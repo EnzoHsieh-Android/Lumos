@@ -1306,19 +1306,58 @@ def cmd_decisions(env, rel=None, superseded=False):
     return 0
 
 
-def cmd_stale(env, match=None):
+def _conds(val):
+    """frontmatter list / 字串 / block scalar → 逐條件展開(去空行)。
+    block scalar 存成含 \\n 的單一字串,split 開以免後續行被 first_line 截掉。"""
+    out = []
+    for c in as_list(val):
+        out += [ln.strip() for ln in str(c).split("\n") if ln.strip()]
+    return out
+
+
+def cmd_stale(env, match=None, candidate=False):
+    if match is not None and not match.strip():          # NEW-1:空 --match 會 "" in c 恆真=全掃
+        print("ERROR: --match 不可為空字串", file=sys.stderr)
+        return 2
+    if candidate and not match:                          # Finding 6:bare --candidate ≈ 列全部=噪音
+        print("ERROR: --candidate 必須配 --match <關鍵字>(例: stale --candidate --match DispatchLog)。\n"
+              "  語意=『改某流程時,哪些活躍 Verification 的 revalidate_when 提到該關鍵字 → 該重驗』;\n"
+              "  本圖譜每篇 Verification 都有 revalidate_when,不帶 --match = 列全部,無篩選意義。",
+              file=sys.stderr)
+        return 2
+    if candidate:
+        # 聚焦查詢:活躍(非 Archive)+ revalidate_when 提到關鍵字 = 「改 X 時該重驗的那幾篇」。
+        # 與純 --match 的差別:只掃 revalidate_when(未來重驗條件,不含 valid_under 快照條件)、排 Archive。
+        rows, n_hit = [], 0
+        for rel, n in sorted(env.notes.items()):
+            if not rel.startswith("Verification/") or "/Archive/" in rel:
+                continue
+            rw = [c for c in _conds(n.fields.get("revalidate_when")) if match in c]
+            if not rw:
+                continue
+            n_hit += 1
+            rows.append(f"{rel} [{status_of(env, rel) or 'no-status'}]")
+            rows += [f"    ↳ {first_line(c, 90)}" for c in rw]
+        if not rows:
+            print(f"無 revalidate_when 提到『{match}』的活躍 Verification")
+            return 0
+        print("\n".join(rows))
+        print(f"\n{n_hit} 篇 revalidate_when 提到『{match}』→ 逐一判斷是否需重驗"
+              f"(`lumos set <篇> status stale`)。")
+        return 0
     rows = []
     for rel, n in sorted(env.notes.items()):
         if not rel.startswith("Verification/"):
             continue
+        arch = " [archived]" if "/Archive/" in rel else ""   # Archive 命中明確標記
         if match:
-            conds = as_list(n.fields.get("valid_under")) + as_list(n.fields.get("revalidate_when"))
-            hit = [c for c in conds if match in c]
+            hit = [c for c in (_conds(n.fields.get("valid_under"))
+                               + _conds(n.fields.get("revalidate_when"))) if match in c]
             if hit:
-                rows.append(f"{rel} [{status_of(env, rel)}]")
+                rows.append(f"{rel} [{status_of(env, rel) or 'no-status'}]{arch}")
                 rows += [f"    ↳ {first_line(h, 90)}" for h in hit]
         elif status_of(env, rel) == "stale":
-            rows.append(rel)
+            rows.append(f"{rel} [stale]{arch}")               # NEW-2:格式統一加 [stale]
     if rows:
         print("\n".join(rows))
     else:
@@ -2460,8 +2499,11 @@ def main():
     p.add_argument("note", nargs="?")
     p.add_argument("--superseded", action="store_true", help="全 vault 掃被推翻的決策")
 
-    p = sub.add_parser("stale", help="stale 驗證 / 條件命中掃描")
+    p = sub.add_parser("stale", help="stale 驗證 / 條件命中掃描 / --candidate 列待覆查清單")
     p.add_argument("--match", help="掃 valid_under/revalidate_when 含此字串的驗證")
+    p.add_argument("--candidate", action="store_true",
+                   help="(須配 --match)聚焦:活躍+revalidate_when 提到該關鍵字、排 Archive — "
+                        "「改 X 流程該重驗哪幾篇」;比純 --match 窄(只看 revalidate_when 不看 valid_under)")
 
     p = sub.add_parser("recent", help="最近 N 天修改的筆記")
     p.add_argument("--days", type=int, default=7)
@@ -2584,7 +2626,7 @@ def main():
     if args.cmd == "decisions":
         return cmd_decisions(env, superseded=True)
     if args.cmd == "stale":
-        return cmd_stale(env, match=args.match)
+        return cmd_stale(env, match=args.match, candidate=args.candidate)
     if args.cmd == "recent":
         return cmd_recent(env, args.days)
     if args.cmd == "stats":

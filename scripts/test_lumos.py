@@ -740,6 +740,39 @@ def t_guard_profile_robustness():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_stale_candidate():
+    """P2 stale --candidate(須配 --match):聚焦『改 X 該重驗哪幾篇』。
+    含護欄(bare candidate / 空 match 報錯)、compose、block scalar 展開、Archive 標記。"""
+    v = mkvault()
+    write(v, "Verification/2026-01-01_a.md",
+          "type: verification\nstatus: pass\nrevalidate_when:\n  - schema 變更\n  - 比率調整",
+          body="# a\n")
+    write(v, "Verification/2026-01-02_b.md", "type: verification\nstatus: pass", body="# b\n")
+    write(v, "Verification/2026-01-03_c.md",
+          "type: verification\nstatus: pass\nrevalidate_when:\n  - DispatchLog 改寫", body="# c\n")
+    write(v, "Verification/2026-01-04_d.md",   # block scalar:DispatchLog 在第二行
+          "type: verification\nstatus: pass\nrevalidate_when: |-\n  第一行條件\n  DispatchLog 第二行",
+          body="# d\n")
+    write(v, "Verification/Archive/2025-01/arch.md",
+          "type: verification\nstatus: pass\nrevalidate_when:\n  - DispatchLog 舊", body="# arch\n")
+    # 護欄:bare --candidate 無 --match → rc2
+    r = run(v, "stale", "--candidate")
+    check("stale: bare --candidate 須配 --match(rc2)", r.returncode == 2, r.stdout + r.stderr)
+    # 護欄:空 --match → rc2
+    r = run(v, "stale", "--match", "")
+    check("stale: 空 --match → rc2", r.returncode == 2, r.stdout + r.stderr)
+    # compose 聚焦
+    r = run(v, "stale", "--candidate", "--match", "DispatchLog")
+    check("compose: 命中 c", "2026-01-03_c" in r.stdout, r.stdout)
+    check("compose: block scalar 第二行命中 d(未截斷)", "2026-01-04_d" in r.stdout, r.stdout)
+    check("compose: 濾掉不含關鍵字的 a", "2026-01-01_a" not in r.stdout, r.stdout)
+    check("compose: 排除 Archive", "Archive" not in r.stdout, r.stdout)
+    # --match 路徑(非 candidate):含 Archive 且標 [archived]
+    r = run(v, "stale", "--match", "DispatchLog")
+    check("stale --match: Archive 命中標 [archived]", "[archived]" in r.stdout, r.stdout)
+    check("stale --match: 含活躍 c", "2026-01-03_c" in r.stdout, r.stdout)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
