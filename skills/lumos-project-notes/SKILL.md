@@ -319,7 +319,17 @@ lumos guard scaffold --node <Systems/X> --invariant "<KEY行子字串>" \
     --method <測試名> --type pure|behavioral|state --claim "<向人確認過的可測斷言>" \
     [--out <測試專案目錄>] [--template <路徑>] [--class <類別名>]
 lumos guard bind <node> "<KEY行子字串>" <測試名>   # 把 [test:測試名] 綁回 KEY 行(寫後自驗)
+lumos guard trace [<node>]          # 合約→守衛測試→Verification 證據鏈(reverse:改某模組會動到哪些守衛/驗證)
 ```
+
+**改某模組前查爆炸半徑**:`lumos guard trace Systems/X` 列出該節點每條 ★INVARIANT★ → 綁的測試方法 → 哪篇 Verification 背書(grep 輸出某測試名即反查「這守衛紅了會牽動誰」)。
+
+**補 verified_by 漏寫**(doctor Check 3 的零判斷項自動修):
+```bash
+lumos sync-verified-by            # dry-run:列 Verification 連到 Systems 但 verified_by 漏列的
+lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
+```
+> 只補 verified_by 這一項。orphan 補掛 / plan_refs 斷鏈需**語意判斷**,doctor 只報不自動修(亂補會掛錯節點)。
 
 - **scaffold 產的是預設紅燈 stub**:套技術棧範本(`.lumos/guard-templates/<type>.tmpl`,專案自備、lumos 語言無關不內建),填好 class/method/invariant/claim/TestIds 前綴,**斷言留 `// TODO` + `Assert.Fail(...)`**——逼你填到綠,不准假綠。
 - **bind 是 KEY 行外科手術**:把 `[test:]` 寫進 summary block 的 ★INVARIANT★ 行(已綁則 merge 進同一個 `[test:A,B]`),寫 tmp→自驗該 ref 真的 parse 得到→atomic。

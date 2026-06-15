@@ -608,6 +608,58 @@ def t_guard():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_guard_trace():
+    """guard trace — 合約→守衛測試→Verification 證據鏈(reverse lookup)。"""
+    v = mkvault()
+    write(v, "Systems/Mod.md",
+          "type: system\nstatus: done\nsummary: |-\n"
+          "  KEY:★INVARIANT★ 某合約 [test:MyGuardTest]",
+          body="# Mod\n")
+    write(v, "Verification/2026-01-02_g.md", "type: verification\nstatus: pass",
+          body="# g\n本守衛 MyGuardTest 跑 lab PASS\n")
+    r = run(v, "guard", "trace", "Systems/Mod")
+    check("guard trace: 合約→測試→Verification 鏈",
+          "MyGuardTest" in r.stdout and "2026-01-02_g" in r.stdout, r.stdout)
+    write(v, "Systems/Lonely.md",
+          "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 沒人測 [test:NobodyTestsThis]",
+          body="# Lonely\n")
+    r = run(v, "guard", "trace", "Systems/Lonely")
+    check("guard trace: 無 Verification 提到 → 明示",
+          "無 Verification 提到" in r.stdout, r.stdout)
+    # Finding 4: 只有裸合約的節點不可印「無合約」矛盾 footer
+    write(v, "Systems/NakedOnly.md",
+          "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 裸合約A\n  KEY:★INVARIANT★ 裸合約B",
+          body="# NakedOnly\n")
+    r = run(v, "guard", "trace", "Systems/NakedOnly")
+    check("guard trace: 裸合約節點不印『無合約』矛盾",
+          "★INVARIANT★" in r.stdout and "無 ★INVARIANT★ 合約" not in r.stdout, r.stdout)
+    # Finding 3: code block 內方法名不算證據
+    write(v, "Systems/Cb.md",
+          "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 某 [test:OnlyInCodeBlock]",
+          body="# Cb\n")
+    write(v, "Verification/2026-01-03_cb.md", "type: verification\nstatus: pass",
+          body="# cb\n```\nOnlyInCodeBlock 只出現在 code block\n```\n")
+    r = run(v, "guard", "trace", "Systems/Cb")
+    check("guard trace: code block 內方法名不算證據",
+          "無 Verification 提到" in r.stdout, r.stdout)
+
+
+def t_sync_verified_by():
+    """sync-verified-by — 補 Check 3 漏寫(dry-run 預設 / --apply 寫 / 冪等)。"""
+    v = mkvault()
+    write(v, "Systems/Pay.md", "type: system\nstatus: done", body="# Pay\n")
+    write(v, "Verification/2026-01-01_payv.md", "type: verification\nstatus: pass",
+          body="# payv\n## 相關模組\n- [[Systems/Pay]]\n")
+    r = run(v, "sync-verified-by")
+    check("sync dry-run: 列出漏寫", "Systems/Pay.md" in r.stdout and "待補" in r.stdout, r.stdout)
+    check("sync dry-run: 不寫入", "verified_by" not in read(v / "Systems" / "Pay.md"))
+    r = run(v, "sync-verified-by", "--apply")
+    check("sync --apply: 寫入 verified_by",
+          "2026-01-01_payv" in read(v / "Systems" / "Pay.md"), r.stdout + r.stderr)
+    r = run(v, "sync-verified-by")
+    check("sync 冪等: 補完後無漏", "無漏寫" in r.stdout, r.stdout)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

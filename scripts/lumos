@@ -973,6 +973,103 @@ def cmd_guard_bind(env, node, invariant_substr, method):
     return 0
 
 
+def cmd_guard_trace(env, node=None):
+    """合約 → 守衛測試 → Verification 證據 的鏈(reverse lookup)。
+    用途:改某模組前,看它的 ★INVARIANT★ 各綁哪個測試、哪篇 Verification 背書 →
+    breaking change 的爆炸半徑可查(grep 輸出某測試名即反查)。"""
+    rel = None
+    if node:
+        rel = env.find(node)
+        if rel is None:
+            print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+            return 2
+    # 預掃所有 Verification 全文 → 之後查「哪篇提到某測試方法名」。
+    # 剝 fenced/inline code(對齊 load_vault 的 body 連結抽取慣例 — code block 內宣告不算證據)。
+    verif_text = {}
+    for r in env.notes:
+        if r.startswith("Verification/"):
+            try:
+                raw = (env.vault / r).read_text(encoding="utf-8-sig")
+                verif_text[r] = INLINE_CODE_RE.sub("", FENCE_RE.sub("", raw))
+            except Exception:
+                verif_text[r] = ""
+    targets = [rel] if rel else sorted(env.notes)
+    nodes_with_inv = 0
+    short_names = set()
+    for r in targets:
+        inv, _ = extract_contracts(env.notes[r])
+        if not inv:
+            continue
+        nodes_with_inv += 1
+        print(f"# {r}")
+        for x in inv:
+            clean, refs = strip_test_refs(x)
+            print(f"  ★INVARIANT★ {clean[:78]}")
+            if not refs:
+                print("      ↳ ⚠ 未綁測試")
+                continue
+            for mth in refs:
+                if len(mth) < 10:
+                    short_names.add(mth)
+                pat = re.compile(r"\b" + re.escape(mth) + r"\b")
+                vs = sorted(env.notes[vr].stem for vr, t in verif_text.items() if pat.search(t))
+                tail = ", ".join(vs) if vs else "(無 Verification 提到此守衛)"
+                print(f"      ↳ [test:{mth}]  →  {tail}")
+    if nodes_with_inv == 0:
+        print("(無 ★INVARIANT★ 合約)" if rel else "(全 vault 無合約)")
+        return 0
+    print("\n※ 「→」是 Verification 全文【字串命中】(非結構化背書):不分正/否定句,"
+          "也抓不到「有驗但沒寫方法名」的篇。當證據鏈線索用,別當鐵證。")
+    if short_names:
+        print(f"⚠ 短方法名 {sorted(short_names)} 易誤命中(全文裡剛好出現該字),建議用長、領域專屬名。")
+    return 0
+
+
+def cmd_sync_verified_by(env, apply=False):
+    """補 doctor Check 3 抓到的 verified_by 漏寫(Verification 連到 Systems、但 Systems.verified_by 沒列)。
+    只動這一個『零判斷』項 — orphan 補掛 / plan_refs 需語意判斷,不在此自動修。
+    dry-run 預設;--apply 才寫(T1 atomic append,自帶 dedup)。"""
+    from collections import defaultdict
+    notes, resolve = env.notes, env.resolve
+    expected = defaultdict(set)
+    for r, n in notes.items():
+        if not r.startswith("Verification/"):
+            continue
+        for t in n.targets:
+            dest = resolve(t)
+            if dest and dest.startswith("Systems/"):
+                expected[dest].add(r)
+    planned = []
+    for sys_rel, verif_rels in sorted(expected.items()):
+        actual = {resolve(link_target(a))
+                  for a in as_list(notes[sys_rel].fields.get("verified_by"))}
+        actual.discard(None)
+        for v in sorted(verif_rels):
+            if v not in actual:
+                vl = v[:-3] if v.endswith(".md") else v
+                planned.append((sys_rel, f"[[{vl}]]"))
+    if not planned:
+        print("✓ verified_by 已全同步,無漏寫")
+        return 0
+    for sys_rel, vl in planned:
+        print(f"  {'+' if apply else '·'} {sys_rel}  ← {vl}")
+    if not apply:
+        print(f"\n{len(planned)} 筆待補(dry-run)。加 --apply 真寫入。")
+        print("※ 判準同 doctor Check 3:Verification 連到某 Systems 即視為驗證它。"
+              "若連結是『描述性提及』(如「取代 [[Systems/舊]]」)會誤補 → 先審這份 dry-run 再 --apply。")
+        return 0
+    print()
+    n_ok = 0
+    for sys_rel, vl in planned:
+        try:
+            if cmd_append(env, sys_rel, "verified_by", vl) == 0:
+                n_ok += 1
+        except (ValueError, RuntimeError) as ex:
+            print(f"  ✗ {sys_rel} {vl}: {ex}", file=sys.stderr)
+    print(f"\n✓ 補了 {n_ok}/{len(planned)} 筆 verified_by")
+    return 0
+
+
 def cmd_context(env, rel, brief=False):
     """節點 + 鄰居 summary 壓縮索引 — MemPalace closet 具象化
     brief=True: 只給 meta + summary 首兩行 + 鄰居名單(壓 token 用)"""
@@ -2233,6 +2330,11 @@ def main():
     gb.add_argument("node")
     gb.add_argument("invariant", help="KEY 行子字串")
     gb.add_argument("method")
+    gt = gsub.add_parser("trace", help="合約→守衛測試→Verification 證據鏈(reverse:爆炸半徑可查)")
+    gt.add_argument("node", nargs="?", help="限單節點(預設全 vault)")
+
+    p = sub.add_parser("sync-verified-by", help="補 Check 3 漏寫的 verified_by(dry-run 預設)")
+    p.add_argument("--apply", action="store_true", help="真寫入(否則 dry-run 只列)")
 
     p = sub.add_parser("search", help="全文搜尋(frontmatter+body);取代 obsidian search")
     p.add_argument("term")
@@ -2364,6 +2466,11 @@ def main():
                                       template=args.template, klass=args.klass)
         if args.gcmd == "bind":
             return cmd_guard_bind(env, args.node, args.invariant, args.method)
+        if args.gcmd == "trace":
+            return cmd_guard_trace(env, args.node)
+
+    if args.cmd == "sync-verified-by":
+        return cmd_sync_verified_by(env, apply=args.apply)
 
     if args.cmd == "decisions":
         return cmd_decisions(env, superseded=True)
