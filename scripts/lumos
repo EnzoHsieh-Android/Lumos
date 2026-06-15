@@ -485,15 +485,17 @@ def run_doctor(env: Env, strict: bool, color: bool):
             if repo_root is None:
                 print(f"  {C['Y']}—{C['X']} 無法定位 repo root,跳過 test_ref 存在性檢查(裸合約仍檢)")
             else:
-                test_methods = discover_test_methods(repo_root)
+                _prof = load_test_profile(repo_root)
+                _attr = _prof["attr_hint"]
+                test_methods = discover_test_methods(repo_root, _prof)
                 hay = build_code_haystack(repo_root)
                 for rel, clean, refs in bound:
                     for name in refs:
                         if name in test_methods:
-                            continue  # 真實 [Fact]/[Theory]/[SkippableFact] 測試方法
+                            continue  # 真實測試方法(依 profile 認 attr)
                         elif name in hay:
                             # 出現在程式碼但不是測試方法 → 偽證據(子字串巧合/被改名/拼錯屬性)
-                            fake.append(f"{rel}: [test:{name}] 在程式碼出現,但不是 [Fact]/[Theory]/[SkippableFact] 測試方法")
+                            fake.append(f"{rel}: [test:{name}] 在程式碼出現,但不是 {_attr} 測試方法")
                         else:
                             dangling.append(f"{rel}: [test:{name}] 在程式碼中找不到")
         if not naked and not dangling and not fake:
@@ -504,7 +506,7 @@ def run_doctor(env: Env, strict: bool, color: bool):
                  "在 invariant 行尾加 [test:測試名],並寫對應測試")
         if fake:
             warn(fake, f"發現 {len(fake)} 條偽證據 test_ref (綁的名字不是真測試方法 → 無法執行):",
-                 "確認 [test:] 名字 = 某個 [Fact]/[Theory]/[SkippableFact] 方法名(別綁到散文/工具方法/拼錯)")
+                 f"確認 [test:] 名字 = 某個 {_attr} 方法名(別綁到散文/工具方法/拼錯)")
         if dangling:
             warn(dangling, f"發現 {len(dangling)} 條懸空 test_ref (綁的測試在程式碼中不存在):",
                  "建立該測試,或修正 [test:] 名稱")
@@ -674,6 +676,95 @@ CODE_EXTS_T = {".cs", ".py", ".js", ".ts", ".tsx", ".jsx", ".vue",
 CODE_SKIP_DIRS = {".git", "node_modules", "bin", "obj", "dist", "build",
                   "__pycache__", "publish", "vendor", ".vs", ".idea"}
 
+# Kotlin/JUnit 測試方法:@Test/@ParameterizedTest 等註解 → (中間不跨 `{`,即不越過方法體)
+# → fun 方法名(允許反引號帶空白的 Kotlin 測試名)。去註解後比對(同 C#)。
+KOTLIN_TEST_RE = re.compile(
+    r"@(?:Test|ParameterizedTest|RepeatedTest)\b[^{]*?\bfun\s+(`[^`]+`|[A-Za-z_]\w*)\s*\(",
+    re.S)
+
+# ── 測試棧 profile(語言可插拔;P5 — Android/Kotlin 等也能用 guard + Check T)──
+# 每個 profile:exts(discover 掃哪些副檔名)/ method_re(group(1)=方法名)/
+# scaffold_ext(產 stub 副檔名)/ dir_mode(suffix=頂層目錄 endswith / rglob=遞迴找目錄名)/
+# dirs[gtype]=(include, exclude)。預設 csharp-xunit(向後相容)。
+TEST_PROFILES = {
+    "csharp-xunit": {
+        "exts": {".cs"}, "method_re": TEST_METHOD_RE, "scaffold_ext": ".cs",
+        "dir_mode": "suffix", "rglob_under": None,
+        "attr_hint": "[Fact]/[Theory]/[SkippableFact]", "fail_hint": "Assert.Fail",
+        "dirs": {"pure": (["Tests"], ["IntegrationTests"]),
+                 "behavioral": (["IntegrationTests"], []),
+                 "state": (["IntegrationTests"], [])},
+    },
+    "kotlin-junit": {
+        "exts": {".kt"}, "method_re": KOTLIN_TEST_RE, "scaffold_ext": ".kt",
+        "dir_mode": "rglob", "rglob_under": "src",   # 限 Gradle/Maven src/ 下,排除 docs/test 等
+        "attr_hint": "@Test/@ParameterizedTest/@RepeatedTest", "fail_hint": "fail()",
+        "dirs": {"pure": (["test"], []),
+                 "behavioral": (["androidTest", "test"], []),
+                 "state": (["androidTest", "test"], [])},
+    },
+}
+
+
+def load_test_profile(repo_root):
+    """讀 <repo>/.lumos/config.json 的 test_profile(預設 csharp-xunit;向後相容)。
+    支援欄位級 inline 覆蓋(exts/scaffold_ext/method_regex)當逃生口。"""
+    import json
+    prof = dict(TEST_PROFILES["csharp-xunit"])
+    cfg_path = repo_root / ".lumos" / "config.json"
+    if not cfg_path.exists():
+        return prof
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"⚠ .lumos/config.json 解析失敗,用 csharp-xunit 預設: {e}", file=sys.stderr)
+        return prof
+    name = cfg.get("test_profile") or "csharp-xunit"   # null/空字串 → 預設(F8)
+    if name in TEST_PROFILES:
+        prof = dict(TEST_PROFILES[name])
+    elif name != "csharp-xunit":
+        print(f"⚠ 未知 test_profile '{name}'(有: {', '.join(TEST_PROFILES)}),用 csharp-xunit",
+              file=sys.stderr)
+    ov = cfg.get("test")
+    if ov is not None and not isinstance(ov, dict):   # F1:test 非 dict → 忽略不 crash
+        print(f"⚠ config.json 的 test 欄位應為物件,忽略(收到 {type(ov).__name__})", file=sys.stderr)
+        ov = None
+    if isinstance(ov, dict):
+        if "exts" in ov:
+            raw = ov["exts"]
+            raw = [raw] if isinstance(raw, str) else raw   # F1:字串容錯為單元素
+            if isinstance(raw, list):
+                prof["exts"] = {e if e.startswith(".") else "." + e for e in raw}
+            else:
+                print("⚠ test.exts 應為陣列,忽略", file=sys.stderr)
+        if isinstance(ov.get("scaffold_ext"), str):
+            prof["scaffold_ext"] = ov["scaffold_ext"]
+        if "method_regex" in ov:
+            rx, err = _safe_user_regex(ov["method_regex"])   # F2:編譯 + ReDoS 探針
+            if rx is not None:
+                prof["method_re"] = rx
+            else:
+                print(f"⚠ test.method_regex 不採用({err}),沿用 profile 內建", file=sys.stderr)
+    return prof
+
+
+def _safe_user_regex(pattern):
+    """編譯使用者提供的 regex,並用【靜態】啟發式擋常見巢狀量詞 ReDoS。
+    關鍵:**絕不執行**該 regex 來探測 — 在 CPython 裡 catastrophic regex 持有 GIL,
+    用 thread/probe 探測反而會把整個 process 卡死(GIL 餓死主執行緒)。故只做模式檢查。
+    非窮舉(擋不到 alternation 型),擋得到 (a+)+ / (a*)+ / (a+)* 這類經典款。
+    回傳 (compiled, None) 或 (None, 原因)。"""
+    if not isinstance(pattern, str):
+        return None, "非字串"
+    # 巢狀量詞:帶量詞的群組整體又被量詞修飾(經典 catastrophic backtracking)
+    if re.search(r"\([^()]*[+*][^()]*\)\s*[+*?]", pattern) or \
+       re.search(r"\([^()]*\)\s*[+*]\s*[+*]", pattern):
+        return None, "疑似巢狀量詞 ReDoS(如 (a+)+);請改寫或用 profile 內建"
+    try:
+        return re.compile(pattern, re.S), None
+    except re.error as e:
+        return None, f"無效: {e}"
+
 
 def invariant_test_refs(inv_text):
     """從 ★INVARIANT★ 文字抽 [test:A,B] 綁定的可執行測試名(可多個,逗號分隔)。無綁定回 []。"""
@@ -704,25 +795,28 @@ def build_code_haystack(repo_root):
     return "\n".join(parts)
 
 
-def discover_test_methods(repo_root):
-    """掃 repo 內所有 .cs,回傳「真實 xUnit 測試方法名」集合(被 [Fact]/[Theory]/[SkippableFact] 標註者)。
+def discover_test_methods(repo_root, profile=None):
+    """掃 repo 內測試檔,回傳「真實測試方法名」集合(被測試框架註解標註者)。
+    測試棧 profile 決定掃哪些副檔名 + 用哪條方法 regex(預設 csharp-xunit;P5 語言可插拔)。
     Check T 用此集合驗證 ★INVARIANT★ 綁定的是『可執行證據』而非散文裡的字面巧合(B6 審計)。"""
     import os
+    profile = profile or load_test_profile(repo_root)
+    exts, mre = profile["exts"], profile["method_re"]
     methods = set()
     for dp, dirs, files in os.walk(repo_root):
         dirs[:] = [d for d in dirs if d not in CODE_SKIP_DIRS]
         for f in files:
-            if Path(f).suffix.lower() == ".cs":
+            if Path(f).suffix.lower() in exts:
                 try:
                     txt = (Path(dp) / f).read_text(encoding="utf-8", errors="ignore")
                 except Exception:
                     continue
-                # 先去註解:屬性間的行尾 // 註解(如 [InlineData(..)] // 說明)會打斷
-                # 「屬性串→方法簽章」的連續比對,導致真測試被誤判偽證據。
+                # 先去註解:行尾 // 註解(如 [InlineData(..)] // 說明 / @Test // 備註)會打斷
+                # 「註解串→方法簽章」的連續比對,導致真測試被誤判偽證據。
                 txt = re.sub(r"//[^\n]*", "", txt)
                 txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
-                for m in TEST_METHOD_RE.finditer(txt):
-                    methods.add(m.group(1))
+                for m in mre.finditer(txt):
+                    methods.add(m.group(1).strip("`"))  # Kotlin 反引號測試名去引號
     return methods
 
 
@@ -813,20 +907,33 @@ def cmd_guard_list(env, unbound_only=False):
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _detect_test_dir(repo_root, gtype):
-    """純函式 → *.Tests(非 Integration);行為/狀態 → *IntegrationTests。
-    多個候選時印警告並取字母序第一個(避免 monorepo 靜默寫錯專案)。"""
-    dirs = [d for d in sorted(repo_root.iterdir()) if d.is_dir()]
-    if gtype in ("behavioral", "state"):
-        hit = [d for d in dirs if d.name.endswith("IntegrationTests")]
-    else:
-        hit = [d for d in dirs if d.name.endswith("Tests")
-               and not d.name.endswith("IntegrationTests")]
+def _detect_test_dir(repo_root, gtype, profile=None):
+    """偵測測試專案目錄。由 profile 決定:
+    suffix 模式(C#)= 頂層目錄 endswith(pure 排除 IntegrationTests);
+    rglob 模式(Kotlin/Android)= 遞迴找目錄名(巢狀 src/test、多 module)。
+    多候選印警告取第一個(避免靜默寫錯)。找不到回 None → scaffold 要求 --out。"""
+    profile = profile or load_test_profile(repo_root)
+    inc, exc = profile["dirs"].get(gtype, ([], []))
+    if profile["dir_mode"] == "suffix":
+        hit = [d for d in sorted(repo_root.iterdir())
+               if d.is_dir() and any(d.name.endswith(p) for p in inc)
+               and not any(d.name.endswith(e) for e in exc)]
+    else:  # rglob:遞迴找目錄名(取第一個 include pattern 有命中者)
+        under = profile.get("rglob_under")
+        hit = []
+        for p in inc:
+            found = sorted(d for d in repo_root.rglob(p)
+                           if d.is_dir() and not (set(d.parts) & CODE_SKIP_DIRS)
+                           and (under is None or under in d.parts))  # F6:限 src/ 下
+            if found:
+                hit = found
+                break
     if not hit:
         return None
     if len(hit) > 1:
-        print(f"⚠ 偵測到多個測試專案 {[d.name for d in hit]},取 {hit[0].name}"
-              f";要寫別處用 --out 指定", file=sys.stderr)
+        names = [str(d.relative_to(repo_root)) for d in hit]
+        print(f"⚠ 偵測到多個測試目錄 {names},取 {names[0]};要寫別處用 --out 指定",
+              file=sys.stderr)
     return hit[0]
 
 
@@ -853,7 +960,8 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
         print(f"ERROR: --type 須為 {'|'.join(GUARD_TYPES)}(收到 {gtype})", file=sys.stderr)
         return 2
     if not IDENT_RE.match(method):
-        print(f"ERROR: --method『{method}』非合法識別字(只允許字母/數字/底線,不可數字開頭)",
+        print(f"ERROR: --method『{method}』非合法識別字(只允許字母/數字/底線,不可數字開頭)。"
+              f"\n  (Kotlin 反引號測試名含空白 → CLI 不支援,請手動編輯 .md 的 [test:] 與測試檔)",
               file=sys.stderr)
         return 2
     if klass is not None and not IDENT_RE.match(klass):
@@ -876,6 +984,7 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     clean, _ = strip_test_refs(matched[0])
     _tautology_warn(claim, clean)
     repo_root = _repo_root_from_env(env)
+    profile = load_test_profile(repo_root)
     tpl_path = Path(template) if template else \
         (repo_root / ".lumos" / "guard-templates" / f"{gtype}.tmpl")
     if not tpl_path.exists():
@@ -893,14 +1002,14 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     if leftover:
         print(f"⚠ 範本有未取代的 placeholder {leftover}(範本 typo?)— 仍寫出,請檢查產出檔",
               file=sys.stderr)
-    out = Path(out_dir) if out_dir else _detect_test_dir(repo_root, gtype)
+    out = Path(out_dir) if out_dir else _detect_test_dir(repo_root, gtype, profile)
     if out is None:
         print("ERROR: 偵測不到測試專案目錄,請給 --out", file=sys.stderr)
         return 2
     if not out.is_dir():
         print(f"ERROR: 輸出目錄不存在: {out}(打錯路徑?先 mkdir 或修正 --out)", file=sys.stderr)
         return 2
-    target = out / f"{klass}.cs"
+    target = out / f"{klass}{profile['scaffold_ext']}"
     if target.exists():
         print(f"ERROR: {target} 已存在,不覆寫(避免蓋掉既有守衛)", file=sys.stderr)
         return 2
@@ -909,7 +1018,7 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     print(f"  類型: {gtype}  |  方法: {method}  |  守衛: {clean[:70]}")
     print("\n下一步(Claude/人):")
     print(f"  1. 開 {target.name},把 // TODO 換成『已向人確認的斷言』"
-          f"(預設 Assert.Fail → 必須填到綠)")
+          f"(預設 {profile['fail_hint']} → 必須填到綠)")
     print(f"  2. 綁回圖譜:  lumos guard bind {rel} \"{invariant_substr}\" {method}")
     print(f"  3. lumos doctor 確認 Check T 通過")
     return 0

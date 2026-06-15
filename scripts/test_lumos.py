@@ -660,6 +660,86 @@ def t_sync_verified_by():
     check("sync 冪等: 補完後無漏", "無漏寫" in r.stdout, r.stdout)
 
 
+def t_guard_kotlin():
+    """P5 語言可插拔:.lumos/config.json test_profile=kotlin-junit →
+    discover 認 @Test fun(.kt)、scaffold 寫 .kt、rglob 偵測巢狀 src/test。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-kt-"))
+    vault = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
+    (vault / "Systems" / "Login.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 登入鎖定 [test:LoginLocksAfterFiveFails]\n"
+        "---\n# Login\n", encoding="utf-8")
+    (root / ".lumos").mkdir(parents=True)
+    (root / ".lumos" / "config.json").write_text(
+        '{"test_profile": "kotlin-junit"}\n', encoding="utf-8")
+    ktdir = root / "app" / "src" / "test" / "java" / "auth"
+    ktdir.mkdir(parents=True)
+    (ktdir / "LoginTest.kt").write_text(
+        "package auth\nimport org.junit.Test\nclass LoginTest {\n"
+        "  @Test\n  fun LoginLocksAfterFiveFails() { }\n}\n", encoding="utf-8")
+    tpl = root / ".lumos" / "guard-templates"
+    tpl.mkdir(parents=True)
+    (tpl / "pure.tmpl").write_text(
+        "// {{NODE}} | {{INVARIANT}} | {{CLAIM}}\nclass {{CLASS}} {\n"
+        "  @Test fun {{METHOD}}() { fail(\"unfilled\") }\n}\n", encoding="utf-8")
+    try:
+        r = run(vault, "guard", "list")
+        check("guard kotlin: @Test fun 認成真方法(real)", "真綁 1" in r.stdout, r.stdout)
+        outd = root / "out"
+        outd.mkdir()
+        r = run(vault, "guard", "scaffold", "--node", "Systems/Login", "--invariant", "登入鎖定",
+                "--method", "NewKtGuard", "--type", "pure", "--claim", "連五次失敗鎖定", "--out", str(outd))
+        check("guard kotlin: scaffold 寫 .kt 副檔名",
+              (outd / "NewKtGuardTests.kt").exists(), r.stdout + r.stderr)
+        r = run(vault, "guard", "scaffold", "--node", "Systems/Login", "--invariant", "登入鎖定",
+                "--method", "AutoDetectKt", "--type", "pure", "--claim", "x")
+        check("guard kotlin: rglob 偵測巢狀 src/test",
+              (root / "app" / "src" / "test" / "AutoDetectKtTests.kt").exists(), r.stdout + r.stderr)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_guard_profile_robustness():
+    """P5 審計修正:壞 config 不 crash(F1)、ReDoS regex 拒用不 hang(F2)、null profile(F8)。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-rob-"))
+    vault = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
+    (vault / "Systems" / "Z.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 某 [test:RealZ]\n---\n# Z\n",
+        encoding="utf-8")
+    (root / "Z.Tests").mkdir()
+    (root / "Z.Tests" / "Z.cs").write_text(
+        "using Xunit;\npublic class Z {\n  [Fact]\n  public void RealZ() { }\n}\n", encoding="utf-8")
+    cfgdir = root / ".lumos"
+    cfgdir.mkdir()
+
+    def setcfg(s):
+        (cfgdir / "config.json").write_text(s, encoding="utf-8")
+
+    try:
+        setcfg('{"test": "oops"}')   # F1: test 非 dict
+        r = run(vault, "doctor", "--ci")
+        check("F1: test 非 dict 不 crash", "Traceback" not in r.stderr, r.stderr)
+        setcfg('{"test_profile": "kotlin-junit", "test": {"exts": ".kt"}}')  # F1: exts 字串
+        r = run(vault, "guard", "list")
+        check("F1: exts 字串不 crash", "Traceback" not in r.stderr, r.stderr)
+        setcfg('{"test": {"method_regex": "(a+)+$"}}')   # F2: ReDoS(若 hang 整個測試會卡死)
+        r = run(vault, "doctor", "--ci")
+        check("F2: ReDoS regex 拒用不 hang", "Traceback" not in r.stderr, r.stderr)
+        setcfg('{"test_profile": null}')   # F8: null → csharp 預設,RealZ real
+        r = run(vault, "guard", "list")
+        check("F8: test_profile null → csharp 預設(真綁 1)", "真綁 1" in r.stdout, r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

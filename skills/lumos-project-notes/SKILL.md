@@ -343,7 +343,12 @@ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
 
 > scaffold/bind 只省「打字」,不省「確認」。doctor Check T + 誠實鐵則(上節)照舊兜底:stub 不填(留 Assert.Fail)= 紅;綁了不存在的方法 = 懸空被擋。
 >
-> **誠實邊界(別過度宣稱)**:`guard list` 的分類與 `scaffold` 的副檔名目前是 **C#/xUnit 專屬**(`discover_test_methods` 只認 `.cs` + `[Fact]/[Theory]/[SkippableFact]`、scaffold 寫 `.cs`、`_detect_test_dir` 認 .NET `*Tests` 慣例;這與既有 Check T 同源)。lumos 的「語言無關」只在圖譜讀寫那層成立。換技術棧要擴 `discover_test_methods`/`_detect_test_dir` + 自備範本。**stub 的紅燈哨兵 `Assert.Fail` 放在 `Skip.If` 之前**——未填的整合守衛在無 DB 的 PR CI 也會紅(不被 skip 掩蓋成假綠);填完斷言後刪哨兵行,`Skip.If` 才恢復「無 DB 才 skip」。
+> **測試棧 profile(語言可插拔,P5)**:guard/Check T 的「認哪些測試方法」由 `.lumos/config.json` 的 `test_profile` 決定,內建 **`csharp-xunit`(預設)** 與 **`kotlin-junit`**(Android)。各 profile 定:掃哪些副檔名、方法 regex、scaffold 副檔名、測試目錄偵測(C# 頂層 `*Tests`/`*IntegrationTests` suffix;Kotlin 遞迴找巢狀 `src/test`/`androidTest`)。**無 config = csharp-xunit,完全向後相容**。逃生口:`config.json` 的 `test` 可欄位級覆蓋 `exts`/`scaffold_ext`/`method_regex`。範本仍技術棧專屬、放各專案 `.lumos/guard-templates/`。
+> ```json
+> // 範例:Android 專案 .lumos/config.json
+> { "test_profile": "kotlin-junit" }
+> ```
+> **stub 的紅燈哨兵放在 skip 之前**——未填的整合守衛在無 DB 的 PR CI 也會紅(不被 skip 掩蓋成假綠);填完斷言後刪哨兵行,skip 才恢復「無 DB 才 skip」。
 
 ### decisions 欄位（ADR：決策時間有效性 + 為什麼選/為什麼不選）
 
