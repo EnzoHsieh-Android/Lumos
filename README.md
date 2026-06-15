@@ -11,6 +11,7 @@
 | 類別 | 檔案 | 作用 |
 |------|------|------|
 | **CLI** | `scripts/lumos` `scripts/test_lumos.py` | 純 python3 標準庫、零依賴。讀(context/search/contracts)、寫(set/append/new,寫後自驗)、巡檢(doctor)、歸檔(archive) |
+| **合約守衛 scaffold** | `lumos guard list/scaffold/bind` | 對談驅動:列未綁的 ★INVARIANT★、套範本產**預設紅燈**測試 stub、把 `[test:]` 綁回 KEY 行。斷言本體由人/AI 確認意圖後填(非 code 反推)。範本技術棧專屬、放各專案 `.lumos/guard-templates/` |
 | **git hooks** | `scripts/hooks/` | pre-commit 硬擋「改 code 沒更新圖譜」/ post-commit 留痕 / pre-push 跑 doctor |
 | **安裝器** | `scripts/install-hooks.sh` `scripts/install-graph-toolchain.sh` `scripts/merge-claude-settings.py` | 把工具組裝進專案 / 設 hooks / 合併 Claude settings |
 | **rename/歸檔** | `scripts/graph-rename.sh` `scripts/fetch-notesmd.sh` | 連結改寫(封 notesmd move) |
