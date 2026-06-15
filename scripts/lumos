@@ -1901,17 +1901,23 @@ def cmd_update(source=None, no_pull=False):
     return rc
 
 
-def cmd_bootstrap(lumos_url=None, lumos_home=None):
+def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False):
     """一鍵在專案內裝好一切:自動 clone Lumos(若缺)→ user-scope skills → 全域 lumos → repo hooks。
     給「剛 clone 專案、機器還沒設定」的同事:cd 進專案打 `python3 scripts/lumos bootstrap` 即可,
-    連 Lumos 都不用先手動 clone(專案自帶 vendored lumos 來跑這個)。"""
+    連 Lumos 都不用先手動 clone(專案自帶 vendored lumos 來跑這個)。
+    --pull:既有 Lumos clone 也 git pull 拉最新(否則已存在就沿用,拿不到 skills 更新)。"""
     import os, subprocess
     home = Path(lumos_home or os.environ.get("LUMOS_HOME")
                 or (Path.home() / "harness" / "lumos-toolchain")).expanduser()
     url = lumos_url or os.environ.get("LUMOS_URL") or "https://github.com/EnzoHsieh-Android/Lumos"
-    # 1) 確保 Lumos 來源在(缺則自動 clone)
+    # 1) 確保 Lumos 來源在(缺則自動 clone;--pull 則既有 clone 也拉最新)
     if (home / "install.sh").exists():
-        print(f"[1/4] Lumos 來源已在: {home}")
+        if pull:
+            print(f"[1/4] Lumos 來源已在,git pull 更新: {home}")
+            if subprocess.run(["git", "-C", str(home), "pull", "--ff-only"]).returncode != 0:
+                print(f"WARN: git pull 失敗(來源有本機改動?),沿用現有 clone", file=sys.stderr)
+        else:
+            print(f"[1/4] Lumos 來源已在: {home}（--pull 可拉最新 skills）")
     else:
         print(f"[1/4] clone Lumos → {home} …")
         home.parent.mkdir(parents=True, exist_ok=True)
@@ -2056,6 +2062,7 @@ def main():
     p = sub.add_parser("bootstrap", help="一鍵裝好一切(自動 clone Lumos + skills + 全域 + repo hooks)")
     p.add_argument("--lumos-url", help="Lumos repo URL(預設公開 repo / $LUMOS_URL)")
     p.add_argument("--lumos-home", help="Lumos clone 目標(預設 ~/harness/lumos-toolchain / $LUMOS_HOME)")
+    p.add_argument("--pull", action="store_true", help="既有 Lumos clone 也 git pull 拉最新(預設沿用)")
 
     args = ap.parse_args()
 
@@ -2067,7 +2074,7 @@ def main():
     if args.cmd == "update":
         return cmd_update(source=args.source, no_pull=args.no_pull)
     if args.cmd == "bootstrap":
-        return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home)
+        return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home, pull=args.pull)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():
