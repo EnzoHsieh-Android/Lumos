@@ -1,0 +1,141 @@
+# Lumos 上手指南(ONBOARDING)
+
+> **Lumos —— 揭開全 AI 開發的黑箱,照亮通往正確需求的路。**
+
+這份給新加入、要開始用「圖譜即合約」這套方法論的人。照著做即可,不用問。
+
+---
+
+## TL;DR(三步)
+
+```bash
+# ① 一次性(每台機器):裝共用 skills
+git clone <lumos-toolchain repo URL> ~/backend/lumos-toolchain
+~/backend/lumos-toolchain/install.sh
+
+# ② 每個專案 repo(clone 後做一次):裝 hooks
+cd <你的專案>
+scripts/install-hooks.sh --force
+
+# ③ 選用(每台機器):全域 lumos 命令
+python3 scripts/lumos install
+```
+
+做完就能用。下面是細節與日常。
+
+---
+
+## 前置需求
+
+| 需要 | 用途 | 沒有會怎樣 |
+|------|------|-----------|
+| `git` | 全部 | 無法運作 |
+| `python3` | lumos CLI + hooks merge(純標準庫,不裝套件) | 無法運作 |
+| Claude Code | skills / hooks 才會 fire | 工具能跑,但 AI 不會自動載方法論 |
+| Claude Max 訂閱 | 第三層 AI 後驗(L3)才划算 | L3 後驗會吃配額/降級,其餘正常 |
+| notesmd-cli(選用) | rename/移檔(`graph-rename.sh`) | 只有改檔名時才需要;`fetch-notesmd.sh` 可抓 |
+
+---
+
+## Step ① 一次性(每台機器):共用 skills
+
+`lumos-project-notes` / `lumos-core-knowledge` 是 **user-scope** 共用 skill(跨所有專案、不在任何 product repo 裡),唯一源就是這個 repo。
+
+```bash
+git clone <lumos-toolchain repo URL> ~/backend/lumos-toolchain
+cd ~/backend/lumos-toolchain
+./install.sh          # symlink ~/.claude/skills/lumos-* → 本 repo(預設)
+```
+
+- **更新 = `git pull`**,symlink 即時生效,不必重裝。
+- 不想 symlink → `./install.sh --copy`(但更新要再跑一次)。
+- 移除 → `./install.sh --uninstall`。
+
+## Step ② 每個專案(每 clone 一個 repo 做一次):hooks
+
+```bash
+git clone <你的專案 repo>
+cd <你的專案>
+scripts/install-hooks.sh --force
+```
+裝三樣:
+- **git hooks**(pre-commit 擋「改 code 沒更新圖譜」/ post-commit 留痕 / pre-push 跑 lumos doctor)— 透過 `core.hooksPath`,**per-clone 必裝一次**
+- **Claude hooks**(L1 收工提醒 / L3 提交後 AI 後驗)→ 複製到 `~/.claude/hooks/`
+- **settings 註冊** → merge 進 `~/.claude/settings.json`
+
+> `--force` 是必要的:你機器上可能有舊版 Claude hooks,不 force 會被 skip 不更新。
+
+## Step ③ 選用(每台機器):全域 lumos 命令
+
+```bash
+python3 scripts/lumos install     # ~/.local/bin/lumos
+```
+之後任何專案目錄直接 `lumos doctor`,不必打 `python3 scripts/lumos`。不裝也行。
+
+---
+
+## 日常使用
+
+**核心原則(也寫在每個專案的 CLAUDE.md):**
+- 知識圖譜(`docs/<專案>-knowledge/`)是**唯一真相來源**;程式碼只是「現在長這樣」,圖譜是「為什麼 + 邊界 + 驗證過沒」。
+- **實時更新**:影響系統行為/決策/驗證的 code 變更,**同一次工作內**更新圖譜(pre-commit 會擋)。
+- 動圖譜一律用 **lumos**,別直接 Grep/Edit 亂改 `.md`。
+
+**常用指令:**
+```bash
+lumos doctor                  # 健康巡檢(破連結/孤節點/verified_by 同步/合約測試綁定…)
+lumos context <節點>          # 進場掃脈絡(節點+鄰居,突顯 ⚠ 合約)
+lumos search <詞>             # 全文搜尋
+lumos contracts [節點]        # 動模組前查硬合約(★INVARIANT★)
+lumos set <節點> <key> <值>   # 改 frontmatter 純量(status/updated…)
+lumos append <節點> <key> "[[x]]"   # 加 verified_by/plan_refs/related(自動去重)
+lumos new <type> <名稱>       # 依模板建節點(system/verification/issue/project)
+lumos archive --days 180      # 滾動歸檔(dry-run 預設;活守衛護欄保護仍存活的守衛證據)
+```
+body 內容(進度段落、checkbox、表格)用 Edit;rename/移檔用 `scripts/graph-rename.sh`。
+
+---
+
+## 更新
+
+| 要更新 | 怎麼做 |
+|--------|--------|
+| 共用 skills | `cd ~/backend/lumos-toolchain && git pull`(symlink 立即生效) |
+| 某專案的 lumos / hooks | 該專案 `git pull`(git hooks 隨之更新);Claude hooks 改版時再跑一次 `scripts/install-hooks.sh --force` |
+
+---
+
+## 唯一源 vs 各專案 vendor copy
+
+**Lumos repo 是整個工具組的唯一源**(CLI / hooks / 安裝器 / 範本 / skills 都在這)。但實際生效分兩種 scope:
+
+| 元件 | 唯一源 | 實際生效在哪 | scope |
+|------|--------|-------------|-------|
+| skills | Lumos `skills/` | symlink → `~/.claude/skills/` | user(全機一份) |
+| lumos CLI + git hooks | Lumos `scripts/` | **vendor 進各專案 `scripts/`** | project |
+| Claude hooks(L1/L3) | Lumos `scripts/hooks/claude/` | install-hooks 裝到 `~/.claude/hooks/` | user |
+
+**為什麼工具組要 vendor 進專案、不能只留 Lumos 一份**:CI 只 checkout 專案 repo(跑 `scripts/lumos doctor`)、git hook 是 per-repo——所以 lumos/hooks 必須在專案 repo 裡。模型是「**Lumos 唯一源 → install-graph-toolchain 把它 vendor 進專案**」,要升級就再從 Lumos 跑一次(idempotent)。skills 例外:它是純方法論文件,user-scope 共用一份不必 vendor。
+
+---
+
+## 疑難排解
+
+- **AI 沒有自動用圖譜方法論** → Step ① 沒做(該機沒裝 user-scope skills)。`ls ~/.claude/skills/` 看有沒有 `lumos-*`。
+- **commit 被擋「改了 code 沒更新圖譜」** → 正常,這是 pre-commit gate。更新對應圖譜節點再 commit;真的不需要圖譜(typo/格式)才 `git commit --no-verify`。
+- **`lumos: command not found`** → 沒做 Step ③,改用 `python3 scripts/lumos`;或確認 `~/.local/bin` 在 PATH。
+- **hooks 沒作用** → 在該專案 repo 跑過 `scripts/install-hooks.sh --force` 沒?`git config core.hooksPath` 應顯示 `scripts/hooks`。
+
+---
+
+## 維護者備註(owner)
+
+- **本 repo 是整個工具組的唯一源**(CLI / hooks / 安裝器 / 範本 / skills)。改任何工具組檔案 = 改這裡 → `git push`。
+  - skills 改完團隊 `git pull` 即同步(symlink);CLI/hooks 改完,各專案要再跑一次 install-graph-toolchain 才更新它們的 vendored copy。
+- **裝進「新專案」**(從 Lumos 跑):
+  ```bash
+  ~/backend/lumos-toolchain/scripts/install-graph-toolchain.sh --target <新 repo 路徑> --slug <知識庫名>
+  ```
+  把 lumos+hooks+範本 vendor 進去、注入 CLAUDE.md 紀律、scaffold 圖譜、裝 hooks。重跑 = 工具組更新(圖譜資料不動)。
+- **不放進本 repo**:各專案的業務圖譜、app 發版/部署腳本(release.sh 等)、project-scope 技術棧 skill。
+- 此 repo 已公開:推任何東西前確認**無公司識別資訊**(專案名/表名/業務規則/內部 repo 名);skills 與範本用通用範例,真實業務域活在各專案自己的圖譜。
