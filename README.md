@@ -23,8 +23,8 @@ Lumos 是**唯一源**;實際生效要分兩層裝(原因:CI 只 checkout 專案
 
 **① 每台機器一次(user-scope)**
 ```bash
-git clone <this repo> ~/backend/lumos-toolchain
-cd ~/backend/lumos-toolchain
+git clone <this repo> ~/harness/lumos-toolchain
+cd ~/harness/lumos-toolchain
 ./install.sh                  # skills → symlink ~/.claude/skills/lumos-*
 python3 scripts/lumos install # (選用) lumos → ~/.local/bin,全域可用
 ```
@@ -33,7 +33,7 @@ python3 scripts/lumos install # (選用) lumos → ~/.local/bin,全域可用
 **② 每個專案一次(project-scope,vendor 工具組進去)**
 ```bash
 # 從 Lumos 跑,把工具組 vendor 進目標專案 + 注入 CLAUDE.md 紀律 + scaffold 圖譜 + 裝 hooks
-~/backend/lumos-toolchain/scripts/install-graph-toolchain.sh --target <專案路徑> --slug <知識庫名>
+~/harness/lumos-toolchain/scripts/install-graph-toolchain.sh --target <專案路徑> --slug <知識庫名>
 ```
 之後該專案 `scripts/lumos`、`scripts/hooks/` 等是 vendored copy(供 CI / hook 自足);要升級就再從 Lumos 跑一次(idempotent:工具組更新、圖譜資料不動)。
 

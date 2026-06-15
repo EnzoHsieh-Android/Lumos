@@ -10,8 +10,8 @@
 
 ```bash
 # ① 一次性(每台機器):裝共用 skills
-git clone <lumos-toolchain repo URL> ~/backend/lumos-toolchain
-~/backend/lumos-toolchain/install.sh
+git clone <lumos-toolchain repo URL> ~/harness/lumos-toolchain
+~/harness/lumos-toolchain/install.sh
 
 # ② 每個專案 repo(clone 後做一次):裝 hooks
 cd <你的專案>
@@ -42,8 +42,8 @@ python3 scripts/lumos install
 `lumos-project-notes` / `lumos-core-knowledge` 是 **user-scope** 共用 skill(跨所有專案、不在任何 product repo 裡),唯一源就是這個 repo。
 
 ```bash
-git clone <lumos-toolchain repo URL> ~/backend/lumos-toolchain
-cd ~/backend/lumos-toolchain
+git clone <lumos-toolchain repo URL> ~/harness/lumos-toolchain
+cd ~/harness/lumos-toolchain
 ./install.sh          # symlink ~/.claude/skills/lumos-* → 本 repo(預設)
 ```
 
@@ -100,10 +100,10 @@ body 內容(進度段落、checkbox、表格)用 Edit;rename/移檔用 `scripts/
 
 | 要更新 | 怎麼做 |
 |--------|--------|
-| 共用 skills | `cd ~/backend/lumos-toolchain && git pull`(symlink 立即生效) |
+| 共用 skills | `cd ~/harness/lumos-toolchain && git pull`(symlink 立即生效) |
 | **某專案的 vendored 工具組(lumos/hooks/紀律範本)** | 在該專案目錄跑 **`lumos update`** — 自動 `git pull` Lumos 來源 + 重新 vendor(工具組更新、CLAUDE.md 紀律同步、hooks 重裝、**圖譜資料 scaffold-skip 不動**)。`--no-pull` 用現有來源、`--source <path>` 指定來源 |
 
-> `lumos update` 就是 `install-graph-toolchain --target <本專案>` 的便利包裝:它從 cwd 自動偵測專案 root + slug,從 Lumos 唯一源(`$LUMOS_HOME` 或 `~/backend/lumos-toolchain`)拉最新再 vendor 進來。等於「一鍵把本專案的工具組對齊 Lumos」。
+> `lumos update` 就是 `install-graph-toolchain --target <本專案>` 的便利包裝:它從 cwd 自動偵測專案 root + slug,從 Lumos 唯一源(`$LUMOS_HOME` 或 `~/harness/lumos-toolchain`)拉最新再 vendor 進來。等於「一鍵把本專案的工具組對齊 Lumos」。
 
 ---
 
@@ -136,7 +136,7 @@ body 內容(進度段落、checkbox、表格)用 Edit;rename/移檔用 `scripts/
   - skills 改完團隊 `git pull` 即同步(symlink);CLI/hooks 改完,各專案要再跑一次 install-graph-toolchain 才更新它們的 vendored copy。
 - **裝進「新專案」**(從 Lumos 跑):
   ```bash
-  ~/backend/lumos-toolchain/scripts/install-graph-toolchain.sh --target <新 repo 路徑> --slug <知識庫名>
+  ~/harness/lumos-toolchain/scripts/install-graph-toolchain.sh --target <新 repo 路徑> --slug <知識庫名>
   ```
   把 lumos+hooks+範本 vendor 進去、注入 CLAUDE.md 紀律、scaffold 圖譜、裝 hooks。重跑 = 工具組更新(圖譜資料不動)。
 - **不放進本 repo**:各專案的業務圖譜、app 發版/部署腳本(release.sh 等)、project-scope 技術棧 skill。

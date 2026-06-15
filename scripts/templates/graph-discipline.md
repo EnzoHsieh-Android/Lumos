@@ -25,4 +25,4 @@
 | 讀圖譜 / 寫筆記 / 巡檢 / 綁合約測試（★INVARIANT★→[test:]）/ 動 `{{KG}}` | **`lumos-project-notes`** |
 | 跨專案共用業務規則（升格核心 / `core_refs` / 偏離 / 動 `core-knowledge`） | **`lumos-core-knowledge`** |
 
-> 圖譜讀寫工具是 **lumos**（`scripts/lumos`，python3 零依賴；細節見 `lumos-project-notes` skill）。`lumos-*` 是 **user-scope skills**（唯一源在 `lumos-toolchain` repo、symlink 進 `~/.claude/skills/`，不在本 repo）——每台機器首次裝一次：`git clone <lumos-toolchain> ~/backend/lumos-toolchain && ~/backend/lumos-toolchain/install.sh`。專案技術棧 skill（如 vue / csharp）見文末〈架構參考 Skills〉。
+> 圖譜讀寫工具是 **lumos**（`scripts/lumos`，python3 零依賴；細節見 `lumos-project-notes` skill）。`lumos-*` 是 **user-scope skills**（唯一源在 `lumos-toolchain` repo、symlink 進 `~/.claude/skills/`，不在本 repo）——每台機器首次裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill（如 vue / csharp）見文末〈架構參考 Skills〉。

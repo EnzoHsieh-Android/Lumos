@@ -97,7 +97,7 @@ if [[ -e "$HOME/.claude/skills/lumos-project-notes" ]]; then
   echo "  ${G}✓${R} ~/.claude/skills/lumos-project-notes 已在(user-scope,所有專案共用)"
 else
   echo "  ${Y}!${R} 未偵測到 user-scope lumos skills。請 clone lumos-toolchain repo 後跑一次 ./install.sh:"
-  echo "      ${D}git clone <lumos-toolchain> ~/backend/lumos-toolchain && ~/backend/lumos-toolchain/install.sh${R}"
+  echo "      ${D}git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh${R}"
 fi
 
 # ── 圖譜骨架（已存在就跳過，絕不覆寫資料）──────────────────────────
