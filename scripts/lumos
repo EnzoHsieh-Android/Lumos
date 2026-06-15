@@ -1120,7 +1120,8 @@ def cmd_guard_trace(env, node=None):
             for mth in refs:
                 if len(mth) < 10:
                     short_names.add(mth)
-                pat = re.compile(r"\b" + re.escape(mth) + r"\b")
+                # re.ASCII:方法名 ASCII;否則中文緊貼方法名(無空格)時 \b 失效漏命中
+                pat = re.compile(r"\b" + re.escape(mth) + r"\b", re.ASCII)
                 vs = sorted(env.notes[vr].stem for vr, t in verif_text.items() if pat.search(t))
                 tail = ", ".join(vs) if vs else "(無 Verification 提到此守衛)"
                 print(f"      ↳ [test:{mth}]  →  {tail}")
@@ -2157,6 +2158,7 @@ def cmd_archive(env, days, apply, today):
             repo_root = p.parent
             break
     live_guard_tests = set()
+    guard_re = None
     if repo_root is not None:
         bound = set()
         for _n in env.notes.values():
@@ -2165,9 +2167,20 @@ def cmd_archive(env, days, apply, today):
                 bound.update(invariant_test_refs(inv))
         methods = discover_test_methods(repo_root)
         live_guard_tests = {name for name in bound if name in methods}
+        if live_guard_tests:
+            # 精確度對齊 Check T:用【詞界】比對方法名,不是 raw 子字串。
+            # 否則短/前綴名(live `Pay` 命中散文 "Payment"、`Foo` 命中 `FooBar`)會
+            # 假性護住無關 Verification → 它們永遠不歸檔(歸檔靜默失效)。
+            # re.ASCII:方法名是 ASCII 識別字;否則 Python \b 視 CJK 為 \w,
+            # 「守衛Pay跑」(中文緊貼方法名無空格)→ \b 不成立 → 漏護(under-protection,更危險)。
+            guard_re = re.compile(r"\b(?:" + "|".join(map(re.escape, live_guard_tests)) + r")\b",
+                                  re.ASCII)
+    guards_all_dead = repo_root is not None and not live_guard_tests and any(
+        invariant_test_refs(inv)
+        for _n in env.notes.values() for inv in extract_contracts(_n)[0])
 
     cands = []       # (rel, stem, ym)
-    protected = []   # rel:被活守衛護欄擋下(早於 cutoff 但仍背書存活守衛)
+    protected = []   # (rel, [backs...]):早於 cutoff 但仍背書存活守衛
     for rel, n in sorted(env.notes.items()):
         if not rel.startswith("Verification/") or "/Archive/" in rel:
             continue
@@ -2176,14 +2189,15 @@ def cmd_archive(env, days, apply, today):
         datestr = str(n.fields.get("created") or n.fields.get("date") or "")[:10]
         if not DATE_RE.match(datestr) or datestr > cutoff:
             continue
-        # 活守衛護欄:這篇是否提到任一條「測試仍存在」的綁定名 → 是則保留不歸檔
-        if live_guard_tests:
+        # 活守衛護欄:這篇是否【詞界】提到任一條「測試仍存在」的綁定名 → 是則保留不歸檔
+        if guard_re is not None:
             try:
                 raw = (env.vault / rel).read_text(encoding="utf-8-sig")
             except Exception:
                 raw = ""
-            if any(t in raw for t in live_guard_tests):
-                protected.append(rel)
+            backs = sorted(set(guard_re.findall(raw)))
+            if backs:
+                protected.append((rel, backs))
                 continue
         cands.append((rel, n.stem, datestr[:7]))
 
@@ -2191,10 +2205,13 @@ def cmd_archive(env, days, apply, today):
     print(f"  cutoff: {cutoff} (--days {days})  mode: {'APPLY' if apply else 'DRY-RUN(--apply 真執行)'}")
     if repo_root is None:
         print("  ⚠ 無法定位 repo root → 活守衛護欄停用(本次純按年齡歸檔)")
+    if guards_all_dead:
+        print("  ⚠ ★INVARIANT★ 綁定的測試都不在 code(守衛已刪/裸合約)→ 活守衛護欄本次停用"
+              "(0 受護 ≠ 全部都能放心歸檔)")
     if protected:
         print(f"  活守衛護欄:{len(protected)} 篇早於 cutoff 但仍背書存活守衛(綁定測試還在 code)→ 保留不歸檔")
-        for rel in protected:
-            print(f"      • {rel}")
+        for rel, backs in protected:
+            print(f"      • {rel}  (backs: {', '.join(backs)})")
     print()
     if not cands:
         print("  無符合條件的 Verification(status∈{pass,done,superseded} 且早於 cutoff;已扣除活守衛護欄保留者)")

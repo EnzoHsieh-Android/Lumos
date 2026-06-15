@@ -773,6 +773,45 @@ def t_stale_candidate():
     check("stale --match: 含活躍 c", "2026-01-03_c" in r.stdout, r.stdout)
 
 
+def t_archive_live_guard_wordboundary():
+    """P3:活守衛護欄詞界比對 — 短/前綴 live 方法名不假性護住無關 Verification。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-arch-"))
+    vault = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    (vault / "Systems" / "S.md").write_text(   # live guard 方法名 "Pay"(短)
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 付款 [test:Pay]\n---\n# S\n",
+        encoding="utf-8")
+    (root / "S.Tests").mkdir()
+    (root / "S.Tests" / "S.cs").write_text(
+        "using Xunit;\npublic class S { [Fact] public void Pay() {} }\n", encoding="utf-8")
+    (vault / "Verification" / "2020-01-01_exact.md").write_text(   # 精確提 Pay → 護住
+        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n---\n# e\n守衛 Pay 跑綠\n",
+        encoding="utf-8")
+    (vault / "Verification" / "2020-01-02_substr.md").write_text(  # 只提 Payment → 不該護
+        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-02\n---\n# s\n講 Payment 流程,與守衛無關\n",
+        encoding="utf-8")
+    try:
+        r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vault), "archive", "--days", "30"],
+                           capture_output=True, text=True)
+        check("archive 護欄: 精確提 Pay 的篇被護住(backs: Pay)",
+              "2020-01-01_exact.md  (backs: Pay)" in r.stdout, r.stdout)
+        check("archive 護欄: 只提 Payment(超字串)不被護住",
+              "2020-01-02_substr.md  (backs" not in r.stdout, r.stdout)
+        # CJK 緊貼方法名(無空格)仍須護住(re.ASCII 詞界;否則 Unicode \b 漏護)
+        (vault / "Verification" / "2020-01-03_cjk.md").write_text(
+            "---\ntype: verification\nstatus: pass\ncreated: 2020-01-03\n---\n# c\n守衛Pay跑綠無空格\n",
+            encoding="utf-8")
+        r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vault), "archive", "--days", "30"],
+                           capture_output=True, text=True)
+        check("archive 護欄: CJK 緊貼方法名仍護住(re.ASCII)",
+              "2020-01-03_cjk.md  (backs: Pay)" in r.stdout, r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
