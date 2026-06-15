@@ -1872,7 +1872,33 @@ def cmd_update(source=None, no_pull=False):
                 print("  ⚠ git pull 失敗(無 remote / 非 ff),用現有來源繼續", file=sys.stderr)
         else:
             print("  (來源非 git repo,跳過 pull)")
-    return subprocess.run(["bash", str(installer), "--target", str(root), "--slug", slug]).returncode
+    rc = subprocess.run(["bash", str(installer), "--target", str(root), "--slug", slug]).returncode
+    # 結尾 diff 自癒:install-graph-toolchain.sh 執行中無法覆寫自己(bash 自我複製不可靠),
+    # 其他檔偶有漏。python 端逐檔比對 src↔target,差異即補(python 非該 bash 腳本,可安全覆寫)。
+    import shutil, filecmp
+    toolkit = ["scripts/lumos", "scripts/test_lumos.py", "scripts/install-hooks.sh",
+               "scripts/install-graph-toolchain.sh", "scripts/merge-claude-settings.py",
+               "scripts/graph-rename.sh", "scripts/fetch-notesmd.sh"]
+    for sub in ("scripts/hooks", "scripts/templates"):
+        base = src / sub
+        if base.is_dir():
+            toolkit += [str(p.relative_to(src)) for p in base.rglob("*") if p.is_file()]
+    healed = []
+    for rel in toolkit:
+        s, t = src / rel, root / rel
+        if not s.exists():
+            continue
+        if (not t.exists()) or not filecmp.cmp(s, t, shallow=False):
+            t.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(s, t)
+            if s.stat().st_mode & 0o111:
+                t.chmod(t.stat().st_mode | 0o111)
+            healed.append(rel)
+    if healed:
+        print(f"  結尾自癒:補齊 installer 漏的 {len(healed)} 檔 → {', '.join(healed)}")
+    else:
+        print("  ✓ 結尾自癒檢查:工具組完全對齊(無漏)")
+    return rc
 
 
 def _vault_in(d: Path):
