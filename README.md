@@ -51,4 +51,4 @@ python3 scripts/lumos install # (選用) lumos → ~/.local/bin,全域可用
 
 Lumos 只放**通用的圖譜工具組**。各專案**自己的東西不進這裡**:業務圖譜內容、app 的發版/部署腳本(如 `release.sh`)、技術棧 skill(vue/csharp 等 project-scope skill)。
 
-詳細上手見 [ONBOARDING.md](ONBOARDING.md)。
+詳細上手見 [ONBOARDING.md](ONBOARDING.md);架構全景見 [ARCHITECTURE.md](ARCHITECTURE.md)(唯一源→兩種 scope→消費端、生命週期指令、22 子命令、強制力管線);與 SDD 的差異見 [SDD-vs-Lumos.md](SDD-vs-Lumos.md)。
