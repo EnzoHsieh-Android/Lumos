@@ -1901,6 +1901,44 @@ def cmd_update(source=None, no_pull=False):
     return rc
 
 
+def cmd_bootstrap(lumos_url=None, lumos_home=None):
+    """一鍵在專案內裝好一切:自動 clone Lumos(若缺)→ user-scope skills → 全域 lumos → repo hooks。
+    給「剛 clone 專案、機器還沒設定」的同事:cd 進專案打 `python3 scripts/lumos bootstrap` 即可,
+    連 Lumos 都不用先手動 clone(專案自帶 vendored lumos 來跑這個)。"""
+    import os, subprocess
+    home = Path(lumos_home or os.environ.get("LUMOS_HOME")
+                or (Path.home() / "harness" / "lumos-toolchain")).expanduser()
+    url = lumos_url or os.environ.get("LUMOS_URL") or "https://github.com/EnzoHsieh-Android/Lumos"
+    # 1) 確保 Lumos 來源在(缺則自動 clone)
+    if (home / "install.sh").exists():
+        print(f"[1/4] Lumos 來源已在: {home}")
+    else:
+        print(f"[1/4] clone Lumos → {home} …")
+        home.parent.mkdir(parents=True, exist_ok=True)
+        if subprocess.run(["git", "clone", url, str(home)]).returncode != 0:
+            print(f"ERROR: clone 失敗。手動 `git clone {url} {home}` 後重試", file=sys.stderr)
+            return 2
+    # 2) user-scope skills(symlink ~/.claude/skills/lumos-*)
+    print("[2/4] 裝 user-scope skills…")
+    subprocess.run(["bash", str(home / "install.sh")])
+    # 3) 全域 lumos → 指向 Lumos 來源(非 vendored copy)
+    print("[3/4] 裝全域 lumos…")
+    subprocess.run([sys.executable, str(home / "scripts" / "lumos"), "install", "--force"])
+    # 4) 本 repo hooks(git toplevel)
+    try:
+        root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+    except Exception:
+        root = Path.cwd()
+    hooks = root / "scripts" / "install-hooks.sh"
+    if hooks.exists():
+        print(f"[4/4] 裝 repo hooks（{root}）…")
+        subprocess.run(["bash", str(hooks), "--force"], cwd=str(root))
+    else:
+        print(f"[4/4] ⚠ 找不到 {hooks}（此專案無 vendored 工具組?）,跳過 hooks", file=sys.stderr)
+    print("\n✓ bootstrap 完成。最後一步:**重啟 Claude Code session**(L1/L3 hooks 要 session start 才載入)。")
+    return 0
+
+
 def _vault_in(d: Path):
     """d 之下是否有 vault: docs/*-knowledge 或 docs/knowledge(專案佈局),
     或 d 本身就是 vault root(standalone,如核心 repo:有 MOC/ + Verification|Systems)。"""
@@ -2015,16 +2053,21 @@ def main():
     p = sub.add_parser("update", help="從 Lumos 唯一源更新本專案 vendored 工具組")
     p.add_argument("--source", help="Lumos 來源 repo 路徑(預設 $LUMOS_HOME 或 ~/harness/lumos-toolchain)")
     p.add_argument("--no-pull", action="store_true", help="不 git pull 來源,用現有")
+    p = sub.add_parser("bootstrap", help="一鍵裝好一切(自動 clone Lumos + skills + 全域 + repo hooks)")
+    p.add_argument("--lumos-url", help="Lumos repo URL(預設公開 repo / $LUMOS_URL)")
+    p.add_argument("--lumos-home", help="Lumos clone 目標(預設 ~/harness/lumos-toolchain / $LUMOS_HOME)")
 
     args = ap.parse_args()
 
-    # install/uninstall/update 不需要 Env(vault),先處理
+    # install/uninstall/update/bootstrap 不需要 Env(vault),先處理
     if args.cmd == "install":
         return cmd_install(force=args.force)
     if args.cmd == "uninstall":
         return cmd_uninstall()
     if args.cmd == "update":
         return cmd_update(source=args.source, no_pull=args.no_pull)
+    if args.cmd == "bootstrap":
+        return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():

@@ -17,7 +17,16 @@
 | **CLAUDE.md 紀律範本** | `scripts/templates/graph-discipline.md` | 「圖譜先行」紀律,注入各專案 CLAUDE.md |
 | **skills** | `skills/lumos-project-notes` `skills/lumos-core-knowledge` | 寫給 AI 的圖譜讀寫規範(user-scope 共用) |
 
-## 兩種 scope、兩種安裝
+## 最快:一鍵 bootstrap(已導入的專案)
+
+clone 一個已導入 Lumos 的專案後,在裡面跑一個指令——**連 Lumos 都自動幫你 clone**:
+```bash
+git clone <你的專案> && cd <你的專案>
+python3 scripts/lumos bootstrap     # 自動:clone Lumos + skills + 全域 lumos + repo hooks
+```
+然後重啟 Claude Code session。`bootstrap` 是下面「兩種安裝」的自動版(專案自帶 vendored lumos 來跑它)。
+
+## 兩種 scope、兩種安裝(底層;全新專案用 install-graph-toolchain)
 
 Lumos 是**唯一源**;實際生效要分兩層裝(原因:CI 只 checkout 專案 repo、git hook 是 per-repo,所以工具組必須 vendor 進各專案):
 

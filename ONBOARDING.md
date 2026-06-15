@@ -6,22 +6,31 @@
 
 ---
 
-## TL;DR(三步)
+## TL;DR — 一鍵(推薦)
+
+clone 專案後,在專案裡跑一個指令,**連 Lumos 都會自動幫你 clone**,skills / 全域 lumos / hooks 一次裝好:
 
 ```bash
-# ① 一次性(每台機器):裝共用 skills
-git clone <lumos-toolchain repo URL> ~/harness/lumos-toolchain
-~/harness/lumos-toolchain/install.sh
-
-# ② 每個專案 repo(clone 後做一次):裝 hooks
-cd <你的專案>
-scripts/install-hooks.sh --force
-
-# ③ 選用(每台機器):全域 lumos 命令
-python3 scripts/lumos install
+git clone <你的專案> && cd <你的專案>
+python3 scripts/lumos bootstrap     # 自動:clone Lumos + skills + 全域 lumos + repo hooks
+# 然後重啟 Claude Code session(L1/L3 hooks 要 session start 載入)
 ```
 
-做完就能用。下面是細節與日常。
+之後再 clone 別的專案,因為機器已設定好,只要 `python3 scripts/lumos bootstrap`(或 `scripts/install-hooks.sh --force`)即可。
+
+> `bootstrap` 做的事 = 下面「手動三步」的自動版。沒有 vendored 工具組的全新專案,改用維護者備註的 `install-graph-toolchain`。
+
+<details><summary>手動三步(bootstrap 底層做的事)</summary>
+
+```bash
+# ① 一次性(每台機器):裝共用 skills（缺 Lumos 先 git clone <URL> ~/harness/lumos-toolchain）
+~/harness/lumos-toolchain/install.sh
+# ② 每個專案 repo:裝 hooks
+cd <你的專案> && scripts/install-hooks.sh --force
+# ③ 選用:全域 lumos
+~/harness/lumos-toolchain/scripts/lumos install
+```
+</details>
 
 ---
 
