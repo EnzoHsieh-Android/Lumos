@@ -309,6 +309,32 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,在扣點/寫 Registrat
 - **lab2 = 測試庫**：整合/狀態守衛用全新唯一測試會員,`finally` 依 CustNo 全刪,不留痕。不要把 lab2 當正式機綁手綁腳。
 - **不重複**:guard 怎麼寫的細節 / lab CI 真機證據,寫進對應 `Verification/2026-06-14_lumos_*.md`,KEY 行只留 `[test:]` 指針。流程已知限制見 [[2026-06-14_lumos_guard審計_已知限制]]。
 
+### `lumos guard`：對談驅動的守衛 scaffold（2026-06-15)
+
+把「★INVARIANT★ → 寫守衛 → 綁 [test:]」這條手抄苦工交給 lumos 的機械部分,**斷言本體仍由你經對談向人確認後填**。三步:
+
+```bash
+lumos guard list [--unbound]        # 列所有 ★INVARIANT★ 綁定狀態(real/dangling/fake/naked);--unbound 只列未綁
+lumos guard scaffold --node <Systems/X> --invariant "<KEY行子字串>" \
+    --method <測試名> --type pure|behavioral|state --claim "<向人確認過的可測斷言>" \
+    [--out <測試專案目錄>] [--template <路徑>] [--class <類別名>]
+lumos guard bind <node> "<KEY行子字串>" <測試名>   # 把 [test:測試名] 綁回 KEY 行(寫後自驗)
+```
+
+- **scaffold 產的是預設紅燈 stub**:套技術棧範本(`.lumos/guard-templates/<type>.tmpl`,專案自備、lumos 語言無關不內建),填好 class/method/invariant/claim/TestIds 前綴,**斷言留 `// TODO` + `Assert.Fail(...)`**——逼你填到綠,不准假綠。
+- **bind 是 KEY 行外科手術**:把 `[test:]` 寫進 summary block 的 ★INVARIANT★ 行(已綁則 merge 進同一個 `[test:A,B]`),寫 tmp→自驗該 ref 真的 parse 得到→atomic。
+
+**⛔ 防帶風向鐵則(leading the witness)**:這套指令存在的前提是「claim 的真來自**人確認的意圖**,不是 code 反推」。Claude 用它時必須:
+
+1. **先問「這裡什麼必須永遠為真」,再去看 code 怎麼實作**——不可先讀 code 反推出斷言、再包裝成「請確認」讓人蓋章(那是假 validation,繞回 Check T 在打的套套邏輯)。
+2. **誠實標記每條斷言的來源**:是「你(人)講的意圖」還是「我從 code 猜的、請你裁示」——後者必須明講、等人確認才寫進 `--claim`。
+3. **重大 invariant 的 claim 等同重大決策**:確認時順手把 `decisions[]` 的 context/why 補上(見下節),別只留一句斷言。
+4. **殘餘誠實**:人可能確認一條錯的 invariant——這是 validation 的天花板,工具只保證 claim 被攤開+明確確認,不保證人一定對。別吹過頭。
+
+> scaffold/bind 只省「打字」,不省「確認」。doctor Check T + 誠實鐵則(上節)照舊兜底:stub 不填(留 Assert.Fail)= 紅;綁了不存在的方法 = 懸空被擋。
+>
+> **誠實邊界(別過度宣稱)**:`guard list` 的分類與 `scaffold` 的副檔名目前是 **C#/xUnit 專屬**(`discover_test_methods` 只認 `.cs` + `[Fact]/[Theory]/[SkippableFact]`、scaffold 寫 `.cs`、`_detect_test_dir` 認 .NET `*Tests` 慣例;這與既有 Check T 同源)。lumos 的「語言無關」只在圖譜讀寫那層成立。換技術棧要擴 `discover_test_methods`/`_detect_test_dir` + 自備範本。**stub 的紅燈哨兵 `Assert.Fail` 放在 `Skip.If` 之前**——未填的整合守衛在無 DB 的 PR CI 也會紅(不被 skip 掩蓋成假綠);填完斷言後刪哨兵行,`Skip.If` 才恢復「無 DB 才 skip」。
+
 ### decisions 欄位（ADR：決策時間有效性 + 為什麼選/為什麼不選）
 
 **有重大架構/技術決策的筆記必須有 `decisions` 陣列。** 追蹤「為什麼當初選 A 後來改 B」，讓過期決策不污染 Claude Code 的上下文，並讓「為什麼不選 B」的學習資產保留下來。

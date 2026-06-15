@@ -551,6 +551,63 @@ def t_invariant_test_binding():
           "裸 ★INVARIANT★" not in r2.stdout, r2.stdout)
 
 
+def t_guard():
+    """guard list/scaffold/bind — 對談驅動守衛 scaffold(2026-06-15)。
+    需 repo_root + 真 .cs(discover_test_methods),故自建 docs/ 結構而非 mkvault。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-guard-"))
+    vault = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
+    (vault / "Systems" / "Demo.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 已綁的合約 [test:RealGuardX]\n"
+        "  KEY:★INVARIANT★ 還沒綁的合約\n"
+        "---\n# Demo\n", encoding="utf-8")
+    td = root / "Demo.IntegrationTests"
+    td.mkdir()
+    (td / "RealGuard.cs").write_text(
+        "using Xunit;\npublic class RealGuard {\n  [Fact]\n  public void RealGuardX() { }\n}\n",
+        encoding="utf-8")
+    tpl = root / ".lumos" / "guard-templates"
+    tpl.mkdir(parents=True)
+    (tpl / "behavioral.tmpl").write_text(
+        "// {{NODE}} | {{INVARIANT}} | {{CLAIM}} | {{PREFIX}}\n"
+        "public class {{CLASS}} {\n  public void {{METHOD}}() "
+        "{ Assert.Fail(\"unfilled\"); }\n}\n", encoding="utf-8")
+    try:
+        r = run(vault, "guard", "list")
+        check("guard list: real/naked 分類", "真綁 1" in r.stdout and "裸 1" in r.stdout, r.stdout)
+        r = run(vault, "guard", "list", "--unbound")
+        check("guard list --unbound: 列裸不列 real",
+              "還沒綁的合約" in r.stdout and "已綁的合約" not in r.stdout, r.stdout)
+        outd = root / "out"
+        outd.mkdir()
+        r = run(vault, "guard", "scaffold", "--node", "Systems/Demo", "--invariant", "還沒綁",
+                "--method", "NewGuardX", "--type", "behavioral", "--claim", "具體可驗斷言",
+                "--out", str(outd))
+        f = outd / "NewGuardXTests.cs"
+        txt = f.read_text(encoding="utf-8") if f.exists() else ""
+        check("guard scaffold: 產出檔", f.exists(), r.stdout + r.stderr)
+        check("guard scaffold: 預設紅燈 Assert.Fail", "Assert.Fail" in txt, txt)
+        check("guard scaffold: placeholder 全替換", "{{" not in txt, txt)
+        r = run(vault, "guard", "scaffold", "--node", "Systems/Demo", "--invariant", "還沒綁",
+                "--method", "1bad", "--type", "behavioral", "--claim", "x", "--out", str(outd))
+        check("guard scaffold: 非法 method 擋(rc2)", r.returncode == 2, r.stdout + r.stderr)
+        r = run(vault, "guard", "scaffold", "--node", "Systems/Demo",
+                "--invariant", "RealGuardX", "--method", "Zz", "--type", "behavioral",
+                "--claim", "x", "--out", str(outd))
+        check("guard scaffold: --invariant 不誤命中 [test:] 名(rc2)",
+              r.returncode == 2, r.stdout + r.stderr)
+        r = run(vault, "guard", "bind", "Systems/Demo", "還沒綁", "NewGuardX")
+        nt = (vault / "Systems" / "Demo.md").read_text(encoding="utf-8")
+        check("guard bind: [test:] 寫回 KEY 行", "[test:NewGuardX]" in nt, r.stdout + r.stderr)
+        check("guard bind: 已綁行不受影響", nt.count("[test:RealGuardX]") == 1, nt)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
