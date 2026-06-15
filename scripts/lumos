@@ -1842,6 +1842,39 @@ def cmd_uninstall():
     return 0
 
 
+def cmd_update(source=None, no_pull=False):
+    """從 Lumos 唯一源 repo 更新「本專案」vendored 的工具組。
+    = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
+    圖譜資料受 install-graph-toolchain 的 scaffold-skip 保護,不會被動。"""
+    import os, subprocess
+    src = Path(source or os.environ.get("LUMOS_HOME")
+               or (Path.home() / "backend" / "lumos-toolchain")).expanduser()
+    installer = src / "scripts" / "install-graph-toolchain.sh"
+    if not installer.exists():
+        print(f"ERROR: 找不到 Lumos 來源 {src}（無 scripts/install-graph-toolchain.sh）\n"
+              f"  用 --source <path> 指定、設 $LUMOS_HOME、或 clone 到 ~/backend/lumos-toolchain",
+              file=sys.stderr)
+        return 2
+    vault = find_vault(Path.cwd())
+    if vault is None:
+        print("ERROR: 當前目錄找不到 docs/*-knowledge 專案 vault", file=sys.stderr)
+        return 2
+    root = vault.parent.parent  # docs/<slug>-knowledge → docs → 專案 root
+    slug = vault.name[:-len("-knowledge")] if vault.name.endswith("-knowledge") else vault.name
+    if root.resolve() == src.resolve():
+        print("ERROR: 當前就是 Lumos 來源本身,不需 update", file=sys.stderr)
+        return 2
+    print(f"lumos update — 來源 {src} → 本專案 {root}（slug={slug}）")
+    if not no_pull:
+        if (src / ".git").is_dir():
+            print("  git pull 來源(取最新工具組)…")
+            if subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode != 0:
+                print("  ⚠ git pull 失敗(無 remote / 非 ff),用現有來源繼續", file=sys.stderr)
+        else:
+            print("  (來源非 git repo,跳過 pull)")
+    return subprocess.run(["bash", str(installer), "--target", str(root), "--slug", slug]).returncode
+
+
 def _vault_in(d: Path):
     """d 之下是否有 vault: docs/*-knowledge 或 docs/knowledge(專案佈局),
     或 d 本身就是 vault root(standalone,如核心 repo:有 MOC/ + Verification|Systems)。"""
@@ -1953,14 +1986,19 @@ def main():
     p = sub.add_parser("archive", help="滾動歸檔老 Verification(單遍,移檔+path連結正規化)")
     p.add_argument("--days", type=int, default=180)
     p.add_argument("--apply", action="store_true", help="真執行(預設 dry-run)")
+    p = sub.add_parser("update", help="從 Lumos 唯一源更新本專案 vendored 工具組")
+    p.add_argument("--source", help="Lumos 來源 repo 路徑(預設 $LUMOS_HOME 或 ~/backend/lumos-toolchain)")
+    p.add_argument("--no-pull", action="store_true", help="不 git pull 來源,用現有")
 
     args = ap.parse_args()
 
-    # install/uninstall 不需要 vault,先處理
+    # install/uninstall/update 不需要 Env(vault),先處理
     if args.cmd == "install":
         return cmd_install(force=args.force)
     if args.cmd == "uninstall":
         return cmd_uninstall()
+    if args.cmd == "update":
+        return cmd_update(source=args.source, no_pull=args.no_pull)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():

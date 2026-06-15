@@ -101,7 +101,9 @@ body 內容(進度段落、checkbox、表格)用 Edit;rename/移檔用 `scripts/
 | 要更新 | 怎麼做 |
 |--------|--------|
 | 共用 skills | `cd ~/backend/lumos-toolchain && git pull`(symlink 立即生效) |
-| 某專案的 lumos / hooks | 該專案 `git pull`(git hooks 隨之更新);Claude hooks 改版時再跑一次 `scripts/install-hooks.sh --force` |
+| **某專案的 vendored 工具組(lumos/hooks/紀律範本)** | 在該專案目錄跑 **`lumos update`** — 自動 `git pull` Lumos 來源 + 重新 vendor(工具組更新、CLAUDE.md 紀律同步、hooks 重裝、**圖譜資料 scaffold-skip 不動**)。`--no-pull` 用現有來源、`--source <path>` 指定來源 |
+
+> `lumos update` 就是 `install-graph-toolchain --target <本專案>` 的便利包裝:它從 cwd 自動偵測專案 root + slug,從 Lumos 唯一源(`$LUMOS_HOME` 或 `~/backend/lumos-toolchain`)拉最新再 vendor 進來。等於「一鍵把本專案的工具組對齊 Lumos」。
 
 ---
 
