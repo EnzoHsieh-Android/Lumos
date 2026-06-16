@@ -812,6 +812,47 @@ def t_archive_live_guard_wordboundary():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_doctor_suggest():
+    """P4 doctor --suggest:orphan Verification 推薦掛載 Systems(正文連結>plan_refs>feature/檔名)。"""
+    v = mkvault()
+    write(v, "Systems/Billing.md", "type: system\nstatus: done", body="# Billing\n")
+    write(v, "Systems/Auth.md", "type: system\nstatus: done", body="# Auth\n")
+    write(v, "Projects/X_計劃.md", "type: project\nstatus: doing", body="計劃連 [[Systems/Auth]]\n")
+    write(v, "Verification/2026-01-01_a.md", "type: verification\nstatus: pass",
+          body="# a\n驗 [[Systems/Billing]]\n")                              # 正文連向
+    write(v, "Verification/2026-01-02_b.md",
+          "type: verification\nstatus: pass\nplan_refs:\n  - \"[[X_計劃]]\"", body="# b\n")  # plan_refs
+    write(v, "Verification/2026-01-03_c.md",
+          "type: verification\nstatus: pass\nfeature: 修 Billing 的問題", body="# c\n")        # feature
+    write(v, "Verification/2026-01-04_d.md", "type: verification\nstatus: pass", body="# d\n")  # 無線索
+    r = run(v, "doctor", "--suggest")
+    check("suggest: 正文連向 → 推薦 Billing",
+          "2026-01-01_a" in r.stdout and "推薦 Systems/Billing.md" in r.stdout, r.stdout)
+    check("suggest: plan_refs → 經計劃推薦 Auth",
+          "經 plan_refs" in r.stdout and "Systems/Auth.md" in r.stdout, r.stdout)
+    check("suggest: feature 提到 stem → 推薦", "feature 提到「Billing」" in r.stdout, r.stdout)
+    check("suggest: 無線索 → 明示人工判斷", "人工判斷" in r.stdout, r.stdout)
+    # 不帶 --suggest:Check 1 維持原本扁平清單(向後相容)
+    r = run(v, "doctor")
+    check("doctor(無 --suggest)不印推薦", "推薦 Systems" not in r.stdout, r.stdout)
+    # Bug-1 前綴重疊抑制:feature 提「點數商城」不該也推薦子字串 Systems「點數」
+    v2 = mkvault()
+    write(v2, "Systems/點數.md", "type: system\nstatus: done", body="# 點\n")
+    write(v2, "Systems/點數商城.md", "type: system\nstatus: done", body="# 商城\n")
+    write(v2, "Verification/2026-02-01_e.md",
+          "type: verification\nstatus: pass\nfeature: 點數商城兌換流程", body="# e\n")
+    r = run(v2, "doctor", "--suggest")
+    check("suggest: 前綴抑制 — 推薦點數商城", "推薦 Systems/點數商城.md" in r.stdout, r.stdout)
+    check("suggest: 前綴抑制 — 不推薦子字串點數", "提到「點數」" not in r.stdout, r.stdout)
+    # Bug-1 ASCII 詞界:feature 無 api 整詞時不推薦 api(避 pos_api 類假命中)
+    v3 = mkvault()
+    write(v3, "Systems/api.md", "type: system\nstatus: done", body="# api\n")
+    write(v3, "Verification/2026-03-01_f.md",
+          "type: verification\nstatus: pass\nfeature: pos_api_auth 流程修正", body="# f\n")
+    r = run(v3, "doctor", "--suggest")
+    check("suggest: ASCII 詞界 — api 不命中 pos_api_auth", "提到「api」" not in r.stdout, r.stdout)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

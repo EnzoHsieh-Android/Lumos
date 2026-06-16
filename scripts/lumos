@@ -286,7 +286,50 @@ def status_of(env, rel):
 
 # ═══════════════════════ doctor ═══════════════════════
 
-def run_doctor(env: Env, strict: bool, color: bool):
+def _stem_hit(stem, text):
+    """stem 是否在 text 中作為「整詞」出現。ASCII stem 用詞界(re.ASCII,避 api 命中 pos_api_auth);
+    CJK 無詞界 → 子字串比對,靠呼叫端的前綴抑制處理重疊(點數 vs 點數商城)。"""
+    if stem.isascii():
+        return re.search(r"\b" + re.escape(stem) + r"\b", text, re.ASCII) is not None
+    return stem in text
+
+
+def _suggest_systems_for_orphan(env, rel, n):
+    """為 orphan Verification 推薦『最可能該掛哪個 Systems』(非 auto-fix,供人確認)。
+    線索強度:本篇正文連向 Systems(3)> 經 plan_refs 計劃連到(2)> feature 提到 stem(1)。
+    回傳 [(sys_rel, score, reason), ...] 依 (score, stem 長度) 降序(同分時更具體的 stem 優先)。"""
+    cands = {}   # sys_rel -> (score, reason)
+
+    def add(sys_rel, score, reason):
+        if sys_rel in env.notes and (sys_rel not in cands or score > cands[sys_rel][0]):
+            cands[sys_rel] = (score, reason)
+
+    for t in n.targets:                                  # 1) 本篇正文連向的 Systems
+        d = env.resolve(t)
+        if d and d.startswith("Systems/"):
+            add(d, 3, "本篇正文連向(verified_by 未同步 → 可 sync-verified-by)")
+    for pr in as_list(n.fields.get("plan_refs")):        # 2) plan_refs → 計劃 → 計劃連向 Systems
+        pd = env.resolve(link_target(pr))
+        if pd and pd in env.notes:
+            for t in env.notes[pd].targets:
+                d = env.resolve(t)
+                if d and d.startswith("Systems/"):
+                    add(d, 2, f"經 plan_refs [[{env.notes[pd].stem}]] 連到")
+    # 3) feature 提到某 Systems stem(只用人寫的 feature,不用自動檔名;整詞 + 前綴重疊抑制)
+    feat = " ".join(str(x) for x in as_list(n.fields.get("feature")))
+    if feat:
+        matched = [(sr, sn.stem) for sr, sn in env.notes.items()
+                   if sr.startswith("Systems/") and sn.stem and _stem_hit(sn.stem, feat)]
+        stems = [s for _, s in matched]
+        for sr, st in matched:
+            if any(st != o and st in o for o in stems):   # st 是另一命中 stem 的子字串 → 丟(留更具體者)
+                continue
+            add(sr, 1, f"feature 提到「{st}」")
+    return sorted(((s, sc, r) for s, (sc, r) in cands.items()),
+                  key=lambda x: (-x[1], -len(env.notes[x[0]].stem or "")))
+
+
+def run_doctor(env: Env, strict: bool, color: bool, suggest=False):
     C = {k: (v if color else "") for k, v in
          dict(R="\033[31m", Y="\033[33m", G="\033[32m", B="\033[1m", X="\033[0m").items()}
     notes, by_stem, resolve = env.notes, env.by_stem, env.resolve
@@ -326,9 +369,23 @@ def run_doctor(env: Env, strict: bool, color: bool):
                if rel.startswith("Verification/") and incoming[rel] == 0]
     if not orphans:
         ok("沒有 Verification orphan")
+    elif suggest:
+        print(f"  {C['Y']}⚠{C['X']} 發現 {len(orphans)} 個 Verification 沒任何 incoming link(附推薦掛載 Systems):")
+        for o in sorted(orphans):
+            print(f"      • {o}")
+            sug = _suggest_systems_for_orphan(env, o, notes[o])
+            if not sug:
+                print("          ↳ (feature/plan_refs/連結皆無線索 → 人工判斷)")
+            for sys_rel, _sc, reason in sug[:3]:
+                print(f"          ↳ 推薦 {sys_rel}  [{reason}]")
+            if len(sug) > 3:
+                print(f"          ↳ (另有 {len(sug) - 3} 個較弱線索略過)")
+        issues += len(orphans)
+        print(f"  {C['B']}建議動作{C['X']}: 確認後 `lumos append <Systems> verified_by \"[[<本篇>]]\"`"
+              ";若推薦理由是「本篇正文連向」(verified_by 漏寫)→ `lumos sync-verified-by` 可批次補。")
     else:
         warn(sorted(orphans), f"發現 {len(orphans)} 個 Verification 沒任何 incoming link:",
-             "找到它驗證的 Systems 並補進 verified_by")
+             "找到它驗證的 Systems 並補進 verified_by(`--suggest` 看推薦掛載目標)")
     print()
 
     section("2/4", "Unresolved wikilinks (破連結)")
@@ -2466,6 +2523,8 @@ def main():
     d = sub.add_parser("doctor", help="圖譜健康巡檢")
     d.add_argument("--strict", action="store_true", help="有 finding 即 exit 1 (CI 用)")
     d.add_argument("--ci", action="store_true", help="CI 模式 = --strict + 無色彩")
+    d.add_argument("--suggest", action="store_true",
+                   help="orphan Verification 附推薦掛載 Systems(從正文連結/plan_refs/feature 推斷,供人確認)")
 
     for name, hlp in (("links", "連出的節點"), ("backlinks", "連入的節點")):
         p = sub.add_parser(name, help=hlp)
@@ -2593,7 +2652,7 @@ def main():
 
     if args.cmd == "doctor":
         color = sys.stdout.isatty() and not args.ci
-        return run_doctor(env, strict=(args.strict or args.ci), color=color)
+        return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest)
 
     if args.cmd in ("links", "backlinks", "context", "map") or \
        (args.cmd == "decisions" and not args.superseded):
