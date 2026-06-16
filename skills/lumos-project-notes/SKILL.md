@@ -493,8 +493,11 @@ plan_refs:
 1. **需求討論跨超過一個 session → 預設寫**（session 數客觀可判，「大改造」主觀不可判）
 2. 動工前需要跨人 / 跨團隊共識（如服務台豁免案的後台分工）
 3. 變更跨多個 Systems 節點（計劃沒有單一宿主可住）
+4. **任何工具產出「設計 / spec」→ 一律寫計劃節點**（brainstorming、writing-plans、OpenSpec、其他 SDD / spec-driven 框架皆同；既然有正式設計產出，它就該住圖譜，不是散在 repo 檔）
 
 其餘變更**不寫計劃**：節點 `decisions[]` 一條 + Verification 即可——一條 decision 就是微型計劃（superseded 條目自帶意圖凍結語意）。常態工作流維持「對話敲定 → 依當下脈絡開發 → 事後沉澱」，計劃節點是大型變更的 opt-in，不是進場義務。
+
+> **⚠ 橋接任何 spec/SDD 工具的預設輸出路徑（必讀）**：各家工具都有自己的 spec 落點——`superpowers:brainstorming` → `docs/superpowers/specs/YYYY-MM-DD-*.md`、`writing-plans` 有自己的落點、`OpenSpec` → `openspec/`、其他 SDD / spec-driven 框架亦各有目錄——**在本紀律下一律覆寫成 lumos 計劃節點**（`Projects/<主題>_計劃.md`，`type: project`），**不另存 `docs/superpowers/specs/`、`openspec/` 或任何 repo 路徑**。理由:「圖譜即唯一真相」涵蓋計劃/設計,不只 code;spec 散在 repo 檔 = 圖譜外的第二真相源,必 drift。多數此類工具也明示「user/專案偏好可覆寫預設 spec 路徑」,本紀律即該覆寫。落地的 Verification 用 `plan_refs` 回指該計劃節點。
 
 **Claude 的維護義務**：
 
