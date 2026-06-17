@@ -25,7 +25,9 @@ description: 維護專案知識圖譜（docs/{project}-knowledge/ 或 docs/knowl
 
 ## 第一步：偵測 Vault
 
-每次觸發此 Skill 時，依序執行：
+> **lumos 不需要 Obsidian。** lumos（scripts/lumos）是零 Obsidian 依賴的純檔案系統工具，`find_vault` 從 cwd 往上自動找 `docs/*-knowledge/`，vault 名稱 = 資料夾 basename。讀取/寫入/巡檢一律用 lumos，**完全不需要在 Obsidian 開啟或註冊 vault**。Obsidian 註冊只在用到 obsidian-only 功能時才需要（見下方步驟 4 與〈操作方式〉的 obsidian 場景表）——**不要把它當設定前置步驟**。
+
+每次觸發此 Skill 時：
 
 ### 1. 偵測知識庫是否存在
 ```bash
@@ -33,39 +35,29 @@ description: 維護專案知識圖譜（docs/{project}-knowledge/ 或 docs/knowl
 ls -d docs/*-knowledge/Projects/ 2>/dev/null || ls docs/knowledge/Projects/ 2>/dev/null
 ```
 
-### 2. 已存在 → 取得 vault 名稱
+### 2. 已存在 → 確認 lumos 找得到
 ```bash
-# 列出所有已註冊的 vault
-obsidian vaults
-
-# 確認 CLI 指到的路徑就是本專案的圖譜（防同名撞 vault）
-obsidian vault="{候選名稱}" eval code="app.vault.adapter.basePath"
+lumos doctor    # 或 lumos stats；跑得動即代表 lumos 已鎖定本專案 vault
 ```
-回傳路徑要等於本專案的 `docs/{slug}-knowledge/` 絕對路徑才算正確 vault。記住 vault 名稱（= 資料夾 basename），後續所有 CLI 命令帶 `vault="{名稱}"`。
+vault 名稱即資料夾 basename（如 `compasskiosk-knowledge`），lumos 自動解析，無需手動指定。
 
 ### 3. 不存在 → 初始化
-詢問使用者確認 vault 名稱（預設建議 `{repo-basename 小寫}-knowledge`），然後：
+詢問使用者確認 vault 名稱（預設 `{repo-basename 小寫}-knowledge`），然後：
 ```bash
 mkdir -p docs/{vault-name}/{Projects,Systems,Issues,Verification,MOC}
 ```
 建立 `.gitignore`（排除 `.obsidian/workspace*.json`、`.obsidian/hotkeys.json`）。
+建完即可直接寫節點（rich 節點 = Write/Edit 內文 + summary block，scalar/list/decisions 走 lumos）→ `lumos doctor` 驗鐵則。**全程無需任何 Obsidian 步驟。**
 
-然後提示使用者：
-1. 用 Obsidian「開啟資料夾」→ 選 `docs/{vault-name}/`
-2. Obsidian 會自動註冊為 vault
-3. 執行 `obsidian vaults` 確認看得到 `{vault-name}`
+### 4.（可選）Obsidian 註冊 — 僅 obsidian-only 功能才需要
+**只有**要用這些 lumos 沒有的功能時才需要在 Obsidian 開啟資料夾：權威 metadataCache eval、白名單外 frontmatter 的 `processFrontMatter` 寫入、在 App 開筆記/搜尋視圖給人看、File Recovery 版本比較。做法：Obsidian「開啟資料夾」→ 選 `docs/{vault-name}/`，Obsidian 自動註冊，`obsidian vaults` 應看得到。**不需要這些功能就不用做。**
 
-### 4. Vault 未在 Obsidian 註冊
-如果資料夾存在但 `obsidian vaults` 找不到：
-- 提示使用者先用 Obsidian 開啟該資料夾
-- 或改用 Read/Write/Edit/Grep 直接操作（降級模式）
-
-### 5. 同名 Vault 衝突偵測
-如果 `obsidian vaults` 列出兩個以上同名項目（例如兩個專案都叫 `knowledge`）：
+### 5. 同名 Vault 衝突（僅影響 obsidian CLI）
+lumos 以 cwd `find_vault`，**不受同名影響**。只有用 obsidian CLI 時，若 `obsidian vaults` 列出兩個以上同名項目（例如兩個專案都叫 `knowledge`）：
 - 用 `obsidian vault="{候選名稱}" eval code="app.vault.adapter.basePath"` 確認指到哪一個
-- 若名稱重複導致 CLI 無法區分 → 必須改名，把其中一個資料夾改成 `docs/{slug}-knowledge/` 慣例（純改名，不破壞圖譜內容）
+- 名稱重複導致 CLI 無法區分 → 把其中一個資料夾改成 `docs/{slug}-knowledge/` 慣例（純改名，不破壞圖譜內容）
 
-**注意**：即使名稱獨立，多 vault 同開時仍要遵守下方 leading `vault=` syntax，否則 CLI 會打到當下 focused vault。改名與 syntax 兩者皆缺一不可。
+**注意**：用到 obsidian CLI 時，`vault=` 必須是 command 之前第一個參數（官方限制），否則多 vault 同開會打到當下 focused vault。
 
 ## 跨專案核心圖譜接點(core-knowledge)
 
