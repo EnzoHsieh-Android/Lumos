@@ -1526,6 +1526,12 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   .chip.on{color:var(--text);background:var(--surface2);border-color:var(--faint)}
   .chip.off{opacity:.38}
   #cy{position:fixed;top:64px;left:0;right:0;bottom:0;z-index:1}
+  /* 常駐節點標籤:HTML 疊層,逐幀貼到節點螢幕座標上(無 WebGL 文字依賴) */
+  #labels{position:fixed;top:64px;left:0;right:0;bottom:0;z-index:2;pointer-events:none;overflow:hidden}
+  .nlab{position:absolute;top:0;left:0;white-space:nowrap;font-family:var(--font-ui);font-weight:600;
+    color:rgba(214,220,234,.52);                       /* 淡:半透明霧白 */
+    text-shadow:0 1px 4px rgba(0,0,0,.92),0 0 2px rgba(0,0,0,.85);  /* 細陰影 → 深色背景與亮節點上都讀得到 */
+    transform:translate(-9999px,-9999px);will-change:transform,opacity;transition:opacity .18s}
   #panel{position:fixed;top:64px;right:0;bottom:0;width:460px;max-width:90vw;z-index:9;
     background:linear-gradient(180deg,var(--surface),#0c0e15);border-left:1px solid var(--border);
     box-shadow:var(--shadow);transform:translateX(102%);
@@ -1584,6 +1590,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="chip on" id="staletoggle"><span class="dot" style="background:var(--stale)"></span>只看 stale</div>
 </div>
 <div id="cy"></div>
+<div id="labels"></div>
 <div id="panel">
   <div id="close">✕</div>
   <div id="phead"><div class="kicker"></div><div class="ttl"></div><div class="meta"></div></div>
@@ -1653,6 +1660,36 @@ Graph
 // 貼合 top bar 下方的容器尺寸(預設會用整個 window 高度,會被頂欄遮 64px)
 function sizeGraph(){ Graph.width(window.innerWidth).height(window.innerHeight-64); }
 sizeGraph(); window.addEventListener('resize', sizeGraph);
+
+// ---- 常駐節點標籤:HTML 疊層逐幀同步到節點螢幕座標 ----
+// 不依賴 three-spritetext(會逼出全域 THREE,風險高、離線臃腫);改用 graph2ScreenCoords 投影,
+// 用 Graph.camera() 既有的 Vector3 做前/後剔除(不需自帶 THREE)。
+const labLayer=document.getElementById('labels'), labOf=new Map();
+DATA.nodes.forEach(n=>{ const d=document.createElement('div'); d.className='nlab';
+  d.textContent=n.label; d.style.fontSize=(11+Math.min(n.indeg,16)*0.25)+'px';  // 樞紐字略大,先被看見
+  labLayer.appendChild(d); labOf.set(n,d); });
+function syncLabels(){
+  requestAnimationFrame(syncLabels);
+  const cam=Graph.camera(); if(!cam||!cam.position) return;
+  const fwd=cam.position.clone(); cam.getWorldDirection(fwd);           // 相機朝向(Vector3,複用內建 THREE)
+  const p=cam.position.clone();
+  const camDist=cam.position.length()||1;                              // 相機到圖心(力場置中於原點)的距離 → 淡出基準,與縮放無關
+  const W=window.innerWidth, H=window.innerHeight-64;
+  DATA.nodes.forEach(n=>{
+    const d=labOf.get(n);
+    if(!nvisible(n)){ d.style.opacity=0; return; }                     // type chip / 只看 stale 過濾
+    p.set(n.x||0,n.y||0,n.z||0);
+    const to=p.clone().sub(cam.position);
+    if(to.dot(fwd)<=0){ d.style.opacity=0; return; }                   // 在相機背後 → 不畫
+    const s=Graph.graph2ScreenCoords(n.x||0,n.y||0,n.z||0);
+    if(s.x<-40||s.x>W+40||s.y<-20||s.y>H+20){ d.style.opacity=0; return; }  // 出畫面
+    d.style.transform='translate('+(s.x)+'px,'+(s.y-13)+'px) translateX(-50%)';  // 置中、略抬到球頂上方
+    const dim = hlN.size && !hlN.has(n);                               // 點選聚焦時,非鄰域更淡
+    const far = Math.min(1, (camDist*1.2)/(to.length()||1));           // 相對相機距離淡出(縮放不變)→ 框全圖時仍清楚可見
+    d.style.opacity = (dim?0.14:0.62) * (0.5+0.5*far);
+  });
+}
+requestAnimationFrame(syncLabels);
 
 function refresh(){
   Graph.nodeColor(ncolor).linkColor(lcolor).linkWidth(lwidth)
