@@ -533,10 +533,15 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False):
     if not inv_all:
         ok("無 ★INVARIANT★ 合約 (無載重宣稱需綁測試)")
     else:
-        naked, bound = [], []
+        naked, bound, unaudited = [], [], []
         for rel, inv in inv_all:
             clean, refs = strip_test_refs(inv)
-            (bound if refs else naked).append((rel, clean, refs))
+            if refs:
+                bound.append((rel, clean, refs))
+                if not invariant_audit_refs(inv):     # 綁了測試但沒經獨立合法性審計
+                    unaudited.append((rel, clean))
+            else:
+                naked.append((rel, clean, refs))
         dangling, fake = [], []
         if bound:
             if repo_root is None:
@@ -555,8 +560,9 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False):
                             fake.append(f"{rel}: [test:{name}] 在程式碼出現,但不是 {_attr} 測試方法")
                         else:
                             dangling.append(f"{rel}: [test:{name}] 在程式碼中找不到")
-        if not naked and not dangling and not fake:
-            ok(f"{len(bound)} 條 ★INVARIANT★ 都綁了真實可執行測試方法 (0 裸合約 / 0 偽證據 / 0 懸空)")
+        if not naked and not dangling and not fake and not unaudited:
+            ok(f"{len(bound)} 條 ★INVARIANT★ 都綁了真實可執行測試方法且經獨立審計 "
+               "(0 裸合約 / 0 偽證據 / 0 懸空 / 0 未審)")
         if naked:
             warn([f"{r}: {first_line(c, 70)}" for r, c, _ in naked],
                  f"發現 {len(naked)} 條裸 ★INVARIANT★ (載重宣稱沒綁測試 → 無法機械驗真):",
@@ -567,6 +573,12 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False):
         if dangling:
             warn(dangling, f"發現 {len(dangling)} 條懸空 test_ref (綁的測試在程式碼中不存在):",
                  "建立該測試,或修正 [test:] 名稱")
+        if unaudited:
+            warn([f"{r}: {first_line(c, 70)}" for r, c in unaudited],
+                 f"發現 {len(unaudited)} 條 ★INVARIANT★ 綁了測試但合法性未經獨立審計 "
+                 "(『是不是真鐵則 / 綁的測試夠不夠格』仍由提出者自評 → maker/checker 破口):",
+                 "派一個無對話脈絡的乾淨 agent 判合法性(別餵你的結論),過了用 "
+                 "`lumos guard audit <node> \"<KEY 行子字串>\"` 留痕")
     print()
 
     print(f"{C['B']}─────────────────────────────────{C['X']}")
@@ -718,6 +730,12 @@ def extract_contracts(note):
 
 
 TEST_REF_RE = re.compile(r"\[test:\s*([^\]]+)\]")
+# [audit:模型/日期] — ★INVARIANT★ 合法性經「無對話脈絡的獨立 agent」審計過的留痕。
+# 與 [test:] 平行:test 證『有沒有照規則做』,audit 證『這規則該不該是鐵則 / 綁的測試夠不夠格』
+# (沒標準答案的判斷不得由提出者本人自評 — maker/checker)。doctor Check T 強制。
+AUDIT_REF_RE = re.compile(r"\[audit:\s*([^\]]+)\]")
+# 抽「乾淨宣稱文字」時 test 與 audit 兩種標記都要剝掉(否則漏進顯示/子字串比對)。
+INV_TAG_RE = re.compile(r"\[(?:test|audit):\s*[^\]]+\]")
 # 真實可執行測試方法:xUnit 屬性([Fact]/[Theory]/[SkippableFact],含 (Skip=..) 變體)
 # + 可選後續屬性(InlineData/MemberData/Trait)→ 存取修飾 → 可選 async → 回傳型別 → 方法名。
 # B6 審計:Check T 不能只做子字串比對(會把「散文裡剛好提到的字」當證據);必須認到真方法。
@@ -831,9 +849,14 @@ def invariant_test_refs(inv_text):
     return out
 
 
+def invariant_audit_refs(inv_text):
+    """從 ★INVARIANT★ 文字抽 [audit:模型/日期] 留痕(通常一條)。無=回 []。"""
+    return [m.strip() for m in AUDIT_REF_RE.findall(inv_text) if m.strip()]
+
+
 def strip_test_refs(inv_text):
-    """回傳 (去掉 [test:..] 標記的乾淨宣稱文字, 綁定測試名 list)。"""
-    return TEST_REF_RE.sub("", inv_text).strip(), invariant_test_refs(inv_text)
+    """回傳 (去掉 [test:..]/[audit:..] 標記的乾淨宣稱文字, 綁定測試名 list)。"""
+    return INV_TAG_RE.sub("", inv_text).strip(), invariant_test_refs(inv_text)
 
 
 def build_code_haystack(repo_root):
@@ -938,7 +961,9 @@ def classify_invariants(env):
                 status = "fake"
             else:
                 status = "real"
-            rows.append({"node": rel, "text": clean, "refs": refs, "status": status})
+            rows.append({"node": rel, "text": clean, "refs": refs, "status": status,
+                         "audited": bool(invariant_audit_refs(x)),
+                         "audit": invariant_audit_refs(x)})
     return rows
 
 
@@ -951,11 +976,14 @@ def cmd_guard_list(env, unbound_only=False):
         shown += 1
         print(f"{GUARD_ICON[r['status']]}  {r['node']}")
         print(f"    {r['text'][:96]}")
-        print(f"    [test:{','.join(r['refs'])}]" if r["refs"] else "    (未綁)")
+        tag = f"[test:{','.join(r['refs'])}]" if r["refs"] else "(未綁)"
+        tag += f"  [audit:{','.join(r['audit'])}]" if r["audited"] else ("  ⚠ 未審" if r["refs"] else "")
+        print(f"    {tag}")
     from collections import Counter
     c = Counter(r["status"] for r in rows)
+    unaudited = sum(1 for r in rows if r["refs"] and not r["audited"])
     print(f"\n合約 {len(rows)} 條 — 真綁 {c['real']} / 懸空 {c['dangling']} / "
-          f"偽證據 {c['fake']} / 裸 {c['naked']}")
+          f"偽證據 {c['fake']} / 裸 {c['naked']} / 未審 {unaudited}")
     if unbound_only and shown == 0:
         print("✓ 沒有未綁合約(全綁真方法)")
     return 0
@@ -1136,6 +1164,64 @@ def cmd_guard_bind(env, node, invariant_substr, method):
         return 2
     print(f"✓ 綁定 [test:{method}] → {rel} 的 ★INVARIANT★")
     print("  下一步: lumos doctor — 方法須已存在於 code,否則 Check T 顯示懸空")
+    return 0
+
+
+def cmd_guard_audit(env, node, invariant_substr, model="sonnet", date=None):
+    """把 [audit:模型/日期] 留痕寫回 ★INVARIANT★ KEY 行(寫後自驗)。
+    語意:這條鐵則的「合法性」(是不是真鐵則 / 綁的測試夠不夠格)已由一個
+    *無對話脈絡的獨立 agent* 判過並通過。工具只記留痕,不證明審計真的乾淨——
+    那靠 skill 的 maker/checker 誠實鐵則(別餵結論給審計者、提出者不得自評)。"""
+    import datetime
+    if date is None:
+        date = datetime.date.today().isoformat()
+    stamp = f"{model}/{date}"
+    rel = env.find(node)
+    if rel is None:
+        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        return 2
+    path = env.vault / rel
+    try:
+        lines, _, e = load_raw_for_edit(path)
+    except (ValueError, RuntimeError) as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        return 2
+    target_idx = None
+    for i in range(1, e):
+        # 比對去掉 [test:]/[audit:] 後的行(子字串不誤命中既有標記內容)
+        if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in INV_TAG_RE.sub("", lines[i]):
+            if target_idx is not None:
+                print(f"ERROR: 『{invariant_substr}』命中多條 KEY 行,請給更精確子字串", file=sys.stderr)
+                return 2
+            target_idx = i
+    if target_idx is None:
+        print(f"ERROR: {rel} 找不到含『{invariant_substr}』的 ★INVARIANT★ KEY 行", file=sys.stderr)
+        return 2
+    line = lines[target_idx]
+    m = AUDIT_REF_RE.search(line)
+    if m:
+        newline = line[:m.start()] + f"[audit:{stamp}]" + line[m.end():]   # 重審 → 覆蓋舊留痕(新日期生效)
+    else:
+        newline = line.rstrip() + f" [audit:{stamp}]"
+    new_lines = lines[:target_idx] + [newline] + lines[target_idx + 1:]
+
+    def check(fields):
+        summ = fields.get("summary")
+        if not isinstance(summ, str):
+            return False
+        for l in summ.split("\n"):
+            mi = INVARIANT_RE.match(l.strip())
+            if mi and invariant_substr in INV_TAG_RE.sub("", l):
+                return stamp in invariant_audit_refs(mi.group(1))
+        return False
+
+    try:
+        atomic_write_verify(path, new_lines, f"[audit:{stamp}]", check)
+    except (ValueError, RuntimeError) as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        return 2
+    print(f"✓ 留痕 [audit:{stamp}] → {rel} 的 ★INVARIANT★")
+    print("  前提:這條合法性已由無脈絡的獨立 agent 判過(maker≠checker)。doctor Check T 不再報『未審』。")
     return 0
 
 
@@ -2591,6 +2677,11 @@ def main():
     gb.add_argument("node")
     gb.add_argument("invariant", help="KEY 行子字串")
     gb.add_argument("method")
+    ga = gsub.add_parser("audit", help="留痕 [audit:模型/日期]:合法性經無脈絡獨立 agent 審計過(maker≠checker)")
+    ga.add_argument("node")
+    ga.add_argument("invariant", help="KEY 行子字串")
+    ga.add_argument("--model", default="sonnet", help="審計用的模型(預設 sonnet — 刻意較弱,不腦補補洞)")
+    ga.add_argument("--date", help="審計日期 YYYY-MM-DD(預設今天)")
     gt = gsub.add_parser("trace", help="合約→守衛測試→Verification 證據鏈(reverse:爆炸半徑可查)")
     gt.add_argument("node", nargs="?", help="限單節點(預設全 vault)")
 
@@ -2730,6 +2821,8 @@ def main():
                                       template=args.template, klass=args.klass)
         if args.gcmd == "bind":
             return cmd_guard_bind(env, args.node, args.invariant, args.method)
+        if args.gcmd == "audit":
+            return cmd_guard_audit(env, args.node, args.invariant, args.model, args.date)
         if args.gcmd == "trace":
             return cmd_guard_trace(env, args.node)
 

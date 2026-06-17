@@ -551,6 +551,56 @@ def t_invariant_test_binding():
           "裸 ★INVARIANT★" not in r2.stdout, r2.stdout)
 
 
+def t_invariant_audit_binding():
+    # Check T 牙齒:綁了 [test:] 但無 [audit:] → doctor 報「未經獨立審計」(maker/checker 破口)
+    v = mkvault()
+    write(v, "Systems/Bound.md",
+          "type: system\nstatus: done\nsummary: |-\n"
+          "  KEY:★INVARIANT★ 點數不足必須擋 [test:SomeGuard]",
+          body="# Bound\n")
+    r = run(v, "doctor", "--ci")
+    check("Check T: 綁測試但未經獨立審計 → doctor 擋(rc1)",
+          r.returncode == 1 and "未經獨立審計" in r.stdout, r.stdout)
+    # 加上 [audit:模型/日期] → 不再報未審
+    v2 = mkvault()
+    write(v2, "Systems/Aud.md",
+          "type: system\nstatus: done\nsummary: |-\n"
+          "  KEY:★INVARIANT★ 點數不足必須擋 [test:SomeGuard] [audit:sonnet/2026-06-18]",
+          body="# Aud\n")
+    r2 = run(v2, "doctor", "--ci")
+    check("Check T: 有 [audit:] 留痕 → 不再報未審", "未經獨立審計" not in r2.stdout, r2.stdout)
+    # 裸合約(連 [test:] 都沒)不應被未審項誤報(naked 先擋,audit 不雙重計)
+    v3 = mkvault()
+    write(v3, "Systems/Naked.md",
+          "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 沒綁測試的",
+          body="# Naked\n")
+    r3 = run(v3, "doctor", "--ci")
+    check("Check T: 裸合約只報裸、不報未審(不雙重計)",
+          "未經獨立審計" not in r3.stdout and "裸 ★INVARIANT★" in r3.stdout, r3.stdout)
+
+
+def t_guard_audit():
+    # guard audit:把 [audit:模型/日期] 留痕寫回 KEY 行,保留 [test:],重審覆蓋舊留痕
+    v = mkvault()
+    p = write(v, "Systems/S.md",
+              "type: system\nstatus: done\nsummary: |-\n"
+              "  KEY:★INVARIANT★ 點數不足必須擋 [test:SomeGuard]",
+              body="# S\n")
+    r = run(v, "guard", "audit", "Systems/S", "點數不足", "--date", "2026-06-18")
+    txt = read(p)
+    check("guard audit: [audit:] 寫回 KEY 行", "[audit:sonnet/2026-06-18]" in txt, r.stdout + r.stderr)
+    check("guard audit: [test:] 綁定不受影響", "[test:SomeGuard]" in txt, txt)
+    # 重審(換模型/日期)→ 覆蓋,不重複留痕
+    run(v, "guard", "audit", "Systems/S", "點數不足", "--date", "2026-07-01", "--model", "opus")
+    txt2 = read(p)
+    check("guard audit: 重審覆蓋舊留痕(新日期生效)",
+          "[audit:opus/2026-07-01]" in txt2 and "2026-06-18" not in txt2, txt2)
+    check("guard audit: 不累積(只一個 audit 標記)", txt2.count("[audit:") == 1, txt2)
+    # 找不到子字串 → rc2
+    r3 = run(v, "guard", "audit", "Systems/S", "不存在的合約")
+    check("guard audit: 子字串找不到 KEY 行 → rc2", r3.returncode == 2, r3.stdout + r3.stderr)
+
+
 def t_guard():
     """guard list/scaffold/bind — 對談驅動守衛 scaffold(2026-06-15)。
     需 repo_root + 真 .cs(discover_test_methods),故自建 docs/ 結構而非 mkvault。"""
