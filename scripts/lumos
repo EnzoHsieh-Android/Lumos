@@ -926,6 +926,68 @@ def cmd_contracts(env, rel=None):
     return 0
 
 
+KNOWN_TYPES = {"system", "verification", "issue", "project", "moc"}
+SYMBOL_NAMES = {"KEY", "FLOW", "DEP", "TEST", "AUTH", "FLAG", "DECISION", "VERIFY", "CORE"}
+SYMBOLISH_RE = re.compile(r"^([A-Z]{2,}):")   # 像「符號宣告」的行(全大寫前綴)→ 抓 typo
+
+
+def cmd_lint(env, node):
+    """單檔快檢:寫完一個節點立刻自驗標籤/格式(node-local,不掃 repo → 比 doctor 快)。
+    抓「寫入當下」最常見的錯:type/summary 缺漏、★ 標記格式錯(漏被 contracts 抓)、
+    裸合約 / 未審、symbol 行 typo、frontmatter 指紋(ghost trap…)。
+    與 doctor 分工:doctor 是全圖權威(跨節點完整性 + [test:] 存在性),lint 只看這一篇、
+    predicts pre-push 會不會擋(error 即 doctor --ci 會擋的同類)。"""
+    rel = env.find(node)
+    if rel is None:
+        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        return 2
+    n = env.notes[rel]
+    errs = list(n.lint)          # frontmatter 指紋(ghost trap / 重複鍵 / 日期引號…)= error
+    warns = []
+
+    t = n.fields.get("type")
+    if not isinstance(t, str) or not t:
+        errs.append("缺 type(frontmatter 必須有 type)")
+    elif t not in KNOWN_TYPES:
+        errs.append(f"未知 type『{t}』(應為 {'/'.join(sorted(KNOWN_TYPES))})")
+
+    summ = n.fields.get("summary")
+    summ = summ if isinstance(summ, str) else ""
+    if t in ("system", "issue") and not summ.strip():
+        errs.append(f"{t} 節點必須有 summary block(放 FLOW:/KEY:/DEP: 等符號行)")
+
+    for raw in summ.split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        ms = SYMBOLISH_RE.match(line)
+        if ms and ms.group(1) not in SYMBOL_NAMES:
+            warns.append(f"非標準符號行『{ms.group(1)}:』(typo? 符號應為 {'/'.join(sorted(SYMBOL_NAMES))})")
+        for mark, rx in (("★INVARIANT★", INVARIANT_RE), ("★DEBT★", DEBT_RE)):
+            if mark in line and not rx.match(line):
+                errs.append(f"{mark} 必須是 KEY 行前綴(KEY:{mark} ...),否則 contracts/doctor 抓不到:{line[:48]}")
+
+    invs, _ = extract_contracts(n)
+    for inv in invs:
+        clean, refs = strip_test_refs(inv)
+        if not refs:
+            errs.append(f"裸 ★INVARIANT★(沒綁 [test:],Check T 會擋):{first_line(clean, 48)}")
+        elif not invariant_audit_refs(inv):
+            errs.append(f"★INVARIANT★ 綁了測試但未獨立審計(缺 [audit:],pre-push 會擋):{first_line(clean, 48)}")
+
+    if not errs and not warns:
+        print(f"✓ lint {rel} — 0 問題")
+        return 0
+    print(f"lint {rel}")
+    for e in errs:
+        print(f"  ✗ {e}")
+    for w in warns:
+        print(f"  ⚠ {w}")
+    print(f"\n{len(errs)} error / {len(warns)} warning"
+          + ("" if errs else "(warning 不阻擋,但建議補)"))
+    return 1 if errs else 0
+
+
 # ───────────── guard: 合約守衛 scaffold(對談驅動)─────────────
 # lumos 只做機械活:① 列出 ★INVARIANT★ 綁定狀態 ② 套範本產 stub(預設紅燈) ③ 把 [test:] 綁回 KEY 行(自驗)。
 # 「斷言本體」由 Claude 經對談向人確認意圖後填 — claim 的真來自人確認,不來自 code 反推
@@ -2337,7 +2399,7 @@ def cmd_new(env, ntype, name, today):
     print(f"✓ new {ntype}: {path.relative_to(env.vault)}")
     for line in NEW_HINT.get(ntype, []):
         print(f"  {line}")
-    print("  寫完跑 lumos doctor 自檢(裸合約/未審/漏 verified_by 都會報);完整標籤規範見 lumos-project-notes skill")
+    print(f"  寫完跑 lumos lint {name}(單檔快檢標籤/格式)→ 全圖再 lumos doctor;完整規範見 lumos-project-notes skill")
     return 0
 
 
@@ -2682,6 +2744,9 @@ def main():
     p = sub.add_parser("contracts", help="合約登記簿 ★INVARIANT★/★DEBT★(全 vault 或單節點)")
     p.add_argument("note", nargs="?")
 
+    p = sub.add_parser("lint", help="單檔快檢:寫完一個節點立刻自驗標籤/格式(比 doctor 快,只看這篇)")
+    p.add_argument("note")
+
     g = sub.add_parser("guard", help="合約守衛 scaffold(對談驅動):列出未綁 / 套範本產 stub / 綁定")
     gsub = g.add_subparsers(dest="gcmd", required=True)
     gl = gsub.add_parser("list", help="列 ★INVARIANT★ 綁定狀態(real/dangling/fake/naked)")
@@ -2833,6 +2898,9 @@ def main():
                 print(f"ERROR: 找不到筆記: {args.note}", file=sys.stderr)
                 return 2
         return cmd_contracts(env, rel)
+
+    if args.cmd == "lint":
+        return cmd_lint(env, args.note)
 
     if args.cmd == "guard":
         if args.gcmd == "list":

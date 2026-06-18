@@ -42,7 +42,7 @@ KEY:★DEBT★ <已知偶然行為,可改不算 breaking>
 - ⚠ **多個 wikilink 必須是 YAML list,一項一行**(`- "[[A]]"`/`- "[[B]]"`);寫成 `"[[A]], [[B]]"` 單字串會長出 ghost 節點。
 - 純量/list/decisions 一律走 `lumos set`/`append`/`decision-add`(安全格式+寫後自驗),別手改 frontmatter。
 
-> 寫完一定跑 `lumos doctor` 自檢(裸合約/未審/漏 verified_by/斷鏈都會報);push 前 pre-push 會再擋一次。
+> 寫完一個節點先跑 `lumos lint <節點>`(單檔快檢:type/summary/★ 格式/裸合約/未審/ghost trap)→ 收尾再 `lumos doctor` 跑全圖;push 前 pre-push 會再擋一次。
 
 ### 主動調用 Skill（遇到情境就調用，別憑記憶硬幹）
 

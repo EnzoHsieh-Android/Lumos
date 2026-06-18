@@ -619,6 +619,56 @@ def t_guard_audit():
     check("guard audit: 子字串找不到 KEY 行 → rc2", r3.returncode == 2, r3.stdout + r3.stderr)
 
 
+def t_lint():
+    # 單檔快檢:乾淨節點過、各種寫入當下的錯被抓
+    v = mkvault()
+    # 乾淨 system(無合約)→ 0 問題
+    write(v, "Systems/Clean.md",
+          "type: system\nstatus: doing\nsummary: |-\n  FLOW:a→b\n  KEY:某關鍵", body="# Clean\n")
+    r = run(v, "lint", "Systems/Clean")
+    check("lint: 乾淨節點 rc0", r.returncode == 0 and "0 問題" in r.stdout, r.stdout)
+    # 裸 ★INVARIANT★ → error rc1
+    write(v, "Systems/Naked.md",
+          "type: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ 沒綁測試的", body="# N\n")
+    r = run(v, "lint", "Systems/Naked")
+    check("lint: 裸合約 → rc1 error", r.returncode == 1 and "裸 ★INVARIANT★" in r.stdout, r.stdout)
+    # ★INVARIANT★ 沒當 KEY 前綴(放 FLOW 行)→ 格式 error
+    write(v, "Systems/BadMark.md",
+          "type: system\nstatus: doing\nsummary: |-\n  FLOW:★INVARIANT★ 放錯行", body="# B\n")
+    r = run(v, "lint", "Systems/BadMark")
+    check("lint: ★ 非 KEY 前綴 → rc1(格式錯,contracts 抓不到)",
+          r.returncode == 1 and "必須是 KEY 行前綴" in r.stdout, r.stdout)
+    # 綁測試但未審 → error
+    write(v, "Systems/Unaud.md",
+          "type: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ 擋下 [test:G]", body="# U\n")
+    r = run(v, "lint", "Systems/Unaud")
+    check("lint: 綁測試未審 → rc1", r.returncode == 1 and "未獨立審計" in r.stdout, r.stdout)
+    # 綁測試 + 已審 → 0 問題
+    write(v, "Systems/Good.md",
+          "type: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ 擋下 [test:G] [audit:sonnet/2026-06-18]",
+          body="# G\n")
+    r = run(v, "lint", "Systems/Good")
+    check("lint: 綁測試+已審 → rc0", r.returncode == 0, r.stdout)
+    # system 缺 summary → error
+    write(v, "Systems/NoSum.md", "type: system\nstatus: doing", body="# NS\n")
+    r = run(v, "lint", "Systems/NoSum")
+    check("lint: system 缺 summary → rc1", r.returncode == 1 and "summary" in r.stdout, r.stdout)
+    # ghost trap(單字串多 wikilink)→ error(複用 frontmatter 指紋)
+    write(v, "Systems/Ghost.md",
+          "type: system\nstatus: doing\nrelated: \"[[A]], [[B]]\"\nsummary: |-\n  KEY:x", body="# Gh\n")
+    r = run(v, "lint", "Systems/Ghost")
+    check("lint: 單字串多 wikilink ghost trap → rc1", r.returncode == 1 and "ghost" in r.stdout.lower(), r.stdout)
+    # symbol typo → warning(不阻擋 rc0)
+    write(v, "Systems/Typo.md",
+          "type: system\nstatus: doing\nsummary: |-\n  KYE:打錯的符號\n  KEY:正常", body="# T\n")
+    r = run(v, "lint", "Systems/Typo")
+    check("lint: 符號 typo → warning 不阻擋(rc0)",
+          r.returncode == 0 and "非標準符號行" in r.stdout, r.stdout)
+    # 找不到節點 → rc2
+    r = run(v, "lint", "Systems/NoSuchNode")
+    check("lint: 找不到節點 → rc2", r.returncode == 2, r.stdout + r.stderr)
+
+
 def t_guard():
     """guard list/scaffold/bind — 對談驅動守衛 scaffold(2026-06-15)。
     需 repo_root + 真 .cs(discover_test_methods),故自建 docs/ 結構而非 mkvault。"""
