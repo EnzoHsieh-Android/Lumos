@@ -107,6 +107,24 @@ def t_new_path_traversal():
     check("BUG-6 未在 vault 外建檔", not (v.parent.parent.parent / "tmp" / "injected.md").exists())
 
 
+def t_new_teaches_tags():
+    # new 在執行當下教標籤規則:stdout 含合約鏈提示,檔案骨架含完整符號行
+    v = mkvault()
+    r = run(v, "new", "system", "AcctSvc", expect_rc=0)
+    check("new system: stdout 教 ★INVARIANT★ + [test:] 合約鏈",
+          "★INVARIANT★" in r.stdout and "[test:" in r.stdout, r.stdout)
+    check("new system: stdout 提示寫完跑 doctor", "lumos doctor" in r.stdout, r.stdout)
+    txt = read(v / "Systems" / "AcctSvc.md")
+    check("new system: summary 骨架含 FLOW/KEY/DEP/TEST 符號行",
+          all(s in txt for s in ("FLOW:", "KEY:", "DEP:", "TEST:")), txt)
+    r2 = run(v, "new", "issue", "BadState", expect_rc=0)
+    t2 = read(v / "Issues" / "BadState.md")
+    check("new issue: 骨架含 FLAG/DECISION/KEY", all(s in t2 for s in ("FLAG:", "DECISION:", "KEY:")), t2)
+    # 骨架本身要過 doctor(空符號行不該觸發 lint)
+    rd = run(v, "doctor", "--ci")
+    check("new 骨架 doctor 不報問題", rd.returncode == 0, rd.stdout)
+
+
 # ── BUG-7: fmt_scalar YAML 型別劫持 ──
 def t_set_boolean_guard():
     v = mkvault()
