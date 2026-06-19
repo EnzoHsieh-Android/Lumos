@@ -39,7 +39,7 @@
 未選中的 gaps ──▶ [5 backlog](候選池 + 衰減淘汰)
 ```
 
-執行形態:新 script `governance/autonomous-loop.sh`,內部一個(或數個)`claude -p` orchestrator 調用;cron `0 10 * * *`(日報 9:30 之後)。**起手先驗當日 `governance/reports/governance-<date>.json`(R2-F1:真實路徑含 `reports/` 層,裸寫會每天判不存在→loop 永不啟動)存在且 date 相符,否則跳過**(R1-m4:日報延遲/失敗時不抽到舊日報或空)。
+執行形態:新 script `governance/autonomous-loop.sh`,內部一個(或數個)`claude -p` orchestrator 調用;cron `0 10 * * *`(日報 9:30 之後)。**起手先驗當日 `governance/reports/governance-<date>.json`(R2-F1:真實路徑含 `reports/` 層,裸寫會每天判不存在→loop 永不啟動)存在且 date 相符,否則跳過**(R1-m4:日報延遲/失敗時不抽到舊日報或空)。**報告缺日(週末/失敗)→ 該日跳過、不視為錯誤;連續 N 日無報告觸發 → 走 LINE 提醒(R3-F-R3-3 loop 餓死偵測,對齊 HEARTBEAT「沒人時不會有警報」)。**
 
 ## 組件逐一
 
@@ -77,7 +77,7 @@
 
 ## 誠實天花板(必寫進 PR 可信度報告 + 系統文件)
 
-1. **放行的人是最後也是唯一真兜底**:全自動判收斂仍是**沒閉合的迴歸**——獨立 judge 只把「canary 抓到沒」的自評**推遠一層**(judge 也是 AI、也會錯),未消滅;且 `lumos canary record` 進去的 **severity 判定仍由 orchestrator 自呼=自評**(R1-m2:judge 不覆蓋 severity),自動模式比手動(主對話的人在場)可信度更低。CONVERGED 是「連 2 輪 opus **canary 被抓到、且**沒挑出 blocker/major」(R2-F3:收斂同時要求 canary caught,漏抓該輪不採信——別把收斂說成只剩『沒挑出問題』那一半),仍不證沒有更深問題。**本輪 R1 本身就是活證:這份 spec 用『強制地面事實查證』審自己,抓到自己 4 個沒查地面事實的假設(B1/B2/M1/M2)——證明這條補償必要,但也證明『沒人 grep 就會放過』,而自動模式裡那個 grep 的人不在。**
+1. **放行的人是最後也是唯一真兜底**:全自動判收斂仍是**沒閉合的迴歸**——獨立 judge 只把「canary 抓到沒」的自評**推遠一層**(judge 也是 AI、也會錯),未消滅;且 `lumos canary record` 進去的 **severity 判定仍由 orchestrator 自呼=自評**(R1-m2:judge 不覆蓋 severity),自動模式比手動(主對話的人在場)可信度更低。**更關鍵(R3-F-R3-1):severity 自報直接決定 `lumos loop status` 收斂與否(門檻 = severity∈{clean,minor})——等於『收斂了沒』由被審者自填,judge 不覆蓋這一哩,是全自動判收斂最弱的環。dry-run 必須人工抽查每輪 severity 自報 vs PR body 實際 findings 是否一致。**CONVERGED 是「連 2 輪 opus **canary 被抓到、且**沒挑出 blocker/major」(R2-F3:收斂同時要求 canary caught,漏抓該輪不採信——別把收斂說成只剩『沒挑出問題』那一半),仍不證沒有更深問題。**本輪 R1 本身就是活證:這份 spec 用『強制地面事實查證』審自己,抓到自己 4 個沒查地面事實的假設(B1/B2/M1/M2)——證明這條補償必要,但也證明『沒人 grep 就會放過』,而自動模式裡那個 grep 的人不在。**
 2. **自動 brainstorm 沒人回澄清** → spec 品質天花板低於有人在場的 brainstorm;「替你決策」是 AI 自選方案,**選錯方向的風險比有人時高**(cib 那種前提錯,自動模式更容易放過——這正是強制地面事實查證要擋的,但擋不保證全擋)。
 3. **AI 判「哪個 gap 值得做」= AI 決定改自己的方向**,有自我強化偏誤風險(可能偏好它「擅長」或「上次做過」的方向)。放行的人要警覺方向是否被 AI 帶偏。
 4. **這是放大放行帶寬,不是無人迭代**:它把「發起 + 篩選 + 自審備料」自動化,把「判斷收斂可不可信 + 放行」留人。
@@ -101,3 +101,9 @@ canary(`--force-expand` 未定義旗標)**漏抓**——opus 在 F4 點到它、
 - **major**:**F1** 日報路徑裸寫漏 `reports/` 層(cron stat 每天判不存在→loop 永不啟動)→ 全篇補 `governance/reports/`;**F2** `governance_flex_builder.py` 是日報專用 schema、無 PR/title 欄位、不可復用 → m3 誠實降級為「復用傳輸層、訊息 body 另寫」。
 - **minor**:**F3** 收斂語義漏「canary caught 那半」(天花板補全);**F5** judge 孫層 spawn 亦未證(§技術可行性補)。
 > 再次實證「canary 可信度因 spec 而異、真 findings 比 canary caught 更可靠」(見 memory)。最自指:本 spec=自動 design-loop,它正被自己描述的那套 design-loop 用「真 findings 兜底、而非靠 canary」驗證並修實。
+
+### R3(2026-06-20,canary 類型 c=未定義常數,opus,caught)
+canary(`DECAY_RATE`/`BACKLOG_FLOOR` 未定義常數)被抓到(識別符清查表標憑空、識破 token;type c 比 R2 type b 公平,opus 一抓即中)。排掉 canary 後 1 真 major + 1 minor:
+- **major**:**F-R3-1** R2-F3 只補了收斂的「文字定義」,沒補自動模式「**severity 自報 = 收斂門檻自填**」的執行面缺口——severity∈{clean,minor} 直接決定 loop status 收斂、judge 不覆蓋 severity → 收斂了沒由被審者自填,全自動判收斂最弱環。折入天花板 + dry-run 抽查每輪 severity vs 實際 findings。
+- **minor**:**F-R3-3** 報告缺日→loop 靜默不跑無告警 → 補 loop 餓死偵測。
+其餘各節評 sound(技術可行性誠實、F1/F2 修乾淨、天花板整體到位)。
