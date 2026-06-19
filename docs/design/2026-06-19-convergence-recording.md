@@ -36,6 +36,7 @@ lumos loop status <id> [--need K]   # K 預設 2
 - 否則「⏳ 還需 N 輪乾淨」,**N = need −(tail 從最後一筆往回數、連續合格的輪數)**(R3-MINOR:有髒輪時 N 不會虛低;最後一輪就髒 → N=need)。
 - 該 loop 記錄數 < K → 未收斂(exit 1)。
 - `--need` 防呆:**`need = max(1, need)`**(R3:不引入未定義常數;< 1 直接夾到 1)。
+- **missed 輪 × tail-K(R6,dogfood 實測逼出)**:`missed` 也算一輪、且 `kind!=caught` 故必不合格 → 一個 missed 落在 tail-K 窗內就擋住收斂,直到它隨新輪滑出窗外。效果 = **一次漏抓 canary 自然重置乾淨連續數**(無需特例,tail-K 機制自動成立)。
 - **篩選規則(R2-BLOCKER-2)**:`rec.get("loop") == loop_id`(嚴格等值;舊 ad-hoc 記錄無 `loop` 鍵 → `None != id` 自然排除)。`loop_id` CLI 入口保證非空。
 - **輸出**:第一行 status,接著每輪一行 tab 分隔(`順位\tkind\tseverity\tts\tnote`;順位 = 該 loop 篩出後 append 序的 1-indexed 位置;無 note 給空字串)當留痕,讓 B skill 不必 screen-scrape。
 - **exit code(給 B skill 機器讀)**:`0`=CONVERGED、`1`=未收斂(**含「該 id 還沒有任何記錄」= 還沒開始審,R2-MAJOR-2**)、`2`=**真錯誤**(參數錯 / 檔讀不到)。「沒記錄」和「I/O 錯」分開,讓 B 能分辨「該起一輪」vs「基礎設施壞了」。
@@ -78,7 +79,8 @@ lumos loop status <id> [--need K]   # K 預設 2
 - `canary record caught --loop L --severity major` → canary-log 該筆含 `loop`/`severity`。
 - `loop status L`(CLI 路徑,非只測內部函式,R1-BLOCKER-1):連 2 輪 caught+clean(或 minor)→ 印 `CONVERGED` 且 **exit 0**;最後 2 輪有一輪 missed/major/blocker → 印「還需」且 **exit 1**。
 - 該 loop 記錄數 < 2 → exit 1;**該 id 無記錄 → exit 1**(還沒開始,非錯誤,R2-MAJOR-2)。
-- **sliding tail-K(R2-MAJOR-1)**:3 輪 = [major, caught+clean, caught+clean] → **CONVERGED**(前面髒輪不算);3 輪 = [clean, clean, major] → 未收斂(最後一輪髒)。
+- **sliding tail-K(R2-MAJOR-1)**:3 輪 = [caught+major, caught+clean, caught+clean] → **CONVERGED**(前面髒輪不算);[caught+clean, caught+clean, caught+major] → 未收斂(最後一輪髒)。(notation:每元素都標 kind+severity,R6)
+- **missed 在 tail-K(R6)**:[caught+clean, missed, caught+clean] → 未收斂(中間 missed 在 tail-2 內);要再一輪 caught+clean 把 missed 擠出窗才收斂。
 - `--loop L` 但**缺 `--severity`** 的輪 → 視同未收斂(exit 1),不得當 clean(R1-MAJOR-3)。
 - `gov` 顯示帶 loop/severity 的 canary 列時,detail **開頭**含 `loop=`/`sev=`(R2-MAJOR-3,即使 auditor/note 長也不被 `[:50]` 截掉)。
 - 測試函式:`t_loop_status`(新,測 loop status CLI/exit code/tail-K)+ `t_canary` 擴充(測帶 --loop/--severity 的 record 與 gov detail)。
@@ -104,7 +106,7 @@ lumos loop status <id> [--need K]   # K 預設 2
 - canary 驗證:審計員抓到 §9 dead-ref(列 MINOR-1 + 「structurally suspicious / signature of a forgotten plant」)→ **醒著**;severity=major → 本輪仍不計入收斂。R1 整合性 reframe 經確認無殘留 overclaim。
 
 ### 第三輪(canary-護;canary=未定義常數 `LOOP_DEFAULT_K`,**抓到**)
-- 前兩輪修正**全部經 code 驗證 hold**。
+- 前兩輪修正**對齊 code 的 delta 屬實**(spec 正確描述「要改什麼」;非指 code 已實作——本 spec 是設計文件)。
 - R3-BLOCKER(真,silent-bug 風險):`cmd_canary` 的 loop/severity 完整 threading(argparse→dispatch→function 簽名→寫入)寫明確切簽名 → §7。
 - R3-MAJOR:gov mapper 的 detail lambda 寫出確切版(含舊記錄無 loop 鍵的條件)→ §7。
 - R3-MINOR:`LOOP_DEFAULT_K` 改 `need = max(1, need)`(不引未定義常數)、「還需 N」的 N 公式寫明 → §3。
