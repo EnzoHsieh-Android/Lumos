@@ -861,7 +861,9 @@ obsidian vault="{vault}" search query="相關關鍵字"
    - **沒抓到** → 放水。**這輪判決作廢**,換不同 canary 重跑。`lumos canary record missed --auditor <模型>`。連 2 次 missed 就升級模型/把文件切小(升級前 `lumos gov --since 7` 看 missed 史)。
 4. **panel 變體**:一輪派 N 個審計員時,每個各給自己的 canary;漏抓自己 canary 的剔出投票。
 
-**天花板**:canary 抓得到「審計員根本沒讀/只吐通用回應」,**抓不到「讀了但複雜權衡判錯」**;且判定「有沒有抓到」由植入者自己做、無外部檢查——canary 是**降低放水機率的摩擦**,不是閉合驗證。設計全文見 `docs/design/2026-06-19-canary-audit.md`。
+**收斂留痕(2026-06-19;讓多輪審計能機械終止)**:把每輪記成一筆帶 loop 的 canary——`lumos canary record caught|missed --loop <設計slug> --severity clean|minor|major|blocker --auditor <模型>`(`severity`=忠實轉錄審計員的最嚴重 finding)。`lumos loop status <slug> --need 2` 從紀錄**算收斂**:連 2 輪 caught 且 severity∈{clean,minor} → exit 0(綠燈進實作);否則 exit 1。missed/缺 severity/blocker/major 都讓它不收斂(逼修了再審)。`gov` 看得到整段輪歷史。
+
+**天花板**:canary 抓得到「審計員根本沒讀/只吐通用回應」,**抓不到「讀了但複雜權衡判錯」**;判定「有沒有抓到」「severity 多嚴重」都由植入者自己做、無外部檢查——canary/收斂是**降低放水機率的摩擦 + 可觀測地板**,不是閉合驗證或 oracle。設計全文見 `docs/design/2026-06-19-canary-audit.md`、`…-convergence-recording.md`。
 
 ### 發現 Issue 時
 ```bash
