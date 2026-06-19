@@ -33,7 +33,7 @@
    **類型由 N 決定(無需記憶/查 log 的 type 欄):type = 清單[(N−1) mod 4]**(N=本輪序,a=1,b=2…)→ 自動 a→b→c→d→a 輪替,missed 重跑時 N 已 +1 故換新類型。嵌唯一 token 定位;在 `--note` 記 `type=<x>`。**提交的 spec 永遠不含 canary。**
 3. **派乾淨審計員**:Agent tool、`model: sonnet`(**升級後 opus,見 §4**)、**refute framing**(主動找洞,別確認)、**不告知有 canary**、指向工作副本。
 4. **判讀**:① **canary 抓到 = 審計員清楚點出那個植入瑕疵的「性質」**(如「§N 不存在」「`--xxx` 未定義」)——光 token 字串出現、或泛泛說「有些引用怪怪的」不算;② **最嚴重真 finding**(`clean`=排掉 canary 後審計員無任何真 finding / `minor` / `major` / `blocker`)= 審計員標的 max。**剝除「審計員誤判」的約束(防自己放水,M-3)**:只有當你能**指出該 finding 客觀錯在哪**(被實際 spec/code 內容反證)才可剝;**判不準就保留**(寧可高估嚴重度)。誤判剝除要在 `--note` 記一句理由。
-5. **記錄**:`lumos canary record caught|missed --loop <id> --severity <worst> --auditor sonnet --note "r<N> type=<a-d> <caught|missed> [誤判剝除理由]"`(**note 格式固定**,含 canary 類型供追溯)。
+5. **記錄**:`lumos canary record caught|missed --loop <id> --severity <worst> --auditor sonnet --note "r<N> type=<a-d> <caught|missed> [誤判剝除理由]"`(`--loop`/`--severity`/`--auditor` 皆 **Component A 的 `canary record` 介面**所定義,見 A spec;`--note` 格式固定含 canary 類型供追溯)。
 6. **漏抓 → 該輪判決不採信**(但**仍是一筆 `missed` record、仍算進 cap**,不是「不存在」):**不折 findings**(判決不可信),下一輪(N+1、自動換 canary 類型 + 更兇 framing,見 §4)。
 7. **抓到 → 折真 findings 進 `docs/design/<id>.md`**;**commit 前 `grep -c '<canary token>' docs/design/<id>.md` 必須為 0**(MINOR-1:確認 canary 沒混進真檔)再 `git commit`(message 記該輪 canary+severity)。折時:剝審計員誤判(依 step4 約束)、套真 fix、把該輪寫進 spec 審計修正紀錄。
 8. **問收斂**:`lumos loop status <id> --need 2`(**K=2**:連 2 輪 caught 且無 blocker/major)→ exit 0 出 loop;exit 1 → 回 step 1 下一輪。
@@ -73,6 +73,11 @@
 - (無 `test_lumos.py` 單元測試——B 是 skill 非 lumos code;A 的原語已有測試。)
 
 ## 審計修正紀錄
+### 第四輪(canary=未定義產物 `loop-summary.md`,**抓到**;無 blocker/major)
+- MINOR-A:`--auditor` 等旗標未註明來自 A 介面 → §3 step5 註明。
+- canary 校準教訓:`loop-summary.md` 偏像真實 deliverable,審計員當「缺路徑」flag(仍是 catch),不如 loop_manifest/round_budget 那種明顯 orphan;下輪用更明確的 orphan(壞 §ref)。
+- **R4 = caught+minor → 計入收斂**;但 tail-2=[r3 major, r4 minor] 尚未收斂,需 r5。
+
 ### 第三輪(canary=未定義欄位 `round_budget`,**抓到**)
 - 前兩輪 13 項修正**全部 hold**。
 - MAJOR-2:連續漏抓 reset 規則 + 單次漏抓 framing 文字未 pin → §4 明訂(最近 2 筆 missed、caught 重置;framing 從第 1 次漏抓就加碼)。
