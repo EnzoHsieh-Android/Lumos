@@ -1,12 +1,12 @@
 # Lumos
 
+[繁體中文](README.md) · **English**
+
 > **Lumos — light up the black box of all-AI development, and the path to the right requirements.**
 >
 > (A revealing charm. It lights the *code* — surfacing the hidden *why*, the decisions, the hard contracts — and lights the *requirements* — forcing understanding through unavoidable dialogue. Lumos doesn't make your requirements correct for you; it lights the path so you can walk it correctly.)
 
 Lumos is the single source for the complete toolset behind the **"graph-as-contract"** methodology. Every all-AI iteration gets woven into a *cloth of understanding*: a knowledge graph is the project's single source of truth — *why it's built this way / where the boundaries are / which behaviors are immutable contracts* — and **commit-time enforcement plus executable contract tests** keep that graph from rotting.
-
-> 中文版見 [`README.md`](README.md)。
 
 ---
 
@@ -224,3 +224,13 @@ lumos gov OrderService   # which gates flagged this node, hard-block vs soft, wi
 - **Don't over-govern.** Mark only what's load-bearing; soft stays soft; never add ceremony without proportional value.
 - **Honest ceilings.** Tools prove *form* (a test exists, a rollback is written, a clean agent reviewed) — never *validation* (the rule is right for today's business, the rollback actually runs). That judgment stays with people.
 - **Maker ≠ checker.** No-right-answer judgments (is this a real contract? is the test a tautology?) go to an independent, context-free agent — not the author.
+
+---
+
+## 11. Boundary & further reading
+
+Lumos holds only the **generic graph toolset**. A project's own things stay out: business graph content, the app's release/deploy scripts (e.g. `release.sh`), tech-stack skills (vue/csharp project-scope skills).
+
+- Onboarding details: [ONBOARDING.md](ONBOARDING.md)
+- Full architecture: [ARCHITECTURE.md](ARCHITECTURE.md) (single source → two scopes → consumers, lifecycle commands, subcommands, enforcement pipeline)
+- Difference vs SDD: [SDD-vs-Lumos.md](SDD-vs-Lumos.md)
