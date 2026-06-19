@@ -81,6 +81,7 @@ lumos loop status <id> [--need K]   # K 預設 2
 - **sliding tail-K(R2-MAJOR-1)**:3 輪 = [major, caught+clean, caught+clean] → **CONVERGED**(前面髒輪不算);3 輪 = [clean, clean, major] → 未收斂(最後一輪髒)。
 - `--loop L` 但**缺 `--severity`** 的輪 → 視同未收斂(exit 1),不得當 clean(R1-MAJOR-3)。
 - `gov` 顯示帶 loop/severity 的 canary 列時,detail **開頭**含 `loop=`/`sev=`(R2-MAJOR-3,即使 auditor/note 長也不被 `[:50]` 截掉)。
+- 測試函式:`t_loop_status`(新,測 loop status CLI/exit code/tail-K)+ `t_canary` 擴充(測帶 --loop/--severity 的 record 與 gov detail)。
 - 既有測試全綠(回歸)。
 
 ## 審計修正紀錄
