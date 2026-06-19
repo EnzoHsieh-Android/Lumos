@@ -8,6 +8,8 @@
 
 「**圖譜即合約**」方法論的**完整工具組唯一源**。把每一次全 AI 迭代織進「已理解的布」:知識圖譜是專案的唯一真相來源(為什麼這樣設計 / 邊界 / 不可改的合約),用 **commit-time 強制力與可執行合約測試**確保它不腐爛。
 
+> **本治理建立在 [Claude Code](https://claude.com/claude-code) 之上。** 整套規範以 Claude Code 為執行的 AI agent 來設計:`skills/` 是 user-scope 的 Claude Code skills(symlink 到 `~/.claude/skills/`)、紀律注入專案的 `CLAUDE.md`、L1/L3 在 Claude Code session start 載入、`[audit:]` 獨立合法性審計用**乾淨的 Claude agent**(maker ≠ checker)。`scripts/lumos` CLI 本身是純 python、哪裡都能跑;但「先讀後動 / 退場寫回 / 獨立審計」這條完整迴圈假設 agent 就是 Claude Code。
+
 ---
 
 ## 1. Lumos 解決什麼

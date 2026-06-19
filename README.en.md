@@ -8,6 +8,8 @@
 
 Lumos is the single source for the complete toolset behind the **"graph-as-contract"** methodology. Every all-AI iteration gets woven into a *cloth of understanding*: a knowledge graph is the project's single source of truth — *why it's built this way / where the boundaries are / which behaviors are immutable contracts* — and **commit-time enforcement plus executable contract tests** keep that graph from rotting.
 
+> **This governance is built on [Claude Code](https://claude.com/claude-code).** The whole methodology is designed around Claude Code as the executing AI agent: `skills/` are user-scope Claude Code skills (symlinked into `~/.claude/skills/`), the discipline is injected into the project's `CLAUDE.md`, L1/L3 hooks load at Claude Code session start, and the `[audit:]` independent-legitimacy check uses a **clean Claude agent** (maker ≠ checker). The `scripts/lumos` CLI itself is plain python and runs anywhere — but the full *read-before-act / write-back / independent-audit* loop assumes the agent is Claude Code.
+
 ---
 
 ## 1. Why Lumos exists
