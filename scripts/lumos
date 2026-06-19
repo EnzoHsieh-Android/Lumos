@@ -329,6 +329,31 @@ def _suggest_systems_for_orphan(env, rel, n):
                   key=lambda x: (-x[1], -len(env.notes[x[0]].stem or "")))
 
 
+def _append_governance_log(vault, events):
+    """doctor --ci 唯一寫者:把本輪 gate findings append 到 docs/.governance-log.jsonl。
+    非 git / 取不到 HEAD → 跳過(不報錯)。dedup 留給讀時(lumos gov)。"""
+    if not events:
+        return
+    import json
+    import datetime
+    import subprocess
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                                capture_output=True, text=True, cwd=str(vault)).stdout.strip()
+    except Exception:
+        commit = ""
+    if not commit:
+        return
+    ts = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    path = vault.parent / ".governance-log.jsonl"
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            for e in events:
+                f.write(json.dumps({"ts": ts, "commit": commit, **e}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
     C = {k: (v if color else "") for k, v in
          dict(R="\033[31m", Y="\033[33m", G="\033[32m", B="\033[1m", X="\033[0m").items()}
@@ -615,6 +640,9 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
         warn_soft(rev_soft, f"{len(rev_soft)} 條 ★CHECKPOINT★ 建議補回退(不擋):",
                   "加 [rollback:decisions] + decisions rollback")
     print()
+
+    if ci:
+        _append_governance_log(env.vault, gov_events)
 
     print(f"{C['B']}─────────────────────────────────{C['X']}")
     if issues == 0:
