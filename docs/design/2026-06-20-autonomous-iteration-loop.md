@@ -88,6 +88,12 @@
 - 單元測試:gap 抽取的排序/去重/前置 gate(有 open PR 則不展開);backlog 衰減淘汰;可信度報告生成。
 - 用合成 governance json + 假 backlog 驗流程,不每次真燒 claude -p。
 
+## 成本與失控保護(R4 補)
+
+- **單日粗估**:brainstorm(1 opus)+ design-loop(≤6 輪 ×[1 opus auditor + 1 opus judge])+ gap 評分(1)≈ **單日 ≤14 個 agent 調用**。走 $0 OAuth 訂閱(無 API key 費),但受訂閱額度 / rate limit 約束。
+- **失控保護三道硬界**:① design-loop `max cap = 6 輪`(既有,不收斂即停);② `N=1` 同時只 1 個待放行(既有,不並發多 spec);③ 連續撞 cap(不收斂)→ 停 + LINE 告警「今日 spec 未收斂、未開 PR」,別無限燒。
+- **dry-run 先觀察實際單日 token / 時長**再放手到真 PR。不設精細 token 預算(YAGNI,訂閱內 $0)。
+
 ## 審計修正紀錄
 
 ### R1(2026-06-20,canary 類型 a=壞§ref,**opus**,caught)
@@ -107,3 +113,8 @@ canary(`DECAY_RATE`/`BACKLOG_FLOOR` 未定義常數)被抓到(識別符清查表
 - **major**:**F-R3-1** R2-F3 只補了收斂的「文字定義」,沒補自動模式「**severity 自報 = 收斂門檻自填**」的執行面缺口——severity∈{clean,minor} 直接決定 loop status 收斂、judge 不覆蓋 severity → 收斂了沒由被審者自填,全自動判收斂最弱環。折入天花板 + dry-run 抽查每輪 severity vs 實際 findings。
 - **minor**:**F-R3-3** 報告缺日→loop 靜默不跑無告警 → 補 loop 餓死偵測。
 其餘各節評 sound(技術可行性誠實、F1/F2 修乾淨、天花板整體到位)。
+
+### R4(2026-06-20,canary 類型 a=壞§ref,opus,caught)
+canary(〈§成本模型〉死§ref)抓到(識別符清查對照 17 個 header 確認無此節、識破 token)。排掉 canary 後 **0 blocker / 0 major / 1 minor**(本輪乾淨):
+- **minor**:成本模型實質缺席(排掉 canary 身分仍真)——spec 提要算成本卻通篇無上界/預算/估算 → 補「成本與失控保護」節(單日 ≤14 agent、三道硬界、dry-run 觀察)。
+其餘各節 sound:**地面事實 7/7 全符真實 code/檔案**,R3 兩條修法乾淨且與 `scripts/lumos:1214` 收斂邏輯精確對齊,天花板無漏列、R1-R3 canary 未洩漏進真檔。
