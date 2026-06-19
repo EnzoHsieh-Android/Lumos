@@ -32,14 +32,15 @@ lumos canary record caught|missed --loop <id> --severity clean|minor|major|block
 lumos loop status <id> [--need K]   # K 預設 2
 ```
 讀 `.canary-log.jsonl`、篩 `loop==id`。**一筆 `--loop` 記錄 = 一輪**;**排序用檔案 append 順序**(不是 `ts` 排序——`ts` 只到秒,同秒兩輪會並列;append 順序唯一且即時間序,R1-MAJOR-2)。判定:
-- **CONVERGED ⟺ 最後 K 輪全是「`kind==caught` 且 `severity∈{clean,minor}`」**(canary 抓到=審計員醒著;無 blocker/major;**缺 severity 視同未收斂**,R1-MAJOR-3)。
-- 否則「⏳ 還需 N 輪乾淨」(最近一輪 missed / major / blocker / 缺 severity → 修了再審)。
-- 該 loop 輪數 < K → 未收斂。
-- **輸出**:第一行 status,接著每輪一行 tab 分隔(`順位\tkind\tseverity\tts\tnote`)當留痕,讓 B skill 不必 screen-scrape。
-- **exit code(R1-BLOCKER-1/MINOR-1,給 B skill 機器讀)**:`0`=CONVERGED、`1`=未收斂、`2`=錯誤 / 該 id 無記錄。
+- **CONVERGED ⟺ 最後 K 輪(sliding tail-K:篩出該 loop 的記錄、保留 append 序、取最後 K 筆)全是「`kind==caught` 且 `severity∈{clean,minor}`」**(canary 抓到=審計員醒著;無 blocker/major;**缺 severity 視同未收斂**,R1-MAJOR-3)。R2-MAJOR-1:是 **tail-K 滑動窗**——前面有髒輪不影響,只看最後 K 筆;不是「每一輪都得乾淨」。
+- 否則「⏳ 還需 N 輪乾淨」(最後 K 內有 missed / major / blocker / 缺 severity → 修了再審)。
+- 該 loop 記錄數 < K → 未收斂(exit 1)。
+- **篩選規則(R2-BLOCKER-2)**:`rec.get("loop") == loop_id`(嚴格等值;舊 ad-hoc 記錄無 `loop` 鍵 → `None != id` 自然排除)。`loop_id` CLI 入口保證非空。
+- **輸出**:第一行 status,接著每輪一行 tab 分隔(`順位\tkind\tseverity\tts\tnote`;順位 = 該 loop 篩出後 append 序的 1-indexed 位置;無 note 給空字串)當留痕,讓 B skill 不必 screen-scrape。
+- **exit code(給 B skill 機器讀)**:`0`=CONVERGED、`1`=未收斂(**含「該 id 還沒有任何記錄」= 還沒開始審,R2-MAJOR-2**)、`2`=**真錯誤**(參數錯 / 檔讀不到)。「沒記錄」和「I/O 錯」分開,讓 B 能分辨「該起一輪」vs「基礎設施壞了」。
 
 ## 4. 為什麼這形狀(以及「機械」到什麼程度,R1-BLOCKER-2 誠實校正)
-- 「留痕」= 那一串 round 記錄本身(怎麼一輪輪收斂的);`gov` 看得到這些 canary 事件。**這塊是純收益、與整合性無關**——本來人眼判收斂不留痕、無法事後查;現在每輪 caught+severity 都記下、收斂條件可被任何人重算。
+- 「留痕」= 那一串 round 記錄本身(怎麼一輪輪收斂的);`gov` 看得到這些 canary 事件。**這塊是純收益、與整合性無關**——本來人眼判收斂不留痕、無法事後查;現在每輪 caught+severity 都記下、收斂條件可被任何人**重查**(R2:用「重查」不用「重算」——公式可重算,但 append-only 無簽章的輸入仍可被偽造,見 §5 整合性)。
 - `loop status` 是**對「忠實記下的審計員判決」做機械計算**——它把「人含糊地說『看起來收斂了』」換成「連 K 輪 caught+乾淨 這個可被重算的條件」。**但它不比輸入更可信**:`severity` 是編排者轉錄審計員的最嚴重 finding,沒有寫入端驗證。一個想早點收工的編排者可以記假的 `clean`。
 - **整合性假設(明說)**:本機制成立的前提是「編排者忠實轉錄審計員的判決」。這跟 canary「植入者忠實判定有沒有抓到」是**同一個沒閉合的迴歸**——它把問題從「審計員審得好不好」往上換成「編排者記得準不準」,後者較難自欺、但**不是 tamper-proof**。
 - 為什麼還是有意義:converged 一輪 = **canary 抓到(審計員醒著)** + 那個醒著的審計員**自己標的最嚴重 finding 是 clean/minor**。兩個訊號疊起來,比「人眼掃一下說 OK」強得多、且可查。
@@ -59,19 +60,20 @@ lumos loop status <id> [--need K]   # K 預設 2
 ## 7. 受影響(含明確 argparse/dispatch,R1-BLOCKER-1)
 - `scripts/lumos`:
   - `canary record` 加 `--loop`/`--severity`(`choices=("clean","minor","major","blocker")`)兩選用 arg;`cmd_canary` 寫入時帶這兩鍵。
-  - 新增 `loop` 頂層 subparser → `lsub = loop.add_subparsers(dest="lcmd", required=True)` → `lsub.add_parser("status")` → positional `id` + `--need`(type=int, default=2)。
-  - dispatch:`if args.cmd == "loop": \n    if args.lcmd == "status": return cmd_loop_status(env, args.id, args.need)`(別重蹈現有 `canary` dispatch 沒讀 `ccmd` 的覆轍)。
-  - `cmd_loop_status(env, loop_id, need)`:讀 canary-log(append 序)、篩 loop、算收斂、印 status+輪歷史、回 0/1/2。
-- `cmd_gov`:canary mapper 的 `detail` **必須**附 loop/severity(R1-MAJOR-1,改「選做」為必做——gov 是主要治理查詢面,否則 audit 史不完整)。
+  - 新增 `loop` 頂層 subparser → `lsub = loop.add_subparsers(dest="lcmd", required=True)` → `st = lsub.add_parser("status")` → `st.add_argument("loop_id")`(**`dest="loop_id"`,不用 `id` 免遮蔽內建**,R2-BLOCKER-1)+ `st.add_argument("--need", type=int, default=2)`。
+  - dispatch:`if args.cmd == "loop":` → `if args.lcmd == "status": return cmd_loop_status(env, args.loop_id, args.need)`(別重蹈現有 `canary` dispatch 沒讀 `ccmd` 的覆轍)。
+  - `cmd_loop_status(env, loop_id, need=2)`(**簽名給 need 預設,防直接呼叫漏傳**,R2-MINOR-3):讀 canary-log(append 序、**不要 ts-sort**——R2:`cmd_gov` 有 ts-sort 別照抄)、篩 loop、tail-K 算收斂、印 status+輪歷史、回 0/1/2。
+- `cmd_gov`:canary mapper 的 `detail` **必須**附 loop/severity(R1-MAJOR-1,改「選做」為必做)。**loop/severity 放 detail 最前**(R2-MAJOR-3:`detail` 顯示有 `[:50]` 截斷,放後面長 auditor/note 會把它吃掉),如 `loop=X sev=major · <auditor> <note>`。
 - `skills/lumos-project-notes/SKILL.md`:canary 協議那節補「記 round(帶 --loop/--severity)+ `loop status` 看收斂」。
 - `scripts/test_lumos.py`:測試。
 
 ## 8. 驗收標準
 - `canary record caught --loop L --severity major` → canary-log 該筆含 `loop`/`severity`。
 - `loop status L`(CLI 路徑,非只測內部函式,R1-BLOCKER-1):連 2 輪 caught+clean(或 minor)→ 印 `CONVERGED` 且 **exit 0**;最後 2 輪有一輪 missed/major/blocker → 印「還需」且 **exit 1**。
-- 該 loop 輪數 < 2 → exit 1;該 id 無記錄 → exit 2。
+- 該 loop 記錄數 < 2 → exit 1;**該 id 無記錄 → exit 1**(還沒開始,非錯誤,R2-MAJOR-2)。
+- **sliding tail-K(R2-MAJOR-1)**:3 輪 = [major, caught+clean, caught+clean] → **CONVERGED**(前面髒輪不算);3 輪 = [clean, clean, major] → 未收斂(最後一輪髒)。
 - `--loop L` 但**缺 `--severity`** 的輪 → 視同未收斂(exit 1),不得當 clean(R1-MAJOR-3)。
-- `gov` 顯示帶 loop/severity 的 canary 列時,detail 含 loop/severity(R1-MAJOR-1)。
+- `gov` 顯示帶 loop/severity 的 canary 列時,detail **開頭**含 `loop=`/`sev=`(R2-MAJOR-3,即使 auditor/note 長也不被 `[:50]` 截掉)。
 - 既有測試全綠(回歸)。
 
 ## 審計修正紀錄
@@ -83,3 +85,12 @@ lumos loop status <id> [--need K]   # K 預設 2
 - R1-MAJOR-3:`--loop` 缺 `--severity` 視同未收斂 → §2/§3/§8。
 - R1-MINOR-1:`loop status` 輸出格式 + exit code(0/1/2)寫明 → §3/§8。
 - canary 驗證:審計員精準點名植入的 `pinned:true`(列為「Deliberately Out-of-Place Defect」+ MAJOR-4)→ **這輪審計員醒著**;但 severity=blocker → 本輪不計入收斂。
+
+### 第二輪(canary-護;canary=指向不存在的 §9,**抓到**)
+- R2-BLOCKER-1:`loop status` positional 用 `dest="loop_id"`(不用 `id` 遮蔽內建)→ §7。
+- R2-BLOCKER-2:篩選明訂 `rec.get("loop") == loop_id` 嚴格等值 → §3。
+- R2-MAJOR-1(真 major):「最後 K 輪」明訂為 **tail-K 滑動窗**(非「每輪都得乾淨」)+ 加 3 輪驗收測試 → §3/§8。
+- R2-MAJOR-2:「無記錄」改 exit 1(還沒開始)、exit 2 只留真錯誤 → §3/§8。
+- R2-MAJOR-3:gov detail 的 loop/severity 放最前(避 `[:50]` 截斷)→ §7/§8。
+- R2-MINOR:`cmd_loop_status` 別照抄 cmd_gov 的 ts-sort、need 簽名給預設、「重算」改「重查」→ §3/§4/§7。
+- canary 驗證:審計員抓到 §9 dead-ref(列 MINOR-1 + 「structurally suspicious / signature of a forgotten plant」)→ **醒著**;severity=major → 本輪仍不計入收斂。R1 整合性 reframe 經確認無殘留 overclaim。
