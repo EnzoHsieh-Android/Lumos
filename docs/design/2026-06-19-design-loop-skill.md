@@ -30,18 +30,18 @@
    - (b) 未定義的旗標 `--xxx`(引入卻不在任何指令/簽名);
    - (c) 未定義的欄位/常數(如憑空的 frontmatter 欄位或常數名);
    - (d) 未定義的產物/檔名(如憑空的 `xxx.json`,不在 schema/它處)。
-   每輪換不同類型(a→b→c→d→a…);嵌唯一 token 定位;記下植在哪。**提交的 spec 永遠不含 canary。**
-3. **派乾淨 Sonnet 審計員**:Agent tool、`model: sonnet`、**refute framing**(主動找洞,別確認)、**不告知有 canary**、指向工作副本。
+   **類型由 N 決定(無需記憶/查 log 的 type 欄):type = 清單[(N−1) mod 4]**(N=本輪序,a=1,b=2…)→ 自動 a→b→c→d→a 輪替,missed 重跑時 N 已 +1 故換新類型。嵌唯一 token 定位;在 `--note` 記 `type=<x>`。**提交的 spec 永遠不含 canary。**
+3. **派乾淨審計員**:Agent tool、`model: sonnet`(**升級後 opus,見 §4**)、**refute framing**(主動找洞,別確認)、**不告知有 canary**、指向工作副本。
 4. **判讀**:① **canary 抓到 = 審計員清楚點出那個植入瑕疵的「性質」**(如「§N 不存在」「`--xxx` 未定義」)——光 token 字串出現、或泛泛說「有些引用怪怪的」不算;② **最嚴重真 finding**(clean/minor/major/blocker)= 排掉 canary 後審計員標的 max。**剝除「審計員誤判」的約束(防自己放水,M-3)**:只有當你能**指出該 finding 客觀錯在哪**(被實際 spec/code 內容反證)才可剝;**判不準就保留**(寧可高估嚴重度)。誤判剝除要在 `--note` 記一句理由。
-5. **記錄**:`lumos canary record caught|missed --loop <id> --severity <worst> --auditor sonnet --note "<rN 摘要>"`。
-6. **漏抓 → 該輪作廢**:換**不同** canary + **更兇**的 refute framing 重跑;**不折 findings**(這輪判決不可信)。
-7. **抓到 → 折真 findings 進 `docs/design/<id>.md`、`git commit`**(commit message 記該輪 canary+severity;折時:工作副本的 canary 不進真檔、剝審計員誤判(依 step4 約束)、套真 fix、把該輪寫進 spec 的審計修正紀錄)。
-8. **問收斂**:`lumos loop status <id>` → exit 0 出 loop;exit 1 → 回 step 1 下一輪。
+5. **記錄**:`lumos canary record caught|missed --loop <id> --severity <worst> --auditor sonnet --note "r<N> type=<a-d> <caught|missed> [誤判剝除理由]"`(**note 格式固定**,含 canary 類型供追溯)。
+6. **漏抓 → 該輪判決不採信**(但**仍是一筆 `missed` record、仍算進 cap**,不是「不存在」):**不折 findings**(判決不可信),下一輪(N+1、自動換 canary 類型 + 更兇 framing,見 §4)。
+7. **抓到 → 折真 findings 進 `docs/design/<id>.md`**;**commit 前 `grep -c '<canary token>' docs/design/<id>.md` 必須為 0**(MINOR-1:確認 canary 沒混進真檔)再 `git commit`(message 記該輪 canary+severity)。折時:剝審計員誤判(依 step4 約束)、套真 fix、把該輪寫進 spec 審計修正紀錄。
+8. **問收斂**:`lumos loop status <id> --need 2`(**K=2**:連 2 輪 caught 且無 blocker/major)→ exit 0 出 loop;exit 1 → 回 step 1 下一輪。
 
 ## 4. 護欄
 
 - **每次派審計員 = 一筆 record = 一輪**(含 missed,M-1):漏抓也 `lumos canary record missed` 留痕、**也算進 cap**;不存在「不記錄的 inline 重跑」。所以「輪」「cap」「連續漏抓」全以 **canary-log 的記錄**為準,定義一致。
-- **連 2 次漏抓(canary-log 連 2 筆 `missed`)→ 升級**:① 審計模型 sonnet→**opus**;② 把 spec 切小(太長審不仔細);③ refute framing 加碼(具體:從「找洞」升成「**逐節讀,你一定找得到至少一個未定義的詞/壞引用/不一致;沒找到就是你沒讀仔細**」)。
+- **連 2 次漏抓(canary-log 連 2 筆 `missed`)→ 升級**:① 審計模型 sonnet→**opus**;② 把 spec 切小(太長審不仔細);③(soft,人工判斷)把 spec 切小:獨立子段各自開 loop;v1 不自動化此步;④ refute framing 加碼(具體:從「找洞」升成「**逐節讀,你一定找得到至少一個未定義的詞/壞引用/不一致;沒找到就是你沒讀仔細**」)。
 - **max rounds cap = 6 筆 record**:到頂仍未收斂 → **停、把現況攤給人**、記一句「達 cap 未收斂」(別無限燒)。
 - **三重自判都是沒閉合的迴歸(誠實,M-3)**:編排的 Claude 同時判 ① canary 抓到沒、② severity、③ 哪些 finding 是審計員誤判——三個都由「植入者本人」做、無外部檢查。已用約束收窄(step4:誤判要能反證、判不準就保留;severity 忠實轉錄 max),但**根本上不 tamper-proof**。
 - **誠實天花板(沿用 A/canary,B 不得弱化)**:loop 是**可觀測 + 摩擦 + 地板**,不是 oracle。收斂只證「連 K 輪醒著的審計員沒找到 blocker/major」,不證完整正確。B 在收斂後**仍要向人提醒**這些天花板,別讓 CONVERGED 被當成「絕對沒問題」。
@@ -53,7 +53,7 @@
 ## 6. 整合 / 讓「每個計畫自動走」
 
 - **B 的 skill description** 設成在「產出 spec/設計後、進實作前」觸發(讓 Claude 自己會調用)。
-- **指針句(具體文字)**:在 `skills/lumos-project-notes/SKILL.md` 的工具表/工作流區、與 `scripts/templates/graph-discipline.md` 的「退場/實作」段,各加:
+- **指針句(具體文字)**:在 `skills/lumos-project-notes/SKILL.md` 的**工具速查表**(`| … | python3 scripts/lumos … |` 那張)新增一列、與 `scripts/templates/graph-discipline.md` 的 **`### 其餘原則` 的「退場必寫」bullet 之後**,各加:
   > 「**設計 spec 完成 → 進實作前,先用 `lumos-design-loop` skill 把它過 canary-護的審計 loop 到 `lumos loop status` 收斂**(trivial 改動可跳並註明)。」
 - B **不改** superpowers 的 brainstorming/writing-plans(那在 plugin cache、不在本 repo)——B 是獨立 skill,靠 description + 上述指針被接上。
 
@@ -72,6 +72,17 @@
 - (無 `test_lumos.py` 單元測試——B 是 skill 非 lumos code;A 的原語已有測試。)
 
 ## 審計修正紀錄
+### 第二輪(canary=未定義旗標 `--escalate-once`,**抓到**)
+- BLOCKER-2(真):K=2 未敘明於 spec 本體 → §3 step8 寫明 `--need 2`。
+- MAJOR-1:`作廢` vs 算進 cap 矛盾 → §3 step6 改「判決不採信、仍是 missed record 算進 cap」。
+- MAJOR-2:rotation 無 state → §3 step2 改「type=清單[(N−1)mod4]」由 N 決定。
+- MINOR-1:commit 前 grep canary token=0 → §3 step7。
+- MINOR-2:`--note` 固定格式含 type → §3 step5。
+- MINOR-3:step3 補「升級後 opus」。
+- MINOR-4:「切小」標 soft/人工、v1 不自動化 → §4。
+- §6 指針 anchor 具體化(工具速查表列、退場必寫 bullet 後)。
+- canary 驗證:審計員精準點名 `--escalate-once`(undefined flag)→ **醒著**;severity=blocker → 不計入收斂。
+
 ### 第一輪(canary-護;canary=未定義產物 `loop_manifest.json`,**抓到**)
 - B-1(canary):ghost 產物,已剝(只在工作副本)。
 - B-2:canary 類型清單缺(spec 未達自己 §8 判準)→ §3 step2 補具體 4 類清單。
