@@ -20,7 +20,7 @@
 
 `claude -p` headless + **$0 OAuth token**(非 API key)成功 spawn 子 agent(`is_error:false, num_turns:2, 子 agent 回傳 SUBAGENT_OK`)。故 spawn 子 agent **不需上 API key**。配置:`--allowedTools "Read,Edit,Bash,Grep,Glob,Agent,WebSearch,WebFetch" --permission-mode dontAsk --agents '<json>' --output-format json`。注意:避開 OAuth 被禁的 model(如 fable-5),auditor/judge 用 opus、brainstorm 用 opus/sonnet。
 
-> ⚠ **只證了「spawn 1 個子 agent」,沒證「orchestrate 整套 design-loop」(R1-B1)。** design-loop 需要 orchestrator 角色做:多輪、跨輪保持狀態、**巢狀** spawn 審計子 agent、自判 caught/missed、record、問收斂、折 findings。而 `lumos-design-loop` skill 明寫「**Claude 主對話編排,lumos 不 spawn**」——把這個編排角色換成一個 headless `claude -p`、且讓它自己再 spawn 子審計員,**這個巢狀 + 多輪 + 狀態保持 + 自判,§19 的單次 spawn 實證完全沒涵蓋**。**dry-run 第一關的成功判準就綁這條**:先實證 headless orchestrator 能跨輪跑完一個 design-loop,再談全鏈。
+> ⚠ **只證了「spawn 1 個子 agent」,沒證「orchestrate 整套 design-loop」(R1-B1)。** design-loop 需要 orchestrator 角色做:多輪、跨輪保持狀態、**巢狀** spawn 審計子 agent、自判 caught/missed、record、問收斂、折 findings。而 `lumos-design-loop` skill 明寫「**Claude 主對話編排,lumos 不 spawn**」——把這個編排角色換成一個 headless `claude -p`、且讓它自己再 spawn 子審計員,**這個巢狀 + 多輪 + 狀態保持 + 自判,§19 的單次 spawn 實證完全沒涵蓋**。**dry-run 第一關的成功判準就綁這條**:先實證 headless orchestrator 能跨輪跑完一個 design-loop,再談全鏈(尤其 judge 是 orchestrator **再** spawn 的孫層 agent——「子 agent spawn 子 agent」這層深度也在未證之列,R2-F5)。
 
 ## 架構:5 組件 + 數據流
 
@@ -39,12 +39,12 @@
 未選中的 gaps ──▶ [5 backlog](候選池 + 衰減淘汰)
 ```
 
-執行形態:新 script `governance/autonomous-loop.sh`,內部一個(或數個)`claude -p` orchestrator 調用;cron `0 10 * * *`(日報 9:30 之後)。**起手先驗當日 `governance-<date>.json` 存在且 date 相符,否則跳過**(R1-m4:日報延遲/失敗時不抽到舊日報或空)。
+執行形態:新 script `governance/autonomous-loop.sh`,內部一個(或數個)`claude -p` orchestrator 調用;cron `0 10 * * *`(日報 9:30 之後)。**起手先驗當日 `governance/reports/governance-<date>.json`(R2-F1:真實路徑含 `reports/` 層,裸寫會每天判不存在→loop 永不啟動)存在且 date 相符,否則跳過**(R1-m4:日報延遲/失敗時不抽到舊日報或空)。
 
 ## 組件逐一
 
 ### 1 — Gap 抽取(選 top-1,對齊放行帶寬)
-- **輸入**:當日 `governance-<date>.json` 的 `gaps[]`(真 schema `{weakness, suggestion}`,R1-B2)+ `backlog.jsonl` 累積候選。
+- **輸入**:當日 `governance/reports/governance-<date>.json`(R2-F1:含 `reports/` 層)的 `gaps[]`(真 schema `{weakness, suggestion}`,R1-B2)+ `backlog.jsonl` 累積候選。
 - **前置 gate(N=1 同時只 1 個待放行,R1-M4 補兩態)**:① **真 PR 模式**:`gh pr list` 查有無 open 的 `auto/spec-*` PR(部署前先 `gh auth status` 驗登入);② **dry-run 模式**:查 `governance/pending/` 有無未處理的 spec。任一有 → 今天的 gaps **全進 backlog、不展開**。
 - **選法**:派 agent 讀全部候選,按判準排序選 top-1 並給理由——判準:① 有外部證據支持 ② 打在 loop engineering 主軸(尤其驗證層可靠度)③ 可落地(非「等 X 變多再做」那類擱置型)④ backlog 衰減分。
 - 選中的移出 backlog 進流程;未選中的當日 gaps 寫入 backlog。
@@ -73,11 +73,11 @@
 - **衰減**:value_score 每天 ×0.95;低於閾值淘汰(防僵尸 gap 永占位)。
 - backlog 本身=「lumos 待改進方向」可排序視圖(對齊 governance 可觀測)。
 - **崩潰安全預設(R1-m1,取代懸空的「災難恢復」)**:claude -p 超時 / 子 agent 死 / 中途崩 → **事務性:要嘛完整產出 PR,要嘛什麼都不留**(不留半成品 PR / 半截 branch / 不污染 backlog)。無人看顧下「無聲寫壞狀態」是已知風險(對齊日報 HEARTBEAT 警告)。
-- **發 LINE 復用既有(R1-m3)**:沿用 governance 既有 `governance_flex_builder.py` + `curl broadcast` + `$HOME/.config/ai-daily/line_token`,不另造 notifier。待放行 PR 超過 N 天沒動 → LINE 提醒一次。
+- **發 LINE(R1-m3 + R2-F2 修正,誠實降級)**:復用 `curl broadcast` + `$HOME/.config/ai-daily/line_token` 的**傳輸層**;但 `governance_flex_builder.py` 是**日報專用**(硬讀 `overview/articles/inspirations/gaps` schema、無 PR/title/可信度欄位,R2-F2 查證),**不可復用**——PR 待放行訊息**另寫一個小 builder**。即:復用傳輸層,訊息 body 另寫,不是「完全不另造」。待放行 PR 超過 N 天沒動 → LINE 提醒一次。
 
 ## 誠實天花板(必寫進 PR 可信度報告 + 系統文件)
 
-1. **放行的人是最後也是唯一真兜底**:全自動判收斂仍是**沒閉合的迴歸**——獨立 judge 只把「canary 抓到沒」的自評**推遠一層**(judge 也是 AI、也會錯),未消滅;且 `lumos canary record` 進去的 **severity 判定仍由 orchestrator 自呼=自評**(R1-m2:judge 不覆蓋 severity),自動模式比手動(主對話的人在場)可信度更低。CONVERGED 是「連 2 輪醒著的 opus 沒挑出 blocker/major」,不證沒有更深問題。**本輪 R1 本身就是活證:這份 spec 用『強制地面事實查證』審自己,抓到自己 4 個沒查地面事實的假設(B1/B2/M1/M2)——證明這條補償必要,但也證明『沒人 grep 就會放過』,而自動模式裡那個 grep 的人不在。**
+1. **放行的人是最後也是唯一真兜底**:全自動判收斂仍是**沒閉合的迴歸**——獨立 judge 只把「canary 抓到沒」的自評**推遠一層**(judge 也是 AI、也會錯),未消滅;且 `lumos canary record` 進去的 **severity 判定仍由 orchestrator 自呼=自評**(R1-m2:judge 不覆蓋 severity),自動模式比手動(主對話的人在場)可信度更低。CONVERGED 是「連 2 輪 opus **canary 被抓到、且**沒挑出 blocker/major」(R2-F3:收斂同時要求 canary caught,漏抓該輪不採信——別把收斂說成只剩『沒挑出問題』那一半),仍不證沒有更深問題。**本輪 R1 本身就是活證:這份 spec 用『強制地面事實查證』審自己,抓到自己 4 個沒查地面事實的假設(B1/B2/M1/M2)——證明這條補償必要,但也證明『沒人 grep 就會放過』,而自動模式裡那個 grep 的人不在。**
 2. **自動 brainstorm 沒人回澄清** → spec 品質天花板低於有人在場的 brainstorm;「替你決策」是 AI 自選方案,**選錯方向的風險比有人時高**(cib 那種前提錯,自動模式更容易放過——這正是強制地面事實查證要擋的,但擋不保證全擋)。
 3. **AI 判「哪個 gap 值得做」= AI 決定改自己的方向**,有自我強化偏誤風險(可能偏好它「擅長」或「上次做過」的方向)。放行的人要警覺方向是否被 AI 帶偏。
 4. **這是放大放行帶寬,不是無人迭代**:它把「發起 + 篩選 + 自審備料」自動化,把「判斷收斂可不可信 + 放行」留人。
@@ -95,3 +95,9 @@ canary(引用不存在的〈組件 6 — 災難恢復〉)被抓到(m1,並識破 
 - **blocker**:**B1** 只實證 spawn 1 個 agent、沒證 orchestrate 整套(巢狀+多輪+跨輪狀態+自判 caught/missed)→ 技術可行性加「dry-run 第一關綁實證 headless orchestrator」;**B2** 日報 `gaps[]` 真 schema=`{weakness,suggestion}`,原 backlog `{gap,source_date,value_score,last_seen}` 凭空 → 明定映射 + value_score=AI 自評進天花板。
 - **major**:**M1/M2**「禁 type d / opus 起手」其實是**覆寫** `lumos-design-loop` skill 預設(skill 是 a/b/c/d 固定輪換 + sonnet 起手),非「沿用既有機制」→ 改寫為明確覆寫 + 評估手動 loop 影響;**M3** 獨立 judge 作用域僅「canary 抓沒抓到」、不檢查真 findings / 方向 → 標明非全鏈錨點、殘留缺口列回誠實天花板。
 - **minor**:m1 組件 6 懸空(=canary,改補崩潰安全預設);m2 record severity 仍自評(天花板補);m3 LINE 復用既有 broadcast;m4 cron 起手驗當日日報存在。
+
+### R2(2026-06-20,canary 類型 b=未定義旗標,opus,**MISSED**)
+canary(`--force-expand` 未定義旗標)**漏抓**——opus 在 F4 點到它、但合理化成「autonomous-loop.sh 自家旗標、待實作介面、不算缺陷」,未點「spec 它處無任何 script 旗標介面定義=憑空」的性質 → 判 missed(該輪判決不採信)。**誠實記:此 canary 偏不公平**(「待實作 script 的旗標」本就可以是合理待定義介面);且 opus 極醒著,找到 2 個真 major——又是「spec 倡導 grep 卻自己沒 grep」的同病:
+- **major**:**F1** 日報路徑裸寫漏 `reports/` 層(cron stat 每天判不存在→loop 永不啟動)→ 全篇補 `governance/reports/`;**F2** `governance_flex_builder.py` 是日報專用 schema、無 PR/title 欄位、不可復用 → m3 誠實降級為「復用傳輸層、訊息 body 另寫」。
+- **minor**:**F3** 收斂語義漏「canary caught 那半」(天花板補全);**F5** judge 孫層 spawn 亦未證(§技術可行性補)。
+> 再次實證「canary 可信度因 spec 而異、真 findings 比 canary caught 更可靠」(見 memory)。最自指:本 spec=自動 design-loop,它正被自己描述的那套 design-loop 用「真 findings 兜底、而非靠 canary」驗證並修實。
