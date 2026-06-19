@@ -33,8 +33,9 @@ lumos loop status <id> [--need K]   # K 預設 2
 ```
 讀 `.canary-log.jsonl`、篩 `loop==id`。**一筆 `--loop` 記錄 = 一輪**;**排序用檔案 append 順序**(不是 `ts` 排序——`ts` 只到秒,同秒兩輪會並列;append 順序唯一且即時間序,R1-MAJOR-2)。判定:
 - **CONVERGED ⟺ 最後 K 輪(sliding tail-K:篩出該 loop 的記錄、保留 append 序、取最後 K 筆)全是「`kind==caught` 且 `severity∈{clean,minor}`」**(canary 抓到=審計員醒著;無 blocker/major;**缺 severity 視同未收斂**,R1-MAJOR-3)。R2-MAJOR-1:是 **tail-K 滑動窗**——前面有髒輪不影響,只看最後 K 筆;不是「每一輪都得乾淨」。
-- 否則「⏳ 還需 N 輪乾淨」(最後 K 內有 missed / major / blocker / 缺 severity → 修了再審)。
+- 否則「⏳ 還需 N 輪乾淨」,**N = need −(tail 從最後一筆往回數、連續合格的輪數)**(R3-MINOR:有髒輪時 N 不會虛低;最後一輪就髒 → N=need)。
 - 該 loop 記錄數 < K → 未收斂(exit 1)。
+- `--need` 防呆:**`need = max(1, need)`**(R3:不引入未定義常數;< 1 直接夾到 1)。
 - **篩選規則(R2-BLOCKER-2)**:`rec.get("loop") == loop_id`(嚴格等值;舊 ad-hoc 記錄無 `loop` 鍵 → `None != id` 自然排除)。`loop_id` CLI 入口保證非空。
 - **輸出**:第一行 status,接著每輪一行 tab 分隔(`順位\tkind\tseverity\tts\tnote`;順位 = 該 loop 篩出後 append 序的 1-indexed 位置;無 note 給空字串)當留痕,讓 B skill 不必 screen-scrape。
 - **exit code(給 B skill 機器讀)**:`0`=CONVERGED、`1`=未收斂(**含「該 id 還沒有任何記錄」= 還沒開始審,R2-MAJOR-2**)、`2`=**真錯誤**(參數錯 / 檔讀不到)。「沒記錄」和「I/O 錯」分開,讓 B 能分辨「該起一輪」vs「基礎設施壞了」。
@@ -59,11 +60,17 @@ lumos loop status <id> [--need K]   # K 預設 2
 
 ## 7. 受影響(含明確 argparse/dispatch,R1-BLOCKER-1)
 - `scripts/lumos`:
-  - `canary record` 加 `--loop`/`--severity`(`choices=("clean","minor","major","blocker")`)兩選用 arg;`cmd_canary` 寫入時帶這兩鍵。
+  - `canary record` 加 `--loop`/`--severity`(`choices=("clean","minor","major","blocker")`)兩選用 arg。**完整 threading(R3-BLOCKER)**:`cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None)`;dispatch 改 `cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop, args.severity)`;寫入 rec 時 `if loop: rec["loop"]=loop` / `if severity: rec["severity"]=severity`(沒給就不寫鍵——別只在 argparse 加 arg 卻漏接到 function/寫入)。
   - 新增 `loop` 頂層 subparser → `lsub = loop.add_subparsers(dest="lcmd", required=True)` → `st = lsub.add_parser("status")` → `st.add_argument("loop_id")`(**`dest="loop_id"`,不用 `id` 免遮蔽內建**,R2-BLOCKER-1)+ `st.add_argument("--need", type=int, default=2)`。
   - dispatch:`if args.cmd == "loop":` → `if args.lcmd == "status": return cmd_loop_status(env, args.loop_id, args.need)`(別重蹈現有 `canary` dispatch 沒讀 `ccmd` 的覆轍)。
   - `cmd_loop_status(env, loop_id, need=2)`(**簽名給 need 預設,防直接呼叫漏傳**,R2-MINOR-3):讀 canary-log(append 序、**不要 ts-sort**——R2:`cmd_gov` 有 ts-sort 別照抄)、篩 loop、tail-K 算收斂、印 status+輪歷史、回 0/1/2。
-- `cmd_gov`:canary mapper 的 `detail` **必須**附 loop/severity(R1-MAJOR-1,改「選做」為必做)。**loop/severity 放 detail 最前**(R2-MAJOR-3:`detail` 顯示有 `[:50]` 截斷,放後面長 auditor/note 會把它吃掉),如 `loop=X sev=major · <auditor> <note>`。
+- `cmd_gov`:canary mapper 的 `detail` **必須**附 loop/severity(R1-MAJOR-1,必做),且**放最前**(R2-MAJOR-3,避 `[:50]` 截斷)。**確切 lambda(R3-MAJOR,含舊 ad-hoc 無此鍵的條件處理)**:
+  ```python
+  load(".canary-log.jsonl", lambda d: {..., "detail": (
+      (f"loop={d['loop']} sev={d.get('severity','?')} · " if d.get("loop") else "")
+      + (d.get("auditor","") + " " + d.get("note","")).strip())})
+  ```
+  舊記錄無 `loop` → 前綴空、行為同現在。
 - `skills/lumos-project-notes/SKILL.md`:canary 協議那節補「記 round(帶 --loop/--severity)+ `loop status` 看收斂」。
 - `scripts/test_lumos.py`:測試。
 
@@ -94,3 +101,10 @@ lumos loop status <id> [--need K]   # K 預設 2
 - R2-MAJOR-3:gov detail 的 loop/severity 放最前(避 `[:50]` 截斷)→ §7/§8。
 - R2-MINOR:`cmd_loop_status` 別照抄 cmd_gov 的 ts-sort、need 簽名給預設、「重算」改「重查」→ §3/§4/§7。
 - canary 驗證:審計員抓到 §9 dead-ref(列 MINOR-1 + 「structurally suspicious / signature of a forgotten plant」)→ **醒著**;severity=major → 本輪仍不計入收斂。R1 整合性 reframe 經確認無殘留 overclaim。
+
+### 第三輪(canary-護;canary=未定義常數 `LOOP_DEFAULT_K`,**抓到**)
+- 前兩輪修正**全部經 code 驗證 hold**。
+- R3-BLOCKER(真,silent-bug 風險):`cmd_canary` 的 loop/severity 完整 threading(argparse→dispatch→function 簽名→寫入)寫明確切簽名 → §7。
+- R3-MAJOR:gov mapper 的 detail lambda 寫出確切版(含舊記錄無 loop 鍵的條件)→ §7。
+- R3-MINOR:`LOOP_DEFAULT_K` 改 `need = max(1, need)`(不引未定義常數)、「還需 N」的 N 公式寫明 → §3。
+- canary 驗證:審計員精準點名 `LOOP_DEFAULT_K`(「Likely the round-3 plant... structurally out-of-place」)→ **醒著**;severity=major → 本輪不計入收斂。連 3 輪 caught(canary 機制穩定);severity blocker→major→major,逼出的 gap 一輪比一輪細。
