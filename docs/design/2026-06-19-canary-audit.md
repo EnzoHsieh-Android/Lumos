@@ -39,7 +39,7 @@
 **只有一個指令**(R1-F6:砍掉 `lumos canary new`——token 鑄造 shell 一行就行,而且 `record` 會自動補):
 
 - `lumos canary record caught|missed [--auditor 模型] [--token T] [--note 文字]` → append 一筆事件到 `<vault.parent>/.canary-log.jsonl`。
-- **argparse 結構(R2-F4,比照 `guard audit`)**:`canary` 為頂層 subparser → 內含 sub-subparser `record` → `kind` 是 `record` 的 positional,`choices=("caught","missed")`(非法值 argparse 自動 rc2)。dispatch:`cmd_canary(env, args.kind, args.auditor, args.token, args.note)`。
+- **argparse 結構(R2-F4,比照 `guard audit`)**:`canary` 為頂層 subparser → `csub = canary.add_subparsers(dest="ccmd", required=True)` → `csub.add_parser("record")` → `kind` 是 `record` 的 positional,`choices=("caught","missed")`(非法值 argparse 自動 rc2)。dispatch:`if args.cmd == "canary": return cmd_canary(env, args.kind, args.auditor, args.token, args.note)`(R3-Issue3:`dest="ccmd"`)。
 - **`cmd_canary(env, …)` 用 `env.vault.parent` 定位寫入**(R2-F1,比照 `cmd_gov`——只用到 vault.parent、不額外依賴已載入的圖)。
 - **`--token` 沒給就自動鑄一個 `CANARY-<secrets.token_hex(4)>`**(R2-F2:**隨機、非時間戳**——時間戳是秒解析度,同秒兩筆會撞 token 被 dedup 誤折)。保證每筆 token 唯一(供 gov dedup,R1-F4)。
   - 寫入 schema:`{"ts","kind","auditor","token","note"}`(`ts` = ISO 本地時間)。
@@ -49,7 +49,7 @@
   {"ts": d["ts"], "commit": "", "gate": "canary", "kind": d["kind"], "hard": False,
    "nodes": [], "token": d.get("token",""), "detail": (d.get("auditor","")+" "+d.get("note","")).strip()}
   ```
-  並把 `cmd_gov` 的 dedup key 從 `(commit, frozenset(nodes), gate, kind)` 改成 `(commit, frozenset(nodes), gate, kind, row.get("token",""))`——加上 `token` 當第 5 個鑑別子。其他來源無 token 欄(`""`),行為不變;canary 每筆 token 唯一 → **不會被誤折成單列**(R1-F4 的 collapse 修掉)。顯示沿用既有格式,`token`/`auditor`/`note` 收進 `detail`。
+  並把 `cmd_gov` 的 dedup key 從 `(r["commit"], frozenset(r["nodes"]), r["gate"], r["kind"])` 改成加第 5 個鑑別子 **`r.get("token", "")`**(R3-Issue1:**務必用 `.get()` 不可用 `r["token"]`**——既有三條 mapper 的 row 沒有 `token` 鍵,`r["token"]` 會對所有舊事件 `KeyError` 弄爆 `lumos gov`)。既有三條 mapper **維持原樣、不加 token 鍵**;**只有 canary mapper 輸出 `token` 鍵**。其他來源 token 取到 `""`、行為不變;canary 每筆 token 唯一 → **不會被誤折成單列**(R1-F4 的 collapse 修掉)。顯示沿用既有格式,`token`/`auditor`/`note` 收進 `detail`。
 
 **寫入路徑**:canary 寫**自己的** `.canary-log.jsonl`(單一寫者=`lumos canary`),不碰 doctor 的 `.governance-log.jsonl`(沿用「不合併寫入、gov 唯讀彙整多檔」的決定)。
 
@@ -88,3 +88,8 @@
 - R2-F1:`cmd_canary` 用 `env.vault.parent`(比照 cmd_gov,不額外載圖)。
 - R2-F7:天花板補「canary 抓得到『沒讀』、抓不到『讀了但判錯複雜權衡』」。
 - 第二輪結論:R1 修正全部 hold;審計員確認「值得做、非過度設計」(~100 行、每輪約 2 分鐘,擋掉『審計員根本沒讀』失敗模式 + gov 可查詢可靠度史)。
+
+### 第三輪(Sonnet 對抗審計)— R2 修正全部 hold
+- R3-Issue1(唯一 must-fix,一行):dedup 用 `r.get("token","")` 不可 `r["token"]`(舊事件無此鍵會 KeyError);既有 mapper 不加 token、只 canary mapper 加 → §3。
+- R3-Issue3(nit):canary sub-subparser `dest="ccmd"` 寫明 → §3。
+- 第三輪結論:除上述一行澄清外無 blocker/major,實作決策已全部 pin 死。
