@@ -1129,11 +1129,16 @@ def cmd_gov(env, node=None, since_days=90):
     load(".governance-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
          "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
          "nodes": [stem(x) for x in d.get("nodes", [])], "detail": ""})
+    # 第 4 源:canary 審計留痕(審計員可靠度史)。只此 mapper 輸出 token 鍵(供 dedup 鑑別)。
+    load(".canary-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": "",
+         "gate": "canary", "kind": d.get("kind", "?"), "hard": False, "nodes": [],
+         "token": d.get("token", ""), "detail": (d.get("auditor", "") + " " + d.get("note", "")).strip()})
 
     rows = [r for r in rows if (r["ts"][:10] or "9999") >= cutoff]
     seen, ded = set(), []
     for r in sorted(rows, key=lambda r: r["ts"]):
-        k = (r["commit"], frozenset(r["nodes"]), r["gate"], r["kind"])
+        # canary 每筆 token 唯一 → 加 token 當第 5 鑑別子(舊三源無此鍵,.get 回 "");必須用 .get 不可 r["token"]
+        k = (r["commit"], frozenset(r["nodes"]), r["gate"], r["kind"], r.get("token", ""))
         if k in seen:
             continue
         seen.add(k)
@@ -1147,6 +1152,28 @@ def cmd_gov(env, node=None, since_days=90):
     if node:
         print("\n(註:L2 繞過無 node、L3 以 Verification 為鍵;對 Systems 節點為部分視圖)")
     print(f"\n{len(ded)} 筆(近 {since_days} 天)")
+    return 0
+
+
+def cmd_canary(env, kind, auditor=None, token=None, note=None):
+    """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
+    record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
+    天花板:這只證明「審計員有沒有醒著讀」,不證明它抓到所有真問題(見設計 doc)。"""
+    import json
+    import datetime
+    import secrets
+    if not token:
+        token = "CANARY-" + secrets.token_hex(4)   # 隨機,非時間戳(同秒不撞)
+    rec = {"ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+           "kind": kind, "auditor": auditor or "", "token": token, "note": note or ""}
+    path = env.vault.parent / ".canary-log.jsonl"
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"ERROR: 寫入 {path} 失敗: {e}", file=sys.stderr)
+        return 2
+    print(f"✓ canary {kind} 留痕: {token}" + (f" (auditor={auditor})" if auditor else ""))
     return 0
 
 
@@ -2914,6 +2941,14 @@ def main():
     p.add_argument("node", nargs="?")
     p.add_argument("--since", type=int, default=90, help="近 N 天(預設 90)")
 
+    cp = sub.add_parser("canary", help="審計員 canary 留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵")
+    csub = cp.add_subparsers(dest="ccmd", required=True)
+    cr = csub.add_parser("record", help="記一筆 caught|missed")
+    cr.add_argument("kind", choices=("caught", "missed"))
+    cr.add_argument("--auditor", help="審計用的模型(如 sonnet)")
+    cr.add_argument("--token", help="canary token(不給則自動鑄 CANARY-<隨機>)")
+    cr.add_argument("--note", help="備註")
+
     g = sub.add_parser("guard", help="合約守衛 scaffold(對談驅動):列出未綁 / 套範本產 stub / 綁定")
     gsub = g.add_subparsers(dest="gcmd", required=True)
     gl = gsub.add_parser("list", help="列 ★INVARIANT★ 綁定狀態(real/dangling/fake/naked)")
@@ -3071,6 +3106,9 @@ def main():
 
     if args.cmd == "gov":
         return cmd_gov(env, args.node, args.since)
+
+    if args.cmd == "canary":
+        return cmd_canary(env, args.kind, args.auditor, args.token, args.note)
 
     if args.cmd == "guard":
         if args.gcmd == "list":

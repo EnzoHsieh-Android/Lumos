@@ -1075,6 +1075,34 @@ def t_marker_doc_sync():
         check(f"drift: {m} 在 graph-discipline", m in dt, "disc 缺")
 
 
+def t_canary():
+    import json as _j
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-can-"))
+    vault = root / "docs" / "kg"
+    (vault / "MOC").mkdir(parents=True)
+    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    try:
+        r = run(vault, "canary", "record", "missed", "--auditor", "sonnet")
+        check("canary: record missed rc0", r.returncode == 0, r.stdout + r.stderr)
+        log = root / "docs" / ".canary-log.jsonl"
+        rec = _j.loads(log.read_text(encoding="utf-8").strip())
+        check("canary: 寫入含 token + missed",
+              rec.get("kind") == "missed" and rec.get("token", "").startswith("CANARY-"), str(rec))
+        r = run(vault, "gov")
+        check("canary: gov 顯示 canary/missed", "canary/missed" in r.stdout, r.stdout)
+        # 兩筆不同 token → gov 各一列(不被 dedup 折成一列)
+        run(vault, "canary", "record", "caught", "--token", "CANARY-A")
+        run(vault, "canary", "record", "caught", "--token", "CANARY-B")
+        r = run(vault, "gov")
+        check("canary: 不同 token 不被 dedup", r.stdout.count("canary/caught") == 2, r.stdout)
+        # 非法 kind → rc2(argparse choices)
+        r = run(vault, "canary", "record", "bogus")
+        check("canary: 非法 kind → rc2", r.returncode == 2, r.stdout + r.stderr)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
