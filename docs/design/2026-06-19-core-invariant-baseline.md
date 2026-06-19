@@ -1,6 +1,6 @@
 # core-content-baseline — 核心節點合約語意的下毒絆線(doctor Check C2)(設計)
 
-> 狀態:草稿 v2(R1 canary-loop 揭發前提錯誤後 pivot;canary-護審計 loop 待續跑 R2+)｜日期:2026-06-19
+> 狀態:**設計打磨完成、擱置實作**(2026-06-19)。canary-loop 4 輪(R1–R4,含 2 輪 opus)深度修補,**未達形式 K=2 收斂**(canary 在此 spec 反覆失靈,見下〈擱置決定〉);待全域核心合約節點 >1 再進實作。
 > 觸發:2026-06-19 治理日報 gap 2 ——「共通節點是多人共編的共享記憶,卻沒有『退回上一版良好狀態』的機制,一筆寫錯會沿連結擴散給全部 agent」。
 > 區分:**不是** Check R(撤「世界動作」);守的是「**記憶狀態**」——核心節點的合約語意被靜默改寫。
 
@@ -144,3 +144,13 @@ canary(植入未定義旗標 `--strict`)**漏抓**——審計員注意到 `--st
 - **major**:**M1** `normalize` 是新 helper(非 `load_vault` 的 `nfc`,後者不去空白);**M2** decisions `#index` mid-list 刪除級聯 → 改「decided 唯一、碰撞報錯」;**M3** `valid_under` 位置 index 同樣級聯 → 改 hash 集合 diff;**M4** content(parse_decisions 已 strip/join)vs summary/valid_under(note.fields 未 strip)正規化不一致 → normalize 三欄一致;**M5** `--ci` gating 與 `_append_governance_log` call site 矛盾 → approve 自寫。
 - **near-blocker 註記**:bare `lumos doctor` 即使 issues>0 exit 仍 0(只 `--ci`/`strict` 非 0)→ 文件只宣稱「pre-push/`--ci` 擋」。
 - **minor**:m1 core_refs 不驅動枚舉(枚舉=掃 core_base,core_refs 只證哪 repo 是 core);m2 approved_by 標為新邏輯 + cwd=consumer;m3 測試補 mid-list 刪除 / gov 讀回 / decided 碰撞。
+
+## 擱置決定(2026-06-19,user 選 A)
+
+設計經 4 輪 canary-loop(含 2 輪 opus)深度打磨,從 v1「守空集合」的致命前提錯,修到欄位級、整合層全對齊現實(枚舉按 type 過濾、event schema 對齊 gov reader、core repo 無 docs 結構、normalize 三欄一致、decided 唯一 key、valid_under 集合 diff…)。**但決定先擱置實作**,理由:
+1. **守備對象現在只有 1 個**核心合約節點(`custtransfer-semantics`)——對齊 lumos_計劃 既有判斷「等 core_refs/核心節點變多再做」。
+2. **此 loop 揭發 canary 機制的限制**:4 輪 3 次 canary 出問題(R1/R2 漏抓——審計員注意力被密集真問題吃滿;R4 不公平——type d「憑空產物」對合理 self-contained 新功能不適用)。真正接住設計缺陷的是「真 findings + 手動查證」,非 canary。此 spec 的形式 K=2 收斂,canary 提供的保證很弱,硬刷投報率低。
+
+**meta 留作 loop-engineering 反饋**:canary missed 率該當可追蹤指標;canary 類型需分 spec 性質校準;「真 findings 數」可能比「canary caught」更可靠反映審計品質。對比同日 rot-eval loop(canary 5/5、5 輪乾淨收斂)——同一機制在不同 spec 上可信度差異巨大。
+
+> 重啟條件:核心合約節點 >1(或新增 core_refs 消費端)時,本 spec 已 ready,接 writing-plans 即可。
