@@ -1,7 +1,7 @@
 # 設計:Canary 審計(test-the-tester,給對抗設計審計防放水)
 
 - 日期:2026-06-19
-- 狀態:設計草案(待 Sonnet 審計 loop 收斂)
+- 狀態:✅ CONVERGED(經 4 輪 Sonnet 對抗審計收斂,implementable as-is)
 - 動機來源:2026-06-18 AI 治理日報 Gap 1 + Codex `/goal`「驗收要比迴圈本身可靠」
 
 ## 0. 動機
@@ -42,7 +42,7 @@
 - **argparse 結構(R2-F4,比照 `guard audit`)**:`canary` 為頂層 subparser → `csub = canary.add_subparsers(dest="ccmd", required=True)` → `csub.add_parser("record")` → `kind` 是 `record` 的 positional,`choices=("caught","missed")`(非法值 argparse 自動 rc2)。dispatch:`if args.cmd == "canary": return cmd_canary(env, args.kind, args.auditor, args.token, args.note)`(R3-Issue3:`dest="ccmd"`)。
 - **`cmd_canary(env, …)` 用 `env.vault.parent` 定位寫入**(R2-F1,比照 `cmd_gov`——只用到 vault.parent、不額外依賴已載入的圖)。
 - **`--token` 沒給就自動鑄一個 `CANARY-<secrets.token_hex(4)>`**(R2-F2:**隨機、非時間戳**——時間戳是秒解析度,同秒兩筆會撞 token 被 dedup 誤折)。保證每筆 token 唯一(供 gov dedup,R1-F4)。
-  - 寫入 schema:`{"ts","kind","auditor","token","note"}`(`ts` = ISO 本地時間)。
+  - 寫入 schema:`{"ts","kind","auditor","token","note"}`(`ts` = `datetime.now().astimezone().isoformat(timespec="seconds")`,比照 `_append_governance_log`)。
 
 - `lumos gov` 新增 `.canary-log.jsonl` 為**第 4 個讀取來源**。**明確 mapper**(R1-F4):
   ```
@@ -93,3 +93,8 @@
 - R3-Issue1(唯一 must-fix,一行):dedup 用 `r.get("token","")` 不可 `r["token"]`(舊事件無此鍵會 KeyError);既有 mapper 不加 token、只 canary mapper 加 → §3。
 - R3-Issue3(nit):canary sub-subparser `dest="ccmd"` 寫明 → §3。
 - 第三輪結論:除上述一行澄清外無 blocker/major,實作決策已全部 pin 死。
+
+### 第四輪(Sonnet 對抗審計)— ✅ CONVERGED
+- 四源 dedup 經確認 crash-free(`r.get("token","")` 對舊事件回 `""`)、argparse/dispatch 全 pin、§6 測試可直接寫。
+- 唯一 nit:`ts` 用 local astimezone(已 pin,比照 governance-log)。
+- 結論:**CONVERGED,implementable as-is**,審計迴圈結束。
