@@ -1095,6 +1095,61 @@ def cmd_lint(env, node):
     return 1 if errs else 0
 
 
+def cmd_gov(env, node=None, since_days=90):
+    """唯讀彙整 bypass-log/rot-queue/governance-log → 治理事件時間軸 / 某節點被哪幾道閘攔過。
+    本機開發可見性工具(非合規物)。L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖。"""
+    import json
+    import datetime
+    docs = env.vault.parent
+    cutoff = (datetime.date.today() - datetime.timedelta(days=since_days)).isoformat()
+
+    def stem(s):
+        return Path(str(s)).stem.lower()
+
+    rows = []
+
+    def load(name, mapper):
+        p = docs / name
+        if not p.exists():
+            return
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(mapper(json.loads(line)))
+            except (ValueError, KeyError):
+                continue
+
+    load(".bypass-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+         "gate": "L2", "kind": "bypassed", "hard": False, "nodes": [], "detail": d.get("subject", "")})
+    load(".rot-queue.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+         "gate": "L3", "kind": "warned", "hard": False, "nodes": [stem(d.get("verification", ""))],
+         "detail": d.get("reason", "")})
+    load(".governance-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+         "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
+         "nodes": [stem(x) for x in d.get("nodes", [])], "detail": ""})
+
+    rows = [r for r in rows if (r["ts"][:10] or "9999") >= cutoff]
+    seen, ded = set(), []
+    for r in sorted(rows, key=lambda r: r["ts"]):
+        k = (r["commit"], frozenset(r["nodes"]), r["gate"], r["kind"])
+        if k in seen:
+            continue
+        seen.add(k)
+        ded.append(r)
+    if node:
+        q = stem(node)
+        ded = [r for r in ded if q in r["nodes"]]
+    for r in ded:
+        mark = "硬擋" if r["hard"] else "軟"
+        print(f"{r['ts'][:10]} [{r['gate']}/{r['kind']}/{mark}] {','.join(r['nodes']) or '-'}  {r['detail'][:50]}")
+    if node:
+        print("\n(註:L2 繞過無 node、L3 以 Verification 為鍵;對 Systems 節點為部分視圖)")
+    print(f"\n{len(ded)} 筆(近 {since_days} 天)")
+    return 0
+
+
 # ───────────── guard: 合約守衛 scaffold(對談驅動)─────────────
 # lumos 只做機械活:① 列出 ★INVARIANT★ 綁定狀態 ② 套範本產 stub(預設紅燈) ③ 把 [test:] 綁回 KEY 行(自驗)。
 # 「斷言本體」由 Claude 經對談向人確認意圖後填 — claim 的真來自人確認,不來自 code 反推
@@ -2854,6 +2909,10 @@ def main():
     p = sub.add_parser("lint", help="單檔快檢:寫完一個節點立刻自驗標籤/格式(比 doctor 快,只看這篇)")
     p.add_argument("note")
 
+    p = sub.add_parser("gov", help="唯讀治理事件帳:時間軸 / 某節點歷來被哪幾道閘攔過")
+    p.add_argument("node", nargs="?")
+    p.add_argument("--since", type=int, default=90, help="近 N 天(預設 90)")
+
     g = sub.add_parser("guard", help="合約守衛 scaffold(對談驅動):列出未綁 / 套範本產 stub / 綁定")
     gsub = g.add_subparsers(dest="gcmd", required=True)
     gl = gsub.add_parser("list", help="列 ★INVARIANT★ 綁定狀態(real/dangling/fake/naked)")
@@ -3008,6 +3067,9 @@ def main():
 
     if args.cmd == "lint":
         return cmd_lint(env, args.note)
+
+    if args.cmd == "gov":
+        return cmd_gov(env, args.node, args.since)
 
     if args.cmd == "guard":
         if args.gcmd == "list":
