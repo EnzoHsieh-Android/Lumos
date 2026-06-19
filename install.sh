@@ -25,7 +25,7 @@ done
 if [[ -t 1 ]]; then G=$'\033[32m'; Y=$'\033[33m'; D=$'\033[2m'; R=$'\033[0m'; else G=''; Y=''; D=''; R=''; fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="$HOME/.claude/skills"
-SKILLS=(lumos-project-notes lumos-core-knowledge)
+SKILLS=(lumos-project-notes lumos-core-knowledge lumos-design-loop)
 
 mkdir -p "$DEST"
 for s in "${SKILLS[@]}"; do

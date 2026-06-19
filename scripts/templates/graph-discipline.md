@@ -16,6 +16,7 @@
 - **唯一真相**：圖譜與其他文件 / 記憶 / 臆測衝突 → 以圖譜為準。
 - **實時更新（不可延後）**：影響系統行為 / 決策 / 驗證的 code 變更，**同一次工作內**同步更新圖譜（不是之後補、批次補）。pre-commit gate 硬擋「改 code 沒帶圖譜更新」。
 - **退場必寫**：做完用 lumos 把脈絡（決策 / 驗證 / 合約）寫回。
+- **設計 spec 完成 → 進實作前**：先用 `lumos-design-loop` skill 把它過 canary-護的審計 loop 到 `lumos loop status` 收斂（trivial 改動可跳並註明）。
 - **計劃/設計也歸圖譜**：任何設計 / spec / 計劃產出（**不論來源——brainstorming、writing-plans、OpenSpec、其他 SDD / spec-driven 工具皆同**）一律寫成 lumos 計劃節點（`Projects/<主題>_計劃`，`type: project`），**不寫 `docs/superpowers/specs/`、`openspec/` 或其他 repo 路徑**；落地的 Verification 以 `plan_refs` 回指（意圖鏈，graph-doctor Check 4 把關）。任何工具內建的 spec 落點一律以此覆寫——「圖譜即真相」涵蓋計劃，不只 code。
 
 ### 寫入時的標籤規範（速查，動筆前掃一眼；完整規範見 `lumos-project-notes` skill）
