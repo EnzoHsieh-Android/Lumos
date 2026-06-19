@@ -1103,6 +1103,69 @@ def t_canary():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_canary_loop_fields():
+    import json as _j
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-clf-"))
+    vault = root / "docs" / "kg"
+    (vault / "MOC").mkdir(parents=True)
+    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    try:
+        r = run(vault, "canary", "record", "caught", "--loop", "L", "--severity", "major", "--token", "zz")
+        check("canary --loop/--severity: rc0", r.returncode == 0, r.stdout + r.stderr)
+        rec = _j.loads((root / "docs" / ".canary-log.jsonl").read_text(encoding="utf-8").strip())
+        check("canary --loop/--severity: 寫入 loop+severity",
+              rec.get("loop") == "L" and rec.get("severity") == "major", str(rec))
+        r = run(vault, "gov")
+        check("gov: canary detail 開頭含 loop=/sev=", "loop=L" in r.stdout and "sev=major" in r.stdout, r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_loop_status():
+    import json as _j
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-loop-"))
+    vault = root / "docs" / "kg"
+    (vault / "MOC").mkdir(parents=True)
+    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    log = root / "docs" / ".canary-log.jsonl"
+    n = [0]
+
+    def rec(loop, kind, sev=None):
+        n[0] += 1
+        d = {"ts": "2026-06-19T10:00:00", "kind": kind, "auditor": "sonnet",
+             "token": f"t{n[0]}", "note": ""}
+        if loop:
+            d["loop"] = loop
+        if sev:
+            d["severity"] = sev
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(_j.dumps(d) + "\n")
+
+    try:
+        r = run(vault, "loop", "status", "L")
+        check("loop status: 無記錄 → exit 1", r.returncode == 1, r.stdout + r.stderr)
+        rec("L", "caught", "clean"); rec("L", "caught", "minor")
+        r = run(vault, "loop", "status", "L")
+        check("loop status: 連2輪 caught+clean/minor → CONVERGED exit0",
+              r.returncode == 0 and "CONVERGED" in r.stdout, r.stdout)
+        rec("L", "caught", "major")
+        r = run(vault, "loop", "status", "L")
+        check("loop status: 最後一輪 major → 未收斂 exit1", r.returncode == 1, r.stdout)
+        rec("L", "caught", "clean"); rec("L", "caught", "clean")
+        r = run(vault, "loop", "status", "L")
+        check("loop status: tail-K 滑動,髒輪滑出 → CONVERGED", r.returncode == 0, r.stdout)
+        rec("M", "caught", "clean"); rec("M", "missed"); rec("M", "caught", "clean")
+        r = run(vault, "loop", "status", "M")
+        check("loop status: missed 在 tail-2 → 未收斂", r.returncode == 1, r.stdout)
+        rec("N", "caught"); rec("N", "caught")
+        r = run(vault, "loop", "status", "N")
+        check("loop status: 缺 severity → 未收斂", r.returncode == 1, r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

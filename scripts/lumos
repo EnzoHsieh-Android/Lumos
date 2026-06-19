@@ -1132,7 +1132,9 @@ def cmd_gov(env, node=None, since_days=90):
     # 第 4 源:canary 審計留痕(審計員可靠度史)。只此 mapper 輸出 token 鍵(供 dedup 鑑別)。
     load(".canary-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": "",
          "gate": "canary", "kind": d.get("kind", "?"), "hard": False, "nodes": [],
-         "token": d.get("token", ""), "detail": (d.get("auditor", "") + " " + d.get("note", "")).strip()})
+         "token": d.get("token", ""),
+         "detail": ((f"loop={d['loop']} sev={d.get('severity', '?')} · " if d.get("loop") else "")
+                    + (d.get("auditor", "") + " " + d.get("note", "")).strip())})
 
     rows = [r for r in rows if (r["ts"][:10] or "9999") >= cutoff]
     seen, ded = set(), []
@@ -1155,9 +1157,10 @@ def cmd_gov(env, node=None, since_days=90):
     return 0
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None):
     """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
+    --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
     天花板:這只證明「審計員有沒有醒著讀」,不證明它抓到所有真問題(見設計 doc)。"""
     import json
     import datetime
@@ -1166,6 +1169,10 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None):
         token = "CANARY-" + secrets.token_hex(4)   # 隨機,非時間戳(同秒不撞)
     rec = {"ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
            "kind": kind, "auditor": auditor or "", "token": token, "note": note or ""}
+    if loop:
+        rec["loop"] = loop
+    if severity:
+        rec["severity"] = severity
     path = env.vault.parent / ".canary-log.jsonl"
     try:
         with open(path, "a", encoding="utf-8") as f:
@@ -1175,6 +1182,53 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None):
         return 2
     print(f"✓ canary {kind} 留痕: {token}" + (f" (auditor={auditor})" if auditor else ""))
     return 0
+
+
+def cmd_loop_status(env, loop_id, need=2):
+    """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
+    讀 .canary-log.jsonl 的 **append 序**(不 ts-sort:ts 只到秒、同秒會並列),篩 loop==id。
+    tail-K 滑動窗:前面髒輪不影響、只看最後 K 筆;missed/缺 severity 視同未收斂。
+    exit 0=CONVERGED / 1=未收斂(含無記錄=還沒開始)/ 2=真錯誤。
+    天花板:收斂=連 K 輪醒著的審計員沒找到 blocker/major,非完整正確;severity 自報(見設計 doc)。"""
+    import json
+    need = max(1, need)
+    path = env.vault.parent / ".canary-log.jsonl"
+    rounds = []
+    try:
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if d.get("loop") == loop_id:
+                    rounds.append(d)
+    except OSError as e:
+        print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
+        return 2
+
+    def good(r):
+        return r.get("kind") == "caught" and r.get("severity") in ("clean", "minor")
+
+    converged = len(rounds) >= need and all(good(r) for r in rounds[-need:])
+    streak = 0                                  # 從尾往回的連續合格數(算「還需 N」)
+    for r in reversed(rounds):
+        if good(r):
+            streak += 1
+        else:
+            break
+    if converged:
+        print(f"✅ CONVERGED ({loop_id}, 連 {need} 輪 caught+乾淨;共 {len(rounds)} 輪)")
+        rc = 0
+    else:
+        print(f"⏳ 還需 {need - streak} 輪乾淨 ({loop_id}, 已 {len(rounds)} 輪)")
+        rc = 1
+    for i, r in enumerate(rounds, 1):           # 留痕:每輪一行 tab 分隔
+        print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
+    return rc
 
 
 # ───────────── guard: 合約守衛 scaffold(對談驅動)─────────────
@@ -2948,6 +3002,15 @@ def main():
     cr.add_argument("--auditor", help="審計用的模型(如 sonnet)")
     cr.add_argument("--token", help="canary token(不給則自動鑄 CANARY-<隨機>)")
     cr.add_argument("--note", help="備註")
+    cr.add_argument("--loop", help="把這輪歸進某設計 loop(供 lumos loop status 算收斂)")
+    cr.add_argument("--severity", choices=("clean", "minor", "major", "blocker"),
+                    help="這輪審計員找到的最嚴重 finding(忠實轉錄)")
+
+    lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
+    lsub = lp.add_subparsers(dest="lcmd", required=True)
+    ls = lsub.add_parser("status", help="算某 loop 收斂:連 K 輪 caught 且無 blocker/major")
+    ls.add_argument("loop_id")
+    ls.add_argument("--need", type=int, default=2, help="連續乾淨輪數 K(預設 2)")
 
     g = sub.add_parser("guard", help="合約守衛 scaffold(對談驅動):列出未綁 / 套範本產 stub / 綁定")
     gsub = g.add_subparsers(dest="gcmd", required=True)
@@ -3108,7 +3171,11 @@ def main():
         return cmd_gov(env, args.node, args.since)
 
     if args.cmd == "canary":
-        return cmd_canary(env, args.kind, args.auditor, args.token, args.note)
+        return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop, args.severity)
+
+    if args.cmd == "loop":
+        if args.lcmd == "status":
+            return cmd_loop_status(env, args.loop_id, args.need)
 
     if args.cmd == "guard":
         if args.gcmd == "list":
