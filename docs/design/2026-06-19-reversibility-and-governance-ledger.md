@@ -64,7 +64,7 @@ KEY:★CHECKPOINT★   部署到 lab2 測試機     [rollback:重新部署上一
 - 既有來源**維持原樣**:`docs/.bypass-log.jsonl`(L2 繞過,post-commit 寫)、`docs/.rot-queue.jsonl`(L3 rot,verification-rot-check 寫)。
 - **新增單一寫者**:`doctor`(python,唯一寫者→無 race)**只在 `--ci`** 把本輪 findings append 到 `<vault.parent>/.governance-log.jsonl`;**純 `lumos doctor`(無 --ci)不寫**(R2-MINOR-2)。schema:`{ts, commit, gate, kind, hard, nodes}`(gate ∈ check-t/check-r/lint…;kind ∈ blocked|warned;hard bool)。
 - **寫入 plumbing(R3-BLOCKER-1)**:`run_doctor` 目前簽名是 `(env, strict, color, suggest)`,且 `strict` 同時被 `--strict` 和 `--ci` 設(`main` 的 `strict=args.strict or args.ci`)。要**新增獨立參數 `ci: bool`** 傳進來,只在 `ci=True` 寫(`--strict` 不寫)。commit hash:寫入區塊內 `subprocess git rev-parse --short HEAD`(**非 git repo / 取不到 HEAD → 該次跳過寫入,不報錯**)。路徑 `env.vault.parent / ".governance-log.jsonl"`。
-- **dedup 在讀時做,不在寫時做**(R2-MAJOR-2):doctor 純 append(不必每次 push 讀全檔);`lumos gov` 顯示時才 dedup by (commit, node, gate, kind)。成長控制:gitignore local-only;`gov` 預設只看近窗(`--since`,預設如 90 天),並對 governance-log 設輪替上限(超過 N 筆截舊)。
+- **dedup 在讀時做,不在寫時做**(R2-MAJOR-2):doctor 純 append(不必每次 push 讀全檔);`lumos gov` 顯示時才 dedup,key = `(commit, frozenset(nodes), gate, kind)`(R4-nit:用整條 nodes 集合,非單一 node)。`nodes` **存 bare stem**(R4-nit:寫入時即 stem 化,讀時直接比,免兩端格式不一)。成長控制:gitignore local-only;`gov` 預設 `--since 90`(**單位:天**),governance-log 輪替上限 `2000` 筆(超過截舊,比照 rot-check 的 CACHE_MAX_ENTRIES 量級)。
 - `lumos gov [<node>] [--since N]`:**唯讀**。`gov`(無 node)= 三來源全合併、依 `ts` 排序(commit 各源短碼長度不一,不靠 commit join,只時間軸排序)。`gov <node>` = **以 stem/basename 正規化比對**(R3-MAJOR-4:rot-queue 的 `verification` 是 repo 相對 `docs/<vault>/Verification/foo.md`、節點是 vault 相對 `Verification/foo` — 統一取 basename stem 比;governance-log 的 `nodes` 同樣 stem 化比)。bypass 無 node 欄→不進 per-node。**v1 不載 vault graph 做 Systems↔Verification 反查 join**(R2-MAJOR-1)。輸出**明確標示限制**:bypass 無 node、rot-queue 以 Verification 為鍵,故對 Systems 節點的 per-node 視圖是**部分**的。
 
 ### 2.2 誠實表述(修正原提案的過度宣稱)
@@ -145,3 +145,8 @@ v1 不做(YAGNI):`cmd_contracts`/`_html_model` 顯示可逆性標記(Check R + l
 - R3-MAJOR-4:`gov <node>` 改 stem/basename 正規化比對(rot-queue 路徑格式不同)→ §2.1。
 - R3-MINOR:parse_decisions 測走 Check R 整合測;gov 測用全專案結構;drift 測 skills 缺則跳過;`[rollback:]` v1 無寫入指令(手寫)→ §5/§7。
 - 第三輪結論:收斂中——已無架構級問題,剩的是實作 plumbing,已全部寫進 spec。
+
+### 第四輪(收斂確認,fresh agent)— ✅ CONVERGED
+- 三輪修正逐一**對著 code 驗證屬實**(ci 參數 plumbing、warn_soft 保 rc0、parse_decisions 吃 rollback、env.vault.parent=docs/)。
+- 無 blocker、無 major。3 個 trivial nit 已即時補:dedup key 用 `frozenset(nodes)`、`nodes` 存 bare stem、`--since` 單位=天 + 輪替上限 2000。
+- 第四輪結論:**implementable as-is**,審計通過,迴圈結束。
