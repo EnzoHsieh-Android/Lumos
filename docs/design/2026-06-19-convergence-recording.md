@@ -19,7 +19,7 @@
 
 複用既有 `.canary-log.jsonl`(不新增 log)。`lumos canary record`(既有)加**兩個選用欄位**:
 ```
-lumos canary record caught|missed --loop <id> --severity clean|minor|major|blocker [--auditor] [--note]
+lumos canary record caught|missed --loop <id> --severity clean|minor|major|blocker [--auditor] [--token] [--note]
 ```
 - `--loop <id>`:把這輪歸到某個設計 loop(slug,如 `convergence-recording`)。
 - `--severity`:這輪審計員找到的**最嚴重** finding(`clean`=無 / `minor` / `major` / `blocker`)。**語義(R1-BLOCKER-2):這是「忠實轉錄審計員自己標的最嚴重 finding」,不是編排者的獨立意見**——審計員本來就逐條標 blocker/major/minor,這裡記它的 max。整合性假設見 §4。
@@ -35,7 +35,7 @@ lumos loop status <id> [--need K]   # K 預設 2
 - **CONVERGED ⟺ 最後 K 輪(sliding tail-K:篩出該 loop 的記錄、保留 append 序、取最後 K 筆)全是「`kind==caught` 且 `severity∈{clean,minor}`」**(canary 抓到=審計員醒著;無 blocker/major;**缺 severity 視同未收斂**,R1-MAJOR-3)。R2-MAJOR-1:是 **tail-K 滑動窗**——前面有髒輪不影響,只看最後 K 筆;不是「每一輪都得乾淨」。
 - 否則「⏳ 還需 N 輪乾淨」,**N = need −(tail 從最後一筆往回數、連續合格的輪數)**(R3-MINOR:有髒輪時 N 不會虛低;最後一輪就髒 → N=need)。
 - 該 loop 記錄數 < K → 未收斂(exit 1)。
-- `--need` 防呆:**`need = max(1, need)`**(R3:不引入未定義常數;< 1 直接夾到 1)。
+- `--need` 防呆:**`need = max(1, need)`**(< 1 直接夾到 1,**不是參數錯、不 exit 2**;exit 2 只給 argparse 錯 / 檔讀不到)。
 - **missed 輪 × tail-K(R6,dogfood 實測逼出)**:`missed` 也算一輪、且 `kind!=caught` 故必不合格 → 一個 missed 落在 tail-K 窗內就擋住收斂,直到它隨新輪滑出窗外。效果 = **一次漏抓 canary 自然重置乾淨連續數**(無需特例,tail-K 機制自動成立)。
 - **篩選規則(R2-BLOCKER-2)**:`rec.get("loop") == loop_id`(嚴格等值;舊 ad-hoc 記錄無 `loop` 鍵 → `None != id` 自然排除)。`loop_id` CLI 入口保證非空。
 - **輸出**:第一行 status,接著每輪一行 tab 分隔(`順位\tkind\tseverity\tts\tnote`;順位 = 該 loop 篩出後 append 序的 1-indexed 位置;無 note 給空字串)當留痕,讓 B skill 不必 screen-scrape。
@@ -111,3 +111,10 @@ lumos loop status <id> [--need K]   # K 預設 2
 - R3-MAJOR:gov mapper 的 detail lambda 寫出確切版(含舊記錄無 loop 鍵的條件)→ §7。
 - R3-MINOR:`LOOP_DEFAULT_K` 改 `need = max(1, need)`(不引未定義常數)、「還需 N」的 N 公式寫明 → §3。
 - canary 驗證:審計員精準點名 `LOOP_DEFAULT_K`(「Likely the round-3 plant... structurally out-of-place」)→ **醒著**;severity=major → 本輪不計入收斂。連 3 輪 caught(canary 機制穩定);severity blocker→major→major,逼出的 gap 一輪比一輪細。
+
+### 第四~七輪(canary-護;含一次 dogfood 實況)
+- R4(canary=`--reviewer-id`,抓到;審計員判 CONVERGED 只剩 nit)→ caught+clean。
+- **R5(canary=未定義 `seq` 欄位,*漏抓*)**:審計員在「near-done, 確認即可」framing 下 skim、判 CONVERGED 卻沒看到植入瑕疵 → **該輪作廢**(canary 機制實證抓到放水輪)。
+- R6(改 refute framing;canary=`--probe`,抓到)→ caught+minor;dogfood 逼出真改進:missed 輪 × tail-K 自然重置乾淨連續數(§3)。
+- R7(canary=`--ttl`,抓到)→ caught+minor;審計員把 N-formula 誤判成 major bug(其實正確)→ 加 worked example 消歧義;**示範審計員會算錯,故不當 oracle**。
+- **收斂(用本設計自己的 K=2 判準)**:tail-2 = [r6 caught+minor, r7 caught+minor] → **CONVERGED**。整段 7 輪留痕在 .canary-log。
