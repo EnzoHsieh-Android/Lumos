@@ -329,13 +329,14 @@ def _suggest_systems_for_orphan(env, rel, n):
                   key=lambda x: (-x[1], -len(env.notes[x[0]].stem or "")))
 
 
-def run_doctor(env: Env, strict: bool, color: bool, suggest=False):
+def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
     C = {k: (v if color else "") for k, v in
          dict(R="\033[31m", Y="\033[33m", G="\033[32m", B="\033[1m", X="\033[0m").items()}
     notes, by_stem, resolve = env.notes, env.by_stem, env.resolve
     print(f"{C['B']}lumos doctor{C['X']} — vault: {C['B']}{env.vault}{C['X']} (self-contained, no Obsidian)")
     print()
     issues = 0
+    gov_events = []          # 本輪 gate findings → governance-log(--ci 才寫)
 
     def section(idx, title):
         print(f"{C['B']}[{idx}]{C['X']} {title}")
@@ -351,6 +352,14 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False):
         if advice:
             print(f"  {C['B']}建議動作{C['X']}: {advice}")
         issues += len(lines)
+
+    def warn_soft(lines, head, advice=None):
+        # 軟提醒:印出但不動 issues → 不影響 rc(R3-MAJOR-3)
+        print(f"  {C['Y']}⚠{C['X']} {head}")
+        for l in lines:
+            print(f"      • {l}")
+        if advice:
+            print(f"  {C['B']}建議{C['X']}: {advice}")
 
     collisions = {s: rs for s, rs in by_stem.items() if len(rs) > 1}
 
@@ -579,6 +588,32 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False):
                  "(『是不是真鐵則 / 綁的測試夠不夠格』仍由提出者自評 → maker/checker 破口):",
                  "派一個無對話脈絡的乾淨 agent 判合法性(別餵你的結論),過了用 "
                  "`lumos guard audit <node> \"<KEY 行子字串>\"` 留痕")
+    print()
+
+    # Check R: 可逆性回退綁定(★IRREVERSIBLE★ 動手前要有實質回退;★CHECKPOINT★ 軟提醒)
+    section("R", "可逆性回退綁定 (★IRREVERSIBLE★ 動手前要有實質回退)")
+    rev_err, rev_soft = [], []
+    for rel, nnote in sorted(notes.items()):
+        for marker, clean, ref in extract_reversibility(nnote):
+            t_ = nnote.fields.get("type")
+            if t_ != "system":
+                rev_err.append(f"{rel}: {marker} 標在非 Systems(type={t_!r})")
+                gov_events.append({"gate": "check-r", "kind": "blocked", "hard": True, "nodes": [nnote.stem]})
+            elif not _rollback_resolved(nnote, ref):
+                if marker == "★IRREVERSIBLE★":
+                    rev_err.append(f"{rel}: {first_line(clean, 60)}")
+                    gov_events.append({"gate": "check-r", "kind": "blocked", "hard": True, "nodes": [nnote.stem]})
+                else:
+                    rev_soft.append(f"{rel}: {first_line(clean, 60)}")
+                    gov_events.append({"gate": "check-r", "kind": "warned", "hard": False, "nodes": [nnote.stem]})
+    if not rev_err and not rev_soft:
+        ok("無未綁回退的可逆性標記")
+    if rev_err:
+        warn(rev_err, f"發現 {len(rev_err)} 條 ★IRREVERSIBLE★ 缺實質回退/標錯型別:",
+             "標記行加 [rollback:decisions] 且 decisions[] 寫非空 rollback;★ 僅用於 Systems")
+    if rev_soft:
+        warn_soft(rev_soft, f"{len(rev_soft)} 條 ★CHECKPOINT★ 建議補回退(不擋):",
+                  "加 [rollback:decisions] + decisions rollback")
     print()
 
     print(f"{C['B']}─────────────────────────────────{C['X']}")
@@ -2911,7 +2946,7 @@ def main():
 
     if args.cmd == "doctor":
         color = sys.stdout.isatty() and not args.ci
-        return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest)
+        return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest, ci=args.ci)
 
     if args.cmd in ("links", "backlinks", "context", "map") or \
        (args.cmd == "decisions" and not args.superseded):
