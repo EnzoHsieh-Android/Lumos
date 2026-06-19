@@ -30,7 +30,7 @@
 
 **校準鐵則**:canary 要「**認真的審計員一定抓得到、但不是一眼就看穿**」——對齊你真正在意的那類瑕疵。太細 = 不公平地判審計員失敗;太明顯 = 訊號太弱、形同走過場。
 
-**天花板(同 [test:]/[audit:]/[rollback:] 的誠實)**:抓到 canary 只證明審計員**醒到足以抓那一個、那一類、那一段的植入瑕疵**,**不證明它抓到了所有真實瑕疵**(它可能細讀了 canary 那段、略過其餘)。canary 是「**注意力的下限**」,不是完整性保證。別把「canary 抓到了」當成「這份東西審乾淨了」。
+**天花板(同 [test:]/[audit:]/[rollback:] 的誠實)**:抓到 canary 只證明審計員**醒到足以抓那一個、那一類、那一段的植入瑕疵**,**不證明它抓到了所有真實瑕疵**(它可能細讀了 canary 那段、略過其餘)。canary 是「**注意力的下限**」,不是完整性保證。別把「canary 抓到了」當成「這份東西審乾淨了」。**canary 抓得到的失敗模式**是「審計員根本沒讀這份文件 / 只吐通用回應」;**抓不到的**是「讀了、但對複雜權衡判斷錯」(R2-F7)——後者 canary 無能為力,別在複雜 spec 上因 canary pass 就過度信任。
 
 **迴歸沒閉合(誠實)**:判定「有沒有抓到」的是**植入者本人,沒有外部檢查**。canary 是**降低放水機率的摩擦**,不是閉合的驗證迴路——它把問題從「審計員審得好不好」換成「你判得準不準」,只是後者較難自欺、不是消失了。
 
@@ -38,8 +38,11 @@
 
 **只有一個指令**(R1-F6:砍掉 `lumos canary new`——token 鑄造 shell 一行就行,而且 `record` 會自動補):
 
-- `lumos canary record caught|missed [--auditor 模型] [--token T] [--note 文字]` → append 一筆事件到 `<vault.parent>/.canary-log.jsonl`(用既有全域 `--vault` 定位,R1-F7)。**`--token` 沒給就自動鑄一個**(`CANARY-<ts>`)→ 保證每筆有唯一 token(供 gov dedup 用,R1-F4)。非法 kind(非 caught/missed)→ rc2。
-  - 寫入 schema:`{"ts","kind","auditor","token","note"}`。
+- `lumos canary record caught|missed [--auditor 模型] [--token T] [--note 文字]` → append 一筆事件到 `<vault.parent>/.canary-log.jsonl`。
+- **argparse 結構(R2-F4,比照 `guard audit`)**:`canary` 為頂層 subparser → 內含 sub-subparser `record` → `kind` 是 `record` 的 positional,`choices=("caught","missed")`(非法值 argparse 自動 rc2)。dispatch:`cmd_canary(env, args.kind, args.auditor, args.token, args.note)`。
+- **`cmd_canary(env, …)` 用 `env.vault.parent` 定位寫入**(R2-F1,比照 `cmd_gov`——只用到 vault.parent、不額外依賴已載入的圖)。
+- **`--token` 沒給就自動鑄一個 `CANARY-<secrets.token_hex(4)>`**(R2-F2:**隨機、非時間戳**——時間戳是秒解析度,同秒兩筆會撞 token 被 dedup 誤折)。保證每筆 token 唯一(供 gov dedup,R1-F4)。
+  - 寫入 schema:`{"ts","kind","auditor","token","note"}`(`ts` = ISO 本地時間)。
 
 - `lumos gov` 新增 `.canary-log.jsonl` 為**第 4 個讀取來源**。**明確 mapper**(R1-F4):
   ```
@@ -64,8 +67,8 @@
 
 ## 6. 驗收標準
 - `lumos canary record missed --auditor sonnet`(帶 `--vault`)→ append 到 `<vault.parent>/.canary-log.jsonl`,且該筆有自動鑄的 `token`;`lumos gov` 出現 `canary/missed` 列。
-- 多筆 canary record(不同 token)→ `gov` **各自一列、不被 dedup 折成一列**。
-- `lumos canary record bogus`(非 caught/missed)→ rc2。
+- 兩筆 record 帶**明確不同的** `--token CANARY-A` / `--token CANARY-B`(R2-F2:測試不依賴 auto-mint 時序)→ `gov` **各自一列、不被 dedup 折成一列**。
+- `lumos canary record bogus`(非 caught/missed)→ rc2(argparse choices)。
 - 既有測試全綠(回歸)。
 
 ## 審計修正紀錄
@@ -78,3 +81,10 @@
 - R1-F6:砍 `lumos canary new`,`record` 自動補 token → §3 / §4。
 - R1-F7:`canary record` 用全域 `--vault` 定位寫入 → §3 / §6。
 - R1-F8:升級前先 `lumos gov --since 7` 看 missed 次數 → §2 step 4。
+
+### 第二輪(Sonnet 對抗審計)— R1 修正經 code 驗證屬實
+- R2-F2(blocker):auto-mint token 改隨機 `secrets.token_hex(4)`(時間戳秒解析度同秒會撞);§6 dedup 測試用明確 `--token`。
+- R2-F4(major):寫明 argparse 結構(`canary`→sub-subparser `record`→positional `kind` choices)。
+- R2-F1:`cmd_canary` 用 `env.vault.parent`(比照 cmd_gov,不額外載圖)。
+- R2-F7:天花板補「canary 抓得到『沒讀』、抓不到『讀了但判錯複雜權衡』」。
+- 第二輪結論:R1 修正全部 hold;審計員確認「值得做、非過度設計」(~100 行、每輪約 2 分鐘,擋掉『審計員根本沒讀』失敗模式 + gov 可查詢可靠度史)。
