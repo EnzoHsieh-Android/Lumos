@@ -850,6 +850,19 @@ obsidian vault="{vault}" search query="相關關鍵字"
 3. 有筆記**引用了 codebase 不存在的方法名**（從未實證過就寫進去）——升格任何主張前先 grep 一次
 4. 同篇筆記可能 KEY 行已更新、decisions 卻沒標 superseded——**自相矛盾**型,審計時兩處都要看
 
+### 對抗設計審計的 canary（test-the-tester，2026-06-19）
+
+派乾淨 agent 對抗審計一份 **spec/設計稿**(挑毛病、找 blocker)時,**順手驗證審計員這輪有沒有認真讀**——放水審計員回報的「沒問題」是最危險的假乾淨。做法:
+
+1. **植一個 canary**:在審計用的**工作副本**裡塞一個刻意、已知、**純加性**的瑕疵(只允許不牽動其他段落的型:**指向不存在章節的交叉引用**、或**約束引用未定義的詞**)。**禁用「與某段矛盾的需求」**那類非局部 canary(會污染審計員對被矛盾那段的真實意見)。給它一個唯一 token 當定位記號。**提交的文件永遠不含 canary。**
+2. **正常跑審計,不告訴 agent 有 canary**(講了就作弊)。
+3. **判定**:唯一算數的是 agent **清楚且正確描述了那個瑕疵**(光是 token 出現不算)。
+   - **抓到** → 這輪是醒的;只信它對**同類、同段**的真實 findings(不是全面合格證)。移除 canary、依真實 findings 改。`lumos canary record caught --auditor <模型>`。
+   - **沒抓到** → 放水。**這輪判決作廢**,換不同 canary 重跑。`lumos canary record missed --auditor <模型>`。連 2 次 missed 就升級模型/把文件切小(升級前 `lumos gov --since 7` 看 missed 史)。
+4. **panel 變體**:一輪派 N 個審計員時,每個各給自己的 canary;漏抓自己 canary 的剔出投票。
+
+**天花板**:canary 抓得到「審計員根本沒讀/只吐通用回應」,**抓不到「讀了但複雜權衡判錯」**;且判定「有沒有抓到」由植入者自己做、無外部檢查——canary 是**降低放水機率的摩擦**,不是閉合驗證。設計全文見 `docs/design/2026-06-19-canary-audit.md`。
+
 ### 發現 Issue 時
 ```bash
 obsidian vault="{vault}" create path="Issues/ISSUE-名稱" content="# ISSUE: 名稱\n\n## 現象\n\n## 相關系統\n- [[Systems/相關系統]]\n\n## 解決方案\n\n## 狀態\n- [ ] 分析原因\n- [ ] 實作修正\n- [ ] 驗證\n"
