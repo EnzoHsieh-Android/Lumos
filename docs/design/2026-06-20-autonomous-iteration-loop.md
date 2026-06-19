@@ -1,6 +1,6 @@
 # autonomous-iteration-loop — 自主迭代 loop:每天自動備好一份已自審的 lumos 改進 spec(設計)
 
-> 狀態:草稿(待**自己走一遍 design-loop**——自指閉環:用 lumos 迭代 lumos 的第一個產物=迭代器自己)｜日期:2026-06-20
+> 狀態:**CONVERGED**(canary-護 design-loop 5 輪、K=2,2026-06-20;**自指閉環達成**——用 lumos 迭代 lumos 的第一個產物=迭代器自己,走完它自己描述的那套 loop 並收斂)。待 writing-plans;**實作第一步=dry-run 實證 headless orchestrator(R1-B1),非直接全自動上線**｜日期:2026-06-20
 > 觸發:user 願景「建立永遠在迭代的 lumos」——日報產出後自動接產出、走 loop、產出改進 spec。
 > 定調(由本 session 實證):**不是「無人迭代」,是「自動備料 + 自審 + 停在放行閘等人」**。放行的人是最後也是唯一真兜底(對齊「AI 全工人只驗證撐不起」「人變稀缺、只在最高槓桿放行點」)。
 
@@ -118,3 +118,7 @@ canary(`DECAY_RATE`/`BACKLOG_FLOOR` 未定義常數)被抓到(識別符清查表
 canary(〈§成本模型〉死§ref)抓到(識別符清查對照 17 個 header 確認無此節、識破 token)。排掉 canary 後 **0 blocker / 0 major / 1 minor**(本輪乾淨):
 - **minor**:成本模型實質缺席(排掉 canary 身分仍真)——spec 提要算成本卻通篇無上界/預算/估算 → 補「成本與失控保護」節(單日 ≤14 agent、三道硬界、dry-run 觀察)。
 其餘各節 sound:**地面事實 7/7 全符真實 code/檔案**,R3 兩條修法乾淨且與 `scripts/lumos:1214` 收斂邏輯精確對齊,天花板無漏列、R1-R3 canary 未洩漏進真檔。
+
+### R5(2026-06-20,canary 類型 c=未定義常數,opus,caught)→ **CONVERGED**
+canary(`AGENT_MAX_TURNS` 未定義常數 + 洩漏 token)抓到(識別符清查表)。排掉 canary 後 **0 blocker / 0 major / 0 minor = clean**:本體地面事實全符、R1-R4 修法扎實、天花板精確對齊 `scripts/lumos:1213` `good(r)` 邏輯。**收斂達成**(tail = R4 minor + R5 clean,連 2 輪 caught+乾淨)。
+> 諷刺註:opus 點出 R5 canary「植在修正者最鬆懈、最容易宣告勝利的那節」(R4 剛宣告 0 major 的成本節)——又一次自指印證:連 design-loop 自己都會在「剛宣告乾淨」處鬆懈,放行的人是最後兜底。
