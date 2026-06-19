@@ -20,7 +20,7 @@
 - **觸發點**:brainstorming 產出 spec/設計 doc 後、進 writing-plans/實作**前**。
 - **硬閘(紀律強制,非技術鎖,M-4 誠實)**:`lumos loop status <id>` 回 exit 0(CONVERGED)前,**不得進實作**。lumos **無法技術上擋住**「未跑 loop 就實作」——這靠 Claude 記得調用 + 誠實套用 trivial 判準(同 pre-commit 有 `--no-verify` 後門:是紀律不是鐵牢)。trivial-skip 也是自評、無第三方檢查;**所以 cap/天花板/留痕都要在**,讓繞過至少留痕、可事後查。
 - **trivial 可跳**:改 typo / 一行 / 純機械(rename、補欄位、連結修復)→ 可跳 loop,但**寫一句為什麼跳**(留在對話/commit message)。
-- **loop id** = spec 檔名 slug(如 `design-loop-skill`),傳給所有 `--loop`。
+- **loop id** = spec 檔名去掉 `docs/design/` 前綴與 `.md`、再去掉日期前綴(如 `docs/design/2026-06-19-design-loop-skill.md` → `design-loop-skill`),傳給所有 `--loop`。
 
 ## 3. 每一輪(skill 的程序,Claude 照做)
 
@@ -32,7 +32,7 @@
    - (d) 未定義的產物/檔名(如憑空的 `xxx.json`,不在 schema/它處)。
    **類型由 N 決定(無需記憶/查 log 的 type 欄):type = 清單[(N−1) mod 4]**(N=本輪序,a=1,b=2…)→ 自動 a→b→c→d→a 輪替,missed 重跑時 N 已 +1 故換新類型。嵌唯一 token 定位;在 `--note` 記 `type=<x>`。**提交的 spec 永遠不含 canary。**
 3. **派乾淨審計員**:Agent tool、`model: sonnet`(**升級後 opus,見 §4**)、**refute framing**(主動找洞,別確認)、**不告知有 canary**、指向工作副本。
-4. **判讀**:① **canary 抓到 = 審計員清楚點出那個植入瑕疵的「性質」**(如「§N 不存在」「`--xxx` 未定義」)——光 token 字串出現、或泛泛說「有些引用怪怪的」不算;② **最嚴重真 finding**(clean/minor/major/blocker)= 排掉 canary 後審計員標的 max。**剝除「審計員誤判」的約束(防自己放水,M-3)**:只有當你能**指出該 finding 客觀錯在哪**(被實際 spec/code 內容反證)才可剝;**判不準就保留**(寧可高估嚴重度)。誤判剝除要在 `--note` 記一句理由。
+4. **判讀**:① **canary 抓到 = 審計員清楚點出那個植入瑕疵的「性質」**(如「§N 不存在」「`--xxx` 未定義」)——光 token 字串出現、或泛泛說「有些引用怪怪的」不算;② **最嚴重真 finding**(`clean`=排掉 canary 後審計員無任何真 finding / `minor` / `major` / `blocker`)= 審計員標的 max。**剝除「審計員誤判」的約束(防自己放水,M-3)**:只有當你能**指出該 finding 客觀錯在哪**(被實際 spec/code 內容反證)才可剝;**判不準就保留**(寧可高估嚴重度)。誤判剝除要在 `--note` 記一句理由。
 5. **記錄**:`lumos canary record caught|missed --loop <id> --severity <worst> --auditor sonnet --note "r<N> type=<a-d> <caught|missed> [誤判剝除理由]"`(**note 格式固定**,含 canary 類型供追溯)。
 6. **漏抓 → 該輪判決不採信**(但**仍是一筆 `missed` record、仍算進 cap**,不是「不存在」):**不折 findings**(判決不可信),下一輪(N+1、自動換 canary 類型 + 更兇 framing,見 §4)。
 7. **抓到 → 折真 findings 進 `docs/design/<id>.md`**;**commit 前 `grep -c '<canary token>' docs/design/<id>.md` 必須為 0**(MINOR-1:確認 canary 沒混進真檔)再 `git commit`(message 記該輪 canary+severity)。折時:剝審計員誤判(依 step4 約束)、套真 fix、把該輪寫進 spec 審計修正紀錄。
@@ -41,7 +41,8 @@
 ## 4. 護欄
 
 - **每次派審計員 = 一筆 record = 一輪**(含 missed,M-1):漏抓也 `lumos canary record missed` 留痕、**也算進 cap**;不存在「不記錄的 inline 重跑」。所以「輪」「cap」「連續漏抓」全以 **canary-log 的記錄**為準,定義一致。
-- **連 2 次漏抓(canary-log 連 2 筆 `missed`)→ 升級**:① 審計模型 sonnet→**opus**;② 把 spec 切小(太長審不仔細);③(soft,人工判斷)把 spec 切小:獨立子段各自開 loop;v1 不自動化此步;④ refute framing 加碼(具體:從「找洞」升成「**逐節讀,你一定找得到至少一個未定義的詞/壞引用/不一致;沒找到就是你沒讀仔細**」)。
+- **更兇 framing(從第 1 次漏抓就用,不必等 2 次)**:把 refute prompt 從「找洞」升成「**逐節讀,你一定找得到至少一個未定義的詞/壞引用/不一致;沒找到就是你沒讀仔細**」。
+- **連 2 次漏抓 → 升級**:定義 = **canary-log 最近 2 筆都 `missed`**(中間一筆 `caught` 即重置連續計數)。升級動作:① 審計模型 sonnet→**opus**;②(soft,人工判斷)把 spec 切小(獨立子段各自開 loop;v1 不自動化此步)。
 - **max rounds cap = 6 筆 record**:到頂仍未收斂 → **停、把現況攤給人**、記一句「達 cap 未收斂」(別無限燒)。
 - **三重自判都是沒閉合的迴歸(誠實,M-3)**:編排的 Claude 同時判 ① canary 抓到沒、② severity、③ 哪些 finding 是審計員誤判——三個都由「植入者本人」做、無外部檢查。已用約束收窄(step4:誤判要能反證、判不準就保留;severity 忠實轉錄 max),但**根本上不 tamper-proof**。
 - **誠實天花板(沿用 A/canary,B 不得弱化)**:loop 是**可觀測 + 摩擦 + 地板**,不是 oracle。收斂只證「連 K 輪醒著的審計員沒找到 blocker/major」,不證完整正確。B 在收斂後**仍要向人提醒**這些天花板,別讓 CONVERGED 被當成「絕對沒問題」。
@@ -72,6 +73,13 @@
 - (無 `test_lumos.py` 單元測試——B 是 skill 非 lumos code;A 的原語已有測試。)
 
 ## 審計修正紀錄
+### 第三輪(canary=未定義欄位 `round_budget`,**抓到**)
+- 前兩輪 13 項修正**全部 hold**。
+- MAJOR-2:連續漏抓 reset 規則 + 單次漏抓 framing 文字未 pin → §4 明訂(最近 2 筆 missed、caught 重置;framing 從第 1 次漏抓就加碼)。
+- MINOR-4:`clean` severity 定義(無任何真 finding)→ §3 step4。
+- NIT:§4 ②③ 重複「切小」編號修;loop id 推導寫明。
+- canary 驗證:審計員精準點名 `round_budget`(undefined field)→ **醒著**;severity=major → 不計入收斂。
+
 ### 第二輪(canary=未定義旗標 `--escalate-once`,**抓到**)
 - BLOCKER-2(真):K=2 未敘明於 spec 本體 → §3 step8 寫明 `--need 2`。
 - MAJOR-1:`作廢` vs 算進 cap 矛盾 → §3 step6 改「判決不採信、仍是 missed record 算進 cap」。
