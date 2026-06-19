@@ -1,7 +1,7 @@
 # 設計:lumos-design-loop skill(Component B)— loop-pipeline 編排
 
 - 日期:2026-06-19
-- 狀態:設計草案(待 canary-護的 Sonnet 審計 loop 收斂)
+- 狀態:✅ CONVERGED(經 5 輪 canary-護審計、用 A 的 K=2 判準收斂:tail-2=[r4 caught+minor, r5 caught+clean])
 - 方向:lumos 治理朝 loop engineering(見 memory `lumos-governance-direction-loop-engineering`)
 - 角色:**Component B**(Claude 編排層 skill),消費 **Component A**(`docs/design/2026-06-19-convergence-recording.md`:`lumos canary record --loop/--severity` + `lumos loop status`)。
 
@@ -73,6 +73,11 @@
 - (無 `test_lumos.py` 單元測試——B 是 skill 非 lumos code;A 的原語已有測試。)
 
 ## 審計修正紀錄
+### 第五輪(canary=壞 §ref→§9,**抓到**)— ✅ CONVERGED
+- 審計員精準點名 §9 dead-ref,並明確驗證其餘全 CLEAN(terms/flags/artifacts/refs 皆定義、無 orphan、邏輯一致)。
+- **R5 = caught+clean** → tail-2=[r4 caught+minor, r5 caught+clean] → **CONVERGED**(K=2 滿足)。
+- 全程 severity:blocker→blocker→major→minor→clean(單調下降,loop 死不收斂直到真乾淨)。5 輪、0 漏抓。
+
 ### 第四輪(canary=未定義產物 `loop-summary.md`,**抓到**;無 blocker/major)
 - MINOR-A:`--auditor` 等旗標未註明來自 A 介面 → §3 step5 註明。
 - canary 校準教訓:`loop-summary.md` 偏像真實 deliverable,審計員當「缺路徑」flag(仍是 catch),不如 loop_manifest/round_budget 那種明顯 orphan;下輪用更明確的 orphan(壞 §ref)。
