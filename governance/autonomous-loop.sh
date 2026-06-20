@@ -58,7 +58,7 @@ SKIPPED="$(get skipped)"; CONVERGED="$(get converged)"; TOPIC="$(get topic)"; SP
 
 if [ "$SKIPPED" = "True" ]; then log "gap 已被既有 spec 覆蓋,skip(reason: $(get reason))。當天結束。"; exit 0; fi
 
-RESIDUAL='["severity 自報直接決定收斂門檻(judge 不覆蓋)——全自動判收斂最弱環","自動 brainstorm 無人回澄清,選錯方向風險高於有人時","AI 自選 gap=自己決定改自己方向,有自我強化偏誤","唯一外部錨點是你 review 這個產出"]'
+RESIDUAL='["judge 單一評審不可靠:換排版可能翻盤(隨機不穩)、對某類 spec 系統性偏(換家族才解、\$0 OAuth 做不到)——judge-perturbation 評估後放棄:機制堵不住自證、ROI 低","severity 由 judge 評(已斷 orchestrator 自填)但 judge 也是 AI、且同輪判 canary+severity=集中化","type d canary 沒測(限 a/b/c)","自動 brainstorm 無人回澄清;AI 自選 gap=自己決定改自己方向(自我強化偏誤)","唯一外部錨點是你 review 這個 PR"]'
 if [ "$CONVERGED" != "True" ]; then
   log "未收斂(converged=$CONVERGED),不放行,scratch 不入庫。"
   python3 -c "

@@ -13,8 +13,7 @@ def build_report(canary_log, loop_id, residual_risks):
     for i, r in enumerate(rows, 1):
         lines.append(f"- R{i}: `{r.get('kind')}` / severity=`{r.get('severity')}` / "
                      f"auditor=`{r.get('auditor','?')}` — {r.get('note','')}")
-    lines += ["", "### 殘留風險(自動模式已知未兜底)", ""]
+    lines += ["", "### ⚠ 這個迴圈沒檢查到的維度(品質最可能爛在這、放行請特別盯)", ""]
     lines += [f"- {risk}" for risk in residual_risks]
-    lines += ["", "> 放行的人是最後也是唯一真兜底:收斂只證連 2 輪醒著的 opus 沒挑出 "
-              "blocker/major,severity 判定仍自評。"]
+    lines += ["", "> 放行的人是最後也是唯一真兜底。上列是這個迴圈**結構上沒能自動檢查**的維度——不是它查過沒問題,是它根本沒查;請你的眼睛盯這幾處。"]
     return "\n".join(lines)
