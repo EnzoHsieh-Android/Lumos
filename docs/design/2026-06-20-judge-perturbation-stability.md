@@ -73,3 +73,10 @@ canary(〈C4 成本模型〉死§ref+token)抓到。worst real = major,全折:
 - **major F3**(最深):原 C2「orchestrator 自產擾動版+自寫 note 說等價」=**被審者自填反模式復發**(judge-severity-gate 才斷開的)→ **改機械 reorder**(程序打亂 findings/bullet 順序、逐字不改內容):確定性、可驗證等價、無 agent 自證,作弊面歸零,**連帶消掉 F6 測試盲區**。且更對症(RAND 測的本就是換排版/順序)。
 - **minor**:F2 邊界理由準確化(claude -p 根本不支援非 Claude、非「換鑰匙」);F4 天花板補 gap 窄化橋接 + judge 集中化因同輪雙呼加深;F5 成本量化(最少 +2 judge/loop)。
 > 本輪最有價值:自以為想好的方案(agent 產擾動)一審就暴露重蹈「被審者自填」覆轍,戳穿同時逼出更乾淨的機械 reorder。
+
+### R2(2026-06-20,canary 類型 b=未定義旗標,opus,caught)— 揭示方案根本兩難,折修方向待人決
+canary(`--shuffle-seed` 懸空)抓到。3 個 major 都指向同一裂縫——**機械 reorder 沒真堵自證,只換了藏身處**:
+- **F2(最深)**:spec 通篇沒說 reorder 由誰執行、種子誰選。若是 orchestrator(被審者)→ 它能挑「對自己有利的順序」=自證悖論原樣復活。**且立論自相矛盾**:前提「順序會讓 judge 翻盤」(否則測試廢)vs 防作弊「只換順序故無作弊面」——順序無關則廢、有關則可作弊,二者不能並存。
+- **F1**:擾動標的失真——RAND 測「換被評對象(spec)排版」,C2 打亂的卻是「auditor findings 報告順序」(評審材料、有序論證體),打亂=破壞論證結構=noise,judge 翻盤未必證不穩。
+- **F3**:「機械可驗證」≠「已被機械驗證」,驗證者未定義、loop 無此閘。
+> **待人決的方向**:(a)折修重做——reorder 改**確定性程序** + 種子=findings **hash**(去人為、堵 F2 選順序)+ **自動 diff 等價閘**(F3)+ 擾動標的改 **spec 本身**(F1);代價:從「多審一次」變成要建一套真功能,且加深 judge 集中化。(b)放棄此方案,改用更輕的 inspiration「可信度報告硬列『迴圈沒檢查到的維度(含 judge 單一不可靠)』」,把人眼導到破口、不建 reorder 機制。**ROI 上 (b) 可能更划算。**
