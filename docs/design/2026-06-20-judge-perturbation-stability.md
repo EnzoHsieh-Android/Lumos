@@ -10,7 +10,7 @@ design-loop **關鍵輪**(要判 clean/minor 的收斂輪),把同一份 spec 換
 
 ## 邊界 / 非目標(YAGNI + 誠實約束)
 
-- **不換模型家族(做不到,$0 OAuth 約束)**:能用的只有 Claude opus/sonnet(fable-5 被禁),真「換家族(GPT/Gemini)避免同門偏心」要 API key。**RAND 的核心建議在當前約束下實現不了**,硬寫=假設做得到的破口。本 spec 只做「同家族內」抗擾動。
+- **不換模型家族(做不到,雙重約束 R1-F2)**:① `claude -p` 本身只路由 Anthropic Claude——換 GPT/Gemini **不是「換把鑰匙」,是換掉整條 CLI/SDK 工具鏈**;② OAuth 訂閱再把 Claude 自家可用面砍到只剩 opus/sonnet(fable-5 亦禁,實證 `ai-governance-research.sh`)。所以「換家族避免同門偏心」(RAND 核心)在當前工具鏈下**根本沒有實現路徑**,硬寫=假設做得到的破口。本 spec 只做「同家族內」抗擾動。
 - **不做真多數決**(每輪多個 opus judge 投票成本翻倍,autonomous loop 已夠燒)。
 - **只補關鍵輪**(要判 clean/minor 的那輪),不是每輪——成本。前面 blocker/major 輪本來就不收斂,不需擾動測試。
 
@@ -29,39 +29,47 @@ design-loop **關鍵輪**(要判 clean/minor 的收斂輪),把同一份 spec 換
 ## 組件
 
 ### C1 — 關鍵輪擾動測試(改 orchestrator-prompt.md design-loop sub-step)
-- 觸發條件:judge 回報的 severity ∈ {clean, minor}(=這輪可能讓收斂窗前進)時才做;major/blocker 輪跳過(本來就不收斂)。
-- 動作:orchestrator 產一份 spec 的**擾動版**(換段落順序 + 關鍵句換句話說,語意嚴格不變),用**同一個 judge prompt** 再審一次,只問 severity。
-- 判定:兩次 severity 是否**同在收斂側**(都 ∈{clean,minor})。跨越門檻 = 不穩 → 該輪 severity 取較嚴格者(=不採信這次 clean/minor)、不算進收斂窗;orchestrator note 記「擾動翻盤」。
+- 觸發條件:judge 回報的 severity ∈ {clean, minor} 時做(=這輪可能讓收斂窗前進);major/blocker 輪跳過(本來就不收斂)。**觸發不對稱(R1-F1)見誠實天花板 1。**
+- 動作:把 judge 的輸入做**機械擾動**(見 C2),用**同一個 judge prompt** 對「原序」+「擾動序」各審一次,只問 severity。
+- 判定:兩次 severity 是否**同在收斂側**(都 ∈{clean,minor})。跨越門檻 = judge 這輪不穩 → 取較嚴格者、不採信、不算進收斂窗;note 記「擾動翻盤」。
 
-### C2 — 擾動版怎麼產(防作弊)
-擾動版由 **orchestrator** 產(它非評定者),不是 judge 自己改;且必須**語意等價**(只換措辭/順序,不增刪 finding、不改數據)。orchestrator note 附「擾動版做了什麼改動」供 dry-run 抽查擾動是否真等價(否則 orchestrator 可做一個「故意更難讀」的擾動版逼翻盤、或「幾乎沒動」的假擾動)。
+### C2 — 擾動用「機械 reorder」、不用 agent 產(R1-F3 解,堵自證悖論)
+**擾動不是 agent 改寫,是程序機械打亂呈現順序**:把 judge 輸入裡 auditor findings 報告的**條目順序**(+ spec 內同級 bullet 順序)用確定性程序打亂、**一個字不改內容**。兩個理由:
+- **直接對症**:RAND 測的本就是「換**排版/順序**」(格式擾動)、不是改寫——機械 reorder 正中靶心,原方案的「換句話說」反而想多了。
+- **無自證(F3 的核心)**:原方案讓 orchestrator(被審者)產擾動版、自己寫 note 說「等價」——正是 judge-severity-gate 才斷開的「**被審者自填**」反模式在新位置復發。機械 reorder 是**確定性、可驗證等價**(同一組 findings 只換序、內容逐字相同),沒有 agent 能塞「幾乎沒動的假擾動」或「故意更難讀」——作弊面歸零(連帶消掉原 F6 測試盲區)。
 
 ### C3 — 收斂語義不變、只多一道閘
 `good(r) = caught AND severity∈{clean,minor}` 定義不動;C1 只是在「judge 回報 severity」與「record」之間插一道「擾動複審」,讓據實評的 severity 多一層抗擾動驗證。
 
 ## 誠實天花板
 
-1. **同家族抗不了「系統性偏」,只抗「隨機不穩」**:擾動測試是同一個 judge 審兩次。它若有**穩定的系統性偏見**(對某類 spec 一貫低估),兩次都偏、都不翻盤——擾動只抓「換排版就翻盤」的隨機不穩,抓不到穩定的系統性偏。RAND 的「同門偏心」核心在 $0 OAuth 下**沒解**(換家族才解),本 spec 只補了一半。
-2. **擾動等價性靠 orchestrator 自律**:擾動版由 orchestrator 產,「語意是否真等價」沒有機制校驗(同 judge-severity-gate 的「規範非機制」)——靠 dry-run 人工抽查擾動 diff。
-3. **成本**:關鍵輪多一次 judge 審(只在 severity∈{clean,minor} 時觸發,即每個 loop 收斂前的少數輪),單日增量有限但非零。
-4. **自指**:本 spec 是用「現在這個單一 judge 的 design-loop」審的——用不可靠的單一評審,審「修單一評審不可靠」的方案。不可避免,放行的人是最後兜底。
+1. **只解「隨機不穩」子集、且只測收斂側(R1-F1)**:本 spec 把 gap「單一 judge 不可靠」窄化成「單一 judge **隨機**不穩」——擾動(同一 judge 換序審兩次)只抓「換排版就翻盤」的隨機不穩;**穩定的系統性偏見**(對某類 spec 一貫低估)兩次都偏、抓不到(換家族才解,$0 OAuth 做不到)。**且觸發不對稱**:只在第一次審 clean/minor 時測,防「假收斂」(clean 翻 major);第一次偏嚴(major)的「假不收斂」不測——接受偏嚴時多花幾輪、不增成本。只補一半,誠實標明。
+2. **擾動等價性已從「靠自律」升為「機械可驗證」(R1-F3 解)**:改機械 reorder 後,擾動是確定性程序(只換 findings/bullet 順序、內容逐字相同),等價性可機械驗證(diff 只有順序差)、無 agent 自證——原「orchestrator 自產自證」反模式已消除。
+3. **成本(R1-F5 量化)**:reorder 本身零成本(程序);多的是 judge 對亂序再審一次,只在 severity∈{clean,minor} 輪觸發。對齊 autonomous-loop「單日 ≤14 agent 調用」基線,收斂前至少 2 個 clean/minor 輪 → **最少 +2 judge 審/loop**。
+4. **judge 集中化因本改動加深(R1-F4)**:judge 同輪被呼兩次(原序+亂序),權重更集中於單一 judge——圖譜即合約 §自主迭代 loop 已命名的「judge 集中化」風險,本改動是「以抗隨機不穩換更深集中化」。
+5. **自指**:本 spec 是用「現在這個單一 judge 的 design-loop」審的——用不可靠的單一評審,審「修單一評審不可靠」的方案。不可避免,放行的人是最後兜底。
 
 ## 測試策略
 
-- 合成:同一 spec 兩種說法,judge 給不同 severity(一 clean 一 major)→ 驗 C1 判「不穩、不採信」。
-- 同一 spec 兩種說法 severity 一致 → 驗 C1 判「穩、採信」。
-- major 輪 → 驗跳過擾動測試(不觸發)。
-- 擾動版非等價(偷改 finding)→ 人工抽查能否從 note 看出(C2 揭露)。
+- 合成:同一 findings 報告,原序 vs 機械亂序,judge 給跨門檻 severity(一 clean 一 major)→ 驗 C1 判「不穩、不採信」。
+- 原序 vs 亂序 severity 一致 → 驗 C1 判「穩、採信」。
+- major 輪 → 驗跳過(不觸發)。
+- **機械 reorder 等價性**:驗亂序版與原版 findings **內容逐字相同、只順序差**(diff 可機械確認)——取代原「人工抽查假擾動」(機械 reorder 無假擾動可言,R1-F3/F6 一併消解)。
 
 ## 知識同步影響(dogfood 2026-06-20 新機制)
 
 此改動若實作,需同步:
 - **`governance/autonomous_loop/orchestrator-prompt.md`**(主改):design-loop sub-step 加「關鍵輪擾動複審」。
 - **`docs/design/2026-06-20-autonomous-iteration-loop.md`** §組件3:judge 那條補「關鍵輪還要過擾動穩定度測試」。
-- **`docs/methodology/圖譜即合約.md`** §四「自主迭代 loop」節:judge 機制補一句抗擾動;§誠實天花板「judge 集中化」可註「已加抗隨機不穩、但系統性偏未解」。
+- **`docs/methodology/圖譜即合約.md`** §四「自主迭代 loop」節:judge 機制補「關鍵輪過機械 reorder 擾動測試」;「judge 集中化」註「已加抗隨機不穩,但同輪雙呼**加深**集中化、系統性偏未解(換家族才解、$0 OAuth 做不到)」。
 - **`docs/methodology/圖譜即合約-對外論述.md`**:白話段「派 AI 審設計」可補一句「同一份東西換個說法再審一次,判斷翻盤就代表這個 AI 沒看穩」。
 - skills:**無**(judge/擾動是 autonomous-loop 獨有;`lumos-design-loop` 手動 loop 人在場、不受影響)。
 
 ## 審計修正紀錄
 
-(design-loop 跑完後補)
+### R1(2026-06-20,canary 類型 a=壞§ref,opus,caught)
+canary(〈C4 成本模型〉死§ref+token)抓到。worst real = major,全折:
+- **major F1**:觸發不對稱——只在第一次審 clean/minor 時測,防「假收斂」、漏「假不收斂(major 其實該 clean)」→ 誠實天花板 1 明列、接受偏嚴多花幾輪。
+- **major F3**(最深):原 C2「orchestrator 自產擾動版+自寫 note 說等價」=**被審者自填反模式復發**(judge-severity-gate 才斷開的)→ **改機械 reorder**(程序打亂 findings/bullet 順序、逐字不改內容):確定性、可驗證等價、無 agent 自證,作弊面歸零,**連帶消掉 F6 測試盲區**。且更對症(RAND 測的本就是換排版/順序)。
+- **minor**:F2 邊界理由準確化(claude -p 根本不支援非 Claude、非「換鑰匙」);F4 天花板補 gap 窄化橋接 + judge 集中化因同輪雙呼加深;F5 成本量化(最少 +2 judge/loop)。
+> 本輪最有價值:自以為想好的方案(agent 產擾動)一審就暴露重蹈「被審者自填」覆轍,戳穿同時逼出更乾淨的機械 reorder。
