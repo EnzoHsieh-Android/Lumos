@@ -19,9 +19,9 @@
 1. cp __SCRATCH__/spec/__DATE__-<topic>.md __SCRATCH__/<topic>-rN.md
 2. 在**工作副本**(只工作副本)植 1 個 canary,類型=[a,b,c][(N-1)%3]:a=壞§ref(引用不存在章節);b=未定義旗標(--xxx 它處無定義);c=未定義常數(ALL_CAPS 無值)。行尾加唯一 token <!-- CANARY-AUTO-N -->。
 3. **用 Agent 工具 spawn 一個 opus auditor**:要它 REFUTE 工作副本、逐節找洞、**強制地面事實查證**(spec 每個現況假設——欄位/函數/檔案/常數——實際 grep/Read 驗 scripts/lumos 等真實 code,報告列查證指令與結果),逐條標 severity。
-4. **用 Agent 工具 spawn 一個 opus judge**(獨立):只判「auditor 有沒有正確點出植入 canary 的『性質』」→ caught 或 missed。
-5. 你讀 auditor 報告,排掉 canary 後判最嚴重真 finding 的 severity(clean/minor/major/blocker)。
-6. python3 scripts/lumos --vault __SCRATCH__/kg canary record <caught|missed> --loop <topic> --severity <sev> --auditor opus --token CANARY-AUTO-N --note "rN <摘要>"
+4. **用 Agent 工具 spawn 一個 opus judge**(獨立,**明文傳入 auditor 完整報告 + canary token**):回傳 ① caught/missed(auditor 有沒有正確點出 canary 性質);② **severity**(clean/minor/major/blocker,排掉 canary 後最嚴重真 finding)+ 一句 rationale。judge **據實評 severity、不加保守偏置**;唯有「對最嚴重 finding 無任一 grep/Read 查證行」才至少 major(客觀二值,不評足不足)。【judge-severity-gate:severity 改由獨立 judge 評、斷開 orchestrator 自填收斂閘】
+5. 你**讀 judge 回報的 severity(不再自評)**,並讀 auditor 報告決定哪些 findings 折進 spec。
+6. python3 scripts/lumos --vault __SCRATCH__/kg canary record <caught|missed> --loop <topic> --severity <judge 回報的 severity,非自評> --auditor opus --token CANARY-AUTO-N --note "rN <摘要>"
 7. caught → 把真 findings 折進 **__SCRATCH__/spec/__DATE__-<topic>.md** + 把該輪寫進審計修正紀錄;**折完務必 grep -c CANARY-AUTO-N __SCRATCH__/spec/__DATE__-<topic>.md == 0**。missed → 不折、直接下一輪。
 8. python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need 2 → exit 0 則停。撞 __MAXR__ 輪未收斂 → 停。
 
