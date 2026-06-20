@@ -1,7 +1,7 @@
 # judge-severity-gate — judge 覆蓋 severity 維度,斷開收斂自填迴路(設計)
 
-> 狀態:**DRAFT / 未收斂(撞 6 輪 cap)** — autonomous-iteration-loop 第一個自動產出,人撈出保留(2026-06-20)。
-> ⚠ **核心張力待人決(非機械補輪可解)**:本 spec 提議 judge「保守評 severity(不確定取高)」來堵自填漏洞,但**保守原則本身會讓 design-loop 更難收斂**(更多輪被評 major)——堵自填 vs 可收斂是對立的。R6 把它當 minor 搁置,實則是核心未決問題。要推進此 spec,得先決定這個張力怎麼解(例:保守只用於『決定收斂門檻』、不用於『要不要再審一輪』?)。
+> 狀態:**張力已解(2026-06-20),待重跑 design-loop 收斂** — autonomous-iteration-loop 自動產出,人撈出後解張力推進。
+> ✅ **核心張力已解**:原 spec 為堵自填,給 judge 加了「拿不準就把 severity 往高評(保守取高)」——但這讓模糊輪永遠 major、進不了收斂窗(堵自填 vs 可收斂對立)。**解=刪掉這條純模糊性保守**:堵自填靠『評定者獨立(orchestrator→judge)』、不靠保守加碼;judge **據實評**,模糊輪可據實為 minor → 能收斂。**區分兩種保守**:對「模糊性」的保守(卡收斂)刪;對「auditor 沒做地面查證」的保守(查證不足→至少 major)**留**(那是對偷懶的合理懲罰、強制地面查證下正常不觸發)。原『保守取高』本就是誤移植 skill 規則(R5-F-C2 已審出)。
 > 品質:6 輪 opus design-loop 磨過(R1 blocker→R6 minor)、地面查證無誤、含雙源損益論證。
 > 觸發 gap:收斂判準 `good(r) = caught AND severity∈{clean,minor}`(scripts/lumos:1214)中,`caught` 已由 judge 判,但 `severity` 由 orchestrator 自評——被審者控制收斂閘的一半。
 > loop_id: judge-severity-gate
@@ -52,11 +52,11 @@ severity 定義(本 spec 新增;skill 僅定義 `clean`,其餘三級無既有語
 - `minor`:最嚴重真 finding 可改善但不阻實作。
 - `major`:最嚴重真 finding 要修才能進實作。
 - `blocker`:最嚴重真 finding 為根本方向或假設出錯。
-- **不確定時取較嚴格層級(本 spec 的保守原則)**:若 judge 無法明確判斷 minor 或 major,取 major;無法判斷 major 或 blocker,取 blocker。此為本 spec 的設計選擇,非移植 skill 的 strip-discipline 規則(F-C2)。
+- **judge 據實評,不加保守偏置(2026-06-20 張力解,取代原『不確定取高』)**:judge 就上述四級**據實判定**;純粹「拿不準 minor 還是 major」時**不刻意往高評**(否則模糊輪永遠 major、進不了收斂窗——R6-F-D1 張力)。堵自填靠評定者獨立、不靠保守加碼。**唯一例外**:auditor 沒列地面查證結果時仍至少 major(見下 F-B3——那是對「沒查證」的保守,非對「模糊性」的保守)。
 
 「排除 canary」的操作:judge 跳過含 canary token 的 finding。
 
-**Judge prompt 中必須包含的 severity 指引(F-B3)**:「評定 severity 時,必須參照 auditor 報告中列出的 grep/Read 查證結果清單,以地面事實為據,而非只看敘述文字。若 auditor 未列查證結果或查證結果不足,severity 至少評為 major(查證不足=不確定程度高=保守原則啟動)。」
+**Judge prompt 中必須包含的 severity 指引(F-B3)**:「評定 severity 時,必須參照 auditor 報告中列出的 grep/Read 查證結果清單,以地面事實為據,而非只看敘述文字。**純粹模糊(拿不準 minor/major)時據實評、不往高**;但若 auditor 未列查證結果或查證不足,severity 至少評為 major(這是對『沒做地面查證』的保守,非對『模糊性』的保守——前者該罰、後者會卡收斂故不保守)。」
 
 ### C2 — Orchestrator 數據流調整(修改 orchestrator-prompt.md 步驟 2 design-loop 的 sub-step 4→5→6)
 **真實當前順序**(orchestrator-prompt.md 步驟 2 design-loop sub-steps 3-6):
@@ -152,3 +152,6 @@ canary(`JUDGE_SEVERITY_DRIFT_THRESHOLD` 未定義常數)被抓到。worst real =
 - **損失**:judge 放水 → 兩維一起失守;原來的「caught 與 severity 歧見可作告警訊號」消失。
 - **收益**:orchestrator(被審者)不再自填 severity → 斷開最明顯的自填閉路;且 orchestrator 自評 severity 時本來就能讀 judge 的 caught/missed 結果再調整,等於單方面的「後驗自評」,雙源保護實質上已不對稱。
 - **結論**:原雙源的交叉保護因「orchestrator 後驗調整」而打折;judge 單源雖有集中化風險,但 judge 本身就是獨立 agent 且無動機放水 severity(judge 的任務不影響它的任何決策)。損益比傾向方案 A,但集中化風險需在誠實天花板揭露且 dry-run 抽查。
+
+### 人工推進(2026-06-20,人撈出解張力)
+R6-F-D1 把「保守取高卡收斂」當 minor 搁置、判「不需修改」——**這個判斷是錯的**:它其實是核心張力(堵自填 vs 可收斂對立)。人撈出後解之:**刪掉「純模糊性保守取高」**(它本就是 R5-F-C2 審出的誤移植);堵自填改靠「評定者獨立(orchestrator→judge)」、可收斂靠「judge 據實評」,並保留「auditor 沒查證→至少 major」這條合理保守(對偷懶的懲罰、非對模糊性)。狀態行/C1/F-B3 已對應修改。**下一步:重跑 design-loop 驗此解能否收斂——理應能,模糊輪不再被強制 major。**
