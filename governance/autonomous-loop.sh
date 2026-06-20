@@ -42,13 +42,12 @@ log "派 orchestrator(claude -p,最多 $MAXR 輪)..."
 rm -f "$PROMPT_FILE"
 
 PARSED="$(cd "$REPO" && python3 -c "
-import json, re, sys
+import json, sys; sys.path.insert(0,'governance')
+from autonomous_loop import orchestrator_result
 try: o=json.load(open('$ORCH_OUT'))
 except Exception as e: print('PARSE_FAIL:'+str(e)); sys.exit(0)
-m=re.search(r'\{.*\}', o.get('result',''), re.S)
-if not m: print('NO_JSON'); sys.exit(0)
-try: print(json.dumps(json.loads(m.group(0)), ensure_ascii=False))
-except Exception as e: print('PARSE_FAIL:'+str(e))
+r=orchestrator_result.extract_json(o.get('result',''))
+print(json.dumps(r, ensure_ascii=False) if r else 'NO_JSON')
 ")"
 log "orchestrator 回傳:$PARSED"
 case "$PARSED" in PARSE_FAIL*|NO_JSON*|"") log "orchestrator 輸出無法解析,中止(log $ORCH_OUT)"; exit 1;; esac

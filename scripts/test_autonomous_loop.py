@@ -101,5 +101,20 @@ class TestLineNotify(unittest.TestCase):
         self.assertIn("dry-run", json.dumps(m, ensure_ascii=False))
 
 
+class TestOrchestratorResult(unittest.TestCase):
+    def test_extracts_last_json_skipping_noise_braces(self):
+        from autonomous_loop import orchestrator_result
+        s = ('一段敘述 收斂需 {clean,minor} 的門檻,撞 cap 停止。\n---\n'
+             '{"topic":"judge-severity-gate","converged":false,"rounds":2}')
+        r = orchestrator_result.extract_json(s)
+        self.assertIsNotNone(r)
+        self.assertEqual(r["topic"], "judge-severity-gate")
+        self.assertEqual(r["converged"], False)
+
+    def test_none_when_no_json(self):
+        from autonomous_loop import orchestrator_result
+        self.assertIsNone(orchestrator_result.extract_json("no json {clean,minor} here"))
+
+
 if __name__ == "__main__":
     unittest.main()
