@@ -52,11 +52,11 @@ severity 定義(本 spec 新增;skill 僅定義 `clean`,其餘三級無既有語
 - `minor`:最嚴重真 finding 可改善但不阻實作。
 - `major`:最嚴重真 finding 要修才能進實作。
 - `blocker`:最嚴重真 finding 為根本方向或假設出錯。
-- **judge 據實評,不加保守偏置(2026-06-20 張力解,取代原『不確定取高』)**:judge 就上述四級**據實判定**;純粹「拿不準 minor 還是 major」時**不刻意往高評**(否則模糊輪永遠 major、進不了收斂窗——R6-F-D1 張力)。堵自填靠評定者獨立、不靠保守加碼。**唯一例外**:auditor 沒列地面查證結果時仍至少 major(見下 F-B3——那是對「沒查證」的保守,非對「模糊性」的保守)。
+- **judge 據實評,不加保守偏置(2026-06-20 張力解,取代原『不確定取高』)**:judge 就上述四級**據實判定**;純粹「拿不準 minor 還是 major」時**不刻意往高評**(否則模糊輪永遠 major、進不了收斂窗——R6-F-D1 張力)。堵自填靠評定者獨立、不靠保守加碼。**唯一例外(R1-F-NEW3,收成客觀二值)**:auditor 報告**完全沒有任何 grep/Read 結果行**時才算「沒查證」→ 至少 major;只要對最嚴重 finding 列了 **≥1 條地面結果**即不適用、改據實評。如此「查證不足」是客觀二值(有/無清單),**不讓 judge 評「足不足」**——否則「我對這條拿不準」會被重新包裝成「查證不足」,模糊性保守從後門回流(R1 審出)。
 
 「排除 canary」的操作:judge 跳過含 canary token 的 finding。
 
-**Judge prompt 中必須包含的 severity 指引(F-B3)**:「評定 severity 時,必須參照 auditor 報告中列出的 grep/Read 查證結果清單,以地面事實為據,而非只看敘述文字。**純粹模糊(拿不準 minor/major)時據實評、不往高**;但若 auditor 未列查證結果或查證不足,severity 至少評為 major(這是對『沒做地面查證』的保守,非對『模糊性』的保守——前者該罰、後者會卡收斂故不保守)。」
+**Judge prompt 中必須包含的 severity 指引(F-B3)**:「評定 severity 時,必須參照 auditor 報告中列出的 grep/Read 查證結果清單,以地面事實為據,而非只看敘述文字。**純粹模糊(拿不準 minor/major)時據實評、不往高**;唯有 auditor 報告**完全沒有任何 grep/Read 結果行**(客觀二值,不是你主觀判『足不足』)才算沒查證 → 至少 major;只要對最嚴重 finding 有 ≥1 條地面結果就據實評(R1-F-NEW3:防『模糊性保守』借「查證不足」之名回流)。」
 
 ### C2 — Orchestrator 數據流調整(修改 orchestrator-prompt.md 步驟 2 design-loop 的 sub-step 4→5→6)
 **真實當前順序**(orchestrator-prompt.md 步驟 2 design-loop sub-steps 3-6):
@@ -96,6 +96,8 @@ orchestrator 仍可讀 auditor 報告決定哪些 findings 要折進 spec(需要
 3. **Judge 同時掌握 caught/missed 與 severity——集中化風險(F4)**:`good(r)` 的兩個條件現在同源於 judge。若 judge 放水,兩個維度一起失守,失去了原設計中「caught=judge、severity=orchestrator」的雙源交叉檢核。dry-run 期間需人工抽查 judge 的 severity_rationale 是否與 auditor findings 一致。
 4. **此 spec 只固定了 autonomous-loop 的 severity 維度**:gap 選擇/brainstorm 方向仍無外部錨;放行的人仍是唯一真兜底。
 5. **收斂閘從「caught=judge, severity=自評」升為「caught=judge, severity=judge」**:比之前好(severity 不再自填),但 judge 單點的「集中化」是新增的已知風險(見 3)。
+6. **severity 地面錨變弱(R1-F-NEW2)**:評定者從能自主 grep 的 orchestrator 換成只讀文字的 judge,severity 不再有「評定者自己查證」這層錨;F-B3 的二值保守只擋「auditor 完全沒查證」,擋不了「auditor 查了但漏了關鍵點、judge 也看不出」。
+7. **C4 兩編輯點無一致性鎖(R1-F-NEW4)**:`orchestrator-prompt.md`(真源)與 `autonomous-iteration-loop.md`(說明)對 severity 來源的描述,改一不改二會漂移;以 prompt 為 source-of-truth。測試策略須補:抽查同輪 judge 的 caught 判定與 severity **兩維對內是否獨立**(集中化的真風險是互相污染,非只 severity 對外一致,R1-F-NEW5)。
 
 ## 測試策略
 
@@ -150,8 +152,15 @@ canary(`JUDGE_SEVERITY_DRIFT_THRESHOLD` 未定義常數)被抓到。worst real =
 
 **補充:雙源損益論證(F-A3 回應)**:原設計雙源(caught=judge, severity=orchestrator)的設計意圖是「交叉檢核」——若 judge 或 orchestrator 其中一方放水,另一方仍可能擋住。本 spec 改為單源(judge 同時掌握兩維)後:
 - **損失**:judge 放水 → 兩維一起失守;原來的「caught 與 severity 歧見可作告警訊號」消失。
+- **損失(R1-F-NEW2,不可低估)**:severity 評定者從『能自主 grep 的 orchestrator』退為『只讀 auditor 文字、不被授予 grep 的 judge』——severity 的**地面事實錨變弱**(原 orchestrator 拿不準能自己查、judge 不能)。F-B3『參照查證清單』只緩解(judge 仍只能看 auditor 列出的,補不了 auditor 漏列的)。這是真實損失,計入損益後方案 A 仍傾向採用(動機型自填是更明確、更常見的破口),但不假裝 judge 失 grep 沒代價。
 - **收益**:orchestrator(被審者)不再自填 severity → 斷開最明顯的自填閉路;且 orchestrator 自評 severity 時本來就能讀 judge 的 caught/missed 結果再調整,等於單方面的「後驗自評」,雙源保護實質上已不對稱。
 - **結論**:原雙源的交叉保護因「orchestrator 後驗調整」而打折;judge 單源雖有集中化風險,但 judge 本身就是獨立 agent 且無動機放水 severity(judge 的任務不影響它的任何決策)。損益比傾向方案 A,但集中化風險需在誠實天花板揭露且 dry-run 抽查。
 
 ### 人工推進(2026-06-20,人撈出解張力)
 R6-F-D1 把「保守取高卡收斂」當 minor 搁置、判「不需修改」——**這個判斷是錯的**:它其實是核心張力(堵自填 vs 可收斂對立)。人撈出後解之:**刪掉「純模糊性保守取高」**(它本就是 R5-F-C2 審出的誤移植);堵自填改靠「評定者獨立(orchestrator→judge)」、可收斂靠「judge 據實評」,並保留「auditor 沒查證→至少 major」這條合理保守(對偷懶的懲罰、非對模糊性)。狀態行/C1/F-B3 已對應修改。**下一步:重跑 design-loop 驗此解能否收斂——理應能,模糊輪不再被強制 major。**
+
+### 重跑 design-loop(人工解張力後)
+**R1(2026-06-20,canary 類型 a=壞§ref,opus,caught)**:canary(〈C5 效能基準〉死§ref+token)抓到。張力解被審出真漏洞(worst=major),已折:
+- **major F-NEW3**(最關鍵):保留的「沒查證→至少 major」缺界線,judge 主觀判「足不足」會讓「模糊性保守」借「查證不足」之名回流——**張力被改名非消除**。→ 收成**客觀二值**(auditor 完全無 grep/Read 行才算沒查證;有 ≥1 條即據實評),不讓 judge 評「足不足」。
+- **major F-NEW2**:張力解只堵動機型自填,severity 地面錨反弱(orchestrator 能 grep、judge 不能)→ 雙源損益補第三損失、誠實天花板第 6 條計入。
+- **minor**:F-NEW4 C4 兩編輯點無一致性鎖(prompt 為真源)→天花板第 7 條;F-NEW5 集中化測試須查兩維對內獨立→天花板第 7 條。
