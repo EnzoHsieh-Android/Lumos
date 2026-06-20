@@ -12,7 +12,8 @@
 掃 docs/design/*.md 的標題與「目標」段,判斷這個 gap 是否**已被既有 spec 覆蓋**(同主題已有設計或已收斂)。若已覆蓋 → **只輸出** {"topic":"<猜的短名>","skipped":true,"reason":"已被 docs/design/<檔名> 覆蓋","converged":false} 並結束,**不寫任何檔**。
 
 ### 1. Brainstorm → spec 草稿(寫到 scratch,不碰 repo)
-未覆蓋才做。掃 docs/design/ 一兩份近期 spec 學格式與誠實風格。權衡 2-3 個解法、**自己選最滿足 gap 的**(把為什麼選、否決什麼寫進 spec)。topic 取簡短英文 kebab。寫 spec 到 **__SCRATCH__/spec/__DATE__-<topic>.md**(**不是** docs/design/),含:目標(一句話)/邊界(YAGNI 非目標)/組件/誠實天花板/測試策略/審計修正紀錄(留標題待填)。loop_id = topic。
+未覆蓋才做。掃 docs/design/ 一兩份近期 spec 學格式與誠實風格。權衡 2-3 個解法、**自己選最滿足 gap 的**(把為什麼選、否決什麼寫進 spec)。topic 取簡短英文 kebab。寫 spec 到 **__SCRATCH__/spec/__DATE__-<topic>.md**(**不是** docs/design/),含:目標(一句話)/邊界(YAGNI 非目標)/組件/誠實天花板/測試策略/**知識同步影響**/審計修正紀錄(留標題待填)。loop_id = topic。
+> **知識同步影響(必填,防實作 drift)**:spec 須含一節,列「此改動若實作,影響哪些方法論論述(`docs/methodology/圖譜即合約.md` + `圖譜即合約-對外論述.md`)/ skills(`lumos-*`)?各該怎麼同步(改哪節、補什麼)?」——沒有影響就明寫『無』。理由:loop 每天改實作,若不宣告碰了哪些知識,論述/skills 會越落越後;這節讓人放行 PR 時一併更新知識,把 drift 堵在放行那一刻(圖譜即合約精神套在 loop 自己身上)。
 
 ### 2. Design-loop(最多 __MAXR__ 輪,canary 限 a/b/c、禁 d)
 每輪 N(從 1 起):
