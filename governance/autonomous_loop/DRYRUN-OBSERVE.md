@@ -22,3 +22,6 @@
 - **整條鏈活起來的證據**:今早 9:30 日報(新路徑+昨晚改的 prompt:主軸=驗證層、對抗視角)自動產出一個**打臉 lumos 收斂機制**的 gap——「別讓被審者自填收斂門檻,讓 judge 覆蓋 severity / 收斂改述成『尚未被駁倒』」。autonomous loop 自動選中它、brainstorm 出 `judge-severity-gate` spec、跑 design-loop。**日報對抗視角 → 自動選中 → 要改進 lumos 自己的最弱環(F-R3-1)。**
 - **發現 parse bug 並修**:orchestrator result 在真 JSON 前夾敘述,敘述含 `{clean,minor}` 干擾,貪婪 regex 抓偏 → 改 `orchestrator_result.extract_json`(從最後一個 { 往前試,TDD 2 test)。
 - orchestrator 行為正常:judge-severity-gate 2 輪都 blocker/major → 未收斂 → 正確不放行。
+
+## 設計缺口(MAXR=6 觀察發現):未收斂但有價值的 spec 會丟在 scratch
+judge-severity-gate(loop 自己挑的、修自己最弱環、6 輪磨到 R6 minor、雙源損益論證)撞 cap 未收斂 → 按設計 dry-run 不入庫 → 躺在 /tmp 等被清。**改進方向**:未收斂但「接近 + 有價值」的 spec 該有去處(如 governance/pending-unconverged/ 或 backlog 標『已展開、R6 minor、待人決』),而非直接丟。本次人工撈出存 docs/design/2026-06-20-judge-severity-gate.md(標 DRAFT/未收斂)。
