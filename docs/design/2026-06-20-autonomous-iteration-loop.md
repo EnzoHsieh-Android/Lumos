@@ -31,7 +31,7 @@
                   ▼ 選中 gap
 [2 自動 Brainstorm]──(派 agent 替你做方案決策,產 spec 草稿 docs/design/)
                   ▼ spec 草稿
-[3 自動 Design-loop]──(opus auditor + canary a/b/c + 獨立 judge + 強制地面事實查證 → CONVERGED)
+[3 自動 Design-loop]──(opus auditor + canary a/b/c + 獨立 judge(判canary+評severity) + 強制地面事實查證 → CONVERGED)
                   ▼ 收斂 spec + 審計軌跡
 [4 放行閘]──(branch + PR + 收斂可信度報告 + LINE 提醒)
                   ▼ 停
@@ -57,7 +57,7 @@
 **覆寫** `lumos-design-loop` skill 的若干預設行為(R1-M1/M2 修正:不是「沿用既有機制」——以下幾條都跟 skill 預設相反,故須**參數化** skill 或 autonomous-loop 自帶覆寫;且要評估對手動 loop 使用者的影響):
 - **opus auditor 起手**(**覆寫** skill 預設「sonnet 起手、連 2 missed 才升 opus」——本 session 證明 opus 一上來就抓到 sonnet 漏的)。
 - **canary 限 type a/b/c**,禁 d(**覆寫** skill 的 `清單[(N-1)mod4]` a/b/c/d 固定輪換——改 a/b/c 三類輪換;本 session 證明 type d 對 self-contained 新功能不公平)。每輪 token 定位。
-- **獨立 judge agent 判「canary 抓到沒」——但作用域僅此(R1-M3 修正,不誇大成全鏈補償)**:orchestrator 植 canary,另一個 judge agent 判「auditor 有沒有點出植入瑕疵的性質」,把**這一個**自評推遠一層。**judge 不檢查 auditor 的真 findings 對不對、不檢查選的 gap / brainstorm 方向對不對**——它不是全鏈的外部錨點。全鏈 AI 自選 gap、自 brainstorm、自審的回歸缺口,唯一外部錨點是末端人 review PR(見誠實天花板)。
+- **獨立 judge agent:判「canary 抓到沒」+ 回報 severity(2026-06-20 judge-severity-gate 落地後擴充)**:orchestrator 植 canary,judge 判「auditor 有沒有點出植入瑕疵的性質」**並回報排掉 canary 後最嚴重真 finding 的 severity**(據實評、finding 層級客觀二值)——**severity 改由 judge 回報、不再 orchestrator 自填**(斷開收斂自填閘,詳 `judge-severity-gate` spec)。**但 judge 仍不檢查選的 gap / brainstorm 方向對不對**——它把「canary + severity」兩維推離被審者,但不是全鏈的外部錨點。全鏈 AI 自選 gap、自 brainstorm 的回歸缺口,唯一外部錨點仍是末端人 review PR(見誠實天花板)。
 - **強制地面事實查證(最重要,cib 教訓)**:auditor prompt 硬性要求——spec 裡每個「現況假設」(欄位存在、函數簽名、檔案在不在、常數值)**必須實際 `grep`/`Read` 驗過**,報告裡列「查了哪些假設、各自結果」。逻辑審不算數;cib「守空集合」正是只逻辑審會漏、手動 grep 才接住。
 - 跑到 `lumos canary record` + `lumos loop status --need 2` CONVERGED。
 
@@ -77,7 +77,7 @@
 
 ## 誠實天花板(必寫進 PR 可信度報告 + 系統文件)
 
-1. **放行的人是最後也是唯一真兜底**:全自動判收斂仍是**沒閉合的迴歸**——獨立 judge 只把「canary 抓到沒」的自評**推遠一層**(judge 也是 AI、也會錯),未消滅;且 `lumos canary record` 進去的 **severity 判定仍由 orchestrator 自呼=自評**(R1-m2:judge 不覆蓋 severity),自動模式比手動(主對話的人在場)可信度更低。**更關鍵(R3-F-R3-1):severity 自報直接決定 `lumos loop status` 收斂與否(門檻 = severity∈{clean,minor})——等於『收斂了沒』由被審者自填,judge 不覆蓋這一哩,是全自動判收斂最弱的環。dry-run 必須人工抽查每輪 severity 自報 vs PR body 實際 findings 是否一致。**CONVERGED 是「連 2 輪 opus **canary 被抓到、且**沒挑出 blocker/major」(R2-F3:收斂同時要求 canary caught,漏抓該輪不採信——別把收斂說成只剩『沒挑出問題』那一半),仍不證沒有更深問題。**本輪 R1 本身就是活證:這份 spec 用『強制地面事實查證』審自己,抓到自己 4 個沒查地面事實的假設(B1/B2/M1/M2)——證明這條補償必要,但也證明『沒人 grep 就會放過』,而自動模式裡那個 grep 的人不在。**
+1. **放行的人是最後也是唯一真兜底**:全自動判收斂仍是**沒閉合的迴歸**——獨立 judge 只把「canary 抓到沒」的自評**推遠一層**(judge 也是 AI、也會錯),未消滅;**且 `lumos canary record` 的 severity 原由 orchestrator 自填=全自動判收斂最弱環,已被 `judge-severity-gate` 修(2026-06-20):severity 改由獨立 judge 據實回報、不再被審者自填,斷開『收斂了沒由被審者自填』那道閘**。**但這把最弱環推進一層、未消滅**(R3-F-R3-1 的後續):judge 同時掌 canary-caught + severity(集中化風險)、只讀 auditor 文字不自己 grep(地面錨弱)、且是「規範非機制強制」(orchestrator 仍可違規轉錄 judge 值)。dry-run 仍須人工抽查 judge severity_rationale vs 實際 findings。CONVERGED 是「連 2 輪 opus **canary 被抓到、且**沒挑出 blocker/major」(R2-F3:收斂同時要求 canary caught,漏抓該輪不採信——別把收斂說成只剩『沒挑出問題』那一半),仍不證沒有更深問題。**本輪 R1 本身就是活證:這份 spec 用『強制地面事實查證』審自己,抓到自己 4 個沒查地面事實的假設(B1/B2/M1/M2)——證明這條補償必要,但也證明『沒人 grep 就會放過』,而自動模式裡那個 grep 的人不在。**
 2. **自動 brainstorm 沒人回澄清** → spec 品質天花板低於有人在場的 brainstorm;「替你決策」是 AI 自選方案,**選錯方向的風險比有人時高**(cib 那種前提錯,自動模式更容易放過——這正是強制地面事實查證要擋的,但擋不保證全擋)。
 3. **AI 判「哪個 gap 值得做」= AI 決定改自己的方向**,有自我強化偏誤風險(可能偏好它「擅長」或「上次做過」的方向)。放行的人要警覺方向是否被 AI 帶偏。
 4. **這是放大放行帶寬,不是無人迭代**:它把「發起 + 篩選 + 自審備料」自動化,把「判斷收斂可不可信 + 放行」留人。
