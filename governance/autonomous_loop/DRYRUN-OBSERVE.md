@@ -25,3 +25,10 @@
 
 ## 設計缺口(MAXR=6 觀察發現):未收斂但有價值的 spec 會丟在 scratch
 judge-severity-gate(loop 自己挑的、修自己最弱環、6 輪磨到 R6 minor、雙源損益論證)撞 cap 未收斂 → 按設計 dry-run 不入庫 → 躺在 /tmp 等被清。**改進方向**:未收斂但「接近 + 有價值」的 spec 該有去處(如 governance/pending-unconverged/ 或 backlog 標『已展開、R6 minor、待人決』),而非直接丟。本次人工撈出存 docs/design/2026-06-20-judge-severity-gate.md(標 DRAFT/未收斂)。
+
+## 2026-06-21 觀察 + skip-空轉 bug 修復
+- **覆蓋檢查首次實戰生效** ✅:loop 選到 backlog 的「judge 單一不可靠」gap,orchestrator 認出「已被 judge-perturbation spec 覆蓋(評估後放棄)」→ skip、不重做。昨天加的覆蓋檢查機制 work 了。
+- **但暴露 skip-空轉 bug**:skip 後「當天結束、不循環選下一個」→ backlog 頂部是已覆蓋 gap 時整天空轉,下面真 gap 永遠輪不到。
+- **修時又發現「重加洞」**:單純加 while 循環不夠——skip 的 gap 被 pop 出 backlog 後,下一輪 `add_gaps`(當日 gaps)會把它**重新加回**(dedup 只看「在不在 backlog」),可能又選又 skip 撞 cap。
+- **完整修(16 test 綠)**:① autonomous-loop.sh 主流程包 while,skip→continue 選下一個(SKIP_CAP=3 防空燒);② gap_select 加 **covered 機制**(`covered.jsonl`):orchestrator 判 skip 的 gap 由 `mark_covered` 永久記下,`add_gaps`/`select` 都跳過——堵重加洞、已放棄/已覆蓋的 gap 永久排除。
+- 待下次 cron 實戰驗證循環 + covered 排除。

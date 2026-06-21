@@ -68,6 +68,17 @@ class TestGapSelect(unittest.TestCase):
         self.assertIn("weakness", got)
         self.assertEqual(len(backlog.load_backlog(self.bl)), 1)  # pop 後剩 1
 
+    def test_covered_gap_excluded_and_not_readded(self):
+        cov = self.d / "covered.jsonl"
+        gap_select.mark_covered(cov, "w1")              # w1 標記為已覆蓋
+        got = gap_select.select(self.report, self.bl, self.pend, "dryrun", "2026-06-20", cov)
+        self.assertEqual(got["weakness"], "w2")         # w1 被排除 → 選 w2
+        self.assertNotIn("w1", [r["weakness"] for r in backlog.load_backlog(self.bl)])  # w1 沒被加回
+        # 再 select 一次(模擬循環):w1 仍不回來
+        got2 = gap_select.select(self.report, self.bl, self.pend, "dryrun", "2026-06-20", cov)
+        if got2:
+            self.assertNotEqual(got2["weakness"], "w1")
+
 
 class TestConfidenceReport(unittest.TestCase):
     def test_build_lists_rounds_and_risks(self):

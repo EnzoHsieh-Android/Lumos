@@ -19,11 +19,13 @@ if [ ! -f "$REPORT" ]; then
   else log "今日無日報($TODAY),跳過"; exit 0; fi
 fi
 
+SKIP_CAP=3; skip_n=0
+while : ; do
 GAP_JSON="$(cd "$REPO" && python3 -c "
 import sys, json; sys.path.insert(0,'governance')
 from autonomous_loop import gap_select
 mode='pr' if '$MODE'=='--pr' else 'dryrun'
-g=gap_select.select('$REPORT','$SCRIPT_DIR/backlog.jsonl','$PENDING',mode,'$TODAY')
+g=gap_select.select('$REPORT','$SCRIPT_DIR/backlog.jsonl','$PENDING',mode,'$TODAY','$SCRIPT_DIR/covered.jsonl')
 print(json.dumps(g, ensure_ascii=False) if g else '')
 ")"
 [ -n "$GAP_JSON" ] || { log "無可展開 gap(N=1 gate 或 backlog 空),結束"; exit 0; }
@@ -56,7 +58,20 @@ case "$PARSED" in PARSE_FAIL*|NO_JSON*|"") log "orchestrator 輸出無法解析,
 get(){ echo "$PARSED" | python3 -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
 SKIPPED="$(get skipped)"; CONVERGED="$(get converged)"; TOPIC="$(get topic)"; SPEC="$(get spec_path)"
 
-if [ "$SKIPPED" = "True" ]; then log "gap 已被既有 spec 覆蓋,skip(reason: $(get reason))。當天結束。"; exit 0; fi
+if [ "$SKIPPED" = "True" ]; then
+  skip_n=$((skip_n+1))
+  echo "$GAP_JSON" | python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import gap_select
+w=json.load(sys.stdin).get('weakness','')
+if w: gap_select.mark_covered('$SCRIPT_DIR/covered.jsonl', w)
+" 2>/dev/null || true
+  log "gap 已被既有 spec 覆蓋,skip(reason: $(get reason));已記入 covered、永久不再選。循環選下一個($skip_n/$SKIP_CAP)。"
+  [ "$skip_n" -ge "$SKIP_CAP" ] && { log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
+  continue
+fi
+break
+done
 
 RESIDUAL='["judge 單一評審不可靠:換排版可能翻盤(隨機不穩)、對某類 spec 系統性偏(換家族才解、\$0 OAuth 做不到)——judge-perturbation 評估後放棄:機制堵不住自證、ROI 低","severity 由 judge 評(已斷 orchestrator 自填)但 judge 也是 AI、且同輪判 canary+severity=集中化","type d canary 沒測(限 a/b/c)","自動 brainstorm 無人回澄清;AI 自選 gap=自己決定改自己方向(自我強化偏誤)","唯一外部錨點是你 review 這個 PR"]'
 if [ "$CONVERGED" != "True" ]; then
