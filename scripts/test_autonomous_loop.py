@@ -1,5 +1,6 @@
-import json, tempfile, unittest, sys
+import json, tempfile, unittest, sys, io, urllib.error
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "governance"))
 from autonomous_loop import backlog, gap_select, confidence_report, line_notify
 
@@ -125,6 +126,59 @@ class TestOrchestratorResult(unittest.TestCase):
     def test_none_when_no_json(self):
         from autonomous_loop import orchestrator_result
         self.assertIsNone(orchestrator_result.extract_json("no json {clean,minor} here"))
+
+
+class TestCrossAudit(unittest.TestCase):
+    def setUp(self):
+        from autonomous_loop import cross_audit
+        self.ca = cross_audit
+        self.d = Path(tempfile.mkdtemp())
+        self.canary = self.d / ".canary-log.jsonl"
+        self.canary.write_text(
+            '{"loop":"x","kind":"caught","severity":"clean","note":"r1"}\n', encoding="utf-8")
+
+    def test_no_key_returns_degraded(self):
+        r = self.ca.run_cross_audit("spec", str(self.canary), "x", "gt",
+                                    key_path=str(self.d / "nonexistent_key"))
+        self.assertEqual(r["status"], "degraded")
+        self.assertEqual(r["reason"], "no_key")
+        self.assertIsNone(r["worst_severity"])
+
+    def _run_with_key(self, urlopen_side):
+        kf = self.d / "key"; kf.write_text("sk-test", encoding="utf-8")
+        with mock.patch.object(self.ca.urllib.request, "urlopen", side_effect=urlopen_side):
+            return self.ca.run_cross_audit("spec", str(self.canary), "x", "gt", key_path=str(kf))
+
+    def test_ok_parses_declared_severity(self):
+        body = json.dumps({"choices": [{"message": {"content": "逐節...\n最嚴重 severity = minor"}}], "usage": {}}).encode()
+        r = self._run_with_key(lambda *a, **k: io.BytesIO(body))
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual(r["worst_severity"], "minor")
+
+    def test_ok_blocker(self):
+        body = json.dumps({"choices": [{"message": {"content": "最嚴重 severity = blocker"}}], "usage": {}}).encode()
+        r = self._run_with_key(lambda *a, **k: io.BytesIO(body))
+        self.assertEqual(r["worst_severity"], "blocker")
+
+    def test_ok_no_format_scans_highest(self):
+        body = json.dumps({"choices": [{"message": {"content": "有個 minor,也有個 major 問題"}}], "usage": {}}).encode()
+        r = self._run_with_key(lambda *a, **k: io.BytesIO(body))
+        self.assertEqual(r["worst_severity"], "major")
+
+    def test_http_error_degraded(self):
+        def boom(*a, **k):
+            raise urllib.error.HTTPError("u", 403, "forbidden", {}, None)
+        r = self._run_with_key(boom)
+        self.assertEqual(r["status"], "degraded")
+        self.assertEqual(r["reason"], "http_403")
+        self.assertIsNone(r["worst_severity"])
+
+    def test_timeout_degraded(self):
+        def boom(*a, **k):
+            raise urllib.error.URLError("timed out")
+        r = self._run_with_key(boom)
+        self.assertEqual(r["status"], "degraded")
+        self.assertEqual(r["reason"], "timeout")
 
 
 if __name__ == "__main__":
