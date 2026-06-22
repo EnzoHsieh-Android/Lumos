@@ -24,7 +24,19 @@
 5. 你**讀 judge 回報的 severity(不再自評)**,並讀 auditor 報告決定哪些 findings 折進 spec。
 6. python3 scripts/lumos --vault __SCRATCH__/kg canary record <caught|missed> --loop <topic> --severity <judge 回報的 severity,非自評> --auditor opus --token CANARY-AUTO-N --note "rN <摘要>"
 7. caught → 把真 findings 折進 **__SCRATCH__/spec/__DATE__-<topic>.md** + 把該輪寫進審計修正紀錄;**折完務必 grep -c CANARY-AUTO-N __SCRATCH__/spec/__DATE__-<topic>.md == 0**。missed → 不折、直接下一輪。
-8. python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need 2 → exit 0 則停。撞 __MAXR__ 輪未收斂 → 停。
+8. python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need 2 → exit 0 表示連 2 輪乾淨(**但先別停,轉 §2.5 跨家族複核**);撞 __MAXR__ 輪未收斂 → 停(此時跳過 §2.5)。
+
+### 2.5 跨家族複核(放行前,只在步驟 8 判定收斂時做一次;覆寫步驟 8 的「則停」)
+a. **取材**:把本 spec 引用到的真實檔案/符號 grep/Read 出來(步驟 3 強制查證時已查過),整理成 ground-truth 片段。
+b. **調 cross_audit**(絕對路徑版,**禁 `python3 -m`**):
+   `python3 -c "import sys,json;sys.path.insert(0,'<REPO>/governance');from autonomous_loop import cross_audit;print(json.dumps(cross_audit.run_cross_audit(open('__SCRATCH__/spec/__DATE__-<topic>.md').read(),'__SCRATCH__/.canary-log.jsonl','<topic>','''<ground_truth>''')))"`(`<REPO>`=實際 repo 絕對路徑;`<ground_truth>`=a 步驟片段)。
+c. **讀回傳 status / worst_severity,判 cross_verdict**:
+   - `status==degraded` → `cross_verdict=degraded`、收斂放行(fail-open,API 掛不卡死)。
+   - `status==ok` 且 worst_severity ∈ {clean,minor} → `cross_verdict=endorsed`、收斂放行。
+   - `status==ok` 且 worst_severity ∈ {major,blocker} → 把 qwen findings 當新一輪 audit:**自己 grep 驗證每條**(真的折進 spec、誤報在審計紀錄標反證);`cross_reject_count += 1`,回步驟 1 續審。`cross_reject_count` 達 2 → 停、不放行、`cross_verdict=disputed`(**必伴 converged:false**)。
+d. **cross_summary**:一句話單行摘要(無換行),供 log/LINE。
 
 ### 3. 輸出(只一個 JSON,第一個字元必須是 {)
-{"topic":"<topic>","spec_path":"__SCRATCH__/spec/__DATE__-<topic>.md","loop_id":"<topic>","converged":true|false,"skipped":false,"rounds":<N>,"notes":"<過程卡點或 ok>"}
+{"topic":"<topic>","spec_path":"__SCRATCH__/spec/__DATE__-<topic>.md","loop_id":"<topic>","converged":true|false,"skipped":false,"rounds":<N>,"cross_verdict":"endorsed|degraded|disputed","cross_worst":"<severity 或空>","cross_summary":"<單行摘要,無換行>","notes":"<過程卡點或 ok>"}
+
+> **cross_* 三欄**(步驟 2.5 跨家族複核的結果):`disputed` 必伴 `converged:false`(才走得進 wrapper 未收斂分支);未做複核(撞 cap 未收斂、或無 step 8 收斂)時三欄留空。
