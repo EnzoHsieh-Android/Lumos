@@ -87,6 +87,14 @@ import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
 print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+  # 副作用 A:未收斂 gap 回 backlog 降分 + 累計 unconverged;達 3 次 → covered(放棄自動、留人),不立即消失
+  RQ="$(echo "$GAP_JSON" | python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import gap_select
+g=json.load(sys.stdin)
+print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+" 2>/dev/null || echo '?')"
+  log "未收斂 gap 處置:$RQ(回 backlog 降分重試 / 累計達 3 次 covered)"
   exit 0
 fi
 

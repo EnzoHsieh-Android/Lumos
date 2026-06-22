@@ -38,6 +38,24 @@ def mark_covered(covered_path, weakness):
         f.write(json.dumps({"weakness": weakness}, ensure_ascii=False) + "\n")
 
 
+def requeue_unconverged(backlog_path, gap, covered_path, decay=0.7, max_unconv=3):
+    """未收斂(撞 cap / cross-family disputed)的 gap:降分 + 累計 unconverged 回 backlog,
+    不立即消失(堵『pop 消費後丟失』洞);累計達 max_unconv → covered(放棄自動、留人手動)。
+    回 'requeued' 或 'covered'。"""
+    n = gap.get("unconverged", 0) + 1
+    w = gap.get("weakness", "")
+    if n >= max_unconv:
+        mark_covered(covered_path, w)
+        return "covered"
+    g = dict(gap)
+    g["unconverged"] = n
+    g["value_score"] = round(g.get("value_score", backlog.INIT_SCORE) * decay, 4)
+    rows = [r for r in backlog.load_backlog(backlog_path) if r.get("weakness") != w]
+    rows.append(g)
+    backlog._save(backlog_path, rows)
+    return "requeued"
+
+
 def select(report_path, backlog_path, pending_dir, mode, today, covered_path=None):
     covered = load_covered(covered_path)
     gaps = [g for g in read_report_gaps(report_path) if g.get("weakness") not in covered]

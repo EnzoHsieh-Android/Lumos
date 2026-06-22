@@ -181,5 +181,37 @@ class TestCrossAudit(unittest.TestCase):
         self.assertEqual(r["reason"], "timeout")
 
 
+class TestRequeueUnconverged(unittest.TestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.bl = self.d / "backlog.jsonl"
+        self.cov = self.d / "covered.jsonl"
+
+    def test_requeue_decays_and_increments(self):
+        g = {"weakness": "w1", "suggestion": "s", "value_score": 0.5}
+        r = gap_select.requeue_unconverged(self.bl, g, self.cov)
+        self.assertEqual(r, "requeued")
+        rows = backlog.load_backlog(self.bl)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["unconverged"], 1)
+        self.assertAlmostEqual(rows[0]["value_score"], 0.35)  # 0.5 * 0.7
+
+    def test_requeue_hits_cap_covered(self):
+        g = {"weakness": "w2", "suggestion": "s", "value_score": 0.3, "unconverged": 2}
+        r = gap_select.requeue_unconverged(self.bl, g, self.cov)  # 2+1=3 >= 3
+        self.assertEqual(r, "covered")
+        self.assertEqual(backlog.load_backlog(self.bl), [])  # 不回 backlog
+        covered = {json.loads(l)["weakness"] for l in self.cov.read_text().splitlines() if l.strip()}
+        self.assertIn("w2", covered)
+
+    def test_requeue_updates_not_duplicates(self):
+        backlog.add_gaps(self.bl, [{"weakness": "w3", "suggestion": "s"}], "2026-06-22")
+        g = backlog.load_backlog(self.bl)[0]
+        gap_select.requeue_unconverged(self.bl, g, self.cov)
+        rows = [r for r in backlog.load_backlog(self.bl) if r["weakness"] == "w3"]
+        self.assertEqual(len(rows), 1)  # 更新而非重複
+        self.assertEqual(rows[0]["unconverged"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
