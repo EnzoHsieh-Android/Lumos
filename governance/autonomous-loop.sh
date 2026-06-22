@@ -57,6 +57,8 @@ case "$PARSED" in PARSE_FAIL*|NO_JSON*|"") log "orchestrator 輸出無法解析,
 
 get(){ echo "$PARSED" | python3 -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
 SKIPPED="$(get skipped)"; CONVERGED="$(get converged)"; TOPIC="$(get topic)"; SPEC="$(get spec_path)"
+CROSS_VERDICT="$(get cross_verdict)"; CROSS_WORST="$(get cross_worst)"; CROSS_SUMMARY="$(get cross_summary)"
+CROSS_SUMMARY="${CROSS_SUMMARY//$'\n'/ }"   # F3 防破版:換行→空格
 
 if [ "$SKIPPED" = "True" ]; then
   skip_n=$((skip_n+1))
@@ -73,14 +75,18 @@ fi
 break
 done
 
-RESIDUAL='["judge 單一評審不可靠:換排版可能翻盤(隨機不穩)、對某類 spec 系統性偏(換家族才解、\$0 OAuth 做不到)——judge-perturbation 評估後放棄:機制堵不住自證、ROI 低","severity 由 judge 評(已斷 orchestrator 自填)但 judge 也是 AI、且同輪判 canary+severity=集中化","type d canary 沒測(限 a/b/c)","自動 brainstorm 無人回澄清;AI 自選 gap=自己決定改自己方向(自我強化偏誤)","唯一外部錨點是你 review 這個 PR"]'
+RESIDUAL='["跨家族複核已加(qwen3-max 放行前複核 opus 設計、補同門盲點);但 degrade 時退回單一 opus、qwen 也是 AI、verdict 判定仍在 orchestrator(prompt 層自律)","severity 由 judge 評(已斷 orchestrator 自填)但 judge 也是 AI、且同輪判 canary+severity=集中化","type d canary 沒測(限 a/b/c)","自動 brainstorm 無人回澄清;AI 自選 gap=自己決定改自己方向(自我強化偏誤)","唯一外部錨點是你 review 這個 PR"]'
 if [ "$CONVERGED" != "True" ]; then
-  log "未收斂(converged=$CONVERGED),不放行,scratch 不入庫。"
-  python3 -c "
-import sys; sys.path.insert(0,'$REPO/governance')
+  if [ "$CROSS_VERDICT" = "disputed" ]; then
+    MSG="⚠ 跨家族否決(qwen 持續異議):$CROSS_SUMMARY"; log "未收斂(跨家族否決 disputed),不放行:$CROSS_SUMMARY"
+  else
+    MSG="⚠ 今日 spec 未收斂、未放行(撞 cap)"; log "未收斂(converged=$CONVERGED),不放行,scratch 不入庫。"
+  fi
+  MSG="$MSG" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
-print('LINE', line_notify.send(line_notify.build_message('$TOPIC','⚠ 今日 spec 未收斂、未放行(撞 cap)',None),t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
   exit 0
 fi
 
@@ -90,6 +96,7 @@ from autonomous_loop import confidence_report
 print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json.loads('''$RESIDUAL''')))
 ")"
 
+[ -n "$CROSS_VERDICT" ] && log "跨家族複核:$CROSS_VERDICT($CROSS_WORST)— $CROSS_SUMMARY"
 if [ "$MODE" = "--dry-run" ]; then
   cp "$SPEC" "$PENDING/" 2>/dev/null || true
   printf '%s\n' "$REPORT_MD" > "$PENDING/$(basename "$SPEC" .md)-confidence.md"
@@ -98,7 +105,7 @@ if [ "$MODE" = "--dry-run" ]; then
 import sys; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
 t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
-print('LINE', line_notify.send(line_notify.build_message('$TOPIC','(dry-run)收斂、待你看 pending/',None),t) if t else 'no-token')" || true
+print('LINE', line_notify.send(line_notify.build_message('$TOPIC','(dry-run)收斂[跨家族:$CROSS_VERDICT]、待你看 pending/',None),t) if t else 'no-token')" || true
 else
   cd "$REPO"; BR="auto/spec-$TOPIC-$TODAY"
   cp "$SPEC" "docs/design/$(basename "$SPEC")"
