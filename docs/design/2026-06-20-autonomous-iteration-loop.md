@@ -8,6 +8,8 @@
 
 每天日報產出後,自動:抽當日最高價值 gap → brainstorm 成 spec → 跑 design-loop 審到收斂 → 把「收斂 spec + 收斂可信度報告」開成 PR、停,等人放行。**人從「每天發起這條鏈」變成「每天 review 一個 PR」。**
 
+> **放行閘補:放行前跨家族複核(cross-family-audit,2026-06-22)**。收斂後、開 PR / 備 pending 前,多一道 **qwen3-max 跨家族複核**補 opus 同門盲點:opus 取材餵 ground-truth、qwen 跨家族判;`endorsed`/`degraded` 放行、`disputed`(major+ 異議)退回 opus 驗證續審、達 2 次升級給人;API 不可用 → degrade 回 opus 放行並於 log/LINE 標註(fail-open)。這是 backlog gap[4]「judge 抗自偏漏了換家族解法」的解——前提「換家族 $0 OAuth 做不到」已被 qwen API 破。詳 `docs/design/2026-06-22-cross-family-audit.md`。
+
 ## 邊界 / 非目標(YAGNI)
 
 - **不自動實作、不自動 merge**:放行(merge PR)永遠人手動。自動只到「備好待放行的 spec」。
