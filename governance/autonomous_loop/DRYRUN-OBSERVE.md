@@ -32,3 +32,11 @@ judge-severity-gate(loop 自己挑的、修自己最弱環、6 輪磨到 R6 mino
 - **修時又發現「重加洞」**:單純加 while 循環不夠——skip 的 gap 被 pop 出 backlog 後,下一輪 `add_gaps`(當日 gaps)會把它**重新加回**(dedup 只看「在不在 backlog」),可能又選又 skip 撞 cap。
 - **完整修(16 test 綠)**:① autonomous-loop.sh 主流程包 while,skip→continue 選下一個(SKIP_CAP=3 防空燒);② gap_select 加 **covered 機制**(`covered.jsonl`):orchestrator 判 skip 的 gap 由 `mark_covered` 永久記下,`add_gaps`/`select` 都跳過——堵重加洞、已放棄/已覆蓋的 gap 永久排除。
 - 待下次 cron 實戰驗證循環 + covered 排除。
+
+## 2026-06-22 修復後首次「正常展開」實戰(audit-trail-persistence)
+- 選 backlog[1]「治理留痕」→ 6 輪 design-loop → **未收斂、不放行、pending 空(正確)**。dry-run 沒碰 repo。
+- canary:r1 missed(blocker)/r2 caught(major)/r3 missed(major)/r4-r6 caught(blocker)。**opus 單家族 canary missed 2/6 ≈ 33%**。
+- 4 輪 caught 但 severity 一直 ≥major → 建不出「連 2 輪 clean/minor tail」→ 撞 cap 6 正確不放行。auditor 抓到的是**真 blocker**(捏造路徑/orchestrator 隔離違反/ts-sort 跟 append-order 矛盾/invalid bash/module import 路徑),非 canary 誤報。
+- 卡點:新組件 audit_writer.py 每輪修完又冒新問題(組件多、互相牽動)= **gap 偏大、該拆小**的訊號。
+- **副作用待議**:未收斂的 gap 被 select 的 pop_top 消費掉、不回 backlog → 除非日報重報否則此真 gap 遺失,且重報也是從頭 brainstorm(沒記住「上次卡在 audit_writer.py」)。
+- 側證跨家族價值:opus missed 2/6 正是 Qwen 第二 auditor 能補的點(呼應 cross-family-audit 討論)。
