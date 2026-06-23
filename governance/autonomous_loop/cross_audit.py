@@ -9,10 +9,30 @@ import os
 import re
 import urllib.request
 import urllib.error
+import ssl
 from pathlib import Path
 
 ENDPOINT = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
 _SEV_ORDER = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+
+
+def _ssl_context():
+    """探測可用 cert bundle 建 SSL context。homebrew python(orchestrator PATH 優先)常無 cert
+    (ssl cafile=None)→ 不指定會 CERTIFICATE_VERIFY_FAILED;探測系統/certifi cert 修之。"""
+    cands = []
+    d = ssl.get_default_verify_paths()
+    if d.cafile:
+        cands.append(d.cafile)
+    try:
+        import certifi
+        cands.append(certifi.where())
+    except ImportError:
+        pass
+    cands += ["/etc/ssl/cert.pem", "/private/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"]
+    for p in cands:
+        if p and os.path.exists(p):
+            return ssl.create_default_context(cafile=p)
+    return ssl.create_default_context()
 
 
 def _parse_worst(text):
@@ -68,7 +88,7 @@ def run_cross_audit(spec_text, canary_log_path, loop_id, ground_truth,
         ENDPOINT, data=payload,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
             data = json.load(resp)
     except urllib.error.HTTPError as e:
         return {"status": "degraded", "worst_severity": None, "reason": f"http_{e.code}"}
