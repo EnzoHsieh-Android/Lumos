@@ -17,7 +17,7 @@ _SEV_ORDER = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
 
 def _parse_worst(text):
     """抓「最嚴重 severity = X」;抓不到 → 掃內文最高 severity;全無 → clean。"""
-    m = re.search(r"最嚴重\s*severity\s*=\s*(clean|minor|major|blocker)", text)
+    m = re.search(r"最嚴重\s*severity\s*[=:：]?\s*\*{0,2}(clean|minor|major|blocker)", text)
     if m:
         return m.group(1)
     found = [s for s in _SEV_ORDER if s in text]

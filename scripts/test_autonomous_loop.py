@@ -180,6 +180,12 @@ class TestCrossAudit(unittest.TestCase):
         self.assertEqual(r["status"], "degraded")
         self.assertEqual(r["reason"], "timeout")
 
+    def test_ok_parses_bolded_severity(self):
+        # 端到端發現:qwen 用 markdown 粗體「= **major**」,正則須容忍,否則 fallback 掃內文 blocker 誤判更嚴重
+        body = json.dumps({"choices": [{"message": {"content": "總結:最嚴重 severity = **major**\n(內文提到一個 blocker 是植入的)"}}], "usage": {}}).encode()
+        r = self._run_with_key(lambda *a, **k: io.BytesIO(body))
+        self.assertEqual(r["worst_severity"], "major")
+
 
 class TestRequeueUnconverged(unittest.TestCase):
     def setUp(self):
