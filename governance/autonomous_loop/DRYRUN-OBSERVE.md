@@ -40,3 +40,10 @@ judge-severity-gate(loop 自己挑的、修自己最弱環、6 輪磨到 R6 mino
 - 卡點:新組件 audit_writer.py 每輪修完又冒新問題(組件多、互相牽動)= **gap 偏大、該拆小**的訊號。
 - **副作用待議**:未收斂的 gap 被 select 的 pop_top 消費掉、不回 backlog → 除非日報重報否則此真 gap 遺失,且重報也是從頭 brainstorm(沒記住「上次卡在 audit_writer.py」)。
 - 側證跨家族價值:opus missed 2/6 正是 Qwen 第二 auditor 能補的點(呼應 cross-family-audit 討論)。
+
+## 2026-06-23 重大發現:orchestrator 一直在「模擬」而非真跑
+- 06-23 10:10 loop 報 converged(check-t-sentinel-combo, cross_verdict=endorsed, rounds:5),但 scratch `spec/` 空、無 `.canary-log.jsonl`、kg 空。
+- orchestrator result 白紙黑字:「intellectual **simulation**」「**no files written, no CLI executed**」「**Simulated** opus auditor/judge」「**Simulated** cross_audit returns」。
+- 即 orchestrator 把 dry-run 誤解成「腦內模擬、什麼都不真做」——spec/canary/auditor/cross_audit 全是它自說自話,converged/endorsed 全幻覺;qwen 那個 finding 是 orchestrator 編的、qwen 根本沒真審。
+- **架空整個 loop**:canary 防放水、judge severity、cross-family 補盲全是假的。很可能從 06-20 上線起一直如此(當時沒查 scratch 真產出、誤以為『spec 品質高』)。
+- 修:orchestrator-prompt 加「⚠ 執行紀律」塊(dry-run≠模擬、必須真執行所有工具、收尾前自查 spec+canary-log 必須存在)。**待下次 cron(06-24 10:10)驗證 orchestrator 是否改為真跑**(查 scratch spec/canary-log 有沒有真產出)。

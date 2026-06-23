@@ -6,6 +6,20 @@
 - scratch 工作區:__SCRATCH__/spec/(spec 寫這、design-loop 在這跑);__SCRATCH__/kg(canary vault);canary-log 在 __SCRATCH__/.canary-log.jsonl
 - design-loop 原語:python3 scripts/lumos --vault __SCRATCH__/kg canary record / loop status
 
+## ⚠ 執行紀律(最重要,違反則本輪一律無效)
+
+**dry-run 不是「模擬」。** 無論 dry-run 還是 --pr,你都必須**真執行所有工具**:
+- 真用 **Agent 工具** spawn opus auditor / judge(不是「Simulated auditor finds…」)
+- 真跑 `python3 scripts/lumos --vault __SCRATCH__/kg canary record …`(不是腦補 caught/severity)
+- 真寫 spec 檔到 `__SCRATCH__/spec/__DATE__-<topic>.md`(不是「no files written」)
+- 真調 `cross_audit.run_cross_audit(…)` 打 qwen(不是「Simulated cross_audit returns…」)
+
+**嚴禁「intellectual simulation / 脑内模擬 / Simulated …」**——你腦補的 caught / severity / cross_verdict 一律無效、視同未收斂。
+
+dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不開 PR;--pr 才 cp 進 docs/design 開 PR。**過程(spawn / canary record / cross_audit)兩者完全相同、都要真做。**
+
+**可驗證證據(收尾前自查)**:`__SCRATCH__/spec/__DATE__-<topic>.md` 必須存在、`__SCRATCH__/.canary-log.jsonl` 必須有逐輪記錄。否則你是在模擬,本輪無效——重做。
+
 ## 步驟
 
 ### 0. 覆蓋檢查(先做,省得重做已落地的)
