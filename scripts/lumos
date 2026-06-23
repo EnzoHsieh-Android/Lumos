@@ -641,6 +641,49 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
                   "加 [rollback:decisions] + decisions rollback")
     print()
 
+    # Check S: L4 自足性審計提醒(軟,不擋,不計 issues)——type=system 節點:
+    #   無 self_audit(或格式非法) = 從未跑 L4;self_audit 日期 < updated = 節點更新後未重審(過期)。
+    # 真實性無法機械驗(lumos 不 spawn agent),只給「摩擦地板」提醒派乾淨 agent 跑自足性審計
+    # (只讀圖譜還原現況),過了 `lumos self-audit <node>` 留痕。同 maker/checker 誠實天花板。
+    section("S", "L4 自足性審計提醒 (Systems 無 self_audit 或已過期 → 派乾淨 agent 還原審)")
+    sa_missing, sa_stale = [], []
+    for rel, n in sorted(notes.items()):
+        if n.fields.get("type") != "system":
+            continue
+        if str(n.fields.get("status", "")).strip() in ("stale", "superseded"):
+            continue
+        sa_val = str(n.fields.get("self_audit", "")).strip()
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", sa_val) if sa_val else None
+        sa_date = m.group(1) if m else None
+        if not sa_date:                       # 無 self_audit 或解析不出日期 → 視同未審
+            sa_missing.append(rel)
+            gov_events.append({"gate": "check-s", "kind": "warned", "hard": False, "nodes": [n.stem]})
+            continue
+        upd = str(n.fields.get("updated", "")).strip()
+        # 缺 updated → 不做過期判定(避免誤報);有則純字串比較(lumos 保證 bare YYYY-MM-DD)
+        if upd and sa_date < upd:
+            sa_stale.append(f"{rel} (self_audit {sa_date} < updated {upd})")
+            gov_events.append({"gate": "check-s", "kind": "warned", "hard": False, "nodes": [n.stem]})
+
+    def _soft_list(items, head, advice):
+        shown = items[:8]
+        lines = list(shown)
+        if len(items) > len(shown):
+            lines.append(f"… 還有 {len(items) - len(shown)} 篇")
+        warn_soft(lines, head, advice)
+
+    if not sa_missing and not sa_stale:
+        ok("所有 Systems 都有 self_audit 且未過期")
+    if sa_missing:
+        _soft_list(sa_missing,
+                   f"{len(sa_missing)} 個 Systems 從未跑 L4 自足性審計(無 self_audit):",
+                   "派無脈絡乾淨 agent 只讀圖譜還原現況,過了 `lumos self-audit <node>` 留痕;輕量無需則略過")
+    if sa_stale:
+        _soft_list(sa_stale,
+                   f"{len(sa_stale)} 個 Systems 的 self_audit 已過期(節點更新後未重審):",
+                   "重派乾淨 agent 還原審後 `lumos self-audit <node>` 重新留痕")
+    print()
+
     if ci:
         _append_governance_log(env.vault, gov_events)
 
@@ -2257,7 +2300,7 @@ def cmd_export_html(env, out_path, standalone=False):
 
 # ═══════════════════════ 階段三: 寫側 T1(行級手術) ═══════════════════════
 
-SCALAR_KEYS = {"status", "updated", "created", "type"}
+SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit"}
 LIST_KEYS = {"verified_by", "plan_refs", "related", "tags"}
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -2468,6 +2511,24 @@ def cmd_set(env, rel, key, value):
                         lambda f: str(f.get(key, "")) == exp_val)
     print(f"✓ set {rel}: {key} = {exp}")
     return 0
+
+
+def cmd_self_audit(env, rel, model="sonnet", date=None):
+    """L4 自足性審計留痕:寫 self_audit: <model>/<date> 到節點 frontmatter。
+    語意:這整篇節點的「自足性」(無主對話脈絡的乾淨 agent 只讀圖譜能不能還原
+    專案現況)已由一個獨立 agent 審過並通過。對應 guard audit 的角色(乾淨 agent
+    審後蓋戳),但程式路徑獨立——這是節點級戳記,guard audit 是行級 [audit:]。
+    工具只記留痕,不證明審計真乾淨——派 agent 的乾淨脈絡/中立 prompt 靠主對話誠實。"""
+    import datetime
+    if date is None:
+        date = datetime.date.today().isoformat()
+    else:
+        try:
+            datetime.date.fromisoformat(date)
+        except ValueError:
+            print(f"ERROR: --date 須為 YYYY-MM-DD:{date!r}", file=sys.stderr)
+            return 2
+    return cmd_set(env, rel, "self_audit", f"{model}/{date}")
 
 
 def cmd_append(env, rel, key, value):
@@ -3081,6 +3142,11 @@ def main():
     p.add_argument("note")
     p.add_argument("key")
     p.add_argument("value")
+    sa = sub.add_parser("self-audit",
+                        help="L4 自足性審計留痕:寫 self_audit:<model>/<date>(乾淨 agent 只讀圖譜還原審過;Check S 看)")
+    sa.add_argument("node")
+    sa.add_argument("--model", default="sonnet", help="審計 model(預設 sonnet)")
+    sa.add_argument("--date", default=None, help="YYYY-MM-DD(預設今日)")
     p = sub.add_parser("new", help="依模板建檔")
     p.add_argument("type", choices=("system", "verification", "issue", "project"))
     p.add_argument("name")
@@ -3206,6 +3272,17 @@ def main():
         if args.format == "html":
             return cmd_export_html(env, args.output, standalone=args.standalone)
         return cmd_export(env, args.format, set(args.folders))
+
+    if args.cmd == "self-audit":
+        rel = env.find(args.node)
+        if rel is None:
+            print(f"ERROR: 找不到筆記: {args.node}", file=sys.stderr)
+            return 2
+        try:
+            return cmd_self_audit(env, rel, args.model, args.date)
+        except (ValueError, RuntimeError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
 
     # T1 寫側
     if args.cmd in ("set", "append"):
