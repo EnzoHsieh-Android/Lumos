@@ -335,7 +335,7 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,扣點前擋下 ... [te
 - 未標 = 可逆(git/測試級,放手)。
 - **天花板**:`[rollback:]` 證「你寫下了 undo」,**不證明它跑得動 / 與現行 schema 一致**(同 [test:]/[audit:])。別把「有寫」當「安全」。
 - v1 手寫 `[rollback:decisions]`(無專用指令);`lumos lint` / `doctor` Check R 把關。
-外部不可逆動作(信已送出、prod 遷移下游已消費)事後無逆操作 → 用 `[guard:decisions]`(decisions[] 記非空 `guard`:冪等鍵/核可閘)取代 `[rollback:]`;兩軌任一即過 Check R,`[guard:]` 僅 `★IRREVERSIBLE★` 適用。
+- 外部不可逆動作(信已送出、prod 遷移下游已消費)事後無逆操作 → 用 `[guard:decisions]`(decisions[] 記非空 `guard`:冪等鍵/核可閘)取代 `[rollback:]`;兩軌任一即過 Check R,`[guard:]` 僅 `★IRREVERSIBLE★` 適用。
 
 ### `lumos guard`：對談驅動的守衛 scaffold（2026-06-15)
 
