@@ -619,18 +619,18 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
     section("R", "可逆性回退綁定 (★IRREVERSIBLE★ 動手前要有實質回退)")
     rev_err, rev_soft = [], []
     for rel, nnote in sorted(notes.items()):
-        for marker, clean, ref in extract_reversibility(nnote):
+        for marker, clean, ref, guard_ref in extract_reversibility(nnote):
             t_ = nnote.fields.get("type")
             if t_ != "system":
                 rev_err.append(f"{rel}: {marker} 標在非 Systems(type={t_!r})")
                 gov_events.append({"gate": "check-r", "kind": "blocked", "hard": True, "nodes": [nnote.stem]})
-            elif not _rollback_resolved(nnote, ref):
-                if marker == "★IRREVERSIBLE★":
-                    rev_err.append(f"{rel}: {first_line(clean, 60)}")
+            elif marker == "★IRREVERSIBLE★":
+                if not (_rollback_resolved(nnote, ref) or _guard_resolved(nnote, guard_ref)):
+                    rev_err.append(f"{rel}: {first_line(clean, 60)} (加 [rollback:decisions] 或 [guard:decisions])")
                     gov_events.append({"gate": "check-r", "kind": "blocked", "hard": True, "nodes": [nnote.stem]})
-                else:
-                    rev_soft.append(f"{rel}: {first_line(clean, 60)}")
-                    gov_events.append({"gate": "check-r", "kind": "warned", "hard": False, "nodes": [nnote.stem]})
+            elif not _rollback_resolved(nnote, ref):  # ★CHECKPOINT★;guard_ref 不讀
+                rev_soft.append(f"{rel}: {first_line(clean, 60)}")
+                gov_events.append({"gate": "check-r", "kind": "warned", "hard": False, "nodes": [nnote.stem]})
     if not rev_err and not rev_soft:
         ok("無未綁回退的可逆性標記")
     if rev_err:
@@ -992,6 +992,7 @@ def strip_test_refs(inv_text):
 CHECKPOINT_RE = re.compile(r"^KEY:\s*(?:\([^)]*\)\s*)?★CHECKPOINT★\s*(.*)")
 IRREVERSIBLE_RE = re.compile(r"^KEY:\s*(?:\([^)]*\)\s*)?★IRREVERSIBLE★\s*(.*)")
 ROLLBACK_REF_RE = re.compile(r"\[rollback:\s*([^\]]+)\]")
+GUARD_REF_RE = re.compile(r"\[guard:\s*([^\]]+)\]")  # 可逆性軸,平行於 ROLLBACK_REF_RE
 
 
 def reversibility_rollback_ref(text):
@@ -999,8 +1000,13 @@ def reversibility_rollback_ref(text):
     return m.group(1).strip() if m else None
 
 
+def reversibility_guard_ref(text):
+    m = GUARD_REF_RE.search(text)
+    return m.group(1).strip() if m else None
+
+
 def extract_reversibility(note):
-    """從 summary KEY 行抽 (marker, 去 [rollback:] 的乾淨文字, rollback_ref)。"""
+    """從 summary KEY 行抽 (marker, 去 [rollback:]/[guard:] 的乾淨文字, rollback_ref, guard_ref)。"""
     summ = note.fields.get("summary")
     out = []
     if isinstance(summ, str):
@@ -1010,8 +1016,9 @@ def extract_reversibility(note):
                 m = rx.match(line)
                 if m:
                     body = m.group(1)
-                    out.append((marker, ROLLBACK_REF_RE.sub("", body).strip(),
-                                reversibility_rollback_ref(body)))
+                    clean_body = ROLLBACK_REF_RE.sub("", GUARD_REF_RE.sub("", body)).strip()
+                    out.append((marker, clean_body,
+                                reversibility_rollback_ref(body), reversibility_guard_ref(body)))
     return out
 
 
@@ -1020,6 +1027,13 @@ def _rollback_resolved(note, ref):
     if not ref or ref.strip().lower() != "decisions":
         return False
     return any(str(d.get("rollback", "")).strip() for d in parse_decisions(note.fm_lines))
+
+
+def _guard_resolved(note, ref):
+    """[guard:decisions] 視為已解析 ⟺ 本節點 decisions[] 有 ≥1 條非空 guard。"""
+    if not ref or ref.strip().lower() != "decisions":
+        return False
+    return any(str(d.get("guard", "")).strip() for d in parse_decisions(note.fm_lines))
 
 
 def build_code_haystack(repo_root):
@@ -1139,14 +1153,14 @@ def cmd_lint(env, node):
             errs.append(f"★INVARIANT★ 綁了測試但未獨立審計(缺 [audit:],pre-push 會擋):{first_line(clean, 48)}")
 
     # Check R 單檔版:可逆性回退綁定 + 標錯型別
-    for marker, rclean, ref in extract_reversibility(n):
+    for marker, rclean, ref, guard_ref in extract_reversibility(n):
         if t != "system":
             errs.append(f"{marker} 只能在 Systems 節點(本節點 type={t!r}):{first_line(rclean, 40)}")
-        elif not _rollback_resolved(n, ref):
-            if marker == "★IRREVERSIBLE★":
-                errs.append(f"{marker} 缺實質回退(行尾加 [rollback:decisions],decisions[] 要有非空 rollback):{first_line(rclean, 40)}")
-            else:
-                warns.append(f"{marker} 建議補回退([rollback:decisions]):{first_line(rclean, 40)}")
+        elif marker == "★IRREVERSIBLE★":
+            if not (_rollback_resolved(n, ref) or _guard_resolved(n, guard_ref)):
+                errs.append(f"{marker} 缺實質回退(行尾加 [rollback:decisions] 或 [guard:decisions],decisions[] 要有非空 rollback/guard):{first_line(rclean, 40)}")
+        elif not _rollback_resolved(n, ref):  # ★CHECKPOINT★;guard_ref 不讀
+            warns.append(f"{marker} 建議補回退([rollback:decisions]):{first_line(rclean, 40)}")
 
     if not errs and not warns:
         print(f"✓ lint {rel} — 0 問題")
@@ -2694,7 +2708,7 @@ NEW_HINT = {
         "填 summary 符號行: FLOW:<流程 a→b→c>  KEY:<關鍵概念/欄位>  DEP:[[依賴模組]]  TEST:<測試狀態>",
         "合約用 KEY 行前綴: ★INVARIANT★=業務合約(改=breaking),必綁 [test:測試名] 再經獨立 [audit:];★DEBT★=偶然可改",
         "  └ 綁定別手寫: lumos guard bind <node> \"<KEY子字串>\" <測試名> / guard audit <node> \"<KEY子字串>\"",
-        "可逆性: 不可逆動作(prod遷移/上架)標 ★IRREVERSIBLE★ + [rollback:decisions];改了難救標 ★CHECKPOINT★",
+        "可逆性: 不可逆動作(prod遷移/上架)標 ★IRREVERSIBLE★ + [rollback:decisions];改了難救標 ★CHECKPOINT★;外部不可逆(信已送/下游已消費)改用 [guard:decisions] 記冪等鍵/核可閘([guard:] 僅對 ★IRREVERSIBLE★ 生效;屬可逆性軸,與 lumos guard bind 的合約軸正交)",
         "組合覆蓋: 最重的鐵則(金額/權限/不可逆)在 ★INVARIANT★ 之後標 ★COMBO★ → doctor Check K 軟提醒補組合測試(別只測 happy-path)",
     ],
     "issue": [

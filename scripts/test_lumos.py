@@ -997,6 +997,32 @@ def t_reversibility_lint():
           "type: issue\nstatus: open\nsummary: |-\n  KEY:★IRREVERSIBLE★ 標錯地方", body="# B\n")
     r = run(v, "lint", "Issues/Bad")
     check("lint: 可逆性標記在非 Systems → rc1", r.returncode == 1 and "只能在 Systems" in r.stdout, r.stdout)
+    # ── [guard:decisions] 事前預防路徑(與 rollback 兩軌任一合規)──
+    write(v, "Systems/Gd1.md",
+          "type: system\nstatus: doing\n"
+          "decisions:\n  - content: 補登 API\n    decided: 2026-06-22\n    guard: 冪等鍵 X-Idempotency-Key + Redis 60s 去重\n"
+          "summary: |-\n  KEY:★IRREVERSIBLE★ 寄發票通知信 [guard:decisions]", body="# G1\n")
+    r = run(v, "lint", "Systems/Gd1")
+    check("lint: IRREVERSIBLE + 非空 guard → rc0", r.returncode == 0, r.stdout)
+    write(v, "Systems/Gd2.md",
+          "type: system\nstatus: doing\n"
+          "decisions:\n  - content: 補登\n    decided: 2026-06-22\n"
+          "summary: |-\n  KEY:★IRREVERSIBLE★ 寄信 [guard:decisions]", body="# G2\n")
+    r = run(v, "lint", "Systems/Gd2")
+    check("lint: IRREVERSIBLE + 空 guard → rc1", r.returncode == 1, r.stdout)
+    write(v, "Systems/Gd5.md",
+          "type: system\nstatus: doing\n"
+          "decisions:\n  - content: 雙保險\n    decided: 2026-06-22\n    rollback: revert.sql\n    guard: 冪等鍵\n"
+          "summary: |-\n  KEY:★IRREVERSIBLE★ 遷移 [rollback:decisions] [guard:decisions]", body="# G5\n")
+    r = run(v, "lint", "Systems/Gd5")
+    check("lint: rollback+guard 兩者皆有 → rc0", r.returncode == 0, r.stdout)
+    write(v, "Systems/Gd6.md",
+          "type: system\nstatus: doing\n"
+          "decisions:\n  - content: 部署\n    decided: 2026-06-22\n    guard: 核可閘\n"
+          "summary: |-\n  KEY:★CHECKPOINT★ 部署 lab [guard:decisions]", body="# G6\n")
+    r = run(v, "lint", "Systems/Gd6")
+    check("lint: CHECKPOINT + guard → guard 靜默忽略、無 rollback 仍 warning rc0",
+          r.returncode == 0 and "建議補回退" in r.stdout, r.stdout)
 
 
 def t_reversibility_doctor():
@@ -1010,6 +1036,24 @@ def t_reversibility_doctor():
           "type: system\nstatus: doing\nsummary: |-\n  KEY:★CHECKPOINT★ 部署 lab2", body="# C\n")
     r2 = run(v2, "doctor", "--ci")
     check("doctor Check R: 只有 checkpoint 缺回退 → rc0(warn_soft 不計 issues)", r2.returncode == 0, r2.stdout)
+
+
+def t_reversibility_guard_doctor():
+    v = mkvault()
+    # IRREVERSIBLE + 非空 guard → 不報 error(doctor --ci rc0)
+    write(v, "Systems/Gd.md",
+          "type: system\nstatus: doing\n"
+          "decisions:\n  - content: 補登 API\n    decided: 2026-06-22\n    guard: 冪等鍵 + Redis 去重\n"
+          "summary: |-\n  KEY:★IRREVERSIBLE★ 寄信 [guard:decisions]", body="# Gd\n")
+    r = run(v, "doctor", "--ci")
+    check("doctor: IRREVERSIBLE + 非空 guard → rc0", r.returncode == 0, r.stdout)
+    # IRREVERSIBLE 兩者皆無 → error,提示含兩選項
+    v2 = mkvault()
+    write(v2, "Systems/Bad.md",
+          "type: system\nstatus: doing\nsummary: |-\n  KEY:★IRREVERSIBLE★ 寄信沒守衛", body="# B\n")
+    r = run(v2, "doctor")
+    check("doctor: IRREVERSIBLE 兩軌皆無 → 提示 rollback 或 guard",
+          "[guard:decisions]" in r.stdout and "[rollback:decisions]" in r.stdout, r.stdout)
 
 
 def t_governance_log_write():
