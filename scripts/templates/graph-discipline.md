@@ -45,6 +45,7 @@ KEY:★CHECKPOINT★   <改了難救:部署測試機>                          #
 未標 = 可逆(git/測試級,放手)
 ```
 - `[rollback:decisions]` 需本節點 `decisions[]` 有非空 `rollback` 欄位(實際回退 SQL/補償步驟)。**證「有寫下 undo」≠「驗過能跑」**。
+- 外部不可逆(信已送出/下游已消費,事後無逆操作)→ 改用 `[guard:decisions]` 記事前守衛(冪等鍵/核可閘);`[guard:]` 僅對 `★IRREVERSIBLE★` 生效,與 `[rollback:]` 兩軌任一合規即放行。
 - 綁定/審計走指令(寫後自驗),別手寫:`lumos guard bind <node> "<KEY子字串>" <測試名>` / `lumos guard audit <node> "<KEY子字串>"`。
 
 **frontmatter 欄位**：`type`(system/verification/issue/project/moc)、`status`(doing/pass/open/done/stale/superseded)、`verified_by`/`plan_refs`/`related`/`tags`(list)、`decisions`(ADR 巢狀)、`valid_under`/`revalidate_when`(重驗條件)、`core_refs`(核心指針,純文字路徑)。
