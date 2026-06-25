@@ -18,7 +18,14 @@ python3 scripts/lumos bootstrap     # 自動:clone Lumos + skills + 全域 lumos
 
 之後再 clone 別的專案,因為機器已設定好,只要 `python3 scripts/lumos bootstrap`(或 `scripts/install-hooks.sh --force`)即可。
 
-> `bootstrap` 做的事 = 下面「手動三步」的自動版。沒有 vendored 工具組的全新專案,改用維護者備註的 `install-graph-toolchain`。
+> `bootstrap` 做的事 = 下面「手動三步」的自動版,適用**已導入 Lumos(專案已帶 `scripts/lumos`)**的 repo。
+>
+> **全新、還沒帶 `scripts/lumos` 的專案**改走兩條指令:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash   # 機器層(連 Lumos 都自動 clone)
+> cd <你的專案> && lumos init     # 專案層:建圖譜骨架 + vendor 工具 + 裝 hooks(slug 預設取資料夾名)
+> ```
+> (離線/企業內網仍可用手動 `install-graph-toolchain`,見維護者備註。)
 
 <details><summary>手動三步(bootstrap 底層做的事)</summary>
 

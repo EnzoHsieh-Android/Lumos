@@ -62,8 +62,26 @@ python3 scripts/lumos bootstrap     # 自動:clone Lumos(若缺)+ user-scope ski
 
 > `bootstrap` 預設**不**拉更新。日後更新:`git -C ~/harness/lumos-toolchain pull`(全 symlink),或 `lumos bootstrap --pull`。
 
-### 4b. 全新專案導入
-從 Lumos clone,把工具組 vendor 進目標專案:
+### 4b. 全新專案導入(兩條指令)
+
+**① 每台機器一次**(遠端,連 Lumos 都自動 clone):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
+# 然後重啟 Claude Code session
+```
+
+`get.sh` 裝「機器層」:clone Lumos + user-scope skills + 全域 `lumos`。(可先 `curl -fsSL <url> -o get.sh` 審閱再跑;傳參用 `… | bash -s -- --pull`。)
+
+**② 每個專案一次**(在你的專案內):
+
+```bash
+cd <你的專案> && lumos init       # slug 預設取資料夾名;自訂用 --name <slug>
+```
+
+`lumos init` 裝「專案層」:建 `docs/<slug>-knowledge/{Systems,…,MOC}` + `.gitignore`、vendor 工具組、裝 pre-commit/pre-push 閘。既有 vault **絕不覆寫**(`--force` 才補齊缺的;`--no-hooks` 只建圖譜輕量版)。
+
+<details><summary>進階/離線:手動 install-graph-toolchain</summary>
 
 ```bash
 git clone https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
@@ -71,8 +89,7 @@ cd ~/harness/lumos-toolchain && ./install.sh        # user-scope skills(symlink)
 python3 scripts/lumos install                       # (選用)全域 `lumos` 上 PATH
 scripts/install-graph-toolchain.sh --target <專案路徑> --slug <名稱>
 ```
-
-這會建 `docs/<名稱>-knowledge/{Systems,Verification,Projects,Issues,Sessions,MOC}`、裝 hooks、把紀律區塊注入專案 `CLAUDE.md`。既有圖譜資料**絕不覆寫**(重跑只更新工具組)。
+</details>
 
 ### 為什麼分兩層裝?
 CI 只 checkout 專案 repo、git hook 是 per-repo,所以**工具組必須 vendor 進各專案**;而 **skills 是 user-scope**(一份共用、symlink 到 `~/.claude/skills/`)。對 Lumos clone `git pull` 會即時更新 skills + 全域 CLI;專案裡 vendored 的工具組用 `lumos update` 刷新。
