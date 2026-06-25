@@ -3003,29 +3003,24 @@ def cmd_uninstall():
     return 0
 
 
-def cmd_update(source=None, no_pull=False):
-    """從 Lumos 唯一源 repo 更新「本專案」vendored 的工具組。
-    = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
-    圖譜資料受 install-graph-toolchain 的 scaffold-skip 保護,不會被動。"""
-    import os, subprocess
-    src = Path(source or os.environ.get("LUMOS_HOME")
-               or (Path.home() / "harness" / "lumos-toolchain")).expanduser()
+def _lumos_src(source=None):
+    """解析 Lumos 唯一源 repo 路徑:--source > $LUMOS_HOME > ~/harness/lumos-toolchain。"""
+    import os
+    return Path(source or os.environ.get("LUMOS_HOME")
+                or (Path.home() / "harness" / "lumos-toolchain")).expanduser()
+
+
+def _vendor_toolchain(src, root, slug, no_pull=False):
+    """從 Lumos 來源 src vendor 工具組到專案 root(install-graph-toolchain.sh + 結尾自癒)。
+    回傳 installer 的 returncode;來源無效回傳 None。圖譜資料受 scaffold-skip 保護不被動。
+    cmd_update / cmd_init(--with-hooks) 共用。"""
+    import subprocess, shutil, filecmp
     installer = src / "scripts" / "install-graph-toolchain.sh"
     if not installer.exists():
         print(f"ERROR: 找不到 Lumos 來源 {src}（無 scripts/install-graph-toolchain.sh）\n"
               f"  用 --source <path> 指定、設 $LUMOS_HOME、或 clone 到 ~/harness/lumos-toolchain",
               file=sys.stderr)
-        return 2
-    vault = find_vault(Path.cwd())
-    if vault is None:
-        print("ERROR: 當前目錄找不到 docs/*-knowledge 專案 vault", file=sys.stderr)
-        return 2
-    root = vault.parent.parent  # docs/<slug>-knowledge → docs → 專案 root
-    slug = vault.name[:-len("-knowledge")] if vault.name.endswith("-knowledge") else vault.name
-    if root.resolve() == src.resolve():
-        print("ERROR: 當前就是 Lumos 來源本身,不需 update", file=sys.stderr)
-        return 2
-    print(f"lumos update — 來源 {src} → 本專案 {root}（slug={slug}）")
+        return None
     if not no_pull:
         if (src / ".git").is_dir():
             print("  git pull 來源(取最新工具組)…")
@@ -3036,7 +3031,6 @@ def cmd_update(source=None, no_pull=False):
     rc = subprocess.run(["bash", str(installer), "--target", str(root), "--slug", slug]).returncode
     # 結尾 diff 自癒:install-graph-toolchain.sh 執行中無法覆寫自己(bash 自我複製不可靠),
     # 其他檔偶有漏。python 端逐檔比對 src↔target,差異即補(python 非該 bash 腳本,可安全覆寫)。
-    import shutil, filecmp
     toolkit = ["scripts/lumos", "scripts/test_lumos.py", "scripts/install-hooks.sh",
                "scripts/install-graph-toolchain.sh", "scripts/merge-claude-settings.py",
                "scripts/graph-rename.sh", "scripts/fetch-notesmd.sh"]
@@ -3060,6 +3054,25 @@ def cmd_update(source=None, no_pull=False):
     else:
         print("  ✓ 結尾自癒檢查:工具組完全對齊(無漏)")
     return rc
+
+
+def cmd_update(source=None, no_pull=False):
+    """從 Lumos 唯一源 repo 更新「本專案」vendored 的工具組。
+    = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
+    圖譜資料受 install-graph-toolchain 的 scaffold-skip 保護,不會被動。"""
+    src = _lumos_src(source)
+    vault = find_vault(Path.cwd())
+    if vault is None:
+        print("ERROR: 當前目錄找不到 docs/*-knowledge 專案 vault", file=sys.stderr)
+        return 2
+    root = vault.parent.parent  # docs/<slug>-knowledge → docs → 專案 root
+    slug = vault.name[:-len("-knowledge")] if vault.name.endswith("-knowledge") else vault.name
+    if root.resolve() == src.resolve():
+        print("ERROR: 當前就是 Lumos 來源本身,不需 update", file=sys.stderr)
+        return 2
+    print(f"lumos update — 來源 {src} → 本專案 {root}（slug={slug}）")
+    rc = _vendor_toolchain(src, root, slug, no_pull=no_pull)
+    return 2 if rc is None else rc
 
 
 def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False):
@@ -3122,9 +3135,11 @@ def _slugify_vault(name: str):
     return s or "project"
 
 
-def cmd_init(name=None, force=False):
-    """在當前 repo 初始化知識圖譜骨架:建 docs/<slug>-knowledge/{5 個資料夾} + .gitignore → 驗證。
-    像 `openspec init`:一行開好就能 `lumos new`。bootstrap 裝工具鏈,init 開圖譜,兩件事。"""
+def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
+    """在當前 repo 初始化知識圖譜:建 docs/<slug>-knowledge/{5 個資料夾} + .gitignore,
+    預設並 vendor 工具組 + 裝 pre-commit/pre-push 閘(--no-hooks 只建圖譜輕量版)。
+    像 `openspec init`:一行開好就能 `lumos new`。
+    分工:init = 專案層(圖譜 + 該 repo 的 hooks);bootstrap = 機器層(clone Lumos/skills/全域 lumos),一輩子一次。"""
     import subprocess
     try:
         root = Path(subprocess.check_output(
@@ -3137,7 +3152,7 @@ def cmd_init(name=None, force=False):
     existing = _vault_in(root)
     if existing is not None and not force:
         print(f"✓ 此 repo 已有 vault: {existing.relative_to(root)}")
-        print("  (要另建用 --name <slug>;要在既有 vault 上補齊缺的資料夾用 --force)")
+        print("  (要另建用 --name <slug>;要在既有 vault 上補齊缺的資料夾/hooks 用 --force)")
         return 0
 
     print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
@@ -3149,10 +3164,29 @@ def cmd_init(name=None, force=False):
         gi.write_text(_INIT_GITIGNORE, encoding="utf-8")
         print(f"  + {vault.relative_to(root)}/.gitignore")
 
+    if with_hooks:
+        src = _lumos_src()
+        if root.resolve() == src.resolve():
+            print("\n  (當前就是 Lumos 來源本身,跳過 vendor/hooks)")
+        else:
+            print("\n裝 hooks:vendor 工具組 + 啟用 pre-commit/pre-push 閘…")
+            rc = _vendor_toolchain(src, root, slug, no_pull=no_pull)
+            if rc is None:
+                print("  ⚠ 來源不可用,略過 hooks(圖譜已建好)。"
+                      "日後補裝:lumos update + bash scripts/install-hooks.sh")
+            else:
+                hooks_sh = root / "scripts" / "install-hooks.sh"
+                if hooks_sh.exists():
+                    subprocess.run(["bash", str(hooks_sh), "--force"], cwd=str(root))
+                else:
+                    print("  ⚠ vendor 後仍找不到 scripts/install-hooks.sh,略過 hooks")
+
     print("\n✓ init 完成。開始用:")
     print(f"    cd {root}")
     print("    lumos new system <模組名>     # 建第一個系統節點")
     print("    lumos doctor                  # 健檢")
+    if with_hooks:
+        print("  (已裝 pre-commit/pre-push 閘:改 code 沒更新圖譜會被擋)")
     return 0
 
 
@@ -3336,9 +3370,11 @@ def main():
     p.add_argument("--lumos-url", help="Lumos repo URL(預設公開 repo / $LUMOS_URL)")
     p.add_argument("--lumos-home", help="Lumos clone 目標(預設 ~/harness/lumos-toolchain / $LUMOS_HOME)")
     p.add_argument("--pull", action="store_true", help="既有 Lumos clone 也 git pull 拉最新(預設沿用)")
-    p = sub.add_parser("init", help="在當前 repo 初始化圖譜骨架(建 5 個資料夾+.gitignore,一行開好就能用)")
+    p = sub.add_parser("init", help="在當前 repo 初始化圖譜(建資料夾+.gitignore,預設並裝 pre-commit/pre-push 閘)")
     p.add_argument("--name", help="vault slug(預設 = repo 資料夾名小寫)")
-    p.add_argument("--force", action="store_true", help="既有 vault 也補齊缺的資料夾")
+    p.add_argument("--force", action="store_true", help="既有 vault 也補齊缺的資料夾/hooks")
+    p.add_argument("--no-hooks", action="store_true", help="只建圖譜,不 vendor 工具/不裝 hooks(輕量版)")
+    p.add_argument("--no-pull", action="store_true", help="vendor 工具時不 git pull 來源")
 
     args = ap.parse_args()
 
@@ -3352,7 +3388,8 @@ def main():
     if args.cmd == "bootstrap":
         return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home, pull=args.pull)
     if args.cmd == "init":
-        return cmd_init(name=args.name, force=args.force)
+        return cmd_init(name=args.name, force=args.force,
+                        with_hooks=not args.no_hooks, no_pull=args.no_pull)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():
