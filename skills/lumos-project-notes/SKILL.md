@@ -42,11 +42,13 @@ lumos doctor    # 或 lumos stats；跑得動即代表 lumos 已鎖定本專案 
 vault 名稱即資料夾 basename（如 `compasskiosk-knowledge`），lumos 自動解析，無需手動指定。
 
 ### 3. 不存在 → 初始化
-詢問使用者確認 vault 名稱（預設 `{repo-basename 小寫}-knowledge`），然後：
+詢問使用者確認 vault 名稱（預設 `{repo-basename 小寫}-knowledge`），然後一行開好（像 `openspec init`）：
 ```bash
-mkdir -p docs/{vault-name}/{Projects,Systems,Issues,Verification,MOC}
+lumos init                 # vault slug 預設 = repo 資料夾名小寫;--name <slug> 自訂
 ```
-建立 `.gitignore`（排除 `.obsidian/workspace*.json`、`.obsidian/hotkeys.json`）。
+`lumos init` 建好 `docs/<slug>-knowledge/{Projects,Systems,Issues,Verification,MOC}` 5 個資料夾 + `.gitignore`（排除 `.obsidian/workspace*.json`、`.obsidian/hotkeys.json`）並印開始用提示。既有 vault 會被偵測到（idempotent，不覆蓋）；要在既有 vault 補齊缺的資料夾用 `--force`。
+> 沒有 vendored `lumos` 的舊專案 fallback：`mkdir -p docs/{vault-name}/{Projects,Systems,Issues,Verification,MOC}` 後手建 `.gitignore`。
+> ⚠ `lumos init`（開圖譜）≠ `lumos bootstrap`（裝工具鏈 skills/全域/hooks）：bootstrap 不建圖譜資料夾，init 不裝工具鏈，兩件事。
 建完即可直接寫節點（rich 節點 = Write/Edit 內文 + summary block，scalar/list/decisions 走 lumos）→ `lumos doctor` 驗鐵則。**全程無需任何 Obsidian 步驟。**
 
 ### 4.（可選）Obsidian 註冊 — 僅 obsidian-only 功能才需要

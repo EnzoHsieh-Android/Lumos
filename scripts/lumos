@@ -3106,6 +3106,56 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False):
     return 0
 
 
+_INIT_SUBDIRS = ("Projects", "Systems", "Issues", "Verification", "MOC")
+_INIT_GITIGNORE = (
+    "# Obsidian 個人狀態(不進版控);圖譜內容本身要 commit\n"
+    ".obsidian/workspace*.json\n"
+    ".obsidian/hotkeys.json\n"
+)
+
+
+def _slugify_vault(name: str):
+    """repo basename → vault slug:小寫、非英數轉 -、收斂連續 -、去頭尾 -、去既有 -knowledge 尾。"""
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if s.endswith("-knowledge"):
+        s = s[:-len("-knowledge")]
+    return s or "project"
+
+
+def cmd_init(name=None, force=False):
+    """在當前 repo 初始化知識圖譜骨架:建 docs/<slug>-knowledge/{5 個資料夾} + .gitignore → 驗證。
+    像 `openspec init`:一行開好就能 `lumos new`。bootstrap 裝工具鏈,init 開圖譜,兩件事。"""
+    import subprocess
+    try:
+        root = Path(subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True, stderr=subprocess.DEVNULL).strip())
+    except Exception:
+        root = Path.cwd()
+    slug = _slugify_vault(name) if name else _slugify_vault(root.name)
+    vault = root / "docs" / f"{slug}-knowledge"
+
+    existing = _vault_in(root)
+    if existing is not None and not force:
+        print(f"✓ 此 repo 已有 vault: {existing.relative_to(root)}")
+        print("  (要另建用 --name <slug>;要在既有 vault 上補齊缺的資料夾用 --force)")
+        return 0
+
+    print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
+    for d in _INIT_SUBDIRS:
+        (vault / d).mkdir(parents=True, exist_ok=True)
+        print(f"  + {vault.relative_to(root)}/{d}/")
+    gi = vault / ".gitignore"
+    if not gi.exists():
+        gi.write_text(_INIT_GITIGNORE, encoding="utf-8")
+        print(f"  + {vault.relative_to(root)}/.gitignore")
+
+    print("\n✓ init 完成。開始用:")
+    print(f"    cd {root}")
+    print("    lumos new system <模組名>     # 建第一個系統節點")
+    print("    lumos doctor                  # 健檢")
+    return 0
+
+
 def _vault_in(d: Path):
     """d 之下是否有 vault: docs/*-knowledge 或 docs/knowledge(專案佈局),
     或 d 本身就是 vault root(standalone,如核心 repo:有 MOC/ + Verification|Systems)。"""
@@ -3286,6 +3336,9 @@ def main():
     p.add_argument("--lumos-url", help="Lumos repo URL(預設公開 repo / $LUMOS_URL)")
     p.add_argument("--lumos-home", help="Lumos clone 目標(預設 ~/harness/lumos-toolchain / $LUMOS_HOME)")
     p.add_argument("--pull", action="store_true", help="既有 Lumos clone 也 git pull 拉最新(預設沿用)")
+    p = sub.add_parser("init", help="在當前 repo 初始化圖譜骨架(建 5 個資料夾+.gitignore,一行開好就能用)")
+    p.add_argument("--name", help="vault slug(預設 = repo 資料夾名小寫)")
+    p.add_argument("--force", action="store_true", help="既有 vault 也補齊缺的資料夾")
 
     args = ap.parse_args()
 
@@ -3298,6 +3351,8 @@ def main():
         return cmd_update(source=args.source, no_pull=args.no_pull)
     if args.cmd == "bootstrap":
         return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home, pull=args.pull)
+    if args.cmd == "init":
+        return cmd_init(name=args.name, force=args.force)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():
