@@ -832,6 +832,7 @@ obsidian vault="{vault}" search query="相關關鍵字"
 
 **留痕（2026-06-23）**：審過且補到一致後，`lumos self-audit <node> [--model sonnet] [--date YYYY-MM-DD]` 蓋 `self_audit: <model>/<date>` 戳記到該節點 frontmatter（純量、走 T1 寫入）。語意：「這整篇被無脈絡乾淨 agent 還原審過」——**節點級**戳記，有別於 ★INVARIANT★ 軸的行級 `[audit:]`（驗單條合約合法性），兩軸獨立。**工具只記留痕，不證明審計真乾淨**（同 guard audit 的 maker/checker 誠實前提）。
 - **doctor Check S（軟提醒、不擋）**：`type=system` 節點**無 `self_audit`** → 列「從未跑 L4」；`self_audit` 日期 **< `updated`** → 列「節點更新後未重審（過期）」。用 `warn_soft`、不計 issues、`doctor --ci` 仍 exit 0，是摩擦地板不是 gate（真實性機器驗不了）。
+- `[H]` 漏標可逆性提醒（`doctor --ci` 才跑）:掃 diff 碰 prod/外部 API/寄送 → 軟提醒「是否漏標 ★IRREVERSIBLE★」。只提醒、不擋。
 
 ### 變體 B：圖譜×程式碼交叉審計（無主對話脈絡時用，以 code 為真值）
 
