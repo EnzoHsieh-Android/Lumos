@@ -684,6 +684,22 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
                    "重派乾淨 agent 還原審後 `lumos self-audit <node>` 重新留痕")
     print()
 
+    # Check H: 漏標可逆性提醒(軟,不擋,不計 issues)——僅 --ci 掃 diff,提示疑似漏標 ★IRREVERSIBLE★
+    section("H", "漏標可逆性提醒 (diff 碰 prod/外部 API/寄送 → 是否漏標 ★IRREVERSIBLE★?)")
+    if not ci:
+        print("  (僅 --ci 模式掃 diff;互動模式略過)")
+    else:
+        hint_hits = _scan_diff_for_irreversible_hints(str(env.vault))
+        if not hint_hits:
+            ok("diff 無疑似不可逆操作行(或無 staged/HEAD diff)")
+        else:
+            warn_soft(
+                hint_hits,
+                f"diff 發現 {len(hint_hits)} 行疑似碰外部不可逆操作:",
+                "確認相關 Systems 節點已標 ★IRREVERSIBLE★ [rollback:decisions] 或 [guard:decisions];若確認可逆可忽略",
+            )
+    print()
+
     # Check K: ★COMBO★ 組合覆蓋提醒(軟,不擋,不計 issues)——標了 ★COMBO★ 的最重 ★INVARIANT★
     #   只綁 1 個 [test:] 標記 → 提醒補組合。數 [test:] 標記個數(TEST_REF_RE,非展開名數),免 [test:a,b] 逗號繞過。
     section("K", "★COMBO★ 組合覆蓋提醒 (最重鐵則只綁 1 個 [test:] → 補組合)")
@@ -1003,6 +1019,61 @@ def reversibility_rollback_ref(text):
 def reversibility_guard_ref(text):
     m = GUARD_REF_RE.search(text)
     return m.group(1).strip() if m else None
+
+
+IRREVERSIBLE_HINT_PATTERNS = [
+    re.compile(r"\bprod[._\-/]|production\b", re.I),
+    re.compile(r"smtplib|sendmail|send_mail\b|\.send_message\b", re.I),
+    re.compile(r"requests\.post\b|httpx\.post\b", re.I),
+    re.compile(r"boto3\.(client|resource)\s*\(", re.I),
+    re.compile(r"\bstripe\.\b|\btwilio\.\b|\bsendgrid\.\b", re.I),
+    re.compile(r"\bDROP\s+TABLE\b|\bDELETE\s+FROM\b", re.I),
+    re.compile(r"external_api\b|ext_api\b", re.I),
+]
+
+
+def _scan_diff_for_irreversible_hints(cwd):
+    """掃 git diff --staged(優先)或 HEAD~1..HEAD,回傳疑似不可逆 +行摘要列表。
+    非 git repo 或無 diff → 回傳 []。跳過測試檔與純注解行。
+    cwd=str(env.vault) 即可:git diff 無 pathspec 時範圍為全 repo,cwd 子目錄不縮小範圍。"""
+    import subprocess  # lazy import,與 L339/L2298 等先例一致
+    _SKIP_EXT = {".md", ".txt", ".rst"}
+    _TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
+
+    for cmd in (["git", "diff", "--staged"], ["git", "diff", "HEAD~1..HEAD"]):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+        except FileNotFoundError:
+            return []
+        if r.returncode != 0 or not r.stdout.strip():
+            continue
+        diff_text = r.stdout
+        break
+    else:
+        return []
+
+    cur_file = ""
+    hits = []
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/"):
+            cur_file = line[6:]
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if not line.startswith("+"):
+            continue
+        ext = Path(cur_file).suffix if cur_file else ""
+        if ext in _SKIP_EXT:
+            continue
+        if cur_file and _TEST_PAT.search(cur_file):
+            continue
+        code_line = line[1:].strip()
+        if code_line.startswith(("#", "//", "--", "/*", "*")):
+            continue
+        for pat in IRREVERSIBLE_HINT_PATTERNS:
+            if pat.search(code_line):
+                hits.append(f"{Path(cur_file).name}: {code_line[:80]}")
+                break
+    return hits[:8]
 
 
 def extract_reversibility(note):

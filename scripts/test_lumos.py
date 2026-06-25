@@ -1241,6 +1241,71 @@ def t_check_k():
     check("Check K F1: [test:a,b] 算 1 標記 → 仍提醒(免逗號繞過)", "happy-path" in run(v4, "doctor").stdout)
 
 
+def _mk_git_vault():
+    """temp git repo + docs/kg vault(子目錄)+ 一個初始 commit。回 (root, vault)。"""
+    import subprocess
+    root = Path(tempfile.mkdtemp(prefix="gctl-h-"))
+    for cmd in (["git", "init", "-q"], ["git", "config", "user.email", "t@t.t"],
+                ["git", "config", "user.name", "t"]):
+        subprocess.run(cmd, cwd=root, capture_output=True)
+    vault = root / "docs" / "kg"
+    (vault / "MOC").mkdir(parents=True)
+    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=root, capture_output=True)
+    return root, vault
+
+
+def t_check_h_irreversible_hint():
+    import subprocess
+    HEAD = "疑似碰外部不可逆"  # warn_soft head 的特徵詞
+
+    # 1. smoke:staged 含 prod requests.post → 提示
+    root, vault = _mk_git_vault()
+    (root / "charge.py").write_text('requests.post("https://prod.api.com/charge")\n', encoding="utf-8")
+    subprocess.run(["git", "add", "charge.py"], cwd=root, capture_output=True)
+    r = run(vault, "doctor", "--ci")
+    check("Check H smoke: staged prod requests.post → 提示", HEAD in r.stdout, r.stdout)
+
+    # 2. filter-test-file:test_ 檔含 sendmail → 不報
+    root, vault = _mk_git_vault()
+    (root / "test_email.py").write_text('sendmail("to@prod")\n', encoding="utf-8")
+    subprocess.run(["git", "add", "test_email.py"], cwd=root, capture_output=True)
+    r = run(vault, "doctor", "--ci")
+    check("Check H filter test-file: test_ 檔不報", HEAD not in r.stdout, r.stdout)
+
+    # 3. filter-comment:純注解行 → 不報
+    root, vault = _mk_git_vault()
+    (root / "x.py").write_text('# sendgrid.send(...)\n', encoding="utf-8")
+    subprocess.run(["git", "add", "x.py"], cwd=root, capture_output=True)
+    r = run(vault, "doctor", "--ci")
+    check("Check H filter comment: 純注解不報", HEAD not in r.stdout, r.stdout)
+
+    # 4. config-file:.yaml 含 prod.stripe → 報(SKIP_EXT 不排 .yaml)
+    root, vault = _mk_git_vault()
+    (root / "config.yaml").write_text('endpoint: https://prod.stripe.com\n', encoding="utf-8")
+    subprocess.run(["git", "add", "config.yaml"], cwd=root, capture_output=True)
+    r = run(vault, "doctor", "--ci")
+    check("Check H config: .yaml prod → 報", HEAD in r.stdout, r.stdout)
+
+    # 5. no-ci:--strict(無 --ci)→ 印互動略過語、不掃
+    root, vault = _mk_git_vault()
+    (root / "charge.py").write_text('requests.post("https://prod.api.com")\n', encoding="utf-8")
+    subprocess.run(["git", "add", "charge.py"], cwd=root, capture_output=True)
+    r = run(vault, "doctor", "--strict")
+    check("Check H no-ci: 互動模式略過", "互動模式略過" in r.stdout, r.stdout)
+
+    # 6. non-git:普通 vault(非 git repo)→ 靜默無疑似、不崩
+    v = mkvault()
+    r = run(v, "doctor", "--ci")
+    check("Check H non-git: 不崩 + 無疑似", HEAD not in r.stdout, r.stdout)
+
+    # 7. initial-commit:只有初始 commit、無新 staged → HEAD~1 rc≠0 → 無疑似
+    root, vault = _mk_git_vault()
+    r = run(vault, "doctor", "--ci")
+    check("Check H initial-commit: 無 parent diff → 無疑似", HEAD not in r.stdout, r.stdout)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
