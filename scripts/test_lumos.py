@@ -1455,6 +1455,20 @@ def t_link_or_copy_idempotent():
     check("dst 連到 src 內容(f.txt 可達)", (dst / "f.txt").exists(), "")
 
 
+def t_deinit_vendored_toolkit_constant():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "m", GRAPHCTL, loader=SourceFileLoader("m", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)  # __main__ guard → import 不跑 main
+    expected = ("scripts/lumos", "scripts/test_lumos.py",
+                "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
+                "scripts/fetch-notesmd.sh")
+    check("deinit: _VENDORED_TOOLKIT 5 檔且帶 scripts/ 前綴",
+          tuple(m._VENDORED_TOOLKIT) == expected, f"got {getattr(m,'_VENDORED_TOOLKIT',None)!r}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
