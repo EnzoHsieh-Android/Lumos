@@ -3003,16 +3003,31 @@ def cmd_install(force=False):
 
 
 def cmd_uninstall():
-    dst = Path.home() / ".local" / "bin" / "lumos"
-    if dst.is_symlink():
-        target = dst.resolve()
-        dst.unlink()
-        print(f"✓ 移除 symlink: {dst}(原指向 {target})")
-        return 0
-    if dst.exists():
-        print(f"⚠ {dst} 是一般檔案非 symlink,未動(手動處理)", file=sys.stderr)
-        return 2
-    print(f"✓ 未安裝({dst} 不存在)")
+    """對稱移除 cmd_install 裝的東西:全域指令(Unix symlink / Win lumos.cmd)+ user-scope skills。"""
+    import os, shutil
+    removed = []
+    bindir = Path.home() / ".local" / "bin"
+    for name in ("lumos.cmd", "lumos"):          # Win shim + Unix symlink
+        g = bindir / name
+        if g.is_symlink():
+            removed.append(f"{g}(symlink → {g.resolve()})"); g.unlink()
+        elif g.exists():
+            removed.append(str(g)); g.unlink()
+    sk = Path.home() / ".claude" / "skills"      # 對稱 _install_skills:junction/symlink/複製夾都清
+    for s in _SKILLS:
+        d = sk / s
+        if d.is_symlink():
+            d.unlink(); removed.append(str(d))
+        elif d.is_dir():
+            try:
+                os.rmdir(d)                       # junction/空夾:只移連結本身,不跟進 target(同 W4)
+            except OSError:
+                shutil.rmtree(d, ignore_errors=True)
+            removed.append(str(d))
+    if removed:
+        print("✓ 移除:\n  " + "\n  ".join(removed))
+    else:
+        print("✓ 未安裝(無全域 lumos / skills)")
     return 0
 
 
@@ -3231,7 +3246,7 @@ def _slugify_vault(name: str):
 
 
 def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
-    """在當前 repo 初始化知識圖譜:建 docs/<slug>-knowledge/{5 個資料夾} + .gitignore,
+    """在當前 repo 初始化知識圖譜:建 docs/<slug>-knowledge/{6 個資料夾} + .gitignore,
     預設並 vendor 工具組 + 裝 pre-commit/pre-push 閘(--no-hooks 只建圖譜輕量版)。
     像 `openspec init`:一行開好就能 `lumos new`。
     分工:init = 專案層(圖譜 + 該 repo 的 hooks);bootstrap = 機器層(clone Lumos/skills/全域 lumos),一輩子一次。"""
@@ -3247,7 +3262,7 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
     existing = _vault_in(root)
     if existing is not None and not force:
         print(f"✓ 此 repo 已有 vault: {existing.relative_to(root)}")
-        print("  (要另建用 --name <slug>;要在既有 vault 上補齊缺的資料夾/hooks 用 --force)")
+        print("  (要另建用 --name <slug>;要在既有 vault 上重裝/更新 hooks 與工具組用 --force,vault 內容不動)")
         return 0
 
     print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
@@ -3457,7 +3472,7 @@ def main():
     p.add_argument("--pull", action="store_true", help="既有 Lumos clone 也 git pull 拉最新(預設沿用)")
     p = sub.add_parser("init", help="在當前 repo 初始化圖譜(建資料夾+.gitignore,預設並裝 pre-commit/pre-push 閘)")
     p.add_argument("--name", help="vault slug(預設 = repo 資料夾名小寫)")
-    p.add_argument("--force", action="store_true", help="既有 vault 也補齊缺的資料夾/hooks")
+    p.add_argument("--force", action="store_true", help="既有 vault 也重裝/更新 hooks 與工具組(vault 內容不動)")
     p.add_argument("--no-hooks", action="store_true", help="只建圖譜,不 vendor 工具/不裝 hooks(輕量版)")
     p.add_argument("--no-pull", action="store_true", help="vendor 工具時不 git pull 來源")
 
