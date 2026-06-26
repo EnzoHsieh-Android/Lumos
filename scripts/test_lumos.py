@@ -96,6 +96,17 @@ def t_install_skills_unix():
     check("skills: ~/.claude/skills/lumos-project-notes 連結存在", dst.exists(), r.stderr)
 
 
+def t_install_includes_skills():
+    if sys.platform == "win32":
+        check("install+skills: Windows 留 Task 7 手動驗", True); return
+    import subprocess
+    subprocess.run([sys.executable, GRAPHCTL, "install", "--force"], capture_output=True, text=True)
+    g = Path.home() / ".local" / "bin" / "lumos"
+    sk = Path.home() / ".claude" / "skills" / "lumos-design-loop"
+    check("install: 全域 lumos 在", g.exists(), "")
+    check("install: 連帶 skills 也在", sk.exists(), "")
+
+
 def t_install_hooks_py():
     """hermetic:temp root + git init + temp HOME,只斷言 core.hooksPath。
     完整 settings 斷言留 Task 3。"""
