@@ -66,7 +66,7 @@ cd ~/harness/lumos-toolchain
 
 - **更新 = `git pull`**,symlink 即時生效,不必重裝。
 - 不想 symlink → `./install.sh --copy`(但更新要再跑一次)。
-- 移除 → `./install.sh --uninstall`。
+- 移除 → `./install.sh --uninstall`(機器層)。
 
 ## Step ② 每個專案(每 clone 一個 repo 做一次):hooks
 
@@ -88,6 +88,15 @@ scripts/install-hooks.sh --force
 python3 scripts/lumos install     # ~/.local/bin/lumos
 ```
 之後任何專案目錄直接 `lumos doctor`,不必打 `python3 scripts/lumos`。不裝也行。
+
+---
+
+## 卸載(移除)
+
+Lumos 分兩層卸載:
+
+- **專案層** —— `cd <你的專案> && lumos deinit` 移除該 repo 的 hooks/工具組/CLAUDE.md 區塊/圖譜(見 README「卸載」段)
+- **機器層** —— `lumos uninstall` 移除全域 `~/.local/bin/lumos`;移除 user-scope skills 用 `cd ~/harness/lumos-toolchain && ./install.sh --uninstall`(或 `rm -rf ~/harness/lumos-toolchain`)
 
 ---
 

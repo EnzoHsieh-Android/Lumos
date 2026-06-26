@@ -192,6 +192,23 @@ lumos bootstrap [--pull]                            # one-shot full setup
 lumos archive [--days N] [--apply]                 # roll old passed Verifications into Archive/ (live guards protected)
 ```
 
+### Uninstalling
+
+Lumos installs in two layers, with one command each:
+
+- **Project layer** (this repo's hooks / vendored toolkit / CLAUDE.md injection / graph), run inside the project:
+  ```bash
+  lumos deinit              # full reverse of init: unbar gate + remove toolkit + strip CLAUDE.md block + delete graph (interactive confirm)
+  lumos deinit --keep-graph     # keep the graph, remove everything else
+  lumos deinit --dry-run        # preview only, change nothing
+  lumos deinit -y               # skip interactive confirm (for CI / non-interactive environments)
+  lumos deinit --source <path>  # specify Lumos source (for self-protection validation)
+  ```
+  deinit never auto-commits and never touches machine-shared items; if it detects a standalone vault (graph == repo root) it force-keeps the graph to avoid deleting the whole repo.
+- **Machine layer** (global `~/.local/bin/lumos`, user-scope skills): `lumos uninstall`.
+
+> Full removal = run `lumos deinit` in each project, then `lumos uninstall` + optionally `rm -rf ~/harness/lumos-toolchain`.
+
 Run `lumos --help` for the authoritative, current list.
 
 ---

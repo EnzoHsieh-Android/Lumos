@@ -221,6 +221,23 @@ lumos bootstrap [--pull]                           # 一鍵全套
 lumos archive [--days N] [--apply]                 # 滾動歸檔老的 pass Verification(活守衛受保護)
 ```
 
+### 卸載
+
+Lumos 是兩層安裝,對應兩個指令:
+
+- **專案層**(本 repo 的 hooks/工具組/CLAUDE.md 注入/圖譜):在專案內跑
+  ```bash
+  lumos deinit              # 完整逆轉 init:拆閘 + 移工具組 + 剝 CLAUDE.md 區塊 + 刪圖譜(互動確認)
+  lumos deinit --keep-graph     # 保留圖譜,只拆其餘
+  lumos deinit --dry-run        # 只預演,不改動
+  lumos deinit -y               # 跳過互動確認(CI/非互動環境用)
+  lumos deinit --source <path>  # 指定 Lumos 來源(自我保護比對用)
+  ```
+  deinit 不自動 commit、不碰機器共用項;偵測到 standalone vault(圖譜=repo 根)會自動保留圖譜以防誤刪整個 repo。
+- **機器層**(全域 `~/.local/bin/lumos`、user-scope skills):`lumos uninstall`。
+
+> 完整卸載 = 在每個專案跑 `lumos deinit`,最後 `lumos uninstall` + 視需要 `rm -rf ~/harness/lumos-toolchain`。
+
 權威清單以 `lumos --help` 為準。
 
 ---

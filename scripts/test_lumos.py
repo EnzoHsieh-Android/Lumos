@@ -1455,6 +1455,293 @@ def t_link_or_copy_idempotent():
     check("dst 連到 src 內容(f.txt 可達)", (dst / "f.txt").exists(), "")
 
 
+def t_deinit_vendored_toolkit_constant():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "m", GRAPHCTL, loader=SourceFileLoader("m", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)  # __main__ guard → import 不跑 main
+    expected = ("scripts/lumos", "scripts/test_lumos.py",
+                "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
+                "scripts/fetch-notesmd.sh")
+    check("deinit: _VENDORED_TOOLKIT 5 檔且帶 scripts/ 前綴",
+          tuple(m._VENDORED_TOOLKIT) == expected, f"got {getattr(m,'_VENDORED_TOOLKIT',None)!r}")
+
+
+def _load_lumos():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "m", GRAPHCTL, loader=SourceFileLoader("m", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def t_deinit_unbar_gate():
+    import subprocess
+    from pathlib import Path
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-unbar-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+    rc1 = m._deinit_unbar_gate(root)
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit unbar: core.hooksPath 已 unset", hp.stdout.strip() == "", f"got {hp.stdout!r}")
+    check("deinit unbar: rc 0 視為成功", rc1 == 0, f"rc={rc1}")
+    rc2 = m._deinit_unbar_gate(root)   # 再 unset 一次 → key 已不存在
+    check("deinit unbar: 重複 unset rc5 不崩潰", rc2 in (0, 5), f"rc={rc2}")
+
+
+def t_deinit_strip_claude():
+    from pathlib import Path
+    m = _load_lumos()
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改本區塊;"
+             "改範本 scripts/templates/graph-discipline.md -->")
+    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+
+    # case A: 有自有段落 + 注入區塊 → 剝區塊、留自有段落、留檔
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-cm-a-"))
+    (root / "CLAUDE.md").write_bytes(
+        ("# CLAUDE.md\n\n我的專案規則。\n\n" + START + "\n圖譜紀律內文\n" + END + "\n").encode("utf-8"))
+    stripped = m._deinit_strip_claude(root)
+    txt = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    check("deinit claude A: 回 True", stripped is True, f"got {stripped}")
+    check("deinit claude A: 自有段落保留", "我的專案規則。" in txt, txt)
+    check("deinit claude A: 區塊已消失", "GRAPH-DISCIPLINE" not in txt, txt)
+    check("deinit claude A: 檔仍在", (root / "CLAUDE.md").exists(), "")
+
+    # case B: 無 START 標記 → no-op、回 False、內容不變
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-cm-b-"))
+    (root / "CLAUDE.md").write_bytes("# CLAUDE.md\n\n只有我的內容\n".encode("utf-8"))
+    before = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    res = m._deinit_strip_claude(root)
+    check("deinit claude B: no-op 回 False", res is False, f"got {res}")
+    check("deinit claude B: 內容不變", (root / "CLAUDE.md").read_text(encoding="utf-8") == before, "")
+
+    # case C: CLAUDE.md 不存在 → no-op、回 False、不報錯
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-cm-c-"))
+    res = m._deinit_strip_claude(root)
+    check("deinit claude C: 無檔 no-op 回 False", res is False, f"got {res}")
+    check("deinit claude C: 仍無 CLAUDE.md", not (root / "CLAUDE.md").exists(), "")
+
+    # case D: END 在 START 之前(corrupt)→ no-op、回 False、內容不變
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-cm-d-"))
+    (root / "CLAUDE.md").write_bytes(("# CLAUDE.md\n" + END + "\n中間\n" + START + "\n").encode("utf-8"))
+    before = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    res = m._deinit_strip_claude(root)
+    check("deinit claude D: END 在 START 前 no-op 回 False", res is False, f"got {res}")
+    check("deinit claude D: 內容不變", (root / "CLAUDE.md").read_text(encoding="utf-8") == before, "")
+
+
+def t_deinit_remove_vendored():
+    from pathlib import Path
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-rm-"))
+    sc = root / "scripts"
+    (sc / "hooks").mkdir(parents=True)
+    (sc / "templates").mkdir(parents=True)
+    (sc / "hooks" / "pre-commit").write_text("#!/bin/sh\n")
+    (sc / "templates" / "graph-discipline.md").write_text("tpl\n")
+    for rel in ("scripts/lumos", "scripts/test_lumos.py", "scripts/merge-claude-settings.py",
+                "scripts/graph-rename.sh", "scripts/fetch-notesmd.sh"):
+        (root / rel).write_text("x\n")
+    (sc / "my_own_helper.py").write_text("mine\n")   # 使用者自有檔
+
+    removed = m._deinit_remove_vendored(root)
+
+    check("deinit rm: scripts/lumos 已移", not (sc / "lumos").exists(), "")
+    check("deinit rm: scripts/hooks/ 整夾移除", not (sc / "hooks").exists(), "")
+    check("deinit rm: scripts/templates/ 整夾移除", not (sc / "templates").exists(), "")
+    check("deinit rm: 使用者自有檔保留", (sc / "my_own_helper.py").exists(), "")
+    check("deinit rm: scripts/ 非空故保留", sc.is_dir(), "")
+    check("deinit rm: 回傳列表含 scripts/lumos", "scripts/lumos" in removed, f"{removed}")
+
+    # 第二個 repo:scripts/ 只剩 Lumos-owned → 清空後應 rmdir
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-deinit-rm2-"))
+    (root2 / "scripts").mkdir()
+    (root2 / "scripts" / "lumos").write_text("x\n")
+    m._deinit_remove_vendored(root2)
+    check("deinit rm: scripts/ 清空後 rmdir", not (root2 / "scripts").exists(), "")
+
+
+def t_deinit_detect_installed():
+    import subprocess
+    from pathlib import Path
+    m = _load_lumos()
+
+    # 無安裝痕跡 → False
+    bare = Path(tempfile.mkdtemp(prefix="gctl-deinit-det0-"))
+    subprocess.run(["git", "-C", str(bare), "init"], capture_output=True, text=True)
+    check("deinit detect: 空 repo False", m._deinit_detect_installed(bare) is False, "")
+
+    # core.hooksPath 有值 → True
+    h = Path(tempfile.mkdtemp(prefix="gctl-deinit-det1-"))
+    subprocess.run(["git", "-C", str(h), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(h), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+    check("deinit detect: hooksPath 有值 True", m._deinit_detect_installed(h) is True, "")
+
+    # scripts/hooks/ 存在 → True
+    s = Path(tempfile.mkdtemp(prefix="gctl-deinit-det2-"))
+    subprocess.run(["git", "-C", str(s), "init"], capture_output=True, text=True)
+    (s / "scripts" / "hooks").mkdir(parents=True)
+    check("deinit detect: scripts/hooks 存在 True", m._deinit_detect_installed(s) is True, "")
+
+    # _claude_block_present
+    c = Path(tempfile.mkdtemp(prefix="gctl-deinit-det3-"))
+    (c / "CLAUDE.md").write_text("# CLAUDE.md\n<!-- LUMOS:GRAPH-DISCIPLINE:START x -->\n", encoding="utf-8")
+    check("deinit detect: claude 區塊在 True", m._claude_block_present(c) is True, "")
+    check("deinit detect: 無 claude False",
+          m._claude_block_present(Path(tempfile.mkdtemp(prefix="gctl-deinit-det4-"))) is False, "")
+
+
+def _mk_installed_project(prefix="gctl-deinit-proj-", with_vault=True, slug="demo"):
+    """造一個已裝 Lumos 專案層的 hermetic repo(不跑 init/update,純手工)。回傳 root。"""
+    import subprocess
+    from pathlib import Path
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+    sc = root / "scripts"
+    (sc / "hooks").mkdir(parents=True)
+    (sc / "templates").mkdir(parents=True)
+    (sc / "hooks" / "pre-commit").write_text("#!/bin/sh\nexit 0\n")
+    (sc / "templates" / "graph-discipline.md").write_text("tpl\n")
+    for rel in ("scripts/lumos", "scripts/test_lumos.py", "scripts/merge-claude-settings.py",
+                "scripts/graph-rename.sh", "scripts/fetch-notesmd.sh"):
+        (root / rel).write_text("x\n")
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改本區塊;"
+             "改範本 scripts/templates/graph-discipline.md -->")
+    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    (root / "CLAUDE.md").write_bytes(
+        ("# CLAUDE.md\n\n我的規則\n\n" + START + "\n紀律\n" + END + "\n").encode("utf-8"))
+    if with_vault:
+        kg = root / "docs" / f"{slug}-knowledge"
+        (kg / "MOC").mkdir(parents=True)
+        (kg / "Systems").mkdir(parents=True)
+        (kg / "MOC" / "index.md").write_text("# idx\n")
+        (kg / "Systems" / "S.md").write_text("# S\n")
+    return root
+
+def _deinit_run(root, *args, stdin_data=None):
+    """從 root 跑 lumos deinit(cwd=root,git toplevel 即 root)。"""
+    import subprocess, os
+    fake = tempfile.mkdtemp(prefix="gctl-deinit-home-")
+    return subprocess.run([sys.executable, GRAPHCTL, "deinit", *args],
+                          cwd=str(root), input=stdin_data,
+                          env=dict(os.environ, HOME=fake, USERPROFILE=fake),
+                          capture_output=True, text=True)
+
+def t_deinit_cmd_basic():
+    from pathlib import Path
+    # 整體(graph 在 Task 7 才刪;此處 --keep-graph 行為驗非破壞動作)
+    root = _mk_installed_project()
+    r = _deinit_run(root, "--keep-graph", "--yes")
+    check("deinit cmd: rc 0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    import subprocess
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit cmd: core.hooksPath 已 unset", hp.stdout.strip() == "", f"{hp.stdout!r}")
+    check("deinit cmd: scripts/hooks/ 已移", not (root / "scripts" / "hooks").exists(), "")
+    check("deinit cmd: scripts/lumos 已移", not (root / "scripts" / "lumos").exists(), "")
+    cm = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    check("deinit cmd: claude 自有段落留", "我的規則" in cm, cm)
+    check("deinit cmd: claude 區塊剝", "GRAPH-DISCIPLINE" not in cm, cm)
+
+    # case 5 白名單:使用者自有檔保留
+    root = _mk_installed_project(prefix="gctl-deinit-white-")
+    (root / "scripts" / "mine.py").write_text("mine\n")
+    _deinit_run(root, "--keep-graph", "--yes")
+    check("deinit cmd: 使用者自有 scripts/mine.py 保留", (root / "scripts" / "mine.py").exists(), "")
+
+    # case 7 來源自我保護:--source 指到 root 本身 → 拒絕 + rc2 + 無副作用
+    root = _mk_installed_project(prefix="gctl-deinit-src-")
+    r = _deinit_run(root, "--keep-graph", "--yes", "--source", str(root))
+    check("deinit cmd: 來源自我保護 rc2", r.returncode == 2, f"{r.returncode} {r.stdout} {r.stderr}")
+    check("deinit cmd: 自我保護下 scripts/lumos 未動", (root / "scripts" / "lumos").exists(), "")
+
+    # case 4 冪等:乾淨 repo → rc0 + 印未安裝
+    bare = Path(tempfile.mkdtemp(prefix="gctl-deinit-bare-"))
+    subprocess.run(["git", "-C", str(bare), "init"], capture_output=True, text=True)
+    r = _deinit_run(bare, "--yes")
+    check("deinit cmd: 冪等 rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    check("deinit cmd: 冪等印未安裝", "未安裝" in r.stdout, r.stdout)
+
+
+def t_deinit_graph():
+    import subprocess, os
+    from pathlib import Path
+
+    # case 1 完整 deinit:default(--yes)→ vault 不存在 + 其餘皆拆
+    root = _mk_installed_project(prefix="gctl-deinit-g1-")
+    r = _deinit_run(root, "--yes")
+    check("deinit graph1: rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    check("deinit graph1: vault 已刪", not (root / "docs" / "demo-knowledge").exists(), "")
+    check("deinit graph1: scripts/lumos 已移", not (root / "scripts" / "lumos").exists(), "")
+
+    # case 2 --keep-graph:vault 仍在
+    root = _mk_installed_project(prefix="gctl-deinit-g2-")
+    _deinit_run(root, "--keep-graph", "--yes")
+    check("deinit graph2: --keep-graph 保留 vault", (root / "docs" / "demo-knowledge").is_dir(), "")
+
+    # case 8 --dry-run:vault + config + 檔案全不動
+    root = _mk_installed_project(prefix="gctl-deinit-g8-")
+    r = _deinit_run(root, "--dry-run")
+    check("deinit graph8: dry-run rc0", r.returncode == 0, f"{r.returncode}")
+    check("deinit graph8: dry-run vault 仍在", (root / "docs" / "demo-knowledge").is_dir(), "")
+    check("deinit graph8: dry-run scripts/lumos 仍在", (root / "scripts" / "lumos").exists(), "")
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit graph8: dry-run hooksPath 未動", hp.stdout.strip() == "scripts/hooks", f"{hp.stdout!r}")
+
+    # case 9 非互動防呆:預設(無 --yes)+ 非 tty → 拒絕刪 + rc2 + vault 仍在
+    root = _mk_installed_project(prefix="gctl-deinit-g9-")
+    r = _deinit_run(root)   # subprocess capture → stdin 非 tty
+    check("deinit graph9: 非互動無 --yes rc2", r.returncode == 2, f"{r.returncode} {r.stdout} {r.stderr}")
+    check("deinit graph9: vault 未刪", (root / "docs" / "demo-knowledge").is_dir(), "")
+
+    # case 10 vault==root 鐵閘:standalone vault repo(非 _lumos_src)→ 絕不 rmtree
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-g10-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+    (root / "MOC").mkdir(); (root / "Systems").mkdir()
+    (root / "MOC" / "index.md").write_text("# idx\n")
+    (root / "important_note.md").write_text("不可刪\n")
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改本區塊;"
+             "改範本 scripts/templates/graph-discipline.md -->")
+    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    (root / "CLAUDE.md").write_bytes(("# CLAUDE.md\n\n" + START + "\nx\n" + END + "\n").encode("utf-8"))
+    r = _deinit_run(root, "--yes")
+    check("deinit graph10: 鐵閘 rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    check("deinit graph10: 印 standalone vault 警示", "standalone vault" in r.stderr, r.stderr)
+    check("deinit graph10: repo 根仍在(絕無 rmtree)", (root / "important_note.md").exists(), "")
+    check("deinit graph10: MOC/ 圖譜仍在", (root / "MOC" / "index.md").exists(), "")
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit graph10: 其餘動作仍執行(hooksPath unset)", hp.stdout.strip() == "", f"{hp.stdout!r}")
+    cm = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    check("deinit graph10: 其餘動作仍執行(claude 區塊剝)", "GRAPH-DISCIPLINE" not in cm, cm)
+
+    # case 3 拆閘有效:deinit 後 commit「改 code 不動圖譜」不被擋
+    root = _mk_installed_project(prefix="gctl-deinit-g3-")
+    _deinit_run(root, "--keep-graph", "--yes")
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit graph3: core.hooksPath 空", hp.stdout.strip() == "", f"{hp.stdout!r}")
+    check("deinit graph3: scripts/hooks/ 不存在", not (root / "scripts" / "hooks").exists(), "")
+    (root / "code.py").write_text("print(1)\n")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True, text=True)
+    cr = subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t",
+                         "commit", "-m", "change code only"], capture_output=True, text=True)
+    check("deinit graph3: commit 不被擋(rc0)", cr.returncode == 0, f"{cr.returncode} {cr.stdout} {cr.stderr}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
