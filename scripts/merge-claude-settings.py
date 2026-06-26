@@ -6,10 +6,19 @@
 """
 from __future__ import annotations
 import json
+import re
+import shutil
 import sys
 from pathlib import Path
 
 SETTINGS = Path.home() / ".claude" / "settings.json"
+
+_PY = shutil.which("python3") or shutil.which("python") or "python3"
+
+
+def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
+    return f'{_PY} "${{HOME}}/.claude/hooks/{rel_path}"'
+
 
 HOOK_ENTRIES = {
     "PostToolUse": [
@@ -18,7 +27,7 @@ HOOK_ENTRIES = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "${HOME}/.claude/hooks/verification-rot-check.py",
+                    "command": _hook_cmd("verification-rot-check.py"),
                     "timeout": 60,
                 }
             ],
@@ -29,7 +38,7 @@ HOOK_ENTRIES = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "${HOME}/.claude/hooks/check-graph-sync.py",
+                    "command": _hook_cmd("check-graph-sync.py"),
                     "timeout": 10,
                 }
             ]
@@ -38,14 +47,20 @@ HOOK_ENTRIES = {
 }
 
 
+def _hook_script(cmd: str):
+    m = re.search(r"([\w.-]+\.py)", cmd or "")
+    return m.group(1) if m else cmd
+
+
 def _equivalent(a: dict, b: dict) -> bool:
     """同一個 hook entry 認定為已存在 (避免重複註冊)。
-    比對:matcher (PostToolUse 需要) + 內層 hooks[].command"""
+    比對:matcher (PostToolUse 需要) + 內層 hook 腳本檔名
+    (認出舊裸路徑 == 新 `python …/xxx.py` 為同一 hook)。"""
     if a.get("matcher") != b.get("matcher"):
         return False
-    a_cmds = sorted(h.get("command", "") for h in a.get("hooks", []))
-    b_cmds = sorted(h.get("command", "") for h in b.get("hooks", []))
-    return a_cmds == b_cmds
+    a_s = sorted(_hook_script(h.get("command", "")) for h in a.get("hooks", []))
+    b_s = sorted(_hook_script(h.get("command", "")) for h in b.get("hooks", []))
+    return a_s == b_s
 
 
 def main() -> int:
@@ -64,8 +79,14 @@ def main() -> int:
     for event, entries_to_add in HOOK_ENTRIES.items():
         existing = settings["hooks"].setdefault(event, [])
         for new_entry in entries_to_add:
-            if any(_equivalent(new_entry, e) for e in existing):
-                print(f"  [skip] {event} hook already registered")
+            match_idx = next((i for i, e in enumerate(existing) if _equivalent(new_entry, e)), None)
+            if match_idx is not None:
+                if existing[match_idx] != new_entry:
+                    existing[match_idx] = new_entry  # 遷移:取代成 resolved-python 格式
+                    print(f"  [migrate] {event} hook → resolved-python")
+                    changed = True
+                else:
+                    print(f"  [skip] {event} hook already current")
                 continue
             existing.append(new_entry)
             print(f"  [add ] {event} hook")

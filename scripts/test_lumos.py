@@ -1384,6 +1384,25 @@ def t_check_h_irreversible_hint():
     check("Check H initial-commit: 無 parent diff → 無疑似", HEAD not in r.stdout, r.stdout)
 
 
+def t_merge_settings_dedupe():
+    import subprocess, json, os
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-settings-"))
+    fake_home = tmp
+    settings = fake_home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    # 既有:舊裸路徑格式
+    settings.write_text(json.dumps({"hooks": {"Stop": [
+        {"hooks": [{"type": "command", "command": "${HOME}/.claude/hooks/check-graph-sync.py", "timeout": 10}]}
+    ]}}), encoding="utf-8")
+    env = dict(os.environ, HOME=str(fake_home), USERPROFILE=str(fake_home))
+    merge = str(Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py")
+    subprocess.run([sys.executable, merge], env=env, capture_output=True, text=True)
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    stop = data["hooks"]["Stop"]
+    cmds = [h["command"] for e in stop for h in e["hooks"] if "check-graph-sync" in h["command"]]
+    check("merge: check-graph-sync 同 hook 只一筆(去重遷移)", len(cmds) == 1, f"got {len(cmds)}: {cmds}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
