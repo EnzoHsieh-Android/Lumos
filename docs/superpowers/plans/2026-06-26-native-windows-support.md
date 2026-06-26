@@ -650,9 +650,9 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 - [ ] **W6 — hook command 反斜線被 Git Bash 吃掉**(W3 修後、marker 探針揭露;claude-code-guide 確認):**Claude Code 在 Windows 用 Git Bash 跑 hook command**,W3 只正斜線化了 home、`_PY`(shutil.which 回 `C:\…\python.EXE`)仍是反斜線 → Git Bash 把 `C:\Users` 吃成 `C:Users` → python 找不到 → hook 靜默失敗(先前在 PowerShell 手動驗 W3「成功」是假象,Claude Code 不用 PowerShell)。修:`_hook_cmd` 在 win32 把 `_PY` 也 `.replace("\\","/")` + 引號。測:`t_hook_cmd_home_resolved` 改 monkeypatch `_PY="C:\\…"` 斷言輸出無反斜線(stale PATH 下 _PY 退化成 python3 測不到,故 monkeypatch)。真機重生 settings = `"C:/…/python.EXE" "C:/…/x.py"`。
 
-- [ ] **W5(觀察,非 lumos 可修)— remote-control session 可能不觸發 hooks**:本輪在 `/remote-control` session 用 marker 探針測,即使 W6 修完格式,PostToolUse 仍未觸發 → 疑 remote-control/server-mode 不跑 user hooks(claude-code-guide:高機率,GitHub #15441/#27398 類似)。**L1 真觸發須在「本地互動 `claude` session(非 remote-control)」驗**;可用 `/hooks`(看載入)+ `claude --debug-file`(看執行紀錄)。
+- [x] **W5(已否證 — 假議題,真因是 W6)**:我一度懷疑「remote-control session 不觸發 hooks」,但那次失敗測試**同時混了兩個變數**(remote-control + W6 反斜線格式),沒隔離。使用者指出「Mac 的 remote-control 會跑 hook」→ remote-control 不該是兇手。隨後做**單變數隔離**(同一 session、hooks 已載入、只切 remote-control 開關、W6 已修):remote-control 模式下 marker **照樣出現** → **remote-control 不抑制 hook 執行,真因從頭到尾只有 W6**。教訓:歸因前先隔離變數,別一次改兩個。
 
-- [ ] **驗收**:`python scripts/test_lumos.py` 全綠(200);真機 `lumos install` 連跑兩次乾淨 + 來源完好;settings hook command = `"<正斜線絕對 python>" "<正斜線絕對 home>/.claude/hooks/…"`(無反斜線、無 `${HOME}`)。**剩 Step 7 L1 實際觸發**:在**本地互動 session**(非 remote-control)改 code、看 L1 軟提醒;沒通則查 remote-control/Claude Code Windows hook 機制,再折。
+- [x] **驗收(全通)**:`python scripts/test_lumos.py` 全綠(200);真機 `lumos install` 連跑兩次乾淨 + 來源完好;settings hook command = `"<正斜線絕對 python>" "<正斜線絕對 home>/.claude/hooks/…"`(無反斜線、無 `${HOME}`)。**Step 7 L1/L3 實際觸發已坐實**:marker 探針確認 PostToolUse(L3)+ Stop(L1)兩個 hook 在 native Windows **本地與 remote-control 模式都觸發**(W6 修後)。Task 7 七步全閉合。
 
 - [ ] **Commit**:`git add scripts/lumos scripts/merge-claude-settings.py scripts/test_lumos.py docs/` + message:
 ```
