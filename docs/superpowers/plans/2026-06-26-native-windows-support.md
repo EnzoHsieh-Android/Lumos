@@ -633,6 +633,32 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
+### Task 8:Task 7 真機 findings 折真(W2/W3/W4)
+
+**來源**:Task 7 跑完,6/7 步過,揪出 3 個 Mac 紙審 3 輪 + 跨平台單元測都摸不到的真機缺陷(OS 物理 / shell 語義邊界)。設計全文見 `docs/design/2026-06-26-native-windows-support.md` 第二筆真機回報。
+
+**Files:**
+- Modify: `scripts/lumos`(`_link_or_copy`:W2 解碼 + W4 junction 安全清理)
+- Modify: `scripts/merge-claude-settings.py`(`_hook_cmd`:W3 home 前綴)
+- Test: `scripts/test_lumos.py`(`t_hook_cmd_home_resolved`、`t_link_or_copy_idempotent`)
+
+- [ ] **W2 — mklink 解碼炸**:`_link_or_copy` 的 `subprocess.run(["cmd","/c","mklink","/J",...], capture_output=True, text=True)` 在繁中 Windows 對 cp950 的 mklink 輸出用 UTF-8 解碼 → reader thread `UnicodeDecodeError`。修:加 `encoding="utf-8", errors="replace"`。(難跨平台單元測;靠真機重跑 install 無 traceback 驗。)
+
+- [ ] **W4 — `_link_or_copy` 不冪等 + junction 清理危險**(W2 修後揭露的 pre-existing):Windows junction 不被 `Path.is_symlink()` 認出 → 舊 `shutil.rmtree(dst)` 會跟進 junction **刪來源 target**;且重跑 junction 殘留 → mklink「已存在」→ fallback copytree 炸 → install 重跑就壞。修:`is_symlink→unlink`、`is_dir→os.rmdir(只移連結/空夾,不碰 target);非空夾才 rmtree`。測:`t_link_or_copy_idempotent`(連呼叫兩次不炸 + 來源 f.txt 還在 + dst 可達)。真機連跑兩次 install 驗冪等。
+
+- [ ] **W3 — hook command `${HOME}` native Windows 不展開**:Task 3 只 resolve 直譯器,路徑前綴仍 `${HOME}`,cmd/PowerShell 不展開 → L1/L3 靜默不觸發。修:`merge-claude-settings.py` 加 `_HOME = str(Path.home()).replace("\\","/")`,`_hook_cmd` 在 `sys.platform=="win32"` 用 `_HOME`、否則 `${HOME}`(Unix 可攜不變)。測:`t_hook_cmd_home_resolved`(win32 斷言無 `${HOME}`、Unix 斷言有)。真機重跑 merge 遷移成絕對 home。
+
+- [ ] **驗收**:`python scripts/test_lumos.py` 全綠(200);真機 `lumos install` 連跑兩次乾淨 + 來源完好;settings hook command = `<絕對 python> "<絕對 home>/.claude/hooks/…"`。**剩 Step 7 L1 實際觸發**:重啟 Claude Code session、改 code、看 L1 軟提醒(W3 修後應通);沒通則回報、再折。
+
+- [ ] **Commit**:`git add scripts/lumos scripts/merge-claude-settings.py scripts/test_lumos.py docs/` + message:
+```
+fix(win): Task 7 真機 findings W2/W3/W4(mklink 解碼 + junction 冪等安全 + hook ${HOME} 解析)
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+```
+
+---
+
 ## 驗證總結
 
 - **跨平台單元測**(任何 OS):`python3 scripts/test_lumos.py` 全綠(scaffold 6 夾、install+skills、merge 去重、hooks fallback、既有回歸)。

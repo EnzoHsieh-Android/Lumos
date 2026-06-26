@@ -3094,17 +3094,26 @@ _SKILLS = ("lumos-project-notes", "lumos-core-knowledge", "lumos-design-loop")  
 
 def _link_or_copy(src: Path, dst: Path):
     """src→dst:Unix symlink、Win 目錄 junction、失敗 fallback 複製。src 須為目錄。"""
-    import shutil, subprocess
-    if dst.is_symlink() or dst.exists():
-        if dst.is_dir() and not dst.is_symlink():
-            shutil.rmtree(dst, ignore_errors=True)
-        else:
-            dst.unlink()
+    import os, shutil, subprocess
+    # W4:Windows junction 不被 is_symlink() 認出。舊碼 rmtree(dst) 會「跟進」junction 刪掉
+    # 來源 target;且重跑時 junction 殘留 → mklink 報已存在 → 不冪等。改:junction/空夾用
+    # os.rmdir(只移連結本身、不碰 target),真實非空夾才 rmtree。
+    if dst.is_symlink():
+        dst.unlink()                                  # Unix symlink
+    elif dst.is_dir():
+        try:
+            os.rmdir(dst)                             # junction 或空夾:只移連結/夾,不跟進 target
+        except OSError:
+            shutil.rmtree(dst, ignore_errors=True)    # 真實非空夾(上次 fallback 複製過)
+    elif dst.exists():
+        dst.unlink()
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
         if _IS_WIN:
+            # W2:mklink 輸出走 OEM 碼頁(繁中=cp950),text=True 預設 UTF-8 解碼會在
+            # reader thread 炸 UnicodeDecodeError。errors="replace" 防炸,returncode 仍可靠。
             r = subprocess.run(["cmd", "/c", "mklink", "/J", str(dst), str(src)],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace")
             if r.returncode != 0:
                 raise OSError(r.stderr)
         else:

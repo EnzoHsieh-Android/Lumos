@@ -14,10 +14,14 @@ from pathlib import Path
 SETTINGS = Path.home() / ".claude" / "settings.json"
 
 _PY = shutil.which("python3") or shutil.which("python") or "python3"
+# W3:${HOME} 只有 POSIX shell 展開;native Windows(Claude Code 經 cmd/PowerShell 跑 hook)
+# 不展開 → hook 路徑變字面 ${HOME} → L1/L3 靜默不觸發。Windows 用解析後的絕對 home。
+_HOME = str(Path.home()).replace("\\", "/")
 
 
 def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
-    return f'{_PY} "${{HOME}}/.claude/hooks/{rel_path}"'
+    home = _HOME if sys.platform == "win32" else "${HOME}"  # Unix 保留 ${HOME}(可攜、Mac 已驗)
+    return f'{_PY} "{home}/.claude/hooks/{rel_path}"'
 
 
 HOOK_ENTRIES = {

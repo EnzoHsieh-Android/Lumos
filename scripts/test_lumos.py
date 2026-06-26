@@ -1412,6 +1412,43 @@ def t_merge_settings_dedupe():
     check("merge: check-graph-sync 同 hook 只一筆(去重遷移)", len(cmds) == 1, f"got {len(cmds)}: {cmds}")
 
 
+def t_hook_cmd_home_resolved():
+    # W3:hook command 路徑前綴。${HOME} 只有 POSIX shell 展開;native Windows(Claude Code
+    # 經 cmd/PowerShell 跑 hook)不展開 → L1/L3 靜默不觸發。Windows 須用解析後的絕對 home。
+    import importlib.util
+    merge = str(Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py")
+    spec = importlib.util.spec_from_file_location("merge_mod_t", merge)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)  # 有 __main__ guard,import 不跑 main
+    cmd = m._hook_cmd("check-graph-sync.py")
+    if sys.platform == "win32":
+        check("hook cmd: Windows 用絕對 home(無 ${HOME},否則 L1 不觸發)",
+              "${HOME}" not in cmd and "/.claude/hooks/check-graph-sync.py" in cmd, cmd)
+    else:
+        check("hook cmd: Unix 保留 ${HOME}(可攜)", "${HOME}" in cmd, cmd)
+
+
+def t_link_or_copy_idempotent():
+    # W4:_link_or_copy 重跑須冪等(get.ps1/install 重跑),且絕不刪來源。
+    # Windows junction 不被 is_symlink() 認出 → 舊碼 rmtree 會跟進刪 target;且第二次 mklink
+    # 報「已存在」→ fallback copytree 炸。修後第二次須乾淨重連、來源完好。
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    loader = SourceFileLoader("lumos_mod_lc", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_lc", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)  # 有 __main__ guard,import 不跑 main
+    base = Path(tempfile.mkdtemp(prefix="gctl-lc-"))
+    src = base / "src"; src.mkdir()
+    (src / "f.txt").write_bytes(b"keep-me\n")
+    dst = base / "dst"
+    m._link_or_copy(src, dst)            # 第一次:建連結/junction
+    m._link_or_copy(src, dst)            # 第二次:不可炸(冪等)
+    check("link_or_copy 冪等(第二次重跑不炸)", True, "")
+    check("來源未被刪(f.txt 還在)", (src / "f.txt").exists(), "rmtree 跟進 junction 刪了來源!")
+    check("dst 連到 src 內容(f.txt 可達)", (dst / "f.txt").exists(), "")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
