@@ -34,14 +34,15 @@ lumos deinit [--keep-graph] [--dry-run] [-y/--yes] [--source <path>]
 | Flag | 作用 |
 |---|---|
 | (無) | 完整逆轉:拆閘 + 移 vendored 工具組 + 剝 CLAUDE.md 區塊 + **刪圖譜**;互動確認 |
-| `--keep-graph` | 保留 `docs/<slug>-knowledge/`,其餘照拆 |
+| `--keep-graph` | 保留圖譜 vault,其餘照拆 |
 | `--dry-run` | 只印「會動到什麼」,不實際改動(預演)。**唯讀,完全不觸發確認機制**(§4 第 1 條的互動確認與非互動中止皆豁免);CI 非 tty 下無需 `--yes` 即可預演 |
 | `-y` / `--yes` | 跳過互動確認(CI / 非互動環境用) |
 | `--source <path>` | 指定 Lumos 來源(預設 `_lumos_src()`),**僅供 §4 第 3 條 `root == _lumos_src()` 自我保護比對用**;vendored 白名單是 hardcoded 常數(見 §5),不隨 source 變動 |
 
 行為細節:
 - **冪等**:找不到 vault **且**無專案層安裝痕跡 → 印 `✓ 未安裝(此 repo 無 Lumos 專案層)` 並 `return 0`(措辭仿 `cmd_uninstall:3030` 的空狀態**語氣**,非逐字)。「有無安裝」的偵測 heuristic = **`git config core.hooksPath` 有設值** 或 **`scripts/hooks/` 目錄存在**(不靠 `scripts/lumos` 自身存在判斷——deinit 正從它執行,恆為真)。
-- **root 與 slug 偵測**:`root` 走 `git rev-parse --show-toplevel`(同 `cmd_init:3255-3260`,獨立輸入);再用 `_vault_in(root)` 找實際 vault 路徑(輸出),不假設名稱、**不從 vault 反推 root**(勿學 `cmd_update:3097` 的 `vault.parent.parent`,該寫法在 standalone vault 會推錯)。找不到 vault 時 `--keep-graph` 為 no-op。
+- **root 與 vault 偵測**:`root` 走 `git rev-parse --show-toplevel`(同 `cmd_init:3255-3260`,獨立輸入);再用 `_vault_in(root)` 找實際 vault 路徑(輸出),**直接用回傳路徑刪/印,不假設名稱、不靠 slug 重組**——`_vault_in` 三型(`docs/<slug>-knowledge`、`docs/knowledge`、standalone vault=root 自身,`scripts/lumos:3293-3306`)都回傳完整 Path,凡正文寫 `docs/<slug>-knowledge/` 僅為示例,實際以回傳值為準(dry-run 印的也是回傳路徑)。**不從 vault 反推 root**(勿學 `cmd_update:3097` 的 `vault.parent.parent`,該寫法在 standalone vault 會推錯)。找不到 vault 時 `--keep-graph` 為 no-op。
+- **heuristic 與 git config 一律帶 `-C root`**:所有 `git config`/`git status` 呼叫用 `git -C <root> …`(不依賴 cwd),確保從子目錄執行也對同一 repo 生效。
 - **不自動 commit**:只改 working tree + git config,留可審閱工作區給使用者(`git diff` 可看)。**已 tracked 的刪檔可 `git restore` 救回;untracked 檔(未 commit 的新筆記)刪了救不回**——正是 §4 第 1 條印清單要警示的對象。
 
 ## 3. 執行順序(設計保證:不被 pre-commit 擋)
@@ -65,7 +66,7 @@ pre-commit 閘由 `core.hooksPath → scripts/hooks/` 驅動,而這兩者正是 
    - **非互動防呆**:stdin 非 tty(管線/CI)又沒 `-y` → 中止並提示加 `--yes`,絕不默默刪。
 2. **只動 Lumos 自己的東西:**
    - vendored 移除走**白名單**:① `_vendor_toolchain` 的固定 5 檔(`scripts/lumos`、`test_lumos.py`、`merge-claude-settings.py`、`graph-rename.sh`、`fetch-notesmd.sh`);② `scripts/hooks/`、`scripts/templates/` **整夾遞迴刪**(這兩夾整個是 Lumos-owned,直接刪目錄即可,**不需依賴 src 列舉**——故 `--source` 不可用時 deinit 照樣移得乾淨)。`scripts/` 底下使用者自有檔一律不碰;`scripts/` 空了才 `rmdir`,否則保留。
-   - `CLAUDE.md` 只依 `LUMOS:GRAPH-DISCIPLINE:START/END` 標記剝該段;其餘內容、甚至整個檔(若還有別的內容)都留。若剝完僅剩 `# CLAUDE.md` 樣板殼,仍保留檔案(不臆測使用者意圖)。
+   - `CLAUDE.md` 只依 `LUMOS:GRAPH-DISCIPLINE:START/END` 標記剝該段;其餘內容、甚至整個檔(若還有別的內容)都留。若剝完僅剩 `# CLAUDE.md` 樣板殼,仍保留檔案(不臆測使用者意圖)。**找不到 START 標記(含 CLAUDE.md 不存在,例如 `init --no-hooks` 或模板缺致 `_scaffold_project:3166` 的 `if tpl.exists()` 未注入)→ 該步 no-op,不報錯**(注入端 `scripts/lumos:3175` 即以 `"…START" not in` 做存在性 gating,剝端對稱)。
 3. **來源 repo 自我保護**:若 `root == _lumos_src()`(站在 Lumos 來源本身),**拒絕執行 + 印 stderr + `return 2`**,否則會把 Lumos 工具組自己刪了。對齊的是 **`cmd_update` 的 root==src 模式**(`scripts/lumos:3099-3101`:`print("ERROR…", file=sys.stderr); return 2`),**不是 `cmd_init`** —— cmd_init 的 root==src 只跳過 vendor/hooks、仍繼續 scaffold 且 rc 0(`scripts/lumos:3273-3274`),語義相反,deinit 套它會變成「在來源 repo 只跳部分動作、仍刪別的」,正好違反本條安全網。
 4. **`vault == root` 鐵閘(防 rmtree 整個 repo)**:`_vault_in(root)` 對 **standalone vault**(根目錄有 `MOC/` + `Verification/` 或 `Systems/`,`scripts/lumos:3303-3305`)回傳 **`root` 本身**——不只 Lumos 源,**使用者自建純知識庫 repo、跨專案 core-knowledge repo 都符合**。此時 `vault.resolve() == root.resolve()`,若照預設刪 vault 就是 `rmtree(整個 repo)`。**故刪 vault 前必過此閘**:偵測到 `vault.resolve() == root.resolve()` →**絕不刪 vault**(強制等同 `--keep-graph`)、印明顯警示說明「偵測到 standalone vault,圖譜=repo 根,已保留;如確要清空請自行手動處理」,deinit 其餘專案層動作(拆閘/剝 CLAUDE.md/移 vendored)仍照常。此閘獨立於 §4 第 3 條的 `_lumos_src()` 比對(那條只擋 Lumos 源這一個 standalone repo,擋不住其他)。
 5. **拆閘優先**:見 §3 step 1。
@@ -73,7 +74,7 @@ pre-commit 閘由 `core.hooksPath → scripts/hooks/` 驅動,而這兩者正是 
 ## 5. 實作落點
 
 - 新增 `cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None)`,置於 `cmd_uninstall`(`scripts/lumos:3005`)附近。
-- 抽出共用白名單:目前 `_vendor_toolchain` 內聯了 toolkit 清單(`scripts/lumos:3064-3069`),deinit 需同一份。抽成模組級常數(**示意命名** `_VENDORED_TOOLKIT`,實作時新建,型態同 `_SKILLS:3107` 的 `tuple/list[str]` 範式)或 helper,`_vendor_toolchain` 與 `cmd_deinit` 共用,避免漂移。
+- 抽出共用白名單:目前 `_vendor_toolchain` 把清單**內聯**在函式體(`scripts/lumos:3064-3069`:固定 5 檔 + `scripts/hooks/`、`scripts/templates/` 兩夾的 rglob 動態展開)。需**小幅重構 `_vendor_toolchain` 內部**,把那「固定 5 檔」清單抽成模組級常數(**示意命名** `_VENDORED_TOOLKIT`,實作時新建,型態同 `_SKILLS:3107` 的 `tuple[str]` 範式),供 `_vendor_toolchain` 與 `cmd_deinit` 共用避免漂移;兩夾在 deinit 端走「整夾遞迴刪」(§4 第 2 條),不需納入該常數。重構只動內部、不改 `_vendor_toolchain` 對外行為。
 - argparse:`sub.add_parser("deinit", ...)` + 上述 flags;`main()` 在 vault-free 早處理區(同 `install/uninstall/update/bootstrap`,`scripts/lumos:3481` 一帶)分派,deinit 不需 vault Env。
 
 ## 6. 測試(TDD)
@@ -91,6 +92,7 @@ pre-commit 閘由 `core.hooksPath → scripts/hooks/` 驅動,而這兩者正是 
 8. **`--dry-run`**:印清單但檔案/config 全無改動。
 9. **非互動防呆**:非 tty 無 `--yes` → 中止、return 非 0、無副作用。
 10. **`vault == root` 鐵閘**(§4 第 4 條):造一個 standalone vault repo(根目錄 `MOC/` + `Systems/`,**非 `_lumos_src()` 路徑**)→ `deinit --yes` → 斷言 **repo 根目錄與圖譜全數仍在**(絕無 rmtree)、印警示、其餘專案層動作(若有)仍執行。這是防「刪整個 repo」的回歸測試。
+11. **CLAUDE.md 退化 no-op**:CLAUDE.md 不存在、或存在但無 `LUMOS:GRAPH-DISCIPLINE` 標記 → `deinit --yes` 該步 no-op、不報錯、其餘步驟照常。
 
 ## 7. 文件
 
@@ -122,3 +124,11 @@ pre-commit 閘由 `core.hooksPath → scripts/hooks/` 驅動,而這兩者正是 
   - **F7 [minor]**:§4 第 2 條明定 hooks/templates 整夾遞迴刪、不依賴 src 列舉。
   - **F9 [minor]**:§6 案例 3 由「OR 二選一」改為三斷言全驗。
   - (canary F2/F6 = `_PROTECTED_PATHS`,植入後移除,真檔不含。)
+- **r4**(canary type d:植入未定義產物 `.deinit-manifest.json`+假 doctor 核對,caught):存活全 minor,已折入:
+  - **F3→minor**(辯方降 major:「依標記剝」已隱含無標記=no-op、非破壞性):§4 第 2 條補「無標記/CLAUDE.md 不存在→no-op 不報錯」,§6 加案例 11。
+  - **F4 [minor]**:§2 改述 vault 偵測直接用 `_vault_in` 回傳路徑,`docs/<slug>-knowledge/` 僅示例(涵蓋 `docs/knowledge`)。
+  - **F5 [minor]**:§4 第 2 條註明 CLAUDE.md 注入為條件式(`_scaffold_project:3166`),deinit 對應 no-op。
+  - **F6 [minor]**:§5 明述 `_vendor_toolchain` 清單 = 固定 5 檔 + hooks/templates rglob 動態展開。
+  - **F7 [minor]**:§2 明定 git config/status 一律 `git -C root`。
+  - **F9 [minor]**:§5 改述 `_VENDORED_TOOLKIT` 需「小幅重構 `_vendor_toolchain` 內部」而非僅「新建」。
+  - (F8 §8 溯源:r2 F4 的誤論據原文已在 r2 紀錄保留+⚠ 標注,可追溯,不另動。canary F1/F2 = `.deinit-manifest.json`,植入後移除,真檔不含。)
