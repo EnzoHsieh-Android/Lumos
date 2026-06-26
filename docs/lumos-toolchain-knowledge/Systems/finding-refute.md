@@ -3,6 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-06-26
+self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/done
