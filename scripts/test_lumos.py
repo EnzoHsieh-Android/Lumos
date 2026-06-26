@@ -1632,8 +1632,11 @@ def _deinit_run(root, *args, stdin_data=None):
     """從 root 跑 lumos deinit(cwd=root,git toplevel 即 root)。"""
     import subprocess, os
     fake = tempfile.mkdtemp(prefix="gctl-deinit-home-")
+    # stdin_data=None → 顯式 DEVNULL,確保非 tty(否則繼承環境 stdin;Windows/某些終端
+    # isatty() 不可靠,會誤判互動 → 走 input() 撞 EOF)。有資料才用 input= 餵。
+    kw = {"input": stdin_data} if stdin_data is not None else {"stdin": subprocess.DEVNULL}
     return subprocess.run([sys.executable, GRAPHCTL, "deinit", *args],
-                          cwd=str(root), input=stdin_data,
+                          cwd=str(root), **kw,
                           env=dict(os.environ, HOME=fake, USERPROFILE=fake),
                           capture_output=True, text=True)
 
