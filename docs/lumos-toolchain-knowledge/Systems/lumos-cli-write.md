@@ -7,6 +7,9 @@ self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/done
+related:
+  - "[[Systems/lumos-cli-read]]"
+  - "[[Systems/lumos-cli-lifecycle]]"
 summary: |-
   FLOW:set/append/self-audit/decision-*→load_raw_for_edit(讀raw,拒BOM/CRLF)→line-based改fm→atomic_write_verify(寫tmp→re-parse自驗值正確+無新lint指紋→os.replace)→敗則tmp丟棄原檔不動
   KEY:7個寫入原語(set/append/new/archive/decision-add/decision-supersede/self-audit)是「專案層」圖譜寫入的唯一安全路徑,取代手改 frontmatter / obsidian property:set
@@ -62,6 +65,8 @@ decisions:
 `_write_lf` 是 vault 唯一寫入原語:`write_bytes` 強制 UTF-8/LF/no-BOM,平台無關(不靠 text mode、不需 Python 3.10 的 `newline=`)。
 
 ## 格式鐵則由原語結構性保證(不靠人手)
+鐵則完整清單(鐵則2/5 等)在 `CLAUDE.md`;本節點只處理寫入相關鐵則(1/3/4)。
+
 - **鐵則1(多 wikilink 必 YAML list)**:`append` 天生一項一行寫 list,用 `link_target` 比對 dedup,絕不字串串接多個 `[[]]`。
 - **鐵則3(含「: 」長文引號化)**:`_fmt_decision_value` 對含 `: `/特殊起首字元的值自動加引號;summary 走 block scalar。
 - **鐵則4(日期 bare 不加引號)**:`fmt_scalar` / decision 子欄位格式化保持日期裸值;`--decided`/`--ended`/`--date` 先過 `DATE_RE`/`fromisoformat` 校驗,非 `YYYY-MM-DD` 直接拒。

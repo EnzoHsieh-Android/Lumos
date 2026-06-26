@@ -12,7 +12,7 @@ summary: |-
   KEY:兩層分工——機器層(install/uninstall/bootstrap)動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Claude hooks);專案層(init/update/deinit)只動本 repo(docs/<slug>-knowledge、scripts/ vendored、CLAUDE.md 注入、core.hooksPath)
   KEY:全域 lumos 與 skills 走 symlink/junction 指向來源 clone(非 copy)→ git pull 來源即吃到 CLI+skills 更新;graph-discipline.md 是 per-project 注入,要重跑 init/update 才刷新
   KEY:install 全域指令 Unix=symlink、Win=lumos.cmd shim;skills 經 _link_or_copy(Unix symlink / Win junction / 失敗 fallback copytree)
-  KEY:_VENDORED_TOOLKIT 5檔常數為 vendor(_vendor_toolchain)與 deinit(_deinit_remove_vendored)共用白名單,避免漂移
+  KEY:_VENDORED_TOOLKIT 白名單=5檔(scripts/lumos、test_lumos.py、merge-claude-settings.py、graph-rename.sh、fetch-notesmd.sh)+scripts/hooks/+scripts/templates/兩夾,為 vendor(_vendor_toolchain)與 deinit(_deinit_remove_vendored)共用,避免漂移
   KEY:vendor 結尾 diff 自癒——逐檔 filecmp 比對 src↔target 差異即 shutil.copy2 覆補(installer 漏檔的安全網)
   KEY:來源 repo 自我保護——update/deinit 偵測 root==_lumos_src() 即 return 2(不可在 Lumos 源本身跑專案層指令)
   KEY:_scaffold_project 既有 vault 自動 skip(保護圖譜資料不被 init/update 動)
@@ -72,5 +72,8 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 
 ## 相關
 - 對稱反安裝細節:[[Systems/lumos-deinit]](唯一有獨立設計稿 `docs/design/2026-06-26-lumos-deinit.md` 的生命週期指令)。
-- 實作落點:`scripts/lumos` `cmd_install`/`cmd_uninstall`/`cmd_bootstrap`/`cmd_init`/`cmd_update`/`cmd_deinit` + helper `_vendor_toolchain`/`_install_skills`/`_install_hooks_py`/`_link_or_copy`/`_scaffold_project` + 常數 `_VENDORED_TOOLKIT`/`_SKILLS`/`_INIT_SUBDIRS_FULL`。
+- 圖譜讀指令群:`scripts/lumos` `new`/`set`/`lint`/`doctor` 等:[[Systems/lumos-cli-read]]。
+- 圖譜寫指令群(`new`/`set`/`rename` 等):[[Systems/lumos-cli-write]]。
+- 原生 Windows 支援細節(junction、lumos.cmd shim、OEM 碼頁處理):[[Systems/native-windows-support]]。
+- 實作落點:`scripts/lumos` `cmd_install`/`cmd_uninstall`/`cmd_bootstrap`/`cmd_init`/`cmd_update`/`cmd_deinit` + helper `_vendor_toolchain`/`_install_skills`/`_install_hooks_py`/`_link_or_copy`/`_scaffold_project` + 常數 `_VENDORED_TOOLKIT`/`_SKILLS`/`_INIT_SUBDIRS_FULL`。`_INIT_SUBDIRS_FULL` 是 vault 六夾:Systems、Verification、Projects、Issues、Sessions、MOC。`_SKILLS` 是 install 時裝入 user-scope 的三個 skills:lumos-project-notes、lumos-core-knowledge、lumos-design-loop。
 - 分發機制脈絡:user-memory `lumos-update-distribution`。

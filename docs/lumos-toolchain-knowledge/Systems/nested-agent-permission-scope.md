@@ -50,7 +50,7 @@ autonomous-loop 的 design-loop 子 agent(auditor / judge)權限範圍收窄 —
 ## 關鍵機制
 1. **子程序替換**:auditor/judge 改為 `(cd "<REPO>" && claude -p "$(cat $TMP)" --allowedTools "Read,Grep,Glob" --permission-mode dontAsk --output-format json --model claude-opus-4-8 > $OUT)`;報告以 `python3 -c "import json; print(json.load(open('$OUT')).get('result',''))"` 取出。
 2. **append-only 收窄**:層0 orchestrator(Read,Edit,Bash,Grep,Glob,Agent)→ 層1 auditor/judge(Read,Grep,Glob only)。每委派一層只能更窄。
-3. **delegation-log**:`__SCRATCH__/.delegation-log.jsonl`,每 spawn 前 append 一行 `{"turn":N,"role":"auditor","tools":"Read,Grep,Glob","spawned_by":"orchestrator","loop_id":"<topic>","ts":"<ISO>"}`。純本機稽核,autonomous-loop.sh 不讀、不進可信度報告。
+3. **delegation-log**:`__SCRATCH__/.delegation-log.jsonl`,每 spawn 前 append 一行 `{"turn":N,"role":"auditor","tools":"Read,Grep,Glob","spawned_by":"orchestrator","loop_id":"<topic>","ts":"<ISO>"}`。`loop_id` 值取自 orchestrator 收到的 gap JSON 的 `topic` 欄位(由 `autonomous-loop.sh:L59` 萃取後隨 gap 內容一併塞入 orchestrator prompt,orchestrator 直接讀用)。純本機稽核,autonomous-loop.sh 不讀、不進可信度報告。
 4. **防 prompt 注入**:prompt 與 auditor 報告寫 temp file 經 `"$(cat $TMP)"` 傳遞,不拼接 shell 字面量。
 
 ## 已知限制(誠實天花板)
@@ -64,3 +64,4 @@ autonomous-loop 的 design-loop 子 agent(auditor / judge)權限範圍收窄 —
 - 設計稿:`docs/design/2026-06-23-nested-agent-permission-scope.md`(opus 5 輪 CONVERGED;R3 MISSED 一輪;跨家族 qwen 複審兩 finding 經人 grep 駁回為誤判)。
 - 實作落點(待做):`governance/autonomous_loop/orchestrator-prompt.md` §2 round sub-steps 3/4。
 - 計畫:無(commit `19ced27` 註「待 writing-plans 實作」,docs/superpowers/plans/ 未見對應份)。
+- 實作後 smoke test(見 [[Verification/2026-06-23_nested-agent-permission-scope_design-loop收斂]]):`$SCRATCH/auditor-r1.json` 存在、`.result` 取出非空、`$SCRATCH/.delegation-log.jsonl` 每輪 auditor+judge 各一行且 `tools="Read,Grep,Glob"`。

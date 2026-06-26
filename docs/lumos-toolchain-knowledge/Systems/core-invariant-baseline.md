@@ -63,9 +63,9 @@ decisions:
 - **擋靜默改、擋不了明知故改**(hash tripwire 只擋「沒人注意的改」;擋不了「明知故改+隨手 approve 過」)。它抬的是「核心改動必須經一次顯式停頓+留痕」的地板,不是 oracle。
 - **守備對象現極少**:目前全域**僅 1 個**核心合約節點(`custtransfer-semantics`),守備價值隨核心知識成長才放大。
 - **留痕不對稱**:baseline 住共用 core repo,但 approve 留痕寫執行端 consumer vault 的 governance-log → consumer A 的 approve 對 consumer B 的 `lumos gov` 不可見(B 卻已吃到 A 改的 baseline)。
-- **擱置理由**:守備對象只 1 個(對齊計畫「等 core_refs/核心節點變多再做」);此 loop 揭發 canary 機制限制(4 輪 3 次 canary 出問題,真正接住缺陷的是「真 findings + 手動查證」非 canary),形式 K=2 未收斂、硬刷投報率低。**重啟條件**:核心合約節點 >1(或新增 core_refs 消費端)。
+- **擱置理由**:守備對象只 1 個(對齊計畫「等 core_refs/核心節點變多再做」);此 loop 揭發 canary 機制限制(4 輪 3 次 canary 出問題,真正接住缺陷的是「真 findings + 手動查證」非 canary),形式 K=2 未收斂、硬刷投報率低。**重啟條件**:核心合約節點 >1(或新增 core_refs 消費端);**由人工在日報/審計時手動評估**——目前無 doctor 規則或 cron 自動偵測此觸發條件。
 
 ## 相關
-- 設計稿:`docs/design/2026-06-19-core-invariant-baseline.md`(canary-loop 4 輪 R1–R4 含 2 輪 opus,審計修正紀錄+擱置決定在尾段)。
+- 設計稿:`docs/design/2026-06-19-core-invariant-baseline.md`(canary-loop 4 輪 R1–R4 含 2 輪 opus,審計修正紀錄+擱置決定在尾段)。**Source of truth 分工**:設計稿是設計決策(rationale/審計紀錄)的 source of truth;本節點是系統狀態、整合關係、已知限制的 source of truth——設計稿若更新而本節點未跟進,即為節點漂移,由人工維護時察覺。
 - 實作計畫:無(擱置,未進 writing-plans)。
 - 預定落點:直接進 `scripts/lumos`(要接 doctor/pre-push 硬閘);實作順序 ①core_base 定位+第二 vault+hash → ②`baseline approve` → ③`baseline status` → ④Check C2 比對+hard block → ⑤approve 留痕進 gov。

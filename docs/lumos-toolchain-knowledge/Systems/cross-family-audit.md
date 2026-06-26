@@ -57,7 +57,7 @@ autonomous loop 的 design-loop 在判定收斂、**真正放行前**多一道 *
 `worst_severity` 在 degraded 態**統一回 None**(R5 F4:免 orchestrator 無條件讀鍵 KeyError——先判 status 再讀 severity)。`_parse_worst` 先正則抓「最嚴重 severity = X」,抓不到掃內文最高者(防 qwen 沒照格式)。
 
 ### cross_verdict 判定(orchestrator,prompt 層)
-模組只回 status + worst_severity;`cross_verdict` 由 orchestrator 據此決定:degraded→`degraded`(放行)、ok+≤minor→`endorsed`(放行)、ok+≥major→把 qwen findings 當新一輪 audit(opus grep 驗證每條:真的折進 spec、誤報標反證),`cross_reject_count += 1` 回步驟 1 續審,達 2 → 停 `disputed` 不放行。
+模組只回 status + worst_severity;`cross_verdict` 由 orchestrator 據此決定:degraded→`degraded`(放行)、ok+≤minor→`endorsed`(放行)、ok+≥major→把 qwen findings 當新一輪 audit(opus grep 驗證每條:真的折進 spec、誤報標反證),`cross_reject_count += 1` 回步驟 1 續審,達 2 → 停 `disputed` 不放行。`cross_reject_count` 為**每次 design-loop 獨立計數**(orchestrator 上下文內變數,不跨 loop 累積;每次 autonomous-loop.sh 啟動一輪新 design-loop 時歸零)。
 
 ### 結果回流(扁平欄位)
 orchestrator §3 result JSON 輸出三欄 `cross_verdict`(endorsed|degraded|disputed)/`cross_worst`(severity)/`cross_summary`(單行摘要);autonomous-loop.sh 用既有 `get()` 取(L60),`cross_summary` 換行 replace 成空格防破版(L61);收斂分支 log 一行 + LINE(L107)、未收斂分支依 verdict 區分文案(L80-85)。**不碰 build_report、不寫跨程序檔**。

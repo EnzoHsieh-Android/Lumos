@@ -53,7 +53,7 @@ decisions:
 
 ## 是什麼
 - **功能 ①（Check R）**：在 Systems 節點 summary 的 KEY 行用 `★IRREVERSIBLE★`/`★CHECKPOINT★` 標記不可逆/難救動作，逼作者在動手前寫下 undo 路徑（`[rollback:decisions]`）或事前防護（`[guard:decisions]`）。doctor 與 lint 強制。
-- **功能 ③（`lumos gov`）**：唯讀彙整器，把分散的治理事件 log 合成一條時間軸，或查某節點歷來被哪幾道閘攔過。
+- **功能 ②（`lumos gov`）**：唯讀彙整器，把分散的治理事件 log 合成一條時間軸，或查某節點歷來被哪幾道閘攔過。gov 寫路徑（doctor `--ci` append `.governance-log.jsonl`）是本功能的子機制，非獨立功能。
 
 ## 關鍵機制
 ### Check R 標記與強制

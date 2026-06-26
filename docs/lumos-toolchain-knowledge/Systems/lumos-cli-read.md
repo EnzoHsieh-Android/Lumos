@@ -15,7 +15,11 @@ summary: |-
   KEY:search 預設排除 fenced+inline code(對齊 doctor 連結抽取慣例,--code 才含)、大小寫不敏感 substring、--regex 切正則;結構化查詢走 contracts/decisions/stale 而非 search
   KEY:讀指令屬「專案層」——以 cwd find_vault 鎖定本專案 vault(不受同名 vault 影響);對比 install/bootstrap 的「機器層」(全域 lumos + user-scope skills)
   DEP:scripts/lumos load_vault/Env/find_vault｜extract_contracts(contracts/context 共用)｜parse_decisions(decisions/stale)｜status_of(links/map/stale 標狀態)
+  KEY:stale --candidate 無 --match 直接 rc2 拒絕(反直覺限制:即使給了 --candidate 沒帶 --match 也拒,避免列全 vault 變噪音);--candidate --match <詞> 才有效
   TEST:scripts/test_lumos.py(t_-prefixed Python 回歸,非 doctor Check T 認的 C# xunit)
+related:
+  - "[[Systems/lumos-cli-write]]"
+  - "[[Systems/lumos-cli-lifecycle]]"
 decisions:
   - content: 讀寫原語嚴格分軌——12 個讀指令純讀記憶體 Env 不碰檔;一切 frontmatter 寫入走 set/append/decision-* 等寫入原語(走 atomic_write_verify:寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename)
     context: 直接手改 frontmatter 會繞過寫後自驗與鐵則防護(YAML 格式爆、ghost 節點、裸合約),且讀指令若兼寫會讓「查脈絡」帶副作用
@@ -72,4 +76,4 @@ decisions:
 - 操作表權威:`CLAUDE.md`(入口三步 + 標籤規範)、`skills/lumos-project-notes/SKILL.md`(23 子命令全覽:讀取 12 + 寫入 7 + 安裝/生命週期 4)。
 - 實作落點:`scripts/lumos` `cmd_search`/`cmd_context`/`cmd_contracts`/`cmd_doctor`/`cmd_links`/`cmd_map`/`cmd_export`/`cmd_decisions`/`cmd_stale`/`cmd_recent`/`cmd_stats` + `load_vault`/`Env`/`find_vault`。
 - 回歸測試:`scripts/test_lumos.py`(Python t_-prefixed)。
-- 對稱寫入原語見其專屬 Systems 節點;`lumos --help` 為現行權威。
+- 對稱寫入原語見 [[Systems/lumos-cli-write]];安裝 / 生命週期見 [[Systems/lumos-cli-lifecycle]];`lumos --help` 為現行權威。

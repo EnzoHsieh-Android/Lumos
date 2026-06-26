@@ -6,6 +6,8 @@ status: doing
 
 Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識圖譜。節點現況以 code 為準,完整設計史/收斂史指回 `docs/design/`。狀態標記:無標=已實作;`[planned]`=設計收斂未落地;`[deferred]`=擱置;`[rejected]`=評估後不做(輕方案落地)。
 
+> **慣例**:節點內嵌的 `scripts/lumos:行號`(或 `@行號`、`:行號`)是**近似導航參考**,code 重構後可能漂移——以 code 現況與函式名為準,行號僅供快速定位。
+
 ## 設計審計 loop(進實作前的把關)
 - [[Systems/design-loop]] — canary-護的設計審計 loop;Claude 編排、lumos 出原語,連 2 輪 caught 才放行實作。
 - [[Systems/canary-audit]] — test-the-tester:每輪偷植已知假錯驗審計員有沒有認真抓(防假陰性/放水)。

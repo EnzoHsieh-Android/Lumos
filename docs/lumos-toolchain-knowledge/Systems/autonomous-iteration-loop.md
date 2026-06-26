@@ -63,7 +63,7 @@ decisions:
 ## 收斂與放行門檻
 - **CONVERGED** = `lumos loop status <topic> --need 2` exit 0 = **連 2 輪 canary caught 且 severity ∈ {clean,minor}**(漏抓那輪不採信收斂的一半)。失控保護:design-loop max cap = 6 輪、N=1、連續撞 cap → 停 + LINE 告警。
 - 收斂後走 **§2.5 跨家族複核**:`endorsed`/`degraded` → 放行;`disputed`(major+ 異議)→ 退回 opus 續審,`cross_reject_count` 達 2 → 停、不放行、`cross_verdict=disputed`(必伴 `converged:false`)。
-- 放行閘:dry-run 寫 `governance/pending/<date>-<topic>.md`(+ confidence);真模式 commit 到 `auto/spec-<topic>-<date>` branch、`gh pr create`、發 LINE。
+- 放行閘:dry-run 寫 `governance/pending/<date>-<topic>.md`(+ confidence);真模式(`--pr`)commit 到 `auto/spec-<topic>-<date>` branch、`gh pr create`、發 LINE。**⚠ 真 PR 模式(--pr)的 branch+PR+LINE 路徑尚未真機驗證**——Verification 節點的 pass 範圍僅涵蓋 dry-run;切換至 --pr 前須重驗放行閘全路徑(見 [[Verification/2026-06-20_autonomous-iteration-loop]] `revalidate_when`)。
 
 ## design-loop 對 skill 預設的覆寫(autonomous 版)
 - **opus auditor 起手**(覆寫 skill「sonnet 起手、連 2 missed 才升 opus」)。

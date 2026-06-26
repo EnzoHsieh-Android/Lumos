@@ -42,14 +42,14 @@ decisions:
 
 ## 定位與邊界(YAGNI)
 - **是一把尺，不是新的閘**:不改 L3 hook、不自動調門檻、不接 CI 擋線、不改 doctor。
-- **先當 prototype 腳本**(設計擬放 `scripts/rot-eval/`),證明數字有意義才升格成 `lumos rot-eval {mine,run}` 子命令 + 週彙整觸發。
+- **先當 prototype 腳本**(設計擬放 `scripts/rot-eval/`),升格條件:三單元跑通 + 對 ≥15 組真實 fixtures 能講出「L3 在 0.7 大概抓 X 成、漏的多是哪一類」(即門檻敏感性表可讀、量級結論明確)後,才升格成 `lumos rot-eval {mine,run}` 子命令 + 週彙整觸發。
 - **不追大 N 統計顯著**——這是方向儀(「就算 0.5 門檻也只 60%」這種量級結論),不是精密尺。
 - **現況:design-only**。spec 已 CONVERGED(canary-護審計 5 輪、K=2),但 `scripts/rot-eval/`、`lumos` 子命令、回歸測試**都尚未實作**。
 
 ## 三個獨立單元
 - **A `mine`(挖候選,絕不貼標)**:掃 vault `git log` 抓三類最顯性 git 訊號當候選——① Verification frontmatter `status: pass→stale`(排除 `pass→done`=成功完成非腐化);② `superseded` / 進 `Verification/Archive/`(篩除批次歸檔:同 commit rename ≥5 檔且 status 不變→排除;≥10 檔不論 status 一律當批次+交人複核);③ `summary`/`KEY:` 行被實質改動。每筆輸出 `{node_path, overturn_commit, diff_text, code_commit, old_node_text}` 寫成 `rot-eval-candidates.jsonl`。
 - **B `label`(人工確認,產黃金集)**:把候選攤成可讀清單,人逐筆判 `positive`(真失效)/`negative`(code 動了但沒失效,量誤報)/`drop`(雜訊或 `diff_text=null`)。存 `rot-eval-fixtures.jsonl`(**進 git**)。
-- **C `run`(重放 + 算分)**:見下「保真關鍵」。輸出 `rot-eval-report.md`,含 recall@0.7 / precision@0.7、門檻敏感性表(0.5/0.6/0.7/0.8;positive 數 < `MIN_FIXTURES_FOR_SWEEP`=5 時整表跳過、只報單點)、每筆 fixture judge 對錯。
+- **C `run`(重放 + 算分)**:見下「保真關鍵」。每筆 fixture 的 `diff_text` 取法:先看 `overturn_commit` 自身有無 code diff → 有則直接用;否則時間窗回溯(30 天內 **或** 最近 10 個 code commit,取先到者)找動到該節點 `valid_under` 符號的 commit → 皆無則 `diff_text=null` 並在 B 階段 drop。輸出 `rot-eval-report.md`,含 recall@0.7 / precision@0.7、門檻敏感性表(0.5/0.6/0.7/0.8;positive 數 < `MIN_FIXTURES_FOR_SWEEP`=5 時整表跳過、只報單點)、每筆 fixture judge 對錯。
 
 ## 保真關鍵(unit C 與線上同一把判斷)
 1. **import**:hook 檔名 `verification-rot-check.py` 帶連字號不能 `import`,用 `importlib.util.spec_from_file_location("hook", <path>)` + `exec_module()`;monkeypatch 打 `hook_module.call_claude_sonnet`(模組屬性)。

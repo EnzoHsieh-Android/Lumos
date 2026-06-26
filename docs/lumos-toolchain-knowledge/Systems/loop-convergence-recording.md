@@ -10,7 +10,7 @@ tags:
 verified_by:
   - "[[Verification/2026-06-19_loop-convergence-recording]]"
 summary: |-
-  FLOW:每輪對抗審計 → canary record caught|missed --loop <id> --severity <max finding> 寫進 .canary-log.jsonl(+loop/+severity 兩選用鍵)→ loop status <id> 讀 append 序、篩 loop==id、tail-K 滑動窗算收斂 → exit 0/1/2 供編排 skill 讀
+  FLOW:每輪對抗審計 → canary record caught|missed --loop <id> --severity <max finding> 寫進 .canary-log.jsonl(+loop/+severity 兩選用鍵)→ loop status <id> [--need K] 讀 append 序、篩 loop==id、tail-K(K 預設2,< 1 夾到 max(1,K))滑動窗算收斂 → exit 0/1/2 供編排 skill 讀
   KEY:把 loop 終止判準從「人含糊說看起來收斂了」換成「連 K(預設2)輪 caught 且 severity∈{clean,minor} 這個可重算條件」;留痕=那串 round 記錄本身
   KEY:CONVERGED ⟺ tail-K 滑動窗(append 序最後 K 筆)全為 caught+clean/minor;前面髒輪不影響、只看最後 K 筆[test:t_loop_status]
   KEY:missed 輪 ×tail-K 自然重置——一個 missed 落在窗內就擋收斂,直到隨新輪滑出;無需特例(dogfood R6 逼出)

@@ -72,7 +72,7 @@ Check R(可逆性閘)擴展:對 `★IRREVERSIBLE★` 動作新增 `[guard:decisi
 
 ## 已知限制 / 非目標
 - 誠實天花板:`[guard:decisions]` 證明「decisions 記了前置守衛」,**不證明守衛在 code 運行時生效**(那靠 `[test:]` + CI)。語義上守衛 > 回退(預防 > 補償),但文件層聲明等級相同。
-- v1 只支援 `[guard:decisions]` 字面;其他 ref → error(留 v2)。
+- v1 只支援 `[guard:decisions]` 字面;其他 ref → error(留 v2,目前為 deferred/backlog,無主動追蹤計畫)。
 - 不廢棄 `[rollback:]`(DB 補償交易場景仍多);不新增 external tag;不驗 guard 已在 code 實作。
 
 ## 知識同步(與本機制同 commit)

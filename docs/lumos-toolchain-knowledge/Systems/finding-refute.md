@@ -17,7 +17,7 @@ summary: |-
   KEY:只買 code 層假陽性——脈絡在 code 外(業務現實)或辯方自己也沒挖到那塊 code 時,拿不出反證則維持 finding(無功但無害);業務層留人(誠實天花板)
   KEY:辯方降級也須拿反證 file:line,拿不出則維持;對齊 judge「無查證行鎖 major」底線,空口『沒問題』不算
   DEP:skills/lumos-design-loop/SKILL.md 步驟4.5｜governance/autonomous_loop/orchestrator-prompt.md §2 步驟4.5｜judge-severity-gate(辯方接 judge 後)｜canary(對稱補位)
-  TEST:無單元測(prompt 紀律);design-loop 實戰自驗,3 輪自動收斂、canary 3/3 全中
+  TEST:無單元測(prompt 紀律);spec 品質以 design-loop 自走驗:3 輪自動收斂、canary 3/3 全中;辯方降級效力(假 major 當輪被駁)本輪未觸發——首個出現假陽性的真實 loop 才可實測
   VERIFY:[[Verification/2026-06-24_finding-refute]]
 decisions:
   - content: 辯方階段插在 judge 後、record 前——對 judge 評 severity≥major 的每條 finding 各派 1 個獨立 opus 辯方,預設 finding 假、強制附 file:line 反證才能降,該輪 severity 由編排者機械取存活 findings 的 max
