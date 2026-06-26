@@ -1496,6 +1496,39 @@ def t_deinit_unbar_gate():
     check("deinit unbar: 重複 unset rc5 不崩潰", rc2 in (0, 5), f"rc={rc2}")
 
 
+def t_deinit_strip_claude():
+    from pathlib import Path
+    m = _load_lumos()
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改本區塊;"
+             "改範本 scripts/templates/graph-discipline.md -->")
+    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+
+    # case A: 有自有段落 + 注入區塊 → 剝區塊、留自有段落、留檔
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-cm-a-"))
+    (root / "CLAUDE.md").write_bytes(
+        ("# CLAUDE.md\n\n我的專案規則。\n\n" + START + "\n圖譜紀律內文\n" + END + "\n").encode("utf-8"))
+    stripped = m._deinit_strip_claude(root)
+    txt = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    check("deinit claude A: 回 True", stripped is True, f"got {stripped}")
+    check("deinit claude A: 自有段落保留", "我的專案規則。" in txt, txt)
+    check("deinit claude A: 區塊已消失", "GRAPH-DISCIPLINE" not in txt, txt)
+    check("deinit claude A: 檔仍在", (root / "CLAUDE.md").exists(), "")
+
+    # case B: 無 START 標記 → no-op、回 False、內容不變
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-cm-b-"))
+    (root / "CLAUDE.md").write_bytes("# CLAUDE.md\n\n只有我的內容\n".encode("utf-8"))
+    before = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    res = m._deinit_strip_claude(root)
+    check("deinit claude B: no-op 回 False", res is False, f"got {res}")
+    check("deinit claude B: 內容不變", (root / "CLAUDE.md").read_text(encoding="utf-8") == before, "")
+
+    # case C: CLAUDE.md 不存在 → no-op、回 False、不報錯
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-cm-c-"))
+    res = m._deinit_strip_claude(root)
+    check("deinit claude C: 無檔 no-op 回 False", res is False, f"got {res}")
+    check("deinit claude C: 仍無 CLAUDE.md", not (root / "CLAUDE.md").exists(), "")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
