@@ -3031,6 +3031,39 @@ def cmd_uninstall():
     return 0
 
 
+def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
+    """專案層反安裝(對稱 cmd_init):拆本 repo 的 pre-commit 閘 / vendored 工具組 /
+    CLAUDE.md 注入區塊 /(預設)圖譜 vault。不碰機器共用項(~/.claude)。不自動 commit。"""
+    import subprocess
+    # root 走 git toplevel;非 git 目錄中止(不 fallback cwd——deinit 會刪檔)
+    try:
+        root = Path(subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True,
+            stderr=subprocess.DEVNULL).strip())
+    except Exception:
+        print("ERROR: 非 git 目錄,deinit 需可靠 repo root(不 fallback cwd)", file=sys.stderr)
+        return 2
+    # pre-flight 守衛①:來源 repo 自我保護(對齊 cmd_update 的 root==src → return 2)
+    src = _lumos_src(source)
+    if root.resolve() == src.resolve():
+        print("ERROR: 當前就是 Lumos 來源本身,deinit 拒絕執行", file=sys.stderr)
+        return 2
+    vault = _vault_in(root)
+    will_delete_vault = False   # Task 7 替換為:vault is not None and not keep_graph(含 vault==root 鐵閘)
+    installed = _deinit_detect_installed(root)
+    has_claude = _claude_block_present(root)
+    if not installed and not will_delete_vault and not has_claude:
+        print("✓ 未安裝(此 repo 無 Lumos 專案層)")
+        return 0
+    # ── 固定順序執行(pre-flight 已過)──
+    _deinit_unbar_gate(root)                 # step 1 先拆閘
+    _deinit_strip_claude(root)               # step 2 剝 CLAUDE.md 區塊
+    # step 3 刪圖譜 vault:Task 7 加入(此處暫不刪)
+    _deinit_remove_vendored(root)            # step 4 最後移 vendored(可能含自己)
+    print("✓ deinit 完成(專案層已移除)。檢視 `git diff` 後自行 commit。")
+    return 0
+
+
 def _deinit_unbar_gate(root: Path) -> int:
     """拆 pre-commit 閘:git -C root config --unset core.hooksPath。
     rc 0(已 unset)/ rc 5(key 本不存在)皆成功;其他 rc 印 warning 但不中止
@@ -3548,6 +3581,11 @@ def main():
     p.add_argument("--force", action="store_true", help="既有 vault 也重裝/更新 hooks 與工具組(vault 內容不動)")
     p.add_argument("--no-hooks", action="store_true", help="只建圖譜,不 vendor 工具/不裝 hooks(輕量版)")
     p.add_argument("--no-pull", action="store_true", help="vendor 工具時不 git pull 來源")
+    p = sub.add_parser("deinit", help="專案層反安裝(對稱 init):拆本 repo 的 hooks/工具組/CLAUDE.md 注入/圖譜")
+    p.add_argument("--keep-graph", action="store_true", help="保留圖譜 vault,其餘照拆")
+    p.add_argument("--dry-run", action="store_true", help="只印會動到什麼,不實際改動")
+    p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(CI/非互動用)")
+    p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
 
     args = ap.parse_args()
 
@@ -3563,6 +3601,9 @@ def main():
     if args.cmd == "init":
         return cmd_init(name=args.name, force=args.force,
                         with_hooks=not args.no_hooks, no_pull=args.no_pull)
+    if args.cmd == "deinit":
+        return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
+                          yes=args.yes, source=args.source)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():

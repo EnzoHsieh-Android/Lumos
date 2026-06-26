@@ -1599,6 +1599,80 @@ def t_deinit_detect_installed():
           m._claude_block_present(Path(tempfile.mkdtemp(prefix="gctl-deinit-det4-"))) is False, "")
 
 
+def _mk_installed_project(prefix="gctl-deinit-proj-", with_vault=True, slug="demo"):
+    """造一個已裝 Lumos 專案層的 hermetic repo(不跑 init/update,純手工)。回傳 root。"""
+    import subprocess
+    from pathlib import Path
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+    sc = root / "scripts"
+    (sc / "hooks").mkdir(parents=True)
+    (sc / "templates").mkdir(parents=True)
+    (sc / "hooks" / "pre-commit").write_text("#!/bin/sh\nexit 0\n")
+    (sc / "templates" / "graph-discipline.md").write_text("tpl\n")
+    for rel in ("scripts/lumos", "scripts/test_lumos.py", "scripts/merge-claude-settings.py",
+                "scripts/graph-rename.sh", "scripts/fetch-notesmd.sh"):
+        (root / rel).write_text("x\n")
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改本區塊;"
+             "改範本 scripts/templates/graph-discipline.md -->")
+    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    (root / "CLAUDE.md").write_bytes(
+        ("# CLAUDE.md\n\n我的規則\n\n" + START + "\n紀律\n" + END + "\n").encode("utf-8"))
+    if with_vault:
+        kg = root / "docs" / f"{slug}-knowledge"
+        (kg / "MOC").mkdir(parents=True)
+        (kg / "Systems").mkdir(parents=True)
+        (kg / "MOC" / "index.md").write_text("# idx\n")
+        (kg / "Systems" / "S.md").write_text("# S\n")
+    return root
+
+def _deinit_run(root, *args, stdin_data=None):
+    """從 root 跑 lumos deinit(cwd=root,git toplevel 即 root)。"""
+    import subprocess, os
+    fake = tempfile.mkdtemp(prefix="gctl-deinit-home-")
+    return subprocess.run([sys.executable, GRAPHCTL, "deinit", *args],
+                          cwd=str(root), input=stdin_data,
+                          env=dict(os.environ, HOME=fake, USERPROFILE=fake),
+                          capture_output=True, text=True)
+
+def t_deinit_cmd_basic():
+    from pathlib import Path
+    # 整體(graph 在 Task 7 才刪;此處 --keep-graph 行為驗非破壞動作)
+    root = _mk_installed_project()
+    r = _deinit_run(root, "--keep-graph", "--yes")
+    check("deinit cmd: rc 0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    import subprocess
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit cmd: core.hooksPath 已 unset", hp.stdout.strip() == "", f"{hp.stdout!r}")
+    check("deinit cmd: scripts/hooks/ 已移", not (root / "scripts" / "hooks").exists(), "")
+    check("deinit cmd: scripts/lumos 已移", not (root / "scripts" / "lumos").exists(), "")
+    cm = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    check("deinit cmd: claude 自有段落留", "我的規則" in cm, cm)
+    check("deinit cmd: claude 區塊剝", "GRAPH-DISCIPLINE" not in cm, cm)
+
+    # case 5 白名單:使用者自有檔保留
+    root = _mk_installed_project(prefix="gctl-deinit-white-")
+    (root / "scripts" / "mine.py").write_text("mine\n")
+    _deinit_run(root, "--keep-graph", "--yes")
+    check("deinit cmd: 使用者自有 scripts/mine.py 保留", (root / "scripts" / "mine.py").exists(), "")
+
+    # case 7 來源自我保護:--source 指到 root 本身 → 拒絕 + rc2 + 無副作用
+    root = _mk_installed_project(prefix="gctl-deinit-src-")
+    r = _deinit_run(root, "--keep-graph", "--yes", "--source", str(root))
+    check("deinit cmd: 來源自我保護 rc2", r.returncode == 2, f"{r.returncode} {r.stdout} {r.stderr}")
+    check("deinit cmd: 自我保護下 scripts/lumos 未動", (root / "scripts" / "lumos").exists(), "")
+
+    # case 4 冪等:乾淨 repo → rc0 + 印未安裝
+    bare = Path(tempfile.mkdtemp(prefix="gctl-deinit-bare-"))
+    subprocess.run(["git", "-C", str(bare), "init"], capture_output=True, text=True)
+    r = _deinit_run(bare, "--yes")
+    check("deinit cmd: 冪等 rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    check("deinit cmd: 冪等印未安裝", "未安裝" in r.stdout, r.stdout)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
