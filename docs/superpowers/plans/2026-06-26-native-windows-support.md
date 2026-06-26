@@ -25,6 +25,114 @@
 
 ---
 
+### Task 0:Windows 行尾/編碼地基(前置——建立可用的綠底 oracle)
+
+**⚠ 為何必須最先做**(真機發現,非紙上):真 Windows `python scripts/test_lumos.py` baseline = **147 過 / 29 敗(23 測試函式)**。根因:`scripts/lumos` 與 `test_lumos.py` 都用 `write_text(..., encoding="utf-8")`(無 `newline=`),Windows text mode 把 `\n`→`\r\n`,lumos **自己寫出 CRLF、`load_raw_for_edit@2564` 又拒絕 CRLF**(自相矛盾)。沒修這層,Task 1–6 的「測試紅→綠」沒有可信 oracle(會被 29 個 CRLF 紅淹沒)。**Mac 端已坐實所有觸點存在、`write_text(newline=)` 是 3.10+ 故用 `write_bytes`。**
+
+**Files:**
+- Modify: `scripts/lumos`(加 `_write_lf`;`atomic_write_verify`/`cmd_new`/`cmd_guard_scaffold`/`cmd_archive`/`cmd_init` 改走它)
+- Modify: `scripts/test_lumos.py`(`write()` helper + 直寫 fixture 改 LF;`t_export_quote_escape` win32 skip;stdout 強制 UTF-8)
+- Create: `.gitattributes`(repo root)
+
+**Interfaces:**
+- Produces:`_write_lf(path:Path, text:str)→None`(寫 UTF-8/LF/no-BOM,不受平台 text mode 影響)。
+- 不變:`load_raw_for_edit` 的 CRLF 拒絕語義保留(vault 慣例 LF 刻意;修的是「寫」不是「讀」)。
+
+- [ ] **Step 1:寫失敗測試(Windows 重現 CRLF 自相矛盾;Mac 恆綠)**
+
+`scripts/test_lumos.py` 加:
+```python
+def t_write_lf_roundtrip():
+    import subprocess
+    proj = Path(tempfile.mkdtemp(prefix="gctl-lf-"))
+    (proj / "Systems").mkdir(parents=True); (proj / "MOC").mkdir()
+    (proj / "MOC" / "idx.md").write_bytes(b"---\ntype: moc\n---\n# idx\n")
+    write(proj, "Systems/S.md", "type: system\nstatus: doing")     # 經 write() helper
+    raw = (proj / "Systems" / "S.md").read_bytes()
+    check("write helper 寫 LF(無 CRLF)", b"\r\n" not in raw, f"got {raw[:40]!r}")
+    r = subprocess.run([sys.executable, GRAPHCTL, "set", str(proj / "Systems" / "S.md"),
+                        "status", "done"], capture_output=True, text=True)
+    raw2 = (proj / "Systems" / "S.md").read_bytes()
+    check("atomic_write_verify 寫回 LF", b"\r\n" not in raw2, f"rc={r.returncode} {r.stderr}")
+```
+
+- [ ] **Step 2:跑測試確認失敗**
+
+Run: `python scripts/test_lumos.py 2>&1 | grep -iE "LF|✗" | head`
+Expected(Windows):LF 兩測 + 既有 append/decision/set/guard/sync 一片紅(同根因)。Mac:恆綠(write_bytes 在 Mac 也寫 LF)。
+
+- [ ] **Step 3:`scripts/lumos` 加 `_write_lf` 並收斂所有內容寫入**
+
+寫入工具區(`atomic_write_verify@2581` 定義前)加:
+```python
+def _write_lf(path: Path, text: str):
+    """寫 UTF-8 / LF / no-BOM,平台無關(不靠 text mode)。vault 唯一寫入原語。
+    用 write_bytes:write_text(newline=) 要 Python 3.10,違反本專案 ≥3.8。"""
+    path.write_bytes(text.encode("utf-8"))
+```
+把下列 `X.write_text(<content>, encoding="utf-8")` 改 `_write_lf(X, <content>)`(**用函式名定位,行號會位移**):
+- `atomic_write_verify`(`@2600` `tmp.write_text`)← **單一收斂點,修這個=修掉 set/append/decision/guard/sync 全部**
+- `cmd_new`(`@2812` `path.write_text(f"---\n{fm}...")`)
+- `cmd_guard_scaffold`(`@1557` `target.write_text`)
+- `cmd_archive`(`@2938` rewrite `tmp.write_text`)
+- `cmd_init`(`@3164` `gi.write_text(_INIT_GITIGNORE)`)
+- (非 vault:`_fetch` cache `@2377`、export html `@2403` CRLF 無害;一致起見可一併改,非放行條件。)
+
+- [ ] **Step 4:`test_lumos.py` fixture 改 LF + 修 Windows 不相容測試**
+
+(a) `write()` helper(`@47`)`write_text`→`write_bytes`:
+```python
+def write(vault, rel, fm, body="# x\n"):
+    p = vault / rel; p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(f"---\n{fm}\n---\n{body}".encode("utf-8"))
+    return p
+```
+(b) 其餘直寫 fixture(`MOC/idx.md`、`.lumos/config.json`、`*.cs/*.kt/*.tmpl` 等)一律 `write_text(...)`→`write_bytes(<str>.encode("utf-8"))`。grep 定位:`grep -n "write_text" scripts/test_lumos.py`。
+(c) `t_export_quote_escape`:NTFS 禁 `"`,開頭加 `if sys.platform == "win32": check("export quote: NTFS 禁 \" 字元,Windows skip", True); return`。
+
+- [ ] **Step 5:runner 強制 UTF-8 stdout(cp950 主控台不 crash)**
+
+`scripts/test_lumos.py` 頂(import 後)加:
+```python
+try:
+    sys.stdout.reconfigure(encoding="utf-8")   # cp950 印 ✓/✗ 會 UnicodeEncodeError
+except Exception:
+    pass
+```
+(可選:`scripts/lumos` 入口同樣處理,免使用者要設 `PYTHONUTF8=1`。)
+
+- [ ] **Step 6:加 `.gitattributes`(根治 clone 端 autocrlf)**
+
+repo root 建 `.gitattributes`(`load_raw_for_edit` 錯誤訊息本就叫使用者這樣做,理應內建):
+```
+* text=auto eol=lf
+*.md text eol=lf
+scripts/lumos text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
+```
+
+- [ ] **Step 7:跑測試 + 全平台回歸**
+
+Run: `python scripts/test_lumos.py 2>&1 | tail -2`
+Expected:全綠(Windows 與 Mac 皆無回歸)——這才是 Task 1–6 可信的紅綠 oracle。Mac:`write_bytes` 同寫 LF,行為不變。
+
+- [ ] **Step 8:Commit**
+
+```bash
+git add scripts/lumos scripts/test_lumos.py .gitattributes
+git commit -m "fix(win): 內容寫入強制 LF(_write_lf)+ runner UTF-8 stdout + .gitattributes
+
+修 lumos 在 Windows 寫 CRLF 又拒絕自己;真 Windows baseline 147/29→全綠,為 Task 1-6 建可信 oracle。
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+> **對後續 Task 的連動**:Task 0 完成後,Task 1 Step 2「Expected: scaffold 測失敗」等紅綠判讀才成立(否則被 CRLF 紅淹沒)。Task 7 真機閘第 4/6 步(`lumos init` 寫檔、pre-commit 擋)也依賴 lumos 不再寫 CRLF。
+
+---
+
 ### Task 1:平台 helper + 安裝原語(跨平台、可測)
 
 **Files:**
