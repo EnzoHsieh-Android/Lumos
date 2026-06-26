@@ -1528,6 +1528,14 @@ def t_deinit_strip_claude():
     check("deinit claude C: 無檔 no-op 回 False", res is False, f"got {res}")
     check("deinit claude C: 仍無 CLAUDE.md", not (root / "CLAUDE.md").exists(), "")
 
+    # case D: END 在 START 之前(corrupt)→ no-op、回 False、內容不變
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-cm-d-"))
+    (root / "CLAUDE.md").write_bytes(("# CLAUDE.md\n" + END + "\n中間\n" + START + "\n").encode("utf-8"))
+    before = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    res = m._deinit_strip_claude(root)
+    check("deinit claude D: END 在 START 前 no-op 回 False", res is False, f"got {res}")
+    check("deinit claude D: 內容不變", (root / "CLAUDE.md").read_text(encoding="utf-8") == before, "")
+
 
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
