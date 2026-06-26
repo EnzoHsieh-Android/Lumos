@@ -8,19 +8,16 @@ LUMOS_HOME="${LUMOS_HOME:-$HOME/harness/lumos-toolchain}"
 LUMOS_URL="${LUMOS_URL:-https://github.com/EnzoHsieh-Android/Lumos}"
 PULL=0; [[ "${1:-}" == "--pull" ]] && PULL=1
 
-if [[ -f "$LUMOS_HOME/install.sh" ]]; then
-  echo "[1/3] Lumos 源已在: $LUMOS_HOME"
+if [[ -f "$LUMOS_HOME/scripts/lumos" ]]; then
+  echo "[1/2] Lumos 源已在: $LUMOS_HOME"
   [[ "$PULL" == 1 ]] && { git -C "$LUMOS_HOME" pull --ff-only || echo "WARN: git pull 失敗,沿用現有 clone" >&2; }
 else
-  echo "[1/3] clone Lumos → $LUMOS_HOME …"
+  echo "[1/2] clone Lumos → $LUMOS_HOME …"
   mkdir -p "$(dirname "$LUMOS_HOME")"
   git clone "$LUMOS_URL" "$LUMOS_HOME"
 fi
 
-echo "[2/3] user-scope skills…"
-bash "$LUMOS_HOME/install.sh"
-
-echo "[3/3] 全域 lumos(symlink → $LUMOS_HOME/scripts/lumos)…"
+echo "[2/2] 全域 lumos(symlink → scripts/lumos)+ user-scope skills…"
 python3 "$LUMOS_HOME/scripts/lumos" install --force
 
 echo
