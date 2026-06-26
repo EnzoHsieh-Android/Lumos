@@ -35,14 +35,14 @@ lumos deinit [--keep-graph] [--dry-run] [-y/--yes] [--source <path>]
 |---|---|
 | (無) | 完整逆轉:拆閘 + 移 vendored 工具組 + 剝 CLAUDE.md 區塊 + **刪圖譜**;互動確認 |
 | `--keep-graph` | 保留 `docs/<slug>-knowledge/`,其餘照拆 |
-| `--dry-run` | 只印「會動到什麼」,不實際改動(預演);與 `--yes` 互不影響。**唯讀,豁免 §4.1 的非互動中止**:CI 非 tty 下 `--dry-run` 無需 `--yes` 即可預演 |
+| `--dry-run` | 只印「會動到什麼」,不實際改動(預演)。**唯讀,完全不觸發確認機制**(§4 第 1 條的互動確認與非互動中止皆豁免);CI 非 tty 下無需 `--yes` 即可預演 |
 | `-y` / `--yes` | 跳過互動確認(CI / 非互動環境用) |
-| `--source <path>` | 指定 Lumos 來源以判定 vendored 檔白名單(預設同 `_lumos_src()`) |
+| `--source <path>` | 指定 Lumos 來源(預設 `_lumos_src()`),**僅供 §4 第 3 條 `root == _lumos_src()` 自我保護比對用**;vendored 白名單是 hardcoded 常數(見 §5),不隨 source 變動 |
 
 行為細節:
 - **冪等**:找不到 vault 且無 vendored 工具組 → 印 `✓ 未安裝(此 repo 無 Lumos 專案層)` 並 `return 0`(措辭仿 `cmd_uninstall:3030` 的空狀態**語氣**,非逐字)。
 - **root 與 slug 偵測**:`root` 走 `git rev-parse --show-toplevel`(同 `cmd_init:3255-3260`,獨立輸入);再用 `_vault_in(root)` 找實際 vault 路徑(輸出),不假設名稱、**不從 vault 反推 root**(勿學 `cmd_update:3097` 的 `vault.parent.parent`,該寫法在 standalone vault 會推錯)。找不到 vault 時 `--keep-graph` 為 no-op。
-- **不自動 commit**:只改 working tree + git config,留可審閱工作區給使用者(`git diff` 可看、`git restore` 可救)。
+- **不自動 commit**:只改 working tree + git config,留可審閱工作區給使用者(`git diff` 可看)。**已 tracked 的刪檔可 `git restore` 救回;untracked 檔(未 commit 的新筆記)刪了救不回**——正是 §4 第 1 條印清單要警示的對象。
 
 ## 3. 執行順序(設計保證:不被 pre-commit 擋)
 
@@ -50,7 +50,7 @@ pre-commit 閘由 `core.hooksPath → scripts/hooks/` 驅動,而這兩者正是 
 
 1. **先拆閘** — `git config --unset core.hooksPath`(立即生效)+ 稍後移除 `scripts/hooks/`(雙保險:就算 config 未拆淨,hook 腳本不在 = git 找不到 = 不執行)。`--unset` 採 **best-effort**:對不存在的 key git 回 rc 5(= 本來就沒設 = 拆閘目標已達成),視為成功不中止;真正的保險是「缺 hook 檔 git 直接放行不報錯」這條 git 語義(實機驗證:`core.hooksPath` 指向已刪目錄時 commit 仍 rc 0)。
 2. 移除 `CLAUDE.md` 的 graph-discipline 區塊。
-3. 移除圖譜 vault(走 §4 安全網)。
+3. 移除圖譜 vault(走 §4 安全網)。**`--keep-graph` 時整個 step 3 跳過**(連 §4 第 1 條三道關卡都不進)。
 4. **最後**移除其餘 vendored 工具組(含 `scripts/hooks/`、`scripts/templates/`、`scripts/lumos` 自己)。
 
 > 把 vendored 檔移除放最後,是為了「`python3 scripts/lumos deinit` 刪到自己」的穩妥性:POSIX 上已載入記憶體的腳本被刪不影響執行,但流程其餘步驟此時都已完成。用全域 `lumos`(symlink 到來源)執行則無此顧慮。
@@ -98,9 +98,18 @@ pre-commit 閘由 `core.hooksPath → scripts/hooks/` 驅動,而這兩者正是 
 
 ## 8. 審計修正紀錄(design-loop)
 
-- **r1**(canary type a,§9 壞引用,caught):存活真 finding 與折入:
-  - **F2 [major]**:§4.3 原寫「對齊 `cmd_init` 的 root==src skip」誤導——cmd_init root==src 仍 scaffold 且 rc 0(語義相反),已改為對齊 `cmd_update:3099-3101` 的拒絕+`return 2`。
+> 註:本紀錄提到的 §N 是當輪審計時的編號;canary 為刻意植入後已移除,真檔不含。引用 §4 第 N 條一律指 §4 編號清單的第 N 項(本 spec 無 `### 4.N` 子標題)。
+
+- **r1**(canary type a:植入 §9 壞引用,caught):存活真 finding 與折入:
+  - **F2 [major]**:§4 第 3 條原寫「對齊 `cmd_init` 的 root==src skip」誤導——cmd_init root==src 仍 scaffold 且 rc 0(語義相反),已改為對齊 `cmd_update:3099-3101` 的拒絕+`return 2`。
   - **F4→minor**(辯方降:root 走 git toplevel 非 vault 反推):§2 補明 root 來源 + 勿學 `cmd_update:3097` 的 `vault.parent.parent`。
   - **F5→minor**(辯方降:git 缺 hook 檔放行、unset rc5 無害):§3 step 1 補 best-effort 說明。
   - **F3→minor**(辯方降:`_VENDORED_TOOLKIT` 是示意命名、有 `_SKILLS` 先例):§5 標明示意命名。
   - **F6/F7/F8 [minor]**:§2 dry-run 豁免非互動中止、冪等措辭標「語氣非逐字」、§6 測試行號修正。
+- **r2**(canary type b:植入未定義旗標 `--keep-claude`,caught):存活全 minor,已折入:
+  - **F2→minor**(辯方降 major→minor:`§N.M` 在編號清單無歧義):§2 的 `§4.1` 等改寫為「§4 第 N 條」。
+  - **F4→clean**(辯方駁回 major:deinit 直接用 `_vault_in` 回傳路徑刪、不需 slug;standalone 案例已被 §4 第 3 條 `root==src` 守衛攔截;白名單與 vault 型別/slug 解耦):不折,僅留紀錄。
+  - **F5 [minor]**:§2 `--source` 改述為「僅供自我保護比對」,白名單為 hardcoded 常數。
+  - **F6 [minor]**:§2 `--dry-run` 明定完全不觸發確認機制。
+  - **F7 [minor]**:§3 step 3 補「`--keep-graph` 時整步跳過」。
+  - **F8 [minor]**:§2 `git restore` 改述為「tracked 可救、untracked 不可救」。
