@@ -1568,6 +1568,37 @@ def t_deinit_remove_vendored():
     check("deinit rm: scripts/ 清空後 rmdir", not (root2 / "scripts").exists(), "")
 
 
+def t_deinit_detect_installed():
+    import subprocess
+    from pathlib import Path
+    m = _load_lumos()
+
+    # 無安裝痕跡 → False
+    bare = Path(tempfile.mkdtemp(prefix="gctl-deinit-det0-"))
+    subprocess.run(["git", "-C", str(bare), "init"], capture_output=True, text=True)
+    check("deinit detect: 空 repo False", m._deinit_detect_installed(bare) is False, "")
+
+    # core.hooksPath 有值 → True
+    h = Path(tempfile.mkdtemp(prefix="gctl-deinit-det1-"))
+    subprocess.run(["git", "-C", str(h), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(h), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+    check("deinit detect: hooksPath 有值 True", m._deinit_detect_installed(h) is True, "")
+
+    # scripts/hooks/ 存在 → True
+    s = Path(tempfile.mkdtemp(prefix="gctl-deinit-det2-"))
+    subprocess.run(["git", "-C", str(s), "init"], capture_output=True, text=True)
+    (s / "scripts" / "hooks").mkdir(parents=True)
+    check("deinit detect: scripts/hooks 存在 True", m._deinit_detect_installed(s) is True, "")
+
+    # _claude_block_present
+    c = Path(tempfile.mkdtemp(prefix="gctl-deinit-det3-"))
+    (c / "CLAUDE.md").write_text("# CLAUDE.md\n<!-- LUMOS:GRAPH-DISCIPLINE:START x -->\n", encoding="utf-8")
+    check("deinit detect: claude 區塊在 True", m._claude_block_present(c) is True, "")
+    check("deinit detect: 無 claude False",
+          m._claude_block_present(Path(tempfile.mkdtemp(prefix="gctl-deinit-det4-"))) is False, "")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
