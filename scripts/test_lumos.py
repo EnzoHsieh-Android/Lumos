@@ -14,6 +14,11 @@ import tempfile
 import unicodedata
 from pathlib import Path
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")   # cp950 印 ✓/✗ 會 UnicodeEncodeError
+except Exception:
+    pass
+
 GRAPHCTL = str(Path(__file__).resolve().parent / "lumos")
 PASS, FAIL = 0, 0
 
@@ -40,19 +45,33 @@ def mkvault():
     d = Path(tempfile.mkdtemp(prefix="gctl-test-"))
     for sub in ("Systems", "Verification", "Projects", "MOC"):
         (d / sub).mkdir(parents=True)
-    (d / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
+    (d / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
     return d
 
 
 def write(vault, rel, fm, body="# x\n"):
     p = vault / rel
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(f"---\n{fm}\n---\n{body}", encoding="utf-8")
+    p.write_bytes(f"---\n{fm}\n---\n{body}".encode("utf-8"))
     return p
 
 
 def read(p):
     return p.read_text(encoding="utf-8")
+
+
+def t_write_lf_roundtrip():
+    import subprocess
+    proj = Path(tempfile.mkdtemp(prefix="gctl-lf-"))
+    (proj / "Systems").mkdir(parents=True); (proj / "MOC").mkdir()
+    (proj / "MOC" / "idx.md").write_bytes(b"---\ntype: moc\n---\n# idx\n")
+    write(proj, "Systems/S.md", "type: system\nstatus: doing")     # 經 write() helper
+    raw = (proj / "Systems" / "S.md").read_bytes()
+    check("write helper 寫 LF(無 CRLF)", b"\r\n" not in raw, f"got {raw[:40]!r}")
+    r = subprocess.run([sys.executable, GRAPHCTL, "set", str(proj / "Systems" / "S.md"),
+                        "status", "done"], capture_output=True, text=True)
+    raw2 = (proj / "Systems" / "S.md").read_bytes()
+    check("atomic_write_verify 寫回 LF", b"\r\n" not in raw2, f"rc={r.returncode} {r.stderr}")
 
 
 # ── BUG-1: append dedup 前綴衝突 — X 不該因 X_v2 存在被誤判 ──
@@ -283,23 +302,23 @@ def t_archive_live_guard_protected():
     # 需要 docs/ 父層(repo_root 偵測)+ 一個含 [Fact] 方法的 .cs(discover_test_methods)
     root = Path(tempfile.mkdtemp(prefix="gctl-repo-"))
     (root / "Tests").mkdir()
-    (root / "Tests" / "GuardTests.cs").write_text(
-        "public class GuardTests {\n  [Fact]\n  public void MyLiveGuard() { }\n}\n", encoding="utf-8")
+    (root / "Tests" / "GuardTests.cs").write_bytes(
+        "public class GuardTests {\n  [Fact]\n  public void MyLiveGuard() { }\n}\n".encode("utf-8"))
     vault = root / "docs" / "kg"
     for sub in ("Systems", "Verification", "MOC"):
         (vault / sub).mkdir(parents=True)
-    (vault / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
     # ★INVARIANT★ 綁定存活測試
-    (vault / "Systems" / "S.md").write_text(
-        "---\ntype: system\nstatus: done\nsummary: |-\n"
-        "  KEY:★INVARIANT★ 某載重宣稱 [test:MyLiveGuard]\n---\n# S\n", encoding="utf-8")
+    (vault / "Systems" / "S.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 某載重宣稱 [test:MyLiveGuard]\n---\n# S\n").encode("utf-8"))
     # 老 Verification:提到存活測試 → 應保留
-    (vault / "Verification" / "2020-01-01_guarded.md").write_text(
-        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n"
-        "valid_under:\n  - MyLiveGuard\n---\n# guarded\n", encoding="utf-8")
+    (vault / "Verification" / "2020-01-01_guarded.md").write_bytes(
+        ("---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n"
+        "valid_under:\n  - MyLiveGuard\n---\n# guarded\n").encode("utf-8"))
     # 老 Verification:沒提到任何存活測試 → 應照舊歸檔
-    (vault / "Verification" / "2020-01-01_plain.md").write_text(
-        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n---\n# plain\n", encoding="utf-8")
+    (vault / "Verification" / "2020-01-01_plain.md").write_bytes(
+        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n---\n# plain\n".encode("utf-8"))
     r = run(vault, "archive", "--days", "30", "--apply", expect_rc=0)
     check("活守衛護欄: 綁定測試仍存在的 Verification 保留不歸檔",
           (vault / "Verification/2020-01-01_guarded.md").exists()
@@ -315,13 +334,13 @@ def t_archive_dead_guard_archivable():
     vault = root / "docs" / "kg"
     for sub in ("Systems", "Verification", "MOC"):
         (vault / sub).mkdir(parents=True)
-    (vault / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
-    (vault / "Systems" / "S.md").write_text(
-        "---\ntype: system\nstatus: done\nsummary: |-\n"
-        "  KEY:★INVARIANT★ 某載重宣稱 [test:GoneGuard]\n---\n# S\n", encoding="utf-8")
-    (vault / "Verification" / "2020-01-01_g.md").write_text(
-        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n"
-        "valid_under:\n  - GoneGuard\n---\n# g\n", encoding="utf-8")
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    (vault / "Systems" / "S.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 某載重宣稱 [test:GoneGuard]\n---\n# S\n").encode("utf-8"))
+    (vault / "Verification" / "2020-01-01_g.md").write_bytes(
+        ("---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n"
+        "valid_under:\n  - GoneGuard\n---\n# g\n").encode("utf-8"))
     run(vault, "archive", "--days", "30", "--apply", expect_rc=0)
     check("守衛已死(測試不在 code): Verification 恢復按年齡可歸檔",
           (vault / "Verification/Archive/2020-01/2020-01-01_g.md").exists())
@@ -348,6 +367,9 @@ def t_set_bad_date_rejected():
 
 # ── export 逸出節點名中的 " (R3 latent bug) ──
 def t_export_quote_escape():
+    if sys.platform == "win32":
+        check("export quote: NTFS 禁 \" 字元,Windows skip", True)
+        return
     v = mkvault()
     write(v, 'Systems/A"B.md', "type: system\nstatus: done")
     rm = run(v, "export", "--format", "mermaid", "--folders", "Systems", expect_rc=0)
@@ -677,23 +699,23 @@ def t_guard():
     vault = root / "docs" / "demo-knowledge"
     for sub in ("Systems", "Verification", "Projects", "MOC"):
         (vault / sub).mkdir(parents=True)
-    (vault / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
-    (vault / "Systems" / "Demo.md").write_text(
-        "---\ntype: system\nstatus: done\nsummary: |-\n"
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    (vault / "Systems" / "Demo.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
         "  KEY:★INVARIANT★ 已綁的合約 [test:RealGuardX]\n"
         "  KEY:★INVARIANT★ 還沒綁的合約\n"
-        "---\n# Demo\n", encoding="utf-8")
+        "---\n# Demo\n").encode("utf-8"))
     td = root / "Demo.IntegrationTests"
     td.mkdir()
-    (td / "RealGuard.cs").write_text(
-        "using Xunit;\npublic class RealGuard {\n  [Fact]\n  public void RealGuardX() { }\n}\n",
-        encoding="utf-8")
+    (td / "RealGuard.cs").write_bytes(
+        "using Xunit;\npublic class RealGuard {\n  [Fact]\n  public void RealGuardX() { }\n}\n"
+        .encode("utf-8"))
     tpl = root / ".lumos" / "guard-templates"
     tpl.mkdir(parents=True)
-    (tpl / "behavioral.tmpl").write_text(
-        "// {{NODE}} | {{INVARIANT}} | {{CLAIM}} | {{PREFIX}}\n"
+    (tpl / "behavioral.tmpl").write_bytes(
+        ("// {{NODE}} | {{INVARIANT}} | {{CLAIM}} | {{PREFIX}}\n"
         "public class {{CLASS}} {\n  public void {{METHOD}}() "
-        "{ Assert.Fail(\"unfilled\"); }\n}\n", encoding="utf-8")
+        "{ Assert.Fail(\"unfilled\"); }\n}\n").encode("utf-8"))
     try:
         r = run(vault, "guard", "list")
         check("guard list: real/naked 分類", "真綁 1" in r.stdout and "裸 1" in r.stdout, r.stdout)
@@ -786,24 +808,24 @@ def t_guard_kotlin():
     vault = root / "docs" / "demo-knowledge"
     for sub in ("Systems", "Verification", "Projects", "MOC"):
         (vault / sub).mkdir(parents=True)
-    (vault / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
-    (vault / "Systems" / "Login.md").write_text(
-        "---\ntype: system\nstatus: done\nsummary: |-\n"
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    (vault / "Systems" / "Login.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
         "  KEY:★INVARIANT★ 登入鎖定 [test:LoginLocksAfterFiveFails]\n"
-        "---\n# Login\n", encoding="utf-8")
+        "---\n# Login\n").encode("utf-8"))
     (root / ".lumos").mkdir(parents=True)
-    (root / ".lumos" / "config.json").write_text(
-        '{"test_profile": "kotlin-junit"}\n', encoding="utf-8")
+    (root / ".lumos" / "config.json").write_bytes(
+        '{"test_profile": "kotlin-junit"}\n'.encode("utf-8"))
     ktdir = root / "app" / "src" / "test" / "java" / "auth"
     ktdir.mkdir(parents=True)
-    (ktdir / "LoginTest.kt").write_text(
-        "package auth\nimport org.junit.Test\nclass LoginTest {\n"
-        "  @Test\n  fun LoginLocksAfterFiveFails() { }\n}\n", encoding="utf-8")
+    (ktdir / "LoginTest.kt").write_bytes(
+        ("package auth\nimport org.junit.Test\nclass LoginTest {\n"
+        "  @Test\n  fun LoginLocksAfterFiveFails() { }\n}\n").encode("utf-8"))
     tpl = root / ".lumos" / "guard-templates"
     tpl.mkdir(parents=True)
-    (tpl / "pure.tmpl").write_text(
-        "// {{NODE}} | {{INVARIANT}} | {{CLAIM}}\nclass {{CLASS}} {\n"
-        "  @Test fun {{METHOD}}() { fail(\"unfilled\") }\n}\n", encoding="utf-8")
+    (tpl / "pure.tmpl").write_bytes(
+        ("// {{NODE}} | {{INVARIANT}} | {{CLAIM}}\nclass {{CLASS}} {\n"
+        "  @Test fun {{METHOD}}() { fail(\"unfilled\") }\n}\n").encode("utf-8"))
     try:
         r = run(vault, "guard", "list")
         check("guard kotlin: @Test fun 認成真方法(real)", "真綁 1" in r.stdout, r.stdout)
@@ -828,18 +850,18 @@ def t_guard_profile_robustness():
     vault = root / "docs" / "demo-knowledge"
     for sub in ("Systems", "Verification", "Projects", "MOC"):
         (vault / sub).mkdir(parents=True)
-    (vault / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n", encoding="utf-8")
-    (vault / "Systems" / "Z.md").write_text(
-        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 某 [test:RealZ]\n---\n# Z\n",
-        encoding="utf-8")
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    (vault / "Systems" / "Z.md").write_bytes(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 某 [test:RealZ]\n---\n# Z\n"
+        .encode("utf-8"))
     (root / "Z.Tests").mkdir()
-    (root / "Z.Tests" / "Z.cs").write_text(
-        "using Xunit;\npublic class Z {\n  [Fact]\n  public void RealZ() { }\n}\n", encoding="utf-8")
+    (root / "Z.Tests" / "Z.cs").write_bytes(
+        "using Xunit;\npublic class Z {\n  [Fact]\n  public void RealZ() { }\n}\n".encode("utf-8"))
     cfgdir = root / ".lumos"
     cfgdir.mkdir()
 
     def setcfg(s):
-        (cfgdir / "config.json").write_text(s, encoding="utf-8")
+        (cfgdir / "config.json").write_bytes(s.encode("utf-8"))
 
     try:
         setcfg('{"test": "oops"}')   # F1: test 非 dict
@@ -898,19 +920,19 @@ def t_archive_live_guard_wordboundary():
     vault = root / "docs" / "demo-knowledge"
     for sub in ("Systems", "Verification", "Projects", "MOC"):
         (vault / sub).mkdir(parents=True)
-    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
-    (vault / "Systems" / "S.md").write_text(   # live guard 方法名 "Pay"(短)
-        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 付款 [test:Pay]\n---\n# S\n",
-        encoding="utf-8")
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
+    (vault / "Systems" / "S.md").write_bytes(   # live guard 方法名 "Pay"(短)
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 付款 [test:Pay]\n---\n# S\n"
+        .encode("utf-8"))
     (root / "S.Tests").mkdir()
-    (root / "S.Tests" / "S.cs").write_text(
-        "using Xunit;\npublic class S { [Fact] public void Pay() {} }\n", encoding="utf-8")
-    (vault / "Verification" / "2020-01-01_exact.md").write_text(   # 精確提 Pay → 護住
-        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n---\n# e\n守衛 Pay 跑綠\n",
-        encoding="utf-8")
-    (vault / "Verification" / "2020-01-02_substr.md").write_text(  # 只提 Payment → 不該護
-        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-02\n---\n# s\n講 Payment 流程,與守衛無關\n",
-        encoding="utf-8")
+    (root / "S.Tests" / "S.cs").write_bytes(
+        "using Xunit;\npublic class S { [Fact] public void Pay() {} }\n".encode("utf-8"))
+    (vault / "Verification" / "2020-01-01_exact.md").write_bytes(   # 精確提 Pay → 護住
+        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n---\n# e\n守衛 Pay 跑綠\n"
+        .encode("utf-8"))
+    (vault / "Verification" / "2020-01-02_substr.md").write_bytes(  # 只提 Payment → 不該護
+        "---\ntype: verification\nstatus: pass\ncreated: 2020-01-02\n---\n# s\n講 Payment 流程,與守衛無關\n"
+        .encode("utf-8"))
     try:
         r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vault), "archive", "--days", "30"],
                            capture_output=True, text=True)
@@ -919,9 +941,9 @@ def t_archive_live_guard_wordboundary():
         check("archive 護欄: 只提 Payment(超字串)不被護住",
               "2020-01-02_substr.md  (backs" not in r.stdout, r.stdout)
         # CJK 緊貼方法名(無空格)仍須護住(re.ASCII 詞界;否則 Unicode \b 漏護)
-        (vault / "Verification" / "2020-01-03_cjk.md").write_text(
-            "---\ntype: verification\nstatus: pass\ncreated: 2020-01-03\n---\n# c\n守衛Pay跑綠無空格\n",
-            encoding="utf-8")
+        (vault / "Verification" / "2020-01-03_cjk.md").write_bytes(
+            "---\ntype: verification\nstatus: pass\ncreated: 2020-01-03\n---\n# c\n守衛Pay跑綠無空格\n"
+            .encode("utf-8"))
         r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vault), "archive", "--days", "30"],
                            capture_output=True, text=True)
         check("archive 護欄: CJK 緊貼方法名仍護住(re.ASCII)",
@@ -1062,9 +1084,9 @@ def t_governance_log_write():
     vault = root / "docs" / "kg"
     for sub in ("Systems", "MOC"):
         (vault / sub).mkdir(parents=True)
-    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
-    (vault / "Systems" / "Mig.md").write_text(
-        "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:★IRREVERSIBLE★ 跑遷移\n---\n# M\n", encoding="utf-8")
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
+    (vault / "Systems" / "Mig.md").write_bytes(
+        "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:★IRREVERSIBLE★ 跑遷移\n---\n# M\n".encode("utf-8"))
     sp.run(["git", "init", "-q"], cwd=str(root))
     sp.run(["git", "add", "-A"], cwd=str(root))
     sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], cwd=str(root))
@@ -1085,14 +1107,14 @@ def t_gov_query():
     root = Path(tempfile.mkdtemp(prefix="gctl-govq-"))
     vault = root / "docs" / "kg"
     (vault / "MOC").mkdir(parents=True)
-    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
     docs = root / "docs"
-    (docs / ".bypass-log.jsonl").write_text(
-        '{"ts":"2026-06-18T10:00:00","commit":"abc","subject":"skip graph"}\n', encoding="utf-8")
-    (docs / ".rot-queue.jsonl").write_text(
-        '{"ts":"2026-06-18T11:00:00","commit":"abc12","verification":"docs/kg/Verification/Foo.md","reason":"schema 變"}\n', encoding="utf-8")
-    (docs / ".governance-log.jsonl").write_text(
-        '{"ts":"2026-06-19T09:00:00","commit":"def","gate":"check-r","kind":"blocked","hard":true,"nodes":["OrderSvc"]}\n', encoding="utf-8")
+    (docs / ".bypass-log.jsonl").write_bytes(
+        '{"ts":"2026-06-18T10:00:00","commit":"abc","subject":"skip graph"}\n'.encode("utf-8"))
+    (docs / ".rot-queue.jsonl").write_bytes(
+        '{"ts":"2026-06-18T11:00:00","commit":"abc12","verification":"docs/kg/Verification/Foo.md","reason":"schema 變"}\n'.encode("utf-8"))
+    (docs / ".governance-log.jsonl").write_bytes(
+        '{"ts":"2026-06-19T09:00:00","commit":"def","gate":"check-r","kind":"blocked","hard":true,"nodes":["OrderSvc"]}\n'.encode("utf-8"))
     try:
         r = run(vault, "gov")
         check("gov: 三來源合併", "check-r" in r.stdout and "skip graph" in r.stdout and "schema 變" in r.stdout, r.stdout)
@@ -1125,7 +1147,7 @@ def t_canary():
     root = Path(tempfile.mkdtemp(prefix="gctl-can-"))
     vault = root / "docs" / "kg"
     (vault / "MOC").mkdir(parents=True)
-    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
     try:
         r = run(vault, "canary", "record", "missed", "--auditor", "sonnet")
         check("canary: record missed rc0", r.returncode == 0, r.stdout + r.stderr)
@@ -1153,7 +1175,7 @@ def t_canary_loop_fields():
     root = Path(tempfile.mkdtemp(prefix="gctl-clf-"))
     vault = root / "docs" / "kg"
     (vault / "MOC").mkdir(parents=True)
-    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
     try:
         r = run(vault, "canary", "record", "caught", "--loop", "L", "--severity", "major", "--token", "zz")
         check("canary --loop/--severity: rc0", r.returncode == 0, r.stdout + r.stderr)
@@ -1172,7 +1194,7 @@ def t_loop_status():
     root = Path(tempfile.mkdtemp(prefix="gctl-loop-"))
     vault = root / "docs" / "kg"
     (vault / "MOC").mkdir(parents=True)
-    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
     log = root / "docs" / ".canary-log.jsonl"
     n = [0]
 
@@ -1250,7 +1272,7 @@ def _mk_git_vault():
         subprocess.run(cmd, cwd=root, capture_output=True)
     vault = root / "docs" / "kg"
     (vault / "MOC").mkdir(parents=True)
-    (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
     subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=root, capture_output=True)
     return root, vault
@@ -1262,35 +1284,35 @@ def t_check_h_irreversible_hint():
 
     # 1. smoke:staged 含 prod requests.post → 提示
     root, vault = _mk_git_vault()
-    (root / "charge.py").write_text('requests.post("https://prod.api.com/charge")\n', encoding="utf-8")
+    (root / "charge.py").write_bytes('requests.post("https://prod.api.com/charge")\n'.encode("utf-8"))
     subprocess.run(["git", "add", "charge.py"], cwd=root, capture_output=True)
     r = run(vault, "doctor", "--ci")
     check("Check H smoke: staged prod requests.post → 提示", HEAD in r.stdout, r.stdout)
 
     # 2. filter-test-file:test_ 檔含 sendmail → 不報
     root, vault = _mk_git_vault()
-    (root / "test_email.py").write_text('sendmail("to@prod")\n', encoding="utf-8")
+    (root / "test_email.py").write_bytes('sendmail("to@prod")\n'.encode("utf-8"))
     subprocess.run(["git", "add", "test_email.py"], cwd=root, capture_output=True)
     r = run(vault, "doctor", "--ci")
     check("Check H filter test-file: test_ 檔不報", HEAD not in r.stdout, r.stdout)
 
     # 3. filter-comment:純注解行 → 不報
     root, vault = _mk_git_vault()
-    (root / "x.py").write_text('# sendgrid.send(...)\n', encoding="utf-8")
+    (root / "x.py").write_bytes('# sendgrid.send(...)\n'.encode("utf-8"))
     subprocess.run(["git", "add", "x.py"], cwd=root, capture_output=True)
     r = run(vault, "doctor", "--ci")
     check("Check H filter comment: 純注解不報", HEAD not in r.stdout, r.stdout)
 
     # 4. config-file:.yaml 含 prod.stripe → 報(SKIP_EXT 不排 .yaml)
     root, vault = _mk_git_vault()
-    (root / "config.yaml").write_text('endpoint: https://prod.stripe.com\n', encoding="utf-8")
+    (root / "config.yaml").write_bytes('endpoint: https://prod.stripe.com\n'.encode("utf-8"))
     subprocess.run(["git", "add", "config.yaml"], cwd=root, capture_output=True)
     r = run(vault, "doctor", "--ci")
     check("Check H config: .yaml prod → 報", HEAD in r.stdout, r.stdout)
 
     # 5. no-ci:--strict(無 --ci)→ 印互動略過語、不掃
     root, vault = _mk_git_vault()
-    (root / "charge.py").write_text('requests.post("https://prod.api.com")\n', encoding="utf-8")
+    (root / "charge.py").write_bytes('requests.post("https://prod.api.com")\n'.encode("utf-8"))
     subprocess.run(["git", "add", "charge.py"], cwd=root, capture_output=True)
     r = run(vault, "doctor", "--strict")
     check("Check H no-ci: 互動模式略過", "互動模式略過" in r.stdout, r.stdout)
