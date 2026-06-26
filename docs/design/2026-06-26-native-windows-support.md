@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: design-hardened-pending-windows
 created: 2026-06-26
 tags:
   - type/project
