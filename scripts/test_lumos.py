@@ -1469,6 +1469,33 @@ def t_deinit_vendored_toolkit_constant():
           tuple(m._VENDORED_TOOLKIT) == expected, f"got {getattr(m,'_VENDORED_TOOLKIT',None)!r}")
 
 
+def _load_lumos():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "m", GRAPHCTL, loader=SourceFileLoader("m", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def t_deinit_unbar_gate():
+    import subprocess
+    from pathlib import Path
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-unbar-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+    rc1 = m._deinit_unbar_gate(root)
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit unbar: core.hooksPath 已 unset", hp.stdout.strip() == "", f"got {hp.stdout!r}")
+    check("deinit unbar: rc 0 視為成功", rc1 == 0, f"rc={rc1}")
+    rc2 = m._deinit_unbar_gate(root)   # 再 unset 一次 → key 已不存在
+    check("deinit unbar: 重複 unset rc5 不崩潰", rc2 in (0, 5), f"rc={rc2}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
