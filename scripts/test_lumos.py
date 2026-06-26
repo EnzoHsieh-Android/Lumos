@@ -1719,6 +1719,7 @@ def t_deinit_graph():
     (root / "CLAUDE.md").write_bytes(("# CLAUDE.md\n\n" + START + "\nx\n" + END + "\n").encode("utf-8"))
     r = _deinit_run(root, "--yes")
     check("deinit graph10: 鐵閘 rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    check("deinit graph10: 印 standalone vault 警示", "standalone vault" in r.stderr, r.stderr)
     check("deinit graph10: repo 根仍在(絕無 rmtree)", (root / "important_note.md").exists(), "")
     check("deinit graph10: MOC/ 圖譜仍在", (root / "MOC" / "index.md").exists(), "")
     hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
