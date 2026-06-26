@@ -91,6 +91,18 @@ scripts/install-graph-toolchain.sh --target <專案路徑> --slug <名稱>
 ```
 </details>
 
+### 4c. Windows(原生 PowerShell)
+前置:Git for Windows(自帶 bash 跑 git hooks)、python on PATH、Claude Code。
+
+```powershell
+irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex
+# 重啟 Claude Code session(L1/L3 在 session start 載入)
+# 若 lumos 找不到:把 %USERPROFILE%\.local\bin 加進 PATH
+cd <你的專案>; lumos init
+```
+
+`get.ps1` 裝「機器層」:clone Lumos(若缺)+ 呼叫 `lumos install` —— 全域 `lumos` 用 `%USERPROFILE%\.local\bin\lumos.cmd` shim、user-scope skills 用目錄 **junction**(`mklink /J`,失敗才退回複製),皆零權限免 admin;個別 Claude hook 的 `.py` 一律**複製**到 `~/.claude/hooks/`。接著 `lumos init` 同 Unix 建專案層(圖譜骨架 + vendor 工具 + git/Claude hooks)。
+
 ### 為什麼分兩層裝?
 CI 只 checkout 專案 repo、git hook 是 per-repo,所以**工具組必須 vendor 進各專案**;而 **skills 是 user-scope**(一份共用、symlink 到 `~/.claude/skills/`)。對 Lumos clone `git pull` 會即時更新 skills + 全域 CLI;專案裡 vendored 的工具組用 `lumos update` 刷新。
 
