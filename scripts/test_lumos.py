@@ -1420,11 +1420,17 @@ def t_hook_cmd_home_resolved():
     spec = importlib.util.spec_from_file_location("merge_mod_t", merge)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)  # 有 __main__ guard,import 不跑 main
-    cmd = m._hook_cmd("check-graph-sync.py")
     if sys.platform == "win32":
-        check("hook cmd: Windows 用絕對 home(無 ${HOME},否則 L1 不觸發)",
-              "${HOME}" not in cmd and "/.claude/hooks/check-graph-sync.py" in cmd, cmd)
+        # Claude Code 在 Windows 用 Git Bash 跑 hook → 反斜線會被吃掉。python 路徑(shutil.which
+        # 在真機回 C:\...\python.EXE)必須正斜線化。monkeypatch _PY 模擬真機(測試 env stale PATH
+        # 下 _PY 會退化成 "python3" 無反斜線、測不到轉換)。
+        m._PY = "C:\\fake\\dir\\python.EXE"
+        cmd = m._hook_cmd("check-graph-sync.py")
+        check("hook cmd: Windows 無 ${HOME}、無反斜線(Git Bash 跑才不吃)、絕對路徑",
+              "${HOME}" not in cmd and "\\" not in cmd
+              and "/.claude/hooks/check-graph-sync.py" in cmd, cmd)
     else:
+        cmd = m._hook_cmd("check-graph-sync.py")
         check("hook cmd: Unix 保留 ${HOME}(可攜)", "${HOME}" in cmd, cmd)
 
 

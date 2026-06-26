@@ -20,8 +20,13 @@ _HOME = str(Path.home()).replace("\\", "/")
 
 
 def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
-    home = _HOME if sys.platform == "win32" else "${HOME}"  # Unix 保留 ${HOME}(可攜、Mac 已驗)
-    return f'{_PY} "{home}/.claude/hooks/{rel_path}"'
+    # W6:Claude Code 在 Windows 用 Git Bash 跑 hook command → 反斜線會被 shell 吃掉
+    # (C:\Users → C:Users → python 找不到 → hook 靜默失敗)。故 Windows 下 python 路徑與
+    # home 都用正斜線 + 引號。Unix 保留 ${HOME}(可攜、Mac 已驗)。
+    if sys.platform == "win32":
+        py = _PY.replace("\\", "/")
+        return f'"{py}" "{_HOME}/.claude/hooks/{rel_path}"'
+    return f'{_PY} "${{HOME}}/.claude/hooks/{rel_path}"'
 
 
 HOOK_ENTRIES = {
