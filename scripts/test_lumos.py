@@ -130,6 +130,15 @@ def t_install_hooks_py():
           hp.stdout.strip() == "scripts/hooks", f"got {hp.stdout!r} stderr={r.stderr}")
 
 
+def t_hooks_python_fallback():
+    import pathlib
+    repo = pathlib.Path(GRAPHCTL).resolve().parent.parent
+    for h in ("post-commit", "pre-push"):
+        t = (repo / "scripts" / "hooks" / h).read_text(encoding="utf-8")
+        check(f"{h}: 有 python3||python fallback",
+              "command -v python3 || command -v python" in t, "缺 fallback")
+
+
 # ── BUG-1: append dedup 前綴衝突 — X 不該因 X_v2 存在被誤判 ──
 def t_append_prefix_collision():
     v = mkvault()
