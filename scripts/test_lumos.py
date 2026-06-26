@@ -1673,6 +1673,74 @@ def t_deinit_cmd_basic():
     check("deinit cmd: 冪等印未安裝", "未安裝" in r.stdout, r.stdout)
 
 
+def t_deinit_graph():
+    import subprocess, os
+    from pathlib import Path
+
+    # case 1 完整 deinit:default(--yes)→ vault 不存在 + 其餘皆拆
+    root = _mk_installed_project(prefix="gctl-deinit-g1-")
+    r = _deinit_run(root, "--yes")
+    check("deinit graph1: rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    check("deinit graph1: vault 已刪", not (root / "docs" / "demo-knowledge").exists(), "")
+    check("deinit graph1: scripts/lumos 已移", not (root / "scripts" / "lumos").exists(), "")
+
+    # case 2 --keep-graph:vault 仍在
+    root = _mk_installed_project(prefix="gctl-deinit-g2-")
+    _deinit_run(root, "--keep-graph", "--yes")
+    check("deinit graph2: --keep-graph 保留 vault", (root / "docs" / "demo-knowledge").is_dir(), "")
+
+    # case 8 --dry-run:vault + config + 檔案全不動
+    root = _mk_installed_project(prefix="gctl-deinit-g8-")
+    r = _deinit_run(root, "--dry-run")
+    check("deinit graph8: dry-run rc0", r.returncode == 0, f"{r.returncode}")
+    check("deinit graph8: dry-run vault 仍在", (root / "docs" / "demo-knowledge").is_dir(), "")
+    check("deinit graph8: dry-run scripts/lumos 仍在", (root / "scripts" / "lumos").exists(), "")
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit graph8: dry-run hooksPath 未動", hp.stdout.strip() == "scripts/hooks", f"{hp.stdout!r}")
+
+    # case 9 非互動防呆:預設(無 --yes)+ 非 tty → 拒絕刪 + rc2 + vault 仍在
+    root = _mk_installed_project(prefix="gctl-deinit-g9-")
+    r = _deinit_run(root)   # subprocess capture → stdin 非 tty
+    check("deinit graph9: 非互動無 --yes rc2", r.returncode == 2, f"{r.returncode} {r.stdout} {r.stderr}")
+    check("deinit graph9: vault 未刪", (root / "docs" / "demo-knowledge").is_dir(), "")
+
+    # case 10 vault==root 鐵閘:standalone vault repo(非 _lumos_src)→ 絕不 rmtree
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-g10-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+    (root / "MOC").mkdir(); (root / "Systems").mkdir()
+    (root / "MOC" / "index.md").write_text("# idx\n")
+    (root / "important_note.md").write_text("不可刪\n")
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改本區塊;"
+             "改範本 scripts/templates/graph-discipline.md -->")
+    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    (root / "CLAUDE.md").write_bytes(("# CLAUDE.md\n\n" + START + "\nx\n" + END + "\n").encode("utf-8"))
+    r = _deinit_run(root, "--yes")
+    check("deinit graph10: 鐵閘 rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    check("deinit graph10: repo 根仍在(絕無 rmtree)", (root / "important_note.md").exists(), "")
+    check("deinit graph10: MOC/ 圖譜仍在", (root / "MOC" / "index.md").exists(), "")
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit graph10: 其餘動作仍執行(hooksPath unset)", hp.stdout.strip() == "", f"{hp.stdout!r}")
+    cm = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    check("deinit graph10: 其餘動作仍執行(claude 區塊剝)", "GRAPH-DISCIPLINE" not in cm, cm)
+
+    # case 3 拆閘有效:deinit 後 commit「改 code 不動圖譜」不被擋
+    root = _mk_installed_project(prefix="gctl-deinit-g3-")
+    _deinit_run(root, "--keep-graph", "--yes")
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("deinit graph3: core.hooksPath 空", hp.stdout.strip() == "", f"{hp.stdout!r}")
+    check("deinit graph3: scripts/hooks/ 不存在", not (root / "scripts" / "hooks").exists(), "")
+    (root / "code.py").write_text("print(1)\n")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True, text=True)
+    cr = subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t",
+                         "commit", "-m", "change code only"], capture_output=True, text=True)
+    check("deinit graph3: commit 不被擋(rc0)", cr.returncode == 0, f"{cr.returncode} {cr.stdout} {cr.stderr}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

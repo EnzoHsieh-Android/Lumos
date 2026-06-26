@@ -3049,16 +3049,52 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
         print("ERROR: 當前就是 Lumos 來源本身,deinit 拒絕執行", file=sys.stderr)
         return 2
     vault = _vault_in(root)
-    will_delete_vault = False   # Task 7 替換為:vault is not None and not keep_graph(含 vault==root 鐵閘)
+    # pre-flight 守衛②:vault == root 鐵閘(防 rmtree 整個 repo)
+    if vault is not None and vault.resolve() == root.resolve() and not keep_graph:
+        keep_graph = True
+        print("⚠ 偵測到 standalone vault(圖譜=repo 根):強制保留圖譜,只拆其餘專案層。",
+              file=sys.stderr)
+    will_delete_vault = (vault is not None) and (not keep_graph)
     installed = _deinit_detect_installed(root)
     has_claude = _claude_block_present(root)
     if not installed and not will_delete_vault and not has_claude:
         print("✓ 未安裝(此 repo 無 Lumos 專案層)")
         return 0
+    if dry_run:
+        print("lumos deinit --dry-run(僅預演,不改動):")
+        print(f"  root: {root}")
+        print("  拆閘: git config --unset core.hooksPath" if installed
+              else "  拆閘: (core.hooksPath 未設,略)")
+        if has_claude:
+            print("  剝 CLAUDE.md graph-discipline 區塊")
+        if will_delete_vault:
+            n = len([f for f in vault.rglob("*") if f.is_file()])
+            print(f"  刪圖譜 vault: {vault}({n} 檔)")
+        elif vault is not None:
+            print(f"  保留圖譜 vault: {vault}")
+        print("  移除 vendored 工具組(白名單:5 檔 + hooks/templates 兩夾)")
+        return 0
+    if will_delete_vault and not yes:
+        if not sys.stdin.isatty():
+            print("ERROR: 非互動環境(stdin 非 tty)且未加 --yes,拒絕刪圖譜。加 --yes 確認。",
+                  file=sys.stderr)
+            return 2
+        files = [f for f in vault.rglob("*") if f.is_file()]
+        dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain", str(vault)],
+                               capture_output=True, text=True).stdout
+        n_dirty = len([ln for ln in dirty.splitlines() if ln.strip()])
+        print(f"將刪除圖譜 vault: {vault}({len(files)} 檔)")
+        if n_dirty:
+            print(f"  ⚠ 其中 {n_dirty} 個未 commit — 刪了 git 救不回!")
+        if input("確定刪除?輸入 y 繼續、其他取消: ").strip().lower() != "y":
+            print("已取消。")
+            return 1
     # ── 固定順序執行(pre-flight 已過)──
     _deinit_unbar_gate(root)                 # step 1 先拆閘
     _deinit_strip_claude(root)               # step 2 剝 CLAUDE.md 區塊
-    # step 3 刪圖譜 vault:Task 7 加入(此處暫不刪)
+    if will_delete_vault:                    # step 3 刪圖譜(pre-flight + 安全網已過)
+        import shutil
+        shutil.rmtree(vault)
     _deinit_remove_vendored(root)            # step 4 最後移 vendored(可能含自己)
     print("✓ deinit 完成(專案層已移除)。檢視 `git diff` 後自行 commit。")
     return 0
