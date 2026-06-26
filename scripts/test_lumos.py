@@ -1537,6 +1537,37 @@ def t_deinit_strip_claude():
     check("deinit claude D: 內容不變", (root / "CLAUDE.md").read_text(encoding="utf-8") == before, "")
 
 
+def t_deinit_remove_vendored():
+    from pathlib import Path
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-deinit-rm-"))
+    sc = root / "scripts"
+    (sc / "hooks").mkdir(parents=True)
+    (sc / "templates").mkdir(parents=True)
+    (sc / "hooks" / "pre-commit").write_text("#!/bin/sh\n")
+    (sc / "templates" / "graph-discipline.md").write_text("tpl\n")
+    for rel in ("scripts/lumos", "scripts/test_lumos.py", "scripts/merge-claude-settings.py",
+                "scripts/graph-rename.sh", "scripts/fetch-notesmd.sh"):
+        (root / rel).write_text("x\n")
+    (sc / "my_own_helper.py").write_text("mine\n")   # 使用者自有檔
+
+    removed = m._deinit_remove_vendored(root)
+
+    check("deinit rm: scripts/lumos 已移", not (sc / "lumos").exists(), "")
+    check("deinit rm: scripts/hooks/ 整夾移除", not (sc / "hooks").exists(), "")
+    check("deinit rm: scripts/templates/ 整夾移除", not (sc / "templates").exists(), "")
+    check("deinit rm: 使用者自有檔保留", (sc / "my_own_helper.py").exists(), "")
+    check("deinit rm: scripts/ 非空故保留", sc.is_dir(), "")
+    check("deinit rm: 回傳列表含 scripts/lumos", "scripts/lumos" in removed, f"{removed}")
+
+    # 第二個 repo:scripts/ 只剩 Lumos-owned → 清空後應 rmdir
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-deinit-rm2-"))
+    (root2 / "scripts").mkdir()
+    (root2 / "scripts" / "lumos").write_text("x\n")
+    m._deinit_remove_vendored(root2)
+    check("deinit rm: scripts/ 清空後 rmdir", not (root2 / "scripts").exists(), "")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
