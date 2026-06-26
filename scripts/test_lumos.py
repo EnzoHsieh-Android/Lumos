@@ -74,6 +74,51 @@ def t_write_lf_roundtrip():
     check("atomic_write_verify 寫回 LF", b"\r\n" not in raw2, f"rc={r.returncode} {r.stderr}")
 
 
+# ── Task 1: 平台 helper + 安裝原語(scaffold / skills / hooks)──
+def t_scaffold_project():
+    import subprocess, sys
+    proj = Path(tempfile.mkdtemp(prefix="gctl-scaf-"))
+    r = subprocess.run([sys.executable, GRAPHCTL, "init", "--name", "demo", "--no-hooks"],
+                       cwd=str(proj), capture_output=True, text=True)
+    kg = proj / "docs" / "demo-knowledge"
+    for d in ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC"):
+        check(f"scaffold: 建 {d} 夾", (kg / d).is_dir(), f"rc={r.returncode} {r.stderr}")
+    check("scaffold: MOC/index.md", (kg / "MOC" / "index.md").exists(), "")
+    check("scaffold: .gitignore", (kg / ".gitignore").exists(), "")
+
+
+def t_install_skills_unix():
+    if sys.platform == "win32":
+        check("skills: Windows 分支留 Task 7 手動驗", True); return
+    import subprocess
+    r = subprocess.run([sys.executable, GRAPHCTL, "install", "--force"], capture_output=True, text=True)
+    dst = Path.home() / ".claude" / "skills" / "lumos-project-notes"
+    check("skills: ~/.claude/skills/lumos-project-notes 連結存在", dst.exists(), r.stderr)
+
+
+def t_install_hooks_py():
+    """hermetic:temp root + git init + temp HOME,只斷言 core.hooksPath。
+    完整 settings 斷言留 Task 3。"""
+    import subprocess, os
+    root = Path(tempfile.mkdtemp(prefix="gctl-hooks-"))
+    fake = Path(tempfile.mkdtemp(prefix="gctl-home-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    # lumos 無 .py 副檔名 → spec_from_file_location 推不出 loader,顯式給 SourceFileLoader
+    code = ("import importlib.util,sys;from pathlib import Path;"
+            "from importlib.machinery import SourceFileLoader;"
+            "spec=importlib.util.spec_from_file_location('m',sys.argv[1],"
+            "loader=SourceFileLoader('m',sys.argv[1]));"
+            "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+            "m._install_hooks_py(Path(sys.argv[2]))")
+    r = subprocess.run([sys.executable, "-c", code, GRAPHCTL, str(root)],
+                       env=dict(os.environ, HOME=str(fake), USERPROFILE=str(fake)),
+                       capture_output=True, text=True)
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("hooks: core.hooksPath == scripts/hooks",
+          hp.stdout.strip() == "scripts/hooks", f"got {hp.stdout!r} stderr={r.stderr}")
+
+
 # ── BUG-1: append dedup 前綴衝突 — X 不該因 X_v2 存在被誤判 ──
 def t_append_prefix_collision():
     v = mkvault()

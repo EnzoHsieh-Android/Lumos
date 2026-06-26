@@ -26,12 +26,15 @@ self-contained,無 Obsidian app / obsidian CLI 依賴,CI 可跑。
   - 連結解析: 路徑優先,fallback basename,大小寫不敏感,NFC 正規化
 """
 import argparse
+import os
 import re
 import sys
 import time
 import unicodedata
 from collections import defaultdict
 from pathlib import Path
+
+_IS_WIN = os.name == "nt"
 
 FENCE_RE = re.compile(r"^```.*?^```", re.S | re.M)
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
@@ -3081,6 +3084,90 @@ def cmd_update(source=None, no_pull=False):
     return 2 if rc is None else rc
 
 
+_SKILLS = ("lumos-project-notes", "lumos-core-knowledge", "lumos-design-loop")  # 同 install.sh:28
+
+
+def _link_or_copy(src: Path, dst: Path):
+    """src→dst:Unix symlink、Win 目錄 junction、失敗 fallback 複製。src 須為目錄。"""
+    import shutil, subprocess
+    if dst.is_symlink() or dst.exists():
+        if dst.is_dir() and not dst.is_symlink():
+            shutil.rmtree(dst, ignore_errors=True)
+        else:
+            dst.unlink()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if _IS_WIN:
+            r = subprocess.run(["cmd", "/c", "mklink", "/J", str(dst), str(src)],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                raise OSError(r.stderr)
+        else:
+            dst.symlink_to(src)
+    except OSError:
+        shutil.copytree(src, dst, dirs_exist_ok=True)  # Python ≥ 3.8
+        print(f"  ⚠ 連結失敗,改複製(失去 git pull 即更新): {dst}")
+
+
+def _install_skills():
+    repo = Path(__file__).resolve().parent.parent
+    dest = Path.home() / ".claude" / "skills"
+    for s in _SKILLS:
+        src = repo / "skills" / s
+        if src.is_dir():
+            _link_or_copy(src, dest / s)
+            print(f"  ✓ skill {s}")
+
+
+_INIT_SUBDIRS_FULL = ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC")
+
+
+def _scaffold_project(root: Path, slug: str):
+    kg = root / "docs" / f"{slug}-knowledge"
+    if kg.exists():
+        print(f"  ✓ vault 已存在,跳過 scaffold(保護資料): {kg}")
+        return
+    for d in _INIT_SUBDIRS_FULL:
+        (kg / d).mkdir(parents=True, exist_ok=True)
+    _write_lf(kg / "MOC" / "index.md",
+              f"---\ntype: moc\nstatus: doing\n---\n# {slug} 知識圖譜總索引\n")
+    _write_lf(kg / ".gitignore",
+              ".bypass-log.jsonl\n.rot-queue.jsonl\n.governance-log.jsonl\n.canary-log.jsonl\n")
+    # CLAUDE.md 注入 graph-discipline 區塊(用既有範本,變數替換)
+    tpl = root / "scripts" / "templates" / "graph-discipline.md"
+    if tpl.exists():
+        body = tpl.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
+        START = "<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->"
+        END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+        block = START + "\n" + body + "\n" + END
+        cm = root / "CLAUDE.md"
+        if not cm.exists():
+            _write_lf(cm, "# CLAUDE.md\n\n" + block + "\n")
+        elif "LUMOS:GRAPH-DISCIPLINE:START" not in cm.read_text(encoding="utf-8"):
+            t = cm.read_text(encoding="utf-8")
+            _write_lf(cm, t.rstrip() + "\n\n" + block + "\n")
+    print(f"  ✓ scaffold {kg}")
+
+
+def _install_hooks_py(root: Path):
+    import subprocess, shutil
+    # ① git config core.hooksPath
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"])
+    # ② 複製 Claude hooks 到 ~/.claude/hooks/(個別 .py 一律 copy,不用 junction:mklink /J 只連目錄)
+    chooks = Path.home() / ".claude" / "hooks"
+    chooks.mkdir(parents=True, exist_ok=True)
+    src_dir = root / "scripts" / "hooks" / "claude"
+    for f in ("check-graph-sync.py", "verification-rot-check.py"):
+        s = src_dir / f
+        if s.exists():
+            shutil.copy2(s, chooks / f)
+    # ③ settings.json 註冊(Task 3 改 merge-claude-settings.py 用 resolved python)
+    merge = root / "scripts" / "merge-claude-settings.py"
+    if merge.exists():
+        subprocess.run([sys.executable, str(merge)])
+    print("  ✓ hooks:core.hooksPath + Claude hooks 複製 + settings 註冊")
+
+
 def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False):
     """一鍵在專案內裝好一切:自動 clone Lumos(若缺)→ user-scope skills → 全域 lumos → repo hooks。
     給「剛 clone 專案、機器還沒設定」的同事:cd 進專案打 `python3 scripts/lumos bootstrap` 即可,
@@ -3125,7 +3212,7 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False):
     return 0
 
 
-_INIT_SUBDIRS = ("Projects", "Systems", "Issues", "Verification", "MOC")
+_INIT_SUBDIRS = ("Projects", "Systems", "Issues", "Verification", "Sessions", "MOC")
 _INIT_GITIGNORE = (
     "# Obsidian 個人狀態(不進版控);圖譜內容本身要 commit\n"
     ".obsidian/workspace*.json\n"
@@ -3169,6 +3256,10 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
     if not gi.exists():
         _write_lf(gi, _INIT_GITIGNORE)
         print(f"  + {vault.relative_to(root)}/.gitignore")
+    moc_idx = vault / "MOC" / "index.md"
+    if not moc_idx.exists():
+        _write_lf(moc_idx, f"---\ntype: moc\nstatus: doing\n---\n# {slug} 知識圖譜總索引\n")
+        print(f"  + {vault.relative_to(root)}/MOC/index.md")
 
     if with_hooks:
         src = _lumos_src()
