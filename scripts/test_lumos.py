@@ -1745,6 +1745,37 @@ def t_deinit_graph():
     check("deinit graph3: commit 不被擋(rc0)", cr.returncode == 0, f"{cr.returncode} {cr.stdout} {cr.stderr}")
 
 
+def t_context_valid_under_warning():
+    import datetime
+    v = mkvault()
+    # >90 天的 Verification 節點(date 2020 → 紅標)
+    write(v, "Verification/old.md",
+          'type: verification\nstatus: pass\ndate: 2020-01-01\nvalid_under:\n  - "DB schema v1 未變"')
+    r = run(v, "context", "Verification/old")
+    check("context: valid_under 警示 header", "⚠ 使用前驗證(valid_under" in r.stdout, r.stdout)
+    check("context: >90 天紅標", "⚠ 節點已" in r.stdout, r.stdout)
+    check("context: 條件內容印出", "DB schema v1 未變" in r.stdout, r.stdout)
+
+    # 新節點(date=今天 → 有警示但無紅標)
+    today = datetime.date.today().isoformat()
+    write(v, "Verification/fresh.md",
+          f'type: verification\nstatus: pass\ndate: {today}\nvalid_under:\n  - "並發 <= 1000 RPS"')
+    r2 = run(v, "context", "Verification/fresh")
+    check("context: 新節點有警示", "⚠ 使用前驗證(valid_under" in r2.stdout, r2.stdout)
+    check("context: 新節點無紅標", "⚠ 節點已" not in r2.stdout, r2.stdout)
+
+    # 無 valid_under → 不印警示
+    write(v, "Systems/plain.md", 'type: system\nstatus: done\nupdated: 2020-01-01')
+    r3 = run(v, "context", "Systems/plain")
+    check("context: 無 valid_under 不印警示", "⚠ 使用前驗證(valid_under" not in r3.stdout, r3.stdout)
+
+    # 空 valid_under(empty list)→ 不印 header
+    write(v, "Verification/empty.md",
+          'type: verification\nstatus: pass\ndate: 2020-01-01\nvalid_under: []')
+    r4 = run(v, "context", "Verification/empty")
+    check("context: 空 valid_under 不印 header", "⚠ 使用前驗證(valid_under" not in r4.stdout, r4.stdout)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
