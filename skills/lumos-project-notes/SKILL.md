@@ -955,6 +955,8 @@ obsidian vault="{vault}" create path="Verification/{日期}_{功能名稱}" cont
 - 若使用者沒提供具體環境條件（版本/RPS/schema 版本）→ **主動詢問**，不可自行假設
 - **建立 Verification 後同步更新 Systems**：Verification 的「## 相關模組」列了幾個 Systems wikilink，就要更新幾個 Systems 的 `verified_by` 欄位（追加，不是覆蓋），雙向同步缺一不可
 
+> 進場提示(2026-06-29 起):`lumos context` 讀節點時會在最上方自動顯示 `valid_under` 條件(>90 天未更新加紅標),並由 `lumos doctor` Check V 量全圖過期率——失效條件從「寫入時標記」變「進場主動提示」,不需 AI 自己去 `lumos stale` 查。
+
 ### Verification 健康檢查（巡檢時必做）
 
 開工前、commit 圖譜更新前、重大環境變動後，用 lumos 掃 Verification：

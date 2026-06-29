@@ -5,7 +5,7 @@ feature: "[[Systems/check-t-sentinel]]"
 commit: 15fd6ad
 date: 2026-06-26
 valid_under:
-  - "scripts/lumos cmd_doctor 維持 Check 段尾順序 T→R→S→K、section(\"K\") 不被改名/占用"
+  - "scripts/lumos cmd_doctor 維持 Check 段尾順序 T→R→S→H→K→V、section(\"K\") 不被改名/占用"
   - "TEST_REF_RE 維持「數 [test:] 標記個數」語義(非展開名數)、★COMBO★ 仍為 ★INVARIANT★ 之後行內標記"
   - "warn_soft/_soft_list 維持不計 issues、不影響 rc(軟 Check 語義)"
 revalidate_when:

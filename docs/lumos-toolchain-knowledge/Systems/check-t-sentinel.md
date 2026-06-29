@@ -10,7 +10,7 @@ tags:
 verified_by:
   - "[[Verification/2026-06-23_check-t-sentinel]]"
 summary: |-
-  FLOW:doctor 掃節點 Check 段尾(T→R→S→K)→Check K 對每 note 取 extract_contracts→過濾 inv 含 ★COMBO★→數該 inv 的 [test:] 標記個數(TEST_REF_RE.findall)==1→收進 combo_thin 經 _soft_list warn_soft 提醒補組合+gov_events check-k warned hard:False→無 ★COMBO★ 則 ok 靜默
+  FLOW:doctor 掃節點 Check 段尾(T→R→S→H→K→V)→Check K 對每 note 取 extract_contracts→過濾 inv 含 ★COMBO★→數該 inv 的 [test:] 標記個數(TEST_REF_RE.findall)==1→收進 combo_thin 經 _soft_list warn_soft 提醒補組合+gov_events check-k warned hard:False→無 ★COMBO★ 則 ok 靜默
   KEY:★COMBO★ 是 invariant 鐵則的子修飾(第 5 個 Tag),標在最重鐵則上,觸發軟 Check K 提醒「別只綁 1 個 happy-path [test:]」;不擋、不計 issues、不執行測試(同 Check S)[test:t_check_k]
   KEY:判據數「[test:] 標記個數」非展開測試名數——[test:a,b] 算 1 個標記,免單逗號 tag 繞過提醒(F1,正中動機要防的反向優化)[test:t_check_k]
   KEY:★COMBO★ 必寫在 invariant marker 之後(末尾);寫在前會讓 INVARIANT_RE 不匹配、整條 invariant 從 Check T/K 雙雙消失
@@ -30,7 +30,7 @@ decisions:
     why_chosen: ★COMBO★ 本就設計為 ★INVARIANT★ 子修飾,單獨用屬罕見誤用;與其加一條撐不住的掃描路徑,不如誠實標盲區、留痕、YAGNI
     decided: 2026-06-23
     valid: true
-  - content: Check K 自己重掃(extract_contracts + strip_test_refs/TEST_REF_RE),不複用 Check T 的 bound/refs 局部變數;接在 Check S 之後(段尾 T→R→S→K),用未占用的 section("K")
+  - content: Check K 自己重掃(extract_contracts + strip_test_refs/TEST_REF_RE),不複用 Check T 的 bound/refs 局部變數;接在 Check S 之後(段尾 T→R→S→H→K→V),用未占用的 section("K")
     context: design-loop r1 揪出 blocker(section("C") 已被 core_refs 占用)+ major(複用 Check T bound/refs 不成立:局部變數出作用域且違反「不改 Check T」)
     why_chosen: Check K 為純新增軟 Check、不得動 Check T;自己重掃才作用域乾淨;照 Check S 模板(warn_soft + _soft_list + gov_events warned/hard:False)複用既有結構
     decided: 2026-06-23
