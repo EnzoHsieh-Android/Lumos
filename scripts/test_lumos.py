@@ -1776,6 +1776,28 @@ def t_context_valid_under_warning():
     check("context: 空 valid_under 不印 header", "⚠ 使用前驗證(valid_under" not in r4.stdout, r4.stdout)
 
 
+def t_doctor_check_v():
+    import datetime
+    v = mkvault()
+    write(v, "Verification/a.md",
+          'type: verification\nstatus: pass\ndate: 2020-01-01\nvalid_under:\n  - "c1"')
+    write(v, "Verification/b.md",
+          'type: verification\nstatus: pass\ndate: 2020-02-02\nvalid_under:\n  - "c2"')
+    today = datetime.date.today().isoformat()
+    write(v, "Verification/c.md",
+          f'type: verification\nstatus: pass\ndate: {today}\nvalid_under:\n  - "c3"')
+    r = run(v, "doctor")
+    check("doctor Check V: 段標題出現", "[V]" in r.stdout, r.stdout)
+    check("doctor Check V: 2/3 (67%)", "2/3 (67%)" in r.stdout, r.stdout)
+
+    # 全新節點 → 0% / ok 行
+    v2 = mkvault()
+    write(v2, "Verification/fresh.md",
+          f'type: verification\nstatus: pass\ndate: {today}\nvalid_under:\n  - "c1"')
+    r2 = run(v2, "doctor")
+    check("doctor Check V: 全新 → 0%/ok", ("0/1 (0%)" in r2.stdout) or ("≤90" in r2.stdout), r2.stdout)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
