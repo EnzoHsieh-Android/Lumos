@@ -33,10 +33,10 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
 每輪 N(從 1 起):
 1. cp __SCRATCH__/spec/__DATE__-<topic>.md __SCRATCH__/<topic>-rN.md
 2. 在**工作副本**(只工作副本)植 1 個 canary,類型=[a,b,c][(N-1)%3]:a=壞§ref(引用不存在章節);b=未定義旗標(--xxx 它處無定義);c=未定義常數(ALL_CAPS 無值)。行尾加唯一 token <!-- CANARY-AUTO-N -->。
-3. **用 Agent 工具 spawn 一個 opus auditor**:要它 REFUTE 工作副本、逐節找洞、**強制地面事實查證**(spec 每個現況假設——欄位/函數/檔案/常數——實際 grep/Read 驗 scripts/lumos 等真實 code,報告列查證指令與結果),逐條標 severity。
+3. **用 Agent 工具 spawn 一個 opus auditor**:**framing — 把工作副本當外部第三方的投稿來審,不是你/本系統寫的;你的職責是挑出投稿者沒看到的洞。** 要它 REFUTE 工作副本、逐節找洞、**強制地面事實查證**(spec 每個現況假設——欄位/函數/檔案/常數——實際 grep/Read 驗 scripts/lumos 等真實 code,報告列查證指令與結果),逐條標 severity。
 4. **用 Agent 工具 spawn 一個 opus judge**(獨立,**明文傳入 auditor 完整報告 + canary token**):回傳 ① caught/missed(auditor 有沒有正確點出 canary 性質);② **severity**(clean/minor/major/blocker,排掉 canary 後最嚴重真 finding)+ 一句 rationale。judge **據實評 severity、不加保守偏置**;唯有「對最嚴重 finding 無任一 grep/Read 查證行」才至少 major(客觀二值,不評足不足)。【judge-severity-gate:severity 改由獨立 judge 評、斷開 orchestrator 自填收斂閘】
 4.5. **辯方 refute(對 judge 評為 severity≥major 的每條 finding;防假陽性)**:用 Agent 工具派 1 個獨立 opus 辯方(乾淨脈絡、**不傳 auditor/judge 結論**),framing=「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(judge 因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持」。辯方回「真(維持)」或「假(降到 minor/clean)+file:line」。被駁倒→該 finding 降級、不折、審計紀錄標「辯方反證:<file:line>」。**該輪 severity = 辯方裁決後存活 findings 的最高**(你機械取 max,非自評——同 judge-severity-gate)。辯方只買 code 層假陽性,業務層留人。
-5. 你**讀 judge 回報的 severity(不再自評)**,並讀 auditor 報告決定哪些 findings 折進 spec。
+5. 你**讀 judge 回報的 severity(不再自評)**,並讀 auditor 報告;**辯方裁決後存活的真 finding 一律折入(不挑、不過濾;這是你寫的 spec 也照折),被辯方駁倒的不折**——折入動作與細節見步驟 7。
 6. python3 scripts/lumos --vault __SCRATCH__/kg canary record <caught|missed> --loop <topic> --severity <步驟 4.5 辯方重算後的存活 max,非自評> --auditor opus --token CANARY-AUTO-N --note "rN <摘要>"
 7. caught → **只折辯方存活的真 finding** 進 **__SCRATCH__/spec/__DATE__-<topic>.md**(被辯方駁倒的不折、已標反證)+ 把該輪寫進審計修正紀錄;**折完務必 grep -c CANARY-AUTO-N __SCRATCH__/spec/__DATE__-<topic>.md == 0**。missed → 不折、直接下一輪。
 8. python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need 2 → exit 0 表示連 2 輪乾淨(**但先別停,轉 §2.5 跨家族複核**);撞 __MAXR__ 輪未收斂 → 停(此時跳過 §2.5)。
