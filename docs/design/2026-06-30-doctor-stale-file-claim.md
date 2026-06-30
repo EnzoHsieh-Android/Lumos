@@ -18,7 +18,7 @@ G3 字面的「孤兒程式碼=有碼沒節點」太吵(lumos 刻意只記載載
 - **既有「code→節點認領」靠 path/stem 提及**:`scripts/hooks/claude/check-graph-sync.py:266 find_notes_mentioning` 以「檔名 stem」反查節點提及——本 spec 沿用「節點正文提路徑」即認領的既有語義,但方向相反(掃節點→驗檔在不在)。
 - **doctor 現有 [2/4] Unresolved wikilinks 只抓壞 `[[wikilink]]`**(`scripts/lumos` run_doctor 內),**抓不到節點正文 inline-code 裡指向死碼的檔路徑**——Check P 補的正是這條缺口,兩者互補不重疊。
 - **doctor 落點**:`run_doctor`(`scripts/lumos:360`);Check 段尾現為 T→R→S→H→K→V(`section("V")` 在 `scripts/lumos:729`,`if ci:` 在 `:749`)。Check P 接在 V 之後、`if ci:` 之前 → 段尾變 T→R→S→H→K→V→P。
-- **節點原文可讀**:`(env.vault / rel).read_text(encoding="utf-8-sig")`(`scripts/lumos:804` 既有用法)。`env.notes` 為節點 dict、`env.vault` 為 vault 路徑。
+- **節點原文可讀**:`(env.vault / rel).read_text(encoding="utf-8-sig")`(load_vault 既有讀法,`scripts/lumos:173` 一帶;`:804` cmd_search 亦同模式)。`env.notes` 為節點 dict、`env.vault` 為 vault 路徑。
 - **軟提醒原語**:`warn_soft(lines, head, advice)`(`scripts/lumos:384`,不計 issues、不改 rc)、`section(idx, title)`(`:369`)、`ok(msg)`(`:372`)皆 run_doctor 閉包。
 
 ## 範圍:Check P 路徑抽取與判定
@@ -26,14 +26,14 @@ G3 字面的「孤兒程式碼=有碼沒節點」太吵(lumos 刻意只記載載
 **repo_root 取法**(r1-F6:沿用既有,不另造):**重用 Check C 已推導的 `repo_root`**(`scripts/lumos:518-522`,`for p in env.vault.parents: if p.name=="docs": repo_root=p.parent`)。`repo_root` 為 None(vault 不在 `docs/` 下,如 standalone vault)→ Check P 印 ok「(無 docs/ 佈局,略過失效認領檢查)」並跳過。**不引入 `git rev-parse` 新方法**(避免 run_doctor 內兩套 repo_root 推導)。
 
 **逐節點掃**(`for rel, n in sorted(env.notes.items())`),讀該節點原文,抽「檔路徑引用」:
-1. **先剝 fenced code block 再取反引號 inline-code span**(r1-F3:`INLINE_CODE_RE.findall(FENCE_RE.sub("", text))`,對齊 load_vault 既有慣例 `scripts/lumos:184`「code block 內宣告不算證據」)——只收 inline-code,不收 fenced block 內的範例路徑。
+1. **先剝 fenced code block 再取反引號 inline-code span,並剝掉 span 的反引號定界符**(`[s.strip("`") for s in INLINE_CODE_RE.findall(FENCE_RE.sub("", text))]`)。**注意(r2-M2)`INLINE_CODE_RE`(`scripts/lumos:40`)無 capture group → `findall` 回傳含兩端反引號的字串(`` `scripts/x.py:10` ``);不 `.strip("`")` 的話 rule 2 的 `:\d+$` 與 rule 3 的頭段比對都會被反引號破壞(行號剝不掉、`first_seg` 變 `` `scripts `` 永不匹配頂層目錄 → 全偽陰性靜默)。** fenced 剝法對齊 load_vault 既有慣例(`scripts/lumos:184` 的 `FENCE_RE.sub` 順序);但 inline-code 處理相反——load_vault 是 `.sub("")` **移除** inline-code 抽 wikilink,Check P 是 `findall` **保留** span 內容,只共用「先剝 fence」這一步。
 2. 對每個 span token:剝尾端 `:行號` / `:行-行`(regex `:\d+(?:-\d+)?$`,記住剝下的行號);跳過 `http://`/`https://`/含 `://` 者;**須含 `/`**(排除裸符號如 `cmd_context`,以及不含 `/` 的 `T→R→S` 之類)。
 3. **第一段須是 repo_root 的現有頂層目錄**(`first_seg in {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith('.')}`,r1-F7:排除 `.git/` 等隱藏目錄)——錨定真實結構;非頂層目錄起始的 token(含 inline-code 的 `maker/checker`、`and/or`)在此被擋下。
 4. 解析 `repo_root / token`;**不存在** → 一條 finding `{node: rel, path: token, line: <剝下的行號或空>}`。
 5. 同一節點同一路徑去重。
 
 **輸出**:
-- 有 finding → `warn_soft`,逐條 `「<rel>:<line 或無> → <token>(已不存在)」`(r1-F5:line 帶進輸出,讓人直接定位節點哪行),advice=「碼被刪/改名?更新節點正文的路徑引用,或補對應節點」。
+- 有 finding → `warn_soft`,逐條(r2-m5 明定格式):有行號 → `「<rel>:<line> → <token>(已不存在)」`;無行號 → `「<rel> → <token>(已不存在)」`(不印 `:None`/空冒號)。line 帶進輸出讓人直接定位節點哪行(r1-F5)。advice=「碼被刪/改名?更新節點正文的路徑引用,或補對應節點」。
 - 無 finding → `ok("無失效檔案認領 (節點引用的 repo 路徑都存在)")`。
 
 ## 邊界 / 非目標(YAGNI)
@@ -70,7 +70,7 @@ CLI subprocess 風格(`run(v, "doctor")` 斷言 stdout),`t_`-prefixed,`check()` 
 ## 誠實天花板
 
 1. **死指針 ≠ 語義漂移**:Check P 只證「節點引用的檔還在」,證不了「節點對該檔的描述仍正確」(同 [test:]/[rollback:] 天花板)。
-2. **路徑抽取靠 inline-code + 頂層目錄錨定**:漏裸符號引用、整頂層目錄被刪;偶有偽陽性(故軟、不擋)。
+2. **路徑抽取靠 inline-code + 頂層目錄錨定**:漏裸符號引用、整頂層目錄被刪;偶有偽陽性(故軟、不擋)。**`FENCE_RE` 的 `^```` 在 MULTILINE 下只匹配行首,縮排的 fenced block(list 內 code block)不被剝**(r2-m4)→ 縮排 fence 內的路徑可能漏剝;此為 codebase 既有 FENCE_RE 行為,v1 接受(warn_soft 兜底)。
 3. **B 不是 A**:Check P **不**保證「重要的碼都有節點認領」(那是 A,刻意不做);它只保證「圖譜既有的檔指針沒指空」。覆蓋率視角的「碼有沒有被記載」仍靠人 + 交叉審計(變體 B),未被本 spec 取代。
 
 ## 審計修正紀錄(design-loop)
@@ -83,3 +83,9 @@ CLI subprocess 風格(`run(v, "doctor")` 斷言 stdout),`t_`-prefixed,`check()` 
   - **F6 [minor]**:repo_root 改用 Check C 既有推導(`docs/` 母目錄),不引入 git rev-parse 新方法;測試 fixture 連動(不需 git、須 docs/ 佈局)。
   - **F7 [minor]**:rule 3 頂層目錄排除隱藏目錄(`.git/` 等)。
   - **F8 [minor]**:邊界節「Check 2」正名為「[2/4] Unresolved wikilinks」。
+- **r2**(canary type b:植入未定義旗標 `--skip-stale-claim`,caught):**收斂輪**,存活全 minor,已折入:
+  - **M2→minor**(辯方實測:故障鏈反了——反引號頭尾殘留 → rule3 全擋 → 全偽陰性靜默,非全偽陽性;且測試案例1正向斷言會 FAIL 接住):rule 1 補「`.strip("`")` 剝定界符」+ 點明 INLINE_CODE_RE 無 capture group。
+  - **m3 [minor]**:rule 1 釐清「對齊慣例」僅指先剝 fence,inline-code 處理與 load_vault `.sub` 相反;行號引用 INLINE_CODE_RE 定義在 `:40`。
+  - **m4 [minor]**:誠實天花板補「FENCE_RE `^` 只匹配行首,縮排 fenced block 不被剝」。
+  - **m5 [minor]**:輸出格式明定無行號時不印 `:None`。
+  - **m6 [minor]**:節點讀法引用改 `:173`(load_vault),`:804` 為 cmd_search 同模式。
