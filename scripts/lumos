@@ -746,6 +746,42 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
         ok(f"0/{len(vu_total)} (0%) — 所有 valid_under 節點 ≤90 天")
     print()
 
+    section("P", "失效檔案認領 (節點正文 inline-code 路徑指向已不存在的檔;軟提醒、不擋 CI)")
+    if repo_root is None:
+        ok("(無 docs/ 佈局,略過失效認領檢查)")
+    else:
+        top_dirs = {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
+        _line_re = re.compile(r":\d+(?:-\d+)?$")
+        stale_claims = []
+        for rel, n in sorted(notes.items()):
+            try:
+                text = (env.vault / rel).read_text(encoding="utf-8-sig")
+            except OSError:
+                continue
+            spans = [s.strip("`") for s in INLINE_CODE_RE.findall(FENCE_RE.sub("", text))]
+            seen_paths = set()
+            for raw in spans:
+                if "://" in raw:
+                    continue
+                m = _line_re.search(raw)
+                line = m.group(0)[1:] if m else ""
+                token = _line_re.sub("", raw)
+                if "/" not in token or token in seen_paths:
+                    continue
+                if token.split("/")[0] not in top_dirs:
+                    continue
+                seen_paths.add(token)
+                if not (repo_root / token).exists():
+                    loc = f"{rel}:{line}" if line else rel
+                    stale_claims.append(f"{loc} → {token}(已不存在)")
+        if stale_claims:
+            warn_soft(stale_claims,
+                      f"{len(stale_claims)} 個節點引用指向已不存在的 repo 路徑(圖譜指向死碼?):",
+                      "碼被刪/改名?更新節點正文的路徑引用,或補對應節點")
+        else:
+            ok("無失效檔案認領 (節點引用的 repo 路徑都存在)")
+    print()
+
     if ci:
         _append_governance_log(env.vault, gov_events)
 

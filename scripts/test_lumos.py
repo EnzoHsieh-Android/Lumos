@@ -1798,6 +1798,51 @@ def t_doctor_check_v():
     check("doctor Check V: 全新 → 0%/ok", ("0/1 (0%)" in r2.stdout) or ("≤90" in r2.stdout), r2.stdout)
 
 
+def _mk_docs_vault(prefix="gctl-checkp-"):
+    """建 temp_root/docs/<slug>-knowledge vault(讓 Check C 的 repo_root 推導命中 docs/ 母目錄)。
+    回傳 (root, vault)。"""
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    vault = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    return root, vault
+
+
+def t_doctor_check_p():
+    # 案例 1+2+3+4+5:同一 vault 多節點
+    root, vault = _mk_docs_vault()
+    (root / "scripts").mkdir()                       # rule 3 錨定靠 scripts/ 存在
+    (root / "scripts" / "real.py").write_text("x\n") # 案例 2 的真實檔
+    # 案例 1:失效認領(scripts/ghost.py 不存在)
+    write(vault, "Systems/a.md", "type: system\nstatus: done",
+          "# A\n見 `scripts/ghost.py` 實作。\n")
+    # 案例 2:存在路徑帶行號 → 不報
+    write(vault, "Systems/b.md", "type: system\nstatus: done",
+          "# B\n見 `scripts/real.py:10` 一帶。\n")
+    # 案例 3:散文/非路徑 → 不報
+    write(vault, "Systems/c.md", "type: system\nstatus: done",
+          "# C\n反引號 `and/or`、散文 maker/checker、反引號 `cmd_context`(無斜線)。\n")
+    # 案例 4:fenced block 內路徑 → 不報
+    write(vault, "Systems/d.md", "type: system\nstatus: done",
+          "# D\n```\n`scripts/ghost.py`\n```\n")
+    # 案例 5:無路徑引用 → 不報
+    write(vault, "Systems/e.md", "type: system\nstatus: done", "# E\n純文字無反引號路徑。\n")
+
+    r = run(vault, "doctor")
+    check("Check P: 段標題出現", "[P]" in r.stdout, r.stdout)
+    check("Check P: 案例1 報出 ghost", ("Systems/a.md" in r.stdout and "scripts/ghost.py" in r.stdout), r.stdout)
+    check("Check P: 案例2 存在路徑不報", "scripts/real.py" not in r.stdout, r.stdout)
+    check("Check P: 案例3 散文/非路徑不報", "and/or" not in r.stdout and "cmd_context" not in r.stdout, r.stdout)
+    check("Check P: 案例4 fenced 內不報", r.stdout.count("scripts/ghost.py") == 1, r.stdout)  # 只有案例1那次
+    check("Check P: rc 不變(warn_soft 軟提醒)", r.returncode == 0, f"rc={r.returncode}")
+
+    # 案例 6:無 docs/ 佈局(mkvault 的 vault 不在 docs/ 下)→ Check P 略過
+    v2 = mkvault()
+    r2 = run(v2, "doctor")
+    check("Check P: 無 docs/ 佈局略過", "略過失效認領" in r2.stdout, r2.stdout)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
