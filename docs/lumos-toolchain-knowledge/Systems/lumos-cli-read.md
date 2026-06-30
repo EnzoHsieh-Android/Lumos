@@ -11,7 +11,7 @@ summary: |-
   FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出 → return 0(查無/正則錯=非0)
   KEY:read/traverse 12 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);純讀、不寫檔、無副作用,與 7 個寫入原語(set/append/new/decision-* …)互斥
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
-  KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H);與 lint 分工——lint 只看單篇 node-local、predicts pre-push 會不會擋
+  KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼));與 lint 分工——lint 只看單篇 node-local、predicts pre-push 會不會擋
   KEY:search 預設排除 fenced+inline code(對齊 doctor 連結抽取慣例,--code 才含)、大小寫不敏感 substring、--regex 切正則;結構化查詢走 contracts/decisions/stale 而非 search
   KEY:讀指令屬「專案層」——以 cwd find_vault 鎖定本專案 vault(不受同名 vault 影響);對比 install/bootstrap 的「機器層」(全域 lumos + user-scope skills)
   DEP:scripts/lumos load_vault/Env/find_vault｜extract_contracts(contracts/context 共用)｜parse_decisions(decisions/stale)｜status_of(links/map/stale 標狀態)
@@ -52,7 +52,7 @@ decisions:
   - `context <節點> [--brief]`(`cmd_context`):節點 + 鄰居 summary 壓縮索引(MemPalace closet)。**頭部直接攤出 ⚠ 合約**(extract_contracts);`--brief` 只給 meta + summary 首兩行 + 鄰居名單(壓 token)。
   - `contracts [節點]`(`cmd_contracts`):合約登記簿,列 `★INVARIANT★`(改=breaking)/ `★DEBT★`(可改);**只認 KEY 行前綴標準格式**;★INVARIANT★ 顯示綁定的 `[test:]`,未綁=⚠(doctor Check T 會擋)。
 - **巡檢 / 完整性**
-  - `doctor [--ci]`(`cmd_doctor`):全圖權威健康巡檢——4 檢查(1/4 Verification orphans、2/4 unresolved wikilinks 破連結、3/4 verified_by 雙向同步、4/4 plan_refs 意圖鏈)+ 同名守衛 + frontmatter lint + Check T(★INVARIANT★→測試綁定)/ Check R(可逆性回退)/ Check H(漏標可逆性軟提醒,僅 --ci 掃 diff)。`--ci` = `--strict` + 無色彩,且是 `.governance-log.jsonl` 唯一寫者。
+  - `doctor [--ci]`(`cmd_doctor`):全圖權威健康巡檢——4 檢查(1/4 Verification orphans、2/4 unresolved wikilinks 破連結、3/4 verified_by 雙向同步、4/4 plan_refs 意圖鏈)+ 同名守衛 + frontmatter lint + Check T(★INVARIANT★→測試綁定)/ Check R(可逆性回退)/ Check H(漏標可逆性軟提醒,僅 --ci 掃 diff)+ Check P(失效檔案認領:inline-code 路徑指向已不存在檔案)。`--ci` = `--strict` + 無色彩,且是 `.governance-log.jsonl` 唯一寫者。
 - **遍歷 / 關聯**
   - `links <節點>` / `backlinks <節點>`(`cmd_links`,reverse=True 即 backlinks):列連出 / 連入節點 + 狀態。
   - `map <節點> [--depth 2]`(`cmd_map`):鄰域樹狀展開,`↺` 標已出現過(防環)。
