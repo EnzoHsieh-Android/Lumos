@@ -23,17 +23,17 @@ G3 字面的「孤兒程式碼=有碼沒節點」太吵(lumos 刻意只記載載
 
 ## 範圍:Check P 路徑抽取與判定
 
-**repo_root 取法**:`git -C <env.vault> rev-parse --show-toplevel`(穩、避開 vault==root 的坑)。取不到(非 git / git 失敗)→ Check P 印 ok「(非 git repo,略過失效認領檢查)」並跳過。
+**repo_root 取法**(r1-F6:沿用既有,不另造):**重用 Check C 已推導的 `repo_root`**(`scripts/lumos:518-522`,`for p in env.vault.parents: if p.name=="docs": repo_root=p.parent`)。`repo_root` 為 None(vault 不在 `docs/` 下,如 standalone vault)→ Check P 印 ok「(無 docs/ 佈局,略過失效認領檢查)」並跳過。**不引入 `git rev-parse` 新方法**(避免 run_doctor 內兩套 repo_root 推導)。
 
 **逐節點掃**(`for rel, n in sorted(env.notes.items())`),讀該節點原文,抽「檔路徑引用」:
-1. 只取 **反引號 inline-code span**(`` `...` ``)——直接濾掉散文裡的 `maker/checker`、`T→R→S` 等帶斜線非路徑 token。
-2. 對每個 span token:剝尾端 `:行號` / `:行-行`(regex `:\d+(?:-\d+)?$`);跳過 `http://`/`https://`/含 `://` 者;**須含 `/`**(排除裸符號如 `cmd_context`)。
-3. **第一段須是 repo_root 的現有頂層目錄**(`first_seg in {p.name for p in repo_root.iterdir() if p.is_dir()}`)——錨定真實結構,`and/or` 之類不收。
-4. 解析 `repo_root / token`;**不存在** → 一條 finding `{node: rel, path: token, line: <剝掉的行號或空>}`。
+1. **先剝 fenced code block 再取反引號 inline-code span**(r1-F3:`INLINE_CODE_RE.findall(FENCE_RE.sub("", text))`,對齊 load_vault 既有慣例 `scripts/lumos:184`「code block 內宣告不算證據」)——只收 inline-code,不收 fenced block 內的範例路徑。
+2. 對每個 span token:剝尾端 `:行號` / `:行-行`(regex `:\d+(?:-\d+)?$`,記住剝下的行號);跳過 `http://`/`https://`/含 `://` 者;**須含 `/`**(排除裸符號如 `cmd_context`,以及不含 `/` 的 `T→R→S` 之類)。
+3. **第一段須是 repo_root 的現有頂層目錄**(`first_seg in {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith('.')}`,r1-F7:排除 `.git/` 等隱藏目錄)——錨定真實結構;非頂層目錄起始的 token(含 inline-code 的 `maker/checker`、`and/or`)在此被擋下。
+4. 解析 `repo_root / token`;**不存在** → 一條 finding `{node: rel, path: token, line: <剝下的行號或空>}`。
 5. 同一節點同一路徑去重。
 
 **輸出**:
-- 有 finding → `warn_soft`,逐條 `「<rel> → <token>(已不存在)」`,advice=「碼被刪/改名?更新節點正文的路徑引用,或補對應節點」。
+- 有 finding → `warn_soft`,逐條 `「<rel>:<line 或無> → <token>(已不存在)」`(r1-F5:line 帶進輸出,讓人直接定位節點哪行),advice=「碼被刪/改名?更新節點正文的路徑引用,或補對應節點」。
 - 無 finding → `ok("無失效檔案認領 (節點引用的 repo 路徑都存在)")`。
 
 ## 邊界 / 非目標(YAGNI)
@@ -43,20 +43,23 @@ G3 字面的「孤兒程式碼=有碼沒節點」太吵(lumos 刻意只記載載
 - ❌ **不抓裸符號/函數名引用**(`cmd_context`、class 名)——非路徑、無法對檔案系統判存在。
 - ❌ **不抓非反引號的散文路徑**——偽陽性來源,刻意只收 inline-code。
 - ❌ **不抓整個頂層目錄被刪**的情形(第一段錨定會讓它落空)——罕見,v1 接受。
-- ❌ **不改 rc、不擋 CI**(warn_soft);**不改** Check 2 wikilink 邏輯、不碰其他 check。
+- ❌ **不改 rc、不擋 CI**(warn_soft);**不改** doctor 既有 `[2/4] Unresolved wikilinks` 邏輯、不碰其他 check。
 - ❌ **不做語義正確性判斷**——只證「指的檔還在」,不證「節點描述仍對」。
 
 ## 測試策略
 
-CLI subprocess 風格(`run(v, "doctor")` 斷言 stdout),`t_`-prefixed,`check()` 斷言;hermetic temp vault(`mkvault`)。但因 Check P 需 repo_root=git toplevel,fixture vault 須 `git init` 並讓 vault 在該 git repo 下(temp dir `git init` 後在其中建 vault + 幾個真實檔)。
+CLI subprocess 風格(`run(v, "doctor")` 斷言 stdout),`t_`-prefixed,`check()` 斷言。
+
+**fixture 佈局(r1-F2/F6:repo_root = `docs/` 的母目錄,故 fixture 不靠 git,但須建 docs/ 佈局 + sibling 頂層目錄)**:temp_root/ 下建 `docs/<slug>-knowledge/`(vault,放節點)+ **sibling `scripts/` 目錄**(rule 3 錨定靠它存在;放 `scripts/real.py`、不放 ghost.py)。repo_root 即 temp_root。**不需 `git init`**(repo_root 用 Check C 的 `docs/` 母目錄法,非 git toplevel)。
 
 需覆蓋:
-1. **失效認領報出**:repo 內節點正文含 `` `scripts/ghost.py` ``(該檔不存在)→ doctor stdout 含該節點與 `scripts/ghost.py`、含 `[P]` 段。
+1. **失效認領報出**:**先建 `scripts/` 目錄**(否則 rule 3 錨定不過),節點正文含 `` `scripts/ghost.py` ``(該檔不存在)→ doctor stdout 含該節點與 `scripts/ghost.py`、含 `[P]` 段。
 2. **存在路徑不報**(剝行號):建真實檔 `scripts/real.py`,節點含 `` `scripts/real.py:10` `` → 不報該路徑。
-3. **散文/非路徑不報**:節點正文反引號 `` `and/or` ``、散文 `maker/checker`、反引號 `cmd_context`(無 `/`)→ 皆不報。
-4. **無路徑引用 → ok**:節點無任何反引號路徑 → Check P 印 ok。
-5. **非 git → 略過**:vault 不在 git repo → Check P 印「略過」ok,doctor rc 不受影響。
-6. **rc 不變**:有失效認領時 doctor 仍 rc 0(warn_soft 不計 issues)。
+3. **散文/非路徑不報**:節點反引號 `` `and/or` ``(`and` 非頂層目錄)、散文(非反引號)`maker/checker`、反引號 `cmd_context`(無 `/`)→ 皆不報。
+4. **fenced block 內不抓**(r1-F3):節點含 ```` ```\n`scripts/ghost.py`\n``` ```` fenced block → 不報(先 FENCE_RE.sub 剝掉)。
+5. **無路徑引用 → ok**:節點無任何反引號路徑 → Check P 印 ok。
+6. **無 docs/ 佈局 → 略過**:vault 非 `docs/<slug>-knowledge` 佈局(repo_root=None)→ Check P 印「略過」ok,doctor rc 不受影響。
+7. **rc 不變**:有失效認領時 doctor 仍 rc 0(warn_soft 不計 issues)。
 
 ## 知識同步影響
 
@@ -69,3 +72,14 @@ CLI subprocess 風格(`run(v, "doctor")` 斷言 stdout),`t_`-prefixed,`check()` 
 1. **死指針 ≠ 語義漂移**:Check P 只證「節點引用的檔還在」,證不了「節點對該檔的描述仍正確」(同 [test:]/[rollback:] 天花板)。
 2. **路徑抽取靠 inline-code + 頂層目錄錨定**:漏裸符號引用、整頂層目錄被刪;偶有偽陽性(故軟、不擋)。
 3. **B 不是 A**:Check P **不**保證「重要的碼都有節點認領」(那是 A,刻意不做);它只保證「圖譜既有的檔指針沒指空」。覆蓋率視角的「碼有沒有被記載」仍靠人 + 交叉審計(變體 B),未被本 spec 取代。
+
+## 審計修正紀錄(design-loop)
+
+- **r1**(canary type a:植入「§repo_root 解析與錨定規格」懸空節引用,caught):存活全 minor(辯方把 3 條 ≥major 全降),已折入:
+  - **F2→minor**(辯方:正向斷言會大聲 FAIL、非 silent-pass,不是 blocker):測試策略明寫案例 1 fixture 須先建 `scripts/` 目錄。
+  - **F3→minor**(辯方:FENCE_RE.sub 是 codebase 明確慣例 `scripts/lumos:184`、實作必沿用;偽陽性窗口窄):rule 1 補「先剝 fenced block」+ 測試案例 4。
+  - **F4→minor**(辯方:純散文括號誤植過濾功勞,pipeline 輸出正確無 bug):rule 1 措辭改述、例子移到真正生效的 rule 2/3。
+  - **F5 [minor]**:輸出帶上 line(`<rel>:<line> → <token>`)。
+  - **F6 [minor]**:repo_root 改用 Check C 既有推導(`docs/` 母目錄),不引入 git rev-parse 新方法;測試 fixture 連動(不需 git、須 docs/ 佈局)。
+  - **F7 [minor]**:rule 3 頂層目錄排除隱藏目錄(`.git/` 等)。
+  - **F8 [minor]**:邊界節「Check 2」正名為「[2/4] Unresolved wikilinks」。
