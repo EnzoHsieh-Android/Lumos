@@ -1798,6 +1798,29 @@ def t_doctor_check_v():
     check("doctor Check V: 全新 → 0%/ok", ("0/1 (0%)" in r2.stdout) or ("≤90" in r2.stdout), r2.stdout)
 
 
+def t_doctor_check_p_precision():
+    root, vault = _mk_docs_vault(prefix="gctl-checkp-v2-")
+    (root / "scripts").mkdir()
+    (root / "scripts" / "real.py").write_text("x\n")
+    (root / "governance").mkdir()  # 讓 glob token 的頂層目錄錨定不先擋,確保是 glob 過濾起作用
+    # 案例 A:glob/模板 token → 不報
+    write(vault, "Systems/a.md", "type: system\nstatus: done",
+          "# A\n見 `governance/pending/*.md` 與 `docs/<slug>-knowledge/` 慣例。\n")
+    # 案例 B:符號/中文錨且檔存在 → 不報
+    write(vault, "Systems/b.md", "type: system\nstatus: done",
+          "# B\n見 `scripts/real.py:t_some_test` 與 `scripts/real.py:行號`。\n")
+    # 案例 C:真死指針帶數字行號 → 報且顯示 :10
+    write(vault, "Systems/c.md", "type: system\nstatus: done",
+          "# C\n見 `scripts/ghost.py:10` 實作。\n")
+
+    r = run(vault, "doctor")
+    check("Check P v2: glob/模板不報", "governance/pending/*.md" not in r.stdout and "<slug>" not in r.stdout, r.stdout)
+    check("Check P v2: 符號/中文錨且檔存在不報", "scripts/real.py" not in r.stdout, r.stdout)
+    check("Check P v2: 真死指針報出", "scripts/ghost.py" in r.stdout, r.stdout)
+    check("Check P v2: 數字行號顯示 :10", "Systems/c.md:10" in r.stdout, r.stdout)
+    check("Check P v2: rc 不變", r.returncode == 0, f"rc={r.returncode}")
+
+
 def _mk_docs_vault(prefix="gctl-checkp-"):
     """建 temp_root/docs/<slug>-knowledge vault(讓 Check C 的 repo_root 推導命中 docs/ 母目錄)。
     回傳 (root, vault)。"""
