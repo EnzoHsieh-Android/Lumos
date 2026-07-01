@@ -60,7 +60,7 @@ decisions:
 4. 非互動(stdin 非 tty)且無 `--yes` → `return 2`。
 互動確認的 `input()` 另包 `try/except EOFError` —— 某些終端 `isatty()` 回 True 但 stdin 實為 EOF(Windows 真機),讀不到確認時**安全預設:拒刪 return 2**;使用者打非 `y` 主動取消 → `return 1`。
 
-> `vault==root` 怎麼發生:`_vault_in(root)` 對 **standalone vault**(`MOC/` + `Systems/` 或 `Verification/` 直接在 repo 根)回傳 root 本身;一般專案則回傳 `docs/<slug>-knowledge/` 或 `docs/knowledge/`(不等於 root)。
+> `vault==root` 怎麼發生:`_vault_in(root)` 對 **standalone vault**(`MOC/` + `Systems/` 或 `Verification/` 直接在 repo 根)回傳 root 本身;一般專案則回傳 `docs/<slug>-knowledge/` 或(舊慣例)docs/knowledge/(不等於 root)。
 > `root==_lumos_src()` 守衛:對齊 `cmd_update` 的 root==src 模式,印 stderr 並 `return 2`(拒絕整個 deinit),與 `vault==root` 鐵閘(只擋 rmtree、其餘照拆)效果不同。
 > 對應回歸測試:`t_deinit_graph`(案例 10 = vault==root 鐵閘,並斷言印出「standalone vault」警示)。
 

@@ -42,9 +42,9 @@ decisions:
 
 ## 定位與邊界(YAGNI)
 - **是一把尺，不是新的閘**:不改 L3 hook、不自動調門檻、不接 CI 擋線、不改 doctor。
-- **先當 prototype 腳本**(設計擬放 `scripts/rot-eval/`),升格條件:三單元跑通 + 對 ≥15 組真實 fixtures 能講出「L3 在 0.7 大概抓 X 成、漏的多是哪一類」(即門檻敏感性表可讀、量級結論明確)後,才升格成 `lumos rot-eval {mine,run}` 子命令 + 週彙整觸發。
+- **先當 prototype 腳本**(設計擬放 scripts/rot-eval/,待建),升格條件:三單元跑通 + 對 ≥15 組真實 fixtures 能講出「L3 在 0.7 大概抓 X 成、漏的多是哪一類」(即門檻敏感性表可讀、量級結論明確)後,才升格成 `lumos rot-eval {mine,run}` 子命令 + 週彙整觸發。
 - **不追大 N 統計顯著**——這是方向儀(「就算 0.5 門檻也只 60%」這種量級結論),不是精密尺。
-- **現況:design-only**。spec 已 CONVERGED(canary-護審計 5 輪、K=2),但 `scripts/rot-eval/`、`lumos` 子命令、回歸測試**都尚未實作**。
+- **現況:design-only**。spec 已 CONVERGED(canary-護審計 5 輪、K=2),但 scripts/rot-eval/(待建)、`lumos` 子命令、回歸測試**都尚未實作**。
 
 ## 三個獨立單元
 - **A `mine`(挖候選,絕不貼標)**:掃 vault `git log` 抓三類最顯性 git 訊號當候選——① Verification frontmatter `status: pass→stale`(排除 `pass→done`=成功完成非腐化);② `superseded` / 進 `Verification/Archive/`(篩除批次歸檔:同 commit rename ≥5 檔且 status 不變→排除;≥10 檔不論 status 一律當批次+交人複核);③ `summary`/`KEY:` 行被實質改動。每筆輸出 `{node_path, overturn_commit, diff_text, code_commit, old_node_text}` 寫成 `rot-eval-candidates.jsonl`。
