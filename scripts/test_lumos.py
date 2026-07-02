@@ -392,6 +392,38 @@ def t_archive_live_guard_protected():
           (vault / "Verification/Archive/2020-01/2020-01-01_plain.md").exists(), r.stdout)
 
 
+def t_archive_live_guard_multiplatform():
+    """T4:活守衛護欄跨 repo。後端 C# 守衛(在 sibling repo)存活 → 提及它的老 Verification 保留。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-arcmp-"))
+    main = root / "app"
+    be = root / "backend"
+    (be / "App.Tests").mkdir(parents=True)
+    (be / "App.Tests" / "G.cs").write_bytes(
+        "using Xunit;\npublic class G {\n  [Fact]\n  public void CsGuard() { }\n}\n".encode("utf-8"))
+    vault = main / "docs" / "kg"
+    for sub in ("Systems", "Verification", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    (main / ".lumos").mkdir(parents=True)
+    (main / ".lumos" / "config.json").write_bytes(
+        ('{"default_platform":"backend","platforms":{'
+        '"backend":{"profile":"csharp-xunit","root":"../backend"}}}\n').encode("utf-8"))
+    (vault / "Systems" / "S.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 後端載重 [test:backend:CsGuard]\n---\n# S\n").encode("utf-8"))
+    (vault / "Verification" / "2020-01-01_guarded.md").write_bytes(
+        ("---\ntype: verification\nstatus: pass\ncreated: 2020-01-01\n"
+        "valid_under:\n  - CsGuard\n---\n# guarded\n").encode("utf-8"))
+    try:
+        r = run(vault, "archive", "--days", "30", "--apply", expect_rc=0)
+        check("活守衛護欄跨 repo: 後端 C# 守衛存活 → 提及它的 Verification 保留不歸檔",
+              (vault / "Verification/2020-01-01_guarded.md").exists()
+              and not (vault / "Verification/Archive/2020-01/2020-01-01_guarded.md").exists(), r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 # ── archive 守衛被刪(測試不在 code)→ 該 Verification 恢復可歸檔 ──
 def t_archive_dead_guard_archivable():
     root = Path(tempfile.mkdtemp(prefix="gctl-repo-"))
@@ -904,6 +936,349 @@ def t_guard_kotlin():
                 "--method", "AutoDetectKt", "--type", "pure", "--claim", "x")
         check("guard kotlin: rglob 偵測巢狀 src/test",
               (root / "app" / "src" / "test" / "AutoDetectKtTests.kt").exists(), r.stdout + r.stderr)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_maestro_profile_discover():
+    """T1 多平台:test_profile=maestro → discover 認 flow name:(含 appId 的 .yaml);
+    file_must_match 濾掉無 appId 的 yaml(CI 檔);多字 name 因 \\s*$ 錨 NO MATCH。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-mae-"))
+    vault = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    # 三條 invariant:checkoutFlow=real / buildJob=dangling(無 appId 被 file_must_match 濾)
+    #              / should=dangling(多字 name NO MATCH)
+    (vault / "Systems" / "Flow.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 結帳流程 [test:checkoutFlow]\n"
+        "  KEY:★INVARIANT★ 建置任務 [test:buildJob]\n"
+        "  KEY:★INVARIANT★ 應顯示選單 [test:should]\n"
+        "---\n# Flow\n").encode("utf-8"))
+    (root / ".lumos").mkdir(parents=True)
+    (root / ".lumos" / "config.json").write_bytes('{"test_profile": "maestro"}\n'.encode("utf-8"))
+    mdir = root / ".maestro"
+    mdir.mkdir(parents=True)
+    (mdir / "checkout.yaml").write_bytes(
+        ("appId: com.example.app\nname: checkoutFlow\ntags: [checkout]\n---\n- launchApp\n").encode("utf-8"))
+    (mdir / "menu.yaml").write_bytes(   # 多字 name + 含 appId → \s*$ 錨 NO MATCH
+        ("appId: com.example.app\nname: 'should show menu'\n---\n- launchApp\n").encode("utf-8"))
+    ci = root / ".github" / "workflows"   # 無 appId 的 CI yaml → file_must_match 濾掉
+    ci.mkdir(parents=True)
+    (ci / "ci.yml").write_bytes(
+        ("name: buildJob\non: [push]\njobs:\n  b:\n    runs-on: ubuntu-latest\n").encode("utf-8"))
+    try:
+        r = run(vault, "guard", "list")
+        check("maestro: flow name:(含 appId)認成真方法 → 真綁 1", "真綁 1" in r.stdout, r.stdout)
+        check("maestro: file_must_match 濾無 appId + 多字 name NO MATCH → 懸空 2",
+              "懸空 2" in r.stdout, r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_playwright_profile_discover():
+    """T1 多平台:test_profile=playwright → discover 認 test('id')/test.describe('id');
+    多字 title NO MATCH(識別字 capture 後需緊接引號)。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-pw-"))
+    vault = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    (vault / "Systems" / "Web.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 登入 [test:loginWorks]\n"
+        "  KEY:★INVARIANT★ 選單 [test:should]\n"
+        "---\n# Web\n").encode("utf-8"))
+    (root / ".lumos").mkdir(parents=True)
+    (root / ".lumos" / "config.json").write_bytes('{"test_profile": "playwright"}\n'.encode("utf-8"))
+    tdir = root / "tests"
+    tdir.mkdir(parents=True)
+    (tdir / "login.spec.ts").write_bytes(
+        ("import { test } from '@playwright/test';\n"
+        "test('loginWorks', async ({ page }) => {});\n"
+        "test('should show menu', async ({ page }) => {});\n").encode("utf-8"))
+    try:
+        r = run(vault, "guard", "list")
+        check("playwright: test('id') 認成真方法 → 真綁 1", "真綁 1" in r.stdout, r.stdout)
+        # 多字 title 'should show menu' NO MATCH → 不被收成 real(loginWorks 才 real;
+        # 'should' 作為子字串在 .ts 內 → 歸偽證據,非 real)。斷言只有 1 條 real。
+        check("playwright: 多字 title 未被收成 real(真綁不為 2)",
+              "真綁 1" in r.stdout and "真綁 2" not in r.stdout, r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _import_lumos():
+    """把 scripts/lumos 當模組載入(檔名無 .py → 用 SourceFileLoader)供單元測試內部函式。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+def t_load_platforms():
+    """T2 多根多 profile 載入:向後相容(無 config/舊 test_profile)+ 多平台 map +
+    default_platform 規則(缺省報錯/指向不存在報錯)+ multiplatform 信號。"""
+    import shutil
+    m = _import_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-lp-"))
+    (root / "docs" / "demo-knowledge" / "MOC").mkdir(parents=True)
+    cfg = root / ".lumos"
+    cfg.mkdir()
+
+    def setcfg(s):
+        (cfg / "config.json").write_bytes(s.encode("utf-8")) if s is not None else \
+            (cfg / "config.json").unlink(missing_ok=True)
+
+    try:
+        # 1. 無 config → legacy 單一條目 csharp-xunit、multiplatform False
+        setcfg(None)
+        r = m.load_platforms(root)
+        check("load_platforms: 無 config → multiplatform False + csharp-xunit 單條目",
+              r["multiplatform"] is False and list(r["platforms"]) == ["csharp-xunit"]
+              and r["default_platform"] == "csharp-xunit"
+              and r["platforms"]["csharp-xunit"]["root"] == root, repr(r))
+        # 2. 舊 test_profile=kotlin-junit → legacy 單條目 kotlin-junit
+        setcfg('{"test_profile": "kotlin-junit"}')
+        r = m.load_platforms(root)
+        check("load_platforms: 舊 test_profile → multiplatform False + kotlin-junit 單條目",
+              r["multiplatform"] is False and list(r["platforms"]) == ["kotlin-junit"], repr(r))
+        # 3. 多平台 map → multiplatform True、root 解析(../be 相對 repo_root)、default 生效
+        (root.parent / (root.name + "-be")).mkdir(exist_ok=True)  # 讓 ../<name>-be 存在
+        setcfg('{"default_platform":"android","platforms":{'
+               '"android":{"profile":"kotlin-junit","root":"."},'
+               '"backend":{"profile":"csharp-xunit","root":"../%s-be"}}}' % root.name)
+        r = m.load_platforms(root)
+        check("load_platforms: 多平台 → multiplatform True + 2 平台 + default android",
+              r["multiplatform"] is True and set(r["platforms"]) == {"android", "backend"}
+              and r["default_platform"] == "android"
+              and r["platforms"]["backend"]["root"] == (root.parent / (root.name + "-be")).resolve(),
+              repr(r))
+        check("load_platforms: 平台 profile 解析為 profile dict(非字串)",
+              r["platforms"]["android"]["profile"]["method_re"] is m.KOTLIN_TEST_RE, repr(r))
+        # 4. 多平台缺 default_platform 且 >1 → 報錯(raise)
+        setcfg('{"platforms":{"a":{"profile":"kotlin-junit","root":"."},'
+               '"b":{"profile":"csharp-xunit","root":"."}}}')
+        try:
+            m.load_platforms(root); ok4 = False
+        except (ValueError, SystemExit):
+            ok4 = True
+        check("load_platforms: 多平台缺 default_platform 且 >1 → 報錯", ok4)
+        # 5. default_platform 指向不存在的鍵 → 報錯
+        setcfg('{"default_platform":"ghost","platforms":{"a":{"profile":"kotlin-junit","root":"."}}}')
+        try:
+            m.load_platforms(root); ok5 = False
+        except (ValueError, SystemExit):
+            ok5 = True
+        check("load_platforms: default_platform 指向不存在鍵 → 報錯", ok5)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(root.parent / (root.name + "-be"), ignore_errors=True)
+
+
+def t_resolve_test_refs():
+    """T3 平台前綴解析:resolve_test_refs(inv, platforms, default) → [(plat,name)]。
+    多平台:含冒號段前綴須為已定義平台(否則報錯)、無冒號段歸 default;
+    legacy(platforms 空):不切分,整串(含冒號)配 default。"""
+    m = _import_lumos()
+    plats = {"android": {}, "backend": {}}   # resolve 只看鍵名
+
+    def inv(s):
+        return f"KEY:★INVARIANT★ 某 {s}"
+
+    # 多平台:雙前綴
+    check("resolve: [test:android:X,backend:Y] → 兩平台各一",
+          m.resolve_test_refs(inv("[test:android:X,backend:Y]"), plats, "android")
+          == [("android", "X"), ("backend", "Y")])
+    # 多平台:無前綴段落 fallback default
+    check("resolve: [test:android:X,Y] → Y 歸 default(android)",
+          m.resolve_test_refs(inv("[test:android:X,Y]"), plats, "android")
+          == [("android", "X"), ("android", "Y")])
+    # 多平台:裸 ref → default
+    check("resolve: [test:X] 裸 ref → default",
+          m.resolve_test_refs(inv("[test:X]"), plats, "android") == [("android", "X")])
+    # 多平台:未定義前綴 → 報錯
+    try:
+        m.resolve_test_refs(inv("[test:foo:X]"), plats, "android"); okf = False
+    except ValueError:
+        okf = True
+    check("resolve: [test:foo:X](foo 非平台)→ 報錯", okf)
+    # legacy:platforms 空 → 不切分,整串配 default
+    check("resolve legacy: [test:orderNote] → (default, orderNote)",
+          m.resolve_test_refs(inv("[test:orderNote]"), {}, "csharp-xunit")
+          == [("csharp-xunit", "orderNote")])
+    check("resolve legacy: [test:foo:bar] → 不切分,整串當方法名(dangling 非報錯)",
+          m.resolve_test_refs(inv("[test:foo:bar]"), {}, "csharp-xunit")
+          == [("csharp-xunit", "foo:bar")])
+
+
+def t_multiplatform_guard_list():
+    """T4 跨 repo 多平台:圖譜在主 repo,invariant 綁前端 Kotlin(root=.)+ 後端 C#(root=../be)。
+    guard list 依平台各自 discover → 兩條都 real;未定義方法 → dangling。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-mp-"))
+    main = root / "app"                       # 主 repo(圖譜所在)
+    be = root / "backend"                     # 後端 sibling repo
+    vault = main / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    (vault / "Systems" / "X.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 前端 [test:android:KtGuard]\n"
+        "  KEY:★INVARIANT★ 後端 [test:backend:CsGuard]\n"
+        "  KEY:★INVARIANT★ 缺 [test:android:NopeMissing]\n"
+        "---\n# X\n").encode("utf-8"))
+    (main / ".lumos").mkdir(parents=True)
+    (main / ".lumos" / "config.json").write_bytes(
+        ('{"default_platform":"android","platforms":{'
+        '"android":{"profile":"kotlin-junit","root":"."},'
+        '"backend":{"profile":"csharp-xunit","root":"../backend"}}}\n').encode("utf-8"))
+    # 前端 Kotlin 測試(主 repo)
+    ktdir = main / "src" / "test" / "java"
+    ktdir.mkdir(parents=True)
+    (ktdir / "G.kt").write_bytes(
+        ("import org.junit.Test\nclass G {\n  @Test\n  fun KtGuard() { }\n}\n").encode("utf-8"))
+    # 後端 C# 測試(sibling repo)
+    csdir = be / "App.Tests"
+    csdir.mkdir(parents=True)
+    (csdir / "G.cs").write_bytes(
+        ("using Xunit;\npublic class G {\n  [Fact]\n  public void CsGuard() { }\n}\n").encode("utf-8"))
+    try:
+        r = run(vault, "guard", "list")
+        check("多平台 guard list: 前端 Kotlin + 後端 C# 跨 repo 各自 discover → 真綁 2",
+              "真綁 2" in r.stdout, r.stdout)
+        check("多平台 guard list: 未定義方法 → 懸空 1", "懸空 1" in r.stdout, r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_multiplatform_doctor_check_t():
+    """T4 doctor Check T 多平台:跨 repo 綁定 + 審計 → 過(rc0);未定義平台前綴 → 明確報錯。"""
+    import shutil
+
+    def build(inv_lines):
+        root = Path(tempfile.mkdtemp(prefix="gctl-mpd-"))
+        main = root / "app"
+        be = root / "backend"
+        vault = main / "docs" / "demo-knowledge"
+        for sub in ("Systems", "Verification", "Projects", "MOC"):
+            (vault / sub).mkdir(parents=True)
+        (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+        (vault / "Systems" / "X.md").write_bytes(
+            ("---\ntype: system\nstatus: done\nsummary: |-\n" + inv_lines + "---\n# X\n").encode("utf-8"))
+        (main / ".lumos").mkdir(parents=True)
+        (main / ".lumos" / "config.json").write_bytes(
+            ('{"default_platform":"android","platforms":{'
+            '"android":{"profile":"kotlin-junit","root":"."},'
+            '"backend":{"profile":"csharp-xunit","root":"../backend"}}}\n').encode("utf-8"))
+        ktdir = main / "src" / "test" / "java"
+        ktdir.mkdir(parents=True)
+        (ktdir / "G.kt").write_bytes(
+            ("import org.junit.Test\nclass G {\n  @Test\n  fun KtGuard() { }\n}\n").encode("utf-8"))
+        csdir = be / "App.Tests"
+        csdir.mkdir(parents=True)
+        (csdir / "G.cs").write_bytes(
+            ("using Xunit;\npublic class G {\n  [Fact]\n  public void CsGuard() { }\n}\n").encode("utf-8"))
+        return root, vault
+
+    # A. 兩平台都綁真方法 + 審計 → Check T 不擋(無裸/懸空/未審)
+    root, vault = build(
+        "  KEY:★INVARIANT★ 前端 [test:android:KtGuard] [audit:sonnet/2026-07-02]\n"
+        "  KEY:★INVARIANT★ 後端 [test:backend:CsGuard] [audit:sonnet/2026-07-02]\n")
+    try:
+        r = run(vault, "doctor", "--ci")
+        check("doctor 多平台: 跨 repo 綁真方法+審計 → Check T 全過(2 條真綁真方法)",
+              "都綁了真實可執行測試方法" in r.stdout
+              and "條懸空 test_ref" not in r.stdout and "條偽證據" not in r.stdout, r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # B. 未定義平台前綴 → 明確報錯
+    root, vault = build(
+        "  KEY:★INVARIANT★ 亂平台 [test:ghost:Foo] [audit:sonnet/2026-07-02]\n")
+    try:
+        r = run(vault, "doctor", "--ci")
+        check("doctor 多平台: 未定義平台前綴 → 報錯(rc1)",
+              r.returncode == 1 and ("ghost" in r.stdout or "未定義" in r.stdout), r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_guard_trace_multiplatform():
+    """T4:guard trace 對 [test:平台:名] 應剝前綴後再搜 Verification(否則 android:X 對不上只寫 X 的篇)。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-trmp-"))
+    main = root / "app"
+    vault = main / "docs" / "kg"
+    for sub in ("Systems", "Verification", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    (main / ".lumos").mkdir(parents=True)
+    (main / ".lumos" / "config.json").write_bytes(
+        ('{"default_platform":"android","platforms":{'
+        '"android":{"profile":"kotlin-junit","root":"."}}}\n').encode("utf-8"))
+    (vault / "Systems" / "S.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 前端 [test:android:BuzzerMapsGuard]\n---\n# S\n").encode("utf-8"))
+    (vault / "Verification" / "2026-07-02_buzzer.md").write_bytes(
+        ("---\ntype: verification\nstatus: pass\ncreated: 2026-07-02\n---\n"
+        "# buzzer\n驗證方法 BuzzerMapsGuard 通過。\n").encode("utf-8"))
+    try:
+        r = run(vault, "guard", "trace")
+        check("guard trace 多平台: 剝平台前綴後命中提及裸方法名的 Verification",
+              "2026-07-02_buzzer" in r.stdout, r.stdout)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_guard_bind_scaffold_platform():
+    """T5:--platform 讓 method 維持識別字、平台另帶。bind 寫 [test:平台:方法]+去重;
+    scaffold 依該平台 root+profile 選 scaffold_ext。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-plat-"))
+    main = root / "app"
+    be = root / "backend"
+    vault = main / "docs" / "kg"
+    for sub in ("Systems", "Verification", "MOC"):
+        (vault / sub).mkdir(parents=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    (main / ".lumos").mkdir(parents=True)
+    (main / ".lumos" / "config.json").write_bytes(
+        ('{"default_platform":"android","platforms":{'
+        '"android":{"profile":"kotlin-junit","root":"."},'
+        '"backend":{"profile":"csharp-xunit","root":"../backend"}}}\n').encode("utf-8"))
+    (vault / "Systems" / "S.md").write_bytes(
+        ("---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 後端載重宣稱ABC\n---\n# S\n").encode("utf-8"))
+    (be / "App.Tests").mkdir(parents=True)
+    # backend 平台的 guard-template(scaffold 從該平台 root 找)
+    tpl = be / ".lumos" / "guard-templates"
+    tpl.mkdir(parents=True)
+    (tpl / "behavioral.tmpl").write_bytes(
+        ("// {{NODE}} | {{INVARIANT}} | {{CLAIM}}\npublic class {{CLASS}} {\n"
+        "  [Fact] public void {{METHOD}}() { Assert.Fail(\"unfilled\"); }\n}\n").encode("utf-8"))
+    try:
+        # bind --platform → 寫 [test:backend:CsGuard]
+        r = run(vault, "guard", "bind", "Systems/S", "後端載重宣稱ABC", "CsGuard", "--platform", "backend")
+        s = read(vault / "Systems" / "S.md")
+        check("bind --platform: KEY 行寫入 [test:backend:CsGuard]",
+              "[test:backend:CsGuard]" in s, s + r.stdout + r.stderr)
+        # 再綁一次 → 去重(比完整 ref backend:CsGuard)
+        r2 = run(vault, "guard", "bind", "Systems/S", "後端載重宣稱ABC", "CsGuard", "--platform", "backend")
+        check("bind --platform: 重綁去重(比完整 platform:method)", "已綁" in r2.stdout, r2.stdout)
+        # scaffold --platform backend → 用 csharp scaffold_ext(.cs)、從 backend root 找 template
+        outd = be / "App.Tests"
+        r3 = run(vault, "guard", "scaffold", "--node", "Systems/S", "--invariant", "後端載重宣稱ABC",
+                 "--method", "NewCsG", "--type", "behavioral", "--platform", "backend",
+                 "--claim", "x", "--out", str(outd))
+        check("scaffold --platform: 依 backend profile 寫 .cs 副檔名",
+              (outd / "NewCsGTests.cs").exists(), r3.stdout + r3.stderr)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

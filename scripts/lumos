@@ -579,34 +579,46 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
                     unaudited.append((rel, clean))
             else:
                 naked.append((rel, clean, refs))
-        dangling, fake = [], []
+        dangling, fake, bad_platform = [], [], []
         if bound:
             if repo_root is None:
                 print(f"  {C['Y']}—{C['X']} 無法定位 repo root,跳過 test_ref 存在性檢查(裸合約仍檢)")
             else:
-                _prof = load_test_profile(repo_root)
-                _attr = _prof["attr_hint"]
-                test_methods = discover_test_methods(repo_root, _prof)
-                hay = build_code_haystack(repo_root)
+                # 多平台感知:每 ref 依平台前綴選對 root+profile 的 method set/haystack(跨 repo)。
+                pdata, split, default, methods_for, hay_for = _platform_test_index(repo_root)
                 for rel, clean, refs in bound:
-                    for name in refs:
-                        if name in test_methods:
-                            continue  # 真實測試方法(依 profile 認 attr)
-                        elif name in hay:
+                    for seg in refs:
+                        if split and ":" in seg:            # 多平台:含冒號 = 平台:名
+                            plat, name = seg.split(":", 1)
+                            plat, name = plat.strip(), name.strip()
+                            if plat not in split:           # 未定義前綴 → 明確報錯(不誤當方法名)
+                                bad_platform.append(
+                                    f"{rel}: [test:{seg}] 平台前綴 '{plat}' 未定義於 platforms"
+                                    f"({', '.join(split)})")
+                                continue
+                        else:                               # legacy 或無前綴段 → default 平台
+                            plat, name = default, seg
+                        if name in methods_for(plat):
+                            continue  # 真實測試方法(依該平台 profile 認 attr)
+                        _attr = pdata["platforms"][plat]["profile"]["attr_hint"]
+                        if name in hay_for(plat):
                             # 出現在程式碼但不是測試方法 → 偽證據(子字串巧合/被改名/拼錯屬性)
-                            fake.append(f"{rel}: [test:{name}] 在程式碼出現,但不是 {_attr} 測試方法")
+                            fake.append(f"{rel}: [test:{seg}] 在程式碼出現,但不是 {_attr} 測試方法")
                         else:
-                            dangling.append(f"{rel}: [test:{name}] 在程式碼中找不到")
-        if not naked and not dangling and not fake and not unaudited:
+                            dangling.append(f"{rel}: [test:{seg}] 在程式碼中找不到")
+        if not naked and not dangling and not fake and not unaudited and not bad_platform:
             ok(f"{len(bound)} 條 ★INVARIANT★ 都綁了真實可執行測試方法且經獨立審計 "
-               "(0 裸合約 / 0 偽證據 / 0 懸空 / 0 未審)")
+               "(0 裸合約 / 0 偽證據 / 0 懸空 / 0 未審 / 0 未定義平台)")
+        if bad_platform:
+            warn(bad_platform, f"發現 {len(bad_platform)} 條 test_ref 平台前綴未定義於 config platforms:",
+                 "config.json 的 platforms 補該平台,或修正 [test:平台:名] 的平台前綴")
         if naked:
             warn([f"{r}: {first_line(c, 70)}" for r, c, _ in naked],
                  f"發現 {len(naked)} 條裸 ★INVARIANT★ (載重宣稱沒綁測試 → 無法機械驗真):",
                  "在 invariant 行尾加 [test:測試名],並寫對應測試")
         if fake:
             warn(fake, f"發現 {len(fake)} 條偽證據 test_ref (綁的名字不是真測試方法 → 無法執行):",
-                 f"確認 [test:] 名字 = 某個 {_attr} 方法名(別綁到散文/工具方法/拼錯)")
+                 "確認 [test:] 名字 = 該平台 profile 認的真測試方法名(別綁到散文/工具方法/拼錯屬性)")
         if dangling:
             warn(dangling, f"發現 {len(dangling)} 條懸空 test_ref (綁的測試在程式碼中不存在):",
                  "建立該測試,或修正 [test:] 名稱")
@@ -964,6 +976,15 @@ KOTLIN_TEST_RE = re.compile(
     r"@(?:Test|ParameterizedTest|RepeatedTest)\b[^{]*?\bfun\s+(`[^`]+`|[A-Za-z_]\w*)\s*\(",
     re.S)
 
+# Maestro(Android E2E)flow 綁 name: 欄位。行尾 \s*$ 錨:多字 name(含空白)NO MATCH
+# → 與 playwright 對稱、不製造假陽性(識別字安全的 name 才可綁,設計慣例)。
+MAESTRO_NAME_RE = re.compile(r"(?m)^name:\s*[\"']?([A-Za-z_]\w*)[\"']?\s*$")
+# file_must_match:只認含 appId: 行首的檔(真 Maestro flow),濾掉 CI 等其他 yaml。
+MAESTRO_FLOW_RE = re.compile(r"(?m)^appId:")
+# Playwright(web E2E):test('id')/test.describe('id')。capture 識別字後需緊接引號,
+# 故含空白 title(如 'should show menu')NO MATCH(設計上不可綁)。
+PLAYWRIGHT_TEST_RE = re.compile(r"\btest(?:\.describe)?\(\s*[\"']([A-Za-z_]\w*)[\"']")
+
 # ── 測試棧 profile(語言可插拔;P5 — Android/Kotlin 等也能用 guard + Check T)──
 # 每個 profile:exts(discover 掃哪些副檔名)/ method_re(group(1)=方法名)/
 # scaffold_ext(產 stub 副檔名)/ dir_mode(suffix=頂層目錄 endswith / rglob=遞迴找目錄名)/
@@ -984,6 +1005,26 @@ TEST_PROFILES = {
         "dirs": {"pure": (["test"], []),
                  "behavioral": (["androidTest", "test"], []),
                  "state": (["androidTest", "test"], [])},
+    },
+    # Maestro(Android E2E):測試單位=YAML flow 檔,綁 name: 欄位(識別字安全)。
+    # file_must_match=^appId: 只認真 flow,濾掉 CI 等其他 yaml(否則其 name: 被誤收)。
+    "maestro": {
+        "exts": {".yaml", ".yml"}, "method_re": MAESTRO_NAME_RE, "scaffold_ext": ".yaml",
+        "dir_mode": "rglob", "rglob_under": None, "file_must_match": MAESTRO_FLOW_RE,
+        "attr_hint": "Maestro flow name:", "fail_hint": "assertVisible(哨兵)",
+        "dirs": {"pure": ([], []),
+                 "behavioral": ([".maestro"], []),
+                 "state": ([".maestro"], [])},
+    },
+    # Playwright(web E2E):test('id')/test.describe('id')。識別字 title(含空白 NO MATCH,
+    # 設計上不可綁)。無 file_must_match(以 test( 為錨,不需檔案過濾)。
+    "playwright": {
+        "exts": {".ts", ".tsx", ".js", ".jsx"}, "method_re": PLAYWRIGHT_TEST_RE,
+        "scaffold_ext": ".spec.ts", "dir_mode": "rglob", "rglob_under": None,
+        "attr_hint": "test('id')/test.describe('id')", "fail_hint": "expect(哨兵).toBe(...)",
+        "dirs": {"pure": ([], []),
+                 "behavioral": (["tests", "e2e"], []),
+                 "state": (["tests", "e2e"], [])},
     },
 }
 
@@ -1030,6 +1071,56 @@ def load_test_profile(repo_root):
     return prof
 
 
+def load_platforms(repo_root):
+    """讀 .lumos/config.json 的多根多 profile 設定(多平台合約測試綁定)。
+    回 {multiplatform: bool, default_platform: str, platforms: {plat: {profile: dict, root: Path}}}。
+    - 無 config / 無 `platforms` 鍵 → legacy:multiplatform False、單一條目(key=test_profile 或
+      csharp-xunit、root=repo_root、profile 走 load_test_profile 含 inline 覆蓋)。此 multiplatform
+      信號(而非「dict 是否為空」)決定 resolve_test_refs 要不要做前綴切分(審計 r4 + opus 辯方拍板)。
+    - 有 `platforms` 鍵 → multiplatform True:每平台 profile 名 → profile dict、
+      root=(repo_root/root_str).resolve()(不存在大聲警告、不擋);default_platform 依 D1 規則。
+    設定錯誤(缺 default_platform 且平台 >1 / default 指向不存在鍵 / profile 名未知)→ raise ValueError。"""
+    import json
+    cfg_path = repo_root / ".lumos" / "config.json"
+    cfg = {}
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"⚠ .lumos/config.json 解析失敗,退回 legacy 單 profile: {e}", file=sys.stderr)
+            cfg = {}
+    plats = cfg.get("platforms")
+    if not isinstance(plats, dict) or not plats:
+        # legacy:單一條目(root=repo_root,profile 沿用 load_test_profile 的 inline 覆蓋支援)
+        name = cfg.get("test_profile") or "csharp-xunit"
+        if name not in TEST_PROFILES:
+            name = "csharp-xunit"
+        return {"multiplatform": False, "default_platform": name,
+                "platforms": {name: {"profile": load_test_profile(repo_root), "root": repo_root}}}
+    out = {}
+    for plat, spec in plats.items():
+        if not isinstance(spec, dict):
+            raise ValueError(f"platforms['{plat}'] 應為物件(收到 {type(spec).__name__})")
+        pname = spec.get("profile")
+        if pname not in TEST_PROFILES:
+            raise ValueError(f"platforms['{plat}'].profile '{pname}' 未知(有: {', '.join(TEST_PROFILES)})")
+        root_str = spec.get("root", ".")
+        root = (repo_root / root_str).resolve()   # 明寫基底 repo_root(非 cwd),見 D1
+        if not root.exists():
+            print(f"⚠ 平台 '{plat}' 的 root 不存在: {root}(該平台 discover 將掃不到測試)", file=sys.stderr)
+        out[plat] = {"profile": dict(TEST_PROFILES[pname]), "root": root}
+    default = cfg.get("default_platform")
+    if default is None:
+        if len(out) == 1:
+            default = next(iter(out))
+        else:
+            raise ValueError(f"多平台 config 有 {len(out)} 個平台但未指定 default_platform"
+                             f"(無前綴 [test:X] 不知歸屬);請加 default_platform")
+    elif default not in out:
+        raise ValueError(f"default_platform '{default}' 不在 platforms({', '.join(out)})")
+    return {"multiplatform": True, "default_platform": default, "platforms": out}
+
+
 def _safe_user_regex(pattern):
     """編譯使用者提供的 regex,並用【靜態】啟發式擋常見巢狀量詞 ReDoS。
     關鍵:**絕不執行**該 regex 來探測 — 在 CPython 裡 catastrophic regex 持有 GIL,
@@ -1049,10 +1140,32 @@ def _safe_user_regex(pattern):
 
 
 def invariant_test_refs(inv_text):
-    """從 ★INVARIANT★ 文字抽 [test:A,B] 綁定的可執行測試名(可多個,逗號分隔)。無綁定回 []。"""
+    """從 ★INVARIANT★ 文字抽 [test:A,B] 綁定的可執行測試名(可多個,逗號分隔)。無綁定回 []。
+    回**原始字串**(含任何 平台: 前綴)——供 tag 重建/顯示;平台解析走 resolve_test_refs。"""
     out = []
     for m in TEST_REF_RE.findall(inv_text):
         out.extend(t.strip() for t in m.split(",") if t.strip())
+    return out
+
+
+def resolve_test_refs(inv_text, platforms, default_platform):
+    """把 [test:...] 解析為 [(platform, method_name)]。沿用 invariant_test_refs 的逗號切分。
+    - platforms 非空(多平台):每段含 ':' → 前綴須為已定義 platform 鍵(C#/Kotlin 名不含冒號,
+      故含冒號即視為 平台:名;前綴未定義 → raise ValueError,不誤當方法名);無 ':' → 歸 default_platform。
+    - platforms 空(legacy,由呼叫端在 multiplatform=False 時傳 {}):**不切分**,整串(含任何冒號)
+      配 default_platform → 後續走單一 method set 比對(含冒號的假想 ref 走 dangling 而非報錯)。"""
+    out = []
+    for seg in invariant_test_refs(inv_text):
+        if platforms and ":" in seg:
+            plat, name = seg.split(":", 1)
+            plat, name = plat.strip(), name.strip()
+            if plat not in platforms:
+                raise ValueError(
+                    f"[test:{seg}] 的平台前綴 '{plat}' 未定義於 platforms"
+                    f"({', '.join(platforms)});不 fallback 避免誤綁")
+            out.append((plat, name))
+        else:
+            out.append((default_platform, seg))
     return out
 
 
@@ -1192,6 +1305,7 @@ def discover_test_methods(repo_root, profile=None):
     import os
     profile = profile or load_test_profile(repo_root)
     exts, mre = profile["exts"], profile["method_re"]
+    must = profile.get("file_must_match")   # 選填:只認內容含此 marker 的檔(如 Maestro ^appId:)
     methods = set()
     for dp, dirs, files in os.walk(repo_root):
         dirs[:] = [d for d in dirs if d not in CODE_SKIP_DIRS]
@@ -1200,6 +1314,10 @@ def discover_test_methods(repo_root, profile=None):
                 try:
                     txt = (Path(dp) / f).read_text(encoding="utf-8", errors="ignore")
                 except Exception:
+                    continue
+                # file_must_match:讀檔後、去註解前先過濾(如 .yaml 一堆,只認真 Maestro flow;
+                # 濾掉 CI yaml 的 name: 被誤收)。現有 profile 無此鍵→.get() 回 None→不過濾。
+                if must is not None and not must.search(txt):
                     continue
                 # 先去註解:行尾 // 註解(如 [InlineData(..)] // 說明 / @Test // 備註)會打斷
                 # 「註解串→方法簽章」的連續比對,導致真測試被誤判偽證據。
@@ -1461,24 +1579,65 @@ def _repo_root_from_env(env):
     return env.vault.parent  # standalone vault root
 
 
+def _platform_test_index(repo_root):
+    """依 .lumos/config 建「平台 → (method set, code haystack)」的惰性索引 + 解析參數。
+    多平台 discover 呼叫點(Check T / classify_invariants / cmd_archive)共用,避免各自重寫平台迴圈。
+    回 (split, default, methods_for, hay_for):
+    - split = multiplatform 時的 platforms dict、legacy 時 {}(→ resolve_test_refs 不切分);
+    - default = default_platform;
+    - methods_for(plat)/hay_for(plat) = 惰性(一次 CLI 內快取)取該平台 root+profile 的測試方法集/haystack
+      (haystack 也跨 repo,修 r4:fake vs dangling 訊息品質)。"""
+    pdata = load_platforms(repo_root)
+    split = pdata["platforms"] if pdata["multiplatform"] else {}
+    default = pdata["default_platform"]
+    mcache, hcache = {}, {}
+
+    def methods_for(plat):
+        if plat not in mcache:
+            p = pdata["platforms"].get(plat)
+            mcache[plat] = discover_test_methods(p["root"], p["profile"]) if p else set()
+        return mcache[plat]
+
+    def hay_for(plat):
+        if plat not in hcache:
+            p = pdata["platforms"].get(plat)
+            hcache[plat] = build_code_haystack(p["root"]) if p else ""
+        return hcache[plat]
+
+    return pdata, split, default, methods_for, hay_for
+
+
+def _classify_one(x, split, default, methods_for, hay_for):
+    """單條 ★INVARIANT★ 的綁定狀態:naked/real/fake/dangling(多平台:每 ref 對其平台判、取最壞)。
+    未定義平台前綴(resolve 報 ValueError)→ dangling(guard list 不 crash;doctor Check T 另明確報)。"""
+    _, refs = strip_test_refs(x)
+    if not refs:
+        return "naked"
+    try:
+        resolved = resolve_test_refs(x, split, default)
+    except ValueError:
+        return "dangling"
+    sts = []
+    for plat, name in resolved:
+        if name in methods_for(plat):
+            sts.append("real")
+        elif name in hay_for(plat):
+            sts.append("fake")
+        else:
+            sts.append("dangling")
+    return "dangling" if "dangling" in sts else ("fake" if "fake" in sts else "real")
+
+
 def classify_invariants(env):
-    """每條 ★INVARIANT★ 的綁定狀態:real / dangling / fake / naked。"""
+    """每條 ★INVARIANT★ 的綁定狀態:real / dangling / fake / naked(多平台感知)。"""
     repo_root = _repo_root_from_env(env)
-    methods = discover_test_methods(repo_root)
-    hay = build_code_haystack(repo_root)
+    _, split, default, methods_for, hay_for = _platform_test_index(repo_root)
     rows = []
     for rel in sorted(env.notes):
         inv, _ = extract_contracts(env.notes[rel])
         for x in inv:
             clean, refs = strip_test_refs(x)
-            if not refs:
-                status = "naked"
-            elif any(r not in methods and r not in hay for r in refs):
-                status = "dangling"
-            elif any(r not in methods for r in refs):
-                status = "fake"
-            else:
-                status = "real"
+            status = _classify_one(x, split, default, methods_for, hay_for)
             rows.append({"node": rel, "text": clean, "refs": refs, "status": status,
                          "audited": bool(invariant_audit_refs(x)),
                          "audit": invariant_audit_refs(x)})
@@ -1558,7 +1717,7 @@ def _tautology_warn(claim, clean):
 
 
 def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
-                       out_dir=None, template=None, klass=None):
+                       out_dir=None, template=None, klass=None, platform=None):
     if gtype not in GUARD_TYPES:
         print(f"ERROR: --type 須為 {'|'.join(GUARD_TYPES)}(收到 {gtype})", file=sys.stderr)
         return 2
@@ -1587,9 +1746,27 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     clean, _ = strip_test_refs(matched[0])
     _tautology_warn(claim, clean)
     repo_root = _repo_root_from_env(env)
-    profile = load_test_profile(repo_root)
+    # 多平台:依 --platform 選 root+profile(範本落點/scaffold_ext/測試目錄偵測都跟平台走)。
+    try:
+        pdata = load_platforms(repo_root)
+    except ValueError as ex:
+        print(f"ERROR: config platforms 設定錯誤: {ex}", file=sys.stderr)
+        return 2
+    if platform is None:
+        if len(pdata["platforms"]) == 1:
+            platform = next(iter(pdata["platforms"]))
+        else:
+            print(f"ERROR: 多平台 config 有 {len(pdata['platforms'])} 個平台,scaffold 請用 --platform 指定"
+                  f"(可選: {', '.join(pdata['platforms'])})", file=sys.stderr)
+            return 2
+    elif platform not in pdata["platforms"]:
+        print(f"ERROR: --platform '{platform}' 不在 config platforms({', '.join(pdata['platforms'])})",
+              file=sys.stderr)
+        return 2
+    pentry = pdata["platforms"][platform]
+    platform_root, profile = pentry["root"], pentry["profile"]
     tpl_path = Path(template) if template else \
-        (repo_root / ".lumos" / "guard-templates" / f"{gtype}.tmpl")
+        (platform_root / ".lumos" / "guard-templates" / f"{gtype}.tmpl")   # 範本走該平台 root(審計 r4)
     if not tpl_path.exists():
         print(f"ERROR: 找不到範本 {tpl_path}\n  範本是技術棧專屬、放專案 "
               f".lumos/guard-templates/<type>.tmpl;lumos 語言無關不內建。先建範本再 scaffold。",
@@ -1605,7 +1782,7 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     if leftover:
         print(f"⚠ 範本有未取代的 placeholder {leftover}(範本 typo?)— 仍寫出,請檢查產出檔",
               file=sys.stderr)
-    out = Path(out_dir) if out_dir else _detect_test_dir(repo_root, gtype, profile)
+    out = Path(out_dir) if out_dir else _detect_test_dir(platform_root, gtype, profile)
     if out is None:
         print("ERROR: 偵測不到測試專案目錄,請給 --out", file=sys.stderr)
         return 2
@@ -1622,15 +1799,18 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     print("\n下一步(Claude/人):")
     print(f"  1. 開 {target.name},把 // TODO 換成『已向人確認的斷言』"
           f"(預設 {profile['fail_hint']} → 必須填到綠)")
-    print(f"  2. 綁回圖譜:  lumos guard bind {rel} \"{invariant_substr}\" {method}")
+    _pflag = f" --platform {platform}" if pdata["multiplatform"] else ""
+    print(f"  2. 綁回圖譜:  lumos guard bind {rel} \"{invariant_substr}\" {method}{_pflag}")
     print(f"  3. lumos doctor 確認 Check T 通過")
     return 0
 
 
-def cmd_guard_bind(env, node, invariant_substr, method):
+def cmd_guard_bind(env, node, invariant_substr, method, platform=None):
     if not IDENT_RE.match(method):
         print(f"ERROR: method『{method}』非合法識別字", file=sys.stderr)
         return 2
+    # 多平台:平台另帶(method 維持識別字、不含冒號),寫成 [test:平台:方法]。IDENT_RE 不放寬。
+    ref = f"{platform}:{method}" if platform else method
     rel = env.find(node)
     if rel is None:
         print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
@@ -1656,13 +1836,13 @@ def cmd_guard_bind(env, node, invariant_substr, method):
     m = TEST_REF_RE.search(line)
     if m:
         refs = [t.strip() for t in m.group(1).split(",") if t.strip()]
-        if method in refs:
-            print(f"已綁 [test:{method}],無需重綁")
+        if ref in refs:   # 去重比完整 ref(platform:method),否則多平台漏判(審計 r3)
+            print(f"已綁 [test:{ref}],無需重綁")
             return 0
-        refs.append(method)
+        refs.append(ref)
         newline = line[:m.start()] + f"[test:{','.join(refs)}]" + line[m.end():]
     else:
-        newline = line.rstrip() + f" [test:{method}]"
+        newline = line.rstrip() + f" [test:{ref}]"
     new_lines = lines[:target_idx] + [newline] + lines[target_idx + 1:]
 
     def check(fields):
@@ -1672,15 +1852,15 @@ def cmd_guard_bind(env, node, invariant_substr, method):
         for l in summ.split("\n"):
             mi = INVARIANT_RE.match(l.strip())
             if mi and invariant_substr in l:
-                return method in invariant_test_refs(mi.group(1))
+                return ref in invariant_test_refs(mi.group(1))   # verify closure 也比完整 ref
         return False
 
     try:
-        atomic_write_verify(path, new_lines, f"[test:{method}]", check)
+        atomic_write_verify(path, new_lines, f"[test:{ref}]", check)
     except (ValueError, RuntimeError) as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         return 2
-    print(f"✓ 綁定 [test:{method}] → {rel} 的 ★INVARIANT★")
+    print(f"✓ 綁定 [test:{ref}] → {rel} 的 ★INVARIANT★")
     print("  下一步: lumos doctor — 方法須已存在於 code,否則 Check T 顯示懸空")
     return 0
 
@@ -1763,6 +1943,21 @@ def cmd_guard_trace(env, node=None):
                 verif_text[r] = INLINE_CODE_RE.sub("", FENCE_RE.sub("", raw))
             except Exception:
                 verif_text[r] = ""
+    # 多平台:refs 帶 平台: 前綴(如 android:X),但 Verification 文字寫的是裸方法名 X →
+    # 搜尋前先剝前綴(顯示仍用完整 ref)。config 壞則當 legacy(不剝)。
+    try:
+        _pd = load_platforms(_repo_root_from_env(env))
+        _split = _pd["platforms"] if _pd["multiplatform"] else {}
+    except ValueError:
+        _split = {}
+
+    def _bare(mth):
+        if _split and ":" in mth:
+            p, n = mth.split(":", 1)
+            if p.strip() in _split:
+                return n.strip()
+        return mth
+
     targets = [rel] if rel else sorted(env.notes)
     nodes_with_inv = 0
     short_names = set()
@@ -1779,10 +1974,11 @@ def cmd_guard_trace(env, node=None):
                 print("      ↳ ⚠ 未綁測試")
                 continue
             for mth in refs:
-                if len(mth) < 10:
-                    short_names.add(mth)
+                bare = _bare(mth)   # 剝平台前綴後才是 Verification 文字裡的方法名
+                if len(bare) < 10:
+                    short_names.add(bare)
                 # re.ASCII:方法名 ASCII;否則中文緊貼方法名(無空格)時 \b 失效漏命中
-                pat = re.compile(r"\b" + re.escape(mth) + r"\b", re.ASCII)
+                pat = re.compile(r"\b" + re.escape(bare) + r"\b", re.ASCII)
                 vs = sorted(env.notes[vr].stem for vr, t in verif_text.items() if pat.search(t))
                 tail = ", ".join(vs) if vs else "(無 Verification 提到此守衛)"
                 print(f"      ↳ [test:{mth}]  →  {tail}")
@@ -2926,13 +3122,18 @@ def cmd_archive(env, days, apply, today):
     live_guard_tests = set()
     guard_re = None
     if repo_root is not None:
-        bound = set()
+        # 多平台感知:每 invariant 依平台前綴解析,對其平台 root+profile 的 method set 判存活。
+        # 收「存活的裸方法名」(非帶前綴的 ref)——guard_re 要在 Verification 文字裡搜方法名。
+        _, split, default, methods_for, _hay = _platform_test_index(repo_root)
         for _n in env.notes.values():
             invs, _ = extract_contracts(_n)
             for inv in invs:
-                bound.update(invariant_test_refs(inv))
-        methods = discover_test_methods(repo_root)
-        live_guard_tests = {name for name in bound if name in methods}
+                try:
+                    for plat, name in resolve_test_refs(inv, split, default):
+                        if name in methods_for(plat):
+                            live_guard_tests.add(name)
+                except ValueError:
+                    continue   # 未定義平台前綴:非有效綁定,不護
         if live_guard_tests:
             # 精確度對齊 Check T:用【詞界】比對方法名,不是 raw 子字串。
             # 否則短/前綴名(live `Pay` 命中散文 "Payment"、`Foo` 命中 `FooBar`)會
@@ -3810,10 +4011,13 @@ def main():
     gs.add_argument("--out", help="測試專案目錄(預設自動偵測 *Tests / *IntegrationTests)")
     gs.add_argument("--template", help="範本路徑(預設 .lumos/guard-templates/<type>.tmpl)")
     gs.add_argument("--class", dest="klass", help="測試類別名(預設 <method>Tests)")
+    gs.add_argument("--platform", help="多平台 config 下指定平台(決定 root/profile/範本落點);"
+                                       "省略且單一平台時自動選,多平台則必填")
     gb = gsub.add_parser("bind", help="把 [test:方法] 綁回 KEY 行(寫後自驗)")
     gb.add_argument("node")
     gb.add_argument("invariant", help="KEY 行子字串")
     gb.add_argument("method")
+    gb.add_argument("--platform", help="多平台 config 下寫成 [test:平台:方法](method 維持識別字)")
     ga = gsub.add_parser("audit", help="留痕 [audit:模型/日期]:合法性經無脈絡獨立 agent 審計過(maker≠checker)")
     ga.add_argument("node")
     ga.add_argument("invariant", help="KEY 行子字串")
@@ -4009,9 +4213,11 @@ def main():
         if args.gcmd == "scaffold":
             return cmd_guard_scaffold(env, args.node, args.invariant, args.method,
                                       args.type, args.claim, out_dir=args.out,
-                                      template=args.template, klass=args.klass)
+                                      template=args.template, klass=args.klass,
+                                      platform=args.platform)
         if args.gcmd == "bind":
-            return cmd_guard_bind(env, args.node, args.invariant, args.method)
+            return cmd_guard_bind(env, args.node, args.invariant, args.method,
+                                  platform=args.platform)
         if args.gcmd == "audit":
             return cmd_guard_audit(env, args.node, args.invariant, args.model, args.date)
         if args.gcmd == "trace":

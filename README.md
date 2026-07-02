@@ -199,8 +199,8 @@ lumos decision-supersede <節點> "<子字串>" --by "..." [--ended 日期]
 **合約與驗證**
 ```bash
 lumos guard list [--unbound]                         # ★INVARIANT★ 綁定狀態(real/dangling/fake/naked)+ 審計狀態
-lumos guard scaffold --node S --invariant "<子字串>" --method M --type pure|behavioral|state --claim "..."
-lumos guard bind  <節點> "<子字串>" <方法>           # 把 [test:方法] 寫回 KEY 行
+lumos guard scaffold --node S --invariant "<子字串>" --method M --type pure|behavioral|state --claim "..." [--platform P]
+lumos guard bind  <節點> "<子字串>" <方法> [--platform P]   # 把 [test:方法] 寫回 KEY 行(多平台:[test:P:方法])
 lumos guard audit <節點> "<子字串>" [--model sonnet] [--date 日期]   # 獨立審計後蓋 [audit:]
 lumos guard trace [<節點>]                           # 合約 → 守衛測試 → Verification 證據鏈
 lumos sync-verified-by [--apply]                     # 補漏寫的 verified_by(doctor Check 3)

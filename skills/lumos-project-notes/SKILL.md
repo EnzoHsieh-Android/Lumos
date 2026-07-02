@@ -378,11 +378,22 @@ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
 
 > scaffold/bind 只省「打字」,不省「確認」。doctor Check T + 誠實鐵則(上節)照舊兜底:stub 不填(留 Assert.Fail)= 紅;綁了不存在的方法 = 懸空被擋。
 >
-> **測試棧 profile(語言可插拔,P5)**:guard/Check T 的「認哪些測試方法」由 `.lumos/config.json` 的 `test_profile` 決定,內建 **`csharp-xunit`(預設)** 與 **`kotlin-junit`**(Android)。各 profile 定:掃哪些副檔名、方法 regex、scaffold 副檔名、測試目錄偵測(C# 頂層 `*Tests`/`*IntegrationTests` suffix;Kotlin 遞迴找巢狀 `src/test`/`androidTest`)。**無 config = csharp-xunit,完全向後相容**。逃生口:`config.json` 的 `test` 可欄位級覆蓋 `exts`/`scaffold_ext`/`method_regex`。範本仍技術棧專屬、放各專案 `.lumos/guard-templates/`。
+> **測試棧 profile(語言可插拔,P5)**:guard/Check T 的「認哪些測試方法」由 `.lumos/config.json` 決定。內建 4 個 profile:**`csharp-xunit`(預設)**、**`kotlin-junit`**(Android 單元)、**`maestro`**(Android E2E,綁 flow `name:` 欄位;`file_must_match=^appId:` 只認真 flow;多字 name NO MATCH)、**`playwright`**(web E2E,綁 `test('id')`/`test.describe('id')`;含空白 title 不可綁)。各 profile 定:掃哪些副檔名、方法 regex、scaffold 副檔名、測試目錄偵測。**無 config = csharp-xunit,完全向後相容**。逃生口:`config.json` 的 `test` 可欄位級覆蓋 `exts`/`scaffold_ext`/`method_regex`。範本仍技術棧專屬、放各專案 `.lumos/guard-templates/`。
 > ```json
-> // 範例:Android 專案 .lumos/config.json
+> // 單平台:Android 專案 .lumos/config.json
 > { "test_profile": "kotlin-junit" }
 > ```
+> **多平台(單一圖譜跨平台綁測試,見 [[Systems/test-profile-multiplatform]])**:圖譜記錄橫跨前後端的系統時,用 `platforms` 多根多 profile map,讓 `[test:平台:方法]` 綁到不同 repo 的測試。`default_platform` 給無前綴裸 ref 的歸屬(多平台缺省即報錯)。`load_platforms`/`resolve_test_refs` 以「config 有無 `platforms` 鍵」為 legacy 信號,舊 `test_profile`/裸 ref 照舊。`guard bind/scaffold --platform` 指定平台(`--method` 維持識別字、平台另帶,bind 寫 `[test:平台:方法]`)。Check T/`classify_invariants`/`cmd_archive` 各 ref 對其平台的 root+profile 判定(跨 repo)。
+> ```json
+> // 多平台:Citrus_KDS/.lumos/config.json
+> { "default_platform": "android",
+>   "platforms": {
+>     "android": {"profile": "kotlin-junit", "root": "."},
+>     "maestro": {"profile": "maestro",      "root": "."},
+>     "backend": {"profile": "csharp-xunit", "root": "../Compass_KDS"}
+>   } }
+> ```
+> 天花板:Check T 只驗測試識別子存在、不驗跑綠(CI 的事);E2E(maestro/playwright)要裝置/瀏覽器(無裝置才 skip);跨 repo 只讀不寫。**撰寫期可用 Maestro MCP / Playwright MCP** 把 scaffold 的紅燈 stub 填到綠(開發工具、非合約守門)。
 > **stub 的紅燈哨兵放在 skip 之前**——未填的整合守衛在無 DB 的 PR CI 也會紅(不被 skip 掩蓋成假綠);填完斷言後刪哨兵行,skip 才恢復「無 DB 才 skip」。
 
 ### decisions 欄位（ADR：決策時間有效性 + 為什麼選/為什麼不選）
