@@ -333,7 +333,7 @@ def _suggest_systems_for_orphan(env, rel, n):
 
 
 def _append_governance_log(vault, events):
-    """doctor --ci 唯一寫者:把本輪 gate findings append 到 docs/.governance-log.jsonl。
+    """寫者=doctor --ci + anchor approve:把 gate findings append 到 docs/.governance-log.jsonl。
     非 git / 取不到 HEAD → 跳過(不報錯)。dedup 留給讀時(lumos gov)。"""
     if not events:
         return
@@ -1341,7 +1341,7 @@ def cmd_gov(env, node=None, since_days=90):
          "detail": d.get("reason", "")})
     load(".governance-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
          "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
-         "nodes": [stem(x) for x in d.get("nodes", [])], "detail": ""})
+         "nodes": [stem(x) for x in d.get("nodes", [])], "detail": d.get("note", "")})
     # 第 4 源:canary 審計留痕(審計員可靠度史)。只此 mapper 輸出 token 鍵(供 dedup 鑑別)。
     load(".canary-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": "",
          "gate": "canary", "kind": d.get("kind", "?"), "hard": False, "nodes": [],
@@ -3546,6 +3546,116 @@ def find_vault(start: Path):
     return None
 
 
+
+ANCHOR_FILES = [
+    "scripts/test_lumos.py",
+    "scripts/test_autonomous_loop.py",
+    "scripts/hooks/pre-commit",
+    "scripts/hooks/pre-push",
+    "scripts/hooks/post-commit",
+]
+_ANCHOR_BASELINE_REL = "governance/anchor-baseline.json"
+
+
+def _anchor_repo_root(repo):
+    """--repo 顯式優先;省略時 cwd 逐層向上找 .git(同 refcheck 慣例)。失敗印錯回 None。"""
+    if repo is not None:
+        p = Path(repo)
+        if not p.is_dir():
+            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            return None
+        return p
+    for cand in (Path.cwd(), *Path.cwd().parents):
+        if (cand / ".git").exists():
+            return cand
+    print("ERROR: cwd 逐層向上找不到 .git repo,請用 --repo 指定", file=sys.stderr)
+    return None
+
+
+def cmd_anchor_verify(repo=None, as_json=False):
+    """錨點完整性核對:baseline 內每個錨點檔算 sha256 比對。
+    全符 rc=0;mismatch/缺檔 rc=1;baseline 不存在 rc=0+警示(漸進採用);參數錯 rc=2。
+    只證「驗證器檔案沒被動過」,不證測試本身寫得對(spec 誠實天花板)。"""
+    import json
+    import hashlib
+    repo_root = _anchor_repo_root(repo)
+    if repo_root is None:
+        return 2
+    bp = repo_root / _ANCHOR_BASELINE_REL
+    if not bp.exists():
+        print("anchor: baseline 不存在(未啟用)——`lumos anchor approve --note` 建立後生效")
+        return 0
+    try:
+        data = json.loads(bp.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"ERROR: baseline 讀取失敗: {e}", file=sys.stderr)
+        return 2
+    mismatches = []
+    for rel, expected in sorted(data.get("anchors", {}).items()):
+        f = repo_root / rel
+        if not f.is_file():
+            mismatches.append({"file": rel, "expected": expected, "actual": "(缺檔)"})
+            continue
+        actual = hashlib.sha256(f.read_bytes()).hexdigest()
+        if actual != expected:
+            mismatches.append({"file": rel, "expected": expected, "actual": actual})
+    if as_json:
+        print(json.dumps({"ok": not mismatches, "mismatches": mismatches}, ensure_ascii=False))
+    elif mismatches:
+        print("✗ anchor verify 失敗——驗證器檔案與 baseline 不符:")
+        for m in mismatches:
+            act = m["actual"] if m["actual"] == "(缺檔)" else m["actual"][:16] + "…"
+            print(f"  {m['file']}(期望 {m['expected'][:16]}… 實際 {act})")
+        print("非刻意 → git checkout 還原;刻意改錨點 → lumos anchor approve --note \"理由\"")
+    else:
+        print(f"✓ anchor verify — {len(data.get('anchors', {}))} 個錨點全符")
+    return 1 if mismatches else 0
+
+
+def cmd_anchor_approve(repo=None, note=None, vault=None):
+    """重算全部錨點 sha256 寫回 baseline + governance-log 留痕(anchor-approve 事件)。
+    改錨點檔的唯一合法路徑;--note 必填(空理由=無資訊留痕)。"""
+    import json
+    import hashlib
+    import datetime
+    if not note or not note.strip():
+        print("ERROR: --note 必填(留痕理由)", file=sys.stderr)
+        return 2
+    repo_root = _anchor_repo_root(repo)
+    if repo_root is None:
+        return 2
+    anchors, absent = {}, []
+    for rel in ANCHOR_FILES:
+        f = repo_root / rel
+        if f.is_file():
+            anchors[rel] = hashlib.sha256(f.read_bytes()).hexdigest()
+        else:
+            absent.append(rel)
+    if absent:
+        print(f"⚠ 錨點檔缺失(不入 baseline): {', '.join(absent)}")
+    bp = repo_root / _ANCHOR_BASELINE_REL
+    prev = {}
+    if bp.exists():
+        try:
+            prev = json.loads(bp.read_text(encoding="utf-8")).get("anchors", {})
+        except (OSError, ValueError):
+            prev = {}
+    changed = sorted({k for k in anchors if anchors[k] != prev.get(k)} | (set(prev) - set(anchors)))
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"version": 1, "anchors": anchors,
+               "approved_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+               "note": note}
+    bp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    v = vault or find_vault(Path.cwd())
+    if v is None:
+        print("⚠ 無 vault:baseline 已寫,governance-log 留痕跳過")
+    else:
+        _append_governance_log(v, [{"gate": "anchor-approve", "kind": "approved",
+                                    "hard": False, "nodes": changed, "note": note}])
+    print(f"✓ anchor approve — {len(anchors)} 個錨點寫入 baseline({len(changed)} 個變更)")
+    return 0
+
+
 def cmd_refcheck(md_path, repo=None, as_json=False):
     """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
     抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
@@ -3807,6 +3917,15 @@ def main():
     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
 
+    p = sub.add_parser("anchor", help="錨點完整性(vault-free):測試 runner/把關 hooks 的 sha256 baseline")
+    asub = p.add_subparsers(dest="anchor_cmd", required=True)
+    av = asub.add_parser("verify", help="比對錨點 sha256 vs baseline;不符 rc=1(baseline 不存在 rc=0+警示)")
+    av.add_argument("--repo", dest="anchor_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+    av.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON")
+    aa = asub.add_parser("approve", help="重算錨點 hash 寫回 baseline + governance-log 留痕(改錨點的合法路徑)")
+    aa.add_argument("--repo", dest="anchor_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+    aa.add_argument("--note", required=True, help="一句話理由(必填,進留痕)")
+
     args = ap.parse_args()
 
     # install/uninstall/update/bootstrap 不需要 Env(vault),先處理
@@ -3826,6 +3945,10 @@ def main():
                           yes=args.yes, source=args.source)
     if args.cmd == "refcheck":
         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+    if args.cmd == "anchor":
+        if args.anchor_cmd == "verify":
+            return cmd_anchor_verify(repo=args.anchor_repo, as_json=args.as_json)
+        return cmd_anchor_approve(repo=args.anchor_repo, note=args.note, vault=args.vault)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():

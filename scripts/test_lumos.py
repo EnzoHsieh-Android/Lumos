@@ -1942,6 +1942,80 @@ def t_refcheck():
           f"rc={r.returncode}\n{r.stdout}")
 
 
+def _mk_anchor_repo():
+    """_mk_git_vault(git repo + docs/kg vault + initial commit)疊 5 個假錨點檔。"""
+    root, vault = _mk_git_vault()
+    (root / "scripts" / "hooks").mkdir(parents=True)
+    for rel in ("scripts/test_lumos.py", "scripts/test_autonomous_loop.py",
+                "scripts/hooks/pre-commit", "scripts/hooks/pre-push",
+                "scripts/hooks/post-commit"):
+        (root / rel).write_text(f"# fake {rel}\n", encoding="utf-8")
+    return root, vault
+
+
+def t_anchor():
+    import json as _json
+    root, vault = _mk_anchor_repo()
+    bp = root / "governance" / "anchor-baseline.json"
+
+    # baseline 不存在 → rc 0 + 警示(漸進採用)
+    r = run(vault, "anchor", "verify", "--repo", str(root))
+    check("anchor: 無 baseline rc=0 且警示未啟用", r.returncode == 0 and "未啟用" in r.stdout,
+          f"rc={r.returncode}\n{r.stdout}")
+
+    # approve 缺 --note → argparse rc=2
+    r = run(vault, "anchor", "approve", "--repo", str(root))
+    check("anchor: approve 缺 --note rc=2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
+
+    # approve → baseline 建立(5 錨點 + note),verify rc=0
+    r = run(vault, "anchor", "approve", "--repo", str(root), "--note", "初始")
+    check("anchor: approve rc=0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+    data = _json.loads(bp.read_text(encoding="utf-8"))
+    check("anchor: baseline 5 錨點+note+version",
+          len(data["anchors"]) == 5 and data["note"] == "初始" and data["version"] == 1,
+          bp.read_text(encoding="utf-8"))
+    r = run(vault, "anchor", "verify", "--repo", str(root))
+    check("anchor: approve 後 verify rc=0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+
+    # governance-log 留痕(gate=anchor-approve,note 進 lumos gov 顯示)
+    gl = root / "docs" / ".governance-log.jsonl"
+    check("anchor: gov-log 有 anchor-approve 事件",
+          gl.exists() and "anchor-approve" in gl.read_text(encoding="utf-8"),
+          gl.read_text(encoding="utf-8") if gl.exists() else "無檔")
+    r = run(vault, "gov")
+    check("anchor: lumos gov 顯示 approve note", "初始" in r.stdout, r.stdout)
+
+    # 改一檔 → verify rc=1 且列出該檔;--json mismatches 精確
+    (root / "scripts" / "hooks" / "pre-push").write_text("# tampered\n", encoding="utf-8")
+    r = run(vault, "anchor", "verify", "--repo", str(root))
+    check("anchor: 改檔 verify rc=1 且列出", r.returncode == 1 and "scripts/hooks/pre-push" in r.stdout,
+          f"rc={r.returncode}\n{r.stdout}")
+    r = run(vault, "anchor", "verify", "--repo", str(root), "--json")
+    d = _json.loads(r.stdout)
+    check("anchor: --json ok=false 且 mismatch 指名",
+          d["ok"] is False and any(m["file"] == "scripts/hooks/pre-push" for m in d["mismatches"]),
+          r.stdout)
+
+    # 缺檔 → rc=1
+    (root / "scripts" / "hooks" / "pre-push").unlink()
+    r = run(vault, "anchor", "verify", "--repo", str(root))
+    check("anchor: 缺檔 verify rc=1", r.returncode == 1 and "缺檔" in r.stdout,
+          f"rc={r.returncode}\n{r.stdout}")
+
+    # 重 approve(容忍缺檔:警示 + 只寫存在的 4 個)→ verify 回 0
+    r = run(vault, "anchor", "approve", "--repo", str(root), "--note", "重簽")
+    check("anchor: 缺檔重 approve rc=0 帶警示", r.returncode == 0 and "缺失" in r.stdout,
+          f"rc={r.returncode}\n{r.stdout}")
+    data = _json.loads(bp.read_text(encoding="utf-8"))
+    check("anchor: 重簽後 baseline 4 錨點", len(data["anchors"]) == 4, str(data["anchors"].keys()))
+    r = run(vault, "anchor", "verify", "--repo", str(root))
+    check("anchor: 重簽後 verify rc=0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+
+    # --repo 解析失敗 → rc=2
+    r = run(vault, "anchor", "verify", "--repo", str(root / "nope"))
+    check("anchor: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
