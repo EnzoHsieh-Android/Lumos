@@ -392,12 +392,12 @@ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
 > ```
 > **多平台(單一圖譜跨平台綁測試,見 [[Systems/test-profile-multiplatform]])**:圖譜記錄橫跨前後端的系統時,用 `platforms` 多根多 profile map,讓 `[test:平台:方法]` 綁到不同 repo 的測試。`default_platform` 給無前綴裸 ref 的歸屬(多平台缺省即報錯)。`load_platforms`/`resolve_test_refs` 以「config 有無 `platforms` 鍵」為 legacy 信號,舊 `test_profile`/裸 ref 照舊。`guard bind/scaffold --platform` 指定平台(`--method` 維持識別字、平台另帶,bind 寫 `[test:平台:方法]`)。Check T/`classify_invariants`/`cmd_archive` 各 ref 對其平台的 root+profile 判定(跨 repo)。
 > ```json
-> // 多平台:Citrus_KDS/.lumos/config.json
-> { "default_platform": "android",
+> // 多平台:<圖譜所在 repo>/.lumos/config.json(平台名/profile/root 依專案自訂)
+> { "default_platform": "app",
 >   "platforms": {
->     "android": {"profile": "kotlin-junit", "root": "."},
->     "maestro": {"profile": "maestro",      "root": "."},
->     "backend": {"profile": "csharp-xunit", "root": "../Compass_KDS"}
+>     "app":     {"profile": "kotlin-junit", "root": "."},          // 前端 App(同 repo)
+>     "e2e":     {"profile": "maestro",      "root": "."},          // 同 repo 的 E2E flow
+>     "backend": {"profile": "csharp-xunit", "root": "../<後端 repo>"}  // 後端 API(另一 repo)
 >   } }
 > ```
 > 天花板:Check T 只驗測試識別子存在、不驗跑綠(CI 的事);E2E(maestro/playwright)要裝置/瀏覽器(無裝置才 skip);跨 repo 只讀不寫。**撰寫期可用 Maestro MCP / Playwright MCP** 把 scaffold 的紅燈 stub 填到綠(開發工具、非合約守門)。
