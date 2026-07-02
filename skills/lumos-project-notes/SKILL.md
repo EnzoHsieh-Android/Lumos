@@ -400,7 +400,12 @@ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
 >     "backend": {"profile": "csharp-xunit", "root": "../<後端 repo>"}  // 後端 API(另一 repo)
 >   } }
 > ```
-> 天花板:Check T 只驗測試識別子存在、不驗跑綠(CI 的事);E2E(maestro/playwright)要裝置/瀏覽器(無裝置才 skip);跨 repo 只讀不寫。**撰寫期可用 Maestro MCP / Playwright MCP** 把 scaffold 的紅燈 stub 填到綠(開發工具、非合約守門)。
+> 天花板:Check T 只驗測試識別子存在、不驗跑綠(CI 的事);E2E(maestro/playwright)要裝置/瀏覽器(無裝置才 skip);跨 repo 只讀不寫。**撰寫期用 Maestro MCP / Playwright MCP** 把 scaffold 的紅燈 stub 填到綠(開發工具、非合約守門)。
+> - **自我供裝(缺就自動裝、別叫使用者手動)**:要用該 MCP 但工具清單裡沒有(deferred 也 ToolSearch 不到)→ 先 `claude mcp list` 確認,沒有就自動配置再用:
+>   - Playwright(web):`claude mcp add playwright npx @playwright/mcp@latest`(前置 Node18+;首用 `npx playwright install` 裝瀏覽器)
+>   - Maestro(mobile):先裝 CLI `curl -Ls "https://get.maestro.mobile.dev" | bash`,再 `claude mcp add maestro -- maestro mcp`
+>   - 裝完**重啟 session** 或重跑 ToolSearch 讓 MCP 工具載入,再繼續填 stub。E2E 仍需模擬器/真機(mobile)或瀏覽器(web)才跑得起來。
+>   - 供裝是這條 workflow 的預設動作;唯一該先問人的情況 = 該機器有明確不得自動裝軟體的政策。
 > **stub 的紅燈哨兵放在 skip 之前**——未填的整合守衛在無 DB 的 PR CI 也會紅(不被 skip 掩蓋成假綠);填完斷言後刪哨兵行,skip 才恢復「無 DB 才 skip」。
 
 ### decisions 欄位（ADR：決策時間有效性 + 為什麼選/為什麼不選）
