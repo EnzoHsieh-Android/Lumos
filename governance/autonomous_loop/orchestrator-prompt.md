@@ -33,8 +33,9 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
 每輪 N(從 1 起):
 1. cp __SCRATCH__/spec/__DATE__-<topic>.md __SCRATCH__/<topic>-rN.md
 2. 在**工作副本**(只工作副本)植 1 個 canary,類型=[a,b,c][(N-1)%3]:a=壞§ref(引用不存在章節);b=未定義旗標(--xxx 它處無定義);c=未定義常數(ALL_CAPS 無值)。行尾加唯一 token <!-- CANARY-AUTO-N -->。
-3. **用 Agent 工具 spawn 一個 opus auditor**:**framing — 把工作副本當外部第三方的投稿來審,不是你/本系統寫的;你的職責是挑出投稿者沒看到的洞。** 要它 REFUTE 工作副本、逐節找洞、**強制地面事實查證**(spec 每個現況假設——欄位/函數/檔案/常數——實際 grep/Read 驗 scripts/lumos 等真實 code,報告列查證指令與結果),逐條標 severity。
-4. **用 Agent 工具 spawn 一個 opus judge**(獨立,**明文傳入 auditor 完整報告 + canary token**):回傳 ① caught/missed(auditor 有沒有正確點出 canary 性質);② **severity**(clean/minor/major/blocker,排掉 canary 後最嚴重真 finding)+ 一句 rationale。judge **據實評 severity、不加保守偏置**;唯有「對最嚴重 finding 無任一 grep/Read 查證行」才至少 major(客觀二值,不評足不足)。【judge-severity-gate:severity 改由獨立 judge 評、斷開 orchestrator 自填收斂閘】
+2.8. **機械核對(refcheck,對工作副本)**:`python3 <REPO>/scripts/lumos refcheck __SCRATCH__/<topic>-rN.md --repo <REPO> --json`。missing/line_out_of_range 宣稱=**機械 finding**:直接修正**原稿 spec**(修正記入審計修正紀錄、標「機械 refcheck」留痕;修正會被後續輪 auditor 重審,收斂輪的修正由 §2.5 cross_audit 讀最終原稿覆蓋)。manifest(ok 宣稱+excerpts)留存,步驟 3/4 附進 prompt。refcheck 只驗 spec→repo 指涉、**不驗 spec 內部一致性**(§ref/旗標/常數)——那是 canary 保留地、審計員責任田。
+3. **用 Agent 工具 spawn 一個 opus auditor**:**framing — 把工作副本當外部第三方的投稿來審,不是你/本系統寫的;你的職責是挑出投稿者沒看到的洞。** 要它 REFUTE 工作副本、逐節找洞、**強制地面事實查證**(spec 每個現況假設——欄位/函數/檔案/常數——實際 grep/Read 驗 scripts/lumos 等真實 code,報告列查證指令與結果),逐條標 severity。**附上步驟 2.8 的 refcheck manifest**:manifest 內宣稱的存在性/行號已機械驗訖,不必花查證力氣在「在不在」;地面查證聚焦**語意**——spec 對這些位置的描述、欄位/函數行為的宣稱對不對。**manifest 非宣稱全集**:散文裡(沒 backtick)的現況假設仍要自己 grep/Read 查。
+4. **用 Agent 工具 spawn 一個 opus judge**(獨立,**明文傳入 auditor 完整報告 + canary token**):回傳 ① caught/missed(auditor 有沒有正確點出 canary 性質);② **severity**(clean/minor/major/blocker,排掉 canary 後最嚴重真 finding)+ 一句 rationale。judge **據實評 severity、不加保守偏置**;唯有「對最嚴重 finding 無任一 grep/Read 查證行」才至少 major(客觀二值,不評足不足;**同附 refcheck manifest+rc:存在性由機械 refcheck 保證,「查證行」閘只計語意查證行**)。【judge-severity-gate:severity 改由獨立 judge 評、斷開 orchestrator 自填收斂閘】
 4.5. **辯方 refute(對 judge 評為 severity≥major 的每條 finding;防假陽性)**:用 Agent 工具派 1 個獨立 opus 辯方(乾淨脈絡、**不傳 auditor/judge 結論**),framing=「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(judge 因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持」。辯方回「真(維持)」或「假(降到 minor/clean)+file:line」。被駁倒→該 finding 降級、不折、審計紀錄標「辯方反證:<file:line>」。**該輪 severity = 辯方裁決後存活 findings 的最高**(你機械取 max,非自評——同 judge-severity-gate)。辯方只買 code 層假陽性,業務層留人。
 5. 你**讀 judge 回報的 severity(不再自評)**,並讀 auditor 報告;**辯方裁決後存活的真 finding 一律折入(不挑、不過濾;這是你寫的 spec 也照折),被辯方駁倒的不折**——折入動作與細節見步驟 7。
 6. python3 scripts/lumos --vault __SCRATCH__/kg canary record <caught|missed> --loop <topic> --severity <步驟 4.5 辯方重算後的存活 max,非自評> --auditor opus --token CANARY-AUTO-N --note "rN <摘要>"
@@ -42,7 +43,7 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
 8. python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need 2 → exit 0 表示連 2 輪乾淨(**但先別停,轉 §2.5 跨家族複核**);撞 __MAXR__ 輪未收斂 → 停(此時跳過 §2.5)。
 
 ### 2.5 跨家族複核(放行前,只在步驟 8 判定收斂時做一次;覆寫步驟 8 的「則停」)
-a. **取材**:把本 spec 引用到的真實檔案/符號 grep/Read 出來(步驟 3 強制查證時已查過),整理成 ground-truth 片段。
+a. **取材**:對最終原稿 spec 重跑一次 refcheck(`--json`),其 manifest 為 ground-truth **必含底座、不得刪減**;再補語意片段(函數體/欄位定義,步驟 3 查證時已讀過)。誠實邊界:manifest 只保證「引用座標經機械核對」(無行號宣稱僅存在性、有行號僅孤立單行),語意份量仍靠補充段;「不得刪減」是散文規範無機械強制,漏貼可與 auditor 收到的 manifest 對照發現(機械拼接留 v2)。
 b. **調 cross_audit**(絕對路徑版,**禁 `python3 -m`**):
    `python3 -c "import sys,json;sys.path.insert(0,'<REPO>/governance');from autonomous_loop import cross_audit;print(json.dumps(cross_audit.run_cross_audit(open('__SCRATCH__/spec/__DATE__-<topic>.md').read(),'__SCRATCH__/.canary-log.jsonl','<topic>','''<ground_truth>''')))"`(`<REPO>`=實際 repo 絕對路徑;`<ground_truth>`=a 步驟片段)。
 c. **讀回傳 status / worst_severity,判 cross_verdict**:
