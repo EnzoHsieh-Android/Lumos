@@ -1866,6 +1866,82 @@ def t_doctor_check_p():
     check("Check P: 無 docs/ 佈局略過", "略過失效認領" in r2.stdout, r2.stdout)
 
 
+def _mk_refcheck_repo():
+    """temp repo:scripts/real.py(5行) + 頂層 scripts/ 目錄;refcheck 用 --repo 顯式指定,免 git。"""
+    root = Path(tempfile.mkdtemp(prefix="gctl-refcheck-"))
+    (root / "scripts").mkdir()
+    (root / "scripts" / "real.py").write_text(
+        "L1 = 1\nL2 = 2\nL3 = 3\nL4 = 4\nL5 = 5\n", encoding="utf-8")
+    return root
+
+
+def t_refcheck():
+    import json as _json
+    root = _mk_refcheck_repo()
+
+    # ---- 案例 1/3/4/5/7 + 目錄型:綜合 spec ----
+    md_all = root / "spec-all.md"
+    md_all.write_text(
+        "# t\n"
+        "缺:`scripts/ghost.py` 實作。\n"
+        "在:`scripts/real.py:3` 與超界 `scripts/real.py:99` 與裸 `scripts/real.py`。\n"
+        "範圍:`scripts/real.py:2-4`。\n"
+        "目錄:`scripts/`。\n"
+        "跳過:`https://x/y`、`and/or`、`cmd_context`、`governance/pending/*.md`。\n"
+        "```\nfenced 內 `scripts/fenced.py` 不抓\n```\n",
+        encoding="utf-8")
+    r = run(root, "refcheck", str(md_all), "--repo", str(root), "--json")
+    check("refcheck: 綜合 spec rc=1(有 missing+out_of_range)", r.returncode == 1,
+          f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+    data = _json.loads(r.stdout)
+    by_key = {(c["token"], c["line"]): c for c in data["claims"]}
+
+    check("refcheck: ghost 報 missing",
+          by_key.get(("scripts/ghost.py", ""), {}).get("status") == "missing", r.stdout)
+    check("refcheck: real.py:3 ok 且 excerpt=第3行實際內容",
+          by_key.get(("scripts/real.py", "3"), {}).get("status") == "ok"
+          and by_key.get(("scripts/real.py", "3"), {}).get("excerpt") == "L3 = 3", r.stdout)
+    check("refcheck: real.py:99 報 line_out_of_range",
+          by_key.get(("scripts/real.py", "99"), {}).get("status") == "line_out_of_range", r.stdout)
+    check("refcheck: 裸 real.py ok 且 excerpt 空",
+          by_key.get(("scripts/real.py", ""), {}).get("status") == "ok"
+          and by_key.get(("scripts/real.py", ""), {}).get("excerpt") == "", r.stdout)
+    ex24 = by_key.get(("scripts/real.py", "2-4"), {}).get("excerpt", "")
+    check("refcheck: 範圍 2-4 ok 且 excerpt 含首尾行",
+          by_key.get(("scripts/real.py", "2-4"), {}).get("status") == "ok"
+          and "L2 = 2" in ex24 and "L4 = 4" in ex24, r.stdout)
+    check("refcheck: 同檔多行號不塌成一條(r3-F1,:3/:99/裸/2-4 各自成 claim)",
+          len([c for c in data["claims"] if c["token"] == "scripts/real.py"]) == 4, r.stdout)
+    check("refcheck: 目錄型 token ok+dir 註記、excerpt 空",
+          by_key.get(("scripts/", ""), {}).get("status") == "ok"
+          and by_key.get(("scripts/", ""), {}).get("dir") is True, r.stdout)
+    skipped = {"https://x/y", "and/or", "cmd_context", "governance/pending/*.md",
+               "scripts/fenced.py"}
+    check("refcheck: url/非頂層/無斜線/glob/fenced 皆不入 claims",
+          not any(c["token"] in skipped for c in data["claims"]), r.stdout)
+    check("refcheck: 統計欄位正確(ok4/missing1/oor1)",
+          data["ok"] == 4 and data["missing"] == 1 and data["out_of_range"] == 1, r.stdout)
+
+    # ---- 案例 2:全 ok → rc 0 ----
+    md_ok = root / "spec-ok.md"
+    md_ok.write_text("# t\n只有 `scripts/real.py:3`。\n", encoding="utf-8")
+    r = run(root, "refcheck", str(md_ok), "--repo", str(root), "--json")
+    check("refcheck: 全 ok rc=0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+
+    # ---- 案例 6:--repo 解析失敗 → rc 2 ----
+    r = run(root, "refcheck", str(md_ok), "--repo", str(root / "nope"))
+    check("refcheck: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
+
+    # ---- md 檔不存在 → rc 2 ----
+    r = run(root, "refcheck", str(root / "ghost.md"), "--repo", str(root))
+    check("refcheck: md 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
+
+    # ---- 人讀版(無 --json)可跑、rc 語意一致 ----
+    r = run(root, "refcheck", str(md_all), "--repo", str(root))
+    check("refcheck: 人讀版 rc=1 且含統計行", r.returncode == 1 and "missing" in r.stdout,
+          f"rc={r.returncode}\n{r.stdout}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

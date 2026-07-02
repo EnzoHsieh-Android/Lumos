@@ -3546,6 +3546,99 @@ def find_vault(start: Path):
     return None
 
 
+def cmd_refcheck(md_path, repo=None, as_json=False):
+    """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
+    抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
+    Check P 是 token 級,這裡是 (token, line);同檔多行號各自成 claim)。
+    只驗 spec→repo 指涉,不驗 spec 內部一致性(canary 保留地)。"""
+    import json
+    md = Path(md_path)
+    if not md.is_file():
+        print(f"ERROR: 找不到檔案: {md_path}", file=sys.stderr)
+        return 2
+    if repo is not None:
+        repo_root = Path(repo)
+        if not repo_root.is_dir():
+            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            return 2
+    else:
+        repo_root = None
+        for cand in (Path.cwd(), *Path.cwd().parents):
+            if (cand / ".git").exists():
+                repo_root = cand
+                break
+        if repo_root is None:
+            print("ERROR: cwd 逐層向上找不到 .git repo,請用 --repo 指定", file=sys.stderr)
+            return 2
+    try:
+        text = md.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        print(f"ERROR: 讀不到 {md_path}: {e}", file=sys.stderr)
+        return 2
+
+    top_dirs = {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
+    _suffix_re = re.compile(r":([^/]+)$")
+    spans = [s.strip("`") for s in INLINE_CODE_RE.findall(FENCE_RE.sub("", text))]
+    seen = set()
+    claims = []
+    for raw in spans:
+        if "://" in raw or any(c in raw for c in "*<>?"):
+            continue
+        m = _suffix_re.search(raw)
+        if m:
+            token, sfx = raw[:m.start()], m.group(1)
+            line = sfx if re.fullmatch(r"\d+(?:-\d+)?", sfx) else ""
+        else:
+            token, line = raw, ""
+        if "/" not in token or (token, line) in seen:
+            continue
+        if token.split("/")[0] not in top_dirs:
+            continue
+        seen.add((token, line))
+        target = repo_root / token
+        if not target.exists():
+            claims.append({"token": token, "line": line, "status": "missing", "excerpt": ""})
+            continue
+        if target.is_dir():
+            claims.append({"token": token, "line": line, "status": "ok", "excerpt": "", "dir": True})
+            continue
+        if not line:
+            claims.append({"token": token, "line": line, "status": "ok", "excerpt": ""})
+            continue
+        if "-" in line:
+            lo, hi = (int(x) for x in line.split("-", 1))
+        else:
+            lo = hi = int(line)
+        try:
+            file_lines = target.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        except OSError:
+            file_lines = None
+        if file_lines is None or lo < 1 or hi > len(file_lines):
+            claims.append({"token": token, "line": line, "status": "line_out_of_range", "excerpt": ""})
+            continue
+        if lo == hi:
+            excerpt = file_lines[lo - 1]
+        else:
+            excerpt = file_lines[lo - 1] + "\n…\n" + file_lines[hi - 1]
+        claims.append({"token": token, "line": line, "status": "ok", "excerpt": excerpt})
+
+    n_missing = sum(1 for c in claims if c["status"] == "missing")
+    n_oor = sum(1 for c in claims if c["status"] == "line_out_of_range")
+    n_ok = sum(1 for c in claims if c["status"] == "ok")
+    if as_json:
+        print(json.dumps({"claims": claims, "missing": n_missing,
+                          "out_of_range": n_oor, "ok": n_ok}, ensure_ascii=False))
+    else:
+        print(f"refcheck {md} (repo={repo_root})")
+        for c in claims:
+            loc = f"{c['token']}:{c['line']}" if c["line"] else c["token"]
+            mark = "✓" if c["status"] == "ok" else "✗"
+            tail = f" | {c['excerpt']}" if c["excerpt"] and "\n" not in c["excerpt"] else ""
+            print(f"  {mark} {c['status']:<17} {loc}{tail}")
+        print(f"統計: ok {n_ok} / missing {n_missing} / out_of_range {n_oor}")
+    return 1 if (n_missing or n_oor) else 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="lumos", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -3709,6 +3802,11 @@ def main():
     p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(CI/非互動用)")
     p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
 
+    p = sub.add_parser("refcheck", help="spec 指涉宣稱確定性核對(vault-free):inline-code 路徑/行號 → 存在性 manifest")
+    p.add_argument("md", help="要核對的 markdown 檔")
+    p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+    p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
+
     args = ap.parse_args()
 
     # install/uninstall/update/bootstrap 不需要 Env(vault),先處理
@@ -3726,6 +3824,8 @@ def main():
     if args.cmd == "deinit":
         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
                           yes=args.yes, source=args.source)
+    if args.cmd == "refcheck":
+        return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():
