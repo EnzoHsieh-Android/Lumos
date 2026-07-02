@@ -15,7 +15,7 @@ summary: |-
   KEY:loop 入口比 pre-push 嚴——missing baseline 視同失敗(無人看顧無人眼兜底);pre-push 維持 rc0+警示(漸進採用)
   KEY:誠實天花板——同 repo 守衛悖論:決意繞過者可連守衛一起改;買到的是無痕篡改被封死(必留 baseline diff/缺 approve 事件/bypass 軌跡其一),非不可繞。baseline 自身無自我保護(手改 json 靠對帳抓,v1 人工);core.hooksPath 一行可指走整個 hooks 層(loop 入口 shell 直呼=第二條路,真解留 future CI)
   DEP:[[lumos-refcheck]](vault-free 同型)｜_append_governance_log(寫者宣稱已改:doctor --ci + anchor approve)
-  TEST:t_anchor 13 checks(無 baseline 警示/approve 建檔+留痕/gov 顯示 note/改檔+缺檔 rc1/--json/重簽容缺/repo 解析 rc2)
+  TEST:t_anchor 14 checks(無 baseline 警示/approve 建檔+留痕/gov 顯示 note/改檔+缺檔 rc1/--json/重簽容缺/repo 解析 rc2)
   VERIFY:[[2026-07-02_anchor-integrity]]
 decisions:
   - content: 方案 A baseline hash+顯式 approve;否決 RHB 環境硬化(方案 B)與純 diff 標記送審(方案 C)
