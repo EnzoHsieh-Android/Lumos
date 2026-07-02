@@ -9,6 +9,7 @@ tags:
   - status/done
 verified_by:
   - "[[Verification/2026-06-23_check-t-sentinel]]"
+  - "[[Verification/2026-07-02_multiplatform-test-binding]]"
 summary: |-
   FLOW:doctor 掃節點 Check 段尾(T→R→S→H→K→V)→Check K 對每 note 取 extract_contracts→過濾 inv 含 ★COMBO★→數該 inv 的 [test:] 標記個數(TEST_REF_RE.findall)==1→收進 combo_thin 經 _soft_list warn_soft 提醒補組合+gov_events check-k warned hard:False→無 ★COMBO★ 則 ok 靜默
   KEY:★COMBO★ 是 invariant 鐵則的子修飾(第 5 個 Tag),標在最重鐵則上,觸發軟 Check K 提醒「別只綁 1 個 happy-path [test:]」;不擋、不計 issues、不執行測試(同 Check S)[test:t_check_k]
