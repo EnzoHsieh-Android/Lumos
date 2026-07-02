@@ -305,8 +305,8 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,在扣點/寫 Registrat
   | 情境 | 綁法 |
   |------|------|
   | 同 repo 單技術棧(多數專案) | 裸 `[test:名]`(現況) |
-  | **圖譜跨前後端 / 跨 repo**(如 KDS = Android Kotlin ＋ .NET 後端在 `../Compass_KDS`) | `.lumos/config.json` 用 `platforms` map,綁 **`[test:平台:名]`**、`guard bind/scaffold --platform <平台>`。合約講**後端行為**就綁 `[test:backend:…]`,別硬塞前端測試(會變偽證據/套套邏輯) |
-  | 合約由 **UI E2E** 驗(點擊流程/跨畫面/真機瀏覽器,非單元) | 該平台用 **`maestro`**(Android)/**`playwright`**(web) profile,綁 flow `name:` / `test('id')`(見文末 test_profile 段) |
+  | **單一圖譜記錄的系統橫跨多技術棧 / 多 repo**(前端 App 一個 repo、後端 API 另一個 repo,共用同一圖譜) | `.lumos/config.json` 用 `platforms` map(各平台指 profile + root),綁 **`[test:平台:名]`**、`guard bind/scaffold --platform <平台>`。合約講**哪一端的行為就綁那一端的測試**(如後端合約 → `[test:<後端平台名>:…]`),別把它硬綁到另一端的測試(會變偽證據/套套邏輯) |
+  | 合約由 **UI E2E** 驗(點擊流程/跨畫面/真機或瀏覽器,非單元) | 該平台 profile 用 **`maestro`**(mobile)/**`playwright`**(web),綁 flow `name:` / `test('id')`(見文末 test_profile 段) |
   - 判不準測試在哪個平台就**別亂綁**——先確認測試真的在哪、config 有沒有該平台(缺就先補 `platforms`)。詳見 [[Systems/test-profile-multiplatform]]。
 - **② 三種 guard（在選定平台內,選最能「驗到真」的那種,別寫套套邏輯）**：
   | 類型 | 專案 | 何時用 | gate |
