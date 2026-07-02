@@ -301,7 +301,14 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,在扣點/寫 Registrat
 ```
 
 - **doctor Check T 強制**：`lumos doctor` 把每條 ★INVARIANT★ 對到一個真實 `[Fact]/[Theory]/[SkippableFact]` 方法（`discover_test_methods` 認真方法，**非子字串比對**——綁到散文/工具方法/拼錯 = 偽證據,擋）。裸合約（沒綁）也擋。
-- **三種 guard（選最能「驗到真」的那種，別寫套套邏輯）**：
+- **① 先判平台（綁 [test:] 的第 0 步;單技術棧專案可略過）**：問「這條合約由**哪個平台/repo 的測試**驗?」——
+  | 情境 | 綁法 |
+  |------|------|
+  | 同 repo 單技術棧(多數專案) | 裸 `[test:名]`(現況) |
+  | **圖譜跨前後端 / 跨 repo**(如 KDS = Android Kotlin ＋ .NET 後端在 `../Compass_KDS`) | `.lumos/config.json` 用 `platforms` map,綁 **`[test:平台:名]`**、`guard bind/scaffold --platform <平台>`。合約講**後端行為**就綁 `[test:backend:…]`,別硬塞前端測試(會變偽證據/套套邏輯) |
+  | 合約由 **UI E2E** 驗(點擊流程/跨畫面/真機瀏覽器,非單元) | 該平台用 **`maestro`**(Android)/**`playwright`**(web) profile,綁 flow `name:` / `test('id')`(見文末 test_profile 段) |
+  - 判不準測試在哪個平台就**別亂綁**——先確認測試真的在哪、config 有沒有該平台(缺就先補 `platforms`)。詳見 [[Systems/test-profile-multiplatform]]。
+- **② 三種 guard（在選定平台內,選最能「驗到真」的那種,別寫套套邏輯）**：
   | 類型 | 專案 | 何時用 | gate |
   |------|------|--------|------|
   | 純函式 | `MyApp.Tests` | 載重**公式**(累點/單次上限) | ubuntu 真跑,dev+prod+PR |
