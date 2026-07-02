@@ -31,6 +31,18 @@ print(json.dumps(g, ensure_ascii=False) if g else '')
 [ -n "$GAP_JSON" ] || { log "無可展開 gap(N=1 gate 或 backlog 空),結束"; exit 0; }
 log "選中 gap:$GAP_JSON"
 
+# 錨點完整性:驗證器被污染時跑出的「收斂/綠」全是假訊號,寧停。
+# loop 入口比 pre-push 嚴:missing baseline 亦硬擋(無人看顧場景無人眼兜底)。
+if [ ! -f "$REPO/governance/anchor-baseline.json" ] || ! (cd "$REPO" && python3 scripts/lumos anchor verify); then
+  log "錨點完整性失敗(anchor verify 不過或 baseline 缺失),loop 拒跑"
+  MSG="⚠ 錨點完整性失敗,自主 loop 拒跑(anchor verify)" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+print('LINE', line_notify.send(line_notify.build_message('anchor-integrity', os.environ['MSG'], None), t) if t else 'no-token')" || true
+  exit 1
+fi
+
 PROMPT_FILE="$(mktemp)"
 sed -e "s#__SCRATCH__#$SCRATCH#g" -e "s#__DATE__#$TODAY#g" -e "s#__MAXR__#$MAXR#g" \
     "$SCRIPT_DIR/autonomous_loop/orchestrator-prompt.md" > "$PROMPT_FILE"
