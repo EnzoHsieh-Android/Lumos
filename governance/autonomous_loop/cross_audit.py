@@ -80,7 +80,7 @@ def run_cross_audit(spec_text, canary_log_path, loop_id, ground_truth,
                     key_path="~/.config/ai-daily/qwen_api_key",
                     model="qwen3-max", timeout=120, temperature=0.2):
     """回傳 dict,status 三態:
-      {"status":"ok","worst_severity":<sev>,"findings":str,"usage":dict}
+      {"status":"ok","worst_severity":<sev>,"parse_fallback":bool,"findings":str,"usage":dict}
       {"status":"degraded","worst_severity":None,"reason":"no_key"}
       {"status":"degraded","worst_severity":None,"reason":"http_<code>"|"timeout"|"error:..."}
     """
