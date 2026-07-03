@@ -38,21 +38,25 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
 4. **用 Agent 工具 spawn 一個 opus judge**(獨立,**明文傳入 auditor 完整報告 + canary token**):回傳 ① caught/missed(auditor 有沒有正確點出 canary 性質);② **severity**(clean/minor/major/blocker,排掉 canary 後最嚴重真 finding)+ 一句 rationale。judge **據實評 severity、不加保守偏置**;唯有「對最嚴重 finding 無任一 grep/Read 查證行」才至少 major(客觀二值,不評足不足;**同附 refcheck manifest+rc:存在性由機械 refcheck 保證,「查證行」閘只計語意查證行**)。【judge-severity-gate:severity 改由獨立 judge 評、斷開 orchestrator 自填收斂閘】
 4.5. **辯方 refute(對 judge 評為 severity≥major 的每條 finding;防假陽性)**:用 Agent 工具派 1 個獨立 opus 辯方(乾淨脈絡、**不傳 auditor/judge 結論**),framing=「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(judge 因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持」。辯方回「真(維持)」或「假(降到 minor/clean)+file:line」。被駁倒→該 finding 降級、不折、審計紀錄標「辯方反證:<file:line>」。**該輪 severity = 辯方裁決後存活 findings 的最高**(你機械取 max,非自評——同 judge-severity-gate)。辯方只買 code 層假陽性,業務層留人。
 5. 你**讀 judge 回報的 severity(不再自評)**,並讀 auditor 報告;**辯方裁決後存活的真 finding 一律折入(不挑、不過濾;這是你寫的 spec 也照折),被辯方駁倒的不折**——折入動作與細節見步驟 7。
-6. python3 scripts/lumos --vault __SCRATCH__/kg canary record <caught|missed> --loop <topic> --severity <步驟 4.5 辯方重算後的存活 max,非自評> --auditor opus --token CANARY-AUTO-N --note "rN <摘要>"
+6. python3 scripts/lumos --vault __SCRATCH__/kg canary record <caught|missed> --loop <topic> --severity <步驟 4.5 辯方重算後的存活 max,非自評> --findings <本輪辯方裁決後存活折入的真 finding 條數;canary 不計;missed 輪不折記 0> --auditor opus --token CANARY-AUTO-N --note "rN <摘要>"
 7. caught → **只折辯方存活的真 finding** 進 **__SCRATCH__/spec/__DATE__-<topic>.md**(被辯方駁倒的不折、已標反證)+ 把該輪寫進審計修正紀錄;**折完務必 grep -c CANARY-AUTO-N __SCRATCH__/spec/__DATE__-<topic>.md == 0**。missed → 不折、直接下一輪。
-8. python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need 2 → exit 0 表示連 2 輪乾淨(**但先別停,轉 §2.5 跨家族複核**);撞 __MAXR__ 輪未收斂 → 停(此時跳過 §2.5)。
+8. python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need 2 --gate --spec __SCRATCH__/spec/__DATE__-<topic>.md --repo <REPO> → exit 0 表示證據閘全過(K-streak ∧ G1 引用座標 ∧ G2 發現枯竭,逐錨明細見輸出;G2 吃步驟 6 的 --findings)(**但先別停,轉 §2.5 跨家族複核**);撞 __MAXR__ 輪未收斂 → 停(此時跳過 §2.5)。
 
 ### 2.5 跨家族複核(放行前,只在步驟 8 判定收斂時做一次;覆寫步驟 8 的「則停」)
 a. **取材**:對最終原稿 spec 重跑一次 refcheck(`--json`),其 manifest 為 ground-truth **必含底座、不得刪減**;再補語意片段(函數體/欄位定義,步驟 3 查證時已讀過)。誠實邊界:manifest 只保證「引用座標經機械核對」(無行號宣稱僅存在性、有行號僅孤立單行),語意份量仍靠補充段;「不得刪減」是散文規範無機械強制,漏貼可與 auditor 收到的 manifest 對照發現(機械拼接留 v2)。
 b. **調 cross_audit**(絕對路徑版,**禁 `python3 -m`**):
    `python3 -c "import sys,json;sys.path.insert(0,'<REPO>/governance');from autonomous_loop import cross_audit;print(json.dumps(cross_audit.run_cross_audit(open('__SCRATCH__/spec/__DATE__-<topic>.md').read(),'__SCRATCH__/.canary-log.jsonl','<topic>','''<ground_truth>''')))"`(`<REPO>`=實際 repo 絕對路徑;`<ground_truth>`=a 步驟片段)。
-c. **讀回傳 status / worst_severity,判 cross_verdict**:
+c. **讀回傳 status / worst_severity / parse_fallback,判 cross_verdict**:
    - `status==degraded` → `cross_verdict=degraded`、收斂放行(fail-open,API 掛不卡死)。
    - `status==ok` 且 worst_severity ∈ {clean,minor} → `cross_verdict=endorsed`、收斂放行。
-   - `status==ok` 且 worst_severity ∈ {major,blocker} → 把 qwen findings 當新一輪 audit:**自己 grep 驗證每條**(真的折進 spec、誤報在審計紀錄標反證);`cross_reject_count += 1`,回步驟 1 續審。`cross_reject_count` 達 2 → 停、不放行、`cross_verdict=disputed`(**必伴 converged:false**)。
+   - `status==ok` 且 worst_severity ∈ {major,blocker} → 把 qwen findings 當新一輪 audit,**逐條機械驗證**(反證=可重跑指令+實際輸出,逐條記入審計修正紀錄;真的折進 spec)。計票規則:
+     - **零證據引用(Confident Liar 條款)**:一條 ≥major 指控若未引用 ground-truth 內任何片段(指控文字與 manifest token/摘錄行無字串交集)→ 標 `unanchored`;仍驗證,但 unanchored **單獨不能撐起 reject**(存活判定需正面證據,非「駁不倒」)。
+     - **≥1 條 ≥major 指控經驗證存活**(未被機械反證、且非僅 unanchored)→ `cross_reject_count += 1`,回步驟 1 續審;達 2 → 停、不放行、`cross_verdict=disputed`(**必伴 converged:false**)。
+     - **全數被機械反證** → `cross_verdict=endorsed-after-refute`、放行(真 minor 照折;反證逐條留痕)——自信但經不起機械驗證的否決,不消耗放行預算。
+     - **`parse_fallback==true` 且 worst≥major**:verdict 格式失守、可信度不足——照走驗證流程,但該遍**不計入 cross_reject**(記 notes 供 confidence report 呈現)。
 d. **cross_summary**:一句話單行摘要(無換行),供 log/LINE。
 
 ### 3. 輸出(只一個 JSON,第一個字元必須是 {)
-{"topic":"<topic>","spec_path":"__SCRATCH__/spec/__DATE__-<topic>.md","loop_id":"<topic>","converged":true|false,"skipped":false,"rounds":<N>,"cross_verdict":"endorsed|degraded|disputed","cross_worst":"<severity 或空>","cross_summary":"<單行摘要,無換行>","notes":"<過程卡點或 ok>"}
+{"topic":"<topic>","spec_path":"__SCRATCH__/spec/__DATE__-<topic>.md","loop_id":"<topic>","converged":true|false,"skipped":false,"rounds":<N>,"cross_verdict":"endorsed|endorsed-after-refute|degraded|disputed","cross_worst":"<severity 或空>","cross_summary":"<單行摘要,無換行>","notes":"<過程卡點或 ok>"}
 
 > **cross_* 三欄**(步驟 2.5 跨家族複核的結果):`disputed` 必伴 `converged:false`(才走得進 wrapper 未收斂分支);未做複核(撞 cap 未收斂、或無 step 8 收斂)時三欄留空。

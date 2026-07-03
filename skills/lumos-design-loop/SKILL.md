@@ -9,7 +9,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 ## 何時用 / 何時跳
 - **用**:brainstorming 產出 spec/設計 doc 後、進 writing-plans/實作**前**。對象=設計/spec 的對抗審計(非圖譜自足性審計)。
-- **硬閘(紀律強制,非技術鎖)**:`lumos loop status <id> --need 2` 回 exit 0(CONVERGED)前**不得進實作**。lumos 擋不住「不跑就實作」——靠你記得調用 + 誠實。
+- **硬閘(紀律強制,非技術鎖)**:`lumos loop status <id> --need 2 --gate --spec docs/design/<id>.md --repo <repo根>` 回 exit 0(GATE PASS:K-streak ∧ G1 引用座標 ∧ G2 發現枯竭)前**不得進實作**。lumos 擋不住「不跑就實作」——靠你記得調用 + 誠實。
 - **trivial 可跳**:改 typo / 一行 / 純機械(rename、補欄位、連結修復)→ 跳 loop,但**寫一句為什麼跳**(commit message)。
 - **loop id** = spec 檔名去 `docs/design/` 前綴、去 `.md`、去 `YYYY-MM-DD-` 日期前綴(`docs/design/2026-06-19-foo.md` → `foo`)。
 
@@ -29,10 +29,10 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
    - ② **最嚴重真 finding**(`clean`=排掉 canary 後無真 finding / `minor` / `major` / `blocker`)= 審計員標的 max。**剝「審計員誤判」要克制**:只有能**指出該 finding 客觀錯在哪**(被實際 spec/code 反證)才剝,**判不準就保留**(寧可高估),剝除理由記進 note。
    - ③ **辯方 refute(對 ②標為 ≥major 的每條 finding)**:用 Agent tool 派 1 個獨立 opus 辯方(乾淨脈絡、**不傳 auditor 報告結論**),framing=「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持」。辯方回「真(維持原 severity)」或「假(降到 minor/clean)+file:line」。被駁倒(假)→ 該 finding 降級、**不折**、在審計紀錄標「辯方反證:<file:line>」。
    - ④ **該輪 severity = 辯方裁決後存活 findings 的最高**(編排者機械取 max,取代 ② 自剝;辯方帶證據裁、同 judge-severity-gate 精神)。辯方只買 code 層假陽性,業務層留人。
-5. **記錄**:`lumos canary record caught|missed --loop <id> --severity <worst> --auditor sonnet --note "r<N> type=<a-d> <caught|missed> [誤判剝除理由]"`。`<worst>` = ④ 辯方重算後的存活 max(非 ② 原評)。
+5. **記錄**:`lumos canary record caught|missed --loop <id> --severity <worst> --findings <M> --auditor sonnet --note "r<N> type=<a-d> <caught|missed> [誤判剝除理由]"`。`<worst>` = ④ 辯方重算後的存活 max(非 ② 原評);`<M>` = ④ 辯方裁決後存活折入的真 finding 條數(canary 不計;missed 輪不折記 0)——供收斂閘 G2 枯竭錨機械讀取。
 6. **漏抓 → 該輪判決不採信**(仍是一筆 missed record、仍算進 cap):**不折 findings**,直接下一輪(N+1、自動換 canary 類型、framing 加碼)。
 7. **抓到 → 只折辯方存活的真 finding 進 `docs/design/<id>.md`**(被辯方駁倒的不折、已在審計紀錄標「辯方反證:<file:line>」);**commit 前 `grep -c '<canary token>' docs/design/<id>.md` 必須為 0**(確認 canary 沒混進真檔)再 `git commit`(message 記該輪 canary+severity)。折時把該輪寫進 spec 的審計修正紀錄。
-8. **問收斂**:`lumos loop status <id> --need 2`(K=2)→ **exit 0 出 loop**;exit 1 → 回 step 1。
+8. **問收斂**:`lumos loop status <id> --need 2 --gate --spec docs/design/<id>.md --repo <repo根>`(K=2;證據閘=K-streak ∧ G1 引用座標 refcheck ∧ G2 發現枯竭)→ **exit 0(GATE PASS)出 loop**;exit 1 → 回 step 1(逐錨明細指出斷在哪)。
 
 ## 護欄
 - **連 2 次漏抓**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)**→ 升級**:① sonnet→opus;②(soft、人工判斷)把 spec 切小,獨立子段各自開 loop(v1 不自動化)。
