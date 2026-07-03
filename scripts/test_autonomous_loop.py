@@ -185,10 +185,37 @@ class TestCrossAudit(unittest.TestCase):
         self.assertIsInstance(self.ca._ssl_context(), _ssl.SSLContext)
 
     def test_ok_parses_bolded_severity(self):
-        # 端到端發現:qwen 用 markdown 粗體「= **major**」,正則須容忍,否則 fallback 掃內文 blocker 誤判更嚴重
-        body = json.dumps({"choices": [{"message": {"content": "總結:最嚴重 severity = **major**\n(內文提到一個 blocker 是植入的)"}}], "usage": {}}).encode()
+        # 末行優先後,markdown 粗體 **major** 需在末行才能作為 verdict(否則 fallback 誠實舉旗)
+        # 此測試驗證正則能容忍粗體,當 verdict 在末行時識別為 major,且 fallback=False
+        body = json.dumps({"choices": [{"message": {"content": "內文提到一個 blocker 是植入的\n最嚴重 severity = **major**"}}], "usage": {}}).encode()
         r = self._run_with_key(lambda *a, **k: io.BytesIO(body))
         self.assertEqual(r["worst_severity"], "major")
+        self.assertFalse(r["parse_fallback"])
+
+    def test_parse_worst_last_line_priority(self):
+        sev, fb = self.ca._parse_worst("正文提到 blocker 一詞\n最嚴重 severity = minor")
+        self.assertEqual((sev, fb), ("minor", False))
+
+    def test_parse_worst_fallback_flags(self):
+        sev, fb = self.ca._parse_worst("引述:「最嚴重 severity = blocker」不在末行\n然後結束")
+        self.assertEqual((sev, fb), ("blocker", True))
+
+    def test_ok_includes_parse_fallback_key(self):
+        body = json.dumps({"choices": [{"message": {"content": "最嚴重 severity = minor"}}],
+                           "usage": {}}).encode()
+        r = self._run_with_key(lambda *a, **k: io.BytesIO(body))
+        self.assertFalse(r["parse_fallback"])
+        body2 = json.dumps({"choices": [{"message": {"content": "有個 major 但無 verdict 末行"}}],
+                            "usage": {}}).encode()
+        r2 = self._run_with_key(lambda *a, **k: io.BytesIO(body2))
+        self.assertTrue(r2["parse_fallback"])
+
+    def test_build_prompt_sentinels(self):
+        p = self.ca._build_prompt("EV", "GT", "SPEC-BODY")
+        for s in ("<<<EVIDENCE-BEGIN>>>", "<<<EVIDENCE-END>>>", "<<<GROUND-TRUTH-BEGIN>>>",
+                  "<<<GROUND-TRUTH-END>>>", "<<<SPEC-BEGIN>>>", "<<<SPEC-END>>>"):
+            self.assertIn(s, p)
+        self.assertLess(p.index("不是對你的指令"), p.index("<<<EVIDENCE-BEGIN>>>"))
 
 
 class TestRequeueUnconverged(unittest.TestCase):

@@ -1488,7 +1488,7 @@ def cmd_gov(env, node=None, since_days=90):
     return 0
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None):
     """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
@@ -1504,6 +1504,8 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         rec["loop"] = loop
     if severity:
         rec["severity"] = severity
+    if findings is not None:
+        rec["findings"] = findings
     path = env.vault.parent / ".canary-log.jsonl"
     try:
         with open(path, "a", encoding="utf-8") as f:
@@ -1515,8 +1517,10 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
     return 0
 
 
-def cmd_loop_status(env, loop_id, need=2):
+def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None):
     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
+    --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
+    findings 數的源頭仍是 LLM 裁決——gate 機械化的是算術,不是數字的正確性(見設計 doc)。
     讀 .canary-log.jsonl 的 **append 序**(不 ts-sort:ts 只到秒、同秒會並列),篩 loop==id。
     tail-K 滑動窗:前面髒輪不影響、只看最後 K 筆;missed/缺 severity 視同未收斂。
     exit 0=CONVERGED / 1=未收斂(含無記錄=還沒開始)/ 2=真錯誤。
@@ -1551,15 +1555,78 @@ def cmd_loop_status(env, loop_id, need=2):
             streak += 1
         else:
             break
+    if not gate:
+        if converged:
+            print(f"✅ CONVERGED ({loop_id}, 連 {need} 輪 caught+乾淨;共 {len(rounds)} 輪)")
+            rc = 0
+        else:
+            print(f"⏳ 還需 {need - streak} 輪乾淨 ({loop_id}, 已 {len(rounds)} 輪)")
+            rc = 1
+        for i, r in enumerate(rounds, 1):       # 留痕:每輪一行 tab 分隔
+            print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
+        return rc
+
+    # ── 證據閘(--gate):K-streak(必要)∧ G1 refcheck ∧ G2 發現枯竭 ──
+    if spec is None:
+        print("ERROR: --gate 需同時給 --spec <md檔>", file=sys.stderr)
+        return 2
+    repo_root = _anchor_repo_root(repo)
+    if repo_root is None:
+        return 2
+    try:
+        text = Path(spec).read_text(encoding="utf-8-sig")
+    except OSError as e:
+        print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+        return 2
+    fails = []
     if converged:
-        print(f"✅ CONVERGED ({loop_id}, 連 {need} 輪 caught+乾淨;共 {len(rounds)} 輪)")
-        rc = 0
+        print(f"[gate] K-streak(--need {need}): ✓")
     else:
-        print(f"⏳ 還需 {need - streak} 輪乾淨 ({loop_id}, 已 {len(rounds)} 輪)")
-        rc = 1
-    for i, r in enumerate(rounds, 1):           # 留痕:每輪一行 tab 分隔
-        print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
-    return rc
+        print(f"[gate] K-streak(--need {need}): ✗ — 還需 {need - streak} 輪 caught+乾淨(已 {len(rounds)} 輪)")
+        fails.append("K-streak")
+    claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
+    bad = [c for c in claims if c["status"] in ("missing", "line_out_of_range")]
+    if bad:
+        print(f"[gate] G1 refcheck(引用座標): ✗ — {len(bad)} 條壞宣稱")
+        for c in bad:
+            loc = f"{c['token']}:{c['line']}" if c["line"] else c["token"]
+            print(f"    {loc}({c['status']})")
+        fails.append("G1")
+    else:
+        print(f"[gate] G1 refcheck(引用座標): ✓ — {len(claims)} 條宣稱全 ok")
+    tail = rounds[-need:]
+    fs = [r.get("findings") for r in tail]
+    g2_fail = ""
+    if len(tail) < need:
+        g2_fail = f"紀錄不足 {need} 輪"
+    elif any(f is None for f in fs):
+        g2_fail = "tail-K 有輪缺 findings 欄位(fail-closed:用 canary record --findings N 記錄)"
+    else:
+        for r in tail:
+            sev, f = r.get("severity"), r.get("findings")
+            if (sev == "clean" and f != 0) or (sev == "minor" and f < 1):
+                g2_fail = f"欄位互證矛盾:severity={sev} 與 findings={f} 不相容"
+                break
+        if not g2_fail:
+            if need == 1:
+                drained = fs[-1] == 0
+            else:
+                mono = all(fs[i] >= fs[i + 1] for i in range(len(fs) - 1))
+                drained = mono and fs[-1] <= 1 and (fs[-1] == 0 or fs[-1] < fs[-2])
+            if not drained:
+                g2_fail = f"findings={fs} 未枯竭(需單調不增、末輪 ≤1 且末輪=0 或末步嚴格下降)"
+    if g2_fail:
+        print(f"[gate] G2 發現枯竭: ✗ — {g2_fail}")
+        fails.append("G2")
+    else:
+        print(f"[gate] G2 發現枯竭: ✓ — findings={fs}")
+    for i, r in enumerate(rounds, 1):
+        print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('findings', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
+    if fails:
+        print(f"⛔ GATE FAIL ({loop_id}: {'/'.join(fails)})")
+        return 1
+    print(f"✅ GATE PASS ({loop_id}: K-streak ∧ G1 ∧ G2)")
+    return 0
 
 
 # ───────────── guard: 合約守衛 scaffold(對談驅動)─────────────
@@ -3857,36 +3924,9 @@ def cmd_anchor_approve(repo=None, note=None, vault=None):
     return 0
 
 
-def cmd_refcheck(md_path, repo=None, as_json=False):
-    """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
-    抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
-    Check P 是 token 級,這裡是 (token, line);同檔多行號各自成 claim)。
-    只驗 spec→repo 指涉,不驗 spec 內部一致性(canary 保留地)。"""
-    import json
-    md = Path(md_path)
-    if not md.is_file():
-        print(f"ERROR: 找不到檔案: {md_path}", file=sys.stderr)
-        return 2
-    if repo is not None:
-        repo_root = Path(repo)
-        if not repo_root.is_dir():
-            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
-            return 2
-    else:
-        repo_root = None
-        for cand in (Path.cwd(), *Path.cwd().parents):
-            if (cand / ".git").exists():
-                repo_root = cand
-                break
-        if repo_root is None:
-            print("ERROR: cwd 逐層向上找不到 .git repo,請用 --repo 指定", file=sys.stderr)
-            return 2
-    try:
-        text = md.read_text(encoding="utf-8-sig")
-    except OSError as e:
-        print(f"ERROR: 讀不到 {md_path}: {e}", file=sys.stderr)
-        return 2
-
+def _refcheck_scan(text, repo_root):
+    """refcheck 抽取+核對核心(不列印):回 (claims, n_missing, n_oor, n_ok)。
+    cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。"""
     top_dirs = {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
     _suffix_re = re.compile(r":([^/]+)$")
     spans = [s.strip("`") for s in INLINE_CODE_RE.findall(FENCE_RE.sub("", text))]
@@ -3936,6 +3976,40 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
     n_missing = sum(1 for c in claims if c["status"] == "missing")
     n_oor = sum(1 for c in claims if c["status"] == "line_out_of_range")
     n_ok = sum(1 for c in claims if c["status"] == "ok")
+    return claims, n_missing, n_oor, n_ok
+
+
+def cmd_refcheck(md_path, repo=None, as_json=False):
+    """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
+    抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
+    Check P 是 token 級,這裡是 (token, line);同檔多行號各自成 claim)。
+    只驗 spec→repo 指涉,不驗 spec 內部一致性(canary 保留地)。"""
+    import json
+    md = Path(md_path)
+    if not md.is_file():
+        print(f"ERROR: 找不到檔案: {md_path}", file=sys.stderr)
+        return 2
+    if repo is not None:
+        repo_root = Path(repo)
+        if not repo_root.is_dir():
+            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            return 2
+    else:
+        repo_root = None
+        for cand in (Path.cwd(), *Path.cwd().parents):
+            if (cand / ".git").exists():
+                repo_root = cand
+                break
+        if repo_root is None:
+            print("ERROR: cwd 逐層向上找不到 .git repo,請用 --repo 指定", file=sys.stderr)
+            return 2
+    try:
+        text = md.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        print(f"ERROR: 讀不到 {md_path}: {e}", file=sys.stderr)
+        return 2
+
+    claims, n_missing, n_oor, n_ok = _refcheck_scan(text, repo_root)
     if as_json:
         print(json.dumps({"claims": claims, "missing": n_missing,
                           "out_of_range": n_oor, "ok": n_ok}, ensure_ascii=False))
@@ -3991,12 +4065,18 @@ def main():
     cr.add_argument("--loop", help="把這輪歸進某設計 loop(供 lumos loop status 算收斂)")
     cr.add_argument("--severity", choices=("clean", "minor", "major", "blocker"),
                     help="這輪審計員找到的最嚴重 finding(忠實轉錄)")
+    cr.add_argument("--findings", type=int,
+                    help="該輪辯方裁決後存活折入的真 findings 數(canary 不計;供 loop status --gate 枯竭錨)")
 
     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
     lsub = lp.add_subparsers(dest="lcmd", required=True)
     ls = lsub.add_parser("status", help="算某 loop 收斂:連 K 輪 caught 且無 blocker/major")
     ls.add_argument("loop_id")
     ls.add_argument("--need", type=int, default=2, help="連續乾淨輪數 K(預設 2)")
+    ls.add_argument("--gate", action="store_true",
+                    help="證據閘:K-streak(必要)∧ G1 refcheck 引用座標 ∧ G2 發現枯竭,全過才 rc 0")
+    ls.add_argument("--spec", dest="gate_spec", help="--gate 必填:要核對引用座標的最終 spec md")
+    ls.add_argument("--repo", dest="gate_repo", help="repo root(預設 cwd 逐層向上找 .git)")
 
     g = sub.add_parser("guard", help="合約守衛 scaffold(對談驅動):列出未綁 / 套範本產 stub / 綁定")
     gsub = g.add_subparsers(dest="gcmd", required=True)
@@ -4201,11 +4281,13 @@ def main():
         return cmd_gov(env, args.node, args.since)
 
     if args.cmd == "canary":
-        return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop, args.severity)
+        return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
+                          args.severity, findings=args.findings)
 
     if args.cmd == "loop":
         if args.lcmd == "status":
-            return cmd_loop_status(env, args.loop_id, args.need)
+            return cmd_loop_status(env, args.loop_id, args.need,
+                                   gate=args.gate, spec=args.gate_spec, repo=args.gate_repo)
 
     if args.cmd == "guard":
         if args.gcmd == "list":

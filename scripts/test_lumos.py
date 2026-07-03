@@ -60,6 +60,110 @@ def read(p):
     return p.read_text(encoding="utf-8")
 
 
+def _mk_gate_fixture():
+    """gate 測試三件套:vault(canary-log 落 vault.parent)+ repo(scripts/real.py)+ 好/壞 spec。"""
+    vault = mkvault()
+    repo = Path(tempfile.mkdtemp(prefix="gctl-gate-repo-"))
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "real.py").write_text("L1\nL2\nL3\n", encoding="utf-8")
+    spec_ok = repo / "spec-ok.md"
+    spec_ok.write_text("# s\n見 `scripts/real.py:2`。\n", encoding="utf-8")
+    spec_bad = repo / "spec-bad.md"
+    spec_bad.write_text("# s\n見 `scripts/ghost.py` 實作。\n", encoding="utf-8")
+    return vault, repo, spec_ok, spec_bad
+
+
+def t_canary_findings():
+    import json as _json
+    vault = mkvault()
+    run(vault, "canary", "record", "caught", "--loop", "cf", "--severity", "minor",
+        "--findings", "3", expect_rc=0)
+    run(vault, "canary", "record", "caught", "--loop", "cf", "--severity", "clean", expect_rc=0)
+    lines = [_json.loads(l) for l in
+             (vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()]
+    check("findings: --findings 3 寫入", lines[0].get("findings") == 3, str(lines[0]))
+    check("findings: 不給則鍵不存在", "findings" not in lines[1], str(lines[1]))
+    r = run(vault, "canary", "record", "caught", "--loop", "cf", "--findings", "abc")
+    check("findings: 非整數 rc!=0", r.returncode != 0, f"rc={r.returncode}")
+
+
+def t_loop_gate():
+    vault, repo, spec_ok, spec_bad = _mk_gate_fixture()
+
+    def rec(loop, sev, f=None, kind="caught"):
+        args = ["canary", "record", kind, "--loop", loop, "--severity", sev]
+        if f is not None:
+            args += ["--findings", str(f)]
+        run(vault, *args, expect_rc=0)
+
+    def gate(loop, spec=None, need="2"):
+        return run(vault, "loop", "status", loop, "--need", need,
+                   "--gate", "--spec", str(spec or spec_ok), "--repo", str(repo))
+
+    rec("g3", "minor", 2); rec("g3", "clean", 0)
+    r = gate("g3")
+    check("gate 案3: [2,0] 全過 rc=0", r.returncode == 0, r.stdout)
+
+    rec("g4", "minor", 2); rec("g4", "minor", 1)
+    r = gate("g4")
+    check("gate 案4: [2,1] 殘餘正向 rc=0", r.returncode == 0, r.stdout)
+
+    rec("g5", "minor", 2); rec("g5", "minor", 3)
+    r = gate("g5")
+    check("gate 案5: [2,3] 非枯竭 rc=1 指 G2", r.returncode == 1 and "G2" in r.stdout, r.stdout)
+
+    rec("g6", "minor", 3); rec("g6", "minor", 2)
+    r = gate("g6")
+    check("gate 案6: 末輪 2>1 rc=1", r.returncode == 1 and "G2" in r.stdout, r.stdout)
+
+    rec("g7", "minor", 1); rec("g7", "minor", 1)
+    r = gate("g7")
+    check("gate 案7: [1,1] 恆定涓流 rc=1", r.returncode == 1 and "G2" in r.stdout, r.stdout)
+
+    rec("g8", "minor", 2); rec("g8", "minor", 1); rec("g8", "minor", 1)
+    r = gate("g8", need="3")
+    check("gate 案8: K=3 [2,1,1] 尾涓流 rc=1", r.returncode == 1 and "G2" in r.stdout, r.stdout)
+
+    rec("g9a", "minor", 1)
+    r = gate("g9a", need="1")
+    check("gate 案9a: K=1 [1] rc=1", r.returncode == 1, r.stdout)
+    rec("g9b", "clean", 0)
+    r = gate("g9b", need="1")
+    check("gate 案9b: K=1 [0] rc=0(不得 IndexError)", r.returncode == 0, f"{r.stdout}\n{r.stderr}")
+
+    rec("g10a", "clean", 1); rec("g10a", "clean", 0)
+    r = gate("g10a")
+    check("gate 案10a: clean 卻 findings=1 互證矛盾 rc=1", r.returncode == 1 and "互證" in r.stdout, r.stdout)
+    rec("g10b", "minor", 2); rec("g10b", "minor", 0)
+    r = gate("g10b")
+    check("gate 案10b: minor 卻 findings=0 互證矛盾 rc=1", r.returncode == 1 and "互證" in r.stdout, r.stdout)
+
+    rec("g11", "minor", 2); rec("g11", "clean", 0)
+    r = gate("g11", spec=spec_bad)
+    check("gate 案11: 壞引用 rc=1 指 G1 且列 ghost",
+          r.returncode == 1 and "G1" in r.stdout and "scripts/ghost.py" in r.stdout, r.stdout)
+
+    run(vault, "canary", "record", "caught", "--loop", "g12", "--findings", "0", expect_rc=0)
+    rec("g12", "clean", 0)
+    r = gate("g12")
+    check("gate 案12: 缺 severity 輪斷在 K-streak(歸因回歸)",
+          r.returncode == 1 and "K-streak" in r.stdout, r.stdout)
+
+    rec("g2f", "minor"); rec("g2f", "clean")
+    r = gate("g2f")
+    check("gate: 缺 findings 欄位 fail-closed 且提示 --findings",
+          r.returncode == 1 and "--findings" in r.stdout, r.stdout)
+
+    # 案 13:回歸——不帶 --gate 行為與現行為一致(舊判準不看 findings)
+    r = run(vault, "loop", "status", "g3")
+    check("gate 案13a: 不帶 --gate CONVERGED rc=0", r.returncode == 0 and "CONVERGED" in r.stdout, r.stdout)
+    r = run(vault, "loop", "status", "g5")
+    check("gate 案13b: g5 無 gate 仍 CONVERGED(舊判準)", r.returncode == 0, r.stdout)
+
+    r = run(vault, "loop", "status", "g3", "--gate", "--repo", str(repo))
+    check("gate 案14: --gate 缺 --spec rc=2", r.returncode == 2, f"rc={r.returncode}")
+
+
 def t_write_lf_roundtrip():
     import subprocess
     proj = Path(tempfile.mkdtemp(prefix="gctl-lf-"))
