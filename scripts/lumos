@@ -3857,36 +3857,9 @@ def cmd_anchor_approve(repo=None, note=None, vault=None):
     return 0
 
 
-def cmd_refcheck(md_path, repo=None, as_json=False):
-    """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
-    抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
-    Check P 是 token 級,這裡是 (token, line);同檔多行號各自成 claim)。
-    只驗 spec→repo 指涉,不驗 spec 內部一致性(canary 保留地)。"""
-    import json
-    md = Path(md_path)
-    if not md.is_file():
-        print(f"ERROR: 找不到檔案: {md_path}", file=sys.stderr)
-        return 2
-    if repo is not None:
-        repo_root = Path(repo)
-        if not repo_root.is_dir():
-            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
-            return 2
-    else:
-        repo_root = None
-        for cand in (Path.cwd(), *Path.cwd().parents):
-            if (cand / ".git").exists():
-                repo_root = cand
-                break
-        if repo_root is None:
-            print("ERROR: cwd 逐層向上找不到 .git repo,請用 --repo 指定", file=sys.stderr)
-            return 2
-    try:
-        text = md.read_text(encoding="utf-8-sig")
-    except OSError as e:
-        print(f"ERROR: 讀不到 {md_path}: {e}", file=sys.stderr)
-        return 2
-
+def _refcheck_scan(text, repo_root):
+    """refcheck 抽取+核對核心(不列印):回 (claims, n_missing, n_oor, n_ok)。
+    cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。"""
     top_dirs = {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
     _suffix_re = re.compile(r":([^/]+)$")
     spans = [s.strip("`") for s in INLINE_CODE_RE.findall(FENCE_RE.sub("", text))]
@@ -3936,6 +3909,40 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
     n_missing = sum(1 for c in claims if c["status"] == "missing")
     n_oor = sum(1 for c in claims if c["status"] == "line_out_of_range")
     n_ok = sum(1 for c in claims if c["status"] == "ok")
+    return claims, n_missing, n_oor, n_ok
+
+
+def cmd_refcheck(md_path, repo=None, as_json=False):
+    """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
+    抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
+    Check P 是 token 級,這裡是 (token, line);同檔多行號各自成 claim)。
+    只驗 spec→repo 指涉,不驗 spec 內部一致性(canary 保留地)。"""
+    import json
+    md = Path(md_path)
+    if not md.is_file():
+        print(f"ERROR: 找不到檔案: {md_path}", file=sys.stderr)
+        return 2
+    if repo is not None:
+        repo_root = Path(repo)
+        if not repo_root.is_dir():
+            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            return 2
+    else:
+        repo_root = None
+        for cand in (Path.cwd(), *Path.cwd().parents):
+            if (cand / ".git").exists():
+                repo_root = cand
+                break
+        if repo_root is None:
+            print("ERROR: cwd 逐層向上找不到 .git repo,請用 --repo 指定", file=sys.stderr)
+            return 2
+    try:
+        text = md.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        print(f"ERROR: 讀不到 {md_path}: {e}", file=sys.stderr)
+        return 2
+
+    claims, n_missing, n_oor, n_ok = _refcheck_scan(text, repo_root)
     if as_json:
         print(json.dumps({"claims": claims, "missing": n_missing,
                           "out_of_range": n_oor, "ok": n_ok}, ensure_ascii=False))
