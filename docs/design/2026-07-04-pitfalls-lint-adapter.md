@@ -47,7 +47,7 @@
 
 ### ③ lint runner + SARIF 解析(runner 契約)
 - **單一寫檔契約(r1-F6:砍 stdout 模式)**:每個指令字串**必須含 `{LINT_SARIF_OUT}` 佔位符**,pitfalls **為每個指令各生成獨立臨時檔**(r6-F2,承重:一棧多 linter 並存時共用一路徑會讓 detekt/ktlint 互相覆寫、一半 findings 靜默歸零)注入、指令用它當 SARIF 輸出路徑,pitfalls 跑完逐一讀。無佔位符的指令 → 視為配置錯、跳過記 lint_skipped(不猜工具預設落點、不吃 stdout——主流 SARIF 產出器多不支援乾淨 stdout,三棧範例皆寫檔式)。
-- **執行(r1-F3①)**:`subprocess.run(指令, shell=True, cwd=repo_root, timeout=LINT_CMD_TIMEOUT)`——指令是字串故 `shell=True`(有別於既有 `_pitfall_diff_mode` 的 list argv,本塊刻意用 shell 跑專案宣告的指令字串);**`{LINT_SARIF_OUT}` 注入用 `str.replace('{LINT_SARIF_OUT}', shlex.quote(臨時檔路徑))`**(r2-F6:shell=True 下路徑須 `shlex.quote` 防空白/元字元拆詞,否則 SARIF 寫錯位、pitfalls 讀不到全落 lint_skipped);`LINT_CMD_TIMEOUT` 常數(預設 180 秒)防 detekt/dotnet build 這類重量級跑掛住 pitfalls 的輕量提示器語意(r8-F3:shell=True 逾時只殺 shell、JVM 孫進程會孤兒續跑 → 用 `start_new_session=True` + 逾時時 `os.killpg` 殺整個 process group)(r1 canary 掩蓋的真 gap:既有 subprocess 無 timeout、git 快無妨,外部 linter 慢必須設限)。
+- **執行(r1-F3①)**:`subprocess.run(指令, shell=True, cwd=repo_root, timeout=LINT_CMD_TIMEOUT)`——指令是字串故 `shell=True`(有別於既有 `_pitfall_diff_mode` 的 list argv,本塊刻意用 shell 跑專案宣告的指令字串);**`{LINT_SARIF_OUT}` 注入用 `str.replace('{LINT_SARIF_OUT}', shlex.quote(臨時檔路徑))`**(r2-F6:shell=True 下路徑須 `shlex.quote` 防空白/元字元拆詞,否則 SARIF 寫錯位、pitfalls 讀不到全落 lint_skipped);`LINT_CMD_TIMEOUT` 常數(預設 180 秒)防 detekt/dotnet build 這類重量級跑掛住 pitfalls 的輕量提示器語意(r8-F3:shell=True 逾時只殺 shell、JVM 孫進程會孤兒續跑 → 用 `start_new_session=True` + 逾時時 `os.killpg` 殺整個 process group);**臨時檔生命週期(r9-F2)**:用 `tempfile.mkstemp` 生成、跑完 `os.unlink` 清理(lumos 現無 tempfile 先例,明定免洩漏累積)(r1 canary 掩蓋的真 gap:既有 subprocess 無 timeout、git 快無妨,外部 linter 慢必須設限)。
 - 解析 SARIF:`json.load` → **對每個 `run` 配對其 driver 與 results**(r1-F5:`tool.driver.name` 是 per-run,須按 run index 配對、非扁平取):`for run in runs: tool = run.tool.driver.name; for r in (run.get('results') or []): ...`(r8-F2:`results` 是 SARIF optional,零 finding 的 driver-only run 缺 `results` → `run.get('results') or []` 免 KeyError 誤落 coarse skip) → 每筆映射 claim `{file, line, source, rule, message}`。**單筆容錯(r4-F1,承重)**:`result.locations` 在 SARIF 2.1.0 是 optional(project/compiler-level 診斷可零 location——ESLint/Roslyn/Sonar 會吐,detekt tracer 恆帶故打不到此路徑);每筆 result 的 location 存取包 `try/except`,`locations` 空或無 `physicalLocation` → **跳過該筆 finding**(或記 file-less claim 不參與 diff 行過濾),**絕不連坐丟整個 run**——容錯粒度是「該 finding」非「整指令」(否則一筆 location-less 讓該 run 其餘合法 findings 全靜默歸零):
   - `file` = `r.locations[0].physicalLocation.artifactLocation.uri` **正規化為 repo 相對正斜線路徑(r3-F2,承重 join key;KDS tracer 2026-07-04 真機坐實)**:剝 `file://` scheme、`urllib.parse.unquote` 解 `%20`、絕對路徑轉 `os.path.relpath(路徑, repo_root)`、反斜線轉正斜線——與 `added` 集合的 key(`+++ b/<path>` repo 相對正斜線)同形才比得中。**tracer 實測(detekt on Citrus_KDS)**:uri=`file:///Users/enzo/Citrus_KDS/app/.../X.kt`(絕對 file://)、`originalUriBaseIds={}`、`uriBaseId=null`——若不剝 scheme+relpath,絕對路徑永不匹配 diff 的 `app/...` repo 相對 key、lint 靜默歸零(坐實此段承重)。**uriBaseId 兼容(其他工具)**:detekt 無 uriBaseId,但 ESLint/Roslyn 可能吐相對 uri + `uriBaseId` → 有 uriBaseId 時以 `run.originalUriBaseIds[uriBaseId].uri` 為 base(r4-F3:originalUriBaseIds 是 run 屬性、須在 `for run in runs` scope 內取)拼接再 relpath(正規化須兩式兼容)
   - `line` = `r.locations[0].physicalLocation.region.startLine`(缺則 0)
@@ -177,3 +177,13 @@ canary 被識別(F1:植入級孤兒產物、無生產規格/消費端/schema/測
 - **R8-F2 minor(折)**:`run.results` 假設存在,SARIF `results` 是 optional、零 finding 的 driver-only run 會 KeyError 落 coarse skip(誤標成功指令為 skipped)→ `run.get('results') or []`。
 - **R8-F3 minor(折)**:shell=True 逾時只殺 shell、JVM 孫進程孤兒續跑 → `start_new_session=True` + `os.killpg` 殺整個 process group。
 存活 2 條全折(皆 minor;canary stack-detect-report.json 不折)。
+
+### R9(2026-07-04,canary type b=未定義旗標 `--json-compact`,opus,**CAUGHT**,severity=minor,存活 findings=1)→ 第 3 乾淨輪(連 r7/r8/r9)
+
+canary 被識別(Finding 1:`--json-compact` live 孤兒旗標、無 argparse/簽名/壓縮分支,結構同 R2 `--no-lint`/R6 `--lint-only`)。除 canary 外 auditor 判「與八輪+tracer 打磨版逐位元組相同、六大承重點坐實、無 blocker/major 結構洞」。存活 1 minor 折:
+- **R9-F2 minor(折)**:臨時檔生命週期(所在目錄/用後清理)未定義 → `tempfile.mkstemp` + 跑完 `os.unlink`(lumos 現無 tempfile 先例,明定免洩漏)。
+存活 1 條折(minor;canary --json-compact 不折)。
+
+## 收斂
+
+**GATE PASS**(2026-07-04):design-loop 9 輪(r1-r4 major、r5 missed 作廢、r6 major、**r7/r8/r9 連 3 輪 caught+minor**)+ KDS 真機 tracer 坐實六大承重點;K-streak 連 3 ∧ G1 引用座標 ∧ G2 findings [2,2,1] 枯竭(單調不增、末輪 1、末步 2→1 降)全過。此塊整合外部工具的邊界複雜度高(location-less/per-command temp/git 失敗/range split/uri 正規化每輪一個真洞),9 輪+tracer 系統性磨平。
