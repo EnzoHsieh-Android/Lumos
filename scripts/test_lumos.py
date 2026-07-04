@@ -3265,6 +3265,43 @@ def t_compose_metrics_cli():
     names = [x.get("name") for x in d1["regressions"] if x["kind"]=="new_non_skippable"]
     check("new_non_skippable Bar", r1.returncode==0 and "com.a.Bar" in names, r1.stdout)
     check("checked_modules 1", d1["checked_modules"]==1, str(d1))
+    # Fix #2: --update-baseline 當 0 模組解析時不能覆寫 baseline
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-cmcli-noparse-"))
+    (root2/".lumos").mkdir()
+    md2 = root2/"app"/"m"; rd2 = root2/"app"/"r"; md2.mkdir(parents=True); rd2.mkdir(parents=True)
+    (root2/".lumos"/"compose-metrics.json").write_text(json.dumps(
+        {"modules":[{"name":"app","metrics_dir":"app/m","reports_dir":"app/r"}]}), encoding="utf-8")
+    sentinel = '{"sentinel":true}'
+    (root2/".lumos"/"compose-baseline.json").write_text(sentinel, encoding="utf-8")
+    # no metrics files → all modules fail to parse → parsed list is empty
+    ru2 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root2),"--update-baseline"],capture_output=True,text=True)
+    after = (root2/".lumos"/"compose-baseline.json").read_text(encoding="utf-8")
+    check("0-parse baseline not overwritten", ru2.returncode==0 and after==sentinel, f"stdout={ru2.stdout!r} file={after!r}")
+    # Fix #1: corrupt baseline → baseline_unreadable=True, baseline_missing=False, rc 0, file intact
+    root3 = Path(tempfile.mkdtemp(prefix="gctl-cmcli-corrupt-"))
+    (root3/".lumos").mkdir()
+    md3 = root3/"app"/"m"; rd3 = root3/"app"/"r"; md3.mkdir(parents=True); rd3.mkdir(parents=True)
+    (root3/".lumos"/"compose-metrics.json").write_text(json.dumps(
+        {"modules":[{"name":"app","metrics_dir":"app/m","reports_dir":"app/r"}]}), encoding="utf-8")
+    corrupt_content = b"not valid json!!!"
+    (root3/".lumos"/"compose-baseline.json").write_bytes(corrupt_content)
+    write_metrics_into = lambda md_,rd_,sk,rows: (
+        (md_/("app_release-module.json")).write_text(json.dumps(
+            {"skippableComposables":sk,"restartableComposables":10,"totalComposables":20,
+             "knownUnstableArguments":5,"inferredUnstableClasses":2}), encoding="utf-8"),
+        (rd_/("app_release-composables.csv")).write_text(
+            "package,name,composable,skippable,restartable,readonly,inline,isLambda,hasDefaults,defaultsGroup,groups,calls,\n", encoding="utf-8"),
+        (rd_/("app_release-composables.txt")).write_text("", encoding="utf-8"),
+    )
+    write_metrics_into(md3, rd3, 10, [])
+    rc3 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root3),"--json"],capture_output=True,text=True)
+    d3 = json.loads(rc3.stdout)
+    after3 = (root3/".lumos"/"compose-baseline.json").read_bytes()
+    check("corrupt-baseline rc0", rc3.returncode==0, f"rc={rc3.returncode} stderr={rc3.stderr!r}")
+    check("corrupt-baseline unreadable true", d3.get("baseline_unreadable") is True, str(d3))
+    check("corrupt-baseline missing false", d3.get("baseline_missing") is not True, str(d3))
+    check("corrupt-baseline regressions empty", d3.get("regressions")==[], str(d3))
+    check("corrupt-baseline file intact", after3==corrupt_content, f"file changed: {after3!r}")
     # 壞宣告 → rc 2
     (root/".lumos"/"compose-metrics.json").write_text('[]', encoding="utf-8")
     r2 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--json"],capture_output=True,text=True)
