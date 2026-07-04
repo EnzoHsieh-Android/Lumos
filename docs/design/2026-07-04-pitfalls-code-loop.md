@@ -64,7 +64,7 @@ CLI:`lumos pitfalls <md檔> [--repo <root>] [--check] [--json]` 或 `lumos pitfa
 觸發:分支終審前跑 `pitfalls --diff <merge-base>..HEAD`——`tier: standard` → 現行單 reviewer 終審(不變);`tier: high` → 本 skill(K=2)。
 
 每輪 N:
-1. `review-package BASE HEAD` **或等價 `git diff -U10 BASE..HEAD` 重導向單檔**(僅需原生 git;review-package 是 superpowers 外掛的 git 薄殼,消費專案無外掛時走等價命令,r1-F1)產 package → **複製工作副本**,植 **bug canary hunk**(合成一個含真 bug 的 hunk + 唯一 token 註解;真代碼與真 package 永不含)。類型輪替 `[(N−1) mod 4]`:(a) 邊界/off-by-one;(b) 資源未釋放/鎖漏;(c) None/例外路徑未接;(d) 冪等/併發破壞(無交易包裹/TOCTOU)。
+1. `review-package BASE HEAD` **或等價 `git diff -U10 BASE..HEAD` 重導向單檔**(僅需原生 git;review-package 是 superpowers 外掛的 git 薄殼,消費專案無外掛時走等價命令,r1-F1)產 package → **複製該 diff 文字檔為工作副本**(r7-F6:副本對象=diff 文字檔、非 checkout 原始碼樹,載體細節見 pillar-2),植 **bug canary hunk**(合成一個含真 bug 的 hunk + 唯一 token 註解;真代碼與真 package 永不含)。類型輪替 `[(N−1) mod 4]`:(a) 邊界/off-by-one;(b) 資源未釋放/鎖漏;(c) None/例外路徑未接;(d) 冪等/併發破壞(無交易包裹/TOCTOU)。
 2. **三道防污染(不可違反)**:
    - **真代碼永不含**:canary 只在 package 工作副本;折入=對真代碼下 fix commit,每個 fix 必須錨到**真 diff 的 file:line**(canary hunk 位置不在真 diff,想折也對不上)。
    - **低耦合植入**:canary hunk 的 file:line 必須落在**真改動集之外**(合成新 hunk 於未被真 diff 觸及的檔/函數——r3-F3:此即 pillar-1「對不上真 diff 座標」機械保證的前提,兩者一致而非矛盾),且與真改動弱耦合,縮小衍生推理波及面。**載體明定**:reviewer 讀的是 review package(diff 文字檔,`git diff -U10` 產)的工作副本;植入=在其 Diff 段插入一段帶合法 `@@` 標頭的偽 hunk + token 註解。**座標權威=package 的 -U10 檔**(r4-F7:pitfalls --diff 預設 -U3,兩者 @@ 位移不同;pillar 判定為檔級不受 -U 影響,行級引用以 package 檔為準)。
@@ -173,3 +173,8 @@ canary 被正確識別性質(缺 CLI 語法行出處、無測試、與 §87/§37
 - **F2(折入)**:知識同步表 design-loop 行補 gate 措辭同步(第三個契約記錄面,R4-F4 族傳播補全)。
 - **F3(折入)**:測試 #7 擴充為過濾全套參數化案(.txt/.rst/_TEST_PAT/註解行,R4-F3 保證的回歸釘)。
 - **編排者筆誤更正(非折入)**:§81「硬性節名清單」→「節名清單(散文慣例)」——r4-F5 折入時漏改此處,grep 機械可證的措辭同步(同 risk-tiered r1「順手改正」前例)。
+
+### R7(2026-07-04,canary type c=未定義常數 `CODE_LOOP_MIN_DIFF_LINES`,opus,**CAUGHT**,severity=minor,存活 findings=1)
+
+canary 被正確識別(明指無值/單一無定義處/承重閘值三重瑕疵,並點名同 R3 型)。F2-F5 為肯定性查證(CLI 旗標/詞表黑名單/gate 契約四記錄面傳播全對)。存活 1 minor 折入:
+- **F6(折入)**:步驟 1「複製工作副本」用語精度——明定副本對象=diff 文字檔(非 checkout 樹),與 pillar-2 載體澄清前後呼應。
