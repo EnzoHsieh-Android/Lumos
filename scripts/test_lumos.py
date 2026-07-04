@@ -2969,6 +2969,48 @@ def t_lint_watch_semver():
     check("數值 behind 1.9.0→1.20.0", m._compare_versions("1.9.0","1.20.0") == ("behind",""), str(m._compare_versions("1.9.0","1.20.0")))
 
 
+def t_lint_watch_registry():
+    import importlib.util as U, json as J, os, tempfile
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    # 四型 registry 的假 response,key = _registry_latest 內部組出的 url
+    pypi_url = "https://pypi.org/pypi/ruff/json"
+    npm_url  = "https://registry.npmjs.org/eslint/latest"
+    gh_url   = "https://api.github.com/repos/detekt/detekt/releases/latest"
+    import urllib.parse as UP
+    mvn_url  = ("https://search.maven.org/solrsearch/select?q="
+               + UP.quote('g:"org.sonarsource.scanner.cli" AND a:"sonar-scanner-cli"')
+               + "&core=gav&sort=timestamp+desc&rows=20&wt=json")
+    fixture = {
+        pypi_url: {"info": {"version": "0.4.9"}},
+        npm_url:  {"version": "9.0.0"},
+        gh_url:   {"tag_name": "v1.24.0"},
+        # maven docs 含 3.9 / 3.20.0 / 一個 RC → 過濾 RC、數值 max 應回 3.20.0
+        mvn_url:  {"response": {"docs": [
+            {"v": "3.9"}, {"v": "3.20.0"}, {"v": "3.21.0-RC1"}, {"v": "3.11"}]}},
+    }
+    fx = Path(tempfile.mkdtemp(prefix="gctl-lw-")) / "fx.json"
+    fx.write_text(J.dumps(fixture), encoding="utf-8")
+    os.environ["LUMOS_LINT_WATCH_FIXTURE"] = str(fx)
+    try:
+        check("pypi", m._registry_latest("pypi:ruff") == ("0.4.9", None), str(m._registry_latest("pypi:ruff")))
+        check("npm", m._registry_latest("npm:eslint") == ("9.0.0", None), str(m._registry_latest("npm:eslint")))
+        check("github 剝 v", m._registry_latest("github:detekt/detekt") == ("1.24.0", None), str(m._registry_latest("github:detekt/detekt")))
+        check("maven 數值 max 過濾 RC",
+              m._registry_latest("maven:org.sonarsource.scanner.cli:sonar-scanner-cli") == ("3.20.0", None),
+              str(m._registry_latest("maven:org.sonarsource.scanner.cli:sonar-scanner-cli")))
+        # pypi info.version 為 prerelease → (None, "latest is prerelease")
+        fixture[pypi_url] = {"info": {"version": "0.4.3a1"}}
+        fx.write_text(J.dumps(fixture), encoding="utf-8")
+        check("pypi prerelease", m._registry_latest("pypi:ruff") == (None, "latest is prerelease"), str(m._registry_latest("pypi:ruff")))
+        # 抓取回 None(fixture 無此 key)→ (None, "registry query failed: ...")
+        latest, reason = m._registry_latest("npm:does-not-exist")
+        check("抓取失敗", latest is None and reason.startswith("registry query failed"), f"{latest},{reason}")
+    finally:
+        os.environ.pop("LUMOS_LINT_WATCH_FIXTURE", None)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

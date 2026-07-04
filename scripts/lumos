@@ -4230,6 +4230,113 @@ def _compare_versions(current, latest):
     return ("behind", "") if la > cu else ("current", "")
 
 
+def _http_get_json(url):
+    """Fetch URL and return parsed JSON dict, or None on any failure.
+
+    If env var LUMOS_LINT_WATCH_FIXTURE is set, reads that JSON file (a
+    {url: response_dict} map) and returns fixture.get(url) — never hitting
+    the network.  Otherwise uses urllib.request with timeout=10s.
+    """
+    import os
+    fixture_path = os.environ.get("LUMOS_LINT_WATCH_FIXTURE")
+    if fixture_path:
+        import json
+        try:
+            with open(fixture_path, encoding="utf-8") as fh:
+                fixture = json.load(fh)
+            return fixture.get(url)
+        except Exception:
+            return None
+    import json
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "lumos-lint-watch"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status < 200 or resp.status >= 300:
+                return None
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _registry_latest(registry, fetch=None):
+    """Return (version, None) on success or (None, reason) on failure.
+
+    registry format: "<type>:<coord>"
+      pypi:<pkg>
+      npm:<pkg>
+      github:<owner>/<repo>
+      maven:<group>:<artifact>
+    """
+    if fetch is None:
+        fetch = _http_get_json
+    try:
+        import urllib.parse
+        rtype, _, coord = registry.partition(":")
+        if rtype == "pypi":
+            url = f"https://pypi.org/pypi/{coord}/json"
+            d = fetch(url)
+            if d is None:
+                return (None, "registry query failed: fetch returned None")
+            try:
+                version = d["info"]["version"]
+            except (KeyError, TypeError) as e:
+                return (None, f"registry query failed: {e}")
+            if _is_prerelease(version):
+                return (None, "latest is prerelease")
+            return (version, None)
+
+        elif rtype == "npm":
+            url = f"https://registry.npmjs.org/{coord}/latest"
+            d = fetch(url)
+            if d is None:
+                return (None, "registry query failed: fetch returned None")
+            try:
+                version = d["version"]
+            except (KeyError, TypeError) as e:
+                return (None, f"registry query failed: {e}")
+            if _is_prerelease(version):
+                return (None, "latest is prerelease")
+            return (version, None)
+
+        elif rtype == "github":
+            url = f"https://api.github.com/repos/{coord}/releases/latest"
+            d = fetch(url)
+            if d is None:
+                return (None, "registry query failed: fetch returned None")
+            try:
+                tag = d["tag_name"]
+            except (KeyError, TypeError) as e:
+                return (None, f"registry query failed: {e}")
+            version = tag.lstrip("v") if tag.startswith("v") else tag
+            if _is_prerelease(version):
+                return (None, "latest is prerelease")
+            return (version, None)
+
+        elif rtype == "maven":
+            group, _, artifact = coord.partition(":")
+            q = urllib.parse.quote(f'g:"{group}" AND a:"{artifact}"')
+            url = (f"https://search.maven.org/solrsearch/select?q={q}"
+                   "&core=gav&sort=timestamp+desc&rows=20&wt=json")
+            d = fetch(url)
+            if d is None:
+                return (None, "registry query failed: fetch returned None")
+            try:
+                docs = (d.get("response") or {}).get("docs") or []
+                stable = [x["v"] for x in docs if x.get("v") and not _is_prerelease(x["v"])]
+                stable = [v for v in stable if _semver_parse(v)]
+            except Exception as e:
+                return (None, f"registry query failed: {e}")
+            if not stable:
+                return (None, "no stable version")
+            return (max(stable, key=_semver_parse), None)
+
+        else:
+            return (None, f"registry query failed: unknown type {rtype!r}")
+    except Exception as e:
+        return (None, f"registry query failed: {e}")
+
+
 def _pitfall_diff_mode(diff_range, repo_root, as_json):
     """掃 git diff <range> 新增行找代碼形態風險位置。過濾繼承 Check H 全套;line 由 @@ 標頭推導。
     rc 恆 0(提示器非閘)。class 用形態類軸(併發/效能/資源)。"""
