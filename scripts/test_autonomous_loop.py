@@ -250,5 +250,64 @@ class TestRequeueUnconverged(unittest.TestCase):
         self.assertEqual(rows[0]["unconverged"], 1)
 
 
+class TestDifficulty(unittest.TestCase):
+    def setUp(self):
+        from autonomous_loop import difficulty
+        self.d = difficulty
+
+    def test_assess_hits_high(self):
+        for kw, cls in (("接 stripe 收款", "payment"), ("金流對帳", "payment"),
+                        ("執行 DROP TABLE 清理", "prod-irreversible"),
+                        ("完成後寄送通知", "external-send")):
+            r = self.d.assess(kw)
+            self.assertEqual(r["tier"], "high", kw)
+            self.assertIn(cls, [h["class"] for h in r["hits"]], kw)
+
+    def test_assess_standard(self):
+        r = self.d.assess("重構內部快取層,拆函數與改名,無外部行為變更")
+        self.assertEqual(r["tier"], "standard")
+        self.assertEqual(r["hits"], [])
+
+    def test_assess_deterministic(self):
+        t = "金流與寄送並存的文本"
+        self.assertEqual(self.d.assess(t), self.d.assess(t))
+
+    def test_assess_self_governance(self):
+        r = self.d.assess("本改動調整 anchor verify 與收斂判準")
+        self.assertEqual(r["tier"], "high")
+        self.assertIn("self-governance", [h["class"] for h in r["hits"]])
+
+    def test_params_mapping(self):
+        self.assertEqual(self.d.params("high"), {"need": 3, "maxr": 8})
+        self.assertEqual(self.d.params("standard"), {"need": 2, "maxr": 6})
+
+    def test_assess_spec_blacklist_strip(self):
+        md = ("# t\n- 狀態:草稿\n"
+              "## 目標\n改內部排序邏輯。\n"
+              "## 組件\n重構 sort 模組,純內部。\n"
+              "## 誠實天花板\ncanary 與收斂判準的既有守衛不受影響。\n"
+              "## 審計修正紀錄(design-loop)\nr1 canary caught。\n")
+        self.assertEqual(self.d.assess_spec(md)["tier"], "standard")
+
+    def test_assess_spec_title_variant(self):
+        md = ("# t\n## 目標\n改內部排序。\n## 組件\n純內部重構。\n"
+              "## 誠實天花板(v2 補)\ncanary 收斂判準。\n## 附:審計修正紀錄與備註\ncanary。\n")
+        self.assertEqual(self.d.assess_spec(md)["tier"], "standard")
+
+    def test_assess_spec_substantive_high(self):
+        md = ("# t\n## 目標\n強化 anchor verify 與 pre-push hook 的接線。\n"
+              "## 組件\n改守衛腳本。\n## 誠實天花板\n無。\n")
+        self.assertEqual(self.d.assess_spec(md)["tier"], "high")
+
+    def test_assess_spec_fallback_near_empty(self):
+        md = "# t\n## 誠實天花板\n" + "金流" * 200 + "\n"
+        self.assertEqual(self.d.assess_spec(md)["tier"], "high")  # 回退全文,偏嚴
+
+    def test_assess_spec_strips_inline_code_and_filenames(self):
+        md = ("# t\n## 目標\n更新 `圖譜即合約-對外論述.md` 的段落說明,內容為文檔措辭。\n"
+              "## 組件\n見 圖譜即合約-對外論述.md 檔。\n## 其他\n無風險詞的內部整理。\n")
+        self.assertEqual(self.d.assess_spec(md)["tier"], "standard")  # 檔名「對外」不得誤觸
+
+
 if __name__ == "__main__":
     unittest.main()
