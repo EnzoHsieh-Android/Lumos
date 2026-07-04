@@ -2519,6 +2519,144 @@ def t_anchor():
     check("anchor: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
 
 
+def t_lint_aligned():
+    import subprocess as sp
+    import importlib.util as U
+    from importlib.machinery import SourceFileLoader
+    root = Path(tempfile.mkdtemp(prefix="gctl-la-"))
+    def git(*a): sp.run(["git",*a],cwd=root,capture_output=True)
+    git("init"); git("config","user.email","t@t"); git("config","user.name","t")
+    (root/"a.kt").write_text("l1\n",encoding="utf-8")
+    git("add","-A"); git("-c","user.email=t@t","-c","user.name=t","commit","-m","c1")
+    (root/"a.kt").write_text("l1\nl2\n",encoding="utf-8")
+    git("add","-A"); git("-c","user.email=t@t","-c","user.name=t","commit","-m","c2")
+    # lumos 無 .py 副檔名 → spec_from_file_location 推不出 loader,顯式給 SourceFileLoader
+    spec=U.spec_from_file_location("lm",GRAPHCTL,loader=SourceFileLoader("lm",GRAPHCTL))
+    m=U.module_from_spec(spec); spec.loader.exec_module(m)
+    # added 集合:c2 的 +l2 在第 2 行
+    diff=sp.run(["git","diff","-U3","HEAD~1..HEAD"],cwd=root,capture_output=True,text=True).stdout
+    added=m._diff_added_lines(diff)
+    check("added: a.kt 第2行", added.get("a.kt")=={2}, str(added))
+    # 對齊:乾淨 ..HEAD → True
+    check("aligned: 乾淨 ..HEAD True", m._lint_aligned("HEAD~1..HEAD", root) is True, "")
+    # 對齊:... symmetric split 不炸(右端 rsplit)
+    check("aligned: ...HEAD 不炸", isinstance(m._lint_aligned("HEAD~1...HEAD", root), bool), "")
+    # dirty tree → False
+    (root/"a.kt").write_text("l1\nl2\nDIRTY\n",encoding="utf-8")
+    check("aligned: dirty False", m._lint_aligned("HEAD~1..HEAD", root) is False, "")
+
+
+def t_lint_config():
+    import importlib.util as U
+    from importlib.machinery import SourceFileLoader
+    # lumos 無 .py 副檔名 → 顯式給 SourceFileLoader
+    spec = U.spec_from_file_location("lm2", GRAPHCTL, loader=SourceFileLoader("lm2", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+
+    root = Path(tempfile.mkdtemp(prefix="gctl-lc-"))
+    lumos_dir = root / ".lumos"
+    lumos_dir.mkdir()
+
+    # Case 1: .kt 命中 → ["cmd1"]
+    lint_json = lumos_dir / "lint.json"
+    lint_json.write_text('{"kt":["cmd1"],"py":["cmd2"]}', encoding="utf-8")
+    config = m._lint_load_config(root)
+    check("lint_config: 讀取 .lumos/lint.json 回 dict", isinstance(config, dict), str(config))
+    # added: a.kt 第 1 行
+    added = {"a.kt": {1}}
+    cmds = m._lint_stacks_for_diff(added, config)
+    check("lint_config: .kt 命中 → [cmd1]", cmds == ["cmd1"], str(cmds))
+
+    # Case 2: 無宣告副檔名 .vue → []
+    added_vue = {"a.vue": {1}}
+    cmds_vue = m._lint_stacks_for_diff(added_vue, config)
+    check("lint_config: .vue 無宣告 → []", cmds_vue == [], str(cmds_vue))
+
+    # Case 3: 無 .lumos/lint.json → _lint_load_config 回 None
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-lc2-"))
+    result = m._lint_load_config(root2)
+    check("lint_config: 無 lint.json → None", result is None, str(result))
+
+    # Case 4: 多檔共享 stack → 去重,不重複 cmd
+    added_multi = {"a.kt": {1}, "b.kt": {2}}
+    cmds_multi = m._lint_stacks_for_diff(added_multi, config)
+    check("lint_config: 多 .kt 共享 stack → 去重 [cmd1]", cmds_multi == ["cmd1"], str(cmds_multi))
+
+    # Case 5: 壞 JSON → None
+    lint_json.write_text("{bad json}", encoding="utf-8")
+    result_bad = m._lint_load_config(root)
+    check("lint_config: 壞 JSON → None", result_bad is None, str(result_bad))
+
+
+def t_lint_sarif():
+    import importlib.util as U, json as J
+    from importlib.machinery import SourceFileLoader
+    spec=U.spec_from_file_location("lm",GRAPHCTL,loader=SourceFileLoader("lm",GRAPHCTL)); m=U.module_from_spec(spec); spec.loader.exec_module(m)
+    root=Path(tempfile.mkdtemp(prefix="gctl-ls-"))
+    # 假 SARIF:絕對 file:// uri + per-run driver + 一筆 location-less
+    sarif={"runs":[{"tool":{"driver":{"name":"detekt"}},"results":[
+        {"ruleId":"R1","message":{"text":"m1"},"locations":[{"physicalLocation":{
+            "artifactLocation":{"uri":f"file://{root}/app/X.kt"},"region":{"startLine":5}}}]},
+        {"ruleId":"R2","message":{"text":"no-loc"}}  # location-less → 跳該筆不連坐
+    ]}]}
+    sf=root/"fake.sarif"; sf.write_text(J.dumps(sarif),encoding="utf-8")
+    cmd=f"cp {sf} {{LINT_SARIF_OUT}}"   # 假 linter=把預存 SARIF 複製到注入路徑
+    claims, ok = m._lint_run_and_parse(cmd, root)
+    check("sarif ok", ok is True, "")
+    check("sarif: 1 claim(location-less 跳)", len(claims)==1, str(claims))
+    c=claims[0]
+    check("sarif: uri 正規化 repo 相對", c["file"]=="app/X.kt", c["file"])
+    check("sarif: source per-run", c["source"]=="lint:detekt", c["source"])
+    check("sarif: line/rule/message", c["line"]==5 and c["rule"]=="R1" and c["message"]=="m1", str(c))
+    # 指令失敗無 SARIF → ok False
+    claims2, ok2 = m._lint_run_and_parse("false", root)
+    check("sarif: 失敗 ok False", ok2 is False and claims2==[], "")
+
+
+def t_lint_sarif_malformed_run():
+    """Finding 1: 含壞 run(無 tool key)的 SARIF — 壞 run 跳過,好 run claim 仍回傳,不 crash。"""
+    import importlib.util as U, json as J
+    from importlib.machinery import SourceFileLoader
+    spec=U.spec_from_file_location("lm2",GRAPHCTL,loader=SourceFileLoader("lm2",GRAPHCTL)); m=U.module_from_spec(spec); spec.loader.exec_module(m)
+    root=Path(tempfile.mkdtemp(prefix="gctl-lsm-"))
+    sarif={"runs":[
+        # 壞 run:完全沒有 tool 鍵 → 應 skip 而不 crash
+        {"results":[{"ruleId":"BAD","message":{"text":"bad"},"locations":[{"physicalLocation":{
+            "artifactLocation":{"uri":f"file://{root}/bad.kt"},"region":{"startLine":1}}}]}]},
+        # 好 run:正常 driver
+        {"tool":{"driver":{"name":"detekt"}},"results":[
+            {"ruleId":"R1","message":{"text":"good"},"locations":[{"physicalLocation":{
+                "artifactLocation":{"uri":f"file://{root}/app/Good.kt"},"region":{"startLine":7}}}]}
+        ]},
+    ]}
+    sf=root/"mixed.sarif"; sf.write_text(J.dumps(sarif),encoding="utf-8")
+    cmd=f"cp {sf} {{LINT_SARIF_OUT}}"
+    claims, ok = m._lint_run_and_parse(cmd, root)
+    check("sarif malformed run: ok True(有好 run)", ok is True, "")
+    check("sarif malformed run: 僅好 run 的 claim 回傳(=1)", len(claims)==1, str(claims))
+    check("sarif malformed run: claim 來自好 run", claims[0]["source"]=="lint:detekt" and claims[0]["file"]=="app/Good.kt", str(claims))
+
+
+def t_lint_sarif_relative_uri():
+    """Finding 2: SARIF uri 已是 repo-relative(無 file://) → file 直接用,不產 ../.. 遍歷路徑。"""
+    import importlib.util as U, json as J
+    from importlib.machinery import SourceFileLoader
+    spec=U.spec_from_file_location("lm3",GRAPHCTL,loader=SourceFileLoader("lm3",GRAPHCTL)); m=U.module_from_spec(spec); spec.loader.exec_module(m)
+    root=Path(tempfile.mkdtemp(prefix="gctl-lsr-"))
+    # uri 是 repo-relative(沒有 file:// 也沒有絕對路徑前綴)
+    sarif={"runs":[{"tool":{"driver":{"name":"ktlint"}},"results":[
+        {"ruleId":"R9","message":{"text":"rel"},"locations":[{"physicalLocation":{
+            "artifactLocation":{"uri":"app/Y.kt"},"region":{"startLine":3}}}]}
+    ]}]}
+    sf=root/"rel.sarif"; sf.write_text(J.dumps(sarif),encoding="utf-8")
+    cmd=f"cp {sf} {{LINT_SARIF_OUT}}"
+    claims, ok = m._lint_run_and_parse(cmd, root)
+    check("sarif relative uri: ok True", ok is True, "")
+    check("sarif relative uri: 1 claim", len(claims)==1, str(claims))
+    check("sarif relative uri: file=app/Y.kt(非 ../.. 遍歷)", claims[0]["file"]=="app/Y.kt", claims[0].get("file",""))
+    check("sarif relative uri: 無 ../.. 前綴", not claims[0]["file"].startswith(".."), claims[0].get("file",""))
+
+
 def t_pitfalls_diff():
     import json as _json, subprocess as sp
     root = Path(tempfile.mkdtemp(prefix="gctl-pfd-"))
@@ -2602,6 +2740,206 @@ def t_pitfalls_spec():
     # md 不存在 → rc 2
     r = run(root, "pitfalls", str(root / "ghost.md"), "--repo", str(root))
     check("pitfalls: md 不存在 rc 2", r.returncode == 2, f"rc={r.returncode}")
+
+
+def t_pitfalls_lint_integration():
+    """Task 4: _pitfall_diff_mode 尾段整合——lint claims 合併/過濾/tier/fallback。"""
+    import json as _json
+    import subprocess as sp
+    import sys as _sys
+
+    # ── 共用 git fixture 建立 helper ──────────────────────────────────────
+    def make_repo():
+        root = Path(tempfile.mkdtemp(prefix="gctl-pli-"))
+        def git(*a):
+            sp.run(["git", *a], cwd=root, capture_output=True)
+        git("init")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        return root, git
+
+    def commit_file(root, git, name, content):
+        (root / name).write_text(content, encoding="utf-8")
+        git("add", "-A")
+        git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", f"add {name}")
+
+    # 寫假 linter 腳本到臨時目錄,避免 shell 引號問題
+    helper_dir = Path(tempfile.mkdtemp(prefix="gctl-pli-helper-"))
+
+    def make_linter(name, sarif_dict):
+        """生成 fake linter 腳本:把 sarif 寫到 argv[1]"""
+        sarif_json = _json.dumps(sarif_dict)
+        script_path = helper_dir / name
+        script_path.write_text(
+            "import sys, json\n"
+            f"data = {repr(sarif_json)}\n"
+            "open(sys.argv[1], 'w').write(data)\n",
+            encoding="utf-8",
+        )
+        return f"{_sys.executable} {script_path} {{LINT_SARIF_OUT}}"
+
+    # SARIF 含兩個 finding: line 2 (在 diff-added) + line 99 (不在 diff-added)
+    sarif_multi_dict = {
+        "runs": [{
+            "tool": {"driver": {"name": "FakeLint"}},
+            "originalUriBaseIds": {},
+            "results": [
+                {
+                    "ruleId": "FAKE001",
+                    "message": {"text": "fake warning line 2"},
+                    "locations": [{"physicalLocation": {
+                        "artifactLocation": {"uri": "base.kt"},
+                        "region": {"startLine": 2},
+                    }}]
+                },
+                {
+                    "ruleId": "FAKE002",
+                    "message": {"text": "fake warning line 99"},
+                    "locations": [{"physicalLocation": {
+                        "artifactLocation": {"uri": "base.kt"},
+                        "region": {"startLine": 99},
+                    }}]
+                },
+            ]
+        }]
+    }
+    fake_cmd = make_linter("fakelint_multi.py", sarif_multi_dict)
+
+    # ── Case 1+2: config 存在, aligned diff ──────────────────────────────
+    # base.kt: 第 1 行舊, 第 2 行新增(含 requests.get(→regex 命中), 第 3 行新增
+    # diff HEAD~1..HEAD 新增行 = {2, 3}
+    # .lumos/lint.json 在 init commit 提交,保持 dirty tree 清空 → aligned=True
+    root, git = make_repo()
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "lint.json").write_text(_json.dumps({"kt": [fake_cmd]}), encoding="utf-8")
+    commit_file(root, git, "base.kt", "// base\n")  # 含 .lumos 一起提交
+    (root / "base.kt").write_text(
+        "// base\n"
+        "    val r = requests.get('http://x')\n"
+        "    val x = 1\n",
+        encoding="utf-8",
+    )
+    git("add", "-A")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add kt code")
+
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    check("pitfalls-lint: rc 0", r.returncode == 0, f"rc={r.returncode}\n{r.stderr}")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+
+    sources = [c.get("source", "") for c in data["claims"]]
+    # Case 1: 兩種 source 都在
+    check("pitfalls-lint: lint source 出現(lint:FakeLint)",
+          any("lint:FakeLint" in s for s in sources), str(data))
+    check("pitfalls-lint: regex source 出現(pitfalls-builtin)",
+          any(s == "pitfalls-builtin" for s in sources), str(data))
+
+    # Case 2: aligned → line 2 保留, line 99 過濾掉
+    lint_lines = [c["line"] for c in data["claims"] if "lint:" in c.get("source", "")]
+    check("pitfalls-lint: aligned 過濾 line 2 保留", 2 in lint_lines, f"lint_lines={lint_lines}")
+    check("pitfalls-lint: aligned 過濾 line 99 剔除", 99 not in lint_lines, f"lint_lines={lint_lines}")
+
+    # lint_ran 有記錄 cmd
+    check("pitfalls-lint: lint_ran 非空", bool(data.get("lint_ran")), str(data))
+    # tier high(有 claims)
+    check("pitfalls-lint: tier high", data["tier"] == "high", str(data))
+
+    # ── Case 3: dirty tree (unaligned) → 全收 + filtered:false ──────────
+    root3, git3 = make_repo()
+    commit_file(root3, git3, "base.kt", "// base\n")
+    (root3 / "base.kt").write_text(
+        "// base\n"
+        "    val r = requests.get('http://x')\n",
+        encoding="utf-8",
+    )
+    git3("add", "-A")
+    git3("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add kt")
+
+    # 製造 dirty tree: 新增未 commit 的改動 → _lint_aligned 回 False
+    (root3 / "dirty_untracked.kt").write_text("// dirty\n", encoding="utf-8")
+
+    sarif_line99_dict = {
+        "runs": [{
+            "tool": {"driver": {"name": "FakeLint"}},
+            "originalUriBaseIds": {},
+            "results": [{
+                "ruleId": "FAKE001",
+                "message": {"text": "fake warning line 99"},
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": "base.kt"},
+                    "region": {"startLine": 99},
+                }}]
+            }]
+        }]
+    }
+    fake_dirty_cmd = make_linter("fakelint_dirty.py", sarif_line99_dict)
+    (root3 / ".lumos").mkdir()
+    (root3 / ".lumos" / "lint.json").write_text(
+        _json.dumps({"kt": [fake_dirty_cmd]}), encoding="utf-8"
+    )
+
+    r3 = run(root3, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root3), "--json")
+    data3 = _json.loads([l for l in r3.stdout.splitlines() if l.strip().startswith("{")][0])
+    lint_lines3 = [c["line"] for c in data3["claims"] if "lint:" in c.get("source", "")]
+    check("pitfalls-lint: unaligned line 99 保留(全收)",
+          99 in lint_lines3, f"lint_lines3={lint_lines3} data3={data3}")
+    check("pitfalls-lint: unaligned filtered:false 標記",
+          data3.get("filtered") is False, str(data3))
+
+    # ── Case 4: 無 .lumos/lint.json → regex-only, 無 lint_ran ───────────
+    root4, git4 = make_repo()
+    commit_file(root4, git4, "app.py", "x = 1\n")
+    (root4 / "app.py").write_text(
+        "import requests\n"
+        "requests.post('http://x')\n",
+        encoding="utf-8",
+    )
+    git4("add", "-A")
+    git4("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c2")
+
+    r4 = run(root4, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root4), "--json")
+    data4 = _json.loads([l for l in r4.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls-lint: 無 config → 無 lint_ran key", "lint_ran" not in data4, str(data4))
+    check("pitfalls-lint: 無 config → regex claims 存在", len(data4.get("claims", [])) > 0, str(data4))
+
+    # ── Case 5: lint cmd 失敗 → lint_skipped 記錄, rc 0, regex claims 在 ─
+    root5, git5 = make_repo()
+    commit_file(root5, git5, "base.kt", "// base\n")
+    (root5 / "base.kt").write_text(
+        "// base\n"
+        "    val r = requests.get('http://x')\n",
+        encoding="utf-8",
+    )
+    git5("add", "-A")
+    git5("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add kt")
+
+    fail_script = helper_dir / "fakelint_fail.py"
+    fail_script.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+    fail_cmd = f"{_sys.executable} {fail_script} {{LINT_SARIF_OUT}}"
+    (root5 / ".lumos").mkdir()
+    (root5 / ".lumos" / "lint.json").write_text(
+        _json.dumps({"kt": [fail_cmd]}), encoding="utf-8"
+    )
+
+    r5 = run(root5, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root5), "--json")
+    check("pitfalls-lint: cmd 失敗 rc 0", r5.returncode == 0, f"rc={r5.returncode}\n{r5.stderr}")
+    data5 = _json.loads([l for l in r5.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls-lint: cmd 失敗 → lint_skipped 有記錄", bool(data5.get("lint_skipped")), str(data5))
+    check("pitfalls-lint: cmd 失敗 → regex claims 仍在", len(data5.get("claims", [])) > 0, str(data5))
+
+    # ── Case 6: diff 未碰宣告棧 → lint_ran 空 ────────────────────────────
+    root6, git6 = make_repo()
+    commit_file(root6, git6, "readme.txt", "hello\n")
+    (root6 / "readme.txt").write_text("hello world\n", encoding="utf-8")
+    git6("add", "-A")
+    git6("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "update txt")
+
+    # config 只宣告 kt,但 diff 是 txt
+    (root6 / ".lumos").mkdir()
+    (root6 / ".lumos" / "lint.json").write_text(_json.dumps({"kt": [fake_cmd]}), encoding="utf-8")
+
+    r6 = run(root6, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root6), "--json")
+    data6 = _json.loads([l for l in r6.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls-lint: 未碰宣告棧 → lint_ran 空", data6.get("lint_ran") == [], str(data6))
 
 
 def main():

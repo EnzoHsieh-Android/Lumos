@@ -4009,6 +4009,195 @@ _PITFALL_DIFF_PATTERNS = [
 ]
 _PITFALL_DIFF_SKIP_EXT = {".md", ".txt", ".rst"}
 _PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
+LINT_CMD_TIMEOUT = 180
+
+
+def _diff_added_lines(diff_text):
+    """從 git diff -U3 輸出建 {file: set(new_line_numbers)} 對應所有新增行(+ 開頭)。
+    使用與 _pitfall_diff_mode 相同的 @@ 標頭推導邏輯。"""
+    added = {}
+    cur_file, new_ln = "", 0
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/"):
+            cur_file = line[6:]
+            continue
+        m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)", line)
+        if m:
+            new_ln = int(m.group(1))
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("-"):
+            continue                          # 刪除行不推進新檔行號
+        if not line.startswith("+"):
+            new_ln += 1                       # context 行推進
+            continue
+        # 這是新增行(+ 開頭)
+        if cur_file:
+            added.setdefault(cur_file, set()).add(new_ln)
+        new_ln += 1                           # 新增行推進新檔行號
+    return added
+
+
+def _lint_aligned(diff_range, repo_root):
+    """判斷 diff_range 右端 ref 是否與工作區 HEAD 對齊(座標系一致)。
+    右端:先 rsplit('...', 1) 再 rsplit('..', 1);空→HEAD;無 .. → 工作區比較恆 True。
+    對齊 = git rev-parse <right> == git rev-parse HEAD 且 git status --porcelain 空。
+    任何子程序失敗 → False。"""
+    import subprocess
+    # 提取右端 ref
+    if "..." in diff_range:
+        right = diff_range.rsplit("...", 1)[1]
+    elif ".." in diff_range:
+        right = diff_range.rsplit("..", 1)[1]
+    else:
+        # 無 .. → 工作區比較,恆對齊
+        return True
+    if not right:
+        right = "HEAD"
+    try:
+        r_right = subprocess.run(
+            ["git", "rev-parse", right],
+            capture_output=True, text=True, cwd=str(repo_root))
+        r_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, cwd=str(repo_root))
+        r_status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, cwd=str(repo_root))
+    except FileNotFoundError:
+        return False
+    if r_right.returncode != 0 or r_head.returncode != 0 or r_status.returncode != 0:
+        return False
+    return (r_right.stdout.strip() == r_head.stdout.strip()
+            and r_status.stdout.strip() == "")
+
+
+def _lint_load_config(repo_root):
+    """讀取 repo_root/.lumos/lint.json → dict;不存在或解析失敗 → None。"""
+    import json
+    p = Path(repo_root) / ".lumos" / "lint.json"
+    if not p.exists():
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _lint_stacks_for_diff(added, config):
+    """由 added({file: set(line_numbers)}) 與 config(lint.json dict) 推導待執行指令列表。
+    每個 added 檔案取副檔名(lstrip('.'))比對 config key;命中則收其指令 list。
+    去重保序(first-seen order),同一指令只收一次。"""
+    seen = set()
+    result = []
+    for f in added:
+        ext = Path(f).suffix.lstrip(".")
+        if ext in config:
+            for cmd in config[ext]:
+                if cmd not in seen:
+                    seen.add(cmd)
+                    result.append(cmd)
+    return result
+
+
+def _lint_run_and_parse(cmd, repo_root):
+    """執行宣告的 lint 指令並解析 SARIF 輸出為 claims 清單。
+    cmd: 含 {LINT_SARIF_OUT} 佔位符的 shell 指令字串。
+    repo_root: git repo 根目錄(Path 或 str)。
+    回傳 (list[claim], bool)——claim={file,line,source,rule,message};ok=成功產出可解析 SARIF。
+    rc≠0 不算失敗,detekt 等工具有問題時仍輸出有效 SARIF。"""
+    import json
+    import os
+    import shlex
+    import signal
+    import subprocess
+    import tempfile
+    import urllib.parse
+
+    repo_root = str(repo_root)
+    # 生成獨立的臨時檔案路徑
+    fd, temp_path = tempfile.mkstemp(suffix=".sarif", prefix="lumos-lint-")
+    os.close(fd)
+    try:
+        # 注入臨時檔路徑到指令
+        injected_cmd = cmd.replace("{LINT_SARIF_OUT}", shlex.quote(temp_path))
+        # 執行指令:使用 Popen 以便 TimeoutExpired 時能 killpg
+        proc = subprocess.Popen(
+            injected_cmd,
+            shell=True,
+            cwd=repo_root,
+            start_new_session=True,
+        )
+        try:
+            proc.communicate(timeout=LINT_CMD_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            proc.wait()
+            return ([], False)
+        # 讀臨時檔:空或 parse 失敗 → ([], False)
+        try:
+            with open(temp_path, encoding="utf-8") as f:
+                content = f.read()
+        except OSError:
+            return ([], False)
+        if not content.strip():
+            return ([], False)
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            return ([], False)
+        # 解析 SARIF
+        claims = []
+        runs = data.get("runs") or []
+        for run in runs:
+            # Finding 1: guard run-level structure — malformed run skipped, not crashed
+            driver_name = run.get("tool", {}).get("driver", {}).get("name")
+            if not driver_name:
+                continue
+            base = run.get("originalUriBaseIds", {})
+            for r in (run.get("results") or []):
+                try:
+                    loc = r["locations"][0]["physicalLocation"]
+                    art_loc = loc["artifactLocation"]
+                    uri = art_loc["uri"]
+                    # uri 正規化:有 uriBaseId 則拼前綴
+                    uri_base_id = art_loc.get("uriBaseId")
+                    if uri_base_id and uri_base_id in base:
+                        uri = base[uri_base_id]["uri"] + uri
+                    # 剝 file:// scheme
+                    if uri.startswith("file://"):
+                        uri = uri[7:]
+                    # URL decode
+                    uri = urllib.parse.unquote(uri)
+                    # Finding 2: 只對絕對路徑做 relpath;相對 uri 直接用(已是 repo 相對)
+                    if os.path.isabs(uri):
+                        rel = os.path.relpath(uri, repo_root)
+                    else:
+                        rel = uri
+                    rel = rel.replace("\\", "/")
+                    start_line = loc.get("region", {}).get("startLine", 0)
+                    rule_id = r.get("ruleId", "")
+                    message_text = (r.get("message") or {}).get("text", "")[:120]
+                    claims.append({
+                        "file": rel,
+                        "line": start_line,
+                        "source": f"lint:{driver_name}",
+                        "rule": rule_id,
+                        "message": message_text,
+                    })
+                except (KeyError, IndexError):
+                    continue
+        return (claims, True)
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
 
 
 def _pitfall_diff_mode(diff_range, repo_root, as_json):
@@ -4025,6 +4214,7 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json):
     if r.returncode != 0:
         print(f"ERROR: git diff {diff_range} 失敗: {r.stderr.strip()}", file=sys.stderr)
         return 2
+    added = {}
     claims = []
     cur_file, new_ln = "", 0
     for line in r.stdout.splitlines():
@@ -4043,6 +4233,7 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json):
             new_ln += 1                       # context 行推進
             continue
         # 這是新增行(+ 開頭)
+        added.setdefault(cur_file, set()).add(new_ln)
         ext = Path(cur_file).suffix if cur_file else ""
         code = line[1:]
         if (ext not in _PITFALL_DIFF_SKIP_EXT and cur_file
@@ -4054,12 +4245,64 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json):
                                    "pattern": pat.pattern, "question": q})
                     break
         new_ln += 1                           # 新增行推進新檔行號
-    tier = "high" if claims else "standard"
-    if as_json:
-        print(json.dumps({"claims": claims, "tier": tier}, ensure_ascii=False))
+
+    # ── Task 4: lint 整合 ─────────────────────────────────────────────────
+    config = _lint_load_config(repo_root)
+    if config is None:
+        # fallback: 無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
+        tier = "high" if claims else "standard"
+        if as_json:
+            print(json.dumps({"claims": claims, "tier": tier}, ensure_ascii=False))
+        else:
+            for c in claims:
+                print(f"  {c['file']}:{c['line']} [{c['class']}] {c['question']}")
+            print(f"tier: {tier}")
+        return 0
+
+    # 有 config: 補 source 到 regex claims
+    for c in claims:
+        c["source"] = "pitfalls-builtin"
+
+    cmds = _lint_stacks_for_diff(added, config)
+    aligned = _lint_aligned(diff_range, repo_root)
+    lint_ran = []
+    lint_skipped = []
+    lint_claims = []
+
+    for cmd in cmds:
+        lc, ok = _lint_run_and_parse(cmd, repo_root)
+        if ok:
+            lint_ran.append(cmd)
+            lint_claims.extend(lc)
+        else:
+            lint_skipped.append(cmd)
+
+    # 過濾 lint claims
+    filtered_marker = None
+    if aligned:
+        lint_claims = [
+            c for c in lint_claims
+            if c["line"] in added.get(c["file"], set())
+        ]
     else:
-        for c in claims:
-            print(f"  {c['file']}:{c['line']} [{c['class']}] {c['question']}")
+        filtered_marker = False  # 未對齊 → 全收 + 標記
+
+    all_claims = lint_claims + claims
+    tier = "high" if all_claims else "standard"
+
+    if as_json:
+        out = {"claims": all_claims, "tier": tier,
+               "lint_ran": lint_ran, "lint_skipped": lint_skipped}
+        if filtered_marker is not None:
+            out["filtered"] = filtered_marker
+        print(json.dumps(out, ensure_ascii=False))
+    else:
+        for c in all_claims:
+            src = c.get("source", "")
+            if src.startswith("lint:"):
+                print(f"  {c['file']}:{c['line']} [{src}] {c.get('message','')}")
+            else:
+                print(f"  {c['file']}:{c['line']} [{c.get('class','')}] {c.get('question','')}")
         print(f"tier: {tier}")
     return 0
 
