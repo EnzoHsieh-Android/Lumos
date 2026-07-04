@@ -100,6 +100,8 @@ class TestConfidenceReport(unittest.TestCase):
         self.assertIn("共 0 輪", md)
         self.assertIn("risk1", md)
 
+
+class TestConfidenceReportTier(unittest.TestCase):
     def test_tier_rendered_and_mismatch_flag(self):
         d = Path(tempfile.mkdtemp()); log = d / "c.jsonl"
         log.write_text('{"loop":"x","kind":"caught","severity":"clean","note":"r1"}\n',
