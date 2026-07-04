@@ -87,8 +87,8 @@
 2. **SARIF level 語意各工具不完全一致**:error/warning/note 的界線工具間有差;本塊不依賴 level 分級(命中即進 manifest、tier 只看有無),迴避此不一致;若未來用 level 排序需另議。
 3. **要專案先配 `.lumos/lint.json`**:一次性,但 Android/Vue/C# 專案本就該有 lint 配置;未配則本塊等於沒開(退回 regex)——漸進採用,不強迫。
 4. **runner 執行 shell 指令**:`.lumos/lint.json` 的指令由專案作者寫、lumos 照跑——等於信任專案宣告檔(同 guard 範本、hooks)。非對抗場景(自己的 repo),威脅模型是配錯非惡意注入。
-5. **行號比對容差**:SARIF 報的行 vs diff 新增行,若 linter 報的是「區塊起始行」而該行不在 diff 但區塊跨進 diff,可能漏;本塊只做精確行比對,粗放匹配留 v2。
-6. **座標系對齊是前提非保證(r1-F2)**:lint 跑工作區、過濾用 range HEAD 端行號,僅 `..HEAD`+乾淨工作區對齊;非對齊自動降級為「全收不過濾」(偏嚴),但那會倒入舊 lint 債、稀釋「只提示本次改動」的聚焦——是換來的安全,非免費。
+5. **行號比對容差**:SARIF 報的行 vs diff 新增行,若 linter 報的是「區塊起始行」而該行不在 diff 但區塊跨進 diff,可能漏;本塊只做精確行比對,粗放匹配留 v2。**offset-only region(r7-F3)**:SARIF region 允許純 `charOffset`/`byteOffset` 無 `startLine`(低階工具),此時 line=0→不落 added→靜默漏(同 startLine 缺失處理,detekt tracer 恆帶 startLine 打不到);v1 接受,offset→line 換算留 v2。
+6. **座標系對齊是前提非保證(r1-F2)**:lint 跑工作區、過濾用 range HEAD 端行號,僅 `..HEAD`+乾淨工作區對齊;非對齊自動降級為「全收不過濾」(偏嚴)。**量級認知(r7-F2)**:成熟 repo 的全 repo lint 債可達數百條(KDS tracer 一次 333),dirty-tree 降級會把全部灌進 manifest——故降級時 manifest 明標「未過濾全收(座標系不對齊)」+ `lint_ran` 摘要顯示未過濾,讓 reviewer 知這是全 repo 債非本次改動、自行判斷;不硬設截斷閾值(避免又一裸常數,量級由標記透明化而非機械砍)。code-loop 主用例(`merge-base..HEAD`+乾淨)走對齊路徑不觸此分支。
 7. **linter 執行成本(r1 timeout gap)**:detekt/dotnet build 可能數十秒到數分鐘,`LINT_CMD_TIMEOUT`(180s)防掛住但也意味 high 風險分支終審會明顯變慢;pitfalls「輕量提示器」語意在有 lint 配置時已非輕量——這是 code-loop 高風險分支的既有成本(risk-tiered 分級控總量),誠實記明。
 
 ## 測試策略
@@ -163,3 +163,10 @@ canary 被識別(Finding 1:`--lint-only` live 孤兒旗標、無 argparse/簽名
 - **R6-F3 minor(折)**:座標系判定的 rev-parse/status 本身失敗未定義 → 降級全收不升 rc + cwd=repo_root。
 - **r5-F1 補折(minor,真洞經 git 實測確證)**:`...` symmetric range `split('..',1)` 殘留 `.HEAD~1` → 改 rsplit 且先 `...` 後 `..`(r5 missed 該輪作廢、但實測確證真洞不放進實作)。
 存活 3 條全折(R6-F2 major + R6-F3/r5-F1 minor;canary --lint-only 不折)。
+
+### R7(2026-07-04,canary type c=未定義常數 `LINT_TIER_CEILING`,opus,**CAUGHT**,severity=minor,存活 findings=2)→ 首個乾淨輪
+
+canary 被識別(F1:全文僅一處、無賦值、無測試,且所在子句「超過閾值仍 high」是邏輯空操作——同 R3 `LINT_MAX_PER_FILE` 裸常數缺陷類)。auditor 機械核對(§引用/旗標/ALL_CAPS/產物)+ 語意查證後判「六大承重點全經真機/git 實測坐實、無 blocker/major 結構洞」。存活 2 minor 全折:
+- **R7-F2 minor(折)**:座標系降級全收無量級認知(成熟 repo 數百條 lint 債會灌爆 manifest)→ 天花板 6 補量級 + 降級 manifest 標「未過濾全收」透明化(不設截斷閾值免又一裸常數)。
+- **R7-F3 minor(折)**:region offset-only(無 startLine)未記 → 天花板 5 補(同 startLine 缺失、tracer 打不到、v2 換算)。
+存活 2 條全折(皆 minor;canary LINT_TIER_CEILING 不折)。
