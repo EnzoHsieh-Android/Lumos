@@ -4155,7 +4155,10 @@ def _lint_run_and_parse(cmd, repo_root):
         claims = []
         runs = data.get("runs") or []
         for run in runs:
-            driver_name = run["tool"]["driver"]["name"]
+            # Finding 1: guard run-level structure — malformed run skipped, not crashed
+            driver_name = run.get("tool", {}).get("driver", {}).get("name")
+            if not driver_name:
+                continue
             base = run.get("originalUriBaseIds", {})
             for r in (run.get("results") or []):
                 try:
@@ -4171,8 +4174,11 @@ def _lint_run_and_parse(cmd, repo_root):
                         uri = uri[7:]
                     # URL decode
                     uri = urllib.parse.unquote(uri)
-                    # 轉 repo-relative POSIX 路徑
-                    rel = os.path.relpath(uri, repo_root)
+                    # Finding 2: 只對絕對路徑做 relpath;相對 uri 直接用(已是 repo 相對)
+                    if os.path.isabs(uri):
+                        rel = os.path.relpath(uri, repo_root)
+                    else:
+                        rel = uri
                     rel = rel.replace("\\", "/")
                     start_line = loc.get("region", {}).get("startLine", 0)
                     rule_id = r.get("ruleId", "")

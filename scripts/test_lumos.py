@@ -2613,6 +2613,50 @@ def t_lint_sarif():
     check("sarif: 失敗 ok False", ok2 is False and claims2==[], "")
 
 
+def t_lint_sarif_malformed_run():
+    """Finding 1: 含壞 run(無 tool key)的 SARIF — 壞 run 跳過,好 run claim 仍回傳,不 crash。"""
+    import importlib.util as U, json as J
+    from importlib.machinery import SourceFileLoader
+    spec=U.spec_from_file_location("lm2",GRAPHCTL,loader=SourceFileLoader("lm2",GRAPHCTL)); m=U.module_from_spec(spec); spec.loader.exec_module(m)
+    root=Path(tempfile.mkdtemp(prefix="gctl-lsm-"))
+    sarif={"runs":[
+        # 壞 run:完全沒有 tool 鍵 → 應 skip 而不 crash
+        {"results":[{"ruleId":"BAD","message":{"text":"bad"},"locations":[{"physicalLocation":{
+            "artifactLocation":{"uri":f"file://{root}/bad.kt"},"region":{"startLine":1}}}]}]},
+        # 好 run:正常 driver
+        {"tool":{"driver":{"name":"detekt"}},"results":[
+            {"ruleId":"R1","message":{"text":"good"},"locations":[{"physicalLocation":{
+                "artifactLocation":{"uri":f"file://{root}/app/Good.kt"},"region":{"startLine":7}}}]}
+        ]},
+    ]}
+    sf=root/"mixed.sarif"; sf.write_text(J.dumps(sarif),encoding="utf-8")
+    cmd=f"cp {sf} {{LINT_SARIF_OUT}}"
+    claims, ok = m._lint_run_and_parse(cmd, root)
+    check("sarif malformed run: ok True(有好 run)", ok is True, "")
+    check("sarif malformed run: 僅好 run 的 claim 回傳(=1)", len(claims)==1, str(claims))
+    check("sarif malformed run: claim 來自好 run", claims[0]["source"]=="lint:detekt" and claims[0]["file"]=="app/Good.kt", str(claims))
+
+
+def t_lint_sarif_relative_uri():
+    """Finding 2: SARIF uri 已是 repo-relative(無 file://) → file 直接用,不產 ../.. 遍歷路徑。"""
+    import importlib.util as U, json as J
+    from importlib.machinery import SourceFileLoader
+    spec=U.spec_from_file_location("lm3",GRAPHCTL,loader=SourceFileLoader("lm3",GRAPHCTL)); m=U.module_from_spec(spec); spec.loader.exec_module(m)
+    root=Path(tempfile.mkdtemp(prefix="gctl-lsr-"))
+    # uri 是 repo-relative(沒有 file:// 也沒有絕對路徑前綴)
+    sarif={"runs":[{"tool":{"driver":{"name":"ktlint"}},"results":[
+        {"ruleId":"R9","message":{"text":"rel"},"locations":[{"physicalLocation":{
+            "artifactLocation":{"uri":"app/Y.kt"},"region":{"startLine":3}}}]}
+    ]}]}
+    sf=root/"rel.sarif"; sf.write_text(J.dumps(sarif),encoding="utf-8")
+    cmd=f"cp {sf} {{LINT_SARIF_OUT}}"
+    claims, ok = m._lint_run_and_parse(cmd, root)
+    check("sarif relative uri: ok True", ok is True, "")
+    check("sarif relative uri: 1 claim", len(claims)==1, str(claims))
+    check("sarif relative uri: file=app/Y.kt(非 ../.. 遍歷)", claims[0]["file"]=="app/Y.kt", claims[0].get("file",""))
+    check("sarif relative uri: 無 ../.. 前綴", not claims[0]["file"].startswith(".."), claims[0].get("file",""))
+
+
 def t_pitfalls_diff():
     import json as _json, subprocess as sp
     root = Path(tempfile.mkdtemp(prefix="gctl-pfd-"))
