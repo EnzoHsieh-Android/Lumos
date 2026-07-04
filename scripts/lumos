@@ -4200,6 +4200,40 @@ def _lint_run_and_parse(cmd, repo_root):
             pass
 
 
+def _semver_parse(v):
+    import re
+    s = v.strip()
+    if s[:1].lower() == "v":
+        s = s[1:]
+    parts = s.split(".")
+    if not parts or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+
+def _is_prerelease(v):
+    import re
+    s = v.lower()
+    if "-" in s:
+        return True
+    return re.search(r'(?:\d|[-._])(a|b|c|rc|alpha|beta|dev|pre)\d*(?:$|[-._\d])', s) is not None
+
+
+def _compare_versions(current, latest):
+    if _is_prerelease(current) or _is_prerelease(latest):
+        return ("skip", "prerelease")
+    cu, la = _semver_parse(current), _semver_parse(latest)
+    if cu is None or la is None:
+        return ("skip", "unparseable")
+    if len(cu) != len(la):
+        # Allow major.minor (2-seg) compared to major.minor.patch (3-seg): pad current with 0
+        if len(cu) == 2 and len(la) == 3:
+            cu = cu + (0,)
+        else:
+            return ("skip", "segment-count-mismatch")
+    return ("behind", "") if la > cu else ("current", "")
+
+
 def _pitfall_diff_mode(diff_range, repo_root, as_json):
     """掃 git diff <range> 新增行找代碼形態風險位置。過濾繼承 Check H 全套;line 由 @@ 標頭推導。
     rc 恆 0(提示器非閘)。class 用形態類軸(併發/效能/資源)。"""

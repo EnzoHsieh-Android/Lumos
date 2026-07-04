@@ -2942,6 +2942,33 @@ def t_pitfalls_lint_integration():
     check("pitfalls-lint: 未碰宣告棧 → lint_ran 空", data6.get("lint_ran") == [], str(data6))
 
 
+def t_lint_watch_semver():
+    import importlib.util as U
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    # _semver_parse
+    check("parse 1.23.7", m._semver_parse("1.23.7") == (1,23,7), str(m._semver_parse("1.23.7")))
+    check("parse v 前綴剝除", m._semver_parse("v1.2.3") == (1,2,3), str(m._semver_parse("v1.2.3")))
+    check("parse 非數字段→None", m._semver_parse("1.x.3") is None, str(m._semver_parse("1.x.3")))
+    # _is_prerelease 正例
+    for v in ["1.24.0-RC1","0.5.0b1","2.22.0.dev20260702"]:
+        check(f"prerelease True {v}", m._is_prerelease(v) is True, v)
+    # _is_prerelease 負例(不可假陽性)
+    for v in ["1.24.0","5.0.2.4997","cobra"]:
+        check(f"prerelease False {v}", m._is_prerelease(v) is False, v)
+    # _compare_versions 三態
+    check("behind", m._compare_versions("1.23.7","1.24.0") == ("behind",""), str(m._compare_versions("1.23.7","1.24.0")))
+    check("current(反向)", m._compare_versions("1.24.0","1.23.7")[0] == "current", str(m._compare_versions("1.24.0","1.23.7")))
+    check("current(相等)", m._compare_versions("1.2.3","1.2.3")[0] == "current", "")
+    check("skip unparseable", m._compare_versions("1.x","1.2.3") == ("skip","unparseable"), str(m._compare_versions("1.x","1.2.3")))
+    check("skip prerelease", m._compare_versions("1.0.0","1.1.0-RC1") == ("skip","prerelease"), str(m._compare_versions("1.0.0","1.1.0-RC1")))
+    check("skip 段數不一(calendar)", m._compare_versions("1.23.7","2024.1") == ("skip","segment-count-mismatch"), str(m._compare_versions("1.23.7","2024.1")))
+    check("skip 段數不一(4段maven)", m._compare_versions("5.0.1","5.0.1.3006") == ("skip","segment-count-mismatch"), "")
+    # 數值排序見證(證非字串比較:字串 '3.9' > '3.20.0')
+    check("數值 behind 3.9→3.20.0", m._compare_versions("3.9","3.20.0") == ("behind",""), str(m._compare_versions("3.9","3.20.0")))
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
