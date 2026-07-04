@@ -250,6 +250,16 @@ class TestRequeueUnconverged(unittest.TestCase):
         self.assertEqual(rows[0]["unconverged"], 1)
 
 
+class TestPromptPlaceholders(unittest.TestCase):
+    def test_need_tier_placeholders(self):
+        p = Path(__file__).resolve().parent.parent / "governance/autonomous_loop/orchestrator-prompt.md"
+        t = p.read_text(encoding="utf-8")
+        self.assertIn("__NEED__", t)
+        self.assertIn("__TIER__", t)
+        self.assertNotIn("--need 2 --gate", t)   # 防硬編回歸
+        self.assertIn("tier_escalated", t)        # 輸出契約含 escalate 欄
+
+
 class TestDifficulty(unittest.TestCase):
     def setUp(self):
         from autonomous_loop import difficulty
