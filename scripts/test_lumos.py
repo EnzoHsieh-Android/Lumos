@@ -3308,6 +3308,36 @@ def t_compose_metrics_cli():
     check("壞宣告 rc2", r2.returncode==2, f"rc={r2.returncode}")
 
 
+def t_compose_metrics_audit():
+    import subprocess as sp, json, tempfile
+    from pathlib import Path
+    root = Path(tempfile.mkdtemp(prefix="gctl-cmaudit-"))
+    (root/".lumos").mkdir()
+    md = root/"app"/"m"; rd = root/"app"/"r"; md.mkdir(parents=True); rd.mkdir(parents=True)
+    (root/".lumos"/"compose-metrics.json").write_text(json.dumps(
+        {"modules":[{"name":"app","metrics_dir":"app/m","reports_dir":"app/r"}]}), encoding="utf-8")
+    (md/"app_release-module.json").write_text(json.dumps(
+        {"skippableComposables":8,"restartableComposables":10,"totalComposables":20,
+         "knownUnstableArguments":5,"inferredUnstableClasses":2}), encoding="utf-8")
+    (rd/"app_release-composables.csv").write_text(
+        "package,name,composable,skippable,restartable,readonly,inline,isLambda,hasDefaults,defaultsGroup,groups,calls,\n"
+        "com.a.Foo,Foo,1,0,1,0,0,0,0,0,1,1,\n"
+        "com.a.Bar,Bar,1,0,1,0,0,0,0,0,1,1,\n"
+        "com.a.Ok,Ok,1,1,1,0,0,0,0,0,1,1,\n", encoding="utf-8")
+    (rd/"app_release-composables.txt").write_text(
+        "restartable fun Foo(\n  unstable vm: Baz\n)\nrestartable skippable fun Ok()\n", encoding="utf-8")
+    # audit: 無視 baseline(不存在也照列)→ inventory 含全部 non-skippable(Foo+Bar,不含 Ok)
+    r = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--audit","--json"],
+               capture_output=True,text=True)
+    check("audit rc0", r.returncode==0, r.stderr)
+    d = json.loads(r.stdout)
+    names = sorted(x["name"] for x in d["inventory"])
+    check("audit inventory = 全部 non-skippable(無視 baseline)", names==["com.a.Bar","com.a.Foo"], str(names))
+    foo = [x for x in d["inventory"] if x["name"]=="com.a.Foo"][0]
+    check("audit unstable_params 附上", foo["unstable_params"]==["vm: Baz"], str(foo))
+    check("audit aggregate", d["aggregate"]["app"]["skippableComposables"]==8, str(d.get("aggregate")))
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

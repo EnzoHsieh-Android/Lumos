@@ -4489,8 +4489,9 @@ def _compose_diff(module, baseline_mod, cur_agg, cur_non_skippable, fqn_to_name,
     return regs
 
 
-def _compose_metrics_mode(repo, as_json, update_baseline):
+def _compose_metrics_mode(repo, as_json, update_baseline, audit=False):
     """lumos compose-metrics: 讀 .lumos/compose-metrics.json、逐模組比對 baseline、輸出回歸 manifest。
+    --audit: 無視 baseline、盤點當下全部 non-skippable composable(初次採用/現況全景)。
     rc 0 = 成功(含回歸/baseline 缺失); rc 2 = config 格式錯誤。
     """
     import json, glob as _glob, os
@@ -4556,6 +4557,33 @@ def _compose_metrics_mode(repo, as_json, update_baseline):
 
         non_skippable_fqns, fqn_to_name, unstable_map = _compose_read_composables(reports_dir, prefix)
         parsed.append((name, mod, non_skippable_fqns, fqn_to_name, unstable_map))
+
+    if audit:
+        # 盤點模式:無視 baseline,列出當下全部 non-skippable composable + 各模組聚合現況
+        inventory = []
+        aggregate = {}
+        for (name, mod, non_skippable_fqns, fqn_to_name, unstable_map) in parsed:
+            aggregate[name] = _agg_subset(mod)
+            for fqn in sorted(non_skippable_fqns):
+                bare = fqn_to_name.get(fqn, "")
+                inventory.append({"module": name, "name": fqn,
+                                  "unstable_params": unstable_map.get(bare, [])})
+        if as_json:
+            print(json.dumps({"inventory": inventory, "aggregate": aggregate,
+                              "checked_modules": len(parsed), "failed": failed}, ensure_ascii=False))
+        else:
+            print(f"{len(inventory)} non-skippable composables (audit, modules: {len(parsed)})")
+            for it in inventory:
+                reason = ("  ← unstable: " + "; ".join(it["unstable_params"])) if it["unstable_params"] else ""
+                print(f"  [non-skippable] {it['module']}/{it['name']}{reason}")
+            for name, agg in aggregate.items():
+                tot = agg.get("totalComposables", 0)
+                sk = agg.get("skippableComposables", 0)
+                print(f"  [{name}] skippable {sk}/{tot}, knownUnstableArgs {agg.get('knownUnstableArguments',0)}, "
+                      f"inferredUnstableClasses {agg.get('inferredUnstableClasses',0)}")
+            if failed:
+                print(f"notice: {len(failed)} module(s) failed to parse")
+        return 0
 
     if update_baseline:
         if not parsed:
@@ -5116,6 +5144,7 @@ def main():
     p.add_argument("--repo", dest="compose_metrics_repo", default=".", help="repo root(含 .lumos/compose-metrics.json 的資料夾,預設 .)")
     p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON manifest")
     p.add_argument("--update-baseline", action="store_true", help="以現況更新 baseline(跳過解析失敗模組)")
+    p.add_argument("--audit", action="store_true", help="無視 baseline,盤點當下全部 non-skippable composable(初次採用/現況全景)")
 
     args = ap.parse_args()
 
@@ -5146,7 +5175,7 @@ def main():
     if args.cmd == "lint-watch":
         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
     if args.cmd == "compose-metrics":
-        return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline)
+        return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline, args.audit)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():
