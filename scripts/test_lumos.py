@@ -2519,6 +2519,33 @@ def t_anchor():
     check("anchor: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
 
 
+def t_lint_aligned():
+    import subprocess as sp
+    import importlib.util as U
+    from importlib.machinery import SourceFileLoader
+    root = Path(tempfile.mkdtemp(prefix="gctl-la-"))
+    def git(*a): sp.run(["git",*a],cwd=root,capture_output=True)
+    git("init"); git("config","user.email","t@t"); git("config","user.name","t")
+    (root/"a.kt").write_text("l1\n",encoding="utf-8")
+    git("add","-A"); git("-c","user.email=t@t","-c","user.name=t","commit","-m","c1")
+    (root/"a.kt").write_text("l1\nl2\n",encoding="utf-8")
+    git("add","-A"); git("-c","user.email=t@t","-c","user.name=t","commit","-m","c2")
+    # lumos 無 .py 副檔名 → spec_from_file_location 推不出 loader,顯式給 SourceFileLoader
+    spec=U.spec_from_file_location("lm",GRAPHCTL,loader=SourceFileLoader("lm",GRAPHCTL))
+    m=U.module_from_spec(spec); spec.loader.exec_module(m)
+    # added 集合:c2 的 +l2 在第 2 行
+    diff=sp.run(["git","diff","-U3","HEAD~1..HEAD"],cwd=root,capture_output=True,text=True).stdout
+    added=m._diff_added_lines(diff)
+    check("added: a.kt 第2行", added.get("a.kt")=={2}, str(added))
+    # 對齊:乾淨 ..HEAD → True
+    check("aligned: 乾淨 ..HEAD True", m._lint_aligned("HEAD~1..HEAD", root) is True, "")
+    # 對齊:... symmetric split 不炸(右端 rsplit)
+    check("aligned: ...HEAD 不炸", isinstance(m._lint_aligned("HEAD~1...HEAD", root), bool), "")
+    # dirty tree → False
+    (root/"a.kt").write_text("l1\nl2\nDIRTY\n",encoding="utf-8")
+    check("aligned: dirty False", m._lint_aligned("HEAD~1..HEAD", root) is False, "")
+
+
 def t_pitfalls_diff():
     import json as _json, subprocess as sp
     root = Path(tempfile.mkdtemp(prefix="gctl-pfd-"))
