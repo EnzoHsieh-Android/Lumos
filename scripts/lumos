@@ -4245,12 +4245,64 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json):
                                    "pattern": pat.pattern, "question": q})
                     break
         new_ln += 1                           # 新增行推進新檔行號
-    tier = "high" if claims else "standard"
-    if as_json:
-        print(json.dumps({"claims": claims, "tier": tier}, ensure_ascii=False))
+
+    # ── Task 4: lint 整合 ─────────────────────────────────────────────────
+    config = _lint_load_config(repo_root)
+    if config is None:
+        # fallback: 無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
+        tier = "high" if claims else "standard"
+        if as_json:
+            print(json.dumps({"claims": claims, "tier": tier}, ensure_ascii=False))
+        else:
+            for c in claims:
+                print(f"  {c['file']}:{c['line']} [{c['class']}] {c['question']}")
+            print(f"tier: {tier}")
+        return 0
+
+    # 有 config: 補 source 到 regex claims
+    for c in claims:
+        c["source"] = "pitfalls-builtin"
+
+    cmds = _lint_stacks_for_diff(added, config)
+    aligned = _lint_aligned(diff_range, repo_root)
+    lint_ran = []
+    lint_skipped = []
+    lint_claims = []
+
+    for cmd in cmds:
+        lc, ok = _lint_run_and_parse(cmd, repo_root)
+        if ok:
+            lint_ran.append(cmd)
+            lint_claims.extend(lc)
+        else:
+            lint_skipped.append(cmd)
+
+    # 過濾 lint claims
+    filtered_marker = None
+    if aligned:
+        lint_claims = [
+            c for c in lint_claims
+            if c["line"] in added.get(c["file"], set())
+        ]
     else:
-        for c in claims:
-            print(f"  {c['file']}:{c['line']} [{c['class']}] {c['question']}")
+        filtered_marker = False  # 未對齊 → 全收 + 標記
+
+    all_claims = lint_claims + claims
+    tier = "high" if all_claims else "standard"
+
+    if as_json:
+        out = {"claims": all_claims, "tier": tier,
+               "lint_ran": lint_ran, "lint_skipped": lint_skipped}
+        if filtered_marker is not None:
+            out["filtered"] = filtered_marker
+        print(json.dumps(out, ensure_ascii=False))
+    else:
+        for c in all_claims:
+            src = c.get("source", "")
+            if src.startswith("lint:"):
+                print(f"  {c['file']}:{c['line']} [{src}] {c.get('message','')}")
+            else:
+                print(f"  {c['file']}:{c['line']} [{c.get('class','')}] {c.get('question','')}")
         print(f"tier: {tier}")
     return 0
 

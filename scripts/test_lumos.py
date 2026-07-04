@@ -2742,6 +2742,206 @@ def t_pitfalls_spec():
     check("pitfalls: md 不存在 rc 2", r.returncode == 2, f"rc={r.returncode}")
 
 
+def t_pitfalls_lint_integration():
+    """Task 4: _pitfall_diff_mode 尾段整合——lint claims 合併/過濾/tier/fallback。"""
+    import json as _json
+    import subprocess as sp
+    import sys as _sys
+
+    # ── 共用 git fixture 建立 helper ──────────────────────────────────────
+    def make_repo():
+        root = Path(tempfile.mkdtemp(prefix="gctl-pli-"))
+        def git(*a):
+            sp.run(["git", *a], cwd=root, capture_output=True)
+        git("init")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        return root, git
+
+    def commit_file(root, git, name, content):
+        (root / name).write_text(content, encoding="utf-8")
+        git("add", "-A")
+        git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", f"add {name}")
+
+    # 寫假 linter 腳本到臨時目錄,避免 shell 引號問題
+    helper_dir = Path(tempfile.mkdtemp(prefix="gctl-pli-helper-"))
+
+    def make_linter(name, sarif_dict):
+        """生成 fake linter 腳本:把 sarif 寫到 argv[1]"""
+        sarif_json = _json.dumps(sarif_dict)
+        script_path = helper_dir / name
+        script_path.write_text(
+            "import sys, json\n"
+            f"data = {repr(sarif_json)}\n"
+            "open(sys.argv[1], 'w').write(data)\n",
+            encoding="utf-8",
+        )
+        return f"{_sys.executable} {script_path} {{LINT_SARIF_OUT}}"
+
+    # SARIF 含兩個 finding: line 2 (在 diff-added) + line 99 (不在 diff-added)
+    sarif_multi_dict = {
+        "runs": [{
+            "tool": {"driver": {"name": "FakeLint"}},
+            "originalUriBaseIds": {},
+            "results": [
+                {
+                    "ruleId": "FAKE001",
+                    "message": {"text": "fake warning line 2"},
+                    "locations": [{"physicalLocation": {
+                        "artifactLocation": {"uri": "base.kt"},
+                        "region": {"startLine": 2},
+                    }}]
+                },
+                {
+                    "ruleId": "FAKE002",
+                    "message": {"text": "fake warning line 99"},
+                    "locations": [{"physicalLocation": {
+                        "artifactLocation": {"uri": "base.kt"},
+                        "region": {"startLine": 99},
+                    }}]
+                },
+            ]
+        }]
+    }
+    fake_cmd = make_linter("fakelint_multi.py", sarif_multi_dict)
+
+    # ── Case 1+2: config 存在, aligned diff ──────────────────────────────
+    # base.kt: 第 1 行舊, 第 2 行新增(含 requests.get(→regex 命中), 第 3 行新增
+    # diff HEAD~1..HEAD 新增行 = {2, 3}
+    # .lumos/lint.json 在 init commit 提交,保持 dirty tree 清空 → aligned=True
+    root, git = make_repo()
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "lint.json").write_text(_json.dumps({"kt": [fake_cmd]}), encoding="utf-8")
+    commit_file(root, git, "base.kt", "// base\n")  # 含 .lumos 一起提交
+    (root / "base.kt").write_text(
+        "// base\n"
+        "    val r = requests.get('http://x')\n"
+        "    val x = 1\n",
+        encoding="utf-8",
+    )
+    git("add", "-A")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add kt code")
+
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    check("pitfalls-lint: rc 0", r.returncode == 0, f"rc={r.returncode}\n{r.stderr}")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+
+    sources = [c.get("source", "") for c in data["claims"]]
+    # Case 1: 兩種 source 都在
+    check("pitfalls-lint: lint source 出現(lint:FakeLint)",
+          any("lint:FakeLint" in s for s in sources), str(data))
+    check("pitfalls-lint: regex source 出現(pitfalls-builtin)",
+          any(s == "pitfalls-builtin" for s in sources), str(data))
+
+    # Case 2: aligned → line 2 保留, line 99 過濾掉
+    lint_lines = [c["line"] for c in data["claims"] if "lint:" in c.get("source", "")]
+    check("pitfalls-lint: aligned 過濾 line 2 保留", 2 in lint_lines, f"lint_lines={lint_lines}")
+    check("pitfalls-lint: aligned 過濾 line 99 剔除", 99 not in lint_lines, f"lint_lines={lint_lines}")
+
+    # lint_ran 有記錄 cmd
+    check("pitfalls-lint: lint_ran 非空", bool(data.get("lint_ran")), str(data))
+    # tier high(有 claims)
+    check("pitfalls-lint: tier high", data["tier"] == "high", str(data))
+
+    # ── Case 3: dirty tree (unaligned) → 全收 + filtered:false ──────────
+    root3, git3 = make_repo()
+    commit_file(root3, git3, "base.kt", "// base\n")
+    (root3 / "base.kt").write_text(
+        "// base\n"
+        "    val r = requests.get('http://x')\n",
+        encoding="utf-8",
+    )
+    git3("add", "-A")
+    git3("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add kt")
+
+    # 製造 dirty tree: 新增未 commit 的改動 → _lint_aligned 回 False
+    (root3 / "dirty_untracked.kt").write_text("// dirty\n", encoding="utf-8")
+
+    sarif_line99_dict = {
+        "runs": [{
+            "tool": {"driver": {"name": "FakeLint"}},
+            "originalUriBaseIds": {},
+            "results": [{
+                "ruleId": "FAKE001",
+                "message": {"text": "fake warning line 99"},
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": "base.kt"},
+                    "region": {"startLine": 99},
+                }}]
+            }]
+        }]
+    }
+    fake_dirty_cmd = make_linter("fakelint_dirty.py", sarif_line99_dict)
+    (root3 / ".lumos").mkdir()
+    (root3 / ".lumos" / "lint.json").write_text(
+        _json.dumps({"kt": [fake_dirty_cmd]}), encoding="utf-8"
+    )
+
+    r3 = run(root3, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root3), "--json")
+    data3 = _json.loads([l for l in r3.stdout.splitlines() if l.strip().startswith("{")][0])
+    lint_lines3 = [c["line"] for c in data3["claims"] if "lint:" in c.get("source", "")]
+    check("pitfalls-lint: unaligned line 99 保留(全收)",
+          99 in lint_lines3, f"lint_lines3={lint_lines3} data3={data3}")
+    check("pitfalls-lint: unaligned filtered:false 標記",
+          data3.get("filtered") is False, str(data3))
+
+    # ── Case 4: 無 .lumos/lint.json → regex-only, 無 lint_ran ───────────
+    root4, git4 = make_repo()
+    commit_file(root4, git4, "app.py", "x = 1\n")
+    (root4 / "app.py").write_text(
+        "import requests\n"
+        "requests.post('http://x')\n",
+        encoding="utf-8",
+    )
+    git4("add", "-A")
+    git4("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c2")
+
+    r4 = run(root4, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root4), "--json")
+    data4 = _json.loads([l for l in r4.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls-lint: 無 config → 無 lint_ran key", "lint_ran" not in data4, str(data4))
+    check("pitfalls-lint: 無 config → regex claims 存在", len(data4.get("claims", [])) > 0, str(data4))
+
+    # ── Case 5: lint cmd 失敗 → lint_skipped 記錄, rc 0, regex claims 在 ─
+    root5, git5 = make_repo()
+    commit_file(root5, git5, "base.kt", "// base\n")
+    (root5 / "base.kt").write_text(
+        "// base\n"
+        "    val r = requests.get('http://x')\n",
+        encoding="utf-8",
+    )
+    git5("add", "-A")
+    git5("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add kt")
+
+    fail_script = helper_dir / "fakelint_fail.py"
+    fail_script.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+    fail_cmd = f"{_sys.executable} {fail_script} {{LINT_SARIF_OUT}}"
+    (root5 / ".lumos").mkdir()
+    (root5 / ".lumos" / "lint.json").write_text(
+        _json.dumps({"kt": [fail_cmd]}), encoding="utf-8"
+    )
+
+    r5 = run(root5, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root5), "--json")
+    check("pitfalls-lint: cmd 失敗 rc 0", r5.returncode == 0, f"rc={r5.returncode}\n{r5.stderr}")
+    data5 = _json.loads([l for l in r5.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls-lint: cmd 失敗 → lint_skipped 有記錄", bool(data5.get("lint_skipped")), str(data5))
+    check("pitfalls-lint: cmd 失敗 → regex claims 仍在", len(data5.get("claims", [])) > 0, str(data5))
+
+    # ── Case 6: diff 未碰宣告棧 → lint_ran 空 ────────────────────────────
+    root6, git6 = make_repo()
+    commit_file(root6, git6, "readme.txt", "hello\n")
+    (root6 / "readme.txt").write_text("hello world\n", encoding="utf-8")
+    git6("add", "-A")
+    git6("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "update txt")
+
+    # config 只宣告 kt,但 diff 是 txt
+    (root6 / ".lumos").mkdir()
+    (root6 / ".lumos" / "lint.json").write_text(_json.dumps({"kt": [fake_cmd]}), encoding="utf-8")
+
+    r6 = run(root6, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root6), "--json")
+    data6 = _json.loads([l for l in r6.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls-lint: 未碰宣告棧 → lint_ran 空", data6.get("lint_ran") == [], str(data6))
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
