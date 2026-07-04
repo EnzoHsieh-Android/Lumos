@@ -1,0 +1,48 @@
+---
+type: system
+status: done
+created: 2026-07-04
+updated: 2026-07-04
+tags:
+  - type/system
+  - status/done
+verified_by:
+  - "[[Verification/2026-07-04_pitfalls-code-loop]]"
+summary: |-
+  FLOW:pitfalls spec 模式(剝除對齊 assess_spec+防呆→掃 PITFALL_CLASSES 四類→印通用3問+命中類追問)｜--check(命中類且無「## 實務隱患」節→rc1)｜--diff(掃新增行 Check H 骨架+代碼形態 pattern→manifest{file,line,class,pattern,question}+尾行 tier;line 由 @@ 推導;rc 恆0)→ tier high 觸發 lumos-code-loop 終審對抗審(bug canary 四型+辯方+K-streak∧G2 收斂,loop status --gate 無 --spec G1 skip)
+  KEY:兩層隱患兩錨點——設計決策級(冪等鍵/重試策略)錨 spec 層 pitfalls --check;代碼級(N+1/race/資源洩漏)錨終審 --diff+code-loop。補審計火力頭重腳輕(spec 有整套對抗機器、代碼原只兩道普通眼)
+  KEY:三道防污染(不可違反)——真代碼永不含(fix 錨真 diff file:line、canary hunk 不在真 diff)｜低耦合植入(canary 座標在真改動集外=pillar-1 機械前提)｜溯源排除(含間接聯想幻影,未顯式引用亦排;偏多排)
+  KEY:PITFALL_CLASSES 四類名 ≡ difficulty.RISK_CLASSES、_PITFALL_BLACKLIST ≡ difficulty._BLACKLIST——漂移守衛落 test_autonomous_loop.py(toolchain-only、非 vendored);詞表/pattern 表自帶 scripts/lumos(difficulty.py 不 vendored)
+  KEY:diff class 用代碼形態類軸(併發/效能/資源)非四業務類;pattern 去重疊(SELECT→效能 N+1、INSERT/UPDATE/DELETE→併發交易);過濾繼承 Check H 全套(skip .md/.txt/.rst+測試檔+註解行)
+  KEY:誠實天花板——pattern 提示器非偵測器(單行掃描,跨行語境小行窗啟發為限)｜canary 校準+溯源排除靠自律｜--check 只驗節存在不驗內容｜mutation 冒煙抽樣非覆蓋｜code-loop 少一道 G1(--spec 可選、G1 skip)｜事故語料進圖譜留 v2
+  DEP:[[risk-tiered-review]](分級哲學延伸到 diff 層)｜[[convergence-evidence-gate]](gate --spec 改可選)｜[[lumos-refcheck]]｜doctor Check H(diff 掃描骨架)
+  TEST:t_pitfalls_spec(9)+t_pitfalls_diff(11,含行號值+併發寫入)+TestPitfallsDrift(2,類名+黑名單)+t_loop_gate 案14翻契約+t_loop_gate_no_spec;374 passed
+  VERIFY:[[2026-07-04_pitfalls-code-loop]]
+decisions:
+  - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
+    context: 效能/併發主戰場在業務專案、治理面在 loop,擇一都缺半;純 prompt 違反 mechanical-not-motivational;全分支跑 code-loop 日常太貴
+    why_chosen: 每軸都選機械可驗+分級控總量;bug canary 驗審查層醒著、mutation 驗測試層守著,兩者正交
+    decided: 2026-07-04
+    valid: true
+  - content: 代碼 canary 用三道防污染(真代碼永不含+低耦合植入+溯源排除),不採純 mutation
+    context: 使用者質疑代碼 canary 污染風險比 spec 嚴重(假 hunk 改變語意、reviewer 推導衍生幻影 findings)
+    why_chosen: 需醒著訊號(無則蓋章 reviewer 連 2 LGTM 空轉收斂,r9 opus 都漏抓);mutation 只驗測試層抓不到審查層敷衍;三道防污染把污染封到「必留可見痕跡」
+    decided: 2026-07-04
+    valid: true
+---
+# pitfalls-code-loop
+
+`lumos pitfalls` 三模式 + `lumos-code-loop` skill——**實務隱患意識 + 代碼審計對齊**。
+
+## 動機
+AI 開發仰賴模型自決實作方式、只需通過最終驗證,但實作選型的實務隱患(效能/冪等/併發/資源)沒人逼它回答;且審計火力頭重腳輕——spec 有 canary/辯方/跨家族/證據閘一整套對抗機器,代碼只有 task reviewer + 終審兩道普通眼睛。
+
+## 組件
+- `scripts/lumos` `cmd_pitfalls`:三模式(spec 提問 / --check 缺節擋 / --diff 代碼風險 manifest+tier),vault-free、詞表自帶。
+- `cmd_loop_status --gate` 的 `--spec` 改可選(缺 → G1 skip;供 code-loop 吃 G2 枯竭錨)。
+- `skills/lumos-code-loop/SKILL.md`:對抗代碼審(bug canary 四型+三道防污染+辯方+證據閘+mutation 冒煙),tier high 觸發。
+- 接線:orchestrator-prompt(步驟1節名+2.8 pitfalls --check)/graph-discipline(終審前 --diff→code-loop)/design-loop skill(審前 --check)/project-notes(指令表+gate 契約)。
+
+## 相關
+- 設計稿:`docs/design/2026-07-04-pitfalls-code-loop.md`(design-loop 8 輪 K=3 收斂;qwen major 機械反證後 endorsed-after-refute)。
+- 實作計畫:`docs/superpowers/plans/2026-07-04-pitfalls-code-loop.md`。
