@@ -49,10 +49,11 @@
 ```
 
 - `name`:人可讀識別(通知/候選顯示用)。
-- `registry`:`<type>:<coord>`。type ∈ `{pypi, npm, maven, github}`:
+- `registry`:`<type>:<coord>`。type ∈ `{pypi, npm, maven, google-maven, github}`:
   - `pypi:<pkg>` → `GET https://pypi.org/pypi/<pkg>/json` → `info.version`。**注意 `info.version` 可能是 PEP 440 prerelease**(如 dev/nightly 通道無穩定版時),見〈prerelease 處理〉。
   - `npm:<pkg>` → `GET https://registry.npmjs.org/<pkg>/latest` → `version`(latest dist-tag = 最新穩定)。
   - `maven:<group>:<artifact>` → 查 Solr,**q 參數值必須 `urllib.parse.quote`**(雙引號→`%22`):`https://search.maven.org/solrsearch/select?q=` + `quote('g:"<group>" AND a:"<artifact>"')` + `&core=gav&sort=timestamp+desc&rows=20&wt=json` → 取 `data["response"]["docs"]`(**完整 JSON 巢狀在 `response` 下,非頂層 `docs`**,r2 認)每筆 `["v"]`、過濾 `_is_prerelease` 者 → **以 `_semver_parse` tuple 為 key 取數值最大**(**嚴禁 `max()` 字串比較**——r2 辯方實測 commons-lang3 字串 `max` 回 `3.9` 而非真 latest `3.20.0`)。**未編碼的字面 `"` 會被 Solr 回 HTTP 400**(r1 辯方實測);`sort=timestamp+desc` 確保高版本數 artifact 的 latest 在 rows 窗內(r2 辯方:預設 relevance 排序 + 字串 max 才是病灶)。
+  - `google-maven:<group>:<artifact>` → **Google Maven(dl.google.com),非 Maven Central**(v1.1 補;KDS 真機坐實 `maven:` 對 AGP 靜默假陰性)。`GET https://dl.google.com/dl/android/maven2/<group 以 . 換 />/<artifact>/maven-metadata.xml`(**回 XML 非 JSON**,需 `xml.etree.ElementTree` + 新 `_http_get_text` 抓取層)→ 迭代 `<versions><version>` 全清單、過濾 `_is_prerelease` 與 `_semver_parse` None、**數值 tuple max**。**⚠ 陷阱**:`<latest>`/`<release>` tag **可能是 prerelease**(真機:AGP `<latest>`=`9.4.0-alpha03`)——**嚴禁直接用 `<latest>`**,必須走 versions 清單過濾後取數值 max(真機:AGP 穩定 max=`9.2.1`)。過濾後空 → `(None,"no stable version")`。適用 AGP / AndroidX / 多數 Google-hosted artifact。
   - `github:<owner>/<repo>` → `GET https://api.github.com/repos/<owner>/<repo>/releases/latest` → `tag_name`(GitHub `/latest` 已排除 prerelease/draft;剝前綴 `v`)。
 - `current`:專案目前鎖定版。**必須與該 registry 的版本格式同方案、同精度**(段數一致——見〈semver 比較〉的等段數守衛);人放行升級後手動 bump 此欄。
 
@@ -109,6 +110,7 @@ prerelease 過濾在 `_registry_latest` 內做(回 `(None, reason)`),不到 `_co
 ### HTTP 抓取層(可注入,測試不打網路)
 
 - `_http_get_json(url) -> dict|None`:`urllib.request`(timeout 10s、`User-Agent: lumos-lint-watch`);非 2xx / 例外 / 非 JSON → None(fail-open)。
+- `_http_get_text(url) -> str|None`(v1.1,給 google-maven XML 用):同 `_http_get_json` 但回原始文字(decode utf-8)、不 `json.loads`;fixture 模式(`LUMOS_LINT_WATCH_FIXTURE`)下 `fixture.get(url)` 預期是**字串**(XML 文字),JSON 型的 fixture 值仍是 dict——fixture 檔可混存(依 url key 區分)。fail-open 同 `_http_get_json`。
 - `_registry_latest(registry, fetch=_http_get_json) -> (str|None, str|None)`:**回 `(latest, reason)` 二元組**——成功回 `(版本字串, None)`;失敗回 `(None, reason)`。**單一 `None` 承載不了三種失敗原因**(網路失敗 / prerelease / 無穩定版),故用二元組帶 reason(r3 認)。reason ∈ `"registry query failed: <e>"` / `"latest is prerelease"` / `"no stable version"`。呼叫端:`latest` 非 None → 進 `_compare_versions`;None → 該條 `failed[]` 記 reason。
 - **測試 seam(端到端可測的具體機制)**:環境變數 `LUMOS_LINT_WATCH_FIXTURE=<json 檔路徑>` 存在時,`_http_get_json` **不打網路**,改讀該 fixture 檔(內容 = `{url: response_dict}` 映射,依 url 回對應假 response;無對應 key → None)。production 無此環境變數即走真 `urllib`。此 seam 讓 `test_lumos.py` 以 subprocess 跑真 CLI + fixture 驗完整 `--json` 管線(subprocess 無法注入 python 函式,故用環境變數 + 檔案)。
 
@@ -252,3 +254,14 @@ canary 被點出(旗標宣告卻未接進 `_http_get_json`——依規不折)。
 - **#5 minor(折)**:`__main__` 收 rc=2 非 JSON stdin 會 JSONDecodeError → 明定 try/except 印空乾淨退。
 
 **達 cap 收斂判定(誠實結論)**:6 輪 canary **6/6 全 caught**(auditor 全程醒著),但 `lumos loop status --gate` **未 GATE PASS**——K-streak 需連 2 輪 caught+乾淨,而每輪都折了真 finding(無乾淨輪);findings 序列 11→8→5→4→5→4 未枯竭到 ≤1。**根因**:核心機械設計(registry 查詢 / semver / prerelease / 三態 / fixture seam)r4-r6 連 3 輪判乾淨、已收斂;churn 全集中在**治理 shell wrapper 散文**——在設計 spec 裡逐字寫 shell 片段,每個不精確範例都招一條 finding。**建議(護欄「spec 切小」)**:核心視為 design-approved;shell wrapper 屬薄整合層,其正確性應在**實作階段以真 shell 測試**定稿(照 `autonomous-loop.sh` 既有模式),不在散文設計裡硬摳。進實作前由人放行本判定。
+
+## v1.1 addendum:google-maven registry type(2026-07-04,KDS 真機驅動)
+
+**動機**:KDS 真機驗證發現 `maven:` 只查 Maven Central,對 Google-hosted artifact(AGP/AndroidX)靜默假陰性(AGP 8.2.2 誤判「已最新」,因 Central 只剩遠古 2.x)。補 `google-maven:` type 查 Google Maven。
+
+**真機坐實的端點與陷阱**(curl 實測):
+- URL `https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/maven-metadata.xml` → HTTP 200 XML `<metadata><versioning><latest>/<release>/<versions><version>…`。
+- `<latest>`=`<release>`=`9.4.0-alpha03`(**prerelease!** 不可直接用);versions 清單過濾 prerelease 後數值 max = **9.2.1**(真 AGP 穩定 latest)。AGP `8.2.2`→`9.2.1` 正確落後(取代舊 maven: 的假「current」)。
+- 641 versions、105 stable;`xml.etree.ElementTree` + `root.iter("version")` 解析。
+
+**design-loop 判定**:**跳過 canary 設計 loop 並註明**——本項為既有已驗機制(`maven:` 數值 max + prerelease 過濾)的小幅機械延伸,唯一新面是 XML 抓取 + Google Maven URL scheme,且**端點/回應形狀/prerelease 陷阱已 curl 真機坐實**。風險在 code(XML 解析、prerelease-in-`<latest>` 陷阱、fixture-text seam),由**單元測(fixture)+ KDS AGP 真機驗證**接住,非設計散文 canary 審計能加值(見 [[design-loop-completeness-ceiling-shown]] 教訓:機械延伸靠真測而非 canary-prose)。實作走 subagent-driven 保留 reviewer code-quality 閘。
