@@ -3336,6 +3336,13 @@ def t_compose_metrics_audit():
     foo = [x for x in d["inventory"] if x["name"]=="com.a.Foo"][0]
     check("audit unstable_params 附上", foo["unstable_params"]==["vm: Baz"], str(foo))
     check("audit aggregate", d["aggregate"]["app"]["skippableComposables"]==8, str(d.get("aggregate")))
+    check("audit checked_modules/failed 欄位", d["checked_modules"]==1 and d["failed"]==[], str(d))
+    # 缺 config + --audit → audit 形狀(有 inventory 鍵,非 delta 形狀)
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-cmaudit2-"))
+    ra = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root2),"--audit","--json"],
+                capture_output=True,text=True)
+    da = json.loads(ra.stdout)
+    check("缺config+audit → audit 形狀(inventory 鍵)", ra.returncode==0 and "inventory" in da and "regressions" not in da, ra.stdout)
 
 
 def main():
