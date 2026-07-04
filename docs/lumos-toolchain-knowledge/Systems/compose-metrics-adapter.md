@@ -19,6 +19,7 @@ summary: |-
   KEY:退步兩類——new_non_skippable(現況 non-skippable FQN 集合 − baseline 集合,附 unstable_params)+ aggregate(skippable_ratio 下降超 COMPOSE_RATIO_EPS=0.01;knownUnstableArguments/inferredUnstableClasses 任何上升);移除的 composable 不報
   KEY:non-skippable = csv row skippable=="0" and restartable=="1" 收 package(FQN);txt↔csv join 以裸 name 為鍵(csv 平行建 {FQN:裸name});txt 區塊起始=含 "fun <Name>("(涵蓋 col-0 裸 fun、scheme() 夾中間、剝泛型 <...>、空行不斷區塊)
   KEY:--update-baseline 只寫成功解析模組(failed 跳過免毒化)+ 0 模組解析不清空既有 baseline;non_skippable sorted() 寫入;corrupt baseline≠missing(baseline_unreadable 不覆蓋)
+  KEY:--audit 盤點模式——無視 baseline 列出當下全部 non-skippable(+unstable 原因),補 delta-only「初次採用看不到既有問題點」的洞(KDS 真機:audit 列 22 條、delta 在乾淨 baseline 下 0)
   KEY:vault-free(dispatch 置 find_vault 前)、fail-open(模組解析失敗→failed[] 不升 rc)、rc 成功=0(含 regressions)/宣告壞=2;lumos 只讀 metrics 不 build 專案
   DEP:[[lint-version-watch]]
   DEP:[[pitfalls-lint-adapter]]
