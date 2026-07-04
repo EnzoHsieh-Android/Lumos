@@ -63,7 +63,7 @@ printf '\n\n## 要處理的 gap\n%s\n模式:%s\n' "$GAP_JSON" "$MODE" >> "$PROMP
 export ANTHROPIC_API_KEY=""
 export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.config/ai-daily/claude_oauth_token" 2>/dev/null)"
 ORCH_OUT="$LOGDIR/orchestrator-$TODAY.json"
-log "派 orchestrator(claude -p,最多 $MAXR 輪)..."
+log "派 orchestrator(claude -p,最多 $MAXR_EFF 輪)..."
 (cd "$REPO" && claude -p "$(cat "$PROMPT_FILE")" \
   --allowedTools "Read,Edit,Bash,Grep,Glob,Agent" \
   --permission-mode acceptEdits --output-format json) > "$ORCH_OUT" 2>"$LOGDIR/orchestrator-$TODAY.err" || true
@@ -133,6 +133,22 @@ print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json
 [ -n "$CROSS_VERDICT" ] && log "跨家族複核:$CROSS_VERDICT($CROSS_WORST)— $CROSS_SUMMARY"
 
 # ── tier 收檔守衛:不信自報 converged——wrapper 自算 tier、以其 need 重驗 gate ──
+if [ -z "$SPEC" ] || [ ! -f "$SPEC" ]; then
+  log "tier 守衛擋下:converged=True 但 spec_path 空或不存在($SPEC)"
+  MSG="⚠ tier 守衛擋下:自報收斂但 spec_path 無效" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+  RQ="$(echo "$GAP_JSON" | python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import gap_select
+g=json.load(sys.stdin)
+print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+" 2>/dev/null || echo '?')"
+  log "未收斂 gap 處置:$RQ(tier 守衛/spec_path)"
+  exit 0
+fi
 TIER_FINAL="$(cd "$REPO" && python3 -c "
 import sys; sys.path.insert(0,'governance')
 from autonomous_loop import difficulty
