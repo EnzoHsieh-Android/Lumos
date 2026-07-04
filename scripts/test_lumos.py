@@ -3233,6 +3233,44 @@ def t_compose_diff():
     check("移除不報", not any(r["kind"]=="new_non_skippable" for r in regs3), str(regs3))
 
 
+def t_compose_metrics_cli():
+    import subprocess as sp, json, tempfile
+    from pathlib import Path
+    root = Path(tempfile.mkdtemp(prefix="gctl-cmcli-"))
+    (root/".lumos").mkdir()
+    md = root/"app"/"m"; rd = root/"app"/"r"; md.mkdir(parents=True); rd.mkdir(parents=True)
+    (root/".lumos"/"compose-metrics.json").write_text(json.dumps(
+        {"modules":[{"name":"app","metrics_dir":"app/m","reports_dir":"app/r"}]}), encoding="utf-8")
+    def write_metrics(skippable, non_sk_rows):
+        (md/"app_release-module.json").write_text(json.dumps(
+            {"skippableComposables":skippable,"restartableComposables":10,"totalComposables":20,
+             "knownUnstableArguments":5,"inferredUnstableClasses":2}), encoding="utf-8")
+        rows = "package,name,composable,skippable,restartable,readonly,inline,isLambda,hasDefaults,defaultsGroup,groups,calls,\n"
+        for fqn,name in non_sk_rows:
+            rows += f"{fqn},{name},1,0,1,0,0,0,0,0,1,1,\n"
+        (rd/"app_release-composables.csv").write_text(rows, encoding="utf-8")
+        (rd/"app_release-composables.txt").write_text("", encoding="utf-8")
+    write_metrics(10, [("com.a.Foo","Foo")])
+    # baseline 缺 → baseline_missing、rc 0、無 regressions
+    r0 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--json"],capture_output=True,text=True)
+    d0 = json.loads(r0.stdout)
+    check("baseline_missing", r0.returncode==0 and d0["baseline_missing"] is True and d0["regressions"]==[], r0.stdout)
+    # --update-baseline 立基準
+    ru = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--update-baseline"],capture_output=True,text=True)
+    check("update-baseline rc0", ru.returncode==0 and (root/".lumos"/"compose-baseline.json").exists(), ru.stderr)
+    # 新增 non_skippable Bar → 報 new_non_skippable
+    write_metrics(10, [("com.a.Foo","Foo"),("com.a.Bar","Bar")])
+    r1 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--json"],capture_output=True,text=True)
+    d1 = json.loads(r1.stdout)
+    names = [x.get("name") for x in d1["regressions"] if x["kind"]=="new_non_skippable"]
+    check("new_non_skippable Bar", r1.returncode==0 and "com.a.Bar" in names, r1.stdout)
+    check("checked_modules 1", d1["checked_modules"]==1, str(d1))
+    # 壞宣告 → rc 2
+    (root/".lumos"/"compose-metrics.json").write_text('[]', encoding="utf-8")
+    r2 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--json"],capture_output=True,text=True)
+    check("壞宣告 rc2", r2.returncode==2, f"rc={r2.returncode}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

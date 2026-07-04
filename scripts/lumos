@@ -4489,6 +4489,137 @@ def _compose_diff(module, baseline_mod, cur_agg, cur_non_skippable, fqn_to_name,
     return regs
 
 
+def _compose_metrics_mode(repo, as_json, update_baseline):
+    """lumos compose-metrics: 讀 .lumos/compose-metrics.json、逐模組比對 baseline、輸出回歸 manifest。
+    rc 0 = 成功(含回歸/baseline 缺失); rc 2 = config 格式錯誤。
+    """
+    import json, glob as _glob, os
+
+    cfg_path = Path(repo) / ".lumos" / "compose-metrics.json"
+    if not cfg_path.exists():
+        if update_baseline:
+            print("compose-metrics: config 不存在,略過 baseline 更新")
+        else:
+            print(json.dumps({"regressions": [], "checked_modules": 0, "new_modules": [],
+                               "failed": [], "baseline_missing": False}, ensure_ascii=False)
+                  if as_json else "")
+        return 0
+
+    try:
+        with open(cfg_path, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except Exception as e:
+        print(f"ERROR: compose-metrics.json 解析失敗: {e}", file=sys.stderr)
+        return 2
+
+    if not isinstance(cfg, dict) or "modules" not in cfg:
+        print("ERROR: compose-metrics.json 必須是 dict 且含 modules 鍵", file=sys.stderr)
+        return 2
+
+    for entry in cfg["modules"]:
+        if not isinstance(entry, dict) or not all(k in entry for k in ("name", "metrics_dir", "reports_dir")):
+            print("ERROR: compose-metrics.json 每條 module 必須含 name/metrics_dir/reports_dir", file=sys.stderr)
+            return 2
+
+    def _agg_subset(mod):
+        return {k: mod.get(k, 0) for k in ("skippableComposables", "restartableComposables",
+                                            "totalComposables", "knownUnstableArguments",
+                                            "inferredUnstableClasses")}
+
+    failed = []
+    parsed = []  # list of (name, mod, non_skippable_fqns, fqn_to_name, unstable_map)
+
+    for entry in cfg["modules"]:
+        name = entry["name"]
+        metrics_dir = os.path.join(repo, entry["metrics_dir"])
+        reports_dir = os.path.join(repo, entry["reports_dir"])
+
+        # resolve prefix
+        if "file_prefix" in entry:
+            prefix = entry["file_prefix"]
+        else:
+            pattern = os.path.join(metrics_dir, "*-module.json")
+            matches = _glob.glob(pattern)
+            if len(matches) == 0:
+                failed.append({"name": name, "reason": "no *-module.json found in metrics_dir"})
+                continue
+            if len(matches) > 1:
+                failed.append({"name": name, "reason": f"multiple *-module.json found: {matches}"})
+                continue
+            basename = os.path.basename(matches[0])
+            prefix = basename[:-len("-module.json")]
+
+        mod = _compose_read_module(metrics_dir, prefix)
+        if mod is None:
+            failed.append({"name": name, "reason": "module.json not found or unparseable"})
+            continue
+
+        non_skippable_fqns, fqn_to_name, unstable_map = _compose_read_composables(reports_dir, prefix)
+        parsed.append((name, mod, non_skippable_fqns, fqn_to_name, unstable_map))
+
+    if update_baseline:
+        baseline = {}
+        for (name, mod, non_skippable_fqns, fqn_to_name, unstable_map) in parsed:
+            baseline[name] = {
+                "aggregate": _agg_subset(mod),
+                "non_skippable": sorted(non_skippable_fqns),
+            }
+        baseline_path = Path(repo) / ".lumos" / "compose-baseline.json"
+        with open(baseline_path, "w", encoding="utf-8") as fh:
+            json.dump(baseline, fh, indent=2, ensure_ascii=False)
+        n_ok = len(parsed)
+        n_skip = len(failed)
+        print(f"baseline updated ({n_ok} modules, {n_skip} skipped)")
+        return 0
+
+    # normal branch: load baseline
+    baseline_path = Path(repo) / ".lumos" / "compose-baseline.json"
+    baseline_missing = False
+    baseline = {}
+    if not baseline_path.exists():
+        baseline_missing = True
+    else:
+        try:
+            with open(baseline_path, encoding="utf-8") as fh:
+                baseline = json.load(fh)
+        except Exception:
+            baseline_missing = True
+
+    regressions = []
+    checked_modules = 0
+    new_modules = []
+
+    for (name, mod, non_skippable_fqns, fqn_to_name, unstable_map) in parsed:
+        if baseline_missing or name not in baseline:
+            new_modules.append(name)
+            continue
+        cur_agg = _agg_subset(mod)
+        regressions += _compose_diff(name, baseline[name], cur_agg, non_skippable_fqns, fqn_to_name, unstable_map)
+        checked_modules += 1
+
+    if as_json:
+        print(json.dumps({
+            "regressions": regressions,
+            "checked_modules": checked_modules,
+            "new_modules": new_modules,
+            "failed": failed,
+            "baseline_missing": baseline_missing,
+        }, ensure_ascii=False))
+    else:
+        n_reg = len(regressions)
+        print(f"{n_reg} regressions (modules: {checked_modules})")
+        for r in regressions:
+            if r["kind"] == "new_non_skippable":
+                print(f"  [new-non-skippable] {r['module']}/{r['name']}")
+            else:
+                print(f"  [aggregate] {r['module']} {r['metric']} {r['baseline']}→{r['current']}")
+        if baseline_missing:
+            print("notice: baseline not found — run --update-baseline to establish")
+        if new_modules:
+            print(f"notice: new modules (not in baseline): {', '.join(new_modules)}")
+    return 0
+
+
 def _lint_watch_mode(repo_root, as_json):
     """lumos lint-watch: 讀 .lumos/lint-watch.json、逐條查 registry、輸出 manifest。
     rc 0 = 成功(含空清單); rc 2 = config 格式錯誤。
@@ -4961,6 +5092,11 @@ def main():
     p.add_argument("--repo", dest="lint_watch_repo", default=".", help="repo root(含 .lumos/lint-watch.json 的資料夾,預設 .)")
     p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON manifest")
 
+    p = sub.add_parser("compose-metrics", help="Compose 可組合指標回歸掃描(vault-free):讀 .lumos/compose-metrics.json 比對 baseline")
+    p.add_argument("--repo", dest="compose_metrics_repo", default=".", help="repo root(含 .lumos/compose-metrics.json 的資料夾,預設 .)")
+    p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON manifest")
+    p.add_argument("--update-baseline", action="store_true", help="以現況更新 baseline(跳過解析失敗模組)")
+
     args = ap.parse_args()
 
     # install/uninstall/update/bootstrap 不需要 Env(vault),先處理
@@ -4989,6 +5125,8 @@ def main():
         return cmd_anchor_approve(repo=args.anchor_repo, note=args.note, vault=args.vault)
     if args.cmd == "lint-watch":
         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
+    if args.cmd == "compose-metrics":
+        return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():
