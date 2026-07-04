@@ -2588,6 +2588,31 @@ def t_lint_config():
     check("lint_config: 壞 JSON → None", result_bad is None, str(result_bad))
 
 
+def t_lint_sarif():
+    import importlib.util as U, json as J
+    from importlib.machinery import SourceFileLoader
+    spec=U.spec_from_file_location("lm",GRAPHCTL,loader=SourceFileLoader("lm",GRAPHCTL)); m=U.module_from_spec(spec); spec.loader.exec_module(m)
+    root=Path(tempfile.mkdtemp(prefix="gctl-ls-"))
+    # 假 SARIF:絕對 file:// uri + per-run driver + 一筆 location-less
+    sarif={"runs":[{"tool":{"driver":{"name":"detekt"}},"results":[
+        {"ruleId":"R1","message":{"text":"m1"},"locations":[{"physicalLocation":{
+            "artifactLocation":{"uri":f"file://{root}/app/X.kt"},"region":{"startLine":5}}}]},
+        {"ruleId":"R2","message":{"text":"no-loc"}}  # location-less → 跳該筆不連坐
+    ]}]}
+    sf=root/"fake.sarif"; sf.write_text(J.dumps(sarif),encoding="utf-8")
+    cmd=f"cp {sf} {{LINT_SARIF_OUT}}"   # 假 linter=把預存 SARIF 複製到注入路徑
+    claims, ok = m._lint_run_and_parse(cmd, root)
+    check("sarif ok", ok is True, "")
+    check("sarif: 1 claim(location-less 跳)", len(claims)==1, str(claims))
+    c=claims[0]
+    check("sarif: uri 正規化 repo 相對", c["file"]=="app/X.kt", c["file"])
+    check("sarif: source per-run", c["source"]=="lint:detekt", c["source"])
+    check("sarif: line/rule/message", c["line"]==5 and c["rule"]=="R1" and c["message"]=="m1", str(c))
+    # 指令失敗無 SARIF → ok False
+    claims2, ok2 = m._lint_run_and_parse("false", root)
+    check("sarif: 失敗 ok False", ok2 is False and claims2==[], "")
+
+
 def t_pitfalls_diff():
     import json as _json, subprocess as sp
     root = Path(tempfile.mkdtemp(prefix="gctl-pfd-"))

@@ -4009,6 +4009,7 @@ _PITFALL_DIFF_PATTERNS = [
 ]
 _PITFALL_DIFF_SKIP_EXT = {".md", ".txt", ".rst"}
 _PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
+LINT_CMD_TIMEOUT = 180
 
 
 def _diff_added_lines(diff_text):
@@ -4099,6 +4100,98 @@ def _lint_stacks_for_diff(added, config):
                     seen.add(cmd)
                     result.append(cmd)
     return result
+
+
+def _lint_run_and_parse(cmd, repo_root):
+    """執行宣告的 lint 指令並解析 SARIF 輸出為 claims 清單。
+    cmd: 含 {LINT_SARIF_OUT} 佔位符的 shell 指令字串。
+    repo_root: git repo 根目錄(Path 或 str)。
+    回傳 (list[claim], bool)——claim={file,line,source,rule,message};ok=成功產出可解析 SARIF。
+    rc≠0 不算失敗,detekt 等工具有問題時仍輸出有效 SARIF。"""
+    import json
+    import os
+    import shlex
+    import signal
+    import subprocess
+    import tempfile
+    import urllib.parse
+
+    repo_root = str(repo_root)
+    # 生成獨立的臨時檔案路徑
+    fd, temp_path = tempfile.mkstemp(suffix=".sarif", prefix="lumos-lint-")
+    os.close(fd)
+    try:
+        # 注入臨時檔路徑到指令
+        injected_cmd = cmd.replace("{LINT_SARIF_OUT}", shlex.quote(temp_path))
+        # 執行指令:使用 Popen 以便 TimeoutExpired 時能 killpg
+        proc = subprocess.Popen(
+            injected_cmd,
+            shell=True,
+            cwd=repo_root,
+            start_new_session=True,
+        )
+        try:
+            proc.communicate(timeout=LINT_CMD_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            proc.wait()
+            return ([], False)
+        # 讀臨時檔:空或 parse 失敗 → ([], False)
+        try:
+            with open(temp_path, encoding="utf-8") as f:
+                content = f.read()
+        except OSError:
+            return ([], False)
+        if not content.strip():
+            return ([], False)
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            return ([], False)
+        # 解析 SARIF
+        claims = []
+        runs = data.get("runs") or []
+        for run in runs:
+            driver_name = run["tool"]["driver"]["name"]
+            base = run.get("originalUriBaseIds", {})
+            for r in (run.get("results") or []):
+                try:
+                    loc = r["locations"][0]["physicalLocation"]
+                    art_loc = loc["artifactLocation"]
+                    uri = art_loc["uri"]
+                    # uri 正規化:有 uriBaseId 則拼前綴
+                    uri_base_id = art_loc.get("uriBaseId")
+                    if uri_base_id and uri_base_id in base:
+                        uri = base[uri_base_id]["uri"] + uri
+                    # 剝 file:// scheme
+                    if uri.startswith("file://"):
+                        uri = uri[7:]
+                    # URL decode
+                    uri = urllib.parse.unquote(uri)
+                    # 轉 repo-relative POSIX 路徑
+                    rel = os.path.relpath(uri, repo_root)
+                    rel = rel.replace("\\", "/")
+                    start_line = loc.get("region", {}).get("startLine", 0)
+                    rule_id = r.get("ruleId", "")
+                    message_text = (r.get("message") or {}).get("text", "")[:120]
+                    claims.append({
+                        "file": rel,
+                        "line": start_line,
+                        "source": f"lint:{driver_name}",
+                        "rule": rule_id,
+                        "message": message_text,
+                    })
+                except (KeyError, IndexError):
+                    continue
+        return (claims, True)
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
 
 
 def _pitfall_diff_mode(diff_range, repo_root, as_json):
