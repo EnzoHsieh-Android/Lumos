@@ -160,8 +160,9 @@ def t_loop_gate():
     r = run(vault, "loop", "status", "g5")
     check("gate 案13b: g5 無 gate 仍 CONVERGED(舊判準)", r.returncode == 0, r.stdout)
 
-    r = run(vault, "loop", "status", "g3", "--gate", "--repo", str(repo))
-    check("gate 案14: --gate 缺 --spec rc=2", r.returncode == 2, f"rc={r.returncode}")
+    r = run(vault, "loop", "status", "g3", "--need", "2", "--gate", "--repo", str(repo))
+    check("gate 案14(新契約): 缺 --spec → G1 skip,g3 收斂 rc 0",
+          r.returncode == 0 and "skipped" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
 
 
 def t_loop_gate_need3():
@@ -173,6 +174,18 @@ def t_loop_gate_need3():
             "--gate", "--spec", str(spec_ok), "--repo", str(repo))
     check("gate K=3: 僅 2 筆合格輪 rc=1(斷在 K-streak)",
           r.returncode == 1 and "K-streak" in r.stdout, r.stdout)
+
+
+def t_loop_gate_no_spec():
+    vault, repo, _spec_ok, _spec_bad = _mk_gate_fixture()
+    def rec(loop, sev, f):
+        run(vault, "canary", "record", "caught", "--loop", loop, "--severity", sev,
+            "--findings", str(f), expect_rc=0)
+    # 未枯竭 [2,3]:即使 G1 skip,G2 仍擋
+    rec("ns1", "minor", 2); rec("ns1", "minor", 3)
+    r = run(vault, "loop", "status", "ns1", "--need", "2", "--gate", "--repo", str(repo))
+    check("gate no-spec: G1 skip 但 G2 未枯竭 → rc 1",
+          r.returncode == 1 and "skipped" in r.stdout and "G2" in r.stdout, r.stdout)
 
 
 def t_write_lf_roundtrip():
@@ -2504,6 +2517,91 @@ def t_anchor():
     # --repo 解析失敗 → rc=2
     r = run(vault, "anchor", "verify", "--repo", str(root / "nope"))
     check("anchor: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
+
+
+def t_pitfalls_diff():
+    import json as _json, subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-pfd-"))
+    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+    git("init"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    # 新增:無 timeout 的 requests.post(資源類)+ 迴圈內 query(效能類)
+    (root / "app.py").write_text(
+        "import requests\n"
+        "def f(ids):\n"
+        "    requests.post('http://x')\n"
+        "    for i in ids:\n"
+        "        db.execute('SELECT 1')\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c2")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    check("pitfalls --diff: rc 0(提示器)", r.returncode == 0, f"rc={r.returncode}\n{r.stderr}")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    tokens = " ".join(f"{c['pattern']}|{c['class']}" for c in data["claims"])
+    check("pitfalls --diff: 命中無 timeout requests(資源)", "資源" in tokens, r.stdout)
+    check("pitfalls --diff: 命中迴圈內 query(效能)", "效能" in tokens, r.stdout)
+    check("pitfalls --diff: tier high", data["tier"] == "high", r.stdout)
+    check("pitfalls --diff: class 用形態軸非四業務類",
+          all(c["class"] in ("併發", "效能", "資源") for c in data["claims"]), r.stdout)
+    check("pitfalls --diff: 每條有 line", all(isinstance(c["line"], int) for c in data["claims"]), r.stdout)
+    check("pitfalls --diff: requests.post 在第 3 行", any(c["line"] == 3 for c in data["claims"]), r.stdout)
+    check("pitfalls --diff: SELECT 在第 5 行", any(c["line"] == 5 for c in data["claims"]), r.stdout)
+    # 純文檔 diff → tier standard
+    (root / "readme.md").write_text("hello\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "doc")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls --diff: .md skip → tier standard", data["tier"] == "standard", r.stdout)
+    # 測試檔內的 requests.post 不觸發(過濾繼承 _TEST_PAT)
+    (root / "test_app.py").write_text("import requests\nrequests.post('http://y')\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "t")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls --diff: 測試檔 skip → tier standard", data["tier"] == "standard", r.stdout)
+    # 併發寫入案: INSERT → class=併發(證第 6 條不再是死碼)
+    (root / "write_op.py").write_text(
+        "def store(val):\n"
+        "    db.execute('INSERT INTO t VALUES(1)')\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "insert")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls --diff: INSERT → class=併發(第 6 條不死碼)", any(c["class"] == "併發" for c in data["claims"]), r.stdout)
+
+
+def t_pitfalls_spec():
+    root = Path(tempfile.mkdtemp(prefix="gctl-pf-"))
+    (root / ".git").mkdir()
+    # 命中 payment + external-send
+    md_hit = root / "hit.md"
+    md_hit.write_text("# s\n## 目標\n接 stripe 收款後寄送通知。\n## 組件\n扣款流程。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md_hit), "--repo", str(root))
+    check("pitfalls spec: 印通用 3 問", "併發" in r.stdout and "效能" in r.stdout and "資源" in r.stdout, r.stdout)
+    check("pitfalls spec: 命中 payment 追問", "冪等" in r.stdout, r.stdout)
+    check("pitfalls spec: 命中 external-send 追問", "去重" in r.stdout or "重試" in r.stdout, r.stdout)
+    # --check 命中且無節 → rc 1
+    r = run(root, "pitfalls", str(md_hit), "--repo", str(root), "--check")
+    check("pitfalls --check: 命中無節 rc 1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+    # 補節 → rc 0
+    md_ok = root / "ok.md"
+    md_ok.write_text("# s\n## 目標\n接 stripe 收款。\n## 實務隱患\n冪等鍵用訂單號。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md_ok), "--repo", str(root), "--check")
+    check("pitfalls --check: 有節 rc 0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+    # 零命中 → rc 0(無節也不擋)
+    md_clean = root / "clean.md"
+    md_clean.write_text("# s\n## 目標\n重構內部排序,無外部行為。\n## 組件\n拆函數。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md_clean), "--repo", str(root), "--check")
+    check("pitfalls --check: 零命中無節 rc 0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+    check("pitfalls spec: 零命中只印通用問", "冪等" not in r.stdout, r.stdout)
+    # 剝除:風險詞只在黑名單樣板節 → 不觸發
+    md_tmpl = root / "tmpl.md"
+    md_tmpl.write_text("# s\n## 目標\n" + "純內部整理。" * 20 +
+                       "\n## 組件\n" + "改函數命名。" * 20 +
+                       "\n## 審計修正紀錄\nr1 canary 抓到金流 stripe 扣款壞 ref。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md_tmpl), "--repo", str(root), "--check")
+    check("pitfalls 剝除: 風險詞只在審計紀錄節 → --check rc 0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+    # md 不存在 → rc 2
+    r = run(root, "pitfalls", str(root / "ghost.md"), "--repo", str(root))
+    check("pitfalls: md 不存在 rc 2", r.returncode == 2, f"rc={r.returncode}")
 
 
 def main():

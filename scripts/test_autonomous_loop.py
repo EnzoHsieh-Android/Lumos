@@ -369,5 +369,33 @@ class TestDifficulty(unittest.TestCase):
         self.assertEqual(r["tier"], "high")  # 回退全文後命中「金流」
 
 
+class TestPitfallsDrift(unittest.TestCase):
+    def test_pitfall_classes_match_risk_classes(self):
+        import subprocess, json as _json
+        from autonomous_loop import difficulty
+        lumos = str(Path(__file__).resolve().parent / "lumos")
+        # 從 lumos 匯出 PITFALL_CLASSES 類名集合(exec 載入模組層常數)
+        src = Path(lumos).read_text(encoding="utf-8")
+        ns = {}
+        import re as _re
+        m = _re.search(r"^PITFALL_CLASSES = \{.*?^\}", src, _re.S | _re.M)
+        self.assertIsNotNone(m, "PITFALL_CLASSES 未找到")
+        exec("import re\n" + m.group(0), ns)
+        self.assertEqual(set(ns["PITFALL_CLASSES"].keys()), set(difficulty.RISK_CLASSES.keys()),
+                         "pitfalls 類名集合 != difficulty.RISK_CLASSES(漂移)")
+
+    def test_pitfall_blacklist_match(self):
+        from autonomous_loop import difficulty
+        lumos = str(Path(__file__).resolve().parent / "lumos")
+        src = Path(lumos).read_text(encoding="utf-8")
+        import re as _re
+        m = _re.search(r"^_PITFALL_BLACKLIST = \((.*?)\)", src, _re.S | _re.M)
+        self.assertIsNotNone(m)
+        ns = {}
+        exec("_PITFALL_BLACKLIST = (" + m.group(1) + ")", ns)
+        self.assertEqual(set(ns["_PITFALL_BLACKLIST"]), set(difficulty._BLACKLIST),
+                         "pitfalls 黑名單 != difficulty._BLACKLIST(漂移)")
+
+
 if __name__ == "__main__":
     unittest.main()
