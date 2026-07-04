@@ -1,7 +1,7 @@
 # 設計:pitfalls lint 整合(pitfalls-lint-adapter)— `--diff` 從 regex 提示器升級為 lint 整合器
 
 - 日期:2026-07-04
-- 狀態:draft(真機 tracer 已定 3 大不確定性,待最後一輪 design-loop 確認收斂)— 純文字 design-loop 3 輪到頂(r1/r2/r3 連三 major、17 findings 折入,主結構穩;但真機整合細節[SARIF uri 形態/git range rev-parse/detekt SARIF 旗標]每文字化一層又生新縫,真值在真機非文字)→ **轉真機 tracer(KDS 專案)定稿**,同 rot-eval「先 prototype」哲學。
+- 狀態:design-approved(2026-07-04)— design-loop 9 輪 GATE PASS(r7/r8/r9 連 3 caught+minor、K-streak∧G1∧G2 findings[2,2,1]枯竭)+ KDS 真機 tracer 坐實六大承重點 + qwen 跨家族 endorsed-after-refute(其 ≥major 全為 canary 誤讀/已折 finding 當 open,機械反證不成立)。原:純文字 design-loop 到頂 → KDS tracer 定稿(r1/r2/r3 連三 major、17 findings 折入,主結構穩;但真機整合細節[SARIF uri 形態/git range rev-parse/detekt SARIF 旗標]每文字化一層又生新縫,真值在真機非文字)→ **轉真機 tracer(KDS 專案)定稿**,同 rot-eval「先 prototype」哲學。
 - 動機來源:`Projects/pitfalls-lint-integration_計劃` 第 ① 塊(地基)。brainstorm(2026-07-04)收斂:pitfalls 不是規則庫、是提問+整合+接線;通則(ruff S113/SIM115)與偏科(compose-rules/detekt/eslint)社群 linter 已有且 AST 級更準,兩者都該讓給 linter(composition over invention);整合共通格式=SARIF。
 - loop_id:pitfalls-lint-adapter
 - 計劃回指:docs/lumos-toolchain-knowledge/Projects 的 pitfalls-lint-integration_計劃 節點。
@@ -187,3 +187,5 @@ canary 被識別(Finding 1:`--json-compact` live 孤兒旗標、無 argparse/簽
 ## 收斂
 
 **GATE PASS**(2026-07-04):design-loop 9 輪(r1-r4 major、r5 missed 作廢、r6 major、**r7/r8/r9 連 3 輪 caught+minor**)+ KDS 真機 tracer 坐實六大承重點;K-streak 連 3 ∧ G1 引用座標 ∧ G2 findings [2,2,1] 枯竭(單調不增、末輪 1、末步 2→1 降)全過。此塊整合外部工具的邊界複雜度高(location-less/per-command temp/git 失敗/range split/uri 正規化每輪一個真洞),9 輪+tracer 系統性磨平。
+
+**跨家族複核**:qwen worst=major 但逐條機械反證——① §壞引用實為 R1/R5 canary(真檔 refcheck 6 座標全 ok、正文無)② 座標系錯配已折(§④ 降級 + tracer 坐實)③ 其餘 qwen 自標 minor+「已修正/caught」——0 條 ≥major 成立 → endorsed-after-refute 放行(convergence-evidence-gate 計票第三次擋同型 qwen 誤報;佐證 backlog『cross_audit 對長 R 紀錄段易誤讀 canary』gap)。
