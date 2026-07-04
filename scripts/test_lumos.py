@@ -2546,6 +2546,48 @@ def t_lint_aligned():
     check("aligned: dirty False", m._lint_aligned("HEAD~1..HEAD", root) is False, "")
 
 
+def t_lint_config():
+    import importlib.util as U
+    from importlib.machinery import SourceFileLoader
+    # lumos 無 .py 副檔名 → 顯式給 SourceFileLoader
+    spec = U.spec_from_file_location("lm2", GRAPHCTL, loader=SourceFileLoader("lm2", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+
+    root = Path(tempfile.mkdtemp(prefix="gctl-lc-"))
+    lumos_dir = root / ".lumos"
+    lumos_dir.mkdir()
+
+    # Case 1: .kt 命中 → ["cmd1"]
+    lint_json = lumos_dir / "lint.json"
+    lint_json.write_text('{"kt":["cmd1"],"py":["cmd2"]}', encoding="utf-8")
+    config = m._lint_load_config(root)
+    check("lint_config: 讀取 .lumos/lint.json 回 dict", isinstance(config, dict), str(config))
+    # added: a.kt 第 1 行
+    added = {"a.kt": {1}}
+    cmds = m._lint_stacks_for_diff(added, config)
+    check("lint_config: .kt 命中 → [cmd1]", cmds == ["cmd1"], str(cmds))
+
+    # Case 2: 無宣告副檔名 .vue → []
+    added_vue = {"a.vue": {1}}
+    cmds_vue = m._lint_stacks_for_diff(added_vue, config)
+    check("lint_config: .vue 無宣告 → []", cmds_vue == [], str(cmds_vue))
+
+    # Case 3: 無 .lumos/lint.json → _lint_load_config 回 None
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-lc2-"))
+    result = m._lint_load_config(root2)
+    check("lint_config: 無 lint.json → None", result is None, str(result))
+
+    # Case 4: 多檔共享 stack → 去重,不重複 cmd
+    added_multi = {"a.kt": {1}, "b.kt": {2}}
+    cmds_multi = m._lint_stacks_for_diff(added_multi, config)
+    check("lint_config: 多 .kt 共享 stack → 去重 [cmd1]", cmds_multi == ["cmd1"], str(cmds_multi))
+
+    # Case 5: 壞 JSON → None
+    lint_json.write_text("{bad json}", encoding="utf-8")
+    result_bad = m._lint_load_config(root)
+    check("lint_config: 壞 JSON → None", result_bad is None, str(result_bad))
+
+
 def t_pitfalls_diff():
     import json as _json, subprocess as sp
     root = Path(tempfile.mkdtemp(prefix="gctl-pfd-"))
