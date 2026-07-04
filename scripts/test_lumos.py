@@ -3048,6 +3048,15 @@ def t_lint_watch_cli():
     (root2 / ".lumos" / "lint-watch.json").write_text('{"not":"a list"}', encoding="utf-8")
     r3 = sp.run([sys.executable, GRAPHCTL, "lint-watch", "--repo", str(root2), "--json"], capture_output=True, text=True, env=env)
     check("壞清單 rc2", r3.returncode == 2, f"rc={r3.returncode}")
+    # 清單條目缺必填欄位(missing current)→ rc 2
+    root3 = Path(tempfile.mkdtemp(prefix="gctl-lwcli3-"))
+    (root3 / ".lumos").mkdir()
+    (root3 / ".lumos" / "lint-watch.json").write_text(
+        '[{"name":"x","registry":"npm:x"}]', encoding="utf-8"
+    )
+    r4 = sp.run([sys.executable, GRAPHCTL, "lint-watch", "--repo", str(root3), "--json"],
+                capture_output=True, text=True, env=env)
+    check("malformed entry rc2", r4.returncode == 2, f"rc={r4.returncode} stderr={r4.stderr}")
 
 
 def main():
