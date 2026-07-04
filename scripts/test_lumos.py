@@ -2531,6 +2531,8 @@ def t_pitfalls_diff():
     check("pitfalls --diff: class 用形態軸非四業務類",
           all(c["class"] in ("併發", "效能", "資源") for c in data["claims"]), r.stdout)
     check("pitfalls --diff: 每條有 line", all(isinstance(c["line"], int) for c in data["claims"]), r.stdout)
+    check("pitfalls --diff: requests.post 在第 3 行", any(c["line"] == 3 for c in data["claims"]), r.stdout)
+    check("pitfalls --diff: SELECT 在第 5 行", any(c["line"] == 5 for c in data["claims"]), r.stdout)
     # 純文檔 diff → tier standard
     (root / "readme.md").write_text("hello\n", encoding="utf-8")
     git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "doc")
@@ -2543,6 +2545,14 @@ def t_pitfalls_diff():
     r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
     data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
     check("pitfalls --diff: 測試檔 skip → tier standard", data["tier"] == "standard", r.stdout)
+    # 併發寫入案: INSERT → class=併發(證第 6 條不再是死碼)
+    (root / "write_op.py").write_text(
+        "def store(val):\n"
+        "    db.execute('INSERT INTO t VALUES(1)')\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "insert")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls --diff: INSERT → class=併發(第 6 條不死碼)", any(c["class"] == "併發" for c in data["claims"]), r.stdout)
 
 
 def t_pitfalls_spec():
