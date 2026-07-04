@@ -35,3 +35,18 @@ lint-version-watch(pitfalls-lint-integration 第②塊)實作驗證。spec 6 輪
 - 版本比較靠人宣告同方案同精度(清單漂移會漏報);registry 端點語意變會失準。
 - design-loop 未 GATE PASS(核心收斂、shell wrapper 散文 churn 達 cap);shell 以真 shell smoke 定稿而非設計散文摳。
 - test_lumos.py + test_autonomous_loop.py 皆 anchor,merge 後 push 前須 anchor approve。
+
+## KDS 真機驗證(2026-07-04,外部 Android 專案 /Users/enzo/Citrus_KDS)
+對真專案寫 `.lumos/lint-watch.json`(block②)+ `.lumos/lint.json`(block①)實跑,兩塊都端到端可用,並坐實真實世界的邊界行為:
+
+**block ② lint-watch(真 registry 查詢,~3s)**:
+- ✅ **正確**:detekt `1.23.7→1.23.8`、kotlin `1.9.20→2.4.0`(github releases 真值)。
+- 🔴 **真限制(silent false-negative,值得補強)**:`maven:` type 只查 Maven Central(search.maven.org)。**AGP(`com.android.tools.build:gradle`)實際在 Google Maven(dl.google.com)**,Central 只剩遠古 `2.0.0~2.3.0` → lumos 取數值 max 得 `2.3.0` < `8.2.2` → 誤判 **"current"(不是 failed,是靜默說「已最新」)**。對 Android 專案(AGP/AndroidX/多數 Google lib 都在 Google Maven)是重要缺口。**enhancement 候選**:加 `google-maven:` registry type 查 `dl.google.com/dl/android/maven2/.../group-index.xml`,或偵測 Google-hosted group 改走該端點。
+- ⚠️ **compound/非標準版**:hilt `2.49`(2段)vs latest 3段 → `segment-count-mismatch` skip(等段數守衛依設計不猜);ksp `1.9.0-1.0.13`(Kotlin-KSP 複合版、含 `-`)→ 被 `_is_prerelease` 判 `prerelease` skip(`-` 啟發式對複合版誤判)。兩者都是「守衛保守、寧 skip 不假陽性」的誠實代價,但 Android 生態多依賴會因此漏報。
+
+**block ① lint-adapter(detekt SARIF,~1s/檔)**:
+- ✅ **端到端全對**:`.lumos/lint.json` kt 棧 → detekt-cli jar `--report sarif:{LINT_SARIF_OUT}` → SARIF 解析、uri 正規化成 `app/src/.../MainActivity.kt`、per-run driver `lint:detekt`。
+- ✅ **座標系對齊過濾實證**:注入一行髒編輯(未使用 private val + magic number),detekt 抓 8 issue,manifest **只留該 diff-added 行(line 99)的 2 條**、其餘 6 條(非 diff 行)正確過濾掉。lint + regex claim 合併、`source` 區分、`tier:high`、rc 0。
+- 📌 **可攜性註**:KDS 的 `.lumos/lint.json` 指向 `/tmp` detekt jar + 絕對 JBR 路徑(驗證用、不可 commit);真整合應改 detekt gradle plugin 或專案內穩定路徑。
+
+**linter 適配結論(對 Kotlin/Android)**:Detekt ✅(實測)、Android Lint ✅(AGP 8.2.2 內建、可 `--sarif`)、ktlint ✅(SARIF reporter);**Error Prone(javac-only)/ Infer(Kotlin 支援有限)非 Kotlin 專案自然選項**。

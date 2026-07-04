@@ -40,6 +40,8 @@ pitfalls-lint-integration 計劃第②塊。每日排程機械偵測「宣告的
 - 只驗「有沒有新版」,不驗「該不該升」(相容性/破壞性由人審 changelog);不做 per-tool 規則 diff。
 - 版本比較純數字 tuple + 等段數守衛:current 須與 registry 同版本方案、同精度宣告(靠人維護,清單漂移會漏報)。
 - registry 端點語意依賴上游(pypi info.version / github /latest 排除 prerelease 行為);上游改語意會失準(記 valid_under)。
+- **`maven:` type 只查 Maven Central(search.maven.org)——Google-hosted artifact(AGP/AndroidX/多數 Google lib 在 Google Maven `dl.google.com`)查不到真 latest、Central 殘留舊版會誤判 "current"(silent false-negative)。KDS 真機坐實(AGP 8.2.2 誤判已最新)。enhancement 候選:加 `google-maven:` registry type。** 見 [[Verification/2026-07-04_lint-version-watch]] KDS 段。
+- **複合/非標準版**(KSP `1.9.0-1.0.13` 含 `-` 被判 prerelease、hilt `2.49` 2 段與 3 段 latest 段數不符)→ 守衛保守 skip(寧漏報不假陽性);Android 生態多依賴受此影響。
 
 ## design-loop 判定(誠實)
 6 輪 canary 6/6 全 caught,抓修真缺陷(Maven `%22`+字串 max 病灶、PEP440 prerelease、三態、等段數守衛、fixture seam、shell↔python JSON 側效)。**未拿 GATE PASS**:核心機械設計 r4-r6 連 3 輪判乾淨=收斂,churn 全在治理 shell wrapper 散文;判定核心 design-approved、shell 於實作階段真 shell 測試定稿(Task 5 真檔端到端 smoke 通過)。
