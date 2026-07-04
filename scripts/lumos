@@ -1566,17 +1566,9 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None):
             print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
         return rc
 
-    # ── 證據閘(--gate):K-streak(必要)∧ G1 refcheck ∧ G2 發現枯竭 ──
-    if spec is None:
-        print("ERROR: --gate 需同時給 --spec <md檔>", file=sys.stderr)
-        return 2
+    # ── 證據閘(--gate):K-streak(必要)∧ G1 refcheck(--spec 可選)∧ G2 發現枯竭 ──
     repo_root = _anchor_repo_root(repo)
     if repo_root is None:
-        return 2
-    try:
-        text = Path(spec).read_text(encoding="utf-8-sig")
-    except OSError as e:
-        print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
         return 2
     fails = []
     if converged:
@@ -1584,16 +1576,24 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None):
     else:
         print(f"[gate] K-streak(--need {need}): ✗ — 還需 {need - streak} 輪 caught+乾淨(已 {len(rounds)} 輪)")
         fails.append("K-streak")
-    claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
-    bad = [c for c in claims if c["status"] in ("missing", "line_out_of_range")]
-    if bad:
-        print(f"[gate] G1 refcheck(引用座標): ✗ — {len(bad)} 條壞宣稱")
-        for c in bad:
-            loc = f"{c['token']}:{c['line']}" if c["line"] else c["token"]
-            print(f"    {loc}({c['status']})")
-        fails.append("G1")
+    if spec is None:
+        print("[gate] G1 refcheck(引用座標): skipped(無 spec 對象,code-loop 情境)")
     else:
-        print(f"[gate] G1 refcheck(引用座標): ✓ — {len(claims)} 條宣稱全 ok")
+        try:
+            text = Path(spec).read_text(encoding="utf-8-sig")
+        except OSError as e:
+            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            return 2
+        claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
+        bad = [c for c in claims if c["status"] in ("missing", "line_out_of_range")]
+        if bad:
+            print(f"[gate] G1 refcheck(引用座標): ✗ — {len(bad)} 條壞宣稱")
+            for c in bad:
+                loc = f"{c['token']}:{c['line']}" if c["line"] else c["token"]
+                print(f"    {loc}({c['status']})")
+            fails.append("G1")
+        else:
+            print(f"[gate] G1 refcheck(引用座標): ✓ — {len(claims)} 條宣稱全 ok")
     tail = rounds[-need:]
     fs = [r.get("findings") for r in tail]
     g2_fail = ""

@@ -160,8 +160,9 @@ def t_loop_gate():
     r = run(vault, "loop", "status", "g5")
     check("gate 案13b: g5 無 gate 仍 CONVERGED(舊判準)", r.returncode == 0, r.stdout)
 
-    r = run(vault, "loop", "status", "g3", "--gate", "--repo", str(repo))
-    check("gate 案14: --gate 缺 --spec rc=2", r.returncode == 2, f"rc={r.returncode}")
+    r = run(vault, "loop", "status", "g3", "--need", "2", "--gate", "--repo", str(repo))
+    check("gate 案14(新契約): 缺 --spec → G1 skip,g3 收斂 rc 0",
+          r.returncode == 0 and "skipped" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
 
 
 def t_loop_gate_need3():
@@ -173,6 +174,18 @@ def t_loop_gate_need3():
             "--gate", "--spec", str(spec_ok), "--repo", str(repo))
     check("gate K=3: 僅 2 筆合格輪 rc=1(斷在 K-streak)",
           r.returncode == 1 and "K-streak" in r.stdout, r.stdout)
+
+
+def t_loop_gate_no_spec():
+    vault, repo, _spec_ok, _spec_bad = _mk_gate_fixture()
+    def rec(loop, sev, f):
+        run(vault, "canary", "record", "caught", "--loop", loop, "--severity", sev,
+            "--findings", str(f), expect_rc=0)
+    # 未枯竭 [2,3]:即使 G1 skip,G2 仍擋
+    rec("ns1", "minor", 2); rec("ns1", "minor", 3)
+    r = run(vault, "loop", "status", "ns1", "--need", "2", "--gate", "--repo", str(repo))
+    check("gate no-spec: G1 skip 但 G2 未枯竭 → rc 1",
+          r.returncode == 1 and "skipped" in r.stdout and "G2" in r.stdout, r.stdout)
 
 
 def t_write_lf_roundtrip():
