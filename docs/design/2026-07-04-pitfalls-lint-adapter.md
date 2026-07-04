@@ -1,7 +1,7 @@
 # 設計:pitfalls lint 整合(pitfalls-lint-adapter)— `--diff` 從 regex 提示器升級為 lint 整合器
 
 - 日期:2026-07-04
-- 狀態:draft — 純文字 design-loop 3 輪到頂(r1/r2/r3 連三 major、17 findings 折入,主結構穩;但真機整合細節[SARIF uri 形態/git range rev-parse/detekt SARIF 旗標]每文字化一層又生新縫,真值在真機非文字)→ **轉真機 tracer(KDS 專案)定稿**,同 rot-eval「先 prototype」哲學。
+- 狀態:draft(真機 tracer 已定 3 大不確定性,待最後一輪 design-loop 確認收斂)— 純文字 design-loop 3 輪到頂(r1/r2/r3 連三 major、17 findings 折入,主結構穩;但真機整合細節[SARIF uri 形態/git range rev-parse/detekt SARIF 旗標]每文字化一層又生新縫,真值在真機非文字)→ **轉真機 tracer(KDS 專案)定稿**,同 rot-eval「先 prototype」哲學。
 - 動機來源:`Projects/pitfalls-lint-integration_計劃` 第 ① 塊(地基)。brainstorm(2026-07-04)收斂:pitfalls 不是規則庫、是提問+整合+接線;通則(ruff S113/SIM115)與偏科(compose-rules/detekt/eslint)社群 linter 已有且 AST 級更準,兩者都該讓給 linter(composition over invention);整合共通格式=SARIF。
 - loop_id:pitfalls-lint-adapter
 - 計劃回指:docs/lumos-toolchain-knowledge/Projects 的 pitfalls-lint-integration_計劃 節點。
@@ -17,6 +17,7 @@
 - **一棧多 linter 並存**:C#(Roslyn+StyleCop+Sonar+Roslynator)、Vue(ESLint+plugins)、Android(Lint+detekt+ktlint)——故指令是「一棧一組(list)」。
 - **lumos 語言無關原則**:`_VENDORED_TOOLKIT` 不含任何棧規則;guard 範本亦專案自備(`.lumos/guard-templates/`)——lint 指令同理由專案宣告(`.lumos/lint.json`),lumos 不猜、不內建。
 - **repo 解析**:`_anchor_repo_root(repo)` 既有(refcheck/anchor/pitfalls 共用)。
+- **KDS 真機 tracer(2026-07-04,detekt on Citrus_KDS)坐實三大不確定性**:① SARIF uri=絕對 `file:///…`(無 uriBaseId)→ 正規化剝 scheme+relpath 為必須(R3-F2);② tool.driver.name='detekt'、region.startLine 有整數值(映射對,R1-F5);③ `git rev-parse '<base>..HEAD'` 回兩行(正端+`^`負端)→ 座標系判定須 split `..` 取右端 ref 單獨 rev-parse(R3-F4);④ detekt 333 issues 時 exit 非零仍產 SARIF(R2-F3② rc 語意)。三個 major 方向全經真機證實,非推測。
 
 ## 方案評比與選擇
 
@@ -48,11 +49,11 @@
 - **單一寫檔契約(r1-F6:砍 stdout 模式)**:每個指令字串**必須含 `{LINT_SARIF_OUT}` 佔位符**,pitfalls 生成臨時檔路徑注入、指令用它當 SARIF 輸出路徑,pitfalls 跑完讀該檔。無佔位符的指令 → 視為配置錯、跳過記 lint_skipped(不猜工具預設落點、不吃 stdout——主流 SARIF 產出器多不支援乾淨 stdout,三棧範例皆寫檔式)。
 - **執行(r1-F3①)**:`subprocess.run(指令, shell=True, cwd=repo_root, timeout=LINT_CMD_TIMEOUT)`——指令是字串故 `shell=True`(有別於既有 `_pitfall_diff_mode` 的 list argv,本塊刻意用 shell 跑專案宣告的指令字串);**`{LINT_SARIF_OUT}` 注入用 `str.replace('{LINT_SARIF_OUT}', shlex.quote(臨時檔路徑))`**(r2-F6:shell=True 下路徑須 `shlex.quote` 防空白/元字元拆詞,否則 SARIF 寫錯位、pitfalls 讀不到全落 lint_skipped);`LINT_CMD_TIMEOUT` 常數(預設 180 秒)防 detekt/dotnet build 這類重量級跑掛住 pitfalls 的輕量提示器語意(r1 canary 掩蓋的真 gap:既有 subprocess 無 timeout、git 快無妨,外部 linter 慢必須設限)。
 - 解析 SARIF:`json.load` → **對每個 `run` 配對其 driver 與 results**(r1-F5:`tool.driver.name` 是 per-run,須按 run index 配對、非扁平取):`for run in runs: tool = run.tool.driver.name; for r in run.results: ...` → 每筆映射 claim `{file, line, source, rule, message}`:
-  - `file` = `r.locations[0].physicalLocation.artifactLocation.uri` **正規化為 repo 相對正斜線路徑(r3-F2,承重 join key)**:剝 `file://` scheme、`urllib.parse.unquote` 解 `%20`、絕對路徑轉 `os.path.relpath(路徑, repo_root)`、反斜線轉正斜線——與 `added` 集合的 key(來自 `+++ b/<path>`,repo 相對正斜線)同形才比得中;正規化缺漏 → lint claim 的 file 永不匹配 added → lint 靜默歸零(同 r2-F1 副檔名 bug 的路徑層翻版,ESLint 常吐絕對 file:// URI)
+  - `file` = `r.locations[0].physicalLocation.artifactLocation.uri` **正規化為 repo 相對正斜線路徑(r3-F2,承重 join key;KDS tracer 2026-07-04 真機坐實)**:剝 `file://` scheme、`urllib.parse.unquote` 解 `%20`、絕對路徑轉 `os.path.relpath(路徑, repo_root)`、反斜線轉正斜線——與 `added` 集合的 key(`+++ b/<path>` repo 相對正斜線)同形才比得中。**tracer 實測(detekt on Citrus_KDS)**:uri=`file:///Users/enzo/Citrus_KDS/app/.../X.kt`(絕對 file://)、`originalUriBaseIds={}`、`uriBaseId=null`——若不剝 scheme+relpath,絕對路徑永不匹配 diff 的 `app/...` repo 相對 key、lint 靜默歸零(坐實此段承重)。**uriBaseId 兼容(其他工具)**:detekt 無 uriBaseId,但 ESLint/Roslyn 可能吐相對 uri + `uriBaseId` → 有 uriBaseId 時以 `originalUriBaseIds[uriBaseId].uri` 為 base 拼接再 relpath(正規化須兩式兼容)
   - `line` = `r.locations[0].physicalLocation.region.startLine`(缺則 0)
   - `source` = `"lint:" + tool`(該 result 所屬 run 的工具名)
   - `rule` = `r.ruleId`;`message` = `r.message.text`(截 120 字)
-- 指令失敗(rc≠0 **且無 SARIF 產出**——rc≠0 是 linter 有 finding 的正常訊號,有 SARIF 就不算失敗,r1-F3② 澄清)/逾時/SARIF 解析失敗 → 印警示、跳過該指令記 lint_skipped、續跑其餘(容錯,**lint 失敗不改 pitfalls rc**)。**rc 語意精確化(r2-F3)**:diff 模式 rc = 掃描成功 0 / git 無或 range 解析失敗 2(既有 `_pitfall_diff_mode` 行為,lint 整合不動它);「rc 恆 0」僅指 lint 失敗不升 rc,非「任何情況都 0」。
+- 指令失敗(rc≠0 **且無 SARIF 產出**——rc≠0 是 linter 有 finding 的正常訊號,有 SARIF 就不算失敗,r1-F3② 澄清;**KDS tracer 坐實:detekt 333 issues 時 exit 非零但正常產 SARIF**)/逾時/SARIF 解析失敗 → 印警示、跳過該指令記 lint_skipped、續跑其餘(容錯,**lint 失敗不改 pitfalls rc**)。**rc 語意精確化(r2-F3)**:diff 模式 rc = 掃描成功 0 / git 無或 range 解析失敗 2(既有 `_pitfall_diff_mode` 行為,lint 整合不動它);「rc 恆 0」僅指 lint 失敗不升 rc,非「任何情況都 0」。
 
 ### ④ 過濾到 diff 觸及行
 - **建行集合(r1-F1:非「復用現成集合」)**:在既有 `_pitfall_diff_mode` 的掃描迴圈內**加一行 accumulator**——確認 `+` 新增行時同步 `added.setdefault(cur_file, set()).add(new_ln)`;regex 骨架(`_PITFALL_DIFF_PATTERNS`、`@@`/context/`+`/`-` 推導、skip 過濾)一字不動,只加集合累積(加法擴充、非改骨架)。
