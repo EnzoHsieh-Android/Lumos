@@ -42,12 +42,12 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch   # 工作副本
 
 **類型輪替 `[(N−1) mod 4]`**:
 
-| index | 類型 | 典型形態 |
-|-------|------|----------|
-| (a) N mod 4 = 1 | 邊界 / off-by-one | `< N` 改 `<= N`、索引越界一格 |
-| (b) N mod 4 = 2 | 資源未釋放 / 鎖漏 | `lock.acquire()` 無對應 `release`、`open()` 無 `with` |
-| (c) N mod 4 = 3 | None / 例外路徑未接 | 呼叫回傳值未判 None、例外吃掉不上報 |
-| (d) N mod 4 = 0 | 冪等 / 併發破壞 | `SELECT` 後 `INSERT` 無交易包裹、TOCTOU |
+| N 值 | (N−1) mod 4 | 類型 | 典型形態 |
+|------|------------|------|----------|
+| N=1 | 0 (a) | 邊界 / off-by-one | `< N` 改 `<= N`、索引越界一格 |
+| N=2 | 1 (b) | 資源未釋放 / 鎖漏 | `lock.acquire()` 無對應 `release`、`open()` 無 `with` |
+| N=3 | 2 (c) | None / 例外路徑未接 | 呼叫回傳值未判 None、例外吃掉不上報 |
+| N=4 | 3 (d) | 冪等 / 併發破壞 | `SELECT` 後 `INSERT` 無交易包裹、TOCTOU |
 
 canary 要「認真審就抓得到、但不一眼看穿」——太細=不公平、太明顯=訊號弱(校準鐵則,同 design-loop)。
 
@@ -160,4 +160,4 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 
 `lumos loop status` exit 0 → 向人回報收斂 + 上述天花板 → 交 **finishing-a-development-branch** 進合併流程。
 
-> 設計全文見 `docs/design/2026-07-04-pitfalls-code-loop.md` §組件③。
+> 設計全文見 `docs/design/2026-07-04-pitfalls-code-loop.md` ### ③ `lumos-code-loop`。
