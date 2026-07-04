@@ -3979,6 +3979,99 @@ def _refcheck_scan(text, repo_root):
     return claims, n_missing, n_oor, n_ok
 
 
+PITFALL_CLASSES = {
+    "payment": [r"金流", r"payment", r"stripe", r"billing", r"退款", r"refund", r"扣款"],
+    "external-send": [r"寄送", r"送出", r"\bsend\b", r"webhook", r"notify", r"LINE 推送", r"\bmail\b", r"簡訊", r"對外"],
+    "prod-irreversible": [r"\bprod\b", r"production", r"遷移", r"migration", r"不可逆", r"DROP TABLE", r"DELETE FROM", r"上架"],
+    "self-governance": [r"錨點", r"anchor verify", r"收斂判準", r"canary", r"審計閘", r"pre-push hook"],
+}
+_PITFALL_COMPILED = {c: [re.compile(p, re.I) for p in pats] for c, pats in PITFALL_CLASSES.items()}
+_PITFALL_GENERAL = [
+    "併發——同資源兩請求同時進來會怎樣?",
+    "效能——這段會進熱路徑/大資料量嗎?",
+    "資源——連線/檔案/鎖有沒有確定釋放?",
+]
+_PITFALL_QUESTIONS = {
+    "payment": "冪等鍵怎麼設計?重複扣款如何防?部分失敗怎麼補償/對帳?",
+    "external-send": "重試會不會風暴?收端如何去重?超時與速率上限?",
+    "prod-irreversible": "回滾路徑?遷移順序與鎖表窗口?",
+    "self-governance": "誤擋的逃生口?繞過有沒有留痕?",
+}
+_PITFALL_BLACKLIST = ("方案評比", "canary 相容性", "誠實天花板", "審計修正紀錄")
+# diff 模式:代碼形態 pattern → 形態類軸(併發/效能/資源);Task 2 填 _PITFALL_DIFF_PATTERNS
+
+
+def _pitfall_strip_spec(md_text):
+    """spec 模式剝除:## 切分→黑名單剝樣板節(前提節保留)→防呆回退→剝 inline-code/檔名。
+    對齊 difficulty.assess_spec 慣例、獨立實作(同 refcheck 對 Check P 不共用)。"""
+    parts = re.split(r"(?m)^(## .*)$", md_text)
+    kept = [parts[0]] if parts and parts[0].strip() else []
+    n_sections = 0
+    i = 1
+    while i + 1 <= len(parts):
+        title, body = parts[i], parts[i + 1]
+        if not any(b in title for b in _PITFALL_BLACKLIST):
+            kept.append(title + body)
+            n_sections += 1
+        i += 2
+    corpus = "\n".join(kept)
+    if n_sections < 2 or len(corpus) < 200:
+        print("⚠ pitfalls: 剝除後餘文近空(節數<2 或字元<200),回退全文掃描(偏嚴)")
+        corpus = md_text
+    corpus = INLINE_CODE_RE.sub(" ", corpus)
+    corpus = re.sub(r"[\w\-./]+\.(?:md|py|sh|json|yml|yaml|txt)\b", " ", corpus)
+    return corpus
+
+
+def _pitfall_scan_classes(text):
+    """回命中類名 list(每類記首個命中即可)。"""
+    hits = []
+    for cls, pats in _PITFALL_COMPILED.items():
+        if any(p.search(text) for p in pats):
+            hits.append(cls)
+    return hits
+
+
+def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患"):
+    """實務隱患提問(vault-free):spec 模式逼答設計決策級隱患;--diff 模式攤代碼級風險位置(Task 2)。
+    spec 模式印通用 3 問 + 命中類追問;--check:命中類且無「## <section_title>」節 → rc 1(只驗節存在)。"""
+    import json
+    repo_root = _anchor_repo_root(repo)
+    if repo_root is None:
+        return 2
+    if diff is not None:
+        print("diff 模式見 Task 2"); return 0
+    if md is None:
+        print("ERROR: pitfalls 需 <md檔> 或 --diff <range>", file=sys.stderr)
+        return 2
+    mp = Path(md)
+    if not mp.is_file():
+        print(f"ERROR: 找不到檔案: {md}", file=sys.stderr)
+        return 2
+    text = mp.read_text(encoding="utf-8-sig")
+    corpus = _pitfall_strip_spec(text)
+    hits = _pitfall_scan_classes(corpus)
+    if check:
+        has_section = re.search(r"(?m)^##\s+.*" + re.escape(section_title), text) is not None
+        if hits and not has_section:
+            print(f"✗ pitfalls --check: 命中風險類 {hits} 但無「## {section_title}」節 → 補節(寫『無』也要寫+為什麼無)")
+            return 1
+        print(f"✓ pitfalls --check: {'有節' if has_section else '零命中'}(命中類={hits})")
+        return 0
+    if as_json:
+        print(json.dumps({"hits": hits, "general": _PITFALL_GENERAL,
+                          "class_questions": {c: _PITFALL_QUESTIONS[c] for c in hits}}, ensure_ascii=False))
+        return 0
+    print("實務隱患提問(通用,恆答):")
+    for q in _PITFALL_GENERAL:
+        print(f"  - {q}")
+    if hits:
+        print(f"命中風險類追問({', '.join(hits)}):")
+        for c in hits:
+            print(f"  - [{c}] {_PITFALL_QUESTIONS[c]}")
+    return 0
+
+
 def cmd_refcheck(md_path, repo=None, as_json=False):
     """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
     抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
@@ -4201,6 +4294,13 @@ def main():
     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
 
+    p = sub.add_parser("pitfalls", help="實務隱患提問(vault-free):spec 逼答隱患 / --diff 攤代碼風險位置")
+    p.add_argument("md", nargs="?", help="spec md 檔(spec 模式)")
+    p.add_argument("--diff", dest="pf_diff", help="diff range(如 main..HEAD;diff 模式)")
+    p.add_argument("--repo", dest="pf_repo", help="repo root(預設 cwd 向上找 .git)")
+    p.add_argument("--check", action="store_true", help="命中風險類且無「## 實務隱患」節 → rc 1")
+    p.add_argument("--json", dest="pf_json", action="store_true", help="JSON 輸出")
+
     p = sub.add_parser("anchor", help="錨點完整性(vault-free):測試 runner/把關 hooks 的 sha256 baseline")
     asub = p.add_subparsers(dest="anchor_cmd", required=True)
     av = asub.add_parser("verify", help="比對錨點 sha256 vs baseline;不符 rc=1(baseline 不存在 rc=0+警示)")
@@ -4229,6 +4329,9 @@ def main():
                           yes=args.yes, source=args.source)
     if args.cmd == "refcheck":
         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+    if args.cmd == "pitfalls":
+        return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
+                            check=args.check, as_json=args.pf_json)
     if args.cmd == "anchor":
         if args.anchor_cmd == "verify":
             return cmd_anchor_verify(repo=args.anchor_repo, as_json=args.as_json)

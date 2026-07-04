@@ -2506,6 +2506,42 @@ def t_anchor():
     check("anchor: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
 
 
+def t_pitfalls_spec():
+    root = Path(tempfile.mkdtemp(prefix="gctl-pf-"))
+    (root / ".git").mkdir()
+    # 命中 payment + external-send
+    md_hit = root / "hit.md"
+    md_hit.write_text("# s\n## 目標\n接 stripe 收款後寄送通知。\n## 組件\n扣款流程。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md_hit), "--repo", str(root))
+    check("pitfalls spec: 印通用 3 問", "併發" in r.stdout and "效能" in r.stdout and "資源" in r.stdout, r.stdout)
+    check("pitfalls spec: 命中 payment 追問", "冪等" in r.stdout, r.stdout)
+    check("pitfalls spec: 命中 external-send 追問", "去重" in r.stdout or "重試" in r.stdout, r.stdout)
+    # --check 命中且無節 → rc 1
+    r = run(root, "pitfalls", str(md_hit), "--repo", str(root), "--check")
+    check("pitfalls --check: 命中無節 rc 1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+    # 補節 → rc 0
+    md_ok = root / "ok.md"
+    md_ok.write_text("# s\n## 目標\n接 stripe 收款。\n## 實務隱患\n冪等鍵用訂單號。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md_ok), "--repo", str(root), "--check")
+    check("pitfalls --check: 有節 rc 0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+    # 零命中 → rc 0(無節也不擋)
+    md_clean = root / "clean.md"
+    md_clean.write_text("# s\n## 目標\n重構內部排序,無外部行為。\n## 組件\n拆函數。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md_clean), "--repo", str(root), "--check")
+    check("pitfalls --check: 零命中無節 rc 0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+    check("pitfalls spec: 零命中只印通用問", "冪等" not in r.stdout, r.stdout)
+    # 剝除:風險詞只在黑名單樣板節 → 不觸發
+    md_tmpl = root / "tmpl.md"
+    md_tmpl.write_text("# s\n## 目標\n" + "純內部整理。" * 20 +
+                       "\n## 組件\n" + "改函數命名。" * 20 +
+                       "\n## 審計修正紀錄\nr1 canary 抓到金流 stripe 扣款壞 ref。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md_tmpl), "--repo", str(root), "--check")
+    check("pitfalls 剝除: 風險詞只在審計紀錄節 → --check rc 0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+    # md 不存在 → rc 2
+    r = run(root, "pitfalls", str(root / "ghost.md"), "--repo", str(root))
+    check("pitfalls: md 不存在 rc 2", r.returncode == 2, f"rc={r.returncode}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
