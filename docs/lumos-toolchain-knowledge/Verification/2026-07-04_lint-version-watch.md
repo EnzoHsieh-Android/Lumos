@@ -41,7 +41,7 @@ lint-version-watch(pitfalls-lint-integration 第②塊)實作驗證。spec 6 輪
 
 **block ② lint-watch(真 registry 查詢,~3s)**:
 - ✅ **正確**:detekt `1.23.7→1.23.8`、kotlin `1.9.20→2.4.0`(github releases 真值)。
-- 🔴 **真限制(silent false-negative,值得補強)**:`maven:` type 只查 Maven Central(search.maven.org)。**AGP(`com.android.tools.build:gradle`)實際在 Google Maven(dl.google.com)**,Central 只剩遠古 `2.0.0~2.3.0` → lumos 取數值 max 得 `2.3.0` < `8.2.2` → 誤判 **"current"(不是 failed,是靜默說「已最新」)**。對 Android 專案(AGP/AndroidX/多數 Google lib 都在 Google Maven)是重要缺口。**enhancement 候選**:加 `google-maven:` registry type 查 `dl.google.com/dl/android/maven2/.../group-index.xml`,或偵測 Google-hosted group 改走該端點。
+- 🔴→✅ **真限制已補(silent false-negative)**:`maven:` type 只查 Maven Central(search.maven.org),AGP 在 Google Maven(dl.google.com)、Central 只剩遠古 `2.x` → 舊 `maven:` 取 `2.3.0`<`8.2.2` 誤判 **"current"**。**v1.1 加 `google-maven:` type**(查 `dl.google.com/dl/android/maven2/<g>/<a>/maven-metadata.xml`、迭代 versions 過濾 prerelease 數值 max、避開 `<latest>`=`9.4.0-alpha03` 陷阱)→ **KDS 真機改宣告後 AGP 正確 `8.2.2→9.2.1`**。適用 AGP/AndroidX/Google-hosted。
 - ⚠️ **compound/非標準版**:hilt `2.49`(2段)vs latest 3段 → `segment-count-mismatch` skip(等段數守衛依設計不猜);ksp `1.9.0-1.0.13`(Kotlin-KSP 複合版、含 `-`)→ 被 `_is_prerelease` 判 `prerelease` skip(`-` 啟發式對複合版誤判)。兩者都是「守衛保守、寧 skip 不假陽性」的誠實代價,但 Android 生態多依賴會因此漏報。
 
 **block ① lint-adapter(detekt SARIF,~1s/檔)**:
