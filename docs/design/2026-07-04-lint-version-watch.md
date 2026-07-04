@@ -21,7 +21,7 @@
 兩層,沿本專案既有分工(機械核心在 `scripts/lumos`、排程/通知在 `governance/`):
 
 1. **機械核心**:`scripts/lumos` 新增 `lint-watch` 子命令(vault-free、可測、rc 語意,同 `refcheck`/`pitfalls`)。讀 watch 清單 → 查各 registry 最新穩定版 → semver 比較 → 落後者輸出候選 manifest(`--json`)。HTTP 抓取層可注入(測試用 fixture,不打真網路)。
-2. **治理排程層**:`governance/lint-watch-check.sh` 掛進 `daily-governance.sh` wrapper 第 3 步(單一喚醒窗)。跑 `lumos lint-watch` → 對新候選(seen-ledger 去重,每個新版只通知一次)LINE 通知 + 暫存到 `governance/lint-upgrades/`。人放行。去重比對本體在可測的 python helper(見〈治理排程層〉),shell 只做接線。
+2. **治理排程層**:**governance/lint-watch-check.sh** 掛進 `daily-governance.sh` wrapper 第 3 步(單一喚醒窗)。跑 `lumos lint-watch` → 對新候選(seen-ledger 去重,每個新版只通知一次)LINE 通知 + 暫存到 **governance/lint-upgrades/**。人放行。去重比對本體在可測的 python helper(見〈治理排程層〉),shell 只做接線。
 
 ### 為什麼不走既有 backlog→orchestrator→design-loop 管線
 
@@ -30,9 +30,9 @@
 ## 產出物清單(本 spec 建立)
 
 - `scripts/lumos` 新增 `lint-watch` 子命令 + helper(`_semver_parse`/`_is_prerelease`/`_semver_behind`/`_registry_latest`/`_http_get_json`)。
-- `governance/lint-watch-check.sh`(治理排程 shell,掛 wrapper 第 3 步)。
-- `governance/autonomous_loop/lint_watch_dedup.py`(seen-ledger 去重 helper,可單元測)。
-- `governance/lint-upgrades/`(暫存目錄:`pending-<DATE>.json` + `seen.jsonl`)。
+- **governance/lint-watch-check.sh**(治理排程 shell,掛 wrapper 第 3 步)。
+- **governance/autonomous_loop/lint_watch_dedup.py**(seen-ledger 去重 helper,可單元測)。
+- **governance/lint-upgrades/**(暫存目錄:`pending-<DATE>.json` + `seen.jsonl`)。
 - 測試:`scripts/test_lumos.py`(機械核心)+ `governance/autonomous_loop` 既有 test harness(去重 helper)。
 
 ## 資料契約
@@ -74,12 +74,12 @@
 
 ### 暫存 + 去重(治理層)
 
-- 候選暫存:`governance/lint-upgrades/pending-<YYYY-MM-DD>.json`(當日新候選快照)。
-- 去重 ledger:`governance/lint-upgrades/seen.jsonl`,一行一個已通知過的升級 `{"name":..,"latest":..,"seen":"YYYY-MM-DD"}`。**通知只對 `(name, latest)` 未在 seen 的候選發**(每個新版只通知一次,不每天洗版)。
+- 候選暫存:**governance/lint-upgrades/pending-<YYYY-MM-DD>.json**(當日新候選快照)。
+- 去重 ledger:**governance/lint-upgrades/seen.jsonl**,一行一個已通知過的升級 `{"name":..,"latest":..,"seen":"YYYY-MM-DD"}`。**通知只對 `(name, latest)` 未在 seen 的候選發**(每個新版只通知一次,不每天洗版)。
 - **seen 寫入時機**:候選一旦暫存即寫 seen(**不論 LINE 是否成功**)——通知是 best-effort,seen 記的是「已處置過此升級」,避免缺 token 時每天重打。缺點是缺 token 那次人收不到 LINE,但 `pending-<DATE>.json` 仍留檔可查(接受:token 缺是設定問題,pending 檔是兜底)。
 - 人放行 = ① 把 `.lumos/lint-watch.json` 的 `current` bump 到 latest(並實際更新 lint.json 對應指令的版本)② 候選自然不再落後。seen 保留(冪等)。
 
-## 機械核心細節(`scripts/lumos lint-watch`)
+## 機械核心細節(**scripts/lumos** 的 lint-watch 子命令)
 
 ### CLI 接線(沿既有 subcommand 慣例,同 refcheck)
 
@@ -115,12 +115,12 @@
 - 清單存在但**格式壞**(非 JSON list / 條目非 dict / 缺 `name`/`registry`/`current` 必填欄)= 2。
 - **網路失敗永不升 rc**(fail-open)。
 
-## 治理排程層(`governance/lint-watch-check.sh` + `lint_watch_dedup.py`)
+## 治理排程層(**governance/lint-watch-check.sh** + `lint_watch_dedup.py`)
 
 - 掛進 `governance/daily-governance.sh` 第 3 步(在報告、autonomous-loop 之後;wrapper `set -uo pipefail` 無 `-e`,本步失敗不影響前兩步)。
 - 對 repo 根跑 `lumos lint-watch --repo <root> --json`。
 - **去重 helper** `lint_watch_dedup.py`:`new_candidates(candidates, seen_path) -> list`——讀 `seen.jsonl`、回 `(name, latest)` 不在 seen 的候選。純函式、可單元測(給定候選 + seen → 新候選集)。
-- 有新候選 → ① 寫 `governance/lint-upgrades/pending-<TODAY>.json`(僅新候選)② 對新候選寫入 `seen.jsonl`(不論通知結果)③ LINE 通知:訊息文字由 shell/dedup helper 組(**不重用 `line_notify.build_message`——那是 spec-放行 專用文案、領域不符**;重用的是 `line_notify.send(message, token)` 這個泛用 curl broadcast),格式:`🔧 lint 升級候選(<N>):\n<name> <current>→<latest>(<type>)\n...`(批次一則、列全部新候選);token 讀 `~/.config/ai-daily/line_token`,缺 → log 跳過。
+- 有新候選 → ① 寫 **governance/lint-upgrades/pending-<TODAY>.json**(僅新候選)② 對新候選寫入 `seen.jsonl`(不論通知結果)③ LINE 通知:訊息文字由 shell/dedup helper 組(**不重用 `line_notify.build_message`——那是 spec-放行 專用文案、領域不符**;重用的是 `line_notify.send(message, token)` 這個泛用 curl broadcast),格式:`🔧 lint 升級候選(<N>):\n<name> <current>→<latest>(<type>)\n...`(批次一則、列全部新候選);token 讀 `~/.config/ai-daily/line_token`,缺 → log 跳過。
 - 無新候選 → 靜默(不通知、不寫檔)。
 - 本步任何失敗只 log、rc 不外傳(wrapper 不 `-e`)。
 
