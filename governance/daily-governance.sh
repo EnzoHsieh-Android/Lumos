@@ -27,7 +27,7 @@ echo "[$(ts)] 治理日報 段結束 rc=$?"
 echo "[$(ts)] 自主 loop 段結束 rc=$?"
 
 # 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)
-"$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1 || true
-echo "[$(ts)] lint-watch 段結束 rc=$?"
+"$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc=$?
+echo "[$(ts)] lint-watch 段結束 rc=$rc"
 
 echo "[$(ts)] daily-governance wrapper 完成"
