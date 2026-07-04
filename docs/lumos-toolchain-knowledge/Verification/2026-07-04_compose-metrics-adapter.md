@@ -32,6 +32,7 @@ compose-metrics-adapter(pitfalls 偏科層 Compose 重組效能)實作驗證。s
 - **baseline 建立**:首跑 `baseline_missing:true`+`new_modules:[app]` → `--update-baseline` → `baseline updated (1 modules, 0 skipped)`,baseline 含 **21 non_skippable**(agg 96/233),再跑 0 regressions(乾淨)。
 - **delta 精準抓到**:注入 `@Composable fun LumosDeltaProbe(vm: CentralViewModel)`(unstable 參數→non-skippable)、完整重 build → `compose-metrics` 回 **1 regression:new_non_skippable `com.citrus.citruskds.LumosDeltaProbe` unstable_params `['vm: CentralViewModel']`**(txt↔csv join 於真資料成立)。
 - **真機發現(已記天花板)**:incremental build 只產部分 metrics(cached 2s build 的 csv 僅 185B/部分檔)→ 現況集合殘缺、delta 失準;**須用完整 build(--rerun-tasks/clean)的 metrics**。
+- **--audit 盤點模式(2026-07-05 補,回應「delta-only 初次採用看不到既有問題點」)**:KDS `--audit` 列出當下全部 **22 non-skippable**(21 既有 + probe 殘留)+ 各自 unstable 原因(state: State / viewModel: CentralViewModel);對照 delta 在乾淨 baseline 下僅報新增——audit 補「初次盤點/現況全景」需求。
 - KDS build.gradle.kts 的 metrics 旗標與 probe 驗完已還原;`.lumos/compose-metrics.json` + `compose-baseline.json` 留作真整合(future build 需保留 Compose metrics 旗標)。
 
 ## 已知限制 / 天花板
