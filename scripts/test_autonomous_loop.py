@@ -333,8 +333,14 @@ class TestDifficulty(unittest.TestCase):
         self.assertEqual(self.d.assess_spec(md)["tier"], "standard")
 
     def test_assess_spec_substantive_high(self):
-        md = ("# t\n## 目標\n強化 anchor verify 與 pre-push hook 的接線。\n"
-              "## 組件\n改守衛腳本。\n## 誠實天花板\n無。\n")
+        # 保留節(目標+組件)剝除後需 >200 字元,確保走正常路徑而非 fallback;
+        # anchor verify 與 pre-push hook 是觸發 high 的關鍵詞,必須保留。
+        filler = ("此節描述內部實作細節調整,不涉及外部系統呼叫或資料庫欄位變更,"
+                  "所有公開介面簽名維持不變,整體屬於守衛接線強化作業。"
+                  "變更範圍僅限程式庫內部邏輯的整理,無對外行為影響。")
+        md = ("# t\n## 目標\n強化 anchor verify 與 pre-push hook 的接線。" + filler + "\n"
+              "## 組件\n改守衛腳本,補強驗證邏輯。" + filler + "\n"
+              "## 誠實天花板\n無。\n")
         self.assertEqual(self.d.assess_spec(md)["tier"], "high")
 
     def test_assess_spec_fallback_near_empty(self):

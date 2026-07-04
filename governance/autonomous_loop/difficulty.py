@@ -43,8 +43,6 @@ def assess_spec(md_text):
     n_sections = 0
     i = 1
     while i + 1 <= len(parts):
-        if i + 1 > len(parts):
-            break
         title, body = parts[i], parts[i + 1]
         if not any(b in title for b in _BLACKLIST):
             kept.append(title + body)

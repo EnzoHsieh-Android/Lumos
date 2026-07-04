@@ -105,6 +105,8 @@ RESIDUAL='["跨家族複核已加(qwen3-max 放行前複核 opus 設計、補同
 if [ "$CONVERGED" != "True" ]; then
   if [ "$CROSS_VERDICT" = "disputed" ]; then
     MSG="⚠ 跨家族否決(qwen 持續異議):$CROSS_SUMMARY"; log "未收斂(跨家族否決 disputed),不放行:$CROSS_SUMMARY"
+  elif [ "$CROSS_VERDICT" = "degraded" ] && [ "$TIER" = "high" ]; then
+    MSG="⚠ 高風險級複核缺席(degraded)、fail-closed 擋下:$CROSS_SUMMARY"; log "未收斂(高風險級複核 degraded fail-closed),不放行:$CROSS_SUMMARY"
   else
     MSG="⚠ 今日 spec 未收斂、未放行(撞 cap)"; log "未收斂(converged=$CONVERGED),不放行,scratch 不入庫。"
   fi
@@ -123,14 +125,6 @@ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DI
   log "未收斂 gap 處置:$RQ(回 backlog 降分重試 / 累計達 3 次 covered)"
   exit 0
 fi
-
-REPORT_MD="$(cd "$REPO" && python3 -c "
-import sys, json; sys.path.insert(0,'governance')
-from autonomous_loop import confidence_report, difficulty
-a=difficulty.assess_spec(open('$SPEC').read())
-print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json.loads('''$RESIDUAL'''),
-      tier=a['tier'], hits=a['hits'], reported_tier='$TIER_RESULT'))
-")"
 
 [ -n "$CROSS_VERDICT" ] && log "跨家族複核:$CROSS_VERDICT($CROSS_WORST)— $CROSS_SUMMARY"
 
@@ -151,6 +145,13 @@ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DI
   log "未收斂 gap 處置:$RQ(tier 守衛/spec_path)"
   exit 0
 fi
+REPORT_MD="$(cd "$REPO" && python3 -c "
+import sys, json; sys.path.insert(0,'governance')
+from autonomous_loop import confidence_report, difficulty
+a=difficulty.assess_spec(open('$SPEC').read())
+print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json.loads('''$RESIDUAL'''),
+      tier=a['tier'], hits=a['hits'], reported_tier='$TIER_RESULT'))
+")"
 TIER_FINAL="$(cd "$REPO" && python3 -c "
 import sys; sys.path.insert(0,'governance')
 from autonomous_loop import difficulty
