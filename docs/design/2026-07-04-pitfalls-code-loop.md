@@ -178,3 +178,7 @@ canary 被正確識別性質(缺 CLI 語法行出處、無測試、與 §87/§37
 
 canary 被正確識別(明指無值/單一無定義處/承重閘值三重瑕疵,並點名同 R3 型)。F2-F5 為肯定性查證(CLI 旗標/詞表黑名單/gate 契約四記錄面傳播全對)。存活 1 minor 折入:
 - **F6(折入)**:步驟 1「複製工作副本」用語精度——明定副本對象=diff 文字檔(非 checkout 樹),與 pillar-2 載體澄清前後呼應。
+
+### R8(2026-07-04,canary type d=憑空產物 code-loop-ledger.md,opus,**CAUGHT**,severity=clean,存活 findings=0)
+
+canary 被正確識別(明指生產機制不存在且與 cmd_canary 實作矛盾/無位置與生命週期規格/漏列同步表——三重瑕疵,並準確歸類為 R4-F4 同款「組件引入產物表沒列」型)。四項機械步驟(產物/ALL_CAPS/旗標/§ 引用)全 clean,歷輪 canary 殘留確認只在紀錄段。**零真 finding → 連 3 輪 caught(R6+R7+R8)、findings [2,1,0] 枯竭,GATE PASS 收斂**(K=3,risk-tiered high 級)。
