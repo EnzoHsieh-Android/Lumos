@@ -2506,6 +2506,45 @@ def t_anchor():
     check("anchor: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
 
 
+def t_pitfalls_diff():
+    import json as _json, subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-pfd-"))
+    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+    git("init"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    # 新增:無 timeout 的 requests.post(資源類)+ 迴圈內 query(效能類)
+    (root / "app.py").write_text(
+        "import requests\n"
+        "def f(ids):\n"
+        "    requests.post('http://x')\n"
+        "    for i in ids:\n"
+        "        db.execute('SELECT 1')\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c2")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    check("pitfalls --diff: rc 0(提示器)", r.returncode == 0, f"rc={r.returncode}\n{r.stderr}")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    tokens = " ".join(f"{c['pattern']}|{c['class']}" for c in data["claims"])
+    check("pitfalls --diff: 命中無 timeout requests(資源)", "資源" in tokens, r.stdout)
+    check("pitfalls --diff: 命中迴圈內 query(效能)", "效能" in tokens, r.stdout)
+    check("pitfalls --diff: tier high", data["tier"] == "high", r.stdout)
+    check("pitfalls --diff: class 用形態軸非四業務類",
+          all(c["class"] in ("併發", "效能", "資源") for c in data["claims"]), r.stdout)
+    check("pitfalls --diff: 每條有 line", all(isinstance(c["line"], int) for c in data["claims"]), r.stdout)
+    # 純文檔 diff → tier standard
+    (root / "readme.md").write_text("hello\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "doc")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls --diff: .md skip → tier standard", data["tier"] == "standard", r.stdout)
+    # 測試檔內的 requests.post 不觸發(過濾繼承 _TEST_PAT)
+    (root / "test_app.py").write_text("import requests\nrequests.post('http://y')\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "t")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls --diff: 測試檔 skip → tier standard", data["tier"] == "standard", r.stdout)
+
+
 def t_pitfalls_spec():
     root = Path(tempfile.mkdtemp(prefix="gctl-pf-"))
     (root / ".git").mkdir()

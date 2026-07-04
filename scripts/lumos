@@ -3998,7 +3998,70 @@ _PITFALL_QUESTIONS = {
     "self-governance": "誤擋的逃生口?繞過有沒有留痕?",
 }
 _PITFALL_BLACKLIST = ("方案評比", "canary 相容性", "誠實天花板", "審計修正紀錄")
-# diff 模式:代碼形態 pattern → 形態類軸(併發/效能/資源);Task 2 填 _PITFALL_DIFF_PATTERNS
+# diff 模式:代碼形態 pattern:(regex, 形態類軸, 提問)——類軸限 併發/效能/資源(非四業務類)
+_PITFALL_DIFF_PATTERNS = [
+    (re.compile(r"requests\.\w+\(|httpx\.\w+\(", re.I), "資源", "HTTP 呼叫有沒有 timeout?"),
+    (re.compile(r"\bopen\s*\(", re.I), "資源", "檔案 handle 有沒有 with/確定 close?"),
+    (re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE)\b", re.I), "效能", "是否在迴圈內、造成 N+1?"),
+    (re.compile(r"\btime\.sleep\s*\(", re.I), "效能", "sleep 在迴圈裡會不會累積延遲?"),
+    (re.compile(r"\bthreading\.|\bLock\s*\(|global\s+\w+", re.I), "併發", "共享狀態有沒有鎖保護?"),
+    (re.compile(r"\bINSERT\b|\bUPDATE\b|\bDELETE\b", re.I), "併發", "寫入有沒有交易包裹?"),
+]
+_PITFALL_DIFF_SKIP_EXT = {".md", ".txt", ".rst"}
+_PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
+
+
+def _pitfall_diff_mode(diff_range, repo_root, as_json):
+    """掃 git diff <range> 新增行找代碼形態風險位置。過濾繼承 Check H 全套;line 由 @@ 標頭推導。
+    rc 恆 0(提示器非閘)。class 用形態類軸(併發/效能/資源)。"""
+    import json
+    import subprocess
+    try:
+        r = subprocess.run(["git", "diff", "-U3", diff_range],
+                           capture_output=True, text=True, cwd=str(repo_root))
+    except FileNotFoundError:
+        print("ERROR: 無 git", file=sys.stderr)
+        return 2
+    if r.returncode != 0:
+        print(f"ERROR: git diff {diff_range} 失敗: {r.stderr.strip()}", file=sys.stderr)
+        return 2
+    claims = []
+    cur_file, new_ln = "", 0
+    for line in r.stdout.splitlines():
+        if line.startswith("+++ b/"):
+            cur_file = line[6:]
+            continue
+        m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)", line)
+        if m:
+            new_ln = int(m.group(1))
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("-"):
+            continue                          # 刪除行不推進新檔行號
+        if not line.startswith("+"):
+            new_ln += 1                       # context 行推進
+            continue
+        # 這是新增行(+ 開頭)
+        ext = Path(cur_file).suffix if cur_file else ""
+        code = line[1:]
+        if (ext not in _PITFALL_DIFF_SKIP_EXT and cur_file
+                and not _PITFALL_DIFF_TEST_PAT.search(cur_file)
+                and not code.strip().startswith(("#", "//", "--", "/*", "*"))):
+            for pat, axis, q in _PITFALL_DIFF_PATTERNS:
+                if pat.search(code):
+                    claims.append({"file": cur_file, "line": new_ln, "class": axis,
+                                   "pattern": pat.pattern, "question": q})
+                    break
+        new_ln += 1                           # 新增行推進新檔行號
+    tier = "high" if claims else "standard"
+    if as_json:
+        print(json.dumps({"claims": claims, "tier": tier}, ensure_ascii=False))
+    else:
+        for c in claims:
+            print(f"  {c['file']}:{c['line']} [{c['class']}] {c['question']}")
+        print(f"tier: {tier}")
+    return 0
 
 
 def _pitfall_strip_spec(md_text):
@@ -4040,7 +4103,7 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
     if repo_root is None:
         return 2
     if diff is not None:
-        print("diff 模式見 Task 2"); return 0
+        return _pitfall_diff_mode(diff, repo_root, as_json)
     if md is None:
         print("ERROR: pitfalls 需 <md檔> 或 --diff <range>", file=sys.stderr)
         return 2
