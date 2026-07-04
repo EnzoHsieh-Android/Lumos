@@ -397,5 +397,95 @@ class TestPitfallsDrift(unittest.TestCase):
                          "pitfalls 黑名單 != difficulty._BLACKLIST(漂移)")
 
 
+class TestLintWatchDedup(unittest.TestCase):
+    """Tests for governance/autonomous_loop/lint_watch_dedup.py"""
+
+    def _load_module(self):
+        import importlib.util as U
+        from importlib.machinery import SourceFileLoader
+        P = str(Path(__file__).resolve().parent.parent / "governance/autonomous_loop/lint_watch_dedup.py")
+        spec = U.spec_from_file_location("lwd", P, loader=SourceFileLoader("lwd", P))
+        m = U.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    def setUp(self):
+        import tempfile
+        self.d = Path(tempfile.mkdtemp(prefix="lwd-"))
+        self.seen = self.d / "seen.jsonl"
+        self.m = self._load_module()
+
+    def test_new_candidates_seen_missing_returns_all(self):
+        cands = [{"name": "detekt", "latest": "1.24.0"}, {"name": "ruff", "latest": "0.5.0"}]
+        result = self.m.new_candidates(cands, str(self.seen))
+        self.assertEqual(result, cands)
+
+    def test_new_candidates_all_seen_returns_empty(self):
+        cands = [{"name": "detekt", "latest": "1.24.0"}, {"name": "ruff", "latest": "0.5.0"}]
+        self.seen.write_text(
+            '{"name":"detekt","latest":"1.24.0","seen":"2026-07-04"}\n'
+            '{"name":"ruff","latest":"0.5.0","seen":"2026-07-04"}\n',
+            encoding="utf-8")
+        self.assertEqual(self.m.new_candidates(cands, str(self.seen)), [])
+
+    def test_new_candidates_partial_new(self):
+        cands = [{"name": "detekt", "latest": "1.24.0"}, {"name": "ruff", "latest": "0.5.0"}]
+        self.seen.write_text('{"name":"detekt","latest":"1.24.0","seen":"2026-07-04"}\n', encoding="utf-8")
+        result = self.m.new_candidates(cands, str(self.seen))
+        self.assertEqual([c["name"] for c in result], ["ruff"])
+
+    def test_new_candidates_same_name_new_latest_counts_as_new(self):
+        cands = [{"name": "detekt", "latest": "1.24.0"}, {"name": "ruff", "latest": "0.5.0"}]
+        self.seen.write_text('{"name":"detekt","latest":"1.23.7","seen":"2026-07-04"}\n', encoding="utf-8")
+        result = self.m.new_candidates(cands, str(self.seen))
+        self.assertTrue(any(c["name"] == "detekt" for c in result))
+
+    def test_main_writes_pending_and_seen_and_stdout_line_dict(self):
+        import subprocess
+        pending = self.d / "pending-2026-07-04.json"
+        manifest = json.dumps({"candidates": [{"name": "detekt", "registry": "github:detekt/detekt",
+                                               "current": "1.23.7", "latest": "1.24.0"}],
+                               "checked": 1, "failed": []})
+        r = subprocess.run(
+            [sys.executable,
+             str(Path(__file__).resolve().parent.parent / "governance/autonomous_loop/lint_watch_dedup.py"),
+             str(self.seen), str(pending), "2026-07-04"],
+            input=manifest, capture_output=True, text=True)
+        self.assertTrue(pending.exists(), "pending 未寫")
+        self.assertEqual(json.loads(pending.read_text())[0]["name"], "detekt")
+        self.assertTrue(self.seen.exists() and "1.24.0" in self.seen.read_text(), "seen 未 append")
+        msg = json.loads(r.stdout)
+        self.assertEqual(msg["messages"][0]["type"], "text")
+        self.assertIn("detekt", msg["messages"][0]["text"])
+
+    def test_main_non_json_stdin_empty_stdout(self):
+        import subprocess
+        pending = self.d / "pending-2026-07-04.json"
+        r = subprocess.run(
+            [sys.executable,
+             str(Path(__file__).resolve().parent.parent / "governance/autonomous_loop/lint_watch_dedup.py"),
+             str(self.seen), str(pending), "2026-07-04"],
+            input="ERROR: bad watch list", capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "", f"非 JSON 應印空: {r.stdout!r}")
+
+    def test_new_candidates_malformed_seen_line_skipped(self):
+        """malformed line in seen.jsonl must be skipped; only valid seen entries filter candidates."""
+        cands = [
+            {"name": "detekt", "latest": "1.24.0"},
+            {"name": "ruff", "latest": "0.5.0"},
+        ]
+        # seen.jsonl: one malformed line, one valid line for "detekt"
+        self.seen.write_text(
+            "not json\n"
+            '{"name":"detekt","latest":"1.24.0","seen":"2026-07-04"}\n',
+            encoding="utf-8")
+        result = self.m.new_candidates(cands, str(self.seen))
+        # must not crash, detekt is seen (valid line) → filtered out
+        names = [c["name"] for c in result]
+        self.assertNotIn("detekt", names, "detekt は valid seen line で除外されるべき")
+        # ruff matches malformed line's key only if parsed — since malformed is skipped, ruff is new
+        self.assertIn("ruff", names, "ruff は malformed line に一致せず新候補のはず")
+
+
 if __name__ == "__main__":
     unittest.main()

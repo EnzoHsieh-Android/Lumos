@@ -4200,6 +4200,194 @@ def _lint_run_and_parse(cmd, repo_root):
             pass
 
 
+def _semver_parse(v):
+    s = v.strip()
+    if s[:1].lower() == "v":
+        s = s[1:]
+    parts = s.split(".")
+    if not parts or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+
+def _is_prerelease(v):
+    import re
+    s = v.lower()
+    if "-" in s:
+        return True
+    return re.search(r'(?:\d|[-._])(a|b|c|rc|alpha|beta|dev|pre)\d*(?:$|[-._\d])', s) is not None
+
+
+def _compare_versions(current, latest):
+    if _is_prerelease(current) or _is_prerelease(latest):
+        return ("skip", "prerelease")
+    cu, la = _semver_parse(current), _semver_parse(latest)
+    if cu is None or la is None:
+        return ("skip", "unparseable")
+    if len(cu) != len(la):
+        return ("skip", "segment-count-mismatch")
+    return ("behind", "") if la > cu else ("current", "")
+
+
+def _http_get_json(url):
+    """Fetch URL and return parsed JSON dict, or None on any failure.
+
+    If env var LUMOS_LINT_WATCH_FIXTURE is set, reads that JSON file (a
+    {url: response_dict} map) and returns fixture.get(url) — never hitting
+    the network.  Otherwise uses urllib.request with timeout=10s.
+    """
+    import os
+    fixture_path = os.environ.get("LUMOS_LINT_WATCH_FIXTURE")
+    if fixture_path:
+        import json
+        try:
+            with open(fixture_path, encoding="utf-8") as fh:
+                fixture = json.load(fh)
+            return fixture.get(url)
+        except Exception:
+            return None
+    import json
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "lumos-lint-watch"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status < 200 or resp.status >= 300:
+                return None
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _registry_latest(registry, fetch=None):
+    """Return (version, None) on success or (None, reason) on failure.
+
+    registry format: "<type>:<coord>"
+      pypi:<pkg>
+      npm:<pkg>
+      github:<owner>/<repo>
+      maven:<group>:<artifact>
+    """
+    if fetch is None:
+        fetch = _http_get_json
+    try:
+        import urllib.parse
+        rtype, _, coord = registry.partition(":")
+        if rtype == "pypi":
+            url = f"https://pypi.org/pypi/{coord}/json"
+            d = fetch(url)
+            if d is None:
+                return (None, "registry query failed: fetch returned None")
+            try:
+                version = d["info"]["version"]
+            except (KeyError, TypeError) as e:
+                return (None, f"registry query failed: {e}")
+            if _is_prerelease(version):
+                return (None, "latest is prerelease")
+            return (version, None)
+
+        elif rtype == "npm":
+            url = f"https://registry.npmjs.org/{coord}/latest"
+            d = fetch(url)
+            if d is None:
+                return (None, "registry query failed: fetch returned None")
+            try:
+                version = d["version"]
+            except (KeyError, TypeError) as e:
+                return (None, f"registry query failed: {e}")
+            if _is_prerelease(version):
+                return (None, "latest is prerelease")
+            return (version, None)
+
+        elif rtype == "github":
+            url = f"https://api.github.com/repos/{coord}/releases/latest"
+            d = fetch(url)
+            if d is None:
+                return (None, "registry query failed: fetch returned None")
+            try:
+                tag = d["tag_name"]
+            except (KeyError, TypeError) as e:
+                return (None, f"registry query failed: {e}")
+            version = tag.lstrip("v") if tag.startswith("v") else tag
+            if _is_prerelease(version):
+                return (None, "latest is prerelease")
+            return (version, None)
+
+        elif rtype == "maven":
+            group, _, artifact = coord.partition(":")
+            q = urllib.parse.quote(f'g:"{group}" AND a:"{artifact}"')
+            url = (f"https://search.maven.org/solrsearch/select?q={q}"
+                   "&core=gav&sort=timestamp+desc&rows=20&wt=json")
+            d = fetch(url)
+            if d is None:
+                return (None, "registry query failed: fetch returned None")
+            try:
+                docs = (d.get("response") or {}).get("docs") or []
+                stable = [x["v"] for x in docs if x.get("v") and not _is_prerelease(x["v"])]
+                stable = [v for v in stable if _semver_parse(v)]
+            except Exception as e:
+                return (None, f"registry query failed: {e}")
+            if not stable:
+                return (None, "no stable version")
+            return (max(stable, key=_semver_parse), None)
+
+        else:
+            return (None, f"registry query failed: unknown type {rtype!r}")
+    except Exception as e:
+        return (None, f"registry query failed: {e}")
+
+
+def _lint_watch_mode(repo_root, as_json):
+    """lumos lint-watch: 讀 .lumos/lint-watch.json、逐條查 registry、輸出 manifest。
+    rc 0 = 成功(含空清單); rc 2 = config 格式錯誤。
+    """
+    import json
+    cfg_path = Path(repo_root) / ".lumos" / "lint-watch.json"
+    if not cfg_path.exists():
+        entries = []
+    else:
+        try:
+            with open(cfg_path, encoding="utf-8") as fh:
+                entries = json.load(fh)
+        except Exception as e:
+            print(f"ERROR: lint-watch.json 解析失敗: {e}", file=sys.stderr)
+            return 2
+        if not isinstance(entries, list):
+            print("ERROR: lint-watch.json 必須是 JSON 陣列", file=sys.stderr)
+            return 2
+        for entry in entries:
+            if not isinstance(entry, dict) or not all(k in entry for k in ("name", "registry", "current")):
+                print("ERROR: lint-watch.json 每條必須含 name/registry/current", file=sys.stderr)
+                return 2
+
+    candidates, failed, checked = [], [], 0
+    for entry in entries:
+        latest, reason = _registry_latest(entry["registry"])
+        if latest is None:
+            failed.append({"name": entry["name"], "reason": reason})
+        else:
+            state, r = _compare_versions(entry["current"], latest)
+            if state == "behind":
+                candidates.append({
+                    "name": entry["name"],
+                    "registry": entry["registry"],
+                    "current": entry["current"],
+                    "latest": latest,
+                })
+                checked += 1
+            elif state == "current":
+                checked += 1
+            else:  # skip
+                failed.append({"name": entry["name"], "reason": r})
+
+    if as_json:
+        print(json.dumps({"candidates": candidates, "checked": checked, "failed": failed},
+                         ensure_ascii=False))
+    else:
+        for c in candidates:
+            print(f"{c['name']} {c['current']} → {c['latest']}")
+    return 0
+
+
 def _pitfall_diff_mode(diff_range, repo_root, as_json):
     """掃 git diff <range> 新增行找代碼形態風險位置。過濾繼承 Check H 全套;line 由 @@ 標頭推導。
     rc 恆 0(提示器非閘)。class 用形態類軸(併發/效能/資源)。"""
@@ -4616,6 +4804,10 @@ def main():
     aa.add_argument("--repo", dest="anchor_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     aa.add_argument("--note", required=True, help="一句話理由(必填,進留痕)")
 
+    p = sub.add_parser("lint-watch", help="依賴版本落差掃描(vault-free):讀 .lumos/lint-watch.json 對比 registry 最新版")
+    p.add_argument("--repo", dest="lint_watch_repo", default=".", help="repo root(含 .lumos/lint-watch.json 的資料夾,預設 .)")
+    p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON manifest")
+
     args = ap.parse_args()
 
     # install/uninstall/update/bootstrap 不需要 Env(vault),先處理
@@ -4642,6 +4834,8 @@ def main():
         if args.anchor_cmd == "verify":
             return cmd_anchor_verify(repo=args.anchor_repo, as_json=args.as_json)
         return cmd_anchor_approve(repo=args.anchor_repo, note=args.note, vault=args.vault)
+    if args.cmd == "lint-watch":
+        return _lint_watch_mode(args.lint_watch_repo, args.as_json)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():

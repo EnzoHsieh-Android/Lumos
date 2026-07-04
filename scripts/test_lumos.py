@@ -2942,6 +2942,123 @@ def t_pitfalls_lint_integration():
     check("pitfalls-lint: 未碰宣告棧 → lint_ran 空", data6.get("lint_ran") == [], str(data6))
 
 
+def t_lint_watch_semver():
+    import importlib.util as U
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    # _semver_parse
+    check("parse 1.23.7", m._semver_parse("1.23.7") == (1,23,7), str(m._semver_parse("1.23.7")))
+    check("parse v 前綴剝除", m._semver_parse("v1.2.3") == (1,2,3), str(m._semver_parse("v1.2.3")))
+    check("parse 非數字段→None", m._semver_parse("1.x.3") is None, str(m._semver_parse("1.x.3")))
+    # _is_prerelease 正例
+    for v in ["1.24.0-RC1","0.5.0b1","2.22.0.dev20260702"]:
+        check(f"prerelease True {v}", m._is_prerelease(v) is True, v)
+    # _is_prerelease 負例(不可假陽性)
+    for v in ["1.24.0","5.0.2.4997","cobra"]:
+        check(f"prerelease False {v}", m._is_prerelease(v) is False, v)
+    # _compare_versions 三態
+    check("behind", m._compare_versions("1.23.7","1.24.0") == ("behind",""), str(m._compare_versions("1.23.7","1.24.0")))
+    check("current(反向)", m._compare_versions("1.24.0","1.23.7")[0] == "current", str(m._compare_versions("1.24.0","1.23.7")))
+    check("current(相等)", m._compare_versions("1.2.3","1.2.3")[0] == "current", "")
+    check("skip unparseable", m._compare_versions("1.x","1.2.3") == ("skip","unparseable"), str(m._compare_versions("1.x","1.2.3")))
+    check("skip prerelease", m._compare_versions("1.0.0","1.1.0-RC1") == ("skip","prerelease"), str(m._compare_versions("1.0.0","1.1.0-RC1")))
+    check("skip 段數不一(calendar)", m._compare_versions("1.23.7","2024.1") == ("skip","segment-count-mismatch"), str(m._compare_versions("1.23.7","2024.1")))
+    check("skip 段數不一(4段maven)", m._compare_versions("5.0.1","5.0.1.3006") == ("skip","segment-count-mismatch"), "")
+    # 數值排序見證(同段數,證非字串比較:字串 '1.9.0' > '1.20.0' 但數值應 behind)
+    check("數值 behind 1.9.0→1.20.0", m._compare_versions("1.9.0","1.20.0") == ("behind",""), str(m._compare_versions("1.9.0","1.20.0")))
+
+
+def t_lint_watch_registry():
+    import importlib.util as U, json as J, os, tempfile
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    # 四型 registry 的假 response,key = _registry_latest 內部組出的 url
+    pypi_url = "https://pypi.org/pypi/ruff/json"
+    npm_url  = "https://registry.npmjs.org/eslint/latest"
+    gh_url   = "https://api.github.com/repos/detekt/detekt/releases/latest"
+    import urllib.parse as UP
+    mvn_url  = ("https://search.maven.org/solrsearch/select?q="
+               + UP.quote('g:"org.sonarsource.scanner.cli" AND a:"sonar-scanner-cli"')
+               + "&core=gav&sort=timestamp+desc&rows=20&wt=json")
+    fixture = {
+        pypi_url: {"info": {"version": "0.4.9"}},
+        npm_url:  {"version": "9.0.0"},
+        gh_url:   {"tag_name": "v1.24.0"},
+        # maven docs 含 3.9 / 3.20.0 / 一個 RC → 過濾 RC、數值 max 應回 3.20.0
+        mvn_url:  {"response": {"docs": [
+            {"v": "3.9"}, {"v": "3.20.0"}, {"v": "3.21.0-RC1"}, {"v": "3.11"}]}},
+    }
+    fx = Path(tempfile.mkdtemp(prefix="gctl-lw-")) / "fx.json"
+    fx.write_text(J.dumps(fixture), encoding="utf-8")
+    os.environ["LUMOS_LINT_WATCH_FIXTURE"] = str(fx)
+    try:
+        check("pypi", m._registry_latest("pypi:ruff") == ("0.4.9", None), str(m._registry_latest("pypi:ruff")))
+        check("npm", m._registry_latest("npm:eslint") == ("9.0.0", None), str(m._registry_latest("npm:eslint")))
+        check("github 剝 v", m._registry_latest("github:detekt/detekt") == ("1.24.0", None), str(m._registry_latest("github:detekt/detekt")))
+        check("maven 數值 max 過濾 RC",
+              m._registry_latest("maven:org.sonarsource.scanner.cli:sonar-scanner-cli") == ("3.20.0", None),
+              str(m._registry_latest("maven:org.sonarsource.scanner.cli:sonar-scanner-cli")))
+        # pypi info.version 為 prerelease → (None, "latest is prerelease")
+        fixture[pypi_url] = {"info": {"version": "0.4.3a1"}}
+        fx.write_text(J.dumps(fixture), encoding="utf-8")
+        check("pypi prerelease", m._registry_latest("pypi:ruff") == (None, "latest is prerelease"), str(m._registry_latest("pypi:ruff")))
+        # 抓取回 None(fixture 無此 key)→ (None, "registry query failed: ...")
+        latest, reason = m._registry_latest("npm:does-not-exist")
+        check("抓取失敗", latest is None and reason.startswith("registry query failed"), f"{latest},{reason}")
+    finally:
+        os.environ.pop("LUMOS_LINT_WATCH_FIXTURE", None)
+
+
+def t_lint_watch_cli():
+    import subprocess as sp, json as J, os, tempfile
+    root = Path(tempfile.mkdtemp(prefix="gctl-lwcli-"))
+    (root / ".lumos").mkdir()
+    watch = [
+        {"name":"ruff","registry":"pypi:ruff","current":"0.4.2"},        # behind
+        {"name":"eslint","registry":"npm:eslint","current":"9.0.0"},     # current(相等)
+        {"name":"cal","registry":"npm:cal","current":"1.23.7"},          # skip(段數不一 2024.1)
+        {"name":"down","registry":"npm:down","current":"0.0.0"},         # fetch 失敗→failed
+    ]
+    (root / ".lumos" / "lint-watch.json").write_text(J.dumps(watch), encoding="utf-8")
+    fixture = {
+        "https://pypi.org/pypi/ruff/json": {"info":{"version":"0.4.9"}},
+        "https://registry.npmjs.org/eslint/latest": {"version":"9.0.0"},
+        "https://registry.npmjs.org/cal/latest": {"version":"2024.1"},
+        # down 無 fixture key → fetch None → failed
+    }
+    fx = root / "fx.json"; fx.write_text(J.dumps(fixture), encoding="utf-8")
+    env = dict(os.environ, LUMOS_LINT_WATCH_FIXTURE=str(fx))
+    r = sp.run([sys.executable, GRAPHCTL, "lint-watch", "--repo", str(root), "--json"],
+               capture_output=True, text=True, env=env)
+    check("rc 0", r.returncode == 0, r.stderr)
+    d = J.loads(r.stdout)
+    check("1 candidate(ruff)", len(d["candidates"]) == 1 and d["candidates"][0]["name"] == "ruff", str(d["candidates"]))
+    check("candidate latest", d["candidates"][0]["latest"] == "0.4.9", str(d["candidates"][0]))
+    check("checked = behind+current = 2", d["checked"] == 2, str(d["checked"]))
+    failed_names = {f["name"] for f in d["failed"]}
+    check("failed 含 cal(段數) + down(抓取)", failed_names == {"cal","down"}, str(d["failed"]))
+    # 缺清單 → rc 0 空候選
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-lwcli2-"))
+    r2 = sp.run([sys.executable, GRAPHCTL, "lint-watch", "--repo", str(root2), "--json"], capture_output=True, text=True, env=env)
+    check("缺清單 rc0", r2.returncode == 0 and J.loads(r2.stdout)["candidates"] == [], r2.stdout)
+    # 壞清單(非 list)→ rc 2
+    (root2 / ".lumos").mkdir()
+    (root2 / ".lumos" / "lint-watch.json").write_text('{"not":"a list"}', encoding="utf-8")
+    r3 = sp.run([sys.executable, GRAPHCTL, "lint-watch", "--repo", str(root2), "--json"], capture_output=True, text=True, env=env)
+    check("壞清單 rc2", r3.returncode == 2, f"rc={r3.returncode}")
+    # 清單條目缺必填欄位(missing current)→ rc 2
+    root3 = Path(tempfile.mkdtemp(prefix="gctl-lwcli3-"))
+    (root3 / ".lumos").mkdir()
+    (root3 / ".lumos" / "lint-watch.json").write_text(
+        '[{"name":"x","registry":"npm:x"}]', encoding="utf-8"
+    )
+    r4 = sp.run([sys.executable, GRAPHCTL, "lint-watch", "--repo", str(root3), "--json"],
+                capture_output=True, text=True, env=env)
+    check("malformed entry rc2", r4.returncode == 2, f"rc={r4.returncode} stderr={r4.stderr}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
