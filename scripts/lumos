@@ -4441,6 +4441,54 @@ def _compose_read_composables(reports_dir, prefix):
     return (non_skippable_fqns, fqn_to_name, unstable_map)
 
 
+COMPOSE_RATIO_EPS = 0.01
+
+
+def _compose_diff(module, baseline_mod, cur_agg, cur_non_skippable, fqn_to_name, umap):
+    """Return list of regression dicts for one module.
+
+    Regression kinds:
+    - new_non_skippable: FQN appeared in cur_non_skippable but not in baseline.
+    - aggregate/skippable_ratio: ratio dropped by more than COMPOSE_RATIO_EPS.
+    - aggregate/knownUnstableArguments|inferredUnstableClasses: count rose.
+    Removed composables (in baseline, not in current) are NOT reported.
+    """
+    regs = []
+    base_agg = baseline_mod.get("aggregate") or {}
+    base_non = set(baseline_mod.get("non_skippable") or [])
+
+    # new_non_skippable
+    for fqn in sorted(cur_non_skippable - base_non):
+        name = fqn_to_name.get(fqn, "")
+        regs.append({
+            "module": module,
+            "kind": "new_non_skippable",
+            "name": fqn,
+            "unstable_params": umap.get(name, []),
+        })
+
+    # skippable_ratio drop
+    br = base_agg.get("skippableComposables", 0) / max(base_agg.get("totalComposables", 0), 1)
+    cr = cur_agg.get("skippableComposables", 0) / max(cur_agg.get("totalComposables", 0), 1)
+    if cr < br - COMPOSE_RATIO_EPS:
+        regs.append({
+            "module": module,
+            "kind": "aggregate",
+            "metric": "skippable_ratio",
+            "baseline": round(br, 3),
+            "current": round(cr, 3),
+        })
+
+    # count increases (no EPS)
+    for k in ("knownUnstableArguments", "inferredUnstableClasses"):
+        b = base_agg.get(k, 0)
+        c = cur_agg.get(k, 0)
+        if c > b:
+            regs.append({"module": module, "kind": "aggregate", "metric": k, "baseline": b, "current": c})
+
+    return regs
+
+
 def _lint_watch_mode(repo_root, as_json):
     """lumos lint-watch: 讀 .lumos/lint-watch.json、逐條查 registry、輸出 manifest。
     rc 0 = 成功(含空清單); rc 2 = config 格式錯誤。

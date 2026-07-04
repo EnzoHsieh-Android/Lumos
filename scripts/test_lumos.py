@@ -3200,6 +3200,39 @@ def t_compose_parse():
           f"ns2={ns2} fn2={fn2} um2={um2}")
 
 
+def t_compose_diff():
+    import importlib.util as U
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    baseline = {"aggregate": {"skippableComposables": 96, "restartableComposables": 229,
+                              "totalComposables": 233, "knownUnstableArguments": 100, "inferredUnstableClasses": 29},
+                "non_skippable": ["com.citrus.KdsScreen"]}
+    cur_agg = {"skippableComposables": 96, "restartableComposables": 230, "totalComposables": 234,
+               "knownUnstableArguments": 108, "inferredUnstableClasses": 29}
+    cur_non = {"com.citrus.KdsScreen", "com.citrus.NewScreen"}   # NewScreen 新增
+    fqn2name = {"com.citrus.NewScreen": "NewScreen", "com.citrus.KdsScreen": "KdsScreen"}
+    umap = {"NewScreen": ["vm: CentralViewModel"]}
+    regs = m._compose_diff("app", baseline, cur_agg, cur_non, fqn2name, umap)
+    kinds = [(r["kind"], r.get("name") or r.get("metric")) for r in regs]
+    check("new_non_skippable NewScreen",
+          ("new_non_skippable", "com.citrus.NewScreen") in kinds, str(kinds))
+    nn = [r for r in regs if r["kind"]=="new_non_skippable"][0]
+    check("unstable_params 附上", nn["unstable_params"] == ["vm: CentralViewModel"], str(nn))
+    check("knownUnstableArguments 上升報", ("aggregate", "knownUnstableArguments") in kinds, str(kinds))
+    check("inferredUnstableClasses 未升→不報",
+          ("aggregate", "inferredUnstableClasses") not in kinds, str(kinds))
+    # skippable_ratio: baseline 96/233=.412, current 96/234=.410 → 差 .002 < EPS(.01) → 不報
+    check("ratio 微幅<EPS 不報", ("aggregate", "skippable_ratio") not in kinds, str(kinds))
+    # ratio 大跌:current skippable=80/234=.342 vs .412 差 .07>EPS → 報
+    regs2 = m._compose_diff("app", baseline, dict(cur_agg, skippableComposables=80), cur_non, fqn2name, umap)
+    check("ratio 大跌>EPS 報", any(r["kind"]=="aggregate" and r.get("metric")=="skippable_ratio" for r in regs2), str(regs2))
+    # 移除的 composable 不報:baseline 有 X 現況無 → 無 regression
+    regs3 = m._compose_diff("app", {"aggregate": baseline["aggregate"], "non_skippable": ["com.citrus.KdsScreen","com.citrus.Gone"]},
+                            cur_agg, {"com.citrus.KdsScreen"}, {}, {})
+    check("移除不報", not any(r["kind"]=="new_non_skippable" for r in regs3), str(regs3))
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
