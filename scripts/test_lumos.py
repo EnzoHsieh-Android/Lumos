@@ -3011,6 +3011,45 @@ def t_lint_watch_registry():
         os.environ.pop("LUMOS_LINT_WATCH_FIXTURE", None)
 
 
+def t_lint_watch_cli():
+    import subprocess as sp, json as J, os, tempfile
+    root = Path(tempfile.mkdtemp(prefix="gctl-lwcli-"))
+    (root / ".lumos").mkdir()
+    watch = [
+        {"name":"ruff","registry":"pypi:ruff","current":"0.4.2"},        # behind
+        {"name":"eslint","registry":"npm:eslint","current":"9.0.0"},     # current(相等)
+        {"name":"cal","registry":"npm:cal","current":"1.23.7"},          # skip(段數不一 2024.1)
+        {"name":"down","registry":"npm:down","current":"0.0.0"},         # fetch 失敗→failed
+    ]
+    (root / ".lumos" / "lint-watch.json").write_text(J.dumps(watch), encoding="utf-8")
+    fixture = {
+        "https://pypi.org/pypi/ruff/json": {"info":{"version":"0.4.9"}},
+        "https://registry.npmjs.org/eslint/latest": {"version":"9.0.0"},
+        "https://registry.npmjs.org/cal/latest": {"version":"2024.1"},
+        # down 無 fixture key → fetch None → failed
+    }
+    fx = root / "fx.json"; fx.write_text(J.dumps(fixture), encoding="utf-8")
+    env = dict(os.environ, LUMOS_LINT_WATCH_FIXTURE=str(fx))
+    r = sp.run([sys.executable, GRAPHCTL, "lint-watch", "--repo", str(root), "--json"],
+               capture_output=True, text=True, env=env)
+    check("rc 0", r.returncode == 0, r.stderr)
+    d = J.loads(r.stdout)
+    check("1 candidate(ruff)", len(d["candidates"]) == 1 and d["candidates"][0]["name"] == "ruff", str(d["candidates"]))
+    check("candidate latest", d["candidates"][0]["latest"] == "0.4.9", str(d["candidates"][0]))
+    check("checked = behind+current = 2", d["checked"] == 2, str(d["checked"]))
+    failed_names = {f["name"] for f in d["failed"]}
+    check("failed 含 cal(段數) + down(抓取)", failed_names == {"cal","down"}, str(d["failed"]))
+    # 缺清單 → rc 0 空候選
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-lwcli2-"))
+    r2 = sp.run([sys.executable, GRAPHCTL, "lint-watch", "--repo", str(root2), "--json"], capture_output=True, text=True, env=env)
+    check("缺清單 rc0", r2.returncode == 0 and J.loads(r2.stdout)["candidates"] == [], r2.stdout)
+    # 壞清單(非 list)→ rc 2
+    (root2 / ".lumos").mkdir()
+    (root2 / ".lumos" / "lint-watch.json").write_text('{"not":"a list"}', encoding="utf-8")
+    r3 = sp.run([sys.executable, GRAPHCTL, "lint-watch", "--repo", str(root2), "--json"], capture_output=True, text=True, env=env)
+    check("壞清單 rc2", r3.returncode == 2, f"rc={r3.returncode}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
