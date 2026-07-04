@@ -3134,6 +3134,54 @@ def t_lint_watch_google_maven():
         import shutil; shutil.rmtree(fx_dir, ignore_errors=True)
 
 
+def t_compose_parse():
+    import importlib.util as U, json, tempfile
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    d = Path(tempfile.mkdtemp(prefix="gctl-cm-"))
+    md = d / "metrics"; rd = d / "reports"; md.mkdir(); rd.mkdir()
+    (md / "app_release-module.json").write_text(json.dumps({
+        "skippableComposables": 96, "restartableComposables": 229, "totalComposables": 233,
+        "knownUnstableArguments": 100, "inferredUnstableClasses": 29}), encoding="utf-8")
+    # csv: KdsScreen non-skippable(skippable=0,restartable=1); MainFeatureBtn skippable(1,1)
+    (rd / "app_release-composables.csv").write_text(
+        "package,name,composable,skippable,restartable,readonly,inline,isLambda,hasDefaults,defaultsGroup,groups,calls,\n"
+        "com.citrus.KdsScreen,KdsScreen,1,0,1,0,0,0,0,0,2,15,\n"
+        "com.citrus.MainFeatureBtn,MainFeatureBtn,1,1,1,0,0,0,0,0,1,1,\n"
+        "com.citrus.GenScreen,GenScreen,1,0,1,0,0,0,0,0,1,1,\n", encoding="utf-8")
+    # txt: KdsScreen 有 unstable viewModel;GenScreen 為泛型 fun GenScreen<T>(;含空行 default;裸 fun helper 無關鍵字
+    (rd / "app_release-composables.txt").write_text(
+        'restartable scheme("[androidx.compose.ui.UiComposable]") fun KdsScreen(\n'
+        '  unstable viewModel: CentralViewModel\n'
+        '  stable askUpdate: Function0<Unit>\n'
+        ')\n'
+        'restartable skippable fun MainFeatureBtn(\n'
+        '  stable status: String = @static {\n'
+        '\n'                                # 空行(多行 default)不該斷區塊
+        '  }\n'
+        ')\n'
+        'restartable fun GenScreen<T>(\n'   # 泛型
+        '  unstable data: T\n'
+        ')\n'
+        'fun calculateYOffset(\n'           # 裸 fun 無關鍵字前綴
+        '  stable width: Int\n'
+        '): Dp\n', encoding="utf-8")
+    # module
+    mod = m._compose_read_module(str(md), "app_release")
+    check("module skippable", mod["skippableComposables"] == 96, str(mod))
+    check("module missing→None", m._compose_read_module(str(md), "nope") is None, "")
+    # composables
+    non_sk, fqn2name, umap = m._compose_read_composables(str(rd), "app_release")
+    check("non_skippable = KdsScreen+GenScreen(FQN)",
+          non_sk == {"com.citrus.KdsScreen", "com.citrus.GenScreen"}, str(non_sk))
+    check("fqn2name", fqn2name["com.citrus.KdsScreen"] == "KdsScreen", str(fqn2name))
+    check("unstable KdsScreen", umap.get("KdsScreen") == ["viewModel: CentralViewModel"], str(umap.get("KdsScreen")))
+    check("unstable GenScreen(泛型名剝<T>)", umap.get("GenScreen") == ["data: T"], str(umap.get("GenScreen")))
+    check("MainFeatureBtn 空行不斷→無 unstable", umap.get("MainFeatureBtn", []) == [], str(umap.get("MainFeatureBtn")))
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

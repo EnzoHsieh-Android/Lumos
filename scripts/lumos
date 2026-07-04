@@ -4387,6 +4387,57 @@ def _registry_latest(registry, fetch=None):
         return (None, f"registry query failed: {e}")
 
 
+def _compose_read_module(metrics_dir, prefix):
+    """Parse <metrics_dir>/<prefix>-module.json; missing file or parse error → None."""
+    import json, os
+    p = os.path.join(metrics_dir, prefix + "-module.json")
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _compose_read_composables(reports_dir, prefix):
+    """Parse composables CSV + TXT for a given prefix.
+
+    Returns (non_skippable_fqns:set, fqn_to_name:dict, unstable_map:dict).
+    Missing CSV → (set(), {}, {}); missing TXT → unstable_map empty.
+    """
+    import csv, os
+    non_skippable_fqns = set()
+    fqn_to_name = {}
+    unstable_map = {}
+
+    csv_path = os.path.join(reports_dir, prefix + "-composables.csv")
+    if os.path.exists(csv_path):
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                fqn = row["package"]
+                fqn_to_name[fqn] = row["name"]
+                if row.get("skippable") == "0" and row.get("restartable") == "1":
+                    non_skippable_fqns.add(fqn)
+
+    txt_path = os.path.join(reports_dir, prefix + "-composables.txt")
+    if os.path.exists(txt_path):
+        cur = None
+        with open(txt_path, encoding="utf-8") as f:
+            for line in f:
+                if " fun " in line and "(" in line:
+                    # Block start: extract name, strip generics
+                    name = line.split(" fun ", 1)[1].split("(", 1)[0]
+                    name = name.split("<", 1)[0]
+                    cur = name
+                    unstable_map[cur] = []
+                elif cur is not None and line.strip().startswith("unstable "):
+                    unstable_map[cur].append(line.strip()[len("unstable "):])
+                # Empty lines and other lines do not change cur
+
+    return (non_skippable_fqns, fqn_to_name, unstable_map)
+
+
 def _lint_watch_mode(repo_root, as_json):
     """lumos lint-watch: 讀 .lumos/lint-watch.json、逐條查 registry、輸出 manifest。
     rc 0 = 成功(含空清單); rc 2 = config 格式錯誤。
