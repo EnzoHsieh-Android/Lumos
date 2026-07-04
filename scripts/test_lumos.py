@@ -2965,8 +2965,8 @@ def t_lint_watch_semver():
     check("skip prerelease", m._compare_versions("1.0.0","1.1.0-RC1") == ("skip","prerelease"), str(m._compare_versions("1.0.0","1.1.0-RC1")))
     check("skip 段數不一(calendar)", m._compare_versions("1.23.7","2024.1") == ("skip","segment-count-mismatch"), str(m._compare_versions("1.23.7","2024.1")))
     check("skip 段數不一(4段maven)", m._compare_versions("5.0.1","5.0.1.3006") == ("skip","segment-count-mismatch"), "")
-    # 數值排序見證(證非字串比較:字串 '3.9' > '3.20.0')
-    check("數值 behind 3.9→3.20.0", m._compare_versions("3.9","3.20.0") == ("behind",""), str(m._compare_versions("3.9","3.20.0")))
+    # 數值排序見證(同段數,證非字串比較:字串 '1.9.0' > '1.20.0' 但數值應 behind)
+    check("數值 behind 1.9.0→1.20.0", m._compare_versions("1.9.0","1.20.0") == ("behind",""), str(m._compare_versions("1.9.0","1.20.0")))
 
 
 def main():
