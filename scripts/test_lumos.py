@@ -3134,6 +3134,180 @@ def t_lint_watch_google_maven():
         import shutil; shutil.rmtree(fx_dir, ignore_errors=True)
 
 
+def t_compose_parse():
+    import importlib.util as U, json, tempfile
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    d = Path(tempfile.mkdtemp(prefix="gctl-cm-"))
+    md = d / "metrics"; rd = d / "reports"; md.mkdir(); rd.mkdir()
+    (md / "app_release-module.json").write_text(json.dumps({
+        "skippableComposables": 96, "restartableComposables": 229, "totalComposables": 233,
+        "knownUnstableArguments": 100, "inferredUnstableClasses": 29}), encoding="utf-8")
+    # csv: KdsScreen non-skippable(skippable=0,restartable=1); MainFeatureBtn skippable(1,1);
+    #      ColZeroWidget non-skippable(0,1) — col-0 bare fun fixture
+    (rd / "app_release-composables.csv").write_text(
+        "package,name,composable,skippable,restartable,readonly,inline,isLambda,hasDefaults,defaultsGroup,groups,calls,\n"
+        "com.citrus.KdsScreen,KdsScreen,1,0,1,0,0,0,0,0,2,15,\n"
+        "com.citrus.MainFeatureBtn,MainFeatureBtn,1,1,1,0,0,0,0,0,1,1,\n"
+        "com.citrus.GenScreen,GenScreen,1,0,1,0,0,0,0,0,1,1,\n"
+        "com.citrus.ColZeroWidget,ColZeroWidget,1,0,1,0,0,0,0,0,1,1,\n", encoding="utf-8")
+    # txt: KdsScreen 有 unstable viewModel;GenScreen 為泛型 fun GenScreen<T>(;含空行 default;裸 fun helper 無關鍵字;
+    #      ColZeroWidget col-0 裸 fun 有 unstable param(M2 修正驗證)
+    (rd / "app_release-composables.txt").write_text(
+        'restartable scheme("[androidx.compose.ui.UiComposable]") fun KdsScreen(\n'
+        '  unstable viewModel: CentralViewModel\n'
+        '  stable askUpdate: Function0<Unit>\n'
+        ')\n'
+        'restartable skippable fun MainFeatureBtn(\n'
+        '  stable status: String = @static {\n'
+        '\n'                                # 空行(多行 default)不該斷區塊
+        '  }\n'
+        ')\n'
+        'restartable fun GenScreen<T>(\n'   # 泛型
+        '  unstable data: T\n'
+        ')\n'
+        'fun calculateYOffset(\n'           # 裸 fun 無關鍵字前綴(無 unstable)
+        '  stable width: Int\n'
+        '): Dp\n'
+        'fun ColZeroWidget(\n'             # col-0 裸 fun WITH unstable(M2 核心案例)
+        '  unstable data: Foo\n'
+        ')\n', encoding="utf-8")
+    # module
+    mod = m._compose_read_module(str(md), "app_release")
+    check("module skippable", mod["skippableComposables"] == 96, str(mod))
+    check("module missing→None", m._compose_read_module(str(md), "nope") is None, "")
+    # module corrupt JSON → None (M3: parse-error branch)
+    (md / "app_release-corrupt.json").write_text("{not json", encoding="utf-8")
+    check("module corrupt JSON→None", m._compose_read_module(str(md), "app_release-corrupt") is None, "")
+    # composables
+    non_sk, fqn2name, umap = m._compose_read_composables(str(rd), "app_release")
+    check("non_skippable = KdsScreen+GenScreen+ColZeroWidget(FQN)",
+          non_sk == {"com.citrus.KdsScreen", "com.citrus.GenScreen", "com.citrus.ColZeroWidget"}, str(non_sk))
+    check("fqn2name", fqn2name["com.citrus.KdsScreen"] == "KdsScreen", str(fqn2name))
+    check("unstable KdsScreen", umap.get("KdsScreen") == ["viewModel: CentralViewModel"], str(umap.get("KdsScreen")))
+    check("unstable GenScreen(泛型名剝<T>)", umap.get("GenScreen") == ["data: T"], str(umap.get("GenScreen")))
+    check("MainFeatureBtn 空行不斷→無 unstable", umap.get("MainFeatureBtn", []) == [], str(umap.get("MainFeatureBtn")))
+    check("col-0 fun ColZeroWidget unstable captured(M2)",
+          umap.get("ColZeroWidget") == ["data: Foo"], str(umap.get("ColZeroWidget")))
+    # csv missing → early-return empty (M1)
+    import tempfile as _tf
+    empty_rd = Path(_tf.mkdtemp(prefix="gctl-cm-nocsv-"))
+    (empty_rd / "x-composables.txt").write_text("fun Orphan(\n  unstable x: Y\n)\n", encoding="utf-8")
+    ns2, fn2, um2 = m._compose_read_composables(str(empty_rd), "x")
+    check("csv missing→early-return (set(),{},{})", (ns2, fn2, um2) == (set(), {}, {}),
+          f"ns2={ns2} fn2={fn2} um2={um2}")
+
+
+def t_compose_diff():
+    import importlib.util as U
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    baseline = {"aggregate": {"skippableComposables": 96, "restartableComposables": 229,
+                              "totalComposables": 233, "knownUnstableArguments": 100, "inferredUnstableClasses": 29},
+                "non_skippable": ["com.citrus.KdsScreen"]}
+    cur_agg = {"skippableComposables": 96, "restartableComposables": 230, "totalComposables": 234,
+               "knownUnstableArguments": 108, "inferredUnstableClasses": 29}
+    cur_non = {"com.citrus.KdsScreen", "com.citrus.NewScreen"}   # NewScreen 新增
+    fqn2name = {"com.citrus.NewScreen": "NewScreen", "com.citrus.KdsScreen": "KdsScreen"}
+    umap = {"NewScreen": ["vm: CentralViewModel"]}
+    regs = m._compose_diff("app", baseline, cur_agg, cur_non, fqn2name, umap)
+    kinds = [(r["kind"], r.get("name") or r.get("metric")) for r in regs]
+    check("new_non_skippable NewScreen",
+          ("new_non_skippable", "com.citrus.NewScreen") in kinds, str(kinds))
+    nn = [r for r in regs if r["kind"]=="new_non_skippable"][0]
+    check("unstable_params 附上", nn["unstable_params"] == ["vm: CentralViewModel"], str(nn))
+    check("knownUnstableArguments 上升報", ("aggregate", "knownUnstableArguments") in kinds, str(kinds))
+    check("inferredUnstableClasses 未升→不報",
+          ("aggregate", "inferredUnstableClasses") not in kinds, str(kinds))
+    # skippable_ratio: baseline 96/233=.412, current 96/234=.410 → 差 .002 < EPS(.01) → 不報
+    check("ratio 微幅<EPS 不報", ("aggregate", "skippable_ratio") not in kinds, str(kinds))
+    # ratio 大跌:current skippable=80/234=.342 vs .412 差 .07>EPS → 報
+    regs2 = m._compose_diff("app", baseline, dict(cur_agg, skippableComposables=80), cur_non, fqn2name, umap)
+    check("ratio 大跌>EPS 報", any(r["kind"]=="aggregate" and r.get("metric")=="skippable_ratio" for r in regs2), str(regs2))
+    # 移除的 composable 不報:baseline 有 X 現況無 → 無 regression
+    regs3 = m._compose_diff("app", {"aggregate": baseline["aggregate"], "non_skippable": ["com.citrus.KdsScreen","com.citrus.Gone"]},
+                            cur_agg, {"com.citrus.KdsScreen"}, {}, {})
+    check("移除不報", not any(r["kind"]=="new_non_skippable" for r in regs3), str(regs3))
+
+
+def t_compose_metrics_cli():
+    import subprocess as sp, json, tempfile
+    from pathlib import Path
+    root = Path(tempfile.mkdtemp(prefix="gctl-cmcli-"))
+    (root/".lumos").mkdir()
+    md = root/"app"/"m"; rd = root/"app"/"r"; md.mkdir(parents=True); rd.mkdir(parents=True)
+    (root/".lumos"/"compose-metrics.json").write_text(json.dumps(
+        {"modules":[{"name":"app","metrics_dir":"app/m","reports_dir":"app/r"}]}), encoding="utf-8")
+    def write_metrics(skippable, non_sk_rows):
+        (md/"app_release-module.json").write_text(json.dumps(
+            {"skippableComposables":skippable,"restartableComposables":10,"totalComposables":20,
+             "knownUnstableArguments":5,"inferredUnstableClasses":2}), encoding="utf-8")
+        rows = "package,name,composable,skippable,restartable,readonly,inline,isLambda,hasDefaults,defaultsGroup,groups,calls,\n"
+        for fqn,name in non_sk_rows:
+            rows += f"{fqn},{name},1,0,1,0,0,0,0,0,1,1,\n"
+        (rd/"app_release-composables.csv").write_text(rows, encoding="utf-8")
+        (rd/"app_release-composables.txt").write_text("", encoding="utf-8")
+    write_metrics(10, [("com.a.Foo","Foo")])
+    # baseline 缺 → baseline_missing、rc 0、無 regressions
+    r0 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--json"],capture_output=True,text=True)
+    d0 = json.loads(r0.stdout)
+    check("baseline_missing", r0.returncode==0 and d0["baseline_missing"] is True and d0["regressions"]==[], r0.stdout)
+    # --update-baseline 立基準
+    ru = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--update-baseline"],capture_output=True,text=True)
+    check("update-baseline rc0", ru.returncode==0 and (root/".lumos"/"compose-baseline.json").exists(), ru.stderr)
+    # 新增 non_skippable Bar → 報 new_non_skippable
+    write_metrics(10, [("com.a.Foo","Foo"),("com.a.Bar","Bar")])
+    r1 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--json"],capture_output=True,text=True)
+    d1 = json.loads(r1.stdout)
+    names = [x.get("name") for x in d1["regressions"] if x["kind"]=="new_non_skippable"]
+    check("new_non_skippable Bar", r1.returncode==0 and "com.a.Bar" in names, r1.stdout)
+    check("checked_modules 1", d1["checked_modules"]==1, str(d1))
+    # Fix #2: --update-baseline 當 0 模組解析時不能覆寫 baseline
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-cmcli-noparse-"))
+    (root2/".lumos").mkdir()
+    md2 = root2/"app"/"m"; rd2 = root2/"app"/"r"; md2.mkdir(parents=True); rd2.mkdir(parents=True)
+    (root2/".lumos"/"compose-metrics.json").write_text(json.dumps(
+        {"modules":[{"name":"app","metrics_dir":"app/m","reports_dir":"app/r"}]}), encoding="utf-8")
+    sentinel = '{"sentinel":true}'
+    (root2/".lumos"/"compose-baseline.json").write_text(sentinel, encoding="utf-8")
+    # no metrics files → all modules fail to parse → parsed list is empty
+    ru2 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root2),"--update-baseline"],capture_output=True,text=True)
+    after = (root2/".lumos"/"compose-baseline.json").read_text(encoding="utf-8")
+    check("0-parse baseline not overwritten", ru2.returncode==0 and after==sentinel, f"stdout={ru2.stdout!r} file={after!r}")
+    # Fix #1: corrupt baseline → baseline_unreadable=True, baseline_missing=False, rc 0, file intact
+    root3 = Path(tempfile.mkdtemp(prefix="gctl-cmcli-corrupt-"))
+    (root3/".lumos").mkdir()
+    md3 = root3/"app"/"m"; rd3 = root3/"app"/"r"; md3.mkdir(parents=True); rd3.mkdir(parents=True)
+    (root3/".lumos"/"compose-metrics.json").write_text(json.dumps(
+        {"modules":[{"name":"app","metrics_dir":"app/m","reports_dir":"app/r"}]}), encoding="utf-8")
+    corrupt_content = b"not valid json!!!"
+    (root3/".lumos"/"compose-baseline.json").write_bytes(corrupt_content)
+    write_metrics_into = lambda md_,rd_,sk,rows: (
+        (md_/("app_release-module.json")).write_text(json.dumps(
+            {"skippableComposables":sk,"restartableComposables":10,"totalComposables":20,
+             "knownUnstableArguments":5,"inferredUnstableClasses":2}), encoding="utf-8"),
+        (rd_/("app_release-composables.csv")).write_text(
+            "package,name,composable,skippable,restartable,readonly,inline,isLambda,hasDefaults,defaultsGroup,groups,calls,\n", encoding="utf-8"),
+        (rd_/("app_release-composables.txt")).write_text("", encoding="utf-8"),
+    )
+    write_metrics_into(md3, rd3, 10, [])
+    rc3 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root3),"--json"],capture_output=True,text=True)
+    d3 = json.loads(rc3.stdout)
+    after3 = (root3/".lumos"/"compose-baseline.json").read_bytes()
+    check("corrupt-baseline rc0", rc3.returncode==0, f"rc={rc3.returncode} stderr={rc3.stderr!r}")
+    check("corrupt-baseline unreadable true", d3.get("baseline_unreadable") is True, str(d3))
+    check("corrupt-baseline missing false", d3.get("baseline_missing") is not True, str(d3))
+    check("corrupt-baseline regressions empty", d3.get("regressions")==[], str(d3))
+    check("corrupt-baseline file intact", after3==corrupt_content, f"file changed: {after3!r}")
+    # 壞宣告 → rc 2
+    (root/".lumos"/"compose-metrics.json").write_text('[]', encoding="utf-8")
+    r2 = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root),"--json"],capture_output=True,text=True)
+    check("壞宣告 rc2", r2.returncode==2, f"rc={r2.returncode}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
