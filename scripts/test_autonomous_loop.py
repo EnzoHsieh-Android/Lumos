@@ -282,16 +282,26 @@ class TestDifficulty(unittest.TestCase):
         self.assertEqual(self.d.params("standard"), {"need": 2, "maxr": 6})
 
     def test_assess_spec_blacklist_strip(self):
+        filler = ("此次修改屬純內部程式重構,僅調整函數命名與模組內部呼叫順序,"
+                  "所有公開介面簽名維持不變。此重構不影響任何使用者可見的行為,"
+                  "不改變資料庫欄位定義,亦不涉及任何第三方系統整合。"
+                  "整體變更範圍限定於程式庫內部實作細節的整理與清理作業。")
         md = ("# t\n- 狀態:草稿\n"
-              "## 目標\n改內部排序邏輯。\n"
-              "## 組件\n重構 sort 模組,純內部。\n"
+              "## 目標\n改內部排序邏輯。" + filler + "\n"
+              "## 組件\n重構 sort 模組,純內部。" + filler + "\n"
               "## 誠實天花板\ncanary 與收斂判準的既有守衛不受影響。\n"
               "## 審計修正紀錄(design-loop)\nr1 canary caught。\n")
         self.assertEqual(self.d.assess_spec(md)["tier"], "standard")
 
     def test_assess_spec_title_variant(self):
-        md = ("# t\n## 目標\n改內部排序。\n## 組件\n純內部重構。\n"
-              "## 誠實天花板(v2 補)\ncanary 收斂判準。\n## 附:審計修正紀錄與備註\ncanary。\n")
+        filler = ("此次修改屬純內部程式重構,僅調整函數命名與模組內部呼叫順序,"
+                  "所有公開介面簽名維持不變。此重構不影響任何使用者可見的行為,"
+                  "不改變資料庫欄位定義,亦不涉及任何第三方系統整合。"
+                  "整體變更範圍限定於程式庫內部實作細節的整理與清理作業。")
+        md = ("# t\n## 目標\n改內部排序。" + filler + "\n"
+              "## 組件\n純內部重構。" + filler + "\n"
+              "## 誠實天花板(v2 補)\ncanary 收斂判準。\n"
+              "## 附:審計修正紀錄與備註\ncanary。\n")
         self.assertEqual(self.d.assess_spec(md)["tier"], "standard")
 
     def test_assess_spec_substantive_high(self):
@@ -304,9 +314,25 @@ class TestDifficulty(unittest.TestCase):
         self.assertEqual(self.d.assess_spec(md)["tier"], "high")  # 回退全文,偏嚴
 
     def test_assess_spec_strips_inline_code_and_filenames(self):
-        md = ("# t\n## 目標\n更新 `圖譜即合約-對外論述.md` 的段落說明,內容為文檔措辭。\n"
-              "## 組件\n見 圖譜即合約-對外論述.md 檔。\n## 其他\n無風險詞的內部整理。\n")
+        filler = ("此次修改屬純內部程式重構,僅調整函數命名與模組內部呼叫順序,"
+                  "所有公開介面簽名維持不變。此重構不影響任何使用者可見的行為,"
+                  "不改變資料庫欄位定義,亦不涉及任何第三方系統整合。"
+                  "整體變更範圍限定於程式庫內部實作細節的整理與清理作業。")
+        md = ("# t\n## 目標\n更新 `圖譜即合約-對外論述.md` 的段落說明,內容為文檔措辭。" + filler + "\n"
+              "## 組件\n見 圖譜即合約-對外論述.md 檔。" + filler + "\n"
+              "## 其他\n無風險詞的內部整理。" + filler + "\n")
         self.assertEqual(self.d.assess_spec(md)["tier"], "standard")  # 檔名「對外」不得誤觸
+
+    def test_assess_spec_fallback_short_corpus(self):
+        # 節數 ≥2 但剝除後 corpus <200 字元,且全文含「金流」在黑名單節
+        # → 字元門檻觸發回退 → 全文 assess → high(獨立驗字元條件起作用)
+        md = ("# t\n"
+              "## 目標\n短。\n"
+              "## 組件\n短。\n"
+              "## 誠實天花板\n金流對帳流程說明。\n")
+        # 確認剝除後餘文 <200 字元(目標+組件節保留,天花板節剝除)
+        r = self.d.assess_spec(md)
+        self.assertEqual(r["tier"], "high")  # 回退全文後命中「金流」
 
 
 if __name__ == "__main__":

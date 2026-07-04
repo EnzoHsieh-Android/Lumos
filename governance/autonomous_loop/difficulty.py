@@ -51,8 +51,8 @@ def assess_spec(md_text):
             n_sections += 1
         i += 2
     corpus = "\n".join(kept)
-    if n_sections < 2:
-        print("⚠ assess_spec: 剝除後餘文近空(節數<2),回退全文 assess(偏嚴)")
+    if n_sections < 2 or len(corpus) < 200:
+        print("⚠ assess_spec: 剝除後餘文近空(節數<2 或字元<200),回退全文 assess(偏嚴)")
         corpus = md_text
     corpus = _INLINE_CODE.sub(" ", corpus)
     corpus = _FILENAME.sub(" ", corpus)
