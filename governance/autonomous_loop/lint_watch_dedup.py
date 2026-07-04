@@ -27,6 +27,9 @@ def _line_message(new):
 
 
 def main(argv):
+    if len(argv) < 3:
+        print("usage: lint_watch_dedup.py <seen_path> <pending_path> <today>", file=sys.stderr)
+        return 2
     seen_path, pending_path, today = argv[0], argv[1], argv[2]
     try:
         manifest = json.load(sys.stdin)

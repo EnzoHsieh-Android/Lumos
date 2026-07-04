@@ -468,6 +468,24 @@ class TestLintWatchDedup(unittest.TestCase):
             input="ERROR: bad watch list", capture_output=True, text=True)
         self.assertEqual(r.stdout.strip(), "", f"非 JSON 應印空: {r.stdout!r}")
 
+    def test_new_candidates_malformed_seen_line_skipped(self):
+        """malformed line in seen.jsonl must be skipped; only valid seen entries filter candidates."""
+        cands = [
+            {"name": "detekt", "latest": "1.24.0"},
+            {"name": "ruff", "latest": "0.5.0"},
+        ]
+        # seen.jsonl: one malformed line, one valid line for "detekt"
+        self.seen.write_text(
+            "not json\n"
+            '{"name":"detekt","latest":"1.24.0","seen":"2026-07-04"}\n',
+            encoding="utf-8")
+        result = self.m.new_candidates(cands, str(self.seen))
+        # must not crash, detekt is seen (valid line) → filtered out
+        names = [c["name"] for c in result]
+        self.assertNotIn("detekt", names, "detekt は valid seen line で除外されるべき")
+        # ruff matches malformed line's key only if parsed — since malformed is skipped, ruff is new
+        self.assertIn("ruff", names, "ruff は malformed line に一致せず新候補のはず")
+
 
 if __name__ == "__main__":
     unittest.main()
