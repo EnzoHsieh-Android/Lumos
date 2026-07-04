@@ -126,8 +126,10 @@ fi
 
 REPORT_MD="$(cd "$REPO" && python3 -c "
 import sys, json; sys.path.insert(0,'governance')
-from autonomous_loop import confidence_report
-print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json.loads('''$RESIDUAL''')))
+from autonomous_loop import confidence_report, difficulty
+a=difficulty.assess_spec(open('$SPEC').read())
+print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json.loads('''$RESIDUAL'''),
+      tier=a['tier'], hits=a['hits'], reported_tier='$TIER_RESULT'))
 ")"
 
 [ -n "$CROSS_VERDICT" ] && log "跨家族複核:$CROSS_VERDICT($CROSS_WORST)— $CROSS_SUMMARY"

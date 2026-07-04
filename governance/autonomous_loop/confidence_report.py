@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-def build_report(canary_log, loop_id, residual_risks):
+def build_report(canary_log, loop_id, residual_risks, tier=None, hits=None, reported_tier=None):
     rows = []
     p = Path(canary_log)
     if p.exists():
@@ -9,7 +9,15 @@ def build_report(canary_log, loop_id, residual_risks):
             if not l.strip(): continue
             r = json.loads(l)
             if r.get("loop") == loop_id: rows.append(r)
-    lines = [f"## 收斂可信度報告(loop={loop_id})", "", f"**共 {len(rows)} 輪:**", ""]
+    lines = [f"## 收斂可信度報告(loop={loop_id})", ""]
+    if tier:
+        mismatch = (f"(⚠ result JSON 自報 `{reported_tier}` ≠ 自算——紅標,查參數謊報)"
+                    if reported_tier not in (None, "", tier) else "")
+        lines.append(f"**風險級 tier=`{tier}`(wrapper 對最終 spec 自算)**{mismatch}")
+        for h in (hits or []):
+            lines.append(f"- hit `{h.get('class')}`:…{h.get('excerpt', '')}…")
+        lines.append("")
+    lines += [f"**共 {len(rows)} 輪:**", ""]
     for i, r in enumerate(rows, 1):
         lines.append(f"- R{i}: `{r.get('kind')}` / severity=`{r.get('severity')}` / "
                      f"auditor=`{r.get('auditor','?')}` — {r.get('note','')}")

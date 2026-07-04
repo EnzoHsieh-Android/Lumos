@@ -100,6 +100,22 @@ class TestConfidenceReport(unittest.TestCase):
         self.assertIn("共 0 輪", md)
         self.assertIn("risk1", md)
 
+    def test_tier_rendered_and_mismatch_flag(self):
+        d = Path(tempfile.mkdtemp()); log = d / "c.jsonl"
+        log.write_text('{"loop":"x","kind":"caught","severity":"clean","note":"r1"}\n',
+                       encoding="utf-8")
+        r = confidence_report.build_report(str(log), "x", ["天花板"], tier="high",
+                                           hits=[{"class": "payment", "excerpt": "接 stripe 收款"}],
+                                           reported_tier="standard")
+        self.assertIn("tier=`high`", r)
+        self.assertIn("payment", r)
+        self.assertIn("紅標", r)
+        r2 = confidence_report.build_report(str(log), "x", ["天花板"], tier="high",
+                                            hits=[], reported_tier="high")
+        self.assertNotIn("紅標", r2)
+        r3 = confidence_report.build_report(str(log), "x", ["天花板"])
+        self.assertNotIn("tier=", r3)   # 向後相容:不傳 tier 照舊
+
 
 class TestLineNotify(unittest.TestCase):
     def test_build_message_has_title_and_pr(self):
