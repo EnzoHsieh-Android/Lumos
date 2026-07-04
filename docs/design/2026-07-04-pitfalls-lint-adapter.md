@@ -1,7 +1,7 @@
 # 設計:pitfalls lint 整合(pitfalls-lint-adapter)— `--diff` 從 regex 提示器升級為 lint 整合器
 
 - 日期:2026-07-04
-- 狀態:draft(design-loop 前)
+- 狀態:draft — 純文字 design-loop 3 輪到頂(r1/r2/r3 連三 major、17 findings 折入,主結構穩;但真機整合細節[SARIF uri 形態/git range rev-parse/detekt SARIF 旗標]每文字化一層又生新縫,真值在真機非文字)→ **轉真機 tracer(KDS 專案)定稿**,同 rot-eval「先 prototype」哲學。
 - 動機來源:`Projects/pitfalls-lint-integration_計劃` 第 ① 塊(地基)。brainstorm(2026-07-04)收斂:pitfalls 不是規則庫、是提問+整合+接線;通則(ruff S113/SIM115)與偏科(compose-rules/detekt/eslint)社群 linter 已有且 AST 級更準,兩者都該讓給 linter(composition over invention);整合共通格式=SARIF。
 - loop_id:pitfalls-lint-adapter
 - 計劃回指:docs/lumos-toolchain-knowledge/Projects 的 pitfalls-lint-integration_計劃 節點。
