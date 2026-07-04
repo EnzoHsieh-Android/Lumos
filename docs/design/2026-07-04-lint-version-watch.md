@@ -29,7 +29,7 @@
 
 ## 產出物清單(本 spec 建立)
 
-- `scripts/lumos` 新增 `lint-watch` 子命令 + helper(`_semver_parse`/`_is_prerelease`/`_semver_behind`/`_registry_latest`/`_http_get_json`)。
+- `scripts/lumos` 新增 `lint-watch` 子命令 + helper(`_semver_parse`/`_is_prerelease`/`_compare_versions`/`_registry_latest`/`_http_get_json`)。
 - **governance/lint-watch-check.sh**(治理排程 shell,掛 wrapper 第 3 步)。
 - **governance/autonomous_loop/lint_watch_dedup.py**(seen-ledger 去重 helper,可單元測)。
 - **governance/lint-upgrades/**(暫存目錄:`pending-<DATE>.json` + `seen.jsonl`)。
@@ -84,7 +84,7 @@
 ### CLI 接線(沿既有 subcommand 慣例,同 refcheck)
 
 - `sub.add_parser("lint-watch")`;`--repo`(dest=`lint_watch_repo`,預設 `.`);`--json`(store_true)。無位置參數——清單固定讀 `<repo>/.lumos/lint-watch.json`。
-- dispatch:`if args.cmd == "lint-watch": ...`。非 `--json` 時印人可讀摘要(每候選一行 `<name> <current> → <latest>`),`--json` 時印上述 manifest。
+- dispatch:`if args.cmd == "lint-watch": ...`,**須置於 `vault = args.vault or find_vault(...)` 之前**(vault-free,同 `refcheck`/`pitfalls`/`anchor`;置於其後會對無 `docs/*-knowledge/` vault 的專案報「找不到 vault」而失效)。非 `--json` 時印人可讀摘要(每候選一行 `<name> <current> → <latest>`),`--json` 時印上述 manifest。
 
 ### semver 解析與比較
 
@@ -125,8 +125,8 @@ prerelease 過濾在 `_registry_latest` 內做(回 `(None, reason)`),不到 `_co
 - 對 repo 根跑 `lumos lint-watch --repo "$REPO" --json`,stdout 存 `$OUT`。
 - **去重 helper** `lint_watch_dedup.py`:
   - 純函式 `new_candidates(candidates, seen_path) -> list`——讀 `seen.jsonl`、回 `(name, latest)` 不在 seen 的候選(單元測對象)。
-  - **`__main__` CLI 契約(shell 接線用)**:`python3 lint_watch_dedup.py <seen_path>`,**stdin 讀** `lumos lint-watch --json` 全量 manifest、**stdout 印** `{"new":[...新候選...], "line_text":"<組好的通知文字>"}`(text 為空表無新候選)。shell 只 pipe:`cat "$OUT" | python3 .../lint_watch_dedup.py "$SEEN"`。
-- 有新候選(helper stdout `new` 非空)→ ① 寫 **governance/lint-upgrades/pending-<TODAY>.json**(僅新候選)② 對新候選 append `seen.jsonl`(不論通知結果)③ LINE 通知:helper 已在 `line_text` 組好文字(格式 `🔧 lint 升級候選(<N>):\n<name> <current>→<latest>(<type>)\n...`,`<type>` = `registry.split(":",1)[0]`,批次一則),shell 把它包成 LINE API dict `{"messages":[{"type":"text","text":"$line_text"}]}` 傳 `line_notify.send(message, token)`(**`send` 直接 `json.dumps` message POST broadcast API,故必須是 dict 非裸字串,r2 認**);token 讀 `~/.config/ai-daily/line_token`,缺 → log 跳過。
+  - **`__main__` CLI 契約(shell 接線用)**:`python3 lint_watch_dedup.py <seen_path>`,**stdin 讀** `lumos lint-watch --json` 全量 manifest、**stdout 印** `{"new":[...新候選...], "line_message": <完整 LINE API dict 或 null>}`。`line_message` **由 helper(python)直接組好完整 dict** `{"messages":[{"type":"text","text":"🔧 lint 升級候選(<N>):\n..."}]}`(文字含 `\n`/emoji、由 python `json.dumps` 正確轉義);無新候選時 `new=[]`、`line_message=null`。**shell 不碰 JSON 組裝**(避免多行字串內插進 shell-built JSON 破格,r4 認)。shell pipe:`cat "$OUT" | python3 .../lint_watch_dedup.py "$SEEN" > "$DEDUP_OUT"`。
+- 有新候選(`new` 非空)→ ① 寫 **governance/lint-upgrades/pending-<TODAY>.json**(僅新候選)② 對新候選 append `seen.jsonl`(不論通知結果)③ LINE 通知:`<type>` = `registry.split(":",1)[0]`(python 端組)。shell 把 `line_message`(已是完整 dict)透過 env-var 交給 python 一行呼 `line_notify.send(json.loads(os.environ["MSG"]), token)`(沿 `autonomous-loop.sh` 的 `MSG=... python3 -c` 慣例,**不在 shell 重建 JSON**);token 讀 `~/.config/ai-daily/line_token`,缺 → log 跳過。**`send` 直接 `json.dumps` message POST broadcast API,故傳 dict 非裸字串(r2 認)**。
 - 無新候選 → 靜默(不通知、不寫檔)。
 - 本步任何失敗只 log、rc 不外傳(wrapper 不 `-e`)。
 
@@ -152,7 +152,7 @@ prerelease 過濾在 `_registry_latest` 內做(回 `(None, reason)`),不到 `_co
 1. `_semver_parse`/`_compare_versions`:`1.23.7` vs `1.24.0`→behind;反向→current;相等→current;`v1.2.3` 前綴剝除;非 semver 段(亂字串)→ parse None → skip(unparseable);**等段數守衛**:`2024.1`(2 段)vs `1.23.7`(3 段)→ skip(segment-count-mismatch);`5.0.1`(3 段)vs `5.0.1.3006`(4 段)→ skip。**數值排序見證**:`3.9` vs `3.20.0` → behind(證非字串比較——字串 `3.9`>`3.20.0`)。
 2. `_is_prerelease`:**正例** `1.24.0-RC1`/`0.5.0b1`(PEP 440 dashless)/`2.22.0.dev20260702`→True;**負例(不可假陽性)** `1.24.0`/`5.0.2.4997`/`cobra`(字母中段無數字/分隔前綴)→False。
 3. `_registry_latest`(回 `(latest, reason)` 二元組)四型:fixture 餵各 registry JSON 形狀(pypi info.version / npm version / maven `data["response"]["docs"][].v` 過濾後**數值** max / github tag_name **剝 `v` 前綴**驗)→ 正確抽出回 `(版本, None)`;**pypi info.version 為 prerelease(如 `0.4.3a1`)→ 回 `(None, "latest is prerelease")`**;maven prerelease 過濾 + 數值 max 見證(docs 含 `3.9`/`3.20.0`/`RC` → 回 `3.20.0`);maven 過濾後空 → `(None, "no stable version")`;抓取回 None(例外/欄位缺)→ `(None, "registry query failed: ...")`。
-4. `lint-watch --json` 端到端(subprocess 跑真 CLI + `LUMOS_LINT_WATCH_FIXTURE` + git fixture + `.lumos/lint-watch.json`):落後條進 candidates、skip 條進 failed、**已是最新條(current)計入 checked 但不進 candidates/failed**、checked 計數 = behind+current 條數。
+4. `lint-watch --json` 端到端(subprocess 跑真 CLI + `LUMOS_LINT_WATCH_FIXTURE` + 臨時目錄當 `--repo` 根[**無 git 互動**,lint-watch 不碰 git]+ `.lumos/lint-watch.json`):落後條進 candidates、skip 條進 failed、**已是最新條(current)計入 checked 但不進 candidates/failed**、checked 計數 = behind+current 條數。
 5. rc:缺清單→0 空候選;**空 list `[]`→0 空候選**;壞清單(非 list / 缺必填欄)→2;全條 fixture-fail→rc 0(fail-open)。
 
 治理層:`lint_watch_dedup.new_candidates` 單元測(候選 + seen → 新候選集,含 ① 空 seen ② 全已見 ③ 部分新 ④ **同 name 但新 latest**(seen 有 `detekt/1.23.7`、候選 `detekt/1.24.0` → 算新,證去重 key 是 `(name,latest)` 非僅 `name`)四例);LINE `send` 重用既有、不重測;shell 接線以 `lumos lint-watch --json` 契約 + `lint_watch_dedup` 的 `__main__` 契約為準。
@@ -214,3 +214,12 @@ canary 性質被點出(無儲存/無 schema/無測試的懸空常數,auditor 還
 - **m-2(折)**:測試缺 pypi prerelease 路徑 / 去重同 name 新 latest → 補案。
 - **m-3(折)**:LINE `<type>` 來源未定 → 明定 `registry.split(":",1)[0]`。
 存活 5 條全折入(canary B-1 不折)。
+
+### R4(2026-07-04,canary type d=未定義產物 `registry-cache.json`(裸檔名),sonnet,**CAUGHT**,severity=major,存活 findings=4)
+
+canary 被點出(唯一提及快取行、無 schema/測試/清單,auditor 比對 canary c/d 型——依規不折)。此輪 auditor 列出大量「無缺陷」乾淨區(spec 已硬化),存活真 finding:
+- **F2 major(折)**:shell 把多行 `line_text`(含 `\n`/emoji)內插進 shell-built JSON 會破格 → 改由 dedup helper(python)直接輸出**完整 LINE dict** `line_message`,shell 只透過 env-var 傳回 python `send`,不碰 JSON 組裝。
+- **F3 minor(折)**:產出物清單殘留舊名 `_semver_behind`(r2 已改 `_compare_versions`)→ 更正。
+- **F4 minor(折)**:測試 4 誤稱「git fixture」(lint-watch 無 git 互動)→ 改「臨時目錄當 repo 根」。
+- **F5 minor(折)**:dispatch 未言明須置於 `find_vault()` 前(vault-free)→ 補明。
+存活 4 條全折入(canary F1 不折)。
