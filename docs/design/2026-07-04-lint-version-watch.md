@@ -123,11 +123,11 @@ prerelease 過濾在 `_registry_latest` 內做(回 `(None, reason)`),不到 `_co
 - 掛進 `governance/daily-governance.sh` 第 3 步(在報告、autonomous-loop 之後;wrapper `set -uo pipefail` 無 `-e`,本步失敗不影響前兩步)。
 - **repo 根探法**:同 `autonomous-loop.sh`——`SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"`、repo 根 = `$SCRIPT_DIR/..`(shell 在 `governance/` 下)。
 - 對 repo 根跑 `lumos lint-watch --repo "$REPO" --json`,stdout 存 `$OUT`。
-- **去重 helper** `lint_watch_dedup.py`:
-  - 純函式 `new_candidates(candidates, seen_path) -> list`——讀 `seen.jsonl`、回 `(name, latest)` 不在 seen 的候選(單元測對象)。
-  - **`__main__` CLI 契約(shell 接線用)**:`python3 lint_watch_dedup.py <seen_path>`,**stdin 讀** `lumos lint-watch --json` 全量 manifest、**stdout 印** `{"new":[...新候選...], "line_message": <完整 LINE API dict 或 null>}`。`line_message` **由 helper(python)直接組好完整 dict** `{"messages":[{"type":"text","text":"🔧 lint 升級候選(<N>):\n..."}]}`(文字含 `\n`/emoji、由 python `json.dumps` 正確轉義);無新候選時 `new=[]`、`line_message=null`。**shell 不碰 JSON 組裝**(避免多行字串內插進 shell-built JSON 破格,r4 認)。shell pipe:`cat "$OUT" | python3 .../lint_watch_dedup.py "$SEEN" > "$DEDUP_OUT"`。
-- 有新候選(`new` 非空)→ ① 寫 **governance/lint-upgrades/pending-<TODAY>.json**(僅新候選)② 對新候選 append `seen.jsonl`(不論通知結果)③ LINE 通知:`<type>` = `registry.split(":",1)[0]`(python 端組)。shell 把 `line_message`(已是完整 dict)透過 env-var 交給 python 一行呼 `line_notify.send(json.loads(os.environ["MSG"]), token)`(沿 `autonomous-loop.sh` 的 `MSG=... python3 -c` 慣例,**不在 shell 重建 JSON**);token 讀 `~/.config/ai-daily/line_token`,缺 → log 跳過。**`send` 直接 `json.dumps` message POST broadcast API,故傳 dict 非裸字串(r2 認)**。
-- 無新候選 → 靜默(不通知、不寫檔)。
+- **去重 helper** `lint_watch_dedup.py`(**所有 JSON 讀寫都在 python;shell 完全不解析/組裝 JSON**——r4 認 shell 組 JSON 破格、r5 認 shell 也不該解析 JSON):
+  - 純函式 `new_candidates(candidates, seen_path) -> list`——讀 `seen.jsonl`(**檔不存在 → 視為空 seen、回全部候選**,首跑無 seen.jsonl 是常態)、回 `(name, latest)` 不在 seen 的候選(單元測對象)。
+  - **`__main__` 契約(把 ①②③ 的 JSON 側效全收進 python,shell 只判空字串)**:`python3 lint_watch_dedup.py <seen_path> <pending_path> <today>`,**stdin 讀** `lumos lint-watch --json` 全量 manifest。行為:算 new candidates → 若非空:**① 寫 `<pending_path>`**(JSON array of `{name, registry, current, latest}`)**② append `<seen_path>`**(每筆 `{name, latest, seen:<today>}`)**③ stdout 印**組好的完整 LINE API dict `{"messages":[{"type":"text","text":"🔧 lint 升級候選(<N>):\n<name> <current>→<latest>(<type>)\n..."}]}`(`<type>`=`registry.split(":",1)[0]`;`json.dumps` 自動轉義 `\n`/emoji);若 new 為空 → 不寫檔、stdout 印空字串。
+  - shell 只需:`MSG=$(cat "$OUT" | python3 .../lint_watch_dedup.py "$SEEN" "$PENDING" "$TODAY")`,再 `[ -n "$MSG" ] && MSG="$MSG" python3 -c 'import os,json,line_notify; line_notify.send(json.loads(os.environ["MSG"]), TOKEN)'`(**shell 把 `$MSG` 當不透明字串傳,不解析**)。token 讀 `~/.config/ai-daily/line_token`,缺 → log 跳過。
+  - ⚠ 此 `MSG` 用法**與 `autonomous-loop.sh` 不同**:那邊 `MSG` 是純文字經 `build_message` 包裝;這邊 `MSG` 已是 `json.dumps` 過的完整 dict、python 端 `json.loads` 後直接 `send`(跳過 `build_message`,領域不符)。**`send` 內部再 `json.dumps` POST broadcast(r2 認)**。
 - 本步任何失敗只 log、rc 不外傳(wrapper 不 `-e`)。
 
 ## 實務隱患
@@ -152,10 +152,10 @@ prerelease 過濾在 `_registry_latest` 內做(回 `(None, reason)`),不到 `_co
 1. `_semver_parse`/`_compare_versions`:`1.23.7` vs `1.24.0`→behind;反向→current;相等→current;`v1.2.3` 前綴剝除;非 semver 段(亂字串)→ parse None → skip(unparseable);**等段數守衛**:`2024.1`(2 段)vs `1.23.7`(3 段)→ skip(segment-count-mismatch);`5.0.1`(3 段)vs `5.0.1.3006`(4 段)→ skip。**數值排序見證**:`3.9` vs `3.20.0` → behind(證非字串比較——字串 `3.9`>`3.20.0`)。
 2. `_is_prerelease`:**正例** `1.24.0-RC1`/`0.5.0b1`(PEP 440 dashless)/`2.22.0.dev20260702`→True;**負例(不可假陽性)** `1.24.0`/`5.0.2.4997`/`cobra`(字母中段無數字/分隔前綴)→False。
 3. `_registry_latest`(回 `(latest, reason)` 二元組)四型:fixture 餵各 registry JSON 形狀(pypi info.version / npm version / maven `data["response"]["docs"][].v` 過濾後**數值** max / github tag_name **剝 `v` 前綴**驗)→ 正確抽出回 `(版本, None)`;**pypi info.version 為 prerelease(如 `0.4.3a1`)→ 回 `(None, "latest is prerelease")`**;maven prerelease 過濾 + 數值 max 見證(docs 含 `3.9`/`3.20.0`/`RC` → 回 `3.20.0`);maven 過濾後空 → `(None, "no stable version")`;抓取回 None(例外/欄位缺)→ `(None, "registry query failed: ...")`。
-4. `lint-watch --json` 端到端(subprocess 跑真 CLI + `LUMOS_LINT_WATCH_FIXTURE` + 臨時目錄當 `--repo` 根[**無 git 互動**,lint-watch 不碰 git]+ `.lumos/lint-watch.json`):落後條進 candidates、skip 條進 failed、**已是最新條(current)計入 checked 但不進 candidates/failed**、checked 計數 = behind+current 條數。
+4. `lint-watch --json` 端到端(subprocess 跑真 CLI + `LUMOS_LINT_WATCH_FIXTURE` + 臨時目錄當 `--repo` 根[**無 git 互動**,lint-watch 不碰 git]+ `.lumos/lint-watch.json`):落後條進 candidates、**skip 三路徑各一 fixture 條進 failed 且 reason 對**(prerelease / unparseable / segment-count-mismatch,非只測最易觸發的一條)、**已是最新條(current)計入 checked 但不進 candidates/failed**、checked 計數 = behind+current 條數。
 5. rc:缺清單→0 空候選;**空 list `[]`→0 空候選**;壞清單(非 list / 缺必填欄)→2;全條 fixture-fail→rc 0(fail-open)。
 
-治理層:`lint_watch_dedup.new_candidates` 單元測(候選 + seen → 新候選集,含 ① 空 seen ② 全已見 ③ 部分新 ④ **同 name 但新 latest**(seen 有 `detekt/1.23.7`、候選 `detekt/1.24.0` → 算新,證去重 key 是 `(name,latest)` 非僅 `name`)四例);LINE `send` 重用既有、不重測;shell 接線以 `lumos lint-watch --json` 契約 + `lint_watch_dedup` 的 `__main__` 契約為準。
+治理層:`lint_watch_dedup.new_candidates` 單元測(候選 + seen → 新候選集,含 ① 空 seen(**含 seen.jsonl 不存在**)② 全已見 ③ 部分新 ④ **同 name 但新 latest**(seen 有 `detekt/1.23.7`、候選 `detekt/1.24.0` → 算新,證去重 key 是 `(name,latest)` 非僅 `name`)四例);`__main__` 側效測(餵 manifest → 驗 `pending_path` 寫出正確 array、`seen.jsonl` append 正確、stdout 為完整 LINE dict;無新候選 → 不寫檔、stdout 空);LINE `send` 重用既有、不重測;shell 接線以 `lint_watch_dedup` 的 `__main__` 契約為準。
 
 ## 知識同步影響
 
@@ -223,3 +223,13 @@ canary 被點出(唯一提及快取行、無 schema/測試/清單,auditor 比對
 - **F4 minor(折)**:測試 4 誤稱「git fixture」(lint-watch 無 git 互動)→ 改「臨時目錄當 repo 根」。
 - **F5 minor(折)**:dispatch 未言明須置於 `find_vault()` 前(vault-free)→ 補明。
 存活 4 條全折入(canary F1 不折)。
+
+### R5(2026-07-04,canary type a=壞章節交叉引用(不存在的退避策略節),sonnet,**CAUGHT**,severity=major,存活 findings=5)
+
+canary 被點出(懸空節指標,20 節無此節——依規不折)。findings 較 r4 回升(4→5),因 r4「shell 不組 JSON」修法的反面:shell 現在需**解析** DEDUP_OUT 才能做 ①②③(M-1)。結構性解:把 ①②③ 的 JSON 側效全收進 `lint_watch_dedup.py __main__`,shell 只判空字串、不碰 JSON。auditor 另列大量乾淨區(核心設計已穩)。
+- **M-1 major(折)**:shell 需解析 dedup JSON 做 ①②③ 但未定義機制、且 spec 禁 shell 組 JSON → `__main__` 收 pending 寫入 + seen append 側效(收 `<pending_path> <today>` 參數),shell 只 `MSG=$(...)` + 判空傳 send。
+- **m-1(折)**:`MSG` 用法與 autonomous-loop 不同(dict vs 純文字、跳 build_message)→ 明標「與慣例不同」。
+- **m-2(折)**:`pending-<DATE>.json` schema 未定 → 明定 array of `{name,registry,current,latest}`。
+- **m-3(折)**:測試 4「skip 進 failed」未指哪條路徑 → 三 skip reason 各一 fixture。
+- **m-4(折)**:`new_candidates` seen.jsonl 不存在行為未定 → 明定不存在=空 seen。
+存活 5 條全折入(canary B-1 不折)。**註:findings 回升 + M-1 為 r4 修法反面,收斂訊號未穩;結構性合併後 r6 應收斂。**
