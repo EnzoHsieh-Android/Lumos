@@ -43,14 +43,27 @@ print('LINE', line_notify.send(line_notify.build_message('anchor-integrity', os.
   exit 1
 fi
 
+# ── tier 分級(risk-tiered-review):gap 文本 assess → 注入 NEED/TIER/MAXR_EFF ──
+read -r TIER NEED < <(echo "$GAP_JSON" | python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import difficulty
+g=json.load(sys.stdin)
+a=difficulty.assess((g.get('weakness','') or '')+'\n'+(g.get('suggestion','') or ''))
+p=difficulty.params(a['tier'])
+print(a['tier'], p['need'])")
+MAXR_EFF="$MAXR"
+[ "$TIER" = "high" ] && MAXR_EFF="$(( MAXR > 8 ? MAXR : 8 ))"
+log "tier 分級:$TIER(need=$NEED, maxr=$MAXR_EFF)"
+
 PROMPT_FILE="$(mktemp)"
-sed -e "s#__SCRATCH__#$SCRATCH#g" -e "s#__DATE__#$TODAY#g" -e "s#__MAXR__#$MAXR#g" \
+sed -e "s#__SCRATCH__#$SCRATCH#g" -e "s#__DATE__#$TODAY#g" -e "s#__MAXR__#$MAXR_EFF#g" \
+    -e "s#__NEED__#$NEED#g" -e "s#__TIER__#$TIER#g" \
     "$SCRIPT_DIR/autonomous_loop/orchestrator-prompt.md" > "$PROMPT_FILE"
 printf '\n\n## 要處理的 gap\n%s\n模式:%s\n' "$GAP_JSON" "$MODE" >> "$PROMPT_FILE"
 export ANTHROPIC_API_KEY=""
 export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.config/ai-daily/claude_oauth_token" 2>/dev/null)"
 ORCH_OUT="$LOGDIR/orchestrator-$TODAY.json"
-log "派 orchestrator(claude -p,最多 $MAXR 輪)..."
+log "派 orchestrator(claude -p,最多 $MAXR_EFF 輪)..."
 (cd "$REPO" && claude -p "$(cat "$PROMPT_FILE")" \
   --allowedTools "Read,Edit,Bash,Grep,Glob,Agent" \
   --permission-mode acceptEdits --output-format json) > "$ORCH_OUT" 2>"$LOGDIR/orchestrator-$TODAY.err" || true
@@ -70,6 +83,7 @@ case "$PARSED" in PARSE_FAIL*|NO_JSON*|"") log "orchestrator 輸出無法解析,
 get(){ echo "$PARSED" | python3 -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
 SKIPPED="$(get skipped)"; CONVERGED="$(get converged)"; TOPIC="$(get topic)"; SPEC="$(get spec_path)"
 CROSS_VERDICT="$(get cross_verdict)"; CROSS_WORST="$(get cross_worst)"; CROSS_SUMMARY="$(get cross_summary)"
+TIER_RESULT="$(get tier)"
 CROSS_SUMMARY="${CROSS_SUMMARY//$'\n'/ }"   # F3 防破版:換行→空格
 
 if [ "$SKIPPED" = "True" ]; then
@@ -91,6 +105,8 @@ RESIDUAL='["跨家族複核已加(qwen3-max 放行前複核 opus 設計、補同
 if [ "$CONVERGED" != "True" ]; then
   if [ "$CROSS_VERDICT" = "disputed" ]; then
     MSG="⚠ 跨家族否決(qwen 持續異議):$CROSS_SUMMARY"; log "未收斂(跨家族否決 disputed),不放行:$CROSS_SUMMARY"
+  elif [ "$CROSS_VERDICT" = "degraded" ] && [ "$TIER" = "high" ]; then
+    MSG="⚠ 高風險級複核缺席(degraded)、fail-closed 擋下:$CROSS_SUMMARY"; log "未收斂(高風險級複核 degraded fail-closed),不放行:$CROSS_SUMMARY"
   else
     MSG="⚠ 今日 spec 未收斂、未放行(撞 cap)"; log "未收斂(converged=$CONVERGED),不放行,scratch 不入庫。"
   fi
@@ -110,13 +126,71 @@ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DI
   exit 0
 fi
 
+[ -n "$CROSS_VERDICT" ] && log "跨家族複核:$CROSS_VERDICT($CROSS_WORST)— $CROSS_SUMMARY"
+
+# ── tier 收檔守衛:不信自報 converged——wrapper 自算 tier、以其 need 重驗 gate ──
+if [ -z "$SPEC" ] || [ ! -f "$SPEC" ]; then
+  log "tier 守衛擋下:converged=True 但 spec_path 空或不存在($SPEC)"
+  MSG="⚠ tier 守衛擋下:自報收斂但 spec_path 無效" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+  RQ="$(echo "$GAP_JSON" | python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import gap_select
+g=json.load(sys.stdin)
+print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+" 2>/dev/null || echo '?')"
+  log "未收斂 gap 處置:$RQ(tier 守衛/spec_path)"
+  exit 0
+fi
 REPORT_MD="$(cd "$REPO" && python3 -c "
 import sys, json; sys.path.insert(0,'governance')
-from autonomous_loop import confidence_report
-print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json.loads('''$RESIDUAL''')))
+from autonomous_loop import confidence_report, difficulty
+a=difficulty.assess_spec(open('$SPEC').read())
+print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json.loads('''$RESIDUAL'''),
+      tier=a['tier'], hits=a['hits'], reported_tier='$TIER_RESULT'))
 ")"
+TIER_FINAL="$(cd "$REPO" && python3 -c "
+import sys; sys.path.insert(0,'governance')
+from autonomous_loop import difficulty
+print(difficulty.assess_spec(open('$SPEC').read())['tier'])")"
+NEED_FINAL="$NEED"
+if [ "$TIER_FINAL" = "high" ] && [ "$NEED_FINAL" -lt 3 ]; then NEED_FINAL=3; fi
+if ! (cd "$REPO" && python3 scripts/lumos --vault "$SCRATCH/kg" loop status "$TOPIC" --need "$NEED_FINAL" --gate --spec "$SPEC" --repo "$REPO"); then
+  log "tier 守衛擋下:自報收斂但 gate 重驗不過(自算 tier=$TIER_FINAL, need=$NEED_FINAL)"
+  MSG="⚠ tier 守衛擋下:自報收斂但 gate 重驗不過(tier=$TIER_FINAL)" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+  RQ="$(echo "$GAP_JSON" | python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import gap_select
+g=json.load(sys.stdin)
+print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+" 2>/dev/null || echo '?')"
+  log "未收斂 gap 處置:$RQ(tier 守衛)"
+  exit 0
+fi
+if [ "$TIER_FINAL" = "high" ] && [ "$CROSS_VERDICT" != "endorsed" ]; then
+  log "tier 守衛擋下:high 級 cross_verdict=$CROSS_VERDICT 非乾淨 endorsed,不放行"
+  MSG="⚠ tier 守衛擋下:high 級複核非乾淨 endorsed(=$CROSS_VERDICT)" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+  RQ="$(echo "$GAP_JSON" | python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import gap_select
+g=json.load(sys.stdin)
+print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+" 2>/dev/null || echo '?')"
+  log "未收斂 gap 處置:$RQ(tier 守衛/cross)"
+  exit 0
+fi
 
-[ -n "$CROSS_VERDICT" ] && log "跨家族複核:$CROSS_VERDICT($CROSS_WORST)— $CROSS_SUMMARY"
 if [ "$MODE" = "--dry-run" ]; then
   cp "$SPEC" "$PENDING/" 2>/dev/null || true
   printf '%s\n' "$REPORT_MD" > "$PENDING/$(basename "$SPEC" .md)-confidence.md"

@@ -164,6 +164,17 @@ def t_loop_gate():
     check("gate 案14: --gate 缺 --spec rc=2", r.returncode == 2, f"rc={r.returncode}")
 
 
+def t_loop_gate_need3():
+    vault, repo, spec_ok, _ = _mk_gate_fixture()
+    for sev, f in (("minor", 2), ("clean", 0)):
+        run(vault, "canary", "record", "caught", "--loop", "k3",
+            "--severity", sev, "--findings", str(f), expect_rc=0)
+    r = run(vault, "loop", "status", "k3", "--need", "3",
+            "--gate", "--spec", str(spec_ok), "--repo", str(repo))
+    check("gate K=3: 僅 2 筆合格輪 rc=1(斷在 K-streak)",
+          r.returncode == 1 and "K-streak" in r.stdout, r.stdout)
+
+
 def t_write_lf_roundtrip():
     import subprocess
     proj = Path(tempfile.mkdtemp(prefix="gctl-lf-"))

@@ -101,6 +101,24 @@ class TestConfidenceReport(unittest.TestCase):
         self.assertIn("risk1", md)
 
 
+class TestConfidenceReportTier(unittest.TestCase):
+    def test_tier_rendered_and_mismatch_flag(self):
+        d = Path(tempfile.mkdtemp()); log = d / "c.jsonl"
+        log.write_text('{"loop":"x","kind":"caught","severity":"clean","note":"r1"}\n',
+                       encoding="utf-8")
+        r = confidence_report.build_report(str(log), "x", ["天花板"], tier="high",
+                                           hits=[{"class": "payment", "excerpt": "接 stripe 收款"}],
+                                           reported_tier="standard")
+        self.assertIn("tier=`high`", r)
+        self.assertIn("payment", r)
+        self.assertIn("紅標", r)
+        r2 = confidence_report.build_report(str(log), "x", ["天花板"], tier="high",
+                                            hits=[], reported_tier="high")
+        self.assertNotIn("紅標", r2)
+        r3 = confidence_report.build_report(str(log), "x", ["天花板"])
+        self.assertNotIn("tier=", r3)   # 向後相容:不傳 tier 照舊
+
+
 class TestLineNotify(unittest.TestCase):
     def test_build_message_has_title_and_pr(self):
         m = line_notify.build_message("X spec", "5輪收斂、1 missed", "http://pr/1")
@@ -248,6 +266,107 @@ class TestRequeueUnconverged(unittest.TestCase):
         rows = [r for r in backlog.load_backlog(self.bl) if r["weakness"] == "w3"]
         self.assertEqual(len(rows), 1)  # 更新而非重複
         self.assertEqual(rows[0]["unconverged"], 1)
+
+
+class TestPromptPlaceholders(unittest.TestCase):
+    def test_need_tier_placeholders(self):
+        p = Path(__file__).resolve().parent.parent / "governance/autonomous_loop/orchestrator-prompt.md"
+        t = p.read_text(encoding="utf-8")
+        self.assertIn("__NEED__", t)
+        self.assertIn("__TIER__", t)
+        self.assertNotIn("--need 2 --gate", t)   # 防硬編回歸
+        self.assertIn("tier_escalated", t)        # 輸出契約含 escalate 欄
+
+
+class TestDifficulty(unittest.TestCase):
+    def setUp(self):
+        from autonomous_loop import difficulty
+        self.d = difficulty
+
+    def test_assess_hits_high(self):
+        for kw, cls in (("接 stripe 收款", "payment"), ("金流對帳", "payment"),
+                        ("執行 DROP TABLE 清理", "prod-irreversible"),
+                        ("完成後寄送通知", "external-send")):
+            r = self.d.assess(kw)
+            self.assertEqual(r["tier"], "high", kw)
+            self.assertIn(cls, [h["class"] for h in r["hits"]], kw)
+
+    def test_assess_standard(self):
+        r = self.d.assess("重構內部快取層,拆函數與改名,無外部行為變更")
+        self.assertEqual(r["tier"], "standard")
+        self.assertEqual(r["hits"], [])
+
+    def test_assess_deterministic(self):
+        t = "金流與寄送並存的文本"
+        self.assertEqual(self.d.assess(t), self.d.assess(t))
+
+    def test_assess_self_governance(self):
+        r = self.d.assess("本改動調整 anchor verify 與收斂判準")
+        self.assertEqual(r["tier"], "high")
+        self.assertIn("self-governance", [h["class"] for h in r["hits"]])
+
+    def test_params_mapping(self):
+        self.assertEqual(self.d.params("high"), {"need": 3, "maxr": 8})
+        self.assertEqual(self.d.params("standard"), {"need": 2, "maxr": 6})
+
+    def test_assess_spec_blacklist_strip(self):
+        filler = ("此次修改屬純內部程式重構,僅調整函數命名與模組內部呼叫順序,"
+                  "所有公開介面簽名維持不變。此重構不影響任何使用者可見的行為,"
+                  "不改變資料庫欄位定義,亦不涉及任何第三方系統整合。"
+                  "整體變更範圍限定於程式庫內部實作細節的整理與清理作業。")
+        md = ("# t\n- 狀態:草稿\n"
+              "## 目標\n改內部排序邏輯。" + filler + "\n"
+              "## 組件\n重構 sort 模組,純內部。" + filler + "\n"
+              "## 誠實天花板\ncanary 與收斂判準的既有守衛不受影響。\n"
+              "## 審計修正紀錄(design-loop)\nr1 canary caught。\n")
+        self.assertEqual(self.d.assess_spec(md)["tier"], "standard")
+
+    def test_assess_spec_title_variant(self):
+        filler = ("此次修改屬純內部程式重構,僅調整函數命名與模組內部呼叫順序,"
+                  "所有公開介面簽名維持不變。此重構不影響任何使用者可見的行為,"
+                  "不改變資料庫欄位定義,亦不涉及任何第三方系統整合。"
+                  "整體變更範圍限定於程式庫內部實作細節的整理與清理作業。")
+        md = ("# t\n## 目標\n改內部排序。" + filler + "\n"
+              "## 組件\n純內部重構。" + filler + "\n"
+              "## 誠實天花板(v2 補)\ncanary 收斂判準。\n"
+              "## 附:審計修正紀錄與備註\ncanary。\n")
+        self.assertEqual(self.d.assess_spec(md)["tier"], "standard")
+
+    def test_assess_spec_substantive_high(self):
+        # 保留節(目標+組件)剝除後需 >200 字元,確保走正常路徑而非 fallback;
+        # anchor verify 與 pre-push hook 是觸發 high 的關鍵詞,必須保留。
+        filler = ("此節描述內部實作細節調整,不涉及外部系統呼叫或資料庫欄位變更,"
+                  "所有公開介面簽名維持不變,整體屬於守衛接線強化作業。"
+                  "變更範圍僅限程式庫內部邏輯的整理,無對外行為影響。")
+        md = ("# t\n## 目標\n強化 anchor verify 與 pre-push hook 的接線。" + filler + "\n"
+              "## 組件\n改守衛腳本,補強驗證邏輯。" + filler + "\n"
+              "## 誠實天花板\n無。\n")
+        self.assertEqual(self.d.assess_spec(md)["tier"], "high")
+
+    def test_assess_spec_fallback_near_empty(self):
+        md = "# t\n## 誠實天花板\n" + "金流" * 200 + "\n"
+        self.assertEqual(self.d.assess_spec(md)["tier"], "high")  # 回退全文,偏嚴
+
+    def test_assess_spec_strips_inline_code_and_filenames(self):
+        filler = ("此次修改屬純內部程式重構,僅調整函數命名與模組內部呼叫順序,"
+                  "所有公開介面簽名維持不變。此重構不影響任何使用者可見的行為,"
+                  "不改變資料庫欄位定義,亦不涉及任何第三方系統整合。"
+                  "整體變更範圍限定於程式庫內部實作細節的整理與清理作業。")
+        md = ("# t\n## 目標\n更新 `圖譜即合約-對外論述.md` 的段落說明,內容為文檔措辭。" + filler + "\n"
+              "## 組件\n見 圖譜即合約-對外論述.md 檔。" + filler + "\n"
+              "## 其他\n無風險詞的內部整理。" + filler + "\n")
+        self.assertEqual(self.d.assess_spec(md)["tier"], "standard")  # 檔名「對外」不得誤觸
+
+    def test_assess_spec_fallback_short_corpus(self):
+        # 節數 ≥2 但剝除後 corpus <200 字元,且全文含「金流」在黑名單節
+        # → 字元門檻觸發回退 → 全文 assess → high(獨立驗字元條件起作用)
+        md = ("# t\n"
+              "## 目標\n短。\n"
+              "## 組件\n短。\n"
+              "## 誠實天花板\n金流對帳流程說明。\n")
+        # 確認剝除後餘文 <200 字元(目標+組件節保留,天花板節剝除)
+        r = self.d.assess_spec(md)
+        self.assertEqual(r["tier"], "high")  # 回退全文後命中「金流」
 
 
 if __name__ == "__main__":
