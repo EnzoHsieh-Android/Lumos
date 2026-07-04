@@ -48,7 +48,7 @@
 - **單一寫檔契約(r1-F6:砍 stdout 模式)**:每個指令字串**必須含 `{LINT_SARIF_OUT}` 佔位符**,pitfalls 生成臨時檔路徑注入、指令用它當 SARIF 輸出路徑,pitfalls 跑完讀該檔。無佔位符的指令 → 視為配置錯、跳過記 lint_skipped(不猜工具預設落點、不吃 stdout——主流 SARIF 產出器多不支援乾淨 stdout,三棧範例皆寫檔式)。
 - **執行(r1-F3①)**:`subprocess.run(指令, shell=True, cwd=repo_root, timeout=LINT_CMD_TIMEOUT)`——指令是字串故 `shell=True`(有別於既有 `_pitfall_diff_mode` 的 list argv,本塊刻意用 shell 跑專案宣告的指令字串);**`{LINT_SARIF_OUT}` 注入用 `str.replace('{LINT_SARIF_OUT}', shlex.quote(臨時檔路徑))`**(r2-F6:shell=True 下路徑須 `shlex.quote` 防空白/元字元拆詞,否則 SARIF 寫錯位、pitfalls 讀不到全落 lint_skipped);`LINT_CMD_TIMEOUT` 常數(預設 180 秒)防 detekt/dotnet build 這類重量級跑掛住 pitfalls 的輕量提示器語意(r1 canary 掩蓋的真 gap:既有 subprocess 無 timeout、git 快無妨,外部 linter 慢必須設限)。
 - 解析 SARIF:`json.load` → **對每個 `run` 配對其 driver 與 results**(r1-F5:`tool.driver.name` 是 per-run,須按 run index 配對、非扁平取):`for run in runs: tool = run.tool.driver.name; for r in run.results: ...` → 每筆映射 claim `{file, line, source, rule, message}`:
-  - `file` = `r.locations[0].physicalLocation.artifactLocation.uri`(正規化為 repo 相對路徑)
+  - `file` = `r.locations[0].physicalLocation.artifactLocation.uri` **正規化為 repo 相對正斜線路徑(r3-F2,承重 join key)**:剝 `file://` scheme、`urllib.parse.unquote` 解 `%20`、絕對路徑轉 `os.path.relpath(路徑, repo_root)`、反斜線轉正斜線——與 `added` 集合的 key(來自 `+++ b/<path>`,repo 相對正斜線)同形才比得中;正規化缺漏 → lint claim 的 file 永不匹配 added → lint 靜默歸零(同 r2-F1 副檔名 bug 的路徑層翻版,ESLint 常吐絕對 file:// URI)
   - `line` = `r.locations[0].physicalLocation.region.startLine`(缺則 0)
   - `source` = `"lint:" + tool`(該 result 所屬 run 的工具名)
   - `rule` = `r.ruleId`;`message` = `r.message.text`(截 120 字)
@@ -57,12 +57,12 @@
 ### ④ 過濾到 diff 觸及行
 - **建行集合(r1-F1:非「復用現成集合」)**:在既有 `_pitfall_diff_mode` 的掃描迴圈內**加一行 accumulator**——確認 `+` 新增行時同步 `added.setdefault(cur_file, set()).add(new_ln)`;regex 骨架(`_PITFALL_DIFF_PATTERNS`、`@@`/context/`+`/`-` 推導、skip 過濾)一字不動,只加集合累積(加法擴充、非改骨架)。
 - SARIF finding 只保留 `(file, line)` 落在 `added` 集合內者(對齊「只提示本次改動風險」,不倒入專案舊 lint 債)。
-- **座標系前提(r1-F2,承重)**:lint 指令對**工作區檔案**跑(SARIF startLine=工作區行號),而 `added` 是 `git diff <range>` 的 **range HEAD 端行號**——**兩者僅在「工作區 == range 的 HEAD 端」時對齊**。本塊的合法使用前提=**range 形如 `<base>..HEAD` 且工作區乾淨**(code-loop 終審調用即此:`merge-base..HEAD`、終審時工作區=HEAD)。**非對齊情形**(dirty tree、歷史區間如 `HEAD~3..HEAD~1`)→ pitfalls 對齊判定用**語意解析非字面比對**(r2-F5,承重):`git rev-parse <range 右端>` == `git rev-parse HEAD` 且 `git status --porcelain` 空(無未提交改動)才視為對齊;`merge-base..HEAD` 被 code-loop 展開成 `<sha>..<sha>` 時右端 rev 仍解析為 HEAD → 正確判對齊(字面尾綴比對會誤判此主用例而錯誤降級)。非對齊 → **印警示「座標系可能不對齊、lint 行過濾略過、改為全收 lint findings(不過濾 diff 行)」**——寧可多收不誤刪(偏嚴,掃描成功仍 rc 0)。
+- **座標系前提(r1-F2,承重)**:lint 指令對**工作區檔案**跑(SARIF startLine=工作區行號),而 `added` 是 `git diff <range>` 的 **range HEAD 端行號**——**兩者僅在「工作區 == range 的 HEAD 端」時對齊**。本塊的合法使用前提=**range 形如 `<base>..HEAD` 且工作區乾淨**(code-loop 終審調用即此:`merge-base..HEAD`、終審時工作區=HEAD)。**非對齊情形**(dirty tree、歷史區間如 `HEAD~3..HEAD~1`)→ pitfalls 對齊判定用**語意解析非字面比對**(r2-F5,承重):**右端抽取明定(r3-F4)**:range 含 `..` → split(`..`,1) 取末段當右端 ref(空則 HEAD);含 `...`(symmetric)→ 同取末段;無 `..`(單 ref,`git diff` 語意=比工作區)→ 右端視為工作區、恆對齊。取得右端 ref 後 `git rev-parse <右端 ref>`(**單一 ref 非整條 range,整條 range rev-parse 會回兩行**) == `git rev-parse HEAD` 且 `git status --porcelain` 空 → 對齊。**事實校正(r3-F3)**:code-loop 實傳 `<merge-base-sha>..HEAD`(HEAD 保持字面 ref、非展開成 sha),故右端解析為 HEAD、正確判對齊(r2-F5 原稱「展開成 <sha>..<sha>」為事實錯誤,結論仍成立)。非對齊 → **印警示「座標系可能不對齊、lint 行過濾略過、改為全收 lint findings(不過濾 diff 行)」**——寧可多收不誤刪(偏嚴,掃描成功仍 rc 0)。
 
 ### ⑤ 合併 + tier + 輸出
 - lint claims 與既有 regex claims **合併**進同一 manifest;每筆帶 `source`(`lint:<tool>` 或 `pitfalls-builtin`)區分。**lint claim 無 `question` 欄——reviewer 鏡頭對 lint claim 讀 `message`(linter 自帶的問題描述)取代 regex claim 的 `question`**(r1-F4:code-loop reviewer prompt 的「逐條判真隱患/誤報」對 lint claim 以 message 為據,不套「必答對應提問」——lint 沒有 pitfalls 式提問)。
 - manifest schema 擴充為 `{file, line, source, ...}`——regex claim 補 `source: "pitfalls-builtin"`、保留原 `class/pattern/question`;lint claim 用 `source/rule/message`(無 class/question——lint 自帶訊息)。**向後相容**:既有欄位不刪。
-- tier:regex 或 lint 任一有 claim → high;皆無 → standard。rc 恆 0。
+- tier:regex 或 lint 任一有 claim → high;皆無 → standard。rc = 掃描成功 0 / git 無或 range 解析失敗 2(r3-F5:同 §③ 精確語意,此處原裸「rc 恆 0」散落漏改已對齊——lint 失敗不升 rc、非任何情況都 0)。
 - `--json`:`{claims:[...], tier, lint_ran: [<跑過的指令摘要>], lint_skipped: [<失敗跳過的>]}`(新增 lint_ran/lint_skipped 供人看有沒有真跑到)。
 
 ### ⑥ 無宣告 / 無 lint 的 fallback
@@ -99,7 +99,10 @@
 5. **lint+regex 合併**:同 diff 既命中 regex 又有 lint finding → manifest 兩者都在、source 欄區分。
 6. **技術棧偵測**:diff 只碰 .py、宣告只有 kt → 不跑 lint(lint_ran 空)。
 7. **指令失敗容錯**:假指令 rc≠0/無 SARIF → lint_skipped 記錄、rc 仍 0、regex claims 仍在。
-8. **回歸**:兩套件全綠。
+8. **去點正規化 witness(r2-F1/r3 測試缺口)**:diff 碰 .kt、宣告 key `kt`、SARIF 有 finding → **lint_ran 非空且 claim 出現**(證 `.kt`→`kt` 對得上;miss 路徑的案 6 接不住此 bug,需正向 witness)。
+9. **uri 正規化(r3-F2)**:SARIF finding 的 uri 為絕對 `file:///…/app.kt`(帶 %20 目錄)→ 正規化後 file key == diff 的 `app.kt`、能落 added 集合被保留。
+10. **座標系降級(r2-F5/r3-F4)**:dirty tree(git status 非空)或 range 右端≠HEAD → 印警示、lint 全收不過濾(claim 含不在 diff 行的 finding);乾淨 ..HEAD → 正常過濾。
+11. **回歸**:兩套件全綠。
 
 ## 知識同步影響
 | 受影響文件 | 需同步什麼 |
@@ -130,3 +133,13 @@ canary 性質被點出(R2-F2:`--no-lint` 無 CLI/簽名出處、無接線)——
 - R2-F4 minor(折):level 三處矛盾(邊界取/映射無/天花板不用)→ 統一不取 level。
 - R2-F6 minor(折):shell=True 下 `{LINT_SARIF_OUT}` 注入未定義引號 → shlex.quote。
 存活 5 條全折入(R2-F1/F5 major + F3/F4/F6 minor)。
+
+### R3(2026-07-04,canary type c=未定義常數 `LINT_MAX_PER_FILE`,opus,**CAUGHT**,severity=major,存活 findings=4)
+
+canary 被識別(F1:全文僅一處、無賦值、無測試——裸常數)。此輪挖出折入自引的新縫:
+- **R3-F2 major(折)**:SARIF `uri`→repo 相對路徑「正規化」只六字無演算法,是 §④ 過濾承重 join key;ESLint 吐絕對 `file://` 會全不匹配 → lint 靜默歸零(r2-F1 副檔名 bug 的路徑層翻版)→ 明定正規化演算法(剝 scheme/unquote/relpath/正斜線)。
+- **R3-F4 minor(折)**:r2-F5 折入的「rev-parse 右端」未定義如何抽右端、整條 range rev-parse 回兩行 → 明定 split `..` 取末段、單 ref 特判。
+- **R3-F3 minor(校正,折)**:r2-F5 的 justification「merge-base 展開成 <sha>..<sha>」事實錯誤(code-loop 傳 `<sha>..HEAD`、HEAD 字面保留)→ 結論仍成立、校正敘述。
+- **R3-F5 minor(折)**:「rc 恆 0」在 §⑤ 殘留未隨 r2-F3 同步(散落漏改,同 memory「知識同步散落會漏」)→ 對齊。
+- 測試缺口(佐證):去點正規化/uri/座標系降級皆無專屬測試 → 補案 8/9/10(正向 witness,miss 路徑接不住 bug)。
+存活 4 條全折(F2 major + F3/F4/F5 minor + 測試補)。
