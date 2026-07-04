@@ -3059,6 +3059,81 @@ def t_lint_watch_cli():
     check("malformed entry rc2", r4.returncode == 2, f"rc={r4.returncode} stderr={r4.stderr}")
 
 
+def t_lint_watch_google_maven():
+    """google-maven: registry type — XML maven-metadata.xml; prerelease-in-<latest> 陷阱避開."""
+    import importlib.util as U, json as J, os, tempfile
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+
+    agp_url = ("https://dl.google.com/dl/android/maven2/"
+               "com/android/tools/build/gradle/maven-metadata.xml")
+    only_pre_url = ("https://dl.google.com/dl/android/maven2/"
+                    "com/example/only-pre/maven-metadata.xml")
+
+    # Realistic AGP XML: <latest> is alpha (the known trap), stable max = 9.2.1
+    agp_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<metadata>'
+        '<versioning>'
+        '<latest>9.4.0-alpha03</latest>'
+        '<release>9.4.0-alpha03</release>'
+        '<versions>'
+        '<version>8.2.2</version>'
+        '<version>9.0.0</version>'
+        '<version>9.2.0</version>'
+        '<version>9.2.1</version>'
+        '<version>9.4.0-alpha03</version>'
+        '<version>3.9</version>'
+        '</versions>'
+        '</versioning>'
+        '</metadata>'
+    )
+    only_pre_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<metadata><versioning><latest>9.4.0-alpha03</latest>'
+        '<versions><version>9.4.0-alpha03</version><version>9.3.0-beta01</version></versions>'
+        '</versioning></metadata>'
+    )
+
+    fixture = {
+        agp_url: agp_xml,
+        only_pre_url: only_pre_xml,
+        # missing_url not present → fetch None
+    }
+    fx_dir = tempfile.mkdtemp(prefix="gctl-gm-")
+    fx = Path(fx_dir) / "fx.json"
+    fx.write_text(J.dumps(fixture), encoding="utf-8")
+    os.environ["LUMOS_LINT_WATCH_FIXTURE"] = str(fx)
+    try:
+        # 1. AGP: must NOT use <latest>=alpha03; stable numeric max = 9.2.1
+        result = m._registry_latest("google-maven:com.android.tools.build:gradle")
+        check("google-maven AGP stable max=9.2.1 (NOT alpha)",
+              result == ("9.2.1", None), str(result))
+
+        # 2. Only-prerelease XML → (None, "no stable version")
+        result2 = m._registry_latest("google-maven:com.example:only-pre")
+        check("google-maven only-prerelease → no stable version",
+              result2 == (None, "no stable version"), str(result2))
+
+        # 3. URL not in fixture (fetch returns None) → (None, "registry query failed: ...")
+        latest3, reason3 = m._registry_latest("google-maven:com.example:missing")
+        check("google-maven missing url → registry query failed",
+              latest3 is None and reason3 is not None and "registry query failed" in reason3,
+              f"{latest3},{reason3}")
+
+        # 4. _http_get_text: returns XML string for known key, None for missing key
+        text = m._http_get_text(agp_url)
+        check("_http_get_text fixture returns XML string",
+              isinstance(text, str) and "<metadata>" in text, repr(text)[:80])
+        missing_text = m._http_get_text("https://dl.google.com/NOTHERE")
+        check("_http_get_text missing key → None", missing_text is None, repr(missing_text))
+
+    finally:
+        os.environ.pop("LUMOS_LINT_WATCH_FIXTURE", None)
+        import shutil; shutil.rmtree(fx_dir, ignore_errors=True)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")

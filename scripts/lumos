@@ -4229,6 +4229,35 @@ def _compare_versions(current, latest):
     return ("behind", "") if la > cu else ("current", "")
 
 
+def _http_get_text(url):
+    """Fetch URL and return raw decoded text (utf-8), or None on any failure.
+
+    If env var LUMOS_LINT_WATCH_FIXTURE is set, reads that JSON file and
+    returns fixture.get(url) — the stored value for text-type urls is expected
+    to be a STRING (e.g. XML text); if the key is missing, returns None.
+    Otherwise uses urllib.request with timeout=10s.
+    """
+    import os
+    fixture_path = os.environ.get("LUMOS_LINT_WATCH_FIXTURE")
+    if fixture_path:
+        import json
+        try:
+            with open(fixture_path, encoding="utf-8") as fh:
+                fixture = json.load(fh)
+            return fixture.get(url)
+        except Exception:
+            return None
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "lumos-lint-watch"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status < 200 or resp.status >= 300:
+                return None
+            return resp.read().decode("utf-8")
+    except Exception:
+        return None
+
+
 def _http_get_json(url):
     """Fetch URL and return parsed JSON dict, or None on any failure.
 
@@ -4266,6 +4295,7 @@ def _registry_latest(registry, fetch=None):
       npm:<pkg>
       github:<owner>/<repo>
       maven:<group>:<artifact>
+      google-maven:<group>:<artifact>
     """
     if fetch is None:
         fetch = _http_get_json
@@ -4329,6 +4359,27 @@ def _registry_latest(registry, fetch=None):
             if not stable:
                 return (None, "no stable version")
             return (max(stable, key=_semver_parse), None)
+
+        elif rtype == "google-maven":
+            # Google Maven (dl.google.com) — returns XML, not JSON.
+            # TRAP: <latest>/<release> tags can be prerelease (e.g. AGP 9.4.0-alpha03).
+            # Must iterate ALL <version> elements, filter _is_prerelease, take numeric max.
+            try:
+                group, _, artifact = coord.partition(":")
+                url = ("https://dl.google.com/dl/android/maven2/"
+                       + group.replace(".", "/") + "/" + artifact + "/maven-metadata.xml")
+                xml_text = _http_get_text(url)
+                if xml_text is None:
+                    return (None, f"registry query failed: fetch returned None for {url}")
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(xml_text)
+                versions = [e.text for e in root.iter("version") if e.text]
+                stable = [v for v in versions if not _is_prerelease(v) and _semver_parse(v) is not None]
+                if not stable:
+                    return (None, "no stable version")
+                return (max(stable, key=_semver_parse), None)
+            except Exception as e:
+                return (None, f"registry query failed: {e}")
 
         else:
             return (None, f"registry query failed: unknown type {rtype!r}")

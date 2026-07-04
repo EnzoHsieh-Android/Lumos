@@ -18,6 +18,7 @@ summary: |-
   KEY:機械核心在 scripts/lumos `lint-watch` 子命令(vault-free、dispatch 置於 find_vault 前);純數字 tuple 比較 + 等段數守衛(段數不一→skip,擋 calendar 2024.1 / 4段 Maven 假陽性)
   KEY:prerelease 一律不建議——_is_prerelease 涵蓋 SemVer `-` 與 PEP 440 dashless(a/b/rc/dev);過濾在 _registry_latest 內、回 (None, reason)
   KEY:Maven latest 取數值 tuple max(嚴禁字串 max——'3.9'>'3.20.0' 字串誤判)+ q 值 urllib.parse.quote(%22,字面雙引號 Solr 回 400)+ sort=timestamp+desc + docs 在 data["response"]["docs"]
+  KEY:google-maven type(v1.1,Android/AGP/AndroidX)——查 dl.google.com maven-metadata.xml(XML 非 JSON,_http_get_text + ElementTree)、迭代 versions 過濾 prerelease 數值 max、**嚴禁用 `<latest>`/`<release>`(可為 prerelease,真機 AGP=9.4.0-alpha03)**;補 maven-Central-only 對 Google-hosted 的 silent false-negative(KDS 真機 AGP 8.2.2→9.2.1)
   KEY:_registry_latest 回 (latest, reason) 二元組(單一 None 承載不了 網路失敗/prerelease/無穩定版 三因);_compare_versions 回 (state, reason) 三態(bool 承載不了 failed 分流)
   KEY:HTTP 抓取層 fixture seam——LUMOS_LINT_WATCH_FIXTURE 環境變數指 {url:response} 檔則不打網路(subprocess 測試可注入);fail-open(網路失敗 → failed[],永不升 rc)
   KEY:治理層所有 JSON 讀寫在 python(lint_watch_dedup.py __main__:pending 寫入 + seen append + LINE dict stdout);shell(lint-watch-check.sh)零 JSON 解析/組裝、只把 $MSG 當不透明字串傳;lumos 用 python3 $REPO/scripts/lumos(cron-safe)
@@ -40,7 +41,7 @@ pitfalls-lint-integration 計劃第②塊。每日排程機械偵測「宣告的
 - 只驗「有沒有新版」,不驗「該不該升」(相容性/破壞性由人審 changelog);不做 per-tool 規則 diff。
 - 版本比較純數字 tuple + 等段數守衛:current 須與 registry 同版本方案、同精度宣告(靠人維護,清單漂移會漏報)。
 - registry 端點語意依賴上游(pypi info.version / github /latest 排除 prerelease 行為);上游改語意會失準(記 valid_under)。
-- **`maven:` type 只查 Maven Central(search.maven.org)——Google-hosted artifact(AGP/AndroidX/多數 Google lib 在 Google Maven `dl.google.com`)查不到真 latest、Central 殘留舊版會誤判 "current"(silent false-negative)。KDS 真機坐實(AGP 8.2.2 誤判已最新)。enhancement 候選:加 `google-maven:` registry type。** 見 [[Verification/2026-07-04_lint-version-watch]] KDS 段。
+- **`maven:` type 只查 Maven Central(search.maven.org)**;Google-hosted artifact(AGP/AndroidX/多數 Google lib)在 Google Maven `dl.google.com` → **改用 `google-maven:` type**(v1.1 已補,查 maven-metadata.xml、避開 prerelease-in-`<latest>` 陷阱、數值 max)。KDS 真機:AGP `maven:` 誤判 "current" → `google-maven:` 正確 `8.2.2→9.2.1`。見 [[Verification/2026-07-04_lint-version-watch]] KDS 段。
 - **複合/非標準版**(KSP `1.9.0-1.0.13` 含 `-` 被判 prerelease、hilt `2.49` 2 段與 3 段 latest 段數不符)→ 守衛保守 skip(寧漏報不假陽性);Android 生態多依賴受此影響。
 
 ## design-loop 判定(誠實)
