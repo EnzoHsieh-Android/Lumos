@@ -37,7 +37,7 @@
 }
 ```
 - key = 副檔名(不含點,如 `kt`/`vue`/`cs`/`py`);value = 該棧的一組指令(list,支援多 linter 並存)。
-- 每個指令須產 SARIF;產物落點約定:指令印到 stdout(pitfalls 讀 stdout)**或**寫到指令內指定的臨時 SARIF 檔再由 pitfalls 讀(兩式擇一,見組件 ③ runner 契約)。
+- 每個指令**必須含 `{LINT_SARIF_OUT}` 佔位符**(pitfalls 注入臨時檔路徑、指令寫 SARIF 到該路徑;單一寫檔契約,見組件 ③;r1-F6 砍 stdout 模式)。三棧範例皆寫檔式。
 - lumos 不驗指令內容、不猜參數——宣告是專案責任(同 guard 範本專案自備)。
 
 ### ② 技術棧偵測(哪些 lint 指令要跑)
@@ -45,20 +45,22 @@
 - diff 無觸及任何宣告棧的檔 → 不跑 lint(只 regex)。
 
 ### ③ lint runner + SARIF 解析(runner 契約)
-- 對每個待跑指令:`subprocess.run(指令, cwd=repo_root)`;**約定指令將 SARIF 寫到 pitfalls 指定的臨時檔**(pitfalls 以 `{LINT_SARIF_OUT}` 佔位符注入路徑到指令字串、指令用它當輸出路徑;無佔位符則讀 stdout)——確定性拿到 SARIF、不猜工具預設落點。
-- 解析 SARIF:`json.load` → 走 `runs[].results[]` → 每筆映射 claim `{file, line, source, rule, message}`:
-  - `file` = `locations[0].physicalLocation.artifactLocation.uri`(正規化為 repo 相對路徑)
-  - `line` = `locations[0].physicalLocation.region.startLine`(缺則 0)
-  - `source` = `runs[].tool.driver.name`(工具名,如 detekt/ESLint)
-  - `rule` = `ruleId`;`message` = `message.text`(截 120 字)
-- 指令失敗(rc≠0 且無 SARIF 產出)/SARIF 解析失敗 → 印警示、跳過該指令、續跑其餘(容錯,不擋)。
+- **單一寫檔契約(r1-F6:砍 stdout 模式)**:每個指令字串**必須含 `{LINT_SARIF_OUT}` 佔位符**,pitfalls 生成臨時檔路徑注入、指令用它當 SARIF 輸出路徑,pitfalls 跑完讀該檔。無佔位符的指令 → 視為配置錯、跳過記 lint_skipped(不猜工具預設落點、不吃 stdout——主流 SARIF 產出器多不支援乾淨 stdout,三棧範例皆寫檔式)。
+- **執行(r1-F3①)**:`subprocess.run(指令, shell=True, cwd=repo_root, timeout=LINT_CMD_TIMEOUT)`——指令是字串故 `shell=True`(有別於既有 `_pitfall_diff_mode` 的 list argv,本塊刻意用 shell 跑專案宣告的指令字串);`LINT_CMD_TIMEOUT` 常數(預設 180 秒)防 detekt/dotnet build 這類重量級跑掛住 pitfalls 的輕量提示器語意(r1 canary 掩蓋的真 gap:既有 subprocess 無 timeout、git 快無妨,外部 linter 慢必須設限)。
+- 解析 SARIF:`json.load` → **對每個 `run` 配對其 driver 與 results**(r1-F5:`tool.driver.name` 是 per-run,須按 run index 配對、非扁平取):`for run in runs: tool = run.tool.driver.name; for r in run.results: ...` → 每筆映射 claim `{file, line, source, rule, message}`:
+  - `file` = `r.locations[0].physicalLocation.artifactLocation.uri`(正規化為 repo 相對路徑)
+  - `line` = `r.locations[0].physicalLocation.region.startLine`(缺則 0)
+  - `source` = `"lint:" + tool`(該 result 所屬 run 的工具名)
+  - `rule` = `r.ruleId`;`message` = `r.message.text`(截 120 字)
+- 指令失敗(rc≠0 **且無 SARIF 產出**——rc≠0 是 linter 有 finding 的正常訊號,有 SARIF 就不算失敗,r1-F3② 澄清)/逾時/SARIF 解析失敗 → 印警示、跳過該指令記 lint_skipped、續跑其餘(容錯,rc 恆 0)。
 
 ### ④ 過濾到 diff 觸及行
-- 從 `git diff` 算出「新增行的 (檔, 行號) 集合」(既有 `@@` 推導已算 new_ln,復用)。
-- SARIF finding 只保留 `(file, line)` 落在 diff 新增行集合內者(對齊 pitfalls「只提示本次改動風險」,不倒入專案舊 lint 債)。行號比對容差:同檔且行號 ∈ 新增行集合。
+- **建行集合(r1-F1:非「復用現成集合」)**:在既有 `_pitfall_diff_mode` 的掃描迴圈內**加一行 accumulator**——確認 `+` 新增行時同步 `added.setdefault(cur_file, set()).add(new_ln)`;regex 骨架(`_PITFALL_DIFF_PATTERNS`、`@@`/context/`+`/`-` 推導、skip 過濾)一字不動,只加集合累積(加法擴充、非改骨架)。
+- SARIF finding 只保留 `(file, line)` 落在 `added` 集合內者(對齊「只提示本次改動風險」,不倒入專案舊 lint 債)。
+- **座標系前提(r1-F2,承重)**:lint 指令對**工作區檔案**跑(SARIF startLine=工作區行號),而 `added` 是 `git diff <range>` 的 **range HEAD 端行號**——**兩者僅在「工作區 == range 的 HEAD 端」時對齊**。本塊的合法使用前提=**range 形如 `<base>..HEAD` 且工作區乾淨**(code-loop 終審調用即此:`merge-base..HEAD`、終審時工作區=HEAD)。**非對齊情形**(dirty tree、歷史區間如 `HEAD~3..HEAD~1`)→ pitfalls 偵測到 range 非 `..HEAD` 或 `git status` 有未提交改動時,**印警示「座標系可能不對齊、lint 行過濾略過、改為全收 lint findings(不過濾 diff 行)」**——寧可多收不誤刪(偏嚴,rc 恆 0)。
 
 ### ⑤ 合併 + tier + 輸出
-- lint claims 與既有 regex claims **合併**進同一 manifest;每筆帶 `source`(`lint:<tool>` 或 `pitfalls-builtin`)區分。
+- lint claims 與既有 regex claims **合併**進同一 manifest;每筆帶 `source`(`lint:<tool>` 或 `pitfalls-builtin`)區分。**lint claim 無 `question` 欄——reviewer 鏡頭對 lint claim 讀 `message`(linter 自帶的問題描述)取代 regex claim 的 `question`**(r1-F4:code-loop reviewer prompt 的「逐條判真隱患/誤報」對 lint claim 以 message 為據,不套「必答對應提問」——lint 沒有 pitfalls 式提問)。
 - manifest schema 擴充為 `{file, line, source, ...}`——regex claim 補 `source: "pitfalls-builtin"`、保留原 `class/pattern/question`;lint claim 用 `source/rule/message`(無 class/question——lint 自帶訊息)。**向後相容**:既有欄位不刪。
 - tier:regex 或 lint 任一有 claim → high;皆無 → standard。rc 恆 0。
 - `--json`:`{claims:[...], tier, lint_ran: [<跑過的指令摘要>], lint_skipped: [<失敗跳過的>]}`(新增 lint_ran/lint_skipped 供人看有沒有真跑到)。
@@ -85,6 +87,8 @@
 3. **要專案先配 `.lumos/lint.json`**:一次性,但 Android/Vue/C# 專案本就該有 lint 配置;未配則本塊等於沒開(退回 regex)——漸進採用,不強迫。
 4. **runner 執行 shell 指令**:`.lumos/lint.json` 的指令由專案作者寫、lumos 照跑——等於信任專案宣告檔(同 guard 範本、hooks)。非對抗場景(自己的 repo),威脅模型是配錯非惡意注入。
 5. **行號比對容差**:SARIF 報的行 vs diff 新增行,若 linter 報的是「區塊起始行」而該行不在 diff 但區塊跨進 diff,可能漏;本塊只做精確行比對,粗放匹配留 v2。
+6. **座標系對齊是前提非保證(r1-F2)**:lint 跑工作區、過濾用 range HEAD 端行號,僅 `..HEAD`+乾淨工作區對齊;非對齊自動降級為「全收不過濾」(偏嚴),但那會倒入舊 lint 債、稀釋「只提示本次改動」的聚焦——是換來的安全,非免費。
+7. **linter 執行成本(r1 timeout gap)**:detekt/dotnet build 可能數十秒到數分鐘,`LINT_CMD_TIMEOUT`(180s)防掛住但也意味 high 風險分支終審會明顯變慢;pitfalls「輕量提示器」語意在有 lint 配置時已非輕量——這是 code-loop 高風險分支的既有成本(risk-tiered 分級控總量),誠實記明。
 
 ## 測試策略
 沿 `scripts/test_lumos.py` CLI subprocess 風格,git fixture:
@@ -101,10 +105,19 @@
 | 受影響文件 | 需同步什麼 |
 |---|---|
 | `skills/lumos-project-notes/SKILL.md` | pitfalls 指令表補「--diff 支援 .lumos/lint.json lint 整合(SARIF)」 |
-| `skills/lumos-code-loop/SKILL.md` | pitfalls --diff manifest 現含 lint 來源(source 欄),reviewer 鏡頭涵蓋 lint findings |
+| `skills/lumos-code-loop/SKILL.md` | pitfalls --diff manifest 現含 lint 來源(source 欄);reviewer 鏡頭對 lint claim 讀 `message`(非 question)、regex claim 仍讀 question(r1-F4) |
 | `scripts/templates/graph-discipline.md` | 終審前 pitfalls --diff 段補一句「專案配 .lumos/lint.json 則自動吃 linter」 |
 | `docs/methodology/圖譜即合約.md` | pitfalls 列補「lint 整合器(SARIF)——吃社群 linter 非自建規則」 |
 | `Projects/pitfalls-lint-integration_計劃` | 第 ① 塊 status 更新 done + verified_by 回指本 spec 落地 Verification |
 
 ## 審計修正紀錄(design-loop)
-(待 design-loop 各輪填入)
+
+### R1(2026-07-04,canary type a=壞§ref「§runner 逾時與併發」,opus,**CAUGHT**,辯方裁決後 severity=major,存活 findings=7)
+
+canary 被正確識別(F7 明指全文標題清單無此節、為壞引用,並戳出它掩蓋的真 gap:runner 無 timeout)。此輪 auditor 紮實,judge 評 F1/F2/F3 三 major;辯方裁決:
+- **F2 維持 major**(座標系錯配:lint 跑工作區 vs diff range HEAD 端行號,精確比對系統性錯位;§誠實天花板漏列)→ 組件④ 補座標系前提(`..HEAD`+乾淨工作區才對齊、非對齊降級全收)+ 天花板 6。
+- **F1 降 minor**(new_ln 是區域變數為真,但「加一行 accumulator 進既有迴圈」是加法擴充非改骨架;spec「復用」指 @@ 推導邏輯非現成集合)→ 組件④ 措辭精確化。
+- **F3 降 minor**(僅 ①shell=True 未明定為真;②誤讀「且無 SARIF」已處理、③已被容錯接住)→ 組件③ 明定 shell=True。
+- **F4/F5/F6 + timeout(canary 掩蓋的真 gap)全折**:lint claim 走 message 非 question(F4)、source per-run 配對(F5)、砍 stdout 單一寫檔契約(F6)、runner 加 LINT_CMD_TIMEOUT(timeout gap)。
+存活 7 條全折入(F2 major + F1/F3①/F4/F5/F6/timeout)。
+
