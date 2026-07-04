@@ -1,7 +1,8 @@
 # 設計:實務隱患意識 + 代碼審計對齊(pitfalls-code-loop)— `lumos pitfalls` 三模式 + code-loop 對抗代碼審
 
 - 日期:2026-07-04
-- 狀態:draft(design-loop 前)
+- 狀態:design-approved(2026-07-04 收斂放行)
+- 收斂紀錄:design-loop 8 輪(K=3 high 級;canary 6/8 caught,r2/r5 missed 依規作廢重挖);GATE PASS(K-streak R6+R7+R8 ∧ G1 11 座標全真 ∧ G2 findings [2,1,0] 枯竭)。辯方 r1 降 4 major、r4 維持 1 major(同步表漏 gate 契約,折入)、r3 降 1 major;qwen 跨家族 1 條 major 經機械反證(把前提節現況陳述誤讀為契約矛盾)→ endorsed-after-refute 放行。
 - 動機來源:使用者觀察——AI 開發仰賴模型自決實作方式、只需通過最終驗證,但實作選型的實務隱患(效能/冪等/併發/資源)沒人逼它回答;且**審計火力頭重腳輕**:spec 有 canary/辯方/跨家族/證據閘一整套對抗機器,代碼只有 task reviewer + 終審兩道普通眼睛——最該被層層審的東西審得最薄。
 - loop_id:pitfalls-code-loop
 
