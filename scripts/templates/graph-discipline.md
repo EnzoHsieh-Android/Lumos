@@ -10,6 +10,7 @@
 - **不分任務類型**：開發、重構、**排查、對外支援、呼叫既有 API、查 DB、對帳**——全部算「進場」。看似純操作的任務，只要動手前需要理解系統，就先讀圖譜。（最常被合理化跳過的破口：把任務歸成「只是查資料 / 跑指令」就略過圖譜。別這樣。）
 - **入口動作**（不知道該讀哪個節點時）：① `lumos search <關鍵字>` 定位節點 → ② `lumos context <節點>` 掃脈絡（頭部直接攤出 ⚠ 合約）→ ③ `lumos contracts <節點>` 查硬合約（★INVARIANT★ 改＝breaking）→ 然後才 grep code / 查 DB 驗證細節。
 - 「先查圖譜」不是禮貌建議，是**順序規定**：圖譜先給你合約與邊界，code/DB 只拿來印證，不是拿來重新發明「本來就該這樣」。
+- **自動輔助（不取代主動查）**：`impact` PreToolUse hook 會在你 Edit/Write/MultiEdit 一支 code **動手前自動注入**「受影響的關聯節點（直接/間接）+ 相關事故（`pitfall_when` 命中）」——順手判會不會波及、需不需同步。它是輔助推播，不取代主動 `lumos context`/`contracts` 查合約。
 
 ### 其餘原則
 
@@ -49,7 +50,7 @@ KEY:★CHECKPOINT★   <改了難救:部署測試機>                          #
 - 綁定/審計走指令(寫後自驗),別手寫:`lumos guard bind <node> "<KEY子字串>" <測試名>` / `lumos guard audit <node> "<KEY子字串>"`.
 - `doctor --ci` 的 Check H 會掃 diff、碰 prod/外部 API/寄送時軟提醒「是否漏標 ★IRREVERSIBLE★」(只提醒、不擋)。
 
-**frontmatter 欄位**：`type`(system/verification/issue/project/moc)、`status`(doing/pass/open/done/stale/superseded)、`verified_by`/`plan_refs`/`related`/`tags`(list)、`decisions`(ADR 巢狀)、`valid_under`/`revalidate_when`(重驗條件)、`core_refs`(核心指針,純文字路徑)。
+**frontmatter 欄位**：`type`(system/verification/issue/project/moc)、`status`(doing/pass/open/done/stale/superseded)、`verified_by`/`plan_refs`/`related`/`tags`(list)、`decisions`(ADR 巢狀)、`valid_under`/`revalidate_when`(重驗條件)、`core_refs`(核心指針,純文字路徑)、`pitfall_when`(事故 Issue 的 pattern-trigger,`glob:`/`content:` → `lumos impact` 進場自動餵)。
 - ⚠ **多個 wikilink 必須是 YAML list,一項一行**(`- "[[A]]"`/`- "[[B]]"`);寫成 `"[[A]], [[B]]"` 單字串會長出 ghost 節點。
 - 純量/list/decisions 一律走 `lumos set`/`append`/`decision-add`(安全格式+寫後自驗),別手改 frontmatter。
 
