@@ -3908,9 +3908,9 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
     預設並 vendor 工具組 + 裝 pre-commit/pre-push 閘(--no-hooks 只建圖譜輕量版)。
     像 `openspec init`:一行開好就能 `lumos new`。
     分工:init = 專案層(圖譜 + 該 repo 的 hooks);bootstrap = 機器層(clone Lumos/skills/全域 lumos),一輩子一次。
-    序列:確保範本已 vendor(最新,with_hooks 路徑) → _reinject_claude_block → existing/force return/skip。
-    既有 vault 非 force 仍會刷新 CLAUDE.md 紀律區塊,但不重建圖譜資料。
-    no_hooks 路徑不 vendor 範本,_reinject 讀本機已 vendor 範本(無則 no_template,靜默)。"""
+    序列(既有 vault 非 force):只 _reinject_claude_block(讀本機已 vendor 範本,不 pull、不重裝 hooks)→ early-return。
+    序列(新 vault 或 --force):_vendor_toolchain(pull + copy2 + hooks + reinject) → scaffold → 完成。
+    no_hooks 路徑(不分新/既有):只 _reinject_claude_block(讀本機已 vendor 範本,無則靜默)。"""
     import subprocess
     try:
         root = Path(subprocess.check_output(
@@ -3921,27 +3921,11 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
 
     existing = _vault_in(root)
 
-    # ── Step 1: vendor 範本(最新)+ reinject CLAUDE.md ─────────────────
-    # with_hooks:vendor(copy2 迴圈更新範本) → _vendor_toolchain 尾部已呼叫 _reinject。
-    # no_hooks:跳過 vendor;_reinject_claude_block 讀本機已 vendor 範本,無則靜默。
-    # 兩路徑都在 existing/force 判定之前執行,確保既有 vault 也能刷新 CLAUDE.md。
-    if with_hooks:
-        src = _lumos_src()
-        if root.resolve() == src.resolve():
-            print("\n  (當前就是 Lumos 來源本身,跳過 vendor/hooks)")
-        else:
-            if existing is None or force:
-                print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
-                print("\n裝 hooks:vendor 工具組 + 啟用 pre-commit/pre-push 閘…")
-            rc = _vendor_toolchain(src, root, slug, no_pull=no_pull)
-            # _vendor_toolchain 已在 copy2 迴圈後呼叫 _reinject_claude_block
-            if rc is None:
-                print("  ⚠ 來源不可用,略過 hooks(圖譜已建好)。日後補裝:lumos update")
-            else:
-                # _vendor_toolchain 已收斂呼叫 _install_hooks_py;這裡再保證一次(idempotent)
-                _install_hooks_py(root)
-    else:
-        # no_hooks:讀本機 vendored 範本執行 reinject(無範本 → no_template → 靜默)
+    # ── Step 1: reinject CLAUDE.md(依路徑輕/重分流)─────────────────────
+    # 既有 vault 非 force:只 reinject(輕量);不 pull、不重裝 hooks。
+    # 新 vault 或 --force:完整 _vendor_toolchain(pull + copy2 + hooks + reinject)。
+    # no_hooks 路徑:一律只 reinject(讀本機已 vendor 範本,無則靜默)。
+    def _do_reinject():
         ri = _reinject_claude_block(root, slug)
         if ri.status == "updated":
             print("  CLAUDE.md 紀律區塊已更新")
@@ -3950,6 +3934,25 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
         elif ri.status == "sentinel_broken":
             print("  ⚠ CLAUDE.md sentinel 半壞,未自動覆蓋,請檢查", file=sys.stderr)
         # unchanged / no_template → 靜默
+
+    if with_hooks:
+        src = _lumos_src()
+        if root.resolve() == src.resolve():
+            print("\n  (當前就是 Lumos 來源本身,跳過 vendor/hooks)")
+        elif existing is not None and not force:
+            # 既有 vault 非 force:輕量路徑,只刷新 CLAUDE.md 紀律區塊
+            _do_reinject()
+        else:
+            # 新 vault 或 --force:完整 vendor(pull + copy2 + hooks + reinject)
+            print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
+            print("\n裝 hooks:vendor 工具組 + 啟用 pre-commit/pre-push 閘…")
+            rc = _vendor_toolchain(src, root, slug, no_pull=no_pull)
+            # _vendor_toolchain 已呼叫 _install_hooks_py + _reinject_claude_block;不重複
+            if rc is None:
+                print("  ⚠ 來源不可用,略過 hooks(圖譜已建好)。日後補裝:lumos update")
+    else:
+        # no_hooks:讀本機 vendored 範本執行 reinject(無範本 → no_template → 靜默)
+        _do_reinject()
 
     # ── Step 2: existing/force 判定 ───────────────────────────────────
     if existing is not None and not force:

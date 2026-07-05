@@ -6452,6 +6452,91 @@ def t_init_existing_resyncs():
               f"sentinel 消失;\ncm={cm_text!r}")
 
 
+def t_init_existing_no_pull():
+    """T3 review I-1/I-2:既有 vault 非 force + with_hooks=True 跑 cmd_init →
+    不呼叫 _vendor_toolchain(不 pull、不重裝 hooks),但 CLAUDE.md 紀律區塊有被刷新。
+
+    做法:用 _load_lumos_mod 載入模組後直接替換 _vendor_toolchain 為記錄 stub,
+    再以 mock _lumos_src 指向有範本的臨時源,呼叫 mod.cmd_init(...)。
+    斷言:stub 未被呼叫;CLAUDE.md 舊 body 已替換。
+    """
+    import tempfile, os, subprocess, sys
+
+    with tempfile.TemporaryDirectory() as src_td, \
+         tempfile.TemporaryDirectory() as proj_td:
+        src = Path(src_td)
+        root = Path(proj_td)
+
+        # ── 建最小 lumos 源(只需範本 + 探針) ──────────────────────────
+        scripts_dir = src / "scripts"
+        scripts_dir.mkdir(parents=True)
+        (scripts_dir / "install-graph-toolchain.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        tpl_dir = scripts_dir / "templates"
+        tpl_dir.mkdir()
+        NEW_TPL = "新版知識圖譜紀律(no-pull test):{{KG}}"
+        (tpl_dir / "graph-discipline.md").write_text(NEW_TPL, encoding="utf-8")
+        (scripts_dir / "hooks").mkdir()
+
+        # ── 建消費專案:既有 vault ──────────────────────────────────────
+        subprocess.run(["git", "init", str(root)], capture_output=True)
+        slug = "consumer"
+        kg = root / "docs" / f"{slug}-knowledge"
+        for d in ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC"):
+            (kg / d).mkdir(parents=True, exist_ok=True)
+        (kg / "MOC" / "index.md").write_text("---\ntype: moc\nstatus: doing\n---\n", encoding="utf-8")
+
+        # 複製範本到消費專案(供 _reinject 讀取本機已 vendor 範本)
+        (root / "scripts" / "templates").mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copy2(tpl_dir / "graph-discipline.md",
+                     root / "scripts" / "templates" / "graph-discipline.md")
+
+        # 建舊 block CLAUDE.md
+        mod = _load_lumos_mod("lumos_t3_nopull")
+        START_PREFIX = mod._CLAUDE_START_PREFIX
+        END = mod._CLAUDE_END
+        OLD_BODY = "舊版 body — 應被刷新但不 pull"
+        old_block = (START_PREFIX + " — 自動注入/更新,勿手改本區塊;"
+                     "改範本 scripts/templates/graph-discipline.md -->\n"
+                     + OLD_BODY + "\n" + END)
+        (root / "CLAUDE.md").write_text("# CLAUDE.md\n\n" + old_block + "\n", encoding="utf-8")
+
+        # ── monkeypatch:替換 _vendor_toolchain 為記錄 stub ────────────
+        vendor_called = []
+
+        def _stub_vendor(s, r, sl, no_pull=False):
+            vendor_called.append((s, r, sl, no_pull))
+            return 0  # 假裝成功但不執行任何動作
+
+        orig_vendor = mod._vendor_toolchain
+        orig_lumos_src = mod._lumos_src
+        mod._vendor_toolchain = _stub_vendor
+        mod._lumos_src = lambda source=None: src  # 指向有範本的臨時源
+
+        try:
+            import os as _os
+            orig_cwd = _os.getcwd()
+            _os.chdir(str(root))
+            rc = mod.cmd_init(name=slug, force=False, with_hooks=True, no_pull=False)
+        finally:
+            _os.chdir(orig_cwd)
+            mod._vendor_toolchain = orig_vendor
+            mod._lumos_src = orig_lumos_src
+
+        # ── 斷言 ──────────────────────────────────────────────────────
+        check("init_existing_no_pull: rc==0", rc == 0, f"rc={rc}")
+        check("init_existing_no_pull: _vendor_toolchain 未被呼叫(不 pull/不重裝 hooks)",
+              len(vendor_called) == 0,
+              f"_vendor_toolchain 被呼叫了 {len(vendor_called)} 次: {vendor_called}")
+        cm_text = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        check("init_existing_no_pull: 舊 body 已被替換(CLAUDE.md 有刷新)",
+              OLD_BODY not in cm_text,
+              f"舊 body 仍存在;\ncm={cm_text!r}")
+        check("init_existing_no_pull: sentinel block 存在",
+              START_PREFIX in cm_text,
+              f"sentinel 消失;\ncm={cm_text!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
