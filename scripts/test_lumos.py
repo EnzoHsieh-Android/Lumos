@@ -2308,6 +2308,23 @@ def t_fold_reverse_omission():
     check("fold_reverse_omission: placeholder <path> 排除(r2-F5)", "<path>" not in toks and "path" not in toks, str(toks))
 
 
+def t_fold_reverse_omission_no_frontmatter():
+    """空檔與無 frontmatter 的 .md 傳入 _fold_reverse_omission 不應拋例外。
+    修前:fm_lines=None 時 `for line in fm_lines:` 拋 TypeError。
+    修後:guard `(fm_lines or [])` → 回空 list / 合理 rc。
+    """
+    m = _import_lumos()
+
+    # 空字串(空檔)
+    result_empty = m._fold_reverse_omission("")
+    check("fold_reverse_omission 空檔: 回 list 不拋例外", isinstance(result_empty, list), repr(result_empty))
+
+    # 純 markdown 無 --- frontmatter
+    plain_md = "# 標題\n\n這是一段純 markdown，沒有 frontmatter。\n\n用到 --some-flag 指令。\n"
+    result_plain = m._fold_reverse_omission(plain_md)
+    check("fold_reverse_omission 無 frontmatter: 回 list 不拋例外", isinstance(result_plain, list), repr(result_plain))
+
+
 # ─── Task 4: cmd_fold_check 組裝 helpers ───────────────────────────────────
 
 def run_lumos(args):
