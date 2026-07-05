@@ -6282,6 +6282,176 @@ def t_reinject_bom_crlf_normalized():
               "既有內容" in raw.decode("utf-8"), f"既有內容消失: {raw.decode()!r}")
 
 
+# ── Task 3: 解耦 scaffold + 接線 update/init ────────────────────────────────
+
+
+def _load_lumos_mod(unique_name="lumos_t3"):
+    """載入 lumos 模組(無 .py 副檔名)回傳 module。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader(unique_name, GRAPHCTL)
+    spec = importlib.util.spec_from_loader(unique_name, loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+def t_scaffold_no_longer_injects():
+    """_scaffold_project 移除注入段後:scaffold 成功建 vault 夾,但 CLAUDE.md 不被它建立或修改。"""
+    import tempfile, os, subprocess, sys
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        # 建一個假的 git repo(避免 cmd_init 中的 git rev-parse 出錯)
+        subprocess.run(["git", "init", str(root)], capture_output=True)
+        # 建 scripts/templates 讓範本存在(但 scaffold 不應碰它)
+        tpl_dir = root / "scripts" / "templates"
+        tpl_dir.mkdir(parents=True, exist_ok=True)
+        (tpl_dir / "graph-discipline.md").write_text("知識圖譜:{{KG}}", encoding="utf-8")
+
+        mod = _load_lumos_mod("lumos_t3_scaffold")
+        mod._scaffold_project(root, "myproj")
+
+        kg = root / "docs" / "myproj-knowledge"
+        check("scaffold_no_longer: vault 夾建立", kg.is_dir(), f"kg={kg}")
+        check("scaffold_no_longer: CLAUDE.md 未被 scaffold 建立",
+              not (root / "CLAUDE.md").exists(),
+              "CLAUDE.md 意外被 _scaffold_project 建立(注入段未移除)")
+
+        # 已有 CLAUDE.md 的情況:scaffold 也不應修改它
+        existing_cm = "# 既有 CLAUDE.md\n\n使用者內容\n"
+        (root / "CLAUDE.md").write_text(existing_cm, encoding="utf-8")
+        # 再呼叫一次(已存在 vault → early return;CLAUDE.md 不應被碰)
+        mod._scaffold_project(root, "myproj")
+        after = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        check("scaffold_no_longer: 既有 CLAUDE.md 未被 scaffold 修改",
+              after == existing_cm,
+              f"CLAUDE.md 被改了: {after!r}")
+
+
+def t_update_resyncs_claude():
+    """整合:_vendor_toolchain 在 copy2 迴圈後呼叫 _reinject_claude_block。
+
+    情境:消費專案有舊版 block;臨時 lumos 源含新版範本。
+    以 os.environ["LUMOS_HOME"] 指向臨時源;跑 _vendor_toolchain(..., no_pull=True)。
+    斷言:CLAUDE.md block 被刷新成新範本內容。
+    """
+    import tempfile, os, subprocess, shutil, sys
+    # ── 建臨時 lumos 源 ──────────────────────────────────────────────────
+    with tempfile.TemporaryDirectory() as src_td, \
+         tempfile.TemporaryDirectory() as proj_td:
+        src = Path(src_td)
+        root = Path(proj_td)
+
+        # 最小 lumos 源結構(只需 install-graph-toolchain.sh 當探針 + 新版範本)
+        scripts_dir = src / "scripts"
+        scripts_dir.mkdir(parents=True)
+        (scripts_dir / "install-graph-toolchain.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        tpl_dir = scripts_dir / "templates"
+        tpl_dir.mkdir()
+        NEW_TPL = "新版知識圖譜紀律:{{KG}}"
+        (tpl_dir / "graph-discipline.md").write_text(NEW_TPL, encoding="utf-8")
+        # hooks dir 需存在避免 rglob 報錯
+        (scripts_dir / "hooks").mkdir()
+
+        # ── 建消費專案:既有 vault + 舊 block ────────────────────────────
+        subprocess.run(["git", "init", str(root)], capture_output=True)
+        slug = "consumer"
+        kg = root / "docs" / f"{slug}-knowledge"
+        kg.mkdir(parents=True)
+
+        mod = _load_lumos_mod("lumos_t3_update")
+        START_PREFIX = mod._CLAUDE_START_PREFIX
+        END = mod._CLAUDE_END
+        OLD_BODY = "舊版紀律內文:docs/consumer-knowledge/"
+        old_block = (START_PREFIX + " -->\n" + OLD_BODY + "\n" + END)
+        old_cm = "# CLAUDE.md\n\n使用者規則\n\n" + old_block + "\n"
+        (root / "CLAUDE.md").write_text(old_cm, encoding="utf-8")
+
+        # ── 用 LUMOS_HOME env 指臨時源,呼叫 _vendor_toolchain ───────────
+        orig_home = os.environ.get("LUMOS_HOME")
+        try:
+            os.environ["LUMOS_HOME"] = str(src)
+            mod._vendor_toolchain(src, root, slug, no_pull=True)
+        finally:
+            if orig_home is None:
+                os.environ.pop("LUMOS_HOME", None)
+            else:
+                os.environ["LUMOS_HOME"] = orig_home
+
+        # ── 斷言 ─────────────────────────────────────────────────────────
+        cm_text = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        expected_body = NEW_TPL.replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
+        check("update_resyncs: CLAUDE.md block 已更新(含新範本內容)",
+              expected_body in cm_text,
+              f"新範本內容未在 CLAUDE.md 中;\ncm={cm_text!r}")
+        check("update_resyncs: 舊 body 已被替換",
+              OLD_BODY not in cm_text,
+              f"舊 body 仍存在: {cm_text!r}")
+        check("update_resyncs: 使用者規則保留",
+              "使用者規則" in cm_text,
+              f"使用者規則消失: {cm_text!r}")
+
+
+def t_init_existing_resyncs():
+    """既有 vault + 非 force 跑 cmd_init → CLAUDE.md 紀律區塊被刷新(early-return 不繞過 reinject)。
+
+    透過 subprocess 跑 `lumos init --name consumer`,消費專案有舊 block 和既有 vault。
+    環境變數 LUMOS_HOME 指向 lumos-toolchain 本身(有真實範本)。
+    """
+    import tempfile, os, subprocess, sys
+    # lumos 本身的 repo(有真實 scripts/templates/graph-discipline.md)
+    lumos_src = Path(GRAPHCTL).resolve().parent.parent
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        subprocess.run(["git", "init", str(root)], capture_output=True)
+        slug = "consumer"
+
+        # 建既有 vault
+        kg = root / "docs" / f"{slug}-knowledge"
+        for d in ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC"):
+            (kg / d).mkdir(parents=True, exist_ok=True)
+        (kg / "MOC" / "index.md").write_text("---\ntype: moc\nstatus: doing\n---\n", encoding="utf-8")
+
+        # 建舊 block CLAUDE.md
+        tpl_path = lumos_src / "scripts" / "templates" / "graph-discipline.md"
+        if not tpl_path.exists():
+            check("init_existing_resyncs: 跳過(lumos 源無範本)", True)
+            return
+
+        # 故意寫舊 block(body 不同於現版範本)
+        START_PREFIX = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
+        END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+        OLD_BODY = "舊版 body — 應被 init 刷新"
+        old_block = (START_PREFIX + " — 自動注入/更新,勿手改本區塊;"
+                     "改範本 scripts/templates/graph-discipline.md -->\n"
+                     + OLD_BODY + "\n" + END)
+        (root / "CLAUDE.md").write_text("# CLAUDE.md\n\n" + old_block + "\n", encoding="utf-8")
+
+        # 把 lumos 源複製最小必需工具到 consumer(使 _vendor_toolchain 的來源探針通過)
+        (root / "scripts").mkdir(exist_ok=True)
+        (root / "scripts" / "templates").mkdir(exist_ok=True)
+        import shutil
+        shutil.copy2(tpl_path, root / "scripts" / "templates" / "graph-discipline.md")
+
+        env = os.environ.copy()
+        env["LUMOS_HOME"] = str(lumos_src)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "init", "--name", slug, "--no-hooks"],
+            cwd=str(root), capture_output=True, text=True, env=env
+        )
+
+        cm_text = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        check("init_existing_resyncs: rc==0", r.returncode == 0,
+              f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+        check("init_existing_resyncs: 舊 body 已被替換",
+              OLD_BODY not in cm_text,
+              f"舊 body 仍存在;\ncm={cm_text!r}\nstdout={r.stdout!r}\nstderr={r.stderr!r}")
+        check("init_existing_resyncs: sentinel block 存在",
+              START_PREFIX in cm_text,
+              f"sentinel 消失;\ncm={cm_text!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

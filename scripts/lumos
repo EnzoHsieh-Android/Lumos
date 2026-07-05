@@ -3741,6 +3741,18 @@ def _vendor_toolchain(src, root, slug, no_pull=False):
         print(f"  結尾自癒:補齊 installer 漏的 {len(healed)} 檔 → {', '.join(healed)}")
     else:
         print("  ✓ 結尾自癒檢查:工具組完全對齊(無漏)")
+    # 範本已是最新(copy2 迴圈完成) → reinject CLAUDE.md 紀律區塊
+    ri = _reinject_claude_block(root, slug)
+    if ri.status == "updated":
+        print("  CLAUDE.md 紀律區塊已更新")
+        if ri.diff:
+            for line in ri.diff.splitlines()[:20]:  # 最多印 20 行 diff 摘要
+                print(f"    {line}")
+    elif ri.status in ("created", "appended"):
+        print(f"  CLAUDE.md 紀律區塊已注入({ri.status})")
+    elif ri.status == "sentinel_broken":
+        print("  ⚠ CLAUDE.md sentinel 半壞,未自動覆蓋,請檢查", file=sys.stderr)
+    # unchanged / no_template → 靜默
     return rc
 
 
@@ -3821,19 +3833,6 @@ def _scaffold_project(root: Path, slug: str):
               f"---\ntype: moc\nstatus: doing\n---\n# {slug} 知識圖譜總索引\n")
     _write_lf(kg / ".gitignore",
               ".bypass-log.jsonl\n.rot-queue.jsonl\n.governance-log.jsonl\n.canary-log.jsonl\n")
-    # CLAUDE.md 注入 graph-discipline 區塊(用既有範本,變數替換)
-    tpl = root / "scripts" / "templates" / "graph-discipline.md"
-    if tpl.exists():
-        body = tpl.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
-        START = "<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->"
-        END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
-        block = START + "\n" + body + "\n" + END
-        cm = root / "CLAUDE.md"
-        if not cm.exists():
-            _write_lf(cm, "# CLAUDE.md\n\n" + block + "\n")
-        elif "LUMOS:GRAPH-DISCIPLINE:START" not in cm.read_text(encoding="utf-8"):
-            t = cm.read_text(encoding="utf-8")
-            _write_lf(cm, t.rstrip() + "\n\n" + block + "\n")
     print(f"  ✓ scaffold {kg}")
 
 
@@ -3908,7 +3907,10 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
     """在當前 repo 初始化知識圖譜:建 docs/<slug>-knowledge/{6 個資料夾} + .gitignore,
     預設並 vendor 工具組 + 裝 pre-commit/pre-push 閘(--no-hooks 只建圖譜輕量版)。
     像 `openspec init`:一行開好就能 `lumos new`。
-    分工:init = 專案層(圖譜 + 該 repo 的 hooks);bootstrap = 機器層(clone Lumos/skills/全域 lumos),一輩子一次。"""
+    分工:init = 專案層(圖譜 + 該 repo 的 hooks);bootstrap = 機器層(clone Lumos/skills/全域 lumos),一輩子一次。
+    序列:確保範本已 vendor(最新,with_hooks 路徑) → _reinject_claude_block → existing/force return/skip。
+    既有 vault 非 force 仍會刷新 CLAUDE.md 紀律區塊,但不重建圖譜資料。
+    no_hooks 路徑不 vendor 範本,_reinject 讀本機已 vendor 範本(無則 no_template,靜默)。"""
     import subprocess
     try:
         root = Path(subprocess.check_output(
@@ -3916,29 +3918,49 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
     except Exception:
         root = Path.cwd()
     slug = _slugify_vault(name) if name else _slugify_vault(root.name)
-    vault = root / "docs" / f"{slug}-knowledge"
 
     existing = _vault_in(root)
-    if existing is not None and not force:
-        print(f"✓ 此 repo 已有 vault: {existing.relative_to(root)}")
-        print("  (要另建用 --name <slug>;要在既有 vault 上重裝/更新 hooks 與工具組用 --force,vault 內容不動)")
-        return 0
 
-    print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
-    _scaffold_project(root, slug)  # 單一源:6 夾 + .gitignore + MOC/index.md(+ CLAUDE.md);既有 vault 自動 skip 保護資料
-
+    # ── Step 1: vendor 範本(最新)+ reinject CLAUDE.md ─────────────────
+    # with_hooks:vendor(copy2 迴圈更新範本) → _vendor_toolchain 尾部已呼叫 _reinject。
+    # no_hooks:跳過 vendor;_reinject_claude_block 讀本機已 vendor 範本,無則靜默。
+    # 兩路徑都在 existing/force 判定之前執行,確保既有 vault 也能刷新 CLAUDE.md。
     if with_hooks:
         src = _lumos_src()
         if root.resolve() == src.resolve():
             print("\n  (當前就是 Lumos 來源本身,跳過 vendor/hooks)")
         else:
-            print("\n裝 hooks:vendor 工具組 + 啟用 pre-commit/pre-push 閘…")
+            if existing is None or force:
+                print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
+                print("\n裝 hooks:vendor 工具組 + 啟用 pre-commit/pre-push 閘…")
             rc = _vendor_toolchain(src, root, slug, no_pull=no_pull)
+            # _vendor_toolchain 已在 copy2 迴圈後呼叫 _reinject_claude_block
             if rc is None:
                 print("  ⚠ 來源不可用,略過 hooks(圖譜已建好)。日後補裝:lumos update")
             else:
                 # _vendor_toolchain 已收斂呼叫 _install_hooks_py;這裡再保證一次(idempotent)
                 _install_hooks_py(root)
+    else:
+        # no_hooks:讀本機 vendored 範本執行 reinject(無範本 → no_template → 靜默)
+        ri = _reinject_claude_block(root, slug)
+        if ri.status == "updated":
+            print("  CLAUDE.md 紀律區塊已更新")
+        elif ri.status in ("created", "appended"):
+            print(f"  CLAUDE.md 紀律區塊已注入({ri.status})")
+        elif ri.status == "sentinel_broken":
+            print("  ⚠ CLAUDE.md sentinel 半壞,未自動覆蓋,請檢查", file=sys.stderr)
+        # unchanged / no_template → 靜默
+
+    # ── Step 2: existing/force 判定 ───────────────────────────────────
+    if existing is not None and not force:
+        print(f"✓ 此 repo 已有 vault: {existing.relative_to(root)}")
+        print("  (要另建用 --name <slug>;要在既有 vault 上重裝/更新 hooks 與工具組用 --force,vault 內容不動)")
+        return 0
+
+    # ── Step 3: scaffold 圖譜資料(新 vault;既有 vault 內部 kg.exists() guard 保護) ──
+    if not with_hooks:
+        print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
+    _scaffold_project(root, slug)  # 6 夾 + .gitignore + MOC/index.md;既有 vault 自動 skip 保護資料
 
     print("\n✓ init 完成。開始用:")
     print(f"    cd {root}")

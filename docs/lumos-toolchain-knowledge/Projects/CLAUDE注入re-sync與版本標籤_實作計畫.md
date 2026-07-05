@@ -16,7 +16,7 @@ summary: |-
   KEY:T1 marker常數+_extract_claude_block_span 三態→ T2 _reinject_claude_block(5-status+diff+半壞+BOM)→ T3 解耦_scaffold+接線_vendor_toolchain/cmd_init→ T4 doctor Check D 漂移守衛→ T5 LUMOS_VERSION+版本戳+nudge→ T6 圖譜回填+回歸+anchor
   DECISION:subagent-driven TDD;基線=先跑 test_lumos.py 取
   DEP:[[CLAUDE注入re-sync與版本標籤_計劃]]
-  TEST:T1 DONE — 16 checks green(t_extract_span_found/absent/broken);全量 752 passed(基線 736)|T2 DONE — 37 checks green(t_reinject_updates_existing/idempotent/creates_when_absent/appends_when_no_sentinel/preserves_outside/sentinel_broken/bom_crlf_normalized/no_template);全量 789 passed
+  TEST:T1 DONE — 16 checks green(t_extract_span_found/absent/broken);全量 752 passed(基線 736)|T2 DONE — 37 checks green(t_reinject_updates_existing/idempotent/creates_when_absent/appends_when_no_sentinel/preserves_outside/sentinel_broken/bom_crlf_normalized/no_template);全量 789 passed|T3 DONE — 9 checks green(t_scaffold_no_longer_injects/t_update_resyncs_claude/t_init_existing_resyncs);全量 798 passed;_lumos_src override 用 os.environ["LUMOS_HOME"]
 ---
 # CLAUDE 注入 re-sync + 版本標籤 Implementation Plan
 
@@ -70,11 +70,11 @@ summary: |-
 
 **Files:** Modify `scripts/lumos`;Test(整合)。
 
-- [ ] **Step 1 失敗測試**:`t_update_resyncs_claude`(整合:臨時源+臨時消費專案、`_lumos_src` monkeypatch/env 指臨時源、既有舊 block→`update`→區塊刷新)、`t_scaffold_no_longer_injects`(scaffold 不再碰 CLAUDE.md)、`t_init_existing_resyncs`(既有 vault init 也刷新、免 --force)。
-- [ ] **Step 2 FAIL**。
-- [ ] **Step 3 實作**:`_scaffold_project` 移除注入段;`_vendor_toolchain` 在 copy2 迴圈**後**呼叫 `_reinject_claude_block` 印 status;`cmd_init` 序列改 vendor→reinject→existing/force return。
-- [ ] **Step 4 PASS**。
-- [ ] **Step 5 Commit** `feat(reinject): 解耦 scaffold + 接線 update/init(修順序)`
+- [x] **Step 1 失敗測試**:`t_update_resyncs_claude`(整合:臨時源+臨時消費專案、`_lumos_src` monkeypatch/env 指臨時源、既有舊 block→`update`→區塊刷新)、`t_scaffold_no_longer_injects`(scaffold 不再碰 CLAUDE.md)、`t_init_existing_resyncs`(既有 vault init 也刷新、免 --force)。
+- [x] **Step 2 FAIL**。
+- [x] **Step 3 實作**:`_scaffold_project` 移除注入段;`_vendor_toolchain` 在 copy2 迴圈**後**呼叫 `_reinject_claude_block` 印 status;`cmd_init` 序列改 vendor→reinject→existing/force return;no_hooks 路徑補 reinject 呼叫(讀本機 vendored 範本)。
+- [x] **Step 4 PASS**:798 passed, 0 failed。
+- [x] **Step 5 Commit** `feat(reinject): 解耦 scaffold + 接線 update/init(修順序)`
 
 ---
 
