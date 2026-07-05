@@ -4893,6 +4893,40 @@ def _pitfall_scan_classes(text):
     return hits
 
 
+def cmd_sqlfluff_sarif(out=None):
+    """sqlfluff --format json(stdin)→ SARIF v2.1(--out 或 stdout)。
+    橋接:sqlfluff(主流可攜 T-SQL/SQL linter)無原生 SARIF → 轉成 lint-adapter 吃的 SARIF。
+    用法(專案 .lumos/lint.json 的 sql 棧):
+      sqlfluff lint <dir> --dialect tsql --format json | python3 scripts/lumos sqlfluff-sarif --out {LINT_SARIF_OUT}
+    """
+    import json
+    try:
+        data = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        data = []
+    results = []
+    for f in (data or []):
+        fp = f.get("filepath", "")
+        for v in (f.get("violations") or []):
+            results.append({
+                "ruleId": v.get("code", ""),
+                "message": {"text": v.get("description", "")},
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": fp},
+                    "region": {"startLine": v.get("start_line_no", v.get("line_no", 0))},
+                }}],
+            })
+    sarif = {"version": "2.1.0",
+             "runs": [{"tool": {"driver": {"name": "sqlfluff"}}, "results": results}]}
+    text = json.dumps(sarif, ensure_ascii=False)
+    if out:
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    else:
+        print(text)
+    return 0
+
+
 def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False):
     """實務隱患提問(vault-free):spec 模式逼答設計決策級隱患;--diff 模式攤代碼級風險位置(Task 2)。
     spec 模式印通用 3 問 + 命中類追問;--check:命中類且無「## <section_title>」節 → rc 1(只驗節存在)。
@@ -5164,6 +5198,9 @@ def main():
     p.add_argument("--json", dest="pf_json", action="store_true", help="JSON 輸出")
     p.add_argument("--no-lint", dest="pf_no_lint", action="store_true", help="--diff 只跑 regex 層、不跑專案 lint 指令(快,給 pre-push advisory)")
 
+    p = sub.add_parser("sqlfluff-sarif", help="sqlfluff --format json(stdin)→ SARIF v2.1(橋接 SQL linter 進 lint-adapter)")
+    p.add_argument("--out", dest="sqlfluff_out", help="輸出 SARIF 檔路徑(預設 stdout)")
+
     p = sub.add_parser("anchor", help="錨點完整性(vault-free):測試 runner/把關 hooks 的 sha256 baseline")
     asub = p.add_subparsers(dest="anchor_cmd", required=True)
     av = asub.add_parser("verify", help="比對錨點 sha256 vs baseline;不符 rc=1(baseline 不存在 rc=0+警示)")
@@ -5205,6 +5242,8 @@ def main():
     if args.cmd == "pitfalls":
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
+    if args.cmd == "sqlfluff-sarif":
+        return cmd_sqlfluff_sarif(out=args.sqlfluff_out)
     if args.cmd == "anchor":
         if args.anchor_cmd == "verify":
             return cmd_anchor_verify(repo=args.anchor_repo, as_json=args.as_json)

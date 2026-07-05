@@ -3457,6 +3457,32 @@ def t_lint_runner_stdout_isolation():
     check("_lint_run_and_parse 仍正常回 (ok=True)", "RESULT True" in r.stdout, r.stdout[:200])
 
 
+def t_sqlfluff_sarif_bridge():
+    """sqlfluff --format json → lumos sqlfluff-sarif → SARIF → _lint_run_and_parse 吃得到(MSSQL 進 lint-adapter)。"""
+    import importlib.util as U, json as J, subprocess as sp, sys as _sys, tempfile
+    from importlib.machinery import SourceFileLoader
+    root = Path(tempfile.mkdtemp(prefix="gctl-sqlb-"))
+    sf_json = J.dumps([{"filepath": "db/001.sql", "violations": [
+        {"start_line_no": 3, "code": "CP01", "description": "Keywords must be consistently upper case."},
+        {"start_line_no": 5, "code": "LT05", "description": "Line is too long."}]}])
+    out = root / "o.sarif"
+    r = sp.run([_sys.executable, GRAPHCTL, "sqlfluff-sarif", "--out", str(out)],
+               input=sf_json, capture_output=True, text=True)
+    check("sqlfluff-sarif rc0", r.returncode == 0, r.stderr)
+    d = J.loads(out.read_text(encoding="utf-8"))
+    check("SARIF v2.1 + driver sqlfluff", d.get("version") == "2.1.0" and d["runs"][0]["tool"]["driver"]["name"] == "sqlfluff", str(d)[:120])
+    check("2 results 映射", len(d["runs"][0]["results"]) == 2, str(len(d["runs"][0]["results"])))
+    # 再過 _lint_run_and_parse:應得 lint:sqlfluff claims
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    claims, ok = m._lint_run_and_parse(f"cp {out} {{LINT_SARIF_OUT}}", root)
+    check("lint-adapter 吃到 sqlfluff claim", ok and len(claims) == 2 and claims[0]["source"] == "lint:sqlfluff", str(claims))
+    check("claim 映射 file/line/rule", claims[0]["file"] == "db/001.sql" and claims[0]["line"] == 3 and claims[0]["rule"] == "CP01", str(claims[0]))
+    # 空 stdin → 空 results 不崩
+    r2 = sp.run([_sys.executable, GRAPHCTL, "sqlfluff-sarif"], input="", capture_output=True, text=True)
+    check("空 stdin 不崩", r2.returncode == 0 and '"results": []' in r2.stdout, r2.stdout[:80])
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
