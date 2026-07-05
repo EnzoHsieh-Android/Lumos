@@ -5209,10 +5209,10 @@ def _fold_reverse_omission(text):
 
 
 def cmd_fold_check(path, as_json=False):
-    """折入後一致性複查輔助(Task 1):列舉鏡像段供人逐段勾一致。
+    """折入後一致性複查輔助:列舉鏡像段 + value-drift + reverse-omission flag。
 
-    Task 1 範圍:argparse + 讀盤 + _fold_mirror_sections 列舉。
-    value-drift / reverse-omission(Task 2/3)待實作,此版不輸出 flag。
+    rc = (value_drift 或 reverse_omission 非空) ? 1 : 0
+    --json schema: {path, mirror_sections, value_drift, reverse_omission}
     """
     import json
     md = Path(path)
@@ -5226,13 +5226,17 @@ def cmd_fold_check(path, as_json=False):
         return 2
 
     mirror_sections = _fold_mirror_sections(text)
+    value_drift = _fold_value_drift(text)
+    reverse_omission = _fold_reverse_omission(text)
+
+    has_flag = bool(value_drift or reverse_omission)
 
     if as_json:
         print(json.dumps({
             "path": str(md),
             "mirror_sections": mirror_sections,
-            "value_drift": [],
-            "reverse_omission": [],
+            "value_drift": value_drift,
+            "reverse_omission": reverse_omission,
         }, ensure_ascii=False))
     else:
         print(f"fold-check {md}")
@@ -5241,8 +5245,18 @@ def cmd_fold_check(path, as_json=False):
             print(f"  ☐ 複查 {s}:與 body 一致?")
         if not mirror_sections:
             print("  (無鏡像段)")
-        print("(value-drift / reverse-omission:Task 2/3 待實作)")
-    return 0
+        if value_drift:
+            print("── value-drift ──")
+            for item in value_drift:
+                print(f"  ⚠ value-drift: 「{item['key']} {item['a']}」vs 「{item['key']} {item['b']}」")
+        if reverse_omission:
+            print("── reverse-omission ──")
+            for item in reverse_omission:
+                print(f"  ⚠ reverse-omission: {item['present_in']} 有「{item['token']}」{item['missing_in']} 無")
+        if not has_flag:
+            print("✓ 無 flag")
+
+    return 1 if has_flag else 0
 
 
 def cmd_refcheck(md_path, repo=None, as_json=False):

@@ -2308,6 +2308,82 @@ def t_fold_reverse_omission():
     check("fold_reverse_omission: placeholder <path> 排除(r2-F5)", "<path>" not in toks and "path" not in toks, str(toks))
 
 
+# ─── Task 4: cmd_fold_check 組裝 helpers ───────────────────────────────────
+
+def run_lumos(args):
+    """執行 scripts/lumos 並回傳 rc(int)。"""
+    r = subprocess.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True)
+    return r.returncode
+
+
+def run_lumos_capture(args):
+    """執行 scripts/lumos 並回傳 stdout(str)。"""
+    r = subprocess.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True)
+    return r.stdout
+
+
+def make_tmp_spec_consistent():
+    """建立一個無 drift 的暫存 spec 檔路徑(str)。
+    最小化 token,確保 value_drift=[] 且 reverse_omission=[]。
+    """
+    import tempfile
+    text = (
+        "---\n"
+        "type: project\n"
+        "status: doing\n"
+        "summary: |-\n"
+        "  KEY:介面設計\n"
+        "---\n"
+        "# 一致測試 spec\n"
+        "\n"
+        "§1 描述:介面設計說明。\n"
+    )
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8")
+    f.write(text)
+    f.close()
+    return f.name
+
+
+def make_tmp_spec_with_node_path_drift():
+    """建立一個含 fold-check <node> vs fold-check <path> value-drift 的暫存 spec 檔路徑(str)。
+    §1 用 fold-check <node>,§2 用 fold-check <path> → value_drift 非空 → rc 1。
+    """
+    import tempfile
+    text = (
+        "---\n"
+        "type: project\n"
+        "status: doing\n"
+        "summary: |-\n"
+        "  KEY:介面設計\n"
+        "---\n"
+        "# drift 測試 spec\n"
+        "\n"
+        "§1 描述:舊文寫 fold-check <node>。\n"
+        "\n"
+        "§2 更新:新介面是 fold-check <path>。\n"
+    )
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8")
+    f.write(text)
+    f.close()
+    return f.name
+
+
+def t_fold_check_rc_json():
+    import json
+    clean = make_tmp_spec_consistent()      # 無 drift
+    assert run_lumos(["fold-check", clean]) == 0
+    drifty = make_tmp_spec_with_node_path_drift()
+    assert run_lumos(["fold-check", drifty]) == 1
+    out = json.loads(run_lumos_capture(["fold-check", drifty, "--json"]))
+    assert set(out) == {"path", "mirror_sections", "value_drift", "reverse_omission"}
+    check("fold_check_rc_json: clean spec → rc 0", run_lumos(["fold-check", clean]) == 0, "")
+    check("fold_check_rc_json: drifty spec → rc 1", run_lumos(["fold-check", drifty]) == 1, "")
+    check("fold_check_rc_json: --json keys 符合 schema", set(out) == {"path", "mirror_sections", "value_drift", "reverse_omission"}, str(set(out)))
+    check("fold_check_rc_json: value_drift 非空(drift spec)", len(out["value_drift"]) > 0, str(out["value_drift"]))
+    check("fold_check_rc_json: mirror_sections 是 list", isinstance(out["mirror_sections"], list), str(out["mirror_sections"]))
+    check("fold_check_rc_json: reverse_omission 是 list", isinstance(out["reverse_omission"], list), str(out["reverse_omission"]))
+
+
 def t_context_valid_under_warning():
     import datetime
     v = mkvault()
