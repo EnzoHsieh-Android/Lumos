@@ -10,7 +10,7 @@
 - **不分任務類型**：開發、重構、**排查、對外支援、呼叫既有 API、查 DB、對帳**——全部算「進場」。看似純操作的任務，只要動手前需要理解系統，就先讀圖譜。（最常被合理化跳過的破口：把任務歸成「只是查資料 / 跑指令」就略過圖譜。別這樣。）
 - **入口動作**（不知道該讀哪個節點時）：① `lumos search <關鍵字>` 定位節點 → ② `lumos context <節點>` 掃脈絡（頭部直接攤出 ⚠ 合約）→ ③ `lumos contracts <節點>` 查硬合約（★INVARIANT★ 改＝breaking）→ 然後才 grep code / 查 DB 驗證細節。
 - 「先查圖譜」不是禮貌建議，是**順序規定**：圖譜先給你合約與邊界，code/DB 只拿來印證，不是拿來重新發明「本來就該這樣」。
-- **自動輔助（不取代主動查）**：`impact` PreToolUse hook 會在你 Edit/Write/MultiEdit 一支 code **動手前自動注入**「受影響的關聯節點（直接/間接）+ 相關事故（`pitfall_when` 命中）」——順手判會不會波及、需不需同步。它是輔助推播，不取代主動 `lumos context`/`contracts` 查合約。
+- **自動輔助（不取代主動查）**：`impact` PreToolUse hook 會在你 Edit/Write/MultiEdit 一支 code **動手前自動注入**「受影響的關聯節點（直接/間接）+ 相關事故（`pitfall_when` 命中）」——看到就順手判：這些節點/事故會不會被你這次改動波及、需不需同步。它是**輔助推播**，不取代你主動 `lumos context`/`contracts` 查合約（hook 只推「碰到的」，合約邊界仍要自己查）。
 
 ### 其餘原則
 
@@ -50,11 +50,11 @@ KEY:★CHECKPOINT★   <改了難救:部署測試機>                          #
 - 綁定/審計走指令(寫後自驗),別手寫:`lumos guard bind <node> "<KEY子字串>" <測試名>` / `lumos guard audit <node> "<KEY子字串>"`.
 - `doctor --ci` 的 Check H 會掃 diff、碰 prod/外部 API/寄送時軟提醒「是否漏標 ★IRREVERSIBLE★」(只提醒、不擋)。
 
-**frontmatter 欄位**：`type`(system/verification/issue/project/moc)、`status`(doing/pass/open/done/stale/superseded)、`verified_by`/`plan_refs`/`related`/`tags`(list)、`decisions`(ADR 巢狀)、`valid_under`/`revalidate_when`(重驗條件)、`core_refs`(核心指針,純文字路徑)、`pitfall_when`(事故 Issue 的 pattern-trigger,`glob:`/`content:` → `lumos impact` 進場自動餵)。
+**frontmatter 欄位**：`type`(system/verification/issue/project/moc)、`status`(doing/pass/open/done/stale/superseded)、`verified_by`/`plan_refs`/`related`/`tags`(list)、`decisions`(ADR 巢狀)、`valid_under`/`revalidate_when`(重驗條件)、`core_refs`(核心指針,純文字路徑)、`pitfall_when`(事故 Issue 的 pattern-trigger list,`glob:`路徑/`content:`內容-regex → `lumos impact` 進場自動餵該事故;見 lumos-project-notes skill)。
 - ⚠ **多個 wikilink 必須是 YAML list,一項一行**(`- "[[A]]"`/`- "[[B]]"`);寫成 `"[[A]], [[B]]"` 單字串會長出 ghost 節點。
 - 純量/list/decisions 一律走 `lumos set`/`append`/`decision-add`(安全格式+寫後自驗),別手改 frontmatter。
 
-> 寫完一個節點先跑 `lumos lint <節點>`(單檔快檢:type/summary/★ 格式/裸合約/未審/ghost trap)→ 收尾再 `lumos doctor` 跑全圖;push 前 pre-push 會再擋一次。
+> 寫完一個節點先跑 `lumos lint <節點>`(單檔快檢:type/summary/★ 格式/裸合約/未審/ghost trap)→ 收尾再 `lumos doctor` 跑全圖;push 前 pre-push 再擋一次(`doctor --ci` + `anchor verify` + tier=high 未過 code-loop 硬擋,詳見下方 skill 表末列)。
 
 ### 主動調用 Skill（遇到情境就調用，別憑記憶硬幹）
 
@@ -63,6 +63,7 @@ KEY:★CHECKPOINT★   <改了難救:部署測試機>                          #
 | **排查 / 對外支援 / 查 DB / 呼叫既有 API**（動手前要懂為什麼 / 邊界 / 合約）→ **先查圖譜再下 code/DB** | **`lumos-project-notes`**（先 `lumos search`→`context`→`contracts`）|
 | 讀圖譜 / 寫筆記 / 巡檢 / 綁合約測試（★INVARIANT★→[test:]）/ 動 `{{KG}}` | **`lumos-project-notes`** |
 | 跨專案共用業務規則（升格核心 / `core_refs` / 偏離 / 動 `core-knowledge`） | **`lumos-core-knowledge`** |
+| **設計 spec 完成 → 進實作前**：把設計過 canary-護的對抗審計 loop 到 `lumos loop status <id> --gate` 收斂才進實作（trivial 改動可跳並註明；spec 高風險建議 `--need 3`）。設計/計劃寫成圖譜計劃節點（`Projects/<主題>_計劃`） | **`lumos-design-loop`** |
 | **分支終審前**：`lumos pitfalls --diff <merge-base>..HEAD` 輸出尾行 `tier: high|standard`；`tier: high` → 調用 **`lumos-code-loop`** skill 做對抗代碼審（user-scope skill，每機裝一次；未裝則退回單 reviewer 並提示裝）。專案配 `.lumos/lint.json` 則 `--diff` 自動吃社群 linter（SARIF），命中併進 manifest；無宣告則 regex-only 不變。**Stop hook 自動 nag**：每回合末跑 `code-loop check`，tier=high 未過台帳 → 注入提醒（只注入不擋回合）。**pre-push hook 已升級為 blocking**：tier=high 且無有效 pass/skip 台帳 → rc1 **硬擋 push**；提示三路（跑 `lumos-code-loop` / `lumos code-loop skip --note` / `git push --no-verify`）。**loop status 收斂後必須 `lumos code-loop pass --note "<理由>"` 記台帳才能 push** | — |
 
 > 圖譜讀寫工具是 **lumos**（`scripts/lumos`，python3 零依賴；細節見 `lumos-project-notes` skill）。`lumos-*` 是 **user-scope skills**（唯一源在 `lumos-toolchain` repo、symlink 進 `~/.claude/skills/`，不在本 repo）——每台機器首次裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill（如 vue / csharp）見文末〈架構參考 Skills〉。
