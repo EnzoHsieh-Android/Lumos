@@ -17,7 +17,7 @@ summary: |-
   DECISION:交付物 3 版本號=「人可讀標籤 + 粗 nudge」,嚴禁當 staleness oracle;單一源 LUMOS_VERSION → 機械蓋進 START sentinel 行(在比對區「外」,不耦合守衛)
   KEY:誠實天花板=版本號不證內容對(bump 可漏),真守衛是內容比對;--no-verify 繞得過 doctor;非 oracle
   DEP:[[lumos-cli-lifecycle]]
-  TEST:待實作(design-loop 收斂前不進實作)
+  TEST:design-loop 3 輪(全 caught,見 canary-log claude-reinject)——架構折穩(解耦/ReInjectResult三態/BlockSpan單一源/版本=標籤/內容比對守衛);severity 未收斂(major→blocker→blocker)因 glue 密集=文檔化天花板[[design-loop-completeness-ceiling-shown]];使用者裁定轉 TDD(gate 未形式過關,偏離理由=glue非架構,已註明),殘留實作細節交紅綠測試釘
 ---
 # CLAUDE 注入 re-sync 與版本標籤_計劃
 
