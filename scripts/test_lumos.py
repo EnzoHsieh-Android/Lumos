@@ -2297,6 +2297,16 @@ def t_fold_value_drift():
     assert "OLD" not in vals_c2, f"C2: 審計段 OLD 被納入掃描, vals={vals_c2}"
 
 
+def t_fold_reverse_omission():
+    m = _import_lumos()
+    text = "---\nsummary: |-\n  KEY:用 --foo\n---\n## §2 body\n用 --foo 和 --bar 和 `<path>`"
+    r = m._fold_reverse_omission(text)
+    toks = [x["token"] for x in r]
+    assert "--bar" in toks              # body 有 summary 無
+    assert "--foo" not in toks          # 兩邊都有→不 flag
+    assert "<path>" not in toks and "path" not in toks  # placeholder 排除(r2-F5)
+
+
 def t_context_valid_under_warning():
     import datetime
     v = mkvault()

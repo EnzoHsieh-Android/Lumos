@@ -5114,6 +5114,99 @@ def _fold_value_drift(text):
     return drifts
 
 
+# Module-level compiled regexes for _fold_reverse_omission
+_FOLD_RO_PLACEHOLDER_RE = re.compile(r'<[^>]+>')
+_FOLD_RO_BACKTICK_RE = re.compile(r'`([^`]+)`')
+_FOLD_RO_DDFLAG_RE = re.compile(r'--\w[\w-]*')
+_FOLD_RO_MARKER_RE = re.compile(r'★\w+★')
+_FOLD_RO_DOTNAME_RE = re.compile(r'\b\w+\.\w+\b')
+_FOLD_RO_CAMEL_RE = re.compile(r'\b[A-Z][a-z]+(?:[A-Z][a-z]*)+\b')
+
+
+def _fold_reverse_omission(text):
+    """偵測「body 有的顯著 token,summary 沒有」的反向遺漏(全文域)。
+
+    掃描域排除 ## …審計修正紀錄 段(複用 _FOLD_AUDIT_RECORD_RE/_FOLD_NEXT_H2_RE)。
+    排除 <…> placeholder(r2-F5)。
+    抽顯著 token:--flag、★MARKER★、\\w+\\.\\w+ 檔名、CamelCase、backtick code。
+    主軸:body 有、summary 無 → 一筆 {token, present_in, missing_in}。
+
+    Returns list[dict] with keys: token, present_in, missing_in.
+    """
+    # Step 1: 排除審計修正紀錄段(從標題行到下個 ## 標題或 EOF),複用 T2 邏輯
+    m = _FOLD_AUDIT_RECORD_RE.search(text)
+    if m:
+        audit_start = m.start()
+        next_h2 = _FOLD_NEXT_H2_RE.search(text, m.end())
+        if next_h2:
+            scan_text = text[:audit_start] + text[next_h2.start():]
+        else:
+            scan_text = text[:audit_start]
+    else:
+        scan_text = text
+
+    # Step 2: 拆 frontmatter/body,抽 summary 文字
+    fm_lines, body = split_frontmatter(scan_text)
+
+    # Extract summary block from frontmatter: lines under "summary: |-" or "summary: |"
+    summary_text = ""
+    in_summary = False
+    summary_lines = []
+    for line in fm_lines:
+        stripped = line.strip()
+        if re.match(r'^summary\s*:\s*\|[-]?\s*$', stripped):
+            in_summary = True
+            continue
+        if in_summary:
+            # Indented lines belong to the summary block; bare key: ends it
+            if line.startswith(" ") or line.startswith("\t"):
+                summary_lines.append(line)
+            else:
+                in_summary = False
+    summary_text = "\n".join(summary_lines)
+
+    # Step 3: 抽顯著 token helper
+    def _strip_placeholders(s):
+        return _FOLD_RO_PLACEHOLDER_RE.sub(' ', s)
+
+    def _extract_tokens(s):
+        """Extract significant tokens from string s, excluding <...> placeholders."""
+        s = _strip_placeholders(s)
+        tokens = set()
+        # backtick code: capture the content inside backticks
+        for m2 in _FOLD_RO_BACKTICK_RE.finditer(s):
+            content = m2.group(1).strip()
+            if content and not _FOLD_RO_PLACEHOLDER_RE.fullmatch(content):
+                tokens.add(content)
+        # --flags
+        for m2 in _FOLD_RO_DDFLAG_RE.finditer(s):
+            tokens.add(m2.group(0))
+        # ★MARKER★
+        for m2 in _FOLD_RO_MARKER_RE.finditer(s):
+            tokens.add(m2.group(0))
+        # \w+.\w+ filenames (but not if they look like placeholder remnants)
+        for m2 in _FOLD_RO_DOTNAME_RE.finditer(s):
+            tokens.add(m2.group(0))
+        # CamelCase
+        for m2 in _FOLD_RO_CAMEL_RE.finditer(s):
+            tokens.add(m2.group(0))
+        return tokens
+
+    summary_tokens = _extract_tokens(summary_text)
+    body_tokens = _extract_tokens(body)
+
+    # Step 4: body 有、summary 無 → flag
+    omissions = []
+    for tok in sorted(body_tokens - summary_tokens):
+        omissions.append({
+            "token": tok,
+            "present_in": "body",
+            "missing_in": "summary",
+        })
+
+    return omissions
+
+
 def cmd_fold_check(path, as_json=False):
     """折入後一致性複查輔助(Task 1):列舉鏡像段供人逐段勾一致。
 
