@@ -6046,6 +6046,242 @@ def t_extract_span_broken():
           f"state={sd!r}")
 
 
+# ── Task 2: _reinject_claude_block ────────────────────────────────────────────
+
+def _make_reinject_root(td, tpl_content=None, claude_content=None):
+    """在臨時目錄建立最小 root 結構供 reinject 測試用。
+    tpl_content=None → 不建立 graph-discipline.md(no_template 情境)。
+    claude_content=None → 不建立 CLAUDE.md。
+    回傳 (root, mod)。"""
+    import tempfile, importlib.util
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path
+    root = Path(td)
+    tpl_dir = root / "scripts" / "templates"
+    tpl_dir.mkdir(parents=True, exist_ok=True)
+    if tpl_content is not None:
+        (tpl_dir / "graph-discipline.md").write_text(tpl_content, encoding="utf-8")
+    loader = SourceFileLoader("lumos_reinject_t2", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_reinject_t2", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    if claude_content is not None:
+        (root / "CLAUDE.md").write_bytes(claude_content if isinstance(claude_content, bytes)
+                                         else claude_content.encode("utf-8"))
+    return root, m
+
+
+def _make_block(mod, slug, tpl_content):
+    """Helper: 組出 reinject 會寫入的完整 block 字串,供測試斷言用。"""
+    body = tpl_content.replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    END = mod._CLAUDE_END
+    return START + "\n" + body + "\n" + END
+
+
+def t_reinject_no_template():
+    """範本檔不存在 → no_template、不 crash、不建檔。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=None, claude_content=None)
+        result = mod._reinject_claude_block(root, "myproj")
+        check("reinject_no_template: status==no_template",
+              result.status == "no_template", f"status={result.status!r}")
+        check("reinject_no_template: diff is None",
+              result.diff is None, f"diff={result.diff!r}")
+        check("reinject_no_template: CLAUDE.md 未被建立",
+              not (root / "CLAUDE.md").exists(), "CLAUDE.md 意外被建立")
+
+
+def t_reinject_creates_when_absent():
+    """CLAUDE.md 不存在 → created、檔被生成且含 block。"""
+    import tempfile
+    TPL = "lumos 知識圖譜路徑:{{KG}}"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL, claude_content=None)
+        result = mod._reinject_claude_block(root, "myproj")
+        check("reinject_creates: status==created",
+              result.status == "created", f"status={result.status!r}")
+        check("reinject_creates: diff is None",
+              result.diff is None, f"diff={result.diff!r}")
+        cm = root / "CLAUDE.md"
+        check("reinject_creates: CLAUDE.md 存在",
+              cm.exists(), "CLAUDE.md 未被建立")
+        content = cm.read_bytes().decode("utf-8")
+        block = _make_block(mod, "myproj", TPL)
+        check("reinject_creates: 含 block",
+              block in content, f"block 未在 content 中;\ncontent={content!r}")
+        check("reinject_creates: KG 替換正確",
+              "docs/myproj-knowledge/" in content, f"KG 未替換: {content!r}")
+        check("reinject_creates: 無 BOM",
+              not cm.read_bytes().startswith(b"\xef\xbb\xbf"), "有 BOM")
+        check("reinject_creates: 無 CRLF",
+              b"\r\n" not in cm.read_bytes(), "有 CRLF")
+
+
+def t_reinject_appends_when_no_sentinel():
+    """有 CLAUDE.md 但無 sentinel → appended、原內容保留 + block 附加。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    ORIGINAL = "# 既有 CLAUDE.md\n\n原始內容在這\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL, claude_content=ORIGINAL)
+        result = mod._reinject_claude_block(root, "proj")
+        check("reinject_appends: status==appended",
+              result.status == "appended", f"status={result.status!r}")
+        check("reinject_appends: diff is None",
+              result.diff is None, f"diff={result.diff!r}")
+        content = (root / "CLAUDE.md").read_bytes().decode("utf-8")
+        check("reinject_appends: 原始內容保留",
+              "原始內容在這" in content, f"原始內容消失: {content!r}")
+        block = _make_block(mod, "proj", TPL)
+        check("reinject_appends: block 附加",
+              block in content, f"block 未在 content 中")
+        # 確認原始內容在 block 之前
+        check("reinject_appends: 原始在前",
+              content.index("原始內容在這") < content.index(mod._CLAUDE_START_PREFIX),
+              "原始內容出現在 block 之後")
+
+
+def t_reinject_updates_existing():
+    """既有 block 內容過時 → updated + diff 非空 + 檔被寫入新內容。"""
+    import tempfile
+    OLD_BODY = "舊的 body 內容"
+    NEW_TPL = "新的範本:{{KG}}"
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    END_SENTINEL = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    old_block = START + "\n" + OLD_BODY + "\n" + END_SENTINEL
+    EXISTING = "# CLAUDE.md\n\n前言\n\n" + old_block + "\n\n後記\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=NEW_TPL, claude_content=EXISTING)
+        result = mod._reinject_claude_block(root, "slug")
+        check("reinject_updates: status==updated",
+              result.status == "updated", f"status={result.status!r}")
+        check("reinject_updates: diff 非 None",
+              result.diff is not None, "diff is None")
+        check("reinject_updates: diff 非空字串",
+              result.diff != "", f"diff empty: {result.diff!r}")
+        content = (root / "CLAUDE.md").read_bytes().decode("utf-8")
+        new_body = NEW_TPL.replace("{{KG}}", "docs/slug-knowledge/").strip()
+        check("reinject_updates: 新 body 寫入",
+              new_body in content, f"新 body 未在 content: {content!r}")
+        check("reinject_updates: 舊 body 消失",
+              OLD_BODY not in content, f"舊 body 殘留: {content!r}")
+        check("reinject_updates: 前言保留",
+              "前言" in content, f"前言消失: {content!r}")
+        check("reinject_updates: 後記保留",
+              "後記" in content, f"後記消失: {content!r}")
+
+
+def t_reinject_idempotent():
+    """再跑一次 → unchanged + 檔案內容不變。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL, claude_content=None)
+        # 第一次: created
+        r1 = mod._reinject_claude_block(root, "slug")
+        check("reinject_idempotent: 第一次 created",
+              r1.status == "created", f"r1.status={r1.status!r}")
+        content_after_first = (root / "CLAUDE.md").read_bytes()
+        # 第二次: unchanged
+        r2 = mod._reinject_claude_block(root, "slug")
+        check("reinject_idempotent: 第二次 unchanged",
+              r2.status == "unchanged", f"r2.status={r2.status!r}")
+        check("reinject_idempotent: diff is None",
+              r2.diff is None, f"diff={r2.diff!r}")
+        content_after_second = (root / "CLAUDE.md").read_bytes()
+        check("reinject_idempotent: 內容 byte-equal",
+              content_after_first == content_after_second,
+              f"第二次寫入改變了內容")
+
+
+def t_reinject_preserves_outside():
+    """sentinel 之外的內容 byte-equal 保留——前綴與後綴逐 byte 相同。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    END_SENTINEL = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    OLD_BODY = "舊 body,需更新"
+    old_block = START + "\n" + OLD_BODY + "\n" + END_SENTINEL
+    PREFIX = "# CLAUDE.md\n\n使用者前綴段落\n\n"
+    SUFFIX = "\n\n使用者後綴段落\n"
+    EXISTING = PREFIX + old_block + SUFFIX
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL, claude_content=EXISTING)
+        result = mod._reinject_claude_block(root, "slug")
+        check("reinject_preserves_outside: status==updated",
+              result.status == "updated", f"status={result.status!r}")
+        new_content = (root / "CLAUDE.md").read_bytes().decode("utf-8")
+        # 找 START 行在新內容中的位置,取前綴
+        si_new = new_content.find(mod._CLAUDE_START_PREFIX)
+        # 找 END 行在新內容中的位置,取後綴
+        ei_new = new_content.find(mod._CLAUDE_END)
+        end_end = ei_new + len(mod._CLAUDE_END)
+        new_prefix = new_content[:si_new]
+        new_suffix = new_content[end_end:]
+        # 原始的前綴/後綴
+        si_old = EXISTING.find(mod._CLAUDE_START_PREFIX)
+        ei_old = EXISTING.find(mod._CLAUDE_END)
+        end_end_old = ei_old + len(mod._CLAUDE_END)
+        orig_prefix = EXISTING[:si_old]
+        orig_suffix = EXISTING[end_end_old:]
+        check("reinject_preserves_outside: 前綴 byte-equal",
+              new_prefix == orig_prefix,
+              f"前綴不同:\norig={orig_prefix!r}\nnew={new_prefix!r}")
+        check("reinject_preserves_outside: 後綴 byte-equal",
+              new_suffix == orig_suffix,
+              f"後綴不同:\norig={orig_suffix!r}\nnew={new_suffix!r}")
+
+
+def t_reinject_sentinel_broken():
+    """只 START 無 END → sentinel_broken + 原檔 byte-equal 不動。"""
+    import tempfile
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    BROKEN = "# CLAUDE.md\n\n" + START + "\nbody without end\n"
+    TPL = "知識圖譜:{{KG}}"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL,
+                                        claude_content=BROKEN.encode("utf-8"))
+        orig_bytes = (root / "CLAUDE.md").read_bytes()
+        result = mod._reinject_claude_block(root, "slug")
+        check("reinject_sentinel_broken: status==sentinel_broken",
+              result.status == "sentinel_broken", f"status={result.status!r}")
+        check("reinject_sentinel_broken: diff is None",
+              result.diff is None, f"diff={result.diff!r}")
+        new_bytes = (root / "CLAUDE.md").read_bytes()
+        check("reinject_sentinel_broken: 原檔 byte-equal",
+              new_bytes == orig_bytes,
+              f"檔案被改動(orig {len(orig_bytes)} vs new {len(new_bytes)} bytes)")
+
+
+def t_reinject_bom_crlf_normalized():
+    """BOM+CRLF 輸入 → 寫後無 BOM、LF、內容正確。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    # 既有 CLAUDE.md 無 sentinel,帶 BOM + CRLF
+    existing_crlf_bom = "\xef\xbb\xbf# CLAUDE.md\r\n\r\n既有內容\r\n".encode("utf-8")
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL,
+                                        claude_content=existing_crlf_bom)
+        result = mod._reinject_claude_block(root, "slug")
+        check("reinject_bom_crlf: status==appended",
+              result.status == "appended", f"status={result.status!r}")
+        raw = (root / "CLAUDE.md").read_bytes()
+        check("reinject_bom_crlf: 無 BOM",
+              not raw.startswith(b"\xef\xbb\xbf"), "仍有 BOM")
+        check("reinject_bom_crlf: 無 CRLF",
+              b"\r\n" not in raw, "仍有 CRLF")
+        check("reinject_bom_crlf: 含 block",
+              mod._CLAUDE_START_PREFIX.encode("utf-8") in raw, "block 未寫入")
+        check("reinject_bom_crlf: 既有內容保留(無 BOM 版)",
+              "既有內容" in raw.decode("utf-8"), f"既有內容消失: {raw.decode()!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

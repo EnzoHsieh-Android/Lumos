@@ -44,6 +44,8 @@ _CLAUDE_END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
 #            body_start/body_end=body 在原 text 中的字元位移,
 #            保證 text[body_start:body_end] == body。
 BlockSpan = namedtuple("BlockSpan", "body body_start body_end")
+# Task 2: ReInjectResult ─ status ∈ created|updated|unchanged|appended|sentinel_broken|no_template
+ReInjectResult = namedtuple("ReInjectResult", "status diff")
 
 FENCE_RE = re.compile(r"^```.*?^```", re.S | re.M)
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
@@ -3548,6 +3550,83 @@ def _extract_claude_block_span(text: str):
         stripped = ""
 
     return ("found", BlockSpan(body=stripped, body_start=body_start, body_end=body_end))
+
+
+# Task 2 ─────────────────────────────────────────────────────────────────────
+# START 行(本 task 無版本戳;T5 會在此字串中插入版本號——形式保留易替換)
+_REINJECT_START_LINE = (
+    "<!-- LUMOS:GRAPH-DISCIPLINE:START"
+    " — 自動注入/更新,勿手改本區塊;"
+    "改範本 scripts/templates/graph-discipline.md -->"
+)
+
+
+def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
+    """讀 vendored 範本 → {{KG}} 替換 → 組 sentinel block → 依三態更新 CLAUDE.md。
+
+    status ∈ created|updated|unchanged|appended|sentinel_broken|no_template。
+    diff:僅 updated 帶 difflib.unified_diff 字串,其餘 None。
+    讀入時正規化 CRLF→LF 並去 BOM;寫入一律 _write_lf(強制 LF / 無 BOM)。
+    """
+    import difflib
+
+    # 1. 範本
+    tpl_path = root / "scripts" / "templates" / "graph-discipline.md"
+    if not tpl_path.exists():
+        return ReInjectResult("no_template", None)
+
+    # 2. 讀範本, {{KG}} 替換, strip
+    body = tpl_path.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
+
+    # 3. 組 block
+    block = _REINJECT_START_LINE + "\n" + body + "\n" + _CLAUDE_END
+
+    # 4. 讀 CLAUDE.md(去 BOM + CRLF 正規化)
+    cm = root / "CLAUDE.md"
+    if cm.exists():
+        raw = cm.read_bytes()
+        # 去 UTF-8 BOM
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+        claude_text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    else:
+        claude_text = None
+
+    # 5. 三態分派
+    if claude_text is None:
+        # CLAUDE.md 不存在 → created
+        _write_lf(cm, "# CLAUDE.md\n\n" + block + "\n")
+        return ReInjectResult("created", None)
+
+    state, span = _extract_claude_block_span(claude_text)
+
+    if state == "broken":
+        return ReInjectResult("sentinel_broken", None)
+
+    if state == "absent":
+        # 有 CLAUDE.md 但無 sentinel → appended
+        new_text = claude_text.rstrip() + "\n\n" + block + "\n"
+        _write_lf(cm, new_text)
+        return ReInjectResult("appended", None)
+
+    # state == "found": splice body only (保留 sentinel 行)
+    old_body = span.body
+    new_body = body
+
+    if old_body == new_body:
+        return ReInjectResult("unchanged", None)
+
+    # 有差 → 替換 body 區段
+    new_text = claude_text[:span.body_start] + new_body + claude_text[span.body_end:]
+    _write_lf(cm, new_text)
+
+    diff = "".join(difflib.unified_diff(
+        old_body.splitlines(keepends=True),
+        new_body.splitlines(keepends=True),
+        fromfile="old body",
+        tofile="new body",
+    ))
+    return ReInjectResult("updated", diff)
 
 
 def _deinit_strip_claude(root: Path) -> bool:
