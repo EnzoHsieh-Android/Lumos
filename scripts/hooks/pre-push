@@ -40,6 +40,24 @@ if ! "$PY" "$GRAPHCTL" anchor verify; then
   exit 1
 fi
 
+# 偏科偵測 advisory(非擋、代碼層):push 前把 diff 的代碼形態風險攤在眼前。
+# 只跑快的 regex 層(--no-lint;不跑專案宣告的 lint 指令,免每次 push 卡 detekt 等)。
+# tier=high → 大聲提醒該跑 lumos-code-loop 終審對抗審。**永不擋 push**(信號非硬規則)。
+mb="$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || true)"
+head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+if [[ -n "$mb" && "$mb" != "$head_sha" ]]; then
+  pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$mb..HEAD" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
+  if printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
+    {
+      echo ""
+      echo "⚠ pre-push advisory:pitfalls --diff tier=high(代碼形態風險命中,見下)"
+      "$PY" "$GRAPHCTL" pitfalls --diff "$mb..HEAD" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+      echo "    → 建議跑 lumos-code-loop 終審對抗審(此為提醒、未擋 push)"
+      echo ""
+    } >&2
+  fi
+fi
+
 # 只在 vault 存在時跑
 have_vault=0
 for d in docs/*-knowledge docs/knowledge; do

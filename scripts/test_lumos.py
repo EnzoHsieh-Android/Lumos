@@ -3345,6 +3345,35 @@ def t_compose_metrics_audit():
     check("缺config+audit → audit 形狀(inventory 鍵)", ra.returncode==0 and "inventory" in da and "regressions" not in da, ra.stdout)
 
 
+def t_pitfalls_no_lint():
+    """--no-lint:--diff 只跑 regex 層,即使有 .lumos/lint.json 也不跑 lint(pre-push advisory 用)。"""
+    import json as _json, subprocess as sp, sys as _sys
+    root = Path(tempfile.mkdtemp(prefix="gctl-pfnl-"))
+    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+    git("init"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (root / "a.kt").write_text("l1\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c1")
+    # 假 linter:寫最小 SARIF 到 {LINT_SARIF_OUT}
+    hd = Path(tempfile.mkdtemp(prefix="gctl-pfnl-h-"))
+    sarif = _json.dumps({"runs": [{"tool": {"driver": {"name": "FakeLint"}}, "results": []}]})
+    (hd / "lint.py").write_text(f"import sys\nopen(sys.argv[1],'w').write({repr(sarif)})\n", encoding="utf-8")
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "lint.json").write_text(
+        _json.dumps({"kt": [f"{_sys.executable} {hd/'lint.py'} {{LINT_SARIF_OUT}}"]}), encoding="utf-8")
+    # diff 新增一個含風險 pattern 的 .kt 行(INSERT → 併發類命中,確保 tier=high/有 claim)
+    (root / "a.kt").write_text("l1\nval q = \"INSERT INTO t VALUES(1)\"\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c2")
+    def run(extra):
+        r = sp.run([_sys.executable, GRAPHCTL, "pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", str(root)] + extra,
+                   capture_output=True, text=True)
+        return _json.loads(r.stdout)
+    d_full = run([])
+    d_nl = run(["--no-lint"])
+    check("預設(有 lint.json)→ 有 lint_ran 鍵", "lint_ran" in d_full, str(sorted(d_full.keys())))
+    check("--no-lint → 無 lint_ran 鍵(regex-only)", "lint_ran" not in d_nl, str(sorted(d_nl.keys())))
+    check("--no-lint 仍有 regex claims + tier", "claims" in d_nl and "tier" in d_nl, str(sorted(d_nl.keys())))
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
