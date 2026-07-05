@@ -3369,7 +3369,7 @@ def t_pitfalls_no_lint():
         return _json.loads(r.stdout)
     d_full = run([])
     d_nl = run(["--no-lint"])
-    check("預設(有 lint.json)→ 有 lint_ran 鍵", "lint_ran" in d_full, str(sorted(d_full.keys())))
+    check("預設(有 lint.json)→ lint 真的有跑(lint_ran 非空)", bool(d_full.get("lint_ran")), str(d_full.get("lint_ran")))
     check("--no-lint → 無 lint_ran 鍵(regex-only)", "lint_ran" not in d_nl, str(sorted(d_nl.keys())))
     check("--no-lint 仍有 regex claims + tier", "claims" in d_nl and "tier" in d_nl, str(sorted(d_nl.keys())))
 
