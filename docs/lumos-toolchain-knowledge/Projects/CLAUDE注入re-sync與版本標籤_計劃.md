@@ -35,32 +35,36 @@ summary: |-
 把「注入 CLAUDE.md」從「scaffold 圖譜資料」拆開。scaffold 的 skip-if-exists 對**圖譜資料**是對的(保護資料不被動),錯在注入搭了它的便車、繼承了 skip。
 
 ## 交付物 1:re-inject(覆蓋 + diff)
-新增 `_reinject_claude_block(root, slug) -> str|None`:
-- 讀**已 vendor 的**範本 → 把 `{{KG}}` 佔位符換成該專案的 knowledge 資料夾相對路徑 → strip → 包 sentinel(含交付物 3 版本戳)。
-- CLAUDE.md 不存在 → 建(title + block);**兩 sentinel 齊全** → 替換之間;無 sentinel → 附加。marker 尋找複用 `_deinit_strip_claude`(prefix-based find 對版本後綴穩健)。
-- **sentinel 外內容逐字保留**;`difflib.unified_diff(舊block, 新block)`:有變 → 寫 + 回 diff(呼叫端印);無變 → 不寫、回 `None`(idempotent 靜默)。
+**回傳型別(F1 blocker,三態不可塞進 `str|None`)**:`_reinject_claude_block(root, slug) -> ReInjectResult`,`ReInjectResult = namedtuple("ReInjectResult", "status diff")`,`status ∈ {"created","updated","unchanged","appended","sentinel_broken"}`、`diff: str|None`(僅 updated 帶 unified_diff,其餘 None)。呼叫端依 status 印(updated→印 diff;sentinel_broken→印警示)。取代原 `str|None`(值多載 = 隱式約定,無型別守護)。
 
-**半壞 sentinel(F-04,顯式定義,別留給實作猜)**:只 START 無 END / 只 END 無 START / END 在 START 前 / 重複出現 → **繼承 `_deinit_strip_claude:3480-3481` 的 no-op**(不覆蓋、不自動修復)。理由:半壞=使用者可能手改過(START 行本標「勿手改」),盲目覆蓋會毀狀態;no-op 保守,由交付物 2 doctor Check 報漂移交人肉裁。**回傳一個 sentinel-broken 訊號**讓呼叫端印警示(不是靜默 no-op)。
+流程:
+- 讀**已 vendor 的**範本 → 把 `{{KG}}` 佔位符換成該專案的 knowledge 資料夾相對路徑 → strip → 包 sentinel(START 行含交付物 3 版本戳)。
+- CLAUDE.md 不存在 → 建(status=created);**兩 sentinel 齊全** → 替換之間(status=updated 帶 diff / unchanged);無 sentinel → 附加(status=appended)。marker 尋找 + body 定位用交付物 2 的 `_extract_claude_block_span`(prefix-based find 對版本後綴穩健)。
+- **sentinel 外內容逐字保留**;`difflib.unified_diff(舊body, 新body)`:有變 → 寫、status=updated;無變 → 不寫、status=unchanged(idempotent 靜默)。
+
+**半壞 sentinel(F-04,顯式)**:只 START 無 END / 只 END 無 START / END 在 START 前 / 重複出現 → **繼承 `_deinit_strip_claude:3480-3481` 的 no-op 邏輯**(不覆蓋、不自動修復),但回 `status="sentinel_broken"`(非靜默;呼叫端印警示,由交付物 2 doctor 報漂移交人肉裁)。理由:半壞=使用者可能手改過(START 標「勿手改」),盲改毀狀態。
 
 **BOM/CRLF(F-09)**:讀時 strip 前導 BOM(`﻿`)後再 find marker;寫一律走 `_write_lf`(強制 LF,同既有寫入慣例)。BOM 檔:注入後正規化為無 BOM + LF(與 T1 寫入「拒 BOM/CRLF」哲學一致)。
 
 接線:
 - `_scaffold_project` **移除**注入段(只留 vault 夾 + MOC + gitignore;其 skip-if-exists 只保護圖譜資料)。
 - `_vendor_toolchain`:注入改到 **copy2 vendor 迴圈之後**呼叫(讀新範本 + 修 :3557 先於 :3567-3576 的順序錯)。
-- `cmd_init`(F-06):現有 `existing and not force → return 0`(`:3759`)會**繞過** re-inject。修法:把 re-inject 提到 early-return **之前**無條件跑(re-inject 本身 idempotent+diff、對既有專案安全),或 early-return 前先呼叫;不要求使用者加 `--force` 才刷新紀律區塊。
+- `cmd_init`(F-06 + F5 順序):現有 `existing and not force → return 0`(`:3759`)會**繞過** re-inject。修法明定序列:**① 確保範本已 vendor(最新)→ ② re-inject → ③ 才走 existing/force 的 return 邏輯**。關鍵:re-inject「讀已 vendor 的範本」,故 vendor 必先於 re-inject(否則讀到上次留的舊 vendored 範本);兩條路徑(init/update)都保證 re-inject 讀到當次最新範本。不要求 `--force` 才刷新紀律區塊(re-inject idempotent+diff、對既有專案安全)。
 
 ## 交付物 2:漂移守衛(內容比對,真守衛)
 - **test** `t_claude_block_matches_template`:斷言本 repo `CLAUDE.md` 兩 sentinel 之間 == `resolve(template)`。
 - **doctor Check(新字母)**:`scripts/templates/graph-discipline.md` 存在 且 CLAUDE.md 有 sentinel → 區塊必 == resolved 範本,否則報漂移;`--ci` 擋。比對的是**repo 內範本↔自己 CLAUDE.md**(內部一致性,與上游新舊無關,消費專案不誤報)。
 - 比對區 = 兩 sentinel「之間」,**不含 sentinel 行本身**(版本戳在 START sentinel 行,落在比對區外,故版本差不觸發內容守衛——標籤與守衛解耦)。
-- **比對 slice 精確定義(F-05,免版本 bump 誤觸發)**:取 `START 行結尾 \n 之後` 到 `END 行開頭 \n 之前` 的子串,兩端各自 strip 首尾空白行後比對。單一函數 `_extract_claude_block_body(text) -> str` 同時供 re-inject 與 doctor Check 用(單一源、避免兩處 slice 取法漂移);對應測試 `t_version_bump_not_trigger_guard`(START 行改版本 → body slice 不變 → 守衛淨)。
-- **遷移零時點(F-02,辯方已證非災難,但寫明預期)**:doctor Check 與 re-inject **同批經一次 `lumos update` 送達**(同 `_vendor_toolchain`;re-inject 在該次 update 內先跑)→ 消費專案「有了新 check」時必已 re-inject,無「有 check 未同步」窗口。唯一會報的情形=真漂移(如半壞 sentinel 導致 re-inject no-op),語意正確、非誤報。
+- **比對 slice 單一源 + 位移(F-05 + F2)**:單一函數 `_extract_claude_block_span(text) -> BlockSpan|None`,`BlockSpan = namedtuple("BlockSpan", "body body_start body_end")`——`body` = `START 行結尾 \n 之後` 到 `END 行開頭 \n 之前`、strip 首尾空白行的字串;`body_start/body_end` = 該 body 在原文的字元位移。**doctor** 用 `.body` 比對;**re-inject** 用 `body_start/body_end` splice(`text[:body_start] + 新body + text[body_end:]`),不再自己找一次 sentinel → 真「單一源」(F2:回 str 不夠 splice,故回 span)。半壞 → 回 `None`。對應測試 `t_version_bump_not_trigger_guard`(START 行改版本 → `.body` 不變 → 守衛淨)。
+- **遷移零時點(F-02 + F8,分開兩情形)**:
+  - **sentinel 完好** → doctor Check 與 re-inject 同批經一次 `lumos update` 送達(同 `_vendor_toolchain`;re-inject 在該次先跑)→「有新 check」時必已 re-inject,**無「有 check 未同步」窗口**。
+  - **半壞 sentinel** → re-inject 回 `sentinel_broken`(no-op)→ doctor 會報漂移。這是**設計內 tradeoff、語意正確的真報**(半壞=手改痕跡,該讓人看見),**不納入「無窗口」保證**、也不是誤報。
 
 ## 交付物 3:版本標籤 + 粗 nudge(嚴禁當守衛)
 **新增常數** `LUMOS_VERSION`(`scripts/lumos` 頂部,目前 code 中**不存在、本計劃新建**;release 手動 bump,允許粗——它是標籤,不是內容指紋)。
 
-- **機械蓋**:vendor/inject 時把版本寫進 START sentinel 行(`<!-- LUMOS:GRAPH-DISCIPLINE:START vX.Y — ... -->`),**絕不手打**;讀取 = 對 START 行以空格切分取 `vX.Y` 欄位(parse 容錯:取不到版本 → 視為未知、不 nudge、不 crash)。
-- **跨邊界 nudge**:`lumos update` / doctor soft check 比對「消費專案 sentinel 蓋的版本 vs 來源 clone 的 `LUMOS_VERSION`」→ 落後則 soft 提示(update 本身順手刷新;nudge 主要給 doctor/獨立可見性)。
+- **機械蓋落點(F4,免雙處維護)**:**範本 `graph-discipline.md` 的 START sentinel 保持無版本戳**(canonical `<!-- LUMOS:GRAPH-DISCIPLINE:START — 勿手改... -->`);版本由 `_reinject_claude_block` 在**包 sentinel 當下字串插值** `LUMOS_VERSION` 進去(`START_SENTINEL.format(version=...)`)。單一源=`LUMOS_VERSION` 常數,範本不帶戳→不會「改範本忘了 bump」。讀取 = 對 START 行空格切分取 `vX.Y`(parse 容錯:取不到 → 未知、不 nudge、不 crash)。
+- **跨邊界 nudge 來源(F3,CI/無源可行性)**:比對「消費專案 CLAUDE.md sentinel 蓋的版本 vs **來源 clone 的 `LUMOS_VERSION`**」;來源 clone 用既有 `_lumos_src()` 解析(`$LUMOS_HOME`/`~/harness/lumos-toolchain`)。**來源 clone 不在本機(CI 只 checkout 專案 repo)→ 靜默 skip nudge**(不 crash、不誤報)。故 nudge 定位=**開發機 advisory**(源可達才提示),非 CI 硬檢查。`lumos update` 本身順手刷新版本;nudge 主要給獨立 `lumos doctor`(源可達時)的可見性。
 - **F-03 定位澄清(消除「nudge 用版本落後 vs 版本非判準」的表面矛盾)**:版本與內容比對答**兩個不同問題**,不衝突——
   - **「你在不在最新 release?」**→ 版本比對,**粗、advisory、不擋**(nudge)。它是提醒「也許該更新」,**不是**「你的區塊此刻正確與否」的裁決。
   - **「你的 CLAUDE.md 區塊內容 == 你自己的範本嗎?」**→ 內容比對(交付物 2),**精確、擋(--ci)**,這才是正確性守衛。
@@ -71,15 +75,16 @@ summary: |-
 - doctor 那道 `--no-verify` 繞得過;覆蓋語意會蓋掉手改區塊內容(但標「勿手改」+ diff 可見)。非 oracle:守得掉「範本改了沒傳到」「repo 內漂移」,守不掉「刻意繞 + 手改還不看 diff」。
 
 ## 測試(TDD)
-- 核心:`t_reinject_updates_existing` / `_idempotent` / `_creates_when_absent` / `_appends_when_no_sentinel` / `_preserves_outside` / `t_update_resyncs_claude`(整合)。
-- 半壞 sentinel(F-07):`t_reinject_only_start_no_end` / `_only_end_no_start` / `_end_before_start` / `_duplicate_sentinel` —— 皆斷言 no-op + 回 sentinel-broken 訊號、原檔不動。
+- 核心:`t_reinject_updates_existing`(status=updated 帶 diff)/ `_idempotent`(status=unchanged 無寫)/ `_creates_when_absent`(created)/ `_appends_when_no_sentinel`(appended)/ `_preserves_outside`。
+- 整合(F10 邊界明定):`t_update_resyncs_claude` — **整合測試**,用臨時 fixture(本機臨時來源目錄 + 臨時消費專案,`_lumos_src` 指向該臨時源;**不走網路**),驗 `lumos update` 後 CLAUDE.md 區塊被刷新。CI 可跑(純檔案系統)。
+- 半壞 sentinel(F-07):`t_reinject_only_start_no_end` / `_only_end_no_start` / `_end_before_start` / `_duplicate_sentinel` —— 皆斷言 `status=="sentinel_broken"` + 原檔不動。
 - BOM/CRLF(F-09):`t_reinject_bom_crlf_normalized`。
-- 守衛:`t_claude_block_matches_template`(本 repo 區塊==範本)/ doctor check 測試(漂移報、同步淨)/ `t_version_bump_not_trigger_guard`(F-05:START 版本改、body 不變 → 守衛淨)。
-- 版本:`t_version_stamped_in_sentinel`(機械蓋)/ `t_version_parse_tolerant`(取不到版本不 crash)/ `t_version_nudge_when_behind`(粗 nudge)。
+- 守衛:`t_claude_block_matches_template`(本 repo 區塊==範本)/ doctor check 測試(漂移報、同步淨)/ `t_version_bump_not_trigger_guard`(F-05:START 版本改、`.body` 不變 → 守衛淨)。
+- 版本:`t_version_stamped_in_sentinel`(inject 字串插值 LUMOS_VERSION)/ `t_version_parse_tolerant`(取不到版本不 crash)/ `t_version_nudge_when_behind`(源可達時 nudge)/ `t_nudge_skip_when_no_source`(F3:`_lumos_src` 不存在 → 靜默 skip、不 crash)。
 
 ## 落地回填
 - Verification `plan_refs` 回指本節點;本節點 TEST/status。
 - 更新 `Systems/lumos-cli-lifecycle`(F-10,附 KEY 草稿):
   - 改既有 KEY「graph-discipline.md 要重跑 init/update 才刷新」→ 標明**現已成真**且注入與 vault-scaffold 已解耦(re-inject 無條件跑、不受既有 vault skip 影響)。
-  - 新增 `KEY:re-inject 覆蓋 sentinel 之間、sentinel 外逐字保留;半壞 sentinel→no-op 由 doctor 報漂移`(判斷是否合約級:此為 breaking-若違反的行為保證 → 評估標 ★INVARIANT★ 並綁 `[test:t_reinject_preserves_outside]`,經 `[audit:]`)。
-  - 新增 `KEY:版本戳=標籤非守衛,內容比對才是正確性守衛`(★DEBT★ 或純 KEY,非合約)。
+  - 新增 `KEY:★INVARIANT★ re-inject 保留 sentinel 之外的 CLAUDE.md 內容逐字不動 [test:t_reinject_preserves_outside]`(F9 設計層裁定=**合約級**:違反 = 毀掉使用者手寫內容 = breaking;落地後綁 `[test:]` + 經 `[audit:]`)。
+  - 新增 `KEY:★DEBT★ 版本戳=人可讀標籤/advisory nudge,非正確性守衛(內容比對才是)`(非合約,可改)。
