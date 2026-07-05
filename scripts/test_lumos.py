@@ -3757,6 +3757,57 @@ def t_impact_reverse_lookup():
           "Systems/C.md" not in hits_abs, f"hits_abs={hits_abs}")
 
 
+def t_impact_contract():
+    """Task 3: _impact_contract(note) -> (contract, combo) 兩軸偵測。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_ic", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_ic", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_contract = m._impact_contract
+    Note = m.Note
+
+    def note_with(summary_text):
+        """建立最簡 Note fixture,只設 fields["summary"]。"""
+        n = Note()
+        n.rel = "Systems/fixture.md"
+        n.stem = "fixture"
+        n.fields = {"type": "system", "status": "doing", "summary": summary_text}
+        n.block_keys = set()
+        n.fm_lines = []
+        n.targets = []
+        n.lint = []
+        n.mtime = 0
+        return n
+
+    # ★INVARIANT★ → contract="INVARIANT"
+    contract, combo = _impact_contract(note_with("KEY:★INVARIANT★ x [test:t]"))
+    check("impact_contract: INVARIANT 節點回 INVARIANT",
+          contract == "INVARIANT", f"got {contract!r}")
+
+    # ★IRREVERSIBLE★(無 INVARIANT) → contract="IRREVERSIBLE"(走獨立 RE)
+    contract, combo = _impact_contract(note_with("KEY:★IRREVERSIBLE★ y [rollback:decisions]"))
+    check("impact_contract: IRREVERSIBLE(無 INVARIANT)走獨立 RE 回 IRREVERSIBLE",
+          contract == "IRREVERSIBLE", f"got {contract!r}")
+
+    # 兩者同時有 → 取 IRREVERSIBLE(最高)
+    contract, combo = _impact_contract(
+        note_with("KEY:★IRREVERSIBLE★ y\nKEY:★INVARIANT★ x [test:t]"))
+    check("impact_contract: IRREVERSIBLE+INVARIANT 取最高=IRREVERSIBLE",
+          contract == "IRREVERSIBLE", f"got {contract!r}")
+
+    # ★INVARIANT★★COMBO★ → combo=True
+    _, combo = _impact_contract(note_with("KEY:★INVARIANT★ ★COMBO★ z [test:t]"))
+    check("impact_contract: INVARIANT+COMBO 行 → combo=True",
+          combo is True, f"got combo={combo!r}")
+
+    # 純 ★DEBT★ → (None, False)
+    result = _impact_contract(note_with("KEY:★DEBT★ w"))
+    check("impact_contract: 純 DEBT → (None, False)",
+          result == (None, False), f"got {result!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

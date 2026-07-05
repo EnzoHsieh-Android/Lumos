@@ -5345,6 +5345,35 @@ def _impact_reverse_lookup(rel_code_path, env, repo_root):
     return hits
 
 
+def _impact_contract(note):
+    """Task 3: 偵測節點的合約標記,回傳 (contract: str|None, combo: bool)。
+
+    兩軸設計(r6-F3):
+    - INVARIANT/DEBT 軸: extract_contracts(note) → inv list。DEBT → None(r9-F7)。
+    - IRREVERSIBLE 軸: 獨立 IRREVERSIBLE_RE 掃 summary(extract_contracts 不含此)。
+    取最高: IRREVERSIBLE > INVARIANT > None。
+    combo(r6-F6): ★COMBO★ 是 ★INVARIANT★ 同行後綴修飾,偵測 INVARIANT 行含 ★COMBO★
+                 (參 scripts/lumos:725 的 '★COMBO★' not in inv);不入 contract enum,走獨立布林。
+    """
+    invs, _debts = extract_contracts(note)  # 只掃 INVARIANT/DEBT
+
+    # combo: 任一 INVARIANT 行含 ★COMBO★ 即為 True
+    combo = any("★COMBO★" in inv for inv in invs)
+
+    # INVARIANT 軸: 有 inv 則 contract="INVARIANT"(DEBT 已被 extract_contracts 分到 _debts,不入此路)
+    contract = "INVARIANT" if invs else None
+
+    # IRREVERSIBLE 軸: 獨立掃 summary(extract_contracts 不含 IRREVERSIBLE)
+    summ = note.fields.get("summary")
+    if isinstance(summ, str):
+        for line in summ.split("\n"):
+            if IRREVERSIBLE_RE.match(line.strip()):
+                contract = "IRREVERSIBLE"  # 最高優先,覆蓋 INVARIANT
+                break
+
+    return contract, combo
+
+
 def cmd_impact(file, repo=None, depth=2, as_json=False):
     """動手前算出哪些知識圖譜節點會被 code 改動波及(Task 1:骨架 + rc 協定)。
     rc 協定: 0=成功 / 3=vault 找不到 / 其他非 0=內部錯。
