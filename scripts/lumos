@@ -5374,6 +5374,89 @@ def _impact_contract(note):
     return contract, combo
 
 
+def _impact_bfs(direct_nodes, env, depth):
+    """Task 4: 從直接節點集沿 env.edges 雙向 BFS 展開間接關聯。
+
+    設計要點:
+    - hop 語意(r8-F5): hop = 距最近直接節點的 BFS 距離,hop ∈ 1..depth。
+    - visited/cycle guard(r8-F4): seen 先種入全部直接節點,直接節點沿環不重入 indirect
+      (參 cmd_map 的 seen 模式 scripts/lumos:908-923)。
+    - 雙向邊: out_e(outlink)+in_e(backlink) 都走;每筆記 is_backlink。
+    - 雙向 direction 衝突(r8-F7): 若 dest 同時可從 out_e 與 in_e 到達 → 標 backlink 優先。
+    - 不含直接節點本身。
+
+    回傳: list[(node, hop, from_node, is_backlink)]
+    """
+    out_e, in_e = env.edges
+
+    # seen 先種入全部直接節點,防止直接節點沿環重入 indirect
+    seen = set(direct_nodes)
+
+    # BFS queue: (node_rel, hop, from_node, is_backlink)
+    from collections import deque
+    queue = deque()
+
+    for direct in direct_nodes:
+        # 展開 out_e(outlink)
+        for dest in out_e.get(direct, []):
+            if dest not in seen:
+                seen.add(dest)
+                queue.append((dest, 1, direct, False))
+        # 展開 in_e(backlink) — backlink 優先:若同一 dest 已被 out_e 加入,
+        # 以 backlink 覆蓋(r8-F7)。為此,若 dest 已在 seen 但是經 out_e 加的,
+        # 還是要標 backlink。
+        # 因 direct_nodes 種入後第一圈 seen 只含 direct_nodes,
+        # 所以 out_e/in_e 各自加到 seen 時可能衝突:同一 dest 同時在 out_e[d] 和 in_e[d]。
+        # 解法:先走 out_e,再走 in_e — in_e 命中的若已在 queue 裡(seen),
+        # 把 queue 裡那筆標記更新為 is_backlink=True。
+        # 實作上:用 pending dict 記「已排入 hop1 的筆」,backlink 優先覆蓋。
+
+    # 重來:改用 pending 機制正確處理同一 hop 內雙向衝突
+    seen = set(direct_nodes)
+    queue = deque()
+
+    # 每一輪 frontier 的 pending: dest -> (hop, from_node, is_backlink)
+    # backlink 優先:若 dest 先被 outlink 加,後被 backlink 命中 → 覆蓋為 backlink
+    for direct in direct_nodes:
+        pending = {}  # dest -> (from_node, is_backlink)
+        for dest in out_e.get(direct, []):
+            if dest not in seen:
+                if dest not in pending:
+                    pending[dest] = (direct, False)
+                # outlink 不覆蓋已有的 backlink
+        for dest in in_e.get(direct, []):
+            if dest not in seen:
+                # backlink 優先:無論如何覆蓋
+                pending[dest] = (direct, True)
+        for dest, (from_node, is_bl) in pending.items():
+            if dest not in seen:
+                seen.add(dest)
+                queue.append((dest, 1, from_node, is_bl))
+
+    result = []
+
+    while queue:
+        node, hop, from_node, is_backlink = queue.popleft()
+        result.append((node, hop, from_node, is_backlink))
+
+        if hop < depth:
+            # 展開下一層,同樣用 pending 處理雙向衝突
+            pending = {}
+            for dest in out_e.get(node, []):
+                if dest not in seen:
+                    if dest not in pending:
+                        pending[dest] = (node, False)
+            for dest in in_e.get(node, []):
+                if dest not in seen:
+                    pending[dest] = (node, True)
+            for dest, (fn, is_bl) in pending.items():
+                if dest not in seen:
+                    seen.add(dest)
+                    queue.append((dest, hop + 1, fn, is_bl))
+
+    return result
+
+
 def cmd_impact(file, repo=None, depth=2, as_json=False):
     """動手前算出哪些知識圖譜節點會被 code 改動波及(Task 1:骨架 + rc 協定)。
     rc 協定: 0=成功 / 3=vault 找不到 / 其他非 0=內部錯。

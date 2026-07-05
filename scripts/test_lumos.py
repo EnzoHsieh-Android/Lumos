@@ -3808,6 +3808,114 @@ def t_impact_contract():
           result == (None, False), f"got {result!r}")
 
 
+# ─── Task 4: 間接關聯 BFS(hop 1..depth, seen cycle guard, 雙向邊) ─────────────
+
+def t_impact_bfs_cycle_and_depth():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_bfs", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_bfs", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_bfs = m._impact_bfs
+
+    # A↔B 環:A 是 direct → BFS 應展開 B(hop1),A 不得重入 indirect(r8-F4)
+    env, _ = make_fixture_vault({
+        "S/A.md": "---\nrelated:\n  - \"[[B]]\"\n---\n`scripts/x`",
+        "S/B.md": "---\nrelated:\n  - \"[[A]]\"\n---\nb",
+    })
+    out = _impact_bfs(["S/A.md"], env, depth=2)
+    nodes = [o[0] for o in out]
+    check("impact_bfs: B(A 的鄰居) 在 indirect 中(hop1)",
+          "S/B.md" in nodes, f"nodes={nodes}")
+    check("impact_bfs: A(direct) 不得沿環重入 indirect(r8-F4)",
+          "S/A.md" not in nodes, f"nodes={nodes}")
+
+
+def t_impact_bfs_depth_limit():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_bfs2", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_bfs2", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_bfs = m._impact_bfs
+
+    # D→N1→N2 chain: depth=1 只出 N1(hop1),不出 N2
+    env, _ = make_fixture_vault({
+        "S/D.md": "---\nrelated:\n  - \"[[N1]]\"\n---\nd",
+        "S/N1.md": "---\nrelated:\n  - \"[[N2]]\"\n---\nn1",
+        "S/N2.md": "---\n---\nn2",
+    })
+    out1 = _impact_bfs(["S/D.md"], env, depth=1)
+    nodes1 = [o[0] for o in out1]
+    check("impact_bfs: depth=1 包含 N1(hop1)",
+          "S/N1.md" in nodes1, f"nodes1={nodes1}")
+    check("impact_bfs: depth=1 不包含 N2(hop2)",
+          "S/N2.md" not in nodes1, f"nodes1={nodes1}")
+
+    # depth=2 出 N1(hop1) 和 N2(hop2)
+    out2 = _impact_bfs(["S/D.md"], env, depth=2)
+    nodes2 = [o[0] for o in out2]
+    check("impact_bfs: depth=2 包含 N1(hop1)",
+          "S/N1.md" in nodes2, f"nodes2={nodes2}")
+    check("impact_bfs: depth=2 包含 N2(hop2)",
+          "S/N2.md" in nodes2, f"nodes2={nodes2}")
+    # 驗 hop 值
+    hop_n2 = next(o[1] for o in out2 if o[0] == "S/N2.md")
+    check("impact_bfs: N2 的 hop=2",
+          hop_n2 == 2, f"hop_n2={hop_n2}")
+
+
+def t_impact_bfs_backlink():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_bfs3", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_bfs3", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_bfs = m._impact_bfs
+
+    # D 是 direct;X 連向 D(backlink);X 應以 is_backlink=True 出現
+    env, _ = make_fixture_vault({
+        "S/D.md": "---\n---\nd",
+        "S/X.md": "---\nrelated:\n  - \"[[D]]\"\n---\nx",
+    })
+    out = _impact_bfs(["S/D.md"], env, depth=1)
+    nodes = [o[0] for o in out]
+    check("impact_bfs: X(backlink 指向 D) 在 indirect 中",
+          "S/X.md" in nodes, f"nodes={nodes}")
+    x_entry = next((o for o in out if o[0] == "S/X.md"), None)
+    check("impact_bfs: X 的 is_backlink=True",
+          x_entry is not None and x_entry[3] is True,
+          f"x_entry={x_entry}")
+
+
+def t_impact_bfs_tuple_fields():
+    """每筆 tuple: (node, hop, from_node, is_backlink) 欄位存在且正確。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_bfs4", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_bfs4", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_bfs = m._impact_bfs
+
+    env, _ = make_fixture_vault({
+        "S/D.md": "---\nrelated:\n  - \"[[N]]\"\n---\nd",
+        "S/N.md": "---\n---\nn",
+    })
+    out = _impact_bfs(["S/D.md"], env, depth=1)
+    check("impact_bfs: 有結果", len(out) > 0, f"out={out}")
+    entry = out[0]
+    check("impact_bfs: tuple 長度=4", len(entry) == 4, f"entry={entry}")
+    node, hop, from_node, is_backlink = entry
+    check("impact_bfs: hop=1", hop == 1, f"hop={hop}")
+    check("impact_bfs: from_node 是 direct", from_node == "S/D.md", f"from_node={from_node}")
+    check("impact_bfs: is_backlink 是 bool", isinstance(is_backlink, bool),
+          f"is_backlink={is_backlink!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
