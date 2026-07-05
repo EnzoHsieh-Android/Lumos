@@ -18,6 +18,7 @@ summary: |-
   KEY:vendor 結尾 diff 自癒——逐檔 filecmp 比對 src↔target 差異即 shutil.copy2 覆補(installer 漏檔的安全網)
   KEY:來源 repo 自我保護——update/deinit 偵測 root==_lumos_src() 即 return 2(不可在 Lumos 源本身跑專案層指令)
   KEY:_scaffold_project 既有 vault 自動 skip(保護圖譜資料不被 init/update 動)
+  KEY:cmd_init slug 決定順序=①--name ②既有 vault 資料夾名(去 -knowledge)③repo basename;②先於③是硬要求——否則既有 vault 上 --force 用 basename 建錯空 vault + 寫錯 CLAUDE.md {{KG}} 路徑(見 [[init-force-slug誤用basename]]) [test:t_init_force_uses_existing_vault_slug]
   DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit｜_vendor_toolchain/_install_skills/_install_hooks_py/_link_or_copy/_scaffold_project｜_VENDORED_TOOLKIT/_SKILLS 常數｜_lumos_src/_vault_in
   TEST:258 passed(t_install_skills/t_install_includes_skills/t_install_hooks_py/t_scaffold_project/t_link_or_copy_idempotent/t_hooks_python_fallback + t_deinit_*)
 decisions:

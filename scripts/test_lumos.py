@@ -6540,6 +6540,61 @@ def t_init_existing_no_pull():
               START_PREFIX in cm_text,
               f"sentinel 消失;\ncm={cm_text!r}")
 
+def t_init_force_uses_existing_vault_slug():
+    """Bug repro:lumos init --force 在既有 vault 上,slug 應取「既有 vault 的 slug」,
+    不是 repo basename。否則建錯 vault + 把 CLAUDE.md {{KG}} 路徑寫錯。
+    現場事故:repo basename=landmarkmember、vault=landmark-knowledge →
+    --force 誤建 docs/landmarkmember-knowledge/ + CLAUDE.md 路徑寫成 landmarkmember-knowledge。"""
+    import tempfile, os, subprocess, shutil
+
+    with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as src_td:
+        # repo basename 刻意 != vault slug
+        root = Path(td) / "landmarkmember"
+        root.mkdir()
+        subprocess.run(["git", "init", str(root)], capture_output=True)
+        src = Path(src_td)
+        (src / "scripts" / "templates").mkdir(parents=True)
+        (src / "scripts" / "templates" / "graph-discipline.md").write_text(
+            "紀律:{{KG}}", encoding="utf-8")
+        (src / "scripts" / "hooks").mkdir()
+        # 既有 vault:landmark-knowledge(slug=landmark ≠ basename landmarkmember)
+        kg = root / "docs" / "landmark-knowledge"
+        for d in ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC"):
+            (kg / d).mkdir(parents=True, exist_ok=True)
+        (kg / "MOC" / "index.md").write_text("---\ntype: moc\nstatus: doing\n---\n", encoding="utf-8")
+        (root / "scripts" / "templates").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src / "scripts" / "templates" / "graph-discipline.md",
+                     root / "scripts" / "templates" / "graph-discipline.md")
+
+        mod = _load_lumos_mod("lumos_initslug")
+        captured = []
+
+        def _stub_vendor(s, r, sl, no_pull=False):
+            captured.append(sl)
+            return 0
+
+        orig_v, orig_s = mod._vendor_toolchain, mod._lumos_src
+        mod._vendor_toolchain = _stub_vendor
+        mod._lumos_src = lambda source=None: src
+        try:
+            orig_cwd = os.getcwd()
+            os.chdir(str(root))
+            rc = mod.cmd_init(name=None, force=True, with_hooks=True, no_pull=True)
+        finally:
+            os.chdir(orig_cwd)
+            mod._vendor_toolchain = orig_v
+            mod._lumos_src = orig_s
+
+        check("init_force_slug: rc==0", rc == 0, f"rc={rc}")
+        check("init_force_slug: slug 取既有 vault(landmark)非 repo basename(landmarkmember)",
+              captured == ["landmark"], f"_vendor_toolchain 收到 slug={captured}(應為 ['landmark'])")
+        check("init_force_slug: 沒建錯的 docs/landmarkmember-knowledge/",
+              not (root / "docs" / "landmarkmember-knowledge").exists(),
+              "誤建了 landmarkmember-knowledge 空 scaffold")
+        check("init_force_slug: 既有 landmark-knowledge 仍在",
+              (root / "docs" / "landmark-knowledge").exists(), "既有 vault 消失")
+
+
 # ── Task 4: doctor Check D 紀律區塊漂移守衛 ────────────────────────────────────
 
 def _make_check_d_root(td, tpl_content=None, claude_content=None, slug="demo"):
