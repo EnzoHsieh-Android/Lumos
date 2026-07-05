@@ -5800,6 +5800,134 @@ def cmd_impact(file, repo=None, depth=None, as_json=False):
     return 0
 
 
+# ── code-loop 台帳(Task 1) ────────────────────────────────────────────────────
+
+def _codeloop_git_branch(repo_root):
+    """取 HEAD branch 名(detached HEAD 回 HEAD)。"""
+    import subprocess
+    r = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                       capture_output=True, text=True, cwd=str(repo_root))
+    return r.stdout.strip() or "HEAD"
+
+
+def _codeloop_git_head(repo_root):
+    """取 HEAD full sha。"""
+    import subprocess
+    r = subprocess.run(["git", "rev-parse", "HEAD"],
+                       capture_output=True, text=True, cwd=str(repo_root))
+    return r.stdout.strip()
+
+
+def _codeloop_git_ts(repo_root):
+    """取 HEAD committer date(ISO 8601);失敗回空字串。"""
+    import subprocess
+    r = subprocess.run(["git", "show", "-s", "--format=%cI", "HEAD"],
+                       capture_output=True, text=True, cwd=str(repo_root))
+    return r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
+
+
+def _codeloop_read(repo_root, branch):
+    """讀 governance/code-loop/<branch>.json;不存在回 None。"""
+    import json
+    p = Path(repo_root) / "governance" / "code-loop" / f"{branch}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _codeloop_write(repo_root, branch, status, note, head_sha, ts):
+    """寫 governance/code-loop/<branch>.json。"""
+    import json
+    d = Path(repo_root) / "governance" / "code-loop"
+    d.mkdir(parents=True, exist_ok=True)
+    rec = {"head_sha": head_sha, "status": status, "note": note, "ts": ts}
+    (d / f"{branch}.json").write_text(
+        json.dumps(rec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts):
+    """把 code-loop 事件 append 到 docs/.governance-log.jsonl(同 bypass-log 哲學)。
+    vault 找不到 / 非 git repo → 靜默跳過。"""
+    import json
+    # 找 docs 目錄(repo root 下的 docs/)
+    docs = Path(repo_root) / "docs"
+    if not docs.is_dir():
+        return
+    path = docs / ".governance-log.jsonl"
+    try:
+        commit_short = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=str(repo_root)).stdout.strip()
+        if not commit_short:
+            return
+        event = {
+            "ts": ts, "commit": commit_short,
+            "gate": "code-loop", "kind": status,
+            "hard": False, "nodes": [],
+            "detail": note, "branch": branch, "head_sha": head_sha,
+        }
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def cmd_code_loop(subcmd, note=None, repo=None):
+    """code-loop 台帳讀寫。
+    pass  → status=passed(綁 HEAD sha);
+    skip  → status=skipped(綁 HEAD sha,留逃生痕);
+    check → 讀台帳回報狀態(Task 2 補完判定式;Task 1 只回讀)。
+    rc: 0=OK / 1=check:未收斂(無有效台帳) / 2=參數錯。
+    """
+    # resolve repo root
+    if repo is not None:
+        repo_root = Path(repo)
+        if not repo_root.is_dir():
+            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            return 2
+    else:
+        repo_root = None
+        for cand in (Path.cwd(), *Path.cwd().parents):
+            if (cand / ".git").exists():
+                repo_root = cand
+                break
+        if repo_root is None:
+            print("ERROR: 找不到 git repo root(.git),請用 --repo 指定", file=sys.stderr)
+            return 2
+
+    branch = _codeloop_git_branch(repo_root)
+    head_sha = _codeloop_git_head(repo_root)
+    ts = _codeloop_git_ts(repo_root)
+
+    if subcmd in ("pass", "skip"):
+        status = "passed" if subcmd == "pass" else "skipped"
+        _codeloop_write(repo_root, branch, status, note or "", head_sha, ts)
+        _codeloop_gov_log(repo_root, branch, status, note or "", head_sha, ts)
+        label = "✅" if status == "passed" else "⏭"
+        print(f"{label} code-loop {status} [{branch}@{head_sha[:8]}] {note or ''}")
+        return 0
+
+    if subcmd == "check":
+        # Task 1 佔位:只回讀台帳(判定式 Task 2 補)
+        rec = _codeloop_read(repo_root, branch)
+        if rec is None:
+            print(f"⚠ 無台帳 [{branch}]:尚未跑 code-loop pass/skip", file=sys.stderr)
+            return 1
+        rec_sha = rec.get("head_sha", "")
+        if rec_sha != head_sha:
+            print(f"⚠ 台帳 sha 過時 [{branch}]:台帳={rec_sha[:8]} HEAD={head_sha[:8]}", file=sys.stderr)
+            return 1
+        s = rec.get("status", "")
+        print(f"✅ code-loop {s} [{branch}@{head_sha[:8]}] {rec.get('note', '')}")
+        return 0
+
+    print(f"ERROR: 未知子命令 {subcmd!r}", file=sys.stderr)
+    return 2
+
+
 def main():
     ap = argparse.ArgumentParser(prog="lumos", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -6020,6 +6148,19 @@ def main():
     p.add_argument("--update-baseline", action="store_true", help="以現況更新 baseline(跳過解析失敗模組)")
     p.add_argument("--audit", action="store_true", help="無視 baseline,盤點當下全部 non-skippable composable(初次採用/現況全景)")
 
+    cl = sub.add_parser("code-loop", help="code-loop 台帳(vault-free):pass/skip 收斂紀錄 + check 查詢")
+    clsub = cl.add_subparsers(dest="clcmd", required=True)
+    for _clname, _clhelp in (
+        ("pass", "記錄本分支 HEAD 已過 code-loop 收斂(status=passed)"),
+        ("skip", "顯式跳過 code-loop 並留痕(status=skipped;同 bypass 哲學)"),
+        ("check", "查詢本分支台帳是否有效(HEAD 吻合且 passed/skipped)"),
+    ):
+        _clp = clsub.add_parser(_clname, help=_clhelp)
+        if _clname in ("pass", "skip"):
+            _clp.add_argument("--note", default="", help="理由(pass/skip 必填習慣;進治理帳)")
+        _clp.add_argument("--repo", dest="cl_repo", default=None,
+                          help="repo root(預設 cwd 逐層向上找 .git)")
+
     args = ap.parse_args()
 
     # install/uninstall/update/bootstrap 不需要 Env(vault),先處理
@@ -6059,6 +6200,9 @@ def main():
         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
     if args.cmd == "compose-metrics":
         return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline, args.audit)
+    if args.cmd == "code-loop":
+        note = getattr(args, "note", None) or ""
+        return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():

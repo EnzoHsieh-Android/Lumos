@@ -5272,6 +5272,73 @@ def t_impact_incidents_main_only():
           "glob:" in ctx, f"ctx={ctx!r}")
 
 
+# ── helpers shared by codeloop tests ──────────────────────────────────────────
+
+def _git_init_commit(d):
+    """git init + config + 一個空 commit,讓 HEAD 有 sha。"""
+    import subprocess as _sp
+    _sp.run(["git", "init", "-q"], cwd=d, capture_output=True)
+    _sp.run(["git", "config", "user.email", "t@t.t"], cwd=d, capture_output=True)
+    _sp.run(["git", "config", "user.name", "t"], cwd=d, capture_output=True)
+    (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
+    _sp.run(["git", "add", "README.md"], cwd=d, capture_output=True)
+    _sp.run(["git", "commit", "-qm", "init"], cwd=d, capture_output=True)
+
+
+def _git_branch(d):
+    """回傳 d 的當前 branch 名。"""
+    import subprocess as _sp
+    return _sp.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                   cwd=d, capture_output=True, text=True).stdout.strip()
+
+
+def _git_head(d):
+    """回傳 d 的當前 HEAD sha(full)。"""
+    import subprocess as _sp
+    return _sp.run(["git", "rev-parse", "HEAD"],
+                   cwd=d, capture_output=True, text=True).stdout.strip()
+
+
+def _codeloop_read(repo_root, branch):
+    """從 governance/code-loop/<branch>.json 讀取記錄並以 dict 回傳。"""
+    import json as _j
+    p = Path(repo_root) / "governance" / "code-loop" / f"{branch}.json"
+    if not p.exists():
+        return None
+    return _j.loads(p.read_text(encoding="utf-8"))
+
+
+# ── Task 1: code-loop pass/skip 台帳(綁 HEAD sha) ──────────────────────────
+
+def t_codeloop_ledger():
+    import shutil
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        rc = run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
+        check("codeloop_ledger: pass rc=0", rc == 0, f"rc={rc}")
+        branch = _git_branch(d)
+        rec = _codeloop_read(d, branch)
+        check("codeloop_ledger: 台帳存在", rec is not None, "找不到 json")
+        if rec is not None:
+            check("codeloop_ledger: status=passed", rec.get("status") == "passed",
+                  f"status={rec.get('status')!r}")
+            check("codeloop_ledger: head_sha 正確", rec.get("head_sha") == _git_head(d),
+                  f"head_sha={rec.get('head_sha')!r}")
+            check("codeloop_ledger: note 正確", rec.get("note") == "done",
+                  f"note={rec.get('note')!r}")
+        # skip path
+        rc2 = run_lumos(["code-loop", "skip", "--note", "no high", "--repo", d])
+        check("codeloop_ledger: skip rc=0", rc2 == 0, f"rc={rc2}")
+        rec2 = _codeloop_read(d, branch)
+        if rec2 is not None:
+            check("codeloop_ledger: skip → status=skipped",
+                  rec2.get("status") == "skipped", f"status={rec2.get('status')!r}")
+            check("codeloop_ledger: skip head_sha 正確",
+                  rec2.get("head_sha") == _git_head(d), f"head_sha={rec2.get('head_sha')!r}")
+            check("codeloop_ledger: skip note 正確",
+                  rec2.get("note") == "no high", f"note={rec2.get('note')!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
