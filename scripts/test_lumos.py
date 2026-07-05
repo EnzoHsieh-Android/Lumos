@@ -4044,8 +4044,8 @@ def t_impact_json_schema_and_sort():
     out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", FIX, "--json"])
     d = _json.loads(out)
 
-    check("impact_json: 頂層 key 集合 == {file,direct,indirect}",
-          set(d) == {"file", "direct", "indirect"}, f"keys={set(d)}")
+    check("impact_json: 頂層 key 集合 == {file,direct,indirect,incidents}",
+          set(d) == {"file", "direct", "indirect", "incidents"}, f"keys={set(d)}")
 
     # direct 欄位: 必有 node/hit/contract/combo; 不得有 hop/from
     for x in d["direct"]:
@@ -4867,6 +4867,70 @@ def t_match_incident_triggers():
     n1_hit = next((x for x in r_mb if x["node"] == "Issues/N1.md"), None)
     check("match_incident: matched_by 含命中 trigger",
           n1_hit is not None and "glob:" in n1_hit.get("matched_by", ""), f"n1_hit={n1_hit}")
+
+
+def t_impact_incidents_section():
+    """Task 2: --json incidents 段 + trigger 去重 + 讀被碰檔內容。
+
+    fixture:
+    - repo/app/UserRepository.py  (實際存在的 code 檔)
+    - Issues/N1.md  pitfall_when glob 命中 UserRepository.py
+                    且 body 引用 `app/UserRepository.py`(→ 本來 direct)
+    去重斷言:N1.md 只列 incidents、不在 direct。
+    無 pitfall_when 節點不進 incidents。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    repo = Path(_tf.mkdtemp(prefix="gctl-t-inc-"))
+    # scripts/ 頂層目錄(讓 _refcheck_scan top_dirs 認到)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake\n", encoding="utf-8")
+    # 被碰 code 檔(content-regex 測試用,可為空)
+    (repo / "app").mkdir()
+    (repo / "app" / "UserRepository.py").write_text("# repo\n", encoding="utf-8")
+    # vault
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Issues", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    # 事故節點: pitfall_when glob + body 引用 app/UserRepository.py(→ 本來進 direct)
+    (vault / "Issues" / "N1.md").write_text(
+        "---\npitfall_when:\n  - \"glob:**/*Repository*.py\"\n---\n"
+        "引用 `app/UserRepository.py` 的用法\n",
+        encoding="utf-8",
+    )
+    # 普通系統節點(無 pitfall_when): 也引用同一 code 檔 → 應留在 direct
+    (vault / "Systems" / "Normal.md").write_text(
+        "---\ntype: system\nstatus: doing\n---\n"
+        "也引用 `app/UserRepository.py`\n",
+        encoding="utf-8",
+    )
+
+    FIX = str(repo)
+    # 用絕對路徑傳 --file(讓 cmd_impact 能讀盤取 content)
+    abs_file = str(repo / "app" / "UserRepository.py")
+    out = run_lumos_capture(["impact", "--file", abs_file, "--repo", FIX, "--json"])
+    d = _json.loads(out)
+
+    check("impact_incidents: 頂層 incidents key 存在",
+          "incidents" in d, f"keys={set(d)}")
+    inc_nodes = {x["node"] for x in d.get("incidents", [])}
+    direct_nodes = {x["node"] for x in d.get("direct", [])}
+
+    check("impact_incidents: N1.md 進 incidents",
+          "Issues/N1.md" in inc_nodes, f"incidents={d.get('incidents')}")
+    # 去重: incidents ∩ direct = ∅
+    check("impact_incidents: 去重——incidents ∩ direct = ∅",
+          inc_nodes.isdisjoint(direct_nodes),
+          f"inc={inc_nodes} direct={direct_nodes}")
+    # Normal.md(無 pitfall_when)應留在 direct
+    check("impact_incidents: Normal.md(無 pitfall_when)留在 direct",
+          "Systems/Normal.md" in direct_nodes, f"direct={direct_nodes}")
+    # incidents 每筆含必要欄位
+    for x in d.get("incidents", []):
+        check("impact_incidents: 每筆含 node/matched_by/contract/combo",
+              set(x) >= {"node", "matched_by", "contract", "combo"}, f"item={x}")
 
 
 def main():
