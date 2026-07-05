@@ -3483,6 +3483,32 @@ def t_sqlfluff_sarif_bridge():
     check("空 stdin 不崩", r2.returncode == 0 and '"results": []' in r2.stdout, r2.stdout[:80])
 
 
+def t_stylelint_sarif_bridge():
+    """stylelint --formatter json → lumos stylelint-sarif → SARIF → _lint_run_and_parse(CSS 進 lint-adapter)。"""
+    import importlib.util as U, json as J, subprocess as sp, sys as _sys, tempfile
+    from importlib.machinery import SourceFileLoader
+    root = Path(tempfile.mkdtemp(prefix="gctl-stylb-"))
+    sl_json = J.dumps([{"source": "src/a.css", "warnings": [
+        {"line": 3, "rule": "color-no-invalid-hex", "text": "Invalid hex color"},
+        {"line": 7, "rule": "block-no-empty", "text": "Empty block"}]}])
+    out = root / "o.sarif"
+    r = sp.run([_sys.executable, GRAPHCTL, "stylelint-sarif", "--out", str(out)],
+               input=sl_json, capture_output=True, text=True)
+    check("stylelint-sarif rc0", r.returncode == 0, r.stderr)
+    d = J.loads(out.read_text(encoding="utf-8"))
+    check("SARIF driver stylelint + 2 results",
+          d["runs"][0]["tool"]["driver"]["name"] == "stylelint" and len(d["runs"][0]["results"]) == 2, str(d)[:120])
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    claims, ok = m._lint_run_and_parse(f"cp {out} {{LINT_SARIF_OUT}}", root)
+    check("lint-adapter 吃到 stylelint claim",
+          ok and len(claims) == 2 and claims[0]["source"] == "lint:stylelint"
+          and claims[0]["file"] == "src/a.css" and claims[0]["line"] == 3 and claims[0]["rule"] == "color-no-invalid-hex",
+          str(claims))
+    r2 = sp.run([_sys.executable, GRAPHCTL, "stylelint-sarif"], input="", capture_output=True, text=True)
+    check("空 stdin 不崩", r2.returncode == 0 and '"results": []' in r2.stdout, r2.stdout[:80])
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
