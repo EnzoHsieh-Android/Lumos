@@ -4173,6 +4173,103 @@ def t_impact_cross_direct_node_dedup():
           len(overlap) == 0, f"overlap={overlap}, direct={direct_nodes}, indirect={indirect_nodes}")
 
 
+def t_impact_depth_config_integration():
+    """Task 8 M-3: CLI --depth 顯式值覆蓋 .lumos/impact.json config 的整合測試。
+
+    建一個 fixture repo:
+    - .lumos/impact.json 設 {"depth": 3}
+    - 一個 code 檔 scripts/target.py(不需實際 python,只需存在)
+    - vault 含 depth 1 可見但 depth 3 才多見的多層圖:
+        DirectNode → Hop1 → Hop2 → Hop3(三層 related chain)
+      DirectNode body 引 `scripts/target.py` → 直接節點。
+      Hop1/2/3 依 related 鏈串 → 深度控制間接 hop 上限。
+
+    驗兩點:
+    1. 不帶 --depth → 用 config depth=3 → indirect 可看到 hop3 節點(Hop3)。
+    2. 帶 --depth 1 → 覆蓋 config → indirect 最多 hop=1 → Hop2/Hop3 不出現。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    # ── 建 fixture ──
+    repo = Path(_tf.mkdtemp(prefix="gctl-t8-depth-"))
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "target.py").write_text("# target\n", encoding="utf-8")
+
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(b"---\ntype: moc\n---\n# idx\n")
+
+    # DirectNode — body 引 scripts/target.py,related → Hop1
+    (vault / "Systems" / "DirectNode.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[Hop1]]\"\n---\n"
+        "引用 `scripts/target.py`\n",
+        encoding="utf-8",
+    )
+    # Hop1 → related → Hop2
+    (vault / "Systems" / "Hop1.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[Hop2]]\"\n---\n無 code 引用\n",
+        encoding="utf-8",
+    )
+    # Hop2 → related → Hop3
+    (vault / "Systems" / "Hop2.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[Hop3]]\"\n---\n無 code 引用\n",
+        encoding="utf-8",
+    )
+    # Hop3 — 葉節點
+    (vault / "Systems" / "Hop3.md").write_text(
+        "---\ntype: system\nstatus: doing\n---\n無 code 引用\n",
+        encoding="utf-8",
+    )
+
+    # .lumos/impact.json — config depth=3
+    (repo / ".lumos").mkdir()
+    (repo / ".lumos" / "impact.json").write_text('{"depth": 3}', encoding="utf-8")
+
+    FIX = str(repo)
+    file_arg = "scripts/target.py"
+
+    # ── 情境 A: 不帶 --depth → config depth=3 → Hop3 應出現 ──
+    out_a = run_lumos_capture(["impact", "--file", file_arg, "--repo", FIX, "--json"])
+    d_a = _json.loads(out_a)
+    indirect_nodes_a = {x["node"] for x in d_a["indirect"]}
+    check("impact_depth_integration: config depth=3 → Hop3 出現於 indirect",
+          any("Hop3" in n for n in indirect_nodes_a),
+          f"indirect_nodes={indirect_nodes_a}")
+    check("impact_depth_integration: config depth=3 → Hop2 出現於 indirect",
+          any("Hop2" in n for n in indirect_nodes_a),
+          f"indirect_nodes={indirect_nodes_a}")
+
+    # ── 情境 B: --depth 1 覆蓋 config(3) → 只有 hop≤1 → Hop2/Hop3 不應出現 ──
+    out_b = run_lumos_capture(["impact", "--file", file_arg, "--repo", FIX, "--depth", "1", "--json"])
+    d_b = _json.loads(out_b)
+    indirect_nodes_b = {x["node"] for x in d_b["indirect"]}
+    check("impact_depth_integration: --depth 1 覆蓋 config → Hop2 不出現",
+          not any("Hop2" in n for n in indirect_nodes_b),
+          f"indirect_nodes={indirect_nodes_b}")
+    check("impact_depth_integration: --depth 1 覆蓋 config → Hop3 不出現",
+          not any("Hop3" in n for n in indirect_nodes_b),
+          f"indirect_nodes={indirect_nodes_b}")
+    check("impact_depth_integration: --depth 1 → Hop1 仍出現(depth=1 的 hop1 可達)",
+          any("Hop1" in n for n in indirect_nodes_b),
+          f"indirect_nodes={indirect_nodes_b}")
+
+    # ── 情境 C: bool in config 不穿透 int 守衛 → 回預設 depth=2 ──
+    # 改 config 為 {"depth": true}(bool),確認不套用(fallback=2 → Hop3 看不到)
+    (repo / ".lumos" / "impact.json").write_text('{"depth": true}', encoding="utf-8")
+    out_c = run_lumos_capture(["impact", "--file", file_arg, "--repo", FIX, "--json"])
+    d_c = _json.loads(out_c)
+    indirect_nodes_c = {x["node"] for x in d_c["indirect"]}
+    # depth=2 → Hop1(hop1) + Hop2(hop2) 可見、Hop3(hop3) 不可見
+    check("impact_depth_integration: bool depth 不穿透守衛 → Hop3 不出現(fallback depth=2)",
+          not any("Hop3" in n for n in indirect_nodes_c),
+          f"indirect_nodes={indirect_nodes_c}")
+    check("impact_depth_integration: bool depth 不穿透守衛 → Hop2 仍出現(fallback depth=2)",
+          any("Hop2" in n for n in indirect_nodes_c),
+          f"indirect_nodes={indirect_nodes_c}")
+
+
 def t_impact_config():
     """Task 8: _impact_load_config — 有檔 depth/ttl merge 預設;無檔 → 2/20;壞 json → 2/20 不拋。"""
     import importlib.util
@@ -4215,6 +4312,22 @@ def t_impact_config():
         open(d + "/.lumos/impact.json", "w").write('{"depth":4,"ttl_min":60}')
         got = fn(d)
         check("impact_config: depth+ttl 皆覆寫", got == {"depth": 4, "ttl_min": 60}, f"got={got}")
+
+    # 情境 5: depth=true(bool)→ 不視為合法 int → fallback 2
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write('{"depth":true}')
+        got = fn(d)
+        check("impact_config: depth=true(bool)→ fallback 2",
+              got == {"depth": 2, "ttl_min": 20}, f"got={got}")
+
+    # 情境 6: ttl_min=false(bool)→ 不視為合法 int → fallback 20
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write('{"ttl_min":false}')
+        got = fn(d)
+        check("impact_config: ttl_min=false(bool)→ fallback 20",
+              got == {"depth": 2, "ttl_min": 20}, f"got={got}")
 
 
 def main():
