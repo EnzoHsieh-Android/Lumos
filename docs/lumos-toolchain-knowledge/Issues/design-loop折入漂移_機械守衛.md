@@ -1,6 +1,6 @@
 ---
 type: issue
-status: open
+status: done
 created: 2026-07-05
 updated: 2026-07-05
 tags:

@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-05
 updated: 2026-07-05
 tags:
@@ -15,17 +15,19 @@ summary: |-
   KEY:先前 ①§-ref+②summary→body token 方案被否決——逐條對照 impact loop 9 輪真漂移,①命中0(只抓 canary)②≈0(真漂移是反向遺漏/同token改值/跨段矛盾,token-presence 抓不到)
   KEY:真失效=「折完 body 忘了回頭看鏡像段」(忘記看非看不出)→ 機械化重點=強制列舉鏡像段 + 兩個可機械化漂移偵測
   FLOW:折 findings 進 body → 寫審計修正紀錄 → lumos fold-check <真檔 path> → 解每個 flag+逐段勾鏡像段一致 → grep canary=0 → commit
-  KEY:fold-check 輸出=①鏡像段列舉(summary block/每個 json fence/審計紀錄/天花板 逐段複查)②value-drift flag(全文域同識別詞不同值,命中 2..depth vs 1..depth、fold-check <node> vs <path>)③reverse-omission flag(全文顯著 token --flag/★MARKER★/檔名/CamelCase/backtick code 某段缺,排除 <…> placeholder,命中 summary 漏 MultiEdit/backtick code)
+  KEY:fold-check 輸出=①鏡像段列舉(summary block/每個 json fence/審計紀錄/天花板 逐段複查)②value-drift flag(全文域同識別詞不同值,命中 2..depth vs 1..depth、fold-check <node> vs <path>)③reverse-omission flag(全文高訊號 token --flag/★MARKER★/帶副檔名檔名 某段缺,排除 <…> placeholder+FENCE+審計段,命中 summary 漏 --json;T5 降噪移除 CamelCase/backtick 散文 token 237→24)
   DECISION:兩交付=lumos fold-check 指令(顧問級,有flag rc1)+ design-loop skill step 7 加強制子步(源在 lumos-toolchain repo user-scope skill)
   DECISION:閘是紀律非防篡改(同 design-loop 本身,lumos 擋不住不跑就 commit);跨段語意矛盾清單逼看不替判;啟發式有假陽假陰
   DEP:[[design-loop]]
-  TEST:未實作(設計定稿,待 design-loop → writing-plans)
+  TEST:已實作(branch feat/fold-check,528 passed;2 design-loop 輪+TDD 5 task+opus 終審);VERIFY:[[2026-07-05_design-loop折入守衛]]
 decisions:
   - content: 折入強制一致性閘(fold-check + skill step7)取代靜態 lint ①§-ref+②token
     context: 初版想給 lumos lint 加 §-ref 解析+summary→body token 檢查
     why_chosen: 逐條對照 impact loop 9 輪真折入漂移:①命中0(只抓 canary)②≈0——真漂移是反向遺漏/同token改值/跨段語意矛盾,token-presence 打不中。改攻工作流:強制列舉鏡像段(逼看,治跨段矛盾)+value-drift(治改值)+reverse-omission(治反向遺漏)
     decided: 2026-07-05
     valid: true
+verified_by:
+  - "[[2026-07-05_design-loop折入守衛]]"
 ---
 # design-loop 折入守衛_計劃
 
