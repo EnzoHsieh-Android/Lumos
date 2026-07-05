@@ -3964,6 +3964,35 @@ def t_impact_via_body_wikilink_fallback():
           result == "body-wikilink", f"got {result!r}")
 
 
+# ─── Task 6: core_refs 跨 repo 葉(cross_repo/no_expand,不展開) ───────────────
+
+def t_impact_core_refs_leaf():
+    """Task 6: 直接節點有 core_refs → 影響清單 indirect 含跨 repo 葉,標 cross_repo/no_expand,不 KeyError。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_cr", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_cr", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_collect = m._impact_collect
+
+    env, _ = make_fixture_vault({
+        "S/A.md": "---\ncore_refs: core-knowledge/systems/rule\n---\n`scripts/x`",
+    })
+    res = _impact_collect("S/A.md", env, depth=2)
+    leaf = [r for r in res["indirect"] if r.get("cross_repo")]
+    check("impact_core_refs: indirect 含跨 repo 葉",
+          len(leaf) > 0, f"indirect={res['indirect']}")
+    check("impact_core_refs: 葉的 node == core-knowledge/systems/rule",
+          leaf[0]["node"] == "core-knowledge/systems/rule", f"leaf={leaf}")
+    check("impact_core_refs: 葉的 no_expand is True",
+          leaf[0]["no_expand"] is True, f"leaf={leaf}")
+    check("impact_core_refs: 葉的 via == core_refs",
+          leaf[0].get("via") == "core_refs", f"leaf={leaf}")
+    check("impact_core_refs: 葉的 cross_repo is True",
+          leaf[0]["cross_repo"] is True, f"leaf={leaf}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

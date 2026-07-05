@@ -5480,6 +5480,79 @@ def _impact_via(frontier, dest, is_backlink, env):
     return "body-wikilink"
 
 
+def _impact_collect(direct_node_rel, env, depth=2):
+    """Task 6: 組裝單一直接節點的影響清單(直接 + 間接)。
+
+    設計要點:
+    - direct_node_rel: vault-relative 路徑(如 "Systems/A.md")。
+    - 直接節點: direct_node_rel 本身,補齊 {node, hit, contract, combo}。
+    - 間接關聯:
+        1. core_refs 跨 repo 葉(r7-F2): 直接節點若有 core_refs,把每條值當
+           「不可展開跨 repo 葉」輸出,標 via:"core_refs",cross_repo:True,
+           no_expand:True,**不試圖 BFS 進它**。
+           讀法: as_list(n.fields.get("core_refs"))(r3-F8:值可能 str/list)。
+        2. BFS 間接關聯(via env.edges 雙向)→ 由 _impact_bfs 出結果,
+           再用 _impact_via 補 via/direction。
+           (BFS 項目的 cross_repo/no_expand 不存在——下游用 .get 取 false。)
+
+    回傳: {"direct": [...], "indirect": [...]}
+    格式:
+      direct 每筆: {node, hit:"body-inline-code", contract, combo}
+      indirect 每筆(core_refs 葉):
+        {node, hop:1, via:"core_refs", direction:"outlink",
+         from:<直接節點>, cross_repo:True, no_expand:True,
+         contract:None, combo:False}
+      indirect 每筆(BFS):
+        {node, hop, via, direction, from, contract, combo}
+    """
+    direct_list = []
+    indirect_list = []
+
+    # 直接節點資料
+    direct_note = env.notes.get(direct_node_rel)
+    contract, combo = _impact_contract(direct_note) if direct_note else (None, False)
+    direct_list.append({
+        "node": direct_node_rel,
+        "hit": "body-inline-code",
+        "contract": contract,
+        "combo": combo,
+    })
+
+    # 1. core_refs 跨 repo 葉(r7-F2):不 BFS 進、不查 env.notes[dest]
+    if direct_note is not None:
+        for core_ref in as_list(direct_note.fields.get("core_refs")):
+            indirect_list.append({
+                "node": core_ref,
+                "hop": 1,
+                "via": "core_refs",
+                "direction": "outlink",
+                "from": direct_node_rel,
+                "cross_repo": True,
+                "no_expand": True,
+                "contract": None,
+                "combo": False,
+            })
+
+    # 2. BFS 間接關聯(via env.edges)
+    bfs_results = _impact_bfs([direct_node_rel], env, depth=depth)
+    for (node, hop, from_node, is_backlink) in bfs_results:
+        bfs_note = env.notes.get(node)
+        bfs_contract, bfs_combo = _impact_contract(bfs_note) if bfs_note else (None, False)
+        via = _impact_via(from_node, node, is_backlink, env)
+        direction = "backlink" if is_backlink else "outlink"
+        indirect_list.append({
+            "node": node,
+            "hop": hop,
+            "via": via,
+            "direction": direction,
+            "from": from_node,
+            "contract": bfs_contract,
+            "combo": bfs_combo,
+        })
+
+    return {"direct": direct_list, "indirect": indirect_list}
+
+
 def cmd_impact(file, repo=None, depth=2, as_json=False):
     """動手前算出哪些知識圖譜節點會被 code 改動波及(Task 1:骨架 + rc 協定)。
     rc 協定: 0=成功 / 3=vault 找不到 / 其他非 0=內部錯。
