@@ -3916,6 +3916,54 @@ def t_impact_bfs_tuple_fields():
           f"is_backlink={is_backlink!r}")
 
 
+# ─── Task 5: via 標記(二次反查,outlink/backlink 讀對端,body-wikilink fallback) ──
+
+def t_impact_via_both_directions():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_via", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_via", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_via = m._impact_via
+
+    env, _ = make_fixture_vault({
+        "S/F.md": "---\nrelated:\n  - \"[[G]]\"\n---\n`scripts/x`",
+        "S/G.md": "g",
+        "S/H.md": "---\nverified_by:\n  - \"[[F]]\"\n---\nh",  # H→F,對 F 是 backlink
+    })
+    # outlink: F→G via related(讀 frontier=F 的 fields)
+    result_outlink = _impact_via("S/F.md", "S/G.md", False, env)
+    check("impact_via: outlink F→G 讀 frontier(F.fields) 得 via=related",
+          result_outlink == "related", f"got {result_outlink!r}")
+
+    # backlink: H→F,從 F 反查到 H(in_e);須讀 dest(H).fields 找 verified_by:[[F]]
+    result_backlink = _impact_via("S/F.md", "S/H.md", True, env)
+    check("impact_via: backlink H→F 讀 dest(H.fields) 得 via=verified_by(不是讀 F)",
+          result_backlink == "verified_by", f"got {result_backlink!r}")
+
+
+def t_impact_via_body_wikilink_fallback():
+    """body-wikilink fallback: 當連結不在任何 frontmatter 欄位時回 body-wikilink(r5-F3)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_via2", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_via2", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_via = m._impact_via
+
+    env, _ = make_fixture_vault({
+        # P→Q 連結只在 body([[Q]]),frontmatter 無 wikilink
+        "S/P.md": "---\n---\nbody 連向 [[Q]]",
+        "S/Q.md": "---\n---\nq",
+    })
+    # outlink: P→Q,frontmatter 無 wikilink → body-wikilink fallback
+    result = _impact_via("S/P.md", "S/Q.md", False, env)
+    check("impact_via: outlink body-wikilink fallback → body-wikilink",
+          result == "body-wikilink", f"got {result!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

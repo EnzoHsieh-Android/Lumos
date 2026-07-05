@@ -5435,6 +5435,51 @@ def _impact_bfs(direct_nodes, env, depth):
     return result
 
 
+def _impact_via(frontier, dest, is_backlink, env):
+    """Task 5: 判斷 BFS 一條邊的 via(沿哪個 frontmatter 欄位到達)。
+
+    設計要點(§2.3,r9-F1):
+    - env.edges 是 out_e[a].append(b) / in_e[b].append(a) ——
+      wikilink **永遠寫在「連出去」那一端**。
+    - outlink(is_backlink=False): wikilink 在 frontier → 讀 frontier.fields,
+      找含指向 dest 的 wikilink 欄位。
+    - backlink(is_backlink=True): wikilink 在 dest(dest 連向 frontier) →
+      讀 dest.fields(不是 frontier!),找含指向 frontier 的 wikilink 欄位。
+      **讀錯端(frontier)會全 miss → 全 body-wikilink fallback(r9-F1 的 bug)。**
+    - 比對:欄位值是 "[[stem]]" 字串,目標是 rel 路徑 →
+      用 link_target()+env.resolve() 轉 rel 再比。
+    - body-wikilink fallback(r5-F3):n.fields 只有 frontmatter;
+      若「wikilink 所在端」任何 frontmatter 欄位都找不到 → via="body-wikilink"。
+
+    via 枚舉: related / verified_by / plan_refs / body-wikilink。
+    direction = "backlink" if is_backlink else "outlink"(由呼叫端 is_backlink 決定)。
+    """
+    # 決定「wikilink 所在端」和「被指向的目標 rel」
+    if is_backlink:
+        # backlink: dest 連向 frontier → wikilink 在 dest,目標是 frontier
+        wikilink_node = dest
+        target_rel = frontier
+    else:
+        # outlink: frontier 連向 dest → wikilink 在 frontier,目標是 dest
+        wikilink_node = frontier
+        target_rel = dest
+
+    note = env.notes.get(wikilink_node)
+    if note is None:
+        return "body-wikilink"
+
+    # 掃 frontmatter 欄位(跳過 block scalar;只看 list/str wikilink 欄位)
+    for field_key in ("related", "verified_by", "plan_refs"):
+        vals = as_list(note.fields.get(field_key))
+        for val in vals:
+            resolved = env.resolve(link_target(val))
+            if resolved == target_rel:
+                return field_key
+
+    # 任何 frontmatter 欄位都找不到 → 邊來自 body([[..]])
+    return "body-wikilink"
+
+
 def cmd_impact(file, repo=None, depth=2, as_json=False):
     """動手前算出哪些知識圖譜節點會被 code 改動波及(Task 1:骨架 + rc 協定)。
     rc 協定: 0=成功 / 3=vault 找不到 / 其他非 0=內部錯。
