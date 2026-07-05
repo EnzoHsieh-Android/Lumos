@@ -5093,61 +5093,111 @@ def t_impact_incidents_smoke():
 def t_impact_incidents_indirect_dedup():
     """Task 4 補 T2 缺口: indirect 去重——節點 BFS 間接命中且 pitfall_when 觸發 → 只列 incidents。
 
-    設計:
-    - 節點 X(Issues/BFSIncident.md):pitfall_when glob 命中目標 code 檔;
-      同時 body 引用另一節點 S,S body 引用目標 code 檔(→ X BFS hop2 間接命中)。
-    - 斷言:X 在 incidents 且不在 indirect(incidents ∩ indirect = ∅)。
+    對照組正面驗證設計(非空洞):
+    - 節點 D(Systems/D.md): body inline-code 引用 app/svc.py → D 是 direct 命中。
+    - 節點 X(Issues/BFSIncident.md): body 引用 [[Systems/D]](backlink 到 D)。
+      → BFS 從 D 出發,沿 in_e["Systems/D.md"] 找到 X → X 是 hop=1 間接候選。
+    - 對照組(X 無 pitfall_when): 斷言 X 出現在 indirect(證 BFS 真能撈到 X)。
+    - 實驗組(X 有 pitfall_when glob 命中 svc.py): 斷言 X 只在 incidents、不在 indirect
+      (證去重真的把 X 從 indirect 移走,而非 X 本來就不在 indirect)。
+    兩組對比才證「去重生效」(非空洞)。
     """
     import json as _json
+    import shutil as _shutil
     import tempfile as _tf
     from pathlib import Path as _P
 
-    repo = _P(_tf.mkdtemp(prefix="gctl-t-indir-dedup-"))
-    (repo / "scripts").mkdir()
-    (repo / "scripts" / "lumos").write_text("# fake\n", encoding="utf-8")
-    # 目標 code 檔
-    (repo / "app").mkdir()
-    (repo / "app" / "svc.py").write_text("# service\n", encoding="utf-8")
+    # ---- 對照組(X 無 pitfall_when) ----
+    repo_ctrl = _P(_tf.mkdtemp(prefix="gctl-t-indir-ctrl-"))
+    try:
+        (repo_ctrl / "scripts").mkdir()
+        (repo_ctrl / "scripts" / "lumos").write_text("# fake\n", encoding="utf-8")
+        (repo_ctrl / "app").mkdir()
+        (repo_ctrl / "app" / "svc.py").write_text("# service\n", encoding="utf-8")
+        vault_ctrl = repo_ctrl / "docs" / "test-knowledge"
+        for sub in ("Systems", "Issues", "Verification", "Projects", "MOC"):
+            (vault_ctrl / sub).mkdir(parents=True, exist_ok=True)
+        (vault_ctrl / "MOC" / "idx.md").write_bytes(
+            "---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+        # 節點 D: body inline-code 引用 app/svc.py → D 是 direct 命中
+        (vault_ctrl / "Systems" / "D.md").write_text(
+            "---\ntype: system\nstatus: doing\n---\n"
+            "核心服務 `app/svc.py` 說明\n",
+            encoding="utf-8",
+        )
+        # 節點 X: body 引用 [[Systems/D]] → out_e[X]=[D], in_e[D]=[X]
+        # BFS 從 D 出發走 in_e → hop=1 撈到 X → X 在 indirect(無 pitfall_when)
+        (vault_ctrl / "Issues" / "BFSIncident.md").write_text(
+            "---\n"
+            "type: issue\n"
+            "status: open\n"
+            "---\n"
+            "相關系統 [[Systems/D]]\n",
+            encoding="utf-8",
+        )
+        abs_file_ctrl = str(repo_ctrl / "app" / "svc.py")
+        out_ctrl = run_lumos_capture(
+            ["impact", "--file", abs_file_ctrl, "--repo", str(repo_ctrl), "--json"])
+        d_ctrl = _json.loads(out_ctrl)
+        ctrl_indirect = {x["node"] for x in d_ctrl.get("indirect", [])}
+        ctrl_incidents = {x["node"] for x in d_ctrl.get("incidents", [])}
+        # 對照組斷言:X 應在 indirect(證 BFS 真能撈到 X)
+        check("impact_indirect_dedup [ctrl]: BFSIncident 在 indirect(BFS 真能撈到)",
+              "Issues/BFSIncident.md" in ctrl_indirect,
+              f"indirect={ctrl_indirect} incidents={ctrl_incidents} direct={[x['node'] for x in d_ctrl.get('direct',[])]}")
+        check("impact_indirect_dedup [ctrl]: BFSIncident 不在 incidents(無 trigger 不觸發)",
+              "Issues/BFSIncident.md" not in ctrl_incidents,
+              f"incidents={ctrl_incidents}")
+    finally:
+        _shutil.rmtree(repo_ctrl, ignore_errors=True)
 
-    vault = repo / "docs" / "test-knowledge"
-    for sub in ("Systems", "Issues", "Verification", "Projects", "MOC"):
-        (vault / sub).mkdir(parents=True, exist_ok=True)
-    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
-
-    # 節點 S: body 引用 app/svc.py → S 是 direct 命中
-    (vault / "Systems" / "S.md").write_text(
-        "---\ntype: system\nstatus: doing\n---\n"
-        "核心服務 `app/svc.py` 說明\n",
-        encoding="utf-8",
-    )
-    # 節點 X: pitfall_when glob 命中 app/svc.py + body 引用 [[Systems/S]]
-    # → X 本來會透過 S body 被 BFS hop2 撈到 indirect
-    # → 但因 pitfall_when 命中,去重後只在 incidents、不在 indirect
-    (vault / "Issues" / "BFSIncident.md").write_text(
-        "---\n"
-        "type: issue\n"
-        "status: open\n"
-        "pitfall_when:\n"
-        "  - \"glob:**/svc.py\"\n"
-        "---\n"
-        "相關系統 [[Systems/S]]\n",
-        encoding="utf-8",
-    )
-
-    abs_file = str(repo / "app" / "svc.py")
-    out = run_lumos_capture(["impact", "--file", abs_file, "--repo", str(repo), "--json"])
-    d = _json.loads(out)
-    inc_nodes = {x["node"] for x in d.get("incidents", [])}
-    indirect_nodes = {x["node"] for x in d.get("indirect", [])}
-
-    check("impact_indirect_dedup: BFSIncident 在 incidents",
-          "Issues/BFSIncident.md" in inc_nodes, f"incidents={d.get('incidents')}")
-    check("impact_indirect_dedup: incidents ∩ indirect = ∅",
-          inc_nodes.isdisjoint(indirect_nodes),
-          f"inc={inc_nodes} indirect={indirect_nodes}")
-    check("impact_indirect_dedup: BFSIncident 不在 indirect",
-          "Issues/BFSIncident.md" not in indirect_nodes,
-          f"indirect={indirect_nodes}")
+    # ---- 實驗組(X 有 pitfall_when 命中 svc.py) ----
+    repo_exp = _P(_tf.mkdtemp(prefix="gctl-t-indir-exp-"))
+    try:
+        (repo_exp / "scripts").mkdir()
+        (repo_exp / "scripts" / "lumos").write_text("# fake\n", encoding="utf-8")
+        (repo_exp / "app").mkdir()
+        (repo_exp / "app" / "svc.py").write_text("# service\n", encoding="utf-8")
+        vault_exp = repo_exp / "docs" / "test-knowledge"
+        for sub in ("Systems", "Issues", "Verification", "Projects", "MOC"):
+            (vault_exp / sub).mkdir(parents=True, exist_ok=True)
+        (vault_exp / "MOC" / "idx.md").write_bytes(
+            "---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+        # 節點 D: 同對照組
+        (vault_exp / "Systems" / "D.md").write_text(
+            "---\ntype: system\nstatus: doing\n---\n"
+            "核心服務 `app/svc.py` 說明\n",
+            encoding="utf-8",
+        )
+        # 節點 X: 加上 pitfall_when glob 命中 svc.py → 去重後只在 incidents
+        (vault_exp / "Issues" / "BFSIncident.md").write_text(
+            "---\n"
+            "type: issue\n"
+            "status: open\n"
+            "pitfall_when:\n"
+            "  - \"glob:**/svc.py\"\n"
+            "---\n"
+            "相關系統 [[Systems/D]]\n",
+            encoding="utf-8",
+        )
+        abs_file_exp = str(repo_exp / "app" / "svc.py")
+        out_exp = run_lumos_capture(
+            ["impact", "--file", abs_file_exp, "--repo", str(repo_exp), "--json"])
+        d_exp = _json.loads(out_exp)
+        exp_incidents = {x["node"] for x in d_exp.get("incidents", [])}
+        exp_indirect = {x["node"] for x in d_exp.get("indirect", [])}
+        # 實驗組斷言:去重後 X 只在 incidents、不在 indirect
+        check("impact_indirect_dedup [exp]: BFSIncident 在 incidents(trigger 命中)",
+              "Issues/BFSIncident.md" in exp_incidents,
+              f"incidents={d_exp.get('incidents')}")
+        check("impact_indirect_dedup [exp]: BFSIncident 不在 indirect(去重生效)",
+              "Issues/BFSIncident.md" not in exp_indirect,
+              f"indirect={exp_indirect}")
+        check("impact_indirect_dedup [exp]: incidents ∩ indirect = ∅",
+              exp_incidents.isdisjoint(exp_indirect),
+              f"inc={exp_incidents} indirect={exp_indirect}")
+    finally:
+        _shutil.rmtree(repo_exp, ignore_errors=True)
 
 
 def t_impact_incidents_main_only():
