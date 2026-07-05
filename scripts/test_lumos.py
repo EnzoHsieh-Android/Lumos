@@ -5024,6 +5024,204 @@ def t_impact_incidents_section():
               set(x) >= {"node", "matched_by", "contract", "combo"}, f"item={x}")
 
 
+# ─── Task 4: e2e/回歸 + 補前輪 review 缺口 ────────────────────────────────────
+
+def t_impact_incidents_regression():
+    """Task 4 Step1: 回歸——對現有無 pitfall_when 的真圖譜跑 impact --json → incidents 空。
+
+    本倉庫圖譜目前沒有 pitfall_when 事故節點,
+    確認不誤傷:direct/indirect 輸出不受影響,incidents 為 []。
+    """
+    import json as _json
+    out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", ".", "--json"])
+    d = _json.loads(out)
+    check("impact_incidents_regression: 頂層 incidents key 存在",
+          "incidents" in d, f"keys={set(d)}")
+    check("impact_incidents_regression: 本圖無 pitfall_when → incidents == []",
+          d["incidents"] == [], f"incidents={d['incidents']}")
+    # 確認 direct/indirect 不受影響(本圖有直接關聯節點)
+    check("impact_incidents_regression: direct key 仍存在",
+          "direct" in d, f"keys={set(d)}")
+    check("impact_incidents_regression: indirect key 仍存在",
+          "indirect" in d, f"keys={set(d)}")
+
+
+def t_impact_incidents_smoke():
+    """Task 4 Step3: 真機 smoke——暫造 pitfall_when 探針節點到真 vault → impact 撈到 → 清理。
+
+    流程:
+    1. 在真 vault Issues/ 建探針節點(_incident_probe.md),pitfall_when glob 命中 scripts/lumos。
+    2. lumos impact --file scripts/lumos --repo . --json → incidents 含探針節點。
+    3. finally 清理探針節點(不留 doctor 髒)。
+    """
+    import json as _json
+    from pathlib import Path as _P
+
+    vault_issues = _P("/Users/enzo/harness/lumos-toolchain/docs/lumos-toolchain-knowledge/Issues")
+    probe = vault_issues / "_incident_probe.md"
+    probe_content = (
+        "---\n"
+        "type: issue\n"
+        "status: open\n"
+        "pitfall_when:\n"
+        "  - \"glob:scripts/lumos\"\n"
+        "summary: |-\n"
+        "  KEY:測試探針,自動清理\n"
+        "---\n"
+        "# 測試探針事故節點\n"
+        "此節點由 t_impact_incidents_smoke 暫建,測試完自動刪除。\n"
+    )
+    try:
+        probe.write_text(probe_content, encoding="utf-8")
+        out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", ".", "--json"])
+        d = _json.loads(out)
+        inc_nodes = {x["node"] for x in d.get("incidents", [])}
+        check("impact_incidents_smoke: incidents 含探針節點",
+              "Issues/_incident_probe" in inc_nodes or
+              any("_incident_probe" in n for n in inc_nodes),
+              f"incidents nodes={inc_nodes}")
+        # matched_by 應含 glob 前綴
+        probe_hits = [x for x in d.get("incidents", []) if "_incident_probe" in x.get("node", "")]
+        check("impact_incidents_smoke: 探針 matched_by 含 glob:",
+              any("glob:" in x.get("matched_by", "") for x in probe_hits),
+              f"probe_hits={probe_hits}")
+    finally:
+        if probe.exists():
+            probe.unlink()
+
+
+def t_impact_incidents_indirect_dedup():
+    """Task 4 補 T2 缺口: indirect 去重——節點 BFS 間接命中且 pitfall_when 觸發 → 只列 incidents。
+
+    設計:
+    - 節點 X(Issues/BFSIncident.md):pitfall_when glob 命中目標 code 檔;
+      同時 body 引用另一節點 S,S body 引用目標 code 檔(→ X BFS hop2 間接命中)。
+    - 斷言:X 在 incidents 且不在 indirect(incidents ∩ indirect = ∅)。
+    """
+    import json as _json
+    import tempfile as _tf
+    from pathlib import Path as _P
+
+    repo = _P(_tf.mkdtemp(prefix="gctl-t-indir-dedup-"))
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake\n", encoding="utf-8")
+    # 目標 code 檔
+    (repo / "app").mkdir()
+    (repo / "app" / "svc.py").write_text("# service\n", encoding="utf-8")
+
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Issues", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+
+    # 節點 S: body 引用 app/svc.py → S 是 direct 命中
+    (vault / "Systems" / "S.md").write_text(
+        "---\ntype: system\nstatus: doing\n---\n"
+        "核心服務 `app/svc.py` 說明\n",
+        encoding="utf-8",
+    )
+    # 節點 X: pitfall_when glob 命中 app/svc.py + body 引用 [[Systems/S]]
+    # → X 本來會透過 S body 被 BFS hop2 撈到 indirect
+    # → 但因 pitfall_when 命中,去重後只在 incidents、不在 indirect
+    (vault / "Issues" / "BFSIncident.md").write_text(
+        "---\n"
+        "type: issue\n"
+        "status: open\n"
+        "pitfall_when:\n"
+        "  - \"glob:**/svc.py\"\n"
+        "---\n"
+        "相關系統 [[Systems/S]]\n",
+        encoding="utf-8",
+    )
+
+    abs_file = str(repo / "app" / "svc.py")
+    out = run_lumos_capture(["impact", "--file", abs_file, "--repo", str(repo), "--json"])
+    d = _json.loads(out)
+    inc_nodes = {x["node"] for x in d.get("incidents", [])}
+    indirect_nodes = {x["node"] for x in d.get("indirect", [])}
+
+    check("impact_indirect_dedup: BFSIncident 在 incidents",
+          "Issues/BFSIncident.md" in inc_nodes, f"incidents={d.get('incidents')}")
+    check("impact_indirect_dedup: incidents ∩ indirect = ∅",
+          inc_nodes.isdisjoint(indirect_nodes),
+          f"inc={inc_nodes} indirect={indirect_nodes}")
+    check("impact_indirect_dedup: BFSIncident 不在 indirect",
+          "Issues/BFSIncident.md" not in indirect_nodes,
+          f"indirect={indirect_nodes}")
+
+
+def t_impact_incidents_main_only():
+    """Task 4 補 T3 缺口: hook main() only-incidents e2e。
+
+    mock subprocess 讓 lumos impact 回「只有 incidents 非空(direct/indirect 空)」,
+    跑 hook main() → 斷言有注入且含「相關事故」段。
+    參照 t_impact_hook_inject 的 mock subprocess scenario。
+    """
+    import importlib.util
+    import io
+    import json as _json
+    import os
+    import uuid as _uuid
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    from unittest.mock import patch, MagicMock
+
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_main_only", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_main_only", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    # subprocess mock: 只有 incidents 非空,direct/indirect 皆空
+    proc_mock = MagicMock()
+    proc_mock.returncode = 0
+    proc_mock.stdout = _json.dumps({
+        "file": "app/svc.py",
+        "direct": [],
+        "indirect": [],
+        "incidents": [
+            {"node": "Issues/NPlus1", "matched_by": "glob:**/svc.py",
+             "contract": None, "combo": False}
+        ],
+    })
+    proc_mock.stderr = ""
+
+    fresh_sid = str(_uuid.uuid4())
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/some/project/app/svc.py"},
+        "session_id": fresh_sid,
+        "cwd": "/some/project",
+    }
+    env_patch = {"CLAUDE_PROJECT_DIR": "/some/project"}
+
+    with patch.object(m, "_find_lumos_script", return_value="/fake/lumos"), \
+         patch("subprocess.run", return_value=proc_mock), \
+         patch.dict(os.environ, env_patch), \
+         patch("sys.stdin", io.StringIO(_json.dumps(payload))):
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            try:
+                rc = m.main()
+            except SystemExit as e:
+                rc = e.code
+        out = buf.getvalue().strip()
+
+    check("impact_incidents_main_only: main() rc=0",
+          rc == 0, f"expected rc=0, got {rc}")
+    check("impact_incidents_main_only: stdout 非空(有注入)",
+          out != "", f"expected JSON on stdout, got {out!r}")
+    j = _json.loads(out)
+    ctx = j.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("impact_incidents_main_only: additionalContext 含「相關事故」段",
+          "相關事故" in ctx or "incident" in ctx.lower(),
+          f"ctx={ctx!r}")
+    check("impact_incidents_main_only: additionalContext 含事故節點名稱",
+          "Issues/NPlus1" in ctx, f"ctx={ctx!r}")
+    check("impact_incidents_main_only: additionalContext 含 matched_by",
+          "glob:" in ctx, f"ctx={ctx!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
