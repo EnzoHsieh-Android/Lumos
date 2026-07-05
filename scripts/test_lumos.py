@@ -3693,6 +3693,70 @@ def t_impact_cli_skeleton():
     check("impact: 缺 --file 應 rc2", run_lumos(["impact", "--repo", "."]) == 2, "")
 
 
+# ─── Task 2: code→node 反查(body inline-code,重讀盤,路徑規範化) ──────────────
+
+def make_fixture_vault(files: dict):
+    """建立 fixture repo:repo_root 含 scripts/ 頂層目錄 + docs/test-knowledge/ vault。
+    files: {vault-rel-path: content-str} — 直接寫進 vault 子目錄。
+    回傳 (env, repo_root):env 是 Env(vault),repo_root 是 Path。
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    repo = Path(tempfile.mkdtemp(prefix="gctl-impact-"))
+    # 建頂層 scripts/ 目錄(讓 _refcheck_scan 的 top_dirs 能認到 scripts/)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake lumos\n", encoding="utf-8")
+    # 建 vault
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    # 寫入測試節點
+    for rel_path, content in files.items():
+        p = vault / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    env = m.Env(vault)
+    return env, repo
+
+
+def t_impact_reverse_lookup():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_reverse_lookup = m._impact_reverse_lookup
+
+    env, repo = make_fixture_vault({
+        "Systems/A.md": "---\ntype: system\nstatus: doing\n---\nbody 提到 `scripts/lumos` 的用法",
+        "Systems/B.md": "---\ntype: system\nstatus: doing\n---\nbody 無關",
+        "Systems/C.md": "---\ntype: system\nstatus: doing\ncore_refs: scripts/lumos\n---\ncore 節點",
+    })
+    hits = _impact_reverse_lookup("scripts/lumos", env, repo)
+    check("impact_reverse_lookup: A(body inline-code 命中) 在結果中",
+          "Systems/A.md" in hits, f"hits={hits}")
+    check("impact_reverse_lookup: B(無引用) 不在結果中",
+          "Systems/B.md" not in hits, f"hits={hits}")
+    check("impact_reverse_lookup: C(core_refs 不算 code 反查 r7-F2) 不在結果中",
+          "Systems/C.md" not in hits, f"hits={hits}")
+
+    # 絕對路徑輸入規範化後仍命中
+    abs_path = str(repo / "scripts" / "lumos")
+    hits_abs = _impact_reverse_lookup(abs_path, env, repo)
+    check("impact_reverse_lookup: 絕對路徑輸入規範化後仍命中 A",
+          "Systems/A.md" in hits_abs, f"hits_abs={hits_abs}")
+    check("impact_reverse_lookup: 絕對路徑輸入規範化後 C 仍不在",
+          "Systems/C.md" not in hits_abs, f"hits_abs={hits_abs}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

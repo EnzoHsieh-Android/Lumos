@@ -5308,6 +5308,43 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
     return 1 if (n_missing or n_oor) else 0
 
 
+def _impact_reverse_lookup(rel_code_path, env, repo_root):
+    """給一支 code 路徑,反查「哪些圖譜節點的 body inline-code 引用了它」。
+
+    設計要點(Task 2):
+    - 只掃 body inline-code,絕不掃 core_refs(r7-F2)。
+    - 複用 _refcheck_scan(text, repo_root) 抽取 body inline-code 路徑;
+      Note 不存 body → 重讀盤每個 .md 餵它(r1-F1)。
+    - 路徑規範化(r3-F5):輸入若為絕對路徑先轉 repo-relative 再比對。
+    - _refcheck_scan 的 top_dirs 靜默過濾照舊(§4 天花板 5)。
+
+    回傳: list[node_rel] — body inline-code 命中 rel_code_path 的節點清單。
+    """
+    import os
+
+    repo_root = Path(repo_root)
+
+    # 路徑規範化:絕對路徑 → repo-relative
+    rp = str(rel_code_path)
+    if os.path.isabs(rp):
+        rp = os.path.relpath(rp, str(repo_root))
+
+    hits = []
+    for node_rel, note in env.notes.items():
+        # 重讀盤:Note 不存 body,直接讀原始 .md 文字
+        md_path = env.vault / node_rel
+        try:
+            text = md_path.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            continue
+        claims, _n_missing, _n_oor, _n_ok = _refcheck_scan(text, repo_root)
+        for claim in claims:
+            if claim["token"] == rp:
+                hits.append(node_rel)
+                break  # 同一節點只算一次
+    return hits
+
+
 def cmd_impact(file, repo=None, depth=2, as_json=False):
     """動手前算出哪些知識圖譜節點會被 code 改動波及(Task 1:骨架 + rc 協定)。
     rc 協定: 0=成功 / 3=vault 找不到 / 其他非 0=內部錯。
