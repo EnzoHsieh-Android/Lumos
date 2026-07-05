@@ -36,10 +36,21 @@ from pathlib import Path
 
 _IS_WIN = os.name == "nt"
 
+# ── Task 5: 版本標籤(人可讀;advisory nudge 用;非正確性 oracle) ───────────────
+LUMOS_VERSION = "v1.0"  # release 手動 bump;允許粗——它是標籤,不是內容指紋
+
 # ── CLAUDE.md sentinel 常數(Task 1: reinject)────────────────────────────────
 # START 行後面可能帶版本戳與說明(e.g. " v1.2 — 勿手改 -->"),故用前綴 find。
 _CLAUDE_START_PREFIX = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
 _CLAUDE_END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+# Task 5: START 行模板(含版本佔位符);reinject 時 .format(version=LUMOS_VERSION)。
+# 範本 graph-discipline.md 保持無版本戳(canonical prefix 形式);
+# 版本由 reinject 當下插值——單一源 = LUMOS_VERSION 常數,無「改範本忘 bump」風險。
+_START_TEMPLATE = (
+    "<!-- LUMOS:GRAPH-DISCIPLINE:START {version}"
+    " — 自動注入/更新,勿手改本區塊;"
+    "改範本 scripts/templates/graph-discipline.md -->"
+)
 # BlockSpan: body=兩 sentinel 之間的內容(strip 首尾空行),
 #            body_start/body_end=body 在原 text 中的字元位移,
 #            保證 text[body_start:body_end] == body。
@@ -849,6 +860,14 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
         else:
             ok("無失效檔案認領 (節點引用的 repo 路徑都存在)")
     print()
+
+    # Check N: 版本 nudge(軟提醒,dev-machine advisory;不算 issue、不擋 CI)
+    if repo_root is not None:
+        _nudge = _version_nudge(repo_root)
+        if _nudge:
+            section("N", "版本更新提示 (dev-machine advisory;不算 issue、不擋 CI)")
+            warn_soft([_nudge], _nudge, "跑 lumos update 刷新紀律區塊與工具組版本")
+            print()
 
     if ci:
         _append_governance_log(env.vault, gov_events)
@@ -3598,7 +3617,7 @@ def _extract_claude_block_span(text: str):
 # START 行(本 task 無版本戳;T5 會在此字串中插入版本號——形式保留易替換)
 
 
-def _expected_claude_body(root: Path, slug: str):
+def _expected_claude_body(root: Path, slug: str) -> "str | None":
     """讀 scripts/templates/graph-discipline.md,{{KG}} 替換後 strip → 預期 body 字串。
     範本不存在 → None(呼叫端 skip Check D)。
     算法與 _reinject_claude_block 完全一致(同一 source of truth)。"""
@@ -3608,11 +3627,9 @@ def _expected_claude_body(root: Path, slug: str):
     return tpl_path.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
 
 
-_REINJECT_START_LINE = (
-    "<!-- LUMOS:GRAPH-DISCIPLINE:START"
-    " — 自動注入/更新,勿手改本區塊;"
-    "改範本 scripts/templates/graph-discipline.md -->"
-)
+# _REINJECT_START_LINE 保留為相容別名(指向帶版本的 START 行,向後相容舊引用)。
+# 正式組 block 走 _START_TEMPLATE.format(version=LUMOS_VERSION)。
+_REINJECT_START_LINE = _START_TEMPLATE.format(version=LUMOS_VERSION)
 
 
 def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
@@ -3629,8 +3646,9 @@ def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
     if body is None:
         return ReInjectResult("no_template", None)
 
-    # 3. 組 block
-    block = _REINJECT_START_LINE + "\n" + body + "\n" + _CLAUDE_END
+    # 3. 組 block(START 行帶當前版本戳,機械插值——版本在 body 外,不影響 Check D 比對)
+    start_line = _START_TEMPLATE.format(version=LUMOS_VERSION)
+    block = start_line + "\n" + body + "\n" + _CLAUDE_END
 
     # 4. 讀 CLAUDE.md(去 BOM + CRLF 正規化)
     cm = root / "CLAUDE.md"
@@ -3740,6 +3758,81 @@ def _lumos_src(source=None):
     import os
     return Path(source or os.environ.get("LUMOS_HOME")
                 or (Path.home() / "harness" / "lumos-toolchain")).expanduser()
+
+
+# ── Task 5: 版本 parse + nudge ───────────────────────────────────────────────
+
+def _parse_sentinel_version(claude_text: str) -> "str | None":
+    """從 CLAUDE.md 文字中找 START sentinel 行,空格切分取形如 vX.Y 的欄位。
+    取不到(無 START / START 行無版本欄位) → None;不 crash。"""
+    _ver_re = re.compile(r"\bv\d+\.\d+\b")
+    for line in claude_text.splitlines():
+        if _CLAUDE_START_PREFIX in line:
+            # START 行存在,掃各 token 找 vX.Y
+            for token in line.split():
+                if _ver_re.fullmatch(token):
+                    return token
+            # START 行存在但無版本欄位 → None
+            return None
+    return None
+
+
+def _version_nudge(root: Path) -> "str | None":
+    """比對本專案 CLAUDE.md sentinel 版本 vs 來源 clone 的 LUMOS_VERSION。
+
+    - 來源 clone 不存在/不可達 → None(靜默 skip;CI 無來源 clone 不誤報)。
+    - CLAUDE 版本 < 來源版本(字串不等且 CLAUDE 較舊) → 軟提示字串。
+    - 相等 / CLAUDE 較新 / 任一取不到 → None。
+    """
+    # 1. 讀 CLAUDE.md sentinel 版本
+    cm = root / "CLAUDE.md"
+    if not cm.exists():
+        return None
+    try:
+        claude_text = cm.read_bytes()
+        if claude_text.startswith(b"\xef\xbb\xbf"):
+            claude_text = claude_text[3:]
+        claude_text = claude_text.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except OSError:
+        return None
+    claude_ver = _parse_sentinel_version(claude_text)
+    if claude_ver is None:
+        return None
+
+    # 2. 讀來源 clone 的 LUMOS_VERSION(文字 grep,不 import 避免副作用)
+    src = _lumos_src()
+    src_lumos = src / "scripts" / "lumos"
+    if not src_lumos.exists():
+        return None  # 來源不可達 → 靜默 skip
+    try:
+        _ver_pat = re.compile(r'^LUMOS_VERSION\s*=\s*"(v\d+\.\d+)"', re.MULTILINE)
+        src_text = src_lumos.read_text(encoding="utf-8", errors="replace")
+        m = _ver_pat.search(src_text)
+        if not m:
+            return None
+        src_ver = m.group(1)
+    except OSError:
+        return None
+
+    # 3. 比對:CLAUDE 版本 < 來源版本 → nudge(簡單字串不等判準;版本是 advisory)
+    if claude_ver == src_ver:
+        return None
+    # 嘗試 tuple 比對(vMAJOR.MINOR → (MAJOR, MINOR));取不到就用字串不等
+    def _ver_tuple(s):
+        try:
+            parts = s.lstrip("v").split(".")
+            return tuple(int(x) for x in parts)
+        except (ValueError, AttributeError):
+            return None
+    ct = _ver_tuple(claude_ver)
+    st = _ver_tuple(src_ver)
+    if ct is not None and st is not None and ct >= st:
+        return None  # CLAUDE 版本 ≥ 來源,不 nudge
+    # CLAUDE 落後(或無法比較)→ 提示
+    return (
+        f"本專案紀律區塊版本 {claude_ver} 落後來源 {src_ver},"
+        f" 可跑 lumos update 刷新"
+    )
 
 
 # vendored 工具組白名單(固定 5 檔,scripts/ 前綴;hooks/templates 兩夾另走整夾刪)。

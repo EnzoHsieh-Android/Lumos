@@ -6072,10 +6072,14 @@ def _make_reinject_root(td, tpl_content=None, claude_content=None):
 
 
 def _make_block(mod, slug, tpl_content):
-    """Helper: 組出 reinject 會寫入的完整 block 字串,供測試斷言用。"""
+    """Helper: 組出 reinject 會寫入的完整 block 字串,供測試斷言用。
+
+    引用 mod._START_TEMPLATE + mod.LUMOS_VERSION(非內聯常數),確保與實際 reinject
+    寫入的 START 行格式一致(版本戳一致)。T4 reviewer 要求:內聯字串會在版本戳加入後
+    讓 fixture 與正式格式不符。
+    """
     body = tpl_content.replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
-    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
-             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    START = mod._START_TEMPLATE.format(version=mod.LUMOS_VERSION)
     END = mod._CLAUDE_END
     return START + "\n" + body + "\n" + END
 
@@ -6564,11 +6568,22 @@ def _make_check_d_root(td, tpl_content=None, claude_content=None, slug="demo"):
 
 
 def _make_check_d_block(tpl_content, slug):
-    """組出 reinject 會寫入的完整 sentinel block,供 Check D fixture CLAUDE.md 使用。"""
+    """組出 reinject 會寫入的完整 sentinel block,供 Check D fixture CLAUDE.md 使用。
+
+    START 行引用 _START_TEMPLATE + LUMOS_VERSION 確保與正式 reinject 格式一致。
+    T4 reviewer 要求:不得內聯 START 常數字串——版本戳加入後內聯會讓 fixture 與
+    真正格式不符,導致 _extract_claude_block_span 判不出 found → 測試隱性 skip。
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "_lumos_for_block", GRAPHCTL,
+        loader=SourceFileLoader("_lumos_for_block", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
     body = tpl_content.replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
-    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
-             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
-    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    START = m._START_TEMPLATE.format(version=m.LUMOS_VERSION)
+    END = m._CLAUDE_END
     return START + "\n" + body + "\n" + END
 
 
@@ -6671,6 +6686,181 @@ def t_doctor_broken_reports():
         check("doctor_broken_reports: --ci 非零 exit",
               r.returncode != 0,
               f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+# ── Task 5: LUMOS_VERSION + 版本戳 + nudge ───────────────────────────────────
+
+
+def t_version_stamped_in_sentinel():
+    """reinject 後 CLAUDE.md 的 START 行必須含 LUMOS_VERSION(如 v1.0)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lumos_mod", GRAPHCTL, loader=SourceFileLoader("lumos_mod", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    version = m.LUMOS_VERSION  # 必須存在、格式 vX.Y
+    check("version_stamped: LUMOS_VERSION 常數存在且格式 vX.Y",
+          bool(__import__("re").fullmatch(r"v\d+\.\d+", version)),
+          f"got {version!r}")
+
+    # 建立臨時 root + 範本,跑 reinject,確認 START 行含版本
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        tpl_dir = root / "scripts" / "templates"
+        tpl_dir.mkdir(parents=True)
+        (tpl_dir / "graph-discipline.md").write_text(
+            "{{KG}} 紀律區塊測試", encoding="utf-8")
+        ri = m._reinject_claude_block(root, "myproj")
+        check("version_stamped: reinject created",
+              ri.status == "created", f"status={ri.status}")
+        cm_text = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        # START 行應含版本字串
+        start_line = [l for l in cm_text.splitlines() if m._CLAUDE_START_PREFIX in l]
+        check("version_stamped: START 行存在",
+              len(start_line) == 1, f"lines={start_line}")
+        if start_line:
+            check(f"version_stamped: START 行含 {version}",
+                  version in start_line[0], f"start_line={start_line[0]!r}")
+
+
+def t_version_parse_tolerant():
+    """_parse_sentinel_version:START 行無版本欄位 → 回 None、不 crash。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lumos_mod2", GRAPHCTL, loader=SourceFileLoader("lumos_mod2", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    # 無版本的 START 行
+    old_start = "<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改 -->"
+    text_no_ver = old_start + "\nbody\n" + "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    result = m._parse_sentinel_version(text_no_ver)
+    check("version_parse_tolerant: 無版本欄位 → None",
+          result is None, f"got {result!r}")
+
+    # 有版本的 START 行
+    ver_start = "<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改 -->"
+    text_with_ver = ver_start + "\nbody\n" + "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    result2 = m._parse_sentinel_version(text_with_ver)
+    check("version_parse_tolerant: 有版本欄位 → 取到 v1.0",
+          result2 == "v1.0", f"got {result2!r}")
+
+    # 完全空字串不 crash
+    result3 = m._parse_sentinel_version("")
+    check("version_parse_tolerant: 空字串 → None 不 crash",
+          result3 is None, f"got {result3!r}")
+
+
+def t_version_bump_not_trigger_guard():
+    """START 行帶舊版本(v0.9),body == 範本 → Check D 淨(0 漂移)。
+    關鍵:版本戳在 START 行(body 外),bump 不觸發內容守衛。"""
+    import tempfile
+    TPL = "知識圖譜路徑:{{KG}}\n\n這是圖譜紀律說明。"
+    SLUG = "myproj"
+    body = TPL.replace("{{KG}}", f"docs/{SLUG}-knowledge/").strip()
+    # START 行帶「舊版本」v0.9,但 body 完全符合範本
+    old_version_start = ("<!-- LUMOS:GRAPH-DISCIPLINE:START v0.9"
+                         " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    block_old_version = old_version_start + "\n" + body + "\n" + END
+    claude_content = "# CLAUDE.md\n\n前言\n\n" + block_old_version + "\n\n後記\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, vault = _make_check_d_root(td, tpl_content=TPL,
+                                          claude_content=claude_content, slug=SLUG)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "--vault", str(vault), "doctor", "--ci"],
+            capture_output=True, text=True,
+        )
+        check("version_bump_not_trigger_guard: 版本舊但 body 符合 → 無不同步警告",
+              "不同步" not in r.stdout,
+              f"stdout={r.stdout}")
+        check("version_bump_not_trigger_guard: doctor 整體 0 issues(版本不觸發內容守衛)",
+              r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+def t_version_nudge_when_behind():
+    """fixture CLAUDE v0.9、來源 clone LUMOS_VERSION=v1.0 → nudge 回提示字串。"""
+    import importlib.util, os
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lumos_nudge", GRAPHCTL, loader=SourceFileLoader("lumos_nudge", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    with tempfile.TemporaryDirectory() as td:
+        # 建造臨時「來源 clone」:只需含 scripts/lumos 且其中有 LUMOS_VERSION = "v1.0"
+        src_dir = Path(td) / "fake_src"
+        (src_dir / "scripts").mkdir(parents=True)
+        fake_lumos = src_dir / "scripts" / "lumos"
+        fake_lumos.write_text('LUMOS_VERSION = "v1.0"\n', encoding="utf-8")
+
+        # 建造 CLAUDE.md 含 v0.9 的 START 行
+        ver_start = ("<!-- LUMOS:GRAPH-DISCIPLINE:START v0.9"
+                     " — 自動注入/更新,勿手改 -->")
+        END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+        claude_text = ver_start + "\nbody content\n" + END
+        root = Path(td) / "consumer"
+        root.mkdir()
+        (root / "CLAUDE.md").write_text(claude_text, encoding="utf-8")
+
+        # 用 LUMOS_HOME 指向臨時來源
+        orig_home = os.environ.get("LUMOS_HOME")
+        os.environ["LUMOS_HOME"] = str(src_dir)
+        try:
+            nudge = m._version_nudge(root)
+        finally:
+            if orig_home is None:
+                os.environ.pop("LUMOS_HOME", None)
+            else:
+                os.environ["LUMOS_HOME"] = orig_home
+
+        check("version_nudge_when_behind: 回提示字串(非 None)",
+              nudge is not None, f"got {nudge!r}")
+        if nudge is not None:
+            check("version_nudge_when_behind: 提示含 v0.9 或 v1.0",
+                  "v0.9" in nudge or "v1.0" in nudge, f"nudge={nudge!r}")
+            check("version_nudge_when_behind: 提示含 update 相關字眼",
+                  "update" in nudge or "lumos" in nudge.lower(),
+                  f"nudge={nudge!r}")
+
+
+def t_nudge_skip_when_no_source():
+    """_lumos_src() 指向不存在路徑 → _version_nudge 回 None、不 crash。"""
+    import importlib.util, os
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lumos_ns", GRAPHCTL, loader=SourceFileLoader("lumos_ns", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    with tempfile.TemporaryDirectory() as td:
+        # CLAUDE.md 含 v0.9
+        ver_start = ("<!-- LUMOS:GRAPH-DISCIPLINE:START v0.9"
+                     " — 自動注入/更新,勿手改 -->")
+        END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+        root = Path(td) / "consumer"
+        root.mkdir()
+        (root / "CLAUDE.md").write_text(
+            ver_start + "\nbody\n" + END, encoding="utf-8")
+
+        # 指向不存在的來源
+        nonexistent = str(Path(td) / "does_not_exist")
+        orig_home = os.environ.get("LUMOS_HOME")
+        os.environ["LUMOS_HOME"] = nonexistent
+        try:
+            nudge = m._version_nudge(root)
+        finally:
+            if orig_home is None:
+                os.environ.pop("LUMOS_HOME", None)
+            else:
+                os.environ["LUMOS_HOME"] = orig_home
+
+        check("nudge_skip_when_no_source: 來源不存在 → None 不 crash",
+              nudge is None, f"got {nudge!r}")
 
 
 def main():
