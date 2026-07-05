@@ -5553,6 +5553,52 @@ def _impact_collect(direct_node_rel, env, depth=2):
     return {"direct": direct_list, "indirect": indirect_list}
 
 
+def _match_incident_triggers(file_rel, file_content, env):
+    """給被碰 code 檔(路徑 + 內容),掃全圖有 pitfall_when 的事故節點,比對觸發條件。
+
+    觸發條件格式(§2):
+    - "glob:<pattern>"  — 比 file_rel 路徑(fnmatch/PurePath.match)。
+    - "content:<regex>" — 比 file_content 內容(re.search)。新建檔空字串 → content 全 miss。
+
+    回傳: list[dict]  每筆 {"node": node_rel, "matched_by": "<trigger 字串>"}。
+    """
+    import re
+    import fnmatch
+    from pathlib import PurePath
+
+    results = []
+    for node_rel, note in env.notes.items():
+        triggers = as_list(note.fields.get("pitfall_when"))
+        if not triggers:
+            continue
+        for trigger in triggers:
+            if trigger.startswith("glob:"):
+                pat = trigger[len("glob:"):]
+                # PurePath.match 支援 ** 遞迴匹配(Python 3.12+);
+                # 對舊版用 fnmatch.fnmatch 作後備以支援基本 * 通配。
+                try:
+                    hit = PurePath(file_rel).match(pat)
+                except Exception:
+                    hit = False
+                if not hit:
+                    # fnmatch 後備:支援 **/*Repository*.py 型 pattern
+                    hit = fnmatch.fnmatch(file_rel, pat)
+                if hit:
+                    results.append({"node": node_rel, "matched_by": trigger})
+                    break  # 同節點只計一次
+            elif trigger.startswith("content:"):
+                pat = trigger[len("content:"):]
+                if not file_content:  # 新建檔無內容 → content 全 miss
+                    continue
+                try:
+                    if re.search(pat, file_content):
+                        results.append({"node": node_rel, "matched_by": trigger})
+                        break  # 同節點只計一次
+                except re.error:
+                    continue  # 無效 regex 靜默跳過
+    return results
+
+
 def _impact_load_config(repo_root):
     """讀取 repo_root/.lumos/impact.json → {"depth":int,"ttl_min":int}。
     缺檔或解析失敗 → fail-open 回預設 {"depth":2,"ttl_min":20}。
@@ -5689,14 +5735,47 @@ def cmd_impact(file, repo=None, depth=None, as_json=False):
     all_direct.sort(key=lambda x: -contract_priority(x.get("contract")))
     all_indirect.sort(key=lambda x: (x.get("hop", 999), -contract_priority(x.get("contract"))))
 
-    # 7. 輸出
+    # 7. 路徑規範化(用於輸出 + _match_incident_triggers 的 file_rel)
     rel_file = str(file)
     if os.path.isabs(rel_file) and repo_root is not None:
         rel_file = os.path.relpath(rel_file, str(repo_root))
 
+    # 8. incidents 段(Task 2):掃全圖 pitfall_when trigger,比對被碰檔。
+    # 讀被碰檔內容:--file 絕對路徑讀盤;讀不到(新建檔/不存在)→ 空字串,只 glob 生效。
+    _abs_file = str(file)
+    if not os.path.isabs(_abs_file) and repo_root is not None:
+        _abs_file = str(repo_root / _abs_file)
+    try:
+        file_content = Path(_abs_file).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        file_content = ""
+
+    # 呼叫 _match_incident_triggers,取得原始命中列表(含 node, matched_by)
+    _raw_incidents = _match_incident_triggers(rel_file, file_content, env)
+
+    # 補 contract/combo(復用 _impact_contract);建 all_incidents list
+    all_incidents = []
+    for inc in _raw_incidents:
+        inc_note = env.notes.get(inc["node"])
+        inc_contract, inc_combo = _impact_contract(inc_note) if inc_note else (None, False)
+        all_incidents.append({
+            "node": inc["node"],
+            "matched_by": inc["matched_by"],
+            "contract": inc_contract,
+            "combo": inc_combo,
+        })
+
+    # 去重(§4):某節點既在 incidents 又在 direct/indirect → 從 direct/indirect 移除
+    incident_node_set = {x["node"] for x in all_incidents}
+    if incident_node_set:
+        all_direct = [x for x in all_direct if x["node"] not in incident_node_set]
+        all_indirect = [x for x in all_indirect if x["node"] not in incident_node_set]
+
+    # 9. 輸出
     if as_json:
         print(json.dumps(
-            {"file": rel_file, "direct": all_direct, "indirect": all_indirect},
+            {"file": rel_file, "direct": all_direct, "indirect": all_indirect,
+             "incidents": all_incidents},
             ensure_ascii=False,
         ))
     else:
@@ -5712,6 +5791,11 @@ def cmd_impact(file, repo=None, depth=None, as_json=False):
         for x in all_indirect:
             cross = " [跨repo葉,不展開]" if x.get("cross_repo") else ""
             print(f"  hop{x['hop']}  {x['node']}  {x['direction']} ← via {x['via']} ← {x['from']}{cross}")
+        if all_incidents:
+            print(f"── 相關事故 ({len(all_incidents)}) ──")
+            for x in all_incidents:
+                contract_tag = f" ★{x['contract']}★" if x.get("contract") else ""
+                print(f"  {x['node']}{contract_tag}  (trigger: {x['matched_by']})")
 
     return 0
 

@@ -55,8 +55,9 @@ Compose 重組效能(SARIF linter 蓋不到的偏科坑)——吃 Compose Compil
 linter 還沒收錄的新坑,量少。反證預篩(駁倒即丟)+ 駁不倒進候選 + 人輕量放行。無機械 oracle,人的閘省不掉。
 **落地**:`lumos-pitfalls-gapfill` skill(on-demand,無 lumos 新碼)+ `Issues/linter-gap實務隱患`(每專案,兩段自去重)。見 [[pitfalls網搜補漏_計劃]] / [[2026-07-05_pitfalls網搜補漏]]。
 
-### ④ 事故語料進圖譜
+### ④ 事故語料進圖譜 ✅ DONE(2026-07-05)
 專案自己踩過的具體坑(linter 沒有)→ 寫成圖譜節點 + 觸發條件 → 實作進場自動餵(像 refcheck manifest)。原 pitfalls-code-loop spec 的 v2。
+**落地**:pattern-trigger 機制——事故節點 `pitfall_when`(glob/content-regex)→ lumos impact `incidents` 段 → 復用 impact hook 進場自動餵。補 impact「跨檔按主題觸發」缺口。見 [[pitfalls事故觸發_計劃]] / [[2026-07-05_pitfalls事故觸發]]。
 
 ## 相關
 - 起點認知:`docs/design/2026-07-04-pitfalls-code-loop.md`(通則層已 merge;偏科層原設計「自建網搜迭代包」經本 brainstorm 推翻,改吃 linter)。

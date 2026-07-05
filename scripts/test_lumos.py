@@ -4044,8 +4044,8 @@ def t_impact_json_schema_and_sort():
     out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", FIX, "--json"])
     d = _json.loads(out)
 
-    check("impact_json: 頂層 key 集合 == {file,direct,indirect}",
-          set(d) == {"file", "direct", "indirect"}, f"keys={set(d)}")
+    check("impact_json: 頂層 key 集合 == {file,direct,indirect,incidents}",
+          set(d) == {"file", "direct", "indirect", "incidents"}, f"keys={set(d)}")
 
     # direct 欄位: 必有 node/hit/contract/combo; 不得有 hop/from
     for x in d["direct"]:
@@ -4722,6 +4722,97 @@ def t_impact_hook_inject():
           f"got {j_main}")
 
 
+def t_impact_hook_incidents_inject():
+    """Task 3: impact hook 注入 incidents 段。
+
+    測試 build_additional_context 納入 incidents 段,
+    及 inject_additional_context 的「空集合不注入」判定納入 incidents。
+    """
+    import importlib.util
+    import io
+    import json
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    from unittest.mock import patch
+
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_incidents", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_incidents", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    inject_additional_context = m.inject_additional_context
+    build_additional_context = m.build_additional_context
+
+    def hook_run_with_impact(impact_data: dict) -> str:
+        """呼叫 inject_additional_context,捕捉 stdout 回傳。"""
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            inject_additional_context(impact_data)
+        return buf.getvalue().strip()
+
+    # ── 1. 非空 incidents(direct/indirect 皆空)→ stdout 非空,含「相關事故」段 ──
+    out = hook_run_with_impact({
+        "direct": [],
+        "indirect": [],
+        "incidents": [{"node": "Issues/N1", "matched_by": "glob:**/*Repo*", "contract": None, "combo": False}]
+    })
+    check("impact_hook_incidents_inject: 非空 incidents → stdout 非空",
+          out != "",
+          f"expected non-empty stdout, got {out!r}")
+    j = json.loads(out)
+    ctx = j["hookSpecificOutput"]["additionalContext"]
+    check("impact_hook_incidents_inject: additionalContext 含「相關事故」或 incident",
+          "相關事故" in ctx or "incident" in ctx.lower(),
+          f"ctx={ctx!r}")
+    check("impact_hook_incidents_inject: additionalContext 含事故節點名稱",
+          "Issues/N1" in ctx,
+          f"ctx={ctx!r}")
+    check("impact_hook_incidents_inject: additionalContext 含 matched_by",
+          "glob:**/*Repo*" in ctx,
+          f"ctx={ctx!r}")
+
+    # ── 2. 全空(direct/indirect/incidents 皆空)→ 不注入 ──
+    out_all_empty = hook_run_with_impact({"direct": [], "indirect": [], "incidents": []})
+    check("impact_hook_incidents_inject: 全空(含空 incidents)不注入",
+          out_all_empty == "",
+          f"expected empty stdout for all-empty impact, got {out_all_empty!r}")
+
+    # ── 3. 空 incidents 但有 direct → 注入(direct 主段),不含「相關事故」段 ──
+    out_no_inc = hook_run_with_impact({
+        "direct": [{"node": "Systems/A", "hit": "body-inline-code", "contract": None, "combo": False}],
+        "indirect": [],
+        "incidents": [],
+    })
+    check("impact_hook_incidents_inject: 空 incidents 有 direct → 仍注入",
+          out_no_inc != "",
+          f"expected non-empty stdout, got {out_no_inc!r}")
+    j_no_inc = json.loads(out_no_inc)
+    ctx_no_inc = j_no_inc["hookSpecificOutput"]["additionalContext"]
+    check("impact_hook_incidents_inject: 空 incidents → 無「相關事故」段",
+          "相關事故" not in ctx_no_inc,
+          f"ctx={ctx_no_inc!r}")
+
+    # ── 4. build_additional_context 含 incidents 時確有「相關事故」段 ──
+    ctx_build = build_additional_context({
+        "direct": [],
+        "indirect": [],
+        "incidents": [
+            {"node": "Issues/SQL_NPlus1", "matched_by": "content:SELECT.*FROM",
+             "contract": "INVARIANT", "combo": False},
+        ],
+    })
+    check("impact_hook_incidents_inject: build_additional_context 含「相關事故」標題",
+          "相關事故" in ctx_build,
+          f"ctx_build={ctx_build!r}")
+    check("impact_hook_incidents_inject: build_additional_context 含事故節點名稱",
+          "Issues/SQL_NPlus1" in ctx_build,
+          f"ctx_build={ctx_build!r}")
+    check("impact_hook_incidents_inject: build_additional_context incidents 含合約標記",
+          "INVARIANT" in ctx_build,
+          f"ctx_build={ctx_build!r}")
+
+
 def t_impact_hook_find_lumos_real():
     """C1 回歸:_find_lumos_script() 真實呼叫(不 mock)應能解析到可用的 lumos。
 
@@ -4827,6 +4918,358 @@ def t_impact_hook_registration_source():
     check("impact_hook_registration_source: HOOK_ENTRIES PreToolUse 含 impact-hook.py",
           found,
           f"entries={entries!r}")
+
+
+# ─── Task 1: _match_incident_triggers(pitfall_when glob/content-regex) ──────────
+
+def t_match_incident_triggers():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_mit", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_mit", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _match_incident_triggers = m._match_incident_triggers
+
+    env, _ = make_fixture_vault({
+        "Issues/N1.md": "---\npitfall_when:\n  - \"glob:**/*Repository*.py\"\n---\nN+1 事故",
+        "Issues/SQL.md": "---\npitfall_when:\n  - \"content:SELECT\\s.*FROM\"\n---\nraw SQL 事故",
+        "Issues/None.md": "---\n---\n無 trigger",
+    })
+    # glob 命中路徑
+    r = _match_incident_triggers("app/UserRepository.py", "code", env)
+    check("match_incident: glob 命中 Issues/N1.md",
+          any(x["node"] == "Issues/N1.md" for x in r), f"r={r}")
+    # content-regex 命中內容
+    r2 = _match_incident_triggers("x.py", "q = 'SELECT a FROM t'", env)
+    check("match_incident: content-regex 命中 Issues/SQL.md",
+          any(x["node"] == "Issues/SQL.md" for x in r2), f"r2={r2}")
+    # 都不命中
+    check("match_incident: 都不命中回空 list",
+          _match_incident_triggers("x.py", "nothing", env) == [], "expected []")
+    # 新建檔無 content → 只 glob
+    r3 = _match_incident_triggers("app/UserRepository.py", "", env)
+    check("match_incident: 新建檔 glob 仍命中 N1.md",
+          any(x["node"] == "Issues/N1.md" for x in r3), f"r3={r3}")
+    check("match_incident: 新建檔 content-regex miss SQL.md",
+          not any(x["node"] == "Issues/SQL.md" for x in r3), f"r3={r3}")
+    # matched_by 欄位存在且含命中的 trigger 字串
+    r_mb = _match_incident_triggers("app/UserRepository.py", "code", env)
+    n1_hit = next((x for x in r_mb if x["node"] == "Issues/N1.md"), None)
+    check("match_incident: matched_by 含命中 trigger",
+          n1_hit is not None and "glob:" in n1_hit.get("matched_by", ""), f"n1_hit={n1_hit}")
+
+
+def t_impact_incidents_section():
+    """Task 2: --json incidents 段 + trigger 去重 + 讀被碰檔內容。
+
+    fixture:
+    - repo/app/UserRepository.py  (實際存在的 code 檔)
+    - Issues/N1.md  pitfall_when glob 命中 UserRepository.py
+                    且 body 引用 `app/UserRepository.py`(→ 本來 direct)
+    去重斷言:N1.md 只列 incidents、不在 direct。
+    無 pitfall_when 節點不進 incidents。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    repo = Path(_tf.mkdtemp(prefix="gctl-t-inc-"))
+    # scripts/ 頂層目錄(讓 _refcheck_scan top_dirs 認到)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake\n", encoding="utf-8")
+    # 被碰 code 檔(content-regex 測試用,可為空)
+    (repo / "app").mkdir()
+    (repo / "app" / "UserRepository.py").write_text("# repo\n", encoding="utf-8")
+    # vault
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Issues", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    # 事故節點: pitfall_when glob + body 引用 app/UserRepository.py(→ 本來進 direct)
+    (vault / "Issues" / "N1.md").write_text(
+        "---\npitfall_when:\n  - \"glob:**/*Repository*.py\"\n---\n"
+        "引用 `app/UserRepository.py` 的用法\n",
+        encoding="utf-8",
+    )
+    # 普通系統節點(無 pitfall_when): 也引用同一 code 檔 → 應留在 direct
+    (vault / "Systems" / "Normal.md").write_text(
+        "---\ntype: system\nstatus: doing\n---\n"
+        "也引用 `app/UserRepository.py`\n",
+        encoding="utf-8",
+    )
+
+    FIX = str(repo)
+    # 用絕對路徑傳 --file(讓 cmd_impact 能讀盤取 content)
+    abs_file = str(repo / "app" / "UserRepository.py")
+    out = run_lumos_capture(["impact", "--file", abs_file, "--repo", FIX, "--json"])
+    d = _json.loads(out)
+
+    check("impact_incidents: 頂層 incidents key 存在",
+          "incidents" in d, f"keys={set(d)}")
+    inc_nodes = {x["node"] for x in d.get("incidents", [])}
+    direct_nodes = {x["node"] for x in d.get("direct", [])}
+
+    check("impact_incidents: N1.md 進 incidents",
+          "Issues/N1.md" in inc_nodes, f"incidents={d.get('incidents')}")
+    # 去重: incidents ∩ direct = ∅
+    check("impact_incidents: 去重——incidents ∩ direct = ∅",
+          inc_nodes.isdisjoint(direct_nodes),
+          f"inc={inc_nodes} direct={direct_nodes}")
+    # Normal.md(無 pitfall_when)應留在 direct
+    check("impact_incidents: Normal.md(無 pitfall_when)留在 direct",
+          "Systems/Normal.md" in direct_nodes, f"direct={direct_nodes}")
+    # incidents 每筆含必要欄位
+    for x in d.get("incidents", []):
+        check("impact_incidents: 每筆含 node/matched_by/contract/combo",
+              set(x) >= {"node", "matched_by", "contract", "combo"}, f"item={x}")
+
+
+# ─── Task 4: e2e/回歸 + 補前輪 review 缺口 ────────────────────────────────────
+
+def t_impact_incidents_regression():
+    """Task 4 Step1: 回歸——對現有無 pitfall_when 的真圖譜跑 impact --json → incidents 空。
+
+    本倉庫圖譜目前沒有 pitfall_when 事故節點,
+    確認不誤傷:direct/indirect 輸出不受影響,incidents 為 []。
+    """
+    import json as _json
+    out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", ".", "--json"])
+    d = _json.loads(out)
+    check("impact_incidents_regression: 頂層 incidents key 存在",
+          "incidents" in d, f"keys={set(d)}")
+    check("impact_incidents_regression: 本圖無 pitfall_when → incidents == []",
+          d["incidents"] == [], f"incidents={d['incidents']}")
+    # 確認 direct/indirect 不受影響(本圖有直接關聯節點)
+    check("impact_incidents_regression: direct key 仍存在",
+          "direct" in d, f"keys={set(d)}")
+    check("impact_incidents_regression: indirect key 仍存在",
+          "indirect" in d, f"keys={set(d)}")
+
+
+def t_impact_incidents_smoke():
+    """Task 4 Step3: 真機 smoke——暫造 pitfall_when 探針節點到真 vault → impact 撈到 → 清理。
+
+    流程:
+    1. 在真 vault Issues/ 建探針節點(_incident_probe.md),pitfall_when glob 命中 scripts/lumos。
+    2. lumos impact --file scripts/lumos --repo . --json → incidents 含探針節點。
+    3. finally 清理探針節點(不留 doctor 髒)。
+    """
+    import json as _json
+    from pathlib import Path as _P
+
+    vault_issues = _P("/Users/enzo/harness/lumos-toolchain/docs/lumos-toolchain-knowledge/Issues")
+    probe = vault_issues / "_incident_probe.md"
+    probe_content = (
+        "---\n"
+        "type: issue\n"
+        "status: open\n"
+        "pitfall_when:\n"
+        "  - \"glob:scripts/lumos\"\n"
+        "summary: |-\n"
+        "  KEY:測試探針,自動清理\n"
+        "---\n"
+        "# 測試探針事故節點\n"
+        "此節點由 t_impact_incidents_smoke 暫建,測試完自動刪除。\n"
+    )
+    try:
+        probe.write_text(probe_content, encoding="utf-8")
+        out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", ".", "--json"])
+        d = _json.loads(out)
+        inc_nodes = {x["node"] for x in d.get("incidents", [])}
+        check("impact_incidents_smoke: incidents 含探針節點",
+              "Issues/_incident_probe" in inc_nodes or
+              any("_incident_probe" in n for n in inc_nodes),
+              f"incidents nodes={inc_nodes}")
+        # matched_by 應含 glob 前綴
+        probe_hits = [x for x in d.get("incidents", []) if "_incident_probe" in x.get("node", "")]
+        check("impact_incidents_smoke: 探針 matched_by 含 glob:",
+              any("glob:" in x.get("matched_by", "") for x in probe_hits),
+              f"probe_hits={probe_hits}")
+    finally:
+        if probe.exists():
+            probe.unlink()
+
+
+def t_impact_incidents_indirect_dedup():
+    """Task 4 補 T2 缺口: indirect 去重——節點 BFS 間接命中且 pitfall_when 觸發 → 只列 incidents。
+
+    對照組正面驗證設計(非空洞):
+    - 節點 D(Systems/D.md): body inline-code 引用 app/svc.py → D 是 direct 命中。
+    - 節點 X(Issues/BFSIncident.md): body 引用 [[Systems/D]](backlink 到 D)。
+      → BFS 從 D 出發,沿 in_e["Systems/D.md"] 找到 X → X 是 hop=1 間接候選。
+    - 對照組(X 無 pitfall_when): 斷言 X 出現在 indirect(證 BFS 真能撈到 X)。
+    - 實驗組(X 有 pitfall_when glob 命中 svc.py): 斷言 X 只在 incidents、不在 indirect
+      (證去重真的把 X 從 indirect 移走,而非 X 本來就不在 indirect)。
+    兩組對比才證「去重生效」(非空洞)。
+    """
+    import json as _json
+    import shutil as _shutil
+    import tempfile as _tf
+    from pathlib import Path as _P
+
+    # ---- 對照組(X 無 pitfall_when) ----
+    repo_ctrl = _P(_tf.mkdtemp(prefix="gctl-t-indir-ctrl-"))
+    try:
+        (repo_ctrl / "scripts").mkdir()
+        (repo_ctrl / "scripts" / "lumos").write_text("# fake\n", encoding="utf-8")
+        (repo_ctrl / "app").mkdir()
+        (repo_ctrl / "app" / "svc.py").write_text("# service\n", encoding="utf-8")
+        vault_ctrl = repo_ctrl / "docs" / "test-knowledge"
+        for sub in ("Systems", "Issues", "Verification", "Projects", "MOC"):
+            (vault_ctrl / sub).mkdir(parents=True, exist_ok=True)
+        (vault_ctrl / "MOC" / "idx.md").write_bytes(
+            "---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+        # 節點 D: body inline-code 引用 app/svc.py → D 是 direct 命中
+        (vault_ctrl / "Systems" / "D.md").write_text(
+            "---\ntype: system\nstatus: doing\n---\n"
+            "核心服務 `app/svc.py` 說明\n",
+            encoding="utf-8",
+        )
+        # 節點 X: body 引用 [[Systems/D]] → out_e[X]=[D], in_e[D]=[X]
+        # BFS 從 D 出發走 in_e → hop=1 撈到 X → X 在 indirect(無 pitfall_when)
+        (vault_ctrl / "Issues" / "BFSIncident.md").write_text(
+            "---\n"
+            "type: issue\n"
+            "status: open\n"
+            "---\n"
+            "相關系統 [[Systems/D]]\n",
+            encoding="utf-8",
+        )
+        abs_file_ctrl = str(repo_ctrl / "app" / "svc.py")
+        out_ctrl = run_lumos_capture(
+            ["impact", "--file", abs_file_ctrl, "--repo", str(repo_ctrl), "--json"])
+        d_ctrl = _json.loads(out_ctrl)
+        ctrl_indirect = {x["node"] for x in d_ctrl.get("indirect", [])}
+        ctrl_incidents = {x["node"] for x in d_ctrl.get("incidents", [])}
+        # 對照組斷言:X 應在 indirect(證 BFS 真能撈到 X)
+        check("impact_indirect_dedup [ctrl]: BFSIncident 在 indirect(BFS 真能撈到)",
+              "Issues/BFSIncident.md" in ctrl_indirect,
+              f"indirect={ctrl_indirect} incidents={ctrl_incidents} direct={[x['node'] for x in d_ctrl.get('direct',[])]}")
+        check("impact_indirect_dedup [ctrl]: BFSIncident 不在 incidents(無 trigger 不觸發)",
+              "Issues/BFSIncident.md" not in ctrl_incidents,
+              f"incidents={ctrl_incidents}")
+    finally:
+        _shutil.rmtree(repo_ctrl, ignore_errors=True)
+
+    # ---- 實驗組(X 有 pitfall_when 命中 svc.py) ----
+    repo_exp = _P(_tf.mkdtemp(prefix="gctl-t-indir-exp-"))
+    try:
+        (repo_exp / "scripts").mkdir()
+        (repo_exp / "scripts" / "lumos").write_text("# fake\n", encoding="utf-8")
+        (repo_exp / "app").mkdir()
+        (repo_exp / "app" / "svc.py").write_text("# service\n", encoding="utf-8")
+        vault_exp = repo_exp / "docs" / "test-knowledge"
+        for sub in ("Systems", "Issues", "Verification", "Projects", "MOC"):
+            (vault_exp / sub).mkdir(parents=True, exist_ok=True)
+        (vault_exp / "MOC" / "idx.md").write_bytes(
+            "---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+        # 節點 D: 同對照組
+        (vault_exp / "Systems" / "D.md").write_text(
+            "---\ntype: system\nstatus: doing\n---\n"
+            "核心服務 `app/svc.py` 說明\n",
+            encoding="utf-8",
+        )
+        # 節點 X: 加上 pitfall_when glob 命中 svc.py → 去重後只在 incidents
+        (vault_exp / "Issues" / "BFSIncident.md").write_text(
+            "---\n"
+            "type: issue\n"
+            "status: open\n"
+            "pitfall_when:\n"
+            "  - \"glob:**/svc.py\"\n"
+            "---\n"
+            "相關系統 [[Systems/D]]\n",
+            encoding="utf-8",
+        )
+        abs_file_exp = str(repo_exp / "app" / "svc.py")
+        out_exp = run_lumos_capture(
+            ["impact", "--file", abs_file_exp, "--repo", str(repo_exp), "--json"])
+        d_exp = _json.loads(out_exp)
+        exp_incidents = {x["node"] for x in d_exp.get("incidents", [])}
+        exp_indirect = {x["node"] for x in d_exp.get("indirect", [])}
+        # 實驗組斷言:去重後 X 只在 incidents、不在 indirect
+        check("impact_indirect_dedup [exp]: BFSIncident 在 incidents(trigger 命中)",
+              "Issues/BFSIncident.md" in exp_incidents,
+              f"incidents={d_exp.get('incidents')}")
+        check("impact_indirect_dedup [exp]: BFSIncident 不在 indirect(去重生效)",
+              "Issues/BFSIncident.md" not in exp_indirect,
+              f"indirect={exp_indirect}")
+        check("impact_indirect_dedup [exp]: incidents ∩ indirect = ∅",
+              exp_incidents.isdisjoint(exp_indirect),
+              f"inc={exp_incidents} indirect={exp_indirect}")
+    finally:
+        _shutil.rmtree(repo_exp, ignore_errors=True)
+
+
+def t_impact_incidents_main_only():
+    """Task 4 補 T3 缺口: hook main() only-incidents e2e。
+
+    mock subprocess 讓 lumos impact 回「只有 incidents 非空(direct/indirect 空)」,
+    跑 hook main() → 斷言有注入且含「相關事故」段。
+    參照 t_impact_hook_inject 的 mock subprocess scenario。
+    """
+    import importlib.util
+    import io
+    import json as _json
+    import os
+    import uuid as _uuid
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    from unittest.mock import patch, MagicMock
+
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_main_only", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_main_only", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    # subprocess mock: 只有 incidents 非空,direct/indirect 皆空
+    proc_mock = MagicMock()
+    proc_mock.returncode = 0
+    proc_mock.stdout = _json.dumps({
+        "file": "app/svc.py",
+        "direct": [],
+        "indirect": [],
+        "incidents": [
+            {"node": "Issues/NPlus1", "matched_by": "glob:**/svc.py",
+             "contract": None, "combo": False}
+        ],
+    })
+    proc_mock.stderr = ""
+
+    fresh_sid = str(_uuid.uuid4())
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/some/project/app/svc.py"},
+        "session_id": fresh_sid,
+        "cwd": "/some/project",
+    }
+    env_patch = {"CLAUDE_PROJECT_DIR": "/some/project"}
+
+    with patch.object(m, "_find_lumos_script", return_value="/fake/lumos"), \
+         patch("subprocess.run", return_value=proc_mock), \
+         patch.dict(os.environ, env_patch), \
+         patch("sys.stdin", io.StringIO(_json.dumps(payload))):
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            try:
+                rc = m.main()
+            except SystemExit as e:
+                rc = e.code
+        out = buf.getvalue().strip()
+
+    check("impact_incidents_main_only: main() rc=0",
+          rc == 0, f"expected rc=0, got {rc}")
+    check("impact_incidents_main_only: stdout 非空(有注入)",
+          out != "", f"expected JSON on stdout, got {out!r}")
+    j = _json.loads(out)
+    ctx = j.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("impact_incidents_main_only: additionalContext 含「相關事故」段",
+          "相關事故" in ctx or "incident" in ctx.lower(),
+          f"ctx={ctx!r}")
+    check("impact_incidents_main_only: additionalContext 含事故節點名稱",
+          "Issues/NPlus1" in ctx, f"ctx={ctx!r}")
+    check("impact_incidents_main_only: additionalContext 含 matched_by",
+          "glob:" in ctx, f"ctx={ctx!r}")
 
 
 def main():
