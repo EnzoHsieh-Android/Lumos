@@ -5050,6 +5050,13 @@ def _fold_mirror_sections(text):
 _FOLD_AUDIT_RECORD_RE = re.compile(
     r"^##\s+(§\d+\s+)?審計修正紀錄.*", re.MULTILINE)
 
+# Module-level compiled regexes for _fold_value_drift (I1)
+_FOLD_DRIFT_FOLD_CHECK_RE = re.compile(r'\bfold-check\s+(\S+)')
+_FOLD_DRIFT_DOTDOT_RE = re.compile(r'\d+\.\.\w+')
+
+# Regex to find the next ## heading after a given position (used in audit-section stripping)
+_FOLD_NEXT_H2_RE = re.compile(r'^##\s', re.MULTILINE)
+
 
 def _fold_value_drift(text):
     """偵測「同識別詞在不同處出現不同值」的漂移(全文域)。
@@ -5057,59 +5064,45 @@ def _fold_value_drift(text):
     掃描域排除 ## …審計修正紀錄 段(含節號前綴),該段刻意引用歷史/舊值,掃它必假陽。
     單一抽取法:掃符合值 pattern 的「識別詞+值」字串——
       - fold-check <value>  (識別詞=fold-check, value=\S+)
-      - \d+\.\.\w+          (整串當 key, 如 2..depth)
-      - \d+min              (整串當 key, 如 5min)
-      - §\d+                (整串當 key)
+      - \d+\.\.\w+          (整串當 key, 如 2..depth,key 為後綴詞 e.g. depth,value 為前導數字)
 
     同一識別詞出現不同值 → 一筆 {key, a, b}。
     Returns list[dict] with keys: key, a, b.
     """
     # Step 1: 排除審計修正紀錄段(從標題行到下個 ## 標題或 EOF)
+    # C2 fix: only strip the audit section itself, not everything after it.
     m = _FOLD_AUDIT_RECORD_RE.search(text)
     if m:
-        scan_text = text[:m.start()]
+        audit_start = m.start()
+        # Find the next ## heading *after* the audit heading
+        next_h2 = _FOLD_NEXT_H2_RE.search(text, m.end())
+        if next_h2:
+            # Keep text before audit section + text from next heading onward
+            scan_text = text[:audit_start] + text[next_h2.start():]
+        else:
+            # Audit section is the last section — truncate to before it
+            scan_text = text[:audit_start]
     else:
         scan_text = text
 
     # Step 2: 單一抽取法 — 掃值 pattern,抽取「識別詞+值」對
-    # Pattern order matters: fold-check first (most specific), then numeric patterns
     # fold-check \S+ : identifier="fold-check", value=next non-whitespace token
-    fold_check_re = re.compile(r'\bfold-check\s+(\S+)')
     # \d+\.\.\w+ : e.g. "2..depth", "1..depth"
-    dotdot_re = re.compile(r'\d+\.\.\w+')
-    # \d+min : e.g. "5min", "10min"
-    min_re = re.compile(r'\d+min\b')
-    # §\d+ : e.g. "§1", "§2"
-    sec_re = re.compile(r'§\d+')
-
-    # Collect: key -> set of values seen
-    from collections import defaultdict
     seen = defaultdict(set)
 
-    for m2 in fold_check_re.finditer(scan_text):
+    for m2 in _FOLD_DRIFT_FOLD_CHECK_RE.finditer(scan_text):
         val = m2.group(1)
         seen["fold-check"].add(val)
 
-    for m2 in dotdot_re.finditer(scan_text):
+    for m2 in _FOLD_DRIFT_DOTDOT_RE.finditer(scan_text):
         token = m2.group(0)
-        # key is the whole token (e.g. "2..depth" → we group by the "depth" part as concept)
-        # But per design: same identifier different values → flag
-        # The "identifier" for dotdot is the token itself (whole), but we want to group
-        # instances like "2..depth" vs "1..depth" under same key.
-        # The design says: 抽其前導識別詞. For \d+\.\.\w+, the suffix (\w+) is the identifier.
+        # The suffix (\w+) is the concept identifier; the prefix (\d+) is the value.
+        # e.g. "2..depth" → key="depth", val="2"
         parts = token.split("..")
         if len(parts) == 2:
             key = parts[1]   # e.g. "depth"
             val = parts[0]   # e.g. "2" or "1"
             seen[key].add(val)
-
-    for m2 in min_re.finditer(scan_text):
-        token = m2.group(0)
-        seen["_min"].add(token)
-
-    for m2 in sec_re.finditer(scan_text):
-        token = m2.group(0)
-        seen["_sec"].add(token)
 
     # Step 3: flag any key that has more than one distinct value
     drifts = []

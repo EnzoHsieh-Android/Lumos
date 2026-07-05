@@ -2272,6 +2272,30 @@ def t_fold_value_drift():
     assert len([x for x in d if x["key"]=="fold-check"]) == 1
     assert m._fold_value_drift("只有 `fold-check <path>` 一種") == []   # 一致→無 flag
 
+    # C1 regression: 多節文件中 §1/§2/§3 不應觸發假陽(_sec pattern 已移除)
+    multi_sec = "## §1 a\n## §2 b\n## §3 c"
+    keys_c1 = [x["key"] for x in m._fold_value_drift(multi_sec)]
+    assert "_sec" not in keys_c1, f"C1: §號假陽, keys={keys_c1}"
+    assert keys_c1 == [], f"C1: 多節文件不應有 drift, keys={keys_c1}"
+
+    # C2 regression: 審計段在中間時,後段 token 不被誤排除
+    mid_audit = (
+        "fold-check alpha\n"
+        "## 審計修正紀錄\n"
+        "fold-check OLD\n"
+        "## 後段\n"
+        "fold-check beta\n"
+    )
+    d_c2 = m._fold_value_drift(mid_audit)
+    keys_c2 = [x["key"] for x in d_c2]
+    # alpha vs beta → drift should be detected (後段未被誤刪)
+    assert "fold-check" in keys_c2, f"C2: 後段 token 被誤排除, drifts={d_c2}"
+    # OLD from audit section should NOT be in the values
+    fc_entry = next((x for x in d_c2 if x["key"] == "fold-check"), None)
+    assert fc_entry is not None
+    vals_c2 = {fc_entry["a"], fc_entry["b"]}
+    assert "OLD" not in vals_c2, f"C2: 審計段 OLD 被納入掃描, vals={vals_c2}"
+
 
 def t_context_valid_under_warning():
     import datetime
