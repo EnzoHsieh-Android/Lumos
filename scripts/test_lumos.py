@@ -3682,6 +3682,17 @@ def t_stylelint_sarif_bridge():
     check("空 stdin 不崩", r2.returncode == 0 and '"results": []' in r2.stdout, r2.stdout[:80])
 
 
+# ─── Task 1: lumos impact 子命令骨架 + rc 協定 ────────────────────────────────
+
+def t_impact_cli_skeleton():
+    # 非 vault 目錄 → rc 3(vault 找不到)
+    with tempfile.TemporaryDirectory() as d:
+        rc = run_lumos(["impact", "--file", "x.py", "--repo", d, "--json"])
+        check("impact: 非圖譜應 rc3", rc == 3, f"非圖譜應 rc3, got {rc}")
+    # 缺 --file → argparse rc 2
+    check("impact: 缺 --file 應 rc2", run_lumos(["impact", "--repo", "."]) == 2, "")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

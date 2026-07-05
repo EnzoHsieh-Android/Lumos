@@ -5308,6 +5308,40 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
     return 1 if (n_missing or n_oor) else 0
 
 
+def cmd_impact(file, repo=None, depth=2, as_json=False):
+    """動手前算出哪些知識圖譜節點會被 code 改動波及(Task 1:骨架 + rc 協定)。
+    rc 協定: 0=成功 / 3=vault 找不到 / 其他非 0=內部錯。
+    """
+    import json
+
+    # 1. 解析 repo root
+    if repo is not None:
+        repo_root = Path(repo)
+        if not repo_root.is_dir():
+            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            return 2
+    else:
+        repo_root = None
+        for cand in (Path.cwd(), *Path.cwd().parents):
+            if (cand / ".git").exists():
+                repo_root = cand
+                break
+
+    # 2. 找 vault(rc 3 = vault 找不到)
+    if repo_root is not None:
+        vault = _vault_in(repo_root)
+    else:
+        vault = find_vault(Path.cwd())
+    if vault is None:
+        print("IMPACT-DEBUG: vault 找不到(rc3)——非圖譜專案或 --repo 未指向含 vault 的目錄", file=sys.stderr)
+        return 3
+
+    # Task 1:骨架完成,後續 Task 實作反查與 BFS
+    if as_json:
+        print(json.dumps({"file": str(file), "direct": [], "indirect": []}, ensure_ascii=False))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="lumos", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -5489,6 +5523,12 @@ def main():
     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
 
+    p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
+    p.add_argument("--file", dest="impact_file", required=True, help="被改動的 code 檔路徑(必填)")
+    p.add_argument("--repo", dest="impact_repo", help="repo root(缺則退回 find_vault;hook 必傳)")
+    p.add_argument("--depth", dest="impact_depth", type=int, default=2, help="BFS 展開深度(預設 2)")
+    p.add_argument("--json", dest="impact_json", action="store_true", help="JSON 輸出(機器可讀)")
+
     p = sub.add_parser("pitfalls", help="實務隱患提問(vault-free):spec 逼答隱患 / --diff 攤代碼風險位置")
     p.add_argument("md", nargs="?", help="spec md 檔(spec 模式)")
     p.add_argument("--diff", dest="pf_diff", help="diff range(如 main..HEAD;diff 模式)")
@@ -5546,6 +5586,9 @@ def main():
     if args.cmd == "pitfalls":
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
+    if args.cmd == "impact":
+        return cmd_impact(args.impact_file, repo=args.impact_repo,
+                          depth=args.impact_depth, as_json=args.impact_json)
     if args.cmd == "sqlfluff-sarif":
         return cmd_sqlfluff_sarif(out=args.sqlfluff_out)
     if args.cmd == "stylelint-sarif":
