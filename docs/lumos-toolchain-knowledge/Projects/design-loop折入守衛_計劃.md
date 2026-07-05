@@ -104,5 +104,9 @@ skill 源在 **lumos-toolchain repo**(`skills/lumos-design-loop/SKILL.md`、syml
 - **F8 minor**:「--json schema fence」vs「每個 json fence」術語。→ 統一。
 - **F9 minor**:§3 step7 現文順序描述不準(寫紀錄是 fold inline)。→ 更正。
 
+## 收斂狀態(2 輪 → 轉 TDD)
+
+canary 2/2 全抓。findings [7,8]。**r2 是 dogfood 金礦**:這份「講折入漂移」的 spec 自己犯了兩條折入漂移(§1 殘留 `<node>`、summary 漏 backtick code),**且我手動 fold-check 也漏抓**——鐵證 (i) 折入漂移隱蔽到手動壓不住、(ii) 機械 fold-check 是剛需、(iii) 漂移不只 summary↔body 還有 body↔body(設計據此改全文域)。**遞迴洞察**:此 spec 的真收斂器正是它要造的 fold-check——沒工具只能手動(已證不足),工具 TDD 建好後回頭能抓 r1-F1/r2-F1/F4、並加速未來所有 loop(含自身)。故同 impact:**設計良好、dogfood 證必要 → 轉 writing-plans+TDD**,剩餘精度交真測。使用者顯式選 TDD 路(2026-07-05)。**誠實天花板**:自指 meta-spec(含 drift 範例)會讓 value-drift 假陽(範例「<node> vs <path>」),靠 audit-record 排除 + 操作者判 warning。
+
 ## 落地後回指
 實作完成 Verification 用 `plan_refs: "[[design-loop折入守衛_計劃]]"` 回指;更新本節點 `TEST:` + `verified_by`;Issue [[design-loop折入漂移_機械守衛]] 轉 status/done。

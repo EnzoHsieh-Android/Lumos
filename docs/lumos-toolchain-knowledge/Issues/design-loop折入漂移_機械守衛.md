@@ -9,11 +9,13 @@ tags:
   - priority/P2
 related:
   - "[[主動影響幅度偵測_計劃]]"
+  - "[[design-loop折入守衛_計劃]]"
+  - "[[design-loop折入守衛_實作計畫]]"
 summary: |-
   FLAG:DECISION
   KEY:lumos-design-loop 機制缺陷——每輪把 finding 折進 spec body 後,summary/schema 範例/審計紀錄/天花板無機械綁定要同步 → 下輪審計員花 finding 抓「植入者沒同步的漂移」而非新設計問題;污染 G2 枯竭判準、拉長輪次、讓真收斂被自傷 finding 遮住
   KEY:實證來源=「主動影響幅度偵測」9 輪 loop:findings 10→7→7→8→6→5→5→8→7 不枯竭,經測約 ~2 finding/輪是折入漂移(summary 殘留舊記號/審計紀錄未標翻案/schema 範例與 body 不同步),非真設計缺口
-  KEY:修法方向(機械守衛非靠紀律)=給 lumos lint/refcheck 加文件內一致性檢查:① §-ref 解析(「見 §N」的 §N 必須存在,順帶機械擋 (a) 型 canary + 真 §漂移)② summary FLOW/KEY 提到的旗標/欄位/schema key 必須在 body 出現 ③ 審計紀錄被後輪翻案的條目需標 superseded
+  KEY:修法定案(見 [[design-loop折入守衛_計劃]]+[[design-loop折入守衛_實作計畫]]):**初版 lint ①§-ref+②summary→body token 被否決**(逐條對照 impact 9 輪真漂移命中≈0)→ 改**折入強制一致性閘**:lumos fold-check <path>(全文域 value-drift+reverse-omission+鏡像段列舉,排除審計紀錄段/placeholder)+ SKILL.md step7 強制子步。經 2 輪 design-loop(dogfood 鐵證機械 fold-check 剛需)→ 轉 TDD 實作
   DECISION:先記為 lumos 工具鏈改進 Issue(非某 spec 問題);真要做需自己走 brainstorm→design-loop(注意別遞歸)。與知識同步散落漂移同病根(需機械守衛逼)
   DEP:[[lumos-refcheck]]
   DEP:[[design-loop]]
