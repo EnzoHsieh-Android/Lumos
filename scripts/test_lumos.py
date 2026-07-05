@@ -3374,6 +3374,59 @@ def t_pitfalls_no_lint():
     check("--no-lint 仍有 regex claims + tier", "claims" in d_nl and "tier" in d_nl, str(sorted(d_nl.keys())))
 
 
+def t_lint_sarif_v1():
+    """SARIF v1.0(dotnet/Roslyn ErrorLog 預設)——tool.name/resultFile.uri/message 字串,與 v2.1 不同。"""
+    import importlib.util as U, json as J, tempfile
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    root = Path(tempfile.mkdtemp(prefix="gctl-s1-"))
+    sarif_v1 = {
+        "version": "1.0.0",
+        "runs": [{
+            "tool": {"name": "Microsoft (R) Visual C# Compiler"},
+            "results": [
+                {"ruleId": "CA1805", "message": "member explicitly initialized to default",
+                 "locations": [{"resultFile": {"uri": f"file://{root}/App/Foo.cs",
+                                               "region": {"startLine": 8}}}]},
+                {"ruleId": "CA0000", "message": "no-loc"},  # location-less → 跳不連坐
+            ]
+        }]
+    }
+    sf = root / "v1.sarif"; sf.write_text(J.dumps(sarif_v1), encoding="utf-8")
+    claims, ok = m._lint_run_and_parse(f"cp {sf} {{LINT_SARIF_OUT}}", root)
+    check("v1 ok", ok is True, "")
+    check("v1 1 claim(location-less 跳)", len(claims) == 1, str(claims))
+    c = claims[0]
+    check("v1 tool.name → source", c["source"] == "lint:Microsoft (R) Visual C# Compiler", c["source"])
+    check("v1 resultFile.uri → repo 相對", c["file"] == "App/Foo.cs", c["file"])
+    check("v1 message 字串 + line/rule", c["line"] == 8 and c["rule"] == "CA1805" and c["message"] == "member explicitly initialized to default", str(c))
+
+
+def t_lint_watch_nuget():
+    """nuget registry type:index.json versions 過濾 prerelease 取數值 max。"""
+    import importlib.util as U, json as J, os, tempfile
+    from importlib.machinery import SourceFileLoader
+    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = U.module_from_spec(spec); spec.loader.exec_module(m)
+    url = "https://api.nuget.org/v3-flatcontainer/stylecop.analyzers/index.json"  # id 小寫
+    fixture = {url: {"versions": ["1.1.0", "1.1.118", "1.2.0-beta.556", "1.0.2"]}}
+    fx = Path(tempfile.mkdtemp(prefix="gctl-ng-")) / "fx.json"
+    fx.write_text(J.dumps(fixture), encoding="utf-8")
+    os.environ["LUMOS_LINT_WATCH_FIXTURE"] = str(fx)
+    try:
+        check("nuget 過濾 beta 取穩定 max",
+              m._registry_latest("nuget:StyleCop.Analyzers") == ("1.1.118", None),
+              str(m._registry_latest("nuget:StyleCop.Analyzers")))
+        fixture[url] = {"versions": ["1.2.0-beta.1", "1.2.0-beta.2"]}
+        fx.write_text(J.dumps(fixture), encoding="utf-8")
+        check("nuget 全 beta → no stable",
+              m._registry_latest("nuget:StyleCop.Analyzers") == (None, "no stable version"),
+              str(m._registry_latest("nuget:StyleCop.Analyzers")))
+    finally:
+        os.environ.pop("LUMOS_LINT_WATCH_FIXTURE", None)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     print(f"lumos 測試({len(tests)} 案例)")
