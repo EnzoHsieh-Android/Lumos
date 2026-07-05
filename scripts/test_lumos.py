@@ -4173,6 +4173,71 @@ def t_impact_cross_direct_node_dedup():
           len(overlap) == 0, f"overlap={overlap}, direct={direct_nodes}, indirect={indirect_nodes}")
 
 
+def t_impact_multisource_bfs_min_hop():
+    """I1 回歸:multi-source BFS 保證 hop = 距最近直接節點的 min 距離。
+
+    圖結構:
+      D1 → N(hop=2 via D1)
+      D2 → N(hop=1 via D2)
+      D1 先在 direct_rels 裡迭代
+
+    斷言:N 的 hop == 1(min),而非 2(first-wins 舊 bug)。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    repo = Path(_tf.mkdtemp(prefix="gctl-t-i1-minhop-"))
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake lumos\n", encoding="utf-8")
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(
+        "---\ntype: moc\n---\n# idx\n".encode("utf-8")
+    )
+
+    # N: 目標節點,不引 scripts/lumos
+    (vault / "Systems" / "NodeN.md").write_text(
+        "---\ntype: system\nstatus: doing\n---\n# N\n",
+        encoding="utf-8",
+    )
+    # M: 中繼節點,D1 → M → N(D1 到 N 是 hop=2)
+    (vault / "Systems" / "NodeM.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[NodeN]]\"\n---\n# M\n",
+        encoding="utf-8",
+    )
+    # D1: 引 scripts/lumos,related → M(D1→M→N,hop=2);D1 先在字母序排在前
+    (vault / "Systems" / "DirectA.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[NodeM]]\"\n"
+        "---\n引用 `scripts/lumos`\n",
+        encoding="utf-8",
+    )
+    # D2: 引 scripts/lumos,related → N(D2→N,hop=1)
+    (vault / "Systems" / "DirectB.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[NodeN]]\"\n"
+        "---\n也引用 `scripts/lumos`\n",
+        encoding="utf-8",
+    )
+
+    out = run_lumos_capture(
+        ["impact", "--file", "scripts/lumos", "--repo", str(repo), "--json"]
+    )
+    d = _json.loads(out)
+
+    indirect_nodes = {x["node"]: x for x in d["indirect"]}
+    direct_nodes = {x["node"] for x in d["direct"]}
+
+    check("impact_minhop: DirectA 在 direct", "Systems/DirectA.md" in direct_nodes,
+          f"direct={direct_nodes}")
+    check("impact_minhop: DirectB 在 direct", "Systems/DirectB.md" in direct_nodes,
+          f"direct={direct_nodes}")
+    check("impact_minhop: NodeN 在 indirect", "Systems/NodeN.md" in indirect_nodes,
+          f"indirect keys={list(indirect_nodes)}")
+    n_hop = indirect_nodes.get("Systems/NodeN.md", {}).get("hop")
+    check("impact_minhop: NodeN.hop == 1(multi-source BFS min 距離,非 first-wins 2)",
+          n_hop == 1, f"got hop={n_hop}, expected 1")
+
+
 def t_impact_depth_config_integration():
     """Task 8 M-3: CLI --depth 顯式值覆蓋 .lumos/impact.json config 的整合測試。
 
@@ -4655,6 +4720,45 @@ def t_impact_hook_inject():
     check("impact_hook_inject: main() additionalContext 含指令文字",
           "動手前" in j_main.get("hookSpecificOutput", {}).get("additionalContext", ""),
           f"got {j_main}")
+
+
+def t_impact_hook_find_lumos_real():
+    """C1 回歸:_find_lumos_script() 真實呼叫(不 mock)應能解析到可用的 lumos。
+
+    安裝後 hook 複製到 ~/.claude/hooks/impact-hook.py,repo-relative 猜測
+    ( Path(__file__).parent×4/scripts/lumos )指向不存在的路徑。修法:優先
+    shutil.which("lumos"),它能在 PATH(~/.local/bin/lumos)找到實際安裝的 lumos。
+
+    測試策略:不 mock _find_lumos_script,直接呼叫它,斷言回傳值非 None 且路徑存在。
+    前提:lumos 必須在 PATH 或 hook 仍在 repo 樹內(本測試在 CI/開發機皆可過)。
+    """
+    import shutil as _shutil
+    import importlib.util as _ilu
+
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    spec = _ilu.spec_from_file_location("impact_hook_c1", hook_path)
+    m = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    result = m._find_lumos_script()
+
+    # 驗 1:不得回傳 None(不論走 which 還是 repo-relative fallback)
+    check("impact_hook_find_lumos_real: _find_lumos_script() 非 None",
+          result is not None,
+          "返回 None — lumos 不在 PATH 且 hook repo-relative fallback 也失效")
+
+    if result is not None:
+        # 驗 2:路徑必須存在
+        check("impact_hook_find_lumos_real: 解析路徑存在於磁碟",
+              Path(result).exists(),
+              f"路徑 {result!r} 不存在")
+
+        # 驗 3:如果 which 找得到 lumos,應優先回傳 which 的結果
+        which_result = _shutil.which("lumos")
+        if which_result is not None:
+            check("impact_hook_find_lumos_real: 優先回傳 which('lumos') 結果",
+                  Path(result).resolve() == Path(which_result).resolve(),
+                  f"expected which={which_result!r}, got {result!r}")
 
 
 def t_impact_end_to_end():

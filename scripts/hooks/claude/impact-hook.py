@@ -182,8 +182,18 @@ def _backdate_marker(session_id: str, file_abs: str, seconds_ago: float) -> None
 
 
 def _find_lumos_script() -> str | None:
-    """找到 lumos CLI 腳本的絕對路徑(同 repo scripts/lumos)。"""
-    # hook 所在目錄是 scripts/hooks/claude/,往上 3 層是 repo root
+    """找到 lumos CLI 腳本的絕對路徑。
+
+    優先用 shutil.which("lumos"):設計 §3 本就假設 PATH 呼叫,hook 複製到
+    ~/.claude/hooks/ 後 repo-relative 猜測失效,which 是唯一可靠方式。
+    which 找不到再 fallback 到 repo-relative(開發中 / 未安裝時兜底)。
+    """
+    import shutil
+    # 1. 優先 PATH:安裝後 lumos 在 ~/.local/bin/lumos(或系統 PATH)
+    which_result = shutil.which("lumos")
+    if which_result is not None:
+        return which_result
+    # 2. Fallback:repo-relative(hook 仍在 repo 樹內時有效,如開發測試)
     hook_dir = Path(__file__).resolve().parent
     repo_root = hook_dir.parent.parent.parent
     candidate = repo_root / "scripts" / "lumos"

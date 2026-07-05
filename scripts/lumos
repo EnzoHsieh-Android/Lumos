@@ -5622,31 +5622,60 @@ def cmd_impact(file, repo=None, depth=None, as_json=False):
     # 5. code → node 反查(只認 body inline-code,r7-F2)
     direct_rels = _impact_reverse_lookup(file, env, repo_root_for_lookup)
 
-    # 6. 組裝影響清單:每個直接節點跑 _impact_collect,再匯總去重
-    # 修正:必須先把全部直接節點種入 direct_seen,再開始 BFS/indirect 收集。
-    # 若迴圈內逐一 add,處理節點 A 的 BFS 展開命中直接節點 B 時,B 尚未在
-    # direct_seen → B 被誤加進 indirect,之後處理 B 又進 direct → B 同時出現
-    # 在 direct 與 indirect(矛盾輸出)。預種全量消除此競爭。
+    # 6. 組裝影響清單:single multi-source BFS 保證 hop = 距最近直接節點的 min 距離(I1)。
+    #
+    # 舊做法(per-node loop)問題:各直接節點各跑一次 BFS → first-wins 去重 → 若節點 N
+    # 從 D1 hop=2、從 D2 hop=1,但 D1 先迭代,N 以 hop=2 進 indirect_seen → D2 的 hop=1
+    # 被跳過,違反設計 §2 indirect.hop=距最近直接節點。
+    #
+    # 新做法:
+    #   ① direct 資料:逐一收(hit/contract/combo 是 per-node 屬性)。
+    #   ② core_refs 葉:逐一從各直接節點抽(也是 per-node 屬性,hop=1 固定)。
+    #   ③ BFS 間接:single multi-source BFS(全部直接節點一起當種子)→ hop 自然是 min。
+    #
+    # 直接節點預種 direct_seen 確保:BFS 不把另一直接節點誤加進 indirect。
     all_direct = []
     all_indirect = []
-    direct_seen = set(direct_rels)  # ← 預種全量直接節點,消除跨直接節點去重競爭
-    indirect_seen = set()  # 去重用 node rel
-    processed_direct = set()  # 避免同一 direct 節點重複展開
+    direct_seen = set(direct_rels)  # ← 預種全量,BFS seen 初始集 + dedup guard
+    indirect_seen = set()  # 去重:core_refs 葉 + BFS 間接
+    processed_direct = set()  # 避免同一 direct 重複展開 direct/core_refs
 
+    # ① 直接節點資料 + ② core_refs 葉(per-node,保留原 _impact_collect 語意)
     for d_rel in direct_rels:
         if d_rel in processed_direct:
             continue
         processed_direct.add(d_rel)
-        collected = _impact_collect(d_rel, env, depth=depth)
-        # 加入 direct
-        for item in collected["direct"]:
-            all_direct.append(item)
-        # 加入 indirect:若節點已在 direct_seen 或 indirect_seen 則跳過
-        for item in collected["indirect"]:
-            node = item["node"]
-            if node not in direct_seen and node not in indirect_seen:
-                indirect_seen.add(node)
-                all_indirect.append(item)
+        direct_note = env.notes.get(d_rel)
+        contract, combo = _impact_contract(direct_note) if direct_note else (None, False)
+        all_direct.append({"node": d_rel, "hit": "body-inline-code",
+                           "contract": contract, "combo": combo})
+        # core_refs 跨 repo 葉(r7-F2):hop=1 固定,不入 BFS
+        if direct_note is not None:
+            for core_ref in as_list(direct_note.fields.get("core_refs")):
+                if core_ref not in direct_seen and core_ref not in indirect_seen:
+                    indirect_seen.add(core_ref)
+                    all_indirect.append({
+                        "node": core_ref, "hop": 1, "via": "core_refs",
+                        "direction": "outlink", "from": d_rel,
+                        "cross_repo": True, "no_expand": True,
+                        "contract": None, "combo": False,
+                    })
+
+    # ③ 單次 multi-source BFS:全部直接節點為種子,hop = min 距離
+    unique_direct_rels = list(processed_direct)
+    bfs_results = _impact_bfs(unique_direct_rels, env, depth=depth)
+    for (node, hop, from_node, is_backlink) in bfs_results:
+        if node in direct_seen or node in indirect_seen:
+            continue
+        indirect_seen.add(node)
+        bfs_note = env.notes.get(node)
+        bfs_contract, bfs_combo = _impact_contract(bfs_note) if bfs_note else (None, False)
+        via = _impact_via(from_node, node, is_backlink, env)
+        direction = "backlink" if is_backlink else "outlink"
+        all_indirect.append({
+            "node": node, "hop": hop, "via": via, "direction": direction,
+            "from": from_node, "contract": bfs_contract, "combo": bfs_combo,
+        })
 
     # 6. 排序(§2.4):合約節點優先 → 直接優先於間接(已分層) → 同層 hop 升序
     # 合約優先權:IRREVERSIBLE=2, INVARIANT=1, None=0
