@@ -4330,6 +4330,64 @@ def t_impact_config():
               got == {"depth": 2, "ttl_min": 20}, f"got={got}")
 
 
+def t_impact_hook_filter_and_rc():
+    """Task 9: impact-hook 過濾 + tool_input.file_path 巢狀讀取 + rc 處理。
+
+    測試對象是 scripts/hooks/claude/impact-hook.py 的可 import 函式:
+      - extract_path(payload) → 從 payload["tool_input"]["file_path"] 取路徑
+      - hook_decide(payload)  → 非 code → None;code 觸發 → 非 None
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    extract_path = m.extract_path
+    hook_decide = m.hook_decide
+
+    # 1. extract_path: 從巢狀 tool_input 讀 file_path
+    check("impact_hook: extract_path 讀 tool_input.file_path",
+          extract_path({"tool_input": {"file_path": "x.py"}}) == "x.py",
+          "expected 'x.py'")
+
+    # 2. 圖譜檔(.md 在 docs/*-knowledge/)→ 放行(None)
+    check("impact_hook: .md 圖譜路徑 → 放行 None",
+          hook_decide({"tool_input": {"file_path": "docs/x-knowledge/a.md"}}) is None,
+          "expected None for graph .md")
+
+    # 3. /docs/ 路徑下的 code 副檔名也應排除(EXCLUDE_PATH_CONTAINS)
+    check("impact_hook: /docs/ 下 .py → 放行 None",
+          hook_decide({"tool_input": {"file_path": "docs/some/file.py"}}) is None,
+          "expected None for /docs/ path")
+
+    # 4. code 副檔名(.py)→ 觸發(非 None)
+    check("impact_hook: .py → 觸發(非 None)",
+          hook_decide({"tool_input": {"file_path": "a.py"}}) is not None,
+          "expected non-None for .py")
+
+    # 5. node_modules 下 .js → 放行(EXCLUDE_PATH_CONTAINS)
+    check("impact_hook: node_modules/.js → 放行 None",
+          hook_decide({"tool_input": {"file_path": "node_modules/lib/a.js"}}) is None,
+          "expected None for node_modules")
+
+    # 6. lock 檔 → 放行(EXCLUDE_FILENAMES)
+    check("impact_hook: package-lock.json → 放行 None",
+          hook_decide({"tool_input": {"file_path": "package-lock.json"}}) is None,
+          "expected None for lock file")
+
+    # 7. 非 code 副檔名(.txt)→ 放行
+    check("impact_hook: .txt → 放行 None",
+          hook_decide({"tool_input": {"file_path": "readme.txt"}}) is None,
+          "expected None for .txt")
+
+    # 8. .ts → 觸發
+    check("impact_hook: .ts → 觸發(非 None)",
+          hook_decide({"tool_input": {"file_path": "src/foo.ts"}}) is not None,
+          "expected non-None for .ts")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
