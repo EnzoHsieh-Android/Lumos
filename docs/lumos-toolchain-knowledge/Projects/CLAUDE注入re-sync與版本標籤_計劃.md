@@ -82,6 +82,21 @@ summary: |-
 - 守衛:`t_claude_block_matches_template`(本 repo 區塊==範本)/ doctor check 測試(漂移報、同步淨)/ `t_version_bump_not_trigger_guard`(F-05:START 版本改、`.body` 不變 → 守衛淨)。
 - 版本:`t_version_stamped_in_sentinel`(inject 字串插值 LUMOS_VERSION)/ `t_version_parse_tolerant`(取不到版本不 crash)/ `t_version_nudge_when_behind`(源可達時 nudge)/ `t_nudge_skip_when_no_source`(F3:`_lumos_src` 不存在 → 靜默 skip、不 crash)。
 
+## 設計定案補充(design-loop r3 加固)
+架構層(進 TDD 前定案):
+- **marker 常數單一源(F1/F2)**:sentinel 字串常數集中一處(名稱由實作定,計劃不硬指);START/END 兩個字串。**版本格式** = `vMAJOR.MINOR`(如 `v1.2`)。**find 用穩定前綴** `"<!-- LUMOS:GRAPH-DISCIPLINE:START"`(版本戳與後綴在其後,前綴 find 不受影響);re-inject 寫入時才把版本插值進 START 行(範本存無戳的前綴形式)。
+- **`_extract_claude_block_span` 三態(F4,不可都回 None)**:回 `("found", BlockSpan)` / `("absent", None)`(無 sentinel→re-inject 走 appended)/ `("broken", None)`(半壞→re-inject 走 sentinel_broken;doctor 走「報漂移」分支、**不取 `.body` 避免 crash**)。三態分開,re-inject 與 doctor 各自 switch。
+- **★INVARIANT★ 精確語意(F6)**:「sentinel 之外逐字保留」= 替換後,`text[:block_start]` 與 `text[block_end:]` 與原文**位元組完全相同**(含空白/換行);`t_reinject_preserves_outside` 斷言前後綴 byte-equal。created/appended 路徑無「之外內容」則真空成立。
+- **doctor Check 字母(F7)**:用 **Check D**(Discipline-drift;若與現有字母撞,實作時順移,計劃不硬綁字母值)。
+- **`--no-hooks`/無範本路徑(F8)**:`root/scripts/templates/graph-discipline.md` 不存在 → re-inject skip(status=`"no_template"`)、不 crash;doctor Check 已用「範本存在」guard,無範本不 check。
+
+實作層細節(交付 TDD 紅綠釘,計劃不再散文摳——見下方「誠實天花板/design-loop 收斂判斷」):
+- 5-status 各呼叫端印什麼、rc(F3);body strip 與 splice 位移一致性(F9);整合測試 `_lumos_src` 用 monkeypatch/env override(F10);nudge 是「CLAUDE.md 版本 vs 當前上游」兩號比對、與 vendored copy 版本可能三號不一(F5,honest note:nudge 是近似 advisory 非精確)。
+
+## 誠實天花板 / design-loop 收斂判斷(r3 後)
+- **loop 未過 gate(3 輪 caught 但 severity major→blocker→blocker、未 K-streak)**。原因不是設計有未解的**架構**洞——架構層(解耦注入/scaffold、ReInjectResult 三態、BlockSpan 單一源、版本=標籤非守衛、內容比對守衛、nudge 定位 dev-machine)已在 r1-r3 折穩;而是本 spec **glue 密集**(sentinel 字串處理、call-site 接線、版本插值),審計員每輪都能再挖出「這個字串/rstrip/status 沒精確到位元」的實作級細節。**這是文檔化的天花板(見 [[design-loop-completeness-ceiling-shown]]:design-loop 對機械核心收斂強、對 shell/glue 散文空轉)**。
+- **判斷**:架構已定案、殘留為 glue 實作細節 → 該由 **TDD 紅綠測試釘死**(每個 status、每個 sentinel 邊界、每個 strip 都寫真測試),而非續磨散文到 cap。續磨只會生更多「字串沒指定到位元」的 finding、不增架構信心。
+
 ## 落地回填
 - Verification `plan_refs` 回指本節點;本節點 TEST/status。
 - 更新 `Systems/lumos-cli-lifecycle`(F-10,附 KEY 草稿):
