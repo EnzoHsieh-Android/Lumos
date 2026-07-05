@@ -5554,8 +5554,9 @@ def _impact_collect(direct_node_rel, env, depth=2):
 
 
 def cmd_impact(file, repo=None, depth=2, as_json=False):
-    """動手前算出哪些知識圖譜節點會被 code 改動波及(Task 1:骨架 + rc 協定)。
-    rc 協定: 0=成功 / 3=vault 找不到 / 其他非 0=內部錯。
+    """動手前算出哪些知識圖譜節點會被 code 改動波及。
+    rc 協定: 0=成功(有/無影響集都算) / 3=vault 找不到 / 其他非 0=內部錯。
+    Task 7: 排序 + --json schema + 人讀輸出。
     """
     import json
 
@@ -5581,9 +5582,73 @@ def cmd_impact(file, repo=None, depth=2, as_json=False):
         print("IMPACT-DEBUG: vault 找不到(rc3)——非圖譜專案或 --repo 未指向含 vault 的目錄", file=sys.stderr)
         return 3
 
-    # Task 1:骨架完成,後續 Task 實作反查與 BFS
+    # 3. 載入圖譜環境
+    env = Env(vault)
+    repo_root_for_lookup = repo_root if repo_root is not None else vault.parent.parent
+
+    # 4. code → node 反查(只認 body inline-code,r7-F2)
+    direct_rels = _impact_reverse_lookup(file, env, repo_root_for_lookup)
+
+    # 5. 組裝影響清單:每個直接節點跑 _impact_collect,再匯總去重
+    # direct 去重:同節點只保留一筆(BFS seen 已種入 direct,但多個直接節點
+    # 各自跑 _impact_collect 時 indirect 可能重複 → 下面用 seen 去重)
+    all_direct = []
+    all_indirect = []
+    direct_seen = set()
+    indirect_seen = set()  # 去重用 node rel
+
+    for d_rel in direct_rels:
+        if d_rel in direct_seen:
+            continue
+        direct_seen.add(d_rel)
+        collected = _impact_collect(d_rel, env, depth=depth)
+        # 加入 direct
+        for item in collected["direct"]:
+            all_direct.append(item)
+        # 加入 indirect:若節點已在 direct_seen 或 indirect_seen 則跳過
+        for item in collected["indirect"]:
+            node = item["node"]
+            if node not in direct_seen and node not in indirect_seen:
+                indirect_seen.add(node)
+                all_indirect.append(item)
+
+    # 6. 排序(§2.4):合約節點優先 → 直接優先於間接(已分層) → 同層 hop 升序
+    # 合約優先權:IRREVERSIBLE=2, INVARIANT=1, None=0
+    def contract_priority(contract):
+        if contract == "IRREVERSIBLE":
+            return 2
+        if contract == "INVARIANT":
+            return 1
+        return 0
+
+    all_direct.sort(key=lambda x: -contract_priority(x.get("contract")))
+    all_indirect.sort(key=lambda x: (x.get("hop", 999), -contract_priority(x.get("contract"))))
+
+    # 7. 輸出
+    rel_file = str(file)
+    import os as _os
+    if _os.path.isabs(rel_file) and repo_root is not None:
+        rel_file = _os.path.relpath(rel_file, str(repo_root))
+
     if as_json:
-        print(json.dumps({"file": str(file), "direct": [], "indirect": []}, ensure_ascii=False))
+        print(json.dumps(
+            {"file": rel_file, "direct": all_direct, "indirect": all_indirect},
+            ensure_ascii=False,
+        ))
+    else:
+        # 人讀輸出
+        print(f"改動 {rel_file} (由讀盤 refcheck 抽取)")
+        print(f"── 直接關聯 ({len(all_direct)}) ──")
+        for x in all_direct:
+            contract_tag = f" ★{x['contract']}★" if x.get("contract") else ""
+            combo_tag = "★COMBO★" if x.get("combo") else ""
+            tags = (contract_tag + (" " + combo_tag if combo_tag else "")).rstrip()
+            print(f"  {'⚠合約 ' if x.get('contract') else ''}{x['node']}{tags}  ({x['hit']})")
+        print(f"── 間接關聯 ({len(all_indirect)}) ──")
+        for x in all_indirect:
+            cross = " [跨repo葉,不展開]" if x.get("cross_repo") else ""
+            print(f"  hop{x['hop']}  {x['node']}  {x['direction']} ← via {x['via']} ← {x['from']}{cross}")
+
     return 0
 
 

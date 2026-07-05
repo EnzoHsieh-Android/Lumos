@@ -3993,6 +3993,127 @@ def t_impact_core_refs_leaf():
           leaf[0]["cross_repo"] is True, f"leaf={leaf}")
 
 
+# ─── Task 7: 排序 + --json schema 輸出 + 人讀輸出 ─────────────────────────────
+
+def t_impact_json_schema_and_sort():
+    """Task 7: --json schema 欄位齊 + 合約節點排最前 + 空集回 rc0。
+
+    fixture:
+    - Systems/WithContract.md  含 ★INVARIANT★,body 引 `scripts/lumos` → 直接+有合約
+    - Systems/NoContract.md    無合約,body 引 `scripts/lumos` → 直接+無合約
+    - Systems/Indirect.md      related 指向 NoContract → 間接(hop1)
+    空集合:新建 empty_repo → 回 {direct:[], indirect:[]} rc0。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    # ── 建 fixture repo ──────────────────────────────────────────
+    repo = Path(_tf.mkdtemp(prefix="gctl-t7-"))
+    # scripts/ 頂層目錄(讓 _refcheck_scan top_dirs 認到 scripts/)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake lumos\n", encoding="utf-8")
+    # vault
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(
+        "---\ntype: moc\n---\n# idx\n".encode("utf-8")
+    )
+    # 節點 A: 有合約(INVARIANT),引 scripts/lumos
+    (vault / "Systems" / "WithContract.md").write_text(
+        "---\ntype: system\nstatus: doing\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 合約 [test:t_stub]\n"
+        "---\n引用 `scripts/lumos` 的用法\n",
+        encoding="utf-8",
+    )
+    # 節點 B: 無合約,引 scripts/lumos;有 related 指向 Indirect
+    (vault / "Systems" / "NoContract.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[Indirect]]\"\n"
+        "---\n也引用 `scripts/lumos`\n",
+        encoding="utf-8",
+    )
+    # 節點 C: 間接節點(NoContract 的 related)
+    (vault / "Systems" / "Indirect.md").write_text(
+        "---\ntype: system\nstatus: doing\n---\n無 code 引用\n",
+        encoding="utf-8",
+    )
+
+    FIX = str(repo)
+
+    # ── 主 schema 測試 ───────────────────────────────────────────
+    out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", FIX, "--json"])
+    d = _json.loads(out)
+
+    check("impact_json: 頂層 key 集合 == {file,direct,indirect}",
+          set(d) == {"file", "direct", "indirect"}, f"keys={set(d)}")
+
+    # direct 欄位: 必有 node/hit/contract/combo; 不得有 hop/from
+    for x in d["direct"]:
+        check("impact_json: direct 項含 node/hit/contract/combo",
+              set(x) >= {"node", "hit", "contract", "combo"}, f"direct_item={x}")
+        check("impact_json: direct 項無 hop",
+              "hop" not in x, f"direct_item={x}")
+        check("impact_json: direct 項無 from",
+              "from" not in x, f"direct_item={x}")
+
+    # indirect 欄位: 必有 node/hop/via/direction/from/contract/combo
+    for x in d["indirect"]:
+        check("impact_json: indirect 項含必要欄位",
+              set(x) >= {"node", "hop", "via", "direction", "from", "contract", "combo"},
+              f"indirect_item={x}")
+
+    # combo 必有(每筆都出,無則 false)
+    for x in d["direct"]:
+        check("impact_json: direct.combo 是 bool",
+              isinstance(x.get("combo"), bool), f"direct_item={x}")
+    for x in d["indirect"]:
+        check("impact_json: indirect.combo 是 bool",
+              isinstance(x.get("combo"), bool), f"indirect_item={x}")
+
+    # 合約節點排最前(若有合約節點,第一個的 contract 非 None;若全無合約,任意)
+    if d["direct"]:
+        has_contract = [x for x in d["direct"] if x["contract"] is not None]
+        if has_contract:
+            check("impact_json: 合約節點排 direct 之首",
+                  d["direct"][0]["contract"] in ("IRREVERSIBLE", "INVARIANT"),
+                  f"direct[0]={d['direct'][0]}, all={d['direct']}")
+        else:
+            check("impact_json: 無合約節點時首位 contract=None",
+                  d["direct"][0]["contract"] is None, f"direct[0]={d['direct'][0]}")
+
+    # 應有至少一個直接節點(WithContract 和 NoContract 都引了 scripts/lumos)
+    check("impact_json: 有直接節點(WithContract+NoContract)",
+          len(d["direct"]) >= 2, f"direct={d['direct']}")
+
+    # 應有間接節點(NoContract related 指向 Indirect)
+    check("impact_json: 有間接節點(Indirect via related)",
+          len(d["indirect"]) >= 1, f"indirect={d['indirect']}")
+
+    # indirect.hop 應為 int
+    for x in d["indirect"]:
+        check("impact_json: indirect.hop 是 int",
+              isinstance(x["hop"], int), f"indirect_item={x}")
+
+    # ── 空集合測試: 找不到任何直接節點時 rc0 + json 出 ─────────────────
+    empty_repo = Path(_tf.mkdtemp(prefix="gctl-t7-empty-"))
+    (empty_repo / "scripts").mkdir()
+    (empty_repo / "scripts" / "newfile.py").write_text("# new\n", encoding="utf-8")
+    empty_vault = empty_repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (empty_vault / sub).mkdir(parents=True, exist_ok=True)
+    (empty_vault / "MOC" / "idx.md").write_bytes(
+        "---\ntype: moc\n---\n# idx\n".encode("utf-8")
+    )
+    out_empty = run_lumos_capture(
+        ["impact", "--file", "scripts/newfile.py", "--repo", str(empty_repo), "--json"]
+    )
+    d_empty = _json.loads(out_empty)
+    check("impact_json: 空集合 direct=[]",
+          d_empty["direct"] == [], f"direct={d_empty['direct']}")
+    check("impact_json: 空集合 indirect=[]",
+          d_empty["indirect"] == [], f"indirect={d_empty['indirect']}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
