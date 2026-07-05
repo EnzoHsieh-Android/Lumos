@@ -12,12 +12,14 @@ related:
   - "[[pitfalls-lint-integration_計劃]]"
 verified_by:
   - "[[Verification/2026-07-04_lint-version-watch]]"
+  - "[[Verification/2026-07-05_csharp-landmark-verify]]"
 summary: |-
   FLOW:讀 .lumos/lint-watch.json → 查各 registry 最新穩定版(pypi/npm/maven/github)→ _compare_versions 三態 → 落後進 candidates manifest → 治理層 dedup(seen-ledger)→ 新候選暫存 governance/lint-upgrades/ + LINE 通知 → 人放行 bump current
   KEY:核心定位——只做版本偵測、不自建規則 diff;新版本本身=信號、changelog 由人審(同第①塊「規則庫讓給社群」)
   KEY:機械核心在 scripts/lumos `lint-watch` 子命令(vault-free、dispatch 置於 find_vault 前);純數字 tuple 比較 + 等段數守衛(段數不一→skip,擋 calendar 2024.1 / 4段 Maven 假陽性)
   KEY:prerelease 一律不建議——_is_prerelease 涵蓋 SemVer `-` 與 PEP 440 dashless(a/b/rc/dev);過濾在 _registry_latest 內、回 (None, reason)
   KEY:Maven latest 取數值 tuple max(嚴禁字串 max——'3.9'>'3.20.0' 字串誤判)+ q 值 urllib.parse.quote(%22,字面雙引號 Solr 回 400)+ sort=timestamp+desc + docs 在 data["response"]["docs"]
+  KEY:nuget type(2026-07-05,C#/.NET)——flatcontainer index.json {"versions":[...]} 過濾 prerelease 數值 max(id 小寫);Landmark 真機:ClosedXML/Dapper/Swashbuckle/xunit/SqlClient 5 條落後正確偵測、StyleCop 1.1.118 穩定(非 beta)
   KEY:google-maven type(v1.1,Android/AGP/AndroidX)——查 dl.google.com maven-metadata.xml(XML 非 JSON,_http_get_text + ElementTree)、迭代 versions 過濾 prerelease 數值 max、**嚴禁用 `<latest>`/`<release>`(可為 prerelease,真機 AGP=9.4.0-alpha03)**;補 maven-Central-only 對 Google-hosted 的 silent false-negative(KDS 真機 AGP 8.2.2→9.2.1)
   KEY:_registry_latest 回 (latest, reason) 二元組(單一 None 承載不了 網路失敗/prerelease/無穩定版 三因);_compare_versions 回 (state, reason) 三態(bool 承載不了 failed 分流)
   KEY:HTTP 抓取層 fixture seam——LUMOS_LINT_WATCH_FIXTURE 環境變數指 {url:response} 檔則不打網路(subprocess 測試可注入);fail-open(網路失敗 → failed[],永不升 rc)

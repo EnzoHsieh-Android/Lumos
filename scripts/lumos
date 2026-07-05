@@ -4123,12 +4123,16 @@ def _lint_run_and_parse(cmd, repo_root):
     try:
         # 注入臨時檔路徑到指令
         injected_cmd = cmd.replace("{LINT_SARIF_OUT}", shlex.quote(temp_path))
-        # 執行指令:使用 Popen 以便 TimeoutExpired 時能 killpg
+        # 執行指令:使用 Popen 以便 TimeoutExpired 時能 killpg。
+        # stdout/stderr → DEVNULL:linter 的 console 輸出(dotnet 警告走 stdout、detekt 走 stderr)
+        # 不可洩漏到 lumos 的 stdout,否則污染 --json 輸出(SARIF 走檔案、console 輸出非契約)。
         proc = subprocess.Popen(
             injected_cmd,
             shell=True,
             cwd=repo_root,
             start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         try:
             proc.communicate(timeout=LINT_CMD_TIMEOUT)
@@ -4151,38 +4155,47 @@ def _lint_run_and_parse(cmd, repo_root):
             data = json.loads(content)
         except json.JSONDecodeError:
             return ([], False)
-        # 解析 SARIF
+        # 解析 SARIF(支援 v2.1 與 v1.0——dotnet/Roslyn ErrorLog 預設吐 v1,Landmark 真機坐實)
         claims = []
         runs = data.get("runs") or []
+        sarif_v1 = str(data.get("version", "")).startswith("1")
         for run in runs:
             # Finding 1: guard run-level structure — malformed run skipped, not crashed
-            driver_name = run.get("tool", {}).get("driver", {}).get("name")
+            tool = run.get("tool", {})
+            driver_name = tool.get("name") if sarif_v1 else tool.get("driver", {}).get("name")
             if not driver_name:
                 continue
             base = run.get("originalUriBaseIds", {})
             for r in (run.get("results") or []):
                 try:
-                    loc = r["locations"][0]["physicalLocation"]
-                    art_loc = loc["artifactLocation"]
-                    uri = art_loc["uri"]
-                    # uri 正規化:有 uriBaseId 則拼前綴
-                    uri_base_id = art_loc.get("uriBaseId")
-                    if uri_base_id and uri_base_id in base:
-                        uri = base[uri_base_id]["uri"] + uri
-                    # 剝 file:// scheme
+                    if sarif_v1:
+                        # v1: locations[].resultFile.{uri,region};message 為字串
+                        rf = r["locations"][0]["resultFile"]
+                        uri = rf["uri"]
+                        start_line = rf.get("region", {}).get("startLine", 0)
+                        msg = r.get("message")
+                        message_text = (msg if isinstance(msg, str) else (msg or {}).get("text", ""))[:120]
+                    else:
+                        # v2.1: locations[].physicalLocation.artifactLocation;message.text
+                        loc = r["locations"][0]["physicalLocation"]
+                        art_loc = loc["artifactLocation"]
+                        uri = art_loc["uri"]
+                        uri_base_id = art_loc.get("uriBaseId")
+                        if uri_base_id and uri_base_id in base:
+                            uri = base[uri_base_id]["uri"] + uri
+                        start_line = loc.get("region", {}).get("startLine", 0)
+                        msg = r.get("message") or {}
+                        message_text = (msg.get("text", "") if isinstance(msg, dict) else str(msg))[:120]
+                    # 共用 uri 正規化:剝 file:// + unquote + 絕對路徑 relpath + 反斜線正規化
                     if uri.startswith("file://"):
                         uri = uri[7:]
-                    # URL decode
                     uri = urllib.parse.unquote(uri)
-                    # Finding 2: 只對絕對路徑做 relpath;相對 uri 直接用(已是 repo 相對)
                     if os.path.isabs(uri):
                         rel = os.path.relpath(uri, repo_root)
                     else:
                         rel = uri
                     rel = rel.replace("\\", "/")
-                    start_line = loc.get("region", {}).get("startLine", 0)
                     rule_id = r.get("ruleId", "")
-                    message_text = (r.get("message") or {}).get("text", "")[:120]
                     claims.append({
                         "file": rel,
                         "line": start_line,
@@ -4296,6 +4309,7 @@ def _registry_latest(registry, fetch=None):
       github:<owner>/<repo>
       maven:<group>:<artifact>
       google-maven:<group>:<artifact>
+      nuget:<PackageId>
     """
     if fetch is None:
         fetch = _http_get_json
@@ -4380,6 +4394,22 @@ def _registry_latest(registry, fetch=None):
                 return (max(stable, key=_semver_parse), None)
             except Exception as e:
                 return (None, f"registry query failed: {e}")
+
+        elif rtype == "nuget":
+            # NuGet flatcontainer:index.json 回 {"versions":[...]}(升序,含 prerelease)。
+            # id 需小寫(flatcontainer 慣例);過濾 prerelease 後數值 max。
+            url = f"https://api.nuget.org/v3-flatcontainer/{coord.lower()}/index.json"
+            d = fetch(url)
+            if d is None:
+                return (None, "registry query failed: fetch returned None")
+            try:
+                versions = d.get("versions") or []
+                stable = [v for v in versions if not _is_prerelease(v) and _semver_parse(v) is not None]
+            except Exception as e:
+                return (None, f"registry query failed: {e}")
+            if not stable:
+                return (None, "no stable version")
+            return (max(stable, key=_semver_parse), None)
 
         else:
             return (None, f"registry query failed: unknown type {rtype!r}")
