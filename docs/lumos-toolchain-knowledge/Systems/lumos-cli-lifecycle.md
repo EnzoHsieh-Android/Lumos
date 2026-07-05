@@ -34,6 +34,8 @@ decisions:
     why_chosen: 單一常數消除安裝/移除白名單漂移;結尾自癒比對 src↔target 差異即覆補,把「installer 漏檔」收斂成可驗證的最終一致
     decided: 2026-06-26
     valid: true
+related:
+  - "[[CLAUDE注入re-sync與版本標籤_計劃]]"
 ---
 # lumos-cli-lifecycle
 
