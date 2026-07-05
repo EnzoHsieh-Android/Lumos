@@ -5300,9 +5300,11 @@ def _git_head(d):
 
 
 def _codeloop_read(repo_root, branch):
-    """從 governance/code-loop/<branch>.json 讀取記錄並以 dict 回傳。"""
+    """從 governance/code-loop/<branch>.json 讀取記錄並以 dict 回傳。
+    branch 名含 / 時扁平化(對齊 lumos 實作)。"""
     import json as _j
-    p = Path(repo_root) / "governance" / "code-loop" / f"{branch}.json"
+    safe = branch.replace("/", "__")
+    p = Path(repo_root) / "governance" / "code-loop" / f"{safe}.json"
     if not p.exists():
         return None
     return _j.loads(p.read_text(encoding="utf-8"))
@@ -5337,6 +5339,103 @@ def t_codeloop_ledger():
                   rec2.get("head_sha") == _git_head(d), f"head_sha={rec2.get('head_sha')!r}")
             check("codeloop_ledger: skip note 正確",
                   rec2.get("note") == "no high", f"note={rec2.get('note')!r}")
+
+
+# ── code-loop check ──────────────────────────────────────────────────────────
+
+def t_codeloop_check():
+    """check: pass 後 rc=0;無台帳 rc=1;HEAD 移動後 sha 不符 rc=1。"""
+    import subprocess as _sp
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+
+        # 無台帳 → check rc=1
+        rc_no = run_lumos(["code-loop", "check", "--repo", d])
+        check("codeloop_check: 無台帳 rc=1", rc_no == 1, f"rc={rc_no}")
+
+        # pass 後 check → rc=0
+        run_lumos(["code-loop", "pass", "--note", "ok", "--repo", d])
+        rc_ok = run_lumos(["code-loop", "check", "--repo", d])
+        check("codeloop_check: pass 後 rc=0", rc_ok == 0, f"rc={rc_ok}")
+
+        # HEAD 移動(再 commit)→ sha 不符 rc=1
+        (Path(d) / "f2.txt").write_text("x\n", encoding="utf-8")
+        _sp.run(["git", "add", "f2.txt"], cwd=d, capture_output=True)
+        _sp.run(["git", "commit", "-qm", "second"], cwd=d, capture_output=True)
+        rc_stale = run_lumos(["code-loop", "check", "--repo", d])
+        check("codeloop_check: sha 不符 rc=1", rc_stale == 1, f"rc={rc_stale}")
+
+
+# ── code-loop branch 名含 / 扁平化 ──────────────────────────────────────────
+
+def t_codeloop_branch_slash():
+    """branch 名含 / 時 pass/skip/讀回均走扁平路徑(不建子目錄)。"""
+    import subprocess as _sp
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+
+        # 建一個含 / 的 branch
+        _sp.run(["git", "checkout", "-b", "feat/slash-test"], cwd=d,
+                capture_output=True)
+        branch = _git_branch(d)
+        assert "/" in branch, f"預期含 /,got {branch!r}"
+
+        # pass
+        rc = run_lumos(["code-loop", "pass", "--note", "slashok", "--repo", d])
+        check("codeloop_slash: pass rc=0", rc == 0, f"rc={rc}")
+
+        # 台帳路徑應為扁平(no 子目錄)
+        safe = branch.replace("/", "__")
+        flat = Path(d) / "governance" / "code-loop" / f"{safe}.json"
+        subdir = Path(d) / "governance" / "code-loop" / "feat"
+        check("codeloop_slash: 扁平路徑存在", flat.exists(), f"path={flat}")
+        check("codeloop_slash: 無 feat/ 子目錄", not subdir.is_dir(),
+              f"subdir={subdir} 存在")
+
+        # 讀回正確
+        rec = _codeloop_read(d, branch)
+        check("codeloop_slash: 讀回 status=passed",
+              rec is not None and rec.get("status") == "passed",
+              f"rec={rec!r}")
+        check("codeloop_slash: 讀回 note=slashok",
+              rec is not None and rec.get("note") == "slashok",
+              f"rec={rec!r}")
+
+        # skip 覆寫後再讀
+        rc2 = run_lumos(["code-loop", "skip", "--note", "no-loop", "--repo", d])
+        check("codeloop_slash: skip rc=0", rc2 == 0, f"rc={rc2}")
+        rec2 = _codeloop_read(d, branch)
+        check("codeloop_slash: skip 讀回 status=skipped",
+              rec2 is not None and rec2.get("status") == "skipped",
+              f"rec2={rec2!r}")
+
+
+# ── gov-log 在含 docs/ 的 repo 不 crash(Critical 回歸) ──────────────────────
+
+def t_codeloop_govlog_with_docs():
+    """docs/ 存在時 gov-log 真的執行到、且不 NameError crash。"""
+    import subprocess as _sp
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        # 建 docs/ 觸發 gov-log 路徑
+        (Path(d) / "docs").mkdir()
+
+        rc = run_lumos(["code-loop", "pass", "--note", "govlog-test", "--repo", d])
+        check("codeloop_govlog: pass rc=0(不 crash)", rc == 0, f"rc={rc}")
+
+        # gov-log 應有一筆記錄
+        log_path = Path(d) / "docs" / ".governance-log.jsonl"
+        check("codeloop_govlog: log 檔存在", log_path.exists(), f"path={log_path}")
+        if log_path.exists():
+            import json as _j
+            lines = [l for l in log_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            check("codeloop_govlog: log 有一行", len(lines) >= 1, f"lines={lines!r}")
+            if lines:
+                ev = _j.loads(lines[0])
+                check("codeloop_govlog: gate=code-loop",
+                      ev.get("gate") == "code-loop", f"ev={ev!r}")
+                check("codeloop_govlog: kind=passed",
+                      ev.get("kind") == "passed", f"ev={ev!r}")
 
 
 def main():

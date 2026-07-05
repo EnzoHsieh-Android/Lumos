@@ -5826,10 +5826,16 @@ def _codeloop_git_ts(repo_root):
     return r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
 
 
+def _codeloop_branch_filename(branch):
+    """把 branch 名扁平化(/ → __)避免建子目錄。"""
+    return branch.replace("/", "__")
+
+
 def _codeloop_read(repo_root, branch):
     """讀 governance/code-loop/<branch>.json;不存在回 None。"""
     import json
-    p = Path(repo_root) / "governance" / "code-loop" / f"{branch}.json"
+    safe = _codeloop_branch_filename(branch)
+    p = Path(repo_root) / "governance" / "code-loop" / f"{safe}.json"
     if not p.exists():
         return None
     try:
@@ -5841,10 +5847,11 @@ def _codeloop_read(repo_root, branch):
 def _codeloop_write(repo_root, branch, status, note, head_sha, ts):
     """寫 governance/code-loop/<branch>.json。"""
     import json
+    safe = _codeloop_branch_filename(branch)
     d = Path(repo_root) / "governance" / "code-loop"
     d.mkdir(parents=True, exist_ok=True)
     rec = {"head_sha": head_sha, "status": status, "note": note, "ts": ts}
-    (d / f"{branch}.json").write_text(
+    (d / f"{safe}.json").write_text(
         json.dumps(rec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -5852,17 +5859,16 @@ def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts):
     """把 code-loop 事件 append 到 docs/.governance-log.jsonl(同 bypass-log 哲學)。
     vault 找不到 / 非 git repo → 靜默跳過。"""
     import json
+    import subprocess
     # 找 docs 目錄(repo root 下的 docs/)
     docs = Path(repo_root) / "docs"
     if not docs.is_dir():
         return
+    if not head_sha:
+        return
     path = docs / ".governance-log.jsonl"
     try:
-        commit_short = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, cwd=str(repo_root)).stdout.strip()
-        if not commit_short:
-            return
+        commit_short = head_sha[:7]
         event = {
             "ts": ts, "commit": commit_short,
             "gate": "code-loop", "kind": status,
@@ -5900,6 +5906,9 @@ def cmd_code_loop(subcmd, note=None, repo=None):
 
     branch = _codeloop_git_branch(repo_root)
     head_sha = _codeloop_git_head(repo_root)
+    if not head_sha:
+        print("ERROR: 無法取得 HEAD sha(git 指令失敗?)", file=sys.stderr)
+        return 2
     ts = _codeloop_git_ts(repo_root)
 
     if subcmd in ("pass", "skip"):
