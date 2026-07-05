@@ -4657,6 +4657,83 @@ def t_impact_hook_inject():
           f"got {j_main}")
 
 
+def t_impact_end_to_end():
+    """Task 12 端到端 smoke:注入暫探針節點 → lumos impact 抓到 → 清理。
+
+    步驟:
+      1. 在真實 vault 建 _impact_probe.md(body 含 `scripts/lumos` inline-code)
+      2. 執行 lumos impact --file scripts/lumos --repo . --json
+      3. 斷言 direct 含 _impact_probe 節點
+      4. finally 刪除探針節點
+
+    此測試驗證「CLI + 真實 vault 掃描 + code→node 反查」全鏈正確。
+    """
+    import json as _json
+    import os as _os
+
+    # 找到本 repo root(test_lumos.py 在 scripts/,往上一層)
+    repo_root = Path(__file__).resolve().parent.parent
+    probe = repo_root / "docs" / "lumos-toolchain-knowledge" / "Systems" / "_impact_probe.md"
+
+    # 寫探針節點(body 引用 scripts/lumos inline-code)
+    probe_content = (
+        "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:probe\n---\n"
+        "# probe\n\nbody `scripts/lumos`\n"
+    )
+    probe.write_text(probe_content, encoding="utf-8")
+
+    try:
+        out = run_lumos_capture(["impact", "--file", str(repo_root / "scripts" / "lumos"),
+                                 "--repo", str(repo_root), "--json"])
+        try:
+            data = _json.loads(out)
+        except _json.JSONDecodeError:
+            data = {}
+
+        direct = data.get("direct", [])
+        found_probe = any("_impact_probe" in x.get("node", "") for x in direct)
+        check("impact_end_to_end: direct 含 _impact_probe 節點",
+              found_probe,
+              f"direct={direct!r}")
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+
+
+def t_impact_hook_registration():
+    """Task 12 hook 註冊:~/.claude/settings.json 含 PreToolUse impact-hook.py 項目。
+
+    此測試驗證 merge-claude-settings.py 正確把 impact-hook.py 註冊進 settings。
+    若 settings.json 不存在或無此項,則 FAIL。
+    """
+    import json as _json
+
+    settings_path = Path.home() / ".claude" / "settings.json"
+    check("impact_hook_registration: settings.json 存在",
+          settings_path.exists(),
+          f"找不到 {settings_path}")
+    if not settings_path.exists():
+        return
+
+    try:
+        settings = _json.loads(settings_path.read_text(encoding="utf-8"))
+    except _json.JSONDecodeError as e:
+        check("impact_hook_registration: settings.json 可解析", False, str(e))
+        return
+
+    pre_hooks = settings.get("hooks", {}).get("PreToolUse", [])
+    found = any(
+        "impact-hook.py" in h.get("command", "")
+        for entry in pre_hooks
+        for h in entry.get("hooks", [])
+    )
+    check("impact_hook_registration: PreToolUse 含 impact-hook.py",
+          found,
+          f"PreToolUse entries={pre_hooks!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
