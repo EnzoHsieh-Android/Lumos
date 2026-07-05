@@ -85,7 +85,7 @@ def main() -> int:
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
-    except (json.JSONDecodeError, Exception):
+    except Exception:
         return 0  # fail-open
 
     # repo root: 優先 $CLAUDE_PROJECT_DIR,fallback payload cwd

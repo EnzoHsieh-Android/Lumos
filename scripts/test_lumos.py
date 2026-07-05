@@ -5773,6 +5773,51 @@ def t_codeloop_guard_hook_registration():
           f"stop_entries={stop_entries!r}")
 
 
+def t_hook_copy_list_completeness():
+    """通則防復發:HOOK_ENTRIES 裡每個已註冊的 hook 腳本,都必須在 _install_hooks_py 複製清單內。
+
+    根因(C1 同型):registration-only 測試只驗 HOOK_ENTRIES 含某檔名,
+    但不驗 _install_hooks_py 也有複製同一檔 → 靜默 no-op。
+    本測試讀兩邊並比集合,任何「註冊了忘了加複製」都會在此紅。
+    """
+    import importlib.util as _ilu
+    import re as _re
+
+    # ── 側 A:從 HOOK_ENTRIES 抽出所有 hook 腳本檔名 ─────────────────────────
+    spec_path = Path(__file__).resolve().parent / "merge-claude-settings.py"
+    spec = _ilu.spec_from_file_location("mcs_completeness", spec_path)
+    mcs = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mcs)
+
+    registered: set[str] = set()
+    for _event, entries in mcs.HOOK_ENTRIES.items():
+        for entry in entries:
+            for hook in entry.get("hooks", []):
+                cmd = hook.get("command", "")
+                # 抽出最後一個 .py 檔名:可能是完整路徑也可能含引號/空白
+                m = _re.search(r'([\w.\-]+\.py)', cmd)
+                if m:
+                    registered.add(m.group(1))
+
+    # ── 側 B:從 scripts/lumos 源碼 grep _install_hooks_py 的 for-tuple ────────
+    lumos_src = Path(__file__).resolve().parent / "lumos"
+    src_text = lumos_src.read_text(encoding="utf-8")
+    # 找 for f in (...): 裡的所有 "*.py" 字串
+    m2 = _re.search(r'for f in \(([^)]+)\)', src_text)
+    copy_list: set[str] = set()
+    if m2:
+        inner = m2.group(1)
+        copy_list = set(_re.findall(r'"([\w.\-]+\.py)"', inner))
+
+    # ── 斷言:registered ⊆ copy_list ──────────────────────────────────────────
+    missing = registered - copy_list
+    check(
+        "hook_copy_list_completeness: HOOK_ENTRIES 所有 hook 都在 _install_hooks_py 複製清單",
+        len(missing) == 0,
+        f"已註冊但未複製={missing!r}  registered={registered!r}  copy_list={copy_list!r}",
+    )
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
