@@ -17,7 +17,8 @@ summary: |-
   KEY:算法權威在設計 §2(fold-check)、§3(skill step7);每 task 給可執行測試+實作要點
   DECISION:實作用 subagent-driven-development;merge 前全 test_lumos.py + 對現有 spec 跑 fold-check 回歸不誤傷
   DEP:[[design-loop折入守衛_計劃]]
-  TEST:未開工(計畫定稿)
+  TEST:T1 PASS(4/4 checks pass,508 passed 0 failed full suite;2026-07-05)
+  TEST:T2 PASS(_fold_value_drift;全文域+排除審計紀錄段;508 passed 0 failed full suite;2026-07-05)
 ---
 # design-loop 折入守衛 Implementation Plan
 
@@ -46,7 +47,7 @@ summary: |-
 
 **Interfaces:** Produces: `cmd_fold_check(path, as_json=False) -> int`;`_fold_mirror_sections(text) -> list[str]`(容節號標題)。
 
-- [ ] **Step 1: 失敗測試**
+- [x] **Step 1: 失敗測試**
 ```python
 def t_fold_mirror_sections():
     text = "---\nsummary: |-\n  KEY:x\n---\n## §2 A\n```json\n{}\n```\n## §4 誠實天花板\nc\n## §5 審計修正紀錄\nd"
@@ -56,10 +57,10 @@ def t_fold_mirror_sections():
     assert any("審計修正紀錄" in s for s in secs)
     assert any("json" in s.lower() for s in secs)  # json fence 算鏡像段
 ```
-- [ ] **Step 2: FAIL**。Run: `python3 scripts/test_lumos.py -k fold_mirror`
-- [ ] **Step 3: 實作** — argparse `fold-check`(`path` 位置參數 + `--json`);`cmd_fold_check` 讀 `Path(path).read_text()`;`_fold_mirror_sections` 掃 summary block + ` ```json ` fence + 標題 regex `^##\s+(§\d+\s+)?(審計修正紀錄|誠實天花板)`(設計 §2.1)。
-- [ ] **Step 4: PASS**。
-- [ ] **Step 5: Commit** `feat(fold-check): argparse + 讀盤 + 鏡像段列舉(容節號)`
+- [x] **Step 2: FAIL**。Run: `python3 scripts/test_lumos.py -k fold_mirror`
+- [x] **Step 3: 實作** — argparse `fold-check`(`path` 位置參數 + `--json`);`cmd_fold_check` 讀 `Path(path).read_text()`;`_fold_mirror_sections` 掃 summary block + ` ```json ` fence + 標題 regex `^##\s+(§\d+\s+)?(審計修正紀錄|誠實天花板)`(設計 §2.1)。
+- [x] **Step 4: PASS**。
+- [x] **Step 5: Commit** `feat(fold-check): argparse + 讀盤 + 鏡像段列舉(容節號)`
 
 ---
 
@@ -69,7 +70,7 @@ def t_fold_mirror_sections():
 
 **Interfaces:** Produces: `_fold_value_drift(text) -> list[dict]`(每筆 `{key, a, b}`;掃描域排審計紀錄段)。
 
-- [ ] **Step 1: 失敗測試**
+- [x] **Step 1: 失敗測試**
 ```python
 def t_fold_value_drift():
     text = "§1 用 `fold-check <node>`\n§2 用 `fold-check <path>`\n## §9 審計修正紀錄\nfold-check <node> 舊史"
@@ -80,10 +81,10 @@ def t_fold_value_drift():
     assert len([x for x in d if x["key"]=="fold-check"]) == 1
     assert _fold_value_drift("只有 `fold-check <path>` 一種") == []   # 一致→無 flag
 ```
-- [ ] **Step 2: FAIL**。
-- [ ] **Step 3: 實作** — 見設計 §2.2:先切掉 `## …審計修正紀錄` 段;掃值 pattern(`\d+\.\.\w+`/`\d+min`/`§\d+`/`fold-check \S+` 類「識別詞+值」),同識別詞不同值 → 一筆。單一抽取法(不混兩法)。
-- [ ] **Step 4: PASS**。
-- [ ] **Step 5: Commit** `feat(fold-check): value-drift 全文域(單一法、排除審計紀錄段)`
+- [x] **Step 2: FAIL**。
+- [x] **Step 3: 實作** — 見設計 §2.2:先切掉 `## …審計修正紀錄` 段;掃值 pattern(`\d+\.\.\w+`/`\d+min`/`§\d+`/`fold-check \S+` 類「識別詞+值」),同識別詞不同值 → 一筆。單一抽取法(不混兩法)。
+- [x] **Step 4: PASS**。
+- [x] **Step 5: Commit** `feat(fold-check): value-drift 全文域(單一法、排除審計紀錄段)`
 
 ---
 

@@ -2248,6 +2248,179 @@ def t_deinit_graph():
     check("deinit graph3: commit 不被擋(rc0)", cr.returncode == 0, f"{cr.returncode} {cr.stdout} {cr.stderr}")
 
 
+def t_fold_mirror_sections():
+    m = _import_lumos()
+    text = "---\nsummary: |-\n  KEY:x\n---\n## §2 A\n```json\n{}\n```\n## §4 誠實天花板\nc\n## §5 審計修正紀錄\nd"
+    secs = m._fold_mirror_sections(text)
+    assert "summary" in secs
+    assert any("誠實天花板" in s for s in secs)   # 容 §4 前綴(r1-F5)
+    assert any("審計修正紀錄" in s for s in secs)
+    assert any("json" in s.lower() for s in secs)  # json fence 算鏡像段
+    check("fold_mirror_sections: summary 在列表", "summary" in secs, str(secs))
+    check("fold_mirror_sections: 誠實天花板(含節號)", any("誠實天花板" in s for s in secs), str(secs))
+    check("fold_mirror_sections: 審計修正紀錄(含節號)", any("審計修正紀錄" in s for s in secs), str(secs))
+    check("fold_mirror_sections: json fence 算鏡像段", any("json" in s.lower() for s in secs), str(secs))
+
+
+def t_fold_value_drift():
+    m = _import_lumos()
+    text = "§1 用 `fold-check <node>`\n§2 用 `fold-check <path>`\n## §9 審計修正紀錄\nfold-check <node> 舊史"
+    d = m._fold_value_drift(text)
+    keys = [x["key"] for x in d]
+    check("fold_value_drift: fold-check 全文域 body↔body 命中", "fold-check" in keys, str(keys))
+    # 審計紀錄段的 <node> 不算(r2:排除掃描)——不應因它多一筆
+    check("fold_value_drift: fold-check 只有一筆(審計段不計)", len([x for x in d if x["key"]=="fold-check"]) == 1, str(d))
+    check("fold_value_drift: 一致→無 flag", m._fold_value_drift("只有 `fold-check <path>` 一種") == [], "")
+
+    # C1 regression: 多節文件中 §1/§2/§3 不應觸發假陽(_sec pattern 已移除)
+    multi_sec = "## §1 a\n## §2 b\n## §3 c"
+    keys_c1 = [x["key"] for x in m._fold_value_drift(multi_sec)]
+    check("fold_value_drift C1: §號無假陽(_sec 不在 keys)", "_sec" not in keys_c1, f"keys={keys_c1}")
+    check("fold_value_drift C1: 多節文件無 drift", keys_c1 == [], f"keys={keys_c1}")
+
+    # C2 regression: 審計段在中間時,後段 token 不被誤排除
+    mid_audit = (
+        "fold-check alpha\n"
+        "## 審計修正紀錄\n"
+        "fold-check OLD\n"
+        "## 後段\n"
+        "fold-check beta\n"
+    )
+    d_c2 = m._fold_value_drift(mid_audit)
+    keys_c2 = [x["key"] for x in d_c2]
+    # alpha vs beta → drift should be detected (後段未被誤刪)
+    check("fold_value_drift C2: 後段 token 未被誤排除", "fold-check" in keys_c2, f"drifts={d_c2}")
+    # OLD from audit section should NOT be in the values
+    fc_entry = next((x for x in d_c2 if x["key"] == "fold-check"), None)
+    check("fold_value_drift C2: fc_entry 存在", fc_entry is not None, str(d_c2))
+    if fc_entry is not None:
+        vals_c2 = {fc_entry["a"], fc_entry["b"]}
+        check("fold_value_drift C2: 審計段 OLD 不納入掃描", "OLD" not in vals_c2, f"vals={vals_c2}")
+
+
+def t_fold_reverse_omission():
+    m = _import_lumos()
+    text = "---\nsummary: |-\n  KEY:用 --foo\n---\n## §2 body\n用 --foo 和 --bar 和 `<path>`"
+    r = m._fold_reverse_omission(text)
+    toks = [x["token"] for x in r]
+    check("fold_reverse_omission: --bar body 有 summary 無→命中", "--bar" in toks, str(toks))
+    check("fold_reverse_omission: --foo 兩邊都有→不 flag", "--foo" not in toks, str(toks))
+    check("fold_reverse_omission: placeholder <path> 排除(r2-F5)", "<path>" not in toks and "path" not in toks, str(toks))
+
+
+def t_fold_reverse_omission_no_frontmatter():
+    """空檔與無 frontmatter 的 .md 傳入 _fold_reverse_omission 不應拋例外。
+    修前:fm_lines=None 時 `for line in fm_lines:` 拋 TypeError。
+    修後:guard `(fm_lines or [])` → 回空 list / 合理 rc。
+    """
+    m = _import_lumos()
+
+    # 空字串(空檔)
+    result_empty = m._fold_reverse_omission("")
+    check("fold_reverse_omission 空檔: 回 list 不拋例外", isinstance(result_empty, list), repr(result_empty))
+
+    # 純 markdown 無 --- frontmatter
+    plain_md = "# 標題\n\n這是一段純 markdown，沒有 frontmatter。\n\n用到 --some-flag 指令。\n"
+    result_plain = m._fold_reverse_omission(plain_md)
+    check("fold_reverse_omission 無 frontmatter: 回 list 不拋例外", isinstance(result_plain, list), repr(result_plain))
+
+
+# ─── Task 4: cmd_fold_check 組裝 helpers ───────────────────────────────────
+
+def run_lumos(args):
+    """執行 scripts/lumos 並回傳 rc(int)。"""
+    r = subprocess.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True)
+    return r.returncode
+
+
+def run_lumos_capture(args):
+    """執行 scripts/lumos 並回傳 stdout(str)。"""
+    r = subprocess.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True)
+    return r.stdout
+
+
+def make_tmp_spec_consistent():
+    """建立一個無 drift 的暫存 spec 檔路徑(str)。
+    含 ```json fence(token 不出現於 summary)→ 證明 FENCE_RE 剝除後 reverse_omission=[]。
+    確保 value_drift=[] 且 reverse_omission=[]。
+    """
+    import tempfile
+    text = (
+        "---\n"
+        "type: project\n"
+        "status: doing\n"
+        "summary: |-\n"
+        "  KEY:介面設計\n"
+        "---\n"
+        "# 一致測試 spec\n"
+        "\n"
+        "§1 描述:介面設計說明。\n"
+        "\n"
+        "```json\n"
+        '{"fenceOnlyToken": "shouldNotFlag"}\n'
+        "```\n"
+    )
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8")
+    f.write(text)
+    f.close()
+    return f.name
+
+
+def make_tmp_spec_with_node_path_drift():
+    """建立一個含 fold-check <node> vs fold-check <path> value-drift 的暫存 spec 檔路徑(str)。
+    §1 用 fold-check <node>,§2 用 fold-check <path> → value_drift 非空 → rc 1。
+    """
+    import tempfile
+    text = (
+        "---\n"
+        "type: project\n"
+        "status: doing\n"
+        "summary: |-\n"
+        "  KEY:介面設計\n"
+        "---\n"
+        "# drift 測試 spec\n"
+        "\n"
+        "§1 描述:舊文寫 fold-check <node>。\n"
+        "\n"
+        "§2 更新:新介面是 fold-check <path>。\n"
+    )
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8")
+    f.write(text)
+    f.close()
+    return f.name
+
+
+def t_fold_check_rc_json():
+    import json
+    import os
+    clean = make_tmp_spec_consistent()      # 無 drift,含 json fence
+    drifty = make_tmp_spec_with_node_path_drift()
+    try:
+        out = json.loads(run_lumos_capture(["fold-check", drifty, "--json"]))
+        check("fold_check_rc_json: clean spec → rc 0", run_lumos(["fold-check", clean]) == 0, "")
+        check("fold_check_rc_json: drifty spec → rc 1", run_lumos(["fold-check", drifty]) == 1, "")
+        check("fold_check_rc_json: --json keys 符合 schema", set(out) == {"path", "mirror_sections", "value_drift", "reverse_omission"}, str(set(out)))
+        check("fold_check_rc_json: value_drift 非空(drift spec)", len(out["value_drift"]) > 0, str(out["value_drift"]))
+        check("fold_check_rc_json: mirror_sections 是 list", isinstance(out["mirror_sections"], list), str(out["mirror_sections"]))
+        check("fold_check_rc_json: reverse_omission 是 list", isinstance(out["reverse_omission"], list), str(out["reverse_omission"]))
+    finally:
+        for p in (clean, drifty):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def t_fold_check_regression():
+    """對現有已固化 spec 跑 fold-check:確認不 crash、rc in (0,1)。
+    有 flag 是可接受的自指範例(value-drift 範例、審計紀錄舊值),人工判;此測試只守不 crash。
+    """
+    spec = str(Path(__file__).resolve().parent.parent /
+               "docs/lumos-toolchain-knowledge/Projects/主動影響幅度偵測_計劃.md")
+    rc = run_lumos(["fold-check", spec])
+    check("fold_check_regression: 已固化 spec 不 crash(rc in 0,1)", rc in (0, 1), f"rc={rc}")
+
+
 def t_context_valid_under_warning():
     import datetime
     v = mkvault()
@@ -3510,7 +3683,13 @@ def t_stylelint_sarif_bridge():
 
 
 def main():
+    import argparse as _ap
+    _p = _ap.ArgumentParser(add_help=False)
+    _p.add_argument("-k", dest="keyword", default=None, help="只跑名稱含此字串的測試")
+    _args, _ = _p.parse_known_args()
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
+    if _args.keyword:
+        tests = [t for t in tests if _args.keyword in t.__name__]
     print(f"lumos 測試({len(tests)} 案例)")
     for t in tests:
         try:

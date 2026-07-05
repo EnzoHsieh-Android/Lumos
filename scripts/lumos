@@ -5002,6 +5002,267 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
     return 0
 
 
+_FOLD_MIRROR_HEADING_RE = re.compile(
+    r"^##\s+(§\d+\s+)?(審計修正紀錄|誠實天花板)", re.MULTILINE)
+
+
+def _fold_mirror_sections(text):
+    """掃 text 回傳所有「鏡像段」標籤清單,供 fold-check 列舉複查用。
+
+    鏡像段定義(設計 §2.1):
+      1. frontmatter summary block → "summary"
+      2. body 內每個 ```json fence → "```json fence N"(1-indexed)
+      3. ## …審計修正紀錄(含節號前綴如 ## §5 審計修正紀錄)
+      4. ## …誠實天花板(含節號前綴如 ## §4 誠實天花板)
+
+    標題比對容節號前綴(r1-F5):regex ^##\\s+(§\\d+\\s+)?(審計修正紀錄|誠實天花板)
+    """
+    sections = []
+
+    # 1. summary block:frontmatter 有 summary: 鍵
+    # Also captures body for steps 2 & 3 — single call, DRY
+    fm_lines, body = split_frontmatter(text)
+    if fm_lines is not None:
+        for line in fm_lines:
+            if re.match(r"^summary\s*:", line):
+                sections.append("summary")
+                break
+
+    # 2. ```json fences in body — body from split_frontmatter (correct offset, DRY)
+    # Match ```json ... ``` fences
+    json_fence_re = re.compile(r"^```json\b", re.MULTILINE)
+    json_count = 0
+    for m in json_fence_re.finditer(body):
+        json_count += 1
+        sections.append(f"```json fence {json_count}")
+
+    # 3 & 4. ## …審計修正紀錄 / ## …誠實天花板 headings (with optional §N prefix)
+    # Scan body only (consistent with json fence scan above)
+    for m in _FOLD_MIRROR_HEADING_RE.finditer(body):
+        # Use the full matched heading text (strip leading ##\s+)
+        heading = m.group(0).lstrip("#").strip()
+        sections.append(heading)
+
+    return sections
+
+
+# Regex to strip ## …審計修正紀錄 section (and everything after it until next ## heading or EOF)
+_FOLD_AUDIT_RECORD_RE = re.compile(
+    r"^##\s+(§\d+\s+)?審計修正紀錄.*", re.MULTILINE)
+
+# Module-level compiled regexes for _fold_value_drift (I1)
+_FOLD_DRIFT_FOLD_CHECK_RE = re.compile(r'\bfold-check\s+(\S+)')
+_FOLD_DRIFT_DOTDOT_RE = re.compile(r'\d+\.\.\w+')
+
+# Regex to find the next ## heading after a given position (used in audit-section stripping)
+_FOLD_NEXT_H2_RE = re.compile(r'^##\s', re.MULTILINE)
+
+
+def _fold_value_drift(text):
+    """偵測「同識別詞在不同處出現不同值」的漂移(全文域)。
+
+    掃描域排除 ## …審計修正紀錄 段(含節號前綴),該段刻意引用歷史/舊值,掃它必假陽。
+    單一抽取法:掃符合值 pattern 的「識別詞+值」字串——
+      - fold-check <value>  (識別詞=fold-check, value=\S+)
+      - \d+\.\.\w+          (整串當 key, 如 2..depth,key 為後綴詞 e.g. depth,value 為前導數字)
+
+    同一識別詞出現不同值 → 一筆 {key, a, b}。
+    Returns list[dict] with keys: key, a, b.
+    """
+    # Step 1: 排除審計修正紀錄段(從標題行到下個 ## 標題或 EOF)
+    # C2 fix: only strip the audit section itself, not everything after it.
+    m = _FOLD_AUDIT_RECORD_RE.search(text)
+    if m:
+        audit_start = m.start()
+        # Find the next ## heading *after* the audit heading
+        next_h2 = _FOLD_NEXT_H2_RE.search(text, m.end())
+        if next_h2:
+            # Keep text before audit section + text from next heading onward
+            scan_text = text[:audit_start] + text[next_h2.start():]
+        else:
+            # Audit section is the last section — truncate to before it
+            scan_text = text[:audit_start]
+    else:
+        scan_text = text
+
+    # Step 2: 單一抽取法 — 掃值 pattern,抽取「識別詞+值」對
+    # fold-check \S+ : identifier="fold-check", value=next non-whitespace token
+    # \d+\.\.\w+ : e.g. "2..depth", "1..depth"
+    seen = defaultdict(set)
+
+    for m2 in _FOLD_DRIFT_FOLD_CHECK_RE.finditer(scan_text):
+        val = m2.group(1)
+        seen["fold-check"].add(val)
+
+    for m2 in _FOLD_DRIFT_DOTDOT_RE.finditer(scan_text):
+        token = m2.group(0)
+        # The suffix (\w+) is the concept identifier; the prefix (\d+) is the value.
+        # e.g. "2..depth" → key="depth", val="2"
+        parts = token.split("..")
+        if len(parts) == 2:
+            key = parts[1]   # e.g. "depth"
+            val = parts[0]   # e.g. "2" or "1"
+            seen[key].add(val)
+
+    # Step 3: flag any key that has more than one distinct value
+    drifts = []
+    for key, vals in seen.items():
+        if len(vals) > 1:
+            val_list = sorted(vals)
+            drifts.append({"key": key, "a": val_list[0], "b": val_list[1]})
+
+    return drifts
+
+
+# Module-level compiled regexes for _fold_reverse_omission
+_FOLD_RO_PLACEHOLDER_RE = re.compile(r'<[^>]+>')
+_FOLD_RO_DDFLAG_RE = re.compile(r'--\w[\w-]*')
+_FOLD_RO_MARKER_RE = re.compile(r'★\w+★')
+# 帶已知副檔名的檔名(避開純版本號如 1.0);路徑允許中間有 . / -
+_FOLD_RO_FILENAME_RE = re.compile(
+    r'\w[\w./-]*\.(?:json|py|md|sh|txt|kt|cs|vue|js|ts|yml|yaml)\b'
+)
+
+
+def _fold_reverse_omission(text):
+    """偵測「body 有的顯著 token,summary 沒有」的反向遺漏(全文域)。
+
+    掃描域排除 ## …審計修正紀錄 段(複用 _FOLD_AUDIT_RECORD_RE/_FOLD_NEXT_H2_RE)。
+    排除 <…> placeholder(r2-F5)。
+    抽顯著 token(high-signal 三類):
+      1. --flag(--\w[\w-]*)
+      2. ★MARKER★(★...★)
+      3. 帶已知副檔名的檔名(\w[\w./-]*\.{ext})
+    不抽 backtick 內容與裸 CamelCase(技術 spec 噪音主源)。
+    主軸:body 有、summary 無 → 一筆 {token, present_in, missing_in}。
+
+    Returns list[dict] with keys: token, present_in, missing_in.
+    """
+    # Step 1: 排除審計修正紀錄段(從標題行到下個 ## 標題或 EOF),複用 T2 邏輯
+    m = _FOLD_AUDIT_RECORD_RE.search(text)
+    if m:
+        audit_start = m.start()
+        next_h2 = _FOLD_NEXT_H2_RE.search(text, m.end())
+        if next_h2:
+            scan_text = text[:audit_start] + text[next_h2.start():]
+        else:
+            scan_text = text[:audit_start]
+    else:
+        scan_text = text
+
+    # Step 2: 拆 frontmatter/body,抽 summary 文字
+    fm_lines, body = split_frontmatter(scan_text)
+
+    # Extract summary block from frontmatter: lines under "summary: |-" or "summary: |"
+    summary_text = ""
+    in_summary = False
+    summary_lines = []
+    for line in (fm_lines or []):
+        stripped = line.strip()
+        if re.match(r'^summary\s*:\s*\|[-]?\s*$', stripped):
+            in_summary = True
+            continue
+        if in_summary:
+            # Indented lines belong to the summary block; bare key: ends it
+            if line.startswith(" ") or line.startswith("\t"):
+                summary_lines.append(line)
+            else:
+                in_summary = False
+    summary_text = "\n".join(summary_lines)
+
+    # Step 3: 抽顯著 token helper
+    def _strip_placeholders(s):
+        return _FOLD_RO_PLACEHOLDER_RE.sub(' ', s)
+
+    def _extract_tokens(s):
+        """Extract high-signal tokens from string s, excluding <...> placeholders.
+
+        Three token classes:
+          1. --flag (--\w[\w-]*)
+          2. ★MARKER★
+          3. Filenames with known extensions (\w[\w./-]*\.{known_ext})
+        Backtick content and bare CamelCase are intentionally excluded (noise sources).
+        """
+        s = FENCE_RE.sub("", s)
+        s = _strip_placeholders(s)
+        tokens = set()
+        # --flags
+        for m2 in _FOLD_RO_DDFLAG_RE.finditer(s):
+            tokens.add(m2.group(0))
+        # ★MARKER★
+        for m2 in _FOLD_RO_MARKER_RE.finditer(s):
+            tokens.add(m2.group(0))
+        # filenames with known extensions
+        for m2 in _FOLD_RO_FILENAME_RE.finditer(s):
+            tokens.add(m2.group(0))
+        return tokens
+
+    summary_tokens = _extract_tokens(summary_text)
+    body_tokens = _extract_tokens(body)
+
+    # Step 4: body 有、summary 無 → flag
+    omissions = []
+    for tok in sorted(body_tokens - summary_tokens):
+        omissions.append({
+            "token": tok,
+            "present_in": "body",
+            "missing_in": "summary",
+        })
+
+    return omissions
+
+
+def cmd_fold_check(path, as_json=False):
+    """折入後一致性複查輔助:列舉鏡像段 + value-drift + reverse-omission flag。
+
+    rc = (value_drift 或 reverse_omission 非空) ? 1 : 0
+    --json schema: {path, mirror_sections, value_drift, reverse_omission}
+    """
+    import json
+    md = Path(path)
+    if not md.is_file():
+        print(f"ERROR: 找不到檔案: {path}", file=sys.stderr)
+        return 2
+    try:
+        text = md.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        print(f"ERROR: 讀不到 {path}: {e}", file=sys.stderr)
+        return 2
+
+    mirror_sections = _fold_mirror_sections(text)
+    value_drift = _fold_value_drift(text)
+    reverse_omission = _fold_reverse_omission(text)
+
+    has_flag = bool(value_drift or reverse_omission)
+
+    if as_json:
+        print(json.dumps({
+            "path": str(md),
+            "mirror_sections": mirror_sections,
+            "value_drift": value_drift,
+            "reverse_omission": reverse_omission,
+        }, ensure_ascii=False))
+    else:
+        print(f"fold-check {md}")
+        print("── 鏡像段(逐段確認與 body 一致)──")
+        for s in mirror_sections:
+            print(f"  ☐ 複查 {s}:與 body 一致?")
+        if not mirror_sections:
+            print("  (無鏡像段)")
+        if value_drift:
+            print("── value-drift ──")
+            for item in value_drift:
+                print(f"  ⚠ value-drift: 「{item['key']} {item['a']}」vs 「{item['key']} {item['b']}」")
+        if reverse_omission:
+            print("── reverse-omission ──")
+            for item in reverse_omission:
+                print(f"  ⚠ reverse-omission: {item['present_in']} 有「{item['token']}」{item['missing_in']} 無")
+        if not has_flag:
+            print("✓ 無 flag")
+
+    return 1 if has_flag else 0
+
+
 def cmd_refcheck(md_path, repo=None, as_json=False):
     """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
     抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
@@ -5219,6 +5480,10 @@ def main():
     p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(CI/非互動用)")
     p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
 
+    p = sub.add_parser("fold-check", help="折入後一致性複查(vault-free):列舉鏡像段 + value-drift/reverse-omission flag")
+    p.add_argument("path", help="要核對的 markdown 檔路徑")
+    p.add_argument("--json", dest="as_json", action="store_true", help="JSON 輸出(供機器讀)")
+
     p = sub.add_parser("refcheck", help="spec 指涉宣稱確定性核對(vault-free):inline-code 路徑/行號 → 存在性 manifest")
     p.add_argument("md", help="要核對的 markdown 檔")
     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
@@ -5274,6 +5539,8 @@ def main():
     if args.cmd == "deinit":
         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
                           yes=args.yes, source=args.source)
+    if args.cmd == "fold-check":
+        return cmd_fold_check(args.path, as_json=args.as_json)
     if args.cmd == "refcheck":
         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
     if args.cmd == "pitfalls":
