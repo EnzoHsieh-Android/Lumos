@@ -30,6 +30,23 @@ def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
 
 
 HOOK_ENTRIES = {
+    "PreToolUse": [
+        {
+            # 主動影響幅度偵測:Edit/Write/MultiEdit 動手前注入 additionalContext。
+            # 比照現有 claude/ hooks 現況:不進 ANCHOR_FILES(見設計 §5)。
+            # 生產實測:用 `claude --debug` 驗 PreToolUse additionalContext 注入時機;
+            # 若版本行為有變可退回 stderr 備援(check-graph-sync.py 已證此路可行)。
+            # (設計 §3 r5-F2)
+            "matcher": "Edit|Write|MultiEdit",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": _hook_cmd("impact-hook.py"),
+                    "timeout": 30,
+                }
+            ],
+        }
+    ],
     "PostToolUse": [
         {
             "matcher": "Bash",

@@ -31,7 +31,7 @@ import re
 import sys
 import time
 import unicodedata
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 _IS_WIN = os.name == "nt"
@@ -3682,7 +3682,7 @@ def _install_hooks_py(root: Path):
     chooks = Path.home() / ".claude" / "hooks"
     chooks.mkdir(parents=True, exist_ok=True)
     src_dir = root / "scripts" / "hooks" / "claude"
-    for f in ("check-graph-sync.py", "verification-rot-check.py"):
+    for f in ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py"):
         s = src_dir / f
         if s.exists():
             shutil.copy2(s, chooks / f)
@@ -5308,6 +5308,414 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
     return 1 if (n_missing or n_oor) else 0
 
 
+def _impact_reverse_lookup(rel_code_path, env, repo_root):
+    """給一支 code 路徑,反查「哪些圖譜節點的 body inline-code 引用了它」。
+
+    設計要點(Task 2):
+    - 只掃 body inline-code,絕不掃 core_refs(r7-F2)。
+    - 複用 _refcheck_scan(text, repo_root) 抽取 body inline-code 路徑;
+      Note 不存 body → 重讀盤每個 .md 餵它(r1-F1)。
+    - 路徑規範化(r3-F5):輸入若為絕對路徑先轉 repo-relative 再比對。
+    - _refcheck_scan 的 top_dirs 靜默過濾照舊(§4 天花板 5)。
+
+    回傳: list[node_rel] — body inline-code 命中 rel_code_path 的節點清單。
+    """
+    import os
+
+    repo_root = Path(repo_root)
+
+    # 路徑規範化:絕對路徑 → repo-relative
+    rp = str(rel_code_path)
+    if os.path.isabs(rp):
+        rp = os.path.relpath(rp, str(repo_root))
+
+    hits = []
+    for node_rel, note in env.notes.items():
+        # 重讀盤:Note 不存 body,直接讀原始 .md 文字
+        md_path = env.vault / node_rel
+        try:
+            text = md_path.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            continue
+        claims, _n_missing, _n_oor, _n_ok = _refcheck_scan(text, repo_root)
+        for claim in claims:
+            if claim["token"] == rp:
+                hits.append(node_rel)
+                break  # 同一節點只算一次
+    return hits
+
+
+def _impact_contract(note):
+    """Task 3: 偵測節點的合約標記,回傳 (contract: str|None, combo: bool)。
+
+    兩軸設計(r6-F3):
+    - INVARIANT/DEBT 軸: extract_contracts(note) → inv list。DEBT → None(r9-F7)。
+    - IRREVERSIBLE 軸: 獨立 IRREVERSIBLE_RE 掃 summary(extract_contracts 不含此)。
+    取最高: IRREVERSIBLE > INVARIANT > None。
+    combo(r6-F6): ★COMBO★ 是 ★INVARIANT★ 同行後綴修飾,偵測 INVARIANT 行含 ★COMBO★
+                 (參 scripts/lumos:725 的 '★COMBO★' not in inv);不入 contract enum,走獨立布林。
+    """
+    invs, _debts = extract_contracts(note)  # 只掃 INVARIANT/DEBT
+
+    # combo: 任一 INVARIANT 行含 ★COMBO★ 即為 True
+    combo = any("★COMBO★" in inv for inv in invs)
+
+    # INVARIANT 軸: 有 inv 則 contract="INVARIANT"(DEBT 已被 extract_contracts 分到 _debts,不入此路)
+    contract = "INVARIANT" if invs else None
+
+    # IRREVERSIBLE 軸: 獨立掃 summary(extract_contracts 不含 IRREVERSIBLE)
+    summ = note.fields.get("summary")
+    if isinstance(summ, str):
+        for line in summ.split("\n"):
+            if IRREVERSIBLE_RE.match(line.strip()):
+                contract = "IRREVERSIBLE"  # 最高優先,覆蓋 INVARIANT
+                break
+
+    return contract, combo
+
+
+def _impact_bfs(direct_nodes, env, depth):
+    """Task 4: 從直接節點集沿 env.edges 雙向 BFS 展開間接關聯。
+
+    設計要點:
+    - hop 語意(r8-F5): hop = 距最近直接節點的 BFS 距離,hop ∈ 1..depth。
+    - visited/cycle guard(r8-F4): seen 先種入全部直接節點,直接節點沿環不重入 indirect
+      (參 cmd_map 的 seen 模式 scripts/lumos:908-923)。
+    - 雙向邊: out_e(outlink)+in_e(backlink) 都走;每筆記 is_backlink。
+    - 雙向 direction 衝突(r8-F7): 若 dest 同時可從 out_e 與 in_e 到達 → 標 backlink 優先。
+    - 不含直接節點本身。
+
+    回傳: list[(node, hop, from_node, is_backlink)]
+    """
+    out_e, in_e = env.edges
+
+    # pending 機制正確處理同一 hop 內雙向衝突(backlink 優先,r8-F7)
+    seen = set(direct_nodes)
+    queue = deque()
+
+    # 每一輪 frontier 的 pending: dest -> (hop, from_node, is_backlink)
+    # backlink 優先:若 dest 先被 outlink 加,後被 backlink 命中 → 覆蓋為 backlink
+    for direct in direct_nodes:
+        pending = {}  # dest -> (from_node, is_backlink)
+        for dest in out_e.get(direct, []):
+            if dest not in seen:
+                if dest not in pending:
+                    pending[dest] = (direct, False)
+                # outlink 不覆蓋已有的 backlink
+        for dest in in_e.get(direct, []):
+            if dest not in seen:
+                # backlink 優先:無論如何覆蓋
+                pending[dest] = (direct, True)
+        for dest, (from_node, is_bl) in pending.items():
+            if dest not in seen:
+                seen.add(dest)
+                queue.append((dest, 1, from_node, is_bl))
+
+    result = []
+
+    while queue:
+        node, hop, from_node, is_backlink = queue.popleft()
+        result.append((node, hop, from_node, is_backlink))
+
+        if hop < depth:
+            # 展開下一層,同樣用 pending 處理雙向衝突
+            pending = {}
+            for dest in out_e.get(node, []):
+                if dest not in seen:
+                    if dest not in pending:
+                        pending[dest] = (node, False)
+            for dest in in_e.get(node, []):
+                if dest not in seen:
+                    pending[dest] = (node, True)
+            for dest, (fn, is_bl) in pending.items():
+                if dest not in seen:
+                    seen.add(dest)
+                    queue.append((dest, hop + 1, fn, is_bl))
+
+    return result
+
+
+def _impact_via(frontier, dest, is_backlink, env):
+    """Task 5: 判斷 BFS 一條邊的 via(沿哪個 frontmatter 欄位到達)。
+
+    設計要點(§2.3,r9-F1):
+    - env.edges 是 out_e[a].append(b) / in_e[b].append(a) ——
+      wikilink **永遠寫在「連出去」那一端**。
+    - outlink(is_backlink=False): wikilink 在 frontier → 讀 frontier.fields,
+      找含指向 dest 的 wikilink 欄位。
+    - backlink(is_backlink=True): wikilink 在 dest(dest 連向 frontier) →
+      讀 dest.fields(不是 frontier!),找含指向 frontier 的 wikilink 欄位。
+      **讀錯端(frontier)會全 miss → 全 body-wikilink fallback(r9-F1 的 bug)。**
+    - 比對:欄位值是 "[[stem]]" 字串,目標是 rel 路徑 →
+      用 link_target()+env.resolve() 轉 rel 再比。
+    - body-wikilink fallback(r5-F3):n.fields 只有 frontmatter;
+      若「wikilink 所在端」任何 frontmatter 欄位都找不到 → via="body-wikilink"。
+
+    via 枚舉: related / verified_by / plan_refs / body-wikilink。
+    direction = "backlink" if is_backlink else "outlink"(由呼叫端 is_backlink 決定)。
+    """
+    # 決定「wikilink 所在端」和「被指向的目標 rel」
+    if is_backlink:
+        # backlink: dest 連向 frontier → wikilink 在 dest,目標是 frontier
+        wikilink_node = dest
+        target_rel = frontier
+    else:
+        # outlink: frontier 連向 dest → wikilink 在 frontier,目標是 dest
+        wikilink_node = frontier
+        target_rel = dest
+
+    note = env.notes.get(wikilink_node)
+    if note is None:
+        return "body-wikilink"
+
+    # 掃 frontmatter 欄位(跳過 block scalar;只看 list/str wikilink 欄位)
+    for field_key in ("related", "verified_by", "plan_refs"):
+        vals = as_list(note.fields.get(field_key))
+        for val in vals:
+            resolved = env.resolve(link_target(val))
+            if resolved == target_rel:
+                return field_key
+
+    # 任何 frontmatter 欄位都找不到 → 邊來自 body([[..]])
+    return "body-wikilink"
+
+
+def _impact_collect(direct_node_rel, env, depth=2):
+    """Task 6: 組裝單一直接節點的影響清單(直接 + 間接)。
+
+    設計要點:
+    - direct_node_rel: vault-relative 路徑(如 "Systems/A.md")。
+    - 直接節點: direct_node_rel 本身,補齊 {node, hit, contract, combo}。
+    - 間接關聯:
+        1. core_refs 跨 repo 葉(r7-F2): 直接節點若有 core_refs,把每條值當
+           「不可展開跨 repo 葉」輸出,標 via:"core_refs",cross_repo:True,
+           no_expand:True,**不試圖 BFS 進它**。
+           讀法: as_list(n.fields.get("core_refs"))(r3-F8:值可能 str/list)。
+        2. BFS 間接關聯(via env.edges 雙向)→ 由 _impact_bfs 出結果,
+           再用 _impact_via 補 via/direction。
+           (BFS 項目的 cross_repo/no_expand 不存在——下游用 .get 取 false。)
+
+    回傳: {"direct": [...], "indirect": [...]}
+    格式:
+      direct 每筆: {node, hit:"body-inline-code", contract, combo}
+      indirect 每筆(core_refs 葉):
+        {node, hop:1, via:"core_refs", direction:"outlink",
+         from:<直接節點>, cross_repo:True, no_expand:True,
+         contract:None, combo:False}
+      indirect 每筆(BFS):
+        {node, hop, via, direction, from, contract, combo}
+    """
+    direct_list = []
+    indirect_list = []
+
+    # 直接節點資料
+    direct_note = env.notes.get(direct_node_rel)
+    contract, combo = _impact_contract(direct_note) if direct_note else (None, False)
+    direct_list.append({
+        "node": direct_node_rel,
+        "hit": "body-inline-code",
+        "contract": contract,
+        "combo": combo,
+    })
+
+    # 1. core_refs 跨 repo 葉(r7-F2):不 BFS 進、不查 env.notes[dest]
+    if direct_note is not None:
+        for core_ref in as_list(direct_note.fields.get("core_refs")):
+            indirect_list.append({
+                "node": core_ref,
+                "hop": 1,
+                "via": "core_refs",
+                "direction": "outlink",
+                "from": direct_node_rel,
+                "cross_repo": True,
+                "no_expand": True,
+                "contract": None,
+                "combo": False,
+            })
+
+    # 2. BFS 間接關聯(via env.edges)
+    bfs_results = _impact_bfs([direct_node_rel], env, depth=depth)
+    for (node, hop, from_node, is_backlink) in bfs_results:
+        bfs_note = env.notes.get(node)
+        bfs_contract, bfs_combo = _impact_contract(bfs_note) if bfs_note else (None, False)
+        via = _impact_via(from_node, node, is_backlink, env)
+        direction = "backlink" if is_backlink else "outlink"
+        indirect_list.append({
+            "node": node,
+            "hop": hop,
+            "via": via,
+            "direction": direction,
+            "from": from_node,
+            "contract": bfs_contract,
+            "combo": bfs_combo,
+        })
+
+    return {"direct": direct_list, "indirect": indirect_list}
+
+
+def _impact_load_config(repo_root):
+    """讀取 repo_root/.lumos/impact.json → {"depth":int,"ttl_min":int}。
+    缺檔或解析失敗 → fail-open 回預設 {"depth":2,"ttl_min":20}。
+    同 .lumos per-feature 檔慣例,但缺檔回 merged 預設(非 None)以 fail-open
+    (注意:_lint_load_config 缺檔回 None,語意不同)。
+    bool 值不被視為合法 int(isinstance(True, int) 在 Python 為 True,故明確排除)。
+    """
+    import json
+    _DEFAULTS = {"depth": 2, "ttl_min": 20}
+    p = Path(repo_root) / ".lumos" / "impact.json"
+    if not p.exists():
+        return dict(_DEFAULTS)
+    try:
+        with open(p, encoding="utf-8") as f:
+            raw = json.load(f)
+        result = dict(_DEFAULTS)
+        depth_val = raw.get("depth")
+        if isinstance(depth_val, int) and not isinstance(depth_val, bool):
+            result["depth"] = depth_val
+        ttl_val = raw.get("ttl_min")
+        if isinstance(ttl_val, int) and not isinstance(ttl_val, bool):
+            result["ttl_min"] = ttl_val
+        return result
+    except Exception:
+        return dict(_DEFAULTS)
+
+
+def cmd_impact(file, repo=None, depth=None, as_json=False):
+    """動手前算出哪些知識圖譜節點會被 code 改動波及。
+    rc 協定: 0=成功(有/無影響集都算) / 3=vault 找不到 / 其他非 0=內部錯。
+    Task 7: 排序 + --json schema + 人讀輸出。
+    """
+    import json
+
+    # 1. 解析 repo root
+    if repo is not None:
+        repo_root = Path(repo)
+        if not repo_root.is_dir():
+            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            return 2
+    else:
+        repo_root = None
+        for cand in (Path.cwd(), *Path.cwd().parents):
+            if (cand / ".git").exists():
+                repo_root = cand
+                break
+
+    # 2. 找 vault(rc 3 = vault 找不到)
+    if repo_root is not None:
+        vault = _vault_in(repo_root)
+    else:
+        vault = find_vault(Path.cwd())
+    if vault is None:
+        print("IMPACT-DEBUG: vault 找不到(rc3)——非圖譜專案或 --repo 未指向含 vault 的目錄", file=sys.stderr)
+        return 3
+
+    # 3. 解析 depth:CLI(顯式 --depth) > .lumos/impact.json config > 預設 2
+    _cfg_root = repo_root if repo_root is not None else vault.parent.parent
+    _impact_cfg = _impact_load_config(_cfg_root)
+    if depth is None:
+        depth = _impact_cfg["depth"]
+
+    # 4. 載入圖譜環境
+    env = Env(vault)
+    repo_root_for_lookup = repo_root if repo_root is not None else vault.parent.parent
+
+    # 5. code → node 反查(只認 body inline-code,r7-F2)
+    direct_rels = _impact_reverse_lookup(file, env, repo_root_for_lookup)
+
+    # 6. 組裝影響清單:single multi-source BFS 保證 hop = 距最近直接節點的 min 距離(I1)。
+    #
+    # 舊做法(per-node loop)問題:各直接節點各跑一次 BFS → first-wins 去重 → 若節點 N
+    # 從 D1 hop=2、從 D2 hop=1,但 D1 先迭代,N 以 hop=2 進 indirect_seen → D2 的 hop=1
+    # 被跳過,違反設計 §2 indirect.hop=距最近直接節點。
+    #
+    # 新做法:
+    #   ① direct 資料:逐一收(hit/contract/combo 是 per-node 屬性)。
+    #   ② core_refs 葉:逐一從各直接節點抽(也是 per-node 屬性,hop=1 固定)。
+    #   ③ BFS 間接:single multi-source BFS(全部直接節點一起當種子)→ hop 自然是 min。
+    #
+    # 直接節點預種 direct_seen 確保:BFS 不把另一直接節點誤加進 indirect。
+    all_direct = []
+    all_indirect = []
+    direct_seen = set(direct_rels)  # ← 預種全量,BFS seen 初始集 + dedup guard
+    indirect_seen = set()  # 去重:core_refs 葉 + BFS 間接
+    processed_direct = set()  # 避免同一 direct 重複展開 direct/core_refs
+
+    # ① 直接節點資料 + ② core_refs 葉(per-node,保留原 _impact_collect 語意)
+    for d_rel in direct_rels:
+        if d_rel in processed_direct:
+            continue
+        processed_direct.add(d_rel)
+        direct_note = env.notes.get(d_rel)
+        contract, combo = _impact_contract(direct_note) if direct_note else (None, False)
+        all_direct.append({"node": d_rel, "hit": "body-inline-code",
+                           "contract": contract, "combo": combo})
+        # core_refs 跨 repo 葉(r7-F2):hop=1 固定,不入 BFS
+        if direct_note is not None:
+            for core_ref in as_list(direct_note.fields.get("core_refs")):
+                if core_ref not in direct_seen and core_ref not in indirect_seen:
+                    indirect_seen.add(core_ref)
+                    all_indirect.append({
+                        "node": core_ref, "hop": 1, "via": "core_refs",
+                        "direction": "outlink", "from": d_rel,
+                        "cross_repo": True, "no_expand": True,
+                        "contract": None, "combo": False,
+                    })
+
+    # ③ 單次 multi-source BFS:全部直接節點為種子,hop = min 距離
+    unique_direct_rels = list(processed_direct)
+    bfs_results = _impact_bfs(unique_direct_rels, env, depth=depth)
+    for (node, hop, from_node, is_backlink) in bfs_results:
+        if node in direct_seen or node in indirect_seen:
+            continue
+        indirect_seen.add(node)
+        bfs_note = env.notes.get(node)
+        bfs_contract, bfs_combo = _impact_contract(bfs_note) if bfs_note else (None, False)
+        via = _impact_via(from_node, node, is_backlink, env)
+        direction = "backlink" if is_backlink else "outlink"
+        all_indirect.append({
+            "node": node, "hop": hop, "via": via, "direction": direction,
+            "from": from_node, "contract": bfs_contract, "combo": bfs_combo,
+        })
+
+    # 6. 排序(§2.4):合約節點優先 → 直接優先於間接(已分層) → 同層 hop 升序
+    # 合約優先權:IRREVERSIBLE=2, INVARIANT=1, None=0
+    def contract_priority(contract):
+        if contract == "IRREVERSIBLE":
+            return 2
+        if contract == "INVARIANT":
+            return 1
+        return 0
+
+    all_direct.sort(key=lambda x: -contract_priority(x.get("contract")))
+    all_indirect.sort(key=lambda x: (x.get("hop", 999), -contract_priority(x.get("contract"))))
+
+    # 7. 輸出
+    rel_file = str(file)
+    if os.path.isabs(rel_file) and repo_root is not None:
+        rel_file = os.path.relpath(rel_file, str(repo_root))
+
+    if as_json:
+        print(json.dumps(
+            {"file": rel_file, "direct": all_direct, "indirect": all_indirect},
+            ensure_ascii=False,
+        ))
+    else:
+        # 人讀輸出
+        print(f"改動 {rel_file} (由讀盤 refcheck 抽取)")
+        print(f"── 直接關聯 ({len(all_direct)}) ──")
+        for x in all_direct:
+            contract_tag = f" ★{x['contract']}★" if x.get("contract") else ""
+            combo_tag = "★COMBO★" if x.get("combo") else ""
+            tags = (contract_tag + (" " + combo_tag if combo_tag else "")).rstrip()
+            print(f"  {'⚠合約 ' if x.get('contract') else ''}{x['node']}{tags}  ({x['hit']})")
+        print(f"── 間接關聯 ({len(all_indirect)}) ──")
+        for x in all_indirect:
+            cross = " [跨repo葉,不展開]" if x.get("cross_repo") else ""
+            print(f"  hop{x['hop']}  {x['node']}  {x['direction']} ← via {x['via']} ← {x['from']}{cross}")
+
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="lumos", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -5489,6 +5897,12 @@ def main():
     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
 
+    p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
+    p.add_argument("--file", dest="impact_file", required=True, help="被改動的 code 檔路徑(必填)")
+    p.add_argument("--repo", dest="impact_repo", help="repo root(缺則退回 find_vault;hook 必傳)")
+    p.add_argument("--depth", dest="impact_depth", type=int, default=None, help="BFS 展開深度(缺省讀 .lumos/impact.json;最終預設 2)")
+    p.add_argument("--json", dest="impact_json", action="store_true", help="JSON 輸出(機器可讀)")
+
     p = sub.add_parser("pitfalls", help="實務隱患提問(vault-free):spec 逼答隱患 / --diff 攤代碼風險位置")
     p.add_argument("md", nargs="?", help="spec md 檔(spec 模式)")
     p.add_argument("--diff", dest="pf_diff", help="diff range(如 main..HEAD;diff 模式)")
@@ -5546,6 +5960,9 @@ def main():
     if args.cmd == "pitfalls":
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
+    if args.cmd == "impact":
+        return cmd_impact(args.impact_file, repo=args.impact_repo,
+                          depth=args.impact_depth, as_json=args.impact_json)
     if args.cmd == "sqlfluff-sarif":
         return cmd_sqlfluff_sarif(out=args.sqlfluff_out)
     if args.cmd == "stylelint-sarif":

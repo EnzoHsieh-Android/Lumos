@@ -3682,6 +3682,1153 @@ def t_stylelint_sarif_bridge():
     check("空 stdin 不崩", r2.returncode == 0 and '"results": []' in r2.stdout, r2.stdout[:80])
 
 
+# ─── Task 1: lumos impact 子命令骨架 + rc 協定 ────────────────────────────────
+
+def t_impact_cli_skeleton():
+    # 非 vault 目錄 → rc 3(vault 找不到)
+    with tempfile.TemporaryDirectory() as d:
+        rc = run_lumos(["impact", "--file", "x.py", "--repo", d, "--json"])
+        check("impact: 非圖譜應 rc3", rc == 3, f"非圖譜應 rc3, got {rc}")
+    # 缺 --file → argparse rc 2
+    check("impact: 缺 --file 應 rc2", run_lumos(["impact", "--repo", "."]) == 2, "")
+
+
+# ─── Task 2: code→node 反查(body inline-code,重讀盤,路徑規範化) ──────────────
+
+def make_fixture_vault(files: dict):
+    """建立 fixture repo:repo_root 含 scripts/ 頂層目錄 + docs/test-knowledge/ vault。
+    files: {vault-rel-path: content-str} — 直接寫進 vault 子目錄。
+    回傳 (env, repo_root):env 是 Env(vault),repo_root 是 Path。
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    repo = Path(tempfile.mkdtemp(prefix="gctl-impact-"))
+    # 建頂層 scripts/ 目錄(讓 _refcheck_scan 的 top_dirs 能認到 scripts/)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake lumos\n", encoding="utf-8")
+    # 建 vault
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    # 寫入測試節點
+    for rel_path, content in files.items():
+        p = vault / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    env = m.Env(vault)
+    return env, repo
+
+
+def t_impact_reverse_lookup():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_reverse_lookup = m._impact_reverse_lookup
+
+    env, repo = make_fixture_vault({
+        "Systems/A.md": "---\ntype: system\nstatus: doing\n---\nbody 提到 `scripts/lumos` 的用法",
+        "Systems/B.md": "---\ntype: system\nstatus: doing\n---\nbody 無關",
+        "Systems/C.md": "---\ntype: system\nstatus: doing\ncore_refs: scripts/lumos\n---\ncore 節點",
+    })
+    hits = _impact_reverse_lookup("scripts/lumos", env, repo)
+    check("impact_reverse_lookup: A(body inline-code 命中) 在結果中",
+          "Systems/A.md" in hits, f"hits={hits}")
+    check("impact_reverse_lookup: B(無引用) 不在結果中",
+          "Systems/B.md" not in hits, f"hits={hits}")
+    check("impact_reverse_lookup: C(core_refs 不算 code 反查 r7-F2) 不在結果中",
+          "Systems/C.md" not in hits, f"hits={hits}")
+
+    # 絕對路徑輸入規範化後仍命中
+    abs_path = str(repo / "scripts" / "lumos")
+    hits_abs = _impact_reverse_lookup(abs_path, env, repo)
+    check("impact_reverse_lookup: 絕對路徑輸入規範化後仍命中 A",
+          "Systems/A.md" in hits_abs, f"hits_abs={hits_abs}")
+    check("impact_reverse_lookup: 絕對路徑輸入規範化後 C 仍不在",
+          "Systems/C.md" not in hits_abs, f"hits_abs={hits_abs}")
+
+
+def t_impact_contract():
+    """Task 3: _impact_contract(note) -> (contract, combo) 兩軸偵測。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_ic", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_ic", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_contract = m._impact_contract
+    Note = m.Note
+
+    def note_with(summary_text):
+        """建立最簡 Note fixture,只設 fields["summary"]。"""
+        n = Note()
+        n.rel = "Systems/fixture.md"
+        n.stem = "fixture"
+        n.fields = {"type": "system", "status": "doing", "summary": summary_text}
+        n.block_keys = set()
+        n.fm_lines = []
+        n.targets = []
+        n.lint = []
+        n.mtime = 0
+        return n
+
+    # ★INVARIANT★ → contract="INVARIANT"
+    contract, combo = _impact_contract(note_with("KEY:★INVARIANT★ x [test:t]"))
+    check("impact_contract: INVARIANT 節點回 INVARIANT",
+          contract == "INVARIANT", f"got {contract!r}")
+
+    # ★IRREVERSIBLE★(無 INVARIANT) → contract="IRREVERSIBLE"(走獨立 RE)
+    contract, combo = _impact_contract(note_with("KEY:★IRREVERSIBLE★ y [rollback:decisions]"))
+    check("impact_contract: IRREVERSIBLE(無 INVARIANT)走獨立 RE 回 IRREVERSIBLE",
+          contract == "IRREVERSIBLE", f"got {contract!r}")
+
+    # 兩者同時有 → 取 IRREVERSIBLE(最高)
+    contract, combo = _impact_contract(
+        note_with("KEY:★IRREVERSIBLE★ y\nKEY:★INVARIANT★ x [test:t]"))
+    check("impact_contract: IRREVERSIBLE+INVARIANT 取最高=IRREVERSIBLE",
+          contract == "IRREVERSIBLE", f"got {contract!r}")
+
+    # ★INVARIANT★★COMBO★ → combo=True
+    _, combo = _impact_contract(note_with("KEY:★INVARIANT★ ★COMBO★ z [test:t]"))
+    check("impact_contract: INVARIANT+COMBO 行 → combo=True",
+          combo is True, f"got combo={combo!r}")
+
+    # 純 ★DEBT★ → (None, False)
+    result = _impact_contract(note_with("KEY:★DEBT★ w"))
+    check("impact_contract: 純 DEBT → (None, False)",
+          result == (None, False), f"got {result!r}")
+
+
+# ─── Task 4: 間接關聯 BFS(hop 1..depth, seen cycle guard, 雙向邊) ─────────────
+
+def t_impact_bfs_cycle_and_depth():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_bfs", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_bfs", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_bfs = m._impact_bfs
+
+    # A↔B 環:A 是 direct → BFS 應展開 B(hop1),A 不得重入 indirect(r8-F4)
+    env, _ = make_fixture_vault({
+        "S/A.md": "---\nrelated:\n  - \"[[B]]\"\n---\n`scripts/x`",
+        "S/B.md": "---\nrelated:\n  - \"[[A]]\"\n---\nb",
+    })
+    out = _impact_bfs(["S/A.md"], env, depth=2)
+    nodes = [o[0] for o in out]
+    check("impact_bfs: B(A 的鄰居) 在 indirect 中(hop1)",
+          "S/B.md" in nodes, f"nodes={nodes}")
+    check("impact_bfs: A(direct) 不得沿環重入 indirect(r8-F4)",
+          "S/A.md" not in nodes, f"nodes={nodes}")
+
+
+def t_impact_bfs_depth_limit():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_bfs2", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_bfs2", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_bfs = m._impact_bfs
+
+    # D→N1→N2 chain: depth=1 只出 N1(hop1),不出 N2
+    env, _ = make_fixture_vault({
+        "S/D.md": "---\nrelated:\n  - \"[[N1]]\"\n---\nd",
+        "S/N1.md": "---\nrelated:\n  - \"[[N2]]\"\n---\nn1",
+        "S/N2.md": "---\n---\nn2",
+    })
+    out1 = _impact_bfs(["S/D.md"], env, depth=1)
+    nodes1 = [o[0] for o in out1]
+    check("impact_bfs: depth=1 包含 N1(hop1)",
+          "S/N1.md" in nodes1, f"nodes1={nodes1}")
+    check("impact_bfs: depth=1 不包含 N2(hop2)",
+          "S/N2.md" not in nodes1, f"nodes1={nodes1}")
+
+    # depth=2 出 N1(hop1) 和 N2(hop2)
+    out2 = _impact_bfs(["S/D.md"], env, depth=2)
+    nodes2 = [o[0] for o in out2]
+    check("impact_bfs: depth=2 包含 N1(hop1)",
+          "S/N1.md" in nodes2, f"nodes2={nodes2}")
+    check("impact_bfs: depth=2 包含 N2(hop2)",
+          "S/N2.md" in nodes2, f"nodes2={nodes2}")
+    # 驗 hop 值
+    hop_n2 = next(o[1] for o in out2 if o[0] == "S/N2.md")
+    check("impact_bfs: N2 的 hop=2",
+          hop_n2 == 2, f"hop_n2={hop_n2}")
+
+
+def t_impact_bfs_backlink():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_bfs3", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_bfs3", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_bfs = m._impact_bfs
+
+    # D 是 direct;X 連向 D(backlink);X 應以 is_backlink=True 出現
+    env, _ = make_fixture_vault({
+        "S/D.md": "---\n---\nd",
+        "S/X.md": "---\nrelated:\n  - \"[[D]]\"\n---\nx",
+    })
+    out = _impact_bfs(["S/D.md"], env, depth=1)
+    nodes = [o[0] for o in out]
+    check("impact_bfs: X(backlink 指向 D) 在 indirect 中",
+          "S/X.md" in nodes, f"nodes={nodes}")
+    x_entry = next((o for o in out if o[0] == "S/X.md"), None)
+    check("impact_bfs: X 的 is_backlink=True",
+          x_entry is not None and x_entry[3] is True,
+          f"x_entry={x_entry}")
+
+
+def t_impact_bfs_tuple_fields():
+    """每筆 tuple: (node, hop, from_node, is_backlink) 欄位存在且正確。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_bfs4", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_bfs4", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_bfs = m._impact_bfs
+
+    env, _ = make_fixture_vault({
+        "S/D.md": "---\nrelated:\n  - \"[[N]]\"\n---\nd",
+        "S/N.md": "---\n---\nn",
+    })
+    out = _impact_bfs(["S/D.md"], env, depth=1)
+    check("impact_bfs: 有結果", len(out) > 0, f"out={out}")
+    entry = out[0]
+    check("impact_bfs: tuple 長度=4", len(entry) == 4, f"entry={entry}")
+    node, hop, from_node, is_backlink = entry
+    check("impact_bfs: hop=1", hop == 1, f"hop={hop}")
+    check("impact_bfs: from_node 是 direct", from_node == "S/D.md", f"from_node={from_node}")
+    check("impact_bfs: is_backlink 是 bool", isinstance(is_backlink, bool),
+          f"is_backlink={is_backlink!r}")
+
+
+# ─── Task 5: via 標記(二次反查,outlink/backlink 讀對端,body-wikilink fallback) ──
+
+def t_impact_via_both_directions():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_via", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_via", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_via = m._impact_via
+
+    env, _ = make_fixture_vault({
+        "S/F.md": "---\nrelated:\n  - \"[[G]]\"\n---\n`scripts/x`",
+        "S/G.md": "g",
+        "S/H.md": "---\nverified_by:\n  - \"[[F]]\"\n---\nh",  # H→F,對 F 是 backlink
+    })
+    # outlink: F→G via related(讀 frontier=F 的 fields)
+    result_outlink = _impact_via("S/F.md", "S/G.md", False, env)
+    check("impact_via: outlink F→G 讀 frontier(F.fields) 得 via=related",
+          result_outlink == "related", f"got {result_outlink!r}")
+
+    # backlink: H→F,從 F 反查到 H(in_e);須讀 dest(H).fields 找 verified_by:[[F]]
+    result_backlink = _impact_via("S/F.md", "S/H.md", True, env)
+    check("impact_via: backlink H→F 讀 dest(H.fields) 得 via=verified_by(不是讀 F)",
+          result_backlink == "verified_by", f"got {result_backlink!r}")
+
+
+def t_impact_via_body_wikilink_fallback():
+    """body-wikilink fallback: 當連結不在任何 frontmatter 欄位時回 body-wikilink(r5-F3)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_via2", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_via2", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_via = m._impact_via
+
+    env, _ = make_fixture_vault({
+        # P→Q 連結只在 body([[Q]]),frontmatter 無 wikilink
+        "S/P.md": "---\n---\nbody 連向 [[Q]]",
+        "S/Q.md": "---\n---\nq",
+    })
+    # outlink: P→Q,frontmatter 無 wikilink → body-wikilink fallback
+    result = _impact_via("S/P.md", "S/Q.md", False, env)
+    check("impact_via: outlink body-wikilink fallback → body-wikilink",
+          result == "body-wikilink", f"got {result!r}")
+
+
+# ─── Task 6: core_refs 跨 repo 葉(cross_repo/no_expand,不展開) ───────────────
+
+def t_impact_core_refs_leaf():
+    """Task 6: 直接節點有 core_refs → 影響清單 indirect 含跨 repo 葉,標 cross_repo/no_expand,不 KeyError。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_cr", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_cr", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _impact_collect = m._impact_collect
+
+    env, _ = make_fixture_vault({
+        "S/A.md": "---\ncore_refs: core-knowledge/systems/rule\n---\n`scripts/x`",
+    })
+    res = _impact_collect("S/A.md", env, depth=2)
+    leaf = [r for r in res["indirect"] if r.get("cross_repo")]
+    check("impact_core_refs: indirect 含跨 repo 葉",
+          len(leaf) > 0, f"indirect={res['indirect']}")
+    check("impact_core_refs: 葉的 node == core-knowledge/systems/rule",
+          leaf[0]["node"] == "core-knowledge/systems/rule", f"leaf={leaf}")
+    check("impact_core_refs: 葉的 no_expand is True",
+          leaf[0]["no_expand"] is True, f"leaf={leaf}")
+    check("impact_core_refs: 葉的 via == core_refs",
+          leaf[0].get("via") == "core_refs", f"leaf={leaf}")
+    check("impact_core_refs: 葉的 cross_repo is True",
+          leaf[0]["cross_repo"] is True, f"leaf={leaf}")
+
+
+# ─── Task 7: 排序 + --json schema 輸出 + 人讀輸出 ─────────────────────────────
+
+def t_impact_json_schema_and_sort():
+    """Task 7: --json schema 欄位齊 + 合約節點排最前 + 空集回 rc0。
+
+    fixture:
+    - Systems/WithContract.md  含 ★INVARIANT★,body 引 `scripts/lumos` → 直接+有合約
+    - Systems/NoContract.md    無合約,body 引 `scripts/lumos` → 直接+無合約
+    - Systems/Indirect.md      related 指向 NoContract → 間接(hop1)
+    空集合:新建 empty_repo → 回 {direct:[], indirect:[]} rc0。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    # ── 建 fixture repo ──────────────────────────────────────────
+    repo = Path(_tf.mkdtemp(prefix="gctl-t7-"))
+    # scripts/ 頂層目錄(讓 _refcheck_scan top_dirs 認到 scripts/)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake lumos\n", encoding="utf-8")
+    # vault
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(
+        "---\ntype: moc\n---\n# idx\n".encode("utf-8")
+    )
+    # 節點 A: 有合約(INVARIANT),引 scripts/lumos
+    (vault / "Systems" / "WithContract.md").write_text(
+        "---\ntype: system\nstatus: doing\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 合約 [test:t_stub]\n"
+        "---\n引用 `scripts/lumos` 的用法\n",
+        encoding="utf-8",
+    )
+    # 節點 B: 無合約,引 scripts/lumos;有 related 指向 Indirect
+    (vault / "Systems" / "NoContract.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[Indirect]]\"\n"
+        "---\n也引用 `scripts/lumos`\n",
+        encoding="utf-8",
+    )
+    # 節點 C: 間接節點(NoContract 的 related)
+    (vault / "Systems" / "Indirect.md").write_text(
+        "---\ntype: system\nstatus: doing\n---\n無 code 引用\n",
+        encoding="utf-8",
+    )
+
+    FIX = str(repo)
+
+    # ── 主 schema 測試 ───────────────────────────────────────────
+    out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", FIX, "--json"])
+    d = _json.loads(out)
+
+    check("impact_json: 頂層 key 集合 == {file,direct,indirect}",
+          set(d) == {"file", "direct", "indirect"}, f"keys={set(d)}")
+
+    # direct 欄位: 必有 node/hit/contract/combo; 不得有 hop/from
+    for x in d["direct"]:
+        check("impact_json: direct 項含 node/hit/contract/combo",
+              set(x) >= {"node", "hit", "contract", "combo"}, f"direct_item={x}")
+        check("impact_json: direct 項無 hop",
+              "hop" not in x, f"direct_item={x}")
+        check("impact_json: direct 項無 from",
+              "from" not in x, f"direct_item={x}")
+
+    # indirect 欄位: 必有 node/hop/via/direction/from/contract/combo
+    for x in d["indirect"]:
+        check("impact_json: indirect 項含必要欄位",
+              set(x) >= {"node", "hop", "via", "direction", "from", "contract", "combo"},
+              f"indirect_item={x}")
+
+    # combo 必有(每筆都出,無則 false)
+    for x in d["direct"]:
+        check("impact_json: direct.combo 是 bool",
+              isinstance(x.get("combo"), bool), f"direct_item={x}")
+    for x in d["indirect"]:
+        check("impact_json: indirect.combo 是 bool",
+              isinstance(x.get("combo"), bool), f"indirect_item={x}")
+
+    # 合約節點排最前(若有合約節點,第一個的 contract 非 None;若全無合約,任意)
+    if d["direct"]:
+        has_contract = [x for x in d["direct"] if x["contract"] is not None]
+        if has_contract:
+            check("impact_json: 合約節點排 direct 之首",
+                  d["direct"][0]["contract"] in ("IRREVERSIBLE", "INVARIANT"),
+                  f"direct[0]={d['direct'][0]}, all={d['direct']}")
+        else:
+            check("impact_json: 無合約節點時首位 contract=None",
+                  d["direct"][0]["contract"] is None, f"direct[0]={d['direct'][0]}")
+
+    # 應有至少一個直接節點(WithContract 和 NoContract 都引了 scripts/lumos)
+    check("impact_json: 有直接節點(WithContract+NoContract)",
+          len(d["direct"]) >= 2, f"direct={d['direct']}")
+
+    # 應有間接節點(NoContract related 指向 Indirect)
+    check("impact_json: 有間接節點(Indirect via related)",
+          len(d["indirect"]) >= 1, f"indirect={d['indirect']}")
+
+    # indirect.hop 應為 int
+    for x in d["indirect"]:
+        check("impact_json: indirect.hop 是 int",
+              isinstance(x["hop"], int), f"indirect_item={x}")
+
+    # ── 空集合測試: 找不到任何直接節點時 rc0 + json 出 ─────────────────
+    empty_repo = Path(_tf.mkdtemp(prefix="gctl-t7-empty-"))
+    (empty_repo / "scripts").mkdir()
+    (empty_repo / "scripts" / "newfile.py").write_text("# new\n", encoding="utf-8")
+    empty_vault = empty_repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (empty_vault / sub).mkdir(parents=True, exist_ok=True)
+    (empty_vault / "MOC" / "idx.md").write_bytes(
+        "---\ntype: moc\n---\n# idx\n".encode("utf-8")
+    )
+    rc_empty = run_lumos(
+        ["impact", "--file", "scripts/newfile.py", "--repo", str(empty_repo), "--json"]
+    )
+    check("impact_json: 空集合 rc==0(顯式斷言)",
+          rc_empty == 0, f"rc={rc_empty}")
+    out_empty = run_lumos_capture(
+        ["impact", "--file", "scripts/newfile.py", "--repo", str(empty_repo), "--json"]
+    )
+    d_empty = _json.loads(out_empty)
+    check("impact_json: 空集合 direct=[]",
+          d_empty["direct"] == [], f"direct={d_empty['direct']}")
+    check("impact_json: 空集合 indirect=[]",
+          d_empty["indirect"] == [], f"indirect={d_empty['indirect']}")
+
+
+def t_impact_cross_direct_node_dedup():
+    """回歸: 兩個互相 related 的直接節點(A、B 都引 scripts/lumos 且互 related),
+    跑 --json 後 B(與 A)只應出現在 direct、不得出現在 indirect。
+
+    修前 bug: direct_seen 在迴圈內逐一 add,處理 A 的 BFS 展開命中 B 時 B 還沒進
+    direct_seen → B 被誤加進 indirect,之後處理 B 又進 direct → B 同時出現在
+    direct 與 indirect(矛盾輸出)。修後:先預種全量 direct_seen。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    repo = Path(_tf.mkdtemp(prefix="gctl-t7-dedup-"))
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake lumos\n", encoding="utf-8")
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(
+        "---\ntype: moc\n---\n# idx\n".encode("utf-8")
+    )
+
+    # A: 引 scripts/lumos,related 指向 B
+    (vault / "Systems" / "DirectA.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[DirectB]]\"\n"
+        "---\n引用 `scripts/lumos` 的用法\n",
+        encoding="utf-8",
+    )
+    # B: 引 scripts/lumos,related 指向 A(互相 related)
+    (vault / "Systems" / "DirectB.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[DirectA]]\"\n"
+        "---\n也引用 `scripts/lumos`\n",
+        encoding="utf-8",
+    )
+
+    rc = run_lumos(["impact", "--file", "scripts/lumos", "--repo", str(repo), "--json"])
+    check("impact_dedup: rc==0", rc == 0, f"rc={rc}")
+
+    out = run_lumos_capture(
+        ["impact", "--file", "scripts/lumos", "--repo", str(repo), "--json"]
+    )
+    d = _json.loads(out)
+
+    direct_nodes = {x["node"] for x in d["direct"]}
+    indirect_nodes = {x["node"] for x in d["indirect"]}
+    overlap = direct_nodes & indirect_nodes
+
+    check("impact_dedup: DirectA 在 direct", "Systems/DirectA.md" in direct_nodes,
+          f"direct_nodes={direct_nodes}")
+    check("impact_dedup: DirectB 在 direct", "Systems/DirectB.md" in direct_nodes,
+          f"direct_nodes={direct_nodes}")
+    check("impact_dedup: direct 與 indirect 無交集(B 不得同時在兩邊)",
+          len(overlap) == 0, f"overlap={overlap}, direct={direct_nodes}, indirect={indirect_nodes}")
+
+
+def t_impact_multisource_bfs_min_hop():
+    """I1 回歸:multi-source BFS 保證 hop = 距最近直接節點的 min 距離。
+
+    圖結構:
+      D1 → N(hop=2 via D1)
+      D2 → N(hop=1 via D2)
+      D1 先在 direct_rels 裡迭代
+
+    斷言:N 的 hop == 1(min),而非 2(first-wins 舊 bug)。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    repo = Path(_tf.mkdtemp(prefix="gctl-t-i1-minhop-"))
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake lumos\n", encoding="utf-8")
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(
+        "---\ntype: moc\n---\n# idx\n".encode("utf-8")
+    )
+
+    # N: 目標節點,不引 scripts/lumos
+    (vault / "Systems" / "NodeN.md").write_text(
+        "---\ntype: system\nstatus: doing\n---\n# N\n",
+        encoding="utf-8",
+    )
+    # M: 中繼節點,D1 → M → N(D1 到 N 是 hop=2)
+    (vault / "Systems" / "NodeM.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[NodeN]]\"\n---\n# M\n",
+        encoding="utf-8",
+    )
+    # D1: 引 scripts/lumos,related → M(D1→M→N,hop=2);D1 先在字母序排在前
+    (vault / "Systems" / "DirectA.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[NodeM]]\"\n"
+        "---\n引用 `scripts/lumos`\n",
+        encoding="utf-8",
+    )
+    # D2: 引 scripts/lumos,related → N(D2→N,hop=1)
+    (vault / "Systems" / "DirectB.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[NodeN]]\"\n"
+        "---\n也引用 `scripts/lumos`\n",
+        encoding="utf-8",
+    )
+
+    out = run_lumos_capture(
+        ["impact", "--file", "scripts/lumos", "--repo", str(repo), "--json"]
+    )
+    d = _json.loads(out)
+
+    indirect_nodes = {x["node"]: x for x in d["indirect"]}
+    direct_nodes = {x["node"] for x in d["direct"]}
+
+    check("impact_minhop: DirectA 在 direct", "Systems/DirectA.md" in direct_nodes,
+          f"direct={direct_nodes}")
+    check("impact_minhop: DirectB 在 direct", "Systems/DirectB.md" in direct_nodes,
+          f"direct={direct_nodes}")
+    check("impact_minhop: NodeN 在 indirect", "Systems/NodeN.md" in indirect_nodes,
+          f"indirect keys={list(indirect_nodes)}")
+    n_hop = indirect_nodes.get("Systems/NodeN.md", {}).get("hop")
+    check("impact_minhop: NodeN.hop == 1(multi-source BFS min 距離,非 first-wins 2)",
+          n_hop == 1, f"got hop={n_hop}, expected 1")
+
+
+def t_impact_depth_config_integration():
+    """Task 8 M-3: CLI --depth 顯式值覆蓋 .lumos/impact.json config 的整合測試。
+
+    建一個 fixture repo:
+    - .lumos/impact.json 設 {"depth": 3}
+    - 一個 code 檔 scripts/target.py(不需實際 python,只需存在)
+    - vault 含 depth 1 可見但 depth 3 才多見的多層圖:
+        DirectNode → Hop1 → Hop2 → Hop3(三層 related chain)
+      DirectNode body 引 `scripts/target.py` → 直接節點。
+      Hop1/2/3 依 related 鏈串 → 深度控制間接 hop 上限。
+
+    驗兩點:
+    1. 不帶 --depth → 用 config depth=3 → indirect 可看到 hop3 節點(Hop3)。
+    2. 帶 --depth 1 → 覆蓋 config → indirect 最多 hop=1 → Hop2/Hop3 不出現。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    # ── 建 fixture ──
+    repo = Path(_tf.mkdtemp(prefix="gctl-t8-depth-"))
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "target.py").write_text("# target\n", encoding="utf-8")
+
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(b"---\ntype: moc\n---\n# idx\n")
+
+    # DirectNode — body 引 scripts/target.py,related → Hop1
+    (vault / "Systems" / "DirectNode.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[Hop1]]\"\n---\n"
+        "引用 `scripts/target.py`\n",
+        encoding="utf-8",
+    )
+    # Hop1 → related → Hop2
+    (vault / "Systems" / "Hop1.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[Hop2]]\"\n---\n無 code 引用\n",
+        encoding="utf-8",
+    )
+    # Hop2 → related → Hop3
+    (vault / "Systems" / "Hop2.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[Hop3]]\"\n---\n無 code 引用\n",
+        encoding="utf-8",
+    )
+    # Hop3 — 葉節點
+    (vault / "Systems" / "Hop3.md").write_text(
+        "---\ntype: system\nstatus: doing\n---\n無 code 引用\n",
+        encoding="utf-8",
+    )
+
+    # .lumos/impact.json — config depth=3
+    (repo / ".lumos").mkdir()
+    (repo / ".lumos" / "impact.json").write_text('{"depth": 3}', encoding="utf-8")
+
+    FIX = str(repo)
+    file_arg = "scripts/target.py"
+
+    # ── 情境 A: 不帶 --depth → config depth=3 → Hop3 應出現 ──
+    out_a = run_lumos_capture(["impact", "--file", file_arg, "--repo", FIX, "--json"])
+    d_a = _json.loads(out_a)
+    indirect_nodes_a = {x["node"] for x in d_a["indirect"]}
+    check("impact_depth_integration: config depth=3 → Hop3 出現於 indirect",
+          any("Hop3" in n for n in indirect_nodes_a),
+          f"indirect_nodes={indirect_nodes_a}")
+    check("impact_depth_integration: config depth=3 → Hop2 出現於 indirect",
+          any("Hop2" in n for n in indirect_nodes_a),
+          f"indirect_nodes={indirect_nodes_a}")
+
+    # ── 情境 B: --depth 1 覆蓋 config(3) → 只有 hop≤1 → Hop2/Hop3 不應出現 ──
+    out_b = run_lumos_capture(["impact", "--file", file_arg, "--repo", FIX, "--depth", "1", "--json"])
+    d_b = _json.loads(out_b)
+    indirect_nodes_b = {x["node"] for x in d_b["indirect"]}
+    check("impact_depth_integration: --depth 1 覆蓋 config → Hop2 不出現",
+          not any("Hop2" in n for n in indirect_nodes_b),
+          f"indirect_nodes={indirect_nodes_b}")
+    check("impact_depth_integration: --depth 1 覆蓋 config → Hop3 不出現",
+          not any("Hop3" in n for n in indirect_nodes_b),
+          f"indirect_nodes={indirect_nodes_b}")
+    check("impact_depth_integration: --depth 1 → Hop1 仍出現(depth=1 的 hop1 可達)",
+          any("Hop1" in n for n in indirect_nodes_b),
+          f"indirect_nodes={indirect_nodes_b}")
+
+    # ── 情境 C: bool in config 不穿透 int 守衛 → 回預設 depth=2 ──
+    # 改 config 為 {"depth": true}(bool),確認不套用(fallback=2 → Hop3 看不到)
+    (repo / ".lumos" / "impact.json").write_text('{"depth": true}', encoding="utf-8")
+    out_c = run_lumos_capture(["impact", "--file", file_arg, "--repo", FIX, "--json"])
+    d_c = _json.loads(out_c)
+    indirect_nodes_c = {x["node"] for x in d_c["indirect"]}
+    # depth=2 → Hop1(hop1) + Hop2(hop2) 可見、Hop3(hop3) 不可見
+    check("impact_depth_integration: bool depth 不穿透守衛 → Hop3 不出現(fallback depth=2)",
+          not any("Hop3" in n for n in indirect_nodes_c),
+          f"indirect_nodes={indirect_nodes_c}")
+    check("impact_depth_integration: bool depth 不穿透守衛 → Hop2 仍出現(fallback depth=2)",
+          any("Hop2" in n for n in indirect_nodes_c),
+          f"indirect_nodes={indirect_nodes_c}")
+
+
+def t_impact_config():
+    """Task 8: _impact_load_config — 有檔 depth/ttl merge 預設;無檔 → 2/20;壞 json → 2/20 不拋。"""
+    import importlib.util
+    import tempfile
+    import os
+    from importlib.machinery import SourceFileLoader
+
+    # 動態 import scripts/lumos(無 .py 副檔名 → 用 SourceFileLoader)
+    loader = SourceFileLoader("lumos_mod_cfg", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_cfg", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    fn = m._impact_load_config
+
+    # 情境 1: 有 .lumos/impact.json {"depth":3} → depth 3,ttl_min 補預設 20
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write('{"depth":3}')
+        got = fn(d)
+        check("impact_config: 有檔 depth 3", got == {"depth": 3, "ttl_min": 20}, f"got={got}")
+
+    # 情境 2: 無 .lumos/impact.json → 預設 2/20
+    with tempfile.TemporaryDirectory() as d:
+        got = fn(d)
+        check("impact_config: 無檔 → 2/20", got == {"depth": 2, "ttl_min": 20}, f"got={got}")
+
+    # 情境 3: 壞 json → 預設 2/20,不拋
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write("{bad")
+        try:
+            got = fn(d)
+            check("impact_config: 壞 json → 2/20", got == {"depth": 2, "ttl_min": 20}, f"got={got}")
+        except Exception as e:
+            check("impact_config: 壞 json 不拋", False, f"raised {e}")
+
+    # 情境 4: ttl_min 可覆寫
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write('{"depth":4,"ttl_min":60}')
+        got = fn(d)
+        check("impact_config: depth+ttl 皆覆寫", got == {"depth": 4, "ttl_min": 60}, f"got={got}")
+
+    # 情境 5: depth=true(bool)→ 不視為合法 int → fallback 2
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write('{"depth":true}')
+        got = fn(d)
+        check("impact_config: depth=true(bool)→ fallback 2",
+              got == {"depth": 2, "ttl_min": 20}, f"got={got}")
+
+    # 情境 6: ttl_min=false(bool)→ 不視為合法 int → fallback 20
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write('{"ttl_min":false}')
+        got = fn(d)
+        check("impact_config: ttl_min=false(bool)→ fallback 20",
+              got == {"depth": 2, "ttl_min": 20}, f"got={got}")
+
+
+def t_impact_hook_filter_and_rc():
+    """Task 9: impact-hook 過濾 + tool_input.file_path 巢狀讀取 + rc 處理。
+
+    測試對象是 scripts/hooks/claude/impact-hook.py 的可 import 函式:
+      - extract_path(payload) → 從 payload["tool_input"]["file_path"] 取路徑
+      - hook_decide(payload)  → 非 code → None;code 觸發 → 非 None
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    extract_path = m.extract_path
+    hook_decide = m.hook_decide
+
+    # 1. extract_path: 從巢狀 tool_input 讀 file_path
+    check("impact_hook: extract_path 讀 tool_input.file_path",
+          extract_path({"tool_input": {"file_path": "x.py"}}) == "x.py",
+          "expected 'x.py'")
+
+    # 2. 圖譜檔(.md 在 docs/*-knowledge/)→ 放行(None)
+    check("impact_hook: .md 圖譜路徑 → 放行 None",
+          hook_decide({"tool_input": {"file_path": "docs/x-knowledge/a.md"}}) is None,
+          "expected None for graph .md")
+
+    # 3. /docs/ 路徑下的 code 副檔名也應排除(EXCLUDE_PATH_CONTAINS)
+    check("impact_hook: /docs/ 下 .py → 放行 None",
+          hook_decide({"tool_input": {"file_path": "docs/some/file.py"}}) is None,
+          "expected None for /docs/ path")
+
+    # 4. code 副檔名(.py)→ 觸發(非 None)
+    check("impact_hook: .py → 觸發(非 None)",
+          hook_decide({"tool_input": {"file_path": "a.py"}}) is not None,
+          "expected non-None for .py")
+
+    # 5. node_modules 下 .js → 放行(EXCLUDE_PATH_CONTAINS)
+    check("impact_hook: node_modules/.js → 放行 None",
+          hook_decide({"tool_input": {"file_path": "node_modules/lib/a.js"}}) is None,
+          "expected None for node_modules")
+
+    # 6. lock 檔 → 放行(EXCLUDE_FILENAMES)
+    check("impact_hook: package-lock.json → 放行 None",
+          hook_decide({"tool_input": {"file_path": "package-lock.json"}}) is None,
+          "expected None for lock file")
+
+    # 7. 非 code 副檔名(.txt)→ 放行
+    check("impact_hook: .txt → 放行 None",
+          hook_decide({"tool_input": {"file_path": "readme.txt"}}) is None,
+          "expected None for .txt")
+
+    # 8. .ts → 觸發
+    check("impact_hook: .ts → 觸發(非 None)",
+          hook_decide({"tool_input": {"file_path": "src/foo.ts"}}) is not None,
+          "expected non-None for .ts")
+
+
+def t_impact_hook_ttl():
+    """Task 10: _ttl_should_inject TTL 冷卻窗 + 惰性清理 >24h session 目錄。
+
+    測試對象是 scripts/hooks/claude/impact-hook.py 的:
+      - _ttl_should_inject(session_id, file_abs, ttl_sec) -> bool
+      - _backdate_marker(session_id, file_abs, seconds_ago)  (測試輔助)
+    """
+    import importlib.util
+    import tempfile
+    import hashlib
+    import time
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_ttl", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_ttl", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    _ttl_should_inject = m._ttl_should_inject
+    _backdate_marker = m._backdate_marker
+
+    sid = "sess-ttl-test-001"
+    f = "/abs/path/to/testfile.py"
+
+    # 計算 marker 路徑,以便 cleanup 後驗證
+    h = hashlib.sha1(f.encode()).hexdigest()[:16]
+    marker_path = _P(tempfile.gettempdir()) / f"lumos-impact-{sid}" / h
+
+    try:
+        # 確保乾淨起點
+        if marker_path.exists():
+            marker_path.unlink()
+
+        # 1. 首次呼叫 → True,且建立 marker 檔
+        result_first = _ttl_should_inject(sid, f, ttl_sec=1200)
+        check("impact_hook_ttl: 首次 True", result_first is True,
+              f"expected True, got {result_first}")
+        check("impact_hook_ttl: 首次後 marker 存在",
+              marker_path.exists(), f"marker 未建立: {marker_path}")
+
+        # 2. 窗內第二次 → False(冷卻)
+        result_second = _ttl_should_inject(sid, f, ttl_sec=1200)
+        check("impact_hook_ttl: 窗內第二次 False", result_second is False,
+              f"expected False (cooldown), got {result_second}")
+
+        # 3. 把 marker 倒推 2000s → 窗外復活 True
+        _backdate_marker(sid, f, 2000)
+        result_revive = _ttl_should_inject(sid, f, ttl_sec=1200)
+        check("impact_hook_ttl: 窗外復活 True", result_revive is True,
+              f"expected True (revive after backdate), got {result_revive}")
+
+        # 4. 測試惰性清理:建一個 mtime 超過 24h 的假 session 目錄
+        old_sid = "sess-old-stale-999"
+        old_session_dir = _P(tempfile.gettempdir()) / f"lumos-impact-{old_sid}"
+        old_session_dir.mkdir(parents=True, exist_ok=True)
+        old_marker = old_session_dir / "deadbeef12345678"
+        old_marker.write_text("0.0")  # 極老時間戳
+        # 把 mtime 設為 25h 前
+        old_time = time.time() - 25 * 3600
+        import os as _os
+        _os.utime(str(old_session_dir), (old_time, old_time))
+
+        # 觸發一次 inject(對一個新 sid/file),會觸發惰性清理
+        new_sid = "sess-trigger-cleanup-002"
+        new_f = "/abs/path/to/anotherfile.py"
+        _ttl_should_inject(new_sid, new_f, ttl_sec=1200)
+
+        # 舊的 session 目錄應被清掉
+        check("impact_hook_ttl: 惰性清理 >24h session 目錄被刪",
+              not old_session_dir.exists(),
+              f"old session dir still exists: {old_session_dir}")
+
+    finally:
+        # 清理本測試建立的 marker 檔與目錄
+        for cleanup_sid, cleanup_f in [
+            (sid, f),
+            ("sess-trigger-cleanup-002", "/abs/path/to/anotherfile.py"),
+        ]:
+            cleanup_h = hashlib.sha1(cleanup_f.encode()).hexdigest()[:16]
+            cleanup_dir = _P(tempfile.gettempdir()) / f"lumos-impact-{cleanup_sid}"
+            cleanup_marker = cleanup_dir / cleanup_h
+            if cleanup_marker.exists():
+                cleanup_marker.unlink()
+            try:
+                cleanup_dir.rmdir()
+            except OSError:
+                pass
+        # 確保 stale dir 清掉(若清理邏輯沒跑到)
+        old_sid = "sess-old-stale-999"
+        old_session_dir = _P(tempfile.gettempdir()) / f"lumos-impact-{old_sid}"
+        import shutil as _shutil
+        if old_session_dir.exists():
+            _shutil.rmtree(str(old_session_dir), ignore_errors=True)
+
+
+def t_impact_hook_inject():
+    """Task 11: additionalContext 注入 + 動手前分析指令 + fail-open。
+
+    測試對象是 scripts/hooks/claude/impact-hook.py 的:
+      - build_additional_context(impact_data) -> str   (注入文字生成)
+      - inject_additional_context(impact_data) -> None (印 JSON 到 stdout)
+
+    輔助函式 hook_run_with_impact(impact_data) 用 subprocess 重跑 main(),
+    繞過真實 lumos 呼叫,直接把 impact_data mock 注入;回傳 stdout 字串。
+    """
+    import importlib.util
+    import io
+    import json
+    import subprocess
+    import sys
+    import tempfile
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    from unittest.mock import patch
+
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_inject", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_inject", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    build_additional_context = m.build_additional_context
+    inject_additional_context = m.inject_additional_context
+
+    def hook_run_with_impact(impact_data: dict) -> str:
+        """呼叫 inject_additional_context,捕捉 stdout 回傳。"""
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            inject_additional_context(impact_data)
+        return buf.getvalue().strip()
+
+    # ── 1. 非空影響集 → stdout 是合法 JSON,含 hookSpecificOutput.additionalContext + 指令文字 ──
+    out = hook_run_with_impact({
+        "direct": [{"node": "S/A", "hit": "body-inline-code", "contract": "INVARIANT", "combo": False}],
+        "indirect": []
+    })
+    check("impact_hook_inject: 非空影響集 stdout 非空",
+          out != "",
+          f"expected non-empty stdout, got {out!r}")
+    j = json.loads(out)
+    check("impact_hook_inject: hookSpecificOutput.hookEventName == PreToolUse",
+          j["hookSpecificOutput"]["hookEventName"] == "PreToolUse",
+          f"got {j}")
+    ctx = j["hookSpecificOutput"]["additionalContext"]
+    check("impact_hook_inject: additionalContext 含指令文字「動手前」",
+          "動手前" in ctx,
+          f"ctx={ctx!r}")
+
+    # ── 2. 空影響集(direct 與 indirect 皆空)→ 不注入(無輸出) ──
+    out_empty = hook_run_with_impact({"direct": [], "indirect": []})
+    check("impact_hook_inject: 空集合不注入(無輸出)",
+          out_empty == "",
+          f"expected empty stdout for empty impact, got {out_empty!r}")
+
+    # ── 3. build_additional_context:清單含節點名稱 ──
+    ctx2 = build_additional_context({
+        "direct": [{"node": "Systems/lumos-refcheck", "hit": "body-inline-code",
+                    "contract": "INVARIANT", "combo": True}],
+        "indirect": [{"node": "Systems/pitfalls", "hop": 1, "via": "related",
+                      "direction": "backlink", "from": "Systems/lumos-refcheck",
+                      "contract": None, "combo": False}],
+    })
+    check("impact_hook_inject: build_additional_context 含直接節點名稱",
+          "Systems/lumos-refcheck" in ctx2,
+          f"ctx2={ctx2!r}")
+    check("impact_hook_inject: build_additional_context 含間接節點名稱",
+          "Systems/pitfalls" in ctx2,
+          f"ctx2={ctx2!r}")
+    check("impact_hook_inject: build_additional_context 含合約標記",
+          "INVARIANT" in ctx2,
+          f"ctx2={ctx2!r}")
+    check("impact_hook_inject: build_additional_context 含指令文字",
+          "動手前" in ctx2,
+          f"ctx2={ctx2!r}")
+
+    # ── 4. lumos 缺席(subprocess FileNotFoundError)→ fail-open:不拋、不注入 ──
+    # 模擬 main() 中 subprocess.run 拋 FileNotFoundError
+    import json as _json
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/some/project/foo.py"},
+        "session_id": "sess-inject-failopen-001",
+        "cwd": "/some/project",
+    }
+    env_patch = {"CLAUDE_PROJECT_DIR": "/some/project"}
+    # patch _find_lumos_script 讓它回傳一個路徑,但 subprocess.run 拋 FileNotFoundError
+    import os
+    with patch.object(m, "_find_lumos_script", return_value="/nonexistent/lumos"), \
+         patch("subprocess.run", side_effect=FileNotFoundError("no lumos")), \
+         patch.dict(os.environ, env_patch), \
+         patch("sys.stdin", io.StringIO(_json.dumps(payload))):
+        buf_fo = io.StringIO()
+        with patch("sys.stdout", buf_fo):
+            try:
+                rc_fo = m.main()
+            except SystemExit as e:
+                rc_fo = e.code
+        fo_out = buf_fo.getvalue().strip()
+    check("impact_hook_inject: lumos 缺席 fail-open rc=0",
+          rc_fo == 0,
+          f"expected rc=0, got {rc_fo}")
+    check("impact_hook_inject: lumos 缺席 fail-open 不注入",
+          fo_out == "",
+          f"expected empty stdout (no inject), got {fo_out!r}")
+
+    # ── 5. rc3 → 不注入(僅印 debug 到 stderr) ──
+    import unittest.mock as _mock
+    _proc_rc3 = _mock.MagicMock()
+    _proc_rc3.returncode = 3
+    _proc_rc3.stdout = ""
+    _proc_rc3.stderr = ""
+    with patch.object(m, "_find_lumos_script", return_value="/fake/lumos"), \
+         patch("subprocess.run", return_value=_proc_rc3), \
+         patch.dict(os.environ, env_patch), \
+         patch("sys.stdin", io.StringIO(_json.dumps(payload))):
+        buf_rc3 = io.StringIO()
+        buf_rc3_err = io.StringIO()
+        with patch("sys.stdout", buf_rc3), patch("sys.stderr", buf_rc3_err):
+            try:
+                rc_rc3 = m.main()
+            except SystemExit as e:
+                rc_rc3 = e.code
+        rc3_out = buf_rc3.getvalue().strip()
+    check("impact_hook_inject: rc3 不注入(stdout 無 JSON)",
+          rc3_out == "",
+          f"expected empty stdout for rc3, got {rc3_out!r}")
+    check("impact_hook_inject: rc3 放行 rc=0",
+          rc_rc3 == 0,
+          f"expected rc=0, got {rc_rc3}")
+
+    # ── 6. T9-M3 補測:非空影響集 → main() stdout 含合法 JSON + additionalContext ──
+    import uuid as _uuid
+    _proc_ok = _mock.MagicMock()
+    _proc_ok.returncode = 0
+    _proc_ok.stdout = _json.dumps({
+        "file": "foo.py",
+        "direct": [{"node": "Systems/A", "hit": "body-inline-code",
+                    "contract": None, "combo": False}],
+        "indirect": [],
+    })
+    _proc_ok.stderr = ""
+    # 每次測試用新 UUID 作 session_id,確保 TTL marker 是全新的(避免跨次測試 marker 殘留)
+    fresh_sid = str(_uuid.uuid4())
+    payload_with_sid = dict(payload, session_id=fresh_sid)
+    with patch.object(m, "_find_lumos_script", return_value="/fake/lumos"), \
+         patch("subprocess.run", return_value=_proc_ok), \
+         patch.dict(os.environ, env_patch), \
+         patch("sys.stdin", io.StringIO(_json.dumps(payload_with_sid))):
+        buf_main = io.StringIO()
+        with patch("sys.stdout", buf_main):
+            try:
+                rc_main = m.main()
+            except SystemExit as e:
+                rc_main = e.code
+        main_out = buf_main.getvalue().strip()
+    check("impact_hook_inject: main() 非空影響集 → stdout 非空",
+          main_out != "",
+          f"expected JSON on stdout, got {main_out!r}")
+    j_main = json.loads(main_out)
+    check("impact_hook_inject: main() hookSpecificOutput.hookEventName == PreToolUse",
+          j_main.get("hookSpecificOutput", {}).get("hookEventName") == "PreToolUse",
+          f"got {j_main}")
+    check("impact_hook_inject: main() additionalContext 含指令文字",
+          "動手前" in j_main.get("hookSpecificOutput", {}).get("additionalContext", ""),
+          f"got {j_main}")
+
+
+def t_impact_hook_find_lumos_real():
+    """C1 回歸:_find_lumos_script() 真實呼叫(不 mock)應能解析到可用的 lumos。
+
+    安裝後 hook 複製到 ~/.claude/hooks/impact-hook.py,repo-relative 猜測
+    ( Path(__file__).parent×4/scripts/lumos )指向不存在的路徑。修法:優先
+    shutil.which("lumos"),它能在 PATH(~/.local/bin/lumos)找到實際安裝的 lumos。
+
+    測試策略:不 mock _find_lumos_script,直接呼叫它,斷言回傳值非 None 且路徑存在。
+    前提:lumos 必須在 PATH 或 hook 仍在 repo 樹內(本測試在 CI/開發機皆可過)。
+    """
+    import shutil as _shutil
+    import importlib.util as _ilu
+
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    spec = _ilu.spec_from_file_location("impact_hook_c1", hook_path)
+    m = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    result = m._find_lumos_script()
+
+    # 驗 1:不得回傳 None(不論走 which 還是 repo-relative fallback)
+    check("impact_hook_find_lumos_real: _find_lumos_script() 非 None",
+          result is not None,
+          "返回 None — lumos 不在 PATH 且 hook repo-relative fallback 也失效")
+
+    if result is not None:
+        # 驗 2:路徑必須存在
+        check("impact_hook_find_lumos_real: 解析路徑存在於磁碟",
+              Path(result).exists(),
+              f"路徑 {result!r} 不存在")
+
+        # 驗 3:如果 which 找得到 lumos,應優先回傳 which 的結果
+        which_result = _shutil.which("lumos")
+        if which_result is not None:
+            check("impact_hook_find_lumos_real: 優先回傳 which('lumos') 結果",
+                  Path(result).resolve() == Path(which_result).resolve(),
+                  f"expected which={which_result!r}, got {result!r}")
+
+
+def t_impact_end_to_end():
+    """Task 12 端到端 smoke:注入暫探針節點 → lumos impact 抓到 → 清理。
+
+    步驟:
+      1. 在真實 vault 建 _impact_probe.md(body 含 `scripts/lumos` inline-code)
+      2. 執行 lumos impact --file scripts/lumos --repo . --json
+      3. 斷言 direct 含 _impact_probe 節點
+      4. finally 刪除探針節點
+
+    此測試驗證「CLI + 真實 vault 掃描 + code→node 反查」全鏈正確。
+    """
+    import json as _json
+    import os as _os
+
+    # 找到本 repo root(test_lumos.py 在 scripts/,往上一層)
+    repo_root = Path(__file__).resolve().parent.parent
+    probe = repo_root / "docs" / "lumos-toolchain-knowledge" / "Systems" / "_impact_probe.md"
+
+    # 寫探針節點(body 引用 scripts/lumos inline-code)
+    probe_content = (
+        "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:probe\n---\n"
+        "# probe\n\nbody `scripts/lumos`\n"
+    )
+    probe.write_text(probe_content, encoding="utf-8")
+
+    try:
+        out = run_lumos_capture(["impact", "--file", str(repo_root / "scripts" / "lumos"),
+                                 "--repo", str(repo_root), "--json"])
+        try:
+            data = _json.loads(out)
+        except _json.JSONDecodeError:
+            data = {}
+
+        direct = data.get("direct", [])
+        found_probe = any("_impact_probe" in x.get("node", "") for x in direct)
+        check("impact_end_to_end: direct 含 _impact_probe 節點",
+              found_probe,
+              f"direct={direct!r}")
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+
+
+def t_impact_hook_registration_source():
+    """Task 12 hook 註冊:驗 merge-claude-settings.py 的 HOOK_ENTRIES 源碼含 PreToolUse impact-hook.py 條目。
+
+    直接 import 源碼模組驗 HOOK_ENTRIES 結構,零外部依賴(不讀 ~/.claude/settings.json),
+    CI 隔離環境可過。
+    """
+    import importlib.util as _ilu
+
+    spec_path = Path(__file__).resolve().parent / "merge-claude-settings.py"
+    spec = _ilu.spec_from_file_location("mcs", spec_path)
+    mcs = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mcs)
+    entries = mcs.HOOK_ENTRIES.get("PreToolUse", [])
+    found = any(
+        "impact-hook.py" in h.get("command", "")
+        for e in entries
+        for h in e.get("hooks", [])
+    )
+    check("impact_hook_registration_source: HOOK_ENTRIES PreToolUse 含 impact-hook.py",
+          found,
+          f"entries={entries!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
