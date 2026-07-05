@@ -57,7 +57,7 @@ KEY:★CHECKPOINT★   <改了難救:部署測試機>                          #
 - ⚠ **多個 wikilink 必須是 YAML list,一項一行**(`- "[[A]]"`/`- "[[B]]"`);寫成 `"[[A]], [[B]]"` 單字串會長出 ghost 節點。
 - 純量/list/decisions 一律走 `lumos set`/`append`/`decision-add`(安全格式+寫後自驗),別手改 frontmatter。
 
-> 寫完一個節點先跑 `lumos lint <節點>`(單檔快檢:type/summary/★ 格式/裸合約/未審/ghost trap)→ 收尾再 `lumos doctor` 跑全圖;push 前 pre-push 會再擋一次。**Stop hook 自動 nag**:每回合末跑 `code-loop check`,tier=high 未過台帳 → 注入提醒(只注入不擋回合)。**pre-push code-loop 已升 blocking**:tier=high 且無有效 pass/skip 台帳 → rc1 硬擋 push;loop 收斂後須執行 `lumos code-loop pass --note "<理由>"` 再 push。
+> 寫完一個節點先跑 `lumos lint <節點>`(單檔快檢:type/summary/★ 格式/裸合約/未審/ghost trap)→ 收尾再 `lumos doctor` 跑全圖;push 前 pre-push 會再擋一次。**Stop hook 自動 nag**:每回合末跑 `code-loop check`,tier=high 未過台帳 → 注入提醒(只注入不擋回合)。**pre-push code-loop 已升 blocking**:tier=high 且無有效 pass/skip 台帳 → rc1 硬擋 push;三路解:① 正途=收斂後 `lumos code-loop pass --note "<理由>"` 記台帳再 push ② 假陽性逃生=`lumos code-loop skip --note "<理由>"`(留痕) ③ `git push --no-verify`(git-native 繞、無痕、自負)。
 
 ### 主動調用 Skill（遇到情境就調用，別憑記憶硬幹）
 
