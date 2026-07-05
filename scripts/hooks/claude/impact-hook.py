@@ -192,6 +192,100 @@ def _find_lumos_script() -> str | None:
     return None
 
 
+_INJECT_INSTRUCTION = (
+    "動手前先判上列直接/間接節點會不會被你這次改動影響、需不需要同步更新圖譜。"
+    "消掉不相關的,對真正受影響的:該同步就同步,不確定就記一句。"
+)
+
+
+def build_additional_context(impact_data: dict) -> str:
+    """把 impact_data 轉成人可讀的影響清單文字,尾加動手前分析指令。
+
+    格式:
+      直接關聯:
+        ★INVARIANT★ Systems/A  (body-inline-code)
+        Systems/B  (body-inline-code)
+      間接關聯(hop N):
+        Systems/C  via related [backlink]
+      <指令文字>
+
+    空 direct + 空 indirect → 不應呼叫此函式(呼叫者先守衛)。
+    """
+    lines: list[str] = []
+
+    direct = impact_data.get("direct", [])
+    indirect = impact_data.get("indirect", [])
+
+    if direct:
+        lines.append("直接關聯:")
+        for item in direct:
+            node = item.get("node", "?")
+            contract = item.get("contract")
+            combo = item.get("combo", False)
+            hit = item.get("hit", "")
+            prefix = ""
+            if contract:
+                prefix = f"★{contract}★"
+            if combo:
+                prefix += "★COMBO★"
+            if prefix:
+                lines.append(f"  {prefix} {node}  ({hit})")
+            else:
+                lines.append(f"  {node}  ({hit})")
+
+    if indirect:
+        lines.append("間接關聯:")
+        for item in indirect:
+            node = item.get("node", "?")
+            hop = item.get("hop", "?")
+            via = item.get("via", "?")
+            direction = item.get("direction", "")
+            contract = item.get("contract")
+            combo = item.get("combo", False)
+            cross = item.get("cross_repo", False)
+            prefix = ""
+            if contract:
+                prefix = f"★{contract}★"
+            if combo:
+                prefix += "★COMBO★"
+            suffix = ""
+            if cross:
+                suffix = " [跨repo葉,不展開]"
+            dir_tag = f" [{direction}]" if direction else ""
+            if prefix:
+                lines.append(f"  hop{hop} {prefix} {node}  via {via}{dir_tag}{suffix}")
+            else:
+                lines.append(f"  hop{hop} {node}  via {via}{dir_tag}{suffix}")
+
+    lines.append("")
+    lines.append(_INJECT_INSTRUCTION)
+    return "\n".join(lines)
+
+
+def inject_additional_context(impact_data: dict) -> None:
+    """非空影響集 → 印 hookSpecificOutput JSON 到 stdout;空集合 → 不輸出。
+
+    永不 block、永不改 permissionDecision。
+
+    注意 (r5-F2):此格式是 Claude Code 官方 PreToolUse additionalContext 能力。
+    上線後請用 `claude --debug` 實測注入時機(PreToolUse 的 additionalContext 注在
+    tool result 旁);若版本行為有變,可退回 stderr 備援(現有 hook 已證此路可行)。
+    """
+    direct = impact_data.get("direct", [])
+    indirect = impact_data.get("indirect", [])
+    if not direct and not indirect:
+        return  # 空影響集:不注入
+
+    ctx = build_additional_context(impact_data)
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": ctx,
+        }
+    }
+    print(json.dumps(output, ensure_ascii=False))
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read())
@@ -281,8 +375,8 @@ def main() -> int:
     if not direct and not indirect:
         return 0
 
-    # Task 11 將在此完成 additionalContext 注入
-    # Task 9 完成:過濾 + 呼叫 + rc 處理(rc0/rc3/其他)
+    # 注入 additionalContext
+    inject_additional_context(impact_data)
     return 0
 
 

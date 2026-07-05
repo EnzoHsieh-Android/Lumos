@@ -4485,6 +4485,178 @@ def t_impact_hook_ttl():
             _shutil.rmtree(str(old_session_dir), ignore_errors=True)
 
 
+def t_impact_hook_inject():
+    """Task 11: additionalContext 注入 + 動手前分析指令 + fail-open。
+
+    測試對象是 scripts/hooks/claude/impact-hook.py 的:
+      - build_additional_context(impact_data) -> str   (注入文字生成)
+      - inject_additional_context(impact_data) -> None (印 JSON 到 stdout)
+
+    輔助函式 hook_run_with_impact(impact_data) 用 subprocess 重跑 main(),
+    繞過真實 lumos 呼叫,直接把 impact_data mock 注入;回傳 stdout 字串。
+    """
+    import importlib.util
+    import io
+    import json
+    import subprocess
+    import sys
+    import tempfile
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    from unittest.mock import patch
+
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_inject", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_inject", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    build_additional_context = m.build_additional_context
+    inject_additional_context = m.inject_additional_context
+
+    def hook_run_with_impact(impact_data: dict) -> str:
+        """呼叫 inject_additional_context,捕捉 stdout 回傳。"""
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            inject_additional_context(impact_data)
+        return buf.getvalue().strip()
+
+    # ── 1. 非空影響集 → stdout 是合法 JSON,含 hookSpecificOutput.additionalContext + 指令文字 ──
+    out = hook_run_with_impact({
+        "direct": [{"node": "S/A", "hit": "body-inline-code", "contract": "INVARIANT", "combo": False}],
+        "indirect": []
+    })
+    check("impact_hook_inject: 非空影響集 stdout 非空",
+          out != "",
+          f"expected non-empty stdout, got {out!r}")
+    j = json.loads(out)
+    check("impact_hook_inject: hookSpecificOutput.hookEventName == PreToolUse",
+          j["hookSpecificOutput"]["hookEventName"] == "PreToolUse",
+          f"got {j}")
+    ctx = j["hookSpecificOutput"]["additionalContext"]
+    check("impact_hook_inject: additionalContext 含指令文字「動手前」",
+          "動手前" in ctx,
+          f"ctx={ctx!r}")
+
+    # ── 2. 空影響集(direct 與 indirect 皆空)→ 不注入(無輸出) ──
+    out_empty = hook_run_with_impact({"direct": [], "indirect": []})
+    check("impact_hook_inject: 空集合不注入(無輸出)",
+          out_empty == "",
+          f"expected empty stdout for empty impact, got {out_empty!r}")
+
+    # ── 3. build_additional_context:清單含節點名稱 ──
+    ctx2 = build_additional_context({
+        "direct": [{"node": "Systems/lumos-refcheck", "hit": "body-inline-code",
+                    "contract": "INVARIANT", "combo": True}],
+        "indirect": [{"node": "Systems/pitfalls", "hop": 1, "via": "related",
+                      "direction": "backlink", "from": "Systems/lumos-refcheck",
+                      "contract": None, "combo": False}],
+    })
+    check("impact_hook_inject: build_additional_context 含直接節點名稱",
+          "Systems/lumos-refcheck" in ctx2,
+          f"ctx2={ctx2!r}")
+    check("impact_hook_inject: build_additional_context 含間接節點名稱",
+          "Systems/pitfalls" in ctx2,
+          f"ctx2={ctx2!r}")
+    check("impact_hook_inject: build_additional_context 含合約標記",
+          "INVARIANT" in ctx2,
+          f"ctx2={ctx2!r}")
+    check("impact_hook_inject: build_additional_context 含指令文字",
+          "動手前" in ctx2,
+          f"ctx2={ctx2!r}")
+
+    # ── 4. lumos 缺席(subprocess FileNotFoundError)→ fail-open:不拋、不注入 ──
+    # 模擬 main() 中 subprocess.run 拋 FileNotFoundError
+    import json as _json
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/some/project/foo.py"},
+        "session_id": "sess-inject-failopen-001",
+        "cwd": "/some/project",
+    }
+    env_patch = {"CLAUDE_PROJECT_DIR": "/some/project"}
+    # patch _find_lumos_script 讓它回傳一個路徑,但 subprocess.run 拋 FileNotFoundError
+    import os
+    with patch.object(m, "_find_lumos_script", return_value="/nonexistent/lumos"), \
+         patch("subprocess.run", side_effect=FileNotFoundError("no lumos")), \
+         patch.dict(os.environ, env_patch), \
+         patch("sys.stdin", io.StringIO(_json.dumps(payload))):
+        buf_fo = io.StringIO()
+        with patch("sys.stdout", buf_fo):
+            try:
+                rc_fo = m.main()
+            except SystemExit as e:
+                rc_fo = e.code
+        fo_out = buf_fo.getvalue().strip()
+    check("impact_hook_inject: lumos 缺席 fail-open rc=0",
+          rc_fo == 0,
+          f"expected rc=0, got {rc_fo}")
+    check("impact_hook_inject: lumos 缺席 fail-open 不注入",
+          fo_out == "",
+          f"expected empty stdout (no inject), got {fo_out!r}")
+
+    # ── 5. rc3 → 不注入(僅印 debug 到 stderr) ──
+    import unittest.mock as _mock
+    _proc_rc3 = _mock.MagicMock()
+    _proc_rc3.returncode = 3
+    _proc_rc3.stdout = ""
+    _proc_rc3.stderr = ""
+    with patch.object(m, "_find_lumos_script", return_value="/fake/lumos"), \
+         patch("subprocess.run", return_value=_proc_rc3), \
+         patch.dict(os.environ, env_patch), \
+         patch("sys.stdin", io.StringIO(_json.dumps(payload))):
+        buf_rc3 = io.StringIO()
+        buf_rc3_err = io.StringIO()
+        with patch("sys.stdout", buf_rc3), patch("sys.stderr", buf_rc3_err):
+            try:
+                rc_rc3 = m.main()
+            except SystemExit as e:
+                rc_rc3 = e.code
+        rc3_out = buf_rc3.getvalue().strip()
+    check("impact_hook_inject: rc3 不注入(stdout 無 JSON)",
+          rc3_out == "",
+          f"expected empty stdout for rc3, got {rc3_out!r}")
+    check("impact_hook_inject: rc3 放行 rc=0",
+          rc_rc3 == 0,
+          f"expected rc=0, got {rc_rc3}")
+
+    # ── 6. T9-M3 補測:非空影響集 → main() stdout 含合法 JSON + additionalContext ──
+    import uuid as _uuid
+    _proc_ok = _mock.MagicMock()
+    _proc_ok.returncode = 0
+    _proc_ok.stdout = _json.dumps({
+        "file": "foo.py",
+        "direct": [{"node": "Systems/A", "hit": "body-inline-code",
+                    "contract": None, "combo": False}],
+        "indirect": [],
+    })
+    _proc_ok.stderr = ""
+    # 每次測試用新 UUID 作 session_id,確保 TTL marker 是全新的(避免跨次測試 marker 殘留)
+    fresh_sid = str(_uuid.uuid4())
+    payload_with_sid = dict(payload, session_id=fresh_sid)
+    with patch.object(m, "_find_lumos_script", return_value="/fake/lumos"), \
+         patch("subprocess.run", return_value=_proc_ok), \
+         patch.dict(os.environ, env_patch), \
+         patch("sys.stdin", io.StringIO(_json.dumps(payload_with_sid))):
+        buf_main = io.StringIO()
+        with patch("sys.stdout", buf_main):
+            try:
+                rc_main = m.main()
+            except SystemExit as e:
+                rc_main = e.code
+        main_out = buf_main.getvalue().strip()
+    check("impact_hook_inject: main() 非空影響集 → stdout 非空",
+          main_out != "",
+          f"expected JSON on stdout, got {main_out!r}")
+    j_main = json.loads(main_out)
+    check("impact_hook_inject: main() hookSpecificOutput.hookEventName == PreToolUse",
+          j_main.get("hookSpecificOutput", {}).get("hookEventName") == "PreToolUse",
+          f"got {j_main}")
+    check("impact_hook_inject: main() additionalContext 含指令文字",
+          "動手前" in j_main.get("hookSpecificOutput", {}).get("additionalContext", ""),
+          f"got {j_main}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
