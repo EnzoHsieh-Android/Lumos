@@ -4058,9 +4058,17 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
             ["git", "rev-parse", "--show-toplevel"], text=True, stderr=subprocess.DEVNULL).strip())
     except Exception:
         root = Path.cwd()
-    slug = _slugify_vault(name) if name else _slugify_vault(root.name)
-
     existing = _vault_in(root)
+    # slug 決定順序:① --name 顯式 ② 既有 vault 的 slug ③ repo basename。
+    # ②必須先於③:否則既有 vault 上跑 --force 會用 repo basename 當 slug,
+    # 建錯一個空 vault + 把 CLAUDE.md {{KG}} 路徑寫錯(現場事故:basename landmarkmember
+    # vs 既有 vault landmark-knowledge)。既有 vault 的資料夾名即權威 slug,不重新 slugify。
+    if name:
+        slug = _slugify_vault(name)
+    elif existing is not None and existing.name.endswith("-knowledge"):
+        slug = existing.name[:-len("-knowledge")]
+    else:
+        slug = _slugify_vault(root.name)
 
     # ── Step 1: reinject CLAUDE.md(依路徑輕/重分流)─────────────────────
     # 既有 vault 非 force:只 reinject(輕量);不 pull、不重裝 hooks。
