@@ -5027,18 +5027,24 @@ def t_impact_incidents_section():
 # ─── Task 4: e2e/回歸 + 補前輪 review 缺口 ────────────────────────────────────
 
 def t_impact_incidents_regression():
-    """Task 4 Step1: 回歸——對現有無 pitfall_when 的真圖譜跑 impact --json → incidents 空。
+    """真圖譜整合:impact --file scripts/lumos → incidents 正確撈到 pitfall_when 事故。
 
-    本倉庫圖譜目前沒有 pitfall_when 事故節點,
-    確認不誤傷:direct/indirect 輸出不受影響,incidents 為 []。
+    本倉庫已 dogfood pitfall_when(Issues/init-force-slug誤用basename content:_slugify_vault
+    命中 scripts/lumos)。此測試證真圖譜上 incidents pipeline 有效 + 輸出良構。
+    (「無 pitfall_when → incidents 空」的不誤傷行為由 t_match_incident_triggers 隔離覆蓋。)
     """
     import json as _json
     out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", ".", "--json"])
     d = _json.loads(out)
     check("impact_incidents_regression: 頂層 incidents key 存在",
           "incidents" in d, f"keys={set(d)}")
-    check("impact_incidents_regression: 本圖無 pitfall_when → incidents == []",
-          d["incidents"] == [], f"incidents={d['incidents']}")
+    nodes = [i.get("node", "") for i in d["incidents"]]
+    check("impact_incidents_regression: 真圖譜撈到 init-force-slug 事故(pipeline 有效)",
+          any("init-force-slug" in n for n in nodes),
+          f"incidents nodes={nodes}")
+    check("impact_incidents_regression: 每筆 incident 良構(有 node + matched_by)",
+          all(i.get("node") and i.get("matched_by") for i in d["incidents"]),
+          f"incidents={d['incidents']}")
     # 確認 direct/indirect 不受影響(本圖有直接關聯節點)
     check("impact_incidents_regression: direct key 仍存在",
           "direct" in d, f"keys={set(d)}")
