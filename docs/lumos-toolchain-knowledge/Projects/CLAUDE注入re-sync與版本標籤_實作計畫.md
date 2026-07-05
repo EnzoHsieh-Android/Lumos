@@ -16,7 +16,7 @@ summary: |-
   KEY:T1 marker常數+_extract_claude_block_span 三態→ T2 _reinject_claude_block(5-status+diff+半壞+BOM)→ T3 解耦_scaffold+接線_vendor_toolchain/cmd_init→ T4 doctor Check D 漂移守衛→ T5 LUMOS_VERSION+版本戳+nudge→ T6 圖譜回填+回歸+anchor
   DECISION:subagent-driven TDD;基線=先跑 test_lumos.py 取
   DEP:[[CLAUDE注入re-sync與版本標籤_計劃]]
-  TEST:T1 DONE — 16 checks green(t_extract_span_found/absent/broken);全量 752 passed(基線 736)|T2 DONE — 37 checks green(t_reinject_updates_existing/idempotent/creates_when_absent/appends_when_no_sentinel/preserves_outside/sentinel_broken/bom_crlf_normalized/no_template);全量 789 passed|T3 DONE — 9 checks green(t_scaffold_no_longer_injects/t_update_resyncs_claude/t_init_existing_resyncs);全量 798 passed|T3-review DONE — I-1既有vault非force只reinject不pull+I-2移除重複_install_hooks_py;新增t_init_existing_no_pull(4 checks);全量 802 passed
+  TEST:T1 DONE — 16 checks green(t_extract_span_found/absent/broken);全量 752 passed(基線 736)|T2 DONE — 37 checks green(t_reinject_updates_existing/idempotent/creates_when_absent/appends_when_no_sentinel/preserves_outside/sentinel_broken/bom_crlf_normalized/no_template);全量 789 passed|T3 DONE — 9 checks green(t_scaffold_no_longer_injects/t_update_resyncs_claude/t_init_existing_resyncs);全量 798 passed|T3-review DONE — I-1既有vault非force只reinject不pull+I-2移除重複_install_hooks_py;新增t_init_existing_no_pull(4 checks);全量 802 passed|T4 DONE — Check D(字母D)+_expected_claude_body helper;4 tests 11 checks;全量 813 passed;本repo doctor 0 issues
 ---
 # CLAUDE 注入 re-sync + 版本標籤 Implementation Plan
 
@@ -85,11 +85,11 @@ summary: |-
 
 **Interfaces:** doctor 新 Check(字母 D 或順移):範本存在 且 CLAUDE.md 有 sentinel → `_extract_claude_block_span(CLAUDE).body == resolve(template).body`,否則報漂移;broken→報;`--ci` 擋。
 
-- [ ] **Step 1 失敗測試**:`t_claude_block_matches_template`(本 repo 同步→淨)、`t_doctor_reports_drift`(人為改 CLAUDE block→報)、`t_doctor_skip_no_template`(無範本→不 check 不誤報)、`t_doctor_broken_reports`(半壞→報、不 crash)。
-- [ ] **Step 2 FAIL**。
-- [ ] **Step 3 實作**:doctor 加 Check;比對用 T1 的 `.body`(broken 不取 .body 避免 crash);計入 issue 數、`--ci` 非零。
-- [ ] **Step 4 PASS** + `python3 scripts/lumos doctor` 本 repo 淨。
-- [ ] **Step 5 Commit** `feat(doctor): Check D 紀律區塊漂移守衛(內容比對)`
+- [x] **Step 1 失敗測試**:`t_claude_block_matches_template`(本 repo 同步→淨)、`t_doctor_reports_drift`(人為改 CLAUDE block→報)、`t_doctor_skip_no_template`(無範本→不 check 不誤報)、`t_doctor_broken_reports`(半壞→報、不 crash)。
+- [x] **Step 2 FAIL**:t_doctor_reports_drift + t_doctor_broken_reports 失敗(Check D 未實作)。
+- [x] **Step 3 實作**:`_expected_claude_body(root,slug)` helper(T2 共用單一源);Check D 加入 run_doctor 在 K 之後 V 之前;guard:無範本→skip/absent→skip/broken→issue/found+不等→issue;broken 不取 .body 避 crash;計入 issues;--ci 非零。
+- [x] **Step 4 PASS** + `python3 scripts/lumos doctor` 本 repo 淨(0 issues,Check D:同步)。
+- [x] **Step 5 Commit** `feat(doctor): Check D 紀律區塊漂移守衛(內容比對)`
 
 ---
 

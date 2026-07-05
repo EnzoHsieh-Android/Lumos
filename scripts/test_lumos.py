@@ -6536,6 +6536,142 @@ def t_init_existing_no_pull():
               START_PREFIX in cm_text,
               f"sentinel 消失;\ncm={cm_text!r}")
 
+# ── Task 4: doctor Check D 紀律區塊漂移守衛 ────────────────────────────────────
+
+def _make_check_d_root(td, tpl_content=None, claude_content=None, slug="demo"):
+    """建立最小 repo root 結構供 Check D 測試用。
+    vault 在 root/docs/<slug>-knowledge/;doctor 透過 vault.parents 取到 docs → repo_root。
+    tpl_content=None → 不建立 scripts/templates/graph-discipline.md。
+    claude_content=None → 不建立 CLAUDE.md。
+    回傳 (root, vault)。
+    """
+    root = Path(td)
+    vault = root / "docs" / f"{slug}-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(b"---\ntype: moc\n---\n# idx\n")
+    # scripts/templates
+    tpl_dir = root / "scripts" / "templates"
+    tpl_dir.mkdir(parents=True, exist_ok=True)
+    if tpl_content is not None:
+        (tpl_dir / "graph-discipline.md").write_text(tpl_content, encoding="utf-8")
+    if claude_content is not None:
+        (root / "CLAUDE.md").write_bytes(
+            claude_content if isinstance(claude_content, bytes)
+            else claude_content.encode("utf-8")
+        )
+    return root, vault
+
+
+def _make_check_d_block(tpl_content, slug):
+    """組出 reinject 會寫入的完整 sentinel block,供 Check D fixture CLAUDE.md 使用。"""
+    body = tpl_content.replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    return START + "\n" + body + "\n" + END
+
+
+def t_claude_block_matches_template():
+    """本 repo 的 CLAUDE.md 紀律區塊必須與 resolved 範本完全一致(防復發守衛)。"""
+    # 直接用本 repo 跑 doctor —vault <actual-vault>
+    actual_vault = Path(GRAPHCTL).resolve().parent.parent / "docs" / "lumos-toolchain-knowledge"
+    if not actual_vault.is_dir():
+        check("claude_block_matches_template: vault 不存在(skip)", True, "")
+        return
+    r = subprocess.run(
+        [sys.executable, GRAPHCTL, "--vault", str(actual_vault), "doctor", "--ci"],
+        capture_output=True, text=True,
+    )
+    # Check D 應讓本 repo doctor 保持 0 issues(無「不同步」警告)
+    check("claude_block_matches_template: 本 repo doctor Check D 淨(0 漂移)",
+          "不同步" not in r.stdout,
+          f"stdout={r.stdout}")
+    check("claude_block_matches_template: 本 repo doctor 整體 0 issues",
+          r.returncode == 0,
+          f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+def t_doctor_reports_drift():
+    """CLAUDE.md block body 與範本不一致 → Check D 報漂移(issue≥1)。"""
+    import tempfile
+    TPL = "知識圖譜路徑:{{KG}}\n\n這是圖譜紀律說明。"
+    SLUG = "myproj"
+    block = _make_check_d_block(TPL, SLUG)
+    # 人為把 CLAUDE.md 的 block body 改一行
+    tampered_block = block.replace("這是圖譜紀律說明。", "這是被人改過的說明。")
+    claude_content = "# CLAUDE.md\n\n前言\n\n" + tampered_block + "\n\n後記\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, vault = _make_check_d_root(td, tpl_content=TPL,
+                                          claude_content=claude_content, slug=SLUG)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "--vault", str(vault), "doctor", "--ci"],
+            capture_output=True, text=True,
+        )
+        check("doctor_reports_drift: 輸出含 [D]",
+              "[D]" in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_reports_drift: 輸出含不同步訊息",
+              "不同步" in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_reports_drift: --ci 非零 exit",
+              r.returncode != 0,
+              f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+def t_doctor_skip_no_template():
+    """範本檔不存在 → Check D skip,不誤報、不計 issue。"""
+    import tempfile
+    SLUG = "myproj"
+    TPL = "知識圖譜:{{KG}}"
+    block = _make_check_d_block(TPL, SLUG)
+    # CLAUDE.md 有正常 sentinel
+    claude_content = "# CLAUDE.md\n\n" + block + "\n"
+    with tempfile.TemporaryDirectory() as td:
+        # tpl_content=None → 不建立範本
+        root, vault = _make_check_d_root(td, tpl_content=None,
+                                          claude_content=claude_content, slug=SLUG)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "--vault", str(vault), "doctor", "--ci"],
+            capture_output=True, text=True,
+        )
+        check("doctor_skip_no_template: 無 [D] 不同步 issue",
+              "不同步" not in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_skip_no_template: doctor 整體 0 issues(無範本不誤報)",
+              r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+def t_doctor_broken_reports():
+    """CLAUDE.md 只 START 無 END(broken)→ Check D 報漂移、不 crash。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    SLUG = "myproj"
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    # 只有 START 無 END(broken)
+    broken_content = "# CLAUDE.md\n\n前言\n\n" + START + "\n只有 START 沒 END\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, vault = _make_check_d_root(td, tpl_content=TPL,
+                                          claude_content=broken_content, slug=SLUG)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "--vault", str(vault), "doctor", "--ci"],
+            capture_output=True, text=True,
+        )
+        check("doctor_broken_reports: 不 crash(無 exception)",
+              r.returncode in (0, 1),
+              f"rc={r.returncode}\nstderr={r.stderr}")
+        check("doctor_broken_reports: 輸出含 [D]",
+              "[D]" in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_broken_reports: 報不同步或損壞訊息",
+              "不同步" in r.stdout or "broken" in r.stdout or "損壞" in r.stdout or "sentinel 損壞" in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_broken_reports: --ci 非零 exit",
+              r.returncode != 0,
+              f"rc={r.returncode}\nstdout={r.stdout}")
+
 
 def main():
     import argparse as _ap

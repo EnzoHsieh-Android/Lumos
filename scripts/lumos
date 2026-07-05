@@ -749,6 +749,48 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
         ok("★COMBO★ 鐵則都綁了 ≥2 個 [test:] 標記")
     print()
 
+    # Check D: 紀律區塊漂移守衛(內容比對)
+    # 範本 scripts/templates/graph-discipline.md ↔ CLAUDE.md sentinel block body。
+    # guard: 範本不存在 → skip(不算 issue);CLAUDE.md absent → skip(未注入過的 repo 不罰)。
+    # broken → 報漂移(算 issue,但不取 .body 避免 crash)。
+    section("D", "紀律區塊漂移守衛 (CLAUDE.md 紀律區塊 ↔ 範本 graph-discipline.md 內容比對)")
+    if repo_root is None:
+        print("  (無 docs/ 佈局,略過 Check D)")
+    else:
+        # slug 從 vault 名取(慣例 docs/<slug>-knowledge → vault.name 去尾碼)
+        _d_vault_name = env.vault.name
+        _d_slug = (_d_vault_name[:-len("-knowledge")]
+                   if _d_vault_name.endswith("-knowledge") else _d_vault_name)
+        expected_body = _expected_claude_body(repo_root, _d_slug)
+        if expected_body is None:
+            print("  (無 scripts/templates/graph-discipline.md 範本,略過 Check D)")
+        else:
+            # 讀 CLAUDE.md
+            _d_cm = repo_root / "CLAUDE.md"
+            if not _d_cm.exists():
+                print("  (無 CLAUDE.md,略過 Check D — 尚未注入無需比對)")
+            else:
+                _d_text = _d_cm.read_bytes()
+                if _d_text.startswith(b"\xef\xbb\xbf"):
+                    _d_text = _d_text[3:]
+                _d_text = _d_text.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+                _d_state, _d_span = _extract_claude_block_span(_d_text)
+                if _d_state == "absent":
+                    print("  (CLAUDE.md 無 sentinel 區塊,略過 Check D — 尚未注入)")
+                elif _d_state == "broken":
+                    warn(["CLAUDE.md 紀律區塊 sentinel 損壞(只有 START 或只有 END),跑 lumos init/update 修復"],
+                         "CLAUDE.md sentinel 損壞(broken)— 無法比對,視為漂移:",
+                         "lumos init --force 或 lumos update 修復 sentinel 再重驗")
+                else:
+                    # found: 比對 body
+                    if _d_span.body == expected_body:
+                        ok("CLAUDE.md 紀律區塊與範本同步(0 漂移)")
+                    else:
+                        warn(["CLAUDE.md 紀律區塊與範本 graph-discipline.md 不同步,跑 lumos update/init 刷新"],
+                             "CLAUDE.md 紀律區塊漂移(與範本不一致):",
+                             "lumos update 或 lumos init --force 刷新 CLAUDE.md 紀律區塊")
+    print()
+
     section("V", "valid_under 過期率 (進場提示覆蓋 + 日齡 proxy;軟提醒、不擋 CI)")
     vu_total, vu_stale = [], []
     for rel, n in sorted(notes.items()):
@@ -3554,6 +3596,18 @@ def _extract_claude_block_span(text: str):
 
 # Task 2 ─────────────────────────────────────────────────────────────────────
 # START 行(本 task 無版本戳;T5 會在此字串中插入版本號——形式保留易替換)
+
+
+def _expected_claude_body(root: Path, slug: str):
+    """讀 scripts/templates/graph-discipline.md,{{KG}} 替換後 strip → 預期 body 字串。
+    範本不存在 → None(呼叫端 skip Check D)。
+    算法與 _reinject_claude_block 完全一致(同一 source of truth)。"""
+    tpl_path = root / "scripts" / "templates" / "graph-discipline.md"
+    if not tpl_path.exists():
+        return None
+    return tpl_path.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
+
+
 _REINJECT_START_LINE = (
     "<!-- LUMOS:GRAPH-DISCIPLINE:START"
     " — 自動注入/更新,勿手改本區塊;"
@@ -3570,13 +3624,10 @@ def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
     """
     import difflib
 
-    # 1. 範本
-    tpl_path = root / "scripts" / "templates" / "graph-discipline.md"
-    if not tpl_path.exists():
+    # 1. 範本 + body(共用 _expected_claude_body 確保 Check D 比對算法一致)
+    body = _expected_claude_body(root, slug)
+    if body is None:
         return ReInjectResult("no_template", None)
-
-    # 2. 讀範本, {{KG}} 替換, strip
-    body = tpl_path.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
 
     # 3. 組 block
     block = _REINJECT_START_LINE + "\n" + body + "\n" + _CLAUDE_END
