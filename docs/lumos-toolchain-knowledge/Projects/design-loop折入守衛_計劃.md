@@ -61,7 +61,7 @@ decisions:
 讀 text → 拆 frontmatter/body → 輸出(⚠ **value-drift/reverse-omission 掃描域排除 `## …審計修正紀錄` 段**——該段刻意引用歷史/被翻案的舊值如「fold-check `<node>`」,掃它必假陽;審計紀錄仍列入①鏡像段供人複查、但不進②③自動掃):
 1. **鏡像段列舉**:掃 `summary` block、每個 ` ```json ` fence、`## …審計修正紀錄`、`## …誠實天花板` → 各印「☐ 複查 <段>:與 body 一致?」。**標題比對容節號前綴**(r1-F5:regex `^##\s+(§\d+\s+)?(審計修正紀錄|誠實天花板)`,免漏掉「## §4 誠實天花板」這種帶節號的)。**（治 mode 3 跨段矛盾 / 審計紀錄未標翻案 / schema 漂移——強制拉到眼前。）**
 2. **value-drift flag**(全文域):抽全文的「pattern-value」——**單一抽取法**(r2-F7:不混兩法),**只保留兩個低假陽 pattern**(實作 T2-C1 修正:原列的 `§\d+`/`\d+min` 移除——§1/§2/§3 是不同章節、5min/10min 是不同合法值,非「同識別詞不同值」,必然假陽):① `\d+\.\.\w+`(range 記號,key=後綴詞如「2..depth」的 `depth`、value=前導數字;舊 `\d\.\.\d` 配不到因 depth 是字母)② `fold-check \S+`(泛化「指令+值」,key=`fold-check`、value=其後 token)。**同一識別詞在不同處出現不同值 → flag**(r2-F1:`fold-check <node>` §1 vs `<path>` §2 → flag)。`⚠ value-drift: 「fold-check <node>」vs 「fold-check <path>」`。**（命中 mode 2 同 token 改值 + body↔body 漂移。）**
-3. **reverse-omission flag**(全文域):抽全文顯著 token(`--flag`/`★MARKER★`/`\w+\.\w+` 檔名/CamelCase/backtick code),**排除 `<…>` placeholder**(r2-F5:`<path>`/`<node>` 是佔位符非識別字,不算);某段(如 summary)缺其他段有的顯著 token → flag。`⚠ reverse-omission: body 有「backtick code」summary 無`。**（命中 mode 1 反向遺漏。）**
+3. **reverse-omission flag**(全文域):抽全文**高訊號 token 三類**(實作 T5 降噪:原含 backtick-code/CamelCase 對長技術 spec 爆量假陽 237 條→收窄後 24 條全真):① `--flag`(`--\w[\w-]*`)② `★MARKER★`(★…★)③ **帶已知副檔名的檔名**(`\w[\w./-]*\.(json|py|md|sh|txt|kt|cs|vue|js|ts|yml|yaml)`,避純版本號噪音)。**排除 `<…>` placeholder**(r2-F5)、FENCE 內容(T4-Critical:先 `FENCE_RE.sub` 剝三重 backtick,對稱 `_refcheck_scan`)、審計紀錄段。summary 缺 body 有的 → flag。`⚠ reverse-omission: body 有「--json」summary 無`。**（命中 mode 1 反向遺漏;代價=失去 CamelCase/backtick 散文 token 的 recall,由 mirror-section 列舉+value-drift 兜底。）**
 4. **rc + 閘語意**(r2-F6:**閘是紀律非機械 abort**):有 flag → rc 1、無 → rc 0——rc 是**給操作者(Claude)的訊號**,不是 script 硬 abort;step 7 由 Claude 讀 flag+逐段勾後才 commit(同 design-loop 整體「lumos 出訊號、Claude 據紀律行動」)。`--json` 輸出供機器讀,schema:
 ```json
 {"path":"...","mirror_sections":["summary","## §4 誠實天花板","## §N 審計修正紀錄"],
@@ -80,7 +80,7 @@ skill 源在 **lumos-toolchain repo**(`skills/lumos-design-loop/SKILL.md`、syml
 3. **閘是紀律非防篡改**:同 design-loop 本身——lumos 擋不住「不跑 fold-check 就 commit」,靠調用+誠實。fold-check 是**可觀測+摩擦+把鏡像段推到眼前**,不是 oracle。
 
 ## §5 測試
-- **fold-check 單元**(`scripts/test_lumos.py`):summary「2..depth」+body「1..depth」→ value-drift;**全文域**——§1「fold-check <node>」+§2「fold-check <path>」(同識別詞不同值,body↔body)→ value-drift(r2-F1);body「MultiEdit」不在 summary → reverse-omission;**`<path>` placeholder 不 flag**(r2-F5);乾淨節點 → 無 flag、rc 0;有 flag → rc 1;鏡像段列舉齊(summary/json fence/審計紀錄/天花板,標題容節號 r1-F5);`--json` 輸出符 §2 schema(path/mirror_sections/value_drift/reverse_omission)。
+- **fold-check 單元**(`scripts/test_lumos.py`):summary「2..depth」+body「1..depth」→ value-drift;**全文域**——§1「fold-check <node>」+§2「fold-check <path>」(同識別詞不同值,body↔body)→ value-drift(r2-F1);body「--bar」不在 summary → reverse-omission(高訊號 token;CamelCase/backtick 已降噪移除,T5);**`<path>` placeholder 不 flag**(r2-F5);乾淨節點 → 無 flag、rc 0;有 flag → rc 1;鏡像段列舉齊(summary/json fence/審計紀錄/天花板,標題容節號 r1-F5);`--json` 輸出符 §2 schema(path/mirror_sections/value_drift/reverse_omission)。
 - **回歸**:對現有 `主動影響幅度偵測_計劃`(已多次固化)跑 fold-check → 應乾淨或只剩已知可接受 flag,證不誤傷。
 
 ## 審計修正紀錄(lumos-design-loop)
