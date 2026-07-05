@@ -35,6 +35,11 @@ summary: |-
 ## 測試
 `scripts/test_lumos.py` 494 passed;新增 `t_lint_sarif_v1`(v1 shape 解析 + location-less 跳)、`t_lint_watch_nuget`(beta 過濾穩定 max + 全 beta→no stable)、`t_lint_runner_stdout_isolation`(child stdout 不洩漏)。
 
+## 併發/死鎖 + T-SQL 真機驗(2026-07-05 追加)
+- **VSTHRD(C# async 死鎖/併發,Roslyn analyzer)**:Landmark Server build → 144 finding,含 **35× VSTHRD103**(sync-over-async 阻塞=死鎖/執行緒池飢餓風險,真 debt);注入 `.Result` probe → pitfalls manifest 抓到 **VSTHRD002「may cause deadlocks」+VSTHRD104**、tier high。走 Roslyn→SARIF v1→lint-adapter,零新工作(加 NuGet + `.editorconfig` 調噪音)。詳 Landmark Issue。
+- **T-SQL(sqlfluff)**:Landmark 65 .sql 檔;`sqlfluff lint --dialect tsql --format json` → **`lumos sqlfluff-sarif`** 橋接 SARIF → lint-adapter;注入行 → 14 claim(AM04/CP01/CP02/LT05)進 manifest source=lint:sqlfluff、對齊過濾只留該行。
+- **抓不到的(誠實)**:N+1(Dapper raw SQL,執行期 profiling)、鎖順序/SQL 死鎖(執行期 deadlock graph)——非靜態 lint 範疇。
+
 ## 天花板
 - dotnet SARIF 版本預設是 v1(`,version=2.1` MSBuild 傳遞不穩,故 lumos 直接支援 v1 較穩健)。
 - lint.json 若用 `dotnet build` 每次 pitfalls --diff 都會 build(慢)→ pre-push advisory 用 `--no-lint` 略過;深掃留終審/CI。

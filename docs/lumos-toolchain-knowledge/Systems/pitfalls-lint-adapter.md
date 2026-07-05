@@ -16,6 +16,7 @@ summary: |-
   KEY:向後相容(回歸釘)——無 .lumos/lint.json → regex-only 輸出 byte-for-byte 不變、不加 lint_ran/lint_skipped 鍵;config=None 走既有 return 早退,manifest shape 不動
   KEY:uri 正規化(KDS tracer 坐實 detekt 吐絕對 file:///)——剝 file:// + urllib.parse.unquote + 有 uriBaseId 拼 run.originalUriBaseIds[base] + 僅 isabs 才 os.path.relpath(repo_root)(相對 uri 直用,避免 ../.. 誤 drop) + 反斜線轉正斜線
   KEY:runner 承重——per-command tempfile.mkstemp + shlex.quote 注入 {LINT_SARIF_OUT} + Popen(shell=True,cwd=repo_root,start_new_session=True) communicate(timeout=LINT_CMD_TIMEOUT=180) 逾時 os.killpg 整組 + finally os.unlink;rc≠0 且無可解析 SARIF 才算失敗記 lint_skipped(detekt 333 issues exit 非零仍產 SARIF)
+  KEY:SQL/T-SQL 橋接——sqlfluff(無原生 SARIF)經 `lumos sqlfluff-sarif`(讀 --format json → SARIF v2.1)進 lint-adapter;專案 .lumos/lint.json 的 sql 棧宣告(Landmark 65 .sql 真機驗)。Dapper 的 C# 內嵌 SQL 非檔案、linter 看不到(天花板)
   KEY:SARIF v1.0 也支援(2026-07-05,dotnet/Roslyn ErrorLog 預設吐 v1:tool.name/resultFile.uri/message 字串;version 欄位判別 v1/v2.1)+ linter console 輸出 DEVNULL 隔離(dotnet 警告走 stdout,不可污染 --json;Landmark 真機暴露)
   KEY:SARIF 迭代容錯——results optional(run.get('results') or []);per-run tool.driver.name 用 .get() 鏈缺則跳該 run 不連坐;單筆 location try/except 空跳該 finding 不連坐整 run
   KEY:座標系對齊——added 行集合僅由 diff + 行構成;對齊=右端 ref(rsplit '...' 後 rsplit '..')rev-parse==HEAD 且 git status --porcelain 空;非對齊或判定失敗→降級全收不過濾、manifest 標 filtered:false、不升 rc
