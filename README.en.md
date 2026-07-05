@@ -35,16 +35,19 @@ Lumos keeps that knowledge in a graph of Markdown notes (Obsidian-compatible, bu
 
 ---
 
-## 3. What's in the box
+## 3. What's in the toolkit
 
-| Category | Files | Role |
+| Category | Files / Commands | Role |
 |---|---|---|
-| **CLI** | `scripts/lumos`, `scripts/test_lumos.py` | Pure python3 stdlib, zero deps. Read / write (write-then-self-verify) / inspect (`doctor`) / archive. |
+| **CLI** | `scripts/lumos`, `scripts/test_lumos.py` | Pure python3 stdlib, zero dependencies, **41 top-level commands**. Read / write (write-then-self-verify) / inspect (`doctor`) / archive. |
 | **Contract-guard scaffold** | `lumos guard list/scaffold/bind/audit/trace` | Dialogue-driven: list unbound `★INVARIANT★`, scaffold **red-by-default** test stubs, bind `[test:]`, stamp independent `[audit:]`. |
-| **git hooks** | `scripts/hooks/` | pre-commit hard-blocks "code without graph"; post-commit leaves a bypass trail; pre-push runs `lumos doctor --ci`. |
-| **Installers** | `scripts/install-hooks.sh`, `scripts/install-graph-toolchain.sh`, `scripts/merge-claude-settings.py` | Vendor the toolset into a project / set up hooks / merge Claude settings. |
+| **Adversarial-audit loops** | `lumos pitfalls`, `code-loop`, `canary`, `loop`, `fold-check`, `refcheck` | `pitfalls --diff` classifies findings by tier (standard/high); tier=high branches go through canary-guarded `code-loop` (adversarial code review); `design-loop` audits a spec adversarially *before* implementation; `fold-check` catches design fold-drift. |
+| **Impact / integrity** | `lumos impact`, `anchor verify/approve` | `impact` reverse-looks up graph nodes affected by a changed file (direct + indirect) and surfaces matched incidents via `pitfall_when`; `anchor` guards test/gate files from silent tampering. |
+| **git hooks** | `scripts/hooks/` | pre-commit hard-blocks "code without graph"; post-commit logs any bypass; pre-push runs `doctor --ci` **+ `anchor verify` + hard-blocks tier=high branches that haven't passed `code-loop`**. |
+| **Claude hooks** | `scripts/hooks/claude/` | PreToolUse: injects the impact radius before you edit code; Stop: nags (push only, never blocks the turn) when a tier=high branch hasn't passed `code-loop`; PostToolUse: self-sufficiency / verification-rot post-check. |
+| **Installers** | `get.sh`, `get.ps1`, `install.sh`, `scripts/merge-claude-settings.py` (underlying: `install-hooks.sh` / `install-graph-toolchain.sh`) | Machine layer (`get.*`) + project layer (`lumos init`) — two-step onboarding, hook setup, and Claude settings merge. |
 | **Discipline template** | `scripts/templates/graph-discipline.md` | The "graph-first" rules injected into each project's `CLAUDE.md`. |
-| **Skills** | `skills/lumos-project-notes`, `skills/lumos-core-knowledge` | The graph read/write rules written *for the AI* (user-scope, shared across projects). |
+| **Skills** | `lumos-project-notes`, `core-knowledge`, `design-loop`, `code-loop`, `pitfalls-gapfill` | Graph read/write rules and adversarial-audit loop orchestration written *for the AI* (user-scope, shared across projects). |
 
 ---
 
@@ -62,8 +65,26 @@ Then **restart your Claude Code session** (L1/L3 hooks load at session start).
 
 > `bootstrap` does **not** pull updates by default. To refresh later: `git -C ~/harness/lumos-toolchain pull` (everything is symlinked), or `lumos bootstrap --pull`.
 
-### 4b. Onboard a brand-new project
-From a Lumos clone, vendor the toolset into your target repo:
+### 4b. Onboard a brand-new project (two commands)
+
+**① Once per machine** (remote, clones Lumos automatically):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
+# then restart your Claude Code session
+```
+
+`get.sh` installs the machine layer: clones Lumos + user-scope skills + global `lumos`. (You can `curl -fsSL <url> -o get.sh` to inspect first; pass flags with `… | bash -s -- --pull`.)
+
+**② Once per project** (inside your project):
+
+```bash
+cd <your-project> && lumos init       # slug defaults to folder name; customize with --name <slug>
+```
+
+`lumos init` installs the project layer: creates `docs/<slug>-knowledge/{Systems,…,MOC}` + `.gitignore`, vendors the toolset, and installs pre-commit/pre-push gates. Existing graph data is **never overwritten** (`--force` fills in missing pieces only; `--no-hooks` creates just the graph scaffold).
+
+<details><summary>Advanced / offline: manual install-graph-toolchain</summary>
 
 ```bash
 git clone https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
@@ -71,11 +92,22 @@ cd ~/harness/lumos-toolchain && ./install.sh        # user-scope skills (symlink
 python3 scripts/lumos install                       # (optional) global `lumos` on PATH
 scripts/install-graph-toolchain.sh --target <your-project> --slug <name>
 ```
+</details>
 
-This creates `docs/<name>-knowledge/{Systems,Verification,Projects,Issues,Sessions,MOC}`, installs hooks, and injects the discipline block into the project's `CLAUDE.md`. Existing graph data is **never overwritten** (re-running only updates the toolchain).
+### 4c. Windows (native PowerShell)
+Prerequisites: Git for Windows (bundles bash for git hooks), python on PATH, Claude Code.
+
+```powershell
+irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex
+# restart your Claude Code session (L1/L3 load at session start)
+# if `lumos` isn't found: add %USERPROFILE%\.local\bin to PATH
+cd <your-project>; lumos init
+```
+
+`get.ps1` installs the machine layer: clones Lumos (if missing) and calls `lumos install` — global `lumos` via a `%USERPROFILE%\.local\bin\lumos.cmd` shim, user-scope skills via directory **junction** (`mklink /J`, falls back to copy on failure), no admin rights required. Individual Claude hook `.py` files are always **copied** to `~/.claude/hooks/`. Then `lumos init` sets up the project layer (graph scaffold + vendored tools + git/Claude hooks), same as Unix.
 
 ### Why two install layers?
-CI only checks out the project repo, and git hooks are per-repo — so the **toolchain must be vendored into each project**, while **skills are user-scope** (one shared copy, symlinked to `~/.claude/skills/`). `git pull` on the Lumos clone updates skills + global CLI instantly; the vendored toolchain in a project refreshes via `lumos update`.
+CI only checks out the project repo, and git hooks are per-repo — so the **toolchain must be vendored into each project**. **Skills are user-scope** (one shared copy, symlinked to `~/.claude/skills/`). `git pull` on the Lumos clone updates skills + global CLI instantly; the vendored toolchain inside a project refreshes via `lumos update`.
 
 ---
 
@@ -126,21 +158,29 @@ unmarked = reversible (git/test-level, go ahead)
 ## 6. Daily workflow
 
 ```
-ENTER  ── lumos search <kw> → lumos context <node> → lumos contracts <node>   (read graph BEFORE grep/DB)
-WORK   ── make the change; for new INVARIANTs: guard scaffold → bind → audit
-WRITE  ── lumos set/append/decision-add to record decisions, verifications, contracts
-VERIFY ── lumos lint <node>        (fast, single file — run right after writing a node)
-       ── lumos doctor             (whole-graph health)
-COMMIT ── pre-commit blocks code-without-graph; pre-push runs doctor --ci as the final gate
+ENTER   ── lumos search <kw> → lumos context <node> → lumos contracts <node>   (read graph BEFORE grep/DB)
+DESIGN  ── before implementing a spec: run design-loop (canary-guarded adversarial audit) until
+           `lumos loop status` converges; write the design as a plan node (Projects/X_plan)
+WORK    ── make the change; before editing code the impact hook auto-injects affected graph nodes
+           + matched incidents; for new INVARIANTs: guard scaffold → bind → audit
+WRITE   ── lumos set/append/decision-add to record decisions, verifications, contracts
+VERIFY  ── lumos lint <node>        (fast, single file — run right after writing a node)
+        ── lumos doctor             (whole-graph health)
+FINISH  ── lumos pitfalls --diff <base>..HEAD; tier=high → code-loop (canary-guarded adversarial
+           code review) → code-loop pass records the convergence ledger
+COMMIT  ── pre-commit blocks code-without-graph; pre-push runs doctor --ci + anchor verify +
+           code-loop check (hard-blocks tier=high branches that haven't passed)
 ```
 
-The three enforcement layers, fastest to hardest:
+Enforcement layers, fastest to hardest:
 
 | Layer | Command | Scope |
 |---|---|---|
-| **lint** | `lumos lint <node>` | one file, no repo scan — predicts what pre-push will reject |
-| **doctor** | `lumos doctor [--ci]` | whole graph: orphans, broken links, `verified_by` sync, **Check T** (contract→test→audit), **Check R** (reversibility), frontmatter lint |
-| **pre-push** | runs `doctor --ci` | hard block before push |
+| **impact** | `lumos impact --file <file>` (+ PreToolUse hook) | Before editing code: pushes affected graph nodes (direct + indirect) + matched incidents; informational, never blocks |
+| **lint** | `lumos lint <node>` | One file, no repo scan — predicts what pre-push will reject |
+| **doctor** | `lumos doctor [--ci]` | Whole graph: orphans, broken links, `verified_by` sync, **Check T** (contract→test→audit), **Check R** (reversibility), frontmatter lint |
+| **code-loop** | `lumos code-loop check` | tier=high branch not yet passed adversarial code review → Stop hook nag + pre-push hard-block |
+| **pre-push** | `doctor --ci` + `anchor verify` + `code-loop check` | Three-in-one hard gate before every push |
 
 ---
 
@@ -170,11 +210,24 @@ lumos decision-supersede <node> "<substr>" --by "..." [--ended DATE]
 **Contracts & verification**
 ```bash
 lumos guard list [--unbound]                         # ★INVARIANT★ binding status (real/dangling/fake/naked) + audit state
-lumos guard scaffold --node S --invariant "<substr>" --method M --type pure|behavioral|state --claim "..."
-lumos guard bind  <node> "<substr>" <method>         # write [test:method] onto the KEY line
+lumos guard scaffold --node S --invariant "<substr>" --method M --type pure|behavioral|state --claim "..." [--platform P]
+lumos guard bind  <node> "<substr>" <method> [--platform P]   # write [test:method] onto the KEY line (multi-platform: [test:P:method])
 lumos guard audit <node> "<substr>" [--model sonnet] [--date D]   # stamp [audit:] after an independent review
 lumos guard trace [<node>]                           # contract → guard test → Verification evidence chain
 lumos sync-verified-by [--apply]                     # fix missing verified_by (doctor Check 3)
+```
+
+**Adversarial-audit loops / impact / integrity**
+```bash
+lumos pitfalls --diff <base>..HEAD [--no-lint]       # scan diff for risks, classify by tier (standard/high); high → run code-loop
+lumos code-loop check [--json]                        # tier=high branch not yet passed → rc1 (Stop nag + pre-push hard-block)
+lumos code-loop pass|skip --note "<reason>"          # record / escape-hatch convergence ledger (pass binds to HEAD sha; skip leaves a trail)
+lumos canary record caught|missed --loop <id> ...    # record design-loop / code-loop canary wakefulness
+lumos loop status <id> --need 2 --gate               # convergence gate (K-streak ∧ G1 ∧ G2)
+lumos fold-check <spec>                               # catch design fold-drift (mirrored sections / value drift / missing reversal)
+lumos refcheck <spec> --repo . [--json]              # mechanically verify spec→repo references (missing / line-number out of range)
+lumos impact --file <file> [--depth N] [--json]      # reverse-lookup affected graph nodes (direct + indirect) + matched incidents (pitfall_when)
+lumos anchor verify | approve --note "<reason>"      # test/gate file integrity: verify fingerprint / approve a deliberate change as new baseline
 ```
 
 **Govern & inspect**
@@ -241,7 +294,7 @@ lumos gov OrderService   # which gates flagged this node, hard-block vs soft, wi
 
 - **DRY / YAGNI / TDD**, frequent commits; the CLI is stdlib-only and CI-runnable.
 - **Don't over-govern.** Mark only what's load-bearing; soft stays soft; never add ceremony without proportional value.
-- **Honest ceilings.** Tools prove *form* (a test exists, a rollback is written, a clean agent reviewed) — never *validation* (the rule is right for today's business, the rollback actually runs). That judgment stays with people.
+- **Honest ceilings.** The gates are a floor and friction, not an oracle. Tools prove *form* (a test exists, a rollback is written, a clean agent reviewed) — never *validation* (the rule is right for today's business, the rollback actually runs). `--no-verify` bypasses git gates — that's self-owned and logged. Stop/PreToolUse Claude hooks are push-only and ignorable. The judgment stays with people.
 - **Maker ≠ checker.** No-right-answer judgments (is this a real contract? is the test a tautology?) go to an independent, context-free agent — not the author.
 
 ---
