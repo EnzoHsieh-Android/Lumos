@@ -5344,26 +5344,37 @@ def t_codeloop_ledger():
 # ── code-loop check ──────────────────────────────────────────────────────────
 
 def t_codeloop_check():
-    """check: pass 後 rc=0;無台帳 rc=1;HEAD 移動後 sha 不符 rc=1。"""
+    """check(Task 2 判定式版):tier=high∧無台帳→rc=1;pass→rc=0;HEAD 移動→rc=1;tier≠high→rc=0。
+    Task 1 的 sha-only 邏輯已由 _codeloop_guard_verdict 取代;此測試對齊新語意。
+    """
     import subprocess as _sp
+
+    # tier=high ∧ 無台帳 → rc=1(blocked)
     with tempfile.TemporaryDirectory() as d:
-        _git_init_commit(d)
-
-        # 無台帳 → check rc=1
+        _make_high_tier_repo(d)
         rc_no = run_lumos(["code-loop", "check", "--repo", d])
-        check("codeloop_check: 無台帳 rc=1", rc_no == 1, f"rc={rc_no}")
+        check("codeloop_check: tier=high∧無台帳 rc=1", rc_no == 1, f"rc={rc_no}")
 
-        # pass 後 check → rc=0
+    # tier=high ∧ pass 後 check → rc=0
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
         run_lumos(["code-loop", "pass", "--note", "ok", "--repo", d])
         rc_ok = run_lumos(["code-loop", "check", "--repo", d])
         check("codeloop_check: pass 後 rc=0", rc_ok == 0, f"rc={rc_ok}")
 
-        # HEAD 移動(再 commit)→ sha 不符 rc=1
-        (Path(d) / "f2.txt").write_text("x\n", encoding="utf-8")
-        _sp.run(["git", "add", "f2.txt"], cwd=d, capture_output=True)
-        _sp.run(["git", "commit", "-qm", "second"], cwd=d, capture_output=True)
+    # tier=high ∧ pass 但 HEAD 移動 → sha 過時 → rc=1
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        run_lumos(["code-loop", "pass", "--note", "ok", "--repo", d])
+        _add_commit(d, "f2.txt", "x\n")
         rc_stale = run_lumos(["code-loop", "check", "--repo", d])
-        check("codeloop_check: sha 不符 rc=1", rc_stale == 1, f"rc={rc_stale}")
+        check("codeloop_check: sha 不符(HEAD移動) rc=1", rc_stale == 1, f"rc={rc_stale}")
+
+    # tier≠high(fail-open/standard) → rc=0 不 blocked
+    with tempfile.TemporaryDirectory() as d:
+        _make_standard_tier_repo(d)
+        rc_std = run_lumos(["code-loop", "check", "--repo", d])
+        check("codeloop_check: tier≠high → rc=0(不 blocked)", rc_std == 0, f"rc={rc_std}")
 
 
 # ── code-loop branch 名含 / 扁平化 ──────────────────────────────────────────
@@ -5436,6 +5447,155 @@ def t_codeloop_govlog_with_docs():
                       ev.get("gate") == "code-loop", f"ev={ev!r}")
                 check("codeloop_govlog: kind=passed",
                       ev.get("kind") == "passed", f"ev={ev!r}")
+
+
+# ── Task 2: _codeloop_guard_verdict 判定式 ───────────────────────────────────
+
+def _make_high_tier_repo(d):
+    """建立有 merge-base + tier=high diff 的 git repo。
+    策略:
+      1. init + 初 commit (這成為 main branch 上的 base)
+      2. 切 feat branch,新增含 requests.post 的 py 檔(觸發 pitfalls 資源類)
+      3. merge-base HEAD main = 初 commit → diff 含 requests.post → tier high
+    """
+    import subprocess as _sp
+    g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@t.t")
+    g("config", "user.name", "t")
+    (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
+    g("add", "README.md")
+    g("commit", "-qm", "init")
+    # 切 feat branch 並加 high-tier 程式
+    g("checkout", "-b", "feat/codeloop-guard-test")
+    (Path(d) / "app.py").write_text(
+        "import requests\n"
+        "def f():\n"
+        "    requests.post('http://x')\n",
+        encoding="utf-8")
+    g("add", "app.py")
+    g("commit", "-qm", "add high tier code")
+
+
+def _make_standard_tier_repo(d):
+    """建立 merge-base + tier=standard diff 的 git repo(只有 .md 變更)。"""
+    import subprocess as _sp
+    g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@t.t")
+    g("config", "user.name", "t")
+    (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
+    g("add", "README.md")
+    g("commit", "-qm", "init")
+    g("checkout", "-b", "feat/standard")
+    (Path(d) / "notes.md").write_text("just docs\n", encoding="utf-8")
+    g("add", "notes.md")
+    g("commit", "-qm", "add docs")
+
+
+def _add_commit(d, filename="bump.txt", content="x\n"):
+    """在 repo d 新增一個 commit,回傳新 HEAD sha。"""
+    import subprocess as _sp
+    g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+    (Path(d) / filename).write_text(content, encoding="utf-8")
+    g("add", filename)
+    g("commit", "-qm", f"bump {filename}")
+    return _sp.run(["git", "rev-parse", "HEAD"], cwd=d,
+                   capture_output=True, text=True).stdout.strip()
+
+
+def t_codeloop_guard_verdict():
+    """_codeloop_guard_verdict 判定式:5 情境。"""
+    import subprocess as _sp
+
+    # ── 情境 1: tier=high ∧ 無台帳 → blocked ──────────────────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        r = _sp.run(
+            [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+            capture_output=True, text=True)
+        check("codeloop_guard: tier=high∧無台帳 → blocked(rc=1)", r.returncode == 1,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+        import json as _j
+        try:
+            data = _j.loads(r.stdout)
+            check("codeloop_guard: --json blocked=true", data.get("blocked") is True,
+                  f"data={data!r}")
+            check("codeloop_guard: --json tier=high", data.get("tier") == "high",
+                  f"data={data!r}")
+        except Exception as ex:
+            check("codeloop_guard: --json 可解析", False, f"ex={ex}\nstdout={r.stdout!r}")
+
+    # ── 情境 2: tier=high ∧ pass(HEAD 符) → 不 blocked ───────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
+        r = _sp.run(
+            [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+            capture_output=True, text=True)
+        check("codeloop_guard: tier=high∧pass(HEAD符) → 不 blocked(rc=0)", r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+        try:
+            import json as _j
+            data = _j.loads(r.stdout)
+            check("codeloop_guard: pass → blocked=false", data.get("blocked") is False,
+                  f"data={data!r}")
+        except Exception as ex:
+            check("codeloop_guard: pass --json 可解析", False, f"ex={ex}\nstdout={r.stdout!r}")
+
+    # ── 情境 3: tier=high ∧ skip(HEAD 符) → 不 blocked ───────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        run_lumos(["code-loop", "skip", "--note", "intentional", "--repo", d])
+        r = _sp.run(
+            [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+            capture_output=True, text=True)
+        check("codeloop_guard: tier=high∧skip(HEAD符) → 不 blocked(rc=0)", r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+        try:
+            import json as _j
+            data = _j.loads(r.stdout)
+            check("codeloop_guard: skip → blocked=false", data.get("blocked") is False,
+                  f"data={data!r}")
+        except Exception as ex:
+            check("codeloop_guard: skip --json 可解析", False, f"ex={ex}\nstdout={r.stdout!r}")
+
+    # ── 情境 4: tier=high ∧ pass 但 HEAD 移動(再 commit) → 作廢 blocked ──
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
+        # 再加一個 commit → HEAD sha 改變 → 台帳 sha 過時
+        _add_commit(d, "extra.txt", "bump\n")
+        r = _sp.run(
+            [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+            capture_output=True, text=True)
+        check("codeloop_guard: pass但HEAD移動 → 作廢 blocked(rc=1)", r.returncode == 1,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+        try:
+            import json as _j
+            data = _j.loads(r.stdout)
+            check("codeloop_guard: HEAD移動後 blocked=true", data.get("blocked") is True,
+                  f"data={data!r}")
+        except Exception as ex:
+            check("codeloop_guard: HEAD移動後 --json 可解析", False,
+                  f"ex={ex}\nstdout={r.stdout!r}")
+
+    # ── 情境 5: tier≠high → 不 blocked ───────────────────────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_standard_tier_repo(d)
+        r = _sp.run(
+            [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+            capture_output=True, text=True)
+        check("codeloop_guard: tier≠high∧無台帳 → 不 blocked(rc=0)", r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+        try:
+            import json as _j
+            data = _j.loads(r.stdout)
+            check("codeloop_guard: standard tier → blocked=false", data.get("blocked") is False,
+                  f"data={data!r}")
+        except Exception as ex:
+            check("codeloop_guard: standard --json 可解析", False,
+                  f"ex={ex}\nstdout={r.stdout!r}")
 
 
 def main():

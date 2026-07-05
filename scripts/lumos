@@ -5881,12 +5881,82 @@ def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts):
         pass
 
 
-def cmd_code_loop(subcmd, note=None, repo=None):
+def _codeloop_guard_verdict(repo_root):
+    """判定式:tier=high(pitfalls --diff merge-base..HEAD --no-lint --json)
+    AND 無有效 pass/skip 台帳(head_sha 綁 HEAD) → blocked=True。
+    fail-open:pitfalls 出錯 / 非 git / 無 merge-base → tier 視作非 high(不 blocked)。
+    回傳 dict{blocked:bool, reason:str, tier:str}。
+    """
+    import json as _json
+    import subprocess as _sp
+
+    # 1. 取 HEAD sha
+    head_sha = _codeloop_git_head(repo_root)
+    if not head_sha:
+        return {"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"}
+
+    # 2. 取 merge-base(fail-open)
+    mb = None
+    for base_branch in ("main", "master"):
+        r = _sp.run(["git", "merge-base", "HEAD", base_branch],
+                    capture_output=True, text=True, cwd=str(repo_root))
+        if r.returncode == 0 and r.stdout.strip():
+            mb = r.stdout.strip()
+            # 若 merge-base == HEAD(在 base branch 上),表示未出 branch,tier 非 high
+            if mb == head_sha:
+                return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
+            break
+
+    if not mb:
+        return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
+
+    # 3. 跑 pitfalls --diff merge-base..HEAD --no-lint --json 取 tier
+    diff_range = f"{mb}..HEAD"
+    try:
+        import sys as _sys
+        graphctl = Path(__file__).resolve()
+        r = _sp.run([_sys.executable, str(graphctl), "pitfalls",
+                     "--diff", diff_range, "--no-lint", "--json",
+                     "--repo", str(repo_root)],
+                    capture_output=True, text=True, cwd=str(repo_root))
+        if r.returncode != 0:
+            return {"blocked": False, "reason": f"pitfalls 失敗(fail-open): {r.stderr.strip()[:120]}", "tier": "unknown"}
+        lines = [l for l in r.stdout.splitlines() if l.strip().startswith("{")]
+        if not lines:
+            return {"blocked": False, "reason": "pitfalls 無 JSON 輸出(fail-open)", "tier": "unknown"}
+        data = _json.loads(lines[0])
+        tier = data.get("tier", "standard")
+    except Exception as e:
+        return {"blocked": False, "reason": f"pitfalls 例外(fail-open): {e}", "tier": "unknown"}
+
+    if tier != "high":
+        return {"blocked": False, "reason": f"tier={tier}(非 high)", "tier": tier}
+
+    # 4. 讀台帳,pass/skip 且 head_sha == HEAD → 有效
+    branch = _codeloop_git_branch(repo_root)
+    rec = _codeloop_read(repo_root, branch)
+    if rec is not None:
+        rec_sha = rec.get("head_sha", "")
+        rec_status = rec.get("status", "")
+        if rec_sha == head_sha and rec_status in ("passed", "skipped"):
+            return {"blocked": False, "reason": f"有效台帳({rec_status}@{head_sha[:8]})", "tier": tier}
+        # 台帳存在但 sha 不符或狀態不對
+        if rec_sha != head_sha:
+            reason = f"tier=high 且台帳 sha 過時(台帳={rec_sha[:8]} HEAD={head_sha[:8]})"
+        else:
+            reason = f"tier=high 且台帳狀態無效({rec_status!r})"
+        return {"blocked": True, "reason": reason, "tier": tier}
+
+    # 5. 無台帳
+    return {"blocked": True, "reason": "tier=high 且無台帳(尚未跑 code-loop pass/skip)", "tier": tier}
+
+
+def cmd_code_loop(subcmd, note=None, repo=None, as_json=False):
     """code-loop 台帳讀寫。
     pass  → status=passed(綁 HEAD sha);
     skip  → status=skipped(綁 HEAD sha,留逃生痕);
-    check → 讀台帳回報狀態(Task 2 補完判定式;Task 1 只回讀)。
-    rc: 0=OK / 1=check:未收斂(無有效台帳) / 2=參數錯。
+    check → 跑判定式回報 verdict(blocked=tier=high∧無有效台帳);--json 輸出 verdict dict。
+    rc: 0=OK / 1=check:blocked / 2=參數錯。
     """
     # resolve repo root
     if repo is not None:
@@ -5920,18 +5990,21 @@ def cmd_code_loop(subcmd, note=None, repo=None):
         return 0
 
     if subcmd == "check":
-        # Task 1 佔位:只回讀台帳(判定式 Task 2 補)
-        rec = _codeloop_read(repo_root, branch)
-        if rec is None:
-            print(f"⚠ 無台帳 [{branch}]:尚未跑 code-loop pass/skip", file=sys.stderr)
-            return 1
-        rec_sha = rec.get("head_sha", "")
-        if rec_sha != head_sha:
-            print(f"⚠ 台帳 sha 過時 [{branch}]:台帳={rec_sha[:8]} HEAD={head_sha[:8]}", file=sys.stderr)
-            return 1
-        s = rec.get("status", "")
-        print(f"✅ code-loop {s} [{branch}@{head_sha[:8]}] {rec.get('note', '')}")
-        return 0
+        # Task 2: 完整判定式(tier-high∧無有效台帳 → blocked)
+        import json as _cljson
+        verdict = _codeloop_guard_verdict(repo_root)
+        blocked = verdict["blocked"]
+        reason = verdict["reason"]
+        tier = verdict["tier"]
+        if as_json:
+            print(_cljson.dumps(verdict, ensure_ascii=False))
+        else:
+            if blocked:
+                print(f"⚠ code-loop check: BLOCKED [{branch}@{head_sha[:8]}] {reason}",
+                      file=sys.stderr)
+            else:
+                print(f"✅ code-loop check: OK [{branch}@{head_sha[:8]}] tier={tier} {reason}")
+        return 1 if blocked else 0
 
     print(f"ERROR: 未知子命令 {subcmd!r}", file=sys.stderr)
     return 2
@@ -6162,11 +6235,14 @@ def main():
     for _clname, _clhelp in (
         ("pass", "記錄本分支 HEAD 已過 code-loop 收斂(status=passed)"),
         ("skip", "顯式跳過 code-loop 並留痕(status=skipped;同 bypass 哲學)"),
-        ("check", "查詢本分支台帳是否有效(HEAD 吻合且 passed/skipped)"),
+        ("check", "跑判定式:tier=high∧無有效台帳→rc1 blocked;--json 輸出 verdict dict"),
     ):
         _clp = clsub.add_parser(_clname, help=_clhelp)
         if _clname in ("pass", "skip"):
             _clp.add_argument("--note", default="", help="理由(pass/skip 必填習慣;進治理帳)")
+        if _clname == "check":
+            _clp.add_argument("--json", dest="cl_json", action="store_true",
+                              help="以 JSON 輸出 verdict dict{blocked,reason,tier}")
         _clp.add_argument("--repo", dest="cl_repo", default=None,
                           help="repo root(預設 cwd 逐層向上找 .git)")
 
@@ -6211,7 +6287,8 @@ def main():
         return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline, args.audit)
     if args.cmd == "code-loop":
         note = getattr(args, "note", None) or ""
-        return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo)
+        cl_json = getattr(args, "cl_json", False)
+        return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo, as_json=cl_json)
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():
