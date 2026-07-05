@@ -4702,36 +4702,27 @@ def t_impact_end_to_end():
             pass
 
 
-def t_impact_hook_registration():
-    """Task 12 hook 註冊:~/.claude/settings.json 含 PreToolUse impact-hook.py 項目。
+def t_impact_hook_registration_source():
+    """Task 12 hook 註冊:驗 merge-claude-settings.py 的 HOOK_ENTRIES 源碼含 PreToolUse impact-hook.py 條目。
 
-    此測試驗證 merge-claude-settings.py 正確把 impact-hook.py 註冊進 settings。
-    若 settings.json 不存在或無此項,則 FAIL。
+    直接 import 源碼模組驗 HOOK_ENTRIES 結構,零外部依賴(不讀 ~/.claude/settings.json),
+    CI 隔離環境可過。
     """
-    import json as _json
+    import importlib.util as _ilu
 
-    settings_path = Path.home() / ".claude" / "settings.json"
-    check("impact_hook_registration: settings.json 存在",
-          settings_path.exists(),
-          f"找不到 {settings_path}")
-    if not settings_path.exists():
-        return
-
-    try:
-        settings = _json.loads(settings_path.read_text(encoding="utf-8"))
-    except _json.JSONDecodeError as e:
-        check("impact_hook_registration: settings.json 可解析", False, str(e))
-        return
-
-    pre_hooks = settings.get("hooks", {}).get("PreToolUse", [])
+    spec_path = Path(__file__).resolve().parent / "merge-claude-settings.py"
+    spec = _ilu.spec_from_file_location("mcs", spec_path)
+    mcs = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mcs)
+    entries = mcs.HOOK_ENTRIES.get("PreToolUse", [])
     found = any(
         "impact-hook.py" in h.get("command", "")
-        for entry in pre_hooks
-        for h in entry.get("hooks", [])
+        for e in entries
+        for h in e.get("hooks", [])
     )
-    check("impact_hook_registration: PreToolUse 含 impact-hook.py",
+    check("impact_hook_registration_source: HOOK_ENTRIES PreToolUse 含 impact-hook.py",
           found,
-          f"PreToolUse entries={pre_hooks!r}")
+          f"entries={entries!r}")
 
 
 def main():
