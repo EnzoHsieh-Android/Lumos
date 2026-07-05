@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-05
 updated: 2026-07-05
 tags:
@@ -21,6 +21,8 @@ summary: |-
   KEY:誠實天花板=非 oracle——關掉「忘了」(Stop push)+「隨手漏」(pre-push 擋),關不掉「刻意繞+不誠實」;同 design-loop/impact「push+摩擦+地板非 oracle」
   DEP:[[pitfalls-code-loop]]
   TEST:待實作
+verified_by:
+  - "[[Verification/2026-07-05_code-loop必用守衛]]"
 ---
 # code-loop 必用守衛_計劃
 

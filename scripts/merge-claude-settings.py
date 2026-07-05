@@ -68,7 +68,19 @@ HOOK_ENTRIES = {
                     "timeout": 10,
                 }
             ]
-        }
+        },
+        {
+            # code-loop 必用守衛:Stop 末注入 nag(tier=high 未過 code-loop)。
+            # 只注入不擋回合(Stop 分不出做完/中途,擋會每回合卡死)。
+            # 設計 §1:Stop hook 只注入 nag。
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": _hook_cmd("code-loop-guard.py"),
+                    "timeout": 30,
+                }
+            ]
+        },
     ],
 }
 

@@ -40,9 +40,10 @@ if ! "$PY" "$GRAPHCTL" anchor verify; then
   exit 1
 fi
 
-# 偏科偵測 advisory(非擋、代碼層):push 前把 diff 的代碼形態風險攤在眼前。
+# 代碼偏科 + code-loop 必用守衛(tier=high):push 前把 diff 的代碼形態風險攤在眼前。
 # 只跑快的 regex 層(--no-lint;不跑專案宣告的 lint 指令,免每次 push 卡 detekt 等)。
-# tier=high → 大聲提醒該跑 lumos-code-loop 終審對抗審。**永不擋 push**(信號非硬規則)。
+# tier=high → 跑 code-loop check:blocked(rc=1)則硬擋 push;否則放行。
+# fail-open:lumos code-loop check 回非 0/1 的異常 rc(找不到/例外) → 不擋(寧漏勿誤擋)。
 mb="$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || true)"
 head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 if [[ -n "$mb" && "$mb" != "$head_sha" ]]; then
@@ -50,11 +51,26 @@ if [[ -n "$mb" && "$mb" != "$head_sha" ]]; then
   if printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
     {
       echo ""
-      echo "⚠ pre-push advisory:pitfalls --diff tier=high(代碼形態風險命中,見下)"
+      echo "⚠ pre-push:pitfalls --diff tier=high(代碼形態風險命中,見下)"
       "$PY" "$GRAPHCTL" pitfalls --diff "$mb..HEAD" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
-      echo "    → 建議跑 lumos-code-loop 終審對抗審(此為提醒、未擋 push)"
       echo ""
     } >&2
+    # code-loop check:rc=0=放、rc=1=blocked 硬擋、其他=fail-open 放
+    cl_rc=0
+    "$PY" "$GRAPHCTL" code-loop check --repo "$REPO_ROOT" >/dev/null 2>&1 || cl_rc=$?
+    if [[ "$cl_rc" -eq 1 ]]; then
+      {
+        echo "🚫 pre-push: 本分支 tier=high 代碼未過 code-loop → push 已擋下"
+        echo ""
+        echo "請選一條:"
+        echo "  1. 跑 lumos-code-loop 終審 → 收斂後重 push"
+        echo "  2. 確屬可接受(假陽/刻意略過) → lumos code-loop skip --note \"<理由>\" → 重 push(留痕)"
+        echo "  3. 緊急繞過 → git push --no-verify(自負、無痕)"
+        echo ""
+      } >&2
+      exit 1
+    fi
+    # rc=0(已收斂/skip/tier≠high):放行;rc≠0/1(異常):fail-open 放行
   fi
 fi
 
