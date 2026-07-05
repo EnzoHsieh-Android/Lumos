@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-05
 updated: 2026-07-05
 tags:
@@ -20,7 +20,9 @@ summary: |-
   KEY:去重=某節點既 impact 結構命中又 trigger 命中→只列 incidents(更具體、標 matched_by);誠實=trigger 人寫 GIGO、content-regex 假陽假陰、量少邊角
   DECISION:有真演算法(trigger 比對)+動剛 merged impact/hook→非純散文,走(輕量 design-loop 或)writing-plans+TDD(impact TDD 抓過 3 真 bug)
   DEP:[[主動影響幅度偵測_計劃]]
-  TEST:待實作
+  TEST:已實作(branch feat/pitfall-incidents,671 passed;TDD 4 task+opus 終審);VERIFY:[[2026-07-05_pitfalls事故觸發]]
+verified_by:
+  - "[[2026-07-05_pitfalls事故觸發]]"
 ---
 # pitfalls 事故觸發_計劃(block ④)
 
@@ -34,6 +36,9 @@ summary: |-
 - **`glob:<pattern>`**(如 `glob:**/*Repository*.cs`)→ 比**被碰檔路徑**(fnmatch/pathlib)。
 - **`content:<regex>`**(如 `content:SELECT\s.*FROM`)→ **grep 被碰檔內容**(re.search)。
 - 走 `lumos set`/`append`?——`pitfall_when` 非白名單 list 欄位,v1 手寫 frontmatter(list 一項一行,同鐵則1);或 skill/指令輔助(YAGNI 先手寫)。
+- **寫 trigger 的兩個 caveat**(最終 review 實測):
+  - **`content:` regex 避免嵌套量詞**(如 `(a+)+$`)——python `re` 無 timeout,對大檔會 catastrophic backtracking 卡住整個 impact/hook(GIGO,§5.2)。用簡單 pattern。
+  - **`glob:**/x` 不match 根層檔**:`glob:**/*Repository*.py` 命中 `app/UserRepository.py` 但**不**命中根層 `UserRepository.py`(`PurePath.match`/`fnmatch` 皆然)。要蓋根層用 `glob:*Repository*.py`,或兩條都寫。
 
 ## §3 比對演算法
 新函式 `_match_incident_triggers(file_rel, file_content, env) -> list[dict]`:
