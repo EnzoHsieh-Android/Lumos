@@ -267,6 +267,24 @@ def build_additional_context(impact_data: dict) -> str:
             else:
                 lines.append(f"  hop{hop} {node}  via {via}{dir_tag}{suffix}")
 
+    incidents = impact_data.get("incidents", [])
+    if incidents:
+        lines.append("相關事故:")
+        for item in incidents:
+            node = item.get("node", "?")
+            matched_by = item.get("matched_by", "?")
+            contract = item.get("contract")
+            combo = item.get("combo", False)
+            prefix = ""
+            if contract:
+                prefix = f"★{contract}★"
+            if combo:
+                prefix += "★COMBO★"
+            if prefix:
+                lines.append(f"  {prefix} {node}  (matched_by: {matched_by})")
+            else:
+                lines.append(f"  {node}  (matched_by: {matched_by})")
+
     lines.append("")
     lines.append(_INJECT_INSTRUCTION)
     return "\n".join(lines)
@@ -283,8 +301,9 @@ def inject_additional_context(impact_data: dict) -> None:
     """
     direct = impact_data.get("direct", [])
     indirect = impact_data.get("indirect", [])
-    if not direct and not indirect:
-        return  # 空影響集:不注入
+    incidents = impact_data.get("incidents", [])
+    if not direct and not indirect and not incidents:
+        return  # 空影響集(direct+indirect+incidents 皆空):不注入
 
     ctx = build_additional_context(impact_data)
     output = {
@@ -382,7 +401,8 @@ def main() -> int:
 
     direct = impact_data.get("direct", [])
     indirect = impact_data.get("indirect", [])
-    if not direct and not indirect:
+    incidents = impact_data.get("incidents", [])
+    if not direct and not indirect and not incidents:
         return 0
 
     # 注入 additionalContext

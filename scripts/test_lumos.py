@@ -4722,6 +4722,97 @@ def t_impact_hook_inject():
           f"got {j_main}")
 
 
+def t_impact_hook_incidents_inject():
+    """Task 3: impact hook 注入 incidents 段。
+
+    測試 build_additional_context 納入 incidents 段,
+    及 inject_additional_context 的「空集合不注入」判定納入 incidents。
+    """
+    import importlib.util
+    import io
+    import json
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    from unittest.mock import patch
+
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_incidents", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_incidents", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    inject_additional_context = m.inject_additional_context
+    build_additional_context = m.build_additional_context
+
+    def hook_run_with_impact(impact_data: dict) -> str:
+        """呼叫 inject_additional_context,捕捉 stdout 回傳。"""
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            inject_additional_context(impact_data)
+        return buf.getvalue().strip()
+
+    # ── 1. 非空 incidents(direct/indirect 皆空)→ stdout 非空,含「相關事故」段 ──
+    out = hook_run_with_impact({
+        "direct": [],
+        "indirect": [],
+        "incidents": [{"node": "Issues/N1", "matched_by": "glob:**/*Repo*", "contract": None, "combo": False}]
+    })
+    check("impact_hook_incidents_inject: 非空 incidents → stdout 非空",
+          out != "",
+          f"expected non-empty stdout, got {out!r}")
+    j = json.loads(out)
+    ctx = j["hookSpecificOutput"]["additionalContext"]
+    check("impact_hook_incidents_inject: additionalContext 含「相關事故」或 incident",
+          "相關事故" in ctx or "incident" in ctx.lower(),
+          f"ctx={ctx!r}")
+    check("impact_hook_incidents_inject: additionalContext 含事故節點名稱",
+          "Issues/N1" in ctx,
+          f"ctx={ctx!r}")
+    check("impact_hook_incidents_inject: additionalContext 含 matched_by",
+          "glob:**/*Repo*" in ctx,
+          f"ctx={ctx!r}")
+
+    # ── 2. 全空(direct/indirect/incidents 皆空)→ 不注入 ──
+    out_all_empty = hook_run_with_impact({"direct": [], "indirect": [], "incidents": []})
+    check("impact_hook_incidents_inject: 全空(含空 incidents)不注入",
+          out_all_empty == "",
+          f"expected empty stdout for all-empty impact, got {out_all_empty!r}")
+
+    # ── 3. 空 incidents 但有 direct → 注入(direct 主段),不含「相關事故」段 ──
+    out_no_inc = hook_run_with_impact({
+        "direct": [{"node": "Systems/A", "hit": "body-inline-code", "contract": None, "combo": False}],
+        "indirect": [],
+        "incidents": [],
+    })
+    check("impact_hook_incidents_inject: 空 incidents 有 direct → 仍注入",
+          out_no_inc != "",
+          f"expected non-empty stdout, got {out_no_inc!r}")
+    j_no_inc = json.loads(out_no_inc)
+    ctx_no_inc = j_no_inc["hookSpecificOutput"]["additionalContext"]
+    check("impact_hook_incidents_inject: 空 incidents → 無「相關事故」段",
+          "相關事故" not in ctx_no_inc,
+          f"ctx={ctx_no_inc!r}")
+
+    # ── 4. build_additional_context 含 incidents 時確有「相關事故」段 ──
+    ctx_build = build_additional_context({
+        "direct": [],
+        "indirect": [],
+        "incidents": [
+            {"node": "Issues/SQL_NPlus1", "matched_by": "content:SELECT.*FROM",
+             "contract": "INVARIANT", "combo": False},
+        ],
+    })
+    check("impact_hook_incidents_inject: build_additional_context 含「相關事故」標題",
+          "相關事故" in ctx_build,
+          f"ctx_build={ctx_build!r}")
+    check("impact_hook_incidents_inject: build_additional_context 含事故節點名稱",
+          "Issues/SQL_NPlus1" in ctx_build,
+          f"ctx_build={ctx_build!r}")
+    check("impact_hook_incidents_inject: build_additional_context incidents 含合約標記",
+          "INVARIANT" in ctx_build,
+          f"ctx_build={ctx_build!r}")
+
+
 def t_impact_hook_find_lumos_real():
     """C1 回歸:_find_lumos_script() 真實呼叫(不 mock)應能解析到可用的 lumos。
 
