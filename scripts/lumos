@@ -5590,17 +5590,20 @@ def cmd_impact(file, repo=None, depth=2, as_json=False):
     direct_rels = _impact_reverse_lookup(file, env, repo_root_for_lookup)
 
     # 5. 組裝影響清單:每個直接節點跑 _impact_collect,再匯總去重
-    # direct 去重:同節點只保留一筆(BFS seen 已種入 direct,但多個直接節點
-    # 各自跑 _impact_collect 時 indirect 可能重複 → 下面用 seen 去重)
+    # 修正:必須先把全部直接節點種入 direct_seen,再開始 BFS/indirect 收集。
+    # 若迴圈內逐一 add,處理節點 A 的 BFS 展開命中直接節點 B 時,B 尚未在
+    # direct_seen → B 被誤加進 indirect,之後處理 B 又進 direct → B 同時出現
+    # 在 direct 與 indirect(矛盾輸出)。預種全量消除此競爭。
     all_direct = []
     all_indirect = []
-    direct_seen = set()
+    direct_seen = set(direct_rels)  # ← 預種全量直接節點,消除跨直接節點去重競爭
     indirect_seen = set()  # 去重用 node rel
+    processed_direct = set()  # 避免同一 direct 節點重複展開
 
     for d_rel in direct_rels:
-        if d_rel in direct_seen:
+        if d_rel in processed_direct:
             continue
-        direct_seen.add(d_rel)
+        processed_direct.add(d_rel)
         collected = _impact_collect(d_rel, env, depth=depth)
         # 加入 direct
         for item in collected["direct"]:
@@ -5626,9 +5629,8 @@ def cmd_impact(file, repo=None, depth=2, as_json=False):
 
     # 7. 輸出
     rel_file = str(file)
-    import os as _os
-    if _os.path.isabs(rel_file) and repo_root is not None:
-        rel_file = _os.path.relpath(rel_file, str(repo_root))
+    if os.path.isabs(rel_file) and repo_root is not None:
+        rel_file = os.path.relpath(rel_file, str(repo_root))
 
     if as_json:
         print(json.dumps(

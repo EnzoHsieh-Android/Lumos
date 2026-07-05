@@ -4104,6 +4104,11 @@ def t_impact_json_schema_and_sort():
     (empty_vault / "MOC" / "idx.md").write_bytes(
         "---\ntype: moc\n---\n# idx\n".encode("utf-8")
     )
+    rc_empty = run_lumos(
+        ["impact", "--file", "scripts/newfile.py", "--repo", str(empty_repo), "--json"]
+    )
+    check("impact_json: 空集合 rc==0(顯式斷言)",
+          rc_empty == 0, f"rc={rc_empty}")
     out_empty = run_lumos_capture(
         ["impact", "--file", "scripts/newfile.py", "--repo", str(empty_repo), "--json"]
     )
@@ -4112,6 +4117,60 @@ def t_impact_json_schema_and_sort():
           d_empty["direct"] == [], f"direct={d_empty['direct']}")
     check("impact_json: 空集合 indirect=[]",
           d_empty["indirect"] == [], f"indirect={d_empty['indirect']}")
+
+
+def t_impact_cross_direct_node_dedup():
+    """回歸: 兩個互相 related 的直接節點(A、B 都引 scripts/lumos 且互 related),
+    跑 --json 後 B(與 A)只應出現在 direct、不得出現在 indirect。
+
+    修前 bug: direct_seen 在迴圈內逐一 add,處理 A 的 BFS 展開命中 B 時 B 還沒進
+    direct_seen → B 被誤加進 indirect,之後處理 B 又進 direct → B 同時出現在
+    direct 與 indirect(矛盾輸出)。修後:先預種全量 direct_seen。
+    """
+    import json as _json
+    import tempfile as _tf
+
+    repo = Path(_tf.mkdtemp(prefix="gctl-t7-dedup-"))
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "lumos").write_text("# fake lumos\n", encoding="utf-8")
+    vault = repo / "docs" / "test-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(
+        "---\ntype: moc\n---\n# idx\n".encode("utf-8")
+    )
+
+    # A: 引 scripts/lumos,related 指向 B
+    (vault / "Systems" / "DirectA.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[DirectB]]\"\n"
+        "---\n引用 `scripts/lumos` 的用法\n",
+        encoding="utf-8",
+    )
+    # B: 引 scripts/lumos,related 指向 A(互相 related)
+    (vault / "Systems" / "DirectB.md").write_text(
+        "---\ntype: system\nstatus: doing\nrelated:\n  - \"[[DirectA]]\"\n"
+        "---\n也引用 `scripts/lumos`\n",
+        encoding="utf-8",
+    )
+
+    rc = run_lumos(["impact", "--file", "scripts/lumos", "--repo", str(repo), "--json"])
+    check("impact_dedup: rc==0", rc == 0, f"rc={rc}")
+
+    out = run_lumos_capture(
+        ["impact", "--file", "scripts/lumos", "--repo", str(repo), "--json"]
+    )
+    d = _json.loads(out)
+
+    direct_nodes = {x["node"] for x in d["direct"]}
+    indirect_nodes = {x["node"] for x in d["indirect"]}
+    overlap = direct_nodes & indirect_nodes
+
+    check("impact_dedup: DirectA 在 direct", "Systems/DirectA.md" in direct_nodes,
+          f"direct_nodes={direct_nodes}")
+    check("impact_dedup: DirectB 在 direct", "Systems/DirectB.md" in direct_nodes,
+          f"direct_nodes={direct_nodes}")
+    check("impact_dedup: direct 與 indirect 無交集(B 不得同時在兩邊)",
+          len(overlap) == 0, f"overlap={overlap}, direct={direct_nodes}, indirect={indirect_nodes}")
 
 
 def main():
