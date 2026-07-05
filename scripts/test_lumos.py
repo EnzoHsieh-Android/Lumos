@@ -5598,6 +5598,181 @@ def t_codeloop_guard_verdict():
                   f"ex={ex}\nstdout={r.stdout!r}")
 
 
+# ── Task 3: code-loop-guard Stop hook ────────────────────────────────────────
+
+def t_codeloop_guard_hook():
+    """Task 3: code-loop-guard.py Stop hook — should_inject + build_nag + fail-open。
+
+    測試對象是 scripts/hooks/claude/code-loop-guard.py 的可 import 函式:
+      - should_inject(verdict: dict) -> bool
+          verdict blocked=True → True;blocked=False → False;缺 blocked 欄位 → False
+      - build_nag(verdict: dict) -> str
+          含「lumos-code-loop 或 lumos code-loop skip」字樣 + verdict reason(若有)
+      - main() 端到端:
+          blocked=True payload → stdout 含 hookSpecificOutput/additionalContext
+          blocked=False payload → 無 stdout(不注入)
+          lumos 缺席(shutil.which=None) → 靜默 exit 0 不注入
+          subprocess 例外 → fail-open 靜默 exit 0
+          非 git repo / 非圖譜 repo → fail-open 靜默 exit 0
+    """
+    import importlib.util
+    import io
+    import json as _j
+    import sys as _sys
+    import tempfile
+    import subprocess as _sp
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    from unittest.mock import patch, MagicMock
+
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "code-loop-guard.py")
+    loader = SourceFileLoader("codeloop_guard_mod", hook_path)
+    spec = importlib.util.spec_from_loader("codeloop_guard_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    should_inject = m.should_inject
+    build_nag = m.build_nag
+
+    # ── 1. should_inject: blocked=True → True ────────────────────────────────
+    check("codeloop_guard_hook: blocked=True → should_inject True",
+          should_inject({"blocked": True}) is True,
+          "expected True")
+
+    # ── 2. should_inject: blocked=False → False ───────────────────────────────
+    check("codeloop_guard_hook: blocked=False → should_inject False",
+          should_inject({"blocked": False}) is False,
+          "expected False")
+
+    # ── 3. should_inject: 缺 blocked 欄位 → False (fail-open) ─────────────────
+    check("codeloop_guard_hook: 缺 blocked → should_inject False",
+          should_inject({}) is False,
+          "expected False for missing blocked key")
+
+    # ── 4. build_nag: 含跑法/skip法提示 ─────────────────────────────────────
+    verdict_blocked = {"blocked": True, "tier": "high", "reason": "test reason here"}
+    nag = build_nag(verdict_blocked)
+    check("codeloop_guard_hook: build_nag 含 lumos-code-loop 或 code-loop 字樣",
+          "code-loop" in nag or "lumos-code-loop" in nag,
+          f"nag={nag!r}")
+    check("codeloop_guard_hook: build_nag 含 skip 字樣",
+          "skip" in nag,
+          f"nag={nag!r}")
+    check("codeloop_guard_hook: build_nag 含 verdict reason",
+          "test reason here" in nag,
+          f"nag={nag!r}")
+
+    # ── 5. build_nag: 無 reason 欄位不 crash ──────────────────────────────────
+    try:
+        nag_no_reason = build_nag({"blocked": True, "tier": "high"})
+        check("codeloop_guard_hook: build_nag 無 reason 不 crash",
+              isinstance(nag_no_reason, str) and len(nag_no_reason) > 0,
+              f"nag={nag_no_reason!r}")
+    except Exception as ex:
+        check("codeloop_guard_hook: build_nag 無 reason 不 crash", False, f"ex={ex}")
+
+    # ── 6. main() 端到端: blocked=True → stdout 含 hookSpecificOutput ─────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        blocked_verdict = _j.dumps({"blocked": True, "tier": "high", "reason": "no convergence"})
+        payload = _j.dumps({"cwd": d})
+        with patch.object(m, "_find_lumos_script", return_value=str(_P(GRAPHCTL).resolve())), \
+             patch.object(m, "_run_lumos_check", return_value=blocked_verdict):
+            captured = io.StringIO()
+            with patch("sys.stdout", captured), \
+                 patch("sys.stdin", io.StringIO(payload)):
+                rc = m.main()
+            out = captured.getvalue().strip()
+        check("codeloop_guard_hook: blocked=True → exit 0(不擋回合)", rc == 0,
+              f"rc={rc}")
+        check("codeloop_guard_hook: blocked=True → stdout 非空", len(out) > 0,
+              f"stdout={out!r}")
+        try:
+            parsed = _j.loads(out)
+            check("codeloop_guard_hook: stdout hookSpecificOutput 鍵存在",
+                  "hookSpecificOutput" in parsed,
+                  f"parsed={parsed!r}")
+            hso = parsed.get("hookSpecificOutput", {})
+            check("codeloop_guard_hook: hookEventName=Stop",
+                  hso.get("hookEventName") == "Stop",
+                  f"hso={hso!r}")
+            check("codeloop_guard_hook: additionalContext 含 code-loop",
+                  "code-loop" in hso.get("additionalContext", ""),
+                  f"ctx={hso.get('additionalContext')!r}")
+            check("codeloop_guard_hook: additionalContext 含 skip",
+                  "skip" in hso.get("additionalContext", ""),
+                  f"ctx={hso.get('additionalContext')!r}")
+        except Exception as ex:
+            check("codeloop_guard_hook: stdout JSON 可解析", False,
+                  f"ex={ex}\nout={out!r}")
+
+    # ── 7. main() 端到端: blocked=False → 無 stdout ──────────────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        ok_verdict = _j.dumps({"blocked": False, "tier": "high"})
+        payload = _j.dumps({"cwd": d})
+        with patch.object(m, "_find_lumos_script", return_value=str(_P(GRAPHCTL).resolve())), \
+             patch.object(m, "_run_lumos_check", return_value=ok_verdict):
+            captured = io.StringIO()
+            with patch("sys.stdout", captured), \
+                 patch("sys.stdin", io.StringIO(payload)):
+                rc2 = m.main()
+            out2 = captured.getvalue().strip()
+        check("codeloop_guard_hook: blocked=False → exit 0", rc2 == 0,
+              f"rc={rc2}")
+        check("codeloop_guard_hook: blocked=False → 無 stdout(不注入)", out2 == "",
+              f"stdout={out2!r}")
+
+    # ── 8. fail-open: lumos 缺席 → 靜默 exit 0 不注入 ───────────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        payload = _j.dumps({"cwd": d})
+        with patch.object(m, "_find_lumos_script", return_value=None):
+            captured = io.StringIO()
+            with patch("sys.stdout", captured), \
+                 patch("sys.stdin", io.StringIO(payload)):
+                rc3 = m.main()
+            out3 = captured.getvalue().strip()
+        check("codeloop_guard_hook: lumos 缺席 → exit 0(fail-open)", rc3 == 0,
+              f"rc={rc3}")
+        check("codeloop_guard_hook: lumos 缺席 → 無 stdout", out3 == "",
+              f"stdout={out3!r}")
+
+    # ── 9. fail-open: _run_lumos_check 拋例外 → 靜默 exit 0 ─────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        payload = _j.dumps({"cwd": d})
+        with patch.object(m, "_find_lumos_script", return_value="/fake/lumos"), \
+             patch.object(m, "_run_lumos_check", side_effect=Exception("subprocess exploded")):
+            captured = io.StringIO()
+            with patch("sys.stdout", captured), \
+                 patch("sys.stdin", io.StringIO(payload)):
+                rc4 = m.main()
+            out4 = captured.getvalue().strip()
+        check("codeloop_guard_hook: subprocess 例外 → exit 0(fail-open)", rc4 == 0,
+              f"rc={rc4}")
+        check("codeloop_guard_hook: subprocess 例外 → 無 stdout", out4 == "",
+              f"stdout={out4!r}")
+
+
+def t_codeloop_guard_hook_registration():
+    """Task 3: merge-claude-settings.py HOOK_ENTRIES Stop 區塊含 code-loop-guard.py。"""
+    import importlib.util as _ilu
+    spec_path = Path(__file__).resolve().parent / "merge-claude-settings.py"
+    spec = _ilu.spec_from_file_location("mcs_codeloop", spec_path)
+    mcs = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mcs)
+    stop_entries = mcs.HOOK_ENTRIES.get("Stop", [])
+    found = any(
+        "code-loop-guard.py" in h.get("command", "")
+        for e in stop_entries
+        for h in e.get("hooks", [])
+    )
+    check("codeloop_guard_hook_registration: HOOK_ENTRIES Stop 含 code-loop-guard.py",
+          found,
+          f"stop_entries={stop_entries!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
