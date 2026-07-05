@@ -2267,16 +2267,16 @@ def t_fold_value_drift():
     text = "§1 用 `fold-check <node>`\n§2 用 `fold-check <path>`\n## §9 審計修正紀錄\nfold-check <node> 舊史"
     d = m._fold_value_drift(text)
     keys = [x["key"] for x in d]
-    assert "fold-check" in keys                    # 全文域 body↔body(r2-F1)
+    check("fold_value_drift: fold-check 全文域 body↔body 命中", "fold-check" in keys, str(keys))
     # 審計紀錄段的 <node> 不算(r2:排除掃描)——不應因它多一筆
-    assert len([x for x in d if x["key"]=="fold-check"]) == 1
-    assert m._fold_value_drift("只有 `fold-check <path>` 一種") == []   # 一致→無 flag
+    check("fold_value_drift: fold-check 只有一筆(審計段不計)", len([x for x in d if x["key"]=="fold-check"]) == 1, str(d))
+    check("fold_value_drift: 一致→無 flag", m._fold_value_drift("只有 `fold-check <path>` 一種") == [], "")
 
     # C1 regression: 多節文件中 §1/§2/§3 不應觸發假陽(_sec pattern 已移除)
     multi_sec = "## §1 a\n## §2 b\n## §3 c"
     keys_c1 = [x["key"] for x in m._fold_value_drift(multi_sec)]
-    assert "_sec" not in keys_c1, f"C1: §號假陽, keys={keys_c1}"
-    assert keys_c1 == [], f"C1: 多節文件不應有 drift, keys={keys_c1}"
+    check("fold_value_drift C1: §號無假陽(_sec 不在 keys)", "_sec" not in keys_c1, f"keys={keys_c1}")
+    check("fold_value_drift C1: 多節文件無 drift", keys_c1 == [], f"keys={keys_c1}")
 
     # C2 regression: 審計段在中間時,後段 token 不被誤排除
     mid_audit = (
@@ -2289,12 +2289,13 @@ def t_fold_value_drift():
     d_c2 = m._fold_value_drift(mid_audit)
     keys_c2 = [x["key"] for x in d_c2]
     # alpha vs beta → drift should be detected (後段未被誤刪)
-    assert "fold-check" in keys_c2, f"C2: 後段 token 被誤排除, drifts={d_c2}"
+    check("fold_value_drift C2: 後段 token 未被誤排除", "fold-check" in keys_c2, f"drifts={d_c2}")
     # OLD from audit section should NOT be in the values
     fc_entry = next((x for x in d_c2 if x["key"] == "fold-check"), None)
-    assert fc_entry is not None
-    vals_c2 = {fc_entry["a"], fc_entry["b"]}
-    assert "OLD" not in vals_c2, f"C2: 審計段 OLD 被納入掃描, vals={vals_c2}"
+    check("fold_value_drift C2: fc_entry 存在", fc_entry is not None, str(d_c2))
+    if fc_entry is not None:
+        vals_c2 = {fc_entry["a"], fc_entry["b"]}
+        check("fold_value_drift C2: 審計段 OLD 不納入掃描", "OLD" not in vals_c2, f"vals={vals_c2}")
 
 
 def t_fold_reverse_omission():
@@ -2302,9 +2303,9 @@ def t_fold_reverse_omission():
     text = "---\nsummary: |-\n  KEY:用 --foo\n---\n## §2 body\n用 --foo 和 --bar 和 `<path>`"
     r = m._fold_reverse_omission(text)
     toks = [x["token"] for x in r]
-    assert "--bar" in toks              # body 有 summary 無
-    assert "--foo" not in toks          # 兩邊都有→不 flag
-    assert "<path>" not in toks and "path" not in toks  # placeholder 排除(r2-F5)
+    check("fold_reverse_omission: --bar body 有 summary 無→命中", "--bar" in toks, str(toks))
+    check("fold_reverse_omission: --foo 兩邊都有→不 flag", "--foo" not in toks, str(toks))
+    check("fold_reverse_omission: placeholder <path> 排除(r2-F5)", "<path>" not in toks and "path" not in toks, str(toks))
 
 
 def t_context_valid_under_warning():
