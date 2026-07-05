@@ -17,11 +17,11 @@ summary: |-
   DECISION:交付物 3 版本號=「人可讀標籤 + 粗 nudge」,嚴禁當 staleness oracle;單一源 LUMOS_VERSION → 機械蓋進 START sentinel 行(在比對區「外」,不耦合守衛)
   KEY:誠實天花板=版本號不證內容對(bump 可漏),真守衛是內容比對;--no-verify 繞得過 doctor;非 oracle
   DEP:[[lumos-cli-lifecycle]]
-  TEST:design-loop 3 輪(全 caught,見 canary-log claude-reinject)——架構折穩(解耦/ReInjectResult三態/BlockSpan單一源/版本=標籤/內容比對守衛);severity 未收斂(major→blocker→blocker)因 glue 密集=文檔化天花板[[design-loop-completeness-ceiling-shown]];使用者裁定轉 TDD(gate 未形式過關,偏離理由=glue非架構,已註明),殘留實作細節交紅綠測試釘
+  TEST:design-loop 3 輪(全 caught,見 canary-log claude-reinject)——架構折穩(解耦/ReInjectResult三態/BlockSpan單一源/版本=標籤/內容比對守衛);severity 未收斂(major→blocker→blocker)因 glue 密集=文檔化天花板memory:design-loop-completeness-ceiling-shown;使用者裁定轉 TDD(gate 未形式過關,偏離理由=glue非架構,已註明),殘留實作細節交紅綠測試釘
 ---
 # CLAUDE 注入 re-sync 與版本標籤_計劃
 
-> 收「vendored 教學範本(`graph-discipline.md`)改了、傳不到既有消費專案 CLAUDE.md」的破口(使用者點出「最重要的是教會 Claude 用本工具」)。設計權威節點;進實作前過 [[lumos-design-loop]] 到收斂。
+> 收「vendored 教學範本(`graph-discipline.md`)改了、傳不到既有消費專案 CLAUDE.md」的破口(使用者點出「最重要的是教會 Claude 用本工具」)。設計權威節點;進實作前過 `lumos-design-loop` skill 到收斂。
 
 ## 背景:破口(三環節合謀)
 `graph-discipline.md` 是注入每個消費專案 `CLAUDE.md` 的「教會 Claude 用本工具」範本。它更新後,`lumos update` 會刷新 CLI/hooks/vendored 範本檔本身,**但 CLAUDE.md 的注入區塊從不重跑**。根因:
@@ -94,7 +94,7 @@ summary: |-
 - 5-status 各呼叫端印什麼、rc(F3);body strip 與 splice 位移一致性(F9);整合測試 `_lumos_src` 用 monkeypatch/env override(F10);nudge 是「CLAUDE.md 版本 vs 當前上游」兩號比對、與 vendored copy 版本可能三號不一(F5,honest note:nudge 是近似 advisory 非精確)。
 
 ## 誠實天花板 / design-loop 收斂判斷(r3 後)
-- **loop 未過 gate(3 輪 caught 但 severity major→blocker→blocker、未 K-streak)**。原因不是設計有未解的**架構**洞——架構層(解耦注入/scaffold、ReInjectResult 三態、BlockSpan 單一源、版本=標籤非守衛、內容比對守衛、nudge 定位 dev-machine)已在 r1-r3 折穩;而是本 spec **glue 密集**(sentinel 字串處理、call-site 接線、版本插值),審計員每輪都能再挖出「這個字串/rstrip/status 沒精確到位元」的實作級細節。**這是文檔化的天花板(見 [[design-loop-completeness-ceiling-shown]]:design-loop 對機械核心收斂強、對 shell/glue 散文空轉)**。
+- **loop 未過 gate(3 輪 caught 但 severity major→blocker→blocker、未 K-streak)**。原因不是設計有未解的**架構**洞——架構層(解耦注入/scaffold、ReInjectResult 三態、BlockSpan 單一源、版本=標籤非守衛、內容比對守衛、nudge 定位 dev-machine)已在 r1-r3 折穩;而是本 spec **glue 密集**(sentinel 字串處理、call-site 接線、版本插值),審計員每輪都能再挖出「這個字串/rstrip/status 沒精確到位元」的實作級細節。**這是文檔化的天花板(見 memory:design-loop-completeness-ceiling-shown:design-loop 對機械核心收斂強、對 shell/glue 散文空轉)**。
 - **判斷**:架構已定案、殘留為 glue 實作細節 → 該由 **TDD 紅綠測試釘死**(每個 status、每個 sentinel 邊界、每個 strip 都寫真測試),而非續磨散文到 cap。續磨只會生更多「字串沒指定到位元」的 finding、不增架構信心。
 
 ## 落地回填
