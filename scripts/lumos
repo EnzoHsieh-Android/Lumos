@@ -5553,6 +5553,52 @@ def _impact_collect(direct_node_rel, env, depth=2):
     return {"direct": direct_list, "indirect": indirect_list}
 
 
+def _match_incident_triggers(file_rel, file_content, env):
+    """給被碰 code 檔(路徑 + 內容),掃全圖有 pitfall_when 的事故節點,比對觸發條件。
+
+    觸發條件格式(§2):
+    - "glob:<pattern>"  — 比 file_rel 路徑(fnmatch/PurePath.match)。
+    - "content:<regex>" — 比 file_content 內容(re.search)。新建檔空字串 → content 全 miss。
+
+    回傳: list[dict]  每筆 {"node": node_rel, "matched_by": "<trigger 字串>"}。
+    """
+    import re
+    import fnmatch
+    from pathlib import PurePath
+
+    results = []
+    for node_rel, note in env.notes.items():
+        triggers = as_list(note.fields.get("pitfall_when"))
+        if not triggers:
+            continue
+        for trigger in triggers:
+            if trigger.startswith("glob:"):
+                pat = trigger[len("glob:"):]
+                # PurePath.match 支援 ** 遞迴匹配(Python 3.12+);
+                # 對舊版用 fnmatch.fnmatch 作後備以支援基本 * 通配。
+                try:
+                    hit = PurePath(file_rel).match(pat)
+                except Exception:
+                    hit = False
+                if not hit:
+                    # fnmatch 後備:支援 **/*Repository*.py 型 pattern
+                    hit = fnmatch.fnmatch(file_rel, pat)
+                if hit:
+                    results.append({"node": node_rel, "matched_by": trigger})
+                    break  # 同節點只計一次
+            elif trigger.startswith("content:"):
+                pat = trigger[len("content:"):]
+                if not file_content:  # 新建檔無內容 → content 全 miss
+                    continue
+                try:
+                    if re.search(pat, file_content):
+                        results.append({"node": node_rel, "matched_by": trigger})
+                        break  # 同節點只計一次
+                except re.error:
+                    continue  # 無效 regex 靜默跳過
+    return results
+
+
 def _impact_load_config(repo_root):
     """讀取 repo_root/.lumos/impact.json → {"depth":int,"ttl_min":int}。
     缺檔或解析失敗 → fail-open 回預設 {"depth":2,"ttl_min":20}。

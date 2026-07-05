@@ -4829,6 +4829,46 @@ def t_impact_hook_registration_source():
           f"entries={entries!r}")
 
 
+# ─── Task 1: _match_incident_triggers(pitfall_when glob/content-regex) ──────────
+
+def t_match_incident_triggers():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_mod_mit", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_mit", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    _match_incident_triggers = m._match_incident_triggers
+
+    env, _ = make_fixture_vault({
+        "Issues/N1.md": "---\npitfall_when:\n  - \"glob:**/*Repository*.py\"\n---\nN+1 事故",
+        "Issues/SQL.md": "---\npitfall_when:\n  - \"content:SELECT\\s.*FROM\"\n---\nraw SQL 事故",
+        "Issues/None.md": "---\n---\n無 trigger",
+    })
+    # glob 命中路徑
+    r = _match_incident_triggers("app/UserRepository.py", "code", env)
+    check("match_incident: glob 命中 Issues/N1.md",
+          any(x["node"] == "Issues/N1.md" for x in r), f"r={r}")
+    # content-regex 命中內容
+    r2 = _match_incident_triggers("x.py", "q = 'SELECT a FROM t'", env)
+    check("match_incident: content-regex 命中 Issues/SQL.md",
+          any(x["node"] == "Issues/SQL.md" for x in r2), f"r2={r2}")
+    # 都不命中
+    check("match_incident: 都不命中回空 list",
+          _match_incident_triggers("x.py", "nothing", env) == [], "expected []")
+    # 新建檔無 content → 只 glob
+    r3 = _match_incident_triggers("app/UserRepository.py", "", env)
+    check("match_incident: 新建檔 glob 仍命中 N1.md",
+          any(x["node"] == "Issues/N1.md" for x in r3), f"r3={r3}")
+    check("match_incident: 新建檔 content-regex miss SQL.md",
+          not any(x["node"] == "Issues/SQL.md" for x in r3), f"r3={r3}")
+    # matched_by 欄位存在且含命中的 trigger 字串
+    r_mb = _match_incident_triggers("app/UserRepository.py", "code", env)
+    n1_hit = next((x for x in r_mb if x["node"] == "Issues/N1.md"), None)
+    check("match_incident: matched_by 含命中 trigger",
+          n1_hit is not None and "glob:" in n1_hit.get("matched_by", ""), f"n1_hit={n1_hit}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
