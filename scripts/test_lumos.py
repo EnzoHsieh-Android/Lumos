@@ -2394,6 +2394,16 @@ def t_fold_check_rc_json():
                 pass
 
 
+def t_fold_check_regression():
+    """對現有已固化 spec 跑 fold-check:確認不 crash、rc in (0,1)。
+    有 flag 是可接受的自指範例(value-drift 範例、審計紀錄舊值),人工判;此測試只守不 crash。
+    """
+    spec = str(Path(__file__).resolve().parent.parent /
+               "docs/lumos-toolchain-knowledge/Projects/主動影響幅度偵測_計劃.md")
+    rc = run_lumos(["fold-check", spec])
+    check("fold_check_regression: 已固化 spec 不 crash(rc in 0,1)", rc in (0, 1), f"rc={rc}")
+
+
 def t_context_valid_under_warning():
     import datetime
     v = mkvault()
