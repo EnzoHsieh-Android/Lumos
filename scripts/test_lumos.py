@@ -2248,6 +2248,20 @@ def t_deinit_graph():
     check("deinit graph3: commit 不被擋(rc0)", cr.returncode == 0, f"{cr.returncode} {cr.stdout} {cr.stderr}")
 
 
+def t_fold_mirror_sections():
+    m = _import_lumos()
+    text = "---\nsummary: |-\n  KEY:x\n---\n## §2 A\n```json\n{}\n```\n## §4 誠實天花板\nc\n## §5 審計修正紀錄\nd"
+    secs = m._fold_mirror_sections(text)
+    assert "summary" in secs
+    assert any("誠實天花板" in s for s in secs)   # 容 §4 前綴(r1-F5)
+    assert any("審計修正紀錄" in s for s in secs)
+    assert any("json" in s.lower() for s in secs)  # json fence 算鏡像段
+    check("fold_mirror_sections: summary 在列表", "summary" in secs, str(secs))
+    check("fold_mirror_sections: 誠實天花板(含節號)", any("誠實天花板" in s for s in secs), str(secs))
+    check("fold_mirror_sections: 審計修正紀錄(含節號)", any("審計修正紀錄" in s for s in secs), str(secs))
+    check("fold_mirror_sections: json fence 算鏡像段", any("json" in s.lower() for s in secs), str(secs))
+
+
 def t_context_valid_under_warning():
     import datetime
     v = mkvault()
@@ -3510,7 +3524,13 @@ def t_stylelint_sarif_bridge():
 
 
 def main():
+    import argparse as _ap
+    _p = _ap.ArgumentParser(add_help=False)
+    _p.add_argument("-k", dest="keyword", default=None, help="只跑名稱含此字串的測試")
+    _args, _ = _p.parse_known_args()
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
+    if _args.keyword:
+        tests = [t for t in tests if _args.keyword in t.__name__]
     print(f"lumos 測試({len(tests)} 案例)")
     for t in tests:
         try:

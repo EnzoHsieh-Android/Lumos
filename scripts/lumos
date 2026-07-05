@@ -5002,6 +5002,87 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
     return 0
 
 
+_FOLD_MIRROR_HEADING_RE = re.compile(
+    r"^##\s+(§\d+\s+)?(審計修正紀錄|誠實天花板)", re.MULTILINE)
+
+
+def _fold_mirror_sections(text):
+    """掃 text 回傳所有「鏡像段」標籤清單,供 fold-check 列舉複查用。
+
+    鏡像段定義(設計 §2.1):
+      1. frontmatter summary block → "summary"
+      2. body 內每個 ```json fence → "```json fence N"(1-indexed)
+      3. ## …審計修正紀錄(含節號前綴如 ## §5 審計修正紀錄)
+      4. ## …誠實天花板(含節號前綴如 ## §4 誠實天花板)
+
+    標題比對容節號前綴(r1-F5):regex ^##\\s+(§\\d+\\s+)?(審計修正紀錄|誠實天花板)
+    """
+    sections = []
+
+    # 1. summary block:frontmatter 有 summary: 鍵
+    fm_lines, _ = split_frontmatter(text)
+    if fm_lines is not None:
+        for line in fm_lines:
+            if re.match(r"^summary\s*:", line):
+                sections.append("summary")
+                break
+
+    # 2. ```json fences in body
+    body_start = text.find("\n---\n", 3)  # skip opening ---
+    body = text[body_start + 4:] if body_start != -1 else text
+    # Match ```json ... ``` fences
+    json_fence_re = re.compile(r"^```json\b", re.MULTILINE)
+    json_count = 0
+    for m in json_fence_re.finditer(body):
+        json_count += 1
+        sections.append(f"```json fence {json_count}")
+
+    # 3 & 4. ## …審計修正紀錄 / ## …誠實天花板 headings (with optional §N prefix)
+    for m in _FOLD_MIRROR_HEADING_RE.finditer(text):
+        # Use the full matched heading text (strip leading ##\s+)
+        heading = m.group(0).lstrip("#").strip()
+        sections.append(heading)
+
+    return sections
+
+
+def cmd_fold_check(path, as_json=False):
+    """折入後一致性複查輔助(Task 1):列舉鏡像段供人逐段勾一致。
+
+    Task 1 範圍:argparse + 讀盤 + _fold_mirror_sections 列舉。
+    value-drift / reverse-omission(Task 2/3)待實作,此版不輸出 flag。
+    """
+    import json
+    md = Path(path)
+    if not md.is_file():
+        print(f"ERROR: 找不到檔案: {path}", file=sys.stderr)
+        return 2
+    try:
+        text = md.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        print(f"ERROR: 讀不到 {path}: {e}", file=sys.stderr)
+        return 2
+
+    mirror_sections = _fold_mirror_sections(text)
+
+    if as_json:
+        print(json.dumps({
+            "path": str(md),
+            "mirror_sections": mirror_sections,
+            "value_drift": [],
+            "reverse_omission": [],
+        }, ensure_ascii=False))
+    else:
+        print(f"fold-check {md}")
+        print("── 鏡像段(逐段確認與 body 一致)──")
+        for s in mirror_sections:
+            print(f"  ☐ 複查 {s}:與 body 一致?")
+        if not mirror_sections:
+            print("  (無鏡像段)")
+        print("(value-drift / reverse-omission:Task 2/3 待實作)")
+    return 0
+
+
 def cmd_refcheck(md_path, repo=None, as_json=False):
     """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
     抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
@@ -5219,6 +5300,10 @@ def main():
     p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(CI/非互動用)")
     p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
 
+    p = sub.add_parser("fold-check", help="折入後一致性複查(vault-free):列舉鏡像段 + value-drift/reverse-omission flag")
+    p.add_argument("path", help="要核對的 markdown 檔路徑")
+    p.add_argument("--json", dest="as_json", action="store_true", help="JSON 輸出(供機器讀)")
+
     p = sub.add_parser("refcheck", help="spec 指涉宣稱確定性核對(vault-free):inline-code 路徑/行號 → 存在性 manifest")
     p.add_argument("md", help="要核對的 markdown 檔")
     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
@@ -5274,6 +5359,8 @@ def main():
     if args.cmd == "deinit":
         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
                           yes=args.yes, source=args.source)
+    if args.cmd == "fold-check":
+        return cmd_fold_check(args.path, as_json=args.as_json)
     if args.cmd == "refcheck":
         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
     if args.cmd == "pitfalls":
