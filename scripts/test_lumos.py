@@ -4173,6 +4173,50 @@ def t_impact_cross_direct_node_dedup():
           len(overlap) == 0, f"overlap={overlap}, direct={direct_nodes}, indirect={indirect_nodes}")
 
 
+def t_impact_config():
+    """Task 8: _impact_load_config — 有檔 depth/ttl merge 預設;無檔 → 2/20;壞 json → 2/20 不拋。"""
+    import importlib.util
+    import tempfile
+    import os
+    from importlib.machinery import SourceFileLoader
+
+    # 動態 import scripts/lumos(無 .py 副檔名 → 用 SourceFileLoader)
+    loader = SourceFileLoader("lumos_mod_cfg", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_mod_cfg", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    fn = m._impact_load_config
+
+    # 情境 1: 有 .lumos/impact.json {"depth":3} → depth 3,ttl_min 補預設 20
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write('{"depth":3}')
+        got = fn(d)
+        check("impact_config: 有檔 depth 3", got == {"depth": 3, "ttl_min": 20}, f"got={got}")
+
+    # 情境 2: 無 .lumos/impact.json → 預設 2/20
+    with tempfile.TemporaryDirectory() as d:
+        got = fn(d)
+        check("impact_config: 無檔 → 2/20", got == {"depth": 2, "ttl_min": 20}, f"got={got}")
+
+    # 情境 3: 壞 json → 預設 2/20,不拋
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write("{bad")
+        try:
+            got = fn(d)
+            check("impact_config: 壞 json → 2/20", got == {"depth": 2, "ttl_min": 20}, f"got={got}")
+        except Exception as e:
+            check("impact_config: 壞 json 不拋", False, f"raised {e}")
+
+    # 情境 4: ttl_min 可覆寫
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(d + "/.lumos")
+        open(d + "/.lumos/impact.json", "w").write('{"depth":4,"ttl_min":60}')
+        got = fn(d)
+        check("impact_config: depth+ttl 皆覆寫", got == {"depth": 4, "ttl_min": 60}, f"got={got}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

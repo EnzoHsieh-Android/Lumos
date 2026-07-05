@@ -5553,7 +5553,30 @@ def _impact_collect(direct_node_rel, env, depth=2):
     return {"direct": direct_list, "indirect": indirect_list}
 
 
-def cmd_impact(file, repo=None, depth=2, as_json=False):
+def _impact_load_config(repo_root):
+    """讀取 repo_root/.lumos/impact.json → {"depth":int,"ttl_min":int}。
+    缺檔或解析失敗 → fail-open 回預設 {"depth":2,"ttl_min":20}。
+    對齊 _lint_load_config 慣例(.lumos/ 目錄 per-feature config)。
+    """
+    import json
+    _DEFAULTS = {"depth": 2, "ttl_min": 20}
+    p = Path(repo_root) / ".lumos" / "impact.json"
+    if not p.exists():
+        return dict(_DEFAULTS)
+    try:
+        with open(p, encoding="utf-8") as f:
+            raw = json.load(f)
+        result = dict(_DEFAULTS)
+        if isinstance(raw.get("depth"), int):
+            result["depth"] = raw["depth"]
+        if isinstance(raw.get("ttl_min"), int):
+            result["ttl_min"] = raw["ttl_min"]
+        return result
+    except Exception:
+        return dict(_DEFAULTS)
+
+
+def cmd_impact(file, repo=None, depth=None, as_json=False):
     """動手前算出哪些知識圖譜節點會被 code 改動波及。
     rc 協定: 0=成功(有/無影響集都算) / 3=vault 找不到 / 其他非 0=內部錯。
     Task 7: 排序 + --json schema + 人讀輸出。
@@ -5582,14 +5605,20 @@ def cmd_impact(file, repo=None, depth=2, as_json=False):
         print("IMPACT-DEBUG: vault 找不到(rc3)——非圖譜專案或 --repo 未指向含 vault 的目錄", file=sys.stderr)
         return 3
 
-    # 3. 載入圖譜環境
+    # 3. 解析 depth:CLI(顯式 --depth) > .lumos/impact.json config > 預設 2
+    _cfg_root = repo_root if repo_root is not None else vault.parent.parent
+    _impact_cfg = _impact_load_config(_cfg_root)
+    if depth is None:
+        depth = _impact_cfg["depth"]
+
+    # 4. 載入圖譜環境
     env = Env(vault)
     repo_root_for_lookup = repo_root if repo_root is not None else vault.parent.parent
 
-    # 4. code → node 反查(只認 body inline-code,r7-F2)
+    # 5. code → node 反查(只認 body inline-code,r7-F2)
     direct_rels = _impact_reverse_lookup(file, env, repo_root_for_lookup)
 
-    # 5. 組裝影響清單:每個直接節點跑 _impact_collect,再匯總去重
+    # 6. 組裝影響清單:每個直接節點跑 _impact_collect,再匯總去重
     # 修正:必須先把全部直接節點種入 direct_seen,再開始 BFS/indirect 收集。
     # 若迴圈內逐一 add,處理節點 A 的 BFS 展開命中直接節點 B 時,B 尚未在
     # direct_seen → B 被誤加進 indirect,之後處理 B 又進 direct → B 同時出現
@@ -5838,7 +5867,7 @@ def main():
     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
     p.add_argument("--file", dest="impact_file", required=True, help="被改動的 code 檔路徑(必填)")
     p.add_argument("--repo", dest="impact_repo", help="repo root(缺則退回 find_vault;hook 必傳)")
-    p.add_argument("--depth", dest="impact_depth", type=int, default=2, help="BFS 展開深度(預設 2)")
+    p.add_argument("--depth", dest="impact_depth", type=int, default=None, help="BFS 展開深度(缺省讀 .lumos/impact.json;最終預設 2)")
     p.add_argument("--json", dest="impact_json", action="store_true", help="JSON 輸出(機器可讀)")
 
     p = sub.add_parser("pitfalls", help="實務隱患提問(vault-free):spec 逼答隱患 / --diff 攤代碼風險位置")
