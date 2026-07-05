@@ -5818,6 +5818,132 @@ def t_hook_copy_list_completeness():
     )
 
 
+# ── Task 4: pre-push 升 blocking ─────────────────────────────────────────────
+
+def t_codeloop_guard_prepush():
+    """Task 4: pre-push hook tier=high 未過 code-loop → rc1 擋 push(blocking)。
+
+    策略:直接執行 scripts/hooks/pre-push shell 腳本,透過 env 傳入測試 repo 路徑。
+    pre-push 讀 GIT_DIR / git rev-parse,所以需要在真實 git repo 中執行。
+
+    情境:
+      A) tier=high ∧ 無台帳 → rc1 擋住 + stderr 含跑法/skip 法提示
+      B) tier=high ∧ pass(HEAD 符) → rc0 放行
+      C) tier=high ∧ skip(HEAD 符) → rc0 放行
+      D) tier=standard → rc0 放行(不誤傷)
+      E) fail-open: lumos 不存在 → rc0 放行
+
+    注意:pre-push 也跑 anchor verify + doctor --ci,測試 repo 無 vault 所以跳過 doctor;
+    anchor verify 在 lumos 不存在時也跳過。為了讓 anchor verify 通過,用真實 lumos。
+    """
+    import subprocess as _sp
+    import os as _os
+
+    pre_push_path = str(Path(__file__).resolve().parent / "hooks" / "pre-push")
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+
+    def _setup_lumos_in_repo(repo_dir, lumos_path=None):
+        """在 repo_dir/scripts/lumos 放真實(或假) lumos,使 pre-push 能找到它。"""
+        scripts_dir = Path(repo_dir) / "scripts"
+        scripts_dir.mkdir(exist_ok=True)
+        target = scripts_dir / "lumos"
+        if lumos_path is None:
+            lumos_path = lumos_real
+        if target.exists() or target.is_symlink():
+            target.unlink()
+        target.symlink_to(lumos_path)
+
+    def _run_pre_push(repo_dir):
+        """在 repo_dir 內執行 pre-push 腳本,回傳 CompletedProcess。"""
+        env = dict(_os.environ)
+        env["GIT_DIR"] = str(Path(repo_dir) / ".git")
+        # pre-push stdin: "<local_ref> <local_sha> <remote_ref> <remote_sha>"
+        stdin_data = "refs/heads/feat dummy refs/heads/feat dummy\n"
+        return _sp.run(
+            ["bash", pre_push_path],
+            cwd=repo_dir,
+            input=stdin_data,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    # ── 情境 A: tier=high ∧ 無台帳 → rc1 擋住 ────────────────────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        _setup_lumos_in_repo(d)
+        r = _run_pre_push(d)
+        check("codeloop_guard_prepush: tier=high∧無台帳 → rc1 擋住",
+              r.returncode == 1,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+        stderr = r.stderr
+        check("codeloop_guard_prepush: stderr 含 lumos-code-loop 或 code-loop",
+              "code-loop" in stderr or "lumos-code-loop" in stderr,
+              f"stderr={stderr!r}")
+        check("codeloop_guard_prepush: stderr 含 skip 提示",
+              "skip" in stderr,
+              f"stderr={stderr!r}")
+        check("codeloop_guard_prepush: stderr 含 --no-verify 繞法",
+              "--no-verify" in stderr,
+              f"stderr={stderr!r}")
+
+    # ── 情境 B: tier=high ∧ pass(HEAD 符) → rc0 放行 ─────────────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        _setup_lumos_in_repo(d)
+        _sp.run([sys.executable, lumos_real, "code-loop", "pass",
+                 "--note", "done", "--repo", d],
+                capture_output=True, text=True)
+        r = _run_pre_push(d)
+        check("codeloop_guard_prepush: tier=high∧pass(HEAD符) → rc0 放行",
+              r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+
+    # ── 情境 C: tier=high ∧ skip(HEAD 符) → rc0 放行 ─────────────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        _setup_lumos_in_repo(d)
+        _sp.run([sys.executable, lumos_real, "code-loop", "skip",
+                 "--note", "intentional", "--repo", d],
+                capture_output=True, text=True)
+        r = _run_pre_push(d)
+        check("codeloop_guard_prepush: tier=high∧skip(HEAD符) → rc0 放行",
+              r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+
+    # ── 情境 D: tier=standard → rc0 不誤傷 ───────────────────────────────────
+    with tempfile.TemporaryDirectory() as d:
+        _make_standard_tier_repo(d)
+        _setup_lumos_in_repo(d)
+        r = _run_pre_push(d)
+        check("codeloop_guard_prepush: tier=standard → rc0 不誤傷",
+              r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+
+    # ── 情境 E: fail-open — lumos code-loop check rc=2(異常) → rc0 放行 ────────
+    # 建假 lumos:code-loop check → rc=2,其他(anchor verify)→ rc=0
+    with tempfile.TemporaryDirectory() as td:
+        _make_high_tier_repo(td)
+        fake_lumos_content = (
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "args = sys.argv[1:]\n"
+            "if 'code-loop' in args and 'check' in args:\n"
+            "    sys.exit(2)\n"
+            "sys.exit(0)\n"
+        )
+        _setup_lumos_in_repo.__globals__  # ensure in scope
+        scripts_dir = Path(td) / "scripts"
+        scripts_dir.mkdir(exist_ok=True)
+        fake_lumos_path = scripts_dir / "lumos"
+        fake_lumos_path.write_text(fake_lumos_content, encoding="utf-8")
+        fake_lumos_path.chmod(0o755)
+        r = _run_pre_push(td)
+        check("codeloop_guard_prepush: lumos code-loop check rc=2(異常) → fail-open rc0",
+              r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
