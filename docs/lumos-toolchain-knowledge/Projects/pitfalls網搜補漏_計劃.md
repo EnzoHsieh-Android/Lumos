@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-05
 updated: 2026-07-05
 tags:
@@ -9,6 +9,7 @@ tags:
 related:
   - "[[pitfalls-lint-integration_計劃]]"
   - "[[finding-refute]]"
+  - "[[linter-gap實務隱患]]"
 plan_refs:
   - "[[pitfalls-lint-integration_計劃]]"
 summary: |-
@@ -20,7 +21,9 @@ summary: |-
   KEY:誠實天花板(計劃明載,skill 複述)=無機械 oracle(舉不了反證≠真:缺席證明謬誤+反證者能力上限,同 canary/[audit:])、人閘省不掉、量少邊角別過度跑
   DECISION:跳 design-loop——純散文 skill 無演算法/code,design-loop 對散文空轉(見記憶 design-loop-completeness-ceiling);驗收改 dogfood 真 stack 走一次流程
   DEP:[[finding-refute]]
-  TEST:待實作(skill + dogfood 真 stack)
+  TEST:已實作(skill skills/lumos-pitfalls-gapfill + dogfood 真 stack python 走通全流程);VERIFY:[[2026-07-05_pitfalls網搜補漏]]
+verified_by:
+  - "[[2026-07-05_pitfalls網搜補漏]]"
 ---
 # pitfalls 網搜補漏_計劃(block ③)
 
