@@ -108,6 +108,7 @@ def _ttl_marker_path(session_id: str, file_abs: str) -> Path:
 
 def _ttl_lazy_cleanup() -> None:
     """惰性清理: 刪 lumos-impact-* 下 mtime > 24h 的 session 目錄 (best-effort)。"""
+    import shutil  # m-1: 提到函式頂,避免每次迭代 import
     try:
         tmp = Path(tempfile.gettempdir())
         cutoff = time.time() - 24 * 3600
@@ -115,7 +116,6 @@ def _ttl_lazy_cleanup() -> None:
             if d.name.startswith("lumos-impact-") and d.is_dir():
                 try:
                     if d.stat().st_mtime < cutoff:
-                        import shutil
                         shutil.rmtree(str(d), ignore_errors=True)
                 except OSError:
                     pass
@@ -139,10 +139,10 @@ def _ttl_should_inject(session_id: str, file_abs: str, ttl_sec: float) -> bool:
 
     Returns:
         True = 應注入;False = 冷卻窗內壓掉。
-    """
-    # 惰性清理:刪 >24h 的 session 目錄(best-effort,失敗不影響主流程)
-    _ttl_lazy_cleanup()
 
+    Race note (I-1): exists→read→write 非原子;並行呼叫最多多注入一次,
+    不會造成資料損壞。此為 best-effort TTL,非嚴格 once 語意。
+    """
     marker = _ttl_marker_path(session_id, file_abs)
     now = time.time()
 
@@ -156,7 +156,11 @@ def _ttl_should_inject(session_id: str, file_abs: str, ttl_sec: float) -> bool:
         except (ValueError, OSError):
             pass  # 壞標記 → 視為過期,重新注入
 
-    # 首次或窗外:更新標記,回 True
+    # 首次或窗外:即將寫標記前先惰性清理 >24h session 目錄
+    # (I-2: 清理移至注入路徑,讓窗內快速路徑跳過全 tmpdir 掃描)
+    _ttl_lazy_cleanup()
+
+    # 更新標記
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(str(now), encoding="utf-8")
@@ -225,7 +229,7 @@ def main() -> int:
                 cfg = json.loads(impact_cfg_path.read_text(encoding="utf-8"))
                 ttl_raw = cfg.get("ttl_min", 20)
                 if isinstance(ttl_raw, (int, float)) and not isinstance(ttl_raw, bool):
-                    ttl_min = int(ttl_raw)
+                    ttl_min = max(1, int(ttl_raw))  # m-4: 截斷兜底,防 0.5 → 0 → TTL 恆觸發
         except (OSError, json.JSONDecodeError, ValueError):
             pass
 
