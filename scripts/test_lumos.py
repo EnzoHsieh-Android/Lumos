@@ -4388,6 +4388,103 @@ def t_impact_hook_filter_and_rc():
           "expected non-None for .ts")
 
 
+def t_impact_hook_ttl():
+    """Task 10: _ttl_should_inject TTL 冷卻窗 + 惰性清理 >24h session 目錄。
+
+    測試對象是 scripts/hooks/claude/impact-hook.py 的:
+      - _ttl_should_inject(session_id, file_abs, ttl_sec) -> bool
+      - _backdate_marker(session_id, file_abs, seconds_ago)  (測試輔助)
+    """
+    import importlib.util
+    import tempfile
+    import hashlib
+    import time
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_ttl", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_ttl", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+
+    _ttl_should_inject = m._ttl_should_inject
+    _backdate_marker = m._backdate_marker
+
+    sid = "sess-ttl-test-001"
+    f = "/abs/path/to/testfile.py"
+
+    # 計算 marker 路徑,以便 cleanup 後驗證
+    h = hashlib.sha1(f.encode()).hexdigest()[:16]
+    marker_path = _P(tempfile.gettempdir()) / f"lumos-impact-{sid}" / h
+
+    try:
+        # 確保乾淨起點
+        if marker_path.exists():
+            marker_path.unlink()
+
+        # 1. 首次呼叫 → True,且建立 marker 檔
+        result_first = _ttl_should_inject(sid, f, ttl_sec=1200)
+        check("impact_hook_ttl: 首次 True", result_first is True,
+              f"expected True, got {result_first}")
+        check("impact_hook_ttl: 首次後 marker 存在",
+              marker_path.exists(), f"marker 未建立: {marker_path}")
+
+        # 2. 窗內第二次 → False(冷卻)
+        result_second = _ttl_should_inject(sid, f, ttl_sec=1200)
+        check("impact_hook_ttl: 窗內第二次 False", result_second is False,
+              f"expected False (cooldown), got {result_second}")
+
+        # 3. 把 marker 倒推 2000s → 窗外復活 True
+        _backdate_marker(sid, f, 2000)
+        result_revive = _ttl_should_inject(sid, f, ttl_sec=1200)
+        check("impact_hook_ttl: 窗外復活 True", result_revive is True,
+              f"expected True (revive after backdate), got {result_revive}")
+
+        # 4. 測試惰性清理:建一個 mtime 超過 24h 的假 session 目錄
+        old_sid = "sess-old-stale-999"
+        old_session_dir = _P(tempfile.gettempdir()) / f"lumos-impact-{old_sid}"
+        old_session_dir.mkdir(parents=True, exist_ok=True)
+        old_marker = old_session_dir / "deadbeef12345678"
+        old_marker.write_text("0.0")  # 極老時間戳
+        # 把 mtime 設為 25h 前
+        old_time = time.time() - 25 * 3600
+        import os as _os
+        _os.utime(str(old_session_dir), (old_time, old_time))
+
+        # 觸發一次 inject(對一個新 sid/file),會觸發惰性清理
+        new_sid = "sess-trigger-cleanup-002"
+        new_f = "/abs/path/to/anotherfile.py"
+        _ttl_should_inject(new_sid, new_f, ttl_sec=1200)
+
+        # 舊的 session 目錄應被清掉
+        check("impact_hook_ttl: 惰性清理 >24h session 目錄被刪",
+              not old_session_dir.exists(),
+              f"old session dir still exists: {old_session_dir}")
+
+    finally:
+        # 清理本測試建立的 marker 檔與目錄
+        for cleanup_sid, cleanup_f in [
+            (sid, f),
+            ("sess-trigger-cleanup-002", "/abs/path/to/anotherfile.py"),
+        ]:
+            cleanup_h = hashlib.sha1(cleanup_f.encode()).hexdigest()[:16]
+            cleanup_dir = _P(tempfile.gettempdir()) / f"lumos-impact-{cleanup_sid}"
+            cleanup_marker = cleanup_dir / cleanup_h
+            if cleanup_marker.exists():
+                cleanup_marker.unlink()
+            try:
+                cleanup_dir.rmdir()
+            except OSError:
+                pass
+        # 確保 stale dir 清掉(若清理邏輯沒跑到)
+        old_sid = "sess-old-stale-999"
+        old_session_dir = _P(tempfile.gettempdir()) / f"lumos-impact-{old_sid}"
+        import shutil as _shutil
+        if old_session_dir.exists():
+            _shutil.rmtree(str(old_session_dir), ignore_errors=True)
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

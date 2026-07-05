@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: 主動影響幅度偵測 (Task 9 — 過濾 + 呼叫原語 + rc 處理)
+"""PreToolUse hook: 主動影響幅度偵測 (Task 10 — TTL 冷卻窗)
 
-攔截 Edit/Write/MultiEdit → 過濾(只 code 副檔名) → subprocess 呼叫
-`lumos impact --file <path> --repo <repo> --json` → 依 rc 協定處理。
+攔截 Edit/Write/MultiEdit → 過濾(只 code 副檔名) → TTL 冷卻窗判定 →
+subprocess 呼叫 `lumos impact --file <path> --repo <repo> --json` → 依 rc 協定處理。
 
 rc 協定:
   rc 0   = 成功 (影響集有/無皆算,json 照出)
   rc 3   = vault 找不到 → 印一行 debug,不注入,放行
   其他非 0 = 內部錯 → fail-open 純靜默放行
 
-TTL 冷卻窗 / additionalContext 注入 → Task 10/11 實作。
-Task 9 只做:過濾 + 呼叫 + 拿到 rc/json。
+additionalContext 注入 → Task 11 實作。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 # === 觸發的原始碼副檔名 ===
@@ -98,6 +100,83 @@ def hook_decide(payload: dict) -> str | None:
     return file_path
 
 
+def _ttl_marker_path(session_id: str, file_abs: str) -> Path:
+    """標記檔路徑: <tmpdir>/lumos-impact-<session_id>/<sha1[:16]>。"""
+    h = hashlib.sha1(file_abs.encode()).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"lumos-impact-{session_id}" / h
+
+
+def _ttl_lazy_cleanup() -> None:
+    """惰性清理: 刪 lumos-impact-* 下 mtime > 24h 的 session 目錄 (best-effort)。"""
+    try:
+        tmp = Path(tempfile.gettempdir())
+        cutoff = time.time() - 24 * 3600
+        for d in tmp.iterdir():
+            if d.name.startswith("lumos-impact-") and d.is_dir():
+                try:
+                    if d.stat().st_mtime < cutoff:
+                        import shutil
+                        shutil.rmtree(str(d), ignore_errors=True)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def _ttl_should_inject(session_id: str, file_abs: str, ttl_sec: float) -> bool:
+    """判定是否在 TTL 冷卻窗內。
+
+    首次或距上次注入 >= ttl_sec → True(應注入),並更新標記檔。
+    距上次注入 < ttl_sec → False(冷卻中,壓掉)。
+
+    標記檔內容 = time.time() Unix float (單一數字)。
+    不用 mtime(避免 touch/rsync 誤動)。
+
+    Args:
+        session_id: hook payload 的 session_id(UUID)。
+        file_abs: 被編輯的檔案絕對路徑。
+        ttl_sec: 冷卻秒數。
+
+    Returns:
+        True = 應注入;False = 冷卻窗內壓掉。
+    """
+    # 惰性清理:刪 >24h 的 session 目錄(best-effort,失敗不影響主流程)
+    _ttl_lazy_cleanup()
+
+    marker = _ttl_marker_path(session_id, file_abs)
+    now = time.time()
+
+    # 讀現有標記
+    if marker.exists():
+        try:
+            content = marker.read_text(encoding="utf-8").strip()
+            last_ts = float(content)
+            if now - last_ts < ttl_sec:
+                return False  # 冷卻窗內,壓掉
+        except (ValueError, OSError):
+            pass  # 壞標記 → 視為過期,重新注入
+
+    # 首次或窗外:更新標記,回 True
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(now), encoding="utf-8")
+    except OSError:
+        pass  # 寫失敗 → best-effort,仍放行
+
+    return True
+
+
+def _backdate_marker(session_id: str, file_abs: str, seconds_ago: float) -> None:
+    """測試輔助:把標記檔時間戳倒推 seconds_ago 秒。"""
+    marker = _ttl_marker_path(session_id, file_abs)
+    backdated = time.time() - seconds_ago
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(backdated), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _find_lumos_script() -> str | None:
     """找到 lumos CLI 腳本的絕對路徑(同 repo scripts/lumos)。"""
     # hook 所在目錄是 scripts/hooks/claude/,往上 3 層是 repo root
@@ -135,6 +214,23 @@ def main() -> int:
         file_path_abs = str(Path(repo) / file_path)
     else:
         file_path_abs = file_path
+
+    # TTL 冷卻窗:讀 .lumos/impact.json 的 ttl_min(預設 20min)
+    session_id = payload.get("session_id", "")
+    if session_id:
+        ttl_min = 20  # 預設
+        try:
+            impact_cfg_path = Path(repo) / ".lumos" / "impact.json"
+            if impact_cfg_path.is_file():
+                cfg = json.loads(impact_cfg_path.read_text(encoding="utf-8"))
+                ttl_raw = cfg.get("ttl_min", 20)
+                if isinstance(ttl_raw, (int, float)) and not isinstance(ttl_raw, bool):
+                    ttl_min = int(ttl_raw)
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+
+        if not _ttl_should_inject(session_id, file_path_abs, ttl_sec=ttl_min * 60):
+            return 0  # 冷卻窗內,壓掉
 
     lumos = _find_lumos_script()
     if lumos is None:
