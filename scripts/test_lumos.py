@@ -5944,6 +5944,925 @@ def t_codeloop_guard_prepush():
               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
 
 
+# ── Task 1: _extract_claude_block_span 三態 ────────────────────────────────
+
+def _import_lumos_for_reinject():
+    """Task 1 用:用 SourceFileLoader 載入 lumos 模組(無 .py 副檔名)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_reinject_mod", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_reinject_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+def t_extract_span_found():
+    """found 態:兩 sentinel 齊全 → body 正確 + 位移對齊;START 帶版本戳亦 found。"""
+    mod = _import_lumos_for_reinject()
+
+    fn = mod._extract_claude_block_span
+    START_PREFIX = mod._CLAUDE_START_PREFIX
+    END = mod._CLAUDE_END
+
+    # 基本版:START 行無版本戳
+    start_line = START_PREFIX + " -->"
+    text = f"before\n{start_line}\nbody line A\nbody line B\n{END}\nafter\n"
+    state, span = fn(text)
+    check("extract_span_found: state==found(無版本戳)", state == "found", f"state={state!r}")
+    check("extract_span_found: span not None", span is not None, "span is None")
+    if span is not None:
+        expected_body = "body line A\nbody line B"
+        check("extract_span_found: body 正確", span.body == expected_body,
+              f"body={span.body!r}")
+        check("extract_span_found: text[body_start:body_end]==body",
+              text[span.body_start:span.body_end] == span.body,
+              f"text[{span.body_start}:{span.body_end}]={text[span.body_start:span.body_end]!r} vs body={span.body!r}")
+
+    # 版本戳版:START 行後面帶 " v1.2 — 勿手改 -->"
+    start_line_v = START_PREFIX + " v1.2 — 勿手改 -->"
+    text2 = f"preamble\n{start_line_v}\ncontent here\n{END}\nfooter\n"
+    state2, span2 = fn(text2)
+    check("extract_span_found: 版本戳 START → 仍 found", state2 == "found",
+          f"state={state2!r}")
+    check("extract_span_found: 版本戳 body 正確", span2 is not None and span2.body == "content here",
+          f"span2={span2!r}")
+    if span2 is not None:
+        check("extract_span_found: 版本戳 text[body_start:body_end]==body",
+              text2[span2.body_start:span2.body_end] == span2.body,
+              f"text2[{span2.body_start}:{span2.body_end}]={text2[span2.body_start:span2.body_end]!r} vs {span2.body!r}")
+
+
+def t_extract_span_absent():
+    """absent 態:純文字無任何 sentinel → ("absent", None)。"""
+    mod = _import_lumos_for_reinject()
+    fn = mod._extract_claude_block_span
+
+    # 完全無 sentinel
+    state, span = fn("some text\nno markers here\n")
+    check("extract_span_absent: 無 sentinel → absent", state == "absent",
+          f"state={state!r}")
+    check("extract_span_absent: span is None", span is None, f"span={span!r}")
+
+    # 空字串
+    state2, span2 = fn("")
+    check("extract_span_absent: 空字串 → absent", state2 == "absent",
+          f"state={state2!r}")
+
+
+def t_extract_span_broken():
+    """broken 態:只START無END / 只END無START / END在START前 / START出現兩次。"""
+    mod = _import_lumos_for_reinject()
+    fn = mod._extract_claude_block_span
+    START_PREFIX = mod._CLAUDE_START_PREFIX
+    END = mod._CLAUDE_END
+
+    start_line = START_PREFIX + " -->"
+
+    # 只 START 無 END
+    text_a = f"text\n{start_line}\nbody\n"
+    sa, spa = fn(text_a)
+    check("extract_span_broken: 只START無END → broken", sa == "broken",
+          f"state={sa!r}")
+    check("extract_span_broken: 只START無END → span None", spa is None, f"span={spa!r}")
+
+    # 只 END 無 START
+    text_b = f"text\nbody\n{END}\n"
+    sb, spb = fn(text_b)
+    check("extract_span_broken: 只END無START → broken", sb == "broken",
+          f"state={sb!r}")
+    check("extract_span_broken: 只END無START → span None", spb is None, f"span={spb!r}")
+
+    # END 在 START 前
+    text_c = f"{END}\nbody\n{start_line}\n"
+    sc, spc = fn(text_c)
+    check("extract_span_broken: END在START前 → broken", sc == "broken",
+          f"state={sc!r}")
+
+    # START 出現兩次
+    text_d = f"{start_line}\nbody\n{start_line}\n{END}\n"
+    sd, spd = fn(text_d)
+    check("extract_span_broken: START出現兩次 → broken", sd == "broken",
+          f"state={sd!r}")
+
+
+# ── Task 2: _reinject_claude_block ────────────────────────────────────────────
+
+def _make_reinject_root(td, tpl_content=None, claude_content=None):
+    """在臨時目錄建立最小 root 結構供 reinject 測試用。
+    tpl_content=None → 不建立 graph-discipline.md(no_template 情境)。
+    claude_content=None → 不建立 CLAUDE.md。
+    回傳 (root, mod)。"""
+    import tempfile, importlib.util
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path
+    root = Path(td)
+    tpl_dir = root / "scripts" / "templates"
+    tpl_dir.mkdir(parents=True, exist_ok=True)
+    if tpl_content is not None:
+        (tpl_dir / "graph-discipline.md").write_text(tpl_content, encoding="utf-8")
+    loader = SourceFileLoader("lumos_reinject_t2", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_reinject_t2", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    if claude_content is not None:
+        (root / "CLAUDE.md").write_bytes(claude_content if isinstance(claude_content, bytes)
+                                         else claude_content.encode("utf-8"))
+    return root, m
+
+
+def _make_block(mod, slug, tpl_content):
+    """Helper: 組出 reinject 會寫入的完整 block 字串,供測試斷言用。
+
+    引用 mod._START_TEMPLATE + mod.LUMOS_VERSION(非內聯常數),確保與實際 reinject
+    寫入的 START 行格式一致(版本戳一致)。T4 reviewer 要求:內聯字串會在版本戳加入後
+    讓 fixture 與正式格式不符。
+    """
+    body = tpl_content.replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
+    START = mod._START_TEMPLATE.format(version=mod.LUMOS_VERSION)
+    END = mod._CLAUDE_END
+    return START + "\n" + body + "\n" + END
+
+
+def t_reinject_no_template():
+    """範本檔不存在 → no_template、不 crash、不建檔。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=None, claude_content=None)
+        result = mod._reinject_claude_block(root, "myproj")
+        check("reinject_no_template: status==no_template",
+              result.status == "no_template", f"status={result.status!r}")
+        check("reinject_no_template: diff is None",
+              result.diff is None, f"diff={result.diff!r}")
+        check("reinject_no_template: CLAUDE.md 未被建立",
+              not (root / "CLAUDE.md").exists(), "CLAUDE.md 意外被建立")
+
+
+def t_reinject_creates_when_absent():
+    """CLAUDE.md 不存在 → created、檔被生成且含 block。"""
+    import tempfile
+    TPL = "lumos 知識圖譜路徑:{{KG}}"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL, claude_content=None)
+        result = mod._reinject_claude_block(root, "myproj")
+        check("reinject_creates: status==created",
+              result.status == "created", f"status={result.status!r}")
+        check("reinject_creates: diff is None",
+              result.diff is None, f"diff={result.diff!r}")
+        cm = root / "CLAUDE.md"
+        check("reinject_creates: CLAUDE.md 存在",
+              cm.exists(), "CLAUDE.md 未被建立")
+        content = cm.read_bytes().decode("utf-8")
+        block = _make_block(mod, "myproj", TPL)
+        check("reinject_creates: 含 block",
+              block in content, f"block 未在 content 中;\ncontent={content!r}")
+        check("reinject_creates: KG 替換正確",
+              "docs/myproj-knowledge/" in content, f"KG 未替換: {content!r}")
+        check("reinject_creates: 無 BOM",
+              not cm.read_bytes().startswith(b"\xef\xbb\xbf"), "有 BOM")
+        check("reinject_creates: 無 CRLF",
+              b"\r\n" not in cm.read_bytes(), "有 CRLF")
+
+
+def t_reinject_appends_when_no_sentinel():
+    """有 CLAUDE.md 但無 sentinel → appended、原內容保留 + block 附加。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    ORIGINAL = "# 既有 CLAUDE.md\n\n原始內容在這\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL, claude_content=ORIGINAL)
+        result = mod._reinject_claude_block(root, "proj")
+        check("reinject_appends: status==appended",
+              result.status == "appended", f"status={result.status!r}")
+        check("reinject_appends: diff is None",
+              result.diff is None, f"diff={result.diff!r}")
+        content = (root / "CLAUDE.md").read_bytes().decode("utf-8")
+        check("reinject_appends: 原始內容保留",
+              "原始內容在這" in content, f"原始內容消失: {content!r}")
+        block = _make_block(mod, "proj", TPL)
+        check("reinject_appends: block 附加",
+              block in content, f"block 未在 content 中")
+        # 確認原始內容在 block 之前
+        check("reinject_appends: 原始在前",
+              content.index("原始內容在這") < content.index(mod._CLAUDE_START_PREFIX),
+              "原始內容出現在 block 之後")
+
+
+def t_reinject_updates_existing():
+    """既有 block 內容過時 → updated + diff 非空 + 檔被寫入新內容。"""
+    import tempfile
+    OLD_BODY = "舊的 body 內容"
+    NEW_TPL = "新的範本:{{KG}}"
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    END_SENTINEL = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    old_block = START + "\n" + OLD_BODY + "\n" + END_SENTINEL
+    EXISTING = "# CLAUDE.md\n\n前言\n\n" + old_block + "\n\n後記\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=NEW_TPL, claude_content=EXISTING)
+        result = mod._reinject_claude_block(root, "slug")
+        check("reinject_updates: status==updated",
+              result.status == "updated", f"status={result.status!r}")
+        check("reinject_updates: diff 非 None",
+              result.diff is not None, "diff is None")
+        check("reinject_updates: diff 非空字串",
+              result.diff != "", f"diff empty: {result.diff!r}")
+        content = (root / "CLAUDE.md").read_bytes().decode("utf-8")
+        new_body = NEW_TPL.replace("{{KG}}", "docs/slug-knowledge/").strip()
+        check("reinject_updates: 新 body 寫入",
+              new_body in content, f"新 body 未在 content: {content!r}")
+        check("reinject_updates: 舊 body 消失",
+              OLD_BODY not in content, f"舊 body 殘留: {content!r}")
+        check("reinject_updates: 前言保留",
+              "前言" in content, f"前言消失: {content!r}")
+        check("reinject_updates: 後記保留",
+              "後記" in content, f"後記消失: {content!r}")
+
+
+def t_reinject_idempotent():
+    """再跑一次 → unchanged + 檔案內容不變。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL, claude_content=None)
+        # 第一次: created
+        r1 = mod._reinject_claude_block(root, "slug")
+        check("reinject_idempotent: 第一次 created",
+              r1.status == "created", f"r1.status={r1.status!r}")
+        content_after_first = (root / "CLAUDE.md").read_bytes()
+        # 第二次: unchanged
+        r2 = mod._reinject_claude_block(root, "slug")
+        check("reinject_idempotent: 第二次 unchanged",
+              r2.status == "unchanged", f"r2.status={r2.status!r}")
+        check("reinject_idempotent: diff is None",
+              r2.diff is None, f"diff={r2.diff!r}")
+        content_after_second = (root / "CLAUDE.md").read_bytes()
+        check("reinject_idempotent: 內容 byte-equal",
+              content_after_first == content_after_second,
+              f"第二次寫入改變了內容")
+
+
+def t_reinject_preserves_outside():
+    """sentinel 之外的內容 byte-equal 保留——前綴與後綴逐 byte 相同。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    END_SENTINEL = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    OLD_BODY = "舊 body,需更新"
+    old_block = START + "\n" + OLD_BODY + "\n" + END_SENTINEL
+    PREFIX = "# CLAUDE.md\n\n使用者前綴段落\n\n"
+    SUFFIX = "\n\n使用者後綴段落\n"
+    EXISTING = PREFIX + old_block + SUFFIX
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL, claude_content=EXISTING)
+        result = mod._reinject_claude_block(root, "slug")
+        check("reinject_preserves_outside: status==updated",
+              result.status == "updated", f"status={result.status!r}")
+        new_content = (root / "CLAUDE.md").read_bytes().decode("utf-8")
+        # 找 START 行在新內容中的位置,取前綴
+        si_new = new_content.find(mod._CLAUDE_START_PREFIX)
+        # 找 END 行在新內容中的位置,取後綴
+        ei_new = new_content.find(mod._CLAUDE_END)
+        end_end = ei_new + len(mod._CLAUDE_END)
+        new_prefix = new_content[:si_new]
+        new_suffix = new_content[end_end:]
+        # 原始的前綴/後綴
+        si_old = EXISTING.find(mod._CLAUDE_START_PREFIX)
+        ei_old = EXISTING.find(mod._CLAUDE_END)
+        end_end_old = ei_old + len(mod._CLAUDE_END)
+        orig_prefix = EXISTING[:si_old]
+        orig_suffix = EXISTING[end_end_old:]
+        check("reinject_preserves_outside: 前綴 byte-equal",
+              new_prefix == orig_prefix,
+              f"前綴不同:\norig={orig_prefix!r}\nnew={new_prefix!r}")
+        check("reinject_preserves_outside: 後綴 byte-equal",
+              new_suffix == orig_suffix,
+              f"後綴不同:\norig={orig_suffix!r}\nnew={new_suffix!r}")
+
+
+def t_reinject_sentinel_broken():
+    """只 START 無 END → sentinel_broken + 原檔 byte-equal 不動。"""
+    import tempfile
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    BROKEN = "# CLAUDE.md\n\n" + START + "\nbody without end\n"
+    TPL = "知識圖譜:{{KG}}"
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL,
+                                        claude_content=BROKEN.encode("utf-8"))
+        orig_bytes = (root / "CLAUDE.md").read_bytes()
+        result = mod._reinject_claude_block(root, "slug")
+        check("reinject_sentinel_broken: status==sentinel_broken",
+              result.status == "sentinel_broken", f"status={result.status!r}")
+        check("reinject_sentinel_broken: diff is None",
+              result.diff is None, f"diff={result.diff!r}")
+        new_bytes = (root / "CLAUDE.md").read_bytes()
+        check("reinject_sentinel_broken: 原檔 byte-equal",
+              new_bytes == orig_bytes,
+              f"檔案被改動(orig {len(orig_bytes)} vs new {len(new_bytes)} bytes)")
+
+
+def t_reinject_bom_crlf_normalized():
+    """BOM+CRLF 輸入 → 寫後無 BOM、LF、內容正確。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    # 既有 CLAUDE.md 無 sentinel,帶 BOM + CRLF
+    existing_crlf_bom = "\xef\xbb\xbf# CLAUDE.md\r\n\r\n既有內容\r\n".encode("utf-8")
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=TPL,
+                                        claude_content=existing_crlf_bom)
+        result = mod._reinject_claude_block(root, "slug")
+        check("reinject_bom_crlf: status==appended",
+              result.status == "appended", f"status={result.status!r}")
+        raw = (root / "CLAUDE.md").read_bytes()
+        check("reinject_bom_crlf: 無 BOM",
+              not raw.startswith(b"\xef\xbb\xbf"), "仍有 BOM")
+        check("reinject_bom_crlf: 無 CRLF",
+              b"\r\n" not in raw, "仍有 CRLF")
+        check("reinject_bom_crlf: 含 block",
+              mod._CLAUDE_START_PREFIX.encode("utf-8") in raw, "block 未寫入")
+        check("reinject_bom_crlf: 既有內容保留(無 BOM 版)",
+              "既有內容" in raw.decode("utf-8"), f"既有內容消失: {raw.decode()!r}")
+
+
+# ── Task 3: 解耦 scaffold + 接線 update/init ────────────────────────────────
+
+
+def _load_lumos_mod(unique_name="lumos_t3"):
+    """載入 lumos 模組(無 .py 副檔名)回傳 module。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader(unique_name, GRAPHCTL)
+    spec = importlib.util.spec_from_loader(unique_name, loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+def t_scaffold_no_longer_injects():
+    """_scaffold_project 移除注入段後:scaffold 成功建 vault 夾,但 CLAUDE.md 不被它建立或修改。"""
+    import tempfile, os, subprocess, sys
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        # 建一個假的 git repo(避免 cmd_init 中的 git rev-parse 出錯)
+        subprocess.run(["git", "init", str(root)], capture_output=True)
+        # 建 scripts/templates 讓範本存在(但 scaffold 不應碰它)
+        tpl_dir = root / "scripts" / "templates"
+        tpl_dir.mkdir(parents=True, exist_ok=True)
+        (tpl_dir / "graph-discipline.md").write_text("知識圖譜:{{KG}}", encoding="utf-8")
+
+        mod = _load_lumos_mod("lumos_t3_scaffold")
+        mod._scaffold_project(root, "myproj")
+
+        kg = root / "docs" / "myproj-knowledge"
+        check("scaffold_no_longer: vault 夾建立", kg.is_dir(), f"kg={kg}")
+        check("scaffold_no_longer: CLAUDE.md 未被 scaffold 建立",
+              not (root / "CLAUDE.md").exists(),
+              "CLAUDE.md 意外被 _scaffold_project 建立(注入段未移除)")
+
+        # 已有 CLAUDE.md 的情況:scaffold 也不應修改它
+        existing_cm = "# 既有 CLAUDE.md\n\n使用者內容\n"
+        (root / "CLAUDE.md").write_text(existing_cm, encoding="utf-8")
+        # 再呼叫一次(已存在 vault → early return;CLAUDE.md 不應被碰)
+        mod._scaffold_project(root, "myproj")
+        after = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        check("scaffold_no_longer: 既有 CLAUDE.md 未被 scaffold 修改",
+              after == existing_cm,
+              f"CLAUDE.md 被改了: {after!r}")
+
+
+def t_update_resyncs_claude():
+    """整合:_vendor_toolchain 在 copy2 迴圈後呼叫 _reinject_claude_block。
+
+    情境:消費專案有舊版 block;臨時 lumos 源含新版範本。
+    以 os.environ["LUMOS_HOME"] 指向臨時源;跑 _vendor_toolchain(..., no_pull=True)。
+    斷言:CLAUDE.md block 被刷新成新範本內容。
+    """
+    import tempfile, os, subprocess, shutil, sys
+    # ── 建臨時 lumos 源 ──────────────────────────────────────────────────
+    with tempfile.TemporaryDirectory() as src_td, \
+         tempfile.TemporaryDirectory() as proj_td:
+        src = Path(src_td)
+        root = Path(proj_td)
+
+        # 最小 lumos 源結構(只需 install-graph-toolchain.sh 當探針 + 新版範本)
+        scripts_dir = src / "scripts"
+        scripts_dir.mkdir(parents=True)
+        (scripts_dir / "install-graph-toolchain.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        tpl_dir = scripts_dir / "templates"
+        tpl_dir.mkdir()
+        NEW_TPL = "新版知識圖譜紀律:{{KG}}"
+        (tpl_dir / "graph-discipline.md").write_text(NEW_TPL, encoding="utf-8")
+        # hooks dir 需存在避免 rglob 報錯
+        (scripts_dir / "hooks").mkdir()
+
+        # ── 建消費專案:既有 vault + 舊 block ────────────────────────────
+        subprocess.run(["git", "init", str(root)], capture_output=True)
+        slug = "consumer"
+        kg = root / "docs" / f"{slug}-knowledge"
+        kg.mkdir(parents=True)
+
+        mod = _load_lumos_mod("lumos_t3_update")
+        START_PREFIX = mod._CLAUDE_START_PREFIX
+        END = mod._CLAUDE_END
+        OLD_BODY = "舊版紀律內文:docs/consumer-knowledge/"
+        old_block = (START_PREFIX + " -->\n" + OLD_BODY + "\n" + END)
+        old_cm = "# CLAUDE.md\n\n使用者規則\n\n" + old_block + "\n"
+        (root / "CLAUDE.md").write_text(old_cm, encoding="utf-8")
+
+        # ── 用 LUMOS_HOME env 指臨時源,呼叫 _vendor_toolchain ───────────
+        orig_home = os.environ.get("LUMOS_HOME")
+        try:
+            os.environ["LUMOS_HOME"] = str(src)
+            mod._vendor_toolchain(src, root, slug, no_pull=True)
+        finally:
+            if orig_home is None:
+                os.environ.pop("LUMOS_HOME", None)
+            else:
+                os.environ["LUMOS_HOME"] = orig_home
+
+        # ── 斷言 ─────────────────────────────────────────────────────────
+        cm_text = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        expected_body = NEW_TPL.replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
+        check("update_resyncs: CLAUDE.md block 已更新(含新範本內容)",
+              expected_body in cm_text,
+              f"新範本內容未在 CLAUDE.md 中;\ncm={cm_text!r}")
+        check("update_resyncs: 舊 body 已被替換",
+              OLD_BODY not in cm_text,
+              f"舊 body 仍存在: {cm_text!r}")
+        check("update_resyncs: 使用者規則保留",
+              "使用者規則" in cm_text,
+              f"使用者規則消失: {cm_text!r}")
+
+
+def t_init_existing_resyncs():
+    """既有 vault + 非 force 跑 cmd_init → CLAUDE.md 紀律區塊被刷新(early-return 不繞過 reinject)。
+
+    透過 subprocess 跑 `lumos init --name consumer`,消費專案有舊 block 和既有 vault。
+    環境變數 LUMOS_HOME 指向 lumos-toolchain 本身(有真實範本)。
+    """
+    import tempfile, os, subprocess, sys
+    # lumos 本身的 repo(有真實 scripts/templates/graph-discipline.md)
+    lumos_src = Path(GRAPHCTL).resolve().parent.parent
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        subprocess.run(["git", "init", str(root)], capture_output=True)
+        slug = "consumer"
+
+        # 建既有 vault
+        kg = root / "docs" / f"{slug}-knowledge"
+        for d in ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC"):
+            (kg / d).mkdir(parents=True, exist_ok=True)
+        (kg / "MOC" / "index.md").write_text("---\ntype: moc\nstatus: doing\n---\n", encoding="utf-8")
+
+        # 建舊 block CLAUDE.md
+        tpl_path = lumos_src / "scripts" / "templates" / "graph-discipline.md"
+        if not tpl_path.exists():
+            check("init_existing_resyncs: 跳過(lumos 源無範本)", True)
+            return
+
+        # 故意寫舊 block(body 不同於現版範本)
+        START_PREFIX = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
+        END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+        OLD_BODY = "舊版 body — 應被 init 刷新"
+        old_block = (START_PREFIX + " — 自動注入/更新,勿手改本區塊;"
+                     "改範本 scripts/templates/graph-discipline.md -->\n"
+                     + OLD_BODY + "\n" + END)
+        (root / "CLAUDE.md").write_text("# CLAUDE.md\n\n" + old_block + "\n", encoding="utf-8")
+
+        # 把 lumos 源複製最小必需工具到 consumer(使 _vendor_toolchain 的來源探針通過)
+        (root / "scripts").mkdir(exist_ok=True)
+        (root / "scripts" / "templates").mkdir(exist_ok=True)
+        import shutil
+        shutil.copy2(tpl_path, root / "scripts" / "templates" / "graph-discipline.md")
+
+        env = os.environ.copy()
+        env["LUMOS_HOME"] = str(lumos_src)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "init", "--name", slug, "--no-hooks"],
+            cwd=str(root), capture_output=True, text=True, env=env
+        )
+
+        cm_text = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        check("init_existing_resyncs: rc==0", r.returncode == 0,
+              f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+        check("init_existing_resyncs: 舊 body 已被替換",
+              OLD_BODY not in cm_text,
+              f"舊 body 仍存在;\ncm={cm_text!r}\nstdout={r.stdout!r}\nstderr={r.stderr!r}")
+        check("init_existing_resyncs: sentinel block 存在",
+              START_PREFIX in cm_text,
+              f"sentinel 消失;\ncm={cm_text!r}")
+
+
+def t_init_existing_no_pull():
+    """T3 review I-1/I-2:既有 vault 非 force + with_hooks=True 跑 cmd_init →
+    不呼叫 _vendor_toolchain(不 pull、不重裝 hooks),但 CLAUDE.md 紀律區塊有被刷新。
+
+    做法:用 _load_lumos_mod 載入模組後直接替換 _vendor_toolchain 為記錄 stub,
+    再以 mock _lumos_src 指向有範本的臨時源,呼叫 mod.cmd_init(...)。
+    斷言:stub 未被呼叫;CLAUDE.md 舊 body 已替換。
+    """
+    import tempfile, os, subprocess, sys
+
+    with tempfile.TemporaryDirectory() as src_td, \
+         tempfile.TemporaryDirectory() as proj_td:
+        src = Path(src_td)
+        root = Path(proj_td)
+
+        # ── 建最小 lumos 源(只需範本 + 探針) ──────────────────────────
+        scripts_dir = src / "scripts"
+        scripts_dir.mkdir(parents=True)
+        (scripts_dir / "install-graph-toolchain.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        tpl_dir = scripts_dir / "templates"
+        tpl_dir.mkdir()
+        NEW_TPL = "新版知識圖譜紀律(no-pull test):{{KG}}"
+        (tpl_dir / "graph-discipline.md").write_text(NEW_TPL, encoding="utf-8")
+        (scripts_dir / "hooks").mkdir()
+
+        # ── 建消費專案:既有 vault ──────────────────────────────────────
+        subprocess.run(["git", "init", str(root)], capture_output=True)
+        slug = "consumer"
+        kg = root / "docs" / f"{slug}-knowledge"
+        for d in ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC"):
+            (kg / d).mkdir(parents=True, exist_ok=True)
+        (kg / "MOC" / "index.md").write_text("---\ntype: moc\nstatus: doing\n---\n", encoding="utf-8")
+
+        # 複製範本到消費專案(供 _reinject 讀取本機已 vendor 範本)
+        (root / "scripts" / "templates").mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copy2(tpl_dir / "graph-discipline.md",
+                     root / "scripts" / "templates" / "graph-discipline.md")
+
+        # 建舊 block CLAUDE.md
+        mod = _load_lumos_mod("lumos_t3_nopull")
+        START_PREFIX = mod._CLAUDE_START_PREFIX
+        END = mod._CLAUDE_END
+        OLD_BODY = "舊版 body — 應被刷新但不 pull"
+        old_block = (START_PREFIX + " — 自動注入/更新,勿手改本區塊;"
+                     "改範本 scripts/templates/graph-discipline.md -->\n"
+                     + OLD_BODY + "\n" + END)
+        (root / "CLAUDE.md").write_text("# CLAUDE.md\n\n" + old_block + "\n", encoding="utf-8")
+
+        # ── monkeypatch:替換 _vendor_toolchain 為記錄 stub ────────────
+        vendor_called = []
+
+        def _stub_vendor(s, r, sl, no_pull=False):
+            vendor_called.append((s, r, sl, no_pull))
+            return 0  # 假裝成功但不執行任何動作
+
+        orig_vendor = mod._vendor_toolchain
+        orig_lumos_src = mod._lumos_src
+        mod._vendor_toolchain = _stub_vendor
+        mod._lumos_src = lambda source=None: src  # 指向有範本的臨時源
+
+        try:
+            import os as _os
+            orig_cwd = _os.getcwd()
+            _os.chdir(str(root))
+            rc = mod.cmd_init(name=slug, force=False, with_hooks=True, no_pull=False)
+        finally:
+            _os.chdir(orig_cwd)
+            mod._vendor_toolchain = orig_vendor
+            mod._lumos_src = orig_lumos_src
+
+        # ── 斷言 ──────────────────────────────────────────────────────
+        check("init_existing_no_pull: rc==0", rc == 0, f"rc={rc}")
+        check("init_existing_no_pull: _vendor_toolchain 未被呼叫(不 pull/不重裝 hooks)",
+              len(vendor_called) == 0,
+              f"_vendor_toolchain 被呼叫了 {len(vendor_called)} 次: {vendor_called}")
+        cm_text = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        check("init_existing_no_pull: 舊 body 已被替換(CLAUDE.md 有刷新)",
+              OLD_BODY not in cm_text,
+              f"舊 body 仍存在;\ncm={cm_text!r}")
+        check("init_existing_no_pull: sentinel block 存在",
+              START_PREFIX in cm_text,
+              f"sentinel 消失;\ncm={cm_text!r}")
+
+# ── Task 4: doctor Check D 紀律區塊漂移守衛 ────────────────────────────────────
+
+def _make_check_d_root(td, tpl_content=None, claude_content=None, slug="demo"):
+    """建立最小 repo root 結構供 Check D 測試用。
+    vault 在 root/docs/<slug>-knowledge/;doctor 透過 vault.parents 取到 docs → repo_root。
+    tpl_content=None → 不建立 scripts/templates/graph-discipline.md。
+    claude_content=None → 不建立 CLAUDE.md。
+    回傳 (root, vault)。
+    """
+    root = Path(td)
+    vault = root / "docs" / f"{slug}-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "MOC" / "idx.md").write_bytes(b"---\ntype: moc\n---\n# idx\n")
+    # scripts/templates
+    tpl_dir = root / "scripts" / "templates"
+    tpl_dir.mkdir(parents=True, exist_ok=True)
+    if tpl_content is not None:
+        (tpl_dir / "graph-discipline.md").write_text(tpl_content, encoding="utf-8")
+    if claude_content is not None:
+        (root / "CLAUDE.md").write_bytes(
+            claude_content if isinstance(claude_content, bytes)
+            else claude_content.encode("utf-8")
+        )
+    return root, vault
+
+
+def _make_check_d_block(tpl_content, slug):
+    """組出 reinject 會寫入的完整 sentinel block,供 Check D fixture CLAUDE.md 使用。
+
+    START 行引用 _START_TEMPLATE + LUMOS_VERSION 確保與正式 reinject 格式一致。
+    T4 reviewer 要求:不得內聯 START 常數字串——版本戳加入後內聯會讓 fixture 與
+    真正格式不符,導致 _extract_claude_block_span 判不出 found → 測試隱性 skip。
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "_lumos_for_block", GRAPHCTL,
+        loader=SourceFileLoader("_lumos_for_block", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    body = tpl_content.replace("{{KG}}", f"docs/{slug}-knowledge/").strip()
+    START = m._START_TEMPLATE.format(version=m.LUMOS_VERSION)
+    END = m._CLAUDE_END
+    return START + "\n" + body + "\n" + END
+
+
+def t_claude_block_matches_template():
+    """本 repo 的 CLAUDE.md 紀律區塊必須與 resolved 範本完全一致(防復發守衛)。"""
+    # 直接用本 repo 跑 doctor —vault <actual-vault>
+    actual_vault = Path(GRAPHCTL).resolve().parent.parent / "docs" / "lumos-toolchain-knowledge"
+    if not actual_vault.is_dir():
+        check("claude_block_matches_template: vault 不存在(skip)", True, "")
+        return
+    r = subprocess.run(
+        [sys.executable, GRAPHCTL, "--vault", str(actual_vault), "doctor", "--ci"],
+        capture_output=True, text=True,
+    )
+    # Check D 應讓本 repo doctor 保持 0 issues(無「不同步」警告)
+    check("claude_block_matches_template: 本 repo doctor Check D 淨(0 漂移)",
+          "不同步" not in r.stdout,
+          f"stdout={r.stdout}")
+    check("claude_block_matches_template: 本 repo doctor 整體 0 issues",
+          r.returncode == 0,
+          f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+def t_doctor_reports_drift():
+    """CLAUDE.md block body 與範本不一致 → Check D 報漂移(issue≥1)。"""
+    import tempfile
+    TPL = "知識圖譜路徑:{{KG}}\n\n這是圖譜紀律說明。"
+    SLUG = "myproj"
+    block = _make_check_d_block(TPL, SLUG)
+    # 人為把 CLAUDE.md 的 block body 改一行
+    tampered_block = block.replace("這是圖譜紀律說明。", "這是被人改過的說明。")
+    claude_content = "# CLAUDE.md\n\n前言\n\n" + tampered_block + "\n\n後記\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, vault = _make_check_d_root(td, tpl_content=TPL,
+                                          claude_content=claude_content, slug=SLUG)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "--vault", str(vault), "doctor", "--ci"],
+            capture_output=True, text=True,
+        )
+        check("doctor_reports_drift: 輸出含 [D]",
+              "[D]" in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_reports_drift: 輸出含不同步訊息",
+              "不同步" in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_reports_drift: --ci 非零 exit",
+              r.returncode != 0,
+              f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+def t_doctor_skip_no_template():
+    """範本檔不存在 → Check D skip,不誤報、不計 issue。"""
+    import tempfile
+    SLUG = "myproj"
+    TPL = "知識圖譜:{{KG}}"
+    block = _make_check_d_block(TPL, SLUG)
+    # CLAUDE.md 有正常 sentinel
+    claude_content = "# CLAUDE.md\n\n" + block + "\n"
+    with tempfile.TemporaryDirectory() as td:
+        # tpl_content=None → 不建立範本
+        root, vault = _make_check_d_root(td, tpl_content=None,
+                                          claude_content=claude_content, slug=SLUG)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "--vault", str(vault), "doctor", "--ci"],
+            capture_output=True, text=True,
+        )
+        check("doctor_skip_no_template: 無 [D] 不同步 issue",
+              "不同步" not in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_skip_no_template: doctor 整體 0 issues(無範本不誤報)",
+              r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+def t_doctor_broken_reports():
+    """CLAUDE.md 只 START 無 END(broken)→ Check D 報漂移、不 crash。"""
+    import tempfile
+    TPL = "知識圖譜:{{KG}}"
+    SLUG = "myproj"
+    START = ("<!-- LUMOS:GRAPH-DISCIPLINE:START"
+             " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    # 只有 START 無 END(broken)
+    broken_content = "# CLAUDE.md\n\n前言\n\n" + START + "\n只有 START 沒 END\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, vault = _make_check_d_root(td, tpl_content=TPL,
+                                          claude_content=broken_content, slug=SLUG)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "--vault", str(vault), "doctor", "--ci"],
+            capture_output=True, text=True,
+        )
+        check("doctor_broken_reports: 不 crash(無 exception)",
+              r.returncode in (0, 1),
+              f"rc={r.returncode}\nstderr={r.stderr}")
+        check("doctor_broken_reports: 輸出含 [D]",
+              "[D]" in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_broken_reports: 報不同步或損壞訊息",
+              "不同步" in r.stdout or "broken" in r.stdout or "損壞" in r.stdout or "sentinel 損壞" in r.stdout,
+              f"stdout={r.stdout}")
+        check("doctor_broken_reports: --ci 非零 exit",
+              r.returncode != 0,
+              f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+# ── Task 5: LUMOS_VERSION + 版本戳 + nudge ───────────────────────────────────
+
+
+def t_version_stamped_in_sentinel():
+    """reinject 後 CLAUDE.md 的 START 行必須含 LUMOS_VERSION(如 v1.0)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lumos_mod", GRAPHCTL, loader=SourceFileLoader("lumos_mod", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    version = m.LUMOS_VERSION  # 必須存在、格式 vX.Y
+    check("version_stamped: LUMOS_VERSION 常數存在且格式 vX.Y",
+          bool(__import__("re").fullmatch(r"v\d+\.\d+", version)),
+          f"got {version!r}")
+
+    # 建立臨時 root + 範本,跑 reinject,確認 START 行含版本
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        tpl_dir = root / "scripts" / "templates"
+        tpl_dir.mkdir(parents=True)
+        (tpl_dir / "graph-discipline.md").write_text(
+            "{{KG}} 紀律區塊測試", encoding="utf-8")
+        ri = m._reinject_claude_block(root, "myproj")
+        check("version_stamped: reinject created",
+              ri.status == "created", f"status={ri.status}")
+        cm_text = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        # START 行應含版本字串
+        start_line = [l for l in cm_text.splitlines() if m._CLAUDE_START_PREFIX in l]
+        check("version_stamped: START 行存在",
+              len(start_line) == 1, f"lines={start_line}")
+        if start_line:
+            check(f"version_stamped: START 行含 {version}",
+                  version in start_line[0], f"start_line={start_line[0]!r}")
+
+
+def t_version_parse_tolerant():
+    """_parse_sentinel_version:START 行無版本欄位 → 回 None、不 crash。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lumos_mod2", GRAPHCTL, loader=SourceFileLoader("lumos_mod2", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    # 無版本的 START 行
+    old_start = "<!-- LUMOS:GRAPH-DISCIPLINE:START — 自動注入/更新,勿手改 -->"
+    text_no_ver = old_start + "\nbody\n" + "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    result = m._parse_sentinel_version(text_no_ver)
+    check("version_parse_tolerant: 無版本欄位 → None",
+          result is None, f"got {result!r}")
+
+    # 有版本的 START 行
+    ver_start = "<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改 -->"
+    text_with_ver = ver_start + "\nbody\n" + "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    result2 = m._parse_sentinel_version(text_with_ver)
+    check("version_parse_tolerant: 有版本欄位 → 取到 v1.0",
+          result2 == "v1.0", f"got {result2!r}")
+
+    # 完全空字串不 crash
+    result3 = m._parse_sentinel_version("")
+    check("version_parse_tolerant: 空字串 → None 不 crash",
+          result3 is None, f"got {result3!r}")
+
+
+def t_version_bump_not_trigger_guard():
+    """START 行帶舊版本(v0.9),body == 範本 → Check D 淨(0 漂移)。
+    關鍵:版本戳在 START 行(body 外),bump 不觸發內容守衛。"""
+    import tempfile
+    TPL = "知識圖譜路徑:{{KG}}\n\n這是圖譜紀律說明。"
+    SLUG = "myproj"
+    body = TPL.replace("{{KG}}", f"docs/{SLUG}-knowledge/").strip()
+    # START 行帶「舊版本」v0.9,但 body 完全符合範本
+    old_version_start = ("<!-- LUMOS:GRAPH-DISCIPLINE:START v0.9"
+                         " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->")
+    END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+    block_old_version = old_version_start + "\n" + body + "\n" + END
+    claude_content = "# CLAUDE.md\n\n前言\n\n" + block_old_version + "\n\n後記\n"
+    with tempfile.TemporaryDirectory() as td:
+        root, vault = _make_check_d_root(td, tpl_content=TPL,
+                                          claude_content=claude_content, slug=SLUG)
+        r = subprocess.run(
+            [sys.executable, GRAPHCTL, "--vault", str(vault), "doctor", "--ci"],
+            capture_output=True, text=True,
+        )
+        check("version_bump_not_trigger_guard: 版本舊但 body 符合 → 無不同步警告",
+              "不同步" not in r.stdout,
+              f"stdout={r.stdout}")
+        check("version_bump_not_trigger_guard: doctor 整體 0 issues(版本不觸發內容守衛)",
+              r.returncode == 0,
+              f"rc={r.returncode}\nstdout={r.stdout}")
+
+
+def t_version_nudge_when_behind():
+    """fixture CLAUDE v0.9、來源 clone LUMOS_VERSION=v1.0 → nudge 回提示字串。"""
+    import importlib.util, os
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lumos_nudge", GRAPHCTL, loader=SourceFileLoader("lumos_nudge", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    with tempfile.TemporaryDirectory() as td:
+        # 建造臨時「來源 clone」:只需含 scripts/lumos 且其中有 LUMOS_VERSION = "v1.0"
+        src_dir = Path(td) / "fake_src"
+        (src_dir / "scripts").mkdir(parents=True)
+        fake_lumos = src_dir / "scripts" / "lumos"
+        fake_lumos.write_text('LUMOS_VERSION = "v1.0"\n', encoding="utf-8")
+
+        # 建造 CLAUDE.md 含 v0.9 的 START 行
+        ver_start = ("<!-- LUMOS:GRAPH-DISCIPLINE:START v0.9"
+                     " — 自動注入/更新,勿手改 -->")
+        END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+        claude_text = ver_start + "\nbody content\n" + END
+        root = Path(td) / "consumer"
+        root.mkdir()
+        (root / "CLAUDE.md").write_text(claude_text, encoding="utf-8")
+
+        # 用 LUMOS_HOME 指向臨時來源
+        orig_home = os.environ.get("LUMOS_HOME")
+        os.environ["LUMOS_HOME"] = str(src_dir)
+        try:
+            nudge = m._version_nudge(root)
+        finally:
+            if orig_home is None:
+                os.environ.pop("LUMOS_HOME", None)
+            else:
+                os.environ["LUMOS_HOME"] = orig_home
+
+        check("version_nudge_when_behind: 回提示字串(非 None)",
+              nudge is not None, f"got {nudge!r}")
+        if nudge is not None:
+            check("version_nudge_when_behind: 提示含 v0.9 或 v1.0",
+                  "v0.9" in nudge or "v1.0" in nudge, f"nudge={nudge!r}")
+            check("version_nudge_when_behind: 提示含 update 相關字眼",
+                  "update" in nudge or "lumos" in nudge.lower(),
+                  f"nudge={nudge!r}")
+
+
+def t_nudge_skip_when_no_source():
+    """_lumos_src() 指向不存在路徑 → _version_nudge 回 None、不 crash。"""
+    import importlib.util, os
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lumos_ns", GRAPHCTL, loader=SourceFileLoader("lumos_ns", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    with tempfile.TemporaryDirectory() as td:
+        # CLAUDE.md 含 v0.9
+        ver_start = ("<!-- LUMOS:GRAPH-DISCIPLINE:START v0.9"
+                     " — 自動注入/更新,勿手改 -->")
+        END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+        root = Path(td) / "consumer"
+        root.mkdir()
+        (root / "CLAUDE.md").write_text(
+            ver_start + "\nbody\n" + END, encoding="utf-8")
+
+        # 指向不存在的來源
+        nonexistent = str(Path(td) / "does_not_exist")
+        orig_home = os.environ.get("LUMOS_HOME")
+        os.environ["LUMOS_HOME"] = nonexistent
+        try:
+            nudge = m._version_nudge(root)
+        finally:
+            if orig_home is None:
+                os.environ.pop("LUMOS_HOME", None)
+            else:
+                os.environ["LUMOS_HOME"] = orig_home
+
+        check("nudge_skip_when_no_source: 來源不存在 → None 不 crash",
+              nudge is None, f"got {nudge!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

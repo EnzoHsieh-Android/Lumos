@@ -1,8 +1,8 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-05
-updated: 2026-07-05
+updated: 2026-07-06
 tags:
   - type/project
   - status/doing
