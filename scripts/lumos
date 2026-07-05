@@ -5116,11 +5116,12 @@ def _fold_value_drift(text):
 
 # Module-level compiled regexes for _fold_reverse_omission
 _FOLD_RO_PLACEHOLDER_RE = re.compile(r'<[^>]+>')
-_FOLD_RO_BACKTICK_RE = re.compile(r'`([^`]+)`')
 _FOLD_RO_DDFLAG_RE = re.compile(r'--\w[\w-]*')
 _FOLD_RO_MARKER_RE = re.compile(r'★\w+★')
-_FOLD_RO_DOTNAME_RE = re.compile(r'\b\w+\.\w+\b')
-_FOLD_RO_CAMEL_RE = re.compile(r'\b[A-Z][a-z]+(?:[A-Z][a-z]*)+\b')
+# 帶已知副檔名的檔名(避開純版本號如 1.0);路徑允許中間有 . / -
+_FOLD_RO_FILENAME_RE = re.compile(
+    r'\w[\w./-]*\.(?:json|py|md|sh|txt|kt|cs|vue|js|ts|yml|yaml)\b'
+)
 
 
 def _fold_reverse_omission(text):
@@ -5128,7 +5129,11 @@ def _fold_reverse_omission(text):
 
     掃描域排除 ## …審計修正紀錄 段(複用 _FOLD_AUDIT_RECORD_RE/_FOLD_NEXT_H2_RE)。
     排除 <…> placeholder(r2-F5)。
-    抽顯著 token:--flag、★MARKER★、\\w+\\.\\w+ 檔名、CamelCase、backtick code。
+    抽顯著 token(high-signal 三類):
+      1. --flag(--\w[\w-]*)
+      2. ★MARKER★(★...★)
+      3. 帶已知副檔名的檔名(\w[\w./-]*\.{ext})
+    不抽 backtick 內容與裸 CamelCase(技術 spec 噪音主源)。
     主軸:body 有、summary 無 → 一筆 {token, present_in, missing_in}。
 
     Returns list[dict] with keys: token, present_in, missing_in.
@@ -5170,27 +5175,25 @@ def _fold_reverse_omission(text):
         return _FOLD_RO_PLACEHOLDER_RE.sub(' ', s)
 
     def _extract_tokens(s):
-        """Extract significant tokens from string s, excluding <...> placeholders."""
+        """Extract high-signal tokens from string s, excluding <...> placeholders.
+
+        Three token classes:
+          1. --flag (--\w[\w-]*)
+          2. ★MARKER★
+          3. Filenames with known extensions (\w[\w./-]*\.{known_ext})
+        Backtick content and bare CamelCase are intentionally excluded (noise sources).
+        """
         s = FENCE_RE.sub("", s)
         s = _strip_placeholders(s)
         tokens = set()
-        # backtick code: capture the content inside backticks
-        # (placeholders already stripped by _strip_placeholders, so no fullmatch guard needed)
-        for m2 in _FOLD_RO_BACKTICK_RE.finditer(s):
-            content = m2.group(1).strip()
-            if content:
-                tokens.add(content)
         # --flags
         for m2 in _FOLD_RO_DDFLAG_RE.finditer(s):
             tokens.add(m2.group(0))
         # ★MARKER★
         for m2 in _FOLD_RO_MARKER_RE.finditer(s):
             tokens.add(m2.group(0))
-        # \w+.\w+ filenames (but not if they look like placeholder remnants)
-        for m2 in _FOLD_RO_DOTNAME_RE.finditer(s):
-            tokens.add(m2.group(0))
-        # CamelCase
-        for m2 in _FOLD_RO_CAMEL_RE.finditer(s):
+        # filenames with known extensions
+        for m2 in _FOLD_RO_FILENAME_RE.finditer(s):
             tokens.add(m2.group(0))
         return tokens
 
