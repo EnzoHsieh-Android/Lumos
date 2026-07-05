@@ -2324,7 +2324,8 @@ def run_lumos_capture(args):
 
 def make_tmp_spec_consistent():
     """建立一個無 drift 的暫存 spec 檔路徑(str)。
-    最小化 token,確保 value_drift=[] 且 reverse_omission=[]。
+    含 ```json fence(token 不出現於 summary)→ 證明 FENCE_RE 剝除後 reverse_omission=[]。
+    確保 value_drift=[] 且 reverse_omission=[]。
     """
     import tempfile
     text = (
@@ -2337,6 +2338,10 @@ def make_tmp_spec_consistent():
         "# 一致測試 spec\n"
         "\n"
         "§1 描述:介面設計說明。\n"
+        "\n"
+        "```json\n"
+        '{"fenceOnlyToken": "shouldNotFlag"}\n'
+        "```\n"
     )
     f = tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8")
     f.write(text)
@@ -2370,18 +2375,23 @@ def make_tmp_spec_with_node_path_drift():
 
 def t_fold_check_rc_json():
     import json
-    clean = make_tmp_spec_consistent()      # 無 drift
-    assert run_lumos(["fold-check", clean]) == 0
+    import os
+    clean = make_tmp_spec_consistent()      # 無 drift,含 json fence
     drifty = make_tmp_spec_with_node_path_drift()
-    assert run_lumos(["fold-check", drifty]) == 1
-    out = json.loads(run_lumos_capture(["fold-check", drifty, "--json"]))
-    assert set(out) == {"path", "mirror_sections", "value_drift", "reverse_omission"}
-    check("fold_check_rc_json: clean spec → rc 0", run_lumos(["fold-check", clean]) == 0, "")
-    check("fold_check_rc_json: drifty spec → rc 1", run_lumos(["fold-check", drifty]) == 1, "")
-    check("fold_check_rc_json: --json keys 符合 schema", set(out) == {"path", "mirror_sections", "value_drift", "reverse_omission"}, str(set(out)))
-    check("fold_check_rc_json: value_drift 非空(drift spec)", len(out["value_drift"]) > 0, str(out["value_drift"]))
-    check("fold_check_rc_json: mirror_sections 是 list", isinstance(out["mirror_sections"], list), str(out["mirror_sections"]))
-    check("fold_check_rc_json: reverse_omission 是 list", isinstance(out["reverse_omission"], list), str(out["reverse_omission"]))
+    try:
+        out = json.loads(run_lumos_capture(["fold-check", drifty, "--json"]))
+        check("fold_check_rc_json: clean spec → rc 0", run_lumos(["fold-check", clean]) == 0, "")
+        check("fold_check_rc_json: drifty spec → rc 1", run_lumos(["fold-check", drifty]) == 1, "")
+        check("fold_check_rc_json: --json keys 符合 schema", set(out) == {"path", "mirror_sections", "value_drift", "reverse_omission"}, str(set(out)))
+        check("fold_check_rc_json: value_drift 非空(drift spec)", len(out["value_drift"]) > 0, str(out["value_drift"]))
+        check("fold_check_rc_json: mirror_sections 是 list", isinstance(out["mirror_sections"], list), str(out["mirror_sections"]))
+        check("fold_check_rc_json: reverse_omission 是 list", isinstance(out["reverse_omission"], list), str(out["reverse_omission"]))
+    finally:
+        for p in (clean, drifty):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 def t_context_valid_under_warning():
