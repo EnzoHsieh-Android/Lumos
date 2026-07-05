@@ -18,6 +18,7 @@ summary: |-
   DECISION:實作用 subagent-driven-development;merge 前全 test_lumos.py + 對現有 spec 跑 fold-check 回歸不誤傷
   DEP:[[design-loop折入守衛_計劃]]
   TEST:T1 PASS(4/4 checks pass,508 passed 0 failed full suite;2026-07-05)
+  TEST:T2 PASS(_fold_value_drift;全文域+排除審計紀錄段;508 passed 0 failed full suite;2026-07-05)
 ---
 # design-loop 折入守衛 Implementation Plan
 
@@ -69,7 +70,7 @@ def t_fold_mirror_sections():
 
 **Interfaces:** Produces: `_fold_value_drift(text) -> list[dict]`(每筆 `{key, a, b}`;掃描域排審計紀錄段)。
 
-- [ ] **Step 1: 失敗測試**
+- [x] **Step 1: 失敗測試**
 ```python
 def t_fold_value_drift():
     text = "§1 用 `fold-check <node>`\n§2 用 `fold-check <path>`\n## §9 審計修正紀錄\nfold-check <node> 舊史"
@@ -80,10 +81,10 @@ def t_fold_value_drift():
     assert len([x for x in d if x["key"]=="fold-check"]) == 1
     assert _fold_value_drift("只有 `fold-check <path>` 一種") == []   # 一致→無 flag
 ```
-- [ ] **Step 2: FAIL**。
-- [ ] **Step 3: 實作** — 見設計 §2.2:先切掉 `## …審計修正紀錄` 段;掃值 pattern(`\d+\.\.\w+`/`\d+min`/`§\d+`/`fold-check \S+` 類「識別詞+值」),同識別詞不同值 → 一筆。單一抽取法(不混兩法)。
-- [ ] **Step 4: PASS**。
-- [ ] **Step 5: Commit** `feat(fold-check): value-drift 全文域(單一法、排除審計紀錄段)`
+- [x] **Step 2: FAIL**。
+- [x] **Step 3: 實作** — 見設計 §2.2:先切掉 `## …審計修正紀錄` 段;掃值 pattern(`\d+\.\.\w+`/`\d+min`/`§\d+`/`fold-check \S+` 類「識別詞+值」),同識別詞不同值 → 一筆。單一抽取法(不混兩法)。
+- [x] **Step 4: PASS**。
+- [x] **Step 5: Commit** `feat(fold-check): value-drift 全文域(單一法、排除審計紀錄段)`
 
 ---
 

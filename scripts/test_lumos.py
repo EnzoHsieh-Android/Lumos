@@ -2262,6 +2262,17 @@ def t_fold_mirror_sections():
     check("fold_mirror_sections: json fence 算鏡像段", any("json" in s.lower() for s in secs), str(secs))
 
 
+def t_fold_value_drift():
+    m = _import_lumos()
+    text = "§1 用 `fold-check <node>`\n§2 用 `fold-check <path>`\n## §9 審計修正紀錄\nfold-check <node> 舊史"
+    d = m._fold_value_drift(text)
+    keys = [x["key"] for x in d]
+    assert "fold-check" in keys                    # 全文域 body↔body(r2-F1)
+    # 審計紀錄段的 <node> 不算(r2:排除掃描)——不應因它多一筆
+    assert len([x for x in d if x["key"]=="fold-check"]) == 1
+    assert m._fold_value_drift("只有 `fold-check <path>` 一種") == []   # 一致→無 flag
+
+
 def t_context_valid_under_warning():
     import datetime
     v = mkvault()
