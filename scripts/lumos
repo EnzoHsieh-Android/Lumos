@@ -31,10 +31,19 @@ import re
 import sys
 import time
 import unicodedata
-from collections import defaultdict, deque
+from collections import defaultdict, deque, namedtuple
 from pathlib import Path
 
 _IS_WIN = os.name == "nt"
+
+# ── CLAUDE.md sentinel 常數(Task 1: reinject)────────────────────────────────
+# START 行後面可能帶版本戳與說明(e.g. " v1.2 — 勿手改 -->"),故用前綴 find。
+_CLAUDE_START_PREFIX = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
+_CLAUDE_END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+# BlockSpan: body=兩 sentinel 之間的內容(strip 首尾空行),
+#            body_start/body_end=body 在原 text 中的字元位移,
+#            保證 text[body_start:body_end] == body。
+BlockSpan = namedtuple("BlockSpan", "body body_start body_end")
 
 FENCE_RE = re.compile(r"^```.*?^```", re.S | re.M)
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
@@ -3464,6 +3473,81 @@ def _deinit_unbar_gate(root: Path) -> int:
     if r.returncode not in (0, 5):
         print(f"  ⚠ git config --unset core.hooksPath rc={r.returncode}(續行)", file=sys.stderr)
     return r.returncode
+
+
+def _extract_claude_block_span(text: str):
+    """定位 CLAUDE.md 中的 LUMOS:GRAPH-DISCIPLINE sentinel 區塊,回傳三態。
+
+    回傳 (state, span):
+      "found"  → span 是 BlockSpan(body, body_start, body_end);
+                 body = START 行結尾 \\n 之後、END 行開頭之前的子字串,strip 首尾空行;
+                 保證 text[body_start:body_end] == body。
+      "absent" → (START 前綴出現 0 次 且 END 出現 0 次) → ("absent", None)
+                 乾淨「沒這塊」,T2 可安全附加。
+      "broken" → 只 START 沒 END / 只 END 沒 START / END 在 START 前 /
+                 START 前綴出現 > 1 次 → ("broken", None)
+                 有殘跡但壞了,不可盲改。
+    """
+    start_count = 0
+    idx = 0
+    si = -1
+    # 計算 START 前綴出現次數,同時記第一次位置
+    while True:
+        pos = text.find(_CLAUDE_START_PREFIX, idx)
+        if pos == -1:
+            break
+        start_count += 1
+        if start_count == 1:
+            si = pos
+        idx = pos + 1
+
+    ei = text.find(_CLAUDE_END)
+
+    has_start = start_count > 0
+    has_end = ei != -1
+
+    # absent: 兩者皆無
+    if not has_start and not has_end:
+        return ("absent", None)
+
+    # broken: 只有其中一個 / 重複 START / END 在 START 前
+    if start_count > 1:
+        return ("broken", None)
+    if has_start and not has_end:
+        return ("broken", None)
+    if has_end and not has_start:
+        return ("broken", None)
+    if ei < si:
+        return ("broken", None)
+
+    # found: si = START 行首字元;找該行結尾(含 \n)
+    nl_after_start = text.find("\n", si)
+    if nl_after_start == -1:
+        # START 行是檔案最後一行,無換行 → 無 body
+        body_raw_start = len(text)
+    else:
+        body_raw_start = nl_after_start + 1  # body 從 START 行下一字元開始
+
+    # body 結束 = END 行開頭字元
+    body_raw_end = ei  # text[body_raw_start:body_raw_end] 是未 strip 的 body
+
+    raw_body = text[body_raw_start:body_raw_end]
+
+    # strip 首尾空白行(只去掉 \n,保留內部縮排)
+    stripped = raw_body.strip("\n")
+
+    if stripped:
+        # 在 raw_body 中找 stripped 的真實位移
+        inner_start = raw_body.find(stripped)
+        body_start = body_raw_start + inner_start
+        body_end = body_start + len(stripped)
+    else:
+        # body 全是空白行:body 設為空字串,位移指向 body_raw_start
+        body_start = body_raw_start
+        body_end = body_raw_start
+        stripped = ""
+
+    return ("found", BlockSpan(body=stripped, body_start=body_start, body_end=body_end))
 
 
 def _deinit_strip_claude(root: Path) -> bool:

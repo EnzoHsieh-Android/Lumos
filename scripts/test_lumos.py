@@ -5944,6 +5944,108 @@ def t_codeloop_guard_prepush():
               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
 
 
+# ── Task 1: _extract_claude_block_span 三態 ────────────────────────────────
+
+def _import_lumos_for_reinject():
+    """Task 1 用:用 SourceFileLoader 載入 lumos 模組(無 .py 副檔名)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("lumos_reinject_mod", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lumos_reinject_mod", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+def t_extract_span_found():
+    """found 態:兩 sentinel 齊全 → body 正確 + 位移對齊;START 帶版本戳亦 found。"""
+    mod = _import_lumos_for_reinject()
+
+    fn = mod._extract_claude_block_span
+    START_PREFIX = mod._CLAUDE_START_PREFIX
+    END = mod._CLAUDE_END
+
+    # 基本版:START 行無版本戳
+    start_line = START_PREFIX + " -->"
+    text = f"before\n{start_line}\nbody line A\nbody line B\n{END}\nafter\n"
+    state, span = fn(text)
+    check("extract_span_found: state==found(無版本戳)", state == "found", f"state={state!r}")
+    check("extract_span_found: span not None", span is not None, "span is None")
+    if span is not None:
+        expected_body = "body line A\nbody line B"
+        check("extract_span_found: body 正確", span.body == expected_body,
+              f"body={span.body!r}")
+        check("extract_span_found: text[body_start:body_end]==body",
+              text[span.body_start:span.body_end] == span.body,
+              f"text[{span.body_start}:{span.body_end}]={text[span.body_start:span.body_end]!r} vs body={span.body!r}")
+
+    # 版本戳版:START 行後面帶 " v1.2 — 勿手改 -->"
+    start_line_v = START_PREFIX + " v1.2 — 勿手改 -->"
+    text2 = f"preamble\n{start_line_v}\ncontent here\n{END}\nfooter\n"
+    state2, span2 = fn(text2)
+    check("extract_span_found: 版本戳 START → 仍 found", state2 == "found",
+          f"state={state2!r}")
+    check("extract_span_found: 版本戳 body 正確", span2 is not None and span2.body == "content here",
+          f"span2={span2!r}")
+    if span2 is not None:
+        check("extract_span_found: 版本戳 text[body_start:body_end]==body",
+              text2[span2.body_start:span2.body_end] == span2.body,
+              f"text2[{span2.body_start}:{span2.body_end}]={text2[span2.body_start:span2.body_end]!r} vs {span2.body!r}")
+
+
+def t_extract_span_absent():
+    """absent 態:純文字無任何 sentinel → ("absent", None)。"""
+    mod = _import_lumos_for_reinject()
+    fn = mod._extract_claude_block_span
+
+    # 完全無 sentinel
+    state, span = fn("some text\nno markers here\n")
+    check("extract_span_absent: 無 sentinel → absent", state == "absent",
+          f"state={state!r}")
+    check("extract_span_absent: span is None", span is None, f"span={span!r}")
+
+    # 空字串
+    state2, span2 = fn("")
+    check("extract_span_absent: 空字串 → absent", state2 == "absent",
+          f"state={state2!r}")
+
+
+def t_extract_span_broken():
+    """broken 態:只START無END / 只END無START / END在START前 / START出現兩次。"""
+    mod = _import_lumos_for_reinject()
+    fn = mod._extract_claude_block_span
+    START_PREFIX = mod._CLAUDE_START_PREFIX
+    END = mod._CLAUDE_END
+
+    start_line = START_PREFIX + " -->"
+
+    # 只 START 無 END
+    text_a = f"text\n{start_line}\nbody\n"
+    sa, spa = fn(text_a)
+    check("extract_span_broken: 只START無END → broken", sa == "broken",
+          f"state={sa!r}")
+    check("extract_span_broken: 只START無END → span None", spa is None, f"span={spa!r}")
+
+    # 只 END 無 START
+    text_b = f"text\nbody\n{END}\n"
+    sb, spb = fn(text_b)
+    check("extract_span_broken: 只END無START → broken", sb == "broken",
+          f"state={sb!r}")
+    check("extract_span_broken: 只END無START → span None", spb is None, f"span={spb!r}")
+
+    # END 在 START 前
+    text_c = f"{END}\nbody\n{start_line}\n"
+    sc, spc = fn(text_c)
+    check("extract_span_broken: END在START前 → broken", sc == "broken",
+          f"state={sc!r}")
+
+    # START 出現兩次
+    text_d = f"{start_line}\nbody\n{start_line}\n{END}\n"
+    sd, spd = fn(text_d)
+    check("extract_span_broken: START出現兩次 → broken", sd == "broken",
+          f"state={sd!r}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

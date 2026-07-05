@@ -16,7 +16,7 @@ summary: |-
   KEY:T1 marker常數+_extract_claude_block_span 三態→ T2 _reinject_claude_block(5-status+diff+半壞+BOM)→ T3 解耦_scaffold+接線_vendor_toolchain/cmd_init→ T4 doctor Check D 漂移守衛→ T5 LUMOS_VERSION+版本戳+nudge→ T6 圖譜回填+回歸+anchor
   DECISION:subagent-driven TDD;基線=先跑 test_lumos.py 取
   DEP:[[CLAUDE注入re-sync與版本標籤_計劃]]
-  TEST:未開工
+  TEST:T1 DONE — 16 checks green(t_extract_span_found/absent/broken);全量 752 passed(基線 736)
 ---
 # CLAUDE 注入 re-sync + 版本標籤 Implementation Plan
 
@@ -44,11 +44,11 @@ summary: |-
 
 **Interfaces:** `_CLAUDE_START_PREFIX = "<!-- LUMOS:GRAPH-DISCIPLINE:START"`、`_CLAUDE_END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"`;`BlockSpan = namedtuple("BlockSpan","body body_start body_end")`;`_extract_claude_block_span(text) -> (state, span)`,state ∈ `"found"|"absent"|"broken"`,found 帶 BlockSpan、其餘 None。
 
-- [ ] **Step 1 失敗測試**:`t_extract_span_found`(完整 START..END→body/位移正確、含版本戳的 START 行仍 found)、`t_extract_span_absent`(無 sentinel→("absent",None))、`t_extract_span_broken`(只START/只END/END在START前→("broken",None))。
-- [ ] **Step 2 FAIL**:`python3 scripts/test_lumos.py -k extract_span`
-- [ ] **Step 3 實作**:prefix-based find START(用 `_CLAUDE_START_PREFIX`,對版本後綴穩健)+ 找該行 `\n`;find END;三態判斷;body=兩 sentinel 行之間、strip 首尾空白行;body_start/body_end=位移。
-- [ ] **Step 4 PASS**。
-- [ ] **Step 5 Commit** `feat(reinject): _extract_claude_block_span 三態 + marker 常數`
+- [x] **Step 1 失敗測試**:`t_extract_span_found`(完整 START..END→body/位移正確、含版本戳的 START 行仍 found)、`t_extract_span_absent`(無 sentinel→("absent",None))、`t_extract_span_broken`(只START/只END/END在START前→("broken",None))。
+- [x] **Step 2 FAIL**:`python3 scripts/test_lumos.py -k extract_span`
+- [x] **Step 3 實作**:prefix-based find START(用 `_CLAUDE_START_PREFIX`,對版本後綴穩健)+ 找該行 `\n`;find END;三態判斷;body=兩 sentinel 行之間、strip 首尾空白行;body_start/body_end=位移。
+- [x] **Step 4 PASS**:16 checks green,全量 752 passed(基線 736)。
+- [x] **Step 5 Commit** `feat(reinject): _extract_claude_block_span 三態 + marker 常數`
 
 ---
 
