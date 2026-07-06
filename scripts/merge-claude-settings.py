@@ -69,18 +69,9 @@ HOOK_ENTRIES = {
                 }
             ]
         },
-        {
-            # code-loop 必用守衛:Stop 末注入 nag(tier=high 未過 code-loop)。
-            # 只注入不擋回合(Stop 分不出做完/中途,擋會每回合卡死)。
-            # 設計 §1:Stop hook 只注入 nag。
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": _hook_cmd("code-loop-guard.py"),
-                    "timeout": 30,
-                }
-            ]
-        },
+        # NOTE(2026-07-06):code-loop-guard Stop nag 已移除——每回合注入太擾民。
+        # code-loop 把關改由 pre-push git hook(scripts/hooks/pre-push)在 push 時單點強制,
+        # 不再每回合 nag。此 merge 冪等只加不減,既有機器需手動從 ~/.claude/settings.json 移除舊 Stop entry。
     ],
 }
 

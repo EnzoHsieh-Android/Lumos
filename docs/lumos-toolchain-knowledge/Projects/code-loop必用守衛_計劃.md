@@ -23,6 +23,12 @@ summary: |-
   TEST:待實作
 verified_by:
   - "[[Verification/2026-07-05_code-loop必用守衛]]"
+decisions:
+  - content: 撤除 Stop hook 每回合 code-loop nag,強制改由 pre-push git hook 單點把關
+    context: 每回合 Stop 注入 nag(tier=high 未過 code-loop)實際使用太擾民,連續刷屏;pre-push 本就在 push 時 blocking 擋,Stop nag 只是提前提醒、非必要
+    why_chosen: push 才是真正需要把關的時點;移除 Stop nag 保留 pre-push 強制,安靜且不失守
+    decided: 2026-07-06
+    valid: true
 ---
 # code-loop 必用守衛_計劃
 
