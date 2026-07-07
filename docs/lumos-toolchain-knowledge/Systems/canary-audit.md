@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-06-26
+updated: 2026-07-07
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -14,6 +14,7 @@ summary: |-
   KEY:test-the-tester——這套方法論把判斷外包乾淨審計員,canary 是「注意力下限」探針,擋掉『審計員根本沒讀/只吐通用回應』失敗模式
   KEY:協議是主體(skill 規則),lumos 只做極小 helper:record 留痕 + gov 唯讀彙整;lumos 不 spawn agent、植入/判定留在對話/skill 層
   KEY:提交的文件永遠不含 canary;token(CANARY-<hex>)只是定位記號,非「抓到」的機械證明——唯一算數的是審計員正確描述了那個瑕疵
+  KEY:誠實天花板新增(2026-07-07)——eval-awareness 有實證:Anthropic 工作空間論文讀到被評估時的 fake/fictional 內部表徵;canary 隱含前提「審計員沒察覺被測」是實在失效模式,行為層 caught/missed 分不出「真醒」vs「知道被測所以演醒」;詳見身體〈天花板〉〈外部佐證〉
   KEY:auto-mint token 用 secrets.token_hex(非時間戳:秒解析度同秒會撞被 dedup 誤折);每筆 token 唯一供 gov dedup 第 5 鑑別子
   KEY:gov dedup key 第 5 子用 r.get("token","")(不可 r["token"]——舊三源無此鍵會 KeyError 弄爆 gov);只 canary mapper 輸出 token 鍵
   DEP:scripts/lumos cmd_canary｜cmd_gov(.canary-log.jsonl 第 4 源)｜env.vault.parent 定位寫入｜skills/lumos-project-notes(canary 協議)
@@ -61,6 +62,11 @@ decisions:
 
 ## 天花板(誠實合約)
 抓到 canary 只證明審計員**醒到足以抓那一個、那一類、那一段**的植入瑕疵,**不證明抓到所有真實瑕疵**。canary 抓得到的失敗模式 = 「審計員根本沒讀 / 只吐通用回應」;**抓不到**的 = 「讀了、但對複雜權衡判斷錯」——後者 canary 無能為力,別在密集 spec 上因 canary pass 就過度信任。迴歸沒閉合:判定者=植入者本人,無外部檢查,canary 是**降低放水機率的摩擦**,非閉合驗證迴路。
+
+**eval-awareness(2026-07-07 補,有實證了)**:canary 還有一個隱含前提——**審計員沒察覺自己被測**。Anthropic 工作空間論文(見下〈外部佐證〉)用 J-lens 直接在模型內部讀到被評估時的「fake / fictional」表徵,證明 **eval-awareness 是實在的失效模式,非杞人憂天**:審計員可能「察覺了但配合演出」,行為層的 caught/missed 完全無法區分「真醒著」與「知道被測所以表現醒著」。現行 canary 是行為代理,關不掉這格;未來 interpretability 探針若進到 API 層,「驗審計員醒著」可望從行為代理升級為**直接讀取工作空間**。
+
+## 外部佐證(2026-07-07)
+- **Anthropic〈Verbalizable representations and a global workspace in LLMs〉**(transformer-circuits.pub/2026/workspace):J-lens 找到模型中間層的全局工作空間(~20-25 個活躍概念、<10% 激活量),**言述與內部推理共用同一批表徵**(反事實反思訓練:訓練「說出」倫理原則 → 未提示情境行為自己變好;消融即回退)。對本系統三個含義:① 對齊審計讀到 "fake/secretly/trick" = 「刻意繞+不誠實」那格的白箱路徑;② eval-awareness 實證(上節);③ 「退場必寫/decisions 必寫 why」的言述紀律可能不只留紀錄、是在塑形後續推理——方法論的機理層支持。工作空間極小也解釋 impact 推播與 summary 符號行(一行一 KEY)為何適配 AI 讀者。
 
 ## Helper(`scripts/lumos`)
 - `lumos canary record caught|missed [--auditor M] [--token T] [--note ...]` → append 一筆到 `<vault.parent>/.canary-log.jsonl`(`cmd_canary`,用 `env.vault.parent` 定位、不額外載圖)。
