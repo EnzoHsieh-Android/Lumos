@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 SETTINGS = Path.home() / ".claude" / "settings.json"
+HOOKS_DIR = Path.home() / ".claude" / "hooks"
 
 _PY = shutil.which("python3") or shutil.which("python") or "python3"
 # W3:${HOME} 只有 POSIX shell 展開;native Windows(Claude Code 經 cmd/PowerShell 跑 hook)
@@ -71,9 +72,37 @@ HOOK_ENTRIES = {
         },
         # NOTE(2026-07-06):code-loop-guard Stop nag 已移除——每回合注入太擾民。
         # code-loop 把關改由 pre-push git hook(scripts/hooks/pre-push)在 push 時單點強制,
-        # 不再每回合 nag。此 merge 冪等只加不減,既有機器需手動從 ~/.claude/settings.json 移除舊 Stop entry。
+        # 不再每回合 nag。(2026-07-07 起懸空註冊由 _prune_dangling 自動清,不再需手動。)
     ],
 }
+
+
+def _prune_dangling(settings: dict) -> list:
+    """剪掉指向 ~/.claude/hooks/ 下「不存在檔案」的 hook 註冊(懸空只會每回合報錯)。
+    起因 2026-07-07 現場事故:code-loop-guard.py 被工具鏈更新刪除、settings 註冊沒清 →
+    每回合「檔案不存在」。只動 command 含 `.claude/hooks/` 的項;使用者自訂
+    (指向他處)的 command 一律不碰。回傳被剪的 (event, script) 列表。"""
+    pruned = []
+    for event, entries in list(settings.get("hooks", {}).items()):
+        kept_entries = []
+        for entry in entries:
+            kept_hooks = []
+            for h in entry.get("hooks", []):
+                cmd = h.get("command", "")
+                if ".claude/hooks/" in cmd.replace("\\", "/"):
+                    script = _hook_script(cmd)
+                    if script.endswith(".py") and not (HOOKS_DIR / script).exists():
+                        pruned.append((event, script))
+                        continue
+                kept_hooks.append(h)
+            if kept_hooks or not entry.get("hooks"):
+                entry = dict(entry)
+                if "hooks" in entry:
+                    entry["hooks"] = kept_hooks
+                kept_entries.append(entry)
+            # else:整組 hooks 都懸空 → entry 一併剪
+        settings["hooks"][event] = kept_entries
+    return pruned
 
 
 def _hook_script(cmd: str):
@@ -104,6 +133,11 @@ def main() -> int:
 
     settings.setdefault("hooks", {})
     changed = False
+
+    # 先清懸空(腳本已被刪、註冊還在 → 每回合報錯),再 merge
+    for event, script in _prune_dangling(settings):
+        print(f"  [prune] {event} hook → {script}(檔案不存在,懸空註冊已清)")
+        changed = True
 
     for event, entries_to_add in HOOK_ENTRIES.items():
         existing = settings["hooks"].setdefault(event, [])

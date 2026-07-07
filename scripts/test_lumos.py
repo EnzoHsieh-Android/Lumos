@@ -5606,6 +5606,60 @@ def t_codeloop_guard_verdict():
 
 # ── Task 3: code-loop-guard Stop hook ────────────────────────────────────────
 
+def t_merge_settings_prunes_dangling():
+    """hook 卸載殘留註冊(2026-07-07 現場事故):腳本被工具鏈更新刪除、settings 註冊沒清
+    → 每回合報「檔案不存在」。修:merge 前剪掉指向 ~/.claude/hooks/ 下不存在檔案的註冊;
+    使用者自訂(不在 hooks 目錄下)的 command 不碰。"""
+    import importlib.util as _ilu
+    import json
+    spec_path = Path(__file__).resolve().parent / "merge-claude-settings.py"
+    spec = _ilu.spec_from_file_location("mcs_prune", spec_path)
+    mcs = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mcs)
+
+    with tempfile.TemporaryDirectory() as td:
+        hooks_dir = Path(td) / "hooks"
+        hooks_dir.mkdir()
+        (hooks_dir / "check-graph-sync.py").write_text("# ok\n", encoding="utf-8")
+        settings_path = Path(td) / "settings.json"
+        settings_path.write_text(json.dumps({
+            "hooks": {
+                "Stop": [
+                    {"hooks": [{"type": "command",
+                                "command": 'python3 "${HOME}/.claude/hooks/check-graph-sync.py"',
+                                "timeout": 10}]},
+                    {"hooks": [{"type": "command",
+                                "command": 'python3 "${HOME}/.claude/hooks/code-loop-guard.py"',
+                                "timeout": 15}]},
+                ],
+                "SessionStart": [
+                    {"hooks": [{"type": "command",
+                                "command": "/usr/local/bin/my-custom-hook.sh"}]},
+                ],
+            }
+        }, ensure_ascii=False), encoding="utf-8")
+
+        orig_s, orig_h = mcs.SETTINGS, mcs.HOOKS_DIR
+        mcs.SETTINGS, mcs.HOOKS_DIR = settings_path, hooks_dir
+        try:
+            rc = mcs.main()
+        finally:
+            mcs.SETTINGS, mcs.HOOKS_DIR = orig_s, orig_h
+
+        check("prune_dangling: rc==0", rc == 0, f"rc={rc}")
+        out = json.loads(settings_path.read_text(encoding="utf-8"))
+        stop_cmds = [h.get("command", "") for e in out["hooks"].get("Stop", [])
+                     for h in e.get("hooks", [])]
+        check("prune_dangling: 懸空 code-loop-guard 註冊被剪",
+              not any("code-loop-guard" in c for c in stop_cmds), f"stop={stop_cmds}")
+        check("prune_dangling: 有效 check-graph-sync 保留",
+              any("check-graph-sync" in c for c in stop_cmds), f"stop={stop_cmds}")
+        custom = [h.get("command", "") for e in out["hooks"].get("SessionStart", [])
+                  for h in e.get("hooks", [])]
+        check("prune_dangling: 使用者自訂 hook(非 hooks 目錄)不碰",
+              any("my-custom-hook" in c for c in custom), f"custom={custom}")
+
+
 def t_codeloop_guard_hook_registration():
     """ADR 2026-07-06(code-loop必用守衛_計劃):撤除 Stop nag、pre-push 單點把關。
     守住這個移除決定——HOOK_ENTRIES 不得再含 code-loop-guard(誤加回=違反 ADR)。"""
