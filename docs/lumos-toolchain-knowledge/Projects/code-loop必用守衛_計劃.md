@@ -12,6 +12,7 @@ related:
   - "[[anchor-integrity]]"
 summary: |-
   FLAG:DECISION
+  KEY:⚠現行(2026-07-06 ADR,見 decisions):Stop nag 已撤除(每回合刷屏太擾民)——守衛=pre-push 單點 blocking;hook 檔/註冊/複製清單已對稱清除,t_codeloop_guard_hook_registration 翻向守「不得加回」
   KEY:收 code-loop「靠記得調用」破口——pitfalls tier=high 目前只 pre-push advisory、靠 Claude 記得跑 code-loop。補「訊號→必須使用」:Stop hook 注入 nag(不會忘)+ pre-push 升 blocking(做完那點硬擋)+ skip-marker 顯式逃生留痕
   KEY:判定式(三處共用)=tier=high(pitfalls --diff)AND 無有效 code-loop 收斂紀錄 AND 無 skip-marker → 該擋/nag
   KEY:Stop hook 只注入不擋(Stop 分不出做完/中途,擋會每回合卡死);pre-push 才硬擋(well-defined 做完點)

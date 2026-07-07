@@ -44,7 +44,7 @@ Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**不
 | **對抗審計 loop** | `lumos pitfalls`、`code-loop`、`canary`、`loop`、`fold-check`、`refcheck` | `pitfalls --diff` 分 tier;tier=high 走 canary 護的 `code-loop`(對抗代碼審);`design-loop` 在進實作前審 spec;`fold-check` 抓設計折入漂移。 |
 | **影響 / 完整性** | `lumos impact`、`anchor verify/approve` | `impact` 由改動的檔反查受影響關聯節點(直接/間接)+ 命中事故(`pitfall_when`);`anchor` 守測試/閘檔不被無聲竄改。 |
 | **git hooks** | `scripts/hooks/` | pre-commit 硬擋「改 code 沒帶圖譜」;post-commit 留繞過痕跡;pre-push 跑 `doctor --ci` **+ anchor verify + tier=high 未過 code-loop 硬擋**。 |
-| **Claude hooks** | `scripts/hooks/claude/` | PreToolUse:改 code 前注入 impact 影響半徑;Stop:tier=high 未過 code-loop 注入 nag(只推不擋);PostToolUse:自足性 / verification-rot 後驗。 |
+| **Claude hooks** | `scripts/hooks/claude/` | PreToolUse:改 code 前注入 impact 影響半徑;PostToolUse:自足性 / verification-rot 後驗。(2026-07-06 ADR:撤除 Stop 每回合 code-loop nag——太擾民,code-loop 由 pre-push 單點把關) |
 | **安裝器** | `get.sh`、`get.ps1`、`install.sh`、`scripts/merge-claude-settings.py`(底層 `install-hooks.sh` / `install-graph-toolchain.sh`) | 機器層(`get.*`)+ 專案層(`lumos init`)兩層導入 / 設 hooks / 合併 Claude settings。 |
 | **紀律範本** | `scripts/templates/graph-discipline.md` | 「圖譜先行」紀律,注入各專案 `CLAUDE.md`。 |
 | **skills** | `lumos-project-notes`、`core-knowledge`、`design-loop`、`code-loop`、`pitfalls-gapfill` | 寫給 **AI** 的圖譜讀寫規範與對抗審計 loop 編排(user-scope 共用)。 |
@@ -175,7 +175,7 @@ KEY:★CHECKPOINT★   <改了難救:部署測試機>
 | **impact** | `lumos impact --file <檔>`(+ PreToolUse hook) | 改 code 前推播受影響關聯節點(直/間接)+ 命中事故;推播不擋 |
 | **lint** | `lumos lint <節點>` | 單檔、不掃 repo——預判 pre-push 會不會擋 |
 | **doctor** | `lumos doctor [--ci]` | 全圖:orphan、斷連、`verified_by` 同步、**Check T**(合約→test→audit)、**Check R**(可逆性)、frontmatter lint |
-| **code-loop** | `lumos code-loop check` | tier=high 分支未過對抗代碼審 → Stop hook nag + pre-push 硬擋 |
+| **code-loop** | `lumos code-loop check` | tier=high 分支未過對抗代碼審 → pre-push 單點硬擋 |
 | **pre-push** | `doctor --ci` + `anchor verify` + `code-loop check` | push 前三合一硬擋 |
 
 ---
@@ -216,7 +216,7 @@ lumos sync-verified-by [--apply]                     # 補漏寫的 verified_by(
 **對抗審計 loop / 影響 / 完整性**
 ```bash
 lumos pitfalls --diff <base>..HEAD [--no-lint]       # 掃 diff 隱患、分 tier(standard/high);high → 走 code-loop
-lumos code-loop check [--json]                        # tier=high 未過對抗代碼審 → rc1(Stop nag + pre-push 硬擋)
+lumos code-loop check [--json]                        # tier=high 未過對抗代碼審 → rc1(pre-push 單點硬擋)
 lumos code-loop pass|skip --note "<理由>"            # 記/繞 收斂台帳(綁 HEAD sha;skip 留痕逃生)
 lumos canary record caught|missed --loop <id> ...    # design-loop/code-loop 的 canary 醒著紀錄
 lumos loop status <id> --need 2 --gate               # 收斂閘(K-streak ∧ G1 ∧ G2)

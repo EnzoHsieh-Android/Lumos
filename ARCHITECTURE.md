@@ -11,7 +11,7 @@ flowchart TB
         CLI["scripts/lumos<br/>(python3 標準庫單檔 CLI)"]
         TEST["scripts/test_lumos.py"]
         GHOOKS["scripts/hooks/<br/>git: pre-commit / post-commit / pre-push"]
-        CHOOKS["scripts/hooks/claude/<br/>PreToolUse (impact 注入) · PostToolUse (自足性/rot 後驗)<br/>Stop (code-loop nag)"]
+        CHOOKS["scripts/hooks/claude/<br/>PreToolUse (impact 注入) · PostToolUse (自足性/rot 後驗)"]
         INST["安裝器<br/>get.sh · get.ps1 · install.sh<br/>install-hooks.sh · install-graph-toolchain.sh · merge-claude-settings.py"]
         TPL["scripts/templates/graph-discipline.md<br/>(圖譜先行紀律範本)"]
         RENAME["scripts/graph-rename.sh · fetch-notesmd.sh<br/>(notesmd move 封印)"]
@@ -130,13 +130,12 @@ flowchart TB
 
 ## 4. 強制力管線 (圖譜不腐爛的機制)
 
-由「動手前推播 → commit 把關 → push 硬閘 → CI」四段;訊號主動推到眼前(impact/nag),硬閘擋在提交與推送點。
+由「動手前推播 → commit 把關 → push 硬閘 → CI」四段;訊號主動推到眼前(impact),硬閘擋在提交與推送點。
 
 ```mermaid
 flowchart TB
     subgraph BEFORE["🟣 動手前 (Claude hooks · 推播,不擋)"]
         PRE["PreToolUse: impact-hook<br/>Edit/Write 前注入<br/>受影響關聯節點 + 命中事故 (pitfall_when)"]
-        STOP["Stop: code-loop-guard<br/>tier=high 未過 code-loop → 注入 nag"]
         POSTT["PostToolUse<br/>自足性 / verification-rot 後驗"]
     end
 
@@ -156,7 +155,7 @@ flowchart TB
     classDef push fill:#2a2440,stroke:#9a7bd6,color:#f0ecff
     class PC,PUSH,BLOCK,PB1,PB2,PB3 gate
     class COMMIT,PASS,CI,EDIT ok
-    class BEFORE,PRE,STOP,POSTT push
+    class BEFORE,PRE,POSTT push
 ```
 
-> **地板不是 oracle**:PreToolUse/Stop 是推播(可被無視)、git 閘可 `--no-verify` 繞(自負、留痕)。守得掉「忘了/隨手漏」,守不掉「刻意繞+不誠實」——那留給人。
+> **地板不是 oracle**:PreToolUse 是推播(可被無視)、git 閘可 `--no-verify` 繞(自負、留痕)。守得掉「忘了/隨手漏」,守不掉「刻意繞+不誠實」——那留給人。

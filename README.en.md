@@ -44,7 +44,7 @@ Lumos keeps that knowledge in a graph of Markdown notes (Obsidian-compatible, bu
 | **Adversarial-audit loops** | `lumos pitfalls`, `code-loop`, `canary`, `loop`, `fold-check`, `refcheck` | `pitfalls --diff` classifies findings by tier (standard/high); tier=high branches go through canary-guarded `code-loop` (adversarial code review); `design-loop` audits a spec adversarially *before* implementation; `fold-check` catches design fold-drift. |
 | **Impact / integrity** | `lumos impact`, `anchor verify/approve` | `impact` reverse-looks up graph nodes affected by a changed file (direct + indirect) and surfaces matched incidents via `pitfall_when`; `anchor` guards test/gate files from silent tampering. |
 | **git hooks** | `scripts/hooks/` | pre-commit hard-blocks "code without graph"; post-commit logs any bypass; pre-push runs `doctor --ci` **+ `anchor verify` + hard-blocks tier=high branches that haven't passed `code-loop`**. |
-| **Claude hooks** | `scripts/hooks/claude/` | PreToolUse: injects the impact radius before you edit code; Stop: nags (push only, never blocks the turn) when a tier=high branch hasn't passed `code-loop`; PostToolUse: self-sufficiency / verification-rot post-check. |
+| **Claude hooks** | `scripts/hooks/claude/` | PreToolUse: injects the impact radius before you edit code; PostToolUse: self-sufficiency / verification-rot post-check. (ADR 2026-07-06: the per-turn Stop nag for code-loop was removed — too noisy; enforcement is the pre-push gate alone.) |
 | **Installers** | `get.sh`, `get.ps1`, `install.sh`, `scripts/merge-claude-settings.py` (underlying: `install-hooks.sh` / `install-graph-toolchain.sh`) | Machine layer (`get.*`) + project layer (`lumos init`) — two-step onboarding, hook setup, and Claude settings merge. |
 | **Discipline template** | `scripts/templates/graph-discipline.md` | The "graph-first" rules injected into each project's `CLAUDE.md`. |
 | **Skills** | `lumos-project-notes`, `core-knowledge`, `design-loop`, `code-loop`, `pitfalls-gapfill` | Graph read/write rules and adversarial-audit loop orchestration written *for the AI* (user-scope, shared across projects). |
@@ -179,7 +179,7 @@ Enforcement layers, fastest to hardest:
 | **impact** | `lumos impact --file <file>` (+ PreToolUse hook) | Before editing code: pushes affected graph nodes (direct + indirect) + matched incidents; informational, never blocks |
 | **lint** | `lumos lint <node>` | One file, no repo scan — predicts what pre-push will reject |
 | **doctor** | `lumos doctor [--ci]` | Whole graph: orphans, broken links, `verified_by` sync, **Check T** (contract→test→audit), **Check R** (reversibility), frontmatter lint |
-| **code-loop** | `lumos code-loop check` | tier=high branch not yet passed adversarial code review → Stop hook nag + pre-push hard-block |
+| **code-loop** | `lumos code-loop check` | tier=high branch not yet passed adversarial code review → pre-push single-point hard-block |
 | **pre-push** | `doctor --ci` + `anchor verify` + `code-loop check` | Three-in-one hard gate before every push |
 
 ---
@@ -220,7 +220,7 @@ lumos sync-verified-by [--apply]                     # fix missing verified_by (
 **Adversarial-audit loops / impact / integrity**
 ```bash
 lumos pitfalls --diff <base>..HEAD [--no-lint]       # scan diff for risks, classify by tier (standard/high); high → run code-loop
-lumos code-loop check [--json]                        # tier=high branch not yet passed → rc1 (Stop nag + pre-push hard-block)
+lumos code-loop check [--json]                        # tier=high branch not yet passed → rc1 (pre-push single-point hard-block)
 lumos code-loop pass|skip --note "<reason>"          # record / escape-hatch convergence ledger (pass binds to HEAD sha; skip leaves a trail)
 lumos canary record caught|missed --loop <id> ...    # record design-loop / code-loop canary wakefulness
 lumos loop status <id> --need 2 --gate               # convergence gate (K-streak ∧ G1 ∧ G2)
@@ -294,7 +294,7 @@ lumos gov OrderService   # which gates flagged this node, hard-block vs soft, wi
 
 - **DRY / YAGNI / TDD**, frequent commits; the CLI is stdlib-only and CI-runnable.
 - **Don't over-govern.** Mark only what's load-bearing; soft stays soft; never add ceremony without proportional value.
-- **Honest ceilings.** The gates are a floor and friction, not an oracle. Tools prove *form* (a test exists, a rollback is written, a clean agent reviewed) — never *validation* (the rule is right for today's business, the rollback actually runs). `--no-verify` bypasses git gates — that's self-owned and logged. Stop/PreToolUse Claude hooks are push-only and ignorable. The judgment stays with people.
+- **Honest ceilings.** The gates are a floor and friction, not an oracle. Tools prove *form* (a test exists, a rollback is written, a clean agent reviewed) — never *validation* (the rule is right for today's business, the rollback actually runs). `--no-verify` bypasses git gates — that's self-owned and logged. PreToolUse Claude-hook injections are push-only and ignorable. The judgment stays with people.
 - **Maker ≠ checker.** No-right-answer judgments (is this a real contract? is the test a tautology?) go to an independent, context-free agent — not the author.
 
 ---
