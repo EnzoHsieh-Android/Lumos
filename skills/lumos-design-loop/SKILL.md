@@ -34,6 +34,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 6. **漏抓 → 該輪判決不採信**(仍是一筆 missed record、仍算進 cap):**不折 findings**,直接下一輪(N+1、自動換 canary 類型、framing 加碼)。
 7. **抓到 → 只折辯方存活的真 finding 進 `docs/design/<id>.md`**(被辯方駁倒的不折、已在審計紀錄標「辯方反證:<file:line>」);折時把該輪寫進 spec 的**審計修正紀錄**。寫完紀錄後:**跑 `lumos fold-check docs/design/<id>.md`** → 讀每個 flag、逐段勾「鏡像段與 body 一致」(summary/json fence/審計修正紀錄/誠實天花板)、解掉每個 drift → 確認一致。之後 **`grep -c '<canary token>' docs/design/<id>.md` 必須為 0**(canary 未混進真檔)再 `git commit`(message 記該輪 canary+severity)。
 8. **問收斂**:`lumos loop status <id> --need 2 --gate --spec docs/design/<id>.md --repo <repo根>`(K=2;證據閘=K-streak ∧ G1 引用座標 refcheck ∧ G2 發現枯竭)→ **exit 0(GATE PASS)出 loop**;exit 1 → 回 step 1(逐錨明細指出斷在哪)。
+   - **`[NEEDS CLARIFICATION]` 慣例(borrow:spec-kit)**:spec 內任何未解的 `[NEEDS CLARIFICATION: 問題]` 標記 = **視同 blocker,不得收斂**(gate 前自查 `grep -c 'NEEDS CLARIFICATION' <spec>` 必須 0)。含糊之處寫成這個標記而不是含糊帶過——把「還不確定」變機械可擋。
 
 ## 護欄
 - **連 2 次漏抓**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)**→ 升級**:① sonnet→opus;②(soft、人工判斷)把 spec 切小,獨立子段各自開 loop(v1 不自動化)。
@@ -44,6 +45,6 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 2. **整合性**:canary-caught / severity / 哪些是「誤判」三個都由植入者(你)自己判、無外部檢查——是**沒閉合的迴歸**,不 tamper-proof。loop 是**可觀測 + 摩擦 + 地板**,不是 oracle。
 
 ## 收斂後
-`lumos loop status` exit 0 → 向人**回報收斂 + 上述天花板** → 交 **writing-plans** 出實作計畫 → 實作。
+`lumos loop status` exit 0 → **收斂即凍結(borrow:Giskard meta-evaluation)**:把 spec 快照 + 辯方裁決後的存活 findings 清單凍進 `governance/golden/<loop-id>/`(spec.md + findings.md 兩檔,零判斷成本純搬運)——golden 語料是 auditor 校準的時間資產(語料累到 10+ 份即可做 replay 校準:拿凍結 spec 重跑審計、對照已知 findings 算各模型接住率,決定哪類 spec 直接上 opus)。→ 向人**回報收斂 + 上述天花板** → 交 **writing-plans** 出實作計畫 → 實作。
 
 > 設計全文見 `docs/design/2026-06-19-design-loop-skill.md`(B)與 `…-convergence-recording.md`(A 原語)、`…-canary-audit.md`(canary 機制)。

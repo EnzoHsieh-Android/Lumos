@@ -76,6 +76,11 @@ Agent tool、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 cana
 **framing(refute framing)**:
 「你是外部第三方,這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀、主動找洞:bug、邊界、資源、例外、冪等、併發——逐條標 severity(clean/minor/major/blocker)。附 pitfalls `--diff` manifest 當鏡頭:命中位置逐條判真隱患/誤報,真隱患必答對應提問。」
 
+**抑噪紀律(borrow:PR-Agent 原始碼實證,兩句逐字進 reviewer prompt)**:
+- 「低嚴重度疑慮,**給不出具體失敗場景就不要標**。」
+- 「**不能從 diff 指出具體受影響的 file:line 路徑,就不准臆測『可能會壞別處』**。」
+- ⚠ 刻意**不借** PR-Agent 的 findings 硬上限(num_max_findings=3)——上限會把真 findings 藏到下一輪,污染 G2 發現枯竭的收斂信號;抑噪靠上面兩句紀律,不靠砍量。
+
 > manifest 現含兩種來源的 claim(`source` 欄區分):regex claim(`source:"pitfalls-builtin"`,讀 `question` 對應提問)與 lint claim(`source:"lint:<driver>"`,來自專案 `.lumos/lint.json` 宣告的社群 linter SARIF,讀 `message`——linter 已是具體診斷、無 question 欄)。reviewer 鏡頭對 lint claim 讀 `message`、對 regex claim 仍讀 `question`。
 
 第一次 missed 起加碼 framing:「逐 hunk 讀,你一定找得到至少一個植入的 bug;沒找到就是你沒讀仔細。」
@@ -137,6 +142,14 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 
 在隔離 worktree 對 diff 涉及模組機械植少量變異(運算子翻轉 / 邊界 ±1,3-5 個)→ 跑該模組測試 → **活下來的變異 = 測試沒接住的洞**,列為 finding 回步驟 4。
 零污染:不經 reviewer、不碰真樹。
+
+**算子速查(borrow:Offutt E-selective / PItest / Kurtz FSE 2016)**:
+- 預設植 **ROR(關係算子 `<`↔`<=`↔`==`)+ LCR(邏輯連接子 `and`↔`or`)**——最防禦得住的兩類;計算密集 diff 加 AOR(算術)。**無普適最優集,跟著 diff 的代碼形態選**。
+- 同一個比較式(如 `i < 42`)**非冗餘變異只有 3 個:`i <= 42`、恆 `true`、恆 `false`**——植這 3 個以外是浪費名額(PItest subsumption)。
+
+**結果判讀(borrow:Stryker 語意)**:
+- **timeout → 記 `skipped(timeout)`,不算 finding 也不算存活**(無限迴圈=CI 事實上會接住;兩派工具語意殊途同歸)。
+- 活變異**分兩桶,處置不同**:**Survived**(測試跑到該行但全綠)= 斷言缺口,補斷言;**NoCoverage**(該行根本沒被執行)= 測試整個缺,**更強的 finding、優先補**。判別零成本:變異行改成 `raise` 試跑一次即知有無被執行。
 
 誠實邊界:3-5 個手植變異是抽樣不是覆蓋;活變異=測試缺口的存在證明,死光≠測試充分;flaky 測試會汙染訊號(跑前先確認套件綠)。
 

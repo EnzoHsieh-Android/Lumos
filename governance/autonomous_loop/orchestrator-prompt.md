@@ -48,7 +48,8 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
 5. 你**讀 judge 回報的 severity(不再自評)**,並讀 auditor 報告;**辯方裁決後存活的真 finding 一律折入(不挑、不過濾;這是你寫的 spec 也照折),被辯方駁倒的不折**——折入動作與細節見步驟 7。
 6. python3 scripts/lumos --vault __SCRATCH__/kg canary record <caught|missed> --loop <topic> --severity <步驟 4.5 辯方重算後的存活 max,非自評> --findings <本輪辯方裁決後存活折入的真 finding 條數;canary 不計;missed 輪不折記 0> --auditor opus --token CANARY-AUTO-N --note "rN <摘要>"
 7. caught → **只折辯方存活的真 finding** 進 **__SCRATCH__/spec/__DATE__-<topic>.md**(被辯方駁倒的不折、已標反證)+ 把該輪寫進審計修正紀錄;**折完務必 grep -c CANARY-AUTO-N __SCRATCH__/spec/__DATE__-<topic>.md == 0**。missed → 不折、直接下一輪。
-8. python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need __NEED__ --gate --spec __SCRATCH__/spec/__DATE__-<topic>.md --repo <REPO> → exit 0 表示證據閘全過(K-streak ∧ G1 引用座標 ∧ G2 發現枯竭,逐錨明細見輸出;G2 吃步驟 6 的 --findings)(**但先別停,轉 §2.5 跨家族複核**);撞 __MAXR__ 輪未收斂 → 停(此時跳過 §2.5)。
+8. **gate 前自查**:`grep -c 'NEEDS CLARIFICATION' __SCRATCH__/spec/__DATE__-<topic>.md` 必須 0——spec 內任何未解 `[NEEDS CLARIFICATION: 問題]` 標記=視同 blocker 不得收斂(含糊寫成標記而非含糊帶過;borrow:spec-kit)。然後 python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need __NEED__ --gate --spec __SCRATCH__/spec/__DATE__-<topic>.md --repo <REPO> → exit 0 表示證據閘全過(K-streak ∧ G1 引用座標 ∧ G2 發現枯竭,逐錨明細見輸出;G2 吃步驟 6 的 --findings)(**但先別停,轉 §2.5 跨家族複核**);撞 __MAXR__ 輪未收斂 → 停(此時跳過 §2.5)。
+   **收斂即凍結(§2.5 過後)**:把最終 spec 快照 + 各輪辯方裁決後存活 findings 清單凍進 `<REPO>/governance/golden/<topic>/`(spec.md + findings.md;零判斷純搬運)——golden 語料供日後 auditor replay 校準(borrow:Giskard)。
 
 ### 2.5 跨家族複核(放行前,只在步驟 8 判定收斂時做一次;覆寫步驟 8 的「則停」)
 a. **取材**:對最終原稿 spec 重跑一次 refcheck(`--json`),其 manifest 為 ground-truth **必含底座、不得刪減**;再補語意片段(函數體/欄位定義,步驟 3 查證時已讀過)。誠實邊界:manifest 只保證「引用座標經機械核對」(無行號宣稱僅存在性、有行號僅孤立單行),語意份量仍靠補充段;「不得刪減」是散文規範無機械強制,漏貼可與 auditor 收到的 manifest 對照發現(機械拼接留 v2)。
