@@ -40,6 +40,27 @@ if ! "$PY" "$GRAPHCTL" anchor verify; then
   exit 1
 fi
 
+# 測試套件閘(僅 Lumos 源 repo;2026-07-07):紅測試兩度溜進 main(pre-push 原只跑 doctor 不跑測試)。
+# 事件點修法:push 前全量跑一次(實測 ~32s)。消費專案不跑——skills/ 只存在於源 repo(不 vendor),
+# 消費端自己的測試歸自己的 CI/hooks 管,lumos 不越俎。逃生:git push --no-verify(自負)。
+if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_lumos.py" ]]; then
+  echo "pre-push: 跑 test_lumos.py 全量(源 repo 測試閘,~32s)…" >&2
+  if ! "$PY" "$REPO_ROOT/scripts/test_lumos.py" >/tmp/lumos-prepush-tests.log 2>&1; then
+    {
+      echo ""
+      echo "🚫 pre-push: test_lumos.py 有紅——push 已擋下(完整輸出: /tmp/lumos-prepush-tests.log)"
+      tail -15 /tmp/lumos-prepush-tests.log | sed 's/^/    /'
+      echo ""
+      echo "請選一條:"
+      echo "  1. 修到綠再 push(正途)"
+      echo "  2. 確屬可接受(如 flaky/環境因素) → git push --no-verify(自負)"
+      echo ""
+    } >&2
+    exit 1
+  fi
+  tail -1 /tmp/lumos-prepush-tests.log >&2
+fi
+
 # 代碼偏科 + code-loop 必用守衛(tier=high):push 前把 diff 的代碼形態風險攤在眼前。
 # 只跑快的 regex 層(--no-lint;不跑專案宣告的 lint 指令,免每次 push 卡 detekt 等)。
 # tier=high → 跑 code-loop check:blocked(rc=1)則硬擋 push;否則放行。
