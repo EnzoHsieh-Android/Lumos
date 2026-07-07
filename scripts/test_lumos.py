@@ -5796,6 +5796,85 @@ def t_codeloop_guard_prepush():
               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
 
 
+def t_prepush_test_gate():
+    """pre-push 測試套件閘(2026-07-07,僅 Lumos 源 repo):
+    源 repo 判定 = skills/lumos-project-notes 目錄存在(不 vendor,消費端沒有)。
+    情境:
+      A) 消費 repo(無 skills/)→ 不跑測試(不擾民、不遞迴)
+      B) 源 repo + 假 runner 紅(rc1)→ pre-push rc1 擋 + stderr 提示
+      C) 源 repo + 假 runner 綠(rc0)→ 測試閘放行(無 🚫 測試訊息)
+    假 runner 防遞迴:scripts/test_lumos.py 放可控小腳本,不跑真套件。"""
+    import subprocess as _sp
+    import os as _os
+
+    pre_push_path = str(Path(__file__).resolve().parent / "hooks" / "pre-push")
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+
+    def _mk_repo(d, with_skills, fake_runner_rc=None):
+        _sp.run(["git", "init", "-b", "main", d], capture_output=True)
+        _sp.run(["git", "-C", d, "config", "user.email", "t@t"], capture_output=True)
+        _sp.run(["git", "-C", d, "config", "user.name", "t"], capture_output=True)
+        (Path(d) / "x.txt").write_text("x\n", encoding="utf-8")
+        _sp.run(["git", "-C", d, "add", "."], capture_output=True)
+        _sp.run(["git", "-C", d, "commit", "-m", "init"], capture_output=True)
+        scripts = Path(d) / "scripts"
+        scripts.mkdir(exist_ok=True)
+        lk = scripts / "lumos"
+        if not lk.exists():
+            lk.symlink_to(lumos_real)
+        if with_skills:
+            (Path(d) / "skills" / "lumos-project-notes").mkdir(parents=True, exist_ok=True)
+        if fake_runner_rc is not None:
+            (scripts / "test_lumos.py").write_text(
+                f"import sys\nprint('FAKE-RUNNER rc={fake_runner_rc}')\nsys.exit({fake_runner_rc})\n",
+                encoding="utf-8")
+
+    def _run(d):
+        env = dict(_os.environ)
+        env["GIT_DIR"] = str(Path(d) / ".git")
+        return _sp.run(["bash", pre_push_path], cwd=d,
+                       input="refs/heads/main dummy refs/heads/main dummy\n",
+                       capture_output=True, text=True, env=env)
+
+    # A) 消費 repo(無 skills/,有 test_lumos.py)→ 不跑測試
+    with tempfile.TemporaryDirectory() as d:
+        _mk_repo(d, with_skills=False, fake_runner_rc=1)  # 就算紅也不該被跑
+        r = _run(d)
+        check("prepush_test_gate: 消費 repo 不跑測試(紅假 runner 也放行)",
+              r.returncode == 0 and "FAKE-RUNNER" not in r.stderr + r.stdout,
+              f"rc={r.returncode}\nstderr={r.stderr}")
+
+    # B) 源 repo + 假 runner 紅 → rc1 擋
+    with tempfile.TemporaryDirectory() as d:
+        _mk_repo(d, with_skills=True, fake_runner_rc=1)
+        r = _run(d)
+        check("prepush_test_gate: 源 repo 紅測試 → rc1 擋",
+              r.returncode == 1, f"rc={r.returncode}\nstderr={r.stderr}")
+        check("prepush_test_gate: stderr 含紅測試提示 + --no-verify 逃生",
+              "test_lumos.py 有紅" in r.stderr and "--no-verify" in r.stderr,
+              f"stderr={r.stderr!r}")
+
+    # C) 源 repo + 假 runner 綠 → 測試閘放行
+    with tempfile.TemporaryDirectory() as d:
+        _mk_repo(d, with_skills=True, fake_runner_rc=0)
+        r = _run(d)
+        check("prepush_test_gate: 源 repo 綠測試 → 放行(無測試🚫)",
+              r.returncode == 0 and "test_lumos.py 有紅" not in r.stderr,
+              f"rc={r.returncode}\nstderr={r.stderr}")
+
+
+def t_runner_k_zero_cases_rc1():
+    """runner 假綠洞修補(2026-07-07):-k 選中 0 案例 → rc1(跑了個寂寞≠全綠)。"""
+    import subprocess as _sp
+    runner = str(Path(__file__).resolve())
+    r = _sp.run([sys.executable, runner, "-k", "zz_絕不存在的測試名zz"],
+                capture_output=True, text=True)
+    check("runner_k_zero: -k 0 案例 → rc1",
+          r.returncode == 1, f"rc={r.returncode}\nstderr={r.stderr}")
+    check("runner_k_zero: stderr 有明確訊息",
+          "0 個測試" in r.stderr, f"stderr={r.stderr!r}")
+
+
 # ── Task 1: _extract_claude_block_span 三態 ────────────────────────────────
 
 def _import_lumos_for_reinject():
@@ -6778,6 +6857,11 @@ def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     if _args.keyword:
         tests = [t for t in tests if _args.keyword in t.__name__]
+        if not tests:
+            # 假綠洞修補:-k 選中 0 案例 ≠ 全綠——「跑了個寂寞」必須紅,
+            # 否則消費 rc 的一方(hook/CI 等機制)會把「沒驗」當「驗過」。
+            print(f"✗ -k '{_args.keyword}' 選中 0 個測試(t_ 名單無此子字串)——視為失敗", file=sys.stderr)
+            return 1
     print(f"lumos 測試({len(tests)} 案例)")
     for t in tests:
         try:
