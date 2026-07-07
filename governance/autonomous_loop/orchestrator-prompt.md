@@ -26,7 +26,12 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
 掃 docs/design/*.md 的標題與「目標」段,判斷這個 gap 是否**已被既有 spec 覆蓋**(同主題已有設計或已收斂)。若已覆蓋 → **只輸出** {"topic":"<猜的短名>","skipped":true,"reason":"已被 docs/design/<檔名> 覆蓋","converged":false} 並結束,**不寫任何檔**。
 
 ### 1. Brainstorm → spec 草稿(寫到 scratch,不碰 repo)
-未覆蓋才做。掃 docs/design/ 一兩份近期 spec 學格式與誠實風格。權衡 2-3 個解法、**自己選最滿足 gap 的**(把為什麼選、否決什麼寫進 spec)。topic 取簡短英文 kebab。寫 spec 到 **__SCRATCH__/spec/__DATE__-<topic>.md**(**不是** docs/design/),含:目標(一句話)/邊界(YAGNI 非目標)/組件/誠實天花板/測試策略/**知識同步影響**/**實務隱患**/審計修正紀錄(留標題待填)。loop_id = topic。
+未覆蓋才做。掃 docs/design/ 一兩份近期 spec 學格式與誠實風格。
+> **先問世界(PRIOR-ART 三問,權衡方案前必答,答案寫進 spec 開頭一行 `PRIOR-ART:`)**:
+> ① **最小解在哪一層?** 這 gap 能否用既有閘/一行 config/既有機制小修解掉?能 → spec 就寫那個小修,不造新機制(前車:exec-anchor-gate 以 5 組件解「pre-push 補跑測試一段」能解的事,人裁 overcheck 不做;見 Issues/自主loop加法偏食)。
+> ② **世界解過沒?** 真搜(WebSearch,非憑印象)GitHub/文獻有無成熟方案;有 → 讀其設計語意與踩坑教訓。
+> ③ **裁定 = borrow-design(預設)/ build(真沒輪子)/ adopt(例外須理由)**。家規零依賴可 vendor → adopt 幾乎恆排除;但「借精神不借 code」是義務——既有輪子的設計教訓免費,跳過才是損失。
+權衡 2-3 個解法、**自己選最滿足 gap 的**(把為什麼選、否決什麼寫進 spec)。topic 取簡短英文 kebab。寫 spec 到 **__SCRATCH__/spec/__DATE__-<topic>.md**(**不是** docs/design/),含:目標(一句話)/邊界(YAGNI 非目標)/組件/誠實天花板/測試策略/**知識同步影響**/**實務隱患**/審計修正紀錄(留標題待填)。loop_id = topic。
 > **知識同步影響(必填,防實作 drift)**:spec 須含一節,列「此改動若實作,影響哪些方法論論述(`docs/methodology/圖譜即合約.md` + `圖譜即合約-對外論述.md`)/ skills(`lumos-*`)?各該怎麼同步(改哪節、補什麼)?」——沒有影響就明寫『無』。理由:loop 每天改實作,若不宣告碰了哪些知識,論述/skills 會越落越後;這節讓人放行 PR 時一併更新知識,把 drift 堵在放行那一刻(圖譜即合約精神套在 loop 自己身上)。
 > **spec 層 ratchet(risk-tiered-review)**:草稿寫完後、以及**每輪折入後(步驟 7 尾)**重跑:`python3 -c "import sys;sys.path.insert(0,'<REPO>/governance');from autonomous_loop import difficulty;print(difficulty.assess_spec(open('__SCRATCH__/spec/__DATE__-<topic>.md').read())['tier'])"`(<REPO>=實際 repo 絕對路徑)。回 high 而本輪注入 tier=standard → **就地升級**:其後輪次收斂 K=3、§2.5c 走 high 條文;cap 維持已注入值(升級不可投遞 cap,誠實收窄——損失=escalate 輪少 2 輪預算,收檔守衛仍以 wrapper 自算 tier 重驗)。**只升不降**(注入 high、文本 assess 出 standard → 維持 high)。result JSON 記 `"tier":"high","tier_escalated":true`。
 
