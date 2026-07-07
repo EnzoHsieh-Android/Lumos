@@ -36,9 +36,12 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 8. **問收斂**:`lumos loop status <id> --need 2 --gate --spec docs/design/<id>.md --repo <repo根>`(K=2;證據閘=K-streak ∧ G1 引用座標 refcheck ∧ G2 發現枯竭)→ **exit 0(GATE PASS)出 loop**;exit 1 → 回 step 1(逐錨明細指出斷在哪)。
    - **`[NEEDS CLARIFICATION]` 慣例(borrow:spec-kit)**:spec 內任何未解的 `[NEEDS CLARIFICATION: 問題]` 標記 = **視同 blocker,不得收斂**(gate 前自查 `grep -c 'NEEDS CLARIFICATION' <spec>` 必須 0)。含糊之處寫成這個標記而不是含糊帶過——把「還不確定」變機械可擋。
 
+> **派工模板**:審計員/辯方的完整 dispatch prompt(輪次語境加碼、查證義務、反駁路線客製)見本 skill 目錄 `templates.md` §1-2(2026-07-07 Landmark 實戰抽取)——派工以模板為準,本文 framing 是摘要。
+
 ## 護欄
 - **連 2 次漏抓**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)**→ 升級**:① sonnet→opus;②(soft、人工判斷)把 spec 切小,獨立子段各自開 loop(v1 不自動化)。
 - **max cap = 6 筆 record**:到頂仍未收斂 → **停、把現況攤給人**、記一句「達 cap 未收斂」。別無限燒。
+- **實質收斂 early-exit(2026-07-07 Landmark 實戰調參)**:連 K 輪 caught 且無 blocker/major、**且新 findings 全為文件精度級 minor** 時,編排者可**提前向人攤牌請裁「實質收斂」**,不必跑滿 cap——「你一定找得到」framing 保證每輪必交 minor,G2 數字枯竭天生壓不到底,這是誠實出口(人裁、留痕記入 loop note)。⚠ 僅限手動 loop;自主 loop 無人可攤牌,其對應機制=unconverged requeue 留人,不適用此條。
 
 ## 誠實天花板(收斂後務必向人提醒,別讓 CONVERGED 被當「絕對沒問題」)
 1. **完整性**:收斂只證「連 2 輪醒著的審計員沒找到 blocker/major」,不證沒有更深的問題。完整性靠多輪 + 多視角,不靠把門檻調嚴。
