@@ -40,6 +40,11 @@ decisions:
     why_chosen: 補 opus 同門盲點是收斂可信度最實在的一道補強;fail-open 確保 qwen 不可用時 loop 不卡死(降級回 opus 並標註)
     decided: 2026-06-22
     valid: true
+  - content: 暫停每日自主 loop(launchctl disable com.enzo.lumos.daily-governance;plist 保留)
+    context: 使用者指示暫停接下來的日報 loop
+    why_chosen: 恢復指令:launchctl enable gui/$UID/com.enzo.lumos.daily-governance && launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.enzo.lumos.daily-governance.plist
+    decided: 2026-07-07
+    valid: true
 ---
 # autonomous-iteration-loop
 
