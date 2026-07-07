@@ -6711,6 +6711,54 @@ def t_version_stamped_in_sentinel():
                   version in start_line[0], f"start_line={start_line[0]!r}")
 
 
+def t_version_stamp_on_updated_path():
+    """存量戶缺口修補(2026-07-07 Landmark 真機發現):updated 路徑原本只換 body、
+    START 行原樣保留 → 所有既有安裝戶永遠拿不到版本戳。修後:found 路徑同步刷新
+    START 行(sentinel 外仍逐字保留);body 同+START 同 → 仍 unchanged(冪等)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lumos_mod_su", GRAPHCTL, loader=SourceFileLoader("lumos_mod_su", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    version = m.LUMOS_VERSION
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        tpl_dir = root / "scripts" / "templates"
+        tpl_dir.mkdir(parents=True)
+        TPL = "{{KG}} 紀律內容"
+        (tpl_dir / "graph-discipline.md").write_text(TPL, encoding="utf-8")
+        body = TPL.replace("{{KG}}", "docs/myproj-knowledge/").strip("\n")
+        # 造存量戶:舊式無版本戳 START + body 已同步 + sentinel 外有使用者內容
+        OLD_START = m._CLAUDE_START_PREFIX + " — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->"
+        PREFIX = "# CLAUDE.md\n\n使用者前綴\n\n"
+        SUFFIX = "\n\n使用者後綴\n"
+        cm = root / "CLAUDE.md"
+        cm.write_text(PREFIX + OLD_START + "\n" + body + "\n" + m._CLAUDE_END + SUFFIX,
+                      encoding="utf-8")
+
+        # body 相同、僅 START 無戳 → 應 updated(刷 START),非 unchanged
+        ri = m._reinject_claude_block(root, "myproj")
+        check("stamp_on_updated: body 同但 START 無戳 → updated",
+              ri.status == "updated", f"status={ri.status}")
+        t = cm.read_text(encoding="utf-8")
+        sl = [l for l in t.splitlines() if m._CLAUDE_START_PREFIX in l]
+        check("stamp_on_updated: START 行已帶版本戳",
+              len(sl) == 1 and version in sl[0], f"start_lines={sl}")
+        check("stamp_on_updated: sentinel 外前綴 byte-equal",
+              t.startswith(PREFIX), f"head={t[:40]!r}")
+        check("stamp_on_updated: sentinel 外後綴 byte-equal",
+              t.endswith(SUFFIX), f"tail={t[-20:]!r}")
+        check("stamp_on_updated: body 未變",
+              ("\n" + body + "\n") in t, "body 被動到")
+
+        # 再跑一次 → START 已 canonical + body 同 → unchanged(冪等)
+        ri2 = m._reinject_claude_block(root, "myproj")
+        check("stamp_on_updated: 二跑 unchanged(冪等)",
+              ri2.status == "unchanged", f"status={ri2.status}")
+
+
 def t_version_parse_tolerant():
     """_parse_sentinel_version:START 行無版本欄位 → 回 None、不 crash。"""
     import importlib.util

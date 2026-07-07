@@ -3675,22 +3675,31 @@ def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
         _write_lf(cm, new_text)
         return ReInjectResult("appended", None)
 
-    # state == "found": splice body only (保留 sentinel 行)
+    # state == "found": splice body + 同步刷新 START 行(版本戳落在存量戶的唯一路徑——
+    # 只換 body 會讓 updated 路徑永遠拿不到版本戳,標籤機制對存量安裝戶形同虛設。
+    # START 行在管理區塊「內」,★INVARIANT★ 只保護 sentinel 之外,刷新它不違約)。
     old_body = span.body
     new_body = body
+    si = claude_text.find(_CLAUDE_START_PREFIX)
+    sl_begin = claude_text.rfind("\n", 0, si) + 1
+    sl_end = claude_text.find("\n", si)
+    old_start_line = claude_text[sl_begin:sl_end] if sl_end != -1 else claude_text[sl_begin:]
 
-    if old_body == new_body:
+    if old_body == new_body and old_start_line == start_line:
         return ReInjectResult("unchanged", None)
 
-    # 有差 → 替換 body 區段
+    # 有差 → 先換 body(高位移),再換 START 行(低位移,原始位移仍有效);兩 splice 之間
+    # 的原始空白行區逐字保留。
     new_text = claude_text[:span.body_start] + new_body + claude_text[span.body_end:]
+    if sl_end != -1 and old_start_line != start_line:
+        new_text = new_text[:sl_begin] + start_line + new_text[sl_end:]
     _write_lf(cm, new_text)
 
     diff = "".join(difflib.unified_diff(
-        old_body.splitlines(keepends=True),
-        new_body.splitlines(keepends=True),
-        fromfile="old body",
-        tofile="new body",
+        (old_start_line + "\n" + old_body).splitlines(keepends=True),
+        (start_line + "\n" + new_body).splitlines(keepends=True),
+        fromfile="old block",
+        tofile="new block",
     ))
     return ReInjectResult("updated", diff)
 

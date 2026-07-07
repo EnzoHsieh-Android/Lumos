@@ -38,6 +38,9 @@ summary: |-
 - **nudge soft**:`warn_soft` 不計 issue、`--ci` 不受影響;`t_nudge_skip_when_no_source`。
 - **接線副作用**:`t_init_existing_no_pull`(既有 vault 非 force init → `_vendor_toolchain` 未被呼叫、無 pull/無重裝 hooks)。
 
+## 迭代修正(2026-07-07)
+- **存量戶版本戳缺口(Landmark 真機發現)**:原 updated 路徑只換 body、START 行原樣保留 → 既有安裝戶永遠拿不到版本戳(標籤機制對主要客群虛設)。修:found 路徑同步刷新 START 行(在管理區塊內,★INVARIANT★ 只保護 sentinel 外,不違約);body 同+START 同才 unchanged(冪等保持)。[test:t_version_stamp_on_updated_path]
+
 ## 誠實天花板
 - **版本 ≠ 守衛**:版本號只驅動 advisory nudge,正確性靠 Check D 內容比對(同「有寫下 undo ≠ 驗過能跑」)。
 - **非 oracle**:doctor Check D `--no-verify` 繞得過;nudge 只在來源可達的開發機生效(CI/無源 skip)。守得掉「範本改了沒傳到/repo 內漂移」,守不掉「刻意繞 + 手改不看 diff」。
