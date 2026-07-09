@@ -9,6 +9,7 @@ tags:
   - status/done
 verified_by:
   - "[[Verification/2026-06-19_design-loop]]"
+  - "[[Verification/2026-07-09_loop三輪壓縮]]"
 summary: |-
   FLOW:brainstorming產spec→[trivial?跳並註明]→每輪{複製spec→/tmp/<id>-rN(N=loop_status輪數+1)→植1canary(類型=清單[(N−1)mod4],只進工作副本)→派乾淨審計員(sonnet,連2missed升opus,不告知canary,refute framing)→判讀(canary抓到?+真finding max severity)→辯方refute(對≥major每條派獨立opus構造反證file:line)→該輪severity=辯方存活max→canary record caught|missed→抓到折真finding進真檔(commit前grep canary token須=0)/漏抓不折直接下輪}→loop status --need 2 exit0→收斂+天花板提醒→writing-plans
   KEY:Claude編排,lumos只出原語——Claude用Agent tool派審計員/判讀/修spec;lumos出 canary record/loop status 記錄與算收斂,lumos不spawn agent

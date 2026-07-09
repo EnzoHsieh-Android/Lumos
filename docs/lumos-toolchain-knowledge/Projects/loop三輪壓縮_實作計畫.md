@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-09
 updated: 2026-07-09
 tags:
@@ -102,10 +102,10 @@ summary: |-
 
 ### Task 6: 圖譜回填 + 回歸 + anchor
 
-- [ ] Verification `plan_refs` 回指設計節點;設計/實作 status→done;`Systems/design-loop` + `convergence-evidence-gate` KEY 更新(panel 收斂)。
-- [ ] 全量測試 0 failed;`lumos doctor` 0 issues。
-- [ ] anchor approve(test_lumos.py 動了)。
-- [ ] Commit `docs(graph): loop 三輪壓縮落地回填`
+- [x] Verification `plan_refs` 回指設計節點;設計/實作 status→done;`Systems/design-loop` + `convergence-evidence-gate` KEY 更新(panel 收斂)。
+- [x] 全量測試 0 failed;`lumos doctor` 0 issues。
+- [x] anchor approve(test_lumos.py 動了)。
+- [x] Commit `docs(graph): loop 三輪壓縮落地回填`
 
 ---
 
