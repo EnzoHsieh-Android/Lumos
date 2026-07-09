@@ -5940,6 +5940,73 @@ def _load_lm():
     return m
 
 
+def t_loop_panel_gate():
+    """loop 壓縮 T3:loop status --panel 收斂謂詞(四條合取 + 混用守衛)。"""
+    import subprocess as _sp
+
+    def _mkvault(d):
+        v = Path(d) / "docs" / "y-knowledge"
+        (v / "MOC").mkdir(parents=True)
+        (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+
+    def _rec(d, *extra):
+        return _sp.run([sys.executable, GRAPHCTL, "canary", "record", *extra],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    def _gate(d, *extra):
+        return _sp.run([sys.executable, GRAPHCTL, "loop", "status", "PL", "--gate", *extra],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    # 收斂:一輪 r1、2 caught 乾淨、capture_counts 高重疊(殘餘 0)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A",
+             "--severity", "minor", "--capture-counts", "2,2,3")
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "B", "--severity", "clean")
+        r = _gate(d, "--panel")
+        check("panel: 2caught+乾淨+高重疊 → rc0", r.returncode == 0,
+              f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+
+    # 輪無效:只 1 caught
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A", "--severity", "clean")
+        _rec(d, "missed", "--loop", "PL", "--round", "r1", "--token", "B")
+        r = _gate(d, "--panel")
+        check("panel: 1caught(輪無效) → 不收斂 rc1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+
+    # 存活 major → 不收斂
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A", "--severity", "major")
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "B", "--severity", "clean")
+        r = _gate(d, "--panel")
+        check("panel: 存活 major → 不收斂 rc1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+
+    # 殘餘超門檻(低重疊)→ 不收斂
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A",
+             "--severity", "minor", "--capture-counts", "1,1,1,1")
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "B", "--severity", "clean")
+        r = _gate(d, "--panel")
+        check("panel: capture-recapture 殘餘超門檻 → rc1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+
+    # 混用守衛:--panel 但 log 無 round → rc2
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "PL", "--token", "A", "--severity", "clean")
+        r = _gate(d, "--panel")
+        check("panel: --panel 但無 round 欄 → rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
+
+    # 混用守衛:log 有 round 但無 --panel → rc2
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A", "--severity", "clean")
+        r = _gate(d)  # 無 --panel
+        check("panel: 有 round 欄但無 --panel → rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
+
+
 def t_canary_round_field():
     """loop 壓縮 T2:canary record --round 台帳欄(panel 一輪 W 筆共享 round-id)。
     帶 --round → 記錄含 round 欄;不帶 → 無此欄(舊記錄格式逐位元不變)。"""

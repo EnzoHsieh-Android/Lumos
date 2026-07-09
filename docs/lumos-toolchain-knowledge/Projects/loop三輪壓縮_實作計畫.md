@@ -68,11 +68,11 @@ summary: |-
 
 **Interfaces:** `loop status <id> --gate --panel [--repo]`——按 round-id 分組;每組判四條合取。混用守衛:`--panel` 但 log 無 round 欄、或 無 --panel 但 log 有 round 欄 → rc2 + 明確錯訊(不靜默誤算)。缺陷計數/severity 由 record 欄提供(orchestrator 已 ODC 分類後寫入);capture-recapture 吃各組的 per-defect capture_counts(record 需帶或由 note 結構化——實作定最小 schema)。
 
-- [ ] **Step 1 失敗測試**:`t_loop_panel_converged`(一組 ≥2 caught + 存活 max≤minor + 殘餘<門檻 → rc0)、`t_loop_panel_invalid_round`(<2 caught → 不收斂)、`t_loop_panel_major_survives`(存活 major → 不收斂)、`t_loop_panel_mixed_log_errors`(--panel 讀到無 round 欄 / 舊模式讀到 round 欄 → rc2)、`t_loop_legacy_unchanged`(無 --panel 無 round → K-streak∧G2 行為與現況逐位元相同)。
-- [ ] **Step 2 FAIL**。
-- [ ] **Step 3 實作** 分組 + 四條合取 + 混用守衛;legacy 路徑完全不動(新分支包在 `if panel:`)。
-- [ ] **Step 4 PASS** + 本 repo `lumos doctor` 不受影響。
-- [ ] **Step 5 Commit** `feat(loop): loop status --panel 收斂謂詞(輪有效∧ODC∧falsification∧capture-recapture)`
+- [x] **Step 1 失敗測試**:`t_loop_panel_converged`(一組 ≥2 caught + 存活 max≤minor + 殘餘<門檻 → rc0)、`t_loop_panel_invalid_round`(<2 caught → 不收斂)、`t_loop_panel_major_survives`(存活 major → 不收斂)、`t_loop_panel_mixed_log_errors`(--panel 讀到無 round 欄 / 舊模式讀到 round 欄 → rc2)、`t_loop_legacy_unchanged`(無 --panel 無 round → K-streak∧G2 行為與現況逐位元相同)。
+- [x] **Step 2 FAIL**。
+- [x] **Step 3 實作** 分組 + 四條合取 + 混用守衛;legacy 路徑完全不動(新分支包在 `if panel:`)。
+- [x] **Step 4 PASS** + 本 repo `lumos doctor` 不受影響。
+- [x] **Step 5 Commit** `feat(loop): loop status --panel 收斂謂詞(輪有效∧ODC∧falsification∧capture-recapture)`
 
 ---
 

@@ -1560,7 +1560,7 @@ def cmd_gov(env, node=None, since_days=90):
     return 0
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None):
     """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
@@ -1576,6 +1576,12 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         rec["loop"] = loop
     if round_id:
         rec["round"] = round_id   # panel 一輪 W 筆共享 round-id(loop status --panel 分組)
+    if capture_counts:
+        try:
+            rec["capture_counts"] = [int(x) for x in str(capture_counts).split(",") if x.strip()]
+        except ValueError:
+            print(f"ERROR: --capture-counts 需逗號分隔整數,收到 {capture_counts!r}", file=sys.stderr)
+            return 2
     if severity:
         rec["severity"] = severity
     if findings is not None:
@@ -1607,7 +1613,53 @@ def _estimate_remaining_defects(capture_counts):
     return f1 * (f1 - 1) / (2 * (f2 + 1))
 
 
-def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None):
+def _loop_status_panel(rounds, loop_id):
+    """平行 panel 收斂謂詞(loop 三輪壓縮):按 round-id 分組,判最新一輪四條合取——
+    ①輪有效(≥2 canary caught)②存活 max severity ≤ minor(ODC 只缺陷類 + 辯方後,由 record 提供)
+    ③capture-recapture 殘餘 < 門檻(有 capture_counts 才判)。結構信號取代 K-streak∧G2 序列。"""
+    from collections import OrderedDict
+    groups = OrderedDict()
+    for r in rounds:
+        groups.setdefault(r.get("round"), []).append(r)
+    if not groups:
+        print(f"⏳ 無 panel 輪記錄 ({loop_id})")
+        return 1
+    rid, latest = next(reversed(groups.items()))
+    order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+    fails = []
+    caught = sum(1 for r in latest if r.get("kind") == "caught")
+    if caught >= 2:
+        print(f"[panel] 輪有效(canary caught {caught} ≥2): ✓")
+    else:
+        print(f"[panel] 輪有效: ✗ — canary caught {caught} <2(輪無效)")
+        fails.append("輪無效")
+    maxsev = max((order.get(r.get("severity", "clean"), 1) for r in latest), default=0)
+    if maxsev >= 2:
+        print(f"[panel] falsification+ODC(存活 max≤minor): ✗ — 存活 {'blocker' if maxsev==3 else 'major'}")
+        fails.append("存活≥major")
+    else:
+        print("[panel] falsification+ODC(存活 max≤minor): ✓")
+    cc = next((r["capture_counts"] for r in latest if r.get("capture_counts")), None)
+    if cc is None:
+        print("[panel] capture-recapture 殘餘: skipped(無 capture_counts)")
+    else:
+        remaining = _estimate_remaining_defects(cc)
+        THRESH = 1.0
+        if remaining < THRESH:
+            print(f"[panel] capture-recapture 殘餘: ✓ — 估計 {remaining:.2f} < {THRESH}")
+        else:
+            print(f"[panel] capture-recapture 殘餘: ✗ — 估計 {remaining:.2f} ≥ {THRESH}(母體未枯竭)")
+            fails.append("殘餘超門檻")
+    for i, r in enumerate(latest, 1):
+        print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('capture_counts','-')}\t{r.get('auditor','')}")
+    if fails:
+        print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+        return 1
+    print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ 存活≤minor ∧ capture-recapture 枯竭)")
+    return 0
+
+
+def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, panel=False):
     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
     findings 數的源頭仍是 LLM 裁決——gate 機械化的是算術,不是數字的正確性(見設計 doc)。
@@ -1634,6 +1686,20 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None):
     except OSError as e:
         print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
         return 2
+
+    # 混用守衛(R2-F1 footgun):panel 記錄(有 round 欄)與 legacy 模式不可混用,
+    # 否則舊模式會把一輪 W 筆當 W 輪、K-streak 偽過。
+    has_round = any("round" in r for r in rounds)
+    if panel and rounds and not has_round:
+        print("ERROR: --panel 但 canary-log 無 round 欄(這批是 legacy 單體記錄?去掉 --panel)",
+              file=sys.stderr)
+        return 2
+    if not panel and has_round:
+        print("ERROR: canary-log 含 round 欄(panel 記錄)卻未加 --panel——拒絕靜默把一輪 W 筆當 W 輪",
+              file=sys.stderr)
+        return 2
+    if panel:
+        return _loop_status_panel(rounds, loop_id)
 
     def good(r):
         return r.get("kind") == "caught" and r.get("severity") in ("clean", "minor")
@@ -6419,6 +6485,8 @@ def main():
                     help="該輪辯方裁決後存活折入的真 findings 數(canary 不計;供 loop status --gate 枯竭錨)")
     cr.add_argument("--round", dest="round_id",
                     help="panel 輪 id(一輪 W 個平行審計員的記錄共享;供 loop status --panel 分組)")
+    cr.add_argument("--capture-counts", dest="capture_counts",
+                    help="panel 輪的 capture-recapture 輸入:各 distinct 缺陷被幾個審計員找到,逗號分隔(如 '2,2,1');供殘餘估計")
 
     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
     lsub = lp.add_subparsers(dest="lcmd", required=True)
@@ -6429,6 +6497,8 @@ def main():
                     help="證據閘:K-streak(必要)∧ G1 refcheck 引用座標 ∧ G2 發現枯竭,全過才 rc 0")
     ls.add_argument("--spec", dest="gate_spec", help="--gate 必填:要核對引用座標的最終 spec md")
     ls.add_argument("--repo", dest="gate_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+    ls.add_argument("--panel", action="store_true",
+                    help="平行 panel 模式:按 round-id 分組,收斂判準=輪有效(≥2 caught)∧存活 max≤minor∧capture-recapture 殘餘<門檻(取代 K-streak∧G2 序列)")
 
     g = sub.add_parser("guard", help="合約守衛 scaffold(對談驅動):列出未綁 / 套範本產 stub / 綁定")
     gsub = g.add_subparsers(dest="gcmd", required=True)
@@ -6704,12 +6774,14 @@ def main():
 
     if args.cmd == "canary":
         return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
-                          args.severity, findings=args.findings, round_id=args.round_id)
+                          args.severity, findings=args.findings, round_id=args.round_id,
+                          capture_counts=args.capture_counts)
 
     if args.cmd == "loop":
         if args.lcmd == "status":
             return cmd_loop_status(env, args.loop_id, args.need,
-                                   gate=args.gate, spec=args.gate_spec, repo=args.gate_repo)
+                                   gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
+                                   panel=args.panel)
 
     if args.cmd == "guard":
         if args.gcmd == "list":
