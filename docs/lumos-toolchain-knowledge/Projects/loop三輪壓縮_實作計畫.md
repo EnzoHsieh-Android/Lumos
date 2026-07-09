@@ -82,11 +82,11 @@ summary: |-
 
 **Interfaces:** `params(tier)` 回傳加 `panel_width`(standard=3、high=5);既有 {need,maxr} 消費端不受影響(多一鍵)。
 
-- [ ] **Step 1 失敗測試**:`t_difficulty_panel_width`——standard→3、high→5;既有 need/maxr 值不變。
-- [ ] **Step 2 FAIL**。
-- [ ] **Step 3 實作** + 確認 `test_autonomous_loop.py` 既有測試不退步。
-- [ ] **Step 4 PASS**。
-- [ ] **Step 5 Commit** `feat(loop): difficulty panel_width(tier 驅動並行寬度)`
+- [x] **Step 1 失敗測試**:`t_difficulty_panel_width`——standard→3、high→5;既有 need/maxr 值不變。
+- [x] **Step 2 FAIL**。
+- [x] **Step 3 實作** + 確認 `test_autonomous_loop.py` 既有測試不退步。
+- [x] **Step 4 PASS**。
+- [x] **Step 5 Commit** `feat(loop): difficulty panel_width(tier 驅動並行寬度)`
 
 ---
 

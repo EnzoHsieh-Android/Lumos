@@ -58,5 +58,8 @@ def assess_spec(md_text):
 
 
 def params(tier):
-    """high 的 maxr 語意=下限 8(max(維運 MAXR, 8) 由 wrapper 端整數比較實現)。"""
-    return {"need": 3, "maxr": 8} if tier == "high" else {"need": 2, "maxr": 6}
+    """high 的 maxr 語意=下限 8(max(維運 MAXR, 8) 由 wrapper 端整數比較實現)。
+    panel_width(loop 三輪壓縮):tier 驅動平行審計員數(high=5/standard=3);
+    既有 need/maxr 消費端多一鍵不受影響。"""
+    return ({"need": 3, "maxr": 8, "panel_width": 5} if tier == "high"
+            else {"need": 2, "maxr": 6, "panel_width": 3})

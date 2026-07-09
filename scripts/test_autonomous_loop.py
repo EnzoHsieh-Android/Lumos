@@ -306,8 +306,9 @@ class TestDifficulty(unittest.TestCase):
         self.assertIn("self-governance", [h["class"] for h in r["hits"]])
 
     def test_params_mapping(self):
-        self.assertEqual(self.d.params("high"), {"need": 3, "maxr": 8})
-        self.assertEqual(self.d.params("standard"), {"need": 2, "maxr": 6})
+        # panel_width(loop 三輪壓縮):tier 驅動並行寬度;既有 need/maxr 不變
+        self.assertEqual(self.d.params("high"), {"need": 3, "maxr": 8, "panel_width": 5})
+        self.assertEqual(self.d.params("standard"), {"need": 2, "maxr": 6, "panel_width": 3})
 
     def test_assess_spec_blacklist_strip(self):
         filler = ("此次修改屬純內部程式重構,僅調整函數命名與模組內部呼叫順序,"

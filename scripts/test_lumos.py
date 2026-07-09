@@ -5940,6 +5940,20 @@ def _load_lm():
     return m
 
 
+def t_difficulty_panel_width():
+    """loop 壓縮 T4:difficulty.params 加 panel_width(tier 驅動並行寬度);既有 need/maxr 不變。"""
+    import importlib.util
+    dp = Path(__file__).resolve().parent.parent / "governance" / "autonomous_loop" / "difficulty.py"
+    spec = importlib.util.spec_from_file_location("difficulty_pw", dp)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    hi, st = m.params("high"), m.params("standard")
+    check("difficulty_pw: high panel_width=5", hi.get("panel_width") == 5, f"hi={hi}")
+    check("difficulty_pw: standard panel_width=3", st.get("panel_width") == 3, f"st={st}")
+    check("difficulty_pw: 既有 need/maxr 不變", hi["need"] == 3 and hi["maxr"] == 8
+          and st["need"] == 2 and st["maxr"] == 6, f"hi={hi} st={st}")
+
+
 def t_loop_panel_gate():
     """loop 壓縮 T3:loop status --panel 收斂謂詞(四條合取 + 混用守衛)。"""
     import subprocess as _sp
