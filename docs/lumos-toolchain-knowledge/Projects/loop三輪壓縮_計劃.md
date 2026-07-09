@@ -48,10 +48,15 @@ summary: |-
 2. **findings 去重**:跨有效審計員報告,依 `(spec 段落, 瑕疵性質)` 合一(編排者判,同今日跨輪去重、只是一次跨 W 份;非全機械=誠實天花板)。
 3. **辯方**:對存活 ≥major 派 opus 辯方(`skills/lumos-design-loop/templates.md` §2)。
 
-### 收斂判準(解 B1:agreement 取代 G2 序列)
-- **一輪收斂 = 輪有效(≥2 canary caught)∧ 辯方後存活 max severity ≤ minor**。一個乾淨 panel 輪即收斂——因 W-多樣 panel 一輪 ≥2 獨立票 ≥ 舊循序 K=2 的信號。
-- 存活 ≥major → fix → **下一輪只重審 delta(改動段落)**,新 W-panel(canary 重新分派)。cap = 3 panel 輪。
-- **G1 引用座標 refcheck 保留**(平行不影響,仍每輪對最終稿跑)。
+### 收斂判準(定案:結構信號取代 count/二值;整合 R2 + 散文收斂三機制)
+一輪 panel 收斂 = **四條合取**(全建在 framing 汙染不到的結構上;推導與文獻見下「散文收斂」節):
+1. **輪有效**:≥2 個帶 canary 同族審計員 caught(注意力閘;<2 → 輪無效,耗 1 cap、重跑)。
+2. **falsification-survived**:每條 ≥major(缺陷類)派辯方 → 零存活(非投票;辯方是既有 falsification 協議)。
+3. **ODC class-gating**:只有**缺陷類**(blocker/major/實質 minor)進上條與收斂判定;cosmetic/潤飾/enhancement 記錄但**不 gate**(隔離無界散文噪音)。
+4. **capture-recapture 殘餘 < 門檻**:從 W 個獨立審計員 findings 的**重疊**估殘餘缺陷(高重疊=枯竭=收斂;低重疊=續跑)。這是取代「G2 findings 序列枯竭」的結構信號——平行 panel 天生提供 capture-recapture 要的獨立檢驗員。門檻按 tier(high 嚴)。
+- **有限 done 判準(AC)**:另要求 spec 的驗收場景(AC)齊備、關鍵決策(AC/失敗/rollout/相容)在(完整性不可判定 → 搬到有限外部物,不判「散文完美」)。
+- 未達 → fix → 下一輪只重審 delta,新 W-panel(canary 重分派)。cap=3 panel 輪。**G1 引用座標 refcheck 保留**(平行不影響)。
+- **agreement/低分歧** = capture-recapture 高重疊的定性面(R2 加的啟發式,此處被 ③④ 形式化取代)。
 
 ### tier→寬度(解 B3)
 `difficulty.params(tier)` 擴傳 `panel_width`:**standard=3(cap 1-2 輪)、high=5(cap 3 輪、需 2 個確認乾淨輪)**。對上文獻「最優平行/循序比按難度」。此為 `governance/autonomous_loop/difficulty.py` 的真 code 擴充(現只回 {need,maxr})。
