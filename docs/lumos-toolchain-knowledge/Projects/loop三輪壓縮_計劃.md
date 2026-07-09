@@ -90,6 +90,15 @@ summary: |-
 - **去重偏多留 vs 卡收斂(r2c-F4)解**:去重**以「同 (段落,性質)」嚴格合一為預設**(不是偏多留);只有「編排者無法判是否同一洞」時才保留兩條。同一洞的多份報告合成一條 finding,辯方對一條裁決,不會殘存重複條卡收斂。(修正 R2 前的「偏多留」措辭——那會系統性阻收斂。)
 - **交 TDD(不在設計散文摳)**:`--round` 產生者/唯一性/部分寫入判定、`--panel` 謂詞分組實作、delta 產生法(git diff vs snapshot)、`__PANEL_WIDTH__` 注入佔位符、並發分批門檻——皆實作級,紅綠測試釘死(見 design-loop-completeness-ceiling:glue 留實作真測)。
 
+## 散文收斂:signal-preserving 停機(2026-07-09 交叉查文獻;解「framing 對抗收斂」根本張力)
+**問題**:aggressive refute-framing(「你一定找得到」)保證每輪必出 minor → count-based 收斂(G2 findings 枯竭)對散文永遠不觸底;放軟 framing 能收斂卻**弱化審計信號**。**核心洞:framing 汙染「數量」,不汙染「結構」**——停機改讀 framing 汙染不到的三種結構信號,完全不動 framing:
+
+- **① Capture-recapture 估殘餘(主信號;軟體檢驗界 10+ 年研究,生物學起源)**:多個**獨立**檢驗員讀同一文件,從彼此 findings 的**重疊率**統計估「總缺陷母體」→ 減已找到 = **殘餘估計**;殘餘 < 門檻即停(IEEE 852741 / ScienceDirect S0164121203000906)。**為何不干擾信號**:停機不看「這輪有沒有出 minor」(count 被 framing 汙染),看**重疊的統計結構**——高重疊(獨立審計員都找到同一批)= 母體枯竭 = 收斂;低重疊(各找各的)= 母體大 = 續跑。framing 讓他們找更多,capture-recapture 用「找到的東西的結構」不用「數量」。**且它天生要多個獨立檢驗員——正是平行 panel 本體**,是本設計缺的收斂信號的精確形式(比我 R2 加的「低分歧」啟發式更量化,低分歧≈高重疊≈少殘餘,此為其形式化)。誠實天花板:小樣本估計會出極端值(IEEE 7426632),當一個信號不當 oracle。
+- **② ODC class-gating:把母體拆成「有界缺陷 vs 無界潤飾」(Chillarege/IBM,ODC)**:findings 按正交 type + severity 分類;**只有缺陷類(blocker/major/實質 minor)gate 收斂,cosmetic/潤飾/enhancement 記錄但不擋**。無界的散文精修噪音關進「trivial/cosmetic」類隔離,不是壓制。這是我已加的「實質收斂 early-exit」的有原則版(ODC 給它真分類法)。
+- **③ 完整性移出散文(undecidable)→ 有限外部判準**:CACM/IEEE 證「spec 充分完整性**理論上不可判定**」——這就是散文永不收斂的數學根源(沒有演算法能判「散文完美沒」)。解=**別在散文上量完整性,搬到有限可檢的外部物**:每條驗收場景(AC)映射一個測試,「done」=所有 AC 有測試 + 關鍵決策(AC/失敗處理/資料歸屬/rollout/相容)齊備(spec-review-checklist),非「散文完美」。把不可判定的散文問題換成有限清單(=borrow-list 的 spec-by-example / spec-kit AC)。
+
+**統一原則**:三者都繞開被 framing 汙染的 count——capture-recapture 讀 overlap 結構、ODC 讀 class 結構、AC 讀 coverage 結構。**停機信號建在結構上,framing 一個字都不用改**。lumos 落地:平行 panel 已提供 capture-recapture 要的獨立檢驗員 → 加「重疊估殘餘」當主收斂信號 + ODC 只讓缺陷類 gate + AC 覆蓋當有限 done 判準,三合一即「散文收斂 without 干擾信號」。
+
 ## 審計修正紀錄
 
 ### R2(2026-07-09,平行 panel dogfood 第 2 輪,重審重設計稿;canary c/a/b 輪替)
