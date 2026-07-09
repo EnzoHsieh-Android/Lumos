@@ -1597,6 +1597,28 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
     return 0
 
 
+def _capture_counts_from_finders(finders):
+    """異質 panel 接線(code-loop 三輪壓縮):把多個 finder 各自找到的 finding-key
+    彙成 capture-recapture 輸入。code-loop 的 finder 是**異質**的——LLM reviewer、
+    `.lumos/lint.json` SARIF linter、測試失敗、mutation 存活——各是一組 finding-key;
+    確定性工具的錯誤剖面與 LLM 正交=真獨立票(直擊「9 judge 2 票」相關性天花板)。
+
+    參數:finders = [[key,...], [key,...], ...],每個子 list = 一個 finder 找到的 key。
+    回傳:各 distinct key「被幾個 finder 找到」的次數列表(降序,決定性)——
+    直接餵 _estimate_remaining_defects 算殘餘。
+    正規化:key strip+casefold(容忍大小寫/前後空白差異);同一 finder 內去重(重複只算一次)。"""
+    from collections import Counter
+    counter = Counter()
+    for finder in finders:
+        seen = set()
+        for k in finder:
+            nk = str(k).strip().casefold()
+            if nk and nk not in seen:
+                seen.add(nk)
+                counter[nk] += 1
+    return sorted(counter.values(), reverse=True)
+
+
 def _estimate_remaining_defects(capture_counts):
     """capture-recapture 殘餘缺陷估計(Chao1 偏差修正版)。
 
@@ -1662,6 +1684,31 @@ def _loop_status_panel(rounds, loop_id):
         print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
     print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ 存活≤minor ∧ capture-recapture 枯竭)")
+    return 0
+
+
+def cmd_loop_capture_counts(env, finders):
+    """異質 panel 接線的機械生產者(code-loop 三輪壓縮):把各 finder 的 finding-key
+    彙成 capture_counts + 算殘餘估計,吐出可直接餵 `canary record --capture-counts` 的逗號串。
+
+    為什麼要機械算:重疊計數(哪個洞被幾個 finder 找到)是 capture-recapture 的核心輸入,
+    人手數易錯——正是該機械化的。異質 finder 一律先正規化 key 再跨 finder 數重疊:
+    LLM reviewer 的 finding、`pitfalls --diff` 的 SARIF linter 命中、測試失敗、mutation 存活,
+    每個 finder 給一個 --finder(逗號分隔它找到的 key,如 file:line 或 section:nature)。
+    確定性工具與 LLM 錯誤剖面正交 → 真獨立票,重疊(同洞多 finder 中)= 更強收斂信號。
+
+    finders = [comma_str, ...](每個 --finder 一項)。空/全空 → 印 0 缺陷、殘餘 0.0。"""
+    parsed = [[k for k in str(fs).split(",") if k.strip()] for fs in (finders or [])]
+    cc = _capture_counts_from_finders(parsed)
+    remaining = _estimate_remaining_defects(cc)
+    n_finders = len(parsed)
+    n_distinct = len(cc)
+    print(f"finders={n_finders} distinct-findings={n_distinct} "
+          f"capture_counts={','.join(str(c) for c in cc) if cc else '(空)'}")
+    print(f"remaining-estimate={remaining:.2f}  "
+          f"({'枯竭 <1.0 → 收斂側' if remaining < 1.0 else '殘餘 ≥1.0 → 續跑側'})")
+    if cc:
+        print(f"→ canary record ... --capture-counts {','.join(str(c) for c in cc)}")
     return 0
 
 
@@ -6506,6 +6553,10 @@ def main():
     ls.add_argument("--repo", dest="gate_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     ls.add_argument("--panel", action="store_true",
                     help="平行 panel 模式:按 round-id 分組,收斂判準=輪有效(≥2 caught)∧存活 max≤minor∧capture-recapture 殘餘<門檻(取代 K-streak∧G2 序列)")
+    lcc = lsub.add_parser("capture-counts",
+                          help="異質 finder 接線:多 --finder 的 finding-key → capture_counts + 殘餘估計(餵 canary record --capture-counts)")
+    lcc.add_argument("--finder", dest="finders", action="append", default=[],
+                     help="一個 finder 找到的 finding-key 逗號串(LLM reviewer / SARIF linter / 測試失敗 / mutation 存活各給一個)")
 
     g = sub.add_parser("guard", help="合約守衛 scaffold(對談驅動):列出未綁 / 套範本產 stub / 綁定")
     gsub = g.add_subparsers(dest="gcmd", required=True)
@@ -6789,6 +6840,8 @@ def main():
             return cmd_loop_status(env, args.loop_id, args.need,
                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
                                    panel=args.panel)
+        if args.lcmd == "capture-counts":
+            return cmd_loop_capture_counts(env, args.finders)
 
     if args.cmd == "guard":
         if args.gcmd == "list":

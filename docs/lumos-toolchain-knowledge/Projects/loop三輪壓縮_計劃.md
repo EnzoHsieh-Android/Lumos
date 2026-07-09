@@ -110,6 +110,7 @@ summary: |-
 - **辯方可執行 falsification**(borrow:Greptile TREX / CodeRabbit sandbox「grep 沒東西≠證明 bug,先跑再信」):code-loop 辯方跑測試/repro/mutation 確認-或-殺 finding,可執行反證 > 論證反證。
 - **capture-recapture 跨異質 finder**:LLM ∪ linter ∪ 測試失敗的重疊(且 capture-recapture 本生於軟體檢驗,回娘家)。
 - 繼承 panel 機制 + capture-recapture 收斂;但 panel 成員換異質、辯方改可執行——非「design-loop 換 canary 名」。落點:`skills/lumos-code-loop/SKILL.md` panel 段(已補)。
+- **異質 finder 接線已機械化(2026-07-09 ship)**:`_capture_counts_from_finders`(跨 finder 正規化+數重疊)+ `lumos loop capture-counts --finder ...`(吐 capture_counts + 殘餘 + 可貼的 `canary record --capture-counts` 串)。orchestrator 把 LLM reviewer / `pitfalls --diff` SARIF linter / 測試失敗 / mutation 存活各當一個 `--finder`,機械算重疊(人手數易錯)。t_capture_counts_from_finders + t_loop_capture_counts_cli;859 passed。
 
 ## 審計修正紀錄
 

@@ -6065,6 +6065,48 @@ def t_canary_round_field():
               "round" not in recs[-1], f"rec={recs[-1]}")
 
 
+def t_capture_counts_from_finders():
+    """異質 panel 接線:多 finder(LLM/linter/測試/mutation)的 finding-key → capture_counts。
+    各 distinct key 被幾個 finder 找到;finder 內去重、key 正規化(大小寫/空白)。"""
+    m = _load_lm()
+    f = m._capture_counts_from_finders
+    # A 找 {x,y}、B 找 {x,z}、C(linter) 找 {x} → x=3, y=1, z=1
+    cc = f([["app.py:10", "app.py:20"], ["app.py:10", "svc.py:5"], ["app.py:10"]])
+    check("cc: x 三 finder 都中 → 含 3", 3 in cc, f"cc={cc}")
+    check("cc: y/z 各一 finder → 兩個 1", cc.count(1) == 2, f"cc={cc}")
+    # 正規化 + finder 內去重:同一 key 大小寫/空白/重複 → 算一次
+    cc2 = f([[" App.py:10 ", "app.py:10", "APP.PY:10"]])
+    check("cc: finder 內正規化去重 → [1]", cc2 == [1], f"cc2={cc2}")
+    check("cc: 空 → []", f([]) == [] and f([[], []]) == [], f"got {f([[],[]])}")
+    # 串接 _estimate_remaining_defects:全獨發 → 殘餘>0
+    counts = f([["a"], ["b"], ["c"]])
+    check("cc: 全獨發餵殘餘估計 >0", m._estimate_remaining_defects(counts) > 0, f"counts={counts}")
+
+
+def t_loop_capture_counts_cli():
+    """CLI `loop capture-counts`:多 --finder → capture_counts + 殘餘估計 + record 建議串。"""
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / ".git").mkdir()
+        (Path(d) / "docs" / "x-knowledge" / "MOC").mkdir(parents=True)
+        def run(*args):
+            return subprocess.run([sys.executable, GRAPHCTL, "loop", "capture-counts", *args],
+                                  cwd=str(Path(d)), capture_output=True, text=True)
+        # 三 finder,x 被三家都中(含 linter)→ capture_counts 含 3;吐 record 建議串
+        r = run("--finder", "app.py:10,app.py:20", "--finder", "app.py:10,svc.py:5",
+                "--finder", "app.py:10")
+        check("cli cc: rc0", r.returncode == 0, r.stderr)
+        check("cli cc: distinct=3", "distinct-findings=3" in r.stdout, r.stdout)
+        check("cli cc: capture_counts 含 3", "capture_counts=3" in r.stdout, r.stdout)
+        check("cli cc: 吐 --capture-counts 建議", "--capture-counts 3" in r.stdout, r.stdout)
+        # 全獨發 → 殘餘 ≥1 → 續跑側
+        r2 = run("--finder", "a", "--finder", "b", "--finder", "c")
+        check("cli cc: 全獨發=續跑側", "續跑側" in r2.stdout, r2.stdout)
+        # 無 finder → 空、殘餘 0、不吐建議串
+        r3 = run()
+        check("cli cc: 空 rc0", r3.returncode == 0 and "distinct-findings=0" in r3.stdout, r3.stdout)
+        check("cli cc: 空不吐建議", "--capture-counts" not in r3.stdout, r3.stdout)
+
+
 def t_caprecap_estimate():
     """loop 壓縮 T1:capture-recapture 殘餘缺陷估計(Chao1 偏差修正)。
     輸入=各 distinct 缺陷「被 W 審計員中幾個找到」的次數列表。"""

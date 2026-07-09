@@ -182,6 +182,20 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 
 - **mutation 冒煙(步驟 7)**在 panel 下升格為**一個確定性 panel 成員**(不只可選旁支):活變異 = 一條 finding 進 capture-recapture 池。
 
+### 異質 finder → capture_counts 的機械算法(別手數重疊)
+一輪跑完,把每個 finder 找到的 finding-key(正規化成 `file:line` 或 `section:nature`)收齊,機械算重疊:
+```
+lumos loop capture-counts \
+  --finder "app.py:12,svc.py:40"   # LLM reviewer A
+  --finder "app.py:12,util.py:9"   # LLM reviewer B
+  --finder "app.py:12"             # SARIF linter(pitfalls --diff 命中)
+  --finder "svc.py:40"             # 測試失敗 / mutation 存活
+# → capture_counts=… + 殘餘估計 + 可直接貼的 `canary record … --capture-counts <串>`
+```
+- 重疊計數(同洞被幾個 finder 中)是 capture-recapture 核心輸入,**人手數易錯 → 該機械化**。
+- linter 命中怎麼拿:`lumos pitfalls <目標> --diff`(SARIF,`.lumos/lint.json` 宣告的社群 linter),命中的 `file:line` 當一個 `--finder`。
+- 拿到 `--capture-counts` 串 → `canary record caught --loop code-<topic> --round rN --capture-counts <串> …`;`loop status code-<topic> --gate --panel` 就用它判 capture-recapture 殘餘那條。
+
 ## 護欄
 
 - **連 2 次漏抓**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)→ 升 opus。
