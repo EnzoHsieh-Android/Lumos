@@ -1627,13 +1627,15 @@ def _loop_status_panel(rounds, loop_id):
     rid, latest = next(reversed(groups.items()))
     order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
     fails = []
-    caught = sum(1 for r in latest if r.get("kind") == "caught")
+    caught_recs = [r for r in latest if r.get("kind") == "caught"]
+    caught = len(caught_recs)
     if caught >= 2:
         print(f"[panel] 輪有效(canary caught {caught} ≥2): ✓")
     else:
         print(f"[panel] 輪有效: ✗ — canary caught {caught} <2(輪無效)")
         fails.append("輪無效")
-    maxsev = max((order.get(r.get("severity", "clean"), 1) for r in latest), default=0)
+    # maxsev 只算 caught(醒著)審計員——missed 者 findings 已剔除(設計 §判定;review M1)
+    maxsev = max((order.get(r.get("severity", "clean"), 1) for r in caught_recs), default=0)
     if maxsev >= 2:
         print(f"[panel] falsification+ODC(存活 max≤minor): ✗ — 存活 {'blocker' if maxsev==3 else 'major'}")
         fails.append("存活≥major")
@@ -1641,7 +1643,11 @@ def _loop_status_panel(rounds, loop_id):
         print("[panel] falsification+ODC(存活 max≤minor): ✓")
     cc = next((r["capture_counts"] for r in latest if r.get("capture_counts")), None)
     if cc is None:
-        print("[panel] capture-recapture 殘餘: skipped(無 capture_counts)")
+        # fail-closed(review C1):panel 的收斂本體就是 capture-recapture 結構信號,
+        # 沒 capture_counts 就無從證母體枯竭 → 不當「跳過」,當「未枯竭」擋。
+        # 否則不寫 counts 即繞過殘餘檢查、退回舊「2 caught+無 major」弱信號。
+        print("[panel] capture-recapture 殘餘: ✗ — 無 capture_counts(母體未證枯竭;panel 模式必帶)")
+        fails.append("無capture_counts")
     else:
         remaining = _estimate_remaining_defects(cc)
         THRESH = 1.0
@@ -1687,14 +1693,15 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
         print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
         return 2
 
-    # 混用守衛(R2-F1 footgun):panel 記錄(有 round 欄)與 legacy 模式不可混用,
-    # 否則舊模式會把一輪 W 筆當 W 輪、K-streak 偽過。
-    has_round = any("round" in r for r in rounds)
-    if panel and rounds and not has_round:
-        print("ERROR: --panel 但 canary-log 無 round 欄(這批是 legacy 單體記錄?去掉 --panel)",
+    # 混用守衛(R2-F1 footgun):panel 記錄(有 round 欄)與 legacy 模式不可混用。
+    # 用 all/any 而非單向 any:partial-mix(部分有 round、部分沒)也擋——否則 round-less
+    # 記錄在 panel 模式會形成 None phantom 組、可能成「最新輪」偽過(review I1)。
+    n_round = sum(1 for r in rounds if "round" in r)
+    if panel and rounds and n_round != len(rounds):
+        print("ERROR: --panel 要求本 loop 記錄全帶 round 欄(混用/legacy 記錄拒讀,防 None phantom 輪)",
               file=sys.stderr)
         return 2
-    if not panel and has_round:
+    if not panel and n_round > 0:
         print("ERROR: canary-log 含 round 欄(panel 記錄)卻未加 --panel——拒絕靜默把一輪 W 筆當 W 輪",
               file=sys.stderr)
         return 2

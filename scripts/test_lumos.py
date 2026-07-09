@@ -6020,6 +6020,25 @@ def t_loop_panel_gate():
         r = _gate(d)  # 無 --panel
         check("panel: 有 round 欄但無 --panel → rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
 
+    # C1 fail-closed:2 caught 乾淨但無 capture_counts → 不收斂(不得靜默跳過殘餘)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A", "--severity", "clean")
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "B", "--severity", "minor")
+        r = _gate(d, "--panel")
+        check("panel: 無 capture_counts → fail-closed rc1(不繞過殘餘)",
+              r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+
+    # I1 partial-mix:同 loop 有 round 欄記錄 + 無 round 欄記錄混用 → rc2(防 None phantom 輪)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A", "--severity", "major")
+        _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "B", "--severity", "major")
+        _rec(d, "caught", "--loop", "PL", "--token", "C", "--severity", "clean")  # 無 round(legacy 混入)
+        r = _gate(d, "--panel")
+        check("panel: partial-mix(有/無 round 混用) → rc2 拒讀",
+              r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
+
 
 def t_canary_round_field():
     """loop 壓縮 T2:canary record --round 台帳欄(panel 一輪 W 筆共享 round-id)。
