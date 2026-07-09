@@ -43,6 +43,15 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 - **max cap = 6 筆 record**:到頂仍未收斂 → **停、把現況攤給人**、記一句「達 cap 未收斂」。別無限燒。
 - **實質收斂 early-exit(2026-07-07 Landmark 實戰調參)**:連 K 輪 caught 且無 blocker/major、**且新 findings 全為文件精度級 minor** 時,編排者可**提前向人攤牌請裁「實質收斂」**,不必跑滿 cap——「你一定找得到」framing 保證每輪必交 minor,G2 數字枯竭天生壓不到底,這是誠實出口(人裁、留痕記入 loop note)。⚠ 僅限手動 loop;自主 loop 無人可攤牌,其對應機制=unconverged requeue 留人,不適用此條。
 
+## 平行 panel 模式(≤3 輪壓縮,2026-07-09;取代 6 輪同族循序,設計見 [[loop三輪壓縮_計劃]])
+6 輪同族循序=相關信號(「9 judge 2 票」)且 framing 對抗 G2 收斂逼跑滿 cap。壓縮=**買獨立廣度不買相關深度**:
+- **一輪 = 平行派 W 個多樣審計員**(W 由 tier:`difficulty.params` 的 `panel_width`,standard=3/high=5),不同 canary 型別(跨 slot 輪替 a/b/c/d)+ 不同鏡頭(正確性/邊界/整合)+ ≥1 跨家族(qwen,不帶 canary、只作否決)。每審計員各自 canary → 注意力檢查平行做。
+- **判定(編排者一次做)**:①逐同族審計員判 canary caught/missed,missed 者 findings 剔除 ②去重(嚴格合一同段同性質)③對存活 ≥major 派辯方 ④算 capture-recapture:各 distinct 缺陷被幾人找到 → `capture_counts`。
+- **記錄**:一輪 W 筆共享 round-id:`lumos canary record caught|missed --loop <id> --round <rid> --severity <s> --capture-counts "2,2,1"`(counts 記在該輪一筆即可)。
+- **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 四條合取:輪有效(≥2 caught)∧ 存活 max≤minor(只算 caught)∧ capture-recapture 殘餘<門檻(**無 counts=fail-closed**)。一個乾淨 panel 輪即收斂(K=1);存活 ≥major → fix → 下一輪只重審 delta,cap=3。
+- **混用守衛**:panel 記錄(帶 round)與 legacy 記錄不可混用,`--panel` 要求全帶 round、否則 rc2(防 None phantom 輪偽過)。
+- **收斂判準理據(散文收斂 without 干擾信號)**:framing 汙染 count 不汙染結構 → capture-recapture 讀重疊、ODC 讀 class、AC 讀 coverage;三者繞開被汙染的 count,framing 不動。詳見 [[loop三輪壓縮_計劃]]。
+
 ## 誠實天花板(收斂後務必向人提醒,別讓 CONVERGED 被當「絕對沒問題」)
 1. **完整性**:收斂只證「連 2 輪醒著的審計員沒找到 blocker/major」,不證沒有更深的問題。完整性靠多輪 + 多視角,不靠把門檻調嚴。
 2. **整合性**:canary-caught / severity / 哪些是「誤判」三個都由植入者(你)自己判、無外部檢查——是**沒閉合的迴歸**,不 tamper-proof。loop 是**可觀測 + 摩擦 + 地板**,不是 oracle。

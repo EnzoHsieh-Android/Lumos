@@ -163,3 +163,20 @@ binding constraints，3-6 條}
    本次 migration 自癒段即此路徑，值得寫成慣例。
 4. **re-review 用 SendMessage 回原審查者**（context 還在，比新派便宜且能對照
    自己前次結論），fix 報告 append 原 report 檔。
+
+---
+
+## 7. 平行 panel 派工(2026-07-09,≤3 輪壓縮;設計 loop三輪壓縮_計劃)
+
+取代 6 輪同族循序。一輪 = **同一則訊息內平行派 W 個審計員**(§1 模板,但差異化):
+
+- **W 由 tier 定**：`difficulty.params(tier)['panel_width']`（standard=3 / high=5）。
+- **多樣化三軸**(「9 judge 2 票」:要獨立票不要數量)：
+  1. **canary 型別跨 slot 輪替** `[(slot) mod 4]`=a/b/c/d(每審計員一份工作副本、各植一型);d 型保裸檔名。
+  2. **鏡頭各異**:slot1 正確性/邏輯、slot2 邊界可執行、slot3 整合知識同步、(W>3)資源併發、回滾。
+  3. **≥1 跨家族**:一個 slot 走 qwen(cross_audit),**不帶 canary**——它是獨立性軸、只作否決(報 ≥major 且辯方沒駁倒→不收斂),不計注意力票、不作背書。
+- **判讀(編排者一次跨 W 份做)**:①逐同族審計員判 canary caught/missed;missed 者 findings 剔除 ②去重(嚴格合一「同段落同性質」,不偏多留)③對存活 ≥major 派 §2 辯方 ④數 capture_counts(各 distinct 缺陷被幾人找到)。
+- **記錄**(一輪 W 筆共享 round-id):
+  `lumos canary record caught|missed --loop <id> --round <rid> --auditor <slotN> --severity <s> [--capture-counts "2,2,1"]`(counts 記該輪一筆即可)。
+- **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 四條合取(輪有效≥2caught ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<1.0[無counts=fail-closed])。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。
+- **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix/legacy→rc2,防 None phantom 輪)。

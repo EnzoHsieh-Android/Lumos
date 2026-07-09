@@ -94,9 +94,9 @@ summary: |-
 
 **Files:** `skills/lumos-design-loop/SKILL.md`(每輪→panel 結構+四條收斂)、`skills/lumos-design-loop/templates.md`(新增平行 panel 派工模板 + W-slot canary 分派 + 判讀:ODC 分類/capture_counts 記錄)、`skills/lumos-code-loop/SKILL.md`(panel 化的 diff 分派)、`governance/autonomous_loop/orchestrator-prompt.md`(步驟 3-8 改平行 + cross_audit 接 panel)、`Systems/design-loop.md`、`Systems/convergence-evidence-gate.md`(G2 序列→panel 結構信號)。
 
-- [ ] **Step 1** 改上述 prose,描述怎麼跑 panel + 用 T1-4 原語;明標「派工以 templates.md 為權威」。
-- [ ] **Step 2** 全量 `python3 scripts/test_lumos.py` 0 failed(prose 改動不該動測試,除非動到 doctor Check D 的範本比對——CLAUDE.md 經 reinject 同步)。
-- [ ] **Step 3 Commit** `docs(loop): panel 化 prose 接線(skills/orchestrator/Systems)`
+- [x] **Step 1** 改上述 prose,描述怎麼跑 panel + 用 T1-4 原語;明標「派工以 templates.md 為權威」。
+- [x] **Step 2** 全量 `python3 scripts/test_lumos.py` 0 failed(prose 改動不該動測試,除非動到 doctor Check D 的範本比對——CLAUDE.md 經 reinject 同步)。
+- [x] **Step 3 Commit** `docs(loop): panel 化 prose 接線(skills/orchestrator/Systems)`
 
 ---
 

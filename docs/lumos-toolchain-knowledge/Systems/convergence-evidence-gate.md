@@ -15,6 +15,7 @@ summary: |-
   KEY:G2 fail-closed(tail-K 缺 findings 欄位即擋)+ 欄位互證(clean⇒0、minor⇒≥1,矛盾即擋);G1 用 _refcheck_scan 只驗 spec→repo 指涉、不驗內部一致性(canary 保留地)
   KEY:Confident Liar 條款(§2.5c)——unanchored(指控與 ground-truth 無字串交集)單獨不撐 reject;parse_fallback 遍不計票;disputed 門票從「qwen 喊 major」改「喊的 major 驗過還站著」
   KEY:誠實天花板——findings 數源頭仍是 LLM 裁決(gate 機械化算術非數字正確性);枯竭≠挖乾(同門盲點趨同);sentinel 擋混淆不擋對抗注入;§2.5c 是 prompt 層散文契約無機械回歸守衛;換 loop_id 洗紀錄/--spec 無綁定向量留 v2(spec hash 綁定)
+  KEY:平行 panel 收斂(2026-07-09,`--panel`,見 [[loop三輪壓縮_計劃]])——G2 序列枯竭是**循序深度**信號、配不上平行拓樸;panel 模式改 capture-recapture 殘餘估計(從 W 獨立審計員 findings 重疊估母體枯竭,取代 findings 序列遞減)+ 輪有效(≥2 caught)+ 存活 max≤minor;無 capture_counts=fail-closed;legacy K-streak∧G1∧G2(無 --panel)完全不變
   DEP:[[lumos-refcheck]](G1 消費 _refcheck_scan)｜[[canary-audit]](記錄面)｜cross_audit.py
   TEST:t_canary_findings 3 + t_loop_gate 16 checks(CLI)+ TestCrossAudit 新 4(unittest);352 passed 全綠
   VERIFY:[[2026-07-03_convergence-evidence-gate]]
