@@ -168,7 +168,19 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
   `lumos canary record caught|missed --loop code-<topic> --round <rid> --auditor <slotN> --severity <s> [--capture-counts "2,2,1"]`。
 - **問收斂**:`lumos loop status code-<topic> --gate --panel --repo <root>` → 四條合取(輪有效≥2caught ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<門檻[無counts=fail-closed]);**G1 本就對代碼 skip**,panel 模式不影響。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta hunk,cap=3。
 - **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix→rc2)。
-- **mutation 冒煙(步驟 7)**在 panel 下不變——是各 reviewer 之外的可選機械錨,不佔 panel slot。
+
+### ⚠ code-loop 與 design-loop 的關鍵差異(2026-07-09 交叉查文獻;別全盤沿用)
+程式碼有散文沒有的東西——**可執行 + 可靜態分析**。文獻(見 [[loop三輪壓縮_計劃]] 的 code-loop 差異節)證 code review 最佳解是**異質 ensemble**,非「多個多樣 LLM」:
+1. **panel 應異質,不只多樣 LLM**(borrow:AutoSafeCoder / Multi-Agent Code Verification via Information Theory,arxiv 2511.16708——submodularity 證異質分析器各加獨立資訊):把**確定性驗證器當一等 panel 成員**,與 LLM reviewer 並列——
+   - 專案 `.lumos/lint.json` 宣告的社群 linter(SARIF,`pitfalls --diff` 已吃)= 一個 slot;
+   - 測試套件(pre-push gate 已跑)、type checker、mutation 冒煙(步驟 7)各算獨立信號。
+   - **為何**:linter/測試/type 的錯誤剖面**與 LLM 正交**(真獨立票),直擊「9 judge 2 票」——純 LLM panel(即使多樣)仍相關,摻確定性工具才買到真獨立票。
+2. **辯方可執行 falsification**(borrow:Greptile TREX / CodeRabbit sandbox「grep 沒東西≠證明有 bug,先跑再信」):design-loop 辯方用 grep/Read 論證;**code-loop 辯方應能跑測試/repro/mutation 確認-或-殺一條 finding**——可執行反證 > 論證反證。lumos 已有種子:mutation 冒煙 + pre-push 測試 gate。
+3. **capture-recapture 跨異質 finder**:LLM findings ∪ linter findings ∪ 測試失敗的**重疊**——LLM 與工具都指同一洞 = 更強收斂信號(且 capture-recapture 本就生於軟體檢驗,回娘家)。
+4. **canary 型別、defect 分類本就不同**(已做:bug 四型 vs a/b/c/d)——文獻(PBR/defect-type mapping)證 reading technique 該隨 artifact 調;但實證 PBR 增益不穩,**重點在異質驗證器 mix 而非 LLM 鏡頭數**。
+> 一句話:code-loop **繼承 panel 機制 + capture-recapture 收斂**(後者本是代碼檢驗的),但**panel 成員換成 LLM + 確定性工具的異質組合、辯方改可執行反證**——不是「design-loop 換 canary 名字」。
+
+- **mutation 冒煙(步驟 7)**在 panel 下升格為**一個確定性 panel 成員**(不只可選旁支):活變異 = 一條 finding 進 capture-recapture 池。
 
 ## 護欄
 
