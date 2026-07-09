@@ -213,7 +213,7 @@ lumos canary record caught --loop "code-$TOPIC" --round "$RID" \
   --auditor slot1 --severity minor --capture-counts "2,1,1"
 # 4. 問收斂
 lumos loop status "code-$TOPIC" --gate --panel --repo .   # rc0=PASS → 進 finishing;rc1→修 delta 再下一輪(cap=3)
-# 5. 收斂後記台帳才能 push
+# 5. 收斂後記留痕才能 push
 lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活 major"
 ```
 
@@ -235,13 +235,13 @@ lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活
 
 ## 收斂後
 
-`lumos loop status` exit 0 → 向人回報收斂 + 上述天花板 → **必須先記 code-loop pass 台帳** → 再交 **finishing-a-development-branch** 進合併流程。
+`lumos loop status` exit 0 → 向人回報收斂 + 上述天花板 → **必須先記 code-loop pass 留痕** → 再交 **finishing-a-development-branch** 進合併流程。
 
 **強制步驟（不可跳）：**
 ```bash
 lumos code-loop pass --note "<收斂理由 / loop-id，例:code-<topic> 收斂 N 輪 caught 無 blocker>"
 ```
 
-> **為什麼**：pre-push hook 已升級為 **blocking**——tier=high 分支若無有效的 `pass`（或 `skip`）台帳，`git push` 會被硬擋（rc1）。`loop status` exit 0 只代表審計收斂，台帳要另外寫一次才閉環。`skip` 是假陽性逃生閥（留痕），正常收斂後用 `pass`。
+> **為什麼**：pre-push hook 已升級為 **blocking**——tier=high 分支若無有效的 `pass`（或 `skip`）留痕，`git push` 會被硬擋（rc1）。`loop status` exit 0 只代表審計收斂，留痕要另外寫一次才閉環。`skip` 是假陽性逃生閥（繞行也留痕），正常收斂後用 `pass`。
 
 > 設計全文見 `docs/design/2026-07-04-pitfalls-code-loop.md` ### ③ `lumos-code-loop`。

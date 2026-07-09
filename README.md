@@ -164,7 +164,7 @@ KEY:★CHECKPOINT★   <改了難救:部署測試機>
 寫回 ── lumos set/append/decision-add 記決策、驗證、合約
 自驗 ── lumos lint <節點>        (快、單檔——寫完一個節點馬上跑)
        ── lumos doctor           (全圖健康)
-終審 ── lumos pitfalls --diff <base>..HEAD;tier=high → code-loop(canary 護對抗代碼審)→ code-loop pass 記台帳
+終審 ── lumos pitfalls --diff <base>..HEAD;tier=high → code-loop(canary 護對抗代碼審)→ code-loop pass 記留痕
 提交 ── pre-commit 擋 code-without-graph;pre-push 跑 doctor --ci + anchor verify + code-loop 硬擋
 ```
 
@@ -217,7 +217,7 @@ lumos sync-verified-by [--apply]                     # 補漏寫的 verified_by(
 ```bash
 lumos pitfalls --diff <base>..HEAD [--no-lint]       # 掃 diff 隱患、分 tier(standard/high);high → 走 code-loop
 lumos code-loop check [--json]                        # tier=high 未過對抗代碼審 → rc1(pre-push 單點硬擋)
-lumos code-loop pass|skip --note "<理由>"            # 記/繞 收斂台帳(綁 HEAD sha;skip 留痕逃生)
+lumos code-loop pass|skip --note "<理由>"            # pass/skip 都記進 code-loop 留痕(綁 HEAD sha;skip=假陽性逃生閥,繞行也留痕)
 lumos canary record caught|missed --loop <id> ...    # design-loop/code-loop 的 canary 醒著紀錄
 lumos loop status <id> --need 2 --gate [--panel]      # 收斂閘(序列:K-streak∧G1∧G2 / --panel:輪有效∧存活max≤minor∧capture-recapture殘餘)
 lumos loop capture-counts --finder ... [--from-pitfalls <range>]  # 異質 finder(LLM+linter+測試)算重疊→capture_counts(--from-pitfalls 自動收割 linter,免手貼)

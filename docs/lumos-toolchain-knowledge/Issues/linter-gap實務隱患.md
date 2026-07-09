@@ -10,7 +10,7 @@ related:
   - "[[pitfalls網搜補漏_計劃]]"
 summary: |-
   FLAG:TECHNICAL
-  KEY:lumos-toolchain(python3 stdlib)的 linter 未收錄實務隱患台帳——lumos-pitfalls-gapfill skill 網搜補漏的落點;兩段〈已採納〉(放行的坑,可被 pitfalls 進場餵)〈已評估駁回〉(駁回的坑+反證,供 skill 去重跳過)
+  KEY:lumos-toolchain(python3 stdlib)的 linter 實務隱患尚未留痕(進實務隱患紀錄)——lumos-pitfalls-gapfill skill 網搜補漏的落點;兩段〈已採納〉(放行的坑,可被 pitfalls 進場餵)〈已評估駁回〉(駁回的坑+反證,供 skill 去重跳過)
   KEY:〈已採納〉目前空(2026-07-05 首次 dogfood 唯一候選被反證預篩駁倒)
   DECISION:isinstance(True,int) bool 穿 int 守衛=真通則隱患但 lumos 已全修(唯二 config int 守衛皆加 not isinstance bool)→ 駁回(無未修實例),記此避免重找
 ---
