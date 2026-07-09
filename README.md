@@ -219,7 +219,8 @@ lumos pitfalls --diff <base>..HEAD [--no-lint]       # 掃 diff 隱患、分 tie
 lumos code-loop check [--json]                        # tier=high 未過對抗代碼審 → rc1(pre-push 單點硬擋)
 lumos code-loop pass|skip --note "<理由>"            # 記/繞 收斂台帳(綁 HEAD sha;skip 留痕逃生)
 lumos canary record caught|missed --loop <id> ...    # design-loop/code-loop 的 canary 醒著紀錄
-lumos loop status <id> --need 2 --gate               # 收斂閘(K-streak ∧ G1 ∧ G2)
+lumos loop status <id> --need 2 --gate [--panel]      # 收斂閘(序列:K-streak∧G1∧G2 / --panel:輪有效∧存活max≤minor∧capture-recapture殘餘)
+lumos loop capture-counts --finder ... [--from-pitfalls <range>]  # 異質 finder(LLM+linter+測試)算重疊→capture_counts(--from-pitfalls 自動收割 linter,免手貼)
 lumos fold-check <spec>                               # 抓設計「折入漂移」(鏡像段/值漂移/反向遺漏)
 lumos refcheck <spec> --repo . [--json]              # spec→repo 指涉的機械核對(missing/行號越界)
 lumos impact --file <檔> [--depth N] [--json]        # 反查受影響關聯節點(直/間接)+ 命中事故(pitfall_when)

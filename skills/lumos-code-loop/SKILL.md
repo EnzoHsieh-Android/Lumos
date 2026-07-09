@@ -196,6 +196,27 @@ lumos loop capture-counts \
 - **linter 免手貼:`--from-pitfalls <range>` 一鍵收割**——`loop capture-counts --finder "<LLM A>" --finder "<LLM B>" --from-pitfalls main..HEAD --repo <root>` 會自己跑 `pitfalls --diff`、按 source 分組(每個 linter driver / pitfalls 內建各一個確定性 finder)、把命中的 `file:line` 併進來一起算重疊。手動 `--finder` 留給 LLM reviewer,確定性 finder 自動來。
 - 拿到 `--capture-counts` 串 → `canary record caught --loop code-<topic> --round rN --capture-counts <串> …`;`loop status code-<topic> --gate --panel` 就用它判 capture-recapture 殘餘那條。
 
+### 端到端一輪(照抄改參數)
+```bash
+# 0. 定 topic / tier / diff range
+TOPIC=code-fix-billing; RANGE=main..HEAD; RID=r1
+# 1. 平行派 W 個乾淨 LLM reviewer(Agent tool,W=panel_width;各讀 diff 工作副本、含輪替 bug canary)
+#    → 收各 reviewer 的 findings,正規化成 file:line
+# 2. 算重疊(LLM 手動 --finder + linter/regex 自動 --from-pitfalls)
+lumos loop capture-counts \
+  --finder "billing.py:88,billing.py:120" \  # reviewer A
+  --finder "billing.py:88,tax.py:12" \       # reviewer B(billing.py:88 與 A 重疊)
+  --from-pitfalls "$RANGE" --repo .          # linter/regex 確定性 finder 自動收割
+#    → 印 capture_counts=… 與可貼的 `--capture-counts <串>`
+# 3. 記這一輪(W 筆共享同一 --round;此處示意 caught 輪)
+lumos canary record caught --loop "code-$TOPIC" --round "$RID" \
+  --auditor slot1 --severity minor --capture-counts "2,1,1"
+# 4. 問收斂
+lumos loop status "code-$TOPIC" --gate --panel --repo .   # rc0=PASS → 進 finishing;rc1→修 delta 再下一輪(cap=3)
+# 5. 收斂後記台帳才能 push
+lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活 major"
+```
+
 ## 護欄
 
 - **連 2 次漏抓**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)→ 升 opus。
