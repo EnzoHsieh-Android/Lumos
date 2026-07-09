@@ -157,10 +157,23 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 
 ---
 
+## 平行 panel 模式(≤3 輪壓縮,2026-07-09;取代 6 輪循序,機械核心與 design-loop 共用)
+機械原語 loop-agnostic,**code-loop 直接可用**(同 `lumos loop status`/`canary record`);差別只在 panel 跑的是 **diff 文字檔**、canary 是 **bug hunk**、**無 G1**(code-loop 本就 skip 引用座標)。設計見 [[loop三輪壓縮_計劃]]。
+
+- **一輪 = 平行派 W 個多樣 reviewer**(W=`difficulty.params(tier)['panel_width']`,standard=3/high=5),各讀一份 diff 工作副本:
+  - **bug canary 型別跨 slot 輪替** `[(slot) mod 4]`=邊界off-by-one / 資源未釋放 / None例外路徑 / 冪等併發(code-loop 的四型,非 design-loop 的 a/b/c/d);canary hunk 仍落**真改動集之外**、走三道防污染(步驟 2.5)。
+  - **鏡頭各異**:bug/邊界 / 資源與例外 / 冪等併發 /(W>3)migration 正確性、測試種子清理。
+  - **≥1 跨家族(qwen)**:不帶 canary、只作否決(同 design-loop)。
+- **判讀/記錄/收斂**:同 design-loop panel(步驟 4 辯方 + 步驟 5 記錄)——一輪 W 筆共享 round-id:
+  `lumos canary record caught|missed --loop code-<topic> --round <rid> --auditor <slotN> --severity <s> [--capture-counts "2,2,1"]`。
+- **問收斂**:`lumos loop status code-<topic> --gate --panel --repo <root>` → 四條合取(輪有效≥2caught ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<門檻[無counts=fail-closed]);**G1 本就對代碼 skip**,panel 模式不影響。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta hunk,cap=3。
+- **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix→rc2)。
+- **mutation 冒煙(步驟 7)**在 panel 下不變——是各 reviewer 之外的可選機械錨,不佔 panel slot。
+
 ## 護欄
 
 - **連 2 次漏抓**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)→ 升 opus。
-- **max cap = 6 筆 record**:到頂仍未收斂 → 停、把現況攤給人、記一句「達 cap 未收斂」。別無限燒。
+- **max cap = 6 筆 record(循序模式);panel 模式 cap=3 輪**。到頂仍未收斂 → 停、把現況攤給人、記一句「達 cap 未收斂」。別無限燒。
 
 ---
 
