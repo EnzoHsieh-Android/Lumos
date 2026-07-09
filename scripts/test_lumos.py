@@ -5708,8 +5708,14 @@ def t_hook_copy_list_completeness():
     # ── 側 B:從 scripts/lumos 源碼 grep _install_hooks_py 的 for-tuple ────────
     lumos_src = Path(__file__).resolve().parent / "lumos"
     src_text = lumos_src.read_text(encoding="utf-8")
-    # 找 for f in (...): 裡的所有 "*.py" 字串
-    m2 = _re.search(r'for f in \(([^)]+)\)', src_text)
+    # 先錨定到 def _install_hooks_py(不再抓全檔第一個 for f in——那會被別處
+    # 無關的 `for f in (...)`(如 sarif 轉換、capture-counts)搶走 → copy_list 抓空誤紅)。
+    fn = _re.search(r'def _install_hooks_py\b', src_text)
+    check("hook_copy_list_completeness: 源碼有 _install_hooks_py", fn is not None,
+          "找不到 def _install_hooks_py——測試錨點失效")
+    scope = src_text[fn.start():] if fn else src_text
+    # 在該函式範圍內找複製清單 for f in (...):(取函式起點後第一個)
+    m2 = _re.search(r'for f in \(([^)]+)\)', scope)
     copy_list: set[str] = set()
     if m2:
         inner = m2.group(1)
