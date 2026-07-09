@@ -40,11 +40,11 @@ summary: |-
 
 **Interfaces:** `_estimate_remaining_defects(capture_counts: list[int]) -> float`——輸入=各 distinct 缺陷「被 W 個審計員中幾個找到」的次數列表;回殘餘估計。用 **Chao1 偏差修正**:`f1=(只1人找到數), f2=(恰2人), remaining = f1*(f1-1)/(2*(f2+1))`(f2=0 不炸)。
 
-- [ ] **Step 1 失敗測試**:`t_caprecap_estimate`——全高重疊(每缺陷都多人找到,f1=0)→ remaining≈0;高 f1 低 f2(各找各的)→ remaining 大;f2=0 不 div0;空輸入→0。
-- [ ] **Step 2 FAIL**:`python3 scripts/test_lumos.py -k caprecap`
-- [ ] **Step 3 實作** Chao1 偏差修正純函式。
-- [ ] **Step 4 PASS**。
-- [ ] **Step 5 Commit** `feat(loop): capture-recapture 殘餘估計(Chao1,平行 panel 收斂信號)`
+- [x] **Step 1 失敗測試**:`t_caprecap_estimate`——全高重疊(每缺陷都多人找到,f1=0)→ remaining≈0;高 f1 低 f2(各找各的)→ remaining 大;f2=0 不 div0;空輸入→0。
+- [x] **Step 2 FAIL**:`python3 scripts/test_lumos.py -k caprecap`
+- [x] **Step 3 實作** Chao1 偏差修正純函式。
+- [x] **Step 4 PASS**。
+- [x] **Step 5 Commit** `feat(loop): capture-recapture 殘餘估計(Chao1,平行 panel 收斂信號)`
 
 ---
 

@@ -5929,6 +5929,30 @@ def t_runner_k_zero_cases_rc1():
           "0 個測試" in r.stderr, f"stderr={r.stderr!r}")
 
 
+def _load_lm():
+    """in-process 載入 lumos 模組(pure-function 測試用)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location(
+        "lm_pf", GRAPHCTL, loader=SourceFileLoader("lm_pf", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def t_caprecap_estimate():
+    """loop 壓縮 T1:capture-recapture 殘餘缺陷估計(Chao1 偏差修正)。
+    輸入=各 distinct 缺陷「被 W 審計員中幾個找到」的次數列表。"""
+    m = _load_lm()
+    f = m._estimate_remaining_defects
+    check("caprecap: 全高重疊 → 殘餘≈0", f([3, 2, 2, 3]) == 0.0, f"got {f([3,2,2,3])}")
+    check("caprecap: 全獨發 f2=0 不div0 → 6.0", f([1, 1, 1, 1]) == 6.0, f"got {f([1,1,1,1])}")
+    check("caprecap: f1=2 f2=2 → ~0.333",
+          abs(f([1, 1, 2, 2]) - (2 * 1) / (2 * 3)) < 1e-9, f"got {f([1,1,2,2])}")
+    check("caprecap: 空輸入 → 0", f([]) == 0.0, f"got {f([])}")
+    check("caprecap: 單一缺陷多人找到 → 0", f([5]) == 0.0, f"got {f([5])}")
+
+
 # ── Task 1: _extract_claude_block_span 三態 ────────────────────────────────
 
 def _import_lumos_for_reinject():
