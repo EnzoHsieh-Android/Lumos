@@ -5940,6 +5940,31 @@ def _load_lm():
     return m
 
 
+def t_canary_round_field():
+    """loop 壓縮 T2:canary record --round 台帳欄(panel 一輪 W 筆共享 round-id)。
+    帶 --round → 記錄含 round 欄;不帶 → 無此欄(舊記錄格式逐位元不變)。"""
+    import json as _json
+    with tempfile.TemporaryDirectory() as d:
+        vault = Path(d) / "docs" / "x-knowledge"
+        (vault / "MOC").mkdir(parents=True)
+        (vault / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+        log = Path(d) / "docs" / ".canary-log.jsonl"
+
+        def _rec(*extra):
+            return subprocess.run([sys.executable, GRAPHCTL, "canary", "record", *extra],
+                                  cwd=str(Path(d)), capture_output=True, text=True)
+
+        r = _rec("caught", "--loop", "L", "--round", "r1", "--token", "T1")
+        check("canary_round: rc0", r.returncode == 0, f"rc={r.returncode} err={r.stderr}")
+        recs = [_json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+        check("canary_round: 帶 --round 記錄含 round 欄",
+              recs[-1].get("round") == "r1", f"rec={recs[-1]}")
+        _rec("missed", "--loop", "L", "--token", "T2")
+        recs = [_json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+        check("canary_round: 不帶 --round 無此欄(向後相容)",
+              "round" not in recs[-1], f"rec={recs[-1]}")
+
+
 def t_caprecap_estimate():
     """loop 壓縮 T1:capture-recapture 殘餘缺陷估計(Chao1 偏差修正)。
     輸入=各 distinct 缺陷「被 W 審計員中幾個找到」的次數列表。"""

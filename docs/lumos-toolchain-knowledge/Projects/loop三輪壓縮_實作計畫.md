@@ -54,11 +54,11 @@ summary: |-
 
 **Interfaces:** `canary record ... --round <id>` 選填;schema 加 `round` 欄(無則 None,向後相容)。
 
-- [ ] **Step 1 失敗測試**:`t_canary_round_field`——帶 --round 寫入含 round 欄;不帶則無此欄(舊記錄格式不變);讀回正確。
-- [ ] **Step 2 FAIL**。
-- [ ] **Step 3 實作** argparse `--round` + 函式參數 + schema。
-- [ ] **Step 4 PASS**。
-- [ ] **Step 5 Commit** `feat(loop): canary record --round 台帳欄(panel 一輪 W 筆共享)`
+- [x] **Step 1 失敗測試**:`t_canary_round_field`——帶 --round 寫入含 round 欄;不帶則無此欄(舊記錄格式不變);讀回正確。
+- [x] **Step 2 FAIL**。
+- [x] **Step 3 實作** argparse `--round` + 函式參數 + schema。
+- [x] **Step 4 PASS**。
+- [x] **Step 5 Commit** `feat(loop): canary record --round 台帳欄(panel 一輪 W 筆共享)`
 
 ---
 
