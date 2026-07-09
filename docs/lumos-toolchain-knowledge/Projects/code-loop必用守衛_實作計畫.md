@@ -82,7 +82,9 @@ def t_codeloop_guard_verdict():
 
 ### Task 3: Stop hook 注入 nag
 
-**Files:** Create `scripts/hooks/claude/code-loop-guard.py`;Modify `scripts/merge-claude-settings.py`(Stop 註冊);Test。
+> ⚠ **已撤除(2026-07-06 ADR)**:此 Stop nag 每回合太擾民,改由 pre-push 單點把關;腳本 scripts/hooks/claude/code-loop-guard.py 與 Stop 註冊已對稱移除(commit 14b41eb)。以下為當時計畫原文,保留歷史。
+
+**Files:** Create scripts/hooks/claude/code-loop-guard.py(已撤除);Modify `scripts/merge-claude-settings.py`(Stop 註冊);Test。
 
 **Interfaces:** Stop hook:verdict blocked → 印 `{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":...}}`(nag,不擋回合)。
 

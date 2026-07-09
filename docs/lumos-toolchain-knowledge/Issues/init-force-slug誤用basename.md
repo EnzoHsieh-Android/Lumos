@@ -23,8 +23,8 @@ summary: |-
 
 ## 現象
 `lumos init --force`(doctor 建議用它刷新 CLAUDE.md 紀律區塊)在既有 vault 專案上:
-- repo 資料夾 basename = `landmarkmember`,實際 vault = `docs/landmark-knowledge/`(slug `landmark`)。
-- `--force` 用 basename 當 slug → **建了一個空的 `docs/landmarkmember-knowledge/` scaffold**,且 **把 CLAUDE.md 的 `{{KG}}` 圖譜路徑寫錯成 `docs/landmarkmember-knowledge/`**(內容 drift)。
+- repo 資料夾 basename = `landmarkmember`,實際 vault = docs/landmark-knowledge/(它站專案,非本 repo;slug `landmark`)。
+- `--force` 用 basename 當 slug → **建了一個空的 docs/landmarkmember-knowledge/ scaffold**,且 **把 CLAUDE.md 的 `{{KG}}` 圖譜路徑寫錯成 docs/landmarkmember-knowledge/**(內容 drift)。
 
 ## Root cause
 `cmd_init` 的 slug 行 `slug = _slugify_vault(name) if name else _slugify_vault(root.name)` **從不參考已算出的 `existing = _vault_in(root)`**。`--force` 走完整 `_vendor_toolchain`(reinject 用該 slug 寫 CLAUDE.md 路徑)+ `_scaffold_project`(用該 slug 建 vault,錯 slug → 建錯的空 vault)。
