@@ -6107,6 +6107,38 @@ def t_loop_capture_counts_cli():
         check("cli cc: 空不吐建議", "--capture-counts" not in r3.stdout, r3.stdout)
 
 
+def t_loop_capture_counts_from_pitfalls():
+    """`loop capture-counts --from-pitfalls <range>`:自動收割 pitfalls diff 命中成一個確定性
+    finder(免手貼),與手動 --finder(LLM reviewer)一起算重疊。這關掉「手動串 linter」那半破口。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-ccfp-"))
+    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+    git("init"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    # requests.post 無 timeout(第 3 行,資源)+ 迴圈內 query(第 5 行,效能)
+    (root / "app.py").write_text(
+        "import requests\n"
+        "def f(ids):\n"
+        "    requests.post('http://x')\n"
+        "    for i in ids:\n"
+        "        db.execute('SELECT 1')\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c2")
+    def cc(*args):
+        return sp.run([sys.executable, GRAPHCTL, "loop", "capture-counts", *args],
+                      cwd=str(root), capture_output=True, text=True)
+    # 手動 finder(LLM reviewer)命中 app.py:3(與 pitfalls 重疊)+ 一個獨發 svc.py:9
+    r = cc("--finder", "app.py:3,svc.py:9", "--from-pitfalls", "HEAD~1..HEAD", "--repo", str(root))
+    check("ccfp: rc0", r.returncode == 0, r.stderr)
+    check("ccfp: 收割了 pitfalls finder", "from-pitfalls" in r.stdout or "收割" in r.stdout, r.stdout)
+    # app.py:3 被手動+pitfalls 兩家中 → capture_counts 含 2;app.py:5 與 svc.py:9 各獨發
+    check("ccfp: app.py:3 重疊 → 含 2", "capture_counts=2" in r.stdout, r.stdout)
+    check("ccfp: 吐 record 建議串", "--capture-counts 2" in r.stdout, r.stdout)
+    # git 錯誤 range → rc2、不崩
+    r2 = cc("--from-pitfalls", "nonexistent..range", "--repo", str(root))
+    check("ccfp: 壞 range → rc2", r2.returncode == 2, f"rc={r2.returncode} {r2.stdout}")
+
+
 def t_caprecap_estimate():
     """loop 壓縮 T1:capture-recapture 殘餘缺陷估計(Chao1 偏差修正)。
     輸入=各 distinct 缺陷「被 W 審計員中幾個找到」的次數列表。"""
