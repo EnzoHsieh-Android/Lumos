@@ -12,8 +12,8 @@ plan_refs:
   - "[[code-loop必用守衛_計劃]]"
 summary: |-
   FLAG:DECISION
-  KEY:「code-loop 必用守衛」TDD 實作計畫(設計見 [[code-loop必用守衛_計劃]]);5 task=T1 code-loop 台帳(pass/skip/check 綁 HEAD)→ T2 guard 判定式(tier-high∧無pass∧無skip)→ T3 Stop hook 注入 nag → T4 pre-push 升 blocking → T5 skill/doc+回歸+回填
-  KEY:台帳 governance/code-loop/<branch>.json {head_sha,status:passed|skipped,note,ts};HEAD 移動→作廢(綁 diff 狀態)
+  KEY:「code-loop 必用守衛」TDD 實作計畫(設計見 [[code-loop必用守衛_計劃]]);5 task=T1 code-loop 留痕(pass/skip/check 綁 HEAD)→ T2 guard 判定式(tier-high∧無pass∧無skip)→ T3 Stop hook 注入 nag → T4 pre-push 升 blocking → T5 skill/doc+回歸+回填
+  KEY:留痕 governance/code-loop/<branch>.json {head_sha,status:passed|skipped,note,ts};HEAD 移動→作廢(綁 diff 狀態)
   DECISION:subagent-driven TDD;基線=main 現值(先跑取)
   DEP:[[code-loop必用守衛_計劃]]
   TEST:未開工
@@ -22,7 +22,7 @@ summary: |-
 
 > **REQUIRED SUB-SKILL:** superpowers:subagent-driven-development。**設計權威**:[[code-loop必用守衛_計劃]](§1 架構/§2 收斂綁HEAD/§3 skip/§4 天花板/§5 測試)。
 
-**Goal:** 收 code-loop「靠記得調用」破口:Stop hook 注入 nag + pre-push 升 blocking + `code-loop` 台帳(pass/skip 綁 HEAD)。
+**Goal:** 收 code-loop「靠記得調用」破口:Stop hook 注入 nag + pre-push 升 blocking + `code-loop` 留痕(pass/skip 綁 HEAD)。
 
 **Architecture:** `lumos code-loop {check,pass,skip}` 讀寫 `governance/code-loop/<branch>.json`(綁 HEAD sha)→ guard 判定式 `tier-high(pitfalls --diff)∧無有效pass∧無有效skip` → Stop hook 注入 nag / pre-push rc1 擋。
 
@@ -39,13 +39,13 @@ summary: |-
 
 ---
 
-### Task 1: `lumos code-loop {pass,skip,check}` 台帳(綁 HEAD)
+### Task 1: `lumos code-loop {pass,skip,check}` 留痕(綁 HEAD)
 
 **Files:** Modify `scripts/lumos`(新 `cmd_code_loop` + argparse subparser);Test。
 
 **Interfaces:** `governance/code-loop/<branch>.json` = `{head_sha, status:"passed"|"skipped", note, ts}`;`_codeloop_read(repo_root, branch)`/`_codeloop_write(...)`;`code-loop pass --note`/`code-loop skip --note`/`code-loop check`。
 
-- [ ] **Step 1: 失敗測試** — `code-loop pass --note x` 寫台帳(head_sha=當前 HEAD、status=passed);`skip` 同(status=skipped);讀回正確;branch/head 從 git 取。
+- [ ] **Step 1: 失敗測試** — `code-loop pass --note x` 寫留痕(head_sha=當前 HEAD、status=passed);`skip` 同(status=skipped);讀回正確;branch/head 從 git 取。
 ```python
 def t_codeloop_ledger():
     with tempfile.TemporaryDirectory() as d:
@@ -57,7 +57,7 @@ def t_codeloop_ledger():
 - [ ] **Step 2: FAIL**。Run: `python3 scripts/test_lumos.py -k codeloop_ledger`
 - [ ] **Step 3: 實作** — argparse `code-loop {pass,skip,check}`;pass/skip 寫 `governance/code-loop/<branch>.json`(git 取 branch/HEAD;ts 用 payload/傳入或省略——**Date.now 禁,ts 由 git commit 時間或省略**,用 `git rev-parse HEAD` 的 committer date 或留空);note 進治理帳(gov-log)。`code-loop check` 見 T2。
 - [ ] **Step 4: PASS**。
-- [ ] **Step 5: Commit** `feat(code-loop): pass/skip 台帳(綁 HEAD sha)`
+- [ ] **Step 5: Commit** `feat(code-loop): pass/skip 留痕(綁 HEAD sha)`
 
 ---
 
@@ -67,14 +67,14 @@ def t_codeloop_ledger():
 
 **Interfaces:** `_codeloop_guard_verdict(repo_root) -> dict{blocked:bool, reason, tier}`;`lumos code-loop check` rc(blocked=1/否則0)+ --json。
 
-- [ ] **Step 1: 失敗測試** — tier=high∧無台帳→blocked;pass(HEAD 相符)→不 blocked;skip(HEAD 相符)→不 blocked;pass 但 HEAD 移動(再 commit)→作廢 blocked;tier≠high→不 blocked。
+- [ ] **Step 1: 失敗測試** — tier=high∧無留痕→blocked;pass(HEAD 相符)→不 blocked;skip(HEAD 相符)→不 blocked;pass 但 HEAD 移動(再 commit)→作廢 blocked;tier≠high→不 blocked。
 ```python
 def t_codeloop_guard_verdict():
-    # mock/造 pitfalls tier=high 的 diff + 台帳狀態,斷言 blocked 各情境
+    # mock/造 pitfalls tier=high 的 diff + 留痕狀態,斷言 blocked 各情境
     ...
 ```
 - [ ] **Step 2: FAIL**。
-- [ ] **Step 3: 實作** — 見設計 §1+§2:跑 `pitfalls --diff <merge-base>..HEAD --no-lint --json`(既有)取 tier;讀台帳,pass/skip 的 head_sha == 當前 HEAD 才有效;`blocked = tier=="high" and not valid_pass and not valid_skip`。`code-loop check` 印 verdict、rc=blocked?1:0。merge-base 取法同 pre-push。
+- [ ] **Step 3: 實作** — 見設計 §1+§2:跑 `pitfalls --diff <merge-base>..HEAD --no-lint --json`(既有)取 tier;讀留痕,pass/skip 的 head_sha == 當前 HEAD 才有效;`blocked = tier=="high" and not valid_pass and not valid_skip`。`code-loop check` 印 verdict、rc=blocked?1:0。merge-base 取法同 pre-push。
 - [ ] **Step 4: PASS**。
 - [ ] **Step 5: Commit** `feat(code-loop): guard 判定式(tier-high∧無pass∧無skip,綁HEAD)+check`
 
@@ -102,7 +102,7 @@ def t_codeloop_guard_verdict():
 
 **Interfaces:** pre-push:verdict blocked → **rc1 擋 push**(從 advisory 升級);訊息含跑法/skip 法。
 
-- [ ] **Step 1: 失敗測試** — 造 tier=high∧無台帳 → pre-push rc≠0(擋);有 pass(HEAD 符)→ rc0(放);skip→放;tier≠high→放。(pre-push 是 shell,測試可呼叫 `lumos code-loop check` 的 rc 對齊 + 端到端 smoke)
+- [ ] **Step 1: 失敗測試** — 造 tier=high∧無留痕 → pre-push rc≠0(擋);有 pass(HEAD 符)→ rc0(放);skip→放;tier≠high→放。(pre-push 是 shell,測試可呼叫 `lumos code-loop check` 的 rc 對齊 + 端到端 smoke)
 - [ ] **Step 2: FAIL/確認**。
 - [ ] **Step 3: 實作** — 見設計 §1:pre-push 現有 tier=high advisory 段(`scripts/hooks/pre-push:43-55`)改為:跑 `lumos code-loop check` → blocked(rc1)則 **exit 1 擋 push** + 印(「跑 lumos-code-loop 或 lumos code-loop skip --note；或 --no-verify 繞(自負)」);否則放行。保留 anchor/graph-doctor 其他 pre-push 檢查。
 - [ ] **Step 4: PASS** + 端到端 smoke(造 tier=high 分支 → push 被擋 → code-loop skip → 放)。
@@ -116,7 +116,7 @@ def t_codeloop_guard_verdict():
 
 - [ ] **Step 1: 回歸測試** — tier≠high 分支:`code-loop check` 不 blocked、Stop 不 nag、pre-push 不擋(不誤傷)。全量 `python3 scripts/test_lumos.py` 0 failed。
 - [ ] **Step 2: 確認**。
-- [ ] **Step 3: 接線** — lumos-code-loop SKILL 收斂(loop status gate 過)後**強制 `lumos code-loop pass --note`** 記台帳(否則 pre-push 仍擋——閉環);使用指南三處補(Stop nag + pre-push code-loop 硬擋 + `code-loop pass/skip/check` 指令)。
+- [ ] **Step 3: 接線** — lumos-code-loop SKILL 收斂(loop status gate 過)後**強制 `lumos code-loop pass --note`** 記留痕(否則 pre-push 仍擋——閉環);使用指南三處補(Stop nag + pre-push code-loop 硬擋 + `code-loop pass/skip/check` 指令)。
 - [ ] **Step 4: PASS** + doctor 0。
 - [ ] **Step 5: Commit** `feat(code-loop-guard): skill/doc 接線 + 回歸`
 

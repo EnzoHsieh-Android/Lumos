@@ -5316,7 +5316,7 @@ def _codeloop_read(repo_root, branch):
     return _j.loads(p.read_text(encoding="utf-8"))
 
 
-# ── Task 1: code-loop pass/skip 台帳(綁 HEAD sha) ──────────────────────────
+# ── Task 1: code-loop pass/skip 留痕(綁 HEAD sha) ──────────────────────────
 
 def t_codeloop_ledger():
     import shutil
@@ -5326,7 +5326,7 @@ def t_codeloop_ledger():
         check("codeloop_ledger: pass rc=0", rc == 0, f"rc={rc}")
         branch = _git_branch(d)
         rec = _codeloop_read(d, branch)
-        check("codeloop_ledger: 台帳存在", rec is not None, "找不到 json")
+        check("codeloop_ledger: 留痕存在", rec is not None, "找不到 json")
         if rec is not None:
             check("codeloop_ledger: status=passed", rec.get("status") == "passed",
                   f"status={rec.get('status')!r}")
@@ -5350,16 +5350,16 @@ def t_codeloop_ledger():
 # ── code-loop check ──────────────────────────────────────────────────────────
 
 def t_codeloop_check():
-    """check(Task 2 判定式版):tier=high∧無台帳→rc=1;pass→rc=0;HEAD 移動→rc=1;tier≠high→rc=0。
+    """check(Task 2 判定式版):tier=high∧無留痕→rc=1;pass→rc=0;HEAD 移動→rc=1;tier≠high→rc=0。
     Task 1 的 sha-only 邏輯已由 _codeloop_guard_verdict 取代;此測試對齊新語意。
     """
     import subprocess as _sp
 
-    # tier=high ∧ 無台帳 → rc=1(blocked)
+    # tier=high ∧ 無留痕 → rc=1(blocked)
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         rc_no = run_lumos(["code-loop", "check", "--repo", d])
-        check("codeloop_check: tier=high∧無台帳 rc=1", rc_no == 1, f"rc={rc_no}")
+        check("codeloop_check: tier=high∧無留痕 rc=1", rc_no == 1, f"rc={rc_no}")
 
     # tier=high ∧ pass 後 check → rc=0
     with tempfile.TemporaryDirectory() as d:
@@ -5401,7 +5401,7 @@ def t_codeloop_branch_slash():
         rc = run_lumos(["code-loop", "pass", "--note", "slashok", "--repo", d])
         check("codeloop_slash: pass rc=0", rc == 0, f"rc={rc}")
 
-        # 台帳路徑應為扁平(no 子目錄)
+        # 留痕路徑應為扁平(no 子目錄)
         safe = branch.replace("/", "__")
         flat = Path(d) / "governance" / "code-loop" / f"{safe}.json"
         subdir = Path(d) / "governance" / "code-loop" / "feat"
@@ -5514,13 +5514,13 @@ def t_codeloop_guard_verdict():
     """_codeloop_guard_verdict 判定式:5 情境。"""
     import subprocess as _sp
 
-    # ── 情境 1: tier=high ∧ 無台帳 → blocked ──────────────────────────────
+    # ── 情境 1: tier=high ∧ 無留痕 → blocked ──────────────────────────────
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
             capture_output=True, text=True)
-        check("codeloop_guard: tier=high∧無台帳 → blocked(rc=1)", r.returncode == 1,
+        check("codeloop_guard: tier=high∧無留痕 → blocked(rc=1)", r.returncode == 1,
               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
         import json as _j
         try:
@@ -5570,7 +5570,7 @@ def t_codeloop_guard_verdict():
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
-        # 再加一個 commit → HEAD sha 改變 → 台帳 sha 過時
+        # 再加一個 commit → HEAD sha 改變 → 留痕 sha 過時
         _add_commit(d, "extra.txt", "bump\n")
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
@@ -5592,7 +5592,7 @@ def t_codeloop_guard_verdict():
         r = _sp.run(
             [sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
             capture_output=True, text=True)
-        check("codeloop_guard: tier≠high∧無台帳 → 不 blocked(rc=0)", r.returncode == 0,
+        check("codeloop_guard: tier≠high∧無留痕 → 不 blocked(rc=0)", r.returncode == 0,
               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
         try:
             import json as _j
@@ -5739,7 +5739,7 @@ def t_codeloop_guard_prepush():
     pre-push 讀 GIT_DIR / git rev-parse,所以需要在真實 git repo 中執行。
 
     情境:
-      A) tier=high ∧ 無台帳 → rc1 擋住 + stderr 含跑法/skip 法提示
+      A) tier=high ∧ 無留痕 → rc1 擋住 + stderr 含跑法/skip 法提示
       B) tier=high ∧ pass(HEAD 符) → rc0 放行
       C) tier=high ∧ skip(HEAD 符) → rc0 放行
       D) tier=standard → rc0 放行(不誤傷)
@@ -5780,12 +5780,12 @@ def t_codeloop_guard_prepush():
             env=env,
         )
 
-    # ── 情境 A: tier=high ∧ 無台帳 → rc1 擋住 ────────────────────────────────
+    # ── 情境 A: tier=high ∧ 無留痕 → rc1 擋住 ────────────────────────────────
     with tempfile.TemporaryDirectory() as d:
         _make_high_tier_repo(d)
         _setup_lumos_in_repo(d)
         r = _run_pre_push(d)
-        check("codeloop_guard_prepush: tier=high∧無台帳 → rc1 擋住",
+        check("codeloop_guard_prepush: tier=high∧無留痕 → rc1 擋住",
               r.returncode == 1,
               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
         stderr = r.stderr
@@ -6047,7 +6047,7 @@ def t_loop_panel_gate():
 
 
 def t_canary_round_field():
-    """loop 壓縮 T2:canary record --round 台帳欄(panel 一輪 W 筆共享 round-id)。
+    """loop 壓縮 T2:canary record --round 留痕欄(panel 一輪 W 筆共享 round-id)。
     帶 --round → 記錄含 round 欄;不帶 → 無此欄(舊記錄格式逐位元不變)。"""
     import json as _json
     with tempfile.TemporaryDirectory() as d:

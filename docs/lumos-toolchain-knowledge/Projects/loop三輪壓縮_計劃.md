@@ -61,7 +61,7 @@ summary: |-
 ### tier→寬度(解 B3)
 `difficulty.params(tier)` 擴傳 `panel_width`:**standard=3(cap 1-2 輪)、high=5(cap 3 輪、需 2 個確認乾淨輪)**。對上文獻「最優平行/循序比按難度」。此為 `governance/autonomous_loop/difficulty.py` 的真 code 擴充(現只回 {need,maxr})。
 
-### 台帳(解 B2)
+### 留痕(解 B2)
 `lumos canary record` 加選填欄 `--round <id>`:一輪 panel = W 筆記錄共享 round-id(保留 per-auditor caught/missed 給 gov 可靠度史)。`cmd_loop_status --gate --panel` 按 round-id 分組讀:一組 = 一輪,判「≥2 caught ∧ 存活 max≤minor」。無 round 欄的舊記錄 = legacy 單體輪(向後相容,K-streak∧G2 舊模式不變)。
 
 ## 誠實天花板

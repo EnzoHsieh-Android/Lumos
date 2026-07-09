@@ -13,7 +13,7 @@ plan_refs:
 summary: |-
   FLAG:DECISION
   KEY:「loop 三輪壓縮」TDD 實作計畫(設計權威=[[loop三輪壓縮_計劃]],經 2 輪平行 panel dogfood + 3 線文獻交叉);策略=TDD 機械核心、prose(skills/orchestrator)當文檔接線(spec 自身天花板:glue 留實作真測不設計散文摳)
-  KEY:6 task=T1 capture-recapture 殘餘估計(純函式 Chao1)→ T2 cmd_canary --round 台帳→ T3 cmd_loop_status --panel 謂詞(輪有效+ODC class-gating+falsification-survived+capture-recapture 殘餘<門檻+混用報錯)→ T4 difficulty panel_width→ T5 prose 接線(skills/templates/orchestrator/Systems)→ T6 圖譜回填+回歸+anchor
+  KEY:6 task=T1 capture-recapture 殘餘估計(純函式 Chao1)→ T2 cmd_canary --round 留痕→ T3 cmd_loop_status --panel 謂詞(輪有效+ODC class-gating+falsification-survived+capture-recapture 殘餘<門檻+混用報錯)→ T4 difficulty panel_width→ T5 prose 接線(skills/templates/orchestrator/Systems)→ T6 圖譜回填+回歸+anchor
   DECISION:subagent-driven TDD;基線 828 passed;向後相容(無 --panel/--round=舊 K-streak∧G2 不變)
   DEP:[[loop三輪壓縮_計劃]]
   TEST:未開工
@@ -24,7 +24,7 @@ summary: |-
 
 **Goal:** 把 canary-護對抗審計 loop 從 6 輪同族循序壓成 ≤3 輪平行多樣 panel,收斂信號改建在結構(capture-recapture 重疊 + ODC class + AC coverage)上,不動 refute-framing。
 
-**Architecture:** 機械核心進 `scripts/lumos`(capture-recapture 估計 + `--panel` gate 謂詞 + `--round` 台帳)+ `difficulty.py`(panel_width);prose(skills/templates/orchestrator)描述怎麼跑 panel + 用這些原語,當文檔接線不 design-loop。
+**Architecture:** 機械核心進 `scripts/lumos`(capture-recapture 估計 + `--panel` gate 謂詞 + `--round` 留痕)+ `difficulty.py`(panel_width);prose(skills/templates/orchestrator)描述怎麼跑 panel + 用這些原語,當文檔接線不 design-loop。
 
 ## Global Constraints
 - 零第三方依賴(capture-recapture 純 stdlib)。
@@ -48,7 +48,7 @@ summary: |-
 
 ---
 
-### Task 2: `cmd_canary record --round` 台帳欄
+### Task 2: `cmd_canary record --round` 留痕欄
 
 **Files:** Modify `scripts/lumos`(cmd_canary + argparse);Test。
 
@@ -58,7 +58,7 @@ summary: |-
 - [x] **Step 2 FAIL**。
 - [x] **Step 3 實作** argparse `--round` + 函式參數 + schema。
 - [x] **Step 4 PASS**。
-- [x] **Step 5 Commit** `feat(loop): canary record --round 台帳欄(panel 一輪 W 筆共享)`
+- [x] **Step 5 Commit** `feat(loop): canary record --round 留痕欄(panel 一輪 W 筆共享)`
 
 ---
 
