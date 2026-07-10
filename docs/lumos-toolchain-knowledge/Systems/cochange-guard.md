@@ -12,7 +12,7 @@ summary: |-
   KEY:pre-commit Gate CC接線(STAGED後Gate 1前——後面每路徑顯式exit,末段=死碼;docs-only在Gate 2早退,唯此點覆蓋主場景);vendored路徑+python3→python fallback
   KEY:★DEBT★ rename-following未做(改名檔訊號重置,與ROSE/Code Maat同限,警告型假陰性成本低)｜Gate 0限縮(無vault repo不跑,hook由init裝、init必建vault)｜shallow clone靜默截斷
   DEP:[[Systems/lumos-cli-lifecycle]]
-  TEST:28/28通過(2026-07-10,t_cochange)+全套893綠 | VERIFY:[[Verification/2026-07-10_cochange守衛]]
+  TEST:30/30通過(2026-07-10,t_cochange,含 mutation M3 邊界殺手測試)+全套895綠+code-loop panel r1 收斂(3/3 canary caught) | VERIFY:[[Verification/2026-07-10_cochange守衛]]
 related:
   - "[[Projects/cochange守衛_計劃]]"
   - "[[Systems/lumos-cli-lifecycle]]"

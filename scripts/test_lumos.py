@@ -7211,6 +7211,11 @@ def _mk_cochange_repo():
     bulk = {f"bulk/f{i}.txt": str(i) for i in range(21)}
     bulk.update({"C.md": "c", "D.md": "d"})
     commit(bulk, "bulk")
+    # 恰好 20 檔(=max_changeset 邊界,應納入):J/K + 18 filler × 3 次(殺 mutation M3:> 變 >= 會漏)
+    for i in range(3):
+        b20 = {f"b20/f{j}.txt": f"{i}-{j}" for j in range(18)}
+        b20.update({"J.md": f"j{i}", "K.md": f"k{i}"})
+        commit(b20, f"b20-{i}")
     for i in range(3):
         commit({"package-lock.json": f"l{i}", "E.md": f"e{i}"}, f"lock{i}")
     return root
@@ -7234,6 +7239,7 @@ def t_cochange():
     check("cochange A⇒B conf 0.8(=門檻,含)", pairs.get(("A.md", "B.md"), {}).get("confidence") == 0.8, str(sorted(pairs)))
     flat = [k for p in pairs for k in p]
     check("cochange 大commit排除(C/D 無規則)", not any(k in ("C.md", "D.md") for k in flat), str(sorted(pairs)))
+    check("cochange 恰好20檔納入(J⇒K 邊界,殺 M3)", pairs.get(("J.md", "K.md"), {}).get("support") == 3, str(sorted(pairs)))
     check("cochange 根層 lockfile 排除(**/ 雙試)", not any("package-lock" in k for k in flat), str(sorted(pairs)))
     check("cochange support=2 預設不出現(F/G)", ("F.md", "G.md") not in pairs, str(sorted(pairs)))
     check("cochange 中文檔名 key 非 octal 逃逸", ("中文甲.md", "中文乙.md") in pairs, str(sorted(pairs)))
@@ -7317,6 +7323,17 @@ def t_cochange():
     nogit = Path(tempfile.mkdtemp(prefix="gctl-ccng-"))
     r = lum("cochange", "rules", "--repo", str(nogit), cwd=nogit)
     check("cochange 非 git rc2", r.returncode == 2, str(r.returncode))
+
+    # config 型別守衛(code-loop r1:非數值 fail-open 不 traceback)
+    (root / ".lumos" / "cochange.json").write_text('{"min_confidence": "0.9", "max_changeset": "20"}', encoding="utf-8")
+    r = lum("cochange", "rules", "--json")
+    check("cochange 非數值門檻 fail-open rc0+提示", r.returncode == 0 and "非數值" in r.stdout, f"rc={r.returncode} out={r.stdout[:200]} err={r.stderr[:200]}")
+    (root / ".lumos" / "cochange.json").unlink()
+
+    # 清理 tempdir(code-loop r1:洩漏修復)
+    import shutil
+    for d in (root, empty, nogit):
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def main():
