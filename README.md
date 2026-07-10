@@ -40,7 +40,8 @@ Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**不
 | 類別 | 檔案 / 命令 | 作用 |
 |---|---|---|
 | **CLI** | `scripts/lumos`、`scripts/test_lumos.py` | 純 python3 標準庫、零依賴、44 個頂層命令。讀 / 寫(寫後自驗)/ 巡檢(`doctor`)/ 歸檔。 |
-| **合約守衛 scaffold** | `lumos guard list/scaffold/bind/audit/trace` | 對談驅動:列未綁的 `★INVARIANT★`、套範本產**預設紅燈**測試 stub、綁 `[test:]`、蓋獨立 `[audit:]`。 |
+| **合約守衛 scaffold** | `lumos guard list/scaffold/bind/audit/trace/kill` | 對談驅動:列未綁的 `★INVARIANT★`、套範本產**預設紅燈**測試 stub、綁 `[test:]`、蓋獨立 `[audit:]`;`kill` 沙盒真弄壞驗殺傷力。 |
+| **檢索與推薦** | `lumos search`(預設相關性排序)、`context --recommend`、`impact --ranked`(dormant) | BM25F+圖分融合;search 面經人工 goldset 評測轉正(nDCG@5 +57%),hook 降噪面未過線維持旗標。評測器 `governance/eval/retrieval_eval.py`。 |
 | **對抗審計 loop** | `lumos pitfalls`、`code-loop`、`canary`、`loop`、`fold-check`、`refcheck` | `pitfalls --diff` 分 tier;tier=high 走 canary 護的 `code-loop`(對抗代碼審);`design-loop` 在進實作前審 spec;`fold-check` 抓設計折入漂移。 |
 | **影響 / 完整性** | `lumos impact`、`anchor verify/approve` | `impact` 由改動的檔反查受影響關聯節點(直接/間接)+ 命中事故(`pitfall_when`);`anchor` 守測試/閘檔不被無聲竄改。 |
 | **git hooks** | `scripts/hooks/` | pre-commit 硬擋「改 code 沒帶圖譜」;post-commit 留繞過痕跡;pre-push 跑 `doctor --ci` **+ anchor verify + tier=high 未過 code-loop 硬擋**。 |
@@ -186,7 +187,8 @@ KEY:★CHECKPOINT★   <改了難救:部署測試機>
 ```bash
 lumos context <節點> [--brief]    # 節點 + 鄰居壓縮索引(合約突顯在頂部)
 lumos contracts [<節點>]          # 合約登記簿:★INVARIANT★(含綁定測試)/ ★DEBT★
-lumos search <關鍵字> [--path P]  # 全文搜尋(取代 Obsidian search)
+lumos search <關鍵字> [--path P] [--top N]  # 全文搜尋;預設 BM25F 相關性排序(正主頂位;--legacy 舊字母序,--regex 走舊路)
+lumos context <節點> --recommend [--top 8]  # 相關節點推薦(圖分×詞彙融合;dormant 旗標)
 lumos links / backlinks <節點>    # 連出 / 連入
 lumos map <節點> [--depth N]      # 鄰域樹
 lumos decisions [<節點>] [--superseded]   # ADR 決策 / 掃被推翻的
@@ -210,6 +212,8 @@ lumos guard scaffold --node S --invariant "<子字串>" --method M --type pure|b
 lumos guard bind  <節點> "<子字串>" <方法> [--platform P]   # 把 [test:方法] 寫回 KEY 行(多平台:[test:P:方法])
 lumos guard audit <節點> "<子字串>" [--model sonnet] [--date 日期]   # 獨立審計後蓋 [audit:]
 lumos guard trace [<節點>]                           # 合約 → 守衛測試 → Verification 證據鏈
+lumos guard kill-add <節點> "<子字串>" --recipe '<JSON>'   # 宣告「業務上怎麼弄壞」配方
+lumos guard kill <節點> [--platform P]               # 殺傷力驗證:worktree 沙盒真弄壞→綁定測試必翻紅(survived=稻草人)
 lumos sync-verified-by [--apply]                     # 補漏寫的 verified_by(doctor Check 3)
 ```
 
@@ -224,6 +228,8 @@ lumos loop capture-counts --finder ... [--from-pitfalls <range>]  # 異質 finde
 lumos fold-check <spec>                               # 抓設計「折入漂移」(鏡像段/值漂移/反向遺漏)
 lumos refcheck <spec> --repo . [--json]              # spec→repo 指涉的機械核對(missing/行號越界)
 lumos impact --file <檔> [--depth N] [--json]        # 反查受影響關聯節點(直/間接)+ 命中事故(pitfall_when)
+lumos impact --file <檔> --ranked [--stdin-payload]  # 融合排序+安全固定席降噪(dormant;hook 面評測未過線)
+lumos cochange rules|check [--json]                  # git 史挖共改規則;pre-commit Gate CC 警告漏改夥伴(advisory)
 lumos anchor verify | approve --note "<理由>"        # 測試/閘檔完整性:驗指紋 / 刻意改後核可基線
 ```
 
@@ -232,6 +238,8 @@ lumos anchor verify | approve --note "<理由>"        # 測試/閘檔完整性:
 lumos lint <節點>                # 單檔快檢(標籤/格式/合約/可逆性)
 lumos doctor [--ci] [--suggest]  # 全圖健康;--ci = strict + 無色(會擋)
 lumos gov [<節點>] [--since N]    # 唯讀治理事件帳:某節點被哪幾道閘攔過、硬擋 vs 軟
+lumos spec-trace <計劃節點>       # 計劃條款 [S1].. 認領掃描(未被 Verification 認領→rc1;opt-in)
+lumos signoff <節點> --note ".."  # 業務簽核留痕(validation 那半;寫 signoff-log+frontmatter)
 ```
 
 **安裝 / 生命週期**

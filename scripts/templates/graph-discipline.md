@@ -8,7 +8,7 @@
 
 - ✋ **STOP 自檢**：如果你正要 grep code、派 Explore、或查 DB 去搞懂「為什麼這樣 / 邊界 / 合約 / 欄位或狀態語意」——**停**，先 `lumos`，再下 code/DB 驗證。
 - **不分任務類型**：開發、重構、**排查、對外支援、呼叫既有 API、查 DB、對帳**——全部算「進場」。看似純操作的任務，只要動手前需要理解系統，就先讀圖譜。（最常被合理化跳過的破口：把任務歸成「只是查資料 / 跑指令」就略過圖譜。別這樣。）
-- **入口動作**（不知道該讀哪個節點時）：① `lumos search <關鍵字>` 定位節點 → ② `lumos context <節點>` 掃脈絡（頭部直接攤出 ⚠ 合約）→ ③ `lumos contracts <節點>` 查硬合約（★INVARIANT★ 改＝breaking）→ 然後才 grep code / 查 DB 驗證細節。
+- **入口動作**（不知道該讀哪個節點時）：① `lumos search <關鍵字>` 定位節點（已預設相關性排序,正主頂位;`--legacy` 舊字母序） → ② `lumos context <節點>` 掃脈絡（頭部直接攤出 ⚠ 合約）→ ③ `lumos contracts <節點>` 查硬合約（★INVARIANT★ 改＝breaking）→ 然後才 grep code / 查 DB 驗證細節。
 - 「先查圖譜」不是禮貌建議，是**順序規定**：圖譜先給你合約與邊界，code/DB 只拿來印證，不是拿來重新發明「本來就該這樣」。
 - **自動輔助（不取代主動查）**：`impact` PreToolUse hook 會在你 Edit/Write/MultiEdit 一支 code **動手前自動注入**「受影響的關聯節點（直接/間接）+ 相關事故（`pitfall_when` 命中）」——看到就順手判：這些節點/事故會不會被你這次改動波及、需不需同步。它是**輔助推播**，不取代你主動 `lumos context`/`contracts` 查合約（hook 只推「碰到的」，合約邊界仍要自己查）。
 
