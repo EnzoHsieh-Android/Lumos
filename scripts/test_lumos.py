@@ -7530,6 +7530,30 @@ def t_guard_kill():
     r = lum("guard", "kill", "Systems/Esc")
     check("kill 圍欄擋逃逸 rc2(error)", r.returncode == 2 and "逃逸" in r.stdout, f"rc={r.returncode} {r.stdout}")
 
+    # drifted:old 命中 2 次(殺 M1:cnt!=1 弱化成 cnt<1)
+    (v / "Systems" / "Multi.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 多重命中示範 [test:TestLimitFive]\n---\n# M\n", encoding="utf-8")
+    r = lum("guard", "kill-add", "Systems/Multi", "多重命中示範",
+            "--file", "prod.py", "--old", "n", "--new", "m")
+    check("multi kill-add rc0", r.returncode == 0, r.stderr)
+    r = lum("guard", "kill", "Systems/Multi", "--json")
+    dd2 = json.loads(r.stdout.strip().splitlines()[-1])
+    check("kill old 多重命中 → drifted(殺 M1)", dd2["results"][0]["verdict"] == "drifted"
+          and "命中" in dd2["results"][0].get("detail", ""), str(dd2))
+
+    # 圍欄:兄弟目錄前綴(../wt-x → startswith 無 sep 會誤放;殺 M2)
+    (v / "Systems" / "Sib.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 兄弟前綴示範 [test:TestLimitFive]\n---\n# Sib\n", encoding="utf-8")
+    r = lum("guard", "kill-add", "Systems/Sib", "兄弟前綴示範",
+            "--file", "../wt-evil/f.py", "--old", "x", "--new", "y")
+    check("sib kill-add rc0", r.returncode == 0, r.stderr)
+    r = lum("guard", "kill", "Systems/Sib", "--json")
+    dd3 = json.loads(r.stdout.strip().splitlines()[-1])
+    check("kill 兄弟前綴 → error 圍欄擋(殺 M2)", dd3["results"][0]["verdict"] == "error"
+          and "逃逸" in dd3["results"][0].get("detail", ""), str(dd3))
+
     # worktree 清理:無殘留
     r = sp.run(["git", "-C", str(root), "worktree", "list"], capture_output=True, text=True)
     check("worktree 無殘留", r.stdout.strip().count("\n") == 0, r.stdout)

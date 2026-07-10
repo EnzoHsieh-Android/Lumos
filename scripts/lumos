@@ -1539,6 +1539,7 @@ def cmd_gov(env, node=None, since_days=90):
     # 第 5 源:kill 殺傷力驗證留痕(guard kill 的 verdict 史)。
     load(".kill-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
          "gate": "kill", "kind": d.get("verdict", "?"), "hard": False,
+         "token": d.get("invariant", "") + d.get("ts", ""),   # 同節點多合約/多次不互吞(dedup 第5鑑別子)
          "nodes": [stem(d.get("node", ""))],
          "detail": f"{d.get('invariant','')[:28]} [{d.get('test','')}] {d.get('note','')}".strip()})
     # 第 4 源:canary 審計留痕(審計員可靠度史)。只此 mapper 輸出 token 鍵(供 dedup 鑑別)。
@@ -2353,8 +2354,12 @@ def _kill_run(cmd, cwd, timeout):
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
+            except (ProcessLookupError, OSError, AttributeError):
+                # AttributeError=Windows 無 killpg/SIGKILL → 退回殺直接子程序
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
             proc.wait()
             buf.seek(0)
             txt = buf.read()
@@ -2398,8 +2403,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
         return 2
     plats = pdata["platforms"]
     default_plat = pdata["default_platform"]
-    if pdata.get("multiplatform") and isinstance(
-            (Path(repo_root) / ".lumos" / "config.json"), Path):
+    if pdata.get("multiplatform") and (Path(repo_root) / ".lumos" / "config.json").exists():
         # platforms 在則 test.run_cmd 不生效(load_platforms 二分慣例)→ 有宣告時告警
         try:
             _cfg = json.loads((Path(repo_root) / ".lumos" / "config.json").read_text(encoding="utf-8"))
@@ -2413,6 +2417,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
     except ValueError:
         pass
     results = []
+    commit = ""   # 迴圈外留痕用;多平台時記最後一組的 HEAD(各 row 的 platform 欄可辨)
     ts = datetime.datetime.now().isoformat(timespec="seconds")
     # 依 platform 分組(每平台一個 worktree + baseline per test)
     groups = {}
@@ -2437,8 +2442,11 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                                     capture_output=True, text=True).stdout.strip()
         except Exception:
             pass
-        dirty = subprocess.run(["git", "-C", str(proot), "status", "--porcelain"],
-                               capture_output=True, text=True).stdout.strip()
+        try:
+            dirty = subprocess.run(["git", "-C", str(proot), "status", "--porcelain"],
+                                   capture_output=True, text=True).stdout.strip()
+        except OSError:
+            dirty = ""
         if dirty:
             print(f"⚠ {plat} repo 有未提交變更——不會進沙盒(kill 以 HEAD 為基準),配方/測試需先 commit")
         flaky = pentry["profile"].get("scaffold_ext") in (".yaml", ".yml") or plat in ("maestro", "playwright")
@@ -2460,7 +2468,8 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
             for r in plist:
                 method_full = r.get("test", "")
                 method = method_full.split(":", 1)[1] if (":" in method_full and pdata.get("multiplatform")) else method_full
-                if not _KILL_METHOD_OK_RE.match(method or ""):
+                method = method.strip("`")   # Kotlin 反引號名拆殼後進白名單
+                if not _KILL_METHOD_OK_RE.fullmatch(method or ""):
                     results.append({**r, "platform": plat, "verdict": "error",
                                     "detail": f"test 名不合法(拒注入): {method!r}"})
                     continue
@@ -2481,7 +2490,8 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                                     "detail": "file 路徑逃逸 worktree(圍欄擋下)"})
                     continue
                 try:
-                    src = open(target, encoding="utf-8").read()
+                    with open(target, encoding="utf-8") as _tf:
+                        src = _tf.read()
                 except OSError as ex:
                     results.append({**r, "platform": plat, "verdict": "drifted",
                                     "detail": f"file 開不了: {ex}"})
@@ -2491,11 +2501,16 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                     results.append({**r, "platform": plat, "verdict": "drifted",
                                     "detail": f"old 命中 {cnt} 次(需恰 1——配方漂移,重寫)"})
                     continue
-                open(target, "w", encoding="utf-8").write(src.replace(r["old"], r["new"], 1))
+                with open(target, "w", encoding="utf-8") as _tf:
+                    _tf.write(src.replace(r["old"], r["new"], 1))
                 m_timeout = max(b_elapsed * 5, floor)
                 m_rc, m_tail, _me, m_to = _kill_run(cmd, wt, m_timeout)
-                subprocess.run(["git", "-C", wt, "checkout", "--", r.get("file", "")],
-                               capture_output=True)
+                rv = subprocess.run(["git", "-C", wt, "checkout", "--", r.get("file", "")],
+                                    capture_output=True)
+                if rv.returncode != 0:
+                    results.append({**r, "platform": plat, "verdict": "error",
+                                    "detail": "revert 失敗——後續同組配方作廢防污染"})
+                    break   # 樹已髒,本組終止(worktree 在 finally 清)
                 if m_to:
                     verdict = "timed_out"   # 歸 killed 類(PIT:變異致掛=被超時接住)
                 elif m_rc != 0:
@@ -2508,19 +2523,31 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                 if flaky:
                     res["flaky_risk"] = True
                 if note_ws:
-                    res["detail"] = res.get("detail", "") + note_ws
+                    res["detail"] = (res.get("detail", "") + note_ws +
+                                     ("(弱證據:紅燈可能來自無關測試)" if verdict in ("killed", "timed_out") else ""))
                 results.append(res)
         finally:
-            if wt_ok and not keep_worktree:
-                subprocess.run(["git", "-C", str(proot), "worktree", "remove", "--force", wt],
-                               capture_output=True)
-                subprocess.run(["git", "-C", str(proot), "worktree", "prune"], capture_output=True)
-                shutil.rmtree(tmp_parent, ignore_errors=True)
-            elif keep_worktree:
+            if keep_worktree:
                 print(f"(--keep-worktree) 現場保留: {wt}")
-        # 留痕(docs/.kill-log.jsonl,gov 第 5 支 load 撈)
+            else:
+                if wt_ok:
+                    subprocess.run(["git", "-C", str(proot), "worktree", "remove", "--force", wt],
+                                   capture_output=True)
+                shutil.rmtree(tmp_parent, ignore_errors=True)   # add 失敗也清(無條件)
+                if wt_ok:
+                    subprocess.run(["git", "-C", str(proot), "worktree", "prune"],
+                                   capture_output=True)          # prune 放 rmtree 後(dir 已消才修行政記錄)
+    # 留痕(docs/.kill-log.jsonl,gov 第 5 支 load 撈)——迴圈外:add 失敗 continue 的 error 也要進帳
+    if True:
         log = env.vault.parent / ".kill-log.jsonl"
-        with open(log, "a", encoding="utf-8") as fh:
+        try:
+            _fh_ok = True
+            fh_cm = open(log, "a", encoding="utf-8")
+        except OSError as ex:
+            _fh_ok = False
+            print(f"⚠ kill-log 寫入失敗(結果只印不留痕): {ex}", file=sys.stderr)
+        if _fh_ok:
+          with fh_cm as fh:
             for res in results:
                 if res.get("_logged"):
                     continue

@@ -12,7 +12,7 @@ summary: |-
   KEY:baseline前置(cargo-mutants)防假殺;timeout=baseline×5下限20s(LUMOS_KILL_TIMEOUT_FLOOR可覆寫);worktree只隔離原始碼不隔離DB(hermetic警語);HEAD基準(dirty大聲警告)
   KEY:★DEBT★ hydration(未提交帶入)與lockfile v1砍(否決位裁);E2E maestro {method}不適用;冷build成本;submodule不init
   DEP:[[Systems/check-t-sentinel]][[Systems/test-profile-multiplatform]]
-  TEST:21/21(t_guard_kill 六態全走)+全套923綠 | VERIFY:[[Verification/2026-07-10_guard殺傷力驗證]]
+  TEST:25/25(t_guard_kill 六態+M1/M2殺手測試)+全套923綠 | VERIFY:[[Verification/2026-07-10_guard殺傷力驗證]]
 related:
   - "[[Projects/guard殺傷力驗證_計劃]]"
   - "[[Systems/check-t-sentinel]]"
