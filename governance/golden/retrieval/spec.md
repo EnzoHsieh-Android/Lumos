@@ -1,0 +1,307 @@
+---
+type: project
+status: doing
+created: 2026-07-10
+updated: 2026-07-10
+tags:
+  - type/project
+  - status/doing
+decisions:
+  - content: 雙盲草案合併:上線走 --ranked 漸進/候選不擴只重排/edit-delta 當 hook query/安全固定席/邊型 ablation 先行
+    context: Claude 與 GPT-5.6 獨立出案;八處分歧逐一裁定(表列)
+    why_chosen: 多數採 Codex 案:漸進相容與安全固定席優於直改預設與乘數 boost;Claude 案貢獻 cochange 金標 proxy 與顯示層折疊;兩案同判處(BM25F/bigram/BFS-decay/v1 無 frecency)直接定案
+    decided: 2026-07-10
+    valid: true
+related:
+  - "[[Projects/檢索優化_調研]]"
+---
+# 檢索優化_計劃
+
+## 目標
+
+中段檢索三件套：search 相關性排序（BM25F）、相關節點推薦（圖分+詞彙融合）、impact hook 降噪（99 條→top-8 帶分數）。
+
+PRIOR-ART: 見 [[Projects/檢索優化_調研]]（deep-research 3 票查證）。**本計劃為雙盲草案合併**：Claude 與 GPT-5.6（Codex CLI）各自獨立出案後擇優——分歧裁定見下表，兩份原始草案存 governance/golden/retrieval-drafts/。裁定=borrow-design，stdlib 原生。
+
+## 雙盲分歧裁定（ADR 摘要）
+
+| 分歧 | 裁定 | 理由 |
+|---|---|---|
+| 上線方式 | `--ranked` 旗標漸進（Codex 案），legacy 預設不變 | 不破壞既有消費者；評測過 gate 再翻預設 |
+| 排序範圍 | 只重排既有候選集（Codex 案） | substring/regex 仍決定候選，token 只管排序——不擴召回 |
+| hook 詞彙訊號 | edit delta 當 query、stdin 傳遞（Codex 案） | 防 args 洩漏；delta 是最強的當下意圖訊號 |
+| 合約/事故 | 安全固定席不參與排序，超額標 safety overflow（Codex 案）| 守衛資訊不因 top-k 靜默消失 |
+| 邊型加權 | v1 無型別邊；edge-type ablation 列評測第一批（Codex 案,Claude 案的直覺權重擱置）| 證據先於直覺;兩案都點名 Borodin 外推是最大疑點 |
+| 共引計分 | Craw/(Craw+2) 平滑飽和（Codex 案）取代硬 cap | 平滑優於斷點 |
+| 去重複 | 分數層:雙 Jaccard≥0.85 壓重複（Codex）;顯示層:姐妹前綴折疊（Claude）| 兩層互補 |
+| 評測金標 | cochange 共改 proxy（Claude 案,快速迭代）+ **雙 LLM 異家族評審**（Claude+Codex session,分歧人裁）60/40 held-out（Codex 案框架,評審主體 r1 改定）| 免標註訊號+嚴謹驗收並用 |
+
+## 定案規格（合併版全文）
+
+# Lumos 檢索與關聯推薦優化：設計草案
+
+> PRIOR-ART: 採 borrow-design；以 BM25F、BFS decay、共引、Jaccard 原理，用 Python stdlib 原生實作，不引入套件或 embedding。  
+> v1 原則：先以旗標啟用，不改既有候選集合與 JSON schema；真 vault 評測通過後再考慮改預設。
+
+## 1. 排序公式與資料流
+
+### BM25F
+
+每個節點拆成以下欄位，初始權重不是合約，須由評測調整：
+
+| 欄位 | 內容 | 權重 |
+|---|---|---:|
+| title | 檔名 stem + 第一個 H1，去重 | 4.0 |
+| summary | frontmatter `summary`，保留 KEY/FLOW 等文字 | 2.5 |
+| tags | `tags` | 1.5 |
+| body | 排除 frontmatter、code fence；是否含 inline code 沿用 `--code` 語意 | 1.0 |
+| type | `type` 值 | 0.5 |
+
+`status`、`updated` 不進詞彙分數：前者不是主題，後者應交給 frecency，不應偽裝成 relevance。
+
+對 query token `t`：
+
+```text
+tf*(t,d) = Σf weight(f) × tf(t,d,f)
+
+idf(t) = log(N / (df(t)+1)) + 1
+
+BM25F(q,d) = Σt∈unique(q)
+  idf(t) × tf*(t,d) × (K1+1)
+  / (tf*(t,d) + K1 × ((1-B) + B × len(d)/avg_len))
+```
+
+初始 `K1=1.2`、`B=0.75`（可調參，見上注記）；欄位權重只乘在 tf 上，且在飽和函數之前。`len(d)` = **跨全部索引欄位的未加權 token 總數**（單一標量，非 per-field），避免高 title boost 同時膨脹長度懲罰。注記：加權 tf* 配固定 K1 會讓高權欄位提早飽和——已知近似取捨；K1/B 列為評測可調參（非合約）。
+
+### 中文 tokenizer
+
+1. 全文先 NFC、英文 lowercase。
+2. 連續漢字以 overlapping bigram 切分：`檢索優化 → 檢索、索優、優化`。
+3. 單一漢字 query 才使用 unigram；不替一般 query 全量加入 unigram，避免「系、統、計」等高頻字淹沒排序。
+4. ASCII identifier 同時保留完整 token，並拆 snake/kebab/camel/digit：`impact_hook2 → impact_hook2、impact、hook、2`。
+5. v1 的 `search` 仍先用現有 substring/regex 決定候選，token 只負責候選內排序，因此不會把原本查不到的節點擴進結果。
+
+選 bigram 是因為它保留局部字序、stdlib 可實作，且比 unigram 有辨識力；但這是待 A/B 的初始裁定，不宣稱已證實。
+
+### 資料流
+
+```text
+load_vault
+→ 擷取欄位與乾淨 body
+→ tokenize
+→ 計算 N、df、avg_len
+→ 產生既有候選集合
+→ BM25F
+→ 穩定排序(score desc, rel path asc)
+→ human / JSON 輸出
+```
+
+99 節點規模每次在記憶體重建即可；v1 不做持久化 index，避免 cache invalidation 與額外寫入。
+
+## 2. 相關推薦分數設計
+
+令 seed 集合為 `S`；`context` 是當前節點，`impact` 是直接命中節點。圖先沿現有雙向邊取最短距離。
+
+### 圖分數
+
+```text
+k(v) = min shortest_distance(s,v), s∈S
+Braw(v) = 1 / 2^k(v)
+B(v) = min(1, 2 × Braw(v))       # hop1=1、hop2=0.5
+```
+
+每個候選只按最近 seed 計一次，不累加路徑數，避免高密度 MOC/計畫叢集劫持。
+
+共引分數：
+
+```text
+Craw(s,v) = Σ共同引用者 u {
+  2  若 u 的同一句同時引用 s、v
+  1  若只在同一節點內共同引用
+}
+C(v) = max_s Craw(s,v) / (Craw(s,v)+2)
+```
+
+frontmatter 同一 list 視為同節點、非同句。每個共同引用者最多貢獻一次。
+
+鄰域相似：
+
+```text
+J(v) = max_s |Γ(s)∩Γ(v)| / |Γ(s)∪Γ(v)|   # Γ(x)=x 的無向鄰域集(所有邊型)
+```
+
+組合：
+
+```text
+G(v) = 0.60×B(v) + 0.25×C(v) + 0.15×J(v)
+```
+
+BFS 有相對較強的小圖證據，所以占六成；共引補二階語意；Jaccard 僅作 tie-breaker。
+
+### 與 BM25 融合
+
+相關推薦的 lexical query：
+
+- `context`：seed 的 title + summary + tags。
+- hook（v1.1）：實際 edit delta，加檔案路徑與直接節點的 title/summary；取不到 delta 才退回 seed metadata。
+- Edit/MultiEdit 使用 old/new snippets；Write 使用新內容，最多 512 個 distinct query tokens。
+
+在候選內正規化：
+
+```text
+L(v) = BM25F(v) / max_candidate BM25F
+R(v) = 0.60×L(v) + 0.40×G(v)
+```
+
+線性融合比 RRF 更適合 v1，因為可顯示可解釋分數並設絕對/相對閾值。**圖與詞彙的分工（r1 修正——原「圖不能單獨決定結果」被 hop1 數學證偽：L=0 時 R=0.24≥0.20）**：hop1 直鄰可純圖過閾（直接鄰居本就高相關，這是設計意圖）；**hop≥2 的 indirect 需 L>0 才進榜**（遠端節點必須有詞彙訊號背書）；所有候選 BM25F=0 時 `L(v):=0`（含 direct 分數的 L，避免 0/0），且不輸出非固定 indirect。
+
+事故 trigger 與直接 code 引用是確切證據，不假裝是圖推薦：
+
+```text
+incident score = 1.0
+direct score   = 0.50 + 0.50×L(v)
+indirect score = R(v)
+```
+
+## 3. Hook 降噪演算法
+
+> **版本歸屬（r2 折入）**：本節 hook 側改動（delta 抽取/stdin payload/prospective/TTL 事故豁免）全屬 **v1.1**；v1 僅落 CLI dormant ranked 與評測器，hook 維持 legacy 全量（見 §4 rollout）。
+
+真 vault 基線：修改 `scripts/lumos` 目前得到 44 direct、53 indirect、2 incidents，共 99 **條輸出**（巧合接近 vault 節點數 ~100 **篇**——兩者不同量，各處措辭已區分）。
+
+預設 `top_k=8`、`min_score=0.20`：
+
+1. 從 hook payload 抽 edit delta（**抽取規格**：Edit=old_string+new_string（replace_all 時 new 仍取一份供詞彙）、MultiEdit=edits[] 依序套用建 prospective 全文（任一 old 套用失敗→該檔 prospective 退回磁碟現況並記 degraded）、Write=content 即全文；512 distinct token cap 在 hook 端執行），經 stdin 傳**單包 JSON**（r2 折入，杜絕雙載歧義）：`{"query":"<delta,512tok cap>","prospective":{"<rel_path>":"<套用 delta 後全文>"}}`，CLI 旗標 `--stdin-payload`（取代 --query-stdin 單值語意）；`subprocess.run(..., input=json.dumps(payload))`（技術可行：hook 現以 json.load(sys.stdin) 讀父 payload,改附 input= 傳子程序即可）。
+1b. **prospective incident（r1 否決位折入，修既有盲點；歸屬 v1.1）**：incident matcher 的 `content:` 比對改用 stdin payload 的 prospective 內容——否則本次新增的危險內容（raw SQL 等）不會觸發事故提醒。**TTL 機制（r2 定義）**：冷卻窗內帶 delta 的呼叫，hook 改呼叫 `lumos impact --incidents-only --stdin-payload`（新快速模式：只跑 trigger 比對、不做反查與 BFS——成本低）並只注入事故段；完整注入照 TTL 壓。取捨：事故比對每次跑（trigger 是安全面）、重型 BFS 維持降頻。
+2. 產生 incidents、direct、depth≤2 indirect；維持現有跨集合去重。
+3. 計算上述分數，非固定項低於 `max(0.20, 0.25×最高非固定分數)` 者移除；**hop1 indirect 只受靜態 0.20 底線**（r2 折入：動態閾值會讓強詞彙 direct 把 R=0.24 的純圖 hop1 砍掉，與「直鄰可純圖過閾」設計意圖矛盾——hop1 不與 direct 對打）。
+4. 安全固定項（r2 擴大——原「僅 hop1 合約」會讓 hop2+ 的 L=0 合約節點被 L>0 規則砍掉、安全資訊靜默消失，回退現行 hook 行為）：所有 incident、direct 的 ★IRREVERSIBLE★/★INVARIANT★（含 ★COMBO★ 修飾——COMBO 非獨立合約類、是 INVARIANT 行的後綴）、以及**有效候選深度內（CLI > config > 預設 2）任意 hop 的 ★INVARIANT★/★IRREVERSIBLE★ 節點**（r3 修正——「任意 hop」原措辭與 depth≤2 候選池矛盾：hop≥3 合約不進池、固定席救不到；全圖合約掃描留 v2 選項不做。合約在深度內不受 L>0 與閾值約束；量大由 overflow 吸收）。「安全類 must-see」=**有效深度內**含合約/事故標記的 must-see，其 recall=100% 由固定席機械保證（深度外合約不在保證範圍——誠實限定）。
+5. **輸出合約（r1 統一——原 8/10/5 三數打架）**：固定席**不占 top_k**、全部保留；非固定項按 `(score desc, hop asc, path asc)` 補到 top_k（預設 8）；固定席數 > top_k 時標 `safety overflow: N`（N=固定席數−top_k；**純資訊計數**，固定席永不被截——與 meta 的「截斷數」〔被閾值/名額砍掉的非固定候選數〕是兩個欄位）。
+6. 不用完整 MMR。僅當兩個非固定候選同時滿足 token Jaccard≥0.85、鄰域 Jaccard≥0.85 時，壓掉較低分者並回補下一名。
+7. 不為湊數輸出低分結果；非固定項可少於 top_k。
+8. 每行輸出總分與短理由，例如：`0.82 Systems/lumos-cli-read — direct, title命中, hop1共引`。
+
+TTL、rc=3 與內部錯誤 fail-open 語意保持不變。
+
+## 4. CLI 面變更
+
+### `search`
+
+新增（三命令**新增**計數旗標、統一命名 `--top`——現行三者皆無計數旗標）：
+
+```text
+lumos search TERM --ranked
+  [--top N] [--explain] [--json] [--sort relevance|path] [--code] [--files-only]
+  # --code 沿既有語意決定候選;--sort 僅 --ranked 下有意義(path=丟棄分數排序,對照用);--files-only 在 --ranked 下按分數排
+```
+
+- 無 `--ranked`：完全維持目前 substring/regex、字母序與輸出。
+- `--ranked`：只重排既有候選；`--regex` 仍由 regex 決定候選。
+- `--explain` 顯示欄位 tf、BM25F、命中 token。
+- `--json` 回傳 `node/rank/score/hits/score_parts`。
+
+### `context`
+
+新增：
+
+```text
+lumos context NOTE --recommend [--top 8] [--min-score 0.20] [--explain]
+```
+
+原有 context 內容不變，尾端另列融合後推薦。
+
+### `impact`
+
+新增：
+
+```text
+lumos impact ... --ranked [--top 8] [--min-score 0.20]
+                       [--stdin-payload] [--incidents-only] [--explain]
+  # --incidents-only: 只跑事故 trigger 比對(不反查/不 BFS),TTL 冷卻窗內 hook 用
+```
+
+- 無 `--ranked` 保持現行四段 JSON。
+- ranked JSON 在 item 加 `rank/score/pinned/score_parts`，另加 `meta` 記候選數、截斷數與 safety overflow。
+- **rollout 兩階段（r1 否決位折入）**：v1 = dormant ranked（CLI 旗標+評測器落地，**hook 維持 legacy 全量輸出**——「lumos 全撈、Claude 消噪」分工不因未過 gate 先破）；評測 gate 通過後 v1.1 = hook 經 `.lumos/impact.json` 的 `"ranked": true` **opt-in** 切換；翻預設另案。
+- `.lumos/impact.json` 可新增 `top_k`、`min_score`；非法值沿用現有 fail-open 預設。
+
+## 5. Frecency 是否進 v1
+
+不進 v1，也不預設開始記帳。
+
+主要問題不是 `math.exp` 成本，而是事件語意與副作用：
+
+- `search` 顯示結果不代表使用者真的讀了節點，若全記會形成 popularity feedback loop。
+- hook 自動注入量遠大於手動 context，低權重仍可能長期累積偏置。
+- 現有讀命令被定義為純讀、無副作用；記帳會改變此邊界。
+- repo 內帳會製造 dirty worktree；user-local 帳又有跨機不同步、權限、併發 append、清理與隱私問題。
+- 在沒有點擊/採用訊號時，權重桶無法可靠校準。
+
+若 v1 評測仍顯示「常用節點排太後」，再做 opt-in v1.1 shadow experiment：帳放 user-local state、以 vault path hash 分區、JSONL append、可清除、不進 git，且只把明確 `context` 記為讀取；未驗收前不參與正式排序。
+
+## 6. 測試與真 vault 評測
+
+### 單元與合約測試
+
+- 中文 bigram、單字 fallback、ASCII/camel/snake 混合、NFC 等價。
+- 手算 BM25F fixture，鎖定「field weight 在飽和前」及 IDF 永不為負。
+- title 命中必勝相同 tf 的 body 命中；同分按 path 穩定排序。
+- BFS cycle、多 seed 最短距離、每節點只計一次。
+- 同句共引=2、同節點共引=1；Jaccard 空集合不除零。
+- lexical 全零時 indirect 不得退化成 graph-only。
+- legacy search/impact stdout、rc、JSON 在未開新旗標時不變。
+- hook top-k、閾值、安全 overflow、TTL、fail-open、stdin query 不洩漏。
+- 近重複壓縮不得移除 pinned 項。
+- **prospective incident（r2 補）**：staged delta 引入 raw SQL（命中某事故 content: trigger）→ 該事故出現在輸出;冷卻窗內帶 delta 呼叫→事故段仍注入（--incidents-only 快速模式）。
+- hop1 純圖（L=0）過靜態 0.20 底線仍進榜（§2 正半邊）;所有候選 BM25F=0 時 L:=0 不觸 0/0。
+- 姐妹折疊：同折疊鍵（去尾段）人讀只列最高分+「(+姐妹 N)」,--json 全量。
+- 任意 hop 的 ★INVARIANT★/★IRREVERSIBLE★ 都進固定席（不因 hop2+ 或 L=0 消失）。
+
+### 真 vault relevance set
+
+建立不進生產排序邏輯的評測集：
+
+- 30 個 search query：繁中短詞、混合 identifier、英文縮寫、單漢字各分層取樣。
+- 20 個真實 code edit case：從 git diff 取 file + edit snippet；特別納入 `scripts/lumos` 的 99 條噪音案例。
+- pooling（r2 操作化）：`retrieval_eval.py --build-pool` 對四個系統（**legacy 現行順序 / ranked-BM25-only / graph-only / fusion**——「old/new」正名為 legacy/ranked，去除與 edit old/new 的同詞歧義）各取 top-N 併集、去識別化（剝方法標記）、以 split_salt 洗牌後輸出 pool 清單;兩位 LLM 評審拿**同一份**去識別清單、各自標、不見系統身份。
+- 評審=**兩個獨立乾淨 LLM session（異家族：Claude 與 Codex/GPT-5.6）**標 `2=必看、1=有用、0=噪音`；分歧由人裁（r1 折入：單人 AI 專案無二名人工評審可用）。
+- **goldset schema（r2 折入 r3 補正——r2 錨點沾考題字樣對真檔落空，審計紀錄先於正文,本輪修復）**：`governance/eval/retrieval-goldset.json` = `{"snapshot_commit","split_salt","search":[{"id","query","split"}],"edit":[{"id","file","delta","split"}],"labels":{"<case_id>":{"<node>":{"claude","codex","final"}}}}`；60/40 由 `split` 欄凍結，切分演算法=`sha256(id+split_salt)` 前綴取模（可重現）。held-out 僅 ~12/8 例、統計力弱——15% gate 以方向一致+效應量解讀，不做顯著性宣稱。
+- **評測器（同上補正）**：獨立腳本 `governance/eval/retrieval_eval.py`（非 lumos 子命令——評測屬治理面），跑法 `python3 governance/eval/retrieval_eval.py [--split train|held] [--build-pool]`；讀 goldset + 呼叫 `lumos search/impact --ranked --json` 算指標，逐輪 append `governance/eval/retrieval-eval-history.jsonl`；cochange proxy 過濾在此腳本內。**目錄分工**：`governance/golden/` 存收斂快照（design-loop 產物）、`governance/eval/` 存評測資產——兩者不混。
+
+指標與 gate：
+
+- search 主指標 nDCG@5；輔助 MRR、Recall@10。
+- related/hook 主指標 nDCG@top_k、Precision@top_k（分母=min(top_k,輸出數)；label≥1 算 relevant；跨案例 macro 平均）；must-see（標 2）中屬安全固定席者 recall=100% 為機械保證、非固定 must-see 報 Recall@top_k **不設硬 gate**（r1 折入：100% 與 top-k 截斷矛盾）。
+- `search nDCG@5` 相對字母序提升至少 15%，且 held-out 不倒退。
+- `hook Precision@top_k ≥ 0.70`；must-see gate 見上（固定席機械保證）。
+- hook 非固定項中位 ≤ top_k、p95 ≤ top_k+2；安全固定席另計、不算噪音失敗。
+- fusion 必須對 BM25-only 與 **graph-only**（完整 G，非 BFS-only）**各**勝至少一主指標且另一指標不顯著倒退（r1 統一：BFS-only 是 §7 ablation 對照、不進 gate；「或」為增補段誤植）。
+- 99 節點下 ranked impact p95≤1 秒。
+
+## 7. 最可疑、最該先驗證的一點
+
+最可疑的是把 Borodin 的 BFS-decay 勝率直接外推到這個 99 節點、具型別與強人工連結語意的 vault。
+
+現有圖把 `related`、`verified_by`、`plan_refs`、body wikilink 與雙向 backlink 都視為等價邊；但計畫—驗證閉環、MOC 聚合邊和真正主題關聯並不等價。即使距離衰減公式在原研究有效，也不能證明「無型別 BFS」在此圖仍最準。
+
+因此第一個真 vault 實驗應是 BFS-only 對照，以及逐一移除 body-wikilink、verified_by、plan_refs 的 edge-type ablation。若結果顯示某類邊系統性製造噪音，應先修候選圖，再調 0.60/0.25/0.15 或融合權重。
+
+
+### 合併版增補（Claude 案採納部分）
+
+- **cochange 金標 proxy（r1 修正）**：`lumos cochange rules`（**預設門檻**——`--all` 是解除門檻、與「高 conf」意圖相反）的規則，過濾兩端皆在 docs/*-knowledge 的對、方向規則取無向 max(conf)——作為 **related/hook 面**的免標註相關對（無 query 詞、不適用 search 評測）；快速 A/B 迭代用，正式驗收仍走人工標註（§6）。稀疏 fallback：99 節點的 knowledge git 史可能出不了幾條 conf≥0.8 對——proxy 空/過稀時退回純人工 goldset,不阻斷。
+- **顯示層姐妹折疊**：折疊鍵=stem 去掉最後一個 `_段`（`檢索優化_計劃`/`檢索優化_實作計畫` → `檢索優化`）相同者折疊，只列最高分 +「(+姐妹 N)」；`--json` 全量（分數層不動，僅展示層）。
+- **評測 baseline 釘死**：「相對字母序提升 15%」的字母序 baseline nDCG 按現行輸出順序計（弱 baseline，gate 從嚴解讀：另要求 fusion 對 BM25-only 與 graph-only 各勝至少一主指標（與 §6 gate 同式））。
+
+## 審計修正紀錄
+
+- **r3（2026-07-10，終輪：1 opus delta + Codex 終審；canary 1/1 caught（b 型幽靈旗標+指出與裁定相衝,probe:recraft×1→pass）、0 missed → 連續第三輪 near-perfect）**：Codex 終審 1 major（「任意 hop 合約固定席」與 depth≤2 候選池矛盾→改「有效深度內」+誠實限定深度外不保證;全圖掃描留 v2）;opus 7 major+6 minor 全屬補丁殘留——**其中揭出 r2 折入事故：兩條折入錨點沾考題字樣、對真檔靜默落空（goldset schema/評測器跑法「紀錄宣稱已折、正文沒有」）→ 本輪以真錨點+assert 補正**（教訓：折入 anchor 禁止取自工作副本文字,一律取真檔原文;此為 fold-check 該擋而未擋的型——錨點污染,記入 canary-audit 未來方向）;其餘：裁定表評審主體同步、COMBO 記法正名、--incidents-only/--files-only 入語法行、--limit 壞前提改寫、pooling 五→四、雙標題/跳號/硬行號清理、golden vs eval 目錄分工。
+- **r2（2026-07-10，panel W=3：2 opus + Codex 覆核位；canary 2/2 caught（c 型未定義欄位/d 型未定義產物,probe 皆 pass）、0 missed → near-perfect；三員高度收斂〔s1 1 blocker+6 major、s2 6 major、Codex 覆核 confirm 上輪兩點修到位+點同一 gate 矛盾〕）**：折入 ~18 條——**blocker（s1/Codex 同抓）**:stdin 單載 delta 卻要兼傳 prospective content→改**單包 JSON payload（`--stdin-payload`）**含 query+prospective map,抽取規格含 replace_all/MultiEdit 失敗 fallback。**major 群**:①hop1 純圖 vs §3 動態閾值→hop1 只受靜態 0.20 底線（不與 direct 對打）②hop≥2 L>0 砍安全合約→固定席擴**任意 hop 的 ★INVARIANT★/★IRREVERSIBLE★**（回退現行 hook 行為,安全類 must-see 由固定席機保）③gate「或」殘留（增補段）→統一為「與」④§2/§3 hook active 殘句→**版本歸屬:hook 側全屬 v1.1**、v1 僅 dormant CLI+評測器⑤TTL 機制→冷卻窗內帶 delta 走 `--incidents-only` 快速模式（只跑 trigger、不 BFS）⑥prospective incident 測試補⑦goldset.json schema 明列+切分 sha256(id+salt) 可重現⑧評測器落點 `governance/eval/retrieval_eval.py`（獨立腳本非子命令）+跑法+eval-history⑨pooling 操作化（legacy/ranked/graph-only/fusion 去識別+洗牌,雙 LLM 同份不見身份）⑩計數旗標統一 `--top`。**minor**:壞行號:318 去具體化、step8 空殼刪、99 兩義、overflow 純資訊計數、cochange 稀疏 fallback、姐妹折疊測試+歸屬、Γ/len(d)/K1 尺度注記。Codex 覆核裁決:「rollout 核心已修到位;先釘死 prospective 傳輸/fallback 與 gate 與/或」→本輪全折。
+
+- **r1（2026-07-10，panel W=3：2 canaried opus + **Codex/GPT-5.6 跨家族否決位首戰**；canary 2/2 caught（s1=a 型假表列引用〔probe:recraft×1,末次探針因節錄視野誤標,判 pass 附註〕、s2=b 型幽靈旗標〔probe:pass〕;token 見 canary-log r1〕）、0 missed → near-perfect 有效輪）**：折入 ~20 條——否決位 2 major（rollout 拆兩階段:hook 維持 legacy、gate 過後 opt-in——原 spec 會讓主要自動消費者未經驗證直接切 top-8；**prospective incident 修既有盲點**:content 觸發改比對套用 delta 後內容+TTL 不壓事故段——本次新增危險內容原本不會觸發事故提醒）+ s1 4 major（hop1 純圖過閾證偽原宣稱→hop≥2 需 L>0；輸出合約 8/10/5 三數統一為固定席不占 top_k+overflow=N−top_k；fusion gate baseline 統一 graph-only+「與」邏輯；〔canary〕）+ s2 4 major（hook delta 抽取規格三工具明列+512 cap 在 hook 端；overflow 綁 top_k；評審=雙 LLM 異家族+人裁；切分凍結 goldset.json+15% gate 統計力誠實限定；must-see 改固定席機械保證）+ minors（Γ 定義、len(d) 總數、K1/B 可調+尺度注記、L 全零:=0、--code/--sort/--files-only 交互、cochange proxy 用預設門檻+無向化+限 related 面、姐妹折疊鍵=去尾段、P@k 分母/label/macro/snapshot）。否決位裁決原文:「這版不能直接進實作——修 rollout、delta incident 語意、TTL 與 gate 定義後才可」→ 本輪已全部折入。
+
+## 相關模組
+
+- [[Projects/檢索優化_調研]]
+- [[Systems/lumos-cli-read]]
+- [[Systems/pitfalls-code-loop]]
