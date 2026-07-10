@@ -5960,6 +5960,44 @@ def t_difficulty_panel_width():
           and st["need"] == 2 and st["maxr"] == 6, f"hi={hi} st={st}")
 
 
+def t_panel_near_perfect_and_gov_ledger():
+    """收斂閘 caught-rate 修正(2026-07-10):①near-perfect 輪有效(caught≥2 但有 missed → 輪無效)
+    ②gov canary 分帳(per-auditor missed-rate + type 分佈)。"""
+    import subprocess as _sp
+
+    def _mkvault(d):
+        v = Path(d) / "docs" / "y-knowledge"
+        (v / "MOC").mkdir(parents=True)
+        (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+
+    def _rec(d, *extra):
+        return _sp.run([sys.executable, GRAPHCTL, "canary", "record", *extra],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    # near-perfect:2 caught + 1 missed(舊判準 caught≥2 會過)→ 現在輪無效 rc1
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "NP", "--round", "r1", "--token", "A",
+             "--severity", "clean", "--capture-counts", "2,2,3")
+        _rec(d, "caught", "--loop", "NP", "--round", "r1", "--token", "B", "--severity", "clean")
+        _rec(d, "missed", "--loop", "NP", "--round", "r1", "--token", "C")
+        r = _sp.run([sys.executable, GRAPHCTL, "loop", "status", "NP", "--gate", "--panel"],
+                    cwd=str(Path(d)), capture_output=True, text=True)
+        check("near-perfect: 2caught+1missed → 輪無效 rc1", r.returncode == 1 and "near-perfect" in r.stdout,
+              f"rc={r.returncode}\n{r.stdout}")
+
+    # gov 分帳:caught/missed per-auditor + type=X 分佈
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "G", "--auditor", "sonnet", "--note", "r1 type=a caught")
+        _rec(d, "missed", "--loop", "G", "--auditor", "sonnet", "--note", "r2 type=b missed")
+        r = _sp.run([sys.executable, GRAPHCTL, "gov"], cwd=str(Path(d)),
+                    capture_output=True, text=True)
+        check("gov 分帳: missed-rate 段出現", "canary 分帳" in r.stdout and "missed-rate 50%" in r.stdout,
+              r.stdout[-400:])
+        check("gov 分帳: type 分佈", "a:1c/0m" in r.stdout and "b:0c/1m" in r.stdout, r.stdout[-400:])
+
+
 def t_loop_panel_gate():
     """loop 壓縮 T3:loop status --panel 收斂謂詞(四條合取 + 混用守衛)。"""
     import subprocess as _sp

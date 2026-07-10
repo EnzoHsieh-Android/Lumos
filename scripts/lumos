@@ -1556,6 +1556,30 @@ def cmd_gov(env, node=None, since_days=90):
         print(f"{r['ts'][:10]} [{r['gate']}/{r['kind']}/{mark}] {','.join(r['nodes']) or '-'}  {r['detail'][:50]}")
     if node:
         print("\n(註:L2 繞過無 node、L3 以 Verification 為鍵;對 Systems 節點為部分視圖)")
+    # canary missed 分帳(2026-07-10,borrow mutation 文獻:missed 類別要分類追蹤,
+    # missed-rate 是一級指標非異常事件)。per-auditor 計數 + note 的 type=X best-effort 分佈。
+    can = [r for r in ded if r["gate"] == "canary"]
+    if can and not node:
+        import re as _re
+        by_aud = {}
+        by_type = {}
+        for r in can:
+            aud = (r["detail"].split("·")[-1].strip().split(" ") or ["?"])[0] or "?"
+            st = by_aud.setdefault(aud, {"caught": 0, "missed": 0})
+            st[r["kind"]] = st.get(r["kind"], 0) + 1
+            m = _re.search(r"type=([\w-]+)", r["detail"])
+            if m:
+                tt = by_type.setdefault(m.group(1), {"caught": 0, "missed": 0})
+                tt[r["kind"]] = tt.get(r["kind"], 0) + 1
+        print("\ncanary 分帳(missed-rate 一級指標):")
+        for aud, st in sorted(by_aud.items()):
+            tot = st["caught"] + st["missed"]
+            if tot:
+                print(f"  {aud}: caught {st['caught']} / missed {st['missed']}"
+                      f" (missed-rate {st['missed']/tot:.0%})")
+        if by_type:
+            print("  型別分佈: " + " | ".join(
+                f"{k}:{v['caught']}c/{v['missed']}m" for k, v in sorted(by_type.items())))
     print(f"\n{len(ded)} 筆(近 {since_days} 天)")
     return 0
 
@@ -1651,8 +1675,14 @@ def _loop_status_panel(rounds, loop_id):
     fails = []
     caught_recs = [r for r in latest if r.get("kind") == "caught"]
     caught = len(caught_recs)
-    if caught >= 2:
-        print(f"[panel] 輪有效(canary caught {caught} ≥2): ✓")
+    missed = sum(1 for r in latest if r.get("kind") == "missed")
+    # near-perfect(2026-07-10,borrow mutation score 文獻:只有近滿分 caught-rate 才有強訊號,
+    # 中段分數與真實審計力相關弱)→ 輪有效 = caught≥2 且該輪 0 missed(全 caught)
+    if caught >= 2 and missed == 0:
+        print(f"[panel] 輪有效(canary caught {caught}/{caught},near-perfect): ✓")
+    elif missed > 0:
+        print(f"[panel] 輪有效: ✗ — {missed} missed(near-perfect 要求全 caught;中段分數弱訊號不背書收斂)")
+        fails.append("輪無效")
     else:
         print(f"[panel] 輪有效: ✗ — canary caught {caught} <2(輪無效)")
         fails.append("輪無效")

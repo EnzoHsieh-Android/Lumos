@@ -22,6 +22,10 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
    - (c) 未定義欄位/常數(憑空的 frontmatter 欄位或常數名)
    - (d) 未定義產物/檔名(憑空的 `xxx.json`,不在 schema/它處)。**(d) 型保持裸檔名(勿帶 repo 路徑如 `configs/foo.json`)——裸檔名無 `/`,天然在 refcheck 抽取域外,canary 防線不受影響;帶路徑會被步驟 2.5 機械吃掉、canary 作廢**
    嵌唯一 token 定位。**canary 要「認真審就抓得到、但不一眼看穿」**——太細=不公平、太明顯=訊號弱(校準鐵則)。
+   **生成硬化三條(2026-07-10,borrow FLAWS arXiv 2511.21843 / IBIR ACM TOSEM 2022;設計見 [[canary生成硬化_計劃]])**:
+   - **載重錨定**:植入位置不隨機挑段——先掃 spec 抽 3-5 條載重最高的可證偽 claim(演算法定義/門檻數字/整合接點),canary 植在其中一條的失效變體上。canary 測「有沒有讀懂核心」,不是「有沒有掃過周邊」。
+   - **難度探針(FLAWS difficulty filter 反向適配)**:植完、派審計員前,派一個 **haiku 探針**(只給被植段落 ±20 行,prompt「這段有沒有內部不一致/未定義引用?」):haiku 一眼抓到 → 太明顯,重植更藏的變體再探(上限 2 次);沒抓到 → 難度合格。探針結果記入該輪 canary note(`probe:pass|recraft×N`)。理由:FLAWS 實測生成者自己抓得到的錯 61-93% 被過濾——不濾,caught 會灌水(mutation score 冗餘教訓同源)。
+   - **事故反轉(IBIR 模式,機會性)**:型別輪替前先查事故語料(`lumos search --path Issues` + `pitfall_when` 命中 spec 主題域):有匹配 → 把該事故的「修法」反轉成 canary(標 `type=incident-inv`),取代該 slot 的通用型別;無匹配 → 照舊輪替。事故驅動的植錯比盲 mutation 寫實且有區分力(IBIR 實證)。
 2.5. **機械核對(refcheck,對工作副本)**:`lumos refcheck /tmp/<id>-rN.md --repo <repo根> --json`。missing/line_out_of_range=機械 finding,直接修**真檔 spec**(記入審計修正紀錄、標「機械 refcheck」);manifest(ok 宣稱+excerpts)留存、步驟 3 餵審計員。refcheck 只驗 spec→repo 指涉、不驗 spec 內部一致性——內部一致性是 canary 保留地、審計員責任田。
 2.6. **pitfalls 核對(派審計員前)**:`lumos pitfalls docs/design/<id>.md --check`;rc 1(缺「## 實務隱患」節)→ 先在**真檔 spec** 補「## 實務隱患」節再繼續。`lumos pitfalls docs/design/<id>.md`(不帶 --check)的提問清單附給步驟 3 的審計員當鏡頭之一。
 3. **派乾淨審計員**:Agent tool、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 canary**、指向工作副本、**refute framing(把工作副本當外部第三方的投稿審,不是你/本系統寫的——挑出投稿者沒看到的洞)**:要它逐節讀、主動找洞(未定義詞/壞引用/不一致/矛盾/可執行性 gap),逐條標 severity;**附步驟 2.5 的 refcheck manifest**——manifest 內宣稱的存在性/行號已機械驗訖,查證力氣聚焦語意;manifest 非宣稱全集,散文裡的現況假設仍要自己查。**第一次 missed 起就加碼 framing**:「逐節讀,你一定找得到至少一個未定義的詞/壞引用/不一致;沒找到就是你沒讀仔細」。
@@ -45,8 +49,13 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 ## 平行 panel 模式(≤3 輪壓縮,2026-07-09;取代 6 輪同族循序,設計見 [[loop三輪壓縮_計劃]])
 6 輪同族循序=相關信號(「9 judge 2 票」)且 framing 對抗 G2 收斂逼跑滿 cap。壓縮=**買獨立廣度不買相關深度**:
-- **一輪 = 平行派 W 個多樣審計員**(W 由 tier:`difficulty.params` 的 `panel_width`,standard=3/high=5),不同 canary 型別(跨 slot 輪替 a/b/c/d)+ 不同鏡頭(正確性/邊界/整合)+ ≥1 跨家族(qwen,不帶 canary、只作否決)。每審計員各自 canary → 注意力檢查平行做。
+- **一輪 = 平行派 W 個多樣審計員**(W 由 tier:`difficulty.params` 的 `panel_width`,standard=3/high=5),不同 canary 型別(跨 slot 輪替 a/b/c/d)+ 不同鏡頭(正確性/邊界/整合)+ ≥1 跨家族(qwen,不帶 canary、只作否決)。每審計員各自 canary → 注意力檢查平行做。**同輪 W 個 canary 不得同型同段——「殺 A 必殺 B」的重複難度 canary 不算獨立注意力票**(冗餘灌水 caught-rate;冗餘識別不可判定 → 靠紀律,borrow mutation score 教訓 2026-07-10)。
 - **判定(編排者一次做)**:①逐同族審計員判 canary caught/missed,missed 者 findings 剔除 ②去重(嚴格合一同段同性質)③對存活 ≥major 派辯方 ④算 capture-recapture:各 distinct 缺陷被幾人找到 → `capture_counts`。
+
+### reviewer 結構紀律(2026-07-10 研究明文化;實證出處見 [[reviewer結構明文化_計劃]])
+1. **禁互辯(硬規則)**:reviewer 互不通訊、不得看彼此輸出迭代辯論;分歧交編排者裁,不回饋重辯。實證:multi-agent debate 第一輪即劇烈放大 position/verbosity/CoT/bandwagon 偏誤且後續輪不自癒(EMNLP 2025)。範圍限定:實證測的是偏誤軸(另有研究稱 debate 提升準確率軸)——lumos 審計場景選抗偏誤。
+2. **編排者=meta-judge**:判讀段(canary 判定/去重/severity max/辯方裁決聚合)是 meta-judge 聚合——只聚合一級判決、不重審內容;judgment pool 越大越抗偏誤(W 寬 panel 的理據;meta-judge position consistency 0.793→0.854)。
+3. **關鍵單點判決 ≥3 run 多數決**:「單一判決要當終局」的窄集合(cap 攤牌前的最後裁定、blocker 級辯方裁決有爭議)→ ≥3 獨立乾淨 run 取多數決。誠實限定:同 judge 同輸入跨 run α 最好僅 0.563(<0.8 可靠線)——多數決**只壓 stochastic 變異、不壓 correlated 系統性盲點**,後者靠異家族 panel,兩者不互替。跨家族 slot:qwen 可用時用;不可用時異模型為次佳並於 note 註記偏離。
 - **記錄**:一輪 W 筆共享 round-id:`lumos canary record caught|missed --loop <id> --round <rid> --severity <s> --capture-counts "2,2,1"`(counts 記在該輪一筆即可)。
 - **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 四條合取:輪有效(≥2 caught)∧ 存活 max≤minor(只算 caught)∧ capture-recapture 殘餘<門檻(**無 counts=fail-closed**)。一個乾淨 panel 輪即收斂(K=1);存活 ≥major → fix → 下一輪只重審 delta,cap=3。
 - **混用守衛**:panel 記錄(帶 round)與 legacy 記錄不可混用,`--panel` 要求全帶 round、否則 rc2(防 None phantom 輪偽過)。

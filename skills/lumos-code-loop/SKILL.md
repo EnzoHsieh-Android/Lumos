@@ -50,6 +50,7 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch   # 工作副本
 | N=4 | 3 (d) | 冪等 / 併發破壞 | `SELECT` 後 `INSERT` 無交易包裹、TOCTOU |
 
 canary 要「認真審就抓得到、但不一眼看穿」——太細=不公平、太明顯=訊號弱(校準鐵則,同 design-loop)。
+**生成硬化三條(載重錨定/haiku 難度探針/事故反轉)與 reviewer 結構紀律(禁互辯/meta-judge/≥3 run 多數決)同 design-loop SKILL——單源在該檔對應節,code-loop 適配:載重錨定=bug canary 植在 diff 主題的核心邏輯型別、事故反轉查 pitfall_when 命中被改檔。不在此雙寫(防散落漂移)。
 
 ---
 
