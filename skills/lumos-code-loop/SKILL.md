@@ -82,6 +82,9 @@ Agent tool、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 cana
 - 「**不能從 diff 指出具體受影響的 file:line 路徑,就不准臆測『可能會壞別處』**。」
 - ⚠ 刻意**不借** PR-Agent 的 findings 硬上限(num_max_findings=3)——上限會把真 findings 藏到下一輪,污染 G2 發現枯竭的收斂信號;抑噪靠上面兩句紀律,不靠砍量。
 
+**受影響功能面鏡頭(2026-07-11 橋接,檢索排序轉正後啟用)**:派 reviewer 前跑
+`lumos impact --diff <merge-base>..HEAD --json` ——聚合整段 diff 各檔的 ranked impact(query=各檔 hunk 文字)成一份 manifest:固定席(★INVARIANT★ 合約+pitfall_when 事故)全保、非固定取跨檔最高分 top-8。附給 reviewer 當第二鏡頭:「逐條判此 diff 會不會破壞該節點宣稱的行為/合約;固定席(合約/事故)必答」。**定位=advisory 人判**(goldset 評測:安全固定席 must-see 30/30 全命中、非固定 P@8≈.52——噪音由 reviewer 過濾,故當鏡頭不當自動閘;此即不接 hook 只接 code-loop 的原因)。
+
 > manifest 現含兩種來源的 claim(`source` 欄區分):regex claim(`source:"pitfalls-builtin"`,讀 `question` 對應提問)與 lint claim(`source:"lint:<driver>"`,來自專案 `.lumos/lint.json` 宣告的社群 linter SARIF,讀 `message`——linter 已是具體診斷、無 question 欄)。reviewer 鏡頭對 lint claim 讀 `message`、對 regex claim 仍讀 `question`。
 
 第一次 missed 起加碼 framing:「逐 hunk 讀,你一定找得到至少一個植入的 bug;沒找到就是你沒讀仔細。」

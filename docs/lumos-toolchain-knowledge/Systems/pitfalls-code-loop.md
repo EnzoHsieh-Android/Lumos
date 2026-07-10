@@ -32,6 +32,8 @@ decisions:
     why_chosen: 需醒著訊號(無則蓋章 reviewer 連 2 LGTM 空轉收斂,r9 opus 都漏抓);mutation 只驗測試層抓不到審查層敷衍;三道防污染把污染封到「必留可見痕跡」
     decided: 2026-07-04
     valid: true
+related:
+  - "[[Projects/impact-diff橋接_計劃]]"
 ---
 # pitfalls-code-loop
 

@@ -229,6 +229,7 @@ lumos fold-check <spec>                               # 抓設計「折入漂移
 lumos refcheck <spec> --repo . [--json]              # spec→repo 指涉的機械核對(missing/行號越界)
 lumos impact --file <檔> [--depth N] [--json]        # 反查受影響關聯節點(直/間接)+ 命中事故(pitfall_when)
 lumos impact --file <檔> --ranked [--stdin-payload]  # 融合排序+安全固定席降噪(dormant;hook 面評測未過線)
+lumos impact --diff <base>..HEAD [--json]            # 受影響功能面 manifest(code-loop 審計鏡頭:合約/事故固定席+top-8,advisory 人判)
 lumos cochange rules|check [--json]                  # git 史挖共改規則;pre-commit Gate CC 警告漏改夥伴(advisory)
 lumos anchor verify | approve --note "<理由>"        # 測試/閘檔完整性:驗指紋 / 刻意改後核可基線
 ```

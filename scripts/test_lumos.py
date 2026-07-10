@@ -7835,6 +7835,57 @@ def t_impact_ranked():
     shutil.rmtree(root, ignore_errors=True)
 
 
+def t_impact_diff():
+    """impact --diff(code-loop 橋接):聚合整段 diff 的 ranked impact 成受影響功能面 manifest。"""
+    import subprocess as sp, json, shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-impd-"))
+    def g(*a):
+        sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+    g("init", "-q"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    v = root / "docs" / "z-knowledge"
+    (v / "Systems").mkdir(parents=True); (v / "Issues").mkdir(); (v / "MOC").mkdir()
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    (v / "Systems" / "SvcCore.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 不可空寫 [test:X]\n---\n"
+        "# SvcCore\n實作在 `src/svc.py`。\n", encoding="utf-8")
+    (v / "Systems" / "Helper.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:普通\n---\n# Helper\n`src/svc.py` 的輔助。\n",
+        encoding="utf-8")
+    (v / "Issues" / "SQL注入踩雷.md").write_text(
+        "---\ntype: issue\nstatus: open\npitfall_when:\n  - \"content:SELECT.*FROM\"\n"
+        "summary: |-\n  FLAG:TECHNICAL\n---\n# SQL 注入\n拼字串 SQL 的坑。\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "svc.py").write_text("def save(x):\n    pass\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "init")
+    # 第二筆 commit:svc.py 引入 SQL(觸發事故 trigger)+ 新增無圖譜引用的 other.py + 動一個圖譜節點(seed 應排除)
+    (root / "src" / "svc.py").write_text(
+        "def save(x):\n    q = 'SELECT id FROM t'\n    return q\n", encoding="utf-8")
+    (root / "src" / "other.py").write_text("pass\n", encoding="utf-8")
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n改一下\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "change")
+    def lum(*a, stdin=None):
+        return sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True,
+                      cwd=root, input=stdin)
+    r = lum("impact", "--diff", "HEAD~1..HEAD", "--json")
+    check("impact --diff rc0", r.returncode == 0, r.stderr[:200])
+    d = json.loads(r.stdout.strip().splitlines()[-1])
+    check("diff manifest 有 results/meta/files", set(d) >= {"results", "meta", "files"}, str(d)[:150])
+    check("diff seed 含 code 檔", "src/svc.py" in d["files"] and "src/other.py" in d["files"], str(d["files"]))
+    check("diff seed 排除圖譜節點", not any(f.startswith("docs/") for f in d["files"]), str(d["files"]))
+    pinned = [x for x in d["results"] if x.get("pinned")]
+    check("合約節點固定席(SvcCore)", any("SvcCore" in x["node"] for x in pinned), str(pinned)[:200])
+    check("事故被磁碟現況觸發(SQL)", any("SQL" in x["node"] for x in pinned), str(pinned)[:200])
+    check("非固定含 Helper 且帶來源檔", any("Helper" in x["node"] and x.get("files")
+          for x in d["results"] if not x.get("pinned")), str(d["results"])[:300])
+    # 人讀模式
+    r = lum("impact", "--diff", "HEAD~1..HEAD")
+    check("diff 人讀含標頭", "受影響功能面" in r.stdout, r.stdout[:150])
+    # 參數守衛:--file 與 --diff 都缺 → rc2
+    r = lum("impact")
+    check("impact 無 --file/--diff rc2", r.returncode == 2, str(r.returncode))
+    shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

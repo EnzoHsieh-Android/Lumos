@@ -7123,7 +7123,8 @@ def _impact_load_config(repo_root):
 
 
 def cmd_impact(file, repo=None, depth=None, as_json=False,
-               ranked=False, top=8, min_score=0.20, stdin_payload=False, incidents_only=False):
+               ranked=False, top=8, min_score=0.20, stdin_payload=False, incidents_only=False,
+               payload=None):
     """動手前算出哪些知識圖譜節點會被 code 改動波及。
     rc 協定: 0=成功(有/無影響集都算) / 3=vault 找不到 / 其他非 0=內部錯。
     Task 7: 排序 + --json schema + 人讀輸出。
@@ -7239,7 +7240,10 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
 
     # 8. stdin payload(階段三):{"query","prospective":{rel:content}}——prospective 供事故比對(套 delta 後),query 供詞彙融合。
     _payload = {}
-    if stdin_payload:
+    if payload is not None:          # 內部呼叫(--diff 聚合)直接給 dict,不經 stdin
+        _payload = payload
+        stdin_payload = True         # query/prospective 語意與 stdin 模式一致
+    elif stdin_payload:
         try:
             _payload = json.loads(sys.stdin.read() or "{}")
         except ValueError:
@@ -7378,6 +7382,96 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 contract_tag = f" ★{x['contract']}★" if x.get("contract") else ""
                 print(f"  {x['node']}{contract_tag}  (trigger: {x['matched_by']})")
 
+    return 0
+
+
+_IMPACT_DIFF_SKIP = ("docs/", "governance/golden/")   # 圖譜/凍結快照非 code,不當 impact 種子
+
+
+def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as_json=False):
+    """code-loop 橋接:對整段 diff 的每支改動 code 檔跑 ranked impact(query=該檔 hunk 文字),
+    聚合成「受影響功能面」manifest——固定席(合約/事故)全保、非固定取跨檔最高分 top-N。
+    定位=審計員鏡頭(advisory,人判),非自動推播(hook 面 goldset 評測未過線,故不接 hook)。
+    rc: 0=成功 / 2=git 失敗 / 3=vault 缺。"""
+    import json as _json
+    import subprocess as _sp
+    repo_root = Path(repo) if repo else None
+    if repo_root is None:
+        for cand in (Path.cwd(), *Path.cwd().parents):
+            if (cand / ".git").exists():
+                repo_root = cand
+                break
+    if repo_root is None or not (repo_root / ".git").exists():
+        print("ERROR: 找不到 git repo(--repo 指定)", file=sys.stderr)
+        return 2
+    r = _sp.run(["git", "-C", str(repo_root), "diff", "--name-only", diff_range],
+                capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"ERROR: git diff 失敗: {r.stderr.strip()[:200]}", file=sys.stderr)
+        return 2
+    files = []
+    for f in r.stdout.splitlines():
+        f = f.strip()
+        if not f or any(f.startswith(p) for p in _IMPACT_DIFF_SKIP) or f.endswith(".jsonl"):
+            continue
+        if not (repo_root / f).exists():   # 已刪檔無現況可反查,跳過
+            continue
+        files.append(f)
+    merged = {}          # node -> entry(跨檔取最高分;pinned 任一檔 pinned 即 pinned)
+    per_file_meta = []
+    import io, contextlib
+    for f in files:
+        d = _sp.run(["git", "-C", str(repo_root), "diff", diff_range, "--", f],
+                    capture_output=True, text=True)
+        hunk = " ".join(l[1:].strip() for l in d.stdout.splitlines()
+                        if l[:1] in "+-" and not l.startswith(("+++", "---")))[:4000]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cmd_impact(f, repo=str(repo_root), depth=depth, as_json=True,
+                            ranked=True, top=top, min_score=min_score,
+                            payload={"query": hunk, "prospective": {}})
+        if rc == 3:
+            print("IMPACT-DEBUG: vault 找不到(rc3)", file=sys.stderr)
+            return 3
+        if rc != 0:
+            continue
+        try:
+            data = _json.loads(buf.getvalue().strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            continue
+        per_file_meta.append({"file": f, **data.get("meta", {})})
+        for x in data.get("results", []):
+            cur = merged.get(x["node"])
+            if cur is None:
+                merged[x["node"]] = {**x, "files": [f]}
+            else:
+                if f not in cur["files"]:
+                    cur["files"].append(f)
+                cur["pinned"] = cur["pinned"] or x.get("pinned", False)
+                if x["score"] > cur["score"]:
+                    for k in ("score", "kind", "hop", "contract", "L"):
+                        if k in x:
+                            cur[k] = x[k]
+    pins = sorted([v for v in merged.values() if v["pinned"]],
+                  key=lambda v: (-v["score"], v["node"]))
+    free = sorted([v for v in merged.values() if not v["pinned"]],
+                  key=lambda v: (-v["score"], v["node"]))[:int(top)]
+    if as_json:
+        print(_json.dumps({"range": diff_range, "files": files,
+                           "results": pins + free,
+                           "meta": {"files": len(files), "pinned": len(pins),
+                                    "free_kept": len(free),
+                                    "free_total": sum(1 for v in merged.values() if not v["pinned"]),
+                                    "per_file": per_file_meta}}, ensure_ascii=False))
+        return 0
+    print(f"受影響功能面({diff_range};{len(files)} 檔;固定席 {len(pins)}+top {len(free)}——審計鏡頭,人判):")
+    for v in pins + free:
+        mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{v.get('hop','?')}"}.get(v["kind"], "")
+        ct = f" ★{v['contract']}★" if v.get("contract") else ""
+        pin = " [固定]" if v["pinned"] else ""
+        print(f"  {v['score']:5.2f} {mk} {v['node']}{ct}{pin}  ←{','.join(v['files'][:3])}")
+    if not merged:
+        print("  (無節點引用這些檔——圖譜對此 diff 無覆蓋)")
     return 0
 
 
@@ -7819,7 +7913,8 @@ def main():
     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
 
     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
-    p.add_argument("--file", dest="impact_file", required=True, help="被改動的 code 檔路徑(必填)")
+    p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff 二擇一)")
+    p.add_argument("--diff", dest="impact_diff", help="diff range(如 main..HEAD):聚合各改動檔的 ranked impact 成受影響功能面 manifest(code-loop 審計鏡頭)")
     p.add_argument("--repo", dest="impact_repo", help="repo root(缺則退回 find_vault;hook 必傳)")
     p.add_argument("--depth", dest="impact_depth", type=int, default=None, help="BFS 展開深度(缺省讀 .lumos/impact.json;最終預設 2)")
     p.add_argument("--json", dest="impact_json", action="store_true", help="JSON 輸出(機器可讀)")
@@ -7917,6 +8012,13 @@ def main():
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
     if args.cmd == "impact":
+        if args.impact_diff:
+            return cmd_impact_diff(args.impact_diff, repo=args.impact_repo,
+                                   depth=args.impact_depth, top=args.impact_top,
+                                   min_score=args.impact_min, as_json=args.impact_json)
+        if not args.impact_file:
+            print("ERROR: impact 需要 --file <檔> 或 --diff <range>", file=sys.stderr)
+            return 2
         return cmd_impact(args.impact_file, repo=args.impact_repo,
                           depth=args.impact_depth, as_json=args.impact_json,
                           ranked=args.impact_ranked, top=args.impact_top,
