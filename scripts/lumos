@@ -904,7 +904,104 @@ def _search_region(lineno, line, fm_end):
     return "body"
 
 
-def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False):
+# ── 檢索排序核心(BM25F,borrow Whoosh 公式+Robertson BM25F tf 加權;spec:檢索優化_計劃) ──
+
+_RANK_ASCII_RE = re.compile(r"[a-z0-9][a-z0-9_\-]*")
+_RANK_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]+")
+_RANK_FIELD_W = {"title": 4.0, "summary": 2.5, "tags": 1.5, "body": 1.0, "type": 0.5}
+
+
+def _rank_tokenize(text):
+    """中文連續段→字元 bigram(單字段→unigram);ASCII→完整 token+snake/kebab/數字拆分;小寫。"""
+    out = []
+    low = nfc(text or "").lower()
+    for m in _RANK_CJK_RE.finditer(low):
+        seg = m.group(0)
+        if len(seg) == 1:
+            out.append(seg)
+        else:
+            out.extend(seg[i:i + 2] for i in range(len(seg) - 1))
+    for m in _RANK_ASCII_RE.finditer(low):
+        tok = m.group(0)
+        out.append(tok)
+        parts = [p for p in re.split(r"[_\-]|(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])", tok) if p]
+        if len(parts) > 1 or (parts and parts[0] != tok):
+            out.extend(p for p in parts if p != tok)
+    return out
+
+
+def _rank_idf(n_docs, df):
+    """平滑 IDF(Whoosh/Lucene Classic):log(N/(df+1))+1——小語料全出現詞仍為正。"""
+    import math
+    return math.log(n_docs / (df + 1)) + 1.0
+
+
+def _rank_bm25(tf, idf, dl, avgdl, k1=1.2, b=0.75):
+    return idf * (tf * (k1 + 1)) / (tf + k1 * ((1 - b) + b * dl / max(avgdl, 1e-9)))
+
+
+def _rank_fields(env, rel):
+    """節點 → 欄位文本 dict(title/summary/tags/body/type)。body 去 frontmatter。"""
+    n = env.notes.get(rel)
+    try:
+        text = (env.vault / rel).read_text(encoding="utf-8-sig")
+    except Exception:
+        text = ""
+    lines = text.split("\n")
+    fm_end = 0
+    if lines and lines[0].strip() == "---":
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                fm_end = i + 1
+                break
+    body = "\n".join(lines[fm_end:])
+    f = n.fields if n else {}
+    tags = f.get("tags")
+    tags = " ".join(tags) if isinstance(tags, list) else str(tags or "")
+    return {"title": (n.stem if n else Path(rel).stem),
+            "summary": str(f.get("summary") or ""),
+            "tags": tags, "body": body, "type": str(f.get("type") or "")}
+
+
+def _rank_score_candidates(env, query, candidates):
+    """對候選集跑 BM25F(欄位 tf 加權於飽和前,單一虛擬文件)。回 [(rel, score, hits)]。
+    N/df/avgdl 以候選集為 corpus(排序目的,絕對值不跨查詢比較)。"""
+    q_tokens = list(dict.fromkeys(_rank_tokenize(query)))
+    if not q_tokens or not candidates:
+        return [(r, 0.0, []) for r in candidates]
+    docs = {}
+    for rel in candidates:
+        fields = _rank_fields(env, rel)
+        tfs = {}
+        dl = 0.0
+        for fname, ftext in fields.items():
+            w = _RANK_FIELD_W[fname]
+            toks = _rank_tokenize(ftext)
+            dl += len(toks)          # 長度用未加權 token 數(spec §1)
+            for tok in toks:
+                if tok in q_tokens:
+                    tfs[tok] = tfs.get(tok, 0.0) + w   # tf 加權於飽和前
+        docs[rel] = (tfs, dl)
+    n_docs = len(docs)
+    avgdl = sum(d for _, d in docs.values()) / max(n_docs, 1)
+    df = {t: sum(1 for tfs, _ in docs.values() if t in tfs) for t in q_tokens}
+    out = []
+    for rel, (tfs, dl) in docs.items():
+        score = 0.0
+        hits = []
+        for tok in q_tokens:
+            tf = tfs.get(tok, 0.0)
+            if tf <= 0:
+                continue
+            score += _rank_bm25(tf, _rank_idf(n_docs, df[tok]), dl, avgdl)
+            hits.append(tok)
+        out.append((rel, round(score, 4), hits))
+    out.sort(key=lambda x: (-x[1], x[0]))
+    return out
+
+
+def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
+               ranked=False, top=20, as_json=False):
     """全文搜尋(frontmatter + body)。預設大小寫不敏感 substring;--regex 用正則。
     預設**排除 fenced code 區塊 + inline code**(對齊 doctor 連結抽取的慣例,--code 才含);
     context 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。職責=自由文字;結構化查詢走
@@ -919,6 +1016,10 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     else:
         needle = nfc(term).lower()
         matches = lambda s: needle in nfc(s).lower()
+    if ranked and regex:
+        print("(--ranked 不適用 --regex 模式,照舊輸出)", file=sys.stderr)
+        ranked = False
+    _cand_hits = {}   # ranked:rel -> hit 行數(候選=legacy 命中集,不擴召回)
     total_files = total_hits = 0
     for rel in sorted(env.notes):
         if path_prefix and not rel.startswith(path_prefix):
@@ -948,6 +1049,9 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             continue
         total_files += 1
         total_hits += len(hits)
+        if ranked:
+            _cand_hits[rel] = len(hits)
+            continue
         if files_only:
             print(f"{rel} ({len(hits)})")
             continue
@@ -959,6 +1063,22 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             print(f"  {lineno} [{tag}]: {disp}")
         if len(hits) > 8:
             print(f"  … 還有 {len(hits) - 8} 處")
+    if ranked:
+        import json as _json
+        scored = _rank_score_candidates(env, term, list(_cand_hits))[:max(int(top), 1)]
+        if as_json:
+            results = [{"node": rel, "score": score, "hits": hits, "match_lines": _cand_hits[rel]}
+                       for rel, score, hits in scored]
+            print(_json.dumps({"results": results, "candidates": len(_cand_hits)},
+                              ensure_ascii=False))
+        elif files_only:
+            for rel, score, _h in scored:
+                print(f"{rel} ({_cand_hits[rel]})")
+        else:
+            for rel, score, hits in scored:
+                print(f"{score:7.3f}  {rel}  [{','.join(hits[:5])}]")
+            print(f"\n(top {len(scored)} / 候選 {len(_cand_hits)})")
+        return 0
     suffix = f"(限 {path_prefix})" if path_prefix else ""
     if not include_code:
         suffix += " [已排除 code block,--code 可含]"
@@ -7380,6 +7500,9 @@ def main():
     p.add_argument("--regex", action="store_true", help="term 當正則(預設 substring 大小寫不敏感)")
     p.add_argument("--files-only", action="store_true", help="只列檔名+命中數")
     p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
+    p.add_argument("--ranked", action="store_true", help="BM25F 相關性排序(只重排既有候選;dormant v1)")
+    p.add_argument("--top", type=int, default=20, help="--ranked 時輸出上限(預設 20)")
+    p.add_argument("--json", dest="search_json", action="store_true", help="--ranked 時輸出 JSON manifest")
 
     p = sub.add_parser("map", help="鄰域樹狀展開")
     p.add_argument("note")
@@ -7622,7 +7745,8 @@ def main():
     if args.cmd == "search":
         return cmd_search(env, args.term, path_prefix=args.path_prefix,
                           regex=args.regex, files_only=args.files_only,
-                          include_code=args.code)
+                          include_code=args.code, ranked=args.ranked, top=args.top,
+                          as_json=args.search_json)
 
     if args.cmd == "contracts":
         rel = None

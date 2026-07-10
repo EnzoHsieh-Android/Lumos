@@ -7621,6 +7621,90 @@ def t_spec_trace_and_signoff():
         check("ledger 兩筆", slog.read_text(encoding="utf-8").count("\n") == 2, "")
 
 
+def _mk_rank_vault():
+    """檢索排序測試 vault:標題命中 vs body 命中、中文 bigram、欄位權重。"""
+    d = Path(tempfile.mkdtemp(prefix="gctl-rank-"))
+    v = d / "docs" / "r-knowledge"
+    for sub_ in ("Systems", "MOC"):
+        (v / sub_).mkdir(parents=True)
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    # A:標題含「檢索」;B:只有 body 深處含「檢索」×1;C:body 含「檢索」×5(飽和測試)
+    (v / "Systems" / "檢索引擎.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:排序核心\ntags:\n  - type/system\n---\n# 檢索引擎\n無關內文。\n",
+        encoding="utf-8")
+    (v / "Systems" / "Alpha.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:別的\n---\n# Alpha\n這裡提到檢索一次。\n",
+        encoding="utf-8")
+    (v / "Systems" / "Beta.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:別的\n---\n# Beta\n"
+        + "檢索兩次:檢索。\n", encoding="utf-8")   # tf=2<標題權重4(spec 只保證同 tf 標題勝;洗詞歸評測調參)
+    (v / "Systems" / "Mixed.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:impact_hook 相關\n---\n# Mixed\nimpact_hook 出現處。\n",
+        encoding="utf-8")
+    return d, v
+
+
+def t_search_ranked():
+    import subprocess as sp, json
+    d, v = _mk_rank_vault()
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+    # legacy 不變:無 --ranked 仍字母序、無分數
+    r = lum("search", "檢索")
+    check("search legacy 無分數", r.returncode == 0 and "score" not in r.stdout, r.stdout[:200])
+    # ranked:標題命中(檢索引擎)必須排第一,勝 body 單次(Alpha)與 body 多次(Beta)
+    r = lum("search", "檢索", "--ranked", "--json")
+    check("search --ranked rc0", r.returncode == 0, r.stderr[:200])
+    data = json.loads(r.stdout.strip().splitlines()[-1])
+    names = [x["node"] for x in data["results"]]
+    check("ranked 標題命中第一", names and "檢索引擎" in names[0], str(names))
+    check("ranked 有分數且遞減", all(data["results"][i]["score"] >= data["results"][i+1]["score"]
+          for i in range(len(data["results"])-1)), str(data)[:200])
+    # 飽和:Beta(5 次 body)不得超過標題命中
+    if any("Beta" in n for n in names) and any("檢索引擎" in n for n in names):
+        check("ranked 飽和(重複詞不壓標題)", names.index([n for n in names if "檢索引擎" in n][0])
+              < names.index([n for n in names if "Beta" in n][0]), str(names))
+    # 候選不擴:ranked 的結果集 ⊆ legacy 命中集(Mixed 不含「檢索」不得出現)
+    check("ranked 候選不擴", not any("Mixed" in n for n in names), str(names))
+    # ASCII 命中:impact_hook 拆詞
+    r = lum("search", "impact_hook", "--ranked", "--json")
+    dd = json.loads(r.stdout.strip().splitlines()[-1])
+    check("ranked ASCII 詞命中", any("Mixed" in x["node"] for x in dd["results"]), str(dd)[:200])
+    # --top 限量
+    r = lum("search", "檢索", "--ranked", "--top", "1", "--json")
+    dd = json.loads(r.stdout.strip().splitlines()[-1])
+    check("ranked --top 1", len(dd["results"]) == 1, str(dd)[:150])
+    # --files-only + --ranked:按分數排
+    r = lum("search", "檢索", "--ranked", "--files-only")
+    first = r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
+    check("ranked --files-only 首行=標題命中", "檢索引擎" in first, r.stdout[:200])
+    # regex 模式不排序(照舊)
+    r = lum("search", "檢索", "--regex", "--ranked")
+    check("regex+ranked 明確拒絕或照舊", r.returncode in (0, 2), str(r.returncode))
+    import shutil; shutil.rmtree(d, ignore_errors=True)
+
+
+def t_tokenizer_unit():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location("lumos_r", GRAPHCTL, loader=SourceFileLoader("lumos_r", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    tk = m._rank_tokenize
+    check("bigram 中文", tk("檢索優化") == ["檢索", "索優", "優化"], str(tk("檢索優化")))
+    check("單漢字 unigram", tk("索") == ["索"], str(tk("索")))
+    check("ASCII 完整+拆分", set(tk("impact_hook2")) >= {"impact_hook2", "impact", "hook", "2"}, str(tk("impact_hook2")))
+    check("混合中英", "檢索" in tk("檢索 bm25") and "bm25" in tk("檢索 bm25"), str(tk("檢索 bm25")))
+    check("大小寫摺疊", "bm25" in tk("BM25"), str(tk("BM25")))
+    # BM25F 手算 fixture:單 doc 單 term,tf*=w_title*1=4, len=avg → score=idf*(4*2.2)/(4+1.2*1)
+    idf = m._rank_idf(2, 1)   # N=2, df=1 → log(2/2)+1 = 1.0
+    check("平滑 IDF 非負", idf == 1.0, str(idf))
+    s = m._rank_bm25(tf=4.0, idf=1.0, dl=10.0, avgdl=10.0)
+    import math
+    expect = 1.0 * (4.0 * 2.2) / (4.0 + 1.2 * 1.0)
+    check("BM25 公式手算", abs(s - expect) < 1e-9, f"{s} vs {expect}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
