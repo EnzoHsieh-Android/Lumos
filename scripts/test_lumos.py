@@ -7180,6 +7180,145 @@ def t_nudge_skip_when_no_source():
               nudge is None, f"got {nudge!r}")
 
 
+def _mk_cochange_repo():
+    """合成 git 歷史(cochange 測試用):
+    A.md+B.md 共改 4 次、A.md 單改 1 次 → conf(A⇒B)=0.8, conf(B⇒A)=1.0, support=4
+    F.md+G.md 共改 2 次 → support 2(低於 min_support=3,--all 才見)
+    H.md+I.md 共改 1 次 → support 1(硬底線外,連 --all 也不見)
+    中文甲.md+中文乙.md 共改 3 次 → conf 1.0(quotePath 測試)
+    一個 >20 檔大 commit(含 C.md/D.md) → 整批排除
+    根層 package-lock.json+E.md 共改 3 次 → lockfile 被預設排除清單濾掉
+    """
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-cc-"))
+    def g(*a):
+        sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+    g("init", "-q"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    def commit(files, msg):
+        for f, content in files.items():
+            p = root / f
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", msg)
+    for i in range(4):
+        commit({"A.md": f"a{i}", "B.md": f"b{i}"}, f"ab{i}")
+    commit({"A.md": "a-solo"}, "a-solo")
+    for i in range(2):
+        commit({"F.md": f"f{i}", "G.md": f"g{i}"}, f"fg{i}")
+    commit({"H.md": "h", "I.md": "i"}, "hi")
+    for i in range(3):
+        commit({"中文甲.md": f"x{i}", "中文乙.md": f"y{i}"}, f"cn{i}")
+    bulk = {f"bulk/f{i}.txt": str(i) for i in range(21)}
+    bulk.update({"C.md": "c", "D.md": "d"})
+    commit(bulk, "bulk")
+    for i in range(3):
+        commit({"package-lock.json": f"l{i}", "E.md": f"e{i}"}, f"lock{i}")
+    return root
+
+
+def t_cochange():
+    import subprocess as sp, json
+    root = _mk_cochange_repo()
+    def lum(*a, cwd=None):
+        return sp.run([sys.executable, GRAPHCTL, *a],
+                      capture_output=True, text=True, cwd=cwd or root)
+    def jload(r):
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
+    # ── rules:預設套門檻 ──
+    r = lum("cochange", "rules", "--json")
+    check("cochange rules rc0", r.returncode == 0, r.stderr)
+    data = jload(r)
+    pairs = {(x["lhs"], x["rhs"]): x for x in data["rules"]}
+    check("cochange B⇒A conf 1.0", pairs.get(("B.md", "A.md"), {}).get("confidence") == 1.0, str(sorted(pairs)))
+    check("cochange A⇒B conf 0.8(=門檻,含)", pairs.get(("A.md", "B.md"), {}).get("confidence") == 0.8, str(sorted(pairs)))
+    flat = [k for p in pairs for k in p]
+    check("cochange 大commit排除(C/D 無規則)", not any(k in ("C.md", "D.md") for k in flat), str(sorted(pairs)))
+    check("cochange 根層 lockfile 排除(**/ 雙試)", not any("package-lock" in k for k in flat), str(sorted(pairs)))
+    check("cochange support=2 預設不出現(F/G)", ("F.md", "G.md") not in pairs, str(sorted(pairs)))
+    check("cochange 中文檔名 key 非 octal 逃逸", ("中文甲.md", "中文乙.md") in pairs, str(sorted(pairs)))
+    check("cochange rules commits/files 為 int", isinstance(data["commits"], int) and isinstance(data["files"], int), str(data))
+
+    # ── rules --all:解除 conf 門檻、support 硬底線 2 ──
+    r = lum("cochange", "rules", "--all", "--json")
+    pairs_all = {(x["lhs"], x["rhs"]): x for x in jload(r)["rules"]}
+    check("cochange --all 含 support=2(F/G)", ("F.md", "G.md") in pairs_all, str(sorted(pairs_all)))
+    check("cochange --all 不含 support=1(H/I 硬底線)", ("H.md", "I.md") not in pairs_all, str(sorted(pairs_all)))
+    check("cochange --all 是預設超集", set(pairs).issubset(set(pairs_all)), "")
+
+    # ── check --staged:A 改了漏 B → 警告(stdout) ──
+    (root / "A.md").write_text("staged-change", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "A.md"], capture_output=True)
+    r = lum("cochange", "check", "--staged", "--json")
+    check("cochange check rc0", r.returncode == 0, r.stderr)
+    w = jload(r)["warnings"]
+    check("cochange staged 漏改警告", any(x["changed"] == "A.md" and x["missing"] == "B.md" for x in w), str(w))
+    check("cochange checked 為 int", isinstance(jload(r)["checked"], int), "")
+    r = lum("cochange", "check", "--staged")
+    check("cochange 警告在 stdout", "B.md" in r.stdout and r.returncode == 0, f"out={r.stdout!r} err={r.stderr!r}")
+
+    # 夥伴同在 staged → 不警告
+    (root / "B.md").write_text("staged-too", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "B.md"], capture_output=True)
+    w = jload(lum("cochange", "check", "--staged", "--json"))["warnings"]
+    check("cochange 夥伴同 staged 不警告", not any(x["missing"] == "B.md" for x in w), str(w))
+    sp.run(["git", "-C", str(root), "reset", "-q", "B.md"], capture_output=True)
+    sp.run(["git", "-C", str(root), "checkout", "-q", "--", "B.md"], capture_output=True)
+
+    # ── --diff 模式:挖掘母體=range 左端(被查 commit 不自我豁免) ──
+    sp.run(["git", "-C", str(root), "commit", "-qm", "a-only"], capture_output=True)  # 把 staged A.md 提交
+    r = lum("cochange", "check", "--diff", "HEAD~1..HEAD", "--json")
+    check("cochange --diff rc0", r.returncode == 0, r.stderr)
+    w = jload(r)["warnings"]
+    check("cochange --diff 漏改警告(母體到 range 左端)", any(x["changed"] == "A.md" and x["missing"] == "B.md" for x in w), str(w))
+
+    # --staged/--diff 皆缺 → rc2;同給 → --diff 優先
+    r = lum("cochange", "check")
+    check("cochange check 皆缺 rc2", r.returncode == 2, str(r.returncode))
+    r = lum("cochange", "check", "--staged", "--diff", "HEAD~1..HEAD", "--json")
+    check("cochange 同給 --diff 優先(staged 空仍有警告)", any(x["changed"] == "A.md" for x in jload(r)["warnings"]), r.stdout)
+
+    # ── 殭屍規則:右側檔已刪 → check 不警告;rules 仍列(觀察用) ──
+    sp.run(["git", "-C", str(root), "rm", "-q", "B.md"], capture_output=True)
+    sp.run(["git", "-C", str(root), "commit", "-qm", "rm-b"], capture_output=True)
+    (root / "A.md").write_text("after-rm", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "A.md"], capture_output=True)
+    w = jload(lum("cochange", "check", "--staged", "--json"))["warnings"]
+    check("cochange 右側已刪不警告(check 層)", not any(x["missing"] == "B.md" for x in w), str(w))
+    sp.run(["git", "-C", str(root), "reset", "-q", "A.md"], capture_output=True)
+    sp.run(["git", "-C", str(root), "checkout", "-q", "--", "A.md"], capture_output=True)
+
+    # ── config:覆寫生效、exclude 合併、min_support=1 視為 2、壞 JSON fail-open ──
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "cochange.json").write_text('{"min_confidence": 0.99}', encoding="utf-8")
+    pairs99 = {(x["lhs"], x["rhs"]) for x in jload(lum("cochange", "rules", "--json"))["rules"]}
+    check("cochange config 覆寫 conf 0.99(0.8 對消失、1.0 對留)", ("A.md", "B.md") not in pairs99 and ("中文甲.md", "中文乙.md") in pairs99, str(sorted(pairs99)))
+    (root / ".lumos" / "cochange.json").write_text('{"exclude": ["中文*.md"]}', encoding="utf-8")
+    pairs_ex = {(x["lhs"], x["rhs"]) for x in jload(lum("cochange", "rules", "--json"))["rules"]}
+    check("cochange 自訂 exclude 與預設合併", ("中文甲.md", "中文乙.md") not in pairs_ex and not any("package-lock" in k for p in pairs_ex for k in p), str(sorted(pairs_ex)))
+    (root / ".lumos" / "cochange.json").write_text('{"min_support": 1}', encoding="utf-8")
+    r = lum("cochange", "rules", "--json")
+    check("cochange min_support=1 視為 2 並提示(stdout)", "視為 2" in r.stdout and r.returncode == 0, r.stdout[:200])
+    (root / ".lumos" / "cochange.json").write_text('{broken', encoding="utf-8")
+    r = lum("cochange", "rules", "--json")
+    check("cochange 壞 JSON fail-open rc0+提示(stdout)", r.returncode == 0 and "解析失敗" in r.stdout, f"rc={r.returncode} out={r.stdout[:200]}")
+    (root / ".lumos" / "cochange.json").unlink()
+
+    # ── rc:zero-commit rc0、非 git rc2 ──
+    import subprocess as sp2
+    empty = Path(tempfile.mkdtemp(prefix="gctl-cc0-"))
+    sp2.run(["git", "-C", str(empty), "init", "-q"], capture_output=True)
+    r = lum("cochange", "rules", "--json", cwd=empty)
+    check("cochange zero-commit rules rc0 空集", r.returncode == 0 and jload(r)["rules"] == [], f"rc={r.returncode}")
+    (empty / "x.md").write_text("x", encoding="utf-8")
+    sp2.run(["git", "-C", str(empty), "add", "x.md"], capture_output=True)
+    r = lum("cochange", "check", "--staged", "--json", cwd=empty)
+    check("cochange zero-commit check rc0", r.returncode == 0 and jload(r)["warnings"] == [], f"rc={r.returncode} out={r.stdout[:120]}")
+    nogit = Path(tempfile.mkdtemp(prefix="gctl-ccng-"))
+    r = lum("cochange", "rules", "--repo", str(nogit), cwd=nogit)
+    check("cochange 非 git rc2", r.returncode == 2, str(r.returncode))
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

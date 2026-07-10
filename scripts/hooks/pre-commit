@@ -39,6 +39,17 @@ fi
 STAGED="$(git -c core.quotePath=off diff --cached --name-only)"
 [[ -z "$STAGED" ]] && exit 0  # 空 commit 不擋
 
+# Gate CC (advisory): co-change 漏改警告 —— 恆不影響 rc(|| true 隔離)。
+# 必須在 Gate 1 之前:後面每條路徑都顯式 exit,「末段」是不可達死碼;
+# docs-only commit 在 Gate 2 就 exit 0,唯有這裡能覆蓋主場景(改文件漏同步夥伴)。
+# 警告走 stdout(2>/dev/null 只吞診斷,含版本偏斜時舊 vendored lumos 的 argparse 錯)。
+CC_PY="$(command -v python3 || command -v python || true)"
+if [ -n "$CC_PY" ] && [ -f "$REPO_ROOT/scripts/lumos" ]; then
+  "$CC_PY" "$REPO_ROOT/scripts/lumos" cochange check --staged 2>/dev/null || true
+else
+  echo "pre-commit: 無 python3 或 scripts/lumos,跳過 co-change 警告" >&2
+fi
+
 # Gate 1: 圖譜污染指紋 (2026-06-13 對抗審計 P0)
 # 攔 notesmd-cli `frontmatter --edit` 的副作用: 日期欄位加引號 (Obsidian property
 # 型別 date→text 靜默損傷,且通常伴隨整篇 frontmatter 鍵序重排)。

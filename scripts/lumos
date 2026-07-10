@@ -5261,6 +5261,227 @@ def _lint_watch_mode(repo_root, as_json):
     return 0
 
 
+# ── cochange:co-change 漏改守衛(vault-free;borrow-design ROSE error-prevention) ──
+# 規則:conf(A⇒B)=shared/freq(A)(非對稱條件機率,ROSE TSE 2005 §5);support=絕對共改次數。
+# 設計 spec:docs/lumos-toolchain-knowledge/Projects/cochange守衛_計劃.md
+
+_COCHANGE_DEFAULTS = {"min_support": 3, "min_confidence": 0.8, "max_changeset": 20}
+_COCHANGE_DEFAULT_EXCLUDE = [
+    "docs/.governance-log.jsonl", "docs/.bypass-log.jsonl",
+    "docs/.canary-log.jsonl", "docs/.rot-queue.jsonl",
+    "**/*-lock.json", "**/*.lock", "**/node_modules/**", "**/dist/**",
+    "**/Migrations/**", "**/*.g.cs", "**/*.Designer.cs",
+]
+
+
+def _cochange_repo_root(repo):
+    """repo root:--repo 指定則驗證之,否則 cwd 逐層向上找 .git。找不到回 None。"""
+    if repo:
+        p = Path(repo).resolve()
+        return p if (p / ".git").exists() else None
+    p = Path.cwd()
+    for cand in (p, *p.parents):
+        if (cand / ".git").exists():
+            return cand
+    return None
+
+
+def _cochange_load_config(repo_root):
+    """讀 .lumos/cochange.json。fail-open(借 impact.json 的 rc 語意+額外一行提示):
+    缺檔/壞 JSON → 預設值 + note;min_support 硬底線 2(設 1 視為 2 + note)。
+    notes 由呼叫端印到 stdout(走 stderr 會被 pre-commit hook 的 2>/dev/null 吞掉)。"""
+    import json
+    cfg = dict(_COCHANGE_DEFAULTS)
+    exclude = list(_COCHANGE_DEFAULT_EXCLUDE)
+    notes = []
+    p = Path(repo_root) / ".lumos" / "cochange.json"
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("必須是 JSON object")
+            for k in ("min_support", "min_confidence", "max_changeset"):
+                if k in data:
+                    cfg[k] = data[k]
+            if isinstance(data.get("exclude"), list):
+                exclude.extend(str(x) for x in data["exclude"])
+        except Exception as e:
+            notes.append(f"cochange: .lumos/cochange.json 解析失敗({e}),改用預設值")
+    try:
+        if cfg["min_support"] < 2:
+            notes.append(f"cochange: min_support={cfg['min_support']} 低於硬底線,視為 2(單次共改=巧合)")
+            cfg["min_support"] = 2
+    except TypeError:
+        notes.append("cochange: min_support 非數值,改用預設 3")
+        cfg["min_support"] = _COCHANGE_DEFAULTS["min_support"]
+    cfg["exclude"] = exclude
+    return cfg, notes
+
+
+def _cochange_excluded(path, patterns):
+    """glob 命中判定。雙試補 stdlib fnmatch 的坑:`**/` 的 `/` 被當字面斜線,
+    `**/*-lock.json` 比不到根層 package-lock.json → 去掉 `**/` 前綴再試一次。"""
+    import fnmatch
+    for pat in patterns:
+        if fnmatch.fnmatch(path, pat):
+            return True
+        if pat.startswith("**/") and fnmatch.fnmatch(path, pat[3:]):
+            return True
+    return False
+
+
+def _cochange_transactions(repo_root, cfg, upto="HEAD"):
+    """git 歷史 → transactions(list of set,repo-relative)。挖掘母體挖到 upto 為止
+    (--diff A..B 時 upto=A:規則來自變更之前的歷史,被查 commit 不自我豁免)。
+    回 (txns, err):zero-commit 回 ([], None);git 失敗回 (None, msg)。
+    排除:merge、raw 檔數 > max_changeset(tangled,以排除前的原始檔數計)、exclude pattern。"""
+    import subprocess as sp
+    head = sp.run(["git", "-C", str(repo_root), "rev-parse", upto],
+                  capture_output=True, text=True)
+    if head.returncode != 0:
+        gitdir = sp.run(["git", "-C", str(repo_root), "rev-parse", "--git-dir"],
+                        capture_output=True, text=True)
+        if gitdir.returncode == 0 and upto == "HEAD":
+            return [], None  # unborn branch:空歷史是正常空結果
+        return None, f"git rev-parse {upto} 失敗(非 git repo 或 rev 不存在)"
+    r = sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=off", "log",
+                "--no-merges", "--pretty=format:\x01%H", "--name-only", upto],
+               capture_output=True, text=True)
+    if r.returncode != 0:
+        return None, (r.stderr or "git log 失敗").strip()
+    txns, cur = [], None
+    for line in r.stdout.splitlines():
+        if line.startswith("\x01"):
+            if cur is not None:
+                txns.append(cur)
+            cur = []
+        elif line.strip() and cur is not None:
+            cur.append(line.strip())
+    if cur is not None:
+        txns.append(cur)
+    out = []
+    for t in txns:
+        if not t or len(t) > cfg["max_changeset"]:  # tangled 以原始檔數判
+            continue
+        kept = {f for f in t if not _cochange_excluded(f, cfg["exclude"])}
+        if kept:
+            out.append(kept)
+    return out, None
+
+
+def _cochange_mine(repo_root, cfg, upto="HEAD"):
+    """挖規則。回 (rules, n_txn, n_files, err);rules={(lhs,rhs):(conf,support)}。
+    support 硬底線 2 於挖掘層生效(rules/check/--all 一體適用)。"""
+    import itertools, collections
+    txns, err = _cochange_transactions(repo_root, cfg, upto=upto)
+    if txns is None:
+        return None, 0, 0, err
+    freq = collections.Counter()
+    pair = collections.Counter()
+    for t in txns:
+        for f in t:
+            freq[f] += 1
+        for a, b in itertools.combinations(sorted(t), 2):
+            pair[(a, b)] += 1
+    rules = {}
+    for (a, b), s in pair.items():
+        if s < 2:
+            continue
+        rules[(a, b)] = (round(s / freq[a], 4), s)
+        rules[(b, a)] = (round(s / freq[b], 4), s)
+    return rules, len(txns), len(freq), None
+
+
+def cmd_cochange_rules(repo=None, show_all=False, as_json=False):
+    """rc:正常(含空規則集/zero-commit)=0;非 git repo/git 失敗=2。"""
+    import json
+    root = _cochange_repo_root(repo)
+    if root is None:
+        print("ERROR: 找不到 git repo(--repo 指定或在 repo 內執行)", file=sys.stderr)
+        return 2
+    cfg, notes = _cochange_load_config(root)
+    for n in notes:
+        print(n)
+    rules, n_txn, n_files, err = _cochange_mine(root, cfg)
+    if rules is None:
+        print(f"ERROR: {err}", file=sys.stderr)
+        return 2
+    out = []
+    for (a, b), (conf, sup) in rules.items():
+        if not show_all and (conf < cfg["min_confidence"] or sup < cfg["min_support"]):
+            continue
+        out.append({"lhs": a, "rhs": b, "confidence": conf, "support": sup})
+    out.sort(key=lambda x: (-x["confidence"], -x["support"], x["lhs"]))
+    if as_json:
+        print(json.dumps({"rules": out, "commits": n_txn, "files": n_files},
+                         ensure_ascii=False))
+    else:
+        for x in out:
+            print(f"conf={x['confidence']:.2f} support={x['support']}  {x['lhs']} => {x['rhs']}")
+        print(f"({len(out)} 條規則 / {n_txn} transactions / {n_files} 檔)")
+    return 0
+
+
+def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
+    """對變更集比對規則,列漏改警告(advisory)。rc:正常(有無警告皆)=0;
+    皆缺 --staged/--diff 或 git 失敗=2。同給時 --diff 優先(同 pitfalls diff>md 慣例)。"""
+    import json
+    import subprocess as sp
+    if not staged and not diff_range:
+        print("ERROR: 需指定 --staged 或 --diff <A..B>", file=sys.stderr)
+        return 2
+    root = _cochange_repo_root(repo)
+    if root is None:
+        print("ERROR: 找不到 git repo(--repo 指定或在 repo 內執行)", file=sys.stderr)
+        return 2
+    cfg, notes = _cochange_load_config(root)
+    for n in notes:
+        print(n)
+    # 挖掘母體:--diff A..B 挖到 A(規則來自變更之前的歷史);--staged 挖到 HEAD
+    upto = "HEAD"
+    if diff_range:
+        base = diff_range.split("..")[0].strip()
+        if base:
+            upto = base
+    rules, _t, _f, err = _cochange_mine(root, cfg, upto=upto)
+    if rules is None:
+        print(f"ERROR: {err}", file=sys.stderr)
+        return 2
+    if diff_range:
+        cmd = ["git", "-C", str(root), "-c", "core.quotePath=off",
+               "diff", "--name-only", diff_range]
+    else:
+        cmd = ["git", "-C", str(root), "-c", "core.quotePath=off",
+               "diff", "--cached", "--name-only"]
+    d = sp.run(cmd, capture_output=True, text=True)
+    if d.returncode != 0:
+        print(f"ERROR: {(d.stderr or 'git diff 失敗').strip()}", file=sys.stderr)
+        return 2
+    changed = {ln.strip() for ln in d.stdout.splitlines() if ln.strip()}
+    changed = {f for f in changed if not _cochange_excluded(f, cfg["exclude"])}
+    by_lhs = {}
+    for (a, b), v in rules.items():
+        by_lhs.setdefault(a, []).append((b, v))
+    warnings = []
+    for a in sorted(changed):
+        for b, (conf, sup) in by_lhs.get(a, ()):
+            if b in changed or conf < cfg["min_confidence"] or sup < cfg["min_support"]:
+                continue
+            if not (root / b).exists():  # 殭屍規則:右側已刪/改名 → 不告警
+                continue
+            warnings.append({"changed": a, "missing": b,
+                             "confidence": conf, "support": sup})
+    warnings.sort(key=lambda w: (-w["confidence"], -w["support"], w["changed"]))
+    if as_json:
+        print(json.dumps({"warnings": warnings, "checked": len(changed)},
+                         ensure_ascii=False))
+    else:
+        for w in warnings:
+            print(f"cochange: 改了 {w['changed']} 但未動 {w['missing']}"
+                  f"(歷史 {w['confidence']:.0%} 同改,共 {w['support']} 次)——確認是否漏改")
+    return 0
+
+
 def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。
@@ -6751,6 +6972,20 @@ def main():
     p.add_argument("--update-baseline", action="store_true", help="以現況更新 baseline(跳過解析失敗模組)")
     p.add_argument("--audit", action="store_true", help="無視 baseline,盤點當下全部 non-skippable composable(初次採用/現況全景)")
 
+    cc = sub.add_parser("cochange", help="co-change 漏改守衛(vault-free):git 歷史挖共改規則,commit 時警告漏改夥伴(advisory)")
+    ccsub = cc.add_subparsers(dest="cccmd", required=True)
+    ccr = ccsub.add_parser("rules", help="列告警規則集(預設套 config 門檻;--all 解除 confidence 門檻)")
+    ccr.add_argument("--all", action="store_true", dest="coch_all",
+                     help="解除 confidence 門檻(support 硬底線 2 仍全域生效)")
+    ccr.add_argument("--repo", dest="coch_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+    ccr.add_argument("--json", action="store_true", dest="coch_json", help="輸出 JSON manifest")
+    ccc = ccsub.add_parser("check", help="對變更集比對規則列漏改警告(advisory rc0;git 失敗 rc2)")
+    ccc.add_argument("--staged", action="store_true", dest="coch_staged", help="變更集=git staged")
+    ccc.add_argument("--diff", dest="coch_diff", default=None, metavar="A..B",
+                     help="變更集=diff range(pre-resolved 兩點如 main..HEAD;與 --staged 同給時 --diff 優先)")
+    ccc.add_argument("--repo", dest="coch_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+    ccc.add_argument("--json", action="store_true", dest="coch_json", help="輸出 JSON manifest")
+
     cl = sub.add_parser("code-loop", help="code-loop 留痕(vault-free):pass/skip 收斂紀錄 + check 查詢")
     clsub = cl.add_subparsers(dest="clcmd", required=True)
     for _clname, _clhelp in (
@@ -6806,6 +7041,12 @@ def main():
         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
     if args.cmd == "compose-metrics":
         return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline, args.audit)
+    if args.cmd == "cochange":
+        if args.cccmd == "rules":
+            return cmd_cochange_rules(repo=args.coch_repo, show_all=args.coch_all,
+                                      as_json=args.coch_json)
+        return cmd_cochange_check(repo=args.coch_repo, staged=args.coch_staged,
+                                  diff_range=args.coch_diff, as_json=args.coch_json)
     if args.cmd == "code-loop":
         note = getattr(args, "note", None) or ""
         cl_json = getattr(args, "cl_json", False)

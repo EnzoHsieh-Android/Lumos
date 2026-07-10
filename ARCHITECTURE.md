@@ -94,11 +94,11 @@ flowchart LR
     class NEW,N1,N2,N3,N4 new
 ```
 
-## 3. CLI 子命令家族 (41 個頂層命令)
+## 3. CLI 子命令家族 (42 個頂層命令)
 
 ```mermaid
 flowchart TB
-    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 41 個頂層命令)"]
+    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 42 個頂層命令)"]
 
     ROOT --> READ["讀取 / 導航 (11)"]
     ROOT --> HEALTH["巡檢 / 治理 (6)"]
@@ -126,7 +126,7 @@ flowchart TB
     class R,H,W,G,LP,I,ST,L leaf
 ```
 
-> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面 41 是頂層命令數,權威清單以 `lumos --help` 為準。
+> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面 42 是頂層命令數,權威清單以 `lumos --help` 為準。
 
 ## 4. 強制力管線 (圖譜不腐爛的機制)
 
