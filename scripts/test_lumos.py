@@ -1704,7 +1704,7 @@ def t_marker_doc_sync():
         check("drift: skills/template 不在(vendored)→ 跳過", True)
         return
     st, dt = skill.read_text(encoding="utf-8"), disc.read_text(encoding="utf-8")
-    for m in ("★CHECKPOINT★", "★IRREVERSIBLE★", "[rollback:", "[guard:"):
+    for m in ("★CHECKPOINT★", "★IRREVERSIBLE★", "[rollback:", "[guard:", "[kill:"):
         check(f"drift: {m} 在 SKILL.md", m in st, "SKILL 缺")
         check(f"drift: {m} 在 graph-discipline", m in dt, "disc 缺")
 
@@ -7390,6 +7390,156 @@ def t_cochange():
     import shutil
     for d in (root, empty, nogit):
         shutil.rmtree(d, ignore_errors=True)
+
+
+def _mk_kill_env():
+    """合成 git repo + vault + 一條綁 [test:] 的 INVARIANT + python run_cmd。
+    prod.py 的 LIMIT 是被守衛行為;test_guard.py 斷言之。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-kill-"))
+    def g(*a):
+        sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+    g("init", "-q"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    (root / "prod.py").write_text("LIMIT = 5\n\ndef check(n):\n    return n <= LIMIT\n", encoding="utf-8")
+    (root / "test_guard.py").write_text(
+        "import sys, prod\n"
+        "def TestLimitFive():\n"
+        "    assert prod.check(5) and not prod.check(6)\n"
+        "TestLimitFive()\nprint('ok')\n", encoding="utf-8")
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "config.json").write_text(
+        '{"test": {"run_cmd": "python3 test_guard.py"}}', encoding="utf-8")
+    v = root / "docs" / "kg-knowledge"
+    (v / "Systems").mkdir(parents=True)
+    (v / "MOC").mkdir()
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    (v / "Systems" / "Limit.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive]\n---\n# Limit\n",
+        encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "init")
+    return root, v
+
+
+def t_guard_kill():
+    import subprocess as sp, json, os
+    root, v = _mk_kill_env()
+    def lum(*a, env_extra=None):
+        e = dict(os.environ)
+        e["LUMOS_KILL_TIMEOUT_FLOOR"] = "3"
+        if env_extra:
+            e.update(env_extra)
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True, cwd=root, env=e)
+
+    # kill-add:寫後自驗 + KEY 行標記
+    r = lum("guard", "kill-add", "Systems/Limit", "上限恆為5",
+            "--file", "prod.py", "--old", "LIMIT = 5", "--new", "LIMIT = 99",
+            "--note", "上限被放寬,超賣風險")
+    check("kill-add rc0", r.returncode == 0, r.stderr)
+    txt = (v / "Systems" / "Limit.md").read_text(encoding="utf-8")
+    check("kill-add 寫入 kill_recipes+標記", "kill_recipes" in txt and "[kill:recipes]" in txt, txt[:400])
+    # 重複配方拒絕
+    r = lum("guard", "kill-add", "Systems/Limit", "上限恆為5",
+            "--file", "prod.py", "--old", "LIMIT = 5", "--new", "LIMIT = 0")
+    check("kill-add 重複拒絕 rc2", r.returncode == 2, str(r.returncode))
+    # naked 合約 0 ref → rc2
+    (v / "Systems" / "Naked.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 裸合約無綁定\n---\n# N\n",
+        encoding="utf-8")
+    r = lum("guard", "kill-add", "Systems/Naked", "裸合約",
+            "--file", "prod.py", "--old", "x", "--new", "y")
+    check("kill-add naked rc2", r.returncode == 2, str(r.returncode))
+
+    # kill:killed happy path(壞法讓測試翻紅)
+    r = lum("guard", "kill", "Systems/Limit", "--json")
+    check("kill killed rc0", r.returncode == 0, f"rc={r.returncode} {r.stdout[:200]} {r.stderr[:200]}")
+    data = json.loads(r.stdout.strip().splitlines()[-1])
+    check("kill verdict=killed", data["results"][0]["verdict"] == "killed", str(data))
+    # 留痕
+    klog = v.parent / ".kill-log.jsonl"
+    check("kill-log 留痕", klog.exists() and "killed" in klog.read_text(encoding="utf-8"), "")
+    # gov 第 5 支 load
+    r = lum("gov")
+    check("gov 撈得到 kill", "kill/killed" in r.stdout, r.stdout[-300:])
+
+    # survived:綁一個不斷言的測試
+    import subprocess as sp2
+    (root / "test_straw.py").write_text("print('ok')\n", encoding="utf-8")
+    (v / "Systems" / "Straw.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 稻草人示範 [test:TestStraw]\n---\n# S\n", encoding="utf-8")
+    sp2.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    sp2.run(["git", "-C", str(root), "commit", "-qm", "straw"], capture_output=True)
+    # 用 config 覆寫 run_cmd 指向稻草人測試
+    (root / ".lumos" / "config.json").write_text(
+        '{"test": {"run_cmd": "python3 test_straw.py"}}', encoding="utf-8")
+    r = lum("guard", "kill-add", "Systems/Straw", "稻草人示範",
+            "--file", "prod.py", "--old", "LIMIT = 5", "--new", "LIMIT = 99")
+    check("straw kill-add rc0", r.returncode == 0, r.stderr)
+    r = lum("guard", "kill", "Systems/Straw")
+    check("kill survived rc1(稻草人)", r.returncode == 1, f"rc={r.returncode} {r.stdout}")
+
+    # drifted:old 漂移
+    (root / ".lumos" / "config.json").write_text(
+        '{"test": {"run_cmd": "python3 test_guard.py"}}', encoding="utf-8")
+    (v / "Systems" / "Drift.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 漂移示範 [test:TestLimitFive]\n---\n# D\n", encoding="utf-8")
+    r = lum("guard", "kill-add", "Systems/Drift", "漂移示範",
+            "--file", "prod.py", "--old", "LIMIT = 42", "--new", "LIMIT = 99")
+    check("drift kill-add rc0", r.returncode == 0, r.stderr)
+    r = lum("guard", "kill", "Systems/Drift")
+    check("kill drifted rc2", r.returncode == 2, f"rc={r.returncode} {r.stdout}")
+
+    # abort:baseline 紅(壞 run_cmd)
+    (root / ".lumos" / "config.json").write_text(
+        '{"test": {"run_cmd": "python3 -c \\"import sys;sys.exit(1)\\""}}', encoding="utf-8")
+    r = lum("guard", "kill", "Systems/Limit")
+    check("kill abort rc2(baseline紅)", r.returncode == 2, f"rc={r.returncode} {r.stdout}")
+
+    # timed_out:壞法造成無窮迴圈 → 歸 killed 類 rc0
+    (root / ".lumos" / "config.json").write_text(
+        '{"test": {"run_cmd": "python3 test_guard.py"}}', encoding="utf-8")
+    (v / "Systems" / "Hang.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 掛死示範 [test:TestLimitFive]\n---\n# H\n", encoding="utf-8")
+    r = lum("guard", "kill-add", "Systems/Hang", "掛死示範",
+            "--file", "prod.py", "--old", "def check(n):",
+            "--new", "import time\ndef check(n):\n    time.sleep(60)")
+    check("hang kill-add rc0", r.returncode == 0, r.stderr)
+    r = lum("guard", "kill", "Systems/Hang", "--json")
+    check("kill timed_out rc0(歸killed類)", r.returncode == 0, f"rc={r.returncode} {r.stdout[:200]}")
+    dd = json.loads(r.stdout.strip().splitlines()[-1])
+    check("verdict=timed_out", dd["results"][0]["verdict"] == "timed_out", str(dd))
+
+    # 缺 run_cmd rc2
+    (root / ".lumos" / "config.json").write_text('{}', encoding="utf-8")
+    r = lum("guard", "kill", "Systems/Limit")
+    check("kill 缺 run_cmd rc2", r.returncode == 2, str(r.returncode))
+    (root / ".lumos" / "config.json").write_text(
+        '{"test": {"run_cmd": "python3 test_guard.py"}}', encoding="utf-8")
+
+    # 路徑圍欄:file 逃逸
+    (v / "Systems" / "Esc.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 逃逸示範 [test:TestLimitFive]\n---\n# E\n", encoding="utf-8")
+    r = lum("guard", "kill-add", "Systems/Esc", "逃逸示範",
+            "--file", "../../etc/hosts", "--old", "localhost", "--new", "evil")
+    check("esc kill-add rc0(宣告不擋,跑時擋)", r.returncode == 0, r.stderr)
+    r = lum("guard", "kill", "Systems/Esc")
+    check("kill 圍欄擋逃逸 rc2(error)", r.returncode == 2 and "逃逸" in r.stdout, f"rc={r.returncode} {r.stdout}")
+
+    # worktree 清理:無殘留
+    r = sp.run(["git", "-C", str(root), "worktree", "list"], capture_output=True, text=True)
+    check("worktree 無殘留", r.stdout.strip().count("\n") == 0, r.stdout)
+
+    # dirty 警告
+    (root / "prod.py").write_text("LIMIT = 5\n\ndef check(n):\n    return n <= LIMIT\n# dirty\n", encoding="utf-8")
+    r = lum("guard", "kill", "Systems/Limit")
+    check("dirty 警告出現", "未提交變更" in r.stdout, r.stdout[:300])
+    import shutil
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def main():

@@ -1026,7 +1026,8 @@ TEST_REF_RE = re.compile(r"\[test:\s*([^\]]+)\]")
 # (沒標準答案的判斷不得由提出者本人自評 — maker/checker)。doctor Check T 強制。
 AUDIT_REF_RE = re.compile(r"\[audit:\s*([^\]]+)\]")
 # 抽「乾淨宣稱文字」時 test 與 audit 兩種標記都要剝掉(否則漏進顯示/子字串比對)。
-INV_TAG_RE = re.compile(r"\[(?:test|audit):\s*[^\]]+\]")
+INV_TAG_RE = re.compile(r"\[(?:test|audit|kill):\s*[^\]]+\]")
+KILL_REF_RE = re.compile(r"\[kill:\s*recipes\s*\]")
 # 真實可執行測試方法:xUnit 屬性([Fact]/[Theory]/[SkippableFact],含 (Skip=..) 變體)
 # + 可選後續屬性(InlineData/MemberData/Trait)→ 存取修飾 → 可選 async → 回傳型別 → 方法名。
 # B6 審計:Check T 不能只做子字串比對(會把「散文裡剛好提到的字」當證據);必須認到真方法。
@@ -1167,8 +1168,10 @@ def load_platforms(repo_root):
         name = cfg.get("test_profile") or "csharp-xunit"
         if name not in TEST_PROFILES:
             name = "csharp-xunit"
+        _tcfg = cfg.get("test") if isinstance(cfg.get("test"), dict) else {}
         return {"multiplatform": False, "default_platform": name,
-                "platforms": {name: {"profile": load_test_profile(repo_root), "root": repo_root}}}
+                "platforms": {name: {"profile": load_test_profile(repo_root), "root": repo_root,
+                                     "run_cmd": _tcfg.get("run_cmd")}}}
     out = {}
     for plat, spec in plats.items():
         if not isinstance(spec, dict):
@@ -1180,7 +1183,8 @@ def load_platforms(repo_root):
         root = (repo_root / root_str).resolve()   # 明寫基底 repo_root(非 cwd),見 D1
         if not root.exists():
             print(f"⚠ 平台 '{plat}' 的 root 不存在: {root}(該平台 discover 將掃不到測試)", file=sys.stderr)
-        out[plat] = {"profile": dict(TEST_PROFILES[pname]), "root": root}
+        out[plat] = {"profile": dict(TEST_PROFILES[pname]), "root": root,
+                     "run_cmd": spec.get("run_cmd")}   # guard kill 用;缺=None
     default = cfg.get("default_platform")
     if default is None:
         if len(out) == 1:
@@ -1532,6 +1536,11 @@ def cmd_gov(env, node=None, since_days=90):
     load(".governance-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
          "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
          "nodes": [stem(x) for x in d.get("nodes", [])], "detail": d.get("note", "")})
+    # 第 5 源:kill 殺傷力驗證留痕(guard kill 的 verdict 史)。
+    load(".kill-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+         "gate": "kill", "kind": d.get("verdict", "?"), "hard": False,
+         "nodes": [stem(d.get("node", ""))],
+         "detail": f"{d.get('invariant','')[:28]} [{d.get('test','')}] {d.get('note','')}".strip()})
     # 第 4 源:canary 審計留痕(審計員可靠度史)。只此 mapper 輸出 token 鍵(供 dedup 鑑別)。
     load(".canary-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": "",
          "gate": "canary", "kind": d.get("kind", "?"), "hard": False, "nodes": [],
@@ -1970,7 +1979,8 @@ def classify_invariants(env):
             status = _classify_one(x, split, default, methods_for, hay_for)
             rows.append({"node": rel, "text": clean, "refs": refs, "status": status,
                          "audited": bool(invariant_audit_refs(x)),
-                         "audit": invariant_audit_refs(x)})
+                         "audit": invariant_audit_refs(x),
+                         "has_kill": bool(KILL_REF_RE.search(x))})   # 從原始行判(clean 已剝)
     return rows
 
 
@@ -1985,6 +1995,8 @@ def cmd_guard_list(env, unbound_only=False):
         print(f"    {r['text'][:96]}")
         tag = f"[test:{','.join(r['refs'])}]" if r["refs"] else "(未綁)"
         tag += f"  [audit:{','.join(r['audit'])}]" if r["audited"] else ("  ⚠ 未審" if r["refs"] else "")
+        if r.get("has_kill"):
+            tag += "  [kill✓]"
         print(f"    {tag}")
     from collections import Counter
     c = Counter(r["status"] for r in rows)
@@ -2192,6 +2204,350 @@ def cmd_guard_bind(env, node, invariant_substr, method, platform=None):
         return 2
     print(f"✓ 綁定 [test:{ref}] → {rel} 的 ★INVARIANT★")
     print("  下一步: lumos doctor — 方法須已存在於 code,否則 Check T 顯示懸空")
+    return 0
+
+
+# ── guard kill:殺傷力驗證(宣告式壞法→隔離 worktree→綁定測試必須翻紅) ──
+# 設計 spec:docs/lumos-toolchain-knowledge/Projects/guard殺傷力驗證_計劃.md(3 輪 panel 收斂)
+# borrow-design:pytest-mutagen(宣告式)+cargo-mutants(baseline/timeout)+Stryker command-runner
+
+_KILL_METHOD_OK_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$|^[\w .]+$")  # IDENT 或 Kotlin 反引號拆殼後白名單
+
+
+def _kill_read_recipes(path):
+    """讀節點的 kill_recipes frontmatter(block scalar 單行 compact JSON array)。回 (list, err)。"""
+    import json
+    try:
+        lines, _, e = load_raw_for_edit(path)
+        fields, _bk, _lint = parse_frontmatter(lines[1:e])
+    except Exception as ex:
+        return None, f"frontmatter 解析失敗: {ex}"
+    raw = fields.get("kill_recipes")
+    if raw is None:
+        return [], None
+    try:
+        data = json.loads(raw if isinstance(raw, str) else str(raw))
+        if not isinstance(data, list):
+            return None, "kill_recipes 必須是 JSON array"
+        return data, None
+    except ValueError as ex:
+        return None, f"kill_recipes JSON 解析失敗: {ex}"
+
+
+def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
+                       platform=None, note=""):
+    """宣告一條壞法配方進 kill_recipes + KEY 行補 [kill:recipes](同檔一次 atomic 寫)。"""
+    import json
+    if old == new:
+        print("ERROR: old 與 new 相同,配方無語意", file=sys.stderr)
+        return 2
+    rel = env.find(node)
+    if rel is None:
+        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        return 2
+    path = env.vault / rel
+    try:
+        lines, _, e = load_raw_for_edit(path)
+    except (ValueError, RuntimeError) as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        return 2
+    # 定位 KEY 行(去標記後比對,避免子字串誤中標記文字)
+    target_idx = None
+    for i in range(1, e):
+        if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in INV_TAG_RE.sub("", lines[i]):
+            if target_idx is not None:
+                print(f"ERROR: 『{invariant_substr}』命中多條 KEY 行,請給更精確子字串", file=sys.stderr)
+                return 2
+            target_idx = i
+    if target_idx is None:
+        print(f"ERROR: {rel} 找不到含『{invariant_substr}』的 ★INVARIANT★ KEY 行", file=sys.stderr)
+        return 2
+    # 解析綁定測試:--test 或 KEY 行唯一 [test:] ref;0 個 → 硬報(kill 驗的就是綁定)
+    line = lines[target_idx]
+    refs = invariant_test_refs(line)
+    if test is None:
+        if len(refs) == 0:
+            print("ERROR: 該合約無 [test:] 綁定(naked)——kill 驗的是綁定測試,先 guard bind", file=sys.stderr)
+            return 2
+        if len(refs) > 1:
+            print(f"ERROR: 該合約綁多個測試({', '.join(refs)}),--test 指明哪一個", file=sys.stderr)
+            return 2
+        test = refs[0]
+    recipe = {"invariant": invariant_substr, "test": test, "file": file,
+              "old": old, "new": new, "note": note or ""}
+    if platform:
+        recipe["platform"] = platform
+    recipes, err = _kill_read_recipes(path)
+    if recipes is None:
+        print(f"ERROR: {err}", file=sys.stderr)
+        return 2
+    for r in recipes:
+        if r.get("invariant") == invariant_substr and r.get("file") == file and r.get("old") == old:
+            print("ERROR: 重複配方(同 invariant 同 file/old),先手動移除舊條", file=sys.stderr)
+            return 2
+    recipes.append(recipe)
+    blob = json.dumps(recipes, ensure_ascii=False)
+    # 重寫 frontmatter:替換或插入 kill_recipes block(單行 compact) + KEY 行補標記
+    newline = line if KILL_REF_RE.search(line) else line.rstrip() + " [kill:recipes]"
+    out, i, replaced = [], 0, False
+    while i < e:
+        l = lines[i]
+        if i == target_idx:
+            out.append(newline); i += 1; continue
+        if l.startswith("kill_recipes:"):
+            out.append("kill_recipes: |-")
+            out.append("  " + blob)
+            i += 1
+            while i < e and (lines[i].startswith("  ") or not lines[i].strip()):
+                i += 1
+            replaced = True
+            continue
+        out.append(l); i += 1
+    if not replaced:
+        out.append("kill_recipes: |-")
+        out.append("  " + blob)
+    new_lines = out + lines[e:]
+    # 若 KEY 行在 summary block 內(常態),target_idx < e 已處理;標記寫後自驗
+
+    def check(fields):
+        raw = fields.get("kill_recipes")
+        if not isinstance(raw, str):
+            return False
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return False
+        if not any(r.get("invariant") == invariant_substr and r.get("old") == old for r in data):
+            return False
+        summ = fields.get("summary")
+        if isinstance(summ, str):
+            for sl in summ.split("\n"):
+                mi = INVARIANT_RE.match(sl.strip())
+                if mi and invariant_substr in INV_TAG_RE.sub("", sl):
+                    return bool(KILL_REF_RE.search(sl))
+        return False
+
+    try:
+        atomic_write_verify(path, new_lines, "[kill:recipes]", check)
+    except (ValueError, RuntimeError) as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        return 2
+    print(f"✓ kill 配方寫入 {rel}(invariant『{invariant_substr[:24]}…』, test={test})")
+    print("  下一步: lumos guard kill 跑殺傷力驗證(worktree 隔離,弄壞→測試必須翻紅)")
+    return 0
+
+
+def _kill_run(cmd, cwd, timeout):
+    """跑 run_cmd(shell,killpg 沿 lint 先例)。回 (rc, tail200, elapsed, timed_out)。"""
+    import os
+    import signal
+    import subprocess
+    import tempfile
+    import time
+    t0 = time.time()
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as buf:
+        proc = subprocess.Popen(cmd, shell=True, cwd=str(cwd), start_new_session=True,
+                                stdout=buf, stderr=subprocess.STDOUT)
+        try:
+            proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            proc.wait()
+            buf.seek(0)
+            txt = buf.read()
+            return (None, txt[-200:], time.time() - t0, True)
+        buf.seek(0)
+        txt = buf.read()
+    return (proc.returncode, txt[-200:], time.time() - t0, False)
+
+
+def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                   as_json=False, keep_worktree=False):
+    """跑節點的 kill 配方:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅。
+    rc:全 killed(含 timed_out)=0;任一 survived=1;有 drifted/abort/error 而無 survived=2;
+    零配方/缺 run_cmd/config 壞=2。"""
+    import json
+    import os
+    import shlex
+    import shutil
+    import subprocess
+    import tempfile
+    import datetime
+    rel = env.find(node)
+    if rel is None:
+        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        return 2
+    path = env.vault / rel
+    recipes, err = _kill_read_recipes(path)
+    if recipes is None:
+        print(f"ERROR: {err}", file=sys.stderr)
+        return 2
+    if invariant_substr:
+        recipes = [r for r in recipes if invariant_substr in r.get("invariant", "")]
+    if not recipes:
+        print("ERROR: 無配方可跑(kill-add 先宣告;或子字串不匹配)", file=sys.stderr)
+        return 2
+    repo_root = _repo_root_from_env(env)
+    try:
+        pdata = load_platforms(repo_root)
+    except ValueError as ex:
+        print(f"ERROR: config 壞: {ex}", file=sys.stderr)
+        return 2
+    plats = pdata["platforms"]
+    default_plat = pdata["default_platform"]
+    if pdata.get("multiplatform") and isinstance(
+            (Path(repo_root) / ".lumos" / "config.json"), Path):
+        # platforms 在則 test.run_cmd 不生效(load_platforms 二分慣例)→ 有宣告時告警
+        try:
+            _cfg = json.loads((Path(repo_root) / ".lumos" / "config.json").read_text(encoding="utf-8"))
+            if isinstance(_cfg.get("test"), dict) and _cfg["test"].get("run_cmd"):
+                print("⚠ config 同時有 platforms 與 test.run_cmd——多平台模式下 test.run_cmd 不生效")
+        except Exception:
+            pass
+    floor = 20.0
+    try:
+        floor = float(os.environ.get("LUMOS_KILL_TIMEOUT_FLOOR", "20"))
+    except ValueError:
+        pass
+    results = []
+    ts = datetime.datetime.now().isoformat(timespec="seconds")
+    # 依 platform 分組(每平台一個 worktree + baseline per test)
+    groups = {}
+    for r in recipes:
+        groups.setdefault(r.get("platform") or platform_override or default_plat, []).append(r)
+    for plat, plist in groups.items():
+        pentry = plats.get(plat)
+        if pentry is None:
+            for r in plist:
+                results.append({**r, "platform": plat, "verdict": "error",
+                                "detail": f"平台 '{plat}' 不在 config"})
+            continue
+        run_cmd = pentry.get("run_cmd")
+        if not run_cmd:
+            print(f"ERROR: 平台 '{plat}' 未宣告 run_cmd(多平台=platforms.{plat}.run_cmd;"
+                  f"legacy=test.run_cmd)——kill 不可用", file=sys.stderr)
+            return 2
+        proot = Path(pentry["root"])
+        commit = ""
+        try:
+            commit = subprocess.run(["git", "-C", str(proot), "rev-parse", "--short", "HEAD"],
+                                    capture_output=True, text=True).stdout.strip()
+        except Exception:
+            pass
+        dirty = subprocess.run(["git", "-C", str(proot), "status", "--porcelain"],
+                               capture_output=True, text=True).stdout.strip()
+        if dirty:
+            print(f"⚠ {plat} repo 有未提交變更——不會進沙盒(kill 以 HEAD 為基準),配方/測試需先 commit")
+        flaky = pentry["profile"].get("scaffold_ext") in (".yaml", ".yml") or plat in ("maestro", "playwright")
+        # per (test) baseline 快取:同測試多配方只跑一次 baseline
+        tmp_parent = tempfile.mkdtemp(prefix="lumos-kill-")
+        wt = os.path.join(tmp_parent, "wt")
+        wt_ok = False
+        try:
+            r_add = subprocess.run(["git", "-C", str(proot), "worktree", "add", "--detach", wt],
+                                   capture_output=True, text=True)
+            if r_add.returncode != 0:
+                for r in plist:
+                    results.append({**r, "platform": plat, "verdict": "error",
+                                    "detail": f"worktree add 失敗: {r_add.stderr.strip()[:120]}"})
+                continue
+            wt_ok = True
+            wt_real = os.path.realpath(wt)
+            baselines = {}
+            for r in plist:
+                method_full = r.get("test", "")
+                method = method_full.split(":", 1)[1] if (":" in method_full and pdata.get("multiplatform")) else method_full
+                if not _KILL_METHOD_OK_RE.match(method or ""):
+                    results.append({**r, "platform": plat, "verdict": "error",
+                                    "detail": f"test 名不合法(拒注入): {method!r}"})
+                    continue
+                cmd = run_cmd.replace("{method}", shlex.quote(method)) if "{method}" in run_cmd else run_cmd
+                note_ws = "" if "{method}" in run_cmd else " whole-suite"
+                if cmd not in baselines:
+                    b_rc, b_tail, b_elapsed, b_to = _kill_run(cmd, wt, max(600.0, floor))
+                    baselines[cmd] = (b_rc, b_tail, b_elapsed, b_to)
+                b_rc, b_tail, b_elapsed, b_to = baselines[cmd]
+                if b_to or b_rc != 0:
+                    results.append({**r, "platform": plat, "verdict": "abort",
+                                    "detail": f"baseline 非綠(rc={b_rc}){note_ws}", "tail": b_tail})
+                    continue
+                # 套配方(路徑圍欄:雙邊 realpath)
+                target = os.path.realpath(os.path.join(wt, r.get("file", "")))
+                if not target.startswith(wt_real + os.sep):
+                    results.append({**r, "platform": plat, "verdict": "error",
+                                    "detail": "file 路徑逃逸 worktree(圍欄擋下)"})
+                    continue
+                try:
+                    src = open(target, encoding="utf-8").read()
+                except OSError as ex:
+                    results.append({**r, "platform": plat, "verdict": "drifted",
+                                    "detail": f"file 開不了: {ex}"})
+                    continue
+                cnt = src.count(r.get("old", ""))
+                if cnt != 1:
+                    results.append({**r, "platform": plat, "verdict": "drifted",
+                                    "detail": f"old 命中 {cnt} 次(需恰 1——配方漂移,重寫)"})
+                    continue
+                open(target, "w", encoding="utf-8").write(src.replace(r["old"], r["new"], 1))
+                m_timeout = max(b_elapsed * 5, floor)
+                m_rc, m_tail, _me, m_to = _kill_run(cmd, wt, m_timeout)
+                subprocess.run(["git", "-C", wt, "checkout", "--", r.get("file", "")],
+                               capture_output=True)
+                if m_to:
+                    verdict = "timed_out"   # 歸 killed 類(PIT:變異致掛=被超時接住)
+                elif m_rc != 0:
+                    verdict = "killed"
+                else:
+                    verdict = "survived"
+                res = {**r, "platform": plat, "verdict": verdict}
+                if verdict == "survived":
+                    res["tail"] = b_tail    # 供人查 filter 是否真的跑到測試(zero-hit 假 survived)
+                if flaky:
+                    res["flaky_risk"] = True
+                if note_ws:
+                    res["detail"] = res.get("detail", "") + note_ws
+                results.append(res)
+        finally:
+            if wt_ok and not keep_worktree:
+                subprocess.run(["git", "-C", str(proot), "worktree", "remove", "--force", wt],
+                               capture_output=True)
+                subprocess.run(["git", "-C", str(proot), "worktree", "prune"], capture_output=True)
+                shutil.rmtree(tmp_parent, ignore_errors=True)
+            elif keep_worktree:
+                print(f"(--keep-worktree) 現場保留: {wt}")
+        # 留痕(docs/.kill-log.jsonl,gov 第 5 支 load 撈)
+        log = env.vault.parent / ".kill-log.jsonl"
+        with open(log, "a", encoding="utf-8") as fh:
+            for res in results:
+                if res.get("_logged"):
+                    continue
+                res["_logged"] = True
+                fh.write(json.dumps({"ts": ts, "node": rel, "commit": commit,
+                                     "invariant": res.get("invariant", ""), "test": res.get("test", ""),
+                                     "platform": res.get("platform", ""),
+                                     "verdict": res["verdict"], "note": res.get("note", ""),
+                                     "flaky_risk": res.get("flaky_risk", False),
+                                     "tail": res.get("tail", "")}, ensure_ascii=False) + "\n")
+    verdicts = [r["verdict"] for r in results]
+    if as_json:
+        print(json.dumps({"results": [{k: v for k, v in r.items() if k != "_logged"}
+                                      for r in results]}, ensure_ascii=False))
+    else:
+        icon = {"killed": "✓", "timed_out": "✓", "survived": "✗",
+                "drifted": "⚠", "abort": "⚠", "error": "⚠"}
+        for r in results:
+            print(f"{icon.get(r['verdict'],'?')} {r['verdict']:<9} {r.get('invariant','')[:30]}"
+                  f" [{r.get('test','')}] {r.get('detail','')}")
+    if "survived" in verdicts:
+        print("✗ 有配方 SURVIVED——綁定測試接不住宣告的壞法(稻草人證據),補強測試", file=sys.stderr)
+        return 1
+    if any(v in ("drifted", "abort", "error") for v in verdicts):
+        return 2
+    if not as_json:
+        print(f"✓ 全部 killed({len(verdicts)} 配方)——綁定測試咬得住")
     return 0
 
 
@@ -4173,7 +4529,7 @@ def _scaffold_project(root: Path, slug: str):
     _write_lf(kg / "MOC" / "index.md",
               f"---\ntype: moc\nstatus: doing\n---\n# {slug} 知識圖譜總索引\n")
     _write_lf(kg / ".gitignore",
-              ".bypass-log.jsonl\n.rot-queue.jsonl\n.governance-log.jsonl\n.canary-log.jsonl\n")
+              ".bypass-log.jsonl\n.rot-queue.jsonl\n.governance-log.jsonl\n.canary-log.jsonl\n.kill-log.jsonl\n")
     print(f"  ✓ scaffold {kg}")
 
 
@@ -5298,7 +5654,7 @@ def _lint_watch_mode(repo_root, as_json):
 _COCHANGE_DEFAULTS = {"min_support": 3, "min_confidence": 0.8, "max_changeset": 20}
 _COCHANGE_DEFAULT_EXCLUDE = [
     "docs/.governance-log.jsonl", "docs/.bypass-log.jsonl",
-    "docs/.canary-log.jsonl", "docs/.rot-queue.jsonl",
+    "docs/.canary-log.jsonl", "docs/.rot-queue.jsonl", "docs/.kill-log.jsonl",
     "**/*-lock.json", "**/*.lock", "**/node_modules/**", "**/dist/**",
     "**/Migrations/**", "**/*.g.cs", "**/*.Designer.cs",
 ]
@@ -6864,6 +7220,21 @@ def main():
     ga.add_argument("--date", help="審計日期 YYYY-MM-DD(預設今天)")
     gt = gsub.add_parser("trace", help="合約→守衛測試→Verification 證據鏈(reverse:爆炸半徑可查)")
     gt.add_argument("node", nargs="?", help="限單節點(預設全 vault)")
+    gka = gsub.add_parser("kill-add", help="宣告壞法配方(kill_recipes+[kill:recipes],同檔原子寫)")
+    gka.add_argument("node")
+    gka.add_argument("invariant", help="KEY 行子字串")
+    gka.add_argument("--file", required=True, help="要弄壞的檔(相對配方平台 root)")
+    gka.add_argument("--old", required=True, help="literal 原文(須唯一命中)")
+    gka.add_argument("--new", required=True, help="壞版本")
+    gka.add_argument("--test", help="綁定測試名(缺省=KEY 行唯一 [test:] ref)")
+    gka.add_argument("--platform", dest="gk_platform", help="配方所屬平台(多平台 config)")
+    gka.add_argument("--note", default="", help="業務上壞了什麼(人話)")
+    gk = gsub.add_parser("kill", help="跑殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅")
+    gk.add_argument("node")
+    gk.add_argument("invariant", nargs="?", help="限某合約(KEY 行子字串;預設全部配方)")
+    gk.add_argument("--platform", dest="gk_platform", help="覆蓋配方平台")
+    gk.add_argument("--json", dest="gk_json", action="store_true", help="輸出 JSON manifest")
+    gk.add_argument("--keep-worktree", action="store_true", help="保留沙盒現場(除錯)")
 
     p = sub.add_parser("sync-verified-by", help="補 Check 3 漏寫的 verified_by(dry-run 預設)")
     p.add_argument("--apply", action="store_true", help="真寫入(否則 dry-run 只列)")
@@ -7158,6 +7529,14 @@ def main():
                                   platform=args.platform)
         if args.gcmd == "audit":
             return cmd_guard_audit(env, args.node, args.invariant, args.model, args.date)
+        if args.gcmd == "kill-add":
+            return cmd_guard_kill_add(env, args.node, args.invariant, file=args.file,
+                                      old=args.old, new=args.new, test=args.test,
+                                      platform=args.gk_platform, note=args.note)
+        if args.gcmd == "kill":
+            return cmd_guard_kill(env, args.node, invariant_substr=args.invariant,
+                                  platform_override=args.gk_platform,
+                                  as_json=args.gk_json, keep_worktree=args.keep_worktree)
         if args.gcmd == "trace":
             return cmd_guard_trace(env, args.node)
 

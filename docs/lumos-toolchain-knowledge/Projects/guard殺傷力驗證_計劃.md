@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-10
 updated: 2026-07-10
 tags:
   - type/project
-  - status/doing
+  - status/done
 decisions:
   - content: 壞法人宣告(kill 配方進 decisions)+config 宣告 run_cmd,不做自動變異生成
     context: 零依賴跨語言(C#/Kotlin/E2E/python)工具不內建語言知識;自動生成變異有等價變異不可判定問題(實務 4-39% 誤報)
