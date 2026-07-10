@@ -1,0 +1,238 @@
+# Lumos 檢索與關聯推薦優化：設計草案
+
+> PRIOR-ART: 採 borrow-design；以 BM25F、BFS decay、共引、Jaccard 原理，用 Python stdlib 原生實作，不引入套件或 embedding。  
+> v1 原則：先以旗標啟用，不改既有候選集合與 JSON schema；真 vault 評測通過後再考慮改預設。
+
+## 1. 排序公式與資料流
+
+### BM25F
+
+每個節點拆成以下欄位，初始權重不是合約，須由評測調整：
+
+| 欄位 | 內容 | 權重 |
+|---|---|---:|
+| title | 檔名 stem + 第一個 H1，去重 | 4.0 |
+| summary | frontmatter `summary`，保留 KEY/FLOW 等文字 | 2.5 |
+| tags | `tags` | 1.5 |
+| body | 排除 frontmatter、code fence；是否含 inline code 沿用 `--code` 語意 | 1.0 |
+| type | `type` 值 | 0.5 |
+
+`status`、`updated` 不進詞彙分數：前者不是主題，後者應交給 frecency，不應偽裝成 relevance。
+
+對 query token `t`：
+
+```text
+tf*(t,d) = Σf weight(f) × tf(t,d,f)
+
+idf(t) = log(N / (df(t)+1)) + 1
+
+BM25F(q,d) = Σt∈unique(q)
+  idf(t) × tf*(t,d) × (K1+1)
+  / (tf*(t,d) + K1 × ((1-B) + B × len(d)/avg_len))
+```
+
+固定 `K1=1.2`、`B=0.75`；欄位權重只乘在 tf 上，且在飽和函數之前。`len(d)` 是各索引欄位的未加權 token 數，避免高 title boost 同時膨脹長度懲罰。
+
+### 中文 tokenizer
+
+1. 全文先 NFC、英文 lowercase。
+2. 連續漢字以 overlapping bigram 切分：`檢索優化 → 檢索、索優、優化`。
+3. 單一漢字 query 才使用 unigram；不替一般 query 全量加入 unigram，避免「系、統、計」等高頻字淹沒排序。
+4. ASCII identifier 同時保留完整 token，並拆 snake/kebab/camel/digit：`impact_hook2 → impact_hook2、impact、hook、2`。
+5. v1 的 `search` 仍先用現有 substring/regex 決定候選，token 只負責候選內排序，因此不會把原本查不到的節點擴進結果。
+
+選 bigram 是因為它保留局部字序、stdlib 可實作，且比 unigram 有辨識力；但這是待 A/B 的初始裁定，不宣稱已證實。
+
+### 資料流
+
+```text
+load_vault
+→ 擷取欄位與乾淨 body
+→ tokenize
+→ 計算 N、df、avg_len
+→ 產生既有候選集合
+→ BM25F
+→ 穩定排序(score desc, rel path asc)
+→ human / JSON 輸出
+```
+
+99 節點規模每次在記憶體重建即可；v1 不做持久化 index，避免 cache invalidation 與額外寫入。
+
+## 2. 相關推薦分數設計
+
+令 seed 集合為 `S`；`context` 是當前節點，`impact` 是直接命中節點。圖先沿現有雙向邊取最短距離。
+
+### 圖分數
+
+```text
+k(v) = min shortest_distance(s,v), s∈S
+Braw(v) = 1 / 2^k(v)
+B(v) = min(1, 2 × Braw(v))       # hop1=1、hop2=0.5
+```
+
+每個候選只按最近 seed 計一次，不累加路徑數，避免高密度 MOC/計畫叢集劫持。
+
+共引分數：
+
+```text
+Craw(s,v) = Σ共同引用者 u {
+  2  若 u 的同一句同時引用 s、v
+  1  若只在同一節點內共同引用
+}
+C(v) = max_s Craw(s,v) / (Craw(s,v)+2)
+```
+
+frontmatter 同一 list 視為同節點、非同句。每個共同引用者最多貢獻一次。
+
+鄰域相似：
+
+```text
+J(v) = max_s |Γ(s)∩Γ(v)| / |Γ(s)∪Γ(v)|
+```
+
+組合：
+
+```text
+G(v) = 0.60×B(v) + 0.25×C(v) + 0.15×J(v)
+```
+
+BFS 有相對較強的小圖證據，所以占六成；共引補二階語意；Jaccard 僅作 tie-breaker。
+
+### 與 BM25 融合
+
+相關推薦的 lexical query：
+
+- `context`：seed 的 title + summary + tags。
+- hook：實際 edit delta，加檔案路徑與直接節點的 title/summary；取不到 delta 才退回 seed metadata。
+- Edit/MultiEdit 使用 old/new snippets；Write 使用新內容，最多 512 個 distinct query tokens。
+
+在候選內正規化：
+
+```text
+L(v) = BM25F(v) / max_candidate BM25F
+R(v) = 0.60×L(v) + 0.40×G(v)
+```
+
+線性融合比 RRF 更適合 v1，因為可顯示可解釋分數並設絕對/相對閾值。詞彙占六成，確保圖不能單獨決定結果；若所有候選 `BM25F=0`，不輸出未固定的 indirect 推薦。
+
+事故 trigger 與直接 code 引用是確切證據，不假裝是圖推薦：
+
+```text
+incident score = 1.0
+direct score   = 0.50 + 0.50×L(v)
+indirect score = R(v)
+```
+
+## 3. Hook 降噪演算法
+
+真 vault 基線：修改 `scripts/lumos` 目前得到 44 direct、53 indirect、2 incidents，共 99 條。
+
+預設 `top_k=8`、`min_score=0.20`：
+
+1. 從 hook payload 抽 edit delta，透過 stdin 傳給 `lumos impact`，避免內容暴露在 process arguments。
+2. 產生 incidents、direct、depth≤2 indirect；維持現有跨集合去重。
+3. 計算上述分數，低於 `max(0.20, 0.25×最高非固定分數)` 者移除。
+4. 安全固定項：所有 incident、direct 的 IRREVERSIBLE/INVARIANT/COMBO、以及 hop1 且達閾值的合約節點。
+5. 固定項先收，再按 `(score desc, hop asc, path asc)` 補滿 8 條。
+6. 不用完整 MMR。僅當兩個非固定候選同時滿足 token Jaccard≥0.85、鄰域 Jaccard≥0.85 時，壓掉較低分者並回補下一名。
+7. 不為湊數輸出低分結果；可以少於 5 條。
+8. 固定項超過 10 時全部保留，並標示 `safety overflow: N`；安全資訊不因展示上限靜默消失。
+9. 每行輸出總分與短理由，例如：`0.82 Systems/lumos-cli-read — direct, title命中, hop1共引`。
+
+TTL、rc=3 與內部錯誤 fail-open 語意保持不變。
+
+## 4. CLI 面變更
+
+### `search`
+
+新增：
+
+```text
+lumos search TERM --ranked
+  [--limit N] [--explain] [--json] [--sort relevance|path]
+```
+
+- 無 `--ranked`：完全維持目前 substring/regex、字母序與輸出。
+- `--ranked`：只重排既有候選；`--regex` 仍由 regex 決定候選。
+- `--explain` 顯示欄位 tf、BM25F、命中 token。
+- `--json` 回傳 `node/rank/score/hits/score_parts`。
+
+### `context`
+
+新增：
+
+```text
+lumos context NOTE --recommend [--top 8] [--min-score 0.20] [--explain]
+```
+
+原有 context 內容不變，尾端另列融合後推薦。
+
+### `impact`
+
+新增：
+
+```text
+lumos impact ... --ranked [--top 8] [--min-score 0.20]
+                       [--query-stdin] [--explain]
+```
+
+- 無 `--ranked` 保持現行四段 JSON。
+- ranked JSON 在 item 加 `rank/score/pinned/score_parts`，另加 `meta` 記候選數、截斷數與 safety overflow。
+- hook 固定使用 `--ranked --top 8 --query-stdin`。
+- `.lumos/impact.json` 可新增 `top_k`、`min_score`；非法值沿用現有 fail-open 預設。
+
+## 5. Frecency 是否進 v1
+
+不進 v1，也不預設開始記帳。
+
+主要問題不是 `math.exp` 成本，而是事件語意與副作用：
+
+- `search` 顯示結果不代表使用者真的讀了節點，若全記會形成 popularity feedback loop。
+- hook 自動注入量遠大於手動 context，低權重仍可能長期累積偏置。
+- 現有讀命令被定義為純讀、無副作用；記帳會改變此邊界。
+- repo 內帳會製造 dirty worktree；user-local 帳又有跨機不同步、權限、併發 append、清理與隱私問題。
+- 在沒有點擊/採用訊號時，權重桶無法可靠校準。
+
+若 v1 評測仍顯示「常用節點排太後」，再做 opt-in v1.1 shadow experiment：帳放 user-local state、以 vault path hash 分區、JSONL append、可清除、不進 git，且只把明確 `context` 記為讀取；未驗收前不參與正式排序。
+
+## 6. 測試與真 vault 評測
+
+### 單元與合約測試
+
+- 中文 bigram、單字 fallback、ASCII/camel/snake 混合、NFC 等價。
+- 手算 BM25F fixture，鎖定「field weight 在飽和前」及 IDF 永不為負。
+- title 命中必勝相同 tf 的 body 命中；同分按 path 穩定排序。
+- BFS cycle、多 seed 最短距離、每節點只計一次。
+- 同句共引=2、同節點共引=1；Jaccard 空集合不除零。
+- lexical 全零時 indirect 不得退化成 graph-only。
+- legacy search/impact stdout、rc、JSON 在未開新旗標時不變。
+- hook top-k、閾值、安全 overflow、TTL、fail-open、stdin query 不洩漏。
+- 近重複壓縮不得移除 pinned 項。
+
+### 真 vault relevance set
+
+建立不進生產排序邏輯的評測集：
+
+- 30 個 search query：繁中短詞、混合 identifier、英文縮寫、單漢字各分層取樣。
+- 20 個真實 code edit case：從 git diff 取 file + edit snippet；特別納入 `scripts/lumos` 的 99 條噪音案例。
+- 對 old/new/BM25-only/graph-only/fusion 做 pooling，隱藏方法與順序。
+- 兩名獨立評審標 `2=必看、1=有用、0=噪音`；分歧再裁決。
+- 60% cases 調權重，40% held-out；權重凍結後才跑驗收。
+
+指標與 gate：
+
+- search 主指標 nDCG@5；輔助 MRR、Recall@10。
+- related/hook 主指標 nDCG@8、Precision@8；另算 must-see Recall。
+- `search nDCG@5` 相對字母序提升至少 15%，且 held-out 不倒退。
+- `hook Precision@8 ≥ 0.70`、must-see Recall=100%。
+- hook 中位輸出≤8、p95≤10；安全 overflow 另列、不算一般噪音失敗。
+- fusion 必須勝 BM25-only 與 BFS-only 至少一個主要指標，且另一個不得顯著倒退；否則不應宣稱融合有效。
+- 99 節點下 ranked impact p95≤1 秒。
+
+## 7. 最可疑、最該先驗證的一點
+
+最可疑的是把 Borodin 的 BFS-decay 勝率直接外推到這個 99 節點、具型別與強人工連結語意的 vault。
+
+現有圖把 `related`、`verified_by`、`plan_refs`、body wikilink 與雙向 backlink 都視為等價邊；但計畫—驗證閉環、MOC 聚合邊和真正主題關聯並不等價。即使距離衰減公式在原研究有效，也不能證明「無型別 BFS」在此圖仍最準。
+
+因此第一個真 vault 實驗應是 BFS-only 對照，以及逐一移除 body-wikilink、verified_by、plan_refs 的 edge-type ablation。若結果顯示某類邊系統性製造噪音，應先修候選圖，再調 0.60/0.25/0.15 或融合權重。
