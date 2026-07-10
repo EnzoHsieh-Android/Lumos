@@ -57,7 +57,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 2. **編排者=meta-judge**:判讀段(canary 判定/去重/severity max/辯方裁決聚合)是 meta-judge 聚合——只聚合一級判決、不重審內容;judgment pool 越大越抗偏誤(W 寬 panel 的理據;meta-judge position consistency 0.793→0.854)。
 3. **關鍵單點判決 ≥3 run 多數決**:「單一判決要當終局」的窄集合(cap 攤牌前的最後裁定、blocker 級辯方裁決有爭議)→ ≥3 獨立乾淨 run 取多數決。誠實限定:同 judge 同輸入跨 run α 最好僅 0.563(<0.8 可靠線)——多數決**只壓 stochastic 變異、不壓 correlated 系統性盲點**,後者靠異家族 panel,兩者不互替。跨家族 slot:qwen 可用時用;不可用時異模型為次佳並於 note 註記偏離。
 - **記錄**:一輪 W 筆共享 round-id:`lumos canary record caught|missed --loop <id> --round <rid> --severity <s> --capture-counts "2,2,1"`(counts 記在該輪一筆即可)。
-- **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 四條合取:輪有效(≥2 caught)∧ 存活 max≤minor(只算 caught)∧ capture-recapture 殘餘<門檻(**無 counts=fail-closed**)。一個乾淨 panel 輪即收斂(K=1);存活 ≥major → fix → 下一輪只重審 delta,cap=3。
+- **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 四條合取:輪有效(caught≥2 且 0 missed,near-perfect)∧ 存活 max≤minor(只算 caught)∧ capture-recapture 殘餘<門檻(**無 counts=fail-closed**)。一個乾淨 panel 輪即收斂(K=1);存活 ≥major → fix → 下一輪只重審 delta,cap=3。
 - **混用守衛**:panel 記錄(帶 round)與 legacy 記錄不可混用,`--panel` 要求全帶 round、否則 rc2(防 None phantom 輪偽過)。
 - **收斂判準理據(散文收斂 without 干擾信號)**:framing 汙染 count 不汙染結構 → capture-recapture 讀重疊、ODC 讀 class、AC 讀 coverage;三者繞開被汙染的 count,framing 不動。詳見 [[loop三輪壓縮_計劃]]。
 

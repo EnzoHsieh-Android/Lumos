@@ -167,7 +167,7 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
   - **≥1 跨家族(qwen)**:不帶 canary、只作否決(同 design-loop)。
 - **判讀/記錄/收斂**:同 design-loop panel(步驟 4 辯方 + 步驟 5 記錄)——一輪 W 筆共享 round-id:
   `lumos canary record caught|missed --loop code-<topic> --round <rid> --auditor <slotN> --severity <s> [--capture-counts "2,2,1"]`。
-- **問收斂**:`lumos loop status code-<topic> --gate --panel --repo <root>` → 四條合取(輪有效≥2caught ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<門檻[無counts=fail-closed]);**G1 本就對代碼 skip**,panel 模式不影響。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta hunk,cap=3。
+- **問收斂**:`lumos loop status code-<topic> --gate --panel --repo <root>` → 四條合取(輪有效 caught≥2且0missed[near-perfect] ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<門檻[無counts=fail-closed]);**G1 本就對代碼 skip**,panel 模式不影響。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta hunk,cap=3。
 - **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix→rc2)。
 
 ### ⚠ code-loop 與 design-loop 的關鍵差異(2026-07-09 交叉查文獻;別全盤沿用)

@@ -1535,7 +1535,7 @@ def cmd_gov(env, node=None, since_days=90):
     # 第 4 源:canary 審計留痕(審計員可靠度史)。只此 mapper 輸出 token 鍵(供 dedup 鑑別)。
     load(".canary-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": "",
          "gate": "canary", "kind": d.get("kind", "?"), "hard": False, "nodes": [],
-         "token": d.get("token", ""),
+         "token": d.get("token", ""), "auditor": d.get("auditor") or "?",
          "detail": ((f"loop={d['loop']} sev={d.get('severity', '?')} · " if d.get("loop") else "")
                     + (d.get("auditor", "") + " " + d.get("note", "")).strip())})
 
@@ -1564,7 +1564,7 @@ def cmd_gov(env, node=None, since_days=90):
         by_aud = {}
         by_type = {}
         for r in can:
-            aud = (r["detail"].split("·")[-1].strip().split(" ") or ["?"])[0] or "?"
+            aud = r.get("auditor", "?")  # record 原生欄位(終審 F2:解析 detail 字串在無 --auditor 時誤歸戶)
             st = by_aud.setdefault(aud, {"caught": 0, "missed": 0})
             st[r["kind"]] = st.get(r["kind"], 0) + 1
             m = _re.search(r"type=([\w-]+)", r["detail"])
@@ -1661,7 +1661,7 @@ def _estimate_remaining_defects(capture_counts):
 
 def _loop_status_panel(rounds, loop_id):
     """平行 panel 收斂謂詞(loop 三輪壓縮):按 round-id 分組,判最新一輪四條合取——
-    ①輪有效(≥2 canary caught)②存活 max severity ≤ minor(ODC 只缺陷類 + 辯方後,由 record 提供)
+    ①輪有效(caught≥2 且 0 missed,near-perfect)②存活 max severity ≤ minor(ODC 只缺陷類 + 辯方後,由 record 提供)
     ③capture-recapture 殘餘 < 門檻(有 capture_counts 才判)。結構信號取代 K-streak∧G2 序列。"""
     from collections import OrderedDict
     groups = OrderedDict()
@@ -6828,7 +6828,7 @@ def main():
     ls.add_argument("--spec", dest="gate_spec", help="--gate 必填:要核對引用座標的最終 spec md")
     ls.add_argument("--repo", dest="gate_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     ls.add_argument("--panel", action="store_true",
-                    help="平行 panel 模式:按 round-id 分組,收斂判準=輪有效(≥2 caught)∧存活 max≤minor∧capture-recapture 殘餘<門檻(取代 K-streak∧G2 序列)")
+                    help="平行 panel 模式:按 round-id 分組,收斂判準=輪有效(caught≥2且0missed)∧存活 max≤minor∧capture-recapture 殘餘<門檻(取代 K-streak∧G2 序列)")
     lcc = lsub.add_parser("capture-counts",
                           help="異質 finder 接線:多 --finder 的 finding-key → capture_counts + 殘餘估計(餵 canary record --capture-counts)")
     lcc.add_argument("--finder", dest="finders", action="append", default=[],

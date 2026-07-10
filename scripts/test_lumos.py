@@ -5986,6 +5986,24 @@ def t_panel_near_perfect_and_gov_ledger():
         check("near-perfect: 2caught+1missed → 輪無效 rc1", r.returncode == 1 and "near-perfect" in r.stdout,
               f"rc={r.returncode}\n{r.stdout}")
 
+    # else 分支覆蓋(終審 F4):1 caught 0 missed → 輪無效(caught<2)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "NP2", "--round", "r1", "--token", "A", "--severity", "clean")
+        r = _sp.run([sys.executable, GRAPHCTL, "loop", "status", "NP2", "--gate", "--panel"],
+                    cwd=str(Path(d)), capture_output=True, text=True)
+        check("near-perfect: 1caught 0missed → 輪無效 rc1(else 分支)", r.returncode == 1 and "<2" in r.stdout,
+              f"rc={r.returncode}\n{r.stdout}")
+
+    # gov 分帳:無 --auditor 的 record 歸 '?' 桶(終審 F2:不誤吞 note 首字)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "missed", "--loop", "G0", "--note", "r1 type=b timeout")
+        r = _sp.run([sys.executable, GRAPHCTL, "gov"], cwd=str(Path(d)),
+                    capture_output=True, text=True)
+        check("gov 分帳: 無 auditor 歸 ? 桶", "?: caught 0 / missed 1" in r.stdout and "r1: caught" not in r.stdout,
+              r.stdout[-300:])
+
     # gov 分帳:caught/missed per-auditor + type=X 分佈
     with tempfile.TemporaryDirectory() as d:
         _mkvault(d)
