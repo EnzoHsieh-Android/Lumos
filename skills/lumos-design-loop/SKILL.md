@@ -49,13 +49,13 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 ## 平行 panel 模式(≤3 輪壓縮,2026-07-09;取代 6 輪同族循序,設計見 [[loop三輪壓縮_計劃]])
 6 輪同族循序=相關信號(「9 judge 2 票」)且 framing 對抗 G2 收斂逼跑滿 cap。壓縮=**買獨立廣度不買相關深度**:
-- **一輪 = 平行派 W 個多樣審計員**(W 由 tier:`difficulty.params` 的 `panel_width`,standard=3/high=5),不同 canary 型別(跨 slot 輪替 a/b/c/d)+ 不同鏡頭(正確性/邊界/整合)+ ≥1 跨家族(qwen,不帶 canary、只作否決)。每審計員各自 canary → 注意力檢查平行做。**同輪 W 個 canary 不得同型同段——「殺 A 必殺 B」的重複難度 canary 不算獨立注意力票**(冗餘灌水 caught-rate;冗餘識別不可判定 → 靠紀律,borrow mutation score 教訓 2026-07-10)。
+- **一輪 = 平行派 W 個多樣審計員**(W 由 tier:`difficulty.params` 的 `panel_width`,standard=3/high=5),不同 canary 型別(跨 slot 輪替 a/b/c/d)+ 不同鏡頭(正確性/邊界/整合)+ ≥1 跨家族(外家模型:**Codex CLI** `codex exec --sandbox read-only`(2026-07-10 起本機可用)或 qwen(自主 loop);不帶 canary、只作否決)。每審計員各自 canary → 注意力檢查平行做。**同輪 W 個 canary 不得同型同段——「殺 A 必殺 B」的重複難度 canary 不算獨立注意力票**(冗餘灌水 caught-rate;冗餘識別不可判定 → 靠紀律,borrow mutation score 教訓 2026-07-10)。
 - **判定(編排者一次做)**:①逐同族審計員判 canary caught/missed,missed 者 findings 剔除 ②去重(嚴格合一同段同性質)③對存活 ≥major 派辯方 ④算 capture-recapture:各 distinct 缺陷被幾人找到 → `capture_counts`。
 
 ### reviewer 結構紀律(2026-07-10 研究明文化;實證出處見 [[reviewer結構明文化_計劃]])
 1. **禁互辯(硬規則)**:reviewer 互不通訊、不得看彼此輸出迭代辯論;分歧交編排者裁,不回饋重辯。實證:multi-agent debate 第一輪即劇烈放大 position/verbosity/CoT/bandwagon 偏誤且後續輪不自癒(EMNLP 2025)。範圍限定:實證測的是偏誤軸(另有研究稱 debate 提升準確率軸)——lumos 審計場景選抗偏誤。
 2. **編排者=meta-judge**:判讀段(canary 判定/去重/severity max/辯方裁決聚合)是 meta-judge 聚合——只聚合一級判決、不重審內容;judgment pool 越大越抗偏誤(W 寬 panel 的理據;meta-judge position consistency 0.793→0.854)。
-3. **關鍵單點判決 ≥3 run 多數決**:「單一判決要當終局」的窄集合(cap 攤牌前的最後裁定、blocker 級辯方裁決有爭議)→ ≥3 獨立乾淨 run 取多數決。誠實限定:同 judge 同輸入跨 run α 最好僅 0.563(<0.8 可靠線)——多數決**只壓 stochastic 變異、不壓 correlated 系統性盲點**,後者靠異家族 panel,兩者不互替。跨家族 slot:qwen 可用時用;不可用時異模型為次佳並於 note 註記偏離。
+3. **關鍵單點判決 ≥3 run 多數決**:「單一判決要當終局」的窄集合(cap 攤牌前的最後裁定、blocker 級辯方裁決有爭議)→ ≥3 獨立乾淨 run 取多數決。誠實限定:同 judge 同輸入跨 run α 最好僅 0.563(<0.8 可靠線)——多數決**只壓 stochastic 變異、不壓 correlated 系統性盲點**,後者靠異家族 panel,兩者不互替。跨家族 slot:Codex CLI/qwen 可用時用;皆不可用才退異型號同門並於 note 註記偏離。
 - **記錄**:一輪 W 筆共享 round-id:`lumos canary record caught|missed --loop <id> --round <rid> --severity <s> --capture-counts "2,2,1"`(counts 記在該輪一筆即可)。
 - **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 四條合取:輪有效(caught≥2 且 0 missed,near-perfect)∧ 存活 max≤minor(只算 caught)∧ capture-recapture 殘餘<門檻(**無 counts=fail-closed**)。一個乾淨 panel 輪即收斂(K=1);存活 ≥major → fix → 下一輪只重審 delta,cap=3。
 - **混用守衛**:panel 記錄(帶 round)與 legacy 記錄不可混用,`--panel` 要求全帶 round、否則 rc2(防 None phantom 輪偽過)。
