@@ -1704,7 +1704,8 @@ def t_marker_doc_sync():
         check("drift: skills/template 不在(vendored)→ 跳過", True)
         return
     st, dt = skill.read_text(encoding="utf-8"), disc.read_text(encoding="utf-8")
-    for m in ("★CHECKPOINT★", "★IRREVERSIBLE★", "[rollback:", "[guard:", "[kill:"):
+    for m in ("★CHECKPOINT★", "★IRREVERSIBLE★", "[rollback:", "[guard:", "[kill:",
+              "spec-trace", "signoff"):
         check(f"drift: {m} 在 SKILL.md", m in st, "SKILL 缺")
         check(f"drift: {m} 在 graph-discipline", m in dt, "disc 缺")
 

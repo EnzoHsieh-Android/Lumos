@@ -342,6 +342,18 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,在扣點/寫 Registrat
 - **lab2 = 測試庫**：整合/狀態守衛用全新唯一測試會員,`finally` 依 CustNo 全刪,不留痕。不要把 lab2 當正式機綁手綁腳。
 - **不重複**:guard 怎麼寫的細節 / lab CI 真機證據,寫進對應 `Verification/2026-06-14_lumos_*.md`,KEY 行只留 `[test:]` 指針。流程已知限制見 [[2026-06-14_lumos_guard審計_已知限制]]。
 
+### ★INVARIANT★ → `[kill:recipes]` 殺傷力驗證（第三級，選配，2026-07-10）
+
+`[test:]` 證保鑣存在、`[audit:]` 審保鑣合格——都沒真打一拳。高風險/金流合約建議補第三級：
+
+```bash
+lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y --note "業務上壞了什麼"
+lumos guard kill <node>   # 沙盒(worktree)真弄壞 → 綁定測試必翻紅;survived=稻草人 rc1
+```
+- 壞法**從業務行為推導**（「驗章短路成恆真」），不從實作反轉；跑測試的指令由 `.lumos/config.json` 宣告（多平台 `platforms.<名>.run_cmd`、單平台 `test.run_cmd`，含 `{method}` 佔位）。
+- 六態：killed/timed_out（都算接住）/survived（稻草人）/drifted（配方漂移重寫）/abort（baseline 就紅）/error。留痕 docs/.kill-log.jsonl，`lumos gov` 可查。
+- 天花板：證「接得住這條壞法」不證「接得住所有壞法」；沙盒只隔離程式碼不隔離 DB——只對自我清理的測試跑。
+
 ### ★INVARIANT★ → `[audit:]` 獨立合法性審計（合約即外審，2026-06-18 機制；doctor Check T 強制）
 
 `[test:]` 證的是「程式**有沒有照規則做**」(verification);它證不了「這條**該不該**是不可改的鐵則」「綁的測試**夠不夠格**(會不會是同源套套邏輯)」。這兩個判斷**沒有標準答案**,而 2026 maker/checker 共識(治理日報 6/17)說得很白:**讓提出者自己評必手下留情**。所以:
@@ -581,6 +593,8 @@ plan_refs:
 其餘變更**不寫計劃**：節點 `decisions[]` 一條 + Verification 即可——一條 decision 就是微型計劃（superseded 條目自帶意圖凍結語意）。常態工作流維持「對話敲定 → 依當下脈絡開發 → 事後沉澱」，計劃節點是大型變更的 opt-in，不是進場義務。
 
 > **⚠ 橋接任何 spec/SDD 工具的預設輸出路徑（必讀）**：各家工具都有自己的 spec 落點——`superpowers:brainstorming` → `docs/superpowers/specs/YYYY-MM-DD-*.md`、`writing-plans` 有自己的落點、`OpenSpec` → `openspec/`、其他 SDD / spec-driven 框架亦各有目錄——**在本紀律下一律覆寫成 lumos 計劃節點**（`Projects/<主題>_計劃.md`，`type: project`），**不另存 `docs/superpowers/specs/`、`openspec/` 或任何 repo 路徑**。理由:「圖譜即唯一真相」涵蓋計劃/設計,不只 code;spec 散在 repo 檔 = 圖譜外的第二真相源,必 drift。多數此類工具也明示「user/專案偏好可覆寫預設 spec 路徑」,本紀律即該覆寫。落地的 Verification 用 `plan_refs` 回指該計劃節點。
+
+**條款級追溯（opt-in，2026-07-10）**：計劃的規格 bullet 可標 `[S1]`/`[S2]`…；落地的 Verification（有 plan_refs 回指）在 body 提及 `[SN]` 即認領；`lumos spec-trace <計劃節點>` 掃未認領（rc1）。大計劃建議標，小計劃不用。一篇 Verification 盡量只回指一個計劃（條款 ID 無計劃域，多計劃回指會交叉記帳）。
 
 **Claude 的維護義務**：
 
@@ -1002,6 +1016,8 @@ obsidian vault="{vault}" create path="Verification/{日期}_{功能名稱}" cont
 - 關聯模組（wikilink）
 
 **Claude 主動填寫義務**：
+- 對應計劃若有 `[SN]` 條款標記 → 本 Verification body 提及所認領的 `[SN]`（spec-trace 靠這個算帳）
+- 重大業務規則（金流/對外合約）落地或翻盤後 → 提醒使用者跑 `lumos signoff <節點> --note "..."` 留 validation 簽核痕（技術驗證 ≠ 業務確認）
 - 寫 `valid_under` 不可只填「現在好用」這種廢話；要具體版本/規模/schema 數字
 - `revalidate_when` 從 `valid_under` 反推：每條 `valid_under` 對應一條「當條件 X 改變時」的 `revalidate_when`
 - 若使用者沒提供具體環境條件（版本/RPS/schema 版本）→ **主動詢問**，不可自行假設
