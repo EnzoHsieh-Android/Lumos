@@ -7750,6 +7750,9 @@ def t_context_recommend():
     check("hop2 L>0 進榜(H2L)", any("H2L" in k for k in res), str(res.keys()))
     check("共引節點進榜(CoC)", any("CoC" in k for k in res), str(res.keys()))
     check("seed 自身排除", not any("Seed" in k for k in res), str(res.keys()))
+    # 融合權重精確值:H1 純圖 hop1(L=0,C=0,J=0)→R=0.40×0.60=0.24(殺 M4 權重對調→0.36)
+    h1x = next(v_ for k, v_ in res.items() if "H1.md" in k)
+    check("融合權重精確(H1 R=0.24)", abs(h1x["score"] - 0.24) < 1e-6, str(h1x))
     # 詞彙命中的 H1L 應勝純圖 H1
     h1 = next(v_ for k, v_ in res.items() if "H1.md" in k)
     h1l = next(v_ for k, v_ in res.items() if "H1L" in k)
