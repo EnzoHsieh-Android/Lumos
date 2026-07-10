@@ -10,7 +10,9 @@ tags:
 verified_by:
   - "[[Verification/2026-06-19_reversibility-governance-ledger]]"
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
+  - "[[Verification/2026-07-10_合約鏈補強234]]"
 summary: |-
+  KEY:[2026-07-10]signoff 簽核留痕(validation 那半:lumos signoff → .signoff-log.jsonl+frontmatter signed_off;gov 第6支load)
   KEY:[2026-07-10]gov 加 canary 分帳段(per-auditor caught/missed+missed-rate+type 分佈;missed-rate 一級指標)
   FLOW:① 可逆性 — Systems KEY 行標 ★IRREVERSIBLE★/★CHECKPOINT★ + [rollback:decisions]/[guard:decisions] → doctor Check R / lint 強制 → ③ findings 經 doctor(僅 --ci)append .governance-log.jsonl → lumos gov 唯讀彙整查詢
   KEY:可逆性走平行函式 extract_reversibility,完全不碰 extract_contracts 的 7 個 callsite(invariant 合約家族零靜默失效)[test:t_reversibility_doctor]

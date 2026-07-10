@@ -1502,6 +1502,93 @@ def cmd_lint(env, node):
     return 1 if errs else 0
 
 
+SPEC_CLAUSE_RE = re.compile(r"\[S(\d+)\]")
+
+
+def cmd_spec_trace(env, node, as_json=False):
+    """條款級追溯(RTM 輕量版):計劃 body 的 [SN] 條款 × 回指 Verification 的認領。
+    rc:全認領=0;有未認領=1;計劃無 [SN] 標記=0(opt-in 未啟用)。唯讀。"""
+    import json
+    rel = env.find(node)
+    if rel is None:
+        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        return 2
+    plan_stem = env.notes[rel].stem
+    try:
+        text = (env.vault / rel).read_text(encoding="utf-8-sig")
+    except OSError as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        return 2
+    ids = sorted({int(m) for m in SPEC_CLAUSE_RE.findall(text)})
+    if not ids:
+        print(f"(opt-in 未啟用) {rel} 無 [SN] 條款標記——要追溯就在規格 bullet 加 [S1]/[S2]…")
+        return 0
+    claims = {i: [] for i in ids}
+    for vrel, n in env.notes.items():
+        if not vrel.startswith("Verification/"):
+            continue
+        prs = n.fields.get("plan_refs")
+        prs = prs if isinstance(prs, list) else ([prs] if prs else [])
+        if not any(plan_stem in str(x) for x in prs):
+            continue   # 沒回指本計劃的提及不算認領(防偶然文字)
+        try:
+            vtext = (env.vault / vrel).read_text(encoding="utf-8-sig")
+        except OSError:
+            continue
+        for m in SPEC_CLAUSE_RE.findall(vtext):
+            i = int(m)
+            if i in claims:
+                claims[i].append(vrel)
+    unclaimed = [i for i in ids if not claims[i]]
+    if as_json:
+        print(json.dumps({"plan": rel, "clauses": {f"S{i}": claims[i] for i in ids},
+                          "unclaimed": [f"S{i}" for i in unclaimed]}, ensure_ascii=False))
+    else:
+        for i in ids:
+            mark = "✓" if claims[i] else "✗"
+            who = ", ".join(Path(x).stem for x in claims[i]) or "(無人認領)"
+            print(f"{mark} [S{i}] ← {who}")
+        print(f"\n{len(ids)} 條款 / 未認領 {len(unclaimed)}")
+    return 1 if unclaimed else 0
+
+
+def cmd_signoff(env, node, note, by=None):
+    """業務簽核留痕(validation 那半):人對業務正確性點頭 → ledger+frontmatter 戳記。
+    工具只記留痕,不證明確認真的發生(同 audit/self-audit 的誠實前提)。"""
+    import json
+    import datetime
+    import subprocess
+    if not (note or "").strip():
+        print("ERROR: --note 必填(確認了什麼,給未來的人看)", file=sys.stderr)
+        return 2
+    rel = env.find(node)
+    if rel is None:
+        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        return 2
+    today = datetime.date.today().isoformat()
+    commit = ""
+    try:
+        commit = subprocess.run(["git", "-C", str(env.vault.parent), "rev-parse", "--short", "HEAD"],
+                                capture_output=True, text=True).stdout.strip()
+    except OSError:
+        pass
+    log = env.vault.parent / ".signoff-log.jsonl"
+    try:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": datetime.datetime.now().isoformat(timespec="seconds"),
+                                 "node": rel, "by": by or "", "note": note,
+                                 "commit": commit}, ensure_ascii=False) + "\n")
+    except OSError as ex:
+        print(f"ERROR: signoff-log 寫入失敗: {ex}", file=sys.stderr)
+        return 2
+    rc = cmd_set(env, rel, "signed_off", today)
+    if rc != 0:
+        print("⚠ ledger 已記但 frontmatter 戳記失敗(見上)", file=sys.stderr)
+        return rc
+    print(f"✓ signoff {rel} — {today}{('(' + by + ')') if by else ''}: {note[:60]}")
+    return 0
+
+
 def cmd_gov(env, node=None, since_days=90):
     """唯讀彙整 bypass-log/rot-queue/governance-log → 治理事件時間軸 / 某節點被哪幾道閘攔過。
     本機開發可見性工具(非合規物)。L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖。"""
@@ -1536,6 +1623,11 @@ def cmd_gov(env, node=None, since_days=90):
     load(".governance-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
          "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
          "nodes": [stem(x) for x in d.get("nodes", [])], "detail": d.get("note", "")})
+    # 第 6 源:業務簽核留痕(validation:人對業務正確性點頭的日期/人/內容)。
+    load(".signoff-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+         "gate": "signoff", "kind": "signed", "hard": False,
+         "token": d.get("ts", ""), "nodes": [stem(d.get("node", ""))],
+         "detail": (d.get("by", "") + " " + d.get("note", "")).strip()})
     # 第 5 源:kill 殺傷力驗證留痕(guard kill 的 verdict 史)。
     load(".kill-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
          "gate": "kill", "kind": d.get("verdict", "?"), "hard": False,
@@ -3399,7 +3491,7 @@ def cmd_export_html(env, out_path, standalone=False):
 
 # ═══════════════════════ 階段三: 寫側 T1(行級手術) ═══════════════════════
 
-SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit"}
+SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off"}
 LIST_KEYS = {"verified_by", "plan_refs", "related", "tags"}
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -4556,7 +4648,7 @@ def _scaffold_project(root: Path, slug: str):
     _write_lf(kg / "MOC" / "index.md",
               f"---\ntype: moc\nstatus: doing\n---\n# {slug} 知識圖譜總索引\n")
     _write_lf(kg / ".gitignore",
-              ".bypass-log.jsonl\n.rot-queue.jsonl\n.governance-log.jsonl\n.canary-log.jsonl\n.kill-log.jsonl\n")
+              ".bypass-log.jsonl\n.rot-queue.jsonl\n.governance-log.jsonl\n.canary-log.jsonl\n.kill-log.jsonl\n.signoff-log.jsonl\n")
     print(f"  ✓ scaffold {kg}")
 
 
@@ -5682,6 +5774,7 @@ _COCHANGE_DEFAULTS = {"min_support": 3, "min_confidence": 0.8, "max_changeset": 
 _COCHANGE_DEFAULT_EXCLUDE = [
     "docs/.governance-log.jsonl", "docs/.bypass-log.jsonl",
     "docs/.canary-log.jsonl", "docs/.rot-queue.jsonl", "docs/.kill-log.jsonl",
+    "docs/.signoff-log.jsonl",
     "**/*-lock.json", "**/*.lock", "**/node_modules/**", "**/dist/**",
     "**/Migrations/**", "**/*.g.cs", "**/*.Designer.cs",
 ]
@@ -7263,6 +7356,15 @@ def main():
     gk.add_argument("--json", dest="gk_json", action="store_true", help="輸出 JSON manifest")
     gk.add_argument("--keep-worktree", action="store_true", help="保留沙盒現場(除錯)")
 
+    p = sub.add_parser("spec-trace", help="條款級追溯(RTM 輕量):計劃 [SN] 條款 × 回指 Verification 認領;未認領 rc1")
+    p.add_argument("node", help="計劃節點")
+    p.add_argument("--json", dest="st_json", action="store_true")
+
+    p = sub.add_parser("signoff", help="業務簽核留痕(validation):人點頭 → .signoff-log.jsonl + frontmatter signed_off")
+    p.add_argument("node")
+    p.add_argument("--note", required=True, help="確認了什麼(必填,給未來的人看)")
+    p.add_argument("--by", help="誰確認的")
+
     p = sub.add_parser("sync-verified-by", help="補 Check 3 漏寫的 verified_by(dry-run 預設)")
     p.add_argument("--apply", action="store_true", help="真寫入(否則 dry-run 只列)")
 
@@ -7528,6 +7630,10 @@ def main():
     if args.cmd == "lint":
         return cmd_lint(env, args.note)
 
+    if args.cmd == "spec-trace":
+        return cmd_spec_trace(env, args.node, as_json=args.st_json)
+    if args.cmd == "signoff":
+        return cmd_signoff(env, args.node, note=args.note, by=args.by)
     if args.cmd == "gov":
         return cmd_gov(env, args.node, args.since)
 

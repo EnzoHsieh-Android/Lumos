@@ -7566,6 +7566,57 @@ def t_guard_kill():
     shutil.rmtree(root, ignore_errors=True)
 
 
+def t_spec_trace_and_signoff():
+    import subprocess as sp, json
+    with tempfile.TemporaryDirectory() as d:
+        v = Path(d) / "docs" / "x-knowledge"
+        for sub_ in ("Projects", "Verification", "MOC"):
+            (v / sub_).mkdir(parents=True)
+        (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+        (v / "Projects" / "P_計劃.md").write_text(
+            "---\ntype: project\nstatus: doing\n---\n# P\n\n## 變更規格\n"
+            "- [S1] 做 A\n- [S2] 做 B\n- [S3] 做 C\n", encoding="utf-8")
+        (v / "Verification" / "V1.md").write_text(
+            "---\ntype: verification\nstatus: pass\nplan_refs:\n  - \"[[P_計劃]]\"\n---\n"
+            "# V1\n驗了 [S1] 與 [S2]。\n", encoding="utf-8")
+        # 沒回指的 Verification 提及 S3 → 不算認領
+        (v / "Verification" / "V2.md").write_text(
+            "---\ntype: verification\nstatus: pass\n---\n# V2\n順帶提到 [S3]。\n", encoding="utf-8")
+        def lum(*a):
+            return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                          capture_output=True, text=True)
+        r = lum("spec-trace", "Projects/P_計劃", "--json")
+        check("spec-trace 未認領 rc1", r.returncode == 1, f"rc={r.returncode} {r.stderr}")
+        dd = json.loads(r.stdout.strip().splitlines()[-1])
+        check("spec-trace S3 未認領(無回指不算)", dd["unclaimed"] == ["S3"], str(dd))
+        check("spec-trace S1 認領者=V1", dd["clauses"]["S1"] == ["Verification/V1.md"], str(dd))
+        # 補認領 → rc0
+        (v / "Verification" / "V3.md").write_text(
+            "---\ntype: verification\nstatus: pass\nplan_refs:\n  - \"[[P_計劃]]\"\n---\n"
+            "# V3\n[S3] 落地。\n", encoding="utf-8")
+        r = lum("spec-trace", "Projects/P_計劃")
+        check("spec-trace 全認領 rc0", r.returncode == 0, r.stdout)
+        # opt-in 未啟用
+        (v / "Projects" / "Q_計劃.md").write_text(
+            "---\ntype: project\nstatus: doing\n---\n# Q\n無標記。\n", encoding="utf-8")
+        r = lum("spec-trace", "Projects/Q_計劃")
+        check("spec-trace 無標記 rc0+提示", r.returncode == 0 and "opt-in" in r.stdout, r.stdout)
+
+        # signoff
+        r = lum("signoff", "Projects/P_計劃", "--note", "業務規則已對過帳", "--by", "enzo")
+        check("signoff rc0", r.returncode == 0, r.stderr)
+        txt = (v / "Projects" / "P_計劃.md").read_text(encoding="utf-8")
+        check("signoff frontmatter 戳記", "signed_off:" in txt, txt[:200])
+        slog = v.parent / ".signoff-log.jsonl"
+        check("signoff ledger 一筆", slog.exists() and "enzo" in slog.read_text(encoding="utf-8"), "")
+        r = lum("gov")
+        check("gov 撈得到 signoff", "signoff/signed" in r.stdout, r.stdout[-300:])
+        # 重簽:ledger 累加
+        r = lum("signoff", "Projects/P_計劃", "--note", "第二次確認")
+        check("signoff 重簽 rc0", r.returncode == 0, r.stderr)
+        check("ledger 兩筆", slog.read_text(encoding="utf-8").count("\n") == 2, "")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

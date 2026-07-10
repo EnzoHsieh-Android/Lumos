@@ -2,14 +2,16 @@
 type: system
 status: done
 created: 2026-07-04
-updated: 2026-07-04
+updated: 2026-07-10
 tags:
   - type/system
   - status/done
 verified_by:
   - "[[Verification/2026-07-04_pitfalls-code-loop]]"
   - "[[Verification/2026-07-05_code-loop必用守衛]]"
+  - "[[Verification/2026-07-10_合約鏈補強234]]"
 summary: |-
+  KEY:[2026-07-10]panel 追加 spec-conformance slot(tier=high 且有收斂 spec→對答案審查員,四類:已實作/縮水/多做/未實作;templates §7.5)
   FLOW:pitfalls spec 模式(剝除對齊 assess_spec+防呆→掃 PITFALL_CLASSES 四類→印通用3問+命中類追問)｜--check(命中類且無「## 實務隱患」節→rc1)｜--diff(掃新增行 Check H 骨架+代碼形態 pattern→manifest{file,line,class,pattern,question}+尾行 tier;line 由 @@ 推導;rc 恆0)→ tier high 觸發 lumos-code-loop 終審對抗審(bug canary 四型+辯方+K-streak∧G2 收斂,loop status --gate 無 --spec G1 skip)
   KEY:兩層隱患兩錨點——設計決策級(冪等鍵/重試策略)錨 spec 層 pitfalls --check;代碼級(N+1/race/資源洩漏)錨終審 --diff+code-loop。補審計火力頭重腳輕(spec 有整套對抗機器、代碼原只兩道普通眼)
   KEY:三道防污染(不可違反)——真代碼永不含(fix 錨真 diff file:line、canary hunk 不在真 diff)｜低耦合植入(canary 座標在真改動集外=pillar-1 機械前提)｜溯源排除(含間接聯想幻影,未顯式引用亦排;偏多排)
