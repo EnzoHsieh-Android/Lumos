@@ -237,7 +237,8 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         verdict["fusion_vs_graph"] = beats(fp, fn, gp, gn)
         verdict["free_median_le_topk"] = med is not None and med <= k_edit
         verdict["free_p95_le_topk2"] = p95 is not None and p95 <= k_edit + 2
-        verdict["must_see_recall"] = round(must_hit / must_t, 4) if must_t else None
+        verdict["must_in_out_recall"] = round(must_hit / must_t, 4) if must_t else None
+        verdict["must_pinned_count"] = must_pin   # 唯一機保=固定席;in_out 含自由席無保底,勿混讀
     return {"split": tag, "search": srows, "edit": erows, "verdict": verdict}
 
 
@@ -268,7 +269,7 @@ def main():
         try:
             gs = json.loads(Path(args.goldset).read_text(encoding="utf-8"))
             gs["labels"]; gs["search"]; gs["edit"]
-        except (OSError, ValueError, KeyError) as e:
+        except (OSError, ValueError, KeyError, TypeError) as e:
             print(f"ERROR: goldset 讀取/結構失敗: {e}", file=sys.stderr)
             return 2
         unl = sum(1 for c in gs["labels"].values() for v in c.values() if v.get("final") is None)
@@ -299,7 +300,10 @@ def main():
         print(f"gate 總判定: {'PASS — 可翻預設' if ok else 'FAIL — 維持 dormant'}")
         hist = Path(__file__).parent / "retrieval-eval-history.jsonl"
         with open(hist, "a", encoding="utf-8") as fh:
+            head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
             fh.write(json.dumps({"mode": "goldset", "ts": datetime.date.today().isoformat(),
+                                 "eval_head": head, "vault_note": "活語料:節點增修致數字 ±1pp 漂移;重現=checkout eval_head 重跑",
                                  "k": args.k, "gates": gates, "pass": ok,
                                  "verdicts": {r["split"]: r["verdict"] for r in reports}},
                                 ensure_ascii=False) + "\n")

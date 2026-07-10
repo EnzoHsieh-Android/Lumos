@@ -8,7 +8,7 @@ tags:
   - status/done
 summary: |-
   FLOW:tokenize(CJK bigram+ASCII拆分)→BM25F(欄位tf加權於飽和前,平滑IDF)→search --ranked只重排既有候選｜_reco(BFS-decay 1/2^k+共引同行×2飽和+Jaccard;G=0.6/0.25/0.15)×BM25F融合(R=0.6L+0.4G)→context --recommend｜impact --ranked(固定席=事故+合約,不占top_k;動態閾;stdin單包JSON prospective)→hook降噪(v1.1待接)
-  KEY:search面已轉正預設(2026-07-11,goldset §6全過:修正尺 nDCG@5 +58.1%/held +106.8%;--legacy逃生,--regex走舊路,預設全量+逐檔命中明細——資訊零損失);recommend/impact面dormant(hook面gate未過:P@8=.52、過閾中位16、固定席噪音9/44);hop≥2需L>0、hop1只受靜態底線;結構前綴停用集(KEY:/FLOW:模板詞不算詞彙訊號);A1型別先驗:moc×0.4乘於詞彙分(train網格凍結,held零倒退,見[[Projects/節點靜態先驗_調研]])
+  KEY:search面已轉正預設(2026-07-11,goldset §6全過:修正尺 nDCG@5 +58.1%/held +106.8%;--legacy逃生,--regex走舊路,預設全量+逐檔命中明細——資訊零損失);recommend/impact面dormant(hook面gate未過:P@8≈.51、過閾中位17、固定席噪音9/44);hop≥2需L>0、hop1只受靜態底線;結構前綴停用集(KEY:/FLOW:模板詞不算詞彙訊號);A1型別先驗:moc×0.4乘於詞彙分(train網格凍結,held零倒退,見[[Projects/節點靜態先驗_調研]])
   KEY:★DEBT★ 多詞片語候選=legacy片語語意(0候選不回退)｜cochange proxy對圖譜related面太稀(兩vault實證,僅sanity check)｜hook接線v1.1待評測
   DEP:[[Systems/lumos-cli-read]][[Systems/cochange-guard]]
   TEST:51/51(t_tokenizer_unit 7+t_search_ranked 17+t_context_recommend 10+t_impact_ranked 8+t_impact_diff 9)+全套994綠 | VERIFY:[[Verification/2026-07-10_檢索排序v1]][[Verification/2026-07-11_檢索goldset評測]]

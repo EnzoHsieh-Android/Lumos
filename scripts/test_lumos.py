@@ -7696,10 +7696,13 @@ def t_search_ranked():
     r = lum("search", "impact_hook", "--ranked", "--json")
     dd = json.loads(r.stdout.strip().splitlines()[-1])
     check("ranked ASCII 詞命中", any("Mixed" in x["node"] for x in dd["results"]), str(dd)[:200])
-    # --top 限量
+    # --top 限量;預設 0=全量(r2 codex:前輪截斷 blocker 的回歸鎖)
     r = lum("search", "檢索", "--ranked", "--top", "1", "--json")
     dd = json.loads(r.stdout.strip().splitlines()[-1])
     check("ranked --top 1", len(dd["results"]) == 1, str(dd)[:150])
+    r = lum("search", "檢索", "--json")
+    dfull = json.loads(r.stdout.strip().splitlines()[-1])
+    check("預設全量(results=candidates)", len(dfull["results"]) == dfull["candidates"] > 1, str(dfull)[:150])
     # --files-only + --ranked:按分數排
     r = lum("search", "檢索", "--ranked", "--files-only")
     first = r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
@@ -7884,6 +7887,8 @@ def t_impact_diff():
     (root / "src" / "other.py").write_text("pass\n", encoding="utf-8")
     (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n改一下\n", encoding="utf-8")
     g("rm", "-q", "src/old.py")
+    (root / "src" / "服務.py").write_text("cjk = True\n", encoding="utf-8")
+    (v / "Systems" / "服務核心.md").write_text("---\ntype: system\nstatus: done\nsummary: |-\n  KEY:x\n---\n# 服務核心\n", encoding="utf-8")
     (root / "governance" / "eval").mkdir(parents=True)
     (root / "governance" / "eval" / "data.json").write_text('{"x": 1}', encoding="utf-8")
     (root / "README.md").write_text("# readme\n", encoding="utf-8")
@@ -7902,6 +7907,8 @@ def t_impact_diff():
           "governance/eval/data.json" not in d["files"] and "README.md" not in d["files"], str(d["files"]))
     check("已刪檔的合約節點進固定席(OldSvc)", any("OldSvc" in x["node"] for x in d["results"] if x.get("pinned")),
           str([x["node"] for x in d["results"]]))
+    check("CJK 檔名:code 檔進種子(quotePath 修)", "src/服務.py" in d["files"], str(d["files"]))
+    check("CJK 檔名:圖譜節點仍被濾掉", not any("服務核心" in f2 for f2 in d["files"]), str(d["files"]))
     pinned = [x for x in d["results"] if x.get("pinned")]
     check("合約節點固定席(SvcCore)", any("SvcCore" in x["node"] for x in pinned), str(pinned)[:200])
     check("事故被磁碟現況觸發(SQL)", any("SQL" in x["node"] for x in pinned), str(pinned)[:200])

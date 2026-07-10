@@ -30,7 +30,7 @@ PRIOR-ART: 沿用 [[Projects/檢索優化_計劃]] §3（hook 降噪機件,已 g
 
 ## 驗證
 
-- t_impact_diff 9 斷言：rc/manifest 結構/seed 過濾（code 檔進、圖譜節點與已刪檔不進）/合約固定席/事故磁碟觸發/非固定帶來源檔/人讀標頭/參數守衛 rc2。
+- t_impact_diff 14 斷言：rc/manifest 結構/seed 過濾（code 檔進、圖譜節點與 governance 資料檔不進、**已刪檔保留**、CJK 檔名 quotePath）/已刪檔合約節點固定席/事故磁碟觸發/非固定帶來源檔/人讀標頭/參數守衛 rc2。
 - 真機（本 repo HEAD~3..HEAD,15 檔）：固定席 3（2 事故+1 合約）浮頂,自由席前三=該批 commit 實際動到的功能節點（檢索優化_計劃/retrieval-ranking/goldset 驗證）——語意正確。
 
 ## 未來方向：落成位置閉環（使用者提案,未實作）
