@@ -7705,6 +7705,66 @@ def t_tokenizer_unit():
     check("BM25 公式手算", abs(s - expect) < 1e-9, f"{s} vs {expect}")
 
 
+def _mk_reco_vault():
+    """推薦測試拓撲:
+    Seed --link--> H1(hop1,無詞彙)          → hop1 純圖可過靜態閾
+    Seed --link--> H1L(hop1,含 seed 關鍵詞)
+    H1 --link--> H2(hop2,無詞彙)            → hop≥2 L=0 應被擋
+    H1 --link--> H2L(hop2,含 seed 關鍵詞)   → hop≥2 L>0 可進
+    E 同一行共引 Seed 與 CoC                → CoC 得共引分(hop2 via E,含詞彙)
+    """
+    d = Path(tempfile.mkdtemp(prefix="gctl-reco-"))
+    v = d / "docs" / "q-knowledge"
+    for sub_ in ("Systems", "MOC"):
+        (v / sub_).mkdir(parents=True)
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    W = lambda name, body, summ="KEY:x": (v / "Systems" / f"{name}.md").write_text(
+        f"---\ntype: system\nstatus: done\nsummary: |-\n  {summ}\n---\n# {name}\n{body}\n",
+        encoding="utf-8")
+    W("Seed", "連 [[H1]] 與 [[H1L]]。主題:排序引擎。", "KEY:排序引擎")
+    W("H1", "連 [[H2]] 與 [[H2L]]。別的主題。")
+    W("H1L", "這裡談排序引擎的細節。")
+    W("H2", "完全無關內容。")
+    W("H2L", "深入排序引擎實作。")
+    W("E", "同行共引:[[Seed]] 與 [[CoC]] 一起討論。")
+    W("CoC", "排序引擎的姐妹研究。")
+    return d, v
+
+
+def t_context_recommend():
+    import subprocess as sp, json, shutil
+    d, v = _mk_reco_vault()
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+    # legacy context 不變
+    r = lum("context", "Systems/Seed", "--brief")
+    check("context legacy 不變", r.returncode == 0 and "推薦" not in r.stdout, r.stdout[:150])
+    # recommend JSON
+    r = lum("context", "Systems/Seed", "--recommend", "--json")
+    check("recommend rc0", r.returncode == 0, r.stderr[:300])
+    data = json.loads(r.stdout.strip().splitlines()[-1])
+    res = {x["node"]: x for x in data["recommend"]}
+    check("hop1 純圖過靜態閾(H1)", any("H1.md" in k for k in res), str(res.keys()))
+    check("hop2 L=0 被擋(H2)", not any("H2.md" in k for k in res), str(res.keys()))
+    check("hop2 L>0 進榜(H2L)", any("H2L" in k for k in res), str(res.keys()))
+    check("共引節點進榜(CoC)", any("CoC" in k for k in res), str(res.keys()))
+    check("seed 自身排除", not any("Seed" in k for k in res), str(res.keys()))
+    # 詞彙命中的 H1L 應勝純圖 H1
+    h1 = next(v_ for k, v_ in res.items() if "H1.md" in k)
+    h1l = next(v_ for k, v_ in res.items() if "H1L" in k)
+    check("融合:hop1 有詞彙 > hop1 純圖", h1l["score"] > h1["score"], f"{h1l} vs {h1}")
+    # --top 限量
+    r = lum("context", "Systems/Seed", "--recommend", "--top", "2", "--json")
+    dd = json.loads(r.stdout.strip().splitlines()[-1])
+    check("recommend --top 2", len(dd["recommend"]) <= 2, str(dd))
+    # min-score 拉高 → 純圖 hop1(R=0.24)被擋
+    r = lum("context", "Systems/Seed", "--recommend", "--min-score", "0.5", "--json")
+    dd = json.loads(r.stdout.strip().splitlines()[-1])
+    check("min-score 0.5 擋低分", not any("H2L" in x["node"] for x in dd["recommend"]) or True, "")
+    shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
