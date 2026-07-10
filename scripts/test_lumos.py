@@ -7641,6 +7641,9 @@ def _mk_rank_vault():
     (v / "Systems" / "Mixed.md").write_text(
         "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:impact_hook 相關\n---\n# Mixed\nimpact_hook 出現處。\n",
         encoding="utf-8")
+    # MOC hub:標題也含「檢索」——A1 型別先驗該把它壓到 system 標題命中之下
+    (v / "MOC" / "檢索索引.md").write_text(
+        "---\ntype: moc\n---\n# 檢索索引\n檢索相關節點列表。\n", encoding="utf-8")
     return d, v
 
 
@@ -7676,6 +7679,19 @@ def t_search_ranked():
               < names.index([n for n in names if "Beta" in n][0]), str(names))
     # 候選不擴:ranked 的結果集 ⊆ legacy 命中集(Mixed 不含「檢索」不得出現)
     check("ranked 候選不擴", not any("Mixed" in n for n in names), str(names))
+    # A1 型別先驗:MOC 標題命中被降權到 system 標題命中之下;override=1.0 時分數回升
+    moc_hit = [x for x in data["results"] if "檢索索引" in x["node"]]
+    sys_hit = [x for x in data["results"] if "檢索引擎" in x["node"]]
+    check("A1 MOC 降權:system 標題勝 MOC 標題", moc_hit and sys_hit
+          and sys_hit[0]["score"] > moc_hit[0]["score"], str(data["results"])[:250])
+    import os as _os
+    env1 = dict(_os.environ, LUMOS_RANK_MOC_MULT="1.0")
+    r = sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "search", "檢索", "--ranked", "--json"],
+               capture_output=True, text=True, env=env1)
+    d1 = json.loads(r.stdout.strip().splitlines()[-1])
+    moc1 = [x for x in d1["results"] if "檢索索引" in x["node"]]
+    check("A1 消融覆寫:mult=1.0 時 MOC 分數高於降權版", moc1 and moc_hit
+          and moc1[0]["score"] > moc_hit[0]["score"], f"{moc1} vs {moc_hit}")
     # ASCII 命中:impact_hook 拆詞
     r = lum("search", "impact_hook", "--ranked", "--json")
     dd = json.loads(r.stdout.strip().splitlines()[-1])

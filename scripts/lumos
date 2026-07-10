@@ -963,9 +963,25 @@ def _rank_fields(env, rel):
             "tags": tags, "body": body, "type": str(f.get("type") or "")}
 
 
+_RANK_TYPE_MULT_MOC = 0.4   # A1 型別先驗:MOC=hub 降權(goldset 實證關鍵字磁鐵;train 網格凍結)
+
+
+def _rank_type_mult(env, rel):
+    """型別先驗乘數(A1,節點靜態先驗_調研):moc 降權、其餘 1.0。
+    降權用乘法(比例效果跨 query 一致,企業搜尋標準);LUMOS_RANK_MOC_MULT 供評測消融覆寫。"""
+    n = env.notes.get(rel)
+    t = str(((n.fields.get("type") if n and isinstance(n.fields, dict) else "") or "")).strip().lower()
+    if t == "moc":
+        try:
+            return float(os.environ.get("LUMOS_RANK_MOC_MULT", _RANK_TYPE_MULT_MOC))
+        except ValueError:
+            return _RANK_TYPE_MULT_MOC
+    return 1.0
+
+
 def _rank_score_candidates(env, query, candidates):
-    """對候選集跑 BM25F(欄位 tf 加權於飽和前,單一虛擬文件)。回 [(rel, score, hits)]。
-    N/df/avgdl 以候選集為 corpus(排序目的,絕對值不跨查詢比較)。"""
+    """對候選集跑 BM25F(欄位 tf 加權於飽和前,單一虛擬文件)× 型別先驗乘數(A1)。
+    回 [(rel, score, hits)]。N/df/avgdl 以候選集為 corpus(排序目的,絕對值不跨查詢比較)。"""
     q_tokens = list(dict.fromkeys(_rank_tokenize(query)))
     if not q_tokens or not candidates:
         return [(r, 0.0, []) for r in candidates]
@@ -995,7 +1011,7 @@ def _rank_score_candidates(env, query, candidates):
                 continue
             score += _rank_bm25(tf, _rank_idf(n_docs, df[tok]), dl, avgdl)
             hits.append(tok)
-        out.append((rel, round(score, 4), hits))
+        out.append((rel, round(score * _rank_type_mult(env, rel), 4), hits))
     out.sort(key=lambda x: (-x[1], x[0]))
     return out
 
