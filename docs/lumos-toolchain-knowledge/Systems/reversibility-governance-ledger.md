@@ -20,7 +20,7 @@ summary: |-
   KEY:checkpoint 標記缺回退只 warn_soft(印但不計 issues)→ doctor --ci 仍 rc0;新增 warn_soft 因既有 warn 會 issues+=1 在 --ci 下誤擋[test:t_reversibility_doctor]
   KEY:可逆性標記僅限 type=system;標在 Issue/Verification → error 標錯型別;type 缺失/非字串不崩不誤報
   KEY:[rollback:]/[guard:] v1 唯一支援形式 = decisions,語義=本節點 decisions[] 有 ≥1 條非空 rollback/guard 內容;其他 ref 值視為未解析
-  KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);四來源 = bypass-log(L2)/rot-queue(L3)/governance-log(doctor)/canary-log;dedup 在讀時做
+  KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);六來源 = bypass-log(L2)/rot-queue(L3)/governance-log(doctor)/canary-log/kill-log/signoff-log;dedup 在讀時做
   KEY:gov 三檔皆 gitignore local-only,是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
   KEY:Check H(後加)僅 --ci 掃 git diff,正則命中疑似不可逆動作(prod/smtp/DROP TABLE…)而無不可逆標記時軟提醒,不擋
   DEP:scripts/lumos run_doctor(Check R/Check H)｜cmd_lint(單檔 Check R)｜cmd_gov｜extract_reversibility/_rollback_resolved/_guard_resolved｜parse_decisions(吃 rollback/guard sub-key)
@@ -73,7 +73,7 @@ decisions:
 硬擋的語義是「逼你寫下 undo 路徑」，**證明你寫了補償步驟，不證明補償跑得動、不證明與現行 schema 一致**（那是 validation，工具到不了）。「有 `[rollback:]`」≠「驗過能用」。措辭刻意與硬擋一致：硬擋的是「有沒有寫下實質 undo」，不是「undo 能不能跑」。
 
 ### `lumos gov` 唯讀彙整
-- 四來源（`cmd_gov`，L1252）：`.bypass-log.jsonl`（L2 繞過）、`.rot-queue.jsonl`（L3 rot）、`.governance-log.jsonl`（doctor `--ci` 新寫者）、`.canary-log.jsonl`（canary 審計留痕，spec 後加，commit 58ae539）。
+- 六來源（`cmd_gov`）：`.bypass-log.jsonl`（L2 繞過）、`.rot-queue.jsonl`（L3 rot）、`.governance-log.jsonl`（doctor `--ci`）、`.canary-log.jsonl`（canary 審計）、`.kill-log.jsonl`（殺傷力驗證，2026-07-10）、`.signoff-log.jsonl`（業務簽核，2026-07-10）。
 - dedup 在**讀時**做，key = `(commit, frozenset(nodes), gate, kind, token)`；`nodes` 寫入即 stem 化，讀時 stem 比對。
 - 預設 `--since 90`（單位：天）；三檔皆 gitignore，**本機開發可見性工具，非合規物**（移除了原提案的歐盟 Art.12 合規宣稱）。
 - 已知限制（輸出明確標示）：L2 繞過無 node、L3 以 Verification 為鍵 → 對 Systems 節點為**部分**視圖；v1 不載 vault graph 做 Systems↔Verification 反查 join。

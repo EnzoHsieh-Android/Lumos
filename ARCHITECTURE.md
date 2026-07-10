@@ -101,7 +101,7 @@ flowchart TB
     ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 44 個頂層命令)"]
 
     ROOT --> READ["讀取 / 導航 (11)"]
-    ROOT --> HEALTH["巡檢 / 治理 (6)"]
+    ROOT --> HEALTH["巡檢 / 治理 (8)"]
     ROOT --> WRITE["寫入 (6)"]
     ROOT --> GUARD["合約守衛 (guard*)"]
     ROOT --> LOOP["對抗審計 loop (6)"]
@@ -110,7 +110,7 @@ flowchart TB
     ROOT --> LIFE["安裝 / 生命週期 (6)"]
 
     READ --> R["context · contracts · search · links<br/>backlinks · map · export · decisions<br/>stale · recent · stats"]
-    HEALTH --> H["doctor · lint · lint-watch<br/>self-audit · sync-verified-by · gov"]
+    HEALTH --> H["doctor · lint · lint-watch<br/>self-audit · sync-verified-by · gov<br/>spec-trace · signoff"]
     WRITE --> W["set · append · new · archive<br/>decision-add · decision-supersede"]
     GUARD --> G["guard {list · scaffold · bind · audit · trace}<br/>(★INVARIANT★→[test:]→[audit:] 綁定鏈)"]
     LOOP --> LP["pitfalls (--diff tier) · code-loop {pass/skip/check}<br/>canary {record} · loop {status}<br/>fold-check · refcheck"]

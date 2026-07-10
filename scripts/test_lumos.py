@@ -7611,6 +7611,9 @@ def t_spec_trace_and_signoff():
         check("signoff ledger 一筆", slog.exists() and "enzo" in slog.read_text(encoding="utf-8"), "")
         r = lum("gov")
         check("gov 撈得到 signoff", "signoff/signed" in r.stdout, r.stdout[-300:])
+        # 空 note 拒絕(殺 M3:必填弱化)
+        r = lum("signoff", "Projects/P_計劃", "--note", "  ")
+        check("signoff 空 note rc2(殺 M3)", r.returncode == 2, str(r.returncode))
         # 重簽:ledger 累加
         r = lum("signoff", "Projects/P_計劃", "--note", "第二次確認")
         check("signoff 重簽 rc0", r.returncode == 0, r.stderr)
