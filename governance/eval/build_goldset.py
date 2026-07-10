@@ -41,7 +41,7 @@ def split_of(cid):
 
 def search_pool(q):
     """池 = legacy 命中前 8 ∪ ranked 前 8(去識別:只留節點名,洗牌)"""
-    legacy = [l.split(" (")[0] for l in lum_lines("search", q, "--files-only")
+    legacy = [l.split(" (")[0] for l in lum_lines("search", q, "--legacy", "--files-only")
               if l.split(" (")[0].endswith(".md") and "/" in l][:8]
     ranked = [x["node"] for x in lum_json("search", q, "--ranked", "--top", "8", "--json").get("results", [])]
     pool = list(dict.fromkeys(legacy + ranked))

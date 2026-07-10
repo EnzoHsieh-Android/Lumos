@@ -114,7 +114,7 @@ def eval_search(gs, split=None, k=5):
         if not lab or not any(v >= 1 for v in lab.values()):
             continue  # 無相關項的案例對 nDCG 無定義,跳過並記數
         n_rel = sum(1 for v in lab.values() if v >= 1)
-        legacy = [l.split(" (")[0] for l in _lum_lines("search", q, "--files-only")
+        legacy = [l.split(" (")[0] for l in _lum_lines("search", q, "--legacy", "--files-only")
                   if l.split(" (")[0].endswith(".md") and "/" in l]
         ranked = [x["node"] for x in
                   _lum("search", q, "--ranked", "--top", "10", "--json").get("results", [])]

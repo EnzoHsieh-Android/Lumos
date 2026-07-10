@@ -7650,9 +7650,18 @@ def t_search_ranked():
     def lum(*a):
         return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
                       capture_output=True, text=True)
-    # legacy 不變:無 --ranked 仍字母序、無分數
+    # 轉正(2026-07-11):預設=ranked;--legacy 逃生走舊字母序全量
+    r = lum("search", "檢索", "--legacy")
+    check("search --legacy 無分數照舊", r.returncode == 0 and "候選" not in r.stdout
+          and ("處 /" in r.stdout), r.stdout[:200])
     r = lum("search", "檢索")
-    check("search legacy 無分數", r.returncode == 0 and "score" not in r.stdout, r.stdout[:200])
+    check("search 預設 ranked rc0", r.returncode == 0, r.stderr[:200])
+    first = r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
+    check("search 預設首行=標題命中帶分數", "檢索引擎" in first and any(c.isdigit() for c in first),
+          r.stdout[:200])
+    check("search 預設保留逐檔命中明細", "[body]" in r.stdout or "[H1]" in r.stdout
+          or "[fm:" in r.stdout, r.stdout[:300])
+    check("search 預設尾註提示 --legacy", "--legacy" in r.stdout, r.stdout[-200:])
     # ranked:標題命中(檢索引擎)必須排第一,勝 body 單次(Alpha)與 body 多次(Beta)
     r = lum("search", "檢索", "--ranked", "--json")
     check("search --ranked rc0", r.returncode == 0, r.stderr[:200])

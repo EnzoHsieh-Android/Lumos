@@ -1005,7 +1005,9 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     """全文搜尋(frontmatter + body)。預設大小寫不敏感 substring;--regex 用正則。
     預設**排除 fenced code 區塊 + inline code**(對齊 doctor 連結抽取的慣例,--code 才含);
     context 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。職責=自由文字;結構化查詢走
-    contracts/decisions/stale/doctor。取代 obsidian search(2026-06-13)。"""
+    contracts/decisions/stale/doctor。取代 obsidian search(2026-06-13)。
+    2026-07-11 起 ranked(BM25F 相關性排序)為 CLI 預設(goldset 評測 §6 search 面全過:
+    nDCG@5 +57%);只重排既有候選、不擴召回;--legacy 走舊字母序全量,--regex 自動走舊路。"""
     if regex:
         try:
             pat = re.compile(term, re.IGNORECASE)
@@ -1019,7 +1021,8 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     if ranked and regex:
         print("(--ranked 不適用 --regex 模式,照舊輸出)", file=sys.stderr)
         ranked = False
-    _cand_hits = {}   # ranked:rel -> hit 行數(候選=legacy 命中集,不擴召回)
+    _cand_hits = {}     # ranked:rel -> hit 行數(候選=legacy 命中集,不擴召回)
+    _cand_detail = {}   # ranked:rel -> (hits, fm_end) 供逐檔明細輸出
     total_files = total_hits = 0
     for rel in sorted(env.notes):
         if path_prefix and not rel.startswith(path_prefix):
@@ -1051,6 +1054,7 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
         total_hits += len(hits)
         if ranked:
             _cand_hits[rel] = len(hits)
+            _cand_detail[rel] = (hits, fm_end)
             continue
         if files_only:
             print(f"{rel} ({len(hits)})")
@@ -1075,9 +1079,17 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             for rel, score, _h in scored:
                 print(f"{rel} ({_cand_hits[rel]})")
         else:
-            for rel, score, hits in scored:
-                print(f"{score:7.3f}  {rel}  [{','.join(hits[:5])}]")
-            print(f"\n(top {len(scored)} / 候選 {len(_cand_hits)})")
+            for rel, score, toks in scored:
+                print(f"{score:7.3f}  {rel}  [{','.join(toks[:5])}]")
+                d_hits, d_fm = _cand_detail.get(rel, ([], 0))
+                for lineno, ln in d_hits[:8]:
+                    s = ln.strip()
+                    tag = _search_region(lineno, ln, d_fm)
+                    disp = s if len(s) <= 90 else s[:90] + "…"
+                    print(f"    {lineno} [{tag}]: {disp}")
+                if len(d_hits) > 8:
+                    print(f"    … 還有 {len(d_hits) - 8} 處")
+            print(f"\n(top {len(scored)} / 候選 {len(_cand_hits)};相關性排序,--legacy 走舊字母序全量)")
         return 0
     suffix = f"(限 {path_prefix})" if path_prefix else ""
     if not include_code:
@@ -7711,9 +7723,11 @@ def main():
     p.add_argument("--regex", action="store_true", help="term 當正則(預設 substring 大小寫不敏感)")
     p.add_argument("--files-only", action="store_true", help="只列檔名+命中數")
     p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
-    p.add_argument("--ranked", action="store_true", help="BM25F 相關性排序(只重排既有候選;dormant v1)")
-    p.add_argument("--top", type=int, default=20, help="--ranked 時輸出上限(預設 20)")
-    p.add_argument("--json", dest="search_json", action="store_true", help="--ranked 時輸出 JSON manifest")
+    p.add_argument("--ranked", action="store_true", help="BM25F 相關性排序(2026-07-11 起已是預設,旗標保留相容)")
+    p.add_argument("--legacy", action="store_true", dest="search_legacy",
+                   help="舊行為:字母序+全量輸出(轉正前預設;--regex 自動走此路)")
+    p.add_argument("--top", type=int, default=20, help="相關性排序輸出上限(預設 20)")
+    p.add_argument("--json", dest="search_json", action="store_true", help="相關性排序 JSON manifest")
 
     p = sub.add_parser("map", help="鄰域樹狀展開")
     p.add_argument("note")
@@ -7962,9 +7976,14 @@ def main():
         return cmd_decisions(env, rel)
 
     if args.cmd == "search":
+        # 2026-07-11 轉正:相關性排序為預設(goldset 評測 §6 search 面全過);
+        # --legacy 逃生;--regex 自動走舊路(候選語意不同,靜默、不印 fallback note)
+        _use_ranked = not args.search_legacy and not args.regex
+        if args.ranked and args.regex:
+            print("(--ranked 不適用 --regex 模式,照舊輸出)", file=sys.stderr)
         return cmd_search(env, args.term, path_prefix=args.path_prefix,
                           regex=args.regex, files_only=args.files_only,
-                          include_code=args.code, ranked=args.ranked, top=args.top,
+                          include_code=args.code, ranked=_use_ranked, top=args.top,
                           as_json=args.search_json)
 
     if args.cmd == "contracts":
