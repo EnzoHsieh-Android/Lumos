@@ -7908,7 +7908,10 @@ def t_impact_diff():
     check("已刪檔的合約節點進固定席(OldSvc)", any("OldSvc" in x["node"] for x in d["results"] if x.get("pinned")),
           str([x["node"] for x in d["results"]]))
     check("CJK 檔名:code 檔進種子(quotePath 修)", "src/服務.py" in d["files"], str(d["files"]))
-    check("CJK 檔名:圖譜節點仍被濾掉", not any("服務核心" in f2 for f2 in d["files"]), str(d["files"]))
+    check("CJK 檔名:無引號跳脫垃圾路徑(quotePath 生效)",
+          not any(f2.startswith('"') or "\\" in f2 for f2 in d["files"]), str(d["files"]))
+    check("CJK 檔名:圖譜節點原始路徑被濾掉",
+          "docs/z-knowledge/Systems/服務核心.md" not in d["files"], str(d["files"]))
     pinned = [x for x in d["results"] if x.get("pinned")]
     check("合約節點固定席(SvcCore)", any("SvcCore" in x["node"] for x in pinned), str(pinned)[:200])
     check("事故被磁碟現況觸發(SQL)", any("SQL" in x["node"] for x in pinned), str(pinned)[:200])
