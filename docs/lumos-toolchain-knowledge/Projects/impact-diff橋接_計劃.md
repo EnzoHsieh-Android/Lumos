@@ -33,6 +33,10 @@ PRIOR-ART: 沿用 [[Projects/檢索優化_計劃]] §3（hook 降噪機件,已 g
 - t_impact_diff 9 斷言：rc/manifest 結構/seed 過濾（code 檔進、圖譜節點與已刪檔不進）/合約固定席/事故磁碟觸發/非固定帶來源檔/人讀標頭/參數守衛 rc2。
 - 真機（本 repo HEAD~3..HEAD,15 檔）：固定席 3（2 事故+1 合約）浮頂,自由席前三=該批 commit 實際動到的功能節點（檢索優化_計劃/retrieval-ranking/goldset 驗證）——語意正確。
 
+## 未來方向：落成位置閉環（使用者提案,未實作）
+
+design-loop 收斂→code-loop 過審之後,「退場必寫」目前只有 pre-commit 粗閘（有沒有帶圖譜改動）與人判;精確版=**`impact --diff` 的預期受影響集 ∩ 分支實際動過的圖譜節點**——受影響但未同步的節點列 advisory 清單（code-loop finishing 步驟或 pre-push 軟提醒）,回答「你改了這功能,但它的節點沒動,是漏了還是不用?」。誠實界定:預期集精度=hook 面現況（P@8≈.52）,固定席（合約/事故）可信度高、自由席人判——所以是提醒不是硬閘;等 hook 面 v1.1 修完精度再議升級。
+
 ## 相關模組
 
 - [[Systems/retrieval-ranking]]

@@ -15,6 +15,7 @@ summary: |-
 related:
   - "[[Projects/檢索優化_計劃]]"
   - "[[Systems/lumos-cli-read]]"
+  - "[[Projects/節點靜態先驗_調研]]"
 verified_by:
   - "[[Verification/2026-07-10_檢索排序v1]]"
   - "[[Verification/2026-07-11_檢索goldset評測]]"
