@@ -7765,6 +7765,64 @@ def t_context_recommend():
     shutil.rmtree(d, ignore_errors=True)
 
 
+def t_impact_ranked():
+    """階段三:impact --ranked(融合排序+固定席+降噪)/--stdin-payload(prospective)/--incidents-only。"""
+    import subprocess as sp, json, shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-impr-"))
+    def g(*a):
+        sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+    g("init", "-q"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    v = root / "docs" / "z-knowledge"
+    (v / "Systems").mkdir(parents=True); (v / "Issues").mkdir(); (v / "MOC").mkdir()
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    # 直接引用 svc.py 的節點 + 一個含合約 + 一個事故(pitfall_when content trigger)
+    (v / "Systems" / "SvcCore.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 不可空寫 [test:X]\n---\n"
+        "# SvcCore\n實作在 `src/svc.py`。\n", encoding="utf-8")
+    (v / "Systems" / "Helper.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:普通\n---\n# Helper\n`src/svc.py` 的輔助。\n",
+        encoding="utf-8")
+    (v / "Issues" / "SQL注入踩雷.md").write_text(
+        "---\ntype: issue\nstatus: open\npitfall_when:\n  - \"content:SELECT.*FROM\"\n"
+        "summary: |-\n  FLAG:TECHNICAL\n---\n# SQL 注入\n拼字串 SQL 的坑。\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "svc.py").write_text("def save(x):\n    pass\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "init")
+    def lum(*a, stdin=None):
+        return sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True,
+                      cwd=root, input=stdin)
+    # legacy impact --json 四段不變
+    r = lum("impact", "--file", "src/svc.py", "--json")
+    d0 = json.loads(r.stdout.strip().splitlines()[-1])
+    check("impact legacy 四段", set(d0) >= {"file", "direct", "indirect", "incidents"}, str(d0)[:150])
+    # ranked:合約節點固定席在前、帶分數
+    r = lum("impact", "--file", "src/svc.py", "--ranked", "--json")
+    check("impact --ranked rc0", r.returncode == 0, r.stderr[:200])
+    dr = json.loads(r.stdout.strip().splitlines()[-1])
+    check("ranked 有 results+meta", "results" in dr and "meta" in dr, str(dr)[:150])
+    pinned = [x for x in dr["results"] if x.get("pinned")]
+    check("合約節點被固定(SvcCore)", any("SvcCore" in x["node"] for x in pinned), str(pinned)[:200])
+    check("每項有分數", all("score" in x for x in dr["results"]), str(dr)[:150])
+    # stdin-payload:prospective 內容含 SQL → 觸發事故(即使磁碟檔沒有)
+    payload = json.dumps({"query": "save with sql",
+                          "prospective": {"src/svc.py": "def save(x):\n    q='SELECT id FROM t'\n"}})
+    r = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+    dp = json.loads(r.stdout.strip().splitlines()[-1])
+    check("prospective incident 觸發", any("SQL" in x["node"] for x in dp["results"] if x.get("kind") == "incident"),
+          str([x for x in dp["results"] if x.get("kind")=="incident"]))
+    # incidents-only:只回事故段、不做 BFS
+    r = lum("impact", "--file", "src/svc.py", "--incidents-only", "--stdin-payload", "--json", stdin=payload)
+    di = json.loads(r.stdout.strip().splitlines()[-1])
+    check("incidents-only 只有事故", all(x.get("kind") == "incident" for x in di["results"]),
+          str(di)[:200])
+    # 磁碟檔無 SQL → legacy(無 prospective)不觸發該事故
+    r = lum("impact", "--file", "src/svc.py", "--json")
+    d2 = json.loads(r.stdout.strip().splitlines()[-1])
+    check("無 prospective 時磁碟無 SQL 不誤觸發", not any("SQL" in x["node"] for x in d2["incidents"]),
+          str(d2["incidents"]))
+    shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

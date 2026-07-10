@@ -7110,7 +7110,8 @@ def _impact_load_config(repo_root):
         return dict(_DEFAULTS)
 
 
-def cmd_impact(file, repo=None, depth=None, as_json=False):
+def cmd_impact(file, repo=None, depth=None, as_json=False,
+               ranked=False, top=8, min_score=0.20, stdin_payload=False, incidents_only=False):
     """動手前算出哪些知識圖譜節點會被 code 改動波及。
     rc 協定: 0=成功(有/無影響集都算) / 3=vault 找不到 / 其他非 0=內部錯。
     Task 7: 排序 + --json schema + 人讀輸出。
@@ -7224,15 +7225,27 @@ def cmd_impact(file, repo=None, depth=None, as_json=False):
     if os.path.isabs(rel_file) and repo_root is not None:
         rel_file = os.path.relpath(rel_file, str(repo_root))
 
-    # 8. incidents 段(Task 2):掃全圖 pitfall_when trigger,比對被碰檔。
-    # 讀被碰檔內容:--file 絕對路徑讀盤;讀不到(新建檔/不存在)→ 空字串,只 glob 生效。
+    # 8. stdin payload(階段三):{"query","prospective":{rel:content}}——prospective 供事故比對(套 delta 後),query 供詞彙融合。
+    _payload = {}
+    if stdin_payload:
+        try:
+            _payload = json.loads(sys.stdin.read() or "{}")
+        except ValueError:
+            _payload = {}
+    # incidents 段:掃全圖 pitfall_when trigger,比對被碰檔。
+    # 內容來源:stdin prospective(套 delta 後,優先)> 磁碟現況。
     _abs_file = str(file)
     if not os.path.isabs(_abs_file) and repo_root is not None:
         _abs_file = str(repo_root / _abs_file)
-    try:
-        file_content = Path(_abs_file).read_text(encoding="utf-8-sig", errors="replace")
-    except OSError:
-        file_content = ""
+    _prosp = _payload.get("prospective") or {}
+    file_content = _prosp.get(rel_file)
+    if file_content is None:
+        file_content = _prosp.get(str(file))
+    if file_content is None:
+        try:
+            file_content = Path(_abs_file).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            file_content = ""
 
     # 呼叫 _match_incident_triggers,取得原始命中列表(含 node, matched_by)
     _raw_incidents = _match_incident_triggers(rel_file, file_content, env)
@@ -7254,6 +7267,80 @@ def cmd_impact(file, repo=None, depth=None, as_json=False):
     if incident_node_set:
         all_direct = [x for x in all_direct if x["node"] not in incident_node_set]
         all_indirect = [x for x in all_indirect if x["node"] not in incident_node_set]
+
+    # 8.5 ranked 融合(階段三,spec §3):固定席(事故+含合約 direct+深度內合約 indirect)不占 top_k;
+    # 非固定按 R=0.6L+0.4G 排,過 max(min_score, 0.25×最高非固定分) 閾;姐妹去冗餘於顯示層。
+    if ranked or incidents_only:
+        query = (_payload.get("query") or "") if stdin_payload else ""
+        results = []
+        # 固定席:事故(kind=incident)恆固定
+        for x in all_incidents:
+            results.append({"node": x["node"], "kind": "incident", "pinned": True,
+                            "score": 1.0, "matched_by": x.get("matched_by"),
+                            "contract": x.get("contract")})
+        if not incidents_only:
+            # 詞彙分:對 direct+indirect 候選跑 BM25F(query 為空則全 0)
+            cand = [x["node"] for x in all_direct] + [x["node"] for x in all_indirect]
+            lex = {}
+            if query and cand:
+                _mx = None
+                raw = _rank_score_candidates(env, query, cand)
+                _mx = max((s for _r, s, _h in raw), default=0.0)
+                for _r, s, _h in raw:
+                    lex[_r] = (s / _mx) if _mx > 0 else 0.0
+            eff_depth = depth if depth is not None else 2
+            for x in all_direct:
+                L = lex.get(x["node"], 0.0)
+                pinned = bool(x.get("contract"))   # 含合約的 direct 固定
+                results.append({"node": x["node"], "kind": "direct", "pinned": pinned,
+                                "score": round(0.50 + 0.50 * L, 4), "L": round(L, 4),
+                                "contract": x.get("contract")})
+            for x in all_indirect:
+                L = lex.get(x["node"], 0.0)
+                hop = x.get("hop", 2)
+                contract = x.get("contract")
+                # 深度內合約 → 固定席(spec r3:有效深度內任意 hop)
+                if contract and hop <= eff_depth:
+                    results.append({"node": x["node"], "kind": "indirect", "pinned": True,
+                                    "score": round(0.40 + 0.30, 4), "L": round(L, 4),
+                                    "hop": hop, "contract": contract})
+                    continue
+                # hop≥2 需 L>0
+                if hop >= 2 and L <= 0:
+                    continue
+                G = 0.60 * min(1.0, 2.0 / (2 ** hop))
+                R = round(0.60 * L + 0.40 * G, 4)
+                results.append({"node": x["node"], "kind": "indirect", "pinned": False,
+                                "score": R, "L": round(L, 4), "hop": hop, "contract": contract})
+        # 分固定/非固定;非固定過閾+排序+補到 top_k
+        pins = [r for r in results if r["pinned"]]
+        free = [r for r in results if not r["pinned"]]
+        max_free = max((r["score"] for r in free), default=0.0)
+        thresh = max(float(min_score), 0.25 * max_free)
+        free = [r for r in free if r["score"] >= thresh]
+        free.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))
+        truncated = max(0, len(free) - int(top))
+        free = free[:int(top)]
+        # 姐妹去冗餘(顯示層,--json 全量不折)
+        final = pins + free
+        meta = {"candidates": len(all_direct) + len(all_indirect) + len(all_incidents),
+                "pinned": len(pins), "truncated": truncated,
+                "safety_overflow": max(0, len(pins) - int(top))}
+        if as_json:
+            print(json.dumps({"file": rel_file, "results": final, "meta": meta},
+                             ensure_ascii=False))
+        else:
+            print(f"改動 {rel_file} — 相關 top(固定席 {len(pins)}):")
+            for r in final:
+                mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{r.get('hop','?')}"}.get(r["kind"], "")
+                ct = f" ★{r['contract']}★" if r.get("contract") else ""
+                pin = " [固定]" if r["pinned"] else ""
+                print(f"  {r['score']:5.2f} {mk} {r['node']}{ct}{pin}")
+            if meta["truncated"]:
+                print(f"  (+{meta['truncated']} 條低分截斷;--json 全量)")
+            if meta["safety_overflow"]:
+                print(f"  safety overflow: {meta['safety_overflow']}")
+        return 0
 
     # 9. 輸出
     if as_json:
@@ -7724,6 +7811,11 @@ def main():
     p.add_argument("--repo", dest="impact_repo", help="repo root(缺則退回 find_vault;hook 必傳)")
     p.add_argument("--depth", dest="impact_depth", type=int, default=None, help="BFS 展開深度(缺省讀 .lumos/impact.json;最終預設 2)")
     p.add_argument("--json", dest="impact_json", action="store_true", help="JSON 輸出(機器可讀)")
+    p.add_argument("--ranked", action="store_true", dest="impact_ranked", help="融合排序+固定席+降噪(dormant v1)")
+    p.add_argument("--top", type=int, dest="impact_top", default=8, help="--ranked 非固定項上限")
+    p.add_argument("--min-score", type=float, dest="impact_min", default=0.20, help="--ranked 分數底線")
+    p.add_argument("--stdin-payload", action="store_true", dest="impact_stdin", help="stdin 讀 {query,prospective}")
+    p.add_argument("--incidents-only", action="store_true", dest="impact_inc_only", help="只跑事故比對(不反查/BFS)")
 
     p = sub.add_parser("pitfalls", help="實務隱患提問(vault-free):spec 逼答隱患 / --diff 攤代碼風險位置")
     p.add_argument("md", nargs="?", help="spec md 檔(spec 模式)")
@@ -7814,7 +7906,10 @@ def main():
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
     if args.cmd == "impact":
         return cmd_impact(args.impact_file, repo=args.impact_repo,
-                          depth=args.impact_depth, as_json=args.impact_json)
+                          depth=args.impact_depth, as_json=args.impact_json,
+                          ranked=args.impact_ranked, top=args.impact_top,
+                          min_score=args.impact_min, stdin_payload=args.impact_stdin,
+                          incidents_only=args.impact_inc_only)
     if args.cmd == "sqlfluff-sarif":
         return cmd_sqlfluff_sarif(out=args.sqlfluff_out)
     if args.cmd == "stylelint-sarif":
