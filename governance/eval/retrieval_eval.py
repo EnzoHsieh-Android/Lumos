@@ -27,8 +27,11 @@ def dcg(rels):
     return sum(r / math.log2(i + 2) for i, r in enumerate(rels))
 
 
-def ndcg_at_k(ranked_labels, k):
-    ideal = sorted(ranked_labels, reverse=True)
+def ndcg_at_k(ranked_labels, k, all_rels=None):
+    """all_rels=該案例完整金標 label 清單(IDCG 基準)。省略時退回取回集自證——
+    僅限「各系統共用同一候選集」的相對比較(edit ablation);跨系統絕對比較必傳,
+    否則漏檢索零懲罰、兩系統不在同一把尺(r1 panel s4 major)。"""
+    ideal = sorted(all_rels if all_rels is not None else ranked_labels, reverse=True)
     idcg = dcg(ideal[:k])
     return dcg(ranked_labels[:k]) / idcg if idcg > 0 else 0.0
 
@@ -119,9 +122,10 @@ def eval_search(gs, split=None, k=5):
         ranked = [x["node"] for x in
                   _lum("search", q, "--ranked", "--top", "10", "--json").get("results", [])]
         row = {"id": cid, "split": case["split"], "n_rel": n_rel}
+        all_rels = sorted(lab.values(), reverse=True)   # IDCG=完整金標(漏檢有懲罰,兩系統同尺)
         for name, order in (("legacy", legacy), ("ranked", ranked)):
             labels = [lab.get(n, 0) for n in order]
-            row[f"{name}_ndcg"] = round(ndcg_at_k(labels, k), 4)
+            row[f"{name}_ndcg"] = round(ndcg_at_k(labels, k, all_rels=all_rels), 4)
             row[f"{name}_mrr"] = round(mrr(labels), 4)
             row[f"{name}_r10"] = recall_at_k(labels, n_rel, 10)
         rows.append(row)
@@ -159,6 +163,8 @@ def eval_edit(gs, split=None, k=8):
         pins = [x for x in res if x.get("pinned")]
         free = [x for x in res if not x.get("pinned")]
         row = {"id": cid, "split": case["split"], "n_free": len(free), "n_pin": len(pins)}
+        # edit 面 nDCG 沿用候選集自證 IDCG:三排序共用同一 free 集,相對比較有效;
+        # 絕對值偏高(漏檢不罰),不得跨面引用(r1 panel s4)。
         orders = {
             "fusion": sorted(free, key=lambda x: (-x["score"], x["node"])),
             "bm25": sorted(free, key=lambda x: (-x.get("L", 0.0), x["node"])),
@@ -171,11 +177,14 @@ def eval_edit(gs, split=None, k=8):
             row[f"{name}_p"] = round(precision_at_k(labels, kk), 4) if labels else None
             row[f"{name}_ndcg"] = round(ndcg_at_k(labels, k), 4) if labels else None
         row["n_rel_free"] = n_rel_free
-        # 固定席檢核:label=2 且被固定 → 機保命中;label=2 未在任何輸出 → miss
+        # must-see 兩指標分開記(r1 panel codex blocker:混稱=證據失真):
+        # in_out=出現在輸出(含自由席,top-k 聚合下可能被截) / pinned=真固定席(唯一機械保證)
         out_nodes = {x["node"] for x in res}
+        pin_nodes = {x["node"] for x in pins}
         must = [n for n, v in lab.items() if v == 2]
         row["must_total"] = len(must)
         row["must_in_out"] = sum(1 for n in must if n in out_nodes)
+        row["must_pinned"] = sum(1 for n in must if n in pin_nodes)
         row["pin_noise"] = sum(1 for x in pins if lab.get(x["node"], 0) == 0)
         rows.append(row)
     return rows
@@ -197,11 +206,11 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         ln, rn = _macro(srows, "legacy_ndcg"), _macro(srows, "ranked_ndcg")
         lm, rm = _macro(srows, "legacy_mrr"), _macro(srows, "ranked_mrr")
         lr, rr = _macro(srows, "legacy_r10"), _macro(srows, "ranked_r10")
-        lift = (rn - ln) / ln * 100 if ln else float("inf")
+        lift = (rn - ln) / ln * 100 if ln else 0.0   # ln=0 → fail-closed(不給 inf 免費過 gate)
         print(f"[search n={len(srows)}] nDCG@{k_search}: legacy={ln} ranked={rn} (提升 {lift:+.1f}%)")
         print(f"  MRR: legacy={lm} ranked={rm} | Recall@10: legacy={lr} ranked={rr}")
         verdict["search_lift_pct"] = round(lift, 1)
-        verdict["search_gate"] = lift >= 15.0
+        verdict["search_gate"] = ln > 0 and lift >= 15.0
     erows = eval_edit(gs, split, k=k_edit)
     if erows:
         fp, fn = _macro(erows, "fusion_p"), _macro(erows, "fusion_ndcg")
@@ -213,8 +222,10 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         med, p95 = _pctl(frees, 0.5), _pctl(frees, 0.95)
         must_t = sum(r["must_total"] for r in erows)
         must_hit = sum(r["must_in_out"] for r in erows)
+        must_pin = sum(r["must_pinned"] for r in erows)
         pin_noise = sum(r["pin_noise"] for r in erows)
         print(f"  非固定項數: 中位={med} p95={p95} | must-see(標2) {must_hit}/{must_t} 在輸出內"
+              f"(僅 {must_pin} 個坐固定席——機械保證只涵蓋合約/事故類,其餘經排序無保底)"
               f" | 固定席噪音 {pin_noise} 條")
         verdict["hook_p_gate"] = fp is not None and fp >= 0.70
         verdict["hook_p"] = fp
@@ -254,7 +265,12 @@ def main():
                                  **agg}, ensure_ascii=False) + "\n")
         return 0
     if args.goldset:
-        gs = json.loads(Path(args.goldset).read_text(encoding="utf-8"))
+        try:
+            gs = json.loads(Path(args.goldset).read_text(encoding="utf-8"))
+            gs["labels"]; gs["search"]; gs["edit"]
+        except (OSError, ValueError, KeyError) as e:
+            print(f"ERROR: goldset 讀取/結構失敗: {e}", file=sys.stderr)
+            return 2
         unl = sum(1 for c in gs["labels"].values() for v in c.values() if v.get("final") is None)
         if unl:
             print(f"⚠ 尚有 {unl} 個候選未定稿(final=None,視為 0)", file=sys.stderr)

@@ -7870,14 +7870,23 @@ def t_impact_diff():
     (v / "Issues" / "SQL注入踩雷.md").write_text(
         "---\ntype: issue\nstatus: open\npitfall_when:\n  - \"content:SELECT.*FROM\"\n"
         "summary: |-\n  FLAG:TECHNICAL\n---\n# SQL 注入\n拼字串 SQL 的坑。\n", encoding="utf-8")
+    (v / "Systems" / "OldSvc.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 舊介面不可斷 [test:Y]\n---\n"
+        "# OldSvc\n實作在 `src/old.py`。\n", encoding="utf-8")
     (root / "src").mkdir()
     (root / "src" / "svc.py").write_text("def save(x):\n    pass\n", encoding="utf-8")
+    (root / "src" / "old.py").write_text("legacy = True\n", encoding="utf-8")
     g("add", "-A"); g("commit", "-qm", "init")
-    # 第二筆 commit:svc.py 引入 SQL(觸發事故 trigger)+ 新增無圖譜引用的 other.py + 動一個圖譜節點(seed 應排除)
+    # 第二筆 commit:svc.py 引入 SQL(觸發事故 trigger)+ 新增無圖譜引用的 other.py + 動圖譜節點(排除)
+    # + 刪除被合約節點引用的 old.py(種子必須保留)+ governance 資料 json 與 README(必須排除)
     (root / "src" / "svc.py").write_text(
         "def save(x):\n    q = 'SELECT id FROM t'\n    return q\n", encoding="utf-8")
     (root / "src" / "other.py").write_text("pass\n", encoding="utf-8")
     (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n改一下\n", encoding="utf-8")
+    g("rm", "-q", "src/old.py")
+    (root / "governance" / "eval").mkdir(parents=True)
+    (root / "governance" / "eval" / "data.json").write_text('{"x": 1}', encoding="utf-8")
+    (root / "README.md").write_text("# readme\n", encoding="utf-8")
     g("add", "-A"); g("commit", "-qm", "change")
     def lum(*a, stdin=None):
         return sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True,
@@ -7888,6 +7897,11 @@ def t_impact_diff():
     check("diff manifest 有 results/meta/files", set(d) >= {"results", "meta", "files"}, str(d)[:150])
     check("diff seed 含 code 檔", "src/svc.py" in d["files"] and "src/other.py" in d["files"], str(d["files"]))
     check("diff seed 排除圖譜節點", not any(f.startswith("docs/") for f in d["files"]), str(d["files"]))
+    check("diff seed 保留已刪檔(合約反查)", "src/old.py" in d["files"], str(d["files"]))
+    check("diff seed 排除 governance 資料 json 與 md",
+          "governance/eval/data.json" not in d["files"] and "README.md" not in d["files"], str(d["files"]))
+    check("已刪檔的合約節點進固定席(OldSvc)", any("OldSvc" in x["node"] for x in d["results"] if x.get("pinned")),
+          str([x["node"] for x in d["results"]]))
     pinned = [x for x in d["results"] if x.get("pinned")]
     check("合約節點固定席(SvcCore)", any("SvcCore" in x["node"] for x in pinned), str(pinned)[:200])
     check("事故被磁碟現況觸發(SQL)", any("SQL" in x["node"] for x in pinned), str(pinned)[:200])

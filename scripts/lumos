@@ -1085,7 +1085,9 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             print(f"  … 還有 {len(hits) - 8} 處")
     if ranked:
         import json as _json
-        scored = _rank_score_candidates(env, term, list(_cand_hits))[:max(int(top), 1)]
+        scored = _rank_score_candidates(env, term, list(_cand_hits))
+        if int(top) > 0:
+            scored = scored[:int(top)]
         if as_json:
             results = [{"node": rel, "score": score, "hits": hits, "match_lines": _cand_hits[rel]}
                        for rel, score, hits in scored]
@@ -1105,7 +1107,8 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
                     print(f"    {lineno} [{tag}]: {disp}")
                 if len(d_hits) > 8:
                     print(f"    … 還有 {len(d_hits) - 8} 處")
-            print(f"\n(top {len(scored)} / 候選 {len(_cand_hits)};相關性排序,--legacy 走舊字母序全量)")
+            trunc = f"top {len(scored)} / " if len(scored) < len(_cand_hits) else ""
+            print(f"\n({trunc}候選 {len(_cand_hits)};相關性排序,--legacy 走舊字母序)")
         return 0
     suffix = f"(限 {path_prefix})" if path_prefix else ""
     if not include_code:
@@ -7140,7 +7143,7 @@ def _impact_load_config(repo_root):
 
 def cmd_impact(file, repo=None, depth=None, as_json=False,
                ranked=False, top=8, min_score=0.20, stdin_payload=False, incidents_only=False,
-               payload=None):
+               payload=None, preloaded=None):
     """動手前算出哪些知識圖譜節點會被 code 改動波及。
     rc 協定: 0=成功(有/無影響集都算) / 3=vault 找不到 / 其他非 0=內部錯。
     Task 7: 排序 + --json schema + 人讀輸出。
@@ -7175,8 +7178,11 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
     if depth is None:
         depth = _impact_cfg["depth"]
 
-    # 4. 載入圖譜環境
-    env = Env(vault)
+    # 4. 載入圖譜環境(preloaded=(vault,env) 由 --diff 聚合復用,避免逐檔重建 N+1)
+    if preloaded is not None and preloaded[0] == vault:
+        env = preloaded[1]
+    else:
+        env = Env(vault)
     repo_root_for_lookup = repo_root if repo_root is not None else vault.parent.parent
 
     # 5. code → node 反查(只認 body inline-code,r7-F2)
@@ -7404,6 +7410,18 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
 _IMPACT_DIFF_SKIP = ("docs/", "governance/golden/")   # 圖譜/凍結快照非 code,不當 impact 種子
 
 
+def _impact_diff_seed_ok(f):
+    """--diff 種子過濾:只收 code 檔。剔除圖譜/凍結快照/帳檔(.jsonl)/文檔(.md)/
+    governance 資料 .json(goldset/裁決紀錄內嵌歷史 code 片段,會偽觸發事故 pin——r1 panel 實證)。"""
+    if not f or any(f.startswith(p) for p in _IMPACT_DIFF_SKIP):
+        return False
+    if f.endswith((".jsonl", ".md")):
+        return False
+    if f.endswith(".json") and f.startswith("governance/"):
+        return False
+    return True
+
+
 def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as_json=False):
     """code-loop 橋接:對整段 diff 的每支改動 code 檔跑 ranked impact(query=該檔 hunk 文字),
     聚合成「受影響功能面」manifest——固定席(合約/事故)全保、非固定取跨檔最高分 top-N。
@@ -7428,14 +7446,16 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
     files = []
     for f in r.stdout.splitlines():
         f = f.strip()
-        if not f or any(f.startswith(p) for p in _IMPACT_DIFF_SKIP) or f.endswith(".jsonl"):
+        if not _impact_diff_seed_ok(f):
             continue
-        if not (repo_root / f).exists():   # 已刪檔無現況可反查,跳過
-            continue
+        # 已刪檔不跳過:反查靠「節點 body 引用該路徑」而非檔案存在——
+        # 刪除/改名正是合約節點最該被推到審計員眼前的時刻(r1 codex major)
         files.append(f)
     merged = {}          # node -> entry(跨檔取最高分;pinned 任一檔 pinned 即 pinned)
     per_file_meta = []
     import io, contextlib
+    _vault = _vault_in(repo_root)
+    _env_shared = Env(_vault) if _vault is not None else None   # 建一次,逐檔復用(r1 N+1)
     for f in files:
         d = _sp.run(["git", "-C", str(repo_root), "diff", diff_range, "--", f],
                     capture_output=True, text=True)
@@ -7445,7 +7465,8 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
         with contextlib.redirect_stdout(buf):
             rc = cmd_impact(f, repo=str(repo_root), depth=depth, as_json=True,
                             ranked=True, top=top, min_score=min_score,
-                            payload={"query": hunk, "prospective": {}})
+                            payload={"query": hunk, "prospective": {}},
+                            preloaded=(_vault, _env_shared) if _env_shared is not None else None)
         if rc == 3:
             print("IMPACT-DEBUG: vault 找不到(rc3)", file=sys.stderr)
             return 3
@@ -7463,11 +7484,12 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
             else:
                 if f not in cur["files"]:
                     cur["files"].append(f)
-                cur["pinned"] = cur["pinned"] or x.get("pinned", False)
+                pinned = cur["pinned"] or x.get("pinned", False)
                 if x["score"] > cur["score"]:
-                    for k in ("score", "kind", "hop", "contract", "L"):
-                        if k in x:
-                            cur[k] = x[k]
+                    # 整項以勝出結果重建(避免 hop/L 舊值殘留成幽靈欄位,r1 s4 minor)
+                    merged[x["node"]] = {**x, "files": cur["files"], "pinned": pinned}
+                else:
+                    cur["pinned"] = pinned
     pins = sorted([v for v in merged.values() if v["pinned"]],
                   key=lambda v: (-v["score"], v["node"]))
     free = sorted([v for v in merged.values() if not v["pinned"]],
@@ -7836,7 +7858,7 @@ def main():
     p.add_argument("--ranked", action="store_true", help="BM25F 相關性排序(2026-07-11 起已是預設,旗標保留相容)")
     p.add_argument("--legacy", action="store_true", dest="search_legacy",
                    help="舊行為:字母序+全量輸出(轉正前預設;--regex 自動走此路)")
-    p.add_argument("--top", type=int, default=20, help="相關性排序輸出上限(預設 20)")
+    p.add_argument("--top", type=int, default=0, help="相關性排序輸出上限(0=全量,預設;圖譜先行不靜默截斷)")
     p.add_argument("--json", dest="search_json", action="store_true", help="相關性排序 JSON manifest")
 
     p = sub.add_parser("map", help="鄰域樹狀展開")
@@ -8028,6 +8050,9 @@ def main():
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
     if args.cmd == "impact":
+        if args.impact_diff and args.impact_file:
+            print("ERROR: --file 與 --diff 二擇一,不可同給", file=sys.stderr)
+            return 2
         if args.impact_diff:
             return cmd_impact_diff(args.impact_diff, repo=args.impact_repo,
                                    depth=args.impact_depth, top=args.impact_top,

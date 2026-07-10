@@ -22,9 +22,9 @@ PRIOR-ART: 沿用 [[Projects/檢索優化_計劃]] §3（hook 降噪機件,已 g
 ## 設計裁定
 
 - **入口**：`lumos impact --diff <base>..HEAD [--json] [--top N]`（與 `--file` 二擇一;都缺 rc2）。
-- **聚合語意**：diff 內每支改動 code 檔（排除 `docs/`、`governance/golden/`、`*.jsonl`、已刪檔）各跑一次 ranked impact，query=該檔 hunk 文字（`+/-` 行內容,cap 4000 字元）；跨檔合併=同節點取最高分、pinned 任一檔 pinned 即 pinned、記來源檔清單。
+- **聚合語意**：diff 內每支改動 code 檔各跑一次 ranked impact（共用一次載入的圖譜環境——r1 panel N+1 修正），query=該檔 hunk 文字（`+/-` 行內容,cap 4000 字元）；跨檔合併=同節點取最高分整項重建（防 hop/L 幽靈欄位殘留）、pinned 任一檔 pinned 即 pinned、記來源檔清單。**種子過濾（r1 panel 修正）**：排除 `docs/`、`governance/golden/`、`*.jsonl`、`*.md`、governance 資料 `*.json`（goldset/裁決檔內嵌歷史 code 片段會偽觸發事故 pin——實證）；**已刪檔保留**（反查靠節點 body 引用路徑,刪除/改名正是合約節點最該被看到的時刻）。--file 與 --diff 同給 rc2。
 - **輸出**：固定席（合約/事故）全保、非固定 top-N;人讀標「審計鏡頭,人判」;--json 帶 per-file meta。
-- **定位（關鍵裁定）**：**advisory 審計鏡頭,不是自動閘、不接 hook**——goldset 評測（[[Verification/2026-07-11_檢索goldset評測]]）hook 面 P@8≈.52 未過線,但安全固定席 must-see 30/30 全命中;code-loop 有 reviewer 在場,噪音由人過濾、合約/事故機保直送,正好匹配「精度不足但召回保底」的現況能力。
+- **定位（關鍵裁定）**：**advisory 審計鏡頭,不是自動閘、不接 hook**——goldset 評測（[[Verification/2026-07-11_檢索goldset評測]]）hook 面 P@8≈.5 未過線;機械保證只涵蓋合約/事故類固定席(標 2 必看僅 1/30 坐固定席——「30/30 全命中」係「出現在輸出」,經排序無保底,r1 panel 更正);code-loop 有 reviewer 在場,保底與噪音都由人兜,故當鏡頭不當自動閘。
 - **prospective 不需要**：diff 模式下 HEAD/工作樹已是改後內容,事故 content trigger 讀磁碟即為「套 delta 後」語意。
 - **消費點**：`lumos-code-loop` skill 步驟 3——派 reviewer 前跑,manifest 附給 reviewer:「逐條判此 diff 會不會破壞該節點宣稱的行為/合約;固定席必答」。
 
