@@ -3472,6 +3472,18 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:8px;
     border:1px solid var(--border-soft);transition:all .15s}
   #close:hover{background:var(--surface3);color:var(--text);border-color:var(--border)}
+  #back{position:absolute;top:var(--sp5);right:calc(var(--sp5) + 38px);cursor:pointer;color:var(--muted);
+    font-size:20px;width:30px;height:30px;display:none;align-items:center;justify-content:center;
+    border-radius:8px;border:1px solid var(--border-soft);transition:all .15s;z-index:3;line-height:1}
+  #back.show{display:flex}
+  #back:hover{background:var(--surface3);color:var(--text);border-color:var(--border)}
+  #timebar{left:50%;transform:translateX(-50%);bottom:var(--sp5);padding:10px 16px;display:none;
+    align-items:center;gap:12px;width:min(560px,80vw)}
+  #timebar.show{display:flex}
+  #timebar input[type=range]{flex:1;accent-color:#b98cff}
+  #tplay{background:none;border:1px solid var(--border);color:var(--text);border-radius:7px;
+    width:28px;height:28px;cursor:pointer;font-size:12px}
+  #tdate{font-family:var(--font-mono);font-size:11px;color:var(--muted);min-width:84px;text-align:right}
   .floatcard{position:fixed;z-index:8;background:rgba(15,18,25,.78);backdrop-filter:blur(16px) saturate(140%);
     border:1px solid var(--border);border-radius:13px;box-shadow:0 10px 40px -10px rgba(0,0,0,.6)}
   #legend{left:var(--sp5);bottom:var(--sp5);padding:14px 16px;font-size:11.5px;color:var(--muted)}
@@ -3493,10 +3505,20 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   <input id="search" placeholder="搜尋節點…" autocomplete="off">
   <div class="chips" id="typechips"></div>
   <div class="chip on" id="staletoggle"><span class="dot" style="background:var(--stale)"></span>只看 stale</div>
+  <div class="chip on" id="invtoggle"><span class="dot" style="background:#ffd479"></span>只看合約</div>
+  <div class="chip on" id="vfold"><span class="dot" style="background:#4fd6a8"></span>驗證摺疊</div>
+  <div class="chip on" id="dim2d"><span class="dot" style="background:#8b93ad"></span>2D</div>
+  <div class="chip on" id="timetoggle"><span class="dot" style="background:#b98cff"></span>時間軸</div>
 </div>
 <div id="cy"></div>
 <div id="labels"></div>
+<div id="timebar" class="floatcard">
+  <button id="tplay">▶</button>
+  <input id="trange" type="range" min="0" max="1" value="1" step="1">
+  <span id="tdate"></span>
+</div>
 <div id="panel">
+  <div id="back" title="上一個節點">‹</div>
   <div id="close">✕</div>
   <div id="phead"><div class="kicker"></div><div class="ttl"></div><div class="meta"></div></div>
   <div id="pbody"></div>
@@ -3517,10 +3539,32 @@ const gdata = {nodes:DATA.nodes, links:DATA.edges.map(e=>({source:e.source,targe
 const nodeOf = x => (x && x.id!==undefined) ? x : byId[x];
 
 // ---- 高亮狀態(點選 = 只亮鄰域,其餘暗化)----
-const hlN=new Set(), hlL=new Set(); let sel=null;
+const hlN=new Set(), hlL=new Set(); let sel=null, hoverN=null;
 const types=[...new Set(DATA.nodes.map(n=>n.type))];
 const active=new Set(types); let staleOnly=false;
-function nvisible(n){ return active.has(n.type) && (!staleOnly || n.status==='stale'); }
+// 擴充狀態:只看合約 / 驗證摺疊(預設開) / 時間軸
+let invOnly=false, vFold=true, timeCut=null;
+// 合約鏡頭集合:合約節點 + 它們 verify 邊指到的驗證節點(守衛證據一起看)
+const contractSet=new Set(DATA.nodes.filter(n=>n.inv&&n.inv.length));
+const contractVerif=new Set();
+DATA.edges.forEach(e=>{ if(e.kind==='verify'&&byId[e.source]&&contractSet.has(byId[e.source])) contractVerif.add(byId[e.target]); });
+// 每節點掛幾筆驗證(摺疊徽章)+ 日期數字(時間軸)
+const vout={};
+DATA.edges.forEach(e=>{ if(e.kind==='verify'&&byId[e.target]&&byId[e.target].type==='verification') vout[e.source]=(vout[e.source]||0)+1; });
+DATA.nodes.forEach(n=>{ n.dnum=n.date?parseInt(n.date.replace(/-/g,''))||0:0; });
+// 標籤 LOD 重要度排名:合約>樞紐>系統/索引;驗證葉最後
+DATA.nodes.slice().sort((a,b)=>
+  ((b.inv&&b.inv.length?10:0)+b.indeg+(b.type==='moc'?6:b.type==='system'?4:0)-(b.type==='verification'?3:0))
+ -((a.inv&&a.inv.length?10:0)+a.indeg+(a.type==='moc'?6:a.type==='system'?4:0)-(a.type==='verification'?3:0))
+).forEach((n,i)=>n.lrank=i);
+function nvisible(n){
+  if(!active.has(n.type)) return false;
+  if(staleOnly && n.status!=='stale') return false;
+  if(invOnly && !(contractSet.has(n)||contractVerif.has(n))) return false;
+  if(timeCut!==null && n.dnum>timeCut) return false;
+  if(vFold && n.type==='verification' && !hlN.has(n)) return false;  // 摺疊:選中母節點才現形
+  return true;
+}
 
 function ncolor(n){ if(hlN.size && !hlN.has(n)) return DIMN; if(n===sel) return '#ffffff'; return baseColor(n); }
 function lcolor(l){ if(hlL.size && !hlL.has(l)) return DIML; return LINKBASE[l.kind]||'#2d3346'; }
@@ -3560,7 +3604,18 @@ Graph
   .nodeVisibility(nvisible)
   .linkVisibility(l=>nvisible(nodeOf(l.source))&&nvisible(nodeOf(l.target)))
   .onNodeClick(focusNode)
+  .onNodeHover(n=>{ hoverN=n||null; document.getElementById('cy').style.cursor=n?'pointer':null; })
   .onBackgroundClick(clearSel);
+
+// ---- 點擊容差:微幅拖曳(旋轉手震)吃掉 click 時,用 pointerup 距離判定兜底 ----
+let pdown=null, lastFocusTs=0;
+const cyEl=document.getElementById('cy');
+cyEl.addEventListener('pointerdown',e=>{ pdown=[e.clientX,e.clientY]; },true);
+cyEl.addEventListener('pointerup',e=>{
+  if(!pdown) return;
+  const moved=Math.hypot(e.clientX-pdown[0],e.clientY-pdown[1]); pdown=null;
+  if(moved<5 && hoverN && Date.now()-lastFocusTs>250) focusNode(hoverN);
+},true);
 
 // 貼合 top bar 下方的容器尺寸(預設會用整個 window 高度,會被頂欄遮 64px)
 function sizeGraph(){ Graph.width(window.innerWidth).height(window.innerHeight-64); }
@@ -3571,7 +3626,8 @@ sizeGraph(); window.addEventListener('resize', sizeGraph);
 // 用 Graph.camera() 既有的 Vector3 做前/後剔除(不需自帶 THREE)。
 const labLayer=document.getElementById('labels'), labOf=new Map();
 DATA.nodes.forEach(n=>{ const d=document.createElement('div'); d.className='nlab';
-  d.textContent=n.label; d.style.fontSize=(11+Math.min(n.indeg,16)*0.25)+'px';  // 樞紐字略大,先被看見
+  d.textContent=n.label+(vout[n.id]?' ✓'+vout[n.id]:'');  // ✓N=掛幾筆驗證(摺疊時的存在感)
+  d.style.fontSize=(11+Math.min(n.indeg,16)*0.25)+'px';  // 樞紐字略大,先被看見
   labLayer.appendChild(d); labOf.set(n,d); });
 function syncLabels(){
   requestAnimationFrame(syncLabels);
@@ -3580,9 +3636,12 @@ function syncLabels(){
   const p=cam.position.clone();
   const camDist=cam.position.length()||1;                              // 相機到圖心(力場置中於原點)的距離 → 淡出基準,與縮放無關
   const W=window.innerWidth, H=window.innerHeight-64;
+  // 標籤 LOD:拉遠只留重要節點的名字,拉近逐步全開;hover/選中/鄰域永遠顯示
+  const budget = camDist>1200?20 : camDist>700?45 : camDist>420?90 : 9999;
   DATA.nodes.forEach(n=>{
     const d=labOf.get(n);
     if(!nvisible(n)){ d.style.opacity=0; return; }                     // type chip / 只看 stale 過濾
+    if(n.lrank>=budget && n!==hoverN && n!==sel && !hlN.has(n)){ d.style.opacity=0; return; }  // LOD 淘汰
     p.set(n.x||0,n.y||0,n.z||0);
     const to=p.clone().sub(cam.position);
     if(to.dot(fwd)<=0){ d.style.opacity=0; return; }                   // 在相機背後 → 不畫
@@ -3606,19 +3665,28 @@ function applyVis(){
 }
 
 // ---- 點選節點:只高亮自己+鄰居+相連邊,飛入聚焦 ----
-function focusNode(n){
+const navStack=[];
+function focusNode(n, fromBack){
+  if(sel && sel!==n && !fromBack) navStack.push(sel);
+  document.getElementById('back').classList.toggle('show', navStack.length>0);
+  lastFocusTs=Date.now();
   hlN.clear(); hlL.clear(); sel=n; hlN.add(n);
   gdata.links.forEach(l=>{
     const s=nodeOf(l.source), t=nodeOf(l.target);
     if(s===n){ hlL.add(l); hlN.add(t); }
     else if(t===n){ hlL.add(l); hlN.add(s); }
   });
-  refresh();
+  refresh(); applyVis();   // 驗證摺疊的現形依賴 hlN → 選中時要重算可見性
   const dist=180, h=Math.hypot(n.x||1,n.y||1,n.z||1)||1, r=1+dist/h;
   Graph.cameraPosition({x:(n.x||0)*r,y:(n.y||0)*r,z:(n.z||0)*r}, n, 1100);
   open(n);
 }
-function clearSel(){ hlN.clear(); hlL.clear(); sel=null; refresh(); panel.classList.remove('open'); }
+function clearSel(){ hlN.clear(); hlL.clear(); sel=null; navStack.length=0;
+  document.getElementById('back').classList.remove('show');
+  refresh(); applyVis(); panel.classList.remove('open'); }
+document.getElementById('back').onclick=()=>{ const p=navStack.pop();
+  document.getElementById('back').classList.toggle('show', navStack.length>0);
+  if(p) focusNode(p, true); };
 
 // ---- 側欄 ----
 const panel=document.getElementById('panel'),ttl=panel.querySelector('.ttl'),
@@ -3645,11 +3713,24 @@ function open(n){
 document.getElementById('close').onclick=clearSel;
 
 // ---- 搜尋:命中者高亮,其餘暗化 ----
-document.getElementById('search').oninput=e=>{
+const searchEl=document.getElementById('search');
+searchEl.oninput=e=>{
   const q=e.target.value.trim().toLowerCase();
   hlN.clear(); hlL.clear(); sel=null;
   if(q) DATA.nodes.forEach(n=>{ if(n.label.toLowerCase().includes(q)) hlN.add(n); });
   refresh();
+};
+searchEl.onkeydown=e=>{
+  if(e.key!=='Enter') return;
+  const q=searchEl.value.trim().toLowerCase(); if(!q) return;
+  // 最佳命中:前綴 > 包含;同級取重要度排名前者 → 直接飛過去開面板
+  const hits=DATA.nodes.filter(n=>n.label.toLowerCase().includes(q));
+  if(!hits.length) return;
+  hits.sort((a,b)=>{
+    const ap=a.label.toLowerCase().startsWith(q)?0:1, bp=b.label.toLowerCase().startsWith(q)?0:1;
+    return ap-bp || a.lrank-b.lrank;
+  });
+  focusNode(hits[0]);
 };
 
 // ---- type 過濾 chips ----
@@ -3665,6 +3746,53 @@ types.forEach(t=>{
 // ---- stale 切換(預設 off=全部;on=只看 stale)----
 const st=document.getElementById('staletoggle');st.classList.remove('on');st.classList.add('off');
 st.onclick=()=>{staleOnly=!staleOnly;st.classList.toggle('on');st.classList.toggle('off');applyVis();};
+
+// ---- 只看合約(合約節點+其守衛驗證) ----
+const iv=document.getElementById('invtoggle');iv.classList.remove('on');iv.classList.add('off');
+iv.onclick=()=>{invOnly=!invOnly;iv.classList.toggle('on');iv.classList.toggle('off');applyVis();};
+
+// ---- 驗證摺疊(預設開;關=全部攤開) ----
+const vf=document.getElementById('vfold');
+vf.onclick=()=>{vFold=!vFold;vf.classList.toggle('on');vf.classList.toggle('off');applyVis();};
+
+// ---- 2D/3D 切換:壓平力場+鎖旋轉(工作模式),還原=3D 展示模式 ----
+const d2=document.getElementById('dim2d');d2.classList.remove('on');d2.classList.add('off');
+let is2d=false;
+d2.onclick=()=>{
+  is2d=!is2d;d2.classList.toggle('on');d2.classList.toggle('off');
+  Graph.numDimensions(is2d?2:3);
+  const ctl=Graph.controls(); if(ctl) ctl.enableRotate=!is2d;
+  if(is2d) Graph.cameraPosition({x:0,y:0,z:900},{x:0,y:0,z:0},800);
+};
+
+// ---- 時間軸:按節點日期回放圖譜生長 ----
+const tt=document.getElementById('timetoggle');tt.classList.remove('on');tt.classList.add('off');
+const tb=document.getElementById('timebar'),tr=document.getElementById('trange'),
+      td=document.getElementById('tdate'),tp=document.getElementById('tplay');
+const dates=[...new Set(DATA.nodes.map(n=>n.dnum).filter(d=>d>0))].sort((a,b)=>a-b);
+let playTimer=null;
+function fmtd(d){const s=String(d);return s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8);}
+function setCut(i){
+  timeCut=dates[i]; td.textContent=fmtd(timeCut);
+  if(i>=dates.length-1){ timeCut=null; td.textContent='現在(全量)'; }
+  applyVis();
+}
+if(dates.length){ tr.max=dates.length-1; tr.value=dates.length-1; td.textContent='現在(全量)'; }
+tt.onclick=()=>{
+  tt.classList.toggle('on');tt.classList.toggle('off');
+  const showing=tb.classList.toggle('show');
+  if(!showing){ timeCut=null; if(playTimer){clearInterval(playTimer);playTimer=null;tp.textContent='▶';} applyVis(); }
+};
+tr.oninput=()=>setCut(+tr.value);
+tp.onclick=()=>{
+  if(playTimer){ clearInterval(playTimer); playTimer=null; tp.textContent='▶'; return; }
+  tp.textContent='⏸'; let i=(+tr.value>=dates.length-1)?0:+tr.value;
+  tr.value=i; setCut(i);
+  playTimer=setInterval(()=>{
+    i++; if(i>=dates.length){ clearInterval(playTimer); playTimer=null; tp.textContent='▶'; return; }
+    tr.value=i; setCut(i);
+  }, 380);
+};
 
 // ---- legend ----
 document.getElementById('legend').innerHTML='<div class="lt">Legend</div>'+
@@ -3694,9 +3822,11 @@ def _html_model(env):
             raw = (env.vault / rel).read_text(encoding="utf-8-sig")
         except Exception:
             raw = ""
+        _dt = n.fields.get("date") or n.fields.get("created")
         nodes.append({
             "id": rel, "label": n.stem, "rel": rel, "type": ntype, "status": status,
             "folder": rel.split("/")[0], "inv": inv, "debt": debt,
+            "date": str(_dt) if _dt else "",
             "indeg": len(set(in_e.get(rel, []))),
             "summary": [l.strip() for l in summ.split("\n") if l.strip()][:6],
             "raw": raw,

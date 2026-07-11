@@ -795,6 +795,11 @@ def t_export_html():
     check("export html: 筆記內 </script> 被轉義成 <\\/script>", "<\\/script>" in html, "escape")
     check("export html: 結尾完整、單一 </html>(未被內文提早關閉)",
           html.rstrip().endswith("</html>") and html.count("</html>") == 1, "structure")
+    # 2026-07-11 視覺化七項優化的 UI 骨架守衛
+    for marker in ("invtoggle", "vfold", "dim2d", "timetoggle", "timebar",
+                   'id="back"', "lrank", "navStack", "pointerup"):
+        check(f"export html: 優化骨架含 {marker}", marker in html, marker)
+    check("export html: 節點模型含 date(時間軸)", '"date"' in html, "date field")
 
 
 def t_invariant_test_binding():

@@ -79,5 +79,7 @@ decisions:
 - 對稱寫入原語見 [[Systems/lumos-cli-write]];安裝 / 生命週期見 [[Systems/lumos-cli-lifecycle]];`lumos --help` 為現行權威。
 
 ## 近期修正
+- 2026-07-11 export html 視覺化七項優化（使用者提案全採）：①標籤 LOD（重要度排名×相機距離預算,hover/選中恆顯）②驗證摺疊預設開（Verification 隱藏、母節點標 ✓N 徽章、選中母節點自動現形）③單擊容差（pointerup 位移<5px 兜底,修 3D 旋轉吃 click）＋2D/3D 切換（numDimensions+鎖旋轉）④搜尋 Enter 飛至最佳命中開面板（前綴>包含,同級取重要度）⑤「只看合約」chip（合約節點+其 verify 目標）⑥面板返回鈕（navStack;搜尋跳轉不入棧=已知取捨）⑦時間軸生長回放（節點 date/created,拉桿+▶ 播放）。真機驗證：Chrome 擴充+Playwright 雙路實測全過;t_export_html +10 骨架斷言。
+
 
 - 2026-07-11 export html 視覺化修：節點面板關閉鈕 `#close` 被後繪的 `#phead`（透明背景）蓋住，真實點擊被攔截而程式呼叫正常——Playwright elementFromPoint 實測定位，補 `z-index:3`。教訓：疊層 UI 的可點性要用真實命中測試驗，不能只驗 handler 有綁。
