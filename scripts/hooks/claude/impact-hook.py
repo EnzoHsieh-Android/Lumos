@@ -202,6 +202,39 @@ def _find_lumos_script() -> str | None:
     return None
 
 
+def extract_delta_query(payload: dict, cap_tokens: int = 512, cap_chars: int = 8000) -> str:
+    """v1.1:從 tool_input 抽「這次改動的內容」當查詢詞(spec §3)。
+
+    Edit = old_string+new_string(刪與增都算「碰到」);MultiEdit = 各 edit 串接;
+    Write = content 全文。cap:512 distinct 空白分詞(CJK 連串視為一詞,罕觸頂)+ 字元上限兜底。
+    prospective 整檔重建刻意省略:content trigger 已 delta-scoped(比對本查詢詞),
+    新增/刪除的危險內容都在 delta 內,不需為觸發語意重建整檔。"""
+    ti = payload.get("tool_input") or {}
+    tool = payload.get("tool_name", "")
+    parts: list[str] = []
+    if tool == "Edit":
+        parts = [str(ti.get("old_string") or ""), str(ti.get("new_string") or "")]
+    elif tool == "MultiEdit":
+        for e in (ti.get("edits") or []):
+            if isinstance(e, dict):
+                parts += [str(e.get("old_string") or ""), str(e.get("new_string") or "")]
+    elif tool == "Write":
+        parts = [str(ti.get("content") or "")]
+    q = " ".join(p for p in parts if p)[:cap_chars]
+    toks = q.split()
+    if len(set(toks)) > cap_tokens:
+        seen: set[str] = set()
+        kept: list[str] = []
+        for tok in toks:
+            if tok not in seen:
+                seen.add(tok)
+                if len(seen) > cap_tokens:
+                    break
+            kept.append(tok)
+        q = " ".join(kept)
+    return q
+
+
 _INJECT_INSTRUCTION = (
     "動手前先判上列直接/間接節點會不會被你這次改動影響、需不需要同步更新圖譜。"
     "消掉不相關的,對真正受影響的:該同步就同步,不確定就記一句。"
@@ -290,6 +323,43 @@ def build_additional_context(impact_data: dict) -> str:
     return "\n".join(lines)
 
 
+def build_ranked_context(data: dict) -> str:
+    """v1.1:把 ranked 輸出({results,meta})轉成降噪清單文字。固定席在前(合約/事故),
+    非固定帶分數;截斷數照 meta 標注。"""
+    lines: list[str] = []
+    res = data.get("results", [])
+    meta = data.get("meta", {})
+    pins = [x for x in res if x.get("pinned")]
+    free = [x for x in res if not x.get("pinned")]
+    if pins:
+        lines.append(f"必看(合約/事故固定席 {len(pins)}):")
+        for x in pins:
+            mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
+            ct = f" ★{x['contract']}★" if x.get("contract") else ""
+            mb = f"  (trigger: {x['matched_by']})" if x.get("matched_by") else ""
+            lines.append(f"  {mk}{ct} {x.get('node','?')}{mb}")
+    if free:
+        lines.append(f"相關(排序 top {len(free)}):")
+        for x in free:
+            mk = {"direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
+            lines.append(f"  {x.get('score',0):.2f} {mk} {x.get('node','?')}")
+    if meta.get("truncated"):
+        lines.append(f"  (+{meta['truncated']} 條低分截斷)")
+    lines.append("")
+    lines.append(_INJECT_INSTRUCTION)
+    return "\n".join(lines)
+
+
+def inject_ranked_context(data: dict) -> None:
+    """ranked 版注入:results 空 → 不輸出。"""
+    if not data.get("results"):
+        return
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": build_ranked_context(data),
+    }}, ensure_ascii=False))
+
+
 def inject_additional_context(impact_data: dict) -> None:
     """非空影響集 → 印 hookSpecificOutput JSON 到 stdout;空集合 → 不輸出。
 
@@ -356,17 +426,27 @@ def main() -> int:
         except (OSError, json.JSONDecodeError, ValueError):
             pass
 
-        if not _ttl_should_inject(session_id, file_path_abs, ttl_sec=ttl_min * 60):
-            return 0  # 冷卻窗內,壓掉
+        in_cooldown = not _ttl_should_inject(session_id, file_path_abs, ttl_sec=ttl_min * 60)
+    else:
+        in_cooldown = False
 
     lumos = _find_lumos_script()
     if lumos is None:
         return 0  # lumos 不在 PATH/repo → fail-open
 
-    # 呼叫 lumos impact --file <path> --repo <repo> --json
+    # v1.1(2026-07-11,goldset §6 全過後轉正):
+    # 窗外 → ranked 降噪版(固定席+top-8,delta 當查詢詞);
+    # 窗內 → --incidents-only 快速路(只跑事故比對——安全面每次都看,重型 BFS 降頻)。
+    delta_q = extract_delta_query(payload)
+    stdin_payload = json.dumps({"query": delta_q, "prospective": {}}, ensure_ascii=False)
+    cmd = [sys.executable, lumos, "impact", "--file", file_path_abs, "--repo", repo,
+           "--ranked", "--stdin-payload", "--json"]
+    if in_cooldown:
+        cmd.append("--incidents-only")
     try:
         result = subprocess.run(
-            [sys.executable, lumos, "impact", "--file", file_path_abs, "--repo", repo, "--json"],
+            cmd,
+            input=stdin_payload,
             capture_output=True,
             text=True,
             timeout=30,
@@ -388,25 +468,14 @@ def main() -> int:
         # 其他非 0 → fail-open 純靜默
         return 0
 
-    # rc == 0: 取得 json 結果
-    # Task 11 在此注入 additionalContext;Task 9 只完成到「拿到 rc/json」
+    # rc == 0: ranked schema {file, results, meta}
     try:
-        impact_data = json.loads(result.stdout)
-    except (json.JSONDecodeError, ValueError):
-        impact_data = None
-
-    # 空影響集不注入(Task 11 處理注入;此處預留結構)
+        impact_data = json.loads(result.stdout.strip().splitlines()[-1])
+    except (json.JSONDecodeError, ValueError, IndexError):
+        return 0
     if not impact_data:
         return 0
-
-    direct = impact_data.get("direct", [])
-    indirect = impact_data.get("indirect", [])
-    incidents = impact_data.get("incidents", [])
-    if not direct and not indirect and not incidents:
-        return 0
-
-    # 注入 additionalContext
-    inject_additional_context(impact_data)
+    inject_ranked_context(impact_data)
     return 0
 
 

@@ -7199,6 +7199,14 @@ def _impact_collect(direct_node_rel, env, depth=2):
     return {"direct": direct_list, "indirect": indirect_list}
 
 
+def _impact_knob(name, default):
+    """hook 面調參旋鈕:預設=凍結常數;LUMOS_IMPACT_* env 僅供 goldset 網格消融,非使用者旗標。"""
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
 def _match_incident_triggers(file_rel, file_content, env):
     """給被碰 code 檔(路徑 + 內容),掃全圖有 pitfall_when 的事故節點,比對觸發條件。
 
@@ -7415,7 +7423,13 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
             file_content = ""
 
     # 呼叫 _match_incident_triggers,取得原始命中列表(含 node, matched_by)
-    _raw_incidents = _match_incident_triggers(rel_file, file_content, env)
+    # content trigger 的比對對象(v1.1 精度修):有 delta(payload.query)→ 比對「這次改動的內容」;
+    # 無 delta(legacy 呼叫)→ 比整檔現況。理由:整檔比對對單體大檔恆誤觸發
+    # (scripts/lumos 本身定義 HOOK_ENTRIES 等符號,改任何一行都命中)——goldset 實測 3/9 固定席噪音源自此。
+    # glob trigger(比路徑)不受影響。
+    _delta_q = (_payload.get("query") or "") if stdin_payload else ""
+    _content_probe = _delta_q if _delta_q else file_content
+    _raw_incidents = _match_incident_triggers(rel_file, _content_probe, env)
 
     # 補 contract/combo(復用 _impact_contract);建 all_incidents list
     all_incidents = []
@@ -7456,11 +7470,12 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 for _r, s, _h in raw:
                     lex[_r] = (s / _mx) if _mx > 0 else 0.0
             eff_depth = depth if depth is not None else 2
+            _dbase = _impact_knob("LUMOS_IMPACT_DIRECT_BASE", 0.30)
             for x in all_direct:
                 L = lex.get(x["node"], 0.0)
                 pinned = bool(x.get("contract"))   # 含合約的 direct 固定
                 results.append({"node": x["node"], "kind": "direct", "pinned": pinned,
-                                "score": round(0.50 + 0.50 * L, 4), "L": round(L, 4),
+                                "score": round(_dbase + (1.0 - _dbase) * L, 4), "L": round(L, 4),
                                 "contract": x.get("contract")})
             for x in all_indirect:
                 L = lex.get(x["node"], 0.0)
@@ -7472,8 +7487,8 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                                     "score": round(0.40 + 0.30, 4), "L": round(L, 4),
                                     "hop": hop, "contract": contract})
                     continue
-                # hop≥2 需 L>0
-                if hop >= 2 and L <= 0:
+                # hop≥2 需 L>底線(遠端節點要足夠詞彙證據背書)
+                if hop >= 2 and L <= _impact_knob("LUMOS_IMPACT_LMIN_HOP2", 0.0):
                     continue
                 G = 0.60 * min(1.0, 2.0 / (2 ** hop))
                 R = round(0.60 * L + 0.40 * G, 4)
@@ -7483,11 +7498,14 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
         pins = [r for r in results if r["pinned"]]
         free = [r for r in results if not r["pinned"]]
         max_free = max((r["score"] for r in free), default=0.0)
-        thresh = max(float(min_score), 0.25 * max_free)
+        thresh = max(float(min_score), _impact_knob("LUMOS_IMPACT_DYN_COEF", 0.55) * max_free)
         free = [r for r in free if r["score"] >= thresh]
         free.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))
-        truncated = max(0, len(free) - int(top))
-        free = free[:int(top)]
+        # 名額制(v1.1):單體檔洪水按排名剪尾——閾值管品質、名額管上限(gate 對齊 top_k+2=10);
+        # 剪的是 11 名以後,不動前 8 的視野(精度/必看召回不受影響)
+        _quota = int(_impact_knob("LUMOS_IMPACT_FREE_QUOTA", 10))
+        truncated = max(0, len(free) - min(int(top), _quota))
+        free = free[:min(int(top), _quota)]
         # 姐妹去冗餘(顯示層,--json 全量不折)
         final = pins + free
         meta = {"candidates": len(all_direct) + len(all_indirect) + len(all_incidents),

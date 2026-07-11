@@ -4459,6 +4459,28 @@ def t_impact_hook_filter_and_rc():
           "expected non-None for .ts")
 
 
+def t_impact_hook_v11_delta_and_format():
+    """v1.1:extract_delta_query 三工具抽取+cap;build_ranked_context 降噪格式。"""
+    from importlib.machinery import SourceFileLoader
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    m = SourceFileLoader("impact_hook_v11", hook_path).load_module()
+    q = m.extract_delta_query({"tool_name": "Edit", "tool_input": {"old_string": "舊的 SQL", "new_string": "新的 UPDLOCK"}})
+    check("delta: Edit 舊+新都入查詢", "舊的" in q and "UPDLOCK" in q, q)
+    q = m.extract_delta_query({"tool_name": "Write", "tool_input": {"content": "whole file body"}})
+    check("delta: Write 取全文", q == "whole file body", q)
+    q = m.extract_delta_query({"tool_name": "MultiEdit", "tool_input": {"edits": [
+        {"old_string": "aa", "new_string": "bb"}, {"old_string": "cc", "new_string": "dd"}]}})
+    check("delta: MultiEdit 串接各 edit", all(x in q for x in ("aa", "bb", "cc", "dd")), q)
+    q = m.extract_delta_query({"tool_name": "Edit", "tool_input": {"old_string": " ".join(f"tok{i}" for i in range(600)), "new_string": ""}})
+    check("delta: 512 distinct token cap", len(set(q.split())) <= 512, str(len(set(q.split()))))
+    ctx = m.build_ranked_context({"results": [
+        {"node": "Issues/X.md", "kind": "incident", "pinned": True, "score": 1.0, "matched_by": "content:SQL"},
+        {"node": "Systems/Y.md", "kind": "direct", "pinned": False, "score": 0.93},
+    ], "meta": {"truncated": 4}})
+    check("ranked 格式: 固定席+分數+截斷注記", "⚠事故" in ctx and "0.93" in ctx and "+4 條低分截斷" in ctx, ctx[:200])
+    check("ranked 格式: 含動手前指令", "動手前" in ctx, ctx[-80:])
+
+
 def t_impact_hook_ttl():
     """Task 10: _ttl_should_inject TTL 冷卻窗 + 惰性清理 >24h session 目錄。
 
@@ -4697,10 +4719,9 @@ def t_impact_hook_inject():
     _proc_ok.returncode = 0
     _proc_ok.stdout = _json.dumps({
         "file": "foo.py",
-        "direct": [{"node": "Systems/A", "hit": "body-inline-code",
-                    "contract": None, "combo": False}],
-        "indirect": [],
-    })
+        "results": [{"node": "Systems/A", "kind": "direct", "pinned": False, "score": 0.8}],
+        "meta": {"candidates": 1, "pinned": 0, "truncated": 0},
+    })   # v1.1:main() 消費 ranked schema
     _proc_ok.stderr = ""
     # 每次測試用新 UUID 作 session_id,確保 TTL marker 是全新的(避免跨次測試 marker 殘留)
     fresh_sid = str(_uuid.uuid4())
@@ -4769,7 +4790,7 @@ def t_impact_hook_incidents_inject():
     j = json.loads(out)
     ctx = j["hookSpecificOutput"]["additionalContext"]
     check("impact_hook_incidents_inject: additionalContext 含「相關事故」或 incident",
-          "相關事故" in ctx or "incident" in ctx.lower(),
+          "相關事故" in ctx or "incident" in ctx.lower() or "⚠事故" in ctx,   # v1.1 ranked 格式=固定席段
           f"ctx={ctx!r}")
     check("impact_hook_incidents_inject: additionalContext 含事故節點名稱",
           "Issues/N1" in ctx,
@@ -5239,13 +5260,12 @@ def t_impact_incidents_main_only():
     proc_mock.returncode = 0
     proc_mock.stdout = _json.dumps({
         "file": "app/svc.py",
-        "direct": [],
-        "indirect": [],
-        "incidents": [
-            {"node": "Issues/NPlus1", "matched_by": "glob:**/svc.py",
-             "contract": None, "combo": False}
+        "results": [
+            {"node": "Issues/NPlus1", "kind": "incident", "pinned": True, "score": 1.0,
+             "matched_by": "glob:**/svc.py", "contract": None}
         ],
-    })
+        "meta": {"candidates": 1, "pinned": 1, "truncated": 0},
+    })   # v1.1:ranked schema,事故=固定席
     proc_mock.stderr = ""
 
     fresh_sid = str(_uuid.uuid4())
@@ -5275,8 +5295,8 @@ def t_impact_incidents_main_only():
           out != "", f"expected JSON on stdout, got {out!r}")
     j = _json.loads(out)
     ctx = j.get("hookSpecificOutput", {}).get("additionalContext", "")
-    check("impact_incidents_main_only: additionalContext 含「相關事故」段",
-          "相關事故" in ctx or "incident" in ctx.lower(),
+    check("impact_incidents_main_only: additionalContext 含事故段(v1.1=固定席格式)",
+          "相關事故" in ctx or "incident" in ctx.lower() or "⚠事故" in ctx,
           f"ctx={ctx!r}")
     check("impact_incidents_main_only: additionalContext 含事故節點名稱",
           "Issues/NPlus1" in ctx, f"ctx={ctx!r}")
@@ -7839,13 +7859,20 @@ def t_impact_ranked():
     pinned = [x for x in dr["results"] if x.get("pinned")]
     check("合約節點被固定(SvcCore)", any("SvcCore" in x["node"] for x in pinned), str(pinned)[:200])
     check("每項有分數", all("score" in x for x in dr["results"]), str(dr)[:150])
-    # stdin-payload:prospective 內容含 SQL → 觸發事故(即使磁碟檔沒有)
-    payload = json.dumps({"query": "save with sql",
+    # v1.1 精度語意:content trigger 比對「這次改動的內容」(payload.query,即 hook 端的 old+new)——
+    # 新增危險內容在 delta 裡 → 觸發;整檔含危險符號但 delta 無關 → 不誤觸發(單體大檔恆誤傷修正)
+    payload = json.dumps({"query": "def save(x): q='SELECT id FROM t'",
                           "prospective": {"src/svc.py": "def save(x):\n    q='SELECT id FROM t'\n"}})
     r = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
     dp = json.loads(r.stdout.strip().splitlines()[-1])
-    check("prospective incident 觸發", any("SQL" in x["node"] for x in dp["results"] if x.get("kind") == "incident"),
+    check("delta 含危險內容 → incident 觸發", any("SQL" in x["node"] for x in dp["results"] if x.get("kind") == "incident"),
           str([x for x in dp["results"] if x.get("kind")=="incident"]))
+    payload2 = json.dumps({"query": "rename helper only",
+                           "prospective": {"src/svc.py": "def save(x):\n    q='SELECT id FROM t'\n"}})
+    r = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload2)
+    dp2 = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delta 無關 → 整檔危險符號不誤觸發(v1.1)", not any("SQL" in x["node"] for x in dp2["results"] if x.get("kind") == "incident"),
+          str([x for x in dp2["results"] if x.get("kind")=="incident"]))
     # incidents-only:只回事故段、不做 BFS
     r = lum("impact", "--file", "src/svc.py", "--incidents-only", "--stdin-payload", "--json", stdin=payload)
     di = json.loads(r.stdout.strip().splitlines()[-1])
