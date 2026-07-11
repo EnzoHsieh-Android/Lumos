@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-06-26
+updated: 2026-07-11
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -44,6 +44,13 @@ decisions:
     context: 使用者指示暫停接下來的日報 loop
     why_chosen: 恢復指令:launchctl enable gui/$UID/com.enzo.lumos.daily-governance && launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.enzo.lumos.daily-governance.plist
     decided: 2026-07-07
+    valid: false
+    superseded_by: 2026-07-11 使用者裁示重啟(launchctl enable+bootstrap 已執行,每日 09:30);重啟時點的安全網比暫停時厚:panel near-perfect 閘/跨家族否決席/guard kill/落成核對均已上線
+    ended: 2026-07-11
+  - content: 重啟每日自主 loop(dry-run 模式維持:收斂備 pending 等人放行,絕不自動 merge)
+    context: 使用者明示「重啟」;7/7 暫停期間補齊 canary 生成硬化/near-perfect/panel/guard kill/落成核對
+    why_chosen: 人放行閘=最高槓桿不動;恢復後首輪吃到全部新紀律
+    decided: 2026-07-11
     valid: true
 ---
 # autonomous-iteration-loop
