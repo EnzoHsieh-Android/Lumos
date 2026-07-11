@@ -7956,9 +7956,26 @@ def t_impact_diff():
     check("事故被磁碟現況觸發(SQL)", any("SQL" in x["node"] for x in pinned), str(pinned)[:200])
     check("非固定含 Helper 且帶來源檔", any("Helper" in x["node"] and x.get("files")
           for x in d["results"] if not x.get("pinned")), str(d["results"])[:300])
+    # 落成核對(sync-check):SvcCore 受影響但 commit2 沒動它 → 列未同步(pinned 標必看);MOC 動過 → touched
+    r = lum("impact", "--diff", "HEAD~1..HEAD", "--sync-check", "--json")
+    ds = json.loads(r.stdout.strip().splitlines()[-1])
+    check("sync-check: 有 sync 段", "sync" in ds, str(ds)[:120])
+    check("sync-check: 動過的節點含 MOC", "MOC/i.md" in ds["sync"]["touched_nodes"], str(ds["sync"]["touched_nodes"]))
+    miss = {m["node"]: m for m in ds["sync"]["missing"]}
+    check("sync-check: SvcCore 受影響未同步且標必看", "Systems/SvcCore.md" in miss and miss["Systems/SvcCore.md"]["pinned"], str(miss.keys()))
+    # 動過 SvcCore 後 → 不再列未同步
+    (v / "Systems" / "SvcCore.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 不可空寫 [test:X]\n---\n# SvcCore\n實作在 `src/svc.py`。同步註記。\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "sync node")
+    r = lum("impact", "--diff", "HEAD~2..HEAD", "--sync-check", "--json")
+    ds2 = json.loads(r.stdout.strip().splitlines()[-1])
+    miss2 = {m["node"] for m in ds2["sync"]["missing"]}
+    check("sync-check: 同步後 SvcCore 不再列缺", "Systems/SvcCore.md" not in miss2, str(miss2))
     # 人讀模式
-    r = lum("impact", "--diff", "HEAD~1..HEAD")
+    r = lum("impact", "--diff", "HEAD~2..HEAD")
     check("diff 人讀含標頭", "受影響功能面" in r.stdout, r.stdout[:150])
+    r = lum("impact", "--diff", "HEAD~2..HEAD", "--sync-check")
+    check("sync-check 人讀含落成核對段", "落成核對" in r.stdout, r.stdout[-300:])
     # 參數守衛:--file 與 --diff 都缺 → rc2
     r = lum("impact")
     check("impact 無 --file/--diff rc2", r.returncode == 2, str(r.returncode))

@@ -7590,7 +7590,8 @@ def _impact_diff_seed_ok(f):
     return True
 
 
-def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as_json=False):
+def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as_json=False,
+                    sync_check=False):
     """code-loop 橋接:對整段 diff 的每支改動 code 檔跑 ranked impact(query=該檔 hunk 文字),
     聚合成「受影響功能面」manifest——固定席(合約/事故)全保、非固定取跨檔最高分 top-N。
     定位=審計員鏡頭(advisory,人判),非自動推播(hook 面 goldset 評測未過線,故不接 hook)。
@@ -7663,9 +7664,26 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
                   key=lambda v: (-v["score"], v["node"]))
     free = sorted([v for v in merged.values() if not v["pinned"]],
                   key=lambda v: (-v["score"], v["node"]))[:int(top)]
+    # 落成位置閉環(sync-check):預期受影響節點 ∩ 分支實際動過的圖譜節點——
+    # 「這功能被改了,它的節點卻沒動」= 受影響未同步清單(advisory,人判;固定席可信度高、自由席≈P@8 .70)
+    sync = None
+    if sync_check:
+        _vault_name = _vault.name if _vault is not None else None
+        touched = set()
+        if _vault_name:
+            _prefix = f"docs/{_vault_name}/"
+            for f2 in r.stdout.splitlines():
+                f2 = f2.strip().strip('"')
+                if f2.startswith(_prefix) and f2.endswith(".md"):
+                    touched.add(f2[len(_prefix):])
+        missing = [v for v in (pins + free) if v["node"] not in touched]
+        sync = {"touched_nodes": sorted(touched),
+                "missing": [{"node": v["node"], "pinned": v["pinned"],
+                             "score": v["score"], "files": v["files"]} for v in missing]}
     if as_json:
         print(_json.dumps({"range": diff_range, "files": files,
                            "results": pins + free,
+                           **({"sync": sync} if sync is not None else {}),
                            "meta": {"files": len(files), "pinned": len(pins),
                                     "free_kept": len(free),
                                     "free_total": sum(1 for v in merged.values() if not v["pinned"]),
@@ -7679,6 +7697,15 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
         print(f"  {v['score']:5.2f} {mk} {v['node']}{ct}{pin}  ←{','.join(v['files'][:3])}")
     if not merged:
         print("  (無節點引用這些檔——圖譜對此 diff 無覆蓋)")
+    if sync is not None:
+        print(f"\n落成核對(分支動過 {len(sync['touched_nodes'])} 個節點):")
+        if not sync["missing"]:
+            print("  ✓ 預期受影響節點全數已同步")
+        else:
+            for v in sync["missing"]:
+                mark = "⚠必看" if v["pinned"] else "  "
+                print(f"  {mark} 未同步 {v['node']}  ←{','.join(v['files'][:2])}")
+            print("  (advisory:漏了還是不用?逐條判;固定席可信度高,自由席人判)")
     return 0
 
 
@@ -8122,6 +8149,8 @@ def main():
     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
     p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff 二擇一)")
     p.add_argument("--diff", dest="impact_diff", help="diff range(如 main..HEAD):聚合各改動檔的 ranked impact 成受影響功能面 manifest(code-loop 審計鏡頭)")
+    p.add_argument("--sync-check", action="store_true", dest="impact_sync",
+                   help="落成核對(配 --diff):預期受影響節點 vs 分支實際動過節點 → 未同步清單(advisory)")
     p.add_argument("--repo", dest="impact_repo", help="repo root(缺則退回 find_vault;hook 必傳)")
     p.add_argument("--depth", dest="impact_depth", type=int, default=None, help="BFS 展開深度(缺省讀 .lumos/impact.json;最終預設 2)")
     p.add_argument("--json", dest="impact_json", action="store_true", help="JSON 輸出(機器可讀)")
@@ -8225,7 +8254,8 @@ def main():
         if args.impact_diff:
             return cmd_impact_diff(args.impact_diff, repo=args.impact_repo,
                                    depth=args.impact_depth, top=args.impact_top,
-                                   min_score=args.impact_min, as_json=args.impact_json)
+                                   min_score=args.impact_min, as_json=args.impact_json,
+                                   sync_check=args.impact_sync)
         if not args.impact_file:
             print("ERROR: impact 需要 --file <檔> 或 --diff <range>", file=sys.stderr)
             return 2

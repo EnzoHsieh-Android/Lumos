@@ -244,6 +244,7 @@ lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活
 
 **強制步驟（不可跳）：**
 ```bash
+lumos impact --diff <merge-base>..HEAD --sync-check   # 落成核對:受影響功能的節點動了沒?未同步清單逐條判(漏了就補,不用就心裡有數)
 lumos code-loop pass --note "<收斂理由 / loop-id，例:code-<topic> 收斂 N 輪 caught 無 blocker>"
 ```
 
