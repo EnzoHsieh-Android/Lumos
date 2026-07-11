@@ -24,7 +24,7 @@ PRIOR-ART: 沿用 [[Projects/檢索優化_計劃]] §3（hook 降噪機件,已 g
 - **入口**：`lumos impact --diff <base>..HEAD [--json] [--top N]`（與 `--file` 二擇一;都缺 rc2）。
 - **聚合語意**：diff 內每支改動 code 檔各跑一次 ranked impact（共用一次載入的圖譜環境——r1 panel N+1 修正），query=該檔 hunk 文字（`+/-` 行內容,cap 4000 字元）；跨檔合併=同節點取最高分整項重建（防 hop/L 幽靈欄位殘留）、pinned 任一檔 pinned 即 pinned、記來源檔清單。**種子過濾（r1 panel 修正）**：排除 `docs/`、`governance/golden/`、`*.jsonl`、`*.md`、governance 資料 `*.json`（goldset/裁決檔內嵌歷史 code 片段會偽觸發事故 pin——實證）；**已刪檔保留**（反查靠節點 body 引用路徑,刪除/改名正是合約節點最該被看到的時刻）。--file 與 --diff 同給 rc2。
 - **輸出**：固定席（合約/事故）全保、非固定 top-N;人讀標「審計鏡頭,人判」;--json 帶 per-file meta。
-- **定位（關鍵裁定）**：**advisory 審計鏡頭,不是自動閘、不接 hook**——goldset 評測（[[Verification/2026-07-11_檢索goldset評測]]）hook 面 P@8≈.5 未過線;機械保證只涵蓋合約/事故類固定席(標 2 必看僅 1/30 坐固定席——「30/30 全命中」係「出現在輸出」,經排序無保底,r1 panel 更正);code-loop 有 reviewer 在場,保底與噪音都由人兜,故當鏡頭不當自動閘。
+- **定位（關鍵裁定）**：**advisory 審計鏡頭,不是自動閘**——機械保證只涵蓋合約/事故類固定席,其餘經排序無保底;code-loop 有 reviewer 在場,保底與噪音都由人兜。（時代註:裁定當下 hook 面 P@8≈.5 未過線;2026-07-11 深夜三病因修畢過 §6 後**單檔版已接 hook**,見 [[Verification/2026-07-11_hook面v1.1轉正]]——本 --diff 聚合版維持鏡頭定位不變。）
 - **prospective 不需要**：diff 模式下 HEAD/工作樹已是改後內容,事故 content trigger 讀磁碟即為「套 delta 後」語意。
 - **消費點**：`lumos-code-loop` skill 步驟 3——派 reviewer 前跑,manifest 附給 reviewer:「逐條判此 diff 會不會破壞該節點宣稱的行為/合約;固定席必答」。
 
@@ -35,7 +35,7 @@ PRIOR-ART: 沿用 [[Projects/檢索優化_計劃]] §3（hook 降噪機件,已 g
 
 ## 未來方向：落成位置閉環（使用者提案,未實作）
 
-design-loop 收斂→code-loop 過審之後,「退場必寫」目前只有 pre-commit 粗閘（有沒有帶圖譜改動）與人判;精確版=**`impact --diff` 的預期受影響集 ∩ 分支實際動過的圖譜節點**——受影響但未同步的節點列 advisory 清單（code-loop finishing 步驟或 pre-push 軟提醒）,回答「你改了這功能,但它的節點沒動,是漏了還是不用?」。誠實界定:預期集精度=hook 面現況（P@8≈.52）,固定席（合約/事故）可信度高、自由席人判——所以是提醒不是硬閘;等 hook 面 v1.1 修完精度再議升級。
+design-loop 收斂→code-loop 過審之後,「退場必寫」目前只有 pre-commit 粗閘（有沒有帶圖譜改動）與人判;精確版=**`impact --diff` 的預期受影響集 ∩ 分支實際動過的圖譜節點**——受影響但未同步的節點列 advisory 清單（code-loop finishing 步驟或 pre-push 軟提醒）,回答「你改了這功能,但它的節點沒動,是漏了還是不用?」。誠實界定:固定席（合約/事故）可信度高、自由席人判——所以是提醒不是硬閘。前置已解:hook 面 v1.1 已修畢轉正（P@8≈.70）——**落成閉環可排上議程**。
 
 ## 相關模組
 
