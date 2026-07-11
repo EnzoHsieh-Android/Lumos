@@ -3778,6 +3778,7 @@ function setCut(i){
   applyVis();
 }
 if(dates.length){ tr.max=dates.length-1; tr.value=dates.length-1; td.textContent='現在(全量)'; }
+else { tt.style.opacity=.35; tt.style.pointerEvents='none'; tt.title='無日期資料'; }   // 空集停用(codex r1)
 tt.onclick=()=>{
   tt.classList.toggle('on');tt.classList.toggle('off');
   const showing=tb.classList.toggle('show');
@@ -7325,7 +7326,12 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
     repo_root_for_lookup = repo_root if repo_root is not None else vault.parent.parent
 
     # 5. code → node 反查(只認 body inline-code,r7-F2)
-    direct_rels = _impact_reverse_lookup(file, env, repo_root_for_lookup)
+    # incidents_only 真快速路(r1 終審親驗修正:原實作僅「不顯示」,反查/BFS 照跑——宣稱落空):
+    # 事故比對只需 rel_file+內容,不需 direct/BFS → 整段跳過,冷卻窗成本回到近零。
+    if incidents_only:
+        direct_rels = []
+    else:
+        direct_rels = _impact_reverse_lookup(file, env, repo_root_for_lookup)
 
     # 6. 組裝影響清單:single multi-source BFS 保證 hop = 距最近直接節點的 min 距離(I1)。
     #
@@ -7346,6 +7352,7 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
     processed_direct = set()  # 避免同一 direct 重複展開 direct/core_refs
 
     # ① 直接節點資料 + ② core_refs 葉(per-node,保留原 _impact_collect 語意)
+    # (incidents_only 時 direct_rels 為空,以下兩段自然零工作——BFS multi-source 種子空集即不擴散)
     for d_rel in direct_rels:
         if d_rel in processed_direct:
             continue
@@ -7428,7 +7435,19 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
     # (scripts/lumos 本身定義 HOOK_ENTRIES 等符號,改任何一行都命中)——goldset 實測 3/9 固定席噪音源自此。
     # glob trigger(比路徑)不受影響。
     _delta_q = (_payload.get("query") or "") if stdin_payload else ""
-    _content_probe = _delta_q if _delta_q else file_content
+    # 探測範圍 = delta + 鄰域窗(r1 終審折入):純 delta 會漏「改在危險函式內部、
+    # 但編輯片段不含函式名」的真陰性;整檔比對又對單體檔恆誤觸發。
+    # 折衷:在整檔內定位 delta 開頭片段,取 ±600 字元鄰域一起探測(窗寬 goldset 調參:2000 會把單體檔遠處符號掃回)——
+    # 函式名通常在鄰域內(覆蓋回來),遠處無關符號仍在窗外(噪音不回來)。定位失敗=退回純 delta。
+    _content_probe = file_content
+    if _delta_q:
+        _content_probe = _delta_q
+        _seek = _delta_q[:80].strip()
+        if _seek and file_content:
+            _pos = file_content.find(_seek)
+            _win = int(_impact_knob("LUMOS_IMPACT_TRIG_WIN", 600))
+            if _pos >= 0 and _win > 0:
+                _content_probe = _delta_q + "\n" + file_content[max(0, _pos - _win):_pos + _win]
     _raw_incidents = _match_incident_triggers(rel_file, _content_probe, env)
 
     # 補 contract/combo(復用 _impact_contract);建 all_incidents list

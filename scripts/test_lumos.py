@@ -4473,6 +4473,13 @@ def t_impact_hook_v11_delta_and_format():
     check("delta: MultiEdit 串接各 edit", all(x in q for x in ("aa", "bb", "cc", "dd")), q)
     q = m.extract_delta_query({"tool_name": "Edit", "tool_input": {"old_string": " ".join(f"tok{i}" for i in range(600)), "new_string": ""}})
     check("delta: 512 distinct token cap", len(set(q.split())) <= 512, str(len(set(q.split()))))
+    q = m.extract_delta_query({"tool_name": "Edit", "tool_input": {"old_string": "x" * 8001, "new_string": "HOOK_ENTRIES danger"}})
+    check("delta: 每段獨立配額(超長 old 不吃掉 new——codex r1 反例)", "HOOK_ENTRIES" in q, str(len(q)))
+    many = {"tool_name": "MultiEdit", "tool_input": {"edits": [
+        {"old_string": "y" * 600, "new_string": "z" * 600} for _ in range(9)
+    ] + [{"old_string": "w" * 600, "new_string": "DANGER_TAIL marker"}]}}
+    q = m.extract_delta_query(many)
+    check("delta: 多段 MultiEdit 尾段不被吃(r2 反例)", "DANGER_TAIL" in q, str(len(q)))
     ctx = m.build_ranked_context({"results": [
         {"node": "Issues/X.md", "kind": "incident", "pinned": True, "score": 1.0, "matched_by": "content:SQL"},
         {"node": "Systems/Y.md", "kind": "direct", "pinned": False, "score": 0.93},

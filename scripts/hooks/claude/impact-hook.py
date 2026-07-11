@@ -220,7 +220,12 @@ def extract_delta_query(payload: dict, cap_tokens: int = 512, cap_chars: int = 8
                 parts += [str(e.get("old_string") or ""), str(e.get("new_string") or "")]
     elif tool == "Write":
         parts = [str(ti.get("content") or "")]
-    q = " ".join(p for p in parts if p)[:cap_chars]
+    # 每段獨立配額(codex r1+r2 折入):先串接再整體截斷會讓「超長 old_string」吃掉整段 new;
+    # 地板配額×多段再尾切又會吃掉後段 edit(r2 抓到的同類假陰性)——
+    # 故:每段保底 300 字元、總量不再尾切(查詢只餵斷詞與 regex,尺寸無虞;512 token cap 照舊)。
+    nz = [p for p in parts if p]
+    per_part = max(300, cap_chars // max(1, len(nz)))
+    q = " ".join(p[:per_part] for p in nz)
     toks = q.split()
     if len(set(toks)) > cap_tokens:
         seen: set[str] = set()

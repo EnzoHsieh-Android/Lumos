@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LUMOS = ROOT / "scripts" / "lumos"
 _VENV = os.environ.get("LUMOS_EVAL_VAULT")
 VAULT = Path(_VENV) if _VENV else next((ROOT / "docs").glob("*-knowledge"), None)
+SNAP_ROOT = None   # 語料快照 worktree 根(釘定時設);impact 走 --repo,不理 --vault
 
 
 def _lum(*args):
@@ -151,9 +152,10 @@ def eval_edit(gs, split=None, k=8):
         if not lab or not any(v >= 1 for v in lab.values()):
             continue
         payload = json.dumps({"query": case.get("delta", ""), "prospective": {}})
-        r = subprocess.run([sys.executable, str(LUMOS), "--vault", str(VAULT),
-                            "impact", "--file", case["file"], "--ranked",
-                            "--top", "50", "--stdin-payload", "--json"],
+        # impact 自行從 --repo 解析 vault(不吃全域 --vault)→ 快照釘定須走 --repo(r1 終審親驗)
+        r = subprocess.run([sys.executable, str(LUMOS),
+                            "impact", "--file", case["file"], "--repo", str(SNAP_ROOT or ROOT),
+                            "--ranked", "--top", "50", "--stdin-payload", "--json"],
                            capture_output=True, text=True, input=payload, cwd=ROOT)
         try:
             data = json.loads(r.stdout.strip().splitlines()[-1])
@@ -243,10 +245,12 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
 
 
 def main():
+    global VAULT, SNAP_ROOT
     ap = argparse.ArgumentParser()
     ap.add_argument("--auto", action="store_true", help="cochange proxy 自動金標(related 面)")
     ap.add_argument("--goldset", help="人工標註 goldset.json 路徑")
     ap.add_argument("--split", choices=["train", "held"], help="只跑該切分")
+    ap.add_argument("--live-vault", action="store_true", help="用現況 vault(預設釘 goldset snapshot;探索/漂移觀測用)")
     ap.add_argument("-k", type=int, default=8)
     args = ap.parse_args()
     if VAULT is None:
@@ -272,6 +276,29 @@ def main():
         except (OSError, ValueError, KeyError, TypeError) as e:
             print(f"ERROR: goldset 讀取/結構失敗: {e}", file=sys.stderr)
             return 2
+        # 語料快照釘定(r1 終審折入,可重現性正解):labels 對應出題當下的 vault——
+        # 之後新增的未標節點若進候選池一律計噪音,gate 會被「寫文件」這種無關演進打翻。
+        # 預設把評測 vault 釘在 goldset.snapshot_commit 的 worktree;--live-vault 才用現況(探索用)。
+        _snap = gs.get("snapshot_commit")
+        if _snap and not args.live_vault and not os.environ.get("LUMOS_EVAL_VAULT"):
+            import tempfile, shutil, atexit
+            _wt = Path(tempfile.mkdtemp(prefix="lumos-eval-snap-"))
+            r = subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach",
+                                str(_wt), _snap], capture_output=True, text=True)
+            if r.returncode == 0:
+                _sv = next((_wt / "docs").glob("*-knowledge"), None)
+                if _sv is not None:
+                    VAULT = _sv
+                    SNAP_ROOT = _wt
+                    print(f"(語料釘定 snapshot={_snap};--live-vault 可用現況)")
+                def _cleanup():
+                    subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(_wt)],
+                                   capture_output=True, text=True)
+                    shutil.rmtree(_wt, ignore_errors=True)
+                atexit.register(_cleanup)
+            else:
+                shutil.rmtree(_wt, ignore_errors=True)   # r2:失敗路徑不留殘目錄
+                print(f"⚠ snapshot worktree 失敗({r.stderr.strip()[:80]}),退回現況 vault", file=sys.stderr)
         unl = sum(1 for c in gs["labels"].values() for v in c.values() if v.get("final") is None)
         if unl:
             print(f"⚠ 尚有 {unl} 個候選未定稿(final=None,視為 0)", file=sys.stderr)
@@ -302,8 +329,10 @@ def main():
         with open(hist, "a", encoding="utf-8") as fh:
             head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
                                   capture_output=True, text=True).stdout.strip()
+            knobs = {k: v for k, v in os.environ.items() if k.startswith("LUMOS_IMPACT_") or k.startswith("LUMOS_RANK_")}
             fh.write(json.dumps({"mode": "goldset", "ts": datetime.date.today().isoformat(),
-                                 "eval_head": head, "vault_note": "活語料:節點增修致數字 ±1pp 漂移;重現=checkout eval_head 重跑",
+                                 "eval_head": head, "knobs": knobs or "frozen-defaults",
+                                 "vault_note": "活語料:節點增修致數字 ±1pp 漂移;重現=checkout eval_head 重跑",
                                  "k": args.k, "gates": gates, "pass": ok,
                                  "verdicts": {r["split"]: r["verdict"] for r in reports}},
                                 ensure_ascii=False) + "\n")
