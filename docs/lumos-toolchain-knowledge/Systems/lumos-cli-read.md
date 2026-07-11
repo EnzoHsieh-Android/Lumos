@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-06-26
+updated: 2026-07-11
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -77,3 +77,7 @@ decisions:
 - 實作落點:`scripts/lumos` `cmd_search`/`cmd_context`/`cmd_contracts`/`cmd_doctor`/`cmd_links`/`cmd_map`/`cmd_export`/`cmd_decisions`/`cmd_stale`/`cmd_recent`/`cmd_stats` + `load_vault`/`Env`/`find_vault`。
 - 回歸測試:`scripts/test_lumos.py`(Python t_-prefixed)。
 - 對稱寫入原語見 [[Systems/lumos-cli-write]];安裝 / 生命週期見 [[Systems/lumos-cli-lifecycle]];`lumos --help` 為現行權威。
+
+## 近期修正
+
+- 2026-07-11 export html 視覺化修：節點面板關閉鈕 `#close` 被後繪的 `#phead`（透明背景）蓋住，真實點擊被攔截而程式呼叫正常——Playwright elementFromPoint 實測定位，補 `z-index:3`。教訓：疊層 UI 的可點性要用真實命中測試驗，不能只驗 handler 有綁。
