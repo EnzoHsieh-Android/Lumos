@@ -7524,12 +7524,14 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 results.append({"node": x["node"], "kind": "direct", "pinned": pinned,
                                 "score": round(_dbase + (1.0 - _dbase) * L, 4), "L": round(L, 4),
                                 "contract": x.get("contract")})
+            _pin_hop = int(_impact_knob("LUMOS_IMPACT_PIN_HOP", 1))
             for x in all_indirect:
                 L = lex.get(x["node"], 0.0)
                 hop = x.get("hop", 2)
                 contract = x.get("contract")
-                # 深度內合約 → 固定席(spec r3:有效深度內任意 hop)
-                if contract and hop <= eff_depth:
+                # 合約固定席 hop 上限(v1.2 旋鈕):合約密集圖(Landmark 考卷實證)hop2 合約
+                # 搭便車氾濫(51 席噪音)——收窄後 hop2 合約降入自由席按分數競爭(L≈0 者被閾殺)
+                if contract and hop <= min(eff_depth, _pin_hop):
                     results.append({"node": x["node"], "kind": "indirect", "pinned": True,
                                     "score": round(0.40 + 0.30, 4), "L": round(L, 4),
                                     "hop": hop, "contract": contract})
@@ -7545,7 +7547,7 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
         pins = [r for r in results if r["pinned"]]
         free = [r for r in results if not r["pinned"]]
         max_free = max((r["score"] for r in free), default=0.0)
-        thresh = max(float(min_score), _impact_knob("LUMOS_IMPACT_DYN_COEF", 0.55) * max_free)
+        thresh = max(float(min_score), _impact_knob("LUMOS_IMPACT_DYN_COEF", 0.65) * max_free)
         free = [r for r in free if r["score"] >= thresh]
         free.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))
         # 名額制(v1.1):單體檔洪水按排名剪尾——閾值管品質、名額管上限(gate 對齊 top_k+2=10);
