@@ -966,17 +966,28 @@ def _rank_fields(env, rel):
 _RANK_TYPE_MULT_MOC = 0.4   # A1 型別先驗:MOC=hub 降權(goldset 實證關鍵字磁鐵;train 網格凍結)
 
 
+_RANK_STATUS_MULT = 1.0   # A1.5 狀態先驗(stale/superseded 降權;goldset 網格後凍結,1.0=關)
+
+
 def _rank_type_mult(env, rel):
-    """型別先驗乘數(A1,節點靜態先驗_調研):moc 降權、其餘 1.0。
-    降權用乘法(比例效果跨 query 一致,企業搜尋標準);LUMOS_RANK_MOC_MULT 供評測消融覆寫。"""
+    """型別/狀態先驗乘數(A1/A1.5,節點靜態先驗_調研):moc 降權、stale/superseded 降權、其餘 1.0。
+    降權用乘法(比例效果跨 query 一致,企業搜尋標準);LUMOS_RANK_* env 供評測消融覆寫。"""
     n = env.notes.get(rel)
-    t = str(((n.fields.get("type") if n and isinstance(n.fields, dict) else "") or "")).strip().lower()
+    fields = n.fields if n and isinstance(n.fields, dict) else {}
+    t = str((fields.get("type") or "")).strip().lower()
+    m = 1.0
     if t == "moc":
         try:
-            return float(os.environ.get("LUMOS_RANK_MOC_MULT", _RANK_TYPE_MULT_MOC))
+            m *= float(os.environ.get("LUMOS_RANK_MOC_MULT", _RANK_TYPE_MULT_MOC))
         except ValueError:
-            return _RANK_TYPE_MULT_MOC
-    return 1.0
+            m *= _RANK_TYPE_MULT_MOC
+    st = str((fields.get("status") or "")).strip().lower()
+    if st in ("stale", "superseded"):
+        try:
+            m *= float(os.environ.get("LUMOS_RANK_STATUS_MULT", _RANK_STATUS_MULT))
+        except ValueError:
+            m *= _RANK_STATUS_MULT
+    return m
 
 
 def _rank_score_candidates(env, query, candidates):
@@ -1012,6 +1023,9 @@ def _rank_score_candidates(env, query, candidates):
             score += _rank_bm25(tf, _rank_idf(n_docs, df[tok]), dl, avgdl)
             hits.append(tok)
         out.append((rel, round(score * _rank_type_mult(env, rel), 4), hits))
+    # A3 權威度(in-degree 飽和加分)已試已殺(2026-07-11 goldset 雙面負增益:
+    # search 0.875→0.847@w0.2、edit P@8 0.70→0.65@w0.1——本圖的高連結節點=導覽樞紐非答案,
+    # 與 MOC 磁鐵實證同構)。詳見 Projects/節點靜態先驗_調研 消融紀錄;勿憑直覺復活。
     out.sort(key=lambda x: (-x[1], x[0]))
     return out
 
@@ -3119,10 +3133,24 @@ def _reco_fused(env, seed, top=8, min_score=0.20, depth=2):
     return out[:max(int(top), 1)]
 
 
+def _usage_log(env, rel, cmd):
+    """A2 事件帳種子(節點靜態先驗_調研):記「節點真的被查閱採用」的 append 帳。
+    先累語料不進分數;未來 frecency=查詢時現算(Firefox 教訓:不存時變分數)。best-effort 靜默。"""
+    try:
+        import datetime as _dt
+        p = env.vault.parent / ".usage-log.jsonl"
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                                 "node": rel, "cmd": cmd}, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, as_json=False):
     """節點 + 鄰居 summary 壓縮索引 — MemPalace closet 具象化
     brief=True: 只給 meta + summary 首兩行 + 鄰居名單(壓 token 用)"""
     n = env.notes[rel]
+    _usage_log(env, rel, "context")
     out_e, in_e = env.edges
     meta = " | ".join(f"{k}:{n.fields[k]}" for k in ("type", "status", "created", "updated")
                       if isinstance(n.fields.get(k), str) and n.fields.get(k))
@@ -6185,7 +6213,7 @@ _COCHANGE_DEFAULTS = {"min_support": 3, "min_confidence": 0.8, "max_changeset": 
 _COCHANGE_DEFAULT_EXCLUDE = [
     "docs/.governance-log.jsonl", "docs/.bypass-log.jsonl",
     "docs/.canary-log.jsonl", "docs/.rot-queue.jsonl", "docs/.kill-log.jsonl",
-    "docs/.signoff-log.jsonl",
+    "docs/.signoff-log.jsonl", "docs/.usage-log.jsonl",
     "**/*-lock.json", "**/*.lock", "**/node_modules/**", "**/dist/**",
     "**/Migrations/**", "**/*.g.cs", "**/*.Designer.cs",
 ]
