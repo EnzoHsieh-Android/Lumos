@@ -7,16 +7,16 @@ tags:
   - type/project
   - status/doing
 summary: |-
-  FLOW:訊號源(C1a-lint演進/C1b-框架版本/C2-網搜每週/C3-code-loop旁註)→collector吐候選(帶target_rule)→共用池(lock去重)→refuter預篩(自造留痕)→governance-drain產草案→人閘三力度(微調/新R走design-loop/刪R)→改idioms文件
+  FLOW:M層(C1a-lint演進/C1b-框架版本 cron偵測)→pending候選→A層(refuter/drain草案/C3旁註/C2網搜,Claude在場跑)→screened→staged→人閘三力度→改idioms文件
   KEY:治病=idioms三份(kotlin/vue/csharp)會過時(版本變)或缺漏(新實踐沒收),既有「飛輪」靠人記得回填=實質不會發生;把「該回來複查」變機械觸發
-  KEY:方案C'(round-1 Codex跨家族審計修正版)——借「設計教訓」(gapfill反證預篩哲學/lint-watch的staging+LINE+人放行形態),但refuter留痕·drain·框架監測各造薄專用新原語,不硬借canary-record/自主loop-N=1(現契約不容)
-  KEY:共用池=idioms-candidates(可變狀態儲存,atomic-rewrite+advisory-lock,非append-only;待建);schema含結構化target_rule;候選kind=stale|gap;stale身分=(doc,tool/框架,from→to,target_rule)含版本以利重驗
-  KEY:C3改「加法旁註」——reviewer照常產完整verdict(所有真bug照計,不動verdict/pre-push),額外旁註「反覆樣式值得升R」;修正round-1 blocker(舊桶B會讓無R真bug逃收斂閘)
-  KEY:refuter預設反方(試駁不試證);框架特定判準=可替換第三方庫選擇(Hilt/Koin·Pinia/Vuex)→駁回進專案圖譜,核心語言/官方框架通用慣例→收(對齊idioms分層原則)
-  KEY:drain=獨立governance步驟(仿lint-watch:staging+LINE+人放行,非自主loop插槽);C2網搜每週;人閘三力度(微調trivial/新R走design-loop/刪R);與linter-gap分池(通用idioms vs 專案gotcha)
+  KEY:方案C''(round-2修正版:拆兩層)——機械層M(純lumos stdlib零LLM,cron可無人跑:版本偵測/池/去重/staging) + agent層A(Claude在場才跑:refuter/草案生成/C3旁註/C2網搜);交棒點=候選池status
+  KEY:演進史=C(只借)→round-1 Codex否決(借用假設半數與現契約不符)→C'(各造薄新原語)→round-2 Codex否決(LLM判斷鏈接不上零依賴cron)→C''(拆層)
+  KEY:候選池=idioms-candidates.json(6態:pending/screened/rejected/deferred/staged/adopted;os.replace atomic;O_CREAT|O_EXCL portable鎖非fcntl;結構化target_rule+tool_or_framework+evidence_version)
+  KEY:C3=結構化附出契約(封閉區塊<<<IDIOMS-ANNOTATION>>>,canary排除+辯方後才抽,抽取失敗不影響verdict);refuter框架特定判準=可替換庫選擇→駁/核心框架慣例→收
+  KEY:誠實代價=A層需Claude在場(自主loop tick或skill),非真7×24無人;「自動」限M層偵測+staging
   DEP:[[pitfalls網搜補漏_計劃]][[lint-version-watch]][[自主loop加法偏食]][[linter-gap實務隱患]]
-  DECISION:[2026-07-12]走方案C(薄collector+池新造,篩選/清池借既有)(valid)
-  DECISION:[2026-07-12]drain掛每日09:30自主loop(valid)｜統一refuter預篩三源(valid)｜C3桶B不進verdict去誘因(valid)
+  DECISION:[2026-07-12]C→C'→C''三代演進,現行C''拆兩層(valid)
+  DECISION:[2026-07-12]C3結構化附出不動verdict(valid)｜refuter/drain屬A層Claude編排不硬造model-runner(valid)｜portable鎖非fcntl(valid)
 related:
   - "[[pitfalls網搜補漏_計劃]]"
   - "[[Systems/lint-version-watch]]"
@@ -38,135 +38,143 @@ decisions:
     why_chosen: 保住三源完整迴路又修正blocker:C3改加法旁註(不動verdict/pre-push)、refuter/drain各造薄專用原語(仿形態不硬借)、C1b加回框架watcher補框架rot分類洞、明定框架特定判準(可替換庫選擇→駁/核心框架慣例→收)
     decided: 2026-07-12
     valid: true
+  - content: round-2 修正:C'→C''拆兩層——機械層M(純lumos stdlib零LLM,cron可無人跑:版本偵測/池/去重/staging) + agent層A(Claude在場才跑:refuter/草案/C3旁註/C2網搜);交棒點=候選池status
+    context: round-2 design-loop 跨家族Codex否決席揭露infra-fit blocker:LLM判斷鏈(refuter/草案生成/C3旁註抽取)接不上零依賴stdlib的cron(lumos不spawn agent、code-loop reviewer無結構化parser、governance daily只是shell);另fcntl與工具鏈原生Windows支援衝突、lint-upgrades每日覆寫會漏、C1b監測對象(kotlin-stdlib≠Compose)不成立
+    why_chosen: 拆層對齊lumos既有哲學(機械原語+Claude編排):M層可無人cron跑偵測,A層判斷鏈跟Claude session節奏(自主loop tick或skill);誠實承認A層非7×24無人=拆層換infra-fit的代價。並修:portable鎖(O_CREAT|O_EXCL非fcntl)、C1a游標讀seen.jsonl、C3結構化封閉區塊附出、6態狀態機(補deferred/staged)、gap採納回填R號、自引用斷路可執行偵測(IDIOMS_SELF_REVIEW旗標)
+    decided: 2026-07-12
+    valid: true
 ---
 # idioms自維護迴路_計劃
 
-**PRIOR-ART:** round-1 對抗審計（Codex 跨家族否決席）證實「只借不造」的假設半數與現契約不符（canary-record 是收斂專用、自主 loop 是 N=1 單工、gapfill 是互動式 skill 且反證邏輯綁單專案、lint-watch 輸出已被治理層消費）。修正為**方案 C'**：借「設計教訓」（gapfill 的反證預篩哲學、lint-watch 的 staging+LINE+人放行**形態**），但 refuter 留痕 / drain / 框架版本監測各造**薄的專用新原語**，不硬借。裁定 = **borrow-design（哲學與形態）+ build（薄新原語：`idioms-candidates` CLI + 框架 watcher + drain 步驟）**。
+**PRIOR-ART:** round-1 揭露「只借不造」半數與現契約不符→C'（各造薄新原語）。round-2 再揭露更深的 infra-fit：LLM-判斷鏈（refuter/草案生成/C3 旁註抽取）接不上零依賴 stdlib 的 cron（`lumos` 不 spawn agent、code-loop reviewer 無結構化 parser）。修正為**方案 C''：拆兩層**——**機械層 M**（純 lumos stdlib、零 LLM、可無人 cron 跑）只做版本偵測/池/去重/staging；**agent 層 A**（Claude 在場才跑，掛自主 loop tick 或專用 skill）做所有 LLM 判斷。對齊 lumos 既有哲學（機械原語 + Claude 編排）。裁定 = **borrow-design（gapfill 反證哲學 + lint-watch 形態）+ build（機械層薄原語）+ orchestrate（agent 層沿用 Claude 編排，不硬造 model-runner）**。
 
 ## 一、問題
 
 三份 idioms 慣例文件（kotlin R1-R18 / vue R1-R13 / csharp R1-R12）會以兩種方式腐爛：
 
-- **過時（stale）**：條文變錯——① `collectAsState` 建議變了、某條 `自訂`/`不可機檢` 現在 linter 原生支援了（**linter 演進**）；② 綁框架 API 版本的條款（Vue 3.5 `useTemplateRef`…）隨升版失準（**框架 API 演進**）。兩子型各有專屬 collector（C1a/C1b）。
+- **過時（stale）**：① 某條 `自訂`/`不可機檢` 現在 linter 原生支援了（**linter 演進**）；② 綁框架 API 版本的條款（Vue 3.5 `useTemplateRef`…）隨升版失準（**框架 API 演進**）。
 - **缺漏（gap）**：該有的最佳實踐從沒進 R 清單。
 
-文件自宣告的維護法（「飛輪：人工糾正一次就回填一條」）**沒有驅動力**——全靠人記得，實質不會發生。本計劃把「該回來複查」從「被記得」變成「被機械觸發」。
+文件自宣告的「飛輪」**沒有驅動力**（全靠人記得）。本計劃把「該回來複查」從「被記得」變成「被機械觸發」。
 
-## 二、架構（方案 C'）
+## 二、架構（方案 C''：機械層 M + agent 層 A）
+
+**分層鐵則**：一步驟需 LLM 判斷 → 屬 A 層（Claude 在場才跑），**絕不放進無人 cron**；純版本/檔案/字串比對 → 屬 M 層（cron 可無人跑）。交棒點 = 候選池的 `status`。
 
 ```
-  C1a 寄生 lint-watch（消費治理層 lint-upgrades 輸出）─┐  linter 原生化 → stale
-  C1b 框架版本 watcher（新薄原語:Vue/Kotlin/.NET 版本）┤  框架 API 演進 → stale
-  C2  網搜收集器（獨立 refuter，非借 gapfill 專案反證）─┤  新最佳實踐 → gap（每週）
-  C3  code-loop reviewer 加法旁註（不動 verdict）──────┘  反覆樣式 → gap
-                    │ 各吐「候選」進 ↓
-     共用池  idioms-candidates（可變狀態儲存，atomic rewrite + advisory lock；待建）
-     (新造核心)     │  結構化 target_rule；stale 身分含版本
-   refuter 預篩 ─── 專用留痕（記在候選記錄內，非 canary-record）：駁倒→rejected、駁不倒→screened
-   (薄新原語)       │
-   drain 步驟 ───── 獨立 governance 步驟（仿 lint-watch 形態:staging+LINE+人放行；非自主 loop 插槽）
-   (薄新原語)       │  screened → 照房規完整 diff 草案 → idioms-proposals（governance/ 下待建）
-                    └→ 人放行 → 改 idioms 文件 + 標 adopted（微調 trivial / 新 R 走 design-loop / 刪 R）
+【M 層 · 機械 cron · 純 lumos stdlib · 零 LLM】
+  C1a 版本偵測(消費 lint-upgrades 事件) ─┐
+  C1b 框架 watcher(監測正確對象)        ┼→ pending 候選(帶 target_rule) → 候選池(lock+去重)
+  staging(drain 機械半:冪等產 stub)     ┘        │ status=pending 等 A 層
+【A 層 · agent-session · Claude 在場(自主 loop tick 或 lumos-idioms-maintain skill)】
+  refuter 判斷: pending → screened / rejected / deferred
+  drain 草案生成: screened → 照房規 diff → staged(冪等,不重產)
+  C3 code-loop 旁註(結構化附出) / C2 網搜(每週) → pending 候選
+【人閘】 staged → 人放行(三力度) → adopted(僅文件真改+驗證後)
 ```
 
-**元件邊界**
+**元件邊界（標層）**
 
-| 元件 | 職責 | 依賴 | 新造 |
+| 元件 | 層 | 職責 | 新造 |
 |---|---|---|---|
-| 候選池 | 可變狀態儲存（atomic rewrite），記來源/文件/種類/**target_rule**/狀態 | 純檔案 + fcntl advisory lock | ✅ 核心 |
-| C1a/C1b/C2/C3 | 各把一種訊號轉統一候選寫進池，**只丟訊號不判對錯** | lint-upgrades 輸出 / 框架 registry / WebSearch / code-loop 旁註 | ✅ 薄 |
-| refuter 預篩 | 每候選派 refuter 試駁 → screened/rejected（留痕記在候選內） | 借 gapfill **哲學**、自造留痕 | ⭕ 薄新原語 |
-| drain | screened → 完整改文件草案 → governance staging | 仿 lint-watch **形態**、人放行 | ⭕ 薄新原語 |
+| 候選池 | M | 可變狀態儲存 + 6 態狀態機 + portable lock + 去重 | ✅ 核心 |
+| C1a/C1b | M | 版本偵測→pending 候選（純機械） | ✅ 薄 |
+| staging | M | drain 機械半：冪等產 proposal stub、LINE | ✅ 薄 |
+| refuter | A | 判斷候選（試駁）→ screened/rejected/deferred | ⭕ Claude 編排 |
+| drain 草案 | A | screened→照房規 diff→staged | ⭕ Claude 編排 |
+| C3 旁註 / C2 網搜 | A | code-loop 附出 / 每週網搜 → pending | ⭕ Claude 編排 |
 
-核心原則：**collector 只丟訊號、不判對錯；判對錯統一交 refuter（機器初篩）+ 人（終判）**。三源無論多吵，品質由單一道閘守。（C3 的粗門檻是「訊號整形」不是「判涵蓋」——權威判斷仍在 refuter+人。）
+核心原則：**collector 只丟訊號、不判對錯；判對錯交 refuter（A 層機器初篩）+ 人（終判）**。
 
 ## 三、元件規格
 
-### 候選池
-- `[S1]` 候選儲存 `idioms-candidates.json`（待建，置於 `governance/` 下），**可變狀態儲存**（非 append-only）：狀態轉移（pending→screened/rejected→adopted）以 **tmp 寫入 → 自驗 → atomic rename** 就地更新，避免 append-only 與可變 status 的矛盾。
-- `[S2]` 候選 schema：`{id, source: lint-linter|framework|websearch|code-loop, doc: kotlin|vue|csharp, kind: stale|gap, target_rule, claim, evidence, refuter_verdict, status: pending|screened|rejected|adopted, ts, revised_from_to}`。**`target_rule` 為結構化欄位**（stale 指某條 R 號、gap 為 null 待分配），供去重與 drain 精確定位，不靠自然語言解析。
-- `[S3]` 入池**單寫入者 + fcntl advisory lock** 防 check-then-act race。去重身分：**stale = `(doc, target_rule, tool/框架, from→to)`**（含版本——同版本重複則丟、新版本重新入池以利重驗）；**gap = `(doc, 正規化 claim)`**（正規化＝Unicode NFC + trim + lowercase，**只做機械近似**；跨源語意重複靠 drain 時人眼收，不宣稱機械收斂——見天花板）。比對現有 R 清單（讀三份 idioms 的 `R\d+` 標號）+ 池內既有候選（含 rejected/adopted）。
+### 候選池（M 層）
+- `[S1]` 候選儲存 `idioms-candidates.json`（待建，`governance/` 下），**可變狀態儲存**：狀態轉移以 **tmp（同目錄）→ 自驗 → `os.replace` atomic rename** 就地更新；崩潰恢復＝啟動清理殘留 `*.tmp`。
+- `[S2]` schema：`{id, source: lint-linter|framework|websearch|code-loop, doc: kotlin|vue|csharp, kind: stale|gap, target_rule, tool_or_framework, claim, evidence, evidence_version, refuter_verdict, status: pending|screened|rejected|deferred|staged|adopted, retry_after, provenance_gen, notified, ts}`。**狀態機**：pending→(refuter)→screened|rejected|deferred；deferred→(重試)→pending；screened→(drain)→staged；staged→(人放行)→adopted。`deferred`/`staged` 為獨立狀態（修 round-2：enum 補齊，不與 pending 混用）。
+- `[S3]` **portable 鎖**：`os.open(lock, O_CREAT|O_EXCL)` 建鎖檔（跨平台 stdlib，**非 `fcntl`**——修 round-2：工具鏈承諾原生 Windows，`fcntl` 非 Windows stdlib；死鎖檔以 mtime 逾時判 stale）。單寫入者持鎖全程 check-then-act。去重身分：**stale = `(doc, target_rule, tool_or_framework, from→to)`**（`tool_or_framework` 為 schema 欄位，消歧同 doc 多監測對象）；**gap = `(doc, 正規化 claim, evidence_version)`**（含 evidence 版本→依據更新可重驗，修 round-2「永久封死重驗」）。正規化＝NFC+trim+lowercase，**只機械近似**（跨源語意重複靠人眼）。
+- `[S3b]` **刪 R 編號策略**：刪 R **保留號洞、不順移重編**（避免既有候選 `target_rule` 指標錯位）；被刪 R 於文件標 `(retired)`，指標永久穩定。
 
-### C1a linter 演進收集器（寄生 lint-watch）
-- `[S4]` **消費治理層 `lint-watch` 已去重的新候選輸出**（`governance/lint-upgrades/`，非原始 lint-watch JSON——避開重複通知/漏 seen 歷史）。依映射（detekt→kotlin / eslint→vue / NuGet analyzers[Roslyn·AsyncFixer·Meziantou]→csharp）吐 `kind=stale`。
-- `[S5]` 候選是「複查指針」（`linter X 升 a→b，複查 <doc> 機檢欄有無條文從自訂/不可機檢變原生支援`）。**但指針本身不是可反駁 claim**——refuter 對 C1a 候選的差事是「翻該版 changelog 找具體 idioms 相關規則變動」，**找不到＝擱置（deferred）非駁倒**（避免把「檢索失敗」誤判成「無變動」的系統性假陰性）。
+### C1a linter 演進收集器（M 層）
+- `[S4]` **消費 lint-upgrades 穩定事件**：**不掃每日覆寫的 `pending-YYYY-MM-DD.json`**（round-2：`"w"` 覆寫漏當日第二批），改讀 append-only `seen.jsonl` + 自持游標（記已消費 offset），不漏不重。映射用**權威表**（`name/registry`→doc + analyzer 類別）：`detekt(maven)→kotlin`、`eslint(npm)→vue`、指定 NuGet analyzer 套件 id 清單→csharp；未知項→log 待人補表，不臆測。
+- `[S5]` 候選＝「複查指針」非可反駁 claim——refuter（A 層）翻 changelog 找具體 idioms 相關規則變動，**找不到→deferred（重試）非 rejected**。
 
-### C1b 框架版本 watcher（新薄原語）
-- `[S6]` **新造薄 watcher**（round-1 決策加回）：讀 `.lumos/idioms-framework-watch.json`（`[{doc, framework, registry, current}]`，registry 用既有 lint-watch 的 `npm:vue` / `maven:org.jetbrains.kotlin:kotlin-stdlib` / `nuget:` 機制），機械查框架本身最新穩定版 vs 鎖定版，落後→吐 `kind=stale`（target_rule=null，claim 標「框架 X 升 a→b，複查綁該版 API 的條款」）。fail-open（網路失敗不升 rc）。**讓「框架 rot」有正確的 stale 來源**（補 §一 Vue 3.5 例的分類洞）。
+### C1b 框架版本 watcher（M 層，新薄原語）
+- `[S6]` 讀 `.lumos/idioms-framework-watch.json`（`[{doc, framework, name, registry, current, source_of_current}]`，**含 `name`**——修 round-2：既有 registry 契約需 `name`，缺則 rc=2）。**監測對象逐一明宣**（修 round-2：kotlin-stdlib≠Compose≠AGP、NuGet≠.NET SDK）：每個框架元件各一筆（如 `{doc:kotlin, framework:compose, name:androidx.compose.runtime:runtime, registry:google-maven}`）。`current` 盡量從 lockfile/pin 讀（`source_of_current` 標來源），避免採納後忘推進而永久重報。落後→吐 `kind=stale`。fail-open。
 
-### C2 缺漏收集器（獨立網搜，非借 gapfill 反證）
-- `[S7]` WebSearch 找「某棧新最佳實踐、linter 沒收**且不在該 idioms R1-Rn**」→ 產 `kind=gap`。**每週觸發一次**。**不復用 gapfill 的「本專案不會踩→反證」邏輯**（那綁單一 repo，idioms 是跨專案通用，會錯殺通用候選）——C2 用**自己的 refuter 判準**（見 [S11]）。**與 `linter-gap實務隱患` 明確分池**：後者記專案級 gotcha、前者記跨專案通用 idioms 規則，職責不重疊、各自 refuter 判準不同。
+### C2 缺漏收集器（A 層，獨立網搜）
+- `[S7]` A 層每週一次 WebSearch 找「某棧新最佳實踐、linter 沒收**且不在 R1-Rn**」→ pending `kind=gap`。**不復用 gapfill 的「本專案不會踩→反證」**（綁單 repo，idioms 跨專案）。**與 `linter-gap實務隱患` 分池**（通用 idioms vs 專案 gotcha），**共用一次網搜、結果分流**兩池（省重複燒）。`doc` 歸類：按棧發起搜尋→天然帶 doc；不屬三棧者丟棄。
 
-### C3 code-loop reviewer 加法旁註（修正 round-1 blocker）
-- `[S8]` **reviewer 照常產出完整 verdict**——所有真 bug（含無 idioms R 條號的 correctness/邊界/資源/例外/並發/impact 合約 finding）**全數照舊計入 verdict 與 severity**，verdict 解析、pre-push 硬擋邏輯**一字不動**（消除 round-1「無 R 真 bug 逃收斂閘」blocker 與相容性風險）。
-- `[S9]` reviewer **額外**產一個**加法旁註區塊**（與 verdict 分離、不影響綠紅）：標記「本次審查中，哪些真 finding 反映了一個**反覆出現、值得升成一條 idioms 規則**的通用樣式」→ 該旁註條目進候選池 `source=code-loop, kind=gap`。旁註是 reviewer verdict 的**附加輸出**，不是把 finding 從 verdict 抽走。
-- `[S10]` 旁註門檻寫死 framing（可辯護通用實踐、非品味）；產量異常高→log 提醒（framing 需收緊），不擋。**因旁註不 gate，即使誤標已存在的 R，refuter+人閘會接住，風險低。**
+### C3 code-loop reviewer 加法旁註（A 層，修 round-1+round-2）
+- `[S8]` **reviewer verdict 完全不動**：所有真 bug（含無 R 條號者）照舊計入 verdict/severity、pre-push 一字不動（修 round-1 blocker）。
+- `[S9]` **結構化附出契約**（修 round-2：reviewer 無 parser、旁註混入自然語言會被誤讀為 finding）：旁註走**獨立封閉區塊** `<<<IDIOMS-ANNOTATION>>>…<<<END>>>` + JSON，由編排者在 **canary 排除、辯方裁決之後**才抽取「存活真 finding 中反映通用樣式者」寫入池（`source=code-loop, kind=gap, provenance_gen`）；**抽取器失敗→略過旁註、絕不影響 verdict**；區塊內含 `major/blocker` 等字樣也不進 severity 計算（物理隔離）。
+- `[S10]` 旁註門檻 framing（可辯護通用實踐、非品味）；不 gate，誤標由 refuter+人閘接住。
 
-### refuter 預篩（薄新原語，自造留痕）
-- `[S11]` 每候選派乾淨 refuter，**試駁不試證**（沿用 gapfill/canary 哲學）。判準依 kind：
-  - **stale（C1a/C1b）**：翻 changelog 找具體 idioms 相關規則變動——找到→screened；**找不到→deferred（擱置重試），非 rejected**。
-  - **gap（C2/C3）**：① R1-Rn 已涵蓋 ② 純品味非可辯護實踐 ③ **框架特定** 任一成立→駁倒。**「框架特定」判準明定**（消除 round-1 自相矛盾）：**可替換的第三方庫選擇**（Hilt/Koin、Pinia/Vuex、EF/Dapper）→ 駁回、進專案圖譜；**核心語言/官方框架的通用慣例**（Coroutines/Flow/Compose、Composition API、ASP.NET Core async）→ 收。對齊三份文件既有的「分層原則：不裁框架庫選擇」。
-- `[S12]` 駁不倒→`status=screened`；駁倒→`status=rejected`+理由，**留在候選記錄內**（本池即去重記憶，同身分下次跳過）。**留痕自造**（記在候選 json 的 `refuter_verdict`），**不借 `lumos canary record`**（那是 loop 收斂專用、無候選語意，硬借會污染 `.canary-log`）。refuter 逾時/失敗→狀態留 `pending` + 記 `retry_after`，不卡死。
+### refuter 預篩（A 層，自造留痕）
+- `[S11]` Claude 在場對 pending 派乾淨 refuter，**試駁不試證**。stale：翻 changelog→找到 screened／找不到 deferred。gap：①已涵蓋 ②純品味 ③**框架特定** 任一→駁倒。**「框架特定」判準**：可替換第三方庫選擇（Hilt/Koin…）→駁、進專案圖譜；核心語言/官方框架通用慣例（Coroutines/Flow/Compose…）→收（對齊三份文件「不裁框架庫」原則）。
+- `[S12]` 駁不倒→screened；駁倒→rejected+理由（留池去重記憶）。**留痕自造**（候選 json `refuter_verdict`），**不借 canary-record**（收斂專用、會污染 `.canary-log`）。逾時/失敗→deferred+`retry_after`（指數退避、上限 N 次後 log 告警人工介入，不無限循環）。
 
-### drain（薄新原語，獨立 governance 步驟）
-- `[S13]` **獨立 governance 步驟 `lumos idioms-drain`**（**非**自主 loop 的 N=1 gap 插槽——那是單工、有 pending 就不開新工，塞不進；改**仿 lint-watch 形態**掛 governance daily 排程，位置在 lint-watch 步驟**之後**以看到其 staged 輸出）。讀池取 `status=screened`，每筆產**照房規的完整 diff 草案**（固定用「已載入三份 idioms 房規」的 prompt 範本產出，防走鐘）：stale→改機檢欄/條文**或標刪除**；gap→一條新 R 含【壞例→好例 + 機檢欄 + 依據連結】。
-- `[S14]` 草案 stage 到 `idioms-proposals（governance/ 下待建）`（**絕不自動改文件**）；LINE 通知「idioms 有 N 筆提案待放行」（N=0 靜默、不發空通知）。
+### drain（M 機械半 + A 草案半）
+- `[S13]` **A 半（草案）**：Claude 在場對 screened 用「已載入三份 idioms 房規」固定範本產**完整 diff 草案**：stale→改機檢欄/條文或標 `(retired)`；gap→一條新 R【壞例→好例+機檢欄+依據】。產完→候選轉 `staged` + 記 proposal-id。
+- `[S14]` **M 半（staging，冪等）**：cron 把 staged 且 `notified=false` 者寫 `idioms-proposals（governance/ 下待建）`、發 LINE、置 `notified=true`；**同候選不逐日重產/重發**（修 round-2）。N=0 靜默。
+- `[S15]` **步序**：A 層（C1a/C1b collector→refuter→drain 草案）在 Claude session tick 一起跑（修 round-2：只排 drain 位置不夠，同輪 collector+refuter 才進得了 drain）；M 層 staging 掛 governance daily。
 
 ### 人閘與落地
-- `[S15]` 人放行後**三力度**：① 機檢欄換規則名/條文微調＝trivial，直接改→`adopted`；② **新增一條 R＝實質設計變更，走一輪 design-loop canary**（改 idioms＝改被全體專案引用的 spec）→ `adopted`；③ **整條 R 已不適用＝刪除**（stale 可導向刪除非只修改），走輕量人確認→`adopted`（補 round-1 缺的刪除路徑）。
-- `[S16]` **自引用斷路**：design-loop 審 idioms 提案（力度②）期間，**C3 旁註收集器對該次審查關閉**（不回收自身產生的候選）；候選記 `provenance` 世代，禁止「桶 B 入池→採納成 R→同 finding 再影響原型別 verdict」的回授環。人閘 + 此斷路共同保證有限終止。
-- `[S17]` `adopted` 候選**留池標記、不搬離**（搬離會讓 [S3] 去重讀不到、同 claim 再入池）；池增長靠「rejected/adopted 標記後可壓縮但恆保留身分鍵」控制。改 idioms 文件是否觸發既有 pre-commit gate、要求同步哪個節點——**列為實作期需 hook 實測確認項**（不假設）。
+- `[S16]` **機械命令 + 狀態一致**（修 round-2）：`lumos idioms approve <id>` / `reject <id>` / `revive <id>`；approve **僅在 idioms 文件真改成功 + 驗證通過後**才轉 `adopted`（避免半完成）。三力度：①微調 trivial 直改；②新 R 走 design-loop canary；③刪 R（標 retired）輕量確認。
+- `[S17]` **gap 採納回填**：新 R 落地後把分配到的 R 號寫回候選 `target_rule`（修 round-2：否則 adopted gap 永遠 null、日後只能弱文字去重）。
+- `[S18]` **自引用斷路**（修 round-2：可執行偵測）：design-loop 審 idioms 提案時編排者設 `IDIOMS_SELF_REVIEW=1`；C3 抽取器見旗標即**跳過**。候選 `provenance_gen` 記世代，禁「入池→採納成 R→同 finding 再生候選」回授環。
+- `[S19]` `adopted`/`rejected` 候選**留池標記、不搬離**（搬離→去重讀不到→重入池）；恆保留身分鍵。改 idioms 是否觸發既有 pre-commit gate＝**實作期 hook 實測確認項**。
 
 ## 四、資料流
 
 ```
-C1a lint-upgrades ─┐
-C1b 框架 registry ─┼→ collector 吐候選(帶 target_rule) → lock+去重 → refuter 預篩 ┬ 駁不倒 → screened
-C2  網搜(每週) ────┤                                                              ├ 駁倒 → rejected+理由(留池)
-C3  reviewer 旁註 ─┘                                                              └ 檢索失敗 → deferred(重試)
-
-governance daily(lint-watch 後): screened → 房規範本產完整 diff 草案 → idioms-proposals（governance/ 下待建） → LINE
-   人放行 ┬ trivial 微調 → 改文件 + adopted
-         ├ 新 R → design-loop canary(C3 旁註對本審查關閉) → 改文件 + adopted
-         └ 刪 R → 輕量確認 → 改文件 + adopted
+【M cron】 C1a(游標讀 seen.jsonl) / C1b(框架 registry) → pending 候選(帶 target_rule/tool_or_framework)
+【A tick】 collector(C2 每週/C3 旁註) + refuter: pending → screened / rejected(留池) / deferred(重試)
+【A tick】 drain 草案: screened → 房規範本 diff → staged(+proposal-id)
+【M cron】 staging(冪等): staged 且 notified=false → idioms-proposals（governance/ 下待建） + LINE
+【人閘】 lumos idioms approve/reject/revive → 文件真改+驗證 → adopted(gap 回填 R 號)
+        新 R 走 design-loop(IDIOMS_SELF_REVIEW=1 關 C3 旁註)
 ```
 
 ## 五、錯誤處理與天花板
 
-**錯誤處理**：refuter 誤駁真缺漏→rejected 全留池、人可用 `lumos idioms-candidates list --rejected` 掃並 `--revive <id>` 撈回（附新 evidence 才重轉 screened）；併發→單寫入者 + fcntl advisory lock，check-then-act 全程持鎖；C1a/C1b 網路失敗→fail-open（deferred，不升 rc）；changelog 檢索失敗→deferred 重試非駁倒（避免系統性假陰性）；stale 版本識別含 from→to→同版本不重掃、新版本重驗；drain N=0→靜默；改文件與專案當地慣例衝突→沿用文件「當地贏、衝突記專案圖譜」。
+**錯誤處理**：refuter 誤駁→rejected 留池、`lumos idioms list --rejected`+`revive <id>`（附新 evidence 才重 pending）；併發→`O_CREAT|O_EXCL` 鎖檔 + 持鎖 check-then-act、殘留 tmp 啟動清理、死鎖檔 mtime 逾時判 stale；C1a 不漏＝游標讀 append-only seen.jsonl；stale 檢索失敗→deferred 非駁；gap 身分含 evidence_version→可重驗；drain 冪等（notified）不重發、staged 未放行不重產；N=0 靜默；當地慣例衝突→當地贏、記專案圖譜。
 
 **天花板（誠實邊界）**：
-1. refuter 抓「版本沒變/已涵蓋/框架庫選擇」，抓不到「讀了但深層判錯」——是降雜訊摩擦地板，非 oracle。
-2. 「還算不算最佳實踐」無機器 oracle，終究人/乾淨模型判；本機制只保證「該複查的不漏掉」，不保證「判得對」。
-3. **去重只機械近似**：gap 跨源（C2 網搜散文 vs C3 旁註）語意等價無法純機械判，殘餘重複靠 drain 時人眼收——不宣稱機械收斂。
-4. 飛輪仍需人糧：C3 要 code-loop 真在跑、真有人審 diff 才有旁註可撿；空轉專案不產糧。
+1. refuter 抓「版本沒變/已涵蓋/框架庫選擇」，抓不到「讀了但深層判錯」——降雜訊地板，非 oracle。
+2. 「還算不算最佳實踐」無機器 oracle，終究人/乾淨模型判。
+3. **去重只機械近似**：gap 跨源語意等價無法純機械判，殘餘靠人眼。
+4. 飛輪需人糧：C3 要 code-loop 真在跑、真有人審。
+5. **A 層需 Claude 在場**：refuter/草案/網搜/旁註都非無人 cron——「自動」限 M 層偵測+staging；判斷鏈跟 Claude session（自主 loop tick 或人跑 skill）節奏，**非真 7×24 無人**。這是拆層換 infra-fit 的**誠實代價**。
 
 ## 實務隱患
 
-- **C3 相容性（已解）**：改為加法旁註後 verdict 解析一字不動，無相容風險——但需測「旁註區塊缺失時 verdict 解析仍正常」。
-- **併發寫入**：單寫入者 + fcntl advisory lock 選定；仍需定義崩潰恢復（半寫的 tmp 檔清理）與非 POSIX 平台（本工具鏈僅 macOS/Linux，Windows 不支援）。
-- **框架 watcher 的 registry 覆蓋**：Vue（npm）清楚，Kotlin「框架」指什麼（語言？stdlib？Compose？）、.NET 指 SDK 還是 runtime——`.lumos/idioms-framework-watch.json` 要人工宣告清楚，覆蓋不保證完整。
-- **drain 排程競跑**：需明訂 drain 在 daily-governance 腳本的**確切步序**（lint-watch 之後），避免與 lint-watch 同次產出的可見性競賽。
-- **自引用終止**：[S16] 的斷路靠 provenance 世代 + 審查期關閉 C3——需測「design-loop 審 idioms 提案時不產生回授候選」。
-- **與 gapfill/linter-gap 邊界**：C2 與 `linter-gap實務隱患` 已明定分池（[S7]）；但兩者都做網搜，需確認不重複燒 WebSearch（可共用一次搜尋、分流結果）。
+- **A 層觸發頻率**：refuter/drain 綁 Claude session，長期無 session → pending/screened 堆積；需定義「多久沒 tick 就 LINE 提醒積壓」。
+- **C1a 游標契約**：依賴 `lint_watch_dedup` 的 seen.jsonl 格式穩定；格式變則游標要跟改（跨元件耦合點）。
+- **C1b current 生命週期**：`source_of_current` 指 lockfile 則自動；人手填則採納後需推進，否則版本標記失真。
+- **C3 結構化附出**：需真測「旁註區塊含 blocker 字樣不影響 verdict severity」「抽取器失敗 verdict 照常」。
+- **portable 鎖邊界**：`O_CREAT|O_EXCL` 崩潰留死鎖檔→需 stale-lock 逾時（mtime+PID）。
 
 ## 六、測試策略
 
-| 單元 | 測什麼 | 型 |
-|---|---|---|
-| 候選池 | atomic rewrite 狀態轉移正確；去重身分（stale 含版本／gap 正規化）生效；併發 lock 下無重複/半寫 | 純函式 + 併發 |
-| C1a/C1b 映射 | linter→doc、框架 registry→doc 對；版本落後判定；fail-open | 純函式 |
-| C3 旁註 | **verdict 不受旁註影響**（有無旁註，verdict/severity 相同）；旁註缺失 verdict 仍解析 | 行為 |
-| refuter harness | 候選進→verdict 記候選內；駁倒→rejected+理由；stale 檢索失敗→deferred 非 rejected；框架庫選擇→駁回 | 行為 |
-| drain | screened→產 idioms-proposals（governance/ 下待建） 草案、**斷言 idioms 文件未被自動寫**；N=0 靜默 | 行為 |
-| 自引用斷路 | design-loop 審 idioms 提案期間 C3 不產回授候選 | 行為 |
-| 端到端 dogfood | 種一筆真 stale（某 detekt 規則已原生）+ 一筆真框架 rot（Vue 3.5）+ 一筆真 gap，跑到 staging | E2E |
+| 單元 | 層 | 測什麼 | 型 |
+|---|---|---|---|
+| 候選池狀態機 | M | 6 態轉移合法性；deferred/staged 獨立；atomic rewrite；殘留 tmp 清理 | 純函式 |
+| portable 鎖 | M | `O_CREAT\|O_EXCL` 併發互斥、無重複/半寫；stale-lock 逾時 | 併發 |
+| 去重身分 | M | stale 含版本、gap 含 evidence_version、刪 R 保號洞 | 純函式 |
+| C1a 游標 | M | 讀 seen.jsonl 不漏當日第二批、不重消費 | 行為 |
+| C1b 映射 | M | 每框架元件各自 registry；`name` 缺→rc=2；fail-open | 純函式 |
+| C3 結構化附出 | A | verdict/severity 不受旁註影響（含旁註帶 blocker 字樣）；抽取失敗 verdict 照常 | 行為 |
+| refuter | A | 駁倒→rejected+理由；stale 檢索失敗→deferred；框架庫選擇→駁；退避上限告警 | 行為 |
+| drain 冪等 | M+A | staged 不逐日重產/重發；proposal-id 唯一；N=0 靜默 | 行為 |
+| 人閘一致 | M | approve 僅文件改+驗證後 adopted；gap 回填 R 號 | 行為 |
+| 自引用斷路 | A | `IDIOMS_SELF_REVIEW=1` 時 C3 不產候選 | 行為 |
+| 端到端 dogfood | — | 種真 stale(detekt 已原生)+真框架 rot(Vue 3.5)+真 gap → staged | E2E |
 
 ## 七、落地順序（建議）
 
-1. 候選池 `idioms-candidates` CLI + schema + lock + 去重（`[S1][S2][S3]`）——地基。
-2. C3 加法旁註（`[S8][S9][S10]`）——槓桿最大、不動既有 verdict/pre-push，風險低。
-3. refuter 預篩薄原語 + 自造留痕（`[S11][S12]`）——借哲學不借 canary-record。
-4. C1a 寄生 lint-upgrades（`[S4][S5]`）+ C1b 框架 watcher（`[S6]`）。
-5. drain 薄原語 + governance 排程 + 人閘三力度 + 自引用斷路（`[S13][S14][S15][S16][S17]`）。
-6. C2 網搜（`[S7]`）——與 linter-gap 分池、共用搜尋分流。
+1. **M 層地基**：候選池 CLI + 6 態狀態機 + portable 鎖 + 去重（`[S1][S2][S3][S3b]`）。
+2. **M 層偵測**：C1a 游標讀 seen.jsonl（`[S4][S5]`）+ C1b 框架 watcher（`[S6]`）→ 純機械、可先無人 cron 產 pending。
+3. **A 層 C3 旁註結構化附出**（`[S8][S9][S10]`）——不動 verdict/pre-push，風險低。
+4. **A 層 refuter**（`[S11][S12]`）——借哲學不借 canary-record。
+5. **drain**（A 草案 `[S13]` + M staging 冪等 `[S14][S15]`）+ 人閘機械命令 + 回填 + 斷路（`[S16][S17][S18][S19]`）。
+6. **A 層 C2 網搜**（`[S7]`）——與 linter-gap 共用搜尋分流。
