@@ -54,6 +54,7 @@ ${LUMOS_CAPS}
 · 近三週剛實作/上線（scripts/skills 的 commit）：
 ${RECENT_SHIPPED:-（近期無 scripts/skills 變更）}
 ⚠【防重提鐵則】凡上面清單已有的機制，一律視為【已解決】，不得在 gaps 裡當『缺這個功能』重提；舊日報若把它列為 gap，那是過期框架、別沿用。真要對它提 gap，必須具體說『現行實作為何仍不足』並附外部證據，而不是泛泛說『可以加 X』（X 已經有了）。
+⚠【參數要查現值，別憑印象或舊報告】要寫某機制的【具體參數／數值】（收斂輪數、K 值、閾值、panel 寬 W、cap 幾輪…）時，先用 Read 讀對應檔確認【現值】：收斂／canary／辯方相關 → ${REPO_ROOT}/skills/lumos-code-loop/reference.md 或 ${REPO_ROOT}/skills/lumos-design-loop/SKILL.md（頭版是精簡版、細節在同目錄 reference.md）；其餘機制查對應 skill 或圖譜。查不到就別寫死數字，改講定性（例：「有上限、連續乾淨才收斂」）。舊報告與方法論散文裡的具體數字可能已過期，不得直接沿用——【只有拿最新的 lumos 現值來比，這個比較才有意義】。
 
 【第二步：去重——文章與觀點兩個層級都要】
 1. 若存在，用 Read 讀取累積觀點總帳：${HISTORY_FILE}
