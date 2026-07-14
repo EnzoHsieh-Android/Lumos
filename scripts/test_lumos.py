@@ -440,6 +440,54 @@ def t_check_e1_dead_endorsement():
     check("E1 點名 fail 背書", "Systems/Failing" in r.stdout and "status=fail" in r.stdout, r.stdout)
 
 
+def t_check_e2_build_on_superseded():
+    v = mkvault()
+    # 被推翻決策節點 D:含 valid:false + ended=2026-06-10
+    write(v, "Projects/D.md",
+          "type: project\nstatus: done\n"
+          "decisions:\n"
+          "  - content: 舊決策\n"
+          "    decided: 2026-05-01\n"
+          "    valid: false\n"
+          "    superseded_by: 新決策\n"
+          "    ended: 2026-06-10", body="# D\n")
+    # 被推翻但「無 ended」的節點 D2:E2 無從時序比對 → 指向它的邊不該被報
+    write(v, "Projects/D2.md",
+          "type: project\nstatus: done\n"
+          "decisions:\n"
+          "  - content: 無ended決策\n"
+          "    decided: 2026-05-01\n"
+          "    valid: false\n"
+          "    superseded_by: 新", body="# D2\n")
+    # 正例 A:verified_by→D、updated 早於 ended → 必報(建在已翻案的決策上、沒跟上)
+    write(v, "Systems/A.md",
+          "type: system\nstatus: done\nupdated: 2026-06-01\nverified_by:\n  - \"[[Projects/D]]\"", body="# A\n")
+    # 反例 B:plan_refs→D、updated 晚於 ended(已跟上)→ 不該報
+    write(v, "Verification/B.md",
+          "type: verification\nstatus: pass\ndate: 2026-07-01\nupdated: 2026-07-01\nplan_refs:\n  - \"[[Projects/D]]\"", body="# B\n")
+    # 反例 C:plan_refs→D2(無 ended)、updated 很舊 → 不該報(缺 ended 無從比對)
+    write(v, "Verification/C.md",
+          "type: verification\nstatus: pass\ndate: 2026-01-01\nupdated: 2026-01-01\nplan_refs:\n  - \"[[Projects/D2]]\"", body="# C\n")
+    r = run(v, "doctor")
+    check("E2 只抓落後的 A 共 1 條(已跟上 B / 缺 ended C 未誤報)",
+          "發現 1 條可能建在被推翻決策上" in r.stdout, r.stdout)
+    check("E2 點名 A→D 落後邊", "Systems/A.md --verified_by--> Projects/D.md" in r.stdout, r.stdout)
+    check("E2 不報已跟上的 B(updated 晚於 ended)", "Verification/B --" not in r.stdout, r.stdout)
+    check("E2 不報缺 ended 的 C(無從時序比對)", "Verification/C --" not in r.stdout, r.stdout)
+
+
+def t_decision_supersede_p1_autofill():
+    import datetime
+    today = datetime.date.today().isoformat()
+    v, p = _vault_with_decisions()  # 節點 X 無頂層 updated
+    r = run(v, "decision-supersede", "X", "樂觀鎖", "--by", "改用 Redis")  # 不給 --ended
+    check("P1 supersede 無 --ended rc=0", r.returncode == 0, r.stderr)
+    txt = read(p)
+    check("P1 缺 --ended → 自動補今日", f"ended: {today}" in txt, txt)
+    check("P1 同步 bump 頂層 updated=今日(原無 updated → 插入)", f"updated: {today}" in txt, txt)
+    check("P1 第二條 valid:true 未被動", "第二條不動" in txt and txt.count("valid: false") == 1, txt)
+
+
 # ══ 第二輪審計回歸 ══
 
 # ── NEW-A: 跨資料夾同 basename append 不該誤 dedup / 不該 rc=2 ──

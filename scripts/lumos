@@ -744,6 +744,51 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
                    "重跑驗證改回 pass、或改標記/移除該 verified_by;死背書給假安心感,是關係層頭號腐爛之一")
     print()
 
+    # Check E2: 建在被推翻決策上(軟,不擋,不計 issues)——關係層時序法(把 Check 4 的時序 proxy 推到「決策
+    #   翻案」層):某節點 D 有 valid:false 決策(且有 ended)→ 沿「方向語意明確」的連入邊(verified_by/plan_refs)
+    #   找指向 D 的來源節點 A → A.updated 早於該決策 ended = A 可能還建在 D 已被推翻的決策上、沒跟上。時序法是
+    #   啟發(可能人早手動確認過但沒動 updated),故 warn_soft。內聯 typed 反查(不建 [P0] 可重用 index——doctor
+    #   本就掃全圖,補網不需;主網 proactive 連鎖才需 P0)。設計見 Projects/關係層傳播守衛_計劃 [S7]。
+    #   已知限制:無 cascade ledger(主網 future)→ 判過無關卻沒動 A.updated 的會每次重報;量少時手動 bump 消音。
+    section("E2", "建在被推翻決策上 (指向某節點的邊,該節點決策已翻案而來源未跟上)")
+
+    import datetime
+    def _ymd(s):
+        try:
+            return datetime.date.fromisoformat(str(s)[:10])
+        except (ValueError, TypeError):
+            return None
+    typed_in = defaultdict(list)                 # target → [(source, edge_type)],只收方向語意明確的邊
+    for arel, an in notes.items():
+        for etype in ("verified_by", "plan_refs"):
+            for item in as_list(an.fields.get(etype)):
+                t = env.resolve(link_target(item))
+                if t:
+                    typed_in[t].append((arel, etype))
+    build_on_dead = []
+    for drel, dn in sorted(notes.items()):
+        for d in parse_decisions(dn.fm_lines):
+            if str(d.get("valid", "true")).lower() != "false":
+                continue
+            ended = _ymd(d.get("ended"))
+            if not ended:                        # 無 ended → 無從時序比對(P1 起新翻案自動補),跳過
+                continue
+            dcontent = first_line(str(d.get("content", "")), 40)
+            for arel, etype in typed_in.get(drel, []):
+                aupd = _ymd(notes[arel].fields.get("updated"))
+                if aupd and aupd < ended:
+                    build_on_dead.append(
+                        f"{arel} --{etype}--> {drel}(決策「{dcontent}」{ended} 翻案,來源自 {aupd} 未更新)")
+                    gov_events.append({"gate": "check-e2", "kind": "warned", "hard": False,
+                                       "nodes": [notes[arel].stem]})
+    if not build_on_dead:
+        ok("無「建在被推翻決策上」的落後邊")
+    else:
+        _soft_list(build_on_dead,
+                   f"發現 {len(build_on_dead)} 條可能建在被推翻決策上的邊(時序法啟發、非定論):",
+                   "查該邊是否真受翻案影響:是→更新來源節點跟上新決策;否→已確認無關可 bump 來源 updated 消音;純語意矛盾留 AI 交叉審")
+    print()
+
     # Check H: 漏標可逆性提醒(軟,不擋,不計 issues)——僅 --ci 掃 diff,提示疑似漏標 ★IRREVERSIBLE★
     section("H", "漏標可逆性提醒 (diff 碰 prod/外部 API/寄送 → 是否漏標 ★IRREVERSIBLE★?)")
     if not ci:
@@ -4223,7 +4268,9 @@ def _fmt_decision_value(v):
 
 def cmd_decision_supersede(env, rel, match, by, ended=None):
     """T3 巢狀手術:把 decisions[] 中 content 含 match 的決策標 valid:false + 補
-    superseded_by/ended。surgical line-based(不重序列化,最小 diff;優於 ruamel reflow)。"""
+    superseded_by/ended。surgical line-based(不重序列化,最小 diff;優於 ruamel reflow)。
+    [P1]:ended 缺則自動補今日 + 同步 bump 頂層 updated(單次 atomic,供 E2 時序法)。"""
+    import datetime
     if ended and not DATE_RE.match(ended):
         raise ValueError(f"--ended 需 YYYY-MM-DD,得到: {ended}")
     path = env.vault / rel
@@ -4257,10 +4304,20 @@ def cmd_decision_supersede(env, rel, match, by, ended=None):
         if re.match(rf"^{pad}superseded_by:\s", fm[i]):
             raise ValueError("該決策已有 superseded_by(已翻盤過),不重複 supersede;要改取代者請手動編輯")
     fm[valid_line] = f"{pad}valid: false"
-    ins = [f"{pad}superseded_by: {_fmt_decision_value(by)}"]
-    if ended:
-        ins.append(f"{pad}ended: {ended}")
+    # [P1] ended 選填 → 缺則自動補今日(E2 時序法要 ended 才判得了「鄰居晚於翻案沒?」)
+    if not ended:
+        ended = datetime.date.today().isoformat()
+    ins = [f"{pad}superseded_by: {_fmt_decision_value(by)}", f"{pad}ended: {ended}"]
     fm[valid_line + 1:valid_line + 1] = ins
+    # [P1] supersede = 對本節點的實質編輯 → 同步 bump 頂層 updated(單次 atomic,同一份 fm;
+    #   不串第二個寫命令避免半完成)。有則就地換、無則插在 decisions: 前(不動決策區索引)。
+    today = datetime.date.today().isoformat()
+    upd_i = next((k for k, ln in enumerate(fm) if re.match(r"^updated:\s", ln)), None)
+    if upd_i is not None:
+        fm[upd_i] = f"updated: {today}"
+    else:
+        dec_i = next((k for k, ln in enumerate(fm) if re.match(r"^decisions:\s*$", ln)), len(fm))
+        fm[dec_i:dec_i] = [f"updated: {today}"]
     new_lines = lines[:1] + fm + lines[e_fm:]
 
     def _check(_fields):
@@ -4269,7 +4326,7 @@ def cmd_decision_supersede(env, rel, match, by, ended=None):
                 return str(d.get("valid", "")).lower() == "false" and "superseded_by" in d
         return False
     atomic_write_verify(path, new_lines, "decisions", _check)
-    print(f"✓ supersede {rel}: 決策「{match[:30]}」→ valid:false + superseded_by")
+    print(f"✓ supersede {rel}: 決策「{match[:30]}」→ valid:false + superseded_by + ended={ended} (updated bump {today})")
     return 0
 
 
