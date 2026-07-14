@@ -721,6 +721,29 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
                    "重派乾淨 agent 還原審後 `lumos self-audit <node>` 重新留痕")
     print()
 
+    # Check E1: 失效背書(軟,不擋,不計 issues)——關係層語意檢查(補 Check 3 只查邊存不存在、不查
+    #   邊還對不對):某節點 verified_by 指向的 Verification 已 stale/fail = 死背書(掛著給人假安心感、
+    #   驗證其實已失效)。ghost 目標交既有 ghost 檢查,這裡跳過(不重疊職責)。
+    #   設計見 Projects/關係層傳播守衛_計劃 [S6](phase-1 MVP,免前置、純 frontmatter)。
+    section("E1", "失效背書 (verified_by 指向的驗證已 stale/fail → 死背書)")
+    dead_endorse = []
+    for rel, n in sorted(notes.items()):
+        for item in as_list(n.fields.get("verified_by")):
+            vrel = env.resolve(link_target(item))
+            if not vrel:                          # ghost → 交既有 ghost 檢查,跳過
+                continue
+            vst = status_of(env, vrel).strip()
+            if vst in ("stale", "fail"):
+                dead_endorse.append(f"{rel} → [[{vrel}]] (status={vst})")
+                gov_events.append({"gate": "check-e1", "kind": "warned", "hard": False, "nodes": [n.stem]})
+    if not dead_endorse:
+        ok("無失效背書 (所有 verified_by 指向的驗證都非 stale/fail)")
+    else:
+        _soft_list(dead_endorse,
+                   f"發現 {len(dead_endorse)} 條失效背書(驗證已 stale/fail 卻還掛著):",
+                   "重跑驗證改回 pass、或改標記/移除該 verified_by;死背書給假安心感,是關係層頭號腐爛之一")
+    print()
+
     # Check H: 漏標可逆性提醒(軟,不擋,不計 issues)——僅 --ci 掃 diff,提示疑似漏標 ★IRREVERSIBLE★
     section("H", "漏標可逆性提醒 (diff 碰 prod/外部 API/寄送 → 是否漏標 ★IRREVERSIBLE★?)")
     if not ci:

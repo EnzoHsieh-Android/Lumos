@@ -11,7 +11,7 @@ summary: |-
   FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出 → return 0(查無/正則錯=非0)
   KEY:read/traverse 12 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);純讀、不寫檔、無副作用,與 7 個寫入原語(set/append/new/decision-* …)互斥
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
-  KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼));與 lint 分工——lint 只看單篇 node-local、predicts pre-push 會不會擋
+  KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼);Check E1 失效背書(verified_by 指向 stale/fail 驗證→死背書,關係層,軟提醒));與 lint 分工——lint 只看單篇 node-local、predicts pre-push 會不會擋
   KEY:search 預設排除 fenced+inline code(對齊 doctor 連結抽取慣例,--code 才含)、大小寫不敏感 substring、--regex 切正則;結構化查詢走 contracts/decisions/stale 而非 search
   KEY:讀指令屬「專案層」——以 cwd find_vault 鎖定本專案 vault(不受同名 vault 影響);對比 install/bootstrap 的「機器層」(全域 lumos + user-scope skills)
   DEP:scripts/lumos load_vault/Env/find_vault｜extract_contracts(contracts/context 共用)｜parse_decisions(decisions/stale)｜status_of(links/map/stale 標狀態)
@@ -36,6 +36,8 @@ decisions:
     why_chosen: cwd-based 定位讓任何專案子目錄直接 lumos <cmd> 都鎖到正確 vault,機器層工具(全域 lumos/skills)則一次裝好共用
     decided: 2026-06-26
     valid: true
+verified_by:
+  - "[[Verification/2026-07-14_relguard_E1失效背書]]"
 ---
 # lumos-cli-read
 

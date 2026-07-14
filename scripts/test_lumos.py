@@ -421,6 +421,25 @@ def t_doctor_clean():
     check("doctor 乾淨 vault → exit 0", r.returncode == 0, r.stdout)
 
 
+# ── Check E1: 失效背書(關係層) — verified_by 指向 stale/fail 驗證該抓、pass 不誤報 ──
+#   關係層傳播守衛 phase-1 MVP([S6])。含「弄壞驗證」:種真死背書 → E1 必抓;pass 背書不報。
+def t_check_e1_dead_endorsement():
+    v = mkvault()
+    # 正例1:背書指向 stale 驗證 → E1 必抓
+    write(v, "Systems/Dead.md", "type: system\nstatus: done\nverified_by:\n  - \"[[VStale]]\"", body="# Dead\n")
+    write(v, "Verification/VStale.md", "type: verification\nstatus: stale\ndate: 2026-01-01", body="# VStale\n")
+    # 正例2:背書指向 fail 驗證 → E1 必抓
+    write(v, "Systems/Failing.md", "type: system\nstatus: done\nverified_by:\n  - \"[[VFail]]\"", body="# Failing\n")
+    write(v, "Verification/VFail.md", "type: verification\nstatus: fail\ndate: 2026-01-01", body="# VFail\n")
+    # 反例:背書指向 pass 驗證 → E1 不該報(靠「共 2 條」證明未誤報)
+    write(v, "Systems/Good.md", "type: system\nstatus: done\nverified_by:\n  - \"[[VPass]]\"", body="# Good\n")
+    write(v, "Verification/VPass.md", "type: verification\nstatus: pass\ndate: 2026-01-01", body="# VPass\n")
+    r = run(v, "doctor")
+    check("E1 抓 stale+fail 共 2 條(pass 未誤報)", "發現 2 條失效背書" in r.stdout, r.stdout)
+    check("E1 點名 stale 背書", "Systems/Dead" in r.stdout and "status=stale" in r.stdout, r.stdout)
+    check("E1 點名 fail 背書", "Systems/Failing" in r.stdout and "status=fail" in r.stdout, r.stdout)
+
+
 # ══ 第二輪審計回歸 ══
 
 # ── NEW-A: 跨資料夾同 basename append 不該誤 dedup / 不該 rc=2 ──
