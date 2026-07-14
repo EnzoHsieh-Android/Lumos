@@ -1,0 +1,161 @@
+---
+type: project
+status: doing
+created: 2026-07-14
+updated: 2026-07-14
+tags:
+  - type/project
+  - status/doing
+summary: |-
+  FLOW:改B的決策/合約→hook自動impact-from-B→機械列鄰居→人/AI判「真傳播嗎」→確認的進工作清單展下一跳(cycle guard)→plan節點留帳;補網=doctor Check E週期掃frontmatter可判的關係鏽
+  KEY:治病=lumos驗證火力全在「節點層」(合約綁測試/乾淨審),關係層(邊)只查存在/斷不斷(Check3/4/P)、不查「還對不對」;頭號腐爛(交叉審計實測)=決策別篇推翻本篇沒跟上,hooks抓不到、只$30 AI交叉審掃得出
+  KEY:pre-commit只保證code↔圖譜同次有動(檔案級存在性),保證不了決策翻案→下游校正(跨節點語意傳播)——不同顆粒度、不重疊
+  KEY:PRIOR-ART(2輪Codex讀repo證偽兩次)=r1誤指_reco_scores、r2更深:_impact_bfs/_impact_via也不行(圖譜建圖層Env.edges去重丟邊型、_impact_via事後單值猜型related遮verified_by)。但邊型存在frontmatter具名欄位→補網直接讀可行、主網需新建typed-edge index。裁定翻成build(typed-edge index+typed hop-1+cascade ledger CLI+Check E)+資料前置,借縮到只剩frontmatter解析
+  KEY:前置地基=P0 typed-edge反向索引(新,兩網共用,lumos現無;純frontmatter建) / P1 supersede自動補ended+bump updated(只E2需) / P2決策穩定ID(升核心:E3精確+ledger確認粒度=決策ID×邊型×鄰居);pre-commit描述已改正(真pre-commit=staged-diff硬擋Gate3,原誤稱Stop hook四層)
+  KEY:兩張網——主網(proactive改節點觸發連鎖確認,趁脈絡最全當場處理)+補網(reactive doctor Check E週期掃,接住主網漏的/之後才連上的)
+  KEY:連鎖防爆炸鐵則=非「自動展N層」是「確認才前進的工作清單」;只有判定真傳播的節點才長下一跳,follow真依賴脊椎、死支斷掉——否則2-3跳點名半張圖=麻痺
+  KEY:天花板=只掃frontmatter可判;純語意矛盾(兩篇內容打架)仍留AI交叉審,本守衛不取代、是機械前濾網讓AI那關變便宜。哲學=機械強制列鄰居(擴覆蓋)+人判傳播(守語意)
+  DEP:[[pitfalls事故觸發_計劃]][[cochange守衛_計劃]]
+  DECISION:[2026-07-14]兩張網(主=改節點觸發連鎖/補=doctor Check E)(valid)
+  DECISION:[2026-07-14]連鎖=判斷閘工作清單非盲BFS(valid)｜擴impact現有引擎不重造(valid)｜advisory不硬擋(valid)
+related:
+  - "[[pitfalls事故觸發_計劃]]"
+  - "[[cochange守衛_計劃]]"
+decisions:
+  - content: 兩張網補關係層語意驗證:主網=改節點觸發的判斷閘連鎖確認(擴impact --node+hook)、補網=doctor Check E週期掃frontmatter可判關係鏽;連鎖用確認才前進的工作清單防爆炸
+    context: lumos驗證全在節點層,關係層邊只查存在/斷不斷、不查還對不對;交叉審計實測頭號腐爛=決策別篇推翻本篇沒跟上,hooks抓不到只 AI掃得出;pre-commit只保code↔圖譜同次有動、保不了決策翻案→下游校正
+    why_chosen: "proactive主網趁脈絡最全當場處理最準最便宜、reactive Check E當補網;連鎖必判斷閘防2-3跳點名半張圖;只掃frontmatter可判、純語意矛盾留AI交叉審(本守衛當機械前濾網讓AI變便宜)。⚠原句稱『impact引擎(_reco_scores)已存在→擴不造』,該前提經round-1/2 Codex讀repo證偽(圖譜無型別),見decisions[2]修正:改為build typed-edge index"
+    decided: 2026-07-14
+    valid: true
+  - content: round-1 Codex(讀repo)修正折入:引擎改_impact_bfs+_impact_via(非_reco_scores)、觸發接decision-supersede CLI(非PreToolUse)、pre-commit描述改正、E2框成Check4擴充、補P1/P2/P3資料契約前置與cascade ledger閉環
+    context: round-1 panel跨家族Codex以scripts/lumos行號釘出PRIOR-ART事實錯誤:_reco_scores是推薦排序器非傳播引擎、decision-supersede是Bash CLI PreToolUse撞不到、Stop hook被誤當pre-commit、E2 ended選填+updated不同步/E3無decision ID/E4無最後實質變更資料模型/連鎖無跨呼叫visited-set
+    why_chosen: 方向(兩張網)成立、壞的是對repo現況的具體宣稱→全折入修正而非重設計;新增§0前置資料模型小改(P1/P2/P3)當落地先決、cascade ledger補跨呼叫閉環與confirmed_ts解永久假陽性
+    decided: 2026-07-14
+    valid: true
+  - content: round-2 Codex(讀repo)修正折入(v3):裁定翻成build——圖譜建圖層無型別(_impact_bfs/_impact_via不能typed propagation),故新建P0 typed-edge index為地基;ledger確認粒度=決策ID×邊型×鄰居+獨立JSON;S3補寫回CLI;S1觸發改內部API+失敗語意+移除decision-add;修chain_visited/P1範圍/decision1自我腐爛
+    context: round-2 panel跨家族Codex以行號證:Env.edges以target去重丟邊型、_impact_via事後單值猜型related遮verified_by→圖譜走圖層無型別;confirmed_ts粒度不足(只node會誤跳);cascade ledger巢狀plan frontmatter扛不住;decision-* CLI無--json;判斷閘寫回介面全空白;sonnet加抓v2自introduce矛盾
+    why_chosen: 方向(兩張網)仍成立但主網地基(typed edge)lumos沒有→從borrow翻build:P0 typed-edge index(邊型其實在frontmatter具名欄位、走圖層才合併掉);補網讀具名欄位可先獨立上、把頭號腐爛變免費週期檢查;主網需P0+新CLI較大工程後上
+    decided: 2026-07-14
+    valid: true
+  - content: 3輪design-loop後暫停實作:架構收斂(Codex r3確認P0 typed-edge從frontmatter建得出、方向可行)但實作合約細節未釘,人裁定收成設計資產。phase-1 MVP=補網E1失效背書(只讀verified_by+status、免前置)
+    context: 3輪panel全GATE FAIL但無地基翻案:r1引擎誤指→r2圖譜無型別→翻build P0 typed-edge index→r3 Codex確認P0可建、剩合約細節(rel-cascade需cascade-id、supersede回傳decision-id、P0 ghost/scalar政策、ledger並行鎖、P1單次atomic、E2首判粒度)。跨家族Codex兩份設計(idioms+本案)皆讀repo揪出doc-only抓不到的地基錯
+    why_chosen: 架構已穩、續推邊際遞減且剩的是實作合約非設計對錯;凍golden保三輪findings+待釘合約清單,實作另議。補網E1現成可建、立刻把頭號腐爛變免費週期檢查;主網typed-edge+CLI後上
+    decided: 2026-07-14
+    valid: true
+---
+# 關係層傳播守衛_計劃
+
+**PRIOR-ART:** 原以為「借既有 impact 引擎小擴」——**兩輪 Codex 讀 repo 證偽兩次**：r1 誤指 `_reco_scores`（推薦排序器）；r2 更深——`_impact_bfs`/`_impact_via` 也不行，因為 **lumos 圖譜在建圖層就丟掉邊型**（`Env.edges` 以 target 去重、不存來源欄位；`_impact_via` 只事後單值猜型、`related` 會遮 `verified_by`/`plan_refs`）。**但邊型其實存在 frontmatter 具名欄位裡**（`verified_by`/`plan_refs`/`related` 各自獨立 list）——是走圖層合併掉的。故裁定改為 **build（typed-edge index + typed hop-1 列舉 + cascade ledger CLI + Check E）+ 資料模型前置（見 §0）+ orchestrate（判斷閘）**；「借」縮到只剩 frontmatter 解析。補網讀具名欄位可行、主網需這個新 index。
+
+## 〇、前置地基（lumos 資料模型改動；round-2 Codex 揭露「圖譜無型別」）
+
+- `[P0]`（**新地基，兩張網共用**）**typed-edge 反向索引**：從 frontmatter 具名欄位（`verified_by`/`plan_refs`/`related`）建「每節點 ← 誰、以哪種邊型指向我」（`{node → {verified_by:[], plan_refs:[], related:[]}}`）。**這是 lumos 現在沒有的**（`Env.edges` 無型別）——主網 typed hop-1、補網 Check E 邊型過濾都靠它。純 frontmatter 可建、stdlib 相容。
+- `[P1]` **`decision-supersede` 寫入時自動補 `ended`=今日 ＋ 同步 bump 節點頂層 `updated`**（現 ended 選填、updated 不同步 → E2 時序代理失真）。**只 E2 需要**（E4 用 V.date vs node.updated、不需 ended）。Codex 驗過 surgical minimal diff 可落地。
+- `[P2]`（**升為核心，非選配**）**決策加穩定 ID**：不只 E3 精確對應（Verification `decision_refs`），**cascade ledger 的確認粒度也需要它**（確認單位 = 觸發決策 ID × 邊型 × 鄰居，見 [S5b]）。缺它 → E3 降高噪音 advisory + ledger 無法精確去抑制。
+
+## 一、問題
+
+lumos 的驗證火力**全在「節點」層**：每條 ★INVARIANT★ 綁測試（Check T）、每條合約派乾淨 agent 審（[audit:]）、每篇自足性審計（L4）。**關係層（邊）只查「存不存在 / 斷不斷」**：verified_by 雙向（Check 3）、plan_refs 意圖鏈（Check 4）、inline 路徑指的檔在不在（Check P）。
+
+唯一沾到邊的是 **Check 4** ——它除斷鏈外，已比對 Verification 檔名日期 vs 結案/被翻計劃的 `updated`（「結案後有較新驗證」的**有限時序 proxy**），但**仍不驗語意**。除此之外**沒有任何機制查「這條邊還對不對」**——「X 驗證 Y」在 X 變 stale/Y 改版後還成不成立、A 建在的 B 決策被別處推翻了沒跟上。這是交叉審計實測記下的**最高頻腐爛**（`reference.md`：「決策在別篇筆記被推翻、本篇沒跟上——hooks 抓不到，交叉審計是目前唯一掃得出它的機制」），代價 $30 / 1.5h AI 交叉審。
+
+**現有 code↔圖譜同步閘為何擋不到**（round-1 Codex 修正：分清兩套機制）：① **真 pre-commit** 是 staged-diff 硬擋——Gate 3「**任一圖譜 .md 進 staged 即讓 code commit 放行**」，只保「同次有 code 也有圖譜檔動」；② 另有 Claude **Stop hook**（軟提醒、per-turn、原稿誤稱『四層 pre-commit』）。**兩者共同盲區**：只數「圖譜有沒有動」，**不看動的是不是對的節點、更不追決策翻案→下游校正**。根本原因：**「A 依賴 B 的那條決策」存在 A 的散文裡、不在機器讀得懂的邊上**，機器從「B 翻了」推不到「去修 A」。
+
+## 二、架構：兩張網
+
+### 主網 · 改節點觸發的連鎖確認（proactive，趁脈絡最全當場處理）
+
+- `[S1]` **觸發（r2 Codex 修正）**：主路 = **`decision-supersede` 寫入 rc=0 後，dispatcher 呼叫一個新內部 cascade-surface 函式**（**不是**直接 `impact --node`——CLI 無 `--json`、`cmd_impact` 入口是 code 檔，故新建內部 API）。**移除 `decision-add`**（它恆寫 valid:true、無「valid 變動」語意，r2 兩審計員指出並列是錯）。次路 = 手改決策 valid 的 Edit/Write 走 PreToolUse（比 old/new，整檔 Write 退化，次要）。**失敗語意**：atomic 寫入在 surface 前已完成 → surface/ledger 失敗**不回滾決策**、記 log、由**補網週期 Check E 兜底**（不擋 supersede，因重跑會被既有 superseded_by 拒）。
+- `[S2]` **typed hop-1 列舉（r2 Codex 修正引擎）**：`lumos impact --node <節點>` = **在 [P0] typed-edge index 上列 hop-1 直接鄰居**，**不是**複用 `_impact_bfs`（那雙向走全部邊、無 predicate，且 `_impact_via` 只事後單值猜型不可靠）。只走**有方向語意的邊型**（`verified_by`/`plan_refs`；`related` 弱、預設不展）+ 標邊型 + 標受影響合約。**cascade 的多跳與跨呼叫 visited 由 [S4]/[S5b] 的 orchestration 管，`--node` 本身只做單層 typed 列舉**（消 S2「hop-1」vs S4「多跳」的矛盾）。
+- `[S3]` **判斷閘 + 寫回介面（r2 Codex 補：原本這步的落地介面全空白）**：人/AI 逐一判「B 這次的改真的牽連這個鄰居嗎？」（機器判不了、守語意）→ **用新 CLI 把判定持久化**：`lumos rel-cascade confirm|prune <鄰居> --from <決策ID> --edge <邊型>`（寫進 [S5b] ledger）。這是「確認才前進」的樞紐，必須有指令、不能只靠當下 AI 記得。
+- `[S4]` **連鎖＝確認才前進的工作清單（防爆炸鐵則）**：**非「自動展 depth-N BFS」**（圖譜 2-3 跳連半張圖 → 點名爆炸 → 麻痺）。只有 `[S3]` 判定**真傳播**的鄰居才進工作清單、長出下一跳；判「沒事」的當場斷掉。follow 真依賴脊椎、死支剪除。
+- `[S5]` **帳本＝plan 節點**：連鎖的工作清單 + 各節點判定寫進一個 plan 節點（可中斷、可續、可稽核）。變更夠大（跨 session/多節點）才開 plan，小的用一次性 checklist。
+- `[S5b]` **cascade ledger schema（r2 Codex 修正：粒度 + 持久化位置）**：**放獨立 `governance/rel-cascade/<cascade-id>.json`**（plan frontmatter 只吃純量/list/block scalar、扛不住巢狀；另放 JSON、stdlib 相容、atomic tmp→rename、入版控）。**確認粒度 = 觸發決策 ID × 邊型 × 鄰居節點**（非只 `{node}`——否則「對一條 related 判無關」會誤跳掉另一條 verified_by/另一個決策的 E2）：
+  ```
+  { cascade_id, root_decision_id, chain_visited:[nodes],           # 全鏈共用一份(整個 cascade-id 一份,非每節點各一)
+    items:[ {neighbor, edge_type, from_decision_id, state:pending|confirmed|pruned, ts} ] }
+  ```
+  confirmed **與** pruned 兩態都寫 `ts`（供補網跳過——pruned 才是「判過無關」的關鍵，解「剪除節點 updated 不前進 → E2 永久假陽性」）。**跨 cascade 不共享 state**：決策 D2 觸發新 cascade，同鄰居重新 pending（不繼承 D1 的 pruned，避免漏傳播）。
+
+### 補網 · doctor Check E 週期掃（reactive，接住主網漏的）
+
+純 **frontmatter 可判**的關係鏽（零 LLM）。**r2 Codex 修正：邊型讀 [P0] typed-index（非無型別 `_impact_via`/`in_e`）**。`warn_soft` **advisory 不硬擋**（有假陽性，是摩擦提醒非 gate）：
+
+- `[S6]` **E1 失效背書**：每條 `verified_by:[[V]]`（直接讀具名欄位）→ 讀 V 的 `status`；`stale`/`fail` → 標「模組掛著死背書」。V 是 ghost → 跳過，交既有 ghost 檢查（不重疊職責）。**E1 不需 [P0]**（verified_by 直接讀），最先可上。
+- `[S7]` **E2 建在被推翻決策上（擴充 Check 4 時序法 + 依 [P0][P1][P2]）**：某節點決策 `valid:false` → 經 [P0] 取**有方向語意的連入邊**（`verified_by`/`plan_refs`）的節點 → 該節點 `updated` < 決策 `ended`（[P1] 保證）→ warn_soft。**跳過規則（粒度化，解永久假陽性）**：ledger 若有這筆 `(from_decision_id × edge_type × neighbor)` 的 `confirmed/pruned` 且 `ts` 晚於決策 `ended` → 跳過。**只 E2 用此跳過**（E1/E4 與決策翻案級聯無關，不套此規則，避免掩蓋無關的真背書失效）。
+- `[S8]` **E3 意圖鏈斷義（依 [P2]）**：用 `decision_refs`（P2）精確對應「Verification 實作的那條意圖是否 valid:false」；P2 未落地前 → 暫**高噪音 advisory**：「`plan_refs` 指的計劃含**任一** invalid 決策」（明標低精度）。
+- `[S9]` **E4 背書早於節點 updated（誠實改名）**：`verified_by` 的 V 的 frontmatter **`date` 欄位**早於節點 `updated` → 標「背書可能驗的是舊版」。**不需 ended、不需 [P0]**。原稱「模組最後實質變更」無資料模型（真 code 級需 git history+路徑認領+rename）→ 列 future。
+
+## 三、資料流
+
+```
+【主網】改 B 決策 → supersede rc=0 後 dispatcher 呼 cascade-surface → lumos impact --node B（[P0] typed index 上 typed hop-1，非 _impact_bfs）
+   → 列 hop-1 鄰居 → 人/AI 逐一判「真傳播?」
+     ├ 真 → 進工作清單 → impact --node <該鄰居> 展下一跳（cycle guard）→ …
+     └ 否 → 剪除
+   → plan 節點記工作清單 + 判定（可續/可稽核）
+【補網】doctor（每次巡檢）→ Check E 掃 E1-E4 frontmatter 可判關係鏽 → warn_soft 提醒
+【殘餘】純語意矛盾（兩篇內容打架）→ 仍留 AI 交叉審（本守衛不取代，只當機械前濾網）
+```
+
+## 四、天花板（誠實邊界）
+
+1. **只掃 frontmatter/日期可判的**：Check E 抓失效背書/推翻殘留/時序過舊；**純語意矛盾（兩篇對同一事各說各話）機器判不了、仍要 AI 交叉審**。本守衛**不取代**交叉審，是把「頭號腐爛」的機械可判大半變免費前濾網，讓昂貴 AI 只處理真需讀懂的殘餘。
+2. **連鎖靠判斷閘防爆炸**：`[S3]` 判「真傳播嗎」是人/AI（GIGO）；判錯 = 該剪沒剪（過度連鎖）或該展沒展（漏傳播）。工具只保證把鄰居攤出來，不保證判得對。
+3. **主網 surfacing 必 hook 強制**（不靠自覺）；**pruning 是語意判斷**（守語意）。合起來 = 機械擴大覆蓋 + 人守語意。
+4. **E2 時序法是啟發**：`updated` 早於 `ended` 只是「可能沒跟上」的代理信號，非定論（可能人早就手動確認過但沒動 updated）→ 故 advisory。
+
+## 五、實務隱患
+
+- **主網觸發的偵測**：怎麼機械判「這次編輯是 decision-supersede / 動到合約行」？（比對 diff 的 decisions[].valid true→false、或 ★KEY 行變動）——需定義觸發條件，過寬會每次改節點都噴、過窄會漏。
+- **P0 解析政策（r3 Codex 待釘合約）**：具名欄位可解析成 list（已驗），但要明定：殘留 scalar 拒絕/納入/報警？ghost 目標保留 unresolved 還是丟？同名無路徑 wikilink 不得靜默指第一篇。P0 工作量 > 「一個 dict」——需逐欄 exact-wikilink 抽取、正反向索引、去重鍵 `(source,target,type)`、供 doctor+impact 共用 API + 索引自身新鮮度（別讓地基也腐爛）。
+- **rel-cascade 定址 + 決策 ID 回傳（r3 Codex）**：`rel-cascade confirm/prune` 需 `--cascade-id`（同決策可多 cascade、跨 cascade 不共享 state，無 id 定不到檔）；`cmd_decision_supersede` 現回 int 0，需改回 `(rc, decision_id)` 供 [S1] 用精確 ID 呼 surface，不可再靠 content 子字串重找。
+- **ledger 並行一致性（r3 Codex）**：atomic rename 只防破檔、不防多 session lost-update → 需鎖/CAS/append-only 事件帳。P1 須**單次 atomic**（同一份 fm 同時補 ended+bump updated），不可串兩個寫命令（第二步失敗留半完成）。
+- **plan 帳本的開啟門檻**：每次改決策都開 plan 節點會過重；小改用一次性 checklist、大改才開 plan——門檻怎麼定。
+- **Check E 假陽性率**：E1 背書 stale 但其實還在用、E2 早就手動確認過——advisory 才不誤傷，但提醒太多也會被無視（同 doctor 0-issue 麻痺的反面）。
+- **主網/補網重疊**：主網當場處理過的，補網週期掃會不會又報一次？→ [S5b] 的 `confirmed_ts` 讓補網跳過（解決）。
+- **重複觸發 debounce**（round-1 Codex）：同節點在一輪對話內被多次 `decision-add`/`set`/Edit → 每次都觸發 impact-from-B → 疊出多個重複 cascade/判斷閘。需 debounce：同節點同 session 合併成**一個** cascade，末次觸發才展。
+- **E2 永久假陽性**（round-1 Codex）：判「沒事」剪除的節點 `updated` 永不前進 → E2 每次 doctor 都重標 → 0-issue 麻痺的反面。→ [S5b] `confirmed_ts` 記「這條邊人工確認過無關」，晚於決策 `ended` 即跳（解決）。
+
+## 六、測試策略
+
+| 單元 | 測什麼 | 型 |
+|---|---|---|
+| impact --node | 從 [P0] typed index 列 hop-1、只走 verified_by/plan_refs 邊型、ghost/scalar 政策正確、不走無型別全邊 | 行為 |
+| P0 typed-edge index | 具名欄位逐欄抽 exact wikilink、正反向、去重鍵、ghost/scalar/同名歧義處置 | 純函式 |
+| rel-cascade CLI | confirm/prune 依 (cascade-id×決策×邊型×鄰居) 寫對檔、path 安全(擋 ../)、並行不 lost-update | 行為 |
+| 觸發偵測 | decision valid true→false 的 diff 被認出、無關編輯不觸發 | 純函式 |
+| 工作清單連鎖 | 只有標「真傳播」的節點展下一跳、剪除的不展、環不重入 | 行為 |
+| Check E1-E4 | 種真失效背書/推翻殘留/斷義/舊背書 → 各被標；乾淨圖不誤報 | 純函式 |
+| 主/補網不重報 | 主網確認留痕後、補網掃同節點跳過 | 行為 |
+| 端到端 | 種一個「B 決策翻案、A 沒跟上」→ 主網當場點名 A / 補網 doctor 也掃得到 | E2E |
+
+## 七、落地順序（建議）
+
+1. **`[S6]` E1 失效背書**——只讀 `verified_by`+V.status，**不需任何前置**，風險最低、獨立可驗，先摘果實。
+2. **`[P0]` typed-edge 反向索引**——主網與 E2 的共同地基（lumos 現在沒有；純 frontmatter 建）。
+3. **`[S9]` E4**（V.date vs node.updated）——只需讀日期、不需 P0/P1。
+4. **`[P1]`（supersede 自動補 ended + bump updated）→ `[S7]` E2**（依 P0+P1）。
+5. **`[P2]` 決策 ID → `[S8]` E3 精確版**（未落地前 E3 走高噪音 advisory）。
+6. **`[S5b]` cascade ledger（獨立 JSON）+ `[S3]` 寫回 CLI**——主網閉環的地基；E2 的粒度化跳過依賴它。
+7. **`[S1]` 觸發接 `decision-supersede`（rc=0 後呼新內部 API）+ 失敗語意 + debounce**（同 root 決策合併一個 cascade）+ `[S2]` typed hop-1 + `[S4]` 判斷閘連鎖。
+
+> 補網（1-5）可先獨立上、立刻把「頭號腐爛」變免費週期檢查；主網（6-7）是需 typed-edge 地基與新 CLI 的較大工程，後上。
+
+## 八、design-loop 狀態與待釘合約（2026-07-14 暫停實作）
+
+**loop 收斂狀態**：3 輪 panel 全 GATE FAIL，但**架構收斂**（跨家族 Codex 讀 repo 兩輪修正地基：r1 引擎誤指→r2 圖譜無型別→翻 build；**r3 確認 P0 從 frontmatter 建得出來**、總評「方向可行、P1 與 CLI 架構都能局部落地」）。剩全是**實作合約細節**、非地基翻案。經人裁定**收成設計資產、暫停實作**（非 gate-clean）。
+
+**phase-1 MVP（現成可建的第一刀）**：**補網 `[S6]` E1 失效背書**——只讀 `verified_by`+V.status、不需任何前置、獨立可驗，立刻把「$30 AI 才掃得出的頭號腐爛」變**免費週期檢查**。接著 `[P0]`→E2/E4。主網（typed hop-1 + cascade ledger + rel-cascade CLI）是較大工程、後上。
+
+**實作前必釘合約（r3 findings，依嚴重度）**：
+- 🔴 **rel-cascade 定址**：`confirm/prune` 需 `--cascade-id`（同決策可多 cascade、跨 cascade 不共享 state，無 id 定不到檔）。
+- 🔴 **決策 ID 回傳**：`cmd_decision_supersede` 現回 int 0，需改 `(rc, decision_id)`，[S1] 才能用精確 ID 呼 surface（不可再靠 content 子字串重找）。
+- 🟠 **P0 解析政策**：殘留 scalar 拒/納/警？ghost 保留 unresolved 還是丟？同名無路徑 wikilink 不得靜默指第一篇。P0 工作量 >「一個 dict」：逐欄 exact-wikilink 抽取、正反向 index、去重鍵 `(source,target,type)`、doctor+impact 共用 API、索引自身新鮮度。
+- 🟠 **ledger 並行**：atomic rename 只防破檔、不防多 session lost-update → 需鎖/CAS/append-only 事件帳。
+- 🟠 **P1 單次 atomic**：同一份 fm 同時補 ended+bump updated，不可串兩寫命令（第二步失敗留半完成、破壞 E2 時序前提）。
+- 🟠 **E2 首判粒度**：ledger 抑制是決策×邊型×鄰居，但 E2 **首次噴警告**仍節點級（節點多決策、只 1 條翻案會整批標）→ 首判也要依 decision_refs 過濾。
+- 🟠 **decision_refs 形狀** / **P2 舊決策回填 ID** / **菱形依賴**（同鄰居經兩邊型/決策到達，chain_visited 扁平會抹平粒度）/ **crash 恢復 + 列出失敗 cascade 指令**（[S1]「補網兜底」高估：Check E 接不回失敗 cascade 的多跳）/ **path 安全**（cascade-id 擋 `../`）。
+- 🟡 ts vs confirmed_ts 命名統一、「小改 checklist」留痕格式、標受影響合約的映射機制。
+
+**天花板重申**：只掃 frontmatter 可判的；純語意矛盾仍留 AI 交叉審（本守衛是機械前濾網、讓 AI 那關變便宜，不取代）。
