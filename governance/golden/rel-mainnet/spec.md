@@ -2,7 +2,7 @@
 type: project
 status: doing
 created: 2026-07-14
-updated: 2026-07-15
+updated: 2026-07-14
 summary: |-
   FLAG:DECISION
   KEY:關係層守衛「主網(proactive 連鎖確認)」的 TDD 實作計畫;設計/架構收斂見 [[關係層傳播守衛_計劃]] §八待釘合約,本節點把 🔴🟠 合約逐條釘死 + 切 4 里程碑
