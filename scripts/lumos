@@ -4598,14 +4598,18 @@ def _utc_ts():
 def _ledger_append(path, obj):
     """[M3 並行合約] O_APPEND fd + 單次 os.write() 整行 bytes(≤4KB 寫前拒,不截斷)。
     POSIX regular file 實務原子;Windows/跨平台 best-effort、預期單寫者(誠實降級,r1 D10)。
-    無 O_CREAT——confirm/prune 永不建檔(建檔只屬觸發端 rel_cascade_create,r2 R4)。"""
+    無 O_CREAT——confirm/prune 永不建檔(建檔只屬觸發端 rel_cascade_create,r2 R4)。
+    [code-loop r1] O_NOFOLLOW 拒 symlink 終點(字元白名單擋不住,CX1);os.write 回傳驗滿寫
+    (ENOSPC 短寫會留中段殘行且 rc=0 假成功,B1)——短寫即 RuntimeError,呼叫端 rc=2。"""
     import json
     data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
     if len(data) > 4096:
         raise ValueError(f"事件行 {len(data)}B 超過 4KB 上限,寫前拒絕(不截斷、不靜默破壞原子假設)")
-    fd = os.open(str(path), os.O_WRONLY | os.O_APPEND)
+    fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
     try:
-        os.write(fd, data)
+        written = os.write(fd, data)
+        if written != len(data):
+            raise RuntimeError(f"帳本短寫({written}/{len(data)}B,疑磁碟滿)——本筆事件未完整落盤,重試前先查空間")
     finally:
         os.close(fd)
 
@@ -4651,7 +4655,10 @@ def _ledger_read(path):
             o = json.loads(line)
         except ValueError:
             continue
-        if i == 0 and o.get("event") == "header":
+        if i == 0 and o.get("event") == "header" \
+                and str(o.get("root_decision_id", "")).strip() and str(o.get("node", "")).strip():
+            # [code-loop r1 CX2] 必要欄位齊才算合法 header——空殼 {"event":"header"} 會讓
+            #   resume 拿空 root 靜默 rc=0 裝成功,而非走「不可恢復 rc=1」救援語意
             header = o
         elif o.get("event") == "transition":
             trans.append(o)
@@ -4669,7 +4676,8 @@ def _ledger_fold(transitions):
 
 
 def _validate_cascade_id(cid):
-    if not CASCADE_ID_RE.match(cid) or ".." in cid:
+    # [code-loop r1 A3] fullmatch 非 match——match+$ 會放過尾端換行(re 的 $ 容忍結尾 \n)
+    if not CASCADE_ID_RE.fullmatch(cid) or ".." in cid:
         raise ValueError(f"cascade-id 含非法字元(限 [A-Za-z0-9._-],擋 ../): {cid}")
 
 
@@ -9056,7 +9064,9 @@ def main():
                     return 2
                 return cmd_rel_cascade_resume(env, args.arg)
             return cmd_rel_cascade_list(env, stale_days=args.rc_stale)
-        except (ValueError, RuntimeError) as e:
+        except (ValueError, RuntimeError, OSError) as e:
+            # [code-loop r1 B3] 含 OSError:磁碟滿/權限/TOCTOU 檔案消失/O_NOFOLLOW 拒 symlink
+            #   ——帳本走檔案系統,IO 例外是本分支常態失敗面,裸 traceback 會破壞 rc=2 行式協議
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
 

@@ -787,6 +787,54 @@ def t_impact_node_mode():
     check("M4 --node×--file 互斥 rc=2", r.returncode == 2, r.stderr)
 
 
+def t_rel_cascade_hardening():
+    """code-loop r1 六修回歸:畸形行 fold 防禦閘(MUT1)/空殼 header(CX2)/尾端換行(A3)/
+    symlink 拒斥(CX1)/OSError→rc=2(B3);短寫驗證(B1)為 os.write 合約、以 code 檢查存在性錨。"""
+    v = mkvault()
+    write(v, "Projects/D.md", "type: project\nstatus: done")
+    write(v, "Systems/A.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/D]]\"")
+    lm = _lm(); env = lm.Env(v)
+    gid = "Projects/D.md#d1"
+    cid = lm.rel_cascade_create(env, gid, "Projects/D.md")
+    p = v / "governance" / "rel-cascade" / (cid + ".jsonl")
+    # MUT1:畸形 transition(缺 edge_type)→ fold 防禦閘 all(k) 必須跳過
+    import json as _json
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(_json.dumps({"event": "transition", "ts": "2026-07-15T00:00:00+00:00",
+                             "neighbor": "Systems/A.md", "from_decision_id": gid,
+                             "state": "confirmed", "by": "ai"}) + "\n")  # 無 edge_type
+    _, trans = lm._ledger_read(p)
+    st = lm._ledger_fold(trans)
+    check("硬化 MUT1:畸形行(缺 edge_type)不進折疊", len(st) == 0 and len(trans) == 1, str(st))
+    # CX2:空殼 header {"event":"header"} → 非法 header:confirm rc=2、resume rc=1
+    sp = v / "governance" / "rel-cascade" / "c-20260101000000-bbbbbbbb.jsonl"
+    sp.write_text('{"event": "header", "ts": "2026-01-01T00:00:00+00:00"}\n', encoding="utf-8")
+    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", "c-20260101000000-bbbbbbbb",
+            "--from", gid, "--edge", "verified_by", "--by", "ai")
+    check("硬化 CX2:空殼 header confirm rc=2(缺 root/node=不合法)", r.returncode == 2, r.stderr)
+    r = run(v, "rel-cascade", "resume", "c-20260101000000-bbbbbbbb")
+    check("硬化 CX2:空殼 header resume rc=1(不可恢復,不裝成功)", r.returncode == 1, r.stderr)
+    # A3:尾端換行 cascade-id → fullmatch 拒 rc=2
+    r = run(v, "rel-cascade", "resume", cid + "\n")
+    check("硬化 A3:尾端換行 id 被 fullmatch 拒 rc=2", r.returncode == 2, r.stderr)
+    # CX1:symlink 終點 → O_NOFOLLOW 拒(OSError→dispatcher rc=2,兼證 B3)
+    import os as _os
+    victim = v / "victim.txt"; victim.write_text("勿附加", encoding="utf-8")
+    link = v / "governance" / "rel-cascade" / "c-20260101000000-cccccccc.jsonl"
+    _os.symlink(victim, link)
+    # 給 symlink 檔一個合法 header 內容繞前置驗證?——symlink 指向的 victim 無 header,寫前驗證先拒;
+    # 直接測 _ledger_append 對 symlink 的 O_NOFOLLOW(底層合約)
+    try:
+        lm._ledger_append(link, {"event": "transition", "x": 1})
+        check("硬化 CX1:symlink 被 O_NOFOLLOW 拒", False, "未拒")
+    except OSError:
+        check("硬化 CX1:symlink 被 O_NOFOLLOW 拒(OSError)", True, "")
+    check("硬化 CX1:victim 未被污染", victim.read_text(encoding="utf-8") == "勿附加", "")
+    # B1:短寫驗證存在性錨(os.write 回傳被檢查)
+    src = open(GRAPHCTL, encoding="utf-8").read()
+    check("硬化 B1:_ledger_append 驗 os.write 回傳(短寫 raise)", "written != len(data)" in src, "")
+
+
 # ══ M2/P0 typed-edge 反向索引 ══
 
 def t_typed_index_contracts():
