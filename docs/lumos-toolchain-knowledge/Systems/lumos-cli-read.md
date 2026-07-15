@@ -39,6 +39,7 @@ decisions:
 verified_by:
   - "[[Verification/2026-07-14_relguard_E1失效背書]]"
   - "[[Verification/2026-07-14_relguard_E2建在被推翻決策上]]"
+  - "[[Verification/2026-07-15_主網M1_決策穩定ID]]"
 ---
 # lumos-cli-read
 
@@ -55,7 +56,7 @@ verified_by:
   - `context <節點> [--brief]`(`cmd_context`):節點 + 鄰居 summary 壓縮索引(MemPalace closet)。**頭部直接攤出 ⚠ 合約**(extract_contracts);`--brief` 只給 meta + summary 首兩行 + 鄰居名單(壓 token)。
   - `contracts [節點]`(`cmd_contracts`):合約登記簿,列 `★INVARIANT★`(改=breaking)/ `★DEBT★`(可改);**只認 KEY 行前綴標準格式**;★INVARIANT★ 顯示綁定的 `[test:]`,未綁=⚠(doctor Check T 會擋)。
 - **巡檢 / 完整性**
-  - `doctor [--ci]`(`cmd_doctor`):全圖權威健康巡檢——4 檢查(1/4 Verification orphans、2/4 unresolved wikilinks 破連結、3/4 verified_by 雙向同步、4/4 plan_refs 意圖鏈)+ 同名守衛 + frontmatter lint + Check T(★INVARIANT★→測試綁定)/ Check R(可逆性回退)/ Check H(漏標可逆性軟提醒,僅 --ci 掃 diff)+ Check P(失效檔案認領:inline-code 路徑指向已不存在檔案)+ Check E1/E2(關係層:E1 失效背書 verified_by→stale/fail、E2 建在被推翻決策上 決策翻案而 typed 連入來源未跟上;皆軟提醒)。`--ci` = `--strict` + 無色彩,且是 `.governance-log.jsonl` 唯一寫者。
+  - `doctor [--ci]`(`cmd_doctor`):全圖權威健康巡檢——4 檢查(1/4 Verification orphans、2/4 unresolved wikilinks 破連結、3/4 verified_by 雙向同步、4/4 plan_refs 意圖鏈)+ 同名守衛 + frontmatter lint + Check T(★INVARIANT★→測試綁定)/ Check R(可逆性回退)/ Check H(漏標可逆性軟提醒,僅 --ci 掃 diff)+ Check P(失效檔案認領:inline-code 路徑指向已不存在檔案)+ Check E1/E2/E3(關係層:E1 失效背書 verified_by→stale/fail、E2 建在被推翻決策上 決策翻案而 typed 連入來源未跟上——鄰居有 decision_refs 時精化為只標指到那條、E3 意圖鏈斷義 decision_refs 指向的決策已翻案+dangling 浮出;皆軟提醒)。`--ci` = `--strict` + 無色彩,且是 `.governance-log.jsonl` 唯一寫者。
 - **遍歷 / 關聯**
   - `links <節點>` / `backlinks <節點>`(`cmd_links`,reverse=True 即 backlinks):列連出 / 連入節點 + 狀態。
   - `map <節點> [--depth 2]`(`cmd_map`):鄰域樹狀展開,`↺` 標已出現過(防環)。

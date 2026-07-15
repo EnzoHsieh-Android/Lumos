@@ -488,6 +488,143 @@ def t_decision_supersede_p1_autofill():
     check("P1 第二條 valid:true 未被動", "第二條不動" in txt and txt.count("valid: false") == 1, txt)
 
 
+# ══ M1/P2 決策穩定 ID(關係層主網 M1 第一刀) ══
+
+def t_decision_id_assignment():
+    v = mkvault()
+    p = write(v, "Systems/S.md", "type: system\nstatus: done")  # 無 decisions
+    r = run(v, "decision-add", "S", "第一條決策", "--decided", "2026-07-15")
+    check("M1 add 無 decisions → rc=0", r.returncode == 0, r.stderr)
+    check("M1 首條指派 id: d1", "id: d1" in read(p), read(p))
+    check("M1 輸出帶 id", "id=d1" in r.stdout, r.stdout)
+    r = run(v, "decision-add", "S", "第二條決策", "--decided", "2026-07-15")
+    check("M1 第二條接續 d2(單調計數)", "id: d2" in read(p) and r.returncode == 0, read(p))
+
+
+def t_decision_supersede_gid_and_id_verify():
+    v = mkvault()
+    p = write(v, "Systems/S.md", "type: system\nstatus: done")
+    run(v, "decision-add", "S", "甲方案", "--decided", "2026-07-15", expect_rc=0)
+    run(v, "decision-add", "S", "乙方案", "--decided", "2026-07-15", expect_rc=0)
+    r = run(v, "decision-supersede", "S", "甲方案", "--by", "改用乙")
+    check("M1 supersede rc=0", r.returncode == 0, r.stderr)
+    check("M1 supersede 輸出帶全域 id [<rel>#d1]", "[Systems/S.md#d1]" in r.stdout, r.stdout)
+    txt = read(p)
+    check("M1 d1 翻案且保留原 id(不刪不換號)",
+          "id: d1" in txt and txt.count("valid: false") == 1 and "superseded_by: 改用乙" in txt, txt)
+    check("M1 d2 未被動", "id: d2" in txt and "乙方案" in txt, txt)
+
+
+def t_decision_supersede_multimatch_rc2():
+    v = mkvault()
+    p = write(v, "Systems/S.md", "type: system\nstatus: done")
+    run(v, "decision-add", "S", "快取策略用 LRU", "--decided", "2026-07-15", expect_rc=0)
+    run(v, "decision-add", "S", "快取策略改 TTL", "--decided", "2026-07-15", expect_rc=0)
+    before = read(p)
+    r = run(v, "decision-supersede", "S", "快取策略", "--by", "X")
+    check("M1 多重命中 → rc=2 拒 first-match", r.returncode == 2, f"rc={r.returncode}")
+    check("M1 rc=2 列候選+提示 #dN", "命中 2 條" in r.stderr and "#dN" in r.stderr, r.stderr)
+    check("M1 多重命中未動檔", read(p) == before, "檔案被改了")
+
+
+def t_decision_supersede_dN_addressing():
+    v = mkvault()
+    p = write(v, "Systems/S.md", "type: system\nstatus: done")
+    run(v, "decision-add", "S", "快取策略用 LRU", "--decided", "2026-07-15", expect_rc=0)
+    run(v, "decision-add", "S", "快取策略改 TTL", "--decided", "2026-07-15", expect_rc=0)
+    r = run(v, "decision-supersede", "S", "#d2", "--by", "改 ARC")
+    check("M1 #d2 精確定址 rc=0", r.returncode == 0, r.stderr)
+    txt = read(p)
+    check("M1 #d2 翻的是第二條(TTL),第一條未動",
+          "[Systems/S.md#d2]" in r.stdout and txt.count("valid: false") == 1
+          and "superseded_by: 改 ARC" in txt, txt + r.stdout)
+    # 未 reindex 節點(決策無 id)以 #dN 查無 → rc=2 提示 reindex
+    write(v, "Systems/Old.md", "type: system\nstatus: done\ndecisions:\n"
+          "  - content: 舊決策無id\n    decided: 2026-01-01\n    valid: true")
+    r = run(v, "decision-supersede", "Old", "#d1", "--by", "Y")
+    check("M1 無 id 節點 #dN 查無 → rc=2 提示 reindex",
+          r.returncode == 2 and "decision-reindex" in r.stderr, r.stderr)
+
+
+def t_decision_reindex():
+    v = mkvault()
+    # 混合狀態:第一條已有 id: d3(手寫/歷史),第二三條無 id → 必須從 d4 接續、絕不撞 d3/不重排
+    p = write(v, "Systems/Mix.md",
+              "type: system\nstatus: done\n"
+              "decisions:\n"
+              "  - content: 甲(已有id)\n    id: d3\n    decided: 2026-01-01\n    valid: true\n"
+              "  - content: 乙(無id)\n    decided: 2026-01-02\n    valid: true\n"
+              "  - content: 丙(無id)\n    decided: 2026-01-03\n    valid: true")
+    r = run(v, "decision-reindex", "Mix")
+    check("reindex rc=0", r.returncode == 0, r.stderr)
+    txt = read(p)
+    check("reindex 混合狀態從 max+1 接續(乙=d4 丙=d5,甲 d3 未動)",
+          "id: d3" in txt and "id: d4" in txt and "id: d5" in txt, txt)
+    check("reindex 依文件順序(乙先於丙)",
+          txt.index("id: d4") < txt.index("id: d5") and txt.index("乙") < txt.index("id: d4"), txt)
+    before = read(p)
+    r = run(v, "decision-reindex", "Mix")
+    check("reindex 冪等(二跑無變動)", r.returncode == 0 and read(p) == before and "冪等" in r.stdout, r.stdout)
+    # 回填後 #dN 定址立即可用
+    r = run(v, "decision-supersede", "Mix", "#d4", "--by", "改丁")
+    check("reindex 後 #d4 可定址翻案", r.returncode == 0 and "[Systems/Mix.md#d4]" in r.stdout, r.stdout)
+    # 無 decisions 節點 → rc=2 明確拒絕
+    write(v, "Systems/None.md", "type: system\nstatus: done")
+    r = run(v, "decision-reindex", "None")
+    check("reindex 無 decisions → rc=2", r.returncode == 2, r.stderr)
+
+
+def t_check_e3_intent_chain():
+    v = mkvault()
+    # 目標節點 D:d1 已翻案、d2 有效
+    write(v, "Projects/D.md",
+          "type: project\nstatus: done\n"
+          "decisions:\n"
+          "  - content: 舊路線\n    id: d1\n    decided: 2026-05-01\n    valid: false\n"
+          "    superseded_by: 新路線\n    ended: 2026-06-10\n"
+          "  - content: 新路線\n    id: d2\n    decided: 2026-06-10\n    valid: true", body="# D\n")
+    # 正例:指向已翻案的 d1 → 斷義
+    write(v, "Verification/VA.md",
+          "type: verification\nstatus: pass\ndate: 2026-05-02\ndecision_refs:\n  - \"Projects/D.md#d1\"", body="# VA\n")
+    # 反例:指向有效的 d2 → 不報
+    write(v, "Verification/VB.md",
+          "type: verification\nstatus: pass\ndate: 2026-06-11\ndecision_refs:\n  - \"Projects/D.md#d2\"", body="# VB\n")
+    # dangling:指向未指派的 d9 + 不存在節點
+    write(v, "Verification/VC.md",
+          "type: verification\nstatus: pass\ndate: 2026-06-11\ndecision_refs:\n"
+          "  - \"Projects/D.md#d9\"\n  - \"Projects/Nope.md#d1\"", body="# VC\n")
+    r = run(v, "doctor")
+    check("E3 抓斷義 1 條(指 d1 翻案)", "發現 1 條意圖鏈斷義" in r.stdout and "Verification/VA" in r.stdout, r.stdout)
+    check("E3 不報有效 d2", "Verification/VB.md → " not in r.stdout, r.stdout)
+    check("E3 dangling 2 條浮出(未指派 id+節點不存在)", "發現 2 條 dangling" in r.stdout, r.stdout)
+
+
+def t_check_e2_decision_refs_refinement():
+    v = mkvault()
+    write(v, "Projects/D.md",
+          "type: project\nstatus: done\n"
+          "decisions:\n"
+          "  - content: 被翻的\n    id: d1\n    decided: 2026-05-01\n    valid: false\n"
+          "    superseded_by: 新\n    ended: 2026-06-10\n"
+          "  - content: 別條有效\n    id: d2\n    decided: 2026-05-01\n    valid: true", body="# D\n")
+    # A:有 decision_refs 且指到「那條」d1、updated 早於 ended → 標
+    write(v, "Systems/A.md",
+          "type: system\nstatus: done\nupdated: 2026-06-01\nverified_by:\n  - \"[[Projects/D]]\"\n"
+          "decision_refs:\n  - \"Projects/D.md#d1\"", body="# A\n")
+    # B:有 decision_refs 但指到別條 d2、updated 也早 → 精化不冤枉,不標
+    write(v, "Systems/B.md",
+          "type: system\nstatus: done\nupdated: 2026-06-01\nverified_by:\n  - \"[[Projects/D]]\"\n"
+          "decision_refs:\n  - \"Projects/D.md#d2\"", body="# B\n")
+    # C:無 decision_refs、updated 早 → 退回節點級,照標(相容不退化)
+    write(v, "Systems/C.md",
+          "type: system\nstatus: done\nupdated: 2026-06-01\nverified_by:\n  - \"[[Projects/D]]\"", body="# C\n")
+    r = run(v, "doctor")
+    check("E2 精化:A(指到那條)+C(無 refs)共 2 條,B(指別條)不冤枉",
+          "發現 2 條可能建在被推翻決策上" in r.stdout, r.stdout)
+    check("E2 精化點名 A 與 C", "Systems/A.md --" in r.stdout and "Systems/C.md --" in r.stdout, r.stdout)
+    check("E2 精化不報 B", "Systems/B.md --" not in r.stdout, r.stdout)
+
+
 # ══ 第二輪審計回歸 ══
 
 # ── NEW-A: 跨資料夾同 basename append 不該誤 dedup / 不該 rc=2 ──

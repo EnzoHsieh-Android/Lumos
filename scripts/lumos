@@ -774,19 +774,67 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
             if not ended:                        # 無 ended → 無從時序比對(P1 起新翻案自動補),跳過
                 continue
             dcontent = first_line(str(d.get("content", "")), 40)
+            did = str(d.get("id", "")).strip()
             for arel, etype in typed_in.get(drel, []):
                 aupd = _ymd(notes[arel].fields.get("updated"))
-                if aupd and aupd < ended:
-                    build_on_dead.append(
-                        f"{arel} --{etype}--> {drel}(決策「{dcontent}」{ended} 翻案,來源自 {aupd} 未更新)")
-                    gov_events.append({"gate": "check-e2", "kind": "warned", "hard": False,
-                                       "nodes": [notes[arel].stem]})
+                if not (aupd and aupd < ended):
+                    continue
+                # [M1] E2 首判精化:鄰居有 decision_refs → 只在指到「那條」翻案決策時才標
+                #   (指到別條=已聲明依賴面、與本翻案無關,不冤枉);無 refs → 退回節點+ended 級(相容不退化)
+                refs = [str(x).strip() for x in as_list(notes[arel].fields.get("decision_refs"))]
+                if refs:
+                    def _hits(s):
+                        mm = re.fullmatch(r"(.+?)#(d\d+)", s)
+                        return bool(mm and did and mm.group(2) == did and env.resolve(mm.group(1)) == drel)
+                    if not any(_hits(s) for s in refs):
+                        continue
+                build_on_dead.append(
+                    f"{arel} --{etype}--> {drel}(決策「{dcontent}」{ended} 翻案,來源自 {aupd} 未更新)")
+                gov_events.append({"gate": "check-e2", "kind": "warned", "hard": False,
+                                   "nodes": [notes[arel].stem]})
     if not build_on_dead:
         ok("無「建在被推翻決策上」的落後邊")
     else:
         _soft_list(build_on_dead,
                    f"發現 {len(build_on_dead)} 條可能建在被推翻決策上的邊(時序法啟發、非定論):",
                    "查該邊是否真受翻案影響:是→更新來源節點跟上新決策;否→已確認無關可 bump 來源 updated 消音;純語意矛盾留 AI 交叉審")
+    print()
+
+    # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
+    #   <節點rel>#dN,M1/P2 決策穩定 ID)指向的那條決策已 valid:false → 本驗證建在被推翻的意圖上。
+    #   dangling ref(格式壞/節點不存在/id 未指派)也浮出——不靜默通過,對齊 M2 反靜默紀律。
+    #   設計見 Projects/關係層主網_實作計畫 M1;取代母計劃 [S8] 的高噪音 advisory。
+    section("E3", "意圖鏈斷義 (decision_refs 指向的決策已翻案 → 建在被推翻意圖上)")
+    e3_broken, e3_dangling = [], []
+    for rel, n in sorted(notes.items()):
+        for ref in as_list(n.fields.get("decision_refs")):
+            s = str(ref).strip()
+            m = re.fullmatch(r"(.+?)#(d\d+)", s)
+            if not m:
+                e3_dangling.append(f"{rel} → {s} (格式非 <節點rel>#dN)")
+                continue
+            trel = env.resolve(m.group(1))
+            if not trel:
+                e3_dangling.append(f"{rel} → {s} (節點不存在)")
+                continue
+            d = next((x for x in parse_decisions(notes[trel].fm_lines)
+                      if str(x.get("id", "")).strip() == m.group(2)), None)
+            if d is None:
+                e3_dangling.append(f"{rel} → {s} (該節點無此決策 id,或未 reindex)")
+                continue
+            if str(d.get("valid", "true")).lower() == "false":
+                e3_broken.append(f"{rel} → {s} (決策已翻案 ended={d.get('ended', '?')})")
+                gov_events.append({"gate": "check-e3", "kind": "warned", "hard": False, "nodes": [n.stem]})
+    if not e3_broken and not e3_dangling:
+        ok("無意圖鏈斷義 (decision_refs 指向的決策都仍有效)")
+    if e3_broken:
+        _soft_list(e3_broken,
+                   f"發現 {len(e3_broken)} 條意圖鏈斷義(所指決策已被推翻):",
+                   "本驗證實作的意圖已翻案:重驗並更新、或改指新決策、或標 stale")
+    if e3_dangling:
+        _soft_list(e3_dangling,
+                   f"發現 {len(e3_dangling)} 條 dangling decision_ref(指向不存在的決策):",
+                   "修正 ref 格式/目標;若目標節點決策未編號先跑 lumos decision-reindex <節點>")
     print()
 
     # Check H: 漏標可逆性提醒(軟,不擋,不計 issues)——僅 --ci 掃 diff,提示疑似漏標 ★IRREVERSIBLE★
@@ -4282,16 +4330,29 @@ def cmd_decision_supersede(env, rel, match, by, ended=None):
     if not loc[2]:  # block 存在但解析不到項目(Bug2:0-indent / 非標準縮排)
         raise ValueError("decisions 區塊解析不到項目(本工具要求 2-space 縮排,不支援 0-indent/tab)")
     _, _, items, _, sub = loc
-    needle = nfc(match)
-    target = None
-    for (st, en) in items:
-        if needle in nfc("\n".join(fm[st:en + 1])):
-            target = (st, en)
-            break
-    if target is None:
-        raise ValueError(f"找不到 content 含「{match}」的決策")
-    st, en = target
     pad = " " * sub
+    needle = nfc(match)
+    id_mode = re.fullmatch(r"#d\d+", match.strip())
+    if id_mode:
+        # [M1/R12] #dN 精確定址:比對項內 id 行
+        want = match.strip()[1:]
+        hits = [(st, en) for (st, en) in items
+                if any(re.match(rf"^{pad}id:\s*{re.escape(want)}\s*$", fm[i])
+                       for i in range(st, en + 1))]
+        if not hits:
+            raise ValueError(f"以 {match} 定址查無決策——該節點決策可能尚無 id,先跑 lumos decision-reindex {rel}")
+    else:
+        hits = [(st, en) for (st, en) in items
+                if needle in nfc("\n".join(fm[st:en + 1]))]
+        if not hits:
+            raise ValueError(f"找不到 content 含「{match}」的決策")
+        if len(hits) > 1:
+            # [M1/R12] 選擇端唯一命中:first-match 會「先改錯項、再用錯項 id 精確驗證它改成功」
+            cands = "; ".join(first_line(fm[st].split("content:", 1)[-1].strip(), 40)
+                              for (st, _) in hits[:5])
+            raise ValueError(f"「{match}」命中 {len(hits)} 條決策,拒絕 first-match(防改錯項)。"
+                             f"候選: {cands} …改用更長子字串或 --match \"#dN\" 精確定址")
+    st, en = hits[0]
     valid_line = None
     for i in range(st, en + 1):
         if re.match(rf"^{pad}valid:\s", fm[i]):   # 只認精確 sub_indent(Bug5:移除過寬 fallback,免誤命中子清單)
@@ -4319,29 +4380,56 @@ def cmd_decision_supersede(env, rel, match, by, ended=None):
         dec_i = next((k for k, ln in enumerate(fm) if re.match(r"^decisions:\s*$", ln)), len(fm))
         fm[dec_i:dec_i] = [f"updated: {today}"]
     new_lines = lines[:1] + fm + lines[e_fm:]
+    # [M1/P2] 讀 target 的 id → 組全域格式 <rel>#d<N> 回傳(下游 header/CASCADE/--from 同格式,無裸碼流出)
+    did = None
+    for i in range(st, en + 1):
+        m = re.match(rf"^{pad}id:\s*(d\d+)\s*$", fm[i])
+        if m:
+            did = m.group(1)
+            break
+    gid = f"{rel}#{did}" if did else None
 
     def _check(_fields):
         for d in parse_decisions(_fm_of(new_lines)):
-            if needle in nfc(str(d.get("content", ""))):
+            # [M1] 有 id → ID 精確驗證(content 子字串重疊會驗錯項);無 id(未 reindex 舊節點)→ 退回 content 驗證
+            hit = (str(d.get("id", "")).strip() == did) if did \
+                else (needle in nfc(str(d.get("content", ""))))
+            if hit:
                 return str(d.get("valid", "")).lower() == "false" and "superseded_by" in d
         return False
     atomic_write_verify(path, new_lines, "decisions", _check)
-    print(f"✓ supersede {rel}: 決策「{match[:30]}」→ valid:false + superseded_by + ended={ended} (updated bump {today})")
-    return 0
+    _tag = f" [{gid}]" if gid else ""
+    print(f"✓ supersede {rel}: 決策「{match[:30]}」→ valid:false + superseded_by + ended={ended} (updated bump {today}){_tag}")
+    return 0, gid
+
+
+def _max_decision_id(fm_lines):
+    """[M1/P2] 掃 decisions[] 既有 id: d<N>,回最大 N(無則 0)。新號=max+1(不重排既有、
+    不回收缺號——ID 穩定性合約:翻案後永不重用)。"""
+    mx = 0
+    for d in parse_decisions(fm_lines):
+        m = re.fullmatch(r"d(\d+)", str(d.get("id", "")).strip())
+        if m:
+            mx = max(mx, int(m.group(1)))
+    return mx
 
 
 def cmd_decision_add(env, rel, content, decided, context=None, why=None):
-    """T3 巢狀手術:append 一條新 ADR 決策到 decisions[](無則建)。surgical line-based。"""
+    """T3 巢狀手術:append 一條新 ADR 決策到 decisions[](無則建)。surgical line-based。
+    [M1/P2]:指派穩定 id d<max+1> 並回傳 (rc, 全域決策id <rel>#d<N>);dispatcher 解包後
+    CLI 對外仍只回整數 rc。"""
     if not DATE_RE.match(decided):
         raise ValueError(f"--decided 需 YYYY-MM-DD,得到: {decided}")
     path = env.vault / rel
     lines, s_fm, e_fm = load_raw_for_edit(path)
     fm = lines[1:e_fm]
     loc = decisions_items(fm)
+    new_id = f"d{_max_decision_id(fm) + 1}"
     if loc is None:
         # 無 decisions key → 在 fm 末尾建
         item_indent, sub = 2, 4
-        block = [f'{" "*item_indent}- content: {_fmt_decision_value(content)}']
+        block = [f'{" "*item_indent}- content: {_fmt_decision_value(content)}',
+                 f"{' '*sub}id: {new_id}"]
         if context:
             block.append(f'{" "*sub}context: {_fmt_decision_value(context)}')
         if why:
@@ -4351,7 +4439,7 @@ def cmd_decision_add(env, rel, content, decided, context=None, why=None):
     else:
         _, e_block, items, item_indent, sub = loc
         ip, sp = " " * item_indent, " " * sub
-        block = [f"{ip}- content: {_fmt_decision_value(content)}"]
+        block = [f"{ip}- content: {_fmt_decision_value(content)}", f"{sp}id: {new_id}"]
         if context:
             block.append(f"{sp}context: {_fmt_decision_value(context)}")
         if why:
@@ -4363,10 +4451,52 @@ def cmd_decision_add(env, rel, content, decided, context=None, why=None):
     needle = nfc(content)
 
     def _check(_fields):
-        return any(needle in nfc(str(d.get("content", "")))
+        # [M1] ID 精確驗證:新 id 那條存在且 content 相符(取代純 content 子字串——重疊時驗錯項)
+        return any(str(d.get("id", "")).strip() == new_id
+                   and needle in nfc(str(d.get("content", "")))
                    for d in parse_decisions(_fm_of(new_lines)))
     atomic_write_verify(path, new_lines, "decisions", _check)
-    print(f"✓ decision-add {rel}: 「{content[:30]}」(valid:true)")
+    print(f"✓ decision-add {rel}: 「{content[:30]}」(id={new_id}, valid:true)")
+    return 0, f"{rel}#{new_id}"
+
+
+def cmd_decision_reindex(env, rel):
+    """[M1/P2] 回填遷移:對既有無 id 決策依文件順序、從既有最大 id+1 接續編號(不重排既有、
+    不回收缺號——混合狀態絕不撞既有 id);冪等(已有 id 跳過)。簽名=單節點一次一篇(同 T3 慣例)。
+    解析不到的決策項明確拒絕(同 supersede 0-indent/tab 語意),不靜默跳過造成缺洞。"""
+    path = env.vault / rel
+    lines, s_fm, e_fm = load_raw_for_edit(path)
+    fm = lines[1:e_fm]
+    loc = decisions_items(fm)
+    if loc is None:
+        raise ValueError("此筆記無 decisions")
+    if not loc[2]:
+        raise ValueError("decisions 區塊解析不到項目(本工具要求 2-space 縮排,不支援 0-indent/tab)")
+    _, _, items, _, sub = loc
+    pad = " " * sub
+    nxt = _max_decision_id(fm) + 1
+    # 先依文件順序算好指派,再由下而上插入(插入不位移未處理的上方索引)
+    plan = []
+    for (st, en) in items:
+        if not any(re.match(rf"^{pad}id:\s*d\d+\s*$", fm[i]) for i in range(st, en + 1)):
+            plan.append((st, f"d{nxt}"))
+            nxt += 1
+    if not plan:
+        print(f"✓ reindex {rel}: 全部決策已有 id,無需回填(冪等)")
+        return 0
+    pre_ids = {str(d.get("id", "")).strip() for d in parse_decisions(fm) if d.get("id")}
+    for st, did in reversed(plan):
+        fm[st + 1:st + 1] = [f"{pad}id: {did}"]   # 插在 dash(content)行之後
+    new_lines = lines[:1] + fm + lines[e_fm:]
+
+    def _check(_fields):
+        ds = parse_decisions(_fm_of(new_lines))
+        ids = [str(d.get("id", "")).strip() for d in ds]
+        return (all(re.fullmatch(r"d\d+", i) for i in ids)          # 全數有 id
+                and len(ids) == len(set(ids))                        # 唯一
+                and pre_ids <= set(ids))                             # 既有 id 未被動
+    atomic_write_verify(path, new_lines, "decisions", _check)
+    print(f"✓ reindex {rel}: 回填 {len(plan)} 條 id({plan[0][1]}..{plan[-1][1]});既有 {len(pre_ids)} 條跳過")
     return 0
 
 
@@ -8222,9 +8352,12 @@ def main():
 
     p = sub.add_parser("decision-supersede", help="T3 巢狀:翻盤一條決策(valid:false+superseded_by)")
     p.add_argument("note")
-    p.add_argument("match", help="決策 content 子字串(定位要翻盤的那條)")
+    p.add_argument("match", help="決策 content 子字串(多重命中 rc=2 列候選,防改錯項)或 \"#dN\" 精確定址(節點未 reindex 查無→rc=2)")
     p.add_argument("--by", required=True, help="被誰取代(superseded_by 值)")
     p.add_argument("--ended", help="失效日期 YYYY-MM-DD(選填)")
+
+    p = sub.add_parser("decision-reindex", help="[M1/P2] 回填遷移:對無 id 決策從既有最大 id+1 接續編號(冪等,單節點)")
+    p.add_argument("note")
 
     p = sub.add_parser("decision-add", help="T3 巢狀:新增一條 ADR 決策")
     p.add_argument("note")
@@ -8550,16 +8683,22 @@ def main():
         except (ValueError, RuntimeError) as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
-    if args.cmd in ("decision-supersede", "decision-add"):
+    if args.cmd in ("decision-supersede", "decision-add", "decision-reindex"):
         rel = env.find(args.note)
         if rel is None:
             print(f"ERROR: 找不到筆記: {args.note}", file=sys.stderr)
             return 2
         try:
+            # [M1/P2] 兩函式回 (rc, 全域決策id);dispatcher 解包,CLI 對外仍只回整數 rc
+            #   (M4 [S1] 觸發端將在此用 decision_id 呼 cascade_surface——屆時包獨立 try/except)
+            if args.cmd == "decision-reindex":
+                return cmd_decision_reindex(env, rel)
             if args.cmd == "decision-supersede":
-                return cmd_decision_supersede(env, rel, args.match, args.by, ended=args.ended)
-            return cmd_decision_add(env, rel, args.content, args.decided,
-                                    context=args.context, why=args.why)
+                rc, _decision_id = cmd_decision_supersede(env, rel, args.match, args.by, ended=args.ended)
+                return rc
+            rc, _decision_id = cmd_decision_add(env, rel, args.content, args.decided,
+                                                context=args.context, why=args.why)
+            return rc
         except (ValueError, RuntimeError) as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
