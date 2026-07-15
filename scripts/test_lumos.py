@@ -830,9 +830,18 @@ def t_rel_cascade_hardening():
     except OSError:
         check("硬化 CX1:symlink 被 O_NOFOLLOW 拒(OSError)", True, "")
     check("硬化 CX1:victim 未被污染", victim.read_text(encoding="utf-8") == "勿附加", "")
-    # B1:短寫驗證存在性錨(os.write 回傳被檢查)
-    src = open(GRAPHCTL, encoding="utf-8").read()
-    check("硬化 B1:_ledger_append 驗 os.write 回傳(短寫 raise)", "written != len(data)" in src, "")
+    # B1 行為測試(r2 折入:取代文字錨——錨會被無害重構誤翻紅、也擋不住邏輯被搬進死碼):
+    #   monkeypatch os.write 模擬 ENOSPC 短寫 → 必須 RuntimeError、不得靜默成功
+    _real_write = lm.os.write
+    try:
+        lm.os.write = lambda fd, data: len(data) - 1
+        try:
+            lm._ledger_append(p, {"event": "transition", "t": 1})
+            check("硬化 B1:短寫→RuntimeError(行為)", False, "未 raise")
+        except RuntimeError as e:
+            check("硬化 B1:短寫→RuntimeError(行為)", "短寫" in str(e), str(e))
+    finally:
+        lm.os.write = _real_write
 
 
 # ══ M2/P0 typed-edge 反向索引 ══
