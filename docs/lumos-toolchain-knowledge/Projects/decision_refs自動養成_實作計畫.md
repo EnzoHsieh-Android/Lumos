@@ -16,6 +16,13 @@ tags:
   - status/doing
 plan_refs:
   - "[[關係層主網_實作計畫]]"
+decisions:
+  - content: T3 design-loop 達 3 輪 panel cap 未 clean 收斂、人裁凍 golden 暫停實作(2026-07-15):核心穩、非收斂集中在 v3 硬加的 rejected-memory+backlog 判準;v4 收斂方向=砍 rejected-memory 回雙欄+backlog 改集合差(B 洞)+count-check 精確化;T1 已交付真價值,T3 是窄覆蓋小加分
+    id: d1
+    context: r1(12 findings)→r2(覆蓋降級+振盪)→r3(rejected-memory 半成品:無解除原語/不在各層強制/backlog 該用集合差)。三席三輪皆 caught canary、收斂到同一根因。三信號一致:r2 證覆蓋窄(結構子集非大宗)+越加保險越漏洞+T1 已交付=T3 ROI 小
+    why_chosen: design-loop 的價值不只抓 bug,也體檢『功能值不值得』——連兩輪暗示『別再堆小功能大機械』。凍 v4 收斂方向進 golden 待日後真需要;T1 繼續自我養成,不損失。簡化實作是乾淨路徑但換來的價值 design-loop 已判小
+    decided: 2026-07-15
+    valid: true
 ---
 # decision_refs自動養成_實作計畫
 
@@ -48,13 +55,15 @@ plan_refs:
 - decision_refs 對就對、錯了 advisory 級提醒，不污染業務邏輯——這是敢放手 auto-fill 的前提。
 
 ## 落地順序
-> **進度（2026-07-15）**：P ✅ + T1 ✅（[[Verification/2026-07-15_decision_refs養成_P前置_T1回寫]]）+ code-loop 硬化 ✅（異質 panel 5 修，[[Verification/2026-07-15_decision_refs養成_codeloop硬化]]，1130 tests 綠）→ **T3 待 design-loop**。
+> **進度（2026-07-15）**：P ✅ + T1 ✅（[[Verification/2026-07-15_decision_refs養成_P前置_T1回寫]]）+ code-loop 硬化 ✅（異質 panel 5 修，[[Verification/2026-07-15_decision_refs養成_codeloop硬化]]，1130 tests 綠）→ **T3 🧊 凍結（達 design-loop 3 輪 cap、人裁暫停實作，見 decisions#d1 + `governance/golden/t3-dref/`；v4 簡化方向已定向，日後真需要再撿）**。T1 繼續自我養成，不損失。
 
 1. **前置 P**：套 `decision-reindex` 到決策節點（機械，可先在 lumos-toolchain 自身跑、再 LandmarkMember）。
 2. **T1 confirm 回寫**（機械、地面真相、現成可建）——主網從「需要 ref」翻成「一邊動一邊長 ref」。
 3. **T3 AI suggest**（含不對稱信任、provenance、audit）——覆蓋背包；design-loop 重點審這塊。
 
-## T3 詳細規格（design-loop v3；r1+r2 四席+Codex 折入）
+## T3 詳細規格（design-loop v3；r1+r2 四席+Codex 折入）🧊 凍結待實作
+
+> **🧊 凍結（2026-07-15，decisions#d1）**：design-loop 達 3 輪 panel cap 未 clean 收斂 → 人裁凍 golden、暫停實作。下方 v3 spec 保留為凍結快照；**收斂到的 v4 簡化方向**（砍 `decision_refs_rejected` 回雙欄 + backlog 改集合差 + candidates 讀側去重 + count-check 精確化）記在 `governance/golden/t3-dref/spec.md` 的 §v4 段。日後真需要 T3，撿 v4 直接實作（實作前 v4 本身重跑一輪 panel 確認簡化無新洞）。
 
 **分工（lumos 家規「Claude 編排、lumos 出原語」）**：lumos 出**機械原語**，語意判斷是 **Claude 編排步驟**，lumos 不派 AI、不讀語意。**`suggest` 不是 lumos 命令**——它是 Claude 編排流程 `backlog→candidates→讀判→add-ai` 的**合稱**；CLI 是下列 **六個真原語**（Codex r2 更正：五→六）。目標一律 `<節點>`（decision_refs 適用任何鄰居含 Systems，與 T1 一致）。
 
@@ -95,3 +104,5 @@ plan_refs:
 
 ## 進實作前（紀律）
 本 spec 完成 → 交 **lumos-design-loop**（碰寫入路徑 + AI 派工 + E2 靜默抑制風險，建議 `--need 3`）到 `loop status --gate --panel` 收斂才實作。落地 Verification 以 `plan_refs` 回指本節點。
+
+**🧊 T3 loop 結局（2026-07-15）**：跑滿 3 輪 panel（12→6→5 findings，canary 全 caught）未 clean 收斂——非收斂 localized 在 v3 晚加的 `decision_refs_rejected`（否決記憶）半成品。人裁凍結（decisions#d1）、暫停實作。golden 已凍在 `governance/golden/t3-dref/`（spec.md + findings.md）。**T1 仍是已交付的真價值，繼續自我養成。**
