@@ -715,6 +715,78 @@ def t_check_e2_ledger_suppress():
           "無「建在被推翻決策上」的落後邊" in r.stdout, r.stdout)
 
 
+# ══ M4/S1-S4 觸發+typed hop-1+連鎖 ══
+
+def t_supersede_triggers_cascade():
+    v = mkvault()
+    p = write(v, "Projects/D.md", "type: project\nstatus: done")
+    run(v, "decision-add", "D", "舊路線", "--decided", "2026-07-01", expect_rc=0)  # id=d1
+    write(v, "Systems/A.md",
+          "type: system\nstatus: done\nupdated: 2026-07-02\n"
+          "summary: |-\n  KEY:★INVARIANT★ 假合約 [test:t_x]\n"
+          "verified_by:\n  - \"[[Projects/D]]\"")
+    r = run(v, "decision-supersede", "D", "舊路線", "--by", "新路線")
+    check("M4 觸發:supersede rc=0", r.returncode == 0, r.stderr)
+    check("M4 stdout 首行=既有成功行逐字保留(不破壞腳本假設)",
+          r.stdout.splitlines()[0].startswith("✓ supersede "), r.stdout)
+    gid = "Projects/D.md#d1"
+    slines = r.stderr.splitlines()
+    cas = [l for l in slines if l.startswith("CASCADE ")]
+    check("M4 stderr CASCADE 行(dispatcher 印,含 mint id+root)",
+          len(cas) == 1 and cas[0].endswith(f"ROOT {gid}")
+          and __import__("re").search(r"CASCADE c-\d{14}-[0-9a-f]{8}", cas[0]), r.stderr)
+    check("M4 stderr NEIGHBOR 行當場點名 A(含 INVARIANT_COUNT)",
+          any(l == "NEIGHBOR Systems/A.md EDGE verified_by INVARIANT_COUNT 1" for l in slines), r.stderr)
+    cid = cas[0].split()[1]
+    lp = v / "governance" / "rel-cascade" / (cid + ".jsonl")
+    check("M4 觸發端建檔+header(root 全域格式)", lp.exists() and gid in lp.read_text(), str(lp))
+    # E2E ①收尾:主網判過(prune)→補網 E2 不重報(觸發真建的帳,非手造)
+    run(v, "rel-cascade", "prune", "A", "--cascade-id", cid, "--from", gid,
+        "--edge", "verified_by", "--by", "ai", expect_rc=0)
+    r = run(v, "doctor")
+    check("M4 E2E:觸發建帳→prune→補網 E2 不重報",
+          "無「建在被推翻決策上」的落後邊" in r.stdout, r.stdout)
+
+
+def t_supersede_trigger_skip_and_failopen():
+    v = mkvault()
+    # 未 reindex 節點(決策無 id)→ CASCADE-SKIP、不建檔、rc=0
+    write(v, "Projects/Old.md",
+          "type: project\nstatus: done\ndecisions:\n"
+          "  - content: 無id舊決策\n    decided: 2026-01-01\n    valid: true")
+    r = run(v, "decision-supersede", "Old", "無id舊決策", "--by", "X")
+    check("M4 無 id → CASCADE-SKIP+rc=0", r.returncode == 0 and "CASCADE-SKIP" in r.stderr, r.stderr)
+    check("M4 SKIP 不建檔", not (v / "governance" / "rel-cascade").exists(), "")
+    # fail-open:governance 落點被檔案佔住 → 建檔炸 → CASCADE-ERROR、supersede 仍 rc=0
+    write(v, "Projects/D.md", "type: project\nstatus: done")
+    run(v, "decision-add", "D", "要翻的", "--decided", "2026-07-01", expect_rc=0)
+    (v / "governance").write_text("occupied", encoding="utf-8")
+    r = run(v, "decision-supersede", "D", "要翻的", "--by", "Y")
+    check("M4 建檔失敗 fail-open:CASCADE-ERROR+supersede 仍 rc=0(決策已 atomic 寫入不回滾)",
+          r.returncode == 0 and "CASCADE-ERROR" in r.stderr, f"rc={r.returncode} {r.stderr}")
+    check("M4 fail-open 決策確實已翻", "valid: false" in read(v / "Projects/D.md"), "")
+
+
+def t_impact_node_mode():
+    v = mkvault()
+    write(v, "Projects/D.md", "type: project\nstatus: done")
+    write(v, "Systems/A.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/D]]\"")
+    write(v, "Systems/B.md", "type: system\nstatus: done\nrelated:\n  - \"[[Projects/D]]\"")  # related 恆不展
+    r = run(v, "impact", "--node", "D", "--repo", str(v))
+    check("M4 impact --node 列 typed hop-1(A in, related B 不展)",
+          r.returncode == 0 and "NEIGHBOR Systems/A.md EDGE verified_by" in r.stdout
+          and "Systems/B.md" not in r.stdout, r.stdout)
+    r = run(v, "impact", "--node", "D", "--json", "--repo", str(v))
+    import json as _json
+    d = _json.loads(r.stdout)
+    check("M4 impact --node --json 機器可讀",
+          d["node"] == "Projects/D.md" and d["neighbors"][0]["edge"] == "verified_by", r.stdout)
+    r = run(v, "impact", "--node", "D", "--depth", "2", "--repo", str(v))
+    check("M4 --node×--depth 互斥 rc=2", r.returncode == 2, r.stderr)
+    r = run(v, "impact", "--node", "D", "--file", "x.py", "--repo", str(v))
+    check("M4 --node×--file 互斥 rc=2", r.returncode == 2, r.stderr)
+
+
 # ══ M2/P0 typed-edge 反向索引 ══
 
 def t_typed_index_contracts():

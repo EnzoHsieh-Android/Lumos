@@ -4732,6 +4732,70 @@ def cmd_rel_cascade_list(env, stale_days=None):
     return 0
 
 
+def _typed_hop1(env, node_rel, idx=None):
+    """[M4/S2] typed hop-1 原語:在 [P0] typed 索引上列「誰以方向語意明確的邊指向 node」單層鄰居。
+    多跳/visited 交 [S4] 編排(resume/判斷閘)。回 (neighbors=[(src,etype,invariant數)], ambigs=[(字面,候選數)])。"""
+    if idx is None:
+        idx = build_typed_index(env)
+    neighbors, ambigs = [], []
+    for (src, etype) in idx["rev"].get(node_rel, []):
+        if etype not in REL_CASCADE_EDGES:
+            continue
+        inv_n = len(extract_contracts(env.notes[src])[0]) if src in env.notes else 0
+        neighbors.append((src, etype, inv_n))
+    for (asrc, lit, aetype, cands) in idx["ambiguous"]:
+        if node_rel in cands and aetype in REL_CASCADE_EDGES:
+            ambigs.append((lit, len(cands)))
+    return neighbors, ambigs
+
+
+def cascade_surface(env, node_rel, root_decision_id, stream=None):
+    """[M4/S1] surfacing 印行器:對 ledger 唯讀、不叫 AI(判斷閘=外部 agent 步驟)。
+    NEIGHBOR 行由本函式印(dispatcher 印 CASCADE 行——它持有 mint 的 id 與 root id,T2 職責切分)。
+    行式 schema=交接通道(編排者從此組 confirm/prune 參數)。回攤出的鄰居數。"""
+    out = stream if stream is not None else sys.stderr
+    neighbors, ambigs = _typed_hop1(env, node_rel)
+    for (src, etype, inv_n) in neighbors:
+        tag = f" INVARIANT_COUNT {inv_n}" if inv_n else ""
+        print(f"NEIGHBOR {src} EDGE {etype}{tag}", file=out)
+    for (lit, n) in ambigs:
+        print(f"NEIGHBOR-AMBIG {lit} CANDIDATES {n}", file=out)
+    return len(neighbors) + len(ambigs)
+
+
+def cmd_impact_node(node_arg, repo=None, as_json=False):
+    """[M4/S2] impact 第三模式 CLI 皮(供人手動查;自動迴圈走進程內原語不 shell-out):
+    typed hop-1 列「誰依賴我」。與 --file/--diff 互斥、與 --depth 互斥(單層列舉無深度語意)。"""
+    import json
+    start = Path(repo).resolve() if repo else Path.cwd()
+    vault = find_vault(start)
+    if vault is None:
+        print("ERROR: 找不到 vault(docs/*-knowledge)", file=sys.stderr)
+        return 2
+    env = Env(vault)
+    rel = env.find(node_arg)
+    if rel is None:
+        print(f"ERROR: 找不到節點: {node_arg}", file=sys.stderr)
+        return 2
+    neighbors, ambigs = _typed_hop1(env, rel)
+    if as_json:
+        print(json.dumps({"node": rel,
+                          "neighbors": [{"rel": s, "edge": e, "invariant_count": n}
+                                        for (s, e, n) in neighbors],
+                          "ambiguous": [{"literal": l, "candidates": n} for (l, n) in ambigs]},
+                         ensure_ascii=False))
+        return 0
+    print(f"NODE {rel}  typed-hop1 連入(verified_by/plan_refs;related 弱恆不展):")
+    for (src, etype, inv_n) in neighbors:
+        tag = f" INVARIANT_COUNT {inv_n}" if inv_n else ""
+        print(f"  NEIGHBOR {src} EDGE {etype}{tag}")
+    for (lit, n) in ambigs:
+        print(f"  NEIGHBOR-AMBIG {lit} CANDIDATES {n}")
+    if not neighbors and not ambigs:
+        print("  (無 typed 連入鄰居)")
+    return 0
+
+
 def cmd_rel_cascade_resume(env, cascade_id):
     """[M3] 「續」的交付項(D16):重放折疊→取 header root→重展 root+最終態 confirmed 鄰居
     (先 confirm 後 prune 不重展)→對粒度鍵差集→列剩餘待判。decision_id=root 全鏈攜帶(R3)。
@@ -4754,21 +4818,24 @@ def cmd_rel_cascade_resume(env, cascade_id):
     print(f"CASCADE {cascade_id} ROOT {root_gid}")
     pending = []
     seen = set()
+    expanded = set()
     for s in seeds:   # visited=root∪最終態 confirmed;粒度鍵冪等,重複展開無害只多列
-        for (src, etype) in idx["rev"].get(s, []):
-            if etype not in REL_CASCADE_EDGES:
-                continue
+        if s in expanded:   # 菱形:同節點經兩路抵達 → 不再展,stderr 留痕(反靜默紀律)
+            print(f"CASCADE-SKIP 已展過不重展: {s}", file=sys.stderr)
+            continue
+        expanded.add(s)
+        neighbors, ambigs = _typed_hop1(env, s, idx=idx)
+        for (src, etype, inv_n) in neighbors:
             k = (src, etype, root_gid)
             if k in state or k in seen:
                 continue
             seen.add(k)
-            inv_n = len(extract_contracts(env.notes[src])[0]) if src in env.notes else 0
             tag = f" INVARIANT_COUNT {inv_n}" if inv_n else ""
             pending.append(f"NEIGHBOR {src} EDGE {etype}{tag}")
-        for (asrc, lit, aetype, cands) in idx["ambiguous"]:
-            if s in cands and aetype in REL_CASCADE_EDGES and (asrc, lit, aetype) not in seen:
-                seen.add((asrc, lit, aetype))
-                pending.append(f"NEIGHBOR-AMBIG {lit} CANDIDATES {len(cands)}")
+        for (lit, n) in ambigs:
+            if (s, lit) not in seen:
+                seen.add((s, lit))
+                pending.append(f"NEIGHBOR-AMBIG {lit} CANDIDATES {n}")
     for line in pending:
         print(line)
     return 0
@@ -8683,7 +8750,8 @@ def main():
     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
 
     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
-    p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff 二擇一)")
+    p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
+    p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
     p.add_argument("--diff", dest="impact_diff", help="diff range(如 main..HEAD):聚合各改動檔的 ranked impact 成受影響功能面 manifest(code-loop 審計鏡頭)")
     p.add_argument("--sync-check", action="store_true", dest="impact_sync",
                    help="落成核對(配 --diff):預期受影響節點 vs 分支實際動過節點 → 未同步清單(advisory)")
@@ -8784,9 +8852,14 @@ def main():
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
     if args.cmd == "impact":
-        if args.impact_diff and args.impact_file:
-            print("ERROR: --file 與 --diff 二擇一,不可同給", file=sys.stderr)
+        if sum(1 for x in (args.impact_file, args.impact_diff, args.impact_node) if x) > 1:
+            print("ERROR: --file/--diff/--node 三擇一,不可同給", file=sys.stderr)
             return 2
+        if args.impact_node:
+            if args.impact_depth is not None:
+                print("ERROR: --node 為單層 typed 列舉,與 --depth 互斥(無深度語意)", file=sys.stderr)
+                return 2
+            return cmd_impact_node(args.impact_node, repo=args.impact_repo, as_json=args.impact_json)
         if args.impact_diff:
             return cmd_impact_diff(args.impact_diff, repo=args.impact_repo,
                                    depth=args.impact_depth, top=args.impact_top,
@@ -8999,6 +9072,22 @@ def main():
                 return cmd_decision_reindex(env, rel)
             if args.cmd == "decision-supersede":
                 rc, _decision_id = cmd_decision_supersede(env, rel, args.match, args.by, ended=args.ended)
+                # [M4/S1] 觸發:supersede 成功→②建檔+③surfacing。②③同包獨立 try(不放上層
+                #   atomic try 內——否則例外被 except 吞成 rc=2 違反 rc=0 合約,R8/T6)。
+                #   輸出協議:supersede stdout 首行已印且逐字不變;cascade 面全走 stderr;
+                #   失敗 fail-open(stderr 記 CASCADE-ERROR、rc 仍 0、補網 E2 兜底)。
+                if rc == 0:
+                    try:
+                        if _decision_id:
+                            _cid = rel_cascade_create(env, _decision_id, rel)
+                            print(f"CASCADE {_cid} ROOT {_decision_id}", file=sys.stderr)
+                            _n = cascade_surface(env, rel, _decision_id, stream=sys.stderr)
+                            if not _n:
+                                print("CASCADE-EMPTY 無 typed 連入鄰居(本次翻案無已知依賴面)", file=sys.stderr)
+                        else:
+                            print("CASCADE-SKIP 決策無 id(節點未 reindex),本次不開 cascade;補網 E2 兜底", file=sys.stderr)
+                    except Exception as _e:   # fail-open:決策寫入已 atomic 完成,不回滾
+                        print(f"CASCADE-ERROR {_e}", file=sys.stderr)
                 return rc
             rc, _decision_id = cmd_decision_add(env, rel, args.content, args.decided,
                                                 context=args.context, why=args.why)
