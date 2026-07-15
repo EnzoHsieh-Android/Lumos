@@ -54,5 +54,27 @@ plan_refs:
 2. **T1 confirm 回寫**（機械、地面真相、現成可建）——主網從「需要 ref」翻成「一邊動一邊長 ref」。
 3. **T3 AI suggest**（含不對稱信任、provenance、audit）——覆蓋背包；design-loop 重點審這塊。
 
+## T3 詳細規格（design-loop 審這塊）
+
+**分工（同 lumos 家規「Claude 編排、lumos 出原語」）**：lumos 出**機械原語**（列候選、寫 ai-ref、audit、prune、promote），語意判斷（V 實作哪條決策）是 **Claude 編排步驟**（如判斷閘），lumos 不派 AI、不讀語意。
+
+**lumos 機械原語（design-loop 審可實作性）**
+- `decision-refs candidates <驗證>`：機械列該驗證的候選決策——來源＝① `plan_refs` 指的計劃的所有決策 ② `verified_by`/`related` 解析到的節點的所有決策（含已翻案的：V 可能實作一條後來被推翻的意圖，正是 E3 要抓的）。輸出＝V 內容摘要 + 每個候選 `<rel>#dN` + 該決策 content（供 Claude 讀判）。`--json` 機器可讀。
+- `decision-refs add-ai <驗證> <ref>`：寫 ref 到 `decision_refs_ai`。**驗證合約**：ref 格式 `<rel>#dN`、目標節點存在、決策 id 存在（拒 dangling——只能指真決策，避免 AI 亂編）；走 `_append_decision_ref`（exact dedup、拒控制字元，T1 已建）。
+- `decision-refs <驗證> [--by ai|human]`：audit 列出 ref + 來源欄位（人抽查用）。
+- `decision-refs prune <驗證> <ref>`：exact 移除某 ref（兩欄擇一命中），剪 AI 誤填。
+- `decision-refs promote <驗證> <ref>`：**抽查蓋章**——把 ref 從 `decision_refs_ai` 搬到 `decision_refs`（升級成可抑制 E2）；單次 atomic（不可留半途兩欄都有/都無）。
+
+**Claude 編排協議**：① `candidates <V>` 列候選 → ② Claude 讀 V + 候選 content、判「V 實作哪條」（放寬：似是就填）→ ③ `add-ai <V> <ref>`。批次背包＝對「有 plan_refs/typed 邊指向決策節點、但 `decision_refs`+`decision_refs_ai` 皆空」的驗證跑（＝T2 缺口偵測折進候選選取，非常設 doctor 檢查）。
+
+**釘死的合約（design-loop 重點）**
+- **候選選取邊界**：只列「有 id 的決策」（無 id 目標提示先 reindex）；空候選集 → suggest no-op（不強填）。
+- **add-ai 反 dangling**：拒指向不存在節點/不存在決策 id 的 ref——AI 只能從 candidates 給的真決策裡選，不能自由造 ref。
+- **promote 原子性**：搬移必單次 atomic（remove _ai + add 正欄同一份 fm），失敗全不動（不可出現 ref 消失或兩欄重複）。
+- **prune 冪等**：移不存在的 ref → no-op rc=0（非錯誤）。
+- **AI GIGO 天花板**：填哪條靠 Claude，判錯＝ai-ref 誤填。不對稱信任（T1 已建、四席驗過）兜住：誤 ai-ref 只誤觸發 E3 advisory（人 prune）、**結構上抑制不了 E2**。suggest 不追求準度、追求覆蓋 + 可抽查。
+
+**測試策略**：candidates 列全來源決策（plan_refs 計劃 + verified_by/related 節點,含已翻案的)、add-ai 反 dangling(拒不存在節點/id)、prune 冪等、promote 原子搬移(_ai→正欄、失敗全不動)、audit --by 分欄列;E2E＝背包驗證跑 suggest → ai-ref 落 _ai → E3 對翻案的觸發、E2 不受 ai-ref 影響。
+
 ## 進實作前（紀律）
 本 spec 完成 → 交 **lumos-design-loop**（碰寫入路徑 + AI 派工 + E2 靜默抑制風險，建議 `--need 3`）到 `loop status --gate --panel` 收斂才實作。落地 Verification 以 `plan_refs` 回指本節點。
