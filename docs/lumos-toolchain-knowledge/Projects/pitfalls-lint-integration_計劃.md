@@ -19,11 +19,13 @@ summary: |-
   TEST:各塊落地時各自 spec 的測試策略;本節點為路線圖、無直接測試
 decisions:
   - content: 四塊拆成獨立 spec 有序做,不吞一個大 spec;序=① adapter+SARIF(地基,②③④ 皆建其上/相關)→ ② 每日版本偵測 → ③ 網搜補漏 → ④ 事故語料
+    id: d1
     context: 使用者要「全做完」;但四塊是獨立子系統,一個 spec 吞下 design-loop 審不動、實作 subagent 也吞不下
     why_chosen: 依賴序 + 各塊獨立可測;adapter 是其餘三塊的共同地基
     decided: 2026-07-04
     valid: true
   - content: 偏科/通則都走社群 linter(SARIF 整合),不自建規則庫;lumos 維持語言無關(不內建任何棧規則)
+    id: d2
     context: 使用者三連問(偏科有 linter?其他平台?通則也有?)推導出——規則庫社群已維護且更新更快、更準(AST 級)、免腐化
     why_chosen: composition over invention(設計原則 6,同「不造輪子用 Obsidian」);解掉自建包的腐化/噪音/未驗證/人工放行四風險
     decided: 2026-07-04

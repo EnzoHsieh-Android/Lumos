@@ -48,6 +48,8 @@ plan_refs:
 - decision_refs 對就對、錯了 advisory 級提醒，不污染業務邏輯——這是敢放手 auto-fill 的前提。
 
 ## 落地順序
+> **進度（2026-07-15）**：P ✅（`decision-reindex --all`，本 vault 38 節點 dogfood）+ T1 ✅（confirm 回寫 + 不對稱信任雙欄，[[Verification/2026-07-15_decision_refs養成_P前置_T1回寫]]，1123 tests 綠）→ **T3 待 design-loop**。
+
 1. **前置 P**：套 `decision-reindex` 到決策節點（機械，可先在 lumos-toolchain 自身跑、再 LandmarkMember）。
 2. **T1 confirm 回寫**（機械、地面真相、現成可建）——主網從「需要 ref」翻成「一邊動一邊長 ref」。
 3. **T3 AI suggest**（含不對稱信任、provenance、audit）——覆蓋背包；design-loop 重點審這塊。

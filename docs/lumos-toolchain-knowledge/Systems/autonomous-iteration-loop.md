@@ -21,26 +21,31 @@ summary: |-
   VERIFY:[[Verification/2026-06-20_autonomous-iteration-loop]]
 decisions:
   - content: 定調為「自動備料 + 自審 + 停在放行閘等人」,而非「無人迭代」;放行(merge PR)永遠人手動,自動只到「備好待放行 spec」,絕不自動實作 / 自動 merge
+    id: d1
     context: user 願景是「永遠在迭代的 lumos」;但全自動判收斂仍是沒閉合的迴歸(judge/cross-family 也是 AI、也會錯),且自動 brainstorm 沒人回澄清、AI 自選 gap 有自我強化偏誤
     why_chosen: 放大放行帶寬不等於消滅放行;末端人 review PR 是全鏈唯一外部錨點、最後真兜底,對齊「AI 全工人只驗證撐不起、人只在最高槓桿放行點」
     decided: 2026-06-20
     valid: true
   - content: dry-run≠模擬——orchestrator-prompt 加「執行紀律」塊強制真執行所有工具,收尾前自查 scratch spec + .canary-log.jsonl 必須存在,否則本輪無效重做;dry-run 與 --pr 唯一差別在收尾(寫 pending vs 開 PR),過程完全相同
+    id: d2
     context: 06-23 真機發現 orchestrator 把 dry-run 誤解成「腦內模擬、什麼都不真做」——report converged/endorsed 但 scratch spec 空、無 canary-log,canary/judge/cross-family 全是它自說自話的幻覺,架空整個 loop(很可能從 06-20 上線起一直如此)
     why_chosen: 防放水的 canary、judge severity、跨家族補盲若被「模擬」架空,收斂報告全失真;唯有強制可驗證證據(真檔案產出)收尾自查才接得住此類幻覺
     decided: 2026-06-23
     valid: true
   - content: severity 改由獨立 judge 據實回報、不再 orchestrator 自填(judge-severity-gate);收斂門檻 = 連 2 輪 canary caught 且 severity ∈ {clean,minor}
+    id: d3
     context: design-loop R3 揪出「severity 自報 = 收斂門檻自填」是全自動判收斂最弱環——被審者自填收斂了沒;此缺口本身就是 loop 上線後自己選中、自己 brainstorm 出 judge-severity-gate spec 來修的(自指)
     why_chosen: 把「收斂了沒」從被審者手裡移到獨立 judge,斷開自填閘;但這只把最弱環推進一層未消滅(judge 集中掌 caught+severity、只讀 auditor 文字不自 grep),仍須人工抽查
     decided: 2026-06-20
     valid: true
   - content: 放行前加 qwen3-max 跨家族複核(§2.5):收斂後開 PR 前,opus 取材餵 ground-truth、qwen 跨家族判;endorsed/degraded 放行、disputed(major+ 異議)退回 opus 續審,達 2 次升給人;API 不可用 → degrade 回 opus 放行(fail-open)
+    id: d4
     context: backlog gap「judge 抗自偏漏了換家族解法」;真機側證 opus 單家族 canary missed 2/6 ≈ 33%,正是同門盲點;前提「換家族 $0 OAuth 做不到」被 qwen API 破
     why_chosen: 補 opus 同門盲點是收斂可信度最實在的一道補強;fail-open 確保 qwen 不可用時 loop 不卡死(降級回 opus 並標註)
     decided: 2026-06-22
     valid: true
   - content: 暫停每日自主 loop(launchctl disable com.enzo.lumos.daily-governance;plist 保留)
+    id: d5
     context: 使用者指示暫停接下來的日報 loop
     why_chosen: 恢復指令:launchctl enable gui/$UID/com.enzo.lumos.daily-governance && launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.enzo.lumos.daily-governance.plist
     decided: 2026-07-07
@@ -48,6 +53,7 @@ decisions:
     superseded_by: 2026-07-11 使用者裁示重啟(launchctl enable+bootstrap 已執行,每日 09:30);重啟時點的安全網比暫停時厚:panel near-perfect 閘/跨家族否決席/guard kill/落成核對均已上線
     ended: 2026-07-11
   - content: 重啟每日自主 loop(dry-run 模式維持:收斂備 pending 等人放行,絕不自動 merge)
+    id: d6
     context: 使用者明示「重啟」;7/7 暫停期間補齊 canary 生成硬化/near-perfect/panel/guard kill/落成核對
     why_chosen: 人放行閘=最高槓桿不動;恢復後首輪吃到全部新紀律
     decided: 2026-07-11

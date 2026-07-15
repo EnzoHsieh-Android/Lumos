@@ -29,21 +29,25 @@ summary: |-
   VERIFY:[[Verification/2026-06-19_reversibility-governance-ledger]]
 decisions:
   - content: 可逆性走自己的平行函式 extract_reversibility,完全不碰 extract_contracts 管線
+    id: d1
     context: design-loop R1-BLOCKER-1 / R2-BLOCKER-A — 若把可逆性塞進 extract_contracts,其 7 個 callsite(Check T、cmd_contracts、guard 家族、_html_model)語義被牽動,有靜默失效風險
     why_chosen: 平行路讓 ★INVARIANT★/★DEBT★ 家族全維持原狀、零回歸;CHECKPOINT_RE/IRREVERSIBLE_RE 寫死對齊 INVARIANT_RE 形狀
     decided: 2026-06-19
     valid: true
   - content: KEY 行 [rollback:](獨立 extractor 自剝 tag)與 decisions[].rollback(frontmatter 欄位)是兩個不同結構的機制,實作分清
+    id: d2
     context: design-loop R2-BLOCKER-B — 原稿把二者混為一談;[rollback:] 是指針、decisions[].rollback 是實際回退內容,_rollback_resolved 要求指針指到 decisions 真有非空 rollback
     why_chosen: 不碰 INV_TAG_RE/strip_test_refs(避動到 guard bind 比對語義);要求解析到實質內容,不能只是冒號後有字
     decided: 2026-06-19
     valid: true
   - content: ③ 治理帳改唯讀彙整器,doctor 是唯一新寫者且只在 --ci append,dedup 在讀時做
+    id: d3
     context: design-loop R1-BLOCKER-3 / R2-MAJOR-2 — 原提案合併多 hook 寫入路徑,bash+python 多寫者搶檔有 race / schema 不一;且 doctor 非 --ci 不該寫(R2-MINOR-2)
     why_chosen: 既有 bypass-log/rot-queue 維持原樣;doctor 純 append(不必每 push 讀全檔)、gov 顯示時才 dedup(key=commit+frozenset(nodes)+gate+kind+token);非 git / 取不到 HEAD 則跳過寫入不報錯
     decided: 2026-06-19
     valid: true
   - content: CHECKPOINT 類 warning 走新增 warn_soft()(印但不計 issues),不走會計 issues 的 warn()
+    id: d4
     context: design-loop R3-MAJOR-3 — run_doctor 既有 warn() 一律 issues += len,任何 warn 在 --ci 下會 rc1,會誤擋只有 checkpoint 缺 rollback 的情況
     why_chosen: Check R 只對 error 級(irreversible 缺實質回退、標錯型別)呼叫 warn(),對 checkpoint/懸空呼叫 warn_soft();回歸測 t_reversibility_doctor 斷言「只有 checkpoint 缺回退 → rc0」
     decided: 2026-06-19

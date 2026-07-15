@@ -21,16 +21,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-22_cross-family-audit]]
 decisions:
   - content: 結果回流砍掉「寫 .cross-audit.json 跨程序檔 + 改 build_report 簽名 + 加報告節」整條數據流，改 orchestrator §3 輸出三個扁平欄位 cross_verdict/cross_worst/cross_summary，autonomous-loop.sh get() 取後走既有 log+LINE
+    id: d1
     context: design-loop R4 排掉 canary 後 3 個 major(報告標題層級錯亂 / $SCRATCH 跨程序歸因 / build_report 第4參 dict-vs-檔路徑型別死結)全集中在「cross_audit 回流 build_report」這條數據流，與前輪 F2 同源、反覆牽動
     why_chosen: 判定該組件為根因，簡化(非打補丁)一舉消 F-A/F-B/F-C + 前輪 F2/F4/F6；扁平欄位由 json.load 後以 shell 變數傳遞，避開字面量注入與跨程序歸因
     decided: 2026-06-22
     valid: true
   - content: 收斂條件疊加跨家族三態——endorsed=通過 / degraded=旁路放行(fail-open) / disputed=否決不放行；degraded 計入放行屬刻意 fail-open，不偽裝成「滿足要求」
+    id: d2
     context: design-loop R5 F6：API 不可用時不可卡死 loop，但也不能把「複核被旁路」謊報成「通過」
     why_chosen: 三態分明讓放行的人知道這次少了一道(degraded 時 log/LINE 明標)；對齊誠實天花板 #4「degrade 時無跨家族背書」
     decided: 2026-06-22
     valid: true
   - content: disputed 出口釘死——orchestrator §3 須明文輸出 converged:false，且未收斂分支 notify 依 cross_verdict 區分「跨家族否決」vs 真撞 cap，不沿用硬編碼「撞 cap」
+    id: d3
     context: design-loop R5 F2：disputed 不伴 converged:false 就走不進 wrapper 未收斂分支(L80-85)；硬編碼「撞 cap」會把 qwen 否決誤導成撞輪數上限
     why_chosen: disputed 必須真能進未收斂出口才有意義；文案區分讓人看得出是被駁回還是耗盡輪數
     decided: 2026-06-22

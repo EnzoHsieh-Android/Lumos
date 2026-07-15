@@ -20,16 +20,19 @@ summary: |-
   VERIFY:[[2026-07-04_risk-tiered-review]]
 decisions:
   - content: 方案 A 關鍵詞分級+機械重驗;否決 RHB 環境硬化(本機無 agent 摸不到的執行面,硬寫=自欺)與純 diff 標記送審(marker 零成本自貼)
+    id: d1
     context: gap 建議借 RHB 讓錨點跑在 agent 改不到的地方;單機工作流做不到,留 future 真 CI
     why_chosen: 分級器零參數確定性;「強制人工複核」的實義=關掉高風險級自動放行寬容路徑(loop 產出本就 100% 人放行)
     decided: 2026-07-04
     valid: true
   - content: 黑名單剝除不選白名單;「前提與既驗事實」節保留
+    id: d2
     context: 黑名單詞對真 spec 標題全數子字串命中,錯配方向=多保留=偏嚴;白名單錯配=剝主內容=靜默降級;r7 辯方 14 份真 spec 實測前提節保留下 8 standard/6 high 全真陽性
     why_chosen: 與天花板「假陽性偏嚴」姿態一致;唯一 full→kept 降級案是修正樣板 canary 假陽性
     decided: 2026-07-04
     valid: true
   - content: escalate 輪 cap 不可投遞(維持已注入值),只投遞 K 與 §2.5c 條文
+    id: d3
     context: __MAXR__ 由 wrapper 起點一次性 sed 注入,loop 中途無重注入管道(spec r4-F4 誠實收窄)
     why_chosen: 寫做得到的;損失=escalate 輪少 2 輪預算,fail-closed 方向不受影響(收檔守衛以自算 tier 重驗)
     decided: 2026-07-04

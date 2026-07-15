@@ -21,16 +21,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-23_nested-agent-permission-scope_design-loop收斂]]
 decisions:
   - content: 選方案 C(harness 層 claude -p 子程序 --allowedTools 收窄)否決方案 A(純 prompt 前置指令)與方案 B(chmod 唯讀 + pre-commit 攔)
+    id: d1
     context: confused deputy 風險——autonomous loop 用 Agent 工具 spawn 的 auditor/judge 完整繼承父全權,被下毒 spec 誘導時可合法 Edit/Bash 寫圖譜改 spec
     why_chosen: 方案 A 是 prompt 層自律,被注入後 LLM 可忽略前置指令(正是漏洞核心);方案 B 只保護特定路徑且 chmod restore 有 TOCTOU 時序窗口;方案 C 機械強制點在 harness 工具集宣告、改動最小、自然留 delegation-log
     decided: 2026-06-23
     valid: true
   - content: 路徑用 __SCRATCH__ sed 替換後的字面絕對路徑,不用 $SCRATCH env;auditor 子程序須以 cwd=repo root 執行
+    id: d2
     context: design-loop R1-B1 揪出 $SCRATCH 在 autonomous-loop.sh 從不 export(orchestrator 子程序中展開為空、路徑破碎);R3-F1 揪出 Grep/Glob 預設搜 cwd,cwd=/tmp 則搜代碼庫靜默空回傳、auditor 誤稱已驗
     why_chosen: __SCRATCH__ 是 autonomous-loop.sh:L35 的 sed 替換 token(展開為字面絕對路徑),非執行時 shell var;cwd=repo root 由呼叫者 `(cd "$REPO" && claude -p ...)` 繼承,保 Grep/Glob 搜得到代碼
     decided: 2026-06-23
     valid: true
   - content: 不建全身份認證體系(無簽章/capability token)、delegation-log 不設自動 CI 驗證(append-only 本機稽核)
+    id: d3
     context: 6/12 日報曾提加密委派 token;YAGNI 取捨——delegation-log 記「orchestrator 宣稱做了什麼」非「harness 驗證確實做了什麼」,可被寫假
     why_chosen: scope 由單一可查點 --allowedTools 在 harness 層管理即夠;獨立驗證需 wrapper 讀 log 比對工具清單,本 spec 明確不做
     decided: 2026-06-23

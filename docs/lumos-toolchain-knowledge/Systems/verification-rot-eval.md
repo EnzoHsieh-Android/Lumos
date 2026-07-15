@@ -19,16 +19,19 @@ summary: |-
   VERIFY:無(design-only,無真機/測試數證據)
 decisions:
   - content: diff_text 必須是「動了 code 的 commit 之完整 diff」(不過濾 code/md/yaml)，純圖譜 status→stale commit 不是 L3 場景；overturn_commit 自身有 code diff 則用它，否則時間窗回溯(30 天內或最近 10 個 code commit)找動到節點 valid_under 符號的 commit，皆無則 null+drop
+    id: d1
     context: design-loop R2 兩個 blocker 推翻 R1 自己的修法——F1:L3 的 get_diff_text() 跑 git diff HEAD~1..HEAD 完全不過濾、餵 prompt 的是整個 commit 完整 diff，且因 hook 對無 code 變動 commit 早退(if not code_files: return 0)、L3 只在動 code 的 commit 上跑；F2:Verification 記符號的欄位是 valid_under，不是 Systems 才有的 verified_by(R1 用錯欄位=死碼)
     why_chosen: 餵進 LLM 的料必須跟線上一致才量得準；R1 的「code-only diff」框架與「verified_by 回溯」都偏離 hook 實際行為，會讓 recall 系統性失真
     decided: 2026-06-19
     valid: true
   - content: unit C 必須複製 L3 main() 的三道 pre-LLM 成本守衛(code_files 非空、MIN_DIFF_LINES(10)≤diff_lines≤MAX_DIFF_LINES(2000))；過不了的 positive 不餵 LLM、不計進 LLM 層分母，改記為「被守衛跳過的 pipeline miss」
+    id: d2
     context: design-loop R3 BLOCKER-2——不複製這些守衛會把 L3 線上根本不會碰(早退跳過)的 diff 也算進去，recall 虛高;R4 FINDING-2 釐清另兩道(candidates 非空=搜尋層設計性繞過、diff_text 非空=B 已 drop)不另複製
     why_chosen: 守衛跳過是 pipeline 層的設計性 miss、不是 LLM 漏判，混進同一分母會汙染「LLM 判斷層 recall」這個唯一誠實能量的數字
     decided: 2026-06-19
     valid: true
   - content: old_node_text 存整篇節點全文(frontmatter+summary+內文)、交給 build_prompt 自截(verification 1500/diff 4000 字)，不只擷結論
+    id: d3
     context: design-loop R1 §5(最關鍵 blocker)——build_prompt 的 verification_text 線上吃節點全文，valid_under/revalidate_when 正是 L3 判「被驗證符號/契約有沒有被動到」的核心料；只餵結論會讓 LLM 少看關鍵欄位、recall 系統性偏低
     why_chosen: fixture 要忠實重放線上 prompt 構造；截斷邏輯留給 build_prompt 自己做才與線上一致(R3 MINOR-2)
     decided: 2026-06-19

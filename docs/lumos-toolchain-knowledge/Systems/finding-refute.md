@@ -21,16 +21,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-24_finding-refute]]
 decisions:
   - content: 辯方階段插在 judge 後、record 前——對 judge 評 severity≥major 的每條 finding 各派 1 個獨立 opus 辯方,預設 finding 假、強制附 file:line 反證才能降,該輪 severity 由編排者機械取存活 findings 的 max
+    id: d1
     context: design-loop 全是檢察官(auditor 找洞)、缺辯方;canary 只驗審計員有沒有認真讀(防漏抓),抓不到「認真讀了但判錯」(誤抓)。2026-06-23 qwen 把已處理好的 __SCRATCH__(sed 替換 token)誤判 major,canary 對這型無能為力
     why_chosen: 把原「編排者克制剝誤判」(自填偏誤:利害關係人自評 severity)升級成獨立帶證據裁決,同 judge-severity-gate 精神(severity 交獨立評定者);辯方靠任務方向相反逼出反方向 grep,殺 code 層假陽性
     decided: 2026-06-24
     valid: true
   - content: 只對 severity≥major 派辯方、只派 1 個(非 N 個多數決)、不重派 judge 算 severity
+    id: d2
     context: good()=caught 且 severity∈{clean,minor},minor/clean 不影響收斂;要選「1 辯方+file:line」還是「N 辯方投票」
     why_chosen: 強制 file:line=確定性查證(可被下輪 auditor/人複驗),比 N 個 AI 投票更貼「確定性>AI 判斷」主軸且省算力;minor/clean 派辯方是白費算力
     decided: 2026-06-24
     valid: true
   - content: 辯方效力來源是「任務方向相反」、不是「code 證據」本身——故不靠多派 auditor
+    id: d3
     context: 質疑「缺脈絡時辯方憑什麼比 auditor 對」;auditor 提 major 時其實也 grep 過(強制查證)
     why_chosen: auditor 找洞(看到可疑就提、無動力深挖反證),辯方被逼構造推翻證據(專查 auditor 跳過的反方向);同樣 grep、目標命題相反→挖的角落不同。多派 auditor 只生更多起訴、同找洞方向
     decided: 2026-06-24

@@ -25,16 +25,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-19_canary-audit]]
 decisions:
   - content: token 不是「抓到」的機械證明,只當定位記號;唯一算數的是審計員清楚且正確地描述了那個植入瑕疵
+    id: d1
     context: design-loop r1 canary 審計揪出的真 blocker(R1-F2):若以 token 字串出現在輸出裡當「抓到」,審計員可能只順手提到 token 卻沒真懂瑕疵,假乾淨
     why_chosen: 整套機制的價值是探測「審計員有沒有醒著讀」;機械字串比對能被表面提及騙過,只有正確描述才證明真的讀懂了那段
     decided: 2026-06-19
     valid: true
   - content: v1 canary 只收純加性(additive)瑕疵——指向不存在章節的交叉引用、或約束引用未定義詞;禁「與另一節矛盾的需求」這類非局部型
+    id: d2
     context: design-loop r1(R1-F3):非局部 canary 會牽動被矛盾的那節、污染審計員對該節的真實 findings,移除 canary 也救不回
     why_chosen: canary 要能乾淨植入再移除、不汙染真實 findings;純加性瑕疵只動自己那一處,移除後其餘審計結果仍可信
     decided: 2026-06-19
     valid: true
   - content: gov dedup 第 5 鑑別子用 r.get("token","") 而非 r["token"];既有三源 mapper 不加 token 鍵,只 canary mapper 輸出 token
+    id: d3
     context: design-loop r3 唯一 must-fix(R3-Issue1):既有三條 mapper 的舊事件 row 沒有 token 鍵,r["token"] 會對所有舊事件 KeyError 弄爆 lumos gov;且 canary 每筆 token 唯一,不加鑑別子會被 dedup 折成單列(R1-F4)
     why_chosen: .get 對舊事件回 "" 行為不變、crash-free;canary token 唯一當第 5 鑑別子才不會把多筆 missed 折成一列丟失可靠度史
     decided: 2026-06-19

@@ -21,16 +21,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-19_loop-convergence-recording]]
 decisions:
   - content: 收斂用 tail-K 滑動窗(append 序最後 K 筆全 caught+clean/minor),非「每輪都得乾淨」;排序用檔案 append 序而非 ts
+    id: d1
     context: 設計 loop r2 真 major(R2-MAJOR-1):「最後 K 輪」原文義含糊,可讀成全程乾淨;且 ts 只到秒、同秒兩輪會並列無法定序
     why_chosen: tail-K 讓前面髒輪(早期被審計揪出的 blocker)不永久汙染收斂,符合「修了就該往前」;append 序唯一且即時間序,免 ts 秒級碰撞
     decided: 2026-06-19
     valid: true
   - content: 機制定位誠實校正為「可觀測性+摩擦+一個地板」而非「機械自我終止 oracle」;severity 是忠實轉錄審計員 max finding、無寫入端驗證
+    id: d2
     context: r1 深層 blocker(R1-BLOCKER-2):原宣稱「機械自我終止」過度;severity 自報、想早收工的編排者可記假 clean——這跟 canary「植入者忠實判定」是同一個沒閉合的迴歸
     why_chosen: 對「無人看顧的自動 loop」夠用(終止從不可查的人判→可查的條件);對「刻意作弊」本就不設防、不該假裝防竄改;誠實標清天花板免下游過度信任
     decided: 2026-06-19
     valid: true
   - content: missed 輪靠 tail-K 機制自然重置乾淨連續數(missed 必 kind!=caught 故落窗內即擋收斂),無需特例
+    id: d3
     context: 第六輪 dogfood 實況逼出(R6):一次漏抓 canary 該讓乾淨連續數歸零,否則放水輪被忽略
     why_chosen: tail-K 已天然涵蓋——missed 在窗內就不收斂、隨新輪滑出才放行;加特例反增複雜度
     decided: 2026-06-19

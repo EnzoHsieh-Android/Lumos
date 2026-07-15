@@ -20,16 +20,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-24_check-r-guard]]
 decisions:
   - content: 採方案 B(★IRREVERSIBLE★ 加 [guard:] 指針)而非新增 ★EXTERNAL-IRREVERSIBLE★ tag 或 kind:external 子分類
+    id: d1
     context: 2026-06-22 日報 gap:Check R 驗「回退有沒有寫」,但外部不可逆動作(寄信/prod 遷移已被下游消費)根本沒有逆操作,寫回退=空頭支票;需要事前預防路徑
     why_chosen: 最小語法增量、向後兼容、同架構;外部/內部邊界在標記時常難判定,新 tag 增學習負擔;{X}_REF_RE/_{X}_resolved/[{X}:decisions] 是可逆性軸既有命名範式(rollback/audit 已採用)。完整 alternatives 見設計稿方案表
     decided: 2026-06-24
     valid: true
   - content: guard 僅影響 ★IRREVERSIBLE★ 分支;CHECKPOINT 分支獨立判 _rollback_resolved(不讀 _guard_resolved)、有 guard 靜默忽略
+    id: d2
     context: design-loop r1 canary 揪出 F-CHECKPOINT(minor):若共用條件對所有 marker,CHECKPOINT+guard 會誤消掉軟提醒
     why_chosen: CHECKPOINT 是「改了難救」非「不可逆」,語義上不該被事前守衛免除軟提醒;分開 IRREVERSIBLE/CHECKPOINT 兩分支讓行為精確且 CHECKPOINT 等同現狀
     decided: 2026-06-24
     valid: true
   - content: 組件 8(graph-discipline.md)+9(SKILL.md)+10(t_marker_doc_sync tuple 加 "[guard:")須同一 commit 提交
+    id: d3
     context: design-loop r1 F-DRIFT(major):原宣稱「才能通過既有漂移測試」不成立——t_marker_doc_sync 迴圈原不含 [guard:,無漂移保護;不同 commit 拆開會立即紅燈
     why_chosen: 漂移守衛測試斷言 [guard: 須同時出現在模板與 skill,tuple 擴充與兩檔同步必須原子化否則測試紅燈
     decided: 2026-06-24

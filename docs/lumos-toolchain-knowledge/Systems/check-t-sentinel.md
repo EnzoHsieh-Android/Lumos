@@ -22,16 +22,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-23_check-t-sentinel]]
 decisions:
   - content: 判據改「數 [test:] 標記個數」(TEST_REF_RE.findall(inv) 長度),非 strip_test_refs 展開的測試名數;[test:a,b] 算 1 個標記
+    id: d1
     context: design-loop r6 canary 排掉後揪出的真 major(F1):原判據 len(refs)(展開測試名數)可被 [test:a,b] 單逗號 tag(=2 名)繞過提醒——正中本機制動機要防的反向優化(maker 寫剛好過的 happy-path 刷掉提醒)
     why_chosen: 機制動機正是防「綁了幾條測試」被反向優化刷掉;若用展開名數,單行多名即可規避提醒,機制自我瓦解;數標記個數才逼真的多個 [test:] 標記
     decided: 2026-06-23
     valid: true
   - content: ★COMBO★ 必寫在 ★INVARIANT★ 之後;★COMBO★ 無 ★INVARIANT★ 標為已知盲區、誤標靜默忽略、YAGNI 不另掃
+    id: d2
     context: design-loop r3 canary 排掉後揪出真 major(F3):原 spec §「★COMBO★ 無 ★INVARIANT★ 也軟提醒」與 extract_contracts 路徑互斥不可實作——extract_contracts 只收 INVARIANT_RE 命中行,純 ★COMBO★ 行進不了
     why_chosen: ★COMBO★ 本就設計為 ★INVARIANT★ 子修飾,單獨用屬罕見誤用;與其加一條撐不住的掃描路徑,不如誠實標盲區、留痕、YAGNI
     decided: 2026-06-23
     valid: true
   - content: Check K 自己重掃(extract_contracts + strip_test_refs/TEST_REF_RE),不複用 Check T 的 bound/refs 局部變數;接在 Check S 之後(段尾 T→R→S→H→K→V),用未占用的 section("K")
+    id: d3
     context: design-loop r1 揪出 blocker(section("C") 已被 core_refs 占用)+ major(複用 Check T bound/refs 不成立:局部變數出作用域且違反「不改 Check T」)
     why_chosen: Check K 為純新增軟 Check、不得動 Check T;自己重掃才作用域乾淨;照 Check S 模板(warn_soft + _soft_list + gov_events warned/hard:False)複用既有結構
     decided: 2026-06-23

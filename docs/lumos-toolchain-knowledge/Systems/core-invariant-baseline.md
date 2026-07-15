@@ -18,16 +18,19 @@ summary: |-
   VERIFY:無(無實作/測試/真機證據)
 decisions:
   - content: 守備對象從「核心節點的 ★INVARIANT★ 行」pivot 成 summary/decisions[].content/valid_under 三類欄位
+    id: d1
     context: v1 前提是「核心節點靠 ★INVARIANT★ 承載合約」;R1 審計+獨立 grep 證實 citrus-core-knowledge 全 repo 0 條 ★INVARIANT★、全 vault 僅 1 條 core_refs——實際承載合約語意的是 summary/decisions/valid_under
     why_chosen: 守實際承載語意的欄位才守得到唯一存在的核心節點 custtransfer-semantics,且隨核心知識成長自動擴大;守空集合的 v1 是致命前提錯
     decided: 2026-06-19
     valid: true
   - content: approve 不重用 _append_governance_log,自寫 append 到 consumer vault 的 .governance-log.jsonl,event schema 對齊 gov reader 用 list 形 nodes
+    id: d2
     context: R3 opus 揪出的 blocker——_append_governance_log 寫 vault.parent,對 core repo = backend/(非 repo),且無 git commit 時早退(正是 CI-checkout 情境會吞掉留痕);core repo 無 docs/ 層;reader 讀 {gate,kind,nodes[](list),hard},用 {event,node} 單數會解成空 nodes
     why_chosen: 留痕要進 lumos gov ledger 才可追蹤(對齊 loop engineering);schema 不對齊則 gov <node> 篩不到、留痕等於沒留
     decided: 2026-06-19
     valid: true
   - content: decisions 用唯一 decided 日期當穩定 key、valid_under 用 hash 集合 diff;不用位置 #index
+    id: d3
     context: R3 opus major——#index 在 mid-list 刪一條會位移、級聯誤報後續條目「被動過」;valid_under 位置 i 同樣級聯
     why_chosen: 集合/唯一-key 比對對 mid-list 刪除穩定(刪一條 = 一個 key/hash 消失,不級聯);approve 強制 decided 唯一、碰撞或缺失報錯要人補,不自動編號
     decided: 2026-06-19

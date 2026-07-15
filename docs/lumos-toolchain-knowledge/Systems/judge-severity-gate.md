@@ -21,16 +21,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-20_judge-severity-gate]]
 decisions:
   - content: severity 維度評定者從 orchestrator(被審者)改為已在場的獨立 judge(擴充 judge 輸出含 severity,不新增 agent、不改 CLI)
+    id: d1
     context: 觸發 gap(日報 2026-06-20):收斂判準 good(r)=caught AND severity∈{clean,minor}(scripts/lumos:1368)中 caught 已由 judge 判,但 severity 由 orchestrator 自評——被審者控制收斂閘的一半。否決方案B(改述「尚未被駁倒」,問題平移仍落 orchestrator)、方案C(第三個 severity-judge agent,重複 token、邊際信心微乎其微)
     why_chosen: judge 已 spawn 於每輪(判 canary caught/missed),增量僅「明文傳入 auditor 報告 + 多問 severity 一問」;評定者從利益相關方換成較獨立 agent,直接斷開自填迴路
     decided: 2026-06-20
     valid: true
   - content: 刪掉「純模糊性保守取高」,judge 據實評;唯一保留的保守是客觀二值「對最嚴重真 finding 無任一 grep/Read 查證行→至少 major」
+    id: d2
     context: 核心張力(autonomous-loop 自動產 spec 撞 6 輪 cap 未收斂後人撈出):原 spec 給 judge 加「拿不準往高評(保守取高)」堵自填,但這讓模糊輪永遠 major、進不了收斂窗(堵自填 vs 可收斂對立)。「保守取高」本就是 R5-F-C2 審出的誤移植 skill strip-discipline 規則。R6-F-D1 曾誤判此為 minor 擱置
     why_chosen: 堵自填靠「評定者獨立」(orchestrator→judge)而非保守加碼;judge 據實評則模糊輪可據實 minor → 能收斂。對「模糊性」的保守(卡收斂)刪、對「auditor 沒做地面查證」的保守(對偷懶的合理懲罰)留;後者收成客觀二值(只數有無查證行、不讓 judge 評足不足)以防模糊性借「查證不足」之名回流
     decided: 2026-06-20
     valid: true
   - content: 二值保守是「用精確換客觀」、有故意留的洞——judge 只數「對最嚴重 finding 有無 ≥1 條查證行」、不評「這條查證打不打中」,故可被「敷衍貼一條無關 grep」規避
+    id: d3
     context: design-loop 重跑 R2-F-R2-2 審出:一評「打不打中」就把主觀性、進而模糊性保守請回來、卡收斂——根本取捨無兩全(主觀判卡收斂 / 客觀數可敷衍)
     why_chosen: 本 spec 選客觀數、誠實揭露此洞(誠實天花板 8),靠 dry-run 抽查「查證行是否真打中最嚴重 finding」緩解,不假裝堵死
     decided: 2026-06-20

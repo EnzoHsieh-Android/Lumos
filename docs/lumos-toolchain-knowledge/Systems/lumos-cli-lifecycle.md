@@ -23,16 +23,19 @@ summary: |-
   TEST:258 passed(t_install_skills/t_install_includes_skills/t_install_hooks_py/t_scaffold_project/t_link_or_copy_idempotent/t_hooks_python_fallback + t_deinit_*)
 decisions:
   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
+    id: d1
     context: 同事 onboarding 與多 repo 使用需要分清「一輩子裝一次的機器設定」與「每個 repo 各自要做的」;deinit 反安裝若誤碰機器共用項會傷到其他 repo
     why_chosen: bootstrap 一鍵把機器層全裝(clone Lumos+全域+skills+repo hooks);init/deinit 對稱只在本 repo 增刪,deinit 明確不碰 ~/.claude,降低反安裝爆炸半徑
     decided: 2026-06-26
     valid: true
   - content: 全域 lumos 與 skills 用 symlink/junction 指向來源 clone(非 copy),graph-discipline.md 則 per-project 注入
+    id: d2
     context: 工具更新如何傳到夥伴機器;若全 copy 則每次更新都要重裝
     why_chosen: symlink 那條 git pull 來源 clone 即吃到 CLI+skills 更新、免重裝;graph-discipline 速查必須跟專案 CLAUDE.md 走故只能 per-project 注入,刷新要重跑 init/update(雷:bootstrap 不加 --pull 不會更新)
     decided: 2026-06-26
     valid: true
   - content: _VENDORED_TOOLKIT(5 檔常數)為 vendor 端與 deinit 端共用白名單;vendor 結尾以 filecmp 逐檔 diff 自癒
+    id: d3
     context: 安裝端與移除端各自列舉檔名會漂移(漏移/漏裝);installer 子流程可能漏檔
     why_chosen: 單一常數消除安裝/移除白名單漂移;結尾自癒比對 src↔target 差異即覆補,把「installer 漏檔」收斂成可驗證的最終一致
     decided: 2026-06-26

@@ -17,11 +17,13 @@ summary: |-
   VERIFY:無(放棄決定無功能可驗,design-loop 收斂史見設計稿)
 decisions:
   - content: 放棄擾動穩定度測試方案,改用輕方案——可信度報告硬列「這個迴圈沒檢查到的維度(judge 單一不可靠列首)」,把破口誠實標給最後兜底的人,不建 reorder 機制
+    id: d1
     context: design-loop r1→r2 每次折修只把自證悖論換個藏身處(agent 產擾動→機械 reorder,但 reorder 由誰執行/種子誰選仍可被被審者操控);且只解「隨機不穩」一半(系統性偏要換家族、$0 OAuth 做不到)、反加深 judge 集中化、為半個解建確定性 reorder+hash+diff 真功能 ROI 低
     why_chosen: loop engineering 洞察——不是每個弱環都該用更多機制堵;有些在當前約束下機制化只會越重越撞自證,最誠實是承認局限、攤給人。機制堵不住的就誠實標給人,別假裝堵得住
     decided: 2026-06-20
     valid: true
   - content: 擾動標的與執行者改用機械 reorder(確定性程序打亂 findings/bullet 順序、逐字不改內容),取代原「orchestrator 自產擾動版+自寫 note 說等價」
+    id: d2
     context: design-loop r1 major F3 揪出原方案讓被審者自填擾動=judge-severity-gate 才斷開的「被審者自填」反模式在新位置復發
     why_chosen: 機械 reorder 確定性、可驗證等價、無 agent 自證,作弊面歸零,且更對症(RAND 測的本就是換排版/順序);惟 r2 再揭即使機械化,「由誰執行/種子誰選」未定義時自證仍復活,成為放棄理由之一
     decided: 2026-06-20

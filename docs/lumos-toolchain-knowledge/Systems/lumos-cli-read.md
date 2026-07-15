@@ -22,16 +22,19 @@ related:
   - "[[Systems/lumos-cli-lifecycle]]"
 decisions:
   - content: 讀寫原語嚴格分軌——12 個讀指令純讀記憶體 Env 不碰檔;一切 frontmatter 寫入走 set/append/decision-* 等寫入原語(走 atomic_write_verify:寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename)
+    id: d1
     context: 直接手改 frontmatter 會繞過寫後自驗與鐵則防護(YAML 格式爆、ghost 節點、裸合約),且讀指令若兼寫會讓「查脈絡」帶副作用
     why_chosen: 讀路徑零副作用才能放心當入口反覆掃;寫路徑集中過 atomic 自驗閘,任一步敗則 tmp 丟棄原檔不動,保證圖譜永遠可解析
     decided: 2026-06-26
     valid: true
   - content: doctor(全圖權威)與 lint(單檔快檢)分工——lint node-local 不掃 repo 比 doctor 快、寫完一篇立刻自驗、error 即 pre-push 會擋的同類;doctor 跑全圖跨節點完整性 + [test:] 存在性
+    id: d2
     context: 每寫一個節點都跑全圖 doctor 太慢、回饋慢;但單檔檢查看不到跨節點完整性(orphans/雙向同步/意圖鏈)
     why_chosen: 兩段式——寫節點當下用 lint 拿快回饋(預測 pre-push),收尾再用 doctor 跑全圖權威巡檢;push 前 pre-push 仍兜底再擋一次
     decided: 2026-06-26
     valid: true
   - content: 讀指令以 cwd find_vault 鎖定「專案層」vault(往上找 docs/*-knowledge 或 standalone vault root),不受多專案同名 vault 影響;與 install/bootstrap 的「機器層」分軌
+    id: d3
     context: Obsidian CLI 的 vault= 只吃資料夾 basename,多專案都叫 docs/knowledge 會撞名;lumos 改以 cwd 往上找消歧
     why_chosen: cwd-based 定位讓任何專案子目錄直接 lumos <cmd> 都鎖到正確 vault,機器層工具(全域 lumos/skills)則一次裝好共用
     decided: 2026-06-26

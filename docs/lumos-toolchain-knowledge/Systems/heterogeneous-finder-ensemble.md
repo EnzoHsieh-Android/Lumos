@@ -25,6 +25,7 @@ summary: |-
   VERIFY:[[2026-07-09_loop三輪壓縮]]
 decisions:
   - content: |-
+    id: d1
       code-loop 繼承 design-loop 的 panel 機制 + capture-recapture 收斂,但 panel 成員換成
       「LLM reviewer + 確定性工具(SARIF linter/測試/type/mutation)」的異質組合、辯方改可執行反證
       ——不是「design-loop 換 canary 名字」。
@@ -37,6 +38,7 @@ decisions:
     decided: 2026-07-09
     valid: true
   - content: |-
+    id: d2
       便利原語(--from-pitfalls 自動收割 linter 命中)與端到端無人跑是兩件事;前者不卡自主 loop 暫停,現在就做。
     context: 使用者追問「linter 命中→餵進去仍手動串」何意,釐清我把兩者混淆
     why_chosen: 手動路徑最煩的一步(手貼 linter file:line)純 lumos 機械可消,與自主 orchestrator 無關

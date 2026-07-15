@@ -27,16 +27,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-19_design-loop]]
 decisions:
   - content: 收斂判準 K=2(連 2 輪 caught 且 severity∈{clean,minor}),寫進 spec 本體與 loop_status --need 預設;漏抓(missed)仍是一筆 record、仍算進 cap,判決不採信但不消失
+    id: d1
     context: design-loop r2 canary 護審計揪出真 BLOCKER:K=2 未敘明於 spec 本體;MAJOR:「作廢」vs「算進 cap」矛盾——漏抓那輪到底算不算一輪定義不一致
     why_chosen: 「輪」「cap」「連續漏抓」全以 canary-log 記錄為準才定義一致,不存在「不記錄的 inline 重跑」;K=2 讓收斂=連 2 輪醒著的審計員沒找到 blocker/major,可觀測且有摩擦
     decided: 2026-06-19
     valid: true
   - content: canary 類型由輪序 N 決定 type=清單[(N−1) mod 4](a 壞§ref／b 未定義旗標／c 未定義欄位／d 未定義產物),無需 state 欄;missed 重跑時 N 已+1 故自動換新類型
+    id: d2
     context: design-loop r2 MAJOR:rotation 無 state——若 type 要記憶/查 log 的 type 欄,植入者得自管狀態、易錯且不可審
     why_chosen: 由 N 機械推導 a→b→c→d→a 輪替,免狀態、可從 loop_status 輪歷史重現;canary 校準鐵則=「認真審抓得到但不一眼看穿」(太細不公平、太明顯訊號弱)
     decided: 2026-06-19
     valid: true
   - content: 加辯方 refute 階段(對 ≥major 每條 finding 派獨立 opus、不傳審計結論、強制 file:line 反證才能降),該輪 severity 取辯方裁決後存活 findings 的機械 max,取代編排者自剝誤判
+    id: d3
     context: finding-refute 後續 spec(3 輪自動收斂):原 step4「編排者自剝審計員誤判」是沒閉合的迴歸、會放水;canary 防假陰性,但假陽性(審計員過度報警)無對稱守衛
     why_chosen: 辯方=canary 的對稱面(canary 防假陰性/防審計員放水,辯方防假陽性/防過度嚴重度);效力來源是「方向相反的對抗」+ 強制帶 code 證據,而非 code 證據本身;業務層假陽性留人裁
     decided: 2026-06-24

@@ -19,20 +19,24 @@ summary: |-
   KEY:decisions[] 是巢狀結構,只能走 decision-add/decision-supersede/decision-reindex 的 surgical line-based 手術(非 ruamel round-trip,避免 reflow 破壞最小 diff);要求 2-space 縮排
   KEY:[M1/P2 2026-07-15]決策穩定 ID——add 指派 id:d<max+1>(翻案永不重用)、supersede 唯一命中(子字串多重命中 rc=2 列候選/#dN 精確定址)+回傳全域 id <rel>#d<N>(dispatcher 解包,CLI 對外仍 int rc)、reindex 冪等回填(混合狀態 max+1 不撞號);寫後自驗升級 ID 精確驗證(有 id 時)
   KEY:[M4/S1 2026-07-15]supersede 觸發主網 surfacing——rc=0 後 dispatcher 獨立 try 包「rel_cascade_create 建帳+cascade_surface 列鄰居」;stdout 首行逐字保留、cascade 面全走 stderr(CASCADE/NEIGHBOR 行式 schema);無 id→CASCADE-SKIP、失敗→CASCADE-ERROR fail-open(rc 仍 0,補網 E2 兜底)
+  KEY:[decision_refs 自動養成 P+T1 2026-07-15]decision-reindex --all 批次編號(顯式,前置);rel-cascade confirm 回寫 decision_ref(_append_decision_ref exact-string dedup,非 link_target——它剝 #dN 會誤合同節點不同決策)。不對稱信任雙欄:by ai→decision_refs_ai(E3 firing 讀聯集/E2 抑制碰不到)、by human→decision_refs(可抑制)
   DEP:scripts/lumos atomic_write_verify｜load_raw_for_edit｜_write_lf(唯一寫入原語,UTF-8/LF/no-BOM)｜parse_frontmatter｜parse_decisions
   TEST:set/append/decision/archive/new 全套 t_-prefixed 回歸(t_set_*,t_append_*,t_decision_*,t_archive_*,t_new_*)
 decisions:
   - content: 所有 frontmatter 寫入經 atomic_write_verify「寫 tmp → re-parse 自驗(值正確且無新 lint 指紋)→ os.replace」,任一步敗則原檔零變動
+    id: d1
     context: 圖譜檔被 doctor/lint 把關,半寫壞的 frontmatter(YAML 解析爆、引入新指紋)會污染全圖;直接寫檔無法保證寫完仍合法
     why_chosen: 寫後自驗把「寫出來的東西真的 parse 得回目標值、且沒新增 lint 問題」變成寫入成功的前置條件;atomic rename 確保不留半截檔,失敗即無痕回滾
     decided: 2026-06-26
     valid: true
   - content: 純量走 set(SCALAR_KEYS 白名單)、list 走 append(LIST_KEYS)、巢狀 decisions[] 走 decision-add/decision-supersede;白名單外 key 一律 rc2 拒絕
+    id: d2
     context: frontmatter 三種結構(純量/list/巢狀)各有不同的安全格式鐵則與最小 diff 策略,混用會破格(如把 list 當純量塞逗號串、reflow 巢狀)
     why_chosen: 按結構分原語各自保證對應鐵則(append 保鐵則1 的 YAML list、decision-* 保 surgical 巢狀不 reflow);白名單擋誤用,把錯誤導向正確指令
     decided: 2026-06-26
     valid: true
   - content: decisions[] 翻盤/新增用 surgical line-based 編輯(只動目標行),不走 ruamel round-trip
+    id: d3
     context: ruamel round-trip 重序列化整份 YAML 會 reflow、破壞「構造性最小 diff」(只改該改的行、其餘逐字原樣),也可能誤動子清單
     why_chosen: line-based 手術精確命中目標決策的 valid/superseded_by 行,diff 最小可審;代價是要求 2-space 標準縮排(0-indent/tab 直接報錯不靜默處理)
     decided: 2026-06-26
@@ -42,6 +46,7 @@ verified_by:
   - "[[Verification/2026-07-15_主網M3_cascade帳本]]"
   - "[[Verification/2026-07-15_主網M4_觸發與連鎖]]"
   - "[[Verification/2026-07-15_主網實驗場_LandmarkMember]]"
+  - "[[Verification/2026-07-15_decision_refs養成_P前置_T1回寫]]"
 ---
 # lumos-cli-write
 

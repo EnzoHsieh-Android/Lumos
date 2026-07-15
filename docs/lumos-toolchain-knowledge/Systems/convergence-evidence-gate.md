@@ -24,16 +24,19 @@ summary: |-
   VERIFY:[[2026-07-03_convergence-evidence-gate]]
 decisions:
   - content: 方案 A(判準增強落在既有 loop status 的 --gate 旗標);否決 B 統計離散度模型與 C 只修 cross_audit 定界
+    id: d1
     context: B 的權重/閾值全是拍腦袋參數,把「一致≠正確」換成「權重≠正確」,違反 mechanical-not-motivational;C 只治複核端不動判準本體
     why_chosen: 每道錨都是確定性核對(rc/字串比對/整數單調性),零權重參數;複用已落地 refcheck;向後相容
     decided: 2026-07-03
     valid: true
   - content: 「留痕完整」不設錨——它是 K-streak 的邏輯後果({streak 通過}⊆{留痕完整}恆真),另設=零判別力裝飾
+    id: d2
     context: design-loop R1 辯方對此 major 反駁失敗、維持原判,導致當輪拆錨重構(gate 從三錨收斂為兩錨)
     why_chosen: 誠實拆除不湊門面;歸因回歸測試(缺 severity 斷在 K-streak)固定此結論、防未來重新發明空錨
     decided: 2026-07-03
     valid: true
   - content: cross_reject 計票改「≥major 經機械驗證存活才 +1」,全反證=endorsed-after-refute 放行
+    id: d3
     context: qwen disputed 三連(refcheck/loop-stall×2/本 spec)的 ≥major 指控經機械驗證全數不成立,仍消耗放行預算逼人裁;本 spec 自己的放行路徑上 _parse_worst fallback 撿引文誤報 blocker 現場重演
     why_chosen: 自信但經不起機械驗證的否決不該有否決權;disputed 升級人核精神保留,只改門票條件
     decided: 2026-07-03

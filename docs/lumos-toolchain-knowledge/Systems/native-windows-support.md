@@ -22,16 +22,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-26_native-windows-support_真機]]
 decisions:
   - content: "核心策略 S2:安裝邏輯搬進跨平台 python CLI(單一真相源),Windows 經 get.ps1 薄入口進來;bash 安裝器瘦成薄殼/收斂(A)"
+    id: d1
     context: lumos CLI 核心已是純 python 標準庫、Windows 原生可跑,卡 Windows 的只有 bash 安裝器 + Unix symlink
     why_chosen: 否決 S1(PowerShell 全套移植=Unix+Win 兩份漂移)與 S3(要求 Git Bash=非純原生);A 完全收斂避免 bash 孤兒 rot,python 成唯一安裝邏輯源
     decided: 2026-06-26
     valid: true
   - content: skills 用 Windows junction(mklink /J)、全域 lumos 用 lumos.cmd shim、任一失敗 fallback 複製;個別 .py(Claude hooks)一律 shutil.copy2 不用 junction
+    id: d2
     context: os.symlink 在 Windows 需管理員/開發者模式權限;junction 零權限且是真連結(保「git pull 即更新」);但 mklink /J 只能連目錄,對個別檔必失敗(design-loop r3-F1)
     why_chosen: 零權限是 Windows 安裝可用性的硬需求;真連結保即時更新;fallback 觸發是「mklink 回非 0」非跨碟判斷(junction 可跨碟,r1-F5)
     decided: 2026-06-26
     valid: true
   - content: "Claude hooks 註冊改寫解析後直呼且 python 路徑/home 全正斜線化:command = \"<resolved-python>\" \"<絕對 home>/.claude/hooks/x.py\";按 hook 路徑去重遷移"
+    id: d3
     context: 真機揭露三連坑—Claude Code 在 Windows 用 Git Bash 跑 hook(W6:反斜線 C:\\Users 被吃成 C:Users)、${HOME} 只 POSIX 展開(W3:native Windows 不展開→字面路徑→L1/L3 靜默不觸發)、command 格式變了 _equivalent 字串比對失效會雙重註冊(r3-F2)
     why_chosen: shebang #!/usr/bin/env python3 Windows 不認;只 resolve 直譯器不夠,還要 resolve home 且正斜線化(Git Bash 才認);按 hook 檔名去重才能升級時取代舊 entry、不雙觸發
     decided: 2026-06-26

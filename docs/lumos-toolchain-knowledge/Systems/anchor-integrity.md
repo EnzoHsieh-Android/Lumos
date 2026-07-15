@@ -19,11 +19,13 @@ summary: |-
   VERIFY:[[2026-07-02_anchor-integrity]]
 decisions:
   - content: 方案 A baseline hash+顯式 approve;否決 RHB 環境硬化(方案 B)與純 diff 標記送審(方案 C)
+    id: d1
     context: 本機單人工作流沒有 agent 摸不到的執行面,硬寫隔離=自欺;marker 對 agent 零成本自貼、無內容 hash 底線
     why_chosen: 機械、確定性、零依賴;無痕篡改被封死到只剩「連守衛一起改」,人 review 有明確紅旗;B 留 future 真 CI(baseline 屆時直接複用)
     decided: 2026-07-02
     valid: true
   - content: 錨點集合 v1 固定列舉 5 檔,不含 scripts/lumos 本體
+    id: d2
     context: lumos 是自主 loop 天天迭代對象,收進 baseline=每天 approve→盲簽疲勞,守衛立刻形同虛設
     why_chosen: 分層——baseline 守驗證器(runner+hooks),測試守被驗物(lumos 行為);改壞 lumos 由 test_lumos.py 抓,前提「runner 沒被動」正是 baseline 守的
     decided: 2026-07-02

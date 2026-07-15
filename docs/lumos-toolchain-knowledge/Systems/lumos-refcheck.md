@@ -19,11 +19,13 @@ summary: |-
   VERIFY:[[2026-07-02_lumos-refcheck]]
 decisions:
   - content: 抽取邏輯從 Check P 複製而非抽共用 helper;去重粒度 (token,line) 與 Check P 的 token 級刻意分歧
+    id: d1
     context: spec r3-F1:Check P token 級去重會把同檔多行號引用塌成一條,refcheck 的 line_out_of_range/excerpt 都掛行號上;spec 明示共用方式留實作決定
     why_chosen: 兩者粒度不同,硬共用要帶 mode 參數反而耦合;複製段小(~30 行)且各自有測試鎖行為
     decided: 2026-07-02
     valid: true
   - content: refcheck 刻意不驗 spec 內部一致性,rc 不進 loop status 收斂判準
+    id: d2
     context: canary a/b/c 全是 spec 內部瑕疵,refcheck 機械抓掉=auditor 看 manifest 就能「抓到」canary,test-the-tester 失效;它是 pre-audit 修正器不是第五道 gate
     why_chosen: canary 相容性是 spec 標明「不可違反」的設計約束
     decided: 2026-07-02

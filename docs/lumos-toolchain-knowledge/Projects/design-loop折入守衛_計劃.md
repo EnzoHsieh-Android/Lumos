@@ -22,6 +22,7 @@ summary: |-
   TEST:已實作(branch feat/fold-check,528 passed;2 design-loop 輪+TDD 5 task+opus 終審);VERIFY:[[2026-07-05_design-loop折入守衛]]
 decisions:
   - content: 折入強制一致性閘(fold-check + skill step7)取代靜態 lint ①§-ref+②token
+    id: d1
     context: 初版想給 lumos lint 加 §-ref 解析+summary→body token 檢查
     why_chosen: 逐條對照 impact loop 9 輪真折入漂移:①命中0(只抓 canary)②≈0——真漂移是反向遺漏/同token改值/跨段語意矛盾,token-presence 打不中。改攻工作流:強制列舉鏡像段(逼看,治跨段矛盾)+value-drift(治改值)+reverse-omission(治反向遺漏)
     decided: 2026-07-05

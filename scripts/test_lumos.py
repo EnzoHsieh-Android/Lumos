@@ -803,6 +803,93 @@ def t_check3_skips_stale_verification():
           "S.md 漏: VPass" in r.stdout, r.stdout)
 
 
+def t_decision_reindex_all():
+    v = mkvault()
+    write(v, "Systems/A.md", "type: system\nstatus: done\ndecisions:\n"
+          "  - content: 甲\n    decided: 2026-01-01\n    valid: true")
+    write(v, "Systems/B.md", "type: system\nstatus: done\ndecisions:\n"
+          "  - content: 乙\n    decided: 2026-01-01\n    valid: true\n"
+          "  - content: 丙\n    decided: 2026-01-02\n    valid: true")
+    write(v, "Systems/NoDec.md", "type: system\nstatus: done")   # 無 decisions → 不碰
+    r = run(v, "decision-reindex", "--all")
+    check("reindex --all rc=0", r.returncode == 0, r.stderr)
+    check("reindex --all 涵蓋 A(d1)+B(d1,d2),NoDec 不碰",
+          "id: d1" in read(v / "Systems/A.md")
+          and read(v / "Systems/B.md").count("id: d") == 2
+          and "id:" not in read(v / "Systems/NoDec.md"), "")
+    before = read(v / "Systems/B.md")
+    r = run(v, "decision-reindex", "--all")
+    check("reindex --all 冪等(二跑無變動)", read(v / "Systems/B.md") == before, "")
+    r = run(v, "decision-reindex")   # 無 node 無 --all
+    check("reindex 無參數 → rc=2", r.returncode == 2, r.stderr)
+
+
+def t_t1_confirm_writes_decision_ref():
+    """decision_refs 自動養成 T1:confirm 回寫 + 不對稱信任雙欄(by ai→_ai/human→正欄)。"""
+    v = mkvault()
+    write(v, "Projects/D.md", "type: project\nstatus: done")
+    run(v, "decision-add", "D", "決策甲", "--decided", "2026-07-01", expect_rc=0)  # d1
+    write(v, "Systems/A.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/D]]\"")
+    write(v, "Verification/B.md", "type: verification\nstatus: pass\ndate: 2026-01-01\nplan_refs:\n  - \"[[Projects/D]]\"")
+    lm = _lm(); env = lm.Env(v)
+    gid = "Projects/D.md#d1"
+    cid = lm.rel_cascade_create(env, gid, "Projects/D.md")
+    # by ai → decision_refs_ai(抑制碰不到)
+    run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid, "--from", gid,
+        "--edge", "verified_by", "--by", "ai", expect_rc=0)
+    ta = read(v / "Systems/A.md")
+    check("T1 by ai 回寫 decision_refs_ai(含引號、精確 #d1)",
+          "decision_refs_ai:" in ta and '"Projects/D.md#d1"' in ta and "decision_refs:" not in ta.replace("decision_refs_ai", ""), ta)
+    # by human → decision_refs(可抑制)
+    run(v, "rel-cascade", "confirm", "B", "--cascade-id", cid, "--from", gid,
+        "--edge", "plan_refs", "--by", "human", expect_rc=0)
+    tb = read(v / "Verification/B.md")
+    check("T1 by human 回寫 decision_refs(正欄)",
+          "decision_refs:" in tb and '"Projects/D.md#d1"' in tb, tb)
+    # prune 不回寫
+    write(v, "Systems/C.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/D]]\"")
+    run(v, "rel-cascade", "prune", "C", "--cascade-id", cid, "--from", gid,
+        "--edge", "verified_by", "--by", "ai", expect_rc=0)
+    check("T1 prune 不回寫(判無關=不記依賴)", "decision_refs" not in read(v / "Systems/C.md"), "")
+    # 精確 dedup:同節點不同決策不誤合(link_target 會 strip #dN 的 bug 防護)
+    run(v, "decision-add", "D", "決策乙", "--decided", "2026-07-02", expect_rc=0)  # d2
+    env2 = lm.Env(v); gid2 = "Projects/D.md#d2"
+    cid2 = lm.rel_cascade_create(env2, gid2, "Projects/D.md")
+    run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid2, "--from", gid2,
+        "--edge", "verified_by", "--by", "ai", expect_rc=0)
+    ta2 = read(v / "Systems/A.md")
+    check("T1 精確 dedup:A.decision_refs_ai 同時有 #d1 和 #d2(不誤合)",
+          '"Projects/D.md#d1"' in ta2 and '"Projects/D.md#d2"' in ta2, ta2)
+    # 冪等:重 confirm 同一條不重複
+    run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid2, "--from", gid2,
+        "--edge", "verified_by", "--by", "ai", expect_rc=0)
+    check("T1 回寫冪等(重 confirm 不重複)", read(v / "Systems/A.md").count('"Projects/D.md#d2"') == 1, "")
+
+
+def t_e3_reads_ai_field_e2_does_not():
+    """不對稱信任接線:E3 firing 讀聯集(ai 也觸發)、E2 抑制只讀 decision_refs(ai 碰不到)。"""
+    v = mkvault()
+    write(v, "Projects/D.md",
+          "type: project\nstatus: done\n"
+          "decisions:\n"
+          "  - content: 被翻\n    id: d1\n    decided: 2026-05-01\n    valid: false\n"
+          "    superseded_by: 新\n    ended: 2026-06-10\n"
+          "  - content: 別條\n    id: d2\n    decided: 2026-05-01\n    valid: true", body="# D\n")
+    # E3:ai 欄指向翻案 d1 → firing 生效(放寬)
+    write(v, "Verification/Vai.md",
+          "type: verification\nstatus: pass\ndate: 2026-05-02\ndecision_refs_ai:\n  - \"Projects/D.md#d1\"", body="# Vai\n")
+    r = run(v, "doctor")
+    check("E3 firing 讀 decision_refs_ai(ai 填的也提醒)",
+          "發現 1 條意圖鏈斷義" in r.stdout and "Vai" in r.stdout, r.stdout)
+    # E2 抑制:A 只有 ai 欄指向「別條 d2」→ 不得抑制(ai 碰不到抑制)→ A 仍被節點級標
+    write(v, "Systems/A.md",
+          "type: system\nstatus: done\nupdated: 2026-06-01\nverified_by:\n  - \"[[Projects/D]]\"\n"
+          "decision_refs_ai:\n  - \"Projects/D.md#d2\"", body="# A\n")
+    r = run(v, "doctor")
+    check("E2 抑制不讀 ai 欄:A 有 ai-ref 指別條仍被標(誤 ai-ref 抑制不了真落後邊)",
+          "Systems/A.md --" in r.stdout, r.stdout)
+
+
 def t_rel_cascade_hardening():
     """code-loop r1 六修回歸:畸形行 fold 防禦閘(MUT1)/空殼 header(CX2)/尾端換行(A3)/
     symlink 拒斥(CX1)/OSError→rc=2(B3);短寫驗證(B1)為 os.write 合約、以 code 檢查存在性錨。"""

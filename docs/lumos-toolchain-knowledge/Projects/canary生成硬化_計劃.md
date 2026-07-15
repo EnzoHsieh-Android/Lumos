@@ -8,6 +8,7 @@ tags:
   - status/done
 decisions:
   - content: 難度過濾用 haiku 弱模型探針(反向適配 FLAWS difficulty filter),上限重植 2 次
+    id: d1
     context: FLAWS 原版丟棄『生成模型自己抓得到』的錯;lumos 情境生成者=編排者(知道答案不能自測),需外部探針
     why_chosen: 弱模型不腦補、它都抓到=真太明顯,同 [audit:] 用 sonnet 的哲學;haiku 成本可忽略;強模型當探針會把難度推到審計員也抓不到(canary 變不公平)
     decided: 2026-07-10

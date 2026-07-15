@@ -853,6 +853,8 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
                     continue
                 # [M1] E2 首判精化:鄰居有 decision_refs → 只在指到「那條」翻案決策時才標
                 #   (指到別條=已聲明依賴面、與本翻案無關,不冤枉);無 refs → 退回節點+ended 級(相容不退化)
+                # [自動養成 不對稱信任] 抑制向只讀 decision_refs(human/cascade),**不讀 decision_refs_ai**
+                #   ——誤 ai-ref 拿來抑制真落後邊=靜默漏傳播=頭號腐爛;ai-ref 抑制不了 E2(結構保證)
                 refs = [str(x).strip() for x in as_list(notes[arel].fields.get("decision_refs"))]
                 if refs:
                     def _hits(s):
@@ -884,7 +886,9 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
     section("E3", "意圖鏈斷義 (decision_refs 指向的決策已翻案 → 建在被推翻意圖上)")
     e3_broken, e3_dangling = [], []
     for rel, n in sorted(notes.items()):
-        for ref in as_list(n.fields.get("decision_refs")):
+        # [自動養成 不對稱信任] firing 向讀「聯集」decision_refs + decision_refs_ai(放寬)
+        #   ——ai 填的也能觸發提醒;錯了 advisory 級、人一刪,低 harm(對比抑制向的保守)
+        for ref in as_list(n.fields.get("decision_refs")) + as_list(n.fields.get("decision_refs_ai")):
             s = str(ref).strip()
             m = re.fullmatch(r"(.+?)#(d\d+)", s)
             if not m:
@@ -4537,10 +4541,23 @@ def cmd_decision_add(env, rel, content, decided, context=None, why=None):
     return 0, f"{rel}#{new_id}"
 
 
-def cmd_decision_reindex(env, rel):
+def cmd_decision_reindex(env, rel=None, all_mode=False):
     """[M1/P2] 回填遷移:對既有無 id 決策依文件順序、從既有最大 id+1 接續編號(不重排既有、
-    不回收缺號——混合狀態絕不撞既有 id);冪等(已有 id 跳過)。簽名=單節點一次一篇(同 T3 慣例)。
+    不回收缺號——混合狀態絕不撞既有 id);冪等(已有 id 跳過)。單節點一次一篇;--all 批次套用
+    到所有有 decisions 的節點(decision_refs 自動養成前置 P;顯式指令、非隱式改)。
     解析不到的決策項明確拒絕(同 supersede 0-indent/tab 語意),不靜默跳過造成缺洞。"""
+    if all_mode:
+        targets = sorted(r for r, n in env.notes.items() if decisions_items(n.fm_lines) is not None)
+        done = errs = 0
+        for r in targets:
+            try:
+                cmd_decision_reindex(env, r)
+                done += 1
+            except (ValueError, RuntimeError) as e:
+                print(f"  ✗ {r}: {e}", file=sys.stderr)
+                errs += 1
+        print(f"✓ reindex --all: 掃 {len(targets)} 個決策節點,{done} 處理 / {errs} 拒絕(格式不合)")
+        return 2 if errs else 0
     path = env.vault / rel
     lines, s_fm, e_fm = load_raw_for_edit(path)
     fm = lines[1:e_fm]
@@ -4693,6 +4710,42 @@ def _validate_from_gid(from_id):
         raise ValueError(f"--from 格式非 <節點rel>#d<N>: {from_id}")
 
 
+def _append_decision_ref(env, rel, field, ref):
+    """[decision_refs 自動養成 T1] 把精確 decision_ref(<rel>#dN)append 到 field
+    (decision_refs=human/cascade-confirmed | decision_refs_ai=AI 填)。**exact-string dedup**
+    ——不用 link_target(它 split('#') 會把 #dN 剝掉,導致同節點不同決策誤 dedup 成一條)。
+    值一律引號化(含 #// 安全)。走 atomic_write_verify。回 True=新增 / False=已存在。"""
+    ref = ref.strip()
+    path = env.vault / rel
+    lines, s_fm, e_fm = load_raw_for_edit(path)
+    fm = lines[1:e_fm]
+    struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+    quoted = '"' + ref.replace('"', '\\"') + '"'
+    if field in struct:
+        s, e, kind = struct[field]
+        if kind != "list":
+            raise ValueError(f"{field} 是 {kind} 型,不可 append decision_ref")
+        for j in range(s + 1, e + 1):
+            if fm[j].lstrip().startswith("-") and strip_quotes(fm[j].lstrip()[1:].strip()) == ref:
+                return False   # exact 已存在
+        indent = "  "
+        for j in range(s + 1, e + 1):
+            if fm[j].lstrip().startswith("-"):
+                indent = fm[j][:len(fm[j]) - len(fm[j].lstrip())]
+                break
+        last = e
+        while last > s and not fm[last].strip():
+            last -= 1
+        fm.insert(last + 1, f"{indent}- {quoted}")
+    else:
+        fm.append(field + ":")
+        fm.append(f"  - {quoted}")
+    new_lines = lines[:1] + fm + lines[e_fm:]
+    atomic_write_verify(path, new_lines, field,
+                        lambda f: any(str(x).strip() == ref for x in as_list(f.get(field))))
+    return True
+
+
 def cmd_rel_cascade_write(env, verb, neighbor, cascade_id, from_id, edge, by):
     """[M3] confirm|prune:append 一筆 transition。寫前驗證(R4):檔存在(不存在→拒,建檔只屬觸發端)、
     header 合法(torn→拒,與 resume rc=1 救援語意按指令類別分流)、--from==header root(全鏈同源)。"""
@@ -4714,6 +4767,17 @@ def cmd_rel_cascade_write(env, verb, neighbor, cascade_id, from_id, edge, by):
                        "edge_type": edge, "from_decision_id": from_id.strip(),
                        "state": state, "by": by})
     print(f"✓ rel-cascade {verb} {nrel} --edge {edge} ({cascade_id}, by={by})")
+    # [decision_refs 自動養成 T1] confirm = 地面真相「鄰居依賴這條決策」→ 回寫 decision_ref。
+    #   provenance 雙欄不對稱信任:by ai → decision_refs_ai(E3 firing 生效、E2 抑制碰不到);
+    #   by human → decision_refs(可抑制 E2)。prune 不回寫(判無關=不記依賴)。
+    #   回寫失敗=軟警告不回滾(帳本才是地面真相,decision_refs 是衍生、可從帳本重建)。
+    if verb == "confirm":
+        field = "decision_refs_ai" if by == "ai" else "decision_refs"
+        try:
+            if _append_decision_ref(env, nrel, field, from_id.strip()):
+                print(f"  ↳ decision_refs 養成: {nrel}.{field} += {from_id.strip()}")
+        except Exception as _e:
+            print(f"  ⚠ decision_ref 回寫失敗(帳本已記,可 reconcile): {_e}", file=sys.stderr)
     return 0
 
 
@@ -8710,8 +8774,9 @@ def main():
     p.add_argument("--by", required=True, help="被誰取代(superseded_by 值)")
     p.add_argument("--ended", help="失效日期 YYYY-MM-DD(選填)")
 
-    p = sub.add_parser("decision-reindex", help="[M1/P2] 回填遷移:對無 id 決策從既有最大 id+1 接續編號(冪等,單節點)")
-    p.add_argument("note")
+    p = sub.add_parser("decision-reindex", help="[M1/P2] 回填遷移:對無 id 決策從既有最大 id+1 接續編號(冪等);--all 批次套用全部決策節點(decision_refs 養成前置)")
+    p.add_argument("note", nargs="?", help="單節點;省略需 --all")
+    p.add_argument("--all", action="store_true", dest="reindex_all", help="批次套用到所有有 decisions 的節點(顯式指令)")
 
     p = sub.add_parser("rel-cascade", help="[M3/S5b] 連鎖判定帳本:confirm/prune 寫回、list 活動齡、resume 續展差集")
     p.add_argument("verb", choices=["confirm", "prune", "list", "resume"])
@@ -9075,7 +9140,17 @@ def main():
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
 
+    if args.cmd == "decision-reindex" and getattr(args, "reindex_all", False):
+        try:
+            return cmd_decision_reindex(env, all_mode=True)
+        except (ValueError, RuntimeError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+
     if args.cmd in ("decision-supersede", "decision-add", "decision-reindex"):
+        if args.cmd == "decision-reindex" and not args.note:
+            print("ERROR: decision-reindex 需 <節點> 或 --all", file=sys.stderr)
+            return 2
         rel = env.find(args.note)
         if rel is None:
             print(f"ERROR: 找不到筆記: {args.note}", file=sys.stderr)

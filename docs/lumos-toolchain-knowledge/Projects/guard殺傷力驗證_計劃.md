@@ -8,11 +8,13 @@ tags:
   - status/done
 decisions:
   - content: 壞法人宣告(kill 配方進 decisions)+config 宣告 run_cmd,不做自動變異生成
+    id: d1
     context: 零依賴跨語言(C#/Kotlin/E2E/python)工具不內建語言知識;自動生成變異有等價變異不可判定問題(實務 4-39% 誤報)
     why_chosen: 人宣告的壞法保證語意有變(繞開等價變異,pytest-mutagen/ISO 26262 先例);run_cmd 沿 .lumos/lint.json 既有信任模型(專案自己宣告的指令);universalmutator ICSE 2018 實證文字層+外部指令 rc 跨語言可行
     decided: 2026-07-10
     valid: true
   - content: 四態判定(killed/survived/timeout/error)+baseline 前置,error 不得記 killed
+    id: d2
     context: 紅燈≠殺傷:本來就紅的測試會假殺、編譯錯的紅是最常見假殺來源
     why_chosen: cargo-mutants baseline 流程+timeout=baseline×5下限20s 整套照搬;PIT/cosmic-ray 的獨立 timeout 類別;survived 才 rc1(稻草人)、環境問題 rc2 分開
     decided: 2026-07-10
@@ -20,6 +22,7 @@ decisions:
     superseded_by: r1 審計折入:改六值 verdict(killed/timed_out歸killed類/survived/drifted/abort/error),timeout 歸 killed 對齊 PIT/cargo-mutants(變異致掛=被超時接住);原『獨立 timeout 類別』引用與 PIT 實際語意相反
     ended: 2026-07-10
   - content: 六值 verdict+timeout 歸 killed+baseline 前置;v1 砍 hydration 與 lockfile(否決位裁定:成本/風險大於收益)
+    id: d3
     context: r1/r2 panel 折入
     why_chosen: PIT 把 TIMED_OUT 記 killed(變異致掛=被接住);hydration 為邊緣便利換一片 binary/untracked 新風險面;lockfile 唯一命名已防碰撞、stale 死鎖反成新風險
     decided: 2026-07-10

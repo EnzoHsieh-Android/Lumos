@@ -21,16 +21,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-25_doctor-irreversible-hint]]
 decisions:
   - content: 採方案 A(regex 字面掃 diff +行 + soft warn);否決 B(跨 graph 節點比對)與 C(LLM 判可逆性)
+    id: d1
     context: 2026-06-22 日報 gap 提「漏標一個不可逆動作=靜默放行危險操作」,要把判可逆性從全靠人想到變機器提醒
     why_chosen: soft reminder 價值在「觸發思考」不在「精確鎖定節點」;B 因大量 Systems 無 [test:] link 會靜默漏提;C 的 LLM 判官無形式保證(gap 自承 weakness);維持「方法論工具靠確定性機制、不靠 LLM 自判」原則
     decided: 2026-06-25
     valid: true
   - content: Check H 刻意不寫 gov_events
+    id: d2
     context: design-loop r4/r5 canary 質疑為何不入治理帳;辯方反證 scripts/lumos:L660/666/699/1228-1230
     why_chosen: gov schema 為「blocked/warned 級 gate finding」,Check H 是 warn_soft 摩擦地板提醒(非 gate finding);且 Check H 無具體 Systems nodes 可記錄(nodes=[]),node-less gov_event 在 cmd_gov(L1228 q in r["nodes"])查不到任何節點,對 lumos gov <node> 消費端零可見性增益
     decided: 2026-06-25
     valid: true
   - content: 常數 IRREVERSIBLE_HINT_PATTERNS 與 helper 放可逆性軸群(IRREVERSIBLE_RE 附近),helper 內自帶 import subprocess
+    id: d3
     context: design-loop r1 canary 抓真 blocker:全檔 subprocess 皆函數內 lazy import、module-level 無 subprocess,module-level helper 不自帶 import 會 NameError;r2/r3 修放置位置
     why_chosen: 遵本檔既有慣例(可逆性 helper 群聚 + run_doctor 前向引用在呼叫時解析);lazy import 與 L339/L2298 等先例一致
     decided: 2026-06-25

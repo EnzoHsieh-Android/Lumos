@@ -23,11 +23,13 @@ summary: |-
   VERIFY:[[2026-07-04_pitfalls-code-loop]]
 decisions:
   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
+    id: d1
     context: 效能/併發主戰場在業務專案、治理面在 loop,擇一都缺半;純 prompt 違反 mechanical-not-motivational;全分支跑 code-loop 日常太貴
     why_chosen: 每軸都選機械可驗+分級控總量;bug canary 驗審查層醒著、mutation 驗測試層守著,兩者正交
     decided: 2026-07-04
     valid: true
   - content: 代碼 canary 用三道防污染(真代碼永不含+低耦合植入+溯源排除),不採純 mutation
+    id: d2
     context: 使用者質疑代碼 canary 污染風險比 spec 嚴重(假 hunk 改變語意、reviewer 推導衍生幻影 findings)
     why_chosen: 需醒著訊號(無則蓋章 reviewer 連 2 LGTM 空轉收斂,r9 opus 都漏抓);mutation 只驗測試層抓不到審查層敷衍;三道防污染把污染封到「必留可見痕跡」
     decided: 2026-07-04

@@ -8,6 +8,7 @@ tags:
   - status/done
 decisions:
   - content: 耦合度量採 ROSE 非對稱 confidence(shared/freq_A),不採 Code Maat 對稱平均
+    id: d1
     context: 漏改守衛本質有方向:改A該提醒B,與改B該提醒A是兩條獨立規則;README.en.md 每次都跟著 README.md 改(6/6)、反向不成立(6/16)
     alternatives_considered:
       - "Code Maat 對稱 degree = shared/average(revs_A,revs_B):實作同樣簡單,但頻率懸殊對(en-README 5 次 vs README 16 次)耦合度被平均稀釋,漏單向規則"
@@ -17,6 +18,7 @@ decisions:
     decided: 2026-07-10
     valid: true
   - content: 參數組 min_support=3/min_confidence=0.8/max_changeset=20,v1 無時間衰減
+    id: d2
     context: 小 repo(478 commits)警告型場景;假警報成本=信任崩壞;硬砍時間窗會餓死訊號
     alternatives_considered:
       - "ROSE navigation regime(support 1/conf 0.1):覆蓋率高但 precision 29%,警告型會狼來了"

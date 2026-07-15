@@ -21,16 +21,19 @@ summary: |-
   VERIFY:[[Verification/2026-06-26_lumos-deinit_跨平台]]
 decisions:
   - content: vault==root 鐵閘:偵測到 vault.resolve()==root.resolve() 時強制 keep-graph、絕不 rmtree,獨立於 root==_lumos_src 守衛
+    id: d1
     context: design-loop r3 canary 審計揪出的真 blocker:_vault_in 對 standalone vault(根目錄 MOC/+Systems)回傳 root 本身,deinit 預設刪 vault 會 rmtree 整個 repo;原 root==_lumos_src 守衛只擋 Lumos 源這一個 standalone repo,擋不住使用者自建知識庫
     why_chosen: 對主打防誤刪的指令,刪掉整個 repo 是不可逆災難;鐵閘獨立於來源守衛才能涵蓋任何 standalone-vault repo
     decided: 2026-06-26
     valid: true
   - content: 預設刪圖譜但置於三道安全網後(印清單+未commit警示、互動y確認、非tty無--yes則rc2拒刪)
+    id: d2
     context: 使用者要 deinit 完整逆轉 init(含圖譜);但圖譜是不可逆資料
     why_chosen: 預設完整逆轉符合對稱語義,安全網把不可逆風險收斂到明確確認;--keep-graph 為逃生口
     decided: 2026-06-26
     valid: true
   - content: 互動確認的 input() 包 try/except EOFError,讀不到確認時拒刪 return 2
+    id: d3
     context: Windows 真機驗證發現:某些終端 isatty() 回 True 但 stdin 實為 EOF,input() 會丟 EOFError
     why_chosen: 破壞性操作的安全預設是拒絕,對齊非互動中止;讀不到確認絕不刪
     decided: 2026-06-26

@@ -24,6 +24,7 @@ related:
   - "[[Issues/linter-gap實務隱患]]"
 decisions:
   - content: 走方案C：薄 collector + 共用候選池為新造，refuter 借 gapfill、drain 借自主 loop、落點仿 linter-gap
+    id: d1
     context: 三份 idioms 文件會過時/缺漏，既有『飛輪』靠人記得回填=實質不會發生；需把『該複查』機械觸發。三源(lint-watch/網搜/code-loop棄稿)產出需匯流
     why_chosen: 唯一同時滿足『共用 sink』又不重造 gapfill/loop 的方案；A 全新子系統重造已 dogfood 的 refuter/drain/落點(違零依賴家規)，B 全走既有軌會讓候選散在 lint-watch staging 與 linter-gap 兩處(破壞共用池、人要看兩地)
     alternatives_considered:
@@ -34,16 +35,19 @@ decisions:
     decided: 2026-07-12
     valid: true
   - content: round-1 修正:方案C→C'——borrow-design(gapfill反證哲學+lint-watch的staging形態)但refuter留痕/drain/框架監測各造薄新原語,不硬借canary-record(收斂專用)/自主loop(N=1單工)
+    id: d2
     context: round-1 design-loop 跨家族Codex否決席揭露:C3兩桶會讓無R真bug逃code-loop收斂閘(blocker)、canary-record無候選語意、自主loop N=1單工不容drain插槽、gapfill反證綁單專案與idioms跨專案通用相斥、lint-watch輸出已被治理層消費
     why_chosen: 保住三源完整迴路又修正blocker:C3改加法旁註(不動verdict/pre-push)、refuter/drain各造薄專用原語(仿形態不硬借)、C1b加回框架watcher補框架rot分類洞、明定框架特定判準(可替換庫選擇→駁/核心框架慣例→收)
     decided: 2026-07-12
     valid: true
   - content: round-2 修正:C'→C''拆兩層——機械層M(純lumos stdlib零LLM,cron可無人跑:版本偵測/池/去重/staging) + agent層A(Claude在場才跑:refuter/草案/C3旁註/C2網搜);交棒點=候選池status
+    id: d3
     context: round-2 design-loop 跨家族Codex否決席揭露infra-fit blocker:LLM判斷鏈(refuter/草案生成/C3旁註抽取)接不上零依賴stdlib的cron(lumos不spawn agent、code-loop reviewer無結構化parser、governance daily只是shell);另fcntl與工具鏈原生Windows支援衝突、lint-upgrades每日覆寫會漏、C1b監測對象(kotlin-stdlib≠Compose)不成立
     why_chosen: 拆層對齊lumos既有哲學(機械原語+Claude編排):M層可無人cron跑偵測,A層判斷鏈跟Claude session節奏(自主loop tick或skill);誠實承認A層非7×24無人=拆層換infra-fit的代價。並修:portable鎖(O_CREAT|O_EXCL非fcntl)、C1a游標讀seen.jsonl、C3結構化封閉區塊附出、6態狀態機(補deferred/staged)、gap採納回填R號、自引用斷路可執行偵測(IDIOMS_SELF_REVIEW旗標)
     decided: 2026-07-12
     valid: true
   - content: 3輪design-loop後暫停實作:架構(M/A拆層)收斂但整合接縫未收斂,人裁定收成設計資產。phase-1 MVP=M層+人手動skill(不碰C3 hook/自主loop整合,那些整合點不存在)
+    id: d4
     context: 3輪panel全GATE FAIL,跨家族Codex否決席3輪皆決定性:r1借用假設不符→C',r2 LLM鏈接不上cron→C''拆層,r3兩sonnet認證架構站住但Codex揭露A層3整合點(runner/skill、C3 code-loop hook、跨session旗標)在repo不存在。loop誠實揭露:全包=大整合工程非幾個薄原語
     why_chosen: 架構已穩、續推邊際遞減且接縫需真build(非spec patch);凍成golden保住三輪findings語料+架構決策,實作另議。phase-1只做真做得出的M層+人跑skill,C3/全自動列phase-2
     decided: 2026-07-12
