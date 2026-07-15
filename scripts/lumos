@@ -822,6 +822,16 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
     _tidx = build_typed_index(env)
     typed_in = {t: [(s, e) for (s, e) in pairs if e in ("verified_by", "plan_refs")]
                 for t, pairs in _tidx["rev"].items()}
+    # [M3] ledger 抑制:掃 rel-cascade 帳本折疊出 terminal 事件(判過的粒度鍵)——terminal ts
+    #   不早於決策 ended(日級;同日判定=翻案後立即處理的常態)→ 該邊跳過(解「判過無關卻每輪重報」
+    #   永久假陽性)。E2 定位帳檔=全目錄掃(復用 list 的讀法),不需重建含秒數的檔名。
+    _led_terminal = {}
+    _rcd = _rel_cascade_dir(env)
+    if _rcd.exists():
+        for _p in sorted(_rcd.glob("*.jsonl")):
+            _h, _trs = _ledger_read(_p)
+            for _k, _t in _ledger_fold(_trs).items():
+                _led_terminal[_k] = max(_led_terminal.get(_k, ""), str(_t.get("ts", "")))
     build_on_dead = []
     for drel, dn in sorted(notes.items()):
         for d in parse_decisions(dn.fm_lines):
@@ -844,6 +854,11 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
                         mm = re.fullmatch(r"(.+?)#(d\d+)", s)
                         return bool(mm and did and mm.group(2) == did and env.resolve(mm.group(1)) == drel)
                     if not any(_hits(s) for s in refs):
+                        continue
+                # [M3] ledger 跳過:這筆 (鄰居×邊型×root決策) 已有 terminal 判定且不早於 ended → 判過,不重報
+                if did:
+                    _lts = _led_terminal.get((arel, etype, f"{drel}#{did}"), "")
+                    if _lts and _lts[:10] >= str(d.get("ended", ""))[:10]:
                         continue
                 build_on_dead.append(
                     f"{arel} --{etype}--> {drel}(決策「{dcontent}」{ended} 翻案,來源自 {aupd} 未更新)")
@@ -4554,6 +4569,208 @@ def cmd_decision_reindex(env, rel):
                 and pre_ids <= set(ids))                             # 既有 id 未被動
     atomic_write_verify(path, new_lines, "decisions", _check)
     print(f"✓ reindex {rel}: 回填 {len(plan)} 條 id({plan[0][1]}..{plan[-1][1]});既有 {len(pre_ids)} 條跳過")
+    return 0
+
+
+# ── [M3/S5b] rel-cascade ledger:連鎖判定的 append-only 帳本 ──
+# 設計/合約見 Projects/關係層主網_實作計畫 M3(3 輪 design-loop 釘死):
+# 每 cascade 一檔 governance/rel-cascade/<cascade-id>.jsonl;行帶 event 判別欄
+# (header|transition);重放折疊=只折 transition、同粒度鍵取檔內物理序最後一筆(沿
+# canary-log 慣例:讀 append 序、不 ts-sort);torn 行(壞 JSON)=未提交,跳過。
+
+CASCADE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+REL_CASCADE_EDGES = ("verified_by", "plan_refs")   # 方向語意明確的邊(related 弱,v1 恆不展)
+
+
+def _rel_cascade_dir(env):
+    """帳本目錄=<repo root>/governance/rel-cascade(可追蹤逐 cascade 檔,非 vault-parent 隱藏帳慣例——
+    刻意設計)。repo root:docs/<slug>-knowledge 型= docs 的上層;standalone vault=vault 自身
+    (絕不往系統 temp 等共用父層爬;.jsonl 非 .md,load_vault 不掃、無污染)。"""
+    root = env.vault.parent.parent if env.vault.parent.name == "docs" else env.vault
+    return root / "governance" / "rel-cascade"
+
+
+def _utc_ts():
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def _ledger_append(path, obj):
+    """[M3 並行合約] O_APPEND fd + 單次 os.write() 整行 bytes(≤4KB 寫前拒,不截斷)。
+    POSIX regular file 實務原子;Windows/跨平台 best-effort、預期單寫者(誠實降級,r1 D10)。
+    無 O_CREAT——confirm/prune 永不建檔(建檔只屬觸發端 rel_cascade_create,r2 R4)。"""
+    import json
+    data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+    if len(data) > 4096:
+        raise ValueError(f"事件行 {len(data)}B 超過 4KB 上限,寫前拒絕(不截斷、不靜默破壞原子假設)")
+    fd = os.open(str(path), os.O_WRONLY | os.O_APPEND)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
+def rel_cascade_create(env, root_gid, node_rel):
+    """[M3 定址合約] 觸發端唯一鑄造者:mint cascade-id=c-<UTC秒ts>-<sha1(root全域id)[:8]>(-<n>)?
+    + O_CREAT|O_EXCL 建檔寫 header。同秒撞名遞增序號(不等下秒;上限 99 防異常迴圈)。
+    純生成、不含節點名——中文 rel 無淨化問題(r1 D5 消解)。回 cascade_id。"""
+    import datetime, hashlib, json
+    d = _rel_cascade_dir(env)
+    d.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+    base = f"c-{ts}-{hashlib.sha1(root_gid.encode('utf-8')).hexdigest()[:8]}"
+    for suffix in [""] + [f"-{i}" for i in range(1, 100)]:
+        cid = base + suffix
+        p = d / (cid + ".jsonl")
+        try:
+            fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            continue
+        try:
+            hdr = json.dumps({"event": "header", "ts": _utc_ts(),
+                              "root_decision_id": root_gid, "node": node_rel},
+                             ensure_ascii=False) + "\n"
+            os.write(fd, hdr.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return cid
+    raise RuntimeError("cascade-id 同名重試逾上限(99)——目錄異常?")
+
+
+def _ledger_read(path):
+    """重放讀取:append 序逐行 parse;壞 JSON 行跳過(torn=未提交事件,丟棄正確)。
+    header=首行且 event:header 才算(torn header → None,root 不可恢復)。回 (header|None, transitions)。"""
+    import json
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return None, []
+    header, trans = None, []
+    for i, line in enumerate(raw.splitlines()):
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        if i == 0 and o.get("event") == "header":
+            header = o
+        elif o.get("event") == "transition":
+            trans.append(o)
+    return header, trans
+
+
+def _ledger_fold(transitions):
+    """狀態折疊:同 (neighbor×edge_type×from_decision_id) 取物理序最後一筆。"""
+    state = {}
+    for t in transitions:
+        k = (t.get("neighbor"), t.get("edge_type"), t.get("from_decision_id"))
+        if all(k):
+            state[k] = t
+    return state
+
+
+def _validate_cascade_id(cid):
+    if not CASCADE_ID_RE.match(cid) or ".." in cid:
+        raise ValueError(f"cascade-id 含非法字元(限 [A-Za-z0-9._-],擋 ../): {cid}")
+
+
+def _validate_from_gid(from_id):
+    if re.fullmatch(r"d\d+", from_id.strip()):
+        raise ValueError(f"--from 需全域格式 <節點rel>#d<N>,裸 {from_id} 拒收(裸格式會讓折疊鍵跨節點誤合)")
+    if not re.fullmatch(r".+#d\d+", from_id.strip()):
+        raise ValueError(f"--from 格式非 <節點rel>#d<N>: {from_id}")
+
+
+def cmd_rel_cascade_write(env, verb, neighbor, cascade_id, from_id, edge, by):
+    """[M3] confirm|prune:append 一筆 transition。寫前驗證(R4):檔存在(不存在→拒,建檔只屬觸發端)、
+    header 合法(torn→拒,與 resume rc=1 救援語意按指令類別分流)、--from==header root(全鏈同源)。"""
+    _validate_cascade_id(cascade_id)
+    _validate_from_gid(from_id)
+    nrel = env.find(neighbor)
+    if nrel is None:
+        raise ValueError(f"找不到鄰居節點: {neighbor}")
+    p = _rel_cascade_dir(env) / (cascade_id + ".jsonl")
+    if not p.exists():
+        raise ValueError(f"cascade 檔不存在: {cascade_id}——帳本由 decision-supersede 觸發端建立,confirm/prune 永不建檔")
+    header, _ = _ledger_read(p)
+    if header is None:
+        raise ValueError("header 損毀/不合法,寫前驗證拒(該 cascade 交 resume 標不可恢復+補網 E2 兜底)")
+    if header.get("root_decision_id") != from_id.strip():
+        raise ValueError(f"--from 不屬本 cascade(header root={header.get('root_decision_id')});v1 全鏈同源")
+    state = "confirmed" if verb == "confirm" else "pruned"
+    _ledger_append(p, {"event": "transition", "ts": _utc_ts(), "neighbor": nrel,
+                       "edge_type": edge, "from_decision_id": from_id.strip(),
+                       "state": state, "by": by})
+    print(f"✓ rel-cascade {verb} {nrel} --edge {edge} ({cascade_id}, by={by})")
+    return 0
+
+
+def cmd_rel_cascade_list(env, stale_days=None):
+    """[M3] 以活動齡列 cascade(--stale N=最後事件 ts 早於 N 天;不判開放/完成精確分類——
+    活動齡才是可算的 crash/失敗偵測器)。stdout、查無 rc=0 空輸出。"""
+    import datetime
+    d = _rel_cascade_dir(env)
+    if not d.exists():
+        return 0
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for p in sorted(d.glob("*.jsonl")):
+        header, trans = _ledger_read(p)
+        cid = p.stem
+        root = header.get("root_decision_id") if header else "(header 損毀,root 不可恢復)"
+        all_ts = [o.get("ts", "") for o in ([header] if header else []) + trans if o.get("ts")]
+        last = max(all_ts) if all_ts else ""
+        if stale_days is not None and last:
+            try:
+                age = (now - datetime.datetime.fromisoformat(last)).days
+            except ValueError:
+                age = None
+            if age is not None and age < stale_days:
+                continue
+        folded = _ledger_fold(trans)
+        n_c = sum(1 for t in folded.values() if t.get("state") == "confirmed")
+        n_p = sum(1 for t in folded.values() if t.get("state") == "pruned")
+        print(f"{cid}  root={root}  last={last or '?'}  confirmed={n_c} pruned={n_p}")
+    return 0
+
+
+def cmd_rel_cascade_resume(env, cascade_id):
+    """[M3] 「續」的交付項(D16):重放折疊→取 header root→重展 root+最終態 confirmed 鄰居
+    (先 confirm 後 prune 不重展)→對粒度鍵差集→列剩餘待判。decision_id=root 全鏈攜帶(R3)。
+    輸出:首行 CASCADE 行(編排者跨 session 拿 --from 不需讀檔)+NEIGHBOR 行 schema。
+    中斷接續/escalate 待人項/誤 prune 翻案補跑下游 三場景共用。torn header → rc=1。"""
+    _validate_cascade_id(cascade_id)
+    p = _rel_cascade_dir(env) / (cascade_id + ".jsonl")
+    if not p.exists():
+        raise ValueError(f"cascade 檔不存在: {cascade_id}")
+    header, trans = _ledger_read(p)
+    if header is None:
+        print(f"✗ {cascade_id}: header 損毀,root 不可恢復——本 cascade 放棄,交補網 E2 兜底", file=sys.stderr)
+        return 1
+    root_gid = header.get("root_decision_id", "")
+    node = header.get("node", "")
+    state = _ledger_fold(trans)
+    confirmed = sorted({k[0] for k, t in state.items() if t.get("state") == "confirmed"})
+    seeds = [node] + [c for c in confirmed if c != node]
+    idx = build_typed_index(env)
+    print(f"CASCADE {cascade_id} ROOT {root_gid}")
+    pending = []
+    seen = set()
+    for s in seeds:   # visited=root∪最終態 confirmed;粒度鍵冪等,重複展開無害只多列
+        for (src, etype) in idx["rev"].get(s, []):
+            if etype not in REL_CASCADE_EDGES:
+                continue
+            k = (src, etype, root_gid)
+            if k in state or k in seen:
+                continue
+            seen.add(k)
+            inv_n = len(extract_contracts(env.notes[src])[0]) if src in env.notes else 0
+            tag = f" INVARIANT_COUNT {inv_n}" if inv_n else ""
+            pending.append(f"NEIGHBOR {src} EDGE {etype}{tag}")
+        for (asrc, lit, aetype, cands) in idx["ambiguous"]:
+            if s in cands and aetype in REL_CASCADE_EDGES and (asrc, lit, aetype) not in seen:
+                seen.add((asrc, lit, aetype))
+                pending.append(f"NEIGHBOR-AMBIG {lit} CANDIDATES {len(cands)}")
+    for line in pending:
+        print(line)
     return 0
 
 
@@ -8416,6 +8633,15 @@ def main():
     p = sub.add_parser("decision-reindex", help="[M1/P2] 回填遷移:對無 id 決策從既有最大 id+1 接續編號(冪等,單節點)")
     p.add_argument("note")
 
+    p = sub.add_parser("rel-cascade", help="[M3/S5b] 連鎖判定帳本:confirm/prune 寫回、list 活動齡、resume 續展差集")
+    p.add_argument("verb", choices=["confirm", "prune", "list", "resume"])
+    p.add_argument("arg", nargs="?", help="confirm/prune=<鄰居節點>;resume=<cascade-id>;list 不吃")
+    p.add_argument("--cascade-id", dest="rc_cid", help="confirm/prune 必填(帳本由 supersede 觸發端建立)")
+    p.add_argument("--from", dest="rc_from", help="root 全域決策 id <節點rel>#d<N>(裸 dN 拒收;v1 全鏈同源)")
+    p.add_argument("--edge", dest="rc_edge", choices=["verified_by", "plan_refs"], help="邊型(方向語意明確者)")
+    p.add_argument("--by", dest="rc_by", choices=["ai", "human"], help="誰判的(ai 判的可抽查/翻案)")
+    p.add_argument("--stale", dest="rc_stale", type=int, help="list:只列最後事件早於 N 天的 cascade(活動齡)")
+
     p = sub.add_parser("decision-add", help="T3 巢狀:新增一條 ADR 決策")
     p.add_argument("note")
     p.add_argument("content")
@@ -8740,6 +8966,27 @@ def main():
         except (ValueError, RuntimeError) as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
+    if args.cmd == "rel-cascade":
+        try:
+            if args.verb in ("confirm", "prune"):
+                missing = [f for f, v in (("<鄰居>", args.arg), ("--cascade-id", args.rc_cid),
+                                          ("--from", args.rc_from), ("--edge", args.rc_edge),
+                                          ("--by", args.rc_by)) if not v]
+                if missing:
+                    print(f"ERROR: rel-cascade {args.verb} 缺參數: {' '.join(missing)}", file=sys.stderr)
+                    return 2
+                return cmd_rel_cascade_write(env, args.verb, args.arg, args.rc_cid,
+                                             args.rc_from, args.rc_edge, args.rc_by)
+            if args.verb == "resume":
+                if not args.arg:
+                    print("ERROR: rel-cascade resume 需 <cascade-id>", file=sys.stderr)
+                    return 2
+                return cmd_rel_cascade_resume(env, args.arg)
+            return cmd_rel_cascade_list(env, stale_days=args.rc_stale)
+        except (ValueError, RuntimeError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+
     if args.cmd in ("decision-supersede", "decision-add", "decision-reindex"):
         rel = env.find(args.note)
         if rel is None:

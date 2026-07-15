@@ -38,6 +38,7 @@ decisions:
     valid: true
 verified_by:
   - "[[Verification/2026-07-15_主網M1_決策穩定ID]]"
+  - "[[Verification/2026-07-15_主網M3_cascade帳本]]"
 ---
 # lumos-cli-write
 

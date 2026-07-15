@@ -574,6 +574,147 @@ def t_decision_reindex():
     check("reindex 無 decisions → rc=2", r.returncode == 2, r.stderr)
 
 
+# ══ M3/S5b rel-cascade ledger ══
+
+def _lm():
+    from importlib.machinery import SourceFileLoader
+    return SourceFileLoader("lumos_m3", GRAPHCTL).load_module()
+
+
+def t_rel_cascade_create_and_fold():
+    v = mkvault()
+    write(v, "Projects/決策源.md", "type: project\nstatus: done")
+    write(v, "Systems/鄰居甲.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/決策源]]\"")
+    lm = _lm(); env = lm.Env(v)
+    gid = "Projects/決策源.md#d1"
+    cid = lm.rel_cascade_create(env, gid, "Projects/決策源.md")
+    check("M3 中文 root 生成 cascade-id 合 pattern(D5 生成側)",
+          bool(__import__("re").fullmatch(r"c-\d{14}-[0-9a-f]{8}", cid)), cid)
+    p = v / "governance" / "rel-cascade" / (cid + ".jsonl")
+    check("M3 O_EXCL 建檔+首行 header(root 全域格式存檔內)",
+          p.exists() and '"event": "header"' in p.read_text().splitlines()[0]
+          and gid in p.read_text().splitlines()[0], p.read_text())
+    # confirm → prune 同粒度鍵:折疊取物理序最後一筆
+    run(v, "rel-cascade", "confirm", "鄰居甲", "--cascade-id", cid, "--from", gid,
+        "--edge", "verified_by", "--by", "ai", expect_rc=0)
+    run(v, "rel-cascade", "prune", "鄰居甲", "--cascade-id", cid, "--from", gid,
+        "--edge", "verified_by", "--by", "human", expect_rc=0)
+    _, trans = lm._ledger_read(p)
+    st = lm._ledger_fold(trans)
+    k = ("Systems/鄰居甲.md", "verified_by", gid)
+    check("M3 折疊=最後一筆(confirm 後 prune → pruned)",
+          st.get(k, {}).get("state") == "pruned" and len(trans) == 2, str(st))
+    # torn 尾行:手動 append 半行 → 重放跳過不炸
+    with open(p, "a", encoding="utf-8") as f:
+        f.write('{"event":"transition","ts":"2026-')
+    _, trans2 = lm._ledger_read(p)
+    check("M3 torn 尾行跳過不炸(未提交=丟棄)", len(trans2) == 2, str(len(trans2)))
+    # 4KB 寫前拒
+    try:
+        lm._ledger_append(p, {"event": "transition", "pad": "x" * 5000})
+        check("M3 4KB 寫前拒", False, "未拒")
+    except ValueError as e:
+        check("M3 4KB 寫前拒(不截斷)", "4KB" in str(e), str(e))
+
+
+def t_rel_cascade_prewrite_validation():
+    v = mkvault()
+    write(v, "Projects/D.md", "type: project\nstatus: done")
+    write(v, "Systems/A.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/D]]\"")
+    lm = _lm(); env = lm.Env(v)
+    gid = "Projects/D.md#d1"
+    cid = lm.rel_cascade_create(env, gid, "Projects/D.md")
+    # ①檔不存在
+    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", "c-19990101000000-deadbeef",
+            "--from", gid, "--edge", "verified_by", "--by", "ai")
+    check("M3 檔不存在 rc=2(confirm 永不建檔)", r.returncode == 2 and "永不建檔" in r.stderr, r.stderr)
+    # ②裸 dN
+    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid, "--from", "d1",
+            "--edge", "verified_by", "--by", "ai")
+    check("M3 裸 dN 拒收 rc=2", r.returncode == 2 and "裸" in r.stderr, r.stderr)
+    # ③--from 不屬本 cascade
+    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid, "--from", "Projects/D.md#d9",
+            "--edge", "verified_by", "--by", "ai")
+    check("M3 --from≠header root rc=2", r.returncode == 2 and "不屬本 cascade" in r.stderr, r.stderr)
+    # ④path 安全
+    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", "../evil",
+            "--from", gid, "--edge", "verified_by", "--by", "ai")
+    check("M3 path 擋 ../ rc=2", r.returncode == 2, r.stderr)
+    # ⑤torn header → 寫指令 rc=2(與 resume rc=1 按指令類別分流)
+    tp = v / "governance" / "rel-cascade" / "c-20260101000000-aaaaaaaa.jsonl"
+    tp.write_text('{"event":"header","ts":"2026-', encoding="utf-8")
+    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", "c-20260101000000-aaaaaaaa",
+            "--from", gid, "--edge", "verified_by", "--by", "ai")
+    check("M3 torn header 寫前拒 rc=2", r.returncode == 2 and "header 損毀" in r.stderr, r.stderr)
+    r = run(v, "rel-cascade", "resume", "c-20260101000000-aaaaaaaa")
+    check("M3 torn header resume rc=1(救不回信號)", r.returncode == 1 and "不可恢復" in r.stderr, r.stderr)
+
+
+def t_rel_cascade_resume_chain():
+    v = mkvault()
+    # 圖:A --verified_by--> D;B --plan_refs--> D;C --verified_by--> A(hop-2)
+    write(v, "Projects/D.md", "type: project\nstatus: done")
+    write(v, "Systems/A.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/D]]\"")
+    write(v, "Verification/B.md", "type: verification\nstatus: pass\ndate: 2026-01-01\nplan_refs:\n  - \"[[Projects/D]]\"")
+    write(v, "Systems/C.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Systems/A]]\"")
+    lm = _lm(); env = lm.Env(v)
+    gid = "Projects/D.md#d1"
+    cid = lm.rel_cascade_create(env, gid, "Projects/D.md")
+    r = run(v, "rel-cascade", "resume", cid)
+    check("M3 resume 首行 CASCADE 行(含 root,跨 session 免讀檔)",
+          r.stdout.splitlines()[0] == f"CASCADE {cid} ROOT {gid}", r.stdout)
+    check("M3 初始 pending=hop-1(A,B),hop-2 C 未展",
+          "NEIGHBOR Systems/A.md EDGE verified_by" in r.stdout
+          and "NEIGHBOR Verification/B.md EDGE plan_refs" in r.stdout
+          and "Systems/C.md" not in r.stdout, r.stdout)
+    # confirm A → 展下一跳:C 出現、A 不再 pending
+    run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid, "--from", gid,
+        "--edge", "verified_by", "--by", "ai", expect_rc=0)
+    r = run(v, "rel-cascade", "resume", cid)
+    check("M3 confirm A 後重展:C 進待判、A 出清單",
+          "NEIGHBOR Systems/C.md EDGE verified_by" in r.stdout
+          and "NEIGHBOR Systems/A.md" not in r.stdout, r.stdout)
+    # prune A(最終態變 pruned)→ C 不再展(只展最終態 confirmed)
+    run(v, "rel-cascade", "prune", "A", "--cascade-id", cid, "--from", gid,
+        "--edge", "verified_by", "--by", "human", expect_rc=0)
+    r = run(v, "rel-cascade", "resume", cid)
+    check("M3 最終態 pruned → 不重展下游(歷史 confirmed 不算)",
+          "Systems/C.md" not in r.stdout, r.stdout)
+    # 誤 prune 翻案:重 confirm → resume 補跑下游(E2E 第二鏈)
+    run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid, "--from", gid,
+        "--edge", "verified_by", "--by", "human", expect_rc=0)
+    r = run(v, "rel-cascade", "resume", cid)
+    check("M3 誤 prune 翻案(重 confirm)→ 下游 C 補跑進待判",
+          "NEIGHBOR Systems/C.md EDGE verified_by" in r.stdout, r.stdout)
+    # list 活動齡
+    r = run(v, "rel-cascade", "list")
+    check("M3 list 列出 cascade+折疊統計", cid in r.stdout and "confirmed=1" in r.stdout, r.stdout)
+    r = run(v, "rel-cascade", "list", "--stale", "1")
+    check("M3 list --stale 1:剛動過的不列(活動齡)", cid not in r.stdout, r.stdout)
+
+
+def t_check_e2_ledger_suppress():
+    v = mkvault()
+    write(v, "Projects/D.md",
+          "type: project\nstatus: done\n"
+          "decisions:\n"
+          "  - content: 被翻的\n    id: d1\n    decided: 2026-05-01\n    valid: false\n"
+          "    superseded_by: 新\n    ended: 2026-06-10", body="# D\n")
+    write(v, "Systems/A.md",
+          "type: system\nstatus: done\nupdated: 2026-06-01\nverified_by:\n  - \"[[Projects/D]]\"", body="# A\n")
+    r = run(v, "doctor")
+    check("M3 抑制前:E2 標 A(落後邊)", "發現 1 條可能建在被推翻決策上" in r.stdout, r.stdout)
+    # 主網判過:cascade + prune A(terminal ts=今>=ended)→ 補網不重報
+    lm = _lm(); env = lm.Env(v)
+    gid = "Projects/D.md#d1"
+    cid = lm.rel_cascade_create(env, gid, "Projects/D.md")
+    run(v, "rel-cascade", "prune", "A", "--cascade-id", cid, "--from", gid,
+        "--edge", "verified_by", "--by", "human", expect_rc=0)
+    r = run(v, "doctor")
+    check("M3 抑制後:主/補網不重報(pruned terminal ts>=ended → E2 跳過)",
+          "無「建在被推翻決策上」的落後邊" in r.stdout, r.stdout)
+
+
 # ══ M2/P0 typed-edge 反向索引 ══
 
 def t_typed_index_contracts():
