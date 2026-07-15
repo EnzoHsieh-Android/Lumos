@@ -309,6 +309,64 @@ def status_of(env, rel):
     return v if isinstance(v, str) else ""
 
 
+TYPED_EDGE_FIELDS = ("verified_by", "plan_refs", "related")
+
+
+def build_typed_index(env):
+    """[M2/P0] typed-edge 反向索引——從 frontmatter 具名欄位(verified_by/plan_refs/related)建
+    「每節點 ← 誰、以哪種邊型指向我」。補 Env.edges 無型別的洞(建圖層以 target 去重丟來源欄位)。
+    每次呼叫現建現用(天生新鮮、無持久化=無腐爛)。合約(關係層主網 M2):
+    - 只索引「整個值恰為一個 wikilink」(沿 load_vault fm_targets 規則);殘留 scalar → scalars
+      warnings、不進索引(不靜默納入)。block scalar 欄位整段排除(鐵則 2)。
+    - ghost(unresolved)→ ghosts 清單(不靜默丟);path 式不 fallback 到 stem(那是靜默猜)。
+    - 同名無路徑 [[X]] 多篇候選 → ambiguous + 候選清單(嚴禁靜默指第一篇——不走 env.resolve,
+      直接查 by_stem 候選數)。
+    - 去重鍵 (source, target字面, type);ambiguous 條目 target=原 wikilink 字面。
+    回傳 dict: rev={target_rel:[(source_rel,etype)]} fwd={source_rel:{etype:[target_rel]}}
+              ghosts=[(src,字面,etype)] ambiguous=[(src,字面,etype,[候選])] scalars=[(src,etype,值)]"""
+    rev = defaultdict(list)
+    fwd = defaultdict(lambda: defaultdict(list))
+    ghosts, ambiguous, scalars = [], [], []
+    seen = set()
+    for rel, n in sorted(env.notes.items()):
+        for etype in TYPED_EDGE_FIELDS:
+            if etype in n.block_keys:
+                continue
+            for item in as_list(n.fields.get(etype)):
+                s = str(item).strip()
+                if not s:
+                    continue
+                m = re.fullmatch(r"\[\[([^\[\]]+?)\]\]", s)
+                if not m:
+                    scalars.append((rel, etype, s))
+                    continue
+                t = nfc(m.group(1).split("|")[0].split("#")[0].strip())
+                if not t:
+                    continue
+                key = (rel, t, etype)
+                if key in seen:
+                    continue
+                seen.add(key)
+                tt = t[:-3] if t.lower().endswith(".md") else t
+                if "/" in tt:
+                    cand = tt + ".md"
+                    if cand in env.notes:
+                        rev[cand].append((rel, etype))
+                        fwd[rel][etype].append(cand)
+                    else:
+                        ghosts.append((rel, t, etype))
+                else:
+                    cands = env.by_stem.get(tt.lower(), [])
+                    if len(cands) == 1:
+                        rev[cands[0]].append((rel, etype))
+                        fwd[rel][etype].append(cands[0])
+                    elif not cands:
+                        ghosts.append((rel, t, etype))
+                    else:
+                        ambiguous.append((rel, t, etype, sorted(cands)))
+    return {"rev": rev, "fwd": fwd, "ghosts": ghosts, "ambiguous": ambiguous, "scalars": scalars}
+
+
 # ═══════════════════════ doctor ═══════════════════════
 
 def _stem_hit(stem, text):
@@ -758,13 +816,12 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
             return datetime.date.fromisoformat(str(s)[:10])
         except (ValueError, TypeError):
             return None
-    typed_in = defaultdict(list)                 # target → [(source, edge_type)],只收方向語意明確的邊
-    for arel, an in notes.items():
-        for etype in ("verified_by", "plan_refs"):
-            for item in as_list(an.fields.get(etype)):
-                t = env.resolve(link_target(item))
-                if t:
-                    typed_in[t].append((arel, etype))
+    # [M2] 內聯反查遷移至 build_typed_index 共用(P0);E2 只消費 resolved(ghost/ambiguous
+    #   不拿來做時序判定——ghost 交既有 ghost 檢查、ambiguous 由 M4 消費端浮出)。
+    #   只收方向語意明確的邊(related 弱、排除)。
+    _tidx = build_typed_index(env)
+    typed_in = {t: [(s, e) for (s, e) in pairs if e in ("verified_by", "plan_refs")]
+                for t, pairs in _tidx["rev"].items()}
     build_on_dead = []
     for drel, dn in sorted(notes.items()):
         for d in parse_decisions(dn.fm_lines):

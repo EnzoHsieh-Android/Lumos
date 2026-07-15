@@ -574,6 +574,49 @@ def t_decision_reindex():
     check("reindex 無 decisions → rc=2", r.returncode == 2, r.stderr)
 
 
+# ══ M2/P0 typed-edge 反向索引 ══
+
+def t_typed_index_contracts():
+    v = mkvault()
+    write(v, "Systems/A.md",
+          "type: system\nstatus: done\n"
+          "verified_by:\n  - \"[[Verification/V1]]\"\n  - \"[[Verification/V1]]\"\n"   # 重複→去重
+          "plan_refs:\n  - \"[[Projects/P1]]\"\n"
+          "related:\n  - \"[[Ghost不存在]]\"\n  - \"殘留scalar非wikilink\"")
+    write(v, "Verification/V1.md", "type: verification\nstatus: pass\ndate: 2026-01-01")
+    write(v, "Projects/P1.md", "type: project\nstatus: done")
+    # 同名歧義:兩篇都叫 Dup,B 用無路徑 [[Dup]] 指
+    write(v, "Systems/Dup.md", "type: system\nstatus: done")
+    write(v, "Projects/Dup.md", "type: project\nstatus: done")
+    write(v, "Systems/B.md", "type: system\nstatus: done\nrelated:\n  - \"[[Dup]]\"")
+    from importlib.machinery import SourceFileLoader
+    lm = SourceFileLoader("lumos_m2", GRAPHCTL).load_module()
+    env = lm.Env(v)
+    idx = lm.build_typed_index(env)
+    rv = idx["rev"]
+    check("M2 反向:V1 ← A(verified_by) 且去重成 1 筆",
+          rv.get("Verification/V1.md") == [("Systems/A.md", "verified_by")], str(dict(rv)))
+    check("M2 反向:P1 ← A(plan_refs)",
+          rv.get("Projects/P1.md") == [("Systems/A.md", "plan_refs")], str(dict(rv)))
+    check("M2 正反向對稱", idx["fwd"]["Systems/A.md"]["verified_by"] == ["Verification/V1.md"]
+          and idx["fwd"]["Systems/A.md"]["plan_refs"] == ["Projects/P1.md"], str(dict(idx["fwd"])))
+    check("M2 ghost 不靜默丟(標進 ghosts)",
+          ("Systems/A.md", "Ghost不存在", "related") in idx["ghosts"], str(idx["ghosts"]))
+    check("M2 scalar 拒斥進 warnings 不進索引",
+          ("Systems/A.md", "related", "殘留scalar非wikilink") in idx["scalars"]
+          and not any("殘留" in t for t in rv), str(idx["scalars"]))
+    amb = idx["ambiguous"]
+    check("M2 同名歧義不靜默指第一篇(記候選清單)",
+          len(amb) == 1 and amb[0][0] == "Systems/B.md" and amb[0][1] == "Dup"
+          and sorted(amb[0][3]) == ["Projects/Dup.md", "Systems/Dup.md"]
+          and not any(p == ("Systems/B.md", "related") for pairs in rv.values() for p in pairs),
+          str(amb))
+    # 投影比較:每條 resolved typed edge 必存在於 Env.edges(超集,不做集合等價)
+    out_e, _ = env.edges
+    proj_ok = all(t in out_e.get(s, []) for t, pairs in rv.items() for (s, _e) in pairs)
+    check("M2 投影比較:resolved typed edge ⊆ Env.edges", proj_ok, str(dict(rv)))
+
+
 def t_check_e3_intent_chain():
     v = mkvault()
     # 目標節點 D:d1 已翻案、d2 有效

@@ -40,6 +40,7 @@ verified_by:
   - "[[Verification/2026-07-14_relguard_E1失效背書]]"
   - "[[Verification/2026-07-14_relguard_E2建在被推翻決策上]]"
   - "[[Verification/2026-07-15_主網M1_決策穩定ID]]"
+  - "[[Verification/2026-07-15_主網M2_typed-edge索引]]"
 ---
 # lumos-cli-read
 
