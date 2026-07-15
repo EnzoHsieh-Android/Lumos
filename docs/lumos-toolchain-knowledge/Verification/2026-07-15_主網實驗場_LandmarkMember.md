@@ -38,5 +38,8 @@ tags:
 2. **INVARIANT_COUNT 在真資料上有效**：POS-API/票券系統各 4 條合約的顯著度提示，正是判斷閘要的 blast-radius 信號。
 3. installed lumos＝symlink 即生效——實驗場零部署成本。
 
+## 四、實驗場回饋修（E1↔Check3 規則矛盾，實錘→即修）
+按 E1 建議拔除 5 條死背書後，Check 3 反咬 4 條「verified_by 漏寫」——stale 驗證內文仍連模組，雙向義務與 E1 打架（拔了報漏寫、掛回報死背書，無解迴圈）。**工具側修**：Check 3 對 stale/fail 驗證豁免（內文連結留作歷史導航，不構成雙向義務）；`t_check3_skips_stale_verification` 正反例釘死（stale 豁免／pass 仍強索）。LandmarkMember 復掃：E1 清零、Check 3 清零、僅剩 1 條與本案無關的 pre-existing orphan。**這正是實驗場的意義——規則對打只有真資料撞得出來。**
+
 ## 相關模組
 - [[關係層主網_實作計畫]]（M1-M4 整包 + 實驗場 ✅；後續=真 vault live 採用觀察）

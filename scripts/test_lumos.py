@@ -787,6 +787,22 @@ def t_impact_node_mode():
     check("M4 --node×--file 互斥 rc=2", r.returncode == 2, r.stderr)
 
 
+def t_check3_skips_stale_verification():
+    """E1↔Check3 矛盾修(LandmarkMember 實驗場實錘):stale/fail 驗證內文連 Systems 不再構成
+    雙向義務——照 E1 拔死背書後 Check 3 不得反過來報漏寫。pass 驗證仍照常強索(反例)。"""
+    v = mkvault()
+    write(v, "Systems/S.md", "type: system\nstatus: done")           # 無 verified_by
+    write(v, "Verification/VStale.md", "type: verification\nstatus: stale\ndate: 2026-01-01",
+          body="# VStale\n驗 [[Systems/S]]\n")                        # stale 連 S → 不索回掛
+    write(v, "Verification/VPass.md", "type: verification\nstatus: pass\ndate: 2026-01-02",
+          body="# VPass\n驗 [[Systems/S]]\n")                         # pass 連 S → 照常索
+    r = run(v, "doctor")
+    check("Check3 跳過 stale 驗證(拔死背書後不反咬漏寫)",
+          "VStale" not in r.stdout.split("[3/4]")[1].split("[4/4]")[0], r.stdout)
+    check("Check3 對 pass 驗證仍強索回掛(不過度豁免)",
+          "S.md 漏: VPass" in r.stdout, r.stdout)
+
+
 def t_rel_cascade_hardening():
     """code-loop r1 六修回歸:畸形行 fold 防禦閘(MUT1)/空殼 header(CX2)/尾端換行(A3)/
     symlink 拒斥(CX1)/OSError→rc=2(B3);短寫驗證(B1)為 os.write 合約、以 code 檢查存在性錨。"""
