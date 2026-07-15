@@ -41,6 +41,7 @@ verified_by:
   - "[[Verification/2026-07-15_主網M1_決策穩定ID]]"
   - "[[Verification/2026-07-15_主網M3_cascade帳本]]"
   - "[[Verification/2026-07-15_主網M4_觸發與連鎖]]"
+  - "[[Verification/2026-07-15_主網實驗場_LandmarkMember]]"
 ---
 # lumos-cli-write
 
