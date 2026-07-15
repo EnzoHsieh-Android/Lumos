@@ -890,6 +890,53 @@ def t_e3_reads_ai_field_e2_does_not():
           "Systems/A.md --" in r.stdout, r.stdout)
 
 
+def t_dref_codeloop_hardening():
+    """code-loop r1 五修回歸:FIX2 fail-safe 選欄/FIX3 E3 去重/FIX4 拒不可序列化字元/
+    FIX1 reindex --all OSError(以 code 錨)。canary 3/3 已由主 loop 記錄。"""
+    v = mkvault()
+    lm = _lm()
+    src = open(GRAPHCTL, encoding="utf-8").read()
+    # FIX1: reindex --all 內外層 except 含 OSError
+    check("FIX1 reindex --all 內層含 OSError",
+          "except (ValueError, RuntimeError, OSError) as e:   # [code-loop r1 A]" in src, "")
+    # FIX2: fail-safe 選欄(未知 by → 不可信 ai 欄)
+    write(v, "Projects/D.md", "type: project\nstatus: done")
+    run(v, "decision-add", "D", "甲", "--decided", "2026-07-01", expect_rc=0)
+    write(v, "Systems/A.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/D]]\"")
+    env = lm.Env(v); gid = "Projects/D.md#d1"; cid = lm.rel_cascade_create(env, gid, "Projects/D.md")
+    # 直接呼 cmd 以非 ai/human 的 by(繞 argparse choices,驗守門本身)
+    env2 = lm.Env(v)
+    lm.cmd_rel_cascade_write(env2, "confirm", "Systems/A.md", cid, gid, "verified_by", "robot")
+    ta = read(v / "Systems/A.md")
+    check("FIX2 fail-safe:未知 by=robot → 落不可信 decision_refs_ai(非可抑制正欄)",
+          "decision_refs_ai:" in ta and "decision_refs:\n" not in ta, ta)
+    # FIX4: 拒不可序列化字元
+    try:
+        lm.cmd_rel_cascade_write(lm.Env(v), "confirm", "Systems/A.md", cid, 'Projects/a"b.md#d1',
+                                 "verified_by", "human")
+        # from_id 驗證會先攔(格式),改直接測 helper
+    except Exception:
+        pass
+    for bad, tag in (('Bad"Ref#d1', '雙引號'), ('Bad\\Ref#d1', '反斜線'),
+                     ('Bad\rRef#d1', '裸CR'), ('Bad\nRef#d1', '換行')):
+        try:
+            lm._append_decision_ref(lm.Env(v), "Systems/A.md", "decision_refs", bad)
+            check(f"FIX4 拒不可序列化字元({tag})", False, "未 raise")
+        except ValueError as e:
+            check(f"FIX4 拒不可序列化字元({tag})", "不可序列化" in str(e), str(e))
+    # FIX3: E3 同 ref 兩欄不重複計
+    write(v, "Projects/E.md",
+          "type: project\nstatus: done\ndecisions:\n"
+          "  - content: 翻\n    id: d1\n    decided: 2026-05-01\n    valid: false\n    superseded_by: x\n    ended: 2026-06-01", body="# E\n")
+    write(v, "Verification/Vdup.md",
+          "type: verification\nstatus: pass\ndate: 2026-05-02\n"
+          "decision_refs:\n  - \"Projects/E.md#d1\"\ndecision_refs_ai:\n  - \"Projects/E.md#d1\"", body="# Vdup\n")
+    r = run(v, "doctor")
+    e3seg = r.stdout.split("[E3]")[1].split("[H]")[0] if "[E3]" in r.stdout else r.stdout
+    check("FIX3 E3 同 ref 兩欄只計一次(去重)",
+          e3seg.count("Vdup") == 1, e3seg)
+
+
 def t_rel_cascade_hardening():
     """code-loop r1 六修回歸:畸形行 fold 防禦閘(MUT1)/空殼 header(CX2)/尾端換行(A3)/
     symlink 拒斥(CX1)/OSError→rc=2(B3);短寫驗證(B1)為 os.write 合約、以 code 檢查存在性錨。"""

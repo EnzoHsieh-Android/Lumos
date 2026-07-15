@@ -47,6 +47,7 @@ verified_by:
   - "[[Verification/2026-07-15_主網M4_觸發與連鎖]]"
   - "[[Verification/2026-07-15_主網實驗場_LandmarkMember]]"
   - "[[Verification/2026-07-15_decision_refs養成_P前置_T1回寫]]"
+  - "[[Verification/2026-07-15_decision_refs養成_codeloop硬化]]"
 ---
 # lumos-cli-write
 

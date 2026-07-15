@@ -888,8 +888,13 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
     for rel, n in sorted(notes.items()):
         # [自動養成 不對稱信任] firing 向讀「聯集」decision_refs + decision_refs_ai(放寬)
         #   ——ai 填的也能觸發提醒;錯了 advisory 級、人一刪,低 harm(對比抑制向的保守)
+        # [code-loop r1 A/C-minor] (rel,ref) 去重:過渡態同 ref 可能兩欄都有,避免重複通報虛胖計數
+        seen_e3 = set()
         for ref in as_list(n.fields.get("decision_refs")) + as_list(n.fields.get("decision_refs_ai")):
             s = str(ref).strip()
+            if s in seen_e3:
+                continue
+            seen_e3.add(s)
             m = re.fullmatch(r"(.+?)#(d\d+)", s)
             if not m:
                 e3_dangling.append(f"{rel} → {s} (格式非 <節點rel>#dN)")
@@ -4553,7 +4558,7 @@ def cmd_decision_reindex(env, rel=None, all_mode=False):
             try:
                 cmd_decision_reindex(env, r)
                 done += 1
-            except (ValueError, RuntimeError) as e:
+            except (ValueError, RuntimeError, OSError) as e:   # [code-loop r1 A] 補 OSError:寫檔面(磁碟滿/權限)
                 print(f"  ✗ {r}: {e}", file=sys.stderr)
                 errs += 1
         print(f"✓ reindex --all: 掃 {len(targets)} 個決策節點,{done} 處理 / {errs} 拒絕(格式不合)")
@@ -4716,11 +4721,16 @@ def _append_decision_ref(env, rel, field, ref):
     ——不用 link_target(它 split('#') 會把 #dN 剝掉,導致同節點不同決策誤 dedup 成一條)。
     值一律引號化(含 #// 安全)。走 atomic_write_verify。回 True=新增 / False=已存在。"""
     ref = ref.strip()
+    # [code-loop r1 CX3/B + delta] 顯式拒 " / \ / 任何 C0 控制字元(<0x20,含裸 \r/\n/\t)——
+    #   strip_quotes 不反跳脫、CRLF 檔案守衛只認 \r\n 序列認不出裸 CR;合法 <rel>#dN 永不含這些。
+    #   「凡控制字元一律拒」比枚舉個案完整(delta reviewer:漏 \r)。
+    if '"' in ref or '\\' in ref or any(ord(c) < 0x20 for c in ref):
+        raise ValueError(f"decision_ref 含不可序列化字元(\"/\\/控制字元): {ref!r}")
     path = env.vault / rel
     lines, s_fm, e_fm = load_raw_for_edit(path)
     fm = lines[1:e_fm]
     struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
-    quoted = '"' + ref.replace('"', '\\"') + '"'
+    quoted = '"' + ref + '"'   # ref 已排除 "/\ → 純引號包裹即安全 round-trip(含 #// 無虞)
     if field in struct:
         s, e, kind = struct[field]
         if kind != "list":
@@ -4772,12 +4782,15 @@ def cmd_rel_cascade_write(env, verb, neighbor, cascade_id, from_id, edge, by):
     #   by human → decision_refs(可抑制 E2)。prune 不回寫(判無關=不記依賴)。
     #   回寫失敗=軟警告不回滾(帳本才是地面真相,decision_refs 是衍生、可從帳本重建)。
     if verb == "confirm":
-        field = "decision_refs_ai" if by == "ai" else "decision_refs"
+        # [code-loop r1 C-medium] fail-**safe**:只有明確 by==human 才落可信正欄;非 ai/human
+        #   (None/打錯/未來新值)一律落不可信 ai 欄——安全守門不靠上游 argparse 撐(誤落正欄=可抑制 E2)
+        field = "decision_refs" if by == "human" else "decision_refs_ai"
         try:
             if _append_decision_ref(env, nrel, field, from_id.strip()):
                 print(f"  ↳ decision_refs 養成: {nrel}.{field} += {from_id.strip()}")
         except Exception as _e:
-            print(f"  ⚠ decision_ref 回寫失敗(帳本已記,可 reconcile): {_e}", file=sys.stderr)
+            # [code-loop r1 CX2] 不過度承諾:reconcile 命令尚未實作(列 future),此處僅記帳本已提交
+            print(f"  ⚠ decision_ref 回寫失敗(帳本已記為地面真相;節點欄位本次未同步): {_e}", file=sys.stderr)
     return 0
 
 
@@ -9143,7 +9156,7 @@ def main():
     if args.cmd == "decision-reindex" and getattr(args, "reindex_all", False):
         try:
             return cmd_decision_reindex(env, all_mode=True)
-        except (ValueError, RuntimeError) as e:
+        except (ValueError, RuntimeError, OSError) as e:   # [code-loop r1 A] 寫檔面 IO 例外 → rc=2 非裸 traceback
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
 
@@ -9182,7 +9195,9 @@ def main():
             rc, _decision_id = cmd_decision_add(env, rel, args.content, args.decided,
                                                 context=args.context, why=args.why)
             return rc
-        except (ValueError, RuntimeError) as e:
+        except (ValueError, RuntimeError, OSError) as e:   # [code-loop 最終 delta A] 補 OSError:
+            # 單節點 decision-supersede/add/reindex 皆走 atomic_write_verify 寫檔,IO 例外(磁碟滿/
+            # 權限/BrokenPipe)本該 rc=2 非裸 traceback——與 --all/rel-cascade dispatcher 一致
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
     if args.cmd == "archive":
