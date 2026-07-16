@@ -56,6 +56,33 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 - **M2（動 gate code,必過 design-loop）**：② risk-cluster 帳——`canary record` 加 cluster 欄位、`loop status --panel` 改停止條件。**改守衛的守衛,高風險面,進實作前本計劃過 design-loop（舊 loop 審新 loop）**。
 - 驗收信號：下一個真實 spec 過 loop 的輪數/wall-clock/token 對照本計劃前的基線（fromscratch-m1 ≈3 輪/~2h）。
 
+## M2 詳細規格（v1,交 design-loop 對象）
+
+**範圍**：只改「記錄欄位 + panel gate 停止條件」。不動 canary 判定、不動辯方、不動 legacy(非 panel)路徑。
+
+### 記錄層（cmd_canary_record 擴一個選配欄）
+
+- `lumos canary record ... --clusters "名=狀態,名=狀態,..."`：該輪存活 findings 經編排者**按根因合併**後的 risk-cluster 清單。狀態白名單三態:`resolved`(已修並核)/`accepted-minor`(小事,接受不改——note 須帶一句理由,紀律非機械)/`disputed-major`(大事,還在吵/未修)。名=kebab 短 slug(編排者命名,跨輪沿用同名=同 cluster)。
+- 不帶 `--clusters` = legacy 記錄,走既有 gate 不變。**同一 loop 內混用(部分輪有 cluster 部分無)→ rc2**(防半套帳偽過,同 panel/legacy round 混用守衛前例)。
+- 解析驗證:狀態不在白名單 rc2;名含空白/逗號/等號 rc2;同輪同名重複 rc2。
+
+### gate 層（loop status --panel 停止條件改造）
+
+全輪皆帶 clusters 時,四條合取改為:
+1. **輪有效**(canary caught 全數,0 missed)——不變。
+2. **cluster 帳無 disputed-major**:跨輪 fold(同名 cluster 取物理序最後一筆狀態,同 M3 帳本 fold 前例)後,無任何 cluster 終態=disputed-major。**取代「存活 max≤minor」**——blocker/major finding 必須屬於某個 disputed-major cluster(未修)或 resolved cluster(已修核);accepted-minor 只准裝 minor(編排者誠實紀律,GIGO 同 anchors)。
+3. **判定輪無新未解 cluster**:本輪(收斂候選輪)沒有首次出現且終態≠resolved 的 cluster 名——根因級的「發現枯竭」訊號,取代被 framing 污染的 finding 計數(measure-word minor 併入既有 cluster 或 accepted,不再永續供應;真的新根因出現=池子沒乾=再跑一輪)。
+4. **capture-recapture 降 advisory**:照算照印(仍是有用訊號),**退出合取**——非定態目標下封閉族群/獨立捕獲前提偏弱(Codex 裁決),不再當硬閘;無 counts 不再 fail-closed(cluster 帳接手守門)。
+- **accepted-minor 帳永久可查**:`loop status <id>` 輸出 cluster ledger 表(名/終態/首現輪/末更輪)——接受不是消失,是記帳(防合法掃地毯,天花板條的機械兌現)。
+
+### 明確不做（範圍刀）
+
+- 不做 cluster 自動聚類(合併是編排者判斷,GIGO 誠實記);不做高風險 claim 雙 finder 覆蓋條件(需 claim 級標注,v1 砍——capture_counts advisory 已給重疊訊號);不動 legacy 循序模式 gate;不動 G1 refcheck 錨;不做跨 loop cluster 庫。
+
+### 測試策略
+
+record 解析:三態白名單過/壞狀態 rc2/名含非法字元 rc2/同輪重名 rc2/不帶=legacy 不變;混用守衛:同 loop 半帶 rc2;fold:同名跨輪最後狀態勝(disputed→resolved 放行、resolved→disputed 回鎖);gate:有 disputed-major 擋/判定輪新未解 cluster 擋/全 resolved+accepted 且 canary 全 caught 放行/新 cluster 但同輪 resolved 放行;advisory:無 counts 不再 fail-closed、殘餘照印不進合取;ledger 表:accepted-minor 顯示於 status 輸出;legacy loop(無 cluster)四條舊合取迴歸不變。
+
 ## 天花板（誠實）
 
 - delta-scoped 有漏看風險——全局哨兵是便宜緩解非保證；哨兵本身是弱檢查器。
