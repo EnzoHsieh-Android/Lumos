@@ -21,6 +21,7 @@ summary: |-
   KEY:接 lumos 已錄知識——『驗證層天花板=oracle 品質』(見 [[Systems/canary-audit]] 誠實天花板 + memory pbt-oracle-reliability):openwiki 對生成 wiki 零 oracle,同一 LLM 讀 code 又寫 doc、無獨立查核。這正是 lumos INVARIANT→[test:]→[audit:]→canary 那條 oracle 疊存在的理由
   KEY:為何反證 lumos 核心賭注成立——openwiki 每條優勢(零紀律/全覆蓋/零摩擦/免疫 drift/分發生態)都來自「文件=可丟投影」,代價=裝不下 code 裡沒有的那層;lumos 存在的理由(合約/驗證/drift-proof 真相)恰是 openwiki 結構上放棄的。可疊用:openwiki 跑導覽層、lumos 守合約層
   KEY:openwiki 真優勢(誠實記,非恭維 lumos)——①零維護零紀律(CI 重生,繞掉 lumos 頭號脆弱點『人懶得寫回』)②冷啟動全 repo 覆蓋(lumos 只長在動過處)③開發內圈零摩擦 ④by-construction 免疫 drift(lumos 一大堆 stale/revalidate 機械就為打這場戰)⑤分發:npm/11k★/三家 CI 範本/多 provider/通吃各家 agent
+  KEY:★精化★真正的軸=provenance(捕獲當下來源品質)非「衍生vs手寫」——openwiki 事後從 code 逆向工程 why(lossy 投影重建、註定漏)；lumos 決策當下第一手目擊(握真脈絡/被否方案)。導覽層須一分為二:指針/索引安全(錯得便宜+讀者 re-ground),合成敘事那半繼承無 oracle(自信錯敘事比沒敘事更毒)。lumos 唯一塌陷回同款失效=from-scratch 重生非合約 prose(常態 vs 例外);edge 是 provenance 非 verification(後者只覆蓋 [test:] 合約子集)
   DEP:[[Systems/canary-audit]]｜[[Systems/verification-rot-eval]]
   DECISION:留痕反例世界解——日後有人問「有自動生 wiki 就夠,幹嘛手寫圖譜?」直接指此節點:答案=openwiki 那套無法承載 code 讀不出的合約/驗證/不可漂移真相,且其新鮮≠正確(無 oracle)
 ---
@@ -71,6 +72,23 @@ lumos 進場紀律＝「先 `lumos` 讀圖譜（為什麼/邊界/合約）→ **
 openwiki 每條優勢都來自同一個賭注：「文件應是 code 的衍生投影、可丟可重生」。**代價是它裝不下任何 code 裡沒有的東西**——沒有「這條是合約、改＝breaking」、沒有「這條驗證過沒」、沒有「當初為什麼這樣選」。lumos 押相反的賭：**真正值錢的知識恰恰是推導不出來的那半**，所以必須手寫 + 機械閘保護。使用者付的維護稅，是這個更難問題的**內生**成本。
 
 **可疊用**：openwiki 跑導覽層、lumos 守合約層，連注入 CLAUDE.md 的手法都一樣。真正威脅不是功能，是它會讓人問「有自動生 wiki 就夠了吧？」——而此節點就是那問題的存檔答案：**新鮮 ≠ 正確；無 oracle 的衍生 wiki 承載不了合約/驗證/不可漂移的真相。**
+
+## 精化（2026-07-16 對話 co-develop）：provenance 軸 + 導覽層一分為二
+
+**導覽層為何容忍無正確性保證、合約層不行——關鍵在錯誤代價 + 自我修正**：
+- 導覽文件是**指針非權威**：agent 照它走到 `src/auth` 當場讀真 code，錯的地方被 ground truth **當場修正**，代價＝多讀幾秒；工作是把搜尋空間 500 檔→5 檔，不是當最終答案。85% 對的地圖對陌生 repo 仍勝於沒地圖。
+- 合約層無此自我修正：「這條改了不會壞」錯了照做就炸 prod，沒有 code 行會當場反駁、且不可逆。代價不對稱。
+- **但導覽層需一分為二**（上輪過度讓渡、此處收窄）：openwiki 安全的只有**指針/索引**那半（錯得便宜、讀者 re-ground）；它**合成的敘事**（架構/why/workflow narrative）那半繼承無 oracle 問題——**一段自信但錯的敘事比沒敘事更毒**（植入假信心、且沒有 code 行反駁得了散文），該當「未審節點」看待、非權威。而 openwiki「零紀律」賣點恰在鼓勵讀者不 re-ground＝自帶內在矛盾。
+
+**真正的軸＝捕獲當下的來源品質（provenance），比「衍生 vs 手寫」更深**：
+- openwiki＝事後、從外部讀者位置把「為什麼」從「長怎樣」**逆向工程**回來；但 code 沒記「為何選 B 不選 A/為何邊界在此/試過什麼失敗」——**從 lossy 投影重建 why 註定漏且常錯**。
+- lumos＝在開發迴圈內、**決策當下**記（作者當時握有真脈絡/決策/被否方案）＝**第一手目擊證詞**非事後遺跡重建。primary source vs reconstruction 對「code 讀不出那層」是**質的差距、在任何機械閘之前就存在**。
+- **誠實不吹過頭**：lumos 真正被 *驗證* 的只有綁 `[test:]` 的 ★INVARIANT★ 子集;其餘 prose **也是「信作者」**(懶/錯的人一樣寫得出錯節點,閘只擋合約級)。故 lumos 的 edge 是 **provenance(第一手捕獲)、不是 verification**;verification 只覆蓋合約那小塊。primary source 也會錯,但**從 ground truth 起步**、reconstruction 從推論起步。
+
+**lumos 唯一塌陷回 openwiki 失效模式的例外＝from-scratch 重生**（使用者鬆口處，認）：
+- 當 lumos 丟掉目擊紀錄、one-shot 重生節點，那一刻它也是 reconstructor，非合約 prose 吃一樣的 synthesis bias。
+- 緩解（＝紀律該守）：① 優先 incremental update-in-loop、少 regenerate-from-scratch（「退場必寫」的價值＝趁還是目擊者時寫、不必日後當考古學家）② 真重生是對「圖譜史 + code」（含既存決策/驗證/舊版）非 code-only、底料更富 ③ 重生的非合約 prose 當「未審」、re-ground 才採信（同一頁 openwiki 級）；合約子集重生錯了還有 [test:]/[audit:] oracle 接得住、openwiki 那邊零接住。
+- **收斂**：openwiki 失效是**常態**（每輪重生無 oracle）；lumos 同款失效是**例外**（僅放棄目擊 from-scratch 重生的非合約 prose）——紀律的全部意義＝把該例外壓到最小。
 
 ## 誠實邊界
 - 未親跑 openwiki 生成一份 wiki 實測其誤差率（結論建立在讀 prompt.ts + test/ 結構 + README 機制）；「無輸出 oracle」是**機制推斷**，非跑出來的量測。日後若要硬化此對照，可跑一次 openwiki 對已知 repo、人工抽查生成頁對 code 的偏差當語料。
