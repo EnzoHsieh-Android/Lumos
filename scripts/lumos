@@ -2223,14 +2223,17 @@ def _parse_clusters(raw):
             return None, f"段缺 '='(格式 名=狀態): {p!r}"
         name, state = p.split("=", 1)
         name, state = name.strip(), state.strip()
-        if (not name or any(c in name for c in " ,=")
-                or any(ord(c) < 0x20 for c in name)):
-            return None, f"cluster 名非法(禁空白/逗號/等號/控制字元): {name!r}"
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", name):
+            return None, f"cluster 名非法(kebab 短 slug:小寫英數起頭+[-_],≤64): {name!r}"
         base = state.split(":", 1)[0]
         if base not in CLUSTER_STATES:
             return None, f"狀態 {base!r} 不在白名單 {'/'.join(CLUSTER_STATES)}"
-        if base == "accepted-minor" and (":" not in state or not state.split(":", 1)[1].strip()):
-            return None, f"accepted-minor 需逐 cluster 內嵌理由(accepted-minor:理由): {p!r}"
+        if base == "accepted-minor":
+            if ":" not in state or not state.split(":", 1)[1].strip():
+                return None, f"accepted-minor 需逐 cluster 內嵌理由(accepted-minor:理由): {p!r}"
+        elif state != base:
+            # resolved/disputed-major 必須精確相等——夾帶冒號後綴=未定義第四態(帳面破三態白名單)
+            return None, f"狀態 {state!r} 夾帶後綴(僅 accepted-minor 可帶冒號理由)"
         if name in out:
             return None, f"同輪同名 cluster 重複: {name!r}"
         out[name] = state
@@ -2389,7 +2392,16 @@ def _loop_status_panel(rounds, loop_id):
     if anchor_rid is not None and anchor_cluster:
         return _loop_status_panel_clusters(groups, valid_of, loop_id)
     # ── 無-cluster 舊帳(或零有效輪=未定錨):既有三條合取,fail-closed 不變 ──
+    # cluster-intent 但未定錨(零有效輪):條 1 改用 M2 嚴格謂詞(unknown-kind 盲區補;
+    # 純無-cluster loop 不受影響——舊行為迴歸保證只對真 legacy 帳)
+    _cluster_intent = any("clusters" in r for r in rounds)
     rid, latest = next(reversed(groups.items()))
+    if _cluster_intent and not valid_of[rid]:
+        print(f"[panel] 輪有效: ✗ — cluster-intent loop 判定輪 {rid} 無效(M2 謂詞:caught≥2∧missed=0∧kind 白名單)")
+        for i, r in enumerate(latest, 1):
+            print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
+        print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: 輪無效[未定錨 cluster-intent])")
+        return 1
     order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
     fails = []
     caught_recs = [r for r in latest if r.get("kind") == "caught"]
@@ -2489,12 +2501,12 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id):
     for rid_, recs in groups.items():
         if valid_of[rid_]:
             continue
-        carried = {}
+        carried = []   # 全列:同名多筆逐條保留(dict.update 會靜默覆蓋掩掉爭議狀態)
         for r in recs:
-            carried.update(r.get("clusters") or {})
+            carried.extend((n, s) for n, s in (r.get("clusters") or {}).items())
         if carried:
             print(f"  ⚠ {rid_}(無效輪) clusters 已忽略: "
-                  + ",".join(f"{n}={s}" for n, s in carried.items()))
+                  + ",".join(f"{n}={s}" for n, s in carried))
     # ledger 表
     if ledger:
         print("  ── cluster ledger(僅計有效輪)──")
