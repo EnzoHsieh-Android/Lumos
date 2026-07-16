@@ -8691,6 +8691,16 @@ def t_check_j_regen():
     write(v, "Systems/Jc3.md", fm % ("KEY:引用 [src:%s/Systems/R0.md:1]" % tok))
     r = run(v, "lint", "Systems/Jc3")
     check("J-c: 合法路徑+行號 → rc0", r.returncode == 0, r.stdout)
+    # --- J-c token 消毒(code-review blocker 迴歸):空/絕對路徑/traversal 皆擋 ---
+    write(v, "Systems/Jc4.md", fm % "KEY:偽證據 [src: ] 空白充數")
+    r = run(v, "lint", "Systems/Jc4")
+    check("J-c: [src: ] 空 token → rc1(不因 join repo_root 自身判 ok)", r.returncode == 1 and "dangling" in r.stdout, r.stdout)
+    write(v, "Systems/Jc5.md", fm % "KEY:偽證據 [src:/etc/passwd]")
+    r = run(v, "lint", "Systems/Jc5")
+    check("J-c: 絕對路徑 → rc1(pathlib join 丟左值不放行)", r.returncode == 1 and "dangling" in r.stdout, r.stdout)
+    write(v, "Systems/Jc6.md", fm % "KEY:偽證據 [src:../../../../etc/passwd]")
+    r = run(v, "lint", "Systems/Jc6")
+    check("J-c: .. traversal → rc1", r.returncode == 1 and "dangling" in r.stdout, r.stdout)
     # --- raw 行四組合(推測/佚失 × INVARIANT/IRREVERSIBLE)→ rc1 專屬訊息;INVARIANT 組合恰一則 ---
     combos = [("Jr1", "KEY:推測:★INVARIANT★ 不確定的合約"), ("Jr2", "KEY:佚失:★INVARIANT★ 據已失的合約"),
               ("Jr3", "KEY:推測:★IRREVERSIBLE★ 不確定的不可逆"), ("Jr4", "DECISION:佚失:★IRREVERSIBLE★ 佚失不可逆")]
@@ -8715,7 +8725,7 @@ def t_check_j_regen():
     # --- doctor 入口:errs 計 issues(--ci rc1);J-d 走 warn_soft 不計 ---
     r = run(v, "doctor", "--ci")
     check("J doctor: regen 違規 → --ci rc1", r.returncode == 1 and "regen 重生來源守衛" in r.stdout, r.stdout[-800:])
-    for rel_ in ("Ja", "Jb4", "Jc1", "Jc2", "Jr1", "Jr2", "Jr3", "Jr4", "NRr"):
+    for rel_ in ("Ja", "Jb4", "Jc1", "Jc2", "Jc4", "Jc5", "Jc6", "Jr1", "Jr2", "Jr3", "Jr4", "NRr"):
         (v / "Systems" / f"{rel_}.md").unlink()
     r = run(v, "doctor", "--ci")
     check("J doctor: 全合規後 rc0 + J-d warn_soft 不計 issues",
