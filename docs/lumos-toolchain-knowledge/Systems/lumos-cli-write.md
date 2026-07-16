@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-15
+updated: 2026-07-16
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -14,7 +14,7 @@ summary: |-
   FLOW:set/append/self-audit/decision-*→load_raw_for_edit(讀raw,拒BOM/CRLF)→line-based改fm→atomic_write_verify(寫tmp→re-parse自驗值正確+無新lint指紋→os.replace)→敗則tmp丟棄原檔不動
   KEY:7個寫入原語(set/append/new/archive/decision-add/decision-supersede/self-audit)是「專案層」圖譜寫入的唯一安全路徑,取代手改 frontmatter / obsidian property:set
   KEY:T1 寫後自驗 atomic——所有 fm mutation 經 atomic_write_verify:寫 .lumos-tmp → re-parse 斷言該 key 寫成目標值 + 無引入新 lint 指紋 → os.replace 原子換入;任一步失敗 tmp 丟棄、原檔零變動 [test:t_set_minimal_diff,t_append_exact_dedup]
-  KEY:set 走 SCALAR_KEYS 白名單{status,updated,created,type,self_audit}、append 走 LIST_KEYS{verified_by,plan_refs,related,tags};白名單外 key 直接 rc2(list 用 append、decisions 翻盤/新增走 decision-*) [test:t_append_block_key_rejected]
+  KEY:set 走 SCALAR_KEYS 白名單{status,updated,created,type,self_audit,signed_off,regen[M1 2026-07-16 from-scratch守衛宣告欄]}、append 走 LIST_KEYS{verified_by,plan_refs,related,tags};白名單外 key 直接 rc2(list 用 append、decisions 翻盤/新增走 decision-*) [test:t_append_block_key_rejected]
   KEY:鐵則1(多wikilink必YAML list)由 append 結構性保證——一項一行 + link_target dedup,絕不字串塞多個[[]];鐵則3/4(含「: 」長文引號化、日期 bare)由 fmt_scalar/_fmt_decision_value 包辦
   KEY:decisions[] 是巢狀結構,只能走 decision-add/decision-supersede/decision-reindex 的 surgical line-based 手術(非 ruamel round-trip,避免 reflow 破壞最小 diff);要求 2-space 縮排
   KEY:[M1/P2 2026-07-15]決策穩定 ID——add 指派 id:d<max+1>(翻案永不重用)、supersede 唯一命中(子字串多重命中 rc=2 列候選/#dN 精確定址)+回傳全域 id <rel>#d<N>(dispatcher 解包,CLI 對外仍 int rc)、reindex 冪等回填(混合狀態 max+1 不撞號);寫後自驗升級 ID 精確驗證(有 id 時)
@@ -48,6 +48,7 @@ verified_by:
   - "[[Verification/2026-07-15_主網實驗場_LandmarkMember]]"
   - "[[Verification/2026-07-15_decision_refs養成_P前置_T1回寫]]"
   - "[[Verification/2026-07-15_decision_refs養成_codeloop硬化]]"
+  - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
 ---
 # lumos-cli-write
 

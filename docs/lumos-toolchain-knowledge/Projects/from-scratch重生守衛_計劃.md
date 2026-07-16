@@ -29,6 +29,8 @@ decisions:
     why_chosen: 殘餘風險(測試格再漏)恰是實作階段 TDD+code-loop mutation 冒煙天生接住的東西——再燒設計輪是拿設計審的錢做實作審的事;同主網 3 輪人裁實質收斂前例。誠實天花板照記:收斂只證三輪無設計層 major 再現,canary 判定/溯源排除為編排者自判非 tamper-proof
     decided: 2026-07-16
     valid: true
+verified_by:
+  - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
 ---
 # from-scratch重生守衛_計劃
 
@@ -65,7 +67,7 @@ openwiki 原罪＝看不見地填滿每個缺口（分不出真句假句）；lu
 
 ## 里程碑（收窄,記取 T3 凍結教訓——別大機械堆小需求）
 
-- **M1（MVP,最硬核）**：`provenance 分級隔離` + `拒絕發明無證據合約`。＝解法 2 + 5。純機械 + 紀律,複用既有雙欄信任,無新派工。**這兩條不做,其餘都是沙上樓閣。**
+- **M1（MVP,最硬核）**：`provenance 分級隔離` + `拒絕發明無證據合約`。＝解法 2 + 5。純機械 + 紀律,複用既有雙欄信任,無新派工。**這兩條不做,其餘都是沙上樓閣。** ✅ **已落地（2026-07-16,[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]:24 格綠+全套 1154 綠）**
 - **M2**：`from-scratch 強制對抗審`（解法 6）——把 design-loop 接成重生的 mandatory gate。複用既有 loop 機械。
 - **M3（後續,選配）**：`git-rationale 收割`（解法 3,複用 cochange）+ `diff 重生`（解法 1）。
 - **M4（後續,選配）**：`Tier-C→signoff 訪談路由`（解法 4）。

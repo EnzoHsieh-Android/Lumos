@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-15
+updated: 2026-07-16
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -11,7 +11,7 @@ summary: |-
   FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出 → return 0(查無/正則錯=非0)
   KEY:read/traverse 12 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);純讀、不寫檔、無副作用,與 7 個寫入原語(set/append/new/decision-* …)互斥
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
-  KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向(stale/fail 驗證豁免——E1 拔死背書後不反咬漏寫)/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼);Check E1 失效背書(verified_by 指向 stale/fail 驗證→死背書)+ Check E2 建在被推翻決策上(決策 valid:false+ended → M2 共用 typed 索引查連入來源、updated 早於 ended → 落後邊;decision_refs 精化只標指到那條;M3 帳本抑制 terminal ts>=ended 跳過=主/補網不重報)+ Check E3 意圖鏈斷義(decision_refs 指翻案決策+dangling 浮出);關係層皆軟提醒);與 lint 分工——lint 只看單篇 node-local、predicts pre-push 會不會擋
+  KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向(stale/fail 驗證豁免——E1 拔死背書後不反咬漏寫)/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼);Check E1 失效背書(verified_by 指向 stale/fail 驗證→死背書)+ Check E2 建在被推翻決策上(決策 valid:false+ended → M2 共用 typed 索引查連入來源、updated 早於 ended → 落後邊;decision_refs 精化只標指到那條;M3 帳本抑制 terminal ts>=ended 跳過=主/補網不重報)+ Check E3 意圖鏈斷義(decision_refs 指翻案決策+dangling 浮出);關係層皆軟提醒;Check J regen 重生來源守衛[M1 2026-07-16]——regen 節點 provenance 分級:J-a 拒發明合約(INVARIANT 標記行需 [src:]/[git:] 意圖證據)+J-b DECISION 四態+J-c 證據指針 substring gate(共用 _validate_repo_ref 不經 top_dirs 靜默過濾;shallow 降 warn_soft 顯性)+J-d 唯讀提醒;與 lint 共用 check_regen_provenance 防兩入口漂移 [test:t_check_j_regen,t_check_j_git]);與 lint 分工——lint 只看單篇 node-local(regen 節點 Check J 為 opt-in 例外需檔案+git 存取)、predicts pre-push 會不會擋
   KEY:search 預設排除 fenced+inline code(對齊 doctor 連結抽取慣例,--code 才含)、大小寫不敏感 substring、--regex 切正則;結構化查詢走 contracts/decisions/stale 而非 search
   KEY:讀指令屬「專案層」——以 cwd find_vault 鎖定本專案 vault(不受同名 vault 影響);對比 install/bootstrap 的「機器層」(全域 lumos + user-scope skills)
   DEP:scripts/lumos load_vault/Env/find_vault｜extract_contracts(contracts/context 共用)｜parse_decisions(decisions/stale)｜status_of(links/map/stale 標狀態)
@@ -46,6 +46,7 @@ verified_by:
   - "[[Verification/2026-07-15_主網M2_typed-edge索引]]"
   - "[[Verification/2026-07-15_主網M3_cascade帳本]]"
   - "[[Verification/2026-07-15_主網M4_觸發與連鎖]]"
+  - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
 ---
 # lumos-cli-read
 

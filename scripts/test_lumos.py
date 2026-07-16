@@ -8649,6 +8649,123 @@ def t_impact_diff():
     shutil.rmtree(root, ignore_errors=True)
 
 
+def t_check_j_regen():
+    # Check J(regen 重生來源守衛):M1 from-scratch守衛;測試逐格對齊 spec v4 測試策略
+    import shutil
+    v = mkvault()
+    tok = v.name  # 標準 mkvault 是 standalone vault → repo_root = v.parent,[src:] 用 v.name/ 前綴
+    # --- set regen 白名單迴歸(r3 B#4) ---
+    write(v, "Systems/R0.md", "type: system\nstatus: doing\nsummary: |-\n  KEY:某關鍵 [src:%s/Systems/R0.md]" % tok)
+    run(v, "set", "Systems/R0", "regen", "from-scratch/2026-07-16", expect_rc=0)
+    r = run(v, "lint", "Systems/R0")
+    check("J: set regen rc0 + 全標記節點 lint rc0", r.returncode == 0, r.stdout)
+    # --- 非 regen 節點不受 J 影響(無 J-a 訊息) ---
+    write(v, "Systems/NR.md", "type: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ 舊合約 [test:G] [audit:s/2026-07-01]")
+    r = run(v, "lint", "Systems/NR")
+    check("J: 非 regen 節點無 J-a 要求", r.returncode == 0 and "J-a" not in r.stdout, r.stdout)
+    # --- J-a:regen ★INVARIANT★ 無 [src:]/[git:] → 擋;有 [src:] → 過 ---
+    write(v, "Systems/Ja.md", "regen: from-scratch/2026-07-16\ntype: system\nstatus: doing\n"
+          "summary: |-\n  KEY:★INVARIANT★ 重生合約 [test:G] [audit:s/2026-07-01]")
+    r = run(v, "lint", "Systems/Ja")
+    check("J-a: regen ★INVARIANT★ 無意圖證據 → rc1", r.returncode == 1 and "J-a 拒絕發明合約" in r.stdout, r.stdout)
+    write(v, "Systems/Ja2.md", "regen: from-scratch/2026-07-16\ntype: system\nstatus: doing\n"
+          "summary: |-\n  KEY:★INVARIANT★ 重生合約 [test:G] [audit:s/2026-07-01] [src:%s/Systems/R0.md]" % tok)
+    r = run(v, "lint", "Systems/Ja2")
+    check("J-a: 有 [src:] → rc0", r.returncode == 0, r.stdout)
+    # --- J-b:DECISION 四態(有證據/推測/佚失/裸→擋) ---
+    fm = "regen: from-scratch/2026-07-16\ntype: system\nstatus: doing\nsummary: |-\n  %s"
+    write(v, "Systems/Jb1.md", fm % ("DECISION:選 A 因效能 [src:%s/Systems/R0.md]" % tok))
+    write(v, "Systems/Jb2.md", fm % "DECISION:推測: 大概因效能選 A")
+    write(v, "Systems/Jb3.md", fm % "DECISION:佚失: 選 A 原因已不可考")
+    write(v, "Systems/Jb4.md", fm % "DECISION:選 A 因效能(重建無據)")
+    for rel_, expect_rc, name in (("Jb1", 0, "有證據"), ("Jb2", 0, "推測標"), ("Jb3", 0, "佚失標"), ("Jb4", 1, "裸→擋")):
+        r = run(v, "lint", f"Systems/{rel_}")
+        check(f"J-b: DECISION {name} rc{expect_rc}", r.returncode == expect_rc, r.stdout)
+    # --- J-c:[src:] substring gate(dangling/越界/合法/假頂層目錄——top_dirs 靜默放行迴歸) ---
+    write(v, "Systems/Jc1.md", fm % "KEY:引用 [src:no_such_dir_xyz/x.py]")
+    r = run(v, "lint", "Systems/Jc1")
+    check("J-c: 假頂層目錄 → rc1(不因 top_dirs 靜默放行)", r.returncode == 1 and "dangling" in r.stdout, r.stdout)
+    write(v, "Systems/Jc2.md", fm % ("KEY:引用 [src:%s/Systems/R0.md:999]" % tok))
+    r = run(v, "lint", "Systems/Jc2")
+    check("J-c: 行號越界 → rc1", r.returncode == 1 and "行號越界" in r.stdout, r.stdout)
+    write(v, "Systems/Jc3.md", fm % ("KEY:引用 [src:%s/Systems/R0.md:1]" % tok))
+    r = run(v, "lint", "Systems/Jc3")
+    check("J-c: 合法路徑+行號 → rc0", r.returncode == 0, r.stdout)
+    # --- raw 行四組合(推測/佚失 × INVARIANT/IRREVERSIBLE)→ rc1 專屬訊息;INVARIANT 組合恰一則 ---
+    combos = [("Jr1", "KEY:推測:★INVARIANT★ 不確定的合約"), ("Jr2", "KEY:佚失:★INVARIANT★ 據已失的合約"),
+              ("Jr3", "KEY:推測:★IRREVERSIBLE★ 不確定的不可逆"), ("Jr4", "DECISION:佚失:★IRREVERSIBLE★ 佚失不可逆")]
+    for rel_, line_ in combos:
+        write(v, f"Systems/{rel_}.md", fm % line_)
+        r = run(v, "lint", f"Systems/{rel_}")
+        check(f"J raw 行: {line_[:14]}… → rc1 專屬訊息", r.returncode == 1 and "不得承載" in r.stdout, r.stdout)
+    r = run(v, "lint", "Systems/Jr1")
+    check("J 消歧: INVARIANT 組合恰一則(無 generic 位置錯誤)",
+          "不得承載" in r.stdout and "必須是 KEY 行前綴" not in r.stdout, r.stdout)
+    # --- 非 regen 節點 KEY:推測:★INVARIANT★ → generic 兜底保留 ---
+    write(v, "Systems/NRr.md", "type: system\nstatus: doing\nsummary: |-\n  KEY:推測:★INVARIANT★ 偷渡")
+    r = run(v, "lint", "Systems/NRr")
+    check("J 消歧: 非 regen 節點 generic 兜底保留", r.returncode == 1 and "必須是 KEY 行前綴" in r.stdout, r.stdout)
+    # --- J-d:無標記 KEY 行 → warning 顯示但 rc0(兩入口皆非阻擋) ---
+    write(v, "Systems/Jd.md", fm % "KEY:一條沒標 tier 的觀察")
+    r = run(v, "lint", "Systems/Jd")
+    check("J-d: 無標記 KEY 行提醒不擋 rc0", r.returncode == 0 and "J-d 提醒" in r.stdout, r.stdout)
+    # --- INV_TAG_RE 擴充:contracts 顯示乾淨(不含 [src:) ---
+    r = run(v, "contracts", "Systems/Ja2")
+    check("INV_TAG_RE: contracts 顯示剝掉 [src:]", "[src:" not in r.stdout, r.stdout)
+    # --- doctor 入口:errs 計 issues(--ci rc1);J-d 走 warn_soft 不計 ---
+    r = run(v, "doctor", "--ci")
+    check("J doctor: regen 違規 → --ci rc1", r.returncode == 1 and "regen 重生來源守衛" in r.stdout, r.stdout[-800:])
+    for rel_ in ("Ja", "Jb4", "Jc1", "Jc2", "Jr1", "Jr2", "Jr3", "Jr4", "NRr"):
+        (v / "Systems" / f"{rel_}.md").unlink()
+    r = run(v, "doctor", "--ci")
+    check("J doctor: 全合規後 rc0 + J-d warn_soft 不計 issues",
+          r.returncode == 0 and "0 issues" in r.stdout, r.stdout[-800:])
+    shutil.rmtree(v, ignore_errors=True)
+
+
+def t_check_j_git():
+    # Check J 的 [git:sha] Tier B 驗證:真 sha 過/假 sha 擋/shallow 降 warn 不擋
+    import shutil
+    import subprocess as sp
+    base = Path(tempfile.mkdtemp(prefix="gctl-jgit-"))
+    def _git(cwd, *args):
+        return sp.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+    try:
+        # origin:兩個 commit 的真 git repo
+        origin = base / "origin"; origin.mkdir()
+        _git(origin, "init", "-q"); _git(origin, "config", "user.email", "t@t"); _git(origin, "config", "user.name", "t")
+        (origin / "a.txt").write_text("one\n"); _git(origin, "add", "."); _git(origin, "commit", "-qm", "c1")
+        sha1 = _git(origin, "rev-parse", "HEAD").stdout.strip()
+        (origin / "b.txt").write_text("two\n"); _git(origin, "add", "."); _git(origin, "commit", "-qm", "c2")
+        # vault 掛在 origin/docs/k-knowledge → _repo_root_from_env 解析到 origin
+        vault = origin / "docs" / "k-knowledge"
+        for sub in ("Systems", "Verification", "Projects", "MOC"):
+            (vault / sub).mkdir(parents=True)
+        fm = "regen: from-scratch/2026-07-16\ntype: system\nstatus: doing\nsummary: |-\n  %s"
+        write(vault, "Systems/G1.md", fm % f"KEY:改法源自 [git:{sha1}]")
+        r = run(vault, "lint", "Systems/G1")
+        check("J-c git: 真 sha → rc0", r.returncode == 0, r.stdout)
+        write(vault, "Systems/G2.md", fm % "KEY:改法源自 [git:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef]")
+        r = run(vault, "lint", "Systems/G2")
+        check("J-c git: 假 sha(full clone) → rc1 dangling", r.returncode == 1 and "dangling" in r.stdout, r.stdout)
+        # shallow clone:只有 c2,sha1 缺 → warn 不擋 + 顯性標示
+        shallow = base / "shallow"
+        sp.run(["git", "clone", "--no-local", "--depth=1", "-q", f"file://{origin}", str(shallow)],
+               capture_output=True, text=True)
+        if (shallow / ".git").exists():
+            svault = shallow / "docs" / "k-knowledge"
+            for sub in ("Systems", "Verification", "Projects", "MOC"):
+                (svault / sub).mkdir(parents=True, exist_ok=True)
+            write(svault, "Systems/S1.md", fm % f"KEY:改法源自 [git:{sha1}]")
+            r = run(svault, "lint", "Systems/S1")
+            check("J-c git: shallow 缺物件 → rc0 warn 顯性標示",
+                  r.returncode == 0 and "Tier B 驗證跳過" in r.stdout, r.stdout)
+        else:
+            check("J-c git: shallow clone 建立失敗(環境不支援 --no-local --depth,跳過此格)", False, "shallow clone failed")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

@@ -1063,6 +1063,32 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
             ok("無失效檔案認領 (節點引用的 repo 路徑都存在)")
     print()
 
+    # Check J: regen 重生來源守衛(from-scratch 節點的 provenance 分級+拒絕發明無證據合約)。
+    # 與 cmd_lint 共用 check_regen_provenance(防兩入口規則漂移);映射表——
+    # errs→warn(hard)計 issues/warns→warn_soft/gov_events→僅 --ci 落帳。
+    _regen_rels = [(rel_, n_) for rel_, n_ in sorted(notes.items())
+                   if isinstance(n_.fields.get("regen"), str) and n_.fields.get("regen").strip()]
+    if _regen_rels:
+        section("J", "regen 重生來源守衛 (provenance 分級;J-a 拒發明合約/J-c 證據指針機械驗)")
+        _jroot = repo_root if repo_root is not None else _repo_root_from_env(env)
+        j_err_lines, j_soft_lines = [], []
+        for rel_, n_ in _regen_rels:
+            j_errs, j_warns, j_gov = check_regen_provenance(n_, _jroot)
+            j_err_lines.extend(f"{rel_}: {e}" for e in j_errs)
+            j_soft_lines.extend(f"{rel_}: {w}" for w in j_warns)
+            gov_events.extend(j_gov)
+            for _e in j_errs:
+                gov_events.append({"gate": "check-j", "kind": "blocked", "hard": True,
+                                   "nodes": [n_.stem]})
+        if j_err_lines:
+            warn(j_err_lines, f"{len(j_err_lines)} 條 regen 節點違反重生來源守衛:",
+                 "補 [src:路徑(:行號)]/[git:sha] 證據、或改標 推測:/佚失:(合約不能建在推測上)")
+        else:
+            ok(f"{len(_regen_rels)} 個 regen 節點證據指針全數可驗")
+        if j_soft_lines:
+            warn_soft(j_soft_lines, f"{len(j_soft_lines)} 條 J-d/降級提醒(軟,不擋):")
+        print()
+
     # Check N: 版本 nudge(軟提醒,dev-machine advisory;不算 issue、不擋 CI)
     if repo_root is not None:
         _nudge = _version_nudge(repo_root)
@@ -1393,8 +1419,11 @@ TEST_REF_RE = re.compile(r"\[test:\s*([^\]]+)\]")
 # 與 [test:] 平行:test 證『有沒有照規則做』,audit 證『這規則該不該是鐵則 / 綁的測試夠不夠格』
 # (沒標準答案的判斷不得由提出者本人自評 — maker/checker)。doctor Check T 強制。
 AUDIT_REF_RE = re.compile(r"\[audit:\s*([^\]]+)\]")
-# 抽「乾淨宣稱文字」時 test 與 audit 兩種標記都要剝掉(否則漏進顯示/子字串比對)。
-INV_TAG_RE = re.compile(r"\[(?:test|audit|kill):\s*[^\]]+\]")
+# 抽「乾淨宣稱文字」時 test/audit/kill 與 regen 證據指針(src/git)都要剝掉(否則漏進顯示/子字串比對)。
+# src|git 擴充(M1 Check J):影響 11 處行號/8 類呼叫點(Check T 乾淨宣稱/contracts/lint 訊息/
+# guard 分類·list·trace/scaffold/kill-add/audit)——行為後果:guard 定位對「正文相同只差指針」
+# 的合約改多重命中=要求更精確正文(指針非宣稱正文,符合語意非退化);[test:] 抽取不受影響。
+INV_TAG_RE = re.compile(r"\[(?:test|audit|kill|src|git):\s*[^\]]+\]")
 KILL_REF_RE = re.compile(r"\[kill:\s*recipes\s*\]")
 # 真實可執行測試方法:xUnit 屬性([Fact]/[Theory]/[SkippableFact],含 (Skip=..) 變體)
 # + 可選後續屬性(InlineData/MemberData/Trait)→ 存取修飾 → 可選 async → 回傳型別 → 方法名。
@@ -1629,6 +1658,14 @@ IRREVERSIBLE_RE = re.compile(r"^KEY:\s*(?:\([^)]*\)\s*)?★IRREVERSIBLE★\s*(.*
 ROLLBACK_REF_RE = re.compile(r"\[rollback:\s*([^\]]+)\]")
 GUARD_REF_RE = re.compile(r"\[guard:\s*([^\]]+)\]")  # 可逆性軸,平行於 ROLLBACK_REF_RE
 
+# ── regen 重生來源軸(M1 from-scratch 守衛;Check J,獨立於合約軸/可逆性軸)──
+# 設計:Projects/from-scratch重生守衛_計劃(design-loop 3 輪,golden: governance/golden/fromscratch-m1)。
+# [src:路徑(:行號)]=Tier A 現 code 可驗;[git:sha]=Tier B 變更事件;推測:/佚失: 前綴=Tier C/佚失。
+SRC_REF_RE = re.compile(r"\[src:\s*([^\]]+?)(?::(\d+(?:-\d+)?))?\s*\]")
+GIT_REF_RE = re.compile(r"\[git:\s*([0-9a-fA-F]{7,40})\s*\]")
+# 疊放釘死:緊跟 summary 前綴(KEY:推測:/DECISION:佚失:);行中出現不算標記(防歧義)。只掃 summary。
+REGEN_PREFIX_RE = re.compile(r"^(?:KEY|DECISION):\s*(推測|佚失):")
+
 
 def reversibility_rollback_ref(text):
     m = ROLLBACK_REF_RE.search(text)
@@ -1803,8 +1840,101 @@ SYMBOL_NAMES = {"KEY", "FLOW", "DEP", "TEST", "AUTH", "FLAG", "DECISION", "VERIF
 SYMBOLISH_RE = re.compile(r"^([A-Z]{2,}):")   # 像「符號宣告」的行(全大寫前綴)→ 抓 typo
 
 
+def _git_commit_exists(repo_root, sha):
+    """[git:sha] Tier B 驗證:git cat-file -e sha^{commit}。非 git repo/物件缺 → False。"""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=str(repo_root),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return r.returncode == 0
+    except OSError:
+        return False
+
+
+def _git_is_shallow(repo_root):
+    import subprocess
+    try:
+        r = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=str(repo_root),
+                           capture_output=True, text=True)
+        return r.returncode == 0 and r.stdout.strip() == "true"
+    except OSError:
+        return False
+
+
+def check_regen_provenance(note, repo_root):
+    """Check J(regen 重生來源守衛)共用檢查器——cmd_lint 與 run_doctor 同呼叫同一函式(防兩入口
+    規則漂移)。只對 frontmatter 帶 regen 的節點生效;非 regen 節點回三空。只掃 summary 行。
+    回 (errs, warns, gov_events),兩入口映射(spec 映射表,照抄不猜):
+      errs → lint errs 計 rc1 / doctor warn(hard) 計 issues
+      warns → lint 顯示不計 rc / doctor warn_soft(J-d 提醒與 shallow 降級兩入口皆非阻擋)
+      gov_events → 僅 doctor --ci 落 _append_governance_log;lint 高頻一律不落帳(防治理帳灌水)
+    註:本函式為 regen 節點對 lint「node-local 不掃 repo」原則的 opt-in 例外(檔案+git 存取)。
+    設計:Projects/from-scratch重生守衛_計劃;golden: governance/golden/fromscratch-m1。"""
+    errs, warns, gov = [], [], []
+    regen = note.fields.get("regen")
+    if not (isinstance(regen, str) and regen.strip()):
+        return errs, warns, gov
+    summ = note.fields.get("summary")
+    summ = summ if isinstance(summ, str) else ""
+    shallow = None  # 惰性判定(每節點至多一次 rev-parse)
+    untagged_keys = 0
+    has_git_ptr = "[git:" in summ  # presence-guard:整節點無 [git: 子串即不 spawn
+    for raw in summ.split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        has_src = SRC_REF_RE.search(line)
+        has_git = GIT_REF_RE.search(line)
+        prefix_m = REGEN_PREFIX_RE.match(line)
+        # 不對稱接線:推測/佚失 不得承載合約/不可逆(raw 行獨立偵測——INVARIANT_RE 對此形態
+        # 整行不 match,靠它=該行對 Check T/contracts 隱形,比擋下更毒;四組合皆觸發)
+        if prefix_m and ("★INVARIANT★" in line or "★IRREVERSIBLE★" in line):
+            errs.append(f"『{prefix_m.group(1)}:』行不得承載 ★INVARIANT★/★IRREVERSIBLE★"
+                        f"(合約不能建在推測上;補 [src:]/[git:] 或走 signoff 升級):{line[:48]}")
+            continue
+        # J-a:regen ★INVARIANT★ 需 [src:]/[git:] 意圖證據(與 Check T 的 [test:] 疊加——
+        # [test:] 只證行為現在成立,不證意圖是合約;拒絕發明合約)
+        if INVARIANT_RE.match(line) and not (has_src or has_git):
+            errs.append(f"regen 節點的 ★INVARIANT★ 缺 [src:]/[git:] 意圖證據"
+                        f"(J-a 拒絕發明合約):{line[:48]}")
+        # J-b:DECISION 行需證據指針或顯式標 推測:/佚失:(重建的 why 必須標來源或標推測)
+        if line.startswith("DECISION:") and not (has_src or has_git or prefix_m):
+            errs.append(f"regen 節點的 DECISION 行無證據指針且未標 推測:/佚失:(J-b):{line[:48]}")
+        # J-d:無 tier 標記的 KEY 行計數(唯讀提醒,不寫回任何欄位)
+        if line.startswith("KEY:") and not (has_src or has_git or prefix_m):
+            untagged_keys += 1
+        # J-c:[src:] substring gate(直走 _validate_repo_ref,不經 top_dirs 靜默過濾)
+        for m in SRC_REF_RE.finditer(line):
+            path, lno = m.group(1).strip(), (m.group(2) or "")
+            status, _ = _validate_repo_ref(repo_root, path, lno)
+            if status == "missing":
+                errs.append(f"[src:{path}] 目標不存在(J-c dangling=幻覺證據)")
+            elif status == "line_out_of_range":
+                errs.append(f"[src:{path}:{lno}] 行號越界(J-c)")
+        # J-c:[git:sha](presence-guard 後才 spawn;shallow 降級=顯性+僅 doctor --ci 留痕,不得靜默)
+        if has_git_ptr:
+            for m in GIT_REF_RE.finditer(line):
+                sha = m.group(1)
+                if _git_commit_exists(repo_root, sha):
+                    continue
+                if shallow is None:
+                    shallow = _git_is_shallow(repo_root)
+                if shallow:
+                    warns.append(f"[git:{sha[:12]}] Tier B 驗證跳過(shallow clone,本地無該物件;"
+                                 f"非擋——full clone 下會重驗)")
+                    gov.append({"gate": "check-j", "kind": "shallow-skip", "hard": False,
+                                "nodes": [note.stem]})
+                else:
+                    errs.append(f"[git:{sha[:12]}] commit 不存在(J-c dangling=幻覺證據)")
+    if untagged_keys:
+        warns.append(f"{untagged_keys} 條 KEY 行無 tier 標記([src:]/[git:]/推測:/佚失:)"
+                     f"——J-d 提醒:prose 級誠實機械驗不了,建議補標或過對抗審")
+    return errs, warns, gov
+
+
 def cmd_lint(env, node):
-    """單檔快檢:寫完一個節點立刻自驗標籤/格式(node-local,不掃 repo → 比 doctor 快)。
+    """單檔快檢:寫完一個節點立刻自驗標籤/格式(node-local,不掃 repo → 比 doctor 快;
+    例外:regen 節點的 Check J 需檔案+git 存取,opt-in、量小)。
     抓「寫入當下」最常見的錯:type/summary 缺漏、★ 標記格式錯(漏被 contracts 抓)、
     裸合約 / 未審、symbol 行 typo、frontmatter 指紋(ghost trap…)。
     與 doctor 分工:doctor 是全圖權威(跨節點完整性 + [test:] 存在性),lint 只看這一篇、
@@ -1828,6 +1958,9 @@ def cmd_lint(env, node):
     if t in ("system", "issue") and not summ.strip():
         errs.append(f"{t} 節點必須有 summary block(放 FLOW:/KEY:/DEP: 等符號行)")
 
+    _regen_val = n.fields.get("regen")
+    _lint_is_regen = isinstance(_regen_val, str) and bool(_regen_val.strip())
+
     for raw in summ.split("\n"):
         line = raw.strip()
         if not line:
@@ -1837,6 +1970,12 @@ def cmd_lint(env, node):
             warns.append(f"非標準符號行『{ms.group(1)}:』(typo? 符號應為 {'/'.join(sorted(SYMBOL_NAMES))})")
         for mark, rx in (("★INVARIANT★", INVARIANT_RE), ("★DEBT★", DEBT_RE)):
             if mark in line and not rx.match(line):
+                # 雙報消歧 predicate(Check J):regen 節點的 KEY:推測:★INVARIANT★ 由 J 專屬訊息
+                # 接手,跳過 generic 位置錯誤(同一行恰一則;非 regen 節點 generic 保留=兜底)。
+                # 既有迴圈只含 INVARIANT/DEBT、無 IRREVERSIBLE → 消歧只需此分支。
+                if (_lint_is_regen and REGEN_PREFIX_RE.match(line)
+                        and ("★INVARIANT★" in line or "★IRREVERSIBLE★" in line)):
+                    continue
                 errs.append(f"{mark} 必須是 KEY 行前綴(KEY:{mark} ...),否則 contracts/doctor 抓不到:{line[:48]}")
 
     invs, _ = extract_contracts(n)
@@ -1846,6 +1985,13 @@ def cmd_lint(env, node):
             errs.append(f"裸 ★INVARIANT★(沒綁 [test:],Check T 會擋):{first_line(clean, 48)}")
         elif not invariant_audit_refs(inv):
             errs.append(f"★INVARIANT★ 綁了測試但未獨立審計(缺 [audit:],pre-push 會擋):{first_line(clean, 48)}")
+
+    # Check J 單檔版(regen 重生來源守衛):共用 check_regen_provenance,映射表——
+    # errs→errs(rc1)/warns→warns(顯示不計 rc)/gov_events→lint 一律不落帳(高頻)。
+    if _lint_is_regen:
+        j_errs, j_warns, _j_gov = check_regen_provenance(n, _repo_root_from_env(env))
+        errs.extend(j_errs)
+        warns.extend(j_warns)
 
     # Check R 單檔版:可逆性回退綁定 + 標錯型別
     for marker, rclean, ref, guard_ref in extract_reversibility(n):
@@ -4132,7 +4278,7 @@ def cmd_export_html(env, out_path, standalone=False):
 
 # ═══════════════════════ 階段三: 寫側 T1(行級手術) ═══════════════════════
 
-SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off"}
+SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen"}
 LIST_KEYS = {"verified_by", "plan_refs", "related", "tags"}
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -6026,9 +6172,35 @@ def cmd_anchor_approve(repo=None, note=None, vault=None):
     return 0
 
 
+def _validate_repo_ref(repo_root, token, line):
+    """驗一條 repo 內檔案指涉:回 (status, excerpt)。status ∈ missing/line_out_of_range/ok。
+    _refcheck_scan 與 check_regen_provenance(Check J 的 [src:] 驗證)共用——
+    J-c 不得走 _refcheck_scan 抽取入口(inline-code 抽取 + top_dirs 靜默過濾會把假目錄放行,
+    正是 J-c 要擋的幻覺;此 helper 直收已解析 path/line,無靜默過濾)。"""
+    target = repo_root / token
+    if not target.exists():
+        return "missing", ""
+    if target.is_dir() or not line:
+        return "ok", ""
+    if "-" in line:
+        lo, hi = (int(x) for x in line.split("-", 1))
+    else:
+        lo = hi = int(line)
+    try:
+        file_lines = target.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError:
+        file_lines = None
+    if file_lines is None or lo < 1 or hi > len(file_lines):
+        return "line_out_of_range", ""
+    if lo == hi:
+        return "ok", file_lines[lo - 1]
+    return "ok", file_lines[lo - 1] + "\n…\n" + file_lines[hi - 1]
+
+
 def _refcheck_scan(text, repo_root):
     """refcheck 抽取+核對核心(不列印):回 (claims, n_missing, n_oor, n_ok)。
-    cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。"""
+    cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。
+    核對段走 _validate_repo_ref(與 Check J 共用);抽取段(inline-code+top_dirs 過濾)維持原規則。"""
     top_dirs = {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
     _suffix_re = re.compile(r":([^/]+)$")
     spans = [s.strip("`") for s in INLINE_CODE_RE.findall(FENCE_RE.sub("", text))]
@@ -6048,32 +6220,11 @@ def _refcheck_scan(text, repo_root):
         if token.split("/")[0] not in top_dirs:
             continue
         seen.add((token, line))
-        target = repo_root / token
-        if not target.exists():
-            claims.append({"token": token, "line": line, "status": "missing", "excerpt": ""})
-            continue
-        if target.is_dir():
-            claims.append({"token": token, "line": line, "status": "ok", "excerpt": "", "dir": True})
-            continue
-        if not line:
-            claims.append({"token": token, "line": line, "status": "ok", "excerpt": ""})
-            continue
-        if "-" in line:
-            lo, hi = (int(x) for x in line.split("-", 1))
-        else:
-            lo = hi = int(line)
-        try:
-            file_lines = target.read_text(encoding="utf-8-sig", errors="replace").splitlines()
-        except OSError:
-            file_lines = None
-        if file_lines is None or lo < 1 or hi > len(file_lines):
-            claims.append({"token": token, "line": line, "status": "line_out_of_range", "excerpt": ""})
-            continue
-        if lo == hi:
-            excerpt = file_lines[lo - 1]
-        else:
-            excerpt = file_lines[lo - 1] + "\n…\n" + file_lines[hi - 1]
-        claims.append({"token": token, "line": line, "status": "ok", "excerpt": excerpt})
+        status, excerpt = _validate_repo_ref(repo_root, token, line)
+        claim = {"token": token, "line": line, "status": status, "excerpt": excerpt}
+        if status == "ok" and (repo_root / token).is_dir():
+            claim["dir"] = True
+        claims.append(claim)
 
     n_missing = sum(1 for c in claims if c["status"] == "missing")
     n_oor = sum(1 for c in claims if c["status"] == "line_out_of_range")
