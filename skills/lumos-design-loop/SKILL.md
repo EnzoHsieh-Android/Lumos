@@ -50,7 +50,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 ## 平行 panel 模式(≤3 輪壓縮,2026-07-09;取代 6 輪同族循序,設計見 [[loop三輪壓縮_計劃]])
 6 輪同族循序=相關信號(「9 judge 2 票」)且 framing 對抗 G2 收斂逼跑滿 cap。壓縮=**買獨立廣度不買相關深度**:
-- **一輪 = 平行派 W 個多樣審計員**(W 由 tier:`difficulty.params` 的 `panel_width`,standard=3/high=5),不同 canary 型別(跨 slot 輪替 a/b/c/d)+ 不同鏡頭(正確性/邊界/整合)+ ≥1 跨家族(外家模型:**Codex CLI** `codex exec --sandbox read-only`(2026-07-10 起本機可用)或 qwen(自主 loop);不帶 canary、只作否決)。每審計員各自 canary → 注意力檢查平行做。**同輪 W 個 canary 不得同型同段——「殺 A 必殺 B」的重複難度 canary 不算獨立注意力票**(冗餘灌水 caught-rate;冗餘識別不可判定 → 靠紀律,borrow mutation score 教訓 2026-07-10)。
+- **一輪 = 平行派 W 個多樣審計員**(W 由 tier:`difficulty.params` 的 `panel_width`,standard=3/high=5),不同 canary 型別(跨 slot 輪替 a/b/c/d)+ 不同鏡頭(正確性/邊界/整合)。**r1 其中一席改無鏡頭通才席(2026-07-16 replay baseline 實證:窄鏡頭隧道視野漏掉的洞被通才一發抓走——首輪買廣度;r2+ delta 輪恢復鏡頭分工買深度;見 [[Verification/2026-07-16_replay校準baseline_v0]])**+ ≥1 跨家族(外家模型:**Codex CLI** `codex exec --sandbox read-only`(2026-07-10 起本機可用)或 qwen(自主 loop);不帶 canary、只作否決)。每審計員各自 canary → 注意力檢查平行做。**同輪 W 個 canary 不得同型同段——「殺 A 必殺 B」的重複難度 canary 不算獨立注意力票**(冗餘灌水 caught-rate;冗餘識別不可判定 → 靠紀律,borrow mutation score 教訓 2026-07-10)。
 - **判定(編排者一次做)**:①逐同族審計員判 canary caught/missed,missed 者 findings 剔除 ②去重(嚴格合一同段同性質)③對存活 ≥major 派辯方 ④算 capture-recapture:各 distinct 缺陷被幾人找到 → `capture_counts`。
 
 ### reviewer 結構紀律(2026-07-10 研究明文化;實證出處見 [[reviewer結構明文化_計劃]])
