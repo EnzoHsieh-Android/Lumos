@@ -56,22 +56,23 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 - **M2（動 gate code,必過 design-loop）**：② risk-cluster 帳——`canary record` 加 cluster 欄位、`loop status --panel` 改停止條件。**改守衛的守衛,高風險面,進實作前本計劃過 design-loop（舊 loop 審新 loop）**。
 - 驗收信號：下一個真實 spec 過 loop 的輪數/wall-clock/token 對照本計劃前的基線（fromscratch-m1 ≈3 輪/~2h）。
 
-## M2 詳細規格（v1,交 design-loop 對象）
+## M2 詳細規格（v2;r1 折入）
 
 **範圍**：只改「記錄欄位 + panel gate 停止條件」。不動 canary 判定、不動辯方、不動 legacy(非 panel)路徑。
 
 ### 記錄層（cmd_canary 的 record 子指令擴一個選配欄）
 
 - `lumos canary record ... --clusters "名=狀態,名=狀態,..."`：該輪存活 findings 經編排者**按根因合併**後的 risk-cluster 清單。狀態白名單三態:`resolved`(已修並核)/`accepted-minor`(小事,接受不改——note 須帶一句理由,紀律非機械)/`disputed-major`(大事,還在吵/未修)。名=kebab 短 slug(編排者命名,跨輪沿用同名=同 cluster)。
-- 不帶 `--clusters` = 無-cluster 舊帳(panel 既有三條合取 gate 不變;「legacy」一詞保留給非 panel 循序模式,兩者勿混)。**同一 loop 內混用(部分輪有 cluster 部分無)→ rc2**(防半套帳偽過,同 panel/legacy round 混用守衛前例)。
-- 解析驗證:狀態不在白名單 rc2;名含空白/逗號/等號 rc2;同輪同名重複 rc2。
+- **W-record 歸屬(r1 Codex+B 折入)**:cluster 合併是編排者一次性彙整,**每輪至多一筆記錄帶 `--clusters`**(建議掛該輪最後一筆);「該輪帶 cluster」=輪級判定(任一筆帶即算,同 capture_counts 慣例 scripts/lumos:2318);同輪 >1 筆帶 → 讀側 rc2(防照抄 capture_counts「取第一筆非空」靜默吞衝突)。
+- 不帶 `--clusters` = 無-cluster 舊帳(panel 既有三條合取 gate 不變;「legacy」一詞保留給非 panel 循序模式,兩者勿混)。**混用守衛(r1 A+B 折入,執行時機與升級裁定釘死)**:判定在**讀側 `loop status`**(同 round 混用守衛前例 scripts/lumos:2418-2429;record 保持純 append 不讀回歷史——否則破「只改記錄欄位」範圍刀);粒度=輪級;**模式以該 loop 首輪定錨**:首輪無 cluster → 整個 loop 走無-cluster 舊 gate 到底,後續輪帶 clusters → 讀側 rc2 並提示「M2 前開始的 loop 不升級,開新 loop id」;首輪有 → 全輪皆須帶(輪級),半帶 rc2。
+- 解析驗證(r1 B 折入,比照 capture_counts 防禦慣例 scripts/lumos:2226):狀態不在白名單 rc2;名含空白/逗號/等號 rc2;同輪同名重複 rc2;**尾逗號空段靜默過濾**;整值空字串=視同未帶;**段缺 `=` → rc2 明確訊息**(嚴禁未捕捉例外崩潰)。
 
 ### gate 層（loop status --panel 停止條件改造）
 
-全輪皆帶 clusters 時,合取改為**三條**(下列 1-3;capture-recapture 另降 advisory 不進判定):
+該 loop 首輪帶 clusters 時,合取改為**兩條**(r1 折入:原條 3 降 advisory——A 席揭穿其字面版擋 accepted-minor 首現=隱性最少兩輪、自打「解 minor 永續供應」;放寬版(只擋新 disputed-major)又與條 2 冗餘。dryness 本質是人裁訊號,不硬閘):
 1. **輪有效**(canary caught 全數,0 missed)——不變。
-2. **cluster 帳無 disputed-major**:跨輪 fold(同名 cluster 取物理序最後一筆狀態,同 M3 帳本 fold 前例)後,無任何 cluster 終態=disputed-major。**取代「存活 max≤minor」**——blocker/major finding 必須屬於某個 disputed-major cluster(未修)或 resolved cluster(已修核);accepted-minor 只准裝 minor(編排者誠實紀律,GIGO 同 anchors)。
-3. **判定輪無新未解 cluster**:本輪(收斂候選輪)沒有首次出現且終態≠resolved 的 cluster 名——根因級的「發現枯竭」訊號,取代被 framing 污染的 finding 計數(measure-word minor 併入既有 cluster 或 accepted,不再永續供應;真的新根因出現=池子沒乾=再跑一輪)。
+2. **cluster 帳無 disputed-major**:跨輪 fold(同名 cluster 取物理序最後一筆狀態,同 [[關係層主網_實作計畫]] M3 cascade 帳本 `_ledger_fold` 前例 scripts/lumos:4841,語意平行不共用函式)後,無任何 cluster 終態=disputed-major。**fold 只採 caught 輪的 clusters(r1 C 折入)**——missed 輪即使帶 clusters 一律忽略+status 顯示「missed 輪 cluster 已忽略」警告(對齊「missed 者 findings 剔除」慣例 scripts/lumos:2311;否則睡著席一筆 resolved 可靜默清掉先前 disputed-major)。**取代「存活 max≤minor」**——blocker/major finding 必須屬於某個 disputed-major cluster(未修)或 resolved cluster(已修核);accepted-minor 只准裝 minor(編排者誠實紀律,GIGO 同 anchors)。
+- (advisory,不進合取) **新生 cluster 數**:判定輪首次出現的 cluster 名(含各終態)照印——根因級 dryness 訊號,供實質收斂人裁參考,不硬擋(硬擋要嘛冗餘要嘛復活 minor 卡門)。
 - (advisory,不進合取) **capture-recapture 降 advisory**:照算照印(仍是有用訊號),**退出合取**——非定態目標下封閉族群/獨立捕獲前提偏弱(Codex 裁決),不再當硬閘;無 counts 不再 fail-closed(cluster 帳接手守門)。
 - **accepted-minor 帳永久可查**:`loop status <id>` 輸出 cluster ledger 表(名/終態/首現輪/末更輪)——接受不是消失,是記帳(防合法掃地毯,天花板條的機械兌現)。
 
@@ -81,19 +82,27 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 
 ### 測試策略
 
-record 解析:三態白名單過/壞狀態 rc2/名含非法字元 rc2/同輪重名 rc2/不帶=legacy 不變;混用守衛:同 loop 半帶 rc2;fold:同名跨輪最後狀態勝(disputed→resolved 放行、resolved→disputed 回鎖);gate:有 disputed-major 擋/判定輪新未解 cluster 擋/全 resolved+accepted 且 canary 全 caught 放行/新 cluster 但同輪 resolved 放行;advisory:無 counts 不再 fail-closed、殘餘照印不進合取;ledger 表:accepted-minor 顯示於 status 輸出;無-cluster loop 走 panel 既有三條合取迴歸不變(輪有效/存活max≤minor/capture-recapture fail-closed);非 panel 循序 gate(K-streak∧G1∧G2)不受影響。
+record 解析:三態白名單過/壞狀態 rc2/名含非法字元 rc2/同輪重名 rc2/尾逗號空段靜默過濾/空字串=未帶/段缺 = → rc2 訊息非崩潰/不帶=無-cluster 舊帳不變;W 歸屬:同輪 >1 筆帶 clusters → 讀側 rc2;混用守衛(讀側):首輪無 cluster 後續帶 → rc2 提示開新 loop/首輪有半帶 → rc2;fold:同名跨輪最後狀態勝(disputed→resolved 放行、resolved→disputed 回鎖)/**missed 輪 clusters 忽略+警告**(睡著席 resolved 不得清 disputed-major);gate:fold 後有 disputed-major 擋/無 disputed-major 且 canary 全 caught 放行(**含 r1 單輪帶 accepted-minor 首現=可收斂**,K=1 真可行);advisory:新生 cluster 數照印/無 counts 不再 fail-closed/殘餘照印不進合取;ledger 表:accepted-minor 顯示於 status 輸出;無-cluster loop 走 panel 既有三條合取迴歸不變;非 panel 循序 gate(K-streak∧G1∧G2)不受影響。
 
 ## M2 審計修正紀錄
 
 **pre-flight（2026-07-16,M1 新步驟 2.7 首戰）**:panel 前便宜 agent 排乾 4 條清單型——①cmd_canary_record 函式名不存在(實為 cmd_canary 的 record 子指令)②「四條合取」標題與「第4項退出合取」自相矛盾(實為三條)③「四條舊合取」與現碼不符(panel 舊 gate 為三條)④「legacy」一詞雙義(panel 無-cluster vs 非 panel 循序)已消歧。全數修真檔,未耗 panel 席。
 
+**r1（2026-07-16,panel:3 sonnet 異鏡頭+Codex 否決席;M1 新規則首戰輪）**:canary a✗(advisory 高殘餘時回鍋硬條件的矛盾,A 席漏——其 F1/F2 帶行號自核採信)b✗(未定義 ledger 查詢旗標,B 席漏——其 F1/F2/F3 帶行號自核採信)c✓(憑空第四狀態自相矛盾+帳外孤兒,精準)。**caught 1/3=無效輪**;誠實記:兩 missed 席均挖出深層真洞卻漏表面植入——canary 或藏過頭,r2 校準難度+framing 加碼。Codex:核心可建、無結構性障礙,gate 改造點行號級列明。存活 6 條 distinct 全折 v2:
+- **條 3 降 advisory(major,A 自核)**:字面版擋 accepted-minor 首現=隱性最少兩輪、自打核心賣點;放寬版與條 2 冗餘 → gate 收兩條合取,新生 cluster 數改 advisory 供人裁。
+- **W-record 歸屬(major,Codex+B)**:每輪至多一筆帶/輪級判定/同輪多筆 rc2(防 capture_counts「取第一筆」慣例靜默吞衝突)。
+- **混用守衛時機+升級裁定(major,A+B 合併)**:判定在讀側(record 純 append 不讀回,護範圍刀);首輪定錨模式;隱患節裁定折回本體消兩節矛盾。
+- **missed 輪 fold 污染(major,C)**:fold 只採 caught 輪,missed 輪 clusters 忽略+警告——否則睡著席可靜默清 disputed-major。
+- **解析邊界(major,B)**:尾逗號/空值/缺 = 三態補全,比照 capture_counts 防禦慣例,嚴禁未捕捉例外崩潰。
+- **M3 引用消歧(minor,B)**:補 wikilink 與 `_ledger_fold` 行號。
+
 ## 實務隱患（M2）
 
 - **self-governance 循環（最重）**：M2 改的是「判定所有 spec 能否進實作」的閘——gate 邏輯錯了會系統性放行壞 spec 或永遠擋好 spec。緩解＝測試逐條對齊合約 + 本 spec 過 design-loop（舊閘審新閘）+ anchor 護測試。
 - **編排者誠實依賴加深**：cluster 合併與三態標定全是編排者自報——把 major 標成 accepted-minor 即偽收斂。緩解＝accepted-minor 須帶理由 + ledger 永久可查 + canary 仍驗審計員(但不驗編排者,誠實記:比 capture-counts 的 GIGO 面更大)。
-- **混用守衛的邊界**：同 loop 半帶 cluster 的 rc2 判定要含 legacy 舊紀錄(升級中途的 loop 怎麼辦——裁定:M2 前開始的 loop 走舊 gate 到底,新 loop 才用 cluster;以「該 loop 首筆記錄有無 cluster」判)。
+- **混用守衛的邊界**：升級裁定已折回規格本體(首輪定錨,r1)——此處僅留提醒:讀側 rc2 的錯誤訊息必須指路「開新 loop id」,否則使用者會誤以為要改舊紀錄。
 - **fold 語意撞名**:cluster fold(最後狀態勝)與 M3 cascade 帳本 fold 同模式但**不同資料源**(canary-log vs rel-cascade jsonl)——實作勿共用函式硬湊,語意平行即可。
-- **誤擋逃生口**:gate 更嚴後(新未解 cluster 擋),誤擋的出口仍是既有「實質收斂人裁」——不新增旗標。
+- **誤擋逃生口**:gate 兩條合取下唯一硬擋=fold 後 disputed-major(新生 cluster 數僅 advisory 不擋門,r1 已降);誤擋的出口仍是既有「實質收斂人裁」——不新增旗標。
 
 ## 天花板（誠實）
 
