@@ -11,6 +11,7 @@ tags:
 related:
   - "[[Systems/canary-audit]]"
   - "[[Systems/verification-rot-eval]]"
+  - "[[Projects/from-scratch重生守衛_計劃]]"
 summary: |-
   FLAG:ORIGIN
   KEY:PRIOR-ART 對照——langchain-ai/openwiki(2026-06 建、11.6k★、MIT、TS):「CLI 掃 repo→LLM 生成 openwiki/ markdown wiki→CI 排程重生開 PR」的 code 衍生 wiki 原型。同樣往 repo 根 CLAUDE.md/AGENTS.md 塞受管區塊叫 agent「先讀 wiki」——與 lumos 使命重疊、但底層賭注相反
