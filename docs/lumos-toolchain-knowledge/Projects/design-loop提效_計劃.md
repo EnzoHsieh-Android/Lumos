@@ -68,11 +68,11 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 
 ### gate 層（loop status --panel 停止條件改造）
 
-全輪皆帶 clusters 時,合取改為**三條**(第 4 項降 advisory 不進判定):
+全輪皆帶 clusters 時,合取改為**三條**(下列 1-3;capture-recapture 另降 advisory 不進判定):
 1. **輪有效**(canary caught 全數,0 missed)——不變。
 2. **cluster 帳無 disputed-major**:跨輪 fold(同名 cluster 取物理序最後一筆狀態,同 M3 帳本 fold 前例)後,無任何 cluster 終態=disputed-major。**取代「存活 max≤minor」**——blocker/major finding 必須屬於某個 disputed-major cluster(未修)或 resolved cluster(已修核);accepted-minor 只准裝 minor(編排者誠實紀律,GIGO 同 anchors)。
 3. **判定輪無新未解 cluster**:本輪(收斂候選輪)沒有首次出現且終態≠resolved 的 cluster 名——根因級的「發現枯竭」訊號,取代被 framing 污染的 finding 計數(measure-word minor 併入既有 cluster 或 accepted,不再永續供應;真的新根因出現=池子沒乾=再跑一輪)。
-4. **capture-recapture 降 advisory**:照算照印(仍是有用訊號),**退出合取**——非定態目標下封閉族群/獨立捕獲前提偏弱(Codex 裁決),不再當硬閘;無 counts 不再 fail-closed(cluster 帳接手守門)。
+- (advisory,不進合取) **capture-recapture 降 advisory**:照算照印(仍是有用訊號),**退出合取**——非定態目標下封閉族群/獨立捕獲前提偏弱(Codex 裁決),不再當硬閘;無 counts 不再 fail-closed(cluster 帳接手守門)。
 - **accepted-minor 帳永久可查**:`loop status <id>` 輸出 cluster ledger 表(名/終態/首現輪/末更輪)——接受不是消失,是記帳(防合法掃地毯,天花板條的機械兌現)。
 
 ### 明確不做（範圍刀）
