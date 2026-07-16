@@ -22,17 +22,10 @@ summary: |-
   DEP:[[Systems/外部對照-code衍生wiki]]｜[[Systems/design-loop]]｜[[Systems/cochange-guard]]
 plan_refs:
   - "[[Systems/外部對照-code衍生wiki]]"
-decisions:
-  - content: M1 design-loop 達 3 輪 panel cap,人裁實質收斂進實作(2026-07-16):機械 gate 形式 FAIL(r3 存活 major+殘餘 3.0)但設計層 r3 零存活、canary 3/3 全精準、r3 存活全屬測試枚舉補全且已折 v4
-    id: d1
-    context: 三輪軌跡:r1 2/3 caught 存活 9(blocker 範圍矛盾)→r2 3/3 存活 6(major 接線)→r3 3/3 全精準 存活 3(測試枚舉,設計層零)。發現數遞減、性質由設計矛盾退至測試格漏列。capture-recapture 殘餘 3.0 來自單席單維度(測試清單枚舉類)
-    why_chosen: 殘餘風險(測試格再漏)恰是實作階段 TDD+code-loop mutation 冒煙天生接住的東西——再燒設計輪是拿設計審的錢做實作審的事;同主網 3 輪人裁實質收斂前例。誠實天花板照記:收斂只證三輪無設計層 major 再現,canary 判定/溯源排除為編排者自判非 tamper-proof
-    decided: 2026-07-16
-    valid: true
 ---
 # from-scratch重生守衛_計劃
 
-> **狀態**：M1 已過 design-loop 3 輪 panel（r3 canary 3/3 全精準、設計層零存活）→ **人裁實質收斂（2026-07-16，decisions#d1）**，golden 凍於 `governance/golden/fromscratch-m1/` → 進 M1 實作。緣起見 [[Systems/外部對照-code衍生wiki]] 對話 co-develop。
+> **狀態**：設計 ideation 收成節點，**尚未過 design-loop**（進實作前需過；碰寫入路徑 + AI 派工 + 靜默填 prose 風險，建議 `--need 3`）。緣起見 [[Systems/外部對照-code衍生wiki]] 對話 co-develop。
 
 ## 問題（緣起）
 
