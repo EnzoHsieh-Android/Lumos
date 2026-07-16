@@ -10,6 +10,7 @@ tags:
 verified_by:
   - "[[Verification/2026-06-19_canary-audit]]"
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
+  - "[[Verification/2026-07-16_replay校準baseline_v0]]"
 summary: |-
   KEY:[2026-07-10]折入錨點污染型事故:編排者用工作副本(含canary)的字串當折入anchor→對真檔靜默落空(replace無assert)——防範:anchor一律取真檔原文+assert;fold-check未來方向補「紀錄宣稱vs正文存在」核對
   KEY:[2026-07-10]生成硬化三條進 skill——載重錨定/haiku 難度探針(FLAWS)/事故反轉(IBIR);missed-rate 升一級指標(lumos gov 分帳);見[[Projects/canary生成硬化_計劃]]

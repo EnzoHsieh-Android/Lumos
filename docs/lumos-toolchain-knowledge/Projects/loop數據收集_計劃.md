@@ -19,6 +19,8 @@ summary: |-
   KEY:逃逸帳=唯一能校準停止決策的標尺——「收斂好不好」ground truth 是下游抓到多少設計期漏的(實例:fromscratch 收斂後 code review 抓 token 消毒 blocker;M2 收斂後 code-loop 抓 Codex 3 洞);現只在散文,無機械歸因
   DECISION:v1 不做統計模型/dashboard/自動調參(代內 n 不足,先累後校準順序不可倒);只做「訊號機械化+歸因」四件:自主 loop 歸檔/逃逸帳/epoch 蓋章/分層 stats
   DEP:[[Systems/loop-convergence-recording]]｜[[Systems/autonomous-iteration-loop]]
+verified_by:
+  - "[[Verification/2026-07-16_replay校準baseline_v0]]"
 ---
 # loop數據收集_計劃
 
@@ -44,7 +46,7 @@ summary: |-
 
 - **M1（堵流失+建標尺）**：①自主 loop 事件流歸檔——收斂/達 cap 時把 /tmp 工作區 canary-log 整檔搬回 repo（零判斷純搬運,同 golden 慣例）②`lumos loop escape` 原語——下游發現可歸因缺陷時記一筆（loop-id/發現階段/嚴重度/描述）,append-only ③epoch 表回溯蓋章（機械,一次性）。
 - **M2（讀取器+新欄）**：①跨 repo 分層 `loop stats`（多 vault 來源,按 epoch 分組輸出:輪數曲線/caught-rate by canary 型別/席位 missed 軸/辯方開庭數/逃逸率）②新記錄結構化欄:`--protocol`/`--canary-type`/`--probe`(現埋於 note 散文,regex 撈不可靠)。
-- **獨立實驗（不進里程碑,隨時可跑）**：replay 校準——17 份 golden 重跑各模型審計、對照已知 findings 算接住率 → 「哪類 spec 直接上 opus」的數據裁決（skill 早有承諾,門檻已過）。
+- **獨立實驗**：replay 校準。✅ **baseline v0 已跑（2026-07-16,[[Verification/2026-07-16_replay校準baseline_v0]]）**——2 spec×2 模型×釘住/未釘 8 席;三結論(haiku 只配機械清單/單席 sonnet 首輪廣度驚人=多輪價值在折入迴歸/洩漏效應分層)+**三鐵則:受試用 git 史前折 v1、repo 釘同期 worktree、prompt 明示提案語意**——三條缺一分數即污染。擴大跑(更多 golden/加 opus)按需。
 
 ## 已知會被機械報表接住的人肉觀察（動機實例）
 
