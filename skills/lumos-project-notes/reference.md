@@ -718,6 +718,29 @@ python3 scripts/lumos recent --days 7
 
 **天花板**:canary 抓得到「審計員根本沒讀/只吐通用回應」,**抓不到「讀了但複雜權衡判錯」**;判定「有沒有抓到」「severity 多嚴重」都由植入者自己做、無外部檢查——canary/收斂是**降低放水機率的摩擦 + 可觀測地板**,不是閉合驗證或 oracle。設計全文見 `docs/design/2026-06-19-canary-audit.md`、`…-convergence-recording.md`。
 
+### 重生守衛(Check J):from-scratch 重建節點的 provenance 分級(2026-07-16)
+
+**問題**:重建(目擊記錄佚失/接手 legacy/整篇重寫)=從 code 快照逆向工程 why——AI 沒有目擊記憶,會編出自信但腦補的「當初為什麼」;最毒是發明假合約(把偶然寫法標成 ★INVARIANT★ 鎖死重構)。統一原則:**讓重建優雅退化成「誠實的、分級的不確定」,把缺口變可見+有型別,不編自信 prose**。設計全文與三輪對抗審:`Projects/from-scratch重生守衛_計劃`+`governance/golden/fromscratch-m1/`。
+
+**完整工作流**:
+1. 重建前:舊節點還在就 **diff 更新別整篇換**(保住殘存目擊內容);真要從零才走本流程。
+2. 重建完蓋章:`lumos set <節點> regen from-scratch/<日期>`(`regen` 在 SCALAR_KEYS 白名單)。
+3. summary 每條 claim 標身分(**只掃 summary 行**,body 內標記是人讀輔助、機器不執法):
+   - `[src:路徑]` / `[src:路徑:行號]` — Tier A,現 code 可驗(行內 bracket 指針,同 [test:] 族)
+   - `[git:sha]` — Tier B,變更事件作證(commit/revert/PR;7-40 位 hex)
+   - `推測:` — Tier C 前綴,**緊接在 KEY:/DECISION: 後**(`KEY:推測: ...`);沒證據的推論顯式標
+   - `佚失:` — 前綴同上;證據已不存在,老實留空不編
+4. `lumos lint <節點>` 立驗;doctor 全圖同規(共用 check_regen_provenance,兩入口不漂移)。
+
+**Check J 四檢**(只對 regen 節點):
+- **J-a(擋)**:★INVARIANT★ 行無 [src:]/[git:] → 擋。[test:] 只證「行為現在成立」,不證「意圖是合約」——重建場景把偶然合約化是頭號毒;regen 節點的合約=[test:] **且** [src:]/[git:] 疊加。
+- **J-b(擋)**:DECISION 行無證據指針且未標 推測:/佚失: → 擋(重建的 why 必須標來源或標推測)。
+- **J-c(擋,substring gate)**:[src:] 真開檔驗存在+行號範圍;[git:] 真跑 cat-file 驗 commit;假路徑/空白/絕對路徑/`..` traversal/假 sha 全擋(防幻覺證據)。shallow clone 驗不到 git 物件→降警告不擋+顯性標示(僅 doctor --ci 落治理帳)。
+- **J-d(提醒不擋)**:無標記 KEY 行計數提醒(prose 級誠實機械驗不了)。
+- **不對稱接線**:`推測:`/`佚失:` 行不得承載 ★INVARIANT★/★IRREVERSIBLE★(合約不能建在推測上)→ 擋,恰一則專屬訊息。
+
+**升級路徑**:推測→查證後補 [src:]/[git:];或業務面人工確認走 `lumos signoff`。**天花板**:J-c 只驗「指針可解析」不驗「內容真支持 claim」(語意層靠對抗審/人);佚失的 why 永久佚失,正確輸出是「佚失:」——嚴禁編一個合理的(把「不知道」渲染成「知道」正是 code 衍生 wiki 的原罪,見 `Systems/外部對照-code衍生wiki`)。
+
 ### 發現 Issue 時
 `lumos new issue <名稱>` 建檔 → `lumos set` 填 status/type/priority → body 用 Edit 寫現象/相關系統/解法/狀態。
 
