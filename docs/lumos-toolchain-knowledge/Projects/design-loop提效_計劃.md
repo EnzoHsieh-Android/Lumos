@@ -60,15 +60,15 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 
 **範圍**：只改「記錄欄位 + panel gate 停止條件」。不動 canary 判定、不動辯方、不動 legacy(非 panel)路徑。
 
-### 記錄層（cmd_canary_record 擴一個選配欄）
+### 記錄層（cmd_canary 的 record 子指令擴一個選配欄）
 
 - `lumos canary record ... --clusters "名=狀態,名=狀態,..."`：該輪存活 findings 經編排者**按根因合併**後的 risk-cluster 清單。狀態白名單三態:`resolved`(已修並核)/`accepted-minor`(小事,接受不改——note 須帶一句理由,紀律非機械)/`disputed-major`(大事,還在吵/未修)。名=kebab 短 slug(編排者命名,跨輪沿用同名=同 cluster)。
-- 不帶 `--clusters` = legacy 記錄,走既有 gate 不變。**同一 loop 內混用(部分輪有 cluster 部分無)→ rc2**(防半套帳偽過,同 panel/legacy round 混用守衛前例)。
+- 不帶 `--clusters` = 無-cluster 舊帳(panel 既有三條合取 gate 不變;「legacy」一詞保留給非 panel 循序模式,兩者勿混)。**同一 loop 內混用(部分輪有 cluster 部分無)→ rc2**(防半套帳偽過,同 panel/legacy round 混用守衛前例)。
 - 解析驗證:狀態不在白名單 rc2;名含空白/逗號/等號 rc2;同輪同名重複 rc2。
 
 ### gate 層（loop status --panel 停止條件改造）
 
-全輪皆帶 clusters 時,四條合取改為:
+全輪皆帶 clusters 時,合取改為**三條**(第 4 項降 advisory 不進判定):
 1. **輪有效**(canary caught 全數,0 missed)——不變。
 2. **cluster 帳無 disputed-major**:跨輪 fold(同名 cluster 取物理序最後一筆狀態,同 M3 帳本 fold 前例)後,無任何 cluster 終態=disputed-major。**取代「存活 max≤minor」**——blocker/major finding 必須屬於某個 disputed-major cluster(未修)或 resolved cluster(已修核);accepted-minor 只准裝 minor(編排者誠實紀律,GIGO 同 anchors)。
 3. **判定輪無新未解 cluster**:本輪(收斂候選輪)沒有首次出現且終態≠resolved 的 cluster 名——根因級的「發現枯竭」訊號,取代被 framing 污染的 finding 計數(measure-word minor 併入既有 cluster 或 accepted,不再永續供應;真的新根因出現=池子沒乾=再跑一輪)。
@@ -81,7 +81,19 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 
 ### 測試策略
 
-record 解析:三態白名單過/壞狀態 rc2/名含非法字元 rc2/同輪重名 rc2/不帶=legacy 不變;混用守衛:同 loop 半帶 rc2;fold:同名跨輪最後狀態勝(disputed→resolved 放行、resolved→disputed 回鎖);gate:有 disputed-major 擋/判定輪新未解 cluster 擋/全 resolved+accepted 且 canary 全 caught 放行/新 cluster 但同輪 resolved 放行;advisory:無 counts 不再 fail-closed、殘餘照印不進合取;ledger 表:accepted-minor 顯示於 status 輸出;legacy loop(無 cluster)四條舊合取迴歸不變。
+record 解析:三態白名單過/壞狀態 rc2/名含非法字元 rc2/同輪重名 rc2/不帶=legacy 不變;混用守衛:同 loop 半帶 rc2;fold:同名跨輪最後狀態勝(disputed→resolved 放行、resolved→disputed 回鎖);gate:有 disputed-major 擋/判定輪新未解 cluster 擋/全 resolved+accepted 且 canary 全 caught 放行/新 cluster 但同輪 resolved 放行;advisory:無 counts 不再 fail-closed、殘餘照印不進合取;ledger 表:accepted-minor 顯示於 status 輸出;無-cluster loop 走 panel 既有三條合取迴歸不變(輪有效/存活max≤minor/capture-recapture fail-closed);非 panel 循序 gate(K-streak∧G1∧G2)不受影響。
+
+## M2 審計修正紀錄
+
+**pre-flight（2026-07-16,M1 新步驟 2.7 首戰）**:panel 前便宜 agent 排乾 4 條清單型——①cmd_canary_record 函式名不存在(實為 cmd_canary 的 record 子指令)②「四條合取」標題與「第4項退出合取」自相矛盾(實為三條)③「四條舊合取」與現碼不符(panel 舊 gate 為三條)④「legacy」一詞雙義(panel 無-cluster vs 非 panel 循序)已消歧。全數修真檔,未耗 panel 席。
+
+## 實務隱患（M2）
+
+- **self-governance 循環（最重）**：M2 改的是「判定所有 spec 能否進實作」的閘——gate 邏輯錯了會系統性放行壞 spec 或永遠擋好 spec。緩解＝測試逐條對齊合約 + 本 spec 過 design-loop（舊閘審新閘）+ anchor 護測試。
+- **編排者誠實依賴加深**：cluster 合併與三態標定全是編排者自報——把 major 標成 accepted-minor 即偽收斂。緩解＝accepted-minor 須帶理由 + ledger 永久可查 + canary 仍驗審計員(但不驗編排者,誠實記:比 capture-counts 的 GIGO 面更大)。
+- **混用守衛的邊界**：同 loop 半帶 cluster 的 rc2 判定要含 legacy 舊紀錄(升級中途的 loop 怎麼辦——裁定:M2 前開始的 loop 走舊 gate 到底,新 loop 才用 cluster;以「該 loop 首筆記錄有無 cluster」判)。
+- **fold 語意撞名**:cluster fold(最後狀態勝)與 M3 cascade 帳本 fold 同模式但**不同資料源**(canary-log vs rel-cascade jsonl)——實作勿共用函式硬湊,語意平行即可。
+- **誤擋逃生口**:gate 更嚴後(新未解 cluster 擋),誤擋的出口仍是既有「實質收斂人裁」——不新增旗標。
 
 ## 天花板（誠實）
 
