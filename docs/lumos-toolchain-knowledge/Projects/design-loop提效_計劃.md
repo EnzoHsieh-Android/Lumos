@@ -52,7 +52,7 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 
 ## 里程碑
 
-- **M1（skill 層,trivial 級可先行）**：①③④⑤ + severity 錨句——全是 SKILL.md/templates.md 文字改動,不動 code。
+- **M1（skill 層,trivial 級可先行）**：①③④⑤ + severity 錨句——全是 SKILL.md/templates.md 文字改動,不動 code。✅ **已落地（2026-07-16,SKILL.md 五處:pre-flight 2.7/severity 錨/辯方路由制/fold 迷你核對/delta-scoped+全局哨兵;user-scope symlink 即時生效）**
 - **M2（動 gate code,必過 design-loop）**：② risk-cluster 帳——`canary record` 加 cluster 欄位、`loop status --panel` 改停止條件。**改守衛的守衛,高風險面,進實作前本計劃過 design-loop（舊 loop 審新 loop）**。
 - 驗收信號：下一個真實 spec 過 loop 的輪數/wall-clock/token 對照本計劃前的基線（fromscratch-m1 ≈3 輪/~2h）。
 

@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-10
+updated: 2026-07-16
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -12,6 +12,7 @@ verified_by:
   - "[[Verification/2026-07-09_loop三輪壓縮]]"
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
 summary: |-
+  KEY:[2026-07-16]提效 M1 落地(見[[Projects/design-loop提效_計劃]])——pre-flight 排乾(panel 前便宜 agent 掃清單型缺陷,cascade)/R2+ 嚴格 delta-scoped(物理只餵 diff+受影響合約+前輪爭議,留全局哨兵;解非定態目標病)/辯方路由制(機械證實與多席一致免辯方,低共識才開庭)/fold 迷你核對/severity 錨句(防 framing 通膨);M2 risk-cluster 帳未做(動 gate code,先過 loop)
   KEY:[2026-07-10]reviewer 結構紀律明文化——禁互辯/編排者=meta-judge/關鍵單點判決≥3run多數決(EMNLP 2025 實證,見[[Projects/reviewer結構明文化_計劃]])
   FLOW:brainstorming產spec→[trivial?跳並註明]→每輪{複製spec→/tmp/<id>-rN(N=loop_status輪數+1)→植1canary(類型=清單[(N−1)mod4],只進工作副本)→派乾淨審計員(sonnet,連2missed升opus,不告知canary,refute framing)→判讀(canary抓到?+真finding max severity)→辯方refute(對≥major每條派獨立opus構造反證file:line)→該輪severity=辯方存活max→canary record caught|missed→抓到折真finding進真檔(commit前grep canary token須=0)/漏抓不折直接下輪}→loop status --need 2 exit0→收斂+天花板提醒→writing-plans
   KEY:Claude編排,lumos只出原語——Claude用Agent tool派審計員/判讀/修spec;lumos出 canary record/loop status 記錄與算收斂,lumos不spawn agent
