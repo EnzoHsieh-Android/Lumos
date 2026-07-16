@@ -11,6 +11,7 @@ verified_by:
   - "[[Verification/2026-06-19_design-loop]]"
   - "[[Verification/2026-07-09_loop三輪壓縮]]"
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
+  - "[[Verification/2026-07-16_dloop提效M2_cluster帳]]"
 summary: |-
   KEY:[2026-07-16]提效 M1 落地(見[[Projects/design-loop提效_計劃]])——pre-flight 排乾(panel 前便宜 agent 掃清單型缺陷,cascade)/R2+ 嚴格 delta-scoped(物理只餵 diff+受影響合約+前輪爭議,留全局哨兵;解非定態目標病)/辯方路由制(機械證實與多席一致免辯方,低共識才開庭)/fold 迷你核對/severity 錨句(防 framing 通膨);M2 risk-cluster 帳未做(動 gate code,先過 loop)
   KEY:[2026-07-10]reviewer 結構紀律明文化——禁互辯/編排者=meta-judge/關鍵單點判決≥3run多數決(EMNLP 2025 實證,見[[Projects/reviewer結構明文化_計劃]])

@@ -8776,6 +8776,198 @@ def t_check_j_git():
         shutil.rmtree(base, ignore_errors=True)
 
 
+def t_m2_cluster_gate():
+    """M2 risk-cluster 三態帳:record 解析/有效輪謂詞/定錨/混用/fold/gate 兩條合取/advisory/ledger。
+    spec: Projects/design-loop提效_計劃 v4(golden: governance/golden/dloop-m2-cluster)。"""
+    import subprocess as _sp
+
+    def _mkvault(d):
+        v = Path(d) / "docs" / "y-knowledge"
+        (v / "MOC").mkdir(parents=True)
+        (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+
+    def _rec(d, *extra):
+        return _sp.run([sys.executable, GRAPHCTL, "canary", "record", *extra],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    def _st(d, loop="CL", *extra):
+        return _sp.run([sys.executable, GRAPHCTL, "loop", "status", loop, "--panel", *extra],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    # ── record 解析(寫側) ──
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", "a=resolved,b=disputed-major")
+        check("M2 rec: 合法三態 rc0", r.returncode == 0, r.stderr)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", "x=weird")
+        check("M2 rec: 壞狀態 rc2", r.returncode == 2 and "白名單" in r.stderr, r.stderr)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", "a b=resolved")
+        check("M2 rec: 名含空白 rc2", r.returncode == 2, r.stderr)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", "a=resolved,a=resolved")
+        check("M2 rec: 同輪重名 rc2", r.returncode == 2 and "重複" in r.stderr, r.stderr)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", "a=resolved,")
+        check("M2 rec: 尾逗號空段過濾 rc0", r.returncode == 0, r.stderr)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", ",")
+        check("M2 rec: 全逗號空列表 rc2", r.returncode == 2 and "無有效內容" in r.stderr, r.stderr)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", "")
+        check("M2 rec: 空字串 rc2(帶旗標即須內容)", r.returncode == 2, r.stderr)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", "abc")
+        check("M2 rec: 段缺 = rc2 非崩潰", r.returncode == 2 and "Traceback" not in r.stderr, r.stderr)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", "a=accepted-minor")
+        check("M2 rec: accepted-minor 缺理由 rc2", r.returncode == 2 and "理由" in r.stderr, r.stderr)
+        r = _rec(d, "caught", "--loop", "CL", "--round", "r1", "--clusters", "a=accepted-minor:字太小可接受")
+        check("M2 rec: accepted-minor:理由 rc0", r.returncode == 0, r.stderr)
+
+    def _round(d, rid, kinds, clusters_on=None, clusters=None, loop="CL"):
+        # kinds: list like ["caught","caught","missed"];clusters_on=index of record carrying --clusters
+        for i, k in enumerate(kinds):
+            extra = ["--token", f"{rid}T{i}"]
+            if clusters_on is not None and i == clusters_on:
+                extra += ["--clusters", clusters]
+            _rec(d, k, "--loop", loop, "--round", rid, "--severity", "clean", *extra)
+
+    # ── gate:定錨+兩條合取+K=1(首個有效輪 accepted-minor 首現可收斂) ──
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=resolved,b=accepted-minor:小字可忍")
+        r = _st(d)
+        check("M2 gate: 首個有效輪 resolved+accepted-minor → PASS(K=1)",
+              r.returncode == 0 and "PASS" in r.stdout, f"rc={r.returncode}\n{r.stdout}{r.stderr}")
+        check("M2 ledger: accepted-minor 理由顯示", "小字可忍" in r.stdout, r.stdout)
+        check("M2 advisory: 無 counts 不 fail-closed", "advisory" in r.stdout, r.stdout)
+
+    # disputed-major 擋
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=disputed-major")
+        r = _st(d)
+        check("M2 gate: disputed-major → FAIL rc1", r.returncode == 1 and "disputed-major" in r.stdout, r.stdout)
+
+    # fold:disputed→resolved 放行;resolved→disputed 回鎖
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=disputed-major")
+        _round(d, "r2", ["caught", "caught"], 1, "a=resolved")
+        r = _st(d)
+        check("M2 fold: disputed→resolved 放行", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=resolved")
+        _round(d, "r2", ["caught", "caught"], 1, "a=disputed-major")
+        r = _st(d)
+        check("M2 fold: resolved→disputed 回鎖", r.returncode == 1, r.stdout)
+
+    # 有效輪謂詞:2caught+1missed 輪的 clusters 不採(掛 caught 記錄上也不採)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=disputed-major")
+        _round(d, "r2", ["caught", "caught", "missed"], 0, "a=resolved")  # 無效輪試洗白
+        r = _st(d)
+        check("M2 謂詞: 無效輪(2c+1m)resolved 不得清 disputed-major",
+              r.returncode == 1 and "disputed-major" in r.stdout, r.stdout)
+        check("M2 警告區: 無效輪 clusters 已忽略列帳", "已忽略" in r.stdout, r.stdout)
+    # 未知 kind 盲區:2caught+1未知 → 輪無效(謂詞補全)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=disputed-major")
+        import json as _j
+        log = Path(d) / "docs" / ".canary-log.jsonl"
+        rows = [_j.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+        rows.append({"ts": rows[-1]["ts"], "kind": "caught", "auditor": "", "token": "X1",
+                     "note": "", "loop": "CL", "round": "r2", "severity": "clean"})
+        rows.append({"ts": rows[-1]["ts"], "kind": "caught", "auditor": "", "token": "X2",
+                     "note": "", "loop": "CL", "round": "r2", "severity": "clean",
+                     "clusters": {"a": "resolved"}})
+        rows.append({"ts": rows[-1]["ts"], "kind": "wat", "auditor": "", "token": "X3",
+                     "note": "", "loop": "CL", "round": "r2"})
+        log.write_text("".join(_j.dumps(x, ensure_ascii=False) + "\n" for x in rows), encoding="utf-8")
+        r = _st(d)
+        check("M2 謂詞: 2caught+1未知kind=無效輪(盲區補全)",
+              r.returncode == 1 and "disputed-major" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
+
+    # 定錨:首輪全 missed 不定錨,第一個有效輪才定錨(cluster 模式成立)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["missed", "missed"])          # 無效首輪,無 clusters
+        _round(d, "r2", ["caught", "caught"], 1, "a=resolved")
+        r = _st(d)
+        check("M2 定錨: 首輪全 missed 不鎖死,r2 有效輪定錨 cluster → PASS",
+              r.returncode == 0, f"rc={r.returncode}\n{r.stdout}{r.stderr}")
+
+    # 混用:定錨無-cluster 後續有效輪帶 → rc2 分因指路
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"])           # 有效輪,無 clusters → 定錨無-cluster
+        _round(d, "r2", ["caught", "caught"], 1, "a=resolved")
+        r = _st(d)
+        check("M2 混用: 定錨無-cluster 後續帶 → rc2+指路開新 loop",
+              r.returncode == 2 and "開新 loop id" in r.stderr, f"rc={r.returncode}\n{r.stderr}")
+    # 混用:定錨 cluster 後續有效輪半帶 → rc2;無效輪不帶=豁免
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=resolved")
+        _round(d, "r2", ["caught", "missed"])            # 無效輪不帶 → 豁免
+        _round(d, "r3", ["caught", "caught"], 1, "b=resolved")
+        r = _st(d)
+        check("M2 混用: 無效輪不帶豁免、有效輪皆帶 → PASS", r.returncode == 0,
+              f"rc={r.returncode}\n{r.stdout}{r.stderr}")
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=resolved")
+        _round(d, "r2", ["caught", "caught"])            # 有效輪半帶 → rc2
+        r = _st(d)
+        check("M2 混用: 有效輪半帶 → rc2", r.returncode == 2 and "半帶" in r.stderr, r.stderr)
+
+    # W 歸屬:有效輪 >1 筆帶 → rc2;無效輪多筆帶 → 豁免列警告
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "CL", "--round", "r1", "--token", "A", "--severity", "clean",
+             "--clusters", "a=resolved")
+        _rec(d, "caught", "--loop", "CL", "--round", "r1", "--token", "B", "--severity", "clean",
+             "--clusters", "b=resolved")
+        r = _st(d)
+        check("M2 W歸屬: 有效輪雙帶 → rc2", r.returncode == 2 and "至多一筆" in r.stderr, r.stderr)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "caught", "--loop", "CL", "--round", "r1", "--token", "A", "--clusters", "a=disputed-major")
+        _rec(d, "missed", "--loop", "CL", "--round", "r1", "--token", "B", "--clusters", "b=resolved")
+        _round(d, "r2", ["caught", "caught"], 1, "c=resolved")
+        r = _st(d)
+        check("M2 W歸屬: 無效輪多筆帶=豁免不 rc2(r2 定錨)", r.returncode == 0,
+              f"rc={r.returncode}\n{r.stdout}{r.stderr}")
+        check("M2 警告區: 無效輪雙帶列帳", r.stdout.count("已忽略") >= 1, r.stdout)
+
+    # round-id 非連續重現 → rc2
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=resolved")
+        _round(d, "r2", ["caught", "caught"], 1, "b=resolved")
+        _rec(d, "caught", "--loop", "CL", "--round", "r1", "--token", "Z", "--clusters", "c=resolved")
+        r = _st(d)
+        check("M2 round-id: 非連續重現 → rc2", r.returncode == 2 and "非連續" in r.stderr, r.stderr)
+
+    # 讀側型別防禦:clusters 欄損壞 → rc2 非 traceback
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"], 1, "a=resolved")
+        import json as _j
+        log = Path(d) / "docs" / ".canary-log.jsonl"
+        rows = [_j.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+        rows[-1]["clusters"] = "corrupted-string"
+        log.write_text("".join(_j.dumps(x, ensure_ascii=False) + "\n" for x in rows), encoding="utf-8")
+        r = _st(d)
+        check("M2 型別防禦: 損壞 clusters → rc2 非 traceback",
+              r.returncode == 2 and "Traceback" not in r.stderr, f"rc={r.returncode}\n{r.stderr}")
+
+    # 無-cluster 舊帳迴歸:三條合取不變(fail-closed 保留)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _round(d, "r1", ["caught", "caught"])            # 無 clusters,無 counts
+        r = _st(d)
+        check("M2 迴歸: 無-cluster 舊帳 capture-recapture 仍 fail-closed rc1",
+              r.returncode == 1 and "capture_counts" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

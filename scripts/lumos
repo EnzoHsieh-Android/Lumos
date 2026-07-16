@@ -2206,10 +2206,42 @@ def cmd_gov(env, node=None, since_days=90):
     return 0
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None):
+CLUSTER_STATES = ("resolved", "accepted-minor", "disputed-major")
+
+
+def _parse_clusters(raw):
+    """M2 risk-cluster 寫側解析:--clusters '名=狀態,...' → (dict{名:狀態}, None) 或 (None, 錯誤訊息)。
+    三態白名單;accepted-minor 需冒號內嵌理由(整筆單一 note 對多 accepted-minor 無法對應=模糊過帳);
+    尾逗號空段靜默過濾,但過濾後空列表=rc2(帶旗標即須有效內容,無「空字串=未帶」特例);
+    設計:Projects/design-loop提效_計劃 M2(golden: governance/golden/dloop-m2-cluster)。"""
+    parts = [p.strip() for p in str(raw).split(",") if p.strip()]
+    if not parts:
+        return None, "帶了 --clusters 但無有效內容(空字串/全逗號)"
+    out = {}
+    for p in parts:
+        if "=" not in p:
+            return None, f"段缺 '='(格式 名=狀態): {p!r}"
+        name, state = p.split("=", 1)
+        name, state = name.strip(), state.strip()
+        if (not name or any(c in name for c in " ,=")
+                or any(ord(c) < 0x20 for c in name)):
+            return None, f"cluster 名非法(禁空白/逗號/等號/控制字元): {name!r}"
+        base = state.split(":", 1)[0]
+        if base not in CLUSTER_STATES:
+            return None, f"狀態 {base!r} 不在白名單 {'/'.join(CLUSTER_STATES)}"
+        if base == "accepted-minor" and (":" not in state or not state.split(":", 1)[1].strip()):
+            return None, f"accepted-minor 需逐 cluster 內嵌理由(accepted-minor:理由): {p!r}"
+        if name in out:
+            return None, f"同輪同名 cluster 重複: {name!r}"
+        out[name] = state
+    return out, None
+
+
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None):
     """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
+    --clusters(M2):該輪 risk-cluster 三態帳(每輪至多一筆帶;讀側 loop status --panel 消費)。
     天花板:這只證明「審計員有沒有醒著讀」,不證明它抓到所有真問題(見設計 doc)。"""
     import json
     import datetime
@@ -2232,6 +2264,12 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         rec["severity"] = severity
     if findings is not None:
         rec["findings"] = findings
+    if clusters is not None:   # 空字串也進解析器 → rc2(帶旗標即須有效內容,勿被 falsy 吞)
+        parsed, err = _parse_clusters(clusters)
+        if err:
+            print(f"ERROR: --clusters {err}", file=sys.stderr)
+            return 2
+        rec["clusters"] = parsed   # dict{名:狀態},同 capture_counts 寫側轉型慣例
     path = env.vault.parent / ".canary-log.jsonl"
     try:
         with open(path, "a", encoding="utf-8") as f:
@@ -2281,17 +2319,76 @@ def _estimate_remaining_defects(capture_counts):
     return f1 * (f1 - 1) / (2 * (f2 + 1))
 
 
+def _round_valid_m2(recs):
+    """M2 統一單位謂詞(有效輪):caught≥2 ∧ missed=0 ∧ 全部 kind ∈ {caught,missed}。
+    gate/fold/定錨/ledger/W 歸屬五處共用——嚴禁記錄級判定(2caught+1missed 輪的
+    clusters 掛 caught 記錄上也不得採納);未知 kind 使輪無效(既有 2303 謂詞對此是盲的)。"""
+    kinds = [r.get("kind") for r in recs]
+    if any(k not in ("caught", "missed") for k in kinds):
+        return False
+    return kinds.count("caught") >= 2 and kinds.count("missed") == 0
+
+
 def _loop_status_panel(rounds, loop_id):
-    """平行 panel 收斂謂詞(loop 三輪壓縮):按 round-id 分組,判最新一輪四條合取——
-    ①輪有效(caught≥2 且 0 missed,near-perfect)②存活 max severity ≤ minor(ODC 只缺陷類 + 辯方後,由 record 提供)
-    ③capture-recapture 殘餘 < 門檻(有 capture_counts 才判)。結構信號取代 K-streak∧G2 序列。"""
+    """平行 panel 收斂謂詞(loop 三輪壓縮)。無-cluster 舊帳:三條合取(輪有效∧存活max≤minor
+    ∧capture-recapture 殘餘,fail-closed)。cluster 帳(M2,設計 Projects/design-loop提效_計劃;
+    golden: governance/golden/dloop-m2-cluster):首個有效輪帶 clusters 定錨 → 兩條合取
+    (輪有效∧fold 後無 disputed-major),新生 cluster/capture-recapture 降 advisory,
+    無效輪 clusters 忽略+警告區列帳(不蒸發)。讀側 rc2 類:round-id 非連續/型別損壞/
+    有效輪 W 歸屬衝突/有效輪級混用。"""
     from collections import OrderedDict
     groups = OrderedDict()
     for r in rounds:
-        groups.setdefault(r.get("round"), []).append(r)
+        rid_ = r.get("round")
+        if rid_ in groups and next(reversed(groups)) != rid_:
+            # M2:round-id 被其他 round 隔開後重現=帳本次序損壞(append-only 不容跳寫)
+            print(f"ERROR: round-id {rid_!r} 非連續重現(被其他輪隔開;append-only 帳次序損壞)",
+                  file=sys.stderr)
+            return 2
+        groups.setdefault(rid_, []).append(r)
     if not groups:
         print(f"⏳ 無 panel 輪記錄 ({loop_id})")
         return 1
+    # ── M2 讀側型別防禦:clusters 欄必須是 dict[str,str](寫側轉型慣例;手改/損壞 → rc2 非 traceback)
+    for r in rounds:
+        if "clusters" in r:
+            c = r["clusters"]
+            if (not isinstance(c, dict)
+                    or any(not isinstance(k, str) or not isinstance(v, str) for k, v in c.items())):
+                print(f"ERROR: 記錄 clusters 欄非 dict{{名:狀態}} 結構(損壞/手改 JSONL?): {c!r}",
+                      file=sys.stderr)
+                return 2
+    valid_of = {rid_: _round_valid_m2(recs) for rid_, recs in groups.items()}
+    # ── M2 W 歸屬:有效輪同輪 >1 筆帶 clusters → rc2(無效輪多筆帶=豁免,列警告區)
+    for rid_, recs in groups.items():
+        if valid_of[rid_] and sum(1 for r in recs if "clusters" in r) > 1:
+            print(f"ERROR: 輪 {rid_} 有 {sum(1 for r in recs if 'clusters' in r)} 筆記錄帶 clusters"
+                  f"(每輪至多一筆;衝突不靜默取第一筆)", file=sys.stderr)
+            return 2
+    # ── M2 定錨:第一個有效輪定模式(無效輪不定錨——首輪全 missed 的新 loop 不得鎖死)
+    anchor_rid, anchor_cluster = None, False
+    for rid_, recs in groups.items():
+        if valid_of[rid_]:
+            anchor_rid = rid_
+            anchor_cluster = any("clusters" in r for r in recs)
+            break
+    if anchor_rid is not None:
+        # 有效輪級混用守衛(無效輪豁免:帶或不帶皆不觸發)
+        for rid_, recs in groups.items():
+            if not valid_of[rid_]:
+                continue
+            has_c = any("clusters" in r for r in recs)
+            if anchor_cluster and not has_c:
+                print(f"ERROR: 本 loop 已定錨 cluster 帳(定錨輪 {anchor_rid}),有效輪 {rid_} 未帶"
+                      f" clusters(半帶);補該輪 cluster 記錄或開新 loop id", file=sys.stderr)
+                return 2
+            if not anchor_cluster and has_c:
+                print(f"ERROR: 本 loop 已定錨無-cluster 模式(定錨輪 {anchor_rid}),有效輪 {rid_} 帶了"
+                      f" clusters;要用 cluster 帳請開新 loop id(不升級既有 loop)", file=sys.stderr)
+                return 2
+    if anchor_rid is not None and anchor_cluster:
+        return _loop_status_panel_clusters(groups, valid_of, loop_id)
+    # ── 無-cluster 舊帳(或零有效輪=未定錨):既有三條合取,fail-closed 不變 ──
     rid, latest = next(reversed(groups.items()))
     order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
     fails = []
@@ -2336,6 +2433,80 @@ def _loop_status_panel(rounds, loop_id):
         print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
     print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ 存活≤minor ∧ capture-recapture 枯竭)")
+    return 0
+
+
+def _loop_status_panel_clusters(groups, valid_of, loop_id):
+    """M2 cluster 帳 gate:兩條合取(判定輪有效 ∧ fold 後無 disputed-major)。
+    fold 只採有效輪(last-wins,同名跨輪最後狀態勝);無效輪 clusters 警告區列帳不蒸發;
+    新生 cluster 與 capture-recapture 皆 advisory 不進合取。"""
+    order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+    rid, latest = next(reversed(groups.items()))
+    fails = []
+    # 條 1:判定輪(latest)有效——同一謂詞
+    caught_recs = [r for r in latest if r.get("kind") == "caught"]
+    n_caught, n_missed = len(caught_recs), sum(1 for r in latest if r.get("kind") == "missed")
+    if valid_of[rid]:
+        print(f"[panel/cluster] 條1 輪有效(caught {n_caught}≥2,0 missed): ✓")
+    else:
+        print(f"[panel/cluster] 條1 輪有效: ✗ — caught {n_caught}/missed {n_missed}"
+              f"(謂詞:caught≥2∧missed=0∧kind 全白名單)")
+        fails.append("輪無效")
+    # fold(僅有效輪,append 序 last-wins)+ ledger(首現/末更輪僅計有效輪,與 advisory 同源)
+    from collections import OrderedDict as _OD
+    ledger = _OD()
+    for rid_, recs in groups.items():
+        if not valid_of[rid_]:
+            continue
+        for r in recs:
+            for name, state in (r.get("clusters") or {}).items():
+                if name not in ledger:
+                    ledger[name] = {"state": state, "first": rid_, "last": rid_}
+                else:
+                    ledger[name]["state"] = state
+                    ledger[name]["last"] = rid_
+    disputed = [n for n, e in ledger.items() if e["state"].split(":", 1)[0] == "disputed-major"]
+    if disputed:
+        print(f"[panel/cluster] 條2 fold 後無 disputed-major: ✗ — {len(disputed)} 個: {','.join(disputed)}")
+        fails.append("存在disputed-major")
+    else:
+        print("[panel/cluster] 條2 fold 後無 disputed-major: ✓")
+    # advisory:新生 cluster(僅基於有效輪;判定輪無效 → 不適用)
+    if valid_of[rid]:
+        born = [n for n, e in ledger.items() if e["first"] == rid]
+        print(f"[panel/cluster] (advisory) 新生 cluster: {len(born)} 個"
+              + (f": {','.join(born)}" if born else ""))
+    else:
+        print("[panel/cluster] (advisory) 新生 cluster: 判定輪無效,新生統計不適用")
+    # advisory:capture-recapture(照算照印,不進合取;無 counts 不 fail-closed——cluster 帳接手守門)
+    cc = next((r["capture_counts"] for r in latest if r.get("capture_counts")), None)
+    if cc is not None:
+        remaining = _estimate_remaining_defects(cc)
+        print(f"[panel/cluster] (advisory) capture-recapture 殘餘估計: {remaining:.2f}(不進合取)")
+    else:
+        print("[panel/cluster] (advisory) capture-recapture: 無 counts(advisory,不擋)")
+    # 警告區:無效輪攜帶的 clusters(已忽略;資料本在 canary-log,顯示即留痕——status 唯讀)
+    for rid_, recs in groups.items():
+        if valid_of[rid_]:
+            continue
+        carried = {}
+        for r in recs:
+            carried.update(r.get("clusters") or {})
+        if carried:
+            print(f"  ⚠ {rid_}(無效輪) clusters 已忽略: "
+                  + ",".join(f"{n}={s}" for n, s in carried.items()))
+    # ledger 表
+    if ledger:
+        print("  ── cluster ledger(僅計有效輪)──")
+        for n, e in ledger.items():
+            print(f"  {n}\t{e['state']}\t首現 {e['first']}\t末更 {e['last']}")
+    for i, r in enumerate(latest, 1):
+        print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
+    if fails:
+        print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+        return 1
+    print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ fold 後無 disputed-major"
+          f"[cluster 帳,{len(ledger)} 個 cluster])")
     return 0
 
 
@@ -8811,6 +8982,8 @@ def main():
                     help="panel 輪 id(一輪 W 個平行審計員的記錄共享;供 loop status --panel 分組)")
     cr.add_argument("--capture-counts", dest="capture_counts",
                     help="panel 輪的 capture-recapture 輸入:各 distinct 缺陷被幾個審計員找到,逗號分隔(如 '2,2,1');供殘餘估計")
+    cr.add_argument("--clusters",
+                    help="M2 risk-cluster 三態帳:'名=狀態,...'(resolved/accepted-minor:理由/disputed-major);每輪至多一筆帶,loop status --panel 消費")
 
     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
     lsub = lp.add_subparsers(dest="lcmd", required=True)
@@ -8822,7 +8995,7 @@ def main():
     ls.add_argument("--spec", dest="gate_spec", help="--gate 必填:要核對引用座標的最終 spec md")
     ls.add_argument("--repo", dest="gate_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     ls.add_argument("--panel", action="store_true",
-                    help="平行 panel 模式:按 round-id 分組,收斂判準=輪有效(caught≥2且0missed)∧存活 max≤minor∧capture-recapture 殘餘<門檻(取代 K-streak∧G2 序列)")
+                    help="平行 panel 模式:按 round-id 分組。無-cluster 舊帳=三條合取(輪有效∧存活max≤minor∧capture-recapture殘餘,fail-closed);cluster 帳(M2,首個有效輪帶 --clusters 定錨)=兩條合取(輪有效∧fold後無disputed-major),新生cluster/capture-recapture 降 advisory。--gate 對 panel 為相容 no-op(panel 判準恆生效)")
     lcc = lsub.add_parser("capture-counts",
                           help="異質 finder 接線:多 --finder 的 finding-key → capture_counts + 殘餘估計(餵 canary record --capture-counts)")
     lcc.add_argument("--finder", dest="finders", action="append", default=[],
@@ -9210,7 +9383,7 @@ def main():
     if args.cmd == "canary":
         return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
                           args.severity, findings=args.findings, round_id=args.round_id,
-                          capture_counts=args.capture_counts)
+                          capture_counts=args.capture_counts, clusters=args.clusters)
 
     if args.cmd == "loop":
         if args.lcmd == "status":

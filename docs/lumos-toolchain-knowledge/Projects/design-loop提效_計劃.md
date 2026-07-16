@@ -26,6 +26,8 @@ decisions:
     why_chosen: 補償性結構證據:三模型家族(GPT/opus/sonnet)獨立收斂於同批洞(W 歸屬三重互證/unknown-kind 雙重互證),framing 偽造不了;且 M2 是 gate code,實作後 pitfalls 必判 tier=high→強制 full code-loop+mutation 冒煙,實作級安全網雙層(M1 Check J 的 token 消毒洞正是該層接住)。形式完美一輪(選項 B)買的是帳面,不是新資訊
     decided: 2026-07-16
     valid: true
+verified_by:
+  - "[[Verification/2026-07-16_dloop提效M2_cluster帳]]"
 ---
 # design-loop提效_計劃
 
@@ -60,7 +62,7 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 ## 里程碑
 
 - **M1（skill 層,trivial 級可先行）**：①③④⑤ + severity 錨句——全是 SKILL.md/templates.md 文字改動,不動 code。✅ **已落地（2026-07-16,SKILL.md 五處:pre-flight 2.7/severity 錨/辯方路由制/fold 迷你核對/delta-scoped+全局哨兵;user-scope symlink 即時生效）**
-- **M2（動 gate code,必過 design-loop）**：② risk-cluster 帳——`canary record` 加 cluster 欄位、`loop status --panel` 改停止條件。**改守衛的守衛,高風險面,進實作前本計劃過 design-loop（舊 loop 審新 loop）**。✅ design-loop 3 輪達 cap,人裁實質收斂(2026-07-16,decisions#d1;golden: `governance/golden/dloop-m2-cluster/`;Codex 否決於 v4 解除)→ **進實作**(實作後必過 tier=high full code-loop,人裁條件)。
+- **M2（動 gate code,必過 design-loop）**：② risk-cluster 帳——`canary record` 加 cluster 欄位、`loop status --panel` 改停止條件。**改守衛的守衛,高風險面,進實作前本計劃過 design-loop（舊 loop 審新 loop）**。✅ design-loop 3 輪達 cap,人裁實質收斂(2026-07-16,decisions#d1;golden: `governance/golden/dloop-m2-cluster/`;Codex 否決於 v4 解除)→ **進實作** ✅ **已落地(2026-07-16,[[Verification/2026-07-16_dloop提效M2_cluster帳]]:29 格綠+全套 1186 綠+舊 panel 16 格無迴歸;push 前過 tier=high full code-loop=人裁條件待執行)**。
 - 驗收信號：下一個真實 spec 過 loop 的輪數/wall-clock/token 對照本計劃前的基線（fromscratch-m1 ≈3 輪/~2h）。
 
 ## M2 詳細規格（v4;r1-r3 折入）

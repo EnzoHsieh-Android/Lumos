@@ -2,14 +2,16 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-06-26
+updated: 2026-07-16
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/done
 verified_by:
   - "[[Verification/2026-06-19_loop-convergence-recording]]"
+  - "[[Verification/2026-07-16_dloop提效M2_cluster帳]]"
 summary: |-
+  KEY:[M2 2026-07-16]risk-cluster 三態帳(見[[Projects/design-loop提效_計劃]])——canary record --clusters '名=狀態'(resolved/accepted-minor:理由/disputed-major)→panel gate 首個有效輪定錨後改兩條合取(輪有效∧fold 後無 disputed-major);_round_valid_m2 統一謂詞(caught≥2∧missed=0∧kind 白名單)五處共用;無效輪豁免+警告區列帳;新生 cluster/capture-recapture 降 advisory;無-cluster 舊帳三條合取不變 [test:t_m2_cluster_gate]
   FLOW:每輪對抗審計 → canary record caught|missed --loop <id> --severity <max finding> 寫進 .canary-log.jsonl(+loop/+severity 兩選用鍵)→ loop status <id> [--need K] 讀 append 序、篩 loop==id、tail-K(K 預設2,< 1 夾到 max(1,K))滑動窗算收斂 → exit 0/1/2 供編排 skill 讀
   KEY:把 loop 終止判準從「人含糊說看起來收斂了」換成「連 K(預設2)輪 caught 且 severity∈{clean,minor} 這個可重算條件」;留痕=那串 round 記錄本身
   KEY:CONVERGED ⟺ tail-K 滑動窗(append 序最後 K 筆)全為 caught+clean/minor;前面髒輪不影響、只看最後 K 筆[test:t_loop_status]
