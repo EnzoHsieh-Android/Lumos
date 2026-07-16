@@ -71,7 +71,7 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 ### gate 層（loop status --panel 停止條件改造）
 
 該 loop 定錨 cluster 模式(第一個有效輪帶 clusters)時,合取改為**兩條**(r1 折入:原條 3 降 advisory——A 席揭穿其字面版擋 accepted-minor 首現=隱性最少兩輪、自打「解 minor 永續供應」;放寬版(只擋新 disputed-major)又與條 2 冗餘。dryness 本質是人裁訊號,不硬閘):
-1. **輪有效**(canary caught 全數,0 missed)——不變。
+1. **輪有效**(同有效輪謂詞:caught≥2 且 0 missed,scripts/lumos:2301-2309——r3 探針噪音自查:原「全數」措辭與現碼不符,統一為單一謂詞)——不變。
 2. **cluster 帳無 disputed-major**:跨輪 fold(同名 cluster 取物理序最後一筆狀態,同 [[關係層主網_實作計畫]] M3 cascade 帳本 `_ledger_fold` 前例 scripts/lumos:4841,語意平行不共用函式)後,無任何 cluster 終態=disputed-major。**fold 只採有效輪的 clusters(r1 C 折入;r2 謂詞綁定)**——見統一單位裁定:非有效輪(任何 missed/孤席/未知 kind)整輪 clusters 忽略+警告區列帳(對齊「missed 者 findings 剔除」慣例 scripts/lumos:2311 的輪級嚴格化;否則睡著席或同輪殘 missed 的 resolved 可靜默清掉先前 disputed-major)。**取代「存活 max≤minor」**——blocker/major finding 必須屬於某個 disputed-major cluster(未修)或 resolved cluster(已修核);accepted-minor 只准裝 minor(編排者誠實紀律,GIGO 同 anchors)。
 - (advisory,不進合取) **新生 cluster**:判定輪首次出現的 cluster **計數+名單**(格式「新生 N 個: name1,name2」,r2 C 數/名消歧;僅基於有效輪——無效輪不得提前『首次出現』扭曲判定)——根因級 dryness 訊號,供實質收斂人裁參考,不硬擋(硬擋要嘛冗餘要嘛復活 minor 卡門)。**實作同步義務(r2)**:capture-recapture 舊訊息(scripts/lumos:2320-2324「✗/必帶」)與 CLI help(8824-8825)須同步改 advisory 語氣——嚴禁「顯示 ✗ 但整體 PASS」;**`--panel` 下 cluster gate 恆生效,`--gate` 對 panel 為相容 no-op**(明訂,消歧義)。
 - (advisory,不進合取) **capture-recapture 降 advisory**:照算照印(仍是有用訊號),**退出合取**——非定態目標下封閉族群/獨立捕獲前提偏弱(Codex 裁決),不再當硬閘;無 counts 不再 fail-closed(cluster 帳接手守門)。
@@ -83,7 +83,7 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 
 ### 測試策略
 
-record 解析(寫側):三態白名單過/壞狀態 rc2/名含非法字元 rc2/同輪重名 rc2/尾逗號空段靜默過濾/**帶旗標過濾後空列表(空字串/全逗號)rc2**/段缺 = → rc2 訊息非崩潰/不帶=無-cluster 舊帳不變;讀側型別防禦:損壞 clusters 欄 rc2 非 traceback;W 歸屬:同輪 >1 筆帶 → 讀側 rc2;**有效輪謂詞**:2caught+1missed 輪的 clusters 不進 fold(掛 caught 記錄上也不進)/單 caught 孤席輪不進/未知 kind 輪不進;定錨:首輪全 missed 不定錨、第一個有效輪才定錨/定錨後無效輪帶或不帶皆不觸發 rc2;混用(有效輪級):定錨無-cluster 後續有效輪帶 → rc2 訊息分因指路/定錨有 cluster 後續有效輪半帶 → rc2;round-id 非連續重現 → rc2;fold:同名跨有效輪最後狀態勝(disputed→resolved 放行、resolved→disputed 回鎖)/無效輪 clusters 忽略+警告區列帳(不蒸發);gate:fold 後有 disputed-major 擋/無 disputed-major 且 canary 全 caught 放行(**含首個有效輪帶 accepted-minor 首現=可收斂**,K=1 真可行);advisory:新生 cluster 計數+名單(僅有效輪)/無 counts 不再 fail-closed/殘餘照印不進合取/舊 ✗ 訊息與 help 同步 advisory 語氣;ledger 表:accepted-minor 顯示+無效輪攜帶項列警告區;--gate 對 panel no-op 相容;無-cluster loop 走 panel 既有三條合取迴歸不變;非 panel 循序 gate(K-streak∧G1∧G2)不受影響。
+record 解析(寫側):三態白名單過/壞狀態 rc2/名含非法字元 rc2/同輪重名 rc2/尾逗號空段靜默過濾/**帶旗標過濾後空列表(空字串/全逗號)rc2**/段缺 = → rc2 訊息非崩潰/不帶=無-cluster 舊帳不變;讀側型別防禦:損壞 clusters 欄 rc2 非 traceback;W 歸屬:同輪 >1 筆帶 → 讀側 rc2;**有效輪謂詞**:2caught+1missed 輪的 clusters 不進 fold(掛 caught 記錄上也不進)/單 caught 孤席輪不進/未知 kind 輪不進;定錨:首輪全 missed 不定錨、第一個有效輪才定錨/定錨後無效輪帶或不帶皆不觸發 rc2;混用(有效輪級):定錨無-cluster 後續有效輪帶 → rc2 訊息分因指路/定錨有 cluster 後續有效輪半帶 → rc2;round-id 非連續重現 → rc2;fold:同名跨有效輪最後狀態勝(disputed→resolved 放行、resolved→disputed 回鎖)/無效輪 clusters 忽略+警告區列帳(不蒸發);gate:fold 後有 disputed-major 擋/無 disputed-major 且輪有效(caught≥2∧0missed)放行(**含首個有效輪帶 accepted-minor 首現=可收斂**,K=1 真可行);advisory:新生 cluster 計數+名單(僅有效輪)/無 counts 不再 fail-closed/殘餘照印不進合取/舊 ✗ 訊息與 help 同步 advisory 語氣;ledger 表:accepted-minor 顯示+無效輪攜帶項列警告區;--gate 對 panel no-op 相容;無-cluster loop 走 panel 既有三條合取迴歸不變;非 panel 循序 gate(K-streak∧G1∧G2)不受影響。
 
 ## M2 審計修正紀錄
 
