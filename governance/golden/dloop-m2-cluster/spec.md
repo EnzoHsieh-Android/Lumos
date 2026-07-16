@@ -19,13 +19,6 @@ summary: |-
   KEY:不做——SPRT(分布每輪變,不可用)/group sequential(收益極小)/Bayesian 停止(posterior 由 prior 主導,需先累 10+ loops 歷史回放校準,順序不可倒)
   DECISION:②動 loop status gate 語意=改守衛的守衛,高風險面——本計劃進實作前必過 design-loop(用舊 loop 審新 loop);①③④⑤純 skill 編排文字,trivial 級可先行
   DEP:[[Systems/design-loop]]｜[[Systems/loop-convergence-recording]]
-decisions:
-  - content: M2 design-loop 達 3 輪 cap,人裁實質收斂進實作(2026-07-16):形式 gate 三輪 FAIL(每輪恰一席漏 canary——同一深鏡頭位三連漏含 opus)但 22 條 distinct 全折、v4 無未決爭議、Codex 跨家族否決於 v4 解除
-    id: d1
-    context: r1 6條(gate 三收二)→r2 9條(統一單位裁定誕生,Codex 否決)→r3 7條(裁定殘餘像素級,Codex 覆核收窄後 v4 解除)。canary 1/3→2/3→2/3;漏席=深鏡頭位,每輪交全場最深 findings——深挖與表面掃描兩軸的系統性觀察已記語料
-    why_chosen: 補償性結構證據:三模型家族(GPT/opus/sonnet)獨立收斂於同批洞(W 歸屬三重互證/unknown-kind 雙重互證),framing 偽造不了;且 M2 是 gate code,實作後 pitfalls 必判 tier=high→強制 full code-loop+mutation 冒煙,實作級安全網雙層(M1 Check J 的 token 消毒洞正是該層接住)。形式完美一輪(選項 B)買的是帳面,不是新資訊
-    decided: 2026-07-16
-    valid: true
 ---
 # design-loop提效_計劃
 
@@ -60,7 +53,7 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 ## 里程碑
 
 - **M1（skill 層,trivial 級可先行）**：①③④⑤ + severity 錨句——全是 SKILL.md/templates.md 文字改動,不動 code。✅ **已落地（2026-07-16,SKILL.md 五處:pre-flight 2.7/severity 錨/辯方路由制/fold 迷你核對/delta-scoped+全局哨兵;user-scope symlink 即時生效）**
-- **M2（動 gate code,必過 design-loop）**：② risk-cluster 帳——`canary record` 加 cluster 欄位、`loop status --panel` 改停止條件。**改守衛的守衛,高風險面,進實作前本計劃過 design-loop（舊 loop 審新 loop）**。✅ design-loop 3 輪達 cap,人裁實質收斂(2026-07-16,decisions#d1;golden: `governance/golden/dloop-m2-cluster/`;Codex 否決於 v4 解除)→ **進實作**(實作後必過 tier=high full code-loop,人裁條件)。
+- **M2（動 gate code,必過 design-loop）**：② risk-cluster 帳——`canary record` 加 cluster 欄位、`loop status --panel` 改停止條件。**改守衛的守衛,高風險面,進實作前本計劃過 design-loop（舊 loop 審新 loop）**。
 - 驗收信號：下一個真實 spec 過 loop 的輪數/wall-clock/token 對照本計劃前的基線（fromscratch-m1 ≈3 輪/~2h）。
 
 ## M2 詳細規格（v4;r1-r3 折入）
