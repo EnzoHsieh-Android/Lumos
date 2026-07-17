@@ -2,7 +2,7 @@
 type: issue
 status: done
 created: 2026-07-05
-updated: 2026-07-05
+updated: 2026-07-17
 tags:
   - type/issue
   - status/open
@@ -17,6 +17,7 @@ summary: |-
   KEY:實證來源=「主動影響幅度偵測」9 輪 loop:findings 10→7→7→8→6→5→5→8→7 不枯竭,經測約 ~2 finding/輪是折入漂移(summary 殘留舊記號/審計紀錄未標翻案/schema 範例與 body 不同步),非真設計缺口
   KEY:修法定案(見 [[design-loop折入守衛_計劃]]+[[design-loop折入守衛_實作計畫]]):**初版 lint ①§-ref+②summary→body token 被否決**(逐條對照 impact 9 輪真漂移命中≈0)→ 改**折入強制一致性閘**:lumos fold-check <path>(全文域 value-drift+reverse-omission+鏡像段列舉,排除審計紀錄段/placeholder)+ SKILL.md step7 強制子步。經 2 輪 design-loop(dogfood 鐵證機械 fold-check 剛需)→ 轉 TDD 實作
   DECISION:先記為 lumos 工具鏈改進 Issue(非某 spec 問題);真要做需自己走 brainstorm→design-loop(注意別遞歸)。與知識同步散落漂移同病根(需機械守衛逼)
+  KEY:[2026-07-17]同病新案例=圖譜節點自身也漂——[[design-loop]] M1 落地只在 summary 頂加 KEY 增量行,FLOW 主幹+辯方 KEY 仍舊制(每條≥major開庭/無pre-flight),據 FLOW 畫生命週期圖被誤導;fold-check 只掃 spec 檔,圖譜節點 summary 內 KEY↔FLOW 一致性目前無守衛(scope 缺口)
   DEP:[[lumos-refcheck]]
   DEP:[[design-loop]]
 ---
@@ -52,3 +53,11 @@ summary: |-
 ## 現況 / 下一步
 - 先記為 lumos 工具鏈改進 Issue。真要實作需自己走 brainstorm→design-loop(⚠ 注意別遞歸:改 design-loop 的工具本身也會過 design-loop)。
 - 與「知識同步散落、機制同步只改最相關段漏散落列舉」同病根——都要機械守衛逼,人手動(含 Claude 折入)都會漏。
+
+## 新案例:圖譜節點自身漂移(2026-07-17)
+
+同病根第三個場域——**不只 spec、不只機制文件,圖譜節點 summary 自己也漂**:
+- [[design-loop]] 2026-07-16 M1 落地時,只在 summary 頂部**加了一條 KEY 增量行**(辯方路由制/pre-flight 排乾),**FLOW 主幹行沒重寫**(仍寫「對≥major每條派辯方」、無前置排乾),第 22 行辯方 KEY 也仍舊制——同一節點內 KEY 與 FLOW 互相矛盾。
+- 實害:據 FLOW 行畫「lumos 生命週期圖」被誤導成舊制(辯方每條開庭/無 pre-flight/循序模式當主幹),對照 SKILL.md 才發現。skill 正文當時有同步、圖譜主幹沒有。
+- 已修:FLOW 行重寫(路由制+前置排乾+--gate 三錨+golden 凍結+panel 指針)、辯方 KEY 行同步、pitfalls-code-loop FLOW 補 tier 三分流(trivial/standard/high)。
+- **scope 缺口**:fold-check 只掃 spec 檔;圖譜節點 summary 內「KEY 增量 vs FLOW 主幹」一致性目前無機械守衛。若日後擴 fold-check,此為候選場域(增量 KEY 落款日期 > FLOW 未動 = 嫌疑訊號)。

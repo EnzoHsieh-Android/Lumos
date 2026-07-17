@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-16
+updated: 2026-07-17
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -16,10 +16,10 @@ verified_by:
 summary: |-
   KEY:[2026-07-16]提效 M1 落地(見[[Projects/design-loop提效_計劃]])——pre-flight 排乾(panel 前便宜 agent 掃清單型缺陷,cascade)/R2+ 嚴格 delta-scoped(物理只餵 diff+受影響合約+前輪爭議,留全局哨兵;解非定態目標病)/辯方路由制(機械證實與多席一致免辯方,低共識才開庭)/fold 迷你核對/severity 錨句(防 framing 通膨);M2 risk-cluster 帳未做(動 gate code,先過 loop)
   KEY:[2026-07-10]reviewer 結構紀律明文化——禁互辯/編排者=meta-judge/關鍵單點判決≥3run多數決(EMNLP 2025 實證,見[[Projects/reviewer結構明文化_計劃]])
-  FLOW:brainstorming產spec→[trivial?跳並註明]→每輪{複製spec→/tmp/<id>-rN(N=loop_status輪數+1)→植1canary(類型=清單[(N−1)mod4],只進工作副本)→派乾淨審計員(sonnet,連2missed升opus,不告知canary,refute framing)→判讀(canary抓到?+真finding max severity)→辯方refute(對≥major每條派獨立opus構造反證file:line)→該輪severity=辯方存活max→canary record caught|missed→抓到折真finding進真檔(commit前grep canary token須=0)/漏抓不折直接下輪}→loop status --need 2 exit0→收斂+天花板提醒→writing-plans
+  FLOW:brainstorming產spec→[trivial?跳並註明]→前置排乾(refcheck機械核對spec→repo指涉+pitfalls --check補實務隱患節+pre-flight便宜agent掃清單型缺陷;首輪前一次,cascade便宜先掃)→每輪{複製spec→/tmp/<id>-rN(N=loop_status輪數+1)→植1canary(類型=清單[(N−1)mod4],只進工作副本)→派乾淨審計員(sonnet,連2missed升opus,不告知canary,refute framing)→判讀(canary抓到?+真finding max severity)→辯方路由(機械證實/多席一致直接折入,僅低共識才派獨立opus構造反證file:line;2026-07-16 M1)→該輪severity=辯方存活max→canary record caught|missed→抓到折真finding進真檔+fold迷你核對(commit前grep canary token須=0)/漏抓不折直接下輪}→loop status --need 2 --gate exit0(K-streak∧G1引用座標∧G2發現枯竭)→收斂+天花板提醒+golden凍結→writing-plans｜平行panel模式(現行推薦,一輪W席≤3輪)見下方KEY
   KEY:Claude編排,lumos只出原語——Claude用Agent tool派審計員/判讀/修spec;lumos出 canary record/loop status 記錄與算收斂,lumos不spawn agent
   KEY:canary=test-the-tester——每輪偷植已知假錯驗審計員有沒有在認真抓;漏抓(missed)=該輪審計失靈,判決不採信、不折findings(防假陰性/審計員放水)
-  KEY:辯方refute=對稱防假陽性——對審計員標≥major的每條finding派獨立opus(乾淨脈絡、不傳審計結論)強制拿file:line反證才能降;辯方只買code層假陽性,業務層留人
+  KEY:辯方refute=對稱防假陽性——對≥major finding 走路由制(2026-07-16 M1):機械證實/多席一致免辯方直接折入,低共識才派獨立opus(乾淨脈絡、不傳審計結論)強制拿file:line反證才能降;辯方只買code層假陽性,業務層留人
   KEY:硬閘是紀律非技術鎖——loop status未CONVERGED不得進實作,但lumos擋不住「不跑就實作」;靠Claude記得調用+誠實+cap/留痕兜底
   KEY:收斂判準K=2——連2輪 caught 且 severity∈{clean,minor};max cap=6筆record,到頂未收斂則停、攤給人
   KEY:實質收斂 early-exit(2026-07-07 Landmark 實戰調參)——連K輪 caught 無 blocker/major 且新 findings 全為文件精度級 minor → 編排者可提前攤牌請人裁「實質收斂」不跑滿 cap(「你一定找得到」framing 使 G2 數字枯竭壓不到底的誠實出口;僅手動 loop,自主 loop 走 unconverged requeue)
@@ -63,7 +63,7 @@ decisions:
 1. 複製 `docs/design/<id>.md` → `/tmp/<id>-rN.md`;**N = `lumos loop status <id>` 已有輪數 + 1**(不靠記憶)。
 2. 植 1 個 **canary**(additive、只進工作副本、**真檔永不含**):類型由 N 機械決定 `清單[(N−1) mod 4]`(a 壞§ref／b 未定義旗標／c 未定義欄位／d 未定義產物),嵌唯一 token 定位。
 3. 派**乾淨審計員**(Agent tool、`model: sonnet`、不告知有 canary、refute framing 逐節找洞)。連 2 次 missed 後升 opus。
-4. **判讀**:① canary 是否被清楚且正確點出性質(光 token 出現不算);② 排掉 canary 後最嚴重真 finding(clean/minor/major/blocker);③ **辯方 refute**(對 ≥major 每條派獨立 opus 構造 file:line 反證);④ 該輪 severity = 辯方裁決後存活 findings 的機械 max。
+4. **判讀**:① canary 是否被清楚且正確點出性質(光 token 出現不算);② 排掉 canary 後最嚴重真 finding(clean/minor/major/blocker);③ **辯方路由**(2026-07-16 M1:機械證實/多席一致直接折入,僅低共識才派獨立 opus 構造 file:line 反證);④ 該輪 severity = 辯方裁決後存活 findings 的機械 max。
 5. `lumos canary record caught|missed --loop <id> --severity <存活max> --auditor <model> --note "r<N> type=<a-d> …"`。
 6. **漏抓** → 判決不採信、**不折** findings、直接下一輪(仍是一筆 missed record、仍算 cap、自動換 canary 類型 + framing 加碼)。
 7. **抓到** → 只折辯方存活的真 finding 進 `docs/design/<id>.md`;**commit 前 `grep -c '<canary token>' docs/design/<id>.md` 必須為 0** 再 commit。
