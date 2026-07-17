@@ -9209,6 +9209,74 @@ def t_diff_injection_guard_sibling_sites():
     print("  ✓ t_diff_injection_guard_sibling_sites")
 
 
+def t_lintcheck_validate():
+    """lint-check 靜態格式校驗:抓宣告了明顯壞的東西(KDS 空殼案例)。
+    正確格式={副檔名: [含 {LINT_SARIF_OUT} 的命令,...]};校驗回 problems 列表。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    _loader = SourceFileLoader("lumos_mod", str(_P(__file__).parent / "lumos"))
+    spec = importlib.util.spec_from_loader("lumos_mod", _loader)
+    m = importlib.util.module_from_spec(spec)
+    _loader.exec_module(m)
+
+    ok = {"kt": ["cd android && ./gradlew detekt -Pout={LINT_SARIF_OUT}"]}
+    check("正常宣告零 problem", m._lintcheck_validate(ok) == [])
+
+    # KDS 空殼案例:value 是 dict 非 list → 抓到
+    kds = {"detekt": {"kt": {"cmd": "cd AndroidKDS && ./gradlew detektMain"}}}
+    probs = m._lintcheck_validate(kds)
+    check("KDS 空殼(value 非 list)被抓", any("list" in p["issue"] or "命令列表" in p["issue"] for p in probs),
+          f"probs={probs}")
+
+    noph = {"kt": ["./gradlew detekt"]}
+    probs = m._lintcheck_validate(noph)
+    check("缺 SARIF 佔位符被抓", any("LINT_SARIF_OUT" in p["issue"] for p in probs), f"probs={probs}")
+
+    check("空命令被抓", any("空" in p["issue"] for p in m._lintcheck_validate({"kt": ["   "]})))
+    check("config 非 dict 被抓", m._lintcheck_validate([1, 2]) != [])
+    check("空 dict 合法零 problem", m._lintcheck_validate({}) == [])
+    print("  ✓ t_lintcheck_validate")
+
+
+def t_lintcheck_cli():
+    """lint-check CLI:格式校驗 rc / --smoke 真跑冒煙抓跑不動 / 無檔靜默 rc0 / 非 JSON rc2。"""
+    import json as _json
+    import subprocess as _sp
+    import tempfile
+    from pathlib import Path as _P
+    lumos_bin = str(_P(__file__).parent / "lumos")
+
+    def run(args, cwd):
+        return _sp.run([sys.executable, lumos_bin] + args, cwd=cwd, capture_output=True, text=True, timeout=60)
+
+    with tempfile.TemporaryDirectory() as td:
+        _sp.run(["git", "init", "-q"], cwd=td, check=True)
+        lp = _P(td) / ".lumos"; lp.mkdir()
+
+        r = run(["lint-check", "--repo", td], td)
+        check("無 lint.json rc0", r.returncode == 0, f"rc={r.returncode} {r.stderr}")
+
+        (lp / "lint.json").write_text(_json.dumps({"detekt": {"kt": {"cmd": "x"}}}), encoding="utf-8")
+        r = run(["lint-check", "--repo", td], td)
+        check("空殼格式 rc1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+
+        (lp / "lint.json").write_text(_json.dumps({"kt": ["false; : {LINT_SARIF_OUT}"]}), encoding="utf-8")
+        r = run(["lint-check", "--repo", td], td)
+        check("格式對靜態層 rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+        r = run(["lint-check", "--repo", td, "--smoke"], td)
+        check("--smoke 抓命令跑不動 rc1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+
+        (lp / "lint.json").write_text(_json.dumps({"kt": ["printf '{\"runs\":[]}' > {LINT_SARIF_OUT}"]}), encoding="utf-8")
+        r = run(["lint-check", "--repo", td, "--smoke"], td)
+        check("--smoke 真產 SARIF rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+
+        (lp / "lint.json").write_text("{壞掉的 json", encoding="utf-8")
+        r = run(["lint-check", "--repo", td], td)
+        check("非 JSON rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
+    print("  ✓ t_lintcheck_cli")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

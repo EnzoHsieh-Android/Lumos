@@ -6547,6 +6547,72 @@ def _lint_stacks_for_diff(added, config):
     return result
 
 
+def _lintcheck_validate(config):
+    """靜態校驗 .lumos/lint.json 宣告格式,回 problems 列表(每項 {stack,issue})。
+    正確格式={副檔名: [含 {LINT_SARIF_OUT} 的命令字串,...]}。抓「宣告了明顯壞的東西」:
+    非 dict / value 非 list / 命令非字串或空 / 缺 SARIF 輸出佔位符。空 dict=合法無宣告。
+    只驗格式不驗命令跑不跑得動(那是 --smoke 冒煙的事)。設計 [[Systems/lint-declaration-health]]。"""
+    problems = []
+    if not isinstance(config, dict):
+        problems.append({"stack": "<root>", "issue": "lint.json 頂層必須是 dict(副檔名→命令列表)"})
+        return problems
+    for stack, cmds in config.items():
+        if not isinstance(cmds, list):
+            problems.append({"stack": stack, "issue": f"value 必須是命令列表(list),實得 {type(cmds).__name__}"})
+            continue
+        if not cmds:
+            problems.append({"stack": stack, "issue": "命令列表為空"})
+            continue
+        for idx, cmd in enumerate(cmds):
+            if not isinstance(cmd, str) or not cmd.strip():
+                problems.append({"stack": stack, "issue": f"第 {idx} 條命令為空或非字串"})
+                continue
+            if "{LINT_SARIF_OUT}" not in cmd:
+                problems.append({"stack": stack, "issue": f"第 {idx} 條命令缺 {{LINT_SARIF_OUT}} 佔位符(SARIF 無處輸出=不會被消費)"})
+    return problems
+
+
+def cmd_lint_check(repo=None, smoke=False, as_json=False):
+    """檢查 .lumos/lint.json 宣告健康度(收「宣告了跑不動的東西」破口)。
+    靜態層(恆跑):格式校驗(見 _lintcheck_validate)。--smoke:真跑每條命令、驗有無產出可解析
+    SARIF——抓「格式對但 task 不存在/plugin 沒裝」的空殼(如 KDS detektMain)。
+    rc:0=健康(含無宣告)/1=有問題/2=lint.json 非 JSON。設計 [[Systems/lint-declaration-health]]。"""
+    import json
+    repo_root = _anchor_repo_root(repo)
+    if repo_root is None:
+        print("lint-check: 找不到 repo root", file=sys.stderr)
+        return 0
+    p = Path(repo_root) / ".lumos" / "lint.json"
+    if not p.exists():
+        if as_json:
+            print(json.dumps({"problems": [], "declared": False}, ensure_ascii=False))
+        return 0
+    try:
+        with open(p, encoding="utf-8") as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"✗ lint-check: .lumos/lint.json 不是合法 JSON: {e}", file=sys.stderr)
+        return 2
+    problems = _lintcheck_validate(config)
+    # --smoke:靜態層無格式問題才冒煙(格式壞的命令沒必要跑)
+    if smoke and not problems and isinstance(config, dict):
+        for stack, cmds in config.items():
+            for cmd in (cmds if isinstance(cmds, list) else []):
+                _claims, ok = _lint_run_and_parse(cmd, repo_root)
+                if not ok:
+                    problems.append({"stack": stack, "issue": f"冒煙失敗:命令跑不出可解析 SARIF(task 不存在/工具沒裝?)｜{cmd[:60]}"})
+    if as_json:
+        print(json.dumps({"problems": problems, "declared": True}, ensure_ascii=False))
+        return 1 if problems else 0
+    if not problems:
+        print(f"✓ lint-check: .lumos/lint.json 宣告健康({'冒煙通過' if smoke else '格式通過,--smoke 可再驗命令'})")
+        return 0
+    print(f"✗ lint-check: .lumos/lint.json 有 {len(problems)} 個問題:")
+    for pr in problems:
+        print(f"  [{pr['stack']}] {pr['issue']}")
+    return 1
+
+
 def _testlayers_load_config(repo_root):
     """讀取 repo_root/.lumos/test-layers.json → dict;不存在/解析失敗/非 dict → None(fail-open)。"""
     import json
@@ -9322,6 +9388,11 @@ def main():
     p.add_argument("--repo", dest="tl_repo", help="repo root(預設 cwd 向上找 .git)")
     p.add_argument("--json", dest="tl_json", action="store_true", help="JSON 輸出")
 
+    p = sub.add_parser("lint-check", help="檢查 .lumos/lint.json 宣告健康度(收『宣告了跑不動的東西』破口):靜態格式校驗 + --smoke 真跑冒煙")
+    p.add_argument("--repo", dest="lc_repo", help="repo root(預設 cwd 向上找 .git)")
+    p.add_argument("--smoke", dest="lc_smoke", action="store_true", help="真跑每條宣告命令、驗有無產出可解析 SARIF(抓 task 不存在/工具沒裝的空殼)")
+    p.add_argument("--json", dest="lc_json", action="store_true", help="JSON 輸出")
+
     p = sub.add_parser("sqlfluff-sarif", help="sqlfluff --format json(stdin)→ SARIF v2.1(橋接 SQL linter 進 lint-adapter)")
     p.add_argument("--out", dest="sqlfluff_out", help="輸出 SARIF 檔路徑(預設 stdout)")
 
@@ -9403,6 +9474,8 @@ def main():
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
     if args.cmd == "test-layers":
         return cmd_test_layers(diff=args.tl_diff, repo=args.tl_repo, as_json=args.tl_json)
+    if args.cmd == "lint-check":
+        return cmd_lint_check(repo=args.lc_repo, smoke=args.lc_smoke, as_json=args.lc_json)
     if args.cmd == "impact":
         if sum(1 for x in (args.impact_file, args.impact_diff, args.impact_node) if x) > 1:
             print("ERROR: --file/--diff/--node 三擇一,不可同給", file=sys.stderr)
