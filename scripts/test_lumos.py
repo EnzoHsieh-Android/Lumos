@@ -9052,28 +9052,28 @@ def t_testlayers_units():
 
     with tempfile.TemporaryDirectory() as td:
         # 無檔 → None
-        assert m._testlayers_load_config(td) is None, "無宣告檔應回 None"
+        check("testlayers 無宣告檔回 None", m._testlayers_load_config(td) is None)
         lp = _P(td) / ".lumos"
         lp.mkdir()
         # 壞 JSON → None(fail-open)
         (lp / "test-layers.json").write_text("{broken", encoding="utf-8")
-        assert m._testlayers_load_config(td) is None, "壞 JSON 應 fail-open None"
+        check("testlayers 壞 JSON fail-open None", m._testlayers_load_config(td) is None)
         # 非 dict 頂層 → None
         (lp / "test-layers.json").write_text("[1,2]", encoding="utf-8")
-        assert m._testlayers_load_config(td) is None, "非 dict 應回 None"
+        check("testlayers 非 dict 頂層回 None", m._testlayers_load_config(td) is None)
         # 正常
         cfg = {"vue": {"layer": "E2E", "cmd": "npx playwright test", "when": "UI 有動"},
                "kt": {"layer": "UI 流程", "cmd": "maestro test flows/"}}
         (lp / "test-layers.json").write_text(_json.dumps(cfg), encoding="utf-8")
         loaded = m._testlayers_load_config(td)
-        assert loaded == cfg, "正常 config 應原樣載入"
+        check("testlayers 正常 config 原樣載入", loaded == cfg, f"loaded={loaded}")
 
     # 棧命中:去重保序 + 計數 + 未宣告棧忽略
     files = ["src/A.vue", "src/B.vue", "app/C.kt", "readme.md"]
     hits = m._testlayers_hits(files, cfg)
-    assert [h[0] for h in hits] == ["vue", "kt"], f"去重保序錯: {hits}"
-    assert hits[0][2] == 2 and hits[1][2] == 1, f"計數錯: {hits}"
-    assert m._testlayers_hits(["x.md"], cfg) == [], "未命中應空列表"
+    check("testlayers 棧命中去重保序", [h[0] for h in hits] == ["vue", "kt"], f"hits={hits}")
+    check("testlayers 棧命中計數", hits[0][2] == 2 and hits[1][2] == 1, f"hits={hits}")
+    check("testlayers 未命中回空列表", m._testlayers_hits(["x.md"], cfg) == [])
     print("  ✓ t_testlayers_units")
 
 
@@ -9101,7 +9101,8 @@ def t_testlayers_cmd():
 
         # 無宣告檔 → 靜默 rc 0
         r = run(["test-layers", "--diff", "HEAD~1..HEAD", "--repo", td], td)
-        assert r.returncode == 0 and r.stdout.strip() == "", f"無宣告應靜默rc0: {r.returncode}/{r.stdout!r}"
+        check("testlayers 無宣告靜默rc0", r.returncode == 0 and r.stdout.strip() == "",
+              f"{r.returncode}/{r.stdout!r}")
 
         # 有宣告 → 命中 vue、忽略 py;rc 0
         lp = _P(td) / ".lumos"; lp.mkdir()
@@ -9109,21 +9110,54 @@ def t_testlayers_cmd():
             {"vue": {"layer": "E2E", "cmd": "npx playwright test", "when": "UI 有動"}}),
             encoding="utf-8")
         r = run(["test-layers", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
-        assert r.returncode == 0, f"rc 應 0: {r.returncode} {r.stderr}"
+        check("testlayers 有宣告 rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
         hits = _json.loads(r.stdout)["hits"]
-        assert len(hits) == 1 and hits[0]["stack"] == "vue" and hits[0]["files"] == 1, hits
+        check("testlayers 命中 vue 忽略 py",
+              len(hits) == 1 and hits[0]["stack"] == "vue" and hits[0]["files"] == 1, hits)
 
         # 人讀輸出含提醒行
         r = run(["test-layers", "--diff", "HEAD~1..HEAD", "--repo", td], td)
-        assert "test-layers 軟提醒" in r.stdout and "npx playwright test" in r.stdout, r.stdout
+        check("testlayers 人讀輸出含提醒行",
+              "test-layers 軟提醒" in r.stdout and "npx playwright test" in r.stdout, r.stdout)
 
         # 壞 range → rc 0 + stderr 診斷(fail-open)
         r = run(["test-layers", "--diff", "nosuch..HEAD", "--repo", td], td)
-        assert r.returncode == 0, f"git 失敗應 fail-open rc0: {r.returncode}"
+        check("testlayers 壞 range fail-open rc0", r.returncode == 0, f"{r.returncode}")
 
         # 缺 --diff → rc 2
         r = run(["test-layers", "--repo", td], td)
-        assert r.returncode == 2, f"缺 --diff 應 rc2: {r.returncode}"
+        check("testlayers 缺 --diff rc2", r.returncode == 2, f"{r.returncode}")
+
+        # CJK 檔名(core.quotePath 預設 true 會八進位轉義,導致 suffix 誤判)
+        (_P(td) / "訂單頁.vue").write_text("<template/>", encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=td, check=True)
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-q", "-m", "c2 cjk"], cwd=td, check=True)
+        r = run(["test-layers", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        check("testlayers CJK diff rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+        hits = _json.loads(r.stdout)["hits"]
+        check("testlayers CJK 檔名命中 vue",
+              len(hits) == 1 and hits[0]["stack"] == "vue" and hits[0]["files"] == 1, hits)
+
+        # --json 在 fail-open 分支(repo 不存在)也必須印 {"hits": []},不可空 stdout
+        r = run(["test-layers", "--diff", "HEAD~1..HEAD",
+                 "--repo", "/nonexistent-path-xyz", "--json"], td)
+        check("testlayers repo 不存在 fail-open rc0", r.returncode == 0, f"{r.returncode}")
+        check("testlayers repo 不存在 --json 印 hits空陣列",
+              _json.loads(r.stdout) == {"hits": []}, r.stdout)
+
+        # --diff 注入防護:值以 '-' 開頭時不可被 git 當成選項吃掉。用 --diff=VALUE 形式
+        # 送(裸 "--diff X" 形式下 argparse 自己就會因 X 長得像 flag 而先擋掉,不會走到
+        # cmd_test_layers;--diff=VALUE 才是值真正原樣落地、需要我們自己守的路徑)。
+        pwned = _P("/tmp/pwned-test-layers-xyz")
+        if pwned.exists():
+            pwned.unlink()
+        r = run(["test-layers", "--diff=--output=/tmp/pwned-test-layers-xyz",
+                 "--repo", td, "--json"], td)
+        check("testlayers --diff 注入 fail-open rc0", r.returncode == 0, f"{r.returncode}")
+        check("testlayers --diff 注入印 hits空陣列",
+              _json.loads(r.stdout) == {"hits": []}, r.stdout)
+        check("testlayers --diff 注入不寫出檔案", not pwned.exists())
     print("  ✓ t_testlayers_cmd")
 
 

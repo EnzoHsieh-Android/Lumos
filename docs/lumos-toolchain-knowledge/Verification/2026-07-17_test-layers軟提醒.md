@@ -19,18 +19,19 @@ related:
   - "[[test-layers軟提醒_計劃]]"
   - "[[test-layers軟提醒_實作計畫]]"
 summary: |-
-  TEST:全量 1197 passed 0 failed(t_testlayers_units 純函式+t_testlayers_cmd e2e:無宣告靜默rc0/命中提醒/壞range fail-open/缺--diff rc2);bash -n pre-push OK;anchor approve 過(pre-push+test_lumos.py)
+  TEST:全量 1217 passed 0 failed(t_testlayers_units 純函式+t_testlayers_cmd e2e:無宣告靜默rc0/命中提醒/壞range fail-open/缺--diff rc2/CJK 檔名命中/--json fail-open 各分支合約一致/--diff 參數注入 guard);bash -n pre-push OK;anchor approve 過(pre-push+test_lumos.py)
   VERIFY:T1 純函式(config 載入 fail-open+棧命中去重保序)/T2 cmd_test_layers 子命令+argparse 接線(JSON/人讀雙輸出)/T3 pre-push advisory 段(|| true 隔離,恆 rc0,anchor approve 已過)/T4 本節點(code-loop skill test-layers 鏡頭併入+圖譜收尾)——四 task 對應 [[test-layers軟提醒_實作計畫]]
   KEY:valid_under=cmd_test_layers 簽名與 .lumos/test-layers.json schema 不變、pre-push advisory 段未動;revalidate_when=schema 改動/pre-push 呼叫段改動/_testlayers_* 函式改動
+  VERIFY:code-loop r1 折入 3 findings(quotepath major/json 分支 minor/參數注入 minor)+測試 check() 化
 ---
 # 2026-07-17_test-layers軟提醒
 
 驗證 [[test-layers軟提醒_計劃]] 落地——`lumos test-layers` 子命令(vault-free,恆 rc0)+ pre-push advisory 段 + code-loop skill 鏡頭三件套,四 task TDD 全量測試通過。
 
 ## 測試結果
-- `scripts/test_lumos.py` 全量 **1197 passed, 0 failed**。
-- `t_testlayers_units`:宣告檔 fail-open 載入(無檔/壞 JSON/非 dict 頂層皆回 None)+ 棧命中去重保序+計數。
-- `t_testlayers_cmd`(e2e,臨時 git repo + subprocess 跑 CLI):無宣告檔靜默 rc0、命中提醒(人讀+JSON 雙輸出)、壞 diff range fail-open rc0、缺 `--diff` 唯一 rc2。
+- `scripts/test_lumos.py` 全量 **1217 passed, 0 failed**(code-loop r1 後,舊 1197→新增 20 條 `check()` 化斷言)。
+- `t_testlayers_units`:宣告檔 fail-open 載入(無檔/壞 JSON/非 dict 頂層皆回 None)+ 棧命中去重保序+計數;全轉 `check()` house style。
+- `t_testlayers_cmd`(e2e,臨時 git repo + subprocess 跑 CLI):無宣告檔靜默 rc0、命中提醒(人讀+JSON 雙輸出)、壞 diff range fail-open rc0、缺 `--diff` 唯一 rc2、CJK 檔名(`訂單頁.vue`)命中 vue(quotePath guard)、`--json` 在 repo-root-None/exception 分支也印 `{"hits": []}`(合約一致)、`--diff=--output=...` 注入不落地寫檔(fail-open rc0);全轉 `check()` house style。
 - `bash -n scripts/hooks/pre-push` OK;pre-push 段 `|| true` 雙保險,恆不影響 rc。
 - pre-push 是 anchor 保護檔,T3 已 `lumos anchor approve --note` 走正門。
 

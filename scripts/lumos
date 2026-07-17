@@ -7709,9 +7709,18 @@ def cmd_test_layers(diff=None, repo=None, as_json=False):
     if not diff:
         print("ERROR: test-layers 需 --diff <range>", file=sys.stderr)
         return 2
+    if diff.startswith("-"):
+        # --diff 值直接進 git 當 positional;'-' 開頭會被 git 誤認成選項(可寫檔),
+        # fail-open 跳過而非硬擋(advisory 合約不變 rc 恆 0,r1 codex minor)
+        print("test-layers: --diff 不接受以 '-' 開頭的值,跳過提醒", file=sys.stderr)
+        if as_json:
+            print(json.dumps({"hits": []}, ensure_ascii=False))
+        return 0
     repo_root = _anchor_repo_root(repo)
     if repo_root is None:
         print("test-layers: 找不到 repo root,跳過提醒", file=sys.stderr)
+        if as_json:
+            print(json.dumps({"hits": []}, ensure_ascii=False))
         return 0
     cfg = _testlayers_load_config(repo_root)
     if cfg is None:
@@ -7719,7 +7728,8 @@ def cmd_test_layers(diff=None, repo=None, as_json=False):
             print(json.dumps({"hits": []}, ensure_ascii=False))
         return 0
     try:
-        r = subprocess.run(["git", "diff", "--name-only", diff],
+        # core.quotePath=false:CJK 檔名不轉義加引號(否則 suffix 判斷全失效,r1 panel major)
+        r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "--name-only", diff],
                            cwd=str(repo_root), capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             print(f"test-layers: git diff rc={r.returncode},跳過提醒", file=sys.stderr)
@@ -7729,6 +7739,8 @@ def cmd_test_layers(diff=None, repo=None, as_json=False):
         files = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
     except Exception as e:
         print(f"test-layers: git diff 失敗({e}),跳過提醒", file=sys.stderr)
+        if as_json:
+            print(json.dumps({"hits": []}, ensure_ascii=False))
         return 0
     hits = _testlayers_hits(files, cfg)
     norm = []
