@@ -10,6 +10,7 @@ related:
   - "[[pitfalls-lint-adapter]]"
   - "[[pitfalls-code-loop]]"
   - "[[pitfalls-lint-integration_計劃]]"
+  - "[[linter精選目錄]]"
 verified_by:
   - "[[Verification/2026-07-04_lint-version-watch]]"
   - "[[Verification/2026-07-05_csharp-landmark-verify]]"
