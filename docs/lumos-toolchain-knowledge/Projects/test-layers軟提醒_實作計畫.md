@@ -45,7 +45,7 @@ summary: |-
 **Interfaces:**
 - Produces: `_testlayers_load_config(repo_root) -> dict|None`、`_testlayers_hits(files: list[str], config: dict) -> list[tuple[str, dict, int]]`(key, entry, 命中檔數;去重保序)
 
-- [ ] **Step 1: 寫失敗測試**(scripts/test_lumos.py 檔尾)
+- [x] **Step 1: 寫失敗測試**(scripts/test_lumos.py 檔尾)
 
 ```python
 def t_testlayers_units():
@@ -87,12 +87,12 @@ def t_testlayers_units():
     print("  ✓ t_testlayers_units")
 ```
 
-- [ ] **Step 2: 跑測試確認失敗**
+- [x] **Step 2: 跑測試確認失敗**
 
 Run: `python3 scripts/test_lumos.py 2>&1 | grep -A2 testlayers`
 Expected: FAIL(`AttributeError: ... _testlayers_load_config`)
 
-- [ ] **Step 3: 最小實作**(scripts/lumos,`_lint_stacks_for_diff` 函式後)
+- [x] **Step 3: 最小實作**(scripts/lumos,`_lint_stacks_for_diff` 函式後)
 
 ```python
 def _testlayers_load_config(repo_root):
@@ -124,12 +124,12 @@ def _testlayers_hits(files, config):
     return [(k, config[k], counts[k]) for k in order]
 ```
 
-- [ ] **Step 4: 跑測試確認通過**
+- [x] **Step 4: 跑測試確認通過**
 
 Run: `python3 scripts/test_lumos.py 2>&1 | tail -3`
 Expected: 全綠含 `✓ t_testlayers_units`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lumos scripts/test_lumos.py

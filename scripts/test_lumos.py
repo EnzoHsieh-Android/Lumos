@@ -9037,6 +9037,46 @@ def t_m2_cluster_gate():
               r.returncode == 1 and "capture_counts" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
 
 
+def t_testlayers_units():
+    """test-layers 純函式:config 載入 fail-open + 棧命中去重保序。"""
+    import json as _json
+    import tempfile
+    from pathlib import Path as _P
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    lumos_path = _P(__file__).parent / "lumos"
+    spec = importlib.util.spec_from_file_location(
+        "lumos_mod", str(lumos_path), loader=SourceFileLoader("lumos_mod", str(lumos_path)))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    with tempfile.TemporaryDirectory() as td:
+        # 無檔 → None
+        assert m._testlayers_load_config(td) is None, "無宣告檔應回 None"
+        lp = _P(td) / ".lumos"
+        lp.mkdir()
+        # 壞 JSON → None(fail-open)
+        (lp / "test-layers.json").write_text("{broken", encoding="utf-8")
+        assert m._testlayers_load_config(td) is None, "壞 JSON 應 fail-open None"
+        # 非 dict 頂層 → None
+        (lp / "test-layers.json").write_text("[1,2]", encoding="utf-8")
+        assert m._testlayers_load_config(td) is None, "非 dict 應回 None"
+        # 正常
+        cfg = {"vue": {"layer": "E2E", "cmd": "npx playwright test", "when": "UI 有動"},
+               "kt": {"layer": "UI 流程", "cmd": "maestro test flows/"}}
+        (lp / "test-layers.json").write_text(_json.dumps(cfg), encoding="utf-8")
+        loaded = m._testlayers_load_config(td)
+        assert loaded == cfg, "正常 config 應原樣載入"
+
+    # 棧命中:去重保序 + 計數 + 未宣告棧忽略
+    files = ["src/A.vue", "src/B.vue", "app/C.kt", "readme.md"]
+    hits = m._testlayers_hits(files, cfg)
+    assert [h[0] for h in hits] == ["vue", "kt"], f"去重保序錯: {hits}"
+    assert hits[0][2] == 2 and hits[1][2] == 1, f"計數錯: {hits}"
+    assert m._testlayers_hits(["x.md"], cfg) == [], "未命中應空列表"
+    print("  ✓ t_testlayers_units")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
