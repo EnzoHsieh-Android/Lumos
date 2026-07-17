@@ -9077,6 +9077,56 @@ def t_testlayers_units():
     print("  ✓ t_testlayers_units")
 
 
+def t_testlayers_cmd():
+    """test-layers CLI:命中提醒/無宣告靜默/rc 恆 0/缺 --diff rc2。"""
+    import json as _json
+    import subprocess as _sp
+    import tempfile
+    from pathlib import Path as _P
+    lumos_bin = str(_P(__file__).parent / "lumos")
+
+    def run(args, cwd):
+        return _sp.run([sys.executable, lumos_bin] + args,
+                       cwd=cwd, capture_output=True, text=True, timeout=60)
+
+    with tempfile.TemporaryDirectory() as td:
+        _sp.run(["git", "init", "-q"], cwd=td, check=True)
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-q", "--allow-empty", "-m", "base"], cwd=td, check=True)
+        (_P(td) / "A.vue").write_text("<template/>", encoding="utf-8")
+        (_P(td) / "b.py").write_text("x=1", encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=td, check=True)
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-q", "-m", "c1"], cwd=td, check=True)
+
+        # 無宣告檔 → 靜默 rc 0
+        r = run(["test-layers", "--diff", "HEAD~1..HEAD", "--repo", td], td)
+        assert r.returncode == 0 and r.stdout.strip() == "", f"無宣告應靜默rc0: {r.returncode}/{r.stdout!r}"
+
+        # 有宣告 → 命中 vue、忽略 py;rc 0
+        lp = _P(td) / ".lumos"; lp.mkdir()
+        (lp / "test-layers.json").write_text(_json.dumps(
+            {"vue": {"layer": "E2E", "cmd": "npx playwright test", "when": "UI 有動"}}),
+            encoding="utf-8")
+        r = run(["test-layers", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        assert r.returncode == 0, f"rc 應 0: {r.returncode} {r.stderr}"
+        hits = _json.loads(r.stdout)["hits"]
+        assert len(hits) == 1 and hits[0]["stack"] == "vue" and hits[0]["files"] == 1, hits
+
+        # 人讀輸出含提醒行
+        r = run(["test-layers", "--diff", "HEAD~1..HEAD", "--repo", td], td)
+        assert "test-layers 軟提醒" in r.stdout and "npx playwright test" in r.stdout, r.stdout
+
+        # 壞 range → rc 0 + stderr 診斷(fail-open)
+        r = run(["test-layers", "--diff", "nosuch..HEAD", "--repo", td], td)
+        assert r.returncode == 0, f"git 失敗應 fail-open rc0: {r.returncode}"
+
+        # 缺 --diff → rc 2
+        r = run(["test-layers", "--repo", td], td)
+        assert r.returncode == 2, f"缺 --diff 應 rc2: {r.returncode}"
+    print("  ✓ t_testlayers_cmd")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

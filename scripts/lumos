@@ -7700,6 +7700,59 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
     return 0
 
 
+def cmd_test_layers(diff=None, repo=None, as_json=False):
+    """test-layers 軟提醒(vault-free,恆 rc 0):diff 命中 .lumos/test-layers.json 宣告棧
+    → 印「該跑的測試層」提醒。無宣告檔靜默;git/解析失敗 fail-open(stderr 診斷+rc 0)。
+    唯一 rc 2=缺 --diff(用法錯誤)。設計:[[test-layers軟提醒_計劃]]。"""
+    import json
+    import subprocess
+    if not diff:
+        print("ERROR: test-layers 需 --diff <range>", file=sys.stderr)
+        return 2
+    repo_root = _anchor_repo_root(repo)
+    if repo_root is None:
+        print("test-layers: 找不到 repo root,跳過提醒", file=sys.stderr)
+        return 0
+    cfg = _testlayers_load_config(repo_root)
+    if cfg is None:
+        if as_json:
+            print(json.dumps({"hits": []}, ensure_ascii=False))
+        return 0
+    try:
+        r = subprocess.run(["git", "diff", "--name-only", diff],
+                           cwd=str(repo_root), capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            print(f"test-layers: git diff rc={r.returncode},跳過提醒", file=sys.stderr)
+            if as_json:
+                print(json.dumps({"hits": []}, ensure_ascii=False))
+            return 0
+        files = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    except Exception as e:
+        print(f"test-layers: git diff 失敗({e}),跳過提醒", file=sys.stderr)
+        return 0
+    hits = _testlayers_hits(files, cfg)
+    norm = []
+    for k, e, n in hits:
+        e = e if isinstance(e, dict) else {}
+        norm.append({"stack": k, "files": n, "layer": e.get("layer", ""),
+                     "cmd": e.get("cmd", ""), "when": e.get("when", "")})
+    if as_json:
+        print(json.dumps({"hits": norm}, ensure_ascii=False))
+        return 0
+    if not norm:
+        return 0
+    print("💡 test-layers 軟提醒(不擋):")
+    for h in norm:
+        line = f"   diff 碰到 {h['stack']}({h['files']} 檔) → 宣告的 {h['layer'] or '?'} 層"
+        if h["cmd"]:
+            line += f":{h['cmd']}"
+        print(line)
+        if h["when"]:
+            print(f"     時機:{h['when']}")
+    print("   跑了嗎?沒跑的話這是 push 前最後一次便宜的提醒點。")
+    return 0
+
+
 _FOLD_MIRROR_HEADING_RE = re.compile(
     r"^##\s+(§\d+\s+)?(審計修正紀錄|誠實天花板)", re.MULTILINE)
 
@@ -9237,6 +9290,11 @@ def main():
     p.add_argument("--json", dest="pf_json", action="store_true", help="JSON 輸出")
     p.add_argument("--no-lint", dest="pf_no_lint", action="store_true", help="--diff 只跑 regex 層、不跑專案 lint 指令(快,給 pre-push advisory)")
 
+    p = sub.add_parser("test-layers", help="測試層軟提醒(vault-free,恆 rc0):diff 命中 .lumos/test-layers.json 宣告棧 → 提醒該跑的測試層")
+    p.add_argument("--diff", dest="tl_diff", help="diff range(如 main..HEAD)")
+    p.add_argument("--repo", dest="tl_repo", help="repo root(預設 cwd 向上找 .git)")
+    p.add_argument("--json", dest="tl_json", action="store_true", help="JSON 輸出")
+
     p = sub.add_parser("sqlfluff-sarif", help="sqlfluff --format json(stdin)→ SARIF v2.1(橋接 SQL linter 進 lint-adapter)")
     p.add_argument("--out", dest="sqlfluff_out", help="輸出 SARIF 檔路徑(預設 stdout)")
 
@@ -9316,6 +9374,8 @@ def main():
     if args.cmd == "pitfalls":
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
+    if args.cmd == "test-layers":
+        return cmd_test_layers(diff=args.tl_diff, repo=args.tl_repo, as_json=args.tl_json)
     if args.cmd == "impact":
         if sum(1 for x in (args.impact_file, args.impact_diff, args.impact_node) if x) > 1:
             print("ERROR: --file/--diff/--node 三擇一,不可同給", file=sys.stderr)
