@@ -24,6 +24,7 @@ summary: |-
   KEY:valid_under=cmd_test_layers 簽名與 .lumos/test-layers.json schema 不變、pre-push advisory 段未動;revalidate_when=schema 改動/pre-push 呼叫段改動/_testlayers_* 函式改動
   VERIFY:code-loop r1 折入 3 findings(quotepath major/json 分支 minor/參數注入 minor)+測試 check() 化
   VERIFY:code-loop r2 折入 2 群findings(pitfalls quotepath major 類級收口/--diff 注入 guard 三站補齊 rc2)
+  VERIFY:code-loop r3 折入第四站注入 guard(loop capture-counts --from-pitfalls,雙席共指+執行級重現;測試 sites 表補第四站);r3 乾淨輪(3/3 caught 0 missed 存活≤minor)收斂
 ---
 # 2026-07-17_test-layers軟提醒
 

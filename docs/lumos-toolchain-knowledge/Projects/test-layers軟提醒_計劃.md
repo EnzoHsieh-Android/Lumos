@@ -64,3 +64,4 @@ PRIOR-ART: ① 最小解層級——復用 pitfalls --diff 既有棧偵測 + pre
 - [x] writing-plans 出實作計畫 → [[test-layers軟提醒_實作計畫]]（2026-07-17，4 task TDD）
 - [x] 實作後 anchor approve（pre-push 檔有動）
 - [ ] 消費專案真機驗證一輪（建議 LandmarkMember 或前端專案，ship 後行動，不在本計畫範圍）
+- [ ] 存量類級收口候選（code-loop r2/r3 產出）：檔名含字面雙引號/反斜線時 git 仍強制轉義加引號（quotePath 關不掉），全家族 `--name-only`/`+++ b/` 解析點需統一 unquote helper 才能根治——觸發面極窄，accepted minor 留痕於 code-loop pass note
