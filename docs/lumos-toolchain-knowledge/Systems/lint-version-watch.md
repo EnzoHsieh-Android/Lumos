@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-07-04
-updated: 2026-07-04
+updated: 2026-07-17
 tags:
   - type/system
   - status/doing
@@ -15,6 +15,7 @@ verified_by:
   - "[[Verification/2026-07-05_csharp-landmark-verify]]"
 summary: |-
   FLOW:讀 .lumos/lint-watch.json → 查各 registry 最新穩定版(pypi/npm/maven/github)→ _compare_versions 三態 → 落後進 candidates manifest → 治理層 dedup(seen-ledger)→ 新候選暫存 governance/lint-upgrades/ + LINE 通知 → 人放行 bump current
+  KEY:[2026-07-17]收網三修(事故見[[Issues/lint-watch空轉假綠]]——部署後空轉12天):runner ①SSL_CERT_FILE=/etc/ssl/cert.pem(python urllib 憑證鏈壞全fetch None)②多repo撒網迴圈(源repo無宣告檔恆空,真宣告在消費專案;seen/pending 按repo分檔)③心跳行(candidates/failed 計數落log,全失敗可見);首次真收網=LandmarkMember 5條落後進pending
   KEY:核心定位——只做版本偵測、不自建規則 diff;新版本本身=信號、changelog 由人審(同第①塊「規則庫讓給社群」)
   KEY:機械核心在 scripts/lumos `lint-watch` 子命令(vault-free、dispatch 置於 find_vault 前);純數字 tuple 比較 + 等段數守衛(段數不一→skip,擋 calendar 2024.1 / 4段 Maven 假陽性)
   KEY:prerelease 一律不建議——_is_prerelease 涵蓋 SemVer `-` 與 PEP 440 dashless(a/b/rc/dev);過濾在 _registry_latest 內、回 (None, reason)
