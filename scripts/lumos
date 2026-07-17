@@ -7399,6 +7399,10 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
     if not staged and not diff_range:
         print("ERROR: 需指定 --staged 或 --diff <A..B>", file=sys.stderr)
         return 2
+    if diff_range and diff_range.startswith("-"):
+        # 同 pitfalls/impact-diff:'-' 開頭值會被 git 誤認成選項,查詢命令 rc2 拒收
+        print("ERROR: --diff 不接受以 '-' 開頭的值", file=sys.stderr)
+        return 2
     root = _cochange_repo_root(repo)
     if root is None:
         print("ERROR: 找不到 git repo(--repo 指定或在 repo 內執行)", file=sys.stderr)
@@ -7457,7 +7461,9 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     供 _pitfall_diff_mode(印)與 loop capture-counts(收割成異質 finder)共用同一計算。"""
     import subprocess
     try:
-        r = subprocess.run(["git", "diff", "-U3", diff_range],
+        # core.quotePath=false:CJK 檔名不轉義加引號(否則 "+++ b/" 前綴比對全失效,
+        # r2 panel major:CJK 檔名 pitfall 命中被靜默漏收/誤歸,同 test-layers/impact-diff 先例)
+        r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "-U3", diff_range],
                            capture_output=True, text=True, cwd=str(repo_root))
     except FileNotFoundError:
         print("ERROR: 無 git", file=sys.stderr)
@@ -7668,6 +7674,11 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
     if repo_root is None:
         return 2
     if diff is not None:
+        if diff.startswith("-"):
+            # --diff 值直接進 git 當 positional;'-' 開頭會被 git 誤認成選項(可寫任意檔,
+            # 如 --output=<path>——r2 panel major 實測驗證)。查詢命令慣例=usage-error rc2。
+            print("ERROR: --diff 不接受以 '-' 開頭的值", file=sys.stderr)
+            return 2
         return _pitfall_diff_mode(diff, repo_root, as_json, no_lint)
     if md is None:
         print("ERROR: pitfalls 需 <md檔> 或 --diff <range>", file=sys.stderr)
@@ -8716,6 +8727,10 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
     rc: 0=成功 / 2=git 失敗 / 3=vault 缺。"""
     import json as _json
     import subprocess as _sp
+    if diff_range.startswith("-"):
+        # 同 pitfalls/cochange-check:'-' 開頭值會被 git 誤認成選項,查詢命令 rc2 拒收
+        print("ERROR: --diff 不接受以 '-' 開頭的值", file=sys.stderr)
+        return 2
     repo_root = Path(repo) if repo else None
     if repo_root is None:
         for cand in (Path.cwd(), *Path.cwd().parents):

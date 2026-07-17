@@ -3550,6 +3550,16 @@ def t_pitfalls_diff():
     r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
     data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
     check("pitfalls --diff: INSERT → class=併發(第 6 條不死碼)", any(c["class"] == "併發" for c in data["claims"]), r.stdout)
+    # CJK 檔名(core.quotePath 預設 true 會八進位轉義,"+++ b/" 前綴比對全失效,
+    # r2 panel major:_pitfall_diff_collect 漏帶 core.quotePath=false)
+    (root / "訂單頁.py").write_text(
+        "def f():\n"
+        "    fh = open('x.txt')\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "cjk")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("pitfalls --diff: CJK 檔名命中且檔名不轉義",
+          any(c["file"] == "訂單頁.py" for c in data["claims"]), r.stdout)
 
 
 def t_pitfalls_spec():
@@ -9159,6 +9169,44 @@ def t_testlayers_cmd():
               _json.loads(r.stdout) == {"hits": []}, r.stdout)
         check("testlayers --diff 注入不寫出檔案", not pwned.exists())
     print("  ✓ t_testlayers_cmd")
+
+
+def t_diff_injection_guard_sibling_sites():
+    """r2 panel minor:r1 只在 cmd_test_layers 補了 '-' 開頭注入guard,同形態的
+    --diff 在 cmd_pitfalls / cmd_cochange_check / cmd_impact_diff 三處沒補。
+    這三處是查詢命令,慣例=usage-error rc2(非 test-layers 的 fail-open rc0)。
+    用 --diff=--output=/tmp/pwned-<site> 形式送(裸 "--diff X" argparse 自己會擋,
+    --diff=VALUE 才是值原樣落地、需要我們自己守的路徑,同 t_testlayers_cmd 慣例)。"""
+    import subprocess as _sp
+    import tempfile
+    from pathlib import Path as _P
+    lumos_bin = str(_P(__file__).parent / "lumos")
+
+    def run(args, cwd):
+        return _sp.run([sys.executable, lumos_bin] + args,
+                       cwd=cwd, capture_output=True, text=True, timeout=60)
+
+    with tempfile.TemporaryDirectory() as td:
+        _sp.run(["git", "init", "-q"], cwd=td, check=True)
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-q", "--allow-empty", "-m", "base"], cwd=td, check=True)
+
+        sites = [
+            ("pitfalls", ["pitfalls", "--repo", td]),
+            ("cochange-check", ["cochange", "check", "--repo", td]),
+            ("impact-diff", ["impact", "--repo", td]),
+        ]
+        for label, base_args in sites:
+            pwned = _P(f"/tmp/pwned-{label}-xyz")
+            if pwned.exists():
+                pwned.unlink()
+            r = run(base_args + [f"--diff=--output=/tmp/pwned-{label}-xyz"], td)
+            check(f"{label} --diff 注入 rc2", r.returncode == 2,
+                  f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+            check(f"{label} --diff 注入不寫出檔案", not pwned.exists())
+            if pwned.exists():
+                pwned.unlink()
+    print("  ✓ t_diff_injection_guard_sibling_sites")
 
 
 def main():
