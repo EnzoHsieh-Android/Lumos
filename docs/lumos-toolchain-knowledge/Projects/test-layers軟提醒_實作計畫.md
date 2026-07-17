@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-17
 updated: 2026-07-17
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[test-layers軟提醒_計劃]]"
 plan_refs:
@@ -336,23 +336,23 @@ git commit -m "feat(hooks): pre-push 追加 test-layers 軟提醒段(恆 rc0,|| 
 
 **Files:**
 - Modify: `skills/lumos-code-loop/SKILL.md`(步驟 3「impact 鏡頭」段後)
-- Create: `docs/lumos-toolchain-knowledge/Verification/2026-XX-XX_test-layers軟提醒.md`(lumos new verification;日期按實際)
+- Create: `docs/lumos-toolchain-knowledge/Verification/2026-07-17_test-layers軟提醒.md`(lumos new verification;已建立)
 - Modify: 本節點與 [[test-layers軟提醒_計劃]](status/勾選/verified_by)
 
-- [ ] **Step 1: SKILL.md 併入**——`**impact 鏡頭**:...` 段落之後加:
+- [x] **Step 1: SKILL.md 併入**——`**impact 鏡頭**:...` 段落之後加:
 
 ```markdown
 **test-layers 鏡頭(有宣告才附)**:派前跑 `lumos test-layers --diff <range> --json`,`hits` 非空 → 附給 reviewer:「diff 碰到 <棧> 且專案宣告 <層> 測試(<cmd>)——判斷此改動需不需要補/跑該層;需要而缺 → 列 finding(severity 依風險自判)」。無宣告檔則略過此鏡頭。
 ```
 
-- [ ] **Step 2: 建 Verification 節點**
+- [x] **Step 2: 建 Verification 節點**
 
 ```bash
 python3 scripts/lumos new verification $(date +%Y-%m-%d)_test-layers軟提醒
 ```
 內文必填:`plan_refs` 指 `[[test-layers軟提醒_計劃]]` 與本實作計畫、`valid_under`(如「cmd_test_layers 簽名/宣告檔 schema 不變」)、`revalidate_when`(「test-layers.json schema 改動/pre-push 呼叫段改動」)、TEST 行記全量測試數;同步 `lumos append Projects/test-layers軟提醒_計劃 verified_by "[[Verification/<日期>_test-layers軟提醒]]"`。
 
-- [ ] **Step 3: 收尾**
+- [x] **Step 3: 收尾**
 
 ```bash
 python3 scripts/lumos set Projects/test-layers軟提醒_計劃 status done
@@ -362,7 +362,7 @@ python3 scripts/lumos doctor
 ```
 Expected: lint 0 問題、doctor 0 issues
 
-- [ ] **Step 4: 終審 + Commit**
+- [x] **Step 4: 終審 + Commit**
 
 ```bash
 python3 scripts/lumos pitfalls --diff main..HEAD --no-lint   # 看尾行 tier

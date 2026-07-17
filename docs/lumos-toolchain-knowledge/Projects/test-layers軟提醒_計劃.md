@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-17
 updated: 2026-07-17
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Systems/pitfalls-lint-adapter]]"
   - "[[Systems/pitfalls-code-loop]]"
@@ -16,6 +16,8 @@ summary: |-
   KEY:軟閘定位=關「忘了」不關「刻意不跑」——E2E 慢+flaky,本機硬擋逼出 --no-verify 文化反噬其他硬閘;真硬閘留 CI 合併點;同 code-loop 必用守衛/impact 的誠實天花板譜系
   KEY:v1 邊界=只提醒,不驗「有沒有真的跑」;v2 候選=查測試報告產物時間戳/接 CI 狀態(假陽性風險高,先不碰)
   DECISION:[2026-07-17]源起=使用者問「E2E 是軟閘嗎」延伸「能否按專案棧提醒對應測試環節」;裁定 v1 純 advisory、opt-in、恆不影響 rc(valid)
+verified_by:
+  - "[[Verification/2026-07-17_test-layers軟提醒]]"
 ---
 # test-layers軟提醒_計劃
 
@@ -60,5 +62,5 @@ PRIOR-ART: ① 最小解層級——復用 pitfalls --diff 既有棧偵測 + pre
 
 ## 下一步
 - [x] writing-plans 出實作計畫 → [[test-layers軟提醒_實作計畫]]（2026-07-17，4 task TDD）
-- [ ] 實作後 anchor approve（pre-push 檔有動）
-- [ ] 消費專案真機驗證一輪（建議 LandmarkMember 或前端專案）
+- [x] 實作後 anchor approve（pre-push 檔有動）
+- [ ] 消費專案真機驗證一輪（建議 LandmarkMember 或前端專案，ship 後行動，不在本計畫範圍）

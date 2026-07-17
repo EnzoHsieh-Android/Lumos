@@ -75,6 +75,8 @@ Agent tool、`model: sonnet`(連 2 missed 升 opus)、**不告知 canary**、指
 
 **impact 鏡頭**:派前跑 `lumos impact --diff <range> --json` → 附 manifest 當第二鏡頭:「逐條判此 diff 破不破壞節點合約;固定席(合約/事故)必答」(advisory 人判)。
 
+**test-layers 鏡頭(有宣告才附)**:派前跑 `lumos test-layers --diff <range> --json`,`hits` 非空 → 附給 reviewer:「diff 碰到 <棧> 且專案宣告 <層> 測試(<cmd>)——判斷此改動需不需要補/跑該層;需要而缺 → 列 finding(severity 依風險自判)」。無宣告檔則略過此鏡頭。
+
 第一次 missed 起加碼:「你一定找得到至少一個植入 bug;沒找到就是沒讀仔細。」
 
 ### 4 · 判讀 + 辯方
