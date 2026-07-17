@@ -67,6 +67,6 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 2. **整合性**:canary-caught / severity / 哪些是「誤判」三個都由植入者(你)自己判、無外部檢查——是**沒閉合的迴歸**,不 tamper-proof。loop 是**可觀測 + 摩擦 + 地板**,不是 oracle。
 
 ## 收斂後
-`lumos loop status` exit 0 → **收斂即凍結(borrow:Giskard meta-evaluation)**:把 spec 快照 + 辯方裁決後的存活 findings 清單凍進 `governance/golden/<loop-id>/`(spec.md + findings.md 兩檔,零判斷成本純搬運)——golden 語料是 auditor 校準的時間資產(語料累到 10+ 份即可做 replay 校準:拿凍結 spec 重跑審計、對照已知 findings 算各模型接住率,決定哪類 spec 直接上 opus)。→ 向人**回報收斂 + 上述天花板** → 交 **writing-plans** 出實作計畫 → 實作。
+`lumos loop status` exit 0 → **收斂即凍結(borrow:Giskard meta-evaluation)**:把 spec 快照 + 辯方裁決後的存活 findings 清單凍進 `governance/golden/<loop-id>/`(spec.md + findings.md 兩檔,零判斷成本純搬運)。**存活未修的 finding 逐條附一句「接受理由」進 findings.md**(文件精度級/成本不值/延後至何時)——沒理由的未修 finding 不得收斂留痕,防「說有問題就無限改」與「拖著不裁」兩頭(2026-07-17 外部評審吸收,見 [[GPT外部評審吸收_計劃]])——golden 語料是 auditor 校準的時間資產(語料累到 10+ 份即可做 replay 校準:拿凍結 spec 重跑審計、對照已知 findings 算各模型接住率,決定哪類 spec 直接上 opus)。→ 向人**回報收斂 + 上述天花板** → 交 **writing-plans** 出實作計畫 → 實作。
 
 > 設計全文見 `docs/design/2026-06-19-design-loop-skill.md`(B)與 `…-convergence-recording.md`(A 原語)、`…-canary-audit.md`(canary 機制)。

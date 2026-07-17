@@ -19,6 +19,7 @@
 - **退場必寫**：做完用 lumos 把脈絡（決策 / 驗證 / 合約）寫回。
 - **設計動筆前先問世界（PRIOR-ART 三問）**：① 最小解在哪一層（既有閘/一行 config/既有機制小修 → 就做那個，別造新機制）② 世界解過沒（真搜 GitHub/文獻，非憑印象）③ 裁定 = borrow-design（預設，借設計教訓原生實作）/ build（真沒輪子）/ adopt（例外須理由——零依賴家規下幾乎恆排除）。答案一行 `PRIOR-ART:` 記進計劃節點。
 - **設計 spec 完成 → 進實作前**：先用 `lumos-design-loop` skill 把它過 canary-護的審計 loop 到 `lumos loop status` 收斂（trivial 改動可跳並註明）。
+- **已知行為測試先行、未知行為實驗先行**：可驗證規則（商業邏輯/狀態轉換/API 合約/bug 修復）走 TDD；探索性工作（UI 探索/SDK 試接/效能調查/PoC）先做最小實驗，結論定案後補回歸測試——嚴禁為滿足流程寫湊數測試（2026-07-17 外部評審吸收，見 `Projects/GPT外部評審吸收_計劃`）。
 - **計劃/設計也歸圖譜**：任何設計 / spec / 計劃產出（**不論來源——brainstorming、writing-plans、OpenSpec、其他 SDD / spec-driven 工具皆同**）一律寫成 lumos 計劃節點（`Projects/<主題>_計劃`，`type: project`），**不寫 `docs/superpowers/specs/`、`openspec/` 或其他 repo 路徑**；落地的 Verification 以 `plan_refs` 回指（意圖鏈，graph-doctor Check 4 把關）。任何工具內建的 spec 落點一律以此覆寫——「圖譜即真相」涵蓋計劃，不只 code。
 
 ### 寫入時的標籤規範（速查，動筆前掃一眼；完整規範見 `lumos-project-notes` skill）

@@ -2,7 +2,7 @@
 type: project
 status: doing
 created: 2026-07-16
-updated: 2026-07-16
+updated: 2026-07-17
 tags:
   - type/project
   - status/doing
@@ -17,6 +17,7 @@ summary: |-
   KEY:★混淆★語料橫跨四五代協議(循序→panel 07-09→canary 硬化 07-10→M1 提效 07-16→M2 cluster 帳 07-16)——跨代混池=體溫計加溫度計;但版本更迭同時是 treatment variable(天然準實驗):跨代比較(panel 省輪?M1 辯方歸零?)可做,代內調參(每層 n=10-15)樣本不足
   KEY:replay 校準不受版本污染——golden 凍 spec+已知 findings(近似 ground truth 標籤),重跑審計算接住率與產出協議代無關;17 份遠超 10+ 門檻,隨時可跑 baseline
   KEY:逃逸帳=唯一能校準停止決策的標尺——「收斂好不好」ground truth 是下游抓到多少設計期漏的(實例:fromscratch 收斂後 code review 抓 token 消毒 blocker;M2 收斂後 code-loop 抓 Codex 3 洞);現只在散文,無機械歸因
+  KEY:★北極星★[2026-07-17 外部評審吸收,見[[Projects/GPT外部評審吸收_計劃]]]——「流程是否讓正常改動變快,而不只讓錯誤改動變困難」:只防錯但人人想繞的流程終被繞過;效率軸(需求→合併時間/每有效 finding 成本/誤擋耗時)與品質軸(逃逸帳)並列,提效工作(M1/三輪壓縮)以此錨定
   DECISION:v1 不做統計模型/dashboard/自動調參(代內 n 不足,先累後校準順序不可倒);只做「訊號機械化+歸因」四件:自主 loop 歸檔/逃逸帳/epoch 蓋章/分層 stats
   DEP:[[Systems/loop-convergence-recording]]｜[[Systems/autonomous-iteration-loop]]
 verified_by:

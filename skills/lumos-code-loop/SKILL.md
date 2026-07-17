@@ -148,6 +148,7 @@ lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活
 lumos impact --diff <merge-base>..HEAD --sync-check   # 落成核對:受影響節點動了沒
 lumos code-loop pass --note "<收斂理由/loop-id>"       # pre-push blocking:無 pass/skip 留痕 → push 硬擋
 ```
+存活未修的 minor findings **逐條一句接受理由**(併入 pass --note 或審計紀錄)——沒理由不得 pass(同 design-loop 收斂節,2026-07-17 外部評審吸收)。
 → 交 **finishing-a-development-branch** 進合併流程。
 
 ---
