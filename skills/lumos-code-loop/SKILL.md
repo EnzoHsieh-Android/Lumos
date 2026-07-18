@@ -140,6 +140,7 @@ lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活
 **護欄**:連 2 missed → 升 opus。cap＝6 筆(循序)/3 輪(panel);到頂未收斂 → 停、攤給人、記「達 cap 未收斂」,別無限燒。
 
 **誠實天花板**(收斂後必向人講):
+> **回報用白話(CLAUDE.md「對人回報用白話」)**:向人講終審結果與天花板時少專有名詞——canary/tier/mutation/fail-open/G1 第一次出現給一句人話(如 mutation=故意改壞代碼看測試接不接得住),或換人話。術語細節留圖譜。目標:人少花一層理解成本。
 1. pattern 掃描是提示器非偵測器(N+1/race 多形態 regex 抓不到);漏網靠 reviewer + canary + 測試。
 2. bug canary 校準與溯源排除靠植入者自律、人工判,偏多排,殘餘下一輪兜底。
 3. mutation 3-5 個是抽樣非覆蓋;死光≠測試充分;flaky 污染訊號。

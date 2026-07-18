@@ -63,6 +63,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 - **收斂判準理據(散文收斂 without 干擾信號)**:framing 汙染 count 不汙染結構 → capture-recapture 讀重疊、ODC 讀 class、AC 讀 coverage;三者繞開被汙染的 count,framing 不動。詳見 [[loop三輪壓縮_計劃]]。
 
 ## 誠實天花板(收斂後務必向人提醒,別讓 CONVERGED 被當「絕對沒問題」)
+> **回報用白話(CLAUDE.md「對人回報用白話」)**:向人講收斂結果與天花板時,少專有名詞——canary/severity/G2/fold/tier 這些第一次出現給一句人話(如 canary=偷埋的假錯,驗審計員有沒有認真看),或乾脆換人話。術語細節留圖譜,別堆進給人看的摘要。目標:人少花一層理解成本。
 1. **完整性**:收斂只證「連 2 輪醒著的審計員沒找到 blocker/major」,不證沒有更深的問題。完整性靠多輪 + 多視角,不靠把門檻調嚴。
 2. **整合性**:canary-caught / severity / 哪些是「誤判」三個都由植入者(你)自己判、無外部檢查——是**沒閉合的迴歸**,不 tamper-proof。loop 是**可觀測 + 摩擦 + 地板**,不是 oracle。
 
