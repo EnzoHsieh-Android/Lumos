@@ -2,7 +2,7 @@
 type: issue
 status: done
 created: 2026-07-05
-updated: 2026-07-17
+updated: 2026-07-18
 tags:
   - type/issue
   - status/open
@@ -17,6 +17,7 @@ summary: |-
   KEY:實證來源=「主動影響幅度偵測」9 輪 loop:findings 10→7→7→8→6→5→5→8→7 不枯竭,經測約 ~2 finding/輪是折入漂移(summary 殘留舊記號/審計紀錄未標翻案/schema 範例與 body 不同步),非真設計缺口
   KEY:修法定案(見 [[design-loop折入守衛_計劃]]+[[design-loop折入守衛_實作計畫]]):**初版 lint ①§-ref+②summary→body token 被否決**(逐條對照 impact 9 輪真漂移命中≈0)→ 改**折入強制一致性閘**:lumos fold-check <path>(全文域 value-drift+reverse-omission+鏡像段列舉,排除審計紀錄段/placeholder)+ SKILL.md step7 強制子步。經 2 輪 design-loop(dogfood 鐵證機械 fold-check 剛需)→ 轉 TDD 實作
   DECISION:先記為 lumos 工具鏈改進 Issue(非某 spec 問題);真要做需自己走 brainstorm→design-loop(注意別遞歸)。與知識同步散落漂移同病根(需機械守衛逼)
+  KEY:[2026-07-18]第四場域=權威派工模板漂移——templates.md 辯方段直到今日仍寫「opus;對每條≥major各派一個」:M1 路由制(07-16)與 S5 Codex 辯方(07-18)都只同步了 SKILL 沒動模板,而 design-loop KEY 明文「漂移以模板為準」=權威文件反而最舊;教訓:凡宣告「權威=X」的 X 必須進每次同步的 checklist 首位
   KEY:[2026-07-17]同病新案例=圖譜節點自身也漂——[[design-loop]] M1 落地只在 summary 頂加 KEY 增量行,FLOW 主幹+辯方 KEY 仍舊制(每條≥major開庭/無pre-flight),據 FLOW 畫生命週期圖被誤導;fold-check 只掃 spec 檔,圖譜節點 summary 內 KEY↔FLOW 一致性目前無守衛(scope 缺口)
   DEP:[[lumos-refcheck]]
   DEP:[[design-loop]]

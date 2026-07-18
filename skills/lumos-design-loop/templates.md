@@ -38,7 +38,7 @@ Spec 檔案：{工作副本路徑 /tmp/<id>-rN.md}
 {missed 後加碼：沒找到就是你沒讀仔細}。最後給一行總結：最嚴重 severity 是什麼。
 ```
 
-## 2. Design-loop 辯方（opus；對每條 ≥major finding 各派一個，乾淨脈絡、不傳審計員報告全文）
+## 2. Design-loop 辯方（**預設 Codex** `codex exec --sandbox read-only`，不可用退 opus 並於留痕註記偏離——判決單點最怕同門盲點，2026-07-18 S5；**路由制 2026-07-16 M1**：機械證實/多席一致者免辯方直接折入，僅**低共識** finding 才開庭各派一個，乾淨脈絡、不傳審計員報告全文）
 
 ```
 你是辯方。有一條針對設計 spec 的審計 finding，你的任務是**預設它是假的/嚴重度高估**，
@@ -86,9 +86,9 @@ repo 在 {repo 根}（可 Read/Grep 真代碼查證 diff 上下文）。
 最後一行總結 max severity。
 ```
 
-## 4. Code-loop 辯方（opus）
+## 4. Code-loop 辯方（**預設 Codex**，不可用退 opus 註記；2026-07-18 S5）
 
-同模板 2，把「設計 spec 的審計 finding」換成「代碼分支的審計 finding」、
+同模板 2（含路由制：低共識才開庭），把「設計 spec 的審計 finding」換成「代碼分支的審計 finding」、
 查證工具加 `git log/git show`（commit 考古常是決定性反證：發版狀態、先例、時序）。
 可要求「若維持，附最小修法建議」——本次 migration 自癒段就是辯方降級時附帶的
 nice-to-have 轉化成的 fix。

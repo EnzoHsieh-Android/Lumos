@@ -5,6 +5,8 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 # lumos-design-loop:canary-護的設計審計 loop(進實作前的硬閘)
 
+> **定位(2026-07-18 d4 使用者裁定)**:抬 spec 質量,**非保 spec 正確**——一輪 panel 抓便宜的(矛盾/未定義詞/缺失敗路徑)就放行;正確性歸下游 code-loop+測試+驗證,漏網進逃逸帳。**前置加重一律拒**(勿往本 loop 添新守衛;完整裁定見圖譜 [[design-loop]] d4)。
+
 **Claude 編排,lumos 出原語。** 你(主對話)用 Agent tool 派審計員、判讀、修 spec;lumos 出 `canary record`/`loop status` 記錄與算收斂。lumos 不 spawn agent。
 
 ## 何時用 / 何時跳
