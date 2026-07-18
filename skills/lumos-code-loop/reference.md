@@ -176,16 +176,18 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 
 ### ⚠ code-loop 與 design-loop 的關鍵差異(2026-07-09 交叉查文獻;別全盤沿用)
 程式碼有散文沒有的東西——**可執行 + 可靜態分析**。文獻(見 [[loop三輪壓縮_計劃]] 的 code-loop 差異節)證 code review 最佳解是**異質 ensemble**,非「多個多樣 LLM」:
-1. **panel 應異質,不只多樣 LLM**(borrow:AutoSafeCoder / Multi-Agent Code Verification via Information Theory,arxiv 2511.16708——submodularity 證異質分析器各加獨立資訊):把**確定性驗證器當一等 panel 成員**,與 LLM reviewer 並列——
-   - 專案 `.lumos/lint.json` 宣告的社群 linter(SARIF,`pitfalls --diff` 已吃)= 一個 slot;
-   - 測試套件(pre-push gate 已跑)、type checker、mutation 冒煙(步驟 7)各算獨立信號。
-   - **為何**:linter/測試/type 的錯誤剖面**與 LLM 正交**(真獨立票),直擊「9 judge 2 票」——純 LLM panel(即使多樣)仍相關,摻確定性工具才買到真獨立票。
+1. **panel 應異質,不只多樣 LLM**(borrow:AutoSafeCoder / Multi-Agent Code Verification via Information Theory,arxiv 2511.16708——submodularity 證異質分析器各加獨立資訊)。**確定性驗證器的參與方式=三通道,不佔 canary 席、不進「輪有效」判定**(它們跑真碼樹,看不到文字 diff 副本裡的誘餌,記席必然 missed;canary 票只驗 LLM 席注意力;2026-07-18 codestage 收斂裁定):
+   - (a) 其 findings 憑執行證據依辯方路由「機械證實」直接折入;
+   - (b) 以**異質 finder** 進 capture-recapture 重疊帳(`loop capture-counts --finder/--from-pitfalls`);⚠ 兩套帳差異:無-cluster 舊帳 capture-recapture **進合取**(真裁決權);M2 cluster 帳 **advisory 不進合取**——該模式下裁決權由通道 (a) 承載(機械證實 findings 進 cluster 三態帳);
+   - (c) 需跑真碼的(測試套件/type checker)沿 mutation 冒煙的**隔離 worktree** 模式。
+   - 具體 finder:專案 `.lumos/lint.json` 宣告的社群 linter(SARIF)/測試套件/type checker/mutation 冒煙(步驟 7)。
+   - **為何**:linter/測試/type 的錯誤剖面**與 LLM 正交**(真獨立資訊),直擊「9 judge 2 票」——純 LLM panel(即使多樣)仍相關,摻確定性工具才買到真獨立訊號。
 2. **辯方可執行 falsification**(borrow:Greptile TREX / CodeRabbit sandbox「grep 沒東西≠證明有 bug,先跑再信」):design-loop 辯方用 grep/Read 論證;**code-loop 辯方應能跑測試/repro/mutation 確認-或-殺一條 finding**——可執行反證 > 論證反證。lumos 已有種子:mutation 冒煙 + pre-push 測試 gate。
 3. **capture-recapture 跨異質 finder**:LLM findings ∪ linter findings ∪ 測試失敗的**重疊**——LLM 與工具都指同一洞 = 更強收斂信號(且 capture-recapture 本就生於軟體檢驗,回娘家)。
 4. **canary 型別、defect 分類本就不同**(已做:bug 四型 vs a/b/c/d)——文獻(PBR/defect-type mapping)證 reading technique 該隨 artifact 調;但實證 PBR 增益不穩,**重點在異質驗證器 mix 而非 LLM 鏡頭數**。
 > 一句話:code-loop **繼承 panel 機制 + capture-recapture 收斂**(後者本是代碼檢驗的),但**panel 成員換成 LLM + 確定性工具的異質組合、辯方改可執行反證**——不是「design-loop 換 canary 名字」。
 
-- **mutation 冒煙(步驟 7)**在 panel 下升格為**一個確定性 panel 成員**(不只可選旁支):活變異 = 一條 finding 進 capture-recapture 池。
+- **mutation 冒煙(步驟 7)**在 panel 下升格為**一個確定性 finder**(不只可選旁支;不佔 canary 席,參與方式見上三通道):活變異 = 一條 finding 進 capture-recapture 池。
 
 ### 異質 finder → capture_counts 的機械算法(別手數重疊)
 一輪跑完,把每個 finder 找到的 finding-key(正規化成 `file:line` 或 `section:nature`)收齊,機械算重疊:
