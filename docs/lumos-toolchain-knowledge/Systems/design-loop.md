@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-17
+updated: 2026-07-18
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -14,6 +14,7 @@ verified_by:
   - "[[Verification/2026-07-16_dloop提效M2_cluster帳]]"
   - "[[Verification/2026-07-16_replay校準baseline_v0]]"
 summary: |-
+  KEY:★定位★[2026-07-18 使用者裁定,見 decisions d4]——design-loop=抬 spec 質量,非保 spec 正確:一輪 panel 抓便宜的(矛盾/未定義詞/缺失敗路徑)就放行,正確性歸下游 code-loop+測試+驗證、漏網進逃逸帳;**前置加重一律拒**(日報 2026-07-18『保留題接閘』已拒收勿重提——保留題留離線 replay 校準,不進閘)
   KEY:[2026-07-16]提效 M1 落地(見[[Projects/design-loop提效_計劃]])——pre-flight 排乾(panel 前便宜 agent 掃清單型缺陷,cascade)/R2+ 嚴格 delta-scoped(物理只餵 diff+受影響合約+前輪爭議,留全局哨兵;解非定態目標病)/辯方路由制(機械證實與多席一致免辯方,低共識才開庭)/fold 迷你核對/severity 錨句(防 framing 通膨);M2 risk-cluster 帳未做(動 gate code,先過 loop)
   KEY:[2026-07-10]reviewer 結構紀律明文化——禁互辯/編排者=meta-judge/關鍵單點判決≥3run多數決(EMNLP 2025 實證,見[[Projects/reviewer結構明文化_計劃]])
   FLOW:brainstorming產spec→[trivial?跳並註明]→前置排乾(refcheck機械核對spec→repo指涉+pitfalls --check補實務隱患節+pre-flight便宜agent掃清單型缺陷;首輪前一次,cascade便宜先掃)→每輪{複製spec→/tmp/<id>-rN(N=loop_status輪數+1)→植1canary(類型=清單[(N−1)mod4],只進工作副本)→派乾淨審計員(sonnet,連2missed升opus,不告知canary,refute framing)→判讀(canary抓到?+真finding max severity)→辯方路由(機械證實/多席一致直接折入,僅低共識才派獨立opus構造反證file:line;2026-07-16 M1)→該輪severity=辯方存活max→canary record caught|missed→抓到折真finding進真檔+fold迷你核對(commit前grep canary token須=0)/漏抓不折直接下輪}→loop status --need 2 --gate exit0(K-streak∧G1引用座標∧G2發現枯竭)→收斂+天花板提醒+golden凍結→writing-plans｜平行panel模式(現行推薦,一輪W席≤3輪)見下方KEY
@@ -46,6 +47,12 @@ decisions:
     context: finding-refute 後續 spec(3 輪自動收斂):原 step4「編排者自剝審計員誤判」是沒閉合的迴歸、會放水;canary 防假陰性,但假陽性(審計員過度報警)無對稱守衛
     why_chosen: 辯方=canary 的對稱面(canary 防假陰性/防審計員放水,辯方防假陽性/防過度嚴重度);效力來源是「方向相反的對抗」+ 強制帶 code 證據,而非 code 證據本身;業務層假陽性留人裁
     decided: 2026-06-24
+    valid: true
+  - content: design-loop 定位裁定=抬 spec 質量,非保 spec 正確——一輪 panel 抓便宜的(矛盾/未定義詞/缺失敗路徑)就放行;正確性歸下游 code review+測試+驗證,漏網進逃逸帳。前置加重一律拒:日報 2026-07-18 提的『保留題接閘』(收斂前抽歷史考卷考審計員)拒收,理由=①信任階梯反面論證:spec 階段只有最弱驗證手段(純文字+LLM 判官),重壓在信號最弱處不划算 ②自家實證:自相矛盾測試 spec 撐過 6 輪散文審、實作真測一次現形;test-layers 跳 design-loop 走 TDD,真 bug 全在 code-loop 抓到零代價 ③導入成本:前端壓太重難導入,違反北極星(讓正常改動變快)。保留題想法降級留離線 replay 校準(不進閘不擋人);『收斂前真跑綁定測試』挪 code-loop/驗證側
+    id: d4
+    context: 使用者裁定:design-loop 本意是提高 spec 質量而非強求完全正確,正確性靠後續 code review 和驗證環節;琢磨太多 spec 問題會難導入(前端花太多時間)。適逢日報 2026-07-18 建議往 spec 收斂閘加保留題,需明確拒收防自主 loop 撿走重做
+    why_chosen: 與既有方向同線(三輪壓縮/pre-flight 排乾/辯方路由全是在砍 spec 階段成本);逃逸帳架構本就承認 spec 不完美由下游接;錢花在驗證信號最強處(code 階段有真測試)
+    decided: 2026-07-18
     valid: true
 ---
 # design-loop
