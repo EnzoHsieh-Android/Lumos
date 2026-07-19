@@ -330,7 +330,8 @@ def build_additional_context(impact_data: dict) -> str:
 
 def build_ranked_context(data: dict) -> str:
     """v1.1:把 ranked 輸出({results,meta})轉成降噪清單文字。固定席在前(合約/事故),
-    非固定帶分數;截斷數照 meta 標注。"""
+    非固定帶分數;截斷數照 meta 標注。尾附棧別效能追問(若 lumos 輸出帶 stack_questions——
+    單源在 scripts/lumos 的 _STACK_PERF_QUESTIONS,本 hook 只格式化不持有內容)。"""
     lines: list[str] = []
     res = data.get("results", [])
     meta = data.get("meta", {})
@@ -350,14 +351,18 @@ def build_ranked_context(data: dict) -> str:
             lines.append(f"  {x.get('score',0):.2f} {mk} {x.get('node','?')}")
     if meta.get("truncated"):
         lines.append(f"  (+{meta['truncated']} 條低分截斷)")
+    for stk, qs in (data.get("stack_questions") or {}).items():
+        lines.append(f"[{stk} 效能檢核——動手時順答]")
+        for q in qs:
+            lines.append(f"  - {q}")
     lines.append("")
     lines.append(_INJECT_INSTRUCTION)
     return "\n".join(lines)
 
 
 def inject_ranked_context(data: dict) -> None:
-    """ranked 版注入:results 空 → 不輸出。"""
-    if not data.get("results"):
+    """ranked 版注入:results 與 stack_questions 皆空 → 不輸出。"""
+    if not data.get("results") and not data.get("stack_questions"):
         return
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",

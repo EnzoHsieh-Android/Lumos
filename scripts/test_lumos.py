@@ -9277,6 +9277,83 @@ def t_lintcheck_cli():
     print("  ✓ t_lintcheck_cli")
 
 
+def t_pitfalls_stack_questions():
+    """棧別效能追問(pitfalls棧別效能追問_計劃 T1):diff 命中 kt/cs/vue/sql 檔 →
+    manifest 附該棧效能三問;測試檔/未收錄棧不附;--json 帶 stack_questions 欄。"""
+    import json as _json
+    import subprocess as _sp
+    import tempfile
+    from pathlib import Path as _P
+    lumos_bin = str(_P(__file__).parent / "lumos")
+
+    def run(args, cwd):
+        return _sp.run([sys.executable, lumos_bin] + args,
+                       cwd=cwd, capture_output=True, text=True, timeout=60)
+
+    with tempfile.TemporaryDirectory() as td:
+        _sp.run(["git", "init", "-q"], cwd=td, check=True)
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-q", "--allow-empty", "-m", "base"], cwd=td, check=True)
+        (_P(td) / "Screen.kt").write_text("val x = 1\n", encoding="utf-8")
+        (_P(td) / "readme.md").write_text("docs\n", encoding="utf-8")
+        (_P(td) / "test_helper.kt").write_text("val t = 1\n", encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=td, check=True)
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-q", "-m", "c1"], cwd=td, check=True)
+
+        r = run(["pitfalls", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        check("stack_questions rc0", r.returncode == 0, f"rc={r.returncode} {r.stderr}")
+        data = _json.loads(r.stdout)
+        sq = data.get("stack_questions", {})
+        check("kt 棧附三問", "kt" in sq and len(sq["kt"]) == 3, f"sq={sq}")
+        check("md 不附", "md" not in sq)
+        check("僅命中棧(test 檔已排除仍同棧,不另生鍵)", set(sq.keys()) == {"kt"}, f"sq={sq}")
+
+        r = run(["pitfalls", "--diff", "HEAD~1..HEAD", "--repo", td], td)
+        check("人讀輸出含效能檢核", "效能檢核" in r.stdout, r.stdout)
+
+        # 純測試檔 diff → 不附(排除規則)
+        (_P(td) / "test_only.cs").write_text("var y = 1;\n", encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=td, check=True)
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-q", "-m", "c2"], cwd=td, check=True)
+        r = run(["pitfalls", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        sq2 = _json.loads(r.stdout).get("stack_questions", {})
+        check("純測試檔不附", sq2 == {}, f"sq2={sq2}")
+    print("  ✓ t_pitfalls_stack_questions")
+
+
+def t_impact_hook_stack_questions():
+    """棧別效能追問 T2:hook 格式化 lumos 輸出的 stack_questions(單源在 lumos,hook 不持有表);
+    僅 stack_questions 無 results 也注入;兩者皆空不注入。"""
+    import contextlib
+    import io
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    hook_path = str(_P(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_sq_mod", hook_path)
+    import importlib.util as _iu
+    spec = _iu.spec_from_loader("impact_hook_sq_mod", loader)
+    m = _iu.module_from_spec(spec)
+    loader.exec_module(m)
+
+    data = {"results": [], "meta": {},
+            "stack_questions": {"kt": ["問一?", "問二?", "問三?"]}}
+    txt = m.build_ranked_context(data)
+    check("hook 文字含效能檢核段", "效能檢核" in txt and "問二?" in txt, txt)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        m.inject_ranked_context(data)
+    check("僅 stack_questions 也注入", "additionalContext" in buf.getvalue(), buf.getvalue()[:120])
+
+    buf2 = io.StringIO()
+    with contextlib.redirect_stdout(buf2):
+        m.inject_ranked_context({"results": [], "meta": {}})
+    check("兩者皆空不注入", buf2.getvalue() == "", buf2.getvalue()[:80])
+    print("  ✓ t_impact_hook_stack_questions")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

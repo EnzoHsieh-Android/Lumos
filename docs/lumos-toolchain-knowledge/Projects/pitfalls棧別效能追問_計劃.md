@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-19
 updated: 2026-07-19
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Systems/效能檢核目錄]]"
   - "[[Systems/pitfalls-code-loop]]"
@@ -24,14 +24,14 @@ PRIOR-ART: ① 最小解——pitfalls 已按副檔名認棧、已有 _PITFALL_Q
 
 ## 交付
 
-1. **[T1] pitfalls --diff 按棧附追問**(scripts/lumos,TDD):
+1. **[T1] ✅(2026-07-19)pitfalls --diff 按棧附追問**(scripts/lumos,TDD;t_pitfalls_stack_questions 6 斷言):
    - 問題表 `_STACK_PERF_QUESTIONS = {"kt": [...3問], "cs": [...], "vue": [...], "sql": [...]}`(內容抄自效能檢核目錄「人判提問」欄,每棧取最載重 3 問)。
    - `--diff` 命中某棧檔案時,manifest 尾附該棧追問(同既有 class 追問格式);`--json` 帶 `stack_questions` 欄。
    - 自動生效面:pre-push 印 tier 時帶出+code-loop reviewer 拿 manifest 即拿到問題。
    - 測試:t_pitfalls_stack_questions(命中 kt 附 Compose 問/未命中不附/json 欄位)。
-2. **[T2] impact hook 注入段**(hook 檔,anchor approve 走正門):
+2. **[T2] ✅(2026-07-19)impact hook 注入段**(實作走單源路線:lumos impact --ranked --json 輸出帶 stack_questions[冷卻 incidents-only 快速路不帶,尊重降噪],hook 只格式化不持有表——比原構想更防雙寫;hook 檔不在 anchor baseline 免 approve;t_impact_hook_stack_questions 3 斷言):
    - PreToolUse 注入時,若目標檔副檔名命中問題表 → 尾附該棧效能三問(一行一問,同現有注入格式)。
-3. **[T3] 蓋章紀律**(code-loop SKILL 一句):pitfalls manifest 含 stack_questions 時,pass --note 須含對應檢核答案(同接受理由紀律)。
+3. **[T3] ✅(2026-07-19)蓋章紀律**(code-loop SKILL 收斂節一句):pitfalls manifest 含 stack_questions 時,pass --note 須含對應檢核答案(同接受理由紀律)。
 4. **同步義務**:效能檢核目錄節點改 → `_STACK_PERF_QUESTIONS` 同步(反向亦然);漂移守衛=測試斷言表中每棧問題數與目錄「人判提問」欄一致性(輕量:數量級檢查)。
 
 ## 實務隱患

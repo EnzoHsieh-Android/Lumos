@@ -6443,6 +6443,31 @@ _PITFALL_QUESTIONS = {
     "self-governance": "誤擋的逃生口?繞過有沒有留痕?",
 }
 _PITFALL_BLACKLIST = ("方案評比", "canary 相容性", "誠實天花板", "審計修正紀錄")
+# 棧別效能追問(pitfalls棧別效能追問_計劃 T1):diff 命中該棧檔案時附進 manifest。
+# 內容源=圖譜 Systems/效能檢核目錄「人判提問」欄,每棧取最載重 3 問——
+# 目錄改動須同步此表、反向亦然(散落漂移家規);提問式>陳述式(逼答哲學,Vercel 56% 跳過實證)。
+_STACK_PERF_QUESTIONS = {
+    "kt": [
+        "Compose:昂貴計算有沒有 remember?不穩定型別會不會讓重組失控(stability report 可查)?",
+        "lazy 列表有沒有穩定 key?高頻狀態有沒有 derivedStateOf?",
+        "有沒有「讀過的狀態又寫」的重組死循環模式?",
+    ],
+    "cs": [
+        "熱路徑有沒有阻塞異步(.Result/.Wait)?CancellationToken 有沒有斷鏈?",
+        "查詢有沒有 N+1/SELECT * 進大表?只撈需要的欄位了嗎?",
+        "熱讀路徑該不該上快取?熱路徑有沒有短命大物件(該用 Span/ValueTask)?",
+    ],
+    "vue": [
+        "這個互動會不會卡主線程(INP>200ms)?長任務要不要拆?",
+        "LCP 元素有沒有被誤加 lazy loading?圖片有沒有寬高(防 CLS)?",
+        "新依賴 bundle 多重?能不能動態載入?",
+    ],
+    "sql": [
+        "這條查詢會在迴圈裡被呼叫嗎(N+1)?",
+        "有沒有索引支撐?會不會大表全掃?",
+        "交易範圍會不會鎖太久?",
+    ],
+}
 # diff 模式:代碼形態 pattern:(regex, 形態類軸, 提問)——類軸限 併發/效能/資源(非四業務類)
 _PITFALL_DIFF_PATTERNS = [
     (re.compile(r"requests\.\w+\(|httpx\.\w+\(", re.I), "資源", "HTTP 呼叫有沒有 timeout?"),
@@ -7569,11 +7594,21 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
                     break
         new_ln += 1                           # 新增行推進新檔行號
 
+    # 棧別效能追問(T1):非測試檔的副檔名命中問題表 → 附該棧三問(去重,首見即收)
+    stack_qs = {}
+    for f in added:
+        if _PITFALL_DIFF_TEST_PAT.search(f):
+            continue
+        ext = Path(f).suffix.lstrip(".").lower()
+        if ext in _STACK_PERF_QUESTIONS and ext not in stack_qs:
+            stack_qs[ext] = _STACK_PERF_QUESTIONS[ext]
+
     # ── Task 4: lint 整合 ─────────────────────────────────────────────────
     config = None if no_lint else _lint_load_config(repo_root)
     if config is None:
         # fallback: no_lint 或無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
-        return {"claims": claims, "tier": "high" if claims else "standard"}
+        return {"claims": claims, "tier": "high" if claims else "standard",
+                "stack_questions": stack_qs}
 
     # 有 config: 補 source 到 regex claims
     for c in claims:
@@ -7605,7 +7640,8 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
 
     all_claims = lint_claims + claims
     out = {"claims": all_claims, "tier": "high" if all_claims else "standard",
-           "lint_ran": lint_ran, "lint_skipped": lint_skipped}
+           "lint_ran": lint_ran, "lint_skipped": lint_skipped,
+           "stack_questions": stack_qs}
     if filtered_marker is not None:
         out["filtered"] = filtered_marker
     return out
@@ -7628,6 +7664,10 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
                 print(f"  {c['file']}:{c['line']} [{src}] {c.get('message','')}")
             else:
                 print(f"  {c['file']}:{c['line']} [{c.get('class','')}] {c.get('question','')}")
+        for stk, qs in data.get("stack_questions", {}).items():
+            print(f"  [{stk} 效能檢核]")
+            for q in qs:
+                print(f"    - {q}")
         print(f"tier: {data['tier']}")
     return 0
 
@@ -8726,8 +8766,14 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 "pinned": len(pins), "truncated": truncated,
                 "safety_overflow": max(0, len(pins) - int(top))}
         if as_json:
-            print(json.dumps({"file": rel_file, "results": final, "meta": meta},
-                             ensure_ascii=False))
+            out_obj = {"file": rel_file, "results": final, "meta": meta}
+            # 棧別效能追問(pitfalls棧別效能追問_計劃 T2):完整 ranked 模式(非 incidents-only
+            # 冷卻快速路)且目標檔命中問題表 → 附該棧三問;單源=_STACK_PERF_QUESTIONS,hook 只格式化
+            if not incidents_only and not _PITFALL_DIFF_TEST_PAT.search(rel_file):
+                _ext = Path(rel_file).suffix.lstrip(".").lower()
+                if _ext in _STACK_PERF_QUESTIONS:
+                    out_obj["stack_questions"] = {_ext: _STACK_PERF_QUESTIONS[_ext]}
+            print(json.dumps(out_obj, ensure_ascii=False))
         else:
             print(f"改動 {rel_file} — 相關 top(固定席 {len(pins)}):")
             for r in final:
