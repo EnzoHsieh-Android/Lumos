@@ -865,8 +865,19 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
                 # [M3] ledger 跳過:這筆 (鄰居×邊型×root決策) 已有 terminal 判定且不早於 ended → 判過,不重報
                 if did:
                     _lts = _led_terminal.get((arel, etype, f"{drel}#{did}"), "")
-                    if _lts and _lts[:10] >= str(d.get("ended", ""))[:10]:
-                        continue
+                    if _lts:
+                        # [tz 跨日修 2026-07-20] ledger ts=UTC(_utc_ts)、ended=本地日期(date.today)
+                        # ——兩時間源混用:台北 00:00-08:00 窗口 UTC 日期仍昨天,raw [:10] 比較
+                        # 誤判「判定早於翻案」→ 判過照樣重報(t_e2_ledger_tz_boundary 實抓)。
+                        # 修=比較點把 UTC ts 轉本地日期;寫入側維持 UTC 不動(歷史帳相容)。
+                        _lts_day = _lts[:10]
+                        try:
+                            import datetime as _dtz
+                            _lts_day = _dtz.datetime.fromisoformat(_lts).astimezone().date().isoformat()
+                        except ValueError:
+                            pass  # 非 iso 舊格式 → 退回 raw 日級比較(fail-open)
+                        if _lts_day >= str(d.get("ended", ""))[:10]:
+                            continue
                 build_on_dead.append(
                     f"{arel} --{etype}--> {drel}(決策「{dcontent}」{ended} 翻案,來源自 {aupd} 未更新)")
                 gov_events.append({"gate": "check-e2", "kind": "warned", "hard": False,
@@ -6444,15 +6455,16 @@ _PITFALL_QUESTIONS = {
 }
 _PITFALL_BLACKLIST = ("方案評比", "canary 相容性", "誠實天花板", "審計修正紀錄")
 # 棧別效能追問(pitfalls棧別效能追問_計劃 T1):diff 命中該棧檔案時附進 manifest。
-# 內容源=圖譜 Systems/效能檢核目錄「人判提問」欄,每棧取最載重 3-5 問(kt=5 cs=4 vue=4 sql=3;idioms ⚠不可機檢條目優先入問(R1 並行/R3 競態等);2026-07-19 使用者補全)——
+# 內容源=圖譜 Systems/效能檢核目錄「人判提問」欄,每棧取最載重 3-5 問(kt=6 cs=4 vue=4 sql=3;idioms ⚠不可機檢條目優先入問+2026-07-20 洩漏/裝箱補(R1 並行/R3 競態等);2026-07-19 使用者補全)——
 # 目錄改動須同步此表、反向亦然(散落漂移家規);提問式>陳述式(逼答哲學,Vercel 56% 跳過實證)。
 _STACK_PERF_QUESTIONS = {
     "kt": [
         "Compose:昂貴計算有沒有 remember?不穩定型別/缺穩定 key 會不會讓重組失控(stability report 可查)?",
         "協程:互不依賴的等待有沒有並行(coroutineScope+async)?有沒有 GlobalScope 裸用/scope 沒跟生命週期(viewModelScope)?",
         "Dispatchers 選對了嗎(IO 密集≠Default)?suspend 函式 main-safe 嗎?async 吞例外/長運算 ensureActive?",
-        "Flow/Channel 選型:狀態=StateFlow/事件=SharedFlow/單消費=Channel,選反會漏事件或黏著重放;背壓要不要 buffer/conflate?UI 收集有 repeatOnLifecycle 嗎?",
-        "大集合長鏈有沒有 asSequence(每步 map/filter 生中間 List)?字串拼接 buildString?",
+        "Flow/Channel 選型:狀態=StateFlow/事件=SharedFlow/單消費=Channel,選反漏事件或黏著重放;背壓 buffer/conflate?repeatOnLifecycle?shareIn 有沒有放函式回傳(每叫一次漏一條熱流,idioms R5)?",
+        "大集合長鏈有沒有 asSequence(每步 map/filter 生中間 List)?熱路徑 value class 有沒有被泛型/可空觸發裝箱?",
+        "洩漏:單例/SDK/companion 有沒有持 Activity Context 或 View(該給 applicationContext)?長活物件持 ViewModel/View 引用?",
     ],
     "cs": [
         "熱路徑有沒有阻塞異步(.Result/.Wait)?互不依賴的 await 有沒有 Task.WhenAll 並行?CancellationToken 斷鏈?",

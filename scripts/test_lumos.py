@@ -9305,7 +9305,7 @@ def t_pitfalls_stack_questions():
         check("stack_questions rc0", r.returncode == 0, f"rc={r.returncode} {r.stderr}")
         data = _json.loads(r.stdout)
         sq = data.get("stack_questions", {})
-        check("kt 棧附五問(Compose/協程/Dispatchers/Flow/集合)", "kt" in sq and len(sq["kt"]) == 5, f"sq={sq}")
+        check("kt 棧附六問(Compose/協程/Dispatchers/Flow/集合+裝箱/洩漏)", "kt" in sq and len(sq["kt"]) == 6, f"sq={sq}")
         check("md 不附", "md" not in sq)
         check("僅命中棧(test 檔已排除仍同棧,不另生鍵)", set(sq.keys()) == {"kt"}, f"sq={sq}")
 
@@ -9357,6 +9357,42 @@ def t_impact_hook_stack_questions():
         m.inject_ranked_context({"results": [], "meta": {}})
     check("兩者皆空不注入", buf2.getvalue() == "", buf2.getvalue()[:80])
     print("  ✓ t_impact_hook_stack_questions")
+
+
+def t_e2_ledger_tz_boundary():
+    """E2 ledger 抑制的時區跨日 bug(2026-07-20 台北凌晨實抓):ledger ts=UTC、ended=本地日期,
+    台北 00:00-08:00 窗口 UTC 日期還在昨天 → raw [:10] 比較誤判「判定早於翻案」→ 判過照樣重報。
+    修法=比較點把 UTC ts 轉本地日期再比。本測試手造「本地今日 00:00 的 UTC 表示」當 transition ts:
+    UTC+N(N>0) 環境必觸發舊 bug;UTC 環境退化為無害通過。"""
+    import datetime as _dt
+    import json as _json
+    v = mkvault()
+    write(v, "Projects/D.md", "type: project\nstatus: done")
+    run(v, "decision-add", "D", "舊路線", "--decided", "2026-07-01", expect_rc=0)
+    write(v, "Systems/A.md",
+          "type: system\nstatus: done\nupdated: 2026-07-02\n"
+          "summary: |-\n  KEY:★INVARIANT★ 假合約 [test:t_x]\n"
+          "verified_by:\n  - \"[[Projects/D]]\"")
+    run(v, "decision-supersede", "D", "舊路線", "--by", "新路線", expect_rc=0)
+    gid = "Projects/D.md#d1"
+    rcd = v / "governance" / "rel-cascade"
+    cid_file = sorted(rcd.glob("*.jsonl"))[0]
+    run(v, "rel-cascade", "prune", "A", "--cascade-id", cid_file.stem, "--from", gid,
+        "--edge", "verified_by", "--by", "human", expect_rc=0)
+    # 竄改 transition ts → 本地今日 00:00 的 UTC iso(非 UTC 時區下其日期字串=昨天)
+    local_mid = _dt.datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    utc_ts = local_mid.astimezone(_dt.timezone.utc).isoformat(timespec="seconds")
+    out = []
+    for ln in cid_file.read_text(encoding="utf-8").splitlines():
+        o = _json.loads(ln)
+        if o.get("event") == "transition":
+            o["ts"] = utc_ts
+        out.append(_json.dumps(o, ensure_ascii=False))
+    cid_file.write_text("\n".join(out) + "\n", encoding="utf-8")
+    r = run(v, "doctor")
+    check("E2 時區跨日:本地今日的判定(UTC 表示為昨日)不得重報",
+          "無「建在被推翻決策上」的落後邊" in r.stdout, r.stdout)
+    print("  ✓ t_e2_ledger_tz_boundary")
 
 
 def main():
