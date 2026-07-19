@@ -9346,6 +9346,11 @@ def t_impact_hook_stack_questions():
     with contextlib.redirect_stdout(buf):
         m.inject_ranked_context(data)
     check("僅 stack_questions 也注入", "additionalContext" in buf.getvalue(), buf.getvalue()[:120])
+    check("僅提問時不接「判上列節點」指令(答非所問)", "上列直接/間接節點" not in txt, txt)
+    txt_with_nodes = m.build_ranked_context(
+        {"results": [{"node": "Systems/x", "kind": "direct", "pinned": False, "score": 0.5}],
+         "meta": {}, "stack_questions": {"kt": ["問?"]}})
+    check("有節點時仍接指令", "上列直接/間接節點" in txt_with_nodes, txt_with_nodes)
 
     buf2 = io.StringIO()
     with contextlib.redirect_stdout(buf2):

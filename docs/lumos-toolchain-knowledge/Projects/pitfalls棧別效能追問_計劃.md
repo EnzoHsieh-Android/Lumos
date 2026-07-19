@@ -34,6 +34,11 @@ PRIOR-ART: ① 最小解——pitfalls 已按副檔名認棧、已有 _PITFALL_Q
 3. **[T3] ✅(2026-07-19)蓋章紀律**(code-loop SKILL 收斂節一句):pitfalls manifest 含 stack_questions 時,pass --note 須含對應檢核答案(同接受理由紀律)。
 4. **同步義務**:效能檢核目錄節點改 → `_STACK_PERF_QUESTIONS` 同步(反向亦然);漂移守衛=測試斷言表中每棧問題數與目錄「人判提問」欄一致性(輕量:數量級檢查)。
 
+## 終審折入(2026-07-19,單 reviewer standard 審)
+- [major,實測重現] 三時機②③在最常見情境形同虛設——.kt 命中棧表但無 regex 命中→tier=standard→pre-push 不印、code-loop 不觸發,只剩①hook 活著 → 修:pre-push 加 standard+棧命中 advisory 分支(恆不影響 rc;anchor approve 走正門);T3 紀律擴及 standard 路(義務落終審紀錄/commit message)。
+- [minor] hook 僅提問無節點時仍接「判上列節點」收尾指令=答非所問 → 修:有節點才接指令(+2 測試斷言,全套 1247)。
+- 假陽記錄:本 diff 自身 tier=high 由單一命中觸發=cs 棧問題字串裡的「SELECT *」被掃描器認成 SQL(考卷把考題當作弊,data string 非執行碼)→ code-loop skip 留痕。
+
 ## 實務隱患
 - 效能:注入量=每棧 3 問(行數小),hook 延遲可忽略;問題表純資料無網路。
 - 提醒疲勞:只在 diff 真命中該棧才附;三問取最載重,不塞全表。

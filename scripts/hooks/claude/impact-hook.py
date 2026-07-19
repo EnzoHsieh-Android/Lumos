@@ -356,7 +356,10 @@ def build_ranked_context(data: dict) -> str:
         for q in qs:
             lines.append(f"  - {q}")
     lines.append("")
-    lines.append(_INJECT_INSTRUCTION)
+    # 收尾指令只在真的列了節點時附(單 reviewer 終審 minor:僅檢核問題時
+    # 「判上列節點」答非所問,會弱化對提問的聚焦——檢核段標題已自帶指令)
+    if res:
+        lines.append(_INJECT_INSTRUCTION)
     return "\n".join(lines)
 
 
