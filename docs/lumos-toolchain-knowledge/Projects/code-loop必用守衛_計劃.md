@@ -5,7 +5,7 @@ created: 2026-07-05
 updated: 2026-07-05
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[pitfalls-code-loop]]"
   - "[[主動影響幅度偵測_計劃]]"

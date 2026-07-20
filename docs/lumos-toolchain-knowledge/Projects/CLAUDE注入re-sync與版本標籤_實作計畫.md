@@ -5,7 +5,7 @@ created: 2026-07-05
 updated: 2026-07-06
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[CLAUDE注入re-sync與版本標籤_計劃]]"
 plan_refs:

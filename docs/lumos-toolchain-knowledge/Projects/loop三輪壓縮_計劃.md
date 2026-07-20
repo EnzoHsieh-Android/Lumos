@@ -5,7 +5,7 @@ created: 2026-07-09
 updated: 2026-07-09
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[design-loop]]"
   - "[[canary-audit]]"

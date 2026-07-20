@@ -5,7 +5,7 @@ created: 2026-07-05
 updated: 2026-07-07
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[design-loop折入守衛_計劃]]"
 plan_refs:

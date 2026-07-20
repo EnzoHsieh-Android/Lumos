@@ -5,7 +5,7 @@ created: 2026-07-05
 updated: 2026-07-05
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[design-loop折入漂移_機械守衛]]"
   - "[[design-loop]]"

@@ -5,7 +5,7 @@ created: 2026-07-05
 updated: 2026-07-18
 tags:
   - type/issue
-  - status/open
+  - status/done
   - priority/P2
 related:
   - "[[主動影響幅度偵測_計劃]]"
