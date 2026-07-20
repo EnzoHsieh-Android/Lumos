@@ -40,7 +40,7 @@ fail-open(網路失敗永不升 rc,設計正確)→ rc 恆 0;輸出恆空 → lo
 - 部署驗收只驗了「機制會動」(07-04 真機),沒驗「排程環境下持續會動」——排程環境(cron PATH/SSL env)是另一個世界。
 
 ## 首次真收網(2026-07-17)
-LandmarkMember 5 條落後進 `governance/lint-upgrades/pending-LandmarkMember-2026-07-17.json`,等人放行:小版 ClosedXML 0.105.0/Dapper 2.1.79/xunit 2.9.3;大版 Swashbuckle 6.9.0→10.2.3、SqlClient 6.1.3→7.0.2(須審 changelog 再升)。
+LandmarkMember 5 條落後,經當日 pending 佇列(執行期暫存產物 pending-LandmarkMember-2026-07-17.json,未進版控、放行後即消化)等人放行:小版 ClosedXML 0.105.0/Dapper 2.1.79/xunit 2.9.3;大版 Swashbuckle 6.9.0→10.2.3、SqlClient 6.1.3→7.0.2(須審 changelog 再升)。
 
 ## 殘餘待辦
 - [ ] Citrus_KDS 掛 `.lumos/lint-watch.json`(有 lint.json/detekt 卻沒掛 watch)並加進 REPOS 清單
