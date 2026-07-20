@@ -2,7 +2,7 @@
 type: project
 status: done
 created: 2026-07-19
-updated: 2026-07-19
+updated: 2026-07-20
 tags:
   - type/project
   - status/done
@@ -15,6 +15,8 @@ summary: |-
   KEY:範圍刀——①動 scripts/lumos(pitfalls 問題表按棧分組+manifest 附問)=真代碼,TDD+standard 終審;②impact hook 注入=動 hook 檔(anchor 保護,approve 走正門);③純紀律。不新增宣告檔(問題表內建 lumos 自帶,同 PITFALL_QUESTIONS 慣例);不做效能自動評分(oracle 教訓)
   DEP:[[Systems/效能檢核目錄]]｜[[Systems/pitfalls-code-loop]]
   DECISION:[2026-07-19]問題表自帶於 scripts/lumos(同 _PITFALL_QUESTIONS 慣例)而非宣告檔——檢核問題是方法論資產跨專案同一份,非專案配置;內容與效能檢核目錄節點同步義務記入(防雙寫漂移,散落漂移家規)(valid)
+verified_by:
+  - "[[Verification/2026-07-20_棧別效能追問]]"
 ---
 # pitfalls棧別效能追問_計劃
 

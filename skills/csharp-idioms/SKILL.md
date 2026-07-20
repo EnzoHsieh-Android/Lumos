@@ -15,6 +15,8 @@ description: 寫或審 C#/.NET（ASP.NET Core Web API）代碼前必讀——通
 
 ## 一、並行與 async 紀律
 
+> **審查時機管道**:本文標「⚠ 不可機檢」的效能/適用性條目,其載重問已由 lumos 效能檢核機制在三時機自動推送(動手前 impact hook 注入/push 前 pitfalls advisory/終審 code-loop 鏡頭;內容源=lumos-toolchain 圖譜 Systems/效能檢核目錄,雙向同步義務)——可機檢條目歸 linter/analyzer,勿靠人記。
+
 ### R1. 互不依賴的等待必須並行 ⚠ 不可機檢，頭號條款
 ```csharp
 // ✗ 笨（延遲相加）

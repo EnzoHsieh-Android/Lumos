@@ -167,8 +167,8 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 - **一輪 = 平行派 W 個多樣 reviewer**(W=`difficulty.params(tier)['panel_width']`,standard=3/high=5),各讀一份 diff 工作副本:
   - **bug canary 型別跨 slot 輪替** `[(slot) mod 4]`=邊界off-by-one / 資源未釋放 / None例外路徑 / 冪等併發(code-loop 的四型,非 design-loop 的 a/b/c/d);canary hunk 仍落**真改動集之外**、走三道防污染(步驟 2.5)。
   - **鏡頭各異**:bug/邊界 / 資源與例外 / 冪等併發 /(W>3)migration 正確性、測試種子清理。
-  - **≥1 跨家族(qwen)**:不帶 canary、只作否決(同 design-loop)。
-- **spec-conformance slot(2026-07-10,調研裁定③)**:tier=high 且該分支有收斂 spec(計劃節點)→ panel **追加**一個對答案審查員(不帶 canary、不佔 W 配額,地位同 qwen 否決位):輸入=收斂 spec+diff,鏡頭=**逐條款對照**「說好的做了嗎/縮水/多做/未實作」四類;縮水與未實作視同 finding 進辯方流程。無 spec 的分支跳過並記一句。派工模板見 templates.md §7.5。
+  - **跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**:tier=high 雙 Codex 角色——1 席帶餌正式 finder 佔 W(受注意力檢查,計入重疊帳)+1 席無餌否決席不佔 W(外掛;findings 與帶餌席同池進辯方,存活 ≥major 依帳模式落閘:M2=記 disputed-major cluster 記錄/舊帳=計存活 max);standard=1 席無餌否決。fail 分級:standard fail-open 退同門+註記/high fail-closed(第三家族替補→延期→外家缺席不得收斂攤人)。qwen 轉列第三家族替補。
+- **spec-conformance slot(2026-07-10,調研裁定③)**:tier=high 且該分支有收斂 spec(計劃節點)→ panel **追加**一個對答案審查員(不帶 canary、不佔 W 配額,地位同 Codex 無餌否決位):輸入=收斂 spec+diff,鏡頭=**逐條款對照**「說好的做了嗎/縮水/多做/未實作」四類;縮水與未實作視同 finding 進辯方流程。無 spec 的分支跳過並記一句。派工模板見 templates.md §7.5。
 - **判讀/記錄/收斂**:同 design-loop panel(步驟 4 辯方 + 步驟 5 記錄)——一輪 W 筆共享 round-id:
   `lumos canary record caught|missed --loop code-<topic> --round <rid> --auditor <slotN> --severity <s> [--capture-counts "2,2,1"]`。
 - **問收斂**:`lumos loop status code-<topic> --gate --panel --repo <root>` → 四條合取(輪有效 caught≥2且0missed[near-perfect] ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<門檻[無counts=fail-closed]);**G1 本就對代碼 skip**,panel 模式不影響。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta hunk,cap=3。
