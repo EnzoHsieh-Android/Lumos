@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-16
+updated: 2026-07-20
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -20,8 +20,9 @@ summary: |-
   KEY:[M1/P2 2026-07-15]決策穩定 ID——add 指派 id:d<max+1>(翻案永不重用)、supersede 唯一命中(子字串多重命中 rc=2 列候選/#dN 精確定址)+回傳全域 id <rel>#d<N>(dispatcher 解包,CLI 對外仍 int rc)、reindex 冪等回填(混合狀態 max+1 不撞號);寫後自驗升級 ID 精確驗證(有 id 時)
   KEY:[M4/S1 2026-07-15]supersede 觸發主網 surfacing——rc=0 後 dispatcher 獨立 try 包「rel_cascade_create 建帳+cascade_surface 列鄰居」;stdout 首行逐字保留、cascade 面全走 stderr(CASCADE/NEIGHBOR 行式 schema);無 id→CASCADE-SKIP、失敗→CASCADE-ERROR fail-open(rc 仍 0,補網 E2 兜底)
   KEY:[decision_refs 自動養成 P+T1 2026-07-15]decision-reindex --all 批次編號(顯式,前置);rel-cascade confirm 回寫 decision_ref(_append_decision_ref exact-string dedup,非 link_target——它剝 #dN 會誤合同節點不同決策)。不對稱信任雙欄:by ai→decision_refs_ai(E3 firing 讀聯集/E2 抑制碰不到)、by human→decision_refs(可抑制)
+  KEY:[2026-07-20]set status 反正規化同步——status 存兩處(欄位+tags 的 status/* 標籤,模板生),set status 同一次原子寫入就地改寫 tags 內既有 status/* 項(無則不添,純同步不發明);寫後自驗同驗兩處;繞過路徑(手改/外部工具)由 lint+doctor Check M 漂移守衛硬擋(見[[Projects/狀態標籤同步守衛_計劃]])
   DEP:scripts/lumos atomic_write_verify｜load_raw_for_edit｜_write_lf(唯一寫入原語,UTF-8/LF/no-BOM)｜parse_frontmatter｜parse_decisions
-  TEST:set/append/decision/archive/new 全套 t_-prefixed 回歸(t_set_*,t_append_*,t_decision_*,t_archive_*,t_new_*)
+  TEST:set/append/decision/archive/new 全套 t_-prefixed 回歸(t_set_*,t_append_*,t_decision_*,t_archive_*,t_new_*);狀態標籤同步 t_set_status_syncs_tag+t_status_tag_drift_guard
 decisions:
   - content: 所有 frontmatter 寫入經 atomic_write_verify「寫 tmp → re-parse 自驗(值正確且無新 lint 指紋)→ os.replace」,任一步敗則原檔零變動
     id: d1
@@ -49,6 +50,7 @@ verified_by:
   - "[[Verification/2026-07-15_decision_refs養成_P前置_T1回寫]]"
   - "[[Verification/2026-07-15_decision_refs養成_codeloop硬化]]"
   - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
+  - "[[2026-07-20_狀態標籤同步守衛]]"
 ---
 # lumos-cli-write
 

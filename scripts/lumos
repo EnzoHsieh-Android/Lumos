@@ -597,6 +597,24 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
              "鐵則修法見 lumos-project-notes skill; 污染指紋見 pre-commit Gate 1 指引")
     print()
 
+    # Check M: 狀態標籤漂移(status 欄位 vs tags 的 status/*;反正規化完整性,
+    # 兜住繞過 set status 同步的寫入路徑;見 Projects/狀態標籤同步守衛_計劃)
+    section("M", "狀態標籤漂移 (status 欄位 vs tags 的 status/* 不一致)")
+    drift_lines = []
+    for rel, n in sorted(notes.items()):
+        st = n.fields.get("status")
+        if not (isinstance(st, str) and st.strip()):
+            continue
+        for tg in as_list(n.fields.get("tags")):
+            if isinstance(tg, str) and tg.startswith("status/") and tg != f"status/{st.strip()}":
+                drift_lines.append(f"{rel}: status={st} vs {tg}")
+    if not drift_lines:
+        ok("status 欄位與 status/* 標籤全同步")
+    else:
+        warn(drift_lines, f"發現 {len(drift_lines)} 處狀態標籤漂移:",
+             "`lumos set <節點> status <值>` 會連標籤一起同步;手改請對齊兩處")
+    print()
+
     # Check C: core_refs 跨 repo 指針完整性(只在有 core_refs 時跑)
     import os
     section("C", "core_refs 跨 repo 指針 (指向核心知識 repo 的檔案是否存在)")
@@ -1968,6 +1986,14 @@ def cmd_lint(env, node):
     summ = summ if isinstance(summ, str) else ""
     if t in ("system", "issue") and not summ.strip():
         errs.append(f"{t} 節點必須有 summary block(放 FLOW:/KEY:/DEP: 等符號行)")
+
+    # 狀態標籤漂移守衛:status 欄位 vs tags 的 status/*(反正規化的完整性檢查,
+    # 兜住繞過 set status 同步的寫入路徑;見 Projects/狀態標籤同步守衛_計劃)
+    _st = n.fields.get("status")
+    if isinstance(_st, str) and _st.strip():
+        for _tg in as_list(n.fields.get("tags")):
+            if isinstance(_tg, str) and _tg.startswith("status/") and _tg != f"status/{_st.strip()}":
+                errs.append(f"status 欄位({_st})與標籤({_tg})漂移(lumos set status 會自動同步;手改請對齊)")
 
     _regen_val = n.fields.get("regen")
     _lint_is_regen = isinstance(_regen_val, str) and bool(_regen_val.strip())
@@ -4552,6 +4578,24 @@ def edit_fm_scalar(fm_lines, key, value):
     return fm
 
 
+def edit_fm_sync_status_tag(fm_lines, status):
+    """set status 的反正規化同步:tags 內既有 status/* 項就地改寫為 status/<新值>。
+    無 tags/無 status/* 標籤則不動(純同步不發明;繞過本路徑的寫入由 lint/doctor
+    漂移守衛兜底)。回傳 (new_fm, tags 內有無 status/* 標籤)。"""
+    fm = list(fm_lines)
+    struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+    if "tags" not in struct or struct["tags"][2] != "list":
+        return fm, False
+    s, e, _kind = struct["tags"]
+    found = False
+    for i in range(s + 1, e + 1):
+        m = re.match(r"^(\s*-\s*)status/\S+\s*$", fm[i])
+        if m:
+            fm[i] = f"{m.group(1)}status/{status}"
+            found = True
+    return fm, found
+
+
 def edit_fm_append(fm_lines, key, value):
     fm = list(fm_lines)
     item = fmt_list_item(value)
@@ -4682,12 +4726,24 @@ def cmd_set(env, rel, key, value):
     path = env.vault / rel
     lines, s, e = load_raw_for_edit(path)
     new_fm = edit_fm_scalar(lines[1:e], key, value)
-    new_lines = lines[:1] + new_fm + lines[e:]
     exp = fmt_scalar(key, value)
     exp_val = strip_quotes(exp)
-    atomic_write_verify(path, new_lines, key,
-                        lambda f: str(f.get(key, "")) == exp_val)
-    print(f"✓ set {rel}: {key} = {exp}")
+    tag_synced = False
+    if key == "status":
+        new_fm, tag_synced = edit_fm_sync_status_tag(new_fm, exp_val)
+    new_lines = lines[:1] + new_fm + lines[e:]
+
+    def _check(f):
+        if str(f.get(key, "")) != exp_val:
+            return False
+        if tag_synced:
+            want = f"status/{exp_val}"
+            tags = [t for t in as_list(f.get("tags")) if isinstance(t, str)]
+            return want in tags and all(t == want for t in tags if t.startswith("status/"))
+        return True
+
+    atomic_write_verify(path, new_lines, key, _check)
+    print(f"✓ set {rel}: {key} = {exp}" + (";tags 的 status/* 已同步" if tag_synced else ""))
     return 0
 
 

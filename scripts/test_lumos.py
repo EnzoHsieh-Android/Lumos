@@ -366,6 +366,51 @@ def t_set_minimal_diff():
           "FLOW:A→B" in txt and "KEY:keep" in txt and "status: done" in txt, txt)
 
 
+# ── set status 同步 tags 的 status/* 標籤(反正規化同步觸發器,[S1]) ──
+def t_set_status_syncs_tag():
+    v = mkvault()
+    p = write(v, "Systems/S.md",
+              "type: system\nstatus: doing\ntags:\n  - type/system\n  - status/doing")
+    run(v, "set", "S", "status", "done", expect_rc=0)
+    txt = read(p)
+    check("set status 同步標籤(status/doing → status/done)",
+          "- status/done" in txt and "- status/doing" not in txt, txt)
+    check("set status 同步不動其他標籤", "- type/system" in txt, txt)
+    # 無 status/* 標籤 → 純同步不發明(不添)
+    p2 = write(v, "Systems/S2.md", "type: system\nstatus: doing\ntags:\n  - type/system")
+    run(v, "set", "S2", "status", "done", expect_rc=0)
+    txt2 = read(p2)
+    check("set status 無 status 標籤不添", "status/" not in txt2.split("---")[1], txt2)
+    # 無 tags 欄位 → 不長出 tags
+    p3 = write(v, "Systems/S3.md", "type: system\nstatus: doing")
+    run(v, "set", "S3", "status", "done", expect_rc=0)
+    check("set status 無 tags 欄位不長 tags", "tags:" not in read(p3), read(p3))
+    # 非 status key 不碰標籤
+    p4 = write(v, "Systems/S4.md",
+               "type: system\nstatus: doing\nupdated: 2026-01-01\ntags:\n  - status/doing")
+    run(v, "set", "S4", "updated", "2026-06-13", expect_rc=0)
+    check("set 非 status key 不碰標籤", "- status/doing" in read(p4), read(p4))
+
+
+# ── lint/doctor 漂移守衛:status 欄位 vs status/* 標籤不一致([S2]) ──
+def t_status_tag_drift_guard():
+    v = mkvault()
+    write(v, "Systems/Drift.md",
+          "type: system\nstatus: done\ntags:\n  - status/doing\nsummary: |-\n  KEY:x",
+          body="# D\n")
+    r = run(v, "lint", "Systems/Drift")
+    check("lint: status 欄位 vs 標籤漂移 → rc1", r.returncode == 1 and "漂移" in r.stdout, r.stdout)
+    write(v, "Systems/Sync.md",
+          "type: system\nstatus: done\ntags:\n  - status/done\nsummary: |-\n  KEY:x",
+          body="# S\n")
+    r = run(v, "lint", "Systems/Sync")
+    check("lint: status 欄位與標籤一致 → rc0", r.returncode == 0, r.stdout)
+    r = run(v, "doctor")
+    check("doctor: 漂移守衛抓到 Drift 節點",
+          "Drift" in r.stdout and "漂移" in r.stdout, r.stdout)
+    check("doctor: 漂移計入 issues(非軟提醒)", "圖譜健康" not in r.stdout, r.stdout)
+
+
 # ── append 全新 list(key 不存在) ──
 def t_append_new_list():
     v = mkvault()
