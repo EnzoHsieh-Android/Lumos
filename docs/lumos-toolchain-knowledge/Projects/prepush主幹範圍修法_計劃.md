@@ -108,8 +108,8 @@ hook 對每個 `refs/heads/*` 範圍呼叫 `code-loop check --diff <range> --at-
 - **summary TEST 子行未同步（major，s2+Codex#2）**：line 21 仍寫「新 ref fallback/首推 main 空 diff」舊框架 → 同步（主 KEY 已改、此子行漏）。
 - 帳目：撤 self-base 歸屬 r2-panel（minor，s2）。
 - 存活 max=major（非-heads 收口），但 r3 為 cap 末輪＋首個有效輪＋findings 全確定性收口 → 待 Codex 終確認後人裁。
-- **首推 main mb==local_sha 空 diff（major，s2）**：重現盲區 → 併入 fail-open+advisory。
-- **shallow/remote_sha 本地無物件（major，s3）**：cat-file -e 探測 → fail-open+advisory（原不對稱靜默）。
+- **首推 main mb==local_sha 空 diff（major，s2）**：重現盲區。~~r1 併入 fail-open+advisory~~ **【r2/r3 已撤銷此決議——改 empty-tree 保守掃，見 §1；此 bullet 僅存歷史，勿據以實作】**。
+- **shallow/remote_sha 本地無物件（major，s3）**：cat-file -e 探測。~~r1 fail-open+advisory~~ **【r2 已撤銷——改 empty-tree 保守掃，見 §1；歷史紀錄勿據以實作】**。
 - **既有 t_codeloop_guard_prepush 崩（major，s3）**：dummy sha 在 stdin load-bearing 後失真 → 重寫真 sha，列同步義務。
 - **anchor baseline 落地卡關（major，s4）**：改 hook 先卡自身 anchor verify → 落地序含 anchor approve，列同步義務。
 - **聚合成本/多 ref 迴圈無測試（s3）**：短路＋逐 ref 迴圈重置＋多 ref 混合測試格。
