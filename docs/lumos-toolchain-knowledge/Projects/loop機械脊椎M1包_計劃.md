@@ -45,7 +45,7 @@ summary: |-
 - **唯讀**：讀該 loop 的 canary-log（同 `loop status` 的讀側守衛：round 混用/損壞 clusters/非連續 round-id → 同款 rc2），不寫任何檔、不 spawn agent——**lumos 只出指針，編排仍是 Claude**（維持 [[Systems/design-loop]]「Claude 編排,lumos 出原語」分工）。
 - **gate 參數委派（r2 C1；r3 basis 欄；r4 Codex 再駁——basis 標註擋不住機讀端只看 phase 放行）**：next 接受完整 gate 旗標組委派既有謂詞、不改 status 行為（`--spec` 對 status 可選是現行語意 :2684）。**r4 收口：next 的 `converged` 只在 full-basis 時輸出**（G1 run ∧ hash verified，如適用）——缺 `--spec` 等資訊不足時 phase 輸出第五值 **`gate-pending`**（「帳面或可收斂，但 next 資訊不足以背書；請自行跑 `loop status --gate` 附完整參數」），**絕不輸出 converged**。code-loop 無-spec 用法不受影響（它直接用 status，不經 next）。
 - **`--tier` 與 gate 模式調和（r3 折入——兩套旗標無調和會產出錯陣容/誤報未收斂）**：明定映射——`--tier light` ⇒ gate 委派走 `--light` 謂詞；`--tier standard|high` ⇒ panel 謂詞。**衝突組合一律 rc2**（`--tier light --panel`／`--tier standard --light` 等），不留「誰贏」猜題。
-- **無 `--tier` 的身分推導（r3 折入——原「預設 standard」與 cap 的 legacy 判定自相矛盾）**：有記錄 → 由帳面格式推導（legacy 格式→width=1/cap=6/legacy 模板；panel 格式→預設 standard width=3/cap=3）；**零記錄 → rc2 要求明示 `--tier`**（不猜——猜錯模式撞混用守衛 :2638）。
+- **無 `--tier` 的身分推導（r3 折入；r7 Codex 終確認統一——原兩處「預設 standard」殘句與 tier 定錨規則分叉，high 可被合法降 standard）**：**定錨優先**——①帳面有 tier 定錨（首個帶 tier 欄的記錄）→ 一律用定錨值（high 定錨即 width=5/min-seats=5，永不 fallback）；②無定錨（本功能上線前的舊帳）→ 帳面格式推導（legacy 格式→width=1/cap=6；panel 格式→**僅此 fallback** standard width=3/cap=3）；③零記錄 → rc2 要求明示 `--tier`（不猜）。
 - **空帳模板模式明定（C1 附帶）**：`--tier standard|high` → panel 格式（帶 `--round`）；`--tier light` → legacy 單席格式（不帶 round）。
 - **輸出（人讀預設；`--json` 機讀）**：
   - `phase`（**v1 契約=五值**，r1 砍死值；r3 補 escalate；r4 補 gate-pending）：`plant-canary` / `converged`（僅 full-basis） / `gate-pending`（資訊不足不背書） / `cap-reached` / `escalate`（light ratchet 已觸發——指路「停止本 loop，開新 panel loop id 承接」）。
@@ -54,7 +54,7 @@ summary: |-
   - light gate 的 FAIL 分因 retryable（missed）/ratchet（永久）。
   - `round`：下一輪 N（= 現有輪數＋1，legacy 記錄數／panel round 分組數）。
   - `canary_type`：legacy＝`清單[(N-1) mod 4]`；panel＝per-slot 輪替表（slot i → `清單[(i+N-1) mod 4]`）。
-  - `width`：tier→席數（light=1／standard=3／high=5；`--tier` 不給預設 standard；**tier 是編排者宣告非 lumos 判定**——誠實：lumos 沒有 tier 判定能力，只做映射）。
+  - `width`：tier→席數（light=1／standard=3／high=5；`--tier` 不給→**依身分推導（定錨優先，見上；r7 統一——舊「預設 standard」句撤）**；**tier 是編排者宣告後定錨，lumos 只做映射與定錨讀取**）。
   - `record_cmd`：該輪記帳指令模板字串（含 loop id／round-id／建議旗標——模板是提示非強制）。
 - **cap（r1 折入：tier→cap 直給對照表）**：`light=2`／`standard=3`／`high=3`／legacy 格式=6。硬編碼進 next，與 skill 漂移時以 code 為準並回寫 skill。
 - **席數下限（r4 新 major；r5 legacy 值；r6 Codex 終判雙補——①數記錄筆數可被同席重複 append 灌滿 ②tier 不持久化，下次省略 --tier 的 high loop 被推成 standard 三席即收斂）**：gate 選配 `--min-seats N`（不帶=現行為不變）；判定輪**相異 `auditor` 欄值數** < N → FAIL「席數不足」（數相異席非筆數——schema 既有欄零新欄，重複席不計）。**tier 持久化**：record 加選配 `--tier` 欄，該 loop 首個帶 tier 的記錄**定錨 loop tier**（同定錨前例）；next/gate 無 `--tier` 時讀帳面定錨值（無欄舊帳→format 推導）；明示 `--tier` 與帳面定錨衝突 → rc2。next 自動傳 min-seats：light=1／standard=3／high=5／legacy=1。
