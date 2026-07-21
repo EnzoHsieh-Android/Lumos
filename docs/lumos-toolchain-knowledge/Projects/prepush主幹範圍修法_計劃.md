@@ -18,7 +18,7 @@ summary: |-
   KEY:code-loop check 改動——加選配 `--diff <a..b>`(r1 折入:名對齊全 CLI,原擬 --range 不一致)+`--at-sha`/`--branch`(r1 最重 major:留痕比對原讀 checkout HEAD,推非當前 checkout 分支時 tier 對 range 算、留痕卻查錯分支=誤放/誤擋;改由 hook 傳被推送 ref 座標);不給=現行為不變(向後相容)
   KEY:落地同步義務(r1 折入)——①anchor:scripts/hooks/pre-push 是錨點檔,改後落地 push 先卡自身 anchor verify→序含 `lumos anchor approve --note` ②既有 t_codeloop_guard_prepush(test_lumos.py:6494)餵 dummy sha,stdin 變 load-bearing 後失真→重寫真 sha ③Issue open→清償 ④code-loop必用守衛計畫「merge-base 同 pre-push」句失真同步 ⑤Verification
   KEY:★風險面★self-governance=high(動 pre-push 守衛本身)——spec 過 design-loop 非 light([[Issues/code-loop守衛main-direct盲區]] 排程時明裁);實作後本 hook 改動自己就會被新邏輯檢到(自舉驗證:改完 push 時新範圍演算法應對本 diff 判 high→要求 code-loop)
-  TEST:見 body 測試策略——--diff CLI 格數/新舊相容/留痕座標(推非當前 checkout 分支查對 ref)/hook 假 stdin 模擬(main-direct/新 ref fallback/首推 main 空 diff/shallow 無物件/刪除 ref/空 stdin/多 ref 混合迴圈/stdin 先讀);既有 t_codeloop_guard_prepush 重寫(dummy sha→真 sha)
+  TEST:見 body 測試策略——--diff CLI 格數/新舊相容/留痕座標(綁 remote_ref 目的地非 local_ref)/hook 假 stdin 模擬(main-direct 增量/新 ref 含首推 main→empty-tree 保守掃 high擋standard放/缺物件 empty-tree/CI $SHA:refs/heads/x→remote_ref 判分支/tag→advisory/刪除 ref/空 stdin/多 ref 混合迴圈/stdin 先讀);既有 t_codeloop_guard_prepush 重寫(dummy sha→真 sha)
   DEP:scripts/hooks/pre-push｜scripts/lumos code-loop check(:9451-9479)｜[[Systems/pitfalls-code-loop]]
   PRIOR-ART:①最小解=hook 讀 stdin 是 git 原生合約,零新機制;code-loop check 加一選配旗標 ②世界解=githooks(5) 官方文件明定 pre-push stdin 格式,業界 hook(husky/lefthook)皆此模式——標準做法非發明 ③裁定=borrow(git 官方合約原生用)
 ---
@@ -50,7 +50,10 @@ summary: |-
 
 - **旗標名＝`--diff`（r1 s4-F3 折入，原 `--range` 與全 CLI 不一致）**：對齊 `pitfalls --diff`/`cochange --diff`/`test-layers --diff`/`impact --diff` 全用 `--diff <A..B>`。給了 → 跳過 merge-base 推導（:9464 段），直接以該範圍跑 pitfalls 算 tier。不給 → 現行為分毫不變（向後相容）。格式非 `<sha>..<sha>`／git 解不開 → 沿 fail-open（unknown tier、不 blocked）＋stderr 一句。
 - **★留痕座標脫鉤（r1 最重 major，三席互證＋r2 Codex 確認）★**：現行留痕比對讀「**當前 checkout** 的 branch/HEAD」（:9502-9517）；hook 逐 ref 檢的是**被推送 ref 的 local_sha**（可非當前 checkout）→ 借錯分支留痕誤放/誤擋。修法：`code-loop check` 加 `--at-sha <sha>`＋`--branch <name>`，hook 傳被推送 ref 座標。
-- **★`--branch` 鍵正確性（r2 Codex#3 折入——原「取 local_ref 末段」是實作 bug）★**：marker 鍵＝完整 branch 名把 `/`→`__`（`feat/x`→`feat__x.json`，:9395）——取末段查 `x.json` 錯、且會名稱碰撞。修法：**只認 `refs/heads/*`**——去 `refs/heads/` 前綴後的**完整** branch 名（沿 :9395 的 `/`→`__` 轉換）作 `--branch` 值。`local_ref` 非 `refs/heads/*`（tag／`HEAD~`／raw revision，git 合約允許）→ 無對應 branch marker，走保守掃描判 tier：**high → 硬擋（r2 s3-F2＋Codex 折入：原「advisory 放行」是 `push sha:refs/tags/x` 的穩定繞法，與本 spec 宗旨相悖；非分支 ref 無留痕通道故不給 pass，要推走 branch 或 `--no-verify` 自負）**；standard 放行。**`--branch` 鍵大小寫（r2 s3-F1＋Codex）**：現行 marker 寫入側（:9395 `_codeloop_branch_filename`）只做 `/`→`__` **不轉大小寫**——`--branch` 值**保留原大小寫**（原植入「先 lower-case」會與寫入側不對稱、大寫分支誤擋）。
+- **★分支判定用 `remote_ref`（目的地）非 `local_ref`（來源）（r3 Codex 新 major 折入——原用 local_ref 誤擋 tag/CI）★**：`local_ref` 可為 raw revision（`$SHA`／`HEAD~`，CI 常見），但**留痕該綁「推去哪」＝ `remote_ref`**：
+  - `remote_ref` ∈ `refs/heads/*` → branch＝去前綴完整名沿 :9395 `/`→`__`、**保留大小寫**（marker 寫入側 :9395 只做 `/`→`__` 不轉大小寫，原植入「先 lower-case」會使大寫分支誤擋）；`--at-sha <local_sha>` `--branch <該名>`；high 無留痕 → 硬擋、`code-loop skip` 逃生**有效**（marker 走 remote_ref branch）。這順帶修好 CI `$SHA:refs/heads/deploy`（local_ref 是 sha 但 remote_ref 是合法 branch）。
+  - `remote_ref` ∈ `refs/tags/*` 或其他非 heads → **標籤/非分支不綁 code 審留痕**（tag 多半指向**已在其分支審過**的 commit，未引入新可執行內容）→ 判 tier 但 **high 亦 advisory 放行＋印一句**（不硬擋——硬擋會誤擋合法 release tag，且無正當留痕通道）。誠實記：這是 tag namespace 的已知較弱面，真要 gate tag 內容另訂策略。
+  - 原「非 heads 一律硬擋」（r2）與「advisory」（隱患）自相矛盾 → 本條收口：**heads 硬擋+可 skip、非 heads advisory**，唯一實作。
 
 ### #2b hook 逐 ref 傳留痕座標
 hook 對每個 `refs/heads/*` 範圍呼叫 `code-loop check --diff <range> --at-sha <local_sha> --branch <去前綴的完整 branch 名>`；非 heads ref 走保守掃描 tier 判定但不綁留痕。
@@ -96,9 +99,15 @@ hook 對每個 `refs/heads/*` 範圍呼叫 `code-loop check --diff <range> --at-
 **r2-panel（2026-07-21，delta 審 v3 樞紐反轉；3 sonnet＋Codex 否決復核）**：canary s2/s3 caught、**s1 missed（自植「standard 亦 advisory 放行」矛盾未抓）→ 連 2 輪無效**（r1 亦 s1 missed；護欄→r3 升 opus）；s1 findings 剔除但兩條經 Codex 獨立浮回。真 findings 折入 v4：
 - **★self-base 過度反轉（major×3，s1+s2+Codex 實測）★**：`merge-base==local_sha` 對每次推 main 都成立→每 main commit empty-tree 全掃永久 high → **該條件全撤**，remote_sha 有效即用增量 diff（空 diff 自然 standard）。
 - **★summary/測試策略未跟樞紐（major，s1+Codex#1）★**：frontmatter KEY 與測試策略 items 仍寫 fail-open（`lumos context` 攤 summary 會誤導、TDD 會把繞法測回去）→ 同步反轉。
-- **非 heads ref high→硬擋（major，s3+Codex）**：原 advisory 放行是 `push sha:refs/tags/x` 繞法 → 改硬擋。
+- **非 heads ref high→硬擋（major，s3+Codex；r3 再修）**：r2 改硬擋堵繞法，但 r3 Codex 揭其誤擋合法 tag/CI＋與隱患 advisory 矛盾 → r3 收口：**判定改用 remote_ref 目的地**（CI raw-revision→heads 走硬擋+skip；真 tag→advisory），唯一實作。
 - **`--branch` 保留大小寫（major，s3+Codex）**：marker 寫入側不轉大小寫，`--branch` 值不得 lower-case（原植入會使大寫分支誤擋）。
 - **既有債記（Codex minor，不折）**：marker 鍵 `feat/x` vs `feat__x` 碰撞、marker 綁 local_sha 不綁 range——屬既有 marker 設計面，出本 spec 範圍，指 [[Projects/code-loop必用守衛_計劃]] 待另案。
+
+**r3-panel（2026-07-21，末輪，opus×2 升級席＋Codex 終確認）**：**canary 2/2 全抓（opus s1 抓自我豁免後門「自動寫 skip 留痕」、s2 抓「空 diff=祖先」git 語意錯，皆正確判植入雜質）＝首個輪有效**——證實前兩輪 s1 漏抓是模型層非 spec（升 opus 即接住，護欄機制實效第 N 筆）。真 findings 折入 v5：
+- **★非-heads 判定改 remote_ref（major，Codex 新）★**：r2「非 heads local_ref 硬擋」誤擋 release tag（新 ref 全掃 high）＋CI `$SHA:refs/heads/x`（raw local_ref 判非 heads），且與隱患 advisory 矛盾 → 改**用 remote_ref 目的地判**：heads→硬擋+skip 逃生有效、tag/其他→advisory。唯一實作。
+- **summary TEST 子行未同步（major，s2+Codex#2）**：line 21 仍寫「新 ref fallback/首推 main 空 diff」舊框架 → 同步（主 KEY 已改、此子行漏）。
+- 帳目：撤 self-base 歸屬 r2-panel（minor，s2）。
+- 存活 max=major（非-heads 收口），但 r3 為 cap 末輪＋首個有效輪＋findings 全確定性收口 → 待 Codex 終確認後人裁。
 - **首推 main mb==local_sha 空 diff（major，s2）**：重現盲區 → 併入 fail-open+advisory。
 - **shallow/remote_sha 本地無物件（major，s3）**：cat-file -e 探測 → fail-open+advisory（原不對稱靜默）。
 - **既有 t_codeloop_guard_prepush 崩（major，s3）**：dummy sha 在 stdin load-bearing 後失真 → 重寫真 sha，列同步義務。
@@ -111,5 +120,5 @@ hook 對每個 `refs/heads/*` 範圍呼叫 `code-loop check --diff <range> --at-
 
 - **自舉面（r1 s?-誠實修正）**：本改動落地 push 時會判 high——但 tier=high **來自 `pitfall_when: glob:scripts/hooks/pre-push` 既有 claim 保底命中**（碰該檔即 high），**與新範圍演算法對錯無關**。故「有觸發 high」不能當「新邏輯正確」的自舉證據——真驗證靠 hook 模擬測試（測試 2/3），不靠落地那次 push 的 tier 值。
 - **保守掃描的殘餘（r2 反轉後）**：無基準改掃 `empty-tree..local_sha`＝掃該 ref 全部內容——對「大量既有內容首推」會判 tier=high（保守；寧誤擋不誤放，守衛正確方向）；真需放行走 `code-loop skip --note` 留痕。只有 git 環境壞到 empty-tree 都掃不動才 advisory 放行（極窄）。
-- **非分支 ref（tag/raw）**：走保守掃描判 tier，但無 branch marker 可綁留痕 → advisory 不硬擋（另訂策略前的誠實預設，記為待辦）。
+- **非分支 remote_ref（tag/其他 namespace）**：判 tier 但 high 亦 advisory 放行（tag 多指向已審 commit；硬擋誤擋合法 release tag）——tag 內容 gate 是已知較弱面，另訂策略前的誠實預設，記為待辦（r3 Codex 收口：用 remote_ref 判定後，CI raw-revision→heads 已正確走硬擋+skip 逃生，此條只剩真 tag/其他 namespace）。
 - **stdin 消費順序**：bash 中若測試段先跑會吃掉 stdin——spec 明定最先讀；測試 2 有專門格。
