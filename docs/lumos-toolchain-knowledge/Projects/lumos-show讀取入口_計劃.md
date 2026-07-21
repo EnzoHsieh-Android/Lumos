@@ -3,6 +3,7 @@ type: project
 status: done
 created: 2026-07-21
 updated: 2026-07-21
+signed_off: 2026-07-21
 tags:
   - type/project
   - status/done
