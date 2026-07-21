@@ -17,7 +17,8 @@ summary: |-
   KEY:pre-push 的 tier=high→code-loop 硬擋守衛以 merge-base..HEAD 算 diff——**直接 commit 在 main 上時 merge-base==HEAD、diff 恆空→tier 恆判 standard→守衛空轉放行**(2026-07-21 M1包 落地實測:pitfalls --diff 對實際變更判 high,code-loop check 卻 OK「無 branch diff」)。hook 為 feature-branch 終審設計,main-direct 工作流=結構性繞過
   KEY:影響面=凡 main-direct 的 gate/守衛類 code 變更都不會被 code-loop 硬擋——把關точка失效,只剩散文紀律(編排者自覺調用 lumos-code-loop)
   KEY:候選修法(未裁)——①pre-push 對 main-direct push 改用「本次 push 的 range(remote..HEAD)」算 tier ②家規化:gate 類 code 一律 feature branch(紀律面,無機械強制) ③兩者並行。動 hook=改守衛,修法本身須過 design-loop
-  KEY:發現脈絡=M1包 實作 push 後自查(spec 明言「實作後 pitfalls 必判 high→full code-loop」但 push 未被擋);該批 code 的補救=事後 code-loop 終審(使用者裁定中)
+  KEY:發現脈絡=M1包 實作 push 後自查(spec 明言「實作後 pitfalls 必判 high→full code-loop」但 push 未被擋);該批 code 的補救=事後 code-loop 終審
+  KEY:排程[2026-07-21 使用者裁「排」]——兩件入待辦:①M1包 gate code 事後 code-loop 終審(記於該計劃 KEY)②本盲區修法:先出方案裁定小 spec(候選①push-range 算 tier/②gate 類 code 家規上 branch/③並行)——**動 pre-push hook=改守衛=self-governance,spec 須過 design-loop(非 light)**
 ---
 # code-loop守衛main-direct盲區
 
