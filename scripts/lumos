@@ -2739,6 +2739,9 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
     if light and panel:
         print("ERROR: --light 與 --panel 互斥(light=單席 legacy 格式;三模式各自一條路)", file=sys.stderr)
         return 2
+    if min_seats is not None and min_seats < 1:
+        print(f"ERROR: --min-seats 需正整數,收到 {min_seats}(負/零=門檻失義;code-loop r2 折入)", file=sys.stderr)
+        return 2
     need = max(1, need)
     path = env.vault.parent / ".canary-log.jsonl"
     rounds = []
@@ -2895,13 +2898,15 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
         fails.append("G2")
     else:
         print(f"[gate] G2 發現枯竭: ✓ — findings={fs}")
-    if min_seats:   # legacy gate 也消費(code-loop r2 折入:原 silent no-op,next 對 legacy 恆傳 1 淪死參數)
-        seats = len({a for r in tail if (a := r.get("auditor"))})
-        if seats < min_seats:
-            print(f"[gate] min-seats: ✗ — 席數不足({min_seats} 席制,窗內僅 {seats} 相異席;空席不計)")
+    if min_seats:   # legacy gate 消費;**逐輪**驗非空(code-loop r2 Codex:整窗聯集會讓「一有一空」過關)
+        bad = [i for i, r in enumerate(tail, 1)
+               if len({a for a in [r.get("auditor")] if a}) < min_seats]
+        if bad:
+            print(f"[gate] min-seats: ✗ — 窗內第 {','.join(map(str, bad))} 輪席數不足"
+                  f"({min_seats} 席制;逐輪驗非空,空席不計)")
             fails.append("席數不足")
         else:
-            print(f"[gate] min-seats: ✓ — {seats} ≥ {min_seats}")
+            print(f"[gate] min-seats: ✓ — 窗內 {len(tail)} 輪逐輪 ≥ {min_seats}")
     # ── M1包 #3 G3 雙 hash 鏈(帶 --spec=聲明要驗;收斂窗=tail need 筆) ──
     if spec is not None:
         try:

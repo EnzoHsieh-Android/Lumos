@@ -201,7 +201,7 @@ repo:{repo 根}(可 Read/Grep 查證 diff 上下文)
   2. **鏡頭各異**:slot1 正確性/邏輯、slot2 邊界可執行、slot3 整合知識同步、(W>3)資源併發、回滾。
   3. **≥1 跨家族**:一個 slot 走 qwen(cross_audit),**不帶 canary**——它是獨立性軸、只作否決(報 ≥major 且辯方沒駁倒→不收斂),不計注意力票、不作背書。
 - **判讀(編排者一次跨 W 份做)**:①逐同族審計員判 canary caught/missed;missed 者 findings 剔除 ②去重(嚴格合一「同段落同性質」,不偏多留)③對存活 ≥major 派 §2 辯方 ④數 capture_counts(各 distinct 缺陷被幾人找到)。
-- **記錄**(一輪 W 筆共享 round-id):
-  `lumos canary record caught|missed --loop <id> --round <rid> --auditor <slotN> --severity <s> [--capture-counts "2,2,1"]`(counts 記該輪一筆即可)。
-- **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 無-cluster 舊帳=三條合取(輪有效≥2caught ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<1.0[無counts=fail-closed]);cluster 帳(M2)=兩條合取(輪有效 ∧ fold後無disputed-major),capture 降 advisory。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。
+- **記錄**(一輪 W 筆共享 round-id;M1包 code-loop r2 折入——模板即權威,雙 hash/tier 必入模板):
+  `lumos canary record caught|missed --loop <id> --round <rid> --auditor <slotN> --severity <s> --findings <M> --spec <計劃節點.md> --reviewed <派工時 sha256> --tier <standard|high> [--capture-counts "2,2,1"]`(counts 記該輪一筆即可)。
+- **問收斂**:`lumos loop status <id> --gate --panel --spec <計劃節點.md> --min-seats <W> --repo <root>`(M1包:缺 --spec 則 G3 hash 不啟用、缺 --min-seats 則兩席即可過——W 席承諾靠這兩旗標機械兌現) → 無-cluster 舊帳=三條合取(輪有效≥2caught ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<1.0[無counts=fail-closed])＋min-seats∧G3;cluster 帳(M2)=兩條合取(輪有效 ∧ fold後無disputed-major)＋min-seats∧G3,capture 降 advisory。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。
 - **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix/legacy→rc2,防 None phantom 輪)。

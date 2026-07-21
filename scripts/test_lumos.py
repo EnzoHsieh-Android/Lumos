@@ -9723,6 +9723,18 @@ def t_m1_codeloop_r2_fixes():
     r = run(v, "loop", "status", f"lm-{_M1U}", "--need", "2", "--gate", "--min-seats", "1",
             "--spec", str(spec), "--repo", str(v.parent))
     check("legacy gate min-seats 生效", r.returncode == 1 and "席" in r.stdout, r.stdout[-150:])
+    # r3 折入:逐輪驗非空(一有一空不得以聯集過)
+    run(v, "canary", "record", "caught", "--loop", f"lw-{_M1U}", "--severity", "minor", "--findings", "1",
+        "--auditor", "solo", "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    run(v, "canary", "record", "caught", "--loop", f"lw-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--reviewed", h, "--spec", str(spec), expect_rc=0)   # 第二輪空席
+    r = run(v, "loop", "status", f"lw-{_M1U}", "--need", "2", "--gate", "--min-seats", "1",
+            "--spec", str(spec), "--repo", str(v.parent))
+    check("legacy 一有一空逐輪驗 FAIL", r.returncode == 1 and "席" in r.stdout, r.stdout[-150:])
+    # r3 折入:--min-seats 非正整數 rc2
+    r = run(v, "loop", "status", f"lw-{_M1U}", "--need", "2", "--gate", "--min-seats", "-1",
+            "--spec", str(spec), "--repo", str(v.parent))
+    check("min-seats 負值 rc2", r.returncode == 2, f"rc={r.returncode}")
 
 
 def t_show():

@@ -177,7 +177,7 @@ slot3（醒席）7 條折入 v2：
 **code-loop 補審（2026-07-21，main-direct 盲區事後補審，loop id `code-m1spine`）**：
 - **r1（附加式 canary，panel 4 sonnet＋Codex 帶餌＋Codex 無餌否決＋spec 合規席）**：canary 2/5 輪無效——**植入工藝第三筆校準：附加式假 hunk 被 repo-grep 機械識破**（三席判 corrupt patch 略過而非抓 bug）。真貨經無餌兩席浮回：cluster 路整條繞過新檢查／tier 靠格式推導可繞／空 auditor 計一席／SKILL panel 指令缺新旗標／成本區僅 legacy／FLOW 缺 G3 句——**六修 TDD 6 紅→綠（commit 046a982）**。
 - **r2（織入式 canary＋事後補審 framing「patch 為受審物本體，repo 逐字差異不構成 finding」）**：**sonnet canary 4/4 全抓**（對照 r1——植入工藝修正實效數據；probe 校準第 4 筆：孤立片段 probe 對單行語意織入過度偵測，s3 probe 曾洩 oracle 記偏離）。真 findings 三 major 折入：G3 OSError 轉字串使 panel/light 對 --spec 不可讀回 rc1 與 G1 不對稱→上拋統一 rc2／next 缺 --spec 提前 return 繞過 round-id 損壞守衛→前置／--min-seats 對 legacy gate silent no-op→窗內相異席消費。**TDD 4 紅→綠、全套 1312 綠**。
-- Codex 帶餌 finder 與無餌否決席 r2 判決另記；r3（cap 末輪）視其判決定。
+- **r2 Codex 兩席收官**：帶餌 finder canary（cap `>` 變體）✓ 精準抓——**r2 canary 終帳 5/5 全抓、輪有效**；其真 findings 與 sonnet 席三修互證＋新增 min-seats 負值未驗（minor）。無餌否決席復核：三修成立；殘留兩條——templates.md §7 權威模板仍教舊指令（major 從 SKILL 主文遷入模板）＋ legacy 席數整窗聯集旁路（一有一空照過，附精確反例）。**r2 後三修（TDD 6 檢查點紅→綠、全套 1314 綠）**：min-seats 非正整數 rc2／legacy 逐輪驗非空／templates §7 記錄與收斂指令補 --spec/--reviewed/--tier/--min-seats。r3（cap 末輪）＝delta 審修復 diff＋Codex 終確認。
 
 **終局（2026-07-21）**：v7 四修 → Codex 判 C1/C4/新A 解除、新B 剩 tier 分叉殘句 → v8 統一定錨優先＋撤殘句 → Codex 抓 summary 鏡像未跟 → v8.1 補 → **Codex 終判：全文一致，NO-VETO**。否決鏈完整記錄：VETO(5)→VETO(4+2)→VETO(4)→VETO(1)→NO-VETO——五次對抗迭代，每次殘留收窄，最後兩次靠鏡像級精度收口。待人裁實質收斂進實作。
 
