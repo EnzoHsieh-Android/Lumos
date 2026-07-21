@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-21
 updated: 2026-07-21
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Projects/全盤外審2026-07_調研]]"
   - "[[Projects/design-loop輕量檔_計劃]]"
@@ -26,6 +26,8 @@ summary: |-
   TEST:規劃見 body 測試策略——next 三模式指針/light 謂詞矩陣(caught×severity×hash)/ratchet 永久 FAIL/hash 綁定與相容/成本欄驗證與顯示/既有 legacy+panel gate 全迴歸不變
   DEP:[[Systems/loop-convergence-recording]](record 欄位面)｜[[Systems/convergence-evidence-gate]](gate 合取面)｜[[Systems/design-loop]](編排分工)
   PRIOR-ART:①最小解=#2-#4 為既有 record/status 兩指令的欄位旗標擴充;#1 為 loop 子指令組**新增第三個 subparser**(status/capture-counts 之外)——新增一條唯讀查詢介面,**非零新指令**(r1 折入:原「全部零新命令」宣稱與 #1 自相矛盾,自我治理判準不得帶頭失守);仍零新治理層/零新檔 ②世界解=[[Projects/全盤外審2026-07_調研]]本體已裁(#1 Codex 摩擦診斷+git status next-action 普適模式/#3 content-address 綁定=git 血統/#4 OpenAI third-party evals+Anthropic demystifying-evals 把 budget 欄列為 eval 判讀必要上下文) ③裁定=borrow-design 全部(stdlib sha256/argparse 原生)
+verified_by:
+  - "[[Verification/2026-07-21_loop機械脊椎M1包]]"
 ---
 # loop機械脊椎M1包_計劃
 

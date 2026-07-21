@@ -91,7 +91,11 @@ def t_loop_gate():
     vault, repo, spec_ok, spec_bad = _mk_gate_fixture()
 
     def rec(loop, sev, f=None, kind="caught"):
-        args = ["canary", "record", kind, "--loop", loop, "--severity", sev]
+        # M1包 帶 --spec 問 gate=聲明要驗(hash 窗 fail-closed)——本組 gate() 恆帶 --spec,
+        # 故 rec 統一帶常數 hash 對(spec_ok 不變→鏈恆一致),保住各案原意(G1/G2 算術)。
+        h = _sha256_of(spec_ok)
+        args = ["canary", "record", kind, "--loop", loop, "--severity", sev,
+                "--spec", str(spec_ok), "--reviewed", h]
         if f is not None:
             args += ["--findings", str(f)]
         run(vault, *args, expect_rc=0)
@@ -9438,6 +9442,209 @@ def t_e2_ledger_tz_boundary():
     check("E2 時區跨日:本地今日的判定(UTC 表示為昨日)不得重報",
           "無「建在被推翻決策上」的落後邊" in r.stdout, r.stdout)
     print("  ✓ t_e2_ledger_tz_boundary")
+
+
+import secrets as _sec
+_M1U = _sec.token_hex(3)   # m1 測試 loop id 唯一後綴(canary-log 落共用 tempdir,跨執行累積)
+
+
+def _sha256_of(p):
+    import hashlib
+    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+
+def t_m1_cost_fields():
+    """M1包 #4 成本選配欄(Projects/loop機械脊椎M1包_計劃):數值寫入/負值 rc2/不給不寫鍵/status 顯示。"""
+    print("t_m1_cost_fields")
+    v = mkvault()
+    r = run(v, "canary", "record", "caught", "--loop", f"mc-{_M1U}", "--severity", "minor",
+            "--findings", "1", "--tokens", "5000", "--wallclock-min", "12", expect_rc=0)
+    log = (v.parent / ".canary-log.jsonl") if not (v / ".canary-log.jsonl").exists() else (v / ".canary-log.jsonl")
+    import json as _j
+    lines = [_j.loads(x) for x in (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    rec = [d for d in lines if d.get("loop") == f"mc-{_M1U}"][-1]
+    check("成本欄寫入", rec.get("tokens") == 5000 and rec.get("wallclock_min") == 12)
+    r = run(v, "canary", "record", "caught", "--loop", f"mc-{_M1U}", "--severity", "minor", "--tokens", "-3")
+    check("負值 rc2", r.returncode == 2, f"rc={r.returncode}")
+    run(v, "canary", "record", "caught", "--loop", f"mc2-{_M1U}", "--severity", "minor", "--findings", "0", expect_rc=0)
+    lines = [_j.loads(x) for x in (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    rec2 = [d for d in lines if d.get("loop") == f"mc2-{_M1U}"][-1]
+    check("不給不寫鍵", "tokens" not in rec2 and "wallclock_min" not in rec2)
+    r = run(v, "loop", "status", f"mc-{_M1U}", "--need", "1")
+    check("status 顯示成本區", "tokens" in r.stdout or "成本" in r.stdout)
+    r = run(v, "loop", "status", f"mc2-{_M1U}", "--need", "1")
+    check("全無成本欄不印", "成本" not in r.stdout)
+
+
+def t_m1_hash_chain():
+    """M1包 #3 雙 hash 鏈:同現規則/OSError/收斂窗鏈續性/半帶/同輪 result 分裂/聲明式 FAIL。"""
+    print("t_m1_hash_chain")
+    v = mkvault()
+    spec = v / "Projects" / "hspec.md"
+    spec.write_text("v1 內容\n", encoding="utf-8")
+    h_v1 = _sha256_of(spec)
+    # 同現規則:單給任一 rc2
+    r = run(v, "canary", "record", "caught", "--loop", f"hc-{_M1U}", "--severity", "minor", "--spec", str(spec))
+    check("--spec 孤給 rc2", r.returncode == 2)
+    r = run(v, "canary", "record", "caught", "--loop", f"hc-{_M1U}", "--severity", "minor", "--reviewed", h_v1)
+    check("--reviewed 孤給 rc2", r.returncode == 2)
+    # --spec 指目錄 rc2(OSError 兜底)
+    r = run(v, "canary", "record", "caught", "--loop", f"hc-{_M1U}", "--severity", "minor",
+            "--spec", str(v / "Projects"), "--reviewed", h_v1)
+    check("--spec 目錄 rc2 無 traceback", r.returncode == 2 and "Traceback" not in r.stderr, r.stderr[:100])
+    # 合法鏈:r1 reviewed=hash(v1) → fold → result=hash(v2);r2 reviewed=hash(v2) → result=hash(v3)
+    run(v, "canary", "record", "caught", "--loop", f"hc-{_M1U}", "--severity", "minor", "--findings", "2",
+        "--reviewed", h_v1, "--spec", str(spec), expect_rc=0)  # r1: 未再改檔,result=hash(v1)
+    spec.write_text("v2 折入後\n", encoding="utf-8")
+    h_v2 = _sha256_of(spec)
+    run(v, "canary", "record", "caught", "--loop", f"hc-{_M1U}", "--severity", "minor", "--findings", "1",
+        "--reviewed", h_v1, "--spec", str(spec), expect_rc=0)  # r2: reviewed=result[r1]=h_v1,result=h_v2
+    r = run(v, "loop", "status", f"hc-{_M1U}", "--need", "2", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("合法鏈 hash 段 ✓", "G3" in r.stdout and "✗" not in [l for l in r.stdout.splitlines() if "G3" in l][0])
+    # 審後改檔 → 末筆 result ≠ 當前 → FAIL
+    spec.write_text("v3 審後手改\n", encoding="utf-8")
+    r = run(v, "loop", "status", f"hc-{_M1U}", "--need", "2", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("審後改檔 FAIL", r.returncode == 1 and "改動" in r.stdout)
+    spec.write_text("v2 折入後\n", encoding="utf-8")   # 還原
+    # 鏈斷:新 loop,r2 reviewed ≠ r1 result
+    spec2 = v / "Projects" / "hspec2.md"
+    spec2.write_text("A\n", encoding="utf-8")
+    hA = _sha256_of(spec2)
+    run(v, "canary", "record", "caught", "--loop", f"hc2-{_M1U}", "--severity", "minor", "--findings", "1",
+        "--reviewed", hA, "--spec", str(spec2), expect_rc=0)   # r1 result=hA
+    spec2.write_text("B 帶外竄改\n", encoding="utf-8")
+    hB = _sha256_of(spec2)
+    run(v, "canary", "record", "caught", "--loop", f"hc2-{_M1U}", "--severity", "minor", "--findings", "0",
+        "--reviewed", hB, "--spec", str(spec2), expect_rc=0)   # r2 reviewed=hB ≠ r1 result=hA → 斷鏈
+    r = run(v, "loop", "status", f"hc2-{_M1U}", "--need", "2", "--gate", "--spec", str(spec2), "--repo", str(v.parent))
+    check("鏈斷 FAIL", r.returncode == 1 and ("鏈" in r.stdout or "斷" in r.stdout))
+    # 窗內半帶 FAIL
+    spec3 = v / "Projects" / "hspec3.md"
+    spec3.write_text("C\n", encoding="utf-8")
+    hC = _sha256_of(spec3)
+    run(v, "canary", "record", "caught", "--loop", f"hc3-{_M1U}", "--severity", "minor", "--findings", "1", expect_rc=0)
+    run(v, "canary", "record", "caught", "--loop", f"hc3-{_M1U}", "--severity", "minor", "--findings", "0",
+        "--reviewed", hC, "--spec", str(spec3), expect_rc=0)
+    r = run(v, "loop", "status", f"hc3-{_M1U}", "--need", "2", "--gate", "--spec", str(spec3), "--repo", str(v.parent))
+    check("窗內半帶 FAIL", r.returncode == 1 and "半帶" in r.stdout)
+    # 聲明式:窗內全無 hash + gate 帶 --spec → FAIL 非 advisory
+    run(v, "canary", "record", "caught", "--loop", f"hc4-{_M1U}", "--severity", "minor", "--findings", "1", expect_rc=0)
+    run(v, "canary", "record", "caught", "--loop", f"hc4-{_M1U}", "--severity", "clean", "--findings", "0", expect_rc=0)
+    r = run(v, "loop", "status", f"hc4-{_M1U}", "--need", "2", "--gate", "--spec", str(spec3), "--repo", str(v.parent))
+    check("聲明式無 hash FAIL", r.returncode == 1 and "未綁" in r.stdout)
+    # 不帶 --spec 舊用法不變(G1 skip 可 PASS)
+    r = run(v, "loop", "status", f"hc4-{_M1U}", "--need", "2", "--gate", "--repo", str(v.parent))
+    check("不帶 --spec 舊用法 rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout[-200:]}")
+    # panel 同輪 result 分裂 FAIL(五席四 B 一 C)
+    spec4 = v / "Projects" / "hspec4.md"
+    spec4.write_text("D\n", encoding="utf-8")
+    hD = _sha256_of(spec4)
+    for i in range(4):
+        run(v, "canary", "record", "caught", "--loop", f"hp-{_M1U}", "--round", "r1", "--auditor", f"s{i}",
+            "--severity", "minor", "--findings", "0", "--reviewed", hD, "--spec", str(spec4), expect_rc=0)
+    spec4.write_text("E 分裂\n", encoding="utf-8")
+    run(v, "canary", "record", "caught", "--loop", f"hp-{_M1U}", "--round", "r1", "--auditor", "s4",
+        "--severity", "minor", "--findings", "0", "--capture-counts", "1,1", "--reviewed", hD,
+        "--spec", str(spec4), expect_rc=0)   # result=hash(E) ≠ 前四席 result=hD
+    r = run(v, "loop", "status", f"hp-{_M1U}", "--panel", "--gate", "--spec", str(spec4), "--repo", str(v.parent))
+    check("panel 同輪 result 分裂 FAIL", r.returncode == 1 and ("分裂" in r.stdout or "一致" in r.stdout))
+
+
+def t_m1_light_gate():
+    """M1包 #2 light K=1 謂詞:真值矩陣/ratchet 永久+分因/欄位互證/hash 強制/互斥。"""
+    print("t_m1_light_gate")
+    v = mkvault()
+    spec = v / "Projects" / "lspec.md"
+    spec.write_text("light spec\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    # --light+--panel 互斥 rc2
+    r = run(v, "loop", "status", f"lg-{_M1U}", "--light", "--panel")
+    check("--light+--panel rc2", r.returncode == 2)
+    # light 缺 --spec rc2(hash 強制需驗證對象)
+    run(v, "canary", "record", "caught", "--loop", f"lg-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    r = run(v, "loop", "status", f"lg-{_M1U}", "--light", "--gate")
+    check("light 缺 --spec rc2", r.returncode == 2)
+    # caught+clean+hash → PASS rc0
+    r = run(v, "loop", "status", f"lg-{_M1U}", "--light", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("light caught+clean PASS", r.returncode == 0, f"rc={r.returncode}\n{r.stdout[-200:]}")
+    # 欄位互證:clean+findings=5 → FAIL
+    run(v, "canary", "record", "caught", "--loop", f"lg2-{_M1U}", "--severity", "clean", "--findings", "5",
+        "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    r = run(v, "loop", "status", f"lg2-{_M1U}", "--light", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("欄位互證矛盾 FAIL", r.returncode == 1 and "互證" in r.stdout)
+    # hash 缺失=FAIL(light 強制)
+    run(v, "canary", "record", "caught", "--loop", f"lg3-{_M1U}", "--severity", "clean", "--findings", "0", expect_rc=0)
+    r = run(v, "loop", "status", f"lg3-{_M1U}", "--light", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("light hash 缺=FAIL", r.returncode == 1 and ("hash" in r.stdout or "綁" in r.stdout))
+    # missed → FAIL(retryable 分因,不觸發 ratchet)
+    run(v, "canary", "record", "missed", "--loop", f"lg4-{_M1U}", "--severity", "clean", "--findings", "0", expect_rc=0)
+    r = run(v, "loop", "status", f"lg4-{_M1U}", "--light", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("missed FAIL retryable", r.returncode == 1 and "retryable" in r.stdout)
+    run(v, "canary", "record", "caught", "--loop", f"lg4-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    r = run(v, "loop", "status", f"lg4-{_M1U}", "--light", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("missed 後 caught 乾淨可 PASS", r.returncode == 0)
+    # ratchet:caught+major → 永久 FAIL,後續乾淨不洗回
+    run(v, "canary", "record", "caught", "--loop", f"lg5-{_M1U}", "--severity", "major", "--findings", "3",
+        "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    r = run(v, "loop", "status", f"lg5-{_M1U}", "--light", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("ratchet FAIL 分因", r.returncode == 1 and "ratchet" in r.stdout)
+    run(v, "canary", "record", "caught", "--loop", f"lg5-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    r = run(v, "loop", "status", f"lg5-{_M1U}", "--light", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("ratchet 永久(乾淨輪不洗回)", r.returncode == 1 and "ratchet" in r.stdout)
+
+
+def t_m1_loop_next():
+    """M1包 #1 loop next:零記錄 rc2/plant-canary/tier 定錨+衝突 rc2/escalate/gate-pending/converged/cap/min-seats/json。"""
+    print("t_m1_loop_next")
+    import json as _j
+    v = mkvault()
+    spec = v / "Projects" / "nspec.md"
+    spec.write_text("next spec\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    # 零記錄無 --tier rc2
+    r = run(v, "loop", "next", f"nx-{_M1U}")
+    check("零記錄無 tier rc2", r.returncode == 2)
+    # 零記錄+tier light → plant-canary N=1
+    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "light", "--json")
+    d = _j.loads(r.stdout)
+    check("零記錄 plant-canary N=1", d["phase"] == "plant-canary" and d["round"] == 1 and r.returncode == 1)
+    check("light width/cap 映射", d["width"] == 1 and d["cap"] == 2)
+    # tier 定錨:record 帶 --tier light → next 無 --tier 讀定錨
+    run(v, "canary", "record", "caught", "--loop", f"nx-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--reviewed", h, "--spec", str(spec), "--tier", "light", expect_rc=0)
+    r = run(v, "loop", "next", f"nx-{_M1U}", "--json", "--spec", str(spec), "--repo", str(v.parent))
+    d = _j.loads(r.stdout)
+    check("tier 定錨讀取", d["tier"] == "light")
+    check("light 收斂 → converged rc0", d["phase"] == "converged" and r.returncode == 0)
+    # 定錨衝突 rc2
+    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "standard")
+    check("tier 衝突 rc2", r.returncode == 2)
+    # 資訊不足 → gate-pending(先於 cap)
+    r = run(v, "loop", "next", f"nx-{_M1U}", "--json")
+    d = _j.loads(r.stdout)
+    check("缺 --spec → gate-pending rc1", d["phase"] == "gate-pending" and r.returncode == 1)
+    # escalate:light ratchet 最先短路
+    run(v, "canary", "record", "caught", "--loop", f"nx2-{_M1U}", "--severity", "major", "--findings", "2",
+        "--reviewed", h, "--spec", str(spec), "--tier", "light", expect_rc=0)
+    r = run(v, "loop", "next", f"nx2-{_M1U}", "--json", "--spec", str(spec), "--repo", str(v.parent))
+    d = _j.loads(r.stdout)
+    check("light ratchet → escalate", d["phase"] == "escalate" and r.returncode == 1)
+    # cap-reached:light cap=2 兩輪未收斂(資訊充分)
+    run(v, "canary", "record", "missed", "--loop", f"nx3-{_M1U}", "--tier", "light", expect_rc=0)
+    run(v, "canary", "record", "missed", "--loop", f"nx3-{_M1U}", expect_rc=0)
+    r = run(v, "loop", "next", f"nx3-{_M1U}", "--json", "--spec", str(spec), "--repo", str(v.parent))
+    d = _j.loads(r.stdout)
+    check("cap-reached", d["phase"] == "cap-reached" and r.returncode == 1)
+    # min-seats:panel 同席灌筆不計——high 定錨,同一 auditor 5 筆
+    for i in range(5):
+        run(v, "canary", "record", "caught", "--loop", f"nx4-{_M1U}", "--round", "r1", "--auditor", "same",
+            "--severity", "clean", "--findings", "0", "--capture-counts", "1",
+            "--reviewed", h, "--spec", str(spec), "--tier", "high", expect_rc=0)
+    r = run(v, "loop", "status", f"nx4-{_M1U}", "--panel", "--min-seats", "5", "--spec", str(spec), "--repo", str(v.parent))
+    check("同席灌筆 min-seats FAIL", r.returncode == 1 and "席" in r.stdout)
 
 
 def t_show():

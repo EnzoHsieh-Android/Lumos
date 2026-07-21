@@ -2277,7 +2277,16 @@ def _parse_clusters(raw):
     return out, None
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None):
+LOOP_TIERS = ("light", "standard", "high")
+
+
+def _sha256_file(path):
+    """檔案 sha256(M1包 #3);OSError 交呼叫端兜(目錄/無權限/不存在統一 rc2,沿 G1 慣例)。"""
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None):
     """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
@@ -2310,6 +2319,34 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             print(f"ERROR: --clusters {err}", file=sys.stderr)
             return 2
         rec["clusters"] = parsed   # dict{名:狀態},同 capture_counts 寫側轉型慣例
+    # ── M1包 #3 雙 hash 鏈(loop機械脊椎M1包_計劃):--spec/--reviewed 必須同現 ──
+    if (spec is None) != (reviewed is None):
+        print("ERROR: hash 雙欄必須成對(--spec 與 --reviewed 同現;reviewed=派工當下真檔 sha256)",
+              file=sys.stderr)
+        return 2
+    if spec is not None:
+        try:
+            rec["result_sha256"] = _sha256_file(spec)   # record 於 fold 後執行=post-fold hash
+        except OSError as e:
+            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            return 2
+        if not re.fullmatch(r"[0-9a-f]{64}", str(reviewed)):
+            print(f"ERROR: --reviewed 需 64 位 sha256 hex,收到 {reviewed!r}", file=sys.stderr)
+            return 2
+        rec["reviewed_sha256"] = reviewed
+    # ── M1包 #4 成本選配欄:非負整數,不給不寫鍵(同 --findings 慣例) ──
+    for _name, _val in (("tokens", tokens), ("wallclock_min", wallclock_min)):
+        if _val is not None:
+            if _val < 0:
+                print(f"ERROR: --{_name.replace('_', '-')} 需非負整數,收到 {_val}", file=sys.stderr)
+                return 2
+            rec[_name] = _val
+    # ── M1包 #1 tier 定錨欄(選配;loop next/gate 讀首個帶 tier 記錄定錨) ──
+    if tier is not None:
+        if tier not in LOOP_TIERS:
+            print(f"ERROR: --tier 需 {'/'.join(LOOP_TIERS)},收到 {tier!r}", file=sys.stderr)
+            return 2
+        rec["tier"] = tier
     path = env.vault.parent / ".canary-log.jsonl"
     try:
         with open(path, "a", encoding="utf-8") as f:
@@ -2369,7 +2406,7 @@ def _round_valid_m2(recs):
     return kinds.count("caught") >= 2 and kinds.count("missed") == 0
 
 
-def _loop_status_panel(rounds, loop_id):
+def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
     """平行 panel 收斂謂詞(loop 三輪壓縮)。無-cluster 舊帳:三條合取(輪有效∧存活max≤minor
     ∧capture-recapture 殘餘,fail-closed)。cluster 帳(M2,設計 Projects/design-loop提效_計劃;
     golden: governance/golden/dloop-m2-cluster):首個有效輪帶 clusters 定錨 → 兩條合取
@@ -2476,6 +2513,24 @@ def _loop_status_panel(rounds, loop_id):
         else:
             print(f"[panel] capture-recapture 殘餘: ✗ — 估計 {remaining:.2f} ≥ {THRESH}(母體未枯竭)")
             fails.append("殘餘超門檻")
+    # ── M1包:min-seats 席數下限(數相異 auditor,同席灌筆不計)+ G3 hash(判定輪) ──
+    if min_seats:
+        seats = len({r.get("auditor") for r in latest if r.get("auditor")})
+        if seats < min_seats:
+            print(f"[panel] min-seats: ✗ — 席數不足({min_seats} 席制僅 {seats} 相異席;同席重複 append 不計)")
+            fails.append("席數不足")
+        else:
+            print(f"[panel] min-seats: ✓ — {seats} 相異席 ≥ {min_seats}")
+    if spec is not None:
+        err, info = _hash_chain_check([latest], spec)
+        if err:
+            print(f"[panel] G3 hash: ✗ — {err}")
+            fails.append("G3")
+        elif info == "unbound":
+            print("[panel] G3 hash: ✗ — 判定輪未綁 spec hash(帶 --spec 即要求驗證)")
+            fails.append("G3")
+        else:
+            print(f"[panel] G3 hash: ✓ — {info}(同輪雙欄一致∧末 result=當前檔)")
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('capture_counts','-')}\t{r.get('auditor','')}")
     if fails:
@@ -2607,7 +2662,62 @@ def cmd_loop_capture_counts(env, finders, from_pitfalls=None, repo=None):
     return 0
 
 
-def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, panel=False):
+def _hash_chain_check(rounds_list, spec_path):
+    """M1包 #3 雙 hash 鏈收斂窗驗證(loop機械脊椎M1包_計劃)。
+    rounds_list=[[rec,...],...] 窗內按序的「輪」列表(legacy=每筆一輪;panel=判定輪一組)。
+    回 (fail_msg or None, info):fail=None 且 info='unbound' 表窗內全無 hash(呼叫端裁 FAIL/advisory)。
+    驗四件:窗級 all-or-nothing(帶=雙欄俱全)/同輪雙欄各自一致/鏈續性 reviewed[k+1]==result[k]/
+    窗末 result==sha256(當前檔)。窗首 reviewed 無窗內錨=已知逃逸不硬驗。"""
+    def has_hash(r):
+        return "reviewed_sha256" in r and "result_sha256" in r
+    def half(r):
+        return ("reviewed_sha256" in r) != ("result_sha256" in r)
+    all_recs = [r for grp in rounds_list for r in grp]
+    if any(half(r) for r in all_recs):
+        return "收斂窗 hash 半帶(記錄僅有 reviewed/result 其一——雙欄必須成對)", ""
+    banded = [has_hash(r) for r in all_recs]
+    if not any(banded):
+        return None, "unbound"
+    if not all(banded):
+        return "收斂窗 hash 半帶——收斂憑證無法互證(窗內任一筆帶即全體必須帶)", ""
+    per_round = []   # [(reviewed, result), ...] 每輪一組
+    for grp in rounds_list:
+        revs = {r["reviewed_sha256"] for r in grp}
+        ress = {r["result_sha256"] for r in grp}
+        if len(revs) > 1 or len(ress) > 1:
+            return ("同輪 hash 分裂——各席 reviewed 或 result 不一致(同輪宣稱多個版本)", "")
+        per_round.append((next(iter(revs)), next(iter(ress))))
+    for k in range(len(per_round) - 1):
+        if per_round[k + 1][0] != per_round[k][1]:
+            return (f"鏈續性斷裂——第 {k + 2} 輪 reviewed ≠ 第 {k + 1} 輪 result"
+                    "(折入版本與下輪受審版本不接)", "")
+    try:
+        cur = _sha256_file(spec_path)
+    except OSError as e:
+        return f"讀不到 --spec {spec_path}: {e}", ""
+    if per_round[-1][1] != cur:
+        return "spec 於審計後被改動(窗末 result ≠ 當前檔),需再過一輪", ""
+    return None, f"{len(per_round)} 輪鏈驗訖"
+
+
+def _cost_summary(rounds):
+    """M1包 #4:任一筆有成本欄時回摘要行 list,否則空(零噪音)。"""
+    rows = [(i, r) for i, r in enumerate(rounds, 1)
+            if "tokens" in r or "wallclock_min" in r]
+    if not rows:
+        return []
+    out = ["成本(自報,GIGO 同 anchors):"]
+    tt = tm = 0
+    for i, r in rows:
+        tk, mn = r.get("tokens"), r.get("wallclock_min")
+        tt += tk or 0
+        tm += mn or 0
+        out.append(f"  #{i}: tokens={tk if tk is not None else '-'} 分鐘={mn if mn is not None else '-'}")
+    out.append(f"  總計: tokens={tt} 分鐘={tm}")
+    return out
+
+
+def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None):
     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
     findings 數的源頭仍是 LLM 裁決——gate 機械化的是算術,不是數字的正確性(見設計 doc)。
@@ -2616,6 +2726,9 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
     exit 0=CONVERGED / 1=未收斂(含無記錄=還沒開始)/ 2=真錯誤。
     天花板:收斂=連 K 輪醒著的審計員沒找到 blocker/major,非完整正確;severity 自報(見設計 doc)。"""
     import json
+    if light and panel:
+        print("ERROR: --light 與 --panel 互斥(light=單席 legacy 格式;三模式各自一條路)", file=sys.stderr)
+        return 2
     need = max(1, need)
     path = env.vault.parent / ".canary-log.jsonl"
     rounds = []
@@ -2648,7 +2761,42 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
               file=sys.stderr)
         return 2
     if panel:
-        return _loop_status_panel(rounds, loop_id)
+        return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec)
+
+    # ── M1包 #2:light K=1 謂詞(loop機械脊椎M1包_計劃;hash 強制 fail-closed) ──
+    if light:
+        if spec is None:
+            print("ERROR: --light 需 --spec(light hash 強制 fail-closed,無驗證對象不可判)", file=sys.stderr)
+            return 2
+        # ratchet 最先:任一 caught 筆 severity≥major → 永久 FAIL(missed 筆不觸發)
+        if any(r.get("kind") == "caught" and r.get("severity") in ("major", "blocker") for r in rounds):
+            print(f"⛔ LIGHT GATE FAIL ({loop_id}: ratchet——已有 caught 輪 severity≥major,永久升 standard;"
+                  "開新 panel loop id(原 id+-std 後綴)承接,乾淨輪不洗回)")
+            return 1
+        if not rounds:
+            print(f"⏳ 無記錄 ({loop_id})")
+            return 1
+        last = rounds[-1]
+        fails = []
+        if last.get("kind") != "caught":
+            fails.append("retryable——末輪 missed(判決不採信;light cap=2 內可重試)")
+        if last.get("severity") not in ("clean", "minor"):
+            fails.append(f"severity={last.get('severity')} 不在 {{clean,minor}}")
+        sev, f = last.get("severity"), last.get("findings")
+        if f is None or (sev == "clean" and f != 0) or (sev == "minor" and f < 1):
+            fails.append(f"欄位互證矛盾:severity={sev} 與 findings={f} 不相容")
+        err, info = _hash_chain_check([[last]], spec)
+        if err:
+            fails.append(err)
+        elif info == "unbound":
+            fails.append("hash 未綁(light 強制 fail-closed:record 須帶 --spec/--reviewed)")
+        if min_seats and len({r.get("auditor") for r in [last]}) < min_seats:
+            fails.append(f"席數不足(min-seats={min_seats})")
+        if fails:
+            print(f"⛔ LIGHT GATE FAIL ({loop_id}): " + "；".join(fails))
+            return 1
+        print(f"✅ LIGHT GATE PASS ({loop_id}: 單席 caught∧max≤minor∧互證∧hash 鏈驗訖 K=1)")
+        return 0
 
     def good(r):
         return r.get("kind") == "caught" and r.get("severity") in ("clean", "minor")
@@ -2669,6 +2817,8 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
             rc = 1
         for i, r in enumerate(rounds, 1):       # 留痕:每輪一行 tab 分隔
             print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
+        for line in _cost_summary(rounds):
+            print(line)
         return rc
 
     # ── 證據閘(--gate):K-streak(必要)∧ G1 refcheck(--spec 可選)∧ G2 發現枯竭 ──
@@ -2725,13 +2875,130 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
         fails.append("G2")
     else:
         print(f"[gate] G2 發現枯竭: ✓ — findings={fs}")
+    # ── M1包 #3 G3 雙 hash 鏈(帶 --spec=聲明要驗;收斂窗=tail need 筆) ──
+    if spec is not None:
+        err, info = _hash_chain_check([[r] for r in tail], spec)
+        if err:
+            print(f"[gate] G3 hash 鏈: ✗ — {err}")
+            fails.append("G3")
+        elif info == "unbound":
+            print("[gate] G3 hash 鏈: ✗ — 收斂窗未綁 spec hash(帶 --spec 即要求驗證;"
+                  "請重審一輪並於 record 帶 --spec/--reviewed)")
+            fails.append("G3")
+        else:
+            print(f"[gate] G3 hash 鏈: ✓ — {info}")
     for i, r in enumerate(rounds, 1):
         print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('findings', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
+    for line in _cost_summary(rounds):
+        print(line)
     if fails:
         print(f"⛔ GATE FAIL ({loop_id}: {'/'.join(fails)})")
         return 1
     print(f"✅ GATE PASS ({loop_id}: K-streak ∧ G1 ∧ G2)")
     return 0
+
+
+_TIER_PARAMS = {"light": (1, 2), "standard": (3, 3), "high": (5, 3), "legacy": (1, 6)}  # tier→(width, cap)
+_CANARY_TYPES = ("a", "b", "c", "d")   # 壞交叉引用/未定義旗標/未定義欄位常數/未定義產物裸檔名
+
+
+def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None):
+    """M1包 #1(loop機械脊椎M1包_計劃):帳本吐唯一下一動作。唯讀指針——lumos 不 spawn agent,
+    編排仍是 Claude(Systems/design-loop 分工)。phase 五值:escalate/gate-pending/converged/
+    cap-reached/plant-canary;判定優先序=escalate→gate-pending(資訊不足,先於 cap)→converged
+    (僅 full-basis)→cap-reached→plant-canary。converged=rc0/其餘 phase=rc1/錯誤=rc2。
+    tier 定錨優先:帳面首個帶 tier 記錄定錨;僅無定錨舊帳按格式推導;零記錄 rc2 要 --tier。"""
+    import json as _json
+    import io
+    import contextlib
+    path = env.vault.parent / ".canary-log.jsonl"
+    rounds = []
+    try:
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = _json.loads(line)
+                except ValueError:
+                    continue
+                if d.get("loop") == loop_id:
+                    rounds.append(d)
+    except OSError as e:
+        print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
+        return 2
+    n_round = sum(1 for r in rounds if "round" in r)
+    if rounds and n_round not in (0, len(rounds)):
+        print("ERROR: canary-log round 欄混用(partial-mix)——帳損壞,同 status 拒讀", file=sys.stderr)
+        return 2
+    panel_fmt = n_round > 0
+    # ── tier 解析:定錨優先(v8);僅無定錨舊帳按格式推導;零記錄 rc2 ──
+    anchor = next((r["tier"] for r in rounds if r.get("tier")), None)
+    if tier and anchor and tier != anchor:
+        print(f"ERROR: --tier {tier} 與帳面定錨 {anchor} 衝突(定錨優先;要換 tier 開新 loop id)", file=sys.stderr)
+        return 2
+    eff_tier = anchor or tier
+    if eff_tier is None:
+        if not rounds:
+            print("ERROR: 零記錄 loop 需明示 --tier(不猜——猜錯模式撞混用守衛)", file=sys.stderr)
+            return 2
+        eff_tier = "standard" if panel_fmt else "legacy"   # 無定錨舊帳 fallback
+    width, cap = _TIER_PARAMS[eff_tier]
+    light = eff_tier == "light"
+    rounds_count = len({r["round"] for r in rounds}) if panel_fmt else len(rounds)
+    n_next = rounds_count + 1
+
+    def emit(phase, extra=None):
+        out = {"phase": phase, "tier": eff_tier, "round": n_next, "width": width,
+               "min_seats": width, "cap": cap, "advisory": "tier 由編排者宣告後定錨;lumos 只做映射與定錨讀取"}
+        if phase == "plant-canary":
+            if light or eff_tier == "legacy":
+                out["canary_type"] = _CANARY_TYPES[(n_next - 1) % 4]
+            else:
+                out["canary_type"] = {f"slot{i}": _CANARY_TYPES[(i + n_next - 1) % 4]
+                                      for i in range(1, width + 1)}
+            rmode = "" if (light or eff_tier == "legacy") else f" --round r{n_next}"
+            out["record_cmd"] = (f"lumos canary record caught|missed --loop {loop_id}{rmode}"
+                                 f" --auditor <席> --severity <s> --findings <M>"
+                                 f" --spec <計劃節點.md> --reviewed <sha256> --tier {eff_tier}")
+        if extra:
+            out.update(extra)
+        if as_json:
+            print(_json.dumps(out, ensure_ascii=False))
+        else:
+            print(f"[next] {loop_id}: phase={phase} tier={eff_tier} 下一輪 N={n_next}"
+                  f" width={width} cap={cap}")
+            for k in ("canary_type", "record_cmd", "note"):
+                if k in out:
+                    print(f"  {k}: {out[k]}")
+        return 0 if phase == "converged" else 1
+
+    # ⓪ escalate:light ratchet 永久態最先短路
+    if light and any(r.get("kind") == "caught" and r.get("severity") in ("major", "blocker")
+                     for r in rounds):
+        return emit("escalate", {"note": "light ratchet 已觸發——停止本 loop,開新 panel loop id(原 id+-std 後綴)承接"})
+    if not rounds:
+        return emit("plant-canary")
+    # ① gate-pending:判 converged 需 gate 結果,資訊不足絕不背書(先於 cap)
+    if spec is None:
+        return emit("gate-pending", {"note": "缺 --spec,gate 判定資訊不足——跑 loop status --gate 附完整參數自判"})
+    # ② full-basis gate 委派(靜默跑既有謂詞,零新判定邏輯)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
+                             spec=spec, repo=repo, panel=(panel_fmt and not light),
+                             light=light, min_seats=(width if panel_fmt and not light else None))
+    if rc == 2:
+        sys.stderr.write(buf.getvalue())
+        return 2
+    if rc == 0:
+        return emit("converged", {"gate_basis": "full(G 合取+hash 委派既有謂詞全過)"})
+    # ③ cap(資訊充分且未 PASS)
+    if rounds_count >= cap:
+        return emit("cap-reached", {"note": f"cap={cap} 到頂未收斂——停,攤給人裁(別無限燒)"})
+    # ④ plant-canary
+    return emit("plant-canary")
 
 
 # ───────────── guard: 合約守衛 scaffold(對談驅動)─────────────
@@ -9310,6 +9577,13 @@ def main():
                     help="panel 輪的 capture-recapture 輸入:各 distinct 缺陷被幾個審計員找到,逗號分隔(如 '2,2,1');供殘餘估計")
     cr.add_argument("--clusters",
                     help="M2 risk-cluster 三態帳:'名=狀態,...'(resolved/accepted-minor:理由/disputed-major);每輪至多一筆帶,loop status --panel 消費")
+    cr.add_argument("--spec", dest="rec_spec",
+                    help="M1包 雙 hash:計算當下真檔 sha256 存 result_sha256(record 於 fold 後執行=post-fold);須與 --reviewed 同現")
+    cr.add_argument("--reviewed", help="M1包 雙 hash:派工當下真檔 sha256 hex(dispatch 快照);須與 --spec 同現")
+    cr.add_argument("--tokens", type=int, help="M1包 成本欄:該輪 subagent tokens(非負整數,選配)")
+    cr.add_argument("--wallclock-min", type=int, dest="wallclock_min", help="M1包 成本欄:該輪 wall-clock 分鐘(非負整數,選配)")
+    cr.add_argument("--tier", dest="rec_tier", choices=("light", "standard", "high"),
+                    help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
 
     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
     lsub = lp.add_subparsers(dest="lcmd", required=True)
@@ -9322,6 +9596,18 @@ def main():
     ls.add_argument("--repo", dest="gate_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     ls.add_argument("--panel", action="store_true",
                     help="平行 panel 模式:按 round-id 分組。無-cluster 舊帳=三條合取(輪有效∧存活max≤minor∧capture-recapture殘餘,fail-closed);cluster 帳(M2,首個有效輪帶 --clusters 定錨)=兩條合取(輪有效∧fold後無disputed-major),新生cluster/capture-recapture 降 advisory。--gate 對 panel 為相容 no-op(panel 判準恆生效)")
+    ls.add_argument("--light", action="store_true",
+                    help="M1包 light K=1 謂詞:單席 caught∧max≤minor∧欄位互證∧hash 雙欄(強制 fail-closed);ratchet=任一 caught 輪≥major 永久 FAIL;與 --panel 互斥;需 --spec")
+    ls.add_argument("--min-seats", type=int, dest="min_seats",
+                    help="M1包 席數下限:判定輪相異 auditor 數<N 即 FAIL(同席重複 append 不計;不帶=行為不變)")
+    ln = lsub.add_parser("next", help="M1包 機械脊椎:帳本吐唯一下一動作(phase/輪數/canary 型別/席數/記帳模板);唯讀指針,不 spawn agent")
+    ln.add_argument("loop_id")
+    ln.add_argument("--tier", dest="next_tier", choices=("light", "standard", "high"),
+                    help="編排者宣告 tier(有帳面定錨時須一致否則 rc2;零記錄必填)")
+    ln.add_argument("--json", action="store_true", dest="next_json", help="機讀輸出")
+    ln.add_argument("--need", type=int, default=2, help="legacy 收斂窗 K(委派 gate 用,預設 2)")
+    ln.add_argument("--spec", dest="gate_spec", help="gate 委派用 spec 檔;缺=判 converged 資訊不足→gate-pending")
+    ln.add_argument("--repo", dest="gate_repo", help="repo root(gate 委派用)")
     lcc = lsub.add_parser("capture-counts",
                           help="異質 finder 接線:多 --finder 的 finding-key → capture_counts + 殘餘估計(餵 canary record --capture-counts)")
     lcc.add_argument("--finder", dest="finders", action="append", default=[],
@@ -9725,13 +10011,18 @@ def main():
     if args.cmd == "canary":
         return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
                           args.severity, findings=args.findings, round_id=args.round_id,
-                          capture_counts=args.capture_counts, clusters=args.clusters)
+                          capture_counts=args.capture_counts, clusters=args.clusters,
+                          spec=args.rec_spec, reviewed=args.reviewed,
+                          tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier)
 
     if args.cmd == "loop":
         if args.lcmd == "status":
             return cmd_loop_status(env, args.loop_id, args.need,
                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
-                                   panel=args.panel)
+                                   panel=args.panel, light=args.light, min_seats=args.min_seats)
+        if args.lcmd == "next":
+            return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json,
+                                 need=args.need, spec=args.gate_spec, repo=args.gate_repo)
         # capture-counts 已在 vault-free 段提前處理(見上)
 
     if args.cmd == "guard":

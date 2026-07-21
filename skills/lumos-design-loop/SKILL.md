@@ -19,7 +19,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 ## 每一輪(照做)
 
-1. **複製**計劃節點檔 → 工作副本 `/tmp/<id>-rN.md`。**N = `lumos loop status <id>` 已有的輪數 + 1**(不靠記憶)。
+1. **複製**計劃節點檔 → 工作副本 `/tmp/<id>-rN.md`。**N/型別/席數/記帳模板一律問 `lumos loop next <id> [--tier ..] [--spec ..]`**(M1包 2026-07-21:帳本吐唯一下一動作,不靠記憶手算;phase=escalate 表 light 已 ratchet 須升級、gate-pending 表資訊不足補參數)。**同時 `sha256sum <計劃節點>` 留存本輪 reviewed hash**(記帳 `--reviewed` 用——雙 hash 鏈的派工快照)。
 2. **植一個 canary**(只進工作副本,**真檔永不含**):additive、**類型由 N 決定** `清單[(N−1) mod 4]`:
    - (a) 壞 §/章節交叉引用(指向不存在的 §N)
    - (b) 未定義旗標 `--xxx`(引入卻不在任何指令/簽名)
@@ -39,7 +39,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
    - ② **最嚴重真 finding**(`clean`=排掉 canary 後無真 finding / `minor` / `major` / `blocker`)= 審計員標的 max。**剝「審計員誤判」要克制**:只有能**指出該 finding 客觀錯在哪**(被實際 spec/code 反證)才剝,**判不準就保留**(寧可高估),剝除理由記進 note。**severity 錨(防 refute framing 通膨,派工模板同句)**:major=照 spec 字面實作會做出**錯的行為**或漏掉合約;文件精度/測試枚舉完整性/措辭=minor,除非漏的是合約級(2026-07-16 提效 M1)。
    - ③ **辯方 refute(路由制,2026-07-16 提效 M1)**:存活 ≥major 先分流——(i) **機械證實免辯方**:有可執行證據且編排者已自核 file:line 為真(regex 實跑/行號實查)→ 直接折入;(ii) **多席一致+各自獨立證據 → 直接折入**;(iii) 只有**低共識**(單席獨有/席間 severity 分歧/證據座標缺失)才派辯方——用可觀測訊號路由,不用模型口頭 confidence。對 (iii) 派 1 個獨立**辯方,預設 Codex**(`codex exec --sandbox read-only`,乾淨脈絡、**不傳 auditor 報告結論**;2026-07-18 S5——判決單點最怕同門盲點,外家反證價值最高;成本中性替換,d4 合規;Codex 不可用退 opus 並於 note 註記偏離),framing=「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持」。辯方回「真(維持原 severity)」或「假(降到 minor/clean)+file:line」。被駁倒(假)→ 該 finding 降級、**不折**、在審計紀錄標「辯方反證:<file:line>」。
    - ④ **該輪 severity = 辯方裁決後存活 findings 的最高**(編排者機械取 max,取代 ② 自剝;辯方帶證據裁、同 judge-severity-gate 精神)。辯方只買 code 層假陽性,業務層留人。
-5. **記錄**:`lumos canary record caught|missed --loop <id> --severity <worst> --findings <M> --auditor sonnet --note "r<N> type=<a-d> <caught|missed> [誤判剝除理由]"`。`<worst>` = ④ 辯方重算後的存活 max(非 ② 原評);`<M>` = ④ 辯方裁決後存活折入的真 finding 條數(canary 不計;missed 輪不折記 0)——供收斂閘 G2 枯竭錨機械讀取。
+5. **記錄(M1包 2026-07-21 時序裁定:caught 輪的 record 移到步驟 7 收尾之後——「fold→fold-check→grep=0→record」連續序列,record 帶 `--spec <計劃節點> --reviewed <步驟1 快照>` 使 hash=post-fold 版;missed 輪無 fold,當場 record 即收尾)**:`lumos canary record caught|missed --loop <id> --severity <worst> --findings <M> --auditor sonnet --spec <計劃節點.md> --reviewed <sha256> [--tier <t>] --note "r<N> type=<a-d> ..."`。**中斷恢復(第二帳)**:log 無該輪 record 但 spec 審計修正紀錄有該輪條目 → 人工補 record 再繼續(防「折了沒記」窗:重派已折輪+ratchet 訊號蒸發)。`<worst>` = ④ 辯方重算後的存活 max(非 ② 原評);`<M>` = ④ 辯方裁決後存活折入的真 finding 條數(canary 不計;missed 輪不折記 0)——供收斂閘 G2 枯竭錨機械讀取。
 6. **漏抓 → 該輪判決不採信**(仍是一筆 missed record、仍算進 cap):**不折 findings**,直接下一輪(N+1、自動換 canary 類型、framing 加碼)。
 7. **抓到 → 只折辯方存活的真 finding 進計劃節點**(被辯方駁倒的不折、已在審計紀錄標「辯方反證:<file:line>」);折時把該輪寫進 spec 的**審計修正紀錄**。寫完紀錄後:**跑 `lumos fold-check <計劃節點.md>`** → 讀每個 flag、逐段勾「鏡像段與 body 一致」(summary/json fence/審計修正紀錄/誠實天花板)、解掉每個 drift → 確認一致。**再派一個便宜 agent 只看本輪折入 diff 做 fold 迷你核對(2026-07-16 提效 M1)**:「動了規則的段,鏡像段(測試策略/摘要/他章)跟了嗎?新句與既有句打架嗎?新引入的詞/旗標/欄位有定義嗎?」——r3 型『補丁沒同步』findings 幾乎全是此型,5 分鐘核對換一整輪。之後 **`grep -c '<canary token>' <計劃節點.md>` 必須為 0**(canary 未混進真檔)再 `git commit`(message 記該輪 canary+severity;圖譜節點 commit 天然過 pre-commit gate)。
 8. **問收斂**:`lumos loop status <id> --need 2 --gate --spec <計劃節點.md> --repo <repo根>`(K=2;證據閘=K-streak ∧ G1 引用座標 refcheck ∧ G2 發現枯竭)→ **exit 0(GATE PASS)出 loop**;exit 1 → 回 step 1(逐錨明細指出斷在哪)。
@@ -74,7 +74,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 1. **pre-flight 排乾**(步驟 2.7 照跑)——清單型缺陷機械掃掉,讓單席從高起點審。
 2. **派 1 席通才審計員**(§1 模板、**無鏡頭通才 framing**:不指定正確性/邊界/整合某一軸,要它全份逐節挑洞——踩平行 panel 的 r1 通才席實證:窄鏡頭漏的洞通才一發抓走)。canary 照植、refute framing 照舊。
 3. **判讀**:canary caught 且辯方裁決後**無存活 ≥major** → 這一輪乾淨。
-4. **收斂**:`lumos loop status <id> --need 1`(K=1;**legacy 模式,不加 --panel**——panel gate 要 caught≥2、單通才席湊不到)。⚠ 但 legacy G2「發現枯竭」被『你一定找得到』framing 壓不到底 → **M0 的 light 收斂走人裁「實質收斂」出口**(護欄段既有機制):pre-flight 排乾 + 這一輪 canary caught 無存活 major → 編排者向人攤牌「light 實質收斂」、留痕記 loop note。**乾淨的單席 K=1 機械 gate(不靠人裁)是 M1 gate code 的事**,M0 先用這條拿數據。
+4. **收斂(M1包 2026-07-21 機械化,取代 M0 人裁出口)**:`lumos loop status <id> --light --gate --spec <計劃節點.md> --repo <root>` → **K=1 機械謂詞**:單席 caught ∧ 存活 max≤minor ∧ 欄位互證 ∧ hash 雙欄鏈驗訖(light 強制 fail-closed)→ rc0 收斂,**不再攤牌人裁**。FAIL 分因:`retryable`(missed,cap=2 內重試一輪)/`ratchet`(任一 caught 輪≥major——**永久**,升 standard 開新 panel loop id(原 id+`-std` 後綴)承接,乾淨輪不洗回)。
 
 **★向上 ratchet(誤判自癒,別跳過)★**:這一輪只要冒出**存活 ≥major**(辯方沒駁倒)→ **light 誤判、立即升 standard**,改走完整 panel 從頭審(tier=standard)。這是「無訊號≠簡單」漏網時的接球手。
 

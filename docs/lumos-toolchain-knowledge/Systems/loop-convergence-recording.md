@@ -53,7 +53,7 @@ decisions:
 - **只做 Component A**(lumos 機械原語)。Component B(編排 skill,讓每個計畫自動進 loop、問 `lumos loop status` 決定停不停)另立子專案,消費 A。
 
 ## 資料模型(複用,不新增 log)
-複用既有 `.canary-log.jsonl`。`lumos canary record` 加**兩個選用鍵**:
+複用既有 `.canary-log.jsonl`。`lumos canary record` 的選用鍵（2026-07-21 M1包 起共七類：`loop`/`severity`/`findings`/`round`/`capture_counts`/`clusters`＋M1包 新增 `reviewed_sha256`/`result_sha256`（`--spec`/`--reviewed` 成對）/`tokens`/`wallclock_min`/`tier`（定錨欄），見 [[Projects/loop機械脊椎M1包_計劃]]）。初版**兩個選用鍵**:
 ```
 lumos canary record caught|missed --loop <id> --severity clean|minor|major|blocker [--auditor] [--token] [--note]
 ```

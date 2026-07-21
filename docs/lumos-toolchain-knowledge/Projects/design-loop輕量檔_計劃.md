@@ -87,7 +87,7 @@ high（四類風險）              →  K=3 / cap≥8 / 關 fail-open
 
 - **M0（純 skill 層，可先行）✅ 落地 2026-07-21**：lumos-design-loop SKILL 三處——〈何時用/何時跳〉加 light 檔進場條（硬否決 honor-system 自核 + 預設 fail-safe 走完整 loop）、新增〈light 檔〉專節（pre-flight + 1 通才席 + legacy `--need 1` + 人裁實質收斂 + 向上 ratchet）、templates.md §1 加單席通才用法。純散文/prompt，不動 gate code。
   - **⚠ 開工發現（M0/M1 邊界銳化）**：light 想要的「單席 K=1 乾淨機械 gate」**現有兩 gate 都不支援**——panel gate 要 caught≥2（單通才席湊不到）、legacy G2「發現枯竭」被『你一定找得到』framing 壓不到底。故 M0 的 light 收斂**只能走人裁「實質收斂」出口**（既有機制）拿數據；**乾淨的單席 K=1 機械 gate 確定落在 M1**（gate code 要新增 light tier 的收斂謂詞：pre-flight-drained + 單席 caught + 無存活 major = 收斂，不靠人裁）。這條把 M1 的 scope 從「加 tier 標籤 + ratchet」擴到「還要定義單席收斂謂詞」。
-- **M1（動 gate code，必過 design-loop）**：`loop status` 認第三檔 light + ratchet 延伸三級 + 硬否決機械 filter（複用 RISK_CLASSES + ★INVARIANT★ 偵測 + 體積閘）。**self-governance=high，進實作前本計劃過完整 design-loop（舊 loop 審新 loop），同 M2 前例。**
+- **M1（動 gate code，必過 design-loop）**：`loop status` 認第三檔 light + ratchet 延伸三級 + 硬否決機械 filter（複用 RISK_CLASSES + ★INVARIANT★ 偵測 + 體積閘）。**self-governance=high，進實作前本計劃過完整 design-loop（舊 loop 審新 loop），同 M2 前例。** ✅ **loop-status 面已由 [[Projects/loop機械脊椎M1包_計劃]] 交付（2026-07-21：`--light` K=1 機械謂詞＋ratchet 永久 FAIL 分因＋hash 強制 fail-closed＋`loop next` phase=escalate；t_m1_* 34 checks＋全套 1302 綠）**——本計劃 M1 剩餘＝進場硬否決機械化（pitfalls 剝自核段，pitfalls/assess 面）。
 - **驗收信號**：一批 light 檔 spec 的 wall-clock/token vs standard 基線；下游逃逸率進逃逸帳對照（見天花板）。
 
 ## 待實作校準
