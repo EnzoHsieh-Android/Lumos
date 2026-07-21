@@ -16,9 +16,9 @@ related:
 summary: |-
   FLAG:DECISION
   KEY:問題=loop 編排的機械脊椎缺四塊(外審 2026-07-21 順位3 一包,使用者裁「一包到底」):①agent 自己當狀態機(輪數/canary 型別/round-id 全靠散文紀律,lumos-show loop 實戰中 round 編號就錯過一次)②light 收斂無機械謂詞(M0 只能人裁攤牌)③收斂帳無 spec 版本綁定(舊乾淨紀錄可掛新內容,[[Systems/convergence-evidence-gate]] 自認 v2 債)④帳本無成本欄(d5 教義無數字可依)
-  KEY:#1 loop next——`lumos loop next <id> [--json] [--tier standard|high|light]` 唯讀讀 canary-log,吐唯一下一動作(判 converged 需完整 gate 旗標組 --need/--spec/--repo/--panel/--light 委派既有謂詞,資訊不足 rc2 絕不謊報收斂——r2 Codex C1):phase(**v1 三值** plant-canary/converged/cap-reached,r1 折入砍死值;**判定=cap 短路優先→PASS→其餘**,三分支互斥窮盡,否則 cap-reached 永不可達誘導無限燒)+輪數 N+canary 型別(legacy=[(N-1)mod4]/panel=per-slot 輪替)+席數(tier→width:light1/standard3/high5)+**cap 對照直給(light2/standard3/high3/legacy6,r1 折入)**+record 指令模板字串。**lumos 只出指針不 spawn agent**;讀側守衛同 status(混用/損壞 rc2);borrow=git status 式 next-action 提示
-  KEY:#2 light 謂詞——`loop status <id> --light --gate`:**單席 caught ∧ 存活 max≤minor ∧ 欄位互證(clean⇒0/minor⇒≥1,復用 :2710;r2 Codex C5 補) ∧ spec hash 相符(light 強制 fail-closed,缺=FAIL 非 advisory;r2 C3/C5) → K=1 收斂 rc0**。不含 capture 殘餘(2026-07-21 實證 singleton minor 無資訊量)。**ratchet 機械面(r2 C5:只吃 caught)**:任一 **caught** 筆 severity≥major → 永久 FAIL 指路升 standard(missed 筆 severity 不可信不觸發,missed 只使該輪不可收斂);--light 與 --panel 互斥 rc2。pre-flight 排乾維持散文紀律不進謂詞(無機械 oracle,誠實不裝)
-  KEY:#3 spec hash——`canary record --spec <path>` 記 sha256 入 spec_sha256 欄;**時序裁定(r2 Codex C4)**:現行「先 record 後 fold」使 post-fold hash 斷言為假——調整 skill 時序(caught 輪 record 移 fold/fold-check/grep 後收尾),列同步義務不假裝既有慣例;**讀檔失敗 OSError 兜底 rc2(r1)**;讀側**末輪級驗證(r2 C2)**:判定輪內全帶-hash 記錄彼此一致∧=sha256(當前檔),輪內漂移即 FAIL(擋補一筆繞過);**定錨式啟用(r2 C3)**:帶過即必須帶到底缺=FAIL,從未帶=advisory(存量不追溯),light 強制,工具鏈模板預設帶 --spec 收窄。v1 單 hash 不做鏈式;byte-level 對行尾敏感(r1,fail-closed 接受);防誤不防惡,誠實天花板
+  KEY:#1 loop next——`lumos loop next <id> [--json] [--tier standard|high|light]` 唯讀讀 canary-log,吐唯一下一動作。gate 委派(r2 C1;r3 修正):完整旗標組委派既有謂詞,--spec 沿現行**可選**語意(G1 skip 仍可 PASS :2684,原 rc2 斷言與現碼相反),converged **附 gate_basis 判定基礎欄**(誠實可稽);**--tier↔gate 模式明定映射**(light⇒--light 謂詞/standard|high⇒panel),衝突組合 rc2(r3);**無 --tier=帳面格式推導**(legacy→width1/cap6,panel→3/3),零記錄 rc2 不猜(r3,原預設 standard 與 cap 判定自相矛盾)。phase **v1 五值**(r1 砍死值+r3 escalate+r4 gate-pending):判定=**escalate 最先短路**→cap→full-basis PASS→converged｜資訊不足→**gate-pending 絕不背書**(r4 Codex 再駁:basis 標註擋不住機讀端只看 phase)→plant-canary,互斥窮盡。canary 型別(legacy=[(N-1)mod4]/panel=per-slot)+cap 對照(light2/standard3/high3/legacy6)+**gate --min-seats 選配席數下限**(next 依 tier 自動傳 1/3/5——r4 新 major:panel 謂詞只要 caught≥2,high 兩席可收斂,五席承諾機械兌現)+record 模板。**lumos 只出指針不 spawn agent**;讀側守衛同 status;borrow=git status 式 next-action
+  KEY:#2 light 謂詞——`loop status <id> --light --gate`:**單席 caught ∧ 存活 max≤minor ∧ 欄位互證(clean⇒0/minor⇒≥1,復用 :2710;r2 C5) ∧ spec hash 相符(light 強制 fail-closed;r2 C3/C5) → K=1 收斂 rc0**。不含 capture 殘餘(實證 singleton minor 無資訊量)。**ratchet(r2 C5 只吃 caught;r3 分因)**:任一 caught 筆 severity≥major → 永久 FAIL 指路升 standard(-std 後綴承接慣例見分工節);**FAIL 輸出分因 retryable(missed)/ratchet(永久)**——供 next phase=escalate 判讀,否則 next 對 ratchet 態誤吐 plant-canary 與「停、升級」打架(r3);--light 與 --panel 互斥 rc2。pre-flight 排乾維持散文紀律不進謂詞(無機械 oracle,誠實不裝)
+  KEY:#3 spec hash——**雙 hash 鏈(r4 Codex 終駁轉正,撤單 hash 範圍刀:單 post-fold hash 證不了 reviewed input,折入引壞版本沒人讀過照樣過閘)**:record --spec 寫 reviewed_sha256(派工當下快照,--reviewed 傳入)+result_sha256(record 當下=post-fold);gate 驗①當前檔=窗 result ②鏈續性 reviewed[n+1]==result[n](折入版本由下輪審計覆蓋;末輪 fold 殘餘=d4 合法逃逸誠實記載)。時序=「fold→fold-check→grep→record」連續收尾(r2 C4+r3 中斷窗第二帳恢復);OSError 兜底 rc2(r1);**收斂窗驗證+窗級 all-or-nothing(r3 輪級→r4 窗級:legacy K=2 首筆無 hash 次筆定錨照穿)**:legacy=最後 need 筆全體/panel·light=判定輪,窗內半帶=FAIL;**帶 --spec 問 gate=聲明要驗,窗內無 hash=FAIL(r4:整條不帶 advisory 即原逃生門;advisory 僅存不帶 --spec 舊用法)**,light 恆強制。byte-level 行尾敏感(fail-closed 接受);hash 正確性繫散文步序(隱患誠實記);防誤不防惡
   KEY:#4 成本欄——`canary record [--tokens N] [--wallclock-min N]` 選配數值欄(非負整數,非數值/負值 rc2;不給不寫鍵,同 --findings 慣例);`loop status` 有欄時尾附成本行(逐輪+總計)。跨 loop 統計/升級率報表**不做**(v1 範圍刀,語料累積後另案;北極星已記[[Projects/loop數據收集_計劃]])
   KEY:與[[Projects/design-loop輕量檔_計劃]] M1 分工——本包交付 light 的 loop-status 面(tier 認得+K=1 謂詞+ratchet 機械面);輕量檔 M1 剩餘=進場硬否決機械化(pitfalls 剝自核段,pitfalls/assess 面)留該計劃,兩包互引不重疊
   KEY:落地同步義務(七項,由折入衍生,枚舉寫死)——skills/lumos-design-loop/SKILL.md(record 時序 C4/手算 N 改指 next/light 節人裁改機械 gate)、skills/lumos-design-loop/templates.md(light 附註+模板預設帶 --spec;空帳模板模式由 tier 推導:standard/high→panel 帶 --round、light→legacy)、convergence-evidence-gate KEY「留 v2」清償、loop-convergence-recording 鍵計數、design-loop 手算 N 敘述、輕量檔計劃 M1 標記、Verification 節點
@@ -43,16 +43,19 @@ summary: |-
 ### #1 `lumos loop next <id> [--json] [--tier standard|high|light]`
 
 - **唯讀**：讀該 loop 的 canary-log（同 `loop status` 的讀側守衛：round 混用/損壞 clusters/非連續 round-id → 同款 rc2），不寫任何檔、不 spawn agent——**lumos 只出指針，編排仍是 Claude**（維持 [[Systems/design-loop]]「Claude 編排,lumos 出原語」分工）。
-- **gate 參數委派（r2 Codex 折入 C1：next 輸入不足不得宣告 converged）**：next 判 `converged` 需要的 gate 合取取決於 `--need/--spec/--repo/--panel/--light`——next **接受與 status 相同的完整 gate 旗標組並內部委派既有 gate 謂詞**（零新判定邏輯，純 delegation）；帶 `--gate` 級判定而未給必要參數（如缺 `--spec`）→ 同 status 現行為 rc2，**絕不在資訊不足時輸出 converged**。
-- **空帳模板模式明定（C1 附帶）**：零記錄 loop 的 `record_cmd` 模板——`--tier standard|high` → panel 格式（帶 `--round`）；`--tier light` → legacy 單席格式（不帶 round）。模板猜錯模式會被現行混用守衛 rc2（:2638），故模式必須由 tier 確定性推導、不留猜。
+- **gate 參數委派（r2 C1；r3 basis 欄；r4 Codex 再駁——basis 標註擋不住機讀端只看 phase 放行）**：next 接受完整 gate 旗標組委派既有謂詞、不改 status 行為（`--spec` 對 status 可選是現行語意 :2684）。**r4 收口：next 的 `converged` 只在 full-basis 時輸出**（G1 run ∧ hash verified，如適用）——缺 `--spec` 等資訊不足時 phase 輸出第五值 **`gate-pending`**（「帳面或可收斂，但 next 資訊不足以背書；請自行跑 `loop status --gate` 附完整參數」），**絕不輸出 converged**。code-loop 無-spec 用法不受影響（它直接用 status，不經 next）。
+- **`--tier` 與 gate 模式調和（r3 折入——兩套旗標無調和會產出錯陣容/誤報未收斂）**：明定映射——`--tier light` ⇒ gate 委派走 `--light` 謂詞；`--tier standard|high` ⇒ panel 謂詞。**衝突組合一律 rc2**（`--tier light --panel`／`--tier standard --light` 等），不留「誰贏」猜題。
+- **無 `--tier` 的身分推導（r3 折入——原「預設 standard」與 cap 的 legacy 判定自相矛盾）**：有記錄 → 由帳面格式推導（legacy 格式→width=1/cap=6/legacy 模板；panel 格式→預設 standard width=3/cap=3）；**零記錄 → rc2 要求明示 `--tier`**（不猜——猜錯模式撞混用守衛 :2638）。
+- **空帳模板模式明定（C1 附帶）**：`--tier standard|high` → panel 格式（帶 `--round`）；`--tier light` → legacy 單席格式（不帶 round）。
 - **輸出（人讀預設；`--json` 機讀）**：
-  - `phase`（**v1 契約=三值**，r1 折入：`record`/`gate` 是 v1 判不出的死值，從契約拿掉留 v2——防 `--json` 消費端寫永遠測不到的死分支）：`plant-canary` / `converged` / `cap-reached`。
-  - **判定優先序（r1 折入 major：cap 短路優先，否則 cap-reached 永不可達）**：① `輪數 ≥ cap` 且 gate 未 PASS → `cap-reached`（**短路，先於一切 FAIL 分支**——對齊 skill「到頂停、別無限燒」硬教義）；② gate PASS → `converged`；③ 其餘（無記錄→N=1；有記錄 gate FAIL→N=現有輪數+1）→ `plant-canary`。三分支互斥窮盡。
+  - `phase`（**v1 契約=五值**，r1 砍死值；r3 補 escalate；r4 補 gate-pending）：`plant-canary` / `converged`（僅 full-basis） / `gate-pending`（資訊不足不背書） / `cap-reached` / `escalate`（light ratchet 已觸發——指路「停止本 loop，開新 panel loop id 承接」）。
+  - **判定優先序（r1 折入 cap 短路；r3 折入 escalate 再前置）**：⓪ light 模式且 ratchet 已觸發（存在 caught 筆 severity≥major）→ `escalate`（**最先短路**——永久態壓過一切）；① `輪數 ≥ cap` 且 gate 未 PASS → `cap-reached`；② gate PASS → `converged`；③ 其餘（無記錄→N=1；有記錄 gate FAIL→N=現有輪數+1）→ `plant-canary`。四分支互斥窮盡。light gate 的 FAIL 輸出同步區分「retryable（missed）」與「ratchet（永久）」兩因，供 next 與人判讀。
   - `round`：下一輪 N（= 現有輪數＋1，legacy 記錄數／panel round 分組數）。
   - `canary_type`：legacy＝`清單[(N-1) mod 4]`；panel＝per-slot 輪替表（slot i → `清單[(i+N-1) mod 4]`）。
   - `width`：tier→席數（light=1／standard=3／high=5；`--tier` 不給預設 standard；**tier 是編排者宣告非 lumos 判定**——誠實：lumos 沒有 tier 判定能力，只做映射）。
   - `record_cmd`：該輪記帳指令模板字串（含 loop id／round-id／建議旗標——模板是提示非強制）。
-- **cap（r1 折入：tier→cap 直給對照表，三個 tier 各有明數，不留三種猜法）**：`light=2`（1 輪收斂為設計目標；missed 輪判決不採信可重試 1 次，第 2 輪仍未收斂→指路人裁或升級）／`standard=3`（panel 現行值）／`high=3`（panel 同值；席寬不同不影響輪 cap）／無 `--tier` 且記錄為 legacy 格式=6（legacy 現行值）。硬編碼進 next，與 skill 漂移時以 code 為準並回寫 skill。
+- **cap（r1 折入：tier→cap 直給對照表）**：`light=2`／`standard=3`／`high=3`／legacy 格式=6。硬編碼進 next，與 skill 漂移時以 code 為準並回寫 skill。
+- **席數下限（r4 Codex 新 major 折入——panel 謂詞只要求 caught≥2、不知 width，high W=5 兩席即可收斂）**：gate 加選配 `--min-seats N`（不帶=現行為不變，向後相容）；判定輪記錄筆數 < N → FAIL「席數不足（N 席制僅到席 M）」。next 依 tier 自動傳（light=1/standard=3/high=5）——high 的五席承諾由此機械兌現。
 
 ### #2 light K=1 謂詞：`loop status <id> --light --gate`
 
@@ -64,11 +67,13 @@ summary: |-
 
 ### #3 spec hash 綁定：`canary record --spec <path>`
 
-- **時序裁定（r2 Codex 折入 C4——原「record 在 fold 後」斷言與現行 skill 步驟順序相反，必須明講）**：現行權威流程是**先 record（步驟5）後 fold（步驟7）**——照此 hash 必在每個有折入的 caught 輪後失配，機制在最常見成功路徑上先壞。**本包裁定：調整 skill 時序**——caught 輪的 record 移至「fold 完成＋fold-check 過＋canary token grep=0」**之後**當輪次收尾（record 是純 append 記帳，移位無機械依賴；missed 輪無 fold，record 即收尾不變）。此為 skill 文字改動，列入同步義務（見下）；spec 不假裝這是既有慣例。
-- 寫側：record 時計算 `<path>` 檔案 sha256 → 存 `spec_sha256` 欄（依上述新時序＝post-fold hash）。**讀檔/hash 失敗一律 rc2（r1 折入 major）**：不存在/是目錄/無權限等統一 `OSError` 兜底——沿 G1 refcheck 讀 `--spec` 的既有 catch 慣例（scripts/lumos:2687-2691）；只查 `exists()` 會對目錄裸 traceback。
-- **讀側（r2 Codex 折入 C2——「末筆」升級「末輪」，防補一筆繞過）**：三模式 gate 帶 `--spec` 時，以**判定輪（round 分組）為單位**驗：該輪**所有帶 `spec_sha256` 的記錄必須彼此一致**且 == sha256(當前 `--spec` 檔)。輪內 hash 不一致 → FAIL（「輪內版本漂移——各席審的不是同一版」）；一致但≠當前檔 → FAIL（「spec 於末輪審計後被改動，需再過一輪」）。Codex 反證場景（往已有效輪補 append 一筆新 hash 記錄）被輪內一致性擋死。legacy/light 單席輪＝該輪唯一一筆，退化為單筆驗證。
-- **相容（r2 Codex 折入 C3——「舊帳 advisory」不得成為永久逃生門）**：**定錨式啟用**（同 cluster 帳定錨前例）——該 loop 首個帶 `spec_sha256` 的記錄出現後，loop 定錨 hash 模式，後續記錄缺 hash → gate FAIL（非 advisory）；**從未帶過**的 loop → advisory `⚠ 本 loop 未啟用 hash 綁定`（存量舊帳不追溯）。**light 例外：強制**（新賽道無存量，缺=FAIL，見 #2）。殘餘誠實記載：legacy/panel 新 loop 整條不帶仍只有 advisory——機械上無法區分「舊帳」與「拒用」，靠 skill 派工模板預設帶 `--spec`＋loop next 的 record_cmd 模板內建 `--spec` 收窄（工具鏈預設路徑帶上，偷懶要主動刪旗標）。
-- v1 **單筆 hash、不做鏈式**（reviewed→result 雙 hash 鏈留 v2）：jsonl append-only 本地已有序；本機制**防誤不防惡**（本地檔可改，誠實天花板同 evidence-gate 既有條）。
+- **時序裁定（r2 Codex C4；r3 折入中斷窗防護）**：現行權威流程是**先 record（步驟5）後 fold（步驟7）**——照此 hash 必在每個有折入的 caught 輪後失配。**本包裁定：調整 skill 時序**——caught 輪改為「fold → fold-check → canary token grep=0 → record」**連續收尾序列**（missed 輪無 fold，record 即收尾不變）。**中斷窗（r3）**：時序移位把「派了沒記」窗擴大為「折了沒記」——crash 落在已折未記時，該輪 log 零痕跡、next 會重發同 N、caught+major 的 ratchet 訊號蒸發。防護＝**spec 審計修正紀錄是第二帳**：恢復規則「log 無該輪 record 但 spec 審計紀錄有該輪條目 → 人工補 record 再繼續」，寫進 skill 收尾段；隱患節記載此窗。此為 skill 文字改動，列入同步義務；spec 不假裝這是既有慣例。
+- **雙 hash 鏈（r4 Codex 終駁折入——單 post-fold hash 證不了「審過的輸入」：折入引壞的版本沒人讀過照樣過閘。撤 v1「單 hash」範圍刀，Codex r1 原案轉正）**：record 帶 `--spec <path>` 時寫**兩欄**——`reviewed_sha256`（**派工當下**真檔快照：skill 步驟 1 複製工作副本時順手 `sha256sum 真檔` 留存，record 以 `--reviewed <hex>` 傳入）＋ `result_sha256`（record 當下真檔＝post-fold）。gate 驗兩件：①當前檔 == 收斂窗 `result_sha256`（防審後改）②**鏈續性**：第 n+1 輪 `reviewed_sha256` == 第 n 輪 `result_sha256`（保證「折入的版本正是下輪審的版本」——折後內容由下輪審計覆蓋）。**末輪 fold 殘餘**（最後一輪折入的內容無下輪覆蓋）＝d4 定位的合法逃逸（正確性歸下游 code-loop＋測試），誠實記載非掩蓋。
+- **讀檔/hash 失敗一律 rc2（r1 折入）**：不存在/是目錄/無權限等統一 `OSError` 兜底——沿 G1 :2687-2691 catch 慣例。
+- **讀側（r2 C2「末筆→末輪」；r3 折入「末輪→收斂窗」——legacy K=2 只驗末輪會讓中間輪逃綁定、K=2 保證靜默降 K=1）**：三模式 gate 帶 `--spec` 時，以**收斂窗**為驗證範圍——legacy＝最後 `need` 筆（K-streak 窗全體）；panel/light＝判定輪（round 分組）。窗內**所有帶 `spec_sha256` 的記錄必須彼此一致**且 == sha256(當前 `--spec` 檔)。不一致 → FAIL（「窗內版本漂移——收斂憑證跨了不同版本」）；一致但≠當前檔 → FAIL（「spec 於審計後被改動，需再過一輪」）。
+- **all-or-nothing 升到收斂窗級（r3 輪級，兩席互證；r4 Codex 再駁——legacy K=2 窗「第一筆無 hash 第二筆定錨」照樣穿）**：**收斂窗內任一筆帶 `spec_sha256` ⇒ 窗內全體記錄必須帶**（含 legacy 的最後 need 筆跨輪窗），半帶 → FAIL「收斂窗 hash 半帶——收斂憑證無法互證」。定錨語意同步窗級化；輪內/窗內不存在時序先後。
+- **相容（r2 C3；r3 輪級化；r4 Codex 再駁收口——「整條不帶=advisory」就是原逃生門換名）**：**gate 帶 `--spec` = 消費者聲明要 hash 驗證 → 收斂窗內無任何 hash = FAIL**（「帳未綁定——請重審一輪並於 record 帶 --spec」），非 advisory。advisory 僅存於 gate **不帶** `--spec` 的舊用法（存量 loop 不重跑 gate 即不受影響；重跑=要求重新背書，fail-closed 合理）。light 恆強制。逃生門閉合：攻擊場景（無 hash 帳＋改檔＋帶 --spec 問 gate）現為 FAIL。
+- ~~v1 單筆 hash~~（r4 撤刀改雙 hash 鏈，見上）；本機制仍**防誤不防惡**（本地 jsonl 可改，誠實天花板同 evidence-gate 既有條）。
 
 ### #4 成本選配欄：`canary record [--tokens N] [--wallclock-min N]`
 
@@ -80,26 +85,28 @@ summary: |-
 
 本包交付 light 的 **loop-status 面**（`--light` 謂詞＋ratchet 機械面）；[[Projects/design-loop輕量檔_計劃]] M1 剩餘＝**進場硬否決機械化**（pitfalls 剝「light 資格自核」段再掃，pitfalls/assess 面）留在該計劃。兩包互引、無重疊面。
 
+**ratchet 承接 id 慣例（r3 折入——原 ratchet 訊息指本節卻無此內容，懸空引用修復）**：light ratchet 後開新 panel loop id＝**原 id ＋ `-std` 後綴**（lumos-show 前例：`lumos-show讀取入口` → `lumos-show讀取入口-std`）；舊 light loop 紀錄原地保留不遷移，新 loop record note 首筆註明「承 <原id> ratchet」。
+
 ## 落地同步義務（同 commit；由折入內容衍生，比照 lumos-show 前例枚舉寫死）
 
 1. `skills/lumos-design-loop/SKILL.md`：〈每一輪〉record 時序改動（C4——caught 輪 record 移 fold/fold-check/grep 之後收尾）；步驟 1「N=status 輪數+1 手算」改指 `lumos loop next`；〈light 檔〉步驟 4 的「人裁實質收斂出口」改寫為 `loop status <id> --light --gate` 機械謂詞（本包 #2 交付的正是這件）。
 2. `skills/lumos-design-loop/templates.md`：§1 light 附註同步（人裁→機械 gate）；派工/記帳模板預設帶 `--spec`（C3 收窄）。
-3. `Systems/convergence-evidence-gate`：KEY 行「--spec 無綁定向量**留 v2**」——#3 落地即清償，同 commit 拿掉「留 v2」改記落地指針。
+3. `Systems/convergence-evidence-gate`：KEY 行「--spec 無綁定向量**留 v2**」——#3 落地即清償，同 commit 拿掉「留 v2」改記落地指針；FLOW 的 gate 合取敘述補 hash 條件式說明（定錨後 FAIL 非 advisory）（r3 觀察折入）。
 4. `Systems/loop-convergence-recording`：record 選用鍵計數與清單（+spec_sha256/tokens/wallclock_min）。
-5. `Systems/design-loop`：〈每一輪〉手算 N 敘述同步 loop next。
+5. `Systems/design-loop`：〈每一輪〉手算 N 敘述同步 loop next；**FLOW 摘要行的「canary record→折真檔」順序句一併改**（r3 折入——C4 時序落地後該句與新行為相反，漏改＝SSOT 內漂移）。
 6. `Projects/design-loop輕量檔_計劃`：M1 的 loop-status 面標記由本包交付。
 7. Verification 節點（plan_refs 回指本計劃）。
 
 ## 明確不做（範圍刀）
 
 - `loop next` 不寫狀態、不 spawn agent、不判 tier（編排者宣告）；phase 不偵測「派了沒記」（log 看不見派工）。
-- 不做雙 hash 鏈（v2）；不做跨 loop 成本報表；不做 escape ledger（外審 #5，獨立小 spec 另案）；不動 legacy/panel 既有 gate 合取語意（只加 hash 驗證與成本顯示，皆帶舊帳相容）。
+- ~~不做雙 hash 鏈~~（r4 Codex 終駁後轉正為 v1 必要件——單 hash 語意撐不住「審過的輸入」證明）；不做跨 loop 成本報表；不做 escape ledger（外審 #5，獨立小 spec 另案）；不動 legacy/panel 既有 gate 合取**本體**（新增 hash/min-seats 皆為選配疊加，不帶=行為不變）。
 
 ## 測試策略
 
 - **next**：空 loop→plant-canary N=1／有 FAIL 記錄→N+1＋型別輪替正確（legacy mod4、panel per-slot）／gate 可過→converged／達 cap→cap-reached／`--json` 結構完整／混用帳 rc2 同 status／`--tier` 三值→width 映射／不存在 loop id 行為明確。
-- **light 謂詞**：矩陣——caught+clean→PASS／caught+minor→PASS／caught+major→FAIL 且此後**永久** FAIL（ratchet，後續乾淨輪不洗回）／missed→FAIL／--light+--panel rc2／--light 對 panel 記錄 rc2／帶 hash 相符 PASS、不符 FAIL、舊帳無欄 advisory 警告不擋。
-- **hash**：--spec 記錄 sha256 正確／檔不存在 rc2／三模式 gate 驗末筆／改檔後 gate FAIL 訊息正確／舊帳相容 advisory。
+- **light 謂詞**：矩陣——caught+clean→PASS／caught+minor→PASS／caught+major→FAIL 且此後**永久** FAIL（ratchet，後續乾淨輪不洗回；FAIL 分因 retryable/ratchet）／missed→FAIL 不觸發 ratchet／欄位互證矛盾（clean+findings>0）→FAIL／--light+--panel rc2／--light 對 panel 記錄 rc2／**hash 缺失=FAIL（light 強制 fail-closed，r4 同步——原「advisory 不擋」行違反 light 語意）**。
+- **hash（r4 同步至收斂窗/雙鏈語意——原「驗末筆」行鎖舊破口）**：--spec 記錄雙欄（reviewed/result）正確／檔不存在/目錄 rc2／**收斂窗驗證**（legacy 最後 need 筆全體；中間輪逃綁定案例=FAIL）／**窗內半帶=FAIL**／**鏈續性**（reviewed[n+1]==result[n]，斷鏈 FAIL）／改檔後 FAIL 訊息正確／gate 帶 --spec 而窗內無 hash=FAIL／gate 不帶 --spec 舊用法不變／`--min-seats` 不足 FAIL、不帶不變。
 - **成本欄**：數值寫入／非數值/負值 rc2／不給不寫鍵／status 顯示逐輪+總計／全無不印。
 - **迴歸**：既有 legacy gate（K-streak∧G1∧G2）、panel 三條合取、cluster 帳、混用守衛——全部現行測試不紅（不動語意）。
 
@@ -124,6 +131,27 @@ slot3（醒席）7 條折入 v2：
 - **C4 record/fold 時序顛倒（major）**：現行為先 record 後 fold，原 spec 斷言相反——裁定調整 skill 時序（caught 輪 record 移 fold 後收尾），列同步義務，不假裝既有慣例。
 - **C5 light 謂詞漏欄位互證＋ratchet 吃 missed（major）**：補 clean⇒0/minor⇒≥1 互證（復用 :2710）；ratchet 改只吃 caught 筆 severity（missed 判決不採信教義）。
 
+**r2（2026-07-21，opus×4 升級席（護欄），canary in-lens＋植 diff hunk 內；Codex 復核另記）**：canary slot1=b 型（憑空模板旗標）✓ slot2=c 型（憑空門檻常數）✓ slot3=d 型（憑空快取檔——連引用前例實碼零快取都挖出）✓ slot4=a 型（憑空章節）✓——**4/4 caught、0 missed=輪有效**（護欄升級＋in-lens 植入紀律立竿見影，對照 r1 sonnet 1/4）。真 findings 去重 7 major＋3 minor 折入 v4：
+- **S1-FC1（major）**：v3「缺 --spec rc2」斷言與現行 status 相反（--spec 可選、G1 skip 仍可 PASS :2684）——改「委派沿現行語意＋converged 附 gate_basis 判定基礎欄」，誠實可稽不改 status。
+- **S1-F-CAP（major）**：無 --tier 預設 standard 與 cap 的 legacy 判定自相矛盾——改帳面格式推導（legacy→1/6；panel→3/3）＋零記錄 rc2 不猜。
+- **S2-FA（major）**：hash 只驗末輪使 legacy K=2 中間輪逃綁定（K=2 靜默降 K=1）——驗證範圍改「收斂窗」（legacy=最後 need 筆全體）。
+- **S2-FB＋S3-FC（major，兩席互證）**：定錨「後續」逐筆時序讓定錨輪內錨前席 grandfathered——改輪級 all-or-nothing（任一帶⇒全帶，半帶 rc2）＋定錨語意輪級化。
+- **S2-FC（major）**：--tier 與 gate-mode 旗標無調和（--tier light 不蘊含 --light 閘→對已收斂 light 誤報未收斂）——明定映射＋衝突 rc2。
+- **S3-FA（major）**：ratchet 態下 next 吐 plant-canary 與「停、升級」打架（最常見 light-found-major 路徑）——phase 補第四值 `escalate` 最先短路＋light FAIL 分因（retryable/ratchet）。
+- **S3-FB（major）**：C4 時序開「折了沒記」中斷窗（重派已折輪＋ratchet 訊號蒸發）——收尾連續序列＋審計紀錄第二帳恢復規則。
+- **S4-F1（major）**：同步義務漏 design-loop FLOW 的 record→fold 順序句——第 5 項擴列。
+- **S4-F3（minor）**：ratchet 訊息懸空引用——分工節補 `-std` 後綴承接慣例。
+- **S3-FE（minor）**：hash 正確性繫散文步序——隱患誠實記載。
+- **S4-觀察（minor）**：evidence-gate FLOW 合取敘述補 hash 條件式——同步義務第 3 項擴。
+
+**r2-Codex 復核（2026-07-21，150k tokens，皆附可執行反證）**：C5 解除；**C1-C4 未解除、2 新 major，VETO 維持——全折入 v5**：
+- **C1 再駁**：basis 標註擋不住機讀端只看 phase 放行 → converged 僅 full-basis 輸出；資訊不足改吐第五值 `gate-pending`，絕不背書。
+- **C2 再駁**：legacy K=2 窗「首筆無 hash 次筆定錨」照穿 → all-or-nothing 升收斂窗級（跨輪窗半帶=FAIL）。
+- **C3 再駁**：「整條不帶=advisory」即原逃生門 → gate 帶 --spec=消費者聲明要驗，窗內無 hash=FAIL；advisory 僅存不帶 --spec 舊用法。
+- **C4 終駁（本輪最深）**：單 post-fold hash 證不了 reviewed input——折入引壞版本沒人讀過照樣過閘 → **撤單 hash 範圍刀，雙 hash 鏈轉正**（reviewed/result 兩欄＋鏈續性 reviewed[n+1]==result[n]；末輪 fold 殘餘=d4 合法逃逸誠實記載）。
+- **新 A**：測試策略行仍鎖舊語意（light advisory 不擋/驗末筆）→ 全單同步 v5 語意。
+- **新 B**：panel 謂詞不知 width、high 兩席可收斂 → gate 選配 `--min-seats`（next 依 tier 自動傳），五席承諾機械兌現。
+
 ## 實務隱患
 
 - **self-governance 循環（最重）**：四件全動「判 spec 能否進實作」的閘——gate 邏輯錯＝系統性放行壞 spec 或永擋好 spec。緩解＝本 spec 過完整 design-loop（high：W=5＋跨家族否決席）＋測試逐條對齊謂詞矩陣＋實作後 full code-loop（pitfalls 必判 high）。
@@ -132,4 +160,5 @@ slot3（醒席）7 條折入 v2：
 - **成本欄 GIGO**：tokens/wallclock 是編排者自報——謊報不可偵測；帳的價值在趨勢非單筆精度（同 anchors GIGO 條）。
 - **cap 硬編碼雙源**：next 的 cap 與 skill 文字雙處宣告——漂移風險；以 code 為準、skill 回寫。
 - **hash 對行尾/編碼敏感（r1 折入）**：byte-level sha256——跨機器 autocrlf/編輯器正規化會使「語意未變」的檔判成「被改動」觸發無資訊量重審。fail-closed 方向（誤擋非誤放）；v1 接受不緩解（單機工作流為主），記載此成本。
-- **loop id typo 不可分辨（r1 折入，既有結構限制）**：無 loop 註冊表——打錯 id 與開新 loop 在 next 眼裡同為「零記錄→plant-canary N=1」，無法提醒。`loop status` 現況同病，非本包引入；記載防「權威指針」錯覺加重此坑。
+- **loop id typo 不可分辨（r1 折入，既有結構限制）**：無 loop 註冊表——打錯 id 與開新 loop 在 next 眼裡同為零記錄，無法提醒（零記錄現改 rc2 要 --tier，略收窄但不解 typo 本身）。`loop status` 現況同病，非本包引入。
+- **hash 正確性繫於散文步序（r3 折入）**：C4 新時序（fold→record）無機械強制——編排者沿舊肌肉記憶 pre-fold record，hash 即綁錯版、日後對「沒被改過」的 spec 誤報「被改動」。與「無機械 oracle 不進謂詞」同級誠實記載：這條 gate 合約的正確性建在 skill 步序紀律上，fail 方向=誤擋非誤放。
