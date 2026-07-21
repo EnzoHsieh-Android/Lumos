@@ -16,7 +16,7 @@ summary: |-
   KEY:實作錨=掛既有名稱解析派發組(scripts/lumos:9656 的 links/backlinks/context/map 組,env.find 解析、找不到 stderr ERROR+rc2)——不造新解析路徑;show 同時寫 _usage_log(env,rel,"show")(三位置參數,對齊 scripts/lumos:3704 簽章與 :3721 呼叫慣例;r1 折入:原引用抄丟 env)
   KEY:★實作陷阱三條(r1 審計折入)★——①派發組尾行是**無條件** `return cmd_decisions(env,rel)`(scripts/lumos:9670),只把 "show" 加進 tuple 忘插 if 分支=靜默印出 decisions;必須在該行前插 `if args.cmd=="show": return cmd_show(...)` ②argparse 位置引數**必須命名 note 非 node**(:9658 getattr(args,"note")、:9660 裸 args.note 無保護,命名 node 會 AttributeError crash;codebase 有 note/node 兩套並存慣例,本組用 note) ③--body-only 開檔須 **utf-8-sig**(loader :195 慣例;show 是首個原樣吐全文的指令,一般 utf-8 會把 BOM 印進輸出)
   KEY:範圍刀=不做 --at <git-sha>(git show 已覆蓋歷史版本)/不做 --json/不做多節點批次;lumos-project-notes skill 補一行「讀 body 用 show」(解禁章的成文出口)
-  KEY:圖譜同步義務(r1 折入 F8;r2 擴列散落面)——同一 commit 須帶:[[Systems/lumos-cli-read]]「12」至少 5 處+「23」算式全改+cmd_show 入清單、skills/lumos-project-notes/reference.md:85 獨立總表(r2 Codex C2:「44」本身陳舊、現行實 48,+show=49/讀取12)、README.md:42(44→49,C2 補列)、lumos-cli-read d1「全程不寫檔」措辭修 A2 漂移(C1)、Verification 節點(plan_refs 回指)——pre-commit Gate 3 對 test_lumos.py(.py 命中 code regex)要求同 commit 圖譜檔,天然滿足;原版只列一處=正中「知識同步散落會漏」病灶
+  KEY:圖譜同步義務(r1 折入 F8;r2 擴列散落面)——同一 commit 須帶:[[Systems/lumos-cli-read]]「12」至少 5 處+「23」算式全改+cmd_show 入清單、skills/lumos-project-notes/reference.md:85 獨立總表(r2 Codex C2:「44」本身陳舊、現行實 48,+show=49/讀取12)、README.md:42(44→49,C2 補列)、lumos-cli-read **全節點**零副作用宣稱**六處**(:11 FLOW/:12 KEY/:24+:27 d1/:58 共同地基/:78 全純讀)修 A2 漂移(C1;r3 Codex 擴列+r4 opus 輪補全;措辭限定 context/show 寫 usage-log+doctor --ci 寫 governance-log+其餘純讀——概括除外會謊稱全部,r4 終局 Codex 再收一格)、Verification 節點(plan_refs 回指)——pre-commit Gate 3 對 test_lumos.py(.py 命中 code regex)要求同 commit 圖譜檔,天然滿足;原版只列一處=正中「知識同步散落會漏」病灶
   KEY:light 檔資格自核(M0 honor-system)——硬否決三訊號:①風險類:唯讀指令,四類風險面皆不涉 ②硬合約:不動任何 invariant 級合約(純新增讀取口) ③體積:預估 ~40 行 code+測試,50 行先驗內、孤立 → light 放行。⚠自核時 pitfalls --check 對本段「引用風險類名稱」關鍵字誤報全四類——honor-system 下人工判掉;此發現餵 [[Projects/design-loop輕量檔_計劃]] M1(機械化硬否決須剝自核段,同 risk-tiered assess_spec 黑名單剝除前例)
   DECISION:[2026-07-21]走 light 路徑(M0 首戰,pre-flight+1 通才席+legacy --need 1+人裁)→r1 存活 4 major,**ratchet 已觸發、升 standard**(W=3 panel,loop id lumos-show讀取入口-std 承接;r2 修正:本行與審計紀錄結論同步,原「審計中」進行式誤導下一棒走錯路徑)
   TEST:t_show 計畫覆蓋(八項,與 body 測試策略同單,r1 折入 F5 對齊、r2 增 7-8):找到(rc0 全文含 frontmatter)/找不到(stderr+rc2)/--body-only(無 frontmatter 鍵行)/模糊名解析(沿 env.find)/show 不改檔(唯讀)/派發組迴歸/重開檔失敗(stderr rc2 無 traceback)/無 frontmatter 檔 --body-only 印整檔
@@ -52,7 +52,7 @@ summary: |-
   1. `Systems/lumos-cli-read`——「12」在節點內**至少 5 處**（summary KEY 行/decisions d1/`## 12 個原語` 標題/body 散文/「23 子命令=讀 12+寫 7+生命週期 4」交叉算式），全部 12→13、23→24，`cmd_*` 清單補 `cmd_show`；
   2. `skills/lumos-project-notes/reference.md:85`——**獨立的另一份**頂層命令總表。⚠ **r2 Codex 否決修正（C2）**：「44」本身已是陳舊數字——現行 argparse 實有 **48** 個頂層命令（總表漏列 `decision-reindex`/`rel-cascade`/`test-layers`/`lint-check`），加 show 應改 **49**、讀取/導航 11→12；落地時一併修真（原 spec「44→45」會把錯數字刻進權威文件）；
   3. `README.md:42`——「44 個頂層命令」同為陳舊硬編碼（Codex C2 補列），一併 →49；
-  4. `Systems/lumos-cli-read` **d1 決策與〈共同地基〉「全程不寫檔、無副作用」措辭**——修為「不改圖譜節點檔；best-effort usage-log 事件帳除外（A2，2026-07-11 起）」——修的是 A2 起即存在的合約漂移（context 已在寫），非為 show 開新特權；
+  4. `Systems/lumos-cli-read` **全節點零副作用宣稱一併改寫（r3 Codex 復核擴列；r4 opus 輪補全）**：**六處**——:11 FLOW「各 cmd_* 純讀印出」（r4 S2-F2 補）、:12 summary KEY 行、:24＋:27 d1 決策（content＋why_chosen 兩行）、:58 共同地基、:78「這 12 個全純讀」——全部修為「**不改圖譜節點檔；context 與 show 寫 best-effort usage-log 事件帳（A2，2026-07-11 起）；doctor --ci 視 findings 寫 governance-log（:416 寫者自述）；其餘讀指令純讀**」語意（末句 scope 為 r4 終局 Codex 折入——原「其餘純讀」對 doctor --ci 仍是假話）。⚠ scope 精確（r4 S1-F2）：概括寫「usage-log 除外」會謊稱 13 個讀指令全寫帳——實查全庫僅 `cmd_context`（:3721）呼叫 `_usage_log`，措辭必須限定 context/show 兩個。另 `Projects/檢索優化_計劃:269` 有同宣稱，屬論證此邊界的討論節點非權威合約，不入同步清單（r4 S2-F4 context）。修的是 A2 起即存在的合約漂移，非為 show 開新特權；
   5. Verification 節點（`plan_refs` 回指本計劃）。
   此條正中「知識同步散落會漏」的已知病灶——枚舉寫死在 spec，實作照單掃，不靠記憶。pre-commit Gate 3 對 `test_lumos.py` 變更要求同 commit 圖譜檔——上列天然滿足。
 - **CLI help**：`sub.add_parser("show", help="節點完整內容(frontmatter+body;--body-only 略 frontmatter)")`。
@@ -104,3 +104,15 @@ summary: |-
   - **C2 同步算術仍錯＋漏 README（major）**：reference.md「44」本身陳舊——現行實為 48（漏 `decision-reindex`/`rel-cascade`/`test-layers`/`lint-check`），+show=49 非 45；README.md:42 同病。折入：數字全修真＋README 入同步清單。
   - Codex 同時複核：三條陷阱/重開檔/split_frontmatter/lumos-cli-read 12→13/pre-commit Gate 全部與現碼吻合（跨家族背書）。
 - **r2 輪判定**：canary 2/2 caught、0 missed=輪有效；distinct findings 7（同步散落 cluster 三席互證，其餘單席）；**存活 max=major → fold 後下一輪 delta-scoped**。
+
+**r4（2026-07-21，delta 重審輪，opus×2 升級席（護欄觸發），canary 植 diff hunk 內）**：slot1=c 型（憑空錯誤訊息長度常數＋憑空「截齊」慣例）✓ **完美抓**（grep 全庫 0 命中＋反先例 :5030 拒絕非截斷＋工作包/真檔落差三重證據）；slot2=d 型（憑空勾稽帳檔名）✓ **完美抓**（grep 0＋git ls-files 無＋直接判讀「極可能是本輪 canary」）。**caught 2/2、0 missed=輪有效**。真 findings 4 條全 minor 折入 v6：
+- **S1-F2 合約措辭 scope 過寬（minor）**：「usage-log 除外」概括會謊稱 13 個讀指令全寫帳——實查僅 cmd_context 呼叫；措辭限定 context/show。
+- **S2-F2 零副作用宣稱實為六處（minor）**：:11 FLOW「純讀印出」漏列——item 4 自己立論「只修兩處自造漂移」卻漏第六處。
+- **S2-F3 frontmatter 四處 vs body 五處鏡像差（minor）**：統一為六處。
+- **S2-F4 檢索優化_計劃:269 同宣稱（context）**：討論節點非權威合約，註明不入清單。
+- **r4 輪判定：輪有效＋存活 max=minor（全文件精度級）**。
+- **r4 終局 Codex**：六處枚舉完整 ✓；措辭再收一格（doctor --ci 寫 governance-log，:416 寫者自述）——照其原句逐字折入，異議按其自開條件成立即解。
+
+**實質收斂裁定（2026-07-21，使用者）**：cap 3 輪到頂＋r3(帳面)輪有效＋存活全文件精度 minor＋全數已折——capture-recapture 殘餘卡門屬已知結構病（singleton findings 壓不到底，M2 cluster 帳為此而生但本 loop 定錨無-cluster 模式）。**人裁實質收斂放行，進實作**。C1 業務簽核（保留記帳）尚待使用者明示。
+
+**r3-前置（2026-07-21，delta 輪 r2 無效＋Codex 復核）**：delta 輪 sonnet×2 **canary 0/2 全 missed=輪無效**（d 型裸檔名/a 型壞節引用皆植於編排者爭議清單——驗了同行 README 卻放過憑空 json/鏡頭即一致性仍漏）→ **兩席 findings 全剔除不折**（判決不採信）；護欄觸發（連 2 筆 missed）→ r3 升 opus。偏離記錄：canary 植 briefing 非受審物、相關性弱，r3 改植 diff hunk 內（協議缺口回饋 M1）。**Codex 復核（46k tokens）：C1 解除（接受保留記帳裁量：副作用已明揭露、非新增行為類型）、C2 解除（獨立重數 argparse=48、+show=49 算術確認）、新 major：同步義務漏 :12 summary KEY 與 :78「全純讀」——只修 d1+共同地基會自造新鏡像漂移（此即被剔除的 slot2 finding 之跨家族獨立再發現——missed 席真 finding 從可信通道浮回,機制自證）→ 折入 v5（同步義務擴為全節點零副作用宣稱）。VETO 維持至 v5 落地。**
