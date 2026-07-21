@@ -171,6 +171,8 @@ slot3（醒席）7 條折入 v2：
 - **新B 殘（雙 major）**：min-seats 數記錄筆數可被同席重複 append 灌滿 → 改數**相異 auditor 欄值**（既有欄零新欄）；tier 不持久化、省略 --tier 的 high loop 被推成 standard 三席收斂 → **record 加選配 tier 欄、首帶定錨、衝突 rc2**。
 - **處置**：cap 3 輪已滿（Codex 復核不佔輪，前例一致）；v7 折入後請否決席終確認，帶其判決攤牌人裁。
 
+**終局（2026-07-21）**：v7 四修 → Codex 判 C1/C4/新A 解除、新B 剩 tier 分叉殘句 → v8 統一定錨優先＋撤殘句 → Codex 抓 summary 鏡像未跟 → v8.1 補 → **Codex 終判：全文一致，NO-VETO**。否決鏈完整記錄：VETO(5)→VETO(4+2)→VETO(4)→VETO(1)→NO-VETO——五次對抗迭代，每次殘留收窄，最後兩次靠鏡像級精度收口。待人裁實質收斂進實作。
+
 ## 實務隱患
 
 - **self-governance 循環（最重）**：四件全動「判 spec 能否進實作」的閘——gate 邏輯錯＝系統性放行壞 spec 或永擋好 spec。緩解＝本 spec 過完整 design-loop（high：W=5＋跨家族否決席）＋測試逐條對齊謂詞矩陣＋實作後 full code-loop（pitfalls 必判 high）。
