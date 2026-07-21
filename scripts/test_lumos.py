@@ -9612,9 +9612,9 @@ def t_m1_loop_next():
     d = _j.loads(r.stdout)
     check("零記錄 plant-canary N=1", d["phase"] == "plant-canary" and d["round"] == 1 and r.returncode == 1)
     check("light width/cap 映射", d["width"] == 1 and d["cap"] == 2)
-    # tier 定錨:record 帶 --tier light → next 無 --tier 讀定錨
+    # tier 定錨:record 帶 --tier light → next 無 --tier 讀定錨(帶 auditor:空席不計已生效)
     run(v, "canary", "record", "caught", "--loop", f"nx-{_M1U}", "--severity", "clean", "--findings", "0",
-        "--reviewed", h, "--spec", str(spec), "--tier", "light", expect_rc=0)
+        "--auditor", "solo", "--reviewed", h, "--spec", str(spec), "--tier", "light", expect_rc=0)
     r = run(v, "loop", "next", f"nx-{_M1U}", "--json", "--spec", str(spec), "--repo", str(v.parent))
     d = _j.loads(r.stdout)
     check("tier 定錨讀取", d["tier"] == "light")
@@ -9645,6 +9645,51 @@ def t_m1_loop_next():
             "--reviewed", h, "--spec", str(spec), "--tier", "high", expect_rc=0)
     r = run(v, "loop", "status", f"nx4-{_M1U}", "--panel", "--min-seats", "5", "--spec", str(spec), "--repo", str(v.parent))
     check("同席灌筆 min-seats FAIL", r.returncode == 1 and "席" in r.stdout)
+
+
+def t_m1_codeloop_r1_fixes():
+    """code-loop 補審 r1 折入(loop機械脊椎M1包):cluster 路徑轉發/tier-格式衝突 rc2/
+    light 空 auditor 不計席/light 席數委派/panel+light 成本區。"""
+    print("t_m1_codeloop_r1_fixes")
+    v = mkvault()
+    spec = v / "Projects" / "cspec.md"
+    spec.write_text("c spec\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    # 1. cluster 模式不得繞過 min-seats/G3:同席 2 筆 caught+clusters 無 disputed,無 hash
+    for i in range(2):
+        run(v, "canary", "record", "caught", "--loop", f"cl-{_M1U}", "--round", "r1", "--auditor", "same",
+            "--severity", "clean", "--findings", "0",
+            *(["--clusters", "x=resolved"] if i == 0 else []), expect_rc=0)
+    r = run(v, "loop", "status", f"cl-{_M1U}", "--panel", "--min-seats", "5", "--spec", str(spec), "--repo", str(v.parent))
+    check("cluster 模式 min-seats/G3 不被繞過", r.returncode == 1 and ("席" in r.stdout or "hash" in r.stdout or "綁" in r.stdout), r.stdout[-200:])
+    # 2. tier=high 定錨但記錄為 legacy 格式(漏 --round) → next rc2 格式衝突,不得走鬆閘
+    run(v, "canary", "record", "caught", "--loop", f"tf-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--reviewed", h, "--spec", str(spec), "--tier", "high", expect_rc=0)
+    r = run(v, "loop", "next", f"tf-{_M1U}", "--spec", str(spec), "--repo", str(v.parent))
+    check("high 定錨+legacy 格式 → rc2", r.returncode == 2, f"rc={r.returncode}")
+    # 3. light 空 auditor 不計席:無 --auditor 的 caught 乾淨輪,min-seats=1 應 FAIL
+    run(v, "canary", "record", "caught", "--loop", f"la-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    r = run(v, "loop", "status", f"la-{_M1U}", "--light", "--gate", "--min-seats", "1", "--spec", str(spec), "--repo", str(v.parent))
+    check("light 空 auditor 不計席 FAIL", r.returncode == 1 and "席" in r.stdout, r.stdout[-150:])
+    # 4. next 對 light 委派 min_seats=1:同上帳但經 next(缺 auditor 不得 converged)
+    run(v, "canary", "record", "caught", "--loop", f"ln-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--reviewed", h, "--spec", str(spec), "--tier", "light", expect_rc=0)
+    r = run(v, "loop", "next", f"ln-{_M1U}", "--json", "--spec", str(spec), "--repo", str(v.parent))
+    import json as _j
+    d = _j.loads(r.stdout)
+    check("next light 委派席數(缺 auditor 不 converged)", d["phase"] != "converged", r.stdout[:150])
+    # 5. panel 與 light 路徑也印成本區
+    for a in ("p1", "p2"):
+        run(v, "canary", "record", "caught", "--loop", f"cp-{_M1U}", "--round", "r1", "--auditor", a,
+            "--severity", "clean", "--findings", "0", "--tokens", "100",
+            *(["--capture-counts", "1"] if a == "p1" else []), expect_rc=0)
+    r = run(v, "loop", "status", f"cp-{_M1U}", "--panel")
+    check("panel 路徑印成本區", "成本" in r.stdout, r.stdout[-150:])
+    run(v, "canary", "record", "caught", "--loop", f"cli-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--reviewed", h, "--spec", str(spec), "--auditor", "solo", "--tokens", "50", expect_rc=0)
+    r = run(v, "loop", "status", f"cli-{_M1U}", "--light", "--gate", "--spec", str(spec), "--repo", str(v.parent))
+    check("light 路徑印成本區", "成本" in r.stdout, r.stdout[-150:])
 
 
 def t_show():

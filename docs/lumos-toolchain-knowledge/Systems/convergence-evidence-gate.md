@@ -12,7 +12,7 @@ verified_by:
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
 summary: |-
   KEY:[2026-07-10]panel 輪有效升級 near-perfect——caught≥2 且 0 missed(中段分數弱訊號不背書收斂;borrow mutation score 文獻,見[[Projects/收斂閘caught-rate修正_計劃]])
-  FLOW:每輪 canary record --findings N(辯方存活折入條數)→loop status --gate --spec <md> --repo <root>→K-streak(必要)∧G1(_refcheck_scan 引用座標 0 missing/0 超界)∧G2(findings 單調不增+末輪≤1+末步下降,K=1 退化末輪=0)→全過 GATE PASS rc0｜cross_audit:_build_prompt sentinel 定界+_parse_worst 末行優先回(sev,parse_fallback)→§2.5c 計票:≥major 經機械驗證存活才 +1 reject,全反證=endorsed-after-refute 放行
+  FLOW:每輪 canary record --findings N(辯方存活折入條數)→loop status --gate --spec <md> --repo <root>→K-streak(必要)∧G1(_refcheck_scan 引用座標 0 missing/0 超界)∧G2(findings 單調不增+末輪≤1+末步下降,K=1 退化末輪=0)∧G3(帶 --spec=聲明 hash 驗證:收斂窗雙 hash 鏈四驗,窗內無 hash=FAIL 非 advisory;不帶 --spec 舊用法不驗——[2026-07-21 M1包])→全過 GATE PASS rc0｜cross_audit:_build_prompt sentinel 定界+_parse_worst 末行優先回(sev,parse_fallback)→§2.5c 計票:≥major 經機械驗證存活才 +1 reject,全反證=endorsed-after-refute 放行
   KEY:收斂判準從「輪次算術」升級「證據錨」——「連 K 輪各挖 5 條 minor」與 [1,1] 穩態涓流不再算收斂;輪次紀律保留為必要條件非充分條件(退役的是充分性)
   KEY:向後相容三條——不帶 --gate 輸出與 rc 分毫不變;不給 --findings 鍵不寫;run_cross_audit 既有鍵不動只增 parse_fallback
   KEY:G2 fail-closed(tail-K 缺 findings 欄位即擋)+ 欄位互證(clean⇒0、minor⇒≥1,矛盾即擋);G1 用 _refcheck_scan 只驗 spec→repo 指涉、不驗內部一致性(canary 保留地)

@@ -2406,6 +2406,30 @@ def _round_valid_m2(recs):
     return kinds.count("caught") >= 2 and kinds.count("missed") == 0
 
 
+def _panel_extra_checks(latest, min_seats, spec):
+    """M1包 判定輪加驗(code-loop 補審 r1 折入:cluster 與無-cluster 兩路皆須過,不得繞):
+    min-seats 數相異非空 auditor(同席灌筆/空席不計)+ G3 hash(帶 --spec=聲明要驗)。回 fails 片段。"""
+    fails = []
+    if min_seats:
+        seats = len({a for r in latest if (a := r.get("auditor"))})
+        if seats < min_seats:
+            print(f"[panel] min-seats: ✗ — 席數不足({min_seats} 席制僅 {seats} 相異席;同席重複/空席不計)")
+            fails.append("席數不足")
+        else:
+            print(f"[panel] min-seats: ✓ — {seats} 相異席 ≥ {min_seats}")
+    if spec is not None:
+        err, info = _hash_chain_check([latest], spec)
+        if err:
+            print(f"[panel] G3 hash: ✗ — {err}")
+            fails.append("G3")
+        elif info == "unbound":
+            print("[panel] G3 hash: ✗ — 判定輪未綁 spec hash(帶 --spec 即要求驗證)")
+            fails.append("G3")
+        else:
+            print(f"[panel] G3 hash: ✓ — {info}(同輪雙欄一致∧末 result=當前檔)")
+    return fails
+
+
 def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
     """平行 panel 收斂謂詞(loop 三輪壓縮)。無-cluster 舊帳:三條合取(輪有效∧存活max≤minor
     ∧capture-recapture 殘餘,fail-closed)。cluster 帳(M2,設計 Projects/design-loop提效_計劃;
@@ -2464,7 +2488,8 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
                       f" clusters;要用 cluster 帳請開新 loop id(不升級既有 loop)", file=sys.stderr)
                 return 2
     if anchor_rid is not None and anchor_cluster:
-        return _loop_status_panel_clusters(groups, valid_of, loop_id)
+        return _loop_status_panel_clusters(groups, valid_of, loop_id,
+                                           min_seats=min_seats, spec=spec, all_rounds=rounds)
     # ── 無-cluster 舊帳(或零有效輪=未定錨):既有三條合取,fail-closed 不變 ──
     # cluster-intent 但未定錨(零有效輪):條 1 改用 M2 嚴格謂詞(unknown-kind 盲區補;
     # 純無-cluster loop 不受影響——舊行為迴歸保證只對真 legacy 帳)
@@ -2513,26 +2538,11 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
         else:
             print(f"[panel] capture-recapture 殘餘: ✗ — 估計 {remaining:.2f} ≥ {THRESH}(母體未枯竭)")
             fails.append("殘餘超門檻")
-    # ── M1包:min-seats 席數下限(數相異 auditor,同席灌筆不計)+ G3 hash(判定輪) ──
-    if min_seats:
-        seats = len({r.get("auditor") for r in latest if r.get("auditor")})
-        if seats < min_seats:
-            print(f"[panel] min-seats: ✗ — 席數不足({min_seats} 席制僅 {seats} 相異席;同席重複 append 不計)")
-            fails.append("席數不足")
-        else:
-            print(f"[panel] min-seats: ✓ — {seats} 相異席 ≥ {min_seats}")
-    if spec is not None:
-        err, info = _hash_chain_check([latest], spec)
-        if err:
-            print(f"[panel] G3 hash: ✗ — {err}")
-            fails.append("G3")
-        elif info == "unbound":
-            print("[panel] G3 hash: ✗ — 判定輪未綁 spec hash(帶 --spec 即要求驗證)")
-            fails.append("G3")
-        else:
-            print(f"[panel] G3 hash: ✓ — {info}(同輪雙欄一致∧末 result=當前檔)")
+    fails += _panel_extra_checks(latest, min_seats, spec)
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('capture_counts','-')}\t{r.get('auditor','')}")
+    for line in _cost_summary(rounds):
+        print(line)
     if fails:
         print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
@@ -2540,7 +2550,7 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
     return 0
 
 
-def _loop_status_panel_clusters(groups, valid_of, loop_id):
+def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=None, all_rounds=None):
     """M2 cluster 帳 gate:兩條合取(判定輪有效 ∧ fold 後無 disputed-major)。
     fold 只採有效輪(last-wins,同名跨輪最後狀態勝);無效輪 clusters 警告區列帳不蒸發;
     新生 cluster 與 capture-recapture 皆 advisory 不進合取。"""
@@ -2604,8 +2614,11 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id):
         print("  ── cluster ledger(僅計有效輪)──")
         for n, e in ledger.items():
             print(f"  {n}\t{e['state']}\t首現 {e['first']}\t末更 {e['last']}")
+    fails += _panel_extra_checks(latest, min_seats, spec)   # M1包:cluster 路不得繞過(code-loop r1)
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
+    for line in _cost_summary(all_rounds or []):
+        print(line)
     if fails:
         print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
@@ -2790,8 +2803,10 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
             fails.append(err)
         elif info == "unbound":
             fails.append("hash 未綁(light 強制 fail-closed:record 須帶 --spec/--reviewed)")
-        if min_seats and len({r.get("auditor") for r in [last]}) < min_seats:
-            fails.append(f"席數不足(min-seats={min_seats})")
+        if min_seats and len({a for r in [last] if (a := r.get("auditor"))}) < min_seats:
+            fails.append(f"席數不足(min-seats={min_seats};空 auditor 不計席——code-loop r1 折入)")
+        for line in _cost_summary(rounds):
+            print(line)
         if fails:
             print(f"⛔ LIGHT GATE FAIL ({loop_id}): " + "；".join(fails))
             return 1
@@ -2946,6 +2961,15 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         eff_tier = "standard" if panel_fmt else "legacy"   # 無定錨舊帳 fallback
     width, cap = _TIER_PARAMS[eff_tier]
     light = eff_tier == "light"
+    # ── tier↔格式一致性(code-loop r1 折入:格式推導可被繞——high 漏帶 --round 會走鬆的 legacy 閘) ──
+    if rounds:
+        if eff_tier in ("standard", "high") and not panel_fmt:
+            print(f"ERROR: tier={eff_tier} 要求 panel 格式(記錄帶 --round),帳面為 legacy 格式——"
+                  "格式衝突(補 record 帶 --round,或 tier 錯誤則開新 loop id)", file=sys.stderr)
+            return 2
+        if light and panel_fmt:
+            print("ERROR: tier=light 為單席 legacy 格式,帳面卻帶 --round(panel 格式)——格式衝突", file=sys.stderr)
+            return 2
     rounds_count = len({r["round"] for r in rounds}) if panel_fmt else len(rounds)
     n_next = rounds_count + 1
 
@@ -2988,7 +3012,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
                              spec=spec, repo=repo, panel=(panel_fmt and not light),
-                             light=light, min_seats=(width if panel_fmt and not light else None))
+                             light=light, min_seats=width)   # 恆傳(light/legacy=1;code-loop r1 折入)
     if rc == 2:
         sys.stderr.write(buf.getvalue())
         return 2
