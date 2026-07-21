@@ -29,7 +29,7 @@ summary: |-
 ---
 # loop機械脊椎M1包_計劃
 
-> **狀態**：spec 完成，待過完整 design-loop（self-governance=high）。緣起：2026-07-21 全盤外審順位3，使用者裁「一包到底」。四件共用同一批面（`canary record` schema＋`loop status` gate），一份 spec 一次審。
+> **狀態**：**實質收斂人裁放行（2026-07-21，使用者）**——cap 3 輪滿＋canary 全綠＋全 findings 折入＋Codex 否決鏈五迭代終 NO-VETO；capture 殘餘卡門屬已知結構病（本 spec #2 正是修它的）。**進實作排程**（實作後 pitfalls 必判 tier=high → full code-loop）。緣起：2026-07-21 全盤外審順位3，使用者裁「一包到底」。
 
 ## 問題（全部實戰驗過）
 
