@@ -1,0 +1,102 @@
+---
+type: project
+status: doing
+created: 2026-07-21
+updated: 2026-07-21
+tags:
+  - type/project
+  - status/doing
+related:
+  - "[[Systems/design-loop]]"
+  - "[[Systems/risk-tiered-review]]"
+  - "[[Systems/convergence-evidence-gate]]"
+  - "[[Projects/design-loop提效_計劃]]"
+summary: |-
+  FLAG:DECISION
+  KEY:問題=design-loop 粒度只有兩檔(trivial 完全跳過｜standard 完整 panel),中間是空的——小而不 trivial 的 spec(小 flag/非金流小邏輯)沒輕量檔可走,直接掉進 standard 完整審=過度審(使用者觀察,2026-07-21)
+  KEY:方向裁定——只解「小任務被過度審」(降成本方向),不碰「大任務多跑」(那半撞 cap=3 效率前緣/RHB 縱深非解藥,已由 [[Projects/design-loop提效_計劃]] 定調,本計劃不重開)
+  KEY:d5 經濟學合規——輕量檔=便宜 spec 便宜審=缺陷分層定價,降成本非精確度軍備競賽,教義站這邊(見 [[Systems/design-loop]] d5);d4 定位合規——抬品質非保正確,light 只誠實定價最便宜的 spec,正確性照歸下游 code-loop+測試+逃逸帳
+  KEY:★進場不對稱★——判「是不是 light」是兩個可靠度不同的問句:往上「有無危險訊號」機械可靠(存在性偵測)→硬否決;往下「夠不夠小」機械不可靠(無訊號≠簡單,誠實天花板那半)→只能 advisory。支點=硬否決擋危險、軟提示只買發現性、ratchet 兜誤判
+  KEY:硬否決(往上,reliable,零新分類器)——命中任一即 light 不給選強制 standard+:①風險類命中(複用 [[Systems/risk-tiered-review]] RISK_CLASSES)②碰到硬合約(invariant 級,impact/co-change 偵測)③體積超天花板(行數精確,size 軸非難度判斷)
+  KEY:軟提示(往下,advisory,唯一新東西)——三訊號全沒響+體積遠低天花板→design-loop 進場跳一句「這條像 light,要用嗎」maker 拍板;維持 advisory 不更強(2026-07-21 使用者裁定)。價值=發現性非準確度:防 maker 忘了 light 存在而什麼都留 standard;提錯有兩層兜(maker 確認+執行期 ratchet 自癒)
+  KEY:light 跑什麼(壓縮 loop)——pre-flight cascade(複用 M1 排乾清單型)+1 輪·1 通才審計員·canary 護·K=1(踩 [[Projects/design-loop提效_計劃]] 已埋「r1 通才席」伏筆);收斂=該輪 canary caught 且無存活 ≥major;自癒=1 輪抓到存活 major→自動 ratchet 升 standard 跑完整 panel
+  KEY:三檔取代兩檔——light<standard<high;ratchet「只升不降」(risk-tiered-review 現有)延伸三級;忘宣告→預設 standard(fail-safe,永不更少)
+  KEY:★meta 自我約束★——加一檔+ratchet 延伸動到 loop status gate 語意=self-governance 風險類=high;按 risk-tiered-review 與 M2 前例,本計劃 code 部分(第1/3步)自己須過完整 design-loop 才實作(舊 loop 審新 loop);軟提示+pre-flight 純 skill 層可先行
+  KEY:體積天花板數值——留實作 replay 校準,不預設魔術數(2026-07-21 使用者裁定)
+  FLOW:brainstorming產spec→lumos 算進場資格{硬否決三訊號任一命中→強制standard+｜全沒響+體積小→advisory 提示 light}→maker 拍板檔位→[light?]{pre-flight cascade→1 通才席 canary 護 K=1→該輪 caught∧無存活major?收斂放行｜抓到存活major→ratchet 升 standard 走完整 panel}→[standard/high?]現行 loop 不變
+  DECISION:方案 A(人工宣告+壓縮 loop+硬 ratchet)+機械建議拆兩方向(硬否決 reliable/軟提示 advisory);拒「機械大部分自動定檔」(踩誠實天花板)
+  DEP:[[Systems/risk-tiered-review]](硬否決複用 RISK_CLASSES+ratchet 只升不降)｜[[Systems/design-loop]](壓縮 loop 派工/canary/K=1 原語)｜[[Systems/convergence-evidence-gate]](loop status gate 認第三檔)｜skills/lumos-design-loop(進場提示+派工模板)
+  PRIOR-ART:①最小解=既有 risk-tiered-review 三檔化+複用 RISK_CLASSES 偵測器+M1 pre-flight+design-loop提效 已埋通才席,借既有機制小修非造新機制 ②世界解過沒=LLM cascade/routing(ICML2025 dekoninck25a/ICLR2024 uncertainty routing)+self-refine 3輪plateau 已於 [[Projects/design-loop提效_計劃]] 2026-07-16 真搜並吸收,本題同機制家族引用該搜尋(便宜先掃/不確定才升級=正統;路由用可觀測訊號非模型口頭 confidence) ③裁定=borrow-design(借 cascade 事前決策思想+tiering,原生實作於 skill/loop status/risk-tiered-review)
+---
+# design-loop輕量檔_計劃
+
+> **狀態**：設計收斂（brainstorming，2026-07-21），尚未實作。緣起：使用者全盤檢視 lumos 工作流時提「design loop 能否依任務規模決定 loop 程度」，經釐清方向=**小任務被過度審**、痛點=**缺中間輕量檔**。
+
+## 問題
+
+design-loop 的程度粒度目前只有兩檔，**中間是空的**：
+
+```
+trivial（typo/一行/純機械）  →  完全跳過 loop
+                              ↑ 缺這一格
+standard（其他全部）          →  完整 panel loop（風險面沒 high 就是這檔，「行為分毫不變」）
+high（四類風險）              →  K=3 / cap≥8 / 關 fail-open
+```
+
+一個「不 trivial、但也不重」的小 spec（加個小 flag、改個非金流小邏輯）沒輕量檔可走，直接掉進 `standard` 的完整 panel——這就是「小任務被過度審」的結構根因。**不是旋鈕沒開好，是缺一檔。**
+
+## 方向界定（範圍刀）
+
+- **只解**「小任務被過度審」——降成本方向。
+- **不碰**「大/難任務多跑」——那半撞 `cap=3 是效率前緣`（self-refine 文獻）＋ `RHB 縱深非解藥`（難題多揮棒不降單輪放水率），已由 [[Projects/design-loop提效_計劃]] 定調，本計劃不重開，也不與 d5「精確度軍備競賽先過教義裁」相衝（本案是降成本）。
+
+## 設計
+
+### 1. 三檔取代兩檔
+`light < standard < high`。ratchet「只升不降」（risk-tiered-review 現有）自然延伸三級。忘了宣告 → 預設 standard（fail-safe，永遠不會更少）。
+
+### 2. 進場：兩個方向、不對稱約束力
+
+判「是不是 light」其實是兩個可靠度天差地別的問句：
+
+| 方向 | 問句 | 機械可靠？ | 約束力 |
+|------|------|-----------|--------|
+| **往上（踢出 light）** | 有無**危險訊號** | ✅ 可靠（存在性偵測） | **硬否決**（up-only，只加審永遠安全） |
+| **往下（放進 light）** | 夠不夠**小/簡單** | ❌ 不可靠（無訊號≠簡單） | **只能 advisory** |
+
+- **硬否決（reliable，零新分類器）**：命中任一 → light 不給選、強制 standard+：
+  1. 風險類命中（複用 `risk-tiered-review` 的 RISK_CLASSES）
+  2. 碰到硬合約（invariant 級，impact/co-change 偵測）
+  3. 體積超天花板（行數精確，屬 size 軸非難度判斷——不可能又大又是「小」檔）
+- **軟提示（advisory，唯一新東西）**：三訊號全沒響 + 體積遠低天花板 → design-loop 進場跳一句「這條像 light，要用嗎？」maker 拍板。**維持 advisory 不更強**。
+  - **它的價值是發現性、不是準確度**：純靠人記得選 light 的真風險是 maker 嫌麻煩不選、什麼都留 standard、白做。提示讓 maker 在對的時機真的走輕量路。
+  - **提錯有兩層兜**：① maker 確認（同 trivial-skip 是 maker 責任）② 執行期 ratchet 自癒（見下）。
+
+### 3. light 跑什麼（壓縮 loop）
+- **pre-flight cascade**（複用 M1）排乾清單型缺陷。
+- **1 輪 · 1 個通才審計員 · canary 護 · K=1**（踩 `design-loop提效` 已埋的「r1 通才席」伏筆）。
+- **收斂**：該輪 canary caught 且無存活 ≥major → 收斂放行。
+- **自癒（誤判在這裡被接住）**：該輪一抓到存活 major → **自動 ratchet 升 standard**，跑完整 panel。
+
+### 4. 教義合規（先講在前面）
+- **d5 經濟學**：便宜 spec 便宜審 = 缺陷分層定價 = **降成本**，非軍備競賽，教義站這邊。
+- **d4 定位**：design-loop 本就「抬品質非保正確、漏網進逃逸帳」；light 只誠實定價最便宜的 spec，正確性照歸下游。
+- **誠實天花板**：不靠「相信分類準」，靠硬否決擋危險 + ratchet 自癒 + 軟提示只買發現性。
+
+## 里程碑
+
+- **M0（純 skill 層，可先行）**：軟提示進場文字（lumos-design-loop SKILL 進場步驟）+ pre-flight 沿用 M1 + 派工模板加「1 通才席 / K=1」的 light 路徑。純散文/prompt，不動 gate code。
+- **M1（動 gate code，必過 design-loop）**：`loop status` 認第三檔 light + ratchet 延伸三級 + 硬否決機械 filter（複用 RISK_CLASSES + ★INVARIANT★ 偵測 + 體積閘）。**self-governance=high，進實作前本計劃過完整 design-loop（舊 loop 審新 loop），同 M2 前例。**
+- **驗收信號**：一批 light 檔 spec 的 wall-clock/token vs standard 基線；下游逃逸率進逃逸帳對照（見天花板）。
+
+## 待實作校準
+
+- **體積天花板數值**：留 replay 校準（spec 改動行數 / 動檔數的門檻），不預設魔術數。
+- **通才席 vs 窄鏡頭席的首輪 capture**：`design-loop提效` 第六改已在等這個數據（n=2 方向性證據）；light 的單通才席正好是它的天然實驗場——可合併觀察。
+
+## 天花板（誠實）
+
+- light 用深度換速度是**設計本意**——小 spec 裡藏的細微 bug 可能溜過單通才席；靠 ratchet + 下游 code-loop/測試 + 逃逸帳兜。
+- 軟提示 + 宣告都依賴 maker 誠實（可能橡皮圖章）——同 trivial-skip / anchors 的 GIGO 天花板。
+- **調價回路**：light 檔 spec 的下游逃逸率該進 `逃逸帳`（d5 已定位「逃逸帳=調價器」）——若 light 檔逃逸率偏高 = 收緊訊號（縮體積天花板 / light 也要 2 席 / 移除某類進 light）。
+- 硬否決只和現有 RISK_CLASSES 一樣可靠——不引入新的漏偵風險，但也**不比它更強**（它漏的它也漏）。
