@@ -100,6 +100,7 @@ high（四類風險）              →  K=3 / cap≥8 / 關 fail-open
 - **關鍵字誤報**：`lumos show` spec 自核段引用風險類名稱（「不碰金流/對外送出…」），`pitfalls --check` 關鍵字偵測命中全四類——**M1 機械化硬否決必須先剝「light 資格自核」段再掃**（同 `risk-tiered-review` assess_spec 的黑名單剝除前例），否則每份寫了自核的 light spec 都被誤踢 standard（fail-safe 方向但摩擦拉滿，light 形同虛設）。
 - **probe 窗對小 spec 失準**：haiku 難度探針的「±20 行局部片段」在 ~60 行 spec 上≈半份全文，body 內任何植入近乎全域可見——同窗重植×2 皆被抓；改**植入拓撲**（矛盾跨 frontmatter summary ↔ body，兩端相距 40+ 行）才 probe pass。M1 收斂謂詞設計時：light 小 spec 的 canary 難度紀律應改「跨鏡像段植入」為預設型，probe 窗協議註明對 <100 行 spec 的失準（偏離字面協議一次，理由已記 r1 note）。
 - **ratchet 首戰即觸發（n=1 數據點）**：「~40 行唯讀指令」的 spec 單通才席挖出 4 條 major（全機械證實：派發組 fallback 陷阱/命名陷阱/簽章抄錯/gate 同步漏列）→ 升 standard。方向解讀：light 的省在「小而真乾淨」的 spec；「小但接既有 8000 行單檔」的 spec 陷阱密度不隨行數縮——**「孤立」判準比「行數」判準更載重**，M1 體積閘設計時併記。升級率統計起點 1/1。
+- **light 首戰全程收束（2026-07-21，loop 完整跑到落地）**：ratchet 後 std panel 3 輪（有效/無效/有效）＋Codex 否決席 3 次介入，實質收斂人裁 → TDD 落地（11 checks＋全套 1268 綠）。M1 可再吃三筆數據：①**canary 植入位置決定性**——sonnet 對「受審物內」canary 4/4 caught、對「編排者 briefing 內」0/2（r2 全輪作廢）；delta 輪 canary 應植 diff hunk 本體，寫進 M1 派工紀律。②**護欄升級實效**——r2 連 2 missed 觸發升 opus，r3 opus 2/2 完美抓（附反先例＋工作包落差三重證據）——升級鏈條真的接得住。③**capture-recapture 殘餘對 singleton minor findings 無資訊量**——末輪 4 條 singleton 全文件精度級，殘餘估計 6.0 卡門到 cap，人裁成為事實出口——M1 的單席 light 收斂謂詞不應含 capture 殘餘條件。
 
 ## 天花板（誠實）
 

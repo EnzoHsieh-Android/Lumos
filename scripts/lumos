@@ -3714,6 +3714,23 @@ def _usage_log(env, rel, cmd):
         pass
 
 
+def cmd_show(env, rel, body_only=False):
+    """節點檔完整內容(frontmatter+body)——context 是壓縮導航,show 是完整真相讀取
+    (Projects/lumos-show讀取入口_計劃)。不改圖譜節點檔;usage-log 事件帳同 context 慣例。"""
+    _usage_log(env, rel, "show")
+    p = env.vault / rel
+    try:
+        text = p.read_text(encoding="utf-8-sig")  # -sig: 同 load_vault 慣例,BOM 不外洩進輸出
+    except Exception as e:
+        # load_vault 容忍讀檔失敗節點(壞 symlink/權限/race 刪檔)照進索引 → 重開檔須自防
+        print(f"ERROR: 讀檔失敗: {rel}: {e}", file=sys.stderr)
+        return 2
+    if body_only:
+        _, text = split_frontmatter(text)  # 無 frontmatter → (None, 原文) → 印整檔
+    sys.stdout.write(text if text.endswith("\n") or not text else text + "\n")
+    return 0
+
+
 def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, as_json=False):
     """節點 + 鄰居 summary 壓縮索引 — MemPalace closet 具象化
     brief=True: 只給 meta + summary 首兩行 + 鄰居名單(壓 token 用)"""
@@ -9261,6 +9278,10 @@ def main():
     p.add_argument("--min-score", type=float, default=0.20, dest="ctx_min", help="--recommend 分數底線")
     p.add_argument("--json", action="store_true", dest="ctx_json", help="--recommend JSON 輸出")
 
+    p = sub.add_parser("show", help="節點完整內容(frontmatter+body;--body-only 略 frontmatter)")
+    p.add_argument("note")  # 派發組共用 args.note(9656 組硬編碼取用;嚴禁命名 node)
+    p.add_argument("--body-only", action="store_true", dest="body_only", help="只印 body(剝離開頭 frontmatter)")
+
     p = sub.add_parser("contracts", help="合約登記簿 ★INVARIANT★/★DEBT★(全 vault 或單節點)")
     p.add_argument("note", nargs="?")
 
@@ -9653,7 +9674,7 @@ def main():
         color = sys.stdout.isatty() and not args.ci
         return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest, ci=args.ci)
 
-    if args.cmd in ("links", "backlinks", "context", "map") or \
+    if args.cmd in ("links", "backlinks", "context", "map", "show") or \
        (args.cmd == "decisions" and not args.superseded):
         rel = env.find(getattr(args, "note", None) or "")
         if rel is None:
@@ -9667,7 +9688,9 @@ def main():
             return cmd_context(env, rel, brief=args.brief, recommend=args.recommend, top=args.ctx_top, min_score=args.ctx_min, as_json=args.ctx_json)
         if args.cmd == "map":
             return cmd_map(env, rel, args.depth)
-        return cmd_decisions(env, rel)
+        if args.cmd == "show":
+            return cmd_show(env, rel, body_only=args.body_only)
+        return cmd_decisions(env, rel)  # 無條件 fallback:新掛組內指令必須在此行前插 if 分支
 
     if args.cmd == "search":
         # 2026-07-11 轉正:相關性排序為預設(goldset 評測 §6 search 面全過);

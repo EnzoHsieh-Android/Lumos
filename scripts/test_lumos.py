@@ -9440,6 +9440,50 @@ def t_e2_ledger_tz_boundary():
     print("  ✓ t_e2_ledger_tz_boundary")
 
 
+def t_show():
+    """show 讀取入口(Projects/lumos-show讀取入口_計劃 八項):找到全文/找不到 rc2/--body-only/
+    模糊名沿 env.find/唯讀(節點檔不變,usage-log 為預期副作用)/派發組迴歸/重開檔失敗 rc2 無
+    traceback/無 frontmatter 檔 --body-only 印整檔。"""
+    print("t_show")
+    v = mkvault()
+    write(v, "Systems/秀測試.md", "type: system\nstatus: done", "# 秀測試\nbody-內文-唯一標記\n")
+    # 1. 找到 → rc0、含 frontmatter --- 與 body 標題行
+    r = run(v, "show", "秀測試", expect_rc=0)
+    check("show 找到 rc0 含 frontmatter", r.stdout.startswith("---") and "type: system" in r.stdout)
+    check("show 含 body 標題行", "# 秀測試" in r.stdout and "body-內文-唯一標記" in r.stdout)
+    # 2. 找不到 → stderr 訊息 + rc2
+    r = run(v, "show", "不存在的節點名", expect_rc=2)
+    check("show 找不到 rc2+stderr", "找不到筆記" in r.stderr)
+    # 3. --body-only → 無 frontmatter 鍵行、有 body
+    r = run(v, "show", "秀測試", "--body-only", expect_rc=0)
+    check("body-only 無 frontmatter 鍵行", "type: system" not in r.stdout and not r.stdout.startswith("---"))
+    check("body-only 含 body", "body-內文-唯一標記" in r.stdout)
+    # 4. 模糊名(同名多篇)沿 env.find:stderr 警告、取第一篇、rc0
+    write(v, "Projects/秀測試.md", "type: project\nstatus: doing", "# 秀測試P\n")
+    r = run(v, "show", "秀測試", expect_rc=0)
+    check("模糊名沿 env.find(警告+取第一)", "同名筆記" in r.stderr and r.returncode == 0)
+    # 5. 唯讀:節點檔內容不變(usage-log append 為預期副作用,不斷言其無)
+    p = v / "Systems" / "秀測試.md"
+    before = p.read_bytes()
+    run(v, "show", "Systems/秀測試", expect_rc=0)
+    check("唯讀:節點檔不變", p.read_bytes() == before)
+    # 6. 派發組迴歸:context 照常
+    r = run(v, "context", "Systems/秀測試", expect_rc=0)
+    check("派發組迴歸 context 不受影響", "Systems/秀測試" in r.stdout)
+    # 7. 重開檔失敗:vault 載入後檔案消失 → rc2 無 traceback
+    #    (load_vault 在 CLI 進程內先掃;要模擬「解析成功但重開失敗」,用 symlink 指向不存在目標——
+    #     rglob 掃得到、read_text 會炸;load_vault 容忍(lint 記讀檔失敗)但 rel 仍可解析)
+    broken = v / "Systems" / "斷鏈.md"
+    broken.symlink_to(v / "Systems" / "不存在的目標檔.md")
+    r = run(v, "show", "斷鏈")
+    check("重開檔失敗 rc2", r.returncode == 2, f"rc={r.returncode}")
+    check("重開檔失敗 stderr 無 traceback", "讀檔失敗" in r.stderr and "Traceback" not in r.stderr, r.stderr[:120])
+    # 8. 無 frontmatter 檔 --body-only → 印整檔
+    (v / "Systems" / "裸檔.md").write_bytes("# 裸檔標題\n純內文無fm\n".encode("utf-8"))
+    r = run(v, "show", "裸檔", "--body-only", expect_rc=0)
+    check("無 frontmatter --body-only 印整檔", "# 裸檔標題" in r.stdout and "純內文無fm" in r.stdout)
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

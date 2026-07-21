@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-21
 updated: 2026-07-21
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Projects/全盤外審2026-07_調研]]"
   - "[[Systems/lumos-cli-read]]"
@@ -22,6 +22,8 @@ summary: |-
   TEST:t_show 計畫覆蓋(八項,與 body 測試策略同單,r1 折入 F5 對齊、r2 增 7-8):找到(rc0 全文含 frontmatter)/找不到(stderr+rc2)/--body-only(無 frontmatter 鍵行)/模糊名解析(沿 env.find)/show 不改檔(唯讀)/派發組迴歸/重開檔失敗(stderr rc2 無 traceback)/無 frontmatter 檔 --body-only 印整檔
   DEP:[[Projects/全盤外審2026-07_調研]]｜scripts/lumos env.find/派發組
   PRIOR-ART:①最小解=既有派發組掛一個子指令+檔案讀取,無新機制 ②世界解=全文讀取是 notes-CLI 普適原語(cat 級),無需深搜;r2 修正:原引 Spec Kit persistence 警告係外審 finding 1(雙真相)的證據、非本題,張冠李戴已除 ③裁定=borrow-design(cat 級功能原生實作)
+verified_by:
+  - "[[Verification/2026-07-21_lumos-show讀取入口]]"
 ---
 # lumos-show讀取入口_計劃
 

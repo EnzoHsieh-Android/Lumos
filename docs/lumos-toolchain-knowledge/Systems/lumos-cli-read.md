@@ -8,8 +8,8 @@ tags:
   - type/system
   - status/done
 summary: |-
-  FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出 → return 0(查無/正則錯=非0)
-  KEY:read/traverse 12 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);純讀、不寫檔、無副作用,與 7 個寫入原語(set/append/new/decision-* …)互斥
+  FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出(context/show 另寫 usage-log 事件帳;doctor --ci 寫 governance-log) → return 0(查無/正則錯=非0)
+  KEY:read/traverse 13 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——context 與 show 寫 best-effort usage-log 事件帳(A2,2026-07-11 起)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀([[Projects/lumos-show讀取入口_計劃]] r4 收斂措辭,修 A2 起「零副作用」宣稱漂移);與 7 個寫入原語(set/append/new/decision-* …)互斥
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
   KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向(stale/fail 驗證豁免——E1 拔死背書後不反咬漏寫)/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼);Check E1 失效背書(verified_by 指向 stale/fail 驗證→死背書)+ Check E2 建在被推翻決策上(決策 valid:false+ended → M2 共用 typed 索引查連入來源、updated 早於 ended → 落後邊;decision_refs 精化只標指到那條;M3 帳本抑制 terminal ts>=ended 跳過=主/補網不重報)+ Check E3 意圖鏈斷義(decision_refs 指翻案決策+dangling 浮出);關係層皆軟提醒;Check J regen 重生來源守衛[M1 2026-07-16]——regen 節點 provenance 分級:J-a 拒發明合約(INVARIANT 標記行需 [src:]/[git:] 意圖證據)+J-b DECISION 四態+J-c 證據指針 substring gate(共用 _validate_repo_ref 不經 top_dirs 靜默過濾;shallow 降 warn_soft 顯性)+J-d 唯讀提醒;與 lint 共用 check_regen_provenance 防兩入口漂移 [test:t_check_j_regen,t_check_j_git]);與 lint 分工——lint 只看單篇 node-local(regen 節點 Check J 為 opt-in 例外需檔案+git 存取)、predicts pre-push 會不會擋
   KEY:search 預設排除 fenced+inline code(對齊 doctor 連結抽取慣例,--code 才含)、大小寫不敏感 substring、--regex 切正則;結構化查詢走 contracts/decisions/stale 而非 search
@@ -21,10 +21,10 @@ related:
   - "[[Systems/lumos-cli-write]]"
   - "[[Systems/lumos-cli-lifecycle]]"
 decisions:
-  - content: 讀寫原語嚴格分軌——12 個讀指令純讀記憶體 Env 不碰檔;一切 frontmatter 寫入走 set/append/decision-* 等寫入原語(走 atomic_write_verify:寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename)
+  - content: 讀寫原語嚴格分軌——13 個讀指令不改圖譜節點檔(context/show 寫 best-effort usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀;2026-07-21 修 A2 漂移後措辭);一切 frontmatter 寫入走 set/append/decision-* 等寫入原語(走 atomic_write_verify:寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename)
     id: d1
     context: 直接手改 frontmatter 會繞過寫後自驗與鐵則防護(YAML 格式爆、ghost 節點、裸合約),且讀指令若兼寫會讓「查脈絡」帶副作用
-    why_chosen: 讀路徑零副作用才能放心當入口反覆掃;寫路徑集中過 atomic 自驗閘,任一步敗則 tmp 丟棄原檔不動,保證圖譜永遠可解析
+    why_chosen: 讀路徑不動圖譜內容才能放心當入口反覆掃(best-effort 事件帳/治理帳不在此限,2026-07-21 措辭修真);寫路徑集中過 atomic 自驗閘,任一步敗則 tmp 丟棄原檔不動,保證圖譜永遠可解析
     decided: 2026-06-26
     valid: true
   - content: doctor(全圖權威)與 lint(單檔快檢)分工——lint node-local 不掃 repo 比 doctor 快、寫完一篇立刻自驗、error 即 pre-push 會擋的同類;doctor 跑全圖跨節點完整性 + [test:] 存在性
@@ -50,20 +50,21 @@ verified_by:
 ---
 # lumos-cli-read
 
-`scripts/lumos` 的 **read/traverse 核心原語**(12 個)——圖譜的查詢與遍歷面。對既有系統動手前,CLAUDE.md 規定第一個工具呼叫必須是這組 `lumos` 讀指令,而非 grep / Read / Explore / DB(code 讀不出「為什麼 / 邊界 / 哪些是不可改合約 / 驗過沒」)。
+`scripts/lumos` 的 **read/traverse 核心原語**(13 個)——圖譜的查詢與遍歷面。對既有系統動手前,CLAUDE.md 規定第一個工具呼叫必須是這組 `lumos` 讀指令,而非 grep / Read / Explore / DB(code 讀不出「為什麼 / 邊界 / 哪些是不可改合約 / 驗過沒」)。
 
 源起:CLI 核心非日報觸發(read 原語是 lumos 工具鏈的地基能力,非某日報 gap/inspiration 衍生的單一功能)。
 
 ## 共同地基
-所有讀指令先 `find_vault`(從 cwd 往上找 `docs/*-knowledge` 或 standalone vault root)→ `load_vault` 掃全 `.md`、解 frontmatter + wikilink → 建記憶體 `Env`(`notes` 節點字典、`by_stem` 名稱索引、雙向 `edges` = (out_e, in_e))。各 `cmd_*` 在此 Env 上純讀、印出、`return 0`(查無資料 / 正則無效等 → 非 0)。**全程不寫檔、無副作用。**
+所有讀指令先 `find_vault`(從 cwd 往上找 `docs/*-knowledge` 或 standalone vault root)→ `load_vault` 掃全 `.md`、解 frontmatter + wikilink → 建記憶體 `Env`(`notes` 節點字典、`by_stem` 名稱索引、雙向 `edges` = (out_e, in_e))。各 `cmd_*` 在此 Env 上純讀、印出、`return 0`(查無資料 / 正則無效等 → 非 0)。**不改圖譜節點檔**——context/show 寫 best-effort usage-log 事件帳(A2)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀(2026-07-21 修「全程不寫檔」措辭與現實的 A2 漂移)。
 
-## 12 個原語(對應 cmd_* / scripts/lumos)
+## 13 個原語(對應 cmd_* / scripts/lumos)
 - **進場三步(入口固定順序)**
   - `search <詞> [--path Systems] [--regex] [--files-only] [--code]`(`cmd_search`):全文搜尋 frontmatter+body,大小寫不敏感 substring。**預設排除 fenced + inline code 區塊**(對齊 doctor 連結抽取慣例),`--code` 才含;`context` 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。職責=自由文字,結構化查詢走 contracts/decisions/stale。
   - `context <節點> [--brief]`(`cmd_context`):節點 + 鄰居 summary 壓縮索引(MemPalace closet)。**頭部直接攤出 ⚠ 合約**(extract_contracts);`--brief` 只給 meta + summary 首兩行 + 鄰居名單(壓 token)。
+  - `show <節點> [--body-only]`(`cmd_show`,2026-07-21):**節點檔完整內容**(frontmatter+body)——context 是壓縮導航(不含 body),show 是完整真相讀取;解「規範禁 Read 圖譜但無全文入口」的結構性違章(外審 blocker,設計/審計 loop 見 [[Projects/lumos-show讀取入口_計劃]])。`--body-only` 以 `split_frontmatter` 剝離開頭 frontmatter;重開檔失敗(壞 symlink/race)→ stderr+rc2 不裸 traceback。
   - `contracts [節點]`(`cmd_contracts`):合約登記簿,列 `★INVARIANT★`(改=breaking)/ `★DEBT★`(可改);**只認 KEY 行前綴標準格式**;★INVARIANT★ 顯示綁定的 `[test:]`,未綁=⚠(doctor Check T 會擋)。
 - **巡檢 / 完整性**
-  - `doctor [--ci]`(`cmd_doctor`):全圖權威健康巡檢——4 檢查(1/4 Verification orphans、2/4 unresolved wikilinks 破連結、3/4 verified_by 雙向同步(stale/fail 驗證豁免,E1↔Check3 矛盾修 2026-07-15)、4/4 plan_refs 意圖鏈)+ 同名守衛 + frontmatter lint + Check T(★INVARIANT★→測試綁定)/ Check R(可逆性回退)/ Check H(漏標可逆性軟提醒,僅 --ci 掃 diff)+ Check P(失效檔案認領:inline-code 路徑指向已不存在檔案)+ Check E1/E2/E3(關係層:E1 失效背書 verified_by→stale/fail、E2 建在被推翻決策上 決策翻案而 typed 連入來源未跟上——鄰居有 decision_refs 時精化為只標指到那條、且 M3 rel-cascade 帳本有 terminal 判定(ts>=ended)即跳過＝主/補網不重報、E3 意圖鏈斷義 decision_refs 指向的決策已翻案+dangling 浮出;皆軟提醒)。`--ci` = `--strict` + 無色彩,且是 `.governance-log.jsonl` 唯一寫者。
+  - `doctor [--ci]`(`cmd_doctor`):全圖權威健康巡檢——4 檢查(1/4 Verification orphans、2/4 unresolved wikilinks 破連結、3/4 verified_by 雙向同步(stale/fail 驗證豁免,E1↔Check3 矛盾修 2026-07-15)、4/4 plan_refs 意圖鏈)+ 同名守衛 + frontmatter lint + Check T(★INVARIANT★→測試綁定)/ Check R(可逆性回退)/ Check H(漏標可逆性軟提醒,僅 --ci 掃 diff)+ Check P(失效檔案認領:inline-code 路徑指向已不存在檔案)+ Check E1/E2/E3(關係層:E1 失效背書 verified_by→stale/fail、E2 建在被推翻決策上 決策翻案而 typed 連入來源未跟上——鄰居有 decision_refs 時精化為只標指到那條、且 M3 rel-cascade 帳本有 terminal 判定(ts>=ended)即跳過＝主/補網不重報、E3 意圖鏈斷義 decision_refs 指向的決策已翻案+dangling 浮出;皆軟提醒)。`--ci` = `--strict` + 無色彩,且會寫 `.governance-log.jsonl`(寫者=doctor --ci＋anchor approve,scripts/lumos:416 自述;原「唯一寫者」為漂移,2026-07-21 順手修真)。
 - **遍歷 / 關聯**
   - `links <節點>` / `backlinks <節點>`(`cmd_links`,reverse=True 即 backlinks):列連出 / 連入節點 + 狀態。
   - `map <節點> [--depth 2]`(`cmd_map`):鄰域樹狀展開,`↺` 標已出現過(防環)。
@@ -75,7 +76,7 @@ verified_by:
   - `stats`(`cmd_stats`):各資料夾節點數 + total。
 
 ## 關鍵設計
-- **讀寫嚴格分軌**:這 12 個全純讀;寫入走另 7 個原語(set/append/new/archive/decision-add/decision-supersede/self-audit),經 `atomic_write_verify`(寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename,任一步敗則 tmp 丟棄原檔不動)。詳見寫入原語節點。
+- **讀寫嚴格分軌**:這 13 個不改圖譜節點檔(context/show 寫 usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀);寫入走另 7 個原語(set/append/new/archive/decision-add/decision-supersede/self-audit),經 `atomic_write_verify`(寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename,任一步敗則 tmp 丟棄原檔不動)。詳見寫入原語節點。
 - **doctor vs lint 分工**:doctor 全圖權威(跨節點 + [test:] 存在性);`lint <節點>` 單檔 node-local 快檢,predicts pre-push 會不會擋。寫節點當下 lint,收尾 doctor。
 - **專案層 vs 機器層**:讀指令以 cwd `find_vault` 鎖本專案 vault(不受同名影響);install / bootstrap 是機器層(全域 `lumos` + user-scope skills),不在本節點範圍。
 
@@ -84,7 +85,7 @@ verified_by:
 - 同名節點:`find` 取第一個並印 `⚠ 同名筆記` stderr 警示;消歧靠資料夾前綴命名(`docs/<slug>-knowledge/`)。
 
 ## 相關
-- 操作表權威:`CLAUDE.md`(入口三步 + 標籤規範)、`skills/lumos-project-notes/SKILL.md`(23 子命令全覽:讀取 12 + 寫入 7 + 安裝/生命週期 4)。
+- 操作表權威:`CLAUDE.md`(入口三步 + 標籤規範)、`skills/lumos-project-notes/SKILL.md`(24 子命令全覽:讀取 13 + 寫入 7 + 安裝/生命週期 4)。
 - 實作落點:`scripts/lumos` `cmd_search`/`cmd_context`/`cmd_contracts`/`cmd_doctor`/`cmd_links`/`cmd_map`/`cmd_export`/`cmd_decisions`/`cmd_stale`/`cmd_recent`/`cmd_stats` + `load_vault`/`Env`/`find_vault`。
 - 回歸測試:`scripts/test_lumos.py`(Python t_-prefixed)。
 - 對稱寫入原語見 [[Systems/lumos-cli-write]];安裝 / 生命週期見 [[Systems/lumos-cli-lifecycle]];`lumos --help` 為現行權威。

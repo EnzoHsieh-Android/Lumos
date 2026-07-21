@@ -39,7 +39,7 @@ Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**不
 
 | 類別 | 檔案 / 命令 | 作用 |
 |---|---|---|
-| **CLI** | `scripts/lumos`、`scripts/test_lumos.py` | 純 python3 標準庫、零依賴、44 個頂層命令。讀 / 寫(寫後自驗)/ 巡檢(`doctor`)/ 歸檔。 |
+| **CLI** | `scripts/lumos`、`scripts/test_lumos.py` | 純 python3 標準庫、零依賴、49 個頂層命令。讀 / 寫(寫後自驗)/ 巡檢(`doctor`)/ 歸檔。 |
 | **合約守衛 scaffold** | `lumos guard list/scaffold/bind/audit/trace/kill` | 對談驅動:列未綁的 `★INVARIANT★`、套範本產**預設紅燈**測試 stub、綁 `[test:]`、蓋獨立 `[audit:]`;`kill` 沙盒真弄壞驗殺傷力。 |
 | **檢索與推薦** | `lumos search`(預設相關性排序)、`impact --ranked`(已接 hook)、`context --recommend`(dormant) | BM25F+圖分融合;search 與 hook 面均經人工 goldset 評測轉正(§6 門檻;評測釘語料快照可重現)。評測器 `governance/eval/retrieval_eval.py`。 |
 | **對抗審計 loop** | `lumos pitfalls`、`code-loop`、`canary`、`loop`、`fold-check`、`refcheck` | `pitfalls --diff` 分 tier;tier=high 走 canary 護的 `code-loop`(對抗代碼審);`design-loop` 在進實作前審 spec;`fold-check` 抓設計折入漂移。 |
