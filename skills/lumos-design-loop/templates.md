@@ -38,6 +38,8 @@ Spec 檔案：{工作副本路徑 /tmp/<id>-rN.md}
 {missed 後加碼：沒找到就是你沒讀仔細}。最後給一行總結：最嚴重 severity 是什麼。
 ```
 
+> **light 檔用法(單席通才,M0 2026-07-21;見 lumos-design-loop SKILL〈light 檔〉)**:light 路徑用本 §1 模板派**單一**審計員——{輪次語境}省略、審查鏡頭改「**無鏡頭通才**:不限正確性/邊界/整合某一軸,全份逐節挑洞」。收斂(legacy `--need 1` + 人裁實質收斂)與向上 ratchet(存活 ≥major → 升 standard 完整 panel)見 SKILL〈light 檔〉。
+
 ## 2. Design-loop 辯方（**預設 Codex** `codex exec --sandbox read-only`，不可用退 opus 並於留痕註記偏離——判決單點最怕同門盲點，2026-07-18 S5；**路由制 2026-07-16 M1**：機械證實/多席一致者免辯方直接折入，僅**低共識** finding 才開庭各派一個，乾淨脈絡、不傳審計員報告全文）
 
 ```

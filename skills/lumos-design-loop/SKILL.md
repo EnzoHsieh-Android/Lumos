@@ -13,6 +13,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 - **用**:brainstorming 產出 spec/設計 doc 後、進 writing-plans/實作**前**。對象=設計/spec 的對抗審計(非圖譜自足性審計)。
 - **硬閘(紀律強制,非技術鎖)**:`lumos loop status <id> --need 2 --gate --spec docs/design/<id>.md --repo <repo根>` 回 exit 0(GATE PASS:K-streak ∧ G1 引用座標 ∧ G2 發現枯竭)前**不得進實作**。lumos 擋不住「不跑就實作」——靠你記得調用 + 誠實。**高風險 spec(金流/對外寄送/prod 不可逆/守衛面)建議 `--need 3`**(對齊自動 loop 的 risk-tiered-review 分級;手動 loop 無機械分級,靠你自判)。
 - **trivial 可跳**:改 typo / 一行 / 純機械(rename、補欄位、連結修復)→ 跳 loop,但**寫一句為什麼跳**(commit message)。
+- **light 檔(輕量路徑,小而不 trivial 的 spec)**:補「trivial 完全跳過」與「standard 完整 panel」中間的缺檔——小 spec(加個小 flag / 改個非金流小邏輯)便宜審。**進場兩道**:① **硬否決**(命中任一即**不給 light**、走完整 loop):碰金流/對外寄送/prod 不可逆/守衛面(risk-tiered 四類)、動到 ★INVARIANT★ 硬合約、或改動體積偏大;② 以上全沒中 + 體積小 → 走 light。忘了判 → **預設走完整 loop(fail-safe,永不更少)**。⚠ **M0 的硬否決靠你自核(honor-system),不比你誠實更可靠——M1 才機械化成 filter,別當它已自動擋**。跑什麼見下方〈light 檔〉。設計脈絡見圖譜 [[design-loop輕量檔_計劃]]。
 - **loop id** = spec 檔名去 `docs/design/` 前綴、去 `.md`、去 `YYYY-MM-DD-` 日期前綴(`docs/design/2026-06-19-foo.md` → `foo`)。
 
 ## 每一輪(照做)
@@ -63,6 +64,20 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 - **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 四條合取:輪有效(caught≥2 且 0 missed,near-perfect)∧ 存活 max≤minor(只算 caught)∧ capture-recapture 殘餘<門檻(**無 counts=fail-closed**)。一個乾淨 panel 輪即收斂(K=1);存活 ≥major → fix → **下一輪嚴格 delta-scoped(2026-07-16 提效 M1,Codex「若只能改一件」)**:審計員**物理上只餵**「折入 diff + 被改 claim 的上下游合約段 + 前輪爭議清單」,**不給整份 spec**(給整份+叮嚀「重點審 delta」無效——審計員照樣全文翻,且折入的新文字持續污染輪間可比性=非定態目標病);另留 **1 席便宜全局哨兵**掃全文防 delta 外漏(弱檢查器,advisory);cap=3。
 - **混用守衛**:panel 記錄(帶 round)與 legacy 記錄不可混用,`--panel` 要求全帶 round、否則 rc2(防 None phantom 輪偽過)。
 - **收斂判準理據(散文收斂 without 干擾信號)**:framing 汙染 count 不汙染結構 → capture-recapture 讀重疊、ODC 讀 class、AC 讀 coverage;三者繞開被汙染的 count,framing 不動。詳見 [[loop三輪壓縮_計劃]]。
+
+## light 檔(輕量路徑,小 spec;M0 落地 2026-07-21,設計見 [[design-loop輕量檔_計劃]])
+
+補「trivial 完全跳過」與「standard 完整 panel」中間的缺檔。**進場資格見上方〈何時用/何時跳〉的 light 檔條**(硬否決三訊號任一中→不給 light;M0 honor-system 自核、M1 才機械化)。
+
+**跑什麼(壓縮,一輪):**
+1. **pre-flight 排乾**(步驟 2.7 照跑)——清單型缺陷機械掃掉,讓單席從高起點審。
+2. **派 1 席通才審計員**(§1 模板、**無鏡頭通才 framing**:不指定正確性/邊界/整合某一軸,要它全份逐節挑洞——踩平行 panel 的 r1 通才席實證:窄鏡頭漏的洞通才一發抓走)。canary 照植、refute framing 照舊。
+3. **判讀**:canary caught 且辯方裁決後**無存活 ≥major** → 這一輪乾淨。
+4. **收斂**:`lumos loop status <id> --need 1`(K=1;**legacy 模式,不加 --panel**——panel gate 要 caught≥2、單通才席湊不到)。⚠ 但 legacy G2「發現枯竭」被『你一定找得到』framing 壓不到底 → **M0 的 light 收斂走人裁「實質收斂」出口**(護欄段既有機制):pre-flight 排乾 + 這一輪 canary caught 無存活 major → 編排者向人攤牌「light 實質收斂」、留痕記 loop note。**乾淨的單席 K=1 機械 gate(不靠人裁)是 M1 gate code 的事**,M0 先用這條拿數據。
+
+**★向上 ratchet(誤判自癒,別跳過)★**:這一輪只要冒出**存活 ≥major**(辯方沒駁倒)→ **light 誤判、立即升 standard**,改走完整 panel 從頭審(tier=standard)。這是「無訊號≠簡單」漏網時的接球手。
+
+**天花板(誠實)**:light 用深度換速度是設計本意;單通才席漏的細微 bug 靠 ratchet + 下游 code-loop/測試 + 逃逸帳兜。M0 進場硬否決是 honor-system,不比 maker 誠實更可靠(M1 才機械化)。light 檔 spec 下游逃逸率該留意(逃逸帳=調價器):偏高=收緊訊號。
 
 ## 誠實天花板(收斂後務必向人提醒,別讓 CONVERGED 被當「絕對沒問題」)
 > **回報用白話(CLAUDE.md「對人回報用白話」)**:向人講收斂結果與天花板時,少專有名詞——canary/severity/G2/fold/tier 這些第一次出現給一句人話(如 canary=偷埋的假錯,驗審計員有沒有認真看),或乾脆換人話。術語細節留圖譜,別堆進給人看的摘要。目標:人少花一層理解成本。
