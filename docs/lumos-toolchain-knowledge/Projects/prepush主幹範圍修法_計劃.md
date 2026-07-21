@@ -24,7 +24,7 @@ summary: |-
 ---
 # prepush主幹範圍修法_計劃
 
-> **狀態**：spec 完成，待 design-loop（self-governance=high）。緣起：[[Issues/code-loop守衛main-direct盲區]]（M1 包 gate code 判 high 卻從門下鑽過，事後補審三輪還帳——事前擋的價值實證）。
+> **狀態**：**實質收斂人裁放行（2026-07-21，使用者）**——cap 3 輪滿＋r3 首個輪有效（opus 2/2）＋設計本體 Codex 確認解除＋殘留全文件歷史衛生（已修）＋capture 殘餘卡門屬已知結構病。**設計定案，進實作為另一 code 階段（擇日）。** 緣起：[[Issues/code-loop守衛main-direct盲區]]（M1 包 gate code 判 high 卻從門下鑽過，事後補審三輪還帳——事前擋的價值實證）。三輪審出三個安全設計級教訓：留痕座標脫鉤／fail-open 是守衛錯預設（樞紐反轉）／非-heads 判定該用 remote_ref 目的地。
 
 ## 問題
 
