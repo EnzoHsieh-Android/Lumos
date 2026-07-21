@@ -17,6 +17,15 @@ set -u
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 cd "$REPO_ROOT" || exit 0
 
+# ── stdin 必須最先讀(prepush範圍修法 #1)──
+# githooks(5):每行 "<local_ref> <local_sha> <remote_ref> <remote_sha>"。
+# 先整批讀進陣列——後段的 anchor verify/測試/doctor 都是 subprocess,會繼承並吃掉 fd0,
+# 若不先讀,推送範圍就丟了。無 stdin 行(如手動測試)=空陣列,代碼風險段自然跳過。
+_PP_LINES=()
+while IFS= read -r _line; do
+  [[ -n "$_line" ]] && _PP_LINES+=("$_line")
+done
+
 # 無 lumos / python3 → 降級放行(不為缺環境 brick push,CI 兜底)
 GRAPHCTL="$REPO_ROOT/scripts/lumos"
 PY="$(command -v python3 || command -v python || true)"
@@ -62,49 +71,72 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
 fi
 
 # 代碼偏科 + code-loop 必用守衛(tier=high):push 前把 diff 的代碼形態風險攤在眼前。
-# 只跑快的 regex 層(--no-lint;不跑專案宣告的 lint 指令,免每次 push 卡 detekt 等)。
-# tier=high → 跑 code-loop check:blocked(rc=1)則硬擋 push;否則放行。
-# fail-open:lumos code-loop check 回非 0/1 的異常 rc(找不到/例外) → 不擋(寧漏勿誤擋)。
-mb="$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || true)"
-head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-if [[ -n "$mb" && "$mb" != "$head_sha" ]]; then
-  pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$mb..HEAD" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
+# prepush範圍修法(2026-07-21):改讀 stdin 推送範圍逐 ref 判,取代 merge-base——分支與
+# main-direct 同軌;無基準(新 ref/缺物件)倒向保守掃 empty-tree..local_sha(非 fail-open,
+# 否則守衛升格成穩定繞法);留痕綁 remote_ref 目的地(非 checkout);逐 ref 獨立判,某 ref
+# high 未過即擋。fail-open 僅剩:pitfalls 本身出錯 / empty-tree 都跑不動。
+_ZERO="0000000000000000000000000000000000000000"
+_EMPTY_TREE="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
+for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+  read -r _lref _lsha _rref _rsha <<< "$_ppl"
+  # 刪除遠端 ref(local_sha 全零)→ 無代碼推送,跳過
+  [[ "$_lsha" == "$_ZERO" ]] && continue
+  # 推導檢查範圍
+  _range=""
+  if [[ "$_rsha" == "$_ZERO" ]]; then
+    # 新 ref(含首推 main:遠端無此 ref)→ 保守掃全部引入內容
+    _range="$_EMPTY_TREE..$_lsha"
+  elif ! git cat-file -e "$_rsha" 2>/dev/null; then
+    # remote_sha 本地無此物件(shallow/force-push 分岔未 fetch)→ 保守掃
+    _range="$_EMPTY_TREE..$_lsha"
+  else
+    # 一般情形:增量 endpoint diff
+    _range="$_rsha..$_lsha"
+  fi
+  [[ -z "$_EMPTY_TREE" ]] && continue   # 連空樹都算不出=git 環境壞,advisory 放行
+
+  pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
   if printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
     {
       echo ""
-      echo "⚠ pre-push:pitfalls --diff tier=high(代碼形態風險命中,見下)"
-      "$PY" "$GRAPHCTL" pitfalls --diff "$mb..HEAD" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+      echo "⚠ pre-push:$_rref tier=high(代碼形態風險命中 $_range,見下)"
+      "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
       echo ""
     } >&2
-    # code-loop check:rc=0=放、rc=1=blocked 硬擋、其他=fail-open 放
-    cl_rc=0
-    "$PY" "$GRAPHCTL" code-loop check --repo "$REPO_ROOT" >/dev/null 2>&1 || cl_rc=$?
-    if [[ "$cl_rc" -eq 1 ]]; then
-      {
-        echo "🚫 pre-push: 本分支 tier=high 代碼未過 code-loop → push 已擋下"
-        echo ""
-        echo "請選一條:"
-        echo "  1. 跑 lumos-code-loop 終審 → 收斂後重 push"
-        echo "  2. 確屬可接受(假陽/刻意略過) → lumos code-loop skip --note \"<理由>\" → 重 push(留痕)"
-        echo "  3. 緊急繞過 → git push --no-verify(自負、無痕)"
-        echo ""
-      } >&2
-      exit 1
+    # 留痕座標綁 remote_ref 目的地:refs/heads/* → 分支硬擋+skip 逃生;非 heads → advisory
+    if [[ "$_rref" == refs/heads/* ]]; then
+      _rbranch="${_rref#refs/heads/}"
+      cl_rc=0
+      "$PY" "$GRAPHCTL" code-loop check --diff "$_range" --at-sha "$_lsha" --branch "$_rbranch" \
+        --repo "$REPO_ROOT" >/dev/null 2>&1 || cl_rc=$?
+      if [[ "$cl_rc" -eq 1 ]]; then
+        {
+          echo "🚫 pre-push: $_rref tier=high 代碼未過 code-loop → push 已擋下"
+          echo ""
+          echo "請選一條:"
+          echo "  1. 跑 lumos-code-loop 終審 → 收斂後重 push"
+          echo "  2. 確屬可接受(假陽/刻意略過) → lumos code-loop skip --note \"<理由>\" → 重 push(留痕)"
+          echo "  3. 緊急繞過 → git push --no-verify(自負、無痕)"
+          echo ""
+        } >&2
+        exit 1
+      fi
+      # rc=0(已收斂/skip):放行;rc≠0/1(異常):fail-open 放行
+    else
+      # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,high 亦 advisory
+      echo "💡 pre-push: $_rref 非分支 ref、tier=high——advisory 放行(tag 內容 gate 另訂策略)" >&2
     fi
-    # rc=0(已收斂/skip/tier≠high):放行;rc≠0/1(異常):fail-open 放行
   elif printf '%s' "$pf_json" | grep -q '"stack_questions": *{"'; then
-    # tier=standard 但 diff 命中棧別效能表(單 reviewer 終審實測:standard+棧命中=最常見情境,
-    # 只在 tier=high 印會讓②pre-push 時機形同虛設)→ advisory 印檢核三問,恆不影響 rc
     {
       echo ""
-      echo "💡 pre-push:棧別效能檢核(advisory,不擋;終審留痕請含答案)"
-      "$PY" "$GRAPHCTL" pitfalls --diff "$mb..HEAD" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+      echo "💡 pre-push:$_rref 棧別效能檢核(advisory,不擋;終審留痕請含答案)"
+      "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
       echo ""
     } >&2 || true
   fi
   # test-layers 軟提醒(advisory,恆不影響 rc;無 .lumos/test-layers.json 靜默)
-  "$PY" "$GRAPHCTL" test-layers --diff "$mb..HEAD" --repo "$REPO_ROOT" 2>/dev/null || true
-fi
+  "$PY" "$GRAPHCTL" test-layers --diff "$_range" --repo "$REPO_ROOT" 2>/dev/null || true
+done
 
 # 只在 vault 存在時跑
 have_vault=0

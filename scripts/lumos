@@ -9447,37 +9447,41 @@ def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts):
         pass
 
 
-def _codeloop_guard_verdict(repo_root):
-    """判定式:tier=high(pitfalls --diff merge-base..HEAD --no-lint --json)
-    AND 無有效 pass/skip 留痕(head_sha 綁 HEAD) → blocked=True。
+def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None):
+    """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
+    AND 無有效 pass/skip 留痕 → blocked=True。
+    留痕座標(prepush範圍修法 #2):at_sha/branch 給了則綁該座標(hook 傳被推送 ref 的
+    local_sha 與 remote_ref 分支),否則讀當前 checkout HEAD/branch(向後相容)。
+    diff_range 給了則跳 merge-base 推導直接算 tier;否則沿 merge-base..HEAD 現行為。
     fail-open:pitfalls 出錯 / 非 git / 無 merge-base → tier 視作非 high(不 blocked)。
     回傳 dict{blocked:bool, reason:str, tier:str}。
     """
     import json as _json
     import subprocess as _sp
 
-    # 1. 取 HEAD sha
-    head_sha = _codeloop_git_head(repo_root)
-    if not head_sha:
+    # 留痕比對座標:優先用傳入的(hook 綁被推送 ref),否則讀 checkout
+    marker_sha = at_sha or _codeloop_git_head(repo_root)
+    marker_branch = branch or _codeloop_git_branch(repo_root)
+    if not marker_sha:
         return {"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"}
 
-    # 2. 取 merge-base(fail-open)
-    mb = None
-    for base_branch in ("main", "master"):
-        r = _sp.run(["git", "merge-base", "HEAD", base_branch],
-                    capture_output=True, text=True, cwd=str(repo_root))
-        if r.returncode == 0 and r.stdout.strip():
-            mb = r.stdout.strip()
-            # 若 merge-base == HEAD(在 base branch 上),表示未出 branch,tier 非 high
-            if mb == head_sha:
-                return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
-            break
+    if diff_range is None:
+        # 現行為:merge-base..HEAD 推導(向後相容)
+        head_sha = _codeloop_git_head(repo_root)
+        mb = None
+        for base_branch in ("main", "master"):
+            r = _sp.run(["git", "merge-base", "HEAD", base_branch],
+                        capture_output=True, text=True, cwd=str(repo_root))
+            if r.returncode == 0 and r.stdout.strip():
+                mb = r.stdout.strip()
+                if mb == head_sha:
+                    return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
+                break
+        if not mb:
+            return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
+        diff_range = f"{mb}..HEAD"
 
-    if not mb:
-        return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
-
-    # 3. 跑 pitfalls --diff merge-base..HEAD --no-lint --json 取 tier
-    diff_range = f"{mb}..HEAD"
+    # 3. 跑 pitfalls --diff <range> --no-lint --json 取 tier
     try:
         import sys as _sys
         graphctl = Path(__file__).resolve()
@@ -9498,17 +9502,16 @@ def _codeloop_guard_verdict(repo_root):
     if tier != "high":
         return {"blocked": False, "reason": f"tier={tier}(非 high)", "tier": tier}
 
-    # 4. 讀留痕,pass/skip 且 head_sha == HEAD → 有效
-    branch = _codeloop_git_branch(repo_root)
-    rec = _codeloop_read(repo_root, branch)
+    # 4. 讀留痕,pass/skip 且 sha == marker_sha → 有效(marker_sha/marker_branch 綁被推送 ref 或 checkout)
+    rec = _codeloop_read(repo_root, marker_branch)
     if rec is not None:
         rec_sha = rec.get("head_sha", "")
         rec_status = rec.get("status", "")
-        if rec_sha == head_sha and rec_status in ("passed", "skipped"):
-            return {"blocked": False, "reason": f"有效留痕({rec_status}@{head_sha[:8]})", "tier": tier}
+        if rec_sha == marker_sha and rec_status in ("passed", "skipped"):
+            return {"blocked": False, "reason": f"有效留痕({rec_status}@{marker_sha[:8]})", "tier": tier}
         # 留痕存在但 sha 不符或狀態不對
-        if rec_sha != head_sha:
-            reason = f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} HEAD={head_sha[:8]})"
+        if rec_sha != marker_sha:
+            reason = f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]})"
         else:
             reason = f"tier=high 且留痕狀態無效({rec_status!r})"
         return {"blocked": True, "reason": reason, "tier": tier}
@@ -9517,7 +9520,7 @@ def _codeloop_guard_verdict(repo_root):
     return {"blocked": True, "reason": "tier=high 且無留痕(尚未跑 code-loop pass/skip)", "tier": tier}
 
 
-def cmd_code_loop(subcmd, note=None, repo=None, as_json=False):
+def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None):
     """code-loop 留痕讀寫。
     pass  → status=passed(綁 HEAD sha);
     skip  → status=skipped(綁 HEAD sha,留逃生痕);
@@ -9558,7 +9561,8 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False):
     if subcmd == "check":
         # Task 2: 完整判定式(tier-high∧無有效留痕 → blocked)
         import json as _cljson
-        verdict = _codeloop_guard_verdict(repo_root)
+        verdict = _codeloop_guard_verdict(repo_root, diff_range=diff_range,
+                                          at_sha=at_sha, branch=marker_branch)
         blocked = verdict["blocked"]
         reason = verdict["reason"]
         tier = verdict["tier"]
@@ -9926,6 +9930,12 @@ def main():
         if _clname == "check":
             _clp.add_argument("--json", dest="cl_json", action="store_true",
                               help="以 JSON 輸出 verdict dict{blocked,reason,tier}")
+            _clp.add_argument("--diff", dest="cl_diff", default=None,
+                              help="直接指定 diff 範圍 <A..B> 算 tier(跳 merge-base 推導;prepush範圍修法)")
+            _clp.add_argument("--at-sha", dest="cl_at_sha", default=None,
+                              help="留痕比對綁此 sha(hook 傳被推送 ref 的 local_sha;預設讀 checkout HEAD)")
+            _clp.add_argument("--branch", dest="cl_branch", default=None,
+                              help="留痕比對綁此 branch(hook 傳 remote_ref 分支名;預設讀 checkout branch)")
         _clp.add_argument("--repo", dest="cl_repo", default=None,
                           help="repo root(預設 cwd 逐層向上找 .git)")
 
@@ -10000,7 +10010,10 @@ def main():
     if args.cmd == "code-loop":
         note = getattr(args, "note", None) or ""
         cl_json = getattr(args, "cl_json", False)
-        return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo, as_json=cl_json)
+        return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo, as_json=cl_json,
+                             diff_range=getattr(args, "cl_diff", None),
+                             at_sha=getattr(args, "cl_at_sha", None),
+                             marker_branch=getattr(args, "cl_branch", None))
     if args.cmd == "loop" and args.lcmd == "capture-counts":
         # 純機械原語(不碰圖譜):跨異質 finder 算 capture-recapture 重疊,vault-free
         return cmd_loop_capture_counts(None, args.finders,

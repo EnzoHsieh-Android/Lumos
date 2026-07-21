@@ -6214,6 +6214,58 @@ def t_codeloop_govlog_with_docs():
                       ev.get("kind") == "passed", f"ev={ev!r}")
 
 
+def t_codeloop_check_diff():
+    """prepush範圍修法 #2:code-loop check --diff/--at-sha/--branch(隔離單元)。
+    --diff 跳 merge-base 推導直接算 tier;--at-sha/--branch 綁指定座標查留痕(非 checkout)。
+    """
+    import subprocess as _sp
+    import json as _j
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+
+    def cl(d, *a):
+        return _sp.run([sys.executable, lumos_real, "code-loop", *a, "--repo", d],
+                       capture_output=True, text=True)
+
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)   # checkout 在 feat/codeloop-guard-test,main 有 base
+        g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        head = g("rev-parse", "HEAD").stdout.strip()
+        mb = g("merge-base", "HEAD", "main").stdout.strip()
+        empty_tree = g("hash-object", "-t", "tree", "/dev/null").stdout.strip()
+        # 1. --diff 直接算 tier(high),無留痕 → blocked rc1
+        r = cl(d, "check", "--diff", f"{mb}..{head}", "--json")
+        v = _j.loads(r.stdout)
+        check("check --diff tier=high 無留痕 blocked", r.returncode == 1 and v["tier"] == "high" and v["blocked"], f"{r.returncode} {r.stdout}")
+        # 2. 不給 --diff 現行為(走 merge-base 推導)不變——仍 high blocked
+        r = cl(d, "check", "--json")
+        v = _j.loads(r.stdout)
+        check("不給 --diff 現行為不變", v["tier"] == "high", r.stdout)
+        # 3. --at-sha/--branch 綁指定座標:對 feat 分支寫 pass,再用 --branch feat/--at-sha head 查得有效
+        cl(d, "pass", "--note", "reviewed")   # 對當前 checkout(feat)寫 pass
+        feat_branch = g("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        # checkout 切到 main(模擬推非當前 checkout 分支)
+        g("checkout", "-q", "main")
+        r = cl(d, "check", "--diff", f"{mb}..{head}", "--at-sha", head, "--branch", feat_branch, "--json")
+        v = _j.loads(r.stdout)
+        check("--at-sha/--branch 綁 feat 座標查得有效留痕放行", r.returncode == 0 and not v["blocked"], f"{r.returncode} {r.stdout}")
+        # 4. 不帶座標(讀 checkout=main)查不到 feat 留痕 → blocked(留痕脫鉤反例)
+        r = cl(d, "check", "--diff", f"{mb}..{head}", "--json")
+        v = _j.loads(r.stdout)
+        check("不帶座標讀 checkout=main 查不到 feat 留痕 blocked", r.returncode == 1 and v["blocked"], f"{r.returncode} {r.stdout}")
+        # 5. --at-sha 與留痕 sha 不符 → blocked
+        r = cl(d, "check", "--diff", f"{mb}..{head}", "--at-sha", empty_tree, "--branch", feat_branch, "--json")
+        v = _j.loads(r.stdout)
+        check("--at-sha 不符留痕 blocked", r.returncode == 1 and v["blocked"], r.stdout)
+        # 6. empty-tree..head 保守掃(新 ref 情境):tier high、無座標留痕 → blocked
+        r = cl(d, "check", "--diff", f"{empty_tree}..{head}", "--at-sha", head, "--branch", "newbr", "--json")
+        v = _j.loads(r.stdout)
+        check("empty-tree 保守掃 high blocked", v["tier"] == "high", r.stdout)
+        # 7. --diff 壞格式 fail-open 不 blocked
+        r = cl(d, "check", "--diff", "bad..range", "--json")
+        v = _j.loads(r.stdout)
+        check("--diff 壞格式 fail-open 不 blocked", not v["blocked"], r.stdout)
+
+
 # ── Task 2: _codeloop_guard_verdict 判定式 ───────────────────────────────────
 
 def _make_high_tier_repo(d):
@@ -6524,12 +6576,18 @@ def t_codeloop_guard_prepush():
             target.unlink()
         target.symlink_to(lumos_path)
 
-    def _run_pre_push(repo_dir):
-        """在 repo_dir 內執行 pre-push 腳本,回傳 CompletedProcess。"""
+    def _run_pre_push(repo_dir, stdin_data=None):
+        """在 repo_dir 內執行 pre-push 腳本,回傳 CompletedProcess。
+        prepush範圍修法:stdin 是 load-bearing——餵真 sha(remote=main base,local=HEAD)。"""
         env = dict(_os.environ)
         env["GIT_DIR"] = str(Path(repo_dir) / ".git")
-        # pre-push stdin: "<local_ref> <local_sha> <remote_ref> <remote_sha>"
-        stdin_data = "refs/heads/feat dummy refs/heads/feat dummy\n"
+        if stdin_data is None:
+            g = lambda *a: _sp.run(["git", *a], cwd=repo_dir, capture_output=True, text=True).stdout.strip()
+            head = g("rev-parse", "HEAD")
+            base = g("merge-base", "HEAD", "main") or head
+            br = g("rev-parse", "--abbrev-ref", "HEAD")
+            # 一般 push 情境:remote_ref/remote_sha=main base, local=當前 branch HEAD
+            stdin_data = f"refs/heads/{br} {head} refs/heads/{br} {base}\n"
         return _sp.run(
             ["bash", pre_push_path],
             cwd=repo_dir,
@@ -6613,6 +6671,88 @@ def t_codeloop_guard_prepush():
         check("codeloop_guard_prepush: lumos code-loop check rc=2(異常) → fail-open rc0",
               r.returncode == 0,
               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+
+
+def t_prepush_range_scan():
+    """prepush範圍修法:hook 讀 stdin 逐 ref、main-direct 同軌、新 ref empty-tree、remote_ref 座標。"""
+    import subprocess as _sp
+    import os as _os
+    pre_push_path = str(Path(__file__).resolve().parent / "hooks" / "pre-push")
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+
+    def setup_lumos(d):
+        sd = Path(d) / "scripts"; sd.mkdir(exist_ok=True)
+        t = sd / "lumos"
+        if t.exists() or t.is_symlink(): t.unlink()
+        t.symlink_to(lumos_real)
+
+    def run_pp(d, stdin_data):
+        env = dict(_os.environ); env["GIT_DIR"] = str(Path(d) / ".git")
+        return _sp.run(["bash", pre_push_path], cwd=d, input=stdin_data,
+                       capture_output=True, text=True, env=env)
+
+    def g(d, *a):
+        return _sp.run(["git", *a], cwd=d, capture_output=True, text=True).stdout.strip()
+
+    # ── main-direct:高風險直推 main(mb==HEAD 現行盲區)→ 新邏輯用 remote..local 增量抓到 → rc1 擋 ──
+    with tempfile.TemporaryDirectory() as d:
+        gr = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        gr("init", "-q", "-b", "main"); gr("config", "user.email", "t@t.t"); gr("config", "user.name", "t")
+        (Path(d)/"README.md").write_text("init\n"); gr("add", "."); gr("commit", "-qm", "init")
+        base = g(d, "rev-parse", "HEAD")
+        (Path(d)/"app.py").write_text("import requests\ndef f():\n    requests.post('http://x')\n")
+        gr("add", "."); gr("commit", "-qm", "high on main")
+        head = g(d, "rev-parse", "HEAD")
+        setup_lumos(d)
+        r = run_pp(d, f"refs/heads/main {head} refs/heads/main {base}\n")
+        check("prepush main-direct high → rc1 擋(盲區已修)", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
+        # pass 後放行(remote_ref=main 座標)
+        _sp.run([sys.executable, lumos_real, "code-loop", "pass", "--note", "ok", "--repo", d], capture_output=True, text=True)
+        r = run_pp(d, f"refs/heads/main {head} refs/heads/main {base}\n")
+        check("prepush main pass 後放行", r.returncode == 0, f"rc={r.returncode}\n{r.stderr[-200:]}")
+
+    # ── 新 ref(remote_sha 全零)→ empty-tree 保守掃,high 擋(非 fail-open 放行) ──
+    with tempfile.TemporaryDirectory() as d:
+        gr = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        gr("init", "-q", "-b", "main"); gr("config", "user.email", "t@t.t"); gr("config", "user.name", "t")
+        (Path(d)/"app.py").write_text("import requests\ndef f():\n    requests.post('http://x')\n")
+        gr("add", "."); gr("commit", "-qm", "high")
+        head = g(d, "rev-parse", "HEAD")
+        setup_lumos(d)
+        zero = "0"*40
+        r = run_pp(d, f"refs/heads/main {head} refs/heads/main {zero}\n")
+        check("prepush 新 ref empty-tree 保守掃 high → rc1 擋(非 fail-open)", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
+
+    # ── 刪除 ref(local_sha 全零)→ 跳過、放行 ──
+    with tempfile.TemporaryDirectory() as d:
+        gr = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        gr("init", "-q", "-b", "main"); gr("config", "user.email", "t@t.t"); gr("config", "user.name", "t")
+        (Path(d)/"README.md").write_text("x\n"); gr("add", "."); gr("commit", "-qm", "i")
+        setup_lumos(d)
+        zero = "0"*40
+        r = run_pp(d, f"(delete) {zero} refs/heads/old {g(d,'rev-parse','HEAD')}\n")
+        check("prepush 刪除 ref 跳過放行", r.returncode == 0, f"rc={r.returncode}")
+
+    # ── 空 stdin(無推送行)→ 代碼風險段跳過、放行 ──
+    with tempfile.TemporaryDirectory() as d:
+        gr = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        gr("init", "-q", "-b", "main"); gr("config", "user.email", "t@t.t"); gr("config", "user.name", "t")
+        (Path(d)/"README.md").write_text("x\n"); gr("add", "."); gr("commit", "-qm", "i")
+        setup_lumos(d)
+        r = run_pp(d, "")
+        check("prepush 空 stdin 跳過放行", r.returncode == 0, f"rc={r.returncode}")
+
+    # ── 非分支 remote_ref(tag)high → advisory 放行(不硬擋) ──
+    with tempfile.TemporaryDirectory() as d:
+        gr = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        gr("init", "-q", "-b", "main"); gr("config", "user.email", "t@t.t"); gr("config", "user.name", "t")
+        (Path(d)/"app.py").write_text("import requests\ndef f():\n    requests.post('http://x')\n")
+        gr("add", "."); gr("commit", "-qm", "high")
+        head = g(d, "rev-parse", "HEAD")
+        setup_lumos(d)
+        zero = "0"*40
+        r = run_pp(d, f"refs/tags/v1 {head} refs/tags/v1 {zero}\n")
+        check("prepush tag high → advisory 放行(非硬擋)", r.returncode == 0 and "advisory" in r.stderr, f"rc={r.returncode}\n{r.stderr[-200:]}")
 
 
 def t_prepush_test_gate():

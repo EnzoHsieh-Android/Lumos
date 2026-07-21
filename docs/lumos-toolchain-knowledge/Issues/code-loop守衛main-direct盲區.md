@@ -1,11 +1,11 @@
 ---
 type: issue
-status: open
+status: done
 created: 2026-07-21
 updated: 2026-07-21
 tags:
   - type/issue
-  - status/open
+  - status/done
 related:
   - "[[Systems/pitfalls-code-loop]]"
   - "[[Projects/loop機械脊椎M1包_計劃]]"

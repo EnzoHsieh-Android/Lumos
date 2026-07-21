@@ -74,7 +74,7 @@ def t_codeloop_guard_verdict():
     ...
 ```
 - [ ] **Step 2: FAIL**。
-- [ ] **Step 3: 實作** — 見設計 §1+§2:跑 `pitfalls --diff <merge-base>..HEAD --no-lint --json`(既有)取 tier;讀留痕,pass/skip 的 head_sha == 當前 HEAD 才有效;`blocked = tier=="high" and not valid_pass and not valid_skip`。`code-loop check` 印 verdict、rc=blocked?1:0。merge-base 取法同 pre-push。
+- [x] **Step 3: 實作** — 見設計 §1+§2:跑 `pitfalls --diff <range> --no-lint --json` 取 tier;讀留痕,pass/skip 的 sha == 目標 才有效;`blocked = tier=="high" and not valid_pass and not valid_skip`。`code-loop check` 印 verdict、rc=blocked?1:0。**範圍取法(2026-07-22 prepush範圍修法落地)：pre-push 改讀 stdin 推送範圍逐 ref 判(取代 merge-base，堵 main-direct 盲區)；`code-loop check` 加 `--diff/--at-sha/--branch` 委派、留痕綁 remote_ref 目的地。見 [[Projects/prepush主幹範圍修法_計劃]]。**
 - [ ] **Step 4: PASS**。
 - [ ] **Step 5: Commit** `feat(code-loop): guard 判定式(tier-high∧無pass∧無skip,綁HEAD)+check`
 

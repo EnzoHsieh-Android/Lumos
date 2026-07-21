@@ -21,6 +21,8 @@ summary: |-
   TEST:見 body 測試策略——--diff CLI 格數/新舊相容/留痕座標(綁 remote_ref 目的地非 local_ref)/hook 假 stdin 模擬(main-direct 增量/新 ref 含首推 main→empty-tree 保守掃 high擋standard放/缺物件 empty-tree/CI $SHA:refs/heads/x→remote_ref 判分支/tag→advisory/刪除 ref/空 stdin/多 ref 混合迴圈/stdin 先讀);既有 t_codeloop_guard_prepush 重寫(dummy sha→真 sha)
   DEP:scripts/hooks/pre-push｜scripts/lumos code-loop check(:9451-9479)｜[[Systems/pitfalls-code-loop]]
   PRIOR-ART:①最小解=hook 讀 stdin 是 git 原生合約,零新機制;code-loop check 加一選配旗標 ②世界解=githooks(5) 官方文件明定 pre-push stdin 格式,業界 hook(husky/lefthook)皆此模式——標準做法非發明 ③裁定=borrow(git 官方合約原生用)
+verified_by:
+  - "[[Verification/2026-07-22_prepush範圍修法落地]]"
 ---
 # prepush主幹範圍修法_計劃
 
