@@ -18,7 +18,7 @@ summary: |-
   KEY:影響面=凡 main-direct 的 gate/守衛類 code 變更都不會被 code-loop 硬擋——把關точка失效,只剩散文紀律(編排者自覺調用 lumos-code-loop)
   KEY:候選修法(未裁)——①pre-push 對 main-direct push 改用「本次 push 的 range(remote..HEAD)」算 tier ②家規化:gate 類 code 一律 feature branch(紀律面,無機械強制) ③兩者並行。動 hook=改守衛,修法本身須過 design-loop
   KEY:發現脈絡=M1包 實作 push 後自查(spec 明言「實作後 pitfalls 必判 high→full code-loop」但 push 未被擋);該批 code 的補救=事後 code-loop 終審
-  KEY:排程[2026-07-21 使用者裁「排」]——①✅M1包 事後 code-loop 終審**已完成**(2026-07-21,三輪+Codex NO-VETO+pass 留痕,見該計劃 KEY;補審過程本身抓出 15 個 gate code 真洞並全修——盲區的實害被事後補審接住,但「事後」比「事前」多繞一大圈=盲區修法的價值實證)②本盲區修法:**仍待辦**——方案裁定小 spec(候選①push-range 算 tier/②gate 類 code 家規上 branch/③並行);動 pre-push hook=改守衛=self-governance,spec 須過 design-loop(非 light)
+  KEY:排程[2026-07-21 使用者裁「排」]——①✅M1包 事後 code-loop 終審**已完成**(三輪+Codex NO-VETO+pass 留痕,補審抓 15 洞全修)②✅本盲區修法**設計定案**(2026-07-21,[[Projects/prepush主幹範圍修法_計劃]] 過 design-loop 3 輪+Codex 確認+實質收斂人裁;裁定=stdin 推送範圍取代 merge-base+code-loop check --diff/--at-sha/--branch;三輪審出留痕脫鉤/fail-open 錯預設/非-heads remote_ref 三教訓)——**剩實作 hook code(另一 code 階段,擇日)**;實作落地後本 Issue status→done
 ---
 # code-loop守衛main-direct盲區
 
