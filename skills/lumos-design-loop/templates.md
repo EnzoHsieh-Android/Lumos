@@ -147,6 +147,9 @@ binding constraints，3-6 條}
   未定義成員…）；token 出現或泛泛說「有問題」不算。
 - **剝除克制**：只有能指出 finding 客觀錯在哪（被 spec/code file:line 反證）才剝；
   判不準保留（寧可高估）。辯方只買 code 層假陽性，業務層留人。
+- **style-bias 錨（2026-07-21，外審吸收）**：severity 按**後果**判（照 spec 實作會發生什麼），
+  不按 finding 寫得多詳細/多有說服力判——2026 實證 judge 最大偏誤是 style（0.76-0.92），
+  position 反而極小；一條寫得漂亮的 minor 仍是 minor，一條寫得潦草的 major 仍是 major。
 - **輪 severity = 辯方裁決後存活 findings 的 max**；findings 數 = 存活折入條數
   （canary 不計）。
 - **canary 型別輪替** `[(N−1) mod 4]`，植入位置每輪換區段；code-loop canary hunk
@@ -199,5 +202,5 @@ repo:{repo 根}(可 Read/Grep 查證 diff 上下文)
 - **判讀(編排者一次跨 W 份做)**:①逐同族審計員判 canary caught/missed;missed 者 findings 剔除 ②去重(嚴格合一「同段落同性質」,不偏多留)③對存活 ≥major 派 §2 辯方 ④數 capture_counts(各 distinct 缺陷被幾人找到)。
 - **記錄**(一輪 W 筆共享 round-id):
   `lumos canary record caught|missed --loop <id> --round <rid> --auditor <slotN> --severity <s> [--capture-counts "2,2,1"]`(counts 記該輪一筆即可)。
-- **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 四條合取(輪有效≥2caught ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<1.0[無counts=fail-closed])。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。
+- **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 無-cluster 舊帳=三條合取(輪有效≥2caught ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<1.0[無counts=fail-closed]);cluster 帳(M2)=兩條合取(輪有效 ∧ fold後無disputed-major),capture 降 advisory。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。
 - **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix/legacy→rc2,防 None phantom 輪)。

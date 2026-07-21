@@ -11,14 +11,15 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 ## 何時用 / 何時跳
 - **用**:brainstorming 產出 spec/設計 doc 後、進 writing-plans/實作**前**。對象=設計/spec 的對抗審計(非圖譜自足性審計)。
-- **硬閘(紀律強制,非技術鎖)**:`lumos loop status <id> --need 2 --gate --spec docs/design/<id>.md --repo <repo根>` 回 exit 0(GATE PASS:K-streak ∧ G1 引用座標 ∧ G2 發現枯竭)前**不得進實作**。lumos 擋不住「不跑就實作」——靠你記得調用 + 誠實。**高風險 spec(金流/對外寄送/prod 不可逆/守衛面)建議 `--need 3`**(對齊自動 loop 的 risk-tiered-review 分級;手動 loop 無機械分級,靠你自判)。
+- **硬閘(紀律強制,非技術鎖)**:`lumos loop status <id> --need 2 --gate --spec <計劃節點.md 路徑> --repo <repo根>` 回 exit 0(GATE PASS:K-streak ∧ G1 引用座標 ∧ G2 發現枯竭)前**不得進實作**。lumos 擋不住「不跑就實作」——靠你記得調用 + 誠實。**高風險 spec(金流/對外寄送/prod 不可逆/守衛面)建議 `--need 3`**(對齊自動 loop 的 risk-tiered-review 分級;手動 loop 無機械分級,靠你自判)。
 - **trivial 可跳**:改 typo / 一行 / 純機械(rename、補欄位、連結修復)→ 跳 loop,但**寫一句為什麼跳**(commit message)。
-- **light 檔(輕量路徑,小而不 trivial 的 spec)**:補「trivial 完全跳過」與「standard 完整 panel」中間的缺檔——小 spec(加個小 flag / 改個非金流小邏輯)便宜審。**進場兩道**:① **硬否決**(命中任一即**不給 light**、走完整 loop):碰金流/對外寄送/prod 不可逆/守衛面(risk-tiered 四類)、動到 ★INVARIANT★ 硬合約、或改動體積偏大;② 以上全沒中 + 體積小 → 走 light。忘了判 → **預設走完整 loop(fail-safe,永不更少)**。⚠ **M0 的硬否決靠你自核(honor-system),不比你誠實更可靠——M1 才機械化成 filter,別當它已自動擋**。跑什麼見下方〈light 檔〉。設計脈絡見圖譜 [[design-loop輕量檔_計劃]]。
-- **loop id** = spec 檔名去 `docs/design/` 前綴、去 `.md`、去 `YYYY-MM-DD-` 日期前綴(`docs/design/2026-06-19-foo.md` → `foo`)。
+- **light 檔(輕量路徑,小而不 trivial 的 spec)**:補「trivial 完全跳過」與「standard 完整 panel」中間的缺檔——小 spec(加個小 flag / 改個非金流小邏輯)便宜審。**進場兩道**:① **硬否決**(命中任一即**不給 light**、走完整 loop):碰金流/對外寄送/prod 不可逆/守衛面(risk-tiered 四類)、動到 ★INVARIANT★ 硬合約、或改動體積偏大;② 以上全沒中 + 體積小(**先驗暫用值:預估實作改動 ≲50 行且孤立——SDD 生態經驗值,2026-07-21 外審吸收;replay 校準後以數據值取代**)→ 走 light。忘了判 → **預設走完整 loop(fail-safe,永不更少)**。⚠ **M0 的硬否決靠你自核(honor-system),不比你誠實更可靠——M1 才機械化成 filter,別當它已自動擋**。跑什麼見下方〈light 檔〉。設計脈絡見圖譜 [[design-loop輕量檔_計劃]]。
+- **★真相入口(2026-07-21 收編,見 [[全盤外審2026-07_調研]] finding 1)★**:被審 spec 的**唯一可寫真檔=圖譜計劃節點**(`docs/{project}-knowledge/Projects/<主題>_計劃.md`)——與 CLAUDE.md「計劃/設計也歸圖譜」對齊。**`docs/design/` 已降唯讀歷史,不再新增、不再折入**(舊 loop 的 docs/design 檔保留供考古)。loop 全程:工作副本從計劃節點複製、折入只回寫計劃節點、gate `--spec` 指計劃節點路徑。
+- **loop id** = 計劃節點檔名去 `_計劃`/`_調研` 後綴、轉 kebab(`Projects/design-loop輕量檔_計劃.md` → `design-loop輕量檔`)。舊 docs/design 時代的 id 慣例只適用歷史紀錄。
 
 ## 每一輪(照做)
 
-1. **複製** `docs/design/<id>.md` → 工作副本 `/tmp/<id>-rN.md`。**N = `lumos loop status <id>` 已有的輪數 + 1**(不靠記憶)。
+1. **複製**計劃節點檔 → 工作副本 `/tmp/<id>-rN.md`。**N = `lumos loop status <id>` 已有的輪數 + 1**(不靠記憶)。
 2. **植一個 canary**(只進工作副本,**真檔永不含**):additive、**類型由 N 決定** `清單[(N−1) mod 4]`:
    - (a) 壞 §/章節交叉引用(指向不存在的 §N)
    - (b) 未定義旗標 `--xxx`(引入卻不在任何指令/簽名)
@@ -30,7 +31,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
    - **難度探針(FLAWS difficulty filter 反向適配)**:植完、派審計員前,派一個 **haiku 探針**(只給被植段落 ±20 行,prompt「這段有沒有內部不一致/未定義引用?」):haiku 一眼抓到 → 太明顯,重植更藏的變體再探(上限 2 次);沒抓到 → 難度合格。探針結果記入該輪 canary note(`probe:pass|recraft×N`)。理由:FLAWS 實測生成者自己抓得到的錯 61-93% 被過濾——不濾,caught 會灌水(mutation score 冗餘教訓同源)。
    - **事故反轉(IBIR 模式,機會性)**:型別輪替前先查事故語料(`lumos search --path Issues` + `pitfall_when` 命中 spec 主題域):有匹配 → 把該事故的「修法」反轉成 canary(標 `type=incident-inv`),取代該 slot 的通用型別;無匹配 → 照舊輪替。事故驅動的植錯比盲 mutation 寫實且有區分力(IBIR 實證)。
 2.5. **機械核對(refcheck,對工作副本)**:`lumos refcheck /tmp/<id>-rN.md --repo <repo根> --json`。missing/line_out_of_range=機械 finding,直接修**真檔 spec**(記入審計修正紀錄、標「機械 refcheck」);manifest(ok 宣稱+excerpts)留存、步驟 3 餵審計員。refcheck 只驗 spec→repo 指涉、不驗 spec 內部一致性——內部一致性是 canary 保留地、審計員責任田。
-2.6. **pitfalls 核對(派審計員前)**:`lumos pitfalls docs/design/<id>.md --check`;rc 1(缺「## 實務隱患」節)→ 先在**真檔 spec** 補「## 實務隱患」節再繼續。`lumos pitfalls docs/design/<id>.md`(不帶 --check)的提問清單附給步驟 3 的審計員當鏡頭之一。
+2.6. **pitfalls 核對(派審計員前)**:`lumos pitfalls <計劃節點.md> --check`;rc 1(缺「## 實務隱患」節)→ 先在**真檔 spec** 補「## 實務隱患」節再繼續。`lumos pitfalls <計劃節點.md>`(不帶 --check)的提問清單附給步驟 3 的審計員當鏡頭之一。
 2.7. **pre-flight 排乾(cascade;2026-07-16 提效 M1,設計見 [[design-loop提效_計劃]];首輪前跑一次,r2+ 不重跑)**:派 1 個便宜 agent 拿固定 checklist 掃**真檔 spec**——未定義旗標/欄位/檔名、章節交叉引用、範圍刀自違(「明確不做」被其他段偷偷違反)、CLI touchpoint(白名單/Check 字母撞名/函式簽名)、測試策略與本文條目一一對應。命中直接修真檔(記入審計修正紀錄標「pre-flight」,不算 loop findings)。理由:實測 r1 大宗是清單型缺陷(fromscratch-m1 r1 九條裡五條此型),先機械排乾讓 panel 從高起點審,一輪收斂(K=1)才從理論變可能;cascade=便宜先掃、貴的審剩下(ICML 2025 cascade 文獻)。
 3. **派乾淨審計員**:Agent tool、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 canary**、指向工作副本、**refute framing(把工作副本當外部第三方的投稿審,不是你/本系統寫的——挑出投稿者沒看到的洞)**:要它逐節讀、主動找洞(未定義詞/壞引用/不一致/矛盾/可執行性 gap),逐條標 severity;**附步驟 2.5 的 refcheck manifest**——manifest 內宣稱的存在性/行號已機械驗訖,查證力氣聚焦語意;manifest 非宣稱全集,散文裡的現況假設仍要自己查。**第一次 missed 起就加碼 framing**:「逐節讀,你一定找得到至少一個未定義的詞/壞引用/不一致;沒找到就是你沒讀仔細」。
 4. **判讀**:
@@ -40,8 +41,8 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
    - ④ **該輪 severity = 辯方裁決後存活 findings 的最高**(編排者機械取 max,取代 ② 自剝;辯方帶證據裁、同 judge-severity-gate 精神)。辯方只買 code 層假陽性,業務層留人。
 5. **記錄**:`lumos canary record caught|missed --loop <id> --severity <worst> --findings <M> --auditor sonnet --note "r<N> type=<a-d> <caught|missed> [誤判剝除理由]"`。`<worst>` = ④ 辯方重算後的存活 max(非 ② 原評);`<M>` = ④ 辯方裁決後存活折入的真 finding 條數(canary 不計;missed 輪不折記 0)——供收斂閘 G2 枯竭錨機械讀取。
 6. **漏抓 → 該輪判決不採信**(仍是一筆 missed record、仍算進 cap):**不折 findings**,直接下一輪(N+1、自動換 canary 類型、framing 加碼)。
-7. **抓到 → 只折辯方存活的真 finding 進 `docs/design/<id>.md`**(被辯方駁倒的不折、已在審計紀錄標「辯方反證:<file:line>」);折時把該輪寫進 spec 的**審計修正紀錄**。寫完紀錄後:**跑 `lumos fold-check docs/design/<id>.md`** → 讀每個 flag、逐段勾「鏡像段與 body 一致」(summary/json fence/審計修正紀錄/誠實天花板)、解掉每個 drift → 確認一致。**再派一個便宜 agent 只看本輪折入 diff 做 fold 迷你核對(2026-07-16 提效 M1)**:「動了規則的段,鏡像段(測試策略/摘要/他章)跟了嗎?新句與既有句打架嗎?新引入的詞/旗標/欄位有定義嗎?」——r3 型『補丁沒同步』findings 幾乎全是此型,5 分鐘核對換一整輪。之後 **`grep -c '<canary token>' docs/design/<id>.md` 必須為 0**(canary 未混進真檔)再 `git commit`(message 記該輪 canary+severity)。
-8. **問收斂**:`lumos loop status <id> --need 2 --gate --spec docs/design/<id>.md --repo <repo根>`(K=2;證據閘=K-streak ∧ G1 引用座標 refcheck ∧ G2 發現枯竭)→ **exit 0(GATE PASS)出 loop**;exit 1 → 回 step 1(逐錨明細指出斷在哪)。
+7. **抓到 → 只折辯方存活的真 finding 進計劃節點**(被辯方駁倒的不折、已在審計紀錄標「辯方反證:<file:line>」);折時把該輪寫進 spec 的**審計修正紀錄**。寫完紀錄後:**跑 `lumos fold-check <計劃節點.md>`** → 讀每個 flag、逐段勾「鏡像段與 body 一致」(summary/json fence/審計修正紀錄/誠實天花板)、解掉每個 drift → 確認一致。**再派一個便宜 agent 只看本輪折入 diff 做 fold 迷你核對(2026-07-16 提效 M1)**:「動了規則的段,鏡像段(測試策略/摘要/他章)跟了嗎?新句與既有句打架嗎?新引入的詞/旗標/欄位有定義嗎?」——r3 型『補丁沒同步』findings 幾乎全是此型,5 分鐘核對換一整輪。之後 **`grep -c '<canary token>' <計劃節點.md>` 必須為 0**(canary 未混進真檔)再 `git commit`(message 記該輪 canary+severity;圖譜節點 commit 天然過 pre-commit gate)。
+8. **問收斂**:`lumos loop status <id> --need 2 --gate --spec <計劃節點.md> --repo <repo根>`(K=2;證據閘=K-streak ∧ G1 引用座標 refcheck ∧ G2 發現枯竭)→ **exit 0(GATE PASS)出 loop**;exit 1 → 回 step 1(逐錨明細指出斷在哪)。
    - **`[NEEDS CLARIFICATION]` 慣例(borrow:spec-kit)**:spec 內任何未解的 `[NEEDS CLARIFICATION: 問題]` 標記 = **視同 blocker,不得收斂**(gate 前自查 `grep -c 'NEEDS CLARIFICATION' <spec>` 必須 0)。含糊之處寫成這個標記而不是含糊帶過——把「還不確定」變機械可擋。
 
 > **派工模板**:審計員/辯方的完整 dispatch prompt(輪次語境加碼、查證義務、反駁路線客製)見本 skill 目錄 `templates.md` §1-2(2026-07-07 Landmark 實戰抽取)——派工以模板為準,本文 framing 是摘要。
@@ -61,7 +62,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 2. **編排者=meta-judge**:判讀段(canary 判定/去重/severity max/辯方裁決聚合)是 meta-judge 聚合——只聚合一級判決、不重審內容;judgment pool 越大越抗偏誤(W 寬 panel 的理據;meta-judge position consistency 0.793→0.854)。
 3. **關鍵單點判決 ≥3 run 多數決**:「單一判決要當終局」的窄集合(cap 攤牌前的最後裁定、blocker 級辯方裁決有爭議)→ ≥3 獨立乾淨 run 取多數決。誠實限定:同 judge 同輸入跨 run α 最好僅 0.563(<0.8 可靠線)——多數決**只壓 stochastic 變異、不壓 correlated 系統性盲點**,後者靠異家族 panel,兩者不互替。跨家族 slot:≥3 run 中**至少 1 run 用 Codex CLI**(qwen 次選);皆不可用才退異型號同門並於 note 註記偏離。**家族否決保護(2026-07-18 S5)**:任一家族 run 提出 blocker,**不得僅以他家族的同門多數推翻**——降級須具備可執行反證(真跑)或第二外家族確認,拿不出則 blocker 維持(fail toward safety;防同門 2:1 壓掉唯一外家正確意見=重現同門盲點)。
 - **記錄**:一輪 W 筆共享 round-id:`lumos canary record caught|missed --loop <id> --round <rid> --severity <s> --capture-counts "2,2,1"`(counts 記在該輪一筆即可)。
-- **問收斂**:`lumos loop status <id> --gate --panel --repo <root>` → 四條合取:輪有效(caught≥2 且 0 missed,near-perfect)∧ 存活 max≤minor(只算 caught)∧ capture-recapture 殘餘<門檻(**無 counts=fail-closed**)。一個乾淨 panel 輪即收斂(K=1);存活 ≥major → fix → **下一輪嚴格 delta-scoped(2026-07-16 提效 M1,Codex「若只能改一件」)**:審計員**物理上只餵**「折入 diff + 被改 claim 的上下游合約段 + 前輪爭議清單」,**不給整份 spec**(給整份+叮嚀「重點審 delta」無效——審計員照樣全文翻,且折入的新文字持續污染輪間可比性=非定態目標病);另留 **1 席便宜全局哨兵**掃全文防 delta 外漏(弱檢查器,advisory);cap=3。
+- **問收斂**:`lumos loop status <id> --gate --panel --repo <root>`。**兩種帳(2026-07-21 修 skill 漂移,對齊 M2 現碼;見 [[design-loop提效_計劃]] M2)**:①無-cluster 舊帳=**三條合取**:輪有效(caught≥2 且 0 missed,near-perfect)∧ 存活 max≤minor(只算 caught)∧ capture-recapture 殘餘<門檻(**無 counts=fail-closed**);②cluster 帳(首個有效輪帶 `--clusters` 定錨)=**兩條合取**:輪有效 ∧ fold 後無 disputed-major——capture-recapture 與新生 cluster **降 advisory**(非定態目標下封閉族群前提偏弱,不當硬閘)。一個乾淨 panel 輪即收斂(K=1);存活 ≥major → fix → **下一輪嚴格 delta-scoped(2026-07-16 提效 M1,Codex「若只能改一件」)**:審計員**物理上只餵**「折入 diff + 被改 claim 的上下游合約段 + 前輪爭議清單」,**不給整份 spec**(給整份+叮嚀「重點審 delta」無效——審計員照樣全文翻,且折入的新文字持續污染輪間可比性=非定態目標病);另留 **1 席便宜全局哨兵**掃全文防 delta 外漏(弱檢查器,advisory);cap=3。
 - **混用守衛**:panel 記錄(帶 round)與 legacy 記錄不可混用,`--panel` 要求全帶 round、否則 rc2(防 None phantom 輪偽過)。
 - **收斂判準理據(散文收斂 without 干擾信號)**:framing 汙染 count 不汙染結構 → capture-recapture 讀重疊、ODC 讀 class、AC 讀 coverage;三者繞開被汙染的 count,framing 不動。詳見 [[loop三輪壓縮_計劃]]。
 
@@ -85,6 +86,6 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 2. **整合性**:canary-caught / severity / 哪些是「誤判」三個都由植入者(你)自己判、無外部檢查——是**沒閉合的迴歸**,不 tamper-proof。loop 是**可觀測 + 摩擦 + 地板**,不是 oracle。
 
 ## 收斂後
-`lumos loop status` exit 0 → **收斂即凍結(borrow:Giskard meta-evaluation)**:把 spec 快照 + 辯方裁決後的存活 findings 清單凍進 `governance/golden/<loop-id>/`(spec.md + findings.md 兩檔,零判斷成本純搬運)。**存活未修的 finding 逐條附一句「接受理由」進 findings.md**(文件精度級/成本不值/延後至何時)——沒理由的未修 finding 不得收斂留痕,防「說有問題就無限改」與「拖著不裁」兩頭(2026-07-17 外部評審吸收,見 [[GPT外部評審吸收_計劃]])——golden 語料是 auditor 校準的時間資產(語料累到 10+ 份即可做 replay 校準:拿凍結 spec 重跑審計、對照已知 findings 算各模型接住率,決定哪類 spec 直接上 opus)。→ 向人**回報收斂 + 上述天花板** → 交 **writing-plans** 出實作計畫 → 實作。
+`lumos loop status` exit 0 → **收斂即凍結(borrow:Giskard meta-evaluation)**:凍進 `governance/golden/<loop-id>/`——**spec 不再複製第三份**(2026-07-21 真相入口收編:多一份副本=多一個漂移源),改寫 `spec-ref.txt` 一行「`<git commit sha>:<計劃節點路徑>`」(replay 時 `git show <sha>:<路徑>` 即還原凍結版);findings.md 照舊(辯方裁決後存活 findings 清單,這是 golden 獨有數據)。**存活未修的 finding 逐條附一句「接受理由」進 findings.md**(文件精度級/成本不值/延後至何時)——沒理由的未修 finding 不得收斂留痕,防「說有問題就無限改」與「拖著不裁」兩頭(2026-07-17 外部評審吸收,見 [[GPT外部評審吸收_計劃]])——golden 語料是 auditor 校準的時間資產(語料累到 10+ 份即可做 replay 校準:拿凍結 spec 重跑審計、對照已知 findings 算各模型接住率,決定哪類 spec 直接上 opus)。→ 向人**回報收斂 + 上述天花板** → 交 **writing-plans** 出實作計畫 → 實作。
 
-> 設計全文見 `docs/design/2026-06-19-design-loop-skill.md`(B)與 `…-convergence-recording.md`(A 原語)、`…-canary-audit.md`(canary 機制)。
+> 設計全文見 `docs/design/2026-06-19-design-loop-skill.md`(B)與 `…-convergence-recording.md`(A 原語)、`…-canary-audit.md`(canary 機制)——**docs/design/ 全目錄已降唯讀歷史(2026-07-21),僅供考古,新設計一律寫圖譜計劃節點**。
