@@ -9692,6 +9692,39 @@ def t_m1_codeloop_r1_fixes():
     check("light 路徑印成本區", "成本" in r.stdout, r.stdout[-150:])
 
 
+def t_m1_codeloop_r2_fixes():
+    """code-loop 補審 r2 折入:G3 OSError rc2 對稱/next 損壞守衛/legacy gate min-seats。"""
+    print("t_m1_codeloop_r2_fixes")
+    v = mkvault()
+    spec = v / "Projects" / "r2spec.md"
+    spec.write_text("r2\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    # 1. panel/light 對 --spec 不可讀 → rc2(非 rc1;與 legacy G1 對稱)
+    run(v, "canary", "record", "caught", "--loop", f"os-{_M1U}", "--severity", "clean", "--findings", "0",
+        "--auditor", "a1", "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    r = run(v, "loop", "status", f"os-{_M1U}", "--light", "--gate", "--spec", str(v / "Projects"), "--repo", str(v.parent))
+    check("light --spec 目錄 rc2", r.returncode == 2, f"rc={r.returncode}")
+    for a in ("a1", "a2"):
+        run(v, "canary", "record", "caught", "--loop", f"osp-{_M1U}", "--round", "r1", "--auditor", a,
+            "--severity", "clean", "--findings", "0", "--capture-counts", "1",
+            "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    r = run(v, "loop", "status", f"osp-{_M1U}", "--panel", "--spec", str(v / "Projects"), "--repo", str(v.parent))
+    check("panel --spec 目錄 rc2", r.returncode == 2, f"rc={r.returncode}")
+    # 2. next 缺 --spec 也要跑帳本損壞守衛:round r1→r2→r1 非連續
+    for rid in ("r1", "r2", "r1"):
+        run(v, "canary", "record", "caught", "--loop", f"cor-{_M1U}", "--round", rid, "--auditor", "x",
+            "--severity", "clean", "--findings", "0", "--tier", "standard", expect_rc=0)
+    r = run(v, "loop", "next", f"cor-{_M1U}")
+    check("next 損壞帳 rc2(缺 --spec 也擋)", r.returncode == 2, f"rc={r.returncode}")
+    # 3. legacy gate 消費 --min-seats(無 auditor → 席數不足 FAIL)
+    for i in range(2):
+        run(v, "canary", "record", "caught", "--loop", f"lm-{_M1U}", "--severity", "clean", "--findings", "0",
+            "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    r = run(v, "loop", "status", f"lm-{_M1U}", "--need", "2", "--gate", "--min-seats", "1",
+            "--spec", str(spec), "--repo", str(v.parent))
+    check("legacy gate min-seats 生效", r.returncode == 1 and "席" in r.stdout, r.stdout[-150:])
+
+
 def t_show():
     """show 讀取入口(Projects/lumos-show讀取入口_計劃 八項):找到全文/找不到 rc2/--body-only/
     模糊名沿 env.find/唯讀(節點檔不變,usage-log 為預期副作用)/派發組迴歸/重開檔失敗 rc2 無

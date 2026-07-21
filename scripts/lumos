@@ -2418,7 +2418,7 @@ def _panel_extra_checks(latest, min_seats, spec):
         else:
             print(f"[panel] min-seats: ✓ — {seats} 相異席 ≥ {min_seats}")
     if spec is not None:
-        err, info = _hash_chain_check([latest], spec)
+        err, info = _hash_chain_check([latest], spec)   # OSError 上拋至 cmd_loop_status 統一 rc2
         if err:
             print(f"[panel] G3 hash: ✗ — {err}")
             fails.append("G3")
@@ -2704,10 +2704,7 @@ def _hash_chain_check(rounds_list, spec_path):
         if per_round[k + 1][0] != per_round[k][1]:
             return (f"鏈續性斷裂——第 {k + 2} 輪 reviewed ≠ 第 {k + 1} 輪 result"
                     "(折入版本與下輪受審版本不接)", "")
-    try:
-        cur = _sha256_file(spec_path)
-    except OSError as e:
-        return f"讀不到 --spec {spec_path}: {e}", ""
+    cur = _sha256_file(spec_path)   # OSError 上拋——呼叫端統一 rc2(code-loop r2:panel/light 原轉字串成 rc1,與 G1 不對稱)
     if per_round[-1][1] != cur:
         return "spec 於審計後被改動(窗末 result ≠ 當前檔),需再過一輪", ""
     return None, f"{len(per_round)} 輪鏈驗訖"
@@ -2774,7 +2771,11 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
               file=sys.stderr)
         return 2
     if panel:
-        return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec)
+        try:
+            return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec)
+        except OSError as e:   # G3 --spec 不可讀:與 legacy G1 對稱 rc2(code-loop r2 折入)
+            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            return 2
 
     # ── M1包 #2:light K=1 謂詞(loop機械脊椎M1包_計劃;hash 強制 fail-closed) ──
     if light:
@@ -2798,7 +2799,11 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
         sev, f = last.get("severity"), last.get("findings")
         if f is None or (sev == "clean" and f != 0) or (sev == "minor" and f < 1):
             fails.append(f"欄位互證矛盾:severity={sev} 與 findings={f} 不相容")
-        err, info = _hash_chain_check([[last]], spec)
+        try:
+            err, info = _hash_chain_check([[last]], spec)
+        except OSError as e:   # 與 legacy G1 對稱 rc2(code-loop r2 折入)
+            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            return 2
         if err:
             fails.append(err)
         elif info == "unbound":
@@ -2890,9 +2895,20 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
         fails.append("G2")
     else:
         print(f"[gate] G2 發現枯竭: ✓ — findings={fs}")
+    if min_seats:   # legacy gate 也消費(code-loop r2 折入:原 silent no-op,next 對 legacy 恆傳 1 淪死參數)
+        seats = len({a for r in tail if (a := r.get("auditor"))})
+        if seats < min_seats:
+            print(f"[gate] min-seats: ✗ — 席數不足({min_seats} 席制,窗內僅 {seats} 相異席;空席不計)")
+            fails.append("席數不足")
+        else:
+            print(f"[gate] min-seats: ✓ — {seats} ≥ {min_seats}")
     # ── M1包 #3 G3 雙 hash 鏈(帶 --spec=聲明要驗;收斂窗=tail need 筆) ──
     if spec is not None:
-        err, info = _hash_chain_check([[r] for r in tail], spec)
+        try:
+            err, info = _hash_chain_check([[r] for r in tail], spec)
+        except OSError as e:   # 對稱 G1 rc2(code-loop r2 折入;G1 讀 text 過≠hash 讀 bytes 必過,race 窗)
+            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            return 2
         if err:
             print(f"[gate] G3 hash 鏈: ✗ — {err}")
             fails.append("G3")
@@ -2948,6 +2964,17 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         print("ERROR: canary-log round 欄混用(partial-mix)——帳損壞,同 status 拒讀", file=sys.stderr)
         return 2
     panel_fmt = n_round > 0
+    if panel_fmt:   # 讀側損壞守衛不得因缺 --spec 提前 return 而繞過(code-loop r2 折入)
+        seen, cur_rid = set(), None
+        for r in rounds:
+            rid = r["round"]
+            if rid != cur_rid:
+                if rid in seen:
+                    print(f"ERROR: round-id {rid!r} 非連續重現(append-only 帳次序損壞)——同 status 拒讀",
+                          file=sys.stderr)
+                    return 2
+                seen.add(rid)
+                cur_rid = rid
     # ── tier 解析:定錨優先(v8);僅無定錨舊帳按格式推導;零記錄 rc2 ──
     anchor = next((r["tier"] for r in rounds if r.get("tier")), None)
     if tier and anchor and tier != anchor:
