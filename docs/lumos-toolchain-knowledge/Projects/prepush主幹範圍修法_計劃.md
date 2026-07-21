@@ -37,20 +37,24 @@ summary: |-
 - **stdin 最先讀**：hook 開頭（anchor verify 之前）把 stdin 逐行讀進陣列——防止後續任何指令（測試段等）繼承並吃掉 stdin。每行格式 `<local_ref> <local_sha> <remote_ref> <remote_sha>`。
 - **逐 ref 推導檢查範圍**：
   - `local_sha` 全零（刪除遠端 ref）→ 跳過該行。
-  - `remote_sha` 全零（新 ref，遠端無基準）→ fallback `git merge-base <local_sha> main|master`；**若 merge-base ∈ {無, local_sha 本身}（r1 s2-F1 折入：首推 main／main-tip 自比得空 diff＝重現盲區）→ fail-open 放行＋advisory**（「新 ref 無基準,風險檢跳過」——沿「寧漏勿誤擋」）。
-  - **`remote_sha` 非全零但本地無此物件（r1 s3-F3 折入：shallow clone／歷史分岔）→ `git cat-file -e <remote_sha>` 探測失敗即比照「無基準」fail-open＋advisory**（原會裸範圍送 pitfalls 報錯靜默吞、且不印 advisory＝與新 ref 路徑不對稱）。
-  - 一般情形 → 範圍 = `<remote_sha>..<local_sha>`。
+  - **★無基準＝保守掃全部，不 fail-open（r2 Codex 三席否決折入——樞紐反轉）★**：對守衛而言「算不出基準→跳過」是把盲區改成正式繞法（首推 main／`main:new-branch`／force-push 分岔未 fetch 全繞過，不需 --no-verify）。正確＝倒向**多掃**：以下情形一律用範圍 `<empty-tree-sha>..<local_sha>`（`git hash-object -t tree /dev/null` 得空樹 sha；scan 該 ref 引入的**全部**內容）跑 tier：
+    - `remote_sha` 全零（新 ref）；
+    - `git merge-base <local_sha> main|master` ∈ {無, `local_sha` 本身}（首推 main／main-tip 自比空 diff，r1 s2）；
+    - `git cat-file -e <remote_sha>` 失敗（shallow／force-push 分岔舊 tip 未 fetch，r1 s3＋r2 Codex#1）。
+    只有連 empty-tree 掃描都跑不起來（git 環境壞）才 advisory 放行。
+  - 一般情形（remote_sha 非全零且物件在本地）→ 範圍 = `<remote_sha>..<local_sha>`。
 - **聚合**：對每個有效範圍跑 `pitfalls --diff <range> --no-lint --json`；**逐 ref 獨立判——某 ref 判 high 即對「該 ref」走 code-loop check 硬擋（用其 --at-sha/--branch 座標，見 #2b）；非全域「整體 high」**（r1 修正：全域 high 會用一個 range 的判定套到別 ref 的留痕＝留痕脫鉤根源）。第一個 high ref 未過即擋、其餘 ref 可短路（成本＋明確性；r1 s3-F2 折入）。standard＋棧命中 → advisory；test-layers 逐範圍 advisory。多 ref push 常見於 `--all`/批次同步——逐 ref 迴圈變數每輪重置。
 - **無 stdin 行**（無實際推送）→ 跳過代碼風險段（其餘 anchor/測試/doctor 照舊）。
-- 原 merge-base 推導整段移除（被 stdin 範圍取代——分支 push 時 remote_sha..local_sha 天然等價於原意圖且更準：只檢真正要推的東西）。
+- 原 merge-base 推導整段移除（被 stdin 範圍取代）。**git 語意誠實記（r2 Codex#3 minor）**：`remote_sha..local_sha` 是**增量 endpoint diff**（`git diff A..B` 比兩端 tree），與舊 `merge-base(main,HEAD)..HEAD` **不等價**——後續 push 前者只比 remote tip↔新 tip、更貼「只檢真正要推的」，但不宜稱「天然等價」或 force-push「只涵蓋新側」。行為＝改成增量端點 diff，明說。
 
 ### #2 `lumos code-loop check --diff <a..b> [--at-sha <sha>]`（選配；r1 折入：旗標改名＋留痕座標）
 
 - **旗標名＝`--diff`（r1 s4-F3 折入，原 `--range` 與全 CLI 不一致）**：對齊 `pitfalls --diff`/`cochange --diff`/`test-layers --diff`/`impact --diff` 全用 `--diff <A..B>`。給了 → 跳過 merge-base 推導（:9464 段），直接以該範圍跑 pitfalls 算 tier。不給 → 現行為分毫不變（向後相容）。格式非 `<sha>..<sha>`／git 解不開 → 沿 fail-open（unknown tier、不 blocked）＋stderr 一句。
-- **★留痕座標脫鉤（r1 最重 major，codex-finder＋s2＋s4 三席互證）★**：現行 `_codeloop_guard_verdict` 的 pass/skip 留痕比對讀「**當前 checkout** 的 branch/HEAD」（:9502-9517 `_codeloop_git_branch`/`_codeloop_git_head`）；但 hook 逐 ref 檢的是**被推送 ref 的 local_sha**（可非當前 checkout——`git push origin featB:featB`、`--all`、代人推）。tier 用 range 算對了，留痕卻查錯分支 → **誤放**（借不相干分支的有效 pass）或**誤擋**（已收斂分支查錯檔）。修法：`code-loop check` 加 `--at-sha <sha>`＋`--branch <name>`（由 hook 傳被推送 ref 的 local_sha 與 `local_ref` 末段），留痕比對改對這兩者，不再讀 checkout。不給則沿現行讀 checkout（向後相容）。
+- **★留痕座標脫鉤（r1 最重 major，三席互證＋r2 Codex 確認）★**：現行留痕比對讀「**當前 checkout** 的 branch/HEAD」（:9502-9517）；hook 逐 ref 檢的是**被推送 ref 的 local_sha**（可非當前 checkout）→ 借錯分支留痕誤放/誤擋。修法：`code-loop check` 加 `--at-sha <sha>`＋`--branch <name>`，hook 傳被推送 ref 座標。
+- **★`--branch` 鍵正確性（r2 Codex#3 折入——原「取 local_ref 末段」是實作 bug）★**：marker 鍵＝完整 branch 名把 `/`→`__`（`feat/x`→`feat__x.json`，:9395）——取末段查 `x.json` 錯、且會名稱碰撞。修法：**只認 `refs/heads/*`**——去 `refs/heads/` 前綴後的**完整** branch 名（沿 :9395 的 `/`→`__` 轉換）作 `--branch` 值。`local_ref` 非 `refs/heads/*`（tag／`HEAD~`／raw revision，git 合約允許）→ 無對應 branch marker，**走保守掃描＋advisory「非分支 ref 無留痕綁定」**（不硬查、不強擋，另訂策略前的誠實預設）。
 
 ### #2b hook 逐 ref 傳留痕座標
-hook 對每個有效範圍呼叫 `code-loop check --diff <range> --at-sha <local_sha> --branch <local_ref 末段>`——tier 與留痕同軌對齊「這一條 ref」。
+hook 對每個 `refs/heads/*` 範圍呼叫 `code-loop check --diff <range> --at-sha <local_sha> --branch <去前綴的完整 branch 名>`；非 heads ref 走保守掃描 tier 判定但不綁留痕。
 
 ### #3 家規 advisory（純散文，一行）
 
@@ -69,7 +73,7 @@ hook 對每個有效範圍呼叫 `code-loop check --diff <range> --at-sha <local
 - 不做 push 範圍的 doctor/測試段範圍化（那兩段本來就是全量語意，與範圍無關）。
 - 不動 pass/skip 留痕的 sha 語意。
 - 不做 CLAUDE.md 紀律區塊改動。
-- 不做 force-push/rewrite 特判（remote_sha..local_sha 對 force push 天然給出新舊差集之外的東西——git 語意如此，誠實記載於隱患）。
+- 不做 force-push 的**特殊路徑**——但缺舊物件時走保守掃描（見 #1 樞紐反轉），非跳過。
 
 ## 測試策略
 
@@ -84,6 +88,11 @@ hook 對每個有效範圍呼叫 `code-loop check --diff <range> --at-sha <local
 
 **r1（2026-07-21，high panel W=4 sonnet 異鏡頭＋Codex 帶餌 finder＋無餌否決席）**：canary s2/s3/s4 caught、**s1 missed（summary↔body「空 stdin 提前 exit0 vs 只跳風險段」矛盾未抓，通才席漏鏡像面）→ 輪無效**；s1 findings 剔除（其主 finding＝留痕脫鉤已由 codex-finder＋s2＋s4 獨立三席互證浮回，無損）。canary token（--push-base/PUSH_RANGE_MAX/hook-sync.log）溯源排除不折。真 findings 折入 v2：
 - **★留痕座標脫鉤（major，三席互證，本輪最重）★**：pass/skip 留痕讀 checkout HEAD、tier 讀被推送 range——非當前 checkout 分支 push 時借錯分支留痕誤放/誤擋 → `--at-sha`/`--branch` 由 hook 傳；聚合改逐 ref 獨立判非全域 high。
+
+**r2（2026-07-21，Codex 帶餌 finder＋無餌否決席；復核 v2）**：finder canary caught；**否決席 VETO 3 major——全指向 v1/v2「無基準＝fail-open」的方向性錯誤**（我 r1 折入時把 shallow/首推都改 fail-open，反而把盲區升格成正式繞法）。全折 v3：
+- **★樞紐反轉（major×2，Codex 否決#1#2）★**：無基準（新 ref／self-base 空 diff／force-push 缺物件）一律 **`empty-tree..local_sha` 保守掃全部**，非跳過——守衛「算不出基準」必須倒向多掃。原 fail-open 條全撤。
+- **`--branch` 鍵 bug（major，Codex#3）**：取 local_ref 末段與 marker 鍵（完整名 `/`→`__`，:9395）不符＋非 heads ref 無綁定 → 限 `refs/heads/*` 用完整名，tag/raw 走保守掃描不綁留痕。
+- **git 語意誠實（minor，Codex）**：「天然等價」「只涵蓋新側」改「增量 endpoint diff」。
 - **首推 main mb==local_sha 空 diff（major，s2）**：重現盲區 → 併入 fail-open+advisory。
 - **shallow/remote_sha 本地無物件（major，s3）**：cat-file -e 探測 → fail-open+advisory（原不對稱靜默）。
 - **既有 t_codeloop_guard_prepush 崩（major，s3）**：dummy sha 在 stdin load-bearing 後失真 → 重寫真 sha，列同步義務。
@@ -95,6 +104,6 @@ hook 對每個有效範圍呼叫 `code-loop check --diff <range> --at-sha <local
 ## 實務隱患
 
 - **自舉面（r1 s?-誠實修正）**：本改動落地 push 時會判 high——但 tier=high **來自 `pitfall_when: glob:scripts/hooks/pre-push` 既有 claim 保底命中**（碰該檔即 high），**與新範圍演算法對錯無關**。故「有觸發 high」不能當「新邏輯正確」的自舉證據——真驗證靠 hook 模擬測試（測試 2/3），不靠落地那次 push 的 tier 值。
-- **fail-open 面**：新 ref 無基準時放行——與現行精神一致，但攻擊面誠實記載：故意用新 branch 首推繞檢。縱深＝家規 advisory＋CI。
-- **force-push 語意**：remote_sha..local_sha 對 rewrite 歷史只涵蓋新側——git 原生語意，不特判，記載即可。
+- **保守掃描的殘餘（r2 反轉後）**：無基準改掃 `empty-tree..local_sha`＝掃該 ref 全部內容——對「大量既有內容首推」會判 tier=high（保守；寧誤擋不誤放，守衛正確方向）；真需放行走 `code-loop skip --note` 留痕。只有 git 環境壞到 empty-tree 都掃不動才 advisory 放行（極窄）。
+- **非分支 ref（tag/raw）**：走保守掃描判 tier，但無 branch marker 可綁留痕 → advisory 不硬擋（另訂策略前的誠實預設，記為待辦）。
 - **stdin 消費順序**：bash 中若測試段先跑會吃掉 stdin——spec 明定最先讀；測試 2 有專門格。
