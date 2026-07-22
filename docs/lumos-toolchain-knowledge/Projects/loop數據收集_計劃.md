@@ -17,6 +17,7 @@ summary: |-
   KEY:★混淆★語料橫跨四五代協議(循序→panel 07-09→canary 硬化 07-10→M1 提效 07-16→M2 cluster 帳 07-16)——跨代混池=體溫計加溫度計;但版本更迭同時是 treatment variable(天然準實驗):跨代比較(panel 省輪?M1 辯方歸零?)可做,代內調參(每層 n=10-15)樣本不足
   KEY:replay 校準不受版本污染——golden 凍 spec+已知 findings(近似 ground truth 標籤),重跑審計算接住率與產出協議代無關;17 份遠超 10+ 門檻,隨時可跑 baseline
   KEY:逃逸帳=唯一能校準停止決策的標尺——「收斂好不好」ground truth 是下游抓到多少設計期漏的(實例:fromscratch 收斂後 code review 抓 token 消毒 blocker;M2 收斂後 code-loop 抓 Codex 3 洞);現只在散文,無機械歸因
+  KEY:[2026-07-22 日報吸收]逃逸帳方向外部獨立背書——Meta-Engineering Harnesses(arXiv 2605.25665,小團隊獨立做出「合約+角色分工+對抗驗證」幾乎 lumos 翻版)多做一件 lumos 缺的:把失誤歸類回頭校準把關器(付費金流案例=合約沒寫全/驗證邊界有洞被歸類後修 gate)。**吸收=記錄半(失誤分類+攢+看哪類一直漏,補 canary「戰績帳誰抓到」缺的另一半「失誤帳誰一直漏」)值得做、即 escape record/promote([[Projects/全盤外審2026-07_調研]] finding5);自動調參半(自動改 difficulty 關鍵詞/tier 門檻)仍守本節點 DECISION「先累後校準順序不可倒」+risk-tiered 誠實天花板(tier 按類別非難度),應 advisory 浮「X 類一直漏」→人裁改 gate(改 gate=self-governance=high 本就人裁)。天花板:靠漏網被下游抓+回報+歸類,GIGO 同 cluster 分類**
   KEY:★北極星★[2026-07-17 外部評審吸收,見[[Projects/GPT外部評審吸收_計劃]]]——「流程是否讓正常改動變快,而不只讓錯誤改動變困難」:只防錯但人人想繞的流程終被繞過;效率軸(需求→合併時間/每有效 finding 成本/誤擋耗時)與品質軸(逃逸帳)並列,提效工作(M1/三輪壓縮)以此錨定
   DECISION:v1 不做統計模型/dashboard/自動調參(代內 n 不足,先累後校準順序不可倒);只做「訊號機械化+歸因」四件:自主 loop 歸檔/逃逸帳/epoch 蓋章/分層 stats
   DEP:[[Systems/loop-convergence-recording]]｜[[Systems/autonomous-iteration-loop]]
