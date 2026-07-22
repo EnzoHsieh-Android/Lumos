@@ -262,6 +262,77 @@ def t_install_hooks_py():
           hp.stdout.strip() == "scripts/hooks", f"got {hp.stdout!r} stderr={r.stderr}")
 
 
+def _load_lumos_module():
+    """動態載入 scripts/lumos(無 .py 副檔名)為模組,供直接呼叫內部函式。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def t_install_global_hook_sync():
+    """install全域hook同步_計劃:cmd_install 尾端同步全域 hooks/settings(全域機器自癒)。
+    在假 HOME 直呼 _sync_global_claude(repo):copy 三 hook + 撤除舊 code-loop-guard + prune 懸空註冊。
+    嚴禁碰真 ~/.claude(用 HOME=tmp 隔離)。"""
+    import os, json as _j, subprocess as _sp
+    repo = Path(GRAPHCTL).resolve().parent.parent
+
+    def run_sync(home):
+        code = ("import sys;from pathlib import Path;"
+                "import importlib.util;from importlib.machinery import SourceFileLoader;"
+                "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
+                "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+                "m._sync_global_claude(Path(sys.argv[2]))")
+        return _sp.run([sys.executable, "-c", code, GRAPHCTL, str(repo)],
+                       env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)),
+                       capture_output=True, text=True)
+
+    # 1. 乾淨假 HOME → copy 三 hook + settings 註冊我方 hook
+    fake = Path(tempfile.mkdtemp(prefix="gctl-gsync-"))
+    r = run_sync(fake)
+    hooks = fake / ".claude" / "hooks"
+    for h in ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py"):
+        check(f"global sync: {h} copied", (hooks / h).exists(), f"stderr={r.stderr[-200:]}")
+    st = fake / ".claude" / "settings.json"
+    check("global sync: settings.json 產生", st.exists(), f"stderr={r.stderr[-200:]}")
+    if st.exists():
+        data = _j.loads(st.read_text(encoding="utf-8"))
+        allcmds = _j.dumps(data.get("hooks", {}), ensure_ascii=False)
+        check("global sync: 註冊 check-graph-sync", "check-graph-sync.py" in allcmds, allcmds[:200])
+
+    # 2. 舊 code-loop-guard 真檔 + Stop 註冊 → sync 後檔刪 ∧ 註冊剪
+    fake2 = Path(tempfile.mkdtemp(prefix="gctl-gsync2-"))
+    h2 = fake2 / ".claude" / "hooks"; h2.mkdir(parents=True)
+    (h2 / "code-loop-guard.py").write_text("# stale\n", encoding="utf-8")
+    (fake2 / ".claude" / "settings.json").write_text(_j.dumps({"hooks": {"Stop": [
+        {"hooks": [{"type": "command", "command": 'python3 "${HOME}/.claude/hooks/code-loop-guard.py"'}]}
+    ]}}, ensure_ascii=False), encoding="utf-8")
+    run_sync(fake2)
+    check("global sync: 撤除 code-loop-guard.py 真檔被刪", not (h2 / "code-loop-guard.py").exists())
+    data2 = _j.loads((fake2 / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    check("global sync: code-loop-guard Stop 註冊被剪", "code-loop-guard" not in _j.dumps(data2, ensure_ascii=False))
+
+    # 3. 使用者自訂 Stop hook(指他處)保留、不誤剪
+    fake3 = Path(tempfile.mkdtemp(prefix="gctl-gsync3-"))
+    (fake3 / ".claude").mkdir(parents=True)
+    (fake3 / ".claude" / "settings.json").write_text(_j.dumps({"hooks": {"Stop": [
+        {"hooks": [{"type": "command", "command": 'python3 /home/me/my-own-hook.py'}]}
+    ]}}, ensure_ascii=False), encoding="utf-8")
+    run_sync(fake3)
+    data3 = _j.loads((fake3 / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    check("global sync: 使用者自訂 hook 保留(不誤剪)", "my-own-hook.py" in _j.dumps(data3, ensure_ascii=False))
+
+    # 4. 冪等:跑兩次結果一致
+    fake4 = Path(tempfile.mkdtemp(prefix="gctl-gsync4-"))
+    run_sync(fake4)
+    s1 = (fake4 / ".claude" / "settings.json").read_text(encoding="utf-8")
+    run_sync(fake4)
+    s2 = (fake4 / ".claude" / "settings.json").read_text(encoding="utf-8")
+    check("global sync: 冪等(跑兩次 settings 一致)", s1 == s2)
+
+
 def t_hooks_python_fallback():
     import pathlib
     repo = pathlib.Path(GRAPHCTL).resolve().parent.parent
@@ -6516,21 +6587,14 @@ def t_hook_copy_list_completeness():
                 if m:
                     registered.add(m.group(1))
 
-    # ── 側 B:從 scripts/lumos 源碼 grep _install_hooks_py 的 for-tuple ────────
+    # ── 側 B:從 scripts/lumos 源碼抽 _GLOBAL_CLAUDE_HOOKS 常數(現役 copy 清單真相源;
+    # install全域hook同步_計劃:清單自 _install_hooks_py 抽出移入常數,_sync_global_claude 用它)──
     lumos_src = Path(__file__).resolve().parent / "lumos"
     src_text = lumos_src.read_text(encoding="utf-8")
-    # 先錨定到 def _install_hooks_py(不再抓全檔第一個 for f in——那會被別處
-    # 無關的 `for f in (...)`(如 sarif 轉換、capture-counts)搶走 → copy_list 抓空誤紅)。
-    fn = _re.search(r'def _install_hooks_py\b', src_text)
-    check("hook_copy_list_completeness: 源碼有 _install_hooks_py", fn is not None,
-          "找不到 def _install_hooks_py——測試錨點失效")
-    scope = src_text[fn.start():] if fn else src_text
-    # 在該函式範圍內找複製清單 for f in (...):(取函式起點後第一個)
-    m2 = _re.search(r'for f in \(([^)]+)\)', scope)
-    copy_list: set[str] = set()
-    if m2:
-        inner = m2.group(1)
-        copy_list = set(_re.findall(r'"([\w.\-]+\.py)"', inner))
+    m2 = _re.search(r'_GLOBAL_CLAUDE_HOOKS\s*=\s*\(([^)]*)\)', src_text)
+    check("hook_copy_list_completeness: 源碼有 _GLOBAL_CLAUDE_HOOKS 常數", m2 is not None,
+          "找不到 _GLOBAL_CLAUDE_HOOKS——測試錨點失效")
+    copy_list: set[str] = set(_re.findall(r'"([\w.\-]+\.py)"', m2.group(1))) if m2 else set()
 
     # ── 斷言:registered ⊆ copy_list ──────────────────────────────────────────
     missing = registered - copy_list

@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-22
 updated: 2026-07-22
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Projects/code-loop必用守衛_計劃]]"
   - "[[Systems/lumos-cli-lifecycle]]"
@@ -20,6 +20,8 @@ summary: |-
   TEST:t_install_syncs_global_hooks(copy 三 hook+跑 merge)/t_install_prunes_stale_stop(植假 code-loop-guard Stop 註冊+真檔→install 後檔刪+註冊剪)/settings 既有內容(使用者自訂 hook)保留/冪等(跑兩次同結果)/update 委派同函式不迴歸
   DEP:scripts/lumos cmd_install/_install_hooks_py/merge-claude-settings.py
   PRIOR-ART:①最小解=抽既有 ②③ 成函式+install 呼叫,零新機制;撤除檔清理對稱 2026-07-06 ADR ②世界解=無需外求(內部分工重構) ③裁定=borrow-design(既有 _prune_dangling/copy 復用)
+verified_by:
+  - "[[Verification/2026-07-22_install全域hook同步]]"
 ---
 # install全域hook同步_計劃
 

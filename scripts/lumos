@@ -5893,6 +5893,10 @@ def cmd_install(force=False):
     # 連帶裝 skills(r2-F1:機器層一鍵)
     print("裝 user-scope skills…")
     _install_skills()
+    # 全域 ~/.claude hooks/settings 同步(install全域hook同步_計劃:全域機器自癒——
+    # copy 現役 hooks + 刪已撤除 hook 殘留 + prune 懸空註冊;來源=來源 repo 自身)
+    _sync_global_claude(Path(__file__).resolve().parent.parent)
+    print("  ✓ 全域 Claude hooks/settings 已同步(含清撤除的舊 Stop 註冊)")
     # PATH 檢查(r1-F7:用 os.pathsep,Windows 是 ;)
     if str(bindir) not in os.environ.get("PATH", "").split(os.pathsep):
         hint = (f'  Windows:把 {bindir} 加進使用者 PATH(系統環境變數)'
@@ -6478,23 +6482,41 @@ def _scaffold_project(root: Path, slug: str):
     print(f"  ✓ scaffold {kg}")
 
 
-def _install_hooks_py(root: Path):
+_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py")
+# 已撤除的全域 hook：install/update 主動刪其殘留真檔(否則 _prune_dangling 因「非懸空」不剪、nag 不停)。
+# code-loop-guard.py:2026-07-06 ADR 撤除 Stop nag(見 Projects/code-loop必用守衛_計劃)。撤別的 hook 在此補。
+_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py",)
+
+
+def _sync_global_claude(src_repo: Path):
+    """全域 ~/.claude hooks/settings 同步(不需專案;install 與 _install_hooks_py 共用)。
+    ①copy 現役 hooks ②刪已撤除 hook 殘留真檔 ③跑 merge-claude-settings(_prune_dangling 剪懸空註冊)。
+    來源=src_repo(install 用來源 repo 自身、update 用專案 vendored copy);寫 ~/.claude(HOME 隔離可測)。
+    設計:Projects/install全域hook同步_計劃。"""
     import subprocess, shutil
-    # ① git config core.hooksPath
-    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"])
-    # ② 複製 Claude hooks 到 ~/.claude/hooks/(個別 .py 一律 copy,不用 junction:mklink /J 只連目錄)
     chooks = Path.home() / ".claude" / "hooks"
     chooks.mkdir(parents=True, exist_ok=True)
-    src_dir = root / "scripts" / "hooks" / "claude"
-    for f in ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py"):
+    src_dir = src_repo / "scripts" / "hooks" / "claude"
+    for f in _GLOBAL_CLAUDE_HOOKS:            # ① 現役 hooks copy
         s = src_dir / f
         if s.exists():
             shutil.copy2(s, chooks / f)
-    # ③ settings.json 註冊(Task 3 改 merge-claude-settings.py 用 resolved python)
-    merge = root / "scripts" / "merge-claude-settings.py"
+    for f in _RETIRED_CLAUDE_HOOKS:           # ② 撤除 hook 殘留真檔主動刪
+        stale = chooks / f
+        if stale.exists() or stale.is_symlink():
+            stale.unlink()
+    merge = src_repo / "scripts" / "merge-claude-settings.py"  # ③ merge+prune 懸空(含②剛變懸空的)
     if merge.exists():
         subprocess.run([sys.executable, str(merge)])
-    print("  ✓ hooks:core.hooksPath + Claude hooks 複製 + settings 註冊")
+
+
+def _install_hooks_py(root: Path):
+    import subprocess
+    # ① git config core.hooksPath(專案本地)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"])
+    # ②③ 全域 hooks/settings 同步(委派共用函式,消雙寫;來源=專案 vendored copy)
+    _sync_global_claude(root)
+    print("  ✓ hooks:core.hooksPath + 全域 Claude hooks 同步(copy+撤除清理+settings)")
 
 
 def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False):

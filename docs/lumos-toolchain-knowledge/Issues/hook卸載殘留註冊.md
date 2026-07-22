@@ -19,6 +19,7 @@ summary: |-
   KEY:二次教訓(誠實)=清理前的 settings 殘留檢查回報「無」是假陰性(檢查方寫的 python 遍歷可能沒對齊實際巢狀結構)→ 檢查通過≠真乾淨,結構性修法(自動 prune)優於一次性檢查
   DECISION:[2026-07-07] 修=merge-claude-settings 加 _prune_dangling:merge 前剪掉「command 含 .claude/hooks/ 且腳本檔不存在」的註冊(懸空只會報錯,剪除普遍安全);使用者自訂(指向他處)不碰;[test:t_merge_settings_prunes_dangling]
   KEY:通則=凡「A 端刪除、B 端引用」的成對資源(腳本↔註冊/檔案↔複製清單),守衛要嘛做成對稱操作、要嘛在 B 端做懸空自癒;同型前例=C1/T12(註冊了沒複製)的鏡像(複製了沒註冊→刪了沒解註冊)
+  KEY:[2026-07-22 殘尾補收,見[[Projects/install全域hook同步_計劃]]]——_prune_dangling 只清「檔已刪的懸空註冊」,但**別台只全域裝的機器**舊 code-loop-guard.py **真檔還在**(install 不同步全域→舊 copy 沒被刪→非懸空→不剪→nag 不停)。修=①install 也跑全域 hooks/settings 同步(原只 update 有、且綁專案 vault)②`_RETIRED_CLAUDE_HOOKS` 常數主動刪已撤除 hook 殘留真檔→變懸空→_prune 收掉。對稱操作補齊「刪腳本」那半,通則落實
 ---
 # hook 卸載殘留註冊(現場事故)
 
