@@ -12,6 +12,7 @@ verified_by:
 summary: |-
   FLOW:design-loop §2 步驟8 達標(連2輪caught+sev∈{clean,minor})→§2.5 放行前複核一次：opus 取材(grep spec 引用檔/符號當 ground-truth)→調 run_cross_audit() 打 qwen3-max(refute framing)→先判 status：degraded→放行標 degraded｜ok+≤minor→endorsed 放行｜ok+≥major→qwen findings 當新一輪 audit、opus grep 驗證後折入/標反證、cross_reject_count+1 回步驟1 續審，達2→停 disputed 不放行(必伴 converged:false)
   KEY:autonomous loop design-loop 收斂判定後、放行前多一道 qwen3-max 跨家族複核，補 opus 同門盲點；不取代每輪 judge-severity-gate
+  KEY:★誠實界線[2026-07-23 日報吸收]★——「連 K 輪一致＝收斂」分不出「真乾淨」vs「集體失手」:多 agent 辯論式評審第二輪就結構性塌成「要嘛一起對、要嘛一起錯」,兩者從外面看一模一樣(arXiv 2510.12697/2604.18005;根因=agent 互看→多樣性崩壞→退化成多數決)。**lumos 現行已對半緩解**:①禁互辯(reviewer 結構明文化,評審不互看不迭代)②本節點跨家族複核+獨立證據錨(opus grep ground-truth / Codex 乾淨脈絡不傳審計結論)——正是此研究開的藥。**殘餘界線**:同源訓練(蒸餾/同家族)的「不同牌子」評審仍可能耦合,「跨輪趨於一致」該讀作可能耦合警訊、非信心上升;最關鍵一判(cap 攤牌/blocker 裁決)仍須錨一次真獨立證據(真跑測試/人抽驗),別讓「討論到沒人反對」充當「大家都對」。接 07-20「分歧即訊號」更深一層:連收斂成因本身都要查(見 Preference Leakage 血緣降權,同日報)
   KEY:run_cross_audit 只回 status+worst_severity；cross_verdict 判定在 orchestrator(prompt 層)，scripts/lumos good() 一行不動
   KEY:fail-open——API 掛/無key/429/超時→degraded、退回 opus 單審放行並 log/LINE 標註，不卡死 loop(誠實天花板 #4：degraded 是旁路非通過)
   KEY:結果回流走 orchestrator §3 三個扁平欄位 cross_verdict/cross_worst/cross_summary→autonomous-loop.sh get() 取；不碰 build_report、不寫跨程序檔
