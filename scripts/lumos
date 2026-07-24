@@ -5938,7 +5938,9 @@ def cmd_uninstall():
         if g.is_symlink():
             removed.append(f"{g}(symlink → {g.resolve()})"); g.unlink()
         elif g.exists():
-            removed.append(str(g)); g.unlink()
+            # 守衛(std F10,teardown一鍵拆機_計劃):同名一般檔不刪(可能是使用者別的工具);
+            # 只有 symlink 才是我方 install 產物。避免 uninstall/teardown 誤刪非我方檔。
+            print(f"  ⚠ {g} 是一般檔(非 symlink),保留不動——非 lumos 安裝物", file=sys.stderr)
     sk = Path.home() / ".claude" / "skills"      # 對稱 _install_skills:junction/symlink/複製夾都清
     for s in _SKILLS:
         d = sk / s
@@ -5954,6 +5956,48 @@ def cmd_uninstall():
         print("✓ 移除:\n  " + "\n  ".join(removed))
     else:
         print("✓ 未安裝(無全域 lumos / skills)")
+    return 0
+
+
+def cmd_teardown(yes=False, source=None):
+    """一鍵拆機:當前 repo 專案層 + 機器全域(CLI/skills/hooks),★永遠保留圖譜文件★。
+    範圍(std F11)=當前 repo + 機器全域,非全機所有 repo(別 repo 的注入/hooks、來源 clone 都留)。
+    三步順序(std F5,全域先——趁 deinit 還沒刪掉 vendored merge):
+      ①_teardown_global_claude ②cmd_deinit(keep_graph=True) ③cmd_uninstall。
+    設計/審計:Projects/teardown一鍵拆機_計劃。"""
+    import subprocess
+    try:                                       # repo root(對稱 deinit,非 git 中止)
+        root = Path(subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True,
+            stderr=subprocess.DEVNULL).strip())
+    except Exception:
+        print("ERROR: 非 git 目錄,teardown 需可靠 repo root(不 fallback cwd)", file=sys.stderr)
+        return 2
+    src = _lumos_src(source)
+    if root.resolve() == src.resolve():
+        print("ERROR: 當前就是 Lumos 來源本身,teardown 拒絕執行", file=sys.stderr)
+        return 2
+    # 確認——★拒絕/取消前零 mutation★(std F13)
+    if not yes:
+        if not sys.stdin.isatty():
+            print("ERROR: 非互動環境且未加 --yes,拒絕 teardown。加 --yes 確認。", file=sys.stderr)
+            return 2
+        print("teardown 將拆【當前 repo 專案層】(pre-commit/pre-push 閘、CLAUDE.md 注入、vendored 工具)")
+        print("  +【機器全域】(~/.local/bin/lumos、~/.claude/skills/lumos-*、~/.claude 全域 hooks)。")
+        print("  圖譜文件保留。⚠ 繼承的破壞性:scripts/hooks|templates 整夾刪、~/.claude/skills 全移。")
+        print("  (只拆當前 repo——別的 repo 與 bootstrap 來源 clone 不動。)")
+        if input("確定? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("已取消(未改動)。")
+            return 0
+    # 三步(全域先)
+    print("① 全域 hook 清理…")
+    _teardown_global_claude(Path(__file__).resolve().parent.parent)
+    print("② 拆專案層(deinit,保留圖譜)…")
+    rc_deinit = cmd_deinit(keep_graph=True, yes=True, source=source)
+    print("③ 拆機器 CLI/skills(uninstall)…")
+    rc_uninstall = cmd_uninstall()
+    print(f"✓ teardown 完成(deinit rc={rc_deinit} / uninstall rc={rc_uninstall};圖譜保留)。"
+          "  重裝:bootstrap 或 install + init。")
     return 0
 
 
@@ -6036,8 +6080,24 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
 def _deinit_unbar_gate(root: Path) -> int:
     """拆 pre-commit 閘:git -C root config --unset core.hooksPath。
     rc 0(已 unset)/ rc 5(key 本不存在)皆成功;其他 rc 印 warning 但不中止
-    (真正保險是 step 4 會把 scripts/hooks/ 整夾刪掉,缺 hook 檔 git 自會放行)。"""
+    (真正保險是 step 4 會把 scripts/hooks/ 整夾刪掉,缺 hook 檔 git 自會放行)。
+    守衛(std F8,teardown一鍵拆機_計劃):只在 core.hooksPath 指向本 repo scripts/hooks 時才 unset;
+    指向使用者自設(如 .githooks)則保留不動——別誤殺使用者的 git hooks(deinit/teardown 共用此安全)。"""
     import subprocess
+    cur = subprocess.run(["git", "-C", str(root), "config", "--get", "core.hooksPath"],
+                         capture_output=True, text=True)
+    val = cur.stdout.strip()
+    if val:
+        vp = Path(val) if Path(val).is_absolute() else (root / val)
+        ours = (root / "scripts" / "hooks")
+        try:
+            same = vp.resolve() == ours.resolve()
+        except Exception:
+            same = str(vp) == str(ours)
+        if not same:
+            print(f"  ⚠ core.hooksPath={val} 非指向 lumos(scripts/hooks),保留不動(可能是你自設的)",
+                  file=sys.stderr)
+            return 0
     r = subprocess.run(["git", "-C", str(root), "config", "--unset", "core.hooksPath"],
                        capture_output=True, text=True)
     if r.returncode not in (0, 5):
@@ -6529,6 +6589,35 @@ def _sync_global_claude(src_repo: Path):
     merge = src_repo / "scripts" / "merge-claude-settings.py"  # ③ merge+prune 懸空(含②剛變懸空的)
     if merge.exists():
         subprocess.run([sys.executable, str(merge)])
+
+
+def _teardown_global_claude(src_repo: Path):
+    """_sync_global_claude 的移除半邊(teardown 用):清全域 ~/.claude 的我方 hook + 剪其懸空註冊。
+    ①先驗 settings.json 可解析→壞則跳過+warn、★不刪 .py★(不製造懸空,std F6)②rm 我方現役+撤除 hook
+    ③跑 merge --prune-only(★只剪懸空、不 re-add★——預設 merge 會把 hook 加回,抵銷 teardown)。
+    須在 deinit 刪掉 vendored merge-claude-settings.py 之前跑(std F5,由 cmd_teardown 順序保證)。
+    設計:Projects/teardown一鍵拆機_計劃。回 True=已處理 / False=因 settings 壞跳過。"""
+    import subprocess, json
+    chome = Path.home() / ".claude"
+    chooks, settings = chome / "hooks", chome / "settings.json"
+    if settings.exists():                     # ① 先驗可解析(壞 → 不半做)
+        try:
+            json.loads(settings.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"  ⚠ ~/.claude/settings.json 無法解析({e}),跳過全域 hook 清理"
+                  "(避免刪了檔卻剪不掉註冊、留懸空)", file=sys.stderr)
+            return False
+    removed = []                              # ② rm 我方 hook 真檔
+    for f in _GLOBAL_CLAUDE_HOOKS + _RETIRED_CLAUDE_HOOKS:
+        p = chooks / f
+        if p.exists() or p.is_symlink():
+            p.unlink(); removed.append(f)
+    merge = src_repo / "scripts" / "merge-claude-settings.py"   # ③ prune-only 剪懸空我方註冊
+    if merge.exists() and settings.exists():
+        subprocess.run([sys.executable, str(merge), "--prune-only"])
+    print(f"  ✓ 全域 hook 清理:移除 {len(removed)} 檔 + 剪懸空我方註冊" if removed
+          else "  ✓ 全域 hook:無我方殘留")
+    return True
 
 
 def _install_hooks_py(root: Path):
@@ -9881,6 +9970,10 @@ def main():
     p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(CI/非互動用)")
     p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
 
+    p = sub.add_parser("teardown", help="一鍵拆機:當前 repo 專案層 + 機器全域(CLI/skills/hooks),保留圖譜")
+    p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(非互動環境必須)")
+    p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
+
     p = sub.add_parser("fold-check", help="折入後一致性複查(vault-free):列舉鏡像段 + value-drift/reverse-omission flag")
     p.add_argument("path", help="要核對的 markdown 檔路徑")
     p.add_argument("--json", dest="as_json", action="store_true", help="JSON 輸出(供機器讀)")
@@ -9991,6 +10084,8 @@ def main():
         return cmd_install(force=args.force)
     if args.cmd == "uninstall":
         return cmd_uninstall()
+    if args.cmd == "teardown":
+        return cmd_teardown(yes=args.yes, source=args.source)
     if args.cmd == "update":
         return cmd_update(source=args.source, no_pull=args.no_pull)
     if args.cmd == "bootstrap":

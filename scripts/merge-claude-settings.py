@@ -139,7 +139,11 @@ def main() -> int:
         print(f"  [prune] {event} hook → {script}(檔案不存在,懸空註冊已清)")
         changed = True
 
-    for event, entries_to_add in HOOK_ENTRIES.items():
+    # --prune-only:只剪懸空、★不 re-add★(teardown 用——刪掉我方 hook .py 後跑此模式,
+    # 剪掉變懸空的我方註冊而不把它加回去;預設 merge 模式會 re-add,反而抵銷 teardown)。
+    prune_only = "--prune-only" in sys.argv
+
+    for event, entries_to_add in ({} if prune_only else HOOK_ENTRIES).items():
         existing = settings["hooks"].setdefault(event, [])
         for new_entry in entries_to_add:
             match_idx = next((i for i, e in enumerate(existing) if _equivalent(new_entry, e)), None)

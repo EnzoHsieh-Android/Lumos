@@ -2851,6 +2851,117 @@ def t_deinit_unbar_gate():
     check("deinit unbar: 重複 unset rc5 不崩潰", rc2 in (0, 5), f"rc={rc2}")
 
 
+def t_deinit_unbar_gate_user_value():
+    """teardown std F8 守衛:core.hooksPath 指使用者值(非本 repo scripts/hooks)→ 保留不 unset。"""
+    import subprocess
+    from pathlib import Path
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-unbar-user-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", ".githooks"],
+                   capture_output=True, text=True)
+    m._deinit_unbar_gate(root)
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("unbar 守衛: 使用者 core.hooksPath(.githooks)保留、不 unset",
+          hp.stdout.strip() == ".githooks", f"got {hp.stdout!r}")
+
+
+def _teardown_run(home, fn):
+    """假 HOME 隔離載入 lumos 模組直呼函式(fn 取 repo Path 參數)。"""
+    import os, subprocess as _sp
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    code = ("import sys;from pathlib import Path;"
+            "import importlib.util;from importlib.machinery import SourceFileLoader;"
+            "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
+            "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+            f"m.{fn}(Path(sys.argv[2]))")
+    return _sp.run([sys.executable, "-c", code, GRAPHCTL, str(repo)],
+                   env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)),
+                   capture_output=True, text=True)
+
+
+def t_teardown_global_claude():
+    """teardown一鍵拆機:_teardown_global_claude 清全域我方 hook+剪懸空註冊、保留使用者 hook、
+    壞 JSON 跳過不半做。假 HOME 隔離(嚴禁碰真 ~/.claude)。"""
+    import json as _j
+    # 1. 先 sync 裝好我方 hook → 植使用者 hook → teardown
+    home = Path(tempfile.mkdtemp(prefix="gctl-td-"))
+    _teardown_run(home, "_sync_global_claude")
+    st = home / ".claude" / "settings.json"
+    hooks = home / ".claude" / "hooks"
+    data = _j.loads(st.read_text(encoding="utf-8"))
+    data.setdefault("hooks", {}).setdefault("Stop", []).append(
+        {"hooks": [{"type": "command", "command": "python3 /home/me/mine.py"}]})
+    st.write_text(_j.dumps(data, ensure_ascii=False), encoding="utf-8")
+    r = _teardown_run(home, "_teardown_global_claude")
+    check("teardown-global: 我方 hook .py 移除",
+          not (hooks / "check-graph-sync.py").exists(), r.stderr[-200:])
+    dump = _j.dumps(_j.loads(st.read_text(encoding="utf-8")), ensure_ascii=False)
+    check("teardown-global: 我方註冊被剪", "check-graph-sync.py" not in dump, dump[:300])
+    check("teardown-global: 使用者 hook 保留(不誤剪)", "mine.py" in dump, dump[:300])
+    # 2. 壞 JSON → 跳過、★不刪 .py★(不半做)
+    home2 = Path(tempfile.mkdtemp(prefix="gctl-td2-"))
+    _teardown_run(home2, "_sync_global_claude")
+    (home2 / ".claude" / "settings.json").write_text("{ broken ", encoding="utf-8")
+    _teardown_run(home2, "_teardown_global_claude")
+    check("teardown-global: 壞 JSON 跳過→我方 hook .py 不被刪(不製造懸空)",
+          (home2 / ".claude" / "hooks" / "check-graph-sync.py").exists())
+
+
+def t_merge_prune_only():
+    """merge --prune-only:只剪懸空、★不 re-add★(teardown 用;預設模式會 re-add 抵銷 teardown)。"""
+    import os, json as _j, subprocess as _sp
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    merge = repo / "scripts" / "merge-claude-settings.py"
+    home = Path(tempfile.mkdtemp(prefix="gctl-po-"))
+    (home / ".claude").mkdir(parents=True)
+    st = home / ".claude" / "settings.json"
+    st.write_text("{}", encoding="utf-8")
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+    _sp.run([sys.executable, str(merge), "--prune-only"], env=env, capture_output=True, text=True)
+    d = _j.loads(st.read_text(encoding="utf-8"))
+    check("merge --prune-only: 不 re-add 我方 hook",
+          "check-graph-sync" not in _j.dumps(d, ensure_ascii=False), str(d)[:200])
+    _sp.run([sys.executable, str(merge)], env=env, capture_output=True, text=True)  # 對照:預設會 add
+    d2 = _j.loads(st.read_text(encoding="utf-8"))
+    check("merge 預設模式: re-add 我方 hook(對照組)",
+          "check-graph-sync" in _j.dumps(d2, ensure_ascii=False), str(d2)[:200])
+
+
+def t_uninstall_preserves_regular_bin():
+    """teardown std F10 守衛:~/.local/bin/lumos 為一般檔(非 symlink)→ cmd_uninstall 保留不刪。假 HOME。"""
+    import os, subprocess as _sp
+    home = Path(tempfile.mkdtemp(prefix="gctl-unin-reg-"))
+    bindir = home / ".local" / "bin"
+    bindir.mkdir(parents=True)
+    (bindir / "lumos").write_text("#!/bin/sh\necho other\n", encoding="utf-8")   # 一般檔非 symlink
+    code = ("import sys;from pathlib import Path;"
+            "import importlib.util;from importlib.machinery import SourceFileLoader;"
+            "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
+            "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);m.cmd_uninstall()")
+    _sp.run([sys.executable, "-c", code, GRAPHCTL],
+            env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)),
+            capture_output=True, text=True)
+    check("uninstall 守衛: 同名一般檔(非 symlink)保留、不刪", (bindir / "lumos").exists())
+
+
+def t_teardown_refuse_zero_mutation():
+    """teardown std F13:非互動環境無 --yes → rc2 拒絕,且拒絕前零 mutation。"""
+    import subprocess
+    root = Path(tempfile.mkdtemp(prefix="gctl-td-refuse-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+    r = subprocess.run([sys.executable, GRAPHCTL, "teardown"], cwd=str(root),
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    check("teardown refuse: 非互動無 --yes → rc2", r.returncode == 2, f"rc={r.returncode} {r.stderr[-150:]}")
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("teardown refuse: 拒絕前零 mutation(core.hooksPath 未動)",
+          hp.stdout.strip() == "scripts/hooks", f"got {hp.stdout!r}")
+
+
 def t_deinit_strip_claude():
     from pathlib import Path
     m = _load_lumos()

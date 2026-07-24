@@ -10,6 +10,8 @@ tags:
 summary: |-
   FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install/uninstall)→專案層每repo(init 建vault+vendor工具組+裝閘｜update 刷新vendored｜deinit 對稱反安裝)
   KEY:兩層分工——機器層(install/uninstall/bootstrap)動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Claude hooks);專案層(init/update/deinit)只動本 repo(docs/<slug>-knowledge、scripts/ vendored、CLAUDE.md 注入、core.hooksPath)
+  KEY:teardown(2026-07-24)=一鍵反安裝,跨兩層:全域hook清理→deinit(keep_graph=True)→uninstall,★永遠保留圖譜文件★;範圍=當前 repo+機器全域(非全機所有 repo,deinit 只吃當前 toplevel)。順序「全域先」因 deinit 會刪 vendored merge-claude-settings.py 而 _teardown_global_claude 要用它;全域清理走 merge --prune-only(只剪懸空不 re-add)+壞 settings JSON 先驗跳過不刪 .py。設計/審計 [[Projects/teardown一鍵拆機_計劃]]、[[Verification/2026-07-24_teardown一鍵拆機]]
+  KEY:安全守衛(2026-07-24,改共用函式故 deinit/uninstall 直呼也受惠)——_deinit_unbar_gate 只在 core.hooksPath 指向本 repo scripts/hooks 才 unset(不誤殺使用者 githooks)｜cmd_uninstall 只移 symlink 不刪 ~/.local/bin/lumos 同名一般檔。★未修繼承殘留(deinit 老 bug,teardown help 明列)★:剝 CLAUDE.md 正規化 sentinel 外空白/CRLF、scripts/hooks|templates 整夾 rmtree(刪使用者自有檔)、uninstall 移全部 skills 非只 lumos-*
   KEY:全域 lumos 與 skills 走 symlink/junction 指向來源 clone(非 copy)→ git pull 來源即吃到 CLI+skills 更新;graph-discipline.md 是 per-project 注入,重跑 init/update 會刷新 CLAUDE.md 紀律區塊(2026-07-06 起真的成真:注入已與 _scaffold_project 的 vault-skip 解耦、無條件 re-inject;見 [[2026-07-06_CLAUDE注入re-sync]])
   KEY:★INVARIANT★ re-inject 只覆蓋 sentinel 之間 body、sentinel 之外 CLAUDE.md 內容 byte-equal 保留(改=毀使用者手寫內容=breaking) [test:t_reinject_preserves_outside] [audit:sonnet/2026-07-06]
   KEY:★DEBT★ CLAUDE.md START sentinel 的版本戳(LUMOS_VERSION)=人可讀標籤/advisory nudge,非正確性守衛(內容比對 doctor Check D 才是;版本在 body 外、bump 不觸發守衛)
@@ -19,7 +21,7 @@ summary: |-
   KEY:來源 repo 自我保護——update/deinit 偵測 root==_lumos_src() 即 return 2(不可在 Lumos 源本身跑專案層指令)
   KEY:_scaffold_project 既有 vault 自動 skip(保護圖譜資料不被 init/update 動)
   KEY:cmd_init slug 決定順序=①--name ②既有 vault 資料夾名(去 -knowledge)③repo basename;②先於③是硬要求——否則既有 vault 上 --force 用 basename 建錯空 vault + 寫錯 CLAUDE.md {{KG}} 路徑(見 [[init-force-slug誤用basename]]) [test:t_init_force_uses_existing_vault_slug]
-  DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit｜_vendor_toolchain/_install_skills/_install_hooks_py/_link_or_copy/_scaffold_project｜_VENDORED_TOOLKIT/_SKILLS 常數｜_lumos_src/_vault_in
+  DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit/cmd_teardown｜_vendor_toolchain/_install_skills/_install_hooks_py/_sync_global_claude/_teardown_global_claude/_link_or_copy/_scaffold_project｜merge-claude-settings.py(--prune-only)｜_VENDORED_TOOLKIT/_SKILLS 常數｜_lumos_src/_vault_in
   TEST:258 passed(t_install_skills/t_install_includes_skills/t_install_hooks_py/t_scaffold_project/t_link_or_copy_idempotent/t_hooks_python_fallback + t_deinit_*)
 decisions:
   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
