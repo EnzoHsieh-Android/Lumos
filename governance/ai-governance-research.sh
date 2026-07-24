@@ -14,7 +14,7 @@ TODAY="$(date +%Y-%m-%d)"
 OUT_DIR="$SCRIPT_DIR/reports"
 mkdir -p "$OUT_DIR" "$SCRIPT_DIR/logs"
 REPORT_FILE="$OUT_DIR/governance-$TODAY.json"
-TOKEN_FILE="$HOME/.config/ai-daily/line_token"
+TOKEN_FILE="$HOME/.config/ai-daily/line_token_research"
 
 # 方法論筆記（每次現場重讀，筆記更新後調研透鏡自動跟上）
 NOTE_MAIN="/Users/enzo/harness/lumos-toolchain/docs/methodology/圖譜即合約.md"
