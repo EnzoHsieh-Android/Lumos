@@ -46,7 +46,7 @@ Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**不
 | **影響 / 完整性** | `lumos impact`、`anchor verify/approve` | `impact` 由改動的檔反查受影響關聯節點(直接/間接)+ 命中事故(`pitfall_when`);`anchor` 守測試/閘檔不被無聲竄改。 |
 | **git hooks** | `scripts/hooks/` | pre-commit 硬擋「改 code 沒帶圖譜」;post-commit 留繞過痕跡;pre-push 跑 `doctor --ci` **+ anchor verify + tier=high 未過 code-loop 硬擋**。 |
 | **Claude hooks** | `scripts/hooks/claude/` | PreToolUse:改 code 前注入 impact 影響半徑;PostToolUse:自足性 / verification-rot 後驗。(2026-07-06 ADR:撤除 Stop 每回合 code-loop nag——太擾民,code-loop 由 pre-push 單點把關) |
-| **安裝器** | `get.sh`、`get.ps1`、`install.sh`、`scripts/merge-claude-settings.py`(底層 `install-hooks.sh` / `install-graph-toolchain.sh`) | 機器層(`get.*`)+ 專案層(`lumos init`)兩層導入 / 設 hooks / 合併 Claude settings。 |
+| **安裝器** | `get.sh`、`get.ps1`、`install.sh`、`scripts/merge-claude-settings.py`(底層 `install-hooks.sh` / `install-graph-toolchain.sh`) | `get.sh` 一鍵到底(機器層+專案層 auto-init,2026-07-25);`get.ps1`(Win)仍兩步(機器層+手動 `lumos init`)。設 hooks / 合併 Claude settings。 |
 | **紀律範本** | `scripts/templates/graph-discipline.md` | 「圖譜先行」紀律,注入各專案 `CLAUDE.md`。 |
 | **skills** | `lumos-project-notes`、`core-knowledge`、`design-loop`、`code-loop`、`pitfalls-gapfill` | 寫給 **AI** 的圖譜讀寫規範與對抗審計 loop 編排(user-scope 共用)。 |
 
@@ -244,7 +244,7 @@ lumos signoff <節點> --note ".."  # 業務簽核留痕(validation 那半;寫 s
 ```bash
 lumos install [--force] · lumos uninstall          # 全域 lumos symlink 到 ~/.local/bin
 lumos update [--source PATH] [--no-pull]           # 從 Lumos 唯一源刷新本專案 vendored 工具組
-lumos bootstrap [--pull]                           # 一鍵全套(安裝)
+lumos bootstrap [--pull] [--init]                  # 一鍵全套(安裝;--init 免確認建新專案)
 lumos teardown [-y]                                # 一鍵拆機(當前 repo + 機器全域,保留圖譜)
 lumos archive [--days N] [--apply]                 # 滾動歸檔老的 pass Verification(活守衛受保護)
 ```
