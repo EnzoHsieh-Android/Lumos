@@ -71,7 +71,7 @@ decisions:
 1. 拆閘 `git -C root config --unset core.hooksPath`(best-effort:rc 0/5 皆成功,其他印 warning 續行)。
 2. 剝 `CLAUDE.md` 的 graph-discipline 區塊(無標記/無檔 → no-op)。
 3. 刪 vault(僅 `will_delete_vault` 時)。
-4. **最後**移 vendored 工具組:`_VENDORED_TOOLKIT` 5 檔(`scripts/lumos`、`scripts/test_lumos.py`、`scripts/merge-claude-settings.py`、`scripts/graph-rename.sh`、`scripts/fetch-notesmd.sh`)+ `scripts/hooks/`、`scripts/templates/` 整夾遞迴刪;`scripts/` 底下使用者自有檔不碰、空了才 `rmdir`。放最後因 POSIX 上刪到執行中的 `scripts/lumos` 自己無妨;Windows 用全域 `lumos`(指向來源 copy)亦無事。
+4. **最後**移 vendored 工具組:`_VENDORED_TOOLKIT` 5 檔(`scripts/lumos`、`scripts/test_lumos.py`、`scripts/merge-claude-settings.py`、`scripts/graph-rename.sh`、`scripts/fetch-notesmd.sh`)+ `scripts/hooks/`、`scripts/templates/` **逐檔白名單刪(F9 修 2026-07-24,原整夾 rmtree 會連坐使用者自有檔)**——`_deinit_remove_vendored(root, src)` 從 `src` 兩夾 rglob 列舉 lumos 檔(對稱 `_vendor_toolchain` 安裝)、只刪這些;夾內尚有使用者檔則留夾+warn、空了才移;src 缺(None/來源夾不存在)→保守留夾+warn 不刪(never delete unknown)。見 [[Issues/deinit整夾刪使用者檔]]。`scripts/` 底下使用者自有檔不碰、空了才 `rmdir`。放最後因 POSIX 上刪到執行中的 `scripts/lumos` 自己無妨;Windows 用全域 `lumos`(指向來源 copy)亦無事。
 
 ## 已知平台差異
 - **Git Bash(MinTTY)**:`isatty()` 不可靠,互動確認可能讀不到 → 設計上落回「拒刪、要 `--yes`」的安全側。
