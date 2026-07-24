@@ -1424,6 +1424,48 @@ def t_search_structure_aware():
     check("search --code 含 code block 內容", "widget in code block" in rc.stdout, rc.stdout)
 
 
+# ── gov 去噪:同日同類 advisory 折疊+大群組摘要+--full 逃生(帳不動只動呈現) ──
+def t_gov_denoise():
+    import json as _j
+    # 私有巢狀結構(root/docs/x-knowledge):gov 讀 vault.parent 當帳目錄——
+    # 不可用 mkvault()(standalone,parent=共用系統 tmp,寫帳會污染他測跨執行讀的同名檔)
+    root = Path(tempfile.mkdtemp(prefix="gctl-gov-"))
+    v = root / "docs" / "x-knowledge"
+    for sub in ("Systems", "MOC"):
+        (v / sub).mkdir(parents=True)
+    (v / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    write(v, "Systems/A.md", "type: system\nstatus: done", body="# A\n")
+    docs = v.parent
+    rows = []
+    # 3 次 doctor 各記同一批 10 節點的 check-s(不同 commit)→ 舊版 30 行噪音
+    for c in ("c1", "c2", "c3"):
+        for i in range(10):
+            rows.append({"ts": "2026-07-24T10:00:00+08:00", "commit": c, "gate": "check-s",
+                         "kind": "warned", "hard": False, "nodes": [f"node{i}"]})
+    (docs / ".governance-log.jsonl").write_text(
+        "\n".join(_j.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    (docs / ".canary-log.jsonl").write_text(_j.dumps(
+        {"ts": "2026-07-24T11:00:00+08:00", "kind": "caught", "token": "tk1",
+         "loop": "demo", "severity": "minor", "auditor": "sonnet", "note": "r1"}) + "\n",
+        encoding="utf-8")
+    r = run(v, "gov", expect_rc=0)
+    body = [l for l in r.stdout.splitlines() if l.startswith("2026-")]
+    check("gov 去噪: 30 筆 advisory 折成 1 摘要行+1 canary", len(body) == 2, f"{len(body)} 行\n" + r.stdout[:400])
+    check("gov 去噪: 摘要行含節點數與次數", "10 節點" in r.stdout and "×3" in r.stdout, r.stdout[:300])
+    check("gov 去噪: canary 逐筆保留(不折)", "loop=demo" in r.stdout, r.stdout[:300])
+    # --full 逃生:回完整帳(30 advisory+1 canary=31 行)
+    rf = run(v, "gov", "--full", expect_rc=0)
+    bodyf = [l for l in rf.stdout.splitlines() if l.startswith("2026-")]
+    check("gov --full: 完整帳 31 行", len(bodyf) == 31, f"{len(bodyf)} 行")
+    # 少量同類(≤6 節點)不收摘要、但同日跨 commit 仍折 ×N
+    (docs / ".governance-log.jsonl").write_text(
+        "\n".join(_j.dumps({"ts": "2026-07-24T10:00:00+08:00", "commit": c, "gate": "check-s",
+                            "kind": "warned", "hard": False, "nodes": ["only1"]})
+                  for c in ("c1", "c2")) + "\n", encoding="utf-8")
+    r2 = run(v, "gov", expect_rc=0)
+    check("gov 去噪: 小群組逐節點列+×2 計次", "only1" in r2.stdout and "×2" in r2.stdout, r2.stdout[:300])
+
+
 # ── pre-commit 閘:vendored 工具白名單豁免(lumos update 例行更新不該撞圖譜閘) ──
 def _precommit_run(root, staged_rel):
     """fixture repo 內 stage 指定檔後跑 pre-commit hook,回 subprocess result。"""

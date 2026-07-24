@@ -2196,9 +2196,11 @@ def cmd_signoff(env, node, note, by=None):
     return 0
 
 
-def cmd_gov(env, node=None, since_days=90):
+def cmd_gov(env, node=None, since_days=90, full=False):
     """唯讀彙整六帳(bypass/rot-queue/governance/canary/kill/signoff)→ 治理事件時間軸。
-    本機開發可見性工具(非合規物)。L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖。"""
+    本機開發可見性工具(非合規物)。L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖。
+    去噪(2026-07-25,呈現層——帳本身不動):同日同類 advisory(軟/warned/無 detail,如 Check S
+    每次 doctor 全名單重喊)跨 commit 折疊 ×N、同群 >6 節點收單行摘要;--full 回完整逐筆。"""
     import json
     import datetime
     docs = env.vault.parent
@@ -2260,9 +2262,48 @@ def cmd_gov(env, node=None, since_days=90):
     if node:
         q = stem(node)
         ded = [r for r in ded if q in r["nodes"]]
-    for r in ded:
-        mark = "硬擋" if r["hard"] else "軟"
-        print(f"{r['ts'][:10]} [{r['gate']}/{r['kind']}/{mark}] {','.join(r['nodes']) or '-'}  {r['detail'][:50]}")
+    # ── 去噪(呈現層):advisory(軟/warned/無 token/無 detail)同(日,gate,kind,node)折 ×N;
+    #    同(日,gate,kind)群 >6 節點再收單行摘要。canary/kill/signoff/L2 等有 detail/token 逐筆保留。
+    def _is_advisory(r):
+        return (not r["hard"]) and r["kind"] == "warned" and not r.get("token") and not r["detail"]
+    lines = []
+    if full:
+        for r in ded:
+            mark = "硬擋" if r["hard"] else "軟"
+            lines.append(f"{r['ts'][:10]} [{r['gate']}/{r['kind']}/{mark}] {','.join(r['nodes']) or '-'}  {r['detail'][:50]}")
+    else:
+        agg = {}          # (date,gate,kind) -> {node: 次數}(保序靠 dict 插入序)
+        for r in ded:
+            if _is_advisory(r):
+                g = agg.setdefault((r["ts"][:10], r["gate"], r["kind"]), {})
+                nk = ",".join(r["nodes"]) or "-"
+                g[nk] = g.get(nk, 0) + 1
+                if g[nk] == 1:
+                    r["_agg"] = (r["ts"][:10], r["gate"], r["kind"], nk)   # 首見佔位,維持時間軸位置
+                else:
+                    r["_drop"] = True
+        for r in ded:
+            if r.get("_drop"):
+                continue
+            mark = "硬擋" if r["hard"] else "軟"
+            if r.get("_agg"):
+                date, gate, kind, nk = r["_agg"]
+                g = agg[(date, gate, kind)]
+                if len(g) > 6:                      # 大群組:整群收一行(只在群內首筆時印)
+                    if g.get("_printed"):
+                        continue
+                    g["_printed"] = True
+                    names = [k for k in g if k != "_printed"]
+                    xmax = max(v for k, v in g.items() if k != "_printed")
+                    head = ",".join(names[:3])
+                    print(f"{date} [{gate}/{kind}/{mark}] {len(names)} 節點({head}…) ×{xmax}")
+                else:                               # 小群組:逐節點+×N 計次
+                    n = g[nk]
+                    print(f"{date} [{gate}/{kind}/{mark}] {nk}" + (f" ×{n}" if n > 1 else ""))
+                continue
+            print(f"{r['ts'][:10]} [{r['gate']}/{r['kind']}/{mark}] {','.join(r['nodes']) or '-'}  {r['detail'][:50]}")
+    for ln in lines:
+        print(ln)
     if node:
         print("\n(註:L2 繞過無 node、L3 以 Verification 為鍵;對 Systems 節點為部分視圖)")
     # canary missed 分帳(2026-07-10,borrow mutation 文獻:missed 類別要分類追蹤,
@@ -9892,6 +9933,7 @@ def main():
     p = sub.add_parser("gov", help="唯讀治理事件帳:時間軸 / 某節點歷來被哪幾道閘攔過")
     p.add_argument("node", nargs="?")
     p.add_argument("--since", type=int, default=90, help="近 N 天(預設 90)")
+    p.add_argument("--full", action="store_true", help="關去噪:advisory 逐筆完整列(預設同日同類折疊)")
 
     cp = sub.add_parser("canary", help="審計員 canary 留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵")
     csub = cp.add_subparsers(dest="ccmd", required=True)
@@ -10360,7 +10402,7 @@ def main():
     if args.cmd == "signoff":
         return cmd_signoff(env, args.node, note=args.note, by=args.by)
     if args.cmd == "gov":
-        return cmd_gov(env, args.node, args.since)
+        return cmd_gov(env, args.node, since_days=args.since, full=args.full)
 
     if args.cmd == "canary":
         return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,

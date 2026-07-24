@@ -23,6 +23,7 @@ summary: |-
   KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);六來源 = bypass-log(L2)/rot-queue(L3)/governance-log(doctor)/canary-log/kill-log/signoff-log;dedup 在讀時做
   KEY:gov 三檔皆 gitignore local-only,是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
   KEY:Check H(後加)僅 --ci 掃 git diff,正則命中疑似不可逆動作(prod/smtp/DROP TABLE…)而無不可逆標記時軟提醒,不擋
+  KEY:gov 去噪(2026-07-25,呈現層——帳本身一筆不動):advisory(軟/warned/無 token 無 detail,如 Check S 每次 doctor 全名單重喊)同(日,gate,kind,node)跨 commit 折 ×N、同群 >6 節點收單行摘要「N 節點(前3…) ×次數」;--full 回完整逐筆(審計逃生口)。canary/kill/signoff/L2 有 detail/token 恆逐筆;canary 分帳不受影響。實測本日 300 筆→17 行 [test:t_gov_denoise]
   DEP:scripts/lumos run_doctor(Check R/Check H)｜cmd_lint(單檔 Check R)｜cmd_gov｜extract_reversibility/_rollback_resolved/_guard_resolved｜parse_decisions(吃 rollback/guard sub-key)
   DEP:文件四面同步 — graph-discipline.md 速查｜lumos-project-notes SKILL.md｜NEW_HINT[system]｜lint;漂移測試守衛(碼有強制 → 文件必須提)[test:t_reversibility_drift]
   TEST:258 passed(macOS);t_reversibility_lint/doctor/guard_doctor/governance_log_write/gov_query/drift
