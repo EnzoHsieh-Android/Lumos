@@ -10,6 +10,8 @@ tags:
 summary: |-
   FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install/uninstall)→專案層每repo(init 建vault+vendor工具組+裝閘｜update 刷新vendored｜deinit 對稱反安裝)
   KEY:兩層分工——機器層(install/uninstall/bootstrap)動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Claude hooks);專案層(init/update/deinit)只動本 repo(docs/<slug>-knowledge、scripts/ vendored、CLAUDE.md 注入、core.hooksPath)
+  KEY:bootstrap 一鍵對稱(2026-07-25)=step3 升級專案層四分流:有vault+vendored→接hooks｜中間態(有vault無vendored,_vault_in 只看名稱防假陽性疊動作)→提示補齊不自動動｜無vault→_confirm_tty 確認(印完整路徑+預設N)y 才 cmd_init(--init 免確認;一律 force=False+no_pull=True,LUMOS_HOME env 傳導自訂 home)｜非git→只機器層。get.sh 迴圈解析 --pull/--init 後整段委派 bootstrap;各步查 rc 失敗尾端彙報 rc1 不吞錯。與 teardown 成鏡像(bootstrap 不刪vault、teardown 不建vault,圖譜兩邊不碰)。設計 [[Projects/bootstrap一鍵對稱_計劃]]、驗證 [[Verification/2026-07-25_bootstrap一鍵對稱]]
+  KEY:_confirm_tty(curl|bash 安全確認)三階=①stdin.isatty→input(),EOFError 落②非當 False ②os.open('/dev/tty',O_RDWR) 低階 fd(r+ 對 tty 炸 not seekable,Codex 真機實證)+os.write+select timeout 30s+os.read(有控制終端≠有人回答) ③None=跳過;答案嚴格 y/yes 預設 N;測試接縫 LUMOS_TTY/LUMOS_TTY_TIMEOUT
   KEY:teardown(2026-07-24)=一鍵反安裝,跨兩層:全域hook清理→deinit(keep_graph=True)→uninstall,★永遠保留圖譜文件★;範圍=當前 repo+機器全域(非全機所有 repo,deinit 只吃當前 toplevel)。順序「全域先」因 deinit 會刪 vendored merge-claude-settings.py 而 _teardown_global_claude 要用它;全域清理走 merge --prune-only(只剪懸空不 re-add)+壞 settings JSON 先驗跳過不刪 .py。設計/審計 [[Projects/teardown一鍵拆機_計劃]]、[[Verification/2026-07-24_teardown一鍵拆機]]
   KEY:安全守衛(2026-07-24,改共用函式故 deinit/uninstall 直呼也受惠)——_deinit_unbar_gate 只在 core.hooksPath 指向本 repo scripts/hooks 才 unset(不誤殺使用者 githooks)｜cmd_uninstall 只移 symlink 不刪 ~/.local/bin/lumos 同名一般檔。繼承殘留(deinit 老 bug,teardown help 明列):F9 scripts/hooks|templates 整夾 rmtree 刪使用者檔=★已修 2026-07-24★(逐檔白名單,見 [[Issues/deinit整夾刪使用者檔]]);未修=F4 剝 CLAUDE.md 正規化 sentinel 外空白/CRLF、F12 uninstall 移全部 skills 非只 lumos-*(影響更小,未開票)
   KEY:全域 lumos 與 skills 走 symlink/junction 指向來源 clone(非 copy)→ git pull 來源即吃到 CLI+skills 更新;graph-discipline.md 是 per-project 注入,重跑 init/update 會刷新 CLAUDE.md 紀律區塊(2026-07-06 起真的成真:注入已與 _scaffold_project 的 vault-skip 解耦、無條件 re-inject;見 [[2026-07-06_CLAUDE注入re-sync]])
@@ -46,6 +48,7 @@ related:
   - "[[CLAUDE注入re-sync與版本標籤_計劃]]"
 verified_by:
   - "[[Verification/2026-07-06_CLAUDE注入re-sync]]"
+  - "[[Verification/2026-07-25_bootstrap一鍵對稱]]"
 ---
 # lumos-cli-lifecycle
 
@@ -63,7 +66,7 @@ deinit(專案層反安裝)**不碰機器共用項**;細節見 [[Systems/lumos-de
 ## 各指令一句話
 - `install [--force]`:全域 lumos(Unix symlink / Win `lumos.cmd` shim)+ 連帶裝 user-scope skills;檢查 `~/.local/bin` 在不在 PATH。
 - `uninstall`:對稱移除全域指令 + skills(symlink/junction/複製夾都清,junction 用 `os.rmdir` 只移連結不跟進 target)。
-- `bootstrap [--lumos-url --lumos-home --pull]`:給「剛 clone 專案、機器還沒設定」的人,一行裝好機器層全部 + 本 repo hooks;預設**不** pull 既有 clone(要 `--pull`)。
+- `bootstrap [--lumos-url --lumos-home --pull --init]`:一鍵裝好機器層全部 + 專案層自動接線(2026-07-25 四分流:已是專案接 hooks/中間態提示/無 vault 經 `_confirm_tty` 確認後 auto-init、`--init` 免確認/非 git 只機器層);預設**不** pull 既有 clone(要 `--pull`)。
 - `init [--name --force --no-hooks --no-pull]`:在當前 repo 建 vault(6 資料夾 + `.gitignore` + `MOC/index.md` + CLAUDE.md 注入)+ 預設 vendor 工具組 + 裝 pre-commit/pre-push 閘。
 - `update [--source --no-pull]`:從 Lumos 唯一源刷新「本專案」vendored 工具組(= git pull 源 + 重 vendor);圖譜資料受 skip 保護不動。
 - `deinit`:對稱反安裝(見 [[Systems/lumos-deinit]])。

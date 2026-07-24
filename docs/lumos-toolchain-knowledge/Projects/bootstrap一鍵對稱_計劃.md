@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-25
 updated: 2026-07-25
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Systems/lumos-cli-lifecycle]]"
   - "[[Projects/teardown一鍵拆機_計劃]]"
@@ -22,11 +22,13 @@ summary: |-
   DECISION:裝側對稱=bootstrap 升級為真一鍵(機器層+專案層 auto-init 含確認),get.sh 委派 bootstrap;顆粒指令(install/init)降級進階保留(使用者 2026-07-25「好」)
   DEP:scripts/lumos cmd_bootstrap/cmd_init/_install_hooks_py/_vault_in｜get.sh
   PRIOR-ART:①最小解=組合既有 cmd_init,bootstrap 只加分流+確認,get.sh 改委派消雙寫 ②世界解=curl|bash 裝置器問確認走 /dev/tty 是 homebrew/rustup 等的成熟慣例(borrow) ③裁定=borrow-design
-verified_by: []
+verified_by:
+  - "[[Verification/2026-07-25_bootstrap一鍵對稱]]"
 ---
 # bootstrap一鍵對稱_計劃
 
-> **狀態**：設計中，待 light 審 → TDD。緣起：拆側有一鍵 `teardown`，裝側 `bootstrap` 不對稱（不建新專案、get.sh 尾行叫人手動 init）。使用者要「一鍵建立↔一鍵解除、冪等」。
+> **狀態**：done（r1 light＋std Codex 兩審折入 → TDD 落地，見 [[Verification/2026-07-25_bootstrap一鍵對稱]]）。緣起：拆側有一鍵 `teardown`，裝側 `bootstrap` 不對稱（不建新專案、get.sh 尾行叫人手動 init）。使用者要「一鍵建立↔一鍵解除、冪等」。
+> 實作與 spec 的已記偏離：測試案 2-5 合併為 `t_bootstrap_autoinit`（同覆蓋）；`_confirm_tty` 第 2 階測試接縫用 `LUMOS_TTY`/`LUMOS_TTY_TIMEOUT` env＋真 pty（非 monkeypatch os.open，等價達意）。
 
 ## 白話問題
 

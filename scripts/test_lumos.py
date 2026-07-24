@@ -2962,6 +2962,139 @@ def t_teardown_refuse_zero_mutation():
           hp.stdout.strip() == "scripts/hooks", f"got {hp.stdout!r}")
 
 
+def t_confirm_tty_unit():
+    """bootstrap一鍵對稱:_confirm_tty 三階單元測(全程不真開終端機;POSIX pty)。"""
+    import os, builtins
+    if not hasattr(os, "openpty"):
+        print("  - skip(非 POSIX)")
+        return
+    m = _load_lumos()
+
+    class _FakeTTYStdin:
+        def isatty(self): return True
+        def read(self, *a): raise AssertionError("stage2 不得讀 sys.stdin")
+        def readline(self, *a): raise AssertionError("stage2 不得讀 sys.stdin")
+    class _FakePipeStdin(_FakeTTYStdin):
+        def isatty(self): return False
+
+    real_stdin, real_input = m.sys.stdin, builtins.input
+    try:
+        # ① isatty=True → input() 餵 y/n
+        m.sys.stdin = _FakeTTYStdin()
+        builtins.input = lambda p="": "y"
+        check("confirm ①: tty 答 y → True", m._confirm_tty("q? ") is True)
+        builtins.input = lambda p="": "no"
+        check("confirm ①: tty 答 no → False(嚴格 y/yes)", m._confirm_tty("q? ") is False)
+        # ② isatty=True 但 input EOFError → 落入第 2 階(非 False);LUMOS_TTY 開不了 → None
+        def _eof(p=""): raise EOFError
+        builtins.input = _eof
+        os.environ["LUMOS_TTY"] = "/nonexistent-tty"
+        check("confirm ②: EOFError 落第2階,tty 開不了 → None(非 False)",
+              m._confirm_tty("q? ") is None)
+        # ③ 第 2 階成功路徑:stdin 非 tty、LUMOS_TTY=pty slave、master 預餵 y
+        m.sys.stdin = _FakePipeStdin()   # read 即 raise → 斷言 stdin 全程未被讀
+        master, slave = os.openpty()
+        os.environ["LUMOS_TTY"] = os.ttyname(slave)
+        os.write(master, b"y\n")
+        r = m._confirm_tty("build? ")
+        check("confirm ③: 第2階 pty 答 y → True(且 stdin 未被讀)", r is True, f"got {r}")
+        prompt_echo = os.read(master, 256)   # prompt 有寫到 tty
+        check("confirm ③: prompt 有寫進 tty", b"build?" in prompt_echo, prompt_echo[:60])
+        os.close(master); os.close(slave)
+        # ④ timeout → None(pty 無人回答,timeout 縮短)
+        master2, slave2 = os.openpty()
+        os.environ["LUMOS_TTY"] = os.ttyname(slave2)
+        os.environ["LUMOS_TTY_TIMEOUT"] = "0.2"
+        check("confirm ④: 有 tty 無人答 → timeout None", m._confirm_tty("q? ") is None)
+        os.close(master2); os.close(slave2)
+    finally:
+        m.sys.stdin = real_stdin
+        builtins.input = real_input
+        os.environ.pop("LUMOS_TTY", None)
+        os.environ.pop("LUMOS_TTY_TIMEOUT", None)
+
+
+def _bootstrap_run(cwd, *args, interactive_off=True):
+    """subprocess 跑 bootstrap:假 HOME 隔離+LUMOS_HOME 指真來源(跳過 clone)。
+    interactive_off:stdin=DEVNULL+setsid 真正脫離控制終端機(否則開發機 /dev/tty 開得起來會掛死)。"""
+    import os, subprocess
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    fake = tempfile.mkdtemp(prefix="gctl-bs-home-")
+    kw = dict(cwd=str(cwd), capture_output=True, text=True, timeout=120,
+              env=dict(os.environ, HOME=fake, USERPROFILE=fake, LUMOS_HOME=str(repo)))
+    if interactive_off:
+        kw["stdin"] = subprocess.DEVNULL
+        if hasattr(os, "setsid"):
+            kw["start_new_session"] = True
+    return subprocess.run([sys.executable, GRAPHCTL, "bootstrap", *args], **kw)
+
+
+def t_bootstrap_autoinit():
+    """bootstrap一鍵對稱:四分流整合測(--init 建/非互動跳過/既有專案接hooks/中間態提示/冪等)。"""
+    import subprocess, os
+    if not hasattr(os, "setsid"):
+        print("  - skip(非 POSIX)")
+        return
+    # ① 無 vault + --init → 建 vault + hooks + CLAUDE 注入
+    r1root = Path(tempfile.mkdtemp(prefix="gctl-bs1-"))
+    subprocess.run(["git", "-C", str(r1root), "init"], capture_output=True)
+    r = _bootstrap_run(r1root, "--init")
+    kgs = list(r1root.glob("docs/*-knowledge"))
+    check("bootstrap --init: vault 建成", len(kgs) == 1 and kgs[0].is_dir(),
+          f"rc={r.returncode} kgs={kgs} {r.stderr[-200:]}")
+    check("bootstrap --init: CLAUDE.md 注入", (r1root / "CLAUDE.md").exists()
+          and "LUMOS:GRAPH-DISCIPLINE" in (r1root / "CLAUDE.md").read_text(encoding="utf-8"), "")
+    hp = subprocess.run(["git", "-C", str(r1root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("bootstrap --init: hooks 接上", hp.stdout.strip() == "scripts/hooks", hp.stdout)
+    # 冪等:再跑一次 --init → 同結果、不重跑 vendor(既有 vault 走接 hooks 分支)
+    r2 = _bootstrap_run(r1root, "--init")
+    check("bootstrap 冪等: 二跑 rc0", r2.returncode == 0, r2.stderr[-200:])
+    check("bootstrap 冪等: 二跑走接 hooks 分支(非 init)", "初始化 lumos 專案" not in r2.stdout, r2.stdout[-300:])
+    # ② 無 vault、非互動、無 --init → 不建 vault + 提示(誤建守衛)
+    r3root = Path(tempfile.mkdtemp(prefix="gctl-bs2-"))
+    subprocess.run(["git", "-C", str(r3root), "init"], capture_output=True)
+    r3 = _bootstrap_run(r3root)
+    check("bootstrap 誤建守衛: 非互動不建 vault",
+          not any(r3root.glob("docs/*-knowledge")), r3.stdout[-200:])
+    check("bootstrap 誤建守衛: 印跳過提示", "跳過建專案" in r3.stdout, r3.stdout[-300:])
+    # ③ 中間態:有 vault 無 vendored → 不動 + 提示
+    r4root = Path(tempfile.mkdtemp(prefix="gctl-bs3-"))
+    subprocess.run(["git", "-C", str(r4root), "init"], capture_output=True)
+    (r4root / "docs" / "x-knowledge" / "MOC").mkdir(parents=True)
+    r4 = _bootstrap_run(r4root)
+    check("bootstrap 中間態: 提示補齊不自動動", "補齊" in (r4.stdout + r4.stderr), r4.stderr[-200:])
+    check("bootstrap 中間態: 不裝 hooks", subprocess.run(
+        ["git", "-C", str(r4root), "config", "core.hooksPath"],
+        capture_output=True, text=True).stdout.strip() == "", "")
+
+
+def t_getsh_forwards_args():
+    """bootstrap一鍵對稱 std F12:get.sh 真跑 bash——argv 轉發/未知旗標 warn/失敗傳播。"""
+    import os, subprocess, json as _j
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    fake_home_dir = Path(tempfile.mkdtemp(prefix="gctl-getsh-"))
+    lh = fake_home_dir / "lumos-src"
+    (lh / "scripts").mkdir(parents=True)
+    argv_file = fake_home_dir / "argv.json"
+    shim = lh / "scripts" / "lumos"
+    shim.write_text("#!/usr/bin/env python3\nimport sys, json\n"
+                    f"json.dump(sys.argv[1:], open({str(argv_file)!r}, 'w'))\n",
+                    encoding="utf-8")
+    env = dict(os.environ, LUMOS_HOME=str(lh))
+    r = subprocess.run(["bash", str(repo / "get.sh"), "--pull", "--init", "--wat"],
+                       env=env, capture_output=True, text=True)
+    check("get.sh: rc0", r.returncode == 0, r.stderr[-200:])
+    got = _j.loads(argv_file.read_text(encoding="utf-8"))
+    check("get.sh: 兩旗標都轉發(非只 $1)", got == ["bootstrap", "--pull", "--init"], f"{got}")
+    check("get.sh: 未知旗標 warn 忽略", "未知旗標 --wat" in r.stderr, r.stderr[-200:])
+    check("get.sh: 不再自跑 install --force(委派)", "install" not in " ".join(got), f"{got}")
+    # 失敗傳播:shim 回非零 → get.sh exit 非零(set -e)
+    shim.write_text("#!/usr/bin/env python3\nimport sys; sys.exit(3)\n", encoding="utf-8")
+    r2 = subprocess.run(["bash", str(repo / "get.sh")], env=env, capture_output=True, text=True)
+    check("get.sh: bootstrap 失敗 → exit 非零", r2.returncode != 0, f"rc={r2.returncode}")
+
+
 def t_deinit_strip_claude():
     from pathlib import Path
     m = _load_lumos()

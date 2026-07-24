@@ -6653,11 +6653,54 @@ def _install_hooks_py(root: Path):
     print("  ✓ hooks:core.hooksPath + 全域 Claude hooks 同步(copy+撤除清理+settings)")
 
 
-def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False):
-    """一鍵在專案內裝好一切:自動 clone Lumos(若缺)→ user-scope skills → 全域 lumos → repo hooks。
-    給「剛 clone 專案、機器還沒設定」的同事:cd 進專案打 `python3 scripts/lumos bootstrap` 即可,
-    連 Lumos 都不用先手動 clone(專案自帶 vendored lumos 來跑這個)。
-    --pull:既有 Lumos clone 也 git pull 拉最新(否則已存在就沿用,拿不到 skills 更新)。"""
+def _confirm_tty(prompt):
+    """三階互動確認(curl|bash 安全;設計:Projects/bootstrap一鍵對稱_計劃 std F1/F2/F3):
+    回 True(答 y/yes)/False(其他答案=拒絕)/None(非互動或無人回答→呼叫端跳過)。
+    ①stdin.isatty→input();EOFError 落入②非當 False(isatty 撒謊時別誤判拒絕)
+    ②os.open(tty,O_RDWR) 低階 fd(★r+ 開法對 tty 會炸 not seekable★)+os.write prompt
+      +select timeout(有控制終端≠有人回答,防 readline 永久掛)+os.read
+    ③皆不可→None。嚴禁在非 isatty 時讀 sys.stdin(curl|bash 下那是腳本殘文管線)。
+    測試接縫:LUMOS_TTY(預設 /dev/tty;單元測指 pty slave)/LUMOS_TTY_TIMEOUT(預設 30s)。"""
+    import os, select
+    def _norm(ans):
+        return ans.strip().lower() in ("y", "yes")   # 嚴格答案+預設 N(F2-B 殘文緩解)
+    if sys.stdin.isatty():
+        try:
+            return _norm(input(prompt))
+        except EOFError:
+            pass                                     # isatty 撒謊 → 試 ②(F2-A)
+    tty_path = os.environ.get("LUMOS_TTY", "/dev/tty")
+    try:
+        timeout = float(os.environ.get("LUMOS_TTY_TIMEOUT", "30"))
+    except ValueError:
+        timeout = 30.0
+    try:
+        fd = os.open(tty_path, os.O_RDWR)
+    except OSError:
+        return None
+    try:
+        os.write(fd, prompt.encode("utf-8"))
+        readable, _, _ = select.select([fd], [], [], timeout)
+        if not readable:
+            os.write(fd, "\n(無回應,視為略過)\n".encode("utf-8"))
+            return None
+        data = os.read(fd, 256)
+        if not data:
+            return None
+        return _norm(data.decode("utf-8", errors="replace"))
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False):
+    """一鍵在專案內裝好一切:自動 clone Lumos(若缺)→ user-scope skills → 全域 lumos → 專案層自動接線。
+    專案層四分流(設計:Projects/bootstrap一鍵對稱_計劃):有 vault+vendored→接 hooks｜有 vault 無
+    vendored(中間態)→提示跑 init 補齊｜無 vault→_confirm_tty 確認(y 才 auto-init;--init 免確認)｜
+    非 git→跳過只做機器層。--pull:既有 Lumos clone 也 git pull 拉最新。
+    冪等:auto-init 只在無 vault 時觸發;cmd_init 一律 force=False+no_pull=True(pull 政策歸 step1)。
+    失敗傳播(std F8):各步查 returncode,任一失敗最終 rc=1,不吞錯照印成功。"""
     import os, subprocess
     home = Path(lumos_home or os.environ.get("LUMOS_HOME")
                 or (Path.home() / "harness" / "lumos-toolchain")).expanduser()
@@ -6678,17 +6721,50 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False):
             return 2
     # 2) 全域 lumos → 指向 Lumos 來源(非 vendored copy);install --force 已連帶裝 user-scope skills
     print("[2/3] 裝全域 lumos(+ user-scope skills)…")
-    subprocess.run([sys.executable, str(home / "scripts" / "lumos"), "install", "--force"])
-    # 3) 本 repo hooks(git toplevel)
+    failures = []
+    rc2 = subprocess.run([sys.executable, str(home / "scripts" / "lumos"),
+                          "install", "--force"]).returncode
+    if rc2 != 0:                                  # std F8:不吞錯
+        print(f"  ⚠ install --force 失敗 rc={rc2}", file=sys.stderr)
+        failures.append("install")
+    # 3) 專案層自動接線(四分流;git toplevel 才算專案)
     try:
-        root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+        root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"],
+                                            text=True, stderr=subprocess.DEVNULL).strip())
     except Exception:
-        root = Path.cwd()
-    if (root / "scripts" / "merge-claude-settings.py").exists():
-        print(f"[3/3] 裝 repo hooks（{root}）…")
-        _install_hooks_py(root)
+        root = None
+    if root is None:
+        print("[3/3] 非 git repo,跳過專案層(機器層已裝;到專案內再跑 bootstrap 或 lumos init)")
     else:
-        print(f"[3/3] ⚠ {root} 無 vendored 工具組(找不到 scripts/merge-claude-settings.py),跳過 hooks", file=sys.stderr)
+        os.environ["LUMOS_HOME"] = str(home)      # std F6:cmd_init 內 _lumos_src 讀此傳導自訂 home
+        vault = _vault_in(root)
+        vendored = (root / "scripts" / "merge-claude-settings.py").exists()
+        if vault is not None and vendored:        # ① 已是專案 → 接 hooks(git config 每機器要重接)
+            print(f"[3/3] 裝 repo hooks（{root}）…")
+            try:
+                _install_hooks_py(root)
+            except Exception as e:
+                print(f"  ⚠ hooks 安裝失敗:{e}", file=sys.stderr)
+                failures.append("hooks")
+        elif vault is not None:                   # ② 中間態(F5:_vault_in 只看名稱,別疊自動動作)
+            print(f"[3/3] ⚠ {root} 有 vault({vault.name})但無 vendored 工具——"
+                  "跑 `lumos init` 補齊(不自動動)", file=sys.stderr)
+        else:                                     # ③ 無 vault → 確認後 auto-init
+            go = init
+            if not go:
+                ans = _confirm_tty(f"[3/3] 要把 {root} 建成 lumos 專案(建圖譜+工具+hooks)嗎? [y/N] ")
+                if ans is None:
+                    print("[3/3] 非互動環境,跳過建專案(要建:互動跑或加 --init)")
+                go = (ans is True)
+            if go:
+                print(f"[3/3] 初始化 lumos 專案（{root}）…")
+                rc3 = cmd_init(force=False, no_pull=True)   # F7:pull 政策歸 step1;永不 force
+                if rc3:
+                    print(f"  ⚠ init 失敗 rc={rc3}", file=sys.stderr)
+                    failures.append("init")
+    if failures:
+        print(f"\n✗ bootstrap 部分失敗:{', '.join(failures)}(其餘步驟已完成)", file=sys.stderr)
+        return 1
     print("\n✓ bootstrap 完成。最後一步:**重啟 Claude Code session**(L1/L3 hooks 要 session start 才載入)。")
     return 0
 
@@ -9979,7 +10055,9 @@ def main():
     p = sub.add_parser("update", help="從 Lumos 唯一源更新本專案 vendored 工具組")
     p.add_argument("--source", help="Lumos 來源 repo 路徑(預設 $LUMOS_HOME 或 ~/harness/lumos-toolchain)")
     p.add_argument("--no-pull", action="store_true", help="不 git pull 來源,用現有")
-    p = sub.add_parser("bootstrap", help="一鍵裝好一切(自動 clone Lumos + skills + 全域 + repo hooks)")
+    p = sub.add_parser("bootstrap", help="一鍵裝好一切(clone Lumos+skills+全域+專案層自動接線;新 repo 經確認 auto-init)")
+    p.add_argument("--init", action="store_true", dest="auto_init",
+                   help="無 vault 的 repo 免確認直接 init 建圖譜(CI/非互動用;不映射 init --force)")
     p.add_argument("--lumos-url", help="Lumos repo URL(預設公開 repo / $LUMOS_URL)")
     p.add_argument("--lumos-home", help="Lumos clone 目標(預設 ~/harness/lumos-toolchain / $LUMOS_HOME)")
     p.add_argument("--pull", action="store_true", help="既有 Lumos clone 也 git pull 拉最新(預設沿用)")
@@ -10113,7 +10191,8 @@ def main():
     if args.cmd == "update":
         return cmd_update(source=args.source, no_pull=args.no_pull)
     if args.cmd == "bootstrap":
-        return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home, pull=args.pull)
+        return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home, pull=args.pull,
+                             init=args.auto_init)
     if args.cmd == "init":
         return cmd_init(name=args.name, force=args.force,
                         with_hooks=not args.no_hooks, no_pull=args.no_pull)

@@ -66,24 +66,21 @@ python3 scripts/lumos bootstrap     # 自動:clone Lumos(若缺)+ user-scope ski
 
 > `bootstrap` 預設**不**拉更新。日後更新:`git -C ~/harness/lumos-toolchain pull`(全 symlink),或 `lumos bootstrap --pull`。
 
-### 4b. 全新專案導入(兩條指令)
+### 4b. 全新專案導入(一條指令)
 
-**① 每台機器一次**(遠端,連 Lumos 都自動 clone):
+**站在你的專案裡跑**(連 Lumos 都自動 clone;2026-07-25 起 get.sh 委派 bootstrap,一鍵到底):
 
 ```bash
+cd <你的專案>
 curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
-# 然後重啟 Claude Code session
+# 會問「要把 <路徑> 建成 lumos 專案嗎? [y/N]」→ 按 y 即建圖譜+工具+hooks;然後重啟 Claude Code session
 ```
 
-`get.sh` 裝「機器層」:clone Lumos + user-scope skills + 全域 `lumos`。(可先 `curl -fsSL <url> -o get.sh` 審閱再跑;傳參用 `… | bash -s -- --pull`。)
+- 機器層(clone Lumos+skills+全域 `lumos`)＋專案層(確認後 auto-init)一次完成;**問句預設 N**,站在不想導入的 repo(如 dotfiles)按 Enter 就跳過。
+- 非互動/CI:`… | bash -s -- --init` 免確認直接建;`--pull` 拉最新。可先 `curl -fsSL <url> -o get.sh` 審閱再跑。
+- 站在**非 git 目錄**跑 → 只裝機器層(同舊行為)。
 
-**② 每個專案一次**(在你的專案內):
-
-```bash
-cd <你的專案> && lumos init       # slug 預設取資料夾名;自訂用 --name <slug>
-```
-
-`lumos init` 裝「專案層」:建 `docs/<slug>-knowledge/{Systems,…,MOC}` + `.gitignore`、vendor 工具組、裝 pre-commit/pre-push 閘。既有 vault **絕不覆寫**(`--force` 才補齊缺的;`--no-hooks` 只建圖譜輕量版)。
+**顆粒操作(進階)**:只建專案層用 `lumos init`(slug 預設取資料夾名,`--name` 自訂;既有 vault **絕不覆寫**,`--no-hooks` 輕量版);只裝機器層用 `lumos install`。安裝↔卸載對稱:`bootstrap/get.sh ↔ teardown`(一鍵)、`install ↔ uninstall`(機器層)、`init ↔ deinit`(專案層)。
 
 <details><summary>進階/離線:手動 install-graph-toolchain</summary>
 
