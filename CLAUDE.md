@@ -10,7 +10,7 @@
 
 - ✋ **STOP 自檢**：如果你正要 grep code、派 Explore、或查 DB 去搞懂「為什麼這樣 / 邊界 / 合約 / 欄位或狀態語意」——**停**，先 `lumos`，再下 code/DB 驗證。
 - **不分任務類型**：開發、重構、**排查、對外支援、呼叫既有 API、查 DB、對帳**——全部算「進場」。看似純操作的任務，只要動手前需要理解系統，就先讀圖譜。（最常被合理化跳過的破口：把任務歸成「只是查資料 / 跑指令」就略過圖譜。別這樣。）
-- **入口動作**（不知道該讀哪個節點時）：① `lumos search <關鍵字>` 定位節點（已預設相關性排序,正主頂位;`--legacy` 舊字母序） → ② `lumos context <節點>` 掃脈絡（頭部直接攤出 ⚠ 合約）→ ③ `lumos contracts <節點>` 查硬合約（★INVARIANT★ 改＝breaking）→ 然後才 grep code / 查 DB 驗證細節。
+- **入口動作**（不知道該讀哪個節點時）：① `lumos search <關鍵字>` 定位節點（已預設相關性排序,正主頂位;`--legacy` 舊字母序;**預設隱藏已作廢 superseded 節點**——stderr 會印隱藏數,要看加 `--include-superseded`） → ② `lumos context <節點>` 掃脈絡（頭部直接攤出 ⚠ 合約）→ ③ `lumos contracts <節點>` 查硬合約（★INVARIANT★ 改＝breaking）→ 然後才 grep code / 查 DB 驗證細節。
 - 「先查圖譜」不是禮貌建議，是**順序規定**：圖譜先給你合約與邊界，code/DB 只拿來印證，不是拿來重新發明「本來就該這樣」。
 - **自動輔助（不取代主動查）**：`impact` PreToolUse hook 會在你 Edit/Write/MultiEdit 一支 code **動手前自動注入**「必看（合約/事故固定席）＋相關 top-8（按你這次改動內容排序）＋棧別效能三問（碰 .kt/.cs/.vue/.sql 時附該棧檢核問，內容源=效能檢核目錄）」——看到就順手判：這些節點/事故會不會被你這次改動波及、需不需同步。它是**輔助推播**，不取代你主動 `lumos context`/`contracts` 查合約（hook 只推「碰到的」，合約邊界仍要自己查）。
 
@@ -21,7 +21,7 @@
 - **退場必寫**：做完用 lumos 把脈絡（決策 / 驗證 / 合約）寫回。
 - **對人回報用白話（少一層理解成本）**：所有給人看的東西——摘要 / 結論 / 收斂報告 / 排查與對外回報，**以及設計探討 / 方案評估 / 機制解釋當下**——優先白話、少專有名詞。**先給生活化比喻或一句話重點（例：圖譜＝筆記本、supersede＝蓋作廢章、真遺忘＝翻筆記時預設別把作廢頁遞出去）再往下談**；機制術語（canary / tier / fold / capture-recapture / fail-open / rc 等）與 file:line 行號能不用就不用，非用不可則第一次出現當場給一句人話解釋或乾脆換成人話；術語與精確細節收進圖譜，別堆在給人看的敘述裡。目標是讓人少花一層理解成本——不是零術語，有訊息量的詞保留但解釋；使用者要深摳精確細節時再往下鑽，但**預設從人話起手**。純散文紀律（非機械閘），靠自覺遵守，同誠實天花板一類。（升格自使用者「白話回報偏好」2026-07-18；2026-07-24 擴及技術討論、不只回報）
 - **設計動筆前先問世界（PRIOR-ART 三問）**：① 最小解在哪一層（既有閘/一行 config/既有機制小修 → 就做那個，別造新機制）② 世界解過沒（真搜 GitHub/文獻，非憑印象）③ 裁定 = borrow-design（預設，借設計教訓原生實作）/ build（真沒輪子）/ adopt（例外須理由——零依賴家規下幾乎恆排除）。答案一行 `PRIOR-ART:` 記進計劃節點。
-- **設計 spec 完成 → 進實作前**：先用 `lumos-design-loop` skill 把它過 canary-護的審計 loop 到 `lumos loop status` 收斂（trivial 改動可跳並註明）。
+- **設計 spec 完成 → 進實作前**：先用 `lumos-design-loop` skill 把它過 canary-護的審計 loop 到 `lumos loop status` 收斂（trivial 改動可跳並註明；小而不 trivial 走 light 檔單席快審,進場資格見 skill）。
 - **已知行為測試先行、未知行為實驗先行**：可驗證規則（商業邏輯/狀態轉換/API 合約/bug 修復）走 TDD；探索性工作（UI 探索/SDK 試接/效能調查/PoC）先做最小實驗，結論定案後補回歸測試——嚴禁為滿足流程寫湊數測試（2026-07-17 外部評審吸收，見 `Projects/GPT外部評審吸收_計劃`）。
 - **計劃/設計也歸圖譜**：任何設計 / spec / 計劃產出（**不論來源——brainstorming、writing-plans、OpenSpec、其他 SDD / spec-driven 工具皆同**）一律寫成 lumos 計劃節點（`Projects/<主題>_計劃`，`type: project`），**不寫 `docs/superpowers/specs/`、`openspec/` 或其他 repo 路徑**；落地的 Verification 以 `plan_refs` 回指（意圖鏈，graph-doctor Check 4 把關）。任何工具內建的 spec 落點一律以此覆寫——「圖譜即真相」涵蓋計劃，不只 code。
 
