@@ -2,7 +2,8 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-24
+self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
@@ -35,7 +36,7 @@ verified_by:
 
 - 挖掘/命令：`scripts/lumos` 的 `_cochange_*` 函式群 + `cmd_cochange_rules`/`cmd_cochange_check`。
 - hook：`scripts/hooks/pre-commit` Gate CC 段。
-- 測試：`scripts/test_lumos.py` 的 `t_cochange`（28 斷言）。
+- 測試：`scripts/test_lumos.py` 的 `t_cochange`（30 斷言）。
 
 ## 相關模組
 

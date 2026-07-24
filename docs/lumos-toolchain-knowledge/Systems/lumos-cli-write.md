@@ -2,8 +2,8 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-20
-self_audit: sonnet/2026-06-26
+updated: 2026-07-24
+self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
@@ -61,7 +61,7 @@ verified_by:
 ## 七個原語(對應 `cmd_*`)
 | 指令 | 結構層 | 做什麼 |
 |---|---|---|
-| `set <node> <key> <value>` | 純量 | 改 `SCALAR_KEYS`={status,updated,created,type,self_audit};行級手術最小 diff |
+| `set <node> <key> <value>` | 純量 | 改 `SCALAR_KEYS`={status,updated,created,type,self_audit,signed_off,regen};行級手術最小 diff |
 | `append <node> <key> "[[x]]"` | list | 追加 `LIST_KEYS`={verified_by,plan_refs,related,tags};鐵則1 安全格式 + `link_target` dedup |
 | `self-audit <node> [--model][--date]` | 純量 | 寫 `self_audit: <model>/<date>` 節點級自足性審計戳記(內部即 `set self_audit`) |
 | `decision-add <node> "<content>" --decided DATE [--context][--why]` | 巢狀 | append 一條 ADR 決策(無 `decisions:` 則在 fm 末尾建) |

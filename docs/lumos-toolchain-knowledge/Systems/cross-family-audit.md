@@ -2,8 +2,8 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-10
-self_audit: sonnet/2026-06-26
+updated: 2026-07-24
+self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
@@ -17,7 +17,7 @@ summary: |-
   KEY:fail-open——API 掛/無key/429/超時→degraded、退回 opus 單審放行並 log/LINE 標註，不卡死 loop(誠實天花板 #4：degraded 是旁路非通過)
   KEY:結果回流走 orchestrator §3 三個扁平欄位 cross_verdict/cross_worst/cross_summary→autonomous-loop.sh get() 取；不碰 build_report、不寫跨程序檔
   KEY:調用禁 python3 -m governance.autonomous_loop.cross_audit(頂層 governance 無 __init__.py)；用 sys.path.insert(0,'<REPO>/governance')+from autonomous_loop import 絕對路徑版
-  DEP:governance/autonomous_loop/cross_audit.py｜orchestrator-prompt.md §2.5｜autonomous-loop.sh(L60-61/80/107)｜~/.config/ai-daily/qwen_api_key(本機,不入 repo)
+  DEP:governance/autonomous_loop/cross_audit.py｜orchestrator-prompt.md §2.5｜autonomous-loop.sh(get() L83/摘要防破版 L87/verdict 分支 L105-111/收斂 log+LINE L197-202;行號 2026-07-24 L4 審計刷新——risk-tiered tier 段前插推移舊座標)｜~/.config/ai-daily/qwen_api_key(本機,不入 repo)
   TEST:scripts/test_autonomous_loop.py 27 passed(cross_audit 單元 mock urllib)
   VERIFY:[[Verification/2026-06-22_cross-family-audit]]
 decisions:
@@ -64,7 +64,7 @@ autonomous loop 的 design-loop 在判定收斂、**真正放行前**多一道 *
 模組只回 status + worst_severity;`cross_verdict` 由 orchestrator 據此決定:degraded→`degraded`(放行)、ok+≤minor→`endorsed`(放行)、ok+≥major→把 qwen findings 當新一輪 audit(opus grep 驗證每條:真的折進 spec、誤報標反證),`cross_reject_count += 1` 回步驟 1 續審,達 2 → 停 `disputed` 不放行。`cross_reject_count` 為**每次 design-loop 獨立計數**(orchestrator 上下文內變數,不跨 loop 累積;每次 autonomous-loop.sh 啟動一輪新 design-loop 時歸零)。
 
 ### 結果回流(扁平欄位)
-orchestrator §3 result JSON 輸出三欄 `cross_verdict`(endorsed|degraded|disputed)/`cross_worst`(severity)/`cross_summary`(單行摘要);autonomous-loop.sh 用既有 `get()` 取(L60),`cross_summary` 換行 replace 成空格防破版(L61);收斂分支 log 一行 + LINE(L107)、未收斂分支依 verdict 區分文案(L80-85)。**不碰 build_report、不寫跨程序檔**。
+orchestrator §3 result JSON 輸出三欄 `cross_verdict`(endorsed|degraded|disputed)/`cross_worst`(severity)/`cross_summary`(單行摘要);autonomous-loop.sh 用既有 `get()` 取(L83),`cross_summary` 換行 replace 成空格防破版(L87);收斂分支 log 一行 + LINE(L197-202)、未收斂分支依 verdict 區分文案(L105-111)。**不碰 build_report、不寫跨程序檔**。
 
 ### key 與調用
 - key 存 `~/.config/ai-daily/qwen_api_key`(單行,**不入 repo/git**;讀不到 → degraded/no_key);走國際 endpoint `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`(國內 endpoint 回 401),OpenAI 兼容模式,`qwen3-max`、`temperature=0.2`。
@@ -86,4 +86,4 @@ orchestrator §3 result JSON 輸出三欄 `cross_verdict`(endorsed|degraded|disp
 ## 相關
 - 設計稿:`docs/design/2026-06-22-cross-family-audit.md`(2026-06-22 design-loop 6 輪、canary 6/6 全 caught、達 cap 6 未自動收斂,剩 F2/F4 文檔級無 blocker、人工定稿放行)。
 - 實作計畫:`docs/superpowers/plans/2026-06-22-cross-family-audit.md`。
-- 實作落點:`governance/autonomous_loop/cross_audit.py`、`orchestrator-prompt.md §2.5`、`autonomous-loop.sh`(L60-61/80-85/107)。
+- 實作落點:`governance/autonomous_loop/cross_audit.py`、`orchestrator-prompt.md §2.5`、`autonomous-loop.sh`(get L83/replace L87/verdict L105-111/收斂 L197-202)。

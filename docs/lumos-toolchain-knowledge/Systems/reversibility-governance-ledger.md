@@ -2,8 +2,8 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-10
-self_audit: sonnet/2026-06-26
+updated: 2026-07-24
+self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
@@ -23,10 +23,10 @@ summary: |-
   KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);六來源 = bypass-log(L2)/rot-queue(L3)/governance-log(doctor)/canary-log/kill-log/signoff-log;dedup 在讀時做
   KEY:gov 三檔皆 gitignore local-only,是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
   KEY:Check H(後加)僅 --ci 掃 git diff,正則命中疑似不可逆動作(prod/smtp/DROP TABLE…)而無不可逆標記時軟提醒,不擋
-  KEY:gov 去噪(2026-07-25,呈現層——帳本身一筆不動):advisory(軟/warned/無 token 無 detail,如 Check S 每次 doctor 全名單重喊)同(日,gate,kind,node)跨 commit 折 ×N、同群 >6 節點收單行摘要「N 節點(前3…) ×次數」;--full 回完整逐筆(審計逃生口)。canary/kill/signoff/L2 有 detail/token 恆逐筆;canary 分帳不受影響。實測本日 300 筆→17 行 [test:t_gov_denoise]
+  KEY:gov 去噪(2026-07-24,呈現層——帳本身一筆不動):advisory(軟/warned/無 token 無 detail,如 Check S 每次 doctor 全名單重喊)同(日,gate,kind,node)跨 commit 折 ×N、同群 >6 節點收單行摘要「N 節點(前3…) ×次數」;--full 回完整逐筆(審計逃生口)。canary/kill/signoff/L2 有 detail/token 恆逐筆;canary 分帳不受影響。實測本日 300 筆→17 行 [test:t_gov_denoise]
   DEP:scripts/lumos run_doctor(Check R/Check H)｜cmd_lint(單檔 Check R)｜cmd_gov｜extract_reversibility/_rollback_resolved/_guard_resolved｜parse_decisions(吃 rollback/guard sub-key)
-  DEP:文件四面同步 — graph-discipline.md 速查｜lumos-project-notes SKILL.md｜NEW_HINT[system]｜lint;漂移測試守衛(碼有強制 → 文件必須提)[test:t_reversibility_drift]
-  TEST:258 passed(macOS);t_reversibility_lint/doctor/guard_doctor/governance_log_write/gov_query/drift
+  DEP:文件四面同步 — graph-discipline.md 速查｜lumos-project-notes SKILL.md｜NEW_HINT[system]｜lint;漂移測試守衛(碼有強制 → 文件必須提)[test:t_marker_doc_sync](L4 審計 2026-07-24 修:原指 t_reversibility_drift 不存在)
+  TEST:全套 1427 綠(2026-07-24);t_reversibility_lint/doctor/guard_doctor + t_governance_log_write/t_gov_query(無 reversibility 前綴)+ t_marker_doc_sync(文件漂移)+ t_gov_denoise(去噪)
   VERIFY:[[Verification/2026-06-19_reversibility-governance-ledger]]
 decisions:
   - content: 可逆性走自己的平行函式 extract_reversibility,完全不碰 extract_contracts 管線
@@ -68,8 +68,8 @@ decisions:
 ### Check R 標記與強制
 - `★IRREVERSIBLE★`：收不回（上架、prod DB 遷移）。缺實質回退 → **error**（doctor `--ci` / pre-push 擋，同裸合約）。
 - `★CHECKPOINT★`：改了難救，動手前先存還原點。缺回退只 **warning**（文件性，不擋）。
-- 強制行為見 `scripts/lumos` `run_doctor` 的 Check R 區段（約 L621）與 `cmd_lint` 單檔版（約 L1229）。
-- 「實質回退」判定（`_rollback_resolved`/`_guard_resolved`，L1099-1110）：ref 字面必須是 `decisions`，且本節點 `decisions[]` 有 ≥1 條非空 `rollback`（或 `guard`）內容；其他 ref 值一律視為未解析。
+- 強制行為見 `scripts/lumos` `run_doctor` 的 Check R 區段（約 L736）與 `cmd_lint` 單檔版（約 L2083）（行號 2026-07-24 L4 審計刷新；隨碼成長會再漂，以函式名 grep 為準）。
+- 「實質回退」判定（`_rollback_resolved` 約 L1823／`_guard_resolved` 約 L1830）：ref 字面必須是 `decisions`，且本節點 `decisions[]` 有 ≥1 條非空 `rollback`（或 `guard`）內容；其他 ref 值一律視為未解析。
 
 ### 兩軌合規（spec 後擴充，commit eb73b22）
 原 spec v1 只有 `[rollback:decisions]`（事後回退）。實作另加 `[guard:decisions]` 事前預防路徑：`★IRREVERSIBLE★` 只要 `_rollback_resolved` **或** `_guard_resolved` 任一為真即放行 —— 對「寄信／送外部 API」這類無回退但可用冪等鍵／核可閘事前防護的動作開一條合規路。`★CHECKPOINT★` 不讀 guard_ref。
@@ -84,7 +84,7 @@ decisions:
 - 已知限制（輸出明確標示）：L2 繞過無 node、L3 以 Verification 為鍵 → 對 Systems 節點為**部分**視圖；v1 不載 vault graph 做 Systems↔Verification 反查 join。
 
 ### Check H（spec 後加，commit 2482746）
-`run_doctor` 另有 Check H（約 L690），僅 `--ci` 掃 `git diff`，正則命中疑似不可逆動作（`prod`/`smtplib`/`DROP TABLE`/`requests.post`/`boto3`… 見 `IRREVERSIBLE_HINT_PATTERNS` L1027）而該節點無 `★IRREVERSIBLE★` 時軟提醒、不擋。這正是原 spec §5 YAGNI 砍掉的「commit-time 軟提醒」之後以 push-time / 純軟提醒形式回歸（掃 diff 而非檔名 stem 配對）。
+`run_doctor` 另有 Check H（約 L955），僅 `--ci` 掃 `git diff`，正則命中疑似不可逆動作（`prod`/`smtplib`/`DROP TABLE`/`requests.post`/`boto3`… 見 `IRREVERSIBLE_HINT_PATTERNS` 約 L1751）而該節點無 `★IRREVERSIBLE★` 時軟提醒、不擋。這正是原 spec §5 YAGNI 砍掉的「commit-time 軟提醒」之後以 push-time / 純軟提醒形式回歸（掃 diff 而非檔名 stem 配對）。
 
 ## 關鍵決策
 見上方 decisions[]（四條，皆 design-loop 四輪對抗審計揪出的 blocker/major）。完整 alternatives 與逐輪修正史見設計稿末「審計修正紀錄」（四輪 CONVERGED）。

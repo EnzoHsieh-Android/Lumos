@@ -2,8 +2,8 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-11
-self_audit: sonnet/2026-06-26
+updated: 2026-07-24
+self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
@@ -16,7 +16,8 @@ summary: |-
   KEY:全自動判收斂仍是沒閉合的迴歸——judge/cross-family 只把自評推遠一層未消滅,末端人 review PR 是最後也唯一真兜底(誠實天花板)
   KEY:dry-run≠模擬——orchestrator 必須真執行所有工具(canary record/cross_audit),收尾前自查 scratch spec+canary-log 必須存在,否則本輪無效重做(06-23 真機抓到「全程腦內模擬」幻覺後硬化)
   KEY:claude -p 走 $0 OAuth token(CLAUDE_CODE_OAUTH_TOKEN,非 API key);避開 OAuth 被禁 model
-  DEP:governance/autonomous-loop.sh(cron 入口)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result}.py + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
+  KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross_verdict=endorsed 後,wrapper(autonomous-loop.sh L130-190)仍①驗 spec_path 存在②用自算 difficulty.assess_spec() 的 tier 重跑 loop status --gate 機械重驗③tier=high 要求 cross_verdict 必須乾淨 endorsed——任一不過→requeue 不放行+LINE;機制本體見 [[Systems/risk-tiered-review]]
+  DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result}.py + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
   TEST:scripts/test_autonomous_loop.py 27 passed;dry-run 端到端真機跑通 06-20→06-26(cron 已上 10:10)
   VERIFY:[[Verification/2026-06-20_autonomous-iteration-loop]]
 decisions:
@@ -71,7 +72,7 @@ decisions:
 > **源起:日報 2026-06-18 gap**——「整套把關預設『每次 commit 都有人在旁邊看 stderr』,但無人看顧的自主迴圈已成主流,這個前提正在崩。」對齊治理大方向 loop engineering(朝自主 / 無人看顧的自我檢查 loop)。
 
 ## 架構(5 組件 + cron 入口)
-- `governance/autonomous-loop.sh` — cron 入口(`10 10 * * *`,日報 9:30 後)。驗當日 `governance/reports/governance-<date>.json` 存在(真模式無報即跳、不視為錯;dry-run fallback 最近一份)→ gap_select → 派 orchestrator → 解析回傳 → 收斂則放行閘。主流程包 `while`(skip → continue 選下一個,`SKIP_CAP=3` 防空燒)。
+- `governance/autonomous-loop.sh` — **由 `daily-governance.sh` 串接呼叫**(launchd 09:30 單次喚醒同腳本內接續;舊「獨立 cron 10:10」已棄——閉蓋睡眠醒不來,2026-07-24 L4 審計修真)。驗當日 `governance/reports/governance-<date>.json` 存在(真模式無報即跳、不視為錯;dry-run fallback 最近一份)→ gap_select → 派 orchestrator → 解析回傳 → 收斂則放行閘。主流程包 `while`(skip → continue 選下一個,`SKIP_CAP=3` 防空燒)。
 - `autonomous_loop/gap_select.py` — 讀日報 `gaps[]`(真 schema `{weakness, suggestion}`)+ `backlog.jsonl`,去重排序選 top-1;**N=1 gate**(`pending_exists`:dry-run 查 `governance/pending/*.md`、真模式 `gh pr list head:auto/spec-`);`covered.jsonl` 永久排除已被既有 spec 覆蓋的 gap。
 - `autonomous_loop/backlog.py` — backlog 讀寫 / value_score 衰減 / 淘汰 / 排序。
 - `autonomous_loop/cross_audit.py` — qwen3-max(DashScope 國際 endpoint)跨家族複核;回 `{status, worst_severity, ...}`,`status==degraded` 為 fail-open(no_key / http / timeout)。

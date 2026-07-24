@@ -2,8 +2,8 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-16
-self_audit: sonnet/2026-06-26
+updated: 2026-07-24
+self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
@@ -68,7 +68,7 @@ verified_by:
   - `show <節點> [--body-only]`(`cmd_show`,2026-07-21):**節點檔完整內容**(frontmatter+body)——context 是壓縮導航(不含 body),show 是完整真相讀取;解「規範禁 Read 圖譜但無全文入口」的結構性違章(外審 blocker,設計/審計 loop 見 [[Projects/lumos-show讀取入口_計劃]])。`--body-only` 以 `split_frontmatter` 剝離開頭 frontmatter;重開檔失敗(壞 symlink/race)→ stderr+rc2 不裸 traceback。
   - `contracts [節點]`(`cmd_contracts`):合約登記簿,列 `★INVARIANT★`(改=breaking)/ `★DEBT★`(可改);**只認 KEY 行前綴標準格式**;★INVARIANT★ 顯示綁定的 `[test:]`,未綁=⚠(doctor Check T 會擋)。
 - **巡檢 / 完整性**
-  - `doctor [--ci]`(`cmd_doctor`):全圖權威健康巡檢——4 檢查(1/4 Verification orphans、2/4 unresolved wikilinks 破連結、3/4 verified_by 雙向同步(stale/fail 驗證豁免,E1↔Check3 矛盾修 2026-07-15)、4/4 plan_refs 意圖鏈)+ 同名守衛 + frontmatter lint + Check T(★INVARIANT★→測試綁定)/ Check R(可逆性回退)/ Check H(漏標可逆性軟提醒,僅 --ci 掃 diff)+ Check P(失效檔案認領:inline-code 路徑指向已不存在檔案)+ Check E1/E2/E3(關係層:E1 失效背書 verified_by→stale/fail、E2 建在被推翻決策上 決策翻案而 typed 連入來源未跟上——鄰居有 decision_refs 時精化為只標指到那條、且 M3 rel-cascade 帳本有 terminal 判定(ts>=ended)即跳過＝主/補網不重報、E3 意圖鏈斷義 decision_refs 指向的決策已翻案+dangling 浮出;皆軟提醒)。`--ci` = `--strict` + 無色彩,且會寫 `.governance-log.jsonl`(寫者=doctor --ci＋anchor approve,scripts/lumos:416 自述;原「唯一寫者」為漂移,2026-07-21 順手修真)。
+  - `doctor [--ci]`(`run_doctor`,非 cmd_ 前綴——L4 審計 2026-07-24 修正指針):全圖權威健康巡檢——4 檢查(1/4 Verification orphans、2/4 unresolved wikilinks 破連結、3/4 verified_by 雙向同步(stale/fail 驗證豁免,E1↔Check3 矛盾修 2026-07-15)、4/4 plan_refs 意圖鏈)+ 同名守衛 + frontmatter lint + Check T(★INVARIANT★→測試綁定)/ Check R(可逆性回退)/ Check H(漏標可逆性軟提醒,僅 --ci 掃 diff)+ Check P(失效檔案認領:inline-code 路徑指向已不存在檔案)+ Check E1/E2/E3(關係層:E1 失效背書 verified_by→stale/fail、E2 建在被推翻決策上 決策翻案而 typed 連入來源未跟上——鄰居有 decision_refs 時精化為只標指到那條、且 M3 rel-cascade 帳本有 terminal 判定(ts>=ended)即跳過＝主/補網不重報、E3 意圖鏈斷義 decision_refs 指向的決策已翻案+dangling 浮出;皆軟提醒)。`--ci` = `--strict` + 無色彩,且會寫 `.governance-log.jsonl`(寫者=doctor --ci＋anchor approve,scripts/lumos:416 自述;原「唯一寫者」為漂移,2026-07-21 順手修真)。
 - **遍歷 / 關聯**
   - `links <節點>` / `backlinks <節點>`(`cmd_links`,reverse=True 即 backlinks):列連出 / 連入節點 + 狀態。
   - `map <節點> [--depth 2]`(`cmd_map`):鄰域樹狀展開,`↺` 標已出現過(防環)。
@@ -90,7 +90,7 @@ verified_by:
 
 ## 相關
 - 操作表權威:`CLAUDE.md`(入口三步 + 標籤規範)、`skills/lumos-project-notes/SKILL.md`(24 子命令全覽:讀取 13 + 寫入 7 + 安裝/生命週期 4)。
-- 實作落點:`scripts/lumos` `cmd_search`/`cmd_context`/`cmd_contracts`/`cmd_doctor`/`cmd_links`/`cmd_map`/`cmd_export`/`cmd_decisions`/`cmd_stale`/`cmd_recent`/`cmd_stats` + `load_vault`/`Env`/`find_vault`。
+- 實作落點:`scripts/lumos` `cmd_search`/`cmd_context`/`cmd_contracts`/`run_doctor`/`cmd_links`/`cmd_map`/`cmd_export`/`cmd_decisions`/`cmd_stale`/`cmd_recent`/`cmd_stats` + `load_vault`/`Env`/`find_vault`。
 - 回歸測試:`scripts/test_lumos.py`(Python t_-prefixed)。
 - 對稱寫入原語見 [[Systems/lumos-cli-write]];安裝 / 生命週期見 [[Systems/lumos-cli-lifecycle]];`lumos --help` 為現行權威。
 

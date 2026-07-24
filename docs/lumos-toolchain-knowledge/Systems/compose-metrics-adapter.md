@@ -3,6 +3,7 @@ type: system
 status: doing
 created: 2026-07-05
 updated: 2026-07-05
+self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/doing

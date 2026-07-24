@@ -2,7 +2,8 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-24
+self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
