@@ -1424,6 +1424,61 @@ def t_search_structure_aware():
     check("search --code 含 code block 內容", "widget in code block" in rc.stdout, rc.stdout)
 
 
+# ── Check T python profile:comment_strip=none+行首錨+檔名錨(CheckT-Python-profile_計劃) ──
+def t_python_profile_discovery():
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-pyprof-"))
+    # 1) r1 實測炸點 fixture:status/* 註解+遠處 **/ 字面,中間的 t_mid 不得被吃
+    (root / "test_x.py").write_text(
+        "# set status 同步 tags 的 status/* 標籤\n"
+        "def t_mid():\n    pass\n"
+        "PAT = 'glob:**/'\n"
+        "def test_a():\n    pass\n"
+        "def t_b():\n    pass\n"
+        "class TC:\n    def t_nested(self):\n        pass\n"
+        "# def t_commented():\n", encoding="utf-8")
+    # 2) 檔名錨:非測試檔名的 t_c 不認
+    (root / "helper.py").write_text("def t_c():\n    pass\n", encoding="utf-8")
+    prof = dict(m.TEST_PROFILES["python"])
+    got = m.discover_test_methods(root, prof)
+    check("pyprof: 炸點中間 t_mid 不被吃(comment_strip=none)", "t_mid" in got, f"{got}")
+    check("pyprof: 行首 test_a/t_b 認得", {"test_a", "t_b"} <= got, f"{got}")
+    check("pyprof: 類內縮排 t_nested 不認(行首錨)", "t_nested" not in got, f"{got}")
+    check("pyprof: 被註解 # def t_commented 不認", "t_commented" not in got, f"{got}")
+    check("pyprof: 非測試檔名 helper.py 的 t_c 不認(檔名錨)", "t_c" not in got, f"{got}")
+    # 3) scaffold 欄位齊全且產物檔名命中檔名錨(std F2)
+    import fnmatch as _fn
+    check("pyprof: scaffold_ext 存在(guard scaffold 不 KeyError)", prof.get("scaffold_ext") == ".py")
+    fname = prof["scaffold_name"].format(m="PayGuard") + prof["scaffold_ext"]
+    check("pyprof: scaffold 產物檔名命中檔名錨",
+          any(_fn.fnmatch(fname, g) for g in prof["file_name_match"]), fname)
+    # 4) c-style 對照組(std F5:必須用 .cs fixture,拿 .py 掛 csharp 會被 exts 濾掉假綠)
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-csprof-"))
+    (root2 / "Tests").mkdir()
+    (root2 / "Tests" / "FooTests.cs").write_text(
+        "/* 註解掉的舊測試\n[Fact]\npublic void OldGuard() {}\n*/\n"
+        "[Fact]\npublic void RealGuard() {}\n", encoding="utf-8")
+    got2 = m.discover_test_methods(root2, dict(m.TEST_PROFILES["csharp-xunit"]))
+    check("csprof 對照: 註解內 OldGuard 照舊被剝", "OldGuard" not in got2, f"{got2}")
+    check("csprof 對照: RealGuard 認得", "RealGuard" in got2, f"{got2}")
+
+
+def t_python_profile_multiplatform():
+    """std F6:multiplatform 路徑 dict(TEST_PROFILES[p]) 繞過 load_test_profile——新欄位放 dict 靜態值,此路徑也吃到。"""
+    import json as _j
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-pymulti-"))
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "config.json").write_text(_j.dumps(
+        {"platforms": {"py": {"profile": "python", "root": "."}}, "default_platform": "py"}),
+        encoding="utf-8")
+    (root / "test_m.py").write_text("def t_multi():\n    pass\n# status/* 註解\nX='glob:**/'\n",
+                                    encoding="utf-8")
+    _, _, _, methods_for, _ = m._platform_test_index(root)
+    got = methods_for("py")
+    check("pyprof multiplatform: t_multi 認得(欄位經 dict 直達)", "t_multi" in got, f"{got}")
+
+
 # ── 真遺忘:search 預設排除 superseded(不排 stale),--include-superseded 逃生 ──
 def t_search_forget_superseded():
     import json as _json

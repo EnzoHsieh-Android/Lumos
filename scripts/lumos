@@ -1505,6 +1505,10 @@ MAESTRO_FLOW_RE = re.compile(r"(?m)^appId:")
 # 故含空白 title(如 'should show menu')NO MATCH(設計上不可綁)。
 PLAYWRIGHT_TEST_RE = re.compile(r"\btest(?:\.describe)?\(\s*[\"']([A-Za-z_]\w*)[\"']")
 
+# Python:行首錨(欄位 0)——排除巢狀/類內/縮排 def 與被註解的 # def(對齊「module-global 才被
+# runner 收集」語意;無框架註冊標記可錨=誠實天花板,見 Projects/CheckT-Python-profile_計劃)。
+PYTHON_TEST_RE = re.compile(r"(?m)^def ((?:t|test)_[A-Za-z0-9_]+)\s*\(")
+
 # ── 測試棧 profile(語言可插拔;P5 — Android/Kotlin 等也能用 guard + Check T)──
 # 每個 profile:exts(discover 掃哪些副檔名)/ method_re(group(1)=方法名)/
 # scaffold_ext(產 stub 副檔名)/ dir_mode(suffix=頂層目錄 endswith / rglob=遞迴找目錄名)/
@@ -1545,6 +1549,23 @@ TEST_PROFILES = {
         "dirs": {"pure": ([], []),
                  "behavioral": (["tests", "e2e"], []),
                  "state": (["tests", "e2e"], [])},
+    },
+    # Python(2026-07-25,CheckT-Python-profile_計劃):無框架註冊標記可錨 → 檔名錨(pytest 收集
+    # 慣例 test_*.py/*_test.py,basename fnmatch,ext 檢查後、讀檔前套)+行首錨(PYTHON_TEST_RE)。
+    # comment_strip="none":Python 無 C 式註解,剝了反被字串/中文註解裡的 /*..*/ 誤吃大段內容
+    # (實測 test_lumos.py 260→94;既有地雷根因);被註解的 # def 不在行首,行首錨天然排除。
+    # scaffold_name 模板:預設 XTests.py 命名會被檔名錨排除,scaffold 產物必須自己能被掃到。
+    # 新欄位全放 dict 靜態值:multiplatform 路徑 dict(TEST_PROFILES[p]) 繞過 load_test_profile。
+    "python": {
+        "exts": {".py"}, "method_re": PYTHON_TEST_RE, "scaffold_ext": ".py",
+        "scaffold_name": "test_{m}", "comment_strip": "none",
+        "file_name_match": ["test_*.py", "*_test.py"],
+        "dir_mode": "rglob", "rglob_under": None,
+        "attr_hint": "行首 def t_*/def test_*(名字錨非框架註冊——無斷言 helper 也會被認,天花板)",
+        "fail_hint": "raise AssertionError",
+        "dirs": {"pure": (["tests", "scripts"], []),
+                 "behavioral": (["tests"], []),
+                 "state": (["tests"], [])},
     },
 }
 
@@ -1833,15 +1854,20 @@ def discover_test_methods(repo_root, profile=None):
     """掃 repo 內測試檔,回傳「真實測試方法名」集合(被測試框架註解標註者)。
     測試棧 profile 決定掃哪些副檔名 + 用哪條方法 regex(預設 csharp-xunit;P5 語言可插拔)。
     Check T 用此集合驗證 ★INVARIANT★ 綁定的是『可執行證據』而非散文裡的字面巧合(B6 審計)。"""
-    import os
+    import os, fnmatch
     profile = profile or load_test_profile(repo_root)
     exts, mre = profile["exts"], profile["method_re"]
     must = profile.get("file_must_match")   # 選填:只認內容含此 marker 的檔(如 Maestro ^appId:)
+    fname_globs = profile.get("file_name_match")   # 選填:basename fnmatch 檔名錨(python:test_*.py)
+    strip = profile.get("comment_strip", "c-style")  # 預設 c-style 向後相容;python="none"
     methods = set()
     for dp, dirs, files in os.walk(repo_root):
         dirs[:] = [d for d in dirs if d not in CODE_SKIP_DIRS]
         for f in files:
             if Path(f).suffix.lower() in exts:
+                # 檔名錨:ext 檢查後、讀檔前套(CheckT-Python-profile_計劃 std F4)
+                if fname_globs and not any(fnmatch.fnmatch(f, g) for g in fname_globs):
+                    continue
                 try:
                     txt = (Path(dp) / f).read_text(encoding="utf-8", errors="ignore")
                 except Exception:
@@ -1850,10 +1876,13 @@ def discover_test_methods(repo_root, profile=None):
                 # 濾掉 CI yaml 的 name: 被誤收)。現有 profile 無此鍵→.get() 回 None→不過濾。
                 if must is not None and not must.search(txt):
                     continue
-                # 先去註解:行尾 // 註解(如 [InlineData(..)] // 說明 / @Test // 備註)會打斷
-                # 「註解串→方法簽章」的連續比對,導致真測試被誤判偽證據。
-                txt = re.sub(r"//[^\n]*", "", txt)
-                txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
+                # 去註解(語言感知,2026-07-25 根因修):c-style 剝 // 與 /*..*/(行尾註解會打斷
+                # 「註解串→方法簽章」連續比對,真測試被誤判偽證據)。★python 走 "none" 不剝★——
+                # Python 無 C 式註解,剝了反被中文註解/字串字面裡的 /*..*/ 配對誤吃大段內容
+                # (實測 test_lumos.py 260→94);被註解的 # def 不在行首,PYTHON_TEST_RE 行首錨排除。
+                if strip == "c-style":
+                    txt = re.sub(r"//[^\n]*", "", txt)
+                    txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
                 for m in mre.finditer(txt):
                     methods.add(m.group(1).strip("`"))  # Kotlin 反引號測試名去引號
     return methods
@@ -3308,7 +3337,11 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     if not out.is_dir():
         print(f"ERROR: 輸出目錄不存在: {out}(打錯路徑?先 mkdir 或修正 --out)", file=sys.stderr)
         return 2
-    target = out / f"{klass}{profile['scaffold_ext']}"
+    # scaffold_name 模板(python="test_{m}"→test_X.py 命中該 profile 檔名錨;無模板走 klass 慣例。
+    # std F2:預設 XTests.py 會被 python 檔名錨排除,scaffold 產物必須自己能被 Check T 掃到)
+    _tpl = profile.get("scaffold_name")
+    _base = _tpl.format(m=method) if _tpl else klass
+    target = out / f"{_base}{profile['scaffold_ext']}"
     if target.exists():
         print(f"ERROR: {target} 已存在,不覆寫(避免蓋掉既有守衛)", file=sys.stderr)
         return 2

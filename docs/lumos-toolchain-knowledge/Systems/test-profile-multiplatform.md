@@ -8,6 +8,7 @@ related:
   - "[[Systems/check-t-sentinel]]"
 verified_by:
   - "[[Verification/2026-07-02_multiplatform-test-binding]]"
+  - "[[Verification/2026-07-25_CheckT-Python-profile]]"
 plan_refs:
   - "[[Projects/多平台合約測試綁定_計劃]]"
 tags:
@@ -22,6 +23,7 @@ summary: |-
   KEY:file_must_match 是 discover 選填 knob(讀檔後去註解前過濾,.get() 相容無此鍵的舊 profile)
   KEY:guard bind/scaffold --platform 旗標——method 維持識別字、平台另帶,bind 寫 [test:plat:method] 去重/verify 比完整 ref;scaffold 範本/scaffold_ext/測試目錄偵測跟平台 root 走
   KEY:天花板——Check T 只驗測試識別子存在,不驗跑綠(CI 的事);E2E 要裝置/瀏覽器(無裝置才 skip);跨 repo 只讀不寫
+  KEY:python profile(2026-07-25,[[Projects/CheckT-Python-profile_計劃]])=第 5 個 profile:行首錨 PYTHON_TEST_RE+檔名錨 file_name_match(basename fnmatch,新欄位,與 maestro file_must_match 內容錨是兩機制)+comment_strip="none"+scaffold_name 模板;discover_test_methods 的註解剝離改語言感知(c-style 預設向後相容)——根因:原對所有語言剝 /*..*/,Python 檔中文註解/字串的巧合配對會吃掉大段內容(本 repo 實測 260→94)。新欄位放 TEST_PROFILES dict 靜態值(multiplatform 路徑繞過 load_test_profile,dict 直達兩路徑都吃到)
   DEP:[[Systems/check-t-sentinel]]
   TEST:t_maestro_profile_discover｜t_playwright_profile_discover｜t_load_platforms｜t_resolve_test_refs｜t_multiplatform_guard_list｜t_multiplatform_doctor_check_t｜t_archive_live_guard_multiplatform｜t_guard_trace_multiplatform｜t_guard_bind_scaffold_platform(333 passed)
   VERIFY:[[Verification/2026-07-02_multiplatform-test-binding]]
