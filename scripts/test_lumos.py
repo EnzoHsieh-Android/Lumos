@@ -1424,6 +1424,56 @@ def t_search_structure_aware():
     check("search --code 含 code block 內容", "widget in code block" in rc.stdout, rc.stdout)
 
 
+# ── pre-commit 閘:vendored 工具白名單豁免(lumos update 例行更新不該撞圖譜閘) ──
+def _precommit_run(root, staged_rel):
+    """fixture repo 內 stage 指定檔後跑 pre-commit hook,回 subprocess result。"""
+    import subprocess, os
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit"
+    subprocess.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    (root / "docs" / "x-knowledge").mkdir(parents=True)   # Gate 0:有 vault 閘才啟用
+    (root / "docs" / "x-knowledge" / ".keep").write_text("", encoding="utf-8")
+    for rel in staged_rel:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    return subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True,
+                          env=dict(os.environ, GIT_DIR=str(root / ".git")))
+
+
+def t_precommit_vendored_exempt():
+    """vendored 工具檔(_VENDORED_TOOLKIT+兩夾)豁免圖譜閘;使用者自有 code 仍照擋。"""
+    import subprocess
+    if not hasattr(__import__("os"), "setsid"):
+        print("  - skip(非 POSIX)")
+        return
+    # ① 只 stage vendored .py → 放行(rc0;lumos update 例行更新情境)
+    r1 = Path(tempfile.mkdtemp(prefix="gctl-pcv1-"))
+    res1 = _precommit_run(r1, ["scripts/test_lumos.py", "scripts/merge-claude-settings.py",
+                               "scripts/hooks/claude/impact-hook.py"])
+    check("precommit 豁免: vendored .py 更新放行", res1.returncode == 0,
+          f"rc={res1.returncode} {res1.stderr[-150:]}{res1.stdout[-150:]}")
+    # ② 使用者自有 code(scripts/ 下非白名單)無圖譜 → 仍擋(rc1;豁免不能過寬)
+    r2 = Path(tempfile.mkdtemp(prefix="gctl-pcv2-"))
+    res2 = _precommit_run(r2, ["scripts/my_tool.py"])
+    check("precommit 豁免: 使用者 scripts/my_tool.py 仍被擋(不過寬)", res2.returncode != 0,
+          f"rc={res2.returncode}")
+    # ③ 一般 src code 無圖譜 → 仍擋(既有行為迴歸)
+    r3 = Path(tempfile.mkdtemp(prefix="gctl-pcv3-"))
+    res3 = _precommit_run(r3, ["app/Main.kt"])
+    check("precommit 豁免: 一般 code 無圖譜仍擋(迴歸)", res3.returncode != 0, f"rc={res3.returncode}")
+
+
+def t_precommit_whitelist_drift_guard():
+    """漂移守衛:pre-commit 的豁免清單必須涵蓋 _VENDORED_TOOLKIT 每一項+兩夾(單真相源比對)。"""
+    m = _load_lumos()
+    hook_txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit").read_text(encoding="utf-8")
+    for rel in m._VENDORED_TOOLKIT:
+        check(f"precommit 漂移守衛: 豁免清單含 {rel}", rel in hook_txt, rel)
+    for d in ("scripts/hooks/", "scripts/templates/"):
+        check(f"precommit 漂移守衛: 豁免清單含 {d}*", f"{d}*" in hook_txt, d)
+
+
 # ── Check T python profile:comment_strip=none+行首錨+檔名錨(CheckT-Python-profile_計劃) ──
 def t_python_profile_discovery():
     m = _load_lumos()

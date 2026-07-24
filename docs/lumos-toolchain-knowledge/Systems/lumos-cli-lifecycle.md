@@ -18,7 +18,7 @@ summary: |-
   KEY:★INVARIANT★ re-inject 只覆蓋 sentinel 之間 body、sentinel 之外 CLAUDE.md 內容 byte-equal 保留(改=毀使用者手寫內容=breaking) [test:t_reinject_preserves_outside] [audit:sonnet/2026-07-06]
   KEY:★DEBT★ CLAUDE.md START sentinel 的版本戳(LUMOS_VERSION)=人可讀標籤/advisory nudge,非正確性守衛(內容比對 doctor Check D 才是;版本在 body 外、bump 不觸發守衛)
   KEY:install 全域指令 Unix=symlink、Win=lumos.cmd shim;skills 經 _link_or_copy(Unix symlink / Win junction / 失敗 fallback copytree)
-  KEY:_VENDORED_TOOLKIT 白名單=5檔(scripts/lumos、test_lumos.py、merge-claude-settings.py、graph-rename.sh、fetch-notesmd.sh)+scripts/hooks/+scripts/templates/兩夾,為 vendor(_vendor_toolchain)與 deinit(_deinit_remove_vendored)共用,避免漂移
+  KEY:_VENDORED_TOOLKIT 白名單=5檔(scripts/lumos、test_lumos.py、merge-claude-settings.py、graph-rename.sh、fetch-notesmd.sh)+scripts/hooks/+scripts/templates/兩夾,為 vendor(_vendor_toolchain)與 deinit(_deinit_remove_vendored)共用,避免漂移;★2026-07-25 pre-commit 圖譜閘也豁免此白名單★(精確路徑非 scripts/* 整夾,專案自有 scripts/foo.py 仍擋)——vendored .py 誤中 code 副檔名判定,致每次 lumos update 例行更新都撞閘、bypass 帳被灌水稀釋真訊號;bash 清單與常數的同步靠 [test:t_precommit_whitelist_drift_guard] 漂移守衛+行為測試 t_precommit_vendored_exempt(放行 vendored/仍擋使用者檔)
   KEY:vendor 結尾 diff 自癒——逐檔 filecmp 比對 src↔target 差異即 shutil.copy2 覆補(installer 漏檔的安全網)
   KEY:來源 repo 自我保護——update/deinit 偵測 root==_lumos_src() 即 return 2(不可在 Lumos 源本身跑專案層指令)
   KEY:_scaffold_project 既有 vault 自動 skip(保護圖譜資料不被 init/update 動)
