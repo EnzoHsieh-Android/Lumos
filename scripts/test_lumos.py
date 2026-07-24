@@ -3003,9 +3003,22 @@ def t_deinit_strip_claude():
     check("deinit claude D: 內容不變", (root / "CLAUDE.md").read_text(encoding="utf-8") == before, "")
 
 
+def _mk_f9_src(prefix):
+    """造一個假 Lumos 來源:scripts/hooks(claude/impact-hook.py+pre-commit)+scripts/templates/graph-discipline.md。"""
+    from pathlib import Path
+    src = Path(tempfile.mkdtemp(prefix=prefix))
+    (src / "scripts" / "hooks" / "claude").mkdir(parents=True)
+    (src / "scripts" / "hooks" / "pre-commit").write_text("#lumos\n")
+    (src / "scripts" / "hooks" / "claude" / "impact-hook.py").write_text("#lumos\n")
+    (src / "scripts" / "templates").mkdir(parents=True)
+    (src / "scripts" / "templates" / "graph-discipline.md").write_text("#lumos\n")
+    return src
+
+
 def t_deinit_remove_vendored():
     from pathlib import Path
     m = _load_lumos()
+    src = _mk_f9_src("gctl-deinit-rm-src-")
     root = Path(tempfile.mkdtemp(prefix="gctl-deinit-rm-"))
     sc = root / "scripts"
     (sc / "hooks").mkdir(parents=True)
@@ -3017,11 +3030,11 @@ def t_deinit_remove_vendored():
         (root / rel).write_text("x\n")
     (sc / "my_own_helper.py").write_text("mine\n")   # 使用者自有檔
 
-    removed = m._deinit_remove_vendored(root)
+    removed = m._deinit_remove_vendored(root, src)
 
     check("deinit rm: scripts/lumos 已移", not (sc / "lumos").exists(), "")
-    check("deinit rm: scripts/hooks/ 整夾移除", not (sc / "hooks").exists(), "")
-    check("deinit rm: scripts/templates/ 整夾移除", not (sc / "templates").exists(), "")
+    check("deinit rm: scripts/hooks/ 清光 lumos 檔後移除", not (sc / "hooks").exists(), "")
+    check("deinit rm: scripts/templates/ 清光 lumos 檔後移除", not (sc / "templates").exists(), "")
     check("deinit rm: 使用者自有檔保留", (sc / "my_own_helper.py").exists(), "")
     check("deinit rm: scripts/ 非空故保留", sc.is_dir(), "")
     check("deinit rm: 回傳列表含 scripts/lumos", "scripts/lumos" in removed, f"{removed}")
@@ -3030,8 +3043,44 @@ def t_deinit_remove_vendored():
     root2 = Path(tempfile.mkdtemp(prefix="gctl-deinit-rm2-"))
     (root2 / "scripts").mkdir()
     (root2 / "scripts" / "lumos").write_text("x\n")
-    m._deinit_remove_vendored(root2)
+    m._deinit_remove_vendored(root2, src)
     check("deinit rm: scripts/ 清空後 rmdir", not (root2 / "scripts").exists(), "")
+
+
+def t_deinit_remove_vendored_preserves_user_files():
+    """F9 修:兩夾只刪 lumos 檔(對稱安裝端 src 列舉),★保留使用者放這兩夾的自有檔★,有留檔則不移夾。"""
+    from pathlib import Path
+    m = _load_lumos()
+    src = _mk_f9_src("gctl-f9-src-")
+    tgt = Path(tempfile.mkdtemp(prefix="gctl-f9-tgt-"))
+    (tgt / "scripts" / "hooks" / "claude").mkdir(parents=True)
+    (tgt / "scripts" / "hooks" / "pre-commit").write_text("#lumos\n")
+    (tgt / "scripts" / "hooks" / "claude" / "impact-hook.py").write_text("#lumos\n")
+    (tgt / "scripts" / "hooks" / "my-own-hook").write_text("#mine\n")          # 使用者檔
+    (tgt / "scripts" / "templates").mkdir(parents=True)
+    (tgt / "scripts" / "templates" / "graph-discipline.md").write_text("#lumos\n")
+    (tgt / "scripts" / "templates" / "my-template.md").write_text("#mine\n")   # 使用者檔
+    m._deinit_remove_vendored(tgt, src)
+    check("F9: lumos hook 檔被刪", not (tgt / "scripts" / "hooks" / "pre-commit").exists())
+    check("F9: lumos claude hook 被刪",
+          not (tgt / "scripts" / "hooks" / "claude" / "impact-hook.py").exists())
+    check("F9: ★使用者 hook 保留★", (tgt / "scripts" / "hooks" / "my-own-hook").exists())
+    check("F9: lumos 範本被刪", not (tgt / "scripts" / "templates" / "graph-discipline.md").exists())
+    check("F9: ★使用者範本保留★", (tgt / "scripts" / "templates" / "my-template.md").exists())
+    check("F9: 有使用者檔的夾保留(不整夾刪)",
+          (tgt / "scripts" / "hooks").is_dir() and (tgt / "scripts" / "templates").is_dir())
+
+
+def t_deinit_remove_vendored_no_src_conservative():
+    """F9 fallback(a):src 缺(None)→ 保守留夾、不刪、warn(never delete unknown)。"""
+    from pathlib import Path
+    m = _load_lumos()
+    tgt = Path(tempfile.mkdtemp(prefix="gctl-f9n-tgt-"))
+    (tgt / "scripts" / "hooks").mkdir(parents=True)
+    (tgt / "scripts" / "hooks" / "pre-commit").write_text("x")
+    m._deinit_remove_vendored(tgt, None)
+    check("F9 fallback: src=None → 保守留夾、lumos 檔也不刪(never delete unknown)",
+          (tgt / "scripts" / "hooks" / "pre-commit").exists())
 
 
 def t_deinit_detect_installed():
@@ -3098,6 +3147,10 @@ def _deinit_run(root, *args, stdin_data=None):
     """從 root 跑 lumos deinit(cwd=root,git toplevel 即 root)。"""
     import subprocess, os
     fake = tempfile.mkdtemp(prefix="gctl-deinit-home-")
+    # F9 後:兩夾逐檔刪需 src 列舉 lumos 檔;假 HOME 下 _lumos_src 解析不到(→保守留夾)。
+    # 未顯式帶 --source 者,注入真 repo 當來源(反映真實情境:Lumos 來源恆在),使 hooks 如常移除。
+    if "--source" not in args:
+        args = (*args, "--source", str(Path(GRAPHCTL).resolve().parent.parent))
     # stdin_data=None → 顯式 DEVNULL,確保非 tty(否則繼承環境 stdin;Windows/某些終端
     # isatty() 不可靠,會誤判互動 → 走 input() 撞 EOF)。有資料才用 input= 餵。
     kw = {"input": stdin_data} if stdin_data is not None else {"stdin": subprocess.DEVNULL}

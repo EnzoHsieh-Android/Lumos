@@ -6072,7 +6072,7 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
     if will_delete_vault:                    # step 3 刪圖譜(pre-flight + 安全網已過)
         import shutil
         shutil.rmtree(vault)
-    _deinit_remove_vendored(root)            # step 4 最後移 vendored(可能含自己)
+    _deinit_remove_vendored(root, src)       # step 4 最後移 vendored(可能含自己);src 供逐檔白名單(F9)
     print("✓ deinit 完成(專案層已移除)。檢視 `git diff` 後自行 commit。")
     return 0
 
@@ -6080,7 +6080,7 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
 def _deinit_unbar_gate(root: Path) -> int:
     """拆 pre-commit 閘:git -C root config --unset core.hooksPath。
     rc 0(已 unset)/ rc 5(key 本不存在)皆成功;其他 rc 印 warning 但不中止
-    (真正保險是 step 4 會把 scripts/hooks/ 整夾刪掉,缺 hook 檔 git 自會放行)。
+    (真正保險是 step 4 會刪掉 scripts/hooks/ 的 lumos hook 檔,缺 hook 檔 git 自會放行)。
     守衛(std F8,teardown一鍵拆機_計劃):只在 core.hooksPath 指向本 repo scripts/hooks 時才 unset;
     指向使用者自設(如 .githooks)則保留不動——別誤殺使用者的 git hooks(deinit/teardown 共用此安全)。"""
     import subprocess
@@ -6290,20 +6290,42 @@ def _deinit_strip_claude(root: Path) -> bool:
     return True
 
 
-def _deinit_remove_vendored(root: Path) -> list:
+def _deinit_remove_vendored(root: Path, src=None) -> list:
     """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 固定 5 檔;
-    ② scripts/hooks/、scripts/templates/ 整夾遞迴刪(Lumos-owned,不靠 src 列舉)。
-    scripts/ 底下使用者自有檔不碰;scripts/ 空了才 rmdir。回傳已移除相對路徑列表。"""
-    import shutil
+    ② scripts/hooks/、scripts/templates/ ★依 src 列舉逐檔刪★(對稱 _vendor_toolchain 的 rglob 安裝)。
+    F9 修(2026-07-24,Issues/deinit整夾刪使用者檔):不再整夾 rmtree——只刪 src 有的 lumos 檔、
+    保留使用者放這兩夾的自有檔,夾空了才移。fallback(a):src 缺(None 或來源夾不存在)→ 保守留夾
+    +warn、不刪(never delete unknown)。scripts/ 底下使用者自有檔不碰;scripts/ 空了才 rmdir。
+    回傳已移除相對路徑列表。"""
     removed = []
     for rel in _VENDORED_TOOLKIT:
         p = root / rel
         if p.exists():
             p.unlink(); removed.append(rel)
     for d in ("scripts/hooks", "scripts/templates"):
-        p = root / d
-        if p.is_dir():
-            shutil.rmtree(p); removed.append(d + "/")
+        tgt = root / d
+        if not tgt.is_dir():
+            continue
+        src_d = (src / d) if src is not None else None
+        if src_d is None or not src_d.is_dir():   # fallback(a):列舉不出 → 保守留夾
+            print(f"  ⚠ 無法從來源列舉 {d} 的 lumos 檔清單,保留整夾避免誤刪你的檔"
+                  "(手動清理,或 deinit/teardown 加 --source 指向 Lumos 來源)", file=sys.stderr)
+            continue
+        for f in src_d.rglob("*"):                # 對稱安裝:src_d 下的檔即 lumos-owned,逐檔刪
+            if f.is_file():
+                rel_f = f.relative_to(src_d)
+                t = tgt / rel_f
+                if t.exists():
+                    t.unlink(); removed.append(f"{d}/{rel_f}")
+        for sub in sorted((p for p in tgt.rglob("*") if p.is_dir()),   # 由深到淺移空子目錄
+                          key=lambda x: len(x.parts), reverse=True):
+            if not any(sub.iterdir()):
+                sub.rmdir()
+        if any(tgt.iterdir()):                    # 夾內尚有使用者檔 → 留+warn
+            leftover = sorted(p.name for p in tgt.iterdir())
+            print(f"  ⚠ {d} 保留(內有非 lumos 檔:{', '.join(leftover[:5])})", file=sys.stderr)
+        else:
+            tgt.rmdir(); removed.append(d + "/")
     sc = root / "scripts"
     if sc.is_dir() and not any(sc.iterdir()):
         sc.rmdir(); removed.append("scripts/")
