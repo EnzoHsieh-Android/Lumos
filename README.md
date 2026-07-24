@@ -247,15 +247,27 @@ lumos signoff <節點> --note ".."  # 業務簽核留痕(validation 那半;寫 s
 ```bash
 lumos install [--force] · lumos uninstall          # 全域 lumos symlink 到 ~/.local/bin
 lumos update [--source PATH] [--no-pull]           # 從 Lumos 唯一源刷新本專案 vendored 工具組
-lumos bootstrap [--pull]                           # 一鍵全套
+lumos bootstrap [--pull]                           # 一鍵全套(安裝)
+lumos teardown [-y]                                # 一鍵拆機(當前 repo + 機器全域,保留圖譜)
 lumos archive [--days N] [--apply]                 # 滾動歸檔老的 pass Verification(活守衛受保護)
 ```
 
 ### 卸載
 
-Lumos 是兩層安裝,對應兩個指令:
+安裝側有 `bootstrap`(一鍵)＋ `install`/`init`(顆粒);卸載側對稱——`teardown`(一鍵)＋ `uninstall`/`deinit`(顆粒)。**分層速記**:整台機器一次拆 → `teardown`;只拆一個 repo → `deinit`;只移全域 CLI → `uninstall`。
 
-- **專案層**(本 repo 的 hooks/工具組/CLAUDE.md 注入/圖譜):在專案內跑
+**① 一鍵拆機(首選)** — 拆「當前 repo 專案層 ＋ 機器全域(CLI/skills/全域 hooks)」,**永遠保留圖譜文件**:
+```bash
+lumos teardown           # 全域 hook 清理 → deinit(--keep-graph) → uninstall,一次拆乾淨(互動確認)
+lumos teardown -y        # 跳過互動確認(非互動環境用)
+```
+- **範圍 = 當前 repo ＋ 機器全域**:別的 repo 的裝設、bootstrap 來源 clone **都不動**(要拆別的 repo 到那個 repo 再跑一次)。
+- 補了「全域 `~/.claude` hook 殘留」的清理(`uninstall` 單獨跑不清這塊)。
+- 確認訊息會列出仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外的空白/換行(F4)、`uninstall` 會移除**全部 lumos 家族 skills**(含 csharp/kotlin/vue-idioms,不只 `lumos-*`;你自己名字不同的 skill 不碰)。
+
+**② 顆粒操作**(teardown 就是建在這兩個之上):
+
+- **專案層 `deinit`**(只拆這一個 repo,全域＋其他 repo 不動)——用途:多個 repo 用 lumos,只想清掉其中一個:
   ```bash
   lumos deinit              # 完整逆轉 init:拆閘 + 移工具組 + 剝 CLAUDE.md 區塊 + 刪圖譜(互動確認)
   lumos deinit --keep-graph     # 保留圖譜,只拆其餘
@@ -263,10 +275,10 @@ Lumos 是兩層安裝,對應兩個指令:
   lumos deinit -y               # 跳過互動確認(CI/非互動環境用)
   lumos deinit --source <path>  # 指定 Lumos 來源(自我保護比對用)
   ```
-  deinit 不自動 commit、不碰機器共用項;偵測到 standalone vault(圖譜=repo 根)會自動保留圖譜以防誤刪整個 repo。
-- **機器層**(全域 `~/.local/bin/lumos`、user-scope skills):`lumos uninstall`。
+  deinit 不自動 commit、不碰機器共用項;standalone vault(圖譜=repo 根)自動保留防誤刪整個 repo。`scripts/hooks`/`scripts/templates` 只刪 lumos 的檔、**你放在裡面的自有檔會保留**(F9 修 2026-07-24)。
+- **機器層 `uninstall`**(只移全域 `~/.local/bin/lumos` + user-scope skills,各 repo 裝設不動)。
 
-> 完整卸載 = 在每個專案跑 `lumos deinit`,最後 `lumos uninstall` + 視需要 `rm -rf ~/harness/lumos-toolchain`。
+> 手動完整版(不用 teardown 時):每個專案 `lumos deinit` → `lumos uninstall` → 視需要 `rm -rf ~/harness/lumos-toolchain`。
 
 權威清單以 `lumos --help` 為準。
 
