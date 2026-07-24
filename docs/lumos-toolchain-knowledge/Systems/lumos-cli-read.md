@@ -13,6 +13,9 @@ summary: |-
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
   KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向(stale/fail 驗證豁免——E1 拔死背書後不反咬漏寫)/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼);Check E1 失效背書(verified_by 指向 stale/fail 驗證→死背書)+ Check E2 建在被推翻決策上(決策 valid:false+ended → M2 共用 typed 索引查連入來源、updated 早於 ended → 落後邊;decision_refs 精化只標指到那條;M3 帳本抑制 terminal ts>=ended 跳過=主/補網不重報)+ Check E3 意圖鏈斷義(decision_refs 指翻案決策+dangling 浮出);關係層皆軟提醒;Check J regen 重生來源守衛[M1 2026-07-16]——regen 節點 provenance 分級:J-a 拒發明合約(INVARIANT 標記行需 [src:]/[git:] 意圖證據)+J-b DECISION 四態+J-c 證據指針 substring gate(共用 _validate_repo_ref 不經 top_dirs 靜默過濾;shallow 降 warn_soft 顯性)+J-d 唯讀提醒;與 lint 共用 check_regen_provenance 防兩入口漂移 [test:t_check_j_regen,t_check_j_git]);與 lint 分工——lint 只看單篇 node-local(regen 節點 Check J 為 opt-in 例外需檔案+git 存取)、predicts pre-push 會不會擋
   KEY:search 預設排除 fenced+inline code(對齊 doctor 連結抽取慣例,--code 才含)、大小寫不敏感 substring、--regex 切正則;結構化查詢走 contracts/decisions/stale 而非 search
+  KEY:真遺忘核心行為(回歸守衛=t_search_forget_superseded,19 檢查+mutation 實測;獨立審計 sonnet/2026-07-24;因 Check T 無 Python profile 不標形式硬合約標記(invariant),見下 KEY)——search 預設排除 status=superseded 但**不排除 stale**(GateMem 2026-07-24;stale 是待重驗警訊,藏了=製造新洞,doctor Check S 綁 stale+superseded 正是反例),--include-superseded 逃生;濾網插「命中確認後、三路分岔前」故 ranked/legacy/regex 三路一致、hidden 數=命中被藏筆數非全庫;隱藏數走 stderr(全模式含 --files-only,不污染 stdout)、--json 加 hidden_superseded 欄位
+  KEY:[已知缺口]doctor Check T 只有 csharp/kotlin/maestro profile、無 Python——本 repo 用 t_ 前綴 Python 回歸(.lumos/config.json 的 test inline 覆蓋只改 exts/method_regex,改不了 dirs(csharp 預設找 Tests/ 夾,Python 在 scripts/)),故 Python 測試的合約無法走 Check T 形式綁定、只能當一般回歸;要形式化須給 Check T 加 python profile(dirs 指 scripts/)——另立
+  KEY:真遺忘只做 search 這一刀(2026-07-24 使用者裁定);context 基本鄰居/推薦、impact、doctor 對作廢驗證的不一致=已知殘留(impact 永不做預設藏——direct 命中是事故記憶);設計與三審見 [[Projects/真遺忘召回過濾_計劃]]
   KEY:讀指令屬「專案層」——以 cwd find_vault 鎖定本專案 vault(不受同名 vault 影響);對比 install/bootstrap 的「機器層」(全域 lumos + user-scope skills)
   DEP:scripts/lumos load_vault/Env/find_vault｜extract_contracts(contracts/context 共用)｜parse_decisions(decisions/stale)｜status_of(links/map/stale 標狀態)
   KEY:stale --candidate 無 --match 直接 rc2 拒絕(反直覺限制:即使給了 --candidate 沒帶 --match 也拒,避免列全 vault 變噪音);--candidate --match <詞> 才有效
@@ -47,6 +50,7 @@ verified_by:
   - "[[Verification/2026-07-15_主網M3_cascade帳本]]"
   - "[[Verification/2026-07-15_主網M4_觸發與連鎖]]"
   - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
+  - "[[Verification/2026-07-24_真遺忘search排除superseded]]"
 ---
 # lumos-cli-read
 
@@ -59,7 +63,7 @@ verified_by:
 
 ## 13 個原語(對應 cmd_* / scripts/lumos)
 - **進場三步(入口固定順序)**
-  - `search <詞> [--path Systems] [--regex] [--files-only] [--code]`(`cmd_search`):全文搜尋 frontmatter+body,大小寫不敏感 substring。**預設排除 fenced + inline code 區塊**(對齊 doctor 連結抽取慣例),`--code` 才含;`context` 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。職責=自由文字,結構化查詢走 contracts/decisions/stale。
+  - `search <詞> [--path Systems] [--regex] [--files-only] [--code] [--include-superseded]`(`cmd_search`):全文搜尋 frontmatter+body,大小寫不敏感 substring。**預設排除 fenced + inline code 區塊**(對齊 doctor 連結抽取慣例),`--code` 才含;`context` 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。**預設排除 `status=superseded` 節點(真遺忘;不排 stale)**,`--include-superseded` 逃生、隱藏數走 stderr(核心行為與回歸守衛見上方 summary KEY)。職責=自由文字,結構化查詢走 contracts/decisions/stale。
   - `context <節點> [--brief]`(`cmd_context`):節點 + 鄰居 summary 壓縮索引(MemPalace closet)。**頭部直接攤出 ⚠ 合約**(extract_contracts);`--brief` 只給 meta + summary 首兩行 + 鄰居名單(壓 token)。
   - `show <節點> [--body-only]`(`cmd_show`,2026-07-21):**節點檔完整內容**(frontmatter+body)——context 是壓縮導航(不含 body),show 是完整真相讀取;解「規範禁 Read 圖譜但無全文入口」的結構性違章(外審 blocker,設計/審計 loop 見 [[Projects/lumos-show讀取入口_計劃]])。`--body-only` 以 `split_frontmatter` 剝離開頭 frontmatter;重開檔失敗(壞 symlink/race)→ stderr+rc2 不裸 traceback。
   - `contracts [節點]`(`cmd_contracts`):合約登記簿,列 `★INVARIANT★`(改=breaking)/ `★DEBT★`(可改);**只認 KEY 行前綴標準格式**;★INVARIANT★ 顯示綁定的 `[test:]`,未綁=⚠(doctor Check T 會擋)。

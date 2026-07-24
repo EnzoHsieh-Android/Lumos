@@ -1424,6 +1424,65 @@ def t_search_structure_aware():
     check("search --code 含 code block 內容", "widget in code block" in rc.stdout, rc.stdout)
 
 
+# ── 真遺忘:search 預設排除 superseded(不排 stale),--include-superseded 逃生 ──
+def t_search_forget_superseded():
+    import json as _json
+    v = mkvault()
+    write(v, "Systems/Live.md", "type: system\nstatus: done", body="# Live\nwidgetflow 活規則\n")
+    write(v, "Systems/Dead.md", "type: system\nstatus: superseded", body="# Dead\nwidgetflow 舊規則\n")
+    write(v, "Systems/Stale.md", "type: system\nstatus: stale", body="# Stale\nwidgetflow 待重驗\n")
+    # 不命中 query 的作廢節點(驗隱藏計數=命中被藏筆數,非全庫 superseded 數)
+    write(v, "Systems/Dead2.md", "type: system\nstatus: superseded", body="# Dead2\n別的詞\n")
+    # status 正常但內含 valid:false 決策(決策層,非節點層,不該因此被藏)
+    write(v, "Systems/Dec.md",
+          "type: system\nstatus: done\n"
+          "decisions:\n  - content: 舊法 widgetflow\n    decided: 2026-04-01\n    valid: false\n",
+          body="# Dec\nwidgetflow 節點還活著\n")
+
+    # 1. 預設遺忘: superseded 不出、stale 出、活的出;stderr 印隱藏數
+    r = run(v, "search", "widgetflow", expect_rc=0)
+    check("預設排除 superseded (Dead 不出)", "Systems/Dead.md" not in r.stdout, r.stdout)
+    check("★樞紐:stale 不被藏 (Stale 出)", "Systems/Stale.md" in r.stdout, r.stdout)
+    check("活節點保留 (Live 出)", "Systems/Live.md" in r.stdout, r.stdout)
+    check("valid:false 決策不誤傷節點 (Dec 出)", "Systems/Dec.md" in r.stdout, r.stdout)
+    check("隱藏提示走 stderr", "已隱藏" in r.stderr, r.stderr)
+    check("隱藏計數精確=命中被藏筆數(1,非全庫2)", "已隱藏 1" in r.stderr, r.stderr)
+    check("隱藏提示不污染 stdout", "已隱藏" not in r.stdout, r.stdout)
+
+    # 2. 明示可召回
+    r2 = run(v, "search", "widgetflow", "--include-superseded", expect_rc=0)
+    check("--include-superseded: Dead 出", "Systems/Dead.md" in r2.stdout, r2.stdout)
+    check("--include-superseded: 不印隱藏提示", "已隱藏" not in r2.stderr, r2.stderr)
+
+    # 3. 三路一致: --legacy
+    rl = run(v, "search", "widgetflow", "--legacy", "--files-only", expect_rc=0)
+    check("--legacy 也排除 superseded", "Systems/Dead.md" not in rl.stdout, rl.stdout)
+    check("--legacy 也印隱藏提示(stderr)", "已隱藏" in rl.stderr, rl.stderr)
+    # 3b. 三路一致: --regex
+    rr = run(v, "search", "widget.*", "--regex", "--files-only", expect_rc=0)
+    check("--regex 也排除 superseded", "Systems/Dead.md" not in rr.stdout, rr.stdout)
+    check("--regex 也印隱藏提示(stderr)", "已隱藏" in rr.stderr, rr.stderr)
+
+    # 4. 輸出通道: --json 加 hidden_superseded 欄位、stdout 仍合法 JSON
+    rj = run(v, "search", "widgetflow", "--json", expect_rc=0)
+    parsed = None
+    try:
+        parsed = _json.loads(rj.stdout)
+    except Exception:
+        pass
+    check("--json stdout 仍合法 JSON(jq 不報錯)", parsed is not None, rj.stdout)
+    check("--json 有 hidden_superseded 欄位=1",
+          bool(parsed) and parsed.get("hidden_superseded") == 1, rj.stdout)
+    check("--json: Dead 不在 results", bool(parsed) and
+          all(x.get("node") != "Systems/Dead.md" for x in parsed.get("results", [])), rj.stdout)
+
+    # 5. --files-only: 檔名走 stdout、提示走 stderr(照印,不取消)
+    rf = run(v, "search", "widgetflow", "--files-only", expect_rc=0)
+    check("--files-only: Live 檔名在 stdout", "Systems/Live.md" in rf.stdout, rf.stdout)
+    check("--files-only: 隱藏提示走 stderr(不取消)", "已隱藏" in rf.stderr, rf.stderr)
+    check("--files-only: stdout 不混提示文字", "已隱藏" not in rf.stdout, rf.stdout)
+
+
 # ══ T3 巢狀決策手術 ══
 
 def _vault_with_decisions():

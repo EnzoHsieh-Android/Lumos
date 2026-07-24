@@ -1287,8 +1287,18 @@ def _rank_score_candidates(env, query, candidates):
     return out
 
 
+def _is_forgotten(env, rel):
+    """召回層真遺忘判定:status=superseded 預設藏(GateMem 2026-07-24 吸收)。
+    ★只認 superseded,不含 stale★——stale 是「待重驗」警訊,藏了=把該看見的提醒也遺忘、製造新洞
+    (見 Projects/真遺忘召回過濾_計劃 樞紐陷阱)。valid:false 決策屬 decisions 層、不歸此節點層判定。"""
+    n = env.notes.get(rel)
+    if not n or not isinstance(n.fields, dict):
+        return False
+    return str(n.fields.get("status") or "").strip().lower() == "superseded"
+
+
 def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
-               ranked=False, top=20, as_json=False):
+               ranked=False, top=20, as_json=False, include_superseded=False):
     """全文搜尋(frontmatter + body)。預設大小寫不敏感 substring;--regex 用正則。
     預設**排除 fenced code 區塊 + inline code**(對齊 doctor 連結抽取的慣例,--code 才含);
     context 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。職責=自由文字;結構化查詢走
@@ -1312,6 +1322,7 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     _cand_hits = {}     # ranked:rel -> hit 行數(候選=legacy 命中集,不擴召回)
     _cand_detail = {}   # ranked:rel -> (hits, fm_end) 供逐檔明細輸出
     total_files = total_hits = 0
+    hidden_superseded = 0   # 真遺忘:命中但因 superseded 被藏的結果筆數(★命中後才算,非全庫 superseded 數)
     for rel in sorted(env.notes):
         if path_prefix and not rel.startswith(path_prefix):
             continue
@@ -1338,6 +1349,11 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
                 hits.append((i + 1, ln))
         if not hits:
             continue
+        # 真遺忘濾網(★插點=命中確認後、三路分岔前):預設藏 superseded,--include-superseded 逃生。
+        # 在此計數→hidden_superseded=命中被藏筆數(非全庫 superseded 數);三路(ranked/legacy/regex)一致。
+        if not include_superseded and _is_forgotten(env, rel):
+            hidden_superseded += 1
+            continue
         total_files += 1
         total_hits += len(hits)
         if ranked:
@@ -1355,6 +1371,10 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             print(f"  {lineno} [{tag}]: {disp}")
         if len(hits) > 8:
             print(f"  … 還有 {len(hits) - 8} 處")
+    # 真遺忘:隱藏提示一律走 stderr(全模式含 --files-only;stderr 不污染 stdout 機器可讀輸出)。
+    # 印隱藏數=遺忘可審計(GateMem);不印=靜默遺忘,正是本案要堵的洞。
+    if hidden_superseded:
+        print(f"（已隱藏 {hidden_superseded} 筆作廢結果，--include-superseded 顯示）", file=sys.stderr)
     if ranked:
         import json as _json
         scored = _rank_score_candidates(env, term, list(_cand_hits))
@@ -1363,7 +1383,8 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
         if as_json:
             results = [{"node": rel, "score": score, "hits": hits, "match_lines": _cand_hits[rel]}
                        for rel, score, hits in scored]
-            print(_json.dumps({"results": results, "candidates": len(_cand_hits)},
+            print(_json.dumps({"results": results, "candidates": len(_cand_hits),
+                               "hidden_superseded": hidden_superseded},
                               ensure_ascii=False))
         elif files_only:
             for rel, score, _h in scored:
@@ -9764,6 +9785,8 @@ def main():
                    help="舊行為:字母序+全量輸出(轉正前預設;--regex 自動走此路)")
     p.add_argument("--top", type=int, default=0, help="相關性排序輸出上限(0=全量,預設;圖譜先行不靜默截斷)")
     p.add_argument("--json", dest="search_json", action="store_true", help="相關性排序 JSON manifest")
+    p.add_argument("--include-superseded", dest="include_superseded", action="store_true",
+                   help="含已作廢(superseded)節點(預設排除;真遺忘,不影響 stale)")
 
     p = sub.add_parser("map", help="鄰域樹狀展開")
     p.add_argument("note")
@@ -10078,7 +10101,7 @@ def main():
         return cmd_search(env, args.term, path_prefix=args.path_prefix,
                           regex=args.regex, files_only=args.files_only,
                           include_code=args.code, ranked=_use_ranked, top=args.top,
-                          as_json=args.search_json)
+                          as_json=args.search_json, include_superseded=args.include_superseded)
 
     if args.cmd == "contracts":
         rel = None
