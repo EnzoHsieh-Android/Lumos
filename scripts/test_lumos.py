@@ -1462,16 +1462,26 @@ def t_precommit_vendored_exempt():
     r3 = Path(tempfile.mkdtemp(prefix="gctl-pcv3-"))
     res3 = _precommit_run(r3, ["app/Main.kt"])
     check("precommit 豁免: 一般 code 無圖譜仍擋(迴歸)", res3.returncode != 0, f"rc={res3.returncode}")
+    # ④ ★源 repo 守門★:有 skills/lumos-project-notes(=Lumos 源)→ 豁免失效,vendored 檔仍擋
+    #    (否則源 repo 自家改 scripts/lumos 不帶圖譜會靜默放行=弄弱自家閘)
+    r4 = Path(tempfile.mkdtemp(prefix="gctl-pcv4-"))
+    (r4 / "skills" / "lumos-project-notes").mkdir(parents=True)
+    res4 = _precommit_run(r4, ["scripts/test_lumos.py"])
+    check("precommit 豁免: 源 repo 內豁免失效、仍擋", res4.returncode != 0, f"rc={res4.returncode}")
 
 
 def t_precommit_whitelist_drift_guard():
-    """漂移守衛:pre-commit 的豁免清單必須涵蓋 _VENDORED_TOOLKIT 每一項+兩夾(單真相源比對)。"""
+    """漂移守衛:pre-commit+post-commit 的豁免清單都必須涵蓋 _VENDORED_TOOLKIT 每項+兩夾+源守門
+    (post-commit 是 bypass 記帳端,漏對齊=例行 update 被記假 bypass 灌水;2026-07-25 實測踩過)。"""
     m = _load_lumos()
-    hook_txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit").read_text(encoding="utf-8")
-    for rel in m._VENDORED_TOOLKIT:
-        check(f"precommit 漂移守衛: 豁免清單含 {rel}", rel in hook_txt, rel)
-    for d in ("scripts/hooks/", "scripts/templates/"):
-        check(f"precommit 漂移守衛: 豁免清單含 {d}*", f"{d}*" in hook_txt, d)
+    hooks_dir = Path(GRAPHCTL).resolve().parent / "hooks"
+    for hook in ("pre-commit", "post-commit"):
+        txt = (hooks_dir / hook).read_text(encoding="utf-8")
+        for rel in m._VENDORED_TOOLKIT:
+            check(f"{hook} 漂移守衛: 豁免清單含 {rel}", rel in txt, rel)
+        for d in ("scripts/hooks/", "scripts/templates/"):
+            check(f"{hook} 漂移守衛: 豁免清單含 {d}*", f"{d}*" in txt, d)
+        check(f"{hook} 漂移守衛: 含源 repo 守門", "skills/lumos-project-notes" in txt, hook)
 
 
 # ── Check T python profile:comment_strip=none+行首錨+檔名錨(CheckT-Python-profile_計劃) ──
