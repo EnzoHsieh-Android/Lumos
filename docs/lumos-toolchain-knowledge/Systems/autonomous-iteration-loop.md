@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-24
+updated: 2026-07-25
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -17,6 +17,7 @@ summary: |-
   KEY:dry-run≠模擬——orchestrator 必須真執行所有工具(canary record/cross_audit),收尾前自查 scratch spec+canary-log 必須存在,否則本輪無效重做(06-23 真機抓到「全程腦內模擬」幻覺後硬化)
   KEY:claude -p 走 $0 OAuth token(CLAUDE_CODE_OAUTH_TOKEN,非 API key);避開 OAuth 被禁 model
   KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross_verdict=endorsed 後,wrapper(autonomous-loop.sh L130-190)仍①驗 spec_path 存在②用自算 difficulty.assess_spec() 的 tier 重跑 loop status --gate 機械重驗③tier=high 要求 cross_verdict 必須乾淨 endorsed——任一不過→requeue 不放行+LINE;機制本體見 [[Systems/risk-tiered-review]]
+  KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.00269,2026-07-24 裁定:語意合約唯一真獨立寫入閘=真跑測試或人,LLM judge=換皮提案者)②PoE 型防竄改帳+逐筆授權+可重播(arXiv 2607.05397,2026-07-25 裁定:價值不靠敵人成立——無人 loop 自己的遙測可不可信;現成便宜前例 2.7ms)③日報吸收管線升格為不可信輸入面(調研員每天真讀外部網頁,今天靠人眼把關,無人化後=夾帶指令/假結論的真通道)。框架修正(使用者 2026-07-25):「內部系統無敵意下毒」對——敵意攻擊框架(IssueTrojanBench 66.5%)不適用單人私有 repo;但無人化後「幻覺 agent 寫錯圖譜+改自己成績單」效果同下毒,主角不需是敵人。同日拒:審計加對抗步(design-loop d4 前置加重一律拒,可審≠審得出=07-23 已記天花板換新引用)/spec 夾帶掃描(spec 作者=自己人,威脅不成立)
   DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result}.py + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
   TEST:scripts/test_autonomous_loop.py 27 passed;dry-run 端到端真機跑通 06-20→06-26(cron 已上 10:10)
   VERIFY:[[Verification/2026-06-20_autonomous-iteration-loop]]
