@@ -22,6 +22,12 @@ NOTE_ESSAY="/Users/enzo/harness/lumos-toolchain/docs/methodology/圖譜即合約
 
 # 累積觀點總帳（長期去重用）＋ 過去 3 天完整報告
 HISTORY_FILE="$OUT_DIR/governance-history.md"
+# 已介紹過的 arXiv id 硬黑名單(2026-07-26:同篇論文換標題騙過標題比對實錘——2605.25665 於
+# 07-22/07-26 重複入報;id 機械抽出注入 prompt,去重不再只靠模型比標題)
+KNOWN_IDS=""
+if [[ -f "$HISTORY_FILE" ]]; then
+  KNOWN_IDS="$(grep -oE 'arXiv[ :]?[0-9]{4}\.[0-9]{4,6}' "$HISTORY_FILE" | grep -oE '[0-9]{4}\.[0-9]{4,6}' | sort -u | tr '\n' ' ')"
+fi
 RECENT_FILES="$( (ls -t "$OUT_DIR"/governance-2*.json 2>/dev/null || true) | head -3 | tr '\n' ' ')"
 
 # 現行實作狀態（權威現況——防止把已 ship 的機制當成 gap 重提）
@@ -60,7 +66,9 @@ ${RECENT_SHIPPED:-（近期無 scripts/skills 變更）}
 1. 若存在，用 Read 讀取累積觀點總帳：${HISTORY_FILE}
 2. 若存在，用 Read 讀取最近的完整報告：${RECENT_FILES:-（尚無歷史報告）}
 去重規則：
-- 已介紹過的「同一篇文章」一律不重複
+- 已介紹過的「同一篇文章」一律不重複。**「同一篇」以 arXiv/DOI id 為準——標題換寫法、換語言、換切入角度都算同一篇**（實錘教訓：2605.25665 換標題後 07-22/07-26 重複入報）。
+- **已介紹過的 arXiv id 硬黑名單（機械抽自總帳，凡在列一律不得再選）**：${KNOWN_IDS:-（尚無）}
+- 選定每篇文章後，先自查其 id 不在上列黑名單，再往下寫。
 - 「觀點」去重是針對【具體的靈感/不足】，不是針對【整個面向】：
   同一條靈感/不足換句話說再講一次算重複；但同一個面向（如記憶治理、稽核、安全）只要是新的角度、新的切入點，就可以再談，不算重複。
   別因為某面向先前被一兩篇講過就把整個面向封死——舊題只要有新證據、新進展或新角度即可舊題新報，並註明新在哪裡。
@@ -167,6 +175,23 @@ if [ -n "$SKIP_REASON" ]; then
   exit 0
 fi
 
+# 產出即記總帳(2026-07-26 解耦:原「發送成功後才記」使配額死亡期 07-21~23 的調研
+# 從去重帳消失→同篇論文重複入報。去重帳語意=「調研過」非「推播過」,故移到發送前)
+python3 - "$REPORT_FILE" "$HISTORY_FILE" <<'PY'
+import json, re, sys
+raw = open(sys.argv[1], encoding="utf-8").read()
+r = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
+lines = [f"## {r['date']}"]
+for a in r.get("articles", []):
+    lines.append(f"- 文章: {a['title']}（{a.get('source', '')}）")
+for i in r.get("inspirations", []):
+    lines.append(f"- 靈感: {i}")
+for g in r.get("gaps", []):
+    lines.append(f"- 不足: {g['weakness']} → {g['suggestion']}")
+with open(sys.argv[2], "a", encoding="utf-8") as f:
+    f.write("\n".join(lines) + "\n\n")
+PY
+
 BODY="$(python3 "$SCRIPT_DIR/governance_flex_builder.py" "$REPORT_FILE")"
 
 LINE_TOKEN="$(cat "$TOKEN_FILE")"
@@ -183,19 +208,4 @@ else
   exit 1
 fi
 
-# 發送成功後，把本日文章與觀點追加進累積總帳（長期去重 + 留存）
-python3 - "$REPORT_FILE" "$HISTORY_FILE" <<'PY'
-import json, re, sys
-raw = open(sys.argv[1], encoding="utf-8").read()
-r = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
-lines = [f"## {r['date']}"]
-for a in r.get("articles", []):
-    lines.append(f"- 文章: {a['title']}（{a.get('source', '')}）")
-for i in r.get("inspirations", []):
-    lines.append(f"- 靈感: {i}")
-for g in r.get("gaps", []):
-    lines.append(f"- 不足: {g['weakness']} → {g['suggestion']}")
-with open(sys.argv[2], "a", encoding="utf-8") as f:
-    f.write("\n".join(lines) + "\n\n")
-PY
 echo "[$(date '+%F %T')] 已寫入觀點總帳：$HISTORY_FILE"
