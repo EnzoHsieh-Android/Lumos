@@ -1466,6 +1466,40 @@ def t_gov_denoise():
     check("gov 去噪: 小群組逐節點列+×2 計次", "only1" in r2.stdout and "×2" in r2.stdout, r2.stdout[:300])
 
 
+# ── 真遺忘第二刀:doctor 對 superseded 驗證三面一致(不索回掛/判死背書/不補回) ──
+def t_doctor_superseded_verification_consistency():
+    v = mkvault()
+    write(v, "Systems/S.md", "type: system\nstatus: done", body="# S\n")
+    # 作廢驗證連到 S,但 S.verified_by 沒掛它
+    write(v, "Verification/VDead.md",
+          "type: verification\nstatus: superseded\ndate: 2026-01-01",
+          body="# VDead\n驗過 [[Systems/S]]\n")
+    r = run(v, "doctor", expect_rc=0)
+    check("超越②Check3: superseded 驗證不索回掛(無 missing 報)",
+          "VDead" not in r.stdout.split("[E1]")[0], r.stdout[:600])
+    rs = run(v, "sync-verified-by")
+    check("超越③sync: 不提議補回 superseded 驗證", "VDead" not in rs.stdout, rs.stdout[:300])
+    # S 真的掛著作廢驗證 → E1 判死背書
+    write(v, "Systems/S2.md",
+          "type: system\nstatus: done\nverified_by:\n  - \"[[Verification/VDead2]]\"",
+          body="# S2\n")
+    write(v, "Verification/VDead2.md",
+          "type: verification\nstatus: superseded\ndate: 2026-01-01",
+          body="# VDead2\n驗過 [[Systems/S2]]\n")
+    r2 = run(v, "doctor", expect_rc=0)
+    check("超越①E1: 掛著 superseded 驗證=死背書警告",
+          "S2" in r2.stdout and "superseded" in r2.stdout, r2.stdout[-800:])
+    # stale 迴歸:行為不變(Check3 跳過、E1 警)
+    write(v, "Systems/S3.md",
+          "type: system\nstatus: done\nverified_by:\n  - \"[[Verification/VStale]]\"",
+          body="# S3\n")
+    write(v, "Verification/VStale.md",
+          "type: verification\nstatus: stale\ndate: 2026-01-01",
+          body="# VStale\n驗過 [[Systems/S3]]\n")
+    r3 = run(v, "doctor", expect_rc=0)
+    check("stale 迴歸: E1 照警", "VStale" in r3.stdout, r3.stdout[-600:])
+
+
 # ── gov 對抗層增量帳:折入缺陷計數(驗證層對自己的驗證;趨零=機關裝飾該砍) ──
 def t_gov_adversarial_increment():
     import json as _j

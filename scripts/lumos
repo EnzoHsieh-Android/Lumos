@@ -482,8 +482,11 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
                 incoming[dest] += 1
 
     section("1/4", "Verification orphans (沒掛進任何 Systems.verified_by / 無 incoming link)")
+    # [真遺忘第二刀 2026-07-26] superseded 豁免 orphan 檢查——E1 判死背書叫拔、拔了變 orphan
+    # 再被這裡唸=刀子咬尾巴;作廢=該遺忘無事可辦(stale/fail 不豁免:待重驗,orphan 提醒仍有用)。
     orphans = [rel for rel in notes
-               if rel.startswith("Verification/") and incoming[rel] == 0]
+               if rel.startswith("Verification/") and incoming[rel] == 0
+               and status_of(env, rel).strip() != "superseded"]
     if not orphans:
         ok("沒有 Verification orphan")
     elif suggest:
@@ -524,7 +527,9 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
         # [E1↔Check3 矛盾修,LandmarkMember 實驗場實錘 2026-07-15] stale/fail 驗證跳過——
         # E1 判死背書要拔,Check 3 若仍強索回掛會跟 E1 打架(拔了這邊報漏寫、掛回那邊報死背書)。
         # 失效驗證的內文連結留作歷史導航,不再構成雙向義務。
-        if status_of(env, rel).strip() in ("stale", "fail"):
+        # [真遺忘第二刀 2026-07-26] superseded 同入 skip 集:search 已預設藏作廢節點,
+        # doctor 這頭不能反向強索「把作廢驗證掛回」——一邊藏一邊撿=方向打架(Codex teardown審 F3)。
+        if status_of(env, rel).strip() in ("stale", "fail", "superseded"):
             continue
         for t in n.targets:
             dest = resolve(t)
@@ -806,7 +811,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
     #   邊還對不對):某節點 verified_by 指向的 Verification 已 stale/fail = 死背書(掛著給人假安心感、
     #   驗證其實已失效)。ghost 目標交既有 ghost 檢查,這裡跳過(不重疊職責)。
     #   設計見 Projects/關係層傳播守衛_計劃 [S6](phase-1 MVP,免前置、純 frontmatter)。
-    section("E1", "失效背書 (verified_by 指向的驗證已 stale/fail → 死背書)")
+    section("E1", "失效背書 (verified_by 指向的驗證已 stale/fail/superseded → 死背書)")
     dead_endorse = []
     for rel, n in sorted(notes.items()):
         for item in as_list(n.fields.get("verified_by")):
@@ -814,11 +819,11 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
             if not vrel:                          # ghost → 交既有 ghost 檢查,跳過
                 continue
             vst = status_of(env, vrel).strip()
-            if vst in ("stale", "fail"):
+            if vst in ("stale", "fail", "superseded"):   # superseded=作廢背書同死(真遺忘第二刀 07-26)
                 dead_endorse.append(f"{rel} → [[{vrel}]] (status={vst})")
                 gov_events.append({"gate": "check-e1", "kind": "warned", "hard": False, "nodes": [n.stem]})
     if not dead_endorse:
-        ok("無失效背書 (所有 verified_by 指向的驗證都非 stale/fail)")
+        ok("無失效背書 (所有 verified_by 指向的驗證都非 stale/fail/superseded)")
     else:
         _soft_list(dead_endorse,
                    f"發現 {len(dead_endorse)} 條失效背書(驗證已 stale/fail 卻還掛著):",
@@ -3988,6 +3993,10 @@ def cmd_sync_verified_by(env, apply=False):
     expected = defaultdict(set)
     for r, n in notes.items():
         if not r.startswith("Verification/"):
+            continue
+        # 對齊 Check 3 skip 集(stale/fail 2026-07-15;superseded 真遺忘第二刀 2026-07-26):
+        # 失效/作廢驗證不構成雙向義務,sync 不得反向補回(否則 E1 掛回又報死背書、search 藏了又被撿)。
+        if status_of(env, r).strip() in ("stale", "fail", "superseded"):
             continue
         for t in n.targets:
             dest = resolve(t)
