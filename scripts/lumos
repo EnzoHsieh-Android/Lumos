@@ -2247,6 +2247,7 @@ def cmd_gov(env, node=None, since_days=90, full=False):
     load(".canary-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": "",
          "gate": "canary", "kind": d.get("kind", "?"), "hard": False, "nodes": [],
          "token": d.get("token", ""), "auditor": d.get("auditor") or "?",
+         "findings": d.get("findings"), "severity": d.get("severity", ""),
          "detail": ((f"loop={d['loop']} sev={d.get('severity', '?')} · " if d.get("loop") else "")
                     + (d.get("auditor", "") + " " + d.get("note", "")).strip())})
 
@@ -2330,6 +2331,29 @@ def cmd_gov(env, node=None, since_days=90, full=False):
         if by_type:
             print("  型別分佈: " + " | ".join(
                 f"{k}:{v['caught']}c/{v['missed']}m" for k, v in sorted(by_type.items())))
+        # 對抗層增量帳(2026-07-26,borrow arXiv 2605.25665 實戰報告欄):折入=caught 輪辯方裁決後
+        # 存活折入的真缺陷數——測試綠後仍被對抗層(canary 護審/辯方/跨家族)抓到,天生就是「測試漏掉的」。
+        # 長期趨零=整套機關裝飾品該砍;這是驗證層對自己的驗證。missed 輪判決不採信不計;
+        # findings 欄 2026-07-21(M1)起才有,舊輪無欄誠實另計不混入。
+        fold_total, fold_sev, fold_aud, legacy_rounds = 0, {}, {}, 0
+        for r in can:
+            if r["kind"] != "caught":
+                continue
+            fnd = r.get("findings")
+            if fnd is None:
+                legacy_rounds += 1
+                continue
+            fold_total += fnd
+            if fnd:
+                sv = r.get("severity") or "?"
+                fold_sev[sv] = fold_sev.get(sv, 0) + fnd
+                aud = r.get("auditor", "?")
+                fold_aud[aud] = fold_aud.get(aud, 0) + fnd
+        sev_s = " ".join(f"{k} {v}" for k, v in sorted(fold_sev.items())) or "無"
+        aud_s = " · ".join(f"{k} {v}" for k, v in sorted(fold_aud.items())) or "無"
+        legacy_s = f"(另 {legacy_rounds} 舊輪無 findings 欄不計)" if legacy_rounds else ""
+        print(f"  對抗層增量帳(折入=測試綠後仍被抓;長期趨零=機關裝飾該砍): "
+              f"折入 {fold_total} 筆缺陷 [{sev_s}] | 依審計員: {aud_s} {legacy_s}".rstrip())
     print(f"\n{len(ded)} 筆(近 {since_days} 天)")
     return 0
 

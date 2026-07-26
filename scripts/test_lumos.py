@@ -1466,6 +1466,36 @@ def t_gov_denoise():
     check("gov 去噪: 小群組逐節點列+×2 計次", "only1" in r2.stdout and "×2" in r2.stdout, r2.stdout[:300])
 
 
+# ── gov 對抗層增量帳:折入缺陷計數(驗證層對自己的驗證;趨零=機關裝飾該砍) ──
+def t_gov_adversarial_increment():
+    import json as _j
+    root = Path(tempfile.mkdtemp(prefix="gctl-govinc-"))
+    v = root / "docs" / "x-knowledge"
+    (v / "MOC").mkdir(parents=True)
+    (v / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+    rows = [
+        {"ts": "2026-07-24T10:00:00+08:00", "kind": "caught", "token": "t1", "loop": "a",
+         "severity": "major", "findings": 4, "auditor": "sonnet", "note": "r1"},
+        {"ts": "2026-07-24T11:00:00+08:00", "kind": "caught", "token": "t2", "loop": "a",
+         "severity": "blocker", "findings": 2, "auditor": "codex", "note": "std"},
+        {"ts": "2026-07-24T12:00:00+08:00", "kind": "missed", "token": "t3", "loop": "b",
+         "severity": "major", "findings": 5, "auditor": "sonnet", "note": "r1"},  # missed 不計折入
+        {"ts": "2026-07-24T13:00:00+08:00", "kind": "caught", "token": "t4", "loop": "b",
+         "severity": "clean", "findings": 0, "auditor": "sonnet", "note": "r2"},
+        {"ts": "2026-07-24T14:00:00+08:00", "kind": "caught", "token": "t5", "loop": "c",
+         "auditor": "sonnet", "note": "舊輪無 findings 欄"},   # M1 前舊資料
+    ]
+    (root / "docs" / ".canary-log.jsonl").write_text(
+        "\n".join(_j.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    r = run(v, "gov", expect_rc=0)
+    check("增量帳: 折入總數=6(caught 之和,missed 不計)", "折入 6" in r.stdout, r.stdout[-500:])
+    check("增量帳: severity 分佈", "blocker 2" in r.stdout and "major 4" in r.stdout, r.stdout[-500:])
+    check("增量帳: 分審計員(codex 2/sonnet 4)",
+          "codex 2" in r.stdout and "sonnet 4" in r.stdout, r.stdout[-500:])
+    check("增量帳: 舊輪無欄誠實註記", "無 findings 欄" in r.stdout or "舊輪不計" in r.stdout, r.stdout[-500:])
+    check("增量帳: 趨零判準語意在場", "趨零" in r.stdout, r.stdout[-500:])
+
+
 # ── pre-commit 閘:vendored 工具白名單豁免(lumos update 例行更新不該撞圖譜閘) ──
 def _precommit_run(root, staged_rel):
     """fixture repo 內 stage 指定檔後跑 pre-commit hook,回 subprocess result。"""

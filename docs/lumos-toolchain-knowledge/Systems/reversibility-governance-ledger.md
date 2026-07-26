@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-24
+updated: 2026-07-26
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -24,6 +24,7 @@ summary: |-
   KEY:gov 三檔皆 gitignore local-only,是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
   KEY:Check H(後加)僅 --ci 掃 git diff,正則命中疑似不可逆動作(prod/smtp/DROP TABLE…)而無不可逆標記時軟提醒,不擋
   KEY:gov 去噪(2026-07-24,呈現層——帳本身一筆不動):advisory(軟/warned/無 token 無 detail,如 Check S 每次 doctor 全名單重喊)同(日,gate,kind,node)跨 commit 折 ×N、同群 >6 節點收單行摘要「N 節點(前3…) ×次數」;--full 回完整逐筆(審計逃生口)。canary/kill/signoff/L2 有 detail/token 恆逐筆;canary 分帳不受影響。實測本日 300 筆→17 行 [test:t_gov_denoise]
+  KEY:對抗層增量帳(2026-07-26,borrow arXiv 2605.25665 實戰報告欄)=canary 分帳尾加「折入 N 筆缺陷[severity 分佈]|依審計員」——折入=caught 輪辯方裁決後存活折入的真缺陷(測試綠後仍被抓,天生=測試漏掉的);長期趨零=整套對抗機關裝飾品該砍,這是驗證層對自己的驗證。missed 輪不計;findings 欄 M1(07-21)前舊輪誠實另計。首跑真帳:近 90 天折入 866 筆(blocker 404/major 403/minor 59)——機關非裝飾實證 [test:t_gov_adversarial_increment]
   DEP:scripts/lumos run_doctor(Check R/Check H)｜cmd_lint(單檔 Check R)｜cmd_gov｜extract_reversibility/_rollback_resolved/_guard_resolved｜parse_decisions(吃 rollback/guard sub-key)
   DEP:文件四面同步 — graph-discipline.md 速查｜lumos-project-notes SKILL.md｜NEW_HINT[system]｜lint;漂移測試守衛(碼有強制 → 文件必須提)[test:t_marker_doc_sync](L4 審計 2026-07-24 修:原指 t_reversibility_drift 不存在)
   TEST:全套 1427 綠(2026-07-24);t_reversibility_lint/doctor/guard_doctor + t_governance_log_write/t_gov_query(無 reversibility 前綴)+ t_marker_doc_sync(文件漂移)+ t_gov_denoise(去噪)
