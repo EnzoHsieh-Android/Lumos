@@ -69,6 +69,15 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 |---|---|---|
 | **sqlfluff** | 多方言(含 T-SQL)靜態解析 + auto-fix,免連 DB | LandmarkMember/KDS 的 `.sql` 適用;經 `lumos sqlfluff-sarif` 橋接進 lint-adapter |
 
+## Flutter/Dart（registry: `pub:<pkg>`；2026-07-26 補，taroko_app 接入調研）
+
+- **flutter_lints**（官方推薦基線,Effective Dart 對齊）→ 進階嚴格版 **very_good_analysis**（企業級,強制 const/顯式型別）。
+- **custom_lint**:自建規則框架(riverpod_lint 等生態基座)。**DCM**:複雜度/程式碼度量(商用)。
+- **架構軸(import 邊界,Dart 3.10+ 才可用)**:`import_rules`(2026/02,YAML 宣告 import 約束進 dart analyze)｜`import_lint`(2026/04)｜`barrel_file_lints`(feature 分層/barrel 規則)。
+- ⚠ **SDK 門檻實錘(taroko_app)**:Dart 2.19(pre-Dart 3)上述架構套件與新版 VGA 全裝不了——舊 SDK 專案的架構軸=升級 Flutter 後解鎖;過渡期用 analysis_options 手開嚴格規則(零依賴不受版本卡)。
+- **Check T**:dart profile 已內建(test('id')/testWidgets('id') 識別字名錨+*_test.dart 檔名錨)——Dart 測試可正式綁 [test:] 走合約鏈。
+- SARIF 橋:`dart analyze` 無原生 SARIF → .lumos/lint.json 接法待 Dart 3 升級後再評(現以 analyzer 直跑為主)。
+
 ## 架構 lint（抽象軸；2026-07-26 補——AI 世代新品類）
 
 「架構規則寫成單元測試」：分層依賴方向、命名慣例、「UseCase 不准碰 DB」這類規則機械可驗，AI 寫的碼違反 → 測試翻紅 → agent 拿到確定性回饋自己修。2026 年此品類明確以「AI 生成碼的確定性護欄」自我定位。

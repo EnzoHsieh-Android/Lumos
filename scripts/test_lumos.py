@@ -1594,6 +1594,35 @@ def t_precommit_whitelist_drift_guard():
         check(f"{hook} 漂移守衛: 含源 repo 守門", "skills/lumos-project-notes" in txt, hook)
 
 
+# ── Check T dart profile:test('id')/testWidgets('id') 字串名錨+檔名錨 *_test.dart ──
+def t_dart_profile_discovery():
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-dartprof-"))
+    (root / "test").mkdir()
+    (root / "test" / "order_test.dart").write_text(
+        "void main() {\n"
+        "  test('alpha_check', () {});\n"
+        "  testWidgets('widget_flow', (tester) async {});\n"
+        "  test('has spaces not bindable', () {});\n"
+        "  /* test('dead_commented', () {}); */\n"
+        "  // test('line_commented', () {});\n"
+        "}\n", encoding="utf-8")
+    (root / "test" / "helper.dart").write_text(   # 非 *_test.dart → 檔名錨排除
+        "void main() { test('in_helper', () {}); }\n", encoding="utf-8")
+    prof = dict(m.TEST_PROFILES["dart"])
+    got = m.discover_test_methods(root, prof)
+    check("dart: test('id') 認得", "alpha_check" in got, f"{got}")
+    check("dart: testWidgets('id') 認得", "widget_flow" in got, f"{got}")
+    check("dart: 含空白名不可綁(識別字錨,同 playwright)", not any("spaces" in g for g in got), f"{got}")
+    check("dart: 塊註解內測試被剝(c-style)", "dead_commented" not in got, f"{got}")
+    check("dart: 行註解內測試被剝", "line_commented" not in got, f"{got}")
+    check("dart: 非 *_test.dart 檔名錨排除", "in_helper" not in got, f"{got}")
+    import fnmatch as _fn
+    fname = prof["scaffold_name"].format(m="pay_guard") + prof["scaffold_ext"]
+    check("dart: scaffold 產物檔名命中檔名錨",
+          any(_fn.fnmatch(fname, g) for g in prof["file_name_match"]), fname)
+
+
 # ── Check T python profile:comment_strip=none+行首錨+檔名錨(CheckT-Python-profile_計劃) ──
 def t_python_profile_discovery():
     m = _load_lumos()
