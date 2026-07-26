@@ -42,7 +42,11 @@ def check(name, cond, detail=""):
 
 
 def mkvault():
-    d = Path(tempfile.mkdtemp(prefix="gctl-test-"))
+    # 巢狀私有 root(2026-07-26 測試池去共用):vault 包在自有 mkdtemp 下 → vault.parent=私有,
+    # 各 cmd 寫的帳檔(.canary-log/.governance-log/.kill-log…落 vault.parent)不再進共用系統 tmp
+    # ——共用時代任兩個測試(或平行 suite)寫帳即互踩(t_canary_findings 假紅/平行 agent 假紅實錘)。
+    d = Path(tempfile.mkdtemp(prefix="gctl-test-")) / "kg"
+    d.mkdir()
     for sub in ("Systems", "Verification", "Projects", "MOC"):
         (d / sub).mkdir(parents=True)
     (d / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
