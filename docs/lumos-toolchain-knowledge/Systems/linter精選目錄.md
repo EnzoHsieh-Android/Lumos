@@ -79,7 +79,7 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 | C#/.NET | **ArchUnitNET**（ArchUnit 移植） | `nuget:ArchUnitNET` |
 | Swift | Harmonize（參考，本組合無 Swift 專案） | github:perrystreetsoftware/Harmonize |
 
-**lumos 接點（此品類最值錢處）**：架構規則＝可執行測試＝可被 `[test:]` 綁定——圖譜裡「分層邊界」等散文級合約可升格正式 invariant 走完整合約鏈（綁定→審計→Check T）。試點：Citrus_KDS（2026-07-26 起）。
+**lumos 接點（此品類最值錢處）**：架構規則＝可執行測試＝可被 `[test:]` 綁定——圖譜裡「分層邊界」等散文級合約可升格正式 invariant 走完整合約鏈（綁定→審計→Check T）。試點：Citrus_KDS **已完成**（2026-07-26，commit 16ee0ce）——5 條規則依其 MVVM架構 節點約定而寫；**首跑 3 紅全真訊號**：抓到真 DIP 違規（VM/UseCase 注入 Impl，修為介面+@Binds）＋ grep 漏看的第二處 GlobalScope（查證後文件化豁免）＋一次規則校準（sealed 結果型別）；已立 ★INVARIANT★ 四子規則各綁 [test:]、獨立審計 mutation 實測非稻草人。**結論：品類有效，可擴 LandmarkMember（ArchUnitNET）**。
 
 ## 跨語言：ast-grep（事故固化引擎；2026-07-26 補）
 
