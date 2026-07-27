@@ -52,7 +52,7 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 
 分工:detekt 抓 bug/實踐、ktlint 或 ktfmt 管格式——別兩個格式器並用。
 
-### detekt 標準接法（2026-07-27 立,KDS 首個消費端）
+### detekt 標準接法（2026-07-27 立;消費端:Citrus_KDS、mOrangePos——mOrangePos 首掃唯一 GlobalScope 命中=crash 補送 App 層正當用法,同 KDS 閃退家族 pattern）
 
 - **安裝=`brew install detekt`**(套件管理器管生命週期)。⚠ 前科:KDS 曾把 detekt jar 放 `/tmp` 被系統清掉兩次(2026-07-17 首發、2026-07-27 重演,見 [[Systems/lint-declaration-health]])——外部工具一律裝進套件管理器,嚴禁易失位置。
 - **共用差分設定=`configs/detekt/android.yml`**(本 repo,隨 clone 分發):開 detekt 預設關但效能檢核目錄點名的三條——`GlobalCoroutineUsage`(GlobalScope 裸用)/`SuspendFunSwallowedCancellation`(吞取消)/`CouldBeSequence`(長鏈該 asSequence)。⚠ coroutines 規則集「有裝≠有開」:`--build-upon-default-config` 裸跑時這三條全不生效。
