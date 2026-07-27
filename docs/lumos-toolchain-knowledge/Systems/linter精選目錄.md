@@ -12,7 +12,7 @@ related:
   - "[[Systems/pitfalls-lint-adapter]]"
 summary: |-
   KEY:各語言精選 linter 參考目錄(2026-07 社群現況搜證)——供各專案 setup 時挑要裝的 linter;裝了才進該專案 .lumos/lint.json(跑 SARIF)+ .lumos/lint-watch.json(盯新版)。此節點是「該裝什麼」的權威菜單,不是「已裝什麼」的清單
-  KEY:linter=風格+最佳實踐檢查(抓代碼問題),≠一般依賴——lint-watch.json 只放真 linter(2026-07-17 收窄事故[[Issues/lint-watch空轉假綠]]:LandmarkMember 誤塞 ClosedXML/Dapper/SqlClient 等執行期依賴,已清成只留 StyleCop)
+  KEY:linter=風格+最佳實踐檢查(抓代碼問題),≠一般依賴——lint-watch.json 只放真 linter(2026-07-17 收窄事故[[Issues/lint-watch空轉假綠]]:LandmarkMember 誤塞 ClosedXML/Dapper/SqlClient 等執行期依賴,已清成只留 StyleCop;[2026-07-27]二次收口:留下的 StyleCop 查證亦從未裝過(csproj 0 引用,「已裝」係循環引用 watch 條目),watch 清空——「裝了才進 watch」須以 csproj 為準,不可信 watch 自身)
   KEY:C#(nuget)——StyleCop.Analyzers(風格/命名/排版)｜Roslynator.Analyzers(500+品質簡化)｜SonarAnalyzer.CSharp(code smell+安全)｜Meziantou.Analyzer(最佳實踐)｜Microsoft.CodeAnalysis.NetAnalyzers(第一方基線,nullable/async/平台;.NET10 SDK 內建)｜Microsoft.VisualStudio.Threading.Analyzers(async死鎖,後端重點)
   KEY:Kotlin/Android(github/google-maven)——detekt(github:detekt/detekt,複雜度/實踐;★coroutines 規則集=併發軸主力:GlobalScope 濫用/結構化併發破壞/Dispatchers 誤用/blocking 混入 suspend,2026-07-26 補點名★)｜ktlint(github:pinterest/ktlint,格式)｜ktfmt(github:facebook/ktfmt,格式,與ktlint二選一)｜Android Lint(隨AGP,google-maven盯AGP,平台特定);[2026-07-27]標準接法立=brew 安裝+本repo configs/detekt/android.yml 共用差分(開預設關的 GlobalCoroutineUsage/SuspendFunSwallowedCancellation/CouldBeSequence——coroutines 規則集「有裝≠有開」),lint.json 樣板見本文,KDS 首消費端
   KEY:Vue/TS/JS(npm)——eslint(基石)｜eslint-plugin-vue(<template>AST,需vue-eslint-parser)｜@vue/eslint-config-typescript(Vue+TS flat config)｜typescript-eslint(TS規則)｜oxlint(Rust 50-100x快,大repo前置加速)｜@biomejs/biome(25-35x+含formatter,ESLint替代)
@@ -33,7 +33,7 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 ## C#/.NET（registry: `nuget:<id>`）
 | linter | 用途 | 備註 |
 |---|---|---|
-| **StyleCop.Analyzers** | 風格/命名/排版/文件註解(數百規則) | LandmarkMember 已裝(唯一) |
+| **StyleCop.Analyzers** | 風格/命名/排版/文件註解(數百規則) | ⚠2026-07-27 查證:LandmarkMember **從未裝過**(git 全史 csproj 0 引用)——舊記「已裝(唯一)」是循環引用 lint-watch 殘留條目的錯誤認知,watch 已清;LM 實裝=VSTHRD+內建 NetAnalyzers |
 | **Roslynator.Analyzers** | 500+ 品質/簡化(冗餘賦值、可簡化條件、缺 ConfigureAwait、未用參數) | 建議補 |
 | **SonarAnalyzer.CSharp** | code smell + 安全覆蓋(SonarLint/SonarQube 同源) | 有跑 SonarQube 則必配 |
 | **Meziantou.Analyzer** | C# 最佳實踐 | 建議補 |

@@ -10158,6 +10158,7 @@ def t_pitfalls_stack_questions():
         _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
                  "commit", "-q", "--allow-empty", "-m", "base"], cwd=td, check=True)
         (_P(td) / "Screen.kt").write_text("val x = 1\n", encoding="utf-8")
+        (_P(td) / "Api.cs").write_text("var x = 1;\n", encoding="utf-8")
         (_P(td) / "readme.md").write_text("docs\n", encoding="utf-8")
         (_P(td) / "test_helper.kt").write_text("val t = 1\n", encoding="utf-8")
         _sp.run(["git", "add", "-A"], cwd=td, check=True)
@@ -10169,8 +10170,9 @@ def t_pitfalls_stack_questions():
         data = _json.loads(r.stdout)
         sq = data.get("stack_questions", {})
         check("kt 棧附七問(Compose/協程/Dispatchers/Flow/集合+裝箱/洩漏/啟動)", "kt" in sq and len(sq["kt"]) == 7, f"sq={sq}")
+        check("cs 棧附五問(阻塞異步/N+1分頁/快取大物件/LINQ/連線生命週期)", "cs" in sq and len(sq["cs"]) == 5, f"sq={sq}")
         check("md 不附", "md" not in sq)
-        check("僅命中棧(test 檔已排除仍同棧,不另生鍵)", set(sq.keys()) == {"kt"}, f"sq={sq}")
+        check("僅命中棧(test 檔已排除仍同棧,不另生鍵)", set(sq.keys()) == {"kt", "cs"}, f"sq={sq}")
 
         r = run(["pitfalls", "--diff", "HEAD~1..HEAD", "--repo", td], td)
         check("人讀輸出含效能檢核", "效能檢核" in r.stdout, r.stdout)
