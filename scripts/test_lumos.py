@@ -10168,7 +10168,7 @@ def t_pitfalls_stack_questions():
         check("stack_questions rc0", r.returncode == 0, f"rc={r.returncode} {r.stderr}")
         data = _json.loads(r.stdout)
         sq = data.get("stack_questions", {})
-        check("kt 棧附六問(Compose/協程/Dispatchers/Flow/集合+裝箱/洩漏)", "kt" in sq and len(sq["kt"]) == 6, f"sq={sq}")
+        check("kt 棧附七問(Compose/協程/Dispatchers/Flow/集合+裝箱/洩漏/啟動)", "kt" in sq and len(sq["kt"]) == 7, f"sq={sq}")
         check("md 不附", "md" not in sq)
         check("僅命中棧(test 檔已排除仍同棧,不另生鍵)", set(sq.keys()) == {"kt"}, f"sq={sq}")
 
