@@ -2,8 +2,8 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-07-17
-self_audit: sonnet/2026-07-24
+updated: 2026-07-27
+self_audit: sonnet/2026-07-27
 tags:
   - type/system
   - status/done
@@ -16,7 +16,7 @@ summary: |-
   KEY:lint-check 收「宣告了跑不動的東西」破口——同 lint-watch 空轉([[Issues/lint-watch空轉假綠]])同病根:宣告與現實脫鉤、無機制對帳。lumos lint-check <repo> 兩層:靜態格式校驗(恆跑)+ --smoke 真跑冒煙
   FLOW:讀 .lumos/lint.json → _lintcheck_validate 靜態校驗(非dict/value非list/命令空/缺{LINT_SARIF_OUT}佔位符)→ [--smoke:格式過才對每條命令 _lint_run_and_parse、無可解析SARIF產出=跑不動]→ rc 0健康(含無宣告)/1有問題/2非JSON
   KEY:兩層各抓一類——靜態層抓「格式錯」(便宜、純靜態);smoke層抓「格式對但跑不動」(工具/task/檔案缺;唯一能抓 gradle task 或外部 jar 存不存在的方法,靜態永遠抓不到)
-  KEY:真實案例(2026-07-17 KDS)——Citrus_KDS 的 lint.json 格式完全正確(`{"kt":["java -jar /tmp/detekt-dist/...detekt-cli.jar --report sarif:{LINT_SARIF_OUT}..."]}`),但 detekt jar 放在 /tmp 被系統清掉→靜態層正確放行、--smoke 正確抓「跑不出 SARIF」rc1。靜態抓不到、smoke 抓得到,正是兩層必要性的鐵證
+  KEY:真實案例(2026-07-17 KDS)——Citrus_KDS 的 lint.json 格式完全正確(`{"kt":["java -jar /tmp/detekt-dist/...detekt-cli.jar --report sarif:{LINT_SARIF_OUT}..."]}`),但 detekt jar 放在 /tmp 被系統清掉→靜態層正確放行、--smoke 正確抓「跑不出 SARIF」rc1。靜態抓不到、smoke 抓得到,正是兩層必要性的鐵證;[2026-07-27]同案重演(jar 又被清)→根治=改 brew 安裝+共用 config(標準接法立於[[Systems/linter精選目錄]]),KDS lint.json 換宣告後 smoke 綠
   KEY:誠實天花板——靜態層驗格式不驗命令跑不跑得動;smoke真跑=慢(每linter一次完整run)、且對「輸出SARIF到stdout而非佔位符檔」的宣告會報錯(那也是宣告錯,smoke正確抓出,非誤報);外部工具放 /tmp 這類易失位置=宣告脆弱,smoke 是唯一守衛
   KEY:設計哲學=宣告即契約需對帳——lint.json/lint-watch.json/test-layers.json 三個宣告檔都吃「宣告了不存在/跑不動的東西沒人知道」風險;lint-check 是 lint.json 這條的對帳器,同族收口
   DEP:scripts/lumos cmd_lint_check + _lintcheck_validate｜復用 _lint_run_and_parse(smoke)
@@ -64,4 +64,4 @@ lumos 三個宣告檔都吃「宣告了不存在/跑不動的東西沒人知道�
 ## 待辦
 - [ ] 接巡檢:`lint-check` 靜態層併入 `doctor --ci`(消費專案 push 前掃自己 lint.json 格式);smoke 太慢不進 doctor,留 CI/setup 手動或 daily-governance
 - [ ] test-layers.json 也給對帳器(同族第三個宣告檔,目前無檢查)
-- [ ] KDS:detekt jar 從 /tmp 移到持久位置(或改 gradle plugin),再 `lint-check --smoke` 驗過——目前宣告格式對但跑不動(jar 被清)
+- [x] KDS:detekt jar 從 /tmp 移到持久位置——2026-07-27 完成:改 `brew install detekt`+共用 config(標準接法見 [[Systems/linter精選目錄]]),lint.json 換宣告、`--input` 擴到整個 source set,`lint-check --smoke` 綠
