@@ -10174,7 +10174,7 @@ def t_pitfalls_stack_questions():
         check("kt 棧附七問(Compose/協程/Dispatchers/Flow/集合+裝箱/洩漏/啟動)", "kt" in sq and len(sq["kt"]) == 7, f"sq={sq}")
         check("cs 棧附五問(阻塞異步/N+1分頁/快取大物件/LINQ/連線生命週期)", "cs" in sq and len(sq["cs"]) == 5, f"sq={sq}")
         check("vue 棧附五問(並行INP/LCP圖片/bundle/watch競態per-item/響應原語)", "vue" in sq and len(sq["vue"]) == 5, f"sq={sq}")
-        check("sql 棧附三問(N+1/索引/交易鎖)", "sql" in sq and len(sq["sql"]) == 3, f"sq={sq}")
+        check("sql 棧附四問(N+1/索引/交易鎖/SARGable)", "sql" in sq and len(sq["sql"]) == 4, f"sq={sq}")
         check("md 不附", "md" not in sq)
         check("僅命中棧(test 檔已排除仍同棧,不另生鍵)", set(sq.keys()) == {"kt", "cs", "vue", "sql"}, f"sq={sq}")
 
