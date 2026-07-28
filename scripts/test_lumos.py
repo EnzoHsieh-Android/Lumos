@@ -10987,7 +10987,7 @@ def _testmap_mk(td):
         "Button.tsx": "export default 1", "__tests__/Button.tsx": "render()",
         "pkg/__init__.py": "", "tests/__init__.py": "",
         "LoadTest.cs": "class LoadTest {}", "FooTest.java": "class FooTest {}",
-        "Tests.cs": "class T {}", "Latest.ts": "1", "Contest.cs": "2",
+        "Tests.cs": "class T {}", "Latest.ts": "1", "Contest.cs": "2", "Test_foo.py": "q=9",
         "ABTest.cs": "3", "PodSpec.ts": "4", "docs/foo_test.md": "# doc",
         "會員系統.cs": "class W {}", "tests/會員系統Tests.cs": "// w",
         "HugeThing.cs": "class H {}",
@@ -11079,6 +11079,7 @@ def t_testmap_build():
         for bad in ("Latest.ts", "Contest.cs", "ABTest.cs", "PodSpec.ts"):
             check(f"{bad} 不判為測試檔", not any(k[1] == bad for k in ed))
         check("md 不入場", not any("foo_test.md" in k[0] + k[1] for k in ed))
+        check("Test_foo.py 大寫T前綴不判測試檔", not any(k[1] == "Test_foo.py" for k in ed))
         check("CJK naming 邊", ("會員系統.cs", "tests/會員系統Tests.cs") in ed)
         # 13 mkdir 自建(.lumos 由本次 build 建立)
         check("mkdir 自建 .lumos", (_P(td) / ".lumos" / "testmap.json").is_file())
@@ -11113,6 +11114,8 @@ def t_testmap_affected():
         sug = {s["test"]: s for s in j["suggests"]}
         check("推薦 CardTests(naming)", "tests/CardTests.cs" in sug
               and sug["tests/CardTests.cs"]["conf"] == 0.9, j["suggests"])
+        confs = [s["conf"] for s in j["suggests"]]
+        check("推薦降序(list 序)", confs == sorted(confs, reverse=True), confs)
         check("suggests 帶 sources/srcs", sug["tests/CardTests.cs"]["sources"] == ["content", "naming"]
               and sug["tests/CardTests.cs"]["srcs"] == ["Card.cs"], sug.get("tests/CardTests.cs"))
         check("② build後commit → stale", j["stale"] is True, j["stale"])
@@ -11152,6 +11155,7 @@ def t_testmap_affected():
         j = _json.loads(r.stdout)
         check("刪除的 src 仍查邊", any(s["test"] == "tests/CardTests.cs" for s in j["suggests"]),
               j["suggests"])
+        check("②′ build後刪檔 → stale", j["stale"] is True, j["stale"])
         # 25 rm 後 mkdir 同名目錄 → 不推薦(is_file 擋)
         (root / "tests/CardTests.cs").unlink()
         (root / "tests/CardTests.cs").mkdir()
@@ -11258,7 +11262,8 @@ def t_testmap_rc():
         for bad, label in (("{oops", "爛JSON"),
                            ('{"version":1,"built_at_commit":"' + "a" * 40 + '","built_at":"x","edges":{}}', "edges非list"),
                            ('{"version":1,"edges":[]}', "header缺"),
-                           ('{"version":2,"built_at_commit":"' + "a" * 40 + '","built_at":"x","edges":[]}', "version≠1")):
+                           ('{"version":2,"built_at_commit":"' + "a" * 40 + '","built_at":"x","edges":[]}', "version≠1"),
+                           ('{"version":1,"built_at_commit":"XYZ!","built_at":"x","edges":[]}', "sha格式不符")):
             mp.write_text(bad, encoding="utf-8")
             r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
             check(f"壞map({label}) rc0+null", r.returncode == 0
@@ -11267,6 +11272,8 @@ def t_testmap_rc():
         m = _json.loads(good)
         m["edges"] = [17, {"src": "Card.cs"}, {"src": "Card.cs", "test": "tests/CardTests.cs", "conf": 999,
                                                "sources": ["naming"]},
+                      {"src": "Card.cs", "test": "tests/CardTests.cs", "conf": True,
+                       "sources": ["naming"]},
                       {"src": "Card.cs", "test": "tests/CardTests.cs", "conf": 0.9}]
         mp.write_text(_json.dumps(m, ensure_ascii=False), encoding="utf-8")
         (root / "Card.cs").write_text("class Card { int r; }", encoding="utf-8")

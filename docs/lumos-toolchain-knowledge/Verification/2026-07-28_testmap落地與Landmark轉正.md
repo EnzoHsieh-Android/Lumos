@@ -15,7 +15,7 @@ tags:
   - type/verification
   - status/pass
 summary: |-
-  TEST:t_testmap_build/t_testmap_affected/t_testmap_rc 68 檢查全綠;全套 1577 passed 0 failed;anchor 重批訖
+  TEST:t_testmap_build/t_testmap_affected/t_testmap_rc 72 檢查全綠(code-loop r1 補 6 缺口);全套 1581 passed 0 failed;anchor 重批訖
   VERIFY:[[Projects/檔案測試依賴地圖_計劃]] 全案落地+[S4] Landmark 轉正閘 PASS
   KEY:Landmark 真庫——edges=371(content 347/cochange 12/雙源 9/naming+content 3)、src=549、tests=68;金標兩層各 5 對分層 recall:單元層 5/5、整合層 5/5(較低層 1.0 ≥0.7 → 轉正);噪音度=每 src 建議條數 中位 1、p95 11(advisory 可受)
   KEY:cochange support 門檻裁值——擋 32 邊(全 support=2);金標無一死於門檻 → 維持 3
@@ -42,6 +42,11 @@ summary: |-
 - 噪音度：每 src 建議條數中位 1、p95 11（advisory 可受，不設硬閘照 spec）。
 - support 門檻：擋 32 邊全為 support=2，金標零傷 → 維持 3。
 - 抽樣誠實帳：整合層第 5 席首抽誤猜不存在的 `TicketService`——修正程序＝讀測試自身註解定真主題再查邊；教訓記入：金標主題判定須以測試內文為準，不得憑檔名腦補。
+
+## code-loop r1 折入（2026-07-28）
+
+- 5 帶餌席（4 sonnet＋Codex finder）**canary 全中**、否決席無 major；spec 對答案席抓到真 bug：`_testmap_strip` 的 `rstrip("._")` 無條件執行 → `__init__` 被裁成 `__init`、dunder 護欄成死碼（測試碰巧綠）——已修（僅剝離後去尾）＋護欄復活；另補 `.gitignore` 行、陳舊①窄接留痕、測試缺口 6 項（降序/②′刪檔 stale/Test_foo 負例/sha 格式值/conf bool）。
+- 接受未修（minor＋理由）：共用 tmp 檔名併發互踩（家族既有慣例、讀端壞損自癒 fail-open）；`I`+stem 撞名假陽性（IOrder.cs 並存場景,advisory 噪音預算內,已知限制）；`rules is None` 降級分支無沙盒測試（git log 失敗難穩定重現,由總兜底+全綠套件護）。
 
 ## toolchain 自庫（天花板如實）
 
