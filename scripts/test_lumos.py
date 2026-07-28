@@ -11084,8 +11084,11 @@ def t_testmap_build():
         for bad in ("Latest.ts", "Contest.cs", "ABTest.cs", "PodSpec.ts"):
             check(f"{bad} 不判為測試檔", not any(k[1] == bad for k in ed))
         check("md 不入場", not any("foo_test.md" in k[0] + k[1] for k in ed))
-        check("Test_bar.py 大寫T前綴不判測試檔(bar.py 無邊)",
-              not any(k[1] == "Test_bar.py" for k in ed),
+        from importlib.machinery import SourceFileLoader as _SFL
+        _lm = _SFL("lumos_tm_mod", str(_P(__file__).parent / "lumos")).load_module()
+        check("Test_bar.py 大寫T前綴不判測試檔(分類直驗+無邊)",
+              not _lm._testmap_is_test("Test_bar.py")
+              and not any(k[1] == "Test_bar.py" for k in ed),
               list(k for k in ed if "bar" in k[0] + k[1]))
         check("CJK naming 邊", ("會員系統.cs", "tests/會員系統Tests.cs") in ed)
         # 13 mkdir 自建(.lumos 由本次 build 建立)
