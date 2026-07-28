@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-02
-updated: 2026-07-02
+updated: 2026-07-28
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -14,6 +14,7 @@ summary: |-
   KEY:守「驗證器本身被悄悄改成一律通過」——測試綠/hook 放行的前提(批改程式沒被動過)從盲信變成可機械核對宣稱;外部實證=八大評測被 conftest 鉤子破
   KEY:刻意不守 scripts/lumos 本體(天天迭代→盲簽疲勞);分層=baseline 守驗證器、測試守被驗物
   KEY:loop 入口比 pre-push 嚴——missing baseline 視同失敗(無人看顧無人眼兜底);pre-push 維持 rc0+警示(漸進採用)
+  KEY:[2026-07-28]調研 gap 候選(arXiv 2607.05743:「檢查時刻vs使用時刻」分離=agent 執行安全通病)——anchor verify 在 pre-push 本機驗、測試實跑在稍後雲端 CI,中間空窗無人看;候選解=CI 端跑測試前自算受護檔雜湊寫入該次執行紀錄、放行時比對「當時真正跑的是哪一版把關程式」;未排程(與既有天花板「真解留 future CI」同向,此為具體形狀)
   KEY:誠實天花板——同 repo 守衛悖論:決意繞過者可連守衛一起改;買到的是無痕篡改被封死(必留 baseline diff/缺 approve 事件/bypass 軌跡其一),非不可繞。baseline 自身無自我保護(手改 json 靠對帳抓,v1 人工);core.hooksPath 一行可指走整個 hooks 層(loop 入口 shell 直呼=第二條路,真解留 future CI)
   DEP:[[lumos-refcheck]](vault-free 同型)｜_append_governance_log(寫者宣稱已改:doctor --ci + anchor approve)
   TEST:t_anchor 14 checks(無 baseline 警示/approve 建檔+留痕/gov 顯示 note/改檔+缺檔 rc1/--json/重簽容缺/repo 解析 rc2)
