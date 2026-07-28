@@ -1,20 +1,23 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-28
 updated: 2026-07-28
 signed_off: 2026-07-28
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Projects/檢索優化_計劃]]"
   - "[[Projects/節點靜態先驗_調研]]"
   - "[[Projects/中心性重驗排程_計劃]]"
 summary: |-
+  KEY:★結論=消融殺除(2026-07-28 考卷裁決)★——edit 卷 train 網格兩臂全滅:baseline nDCG@8 0.9831 vs PPR w0.2/0.4/0.6=0.9817/0.9668/0.9598(權重越大越差);b2 cochange 邊權與 b1 純 PPR 同分=邊權零貢獻;無一臂勝出帶外→整包刪碼留墓碑(scripts/lumos impact 段+pagerank docstring)。與 A3 同源:圖傳播訊號打不過調校後 BM25F。意外收穫:free 池中位 3 席→池≤k 時 P@k 對重排零鑑別,裁決依 nDCG@8(記入考卷方法論)。保留資產:personalization 參數位(③/通用)+LUMOS_EVAL_REPO 路由(S4a 通用 harness)
   KEY:[r1 樞紐重定向]目標面=**edit(impact hook 推薦)**非 related——r1 light 審出考卷實況:goldset 無 related 人工分卷,唯一 related 自動評測以 cochange 當金標=treatment 洩入 oracle 必自我確證(循環);edit 卷=人工標註+train/held 切分俱在,且 PPR 種子導向天然合 edit 面(diff 命中節點=種子)。PPR(personalization 種子向量,對稱化圖)+cochange 邊權(僅加權既有邊);**轉正閘=edit 卷 A/B:train 網格、held 確認、容忍帶內退步即殺+刪碼(A3 前例)**。源=2026-07-28 閉環盤點②
   KEY:v1 範圍刀[r1 反轉]——只動 edit/hook 面推薦;search 與 related 面不動(related 的人工分卷不存在,建卷=另立計劃的標註工程);不新增持久化快取
   DECISION:[2026-07-28]light 進場→r1 即 ratchet(blocker×2)——「引 ③ 為證」被審計員正確指為反向背書(③ 也是 light 炸升);連兩案實證:演算法密集 spec 直接走 standard,light 先驗值該加「演算法密集」硬否決訊號(回饋 design-loop skill 待辦)
+verified_by:
+  - "[[Verification/2026-07-28_PPR邊權消融]]"
 ---
 # 檢索 PPR＋cochange 邊權計劃
 

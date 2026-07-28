@@ -2980,6 +2980,49 @@ def t_loop_verify_progress():
     print("  ✓ t_loop_verify_progress")
 
 
+def t_ppr_personalized():
+    """PPR 個人化(原檢索PPR邊權_計劃,檢索用途已消融殺除;personalization 保留為
+    ③ 參數位/通用原語):種子傳播/對稱化/濾後重歸一/空=空dict/None 路徑不變。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-ppr-"))
+    vault = root / "docs" / "kg"
+    (vault / "Systems").mkdir(parents=True)
+
+    def w(rel, typ, body=""):
+        (vault / rel).parent.mkdir(parents=True, exist_ok=True)
+        (vault / rel).write_text(f"---\ntype: {typ}\n---\n# x\n{body}\n", encoding="utf-8")
+
+    # V→S(只有入鏈);孤島 I;seed=S
+    w("Systems/S.md", "system")
+    w("Systems/V.md", "verification", "[[Systems/S]]")
+    w("Systems/W.md", "verification", "[[Systems/V]]")
+    w("Systems/I.md", "system")
+    w("Systems/M.md", "moc")
+    try:
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader("lumos_ppr", GRAPHCTL)
+        spec_ = importlib.util.spec_from_loader("lumos_ppr", loader)
+        mod = importlib.util.module_from_spec(spec_)
+        loader.exec_module(mod)
+        env = mod.Env(vault)
+        # 有向 None 路徑:V→S 之下 S 高;W 只指 V
+        base = mod._graph_pagerank(env)
+        check("None 路徑仍有向(S 收 V 質量)", base["Systems/S.md"] > base["Systems/I.md"], str(base))
+        # 種子=S:對稱化後 in-link 鄰居 V 分數 > 兩跳 W > 孤島 I
+        pr = mod._graph_pagerank(env, personalization={"Systems/S.md": 1.0})
+        check("種子鄰居 V > 兩跳 W", pr["Systems/V.md"] > pr["Systems/W.md"], str(pr))
+        check("兩跳 W > 孤島 I", pr["Systems/W.md"] > pr["Systems/I.md"], str(pr))
+        check("種子分數>兩跳(排前由底分,非必最高)", pr["Systems/S.md"] > pr["Systems/W.md"], str(pr))
+        # 域外種子濾除重歸一;全濾=空 dict
+        pr2 = mod._graph_pagerank(env, personalization={"Systems/S.md": 1.0, "Systems/M.md": 1.0})
+        check("moc 種子被濾、結果同單種子", abs(pr2["Systems/V.md"] - pr["Systems/V.md"]) < 1e-9, str(pr2))
+        check("全域外種子=空 dict", mod._graph_pagerank(env, personalization={"Systems/M.md": 1.0}) == {}, "")
+    finally:
+        shutil.rmtree(root)
+    print("  ✓ t_ppr_personalized")
+
+
 def t_graph_pagerank():
     """[S1] 中心性 helper(中心性重驗排程_計劃):dangling 均攤/孤兒基礎分/moc 排除(含對照跑法)/ghost 不炸。"""
     import shutil

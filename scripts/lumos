@@ -4613,10 +4613,14 @@ def _conds(val):
 
 
 def _graph_pagerank(env, personalization=None, damping=0.85, tol=1e-6, max_iter=50):
-    """[S1] 中心性 helper(中心性重驗排程_計劃,2026-07-28):節點集=vault 全節點排 type=moc;
-    邊=env.edges(建邊時 ghost 已丟);dangling 質量均攤回全圖;L1 收斂 1e-6/50 迭代。
-    personalization=None 恆(參數位預留給 檢索PPR邊權_計劃)。回 {rel: score},總質量≈1。
-    誠實:本圖幾百節點下近似平滑 in-degree,取「傷害面」語意非拓撲深度優勢(A3 消融紀錄在案)。"""
+    """[S1] 中心性/PPR helper(中心性重驗排程_計劃+檢索PPR邊權_計劃,2026-07-28):
+    節點集=vault 全節點排 type=moc;邊=env.edges(ghost 建邊已丟);L1 收斂 1e-6/50 迭代。
+    personalization=None(③ 語意):有向、均勻 teleport、dangling 均攤——行為恆定不變。
+    personalization={rel:w}(② 語意):傳播圖**對稱化**(vault 連結大宗=新筆記→舊節點,有向會漏
+    in-link-only 真相關)、teleport 與 dangling 質量皆回種子向量;域外種子(moc/不存在)由本
+    helper 濾除後重歸一(合約 owner=helper),全濾/空集=回空 dict(呼叫端視為 P 缺席)。
+    誠實:本圖幾百節點下近似平滑 in-degree(A3 消融紀錄在案;PPR 檢索分量 2026-07-28
+    edit 卷消融同敗——personalization 保留為 ③ 之參數位與通用原語,檢索用途勿復活)。"""
     out_e, _in_e = env.edges
     nodes = [rel for rel, n in env.notes.items() if str(n.fields.get("type") or "") != "moc"]
     node_set = set(nodes)
@@ -4624,11 +4628,26 @@ def _graph_pagerank(env, personalization=None, damping=0.85, tol=1e-6, max_iter=
     if N == 0:
         return {}
     outs = {r: [d for d in out_e.get(r, []) if d in node_set] for r in nodes}
-    pr = {r: 1.0 / N for r in nodes}
+    seeds = None
+    if personalization is not None:
+        seeds = {r: w for r, w in personalization.items() if r in node_set and w > 0}
+        if not seeds:
+            return {}
+        tot = sum(seeds.values())
+        seeds = {r: w / tot for r, w in seeds.items()}
+        sym = {r: set(outs[r]) for r in nodes}
+        for r in nodes:
+            for d in outs[r]:
+                sym[d].add(r)
+        outs = {r: sorted(sym[r]) for r in nodes}
+
+    def _tp(r):
+        return seeds.get(r, 0.0) if seeds is not None else 1.0 / N
+
+    pr = {r: _tp(r) for r in nodes} if seeds is not None else {r: 1.0 / N for r in nodes}
     for _ in range(max_iter):
         dangling = sum(pr[r] for r in nodes if not outs[r])
-        base = (1 - damping) / N + damping * dangling / N
-        new = {r: base for r in nodes}
+        new = {r: (1 - damping) * _tp(r) + damping * dangling * _tp(r) for r in nodes}
         for r in nodes:
             o = outs[r]
             if o:
@@ -4640,6 +4659,30 @@ def _graph_pagerank(env, personalization=None, damping=0.85, tol=1e-6, max_iter=
         if delta < tol:
             break
     return pr
+
+
+def _ppr_cochange_weights(env, repo_root):
+    """[S2] cochange 邊權(檢索PPR邊權_計劃):vault 檔共改 conf(有向,_cochange_mine)→
+    {(a_rel,b_rel): 1+max(conf)};僅供既有邊加權(不造邊)。git 缺席/空史=空 dict degrade。"""
+    try:
+        cfg = _cochange_load_config(repo_root)
+        rules, _nt, _nf, err = _cochange_mine(repo_root, cfg)
+        if err or not rules:
+            return {}
+    except Exception:
+        return {}
+    try:
+        prefix = str(env.vault.relative_to(repo_root)) + "/"
+    except ValueError:
+        return {}
+    out = {}
+    for (a, b), (conf, _sup) in rules.items():
+        if a.startswith(prefix) and b.startswith(prefix) and a.endswith(".md") and b.endswith(".md"):
+            ra, rb = a[len(prefix):], b[len(prefix):]
+            key = (ra, rb) if (ra, rb) not in out else (ra, rb)
+            cur = out.get((ra, rb), out.get((rb, ra), 1.0))
+            out[(ra, rb)] = max(cur, 1.0 + conf)
+    return out
 
 
 def _hazen_percentile(pr):
@@ -9890,6 +9933,11 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
         free.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))
         # 名額制(v1.1):單體檔洪水按排名剪尾——閾值管品質、名額管上限(gate 對齊 top_k+2=10);
         # 剪的是 11 名以後,不動前 8 的視野(精度/必看召回不受影響)
+        # PPR 分量(檢索PPR邊權_計劃)已試已殺(2026-07-28 edit 卷 train 網格全負:
+        # baseline nDCG@8 0.9831 vs ppr w0.2/0.4/0.6=0.9817/0.9668/0.9598,b1 純 PPR 與
+        # b2 cochange 邊權同分=邊權零貢獻;free 池中位 3 席使 P@8 對重排零鑑別,裁決依 nDCG)。
+        # 與 A3 同源教訓:本圖的圖傳播訊號打不過調校後的 BM25F 融合;勿憑直覺復活,
+        # 重試須先過同款考卷。詳 Projects/檢索PPR邊權_計劃 墓碑節。
         _quota = int(_impact_knob("LUMOS_IMPACT_FREE_QUOTA", 10))
         truncated = max(0, len(free) - min(int(top), _quota))
         free = free[:min(int(top), _quota)]

@@ -154,7 +154,8 @@ def eval_edit(gs, split=None, k=8):
         payload = json.dumps({"query": case.get("delta", ""), "prospective": {}})
         # impact 自行從 --repo 解析 vault(不吃全域 --vault)→ 快照釘定須走 --repo(r1 終審親驗)
         r = subprocess.run([sys.executable, str(LUMOS),
-                            "impact", "--file", case["file"], "--repo", str(SNAP_ROOT or ROOT),
+                            "impact", "--file", case["file"],
+                            "--repo", os.environ.get("LUMOS_EVAL_REPO") or str(SNAP_ROOT or ROOT),
                             "--ranked", "--top", "50", "--stdin-payload", "--json"],
                            capture_output=True, text=True, input=payload, cwd=ROOT)
         try:
@@ -172,6 +173,7 @@ def eval_edit(gs, split=None, k=8):
             "bm25": sorted(free, key=lambda x: (-x.get("L", 0.0), x["node"])),
             "graph": sorted(free, key=lambda x: (-_graph_score(x), x["node"])),
         }
+
         n_rel_free = sum(1 for x in free if lab.get(x["node"], 0) >= 1)
         for name, order in orders.items():
             labels = [lab.get(x["node"], 0) for x in order]
@@ -220,6 +222,7 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         gp, gn = _macro(erows, "graph_p"), _macro(erows, "graph_ndcg")
         print(f"[edit n={len(erows)}] P@{k_edit}: fusion={fp} bm25={bp} graph={gp}")
         print(f"  nDCG@{k_edit}: fusion={fn} bm25={bn} graph={gn}")
+
         frees = [r["n_free"] for r in erows]
         med, p95 = _pctl(frees, 0.5), _pctl(frees, 0.95)
         must_t = sum(r["must_total"] for r in erows)
