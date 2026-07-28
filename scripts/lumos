@@ -9038,6 +9038,423 @@ _FOLD_MIRROR_HEADING_RE = re.compile(
     r"^##\s+(§\d+\s+)?(審計修正紀錄|誠實天花板)", re.MULTILINE)
 
 
+# ── testmap:檔案↔測試依賴地圖(vault-free;設計 [[檔案測試依賴地圖_計劃]]) ──────────
+
+import json
+import subprocess
+
+_TESTMAP_EXTS = {"kt", "java", "cs", "py", "ts", "tsx", "js", "jsx", "vue", "swift", "sql"}
+_TESTMAP_DIR_RE = None  # lazy
+
+
+def _testmap_ext(path):
+    name = path.rsplit("/", 1)[-1]
+    i = name.rfind(".")
+    return name[i + 1:].lower() if i > 0 else ""
+
+
+def _testmap_stem(path):
+    name = path.rsplit("/", 1)[-1]
+    i = name.rfind(".")
+    return name[:i] if i > 0 else name
+
+
+def _testmap_camel_suffixes(ext):
+    # 駝峰單數 Test 僅限 java(LoadTest.cs 類領域名詞誤殺率高,spec 明文取捨)
+    return ("Tests", "Test") if ext == "java" else ("Tests",)
+
+
+def _testmap_is_test(path):
+    global _TESTMAP_DIR_RE
+    if _TESTMAP_DIR_RE is None:
+        _TESTMAP_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|specs?)/", re.IGNORECASE)
+    ext = _testmap_ext(path)
+    if ext not in _TESTMAP_EXTS:
+        return False
+    if _TESTMAP_DIR_RE.search(path):
+        return True
+    name = path.rsplit("/", 1)[-1]
+    if ".spec." in name or ".test." in name:   # 小寫字面,大小寫敏感
+        return True
+    stem = _testmap_stem(path)
+    if stem.startswith("test_"):
+        return True
+    low = stem.lower()
+    for suf in ("_tests", "_specs", "_test", "_spec"):   # 底線變體:大小寫不敏感
+        if low.endswith(suf):
+            return True
+    for suf in _testmap_camel_suffixes(ext):             # 駝峰:大小寫敏感+前字元非大寫
+        if stem == suf:
+            return True                                   # stem 恰=綴詞(Tests.cs)
+        if stem.endswith(suf):
+            prev = stem[-len(suf) - 1]
+            if not ("A" <= prev <= "Z"):
+                return True
+    return False
+
+
+def _testmap_strip(path):
+    """剝離管線:回 (剝後 stem, 有無發生剝離)。與判定同套規則。"""
+    ext = _testmap_ext(path)
+    stem = _testmap_stem(path)          # 只剝最後一段語言副檔名
+    stripped = False
+    for mark in (".spec", ".test"):     # 緊鄰標記段連同剝除
+        if stem.endswith(mark):
+            stem = stem[:-len(mark)]
+            stripped = True
+            break
+    if not stripped:
+        low = stem.lower()
+        camel = _testmap_camel_suffixes(ext)
+        for suf in ("_tests", "_specs", "Tests", "_test", "_spec", "Test"):
+            if suf.startswith("_"):
+                if low.endswith(suf):
+                    stem = stem[:-len(suf)]
+                    stripped = True
+                    break
+            else:
+                if suf not in camel or not stem.endswith(suf):
+                    continue
+                prev = stem[-len(suf) - 1] if len(stem) > len(suf) else ""
+                if prev and "A" <= prev <= "Z":
+                    continue
+                stem = stem[:-len(suf)]
+                stripped = True
+                break
+        if not stripped and stem.startswith("test_"):
+            stem = stem[len("test_"):]
+            stripped = True
+    return stem.rstrip("._"), stripped
+
+
+def _testmap_git(root, args, timeout=30):
+    return subprocess.run(["git", "-C", str(root), "-c", "core.quotePath=false"] + args,
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def _testmap_classify(files):
+    tests, srcs = [], []
+    for f in files:
+        if _testmap_ext(f) not in _TESTMAP_EXTS:
+            continue
+        (tests if _testmap_is_test(f) else srcs).append(f)
+    return tests, srcs
+
+
+def _testmap_mine(root, tests, srcs, as_json):
+    """三路訊號 → {(src,test): (conf, set(sources))}。"""
+    edges = {}
+
+    def add(src, test, source, conf):
+        key = (src, test)
+        c, ss = edges.get(key, (0.0, set()))
+        ss.add(source)
+        edges[key] = (max(c, conf), ss)
+
+    # 訊號一 naming
+    by_stem = {}
+    for s in srcs:
+        by_stem.setdefault(_testmap_stem(s).lower(), []).append(s)
+    for tf in tests:
+        stem, stripped = _testmap_strip(tf)
+        if not stem:
+            continue
+        hits = by_stem.get(stem.lower(), [])
+        if stripped:
+            for s in hits:
+                add(s, tf, "naming", 0.9)
+        elif len(hits) == 1 and not (stem.startswith("__") and stem.endswith("__")):
+            add(hits[0], tf, "naming", 0.9)   # 同名唯一例外(__tests__/Button 慣例)
+
+    # 訊號二 content(單一 alternation,finditer 全 token 反查)
+    tokens = {}
+    for s in srcs:
+        st = _testmap_stem(s)
+        if len(st) < 4:
+            continue                          # 門檻作用於 src-stem 本身,I+stem 亦不搜
+        tokens.setdefault(st, set()).add(s)
+        tokens.setdefault("I" + st, set()).add(s)
+    if tokens:
+        pat = re.compile(r"\b(" + "|".join(
+            re.escape(k) for k in sorted(tokens, key=len, reverse=True)) + r")\b")
+        for tf in tests:
+            fp = Path(root) / tf
+            try:
+                if fp.stat().st_size > 200 * 1024:
+                    print(f"testmap: {tf} 超過 200KB,跳過 content 訊號", file=sys.stderr)
+                    continue
+                text = fp.read_bytes().decode("utf-8", errors="ignore")
+            except OSError as e:
+                print(f"testmap: {tf} 讀取失敗({e}),跳過 content 訊號", file=sys.stderr)
+                continue
+            for tok in set(pat.findall(text)):
+                for s in tokens[tok]:
+                    if s != tf:
+                        add(s, tf, "content", 0.5)
+
+    # 訊號三 cochange
+    cfg, notes = _cochange_load_config(Path(root))
+    for n in notes:
+        print(n, file=(sys.stderr if as_json else sys.stdout))
+    rules, _nt, _nf, _err = _cochange_mine(Path(root), cfg)
+    blocked = {}
+    if rules is None:
+        print("testmap: cochange 挖掘失敗,整源跳過(naming/content 照出)", file=sys.stderr)
+    else:
+        src_set, test_set = set(srcs), set(tests)
+        for (a, b), (conf, support) in rules.items():
+            if a in src_set and b in test_set:
+                if support < 3:               # 噪音門檻(寫死 3 不讀 cfg;分辨巧合的量是 support)
+                    blocked[support] = blocked.get(support, 0) + 1
+                    continue
+                add(a, b, "cochange", min(conf, 0.8))   # 封頂:恆低於 naming 0.9/自證 1.0
+    dist = " ".join(f"support={k}:{v}" for k, v in sorted(blocked.items()))
+    print(f"testmap: cochange support<3 擋 {sum(blocked.values())} 邊"
+          + (f" (分佈 {dist})" if dist else ""), file=sys.stderr)
+    return edges
+
+
+def cmd_testmap_build(repo=None, as_json=False):
+    try:
+        return _testmap_build_inner(repo, as_json)
+    except Exception as e:
+        print(f"testmap build: 未預期錯誤 {e}", file=sys.stderr)
+        if as_json:
+            print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        return 2
+
+
+def _testmap_build_inner(repo, as_json):
+    def die(msg):
+        print(f"testmap build: {msg}", file=sys.stderr)
+        if as_json:
+            print(json.dumps({"error": msg}, ensure_ascii=False))
+        return 2
+
+    root = _anchor_repo_root(repo)
+    if root is None:
+        return die("找不到 repo root")
+    r = _testmap_git(root, ["rev-parse", "--show-toplevel"])
+    if r.returncode != 0:
+        return die("非 git repo")
+    if Path(r.stdout.strip()).resolve() != Path(root).resolve():
+        return die(f"--repo 必須指向 repo 根(子目錄下 ls-files 與 git log 路徑空間不相交"
+                   f"會靜默零邊): {root}")
+    r = _testmap_git(root, ["rev-parse", "HEAD"])
+    if r.returncode != 0:
+        return die("空歷史(unborn branch),無可挖")
+    head = r.stdout.strip()
+    r = _testmap_git(root, ["ls-files"])
+    if r.returncode != 0:
+        return die("git ls-files 失敗")
+    files = [f for f in r.stdout.splitlines() if f]
+    tests, srcs = _testmap_classify(files)
+    edges = _testmap_mine(root, tests, srcs, as_json)
+
+    from datetime import datetime, timezone
+    payload = {
+        "version": 1, "built_at_commit": head,
+        "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "edges": [{"src": k[0], "test": k[1], "sources": sorted(v[1]),
+                   "conf": round(v[0], 4)}
+                  for k, v in sorted(edges.items())],
+    }
+    out = Path(root) / ".lumos" / "testmap.json"
+    tmp = out.with_suffix(out.suffix + ".lumos-tmp")
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n",
+                       encoding="utf-8")
+        os.replace(tmp, out)
+    except OSError as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return die(f"寫檔失敗: {e}")
+    if as_json:
+        print(json.dumps({"edge_count": len(payload["edges"]), "src_files": len(srcs),
+                          "test_files": len(tests), "built_at": payload["built_at"],
+                          "built_at_commit": head, "path": ".lumos/testmap.json"},
+                         ensure_ascii=False))
+    else:
+        print(f"testmap: edges={len(payload['edges'])} src={len(srcs)} "
+              f"tests={len(tests)} → .lumos/testmap.json")
+    return 0
+
+
+_TESTMAP_EMPTY = {"map_built_at": None, "built_at_commit": None, "stale": False,
+                  "suggests": [], "uncovered": []}
+
+
+def cmd_testmap_affected(diff=None, repo=None, as_json=False):
+    if not diff:
+        print("ERROR: testmap affected 需 --diff <range>", file=sys.stderr)
+        return 2
+    try:
+        return _testmap_affected_inner(diff, repo, as_json)
+    except Exception as e:   # 總兜底:恆 rc0 是唯一硬合約(枚舉是文件、兜底是機制)
+        print(f"testmap affected: fail-open(未預期錯誤 {e})", file=sys.stderr)
+        if as_json:
+            print(json.dumps(_TESTMAP_EMPTY, ensure_ascii=False))
+        return 0
+
+
+def _testmap_affected_inner(diff, repo, as_json):
+    def bail(msg):
+        print(f"testmap affected: {msg}", file=sys.stderr)
+        if as_json:
+            print(json.dumps(_TESTMAP_EMPTY, ensure_ascii=False))
+        return 0
+
+    if diff.startswith("-"):     # ① 檢查在載入 map 之前(此路不印 banner)
+        return bail("--diff 不接受 '-' 開頭的值,跳過")
+    root = _anchor_repo_root(repo)
+    if root is None:
+        return bail("找不到 repo root")
+    r = _testmap_git(root, ["rev-parse", "--show-toplevel"])
+    if r.returncode != 0 or Path(r.stdout.strip()).resolve() != Path(root).resolve():
+        return bail("--repo 非 repo 根(fail-open;確認 --repo 指向 repo 根)")   # ② 軟版根檢查
+    root = Path(root)
+
+    # map 三級守衛
+    mp = root / ".lumos" / "testmap.json"
+    try:
+        raw = mp.read_text(encoding="utf-8")
+    except OSError:
+        return bail("無 map(先跑 lumos testmap build;確認 --repo 指向 repo 根)")
+    try:
+        m = json.loads(raw)
+    except ValueError:
+        return bail("map 壞損(JSON 解析失敗),視同無 map——先跑 lumos testmap build")
+    bac = m.get("built_at_commit") if isinstance(m, dict) else None
+    if (not isinstance(m, dict) or not isinstance(m.get("edges"), list)
+            or m.get("version") != 1 or not isinstance(bac, str)
+            or not isinstance(m.get("built_at"), str)
+            or not re.fullmatch(r"[0-9a-f]{7,40}", bac)):
+        return bail("map 壞損(結構/表頭守衛),視同無 map——先跑 lumos testmap build")
+    edges = []
+    for e in m["edges"]:          # 逐邊守衛
+        if not isinstance(e, dict):
+            continue
+        src, test, conf = e.get("src"), e.get("test"), e.get("conf")
+        if not isinstance(src, str) or not isinstance(test, str):
+            continue
+        if isinstance(conf, bool) or not isinstance(conf, (int, float)) \
+                or not (0 <= conf <= 1):
+            continue
+        ss = e.get("sources")
+        sources = ([x for x in ss if isinstance(x, str)
+                    and x in ("naming", "content", "cochange")]
+                   if isinstance(ss, list) else [])
+        edges.append((src, test, float(conf), sources))
+
+    # diff 檔集(⑤)
+    r = _testmap_git(root, ["diff", "--no-renames", "--name-only", diff])
+    changed = [f for f in r.stdout.splitlines() if f] if r.returncode == 0 else None
+    if changed is None:
+        print("testmap affected: git diff 失敗(range 不存在?),建議清單空(fail-open)",
+              file=sys.stderr)
+
+    # ls-files(⑥)
+    r = _testmap_git(root, ["ls-files"])
+    lsfiles = set(f for f in r.stdout.splitlines() if f) if r.returncode == 0 else None
+    if lsfiles is not None:
+        cur_tests, cur_srcs = _testmap_classify(sorted(lsfiles))
+    else:
+        cur_tests, cur_srcs = [], []
+        print("testmap affected: git ls-files 失敗,建議清單空(fail-open)", file=sys.stderr)
+    if lsfiles is None:           # ⑥ 陳舊母體退化為 map 內路徑
+        universe = {e[0] for e in edges} | {e[1] for e in edges}
+    else:
+        universe = (set(cur_srcs) | set(cur_tests)
+                    | {e[0] for e in edges} | {e[1] for e in edges})
+
+    def test_exists(tf):
+        if lsfiles is None:
+            return False          # ⑥ 建議一律空,不得輸出幽靈邊
+        return tf in lsfiles and (root / tf).is_file()
+
+    # 建議(存在性過濾統一管 map 邊與自證兩路)
+    sug = {}
+
+    def sug_add(test, conf, src, sources):
+        c, srcs_, ss = sug.get(test, (0.0, set(), set()))
+        sug[test] = (max(c, conf), srcs_ | ({src} if src else set()), ss | set(sources))
+
+    if changed is not None:
+        for f in changed:
+            for (src, test, conf, sources) in edges:
+                if src == f and test_exists(test):
+                    sug_add(test, conf, src, sources)
+            if _testmap_is_test(f) and test_exists(f):
+                sug_add(f, 1.0, None, ["self"])   # 自證(已刪除測試檔不自證)
+    suggests = [{"test": k, "conf": round(v[0], 4), "srcs": sorted(v[1]),
+                 "sources": sorted(v[2])}
+                for k, v in sug.items()]
+    suggests.sort(key=lambda s: (-s["conf"], s["test"]))
+
+    # uncovered(僅現存候選 src;src 邊全指已刪測試也落此)
+    uncovered = []
+    if changed is not None and lsfiles is not None:
+        cs = set(cur_srcs)
+        for f in changed:
+            if f in cs and not any(src == f and test_exists(test)
+                                   for (src, test, _c, _s) in edges):
+                uncovered.append(f)
+        uncovered.sort()
+
+    # 陳舊三訊號(獨立判定,任一真;各訊號自身 git 失敗=略過)
+    stale = False
+    try:
+        r = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
+                            bac, "HEAD"], capture_output=True, text=True, timeout=30)
+        if r.returncode == 1:     # rc1=非祖先;其他錯誤(sha 不存在等)略過①
+            stale = True
+    except Exception:
+        pass
+    if not stale:
+        r = _testmap_git(root, ["diff", "--name-only", f"{bac}..HEAD"])
+        if r.returncode == 0 and any(f in universe for f in r.stdout.splitlines() if f):
+            stale = True
+    if not stale:
+        r = _testmap_git(root, ["status", "--porcelain", "--untracked-files=all"])
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if len(line) < 4:
+                    continue
+                st, rest = line[:2], line[3:]
+                paths = rest.split(" -> ") if " -> " in rest else [rest]
+                if st == "??":
+                    # 未追蹤檔不在 ls-files/map 並集,改依判定規則現算
+                    if any(_testmap_ext(p2) in _TESTMAP_EXTS for p2 in paths):
+                        stale = True
+                        break
+                elif any(p2 in universe for p2 in paths):
+                    stale = True
+                    break
+
+    # 輸出
+    if as_json:
+        print(json.dumps({"map_built_at": m["built_at"], "built_at_commit": bac,
+                          "stale": stale, "suggests": suggests, "uncovered": uncovered},
+                         ensure_ascii=False))
+    else:
+        print(f"map built at {m['built_at']} ({bac[:8]})")
+        if stale:
+            print("testmap: map 可能過期,建議 rebuild", file=sys.stderr)
+        if suggests:
+            for s in suggests:
+                print(f"  {s['conf']:.2f} {s['test']} [{','.join(s['sources'])}]")
+        else:
+            print("（無建議）")
+        if uncovered:
+            print("無已知測試:")
+            for f in uncovered:
+                print(f"  {f}")
+    return 0
+
+
 def _fold_mirror_sections(text):
     """掃 text 回傳所有「鏡像段」標籤清單,供 fold-check 列舉複查用。
 
@@ -10634,6 +11051,15 @@ def main():
     p.add_argument("--json", dest="pf_json", action="store_true", help="JSON 輸出")
     p.add_argument("--no-lint", dest="pf_no_lint", action="store_true", help="--diff 只跑 regex 層、不跑專案 lint 指令(快,給 pre-push advisory)")
 
+    tm = sub.add_parser("testmap", help="檔案↔測試依賴地圖(vault-free):build 三路訊號挖 file↔test 邊存 .lumos/testmap.json;affected 依 diff 推薦該跑測試(advisory 恆 rc0)")
+    tmsub = tm.add_subparsers(dest="tmcmd", required=True)
+    tmb = tmsub.add_parser("build", help="挖掘並寫 map")
+    tmb.add_argument("--repo", dest="tm_repo", default=None)
+    tmb.add_argument("--json", dest="tm_json", action="store_true")
+    tma = tmsub.add_parser("affected", help="diff → 建議測試(advisory)")
+    tma.add_argument("--diff", dest="tm_diff", default=None)
+    tma.add_argument("--repo", dest="tm_repo", default=None)
+    tma.add_argument("--json", dest="tm_json", action="store_true")
     p = sub.add_parser("test-layers", help="測試層軟提醒(vault-free,恆 rc0):diff 命中 .lumos/test-layers.json 宣告棧 → 提醒該跑的測試層")
     p.add_argument("--diff", dest="tl_diff", help="diff range(如 main..HEAD)")
     p.add_argument("--repo", dest="tl_repo", help="repo root(預設 cwd 向上找 .git)")
@@ -10732,6 +11158,11 @@ def main():
     if args.cmd == "pitfalls":
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
+    if args.cmd == "testmap":
+        if args.tmcmd == "build":
+            return cmd_testmap_build(repo=args.tm_repo, as_json=args.tm_json)
+        return cmd_testmap_affected(diff=args.tm_diff, repo=args.tm_repo,
+                                    as_json=args.tm_json)
     if args.cmd == "test-layers":
         return cmd_test_layers(diff=args.tl_diff, repo=args.tl_repo, as_json=args.tl_json)
     if args.cmd == "lint-check":

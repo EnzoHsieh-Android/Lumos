@@ -9,7 +9,7 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 
 ## 一眼看懂
 
-- **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill(K=2);`standard` 走單 reviewer;trivial 可跳(commit 註明)。
+- **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill(K=2);`standard` 走單 reviewer;trivial 可跳(commit 註明)。進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
 - **gate/守衛類 code 建議 feature branch**(2026-07-22 prepush範圍修法):pre-push 對 branch 與 main-direct **現已同軌**檢查(讀 stdin 推送範圍逐 ref 判,非 merge-base)——此為縱深建議非機械強制。
 - **loop id** = `code-<topic>`（例 `code-payment-retry`）。
 - **一輪 = 7 步(循序)** 或 **平行 panel(≤3 輪,見下)**:

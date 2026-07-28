@@ -10963,6 +10963,337 @@ def t_show():
     check("無 frontmatter --body-only 印整檔", "# 裸檔標題" in r.stdout and "純內文無fm" in r.stdout)
 
 
+
+
+def _testmap_mk(td):
+    """testmap 沙盒 fixture:bulk commit(>20 檔,cochange 挖掘層天然丟棄)+cochange 專用小 commit。"""
+    import subprocess as _sp
+    from pathlib import Path as _P
+    g = lambda *a: _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                           cwd=td, check=True, capture_output=True)
+    g("init", "-q")
+    root = _P(td)
+    files = {
+        "src/Foo.cs": "class Foo {}", "Foo.ts": "export const x=1",
+        "Foo.spec.ts": "it('x',()=>{})",
+        "src/Foo.generated.cs": "class G {}", "src/Foo.generated.Tests.cs": "class GT {}",
+        "foo.py": "x=1", "foo_spec.py": "y=2", "test_foo.py": "z=3", "Foo_TESTS.py": "w=4",
+        "tests/FooTests.cs": "class FT {}",
+        "IMember.cs": "interface IMember {}", "Member.cs": "class Member {}",
+        "Db.cs": "class Db {}",
+        "tests/ScenarioTests.cs": "var m = new Mock<IMember>(); // Db",
+        "Card.cs": "class Card {}", "tests/CardTests.cs": "// Card here",
+        "a/helpers.py": "h=1", "b/helpers.py": "h=2", "tests/helpers.py": "h=3",
+        "Button.tsx": "export default 1", "__tests__/Button.tsx": "render()",
+        "pkg/__init__.py": "", "tests/__init__.py": "",
+        "LoadTest.cs": "class LoadTest {}", "FooTest.java": "class FooTest {}",
+        "Tests.cs": "class T {}", "Latest.ts": "1", "Contest.cs": "2",
+        "ABTest.cs": "3", "PodSpec.ts": "4", "docs/foo_test.md": "# doc",
+        "會員系統.cs": "class W {}", "tests/會員系統Tests.cs": "// w",
+        "HugeThing.cs": "class H {}",
+    }
+    for rel, body in files.items():
+        fp = root / rel
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(body, encoding="utf-8")
+    (root / "tests/HugeThingTests.cs").write_text("// pad\n" + "0" * 250 * 1024, encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-q", "-m", "bulk")          # 36 檔 > max_changeset 20 → cochange 丟棄
+    for i in range(3):                        # support=3 → cochange 邊
+        (root / "coch.cs").write_text(f"c={i}", encoding="utf-8")
+        (root / "tests/CochScenTests.cs").write_text(f"t={i}", encoding="utf-8")
+        g("add", "coch.cs", "tests/CochScenTests.cs")
+        g("commit", "-q", "-m", f"co{i}")
+    for i in range(2):                        # support=2 → 被 testmap 門檻擋
+        (root / "two.cs").write_text(f"c={i}", encoding="utf-8")
+        (root / "tests/TwoScenTests.cs").write_text(f"t={i}", encoding="utf-8")
+        g("add", "two.cs", "tests/TwoScenTests.cs")
+        g("commit", "-q", "-m", f"two{i}")
+    return g
+
+
+def _testmap_run(args, cwd):
+    import subprocess as _sp
+    from pathlib import Path as _P
+    lumos_bin = str(_P(__file__).parent / "lumos")
+    return _sp.run([sys.executable, lumos_bin] + args, cwd=cwd,
+                   capture_output=True, text=True, timeout=120)
+
+
+def _testmap_edges(td):
+    import json as _json
+    from pathlib import Path as _P
+    m = _json.loads((_P(td) / ".lumos" / "testmap.json").read_text(encoding="utf-8"))
+    return {(e["src"], e["test"]): e for e in m["edges"]}, m
+
+
+def t_testmap_build():
+    """[S1] 三路訊號挖掘:naming 各型/content/cochange 門檻/合併/確定性/守衛。"""
+    import json as _json
+    import tempfile
+    from pathlib import Path as _P
+    with tempfile.TemporaryDirectory() as td:
+        _testmap_mk(td)
+        r = _testmap_run(["testmap", "build", "--repo", td], td)
+        check("build rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+        ed, m = _testmap_edges(td)
+        # 1 naming 各型
+        check("naming FooTests↔src/Foo.cs", ("src/Foo.cs", "tests/FooTests.cs") in ed, list(ed)[:8])
+        check("naming FooTests↔Foo.ts(同stem多src各建)", ("Foo.ts", "tests/FooTests.cs") in ed)
+        check("naming Foo.spec.ts↔Foo.ts(標記段)", ("Foo.ts", "Foo.spec.ts") in ed)
+        check("naming 點分basename(去尾點)", ("src/Foo.generated.cs", "src/Foo.generated.Tests.cs") in ed)
+        check("naming foo_spec(_spec直剝)", ("foo.py", "foo_spec.py") in ed)
+        check("naming test_前綴", ("foo.py", "test_foo.py") in ed)
+        check("naming Foo_TESTS(底線不敏感可剝)", ("foo.py", "Foo_TESTS.py") in ed)
+        e = ed[("src/Foo.cs", "tests/FooTests.cs")]
+        check("naming conf 0.9", e["conf"] == 0.9, e)
+        # 2 content
+        check("content I+stem 兩邊各建", ("Member.cs", "tests/ScenarioTests.cs") in ed
+              and ("IMember.cs", "tests/ScenarioTests.cs") in ed)
+        check("content 短stem<4不建(Db)", ("Db.cs", "tests/ScenarioTests.cs") not in ed)
+        check("content conf 0.5", ed[("Member.cs", "tests/ScenarioTests.cs")]["conf"] == 0.5)
+        # 3 cochange
+        check("cochange support3 建邊(封頂0.8)", ("coch.cs", "tests/CochScenTests.cs") in ed
+              and ed[("coch.cs", "tests/CochScenTests.cs")]["conf"] == 0.8,
+              ed.get(("coch.cs", "tests/CochScenTests.cs")))
+        check("cochange support2 不建", ("two.cs", "tests/TwoScenTests.cs") not in ed)
+        check("cochange 擋邊 stderr 統計", "support<3" in r.stderr, r.stderr[:200])
+        # 4 合併+確定性
+        e = ed[("Card.cs", "tests/CardTests.cs")]
+        check("多源合併 sources 字典序", e["sources"] == ["content", "naming"] and e["conf"] == 0.9, e)
+        edges1 = m["edges"]
+        _testmap_run(["testmap", "build", "--repo", td], td)
+        _, m2 = _testmap_edges(td)
+        check("edges 兩次 build 逐字相等", edges1 == m2["edges"])
+        # 8 200KB 跳 content、naming 不受影響
+        check("200KB 超限跳 content(stderr記)", "HugeThingTests" in r.stderr, r.stderr[:300])
+        check("200KB naming 不受影響", ("HugeThing.cs", "tests/HugeThingTests.cs") in ed)
+        # 9+20+21+22 判定/建邊邊界
+        check("helpers 同stem>1 不建邊", not any(k[1] == "tests/helpers.py" for k in ed))
+        check("同名唯一 __tests__/Button.tsx 建邊", ("Button.tsx", "__tests__/Button.tsx") in ed)
+        check("dunder 不建邊", not any(k[1] == "tests/__init__.py" for k in ed))
+        check("駝峰單數限java:FooTest.java 是測試", not any(k[0] == "FooTest.java" for k in ed))
+        check("LoadTest.cs 非測試(是src)", not any(k[1] == "LoadTest.cs" for k in ed))
+        check("Tests.cs stem=綴詞 不建邊", not any("Tests.cs" == k[1] and k[0] for k in ed
+              if k[1] == "Tests.cs"))
+        for bad in ("Latest.ts", "Contest.cs", "ABTest.cs", "PodSpec.ts"):
+            check(f"{bad} 不判為測試檔", not any(k[1] == bad for k in ed))
+        check("md 不入場", not any("foo_test.md" in k[0] + k[1] for k in ed))
+        check("CJK naming 邊", ("會員系統.cs", "tests/會員系統Tests.cs") in ed)
+        # 13 mkdir 自建(.lumos 由本次 build 建立)
+        check("mkdir 自建 .lumos", (_P(td) / ".lumos" / "testmap.json").is_file())
+        # header
+        check("map header 齊", m["version"] == 1 and len(m["built_at_commit"]) == 40
+              and "T" in m["built_at"], {k: m[k] for k in ("version", "built_at")})
+        # 10 json 純度
+        r = _testmap_run(["testmap", "build", "--repo", td, "--json"], td)
+        check("build --json 單行", r.returncode == 0 and len(r.stdout.strip().splitlines()) == 1)
+        j = _json.loads(r.stdout)
+        check("build --json 欄位", j["edge_count"] == len(edges1) and j["path"] == ".lumos/testmap.json"
+              and len(j["built_at_commit"]) == 40, j)
+
+
+def t_testmap_affected():
+    """[S2] advisory 查詢:推薦/自證/去重/uncovered/刪檔語意/陳舊三訊號/json。"""
+    import json as _json
+    import shutil
+    import subprocess as _sp
+    import tempfile
+    from pathlib import Path as _P
+    with tempfile.TemporaryDirectory() as td:
+        g = _testmap_mk(td)
+        root = _P(td)
+        _testmap_run(["testmap", "build", "--repo", td], td)
+        # ② 陳舊:build 後 commit 候選檔
+        (root / "Card.cs").write_text("class Card { int x; }", encoding="utf-8")
+        g("add", "Card.cs"); g("commit", "-q", "-m", "card change")
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        check("affected rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+        j = _json.loads(r.stdout)
+        sug = {s["test"]: s for s in j["suggests"]}
+        check("推薦 CardTests(naming)", "tests/CardTests.cs" in sug
+              and sug["tests/CardTests.cs"]["conf"] == 0.9, j["suggests"])
+        check("suggests 帶 sources/srcs", sug["tests/CardTests.cs"]["sources"] == ["content", "naming"]
+              and sug["tests/CardTests.cs"]["srcs"] == ["Card.cs"], sug.get("tests/CardTests.cs"))
+        check("② build後commit → stale", j["stale"] is True, j["stale"])
+        check("json map 欄照實", j["map_built_at"] and j["built_at_commit"], j)
+        # 重建後乾淨 → stale false;自證+去重
+        _testmap_run(["testmap", "build", "--repo", td], td)
+        (root / "Card.cs").write_text("class Card { int y; }", encoding="utf-8")
+        (root / "tests/CardTests.cs").write_text("// Card v2", encoding="utf-8")
+        g("add", "-A"); g("commit", "-q", "-m", "both")
+        _testmap_run(["testmap", "build", "--repo", td], td)   # 乾淨基準
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        sug = {s["test"]: s for s in j["suggests"]}
+        e = sug.get("tests/CardTests.cs")
+        check("自證+邊 去重一筆 conf1.0 sources聯集", e and e["conf"] == 1.0
+              and "self" in e["sources"] and "naming" in e["sources"]
+              and len([s for s in j["suggests"] if s["test"] == "tests/CardTests.cs"]) == 1, e)
+        check("乾淨基準 stale false", j["stale"] is False, j["stale"])
+        # 文字模式
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td], td)
+        check("文字 banner+建議行", r.stdout.startswith("map built at ")
+              and "tests/CardTests.cs" in r.stdout and "[" in r.stdout, r.stdout[:200])
+        # 刪除測試檔:map 邊與自證兩路皆不推薦;src 全邊已刪 → uncovered(孤立對 Foo.generated)
+        g("rm", "-q", "tests/FooTests.cs", "src/Foo.generated.Tests.cs")
+        (root / "src/Foo.cs").write_text("class Foo { int z; }", encoding="utf-8")
+        (root / "src/Foo.generated.cs").write_text("class G { int z; }", encoding="utf-8")
+        g("add", "src"); g("commit", "-q", "-m", "del tests + change srcs")
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        check("已刪測試檔不推薦", not any(s["test"] in ("tests/FooTests.cs", "src/Foo.generated.Tests.cs")
+              for s in j["suggests"]), j["suggests"])
+        check("src邊全指已刪測試 → uncovered", "src/Foo.generated.cs" in j["uncovered"], j["uncovered"])
+        # 刪除 src 仍查邊
+        _testmap_run(["testmap", "build", "--repo", td], td)
+        g("rm", "-q", "Card.cs"); g("commit", "-q", "-m", "del card")
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        check("刪除的 src 仍查邊", any(s["test"] == "tests/CardTests.cs" for s in j["suggests"]),
+              j["suggests"])
+        # 25 rm 後 mkdir 同名目錄 → 不推薦(is_file 擋)
+        (root / "tests/CardTests.cs").unlink()
+        (root / "tests/CardTests.cs").mkdir()
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        check("同名目錄不推薦", not any(s["test"] == "tests/CardTests.cs" for s in j["suggests"]),
+              j["suggests"])
+        shutil.rmtree(root / "tests/CardTests.cs")
+        _sp.run(["git", "checkout", "-q", "--", "."], cwd=td, check=True)
+        # ①非祖先 sha
+        _testmap_run(["testmap", "build", "--repo", td], td)
+        cur = _sp.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=td,
+                      capture_output=True, text=True).stdout.strip()
+        g("checkout", "-q", "-b", "side")
+        g("commit", "-q", "--allow-empty", "-m", "side")
+        side_sha = _sp.run(["git", "rev-parse", "HEAD"], cwd=td,
+                           capture_output=True, text=True).stdout.strip()
+        g("checkout", "-q", cur)
+        g("commit", "-q", "--allow-empty", "-m", "after")
+        mp = root / ".lumos" / "testmap.json"
+        mm = _json.loads(mp.read_text(encoding="utf-8"))
+        mm["built_at_commit"] = side_sha
+        mp.write_text(_json.dumps(mm, ensure_ascii=False), encoding="utf-8")
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        check("①非祖先 sha → stale", j["stale"] is True, j["stale"])
+        # ③ 未提交改動/未追蹤新測試檔
+        _testmap_run(["testmap", "build", "--repo", td], td)
+        (root / "HugeThing.cs").write_text("class H { int q; }", encoding="utf-8")
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        check("③ 未提交改動 → stale", j["stale"] is True, j["stale"])
+        _sp.run(["git", "checkout", "-q", "--", "."], cwd=td, check=True)
+        (root / "tests/NewTests.cs").write_text("// new", encoding="utf-8")
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        check("③ 未追蹤新測試檔 → stale", j["stale"] is True, j["stale"])
+        (root / "tests/NewTests.cs").unlink()
+        # 24 CJK 存在性過濾不消失
+        (root / "會員系統.cs").write_text("class W { int a; }", encoding="utf-8")
+        g("add", "-A"); g("commit", "-q", "-m", "cjk change")
+        _testmap_run(["testmap", "build", "--repo", td], td)
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        check("CJK 建議不消失", any(s["test"] == "tests/會員系統Tests.cs" for s in j["suggests"]),
+              j["suggests"])
+        # md 靜默
+        (root / "docs/foo_test.md").write_text("# doc2", encoding="utf-8")
+        g("add", "-A"); g("commit", "-q", "-m", "md only")
+        _testmap_run(["testmap", "build", "--repo", td], td)
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        check("md 靜默(不進建議/uncovered)", j["suggests"] == [] and j["uncovered"] == [], j)
+        # ⑤ map 有效僅 diff 失敗:map 欄照實
+        r = _testmap_run(["testmap", "affected", "--diff", "nosuch..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        check("⑤ diff失敗 rc0+map欄照實", r.returncode == 0 and j["map_built_at"] is not None
+              and j["suggests"] == [], j)
+        # affected --repo 子目錄 → fail-open rc0
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD",
+                          "--repo", str(root / "src"), "--json"], td)
+        j = _json.loads(r.stdout)
+        check("23 affected 子目錄 fail-open rc0", r.returncode == 0 and j["map_built_at"] is None,
+              f"{r.returncode} {j}")
+
+
+def t_testmap_rc():
+    """[S1][S2] rc 矩陣+map 守衛(獨立函式防 expect_rc 首敗吞斷言)。"""
+    import json as _json
+    import subprocess as _sp
+    import tempfile
+    from pathlib import Path as _P
+    EMPTY = {"map_built_at": None, "built_at_commit": None, "stale": False,
+             "suggests": [], "uncovered": []}
+    with tempfile.TemporaryDirectory() as td:
+        r = _testmap_run(["testmap", "build", "--repo", td], td)
+        check("build 非git rc2", r.returncode == 2, r.returncode)
+        _sp.run(["git", "init", "-q"], cwd=td, check=True)
+        r = _testmap_run(["testmap", "build", "--repo", td], td)
+        check("build unborn rc2", r.returncode == 2, r.returncode)
+    with tempfile.TemporaryDirectory() as td:
+        g = _testmap_mk(td)
+        root = _P(td)
+        sub = root / "src"
+        r = _testmap_run(["testmap", "build", "--repo", str(sub)], td)
+        check("build 子目錄 rc2", r.returncode == 2, r.returncode)
+        r = _testmap_run(["testmap", "build", "--repo", td], td)
+        check("build 合法根(symlink /var 路徑)不誤擋 rc0", r.returncode == 0,
+              f"{r.returncode} {r.stderr}")
+        # 缺 --diff rc2;等號式 - 開頭 rc0+單行 json
+        r = _testmap_run(["testmap", "affected", "--repo", td], td)
+        check("affected 缺 --diff rc2", r.returncode == 2, r.returncode)
+        r = _testmap_run(["testmap", "affected", "--diff=-abc", "--repo", td, "--json"], td)
+        check("- 開頭 rc0 單行json", r.returncode == 0
+              and _json.loads(r.stdout) == EMPTY, f"{r.returncode} {r.stdout!r}")
+        mp = root / ".lumos" / "testmap.json"
+        good = mp.read_text(encoding="utf-8")
+        # 無 map
+        mp.unlink()
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        check("無 map rc0+提示+null json", r.returncode == 0 and "build" in r.stderr
+              and _json.loads(r.stdout) == EMPTY, f"{r.returncode} {r.stderr[:120]}")
+        # 爛 JSON / edges 非 list / header 缺 / version≠1
+        for bad, label in (("{oops", "爛JSON"),
+                           ('{"version":1,"built_at_commit":"' + "a" * 40 + '","built_at":"x","edges":{}}', "edges非list"),
+                           ('{"version":1,"edges":[]}', "header缺"),
+                           ('{"version":2,"built_at_commit":"' + "a" * 40 + '","built_at":"x","edges":[]}', "version≠1")):
+            mp.write_text(bad, encoding="utf-8")
+            r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+            check(f"壞map({label}) rc0+null", r.returncode == 0
+                  and _json.loads(r.stdout)["map_built_at"] is None, f"{r.returncode} {r.stdout!r}")
+        # 逐邊守衛:非dict/缺欄/conf越界/sources缺→[]
+        m = _json.loads(good)
+        m["edges"] = [17, {"src": "Card.cs"}, {"src": "Card.cs", "test": "tests/CardTests.cs", "conf": 999,
+                                               "sources": ["naming"]},
+                      {"src": "Card.cs", "test": "tests/CardTests.cs", "conf": 0.9}]
+        mp.write_text(_json.dumps(m, ensure_ascii=False), encoding="utf-8")
+        (root / "Card.cs").write_text("class Card { int r; }", encoding="utf-8")
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-am", "c"],
+                cwd=td, check=True)
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        j = _json.loads(r.stdout)
+        sug = [s for s in j["suggests"] if s["test"] == "tests/CardTests.cs"]
+        check("逐邊守衛:壞邊跳/好邊留 sources=[]", r.returncode == 0 and len(sug) == 1
+              and sug[0]["conf"] == 0.9 and sug[0]["sources"] == [], f"{r.returncode} {j}")
+        # map 為目錄 → 總兜底 rc0
+        mp.unlink(); mp.mkdir()
+        r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
+        check("map為目錄 rc0+null", r.returncode == 0
+              and _json.loads(r.stdout)["map_built_at"] is None, f"{r.returncode} {r.stdout!r}")
+        mp.rmdir()
+        # 寫檔失敗:.lumos 換成檔案 → build rc2+json error
+        import shutil
+        shutil.rmtree(root / ".lumos")
+        (root / ".lumos").write_text("x", encoding="utf-8")
+        r = _testmap_run(["testmap", "build", "--repo", td, "--json"], td)
+        check("寫檔失敗 rc2+json error", r.returncode == 2 and "error" in _json.loads(r.stdout),
+              f"{r.returncode} {r.stdout!r}")
+
+
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
