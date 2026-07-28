@@ -10984,10 +10984,12 @@ def _testmap_mk(td):
         "tests/ScenarioTests.cs": "var m = new Mock<IMember>(); // Db",
         "Card.cs": "class Card {}", "tests/CardTests.cs": "// Card here",
         "a/helpers.py": "h=1", "b/helpers.py": "h=2", "tests/helpers.py": "h=3",
+        "helper.py": "h=4", "tests/helper_.py": "h=5",   # rstrip 回歸釘:未剝離 stem 不去尾底線
         "Button.tsx": "export default 1", "__tests__/Button.tsx": "render()",
         "pkg/__init__.py": "", "tests/__init__.py": "",
         "LoadTest.cs": "class LoadTest {}", "FooTest.java": "class FooTest {}",
-        "Tests.cs": "class T {}", "Latest.ts": "1", "Contest.cs": "2", "Test_foo.py": "q=9",
+        "Tests.cs": "class T {}", "Latest.ts": "1", "Contest.cs": "2",
+        "bar.py": "b=1", "Test_bar.py": "q=9",   # 大寫T前綴負例(獨立stem,防 APFS 大小寫不敏感撞 test_foo.py)
         "ABTest.cs": "3", "PodSpec.ts": "4", "docs/foo_test.md": "# doc",
         "會員系統.cs": "class W {}", "tests/會員系統Tests.cs": "// w",
         "HugeThing.cs": "class H {}",
@@ -11070,6 +11072,9 @@ def t_testmap_build():
         check("200KB naming 不受影響", ("HugeThing.cs", "tests/HugeThingTests.cs") in ed)
         # 9+20+21+22 判定/建邊邊界
         check("helpers 同stem>1 不建邊", not any(k[1] == "tests/helpers.py" for k in ed))
+        check("rstrip 回歸釘:helper_ 未剝離不去尾(無邊)",
+              not any(k[1] == "tests/helper_.py" for k in ed),
+              list(k for k in ed if "helper" in k[0]))
         check("同名唯一 __tests__/Button.tsx 建邊", ("Button.tsx", "__tests__/Button.tsx") in ed)
         check("dunder 不建邊", not any(k[1] == "tests/__init__.py" for k in ed))
         check("駝峰單數限java:FooTest.java 是測試", not any(k[0] == "FooTest.java" for k in ed))
@@ -11079,7 +11084,9 @@ def t_testmap_build():
         for bad in ("Latest.ts", "Contest.cs", "ABTest.cs", "PodSpec.ts"):
             check(f"{bad} 不判為測試檔", not any(k[1] == bad for k in ed))
         check("md 不入場", not any("foo_test.md" in k[0] + k[1] for k in ed))
-        check("Test_foo.py 大寫T前綴不判測試檔", not any(k[1] == "Test_foo.py" for k in ed))
+        check("Test_bar.py 大寫T前綴不判測試檔(bar.py 無邊)",
+              not any(k[1] == "Test_bar.py" for k in ed),
+              list(k for k in ed if "bar" in k[0] + k[1]))
         check("CJK naming 邊", ("會員系統.cs", "tests/會員系統Tests.cs") in ed)
         # 13 mkdir 自建(.lumos 由本次 build 建立)
         check("mkdir 自建 .lumos", (_P(td) / ".lumos" / "testmap.json").is_file())
@@ -11107,7 +11114,8 @@ def t_testmap_affected():
         _testmap_run(["testmap", "build", "--repo", td], td)
         # ② 陳舊:build 後 commit 候選檔
         (root / "Card.cs").write_text("class Card { int x; }", encoding="utf-8")
-        g("add", "Card.cs"); g("commit", "-q", "-m", "card change")
+        (root / "coch.cs").write_text("c=9", encoding="utf-8")
+        g("add", "Card.cs", "coch.cs"); g("commit", "-q", "-m", "card+coch change")
         r = _testmap_run(["testmap", "affected", "--diff", "HEAD~1..HEAD", "--repo", td, "--json"], td)
         check("affected rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
         j = _json.loads(r.stdout)
@@ -11115,7 +11123,8 @@ def t_testmap_affected():
         check("推薦 CardTests(naming)", "tests/CardTests.cs" in sug
               and sug["tests/CardTests.cs"]["conf"] == 0.9, j["suggests"])
         confs = [s["conf"] for s in j["suggests"]]
-        check("推薦降序(list 序)", confs == sorted(confs, reverse=True), confs)
+        check("推薦降序(多筆異conf真序)", len(confs) >= 2 and confs[0] == 0.9
+              and confs == sorted(confs, reverse=True), confs)
         check("suggests 帶 sources/srcs", sug["tests/CardTests.cs"]["sources"] == ["content", "naming"]
               and sug["tests/CardTests.cs"]["srcs"] == ["Card.cs"], sug.get("tests/CardTests.cs"))
         check("② build後commit → stale", j["stale"] is True, j["stale"])

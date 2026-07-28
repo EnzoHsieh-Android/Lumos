@@ -48,6 +48,11 @@ summary: |-
 - 5 帶餌席（4 sonnet＋Codex finder）**canary 全中**、否決席無 major；spec 對答案席抓到真 bug：`_testmap_strip` 的 `rstrip("._")` 無條件執行 → `__init__` 被裁成 `__init`、dunder 護欄成死碼（測試碰巧綠）——已修（僅剝離後去尾）＋護欄復活；另補 `.gitignore` 行、陳舊①窄接留痕、測試缺口 6 項（降序/②′刪檔 stale/Test_foo 負例/sha 格式值/conf bool）。
 - 接受未修（minor＋理由）：共用 tmp 檔名併發互踩（家族既有慣例、讀端壞損自癒 fail-open）；`I`+stem 撞名假陽性（IOrder.cs 並存場景,advisory 噪音預算內,已知限制）；`rules is None` 降級分支無沙盒測試（git log 失敗難穩定重現,由總兜底+全綠套件護）。
 
+## code-loop r2 折入（測試品質輪）
+
+- 三席 canary 全中＋Codex 否決無 major；抓到**三條「補的測試自己是虛的」**：①降序斷言單元素恆真 → 改多筆異 conf 場景（0.9+0.8）；②`Test_foo.py` 與 `test_foo.py` 在 APFS 大小寫不敏感 FS 是同一檔（斷言空轉＋靜默覆寫 fixture）→ 換獨立 stem `Test_bar.py`+`bar.py`；③rstrip 修復無回歸釘（還原 bug 全套照綠）→ 加 `tests/helper_.py`+`helper.py` 釘（未剝離不去尾,舊 bug 下會誤建邊翻紅）。t_testmap_* 73 檢查。
+- 教訓入帳：測試斷言的「空轉三型」——單元素排序恆真／fixture 在大小寫不敏感 FS 撞檔／缺對著已修 bug 的還原翻紅釘。
+
 ## toolchain 自庫（天花板如實）
 
 `test_lumos.py` 單檔巨測（>200KB 跳 content）＋`scripts/lumos` 無副檔名不入候選——自庫僅驗機械正確性，不當成效證據（spec 明文）。
