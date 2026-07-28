@@ -113,7 +113,7 @@ flowchart TB
     HEALTH --> H["doctor · lint · lint-watch<br/>self-audit · sync-verified-by · gov<br/>spec-trace · signoff"]
     WRITE --> W["set · append · new · archive<br/>decision-add · decision-supersede"]
     GUARD --> G["guard {list · scaffold · bind · audit · trace}<br/>(★INVARIANT★→[test:]→[audit:] 綁定鏈)"]
-    LOOP --> LP["pitfalls (--diff tier) · code-loop {pass/skip/check}<br/>canary {record} · loop {status}<br/>fold-check · refcheck"]
+    LOOP --> LP["pitfalls (--diff tier) · code-loop {pass/skip/check}<br/>canary {record} · loop {status·next·compress·verify-progress·capture-counts}<br/>fold-check · refcheck"]
     INTEG --> I["anchor {verify · approve}<br/>impact (影響半徑 + 事故觸發)"]
     SARIF --> ST["sqlfluff-sarif · stylelint-sarif<br/>compose-metrics"]
     LIFE --> L["install · uninstall · update<br/>bootstrap · init · deinit"]

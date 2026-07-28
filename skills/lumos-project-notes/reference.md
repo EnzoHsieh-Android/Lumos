@@ -30,7 +30,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | **測試層軟提醒（diff 命中宣告棧→提醒該跑的測試層）** | `python3 scripts/lumos test-layers --diff <range> [--json]` — 恆 rc0 advisory;讀 .lumos/test-layers.json,無宣告靜默 |
 | **lint 宣告健康檢查（宣告了跑不動的 linter 抓出來）** | `python3 scripts/lumos lint-check [--repo R] [--smoke]` — 靜態格式校驗+--smoke 真跑冒煙;rc 0健康/1有問題/2非JSON |
 | 治理事件帳（某節點歷來被哪幾道閘攔過） | `python3 scripts/lumos gov [<筆記名>] [--since N]` — 唯讀彙整 bypass/rot/governance-log;本機可見性 |
-| **設計 spec 進實作前打磨**（canary-護審計 loop 到收斂） | 調用 **`lumos-design-loop`** skill;原語 `lumos canary record --loop/--severity/--findings` + `lumos loop status <id> --need 2 --gate --spec <md> --repo <root>`(證據閘:K-streak ∧ 引用座標 refcheck ∧ 發現枯竭) |
+| **設計 spec 進實作前打磨**（canary-護審計 loop 到收斂） | 調用 **`lumos-design-loop`** skill;原語 `lumos canary record --loop/--severity/--findings` + `lumos loop status <id> --need 2 --gate --spec <md> --repo <root>`(證據閘:K-streak ∧ 引用座標 refcheck ∧ 發現枯竭)。收斂另有三模式:`--gate --panel`(不吃 --need)/`--light`/`--gate --spec --settle <清單.json>`(結清,互斥群 rc2);輔助原語 `loop next`(settle 不支援)/`loop compress`/`loop verify-progress`——詳 design-loop skill |
 | 健康巡檢（orphans / unresolved / verified_by 同步 / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / ★INVARIANT★→測試綁定 + 獨立合法性審計；Check P 失效檔案認領(節點正文 inline-code 路徑指向已不存在的 repo 檔 → 軟提醒「圖譜指向死碼」)） | `python3 scripts/lumos doctor [--ci]` |
 | 讀單篇 decisions | `python3 scripts/lumos decisions <筆記名>` |
 | 全 vault 掃被推翻決策 | `python3 scripts/lumos decisions --superseded` |
@@ -723,7 +723,7 @@ python3 scripts/lumos recent --days 7
    - **沒抓到** → 放水。**這輪判決作廢**,換不同 canary 重跑。`lumos canary record missed --auditor <模型>`。連 2 次 missed 就升級模型/把文件切小(升級前 `lumos gov --since 7` 看 missed 史)。
 4. **panel 變體**:一輪派 N 個審計員時,每個各給自己的 canary;漏抓自己 canary 的剔出投票。
 
-**收斂留痕(2026-06-19;讓多輪審計能機械終止)**:把每輪記成一筆帶 loop 的 canary——`lumos canary record caught|missed --loop <設計slug> --severity clean|minor|major|blocker --findings <存活折入條數> --auditor <模型>`(`severity`=忠實轉錄審計員的最嚴重 finding;`--findings`=辯方裁決後存活折入的真 finding 條數)。收斂查詢用**證據閘**:`lumos loop status <slug> --need 2 --gate --spec <spec md> --repo <root>`——輪次紀律(連 2 輪 caught+乾淨)為必要條件,合取 G1(spec 引用座標 refcheck 全 ok)與 G2(發現枯竭:findings 單調不增、末輪 ≤1 且末步下降)→ exit 0=GATE PASS(綠燈進實作)。missed/缺 severity/blocker/major/引用壞座標/發現未枯竭都讓它不收斂(逼修了再審);不帶 `--gate` 為舊版純輪次判準(向後相容)。`gov` 看得到整段輪歷史。
+**收斂留痕(2026-06-19;讓多輪審計能機械終止)**:把每輪記成一筆帶 loop 的 canary——`lumos canary record caught|missed --loop <設計slug> --severity clean|minor|major|blocker --findings <存活折入條數> --auditor <模型>`(`severity`=忠實轉錄審計員的最嚴重 finding;`--findings`=辯方裁決後存活折入的真 finding 條數)。收斂查詢用**證據閘**:`lumos loop status <slug> --need 2 --gate --spec <spec md> --repo <root>`——輪次紀律(連 2 輪 caught+乾淨)為必要條件,合取 G1(spec 引用座標 refcheck 全 ok)與 G2(發現枯竭:findings 單調不增、末輪 ≤1 且末步下降)→ exit 0=GATE PASS(綠燈進實作)。missed/缺 severity/blocker/major/引用壞座標/發現未枯竭都讓它不收斂(逼修了再審);不帶 `--gate` 為舊版純輪次判準(向後相容);panel/light/settle 三模式判準各異(見 design-loop skill,settle=清單全結清∧G1∧G3)。`gov` 看得到整段輪歷史。
 > **gate 契約補注**:`--spec` 在 code-loop 情境可省略(`loop status --gate` G1 skip,無 spec 可驗引用座標屬預期);design/spec loop 仍帶 `--spec`(G1 會跑 refcheck 驗引用座標)。
 
 **天花板**:canary 抓得到「審計員根本沒讀/只吐通用回應」,**抓不到「讀了但複雜權衡判錯」**;判定「有沒有抓到」「severity 多嚴重」都由植入者自己做、無外部檢查——canary/收斂是**降低放水機率的摩擦 + 可觀測地板**,不是閉合驗證或 oracle。設計全文見 `docs/design/2026-06-19-canary-audit.md`、`…-convergence-recording.md`。

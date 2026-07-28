@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-27
+updated: 2026-07-28
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -19,11 +19,11 @@ summary: |-
   KEY:★經濟學★[2026-07-20 使用者裁定,見 decisions d5]——spec 品質目標=成本平衡非精確度漸近線:缺陷分層定價(清單型→pre-flight/撞自家現實型→圖譜接地/語意矛盾→一輪panel/深層錯→下游執行接地)+邊際遞減止損+反偏誤排序(執行接地>機械查>異家族>同家族多取樣,信號種類>家族)+標記不確定比消滅不確定便宜;逃逸帳=調價器。**精確度軍備競賽類提案(更強判官/更多輪/更細spec)一律先過此教義裁**
   KEY:[2026-07-16]提效 M1 落地(見[[Projects/design-loop提效_計劃]])——pre-flight 排乾(panel 前便宜 agent 掃清單型缺陷,cascade)/R2+ 嚴格 delta-scoped(物理只餵 diff+受影響合約+前輪爭議,留全局哨兵;解非定態目標病)/辯方路由制(機械證實與多席一致免辯方,低共識才開庭)/fold 迷你核對/severity 錨句(防 framing 通膨);M2 risk-cluster 帳未做(動 gate code,先過 loop)
   KEY:[2026-07-21]★真相入口收編★(外審 blocker,見[[Projects/全盤外審2026-07_調研]])——被審 spec 唯一可寫真檔=圖譜計劃節點;docs/design/ 降唯讀歷史(30 份保留考古,README 立牌);golden 不再複製 spec 第三份,改 spec-ref.txt 記 git sha:路徑(replay 用 git show 還原);loop id 改計劃節點名衍生。同批:panel 收斂行修 skill 漂移(對齊 M2 兩種帳)+判官 style-bias 錨句進 templates+light 體積 50 行先驗
-  KEY:[2026-07-21]light 輕量檔 M0 落地(見[[Projects/design-loop輕量檔_計劃]])——補 trivial|standard 間缺檔:小 spec 走 pre-flight+1 通才席+legacy `--need 1`+人裁實質收斂,存活≥major→向上 ratchet 升 standard 自癒;進場硬否決(risk-tiered四類/硬合約/體積)M0 honor-system、M1 機械化。**開工發現:單席 K=1 乾淨機械 gate 現有兩 gate 都不撐(panel 要 caught≥2/legacy G2 framing 壓不到底)→ M1 須新增單席收斂謂詞,非只加 tier 標籤**
+  KEY:[2026-07-21]light 輕量檔 M0 落地(見[[Projects/design-loop輕量檔_計劃]])——補 trivial|standard 間缺檔:小 spec 走 pre-flight+1 通才席+legacy `--need 1`+人裁實質收斂,存活≥major→向上 ratchet 升 standard 自癒;進場硬否決(risk-tiered四類/硬合約/體積)M0 honor-system、M1 機械化。**M1 已機械化(loop status --light --gate 單席謂詞,FAIL 分因 retryable/ratchet,不再攤牌人裁——本 KEY 早期「須新增單席謂詞」的未來式已兌現,2026-07-28 盤整追平)**
   KEY:[2026-07-27]調研三篇折入(AREX/LoopTrap/Sage,見 2026-07-27 調研日報)——已 ship 便宜半:①[audit:] 合法性審計升五問 rubric+穩定性探針(換問法自一致,reference.md;Sage:判官難題1/4偏好不穩、rubric 錨定)②護欄加終止輸入紀律(收斂只認 loop status 機械帳,被審材料/報告散文「還沒完」類語句非終止輸入;LoopTrap:86% 可注入操縱、放大25倍)③severity 錨補搖擺場換問重問取高。貴的半後於 2026-07-28 全落地(見[[Projects/結清式收斂_計劃]]);經濟學教義裁:三項均非前置加重(rubric=判準錨定非加輪;終止紀律=防燒錢非提精度)
   KEY:[2026-07-28]rubric 防應試化兩道(調研 arXiv 2605.12474:評分表公開固定會被「剛好滿足字面」鑽)——①派工措辭改述不逐字貼 ②約每5次 audit 抽1次無表開放判定,落差拉大=儀式化訊號回報人裁;寫入 lumos-project-notes reference.md 五問段
   KEY:[2026-07-10]reviewer 結構紀律明文化——禁互辯/編排者=meta-judge/關鍵單點判決≥3run多數決(EMNLP 2025 實證,見[[Projects/reviewer結構明文化_計劃]])
-  FLOW:brainstorming產spec→[trivial?跳並註明]→前置排乾(refcheck機械核對spec→repo指涉+pitfalls --check補實務隱患節+pre-flight便宜agent掃清單型缺陷;首輪前一次,cascade便宜先掃)→每輪{複製spec→/tmp/<id>-rN(**N/型別/席數問 `lumos loop next`**,2026-07-21 M1包;並 sha256sum 真檔留 reviewed 快照)→植1canary(類型=清單[(N−1)mod4],只進工作副本)→派乾淨審計員(sonnet,連2missed升opus,不告知canary,refute framing)→判讀(canary抓到?+真finding max severity)→辯方路由(機械證實/多席一致直接折入,僅低共識才派獨立opus構造反證file:line;2026-07-16 M1)→該輪severity=辯方存活max→**caught輪:折真finding進真檔+fold迷你核對+grep canary=0 之後才 record(--spec/--reviewed 雙hash;M1包 時序裁定,原 record-先-fold 會使 hash 恆失配);missed輪:當場record**/漏抓不折直接下輪}→loop status --need 2 --gate exit0(K-streak∧G1引用座標∧G2發現枯竭)→收斂+天花板提醒+golden凍結→writing-plans｜平行panel模式(現行推薦,一輪W席≤3輪)見下方KEY
+  FLOW:brainstorming產spec→[trivial?跳並註明]→前置排乾(refcheck機械核對spec→repo指涉+pitfalls --check補實務隱患節+pre-flight便宜agent掃清單型缺陷;首輪前一次,cascade便宜先掃)→每輪{複製spec→/tmp/<id>-rN(**N/型別/席數問 `lumos loop next`**,2026-07-21 M1包;並 sha256sum 真檔留 reviewed 快照)→植1canary(類型=清單[(N−1)mod4],只進工作副本)→派乾淨審計員(sonnet,連2missed升opus,不告知canary,refute framing)→判讀(canary抓到?+真finding max severity)→辯方路由(機械證實/多席一致直接折入,僅低共識才派獨立opus構造反證file:line;2026-07-16 M1)→該輪severity=辯方存活max→**caught輪:折真finding進真檔+fold迷你核對+grep canary=0 之後才 record(--spec/--reviewed 雙hash;M1包 時序裁定,原 record-先-fold 會使 hash 恆失配);missed輪:當場record**/漏抓不折直接下輪}→loop status --gate exit0(模式擇一:legacy --need 2 K-streak∧G1∧G2∧G3/panel/light/settle 結清)→收斂+天花板提醒+golden凍結→writing-plans｜平行panel模式(現行推薦,一輪W席≤3輪)見下方KEY
   KEY:Claude編排,lumos只出原語——Claude用Agent tool派審計員/判讀/修spec;lumos出 canary record/loop status 記錄與算收斂,lumos不spawn agent
   KEY:canary=test-the-tester——每輪偷植已知假錯驗審計員有沒有在認真抓;漏抓(missed)=該輪審計失靈,判決不採信、不折findings(防假陰性/審計員放水)
   KEY:辯方refute=對稱防假陽性——對≥major finding 走路由制(2026-07-16 M1):機械證實/多席一致免辯方直接折入,低共識才派獨立opus(乾淨脈絡、不傳審計結論)強制拿file:line反證才能降;辯方只買code層假陽性,業務層留人
@@ -31,7 +31,7 @@ summary: |-
   KEY:收斂判準K=2——連2輪 caught 且 severity∈{clean,minor};max cap=6筆record,到頂未收斂則停、攤給人
   KEY:實質收斂 early-exit(2026-07-07 Landmark 實戰調參)——連K輪 caught 無 blocker/major 且新 findings 全為文件精度級 minor → 編排者可提前攤牌請人裁「實質收斂」不跑滿 cap(「你一定找得到」framing 使 G2 數字枯竭壓不到底的誠實出口;僅手動 loop,自主 loop 走 unconverged requeue)
   KEY:派工模板權威=skills/lumos-design-loop/templates.md(6角色 dispatch prompt+編排者判讀規則,Landmark 實戰抽取;SKILL 內嵌 framing 是摘要,漂移以模板為準)
-  KEY:平行 panel 模式(2026-07-09,≤3輪壓縮,見 [[loop三輪壓縮_計劃]])——買獨立廣度非相關深度:一輪平行 W 個多樣審計員(tier→panel_width);收斂判準改結構信號(輪有效∧存活max≤minor∧capture-recapture殘餘<門檻,無counts=fail-closed)取代 K-streak∧G2 序列;`loop status --gate --panel`;混用守衛防 None phantom 輪;legacy(無--panel)完全不變
+  KEY:平行 panel 模式(2026-07-09,≤3輪壓縮,見 [[loop三輪壓縮_計劃]])——買獨立廣度非相關深度:一輪平行 W 個多樣審計員(tier→panel_width);收斂判準改結構信號(無-cluster 三條合取:輪有效∧存活max≤minor∧capture-recapture殘餘<門檻,無counts=fail-closed;M2 cluster 帳=兩條合取,詳[[Systems/loop-convergence-recording]])取代 K-streak∧G2 序列;`loop status --gate --panel`;混用守衛防 None phantom 輪;legacy(無--panel)完全不變
   DEP:lumos canary record --loop/--severity｜lumos loop status --need(Component A 原語)｜skills/lumos-design-loop/SKILL.md
   TEST:Component A 原語有 test_lumos.py 覆蓋;B 是 skill 非 code,以 design-loop 自跑收斂為驗證
   VERIFY:[[Verification/2026-06-19_design-loop]]
@@ -75,7 +75,7 @@ decisions:
 日報 2026-06-18 gap:「內迴圈派 Sonnet 當審計員,卻從沒檢查它這一輪到底有沒有在認真抓。」suggestion 借 Codex『驗收要比迴圈本身可靠』:每輪審計先偷塞一個已知假錯(canary),看審計員抓不抓得到,抓不到代表這輪審計失靈、回報的「乾淨」作廢重跑。此 gap 直接催生 Component A(`canary record` 原語)與 Component B(本 skill,把 canary-護的對抗審計 loop 編排成標準路徑)。
 
 ## 定位:Component A / B 分工
-- **Component A**(`docs/design/2026-06-19-convergence-recording.md`):lumos 出**原語** —— `lumos canary record --loop/--severity`(寫 `.canary-log.jsonl`)+ `lumos loop status --need`(讀 log 算收斂)。有 `test_lumos.py` 覆蓋。
+- **Component A**(`docs/design/2026-06-19-convergence-recording.md`(唯讀歷史)):lumos 出**原語** —— `lumos canary record --loop/--severity`(寫 `.canary-log.jsonl`)+ `lumos loop status --need`(讀 log 算收斂)。有 `test_lumos.py` 覆蓋。
 - **Component B**(本節點 = 本 skill):Claude 的**編排層** —— 用 Agent tool 派審計員、判讀、修 spec。**lumos 不 spawn agent**;Claude 照 SKILL.md 跑程序。
 
 ## 每一輪的程序(SKILL.md §「每一輪」)
@@ -103,7 +103,7 @@ decisions:
 
 ## 相關
 - 設計稿(B):`docs/design/2026-06-19-design-loop-skill.md`(design-loop 收斂,5 輪、0 漏抓,severity 單調 blocker→blocker→major→minor→clean)。
-- 設計稿(A 原語):`docs/design/2026-06-19-convergence-recording.md`。
+- 設計稿(A 原語):`docs/design/2026-06-19-convergence-recording.md`(唯讀歷史)。
 - 設計稿(辯方 refute 後續):`docs/design/` finding-refute(3 輪自動收斂)。
 - 實作落點:`skills/lumos-design-loop/SKILL.md`(B);`scripts/lumos` `cmd_canary` + `cmd_loop_status`(A 原語)。
 - 衍生:`docs/superpowers/plans/2026-06-20-autonomous-iteration-loop.md`(自主迭代 loop 跨輪 headless 跑 design-loop)。

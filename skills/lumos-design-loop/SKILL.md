@@ -1,6 +1,6 @@
 ---
 name: lumos-design-loop
-description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨 agent 一輪輪對抗審計、每輪偷植 canary 驗審計員有沒有放水、修到 lumos loop status 收斂(連 2 輪 caught 且無 blocker/major)才放行實作。對齊「收斂=進實作綠燈」。trivial 改動(typo/一行/純機械)可跳並註明。觸發詞:設計審完了沒、spec 進實作前、loop 打磨、design loop、審計到收斂。
+description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨 agent 一輪輪對抗審計、每輪偷植 canary 驗審計員有沒有放水、修到 lumos loop status --gate 收斂才放行實作(判準依模式:legacy 連2輪/panel 一乾淨輪/light 單席/settle 清單全結清)。對齊「收斂=進實作綠燈」。trivial 改動(typo/一行/純機械)可跳並註明。觸發詞:設計審完了沒、spec 進實作前、loop 打磨、design loop、審計到收斂。
 ---
 
 # lumos-design-loop:canary-護的設計審計 loop(進實作前的硬閘)
@@ -11,7 +11,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 ## 何時用 / 何時跳
 - **用**:brainstorming 產出 spec/設計 doc 後、進 writing-plans/實作**前**。對象=設計/spec 的對抗審計(非圖譜自足性審計)。
-- **硬閘(紀律強制,非技術鎖)**:`lumos loop status <id> --need 2 --gate --spec <計劃節點.md 路徑> --repo <repo根>` 回 exit 0(GATE PASS:K-streak ∧ G1 引用座標 ∧ G2 發現枯竭)前**不得進實作**。lumos 擋不住「不跑就實作」——靠你記得調用 + 誠實。**高風險 spec(金流/對外寄送/prod 不可逆/守衛面)建議 `--need 3`,或改用 settle 結清模式**(`--gate --settle <JSON 清單檔>`:spec 硬合約逐條拆清單、全結清才收斂——存在證明取代數輪;opt-in、v1 只接 legacy 手動 loop、與 --panel/--light/--need/--min-seats 互斥,設計與清單 schema 見圖譜 [[結清式收斂_計劃]];2026-07-28 落地)。手動 loop 無機械分級,靠你自判。
+- **硬閘(紀律強制,非技術鎖)**:`lumos loop status <id> --need 2 --gate --spec <計劃節點.md 路徑> --repo <repo根>` 回 exit 0(GATE PASS:K-streak ∧ G1 引用座標 ∧ G2 發現枯竭)前**不得進實作**。lumos 擋不住「不跑就實作」——靠你記得調用 + 誠實。**高風險 spec(金流/對外寄送/prod 不可逆/守衛面)建議 `--need 3`,或改用 settle 結清模式**(`--gate --spec <計劃節點> --settle <JSON 清單檔>`(--spec 必填,缺=rc2):spec 硬合約逐條拆清單、全結清才收斂——存在證明取代數輪;opt-in、v1 只接 legacy 手動 loop、與 --panel/--light/--need/--min-seats 互斥,設計與清單 schema 見圖譜 [[結清式收斂_計劃]];2026-07-28 落地)。手動 loop 無機械分級,靠你自判。
 - **trivial 可跳**:改 typo / 一行 / 純機械(rename、補欄位、連結修復)→ 跳 loop,但**寫一句為什麼跳**(commit message)。
 - **light 檔(輕量路徑,小而不 trivial 的 spec)**:補「trivial 完全跳過」與「standard 完整 panel」中間的缺檔——小 spec(加個小 flag / 改個非金流小邏輯)便宜審。**進場兩道**:① **硬否決**(命中任一即**不給 light**、走完整 loop):碰金流/對外寄送/prod 不可逆/守衛面(risk-tiered 四類)、動到 ★INVARIANT★ 硬合約、或改動體積偏大;② 以上全沒中 + 體積小(**先驗暫用值:預估實作改動 ≲50 行且孤立——SDD 生態經驗值,2026-07-21 外審吸收;replay 校準後以數據值取代**)→ 走 light。忘了判 → **預設走完整 loop(fail-safe,永不更少)**。⚠ **M0 的硬否決靠你自核(honor-system),不比你誠實更可靠——M1 才機械化成 filter,別當它已自動擋**。跑什麼見下方〈light 檔〉。設計脈絡見圖譜 [[design-loop輕量檔_計劃]]。
 - **★真相入口(2026-07-21 收編,見 [[全盤外審2026-07_調研]] finding 1)★**:被審 spec 的**唯一可寫真檔=圖譜計劃節點**(`docs/{project}-knowledge/Projects/<主題>_計劃.md`)——與 CLAUDE.md「計劃/設計也歸圖譜」對齊。**`docs/design/` 已降唯讀歷史,不再新增、不再折入**(舊 loop 的 docs/design 檔保留供考古)。loop 全程:工作副本從計劃節點複製、折入只回寫計劃節點、gate `--spec` 指計劃節點路徑。
@@ -19,7 +19,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 ## 每一輪(照做)
 
-1. **複製**計劃節點檔 → 工作副本 `/tmp/<id>-rN.md`。**N/型別/席數/記帳模板一律問 `lumos loop next <id> [--tier ..] [--spec ..]`**(M1包 2026-07-21:帳本吐唯一下一動作,不靠記憶手算;phase=escalate 表 light 已 ratchet 須升級、gate-pending 表資訊不足補參數)。**同時 `sha256sum <計劃節點>` 留存本輪 reviewed hash**(記帳 `--reviewed` 用——雙 hash 鏈的派工快照)。
+1. **複製**計劃節點檔 → 工作副本 `/tmp/<id>-rN.md`。**N/型別/席數/記帳模板一律問 `lumos loop next <id> [--tier ..] [--spec ..]`**(⚠ **settle loop 例外**:loop next 認不得 settle、會照 K-streak 誤報——settle loop 勿用 loop next,直接問 gate;結清式收斂 v1 已知限制)(M1包 2026-07-21:帳本吐唯一下一動作,不靠記憶手算;phase=escalate 表 light 已 ratchet 須升級、gate-pending 表資訊不足補參數)。**同時 `sha256sum <計劃節點>` 留存本輪 reviewed hash**(記帳 `--reviewed` 用——雙 hash 鏈的派工快照)。
 2. **植一個 canary**(只進工作副本,**真檔永不含**):additive、**類型由 N 決定** `清單[(N−1) mod 4]`:
    - (a) 壞 §/章節交叉引用(指向不存在的 §N)
    - (b) 未定義旗標 `--xxx`(引入卻不在任何指令/簽名)

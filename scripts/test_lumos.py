@@ -10364,7 +10364,7 @@ def t_lintcheck_cli():
 
 def t_pitfalls_stack_questions():
     """棧別效能追問(pitfalls棧別效能追問_計劃 T1):diff 命中 kt/cs/vue/sql 檔 →
-    manifest 附該棧效能三問;測試檔/未收錄棧不附;--json 帶 stack_questions 欄。"""
+    manifest 附該棧效能檢核問(數量守衛見斷言);測試檔/未收錄棧不附;--json 帶 stack_questions 欄。"""
     import json as _json
     import subprocess as _sp
     import tempfile
