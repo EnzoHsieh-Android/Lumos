@@ -2862,6 +2862,110 @@ def t_canary_loop_fields():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_settle_gate():
+    """settle 收斂閘([S1] 結清式收斂_計劃):清單全結清∧G1∧G3;rc2 互斥/前置群;
+    貶值三態(missed/空 auditor/懸空輪)fail-closed;條目 spec_sha 過期 rc1;壞行 rc2 全檔。"""
+    import hashlib
+    import json as _j
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-settle-"))
+    vault = root / "docs" / "kg"
+    (vault / "MOC").mkdir(parents=True)
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
+    log = root / "docs" / ".canary-log.jsonl"
+    spec = root / "spec.md"
+    spec.write_text("# spec\n", encoding="utf-8")
+    sha = hashlib.sha256(spec.read_bytes()).hexdigest()
+    lst = root / "settle.json"
+
+    def rec(kind, auditor="sonnet", result=None):
+        d = {"ts": "t", "kind": kind, "token": "x", "loop": "S"}
+        if auditor is not None:
+            d["auditor"] = auditor
+        if result:
+            d["reviewed_sha256"] = result
+            d["result_sha256"] = result
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(_j.dumps(d) + "\n")
+
+    def wl(entries):
+        lst.write_text(_j.dumps({"entries": entries}), encoding="utf-8")
+
+    def e(eid, kind, status, rnd=None, esha=None):
+        d = {"id": eid, "kind": kind, "claim": "c", "status": status, "spec_sha": esha or sha}
+        if rnd is not None:
+            d["verified_in_round"] = rnd
+        return d
+
+    G = ["loop", "status", "S", "--settle", str(lst), "--gate", "--spec", str(spec), "--repo", str(root)]
+    try:
+        r = run(vault, "loop", "status", "S", "--settle", str(lst), "--gate", "--spec", str(spec), "--panel")
+        check("settle×panel rc2", r.returncode == 2, r.stderr)
+        r = run(vault, "loop", "status", "S", "--settle", str(lst), "--gate", "--spec", str(spec), "--light")
+        check("settle×light rc2", r.returncode == 2, r.stderr)
+        r = run(vault, "loop", "status", "S", "--settle", str(lst), "--gate", "--spec", str(spec), "--need", "2")
+        check("settle×顯式 need rc2", r.returncode == 2, r.stderr)
+        r = run(vault, "loop", "status", "S", "--settle", str(lst), "--gate", "--spec", str(spec), "--min-seats", "1")
+        check("settle×min-seats rc2", r.returncode == 2, r.stderr)
+        r = run(vault, "loop", "status", "S", "--settle", str(lst), "--spec", str(spec))
+        check("settle 無 --gate rc2", r.returncode == 2, r.stderr)
+        r = run(vault, "loop", "status", "S", "--settle", str(lst), "--gate")
+        check("settle 無 --spec rc2", r.returncode == 2, r.stderr)
+        r = run(vault, *G)
+        check("清單檔不存在 rc2", r.returncode == 2, r.stderr)
+        lst.write_text("{bad", encoding="utf-8")
+        r = run(vault, *G)
+        check("清單壞 JSON rc2", r.returncode == 2, r.stderr)
+        wl([])
+        r = run(vault, *G)
+        check("零條目 rc2(vacuous pass 拒收)", r.returncode == 2, r.stderr)
+        wl([e("1", "semantic", "llm-ok")])
+        r = run(vault, *G)
+        check("llm-ok 缺 verified_in_round rc2", r.returncode == 2, r.stderr)
+        rec("caught", result=sha)                        # r1(caught,有 auditor)
+        wl([e("1", "mech", "mech-ok"), e("2", "semantic", "llm-ok", rnd=1)])
+        r = run(vault, *G)
+        check("全結清+G1+G3(語意直跳 llm-ok 合法) → rc0", r.returncode == 0 and "SETTLE GATE PASS" in r.stdout,
+              r.stdout + r.stderr)
+        wl([e("1", "semantic", "mech-ok")])
+        r = run(vault, *G)
+        check("語意條停 mech-ok(終態規則) → rc1", r.returncode == 1, r.stdout)
+        wl([e("1", "mech", "mech-ok"), e("2", "mech", "unverified")])
+        r = run(vault, *G)
+        check("任一 unverified → rc1", r.returncode == 1, r.stdout)
+        rec("missed", result=sha)                        # r2(missed)
+        wl([e("1", "semantic", "llm-ok", rnd=2)])
+        r = run(vault, *G)
+        check("missed 輪 llm-ok 貶值 → rc1", r.returncode == 1, r.stdout)
+        rec("caught", auditor=None, result=sha)          # r3(caught 但空 auditor)
+        wl([e("1", "semantic", "llm-ok", rnd=3)])
+        r = run(vault, *G)
+        check("caught 無 auditor 視同 missed 貶值 → rc1", r.returncode == 1, r.stdout)
+        wl([e("1", "semantic", "llm-ok", rnd=99)])
+        r = run(vault, *G)
+        check("懸空輪 fail-closed → rc1", r.returncode == 1, r.stdout)
+        wl([e("1", "mech", "mech-ok", esha="0" * 64)])
+        r = run(vault, *G)
+        check("條目 spec_sha 過期 → rc1", r.returncode == 1, r.stdout)
+        spec.write_text("# spec v2\n", encoding="utf-8")     # off-fold 改版:末筆 result 停在舊 sha
+        sha2 = hashlib.sha256(spec.read_bytes()).hexdigest()
+        wl([e("1", "mech", "mech-ok", esha=sha2)])
+        r = run(vault, *G)
+        check("G3 末筆 result≠現檔 → rc1", r.returncode == 1, r.stdout)
+        r = run(vault, "loop", "status", "S2", "--settle", str(lst), "--gate", "--spec", str(spec),
+                "--repo", str(root))
+        check("零 record → G3 fail rc1", r.returncode == 1, r.stdout)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("{broken\n")
+        r = run(vault, *G)
+        check("log 壞行 → rc2 fail-closed(全檔半徑)", r.returncode == 2, r.stderr)
+        r = run(vault, "loop", "status", "S")
+        check("迴歸:不帶 --settle legacy 容忍壞行(行為不變)", r.returncode in (0, 1), r.stderr)
+    finally:
+        shutil.rmtree(root)
+    print("  ✓ t_settle_gate")
+
+
 def t_loop_status():
     import json as _j
     import shutil

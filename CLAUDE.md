@@ -74,7 +74,7 @@ KEY:★CHECKPOINT★   <改了難救:部署測試機>                          #
 | **排查 / 對外支援 / 查 DB / 呼叫既有 API**（動手前要懂為什麼 / 邊界 / 合約）→ **先查圖譜再下 code/DB** | **`lumos-project-notes`**（先 `lumos search`→`context`→`contracts`）|
 | 讀圖譜 / 寫筆記 / 巡檢 / 綁合約測試（★INVARIANT★→[test:]）/ 動 `docs/lumos-toolchain-knowledge/` | **`lumos-project-notes`** |
 | 跨專案共用業務規則（升格核心 / `core_refs` / 偏離 / 動 `core-knowledge`） | **`lumos-core-knowledge`** |
-| **設計 spec 完成 → 進實作前**：把設計過 canary-護的對抗審計 loop 到 `lumos loop status <id> --gate` 收斂才進實作（trivial 改動可跳並註明；spec 高風險建議 `--need 3`）。設計/計劃寫成圖譜計劃節點（`Projects/<主題>_計劃`） | **`lumos-design-loop`** |
+| **設計 spec 完成 → 進實作前**：把設計過 canary-護的對抗審計 loop 到 `lumos loop status <id> --gate` 收斂才進實作（trivial 改動可跳並註明；spec 高風險建議 `--need 3` 或 settle 結清模式 `--settle`）。設計/計劃寫成圖譜計劃節點（`Projects/<主題>_計劃`） | **`lumos-design-loop`** |
 | **分支終審前**：`lumos pitfalls --diff <merge-base>..HEAD` 輸出尾行 `tier: high|standard`；`tier: high` → 調用 **`lumos-code-loop`** skill 做對抗代碼審（user-scope skill，每機裝一次；未裝則退回單 reviewer 並提示裝）。專案配 `.lumos/lint.json` 則 `--diff` 自動吃社群 linter（SARIF），命中併進 manifest；無宣告則 regex-only 不變。**pre-push hook 單點把關（blocking）**：tier=high 且無有效 pass/skip 留痕 → rc1 **硬擋 push**；提示三路（跑 `lumos-code-loop` / `lumos code-loop skip --note` / `git push --no-verify`）。（2026-07-06 ADR：撤除每回合 Stop nag——太擾民；push 才是把關時點）。**loop status 收斂後必須 `lumos code-loop pass --note "<理由>"` 記留痕才能 push** | — |
 
 > 圖譜讀寫工具是 **lumos**（`scripts/lumos`，python3 零依賴；細節見 `lumos-project-notes` skill）。`lumos-*` 是 **user-scope skills**（唯一源在 `lumos-toolchain` repo、symlink 進 `~/.claude/skills/`，不在本 repo）——每台機器首次裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill（如 vue / csharp）見文末〈架構參考 Skills〉。

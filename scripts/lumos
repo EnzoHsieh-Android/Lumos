@@ -2864,7 +2864,107 @@ def _cost_summary(rounds):
     return out
 
 
-def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None):
+def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
+    """settle 收斂閘([S1] 結清式收斂_計劃,2026-07-28):清單全結清 ∧ G1 refcheck ∧ G3(末筆 result=現檔)。
+    K-streak/G2 由「逐條存在證明」取代(G2 印 advisory 不進合取)。
+    caught 輪定義收緊:kind=caught ∧ auditor 非空;否則視同 missed(貶值 llm-ok)。
+    fail-closed 族:log 壞行=rc2(及於整個共用檔——壞行無法歸屬 loop);清單檔不可讀/格式非法/
+    零條目/llm-ok 缺 verified_in_round=rc2;懸空輪/非 caught 輪的 llm-ok=貶值視同未結清。
+    清單檔=JSON {"entries":[{id,kind:mech|semantic,claim,status,verified_in_round?,spec_sha}]}
+    (零依賴家規:JSON 非 YAML——stdlib 可解)。"""
+    import json
+    if n_badlines:
+        print(f"ERROR: canary-log 含 {n_badlines} 行不可解析——settle 輪鍵=append 序,壞行使序號位移,"
+              "fail-closed 及於整個共用檔(修復或歸檔壞行後重跑)", file=sys.stderr)
+        return 2
+    try:
+        data = json.loads(Path(settle_path).read_text(encoding="utf-8-sig"))
+    except OSError as e:
+        print(f"ERROR: 讀不到 --settle 清單檔 {settle_path}: {e}", file=sys.stderr)
+        return 2
+    except ValueError as e:
+        print(f"ERROR: --settle 清單檔非合法 JSON: {e}", file=sys.stderr)
+        return 2
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, list) or not entries:
+        print("ERROR: 清單需 {\"entries\":[...]} 且至少 1 條——零條目全結清恆真=零證明,拒收",
+              file=sys.stderr)
+        return 2
+    for i, e in enumerate(entries, 1):
+        if not isinstance(e, dict) or not all(k in e for k in ("id", "kind", "status", "spec_sha")):
+            print(f"ERROR: 條目 #{i} 缺必要欄(id/kind/status/spec_sha)", file=sys.stderr)
+            return 2
+        if e["kind"] not in ("mech", "semantic") or e["status"] not in ("unverified", "mech-ok", "llm-ok"):
+            print(f"ERROR: 條目 {e.get('id')} kind/status 非法(kind=mech|semantic,"
+                  "status=unverified|mech-ok|llm-ok)", file=sys.stderr)
+            return 2
+        if e["status"] == "llm-ok" and not isinstance(e.get("verified_in_round"), int):
+            print(f"ERROR: 條目 {e.get('id')} llm-ok 缺 verified_in_round(int)——空席背書洞,schema 強制",
+                  file=sys.stderr)
+            return 2
+    repo_root = _anchor_repo_root(repo)
+    if repo_root is None:
+        return 2
+    try:
+        cur_sha = _sha256_file(spec)
+        text = Path(spec).read_text(encoding="utf-8-sig")
+    except OSError as e:
+        print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+        return 2
+    fails = []
+    # caught 輪(收緊定義):kind=caught ∧ auditor 非空;輪鍵=append 序(1-based)
+    def is_caught_round(n):
+        if not (1 <= n <= len(rounds)):
+            return False   # 懸空輪 fail-closed
+        r = rounds[n - 1]
+        return r.get("kind") == "caught" and bool(r.get("auditor"))
+    unsettled = []
+    for e in entries:
+        status = e["status"]
+        why = None
+        if status == "llm-ok" and not is_caught_round(e["verified_in_round"]):
+            status, why = "unverified", f"貶值(第 {e['verified_in_round']} 輪非 caught/懸空/空席)"
+        if e["spec_sha"] != cur_sha:
+            why = "spec_sha 過期(spec 已改版,重拆或確認重蓋)"
+        elif status == "unverified" or (e["kind"] == "semantic" and status != "llm-ok"):
+            why = why or ("語意條停 " + status + "(須 llm-ok 才結清)" if status != "unverified" else "未查證")
+        if why:
+            unsettled.append((e["id"], why))
+    if unsettled:
+        print(f"[settle] 清單全結清: ✗ — {len(unsettled)}/{len(entries)} 條未結清")
+        for eid, why in unsettled:
+            print(f"    {eid}: {why}")
+        fails.append("清單未結清")
+    else:
+        print(f"[settle] 清單全結清: ✓ — {len(entries)} 條(mech-ok/llm-ok 依 kind 各就終態)")
+    claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
+    bad = [c for c in claims if c["status"] in ("missing", "line_out_of_range")]
+    if bad:
+        print(f"[settle] G1 refcheck: ✗ — {len(bad)} 條壞宣稱")
+        fails.append("G1")
+    else:
+        print(f"[settle] G1 refcheck: ✓ — {len(claims)} 條宣稱全 ok")
+    last = rounds[-1] if rounds else None
+    if last is None:
+        print("[settle] G3 末筆對齊: ✗ — settle 帳零 record(fail-closed)")
+        fails.append("G3")
+    elif last.get("result_sha256") != cur_sha:
+        print("[settle] G3 末筆對齊: ✗ — 末筆 result hash≠當前 spec(缺欄同 ✗;off-fold 改版後請重審一輪)")
+        fails.append("G3")
+    else:
+        print("[settle] G3 末筆對齊: ✓")
+    fs = [r.get("findings") for r in rounds[-3:]]
+    print(f"[settle] G2(advisory,不進合取): findings 近況={fs}")
+    for i, r in enumerate(rounds, 1):
+        print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
+    if fails:
+        print(f"⛔ SETTLE GATE FAIL ({loop_id}: {'/'.join(fails)})")
+        return 1
+    print(f"✅ SETTLE GATE PASS ({loop_id}: 清單全結清 ∧ G1 ∧ G3)")
+    return 0
+
+
+def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None):
     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
     findings 數的源頭仍是 LLM 裁決——gate 機械化的是算術,不是數字的正確性(見設計 doc)。
@@ -2876,12 +2976,34 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
     if light and panel:
         print("ERROR: --light 與 --panel 互斥(light=單席 legacy 格式;三模式各自一條路)", file=sys.stderr)
         return 2
+    explicit_need = need is not None
+    if need is None:
+        need = 2
+    if settle is not None:
+        # [S1] rc2 互斥/前置群(fail-closed;結清式收斂_計劃 2026-07-28)
+        if panel or light:
+            print("ERROR: --settle 與 --panel/--light 互斥(v1 只接 legacy 路徑)", file=sys.stderr)
+            return 2
+        if explicit_need:
+            print("ERROR: --settle 不數輪,顯式 --need 無意義(靜默忽略會誤導)——拿掉 --need", file=sys.stderr)
+            return 2
+        if min_seats is not None:
+            print("ERROR: --settle 與 --min-seats 併用 rc2(該檢查定義在 need 窗上,settle 拔窗後無定義域;"
+                  "auditor 非空職能由 caught 定義收緊承接)", file=sys.stderr)
+            return 2
+        if not gate:
+            print("ERROR: --settle 需 --gate(fail-closed)", file=sys.stderr)
+            return 2
+        if spec is None:
+            print("ERROR: --settle 需 --spec(條目 spec_sha 與 G3 皆比對現檔,無對象不可判)", file=sys.stderr)
+            return 2
     if min_seats is not None and min_seats < 1:
         print(f"ERROR: --min-seats 需正整數,收到 {min_seats}(負/零=門檻失義;code-loop r2 折入)", file=sys.stderr)
         return 2
     need = max(1, need)
     path = env.vault.parent / ".canary-log.jsonl"
     rounds = []
+    n_badlines = 0
     try:
         if path.exists():
             for line in path.read_text(encoding="utf-8").splitlines():
@@ -2891,6 +3013,7 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
                 try:
                     d = json.loads(line)
                 except ValueError:
+                    n_badlines += 1   # settle fail-closed 用;legacy/panel 維持容忍(行為不變)
                     continue
                 if d.get("loop") == loop_id:
                     rounds.append(d)
@@ -2910,6 +3033,8 @@ def cmd_loop_status(env, loop_id, need=2, gate=False, spec=None, repo=None, pane
         print("ERROR: canary-log 含 round 欄(panel 記錄)卻未加 --panel——拒絕靜默把一輪 W 筆當 W 輪",
               file=sys.stderr)
         return 2
+    if settle is not None:
+        return _loop_status_settle(rounds, n_badlines, loop_id, settle, spec, repo)
     if panel:
         try:
             return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec)
@@ -10019,7 +10144,7 @@ def main():
     lsub = lp.add_subparsers(dest="lcmd", required=True)
     ls = lsub.add_parser("status", help="算某 loop 收斂:連 K 輪 caught 且無 blocker/major")
     ls.add_argument("loop_id")
-    ls.add_argument("--need", type=int, default=2, help="連續乾淨輪數 K(預設 2)")
+    ls.add_argument("--need", type=int, default=None, help="連續乾淨輪數 K(預設 2;--settle 下禁用)")
     ls.add_argument("--gate", action="store_true",
                     help="證據閘:K-streak(必要)∧ G1 refcheck 引用座標 ∧ G2 發現枯竭,全過才 rc 0")
     ls.add_argument("--spec", dest="gate_spec", help="--gate 必填:要核對引用座標的最終 spec md")
@@ -10028,6 +10153,9 @@ def main():
                     help="平行 panel 模式:按 round-id 分組。無-cluster 舊帳=三條合取(輪有效∧存活max≤minor∧capture-recapture殘餘,fail-closed);cluster 帳(M2,首個有效輪帶 --clusters 定錨)=兩條合取(輪有效∧fold後無disputed-major),新生cluster/capture-recapture 降 advisory。--gate 對 panel 為相容 no-op(panel 判準恆生效)")
     ls.add_argument("--light", action="store_true",
                     help="M1包 light K=1 謂詞:單席 caught∧max≤minor∧欄位互證∧hash 雙欄(強制 fail-closed);ratchet=任一 caught 輪≥major 永久 FAIL;與 --panel 互斥;需 --spec")
+    ls.add_argument("--settle", metavar="清單檔",
+                    help="結清模式(opt-in,v1 只接 legacy):JSON 約束清單,全結清∧G1∧G3 才收斂;"
+                         "與 --panel/--light/--need/--min-seats 互斥,需 --gate+--spec")
     ls.add_argument("--min-seats", type=int, dest="min_seats",
                     help="M1包 席數下限:判定輪相異 auditor 數<N 即 FAIL(同席重複 append 不計;不帶=行為不變)")
     ln = lsub.add_parser("next", help="M1包 機械脊椎:帳本吐唯一下一動作(phase/輪數/canary 型別/席數/記帳模板);唯讀指針,不 spawn agent")
@@ -10469,7 +10597,8 @@ def main():
         if args.lcmd == "status":
             return cmd_loop_status(env, args.loop_id, args.need,
                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
-                                   panel=args.panel, light=args.light, min_seats=args.min_seats)
+                                   panel=args.panel, light=args.light, min_seats=args.min_seats,
+                                   settle=args.settle)
         if args.lcmd == "next":
             return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json,
                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)
