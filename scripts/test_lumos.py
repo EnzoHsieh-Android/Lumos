@@ -2980,6 +2980,103 @@ def t_loop_verify_progress():
     print("  ✓ t_loop_verify_progress")
 
 
+def t_graph_pagerank():
+    """[S1] 中心性 helper(中心性重驗排程_計劃):dangling 均攤/孤兒基礎分/moc 排除(含對照跑法)/ghost 不炸。"""
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-pr-"))
+    vault = root / "docs" / "kg"
+    for d in ("Systems", "MOC"):
+        (vault / d).mkdir(parents=True)
+
+    def w(rel, typ, body=""):
+        (vault / rel).parent.mkdir(parents=True, exist_ok=True)
+        (vault / rel).write_text(f"---\ntype: {typ}\n---\n# x\n{body}\n", encoding="utf-8")
+
+    w("Systems/A.md", "system", "[[Systems/B]] [[Systems/Ghost不存在]]")
+    w("Systems/B.md", "system", "[[Systems/C]]")
+    w("Systems/C.md", "system")                       # dangling(無出邊)
+    w("Systems/D.md", "system")                       # 孤兒
+    w("MOC/M.md", "moc", "[[Systems/A]] [[Systems/B]] [[Systems/C]] [[Systems/D]]")
+    try:
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader("lumos_mod", GRAPHCTL)
+        spec_ = importlib.util.spec_from_loader("lumos_mod", loader)
+        mod = importlib.util.module_from_spec(spec_)
+        loader.exec_module(mod)
+        env = mod.Env(vault)
+        pr = mod._graph_pagerank(env)
+        check("moc 不進節點集", "MOC/M.md" not in pr, str(pr))
+        check("鏈尾 C 分最高(A→B→C)", pr["Systems/C.md"] > pr["Systems/B.md"] > pr["Systems/A.md"], str(pr))
+        check("孤兒 D 基礎分>0", pr["Systems/D.md"] > 0, str(pr))
+        check("總質量守恆≈1(dangling 均攤)", abs(sum(pr.values()) - 1.0) < 1e-4, str(sum(pr.values())))
+        # 對照跑法:moc 改標 system → M 高中心(入鏈 0 出鏈 4...M 無入鏈,改驗排除邏輯本身)
+        w("MOC/M.md", "system", "[[Systems/A]] [[Systems/B]] [[Systems/C]] [[Systems/D]]")
+        env2 = mod.Env(vault)
+        pr2 = mod._graph_pagerank(env2)
+        check("對照:改標 system 即進節點集且改變分布", "MOC/M.md" in pr2 and abs(pr2["Systems/C.md"] - pr["Systems/C.md"]) > 1e-9, str(pr2))
+    finally:
+        shutil.rmtree(root)
+    print("  ✓ t_graph_pagerank")
+
+
+def t_stale_central():
+    """[S2][S3] 風險排序(中心性重驗排程_計劃):有鏈組 risk=Hazen百分位×(1+log1p(days));
+    無鏈組後置純天數;0 天不沉底;fallback 鏈+三層全缺剔除警示;--legacy 字母序;related 不誤收。"""
+    import json as _j
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-sc-"))
+    vault = root / "docs" / "kg"
+    (vault / "Systems").mkdir(parents=True)
+    (vault / "Verification").mkdir(parents=True)
+
+    def w(rel, fm, body=""):
+        (vault / rel).write_text("---\n" + fm + "\n---\n# x\n" + body + "\n", encoding="utf-8")
+
+    # Hub S1(3 入鏈) vs 冷門 S2(0 入鏈)
+    w("Systems/S1.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Verification/2026-07-18_v1]]\"\n  - \"[[Verification/2026-07-08_v4]]\"")
+    w("Systems/S2.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Verification/2026-07-08_v2]]\"", "[[Systems/S1]]")
+    w("Systems/S3.md", "type: system\nstatus: done", "[[Systems/S1]] [[Systems/S1]]")
+    w("Systems/S4.md", "type: system\nstatus: done", "[[Systems/S1]]")
+    # V1:stale,對象 S1(hub),10 天;V2:stale,對象 S2(冷),20 天(更舊)
+    w("Verification/2026-07-18_v1.md", "type: verification\nstatus: stale\ndate: 2026-07-18")
+    w("Verification/2026-07-08_v2.md", "type: verification\nstatus: stale\ndate: 2026-07-08")
+    # V3:stale,無對象,最舊(無鏈組)
+    w("Verification/2026-07-01_v3.md", "type: verification\nstatus: stale\ndate: 2026-07-01")
+    # V4:stale,對象 S1,0 天(今天)——不得沉底
+    import datetime
+    today = datetime.date.today().isoformat()
+    w("Verification/2026-07-08_v4.md", f"type: verification\nstatus: stale\ndate: {today}")
+    # V5:stale,無 date、檔名無日期前綴、無 created → 三層全缺=剔除+警示
+    w("Verification/nodate_v5.md", "type: verification\nstatus: stale")
+    # V6:stale,S2 只用 related 指它(related 不算對象鏈)→ 無鏈組
+    w("Verification/2026-07-05_v6.md", "type: verification\nstatus: stale")
+    w("Systems/S5.md", "type: system\nstatus: done\nrelated:\n  - \"[[Verification/2026-07-05_v6]]\"", "[[Systems/S1]]")
+    try:
+        r = run(vault, "stale")
+        check("stale rc0", r.returncode == 0, r.stderr)
+        out = r.stdout
+        i1, i2 = out.find("2026-07-18_v1"), out.find("2026-07-08_v2")
+        i3, i4, i6 = out.find("2026-07-01_v3"), out.find("2026-07-08_v4"), out.find("2026-07-05_v6")
+        check("高中心 V1 排前於更舊低中心 V2", 0 <= i1 < i2, out)
+        check("0 天 V4 不沉底(有鏈組內,在無鏈組前)", 0 <= i4 < i3, out)
+        check("無鏈組後置(V3 在所有有鏈之後)", i3 > max(i1, i2, i4), out)
+        check("related 不誤收(V6 落無鏈組)", i6 > max(i1, i2, i4), out)
+        check("三層全缺剔除+警示", "nodate_v5" not in out and "nodate_v5" in r.stderr, out + r.stderr)
+        check("輸出含分位欄", "band=" in out or "組" in out, out)
+        r = run(vault, "stale", "--legacy")
+        outs = [l for l in r.stdout.splitlines() if "Verification/" in l]
+        check("--legacy 字母序", outs == sorted(outs), r.stdout)
+        # [S3] Check S 顯示序:hub S1 應排前(兩清單各自 PR 降冪;本 vault 全無 self_audit=同入 sa_missing)
+        r = run(vault, "doctor")
+        seg = r.stdout.split("Check S")[1] if "Check S" in r.stdout else r.stdout
+        j1, j2 = seg.find("Systems/S1.md"), seg.find("Systems/S2.md")
+        check("Check S:hub S1 排前於 S2(PR 重排)", 0 <= j1 < j2, seg[:600])
+    finally:
+        shutil.rmtree(root)
+    print("  ✓ t_stale_central")
+
+
 def t_settle_gate():
     """settle 收斂閘([S1] 結清式收斂_計劃):清單全結清∧G1∧G3;rc2 互斥/前置群;
     貶值三態(missed/空 auditor/懸空輪)fail-closed;條目 spec_sha 過期 rc1;壞行 rc2 全檔。"""
