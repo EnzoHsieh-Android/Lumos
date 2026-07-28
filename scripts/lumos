@@ -2864,6 +2864,128 @@ def _cost_summary(rounds):
     return out
 
 
+_COMPRESS_PIN_RE = re.compile(
+    r"★INVARIANT★|★IRREVERSIBLE★|★CHECKPOINT★|停在放行點|anchor\s*驗證|anchor\s*verify|\[PIN\]", re.I)
+_COMPRESS_EVID_RE = re.compile(r"VERIFY:|✅|\[test:|^\s*TEST:", re.I)
+_COMPRESS_OPEN_RE = re.compile(r"-\s*\[\s\]|TODO|BLOCKER|⏳|未結", re.I)
+
+
+def cmd_loop_compress(file, as_json=False):
+    """[S2] 結構化壓縮(結清式收斂_計劃,2026-07-28):長跑上下文不交通用摘要——規則式三欄:
+    壓不掉白名單(★合約/停在放行點/anchor 驗證/[PIN] 口頭約定)/已驗證證據(VERIFY:/✅/[test:)/
+    未結約束(checkbox/TODO/BLOCKER)。白名單行在輸出**必存在**(治 governance decay 殘餘面:
+    對話中途口頭約定寫成 [PIN] 行即壓不掉);無標記散文可丟。零模型、純規則,輸出走 stdout
+    (落檔權在消費者——orchestrator 自行重導)。rc0 成功/rc2 檔不可讀。"""
+    import json
+    try:
+        lines = Path(file).read_text(encoding="utf-8-sig").splitlines()
+    except OSError as e:
+        print(f"ERROR: 讀不到 {file}: {e}", file=sys.stderr)
+        return 2
+    pinned, evidence, open_items = [], [], []
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            continue
+        if _COMPRESS_PIN_RE.search(s):
+            pinned.append(s)
+        elif _COMPRESS_EVID_RE.search(s):
+            evidence.append(s)
+        elif _COMPRESS_OPEN_RE.search(s):
+            open_items.append(s)
+    if as_json:
+        print(json.dumps({"pinned": pinned, "evidence": evidence, "open": open_items,
+                          "input_lines": len(lines)}, ensure_ascii=False, indent=1))
+        return 0
+    print("# 壓縮狀態(規則式;白名單壓不掉)")
+    for title, bucket in (("壓不掉白名單", pinned), ("已驗證證據", evidence), ("未結約束", open_items)):
+        print(f"## {title}")
+        for s in bucket:
+            print(f"- {s}")
+    print(f"[compress] 輸入 {len(lines)} 行 → 保留 {len(pinned) + len(evidence) + len(open_items)} 行"
+          f"(白名單 {len(pinned)}/證據 {len(evidence)}/未結 {len(open_items)})")
+    return 0
+
+
+def cmd_loop_verify_progress(env, loop_id, settle=None, as_json=False):
+    """[S3] 獨立進度驗證器(結清式收斂_計劃,2026-07-28):看不到被審材料的覆核原語——
+    直讀 .canary-log.jsonl(+選配 settle 清單檔),**只吃結構欄位**(kind/severity/findings/
+    auditor 存在性/hash 存在性),note/--clusters 理由字串一律丟棄(LoopTrap 散文注入面隔離)。
+    fail-closed:壞行/kind 缺失=rc2。誠實天花板:結構欄位≠客觀真值(findings/severity 源頭仍是
+    LLM 裁決、帳由被驗方寫)——隔離的是散文注入,不是帳本自報。輸出=結構 JSON/純事實行,
+    供編排者對照自己的收斂認知,非 oracle。"""
+    import json
+    path = env.vault.parent / ".canary-log.jsonl"
+    rounds = []
+    try:
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    print("ERROR: canary-log 含不可解析行——驗證器 fail-closed(結構完整性破損,"
+                          "輪序不可信)", file=sys.stderr)
+                    return 2
+                if d.get("loop") == loop_id:
+                    rounds.append(d)
+    except OSError as e:
+        print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
+        return 2
+    for i, r in enumerate(rounds, 1):
+        if not isinstance(r.get("kind"), str):
+            print(f"ERROR: 第 {i} 筆 record 缺 kind——結構欄位缺失 fail-closed", file=sys.stderr)
+            return 2
+    def caught_ok(r):
+        return r.get("kind") == "caught" and bool(r.get("auditor"))
+    streak = 0
+    for r in reversed(rounds):
+        if caught_ok(r) and r.get("severity") in ("clean", "minor"):
+            streak += 1
+        else:
+            break
+    out = {
+        "loop": loop_id,
+        "rounds": len(rounds),
+        "kinds": [r.get("kind") for r in rounds],
+        "clean_streak": streak,
+        "findings_trend": [r.get("findings") for r in rounds],
+        "last": ({"kind": rounds[-1].get("kind"), "severity": rounds[-1].get("severity"),
+                  "has_result_hash": "result_sha256" in rounds[-1]} if rounds else None),
+    }
+    if settle is not None:
+        try:
+            data = json.loads(Path(settle).read_text(encoding="utf-8-sig"))
+            entries = data["entries"]
+            assert isinstance(entries, list) and entries
+        except (OSError, ValueError, KeyError, AssertionError) as e:
+            print(f"ERROR: settle 清單檔不可讀/格式非法: {e}", file=sys.stderr)
+            return 2
+        def is_caught_round(n):
+            return isinstance(n, int) and 1 <= n <= len(rounds) and caught_ok(rounds[n - 1])
+        unsettled = 0
+        for e in entries:
+            status = e.get("status")
+            if status == "llm-ok" and not is_caught_round(e.get("verified_in_round")):
+                status = "unverified"
+            if status == "unverified" or (e.get("kind") == "semantic" and status != "llm-ok"):
+                unsettled += 1
+        out["settle"] = {"total": len(entries), "unsettled": unsettled,
+                         "settled": len(entries) - unsettled}
+    if as_json:
+        print(json.dumps(out, ensure_ascii=False, indent=1, sort_keys=True))
+    else:
+        print(f"[verify-progress] loop={loop_id} rounds={out['rounds']} clean_streak={out['clean_streak']}")
+        print(f"  kinds={out['kinds']} findings={out['findings_trend']}")
+        if out["last"]:
+            print(f"  last={out['last']}")
+        if "settle" in out:
+            print(f"  settle={out['settle']}")
+    return 0
+
+
 def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
     """settle 收斂閘([S1] 結清式收斂_計劃,2026-07-28):清單全結清 ∧ G1 refcheck ∧ G3(末筆 result=現檔)。
     K-streak/G2 由「逐條存在證明」取代(G2 印 advisory 不進合取)。
@@ -10158,6 +10280,13 @@ def main():
                          "與 --panel/--light/--need/--min-seats 互斥,需 --gate+--spec")
     ls.add_argument("--min-seats", type=int, dest="min_seats",
                     help="M1包 席數下限:判定輪相異 auditor 數<N 即 FAIL(同席重複 append 不計;不帶=行為不變)")
+    lc = lsub.add_parser("compress", help="[S2] 結構化壓縮:長跑上下文規則式三欄(白名單壓不掉/證據/未結)")
+    lc.add_argument("compress_file", metavar="檔")
+    lc.add_argument("--json", dest="compress_json", action="store_true")
+    lv = lsub.add_parser("verify-progress", help="[S3] 獨立進度驗證器:直讀帳只吃結構欄位,散文注入免疫")
+    lv.add_argument("vp_loop_id", metavar="loop_id")
+    lv.add_argument("--settle", dest="vp_settle", metavar="清單檔")
+    lv.add_argument("--json", dest="vp_json", action="store_true")
     ln = lsub.add_parser("next", help="M1包 機械脊椎:帳本吐唯一下一動作(phase/輪數/canary 型別/席數/記帳模板);唯讀指針,不 spawn agent")
     ln.add_argument("loop_id")
     ln.add_argument("--tier", dest="next_tier", choices=("light", "standard", "high"),
@@ -10599,6 +10728,11 @@ def main():
                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
                                    panel=args.panel, light=args.light, min_seats=args.min_seats,
                                    settle=args.settle)
+        if args.lcmd == "compress":
+            return cmd_loop_compress(args.compress_file, as_json=args.compress_json)
+        if args.lcmd == "verify-progress":
+            return cmd_loop_verify_progress(env, args.vp_loop_id, settle=args.vp_settle,
+                                            as_json=args.vp_json)
         if args.lcmd == "next":
             return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json,
                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)

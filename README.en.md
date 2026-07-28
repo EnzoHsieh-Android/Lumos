@@ -224,6 +224,8 @@ lumos code-loop check [--json]                        # tier=high branch not yet
 lumos code-loop pass|skip --note "<reason>"          # record / escape-hatch convergence ledger (pass binds to HEAD sha; skip leaves a trail)
 lumos canary record caught|missed --loop <id> ...    # record design-loop / code-loop canary wakefulness
 lumos loop status <id> --need 2 --gate               # convergence gate (K-streak ∧ G1 ∧ G2)
+lumos loop status <id> --gate --settle <list.json>   # settle mode (all-claims-settled ∧ G1 ∧ G3)
+lumos loop compress <notes> / lumos loop verify-progress <id>   # whitelist compression / structural cross-check
 lumos fold-check <spec>                               # catch design fold-drift (mirrored sections / value drift / missing reversal)
 lumos refcheck <spec> --repo . [--json]              # mechanically verify spec→repo references (missing / line-number out of range)
 lumos impact --file <file> [--depth N] [--json]      # reverse-lookup affected graph nodes (direct + indirect) + matched incidents (pitfall_when)

@@ -4,6 +4,7 @@
 - 方法論透鏡:docs/methodology/圖譜即合約.md(技術)+ 圖譜即合約-對外論述.md
 - 既有 spec(讀來學格式 + 做覆蓋檢查):docs/design/*.md
 - scratch 工作區:__SCRATCH__/spec/(spec 寫這、design-loop 在這跑);__SCRATCH__/kg(canary vault);canary-log 在 __SCRATCH__/.canary-log.jsonl
+- 長跑上下文紀律([S2][S3],2026-07-28):scratch 筆記要壓縮時**不用通用摘要**,跑 `lumos loop compress <筆記檔>`(規則式三欄;途中口頭約定寫成 `[PIN] ...` 行=壓不掉);判收斂前跑 `lumos loop verify-progress <loop-id> --json` 對照自己的認知(只吃結構帳、散文注入免疫;它是覆核原語非 oracle)
 - design-loop 原語:python3 scripts/lumos --vault __SCRATCH__/kg canary record / loop status
 
 ## ⚠ 執行紀律(最重要,違反則本輪一律無效)
