@@ -31,6 +31,22 @@ def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
 
 
 HOOK_ENTRIES = {
+    "SessionStart": [
+        {
+            # CI 紅燈後備網(CI回流閉環_計劃 [S2b]):主路徑是 push 後同輪 lumos ci-wait,
+            # 這支只在主路徑沒跑完(session 中斷/關機)時兜底,開場推播紅燈。
+            # 總開關:專案未宣告 .lumos/config.json 的 ci 區塊即完全靜默(零侵入)。
+            # 生命週期對稱:檔名同時在 scripts/lumos 的 _GLOBAL_CLAUDE_HOOKS 白名單中,
+            # 否則註冊指向不存在的檔、下次 init 時被 _prune_dangling 剪掉(見 Issues/hook卸載殘留註冊)。
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": _hook_cmd("ci-status-hook.py"),
+                    "timeout": 15,
+                }
+            ],
+        }
+    ],
     "PreToolUse": [
         {
             # 主動影響幅度偵測:Edit/Write/MultiEdit 動手前注入 additionalContext。

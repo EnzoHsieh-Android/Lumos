@@ -2251,7 +2251,7 @@ def cmd_signoff(env, node, note, by=None):
 
 
 def cmd_gov(env, node=None, since_days=90, full=False):
-    """唯讀彙整六帳(bypass/rot-queue/governance/canary/kill/signoff)→ 治理事件時間軸。
+    """唯讀彙整七帳(bypass/rot-queue/governance/canary/kill/signoff/ci)→ 治理事件時間軸。
     本機開發可見性工具(非合規物)。L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖。
     去噪(2026-07-25,呈現層——帳本身不動):同日同類 advisory(軟/warned/無 detail,如 Check S
     每次 doctor 全名單重喊)跨 commit 折疊 ×N、同群 >6 節點收單行摘要;--full 回完整逐筆。"""
@@ -2307,6 +2307,14 @@ def cmd_gov(env, node=None, since_days=90, full=False):
                      if d.get("kind") == "second" else "")
                     + (f"loop={d['loop']} sev={d.get('severity', '?')} · " if d.get("loop") else "")
                     + (d.get("auditor", "") + " " + d.get("note", "")).strip())})
+
+    # 第 7 源:CI 回流帳(總開關——未宣告 ci 區塊即完全不 load,否則移除宣告後歷史事件仍顯示)
+    _ci_root = _anchor_repo_root(None)
+    if _ci_root and _ci_config(_ci_root)[0]:
+        load(CI_LOG_NAME, lambda d: {"ts": d.get("ts", ""), "commit": d.get("sha", ""),
+             "gate": "ci", "kind": d.get("conclusion", "?"), "hard": False, "nodes": [],
+             "token": d.get("dedup_key", ""),
+             "detail": f"{d.get('workflow', '')} {d.get('title', '')} {d.get('failed_step', '')}".strip()})
 
     rows = [r for r in rows if (r["ts"][:10] or "9999") >= cutoff]
     seen, ded = set(), []
@@ -7280,7 +7288,7 @@ def _scaffold_project(root: Path, slug: str):
     print(f"  ✓ scaffold {kg}")
 
 
-_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py")
+_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py", "ci-status-hook.py")
 # 已撤除的全域 hook：install/update 主動刪其殘留真檔(否則 _prune_dangling 因「非懸空」不剪、nag 不停)。
 # code-loop-guard.py:2026-07-06 ADR 撤除 Stop nag(見 Projects/code-loop必用守衛_計劃)。撤別的 hook 在此補。
 _RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py",)
@@ -8675,7 +8683,7 @@ def _lint_watch_mode(repo_root, as_json):
 
 _COCHANGE_DEFAULTS = {"min_support": 3, "min_confidence": 0.8, "max_changeset": 20}
 _COCHANGE_DEFAULT_EXCLUDE = [
-    "docs/.governance-log.jsonl", "docs/.bypass-log.jsonl",
+    "docs/.governance-log.jsonl", "docs/.bypass-log.jsonl", "docs/.ci-log.jsonl",
     "docs/.canary-log.jsonl", "docs/.rot-queue.jsonl", "docs/.kill-log.jsonl",
     "docs/.signoff-log.jsonl", "docs/.usage-log.jsonl",
     "**/*-lock.json", "**/*.lock", "**/node_modules/**", "**/dist/**",
@@ -9653,6 +9661,291 @@ def _testmap_affected_inner(diff, repo, as_json):
             for f in uncovered:
                 print(f"  {f}")
     return 0
+
+
+# ── CI 回流閉環(vault-free 讀寫帳;設計 [[CI回流閉環_計劃]] v1=direct only) ──────────
+
+CI_LOG_NAME = ".ci-log.jsonl"
+_CI_GREEN = ("success", "neutral", "skipped")
+_CI_RED = ("failure", "timed_out", "startup_failure")
+
+
+def _ci_config(repo_root):
+    """讀 .lumos/config.json 的 ci 區塊。回 (enabled, cfg)。
+    總開關:未宣告 ci 區塊=功能全關(行為與未安裝逐字相同);config 壞損→退「全關」(fail-safe 到零侵入)。"""
+    import json
+    path = Path(repo_root) / ".lumos" / "config.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, {}
+    ci = data.get("ci") if isinstance(data, dict) else None
+    if not isinstance(ci, dict):
+        if ci is not None:
+            print("⚠ .lumos/config.json 的 ci 非物件——CI 回流功能關閉(fail-safe)", file=sys.stderr)
+        return False, {}
+    wf = ci.get("workflow")
+    if wf is not None and not isinstance(wf, (str, list)):
+        print("⚠ ci.workflow 需字串或字串陣列——CI 回流功能關閉(fail-safe)", file=sys.stderr)
+        return False, {}
+    return True, ci
+
+
+def _ci_gh(repo_root, args, timeout=60):
+    """跑 gh(cwd=repo_root)。回 (rc, stdout, err_or_None);gh 缺席回 (None,"",訊息)。"""
+    import subprocess
+    try:
+        r = subprocess.run(["gh"] + args, cwd=str(repo_root), capture_output=True,
+                           text=True, timeout=timeout)
+    except FileNotFoundError:
+        return None, "", "gh 未安裝"
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, "", f"gh 執行失敗: {e}"
+    return r.returncode, r.stdout, (None if r.returncode == 0 else (r.stderr or "").strip()[:200])
+
+
+def _ci_list_runs(repo_root, sha, workflows):
+    """查該 sha 的 run。workflows=None→全部;字串/陣列→逐支各查一次後合併(--workflow 是單值旗標)。
+    回 (runs, err)。用 gh 原生 --commit 過濾(client-side 比對會被 gh 預設 limit 20 擠掉=假綠)。"""
+    import json
+    fields = "databaseId,attempt,status,conclusion,displayTitle,url,workflowName"
+    names = ([workflows] if isinstance(workflows, str) else list(workflows or [None]))
+    out, seen = [], set()
+    for name in names:
+        args = ["run", "list", "--commit", sha, "--json", fields, "--limit", "100"]
+        if name:
+            args += ["--workflow", name]
+        rc, so, err = _ci_gh(repo_root, args)
+        if rc is None or rc != 0:
+            return None, (err or "gh run list 失敗")
+        try:
+            rows = json.loads(so or "[]")
+        except ValueError:
+            return None, "gh 輸出非 JSON"
+        for r in rows if isinstance(rows, list) else []:
+            key = (r.get("databaseId"), r.get("attempt"))
+            if key not in seen:
+                seen.add(key)
+                out.append(r)
+    return out, None
+
+
+def _ci_failed_step(repo_root, run_id):
+    """失敗步驟名取自 jobs JSON(非 log 文字解析);多個全列以 ';' 串接。"""
+    import json
+    rc, so, _err = _ci_gh(repo_root, ["run", "view", str(run_id), "--json", "jobs"])
+    if rc is None or rc != 0:
+        return ""
+    try:
+        jobs = (json.loads(so or "{}") or {}).get("jobs") or []
+    except ValueError:
+        return ""
+    hits = []
+    for j in jobs if isinstance(jobs, list) else []:
+        for st in (j.get("steps") or []):
+            if st.get("conclusion") == "failure":
+                hits.append(f"{j.get('name', '?')}/{st.get('name', '?')}")
+    return ";".join(hits)
+
+
+def _ci_fail_log(repo_root, run_id):
+    """log 尾段:先取尾 40 行、再截 4000 字(兩上限依序)。"""
+    rc, so, _err = _ci_gh(repo_root, ["run", "view", str(run_id), "--log-failed"])
+    if rc is None or not so:
+        return ""
+    return "\n".join(so.splitlines()[-40:])[:4000]
+
+
+def _ci_log_path(env):
+    return env.vault.parent / CI_LOG_NAME
+
+
+def _ci_write(env, rec):
+    """寫帳(去重鍵 run_id:attempt:conclusion;helper 不 upsert 故應用層先掃)。回 rc。"""
+    import json
+    path = _ci_log_path(env)
+    key = rec["dedup_key"]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(d, dict) and d.get("dedup_key") == key:
+                    return 0        # 已記過,跳過(不算失敗)
+    except OSError:
+        pass
+    return _jsonl_append_verified(path, rec, "dedup_key", key)
+
+
+def cmd_ci_wait(env, timeout=600.0, repo_dir=None, sha=None, branch=None,
+                grace=30.0, as_json=False):
+    """[S1] push 後同輪等 CI 結論。綠 rc0/紅 rc1/未定·逾時·no-run·工具缺席 rc0/帳寫失敗·參數錯 rc2。"""
+    import json
+    import datetime
+    import subprocess
+    import time
+
+    def emit(verdict, runs=None, note=None, rc=0):
+        payload = {"sha": sha, "verdict": verdict, "runs": runs or []}
+        if as_json:
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            if note:
+                print(note)
+            for r in (runs or []):
+                print(f"CI {r.get('conclusion', '?'):<12} {r.get('workflow', '?')}"
+                      f" {(r.get('sha') or '')[:7]} → {r.get('url', '')}")
+            print(f"→ 判定: {verdict}")
+        return rc
+
+    root = repo_dir or _anchor_repo_root(None)
+    if root is None or not Path(root).is_dir():
+        print(f"ERROR: --repo-dir 需為存在的目錄: {repo_dir!r}", file=sys.stderr)
+        return 2
+    enabled, cfg = _ci_config(root)
+    if not enabled:
+        return emit("disabled", note="(未宣告 .lumos/config.json 的 ci 區塊,CI 回流功能關閉)")
+    def _git_out(*a):
+        try:
+            r = subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True,
+                               timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return ""        # git 缺席/逾時也 fail-open(絕不 traceback)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    if not sha:
+        sha = _git_out("rev-parse", "HEAD") or None
+    if not branch:
+        branch = _git_out("rev-parse", "--abbrev-ref", "HEAD")
+    if not sha:
+        print("ci-wait: 取不到 HEAD sha(空 repo?),跳過", file=sys.stderr)
+        return emit("unavailable")
+
+    deadline = time.time() + float(timeout)
+    graced = False
+    while True:
+        runs, err = _ci_list_runs(root, sha, cfg.get("workflow"))
+        if runs is None:
+            print(f"ci-wait: {err}(fail-open,不擋任何流程)", file=sys.stderr)
+            return emit("unavailable")
+        done = [r for r in runs if r.get("status") == "completed"]
+        red = [r for r in done if (r.get("conclusion") or "") in _CI_RED]
+        if red:                       # 任一紅即紅:立刻早退(不等其餘)
+            out = []
+            for r in red:
+                rid = r.get("databaseId")
+                out.append({"run_id": rid, "attempt": r.get("attempt", 1),
+                            "workflow": r.get("workflowName", "?"), "sha": sha,
+                            "conclusion": r.get("conclusion"), "url": r.get("url", ""),
+                            "failed_step": _ci_failed_step(root, rid),
+                            "log_tail": _ci_fail_log(root, rid)})
+            rc_w = _ci_record(env, out, sha, branch)
+            return rc_w if rc_w else emit("red", out, rc=1)
+        if runs and len(done) == len(runs):
+            if not graced:            # 全綠前再等一個 grace 期(晚註冊 run 緩解,非保證)
+                graced = True
+                time.sleep(min(float(grace), max(0.0, deadline - time.time())))
+                continue
+            out = [{"run_id": r.get("databaseId"), "attempt": r.get("attempt", 1),
+                    "workflow": r.get("workflowName", "?"), "sha": sha,
+                    "conclusion": r.get("conclusion"), "url": r.get("url", ""),
+                    "failed_step": "", "log_tail": ""} for r in done]
+            rc_w = _ci_record(env, out, sha, branch)
+            return rc_w if rc_w else emit("green", out)
+        if not runs:                  # no-run 快速路徑:grace 後仍零 → 立刻收工,不白等
+            if not graced:
+                graced = True
+                time.sleep(min(float(grace), max(0.0, deadline - time.time())))
+                continue
+            rc_w = _ci_record(env, [{"run_id": None, "attempt": 0, "workflow": "",
+                                     "sha": sha, "conclusion": "no-run", "url": "",
+                                     "failed_step": "", "log_tail": ""}], sha, branch)
+            return rc_w if rc_w else emit(
+                "no-run", note="此 sha 未觸發任何 workflow(檢查 workflow 的 branch/path 觸發條件)")
+        if time.time() >= deadline:
+            rc_w = _ci_record(env, [{"run_id": None, "attempt": 0, "workflow": "",
+                                     "sha": sha, "conclusion": "timeout-waiting", "url": "",
+                                     "failed_step": "", "log_tail": ""}], sha, branch)
+            return rc_w if rc_w else emit(
+                "timeout", note=f"逾時({timeout:.0f}s)未出結論,請手動查 gh run list")
+        time.sleep(min(15.0, max(1.0, deadline - time.time())))
+
+
+def _ci_record(env, rows, sha, branch):
+    """把結果逐筆寫帳;任一筆寫失敗即回 rc2(自驗失敗優先於紅燈)。"""
+    import datetime
+    ts = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    for r in rows:
+        rid = r.get("run_id")
+        att = r.get("attempt", 0)
+        concl = r.get("conclusion") or "?"
+        key = (f"{rid}:{att}:{concl}" if rid else f"nosha:{sha}:{concl}")
+        rec = {"ts": ts, "run_id": rid, "attempt": att, "sha": sha, "branch": branch,
+               "workflow": r.get("workflow", ""), "conclusion": concl,
+               "title": r.get("title", ""), "url": r.get("url", ""),
+               "failed_step": r.get("failed_step", ""), "dedup_key": key}
+        rc = _ci_write(env, rec)
+        if rc != 0:
+            return rc
+    return 0
+
+
+def cmd_ci_status(env, repo_dir=None, as_json=False):
+    """[S3] 唯讀查最後一次 CI 結果(不打網路,供離線與 hook)。恆 rc0。"""
+    import json
+    import datetime
+    root = repo_dir or _anchor_repo_root(None)
+    if root is None or not Path(root).is_dir():
+        print(f"ERROR: --repo-dir 需為存在的目錄: {repo_dir!r}", file=sys.stderr)
+        return 2
+    enabled, _cfg = _ci_config(root)
+    if not enabled:
+        if as_json:
+            print(json.dumps({"verdict": "disabled"}, ensure_ascii=False))
+        else:
+            print("(未宣告 ci 區塊,CI 回流功能關閉)")
+        return 0
+    last = None
+    try:
+        with open(_ci_log_path(env), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(d, dict):
+                    last = d
+    except OSError:
+        last = None
+    if last is None:
+        if as_json:
+            print(json.dumps({"verdict": "no-data"}, ensure_ascii=False))
+        else:
+            print("(尚無 CI 紀錄——先跑 lumos ci-wait)")
+        return 0
+    if as_json:
+        print(json.dumps(last, ensure_ascii=False))
+        return 0
+    stale = ""
+    try:
+        age = (datetime.datetime.now().astimezone()
+               - datetime.datetime.fromisoformat(last.get("ts", ""))).total_seconds()
+        if age > 86400:
+            stale = "  ⚠ 資料可能過期(>24h),跑 lumos ci-wait 更新"
+    except (ValueError, TypeError):
+        pass
+    print(f"CI {last.get('conclusion', '?')} {(last.get('sha') or '')[:7]}"
+          f" [{last.get('workflow', '')}] → {last.get('url', '')}"
+          f"  (檢查於 {last.get('ts', '?')}){stale}")
+    if last.get("failed_step"):
+        print(f"  失敗步驟: {last['failed_step']}")
+    return 0
+
 
 
 def _fold_mirror_sections(text):
@@ -11256,6 +11549,16 @@ def main():
     p.add_argument("--json", dest="pf_json", action="store_true", help="JSON 輸出")
     p.add_argument("--no-lint", dest="pf_no_lint", action="store_true", help="--diff 只跑 regex 層、不跑專案 lint 指令(快,給 pre-push advisory)")
 
+    cw = sub.add_parser("ci-wait", help="[CI回流閉環] push 後同輪等 GitHub Actions 結論(綠 rc0/紅 rc1;需 .lumos/config.json 宣告 ci 區塊才啟用)")
+    cw.add_argument("--timeout", dest="cw_timeout", type=float, default=600.0)
+    cw.add_argument("--grace", dest="cw_grace", type=float, default=30.0, help="判綠/判無 run 前的重查窗(秒)")
+    cw.add_argument("--repo-dir", dest="cw_repo", default=None)
+    cw.add_argument("--sha", dest="cw_sha", default=None)
+    cw.add_argument("--branch", dest="cw_branch", default=None)
+    cw.add_argument("--json", dest="cw_json", action="store_true")
+    cs = sub.add_parser("ci-status", help="[CI回流閉環] 唯讀查最後一次 CI 結果(不打網路)")
+    cs.add_argument("--repo-dir", dest="cs_repo", default=None)
+    cs.add_argument("--json", dest="cs_json", action="store_true")
     tm = sub.add_parser("testmap", help="檔案↔測試依賴地圖(vault-free):build 三路訊號挖 file↔test 邊存 .lumos/testmap.json;affected 依 diff 推薦該跑測試(advisory 恆 rc0)")
     tmsub = tm.add_subparsers(dest="tmcmd", required=True)
     tmb = tmsub.add_parser("build", help="挖掘並寫 map")
@@ -11482,6 +11785,12 @@ def main():
     if args.cmd == "gov":
         return cmd_gov(env, args.node, since_days=args.since, full=args.full)
 
+    if args.cmd == "ci-wait":
+        return cmd_ci_wait(env, timeout=args.cw_timeout, repo_dir=args.cw_repo,
+                           sha=args.cw_sha, branch=args.cw_branch,
+                           grace=args.cw_grace, as_json=args.cw_json)
+    if args.cmd == "ci-status":
+        return cmd_ci_status(env, repo_dir=args.cs_repo, as_json=args.cs_json)
     if args.cmd == "canary":
         if args.ccmd == "second":
             return cmd_canary_second(env, ref_id=args.sec_ref, verdict=args.sec_verdict,

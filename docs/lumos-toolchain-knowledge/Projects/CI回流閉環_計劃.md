@@ -16,6 +16,8 @@ summary: |-
   KEY:解法方向=**push 後同輪等待+修復重試(watch-fix-retry)**,非雲端自動修也非留到下次開場:`lumos ci-wait` 在 push 成功後阻塞等 CI 結論→紅則印失敗步驟+log 尾段→在場 session 當輪修→重推→再等(最多 2 次自動重試,之後攤人);SessionStart 推播降為**後備網**(session 中斷/機器關機才用),不是主路徑
   KEY:★不採雲端 autofix(明文裁定)★——世界主流(Copilot cloud agent 一鍵修/Codex workflow_run autofix/GH Agentic Workflows)是 CI 失敗觸發 agent 在雲端改碼開 PR;與 2026-07-29 剛裁定的「autonomous 非 dry-run 停用」同源風險(無人看顧 agent 握寫入權=confused-deputy),且需把金鑰放進 CI → 本案明文排除,解禁條件同 [[Systems/nested-agent-permission-scope]] d4
   DEP:[[Systems/reversibility-governance-ledger]]
+verified_by:
+  - "[[Verification/2026-07-29_CI回流閉環v1落地]]"
 ---
 # CI 回流閉環_計劃
 
@@ -186,3 +188,4 @@ summary: |-
   **cap=3 到頂**：三輪皆有效輪且三席全中，但每輪仍出真 major（本輪含一條 r2 同型復發）——依紀律停、攤人裁。
   **帳面時序偏差（如實記）**：r3 三筆 canary record 因折入腳本首跑中止而先於折入寫入，log 內 `reviewed`/`result` hash 為折入前版本；findings 內容與判定不受影響（審計報告在先、折入在後），惟 hash 鏈該輪不代表 post-fold 版——同 2026-07-28 testmap r3 的同型註記。
 - **r3 後補充折入（2026-07-29，使用者指出，非新一輪審計）**：①PRIOR-ART 補 ⓪「自家後院已有實作」（Landmark 的發版輪詢腳本＝本案實戰驗證來源；家規三問第一問當時只查外部世界，漏查消費專案——教訓記入）；②借其形態新增 `ci.workflow` 選配宣告：**指定要等哪支 workflow 即可繞開聚合與晚註冊假綠兩個複雜度**（複雜度退回已在真環境驗證的等級），未宣告才走保守聚合路徑。測項補 32。
+- **人裁放行（2026-07-29）**：續審 r1 後使用者裁定進實作。理由記：範圍手術已砍掉缺陷密度最高的 PR 路徑，v1 剩下的是 `ci-wait`＋帳＋後備網＋gov 一源；剩餘風險屬「外部行為（gh CLI/GitHub）對不對」型——**真 fixture 跑一次比再審一輪散文有效**（同 testmap 教訓）。兜底＝[S4] 測項矩陣＋CI＋code-loop 終審。

@@ -11267,6 +11267,238 @@ decisions:
     check("lint 正常 decisions 不誤報", r.returncode == 0, f"{r.returncode} {r.stdout[:150]}")
 
 
+def _mk_ci_env(gh_body, declare_ci=True, workflow=None):
+    """合成 git repo + vault + 假 gh(PATH 攔截) + .lumos/config.json 的 ci 宣告。"""
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-ci-"))
+    def g(*a):
+        _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+    g("init", "-q"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
+    (root / "a.txt").write_text("x", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "init")
+    g("remote", "add", "origin", "https://github.com/acme/demo.git")
+    v = root / "docs" / "kg-knowledge"
+    (v / "Systems").mkdir(parents=True); (v / "MOC").mkdir()
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    (root / ".lumos").mkdir(exist_ok=True)
+    cfg = {}
+    if declare_ci:
+        cfg["ci"] = {} if workflow is None else {"workflow": workflow}
+    (root / ".lumos" / "config.json").write_text(_json.dumps(cfg), encoding="utf-8")
+    binp = root / "fakebin"; binp.mkdir()
+    gh = binp / "gh"
+    gh.write_text(gh_body, encoding="utf-8")
+    gh.chmod(0o755)
+    env = dict(_os.environ)
+    env["PATH"] = f"{binp}:{env['PATH']}"
+    return root, v, env
+
+
+def _ci_run(root, v, env, *args):
+    import subprocess as _sp
+    return _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *args],
+                   cwd=str(root), capture_output=True, text=True, env=env, timeout=120)
+
+
+_GH_STUB_HEAD = """#!/usr/bin/env python3
+import json, sys, os, pathlib
+state = pathlib.Path(os.environ.get("GH_STATE", "/tmp/gh-state"))
+n = int(state.read_text()) if state.exists() else 0
+state.write_text(str(n + 1))
+args = sys.argv[1:]
+"""
+
+
+def t_ci_wait():
+    """[S1] ci-wait:綠/紅/no-run/逾時/聚合早退/多run輸出/總開關/fail-open。"""
+    import json as _json
+    import os as _os
+    sha_stub = (
+        "\nif args[:2] == [\"run\", \"list\"]:\n"
+        "    runs = RUNS_FIRST if n == 0 else RUNS_LATER\n"
+        "    print(json.dumps(runs))\n"
+        "    sys.exit(0)\n"
+        "if args[:2] == [\"run\", \"view\"]:\n"
+        "    if \"--log-failed\" in args:\n"
+        "        print(chr(10).join(['build' + chr(9) + 'test'] * 60)); sys.exit(0)\n"
+        "    print(json.dumps({\"jobs\": [{\"name\": \"build\", \"steps\": ["
+        "{\"name\": \"Full test suite\", \"conclusion\": \"failure\"}]}]})); sys.exit(0)\n"
+        "sys.exit(0)\n"
+    )
+    def stub(first, later=None):
+        return (_GH_STUB_HEAD + f"RUNS_FIRST = {first!r}\nRUNS_LATER = {(later if later is not None else first)!r}\n"
+                .replace("'", '"') + sha_stub)
+
+    green = [{"databaseId": 1, "attempt": 1, "status": "completed", "conclusion": "success",
+              "displayTitle": "ok", "url": "u1", "workflowName": "CI"}]
+    red = [{"databaseId": 2, "attempt": 1, "status": "completed", "conclusion": "failure",
+            "displayTitle": "bad", "url": "u2", "workflowName": "CI"}]
+
+    # 綠
+    root, v, env = _mk_ci_env(stub(green))
+    _os.environ["GH_STATE"] = str(root / "st1"); env["GH_STATE"] = str(root / "st1")
+    r = _ci_run(root, v, env, "ci-wait", "--json")
+    check("ci-wait 綠 rc0", r.returncode == 0, f"{r.returncode} {r.stdout[:200]} {r.stderr[:200]}")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("綠 verdict/runs 陣列", d["verdict"] == "green" and isinstance(d["runs"], list)
+          and len(d["runs"]) == 1, d)
+    log = v.parent / ".ci-log.jsonl"
+    check("寫帳", log.exists() and "success" in log.read_text(encoding="utf-8"), "")
+
+    # 紅 → rc1 + 失敗步驟(取自 jobs JSON) + log 尾段
+    root, v, env = _mk_ci_env(stub(red))
+    env["GH_STATE"] = str(root / "st2")
+    r = _ci_run(root, v, env, "ci-wait", "--json")
+    check("ci-wait 紅 rc1", r.returncode == 1, f"{r.returncode} {r.stdout[:200]}")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("紅 verdict + failed_step 取自 jobs", d["verdict"] == "red"
+          and "Full test suite" in (d["runs"][0].get("failed_step") or ""), d)
+
+    # 聚合:一綠一紅 → 任一紅即紅、早退
+    both = green + red
+    root, v, env = _mk_ci_env(stub(both))
+    env["GH_STATE"] = str(root / "st3")
+    r = _ci_run(root, v, env, "ci-wait", "--json")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("聚合 任一紅即紅", r.returncode == 1 and d["verdict"] == "red", f"{r.returncode} {d}")
+
+    # no-run 快速路徑(不等滿 timeout)
+    root, v, env = _mk_ci_env(stub([]))
+    env["GH_STATE"] = str(root / "st4")
+    import time as _t
+    t0 = _t.time()
+    r = _ci_run(root, v, env, "ci-wait", "--json", "--timeout", "60", "--grace", "1")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("no-run rc0 + verdict", r.returncode == 0 and d["verdict"] == "no-run", f"{r.returncode} {d}")
+    check("no-run 不白等(<20s)", _t.time() - t0 < 20, f"{_t.time()-t0:.0f}s")
+
+    # 逾時:恆 in_progress
+    inprog = [{"databaseId": 3, "attempt": 1, "status": "in_progress", "conclusion": None,
+               "displayTitle": "run", "url": "u3", "workflowName": "CI"}]
+    root, v, env = _mk_ci_env(stub(inprog))
+    env["GH_STATE"] = str(root / "st5")
+    r = _ci_run(root, v, env, "ci-wait", "--json", "--timeout", "1")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("逾時 rc0 + verdict=timeout", r.returncode == 0 and d["verdict"] == "timeout", f"{r.returncode} {d}")
+
+    # 總開關:未宣告 ci 區塊 → 完全不跑
+    root, v, env = _mk_ci_env(stub(red), declare_ci=False)
+    env["GH_STATE"] = str(root / "st6")
+    r = _ci_run(root, v, env, "ci-wait", "--json")
+    check("總開關 未宣告 rc0 不跑", r.returncode == 0, f"{r.returncode} {r.stdout[:150]}")
+    check("總開關 未宣告 不寫帳", not (v.parent / ".ci-log.jsonl").exists(), "")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("總開關 verdict=disabled", d["verdict"] == "disabled", d)
+
+    # fail-open:gh 缺席(PATH 只放 git,確保 gh 找不到而 git 還在)
+    root, v, env = _mk_ci_env(stub(green))
+    _onlygit = root / "onlygit"; _onlygit.mkdir()
+    import shutil as _sh
+    _gitbin = _sh.which("git")
+    if _gitbin:
+        (_onlygit / "git").symlink_to(_gitbin)
+    env["PATH"] = str(_onlygit)
+    r = _ci_run(root, v, env, "ci-wait", "--json")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("gh 缺席 fail-open rc0+JSON", r.returncode == 0 and d["verdict"] == "unavailable", f"{r.returncode} {d}")
+
+    # 去重:同 run 同 attempt 同 conclusion 連跑兩次 → 帳一筆
+    root, v, env = _mk_ci_env(stub(green))
+    env["GH_STATE"] = str(root / "st7")
+    _ci_run(root, v, env, "ci-wait")
+    _ci_run(root, v, env, "ci-wait")
+    lines = [l for l in (v.parent / ".ci-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("去重 同 run/attempt/conclusion 只一筆", len(lines) == 1, lines)
+
+    # --repo-dir 非目錄 rc2
+    r = _ci_run(root, v, env, "ci-wait", "--repo-dir", str(root / "nope"))
+    check("--repo-dir 非目錄 rc2", r.returncode == 2, str(r.returncode))
+
+
+def t_ci_status_and_gov():
+    """[S3] ci-status 唯讀不打網路 + gov 第 7 源(含總開關)。"""
+    import json as _json
+    stub = _GH_STUB_HEAD + "sys.exit(9)\n"   # 一旦被呼叫就失敗
+    root, v, env = _mk_ci_env(stub)
+    log = v.parent / ".ci-log.jsonl"
+    log.write_text(_json.dumps({
+        "ts": "2026-07-29T10:00:00+08:00", "run_id": 7, "attempt": 1, "sha": "abc1234",
+        "branch": "main", "workflow": "CI", "conclusion": "failure", "title": "bad",
+        "url": "u", "failed_step": "build/test", "dedup_key": "7:1:failure"},
+        ensure_ascii=False) + "\n", encoding="utf-8")
+    r = _ci_run(root, v, env, "ci-status", "--json")
+    check("ci-status 不呼叫 gh(rc0)", r.returncode == 0, f"{r.returncode} {r.stderr[:150]}")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("ci-status 讀帳", d.get("conclusion") == "failure" and d.get("sha") == "abc1234", d)
+    r = _ci_run(root, v, env, "ci-status")
+    check("ci-status 文字含檢查時刻", "2026-07-29" in r.stdout, r.stdout[:150])
+    # gov 第 7 源
+    r = _ci_run(root, v, env, "gov")
+    check("gov 見得到 CI 事件", "ci" in r.stdout and "failure" in r.stdout, r.stdout[-400:])
+    # 總開關:移除 ci 區塊 → gov 不 load
+    (root / ".lumos" / "config.json").write_text("{}", encoding="utf-8")
+    r = _ci_run(root, v, env, "gov")
+    check("gov 總開關:移除宣告後不顯示", "failure" not in r.stdout, r.stdout[-300:])
+
+
+def t_ci_hooks():
+    """[S2b] SessionStart hook 註冊對稱 + 提醒判法(該 sha 全部筆/總開關)。"""
+    import json as _json
+    import subprocess as _sp
+    from pathlib import Path as _P
+    root_repo = _P(__file__).resolve().parent.parent
+    hook = root_repo / "scripts" / "hooks" / "claude" / "ci-status-hook.py"
+    check("hook 檔存在", hook.exists(), str(hook))
+    src = (root_repo / "scripts" / "lumos").read_text(encoding="utf-8")
+    check("hook 進 _GLOBAL_CLAUDE_HOOKS 白名單(生命週期對稱)",
+          "ci-status-hook.py" in src, "")
+    merge = (root_repo / "scripts" / "merge-claude-settings.py").read_text(encoding="utf-8")
+    check("hook 進 HOOK_ENTRIES(SessionStart)",
+          "ci-status-hook.py" in merge and "SessionStart" in merge, "")
+    check("hook 輸出契約宣告 SessionStart(非抄 PreToolUse)",
+          hook.exists() and '"SessionStart"' in hook.read_text(encoding="utf-8"), "")
+    # 行為:紅 → 有注入;綠 → 靜默;未宣告 → 靜默
+    stub = _GH_STUB_HEAD + "sys.exit(0)\n"
+    root, v, env = _mk_ci_env(stub)
+    sha = _sp.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                  capture_output=True, text=True).stdout.strip()
+    log = v.parent / ".ci-log.jsonl"
+    def wr(concl):
+        log.write_text(_json.dumps({"ts": "2026-07-29T10:00:00+08:00", "run_id": 1, "attempt": 1,
+                                    "sha": sha, "branch": "main", "workflow": "CI",
+                                    "conclusion": concl, "title": "t", "url": "u",
+                                    "failed_step": "", "dedup_key": f"1:1:{concl}"},
+                                   ensure_ascii=False) + "\n", encoding="utf-8")
+    def run_hook():
+        payload = _json.dumps({"cwd": str(root)})
+        return _sp.run([sys.executable, str(hook)], input=payload, capture_output=True,
+                       text=True, cwd=str(root), env=env, timeout=60)
+    wr("failure")
+    r = run_hook()
+    check("hook 紅 → 注入提醒", r.returncode == 0 and "CI" in r.stdout and "紅" in r.stdout,
+          f"{r.returncode} {r.stdout[:200]} {r.stderr[:200]}")
+    wr("success")
+    r = run_hook()
+    check("hook 綠 → 靜默", r.stdout.strip() == "", r.stdout[:150])
+    # 多 run 分筆:紅在前綠在後,不可被「最後一筆」蓋掉
+    log.write_text("\n".join([
+        _json.dumps({"ts": "2026-07-29T10:00:00+08:00", "run_id": 1, "attempt": 1, "sha": sha,
+                     "branch": "main", "workflow": "A", "conclusion": "failure", "title": "t",
+                     "url": "u", "failed_step": "", "dedup_key": "1:1:failure"}, ensure_ascii=False),
+        _json.dumps({"ts": "2026-07-29T10:01:00+08:00", "run_id": 2, "attempt": 1, "sha": sha,
+                     "branch": "main", "workflow": "B", "conclusion": "success", "title": "t",
+                     "url": "u", "failed_step": "", "dedup_key": "2:1:success"}, ensure_ascii=False),
+    ]) + "\n", encoding="utf-8")
+    r = run_hook()
+    check("hook 多run:紅不被最後一筆綠蓋掉", "紅" in r.stdout, r.stdout[:200])
+    # 總開關
+    (root / ".lumos" / "config.json").write_text("{}", encoding="utf-8")
+    r = run_hook()
+    check("hook 總開關:未宣告 → 靜默", r.stdout.strip() == "", r.stdout[:150])
+
+
 def _testmap_mk(td):
     """testmap 沙盒 fixture:bulk commit(>20 檔,cochange 挖掘層天然丟棄)+cochange 專用小 commit。"""
     import subprocess as _sp
