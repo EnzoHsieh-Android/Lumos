@@ -9327,6 +9327,231 @@ def t_cochange():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def t_canary_record_persist():
+    """[S1] record 落盤自驗:印絕對路徑/token 讀回相符/readback 失敗 rc2 不印 ✓。"""
+    import json as _json
+    v = mkvault()
+    log = v.parent / ".canary-log.jsonl"
+    r = run(v, "canary", "record", "caught", "--loop", "L1", "--auditor", "sonnet")
+    check("record rc0", r.returncode == 0, r.stderr)
+    check("輸出含 log 絕對路徑", str(log) in r.stdout, r.stdout)
+    tok = [w for w in r.stdout.split() if w.startswith("CANARY-")][0].rstrip(":")
+    rows = [_json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("token 落盤且相符", any(x.get("token") == tok for x in rows), rows)
+    r = run(v, "canary", "record", "caught", "--loop", "L1")
+    check("--auditor 未給時無 auditor 段", "auditor=" not in r.stdout, r.stdout)
+    # 2b. readback 失敗誘發:log 指向 /dev/null(append 成功、讀回恆空)
+    log.unlink()
+    log.symlink_to("/dev/null")
+    r = run(v, "canary", "record", "missed", "--loop", "L1", "--auditor", "x")
+    check("readback 失敗 rc2", r.returncode == 2, f"rc={r.returncode} {r.stdout}")
+    check("readback 失敗訊息", "落盤自驗失敗" in r.stderr, r.stderr)
+    check("readback 失敗不印 ✓", "✓" not in r.stdout, r.stdout)
+
+
+def t_canary_second():
+    """[S2] 第二判者:自身 token/ref/gov 可見/不進 gate/參數守衛。"""
+    import json as _json
+    v = mkvault()
+    log = v.parent / ".canary-log.jsonl"
+    r = run(v, "canary", "record", "caught", "--loop", "L2", "--round", "r1",
+            "--auditor", "sonnet", "--severity", "minor", "--findings", "0",
+            "--capture-counts", "1")
+    tok = [w for w in r.stdout.split() if w.startswith("CANARY-")][0].rstrip(":")
+    base_status = run(v, "loop", "status", "L2", "--gate", "--panel", "--min-seats", "1")
+    r = run(v, "canary", "second", "--id", tok, "--verdict", "agree",
+            "--auditor", "opus", "--note", "覆核同意")
+    check("second rc0", r.returncode == 0, f"{r.returncode} {r.stderr}")
+    rows = [_json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    sec = [x for x in rows if x.get("kind") == "second"]
+    check("second 一次寫一行(單源不雙寫)", len(sec) == 1, sec)
+    check("second 帶自身 token 且 != ref", sec[0].get("token", "").startswith("CANARY-")
+          and sec[0]["token"] != tok and sec[0].get("ref") == tok, sec[0])
+    check("second note 落盤", sec[0].get("note") == "覆核同意", sec[0])
+    check("second 成功行印自身 token", sec[0]["token"] in r.stdout, r.stdout)
+    after = run(v, "loop", "status", "L2", "--gate", "--panel", "--min-seats", "1")
+    check("second 不影響 gate(輸出+rc 逐字節同)",
+          after.stdout == base_status.stdout and after.returncode == base_status.returncode,
+          f"{after.returncode}/{base_status.returncode}")
+    # 多筆 second 不被 gov dedup 吞 + verdict 可見
+    run(v, "canary", "second", "--id", tok, "--verdict", "overturn", "--auditor", "codex")
+    g = run(v, "gov")
+    check("gov 見得到 second 且不吞(2 筆)", g.stdout.count("second") >= 2, g.stdout[-400:])
+    check("gov 見得到 verdict", "overturn" in g.stdout and "agree" in g.stdout, g.stdout[-400:])
+    # 守衛
+    r = run(v, "canary", "second", "--id", "CANARY-nope", "--verdict", "agree", "--auditor", "x")
+    check("second --id 不存在 rc2", r.returncode == 2, str(r.returncode))
+    r = run(v, "canary", "second", "--id", tok, "--verdict", "maybe", "--auditor", "x")
+    check("second verdict 亂值 rc2", r.returncode == 2, str(r.returncode))
+    r = run(v, "canary", "second", "--id", tok, "--verdict", "agree")
+    check("second 缺 --auditor rc2", r.returncode == 2, str(r.returncode))
+    # second 專屬 readback（審計指出的範圍瑕疵：合約涵蓋 record/second 兩者）
+    log.unlink(); log.symlink_to("/dev/null")
+    r = run(v, "canary", "second", "--id", tok, "--verdict", "agree", "--auditor", "x")
+    check("second readback 失敗 rc2", r.returncode == 2, f"{r.returncode} {r.stdout}")
+
+
+def _mk_attr_env(runner_body, method="TestLimitFive"):
+    """合成 kill 環境但 run_cmd 指向可控輸出的假 runner(歸因測試用)。"""
+    import subprocess as sp
+    root, v = _mk_kill_env()
+    (root / "fake_runner.py").write_text(runner_body, encoding="utf-8")
+    (root / ".lumos" / "config.json").write_text(
+        '{"test": {"run_cmd": "python3 fake_runner.py"}}', encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(root), "commit", "-qm", "fake"], capture_output=True)
+    return root, v
+
+
+def t_guard_kill_rc_precedence():
+    """[合約] rc 優先序三格窮盡 + 混批次優先(審計打回:原綁定只覆蓋 1/3 格)。"""
+    import subprocess as sp, os, json as _json
+    def lum(root, v, *a):
+        e = dict(os.environ); e["LUMOS_KILL_TIMEOUT_FLOOR"] = "5"
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True, cwd=root, env=e)
+    # survived → rc1
+    root, v = _mk_attr_env("print('ok')\n")   # 永遠綠=殺不掉
+    lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5",
+        "--file", "prod.py", "--old", "LIMIT = 5", "--new", "LIMIT = 99")
+    r = lum(root, v, "guard", "kill", "Systems/Limit")
+    check("rc格1 survived→rc1", r.returncode == 1, f"{r.returncode} {r.stdout}")
+    # drifted → rc2
+    root, v = _mk_attr_env("import prod, sys\nsys.exit(0 if prod.LIMIT == 5 else 1)\n")
+    lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5",
+        "--file", "prod.py", "--old", "NOT_THERE", "--new", "X")
+    r = lum(root, v, "guard", "kill", "Systems/Limit")
+    check("rc格2 drifted→rc2", r.returncode == 2, f"{r.returncode} {r.stdout}")
+    # 混批次:survived + drifted 同批 → survived 優先 rc1
+    root, v = _mk_attr_env("print('ok')\n")
+    lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5",
+        "--file", "prod.py", "--old", "LIMIT = 5", "--new", "LIMIT = 99")
+    lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5",
+        "--file", "prod.py", "--old", "NOT_THERE", "--new", "X")
+    r = lum(root, v, "guard", "kill", "Systems/Limit")
+    check("rc優先序 survived勝drifted→rc1", r.returncode == 1, f"{r.returncode} {r.stdout}")
+    # 弱證據不放行執行錯誤:timeout + drifted 同批 → rc2
+    root, v = _mk_attr_env("import prod, time\nif prod.LIMIT != 5:\n    time.sleep(60)\nprint('ok')\n")
+    lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5",
+        "--file", "prod.py", "--old", "LIMIT = 5", "--new", "LIMIT = 99")
+    lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5",
+        "--file", "prod.py", "--old", "NOT_THERE", "--new", "X")
+    r = lum(root, v, "guard", "kill", "Systems/Limit")
+    check("rc優先序 弱證據不蓋過drifted→rc2", r.returncode == 2, f"{r.returncode} {r.stdout}")
+
+
+def t_guard_kill_json_purity():
+    """[合約] --json 成功路徑 stdout 恰一行純 JSON:dirty repo/多平台 legacy 警告兩情境。"""
+    import subprocess as sp, os, json as _json
+    def lum(root, v, *a):
+        e = dict(os.environ); e["LUMOS_KILL_TIMEOUT_FLOOR"] = "5"
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True, cwd=root, env=e)
+    def one_line(r, label):
+        lines = [l for l in r.stdout.splitlines() if l.strip()]
+        check(f"{label} stdout 恰一行", len(lines) == 1, r.stdout[:300])
+        if len(lines) == 1:
+            check(f"{label} 該行合法 JSON", bool(_json.loads(lines[0])), lines[0][:120])
+    # 情境1:dirty worktree
+    root, v = _mk_attr_env("import prod, sys\nsys.exit(0 if prod.LIMIT == 5 else 1)\n")
+    lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5",
+        "--file", "prod.py", "--old", "LIMIT = 5", "--new", "LIMIT = 99")
+    (root / "dirty.txt").write_text("x", encoding="utf-8")
+    one_line(lum(root, v, "guard", "kill", "Systems/Limit", "--json"), "dirty")
+    # 情境2:多平台 config 同時留 legacy test.run_cmd(審計打回的漏網分支)
+    root, v = _mk_attr_env("import prod, sys\nsys.exit(0 if prod.LIMIT == 5 else 1)\n")
+    (root / ".lumos" / "config.json").write_text(_json.dumps({
+        "test": {"run_cmd": "python3 fake_runner.py"},
+        "platforms": {"py": {"run_cmd": "python3 fake_runner.py", "profile": "python"}}},
+        ensure_ascii=False), encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(root), "commit", "-qm", "mp"], capture_output=True)
+    lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5",
+        "--file", "prod.py", "--old", "LIMIT = 5", "--new", "LIMIT = 99", "--platform", "py")
+    one_line(lum(root, v, "guard", "kill", "Systems/Limit", "--json"), "multiplatform-legacy")
+    # 情境3:--keep-worktree 現場保留訊息(複審指出的第三個 gate 點)
+    one_line(lum(root, v, "guard", "kill", "Systems/Limit", "--json", "--keep-worktree"),
+             "keep-worktree")
+
+
+def t_guard_kill_attribution():
+    """[S3] 歸因四型 + rc 優先序 + json 純度 + 名字偽強殺反例。"""
+    import subprocess as sp, json as _json, os
+
+    def lum(root, v, *a):
+        e = dict(os.environ); e["LUMOS_KILL_TIMEOUT_FLOOR"] = "5"
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True, cwd=root, env=e)
+
+    def prep(root, v):
+        r = lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5",
+                "--file", "prod.py", "--old", "LIMIT = 5", "--new", "LIMIT = 99")
+        assert r.returncode == 0, r.stderr
+
+    # (a) 具名失敗 → killed 強歸因;摘錄含命中段
+    root, v = _mk_attr_env(
+        "import prod, sys\n"
+        "print('collected 1 item')\n"
+        "if prod.LIMIT != 5:\n"
+        "    print('FAILURES')\n    print('TestLimitFive')\n    print('  x' * 200)\n"
+        "    print('E   assert 99 == 5')\n    print('t.py:2: AssertionError')\n    sys.exit(1)\n"
+        "print('ok')\n")
+    prep(root, v)
+    r = lum(root, v, "guard", "kill", "Systems/Limit", "--json")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("(a) killed 強歸因", d["results"][0]["verdict"] == "killed", d)
+    check("(a) 帶歸因摘錄", "attr_excerpt" in d["results"][0], d["results"][0])
+    check("(a) 摘錄截 200 字", len(d["results"][0].get("attr_excerpt", "")) <= 200,
+          len(d["results"][0].get("attr_excerpt", "")))
+
+    # (b) 匿名 crash → killed_unattributed + 警告
+    root, v = _mk_attr_env(
+        "import prod, sys\n"
+        "if prod.LIMIT != 5:\n    print('Traceback: ImportError boom'); sys.exit(1)\n"
+        "print('ok')\n")
+    prep(root, v)
+    r = lum(root, v, "guard", "kill", "Systems/Limit")
+    check("(b) unattributed", "killed_unattributed" in r.stdout, r.stdout)
+    check("(b) 印警告建議 filter", "filter" in r.stdout + r.stderr, r.stdout)
+    check("(b) 非強殺措辭", "咬得住" not in r.stdout, r.stdout)
+    check("(b) icon 非 ?", "? killed_unattributed" not in r.stdout, r.stdout)
+
+    # (c) 逾時 → timed_out_weak,不計 killed
+    root, v = _mk_attr_env(
+        "import prod, time\n"
+        "if prod.LIMIT != 5:\n    time.sleep(60)\n"
+        "print('ok')\n")
+    prep(root, v)
+    r = lum(root, v, "guard", "kill", "Systems/Limit")
+    check("(c) timed_out_weak", "timed_out_weak" in r.stdout, r.stdout)
+    check("(c) timeout-only rc0", r.returncode == 0, str(r.returncode))
+    check("(c) 摘要印弱證據", "弱" in r.stdout, r.stdout)
+
+    # (d) 名字自帶標記 → 不得偽造強殺
+    root, v = _mk_attr_env(
+        "import prod, sys\n"
+        "print('running TestFAILEDCase')\n"
+        "if prod.LIMIT != 5:\n    sys.exit(1)\n"
+        "print('ok')\n")
+    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    (v / "Systems" / "Limit.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestFAILEDCase]\n---\n# Limit\n",
+        encoding="utf-8")
+    prep(root, v)
+    r = lum(root, v, "guard", "kill", "Systems/Limit")
+    check("(d) 名字自帶 FAILED 不算強殺", "killed_unattributed" in r.stdout, r.stdout)
+
+    # (e) json 純度:dirty worktree 下 stdout 恰一行合法 JSON
+    root, v = _mk_attr_env("import prod, sys\nsys.exit(0 if prod.LIMIT == 5 else 1)\n")
+    prep(root, v)
+    (root / "dirty.txt").write_text("x", encoding="utf-8")
+    r = lum(root, v, "guard", "kill", "Systems/Limit", "--json")
+    lines = [l for l in r.stdout.splitlines() if l.strip()]
+    check("(e) dirty×json stdout 恰一行", len(lines) == 1, r.stdout[:300])
+    check("(e) 該行可 parse", _json.loads(lines[0]) if lines else False, "")
+
+
 def _mk_kill_env():
     """合成 git repo + vault + 一條綁 [test:] 的 INVARIANT + python run_cmd。
     prod.py 的 LIMIT 是被守衛行為;test_guard.py 斷言之。"""
@@ -9446,7 +9671,8 @@ def t_guard_kill():
     r = lum("guard", "kill", "Systems/Hang", "--json")
     check("kill timed_out rc0(歸killed類)", r.returncode == 0, f"rc={r.returncode} {r.stdout[:200]}")
     dd = json.loads(r.stdout.strip().splitlines()[-1])
-    check("verdict=timed_out", dd["results"][0]["verdict"] == "timed_out", str(dd))
+    check("verdict=timed_out_weak(S3 刻意降級:timeout 不再計 killed)",
+          dd["results"][0]["verdict"] == "timed_out_weak", str(dd))
 
     # 缺 run_cmd rc2
     (root / ".lumos" / "config.json").write_text('{}', encoding="utf-8")

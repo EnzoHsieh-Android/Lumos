@@ -86,7 +86,8 @@ Agent tool、`model: sonnet`(連 2 missed 升 opus)、**不告知 canary**、指
 - **max severity**:排掉 canary 及溯源影子後的存活 max。剝「誤判」要克制——只有能用真 diff file:line 反證才剝,判不準保留。
 - **辯方(對每條 ≥major;預設 Codex,2026-07-18 S5)**:派 1 個 **Codex 辯方**(`codex exec --sandbox read-only`,乾淨脈絡)——判決單點最怕同門盲點,外家反證價值最高;Codex 不可用退 opus 並於留痕註記偏離。framing=「預設此 finding 假,構造反駁證據、必附 file:line(grep/Read 真碼),拿不出則維持」。可加 `git log`/`git show`(commit 考古常決定性)。辯方降級若順手附最小修法 → 轉 fix 佇列。
 - **該輪 severity** ＝ 辯方裁決後存活 max。
-- **修進真碼**:fix commit + 必要新測試。業務合約級隱患 → 另寫圖譜 ★INVARIANT★ 綁 `[test:]`;非合約級測試進套件靠回歸守。
+- **修進真碼**:fix commit + 必要新測試。**修 bug 標配「還原翻紅釘」**——把 bug 還原回去、綁定測試必須翻紅的回歸測試(2026-07-28 testmap 實戰:存在且全綠的測試可能什麼都沒驗;「存在」騙得過、「翻紅」騙不過)。業務合約級隱患 → 另寫圖譜 ★INVARIANT★ 綁 `[test:]`;非合約級測試進套件靠回歸守。
+- **canary 判定抽樣分權(oracle品質包 S2)**:每累計 5 個 caught 輪抽 1 輪,把審計員原始報告+植入描述交乾淨第二判者判 caught/missed,結果記 `lumos canary second --id <CANARY-x> --verdict agree|overturn --auditor <模型>`(純 telemetry 不進 gate);抽中輪報告存 `governance/canary-samples/<id>.md`。分歧→下一輪 framing 復核。
 
 ### 5 · 記錄
 ```bash

@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-29
 updated: 2026-07-29
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Projects/Codex外審吸收_計劃]]"
   - "[[Issues/canary-record未落盤事件]]"
@@ -17,6 +17,8 @@ summary: |-
   KEY:出身——2026-07-29 Codex 外審對話三輪:它抓到 record 回報成功未落盤真事故([[Issues/canary-record未落盤事件]])+「guard-kill 只知紅不知為何紅」+「caught/missed 無第二判者」;與我方圖譜舊結論「驗證層天花板=oracle 品質」合流
   DEP:[[Systems/canary-audit]]
   DEP:[[Systems/guard-kill]]
+verified_by:
+  - "[[Verification/2026-07-29_oracle品質包落地]]"
 ---
 # oracle 品質包_計劃（P1-1）
 

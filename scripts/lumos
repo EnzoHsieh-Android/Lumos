@@ -2302,7 +2302,10 @@ def cmd_gov(env, node=None, since_days=90, full=False):
          "gate": "canary", "kind": d.get("kind", "?"), "hard": False, "nodes": [],
          "token": d.get("token", ""), "auditor": d.get("auditor") or "?",
          "findings": d.get("findings"), "severity": d.get("severity", ""),
-         "detail": ((f"loop={d['loop']} sev={d.get('severity', '?')} · " if d.get("loop") else "")
+         # [S2] second 行的 verdict/ref 併進 detail(否則分歧訊號在治理帳全程隱形)
+         "detail": ((f"verdict={d.get('verdict','?')} ref={d.get('ref','')} · "
+                     if d.get("kind") == "second" else "")
+                    + (f"loop={d['loop']} sev={d.get('severity', '?')} · " if d.get("loop") else "")
                     + (d.get("auditor", "") + " " + d.get("note", "")).strip())})
 
     rows = [r for r in rows if (r["ts"][:10] or "9999") >= cutoff]
@@ -2517,13 +2520,90 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             return 2
         rec["tier"] = tier
     path = env.vault.parent / ".canary-log.jsonl"
+    rc = _jsonl_append_verified(path, rec, "token", token)
+    if rc != 0:
+        return rc
+    print(f"✓ canary {kind} 留痕: {token}" + (f" (auditor={auditor})" if auditor else "")
+          + f" → {path.resolve()}")
+    return 0
+
+
+def _jsonl_append_verified(path, rec, key_field, key_value):
+    """[S1 oracle品質包] append 一行 JSONL + 讀回自驗(成功宣稱與證據綁死)。
+    caller 給唯一鍵欄名與值——不寫死欄名(record 用 token、second 用自身 token)。
+    寫入 OSError → rc2(既有訊息);寫成功但重開檔讀不回該鍵 → rc2「落盤自驗失敗」。
+    出身:2026-07-28 record 回報成功未落盤事故([[Issues/canary-record未落盤事件]])。"""
+    import json
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError as e:
         print(f"ERROR: 寫入 {path} 失敗: {e}", file=sys.stderr)
         return 2
-    print(f"✓ canary {kind} 留痕: {token}" + (f" (auditor={auditor})" if auditor else ""))
+    try:
+        with open(path, encoding="utf-8") as f:      # 獨立重開檔(非同 fd)
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(d, dict) and d.get(key_field) == key_value:
+                    return 0
+    except OSError as e:
+        print(f"canary record: 落盤自驗失敗({path.resolve()}): 讀回失敗 {e}", file=sys.stderr)
+        return 2
+    print(f"canary record: 落盤自驗失敗({path.resolve()}): 寫入回報成功但讀不回該筆",
+          file=sys.stderr)
+    return 2
+
+
+def cmd_canary_second(env, ref_id=None, verdict=None, auditor=None, note=None):
+    """[S2 oracle品質包] canary 判定的第二判者留痕(抽樣分權,telemetry-only)。
+    走 [S1] 同一自驗 helper(唯一鍵=自身新 token);loop status 天然忽略(second 行無 loop 欄)。
+    天花板:第二判者仍是 LLM,只壓「植入者=唯一判定者」的單點,不證判定為真。"""
+    import json
+    import datetime
+    import secrets
+    if not ref_id or not verdict:
+        print("ERROR: canary second 需 --id 與 --verdict", file=sys.stderr)
+        return 2
+    if verdict not in ("agree", "overturn"):
+        print(f"ERROR: --verdict 僅收 agree/overturn,收到 {verdict!r}", file=sys.stderr)
+        return 2
+    if not auditor:
+        print("ERROR: canary second 需 --auditor(分權紀錄無名則失義)", file=sys.stderr)
+        return 2
+    path = env.vault.parent / ".canary-log.jsonl"
+    found = False
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(d, dict) and d.get("token") == ref_id and d.get("kind") != "second":
+                    found = True
+                    break
+    except OSError as e:
+        print(f"ERROR: 讀不到 canary log {path}: {e}", file=sys.stderr)
+        return 2
+    if not found:
+        print(f"ERROR: --id {ref_id} 不在 canary log(無原判可覆核)", file=sys.stderr)
+        return 2
+    token = "CANARY-" + secrets.token_hex(4)
+    rec = {"ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+           "kind": "second", "token": token, "ref": ref_id, "verdict": verdict,
+           "auditor": auditor, "note": note or ""}
+    rc = _jsonl_append_verified(path, rec, "token", token)
+    if rc != 0:
+        return rc
+    print(f"✓ canary second 留痕: {token} (ref={ref_id} verdict={verdict} auditor={auditor})"
+          f" → {path.resolve()}")
     return 0
 
 
@@ -3938,10 +4018,57 @@ def _kill_run(cmd, cwd, timeout):
             proc.wait()
             buf.seek(0)
             txt = buf.read()
-            return (None, txt[-200:], time.time() - t0, True)
+            return (None, _kill_cap(txt), time.time() - t0, True)
         buf.seek(0)
         txt = buf.read()
-    return (proc.returncode, txt[-200:], time.time() - t0, False)
+    return (proc.returncode, _kill_cap(txt), time.time() - t0, False)
+
+
+_KILL_OUT_CAP = 256 * 1024
+
+
+def _kill_cap(txt):
+    """[S3 oracle品質包] 保留完整輸出供歸因(上限 256KB;超限取頭尾各半、對齊換行邊界
+    並插 marker——裸位元組砍半會把兩條真實行拼成假行汙染行窗掃描)。"""
+    if len(txt) <= _KILL_OUT_CAP:
+        return txt
+    half = _KILL_OUT_CAP // 2
+    head, tail = txt[:half], txt[-half:]
+    head = head[:head.rfind("\n") + 1] if "\n" in head else head
+    tail = tail[tail.find("\n") + 1:] if "\n" in tail else tail
+    dropped = len(txt) - len(head) - len(tail)
+    return head + f"...[truncated {dropped} bytes]...\n" + tail
+
+
+_KILL_FAIL_MARKS = ("FAIL", "FAILED", "✗", "AssertionError")
+
+
+def _kill_attribute(out, method):
+    """[S3] 歸因:綁定測試名的任一出現處,其行起(含同行)5 行窗內有失敗標記,
+    且標記命中位置不得落在測試名字串自身範圍內(防 test_fail_closed 這類名字偽造強殺)。
+    回 (attributed: bool, excerpt: str)——excerpt 取跨距最短的命中處、名行到標記行整段、截 200 字。"""
+    if not out or not method:
+        return False, ""
+    lines = out.splitlines()
+    best = None
+    for i, line in enumerate(lines):
+        col = line.find(method)
+        if col < 0:
+            continue
+        for j in range(i, min(i + 5, len(lines))):
+            probe = lines[j]
+            # 遮蔽測試名字串本身再找標記(名字自帶 FAIL/AssertionError 不算證據)
+            masked = probe.replace(method, " " * len(method))
+            up = masked.upper()
+            if any(m.upper() in up for m in _KILL_FAIL_MARKS):
+                span = j - i
+                if best is None or span < best[0]:
+                    best = (span, i, j)
+                break
+    if best is None:
+        return False, ""
+    _, i, j = best
+    return True, "\n".join(lines[i:j + 1])[:200]
 
 
 def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
@@ -3983,7 +4110,8 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
         try:
             _cfg = json.loads((Path(repo_root) / ".lumos" / "config.json").read_text(encoding="utf-8"))
             if isinstance(_cfg.get("test"), dict) and _cfg["test"].get("run_cmd"):
-                print("⚠ config 同時有 platforms 與 test.run_cmd——多平台模式下 test.run_cmd 不生效")
+                print("⚠ config 同時有 platforms 與 test.run_cmd——多平台模式下 test.run_cmd 不生效",
+                      file=(sys.stderr if as_json else sys.stdout))   # [S3] --json 純度
         except Exception:
             pass
     floor = 20.0
@@ -4023,7 +4151,8 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
         except OSError:
             dirty = ""
         if dirty:
-            print(f"⚠ {plat} repo 有未提交變更——不會進沙盒(kill 以 HEAD 為基準),配方/測試需先 commit")
+            print(f"⚠ {plat} repo 有未提交變更——不會進沙盒(kill 以 HEAD 為基準),配方/測試需先 commit",
+                  file=(sys.stderr if as_json else sys.stdout))   # [S3] --json 純度:診斷一律 stderr
         flaky = pentry["profile"].get("scaffold_ext") in (".yaml", ".yml") or plat in ("maestro", "playwright")
         # per (test) baseline 快取:同測試多配方只跑一次 baseline
         tmp_parent = tempfile.mkdtemp(prefix="lumos-kill-")
@@ -4056,7 +4185,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                 b_rc, b_tail, b_elapsed, b_to = baselines[cmd]
                 if b_to or b_rc != 0:
                     results.append({**r, "platform": plat, "verdict": "abort",
-                                    "detail": f"baseline 非綠(rc={b_rc}){note_ws}", "tail": b_tail})
+                                    "detail": f"baseline 非綠(rc={b_rc}){note_ws}", "tail": b_tail[-200:]})
                     continue
                 # 套配方(路徑圍欄:雙邊 realpath)
                 target = os.path.realpath(os.path.join(wt, r.get("file", "")))
@@ -4086,24 +4215,33 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
                     results.append({**r, "platform": plat, "verdict": "error",
                                     "detail": "revert 失敗——後續同組配方作廢防污染"})
                     break   # 樹已髒,本組終止(worktree 在 finally 清)
+                attr_excerpt = ""
                 if m_to:
-                    verdict = "timed_out"   # 歸 killed 類(PIT:變異致掛=被超時接住)
+                    # [S3] timeout 降弱證據(不再計 killed):掛掉可能是環境非變異
+                    verdict = "timed_out_weak"
                 elif m_rc != 0:
-                    verdict = "killed"
+                    ok_attr, attr_excerpt = _kill_attribute(m_tail, method)
+                    verdict = "killed" if ok_attr else "killed_unattributed"
                 else:
                     verdict = "survived"
                 res = {**r, "platform": plat, "verdict": verdict}
+                if attr_excerpt:
+                    res["attr_excerpt"] = attr_excerpt
+                if verdict == "killed_unattributed":
+                    res["detail"] = (res.get("detail", "")
+                                     + "弱證據:紅燈未歸因到綁定測試(建議 run_cmd 加 filter 鎖定該測試)")
                 if verdict == "survived":
-                    res["tail"] = b_tail    # 供人查 filter 是否真的跑到測試(zero-hit 假 survived)
+                    res["tail"] = b_tail[-200:]   # 展示裁回(_kill_run 現保留全文供歸因)
                 if flaky:
                     res["flaky_risk"] = True
                 if note_ws:
                     res["detail"] = (res.get("detail", "") + note_ws +
-                                     ("(弱證據:紅燈可能來自無關測試)" if verdict in ("killed", "timed_out") else ""))
+                                     ("(弱證據:紅燈可能來自無關測試)" if verdict in ("killed", "killed_unattributed", "timed_out_weak") else ""))
                 results.append(res)
         finally:
             if keep_worktree:
-                print(f"(--keep-worktree) 現場保留: {wt}")
+                print(f"(--keep-worktree) 現場保留: {wt}",
+                      file=(sys.stderr if as_json else sys.stdout))
             else:
                 if wt_ok:
                     subprocess.run(["git", "-C", str(proot), "worktree", "remove", "--force", wt],
@@ -4138,7 +4276,8 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
         print(json.dumps({"results": [{k: v for k, v in r.items() if k != "_logged"}
                                       for r in results]}, ensure_ascii=False))
     else:
-        icon = {"killed": "✓", "timed_out": "✓", "survived": "✗",
+        icon = {"killed": "✓", "timed_out": "✓", "killed_unattributed": "⚠",
+                "timed_out_weak": "⚠", "survived": "✗",
                 "drifted": "⚠", "abort": "⚠", "error": "⚠"}
         for r in results:
             print(f"{icon.get(r['verdict'],'?')} {r['verdict']:<9} {r.get('invariant','')[:30]}"
@@ -4149,7 +4288,15 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
     if any(v in ("drifted", "abort", "error") for v in verdicts):
         return 2
     if not as_json:
-        print(f"✓ 全部 killed({len(verdicts)} 配方)——綁定測試咬得住")
+        # [S3] 措辭收斂:「咬得住」只配全強殺;混弱證據分列(unattributed+timeout 同桶)
+        _strong = verdicts.count("killed")
+        _weak = verdicts.count("killed_unattributed") + verdicts.count("timed_out_weak")
+        if _weak:
+            print(f"強殺 {_strong} / 弱證據 {_weak}"
+                  f"(unattributed {verdicts.count('killed_unattributed')}"
+                  f" + timeout {verdicts.count('timed_out_weak')})——弱證據未歸因到綁定測試")
+        else:
+            print(f"✓ 全部 killed({len(verdicts)} 配方)——綁定測試咬得住")
     return 0
 
 
@@ -10812,6 +10959,11 @@ def main():
 
     cp = sub.add_parser("canary", help="審計員 canary 留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵")
     csub = cp.add_subparsers(dest="ccmd", required=True)
+    cs2 = csub.add_parser("second", help="[oracle品質包 S2] 第二判者覆核留痕(抽樣分權,telemetry-only,不進 gate)")
+    cs2.add_argument("--id", dest="sec_ref", required=True, metavar="CANARY-xxx", help="被覆核的原判 token")
+    cs2.add_argument("--verdict", dest="sec_verdict", metavar="agree|overturn", help="覆核結論")
+    cs2.add_argument("--auditor", dest="sec_auditor", help="第二判者(必填;建議跨家族)")
+    cs2.add_argument("--note", dest="sec_note", help="一句理由")
     cr = csub.add_parser("record", help="記一筆 caught|missed")
     cr.add_argument("kind", choices=("caught", "missed"))
     cr.add_argument("--auditor", help="審計用的模型(如 sonnet)")
@@ -11306,6 +11458,9 @@ def main():
         return cmd_gov(env, args.node, since_days=args.since, full=args.full)
 
     if args.cmd == "canary":
+        if args.ccmd == "second":
+            return cmd_canary_second(env, ref_id=args.sec_ref, verdict=args.sec_verdict,
+                                     auditor=args.sec_auditor, note=args.sec_note)
         return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
                           args.severity, findings=args.findings, round_id=args.round_id,
                           capture_counts=args.capture_counts, clusters=args.clusters,
