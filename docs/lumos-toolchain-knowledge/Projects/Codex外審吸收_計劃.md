@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-29
 updated: 2026-07-29
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Projects/上下文瘦身_計劃]]"
   - "[[Projects/GPT外部評審吸收_計劃]]"
@@ -38,4 +38,4 @@ summary: |-
 ## 驗證
 
 - P0 全套：本機 1588 checks 全綠＋乾淨 HOME 預演全綠（CI 可行性驗證）＋doctor 0 issues。
-- CI 首跑結果見 push 後 Actions（追記於此）。
+- CI 首跑實錄：run#1 **紅**——當場抓到 `t_impact_incidents_smoke` 硬編 `/Users/enzo/...` 絕對路徑（外審 hermetic 批評第一天就兌現價值）；改 `__file__` 相對後 run#2 **綠**（3m15s 全套 1588＋doctor --ci＋anchor verify）。信任根已活。
