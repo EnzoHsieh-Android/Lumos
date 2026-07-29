@@ -42,7 +42,7 @@ Lumos keeps that knowledge in a graph of Markdown notes (Obsidian-compatible, bu
 | **CLI** | `scripts/lumos`, `scripts/test_lumos.py` | Pure python3 stdlib, zero dependencies, **44 top-level commands**. Read / write (write-then-self-verify) / inspect (`doctor`) / archive. |
 | **Contract-guard scaffold** | `lumos guard list/scaffold/bind/audit/trace` | Dialogue-driven: list unbound `★INVARIANT★`, scaffold **red-by-default** test stubs, bind `[test:]`, stamp independent `[audit:]`. |
 | **Adversarial-audit loops** | `lumos pitfalls`, `code-loop`, `canary`, `loop`, `fold-check`, `refcheck` | `pitfalls --diff` classifies findings by tier (standard/high); tier=high branches go through canary-guarded `code-loop` (adversarial code review); `design-loop` audits a spec adversarially *before* implementation; `fold-check` catches design fold-drift. |
-| **Impact / integrity** | `lumos impact`, `anchor verify/approve` | `impact` reverse-looks up graph nodes affected by a changed file (direct + indirect) and surfaces matched incidents via `pitfall_when`; `anchor` guards test/gate files from silent tampering. |
+| **Impact / integrity** | `lumos impact`, `anchor verify/approve`, `lumos testmap` | `impact` reverse-looks up graph nodes affected by a changed file (direct + indirect) and surfaces matched incidents via `pitfall_when`; `anchor` guards test/gate files from silent tampering; `testmap` builds a file↔test dependency map (naming/content/cochange signals) and `affected` suggests which tests to run for a diff (advisory; promoted via a two-layer gold-pair recall of 1.0 on a real repo). |
 | **git hooks** | `scripts/hooks/` | pre-commit hard-blocks "code without graph"; post-commit logs any bypass; pre-push runs `doctor --ci` **+ `anchor verify` + hard-blocks tier=high branches that haven't passed `code-loop`**. |
 | **Claude hooks** | `scripts/hooks/claude/` | PreToolUse: injects the impact radius before you edit code; PostToolUse: self-sufficiency / verification-rot post-check. (ADR 2026-07-06: the per-turn Stop nag for code-loop was removed — too noisy; enforcement is the pre-push gate alone.) |
 | **Installers** | `get.sh`, `get.ps1`, `install.sh`, `scripts/merge-claude-settings.py` (underlying: `install-hooks.sh` / `install-graph-toolchain.sh`) | Machine layer (`get.*`) + project layer (`lumos init`) — two-step onboarding, hook setup, and Claude settings merge. |
@@ -166,7 +166,8 @@ WORK    ── make the change; before editing code the impact hook auto-injects
 WRITE   ── lumos set/append/decision-add to record decisions, verifications, contracts
 VERIFY  ── lumos lint <node>        (fast, single file — run right after writing a node)
         ── lumos doctor             (whole-graph health)
-FINISH  ── lumos pitfalls --diff <base>..HEAD; tier=high → code-loop (canary-guarded adversarial
+FINISH  ── lumos testmap affected --diff <base>..HEAD for suggested tests (advisory);
+           lumos pitfalls --diff <base>..HEAD; tier=high → code-loop (canary-guarded adversarial
            code review) → code-loop pass records the convergence ledger
 COMMIT  ── pre-commit blocks code-without-graph; pre-push runs doctor --ci + anchor verify +
            code-loop check (hard-blocks tier=high branches that haven't passed)
@@ -194,7 +195,7 @@ lumos search <kw> [--path P]     # full-text search (replaces Obsidian search)
 lumos links / backlinks <node>   # outgoing / incoming edges
 lumos map <node> [--depth N]     # neighborhood tree
 lumos decisions [<node>] [--superseded]   # ADR decisions / scan overturned ones
-lumos stale [--match S] [--candidate]     # stale verifications / "what to re-verify when X changes"
+lumos stale [--match S] [--candidate]     # stale verifications / "what to re-verify when X changes" (risk-sorted by hub-ness × age; --legacy for alphabetical)
 lumos recent [N] · lumos stats · lumos export --format mermaid|dot|html
 ```
 
@@ -231,6 +232,8 @@ lumos loop capture-counts --finder ... --from-pitfalls <range>   # capture-recap
 lumos fold-check <spec>                               # catch design fold-drift (mirrored sections / value drift / missing reversal)
 lumos refcheck <spec> --repo . [--json]              # mechanically verify spec→repo references (missing / line-number out of range)
 lumos impact --file <file> [--depth N] [--json]      # reverse-lookup affected graph nodes (direct + indirect) + matched incidents (pitfall_when)
+lumos testmap build [--repo R] [--json]              # file↔test dependency map: mine edges via naming/content/cochange signals into .lumos/testmap.json
+lumos testmap affected --diff <range> [--json]       # suggest tests for a diff + uncovered files + 3-signal staleness hints (advisory, always rc0)
 lumos anchor verify | approve --note "<reason>"      # test/gate file integrity: verify fingerprint / approve a deliberate change as new baseline
 ```
 
