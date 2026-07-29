@@ -35,13 +35,14 @@ summary: |-
 ### [S1] `canary record` 落盤自驗（修 [[Issues/canary-record未落盤事件]] 的機械面）
 
 - 成功輸出改為：`✓ canary <kind> 留痕: CANARY-<id> [(auditor=<a>)] → <log 檔絕對路徑>`（auditor 段沿現行慣例**有給才印**；新增＝行尾落盤絕對路徑，消「成功了但不知寫哪」盲區）。
-- **append 後讀回驗證**（**欄位名更正，r1 四方同報：現行 schema 識別欄是 `token`，無 `id` 欄——照原文實作自驗會 100% 誤報**）：**重新開檔**（獨立 read handle，以此為準）、確認存在某行 `json.loads` 可解且其 **`token` 欄 == `CANARY-<id>`**；不成立 → stderr `canary record: 落盤自驗失敗(<絕對路徑>)` ＋ **rc 2**、不印 ✓ 行。自驗 helper 介面＝「寫入一行＋caller 提供唯一鍵欄名與值」（record 用 `token`、second 用自身 `token`），不寫死欄名。
+- **append 後讀回驗證**（**欄位名更正，r1 四方同報：現行 schema 識別欄是 `token`，無 `id` 欄——照原文實作自驗會 100% 誤報**）：**重新開檔**（獨立 read handle，以此為準）、確認存在某行 `json.loads` 可解且其 **`token` 欄 == `CANARY-<id>`**；不成立 → stderr `canary record: 落盤自驗失敗(<絕對路徑>)` ＋ **rc 2**、不印 ✓ 行。自驗 helper 介面＝「寫入一行＋caller 提供唯一鍵欄名與值」（record 用 `token`、second 用自身 `token`），不寫死欄名。**second 的成功行印自身新 token**（非 `--id` 引用的原 token——樣板佔位符消歧，r2）。
 - vault 解析失敗（cwd 無 vault 且未給 --vault）→ 維持現行 rc2 路徑，但 [S1] 測試釘住「絕不靜默成功」。
 - `canary second`（[S2] 新指令）與既有 record 共用同一寫入＋自驗 helper（單源，不雙寫）。
 
 ### [S2] canary 第二判定者（抽樣分權，telemetry-only）
 
 - 新子指令：`lumos canary second --id CANARY-<id> --verdict agree|overturn --auditor <模型/人> [--note "<一句>"]`
+  - **wiring 前置修改明文（r2 席1/席2 同報）**：現行 dispatch `if args.cmd == "canary":` 無條件呼叫 `cmd_canary(env, args.kind, ...)` 不看 ccmd——須改依 `args.ccmd` 分流、second 走獨立 `cmd_canary_second`（否則跑 second 取不存在的 `kind` 屬性必崩）；新增 `csub.add_parser("second", ...)`。
   - 追加一行 `{kind:"second", token:"CANARY-<新id>", ref:"CANARY-<原id>", verdict, auditor, note, ts}`——**second 必帶自身唯一 `token`**（r1 實查：gov ledger dedup key 含 token，缺 token 的 second 行會被折成一筆靜默消失）；走 [S1] 自驗 helper（唯一鍵=自身 token）。
   - `--id` 在 log 中不存在 → rc 2；`verdict` 僅收 `agree`/`overturn`（overturn 語意＝第二判者不同意原 caught/missed 判定；細節寫 note）。
   - `loop status` 忽略 second 行——**機制＝天然成立**（second 行不帶 `loop` 欄，現行 `loop==loop_id` 過濾天生濾掉，pre-flight 已實查現碼證實）；**不要為此新寫判斷（死代碼）**，[S3′] 第 5 項是回歸釘（防未來 filter 鬆動），非新邏輯。
@@ -50,20 +51,20 @@ summary: |-
 
 ### [S3] guard-kill 歸因升級（「準殺」）
 
-**現況更正（pre-flight 實查）**：現行 verdict 已六值（killed/timed_out/survived/drifted/abort/error）、`.kill-log` 已有 verdict 欄、且 **timed_out 現行計入 killed**（PIT 心智模型註解在案）。本條款＝**取值語意升級＋一項刻意行為變更**，非新增欄位：`killed` 拆歸因/未歸因兩級；`timed_out` **改不計 killed**（刻意變更——採外審「timeout 降弱證據」；理由：掛掉可能是環境非變異）。**rc 優先序明文（r1 修矛盾）**：`survived`→rc1；無 survived 但任一 `drifted/abort/error`→**rc2 不變**（執行錯誤不因弱證據條款放行）；僅 killed/killed-unattributed/timed_out-weak 組合→rc0＋摘要印弱證據（unattributed 與 timeout 同桶分列）。`--json` 模式弱證據計數入 JSON 欄位，不另印人話行（單行純度不破）。
+**現況更正（pre-flight 實查）**：現行 verdict 已六值（killed/timed_out/survived/drifted/abort/error）、`.kill-log` 已有 verdict 欄、且 **timed_out 現行計入 killed**（PIT 心智模型註解在案）。本條款＝**取值語意升級＋一項刻意行為變更**，非新增欄位：`killed` 拆歸因/未歸因兩級（新值定名 **`killed_unattributed`／`timed_out_weak`——底線風格與既有六值一致**，r2 指正勿混連字號）；`timed_out` **改不計 killed**（刻意變更——採外審「timeout 降弱證據」；理由：掛掉可能是環境非變異）。**rc 優先序明文（r1 修矛盾）**：`survived`→rc1；無 survived 但任一 `drifted/abort/error`→**rc2 不變**（執行錯誤不因弱證據條款放行）；僅 killed/killed_unattributed/timed_out_weak 組合→rc0＋摘要印弱證據（unattributed 與 timeout 同桶分列）。`--json` 模式弱證據計數入 JSON 欄位，不另印人話行；**且 guard kill 既有的 dirty-worktree 警告與 --keep-worktree 路徑提示在 --json 模式一律改走 stderr**（Codex r2：現碼這兩處先於 JSON 印上 stdout，消費端 json.loads 必炸——本包順修＋測項釘）。
 
-**前置修改（r1 四方同報）**：現行 `_kill_run` 只回傳輸出最後 200 字元——歸因開跑前料就沒了。本條款含 `_kill_run` 同步修改：完整保留 runner stdout＋stderr 供歸因（上限 256KB，超限存頭尾各半＋警告），歸因後才做展示截斷；既有 tail 展示不變。
+**前置修改（r1 四方同報；r2 補波及面）**：現行 `_kill_run` 只回傳輸出最後 200 字元——歸因開跑前料就沒了。同步修改：`_kill_run` 完整保留 runner stdout＋stderr 供歸因（上限 256KB；**超限截斷對齊換行邊界、縫處插一行 `...[truncated N bytes]...` marker**——r2 指正：裸位元組砍半會把兩條真實行拼成假行汙染行窗掃描）。**既有 tail 消費點三處（baseline 非綠 tail／survived res.tail／.kill-log 落盤與 --json）在使用前各自裁回 200 字**（r2 席1：只改 _kill_run 一處會讓帳檔與 json 膨脹到 256KB，違背「既有展示不變」）。
 
 `lumos guard kill` 跑完 recipe 後，對完整輸出做文字歸因：
 
 | verdict | 判準 | 語意 |
 |---|---|---|
-| `killed` | rc≠0 **且** 綁定測試方法名出現於輸出、且其行起往後 5 行窗內有失敗標記（`FAIL`/`FAILED`/`✗`/`AssertionError`——**裸 `Exception` 剔除**：r1 反例 `Running testFoo`＋兩行後 `InfrastructureException` 會偽造強歸因，非斷言類例外落 unattributed；標記比對大小寫不敏感） | 強證據：那條測試真的咬住了 |
-| `killed-unattributed` | rc≠0 但綁定測試名未命中上述判準 | 弱證據：可能只是 compile error/環境 crash——印警告「建議 recipe 加 filter 鎖定該測試」；**與 killed 分開計數**（摘要行分列） |
-| `timed_out-weak` | runner 逾時 | 弱證據、**不計 killed**（刻意變更，見上） |
+| `killed` | rc≠0 **且** 綁定測試方法名的**任一出現處**（掃全部出現行，非首個——r2 席2 以真實 pytest 重現：FAILURES 區頭行後標記在 6 行外，但 summary 行 `FAILED …::test_foo` 同行即中）其行起（含同行）往後 5 行窗內有失敗標記（`FAIL`/`FAILED`/`✗`/`AssertionError`——**裸 `Exception` 剔除**：非斷言類例外落 unattributed；標記大小寫不敏感） | 強證據：那條測試真的咬住了 |
+| `killed_unattributed` | rc≠0 但綁定測試名未命中上述判準 | 弱證據：可能只是 compile error/環境 crash——印警告「建議 recipe 加 filter 鎖定該測試」；**與 killed 分開計數**（摘要行分列） |
+| `timed_out_weak` | runner 逾時 | 弱證據、**不計 killed**（刻意變更，見上） |
 | `survived` | rc 0 | 不變（稻草人證據） |
 
-- 歸因輸出：以**失敗標記行為中心**、前後各 1 行並含測試名行的摘錄（截 200 字）印於 verdict 後。**摘要措辭收斂**：「✓ 全部 killed——咬得住」僅全強 killed 時印；混弱證據改印 `強殺 X / 弱 Y`。逐行 icon 表補 killed-unattributed(⚠)/timed_out-weak(⚠)。
+- 歸因輸出（r2 修幾何矛盾：標記行±1 行含不到 5 行外的測試名行）：摘錄＝**從命中的測試名行到失敗標記行整段**（含兩端，至多 6 行），總長截 200 字，印於 verdict 後。`killed_unattributed`/`timed_out_weak`/`survived` 無標記行——沿現行 tail 尾段展示（明文）。**摘要措辭收斂**：「✓ 全部 killed——咬得住」僅全強 killed 時印；混弱證據改印 `強殺 X / 弱 Y`。逐行 icon 表補 killed-unattributed(⚠)/timed_out-weak(⚠)。
 - 綁定測試名比對：以 `[test:]` 的方法名（含多平台 `P:方法` 的方法段）做**大小寫敏感子字串**比對（測試方法名是識別字）。
 - 既有 kill 測試：**timed_out 相關斷言依刻意變更同步調整**（其餘不倒退）；`.kill-log` verdict 欄既存——只擴值域，舊值讀取不變。
 
@@ -74,7 +75,7 @@ summary: |-
 3. record 於 vault 外 cwd（明給 --vault）→ 寫進正確 log（cwd 漂移回歸釘）；cwd 無 vault 且未給 --vault → rc2 非靜默成功；
 4. second 正常 agree → log 追加 kind=second 行（含 note 落盤讀回）；`--id` 不存在 → rc2；verdict 亂值 → rc2；缺 `--auditor` → rc2（分權紀錄無名則失義）；
 5. second 行存在時 `loop status --gate` 輸出與 rc 逐字節相同（回歸釘）；5b. `lumos gov` 多筆 second 不被 dedup 吞（各自 token 唯一）；5c. canary dispatch 依 ccmd 分流（second 不因取 `kind` 屬性炸——wiring touchpoint）；
-6. kill 歸因四型（fake run_cmd 各產：具名失敗／匿名 crash／逾時／全綠）→ killed／killed-unattributed（含警告）／timed_out-weak／survived；**timeout-only 情境 rc0＋摘要印弱證據筆數**；摘要 killed 與 unattributed **分開計數**可見；
+6. kill 歸因四型（fake run_cmd 各產：具名失敗／匿名 crash／逾時／全綠）→ killed／killed_unattributed（含警告）／timed_out_weak／survived；**6b. 真實 pytest 形狀 fixture**（FAILURES 區＋summary 行）→ killed 強歸因；**6c. --json 於 dirty worktree 下 stdout 恰一行合法 JSON**；**timeout-only 情境 rc0＋摘要印弱證據筆數**；摘要 killed 與 unattributed **分開計數**可見；
 7. killed 歸因輸出含命中行摘錄；**超長命中行截 200 字**（構造長行驗截斷）；
 8. gov ledger 對新 verdict 值原樣帶出不炸；icon 表兩新值非 `?`；（原「舊行無 verdict 欄」情境不存在，pre-flight 已證，刪）；
 9. 綁定名比對大小寫敏感（`Foo_test` 不命中 `foo_test`）；**多平台綁定（`[test:P:方法]`）取方法段歸因**命中案。
@@ -85,6 +86,9 @@ summary: |-
 - design-loop 與 code-loop 判讀段各加 [S2] 抽樣條（一句＋樣本保留路徑）。
 - [S1] 落地後：`Issues/canary-record未落盤事件` status → resolved，回填根因調查結果（重現或「無法重現，readback 防線已閉」如實記）。
 
+- **r2 panel**（2026-07-29，delta 3 席 sonnet＋Codex 否決；**三席 canary 全中（二連）**；存活全機械證實免辯方）：[major] ①canary dispatch 不看 ccmd——second 照字面必崩 → wiring 前置修改明文（席1+席2）；②_kill_run 改 256KB 波及三處 tail 消費點（帳檔/json 膨脹）→ 各自裁回明文（席1）；③真實 pytest 輸出標記在 5 行窗外、強殺誤判弱（席2 實跑 pytest 重現）→ 判準改「任一出現處」；④頭尾各半截斷拼假行 → 對齊換行+marker 行（席2）；⑤摘錄窗幾何矛盾（標記±1 含不到 5 行外測試名）→ 改「名行到標記行整段」（席3）；⑥guard kill --json 被 dirty 警告破純度 → 診斷改 stderr+測項（Codex）。[minor] verdict 命名統一底線風格；second 樣板 token 消歧；無標記行型摘錄明文；折入清單 reopen 措辭修正（席3 抓宣稱無落地）。測項補 6b（真 pytest fixture）/6c（dirty×json 純度）。
+  canary 帳：席1 caught（c 型幽靈回填欄——append-only 檔改寫既有行＝照字面不可能,性質點滿）、席2 caught（d 型溢出檔——多 recipe 互覆寫的具體失敗場景）、席3 caught（a 型假引用——宣稱 [S4] 有某總表,逐字核證無）。
+
 ## 實務隱患
 
 - 歸因啟發式對「測試名出現在非失敗上下文」（如 runner 列印執行清單）可能誤歸因 → 判準要求名字＋失敗標記**鄰近共現**（5 行窗），仍非零誤判，明標弱證據帳分開統計。
@@ -93,6 +97,6 @@ summary: |-
 
 ## 審計修正紀錄
 
-- **r1 panel**（2026-07-29，3 席 sonnet＋Codex 否決；**三席 canary 全中**；存活全機械證實免辯方）：[major] ①readback 判準引用不存在的 `id` 欄（現行=`token`）——照字面自驗 100% 誤報、功能自爆（四方同報,本包要防的錯落自己身上）→ 欄名更正+helper 介面改 caller 給唯一鍵；②second 行缺 token 會被 gov dedup 靜默吞光 → 必帶自身唯一 token（席1/席3/Codex）；③`_kill_run` 僅存尾 200 字、歸因無料 → 前置修改明文（四方）；④rc 規格矛盾（「無 survived rc0」誤蓋 drifted/abort/error）→ 優先序明文（Codex）；⑤裸 `Exception` 標記偽造強歸因（InfrastructureException 反例）→ 剔除、限斷言類（Codex）；⑥[S3′]#2 誘發手法測不到新分支 → 拆 2/2b（symlink→/dev/null 誘發 readback 失敗）（席3）；⑦「全部 killed 咬得住」混弱證據時誤導 → 措辭收斂+icon 補值（席3）；⑧#8 測項對不存在的讀取點 → 改測 gov 新值顯示（席1+Codex）。[minor] reopen 敘述統一；--json 弱證據入欄不印人話；摘錄中心行明定；dispatch 分流 touchpoint（5c）。
+- **r1 panel**（2026-07-29，3 席 sonnet＋Codex 否決；**三席 canary 全中**；存活全機械證實免辯方）：[major] ①readback 判準引用不存在的 `id` 欄（現行=`token`）——照字面自驗 100% 誤報、功能自爆（四方同報,本包要防的錯落自己身上）→ 欄名更正+helper 介面改 caller 給唯一鍵；②second 行缺 token 會被 gov dedup 靜默吞光 → 必帶自身唯一 token（席1/席3/Codex）；③`_kill_run` 僅存尾 200 字、歸因無料 → 前置修改明文（四方）；④rc 規格矛盾（「無 survived rc0」誤蓋 drifted/abort/error）→ 優先序明文（Codex）；⑤裸 `Exception` 標記偽造強歸因（InfrastructureException 反例）→ 剔除、限斷言類（Codex）；⑥[S3′]#2 誘發手法測不到新分支 → 拆 2/2b（symlink→/dev/null 誘發 readback 失敗）（席3）；⑦「全部 killed 咬得住」混弱證據時誤導 → 措辭收斂+icon 補值（席3）；⑧#8 測項對不存在的讀取點 → 改測 gov 新值顯示（席1+Codex）。[minor] 讀回機制明定為「獨立重開檔」（原 spec 前後段一講 reopen 一講同 fd,統一取前者）；--json 弱證據入欄不印人話；摘錄中心行明定；dispatch 分流 touchpoint（5c）。
 
 - **pre-flight**（2026-07-29，機械 checklist＋現碼實查，不計 loop findings）：①[S3] 三處現況誤述更正——現行 verdict 已六值/.kill-log 已有 verdict 欄/timed_out 現行計 killed（「timeout→skipped 既有語意」是我方誤寫）→ 改述為「取值語意升級＋timeout 降級屬刻意變更」並明文 rc 影響；②[S2] loop status 忽略 second＝天然成立（second 行無 loop 欄,現有過濾天生濾掉）→ 明文防死代碼,測試改回歸釘定位;③範圍刀與 [S2] 措辭衝突消解;④auditor 段沿現行有給才印;⑤[S3′] 補 6 項測試縫(note 落盤/缺 auditor rc2/多平台方法段/分開計數/200 字截斷/timeout-only rc 邊界);⑥canary-samples 寫入者=編排者人工,明文不驗。
