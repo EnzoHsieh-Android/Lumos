@@ -118,9 +118,9 @@ summary: |-
 ### [S3] 帳與離線查詢
 
 - `lumos ci-status`（唯讀、不打網路）：印帳上最後一筆＋`(檢查於 <ts>)`；超過 24 小時加註可能過期。供 hook 與離線用。
-- **帳檔（單源，全 spec 以此為準）**：檔名釘死為 docs 下的 **dot 前綴 ci-log jsonl 帳**（即與既有六帳同形：`.` 開頭、`-log.jsonl` 結尾；r3 席1+Codex 抓到原文字面漏了前導 dot 卻自稱 dot 前綴，三處各自解讀會產生兩個不同路徑＝互相看不到的 silent no-op）；欄位 `{ts, run_id, sha, branch, workflow, conclusion, title, url, failed_step, dedup_key}`——`branch` 供跨分支防誤提醒（r2 席1：原單源清單漏此欄，但 [S2b]/[S4] 都依賴它）；`workflow` 供多 run 分筆；`failed_step` 僅紅燈非空。
+- **帳檔（單源，全 spec 以此為準）**：檔名**字面釘死＝docs／.ci-log.jsonl**（讀作 docs 目錄下、點號開頭的 ci-log.jsonl；續審再指正前版「敘述式收窄不算釘死」——實作三處（gitignore／cochange exclude／gov load）需逐字同一字串，此處即權威）；欄位 `{ts, run_id, attempt, sha, branch, workflow, conclusion, title, url, failed_step, dedup_key}`——`branch` 供跨分支防誤提醒（r2 席1：原單源清單漏此欄，但 [S2b]/[S4] 都依賴它）；`workflow` 供多 run 分筆；`failed_step` 僅紅燈非空。
 - **只在終局寫帳（r1 修矛盾：原文暗示 in_progress 也記，與 [S1] 終局寫帳打架）**：`ci-wait` 只在**綠／紅／未定／逾時**四種終局各寫一筆；輪詢中的 `in_progress` 不寫帳。
-- **去重是應用層責任（r1 實查：`_jsonl_append_verified` 是「無條件寫入再讀回自驗」，不是 upsert，擋不了重複）**：寫入前先掃帳檔，已存在同 `dedup_key`（＝`run_id:conclusion`）→ 跳過寫入直接輸出（不算失敗）；否則才呼叫 helper（`key_field` 傳 `dedup_key`）。
+- **去重是應用層責任（r1 實查：`_jsonl_append_verified` 是「無條件寫入再讀回自驗」，不是 upsert，擋不了重複）**：寫入前先掃帳檔，已存在同 `dedup_key`（＝`run_id:attempt:conclusion`——**加 `attempt`**，續審：`gh run rerun` 沿用同一 run_id 只增 attempt，「紅→重跑→又紅」第二筆會被吞掉，而 [S2] 的 flaky 紀律正需要看到重跑次數）→ 跳過寫入直接輸出（不算失敗）；否則才呼叫 helper（`key_field` 傳 `dedup_key`）。
 - **逾時且該 sha 的 run 從未出現**：`run_id` 記 null、`dedup_key` 改用 `nosha:<sha>:timeout-waiting`（避免此型互相去重吞掉）。
 - **SessionStart hook 與 `ci-status` 皆不打網路**（避免拖慢開場）；只有 `ci-wait` 會連線。
 
