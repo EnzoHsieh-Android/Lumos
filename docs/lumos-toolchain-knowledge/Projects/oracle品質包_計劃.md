@@ -93,6 +93,13 @@ summary: |-
 - **r3 panel（終輪，2026-07-29；席1/席2 caught、席3 missed 剔除；cap=3 到頂）**：[major] ①icon 表連字號/底線自打（r2 修過又復發同型——席1+席2 同報,席3 落選同報）→ 底線統一＋全等注記；②second 的 verdict/ref 在 gov 帳全程隱形（分歧訊號被消音）→ mapper/分帳 touchpoint＋測項 5d（席1）；③--json 純度漏 legacy config 警告同坑 → 收斂全稱規則（Codex）；④測試名自帶 FAIL 偽造強歸因（`test_fail_closed` 反例）→ 標記不得命中名字串範圍內＋反例測項 6d（Codex）。[minor] tail 寫入點計數措辭校準；摘錄取跨距最短出現處；[編排者自主修正,採落選席觀察] 三型混合批測項 6e＋單源不雙寫釘 5e。
   canary 帳：席1 caught（d 型幽靈樣本檔,點出全檔唯一出現無路徑錨）、席2 caught（a 型假引用,核 [S1] 證無裁回規則）、**席3 missed**（b 型幽靈旗標未點出且宣稱簽名無不一致——判 missed 剔除,其 icon 發現由另兩席同報存活）。
 
+## 合約候選清單（設計端提名，落地時 guard bind 蓋章——合約鏡頭首次 dogfood）
+
+1. 「`canary record`/`second` 回報成功 ⟺ 該行已落盤可讀回」（readback 驗不到即 rc2 不印 ✓）——候選綁 `t_canary_record_persist`。
+2. 「second 紀錄純 telemetry，永不影響 `loop status` gate 輸出與 rc」——候選綁測項 5 回歸釘。
+3. 「guard kill 的 rc 優先序：survived→rc1、drifted/abort/error→rc2，弱證據不放行執行錯誤」——候選綁測項 6 rc 邊界。
+4. 「guard kill --json 模式 stdout 恆單行合法 JSON」——候選綁測項 6c。
+
 ## 實務隱患
 
 - 歸因啟發式對「測試名出現在非失敗上下文」（如 runner 列印執行清單）可能誤歸因 → 判準要求名字＋失敗標記**鄰近共現**（5 行窗），仍非零誤判，明標弱證據帳分開統計。
