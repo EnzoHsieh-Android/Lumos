@@ -38,6 +38,12 @@ decisions:
     why_chosen: scope 由單一可查點 --allowedTools 在 harness 層管理即夠;獨立驗證需 wrapper 讀 log 比對工具清單,本 spec 明確不做
     decided: 2026-06-23
     valid: true
+  - content: 非 dry-run 模式停用:autonomous-loop.sh 對 --pr 直接 exit 2(硬閘進 script 開頭),排程路徑本就僅 dry-run。解禁條件=read-only child isolation 落地+過 code-loop 終審
+    id: d4
+    context: Codex 外審(2026-07-29)指出已知 confused-deputy 漏洞仍留可執行入口;使用者裁定停用
+    why_chosen: 漏洞已知且修復 planned 未落地時,留著入口=可被 poisoned spec 誘導 Edit/Bash 的活風險;dry-run 產出 pending 等人放行的價值不受影響
+    decided: 2026-07-29
+    valid: true
 ---
 # nested-agent-permission-scope
 

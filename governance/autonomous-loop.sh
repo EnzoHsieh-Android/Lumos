@@ -5,11 +5,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODE="${1:---dry-run}"
 MAXR="${2:-6}"
+# 非 dry-run 停用(2026-07-29 使用者裁定,Codex 外審採納):子 agent 權限隔離
+# (Systems/nested-agent-permission-scope,planned)落地前,confused-deputy 已知漏洞
+# 不留可執行入口——--pr 直接拒跑。解禁條件:read-only child isolation 落地+過 code-loop。
+if [ "$MODE" != "--dry-run" ]; then
+  echo "autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常" >&2
+  exit 2
+fi
 TODAY="$(date +%F)"
 REPORT="$SCRIPT_DIR/reports/governance-$TODAY.json"
 PENDING="$SCRIPT_DIR/pending";  mkdir -p "$PENDING"
 LOGDIR="$SCRIPT_DIR/logs";      mkdir -p "$LOGDIR"
-SCRATCH="/tmp/auto-loop-$TODAY"; mkdir -p "$SCRATCH/kg" "$SCRATCH/spec"
+SCRATCH="$(mktemp -d "/tmp/auto-loop-$TODAY.XXXXXX")"; mkdir -p "$SCRATCH/kg" "$SCRATCH/spec"   # mktemp:防可預測路徑搶佔(外審 minor)
 log(){ echo "[$(date '+%F %T')] $*"; }
 
 if [ ! -f "$REPORT" ]; then
