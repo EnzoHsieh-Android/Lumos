@@ -6866,7 +6866,7 @@ def t_impact_incidents_smoke():
     import json as _json
     from pathlib import Path as _P
 
-    vault_issues = _P("/Users/enzo/harness/lumos-toolchain/docs/lumos-toolchain-knowledge/Issues")
+    vault_issues = _P(__file__).resolve().parent.parent / "docs" / "lumos-toolchain-knowledge" / "Issues"
     probe = vault_issues / "_incident_probe.md"
     probe_content = (
         "---\n"
