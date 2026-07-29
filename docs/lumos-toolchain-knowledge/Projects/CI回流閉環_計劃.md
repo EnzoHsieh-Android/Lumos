@@ -19,7 +19,9 @@ summary: |-
 ---
 # CI 回流閉環_計劃
 
-`PRIOR-ART:` ① 最小層：`gh run list --json` 已能查狀態、`lumos gov` 已是多帳彙整器、Claude hook 註冊機制（`merge-claude-settings.py` 的 `HOOK_ENTRIES`）已存在——主路徑 [S1][S2] 屬接線；**但 [S2b]-① 的 SessionStart hook 是新建**（實查現有僅註冊 PreToolUse/PostToolUse/Stop 三事件，無 SessionStart），需新增 hook 檔＋新事件登記，pre-flight 已更正原「已存在」的誤述。② 世界解過：Copilot cloud agent 一鍵修復、Codex `workflow_run` autofix、GH Agentic Workflows self-healing CI——全屬「雲端 agent 自動改碼開 PR」型。③ 裁定＝**borrow-design 但反向取捨**：借「CI 失敗要有下游接手」的問題定義，**拒絕**其雲端無人值守實作（見上方 ★ 裁定），改為本機拉取＋人在場修復。
+`PRIOR-ART:` **⓪ 自家後院已有實作（2026-07-29 使用者指出，本案 PRIOR-ART 第一問的真漏查——當時只查外部世界沒查消費專案）**：LandmarkMember（消費 repo，非本 repo 路徑）的 fetch-bundle 發版腳本早已在輪詢 CI——`gh run list --workflow=<指定> --branch=<tag> --json databaseId,status,conclusion` 每 N 秒重試、有次數上限；`completed+success` 才往下走、`completed+非 success` 印 run URL 後中止、逾時中止；其 release 腳本事後再撈 run id 寫進發版紀錄。**這是本案的實戰驗證來源**（輪詢間隔/逾時處置/run 撈不到的 fail 形態/`--branch` 配 tag 過濾皆已在真環境跑順），**差別在範圍**：它等「一支指定 workflow、發版時機、紅了交人」；本案要「該 sha 全部檢查、每次 push、紅了 AI 當輪修＋進治理帳」。
+
+① 最小層：`gh run list --json` 已能查狀態、`lumos gov` 已是多帳彙整器、Claude hook 註冊機制（`merge-claude-settings.py` 的 `HOOK_ENTRIES`）已存在——主路徑 [S1][S2] 屬接線；**但 [S2b]-① 的 SessionStart hook 是新建**（實查現有僅註冊 PreToolUse/PostToolUse/Stop 三事件，無 SessionStart），需新增 hook 檔＋新事件登記，pre-flight 已更正原「已存在」的誤述。② 世界解過：Copilot cloud agent 一鍵修復、Codex `workflow_run` autofix、GH Agentic Workflows self-healing CI——全屬「雲端 agent 自動改碼開 PR」型。③ 裁定＝**borrow-design 但反向取捨**：借「CI 失敗要有下游接手」的問題定義，**拒絕**其雲端無人值守實作（見上方 ★ 裁定），改為本機拉取＋人在場修復。
 
 ## 範圍刀（明確不做）
 
@@ -40,7 +42,10 @@ summary: |-
 
 - **時機**：`git push` 成功之後**立刻**在同一輪跑（CI 於 push 完成即觸發，~3 分鐘出結論）。
 - 行為：先解析當前 HEAD sha → 輪詢 `gh run list --branch <分支> --json databaseId,headSha,status,conclusion,displayTitle,url,workflowName`（間隔 15s，`--timeout` 預設 600s）直到**該 sha 的所有 run 全部** `status=completed`（r2 Codex：只取最近一筆會假綠——快 lint 先綠就收工、慢 integration 五分鐘後才紅，後備網讀最後一筆也是綠，主目標破功）。
-- **聚合判定**：全綠才綠；**任一紅即紅**（紅的 workflow 全列）；有 run 仍在跑就繼續等。帳每個 run 各記一筆（`workflow` 欄）。
+- **`ci.workflow` 宣告（選配，2026-07-29 折入；借 Landmark 實戰形態，把複雜度退回已驗證等級）**：
+  - **有宣告**（字串或字串陣列）→ `gh run list --workflow=<名>` **只等宣告的那幾支**。此路徑**沒有聚合問題也沒有晚註冊假綠問題**（等的是確定的集合），複雜度＝Landmark 現行做法。適合「只有一支關鍵 workflow 要等」的專案。
+  - **未宣告**（預設）→ 等該 sha 的**全部** run，走下列聚合＋grace period（保守但複雜；適合 workflow 會增減的專案）。
+- **聚合判定（未宣告 workflow 時）**：全綠才綠；**任一紅即紅**（紅的 workflow 全列）；有 run 仍在跑就繼續等。帳每個 run 各記一筆（`workflow` 欄）。
 - **晚註冊 run 的 grace period（r3 席2：原「等目前已註冊的都完成」只是把假綠從『完成時間』搬到『註冊時間』——path-filter 或依賴型 workflow 可能在你判綠後才註冊）**：判定為綠之前，**再等一個 grace 期（預設 30s）重查一次**；期間出現新 run 就繼續等。仍為綠才收工，並在輸出附「已知 N 個 workflow」供人核對。**此為緩解非保證**（無法證明沒有更晚的 run），明文列入誠實天花板。
 - **綠**：印一行綠燈訊息、寫帳、rc0。
 - **conclusion 九值分三類（r1：原紅/綠二分不窮盡；gh 實有 success/failure/cancelled/skipped/timed_out/action_required/neutral/stale/startup_failure）**：
@@ -57,7 +62,7 @@ summary: |-
 ### [S1b] 推送路徑分派（`.lumos/config.json` 的 `ci.flow`，彈性宣告）
 
 ```json
-{"ci": {"flow": "direct|pr|tier", "auto_merge": true}}
+{"ci": {"flow": "direct|pr|tier", "auto_merge": true, "workflow": "CI"}}
 ```
 
 - **`direct`（宣告了 ci 區塊但 flow=direct）**：直接 push → `ci-wait` → 紅則當輪修（[S2]）。
@@ -155,7 +160,8 @@ summary: |-
 29. **前提查詢 403**：branch protection 查詢回 403 → 拒用 `--auto`（不誤判為「無必要檢查」）；rulesets 查得到必要檢查 → 可用；
 30. **gov 總開關**：移除 `ci` 區塊後 `lumos gov` 不再顯示歷史 CI 事件；
 31. **tier=unknown**（fixture 讓 pitfalls fail-open）→ 走 direct；
-32. **重試上限機械面**：`ci-wait` 不含重試邏輯（重試是 [S2] skill 紀律）——測項僅釘「rc1 時輸出含可據以修復的失敗步驟＋log 尾段」，重試次數不由工具強制（明文取捨：紀律面不機械化，防工具替人決定何時放棄）。
+32. **`ci.workflow` 指定路徑**：宣告單一 workflow → 只等該支（fixture 讓另一支同 sha 的 run 恆 in_progress，仍能判綠收工）；宣告陣列 → 等該子集全部；未宣告 → 走聚合＋grace（沿測項 22/27）；
+33. **重試上限機械面**：`ci-wait` 不含重試邏輯（重試是 [S2] skill 紀律）——測項僅釘「rc1 時輸出含可據以修復的失敗步驟＋log 尾段」，重試次數不由工具強制（明文取捨：紀律面不機械化，防工具替人決定何時放棄）。
 
 ### [S5] 文件
 
@@ -179,3 +185,4 @@ summary: |-
   canary 帳：席1 caught（d 型幽靈 schema 檔）、席2 caught（a 型假引用）、席3 caught（b 型幽靈旗標 `--draft-first`）。
   **cap=3 到頂**：三輪皆有效輪且三席全中，但每輪仍出真 major（本輪含一條 r2 同型復發）——依紀律停、攤人裁。
   **帳面時序偏差（如實記）**：r3 三筆 canary record 因折入腳本首跑中止而先於折入寫入，log 內 `reviewed`/`result` hash 為折入前版本；findings 內容與判定不受影響（審計報告在先、折入在後），惟 hash 鏈該輪不代表 post-fold 版——同 2026-07-28 testmap r3 的同型註記。
+- **r3 後補充折入（2026-07-29，使用者指出，非新一輪審計）**：①PRIOR-ART 補 ⓪「自家後院已有實作」（Landmark 的發版輪詢腳本＝本案實戰驗證來源；家規三問第一問當時只查外部世界，漏查消費專案——教訓記入）；②借其形態新增 `ci.workflow` 選配宣告：**指定要等哪支 workflow 即可繞開聚合與晚註冊假綠兩個複雜度**（複雜度退回已在真環境驗證的等級），未宣告才走保守聚合路徑。測項補 32。
