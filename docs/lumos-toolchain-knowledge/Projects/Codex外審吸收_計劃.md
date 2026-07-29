@@ -39,3 +39,4 @@ summary: |-
 
 - P0 全套：本機 1588 checks 全綠＋乾淨 HOME 預演全綠（CI 可行性驗證）＋doctor 0 issues。
 - CI 首跑實錄：run#1 **紅**——當場抓到 `t_impact_incidents_smoke` 硬編 `/Users/enzo/...` 絕對路徑（外審 hermetic 批評第一天就兌現價值）；改 `__file__` 相對後 run#2 **綠**（3m15s 全套 1588＋doctor --ci＋anchor verify）。信任根已活。
+- **對話輪收官（2026-07-29，三輪互審）**：總分 5.2→**6.4**（方法論 7.5/治理 7.5/架構 6.0/可用性 5.5/安全 5.5）。全程五份文件歸檔 `governance/external-reviews/`。對話戰果：①它改口四處（canary 鑑別力/負結果文化/可移植性基準/拆檔時點——皆因實證）②我方採納其「第一刀」三步與 guard-kill 升準殺全案③**它反查出真事故**：code-testmap r2 三筆 canary record 回報成功未落盤（[[Issues/canary-record未落盤事件]]），11 中 10 降級為 8 原生+3 補記④終稿仍明標分歧：「圖譜為準」正文未改不給預支分、dry-run 寫權未隔離、required check 未設。⑤路線圖重排：P1-0 部署最後一哩/P1-1 oracle 品質包（record 落盤自驗+canary 第二判者抽查+guard-kill 歸因）/P1-2 砍統計儀式/P1-3 合約普查——與我方 backlog 合流，oracle 品質升為最高投資序。終稿結語可當北極星：「讓每一盞綠燈都能回答：證據真的落盤了嗎？紅燈真的是那條規則咬住的嗎？」
