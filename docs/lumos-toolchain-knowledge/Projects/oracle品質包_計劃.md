@@ -47,24 +47,25 @@ summary: |-
   - `--id` 在 log 中不存在 → rc 2；`verdict` 僅收 `agree`/`overturn`（overturn 語意＝第二判者不同意原 caught/missed 判定；細節寫 note）。
   - `loop status` 忽略 second 行——**機制＝天然成立**（second 行不帶 `loop` 欄，現行 `loop==loop_id` 過濾天生濾掉，pre-flight 已實查現碼證實）；**不要為此新寫判斷（死代碼）**，[S3′] 第 5 項是回歸釘（防未來 filter 鬆動），非新邏輯。
 - **抽樣紀律（skill 層，非機械閘）**：design-loop 與 code-loop 判讀段各加一條——每累計 5 個 caught 輪抽 1 輪，把「審計員原始報告全文＋植入描述（型別/位置/性質）」交乾淨第二判者判 caught/missed；抽中輪的審計員報告存 `governance/canary-samples/CANARY-<id>.md`（**寫入者＝編排者人工存檔，本條即其定義，[S3′] 不驗**；僅抽中輪保留——全量成本不值）。分歧（overturn）→ 記 `canary second --verdict overturn` ＋該 loop 下一輪 framing 復核。
+- **gov 可見性 touchpoint（r3 席1）**：現行 gov 第 4 源 mapper 不讀 `verdict`/`ref`——overturn 分歧訊號寫進 log 後在治理帳完全隱形（S2 存在理由被消音）。同步修改：mapper 把 `verdict`/`ref` 併入 detail、分帳段對 kind=second 顯示 `agree/overturn` 計數；測項 5d＝`lumos gov` 可見 second 的 verdict。
 - 誠實天花板：抽樣頻率 1/5 是先驗值；第二判者仍是 LLM（同門盲點靠換家族緩解，skill 建議第二判者優先跨家族）。
 
 ### [S3] guard-kill 歸因升級（「準殺」）
 
-**現況更正（pre-flight 實查）**：現行 verdict 已六值（killed/timed_out/survived/drifted/abort/error）、`.kill-log` 已有 verdict 欄、且 **timed_out 現行計入 killed**（PIT 心智模型註解在案）。本條款＝**取值語意升級＋一項刻意行為變更**，非新增欄位：`killed` 拆歸因/未歸因兩級（新值定名 **`killed_unattributed`／`timed_out_weak`——底線風格與既有六值一致**，r2 指正勿混連字號）；`timed_out` **改不計 killed**（刻意變更——採外審「timeout 降弱證據」；理由：掛掉可能是環境非變異）。**rc 優先序明文（r1 修矛盾）**：`survived`→rc1；無 survived 但任一 `drifted/abort/error`→**rc2 不變**（執行錯誤不因弱證據條款放行）；僅 killed/killed_unattributed/timed_out_weak 組合→rc0＋摘要印弱證據（unattributed 與 timeout 同桶分列）。`--json` 模式弱證據計數入 JSON 欄位，不另印人話行；**且 guard kill 既有的 dirty-worktree 警告與 --keep-worktree 路徑提示在 --json 模式一律改走 stderr**（Codex r2：現碼這兩處先於 JSON 印上 stdout，消費端 json.loads 必炸——本包順修＋測項釘）。
+**現況更正（pre-flight 實查）**：現行 verdict 已六值（killed/timed_out/survived/drifted/abort/error）、`.kill-log` 已有 verdict 欄、且 **timed_out 現行計入 killed**（PIT 心智模型註解在案）。本條款＝**取值語意升級＋一項刻意行為變更**，非新增欄位：`killed` 拆歸因/未歸因兩級（新值定名 **`killed_unattributed`／`timed_out_weak`——底線風格與既有六值一致**，r2 指正勿混連字號）；`timed_out` **改不計 killed**（刻意變更——採外審「timeout 降弱證據」；理由：掛掉可能是環境非變異）。**rc 優先序明文（r1 修矛盾）**：`survived`→rc1；無 survived 但任一 `drifted/abort/error`→**rc2 不變**（執行錯誤不因弱證據條款放行）；僅 killed/killed_unattributed/timed_out_weak 組合→rc0＋摘要印弱證據（unattributed 與 timeout 同桶分列）。`--json` 模式弱證據計數入 JSON 欄位，不另印人話行；**且 guard kill 在 --json 模式下所有非 JSON 診斷（dirty-worktree 警告/--keep-worktree 路徑/多平台 legacy run_cmd 警告等）一律走 stderr**——r2 只點名兩處、r3 Codex 再抓 legacy config 警告同坑，收斂為全稱規則＋測項各釘（6c 擴：dirty 與 legacy-config 兩情境）。
 
-**前置修改（r1 四方同報；r2 補波及面）**：現行 `_kill_run` 只回傳輸出最後 200 字元——歸因開跑前料就沒了。同步修改：`_kill_run` 完整保留 runner stdout＋stderr 供歸因（上限 256KB；**超限截斷對齊換行邊界、縫處插一行 `...[truncated N bytes]...` marker**——r2 指正：裸位元組砍半會把兩條真實行拼成假行汙染行窗掃描）。**既有 tail 消費點三處（baseline 非綠 tail／survived res.tail／.kill-log 落盤與 --json）在使用前各自裁回 200 字**（r2 席1：只改 _kill_run 一處會讓帳檔與 json 膨脹到 256KB，違背「既有展示不變」）。
+**前置修改（r1 四方同報；r2 補波及面）**：現行 `_kill_run` 只回傳輸出最後 200 字元——歸因開跑前料就沒了。同步修改：`_kill_run` 完整保留 runner stdout＋stderr 供歸因（上限 256KB；**超限截斷對齊換行邊界、縫處插一行 `...[truncated N bytes]...` marker**——r2 指正：裸位元組砍半會把兩條真實行拼成假行汙染行窗掃描）。**既有 tail 寫入點兩處（baseline 非綠／survived 的 res.tail——.kill-log 與 --json 為其下游共用）於寫入時裁回 200 字**（r3 措辭校準:非三處獨立源）（r2 席1：只改 _kill_run 一處會讓帳檔與 json 膨脹到 256KB，違背「既有展示不變」）。
 
 `lumos guard kill` 跑完 recipe 後，對完整輸出做文字歸因：
 
 | verdict | 判準 | 語意 |
 |---|---|---|
-| `killed` | rc≠0 **且** 綁定測試方法名的**任一出現處**（掃全部出現行，非首個——r2 席2 以真實 pytest 重現：FAILURES 區頭行後標記在 6 行外，但 summary 行 `FAILED …::test_foo` 同行即中）其行起（含同行）往後 5 行窗內有失敗標記（`FAIL`/`FAILED`/`✗`/`AssertionError`——**裸 `Exception` 剔除**：非斷言類例外落 unattributed；標記大小寫不敏感） | 強證據：那條測試真的咬住了 |
+| `killed` | rc≠0 **且** 綁定測試方法名的**任一出現處**（掃全部出現行——r2 真實 pytest 重現:summary 行同行即中）其行起（含同行）往後 5 行窗內有失敗標記，**且標記命中位置不得落在測試名字串自身範圍內**（r3 Codex 反例:綁定測試叫 `test_fail_closed`,名字自帶 FAIL——回顯名字＋無關 rc≠0 就偽造強殺;此類落 unattributed）（`FAIL`/`FAILED`/`✗`/`AssertionError`——**裸 `Exception` 剔除**：非斷言類例外落 unattributed；標記大小寫不敏感） | 強證據：那條測試真的咬住了 |
 | `killed_unattributed` | rc≠0 但綁定測試名未命中上述判準 | 弱證據：可能只是 compile error/環境 crash——印警告「建議 recipe 加 filter 鎖定該測試」；**與 killed 分開計數**（摘要行分列） |
 | `timed_out_weak` | runner 逾時 | 弱證據、**不計 killed**（刻意變更，見上） |
 | `survived` | rc 0 | 不變（稻草人證據） |
 
-- 歸因輸出（r2 修幾何矛盾：標記行±1 行含不到 5 行外的測試名行）：摘錄＝**從命中的測試名行到失敗標記行整段**（含兩端，至多 6 行），總長截 200 字，印於 verdict 後。`killed_unattributed`/`timed_out_weak`/`survived` 無標記行——沿現行 tail 尾段展示（明文）。**摘要措辭收斂**：「✓ 全部 killed——咬得住」僅全強 killed 時印；混弱證據改印 `強殺 X / 弱 Y`。逐行 icon 表補 killed-unattributed(⚠)/timed_out-weak(⚠)。
+- 歸因輸出（r2 修幾何矛盾：標記行±1 行含不到 5 行外的測試名行）：摘錄＝**取跨距最短的命中出現處**（名行與標記行距離最小者），從名行到標記行整段（含兩端，至多 6 行），總長截 200 字，印於 verdict 後。`killed_unattributed`/`timed_out_weak`/`survived` 無標記行——沿現行 tail 尾段展示（明文）。**摘要措辭收斂**：「✓ 全部 killed——咬得住」僅全強 killed 時印；混弱證據改印 `強殺 X / 弱 Y`。逐行 icon 表補 `killed_unattributed`(⚠)/`timed_out_weak`(⚠)（底線——r3 抓到 r2 自己又寫回連字號,icon key 必須與 verdict 字面全等否則查表恆 `?`）。
 - 綁定測試名比對：以 `[test:]` 的方法名（含多平台 `P:方法` 的方法段）做**大小寫敏感子字串**比對（測試方法名是識別字）。
 - 既有 kill 測試：**timed_out 相關斷言依刻意變更同步調整**（其餘不倒退）；`.kill-log` verdict 欄既存——只擴值域，舊值讀取不變。
 
@@ -74,8 +75,8 @@ summary: |-
 2. 寫入失敗（log 被目錄佔用）→ rc2 走既有 OSError 訊息（此手法誘發不到 readback 分支——r1 指正）；2b. **readback 失敗誘發＝log 為 symlink→/dev/null**（append 成功、讀回恆空）→ rc2、stderr 含「落盤自驗失敗」、無 ✓ 行；
 3. record 於 vault 外 cwd（明給 --vault）→ 寫進正確 log（cwd 漂移回歸釘）；cwd 無 vault 且未給 --vault → rc2 非靜默成功；
 4. second 正常 agree → log 追加 kind=second 行（含 note 落盤讀回）；`--id` 不存在 → rc2；verdict 亂值 → rc2；缺 `--auditor` → rc2（分權紀錄無名則失義）；
-5. second 行存在時 `loop status --gate` 輸出與 rc 逐字節相同（回歸釘）；5b. `lumos gov` 多筆 second 不被 dedup 吞（各自 token 唯一）；5c. canary dispatch 依 ccmd 分流（second 不因取 `kind` 屬性炸——wiring touchpoint）；
-6. kill 歸因四型（fake run_cmd 各產：具名失敗／匿名 crash／逾時／全綠）→ killed／killed_unattributed（含警告）／timed_out_weak／survived；**6b. 真實 pytest 形狀 fixture**（FAILURES 區＋summary 行）→ killed 強歸因；**6c. --json 於 dirty worktree 下 stdout 恰一行合法 JSON**；**timeout-only 情境 rc0＋摘要印弱證據筆數**；摘要 killed 與 unattributed **分開計數**可見；
+5. second 行存在時 `loop status --gate` 輸出與 rc 逐字節相同（回歸釘）；5b. `lumos gov` 多筆 second 不被 dedup 吞（各自 token 唯一）；5d. gov 可見 second 的 verdict（agree/overturn 計數）；5e. second 一次呼叫恰寫一行（單源不雙寫釘）；5c. canary dispatch 依 ccmd 分流（second 不因取 `kind` 屬性炸——wiring touchpoint）；
+6. kill 歸因四型（fake run_cmd 各產：具名失敗／匿名 crash／逾時／全綠）→ killed／killed_unattributed（含警告）／timed_out_weak／survived；**6b. 真實 pytest 形狀 fixture**（FAILURES 區＋summary 行）→ killed 強歸因；**6d. 名字自帶標記反例**（綁定名 `test_fail_closed`＋無關失敗）→ unattributed；**6e. 三型混合批**（killed+unattributed+timed_out_weak 同批）→ `強殺 X / 弱 Y` 措辭＋分桶計數；**6c. --json 於 dirty worktree 下 stdout 恰一行合法 JSON**；**timeout-only 情境 rc0＋摘要印弱證據筆數**；摘要 killed 與 unattributed **分開計數**可見；
 7. killed 歸因輸出含命中行摘錄；**超長命中行截 200 字**（構造長行驗截斷）；
 8. gov ledger 對新 verdict 值原樣帶出不炸；icon 表兩新值非 `?`；（原「舊行無 verdict 欄」情境不存在，pre-flight 已證，刪）；
 9. 綁定名比對大小寫敏感（`Foo_test` 不命中 `foo_test`）；**多平台綁定（`[test:P:方法]`）取方法段歸因**命中案。
@@ -88,6 +89,9 @@ summary: |-
 
 - **r2 panel**（2026-07-29，delta 3 席 sonnet＋Codex 否決；**三席 canary 全中（二連）**；存活全機械證實免辯方）：[major] ①canary dispatch 不看 ccmd——second 照字面必崩 → wiring 前置修改明文（席1+席2）；②_kill_run 改 256KB 波及三處 tail 消費點（帳檔/json 膨脹）→ 各自裁回明文（席1）；③真實 pytest 輸出標記在 5 行窗外、強殺誤判弱（席2 實跑 pytest 重現）→ 判準改「任一出現處」；④頭尾各半截斷拼假行 → 對齊換行+marker 行（席2）；⑤摘錄窗幾何矛盾（標記±1 含不到 5 行外測試名）→ 改「名行到標記行整段」（席3）；⑥guard kill --json 被 dirty 警告破純度 → 診斷改 stderr+測項（Codex）。[minor] verdict 命名統一底線風格；second 樣板 token 消歧；無標記行型摘錄明文；折入清單 reopen 措辭修正（席3 抓宣稱無落地）。測項補 6b（真 pytest fixture）/6c（dirty×json 純度）。
   canary 帳：席1 caught（c 型幽靈回填欄——append-only 檔改寫既有行＝照字面不可能,性質點滿）、席2 caught（d 型溢出檔——多 recipe 互覆寫的具體失敗場景）、席3 caught（a 型假引用——宣稱 [S4] 有某總表,逐字核證無）。
+
+- **r3 panel（終輪，2026-07-29；席1/席2 caught、席3 missed 剔除；cap=3 到頂）**：[major] ①icon 表連字號/底線自打（r2 修過又復發同型——席1+席2 同報,席3 落選同報）→ 底線統一＋全等注記；②second 的 verdict/ref 在 gov 帳全程隱形（分歧訊號被消音）→ mapper/分帳 touchpoint＋測項 5d（席1）；③--json 純度漏 legacy config 警告同坑 → 收斂全稱規則（Codex）；④測試名自帶 FAIL 偽造強歸因（`test_fail_closed` 反例）→ 標記不得命中名字串範圍內＋反例測項 6d（Codex）。[minor] tail 寫入點計數措辭校準；摘錄取跨距最短出現處；[編排者自主修正,採落選席觀察] 三型混合批測項 6e＋單源不雙寫釘 5e。
+  canary 帳：席1 caught（d 型幽靈樣本檔,點出全檔唯一出現無路徑錨）、席2 caught（a 型假引用,核 [S1] 證無裁回規則）、**席3 missed**（b 型幽靈旗標未點出且宣稱簽名無不一致——判 missed 剔除,其 icon 發現由另兩席同報存活）。
 
 ## 實務隱患
 
