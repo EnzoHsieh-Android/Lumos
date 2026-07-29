@@ -14,7 +14,7 @@ summary: |-
   KEY:問題——CI(GitHub Actions)紅了只存在 GitHub 網頁,本機 lumos/圖譜/治理帳全不知情;下個 session 開場也讀不到 → 自動開發迴圈在「推出去之後」斷掉
   KEY:解法方向=**push 後同輪等待+修復重試(watch-fix-retry)**,非雲端自動修也非留到下次開場:`lumos ci-wait` 在 push 成功後阻塞等 CI 結論→紅則印失敗步驟+log 尾段→在場 session 當輪修→重推→再等(最多 2 次自動重試,之後攤人);SessionStart 推播降為**後備網**(session 中斷/機器關機才用),不是主路徑
   KEY:★不採雲端 autofix(明文裁定)★——世界主流(Copilot cloud agent 一鍵修/Codex workflow_run autofix/GH Agentic Workflows)是 CI 失敗觸發 agent 在雲端改碼開 PR;與 2026-07-29 剛裁定的「autonomous 非 dry-run 停用」同源風險(無人看顧 agent 握寫入權=confused-deputy),且需把金鑰放進 CI → 本案明文排除,解禁條件同 [[Systems/nested-agent-permission-scope]] d4
-  DEP:[[Systems/gov治理帳]]
+  DEP:[[Systems/reversibility-governance-ledger]]
 ---
 # CI 回流閉環_計劃
 
@@ -31,17 +31,23 @@ summary: |-
 
 ## 條款
 
-### [S1] `lumos ci-wait [--timeout 600] [--repo R] [--json]`——push 後同輪等結論（主路徑）
+### [S1] `lumos ci-wait [--timeout 600] [--repo-dir D] [--json]`——push 後同輪等結論（主路徑）
+
+**旗標更名（r1 四方同報）**：原 `--repo` 與 `gh` 原生 `-R/--repo`（吃 `OWNER/REPO` 字串）語意相反、直傳會被 gh 拒收 → 改名 `--repo-dir`（本機目錄，沿 lumos 家族語意）；**owner/repo 由本案自行從 `git -C D remote get-url origin` 解析後餵 `gh -R`，不轉發使用者輸入**。
 
 - **時機**：`git push` 成功之後**立刻**在同一輪跑（CI 於 push 完成即觸發，~3 分鐘出結論）。
 - 行為：先解析當前 HEAD sha → 輪詢 `gh run list --branch <分支> --json databaseId,headSha,status,conclusion,displayTitle,url`（間隔 15s，`--timeout` 預設 600s）直到**該 sha 的 run** 出現且 `status=completed`。
 - **綠**：印一行綠燈訊息、寫帳、rc0。
-- **紅**：印 `conclusion`＋**失敗步驟名**＋該步驟 log 尾段 40 行（`gh run view <id> --log-failed`，截 4000 字）＋run URL；寫帳；**rc 1**（讓呼叫端/skill 知道要進修復路徑）。
+- **conclusion 九值分三類（r1：原紅/綠二分不窮盡；gh 實有 success/failure/cancelled/skipped/timed_out/action_required/neutral/stale/startup_failure）**：
+  - **綠**＝`success`／`neutral`／`skipped` → rc0。
+  - **紅**＝`failure`／`timed_out`／`startup_failure` → rc1＋失敗證據（下行）。
+  - **未定**＝`cancelled`／`action_required`／`stale` → rc0＋印「非成功但無失敗步驟可歸因」＋寫帳，**不進修復路徑**。
+- **紅燈證據取得（r1+Codex：`--log-failed` 是純文字 log 非結構化 step API，多 job 平行時輸出交錯，且可能只標 UNKNOWN STEP）**：步驟名走 **`gh run view <id> --json jobs`** 取 `jobs[].steps[]` 中 `conclusion=="failure"` 者——**多個失敗步驟全列**（`job/step` 成對，`failed_step` 欄以 `;` 串接）；log 證據才用 `--log-failed`，**先取尾 40 行、再截 4000 字**（兩上限依序，r1 定序）；＋run URL；寫帳；**rc 1**。
 - 逾時未出結論：印已知狀態＋提示手動查，寫帳（`conclusion=timeout-waiting`），**rc 0**（不把等待逾時當失敗）。
 - `gh` 不存在／未登入／非 GitHub remote → stderr 一行說明＋**rc0** fail-open（不因缺工具卡住任何流程）。
-- 帳檔：`docs/.ci-log.jsonl`（本案新建；欄位單源定義見 [S3]，此處不重述）。
+- 帳檔：docs 下的 ci-log JSONL（本案新建產物，檔名比照既有六帳的 dot-log 慣例；欄位單源定義見 [S3]）。
 - 輸出：文字模式一行 `CI <conclusion> <sha 前7> <title> → <url>`；`--json` 單行純 JSON。
-- **rc 明定（pre-flight 修矛盾：原文「恆 0」與紅燈 rc1 互斥，會讓 [S2] 主路徑失去觸發訊號）**：綠 rc0／**紅 rc1**（skill 判讀訊號，非閘）／逾時 rc0／工具缺席 rc0 fail-open／`--repo` 指非目錄 rc2。無 `--refresh` 旗標（`ci-wait` 恆打網路——它的存在意義就是等本次 push 的結論；讀快取那條是 `ci-status` 的語意，見 [S3]）。
+- **rc 單源（全 spec 以此為準，含優先序）**：`--repo-dir` 非目錄 rc2 ＞ **帳檔寫入/自驗失敗 rc2**（沿 `_jsonl_append_verified` 語意，優先於紅燈——r1 抓到原 rc 表與 [S4] 測項打架）＞ 紅 rc1 ＞ 綠/未定/逾時/工具缺席 rc0（fail-open）。無 `--refresh` 旗標（`ci-wait` 恆打網路——它的存在意義就是等本次 push 的結論；讀快取那條是 `ci-status` 的語意，見 [S3]）。
 
 ### [S2] 修復重試迴圈（skill 紀律，機械原語由 [S1] 出）
 
@@ -56,19 +62,24 @@ summary: |-
 
 ### [S2b] 後備網（主路徑失效時才用，都只提醒不擋）
 
-1. **SessionStart hook**：session 中斷／機器關機導致 [S2] 沒跑完時的兜底——讀帳最後一筆，紅且 sha 仍是祖先 → 開場注入一行提醒。綠或無資料靜默。
-2. **pre-push**：帳上最後一筆為紅且 sha 仍是祖先 → stderr 一行提醒（不改 rc，不新增擋點）。
-3. **`lumos gov` 第 7 源**：CI 事件併入治理時間軸。**mapper 欄位明定**（對齊既有 load() 契約）：`ts=d.ts`／`commit=d.sha`／`gate="ci"`／`kind=d.conclusion`（success/failure/…）／`hard=False`／`nodes=[]`／`token=d.dedup_key`（第 5 去重鑑別子）／`detail=f"{d.title} {d.failed_step}".strip()`。
+1. **SessionStart hook（新建）**：讀帳最後一筆，紅則開場注入提醒；綠／無資料靜默。
+   - **落地三處必改（r1 實查，缺一即靜默失效）**：① 新 hook 檔進 `scripts/hooks/claude/`；② 登記進 `merge-claude-settings.py` 的 `HOOK_ENTRIES`（新事件 SessionStart）；③ **檔名加進 `scripts/lumos` 的 `_GLOBAL_CLAUDE_HOOKS` 白名單**——否則檔案不被複製到 `~/.claude/hooks/`，下次 init/bootstrap 時 `_prune_dangling` 會把註冊剪掉。
+   - **生命週期對稱（impact hook 推播命中 [[Issues/hook卸載殘留註冊]]，其通則正中本案）**：該事故通則＝「凡 A 端刪除／B 端引用的成對資源，守衛要嘛對稱操作、要嘛 B 端懸空自癒」；本案是同一面鏡子的另一面「註冊了沒複製＝silent no-op」——故三處必改缺一不可，且 [S4] 須有測項釘住「註冊存在 ⟺ 檔案存在」（沿既有 `t_merge_settings_prunes_dangling` 的守衛精神）。
+   - **輸出契約**：沿 PreToolUse hook 的 stdout JSON 形式（`hookSpecificOutput.additionalContext`），不用 Stop hook 的 stderr+exit2（事件語意不同）。
+   - **提醒精準度（r1+Codex）**：帳檔加 `branch` 欄；觸發條件＝最後一筆為紅 ∧ 其 sha 是當前 HEAD 祖先 ∧ 其 branch＝當前分支——防「從紅 sha 開的新分支被永久提醒」。
+2. **pre-push**：同上三條件 → stderr 一行提醒（不改 rc、不新增擋點）。**插入點明定（r1 實查）**：須放在 `have_vault` 早退之前——否則無 vault 的 repo 永遠看不到提醒。
+3. **`lumos gov` 第 7 源**：CI 事件併入治理時間軸。**mapper 欄位明定（一律 `d.get(...)` dict 存取，對齊既有六源——r1 指正屬性存取會讓 `lumos gov` 全源炸掉）**：ts／commit（取 sha）／gate＝ci／kind（取 conclusion，缺則 ?）／hard＝False／nodes＝[]／token（取 dedup_key，第 5 去重鑑別子）／detail（title＋failed_step 串接後 strip）。**無 severity 欄**（CI 事件無嚴重度語意；原文的 tier 欄是幽靈欄位，帳檔從未寫入）。
 
 ### [S3] 帳與離線查詢
 
 - `lumos ci-status`（唯讀、不打網路）：印帳上最後一筆＋`(檢查於 <ts>)`；超過 24 小時加註可能過期。供 hook 與離線用。
 - **帳檔欄位（單源，全 spec 以此為準）**：`{ts, run_id, sha, conclusion, title, url, failed_step}`——`failed_step` 僅紅燈時非空；無 `checked_at`（`ts` 即檢查時刻）。
-- 去重鍵＝`(run_id, conclusion)`：同 run 同結論重跑不重複 append；狀態變化（如 `in_progress`→`failure`）各記一筆。
-- 寫入走既有 `_jsonl_append_verified(path, rec, key_field, key_value)`（**實查簽名：caller 給欄名與值**）——本案傳 `key_field="dedup_key"`、值＝`f"{run_id}:{conclusion}"`，故記錄多帶一個 `dedup_key` 欄供自驗與去重共用。
+- **只在終局寫帳（r1 修矛盾：原文暗示 in_progress 也記，與 [S1] 終局寫帳打架）**：`ci-wait` 只在**綠／紅／未定／逾時**四種終局各寫一筆；輪詢中的 `in_progress` 不寫帳。
+- **去重是應用層責任（r1 實查：`_jsonl_append_verified` 是「無條件寫入再讀回自驗」，不是 upsert，擋不了重複）**：寫入前先掃帳檔，已存在同 `dedup_key`（＝`run_id:conclusion`）→ 跳過寫入直接輸出（不算失敗）；否則才呼叫 helper（`key_field` 傳 `dedup_key`）。
+- **逾時且該 sha 的 run 從未出現**：`run_id` 記 null、`dedup_key` 改用 `nosha:<sha>:timeout-waiting`（避免此型互相去重吞掉）。
 - **SessionStart hook 與 `ci-status` 皆不打網路**（避免拖慢開場）；只有 `ci-wait` 會連線。
 
-### [S4] 測試（TDD，依現有一函式一主題慣例拆：`t_ci_wait`／`t_ci_status_and_gov`／`t_ci_hooks`）
+### [S4] 測試（TDD，拆三函式：`t_ci_wait`／`t_ci_status_and_gov`／`t_ci_hooks`；gh 一律 fixture 腳本，**不打真 API**）
 
 1. `gh` 不存在（PATH 隔離）→ ci-wait rc0＋stderr 說明＋不寫帳；
 2. 假 `gh` fixture（第一次回 in_progress、第二次回 success）→ 輪詢後 rc0、寫帳一筆（狀態變化各一筆）；
@@ -83,11 +94,17 @@ summary: |-
 11. 去重：同 run 同 conclusion 連跑兩次 → 帳只一筆；
 12. 寫後自驗失敗（帳檔 symlink→/dev/null）→ ci-wait 印落盤自驗失敗、rc2（沿 `_jsonl_append_verified` 既有語意，優先於紅燈 rc1）；
 13. `--repo` 指非目錄 → rc2；`gh` 未登入（fixture 吐鑑權錯誤 rc≠0）→ rc0 fail-open＋stderr；非 GitHub remote → rc0 fail-open；
-14. **重試上限機械面**：`ci-wait` 不含重試邏輯（重試是 [S2] skill 紀律）——測項僅釘「rc1 時輸出含可據以修復的失敗步驟＋log 尾段」，重試次數不由工具強制（明文取捨：紀律面不機械化，防工具替人決定何時放棄）。
+14. conclusion 九值分類：neutral／skipped → rc0 綠；cancelled／action_required／stale → rc0 未定且不取失敗步驟；timed_out／startup_failure → rc1 紅；
+15. 多 job 平行失敗 fixture（兩 job 各有失敗 step）→ failed_step 含兩者（`;` 串接）且取自 jobs JSON 非 log 解析；
+16. log 兩上限依序：先 40 行後 4000 字（構造 100 行超長 log 驗）；
+17. 逾時且 run 從未出現 → run_id null、dedup_key 走 nosha 形式；兩個不同 sha 的逾時各記一筆（不互吞）；
+18. branch 欄與提醒精準度：紅 sha 是祖先但 branch 不同 → hook 靜默；
+18b. hook 生命週期對稱：新 hook 同時在 `HOOK_ENTRIES` 與 `_GLOBAL_CLAUDE_HOOKS` 白名單中（缺一即紅），且 merge 後註冊不被 `_prune_dangling` 剪掉；
+19. **重試上限機械面**：`ci-wait` 不含重試邏輯（重試是 [S2] skill 紀律）——測項僅釘「rc1 時輸出含可據以修復的失敗步驟＋log 尾段」，重試次數不由工具強制（明文取捨：紀律面不機械化，防工具替人決定何時放棄）。
 
 ### [S5] 文件
 
-- README 指令參考加 `ci-wait`／`ci-status` 兩行＋工作流圖加「push → ci-wait → 紅則當輪修」一步；ARCHITECTURE 治理帳段落更新為七帳。
+- README 指令參考加 `ci-wait`／`ci-status` 兩行＋工作流圖加「push → ci-wait → 紅則當輪修」一步；ARCHITECTURE 治理帳段落更新為七帳；**`cmd_gov` docstring「六帳」改七帳**（in-code 文件同步）；**新帳檔補進 vault `.gitignore` 樣板與 `_COCHANGE_DEFAULT_EXCLUDE`**（比照既有六帳，防誤入版控與假共改警訊）。
 - 本節點記「為什麼不做雲端 autofix」，供未來重議時看得到取捨。
 
 ## 實務隱患
@@ -99,3 +116,5 @@ summary: |-
 ## 審計修正紀錄
 
 - **pre-flight**（2026-07-29，機械 checklist＋現碼實查，不計 loop findings）：①rc 規格自相矛盾（「恆 0」vs 紅燈 rc1，會讓主路徑失去觸發訊號）→ rc 明定五態；②`--refresh` 誤植（`ci-wait` 恆打網路，讀快取是 `ci-status` 語意）→ 刪；③帳檔欄位兩處打架＋檔名未定 → 單源定義於 [S3]＋補 `dedup_key` 欄（對齊 `_jsonl_append_verified` 實查簽名）；④PRIOR-ART 誤述「SessionStart hook 已存在」→ 實查僅 PreToolUse/PostToolUse/Stop 三事件，更正為新建；⑤gov mapper 欄位未定 → 對齊既有 load() 契約逐欄明定；⑥[S4] 測試名與慣例不符＋漏 6 型 → 拆三函式＋補測項 10-14；⑦重試/flaky/Issue 屬紀律層非機械閘 → 邊界明文（防誤以為有機械保證）。
+- **r1 panel**（2026-07-29，3 席 sonnet＋Codex 否決；**三席 canary 全中**；存活全機械證實免辯方）：[major] ①`--repo` 與 gh 原生 `-R` 語意相反、直傳被拒 → 更名 `--repo-dir`＋自行解析 owner/repo（四方同報）；②conclusion 當紅綠二分、實有九值 → 三類明定（席2）；③`--log-failed` 非結構化 step API＋多 job 交錯 → 步驟名改走 `--json jobs` 且全列（席1+Codex）；④gov mapper 用屬性存取會讓 `lumos gov` 全源炸、且 severity 欄是幽靈 → 改 dict 存取＋刪欄（席2）；⑤`_jsonl_append_verified` 不是 upsert、去重須應用層自己擋 → 明文（席3）；⑥SessionStart hook 漏 `_GLOBAL_CLAUDE_HOOKS` 白名單 → 註冊會被 `_prune_dangling` 剪掉而靜默失效 → 三處必改＋輸出契約明定（席3+Codex）；⑦pre-push 提醒若放 `have_vault` 早退之後永不觸發 → 插入點明定（席3+Codex）；⑧rc 表與測項 12 打架（自驗失敗 rc2 未入表）→ rc 單源含優先序；⑨in_progress 是否寫帳自相矛盾 → 只在四終局寫帳；⑩`DEP` 指向不存在的節點（ghost）→ 改指真實治理帳節點（席2）。[minor] 逾時無 run_id 的 dedup 形式；log 兩上限定序；branch 欄防跨分支誤提醒；`cmd_gov` docstring 六→七帳；新帳檔補 gitignore 與 cochange exclude。測項補 14-18。
+  canary 帳：席1 caught（b 型幽靈旗標）、席2 caught（c 型幽靈欄位，並點出屬性存取致命）、席3 caught（d 型幽靈產物）。
