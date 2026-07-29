@@ -9385,10 +9385,20 @@ def t_canary_second():
     check("second verdict 亂值 rc2", r.returncode == 2, str(r.returncode))
     r = run(v, "canary", "second", "--id", tok, "--verdict", "agree")
     check("second 缺 --auditor rc2", r.returncode == 2, str(r.returncode))
-    # second 專屬 readback（審計指出的範圍瑕疵：合約涵蓋 record/second 兩者）
-    log.unlink(); log.symlink_to("/dev/null")
-    r = run(v, "canary", "second", "--id", tok, "--verdict", "agree", "--auditor", "x")
-    check("second readback 失敗 rc2", r.returncode == 2, f"{r.returncode} {r.stdout}")
+    # second 不得同人自覆核(分權核心;終審 Codex 抓到)
+    r0 = run(v, "canary", "record", "caught", "--loop", "L3", "--auditor", "opus")
+    tok3 = [w for w in r0.stdout.split() if w.startswith("CANARY-")][0].rstrip(":")
+    r = run(v, "canary", "second", "--id", tok3, "--verdict", "agree", "--auditor", "opus")
+    check("second 同判者自覆核 rc2", r.returncode == 2 and "分權" in r.stderr,
+          f"{r.returncode} {r.stderr[:120]}")
+    r = run(v, "canary", "second", "--id", tok3, "--verdict", "agree", "--auditor", "codex")
+    check("second 不同判者放行", r.returncode == 0, r.stderr)
+    # second 走同一自驗 helper 的證據:壞行(半截多位元組)不炸、仍能寫入並讀回
+    with open(log, "ab") as fh:
+        fh.write(b'{"kind":"record","token":"CANARY-broken","note":"\xe4\xb8')
+        fh.write(b"\n")
+    r = run(v, "canary", "second", "--id", tok3, "--verdict", "overturn", "--auditor", "qwen")
+    check("second 對壞行容錯不炸(rc0)", r.returncode == 0, f"{r.returncode} {r.stderr[:150]}")
 
 
 def _mk_attr_env(runner_body, method="TestLimitFive"):
@@ -9524,8 +9534,21 @@ def t_guard_kill_attribution():
     prep(root, v)
     r = lum(root, v, "guard", "kill", "Systems/Limit")
     check("(c) timed_out_weak", "timed_out_weak" in r.stdout, r.stdout)
-    check("(c) timeout-only rc0", r.returncode == 0, str(r.returncode))
     check("(c) 摘要印弱證據", "弱" in r.stdout, r.stdout)
+    check("(c) icon timed_out_weak 非 ?", "? timed_out_weak" not in r.stdout, r.stdout)
+    check("(c) 全弱證據 rc1(不 fail-open)", r.returncode == 1, str(r.returncode))
+
+    # (c2) 鄰近他測失敗不得誤歸因給綁定測試(終審 Codex 反例)
+    root, v = _mk_attr_env(
+        "import prod, sys\n"
+        "print('TestLimitFive PASSED')\n"
+        "if prod.LIMIT != 5:\n    print('TestOther FAILED'); sys.exit(1)\n"
+        "print('ok')\n")
+    prep(root, v)
+    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(root), "commit", "-qm", "c2"], capture_output=True)
+    r = lum(root, v, "guard", "kill", "Systems/Limit")
+    check("(c2) 鄰近他測失敗→unattributed", "killed_unattributed" in r.stdout, r.stdout)
 
     # (d) 名字自帶標記 → 不得偽造強殺
     root, v = _mk_attr_env(
@@ -9669,7 +9692,7 @@ def t_guard_kill():
             "--new", "import time\ndef check(n):\n    time.sleep(60)")
     check("hang kill-add rc0", r.returncode == 0, r.stderr)
     r = lum("guard", "kill", "Systems/Hang", "--json")
-    check("kill timed_out rc0(歸killed類)", r.returncode == 0, f"rc={r.returncode} {r.stdout[:200]}")
+    check("kill timeout-only rc1(S3 刻意變更:全弱證據不 fail-open)", r.returncode == 1, f"rc={r.returncode} {r.stdout[:200]}")
     dd = json.loads(r.stdout.strip().splitlines()[-1])
     check("verdict=timed_out_weak(S3 刻意降級:timeout 不再計 killed)",
           dd["results"][0]["verdict"] == "timed_out_weak", str(dd))

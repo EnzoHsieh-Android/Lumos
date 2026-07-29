@@ -2388,6 +2388,13 @@ def cmd_gov(env, node=None, since_days=90, full=False):
         if by_type:
             print("  型別分佈: " + " | ".join(
                 f"{k}:{v['caught']}c/{v['missed']}m" for k, v in sorted(by_type.items())))
+        # [S2] 第二判者分帳(否則 overturn 分歧只在 detail 字串裡、看不到彙總)
+        _sec = [r for r in can if r["kind"] == "second"]
+        if _sec:
+            _ag = sum(1 for r in _sec if "verdict=agree" in r.get("detail", ""))
+            _ov = len(_sec) - _ag
+            print(f"  第二判者覆核: {len(_sec)} 筆(agree {_ag} / overturn {_ov}"
+                  + (f" ← 分歧率 {_ov/len(_sec):.0%},翻盤輪值得回看" if _ov else "") + ")")
         # 對抗層增量帳(2026-07-26,borrow arXiv 2605.25665 實戰報告欄):折入=caught 輪辯方裁決後
         # 存活折入的真缺陷數——測試綠後仍被對抗層(canary 護審/辯方/跨家族)抓到,天生就是「測試漏掉的」。
         # 長期趨零=整套機關裝飾品該砍;這是驗證層對自己的驗證。missed 輪判決不採信不計;
@@ -2541,7 +2548,7 @@ def _jsonl_append_verified(path, rec, key_field, key_value):
         print(f"ERROR: 寫入 {path} 失敗: {e}", file=sys.stderr)
         return 2
     try:
-        with open(path, encoding="utf-8") as f:      # 獨立重開檔(非同 fd)
+        with open(path, encoding="utf-8", errors="replace") as f:   # 獨立重開檔(非同 fd)
             for line in f:
                 if not line.strip():
                     continue
@@ -2551,7 +2558,7 @@ def _jsonl_append_verified(path, rec, key_field, key_value):
                     continue
                 if isinstance(d, dict) and d.get(key_field) == key_value:
                     return 0
-    except OSError as e:
+    except (OSError, ValueError) as e:
         print(f"canary record: 落盤自驗失敗({path.resolve()}): 讀回失敗 {e}", file=sys.stderr)
         return 2
     print(f"canary record: 落盤自驗失敗({path.resolve()}): 寫入回報成功但讀不回該筆",
@@ -2577,8 +2584,9 @@ def cmd_canary_second(env, ref_id=None, verdict=None, auditor=None, note=None):
         return 2
     path = env.vault.parent / ".canary-log.jsonl"
     found = False
+    orig_auditor = ""
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:   # 半截多位元組行不炸(替代字元)
             for line in f:
                 if not line.strip():
                     continue
@@ -2588,12 +2596,18 @@ def cmd_canary_second(env, ref_id=None, verdict=None, auditor=None, note=None):
                     continue
                 if isinstance(d, dict) and d.get("token") == ref_id and d.get("kind") != "second":
                     found = True
+                    orig_auditor = (d.get("auditor") or "").strip()
                     break
     except OSError as e:
         print(f"ERROR: 讀不到 canary log {path}: {e}", file=sys.stderr)
         return 2
     if not found:
         print(f"ERROR: --id {ref_id} 不在 canary log(無原判可覆核)", file=sys.stderr)
+        return 2
+    if orig_auditor and orig_auditor.strip().lower() == auditor.strip().lower():
+        # 分權的核心:同一判者自覆核=沒有第二個人,字面擊穿 S2(2026-07-29 終審 Codex)
+        print(f"ERROR: --auditor 與原判者相同({orig_auditor})——第二判者須為不同判者(分權)",
+              file=sys.stderr)
         return 2
     token = "CANARY-" + secrets.token_hex(4)
     rec = {"ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -4041,6 +4055,8 @@ def _kill_cap(txt):
 
 
 _KILL_FAIL_MARKS = ("FAIL", "FAILED", "✗", "AssertionError")
+# 窗內另一個測試名(常見命名:test_x / TestX / xxxTest)——見到即停掃,防「隔壁測試失敗」被算到綁定測試頭上
+_KILL_OTHER_TEST_RE = re.compile(r"\b([Tt]est[_A-Za-z0-9]\w*|\w+Tests?)\b")
 
 
 def _kill_attribute(out, method):
@@ -4059,6 +4075,8 @@ def _kill_attribute(out, method):
             probe = lines[j]
             # 遮蔽測試名字串本身再找標記(名字自帶 FAIL/AssertionError 不算證據)
             masked = probe.replace(method, " " * len(method))
+            if j > i and _KILL_OTHER_TEST_RE.search(masked):
+                break   # 窗內出現另一個測試名 → 後續標記屬別支,停掃(防鄰近他測誤歸因)
             up = masked.upper()
             if any(m.upper() in up for m in _KILL_FAIL_MARKS):
                 span = j - i
@@ -4287,6 +4305,13 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
         return 1
     if any(v in ("drifted", "abort", "error") for v in verdicts):
         return 2
+    # 弱證據 fail-open 修補(2026-07-29 終審 Codex):全部弱證據=沒有任何一條配方被歸因到綁定測試
+    # → rc1(同 survived 級「證據不足」),不得以 rc0 讓 hook/CI 誤判通過。混有強殺則 rc0。
+    if verdicts and "killed" not in verdicts and all(
+            v in ("killed_unattributed", "timed_out_weak") for v in verdicts):
+        print("✗ 全部弱證據(未歸因/逾時)——無任一配方證實被綁定測試咬住,補 filter 或強化斷言",
+              file=sys.stderr)
+        return 1
     if not as_json:
         # [S3] 措辭收斂:「咬得住」只配全強殺;混弱證據分列(unattributed+timeout 同桶)
         _strong = verdicts.count("killed")
