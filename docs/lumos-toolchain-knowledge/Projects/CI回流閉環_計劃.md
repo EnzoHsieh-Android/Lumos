@@ -12,6 +12,7 @@ related:
 summary: |-
   FLAG:DECISION
   KEY:問題——CI(GitHub Actions)紅了只存在 GitHub 網頁,本機 lumos/圖譜/治理帳全不知情;下個 session 開場也讀不到 → 自動開發迴圈在「推出去之後」斷掉
+  KEY:★彈性宣告(2026-07-29 使用者裁定,零侵入預設)★——推送路徑由專案 `.lumos/config.json` 的 `ci.flow` 宣告:**無宣告=direct(現況,裝了新功能行為不變)**／`pr`(一律分支+PR,紅燈碰不到 main)／`tier`(混合:pitfalls tier=high 才走 PR);GitHub 端 branch protection/ruleset **完全不必動**(工具端行為,隨時改 config 切換,不影響其他人與消費專案)
   KEY:解法方向=**push 後同輪等待+修復重試(watch-fix-retry)**,非雲端自動修也非留到下次開場:`lumos ci-wait` 在 push 成功後阻塞等 CI 結論→紅則印失敗步驟+log 尾段→在場 session 當輪修→重推→再等(最多 2 次自動重試,之後攤人);SessionStart 推播降為**後備網**(session 中斷/機器關機才用),不是主路徑
   KEY:★不採雲端 autofix(明文裁定)★——世界主流(Copilot cloud agent 一鍵修/Codex workflow_run autofix/GH Agentic Workflows)是 CI 失敗觸發 agent 在雲端改碼開 PR;與 2026-07-29 剛裁定的「autonomous 非 dry-run 停用」同源風險(無人看顧 agent 握寫入權=confused-deputy),且需把金鑰放進 CI → 本案明文排除,解禁條件同 [[Systems/nested-agent-permission-scope]] d4
   DEP:[[Systems/reversibility-governance-ledger]]
@@ -27,6 +28,8 @@ summary: |-
 - **不擋** push／commit：CI 狀態不新增本機硬閘（`ci-wait` 的 rc1 是給 skill 判讀用的訊號，不是閘）。
 - **不做**無限重試：修復重試上限 2 次，之後攤人＋寫 Issue（防燒錢與掩蓋真 bug）。
 - **不做**跨 repo 聚合：只查當前 repo 當前分支。
+- **不動 GitHub 設定**：不要求也不代設 branch protection／ruleset／auto-merge repo 選項（那是人的決定，且會全域影響消費專案）——工具端在有無保護下都能運作。
+- **不改預設行為**：未宣告 `ci.flow` 的專案（含所有既有消費 repo）行為與現在**逐字相同**（直推、無 PR、無新閘）。
 - **不解析** CI log 全文做根因判讀（v1 只取失敗步驟名＋log 尾段；判讀交在場的人／session）。
 
 ## 條款
@@ -49,9 +52,22 @@ summary: |-
 - 輸出：文字模式一行 `CI <conclusion> <sha 前7> <title> → <url>`；`--json` 單行純 JSON。
 - **rc 單源（全 spec 以此為準，含優先序）**：`--repo-dir` 非目錄 rc2 ＞ **帳檔寫入/自驗失敗 rc2**（沿 `_jsonl_append_verified` 語意，優先於紅燈——r1 抓到原 rc 表與 [S4] 測項打架）＞ 紅 rc1 ＞ 綠/未定/逾時/工具缺席 rc0（fail-open）。無 `--refresh` 旗標（`ci-wait` 恆打網路——它的存在意義就是等本次 push 的結論；讀快取那條是 `ci-status` 的語意，見 [S3]）。
 
+### [S1b] 推送路徑分派（`.lumos/config.json` 的 `ci.flow`，彈性宣告）
+
+```json
+{"ci": {"flow": "direct|pr|tier", "auto_merge": true}}
+```
+
+- **`direct`（預設，無宣告即此）**：現況——直接 push 目標分支 → `ci-wait` → 紅則當輪修（[S2]）。**裝了本功能不改變任何既有專案的行為**。
+- **`pr`**：改動一律走 feature 分支——`lumos ship` 幫忙串：建/推分支 → `gh pr create --fill` → （`auto_merge` 為真時）`gh pr merge --auto --squash` → `ci-wait` 等該分支的 run → 綠則由 GitHub 自動合併進 main、紅則在分支上修（main 全程乾淨）。
+- **`tier`（混合，推薦）**：跑 `lumos pitfalls --diff <base>..HEAD` 取尾行 tier——`high` 走 `pr` 路徑、`standard` 走 `direct`。**沿用既有風險分級器，不新造判準**。
+- **config 讀取**：沿既有 `.lumos/config.json` 慣例（同 cochange/test-layers/lint 宣告）；未知 `flow` 值 → stderr 警告＋**退回 `direct`**（fail-safe：不因設定打錯就改變推送行為）。
+- **`auto_merge` 前提誠實**：GitHub 端未開「Allow auto-merge」或無必要檢查時，`gh pr merge --auto` 會失敗 → 捕捉後降級為「PR 已開、請人工合併」＋stderr 說明，**不視為錯誤**（rc 不變）。
+- **GitHub 端硬保護（選配、與本案解耦）**：若日後要機械強制「紅燈不准進 main」，走 GitHub **Rulesets**（支援 evaluate 只記錄不擋的試跑模式、支援 bypass 名單保留緊急直推並留痕）——本 spec 不代設、不依賴其存在。
+
 ### [S2] 修復重試迴圈（skill 紀律，機械原語由 [S1] 出）
 
-`lumos-project-notes` skill 的收尾段與 code-loop 收斂後段各加一條——**push 成功後必跑 `lumos ci-wait`**：
+`lumos-project-notes` skill 的收尾段與 code-loop 收斂後段各加一條——**push（或 `lumos ship`）成功後必跑 `lumos ci-wait`**（[S1b] 三種 flow 共用同一套修復迴圈；差別只在「紅燈修在 main 上還是分支上」）：
 
 - rc0（綠）→ 收工。
 - rc1（紅）→ **當輪修**：讀 [S1] 印出的失敗步驟＋log 尾段 → 定位 → 修 → commit → push → **再跑一次 `ci-wait`**。
@@ -100,11 +116,13 @@ summary: |-
 17. 逾時且 run 從未出現 → run_id null、dedup_key 走 nosha 形式；兩個不同 sha 的逾時各記一筆（不互吞）；
 18. branch 欄與提醒精準度：紅 sha 是祖先但 branch 不同 → hook 靜默；
 18b. hook 生命週期對稱：新 hook 同時在 `HOOK_ENTRIES` 與 `_GLOBAL_CLAUDE_HOOKS` 白名單中（缺一即紅），且 merge 後註冊不被 `_prune_dangling` 剪掉；
-19. **重試上限機械面**：`ci-wait` 不含重試邏輯（重試是 [S2] skill 紀律）——測項僅釘「rc1 時輸出含可據以修復的失敗步驟＋log 尾段」，重試次數不由工具強制（明文取捨：紀律面不機械化，防工具替人決定何時放棄）。
+19. **flow 分派**：無宣告 → 走 direct（不呼叫 gh pr，行為與現況逐字相同）；`flow=pr` → 呼叫 pr create/merge（fixture 攔截）；`flow=tier` ＋ pitfalls 吐 `tier: high` → 走 pr 路徑，吐 `standard` → 走 direct；未知 flow 值 → 警告＋退 direct；
+20. **auto_merge 降級**：`gh pr merge --auto` fixture 回失敗 → 印「PR 已開、請人工合併」、rc 不變（非錯誤）；
+21. **重試上限機械面**：`ci-wait` 不含重試邏輯（重試是 [S2] skill 紀律）——測項僅釘「rc1 時輸出含可據以修復的失敗步驟＋log 尾段」，重試次數不由工具強制（明文取捨：紀律面不機械化，防工具替人決定何時放棄）。
 
 ### [S5] 文件
 
-- README 指令參考加 `ci-wait`／`ci-status` 兩行＋工作流圖加「push → ci-wait → 紅則當輪修」一步；ARCHITECTURE 治理帳段落更新為七帳；**`cmd_gov` docstring「六帳」改七帳**（in-code 文件同步）；**新帳檔補進 vault `.gitignore` 樣板與 `_COCHANGE_DEFAULT_EXCLUDE`**（比照既有六帳，防誤入版控與假共改警訊）。
+- README 指令參考加 `ci-wait`／`ci-status`／`ship` 三行＋`.lumos/config.json` 的 `ci.flow` 宣告一段（含「無宣告＝現況不變」的醒目說明）＋工作流圖加「push → ci-wait → 紅則當輪修」一步；ARCHITECTURE 治理帳段落更新為七帳；**`cmd_gov` docstring「六帳」改七帳**（in-code 文件同步）；**新帳檔補進 vault `.gitignore` 樣板與 `_COCHANGE_DEFAULT_EXCLUDE`**（比照既有六帳，防誤入版控與假共改警訊）。
 - 本節點記「為什麼不做雲端 autofix」，供未來重議時看得到取捨。
 
 ## 實務隱患
