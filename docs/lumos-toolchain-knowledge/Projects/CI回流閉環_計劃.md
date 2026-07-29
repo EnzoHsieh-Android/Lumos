@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-07-29
 updated: 2026-07-29
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Projects/Codex外審吸收_計劃]]"
   - "[[Systems/nested-agent-permission-scope]]"
@@ -189,3 +189,26 @@ verified_by:
   **帳面時序偏差（如實記）**：r3 三筆 canary record 因折入腳本首跑中止而先於折入寫入，log 內 `reviewed`/`result` hash 為折入前版本；findings 內容與判定不受影響（審計報告在先、折入在後），惟 hash 鏈該輪不代表 post-fold 版——同 2026-07-28 testmap r3 的同型註記。
 - **r3 後補充折入（2026-07-29，使用者指出，非新一輪審計）**：①PRIOR-ART 補 ⓪「自家後院已有實作」（Landmark 的發版輪詢腳本＝本案實戰驗證來源；家規三問第一問當時只查外部世界，漏查消費專案——教訓記入）；②借其形態新增 `ci.workflow` 選配宣告：**指定要等哪支 workflow 即可繞開聚合與晚註冊假綠兩個複雜度**（複雜度退回已在真環境驗證的等級），未宣告才走保守聚合路徑。測項補 32。
 - **人裁放行（2026-07-29）**：續審 r1 後使用者裁定進實作。理由記：範圍手術已砍掉缺陷密度最高的 PR 路徑，v1 剩下的是 `ci-wait`＋帳＋後備網＋gov 一源；剩餘風險屬「外部行為（gh CLI/GitHub）對不對」型——**真 fixture 跑一次比再審一輪散文有效**（同 testmap 教訓）。兜底＝[S4] 測項矩陣＋CI＋code-loop 終審。
+
+## 結案與正名（2026-07-29 外審 round3 吸收）
+
+**status → done（v1 範圍）**。本節點自此為 v1 的歷史檔；PR flow / `ship` / auto-merge / tier 混合等仍留在上文的
+設計段落，**均屬未實作的 v2 構想**，讀本節點時勿當現況（外審實錘：節點 `status: doing` 又留著整套 PR 設計，
+與 code 的 direct-only 實作對不上）。v2 若啟動另開節點。
+
+**★正名：「閉環」→「觀測」★**（外審兩輪的一致判詞，此處採納）
+`ci-wait` **不是強制面**：它擋不了 push、擋不了 merge、擋不了 direct-to-main；`gh` 缺席／config 壞損／逾時／
+無 run 一律 fail-open rc0。它買到的是**回饋延遲**（雲端紅 → 同輪知道 → 當輪修），不是控制。
+續稱「閉環」會製造「反正 agent 會修」的道德風險，讓 branch protection 這種**真**強制面被無限延後。
+要「紅燈進不了 main」，唯一的路是 GitHub 端 required status check（backlog ⑥，人工設定，本工具不碰）。
+
+## r3 外審抓到的實作缺陷（皆已複驗屬實並修）
+
+| 缺陷 | 實況 | 修法 |
+|---|---|---|
+| **假綠**：completed 且非明列紅即判綠 | `cancelled`／`action_required`／`stale`／未知未來值全被判 green——**計劃 [S1] 早就寫了三分類矩陣，實作只做二分** | 綠改**白名單制**（只認 `_CI_GREEN`），非綠非紅一律 `undetermined` rc0＋提示人判；4 個 conclusion＋混合案共 10 檢查，mutation 驗過（退回舊碼即 5 紅） |
+| **紅燈證據看不到** | `failed_step`／`log_tail` 只進 `--json`；預設文字輸出只有狀態＋URL，人跑指令拿不到任何可修線索——而 README／兩支 skill／本節點都承諾會印 | 文字 emitter 補印失敗步驟＋log 尾段；斷言直接驗 stdout（非 rc），mutation 驗過 |
+| **`ci-status` 同型假綠** | 只讀檔尾最後一筆；同 sha 多支 workflow 時綠的排在後面就把紅的蓋掉（＝ r1 對 SessionStart hook 抓過的同一個坑，`ci-status` 漏修） | 改取最新 sha 的**全部**筆、報最壞的（紅 > 未定 > 綠），3 檢查 |
+
+**教訓（進方法論）**：同一類缺陷在一個功能裡會出現在**多個消費點**（hook／wait／status 三處讀同一份帳）。
+r1 修了 hook 那處就以為修完了——**修一處不等於修一類**，該當場列出全部消費點逐一檢查。

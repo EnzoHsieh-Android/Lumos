@@ -11235,20 +11235,43 @@ def t_docs_enumeration_drift():
 
     # ② guard kill verdict 值域:碼裡實際會寫出的 verdict vs reference.md 列舉
     kill_body = src[src.index("def cmd_guard_kill("):src.index("def cmd_guard_audit(")]
-    verdicts = set(_re.findall(r'verdict = "([a-z_]+)"', kill_body))
+    # 抽取要涵蓋三元式:`verdict = "a" if c else "b"` 用舊 regex 只會抓到 "a",
+    # 於是 killed_unattributed 整個從值域裡蒸發(2026-07-29:守衛的尺第二次被抓到在漂)。
+    # 作法:先取所有 `verdict = <右式>` 整行,再把該行**全部**字串字面量收進來。
+    verdicts = set()
+    for rhs in _re.findall(r"^\s*verdict\s*=\s*(.+)$", kill_body, _re.M):
+        verdicts |= set(_re.findall(r'"([a-z_]+)"', rhs))
     verdicts |= set(_re.findall(r'"verdict": "([a-z_]+)"', kill_body))
     ref = (root / "skills" / "lumos-project-notes" / "reference.md").read_text(encoding="utf-8")
     kill_sec = ref[ref.index("lumos guard kill-add"):ref.index("lumos guard kill-add") + 2000]
     missing = sorted(v for v in verdicts if v not in kill_sec)
     check("kill verdict 值域:碼有的 reference.md 都列了", not missing, f"未列: {missing}")
+    # ②b **圖譜節點同受守衛**——只守 skill reference 的舊寫法,讓 Systems/guard-kill.md 一路留著
+    # 舊六態與「timed_out 歸 killed」,造出「圖譜錯、code 對」的活例(2026-07-29 外審實錘)。
+    gk = root / "docs" / "lumos-toolchain-knowledge" / "Systems" / "guard-kill.md"
+    if gk.exists():
+        gk_text = gk.read_text(encoding="utf-8")
+        gk_missing = sorted(v for v in verdicts if v not in gk_text)
+        check("kill verdict 值域:碼有的 Systems/guard-kill.md 都列了",
+              not gk_missing, f"未列: {gk_missing}")
+        # 態數宣稱也從碼推導(非硬編「七」):文件若寫「N態」而 N≠碼裡的 verdict 數即漂移。
+        # 「舊六態」這種標明已作廢的歷史註記合法 → 負向預查排除「舊」。
+        want = "零一二三四五六七八九十"[len(verdicts)]
+        bad = sorted(set(_re.findall(r"(?<!舊)([一二三四五六七八九十])態", gk_text)) - {want})
+        check(f"Systems/guard-kill.md 態數宣稱=碼實際({want}態)",
+              not bad, f"文件另寫: {bad}態")
 
     # ③ Claude hook 生命週期對稱:註冊(HOOK_ENTRIES) ⟺ 複製白名單(_GLOBAL_CLAUDE_HOOKS)
     merge = (root / "scripts" / "merge-claude-settings.py").read_text(encoding="utf-8")
     registered = set(_re.findall(r'_hook_cmd\("([\w.-]+)"\)', merge))
     wl = _re.search(r"_GLOBAL_CLAUDE_HOOKS = \(([^)]*)\)", src)
     copied = set(_re.findall(r'"([\w.-]+)"', wl.group(1) if wl else ""))
+    # **雙向**等價,不是單向包含:舊寫法只驗 registered ⊆ copied,「複製了卻沒註冊」的幽靈 hook
+    # 照樣過(裝進機器、永不觸發、無人知道它死著)——2026-07-29 外審實錘。
     check("hook 生命週期對稱:註冊的都在複製白名單裡",
           registered <= copied, f"註冊未複製(會被 _prune_dangling 剪掉): {sorted(registered - copied)}")
+    check("hook 生命週期對稱:複製白名單裡的都有註冊",
+          copied <= registered, f"複製未註冊(幽靈 hook,永不觸發): {sorted(copied - registered)}")
     for name in sorted(registered | copied):
         check(f"hook 檔存在: {name}", (root / "scripts" / "hooks" / "claude" / name).exists(), "")
 
@@ -11257,17 +11280,36 @@ def t_docs_command_count():
     """文件宣稱的頂層命令數 vs argparse 實數(2026-07-29 外審實錘:ARCHITECTURE 曾停在 44)。"""
     import re as _re
     from pathlib import Path as _P
+    import subprocess as _sp
     root = _P(__file__).resolve().parent.parent
-    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
-    actual = len(set(_re.findall(
-        r"^\s+(?:[a-z_]+ = )?sub\.add_parser\(\"([a-z-]+)\"", src, _re.M)))
-    for fname, pat in (("README.md", r"(\d+) 個頂層命令"),
-                       ("README.en.md", r"(\d+) top-level commands"),
-                       ("ARCHITECTURE.md", r"(\d+) 個頂層命令")):
-        text = (root / fname).read_text(encoding="utf-8")
-        nums = set(_re.findall(pat, text))
-        check(f"{fname} 命令數與 argparse 同步",
+    # 真值取自 **argparse 自己**(`--help` 的 choices),不是對原始碼做 regex 近似:
+    # 舊 regex 漏掉迴圈註冊的 links/backlinks,把真數 53 算成 51——**守衛的尺自己在漂**,
+    # 於是三份文件寫 51 反而「全綠」(2026-07-29)。reference.md 早寫明「--help 為現行權威」。
+    _h = _sp.run([sys.executable, str(root / "scripts" / "lumos"), "--help"],
+                 capture_output=True, text=True, timeout=60).stdout
+    _m = _re.search(r"\{([a-z0-9,\-]+)\}", _h)
+    actual = len(set(_m.group(1).split(","))) if _m else 0
+    check("命令數真值取自 --help choices(非原始碼 regex)", actual > 40, f"actual={actual}")
+    # 掃**全部活文件**而非手維護清單——固定三檔的舊寫法正是 AGENTS.md(44)與
+    # skills/…/reference.md(49)同時漂移卻全綠的原因(2026-07-29 外審實錘)。
+    # 排除:外審歸檔(逐字歷史紀錄,不得回改)、圖譜(決策條目會引述當時數字)、.git。
+    # golden/ 是凍結語料(過去 loop 的 spec 快照,replay 校準用),與外審歸檔同性質:歷史不得回改。
+    skip = ("governance/external-reviews/", "governance/golden/",
+            "-knowledge/", "/.git/", "node_modules/")
+    scanned = 0
+    for p in sorted(root.rglob("*.md")):
+        rel = p.relative_to(root).as_posix()
+        if any(s.strip("/") in rel for s in skip):
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        nums = set(_re.findall(r"(\d+) 個頂層命令", text)) | set(
+            _re.findall(r"(\d+) top-level commands", text))
+        if not nums:
+            continue
+        scanned += 1
+        check(f"{rel} 命令數與 argparse 同步",
               nums == {str(actual)}, f"claim={nums} actual={actual}")
+    check("命令數守衛真的掃到活文件(>=4 份)", scanned >= 4, f"scanned={scanned}")
 
 
 def t_lint_decisions_structure():
@@ -11455,6 +11497,45 @@ def t_ci_wait():
     r = _ci_run(root, v, env, "ci-wait", "--repo-dir", str(root / "nope"))
     check("--repo-dir 非目錄 rc2", r.returncode == 2, str(r.returncode))
 
+    # ── 假綠:completed 但非成功的 conclusion 不得判綠(2026-07-29 外審實錘) ──
+    # 舊碼是「全 completed 且無紅 → green」的二分,cancelled/action_required/stale
+    # 與任何未知未來值都會被靜默判綠。計劃 [S1] 矩陣本來就寫了三分類,實作漏跟。
+    for concl in ("cancelled", "action_required", "stale", "some_future_value"):
+        rows = [{"databaseId": 9, "attempt": 1, "status": "completed", "conclusion": concl,
+                 "displayTitle": "x", "url": "u9", "workflowName": "CI"}]
+        root, v, env = _mk_ci_env(stub(rows))
+        env["GH_STATE"] = str(root / f"stu-{concl}")
+        r = _ci_run(root, v, env, "ci-wait", "--json", "--grace", "0")
+        d = _json.loads(r.stdout.strip().splitlines()[-1])
+        check(f"conclusion={concl} 不得判綠", d["verdict"] == "undetermined", d)
+        check(f"conclusion={concl} rc0(不進修復路徑)", r.returncode == 0, str(r.returncode))
+
+    # 混合:一支 success 一支 cancelled → 整體未定(不能被那支綠的蓋過去)
+    mixed = green + [{"databaseId": 10, "attempt": 1, "status": "completed",
+                      "conclusion": "cancelled", "displayTitle": "x", "url": "u10",
+                      "workflowName": "Lint"}]
+    root, v, env = _mk_ci_env(stub(mixed))
+    env["GH_STATE"] = str(root / "stmix")
+    r = _ci_run(root, v, env, "ci-wait", "--json", "--grace", "0")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("一綠一 cancelled → 未定不判綠", d["verdict"] == "undetermined", d)
+
+    # ── 紅燈證據必須進**文字**輸出(不是只塞 --json) ──
+    # 外審實錘:README/skill/計劃都承諾會印失敗步驟+log,實作只進 json,
+    # 人跑 `lumos ci-wait` 只看得到「紅」跟一個網址,拿不到任何可修的線索。
+    root, v, env = _mk_ci_env(stub(red))
+    env["GH_STATE"] = str(root / "sttext")
+    r = _ci_run(root, v, env, "ci-wait")          # 注意:不帶 --json
+    check("紅燈文字輸出含失敗步驟", "Full test suite" in r.stdout, r.stdout[:300])
+    check("紅燈文字輸出含 log 尾段", "log 尾段" in r.stdout and "build" in r.stdout,
+          r.stdout[:300])
+    check("紅燈文字輸出 rc1", r.returncode == 1, str(r.returncode))
+    # 綠燈不該噴這些噪音
+    root, v, env = _mk_ci_env(stub(green))
+    env["GH_STATE"] = str(root / "sttext2")
+    r = _ci_run(root, v, env, "ci-wait")
+    check("綠燈文字輸出無失敗步驟噪音", "失敗步驟" not in r.stdout, r.stdout[:200])
+
 
 def t_ci_status_and_gov():
     """[S3] ci-status 唯讀不打網路 + gov 第 7 源(含總開關)。"""
@@ -11473,6 +11554,48 @@ def t_ci_status_and_gov():
     check("ci-status 讀帳", d.get("conclusion") == "failure" and d.get("sha") == "abc1234", d)
     r = _ci_run(root, v, env, "ci-status")
     check("ci-status 文字含檢查時刻", "2026-07-29" in r.stdout, r.stdout[:150])
+    # 「檔尾最後一筆」≠「最新結論」:同 sha 多支 workflow 各一筆,綠的排在紅的後面時
+    # 舊碼只讀最後一筆 → 報綠(與 SessionStart hook 早先修過的同型假綠,2026-07-29 補齊)。
+    rows = [
+        {"ts": "2026-07-29T11:00:00+08:00", "run_id": 8, "attempt": 1, "sha": "def5678",
+         "branch": "main", "workflow": "CI", "conclusion": "failure", "title": "bad",
+         "url": "u8", "failed_step": "build/test", "dedup_key": "8:1:failure"},
+        {"ts": "2026-07-29T11:01:00+08:00", "run_id": 9, "attempt": 1, "sha": "def5678",
+         "branch": "main", "workflow": "Lint", "conclusion": "success", "title": "ok",
+         "url": "u9", "failed_step": "", "dedup_key": "9:1:success"},
+    ]
+    log.write_text("".join(_json.dumps(x, ensure_ascii=False) + "\n" for x in rows),
+                   encoding="utf-8")
+    r = _ci_run(root, v, env, "ci-status", "--json")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("ci-status 同 sha 多筆:報最壞的(紅)非檔尾那筆(綠)",
+          d.get("conclusion") == "failure" and d.get("workflow") == "CI", d)
+    # **反序也要成立**——只測「壞的在前」分不出「報最壞」與「報第一筆」;
+    # 把紅的放檔尾再測一次,兩個方向都對才是真的取最壞(終審 reviewer 指出的空洞風險)。
+    log.write_text("".join(_json.dumps(x, ensure_ascii=False) + "\n"
+                           for x in [rows[1], rows[0]]), encoding="utf-8")
+    r = _ci_run(root, v, env, "ci-status", "--json")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("ci-status 同 sha 多筆:紅的排檔尾也照報紅(非只取第一筆)",
+          d.get("conclusion") == "failure" and d.get("workflow") == "CI", d)
+    # 同 sha 全綠時照報綠
+    log.write_text(_json.dumps(rows[1], ensure_ascii=False) + "\n", encoding="utf-8")
+    r = _ci_run(root, v, env, "ci-status", "--json")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("ci-status 同 sha 全綠仍報綠", d.get("conclusion") == "success", d)
+    # 非成功非紅(cancelled)優先於綠被報出來
+    log.write_text("".join(_json.dumps(x, ensure_ascii=False) + "\n" for x in [
+        {**rows[1], "run_id": 11, "conclusion": "cancelled", "workflow": "Deploy",
+         "dedup_key": "11:1:cancelled"}, rows[1]]), encoding="utf-8")
+    r = _ci_run(root, v, env, "ci-status", "--json")
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("ci-status 同 sha 有 cancelled:不報綠", d.get("conclusion") == "cancelled", d)
+    # 還原成單筆 failure 供後續 gov 斷言
+    log.write_text(_json.dumps({
+        "ts": "2026-07-29T10:00:00+08:00", "run_id": 7, "attempt": 1, "sha": "abc1234",
+        "branch": "main", "workflow": "CI", "conclusion": "failure", "title": "bad",
+        "url": "u", "failed_step": "build/test", "dedup_key": "7:1:failure"},
+        ensure_ascii=False) + "\n", encoding="utf-8")
     # gov 第 7 源
     r = _ci_run(root, v, env, "gov")
     check("gov 見得到 CI 事件", "ci" in r.stdout and "failure" in r.stdout, r.stdout[-400:])

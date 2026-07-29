@@ -28,7 +28,7 @@ Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**核
 
 ## 2. 核心理念:圖譜即合約
 
-- **圖譜是唯一真相。** 圖譜與 code / 記憶 / 臆測衝突 → 以圖譜為準。
+- **圖譜是意圖與合約的真相。** 圖譜與其他文件 / 記憶 / 臆測衝突 → 以圖譜為準。**但行為事實不是**——「現在實際跑成什麼樣」的權威是測試 / 執行結果 / 生產觀測；兩者衝突時不自動判圖譜為真，那代表有東西壞了，查清哪邊錯並立事故節點（2026-07-29 外部評審吸收：本專案自己出過「圖譜寫舊態、程式已更新」的活例，照舊規則會把正確的碼判成錯）。
 - **先讀再動。** 動既有系統前,第一個動作是 `lumos`,不是 `grep` / `Read` / 查 DB。圖譜先給你合約與邊界,code/DB 只拿來印證細節。
 - **退場寫回。** 做完把決策 / 驗證 / 合約寫回圖譜。
 - **commit-time 強制。** pre-commit 硬擋「改 code 沒更新圖譜」;`lumos doctor` 證明圖譜內部一致、且每條載重宣稱都綁了可執行測試。
@@ -39,7 +39,7 @@ Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**核
 
 | 類別 | 檔案 / 命令 | 作用 |
 |---|---|---|
-| **CLI** | `scripts/lumos`、`scripts/test_lumos.py` | 純 python3 標準庫、零依賴、51 個頂層命令。讀 / 寫(寫後自驗)/ 巡檢(`doctor`)/ 歸檔。 |
+| **CLI** | `scripts/lumos`、`scripts/test_lumos.py` | 純 python3 標準庫、零依賴、53 個頂層命令。讀 / 寫(寫後自驗)/ 巡檢(`doctor`)/ 歸檔。 |
 | **合約守衛 scaffold** | `lumos guard list/scaffold/bind/audit/trace/kill` | 對談驅動:列未綁的 `★INVARIANT★`、套範本產**預設紅燈**測試 stub、綁 `[test:]`、蓋獨立 `[audit:]`;`kill` 沙盒真弄壞驗殺傷力。 |
 | **檢索與推薦** | `lumos search`(預設相關性排序)、`impact --ranked`(已接 hook)、`context --recommend`(dormant) | BM25F+圖分融合;search 與 hook 面均經人工 goldset 評測轉正(§6 門檻;評測釘語料快照可重現)。評測器 `governance/eval/retrieval_eval.py`。 |
 | **對抗審計 loop** | `lumos pitfalls`、`code-loop`、`canary`、`loop`、`fold-check`、`refcheck` | `pitfalls --diff` 分 tier;tier=high 走 canary 護的 `code-loop`(對抗代碼審);`design-loop` 在進實作前審 spec;`fold-check` 抓設計折入漂移。 |
@@ -234,7 +234,7 @@ lumos cochange rules|check [--json]                  # git 史挖共改規則;pr
 lumos testmap build [--repo R] [--json]              # 檔案↔測試依賴地圖:三路訊號(naming/content/cochange)挖邊存 .lumos/testmap.json
 lumos testmap affected --diff <range> [--json]       # 依 diff 推薦該跑測試+「無已知測試」裸檔+map 陳舊三訊號提醒(advisory 恆 rc0)
 lumos anchor verify | approve --note "<理由>"        # 測試/閘檔完整性:驗指紋 / 刻意改後核可基線
-lumos ci-wait [--timeout 600] [--json]               # push 後同輪等 GitHub Actions 結論(綠 rc0/紅 rc1+失敗步驟+log 尾段);需 .lumos/config.json 宣告 ci 區塊才啟用
+lumos ci-wait [--timeout 600] [--json]               # push 後同輪等 GitHub Actions 結論(綠 rc0/紅 rc1+失敗步驟+log 尾段/非成功非失敗=undetermined rc0 要人判);觀測非強制,擋不了 push·merge;需 .lumos/config.json 宣告 ci 區塊才啟用
 lumos ci-status [--json]                             # 唯讀查最後一次 CI 結果(不打網路,供離線與 SessionStart hook)
 ```
 

@@ -40,3 +40,28 @@ summary: |-
 - P0 全套：本機 1588 checks 全綠＋乾淨 HOME 預演全綠（CI 可行性驗證）＋doctor 0 issues。
 - CI 首跑實錄：run#1 **紅**——當場抓到 `t_impact_incidents_smoke` 硬編 `/Users/enzo/...` 絕對路徑（外審 hermetic 批評第一天就兌現價值）；改 `__file__` 相對後 run#2 **綠**（3m15s 全套 1588＋doctor --ci＋anchor verify）。信任根已活。
 - **對話輪收官（2026-07-29，三輪互審）**：總分 5.2→**6.4**（方法論 7.5/治理 7.5/架構 6.0/可用性 5.5/安全 5.5）。全程五份文件歸檔 `governance/external-reviews/`。對話戰果：①它改口四處（canary 鑑別力/負結果文化/可移植性基準/拆檔時點——皆因實證）②我方採納其「第一刀」三步與 guard-kill 升準殺全案③**它反查出真事故**：code-testmap r2 三筆 canary record 回報成功未落盤（[[Issues/canary-record未落盤事件]]），11 中 10 降級為 8 原生+3 補記④終稿仍明標分歧：「圖譜為準」正文未改不給預支分、dry-run 寫權未隔離、required check 未設。⑤路線圖重排：P1-0 部署最後一哩/P1-1 oracle 品質包（record 落盤自驗+canary 第二判者抽查+guard-kill 歸因）/P1-2 砍統計儀式/P1-3 合約普查——與我方 backlog 合流，oracle 品質升為最高投資序。終稿結語可當北極星：「讓每一盞綠燈都能回答：證據真的落盤了嗎？紅燈真的是那條規則咬住的嗎？」
+
+## Round3 重審（2026-07-29 晚，基準 b75266c；全文 `governance/external-reviews/2026-07-29-codex-round3-recheck.md`）
+
+**總分 6.4 → 6.4（不動）**。唯一上升＝治理機制 7.5→**7.7**（append-readback／timed_out 弱化／全弱 rc1／還原翻紅釘／CI 當輪回流／INVARIANT 2→6）；架構 6.0→**5.9**、安全 5.5→**5.4**（新增 489 行 god module＋一個「看起來像強制、實際 fail-open」的回路）。
+
+**它實查後點名我方自報不實五處，我逐條複驗＝全中（非誤報）**：
+
+| 自報 | 實況 | 佐證 |
+|---|---|---|
+| 「紅則吐失敗步驟＋log 尾段」 | 只進 `--json`；**預設文字 emitter 不印**，人跑指令看不到任何失敗證據 | `scripts/lumos` `cmd_ci_wait.emit()` |
+| 「cwd 漂移/錯 vault/不可寫路徑回歸測試」 | `t_canary_record_persist` 只有「正常落盤」＋「symlink /dev/null 必失敗」兩例 | `scripts/test_lumos.py` |
+| 「第二判者＝分權成立」 | telemetry-only、不影響閘、auditor 是自由字串（換個名字即過）、**帳上零筆 second、抽樣目錄只有 README** | `cmd_canary_second` |
+| 「guard-kill 輸出 assertion 與行為歸因」 | 文字鄰接啟發法；且 `attr_excerpt` **不寫進 kill ledger、預設輸出也不印** | `_kill_attribute` |
+| 「hook 三方 ⟺ 已守衛」 | 斷言實為**單向** `registered ⊆ copied`；「複製了沒註冊」的幽靈 hook 照樣過 | `t_docs_enumeration_drift` ③ |
+
+**另抓三個真缺陷（已複驗）**：
+1. **CI 假綠**——只認 `failure/timed_out/startup_failure` 為紅，`cancelled`／`action_required` 完成即判 green（計劃節點自列的 conclusion 矩陣未實作完）。
+2. **指令數三版本並存**——`AGENTS.md` 44／`reference.md` 49／實際 51；`t_docs_command_count` 只掃 README/README.en/ARCHITECTURE，守衛面沒覆蓋到。
+3. **圖譜自己是舊的**——`Systems/guard-kill.md` 仍寫「六態／timed_out 歸 killed／全 killed 含 timed_out=rc0」，與現碼七態相反；昨日只同步 skill reference，守衛也只驗 reference。
+
+**★最毒的一擊（認識論）★**：本輪由我方親手製造出「圖譜錯、code 對」的活例——照 CLAUDE.md「衝突以圖譜為準」，正確的新程式會被判成錯。外審兩輪都指此條該限縮為**意圖權威**（行為事實歸測試/執行/生產觀測，衝突立 incident）；正文仍未改（`CLAUDE.md`／`README.md`／project-notes skill 三處），本輪不給分且被當反證。
+
+**正名建議（採納傾向）**：「CI 回流**閉環**」→「CI 回流**觀測**」——它擋不了 push/merge/direct-main，沒有 required check 就不是強制面；續稱閉環會製造「反正 agent 會修」的道德風險。
+
+**6.4 上限理由收窄（非撤銷）**：舊理由「完全缺乏寫後驗證」已修正；新理由＝「寫後可見性已補，但證據帳的**持久性／唯一性／身份／並發／不可竄改**仍未成立」（無 fsync/鎖、不比對讀回的是否為本筆、選錯合法 vault 仍成功、TOCTOU/inode 替換無防、事故根因至今未證）。

@@ -4302,7 +4302,9 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
         print(json.dumps({"results": [{k: v for k, v in r.items() if k != "_logged"}
                                       for r in results]}, ensure_ascii=False))
     else:
-        icon = {"killed": "✓", "timed_out": "✓", "killed_unattributed": "⚠",
+        # 七態(舊 timed_out 鍵已於 2026-07-29 移除:那是六態時代的殘留死鍵,
+        # 且掛 ✓ 會讓人誤以為逾時算接住——現在逾時是 timed_out_weak ⚠)
+        icon = {"killed": "✓", "killed_unattributed": "⚠",
                 "timed_out_weak": "⚠", "survived": "✗",
                 "drifted": "⚠", "abort": "⚠", "error": "⚠"}
         for r in results:
@@ -9666,6 +9668,8 @@ def _testmap_affected_inner(diff, repo, as_json):
 # ── CI 回流閉環(vault-free 讀寫帳;設計 [[CI回流閉環_計劃]] v1=direct only) ──────────
 
 CI_LOG_NAME = ".ci-log.jsonl"
+# conclusion 三分類(計劃 [S1] 矩陣)。**白名單制**:綠只認列舉值,非綠非紅一律「未定」——
+# cancelled/action_required/stale 與任何未知/未來新增值都走未定,不得靜默判綠(fail toward 不放行)。
 _CI_GREEN = ("success", "neutral", "skipped")
 _CI_RED = ("failure", "timed_out", "startup_failure")
 
@@ -9799,6 +9803,14 @@ def cmd_ci_wait(env, timeout=600.0, repo_dir=None, sha=None, branch=None,
             for r in (runs or []):
                 print(f"CI {r.get('conclusion', '?'):<12} {r.get('workflow', '?')}"
                       f" {(r.get('sha') or '')[:7]} → {r.get('url', '')}")
+                # 失敗證據必須進**文字**輸出:只塞 --json 等於人跑指令看不到任何可修的線索
+                # (2026-07-29 外審實錘:README/skill/計劃都承諾會印,實作只進 json)
+                if r.get("failed_step"):
+                    print(f"  失敗步驟: {r['failed_step']}")
+                if r.get("log_tail"):
+                    print("  log 尾段:")
+                    for ln in str(r["log_tail"]).splitlines():
+                        print(f"    {ln}")
             print(f"→ 判定: {verdict}")
         return rc
 
@@ -9854,7 +9866,17 @@ def cmd_ci_wait(env, timeout=600.0, repo_dir=None, sha=None, branch=None,
                     "conclusion": r.get("conclusion"), "url": r.get("url", ""),
                     "failed_step": "", "log_tail": ""} for r in done]
             rc_w = _ci_record(env, out, sha, branch)
-            return rc_w if rc_w else emit("green", out)
+            if rc_w:
+                return rc_w
+            # conclusion 三分類(計劃 [S1] 矩陣;2026-07-29 外審實錘實作只做紅/非紅二分):
+            # 綠=全部落在 _CI_GREEN;非綠非紅(cancelled/action_required/stale,含未知未來值)
+            # =未定,rc0 但**不得判綠**——「完成且沒紅」不等於「通過」。
+            odd = [r for r in out if (r.get("conclusion") or "") not in _CI_GREEN]
+            if odd:
+                names = "、".join(sorted({(r.get("conclusion") or "?") for r in odd}))
+                return emit("undetermined", out,
+                            note=f"非成功但無失敗步驟可歸因({names}):不進修復路徑,請人判")
+            return emit("green", out)
         if not runs:                  # no-run 快速路徑:grace 後仍零 → 立刻收工,不白等
             if not graced:
                 graced = True
@@ -9908,7 +9930,7 @@ def cmd_ci_status(env, repo_dir=None, as_json=False):
         else:
             print("(未宣告 ci 區塊,CI 回流功能關閉)")
         return 0
-    last = None
+    rows = []
     try:
         with open(_ci_log_path(env), encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -9919,9 +9941,18 @@ def cmd_ci_status(env, repo_dir=None, as_json=False):
                 except ValueError:
                     continue
                 if isinstance(d, dict):
-                    last = d
+                    rows.append(d)
     except OSError:
-        last = None
+        rows = []
+    # 「最後一筆」不等於「最新結論」:同一 sha 多支 workflow 各記一筆,檔尾那筆可能正好是綠的、
+    # 把紅的蓋掉(2026-07-29 沿 SessionStart hook 同型修法)。取最新 sha 的**全部**筆、報最壞的。
+    last = None
+    if rows:
+        newest_sha = rows[-1].get("sha")
+        same = [r for r in rows if r.get("sha") == newest_sha] or [rows[-1]]
+        last = (next((r for r in same if (r.get("conclusion") or "") in _CI_RED), None)
+                or next((r for r in same if (r.get("conclusion") or "") not in _CI_GREEN), None)
+                or same[-1])
     if last is None:
         if as_json:
             print(json.dumps({"verdict": "no-data"}, ensure_ascii=False))
