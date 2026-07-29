@@ -279,7 +279,8 @@ lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y --note "�
 lumos guard kill <node>   # 沙盒(worktree)真弄壞 → 綁定測試必翻紅;survived=稻草人 rc1
 ```
 - 壞法**從業務行為推導**（「驗章短路成恆真」），不從實作反轉；跑測試的指令由 `.lumos/config.json` 宣告（多平台 `platforms.<名>.run_cmd`、單平台 `test.run_cmd`，含 `{method}` 佔位）。
-- 六態：killed/timed_out（都算接住）/survived（稻草人）/drifted（配方漂移重寫）/abort（baseline 就紅）/error。留痕 docs/.kill-log.jsonl，`lumos gov` 可查。
+- 七態（2026-07-29 oracle 品質包升級）：**`killed`＝強證據**（綁定測試名與失敗標記鄰近共現，且標記不落在名字串內）／**`killed_unattributed`＝弱證據**（紅了但歸因不到綁定測試，可能是編譯錯/環境掛，印警告建議 run_cmd 加 filter）／**`timed_out_weak`＝弱證據且不計 killed**（刻意變更：掛掉可能是環境非變異）／`survived`（稻草人）／`drifted`（配方漂移重寫）／`abort`（baseline 就紅）／`error`。
+- rc 優先序：survived→1；drifted/abort/error→2；**全部弱證據→1**（沒有任一條被證實咬住，不得以 rc0 報成功）；有強殺且無錯→0。摘要「咬得住」只配全強殺，混弱證據改印「強殺 X / 弱 Y」。留痕 docs/.kill-log.jsonl，`lumos gov` 可查。
 - 天花板：證「接得住這條壞法」不證「接得住所有壞法」；沙盒只隔離程式碼不隔離 DB——只對自我清理的測試跑。
 
 ### ★INVARIANT★ → `[audit:]` 獨立合法性審計（合約即外審，2026-06-18 機制；doctor Check T 強制）

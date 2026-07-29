@@ -11214,6 +11214,45 @@ def t_show():
 
 
 
+def t_docs_enumeration_drift():
+    """文件裡的「手寫列舉/數字」對機械事實的漂移守衛(2026-07-29 使用者指出:
+    有守衛的當場被咬住、沒守衛的全漏 → 把守衛面從命令數推廣到三類散落事實)。
+    通則:凡文件宣稱一個可從碼機械推導的清單/數字,就該有一條這樣的測試。"""
+    import re as _re
+    from pathlib import Path as _P
+    root = _P(__file__).resolve().parent.parent
+    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+
+    # ① 治理帳數:cmd_gov 實際 load() 幾支 vs 文件/docstring 宣稱
+    gov_body = src[src.index("def cmd_gov("):src.index("def cmd_gov(") + 6000]
+    n_sources = len(_re.findall(r"^\s*load\(", gov_body, _re.M))
+    zh = "零一二三四五六七八九十"
+    claimed = set(_re.findall(r"彙整([一二三四五六七八九十])帳", src))
+    claimed |= set(_re.findall(r"讀([一二三四五六七八九十])個本機 JSONL",
+                               (root / "README.md").read_text(encoding="utf-8")))
+    check("治理帳數:文件宣稱 vs cmd_gov 實際 load 數",
+          claimed == {zh[n_sources]}, f"claim={claimed} actual={n_sources}({zh[n_sources]})")
+
+    # ② guard kill verdict 值域:碼裡實際會寫出的 verdict vs reference.md 列舉
+    kill_body = src[src.index("def cmd_guard_kill("):src.index("def cmd_guard_audit(")]
+    verdicts = set(_re.findall(r'verdict = "([a-z_]+)"', kill_body))
+    verdicts |= set(_re.findall(r'"verdict": "([a-z_]+)"', kill_body))
+    ref = (root / "skills" / "lumos-project-notes" / "reference.md").read_text(encoding="utf-8")
+    kill_sec = ref[ref.index("lumos guard kill-add"):ref.index("lumos guard kill-add") + 2000]
+    missing = sorted(v for v in verdicts if v not in kill_sec)
+    check("kill verdict 值域:碼有的 reference.md 都列了", not missing, f"未列: {missing}")
+
+    # ③ Claude hook 生命週期對稱:註冊(HOOK_ENTRIES) ⟺ 複製白名單(_GLOBAL_CLAUDE_HOOKS)
+    merge = (root / "scripts" / "merge-claude-settings.py").read_text(encoding="utf-8")
+    registered = set(_re.findall(r'_hook_cmd\("([\w.-]+)"\)', merge))
+    wl = _re.search(r"_GLOBAL_CLAUDE_HOOKS = \(([^)]*)\)", src)
+    copied = set(_re.findall(r'"([\w.-]+)"', wl.group(1) if wl else ""))
+    check("hook 生命週期對稱:註冊的都在複製白名單裡",
+          registered <= copied, f"註冊未複製(會被 _prune_dangling 剪掉): {sorted(registered - copied)}")
+    for name in sorted(registered | copied):
+        check(f"hook 檔存在: {name}", (root / "scripts" / "hooks" / "claude" / name).exists(), "")
+
+
 def t_docs_command_count():
     """文件宣稱的頂層命令數 vs argparse 實數(2026-07-29 外審實錘:ARCHITECTURE 曾停在 44)。"""
     import re as _re

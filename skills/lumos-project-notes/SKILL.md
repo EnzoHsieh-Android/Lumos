@@ -11,6 +11,7 @@ description: 維護專案知識圖譜（docs/{project}-knowledge/）— 追蹤�
 - **主工具 = `lumos`**(python3 零依賴,`find_vault` 自動鎖定 `docs/*-knowledge/`)。**禁止**用 Grep/Read/Edit/Write 直接碰 vault 的 .md——繞過寫後自驗與鐵則防護。需讀節點**完整 body**(決策全文/章節內文)→ `lumos show <節點> [--body-only]`(2026-07-21 新增,補「context 只給 summary 索引」的全文讀取缺口);context 仍是進場導航首選。
 - **進場三步**:`lumos search <關鍵字>` 定位 → `lumos context <節點>` 掃脈絡(頭部攤 ⚠ 合約) → `lumos contracts <節點>` 查硬合約。**然後**才 grep code / 查 DB 驗證。
 - **寫完一個節點**:`lumos lint <節點>`(單檔快檢) → 收尾 `lumos doctor`(全圖)。
+- **push 後拉回 CI 結論（僅當專案 `.lumos/config.json` 宣告 `ci` 區塊時；未宣告＝此條不存在）**：`lumos ci-wait` → 綠且 `verdict=green` 才收工；**rc1（紅）＝當輪修**（讀它印的失敗步驟＋log 尾段 → 修 → 推 → 再等，上限 2 次，仍紅則寫 Issue 攤給人）；rc0 但 verdict 是 `timeout`/`no-run`/`unavailable` **不算綠**（分別是：還沒跑完要手動查／此 sha 沒觸發任何 workflow／環境缺 gh）。**紅燈不過夜**：修不完也要在收尾報告明講「main 上有紅燈未解」，不得靜默收工。
 - **rich 節點** = Write/Edit 內文 + `summary` block;**純量/list/decisions 一律走 `lumos set`/`append`/`decision-add`**(別手改 frontmatter)。
 
 > ### ⤵ 何時去翻 `reference.md`（本 skill 目錄下,權威展開版 880 行）

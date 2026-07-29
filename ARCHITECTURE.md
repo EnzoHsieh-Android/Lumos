@@ -130,7 +130,7 @@ flowchart TB
 
 ## 4. 強制力管線 (圖譜不腐爛的機制)
 
-由「動手前推播 → commit 把關 → push 硬閘 → CI」四段;訊號主動推到眼前(impact),硬閘擋在提交與推送點。
+由「動手前推播 → commit 把關 → push 硬閘 → CI → **回流當輪修**」五段;訊號主動推到眼前(impact),硬閘擋在提交與推送點,CI 結論由 `lumos ci-wait` 拉回同一輪(需專案宣告 `.lumos/config.json` 的 `ci` 區塊才啟用;未宣告=此段不存在)。
 
 ```mermaid
 flowchart TB
@@ -148,13 +148,18 @@ flowchart TB
     PUSH -->|"② anchor verify"| PB2["⛔ 測試/閘檔動了沒核可"]
     PUSH -->|"③ code-loop check (tier=high)"| PB3["⛔ 未過 code-loop<br/>(pass/skip/--no-verify 三路)"]
     PUSH -->|全過| PASS["push"]
-    PASS --> CI["CI: lumos doctor --ci<br/>+ ★INVARIANT★→[test:] 真跑"]
+    PASS --> CI["CI (GitHub Actions): 全套測試<br/>+ doctor --ci + anchor verify"]
+    CI --> WAIT{"lumos ci-wait<br/>(push 後同輪等結論)"}
+    WAIT -->|綠| DONE["收工"]
+    WAIT -->|"紅 rc1 + 失敗步驟/log"| FIX["當輪修 → 再推 → 再等<br/>(上限 2 次,之後寫 Issue 攤人)"]
+    FIX --> EDIT
 
     classDef gate fill:#3a2020,stroke:#dc5b5b,color:#ffe8e8
     classDef ok fill:#1b3a2a,stroke:#3ddc84,color:#e8fff0
     classDef push fill:#2a2440,stroke:#9a7bd6,color:#f0ecff
     class PC,PUSH,BLOCK,PB1,PB2,PB3 gate
-    class COMMIT,PASS,CI,EDIT ok
+    class COMMIT,PASS,CI,EDIT,DONE ok
+    class WAIT,FIX gate
     class BEFORE,PRE,POSTT push
 ```
 

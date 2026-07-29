@@ -154,6 +154,7 @@ lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活
 lumos impact --diff <merge-base>..HEAD --sync-check   # 落成核對:受影響節點動了沒
 lumos code-loop pass --note "<收斂理由/loop-id>"       # pre-push blocking:無 pass/skip 留痕 → push 硬擋
 ```
+- **push 後拉回 CI 結論（僅當專案 `.lumos/config.json` 宣告 `ci` 區塊時；未宣告＝此條不存在）**：`lumos ci-wait` → 綠且 `verdict=green` 才收工；**rc1（紅）＝當輪修**（讀它印的失敗步驟＋log 尾段 → 修 → 推 → 再等，上限 2 次，仍紅則寫 Issue 攤給人）；rc0 但 verdict 是 `timeout`/`no-run`/`unavailable` **不算綠**（分別是：還沒跑完要手動查／此 sha 沒觸發任何 workflow／環境缺 gh）。**紅燈不過夜**：修不完也要在收尾報告明講「main 上有紅燈未解」，不得靜默收工。
 存活未修的 minor findings **逐條一句接受理由**(併入 pass --note 或審計紀錄)——沒理由不得 pass(同 design-loop 收斂節,2026-07-17 外部評審吸收)。
 **棧別效能檢核(2026-07-19,紀律層)**:pitfalls manifest 帶 `stack_questions`(diff 命中 kt/cs/vue/sql)時,終審留痕須含對應檢核問題的答案(一句即可;同接受理由紀律)——tier=high 落在 pass --note;**tier=standard 走單 reviewer 時同義務落在終審紀錄/commit message**(standard+棧命中是最常見情境,pre-push 亦會 advisory 印問;單 reviewer 實測折入 2026-07-19)。內容源=[[Systems/效能檢核目錄]]。
 **真跑優先(2026-07-18 S1,紀律層規則非機械閘)**:diff 經 `lumos impact --diff` 命中綁 `[test:]` 的星標合約節點時,pass 前**只跑該綁定測試**(非全套)且須綠,結果記入 pass --note——LLM 判官意見不能替代這一跑(信任階梯:真跑>機械查>LLM 判官>自報)。`[test:]` 存的是測試名非指令,解析順序=①合約節點/專案圖譜記載的完整指令 ②依該棧慣例組指令(`dotnet test --filter`/`python3 scripts/test_lumos.py -k` 等)③歧義/查無 → **不得靜默跳過**:退跑該測試檔/模組級,再不行跑全套,留痕記「解析歧義」——「解析不了所以沒跑」不構成放行理由。機械化留 v2(動 gate code 另立計劃)。
