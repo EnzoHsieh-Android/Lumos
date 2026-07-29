@@ -1,0 +1,29 @@
+name: CI
+# 獨立信任根(2026-07-29 Codex 外審 P0):本機 hooks 可繞(--no-verify/缺環境降級放行),
+# 這裡是 push 後必跑的後盾——pre-push 提示裡的「CI 仍會抓」由本 workflow 兌現。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile check
+        run: python -m compileall -q scripts/lumos scripts/test_lumos.py
+      - name: SyntaxWarning 歸零閘
+        run: python -W error::SyntaxWarning -c "compile(open('scripts/lumos').read(),'lumos','exec'); compile(open('scripts/test_lumos.py').read(),'t','exec')"
+      - name: Full test suite (1585 checks)
+        run: python scripts/test_lumos.py
+      - name: Graph doctor (strict)
+        run: python scripts/lumos doctor --ci
+      - name: Anchor verify (baseline 缺失必紅)
+        run: |
+          test -f governance/anchor-baseline.json || { echo "anchor baseline 缺失"; exit 1; }
+          python scripts/lumos anchor verify

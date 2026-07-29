@@ -25,8 +25,8 @@ summary: |-
   TEST:t_capture_counts_from_finders(5)+t_loop_capture_counts_cli(7)+t_loop_capture_counts_from_pitfalls(5)+t_pitfalls_diff(11)+t_pitfalls_lint_integration(15,重構後逐鍵不變);865 passed
   VERIFY:[[2026-07-09_loop三輪壓縮]]
 decisions:
-  - content: |-
-    id: d1
+  - id: d1
+    content: |-
       code-loop 繼承 design-loop 的 panel 機制 + capture-recapture 收斂,但 panel 成員換成
       「LLM reviewer + 確定性工具(SARIF linter/測試/type/mutation)」的異質組合、辯方改可執行反證
       ——不是「design-loop 換 canary 名字」。

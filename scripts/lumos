@@ -2065,6 +2065,32 @@ def cmd_lint(env, node):
     if t in ("system", "issue") and not summ.strip():
         errs.append(f"{t} 節點必須有 summary block(放 FLOW:/KEY:/DEP: 等符號行)")
 
+    # decisions 結構守衛(2026-07-29 外審實錘:id 縮排吞進 content block,parser 靜默降級、
+    # doctor 全綠——「綠燈≠schema 有效」的活例。以正牌 parse_decisions 驗:
+    # 壞型一(sibling 被吞)→ content 空;壞型二(entry 非 `- key:` 形)→ 整條被靜默丟棄=條數對不上)
+    try:
+        _fm_lines, _ = split_frontmatter((env.vault / rel).read_text(encoding="utf-8"))
+    except OSError:
+        _fm_lines = None
+    if _fm_lines and any(re.match(r"^decisions:\s*$", _l) for _l in _fm_lines):
+        _parsed = parse_decisions(_fm_lines)
+        _raw_items = 0
+        _in = False
+        for _l in _fm_lines:
+            if re.match(r"^decisions:\s*$", _l):
+                _in = True
+                continue
+            if _in and _l.strip() and not _l.startswith(" "):
+                _in = False
+            if _in and re.match(r"^\s*-\s", _l):
+                _raw_items += 1
+        if _raw_items != len(_parsed):
+            errs.append(f"decisions 結構壞損:寫了 {_raw_items} 條、只解析出 {len(_parsed)} 條"
+                        "(entry 須為 `- id:`/`- content:` 起頭的 dict;用 lumos decision-add 寫入)")
+        for _di, _d in enumerate(_parsed):
+            if not str(_d.get("content") or "").strip():
+                errs.append(f"decisions[{_di}] content 為空(常見成因:sibling 鍵縮排錯位被吞進 block scalar)")
+
     # 狀態標籤漂移守衛:status 欄位 vs tags 的 status/*(反正規化的完整性檢查,
     # 兜住繞過 set status 同步的寫入路徑;見 Projects/狀態標籤同步守衛_計劃)
     _st = n.fields.get("status")
@@ -9510,7 +9536,7 @@ _FOLD_NEXT_H2_RE = re.compile(r'^##\s', re.MULTILINE)
 
 
 def _fold_value_drift(text):
-    """偵測「同識別詞在不同處出現不同值」的漂移(全文域)。
+    r"""偵測「同識別詞在不同處出現不同值」的漂移(全文域)。
 
     掃描域排除 ## …審計修正紀錄 段(含節號前綴),該段刻意引用歷史/舊值,掃它必假陽。
     單一抽取法:掃符合值 pattern 的「識別詞+值」字串——
@@ -9576,7 +9602,7 @@ _FOLD_RO_FILENAME_RE = re.compile(
 
 
 def _fold_reverse_omission(text):
-    """偵測「body 有的顯著 token,summary 沒有」的反向遺漏(全文域)。
+    r"""偵測「body 有的顯著 token,summary 沒有」的反向遺漏(全文域)。
 
     掃描域排除 ## …審計修正紀錄 段(複用 _FOLD_AUDIT_RECORD_RE/_FOLD_NEXT_H2_RE)。
     排除 <…> placeholder(r2-F5)。
@@ -9626,7 +9652,7 @@ def _fold_reverse_omission(text):
         return _FOLD_RO_PLACEHOLDER_RE.sub(' ', s)
 
     def _extract_tokens(s):
-        """Extract high-signal tokens from string s, excluding <...> placeholders.
+        r"""Extract high-signal tokens from string s, excluding <...> placeholders.
 
         Three token classes:
           1. --flag (--\w[\w-]*)

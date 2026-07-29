@@ -10965,6 +10965,59 @@ def t_show():
 
 
 
+def t_docs_command_count():
+    """文件宣稱的頂層命令數 vs argparse 實數(2026-07-29 外審實錘:ARCHITECTURE 曾停在 44)。"""
+    import re as _re
+    from pathlib import Path as _P
+    root = _P(__file__).resolve().parent.parent
+    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    actual = len(set(_re.findall(
+        r"^\s+(?:[a-z_]+ = )?sub\.add_parser\(\"([a-z-]+)\"", src, _re.M)))
+    for fname, pat in (("README.md", r"(\d+) 個頂層命令"),
+                       ("README.en.md", r"(\d+) top-level commands"),
+                       ("ARCHITECTURE.md", r"(\d+) 個頂層命令")):
+        text = (root / fname).read_text(encoding="utf-8")
+        nums = set(_re.findall(pat, text))
+        check(f"{fname} 命令數與 argparse 同步",
+              nums == {str(actual)}, f"claim={nums} actual={actual}")
+
+
+def t_lint_decisions_structure():
+    """lint 抓 decisions 結構壞損:id 被吞進 content block(外審實錘型)/entry 非 dict。"""
+    v = mkvault()
+    # 壞型一:id 縮排進 content 首行(sibling 被吞)
+    write(v, "Systems/BadDec.md", """type: system
+summary: |-
+  KEY:x
+decisions:
+  - content: |-
+    id: d1
+      吞掉的內容""", "# b\n")
+    r = run(v, "lint", "BadDec")
+    check("lint 抓 id-吞進-content", r.returncode != 0 and "decisions" in r.stdout + r.stderr,
+          f"{r.returncode} {r.stdout[:150]}")
+    # 壞型二:entry 是純字串
+    write(v, "Systems/BadDec2.md", """type: system
+summary: |-
+  KEY:x
+decisions:
+  - 只是一句話""", "# b\n")
+    r = run(v, "lint", "BadDec2")
+    check("lint 抓 decisions entry 非 dict", r.returncode != 0
+          and "decisions" in r.stdout + r.stderr, f"{r.returncode} {r.stdout[:150]}")
+    # 好型:正常結構不誤報
+    write(v, "Systems/GoodDec.md", """type: system
+summary: |-
+  KEY:x
+decisions:
+  - id: d1
+    content: |-
+      正常內容
+    decided: 2026-07-29""", "# g\n")
+    r = run(v, "lint", "GoodDec")
+    check("lint 正常 decisions 不誤報", r.returncode == 0, f"{r.returncode} {r.stdout[:150]}")
+
+
 def _testmap_mk(td):
     """testmap 沙盒 fixture:bulk commit(>20 檔,cochange 挖掘層天然丟棄)+cochange 專用小 commit。"""
     import subprocess as _sp

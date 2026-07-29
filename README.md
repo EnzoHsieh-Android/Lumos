@@ -22,7 +22,7 @@
 - 有沒有**驗證過**、在什麼前提下成立。
 - 這個動作**可不可逆**、搞砸了怎麼收回。
 
-Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**不需要 Obsidian app**),用零依賴的 python CLI + git hooks 讓「**不更新圖譜**」比「更新圖譜」更難。
+Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**核心不需要 Obsidian app**;僅兩支選配 Claude hook 的部分功能在無 Obsidian 時自動降級),用零依賴的 python CLI + git hooks 讓「**不更新圖譜**」比「更新圖譜」更難。
 
 ---
 
@@ -43,7 +43,7 @@ Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**不
 | **合約守衛 scaffold** | `lumos guard list/scaffold/bind/audit/trace/kill` | 對談驅動:列未綁的 `★INVARIANT★`、套範本產**預設紅燈**測試 stub、綁 `[test:]`、蓋獨立 `[audit:]`;`kill` 沙盒真弄壞驗殺傷力。 |
 | **檢索與推薦** | `lumos search`(預設相關性排序)、`impact --ranked`(已接 hook)、`context --recommend`(dormant) | BM25F+圖分融合;search 與 hook 面均經人工 goldset 評測轉正(§6 門檻;評測釘語料快照可重現)。評測器 `governance/eval/retrieval_eval.py`。 |
 | **對抗審計 loop** | `lumos pitfalls`、`code-loop`、`canary`、`loop`、`fold-check`、`refcheck` | `pitfalls --diff` 分 tier;tier=high 走 canary 護的 `code-loop`(對抗代碼審);`design-loop` 在進實作前審 spec;`fold-check` 抓設計折入漂移。 |
-| **影響 / 完整性** | `lumos impact`、`anchor verify/approve`、`lumos testmap` | `impact` 由改動的檔反查受影響關聯節點(直接/間接)+ 命中事故(`pitfall_when`);`anchor` 守測試/閘檔不被無聲竄改;`testmap` 建檔案↔測試依賴地圖(naming/content/cochange 三路訊號),`affected` 依 diff 推薦該跑測試(advisory,Landmark 真庫金標雙層 recall 1.0 轉正)。 |
+| **影響 / 完整性** | `lumos impact`、`anchor verify/approve`、`lumos testmap` | `impact` 由改動的檔反查受影響關聯節點(直接/間接)+ 命中事故(`pitfall_when`);`anchor` 守測試/閘檔不被**無聲**竄改(改動偵測:防意外/無痕漂移;同 repo 內自簽,非防蓄意攻擊的信任根);`testmap` 建檔案↔測試依賴地圖(naming/content/cochange 三路訊號),`affected` 依 diff 推薦該跑測試(advisory,Landmark 真庫金標雙層 recall 1.0 轉正)。 |
 | **git hooks** | `scripts/hooks/` | pre-commit 硬擋「改 code 沒帶圖譜」;post-commit 留繞過痕跡;pre-push 跑 `doctor --ci` **+ anchor verify + tier=high 未過 code-loop 硬擋**。 |
 | **Claude hooks** | `scripts/hooks/claude/` | PreToolUse:改 code 前注入 impact 影響半徑;PostToolUse:自足性 / verification-rot 後驗。(2026-07-06 ADR:撤除 Stop 每回合 code-loop nag——太擾民,code-loop 由 pre-push 單點把關) |
 | **安裝器** | `get.sh`、`get.ps1`、`install.sh`、`scripts/merge-claude-settings.py`(底層 `install-hooks.sh` / `install-graph-toolchain.sh`) | `get.sh` 一鍵到底(機器層+專案層 auto-init,2026-07-25);`get.ps1`(Win)仍兩步(機器層+手動 `lumos init`)。設 hooks / 合併 Claude settings。 |

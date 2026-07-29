@@ -22,8 +22,8 @@ python3 scripts/lumos bootstrap     # 自動:clone Lumos + skills + 全域 lumos
 >
 > **全新、還沒帶 `scripts/lumos` 的專案**改走兩條指令:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash   # 機器層(連 Lumos 都自動 clone)
-> cd <你的專案> && lumos init     # 專案層:建圖譜骨架 + vendor 工具 + 裝 hooks(slug 預設取資料夾名)
+> cd <你的專案> && curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
+> # 一鍵到底(2026-07-25 起):機器層+專案層 auto-init(會先問一句,按 y 建圖譜+工具+hooks);顆粒操作(只 init/只 install)見 README 4b
 > ```
 > **原生 Windows(PowerShell)**改用 `get.ps1` 入口:`irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex`(全域 lumos 用 `.cmd` shim、skills 用 junction),重啟 session 後 `cd <你的專案>; lumos init`。詳見 [README 4c](README.md)。
 > (離線/企業內網仍可用手動 `install-graph-toolchain`,見維護者備註。)
