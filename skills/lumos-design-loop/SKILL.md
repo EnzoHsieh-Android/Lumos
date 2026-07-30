@@ -57,7 +57,11 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 
 ## 平行 panel 模式(≤3 輪壓縮,2026-07-09;取代 6 輪同族循序,設計見 [[loop三輪壓縮_計劃]])
 6 輪同族循序=相關信號(「9 judge 2 票」)且 framing 對抗 G2 收斂逼跑滿 cap。壓縮=**買獨立廣度不買相關深度**:
-- **一輪 = 平行派 W 個多樣審計員**(W 由 tier:`difficulty.params` 的 `panel_width`,standard=3/high=5),不同 canary 型別(跨 slot 輪替 a/b/c/d)+ 不同鏡頭(正確性/邊界/整合)。**r1 其中一席改無鏡頭通才席(2026-07-16 replay baseline 實證:窄鏡頭隧道視野漏掉的洞被通才一發抓走——首輪買廣度;r2+ delta 輪恢復鏡頭分工買深度;見 [[Verification/2026-07-16_replay校準baseline_v0]])**+ ≥1 跨家族(外家模型:**Codex CLI** `codex exec --sandbox read-only`(2026-07-10 起本機可用)或 qwen(自主 loop);不帶 canary、只作否決)。每審計員各自 canary → 注意力檢查平行做。**同輪 W 個 canary 不得同型同段——「殺 A 必殺 B」的重複難度 canary 不算獨立注意力票**(冗餘灌水 caught-rate;冗餘識別不可判定 → 靠紀律,borrow mutation score 教訓 2026-07-10)。
+- **一輪 = 平行派 W 個多樣審計員**(W 由 tier:`difficulty.params` 的 `panel_width`,standard=3/high=5),不同 canary 型別(跨 slot 輪替 a/b/c/d)+ 不同鏡頭(正確性/邊界/整合)。**r1 其中一席改無鏡頭通才席(2026-07-16 replay baseline 實證:窄鏡頭隧道視野漏掉的洞被通才一發抓走——首輪買廣度;r2+ delta 輪恢復鏡頭分工買深度;見 [[Verification/2026-07-16_replay校準baseline_v0]])**+ **跨家族席(能力宣告制,2026-07-30 修訂)**:外家模型(**Codex CLI** `codex exec --sandbox read-only`／qwen)。
+  - **有可用的外家 → 該席也要帶 canary**(舊版「不帶 canary、只作否決」已作廢):否決席過去沒有注意力檢查,等於「它講得有沒有道理」全由編排者自己讀了算——**maker 自判**,正是本機制要消滅的東西。2026-07-30 實例:外家席交出打掉整份 spec 前提的最重發現,但帳上沒有任何機械證據證明它醒著。**其 findings 是否佔 W／計入重疊帳,維持現狀不動**(升為主力席會連動收斂判準,另案處理,見下)。
+  - **沒有可用的外家 → loop 照跑,不擋**:但**必須在 canary record 的 note 留「單家族」**,且收斂結論的措辭降級為「單家族視角下未發現」。★**沒有跨家族不是「不准收斂」,而是「收斂的宣稱要更小」**★——本 skill 是要發給別人用的,硬性要求第二家廠商 CLI 等於給零依賴工具鏈加一個外部依賴、讓沒有的人開箱即壞。誠實地少講一點 > 擋住別人不給用。
+  - **為什麼不直接升主力席**:2026-07-30 日報建議「跨家族席從否決席升為主力席」,**本次刻意只採一半**——升主力席會動到佔 W、capture-recapture 帳與 fail-closed 分級(code-loop 已走過該路,但其 fail-closed 是為本 repo 寫的,套到消費端＝跑不了),與可攜性直接衝突,另立題目再審。
+  每審計員各自 canary → 注意力檢查平行做。**同輪 W 個 canary 不得同型同段——「殺 A 必殺 B」的重複難度 canary 不算獨立注意力票**(冗餘灌水 caught-rate;冗餘識別不可判定 → 靠紀律,borrow mutation score 教訓 2026-07-10)。
 - **判定(編排者一次做)**:①逐同族審計員判 canary caught/missed,missed 者 findings 剔除 ②去重(嚴格合一同段同性質)③對存活 ≥major 派辯方 ④算 capture-recapture:各 distinct 缺陷被幾人找到 → `capture_counts`。
 
 ### reviewer 結構紀律(2026-07-10 研究明文化;實證出處見 [[reviewer結構明文化_計劃]])
@@ -86,6 +90,7 @@ description: 寫完一份設計 spec/plan、進實作前用這個——派乾淨
 ## 誠實天花板(收斂後務必向人提醒,別讓 CONVERGED 被當「絕對沒問題」)
 > 回報遵 CLAUDE.md「對人回報用白話」規則(人話起手;canary 之類術語首次出現給一句人話,如 canary=偷埋的假錯驗審計員醒著)。
 1. **完整性**:收斂只證「連 2 輪醒著的審計員沒找到 blocker/major」,不證沒有更深的問題。完整性靠多輪 + 多視角,不靠把門檻調嚴。
+   - ★**caught ≠ 覆蓋**(2026-07-30 外部實證入帳)★:canary 抓到只證該席**醒著**,不證它審得夠廣。植錯誤考審查系統的實測——**最強單一配置只抓到 71.6%,六個模型的並集才 83.3%**,且不同模型抓到的是**不同種類**的錯(arXiv 2606.19749,Dang Nguyen 等,2026-06-18;經 2026-07-30 治理日報引入)。**推論**:單席 caught 的輪次不得被當成「這一輪審夠了」;廣度只能靠多席 × 多鏡頭 × 跨家族買,買不到就**如實把收斂宣稱講小**。同源提醒:該研究同時指出真實部署最常見的抱怨是**誤報與無關痛癢的小意見**——與本 skill 的抑噪紀律同向。
 2. **整合性**:canary-caught / severity / 哪些是「誤判」三個都由植入者(你)自己判、無外部檢查——是**沒閉合的迴歸**,不 tamper-proof。loop 是**可觀測 + 摩擦 + 地板**,不是 oracle。
 
 ## 收斂後

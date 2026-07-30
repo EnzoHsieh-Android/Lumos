@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-10
+updated: 2026-07-30
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -17,6 +17,8 @@ summary: |-
   KEY:[2026-07-10]折入錨點污染型事故:編排者用工作副本(含canary)的字串當折入anchor→對真檔靜默落空(replace無assert)——防範:anchor一律取真檔原文+assert;fold-check未來方向補「紀錄宣稱vs正文存在」核對
   KEY:[2026-07-10]生成硬化三條進 skill——載重錨定/haiku 難度探針(FLAWS)/事故反轉(IBIR);missed-rate 升一級指標(lumos gov 分帳);見[[Projects/canary生成硬化_計劃]]
   FLOW:對抗審計一份 spec → 在工作副本偷植 1 個純加性 canary(指向不存在章節/引用未定義詞)→ 不告訴審計員、正常跑審 → 判定:審計員清楚描述該瑕疵=抓到(只信同類同段 findings)/沒描述=放水(判決作廢、換 canary 重跑)→ `lumos canary record caught|missed` 記一筆 → `lumos gov` 第 4 源彙整成審計員可靠度史
+  KEY:[2026-07-30]★caught≠覆蓋★外部實證入帳:植錯誤考審查系統實測**最強單席僅 71.6%、六模型並集才 83.3%**(arXiv 2606.19749,經 07-30 治理日報引入)——canary caught 只證該席**醒著**、不證審得夠廣;廣度只能靠多席×多鏡頭×跨家族買,買不到就把收斂宣稱講小
+  KEY:[2026-07-30]跨家族席改**能力宣告制**:有外家→該席也帶 canary(舊「不帶canary只否決」作廢,理由=否決席無注意力檢查等於編排者自判);無外家→loop 照跑但 note 留「單家族」、收斂措辭降級為「單家族視角下未發現」。**刻意不採日報的「升主力席」**(連動佔W/capture帳/fail-closed,且與可攜性衝突:skill 要發給別人用,硬要求第二家 CLI=零依賴工具鏈加外部依賴)
   KEY:test-the-tester——這套方法論把判斷外包乾淨審計員,canary 是「注意力下限」探針,擋掉『審計員根本沒讀/只吐通用回應』失敗模式
   KEY:協議是主體(skill 規則),lumos 只做極小 helper:record 留痕 + gov 唯讀彙整;lumos 不 spawn agent、植入/判定留在對話/skill 層
   KEY:提交的文件永遠不含 canary;token(CANARY-<hex>)只是定位記號,非「抓到」的機械證明——唯一算數的是審計員正確描述了那個瑕疵
@@ -93,3 +95,30 @@ decisions:
 - 設計稿:`docs/design/2026-06-19-canary-audit.md`(4 輪 Sonnet 對抗審計收斂)。
 - 實作落點:`scripts/lumos` `cmd_canary` + `cmd_gov` 第 4 源 mapper;`skills/lumos-project-notes/SKILL.md` canary 協議段。
 - 實作 commit:`58ae539`(canary record + gov 第 4 源)。
+
+## caught ≠ 覆蓋（2026-07-30 外部實證入帳）
+
+**來源**：arXiv 2606.19749（Dang Nguyen 等，2026-06-18，植入已知錯誤考各種 AI 審查系統）——
+經 2026-07-30 治理日報（`governance/reports/governance-2026-07-30.json`）引入。
+
+**數字**：**最強單一配置抓到 71.6%；六個模型的並集才 83.3%**，關鍵在不同模型抓到的是**不同種類**的錯。
+同研究另指出真實部署的使用者抱怨以**誤報與無關痛癢的小意見**為大宗。
+
+**對本機制的意義（兩條，已寫進 `lumos-design-loop` skill 誠實天花板）**：
+1. **canary caught 只證該席「醒著」，不證它審得夠廣。** 單席 caught 的輪次不得被當成「這一輪審夠了」；
+   廣度只能靠多席 × 多鏡頭 × 跨家族買，買不到就如實把收斂宣稱講小。
+2. 誤報大宗的發現與既有抑噪紀律同向，維持不動。
+
+## 跨家族席補注意力檢查（2026-07-30 修訂）
+
+**改動**：design-loop 的跨家族席由「不帶 canary、只作否決」改為**有可用外家時該席也帶 canary**。
+
+**理由**：否決席過去沒有注意力檢查，等於「它講得有沒有道理」全由編排者自己讀了算——**maker 自判**，
+正是本機制要消滅的東西。2026-07-30 現場實例：外家席交出打掉整份 spec 前提的最重發現
+（見 [[Projects/版本發布流程_計劃]] r1），但帳上沒有任何機械證據證明它醒著。
+
+**刻意只採一半**：2026-07-30 日報建議「跨家族席升為主力席」，本次**不採**——升主力席會連動佔 W、
+capture-recapture 帳與 fail-closed 分級，且與**可攜性**直接衝突：skill 是要發給別人用的，
+硬性要求第二家廠商 CLI ＝ 給零依賴工具鏈加外部依賴、讓沒有的人開箱即壞。
+故採**能力宣告制**：沒有外家 → loop 照跑、note 留「單家族」、收斂措辭降級為
+「單家族視角下未發現」。★沒有跨家族不是「不准收斂」，而是「收斂的宣稱要更小」★。
