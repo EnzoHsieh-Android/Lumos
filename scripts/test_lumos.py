@@ -12536,6 +12536,8 @@ def t_slim_uninstall_removes_claude_md_block():
     # 情境二:CLAUDE.md 原本不存在 → 安裝時新建 → 卸載後應連檔案一起消失
     proj_b = root / "proj_b"
     proj_b.mkdir()
+    (proj_b / ".git").mkdir()   # ★install.sh 注入目標守衛第一層要求★:CLAUDE.md
+                                 # 情境本身就是「原本不存在」,守衛改靠 .git 判定專案根
     fake_home_b = root / "home_b"
     (fake_home_b / ".local" / "bin").mkdir(parents=True)
     env_b = dict(_os.environ, HOME=str(fake_home_b))
@@ -12772,6 +12774,8 @@ def t_slim_uninstall_backs_up_and_preserves_custom_files():
     import tempfile as _tf, os as _os
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-slimuninst-"))
+    (root / ".git").mkdir()   # ★install.sh 注入目標守衛第一層要求★:root 本身就是
+                               # install.sh 的目標 cwd,標記一下讓它看起來像專案根
     repo = _P(GRAPHCTL).parent.parent
 
     fake_home = root / "home"
@@ -12826,6 +12830,7 @@ def t_slim_uninstall_refuses_foreign_bin():
     import tempfile as _tf, os as _os
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-slimuninstfp-"))
+    (root / ".git").mkdir()   # ★install.sh 注入目標守衛第一層要求★(見上一測試同款註解)
     repo = _P(GRAPHCTL).parent.parent
 
     fake_home = root / "home"
@@ -12874,6 +12879,7 @@ def t_slim_uninstall_idempotent_second_run():
     import tempfile as _tf, os as _os
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-slimuninst2x-"))
+    (root / ".git").mkdir()   # ★install.sh 注入目標守衛第一層要求★(見前述同款註解)
     repo = _P(GRAPHCTL).parent.parent
 
     fake_home = root / "home"
@@ -13035,6 +13041,8 @@ def t_slim_get_idempotent():
     import tempfile as _tf, os as _os, shutil as _sh
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-slimget-"))
+    (root / ".git").mkdir()   # ★install.sh 注入目標守衛第一層要求★:get.sh 不 cd,
+                               # install.sh 的目標 cwd 就是呼叫 get.sh 時的 root
     repo = _P(GRAPHCTL).parent.parent
 
     src_repo = root / "src_repo"
@@ -13402,6 +13410,179 @@ def t_slim_gen_dist_ships_entrypoints():
         if p.is_file():
             mode = p.stat().st_mode & 0o111
             check(f"dist/{rel} 有可執行位元", mode != 0, oct(p.stat().st_mode))
+
+
+def t_slim_install_guard_rejects_empty_dir():
+    """★注入目標守衛,第一層★:空目錄(無 `.git`/無 `docs/*-knowledge/`/無既有
+    `CLAUDE.md`)——這裡看起來不是專案根,拒絕 rc=2,且 `CLAUDE.md` 不得被建立。
+    ★誠實邊界★:這層擋的是「在 `~` 或隨便一個目錄下誤跑」,不是那兩次真實事故
+    (事故發生的目錄本身就有 .git/CLAUDE.md/docs/*-knowledge,像不像專案根這層
+    完全擋不住——那是第二層的事,見 `t_slim_install_guard_rejects_source_repo`)。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-guard-empty-"))
+    repo = _P(GRAPHCTL).parent.parent
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    empty = root / "empty"
+    empty.mkdir()
+
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(empty),
+                       capture_output=True, text=True, env=env)
+    check("★第一層★ 空目錄 → rc=2", r.returncode == 2, r.stdout + r.stderr)
+    check("★第一層★ CLAUDE.md 未被建立", not (empty / "CLAUDE.md").exists(), "")
+    check("★第三層★ 輸出含目標絕對路徑(即使被拒絕也要印)",
+          str(empty) in r.stdout, r.stdout)
+    check("拒絕訊息講清楚檢查了什麼",
+          ".git" in (r.stdout + r.stderr) and "docs" in (r.stdout + r.stderr), r.stdout + r.stderr)
+
+
+def t_slim_install_guard_rejects_home_dir():
+    """★注入目標守衛,第一層特例★:`$(pwd)` == `$HOME` → 一律拒絕,就算
+    `$HOME` 底下剛好有 `.git`(一般規則會因為有 .git 而放行,這條特例硬擋
+    優先於一般規則)。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-guard-home-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    (fake_home / ".git").mkdir(parents=True)   # ★就算 $HOME 底下有 .git 也要拒絕★
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(fake_home),
+                       capture_output=True, text=True, env=env)
+    check("★第一層特例★ cwd==$HOME(即使有 .git)→ rc=2", r.returncode == 2, r.stdout + r.stderr)
+    check("★第一層特例★ CLAUDE.md 未被建立", not (fake_home / "CLAUDE.md").exists(), "")
+
+
+def t_slim_install_guard_rejects_source_repo():
+    """★注入目標守衛,第二層(核心)★:目標目錄同時具備
+    `skills/lumos-project-notes/`+`scripts/lumos`+`scripts/templates/graph-
+    discipline.md` 三件套 → 判定是 lumos 工具鏈的來源 repo,不是要交接的專案,
+    拒絕 rc=2、`CLAUDE.md` 不得被動。這個假目錄★刻意也帶 `.git`/既有
+    `CLAUDE.md`★(模擬真實事故現場——第一層完全擋不住,只有這層擋得住)。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-guard-src-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    # 假的「來源 repo」目標——三件套齊備,且★也★有 .git/docs/*-knowledge/
+    # CLAUDE.md(第一層那些條件全部成立),證明真正擋下它的是第二層。
+    src = root / "fake-source-repo"
+    (src / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (src / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    (src / "scripts" / "templates").mkdir(parents=True)
+    (src / "scripts" / "lumos").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    (src / "scripts" / "templates" / "graph-discipline.md").write_text("# tpl\n", encoding="utf-8")
+    (src / ".git").mkdir()
+    (src / "docs" / "fake-knowledge").mkdir(parents=True)
+    original = "# 來源 repo 自己的 CLAUDE.md\n\n不該被動。\n"
+    (src / "CLAUDE.md").write_text(original, encoding="utf-8")
+
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(src),
+                       capture_output=True, text=True, env=env)
+    check("★第二層★ 三件套齊備 → rc=2(即使第一層條件全成立)",
+          r.returncode == 2, r.stdout + r.stderr)
+    check("★第二層★ CLAUDE.md 完全未被動(byte-equal)",
+          (src / "CLAUDE.md").read_text(encoding="utf-8") == original, "")
+    check("★第二層★ 訊息明講這是來源 repo",
+          "來源 repo" in (r.stdout + r.stderr), r.stdout + r.stderr)
+
+
+def t_slim_install_guard_repro_real_incident():
+    """★重現真實事故,對本 repo 實跑★:那兩次子代理忘記先 cd 進交付包
+    clone,直接在本 repo(lumos 工具鏈來源 repo)根目錄跑的是**生成出來的
+    `dist/install.sh`**——用 `scripts/slim-gen.py` 重新生成一份 `dist/`
+    (與那兩次事故實際執行的產物同形),以 cwd=本 repo 根目錄執行它,必須被
+    第二層擋下、rc=2、`CLAUDE.md` 完全未被動。
+    ★2026-08-01 獨立審計抓到的假陽性,回歸測試(不要重蹈)★:原版直接對
+    `slim/install.sh` 原始檔以 repo 根為 cwd 執行——但 `slim/` 底下沒有
+    `scripts/lumos`,會先撞上與本守衛完全無關的套件完整性檢查
+    `[ -f "${PKG}/scripts/lumos" ]` 提前以 rc=2 退出,測試斷言剛好也是
+    rc=2/CLAUDE.md 未變,**看起來像綠燈但其實沒測到守衛邏輯本身**——把
+    layer 2 的判斷式整段刪掉,這個(舊版的)測試依然會通過。改用真正生成的
+    `dist/install.sh`(PKG 解到 `dist/`,`scripts/lumos`/`skills/lumos-
+    project-notes` 都在,套件完整性檢查會過,測試才會真的走進守衛邏輯)
+    並額外斷言訊息含「來源 repo」字樣,確保真的是第二層擋下而非其他原因。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-realrepo-"))
+    dist = root / "dist"
+    g = subprocess.run([sys.executable, str(repo / "scripts" / "slim-gen.py"),
+                        "--outfile", str(dist / "scripts" / "lumos")],
+                       capture_output=True, text=True)
+    check("★重現事故★ fixture: slim-gen 生成 rc0", g.returncode == 0, g.stdout + g.stderr)
+
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    before = (repo / "CLAUDE.md").read_bytes()
+    r = subprocess.run(["bash", str(dist / "install.sh")], cwd=str(repo),
+                       capture_output=True, text=True, env=env)
+    after = (repo / "CLAUDE.md").read_bytes()
+    check("★重現事故★ 在本 repo 根目錄跑生成出來的 dist/install.sh → rc=2",
+          r.returncode == 2, r.stdout + r.stderr)
+    check("★重現事故★ 本 repo 的 CLAUDE.md 完全未被動(byte-equal)",
+          after == before, "")
+    check("★重現事故★ 訊息明講這是來源 repo(確認真的是第二層擋下,不是套件完整性檢查誤打誤撞)",
+          "來源 repo" in (r.stdout + r.stderr), r.stdout + r.stderr)
+
+
+def t_slim_install_guard_here_bypasses():
+    """★逃生閥★:`--here` 能繞過第一、二層——連來源 repo 三件套都齊備的目錄,
+    加了 `--here` 也放行(第三層的印出目標仍然要出現)。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-guard-here-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    empty = root / "empty"
+    empty.mkdir()
+    r = subprocess.run(["bash", str(pkg / "install.sh"), "--here"], cwd=str(empty),
+                       capture_output=True, text=True, env=env)
+    check("★--here★ 空目錄加 --here → rc=0", r.returncode == 0, r.stdout + r.stderr)
+    check("★--here★ CLAUDE.md 確實被建立", (empty / "CLAUDE.md").exists(), "")
+    check("★--here★ 第三層印出仍然出現(不因 --here 而略過)",
+          str(empty) in r.stdout, r.stdout)
+
+
+def t_slim_install_guard_normal_project_still_works():
+    """★既有行為不得退化★:正常專案(有 `.git`)照常成功——守衛只擋不像專案根
+    /來源 repo 的情境,不影響一般用法。附帶斷言第三層的目標印出確實存在。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-guard-normal-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    proj = root / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                       capture_output=True, text=True, env=env)
+    check("★正常專案★ 有 .git → rc=0", r.returncode == 0, r.stdout + r.stderr)
+    check("★正常專案★ CLAUDE.md 確實被建立/更新", (proj / "CLAUDE.md").exists(), "")
+    check("★第三層★ 目標絕對路徑印在輸出裡", str(proj) in r.stdout, r.stdout)
 
 
 def main():

@@ -51,7 +51,88 @@ SRC_SKILL="${PKG}/skills/lumos-project-notes"
 [ -d "$SRC_SKILL" ] || { echo "ERROR: 找不到 ${SRC_SKILL}" >&2; exit 2; }
 
 FORCE=0
-[ "${1:-}" = "--force" ] && FORCE=1
+HERE=0
+for _arg in "$@"; do
+  case "$_arg" in
+    --force) FORCE=1 ;;
+    --here)  HERE=1 ;;
+  esac
+done
+
+# ⓪ 注入目標守衛(2026-08-01 補)—— ★真實事故已咬過兩次★:兩位不同的子代理
+# 驗證時忘記 cd 進 clone,直接在 lumos-toolchain 這個來源 repo 底下跑
+# `dist/install.sh`,當場改掉了來源 repo 自己的 CLAUDE.md(兩次都當場發現、
+# git checkout 還原,但足以說明本質上容易誤用)。三層各擋不同的東西,別把它們
+# 混為一談:
+#   第一層 擋「在 $HOME 或隨便一個目錄下誤跑」—— 不像專案根就拒絕。
+#   第二層 擋「這個目錄其實是 lumos 工具鏈本身的來源 repo」—— ★這層才擋得住
+#          那兩次事故★:事故發生的目錄本身就有 .git/CLAUDE.md/docs/*-knowledge,
+#          長得完全像個合理的專案根,第一層檔不住。沿用 scripts/lumos 裡
+#          cmd_update/cmd_deinit 的自我保護精神(root == _lumos_src() → 拒絕)。
+#   第三層 動手前把目標印大聲 —— 前兩層都擋不住「在另一個合法專案根誤跑」,
+#          只有把目標印出來才有機會被人眼看見,是最後一道防線。
+# 逃生閥 `--here`:明示「我知道我在做什麼,就是要裝在這個目錄」,繞過第一、
+# 二層(但仍然印目標——第三層不因 --here 而略過)。
+TARGET_DIR="$(pwd -P)"   # ★-P 强制解 symlink★:見下方 HOME_PHYS 同款理由
+TARGET_CLAUDE_MD="${TARGET_DIR}/CLAUDE.md"
+echo "目標專案: ${TARGET_DIR}"
+echo "將修改: ${TARGET_CLAUDE_MD}"
+
+if [ "$HERE" -eq 0 ]; then
+  # 第一層,特例:$(pwd) 就是 $HOME —— 硬擋,就算 $HOME 底下剛好有 .git 也一樣。
+  # ★$HOME 比對要用實體路徑★:TARGET_DIR 用 `pwd -P` 解掉 symlink 求得實體
+  # 路徑(例如 macOS 的 /var → /private/var);若直接拿 $HOME 環境變數(可能是
+  # symlink 形式的邏輯路徑)字串比對,兩者形式不一致會誤判不相等、放過真正
+  # 該擋的 $HOME 情境。★注意 `cd X && pwd`(不帶 -P)不會解 symlink——那是
+  # bash 的邏輯路徑追蹤,只有 `pwd -P`/`cd -P` 才會實際呼叫 getcwd() 解析★,
+  # 兩邊都要用 -P 才會對齊本檔開頭解 PKG 用的 `cd ... && pwd` 那套(PKG 那段
+  # 沒有 -P 問題,是因為從未經過先前的 `cd`,一開始就是實體路徑)。
+  HOME_PHYS="$HOME"
+  if [ -d "$HOME" ]; then
+    HOME_PHYS="$(cd "$HOME" && pwd -P)"
+  fi
+  if [ "$TARGET_DIR" = "$HOME_PHYS" ]; then
+    echo "ERROR: ${TARGET_DIR} 是你的家目錄(\$HOME),不是專案根目錄——拒絕注入。" >&2
+    echo "  若確定要在這裡安裝,加 --here 明示。" >&2
+    exit 2
+  fi
+
+  # 第一層,一般情況:至少一項成立才放行 —— 有 .git / 有 docs/*-knowledge/ /
+  # 已有 CLAUDE.md。全都沒有 → 這裡看起來不是專案根目錄,拒絕。
+  looks_like_project_root=0
+  if [ -e "${TARGET_DIR}/.git" ]; then
+    looks_like_project_root=1
+  fi
+  if [ "$looks_like_project_root" -eq 0 ]; then
+    for _d in "${TARGET_DIR}"/docs/*-knowledge; do
+      if [ -d "$_d" ]; then
+        looks_like_project_root=1
+        break
+      fi
+    done
+  fi
+  if [ -f "${TARGET_DIR}/CLAUDE.md" ]; then
+    looks_like_project_root=1
+  fi
+
+  if [ "$looks_like_project_root" -eq 0 ]; then
+    echo "ERROR: ${TARGET_DIR} 這裡看起來不是專案根目錄——拒絕注入。" >&2
+    echo "  已檢查(至少一項成立才放行):.git / docs/*-knowledge/ / 既有 CLAUDE.md" >&2
+    echo "  結果一項都沒有。若確定要在這裡安裝,加 --here 明示。" >&2
+    exit 2
+  fi
+
+  # 第二層:這個目錄是不是 lumos 工具鏈本身的來源 repo —— 三件套(skill 原始
+  # 目錄 + scripts/lumos + scripts/templates/graph-discipline.md)同時齊備才
+  # 判定是來源 repo,不是消費端專案。
+  if [ -d "${TARGET_DIR}/skills/lumos-project-notes" ] \
+     && [ -f "${TARGET_DIR}/scripts/lumos" ] \
+     && [ -f "${TARGET_DIR}/scripts/templates/graph-discipline.md" ]; then
+    echo "ERROR: ${TARGET_DIR} 是 lumos 工具鏈的來源 repo,不是要交接的專案——拒絕注入。" >&2
+    echo "  若確定要在這裡安裝,加 --here 明示。" >&2
+    exit 2
+  fi
+fi
 
 mkdir -p "$BIN" "$SKILLS"
 
