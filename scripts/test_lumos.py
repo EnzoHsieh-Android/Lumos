@@ -12213,6 +12213,28 @@ def t_slim_install_no_project_touch():
           (fake_home / ".local" / "bin" / "lumos").read_text(encoding="utf-8") == "USER OWN\n", "")
 
 
+def t_slim_readme_assertions():
+    """README 必要章節與關鍵句的內容斷言(spec [S5])。"""
+    from pathlib import Path as _P
+    p = _P(GRAPHCTL).parent.parent / "slim" / "README.md"
+    txt = p.read_text(encoding="utf-8")
+    for key, name in (
+        ("lumos search", "進場三步"),
+        ("lumos context", "進場三步-context"),
+        ("lumos contracts", "進場三步-contracts"),
+        ("鐵則", "frontmatter 四條鐵則"),
+        ("移除的是入口不是全部程式碼", "功能子集聲明(★後半句才是 helper 澄清★)"),
+        ("凍結快照", "★凍結聲明:不是發布通道★"),
+        ("install-hooks.sh", "明講不要跑哪些"),
+        ("doctor", "合約鏈與 doctor 解法"),
+    ):
+        check(f"README 含「{name}」", key in txt, f"缺 {key!r}")
+    # ★交付文字掃描器也要掃 README★
+    scanner = str(_P(GRAPHCTL).parent / "slim-scan.py")
+    r = subprocess.run([sys.executable, scanner, str(p)], capture_output=True, text=True)
+    check("README 無懸空引用(rc0)", r.returncode == 0, r.stdout)
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
