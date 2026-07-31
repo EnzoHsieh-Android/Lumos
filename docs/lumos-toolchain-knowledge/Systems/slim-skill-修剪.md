@@ -18,6 +18,7 @@ summary: |-
 verified_by:
   - "[[Verification/2026-07-31_slim-skill與readme落地]]"
   - "[[Verification/2026-07-31_公開精簡版終審修復]]"
+  - "[[Verification/2026-07-31_接手者演練複審修復]]"
 ---
 # slim-skill-修剪
 

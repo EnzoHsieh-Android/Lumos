@@ -12357,18 +12357,22 @@ def t_slim_readme_assertions():
     ):
         check(f"README 含「{name}」", key in txt, f"缺 {key!r}")
     # ★交付文字掃描器也要掃 README★
-    # ★C1 例外(2026-07-31 終審後已人工審查,故意保留)★:README 新增了「doctor 有些
-    # 建議指向本包沒給的指令」揭露段,故意寫出 `lumos init`/`lumos update`/
-    # `lumos self-audit` 告訴讀者「這三支不存在,看到請忽略」——這是自我指涉的誠實
-    # 揭露,不是意外的懸空引用(不會誤導讀者以為指令存在)。掃描器仍要跑、仍要對其餘
-    # 內容零容忍,只白名單這三個已審查過的候選。
+    # ★C1 例外(2026-07-31 終審後已人工審查,故意保留;2026-07-31 接手者演練複審追加
+    # 第 4 支)★:README 的「doctor 有些建議指向本包沒給的指令」揭露段故意寫出
+    # `lumos init`/`lumos update`/`lumos self-audit`/`lumos signoff` 告訴讀者
+    # 「這些指令不存在,看到請忽略」——這是自我指涉的誠實揭露,不是意外的懸空引用
+    # (不會誤導讀者以為指令存在)。`signoff` 是複審查出的第 4 支:`scripts/lumos`
+    # 的 check_regen_provenance()(lint 與 doctor 共用)在 regen 節點缺證據指針時
+    # 會建議「走 signoff 升級」,同型未交付指令,同一段揭露一併白名單。掃描器仍要
+    # 跑、仍要對其餘內容零容忍,只白名單這四個已審查過的候選——★不寫死數量★:
+    # 這份列舉不保證窮盡(該 spec 已被「我列了 N 種/N 支」打臉四次)。
     scanner = str(_P(GRAPHCTL).parent / "slim-scan.py")
     r = subprocess.run([sys.executable, scanner, str(p), "--json"],
                        capture_output=True, text=True)
     import json as _j3
     cands = _j3.loads(r.stdout)["candidates"] if r.stdout.strip() else []
     reviewed_exception = {("init", "prefixed"), ("update", "prefixed"),
-                          ("self-audit", "prefixed")}
+                          ("self-audit", "prefixed"), ("signoff", "prefixed")}
     unexpected = [c for c in cands if (c["token"], c["form"]) not in reviewed_exception]
     check("README 無非預期的懸空引用(排除 C1 已審查揭露段例外)",
           not unexpected, str(unexpected))
