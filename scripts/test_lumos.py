@@ -12009,6 +12009,42 @@ def t_testmap_rc():
 
 
 
+def t_slim_scan():
+    """交付文字掃描器:五種懸空引用形態都要命中,保留指令不得誤報為移除指令。"""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimscan-"))
+    scanner = str(_P(GRAPHCTL).parent / "slim-scan.py")
+
+    f = root / "sample.md"
+    f.write_text(
+        "1 前綴型: 跑 `lumos pitfalls <md>` 掃隱患\n"
+        "2 裸token型: 對抗審計 loop(`canary`/`refcheck`)\n"
+        "3 skill型: 走 design-loop skill 打磨\n"
+        "4 span帶參型: `loop status --gate` 問收斂\n"
+        "5 裸散文型: canary 驗審計員醒著\n"
+        "6 乾淨行: 用 `lumos search` 找節點\n",
+        encoding="utf-8")
+
+    r = subprocess.run([sys.executable, scanner, str(f), "--json"],
+                       capture_output=True, text=True)
+    check("slim-scan 有命中回 rc1", r.returncode == 1, r.stderr)
+    import json as _j
+    d = _j.loads(r.stdout)
+    forms = {c["form"] for c in d["candidates"]}
+    for want in ("prefixed", "bare-token", "skill-name", "span-with-args", "prose"):
+        check(f"slim-scan 命中形態 {want}", want in forms, str(sorted(forms)))
+    lines = {c["line"] for c in d["candidates"]}
+    check("slim-scan 不誤報保留指令 search(第6行)", 6 not in lines, str(sorted(lines)))
+
+    # 反事實:乾淨檔必須 rc0
+    g = root / "clean.md"
+    g.write_text("只提保留指令: `lumos search`、`lumos doctor`、`lumos guard list`\n",
+                 encoding="utf-8")
+    r2 = subprocess.run([sys.executable, scanner, str(g)], capture_output=True, text=True)
+    check("slim-scan 乾淨檔 rc0", r2.returncode == 0, r2.stdout + r2.stderr)
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

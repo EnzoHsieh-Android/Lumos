@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""slim-scan.py — 交付文字懸空引用掃描器(stdlib only)
+
+掃 README/SKILL.md/reference.md,找出提及「精簡版已移除的指令」或「不交付的 skill」
+的句子,輸出候選清單交人逐條裁。
+
+★不是自動改寫器★:裸 token 形態必然有假陽性(export/set/show/loop/impact 等本身
+是常見英文詞),故只出候選、不動檔案。
+
+rc: 0=無候選 / 1=有候選 / 2=參數錯
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+# 不交付的 skill(含不帶 lumos- 前綴的簡稱)
+DROP_SKILLS = ("lumos-design-loop", "lumos-code-loop", "lumos-core-knowledge",
+               "lumos-pitfalls-gapfill", "design-loop", "code-loop",
+               "core-knowledge", "pitfalls-gapfill")
+
+KEEP = set("""append archive backlinks context contracts decision-add decision-reindex
+decision-supersede decisions doctor export guard links lint map new recent
+rel-cascade search set show stale stats sync-verified-by""".split())
+
+
+def all_commands(lumos: Path):
+    """真值取 --help 的 choices,不硬編。"""
+    r = subprocess.run([sys.executable, str(lumos), "--help"],
+                       capture_output=True, text=True)
+    m = re.search(r"\{([a-z0-9,\-]+)\}", r.stdout)
+    if not m:
+        print("ERROR: 無法從 --help 解析指令全集", file=sys.stderr)
+        sys.exit(2)
+    return set(m.group(1).split(","))
+
+
+def scan_line(line, removed):
+    """回傳 [(token, form), ...]。同一行可命中多種形態。"""
+    hits = []
+    # 形態 1:帶前綴
+    for m in re.finditer(r"(?:python3\s+)?(?:scripts/)?lumos\s+([a-z0-9\-]+)", line):
+        if m.group(1) in removed:
+            hits.append((m.group(1), "prefixed"))
+    # 形態 2/4:backtick span —— 取首 token 比對(涵蓋「裸 token」與「帶參數」兩種)
+    for m in re.finditer(r"`([^`]+)`", line):
+        span = m.group(1).strip()
+        first = span.split()[0] if span.split() else ""
+        first = first.lstrip("/")
+        if first in removed:
+            hits.append((first, "bare-token" if span == first else "span-with-args"))
+    # 形態 3:skill 名(含簡稱)
+    for s in DROP_SKILLS:
+        if s in line:
+            hits.append((s, "skill-name"))
+            break
+    # 形態 5:裸散文型 —— 無 backtick、無前綴,直接嵌在句子裡
+    #   只認「有明確詞邊界」的出現,且該 token 不是保留指令
+    for cmd in removed:
+        if len(cmd) < 4:          # 太短的詞(如 gov)誤報率過高,交給形態 1/2
+            continue
+        if re.search(r"(?<![`\w\-])" + re.escape(cmd) + r"(?![\w\-])", line):
+            if not any(h[0] == cmd for h in hits):
+                hits.append((cmd, "prose"))
+    return hits
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("files", nargs="+")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--lumos", default=str(Path(__file__).resolve().parent / "lumos"))
+    a = ap.parse_args()
+
+    removed = all_commands(Path(a.lumos)) - KEEP
+    out = []
+    for fp in a.files:
+        p = Path(fp)
+        if not p.is_file():
+            print(f"ERROR: 檔案不存在: {fp}", file=sys.stderr)
+            return 2
+        for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            for tok, form in scan_line(line, removed):
+                out.append({"file": fp, "line": n, "token": tok,
+                            "form": form, "text": line.strip()[:120]})
+
+    if a.json:
+        print(json.dumps({"candidates": out, "total": len(out)}, ensure_ascii=False))
+    else:
+        for c in out:
+            print(f"{c['file']}:{c['line']}  [{c['form']}] {c['token']}\n    {c['text']}")
+        print(f"\n候選 {len(out)} 條 —— ★這是候選不是判決,裸 token 與散文型必有假陽性,請逐條裁★")
+    return 1 if out else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
