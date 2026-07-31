@@ -12045,6 +12045,114 @@ def t_slim_scan():
     check("slim-scan 乾淨檔 rc0", r2.returncode == 0, r2.stdout + r2.stderr)
 
 
+def t_slim_gen_loop_registration():
+    """合成 fixture:迴圈註冊的指令在該砍時真的被砍掉。
+    ★現行白名單下無真實對象(links/backlinks 都保留),故必須合成★(spec T-5)。"""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimgen-loop-"))
+    src = root / "toy.py"
+    src.write_text(
+        "import argparse, sys\n"
+        "def cmd_keepme():\n    print('keep'); return 0\n"
+        "def cmd_dropme():\n    print('drop'); return 0\n"
+        "def main():\n"
+        "    ap = argparse.ArgumentParser()\n"
+        "    sub = ap.add_subparsers(dest='cmd')\n"
+        "    for name, hlp in (('keepme','k'), ('dropme','d')):\n"
+        "        sub.add_parser(name, help=hlp)\n"
+        "    args = ap.parse_args()\n"
+        "    if args.cmd == 'keepme':\n        return cmd_keepme()\n"
+        "    if args.cmd == 'dropme':\n        return cmd_dropme()\n"
+        "    return 2\n"
+        "if __name__ == '__main__':\n    sys.exit(main())\n",
+        encoding="utf-8")
+
+    gen = str(_P(GRAPHCTL).parent / "slim-gen.py")
+    out = root / "out.py"
+    r = subprocess.run([sys.executable, gen, "--src", str(src), "--outfile", str(out),
+                        "--keep", "keepme"], capture_output=True, text=True)
+    check("slim-gen 合成 fixture rc0", r.returncode == 0, r.stdout + r.stderr)
+    txt = out.read_text(encoding="utf-8")
+    check("迴圈註冊的 dropme 被砍出註冊清單", "'dropme'" not in txt and '"dropme"' not in txt, txt[:400])
+    check("迴圈註冊的 keepme 仍在", "keepme" in txt, txt[:400])
+    check("cmd_dropme 函式被移除", "def cmd_dropme" not in txt, txt[:400])
+    h = subprocess.run([sys.executable, str(out), "--help"], capture_output=True, text=True)
+    check("產物 --help 不含 dropme", "dropme" not in h.stdout, h.stdout)
+
+
+def t_slim_gen():
+    """對真實 scripts/lumos 生成:產物 --help 只剩保留指令、compileall 過、無 dangling handler。"""
+    import tempfile as _tf
+    import re as _re
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimgen-"))
+    gen = str(_P(GRAPHCTL).parent / "slim-gen.py")
+    out = root / "lumos"
+
+    r = subprocess.run([sys.executable, gen, "--outfile", str(out)],
+                       capture_output=True, text=True)
+    check("slim-gen 真檔 rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    h = subprocess.run([sys.executable, str(out), "--help"], capture_output=True, text=True)
+    m = _re.search(r"\{([a-z0-9,\-]+)\}", h.stdout)
+    got = set(m.group(1).split(",")) if m else set()
+    keep = set("""append archive backlinks context contracts decision-add decision-reindex
+decision-supersede decisions doctor export guard links lint map new recent
+rel-cascade search set show stale stats sync-verified-by""".split())
+    check("產物 --help == 保留 24 支", got == keep, f"多={sorted(got-keep)} 少={sorted(keep-got)}")
+
+    c = subprocess.run([sys.executable, "-W", "error::SyntaxWarning",
+                        "-m", "py_compile", str(out)], capture_output=True, text=True)
+    check("產物 py_compile 0 SyntaxWarning", c.returncode == 0, c.stderr)
+
+    # dangling handler = 0:產物內被呼叫但未定義的 cmd_*/run_* 名稱
+    import ast as _ast
+    tree = _ast.parse(out.read_text(encoding="utf-8"))
+    defined = {n.name for n in _ast.walk(tree) if isinstance(n, _ast.FunctionDef)}
+    called = {c.func.id for c in _ast.walk(tree)
+              if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)}
+    dangling = {n for n in (called - defined) if n.startswith(("cmd_", "run_", "_"))}
+    check("產物 dangling handler = 0", not dangling, str(sorted(dangling)))
+
+
+def t_slim_gen_keeps_comments():
+    """★行級手術的存在理由★:產物必須保住註解密度。
+    若有人把生成器改回 ast.unparse(語法樹無註解),密度會掉到 0,這條翻紅。
+
+    2026-07-31 二次校正(接手收尾,對抗實測後再改一次):任意百分比門檻(≥50%/
+    ≥60%)沒有意義——砍多砍少都會動它,不是行級手術這個設計本身的性質。真正
+    該鎖的是「註解密度沒有下降」,那才是行級手術(相對 ast.unparse)的實質保證,
+    照樣抓得住 ast.unparse(密度歸零)。哨兵改成 test_lumos.py 260→94 那條事故
+    脈絡註解——它出現兩處:一處在模組層 TEST_PROFILES dict 字面值裡(module-level
+    語句,不受函式級刪除影響)、一處在保留指令可達閉包內的 discover_test_methods()
+    裡,兩種情況都保證留在產物中,比綁在某支可能被砍的函式內更穩。原哨兵 W4
+    位於 _link_or_copy(只被 _install_skills → cmd_install/cmd_uninstall 呼叫,
+    兩支都在移除清單),被正當砍掉不是生成器的錯,是 brief 挑錯哨兵。"""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    out = _P(_tf.mkdtemp(prefix="gctl-slimcmt-")) / "lumos"
+    r = subprocess.run([sys.executable, str(repo / "scripts" / "slim-gen.py"),
+                        "--outfile", str(out)], capture_output=True, text=True)
+    check("slim-gen rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    def _density(p):
+        lines = _P(p).read_text(encoding="utf-8").splitlines()
+        c = sum(1 for ln in lines if ln.lstrip().startswith("#"))
+        return c, len(lines), (c / len(lines) if lines else 0)
+
+    sc, sl, sd = _density(repo / "scripts" / "lumos")
+    oc, ol, od = _density(out)
+    # ★密度不得低於原檔的 90%★:抓得住 unparse(密度歸零),又不因砍多砍少假紅
+    check(f"★產物註解密度未下降★(原 {sc}/{sl}={sd:.1%} → 產物 {oc}/{ol}={od:.1%})",
+          od >= sd * 0.9, f"密度掉到 {od:.1%}")
+    # 哨兵:一條確實留在產物裡的事故脈絡註解(選在保留側函式內)
+    txt = _P(out).read_text(encoding="utf-8")
+    check("事故脈絡註解仍在(實測 test_lumos.py 260→94 那條)",
+          "260→94" in txt, "哨兵註解不見了")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
