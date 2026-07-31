@@ -6,7 +6,20 @@
 
 包裡有一支機器層安裝器，只做兩件事：①把 `lumos` 裝到 `~/.local/bin` ②把技能說明實體複製到 `~/.claude/skills/lumos-project-notes/`（不是 symlink，交付包搬走／刪掉後 skill 仍在）。
 
-在套件根目錄下執行 `./install.sh`（第一次安裝）；若目標（全域指令或 skill 目錄）已存在，加 `--force` 覆寫（skill 目錄會先備份成 `.bak.<時間戳>` 才覆寫）：`./install.sh --force`。
+**一行安裝**（把交付包拉到固定落點 `~/.lumos-slim` 再自動執行安裝器）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/citrus-android-developer/Citrus_Lumos/main/get.sh | bash
+```
+
+不想 `curl | bash` 也可以，**兩行分開跑**（效果完全一樣，只是自己掌控每一步）：
+
+```bash
+git clone https://github.com/citrus-android-developer/Citrus_Lumos.git ~/.lumos-slim
+~/.lumos-slim/install.sh
+```
+
+兩種方式都會把套件放在 `~/.lumos-slim`（見下方〈`~/.lumos-slim` 是什麼〉），再執行套件裡的安裝器；若目標（全域指令或 skill 目錄）已存在，加 `--force` 覆寫（skill 目錄會先備份成 `.bak.<時間戳>` 才覆寫）——一行版：在 `curl` 那行末尾加 `-s -- --force`；兩行版：`~/.lumos-slim/install.sh --force`。
 
 **確認裝好**：
 
@@ -15,6 +28,41 @@ lumos --help
 ```
 
 看到指令清單（`context`／`search`／`doctor`…）就是裝好了。安裝器**只動 `$HOME`**，不會碰任何專案 repo、不會改 `.git/config`、不會注入或更新任何 `CLAUDE.md`。
+
+## 怎麼移除
+
+**一行卸載**：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/citrus-android-developer/Citrus_Lumos/main/uninstall.sh | bash
+```
+
+已經裝過的話，也可以直接跑套件裡帶的那支：
+
+```bash
+~/.lumos-slim/uninstall.sh
+```
+
+**卸載會做什麼**（安全紀律比功能更重要，逐條講清楚）：
+
+1. 移除全域指令 `~/.local/bin/lumos`——但**只有在它的內容經 sha256 比對確實是本包裝的那份時才會動**；比對不符（代表那可能是你自己另外裝的東西，不是本包的）就拒絕移除、印清楚訊息、結束碼 2，不會用猜的去刪；真的確定要砍才加 `--force`。
+2. 移除技能目錄 `~/.claude/skills/lumos-project-notes/`——**移除前一定先備份成 `.bak.<時間戳>`，不會直接砍掉**；你如果在裡面塞過自己的筆記或修改，備份目錄裡找得到。
+3. 移除 `~/.lumos-slim` 本身——前提是它裡面的東西看起來還是本包的內容（有 `scripts/lumos` 跟 `install.sh`），不是就留著不動。
+
+**卸載不會碰什麼**：
+
+- 不碰任何專案目錄／repo。
+- 不碰 `~/.claude/settings.json`。
+- 不碰 `~/.claude/hooks/`。
+- 不碰除了 `lumos-project-notes` 以外的任何其他 skill。
+
+## `~/.lumos-slim` 是什麼
+
+`get.sh` 會把交付包 clone 到這個固定路徑，再執行裡面的安裝器，把 `lumos` 複製到 `~/.local/bin`、把 skill 複製到 `~/.claude/skills/`——複製之後兩邊就解耦了：就算事後把 `~/.lumos-slim` 整個刪掉，已經裝好的全域指令跟 skill 仍然能正常用，不會斷。
+
+固定放在這裡（而不是像早期版本用「安裝器所在目錄」定位自己）是為了讓一行安裝可以透過 `curl | bash` 執行——那種跑法下腳本沒有穩定的檔案位置可定位自己，需要一個固定的家；也讓卸載腳本有東西可以拿來做內容比對。
+
+**可以自己刪掉嗎？可以**，但建議留著，理由：①卸載腳本靠比對 `~/.local/bin/lumos` 跟 `~/.lumos-slim/scripts/lumos` 的內容來確認「這真的是本包裝的東西」，沒有這份參照，卸載時就只能用 `--force` 硬移除全域指令；②留著才能用〈怎麼裝〉的一行/兩行指令再跑一次做冪等更新（雖然本包是凍結快照，不會有真正的新版本可拉，見下方〈凍結聲明〉）。想刪就刪，只是刪了之後卸載那一步會多一道手續。
 
 ## 進場三步
 

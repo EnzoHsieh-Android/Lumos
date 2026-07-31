@@ -80,6 +80,30 @@ def scan_line(line, removed):
     return hits
 
 
+def _windowed_text(s, token, width=120):
+    """回傳以 token 命中位置為中心的窗口(不是從字串開頭硬截 width 字)。
+
+    ★背景(2026-07-31 代碼審 minor-1)★:原本 `text = s[:width]` 是「從常數字串
+    **開頭**截前 120 字」,不是「以命中點為中心」——真實案例 `scripts/lumos:416-417`
+    的 docstring 壓平後 134 字,`lumos gov` 出現在第 123 字,截斷後候選清單完全看
+    不到命中的詞,人工逐條裁時無從判斷為什麼被標記。改成以命中位置為中心取窗口,
+    讓 text 一定包含命中的 token(除非 token 本身就找不到,理論上不會發生,防禦保留
+    退回開頭截斷)。"""
+    norm = " ".join(s.split())
+    idx = norm.lower().find(token.lower())
+    if idx == -1:
+        return norm[:width]
+    half = max(20, (width - len(token)) // 2)
+    start = max(0, idx - half)
+    end = min(len(norm), idx + len(token) + half)
+    snippet = norm[start:end]
+    if start > 0:
+        snippet = "…" + snippet
+    if end < len(norm):
+        snippet = snippet + "…"
+    return snippet[:width + 2]
+
+
 def scan_python_file(fp, path: Path, removed):
     """ast 模式:只掃 `ast.Constant` 的 str(warn()/print() 訊息等),不掃程式碼識別
     字或註解——套用與 markdown 相同的 scan_line() 形態比對。多行字串常數(docstring)
@@ -90,7 +114,7 @@ def scan_python_file(fp, path: Path, removed):
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             for tok, form in scan_line(node.value, removed):
-                text = " ".join(node.value.strip().split())[:120]
+                text = _windowed_text(node.value.strip(), tok)
                 out.append({"file": fp, "line": node.lineno, "token": tok,
                             "form": form, "text": text})
     return out
@@ -120,7 +144,7 @@ def main():
         for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
             for tok, form in scan_line(line, removed):
                 out.append({"file": fp, "line": n, "token": tok,
-                            "form": form, "text": line.strip()[:120]})
+                            "form": form, "text": _windowed_text(line.strip(), tok)})
 
     if a.json:
         print(json.dumps({"candidates": out, "total": len(out)}, ensure_ascii=False))
