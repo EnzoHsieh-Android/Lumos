@@ -116,14 +116,23 @@ def _first_const(e):
     return None
 
 
-def _is_registration_loop(n):
-    """for 迴圈的 body 是不是真的呼叫 xxx.add_parser(<迴圈目標變數>, ...)。
+def _is_registration_loop(n, top_var=None):
+    """for 迴圈的 body 是不是真的呼叫 <receiver>.add_parser(<迴圈目標變數>, ...)。
     ★不能只看 iter 是不是常數字串 tuple★:12000 行檔案裡一堆商業邏輯也長
     `for key in ("verified_by","plan_refs","core_refs"):` 這種形狀(單純迭代
     欄位名,body 完全不碰 argparse)。沒有這道 gate,那種迴圈會被誤判成「指
     令迴圈註冊」,連帶把 "verified_by" 這種欄位名算進 removed 指令集,砍穿
     別的保留函式內的 if 分支、刪出語法洞(實測案例:cmd_sync_verified_by 的
-    try/except 被砍空)。"""
+    try/except 被砍空)。
+
+    ★top_var 限定同樣重要(2026-07-31 審查揪出的缺陷)★:receiver 必須是頂層
+    subparsers 變數(top_var),不然一個被保留的指令若用迴圈註冊「自己的」巢狀
+    子指令(例如 `osub = p2.add_subparsers(...)` 後 `for n,h in (...):
+    osub.add_parser(n, help=h)`),body 形狀跟頂層迴圈註冊一模一樣、但迭代出來
+    的是巢狀子指令名(不在頂層 keep 名單裡)。若不限 receiver,呼叫端會把這種
+    巢狀迴圈也判成「頂層指令迴圈」,拿巢狀子指令名去跟頂層 keep 比對——當然
+    找不到,於是整段迴圈被砍空,即使外層指令本身在保留清單裡。
+    top_var=None 時退回不限 receiver(舊行為,供未持有 top_var 語境時使用)。"""
     targets = set()
     if isinstance(n.target, ast.Name):
         targets.add(n.target.id)
@@ -137,6 +146,9 @@ def _is_registration_loop(n):
         if (isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
                 and c.func.attr == "add_parser" and c.args
                 and isinstance(c.args[0], ast.Name) and c.args[0].id in targets):
+            if top_var is not None:
+                if not (isinstance(c.func.value, ast.Name) and c.func.value.id == top_var):
+                    continue
             return True
     return False
 
@@ -197,8 +209,15 @@ def collect_edits(tree, funcs, drop, keep, removed):
     # 後續行不會匹配 `_add_parser_name(top_var=...)`(receiver 不是頂層
     # subparsers 變數),必須整段跟著該指令的區塊一起刪,否則刪掉宣告行
     # 留下引用未定義變數的殘行 → 產物 NameError / SyntaxError。
-    # 區塊邊界:下一個頂層 `x = <top_var>.add_parser(...)`、for 迴圈註冊、
+    # 區塊邊界:下一個頂層 `x = <top_var>.add_parser(...)`、"頂層" for 迴圈註冊、
     # 或 `args = <top_var 的來源> .parse_args()`(註冊區結束,進入 dispatch)。
+    # ★只有 receiver 是 top_var 的迴圈才算「頂層」邊界★(2026-07-31 修正):
+    # 保留指令自己巢狀註冊子指令的迴圈(receiver 是它自己的 add_subparsers
+    # 產物,不是 top_var)不算邊界——它跟前後的 `p2 = sub.add_parser(...)` /
+    # `osub = p2.add_subparsers(...)` 一樣,屬於「當前正在累積的區塊」的一部
+    # 分,該跟著區塊一起去留(区块被删就跟着删、区块保留就跟着留),不能被剥离
+    # 出去丟給下面那段只認頂層 keep 名單的 ast.walk 迴圈處理(那段會拿巢狀子
+    # 指令名去跟頂層 keep 比對,永遠比不中,导致整段迴圈被誤砍空)。
     block_name, block_stmts = None, []
 
     def _flush_block():
@@ -211,9 +230,10 @@ def collect_edits(tree, funcs, drop, keep, removed):
     for n in main.body:
         if registration_done:
             break
-        if isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple):
+        if (isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple)
+                and _is_registration_loop(n, top_var=top_var)):
             _flush_block()
-            continue  # 迴圈註冊由下面獨立的 ast.walk 統一處理(含重排例外)
+            continue  # 頂層迴圈註冊,由下面獨立的 ast.walk 統一處理(含重排例外)
         if (isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
                 and isinstance(n.value.func, ast.Attribute)
                 and n.value.func.attr == "parse_args"):
@@ -236,9 +256,10 @@ def collect_edits(tree, funcs, drop, keep, removed):
             if ns and ns <= removed:
                 dels.append((n.lineno, n.end_lineno))
                 continue
-        # 迴圈註冊(★須 _is_registration_loop 把關★,見該函式說明)
+        # 迴圈註冊(★須 _is_registration_loop 把關★,含 top_var receiver 限定,
+        # 見該函式說明——沒有這道限定,保留指令自己的巢狀迴圈註冊會被誤砍)
         if (isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple)
-                and _is_registration_loop(n)):
+                and _is_registration_loop(n, top_var=top_var)):
             names = [_first_const(e) for e in n.iter.elts]
             if names and all(x is not None for x in names):
                 kept = [e for e, x in zip(n.iter.elts, names) if x in keep]
@@ -299,7 +320,7 @@ def main():
         if nm:
             allc.add(nm)
         if (isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple)
-                and _is_registration_loop(n)):
+                and _is_registration_loop(n, top_var=top_var)):
             for e in n.iter.elts:
                 x = _first_const(e)
                 if x:

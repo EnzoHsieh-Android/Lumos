@@ -12107,6 +12107,77 @@ def t_slim_gen_loop_registration():
     check("產物 --help 不含 dropme", "dropme" not in h.stdout, h.stdout)
 
 
+def t_slim_gen_nested_loop_registration():
+    """★缺陷重現★(審查以合成 fixture 實地示範):保留指令用迴圈註冊「自己的」
+    巢狀子指令時,那段迴圈不得被當成頂層指令迴圈整段砍空。
+
+    `_is_registration_loop` 只看 body 有沒有 `X.add_parser(迴圈變數, ...)`,
+    完全沒查 receiver `X` 是不是頂層 subparsers 變數(top_var)。otherkeep 底下
+    的 `osub`(它自己的 add_subparsers 產物)長得跟頂層 `sub` 一樣的呼叫形狀,
+    若不限 receiver,`collect_edits()`(以及 `main()` 印診斷用的 allc 掃描——
+    兩邊是同一段未防護邏輯,不是各自獨立的問題)會把 osub 迴圈的元素("removeme"/
+    "x2")拿去跟『頂層』keep 名單比對——這兩個名字當然不在裡面,於是判定
+    kept=[]、整段迴圈砍空,即使 otherkeep 本身在保留清單裡。"""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimgen-nestedloop-"))
+    src = root / "toy.py"
+    src.write_text(
+        "import argparse, sys\n"
+        "def cmd_keepme():\n    print('keep'); return 0\n"
+        "def cmd_dropme():\n    print('drop'); return 0\n"
+        "def cmd_ocmd_removeme():\n    print('removeme'); return 0\n"
+        "def cmd_ocmd_x2():\n    print('x2'); return 0\n"
+        "def main():\n"
+        "    ap = argparse.ArgumentParser()\n"
+        "    sub = ap.add_subparsers(dest='cmd')\n"
+        "    for name, hlp in (('keepme','k'), ('dropme','d')):\n"
+        "        sub.add_parser(name, help=hlp)\n"
+        "    p2 = sub.add_parser('otherkeep')\n"
+        "    osub = p2.add_subparsers(dest='ocmd', required=True)\n"
+        "    for _n, _h in (('removeme','h1'), ('x2','h2')):\n"
+        "        osub.add_parser(_n, help=_h)\n"
+        "    args = ap.parse_args()\n"
+        "    if args.cmd == 'keepme':\n        return cmd_keepme()\n"
+        "    if args.cmd == 'dropme':\n        return cmd_dropme()\n"
+        "    if args.cmd == 'otherkeep':\n"
+        "        if args.ocmd == 'removeme':\n            return cmd_ocmd_removeme()\n"
+        "        if args.ocmd == 'x2':\n            return cmd_ocmd_x2()\n"
+        "    return 2\n"
+        "if __name__ == '__main__':\n    sys.exit(main())\n",
+        encoding="utf-8")
+
+    gen = str(_P(GRAPHCTL).parent / "slim-gen.py")
+    out = root / "out.py"
+    r = subprocess.run([sys.executable, gen, "--src", str(src), "--outfile", str(out),
+                        "--keep", "keepme", "otherkeep"], capture_output=True, text=True)
+    check("slim-gen 巢狀迴圈 fixture rc0", r.returncode == 0, r.stdout + r.stderr)
+    txt = out.read_text(encoding="utf-8")
+    # ★缺陷重現★:直接查『迴圈本體』(osub.add_parser 呼叫)還在不在——不能只
+    # 查 'removeme'/'x2' 字面值,那兩個字串在保留的 dispatch if 條件
+    # (`args.ocmd == 'removeme'`)裡也會出現,不是可靠的氧化指標。
+    check("★缺陷重現★ otherkeep 的巢狀註冊迴圈本體仍在",
+          "osub.add_parser(_n" in txt, txt)
+    check("cmd_ocmd_removeme 函式未被誤刪", "def cmd_ocmd_removeme" in txt, txt[:800])
+    check("cmd_ocmd_x2 函式未被誤刪", "def cmd_ocmd_x2" in txt, txt[:800])
+    check("otherkeep 本身仍在", "'otherkeep'" in txt, txt[:800])
+    # ★頂層行為不得退化★:與 t_slim_gen_loop_registration 同款頂層迴圈砍法
+    check("頂層迴圈 dropme 仍正確被砍", "'dropme'" not in txt and '"dropme"' not in txt, txt)
+    check("頂層迴圈 keepme 仍在", "'keepme'" in txt, txt[:400])
+    check("cmd_dropme 函式被移除", "def cmd_dropme" not in txt, txt[:400])
+
+    h = subprocess.run([sys.executable, str(out), "--help"], capture_output=True, text=True)
+    check("產物 --help 頂層不含 dropme", "dropme" not in h.stdout, h.stdout)
+    check("產物 --help 頂層含 otherkeep", "otherkeep" in h.stdout, h.stdout)
+
+    h2 = subprocess.run([sys.executable, str(out), "otherkeep", "--help"],
+                        capture_output=True, text=True)
+    check("otherkeep --help 列得出巢狀子指令 removeme",
+          "removeme" in h2.stdout, h2.stdout + h2.stderr)
+    check("otherkeep --help 列得出巢狀子指令 x2",
+          "x2" in h2.stdout, h2.stdout + h2.stderr)
+
+
 def t_slim_gen():
     """對真實 scripts/lumos 生成:產物 --help 只剩保留指令、compileall 過、無 dangling handler。"""
     import tempfile as _tf

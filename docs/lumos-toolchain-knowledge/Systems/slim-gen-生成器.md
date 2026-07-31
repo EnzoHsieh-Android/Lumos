@@ -12,8 +12,9 @@ summary: |-
   KEY:移除謂詞=「保留指令 dispatch 的 AST 可達性閉包之補集」,不是 `cmd_` 前綴字面比對(lint-watch 實作叫 `_lint_watch_mode`、保留的 doctor 叫 `run_doctor`,前綴法會誤判)
   KEY:removed_cmds 真值來源=掃全部 subparser 註冊(Assign/Expr/迴圈三種形態)得到的指令全集減 DEFAULT_KEEP(24 支),不硬編移除清單
   KEY:產物自我驗證雙保險——① `ast.parse(new_text)` 失敗即 rc1 中止(行級刪除最容易刪出語法洞的地方)② `--emit-manifest` 印 `keep_funcs`/`drop_funcs`/`removed_cmds`/`kept_comment_lines` 供測試/人工核對
-  DEP:scripts/lumos(唯一輸入源)｜scripts/test_lumos.py t_slim_gen/t_slim_gen_loop_registration/t_slim_gen_keeps_comments
-  TEST:12 checks 全綠(`python3 scripts/test_lumos.py -k slim_gen`)——真檔生成(--help==保留24支/py_compile 0 SyntaxWarning/dangling handler=0)+合成fixture(驗迴圈註冊真的被砍,現行白名單下無真實對象故必須合成)+註解密度守衛(★產物註解密度不得低於原檔90%★,抓 ast.unparse 迴歸;哨兵 test_lumos.py 260→94 事故註解,2026-07-31 收尾時把原 brief 的 W4/百分比門檻哨兵換掉,見下方 DECISION)
+  KEY:★迴圈註冊刪除須 top_var receiver 限定★(2026-07-31 審查揪出、已修復,不是「超出範圍」)——`_is_registration_loop` 原本只看 for 迴圈 body 有沒有 `X.add_parser(迴圈變數,...)`,完全沒查 receiver `X` 是不是頂層 subparsers 變數(`top_var`)。後果:一個被保留的指令,若用迴圈註冊「自己的」巢狀子指令(如 `osub = p2.add_subparsers(...)` 後 `for n,h in (...): osub.add_parser(n,help=h)`,receiver 是 `osub` 不是 `top_var`),整段迴圈會被誤判成頂層指令迴圈、拿巢狀子指令名去跟頂層 keep 名單比對(當然比不中)、整段砍空——即使外層指令本身在保留清單裡。審查用合成 fixture(`otherkeep` 巢狀註冊 `removeme`/`x2`)實地示範重現;現行 `scripts/lumos` 沒被咬到純屬巧合(全檔唯二匹配的巢狀迴圈——`links`/`backlinks`兩者皆保留不觸發混合刪除、`code-loop` 底下的 `pass`/`skip`/`check` 因 `code-loop` 本身就是移除指令整塊本來就要砍——潛伏缺陷不是已發生的錯誤)。修法:`_is_registration_loop(n, top_var=...)` 加 receiver 檢查,`collect_edits()` 與 `main()` 印診斷用的 `allc` 掃描兩處呼叫點都傳入 `top_var`(★兩邊是同一段未防護邏輯,不是各自獨立的問題★);連帶修正 `collect_edits()` 的 main.body 區塊追蹤——nested for 迴圈(receiver≠top_var)不再被無條件剝離去單獨處理,而是併入所在區塊(隨區塊留/隨區塊砍),否則「巢狀迴圈屬於已移除群組指令(如 code-loop)」的情況會反向退化成漏刪、產出 NameError。
+  DEP:scripts/lumos(唯一輸入源)｜scripts/test_lumos.py t_slim_gen/t_slim_gen_loop_registration/t_slim_gen_nested_loop_registration/t_slim_gen_keeps_comments
+  TEST:24 checks 全綠(`python3 scripts/test_lumos.py -k slim_gen`)——真檔生成(--help==保留24支/py_compile 0 SyntaxWarning/dangling handler=0)+合成fixture(驗迴圈註冊真的被砍,現行白名單下無真實對象故必須合成)+巢狀迴圈合成fixture(`t_slim_gen_nested_loop_registration`,驗保留指令自己的巢狀註冊迴圈不被誤砍、頂層迴圈砍法不退化)+註解密度守衛(★產物註解密度不得低於原檔90%★,抓 ast.unparse 迴歸;哨兵 test_lumos.py 260→94 事故註解,2026-07-31 收尾時把原 brief 的 W4/百分比門檻哨兵換掉,見下方 DECISION)
 verified_by:
   - "[[Verification/2026-07-31_slim-gen生成器落地]]"
   - "[[Verification/2026-07-31_公開精簡版交付]]"
@@ -22,6 +23,12 @@ decisions:
     id: d1
     context: 任意保留率門檻無意義(砍多砍少都會動它),真正該鎖的是密度沒有下降——那才是行級手術相對 ast.unparse 的實質保證
     why_chosen: 密度守衛照樣抓得住 ast.unparse 迴歸(密度歸零);實測原檔 11999行/686行註解=5.7%,產物 6203行/379行註解=6.1%,未下降
+    decided: 2026-07-31
+    valid: true
+  - content: 迴圈註冊刪除加 top_var receiver 限定:2026-07-31 審查(Task 5 複審)以合成 fixture 實地示範重現「保留指令巢狀自建註冊迴圈被誤砍空」——修 _is_registration_loop 加 receiver 檢查、collect_edits()與main()診斷用allc掃描兩處呼叫點統一傳入top_var,並修正collect_edits()的main.body區塊追蹤(nested迴圈併入所在區塊隨去留,不再無條件剝離單獨處理)。前一位實作者曾把此現象定調為「main()印診斷用allc掃描沒限定receiver、collect_edits()是安全的、純診斷雜訊、超出範圍」——經審查追碼確認兩邊是同一段未防護邏輯,那個定調錯誤,已不採用。
+    id: d2
+    context: 審查用合成fixture(otherkeep巢狀註冊removeme/x2)demonstrate:一個被保留的指令若用迴圈註冊自己的巢狀子指令,那段迴圈會被整個砍空,即使該指令本身在保留清單。現行scripts/lumos沒被咬到純屬巧合(links/backlinks都保留不觸發、code-loop底下pass/skip/check本來就該整塊砍),是潛伏缺陷不是已發生的錯誤。
+    why_chosen: receiver檢查是最小且對稱的修法——與_add_parser_name既有的top_var限定同一套設計語言;順帶修main.body區塊追蹤讓nested迴圈跟隨所屬群組指令去留,避免只修『不該砍』又反向破壞『該砍』(code-loop案例的NameError回歸,已用t_slim_gen_nested_loop_registration+既有真檔測試雙重鎖死)
     decided: 2026-07-31
     valid: true
 ---
