@@ -329,6 +329,20 @@ def main():
                          ensure_ascii=False))
     else:
         print(f"✓ 生成 {out}  保留 {len(seen)} 函式 / 移除 {len(drop)} / 保住 {kept_comments} 行註解")
+
+    # 組交付包:slim/ 的內容原樣複製進 dist/
+    import shutil
+    pkg_src = here.parent / "slim"
+    pkg_dst = out.parent.parent
+    if pkg_src.is_dir():
+        for item in ("install.sh", "README.md", "skills"):
+            s = pkg_src / item
+            if s.is_dir():
+                shutil.copytree(s, pkg_dst / item, dirs_exist_ok=True)
+            elif s.is_file():
+                shutil.copy2(s, pkg_dst / item)
+        (pkg_dst / "install.sh").chmod(0o755)
+        print(f"✓ 交付包: {pkg_dst}")
     return 0
 
 

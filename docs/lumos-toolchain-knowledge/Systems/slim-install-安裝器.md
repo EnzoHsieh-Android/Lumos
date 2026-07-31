@@ -15,6 +15,7 @@ summary: |-
   TEST:8 checks 全綠(`python3 scripts/test_lumos.py -k slim_install`)——安裝器 rc0、專案 worktree porcelain 空、.git/config 不變、全域指令已裝、skill 實體複製非 symlink、不裝 Claude hook、既有一般檔碰撞拒絕 rc2、既有檔內容未被動
 verified_by:
   - "[[Verification/2026-07-31_slim-install安裝器落地]]"
+  - "[[Verification/2026-07-31_公開精簡版交付]]"
 ---
 # slim-install-安裝器
 

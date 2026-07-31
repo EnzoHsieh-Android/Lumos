@@ -107,6 +107,10 @@ $ python3 scripts/slim-scan.py slim/README.md
 - 掃描器對 README 的要求比對 skill 文件嚴格:skill 文件允許重跑後留 14 條候選(只要逐條能說出假陽性理由),但 README 的自動化測試直接斷言 `returncode == 0`,不接受任何候選殘留——這逼出了「安裝指令措辭遷就 regex」這個非工程最優但測試要求下的必要妥協。
 - Step 3 修剪範圍比預期大:brief 只明確點名 `reference.md:85` 與 `SKILL.md:14` 兩處,但逐條過完 129 條候選後,發現「對抗設計審計的 canary」整節(原 reference.md 約 16 行)、`pitfall_when` 整段欄位說明都是完全依附已砍功能(`impact`/`canary`/`loop`/design-loop skill)、沒有可拆出保留的獨立紀律語句,只能整段刪除。
 
+## 後續(2026-07-31 Task 5 更新)
+
+上面「達成 rc0 的代價」段落記的 ★DEBT★(安裝指令遷就掃描器 regex 改寫成「用 `bash` 執行 `install.sh`」)已在 Task 5 修正掃描器 prose 形態的假陽性後解除——README 的安裝指令已改回 `./install.sh`,`Systems/slim-readme` 的 ★DEBT★ 標記已移除。細節見 [[Verification/2026-07-31_公開精簡版交付]]、[[Systems/slim-scan-掃描器]]。
+
 ## 相關
 
 - 設計/規格:`.superpowers/sdd/公開精簡版_實作計畫/task-4-brief.md`(SDD 產出,非圖譜路徑,依計畫落地於此)

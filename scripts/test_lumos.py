@@ -12045,6 +12045,32 @@ def t_slim_scan():
     check("slim-scan 乾淨檔 rc0", r2.returncode == 0, r2.stdout + r2.stderr)
 
 
+def t_slim_scan_filename_fp():
+    """★守衛真缺陷★:prose 形態假陽性——檔名(`./install.sh`/`scripts/install-hooks.sh`)
+    被誤判成對已移除指令 `install` 的裸散文引用。原負向前瞻/後顧只排除反引號/字母/
+    連字號,沒排除路徑分隔 `/`(前接)與副檔名 `.<ext>`(後接),導致「檔名」被當「指令引用」。
+    ★別為了消假陽性連真陽性也殺掉★:真的裸散文引用(canary)仍要命中。"""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimscanfp-"))
+    scanner = str(_P(GRAPHCTL).parent / "slim-scan.py")
+
+    f = root / "sample.md"
+    f.write_text(
+        "1 檔名(相對路徑開頭,不得命中): 跑 `./install.sh` 安裝\n"
+        "2 檔名(子路徑+副檔名,不得命中): 見 scripts/install-hooks.sh\n"
+        "3 真裸散文(仍要命中): canary 驗審計員醒著\n",
+        encoding="utf-8")
+    r = subprocess.run([sys.executable, scanner, str(f), "--json"],
+                       capture_output=True, text=True)
+    import json as _j
+    d = _j.loads(r.stdout)
+    lines = {c["line"] for c in d["candidates"]}
+    check("★假陽性修正★ `./install.sh` 不命中(第1行)", 1 not in lines, str(d["candidates"]))
+    check("★假陽性修正★ scripts/install-hooks.sh 不命中(第2行)", 2 not in lines, str(d["candidates"]))
+    check("★真陽性不受影響★ 真裸散文引用仍命中(第3行)", 3 in lines, str(d["candidates"]))
+
+
 def t_slim_gen_loop_registration():
     """合成 fixture:迴圈註冊的指令在該砍時真的被砍掉。
     ★現行白名單下無真實對象(links/backlinks 都保留),故必須合成★(spec T-5)。"""
@@ -12233,6 +12259,75 @@ def t_slim_readme_assertions():
     scanner = str(_P(GRAPHCTL).parent / "slim-scan.py")
     r = subprocess.run([sys.executable, scanner, str(p)], capture_output=True, text=True)
     check("README 無懸空引用(rc0)", r.returncode == 0, r.stdout)
+
+
+def t_slim_gate():
+    """交付前四道機械驗證(spec [S6])。★四道都不可跳★"""
+    import tempfile as _tf, re as _re, json as _j, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    root = _P(_tf.mkdtemp(prefix="gctl-slimgate-"))
+    dist = root / "dist"
+    r = subprocess.run([sys.executable, str(repo / "scripts" / "slim-gen.py"),
+                        "--outfile", str(dist / "scripts" / "lumos")],
+                       capture_output=True, text=True)
+    check("gate: 生成 rc0", r.returncode == 0, r.stdout + r.stderr)
+    cli = dist / "scripts" / "lumos"
+
+    # 第 1 道 負向:--help choices 不得出現任何移除指令(逐支列名)
+    keep = set("""append archive backlinks context contracts decision-add decision-reindex
+decision-supersede decisions doctor export guard links lint map new recent
+rel-cascade search set show stale stats sync-verified-by""".split())
+    full = subprocess.run([sys.executable, GRAPHCTL, "--help"],
+                          capture_output=True, text=True).stdout
+    allc = set(_re.search(r"\{([a-z0-9,\-]+)\}", full).group(1).split(","))
+    removed = allc - keep
+    h = subprocess.run([sys.executable, str(cli), "--help"],
+                       capture_output=True, text=True).stdout
+    got = set(_re.search(r"\{([a-z0-9,\-]+)\}", h).group(1).split(","))
+    check("★第1道 負向★ choices 不含任何移除指令", not (got & removed),
+          str(sorted(got & removed)))
+    check("★全覆蓋★ 保留∪移除 == --help 全集且零交集",
+          (keep | removed) == allc and not (keep & removed), "")
+
+    # 第 2 道 正向:子模式 —— ★驗 spec S6-3 的三來源判準,對真 parser 斷言★
+    def _help(*a):
+        return subprocess.run([sys.executable, str(cli), *a, "--help"],
+                              capture_output=True, text=True).stdout
+    # 來源③ 旗標帶 choices → 機械枚舉那類
+    check("S6-3: export --format 有 choices(→機械枚舉)",
+          "{mermaid,dot,html}" in _help("export").replace(" ", ""), _help("export")[:300])
+    # 來源② positional 帶 choices
+    check("S6-3: rel-cascade verb 有 choices(→機械枚舉)",
+          "{confirm,prune,list,resume}" in _help("rel-cascade").replace(" ", ""),
+          _help("rel-cascade")[:300])
+    # 來源① subparsers
+    g = _help("guard")
+    check("S6-3: guard 有 7 支 subparser(→機械枚舉)",
+          "{list,scaffold,bind,audit,trace,kill-add,kill}" in g.replace(" ", ""), g[:300])
+    # 純旗標型:整份 help 不得出現任何 choices 的 {..} 形式
+    for cmd in ("search", "archive"):
+        check(f"S6-3: {cmd} 無任何 choices(→純旗標型)", "{" not in _help(cmd), _help(cmd)[:300])
+    vault = mkvault()
+    d = subprocess.run([sys.executable, str(cli), "--vault", str(vault), "doctor"],
+                       capture_output=True, text=True)
+    check("★正向 doctor 實跑★(不只 --help)", d.returncode in (0, 1), d.stderr[:300])
+
+    # 第 3 道 等價:goldset search 30 條,完整版 vs 精簡版結果一致
+    gs = _j.loads((repo / "governance" / "eval" / "retrieval-goldset.json")
+                  .read_text(encoding="utf-8"))
+    qs = [q["query"] for q in gs["search"][:10]]      # 取前 10 條做冒煙,全量在 Step 4
+    same = 0
+    for q in qs:
+        a = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vault),
+                            "search", q, "--files-only"], capture_output=True, text=True)
+        b = subprocess.run([sys.executable, str(cli), "--vault", str(vault),
+                            "search", q, "--files-only"], capture_output=True, text=True)
+        if a.stdout == b.stdout:
+            same += 1
+    check("★第3道 等價★ search 前10條兩版一致", same == len(qs), f"{same}/{len(qs)}")
+
+    # 第 4 道 真機預演在 Step 4 手動跑(需乾淨 HOME)
 
 
 def main():

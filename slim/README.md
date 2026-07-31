@@ -6,7 +6,7 @@
 
 包裡有一支機器層安裝器，只做兩件事：①把 `lumos` 裝到 `~/.local/bin` ②把技能說明實體複製到 `~/.claude/skills/lumos-project-notes/`（不是 symlink，交付包搬走／刪掉後 skill 仍在）。
 
-在套件根目錄下，用 `bash` 執行 `install.sh`（第一次安裝）；若目標（全域指令或 skill 目錄）已存在，加 `--force` 覆寫（skill 目錄會先備份成 `.bak.<時間戳>` 才覆寫）：用 `bash` 執行 `install.sh` 時帶上 `--force`。
+在套件根目錄下執行 `./install.sh`（第一次安裝）；若目標（全域指令或 skill 目錄）已存在，加 `--force` 覆寫（skill 目錄會先備份成 `.bak.<時間戳>` 才覆寫）：`./install.sh --force`。
 
 **確認裝好**：
 

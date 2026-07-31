@@ -59,10 +59,14 @@ def scan_line(line, removed):
             break
     # 形態 5:裸散文型 —— 無 backtick、無前綴,直接嵌在句子裡
     #   只認「有明確詞邊界」的出現,且該 token 不是保留指令
+    #   ★邊界排除必須含路徑分隔與副檔名★:原本只排反引號/字母/連字號,
+    #   `./install.sh`(前接 `/`)、`scripts/install-hooks.sh`(後接 `.sh`)這種
+    #   「檔名」會被誤判成對指令 `install` 的散文引用——那是檔名不是指令引用。
+    #   前瞻多加 `(?!\.\w)`(後接「.字母」=副檔名),後顧多加排 `/`(前接路徑分隔)。
     for cmd in removed:
         if len(cmd) < 4:          # 太短的詞(如 gov)誤報率過高,交給形態 1/2
             continue
-        if re.search(r"(?<![`\w\-])" + re.escape(cmd) + r"(?![\w\-])", line):
+        if re.search(r"(?<![`\w\-/])" + re.escape(cmd) + r"(?![\w\-])(?!\.\w)", line):
             if not any(h[0] == cmd for h in hits):
                 hits.append((cmd, "prose"))
     return hits
