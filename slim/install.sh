@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # install.sh — 公開精簡版 機器層安裝器
 #
-# ★做三件事★:①全域 lumos 指令 ②實體複製 skill 到 ~/.claude/skills/
+# ★做三件事★:①全域 lumos 指令(附帶寫一份身分證 manifest,見下方①b,讓
+#            uninstall.sh 有穩定比對基準)②實體複製 skill 到 ~/.claude/skills/
 #            ③在執行時所在目錄(專案根)的 CLAUDE.md 裡放一塊策展過的精簡版
 #            紀律區塊(sentinel `<!-- LUMOS-SLIM:START/END -->`)。
 #
@@ -66,6 +67,42 @@ fi
 cp "$SRC_CLI" "$DST_CLI"
 chmod +x "$DST_CLI"
 echo "✓ 全域指令: ${DST_CLI}"
+
+# ①b 身分證 manifest —— 讓 uninstall.sh 有穩定比對基準,★不依賴 ~/.lumos-slim
+# 事後還存不存在★(README〈~/.lumos-slim 是什麼〉明講使用者可以刪掉它;而且
+# 兩行版安裝——`git clone ... ~/.lumos-slim && ~/.lumos-slim/install.sh`——
+# 之外,使用者也可能把包 clone 到別的路徑直接跑 install.sh,~/.lumos-slim
+# 壓根不會存在)。放在 ~/.local/share/(不是使用者的專案目錄),不會污染任何
+# 專案的 git status。內容只需回答一件事:「~/.local/bin/lumos 是不是我們裝
+# 的那份」——記安裝當下對 DST_CLI 算出的 sha256 就夠。冪等:每次成功安裝都
+# 覆寫,沿用最新那份。
+MANIFEST_DIR="${HOME}/.local/share/lumos-slim"
+MANIFEST="${MANIFEST_DIR}/manifest.json"
+mkdir -p "$MANIFEST_DIR"
+if command -v sha256sum >/dev/null 2>&1; then
+  BIN_SHA="$(sha256sum "$DST_CLI" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  BIN_SHA="$(shasum -a 256 "$DST_CLI" | awk '{print $1}')"
+else
+  BIN_SHA=""
+fi
+python3 - "$MANIFEST" "$BIN_SHA" "$PKG" <<'LUMOS_SLIM_MANIFEST_PY_EOF'
+import json
+import sys
+import time
+from pathlib import Path
+
+manifest_path, bin_sha, pkg_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+data = {
+    "format_version": 1,
+    "bin_sha256": bin_sha,
+    "installed_at_epoch": int(time.time()),
+    "pkg_dir": pkg_dir,
+}
+Path(manifest_path).write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                                encoding="utf-8")
+LUMOS_SLIM_MANIFEST_PY_EOF
+echo "✓ 身分證 manifest: ${MANIFEST}"
 
 # ② skill —— ★實體複製,不是 symlink★(來源=交付包,但複製後與包解耦)
 DST_SKILL="${SKILLS}/lumos-project-notes"

@@ -12793,7 +12793,8 @@ def t_slim_uninstall_backs_up_and_preserves_custom_files():
           not (fake_home / ".claude" / "hooks").exists(), "")
 
     uninstall_sh = str(repo / "slim" / "uninstall.sh")
-    r2 = subprocess.run(["bash", uninstall_sh], capture_output=True, text=True, env=env)
+    r2 = subprocess.run(["bash", uninstall_sh], cwd=str(root),
+                        capture_output=True, text=True, env=env)
     check("uninstall.sh rc0", r2.returncode == 0, r2.stdout + r2.stderr)
 
     skills_dir = fake_home / ".claude" / "skills"
@@ -12816,8 +12817,12 @@ def t_slim_uninstall_backs_up_and_preserves_custom_files():
 
 def t_slim_uninstall_refuses_foreign_bin():
     """★反誤傷②(卸載)★:把 ~/.local/bin/lumos 換成使用者自己的一般檔 → 跑
-    uninstall → 斷言 rc=2 且該檔內容未被動。★連帶★:判定不符後應立即中止,
-    不繼續動 skill 目錄(不應在使用者資產判斷失敗後仍片面執行後續步驟)。"""
+    uninstall → 斷言 rc=1(★2026-07-31 改版:安全性跳過,不是硬錯誤,見 rc
+    語意三段式★)且該檔內容未被動。★2026-07-31 步驟獨立化改版★:bin 判定不符
+    不再用 `exit` 中止整支腳本——skill 目錄這一步與 bin 的比對結果無關,應該
+    照常執行(備份/移除)。獨立性的正面回歸測試見
+    `t_slim_uninstall_bin_refusal_does_not_block_claude_md_restore`(驗
+    CLAUDE.md 那一步)。"""
     import tempfile as _tf, os as _os
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-slimuninstfp-"))
@@ -12837,15 +12842,19 @@ def t_slim_uninstall_refuses_foreign_bin():
     bin_path.write_text("#!/bin/sh\necho USER OWN BINARY\n", encoding="utf-8")
 
     uninstall_sh = str(repo / "slim" / "uninstall.sh")
-    r2 = subprocess.run(["bash", uninstall_sh], capture_output=True, text=True, env=env)
-    check("★內容不符 → rc2★", r2.returncode == 2, r2.stdout + r2.stderr)
+    r2 = subprocess.run(["bash", uninstall_sh], cwd=str(root),
+                        capture_output=True, text=True, env=env)
+    check("★內容不符 → rc1(安全性跳過,非硬錯誤)★", r2.returncode == 1, r2.stdout + r2.stderr)
     check("★該檔內容未被動★",
           bin_path.read_text(encoding="utf-8") == "#!/bin/sh\necho USER OWN BINARY\n", "")
-    check("判定失敗即中止:skill 目錄未被備份/搬動",
-          (fake_home / ".claude" / "skills" / "lumos-project-notes" / "SKILL.md").is_file(), "")
+    check("★步驟互不阻擋★ bin 判定不符後,skill 目錄仍照常被備份(不再『判定失敗即中止』)",
+          not (fake_home / ".claude" / "skills" / "lumos-project-notes").exists()
+          and any((fake_home / ".claude" / "skills").glob("lumos-project-notes.bak.*")),
+          str(list((fake_home / ".claude" / "skills").iterdir())))
 
     # --force 是唯一合法的繞過方式,且要明確帶
-    r3 = subprocess.run(["bash", uninstall_sh, "--force"], capture_output=True, text=True, env=env)
+    r3 = subprocess.run(["bash", uninstall_sh, "--force"], cwd=str(root),
+                        capture_output=True, text=True, env=env)
     check("★帶 --force 才允許移除★", r3.returncode == 0, r3.stdout + r3.stderr)
     check("--force 後檔案確實被移除", not bin_path.exists(), "")
 
@@ -12880,7 +12889,8 @@ def t_slim_uninstall_idempotent_second_run():
     custom.write_text("使用者自訂內容,不該被吃掉\n", encoding="utf-8")
 
     uninstall_sh = str(repo / "slim" / "uninstall.sh")
-    r1 = subprocess.run(["bash", uninstall_sh], capture_output=True, text=True, env=env)
+    r1 = subprocess.run(["bash", uninstall_sh], cwd=str(root),
+                        capture_output=True, text=True, env=env)
     check("第一次 uninstall rc0", r1.returncode == 0, r1.stdout + r1.stderr)
 
     skills_dir = fake_home / ".claude" / "skills"
@@ -12890,7 +12900,8 @@ def t_slim_uninstall_idempotent_second_run():
                         if baks_after_1 else None)
 
     # ★保險起見再跑一次★
-    r2 = subprocess.run(["bash", uninstall_sh], capture_output=True, text=True, env=env)
+    r2 = subprocess.run(["bash", uninstall_sh], cwd=str(root),
+                        capture_output=True, text=True, env=env)
     check("★minor-2★ 第二次 uninstall 不炸,rc=0(冪等——語意等同「本來就沒裝」)",
           r2.returncode == 0, r2.stdout + r2.stderr)
 
@@ -12905,6 +12916,116 @@ def t_slim_uninstall_idempotent_second_run():
           not (fake_home / ".lumos-slim").exists(), "")
     check("BIN 第二次跑完後仍不存在",
           not (fake_home / ".local" / "bin" / "lumos").exists(), "")
+
+
+def t_slim_uninstall_direct_install_restores_claude_md():
+    """★端到端實測抓到的真 bug,回歸測試(2026-07-31)★:接手者若不走 get.sh
+    (一行安裝,固定落點 `~/.lumos-slim`),而是照 README 也在教的另一條路——
+    直接把交付包 clone 到任意路徑、跑包內 `install.sh`——`~/.lumos-slim` 從
+    頭到尾不會存在。舊版 uninstall.sh 拿 `~/.lumos-slim/scripts/lumos` 當 bin
+    比對的**唯一**基準,基準缺失就直接 `exit 2` 中止整支腳本,CLAUDE.md 的完整
+    版還原(步驟④)完全沒機會執行——接手者從此卸載不掉,且舊訊息說「這可能是
+    你自己的東西」在這個情境下是**誤導**(其實就是本包裝的,只是找不到比對
+    基準)。這個測試★不經過 get.sh、確保 ~/.lumos-slim 不存在★:交付包 clone
+    到一個跟 `~/.lumos-slim` 無關的任意路徑,直接跑該路徑下的 install.sh,再
+    跑 uninstall.sh,斷言卸載後 CLAUDE.md 與安裝前完全 byte-equal(完整版區塊
+    原文一字不差還原、精簡版區塊清掉)。"""
+    import tempfile as _tf, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-directbug-"))
+    repo = _P(GRAPHCTL).parent.parent
+
+    # ★交付包 clone 到任意路徑(不是 ~/.lumos-slim)★——模擬「兩行版」使用者
+    # 自己選的落點,例如 `git clone ... ~/dev/Citrus_Lumos`。
+    pkg = _slim_make_pkg_at(root / "wherever-i-cloned-it")
+    _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
+    (pkg / "uninstall.sh").chmod(0o755)
+
+    # 假專案:CLAUDE.md 帶完整版 LUMOS:GRAPH-DISCIPLINE 區塊(模擬 Landmark)。
+    proj = root / "proj"
+    proj.mkdir()
+    original = (
+        "# Landmark\n\n"
+        "<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊 -->\n"
+        "## 完整版紀律\n\n離職交接用的完整版內容,卸載後要一字不差還原。\n"
+        "<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n\n"
+        "## 專案自訂章節\n\n這段在完整版區塊之後,卸載後要一字不差還原。\n"
+    )
+    (proj / "CLAUDE.md").write_text(original, encoding="utf-8")
+
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ 直接跑包內 install.sh(不經 get.sh)rc0", ri.returncode == 0,
+          ri.stdout + ri.stderr)
+    check("★前置★ ~/.lumos-slim 確實不存在(模擬 README 兩行版的另一條安裝路徑)",
+          not (fake_home / ".lumos-slim").exists(), "")
+    after_install = (proj / "CLAUDE.md").read_text(encoding="utf-8")
+    check("★前置★ 完整版區塊已被換成精簡版",
+          "LUMOS:GRAPH-DISCIPLINE" not in after_install
+          and "<!-- LUMOS-SLIM:START -->" in after_install, after_install)
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★核心回歸★ uninstall.sh 不因 bin 比對基準缺失而整支中止(rc0,乾淨卸載)",
+          ru.returncode == 0, ru.stdout + ru.stderr)
+    check("★核心回歸★ CLAUDE.md 與安裝前完全 byte-equal(完整版區塊已還原)",
+          (proj / "CLAUDE.md").read_text(encoding="utf-8") == original,
+          (proj / "CLAUDE.md").read_text(encoding="utf-8"))
+    check("★連帶★ bin 也確實被移除(manifest 基準比對成功,不是靠 --force)",
+          not (fake_home / ".local" / "bin" / "lumos").exists(), "")
+    check("★連帶★ skill 目錄也確實被備份移除",
+          not (fake_home / ".claude" / "skills" / "lumos-project-notes").exists(), "")
+
+
+def t_slim_uninstall_bin_refusal_does_not_block_claude_md_restore():
+    """★設計缺陷回歸測試(②各步獨立,不是一票否決)★:bin 的安全檢查失敗
+    (內容跟比對基準不符,可能是使用者自己的東西)不該擋住 CLAUDE.md 的完整版
+    還原——這是兩件獨立的事。裝好之後把 `~/.local/bin/lumos` 換成使用者自己的
+    檔(manifest 比對一定不符),不帶 `--force` 跑 uninstall.sh:斷言①bin 因為
+    安全考量拒絕移除、內容未被動②即便①拒絕,CLAUDE.md 依然完整版位元組級還原
+    (步驟互不阻擋)③rc 反映的是「安全性跳過」而非硬錯誤(rc 語意三段式)。"""
+    import tempfile as _tf, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-indep-"))
+    repo = _P(GRAPHCTL).parent.parent
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")   # 固定落點,manifest+PKG 備援都拿得到基準
+    _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
+    (pkg / "uninstall.sh").chmod(0o755)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    proj = root / "proj"
+    proj.mkdir()
+    original = (
+        "# 專案標題\n\n"
+        "<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 -->\n完整版內容,獨立性測試。\n"
+        "<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n"
+    )
+    (proj / "CLAUDE.md").write_text(original, encoding="utf-8")
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ install.sh rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    bin_path = fake_home / ".local" / "bin" / "lumos"
+    bin_path.unlink()
+    bin_path.write_text("#!/bin/sh\necho USER OWN BINARY\n", encoding="utf-8")
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★①bin 因安全考量拒絕移除,內容未被動★",
+          bin_path.read_text(encoding="utf-8") == "#!/bin/sh\necho USER OWN BINARY\n", "")
+    check("★②即便①拒絕,CLAUDE.md 仍完整還原(步驟互不阻擋,本次修的核心)★",
+          (proj / "CLAUDE.md").read_text(encoding="utf-8") == original,
+          (proj / "CLAUDE.md").read_text(encoding="utf-8"))
+    check("★③rc 反映安全性跳過,非硬錯誤★ rc==1", ru.returncode == 1,
+          ru.stdout + ru.stderr)
 
 
 def t_slim_get_idempotent():
