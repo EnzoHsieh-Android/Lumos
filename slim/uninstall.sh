@@ -10,6 +10,11 @@
 #
 # ★絕不碰★:任何專案目錄、~/.claude/settings.json、~/.claude/hooks/、
 #          除了 lumos-project-notes 以外的任何 skill。
+# ★唯一例外(★2026-07-31 使用者裁定,與 install.sh 對稱★)★:執行目錄下
+#          CLAUDE.md 裡 `<!-- LUMOS-SLIM:START/END -->` sentinel 之間的那一
+#          塊——install.sh 附加的,uninstall.sh 對稱移除,sentinel 以外的內容
+#          一個位元組都不動;若移除後檔案變空,連同檔案本身一併刪除(還原成
+#          「本來就沒這個檔案」的狀態)。
 set -eu
 
 BIN="${HOME}/.local/bin/lumos"
@@ -76,6 +81,55 @@ else
   echo "  (未安裝: ${PKG})"
 fi
 
+# ④ 執行目錄下 CLAUDE.md 的 LUMOS-SLIM sentinel 區塊 —— 與 install.sh 對稱
+#    的 append-only 移除:找不到 sentinel 就當「本來就沒裝」放行(冪等);
+#    找到就只挖掉 sentinel 之間那塊(連同 install.sh 加的那一個分隔 "\n"),
+#    其餘內容原封不動;挖完若整個檔案變空,連檔案一起刪掉,回到「原本沒有
+#    這個檔案」的狀態。
+CLAUDE_MD="$(pwd)/CLAUDE.md"
+python3 - "$CLAUDE_MD" <<'LUMOS_SLIM_UNINST_PY_EOF'
+import re
+import sys
+from pathlib import Path
+
+target = Path(sys.argv[1])
+START = "<!-- LUMOS-SLIM:START -->"
+END = "<!-- LUMOS-SLIM:END -->"
+
+if not target.exists():
+    print(f"  (未安裝: {target} 的 LUMOS-SLIM 圖譜標籤區塊 — 檔案不存在)")
+    sys.exit(0)
+
+current = target.read_text(encoding="utf-8")
+pattern = re.compile(re.escape(START) + r".*?" + re.escape(END) + r"\n?", re.DOTALL)
+matches = list(pattern.finditer(current))
+
+if not matches:
+    print(f"  (未安裝: {target} 的 LUMOS-SLIM 圖譜標籤區塊)")
+    sys.exit(0)
+
+if len(matches) > 1:
+    print(f"⚠ {target} 內有多個 LUMOS-SLIM sentinel 區塊,拒絕自動移除"
+          "——請手動清理。", file=sys.stderr)
+    sys.exit(2)
+
+m = matches[0]
+start, end = m.start(), m.end()
+# 吃掉 install.sh 附加時加的那一個分隔 "\n"(緊鄰 sentinel 開頭前的單一換行),
+# 其餘既有內容不動——與 install.sh 的插入邏輯精確對稱。
+if start > 0 and current[start - 1] == "\n":
+    start -= 1
+new = current[:start] + current[end:]
+
+if new == "":
+    target.unlink()
+    print(f"✓ 已移除: {target} 的 LUMOS-SLIM 圖譜標籤區塊(內容變空,檔案本身一併移除)")
+else:
+    target.write_text(new, encoding="utf-8")
+    print(f"✓ 已移除: {target} 的 LUMOS-SLIM 圖譜標籤區塊(其餘內容不變)")
+LUMOS_SLIM_UNINST_PY_EOF
+
 echo
 echo "卸載完成。"
-echo "★未動★:任何專案目錄、~/.claude/settings.json、~/.claude/hooks/、其他 skill。"
+echo "★未動★:任何專案目錄、~/.claude/settings.json、~/.claude/hooks/、其他 skill;"
+echo "        CLAUDE.md 除了上面那塊 LUMOS-SLIM sentinel 區塊,其餘內容原封不動。"

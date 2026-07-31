@@ -12352,8 +12352,13 @@ def t_slim_gen_keeps_comments():
 
 
 def t_slim_install_no_project_touch():
-    """★反事實★ 安裝器不得觸及專案層:跑完 worktree porcelain 空 + .git/config 不變。
-    且不得無備份覆寫既有機器層資產。"""
+    """★反事實(2026-07-31 換形狀,非放鬆)★:安裝器裁定變更後**會**動專案層的
+    CLAUDE.md(append-only 附加圖譜標籤教學,見 install.sh 檔頭 2026-07-31 裁定
+    變更說明)——原本斷言「worktree porcelain 為空」已不成立(CLAUDE.md 必然
+    變動),故換一組更精確的斷言:①sentinel 外的內容 byte-equal ②`.git/config`
+    前後相同(這條沒變,裁定沒開放碰 git 設定)③除 CLAUDE.md 外,worktree 內
+    不新增/修改任何檔案(git status --porcelain 只認 `M CLAUDE.md`/`?? CLAUDE.md`
+    這一條紀錄,其餘 path 出現即紅)。且不得無備份覆寫既有機器層資產。"""
     import tempfile as _tf, os as _os, shutil as _sh
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-sliminst-"))
@@ -12370,11 +12375,12 @@ def t_slim_install_no_project_touch():
     _sh.copy2(_P(GRAPHCTL).parent.parent / "slim" / "install.sh", pkg / "install.sh")
     (pkg / "install.sh").chmod(0o755)
 
-    # 造一個假專案 repo
+    # 造一個假專案 repo —— CLAUDE.md 帶既有內容(模擬 Landmark 那類已有紀律段的專案)
     proj = root / "proj"
     proj.mkdir()
     subprocess.run(["git", "init", "-q", str(proj)], check=True)
-    (proj / "CLAUDE.md").write_text("# 專案紀律\n", encoding="utf-8")
+    claude_md_original = "# 專案紀律\n\n這是既有內容,一個位元組都不該被動。\n引用 lumos-project-notes 9 次(模擬 Landmark)。\n"
+    (proj / "CLAUDE.md").write_text(claude_md_original, encoding="utf-8")
     (proj / "scripts").mkdir()
     (proj / "scripts" / "own.py").write_text("print(1)\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(proj), "add", "-A"], check=True)
@@ -12391,9 +12397,21 @@ def t_slim_install_no_project_touch():
 
     st = subprocess.run(["git", "-C", str(proj), "status", "--porcelain"],
                         capture_output=True, text=True)
-    check("★專案 worktree porcelain 為空★", st.stdout.strip() == "", st.stdout)
+    porcelain_lines = [ln for ln in st.stdout.splitlines() if ln.strip()]
+    check("★除 CLAUDE.md 外不新增/修改任何檔案★ porcelain 只有一條且是 CLAUDE.md",
+          porcelain_lines == [" M CLAUDE.md"], st.stdout)
     check("★專案 .git/config 前後相同★",
           (proj / ".git" / "config").read_text(encoding="utf-8") == cfg_before, "")
+
+    claude_md_after = (proj / "CLAUDE.md").read_text(encoding="utf-8")
+    check("★sentinel 外的既有內容 byte-equal★ 原內容原封不動地留在檔案開頭",
+          claude_md_after.startswith(claude_md_original), claude_md_after[:200])
+    check("★附加而非覆蓋★ sentinel 區塊確實被加上",
+          "<!-- LUMOS-SLIM:START -->" in claude_md_after
+          and "<!-- LUMOS-SLIM:END -->" in claude_md_after, "")
+    check("★sentinel 外 byte-equal(嚴格版)★ 扣掉附加區塊,其餘 byte 與原內容相同",
+          claude_md_after[:len(claude_md_original)] == claude_md_original, "")
+
     check("全域指令已裝", (fake_home / ".local" / "bin" / "lumos").exists(), "")
     check("skill 已實體複製(非 symlink)",
           (fake_home / ".claude" / "skills" / "lumos-project-notes" / "SKILL.md").is_file()
@@ -12409,6 +12427,119 @@ def t_slim_install_no_project_touch():
     check("既有一般檔 → 拒絕 rc2", r2.returncode == 2, r2.stdout + r2.stderr)
     check("既有一般檔內容未被動",
           (fake_home / ".local" / "bin" / "lumos").read_text(encoding="utf-8") == "USER OWN\n", "")
+
+
+def t_slim_install_claude_md_idempotent():
+    """★冪等★:install.sh 對 CLAUDE.md 的附加重跑兩次,只應出現一塊 sentinel
+    區塊,且第二次跑完的檔案內容與第一次完全 byte-equal(不疊出第二塊、不因
+    重跑而漂移)。用 --force 讓第二次的 bin/skill 碰撞放行,聚焦驗證 CLAUDE.md
+    這一段的冪等性。"""
+    import tempfile as _tf, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-idem-"))
+
+    pkg = root / "pkg"
+    (pkg / "scripts").mkdir(parents=True)
+    (pkg / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (pkg / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nprint('slim')\n",
+                                           encoding="utf-8")
+    (pkg / "scripts" / "lumos").chmod(0o755)
+    (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
+                                                                     encoding="utf-8")
+    _sh.copy2(_P(GRAPHCTL).parent.parent / "slim" / "install.sh", pkg / "install.sh")
+    (pkg / "install.sh").chmod(0o755)
+
+    proj = root / "proj"
+    proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 既有專案紀律\n\n不該被動的一段文字。\n",
+                                    encoding="utf-8")
+
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    r1 = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("第一次安裝 rc0", r1.returncode == 0, r1.stdout + r1.stderr)
+    after_1 = (proj / "CLAUDE.md").read_text(encoding="utf-8")
+    check("第一次跑完只有一塊 sentinel",
+          after_1.count("<!-- LUMOS-SLIM:START -->") == 1, after_1)
+
+    r2 = subprocess.run(["bash", str(pkg / "install.sh"), "--force"], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("第二次安裝(--force)rc0", r2.returncode == 0, r2.stdout + r2.stderr)
+    after_2 = (proj / "CLAUDE.md").read_text(encoding="utf-8")
+
+    check("★冪等★ 重跑後仍只有一塊 sentinel(沒疊出第二塊)",
+          after_2.count("<!-- LUMOS-SLIM:START -->") == 1, after_2)
+    check("★冪等★ 重跑後 CLAUDE.md 內容與第一次 byte-equal",
+          after_2 == after_1, "第一次:\n" + after_1 + "\n第二次:\n" + after_2)
+
+
+def t_slim_uninstall_removes_claude_md_block():
+    """★可移除★:uninstall.sh 要能乾淨拿掉 install.sh 附加的 CLAUDE.md 區塊,
+    卸載後 CLAUDE.md 回到原樣 byte-equal(既有內容原封不動,sentinel 區塊消失)。
+    另驗「CLAUDE.md 原本不存在」這個邊界:安裝時新建的檔案,卸載後應連檔案本身
+    一起消失(回到「原本沒有這個檔案」的狀態),不是留一個空檔。"""
+    import tempfile as _tf, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-rm-"))
+    repo = _P(GRAPHCTL).parent.parent
+
+    pkg = root / "pkg"
+    (pkg / "scripts").mkdir(parents=True)
+    (pkg / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (pkg / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nprint('slim')\n",
+                                           encoding="utf-8")
+    (pkg / "scripts" / "lumos").chmod(0o755)
+    (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
+                                                                     encoding="utf-8")
+    _sh.copy2(repo / "slim" / "install.sh", pkg / "install.sh")
+    (pkg / "install.sh").chmod(0o755)
+    _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
+    (pkg / "uninstall.sh").chmod(0o755)
+
+    # 情境一:CLAUDE.md 已有既有內容
+    proj_a = root / "proj_a"
+    proj_a.mkdir()
+    original_a = "# 既有專案紀律\n\n不該被動的一段文字,卸載後要原封不動。\n"
+    (proj_a / "CLAUDE.md").write_text(original_a, encoding="utf-8")
+
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj_a),
+                        capture_output=True, text=True, env=env)
+    check("移除測試前置:install.sh rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+    check("移除測試前置:sentinel 確實已附加",
+          "<!-- LUMOS-SLIM:START -->" in (proj_a / "CLAUDE.md").read_text(encoding="utf-8"), "")
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh"), "--force"], cwd=str(proj_a),
+                        capture_output=True, text=True, env=env)
+    check("uninstall.sh rc0", ru.returncode == 0, ru.stdout + ru.stderr)
+    check("★可移除★ 卸載後 CLAUDE.md 回到原樣 byte-equal",
+          (proj_a / "CLAUDE.md").read_text(encoding="utf-8") == original_a,
+          (proj_a / "CLAUDE.md").read_text(encoding="utf-8"))
+
+    # 情境二:CLAUDE.md 原本不存在 → 安裝時新建 → 卸載後應連檔案一起消失
+    proj_b = root / "proj_b"
+    proj_b.mkdir()
+    fake_home_b = root / "home_b"
+    (fake_home_b / ".local" / "bin").mkdir(parents=True)
+    env_b = dict(_os.environ, HOME=str(fake_home_b))
+
+    rib = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj_b),
+                         capture_output=True, text=True, env=env_b)
+    check("情境二前置:install.sh rc0", rib.returncode == 0, rib.stdout + rib.stderr)
+    check("情境二前置:CLAUDE.md 因安裝而新建",
+          (proj_b / "CLAUDE.md").exists(), "")
+
+    rub = subprocess.run(["bash", str(pkg / "uninstall.sh"), "--force"], cwd=str(proj_b),
+                         capture_output=True, text=True, env=env_b)
+    check("情境二:uninstall.sh rc0", rub.returncode == 0, rub.stdout + rub.stderr)
+    check("★可移除(邊界)★ 原本不存在的 CLAUDE.md,卸載後連檔案本身一併消失",
+          not (proj_b / "CLAUDE.md").exists(), "")
 
 
 def _slim_make_pkg_at(pkg_dir):

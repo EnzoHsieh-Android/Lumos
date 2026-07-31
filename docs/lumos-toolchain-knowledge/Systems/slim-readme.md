@@ -13,21 +13,28 @@ summary: |-
   KEY:2026-07-31 Task 5 修正 `slim-scan.py` 的 prose 形態假陽性(見 [[Systems/slim-scan-掃描器]])後,安裝指令已改回慣用的 `./install.sh`——原本因「`/` 緊貼 `install` 前面、`.sh` 緊貼後面」撞裸散文誤判,遷就掃描器改寫成「用 `bash` 執行 `install.sh`」,那條遺留債已隨掃描器修正解除(舊 DEBT 標記已移除)
   KEY:★2026-07-31 終審 C1 修復★——README 新增一段揭露「`doctor` 有些檢查會建議跑 `lumos init`/`lumos update`/`lumos self-audit`,這三支未交付,看到請忽略;`CLAUDE.md` 相關檢查(Check D)在本版無修復路徑,是刻意的」。這段文字必然會被掃描器命中(自己寫出 `lumos init` 等已移除指令名),但這是「自我指涉的誠實揭露」不是意外懸空引用——`t_slim_readme_assertions` 的斷言因此從死板 `rc == 0` 改成「候選須落在已審查白名單 {(init,prefixed),(update,prefixed),(self-audit,prefixed)} 內,任何超出白名單的候選仍判失敗」,守衛對其餘內容仍零容忍
   KEY:2026-07-31 Task 6 補「怎麼裝」與新增「怎麼移除」「`~/.lumos-slim` 是什麼」兩段——一行安裝(`curl | bash` 跑 [[Systems/slim-get-一行安裝]])與兩行版(先 `git clone` 再跑 `install.sh`)並列讓人選;一行卸載(`curl | bash` 跑 [[Systems/slim-uninstall-一行卸載]])逐條列「會做什麼／不會碰什麼」(尤其明講 skill 目錄先備份不直接刪、不碰專案與 settings.json);解釋固定落點 `~/.lumos-slim` 可以自己刪但建議留著(卸載的 sha256 比對基準)。改動後重跑 `slim-scan.py` 對 README.md 掃描,候選集合仍等於已審查白名單(見下條 TEST),無新增非預期懸空引用
+  KEY:★2026-07-31 Task 8 裁定變更——README 反映安裝器不再「完全不碰 CLAUDE.md」★:新增〈會不會動我專案的 CLAUDE.md〉整節,講清楚範圍刀(附加 vs 覆蓋)、注入內容五段摘要、三條寫入紀律(只准附加/冪等/可移除)、目標路徑(執行安裝器時所在目錄);「怎麼裝」「怎麼確認裝好」兩段同步改口(不再宣稱「不會注入或更新任何 CLAUDE.md」);「怎麼移除」新增第 4 步;doctor Check D 那段改寫成「本包只附加名字不同的 `LUMOS-SLIM` sentinel,完全不觸碰完整版 `LUMOS:GRAPH-DISCIPLINE` sentinel,故 Check D 在本版仍無修復指令」(理由從「本包不注入」換成「注入的是另一個不相干的 sentinel」)。改動後重跑 `slim-scan.py`,新文字裡的 `init`/`update` 一律改寫成帶 `lumos ` 前綴(落入既有已審查白名單),design-loop/code-loop 改用不含指令名的泛稱措辭,避免製造新的非預期候選——候選集合仍等於已審查白名單,見下條 TEST
   DEP:scripts/test_lumos.py t_slim_readme_assertions｜scripts/slim-scan.py
-  TEST:t_slim_readme_assertions 9 checks 全綠(`python3 scripts/test_lumos.py -k slim_readme`);`slim-scan.py slim/README.md --json` 驗證候選集合 == 已審查白名單(4 類 token:init/update/self-audit/signoff,皆 prefixed 形態,2026-07-31 Task 6 改動後仍 6 條候選、集合不變),無非預期殘留
+  TEST:t_slim_readme_assertions 9 checks 全綠(`python3 scripts/test_lumos.py -k slim_readme`);`slim-scan.py slim/README.md --json` 驗證候選集合 == 已審查白名單(4 類 token:init/update/self-audit/signoff,皆 prefixed 形態),2026-07-31 Task 8 改動後仍等於白名單、無非預期殘留
 verified_by:
   - "[[Verification/2026-07-31_slim-skill與readme落地]]"
   - "[[Verification/2026-07-31_公開精簡版交付]]"
   - "[[Verification/2026-07-31_公開精簡版終審修復]]"
   - "[[Verification/2026-07-31_接手者演練複審修復]]"
   - "[[Verification/2026-07-31_公開精簡版一行安裝卸載與代碼審修復]]"
+  - "[[Verification/2026-07-31_slim-claude-md注入]]"
 related:
   - "[[Systems/slim-scan-掃描器]]"
   - "[[Systems/slim-get-一行安裝]]"
   - "[[Systems/slim-uninstall-一行卸載]]"
+  - "[[Systems/slim-install-安裝器]]"
+plan_refs:
+  - "[[Projects/公開精簡版_計劃]]"
 ---
 # slim-readme
 
-公開精簡版交付內容之一:`slim/README.md`,新人 clone 到精簡版後唯一的自足說明文件(★不假設讀過完整版任何文件★)。涵蓋安裝、進場三步、frontmatter 鐵則、合約鏈與 doctor 解法、範圍聲明(功能子集非全部)、明講不要跑哪些(含「本 README 壓不住專案 CLAUDE.md」的誠實界線)、凍結聲明七項必要內容,每項都被 `t_slim_readme_assertions` 的內容斷言鎖住。詳見 [[Projects/公開精簡版_實作計畫]] Task 4。
+公開精簡版交付內容之一:`slim/README.md`,新人 clone 到精簡版後唯一的自足說明文件(★不假設讀過完整版任何文件★)。涵蓋安裝、進場三步、frontmatter 鐵則、合約鏈與 doctor 解法、範圍聲明(功能子集非全部)、明講不要跑哪些(含「本 README 壓不住專案 CLAUDE.md」的誠實界線)、凍結聲明七項必要內容,每項都被 `t_slim_readme_assertions` 的內容斷言鎖住。詳見 [[Projects/公開精簡版_實作計畫]] Task 4、Task 8(CLAUDE.md 注入裁定變更)。
 
-規格/設計脈絡見 `.superpowers/sdd/公開精簡版_實作計畫/task-4-brief.md`(SDD 產出,非圖譜路徑,依計畫落地於此)。
+★2026-07-31 Task 8★:新增〈會不會動我專案的 CLAUDE.md〉一節,取代原本「本包不會注入或更新任何 CLAUDE.md」的說法——安裝器現在會 append-only 附加一段圖譜標籤教學,細節與範圍刀見 [[Systems/slim-install-安裝器]]。
+
+規格/設計脈絡見 `.superpowers/sdd/公開精簡版_實作計畫/task-4-brief.md`(SDD 產出,非圖譜路徑,依計畫落地於此)、Task 8 見 `.superpowers/sdd/公開精簡版_實作計畫/task-8-report.md`。

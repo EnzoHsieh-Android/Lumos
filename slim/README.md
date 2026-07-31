@@ -4,7 +4,7 @@
 
 ## 怎麼裝
 
-包裡有一支機器層安裝器，只做兩件事：①把 `lumos` 裝到 `~/.local/bin` ②把技能說明實體複製到 `~/.claude/skills/lumos-project-notes/`（不是 symlink，交付包搬走／刪掉後 skill 仍在）。
+包裡有一支機器層安裝器，做三件事：①把 `lumos` 裝到 `~/.local/bin` ②把技能說明實體複製到 `~/.claude/skills/lumos-project-notes/`（不是 symlink，交付包搬走／刪掉後 skill 仍在）③（★2026-07-31 裁定變更，見下方〈會不會動我專案的 CLAUDE.md〉★）在**執行安裝器時所在的目錄**（你的專案根）的 `CLAUDE.md` 檔尾，附加一段「怎麼解析圖譜標籤」的教學。
 
 **一行安裝**（把交付包拉到固定落點 `~/.lumos-slim` 再自動執行安裝器）：
 
@@ -27,7 +27,22 @@ git clone https://github.com/citrus-android-developer/Citrus_Lumos.git ~/.lumos-
 lumos --help
 ```
 
-看到指令清單（`context`／`search`／`doctor`…）就是裝好了。安裝器**只動 `$HOME`**，不會碰任何專案 repo、不會改 `.git/config`、不會注入或更新任何 `CLAUDE.md`。
+看到指令清單（`context`／`search`／`doctor`…）就是裝好了。安裝器**不會改 `.git/config`**、不會碰專案裡除了 `CLAUDE.md` 以外的任何檔案；`CLAUDE.md` 這一份會被動——只附加一小塊，細節見下方〈會不會動我專案的 CLAUDE.md〉。
+
+## 會不會動我專案的 CLAUDE.md
+
+**會，但只加不改**（★2026-07-31 裁定變更，取代舊版「不注入／不更新任何 CLAUDE.md」的裁定★）。
+
+**範圍刀（別跟完整版搞混）**：舊裁定禁的是**覆蓋**——完整版 `lumos init`／`lumos update` 會用範本**整段重新注入、覆蓋掉 sentinel 之間既有的紀律區塊**，這對已經有自己一套紀律的專案（例如引用 `lumos-project-notes` 9 次的既有專案）是破壞性的。現在開放的是**附加**——只在 `CLAUDE.md` 檔尾用本包**專屬** sentinel `<!-- LUMOS-SLIM:START -->` … `<!-- LUMOS-SLIM:END -->` 加一段「怎麼解析圖譜標籤」的教學句，**sentinel 以外的既有內容一個位元組都不會被動**。這個 sentinel 刻意跟完整版的不同名，所以就算日後有人在同一個專案跑了完整版的 `lumos init`／`lumos update`，也不會把這一塊誤判成它自己的區塊而覆蓋掉。
+
+**這段教學句寫了什麼**：內容摘自 `lumos-project-notes` skill 的 `reference.md`〈summary 欄位〉節，涵蓋——① `FLOW:`／`KEY:`／`DEP:`／`TEST:`／`VERIFY:`／`DECISION:`／`FLAG:`／`AUTH:` 這些 summary 符號的意思與分隔符 ② `KEY:` 行的 `★INVARIANT★`／`★DEBT★`／`★IRREVERSIBLE★`／`★CHECKPOINT★` 前綴（合約 vs 偶然，搞混的後果）③ `[test:]`／`[audit:]`／`[rollback:]` 合約鏈括號 ④ `valid_under:`／`plan_refs:`／`verified_by:`／`decisions:` frontmatter 欄位 ⑤ 進場三步與「這是精簡版只有 24 支指令」的提醒。**不含**反覆對抗審查那套機械紀律——那組明確不給（見〈範圍聲明〉）。
+
+**寫入紀律（三條，都有回歸測試釘住）**：
+1. **只准附加，絕不覆蓋**——寫在檔尾，sentinel 以外的既有內容 byte-equal。
+2. **冪等**——裝好之後重跑安裝器（例如帶 `--force` 重裝），只會更新自己那塊 sentinel 之間的內容，不會疊出第二塊。
+3. **可移除**——跑 `uninstall.sh` 能乾淨拿掉這一塊，其餘內容原封不動；若 `CLAUDE.md` 是安裝時才新建的（原本沒有這份檔案），卸載後連檔案本身也會一併消失。
+
+**目標是哪一份 `CLAUDE.md`**：**執行安裝器（或 `get.sh`）時所在的目錄**（也就是你的專案根）底下的 `CLAUDE.md`。跟其他機器層動作（裝全域指令、複製 skill）不同，這一步是唯一會碰專案檔案的動作——但範圍嚴格限制在這一塊 sentinel。
 
 ## 怎麼移除
 
@@ -48,10 +63,11 @@ curl -fsSL https://raw.githubusercontent.com/citrus-android-developer/Citrus_Lum
 1. 移除全域指令 `~/.local/bin/lumos`——但**只有在它的內容經 sha256 比對確實是本包裝的那份時才會動**；比對不符（代表那可能是你自己另外裝的東西，不是本包的）就拒絕移除、印清楚訊息、結束碼 2，不會用猜的去刪；真的確定要砍才加 `--force`。
 2. 移除技能目錄 `~/.claude/skills/lumos-project-notes/`——**移除前一定先備份成 `.bak.<時間戳>`，不會直接砍掉**；你如果在裡面塞過自己的筆記或修改，備份目錄裡找得到。
 3. 移除 `~/.lumos-slim` 本身——前提是它裡面的東西看起來還是本包的內容（有 `scripts/lumos` 跟 `install.sh`），不是就留著不動。
+4. 移除**執行卸載腳本時所在目錄**（專案根）`CLAUDE.md` 裡的 `<!-- LUMOS-SLIM:START -->` … `<!-- LUMOS-SLIM:END -->` 區塊——找不到這塊 sentinel 就當「本來沒裝」放行，不會報錯；找到就只挖掉這一塊，sentinel 以外的既有內容原封不動；若整份 `CLAUDE.md` 是安裝時才新建的（挖完變空），連檔案本身也會一併移除，回到「原本沒有這份檔案」的狀態。
 
 **卸載不會碰什麼**：
 
-- 不碰任何專案目錄／repo。
+- 不碰任何專案目錄／repo（**唯一例外**：上面第 4 點那塊 `CLAUDE.md` 裡的 `LUMOS-SLIM` sentinel 區塊——這是它對稱移除 `install.sh` 附加內容的地方，除此之外不動專案任何其他檔案）。
 - 不碰 `~/.claude/settings.json`。
 - 不碰 `~/.claude/hooks/`。
 - 不碰除了 `lumos-project-notes` 以外的任何其他 skill。
@@ -110,7 +126,7 @@ KEY:★DEBT★ <已知偶然行為,可改不算 breaking>
 
 `doctor`／`lint` 有幾個檢查項是從完整版原封繼承的，訊息裡會叫你跑本精簡版沒交付的指令修復——已知至少有 `lumos init`、`lumos update`、`lumos self-audit <node>`、`lumos signoff <node>`（最後一支出現在 `lint` 對 regen 節點的證據檢查訊息裡）——**這份列舉不保證窮盡**，跑了只會得到「未知指令」錯誤才是判準。看到本精簡版沒有的指令名就知道不必照做，該檢查項在本版沒有機械修復路徑。
 
-最常見的觸發點是 **Check D（`CLAUDE.md` 紀律區塊比對）**：如果你的專案 `CLAUDE.md` 有 sentinel 區塊但損壞或與範本不同步，`doctor`／`doctor --ci` 會報這項問題並建議跑 `lumos init`/`lumos update` 修復。**這是刻意留下的**——本包的安裝器明講「不注入、不更新任何 `CLAUDE.md`」（見〈怎麼裝〉），所以 `CLAUDE.md` 相關的檢查在本版**沒有對應的修復指令**。這項提醒本身仍有用（代表你的紀律區塊確實跟範本不一致），只是解法不是本包能提供的——要嘛忽略它、要嘛自己手動比對範本改。
+最常見的觸發點是 **Check D（`CLAUDE.md` 紀律區塊比對）**：如果你的專案 `CLAUDE.md` 有 `<!-- LUMOS:GRAPH-DISCIPLINE:START -->` 那個**完整版**的 sentinel 區塊但損壞或與範本不同步，`doctor`／`doctor --ci` 會報這項問題並建議跑 `lumos init`/`lumos update` 修復。**這是刻意留下的**——本包的安裝器只會附加它自己專屬、名字不同的 `<!-- LUMOS-SLIM:START/END -->` 區塊（見〈會不會動我專案的 CLAUDE.md〉），完全不觸碰 `LUMOS:GRAPH-DISCIPLINE` 那塊，所以 Check D 相關的檢查在本版**沒有對應的修復指令**。這項提醒本身仍有用（代表你的（完整版）紀律區塊確實跟範本不一致），只是解法不是本包能提供的——要嘛忽略它、要嘛自己手動比對範本改。
 
 ## 範圍聲明
 
