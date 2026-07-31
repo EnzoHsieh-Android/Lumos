@@ -12131,6 +12131,47 @@ def t_slim_scan_window_centered():
           cands and all("gov" in c["text"] for c in cands), str(cands))
 
 
+def t_slim_scan_window_uses_real_hit_position():
+    """★minor-1 二輪回歸(2026-07-31 代碼審第二輪)★:`_windowed_text()` 原本用
+    `.find(token)` 在整段正規化文字裡找 token「第一次出現的子字串」,不是
+    `scan_line()` 實際判定命中的那個位置——兩者語意不同。token 常是別的詞的
+    字首/字尾(如 `gov` 是 `governance` 的字首),那個「別的詞」若排在真命中詞
+    前面、且間距超過視窗半徑(width=120 時半徑 58),視窗會開錯地方,`text`
+    欄位完全看不到真正觸發規則的那段——`scripts/lumos:415-417` 那個實際案例
+    只是「間距(~59字)恰好小於半徑」才勉強罩到,不是保證,重現後果需要間距
+    拉大。
+
+    造一段文字:先放 `governance`(含 `gov` 子字串,但不觸發任何比對形態——
+    `gov` 只有 3 字,短於 prose 形態的最短門檻 4,且 `governance` 不含反引號
+    /`lumos ` 前綴/skill 名),隔一段 > 58 字的填充文字,再放真正觸發
+    prefixed 形態的 `lumos gov`。斷言 text 欄位包含 `lumos gov`(修正前必
+    失敗——視窗會開在 `governance` 那個假命中點附近,離真命中 89 字遠,完全
+    罩不到)。"""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimscanwin2-"))
+    scanner = str(_P(GRAPHCTL).parent / "slim-scan.py")
+
+    decoy = "governance "          # 含 gov 子字串,但不觸發任何比對規則
+    pad = "filler " * 10           # 70 字 > 58(gov 視窗半徑),確保間距夠大
+    src = root / "sample.py"
+    src.write_text(
+        'def f():\n'
+        '    """' + decoy + pad + '跑 lumos gov 才對"""\n'
+        '    pass\n',
+        encoding="utf-8")
+    r = subprocess.run([sys.executable, scanner, "--python", str(src), "--json"],
+                       capture_output=True, text=True)
+    check("minor-1 二輪回歸 fixture 有命中(rc1)", r.returncode == 1, r.stdout + r.stderr)
+    import json as _j
+    d = _j.loads(r.stdout)
+    cands = [c for c in d["candidates"] if c["token"] == "gov"]
+    check("命中已移除指令 gov(prefixed 形態)", len(cands) >= 1, str(d["candidates"]))
+    check("★視窗中心=真命中位置★ text 欄位包含 `lumos gov`"
+          "(不是被 governance 裡的 gov 誤導開窗)",
+          cands and all("lumos gov" in c["text"] for c in cands), str(cands))
+
+
 def t_slim_gen_loop_registration():
     """合成 fixture:迴圈註冊的指令在該砍時真的被砍掉。
     ★現行白名單下無真實對象(links/backlinks 都保留),故必須合成★(spec T-5)。"""
@@ -12472,6 +12513,62 @@ def t_slim_uninstall_refuses_foreign_bin():
     r3 = subprocess.run(["bash", uninstall_sh, "--force"], capture_output=True, text=True, env=env)
     check("★帶 --force 才允許移除★", r3.returncode == 0, r3.stdout + r3.stderr)
     check("--force 後檔案確實被移除", not bin_path.exists(), "")
+
+
+def t_slim_uninstall_idempotent_second_run():
+    """★minor-2(2026-07-31 代碼審第二輪)★:接手者「保險起見再跑一次確認乾淨」是
+    很自然的行為,但原本只測過跑一次。裝好 → 塞使用者自訂檔 → 跑 uninstall → 再
+    跑一次 uninstall → 斷言:
+    ①第二次不炸(rc=0)——讀腳本後判定:三步(BIN/SKILL/PKG)第二次跑時全部落入
+      「東西已經不在」的分支(`else` 印 `(未安裝: ...)`,純 echo,不觸發任何
+      exit),語意上與「這台機器本來就沒裝過」完全等價,而那個情境本就是 rc0;
+      idempotent 工具(`rm -f`/`apt remove` 之類)的慣例是「不需要做事=成功」,
+      不是「報錯」,故第二次也判定 rc0 才合理,非 0 反而是腳本壞了。
+    ②第二次不產生多餘的空備份目錄——SKILL 路徑在第一次跑完後已被 mv 走,第二次
+      `[ -d "$SKILL" ]` 為假,進不了備份分支,不會多出一個 `.bak.*`。
+    ③第一次備份出來的使用者自訂檔,第二次跑完後仍完好未被動。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimuninst2x-"))
+    repo = _P(GRAPHCTL).parent.parent
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    r = subprocess.run(["bash", str(pkg / "install.sh")], capture_output=True, text=True, env=env)
+    check("冪等回歸測試前置:install.sh rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    custom = fake_home / ".claude" / "skills" / "lumos-project-notes" / "my-own-notes.txt"
+    custom.write_text("使用者自訂內容,不該被吃掉\n", encoding="utf-8")
+
+    uninstall_sh = str(repo / "slim" / "uninstall.sh")
+    r1 = subprocess.run(["bash", uninstall_sh], capture_output=True, text=True, env=env)
+    check("第一次 uninstall rc0", r1.returncode == 0, r1.stdout + r1.stderr)
+
+    skills_dir = fake_home / ".claude" / "skills"
+    baks_after_1 = sorted(skills_dir.glob("lumos-project-notes.bak.*"))
+    check("第一次跑完備份存在(前置條件)", len(baks_after_1) == 1, str(list(skills_dir.iterdir())))
+    content_after_1 = ((baks_after_1[0] / "my-own-notes.txt").read_text(encoding="utf-8")
+                        if baks_after_1 else None)
+
+    # ★保險起見再跑一次★
+    r2 = subprocess.run(["bash", uninstall_sh], capture_output=True, text=True, env=env)
+    check("★minor-2★ 第二次 uninstall 不炸,rc=0(冪等——語意等同「本來就沒裝」)",
+          r2.returncode == 0, r2.stdout + r2.stderr)
+
+    baks_after_2 = sorted(skills_dir.glob("lumos-project-notes.bak.*"))
+    check("★minor-2★ 第二次不產生多餘的空備份目錄(數量不變,仍是 1)",
+          len(baks_after_2) == len(baks_after_1) == 1, str(list(skills_dir.iterdir())))
+    check("★minor-2★ 第一次備份出來的自訂檔,第二次跑完後仍完好",
+          bool(baks_after_2)
+          and (baks_after_2[0] / "my-own-notes.txt").read_text(encoding="utf-8") == content_after_1,
+          str(list(baks_after_2[0].iterdir())) if baks_after_2 else "無備份目錄")
+    check("PKG 目錄第二次跑完後仍不存在(沒有詭異重建)",
+          not (fake_home / ".lumos-slim").exists(), "")
+    check("BIN 第二次跑完後仍不存在",
+          not (fake_home / ".local" / "bin" / "lumos").exists(), "")
 
 
 def t_slim_get_idempotent():
