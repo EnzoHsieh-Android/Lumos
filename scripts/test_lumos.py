@@ -12153,6 +12153,66 @@ def t_slim_gen_keeps_comments():
           "260→94" in txt, "哨兵註解不見了")
 
 
+def t_slim_install_no_project_touch():
+    """★反事實★ 安裝器不得觸及專案層:跑完 worktree porcelain 空 + .git/config 不變。
+    且不得無備份覆寫既有機器層資產。"""
+    import tempfile as _tf, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-"))
+
+    # 造一個假交付包
+    pkg = root / "pkg"
+    (pkg / "scripts").mkdir(parents=True)
+    (pkg / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (pkg / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nprint('slim')\n",
+                                           encoding="utf-8")
+    (pkg / "scripts" / "lumos").chmod(0o755)
+    (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
+                                                                     encoding="utf-8")
+    _sh.copy2(_P(GRAPHCTL).parent.parent / "slim" / "install.sh", pkg / "install.sh")
+    (pkg / "install.sh").chmod(0o755)
+
+    # 造一個假專案 repo
+    proj = root / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+    (proj / "CLAUDE.md").write_text("# 專案紀律\n", encoding="utf-8")
+    (proj / "scripts").mkdir()
+    (proj / "scripts" / "own.py").write_text("print(1)\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(proj), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(proj), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "init"], check=True)
+    cfg_before = (proj / ".git" / "config").read_text(encoding="utf-8")
+
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                       capture_output=True, text=True, env=env)
+    check("安裝器 rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    st = subprocess.run(["git", "-C", str(proj), "status", "--porcelain"],
+                        capture_output=True, text=True)
+    check("★專案 worktree porcelain 為空★", st.stdout.strip() == "", st.stdout)
+    check("★專案 .git/config 前後相同★",
+          (proj / ".git" / "config").read_text(encoding="utf-8") == cfg_before, "")
+    check("全域指令已裝", (fake_home / ".local" / "bin" / "lumos").exists(), "")
+    check("skill 已實體複製(非 symlink)",
+          (fake_home / ".claude" / "skills" / "lumos-project-notes" / "SKILL.md").is_file()
+          and not (fake_home / ".claude" / "skills" / "lumos-project-notes").is_symlink(), "")
+    check("不裝任何 Claude hook",
+          not (fake_home / ".claude" / "hooks").exists(), "")
+
+    # ★反誤傷★:既有一般檔不得被刪
+    (fake_home / ".local" / "bin" / "lumos").unlink()
+    (fake_home / ".local" / "bin" / "lumos").write_text("USER OWN\n", encoding="utf-8")
+    r2 = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("既有一般檔 → 拒絕 rc2", r2.returncode == 2, r2.stdout + r2.stderr)
+    check("既有一般檔內容未被動",
+          (fake_home / ".local" / "bin" / "lumos").read_text(encoding="utf-8") == "USER OWN\n", "")
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
