@@ -356,7 +356,7 @@ def main():
     pkg_src = here.parent / "slim"
     pkg_dst = out.parent.parent
     if pkg_src.is_dir():
-        for item in ("install.sh", "get.sh", "uninstall.sh", "README.md", "skills"):
+        for item in ("install.sh", "get.sh", "uninstall.sh", "README.md", "claude-block.md", "skills"):
             s = pkg_src / item
             if s.is_dir():
                 shutil.copytree(s, pkg_dst / item, dirs_exist_ok=True)

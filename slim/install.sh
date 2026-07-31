@@ -2,16 +2,27 @@
 # install.sh — 公開精簡版 機器層安裝器
 #
 # ★做三件事★:①全域 lumos 指令 ②實體複製 skill 到 ~/.claude/skills/
-#            ③(★2026-07-31 使用者裁定,推翻原「不注入/更新任何 CLAUDE.md」★)
-#            在執行時所在目錄(專案根)的 CLAUDE.md 檔尾,用專屬 sentinel
-#            append-only 附加一段「怎麼解析圖譜標籤」教學。
+#            ③在執行時所在目錄(專案根)的 CLAUDE.md 裡放一塊策展過的精簡版
+#            紀律區塊(sentinel `<!-- LUMOS-SLIM:START/END -->`)。
 #
-# ★裁定範圍刀(別搞混)★:當初禁的是「覆蓋」——完整版 init/update 會用範本
-# 整段換掉 sentinel 之間既有紀律區塊(會把 Landmark 那類專案既有的紀律段沖掉)。
-# 現在開的是「附加」——只在檔尾加一塊教學句,sentinel 以外一個位元組都不動;
-# ②sentinel 刻意取名 `<!-- LUMOS-SLIM:START/END -->`,與完整版的 sentinel 不
-# 同名,不會被完整版 init/update 誤判成自己的區塊而覆蓋掉;③內容只教「標籤怎麼
-# 讀」,design-loop/code-loop 那套機械紀律依舊不給(見 [S4-b])。
+# ★裁定演進(spec [S3],三次)★:原裁定=絕不碰專案 CLAUDE.md;第二次=只准
+# append-only 附加、sentinel 以外一個位元組都不動、完整版 `LUMOS:GRAPH-
+# DISCIPLINE` 區塊(若有)原封不動留著;現在(2026-07-31 第三次,本次改動)=
+# 若專案已有完整版區塊,**整段移除**它,換成這塊精簡版區塊——但移除前先把
+# 完整版原文位元組級備份(base64 編碼藏進精簡版區塊自己的 HTML 註解裡,見
+# `claude-block.md` 的 `FULL-BACKUP` 標記),`uninstall.sh` 能用它精確還原。
+# 理由:完整版那段本身自稱「優先級最高/第一個工具呼叫必須是 lumos」,兩套
+# 規則並存時接手者的 Claude 會先讀到它、照著撲空(它引用的 design-loop/
+# code-loop/pitfalls 等 13 處指令本包都沒交付)。精簡版區塊已策展吸收完整版
+# 裡仍然有效的部分(合約鏈/可逆性標記/regen 重生標記/frontmatter 欄位等),
+# 只拿掉依賴已移除指令才有意義的段落。
+# ★已知風險(使用者已知並接受)★:完整版區塊自稱「自動注入/更新」——若專案
+# 還有其他人在用完整版、他跑更新指令會把完整版裝回來,兩邊來回覆蓋。
+#
+# 插入位置:①有完整版區塊 → 原位置整段換掉(不是搬到檔尾——那裡才顯眼)
+#          ②沒有 → 插在檔首「# 標題」之後,沒有標題就插最前面
+#          ③CLAUDE.md 不存在 → 建立,內容就是這個區塊
+# ★冪等★:重跑只更新自己那塊(沿用既有備份標記,不重新編碼、不二次包裹)。
 # ★仍明確不做★:不 scaffold 圖譜、不 vendor 工具進專案、不設 core.hooksPath、
 #              不裝任何 Claude hook。
 #
@@ -70,103 +81,85 @@ fi
 cp -R "$SRC_SKILL" "$DST_SKILL"
 echo "✓ skill: ${DST_SKILL}"
 
-# ③ 專案層 CLAUDE.md —— append-only 附加圖譜標籤教學(見檔頭裁定變更說明)。
-# 目標 = 執行本腳本時的當前目錄(新人在自己的專案根底下跑安裝器/一行安裝)。
-# ★只准附加、絕不覆蓋★:sentinel 以外的既有內容一個位元組都不動;冪等——
-# 重跑只更新自己那塊 sentinel 之間的內容,不會疊出第二塊;CLAUDE.md 不存在時
-# 直接建立(只含這一塊)。合併邏輯用 python3 stdlib 做,不手滾 sed/awk 拼字串
-# (block 內含反引號/中文/Markdown 表格,sed 逐行替換極易漏 escape)。
+# ③ 專案層 CLAUDE.md —— 用策展後的精簡版紀律區塊取代完整版(若有)/附加(見
+# 檔頭裁定演進說明)。目標 = 執行本腳本時的當前目錄(新人在自己的專案根底下
+# 跑安裝器/一行安裝)。範本 = 本包隨附的 claude-block.md(靜態檔,不在腳本裡
+# 手刻 heredoc)。合併邏輯用 python3 stdlib 做,不手滾 sed/awk 拼字串(block
+# 內含反引號/中文/Markdown 表格,sed 逐行替換極易漏 escape)。
 CLAUDE_MD="$(pwd)/CLAUDE.md"
-BLOCK_FILE="$(mktemp)"
-trap 'rm -f "$BLOCK_FILE"' EXIT
-cat > "$BLOCK_FILE" <<'LUMOS_SLIM_BLOCK_EOF'
-<!-- LUMOS-SLIM:START -->
-## Lumos 圖譜標籤速查(精簡版接手教學;append-only,2026-07-31 由 lumos-slim 安裝器附加)
+BLOCK_TEMPLATE="${PKG}/claude-block.md"
+[ -f "$BLOCK_TEMPLATE" ] || { echo "ERROR: 找不到 ${BLOCK_TEMPLATE}" >&2; exit 2; }
 
-> 本區塊由 `lumos-slim` 的 `install.sh` 自動維護(只附加、不覆蓋既有內容;重跑只更新這一塊,`uninstall.sh` 可乾淨移除)。內容摘自 `lumos-project-notes` skill 的 `reference.md`〈summary 欄位〉節,教你怎麼讀既有專案知識圖譜(`docs/{project}-knowledge/`)的 frontmatter 標籤。
-
-### A. summary 欄位符號(Systems/Issues 筆記的結構化摘要)
-
-| 符號 | 用途 |
-|------|------|
-| `FLOW:` | 核心流程 |
-| `KEY:` | 關鍵概念/欄位 |
-| `DEP:` | 依賴模組(wikilink) |
-| `TEST:` | 測試狀態 |
-| `VERIFY:` | 驗證紀錄連結 |
-| `DECISION:` | 重大決策,帶 `(valid)`/`(superseded)` |
-| `FLAG:` | 語意標記(TECHNICAL/DECISION/ORIGIN) |
-| `AUTH:` | 認證方式 |
-
-分隔符:`→` 流程方向、`｜` 分隔同類、`,` 分隔同欄細項。
-
-看哪幾行:Systems 看 `FLOW`+`KEY`+`DEP`+`TEST`;Issues 看 `FLAG`+`DECISION`+`KEY`;Verification 看 `TEST`+`VERIFY`。
-
-### B. `KEY:` 行的前綴(最要命,別搞混)
-
-- `★INVARIANT★` — 業務合約,**改動＝breaking**,動前先看它綁的 `[test:]`
-- `★DEBT★` — 已知偶然行為,**可以改、不算 breaking**
-- `★IRREVERSIBLE★`/`★CHECKPOINT★` — 不可逆,動前找 `[rollback:]`
-
-把兩者搞混的兩種後果:把 `★DEBT★` 當合約 → 不敢動該動的;把 `★INVARIANT★` 當普通說明 → 動了就壞。
-
-### C. 合約鏈括號
-
-- `[test:]` — 綁定測試
-- `[audit:]` — 獨立審計
-- `[rollback:]` — 回滾路徑
-
-### D. frontmatter 欄位
-
-- `valid_under:` — 這條結論在什麼前提下成立,前提沒了結論就不算數
-- `plan_refs:`/`verified_by:` — 追回「為什麼這樣設計」
-- `decisions:` — ADR,含被取代的舊決策
-
-### E. 進場三步(這是精簡版:只有 24 支指令)
-
-```
-lumos search <關鍵字>      # 定位
-lumos context <節點>       # 掃脈絡
-lumos contracts <節點>     # 查硬合約
-```
-
-只有 24 支指令;`init`/`update`/`self-audit`/`signoff` 不存在,`doctor` 若建議跑它們請忽略。
-<!-- LUMOS-SLIM:END -->
-LUMOS_SLIM_BLOCK_EOF
-
-python3 - "$CLAUDE_MD" "$BLOCK_FILE" <<'LUMOS_SLIM_PY_EOF'
+python3 - "$CLAUDE_MD" "$BLOCK_TEMPLATE" <<'LUMOS_SLIM_PY_EOF'
+import base64
 import re
 import sys
 from pathlib import Path
 
 target = Path(sys.argv[1])
-block = Path(sys.argv[2]).read_text(encoding="utf-8")
-START = "<!-- LUMOS-SLIM:START -->"
-END = "<!-- LUMOS-SLIM:END -->"
+template = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+SLIM_START = "<!-- LUMOS-SLIM:START -->"
+SLIM_END = "<!-- LUMOS-SLIM:END -->"
+# ★完整版 START 有版本號後綴(如 "...START v1.0 — 自動注入...-->"),不是固定
+# 字面值★——只匹配前綴,與 scripts/lumos 的 _CLAUDE_START_PREFIX 同款做法。
+FULL_START_PREFIX = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
+FULL_END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+BACKUP_NONE = "<!-- LUMOS-SLIM:FULL-BACKUP:NONE -->"
+BACKUP_RE = re.compile(r"<!-- LUMOS-SLIM:FULL-BACKUP:(NONE|BASE64:[A-Za-z0-9+/=]*) -->")
+
+slim_pat = re.compile(re.escape(SLIM_START) + r".*?" + re.escape(SLIM_END) + r"\n?", re.DOTALL)
+full_pat = re.compile(re.escape(FULL_START_PREFIX) + r".*?" + re.escape(FULL_END) + r"\n?", re.DOTALL)
 
 original = target.read_text(encoding="utf-8") if target.exists() else ""
-pattern = re.compile(re.escape(START) + r".*?" + re.escape(END) + r"\n?", re.DOTALL)
-matches = list(pattern.finditer(original))
+slim_matches = list(slim_pat.finditer(original))
+full_matches = list(full_pat.finditer(original))
 
-if len(matches) > 1:
-    print(f"ERROR: {target} 內有多個 LUMOS-SLIM sentinel 區塊,拒絕自動合併"
+if len(slim_matches) > 1:
+    print(f"ERROR: {target} 內有多個 LUMOS-SLIM sentinel 區塊,拒絕自動處理"
           "——請手動清理後重跑。", file=sys.stderr)
     sys.exit(2)
+if len(full_matches) > 1:
+    print(f"ERROR: {target} 內有多個 LUMOS:GRAPH-DISCIPLINE sentinel 區塊,"
+          "拒絕自動處理——請手動清理後重跑。", file=sys.stderr)
+    sys.exit(2)
+if slim_matches and full_matches:
+    print(f"ERROR: {target} 同時有 LUMOS-SLIM 與 LUMOS:GRAPH-DISCIPLINE 兩種"
+          "sentinel 區塊並存,狀態不明確,拒絕自動處理——請手動清理後重跑。",
+          file=sys.stderr)
+    sys.exit(2)
 
-if matches:
-    m = matches[0]
-    new = original[:m.start()] + block + original[m.end():]
-elif original == "":
-    new = block
+if full_matches:
+    # 情境①:有完整版區塊 —— 先把原文位元組級編碼進備份標記,再原位置整段
+    # 換成精簡版區塊(不是搬到檔尾)。
+    m = full_matches[0]
+    full_text = m.group(0)
+    encoded = base64.b64encode(full_text.encode("utf-8")).decode("ascii")
+    backup_marker = f"<!-- LUMOS-SLIM:FULL-BACKUP:BASE64:{encoded} -->"
+    start, end = m.start(), m.end()
+elif slim_matches:
+    # 情境②:冪等重跑 —— 精簡版區塊已存在,沿用它既有的備份標記(★不重新
+    # 編碼、不因這次沒看到完整版區塊就誤判成「原本沒有」而把備份洗掉★)。
+    m = slim_matches[0]
+    bm = BACKUP_RE.search(m.group(0))
+    backup_marker = bm.group(0) if bm else BACKUP_NONE
+    start, end = m.start(), m.end()
 else:
-    # ★固定分隔符★:非空既有內容一律只加一個 "\n" 再接區塊,不對既有內容做任何
-    # trim/正規化(不管它原本結尾是 0 個、1 個還是多個換行,都不動它半個位元組)。
-    # uninstall.sh 的移除邏輯與此對稱:只吃掉這一個我們自己加的 "\n",其餘還原。
-    new = original + "\n" + block
+    # 情境③:兩種都沒有 —— 全新安裝,無備份;插入點是「檔首 # 標題之後」,
+    # 沒有標題就插最前面,原檔不存在/空檔就直接整份是這個區塊。
+    backup_marker = BACKUP_NONE
+    if original.startswith("# "):
+        nl = original.find("\n")
+        pos = nl + 1 if nl != -1 else len(original)
+    else:
+        pos = 0
+    start = end = pos
 
+block_text = template.replace(BACKUP_NONE, backup_marker)
+new = original[:start] + block_text + original[end:]
 target.write_text(new, encoding="utf-8")
 LUMOS_SLIM_PY_EOF
-echo "✓ CLAUDE.md 圖譜標籤教學已附加/更新: ${CLAUDE_MD}"
+echo "✓ CLAUDE.md 精簡版紀律區塊已安裝/更新: ${CLAUDE_MD}"
 
 case ":${PATH}:" in
   *":${BIN}:"*) ;;

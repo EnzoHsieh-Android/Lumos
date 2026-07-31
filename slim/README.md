@@ -4,7 +4,7 @@
 
 ## 怎麼裝
 
-包裡有一支機器層安裝器，做三件事：①把 `lumos` 裝到 `~/.local/bin` ②把技能說明實體複製到 `~/.claude/skills/lumos-project-notes/`（不是 symlink，交付包搬走／刪掉後 skill 仍在）③（★2026-07-31 裁定變更，見下方〈會不會動我專案的 CLAUDE.md〉★）在**執行安裝器時所在的目錄**（你的專案根）的 `CLAUDE.md` 檔尾，附加一段「怎麼解析圖譜標籤」的教學。
+包裡有一支機器層安裝器，做三件事：①把 `lumos` 裝到 `~/.local/bin` ②把技能說明實體複製到 `~/.claude/skills/lumos-project-notes/`（不是 symlink，交付包搬走／刪掉後 skill 仍在）③（★2026-07-31 裁定第三次變更，見下方〈會不會動我專案的 CLAUDE.md〉★）在**執行安裝器時所在的目錄**（你的專案根）的 `CLAUDE.md` 裡放一塊策展過的「怎麼解析圖譜標籤」精簡版紀律區塊——若專案原本就有完整版紀律區塊會被整段取代掉（原位置，不是搬到檔尾），沒有就插在檔首標題之後。
 
 **一行安裝**（把交付包拉到固定落點 `~/.lumos-slim` 再自動執行安裝器）：
 
@@ -27,22 +27,30 @@ git clone https://github.com/citrus-android-developer/Citrus_Lumos.git ~/.lumos-
 lumos --help
 ```
 
-看到指令清單（`context`／`search`／`doctor`…）就是裝好了。安裝器**不會改 `.git/config`**、不會碰專案裡除了 `CLAUDE.md` 以外的任何檔案；`CLAUDE.md` 這一份會被動——只附加一小塊，細節見下方〈會不會動我專案的 CLAUDE.md〉。
+看到指令清單（`context`／`search`／`doctor`…）就是裝好了。安裝器**不會改 `.git/config`**、不會碰專案裡除了 `CLAUDE.md` 以外的任何檔案；`CLAUDE.md` 這一份會被動，細節見下方〈會不會動我專案的 CLAUDE.md〉。
 
 ## 會不會動我專案的 CLAUDE.md
 
-**會，但只加不改**（★2026-07-31 裁定變更，取代舊版「不注入／不更新任何 CLAUDE.md」的裁定★）。
+**會**（★2026-07-31 裁定第三次變更★）。這條裁定改了三次，如實記錄演進，別誤會成一次到位：
 
-**範圍刀（別跟完整版搞混）**：舊裁定禁的是**覆蓋**——完整版 `lumos init`／`lumos update` 會用範本**整段重新注入、覆蓋掉 sentinel 之間既有的紀律區塊**，這對已經有自己一套紀律的專案（例如引用 `lumos-project-notes` 9 次的既有專案）是破壞性的。現在開放的是**附加**——只在 `CLAUDE.md` 檔尾用本包**專屬** sentinel `<!-- LUMOS-SLIM:START -->` … `<!-- LUMOS-SLIM:END -->` 加一段「怎麼解析圖譜標籤」的教學句，**sentinel 以外的既有內容一個位元組都不會被動**。這個 sentinel 刻意跟完整版的不同名，所以就算日後有人在同一個專案跑了完整版的 `lumos init`／`lumos update`，也不會把這一塊誤判成它自己的區塊而覆蓋掉。
+1. **原裁定（絕不碰）**：安裝器完全不注入／不更新任何 `CLAUDE.md`。
+2. **第二次（只准附加）**：開放在 `CLAUDE.md` 檔尾用專屬 sentinel 附加一段教學句，sentinel 以外一個位元組都不動；專案原本若有完整版 `LUMOS:GRAPH-DISCIPLINE` 紀律區塊，原封不動留著、兩套規則並存。
+3. **現在（可移除既有區塊並策展吸收）**：發現「兩套規則並存」本身就是問題——完整版那段開頭就自稱「優先級最高」「第一個工具呼叫必須是 `lumos`」，接手者的 Claude 會先讀到它、照著它引用的十幾處進階指令去撲空（那些指令本包都沒交付）。現在若專案已有完整版區塊，安裝器會**整段移除它**，換成精簡版區塊——但移除前**先把完整版原文位元組級備份**，`uninstall.sh` 能精確還原。
 
-**這段教學句寫了什麼**：內容摘自 `lumos-project-notes` skill 的 `reference.md`〈summary 欄位〉節，涵蓋——① `FLOW:`／`KEY:`／`DEP:`／`TEST:`／`VERIFY:`／`DECISION:`／`FLAG:`／`AUTH:` 這些 summary 符號的意思與分隔符 ② `KEY:` 行的 `★INVARIANT★`／`★DEBT★`／`★IRREVERSIBLE★`／`★CHECKPOINT★` 前綴（合約 vs 偶然，搞混的後果）③ `[test:]`／`[audit:]`／`[rollback:]` 合約鏈括號 ④ `valid_under:`／`plan_refs:`／`verified_by:`／`decisions:` frontmatter 欄位 ⑤ 進場三步與「這是精簡版只有 24 支指令」的提醒。**不含**反覆對抗審查那套機械紀律——那組明確不給（見〈範圍聲明〉）。
+**移除前會先策展**：完整版區塊裡仍然有效的內容（圖譜即唯一真相來源的核心原則、進場三步、summary 符號表、合約鏈 `★INVARIANT★`/`★DEBT★`/`[test:]`/`[audit:]`、可逆性標記 `★IRREVERSIBLE★`/`★CHECKPOINT★`/`[rollback:]`、regen 重生標記 `[src:]`/`[git:]`/`推測:`/`佚失:`、frontmatter 欄位）已經吸收進精簡版區塊（範本見本包隨附的 `claude-block.md`）；拿掉的只有依賴本包沒交付的指令才有意義的段落。
+
+**插入位置**：①專案原本有完整版區塊 → 精簡版區塊插在**它原本的位置**（不是搬到檔尾——那裡才顯眼）②沒有 → 插在檔首「# 標題」之後，沒有標題就插最前面 ③`CLAUDE.md` 不存在 → 建立，內容就是這個區塊。sentinel（`<!-- LUMOS-SLIM:START -->` … `<!-- LUMOS-SLIM:END -->`）以外的既有內容，一律 byte-equal 保留。
+
+**備份機制**：完整版區塊原文（含它自己的 sentinel）base64 編碼後，藏在精簡版區塊自己的 HTML 註解裡（`<!-- LUMOS-SLIM:FULL-BACKUP:BASE64:... -->`）——不新增任何檔案到你的專案（不污染 `git status`），也不依賴 `~/.lumos-slim` 存在（就算那個目錄事後被刪掉，備份仍隨 `CLAUDE.md` 本身留著）。`uninstall.sh` 讀出這個標記、解碼、還原回原位置，位元組級一致。
 
 **寫入紀律（三條，都有回歸測試釘住）**：
-1. **只准附加，絕不覆蓋**——寫在檔尾，sentinel 以外的既有內容 byte-equal。
-2. **冪等**——裝好之後重跑安裝器（例如帶 `--force` 重裝），只會更新自己那塊 sentinel 之間的內容，不會疊出第二塊。
-3. **可移除**——跑 `uninstall.sh` 能乾淨拿掉這一塊，其餘內容原封不動；若 `CLAUDE.md` 是安裝時才新建的（原本沒有這份檔案），卸載後連檔案本身也會一併消失。
+1. **原地取代，不搬位置**——sentinel 以外的既有內容 byte-equal 保留；有完整版區塊就原位置換掉，沒有就插在檔首標題後。
+2. **冪等**——裝好之後重跑安裝器（例如帶 `--force` 重裝），只會更新自己那塊 sentinel 之間的內容，不疊出第二塊、備份也不會被重新編碼或洗掉。
+3. **可移除**——跑 `uninstall.sh` 能位元組級還原（若原本有完整版區塊）或乾淨拿掉這一塊（若原本沒有），其餘內容原封不動；若 `CLAUDE.md` 是安裝時才新建的（原本沒有這份檔案），卸載後連檔案本身也會一併消失。
 
-**目標是哪一份 `CLAUDE.md`**：**執行安裝器（或 `get.sh`）時所在的目錄**（也就是你的專案根）底下的 `CLAUDE.md`。跟其他機器層動作（裝全域指令、複製 skill）不同，這一步是唯一會碰專案檔案的動作——但範圍嚴格限制在這一塊 sentinel。
+**已知風險（已知並接受的取捨）**：完整版區塊自稱「自動注入/更新」——如果這個專案還有其他人在用完整版 lumos-toolchain、他跑了更新流程，會把完整版裝回來，兩邊就變成來回覆蓋。本包沒有機制阻止這件事，只能在這裡講清楚。
+
+**目標是哪一份 `CLAUDE.md`**：**執行安裝器（或 `get.sh`）時所在的目錄**（也就是你的專案根）底下的 `CLAUDE.md`。跟其他機器層動作（裝全域指令、複製 skill）不同，這一步是唯一會碰專案檔案的動作——但範圍嚴格限制在這一塊 sentinel（及它取代掉的完整版區塊，若有）。
 
 ## 怎麼移除
 
@@ -63,11 +71,11 @@ curl -fsSL https://raw.githubusercontent.com/citrus-android-developer/Citrus_Lum
 1. 移除全域指令 `~/.local/bin/lumos`——但**只有在它的內容經 sha256 比對確實是本包裝的那份時才會動**；比對不符（代表那可能是你自己另外裝的東西，不是本包的）就拒絕移除、印清楚訊息、結束碼 2，不會用猜的去刪；真的確定要砍才加 `--force`。
 2. 移除技能目錄 `~/.claude/skills/lumos-project-notes/`——**移除前一定先備份成 `.bak.<時間戳>`，不會直接砍掉**；你如果在裡面塞過自己的筆記或修改，備份目錄裡找得到。
 3. 移除 `~/.lumos-slim` 本身——前提是它裡面的東西看起來還是本包的內容（有 `scripts/lumos` 跟 `install.sh`），不是就留著不動。
-4. 移除**執行卸載腳本時所在目錄**（專案根）`CLAUDE.md` 裡的 `<!-- LUMOS-SLIM:START -->` … `<!-- LUMOS-SLIM:END -->` 區塊——找不到這塊 sentinel 就當「本來沒裝」放行，不會報錯；找到就只挖掉這一塊，sentinel 以外的既有內容原封不動；若整份 `CLAUDE.md` 是安裝時才新建的（挖完變空），連檔案本身也會一併移除，回到「原本沒有這份檔案」的狀態。
+4. 處理**執行卸載腳本時所在目錄**（專案根）`CLAUDE.md` 裡的 `<!-- LUMOS-SLIM:START -->` … `<!-- LUMOS-SLIM:END -->` 區塊——找不到這塊 sentinel 就當「本來沒裝」放行，不會報錯；找到就讀出區塊內建的備份標記：**有**完整版原文備份（代表 `install.sh` 當初取代掉了完整版 `LUMOS:GRAPH-DISCIPLINE` 區塊）→ 位元組級還原該區塊回原位置；**沒有**（當初本來就沒有完整版區塊）→ 單純移除精簡版區塊。sentinel（與還原出來的完整版區塊）以外的既有內容原封不動；若整份 `CLAUDE.md` 是安裝時才新建的（挖完變空），連檔案本身也會一併移除，回到「原本沒有這份檔案」的狀態。
 
 **卸載不會碰什麼**：
 
-- 不碰任何專案目錄／repo（**唯一例外**：上面第 4 點那塊 `CLAUDE.md` 裡的 `LUMOS-SLIM` sentinel 區塊——這是它對稱移除 `install.sh` 附加內容的地方，除此之外不動專案任何其他檔案）。
+- 不碰任何專案目錄／repo（**唯一例外**：上面第 4 點那塊 `CLAUDE.md` 裡的 `LUMOS-SLIM` sentinel 區塊，及它取代掉的完整版區塊（若有，已還原）——除此之外不動專案任何其他檔案）。
 - 不碰 `~/.claude/settings.json`。
 - 不碰 `~/.claude/hooks/`。
 - 不碰除了 `lumos-project-notes` 以外的任何其他 skill。
@@ -126,7 +134,7 @@ KEY:★DEBT★ <已知偶然行為,可改不算 breaking>
 
 `doctor`／`lint` 有幾個檢查項是從完整版原封繼承的，訊息裡會叫你跑本精簡版沒交付的指令修復——已知至少有 `lumos init`、`lumos update`、`lumos self-audit <node>`、`lumos signoff <node>`（最後一支出現在 `lint` 對 regen 節點的證據檢查訊息裡）——**這份列舉不保證窮盡**，跑了只會得到「未知指令」錯誤才是判準。看到本精簡版沒有的指令名就知道不必照做，該檢查項在本版沒有機械修復路徑。
 
-最常見的觸發點是 **Check D（`CLAUDE.md` 紀律區塊比對）**：如果你的專案 `CLAUDE.md` 有 `<!-- LUMOS:GRAPH-DISCIPLINE:START -->` 那個**完整版**的 sentinel 區塊但損壞或與範本不同步，`doctor`／`doctor --ci` 會報這項問題並建議跑 `lumos init`/`lumos update` 修復。**這是刻意留下的**——本包的安裝器只會附加它自己專屬、名字不同的 `<!-- LUMOS-SLIM:START/END -->` 區塊（見〈會不會動我專案的 CLAUDE.md〉），完全不觸碰 `LUMOS:GRAPH-DISCIPLINE` 那塊，所以 Check D 相關的檢查在本版**沒有對應的修復指令**。這項提醒本身仍有用（代表你的（完整版）紀律區塊確實跟範本不一致），只是解法不是本包能提供的——要嘛忽略它、要嘛自己手動比對範本改。
+相關的是 **Check D（`CLAUDE.md` 紀律區塊比對）**：這項檢查在**找不到任何 sentinel 區塊時會自動略過**（印「尚未注入」，不算 issue）。本包安裝器若在你的專案裡發現完整版 `<!-- LUMOS:GRAPH-DISCIPLINE:START -->` 那個 sentinel 區塊，會整段取代成本包自己的 `<!-- LUMOS-SLIM:START/END -->` 區塊（見〈會不會動我專案的 CLAUDE.md〉），取代後 `LUMOS:GRAPH-DISCIPLINE` 這個 sentinel 就不存在了，Check D 因此自動略過，不會再報「跟範本不同步」——但如果你手動把完整版區塊裝回去（或還有其他人跑更新流程把它裝回來），Check D 又會恢復檢查，屆時建議的修復指令（`lumos init`/`lumos update`）本版一樣沒有，解法只能是忽略或自己手動比對範本改。
 
 ## 範圍聲明
 

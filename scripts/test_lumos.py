@@ -12352,13 +12352,12 @@ def t_slim_gen_keeps_comments():
 
 
 def t_slim_install_no_project_touch():
-    """★反事實(2026-07-31 換形狀,非放鬆)★:安裝器裁定變更後**會**動專案層的
-    CLAUDE.md(append-only 附加圖譜標籤教學,見 install.sh 檔頭 2026-07-31 裁定
-    變更說明)——原本斷言「worktree porcelain 為空」已不成立(CLAUDE.md 必然
-    變動),故換一組更精確的斷言:①sentinel 外的內容 byte-equal ②`.git/config`
-    前後相同(這條沒變,裁定沒開放碰 git 設定)③除 CLAUDE.md 外,worktree 內
-    不新增/修改任何檔案(git status --porcelain 只認 `M CLAUDE.md`/`?? CLAUDE.md`
-    這一條紀錄,其餘 path 出現即紅)。且不得無備份覆寫既有機器層資產。"""
+    """★反事實(2026-07-31 [S3] 第三次裁定,換形狀非放鬆)★:安裝器**會**動專案層
+    的 CLAUDE.md——當專案沒有完整版 `LUMOS:GRAPH-DISCIPLINE` 區塊時,精簡版區塊
+    插在檔首「# 標題」之後(不是檔尾),既有內容原封不動地被保留、只是位置往後
+    挪。斷言:①既有內容仍完整存在(順序不變,只是被插入點隔開)②`.git/config`
+    前後相同(裁定沒開放碰 git 設定)③除 CLAUDE.md 外,worktree 內不新增/修改
+    任何檔案。且不得無備份覆寫既有機器層資產。"""
     import tempfile as _tf, os as _os, shutil as _sh
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-sliminst-"))
@@ -12372,14 +12371,18 @@ def t_slim_install_no_project_touch():
     (pkg / "scripts" / "lumos").chmod(0o755)
     (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
                                                                      encoding="utf-8")
-    _sh.copy2(_P(GRAPHCTL).parent.parent / "slim" / "install.sh", pkg / "install.sh")
+    repo = _P(GRAPHCTL).parent.parent
+    _sh.copy2(repo / "slim" / "install.sh", pkg / "install.sh")
     (pkg / "install.sh").chmod(0o755)
+    _sh.copy2(repo / "slim" / "claude-block.md", pkg / "claude-block.md")
 
-    # 造一個假專案 repo —— CLAUDE.md 帶既有內容(模擬 Landmark 那類已有紀律段的專案)
+    # 造一個假專案 repo —— CLAUDE.md 帶既有內容、無完整版紀律區塊(模擬一般專案)
     proj = root / "proj"
     proj.mkdir()
     subprocess.run(["git", "init", "-q", str(proj)], check=True)
-    claude_md_original = "# 專案紀律\n\n這是既有內容,一個位元組都不該被動。\n引用 lumos-project-notes 9 次(模擬 Landmark)。\n"
+    heading = "# 專案紀律\n"
+    rest = "\n這是既有內容,一個位元組都不該被動。\n引用 lumos-project-notes 9 次(模擬 Landmark)。\n"
+    claude_md_original = heading + rest
     (proj / "CLAUDE.md").write_text(claude_md_original, encoding="utf-8")
     (proj / "scripts").mkdir()
     (proj / "scripts" / "own.py").write_text("print(1)\n", encoding="utf-8")
@@ -12404,13 +12407,19 @@ def t_slim_install_no_project_touch():
           (proj / ".git" / "config").read_text(encoding="utf-8") == cfg_before, "")
 
     claude_md_after = (proj / "CLAUDE.md").read_text(encoding="utf-8")
-    check("★sentinel 外的既有內容 byte-equal★ 原內容原封不動地留在檔案開頭",
-          claude_md_after.startswith(claude_md_original), claude_md_after[:200])
+    check("★插入點=檔首標題之後★ 精簡版區塊緊接在第一行標題後",
+          claude_md_after.startswith(heading + "<!-- LUMOS-SLIM:START -->"),
+          claude_md_after[:200])
+    check("★sentinel 外內容 byte-equal★ 標題之後的原內容原封不動接在區塊之後",
+          claude_md_after.endswith(rest), claude_md_after[-200:])
+    check("★純插入,不動既有 byte★ 挖掉中間插入的區塊後可還原成原檔",
+          claude_md_after[:len(heading)] + claude_md_after[-len(rest):] == claude_md_original,
+          "")
     check("★附加而非覆蓋★ sentinel 區塊確實被加上",
           "<!-- LUMOS-SLIM:START -->" in claude_md_after
           and "<!-- LUMOS-SLIM:END -->" in claude_md_after, "")
-    check("★sentinel 外 byte-equal(嚴格版)★ 扣掉附加區塊,其餘 byte 與原內容相同",
-          claude_md_after[:len(claude_md_original)] == claude_md_original, "")
+    check("沒有完整版區塊時不產生 FULL-BACKUP",
+          "<!-- LUMOS-SLIM:FULL-BACKUP:NONE -->" in claude_md_after, claude_md_after)
 
     check("全域指令已裝", (fake_home / ".local" / "bin" / "lumos").exists(), "")
     check("skill 已實體複製(非 symlink)",
@@ -12448,6 +12457,7 @@ def t_slim_install_claude_md_idempotent():
                                                                      encoding="utf-8")
     _sh.copy2(_P(GRAPHCTL).parent.parent / "slim" / "install.sh", pkg / "install.sh")
     (pkg / "install.sh").chmod(0o755)
+    _sh.copy2(_P(GRAPHCTL).parent.parent / "slim" / "claude-block.md", pkg / "claude-block.md")
 
     proj = root / "proj"
     proj.mkdir()
@@ -12498,6 +12508,7 @@ def t_slim_uninstall_removes_claude_md_block():
     (pkg / "install.sh").chmod(0o755)
     _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
     (pkg / "uninstall.sh").chmod(0o755)
+    _sh.copy2(repo / "slim" / "claude-block.md", pkg / "claude-block.md")
 
     # 情境一:CLAUDE.md 已有既有內容
     proj_a = root / "proj_a"
@@ -12541,6 +12552,194 @@ def t_slim_uninstall_removes_claude_md_block():
     check("★可移除(邊界)★ 原本不存在的 CLAUDE.md,卸載後連檔案本身一併消失",
           not (proj_b / "CLAUDE.md").exists(), "")
 
+    # 情境三([S3] 第三次裁定核心):CLAUDE.md 已有完整版 LUMOS:GRAPH-DISCIPLINE
+    # 區塊 —— install 應把它整段換成精簡版區塊(原位置),uninstall 應能位元組
+    # 級把完整版區塊原文還原回去,最終與安裝前完全 byte-equal(含完整版內容
+    # 一字不差)。
+    proj_c = root / "proj_c"
+    proj_c.mkdir()
+    original_c = (
+        "# 專案標題\n\n"
+        "<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊 -->\n"
+        "## 完整版紀律\n\n這裡引用 design-loop/code-loop 一堆本包沒交付的指令。\n"
+        "<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n\n"
+        "## 專案自訂章節\n\n這段在完整版區塊之後,卸載後要一字不差還原。\n"
+    )
+    (proj_c / "CLAUDE.md").write_text(original_c, encoding="utf-8")
+    fake_home_c = root / "home_c"
+    (fake_home_c / ".local" / "bin").mkdir(parents=True)
+    env_c = dict(_os.environ, HOME=str(fake_home_c))
+
+    ric = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj_c),
+                         capture_output=True, text=True, env=env_c)
+    check("情境三前置:install.sh rc0", ric.returncode == 0, ric.stdout + ric.stderr)
+    after_install_c = (proj_c / "CLAUDE.md").read_text(encoding="utf-8")
+    check("情境三:完整版區塊已消失", "LUMOS:GRAPH-DISCIPLINE" not in after_install_c,
+          after_install_c)
+
+    ruc = subprocess.run(["bash", str(pkg / "uninstall.sh"), "--force"], cwd=str(proj_c),
+                         capture_output=True, text=True, env=env_c)
+    check("情境三:uninstall.sh rc0", ruc.returncode == 0, ruc.stdout + ruc.stderr)
+    check("★位元組級還原★ 卸載後 CLAUDE.md 與安裝前完全 byte-equal(含完整版原文)",
+          (proj_c / "CLAUDE.md").read_text(encoding="utf-8") == original_c,
+          (proj_c / "CLAUDE.md").read_text(encoding="utf-8"))
+
+
+def t_slim_install_replaces_full_discipline_block_in_place():
+    """★[S3] 第三次裁定核心,正向細節★:完整版 `LUMOS:GRAPH-DISCIPLINE` 區塊被
+    整段換成精簡版區塊時,①換的位置是原地(不是搬到檔尾)②區塊前後的既有內容
+    byte-equal 保留③備份標記(FULL-BACKUP:BASE64)base64 解碼後與完整版原文
+    (含 START/END sentinel 本身)逐位元組相同——這是 uninstall 能位元組級還原
+    的前提,若編碼時漏字/多字,還原一定跟著錯,故單獨對備份內容本身斷言,不能
+    只靠「跑完 uninstall 剛好對上」這種間接驗法。"""
+    import base64 as _b64, tempfile as _tf, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-full-"))
+    repo = _P(GRAPHCTL).parent.parent
+
+    pkg = root / "pkg"
+    (pkg / "scripts").mkdir(parents=True)
+    (pkg / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (pkg / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nprint('slim')\n",
+                                           encoding="utf-8")
+    (pkg / "scripts" / "lumos").chmod(0o755)
+    (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
+                                                                     encoding="utf-8")
+    _sh.copy2(repo / "slim" / "install.sh", pkg / "install.sh")
+    (pkg / "install.sh").chmod(0o755)
+    _sh.copy2(repo / "slim" / "claude-block.md", pkg / "claude-block.md")
+
+    proj = root / "proj"
+    proj.mkdir()
+    prefix = "# 專案標題\n\n這段在完整版區塊之前,不該被動。\n\n"
+    full_block = (
+        "<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊 -->\n"
+        "## 完整版紀律\n\n這裡引用 design-loop/code-loop 一堆本包沒交付的指令。\n"
+        "<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n"
+    )
+    suffix = "\n## 專案自訂章節\n\n這段在完整版區塊之後,不該被動。\n"
+    original = prefix + full_block + suffix
+    (proj / "CLAUDE.md").write_text(original, encoding="utf-8")
+
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                       capture_output=True, text=True, env=env)
+    check("install.sh rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    after = (proj / "CLAUDE.md").read_text(encoding="utf-8")
+    check("★完整版區塊整段消失★", "LUMOS:GRAPH-DISCIPLINE" not in after, after)
+    check("★原地取代,非搬到檔尾★ 區塊前的內容緊接精簡版區塊開頭",
+          after.startswith(prefix + "<!-- LUMOS-SLIM:START -->"), after[:len(prefix) + 60])
+    check("★區塊後的既有內容 byte-equal★", after.endswith(suffix), after[-100:])
+    check("只有一塊精簡版 sentinel", after.count("<!-- LUMOS-SLIM:START -->") == 1, after)
+
+    import re as _re
+    m = _re.search(r"<!-- LUMOS-SLIM:FULL-BACKUP:BASE64:([A-Za-z0-9+/=]*) -->", after)
+    check("★備份標記存在且是 BASE64(非 NONE)★", m is not None, after)
+    if m:
+        decoded = _b64.b64decode(m.group(1)).decode("utf-8")
+        check("★備份逐位元組等於完整版原文(含 sentinel 本身)★", decoded == full_block,
+              f"decoded={decoded!r}\nexpected={full_block!r}")
+
+
+def t_slim_install_backup_survives_idempotent_reinstall():
+    """★冪等 × 備份不可漂移★:已用完整版區塊裝過一次(備份已編碼進精簡版區塊)
+    後,重跑安裝器(--force,繞過 bin/skill 已存在的碰撞檢查)不應該:①因為這次
+    掃描不到「活著的」完整版區塊(它已被第一次跑掉換走了)就誤判成「原本沒有」
+    把備份洗成 NONE ②把備份重新 base64 一次疊出雙層編碼。斷言重跑後 CLAUDE.md
+    內容與第一次跑完 byte-equal。"""
+    import tempfile as _tf, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-full-idem-"))
+    repo = _P(GRAPHCTL).parent.parent
+
+    pkg = root / "pkg"
+    (pkg / "scripts").mkdir(parents=True)
+    (pkg / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (pkg / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nprint('slim')\n",
+                                           encoding="utf-8")
+    (pkg / "scripts" / "lumos").chmod(0o755)
+    (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
+                                                                     encoding="utf-8")
+    _sh.copy2(repo / "slim" / "install.sh", pkg / "install.sh")
+    (pkg / "install.sh").chmod(0o755)
+    _sh.copy2(repo / "slim" / "claude-block.md", pkg / "claude-block.md")
+
+    proj = root / "proj"
+    proj.mkdir()
+    original = (
+        "<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 -->\n完整版內容\n"
+        "<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n"
+    )
+    (proj / "CLAUDE.md").write_text(original, encoding="utf-8")
+
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    r1 = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("第一次安裝(有完整版區塊)rc0", r1.returncode == 0, r1.stdout + r1.stderr)
+    after_1 = (proj / "CLAUDE.md").read_text(encoding="utf-8")
+    check("第一次跑完備份是 BASE64(前置條件)",
+          "FULL-BACKUP:BASE64:" in after_1, after_1)
+
+    r2 = subprocess.run(["bash", str(pkg / "install.sh"), "--force"], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("第二次安裝(--force)rc0", r2.returncode == 0, r2.stdout + r2.stderr)
+    after_2 = (proj / "CLAUDE.md").read_text(encoding="utf-8")
+
+    check("★冪等★ 重跑後仍只有一塊 sentinel", after_2.count("<!-- LUMOS-SLIM:START -->") == 1,
+          after_2)
+    check("★備份沒被洗掉/沒被二次包裹★ 重跑後內容與第一次 byte-equal",
+          after_2 == after_1, "第一次:\n" + after_1 + "\n第二次:\n" + after_2)
+
+    # 收尾:確認這份備份仍然能被 uninstall 正確用來還原
+    _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
+    (pkg / "uninstall.sh").chmod(0o755)
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh"), "--force"], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("重跑兩次後仍可正確卸載還原 rc0", ru.returncode == 0, ru.stdout + ru.stderr)
+    check("★重跑後的備份依然位元組級可還原★",
+          (proj / "CLAUDE.md").read_text(encoding="utf-8") == original,
+          (proj / "CLAUDE.md").read_text(encoding="utf-8"))
+
+
+def t_slim_claude_block_curation():
+    """★策展正確性(spec [S3] 第三次裁定)★:`slim/claude-block.md` 是策展後的
+    「取代完整版紀律區塊」範本——斷言①不含依賴已移除指令才有意義的字串(這些
+    技能/指令本包沒交付,留著會讓接手者的 Claude 去撲空)②含仍然有效、已從
+    完整版策展吸收進來的內容(合約鏈/summary 符號/regen 重生標記/frontmatter
+    欄位)。"""
+    from pathlib import Path as _P
+    p = _P(GRAPHCTL).parent.parent / "slim" / "claude-block.md"
+    txt = p.read_text(encoding="utf-8")
+
+    for bad in ("design-loop", "code-loop", "core-knowledge", "pitfalls",
+                "spec-trace", "signoff", "lumos init", "lumos update"):
+        check(f"★策展:不含已移除指令/skill 字串★ 「{bad}」", bad not in txt, "")
+
+    for good in ("★INVARIANT★", "★DEBT★", "[test:", "FLOW:", "KEY:", "valid_under",
+                 "佚失:"):
+        check(f"★策展:含仍有效的內容★ 「{good}」", good in txt, "")
+
+    # ★交付文字掃描器也要掃這份範本★(它會被原封不動裝進使用者的 CLAUDE.md)
+    scanner = str(_P(GRAPHCTL).parent / "slim-scan.py")
+    r = subprocess.run([sys.executable, scanner, str(p), "--json"],
+                       capture_output=True, text=True)
+    import json as _j5
+    cands = _j5.loads(r.stdout)["candidates"] if r.stdout.strip() else []
+    check("claude-block.md 無懸空引用(移除指令/skill 名)", not cands, str(cands))
+
+    # sentinel 完整性 + FULL-BACKUP 佔位符存在(install.sh 靠字面替換這個佔位符)
+    check("含開始 sentinel", "<!-- LUMOS-SLIM:START -->" in txt, "")
+    check("含結束 sentinel", txt.rstrip().endswith("<!-- LUMOS-SLIM:END -->"), txt[-80:])
+    check("含 FULL-BACKUP:NONE 佔位符(install.sh 靠字面替換)",
+          "<!-- LUMOS-SLIM:FULL-BACKUP:NONE -->" in txt, "")
+
 
 def _slim_make_pkg_at(pkg_dir):
     """建一個「長得像本包」的假交付包(scripts/lumos + install.sh + skill)在
@@ -12560,6 +12759,9 @@ def _slim_make_pkg_at(pkg_dir):
     repo = _P(GRAPHCTL).parent.parent
     _sh.copy2(repo / "slim" / "install.sh", pkg_dir / "install.sh")
     (pkg_dir / "install.sh").chmod(0o755)
+    # ★install.sh 現在讀外部範本★:CLAUDE.md 區塊不再是腳本內的 heredoc,
+    # 而是隨包帶的 claude-block.md——沒帶這份檔案 install.sh 會直接 ERROR rc2。
+    _sh.copy2(repo / "slim" / "claude-block.md", pkg_dir / "claude-block.md")
     return pkg_dir
 
 
@@ -12577,7 +12779,8 @@ def t_slim_uninstall_backs_up_and_preserves_custom_files():
     (fake_home / ".local" / "bin").mkdir(parents=True)
     env = dict(_os.environ, HOME=str(fake_home))
 
-    r = subprocess.run(["bash", str(pkg / "install.sh")], capture_output=True, text=True, env=env)
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(root),
+                       capture_output=True, text=True, env=env)
     check("uninstall 測試前置:install.sh rc0", r.returncode == 0, r.stdout + r.stderr)
 
     # 使用者在 skill 目錄裡塞了自己的檔
@@ -12625,7 +12828,8 @@ def t_slim_uninstall_refuses_foreign_bin():
     (fake_home / ".local" / "bin").mkdir(parents=True)
     env = dict(_os.environ, HOME=str(fake_home))
 
-    r = subprocess.run(["bash", str(pkg / "install.sh")], capture_output=True, text=True, env=env)
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(root),
+                       capture_output=True, text=True, env=env)
     check("uninstall 拒絕測試前置:install.sh rc0", r.returncode == 0, r.stdout + r.stderr)
 
     bin_path = fake_home / ".local" / "bin" / "lumos"
@@ -12668,7 +12872,8 @@ def t_slim_uninstall_idempotent_second_run():
     (fake_home / ".local" / "bin").mkdir(parents=True)
     env = dict(_os.environ, HOME=str(fake_home))
 
-    r = subprocess.run(["bash", str(pkg / "install.sh")], capture_output=True, text=True, env=env)
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(root),
+                       capture_output=True, text=True, env=env)
     check("冪等回歸測試前置:install.sh rc0", r.returncode == 0, r.stdout + r.stderr)
 
     custom = fake_home / ".claude" / "skills" / "lumos-project-notes" / "my-own-notes.txt"
@@ -12726,14 +12931,14 @@ def t_slim_get_idempotent():
     env = dict(_os.environ, HOME=str(fake_home), LUMOS_SLIM_REPO_URL=str(src_repo))
     get_sh = str(repo / "slim" / "get.sh")
 
-    r1 = subprocess.run(["bash", get_sh], capture_output=True, text=True, env=env)
+    r1 = subprocess.run(["bash", get_sh], cwd=str(root), capture_output=True, text=True, env=env)
     check("get.sh 首次執行 rc0", r1.returncode == 0, r1.stdout + r1.stderr)
     check("~/.lumos-slim 已建立(git clone)",
           (fake_home / ".lumos-slim" / ".git").is_dir(), "")
     check("全域指令已裝(經由 get.sh → install.sh)",
           (fake_home / ".local" / "bin" / "lumos").exists(), "")
 
-    r2 = subprocess.run(["bash", get_sh], capture_output=True, text=True, env=env)
+    r2 = subprocess.run(["bash", get_sh], cwd=str(root), capture_output=True, text=True, env=env)
     check("★冪等★ 第二次執行不出現 git clone 式爆炸訊息",
           "already exists and is not an empty directory" not in (r2.stdout + r2.stderr),
           r2.stdout + r2.stderr)
@@ -12743,7 +12948,8 @@ def t_slim_get_idempotent():
           (fake_home / ".lumos-slim" / ".git").is_dir(), "")
 
     # 帶 --force 轉發給 install.sh,驗證冪等更新 + 強制重裝可以完整跑到底
-    r3 = subprocess.run(["bash", get_sh, "--force"], capture_output=True, text=True, env=env)
+    r3 = subprocess.run(["bash", get_sh, "--force"], cwd=str(root),
+                        capture_output=True, text=True, env=env)
     check("get.sh --force 轉發給 install.sh,第二次仍可完整跑完 rc0",
           r3.returncode == 0, r3.stdout + r3.stderr)
 
@@ -13064,7 +13270,7 @@ def t_slim_gen_dist_ships_entrypoints():
                        capture_output=True, text=True)
     check("slim-gen rc0", r.returncode == 0, r.stdout + r.stderr)
 
-    expected = ["get.sh", "uninstall.sh", "install.sh", "README.md",
+    expected = ["get.sh", "uninstall.sh", "install.sh", "README.md", "claude-block.md",
                 "scripts/lumos", "skills/lumos-project-notes/SKILL.md"]
     for rel in expected:
         p = dist / rel
