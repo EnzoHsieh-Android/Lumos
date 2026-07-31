@@ -13048,6 +13048,35 @@ def t_slim_gate_doctor_nameerror_counterfactual():
           not gate_ok, f"stderr含Traceback={'Traceback' in d.stderr}, stdout尾={d.stdout[-200:]!r}")
 
 
+def t_slim_gen_dist_ships_entrypoints():
+    """★交付包完整性★:slim-gen 組交付包時只複製了 install.sh/README.md/skills,
+    漏了 get.sh(curl|bash 入口)與 uninstall.sh——接手者拿到的包裡沒有一行安裝
+    入口、也沒有卸載腳本,等於那些功能不存在。斷言生成後 dist/ 內含這兩支,且
+    連同 install.sh 三支 .sh 都保留可執行位元(組包用 shutil.copy2 保留 mode,
+    但仍要機械鎖住,防止改用別的複製方式時悄悄退化成 0o644)。"""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    root = _P(_tf.mkdtemp(prefix="gctl-slimdist-"))
+    dist = root / "dist"
+    r = subprocess.run([sys.executable, str(repo / "scripts" / "slim-gen.py"),
+                        "--outfile", str(dist / "scripts" / "lumos")],
+                       capture_output=True, text=True)
+    check("slim-gen rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    expected = ["get.sh", "uninstall.sh", "install.sh", "README.md",
+                "scripts/lumos", "skills/lumos-project-notes/SKILL.md"]
+    for rel in expected:
+        p = dist / rel
+        check(f"dist/{rel} 存在", p.is_file(), f"{p} 不存在")
+
+    for rel in ("get.sh", "uninstall.sh", "install.sh"):
+        p = dist / rel
+        if p.is_file():
+            mode = p.stat().st_mode & 0o111
+            check(f"dist/{rel} 有可執行位元", mode != 0, oct(p.stat().st_mode))
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

@@ -356,13 +356,16 @@ def main():
     pkg_src = here.parent / "slim"
     pkg_dst = out.parent.parent
     if pkg_src.is_dir():
-        for item in ("install.sh", "README.md", "skills"):
+        for item in ("install.sh", "get.sh", "uninstall.sh", "README.md", "skills"):
             s = pkg_src / item
             if s.is_dir():
                 shutil.copytree(s, pkg_dst / item, dirs_exist_ok=True)
             elif s.is_file():
                 shutil.copy2(s, pkg_dst / item)
-        (pkg_dst / "install.sh").chmod(0o755)
+        for exe in ("install.sh", "get.sh", "uninstall.sh"):
+            p = pkg_dst / exe
+            if p.is_file():
+                p.chmod(0o755)
         print(f"✓ 交付包: {pkg_dst}")
     return 0
 
