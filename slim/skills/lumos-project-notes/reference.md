@@ -15,7 +15,7 @@
 
 repo 內的 `scripts/lumos`（python3 標準庫，零 Obsidian 依賴）是**日常操作圖譜的主要工具**。讀取、寫入、巡檢、歸檔一律先用 lumos；Obsidian CLI 只保留給 lumos 沒有的少數場景（見下節）。
 
-> **全域安裝**：本精簡版隨附 `install.sh`（不是 `lumos install`——那支子命令未交付），跑一次把 `lumos` 裝上 `~/.local/bin`，之後任何專案子目錄直接打 `lumos <cmd>`（find_vault 從 cwd 往上找 docs/*-knowledge）。下表指令前綴 `python3 scripts/lumos` 與全域 `lumos` 等價。
+> **全域安裝**：本精簡版隨附 `install.sh`（不是 `lumos install`——那支子命令未交付），跑一次把 `lumos` 裝上 `~/.local/bin`，之後任何專案子目錄直接打 `lumos <cmd>`（find_vault 從 cwd 往上找 docs/*-knowledge）。下文一律用全域 `lumos` 前綴。★不要用 `lumos`★——若你所在的專案本身 vendored 了完整版 `scripts/lumos`（checked in、非本精簡版安裝的），那個前綴會呼叫到**完整版 53 支指令**，不是本精簡版的 24 支子集；`init`/`update` 等本精簡版未交付的指令在那條路徑上會**真的執行**，可能動到專案層 `CLAUDE.md`。全域安裝是本包唯一保證等價的路徑。
 
 **禁止用 Grep/Glob/Read/Edit/Write 直接操作 `docs/{vault-name}/` 下的 .md 檔案。**
 lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合約測試綁定），是單純讀寫檔案做不到的；直接編輯也繞過寫後自驗與鐵則防護。
@@ -24,19 +24,19 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 
 | 用途 | lumos 指令 |
 |---|---|
-| **單檔快檢（寫完一個節點立刻自驗標籤/格式，比 doctor 快）** | `python3 scripts/lumos lint <筆記名>` — type/summary/★ 格式/裸合約/未審/ghost trap;node-local 不掃 repo |
-| 健康巡檢（orphans / unresolved / verified_by 同步 / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / ★INVARIANT★→測試綁定 + 獨立合法性審計；Check P 失效檔案認領(節點正文 inline-code 路徑指向已不存在的 repo 檔 → 軟提醒「圖譜指向死碼」)） | `python3 scripts/lumos doctor [--ci]` |
-| 讀單篇 decisions | `python3 scripts/lumos decisions <筆記名>` |
-| 全 vault 掃被推翻決策 | `python3 scripts/lumos decisions --superseded` |
-| 環境變更掃 valid_under / revalidate_when 命中 | `python3 scripts/lumos stale --match "<條件字串>"` |
-| **改某流程前查「該重驗哪幾篇」** | `python3 scripts/lumos stale --candidate --match "<關鍵字>"` — 聚焦活躍 Verification 的 `revalidate_when`(未來重驗條件、排 Archive);比純 `--match` 窄(後者含 valid_under 快照 + Archive) |
-| status=stale 清單 | `python3 scripts/lumos stale` |
-| 最近 N 天修改 | `python3 scripts/lumos recent --days 7` |
-| 資料夾統計 | `python3 scripts/lumos stats` |
-| 反查連入/連出 | `python3 scripts/lumos backlinks <筆記名>`／`links` |
-| 進場掃脈絡（節點 + 鄰居 closet 索引；頭部突顯 ⚠ 合約） | `python3 scripts/lumos context <筆記名> [--brief]` |
-| **合約登記簿（動模組前查硬合約）** | `python3 scripts/lumos contracts [筆記名]` — 列 ★INVARIANT★(改=breaking)/★DEBT★(可改);只認 KEY 行前綴標準格式 |
-| **全文搜尋** | `python3 scripts/lumos search <詞> [--path Systems] [--regex] [--files-only] [--top N] [--json]` — frontmatter+body,大小寫不敏感 substring;**預設 BM25F 相關性排序**(2026-07-11 轉正,goldset 評測修正尺 nDCG@5 +58.1%;只重排既有候選不擴召回,預設全量+逐檔命中明細,--top N 才截);`--legacy` 走舊字母序全量,`--regex` 自動走舊路;**A1 型別先驗:MOC 索引頁 ×0.4 降權**(仍在結果內只是後移;要找索引頁用 `--path MOC` 直達) |
+| **單檔快檢（寫完一個節點立刻自驗標籤/格式，比 doctor 快）** | `lumos lint <筆記名>` — type/summary/★ 格式/裸合約/未審/ghost trap;node-local 不掃 repo |
+| 健康巡檢（orphans / unresolved / verified_by 同步 / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / ★INVARIANT★→測試綁定 + 獨立合法性審計；Check P 失效檔案認領(節點正文 inline-code 路徑指向已不存在的 repo 檔 → 軟提醒「圖譜指向死碼」)） | `lumos doctor [--ci]` |
+| 讀單篇 decisions | `lumos decisions <筆記名>` |
+| 全 vault 掃被推翻決策 | `lumos decisions --superseded` |
+| 環境變更掃 valid_under / revalidate_when 命中 | `lumos stale --match "<條件字串>"` |
+| **改某流程前查「該重驗哪幾篇」** | `lumos stale --candidate --match "<關鍵字>"` — 聚焦活躍 Verification 的 `revalidate_when`(未來重驗條件、排 Archive);比純 `--match` 窄(後者含 valid_under 快照 + Archive) |
+| status=stale 清單 | `lumos stale` |
+| 最近 N 天修改 | `lumos recent --days 7` |
+| 資料夾統計 | `lumos stats` |
+| 反查連入/連出 | `lumos backlinks <筆記名>`／`links` |
+| 進場掃脈絡（節點 + 鄰居 closet 索引；頭部突顯 ⚠ 合約） | `lumos context <筆記名> [--brief]` |
+| **合約登記簿（動模組前查硬合約）** | `lumos contracts [筆記名]` — 列 ★INVARIANT★(改=breaking)/★DEBT★(可改);只認 KEY 行前綴標準格式 |
+| **全文搜尋** | `lumos search <詞> [--path Systems] [--regex] [--files-only] [--top N] [--json]` — frontmatter+body,大小寫不敏感 substring;**預設 BM25F 相關性排序**(2026-07-11 轉正,goldset 評測修正尺 nDCG@5 +58.1%;只重排既有候選不擴召回,預設全量+逐檔命中明細,--top N 才截);`--legacy` 走舊字母序全量,`--regex` 自動走舊路;**A1 型別先驗:MOC 索引頁 ×0.4 降權**(仍在結果內只是後移;要找索引頁用 `--path MOC` 直達) |
 | 鄰域樹狀展開／畫圖 | `map <筆記名> --depth 2`／`export --folders Systems Projects` |
 
 **寫入**：
@@ -56,6 +56,8 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 - **白名單外的 frontmatter 寫入**（`summary` block 改某行、`alternatives_considered` 子清單編輯）→ lumos 目前無對應,走下節 obsidian `processFrontMatter` eval 或手動 Edit
 
 **安裝 / 生命週期**：本精簡版的機器層安裝／解除不走 `lumos` 子命令（`install`/`uninstall`/`update`/`bootstrap`/`init`/`deinit`/`teardown` 皆未交付）。改用交付包隨附的 `install.sh`——用法見專案 README。
+
+> ⚠ **`doctor` 的某些檢查會建議跑 `lumos init`／`lumos update`／`lumos self-audit`**——這是從完整版原封繼承的訊息文字，**這三支未交付，看到請忽略**。最常見的是 `CLAUDE.md` 紀律區塊比對（Check D）：sentinel 損壞或與範本不同步時會建議跑 `init`/`update` 修復；`CLAUDE.md` 相關的檢查在本版**沒有修復路徑**，那是刻意的（本版不注入、不更新任何 `CLAUDE.md`，見專案 README〈怎麼裝〉）。
 
 > **子命令全覽（本精簡版 24 支頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats`）+ 巡檢/治理（`doctor` `lint` `sync-verified-by` `rel-cascade`）+ 寫入（`set` `append` `new` `archive` `decision-add` `decision-supersede` `decision-reindex`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）。
 
@@ -450,10 +452,10 @@ verified_by:
 
 ```bash
 # 加入新的 verified_by 條目 → lumos append(鐵則1 安全 YAML list 格式、自動去重)
-python3 scripts/lumos append Systems/OrderService verified_by "[[Verification/2026-05-04_點數圈存顯示]]"
+lumos append Systems/OrderService verified_by "[[Verification/2026-05-04_點數圈存顯示]]"
 
 # 讀取 → lumos context(節點 frontmatter 一覽)或直接看檔
-python3 scripts/lumos context Systems/OrderService --brief
+lumos context Systems/OrderService --brief
 ```
 
 > ⚠️ **絕不要用 obsidian `property:set` 塞逗號串接的多個 wikilink**（`value="[[A]], [[B]]" type="list"`）——實測存成**單一字串**而非 YAML list，圖譜長出亂碼 ghost 節點(2026-06-10 踩雷 14 篇)。`lumos append` 天生用安全 list 格式,沒有這個雷;真要走 obsidian 則用 `processFrontMatter` 陣列操作,別用 property:set。
@@ -461,7 +463,7 @@ python3 scripts/lumos context Systems/OrderService --brief
 **自動同步檢查** → `lumos doctor`（巡檢用,Check 3「verified_by 雙向同步」直接掃出漏寫的 Systems,不必再寫 eval）：
 
 ```bash
-python3 scripts/lumos doctor    # 含「所有 Verification 都已掛進對應 Systems 的 verified_by」檢查
+lumos doctor    # 含「所有 Verification 都已掛進對應 Systems 的 verified_by」檢查
 ```
 
 > 注意：歷史筆記的 `verified_by` 可能殘留字串型值（非 list）;lumos 讀取已內建正規化,obsidian eval fallback 才需自己 `Array.isArray(raw) ? raw.map(String) : ...`。
@@ -506,13 +508,13 @@ decisions 是巢狀物件,**用 lumos 讀**（格式化輸出 valid/superseded,�
 
 ```bash
 # 讀取單篇筆記的決策(格式化:✅/❌ + 日期 + content + superseded_by)
-python3 scripts/lumos decisions Systems/OrderService
+lumos decisions Systems/OrderService
 
 # 全 vault 掃所有被推翻的決策
-python3 scripts/lumos decisions --superseded
+lumos decisions --superseded
 
 # 看 summary / 整篇 frontmatter
-python3 scripts/lumos context Systems/OrderService --brief
+lumos context Systems/OrderService --brief
 ```
 
 > fallback(無 lumos 的舊專案):obsidian `eval` 讀 `getFileCache(f).frontmatter.decisions` 自己 map,或 `property:read name="summary"`。
@@ -550,34 +552,34 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 ### 開工前：掌握現況
 ```bash
 # 掃進行中 / 被阻擋的工作(搜 tag)
-python3 scripts/lumos search "status/doing"
-python3 scripts/lumos search "status/blocked"
+lumos search "status/doing"
+lumos search "status/blocked"
 
 # 看最近的交接 / 異動
-python3 scripts/lumos recent --days 7
+lumos recent --days 7
 
 # 快速了解某模組現況(節點+鄰居 closet 索引,頭部突顯 ⚠ 合約 — 比 read+outline 強)
-python3 scripts/lumos context Systems/Billing
+lumos context Systems/Billing
 ```
 
 ### 改完程式碼後：更新圖譜
 ```bash
 # 更新 updated 日期(frontmatter 純量 → lumos)
-python3 scripts/lumos set Systems/Billing updated 2026-03-27
+lumos set Systems/Billing updated 2026-03-27
 
 # 追加一條 verified_by(frontmatter list → lumos,自動 dedup)
-python3 scripts/lumos append Systems/Billing verified_by "[[Verification/2026-03-27_xxx]]"
+lumos append Systems/Billing verified_by "[[Verification/2026-03-27_xxx]]"
 ```
 > body 的進度段落、打勾待辦、串接狀態表格 → 用 **Edit** 精準改(這類 body 編輯不是 lumos T1 範圍;真要叫 GUI 給人看才用 obsidian)。
 
 ### 查關聯：更新一份筆記後檢查連帶影響
 ```bash
 # 誰引用了這份(反向連結) / 這份連出去的(正向連結)
-python3 scripts/lumos backlinks Issues/會員升等降級機制
-python3 scripts/lumos links Issues/會員升等降級機制
+lumos backlinks Issues/會員升等降級機制
+lumos links Issues/會員升等降級機制
 
 # 搜相關關鍵字,確認其他筆記是否也要更新
-python3 scripts/lumos search "贈獎"
+lumos search "贈獎"
 ```
 
 ### 追溯變更
@@ -591,11 +593,11 @@ git diff -- docs/myapp-knowledge/Systems/Billing.md
 ### 健康巡檢
 ```bash
 # 一次到位:orphans / 破連結 / verified_by 同步 / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / 合約測試綁定
-python3 scripts/lumos doctor
+lumos doctor
 
 # 資料夾統計 / 最近異動
-python3 scripts/lumos stats
-python3 scripts/lumos recent --days 7
+lumos stats
+lumos recent --days 7
 ```
 > lumos doctor 涵蓋了舊 obsidian `orphans`/`unresolved` 等;deadends 等 obsidian-only 巡檢才回頭用 obsidian(見上節)。
 
@@ -776,17 +778,17 @@ obsidian vault="{vault}" create path="Verification/{日期}_{功能名稱}" cont
 
 ```bash
 # status: stale 的驗證(需重跑)
-python3 scripts/lumos stale
+lumos stale
 
 # 環境變動後:掃 valid_under / revalidate_when 命中某條件的驗證(改了 .NET 8 → 比對哪些要重驗)
-python3 scripts/lumos stale --match ".NET 8"
+lumos stale --match ".NET 8"
 
 # Systems 改動後查 verified_by + 反向連結
-python3 scripts/lumos context Systems/{剛改的系統} --brief
-python3 scripts/lumos backlinks Systems/{剛改的系統}
+lumos context Systems/{剛改的系統} --brief
+lumos backlinks Systems/{剛改的系統}
 
 # verified_by 雙向同步漏寫 → doctor Check 3 一次掃全 vault
-python3 scripts/lumos doctor
+lumos doctor
 ```
 
 > `valid_until` 過期掃描 lumos 暫無對應(valid_until 用得少;多數用 valid_under 條件式),需要時走 obsidian eval fallback。

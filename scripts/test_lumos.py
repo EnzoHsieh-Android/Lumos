@@ -12045,6 +12045,36 @@ def t_slim_scan():
     check("slim-scan 乾淨檔 rc0", r2.returncode == 0, r2.stdout + r2.stderr)
 
 
+def t_slim_scan_python():
+    """★C1★ 交付的 CLI 產物自己的字串常數(印給使用者看的 warn/print 訊息)從未被
+    掃描過——slim-scan.py 原本只拿來掃 markdown。用 `--python` 明確旗標(產物檔名
+    `dist/scripts/lumos` 沒有 .py 副檔名,無法單靠副檔名自動判斷),ast 掃
+    `ast.Constant` 的 str,套用既有的形態比對。真世界審計實測產物字串常數共 11 處
+    指向已移除指令(init/update/self-audit/gov/anchor/canary/...);此處斷言至少
+    命中三類:init/update/self-audit(spec 明列的最小驗收)。"""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    root = _P(_tf.mkdtemp(prefix="gctl-slimscanpy-"))
+    dist_cli = root / "lumos"
+    r = subprocess.run([sys.executable, str(repo / "scripts" / "slim-gen.py"),
+                        "--outfile", str(dist_cli)],
+                       capture_output=True, text=True)
+    check("slim-scan --python fixture: 生成產物 rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    scanner = str(repo / "scripts" / "slim-scan.py")
+    rs = subprocess.run([sys.executable, scanner, "--python", str(dist_cli), "--json"],
+                        capture_output=True, text=True)
+    check("★C1★ slim-scan --python 對產物有命中回 rc1", rs.returncode == 1,
+          rs.stdout + rs.stderr)
+    import json as _j
+    d = _j.loads(rs.stdout)
+    tokens = {c["token"] for c in d["candidates"]}
+    for want in ("init", "update", "self-audit"):
+        check(f"★C1★ slim-scan --python 掃到產物字串常數指向已移除指令 {want}",
+              want in tokens, str(sorted(tokens)))
+
+
 def t_slim_scan_filename_fp():
     """★守衛真缺陷★:prose 形態假陽性——檔名(`./install.sh`/`scripts/install-hooks.sh`)
     被誤判成對已移除指令 `install` 的裸散文引用。原負向前瞻/後顧只排除反引號/字母/
@@ -12327,9 +12357,21 @@ def t_slim_readme_assertions():
     ):
         check(f"README 含「{name}」", key in txt, f"缺 {key!r}")
     # ★交付文字掃描器也要掃 README★
+    # ★C1 例外(2026-07-31 終審後已人工審查,故意保留)★:README 新增了「doctor 有些
+    # 建議指向本包沒給的指令」揭露段,故意寫出 `lumos init`/`lumos update`/
+    # `lumos self-audit` 告訴讀者「這三支不存在,看到請忽略」——這是自我指涉的誠實
+    # 揭露,不是意外的懸空引用(不會誤導讀者以為指令存在)。掃描器仍要跑、仍要對其餘
+    # 內容零容忍,只白名單這三個已審查過的候選。
     scanner = str(_P(GRAPHCTL).parent / "slim-scan.py")
-    r = subprocess.run([sys.executable, scanner, str(p)], capture_output=True, text=True)
-    check("README 無懸空引用(rc0)", r.returncode == 0, r.stdout)
+    r = subprocess.run([sys.executable, scanner, str(p), "--json"],
+                       capture_output=True, text=True)
+    import json as _j3
+    cands = _j3.loads(r.stdout)["candidates"] if r.stdout.strip() else []
+    reviewed_exception = {("init", "prefixed"), ("update", "prefixed"),
+                          ("self-audit", "prefixed")}
+    unexpected = [c for c in cands if (c["token"], c["form"]) not in reviewed_exception]
+    check("README 無非預期的懸空引用(排除 C1 已審查揭露段例外)",
+          not unexpected, str(unexpected))
 
 
 def t_slim_gate():
@@ -12382,23 +12424,131 @@ rel-cascade search set show stale stats sync-verified-by""".split())
     vault = mkvault()
     d = subprocess.run([sys.executable, str(cli), "--vault", str(vault), "doctor"],
                        capture_output=True, text=True)
-    check("★正向 doctor 實跑★(不只 --help)", d.returncode in (0, 1), d.stderr[:300])
+    # ★C3(2026-07-31 終審)★:純 rc in (0,1) 收不住「未捕捉例外」——Python 未捕例外
+    # 就是 exit 1,跟正常「發現 issue」的 rc=1 撞號;審查員注入
+    # `_totally_undefined_helper()` 進 run_doctor,rc=1 + 完整 traceback 照樣被這條
+    # 斷言收下。加兩道:①stderr 不得含 Traceback ②stdout 必須真的跑到收尾摘要行
+    # (「─────」分隔線後的「圖譜健康」或「發現 N 個 issue」)——這行只有 run_doctor
+    # 正常跑完全部檢查才會印,NameError 會在印到這裡前就整支炸掉,stdout 提早截斷。
+    check("★正向 doctor 實跑★(不只 --help)",
+          d.returncode in (0, 1) and "Traceback" not in d.stderr,
+          d.stderr[:300])
+    check("★正向 doctor 實跑★ stdout 真的跑到收尾摘要(未被例外提早截斷)",
+          ("圖譜健康" in d.stdout or "個 issue" in d.stdout) and "篇)" in d.stdout,
+          d.stdout[-300:] + "|STDERR|" + d.stderr[:300])
 
     # 第 3 道 等價:goldset search 30 條,完整版 vs 精簡版結果一致
+    # ★C2(2026-07-31 終審)★:原本跑在 mkvault() 的空 vault 上——四個空資料夾 + 一篇
+    # MOC,兩邊 search 都回空字串,這道閘等於在比 '' == ''、把 cmd_search 掏空也
+    # 10/10 PASS。改跑在本 repo 自己的 docs/lumos-toolchain-knowledge(唯讀 search,
+    # 不寫入;spec:243 要求「須先定死跑哪個 vault」——goldset 的 snapshot_commit
+    # 就是這份 vault 某個舊版本,用同一份 vault 最貼近原意)。先驗證完整版在這個
+    # vault 上 30 條全部非空,否則等於只是換了個空 vault、沒解掉真問題。
+    real_vault = repo / "docs" / "lumos-toolchain-knowledge"
     gs = _j.loads((repo / "governance" / "eval" / "retrieval-goldset.json")
                   .read_text(encoding="utf-8"))
+    all_qs = [q["query"] for q in gs["search"]]
+    nonempty = 0
+    for q in all_qs:
+        a0 = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(real_vault),
+                             "search", q, "--files-only"], capture_output=True, text=True)
+        if a0.stdout.strip():
+            nonempty += 1
+    check("★C2★ 完整版在真 vault 上 30 條 goldset 查詢皆非空(防退化成空 vault假守衛)",
+          nonempty == len(all_qs), f"{nonempty}/{len(all_qs)} 非空")
+
     qs = [q["query"] for q in gs["search"][:10]]      # 取前 10 條做冒煙,全量在 Step 4
     same = 0
     for q in qs:
-        a = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vault),
+        a = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(real_vault),
                             "search", q, "--files-only"], capture_output=True, text=True)
-        b = subprocess.run([sys.executable, str(cli), "--vault", str(vault),
+        b = subprocess.run([sys.executable, str(cli), "--vault", str(real_vault),
                             "search", q, "--files-only"], capture_output=True, text=True)
         if a.stdout == b.stdout:
             same += 1
-    check("★第3道 等價★ search 前10條兩版一致", same == len(qs), f"{same}/{len(qs)}")
+    check("★第3道 等價★ search 前10條兩版一致(真 vault)", same == len(qs), f"{same}/{len(qs)}")
 
     # 第 4 道 真機預演在 Step 4 手動跑(需乾淨 HOME)
+
+
+def t_slim_gate_search_equivalence_counterfactual():
+    """★C2 反事實(spec:268)★:第 3 道等價驗證的價值全在「壞掉時會不會擋」。
+    故意在精簡版產物副本裡竄改排序(reverse 掉 `_rank_score_candidates` 的回傳
+    順序,模擬「行級手術動到排序參數」這種真會發生的壞法),重跑與 t_slim_gate
+    完全同款的比對邏輯,斷言 same != 10——這道閘必須翻紅,不能永遠 PASS。"""
+    import tempfile as _tf, json as _j
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    root = _P(_tf.mkdtemp(prefix="gctl-slimgate-cf3-"))
+    dist_cli = root / "lumos"
+    r = subprocess.run([sys.executable, str(repo / "scripts" / "slim-gen.py"),
+                        "--outfile", str(dist_cli)],
+                       capture_output=True, text=True)
+    check("★C2 反事實★ fixture: 生成 rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    text = dist_cli.read_text(encoding="utf-8")
+    marker = "        scored = _rank_score_candidates(env, term, list(_cand_hits))"
+    check("★C2 反事實★ 產物含預期的排序呼叫(竄改點存在,前提沒漂移)",
+          marker in text, "")
+    tampered = text.replace(marker, marker + "\n        scored = list(reversed(scored))", 1)
+    check("★C2 反事實★ 竄改確實改到檔案內容", tampered != text, "")
+    dist_cli.write_text(tampered, encoding="utf-8")
+    dist_cli.chmod(0o755)
+
+    real_vault = repo / "docs" / "lumos-toolchain-knowledge"
+    gs = _j.loads((repo / "governance" / "eval" / "retrieval-goldset.json")
+                  .read_text(encoding="utf-8"))
+    qs = [q["query"] for q in gs["search"][:10]]
+    same = 0
+    diverged = []
+    for q in qs:
+        a = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(real_vault),
+                            "search", q, "--files-only"], capture_output=True, text=True)
+        b = subprocess.run([sys.executable, str(dist_cli), "--vault", str(real_vault),
+                            "search", q, "--files-only"], capture_output=True, text=True)
+        if a.stdout == b.stdout:
+            same += 1
+        else:
+            diverged.append(q)
+    check("★C2 反事實★ 竄改排序後,等價閘必翻紅(same 不再是 10/10)",
+          same != len(qs), f"same={same}/{len(qs)}, 有差異的查詢={diverged}")
+
+
+def t_slim_gate_doctor_nameerror_counterfactual():
+    """★C3 反事實★:第 2 道「doctor 實跑」的斷言(★正向 doctor 實跑★)存在的理由
+    正是「精簡版 doctor 會壞要抓得到」——行級手術最典型的故障就是砍到還被引用的
+    函式,執行期 NameError。故意在精簡版產物副本裡的 `run_doctor` 開頭塞一顆地雷
+    (`_totally_undefined_helper()`),斷言 t_slim_gate 現在用的斷言邏輯
+    (`Traceback not in stderr` 且 stdout 有收尾摘要)會抓到它翻紅。"""
+    import tempfile as _tf
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    root = _P(_tf.mkdtemp(prefix="gctl-slimgate-cf2-"))
+    dist_cli = root / "lumos"
+    r = subprocess.run([sys.executable, str(repo / "scripts" / "slim-gen.py"),
+                        "--outfile", str(dist_cli)],
+                       capture_output=True, text=True)
+    check("★C3 反事實★ fixture: 生成 rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    text = dist_cli.read_text(encoding="utf-8")
+    marker = "def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):"
+    check("★C3 反事實★ 產物含預期的 run_doctor 簽名(竄改點存在,前提沒漂移)",
+          marker in text, "")
+    tampered = text.replace(
+        marker, marker + "\n    _totally_undefined_helper()  # ★注入的 NameError★", 1)
+    check("★C3 反事實★ 竄改確實改到檔案內容", tampered != text, "")
+    dist_cli.write_text(tampered, encoding="utf-8")
+    dist_cli.chmod(0o755)
+
+    vault = mkvault()
+    d = subprocess.run([sys.executable, str(dist_cli), "--vault", str(vault), "doctor"],
+                       capture_output=True, text=True)
+    check("★C3 反事實★ 注入 NameError 後確實 rc=1(前提成立)", d.returncode == 1,
+          f"rc={d.returncode} stderr={d.stderr[:200]}")
+    gate_ok = (d.returncode in (0, 1) and "Traceback" not in d.stderr
+               and (("圖譜健康" in d.stdout or "個 issue" in d.stdout) and "篇)" in d.stdout))
+    check("★C3 反事實★ 注入 NameError 後,doctor 實跑閘必翻紅(不是被 rc in (0,1) 放行)",
+          not gate_ok, f"stderr含Traceback={'Traceback' in d.stderr}, stdout尾={d.stdout[-200:]!r}")
 
 
 def main():

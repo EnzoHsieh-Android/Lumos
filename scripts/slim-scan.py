@@ -5,12 +5,20 @@
 掃 README/SKILL.md/reference.md,找出提及「精簡版已移除的指令」或「不交付的 skill」
 的句子,輸出候選清單交人逐條裁。
 
+★C1(2026-07-31 終審):也要掃產物 CLI 自己★——交付的不只是文件,`dist/scripts/lumos`
+裡 warn()/print() 的字串常數一樣會叫接手者去跑不存在的指令(如「跑 lumos update 修
+復」)。這類字串用 `--python` 旗標走 ast 模式:只掃 `ast.Constant` 的 str,不掃程式碼
+識別字/註解——後者雜訊極高(實測純文字逐行掃全檔會把 `# [code-loop r1 ...]` 這類內部
+審查註記也算命中,41 條裡 15 條是這種假陽性;ast 模式收斂到 11 條真信號)。產物檔名
+(`lumos`)沒有 `.py` 副檔名,無法單靠副檔名自動判斷,故用明確旗標而非自動偵測。
+
 ★不是自動改寫器★:裸 token 形態必然有假陽性(export/set/show/loop/impact 等本身
 是常見英文詞),故只出候選、不動檔案。
 
 rc: 0=無候選 / 1=有候選 / 2=參數錯
 """
 import argparse
+import ast
 import json
 import re
 import subprocess
@@ -72,11 +80,31 @@ def scan_line(line, removed):
     return hits
 
 
+def scan_python_file(fp, path: Path, removed):
+    """ast 模式:只掃 `ast.Constant` 的 str(warn()/print() 訊息等),不掃程式碼識別
+    字或註解——套用與 markdown 相同的 scan_line() 形態比對。多行字串常數(docstring)
+    整段當一行餵給 scan_line(),行號取該常數的起始行(node.lineno);近似值,候選清單
+    本來就是交人逐條裁,不要求精確到物理行。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for tok, form in scan_line(node.value, removed):
+                text = " ".join(node.value.strip().split())[:120]
+                out.append({"file": fp, "line": node.lineno, "token": tok,
+                            "form": form, "text": text})
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="+")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--lumos", default=str(Path(__file__).resolve().parent / "lumos"))
+    ap.add_argument("--python", action="store_true",
+                     help="以 ast 模式掃檔案(只認 ast.Constant 的 str);"
+                          "產物(如 dist/scripts/lumos)沒有 .py 副檔名,"
+                          "無法自動判斷,須明講此旗標。.py 副檔名的檔案自動走此模式")
     a = ap.parse_args()
 
     removed = all_commands(Path(a.lumos)) - KEEP
@@ -86,6 +114,9 @@ def main():
         if not p.is_file():
             print(f"ERROR: 檔案不存在: {fp}", file=sys.stderr)
             return 2
+        if a.python or p.suffix == ".py":
+            out.extend(scan_python_file(fp, p, removed))
+            continue
         for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
             for tok, form in scan_line(line, removed):
                 out.append({"file": fp, "line": n, "token": tok,
