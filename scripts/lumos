@@ -6680,9 +6680,15 @@ def _selfdelete_risk(root: Path) -> bool:
     if not (_IS_WIN or os.environ.get("LUMOS_SIMULATE_WINDOWS") == "1"):
         return False
     try:
-        return Path(__file__).resolve().is_relative_to(root.resolve())
-    except Exception:
-        return False       # 算不出來就不擋(never block on unknown)
+        me, r = Path(__file__).resolve().parts, root.resolve().parts
+    except OSError:
+        return False       # 路徑解不開(權限/壞連結)就不擋(never block on unknown)
+    # ★不用 `Path.is_relative_to()`★——那是 Python 3.9+,本專案宣告 ≥3.8
+    # (同檔 `_write_lf` 為了同一個理由避開 3.10 才有的 write_text(newline=))。
+    # ★也不要把 except 放寬成 `except Exception`★:這道守衛的失敗模式是「回 False」,
+    # 一旦把自己的程式錯誤(如 AttributeError)也吞掉,守衛就★靜默地等於不存在★
+    # ——2026-08-02 代碼審 r2 抓到的正是這個組合。
+    return len(me) > len(r) and me[:len(r)] == r
 
 
 def cmd_teardown(yes=False, source=None):
@@ -6764,7 +6770,9 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
     if root.resolve() == src.resolve():
         print("ERROR: 當前就是 Lumos 來源本身,deinit 拒絕執行", file=sys.stderr)
         return 2
-    if _selfdelete_risk(root):   # Windows 自刪(見 _selfdelete_risk)——mutation 之前擋
+    # ★dry-run 例外(2026-08-02 代碼審 r2)★:純預覽、零 mutation,不會走到刪自己那一步,
+    # 擋它只是誤傷合法的唯讀操作(而且使用者正想用它看看會動到什麼)。
+    if not dry_run and _selfdelete_risk(root):   # Windows 自刪——mutation 之前擋
         print("ERROR: Windows 上不能用專案自帶的那份 lumos 拆自己"
               f"({Path(__file__).resolve()})——最後刪 vendored 時會刪到執行中的檔案,"
               "留下拆一半的狀態。", file=sys.stderr)

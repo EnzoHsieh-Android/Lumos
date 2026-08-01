@@ -3637,6 +3637,80 @@ def t_deinit_vendored_unlink_failure_does_not_abort():
           removed is not None and "scripts/lumos" in removed, f"removed={removed!r}")
 
 
+def t_selfdelete_risk_python38_compatible_and_dryrun_exempt():
+    """★代碼審 r2 抓到的兩條(都在 _selfdelete_risk 這道守衛上)★
+
+    ①**3.8 相容**:第一版用 `Path.is_relative_to()`——那是 Python 3.9+,但本專案
+    白紙黑字宣告 ≥3.8(`scripts/lumos` 的 `_write_lf` docstring 就為了同一個理由
+    避開 3.10 才有的 `write_text(newline=)`)。更毒的是第一版把 except 寫成
+    `except Exception: return False`,於是 3.8 上的 `AttributeError` ★被自己的
+    守衛悄悄吞掉★——守衛靜默地等於不存在,不報錯、不留痕。
+    ★通則★:守衛的失敗模式若是「回 False／放行」,就★絕不能用寬 except★,
+    否則守衛裡的任何程式錯誤都會退化成「守衛不存在」。
+
+    ②**dry-run 不該被擋**:`deinit --dry-run` 是純預覽、零 mutation,根本走不到
+    刪自己那一步;擋它只是誤傷合法的唯讀操作,而且使用者正想用它看看會動到什麼。
+
+    ★驗行為不是驗寫法★:①不掃原始碼有沒有出現 `is_relative_to` 這個字串
+    (那是第③型「驗寫法不驗行為」),而是★把 `Path` 上的 3.9+ API 真的拿掉★、
+    再呼叫這道守衛,斷言它仍然算得出正確答案;②真的跑一次 `--dry-run` 子進程,
+    斷言不被擋、且什麼都沒動。"""
+    import os as _os9, shutil as _sh9, subprocess as _sp9
+    from pathlib import PurePath as _PurePath      # is_relative_to 定義在 PurePath 上,
+    m = _load_lumos()                              # Path 只是繼承來的,要拔就得拔這裡
+
+    # ── ① 模擬 Python 3.8:把 3.9+ 才有的 is_relative_to 從類別上拿掉 ──
+    had = "is_relative_to" in _PurePath.__dict__
+    saved = _PurePath.__dict__.get("is_relative_to")
+    root = Path(tempfile.mkdtemp(prefix="gctl-sdr38-"))
+    (root / "scripts").mkdir()
+    env_key = "LUMOS_SIMULATE_WINDOWS"
+    old_env = _os9.environ.get(env_key)
+    try:
+        if had:
+            delattr(_PurePath, "is_relative_to")
+        check("★前置★ 現場成立:Path.is_relative_to 已不存在(模擬 3.8)",
+              not hasattr(Path, "is_relative_to"), "")
+        _os9.environ[env_key] = "1"
+        # m 的 __file__ 是本 repo 的 scripts/lumos → 不在 root 底下 → 應為 False
+        outside = m._selfdelete_risk(root)
+        # 把 root 設成本 repo(m.__file__ 確實在它底下)→ 應為 True
+        repo = Path(GRAPHCTL).resolve().parent.parent
+        inside = m._selfdelete_risk(repo)
+    finally:
+        if had and saved is not None:
+            setattr(_PurePath, "is_relative_to", saved)
+        if old_env is None:
+            _os9.environ.pop(env_key, None)
+        else:
+            _os9.environ[env_key] = old_env
+
+    check("★3.8 上守衛仍算得出「不在裡面」★(不得靠 3.9+ API)", outside is False, f"got {outside!r}")
+    check("★3.8 上守衛仍算得出「在裡面」★——★這條才擋得住『寬 except 把錯誤吞成永遠放行』★",
+          inside is True, f"got {inside!r}")
+
+    # ── ② --dry-run 不得被擋 ──
+    root2 = Path(tempfile.mkdtemp(prefix="gctl-sdrdry-"))
+    _sp9.run(["git", "-C", str(root2), "init"], capture_output=True, text=True)
+    _sp9.run(["git", "-C", str(root2), "config", "core.hooksPath", "scripts/hooks"],
+             capture_output=True, text=True)
+    (root2 / "scripts").mkdir()
+    vendored = root2 / "scripts" / "lumos"
+    _sh9.copy2(GRAPHCTL, vendored)
+    home = Path(tempfile.mkdtemp(prefix="gctl-sdrdry-home-"))
+    env = dict(_os9.environ, HOME=str(home), USERPROFILE=str(home),
+               LUMOS_SIMULATE_WINDOWS="1")
+    r = _sp9.run([sys.executable, str(vendored), "deinit", "--dry-run"], cwd=str(root2),
+                 capture_output=True, text=True, env=env)
+    out = r.stdout + r.stderr
+    check("★--dry-run 純預覽不得被自刪守衛擋下★(rc≠2 且訊息不含那句拒絕)",
+          r.returncode != 2 and "不能用專案自帶的那份" not in out,
+          f"rc={r.returncode} {out[-300:]}")
+    check("★前置★ dry-run 真的什麼都沒動(vendored 還在、hooksPath 未變)",
+          vendored.is_file() and _sp9.run(["git", "-C", str(root2), "config", "core.hooksPath"],
+                                          capture_output=True, text=True).stdout.strip() == "scripts/hooks", out[-200:])
+
+
 def t_deinit_teardown_refuse_self_delete_on_windows():
     """★Windows 專屬:不准用「專案自帶的那一份」拆自己★
 
