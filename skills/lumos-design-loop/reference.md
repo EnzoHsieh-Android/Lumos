@@ -84,6 +84,19 @@ lumos loop status <id> --gate --panel --spec <計劃節點.md> --min-seats <W> -
 
 cluster 帳模式同樣生效，不得繞。
 
+### D0 · 先決定用哪一種帳（★只有第一輪能決定★）
+
+模式由**第一個有效輪**定錨，之後要換只能開新 loop id。`lumos loop next` 在 N=1 且 panel 模式時會提示你這件事——**看到那條 hint 就是要你現在做決定**。
+
+| 這個 loop 的 findings 會長成什麼樣 | 選 |
+|---|---|
+| 散成**性質不同**的風險群（例：「規格縮水」＋「邊界 bug」＋「效能回歸」） | **cluster 帳**（D2） |
+| 單一主題、findings 同性質 | 預設**無-cluster**（D1） |
+
+**為什麼性質不同就別壓成一個數**：單一 max severity 會讓一軸遮蔽另一軸——「規格縮水 minor」躲在「邊界 bug major」後面，修完 bug 那輪就乾淨了，縮水那條只在 findings 數裡留下一個 +1。cluster 帳逐群追蹤，每群要嘛 `resolved`、要嘛 `accepted-minor:理由`（**理由內嵌必填**），`disputed-major` 存在就不收斂。
+
+★2026-08-02 量測（誠實的反面教材）★：M2 落地至今 **316 筆 canary 記錄裡只有 1 筆帶 `--clusters`**，而那一筆是開發它的 `code-m2cluster` 自己——**34 個用過 panel 的 loop 有 33 個靜默落回無-cluster 舊帳**。機制不是不好，是**沒有任何地方在該選的時候提起它**。`loop next` 的 hint 就是補這個洞。
+
 ### D1 · 無-cluster 舊帳＝三條合取
 
 1. **輪有效**：caught≥2 且 0 missed（near-perfect）

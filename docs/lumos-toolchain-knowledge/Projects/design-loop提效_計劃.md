@@ -65,6 +65,37 @@ fromscratch-m1 三輪 9→6→3、T3 三輪 12→6→5——常態跑滿 cap 靠
 - **M2（動 gate code,必過 design-loop）**：② risk-cluster 帳——`canary record` 加 cluster 欄位、`loop status --panel` 改停止條件。**改守衛的守衛,高風險面,進實作前本計劃過 design-loop（舊 loop 審新 loop）**。✅ design-loop 3 輪達 cap,人裁實質收斂(2026-07-16,decisions#d1;golden: `governance/golden/dloop-m2-cluster/`;Codex 否決於 v4 解除)→ **進實作** ✅ **已落地(2026-07-16,[[Verification/2026-07-16_dloop提效M2_cluster帳]]:29 格綠+全套 1186 綠+舊 panel 16 格無迴歸;push 前過 tier=high full code-loop=人裁條件待執行)**。
 - 驗收信號：下一個真實 spec 過 loop 的輪數/wall-clock/token 對照本計劃前的基線（fromscratch-m1 ≈3 輪/~2h）。
 
+## ★M2 落地後量測:機制存在但沒在用(2026-08-02)★
+
+拿 `docs/.canary-log.jsonl` 實際數過：
+
+| | 數字 |
+|---|---|
+| canary 記錄總筆數 | **316** |
+| 其中 panel 模式（帶 `--round`） | 251（79%） |
+| 用過 panel 的 loop | **34 個** |
+| ★帶 `--clusters` 的筆數★ | **1** |
+| ★用過 cluster 帳的 loop★ | **1 個 —— `code-m2cluster`，也就是開發這個功能的那個 loop** |
+
+**34 個適用的 loop 裡，33 個靜默落回無-cluster 舊帳（單一 max severity）。** 機制蓋好、對自己 dogfood 一次，之後再也沒被任何真實工作用過。
+
+### 根因（查證過，不是猜）
+
+1. **`loop next` 從不提它** —— grep `clusters` 在 `cmd_loop_next` 相關碼零命中。而 `loop next` 正是 skill 明文要求「N／型別／席數／記帳模板一律問」的那個入口。
+2. **skill 只描述兩種帳，從不說何時該選** —— D 段把 D1／D2 的判準寫得很細，但沒有任何一句幫你決定。
+3. **而選擇只有第一輪能做** —— 模式由第一個有效輪定錨，之後要換只能開新 loop id。錯過就是錯過，而且不會有人告訴你錯過了。
+
+★這是「測試存在但沒在驗」的上一層形態：**機制存在但沒在用**★。兩者的共同點是——**帳面看起來都是綠的**。
+
+### 處置（2026-08-02 落地）
+
+- `lumos loop next` 在 **N=1 且 panel 模式**時印 `cluster_hint`，明說「只有現在能選」並給選擇判準。★只在 N=1 印★：那是選擇真正還開著的唯一時刻；對已定錨的 loop 提示只會誤導。[test:t_loop_next_cluster_hint_only_when_choice_is_open]（翻紅釘：拿掉 `n_next == 1` 限制 → 「已開始記錄後不得再提」翻紅；從印出鍵移除 → 「文字模式也要印出來」翻紅）
+- skill `reference.md` 新增 **§D0「先決定用哪一種帳」**，含選擇表與「為什麼性質不同就別壓成一個數」（單一 max 會讓一軸遮蔽另一軸），並把這份量測當誠實的反面教材寫進去。
+
+### 外部對照
+
+借鑒 `mattpocock/skills` 的 `code-review`：它把 Standards 與 Spec 兩軸**分開跑、分開報，明文禁止合併或跨軸重排**，理由正是「一軸會遮蔽另一軸」。★lumos 早就有更強的版本（cluster 三態帳還要求 `accepted-minor` 內嵌理由），差別只在**它是預設、lumos 是沒人記得的 opt-in**。★ 所以這次不動 gate 語意，只把它變得**在該選的時候會被想起來**。
+
 ## M2 詳細規格（v4;r1-r3 折入）
 
 **範圍**：只改「記錄欄位 + panel gate 停止條件」。不動 canary 判定、不動辯方、不動 legacy(非 panel)路徑。

@@ -11262,6 +11262,50 @@ def t_m1_light_gate():
     check("ratchet 永久(乾淨輪不洗回)", r.returncode == 1 and "ratchet" in r.stdout)
 
 
+def t_loop_next_cluster_hint_only_when_choice_is_open():
+    """★機制存在但沒在用★(2026-08-02 量測):M2 的 cluster 三態帳落地至今,316 筆
+    canary 記錄裡★只有 1 筆帶 --clusters★,而那一筆是開發它的 `code-m2cluster`
+    自己——34 個用過 panel 的 loop 裡有 33 個靜默落回無-cluster 舊帳(單一 max
+    severity)。根因不是機制不好,是★沒有任何地方在該選的時候提起它★:
+    `loop next` 不提、skill 只描述兩種帳卻不說何時該選。
+
+    ★而模式只有第一輪能選★——由「第一個有效輪」定錨,之後要換只能開新 loop id。
+    所以提示必須恰好出現在 N=1,且★不得對已開始記錄的 loop 噴★(那時選擇已經關了,
+    提了只是誤導)。
+
+    ★驗行為★:panel 模式(tier=standard/high)零記錄時必須有 hint;有記錄之後
+    (N≥2)必須沒有;legacy 與 light 這兩種用不到 cluster 帳的模式也必須沒有。"""
+    import json as _j
+    v = mkvault()
+    spec = v / "Projects" / "chspec.md"
+    spec.write_text("cluster hint spec\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    lid = f"ch-{_M1U}"
+
+    r = run(v, "loop", "next", lid, "--tier", "standard", "--json")
+    d = _j.loads(r.stdout)
+    check("★前置★ 現場成立:第一輪且為 panel 模式",
+          d["phase"] == "plant-canary" and d["round"] == 1 and d["tier"] == "standard", r.stdout[:200])
+    check("★N=1(選擇還開著)必須提示 cluster 帳★", "cluster_hint" in d, r.stdout[:300])
+    check("★提示要講清楚『只有現在能選』★(不然看到也不知道有時效)",
+          "第一輪" in d.get("cluster_hint", "") and "開新 loop id" in d.get("cluster_hint", ""),
+          d.get("cluster_hint", "")[:200])
+    check("★文字模式也要印出來★(不能只有 --json 看得到)",
+          "cluster_hint" in run(v, "loop", "next", lid, "--tier", "standard").stdout, "")
+
+    # 記一輪之後,模式已定錨 → 選擇關了 → 不得再提
+    run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
+        "--findings", "0", "--auditor", "s1", "--reviewed", h, "--spec", str(spec),
+        "--tier", "standard", expect_rc=0)
+    r2 = run(v, "loop", "next", lid, "--json", "--spec", str(spec), "--repo", str(v.parent))
+    d2 = _j.loads(r2.stdout)
+    check("★已開始記錄後不得再提★(選擇已關,提了是誤導)", "cluster_hint" not in d2, r2.stdout[:300])
+
+    # legacy 與 light 用不到 cluster 帳 → 不得提(反誤傷)
+    dl = _j.loads(run(v, "loop", "next", f"chl-{_M1U}", "--tier", "light", "--json").stdout)
+    check("★light 不得提(用不到 cluster 帳)★", "cluster_hint" not in dl, "")
+
+
 def t_m1_loop_next():
     """M1包 #1 loop next:零記錄 rc2/plant-canary/tier 定錨+衝突 rc2/escalate/gate-pending/converged/cap/min-seats/json。"""
     print("t_m1_loop_next")
