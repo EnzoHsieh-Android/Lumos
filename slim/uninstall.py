@@ -24,9 +24,17 @@ sha256 比對(拿 ~/.lumos-slim/scripts/lumos 當基準)當一票否決——`~/
 中止,CLAUDE.md 的還原(步驟④)完全沒機會執行。修法兩件事:①身分證 manifest
 (`~/.local/share/lumos-slim/manifest.json`,install.py 裝機時寫)是★比對的
 主要來源★,不依賴 `~/.lumos-slim` 存不存在;找不到時才退回舊版做法(拿
-`~/.lumos-slim/scripts/lumos` 當基準,相容早期裝的機器)②四個清理步驟
-(bin／skill 目錄／`~/.lumos-slim`／CLAUDE.md 區塊)★各自獨立判斷、各自執行、
-互不阻擋★——不用 return/exit 讓某一步的安全考量中止其餘步驟。
+`~/.lumos-slim/scripts/lumos` 當基準,相容早期裝的機器)②清理步驟
+(bin／skill 目錄／`~/.lumos-slim`／CLAUDE.md 區塊／manifest 本身)★各自獨立判斷、
+各自執行、互不阻擋★——不用 return/exit 讓某一步的安全考量中止其餘步驟。
+
+★2026-08-01 真跑冒煙補的第⑤步:manifest 自己也要清掉★——在此之前,卸載跑完
+會在 `~/.local/share/lumos-slim/` 底下留著 manifest.json,彙總卻印「✓ 全部完成」。
+整套測試全綠也看不到,因為根本沒有任何一條測試斷言過卸載後它該消失(不是斷言
+寫錯,是「沒去驗」)。★唯一的資料相依(不是控制相依,不違反上面那條獨立性)★:
+①/①b 有任何一份 bin 檔案基於安全考量沒被移除時,manifest 必須留著——它是使用者
+之後加 `--force` 或手動確認時唯一的比對基準,先刪掉等於銷毀判斷依據,下次重跑
+只會落到「基準缺失」。留著時印一句為什麼留。
 
 rc 語意(彙總後決定,不是任一步驟直接中止):
   0 = 每一步都「完成」或「本來就沒裝/沒有這塊」(乾淨卸載,含冪等 no-op)
@@ -156,6 +164,11 @@ def main(argv=None):
     manifest_path = Path.home() / ".local" / "share" / "lumos-slim" / "manifest.json"
 
     rc = 0
+    # ★manifest(身分證)該不該一起清掉,取決於 bin 這一步的結果★——若①/①b 有任何
+    # 一份檔案基於安全考量沒被移除(比對不符/基準缺失/讀不到),manifest 必須留著:
+    # 它正是使用者之後加 --force 或手動處理時唯一的比對基準,先刪了等於把判斷依據
+    # 銷毀。只有 bin 確實清乾淨(或本來就沒裝)時,留著 manifest 才純粹是殘留垃圾。
+    bin_cleared = True
 
     def bump(n):
         nonlocal rc
@@ -188,6 +201,7 @@ def main(argv=None):
                 print(f"⚠ 無法讀取 {dst_script} 內容,無法安全比對——跳過移除: {e}", file=sys.stderr)
                 print("  確定要砍就加 --force 重跑。", file=sys.stderr)
                 bump(2)
+                bin_cleared = False
                 cur_sha = None
 
             if cur_sha is not None:
@@ -211,6 +225,7 @@ def main(argv=None):
                           file=sys.stderr)
                     print("  是不是本包裝的那份,拒絕移除。確定要砍就加 --force 重跑。", file=sys.stderr)
                     bump(1)
+                    bin_cleared = False
                 elif cur_sha == ref_sha:
                     dst_script.unlink()
                     print(f"✓ 已移除: {dst_script}")
@@ -220,6 +235,7 @@ def main(argv=None):
                     print("  這可能是你自己的東西,不是本包裝的那份 lumos——拒絕移除。", file=sys.stderr)
                     print("  確定要砍就加 --force 重跑。", file=sys.stderr)
                     bump(1)
+                    bin_cleared = False
     else:
         print(f"  (未安裝: {dst_script})")
 
@@ -255,6 +271,7 @@ def main(argv=None):
                     print(f"⚠ {dst_shim} 內容不是合法 utf-8,無法安全比對——跳過移除: {e}", file=sys.stderr)
                     print("  確定要砍就加 --force 重跑。", file=sys.stderr)
                     bump(2)
+                    bin_cleared = False
                     shim_text = None
 
                 if shim_text is not None:
@@ -266,6 +283,7 @@ def main(argv=None):
                               file=sys.stderr)
                         print("  確定要砍就加 --force 重跑。", file=sys.stderr)
                         bump(1)
+                        bin_cleared = False
         else:
             print(f"  (未安裝: {dst_shim})")
 
@@ -306,6 +324,34 @@ def main(argv=None):
     print(claude_msg)
     if claude_rc != 0:
         bump(claude_rc)
+
+    # ⑤ 身分證 manifest(~/.local/share/lumos-slim/manifest.json)—— ★2026-08-01
+    #    真跑冒煙抓到的殘留:一整套測試全綠、卸載彙總印「✓ 全部完成」,實際跑完
+    #    卻在使用者 $HOME 底下留著這支檔案★(整套測試沒有任何一條斷言過它——同
+    #    一個「測試存在但沒在驗它宣稱要驗的」老坑,這次是「根本沒去驗」)。
+    #    ★與①②③④獨立★:它自己判斷、自己執行,不擋任何其他步驟、也不被擋。
+    #    ★但有一個資料相依(不是控制相依)★:只有 bin 確實清乾淨(或本來就沒裝)
+    #    才刪 manifest——①/①b 任一份基於安全考量沒移除時,manifest 是使用者之後
+    #    重試(加 --force / 手動確認)唯一的比對基準,先刪掉等於把判斷依據銷毀,
+    #    下次重跑只會落到「基準缺失」。留著並印一句為什麼留,比默默刪掉誠實。
+    #    只刪這支檔案與(空的)父目錄 lumos-slim/,★絕不碰 ~/.local/share 底下
+    #    其他任何東西★——那裡是很多工具共用的地方。
+    if manifest_path.is_file():
+        if bin_cleared:
+            try:
+                manifest_path.unlink()
+                print(f"✓ 已移除: {manifest_path}(身分證 manifest)")
+                parent = manifest_path.parent
+                if parent.name == "lumos-slim" and not any(parent.iterdir()):
+                    parent.rmdir()
+                    print(f"✓ 已移除空目錄: {parent}")
+            except OSError as e:
+                print(f"⚠ 移除 {manifest_path} 失敗: {e}", file=sys.stderr)
+                bump(2)
+        else:
+            print(f"  (保留: {manifest_path} — 上面 bin 有項目未移除,manifest 是重試時的比對基準)")
+    else:
+        print(f"  (未安裝: {manifest_path})")
 
     print()
     print("== 卸載彙總 ==")

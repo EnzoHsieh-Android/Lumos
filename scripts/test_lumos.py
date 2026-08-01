@@ -13044,6 +13044,107 @@ def t_slim_uninstall_bin_refusal_does_not_block_claude_md_restore():
           ru.stdout + ru.stderr)
 
 
+def t_slim_uninstall_removes_manifest_when_bin_cleared():
+    """★真跑冒煙抓到的殘留(2026-08-01)★:整套測試全綠、卸載彙總印「✓ 全部
+    完成」,實際跑完卻在 `~/.local/share/lumos-slim/` 底下留著 manifest.json
+    ——沒有任何一條測試斷言過它該消失(不是斷言寫錯,是根本沒去驗)。
+
+    ★驗的是行為不是寫法★:真的跑一次安裝再跑一次卸載,然後對檔案系統做
+    存在性斷言(`.exists()`),不看原始碼有沒有出現 `manifest_path.unlink()`
+    這種字面。把 ⑤ 整段刪掉、或把 `unlink()` 換成 no-op,這條都會翻紅。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimmanifest-"))
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    proj = root / "proj"
+    proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案標題\n\n原有內容\n", encoding="utf-8")
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ install.sh rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    manifest = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+    check("★前置★ 安裝後 manifest 存在", manifest.is_file(), str(manifest))
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★卸載後 manifest 檔案真的不存在★(存在性斷言,不是掃原始碼)",
+          not manifest.exists(), ru.stdout + ru.stderr)
+    check("★空的 lumos-slim/ 父目錄也一併清掉★",
+          not manifest.parent.exists(), ru.stdout + ru.stderr)
+    check("★但 ~/.local/share 本身絕不能被動★(那是眾多工具共用的地方)",
+          (fake_home / ".local" / "share").is_dir(), ru.stdout + ru.stderr)
+    check("★乾淨卸載 rc0★", ru.returncode == 0, ru.stdout + ru.stderr)
+
+
+def t_slim_uninstall_keeps_manifest_when_bin_refused():
+    """★manifest 的清除有一個資料相依,不能無腦刪★:①bin 基於安全考量沒被
+    移除時,manifest 必須留著——它是使用者之後加 `--force` 或手動確認時唯一的
+    比對基準,先刪掉等於銷毀判斷依據,下次重跑只會落到「基準缺失」而不是
+    「內容不符」,使用者反而更難判斷。
+
+    ★驗行為★:製造「bin 被換成使用者自己的檔」現場、跑不帶 --force 的卸載,
+    斷言 manifest 檔案★仍然存在★,而且它仍然能當基準用(內容可解析出
+    bin_sha256)。把 ⑤ 的 `if bin_cleared:` 拿掉改成無條件刪,這條翻紅。"""
+    import tempfile as _tf, os as _os, json as _json
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimmanifest-keep-"))
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    proj = root / "proj"
+    proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案標題\n\n原有內容\n", encoding="utf-8")
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ install.sh rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    manifest = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+    bin_path = fake_home / ".local" / "bin" / "lumos"
+    bin_path.unlink()
+    bin_path.write_text("#!/bin/sh\necho USER OWN BINARY\n", encoding="utf-8")
+
+    # 先把卸載器複製到 pkg 外面(第一次卸載的步驟③會把 `~/.lumos-slim` 整包移除,
+    # 那是它該做的;第二次重跑必須從別的地方叫,模擬 README 明列的「從自己 clone
+    # 的目錄跑」那條支援路徑)。
+    import shutil as _sh2
+    outside = root / "pkg-copy"
+    outside.mkdir()
+    for fn in ("uninstall.sh", "uninstall.py"):
+        _sh2.copy2(pkg / fn, outside / fn)
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★bin 拒絕移除時 manifest 必須留著(它是重試的比對基準)★",
+          manifest.is_file(), ru.stdout + ru.stderr)
+    kept = _json.loads(manifest.read_text(encoding="utf-8")).get("bin_sha256", "")
+    check("★留下來的 manifest 仍可用作基準(bin_sha256 解析得出)★",
+          bool(kept), repr(kept))
+    check("★rc 仍是安全性跳過 rc1★", ru.returncode == 1, ru.stdout + ru.stderr)
+
+    # ★同一份現場加 --force 重跑:bin 清掉了,manifest 這次就該一起消失★
+    # ——證明「留著」不是永久豁免,而是等使用者裁定後照樣收乾淨。
+    # ⚠ 第一次卸載的步驟③已經把 `~/.lumos-slim` 整包移除(那是它該做的),所以
+    # 第二次不能再從 pkg 路徑叫——先把兩支檔案複製到 pkg 外面,模擬使用者
+    # 「從自己 clone 的目錄再跑一次」那條路(README 明列的支援用法)。
+    rf = subprocess.run(["bash", str(outside / "uninstall.sh"), "--force"], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★--force 重跑後 bin 清掉,manifest 也跟著消失★",
+          not bin_path.exists() and not manifest.exists(), rf.stdout + rf.stderr)
+
+
 def t_slim_get_idempotent():
     """★get.sh 冪等★:~/.lumos-slim 已存在時再跑一次不得產生 git clone 對非空
     目錄的『爆炸』式錯誤,而是 git pull 或直接沿用。用本地 git repo 當 clone
