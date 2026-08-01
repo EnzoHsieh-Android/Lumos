@@ -341,13 +341,23 @@ def main(argv=None):
             try:
                 manifest_path.unlink()
                 print(f"✓ 已移除: {manifest_path}(身分證 manifest)")
-                parent = manifest_path.parent
-                if parent.name == "lumos-slim" and not any(parent.iterdir()):
-                    parent.rmdir()
-                    print(f"✓ 已移除空目錄: {parent}")
             except OSError as e:
                 print(f"⚠ 移除 {manifest_path} 失敗: {e}", file=sys.stderr)
                 bump(2)
+            else:
+                # ★父目錄清理必須自己一個 try,不能跟上面共用★(2026-08-01 代碼審
+                # r3 抓到):共用時 iterdir()/rmdir() 拋 OSError 會印成「移除
+                # manifest 失敗」並 bump(2)——但 manifest 其實已經刪成功了(上面
+                # 的 ✓ 都印出來了),使用者會同時看到 ✓ 和 ⚠、以為要手動處理。
+                # 這一步是選配的收尾清理(目錄非空/被別的流程動過都算正常),
+                # 失敗不該升級成「真正的錯誤」,只印一句就好。
+                parent = manifest_path.parent
+                try:
+                    if parent.name == "lumos-slim" and not any(parent.iterdir()):
+                        parent.rmdir()
+                        print(f"✓ 已移除空目錄: {parent}")
+                except OSError as e:
+                    print(f"  (順帶清理空目錄 {parent} 沒成功,不影響卸載結果: {e})")
         else:
             print(f"  (保留: {manifest_path} — 上面 bin 有項目未移除,manifest 是重試時的比對基準)")
     else:

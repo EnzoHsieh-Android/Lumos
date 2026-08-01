@@ -13084,6 +13084,61 @@ def t_slim_uninstall_removes_manifest_when_bin_cleared():
     check("★乾淨卸載 rc0★", ru.returncode == 0, ru.stdout + ru.stderr)
 
 
+def t_slim_uninstall_manifest_parent_cleanup_is_best_effort():
+    """★代碼審 r3 抓到的錯誤歸因★:manifest 刪掉之後「順帶清掉空的 lumos-slim/
+    父目錄」是選配收尾,原本跟 `unlink()` 共用同一個 try/except——父目錄清不掉時
+    會印成「⚠ 移除 manifest 失敗」並把 rc 升到 2(真正的錯誤),但 manifest 其實
+    已經刪成功、`✓ 已移除` 都印出來了。使用者會同時看到 ✓ 和 ⚠,以為要手動處理。
+
+    ★這條測試的第一版是錯的,記在這裡當教訓★:第一版用「父目錄裡塞一個別的
+    檔案讓它非空」當現場——但那樣 `if ... and not any(parent.iterdir())` 直接
+    判假,`rmdir()` ★根本不會被執行★,例外路徑一次都沒跑到,把修法還原成共用
+    try 的突變照樣全綠。這正是本專案已撞十一次的「測試存在但沒在驗它宣稱要驗
+    的」——**要驗例外處理,現場就必須真的讓那個呼叫拋例外**。
+
+    ★真正的現場★:把 `~/.local/share` 設成唯讀(r-x)。`unlink()` 需要的是
+    `lumos-slim/` 的寫權限(仍有)故會成功;`rmdir("lumos-slim")` 需要的是
+    父目錄 `share/` 的寫權限(已拿掉)故必定拋 PermissionError(OSError 子類)。
+    斷言:①manifest 真的被刪 ②rc 仍是 0 ③輸出沒有誤導的「移除 manifest 失敗」。"""
+    import tempfile as _tf, os as _os, stat as _st
+    from pathlib import Path as _P
+    if hasattr(_os, "geteuid") and _os.geteuid() == 0:
+        check("★skip★ root 身分下權限不生效,此測試無意義", True, "running as root")
+        return
+    root = _P(_tf.mkdtemp(prefix="gctl-slimmanifest-parent-"))
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    proj = root / "proj"
+    proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案標題\n\n原有內容\n", encoding="utf-8")
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ install.sh rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    manifest = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+    share = manifest.parent.parent
+    orig_mode = share.stat().st_mode
+    _os.chmod(share, 0o500)          # r-x:lumos-slim/ 仍可寫(unlink 過),但不能被 rmdir
+    try:
+        ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                            capture_output=True, text=True, env=env)
+        out = ru.stdout + ru.stderr
+        check("★前置★ 現場成立:rmdir 這一步真的拋了例外(輸出有順帶清理沒成功的字樣)",
+              "順帶清理空目錄" in out, out)
+        check("★manifest 仍被刪掉(父目錄清不掉不該擋住它)★", not manifest.exists(), out)
+        check("★rc 仍是 0(選配收尾失敗不得升級成『真正的錯誤』)★", ru.returncode == 0, out)
+        check("★輸出不得出現誤導的『移除 <manifest> 失敗』★",
+              f"移除 {manifest} 失敗" not in out, out)
+    finally:
+        _os.chmod(share, orig_mode)
+
+
 def t_slim_uninstall_keeps_manifest_when_bin_refused():
     """★manifest 的清除有一個資料相依,不能無腦刪★:①bin 基於安全考量沒被
     移除時,manifest 必須留著——它是使用者之後加 `--force` 或手動確認時唯一的
