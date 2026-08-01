@@ -13442,7 +13442,22 @@ def t_slim_readme_assertions():
     cands = _j3.loads(r.stdout)["candidates"] if r.stdout.strip() else []
     reviewed_exception = {("init", "prefixed"), ("update", "prefixed"),
                           ("self-audit", "prefixed"), ("signoff", "prefixed")}
-    unexpected = [c for c in cands if (c["token"], c["form"]) not in reviewed_exception]
+    # ★2026-08-01 新增的「程式碼註解裡也會提到本包沒交付的檔案」揭露段★——同樣是
+    # 自我指涉的誠實揭露(告訴讀者這些字串在註解裡看到是正常的)。★但這裡不放行
+    # 整個 (token, form)★:上面那組 (token, form) 白名單天生偏寬,同 token/form 的
+    # 候選出現在 README 任何一行都會被靜默吃掉(skill 那支守衛就是因此改用四元組)。
+    # 這兩條改綁「該段獨有的特徵字串」——換句話說,只有出現在這段揭露裡才放行,
+    # 同一個 token 若在別處新長出來仍會炸開。
+    reviewed_in_context = (
+        ("design-loop", "skill-name", "這些檔案本包都沒交付"),
+        ("code-loop", "prose", "這些檔案本包都沒交付"),
+    )
+    unexpected = [
+        c for c in cands
+        if (c["token"], c["form"]) not in reviewed_exception
+        and not any(c["token"] == t and c["form"] == f and sub in c["text"]
+                    for t, f, sub in reviewed_in_context)
+    ]
     check("README 無非預期的懸空引用(排除 C1 已審查揭露段例外)",
           not unexpected, str(unexpected))
 
