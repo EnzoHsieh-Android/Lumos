@@ -10,6 +10,19 @@
 # 出的分支邏輯(見 install.py 模組 docstring),這支 .ps1 薄殼本身、Windows
 # PATH 的實際行為、`.cmd` shim 在真實 cmd.exe/PowerShell 下能不能被找到,都
 # 沒有真機驗證過。
+#
+# ★2026-08 Task 14 修復③(保險性修法,★這段語意本身也沒有真機驗證過★)★:
+# 舊版收尾是裸的 `exit $LASTEXITCODE`——PowerShell 的 `exit` 在 README 教的
+# 兩種呼叫方式(`irm ... | iex` 一行版、`& "路徑\install.ps1"` 兩行版)下都會
+# 終止整個呼叫端 session,不像 bash 子行程只結束自己:使用者貼上指令、安裝其實
+# 成功了,但畫面印完「裝好了」之後整個 PowerShell 視窗突然關閉,會被誤以為是
+# 崩潰。改成不呼叫 `exit`,只把子行程(`install.py`)的 rc 寫回
+# `$LASTEXITCODE`(PowerShell 的特殊自動變數,寫入即對呼叫端可見,呼叫端仍可
+# `& install.ps1; if ($LASTEXITCODE -ne 0) {...}` 讀到正確值)——★取捨★:若
+# 是用 `powershell.exe -File install.ps1` 這種「當成獨立行程啟動」的方式呼叫
+# (README 沒教這種呼叫法),因為腳本本身不再呼叫 `exit`,回給作業系統的行程
+# exit code 會固定是 0,不會反映失敗;README 教的兩種呼叫方式都是在同一個
+# session 內執行(不是啟動新行程),不受此取捨影響。
 $ErrorActionPreference = "Stop"
 
 $Pkg = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -22,4 +35,4 @@ if (-not $Py) {
 }
 
 & $Py.Source "$Pkg\install.py" @args
-exit $LASTEXITCODE
+$global:LASTEXITCODE = $LASTEXITCODE

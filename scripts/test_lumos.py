@@ -13900,6 +13900,163 @@ def t_slim_uninstall_windows_removes_paired_files():
     check("★lumos 內容副本已移除(成對清除,無孤兒檔)★", not dst_script.exists(), "")
 
 
+def _slim_python3_only_path_env(root):
+    """建一個「PATH 上保證只有 `python3`、沒有 `python`」的環境字串——供
+    `t_slim_install_windows_shim_does_not_hardcode_python_*` 用,★不依賴宿主
+    機器剛好沒裝 `python` 這個巧合★(即使巧合成立,也不該讓測試的紅/綠取決於
+    跑測試那台機器裝了什麼):在 `root` 下自建一個 stub bin 目錄,裡面放一支
+    只轉呼叫真正直譯器(`sys.executable`)的 `python3` shell script,PATH 只
+    含這個 stub 目錄 + `bash`/`git` 所在目錄(薄殼與 git 操作需要),刻意不
+    帶系統其他可能藏著 `python` 這個名字的目錄。回傳組好的 PATH 字串。"""
+    import shutil as _sh2
+    stub_dir = root / "stubbin"
+    stub_dir.mkdir(parents=True, exist_ok=True)
+    py3 = stub_dir / "python3"
+    py3.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    py3.chmod(0o755)
+    dirs = [str(stub_dir)]
+    for exe in (_sh2.which("bash"), _sh2.which("git")):
+        if exe:
+            d = str(Path(exe).parent)
+            if d not in dirs:
+                dirs.append(d)
+    return ":".join(dirs)
+
+
+def t_slim_install_windows_shim_does_not_hardcode_python_when_only_python3_available():
+    """★Windows 分支邏輯測試,非真機驗證★(2026-08 Task 14,①★必修★,紅→
+    綠鎖行為):修復前 `.cmd` shim 寫死呼叫字面 `python`(`install.py` 舊版
+    `_install_cli()` 的 `shim_text = '@echo off\\r\\npython "%~dp0lumos"
+    %*\\r\\n'`),但同專案 `install.sh`/`install.ps1` 兩支薄殼都承認 `python`
+    可能不存在(先試 `python3`,找不到才退 `python`)——只有 `python3.exe`、
+    沒有 `python.exe` 的 Windows 機器上,`install.ps1` 用 `python3` 把安裝
+    跑完、印出「裝好了」,但產生的 shim 卻寫死呼叫 `python`,之後每次打
+    `lumos` 都得到 `'python' is not recognized`,裝完即壞。
+
+    用 `_slim_python3_only_path_env()` 組一個 PATH 上保證只有 `python3`(自製
+    stub,`exec` 真正的直譯器,不依賴宿主機器巧合沒裝 `python`)的環境,跑一次
+    模擬 Windows 安裝,斷言產生的 shim 裡呼叫 lumos 腳本前的那個指令詞恰好是
+    `python3`——★精確比對,不是子字串比對★(`"python3" in shim_text` 這種
+    寫法測不出寫死 bug,因為 `python3` 這個字串本身就包含 `python` 這個子
+    字串,子字串比對永遠是真)。"""
+    import tempfile as _tf, os as _os, re as _re
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-wshimpy-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+
+    proj = root / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+
+    only_python3_path = _slim_python3_only_path_env(root)
+    env = dict(_os.environ, HOME=str(fake_home), PATH=only_python3_path,
+               LUMOS_SLIM_SIMULATE_WINDOWS="1")
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                       capture_output=True, text=True, env=env)
+    check("模擬 Windows 安裝(PATH 只有 python3)rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    dst_shim = fake_home / ".local" / "bin" / "lumos.cmd"
+    shim_text = dst_shim.read_text(encoding="utf-8") if dst_shim.is_file() else ""
+    m = _re.search(r'^(\S+)\s+"%~dp0lumos"', shim_text, _re.MULTILINE)
+    interpreter = m.group(1) if m else None
+    check("★shim 有記錄呼叫用的直譯器★", interpreter is not None, shim_text)
+    check("★不是寫死字面 python(精確比對,非子字串)★", interpreter != "python", shim_text)
+    check("★確實記錄成偵測到的 python3★", interpreter == "python3", shim_text)
+
+
+def t_slim_install_windows_collision_detects_orphan_cmd_shim():
+    """★Windows 分支邏輯測試,非真機驗證★(2026-08 Task 14,②,紅→綠鎖行為):
+    修復前碰撞偵測 `collided = dst_script.exists() or dst_script.is_symlink()`
+    只看 `lumos`(dst_script)不看 `lumos.cmd`(dst_shim)——使用者若手動刪了
+    `lumos` 忘了刪 `lumos.cmd`(單獨殘留),非 `--force` 重裝時 `collided` 判
+    成假,會直接跳過碰撞保護、無聲覆寫殘留的 `lumos.cmd`,繞過「碰撞需要
+    --force」這條保護的存在意義。
+
+    這裡的 fake bin 目錄只放一個殘留的 `lumos.cmd`(內容是可辨識的假字串),
+    刻意不放 `lumos`,模擬「使用者砍過 lumos、忘了砍 .cmd」的現場,跑一次不帶
+    --force 的模擬 Windows 安裝,斷言:①rc 非 0(視為碰撞,不是靜默成功)
+    ②殘留的 `lumos.cmd` 內容原封不動(沒被蓋掉)③沒有產生 `lumos`(證明真的
+    在碰撞保護那一步就退出,沒有往下跑完安裝)。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-cmdcollide-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    fake_home = root / "home"
+    bin_dir = fake_home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    orphan_shim = bin_dir / "lumos.cmd"
+    # ★用 write_bytes/read_bytes 比對,不用 write_text/read_text★——後者預設
+    # universal-newline 轉譯,讀回時會把 \r\n 正規化成 \n,拿它跟原始字串比較
+    # 即使檔案位元組完全沒被動過也會誤判成「內容變了」(假紅),掩蓋掉真正要
+    # 驗的事:檔案位元組有沒有被 install.py 動過。
+    orphan_bytes = "@echo off\r\nrem 使用者手動殘留的舊 shim,lumos 本體已被刪除\r\n".encode("utf-8")
+    orphan_shim.write_bytes(orphan_bytes)
+
+    proj = root / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+
+    env = dict(_os.environ, HOME=str(fake_home), LUMOS_SLIM_SIMULATE_WINDOWS="1")
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                       capture_output=True, text=True, env=env)
+    check("★孤兒 lumos.cmd 視為碰撞,非 0 退出(不是靜默成功)★",
+          r.returncode != 0, r.stdout + r.stderr)
+    check("★孤兒 lumos.cmd 內容未被覆寫(位元組級比對)★",
+          orphan_shim.read_bytes() == orphan_bytes,
+          repr(orphan_shim.read_bytes()))
+    check("★仍未產生 lumos(dst_script),證明真的沒往下跑完安裝步驟★",
+          not (bin_dir / "lumos").exists(), "")
+
+    # ★對稱驗證★:同一份殘留現場,帶 --force 應該能正常覆寫成功(不是从此
+    # 卡死),避免這條修復矯枉過正變成「Windows 上 --force 也救不了」。
+    rf = subprocess.run(["bash", str(pkg / "install.sh"), "--force"], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★帶 --force 能正常覆寫孤兒殘留,重新裝成功★", rf.returncode == 0, rf.stdout + rf.stderr)
+    check("★--force 之後 lumos.cmd 內容已更新(不再是孤兒殘留文字,位元組級比對)★",
+          orphan_shim.read_bytes() != orphan_bytes,
+          repr(orphan_shim.read_bytes()))
+    check("★--force 之後 lumos 也已產生★", (bin_dir / "lumos").exists(), "")
+
+
+def t_slim_ps1_scripts_avoid_session_killing_trailing_exit():
+    """★靜態結構檢查,非真機驗證★(2026-08 Task 14,③保險性修法):PowerShell
+    的 `exit` 在 `irm ... | iex` 或 `& "路徑\\install.ps1"` 這種呼叫鏈裡會
+    終止整個呼叫端 session(不像 bash 子行程只結束自己),而 README 教的兩種
+    呼叫方式(`irm ... | iex` 一行版、`& "$HOME\\.lumos-slim\\install.ps1"`
+    兩行版)都會踩到——使用者貼上指令、安裝其實成功了,但畫面印完「裝好了」
+    之後整個 PowerShell 視窗突然關閉,會被誤以為是崩潰。
+
+    ★這台機器沒有 PowerShell,無法真機驗證這段語意★——只能做靜態結構檢查:
+    斷言 `install.ps1`(:25)、`uninstall.ps1`(:19)、`get.ps1`(:55)三處原本
+    收尾用的字面 `exit $LASTEXITCODE` 都已移除,改成不呼叫 `exit` 但仍把 rc
+    寫回 `$LASTEXITCODE`(供呼叫端在同一個 session 內讀到)的寫法;同時要求
+    三支檔案裡都留著「這段修法未經真機驗證」的誠實聲明,不能包裝成已解決。"""
+    import re as _re
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    slim = repo / "slim"
+
+    for name in ("install.ps1", "uninstall.ps1", "get.ps1"):
+        text = (slim / name).read_text(encoding="utf-8")
+        # ★只看真正的程式碼行,不看註解★——修復說明的註解文字裡本來就會提到
+        # 舊寫法的字面 `exit $LASTEXITCODE`(拿來解釋改了什麼),對整份檔案
+        # 做無腦子字串比對會被自己的說明文字誤觸發成「還有裸 exit」假紅。
+        code_lines = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
+        code_text = "\n".join(code_lines)
+        check(f"★{name} 不再有裸的 exit $LASTEXITCODE 收尾(僅看程式碼行)★",
+              not _re.search(r'^\s*exit\s+\$LASTEXITCODE\s*$', code_text, _re.MULTILINE),
+              code_text)
+        check(f"★{name} 仍把 rc 寫回 $LASTEXITCODE 供呼叫端讀取★",
+              "$LASTEXITCODE = $LASTEXITCODE" in text or "$global:LASTEXITCODE" in text,
+              text)
+        check(f"★{name} 留有『此修法未在真機驗證』的誠實聲明★",
+              ("真機" in text and "驗證" in text), text)
+
+
 def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)

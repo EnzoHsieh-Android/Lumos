@@ -22,6 +22,10 @@ irm https://raw.githubusercontent.com/citrus-android-developer/Citrus_Lumos/main
 
 ★**誠實標記,別誤讀成「Windows 已驗證」**★：這台開發機是 macOS,沒有 Windows/PowerShell 環境可用,**Windows 路徑沒有在真機上跑過**。`install.py`/`uninstall.py` 的邏輯與 Unix 共用同一份 Python 原始碼,Windows 分支（`.cmd` shim 產生、PATH 提示文字）靠 `LUMOS_SLIM_SIMULATE_WINDOWS=1` 環境變數在非 Windows 機器上注入、只驗證過**分支邏輯本身跑對路**（見 `scripts/test_lumos.py` 的 `t_slim_install_windows_*`/`t_slim_uninstall_windows_*` 系列）——`.cmd` shim 在真實 `cmd.exe`/PowerShell 下能不能被正確找到並執行、`install.ps1`/`uninstall.ps1`/`get.ps1` 這三支 `.ps1` 薄殼本身、PATH 環境變數在 Windows 上的實際生效方式,都**沒有機會做真機驗證**。若你在 Windows 上使用本包遇到問題,請直接檢查 `install.py`/`uninstall.py`（跨平台邏輯都在這兩支,可讀可改)。
 
+★**2026-08 Task 14 新增兩項未驗清單(同款誠實聲明,不要誤讀成已解決)**★:
+- **`.cmd` shim 直譯器 fallback**——shim 呼叫用的直譯器名稱(`python3`/`python`)改成安裝當下用 `shutil.which()` 偵測、寫進 shim(見 `install.py` 的 `_pick_windows_interpreter()`),不再寫死字面 `python`。用意是修「Windows 機器只有 `python3.exe`、沒有 `python.exe` 時裝完即壞」這個問題,邏輯層級已用 `LUMOS_SLIM_SIMULATE_WINDOWS=1` 驗過(`t_slim_install_windows_shim_does_not_hardcode_python_when_only_python3_available`),但 `shutil.which()` 在真實 Windows `cmd.exe`/PowerShell 環境下解析 PATH 的實際行為(含副檔名 `.exe` 解析、`PATHEXT` 等)沒有真機驗證過。
+- **`.ps1` 收尾不再呼叫 `exit`**——`install.ps1`/`uninstall.ps1`/`get.ps1` 三支的收尾從 `exit $LASTEXITCODE` 改成 `$global:LASTEXITCODE = $LASTEXITCODE`,理由是 `exit` 在 `irm ... | iex`/`& "路徑\install.ps1"` 這種呼叫鏈裡會終止整個呼叫端 PowerShell session,不像 bash 子行程只結束自己。**這段修法本身沒有真機驗證過**——只能推理不會再主動關掉呼叫端視窗,但改法是否真的完全解決原問題、以及 `$LASTEXITCODE` 在各種呼叫路徑下是否確實對呼叫端可見,都得等真機驗證才能下定論。
+
 ## 怎麼裝
 
 包裡有一支機器層安裝器，做三件事：①把 `lumos` 裝到 `~/.local/bin`（Windows 額外產生 `lumos.cmd` shim，見上方〈支援平台〉）②把技能說明實體複製到 `~/.claude/skills/lumos-project-notes/`（不是 symlink，交付包搬走／刪掉後 skill 仍在）③（★2026-07-31 裁定第三次變更，見下方〈會不會動我專案的 CLAUDE.md〉★）在**執行安裝器時所在的目錄**（你的專案根）的 `CLAUDE.md` 裡放一塊策展過的「怎麼解析圖譜標籤」精簡版紀律區塊——若專案原本就有完整版紀律區塊會被整段取代掉（原位置，不是搬到檔尾），沒有就插在檔首標題之後。

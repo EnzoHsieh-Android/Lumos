@@ -51,7 +51,14 @@ bug 不會再發生。
   - 全域指令:Unix 直接複製 + chmod +x;Windows 額外產生 `lumos.cmd` shim,
     shim 內容只用 `%~dp0`(自己所在目錄)相對定位、不參照 PKG 來源——維持與
     Unix 版相同的「複製後與交付包解耦」特性(`~/.lumos-slim` 事後被砍掉,已裝
-    好的東西仍要能動)。
+    好的東西仍要能動)。shim 呼叫用的直譯器名稱(`python3`/`python`)由
+    `_pick_windows_interpreter()` 在安裝當下偵測、寫進 shim,★不寫死字面
+    `python`★(2026-08 Task 14 修復——舊寫法與 `install.sh`/`install.ps1`
+    自己「python3 優先,找不到才退 python」的判斷邏輯互相矛盾,只有
+    `python3.exe`、沒有 `python.exe` 的機器會裝完即壞,細節見該函式
+    docstring)。碰撞偵測(是否需要 `--force`)在 Windows 路徑下同時看
+    `lumos` 與 `lumos.cmd` 兩個檔案,任一存在都算碰撞(同次修復②——只看
+    前者會讓單獨殘留的 `lumos.cmd` 被非 `--force` 重裝無聲覆寫)。
   - skill 目錄:精簡版一律實體複製(不像完整版那樣建 symlink/junction),
     Windows/Unix 共用同一段程式碼,較單純;但移除/備份時仍用「先 rename 再處理
     內容」的方式,不直接假設它是一般目錄(避免完整版 `_link_or_copy` 那個 W4
@@ -169,6 +176,48 @@ def _merge_claude_md_text(target: Path, template: str):
     return 0, new_text
 
 
+def _pick_windows_interpreter():
+    """回傳要寫進 `.cmd` shim 的直譯器命令名稱(★2026-08 Task 14 修復①★,
+    不是絕對路徑)——安裝當下依序試 `python3`/`python`(與 `install.sh` 的
+    候選清單、`install.ps1` 的 `Get-Command` 鏈同一套「python3 優先」判斷
+    邏輯,三處判斷一致、不漂移),寫進 shim 供之後每次執行 `lumos` 時使用。
+
+    ★為什麼寫在安裝當下偵測到的名稱、不是寫死字面 `python`★:舊寫法
+    `python "%~dp0lumos" %*` 與同專案兩支薄殼(`install.sh`/`install.ps1`)
+    自己都承認「`python` 可能不存在,得先試 `python3`」互相矛盾——只有
+    `python3.exe`、沒有 `python.exe` 的 Windows 機器(常見於某些官方安裝器/
+    Microsoft Store 版 Python)上,`install.ps1` 用 `python3` 把安裝跑完、
+    印出「裝好了」,但產生的 shim 卻寫死呼叫 `python`,之後每次打 `lumos`
+    都得到 `'python' is not recognized`——裝完即壞,且要等使用者真的執行才
+    會發現,不會在安裝當下就報錯。
+
+    ★為什麼寫命令名稱、不寫 `sys.executable` 的絕對路徑★:安裝當下其實可以
+    拿到更「精確」的答案——`install.ps1` 已經用 `Get-Command` 解出一支具體
+    存在的 exe 絕對路徑並用它跑起 `install.py`,理論上 `sys.executable` 就是
+    那支路徑,直接烤進 shim 看似「當下已驗證存在」最穩。但實務上 Windows 常見
+    的 python 版本管理方式(pyenv-win、winget/choco 升級)經常是「换一支新
+    exe、搬動安裝目錄」而不是「原地替換同一個路徑」,絕對路徑撐不過這類升級;
+    相對地,`python3`/`python` 這兩個命令名稱通常穩定掛在 PATH 上,版本管理
+    工具本身的職責就是讓這兩個名字持續可用。寫名稱與另外兩支薄殼的判斷邏輯
+    語意一致,是三處一致中最不會漂移的選擇。兩個候選都試不到就退回 "python"
+    (維持與舊版相同的『至少嘗試一次』語意,不讓 shim 產生這一步本身失敗——
+    真正「兩者都沒有」的情況本來就該在使用者執行 `lumos` 時才浮現,不該卡在
+    安裝步驟;安裝當下若真的兩者都無法偵測,通常代表 `install.ps1`/`install.sh`
+    自己也早就已經因為同樣理由 rc2 退出了,不會走到這裡)。
+
+    ★這台機器沒有 Windows,無法用真實 `where`/PATH 語意驗證★——這裡呼叫的
+    `shutil.which()` 是 Python 標準庫的跨平台實作,在 `LUMOS_SLIM_SIMULATE_
+    WINDOWS=1` 模擬下實際查的仍是這台機器真正的 PATH(見 `scripts/test_lumos.py`
+    的 `t_slim_install_windows_shim_does_not_hardcode_python_*`)——驗證的是
+    ★程式邏輯本身★(偵測到什麼就寫什麼),不是 Windows 真機下 `where.exe`/
+    `cmd.exe` 對 `.cmd` 的實際解析行為。
+    """
+    for cand in ("python3", "python"):
+        if shutil.which(cand):
+            return cand
+    return "python"
+
+
 def _install_cli(pkg: Path, bin_dir: Path, force: bool):
     """回傳 rc。① 全域指令 —— 碰撞語意沿用完整版 cmd_install 的階梯。
 
@@ -176,26 +225,41 @@ def _install_cli(pkg: Path, bin_dir: Path, force: bool):
     Windows:同一份內容複製成 `~/.local/bin/lumos`(沒有可執行位元的意義,純粹
     是 shim 呼叫的目標),另外產生 `~/.local/bin/lumos.cmd` 這個 shim——shim
     內容用 `%~dp0`(批次檔自己所在目錄)相對定位到同目錄下的 `lumos`,★不寫死
-    PKG 路徑★,理由與 Unix 版一致:複製完要跟交付包來源解耦。
+    PKG 路徑★,理由與 Unix 版一致:複製完要跟交付包來源解耦;shim 呼叫用的
+    直譯器名稱由 `_pick_windows_interpreter()` 在安裝當下偵測,不寫死
+    `python`(★2026-08 Task 14 修復①,見該函式 docstring★)。
+
+    ★2026-08 Task 14 修復②★:碰撞偵測(Windows 路徑下)同時看 `lumos` 與
+    `lumos.cmd` 兩個檔案——只看前者的舊寫法,若使用者手動刪了 `lumos` 忘了刪
+    `lumos.cmd`(單獨殘留),非 `--force` 重裝時 `dst_script.exists()` 為
+    False、collided 判成假,會直接跳過碰撞保護、無聲覆寫殘留的 `lumos.cmd`
+    (繞過「碰撞需要 --force」這條保護的存在意義)。
     """
     src_cli = pkg / "scripts" / "lumos"
     dst_script = bin_dir / "lumos"
     dst_shim = bin_dir / "lumos.cmd"
 
     collided = dst_script.exists() or dst_script.is_symlink()
+    if IS_WIN:
+        collided = collided or dst_shim.exists() or dst_shim.is_symlink()
     if collided:
         if not force:
-            print(f"⚠ {dst_script} 已存在,加 --force 覆寫", file=sys.stderr)
+            if IS_WIN:
+                print(f"⚠ {dst_script} 或 {dst_shim} 已存在,加 --force 覆寫", file=sys.stderr)
+            else:
+                print(f"⚠ {dst_script} 已存在,加 --force 覆寫", file=sys.stderr)
             return 2
-        dst_script.unlink()
+        if dst_script.exists() or dst_script.is_symlink():
+            dst_script.unlink()
         if IS_WIN and (dst_shim.exists() or dst_shim.is_symlink()):
             dst_shim.unlink()
 
     shutil.copyfile(src_cli, dst_script)
     if IS_WIN:
-        shim_text = '@echo off\r\npython "%~dp0lumos" %*\r\n'
+        py_cmd = _pick_windows_interpreter()
+        shim_text = f'@echo off\r\n{py_cmd} "%~dp0lumos" %*\r\n'
         dst_shim.write_bytes(shim_text.encode("utf-8"))
-        print(f"✓ 全域指令: {dst_shim} (→ {dst_script})")
+        print(f"✓ 全域指令: {dst_shim} (→ {dst_script}, 直譯器={py_cmd})")
     else:
         dst_script.chmod(0o755)
         print(f"✓ 全域指令: {dst_script}")

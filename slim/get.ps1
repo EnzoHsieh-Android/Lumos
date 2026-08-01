@@ -20,6 +20,12 @@
 # git-for-Windows 可用)——邏輯照 get.sh 逐步翻譯,git clone/pull 的參數與
 # get.sh 相同,但這支腳本本身、`irm | iex` 這種執行方式在真實 Windows 上的行為
 # 都沒有真機驗證過。
+#
+# ★2026-08 Task 14 修復③(保險性修法,★這段語意本身也沒有真機驗證過★,與
+# install.ps1 同款理由,細節見該檔案同一段註解)★:收尾不再呼叫裸的 `exit`
+# ——`get.ps1` 正是 README 一行版 `irm ... | iex` 直接執行的那支腳本,`exit`
+# 在這種呼叫方式下最容易把使用者當下開著的 PowerShell 視窗整個關掉;改把
+# `install.ps1` 的 rc 寫回 `$LASTEXITCODE` 供呼叫端讀取。
 $ErrorActionPreference = "Stop"
 
 $RepoUrl = if ($env:LUMOS_SLIM_REPO_URL) { $env:LUMOS_SLIM_REPO_URL } else { "https://github.com/citrus-android-developer/Citrus_Lumos.git" }
@@ -52,4 +58,4 @@ if (-not (Test-Path $InstallScript)) {
 }
 
 & $InstallScript @args
-exit $LASTEXITCODE
+$global:LASTEXITCODE = $LASTEXITCODE
