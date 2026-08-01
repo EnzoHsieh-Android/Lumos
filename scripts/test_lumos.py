@@ -3578,6 +3578,154 @@ def t_teardown_refuse_zero_mutation():
           hp.stdout.strip() == "scripts/hooks", f"got {hp.stdout!r}")
 
 
+def t_deinit_vendored_unlink_failure_does_not_abort():
+    """★刪不掉一個檔不該炸穿整個流程★(2026-08-01):`_deinit_remove_vendored`
+    的頂層白名單迴圈以前是裸 `p.unlink()`。走 teardown 時①全域 hook 已清、
+    ②CLAUDE.md 已剝、閘已拆,若在這裡拋 `OSError`(Windows 刪執行中的檔、防毒
+    鎖檔),③uninstall 根本沒機會跑——使用者拿到拆一半又只看到 traceback 的狀態。
+
+    ★驗行為★:把某一支 vendored 檔的所在目錄設成唯讀,讓 `unlink()` 真的拋
+    `PermissionError`(不是模擬、不是 mock),斷言①不炸出未接的例外 ②其餘 vendored
+    檔仍被移除(流程有走完)③沒刪掉的那支★不得出現在回傳的已移除清單裡★
+    (不靜默、清單仍誠實)。"""
+    import os as _os8, stat as _st8, shutil as _sh8
+    if hasattr(_os8, "geteuid") and _os8.geteuid() == 0:
+        check("★skip★ root 身分下權限不生效", True, "running as root")
+        return
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-vendunlink-"))
+    src = Path(GRAPHCTL).resolve().parent.parent
+    (root / "scripts").mkdir()
+    # 布置兩支 vendored:一支放在唯讀夾(刪不掉)、一支放在可寫處(該被刪掉)
+    locked_dir = root / "scripts" / "locked"
+    locked_dir.mkdir()
+    _sh8.copy2(GRAPHCTL, root / "scripts" / "lumos")
+    _sh8.copy2(src / "scripts" / "graph-rename.sh", root / "scripts" / "graph-rename.sh")
+    orig_mode = (root / "scripts").stat().st_mode
+
+    real_toolkit = m._VENDORED_TOOLKIT
+    try:
+        # 只留這兩支,避免動到不相干邏輯
+        m._VENDORED_TOOLKIT = ("scripts/lumos", "scripts/graph-rename.sh")
+        _os8.chmod(root / "scripts", 0o500)     # r-x:底下的檔案刪不掉
+        crashed, removed = None, None
+        try:
+            removed = m._deinit_remove_vendored(root, src)
+        except Exception as e:
+            crashed = e
+    finally:
+        _os8.chmod(root / "scripts", orig_mode)
+        m._VENDORED_TOOLKIT = real_toolkit
+
+    check("★unlink 失敗不得炸出未接的例外★", crashed is None, f"crashed={crashed!r}")
+    check("★沒刪掉的檔不得混進『已移除』清單(清單要誠實)★",
+          removed is not None and "scripts/lumos" not in removed, f"removed={removed!r}")
+    check("★前置★ 現場成立:檔案確實還在(刪失敗不是刪成功)",
+          (root / "scripts" / "lumos").is_file(), "")
+
+
+def t_deinit_teardown_refuse_self_delete_on_windows():
+    """★Windows 專屬:不准用「專案自帶的那一份」拆自己★
+
+    `_deinit_remove_vendored` 最後會刪 `scripts/lumos`。POSIX 上刪掉執行中的檔案
+    無妨(所以刻意排最後),★但 Windows 不准刪執行中的檔案★,會拋 PermissionError,
+    而那句 `p.unlink()` 沒有 try/except。後果不是「少刪一個檔」而是★半做★:走
+    teardown 的話①全域 hook 已清、②CLAUDE.md 已剝、閘已拆,才在這裡炸 traceback,
+    ③uninstall 根本沒機會跑。這條路很容易走到——Windows 裝完要重開 session 才吃得
+    到 PATH,拿不到 `lumos` 指令的人自然會打 `python scripts\\lumos teardown`。
+
+    ★HOME 一定要隔離★:這條測試第一版沒隔離,`teardown -y` 就真的把我這台機器的
+    `~/.claude/hooks` 四支全刪了、全域 lumos 也被移除(見 Issues 節點)。破壞性
+    指令的測試,假 HOME 是最低門檻,不是可選項。
+    """
+    import subprocess, os as _os7, shutil as _sh7
+    root = Path(tempfile.mkdtemp(prefix="gctl-selfdel-"))
+    home = Path(tempfile.mkdtemp(prefix="gctl-selfdel-home-"))       # ★隔離★
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    (root / "scripts").mkdir()
+    vendored = root / "scripts" / "lumos"
+
+    def _fresh():
+        """每個子案例都重新布置(前一案若真的跑了會把現場拆掉)。"""
+        _sh7.copy2(GRAPHCTL, vendored)
+        subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"],
+                       capture_output=True, text=True)
+
+    base_env = dict(_os7.environ, HOME=str(home), USERPROFILE=str(home))
+    win_env = dict(base_env, LUMOS_SIMULATE_WINDOWS="1")
+
+    for cmd in ("teardown", "deinit"):
+        _fresh()
+        r = subprocess.run([sys.executable, str(vendored), cmd, "-y"], cwd=str(root),
+                           capture_output=True, text=True, env=win_env)
+        out = r.stdout + r.stderr
+        check(f"★{cmd}:Windows 上用專案自帶那份拆自己 → rc2 拒絕★",
+              r.returncode == 2, f"rc={r.returncode} {out[-300:]}")
+        check(f"★{cmd}:訊息要指出改用全域 lumos(接手者看得懂怎麼辦)★",
+              "全域" in out, out[-300:])
+        hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                            capture_output=True, text=True)
+        check(f"★{cmd}:拒絕前零 mutation(core.hooksPath 原封不動)★",
+              hp.stdout.strip() == "scripts/hooks", f"got {hp.stdout!r}")
+        check(f"★{cmd}:vendored lumos 未被刪(確實什麼都沒做)★", vendored.is_file(), "")
+
+    # ★反誤傷★:非 Windows 走同一條路必須照跑(POSIX 自刪是刻意支援的行為)
+    _fresh()
+    r2 = subprocess.run([sys.executable, str(vendored), "deinit", "-y"], cwd=str(root),
+                        capture_output=True, text=True, env=base_env)
+    out2 = r2.stdout + r2.stderr
+    check("★非 Windows 不得被這道守衛誤擋(POSIX 自刪合法)★",
+          "不能用專案自帶的那份" not in out2, out2[-300:])
+    check("★反誤傷佐證:POSIX 上 deinit 真的做了事(vendored 已被刪)★",
+          not vendored.exists(), f"rc={r2.returncode} {out2[-200:]}")
+
+
+def t_teardown_isatty_lies_eof_refuses():
+    """★Windows 真機現場(deinit 踩過、teardown 沒補)★:某些終端 `isatty()` 回 True
+    但 stdin 其實是 EOF,`input()` 會丟 `EOFError`。`cmd_deinit`(scripts/lumos:6766)
+    與 `_confirm_tty`(:7373)都包了 `try/except EOFError`、安全預設拒絕,唯獨
+    `cmd_teardown` 自己那句 `input("確定? [y/N] ")` 是裸的——在那種終端下會吃到
+    一個沒人接的 traceback。
+
+    ★驗行為不是驗寫法★:真的把 `sys.stdin` 換成 isatty 說謊的假物件、`input`
+    換成會丟 EOFError 的版本,呼叫 `cmd_teardown(yes=False)`,斷言①不炸出
+    EOFError ②回非 0(破壞性操作讀不到確認 → 安全預設拒絕)③★零 mutation★
+    (確認在三步之前,core.hooksPath 必須原封不動)。
+
+    ★不能用 --yes 當解法★:那等於跳過確認直接執行破壞性操作,正是這種時候
+    最不該做的事。"""
+    import subprocess, builtins, os as _os6
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-td-eof-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"],
+                   capture_output=True, text=True)
+
+    class _LyingStdin:
+        def isatty(self): return True          # 撒謊:說自己是終端
+    real_stdin, real_input, cwd = m.sys.stdin, builtins.input, _os6.getcwd()
+    def _eof(prompt=""): raise EOFError        # 但實際讀不到東西
+    try:
+        _os6.chdir(root)
+        m.sys.stdin, builtins.input = _LyingStdin(), _eof
+        crashed = None
+        try:
+            rc = m.cmd_teardown(yes=False)
+        except EOFError as e:
+            crashed, rc = e, None
+    finally:
+        m.sys.stdin, builtins.input = real_stdin, real_input
+        _os6.chdir(cwd)
+
+    check("★isatty 說謊 + stdin EOF → 不得炸出未接的 EOFError★",
+          crashed is None, f"crashed={crashed!r}")
+    check("★讀不到確認 → 安全預設拒絕(非 0)★", rc not in (None, 0), f"rc={rc!r}")
+    hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                        capture_output=True, text=True)
+    check("★拒絕前零 mutation(core.hooksPath 原封不動)★",
+          hp.stdout.strip() == "scripts/hooks", f"got {hp.stdout!r}")
+
+
 def t_confirm_tty_unit():
     """bootstrap一鍵對稱:_confirm_tty 三階單元測(全程不真開終端機;POSIX pty)。"""
     import os, builtins

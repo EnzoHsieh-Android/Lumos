@@ -6662,6 +6662,29 @@ def cmd_uninstall():
     return 0
 
 
+def _selfdelete_risk(root: Path) -> bool:
+    """Windows 專屬:正在跑的這份 lumos 就是 root 底下那份 vendored copy 嗎?
+
+    `_deinit_remove_vendored` 最後會刪 `scripts/lumos`——POSIX 上刪掉執行中的檔案
+    無妨(所以刻意排最後),★但 Windows 不准刪執行中的檔案★,會拋 PermissionError,
+    而那句 `p.unlink()` 沒有 try/except。後果不是「少刪一個檔」而是★半做★:走
+    teardown 的話,①全域 hook 已清、②CLAUDE.md 已剝、閘已拆,才在這裡炸 traceback,
+    ③uninstall 根本沒機會跑。使用者拿到一個拆一半又看不懂的狀態。
+
+    這條路很容易走到:Windows 裝完要重開 session 才吃得到 PATH,拿不到 `lumos`
+    這個指令的人自然會打 `python scripts\\lumos teardown`。
+
+    ★只在 Windows 回 True★——POSIX 上這條路是合法且刻意支援的,不能一起擋掉。
+    `LUMOS_SIMULATE_WINDOWS` 只是測試接縫(本機沒有 Windows 可驗)。
+    """
+    if not (_IS_WIN or os.environ.get("LUMOS_SIMULATE_WINDOWS") == "1"):
+        return False
+    try:
+        return Path(__file__).resolve().is_relative_to(root.resolve())
+    except Exception:
+        return False       # 算不出來就不擋(never block on unknown)
+
+
 def cmd_teardown(yes=False, source=None):
     """一鍵拆機:當前 repo 專案層 + 機器全域(CLI/skills/hooks),★永遠保留圖譜文件★。
     範圍(std F11)=當前 repo + 機器全域,非全機所有 repo(別 repo 的注入/hooks、來源 clone 都留)。
@@ -6680,6 +6703,14 @@ def cmd_teardown(yes=False, source=None):
     if root.resolve() == src.resolve():
         print("ERROR: 當前就是 Lumos 來源本身,teardown 拒絕執行", file=sys.stderr)
         return 2
+    if _selfdelete_risk(root):   # Windows 自刪(見 _selfdelete_risk)——在任何 mutation 之前擋
+        print("ERROR: Windows 上不能用專案自帶的那份 lumos 拆自己"
+              f"({Path(__file__).resolve()})——最後刪 vendored 時會刪到執行中的檔案,"
+              "留下拆一半的狀態。", file=sys.stderr)
+        print("  改用全域指令重跑:  lumos teardown", file=sys.stderr)
+        print("  (若 PATH 還沒吃到,先重開一個終端;或直接用來源那份:"
+              f"  python {src / 'scripts' / 'lumos'} teardown)", file=sys.stderr)
+        return 2
     # 確認——★拒絕/取消前零 mutation★(std F13)
     if not yes:
         if not sys.stdin.isatty():
@@ -6691,7 +6722,17 @@ def cmd_teardown(yes=False, source=None):
         print("  ⚠ 仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外空白/換行;移除全部 lumos 家族")
         print("     skills(含 csharp/kotlin/vue-idioms,你名字不同的 skill 不碰)。")
         print("  (只拆當前 repo——別的 repo 與 bootstrap 來源 clone 不動。)")
-        if input("確定? [y/N] ").strip().lower() not in ("y", "yes"):
+        try:
+            ans = input("確定? [y/N] ").strip().lower()
+        except EOFError:
+            # isatty() 在某些終端/Windows 回 True 但 stdin 其實 EOF → 讀不到確認。
+            # 對齊 cmd_deinit 與 _confirm_tty 的既有硬化(同一現場,Windows 真機踩過):
+            # 破壞性操作安全預設=拒絕(rc2,同上面非互動分支),不是往下做。
+            # ★不要拿 --yes 當解法★——那等於跳過確認直接執行破壞性操作。
+            print("ERROR: 讀不到確認輸入(stdin EOF),拒絕 teardown。"
+                  "確定要拆再加 --yes。", file=sys.stderr)
+            return 2
+        if ans not in ("y", "yes"):
             print("已取消(未改動)。")
             return 0
     # 三步(全域先)
@@ -6722,6 +6763,14 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
     src = _lumos_src(source)
     if root.resolve() == src.resolve():
         print("ERROR: 當前就是 Lumos 來源本身,deinit 拒絕執行", file=sys.stderr)
+        return 2
+    if _selfdelete_risk(root):   # Windows 自刪(見 _selfdelete_risk)——mutation 之前擋
+        print("ERROR: Windows 上不能用專案自帶的那份 lumos 拆自己"
+              f"({Path(__file__).resolve()})——最後刪 vendored 時會刪到執行中的檔案,"
+              "留下拆一半的狀態。", file=sys.stderr)
+        print("  改用全域指令重跑:  lumos deinit", file=sys.stderr)
+        print("  (若 PATH 還沒吃到,先重開一個終端;或直接用來源那份:"
+              f"  python {src / 'scripts' / 'lumos'} deinit)", file=sys.stderr)
         return 2
     vault = _vault_in(root)
     # pre-flight 守衛②:vault == root 鐵閘(防 rmtree 整個 repo)
@@ -7006,7 +7055,17 @@ def _deinit_remove_vendored(root: Path, src=None) -> list:
     for rel in _VENDORED_TOOLKIT:
         p = root / rel
         if p.exists():
-            p.unlink(); removed.append(rel)
+            # ★刪不掉不該炸穿整個流程★(2026-08-01):這裡以前是裸 unlink()。
+            # 走 teardown 時,①全域 hook 已清、②CLAUDE.md 已剝、閘已拆,
+            # 若在這裡拋 PermissionError(Windows 刪執行中的檔、防毒鎖檔),
+            # ③uninstall 根本沒機會跑 → 使用者拿到拆一半又只看到 traceback 的
+            # 狀態。改成印清楚哪一個檔沒刪掉、繼續往下走完;★不靜默★——沒刪掉
+            # 的檔不會被記進 removed,呼叫端印出來的清單仍然誠實。
+            # (Windows 自刪這條主要路徑另有 _selfdelete_risk 在 mutation 前擋。)
+            try:
+                p.unlink(); removed.append(rel)
+            except OSError as e:
+                print(f"  ⚠ 移除 {p} 失敗,跳過(其餘步驟照跑): {e}", file=sys.stderr)
     for d in ("scripts/hooks", "scripts/templates"):
         tgt = root / d
         if not tgt.is_dir():
