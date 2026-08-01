@@ -13542,7 +13542,16 @@ def t_slim_install_guard_repro_real_incident():
 
 def t_slim_install_guard_here_bypasses():
     """★逃生閥★:`--here` 能繞過第一、二層——連來源 repo 三件套都齊備的目錄,
-    加了 `--here` 也放行(第三層的印出目標仍然要出現)。"""
+    加了 `--here` 也放行(第三層的印出目標仍然要出現)。
+    ★2026-08-01 代碼審第四輪抓到的稻草人回歸測試,不要重蹈★:舊版 fixture 是
+    一個空目錄——空目錄永遠不會滿足第二層(需 `skills/lumos-project-notes/`+
+    `scripts/lumos`+`scripts/templates/graph-discipline.md` 三件套齊備)的判定
+    條件,所以舊版只驗到「`--here` 繞過第一層」,把第二層判斷式整段刪掉這條測試
+    照樣綠——那半個逃生閥零回歸覆蓋。改用與 `t_slim_install_guard_rejects_
+    source_repo` 同款的假來源 repo fixture(三件套齊備 + 也帶 .git/CLAUDE.md,
+    模擬真實事故現場),先跑一次不帶 `--here` 斷言確實被第二層擋下(rc=2),
+    再跑一次帶 `--here` 斷言確實放行(rc=0、CLAUDE.md 被更新)——這樣才是真的
+    證明 `--here` 繞過的是第二層,不是巧合。"""
     import tempfile as _tf, os as _os
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-sliminst-guard-here-"))
@@ -13552,14 +13561,37 @@ def t_slim_install_guard_here_bypasses():
     (fake_home / ".local" / "bin").mkdir(parents=True)
     env = dict(_os.environ, HOME=str(fake_home))
 
-    empty = root / "empty"
-    empty.mkdir()
-    r = subprocess.run(["bash", str(pkg / "install.sh"), "--here"], cwd=str(empty),
+    # 假的「來源 repo」目標——三件套齊備,且也有 .git/docs/*-knowledge/
+    # CLAUDE.md(第一層條件全部成立),與 t_slim_install_guard_rejects_source_repo
+    # 同款,確保這是第二層在擋、不是第一層。
+    src = root / "fake-source-repo"
+    (src / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (src / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    (src / "scripts" / "templates").mkdir(parents=True)
+    (src / "scripts" / "lumos").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    (src / "scripts" / "templates" / "graph-discipline.md").write_text("# tpl\n", encoding="utf-8")
+    (src / ".git").mkdir()
+    (src / "docs" / "fake-knowledge").mkdir(parents=True)
+    original = "# 來源 repo 自己的 CLAUDE.md\n\n不該被動。\n"
+    (src / "CLAUDE.md").write_text(original, encoding="utf-8")
+
+    # 不帶 --here:先證明這個 fixture 真的會被第二層擋下(不是空手放行)。
+    r_blocked = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(src),
+                               capture_output=True, text=True, env=env)
+    check("★前置★ 不帶 --here → 確實被第二層擋下(rc=2)",
+          r_blocked.returncode == 2, r_blocked.stdout + r_blocked.stderr)
+    check("★前置★ 擋下時 CLAUDE.md 未被動(byte-equal)",
+          (src / "CLAUDE.md").read_text(encoding="utf-8") == original, "")
+
+    # 帶 --here:同一個來源 repo 三件套齊備的目錄,加了 --here 應該放行。
+    r = subprocess.run(["bash", str(pkg / "install.sh"), "--here"], cwd=str(src),
                        capture_output=True, text=True, env=env)
-    check("★--here★ 空目錄加 --here → rc=0", r.returncode == 0, r.stdout + r.stderr)
-    check("★--here★ CLAUDE.md 確實被建立", (empty / "CLAUDE.md").exists(), "")
+    check("★--here★ 來源 repo 三件套齊備 + --here → rc=0(繞過第二層)",
+          r.returncode == 0, r.stdout + r.stderr)
+    check("★--here★ CLAUDE.md 確實被更新(不再是安裝前原文)",
+          (src / "CLAUDE.md").read_text(encoding="utf-8") != original, "")
     check("★--here★ 第三層印出仍然出現(不因 --here 而略過)",
-          str(empty) in r.stdout, r.stdout)
+          str(src) in r.stdout, r.stdout)
 
 
 def t_slim_install_guard_normal_project_still_works():
@@ -13583,6 +13615,68 @@ def t_slim_install_guard_normal_project_still_works():
     check("★正常專案★ 有 .git → rc=0", r.returncode == 0, r.stdout + r.stderr)
     check("★正常專案★ CLAUDE.md 確實被建立/更新", (proj / "CLAUDE.md").exists(), "")
     check("★第三層★ 目標絕對路徑印在輸出裡", str(proj) in r.stdout, r.stdout)
+
+
+def t_slim_install_symlink_cwd_audit_path_matches_write_path():
+    """★MINOR(2026-08-01 代碼審第四輪)★:第三層守衛與 CLAUDE.md 寫入路徑計算
+    必須用同一套 `pwd -P`(解 symlink),不能一個用 `pwd -P`、另一個用素樸
+    `$(pwd)`——否則透過 symlink 進入專案目錄時,守衛稽核印出的「將修改: …」
+    路徑會跟真正寫入完成後回報的路徑字串不一致,弱化第三層「把目標印出來讓
+    人眼抓錯」的價值(雖然兩者實際指向同一個檔案,不會寫錯地方)。
+    ★怎麼逼出分歧★:純粹用 `subprocess.run(cwd=<symlink 路徑>)` 不夠——OS
+    chdir(2) 一律解到實體路徑,bash 起手若沒有匹配的 `$PWD` 環境變數可承接,
+    `pwd`(無 -P)一樣會回退成實體路徑,測不出分歧。真實情境是使用者的互動
+    shell 先 `cd` 進 symlink(那個 shell 會把 `$PWD` 設成 symlink 形式的邏輯
+    路徑並 export),再從那裡呼叫 `bash install.sh`——子行程的 bash 會沿用繼承
+    到的 `$PWD`(經 stat 驗證與 getcwd() 同一個目的地就採信),此時素樸 `pwd`
+    回傳 symlink 形式、`pwd -P` 回傳實體形式,兩者才會真的分岔。這裡用
+    `env=dict(..., PWD=<symlink 路徑>)` 模擬這個情境(已手動驗證 bash 行為
+    確實如此)。
+    斷言:守衛開頭印的「將修改: X」與收尾印的「✓ CLAUDE.md …已安裝/更新: Y」
+    (Y 直接來自實際寫入用的 `$CLAUDE_MD` 變數)必須是同一個字串——這條測試在
+    `slim/install.sh:207` 改回素樸 `$(pwd)` 會翻紅(X 是 `pwd -P` 算出的實體
+    路徑、Y 會變成 symlink 形式的邏輯路徑,兩者不再相等)。"""
+    import tempfile as _tf, os as _os, re as _re
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-symlink-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+
+    real_proj = root / "real-proj"
+    real_proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(real_proj)], check=True)
+
+    link_proj = root / "link-proj"
+    link_proj.symlink_to(real_proj, target_is_directory=True)
+
+    # ★關鍵★:顯式把 $PWD 設成 symlink 路徑,模擬互動 shell 已 cd 進 symlink
+    # 後再呼叫本腳本的情境——沒有這行,子行程的 bash 起手 PWD 會直接落回
+    # getcwd() 的實體路徑,測不出 `pwd` 與 `pwd -P` 的分歧。
+    env = dict(_os.environ, HOME=str(fake_home), PWD=str(link_proj))
+
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(link_proj),
+                       capture_output=True, text=True, env=env)
+    check("symlink cwd 安裝 rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    m_target = _re.search(r"^將修改: (.+)$", r.stdout, _re.MULTILINE)
+    m_done = _re.search(r"^✓ CLAUDE\.md 精簡版紀律區塊已安裝/更新: (.+)$", r.stdout, _re.MULTILINE)
+    check("輸出含「將修改:」稽核行", m_target is not None, r.stdout)
+    check("輸出含「✓ …已安裝/更新:」收尾行", m_done is not None, r.stdout)
+
+    if m_target and m_done:
+        audit_path = m_target.group(1).strip()
+        written_path = m_done.group(1).strip()
+        check("★稽核路徑與實際寫入路徑字串一致★ (改回素樸 $(pwd) 會在這裡翻紅)",
+              audit_path == written_path,
+              f"稽核: {audit_path!r}  實際寫入: {written_path!r}")
+        check("★兩者皆已解 symlink(實體路徑,非 symlink 邏輯路徑)★",
+              str(link_proj) not in audit_path and str(link_proj) not in written_path,
+              f"稽核: {audit_path!r}  實際寫入: {written_path!r}  symlink路徑: {link_proj}")
+
+    real_claude_md = real_proj / "CLAUDE.md"
+    check("CLAUDE.md 確實寫在實體路徑底下", real_claude_md.exists(), "")
 
 
 def main():

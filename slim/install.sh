@@ -204,7 +204,11 @@ echo "✓ skill: ${DST_SKILL}"
 # 跑安裝器/一行安裝)。範本 = 本包隨附的 claude-block.md(靜態檔,不在腳本裡
 # 手刻 heredoc)。合併邏輯用 python3 stdlib 做,不手滾 sed/awk 拼字串(block
 # 內含反引號/中文/Markdown 表格,sed 逐行替換極易漏 escape)。
-CLAUDE_MD="$(pwd)/CLAUDE.md"
+# ★用 TARGET_DIR(已用 `pwd -P` 解過 symlink)組,別再叫一次 `$(pwd)`★——
+# 兩者若指向同一個檔案但字串不同(cwd 經 symlink 進來時),稽核印出的路徑
+# (第三層 TARGET_CLAUDE_MD)與這裡實際寫入的路徑就會對不上,弱化第三層
+# 「把目標印出來讓人眼抓錯」的價值(2026-08-01 代碼審第四輪 MINOR)。
+CLAUDE_MD="$TARGET_CLAUDE_MD"
 BLOCK_TEMPLATE="${PKG}/claude-block.md"
 [ -f "$BLOCK_TEMPLATE" ] || { echo "ERROR: 找不到 ${BLOCK_TEMPLATE}" >&2; exit 2; }
 
