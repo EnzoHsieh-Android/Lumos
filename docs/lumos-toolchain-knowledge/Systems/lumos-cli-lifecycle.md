@@ -46,6 +46,8 @@ decisions:
     valid: true
 related:
   - "[[CLAUDE注入re-sync與版本標籤_計劃]]"
+  - "[[Systems/slim-install-安裝器]]"
+  - "[[Systems/slim-uninstall-一行卸載]]"
 verified_by:
   - "[[Verification/2026-07-06_CLAUDE注入re-sync]]"
   - "[[Verification/2026-07-25_bootstrap一鍵對稱]]"
