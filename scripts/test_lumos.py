@@ -13132,6 +13132,94 @@ def t_slim_uninstall_keeps_manifest_when_shim_remains():
     check("★留下來的 manifest 仍可用作基準★", bool(kept), repr(kept))
 
 
+def t_slim_uninstall_manifest_ignores_stray_cmd_on_posix():
+    """★代碼審 r5 抓到,r4 修法自己引入的邊界(a)★:`bin_cleared` 原本無條件檢查
+    `dst_shim.exists()`,但①b 整段包在 `if IS_WIN:` 底下——非 Windows 機器
+    根本不會去看、去動 `~/.local/bin/lumos.cmd`。於是 macOS/Linux 上只要那個
+    路徑上剛好有別的東西(`~/.local/bin` 是很多工具共用的地方,也可能是先前
+    用 LUMOS_SLIM_SIMULATE_WINDOWS=1 測試留下的殘留),manifest 就永遠刪不掉,
+    訊息還誤導成「上面 bin 有項目未移除」——但①b 從沒嘗試移除它。★而且⑤沒有
+    `--force` 分支(①/①b 才有)★,使用者照著彙總訊息重跑 --force 也解不開。
+
+    ★驗行為★:非 Windows(不設 SIMULATE_WINDOWS)、`lumos.cmd` 路徑上放一個
+    不相干的檔案,斷言①manifest 仍被正常清掉 ②那個不相干的檔案原封不動。
+    把 `IS_WIN and` 拿掉,這條翻紅。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimmanifest-stray-"))
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+    env.pop("LUMOS_SLIM_SIMULATE_WINDOWS", None)
+
+    proj = root / "proj"
+    proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案標題\n\n原有內容\n", encoding="utf-8")
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ 非 Windows 安裝 rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    manifest = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+    stray = fake_home / ".local" / "bin" / "lumos.cmd"
+    stray_bytes = "別的東西,跟本包無關\n".encode("utf-8")
+    stray.write_bytes(stray_bytes)
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    out = ru.stdout + ru.stderr
+    check("★非 Windows 上不相干的 lumos.cmd 不得卡住 manifest 清理★",
+          not manifest.exists(), out)
+    check("★那個不相干的檔案原封不動(非 Windows 下①b 本來就不該碰它)★",
+          stray.is_file() and stray.read_bytes() == stray_bytes, out)
+
+
+def t_slim_uninstall_keeps_manifest_when_shim_is_broken_symlink():
+    """★代碼審 r5 抓到,r4 修法自己引入的邊界(b)★:判斷式左右兩半不對稱——
+    `dst_script` 那半寫了 `exists() or is_symlink()`,`dst_shim` 那半只有
+    `exists()`。`Path.exists()` 對「目標已被刪掉的斷鏈 symlink」回傳 False,
+    但那個 symlink 本身仍佔著 `~/.local/bin/lumos.cmd` 這個路徑、①b 也確實
+    沒把它移除(讀內容會拋 OSError,走「無法安全比對→跳過移除」那條)。
+    於是 shim 還在,manifest 卻被判成「可以清了」而刪掉——正是 r4 要修的那條
+    資料相依被繞過。
+
+    ★驗行為★:Windows 模擬下把 lumos.cmd 做成指向不存在目標的斷鏈 symlink,
+    斷言 manifest ★仍在★。把 `or dst_shim.is_symlink()` 拿掉,這條翻紅。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimmanifest-brokenlink-"))
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home), LUMOS_SLIM_SIMULATE_WINDOWS="1")
+
+    proj = root / "proj"
+    proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案標題\n\n原有內容\n", encoding="utf-8")
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ Windows 模擬安裝 rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    manifest = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+    shim = fake_home / ".local" / "bin" / "lumos.cmd"
+    shim.unlink()
+    shim.symlink_to(root / "這個目標不存在")
+    check("★前置★ 現場成立:斷鏈 symlink(exists() 為假但 is_symlink() 為真)",
+          (not shim.exists()) and shim.is_symlink(), "")
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    out = ru.stdout + ru.stderr
+    check("★前置★ 斷鏈 shim 確實沒被移除(仍佔著那個路徑)", shim.is_symlink(), out)
+    check("★shim 還佔著路徑 → manifest 必須留著★", manifest.is_file(), out)
+
+
 def t_slim_uninstall_manifest_parent_cleanup_is_best_effort():
     """★代碼審 r3 抓到的錯誤歸因★:manifest 刪掉之後「順帶清掉空的 lumos-slim/
     父目錄」是選配收尾,原本跟 `unlink()` 共用同一個 try/except——父目錄清不掉時

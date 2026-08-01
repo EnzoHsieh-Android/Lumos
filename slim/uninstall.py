@@ -333,7 +333,19 @@ def main(argv=None):
     #    程序鎖住)時 shim 明明還在,manifest 卻照樣被刪,把使用者重試時唯一的比對
     #    基準銷毀。分支簿記天生會漏(這次就漏了),改成事後問一句「東西還在不在」:
     #    對每一條現有與未來新增的分支都自動成立,漏不掉。
-    bin_cleared = not (dst_script.exists() or dst_script.is_symlink() or dst_shim.exists())
+    #    ★兩個邊界(2026-08-01 代碼審 r5 抓到,都是 r4 這個修法自己引入的)★:
+    #    (a) shim 的存在性檢查必須跟①b 一樣受 `IS_WIN` 限定——①b 整段包在
+    #        `if IS_WIN:` 底下,非 Windows 機器根本不會去看/去動 `lumos.cmd`;
+    #        這裡若無條件檢查,macOS/Linux 上只要那個路徑上剛好有別的東西
+    #        (`~/.local/bin` 是很多工具共用的地方),manifest 就會被永久卡住,
+    #        而且⑤沒有 `--force` 分支(①/①b 才有),使用者照訊息重跑也解不開。
+    #    (b) shim 那一半要跟 `dst_script` 對稱補上 `is_symlink()`——`exists()`
+    #        對「目標已被刪掉的斷鏈 symlink」回傳 False,但那個 symlink 本身
+    #        仍佔著路徑、①b 也確實沒把它移除掉。
+    bin_cleared = not (
+        dst_script.exists() or dst_script.is_symlink()
+        or (IS_WIN and (dst_shim.exists() or dst_shim.is_symlink()))
+    )
 
     if manifest_path.is_file():
         if bin_cleared:
