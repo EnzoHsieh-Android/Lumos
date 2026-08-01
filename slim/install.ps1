@@ -23,16 +23,32 @@
 # (README 沒教這種呼叫法),因為腳本本身不再呼叫 `exit`,回給作業系統的行程
 # exit code 會固定是 0,不會反映失敗;README 教的兩種呼叫方式都是在同一個
 # session 內執行(不是啟動新行程),不受此取捨影響。
+#
+# ★2026-08 Task 15(接續 Task 14,補殘留缺陷)★:Task 14 只修了「結尾」那個
+# `exit $LASTEXITCODE`,早期「找不到 python」錯誤分支的 `exit 2` 沒有一併改
+# ——這處反而更該修,因為它在錯誤路徑上,使用者最需要看到錯誤訊息的時候
+# 視窗反而被關掉,連錯在哪都來不及讀。改法:把整段邏輯包進 `Invoke-Install`
+# 函式,錯誤分支印完 `Write-Error` 後 `return 2`(函式層級的 `return`,不是
+# `exit`——只結束這支函式,不終止呼叫端 session);本檔案最下方把函式回傳值
+# 收進 `$rc` 再寫回 `$global:LASTEXITCODE`,沿用 Task 14 選定的慣例。這段
+# 語意同樣沒有真機驗證過,見上方「★誠實聲明★」與 `slim/README.md`〈支援
+# 平台〉。
 $ErrorActionPreference = "Stop"
 
-$Pkg = Split-Path -Parent $MyInvocation.MyCommand.Path
+function Invoke-Install {
+  param($Pkg, $Args)
 
-$Py = Get-Command python3 -ErrorAction SilentlyContinue
-if (-not $Py) { $Py = Get-Command python -ErrorAction SilentlyContinue }
-if (-not $Py) {
-  Write-Error "ERROR: 找不到 python3 或 python 指令——請先安裝 Python 3 再重跑本腳本。"
-  exit 2
+  $Py = Get-Command python3 -ErrorAction SilentlyContinue
+  if (-not $Py) { $Py = Get-Command python -ErrorAction SilentlyContinue }
+  if (-not $Py) {
+    Write-Error "ERROR: 找不到 python3 或 python 指令——請先安裝 Python 3 再重跑本腳本。"
+    return 2
+  }
+
+  & $Py.Source "$Pkg\install.py" @Args
+  return $LASTEXITCODE
 }
 
-& $Py.Source "$Pkg\install.py" @args
-$global:LASTEXITCODE = $LASTEXITCODE
+$Pkg = Split-Path -Parent $MyInvocation.MyCommand.Path
+$rc = Invoke-Install -Pkg $Pkg -Args $args
+$global:LASTEXITCODE = $rc

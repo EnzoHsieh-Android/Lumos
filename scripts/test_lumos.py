@@ -14023,18 +14023,23 @@ def t_slim_install_windows_collision_detects_orphan_cmd_shim():
 
 
 def t_slim_ps1_scripts_avoid_session_killing_trailing_exit():
-    """★靜態結構檢查,非真機驗證★(2026-08 Task 14,③保險性修法):PowerShell
-    的 `exit` 在 `irm ... | iex` 或 `& "路徑\\install.ps1"` 這種呼叫鏈裡會
-    終止整個呼叫端 session(不像 bash 子行程只結束自己),而 README 教的兩種
-    呼叫方式(`irm ... | iex` 一行版、`& "$HOME\\.lumos-slim\\install.ps1"`
-    兩行版)都會踩到——使用者貼上指令、安裝其實成功了,但畫面印完「裝好了」
-    之後整個 PowerShell 視窗突然關閉,會被誤以為是崩潰。
+    """★靜態結構檢查,非真機驗證★(2026-08 Task 14,③保險性修法;★Task 15
+    擴大範圍★——Task 14 只改了三支檔案「結尾」那個 `exit $LASTEXITCODE`,
+    早期錯誤分支(找不到 python3/python、找不到 git、clone/pull 失敗、交付包
+    不完整)留下的 6 處 `exit 2` 沒有一併修,反而更該修:它們全在錯誤路徑上,
+    使用者最需要看到錯誤訊息的時候,視窗反而被關掉、連錯在哪都來不及讀)。
+    PowerShell 的 `exit` 在 `irm ... | iex` 或 `& "路徑\\install.ps1"` 這種
+    呼叫鏈裡會終止整個呼叫端 session(不像 bash 子行程只結束自己),而 README
+    教的兩種呼叫方式(`irm ... | iex` 一行版、`& "$HOME\\.lumos-slim\\install.ps1"`
+    兩行版)都會踩到。
 
     ★這台機器沒有 PowerShell,無法真機驗證這段語意★——只能做靜態結構檢查:
-    斷言 `install.ps1`(:25)、`uninstall.ps1`(:19)、`get.ps1`(:55)三處原本
-    收尾用的字面 `exit $LASTEXITCODE` 都已移除,改成不呼叫 `exit` 但仍把 rc
-    寫回 `$LASTEXITCODE`(供呼叫端在同一個 session 內讀到)的寫法;同時要求
-    三支檔案裡都留著「這段修法未經真機驗證」的誠實聲明,不能包裝成已解決。"""
+    斷言三支 `.ps1` 的**程式碼行完全不含裸 `exit`**(不只結尾的
+    `exit $LASTEXITCODE`,也涵蓋早期分支的 `exit 2`;排除註解行,避免被修復
+    說明自己的文字誤觸發),同時仍把 rc 寫回 `$LASTEXITCODE`(供呼叫端在同一
+    個 session 內讀到)、且都留著「這段修法未經真機驗證」的誠實聲明,不能
+    包裝成已解決。★反向斷言(驗『沒有把守衛拆成不擋』)另見
+    `t_slim_ps1_error_branches_still_halt_via_return`。"""
     import re as _re
     from pathlib import Path as _P
     repo = _P(GRAPHCTL).parent.parent
@@ -14043,18 +14048,86 @@ def t_slim_ps1_scripts_avoid_session_killing_trailing_exit():
     for name in ("install.ps1", "uninstall.ps1", "get.ps1"):
         text = (slim / name).read_text(encoding="utf-8")
         # ★只看真正的程式碼行,不看註解★——修復說明的註解文字裡本來就會提到
-        # 舊寫法的字面 `exit $LASTEXITCODE`(拿來解釋改了什麼),對整份檔案
-        # 做無腦子字串比對會被自己的說明文字誤觸發成「還有裸 exit」假紅。
+        # 舊寫法的字面 `exit $LASTEXITCODE`/`exit 2`(拿來解釋改了什麼),對
+        # 整份檔案做無腦字串比對會被自己的說明文字誤觸發成「還有裸 exit」假紅。
         code_lines = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
         code_text = "\n".join(code_lines)
-        check(f"★{name} 不再有裸的 exit $LASTEXITCODE 收尾(僅看程式碼行)★",
-              not _re.search(r'^\s*exit\s+\$LASTEXITCODE\s*$', code_text, _re.MULTILINE),
+        check(f"★{name} 程式碼行完全不含裸 exit(涵蓋早期錯誤分支的 exit 2,不只結尾)★",
+              not _re.search(r'(?im)^\s*exit(?![\w-])', code_text),
               code_text)
         check(f"★{name} 仍把 rc 寫回 $LASTEXITCODE 供呼叫端讀取★",
               "$LASTEXITCODE = $LASTEXITCODE" in text or "$global:LASTEXITCODE" in text,
               text)
         check(f"★{name} 留有『此修法未在真機驗證』的誠實聲明★",
               ("真機" in text and "驗證" in text), text)
+
+
+def t_slim_ps1_error_branches_still_halt_via_return():
+    """★反向斷言,防止「拔掉 exit 但守衛被拆成不擋」★(2026-08 Task 15,
+    接續 Task 14 殘留缺陷):把 `exit 2` 改成別的寫法,很容易一不小心寫成
+    「印完錯誤訊息但沒有真的中止」,導致守衛形同虛設(例如找不到 python 卻
+    繼續往下跑 install.py)。這裡做的是**靜態結構檢查**,驗的是:每一處
+    `Write-Error`(程式碼行,排除註解)緊接著的下一行程式碼必須是
+    `return <整數>`——在 PowerShell 裡,函式本體內的 `return` 會直接結束
+    整個函式(不只是結束當下的 if/elseif 區塊),只要這個 `return` 是函式
+    本體內、沒有巢狀在別的迴圈/scriptblock 裡面,後面真正的安裝/卸載動作
+    就不會被跑到;另外檢查函式回傳值真的有被外層收進變數、寫回
+    `$global:LASTEXITCODE`,不是函式內部對了但外層沒接住。
+
+    ★這條驗得到什麼、驗不到什麼(誠實邊界)★:
+    - 驗得到:原始碼結構上「錯誤訊息後面緊接著就是 `return <int>`,不是繼續
+      往下的其他陳述式」;3 支檔案裡 6 個 `Write-Error` 一一對應 6 個
+      `return`;邏輯確實包進 `function`;函式回傳值確實被外層變數接住並寫回
+      `$global:LASTEXITCODE`。
+    - 驗不到:PowerShell 真實執行語意——這個 `return` 在實際執行時是否真的
+      結束整個函式(而非某個巢狀 scriptblock/迴圈,本檔案的函式本身沒有這種
+      巢狀,但這條測試不是靠追蹤大括號配對驗證這件事,是靠人工確認結構後
+      寫死的正則);函式呼叫鏈、`$LASTEXITCODE`/`$global:LASTEXITCODE` 在
+      PowerShell 各種呼叫路徑(`&`/`iex`/dot-source)下是否真的对呼叫端可見,
+      都需要真機驗證,這台機器沒有 PowerShell 做不到。"""
+    import re as _re
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    slim = repo / "slim"
+
+    expected_write_error_count = {
+        "install.ps1": 1,
+        "uninstall.ps1": 1,
+        "get.ps1": 4,
+    }
+
+    for name, expected_count in expected_write_error_count.items():
+        text = (slim / name).read_text(encoding="utf-8")
+        code_lines = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
+
+        write_error_count = 0
+        for i, ln in enumerate(code_lines):
+            if not _re.search(r'\bWrite-Error\b', ln):
+                continue
+            write_error_count += 1
+            j = i + 1
+            while j < len(code_lines) and code_lines[j].strip() == "":
+                j += 1
+            next_line = code_lines[j].strip() if j < len(code_lines) else ""
+            check(f"★{name} 第{write_error_count}處 Write-Error 後緊接著 return <int>(不是繼續往下跑)★",
+                  bool(_re.match(r'^return\s+\d+$', next_line)),
+                  f"下一行程式碼是: {next_line!r}\n完整檔案:\n{text}")
+
+        check(f"★{name} 錯誤分支(Write-Error)數量符合預期({expected_count}),沒有分支被漏改或多算★",
+              write_error_count == expected_count,
+              f"實際找到 {write_error_count} 處\n{text}")
+
+        check(f"★{name} 邏輯已包進函式(function),不是留在裸的頂層★",
+              bool(_re.search(r'(?im)^\s*function\s+\S+', text)),
+              text)
+
+        m_call = _re.search(r'\$(\w+)\s*=\s*Invoke-\w+', text)
+        check(f"★{name} 函式回傳值有被外層變數接住★", bool(m_call), text)
+        if m_call:
+            varname = m_call.group(1)
+            check(f"★{name} 接住的變數有寫回 $global:LASTEXITCODE(呼叫端讀得到 rc)★",
+                  bool(_re.search(rf'\$global:LASTEXITCODE\s*=\s*\${varname}\b', text)),
+                  text)
 
 
 def main():

@@ -24,7 +24,7 @@ irm https://raw.githubusercontent.com/citrus-android-developer/Citrus_Lumos/main
 
 ★**2026-08 Task 14 新增兩項未驗清單(同款誠實聲明,不要誤讀成已解決)**★:
 - **`.cmd` shim 直譯器 fallback**——shim 呼叫用的直譯器名稱(`python3`/`python`)改成安裝當下用 `shutil.which()` 偵測、寫進 shim(見 `install.py` 的 `_pick_windows_interpreter()`),不再寫死字面 `python`。用意是修「Windows 機器只有 `python3.exe`、沒有 `python.exe` 時裝完即壞」這個問題,邏輯層級已用 `LUMOS_SLIM_SIMULATE_WINDOWS=1` 驗過(`t_slim_install_windows_shim_does_not_hardcode_python_when_only_python3_available`),但 `shutil.which()` 在真實 Windows `cmd.exe`/PowerShell 環境下解析 PATH 的實際行為(含副檔名 `.exe` 解析、`PATHEXT` 等)沒有真機驗證過。
-- **`.ps1` 收尾不再呼叫 `exit`**——`install.ps1`/`uninstall.ps1`/`get.ps1` 三支的收尾從 `exit $LASTEXITCODE` 改成 `$global:LASTEXITCODE = $LASTEXITCODE`,理由是 `exit` 在 `irm ... | iex`/`& "路徑\install.ps1"` 這種呼叫鏈裡會終止整個呼叫端 PowerShell session,不像 bash 子行程只結束自己。**這段修法本身沒有真機驗證過**——只能推理不會再主動關掉呼叫端視窗,但改法是否真的完全解決原問題、以及 `$LASTEXITCODE` 在各種呼叫路徑下是否確實對呼叫端可見,都得等真機驗證才能下定論。
+- **`.ps1` 全程不再呼叫 `exit`**——`install.ps1`/`uninstall.ps1`/`get.ps1` 三支原本收尾是裸的 `exit $LASTEXITCODE`,理由是 `exit` 在 `irm ... | iex`/`& "路徑\install.ps1"` 這種呼叫鏈裡會終止整個呼叫端 PowerShell session,不像 bash 子行程只結束自己(Task 14 先修的收尾那一處)。**2026-08 Task 15 補上殘留缺陷**:三支檔案早期錯誤分支(找不到 python3/python、找不到 git、`git pull`/`git clone` 失敗、交付包不完整,共 6 處)當時仍留著裸的 `exit 2`——這幾處反而更該修,因為全在錯誤路徑上,使用者最需要看到錯誤訊息的時候,視窗反而被關掉,連錯在哪都來不及讀。現在三支檔案的邏輯都包進一個函式,錯誤分支印完訊息後用函式層級的 `return <int>`(不是 `exit`)中止,呼叫端在腳本最下方把函式回傳值收進 `$global:LASTEXITCODE`。**這整段修法(結尾與早期分支)本身都沒有真機驗證過**——只能推理不會再主動關掉呼叫端視窗、`return` 不會意外落空(有靜態結構測試 `t_slim_ps1_error_branches_still_halt_via_return` 驗過「錯誤訊息後一定接 `return`」,但驗不到 PowerShell 的真實執行語意),改法是否真的完全解決原問題、`$LASTEXITCODE` 在各種呼叫路徑下是否確實對呼叫端可見,都得等真機驗證才能下定論。
 
 ## 怎麼裝
 
