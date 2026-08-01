@@ -15,15 +15,28 @@
 # `Invoke-Uninstall` 函式,錯誤分支印完 `Write-Error` 後 `return 2`,本檔案
 # 最下方把函式回傳值收進 `$rc` 再寫回 `$global:LASTEXITCODE`。這段語意同樣
 # 沒有真機驗證過。
-$ErrorActionPreference = "Stop"
-
+#
+# ★2026-08 Task 16 修復①(BLOCKER,補 Task 15 遺漏,理由與 install.ps1 同款,
+# 細節見該檔案同一段註解)★:`$ErrorActionPreference = "Stop"` 會把
+# `Write-Error` 升級成終止型例外,讓它後面的 `return 2` 執行不到、例外炸穿
+# `Invoke-Uninstall`、`$global:LASTEXITCODE` 永遠寫不進去、呼叫端把失敗誤判
+# 成成功。改法:`Write-Error` 加 `-ErrorAction Continue` 明確覆寫。同樣沒有
+# 真機驗證過。
+#
+# ★2026-08 Task 16 修復③(一致性處理,本檔案原本不受影響,理由與 install.ps1
+# 同款,細節見該檔案同一段註解)★:`$ErrorActionPreference = "Stop"` 移進
+# `Invoke-Uninstall` 函式內部第一行;頂層的 `$Pkg = Split-Path -Parent
+# $MyInvocation.MyCommand.Path` 同款理由留在函式外(避免 `$MyInvocation` 語意
+# 被函式 scope 改變)。
 function Invoke-Uninstall {
   param($Pkg, $Args)
+
+  $ErrorActionPreference = "Stop"
 
   $Py = Get-Command python3 -ErrorAction SilentlyContinue
   if (-not $Py) { $Py = Get-Command python -ErrorAction SilentlyContinue }
   if (-not $Py) {
-    Write-Error "ERROR: 找不到 python3 或 python 指令——請先安裝 Python 3 再重跑本腳本。"
+    Write-Error "ERROR: 找不到 python3 或 python 指令——請先安裝 Python 3 再重跑本腳本。" -ErrorAction Continue
     return 2
   }
 

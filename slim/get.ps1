@@ -35,13 +35,35 @@
 # 的 `return`,不是 `exit`——只結束這支函式,不終止呼叫端 session,也保證
 # 該分支之後真正的 clone/安裝動作不會被跑到);本檔案最下方把函式回傳值收進
 # `$rc` 再寫回 `$global:LASTEXITCODE`。這段語意同樣沒有真機驗證過。
-$ErrorActionPreference = "Stop"
-
+#
+# ★2026-08 Task 16 修復①(BLOCKER,補 Task 15 遺漏,理由與 install.ps1 同款,
+# 細節見該檔案同一段註解)★:`$ErrorActionPreference = "Stop"` 會把
+# `Write-Error` 升級成終止型例外,讓它後面的 `return 2` 執行不到、例外炸穿
+# `Invoke-Get`、`$global:LASTEXITCODE` 永遠寫不進去、呼叫端把失敗誤判成成功
+# ——`get.ps1` 正是 `irm ... | iex` 一行版直接執行的腳本,踩到的機率最高。
+# 改法:4 處 `Write-Error` 都加 `-ErrorAction Continue` 明確覆寫。同樣沒有
+# 真機驗證過。
+#
+# ★2026-08 Task 16 修復③★:`$ErrorActionPreference = "Stop"` 若寫在頂層(不在
+# 函式裡面),會污染呼叫端 session——README 教的一行安裝是 `irm ... | iex`,
+# `iex` 是在**呼叫端當下的 scope** 執行(不像 `& "path.ps1"` 會建新 script
+# scope),使用者跑完一行安裝後,同一個視窗裡任何原本靠非終止型錯誤運作的
+# 後續指令都會被意外中止,而且裝完不會自動還原,使用者也不會知道原因是
+# 「剛剛裝了個東西」。改法:把這行賦值移進 `Invoke-Get` 函式內部第一行——
+# PowerShell 函式預設有自己的子 scope,函式內對變數賦值(沒加 `$global:`/
+# `$script:` 前綴)只落在函式自己的 local scope,不會外溢回呼叫端;`Invoke-Get`
+# 這個函式本體已經涵蓋了本檔案所有會用到非終止型錯誤語意的邏輯(git 指令、
+# clone/pull),搬進去不影響行為,只是把賦值的可見範圍收窄。`install.ps1`／
+# `uninstall.ps1` 因為經 `&` 呼叫、本來就有自己的 script scope,不受這個污染
+# 問題影響,但一併搬進函式維持三支檔案寫法一致。這段 scope 語意同樣沒有真機
+# 驗證過(這台機器沒有 PowerShell)。
 function Invoke-Get {
   param($RepoUrl, $Dest, $Args)
 
+  $ErrorActionPreference = "Stop"
+
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Error "ERROR: 找不到 git 指令——請先安裝 git 再重跑這支腳本(https://git-scm.com/download/win)。"
+    Write-Error "ERROR: 找不到 git 指令——請先安裝 git 再重跑這支腳本(https://git-scm.com/download/win)。" -ErrorAction Continue
     return 2
   }
 
@@ -49,11 +71,11 @@ function Invoke-Get {
     Write-Host "已存在 $Dest,更新到最新版..."
     git -C $Dest pull --ff-only -q
     if ($LASTEXITCODE -ne 0) {
-      Write-Error "ERROR: $Dest 更新失敗(可能有本地改動,或不是 fast-forward)。若你動過裡面的檔案,確認沒有要留的東西後備份/刪掉 $Dest 再重跑本腳本。"
+      Write-Error "ERROR: $Dest 更新失敗(可能有本地改動,或不是 fast-forward)。若你動過裡面的檔案,確認沒有要留的東西後備份/刪掉 $Dest 再重跑本腳本。" -ErrorAction Continue
       return 2
     }
   } elseif (Test-Path $Dest) {
-    Write-Error "ERROR: $Dest 已存在,但不是本包的 git clone(找不到 $Dest\.git)。為避免誤刪你自己的東西,不會自動覆寫——請自行確認該目錄內容後處理。"
+    Write-Error "ERROR: $Dest 已存在,但不是本包的 git clone(找不到 $Dest\.git)。為避免誤刪你自己的東西,不會自動覆寫——請自行確認該目錄內容後處理。" -ErrorAction Continue
     return 2
   } else {
     Write-Host "首次安裝,clone 到 $Dest..."
@@ -62,7 +84,7 @@ function Invoke-Get {
 
   $InstallScript = Join-Path $Dest "install.ps1"
   if (-not (Test-Path $InstallScript)) {
-    Write-Error "ERROR: $InstallScript 不存在——交付包內容可能不完整。"
+    Write-Error "ERROR: $InstallScript 不存在——交付包內容可能不完整。" -ErrorAction Continue
     return 2
   }
 

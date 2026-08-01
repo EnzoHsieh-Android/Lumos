@@ -13900,6 +13900,94 @@ def t_slim_uninstall_windows_removes_paired_files():
     check("★lumos 內容副本已移除(成對清除,無孤兒檔)★", not dst_script.exists(), "")
 
 
+def t_slim_uninstall_windows_orphan_cmd_shim_removed():
+    """★Windows 分支邏輯測試,非真機驗證★(2026-08 Task 16,②MAJOR,紅→綠鎖
+    行為):修復前 `uninstall.py` 的 `if dst_script.exists() or
+    dst_script.is_symlink():` 把整個 `lumos.cmd`(`dst_shim`)移除邏輯都巢狀在
+    底下——`lumos` 不存在但 `lumos.cmd` 還在(使用者手滑只刪了 `lumos`,忘了
+    刪 `.cmd`)時,外層 `if` 直接判假,整段(含 `--force` 分支)都跳過,孤兒
+    `lumos.cmd` 永遠清不掉、`--force` 也救不了——牴觸 `uninstall.py` 自己
+    docstring 講的「兩者總是成對安裝/移除」,也是 install.py 那邊 Task 14②
+    已經修過的「碰撞偵測要同時看兩個檔案」的鏡像缺口。
+
+    先用 `LUMOS_SLIM_SIMULATE_WINDOWS=1` 做一次真實安裝(產生真正的
+    `lumos`+`lumos.cmd` 配對,shim 內容是 install.py 實際偵測出的直譯器,不是
+    自己憑空編的假字串),接著只刪 `lumos`(模擬使用者手滑),留下孤兒
+    `lumos.cmd`;跑一次不帶 `--force` 的模擬 Windows 卸載,斷言:①rc 仍是
+    0(乾淨卸載,因為孤兒 shim 內容比對得上 install.py 產生的固定樣板,不需要
+    `--force` 這條保護)②孤兒 `lumos.cmd` 確實被清掉,不是永遠殘留。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-orphancmd-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    _slim_copy_uninstall_files(pkg)
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+
+    proj = root / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+
+    env = dict(_os.environ, HOME=str(fake_home), LUMOS_SLIM_SIMULATE_WINDOWS="1")
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ Windows 模擬安裝 rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    dst_shim = fake_home / ".local" / "bin" / "lumos.cmd"
+    dst_script = fake_home / ".local" / "bin" / "lumos"
+    check("★前置★ .cmd shim 與內容副本都已裝上", dst_shim.is_file() and dst_script.is_file(), "")
+
+    # ★模擬使用者手滑只刪了 lumos,忘了刪 lumos.cmd★——不透過 uninstall,直接
+    # 手動製造孤兒現場。
+    dst_script.unlink()
+    check("★前置★ lumos 已不存在、lumos.cmd 仍孤兒殘留(現場已布置)",
+          not dst_script.exists() and dst_shim.is_file(), "")
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★孤兒現場下卸載仍 rc0(乾淨卸載,shim 內容比對得上,不需要 --force)★",
+          ru.returncode == 0, ru.stdout + ru.stderr)
+    check("★孤兒 lumos.cmd 確實被清掉(不是永遠殘留)★", not dst_shim.exists(), "")
+
+
+def t_slim_uninstall_windows_orphan_cmd_shim_foreign_content_needs_force():
+    """★反誤傷 + Windows 分支邏輯測試,非真機驗證★(2026-08 Task 16,②MAJOR,
+    對稱驗證):驗證 `t_slim_uninstall_windows_orphan_cmd_shim_removed` 的修法
+    不是矯枉過正變成「lumos 不存在時無腦刪掉任何 lumos.cmd」——內容比對規則
+    要真的有鑑別力。孤兒 `lumos.cmd` 若內容不符合 install.py 產生的固定樣板
+    (可能是使用者自己的東西),不帶 `--force` 應該拒絕移除(rc=1,安全性
+    跳過,不是硬錯誤);帶 `--force` 才能覆蓋這條保護。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-orphancmdfg-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    _slim_copy_uninstall_files(pkg)
+    fake_home = root / "home"
+    bin_dir = fake_home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    foreign_shim = bin_dir / "lumos.cmd"
+    foreign_bytes = "@echo off\r\nrem 使用者自己的東西,不是本包產生的 shim\r\n".encode("utf-8")
+    foreign_shim.write_bytes(foreign_bytes)
+
+    proj = root / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+
+    env = dict(_os.environ, HOME=str(fake_home), LUMOS_SLIM_SIMULATE_WINDOWS="1")
+    r = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                       capture_output=True, text=True, env=env)
+    check("★內容不符本包樣板 → rc1(安全性跳過,非硬錯誤)★", r.returncode == 1, r.stdout + r.stderr)
+    check("★該檔內容未被動(位元組級比對)★",
+          foreign_shim.read_bytes() == foreign_bytes, repr(foreign_shim.read_bytes()))
+
+    rf = subprocess.run(["bash", str(pkg / "uninstall.sh"), "--force"], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★帶 --force 才允許移除★", rf.returncode == 0, rf.stdout + rf.stderr)
+    check("--force 後檔案確實被移除", not foreign_shim.exists(), "")
+
+
 def _slim_python3_only_path_env(root):
     """建一個「PATH 上保證只有 `python3`、沒有 `python`」的環境字串——供
     `t_slim_install_windows_shim_does_not_hardcode_python_*` 用,★不依賴宿主
@@ -14084,7 +14172,18 @@ def t_slim_ps1_error_branches_still_halt_via_return():
       巢狀,但這條測試不是靠追蹤大括號配對驗證這件事,是靠人工確認結構後
       寫死的正則);函式呼叫鏈、`$LASTEXITCODE`/`$global:LASTEXITCODE` 在
       PowerShell 各種呼叫路徑(`&`/`iex`/dot-source)下是否真的对呼叫端可見,
-      都需要真機驗證,這台機器沒有 PowerShell 做不到。"""
+      都需要真機驗證,這台機器沒有 PowerShell 做不到。
+
+    ★2026-08 Task 16 事後補述(這條測試實際踩到的邊界)★:這條測試連續撐過
+    Task 14/15 兩輪(含 mutant 驗證),但完全沒抓到 ①的 `$ErrorActionPreference
+    = "Stop"` 讓 `Write-Error` 本身變終止型例外的問題——因為它驗的是「原始碼
+    長相」(Write-Error 後面那一行寫的是不是 `return <int>`),不是「執行到
+    那一行時,`Write-Error` 這個陳述式本身會不會先拋例外讓 `return` 永遠執行
+    不到」。這是本專案第十次撞到「測試存在但沒在驗它宣稱要驗的」——mutant
+    驗證只證明「抓得到我想到的失敗模式」,不證明「抓得到真正的失敗模式」,
+    不能當作「測試夠格」的證據。真正涵蓋這個語意規則的是
+    `t_slim_ps1_write_error_noterminating_under_stop_preference`(見該測試
+    docstring 對自己驗得到/驗不到的誠實邊界)。"""
     import re as _re
     from pathlib import Path as _P
     repo = _P(GRAPHCTL).parent.parent
@@ -14128,6 +14227,99 @@ def t_slim_ps1_error_branches_still_halt_via_return():
             check(f"★{name} 接住的變數有寫回 $global:LASTEXITCODE(呼叫端讀得到 rc)★",
                   bool(_re.search(rf'\$global:LASTEXITCODE\s*=\s*\${varname}\b', text)),
                   text)
+
+
+def t_slim_ps1_write_error_noterminating_under_stop_preference():
+    """★靜態結構檢查,非真機驗證★(2026-08 Task 16,①BLOCKER,補 Task 15
+    真正的漏洞):三支 `.ps1` 頂部都設 `$ErrorActionPreference = "Stop"`——
+    PowerShell 語意:`Stop` 會把 `Write-Error` 這種非終止型錯誤升級成終止型
+    例外(等同 `throw`)。後果:①`Write-Error` 那行直接拋例外,它後面的
+    `return <int>`(`t_slim_ps1_error_branches_still_halt_via_return` 驗的
+    正是這一行的長相)是死碼,永遠執行不到 ②例外炸穿 `Invoke-Install`/
+    `Invoke-Uninstall`/`Invoke-Get`,連 `$rc = Invoke-* ...` 的賦值都完成不了
+    ③檔尾 `$global:LASTEXITCODE = $rc` 永遠不執行,呼叫端讀到的是殘留舊值
+    (很可能是 0)——把失敗誤判成成功;使用者看到的也不是設計中的乾淨 ERROR
+    訊息,而是未捕捉例外的堆疊。★這正好打掉 Task 14/15 整段修法的目的,而且
+    發生在它最該保護的錯誤路徑上★——這是本專案第十次撞到「測試存在但沒在驗
+    它宣稱要驗的」,細節見 `t_slim_ps1_error_branches_still_halt_via_return`
+    docstring 的事後補述。
+
+    修法:每一處 `Write-Error` 呼叫都明確加 `-ErrorAction Continue`——這是
+    PowerShell 官方支援的逐次呼叫覆寫機制,對單一 cmdlet 呼叫的 `-ErrorAction`
+    參數會蓋過 `$ErrorActionPreference` 這個全域偏好設定(其餘沒有明確覆寫的
+    cmdlet 仍然照 `Stop` 該終止就終止,這是刻意保留的行為,只放行 Write-Error
+    這條刻意設計成非終止的分支)。
+
+    ★這條驗得到什麼、驗不到什麼(誠實邊界,不能再犯同一種「驗長相不驗語意」
+    的錯)★:
+    - 驗得到:①三支檔案的 `$ErrorActionPreference = "Stop"` 賦值仍在(沒有
+      順手拔掉,拔掉會弱化其他未加 -ErrorAction 覆寫的 cmdlet 該終止卻不終止
+      的保護)②每一處 `Write-Error` 呼叫「那一行本身」帶有
+      `-ErrorAction Continue`/`SilentlyContinue`/`Ignore` 這種明確覆寫寫法
+      (不是靠猜隔壁行、不是子字串比對整份檔案)③`Write-Error` 出現次數符合
+      預期(6 處:install.ps1=1、uninstall.ps1=1、get.ps1=4),沒有分支被漏改
+      或多算 ④結構順序上,`$ErrorActionPreference = "Stop"` 賦值出現在所有
+      `Write-Error` 呼叫「之前」(粗略對應函式內由上而下的執行順序;三支檔案
+      邏輯本身是線性、沒有前置分支會跳過賦值,行號順序在這裡足以近似執行
+      順序,但這不是控制流分析)。
+    - 驗不到(這才是核心誠實聲明):`-ErrorAction Continue` 這個參數在真實
+      PowerShell 執行時是否確實蓋過 `$ErrorActionPreference`(這是 PowerShell
+      官方文件記載的行為,但這台機器沒有 PowerShell,沒有辦法實際執行一行
+      `$ErrorActionPreference = "Stop"; Write-Error "x" -ErrorAction Continue;
+      Write-Host "still alive"` 去驗證「still alive」真的印得出來);函式
+      scope 内對 `$ErrorActionPreference` 的區域賦值(Task 16③也順手把它從
+      頂層搬進函式,見 `slim/install.ps1`/`slim/uninstall.ps1`/`slim/get.ps1`
+      同一段修復註解)在函式呼叫當下是否真的先於函式內任何 cmdlet 生效,是
+      PowerShell scope 解析規則,同樣沒有真機可以驗;`$LASTEXITCODE`/
+      `$global:LASTEXITCODE` 在 `irm | iex`/`&`/dot-source 各種呼叫路徑下
+      是否真的對呼叫端可見,一樣需要真機驗證。★不把 mutant 驗證(把
+      `-ErrorAction Continue` 拿掉確認這條測試會翻紅)當作「測試夠格」的
+      證據★——mutant 只證明「抓得到我想到的這一種失敗模式」,不證明「抓
+      得到 PowerShell 真實執行時所有可能讓 Write-Error 變終止型的失敗模式」
+      (例如:若之後有人在 `-ErrorAction Continue` 後面誤加了會覆寫回 `Stop`
+      的參數、或把整行搬進一個自己又設了 `$ErrorActionPreference = "Stop"`
+      的巢狀 scriptblock,這條正則不保證抓得到)。"""
+    import re as _re
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    slim = repo / "slim"
+
+    expected_write_error_count = {
+        "install.ps1": 1,
+        "uninstall.ps1": 1,
+        "get.ps1": 4,
+    }
+
+    for name, expected_count in expected_write_error_count.items():
+        text = (slim / name).read_text(encoding="utf-8")
+        code_lines = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
+
+        stop_idx = None
+        for i, ln in enumerate(code_lines):
+            if _re.search(r'\$ErrorActionPreference\s*=\s*"Stop"', ln):
+                stop_idx = i
+                break
+        check(f"★{name} 仍設 $ErrorActionPreference = \"Stop\"(沒有為了閃避這個 bug 順手拔掉,"
+              "弱化其他 cmdlet 該終止卻不終止的保護)★",
+              stop_idx is not None, text)
+
+        write_error_count = 0
+        for i, ln in enumerate(code_lines):
+            if not _re.search(r'\bWrite-Error\b', ln):
+                continue
+            write_error_count += 1
+            check(f"★{name} 第{write_error_count}處 Write-Error 本行有明確非終止 -ErrorAction 覆寫"
+                  "(不依賴猜測隔壁行、不是整份檔案子字串比對)★",
+                  bool(_re.search(r'-ErrorAction\s+(Continue|SilentlyContinue|Ignore)\b', ln)),
+                  ln)
+            if stop_idx is not None:
+                check(f"★{name} 第{write_error_count}處 Write-Error 出現在 $ErrorActionPreference = \"Stop\" "
+                      "賦值之後(結構順序近似執行順序,不是控制流分析)★",
+                      i > stop_idx, f"Write-Error 在第 {i} 行,Stop 賦值在第 {stop_idx} 行\n{text}")
+
+        check(f"★{name} Write-Error 出現次數符合預期({expected_count}),沒有分支被漏改或多算★",
+              write_error_count == expected_count,
+              f"實際找到 {write_error_count} 處\n{text}")
 
 
 def main():

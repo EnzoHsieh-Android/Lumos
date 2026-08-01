@@ -63,6 +63,12 @@ SLIM_START = "<!-- LUMOS-SLIM:START -->"
 SLIM_END = "<!-- LUMOS-SLIM:END -->"
 BACKUP_RE = re.compile(r"<!-- LUMOS-SLIM:FULL-BACKUP:(NONE|BASE64:[A-Za-z0-9+/=]*) -->")
 
+# ★2026-08 Task 16 修復②★:`lumos.cmd` shim 的固定樣板,與 install.py
+# `_install_cli()` 產生的 `shim_text = f'@echo off\r\n{py_cmd} "%~dp0lumos" %*\r\n'`
+# 一一對應——`py_cmd` 只會是 `python3` 或 `python`(見 `_pick_windows_interpreter()`
+# 候選清單)。沒有 manifest 雜湊可比對 shim 本身時,拿這個樣板當安全判斷基準。
+SHIM_TEXT_RE = re.compile(r'\A@echo off\r\n(?:python3|python) "%~dp0lumos" %\*\r\n\Z')
+
 
 def _sha256_file(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -158,17 +164,22 @@ def main(argv=None):
 
     print("== 公開精簡版卸載 ==")
 
-    # ① ~/.local/bin/lumos(+ Windows 的 lumos.cmd 搭檔)—— ★只在它確實是我們
-    #    裝的那份時才移除★。判斷方式:優先用 install.py 寫的 manifest(不依賴
-    #    ~/.lumos-slim 存在);manifest 給不出參照時,退回舊版做法(拿
-    #    ~/.lumos-slim/scripts/lumos 當基準,相容較舊安裝)。★兩種「不移除」
-    #    要分清楚★:完全找不到任何比對基準(基準缺失)、跟找到基準但內容比對
-    #    不符(內容真的不符)——對使用者的意義不一樣,訊息分開講。
+    # ① ~/.local/bin/lumos —— ★只在它確實是我們裝的那份時才移除★。判斷方式:
+    #    優先用 install.py 寫的 manifest(不依賴 ~/.lumos-slim 存在);manifest
+    #    給不出參照時,退回舊版做法(拿 ~/.lumos-slim/scripts/lumos 當基準,
+    #    相容較舊安裝)。★兩種「不移除」要分清楚★:完全找不到任何比對基準
+    #    (基準缺失)、跟找到基準但內容比對不符(內容真的不符)——對使用者的
+    #    意義不一樣,訊息分開講。
+    #    ★2026-08 Task 16 修復②:Windows 的 lumos.cmd 搭檔已移出這個 if,改成
+    #    ①b 獨立區塊(見下)★——舊寫法把 dst_shim 的移除巢狀在這個 if 裡面,
+    #    `lumos` 不存在但 `lumos.cmd` 還在(孤兒殘留,例如使用者手滑只刪了
+    #    `lumos`)時,外層 `if dst_script.exists()...` 直接判假,整段(含
+    #    --force 分支)都跳過,孤兒 `lumos.cmd` 永遠清不掉、`--force` 也救不了
+    #    ——這牴觸本檔案 docstring 自己講的「兩者總是成對安裝/移除」,也是
+    #    install.py 那邊已經修過的「碰撞偵測要同時看兩個檔案」的鏡像缺口。
     if dst_script.exists() or dst_script.is_symlink():
         if force:
             dst_script.unlink()
-            if IS_WIN and (dst_shim.exists() or dst_shim.is_symlink()):
-                dst_shim.unlink()
             print(f"✓ 已移除(--force,跳過內容比對): {dst_script}")
         else:
             try:
@@ -202,8 +213,6 @@ def main(argv=None):
                     bump(1)
                 elif cur_sha == ref_sha:
                     dst_script.unlink()
-                    if IS_WIN and (dst_shim.exists() or dst_shim.is_symlink()):
-                        dst_shim.unlink()
                     print(f"✓ 已移除: {dst_script}")
                 else:
                     print(f"⚠ {dst_script} 內容與比對基準({ref_desc})不一致——這是「內容真的不符」,不是基準缺失。",
@@ -213,6 +222,52 @@ def main(argv=None):
                     bump(1)
     else:
         print(f"  (未安裝: {dst_script})")
+
+    # ①b ~/.local/bin/lumos.cmd(Windows 搭檔,僅 IS_WIN)—— ★與①各自獨立
+    #    判斷、各自執行,互不阻擋★(2026-08 Task 16 修復②)。shim 本身沒有
+    #    manifest 雜湊可比對(install.py `_install_cli()` 只記 dst_script 的
+    #    雜湊,shim 內容是固定樣板、跟安裝位置無關,拿它比對沒有鑑別力,見該處
+    #    註解)——改用「內容是否符合 install.py 產生的固定樣板」當安全判斷
+    #    基準:`@echo off\r\n<偵測到的直譯器> "%~dp0lumos" %*\r\n`,直譯器只會
+    #    是 `python3` 或 `python`(見 `_pick_windows_interpreter()`)。符合樣板
+    #    視為本包裝的 shim,可以安全移除(不需要 --force);不符合就當成使用者
+    #    自己的東西,拒絕移除。
+    if IS_WIN:
+        if dst_shim.exists() or dst_shim.is_symlink():
+            if force:
+                dst_shim.unlink()
+                print(f"✓ 已移除(--force,跳過內容比對): {dst_shim}")
+            else:
+                try:
+                    # ★用 read_bytes().decode() 比對,不用 read_text()★——後者
+                    # 預設 universal-newline 轉譯,會把 shim 內容裡的 `\r\n`
+                    # 正規化成 `\n`,即使檔案位元組完全沒被動過,也會讓下面比對
+                    # `\r\n` 的 SHIM_TEXT_RE 永遠比對不到(同一個坑,`t_slim_
+                    # install_windows_collision_detects_orphan_cmd_shim` 的
+                    # docstring 已經點過一次,這裡是它在讀取端的鏡像版本)。
+                    shim_text = dst_shim.read_bytes().decode("utf-8")
+                except OSError as e:
+                    print(f"⚠ 無法讀取 {dst_shim} 內容,無法安全比對——跳過移除: {e}", file=sys.stderr)
+                    print("  確定要砍就加 --force 重跑。", file=sys.stderr)
+                    bump(2)
+                    shim_text = None
+                except UnicodeDecodeError as e:
+                    print(f"⚠ {dst_shim} 內容不是合法 utf-8,無法安全比對——跳過移除: {e}", file=sys.stderr)
+                    print("  確定要砍就加 --force 重跑。", file=sys.stderr)
+                    bump(2)
+                    shim_text = None
+
+                if shim_text is not None:
+                    if SHIM_TEXT_RE.match(shim_text):
+                        dst_shim.unlink()
+                        print(f"✓ 已移除: {dst_shim}")
+                    else:
+                        print(f"⚠ {dst_shim} 內容不符合本包產生的 shim 樣板——可能是你自己的東西,拒絕移除。",
+                              file=sys.stderr)
+                        print("  確定要砍就加 --force 重跑。", file=sys.stderr)
+                        bump(1)
+        else:
+            print(f"  (未安裝: {dst_shim})")
 
     # ② skill 目錄 —— ★移除前先備份,不直接刪★(使用者可能在裡面塞過自己的
     #    檔)。★與①獨立★:①的比對結果(移除/跳過/錯誤)不影響這一步是否執行。
