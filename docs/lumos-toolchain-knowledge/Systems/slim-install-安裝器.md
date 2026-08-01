@@ -42,6 +42,7 @@ verified_by:
   - "[[Verification/2026-08-01_slim-windows兩缺陷修復]]"
   - "[[Verification/2026-08-01_slim-ps1早期分支exit修復]]"
   - "[[Verification/2026-08-01_slim-終審三缺陷修復]]"
+  - "[[Verification/2026-08-01_slim-manifest殘留與代碼審六輪]]"
 related:
   - "[[Systems/slim-get-一行安裝]]"
   - "[[Systems/slim-uninstall-一行卸載]]"
