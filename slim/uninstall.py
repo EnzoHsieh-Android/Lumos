@@ -164,11 +164,6 @@ def main(argv=None):
     manifest_path = Path.home() / ".local" / "share" / "lumos-slim" / "manifest.json"
 
     rc = 0
-    # ★manifest(身分證)該不該一起清掉,取決於 bin 這一步的結果★——若①/①b 有任何
-    # 一份檔案基於安全考量沒被移除(比對不符/基準缺失/讀不到),manifest 必須留著:
-    # 它正是使用者之後加 --force 或手動處理時唯一的比對基準,先刪了等於把判斷依據
-    # 銷毀。只有 bin 確實清乾淨(或本來就沒裝)時,留著 manifest 才純粹是殘留垃圾。
-    bin_cleared = True
 
     def bump(n):
         nonlocal rc
@@ -201,7 +196,6 @@ def main(argv=None):
                 print(f"⚠ 無法讀取 {dst_script} 內容,無法安全比對——跳過移除: {e}", file=sys.stderr)
                 print("  確定要砍就加 --force 重跑。", file=sys.stderr)
                 bump(2)
-                bin_cleared = False
                 cur_sha = None
 
             if cur_sha is not None:
@@ -225,7 +219,6 @@ def main(argv=None):
                           file=sys.stderr)
                     print("  是不是本包裝的那份,拒絕移除。確定要砍就加 --force 重跑。", file=sys.stderr)
                     bump(1)
-                    bin_cleared = False
                 elif cur_sha == ref_sha:
                     dst_script.unlink()
                     print(f"✓ 已移除: {dst_script}")
@@ -235,7 +228,6 @@ def main(argv=None):
                     print("  這可能是你自己的東西,不是本包裝的那份 lumos——拒絕移除。", file=sys.stderr)
                     print("  確定要砍就加 --force 重跑。", file=sys.stderr)
                     bump(1)
-                    bin_cleared = False
     else:
         print(f"  (未安裝: {dst_script})")
 
@@ -271,7 +263,6 @@ def main(argv=None):
                     print(f"⚠ {dst_shim} 內容不是合法 utf-8,無法安全比對——跳過移除: {e}", file=sys.stderr)
                     print("  確定要砍就加 --force 重跑。", file=sys.stderr)
                     bump(2)
-                    bin_cleared = False
                     shim_text = None
 
                 if shim_text is not None:
@@ -283,7 +274,6 @@ def main(argv=None):
                               file=sys.stderr)
                         print("  確定要砍就加 --force 重跑。", file=sys.stderr)
                         bump(1)
-                        bin_cleared = False
         else:
             print(f"  (未安裝: {dst_shim})")
 
@@ -334,8 +324,17 @@ def main(argv=None):
     #    才刪 manifest——①/①b 任一份基於安全考量沒移除時,manifest 是使用者之後
     #    重試(加 --force / 手動確認)唯一的比對基準,先刪掉等於把判斷依據銷毀,
     #    下次重跑只會落到「基準缺失」。留著並印一句為什麼留,比默默刪掉誠實。
+    #    ★判斷方式見下方 bin_cleared:直接查檔案系統實況,不做分支簿記★
     #    只刪這支檔案與(空的)父目錄 lumos-slim/,★絕不碰 ~/.local/share 底下
     #    其他任何東西★——那裡是很多工具共用的地方。
+    # ★「bin 有沒有清乾淨」直接查檔案系統實況,不用旗標簿記★(2026-08-01 代碼審
+    #    r4 抓到):原本在①/①b 的每一條「沒移除」分支手動設 `bin_cleared = False`,
+    #    ①b 的 OSError 分支漏設了一條——Windows 上 `lumos.cmd` 讀不到(權限/被別的
+    #    程序鎖住)時 shim 明明還在,manifest 卻照樣被刪,把使用者重試時唯一的比對
+    #    基準銷毀。分支簿記天生會漏(這次就漏了),改成事後問一句「東西還在不在」:
+    #    對每一條現有與未來新增的分支都自動成立,漏不掉。
+    bin_cleared = not (dst_script.exists() or dst_script.is_symlink() or dst_shim.exists())
+
     if manifest_path.is_file():
         if bin_cleared:
             try:

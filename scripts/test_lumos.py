@@ -13084,6 +13084,54 @@ def t_slim_uninstall_removes_manifest_when_bin_cleared():
     check("★乾淨卸載 rc0★", ru.returncode == 0, ru.stdout + ru.stderr)
 
 
+def t_slim_uninstall_keeps_manifest_when_shim_remains():
+    """★代碼審 r4 抓到的漏分支★:「bin 沒清乾淨就別刪 manifest」原本是靠在①/①b
+    每一條「沒移除」分支手動設 `bin_cleared = False` 來簿記,①b 的 `OSError`
+    分支★漏設了一條★——Windows 上 `lumos.cmd` 讀不到(權限/被別的程序鎖住)時
+    shim 明明還在,manifest 卻照樣被刪,把使用者重試時唯一的比對基準銷毀。
+
+    ★修法不是補那一條分支,是換掉整個機制★:改成事後直接查檔案系統實況
+    (`dst_script.exists() or dst_shim.exists()`)——分支簿記天生會漏(這次就
+    漏了),查實況對每一條現有與未來新增的分支都自動成立。
+
+    ★驗行為★:布置「`lumos` 已清掉、但有一個內容不符本包樣板的 `lumos.cmd`
+    孤兒還在」的現場(不帶 --force 時卸載器會拒絕移除它),斷言 manifest ★仍在★。
+    把修法還原成 `bin_cleared = True` 的旗標簿記,這條會翻紅。"""
+    import tempfile as _tf, os as _os, json as _json
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-slimmanifest-shim-"))
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home), LUMOS_SLIM_SIMULATE_WINDOWS="1")
+
+    proj = root / "proj"
+    proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案標題\n\n原有內容\n", encoding="utf-8")
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ Windows 模擬安裝 rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    manifest = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+    shim = fake_home / ".local" / "bin" / "lumos.cmd"
+    check("★前置★ 安裝後 manifest 與 shim 都在", manifest.is_file() and shim.is_file(), "")
+
+    # 把 shim 換成「使用者自己的東西」——卸載器會拒絕移除它(不帶 --force)
+    shim.write_bytes("@echo off\r\nrem 使用者自己的東西\r\n".encode("utf-8"))
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    out = ru.stdout + ru.stderr
+    check("★前置★ 現場成立:shim 確實沒被移除(仍在原地)", shim.is_file(), out)
+    check("★shim 還在 → manifest 必須留著(它是重試時唯一的比對基準)★",
+          manifest.is_file(), out)
+    kept = _json.loads(manifest.read_text(encoding="utf-8")).get("bin_sha256", "")
+    check("★留下來的 manifest 仍可用作基準★", bool(kept), repr(kept))
+
+
 def t_slim_uninstall_manifest_parent_cleanup_is_best_effort():
     """★代碼審 r3 抓到的錯誤歸因★:manifest 刪掉之後「順帶清掉空的 lumos-slim/
     父目錄」是選配收尾,原本跟 `unlink()` 共用同一個 try/except——父目錄清不掉時
