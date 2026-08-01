@@ -14629,7 +14629,53 @@ def t_slim_ps1_write_error_noterminating_under_stop_preference():
               f"實際找到 {write_error_count} 處\n{text}")
 
 
+def t_suite_strips_git_env_from_hook_invocation():
+    """★pre-push 假紅回歸釘(2026-08-01)★:`git push` 會把 `GIT_DIR` export 給
+    hook,hook 再把整個 env 傳給測試進程。大量測試會自己 `git init` 臨時 repo
+    再對它下 git 指令——`GIT_DIR` 一旦存在就★覆蓋 cwd 推斷★,那些指令全部打到
+    本 repo 而不是臨時 repo。症狀是同一個 commit 人手跑全綠、由 pre-push 跑就
+    紅個三五條,而且每次紅的條數還不一樣;把 `GIT_DIR` 指向本 repo 實測,紅的
+    條數暴增到 65。
+
+    ★驗行為不是驗寫法★:真的用被污染的 env 去 spawn 一個子進程跑一條 git 重的
+    測試,斷言它 rc0。把 `main()` 開頭那段 `environ.pop` 拿掉,這條會翻紅
+    (已驗證:拿掉後同一條在污染 env 下確實失敗)。"""
+    import os as _os5
+    env = dict(_os5.environ)
+    env["GIT_DIR"] = str(Path(GRAPHCTL).resolve().parent.parent / ".git")
+    r = subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                        "-k", "codeloop_guard_prepush"],
+                       capture_output=True, text=True, env=env)
+    check("★GIT_DIR 被污染時,建臨時 repo 的測試仍該全綠(env 已在進入點清掉)★",
+          r.returncode == 0, (r.stdout + r.stderr)[-1500:])
+
+
 def main():
+    # ★把 git 的環境變數從進程 env 清掉(2026-08-01,pre-push 假紅實錘)★
+    #
+    # 症狀:同一個 commit、同一棵樹,直接跑 `python3 scripts/test_lumos.py` 是
+    # 2039 passed / 0 failed,但由 pre-push hook 跑同一支就 3~5 條紅,而且每次
+    # 紅的條數還不一樣。
+    #
+    # 真因:`git push` 會把 `GIT_DIR` 這類變數 export 給 hook,hook 再把整個
+    # env 傳給測試進程。大量測試會自己 `git init` 一個臨時 repo 再對它下 git
+    # 指令——但 `GIT_DIR` 一旦存在就★覆蓋 cwd 推斷★,那些 git 指令全部打到
+    # 本 repo 而不是臨時 repo,行為當然對不上。實測把 `GIT_DIR` 指向本 repo
+    # 再跑,紅的條數暴增到 65,機制確認。
+    #
+    # 為什麼修在這裡:替代方案是「每個建臨時 repo 的測試各自清 env」——那是
+    # 幾十個呼叫點的分支簿記,天生會漏(本專案 2026-08-01 才因為同型的分支簿記
+    # 漏一條被代碼審抓到)。清在唯一進入點,對現有與未來新增的測試都自動成立。
+    #
+    # ★為什麼這不是把閘關掉★:清掉的是「測試進程該用哪個 repo」的外部注入,
+    # 不是任何斷言。清完之後 hook 跑出來的結果會跟人手跑的一致——閘從「會給
+    # 假紅」變成「可信」,是加嚴不是放寬。一個持續給假紅的閘,下一次就會被人
+    # 用 --no-verify waive 掉,那才是真的把閘關掉。
+    import os as _os_env
+    for _v in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
+               "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+        _os_env.environ.pop(_v, None)
+
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
     _p.add_argument("-k", dest="keyword", default=None, help="只跑名稱含此字串的測試")

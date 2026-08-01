@@ -11,16 +11,28 @@ set -eu
 # 沒問題,但那是 python 直譯器收到的路徑之後的事——這裡要先把「正確的
 # install.py 絕對路徑」算出來、傳給 python,前提是先解開 install.sh 自己可能
 # 身處的 symlink 鏈。
+# 取路徑的目錄部分。★不呼叫外部 `dirname`★——這支薄殼是要在別人機器上跑的,
+# PATH 被縮到很小時(容器最小映像、CI 的乾淨 shell、或使用者自己設過 PATH)
+# 外部工具不保證在;純 bash 參數展開零依賴。2026-08-01 本 repo 的測試閘就是
+# 因為 `dirname` 不在測試組出來的最小 PATH 上而紅,見
+# Issues/prepush測試閘假紅-git環境洩漏。
+_dirof() {
+  case "$1" in
+    */*) d="${1%/*}"; [ -n "$d" ] || d="/"; printf '%s\n' "$d" ;;
+    *)   printf '%s\n' "." ;;
+  esac
+}
+
 SOURCE="$0"
 while [ -L "$SOURCE" ]; do
-  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  DIR="$(cd "$(_dirof "$SOURCE")" && pwd)"
   LINK="$(readlink "$SOURCE")"
   case "$LINK" in
     /*) SOURCE="$LINK" ;;
     *)  SOURCE="${DIR}/${LINK}" ;;
   esac
 done
-PKG="$(cd "$(dirname "$SOURCE")" && pwd)"
+PKG="$(cd "$(_dirof "$SOURCE")" && pwd)"
 
 # Windows 常只裝了 `python`(無 `python3` 別名),Unix 系統慣例反過來——兩者
 # 都試,都沒有就給清楚錯誤訊息(不是讓後面的呼叫用 command-not-found 的方式炸)。
