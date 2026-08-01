@@ -19,6 +19,17 @@ lumos contracts <節點>     # 查硬合約
 
 ### A. summary 欄位符號(Systems/Issues 筆記的結構化摘要)
 
+★這些符號行必須寫在 frontmatter 的 `summary:` 欄位裡,不是 body 的 `## Summary` 標題底下★——寫錯位置時 `search` 照樣找得到那幾行、標籤也照樣解析,但 `contracts`／`guard` 會靜默回「(無合約標記)」,讀的人會以為這個節點沒有硬合約。格式:
+
+```yaml
+---
+type: system
+summary: |-
+  FLOW: 建單 → 付款 → 出貨
+  KEY: ★INVARIANT★ 付款成功後金額不可再改 [test:test_amount_frozen]
+---
+```
+
 | 符號 | 用途 |
 |------|------|
 | `FLOW:` | 核心流程 |
