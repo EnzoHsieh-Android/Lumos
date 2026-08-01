@@ -20,6 +20,7 @@ summary: |-
   KEY:★2026-08-01 補追加 Task 13——新增〈支援平台〉節,插在最前面(標題之後、〈怎麼裝〉之前)★:明講三平台(macOS/Linux/Windows)都支援、單一 Python 邏輯來源+薄殼分工的架構、各平台一行安裝指令(Windows 是 `irm ... | iex`)、`~/.local/bin` 不在預設 PATH 要自己加(分平台講法)。★誠實標記(不可省)★:這台開發機是 macOS 沒有 Windows/PowerShell,Windows 路徑沒有真機驗證過,`install.py`/`uninstall.py` 的 Windows 分支只靠 `LUMOS_SLIM_SIMULATE_WINDOWS=1` 環境變數注入驗過分支邏輯本身,`.cmd` shim 真機行為/PATH 真實生效方式/三支 `.ps1` 薄殼本身都沒驗證——這段誠實聲明與 [[Verification/2026-08-01_slim-python移植]] 的 `valid_under`/`revalidate_when` 對齊,別讓兩邊各說各話。〈怎麼裝〉段落補 Windows 對應指令(PowerShell 版兩行安裝、`--force` 語法)。改動後重跑 `slim-scan.py`,新文字未新增非預期懸空引用,候選集合仍等於既有白名單(見下條 TEST)
   DEP:scripts/test_lumos.py t_slim_readme_assertions｜scripts/slim-scan.py
   TEST:t_slim_readme_assertions 9 checks 全綠(`python3 scripts/test_lumos.py -k slim_readme`);`slim-scan.py slim/README.md --json` 驗證候選集合 == 已審查白名單(4 類 token:init/update/self-audit/signoff,皆 prefixed 形態),Task 10/11 改動後仍等於白名單、無非預期殘留(217 checks 全綠,`python3 scripts/test_lumos.py -k slim`)
+  KEY:★2026-08-01 Task 14——〈支援平台〉誠實標記段追加兩項未驗清單★:與 Task 13 那段既有誠實聲明同一段落,追加兩個具體項目(不是新開一節)——①`.cmd` shim 直譯器 fallback(`install.py` 的 `_pick_windows_interpreter()` 用 `shutil.which()` 安裝當下偵測,邏輯層級已驗,`shutil.which()` 在真實 Windows PATH/`PATHEXT` 下的實際解析行為未驗)②三支 `.ps1` 收尾改成 `$global:LASTEXITCODE = $LASTEXITCODE`(不再呼叫裸 `exit`,見 [[Systems/slim-install-安裝器]]/[[Systems/slim-uninstall-一行卸載]]/[[Systems/slim-get-一行安裝]] 對應 KEY 行),修法本身完全沒有真機驗證。這段誠實聲明與 [[Verification/2026-08-01_slim-windows兩缺陷修復]] 的 `valid_under`/`revalidate_when` 對齊。改動未新增/移除任何 `slim-scan.py` 掃描的候選 token(只在既有誠實標記段追加說明文字),`t_slim_readme_assertions` 斷言未動,無需新增測試。
 verified_by:
   - "[[Verification/2026-07-31_slim-skill與readme落地]]"
   - "[[Verification/2026-07-31_公開精簡版交付]]"
@@ -29,6 +30,7 @@ verified_by:
   - "[[Verification/2026-07-31_slim-claude-md注入]]"
   - "[[Verification/2026-07-31_slim-claude-md第三次裁定取代與備份還原]]"
   - "[[Verification/2026-08-01_slim-python移植]]"
+  - "[[Verification/2026-08-01_slim-windows兩缺陷修復]]"
 related:
   - "[[Systems/slim-scan-掃描器]]"
   - "[[Systems/slim-get-一行安裝]]"
