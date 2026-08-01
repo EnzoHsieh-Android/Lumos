@@ -3579,16 +3579,24 @@ def t_teardown_refuse_zero_mutation():
 
 
 def t_deinit_vendored_unlink_failure_does_not_abort():
-    """★刪不掉一個檔不該炸穿整個流程★(2026-08-01):`_deinit_remove_vendored`
-    的頂層白名單迴圈以前是裸 `p.unlink()`。走 teardown 時①全域 hook 已清、
-    ②CLAUDE.md 已剝、閘已拆,若在這裡拋 `OSError`(Windows 刪執行中的檔、防毒
-    鎖檔),③uninstall 根本沒機會跑——使用者拿到拆一半又只看到 traceback 的狀態。
+    """★刪不掉一個檔不該炸穿整個流程★:`_deinit_remove_vendored` 的頂層白名單迴圈
+    以前是裸 `p.unlink()`。走 teardown 時①全域 hook 已清、②CLAUDE.md 已剝、閘已拆,
+    若在這裡拋 `OSError`(Windows 刪執行中的檔、防毒鎖檔),③uninstall 根本沒機會跑
+    ——使用者拿到拆一半又只看到 traceback 的狀態。
 
-    ★驗行為★:把某一支 vendored 檔的所在目錄設成唯讀,讓 `unlink()` 真的拋
-    `PermissionError`(不是模擬、不是 mock),斷言①不炸出未接的例外 ②其餘 vendored
-    檔仍被移除(流程有走完)③沒刪掉的那支★不得出現在回傳的已移除清單裡★
-    (不靜默、清單仍誠實)。"""
-    import os as _os8, stat as _st8, shutil as _sh8
+    ★這條測試的第一版是壞的,記在這裡當教訓★(2026-08-01 代碼審 r1 抓到):第一版把
+    兩支 vendored 檔都放在同一個被 chmod 成唯讀的 `scripts/` 底下,於是★兩支都刪不掉★,
+    而 docstring 宣稱要驗的第②點「其餘 vendored 檔仍被移除(流程有走完)」★根本沒有
+    任何斷言★、照當時的佈置也不成立。另有一個 `locked_dir` 建了卻從沒用過的死程式碼。
+    → 那正是 [[Systems/測試假綠形態]] 的第④型(現場走不到被測分支)與第⑥型(根本沒去驗)
+    疊在一起:把修法還原成裸 unlink,舊版測試仍抓得到「炸例外」,但抓不到「迴圈中斷、
+    後面的檔沒被刪」這個真正該擋的回歸。
+
+    ★現在的現場★:兩支檔分屬不同目錄,只鎖其中一個——
+      scripts/locked/graph-rename.sh  ← 父目錄 0o500,unlink 必失敗(★排在迴圈第一個★)
+      scripts/lumos                   ← 父目錄可寫,unlink 必成功
+    白名單順序刻意讓「會失敗的」排前面,才驗得到「失敗之後迴圈還會往下走」。"""
+    import os as _os8, shutil as _sh8
     if hasattr(_os8, "geteuid") and _os8.geteuid() == 0:
         check("★skip★ root 身分下權限不生效", True, "running as root")
         return
@@ -3596,32 +3604,37 @@ def t_deinit_vendored_unlink_failure_does_not_abort():
     root = Path(tempfile.mkdtemp(prefix="gctl-vendunlink-"))
     src = Path(GRAPHCTL).resolve().parent.parent
     (root / "scripts").mkdir()
-    # 布置兩支 vendored:一支放在唯讀夾(刪不掉)、一支放在可寫處(該被刪掉)
     locked_dir = root / "scripts" / "locked"
     locked_dir.mkdir()
-    _sh8.copy2(GRAPHCTL, root / "scripts" / "lumos")
-    _sh8.copy2(src / "scripts" / "graph-rename.sh", root / "scripts" / "graph-rename.sh")
-    orig_mode = (root / "scripts").stat().st_mode
+    locked_file = locked_dir / "graph-rename.sh"          # 會刪失敗的那支
+    free_file = root / "scripts" / "lumos"                 # 該被刪掉的那支
+    _sh8.copy2(src / "scripts" / "graph-rename.sh", locked_file)
+    _sh8.copy2(GRAPHCTL, free_file)
+    orig_mode = locked_dir.stat().st_mode
 
     real_toolkit = m._VENDORED_TOOLKIT
     try:
-        # 只留這兩支,避免動到不相干邏輯
-        m._VENDORED_TOOLKIT = ("scripts/lumos", "scripts/graph-rename.sh")
-        _os8.chmod(root / "scripts", 0o500)     # r-x:底下的檔案刪不掉
+        m._VENDORED_TOOLKIT = ("scripts/locked/graph-rename.sh", "scripts/lumos")
+        _os8.chmod(locked_dir, 0o500)     # r-x:底下的檔刪不掉,但 scripts/ 本身仍可寫
         crashed, removed = None, None
         try:
             removed = m._deinit_remove_vendored(root, src)
         except Exception as e:
             crashed = e
     finally:
-        _os8.chmod(root / "scripts", orig_mode)
+        _os8.chmod(locked_dir, orig_mode)
         m._VENDORED_TOOLKIT = real_toolkit
 
     check("★unlink 失敗不得炸出未接的例外★", crashed is None, f"crashed={crashed!r}")
+    check("★前置★ 現場成立:那支檔確實刪不掉(還在磁碟上)", locked_file.is_file(), "")
     check("★沒刪掉的檔不得混進『已移除』清單(清單要誠實)★",
-          removed is not None and "scripts/lumos" not in removed, f"removed={removed!r}")
-    check("★前置★ 現場成立:檔案確實還在(刪失敗不是刪成功)",
-          (root / "scripts" / "lumos").is_file(), "")
+          removed is not None and "scripts/locked/graph-rename.sh" not in removed,
+          f"removed={removed!r}")
+    # ★這兩條是第一版漏掉的:失敗之後迴圈要繼續走完★
+    check("★★失敗之後迴圈仍往下走:後面那支檔真的被刪掉了★★",
+          not free_file.exists(), f"還在:{free_file}")
+    check("★被刪掉的那支要出現在『已移除』清單裡★",
+          removed is not None and "scripts/lumos" in removed, f"removed={removed!r}")
 
 
 def t_deinit_teardown_refuse_self_delete_on_windows():
