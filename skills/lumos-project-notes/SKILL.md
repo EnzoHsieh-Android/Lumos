@@ -122,6 +122,7 @@ KEY:★DEBT★ <已知偶然行為,可改不算 breaking>
 - `[test:方法名]` — 綁一個真實測試(doctor Check T 強制,裸合約擋)。**綁定走指令**:`lumos guard bind <node> "<KEY子字串>" <測試名>`。
 - `[audit:模型/日期]` — 綁測試後,合法性須經**無脈絡獨立 agent** 審過(prompt 中立「試圖反駁」,不帶風向;**判準=五問 rubric 逐條打勾,五項全過才 legal**——意圖證據/合約vs偶然/測試夠格/可證偽/爆炸半徑,含穩定性探針與防應試化兩道,完整規格見 reference.md〈[audit:] 獨立合法性審計〉段)。`lumos guard audit <node> "<KEY子字串>"`。
 - `[kill:recipes]`(選配,金流建議)— 沙盒真弄壞、綁定測試必翻紅。`lumos guard kill-add` / `kill`。
+- **綁 `[test:]` 前對照 [[Systems/測試假綠形態]] 八型清單**——綁上去的測試若中了其中一型,合約鏈看起來完整、實際什麼都沒守住(★最隱蔽的是「現場走不到被測分支」★:把修法還原回去測試照樣全綠)。修 bug 的翻紅釘★必須配一條「現場成立」前置斷言★。
 - **天花板**:[test:] 只買 verification;「這規則現在還符不符合真實業務」是 validation,要對業務現實的人確認(`lumos signoff`)。
 
 **可逆性(危險動作動手前先寫好收回,僅 Systems)**:

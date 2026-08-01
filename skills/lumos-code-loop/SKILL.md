@@ -86,7 +86,13 @@ Agent tool、`model: sonnet`(連 2 missed 升 opus)、**不告知 canary**、指
 - **max severity**:排掉 canary 及溯源影子後的存活 max。剝「誤判」要克制——只有能用真 diff file:line 反證才剝,判不準保留。
 - **辯方(對每條 ≥major;預設 Codex,2026-07-18 S5)**:派 1 個 **Codex 辯方**(`codex exec --sandbox read-only`,乾淨脈絡)——判決單點最怕同門盲點,外家反證價值最高;Codex 不可用退 opus 並於留痕註記偏離。framing=「預設此 finding 假,構造反駁證據、必附 file:line(grep/Read 真碼),拿不出則維持」。可加 `git log`/`git show`(commit 考古常決定性)。辯方降級若順手附最小修法 → 轉 fix 佇列。
 - **該輪 severity** ＝ 辯方裁決後存活 max。
-- **修進真碼**:fix commit + 必要新測試。**修 bug 標配「還原翻紅釘」**——把 bug 還原回去、綁定測試必須翻紅的回歸測試(2026-07-28 testmap 實戰:存在且全綠的測試可能什麼都沒驗;「存在」騙得過、「翻紅」騙不過)。業務合約級隱患 → 另寫圖譜 ★INVARIANT★ 綁 `[test:]`;非合約級測試進套件靠回歸守。
+- **修進真碼**:fix commit + 必要新測試。**修 bug 標配「還原翻紅釘」**——把 bug 還原回去、綁定測試必須翻紅的回歸測試(存在且全綠的測試可能什麼都沒驗;「存在」騙得過、「翻紅」騙不過)。
+  - ★**翻紅釘必須配一條「現場成立」前置斷言**★——證明**被測那條路真的被執行到**。翻紅釘對「現場走不到被測分支」這一型★完全瞎★:布置錯的現場下,把修法還原回去,測試照樣全綠(2026-08-01 實例:要驗 `rmdir` 的例外處理,現場卻布置成「父目錄非空」→ `rmdir()` 根本不會被呼叫)。前置斷言失敗 ＝ 這條測試根本沒在測它宣稱要測的東西,**比主斷言失敗更該優先修**。寫法:
+    ```python
+    check("★前置★ 現場成立:rmdir 這一步真的拋了例外(輸出有『順帶清理』字樣)", "順帶清理空目錄" in out, out)
+    ```
+  - **寫測試/審測試前對照 [[Systems/測試假綠形態]] 八型清單**(恆真斷言/斷言太鬆/驗寫法不驗行為/現場走不到被測分支/fixture 無鑑別力/根本沒去驗/白名單過寬/依賴環境巧合)。⚠ **對照過清單 ≠ 測試夠格**——清單是提示器不是偵測器,且★一定有第九型★。
+  - 業務合約級隱患 → 另寫圖譜 ★INVARIANT★ 綁 `[test:]`;非合約級測試進套件靠回歸守。
 - **canary 判定抽樣分權(oracle品質包 S2)**:每累計 5 個 caught 輪抽 1 輪,把審計員原始報告+植入描述交乾淨第二判者判 caught/missed,結果記 `lumos canary second --id <CANARY-x> --verdict agree|overturn --auditor <模型>`(純 telemetry 不進 gate);抽中輪報告存 `governance/canary-samples/<id>.md`。分歧→下一輪 framing 復核。
 
 ### 5 · 記錄
