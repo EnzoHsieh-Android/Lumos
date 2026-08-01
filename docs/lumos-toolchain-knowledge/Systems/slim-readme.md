@@ -17,6 +17,7 @@ summary: |-
   KEY:★2026-07-31 Task 9 裁定第三次變更——README 反映「附加」升級成「有完整版區塊就整段取代」★:〈會不會動我專案的 CLAUDE.md〉整節重寫,明列裁定演進三階(原裁定絕不碰→Task 8 只准附加→Task 9 可移除既有區塊並策展吸收)、策展範圍(吸收合約鏈/regen 重生標記/frontmatter 欄位,拿掉依賴已移除指令的段落)、插入位置改變(有完整版區塊原地取代/沒有插檔首標題後,不再是純檔尾附加)、備份機制(base64 藏在精簡版區塊自己的 HTML 註解裡,不新增檔案、`~/.lumos-slim` 刪掉也還原得了)、已知風險(完整版若自稱自動更新,其他人跑更新流程會裝回來,兩邊來回覆蓋——已知並接受)。doctor Check D 那段改寫成準確版本:取代後 `LUMOS:GRAPH-DISCIPLINE` sentinel 不存在,Check D 自動略過(不是「刻意不觸碰另一個 sentinel」,是那個 sentinel 真的被拿掉了)。改動時把新增的 `init`/`update` 提及一律寫成 `lumos init`/`lumos update`(落入既有白名單 prefixed 形態),避免製造新的非預期候選
   KEY:★2026-07-31 Task 10——端到端實測抓到真 bug 後同步★:〈怎麼移除〉改寫成強調「四步互不阻擋」+ rc 三段式語意(0=全成功,1=安全性跳過非硬錯誤,2=真正錯誤)+ bin 比對基準分兩層(manifest 優先、`~/.lumos-slim/scripts/lumos` 備援)+「基準缺失」與「內容真的不符」訊息分開講;〈`~/.lumos-slim` 是什麼〉改寫成明講「兩行版安裝本來就不會建立這個路徑,是正常用法不是錯誤操作」,並更正「比對基準已改成優先讀 manifest,這個目錄留不留都不影響卸載」(舊版寫「沒有這份參照卸載只能靠 --force」已不成立)
   KEY:★2026-08-01 Task 11——新增第 8 節,注入目標守衛★:新增〈注入目標守衛(裝到哪裡才安全)〉,插在〈會不會動我專案的 CLAUDE.md〉之後——逐條說明三層守衛(不像專案根拒絕/拒絕裝進 lumos 工具鏈來源 repo/動手前印大聲目標路徑)各擋什麼,明講第一層擋不住那兩次真實事故(事故現場本身就有 `.git`/`CLAUDE.md`/`docs/*-knowledge/`)、真正擋住的是第二層,以及 `--here` 逃生閥用法。改動後重跑 `slim-scan.py`,新文字未提及任何已移除指令名,候選集合仍等於既有已審查白名單、無新增非預期殘留
+  KEY:★2026-08-01 補追加 Task 13——新增〈支援平台〉節,插在最前面(標題之後、〈怎麼裝〉之前)★:明講三平台(macOS/Linux/Windows)都支援、單一 Python 邏輯來源+薄殼分工的架構、各平台一行安裝指令(Windows 是 `irm ... | iex`)、`~/.local/bin` 不在預設 PATH 要自己加(分平台講法)。★誠實標記(不可省)★:這台開發機是 macOS 沒有 Windows/PowerShell,Windows 路徑沒有真機驗證過,`install.py`/`uninstall.py` 的 Windows 分支只靠 `LUMOS_SLIM_SIMULATE_WINDOWS=1` 環境變數注入驗過分支邏輯本身,`.cmd` shim 真機行為/PATH 真實生效方式/三支 `.ps1` 薄殼本身都沒驗證——這段誠實聲明與 [[Verification/2026-08-01_slim-python移植]] 的 `valid_under`/`revalidate_when` 對齊,別讓兩邊各說各話。〈怎麼裝〉段落補 Windows 對應指令(PowerShell 版兩行安裝、`--force` 語法)。改動後重跑 `slim-scan.py`,新文字未新增非預期懸空引用,候選集合仍等於既有白名單(見下條 TEST)
   DEP:scripts/test_lumos.py t_slim_readme_assertions｜scripts/slim-scan.py
   TEST:t_slim_readme_assertions 9 checks 全綠(`python3 scripts/test_lumos.py -k slim_readme`);`slim-scan.py slim/README.md --json` 驗證候選集合 == 已審查白名單(4 類 token:init/update/self-audit/signoff,皆 prefixed 形態),Task 10/11 改動後仍等於白名單、無非預期殘留(217 checks 全綠,`python3 scripts/test_lumos.py -k slim`)
 verified_by:
@@ -27,6 +28,7 @@ verified_by:
   - "[[Verification/2026-07-31_公開精簡版一行安裝卸載與代碼審修復]]"
   - "[[Verification/2026-07-31_slim-claude-md注入]]"
   - "[[Verification/2026-07-31_slim-claude-md第三次裁定取代與備份還原]]"
+  - "[[Verification/2026-08-01_slim-python移植]]"
 related:
   - "[[Systems/slim-scan-掃描器]]"
   - "[[Systems/slim-get-一行安裝]]"

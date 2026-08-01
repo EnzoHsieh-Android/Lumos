@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-01
 tags:
   - type/system
   - status/done
@@ -12,13 +12,15 @@ summary: |-
   KEY:★冪等的精確定義★——「不炸」指的是不出現 `git clone` 對非空目錄的爆炸式錯誤(`already exists and is not an empty directory`)。第二次執行呼叫到的 `install.sh` 仍有自己既有的碰撞保護(未帶 `--force` 時偵測到 `~/.local/bin/lumos` 已存在會拒絕、rc2)——這是 install.sh 既有的、刻意的安全行為,不是 get.sh 冪等性的破口;`get.sh` 本身把 `--force` 原樣轉發即可讓使用者一次到位重跑
   KEY:與本 repo 根目錄既有的 `get.sh`/`get.ps1`(完整版 Lumos 遠端一鍵裝,clone `EnzoHsieh-Android/Lumos` 後委派 `bootstrap`,見 [[Systems/lumos-cli-lifecycle]])是**兩支獨立腳本、不同交付對象**——本節點記的是 `slim/get.sh`,目標 repo 是精簡版交付庫 `citrus-android-developer/Citrus_Lumos`,只做「clone/更新+執行 install.sh」兩件事,不含 bootstrap 的專案層四分流/`_confirm_tty`/hooks 接線等機器層以外的邏輯——★這是刻意的功能子集,不是殘缺★
   KEY:`REPO_URL` 可用環境變數 `LUMOS_SLIM_REPO_URL` 覆蓋(測試用,指向本地 git repo 路徑避免打真網路);生產預設寫死 GitHub URL,不吃命令列參數覆蓋(降低被誤導向惡意 repo 的攻擊面)
-  DEP:slim/get.sh｜slim/install.sh(被呼叫執行)｜scripts/test_lumos.py t_slim_get_idempotent｜t_slim_get_no_git
+  KEY:★2026-08-01 補追加 Task 13——新增 Windows 對應腳本 slim/get.ps1,slim/get.sh 本身邏輯不變★:`slim/get.sh` 呼叫的 `install.sh` 從「承載全部邏輯」改成「薄殼轉發給 `install.py`」(見 [[Systems/slim-install-安裝器]]),但 `get.sh` 自己的 clone/pull/檢查/呼叫邏輯完全沒動——它本來就只負責「把套件放到固定落點+呼叫 install.sh」,install.sh 內部怎麼實作跟它無關。新增 `slim/get.ps1` 逐步對照翻譯同一套邏輯(clone/pull 到 `$HOME\.lumos-slim` → 呼叫 `install.ps1`),先例正是本節點 KEY 行(上)提到的本 repo 根目錄完整版 `get.ps1`(12 行,直接把工作丟給 python)——★這台機器沒有 Windows/PowerShell,`get.ps1` 沒有真機驗證過★,只是逐行對照 `get.sh` 翻譯,見 [[Verification/2026-08-01_slim-python移植]] 的誠實標記。
+  DEP:slim/get.sh｜slim/get.ps1(新增,Windows 對應)｜slim/install.sh(被呼叫執行)｜slim/install.ps1(新增)｜scripts/test_lumos.py t_slim_get_idempotent｜t_slim_get_no_git
   TEST:t_slim_get_idempotent 7 checks 全綠——首次執行 rc0(git clone 到位)、第二次執行不出現 clone 式爆炸訊息且 stderr 無 traceback、`.git` 目錄未被破壞、帶 `--force` 轉發給 install.sh 可完整跑完 rc0;t_slim_get_no_git 3 checks 全綠——限縮 `PATH` 模擬 git 缺失,斷言 rc2+清楚錯誤訊息(非 traceback)+`~/.lumos-slim` 未被建立(`python3 scripts/test_lumos.py -k slim_get`)
 related:
   - "[[Systems/slim-install-安裝器]]"
   - "[[Systems/slim-uninstall-一行卸載]]"
 verified_by:
   - "[[Verification/2026-07-31_公開精簡版一行安裝卸載與代碼審修復]]"
+  - "[[Verification/2026-08-01_slim-python移植]]"
 ---
 # slim-get-一行安裝
 

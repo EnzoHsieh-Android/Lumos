@@ -2,9 +2,29 @@
 
 這是知識圖譜工具 lumos 的**離職交接精簡版**——目的只有一個：讓接手的人能讀懂既有專案留下的知識圖譜（`docs/{project}-knowledge/`）。可讀是目標，可維護是加分，本包不設任何機械強制（不擋 commit、不擋 push、不裝任何 hook）。
 
+## 支援平台
+
+支援 **macOS／Linux／Windows** 三個平台。安裝／卸載的全部邏輯只有一份，寫在 `install.py`／`uninstall.py`（Python 3 標準庫，零依賴）——`.sh`（macOS/Linux）與 `.ps1`（Windows）都只是**薄殼**，負責定位套件位置、挑一支可用的 `python3`/`python` 直譯器，然後把參數原樣轉發過去。這樣設計是為了避免同一套邏輯維護兩份、隨時間漂移出兩套不一致的行為。
+
+各平台的一行安裝指令：
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/citrus-android-developer/Citrus_Lumos/main/get.sh | bash
+```
+
+```powershell
+# Windows(PowerShell)
+irm https://raw.githubusercontent.com/citrus-android-developer/Citrus_Lumos/main/get.ps1 | iex
+```
+
+裝完後 `lumos` 指令會落在 `~/.local/bin`（Windows 是 `%USERPROFILE%\.local\bin`）——這個路徑通常**不在預設 PATH 裡**，需要自己加：macOS/Linux 在 shell 設定檔（`~/.zshrc`／`~/.bashrc`）加一行 `export PATH="$HOME/.local/bin:$PATH"`；Windows 把 `%USERPROFILE%\.local\bin` 加進「系統環境變數」的使用者 PATH（安裝器結尾若偵測到不在 PATH 裡,會依平台印出對應提示）。
+
+★**誠實標記,別誤讀成「Windows 已驗證」**★：這台開發機是 macOS,沒有 Windows/PowerShell 環境可用,**Windows 路徑沒有在真機上跑過**。`install.py`/`uninstall.py` 的邏輯與 Unix 共用同一份 Python 原始碼,Windows 分支（`.cmd` shim 產生、PATH 提示文字）靠 `LUMOS_SLIM_SIMULATE_WINDOWS=1` 環境變數在非 Windows 機器上注入、只驗證過**分支邏輯本身跑對路**（見 `scripts/test_lumos.py` 的 `t_slim_install_windows_*`/`t_slim_uninstall_windows_*` 系列）——`.cmd` shim 在真實 `cmd.exe`/PowerShell 下能不能被正確找到並執行、`install.ps1`/`uninstall.ps1`/`get.ps1` 這三支 `.ps1` 薄殼本身、PATH 環境變數在 Windows 上的實際生效方式,都**沒有機會做真機驗證**。若你在 Windows 上使用本包遇到問題,請直接檢查 `install.py`/`uninstall.py`（跨平台邏輯都在這兩支,可讀可改)。
+
 ## 怎麼裝
 
-包裡有一支機器層安裝器，做三件事：①把 `lumos` 裝到 `~/.local/bin` ②把技能說明實體複製到 `~/.claude/skills/lumos-project-notes/`（不是 symlink，交付包搬走／刪掉後 skill 仍在）③（★2026-07-31 裁定第三次變更，見下方〈會不會動我專案的 CLAUDE.md〉★）在**執行安裝器時所在的目錄**（你的專案根）的 `CLAUDE.md` 裡放一塊策展過的「怎麼解析圖譜標籤」精簡版紀律區塊——若專案原本就有完整版紀律區塊會被整段取代掉（原位置，不是搬到檔尾），沒有就插在檔首標題之後。
+包裡有一支機器層安裝器，做三件事：①把 `lumos` 裝到 `~/.local/bin`（Windows 額外產生 `lumos.cmd` shim，見上方〈支援平台〉）②把技能說明實體複製到 `~/.claude/skills/lumos-project-notes/`（不是 symlink，交付包搬走／刪掉後 skill 仍在）③（★2026-07-31 裁定第三次變更，見下方〈會不會動我專案的 CLAUDE.md〉★）在**執行安裝器時所在的目錄**（你的專案根）的 `CLAUDE.md` 裡放一塊策展過的「怎麼解析圖譜標籤」精簡版紀律區塊——若專案原本就有完整版紀律區塊會被整段取代掉（原位置，不是搬到檔尾），沒有就插在檔首標題之後。
 
 **一行安裝**（把交付包拉到固定落點 `~/.lumos-slim` 再自動執行安裝器）：
 
@@ -19,7 +39,14 @@ git clone https://github.com/citrus-android-developer/Citrus_Lumos.git ~/.lumos-
 ~/.lumos-slim/install.sh
 ```
 
-兩種方式都會把套件放在 `~/.lumos-slim`（見下方〈`~/.lumos-slim` 是什麼〉），再執行套件裡的安裝器；若目標（全域指令或 skill 目錄）已存在，加 `--force` 覆寫（skill 目錄會先備份成 `.bak.<時間戳>` 才覆寫）——一行版：在 `curl` 那行末尾加 `-s -- --force`；兩行版：`~/.lumos-slim/install.sh --force`。
+Windows 對應版本（PowerShell）：
+
+```powershell
+git clone https://github.com/citrus-android-developer/Citrus_Lumos.git $HOME\.lumos-slim
+& "$HOME\.lumos-slim\install.ps1"
+```
+
+兩種方式都會把套件放在 `~/.lumos-slim`（見下方〈`~/.lumos-slim` 是什麼〉），再執行套件裡的安裝器；若目標（全域指令或 skill 目錄）已存在，加 `--force` 覆寫（skill 目錄會先備份成 `.bak.<時間戳>` 才覆寫）——一行版：在 `curl`/`irm` 那行末尾加 `-s -- --force`（Windows 是 `iex "& { $(irm ...) } --force"` 或直接兩行版加 `--force`）；兩行版：`~/.lumos-slim/install.sh --force` 或 `install.ps1 --force`。
 
 **確認裝好**：
 

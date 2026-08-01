@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-01
 tags:
   - type/system
   - status/done
@@ -21,6 +21,7 @@ summary: |-
   KEY:★2026-07-31 代碼審第二輪 minor-2 調查★——「連續跑兩次 uninstall.sh」原本沒有回歸測試覆蓋。讀腳本+手動在暫存目錄實測兩次後判定**腳本本身不需要改**:BIN/SKILL/PKG 三步判斷式第二次跑時全部落入「東西已經不在」的 `else` 分支(純 `echo`,不觸發任何 `exit`),語意上與「這台機器本來就沒裝過」完全等價,而那個情境本就是 rc0——①BIN 已被 `rm -f` → `[ -e "$BIN" ] || [ -L "$BIN" ]` 為假 ②SKILL 已被 `mv` 走 → `[ -d "$SKILL" ]` 為假,進不了備份分支,不會多出 `.bak.*` ③PKG 已被 `rm -rf` → `[ -d "$PKG" ]` 為假。故只補純回歸測試鎖住這個已經正確的冪等行為,防未來改動悄悄破壞它;rc 判定=第二次仍應是 0(idempotent 工具「不需要做事=成功」的慣例,與「未安裝」分支本就 rc0 一致,非 0 反而讓接手者自然的「保險起見再跑一次」被腳本自己判失敗)
   DEP:slim/uninstall.sh｜slim/install.sh(產生 manifest 比對基準與備份對象、寫入 FULL-BACKUP 標記)｜scripts/test_lumos.py t_slim_uninstall_backs_up_and_preserves_custom_files｜t_slim_uninstall_refuses_foreign_bin｜t_slim_uninstall_idempotent_second_run｜t_slim_uninstall_removes_claude_md_block｜t_slim_uninstall_direct_install_restores_claude_md｜t_slim_uninstall_bin_refusal_does_not_block_claude_md_restore
   TEST:198 checks 全綠(`python3 scripts/test_lumos.py -k slim`)。★Task 10 新增★ t_slim_uninstall_direct_install_restores_claude_md——不經 get.sh、確保 `~/.lumos-slim` 不存在,直接跑包內 install.sh 再跑 uninstall.sh,斷言 rc0 且 CLAUDE.md 與安裝前完全 byte-equal(修前:rc2 中止,CLAUDE.md 完全沒被動,此測試翻紅);t_slim_uninstall_bin_refusal_does_not_block_claude_md_restore——bin 換成使用者自己的檔,斷言①bin 拒絕移除②CLAUDE.md 仍完整還原③rc==1(修前:CLAUDE.md 沒有機會被還原,此測試翻紅)。t_slim_uninstall_refuses_foreign_bin 改版(rc2→rc1,且新增「skill 目錄仍照常被備份」正面斷言,取代舊版「判定失敗即中止」的反向斷言)。原有測試不變:t_slim_uninstall_backs_up_and_preserves_custom_files 11 checks;t_slim_uninstall_idempotent_second_run 8 checks;t_slim_uninstall_removes_claude_md_block(情境一~三);另見 [[Systems/slim-install-安裝器]] 的 `t_slim_install_backup_survives_idempotent_reinstall`
+  KEY:★2026-08-01 補追加 Task 13——bash 搬成 Python(stdlib only),與 [[Systems/slim-install-安裝器]] 同批★:`slim/uninstall.sh` 原本承載全部邏輯,改成 ★`slim/uninstall.py` 承載全部邏輯★,`slim/uninstall.sh`(改版後僅 ~30 行)/新增的 `slim/uninstall.ps1` 都只做「定位套件目錄+挑直譯器+轉發參數」。四步驟互不阻擋、manifest 優先/PKG 備援兩階比對、rc 三段式語意——全部行為逐條搬進 Python,`[test:]` 綁定的測試函式名稱一個沒變。★移植順帶消掉一種失敗模式★:bash 版原有「找不到 sha256sum/shasum 就 rc2」分支,Python `hashlib` 是標準庫必存在,不保留對應分支(無測試依賴它,故非破壞性簡化)。Windows 支援:`lumos.cmd` shim 與 `lumos` 內容副本成對移除(manifest 比對邏輯共用同一段程式碼,不分平台);★這台機器沒有 Windows★,靠 `LUMOS_SLIM_SIMULATE_WINDOWS=1` 驗證「成對移除」這個分支邏輯(`t_slim_uninstall_windows_removes_paired_files`),測不到真機行為。新增 1 支薄殼轉發參數獨立單元測試。詳見 [[Verification/2026-08-01_slim-python移植]],報告 `.superpowers/sdd/公開精簡版_實作計畫/task-13-report.md`
 related:
   - "[[Systems/slim-install-安裝器]]"
   - "[[Systems/slim-get-一行安裝]]"
@@ -30,6 +31,7 @@ verified_by:
   - "[[Verification/2026-07-31_slim-claude-md注入]]"
   - "[[Verification/2026-07-31_slim-claude-md第三次裁定取代與備份還原]]"
   - "[[Verification/2026-07-31_slim-uninstall步驟獨立化與manifest基準修復]]"
+  - "[[Verification/2026-08-01_slim-python移植]]"
 ---
 # slim-uninstall-一行卸載
 

@@ -12372,9 +12372,7 @@ def t_slim_install_no_project_touch():
     (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
                                                                      encoding="utf-8")
     repo = _P(GRAPHCTL).parent.parent
-    _sh.copy2(repo / "slim" / "install.sh", pkg / "install.sh")
-    (pkg / "install.sh").chmod(0o755)
-    _sh.copy2(repo / "slim" / "claude-block.md", pkg / "claude-block.md")
+    _slim_copy_install_files(pkg)
 
     # 造一個假專案 repo —— CLAUDE.md 帶既有內容、無完整版紀律區塊(模擬一般專案)
     proj = root / "proj"
@@ -12455,9 +12453,7 @@ def t_slim_install_claude_md_idempotent():
     (pkg / "scripts" / "lumos").chmod(0o755)
     (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
                                                                      encoding="utf-8")
-    _sh.copy2(_P(GRAPHCTL).parent.parent / "slim" / "install.sh", pkg / "install.sh")
-    (pkg / "install.sh").chmod(0o755)
-    _sh.copy2(_P(GRAPHCTL).parent.parent / "slim" / "claude-block.md", pkg / "claude-block.md")
+    _slim_copy_install_files(pkg)
 
     proj = root / "proj"
     proj.mkdir()
@@ -12504,11 +12500,8 @@ def t_slim_uninstall_removes_claude_md_block():
     (pkg / "scripts" / "lumos").chmod(0o755)
     (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
                                                                      encoding="utf-8")
-    _sh.copy2(repo / "slim" / "install.sh", pkg / "install.sh")
-    (pkg / "install.sh").chmod(0o755)
-    _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
-    (pkg / "uninstall.sh").chmod(0o755)
-    _sh.copy2(repo / "slim" / "claude-block.md", pkg / "claude-block.md")
+    _slim_copy_install_files(pkg)
+    _slim_copy_uninstall_files(pkg)
 
     # 情境一:CLAUDE.md 已有既有內容
     proj_a = root / "proj_a"
@@ -12607,9 +12600,7 @@ def t_slim_install_replaces_full_discipline_block_in_place():
     (pkg / "scripts" / "lumos").chmod(0o755)
     (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
                                                                      encoding="utf-8")
-    _sh.copy2(repo / "slim" / "install.sh", pkg / "install.sh")
-    (pkg / "install.sh").chmod(0o755)
-    _sh.copy2(repo / "slim" / "claude-block.md", pkg / "claude-block.md")
+    _slim_copy_install_files(pkg)
 
     proj = root / "proj"
     proj.mkdir()
@@ -12666,9 +12657,7 @@ def t_slim_install_backup_survives_idempotent_reinstall():
     (pkg / "scripts" / "lumos").chmod(0o755)
     (pkg / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# skill\n",
                                                                      encoding="utf-8")
-    _sh.copy2(repo / "slim" / "install.sh", pkg / "install.sh")
-    (pkg / "install.sh").chmod(0o755)
-    _sh.copy2(repo / "slim" / "claude-block.md", pkg / "claude-block.md")
+    _slim_copy_install_files(pkg)
 
     proj = root / "proj"
     proj.mkdir()
@@ -12700,8 +12689,7 @@ def t_slim_install_backup_survives_idempotent_reinstall():
           after_2 == after_1, "第一次:\n" + after_1 + "\n第二次:\n" + after_2)
 
     # 收尾:確認這份備份仍然能被 uninstall 正確用來還原
-    _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
-    (pkg / "uninstall.sh").chmod(0o755)
+    _slim_copy_uninstall_files(pkg)
     ru = subprocess.run(["bash", str(pkg / "uninstall.sh"), "--force"], cwd=str(proj),
                         capture_output=True, text=True, env=env)
     check("重跑兩次後仍可正確卸載還原 rc0", ru.returncode == 0, ru.stdout + ru.stderr)
@@ -12743,13 +12731,42 @@ def t_slim_claude_block_curation():
           "<!-- LUMOS-SLIM:FULL-BACKUP:NONE -->" in txt, "")
 
 
-def _slim_make_pkg_at(pkg_dir):
-    """建一個「長得像本包」的假交付包(scripts/lumos + install.sh + skill)在
-    指定路徑——供 get.sh/uninstall.sh 測試共用。★不寫死內容★:lumos 腳本內容
-    隨呼叫端傳入,好讓 uninstall.sh 的 sha256 比對測試能控制「符合」與「不符合」
-    兩種情境。"""
+def _slim_copy_install_files(pkg_dir):
+    """複製 `install.sh`(薄殼)+ `install.py`(★真正邏輯所在★,取代舊版把全部
+    行為寫在 install.sh 裡的做法)+ `claude-block.md`(安裝器讀的外部範本)到
+    `pkg_dir`——★三者缺一不可★:`install.sh` 現在只做兩件事(定位套件目錄、
+    挑一支可用的 python 直譯器),真正動作全轉發給同目錄下的 `install.py`,
+    少了它 `install.sh` 會 rc2(找不到 install.py)或直接失敗。"""
     from pathlib import Path as _P
     import shutil as _sh
+    pkg_dir = _P(pkg_dir)
+    repo = _P(GRAPHCTL).parent.parent
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("install.sh", "install.py"):
+        _sh.copy2(repo / "slim" / name, pkg_dir / name)
+    (pkg_dir / "install.sh").chmod(0o755)
+    _sh.copy2(repo / "slim" / "claude-block.md", pkg_dir / "claude-block.md")
+
+
+def _slim_copy_uninstall_files(pkg_dir):
+    """複製 `uninstall.sh`(薄殼)+ `uninstall.py`(真正邏輯)到 `pkg_dir`——
+    與 `_slim_copy_install_files` 對稱,同款理由。"""
+    from pathlib import Path as _P
+    import shutil as _sh
+    pkg_dir = _P(pkg_dir)
+    repo = _P(GRAPHCTL).parent.parent
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("uninstall.sh", "uninstall.py"):
+        _sh.copy2(repo / "slim" / name, pkg_dir / name)
+    (pkg_dir / "uninstall.sh").chmod(0o755)
+
+
+def _slim_make_pkg_at(pkg_dir):
+    """建一個「長得像本包」的假交付包(scripts/lumos + install.sh/.py + skill)
+    在指定路徑——供 get.sh/uninstall.py 測試共用。★不寫死內容★:lumos 腳本
+    內容隨呼叫端傳入,好讓 uninstall 的 sha256 比對測試能控制「符合」與
+    「不符合」兩種情境。"""
+    from pathlib import Path as _P
     pkg_dir = _P(pkg_dir)
     (pkg_dir / "scripts").mkdir(parents=True, exist_ok=True)
     (pkg_dir / "skills" / "lumos-project-notes").mkdir(parents=True, exist_ok=True)
@@ -12758,12 +12775,7 @@ def _slim_make_pkg_at(pkg_dir):
     (pkg_dir / "scripts" / "lumos").chmod(0o755)
     (pkg_dir / "skills" / "lumos-project-notes" / "SKILL.md").write_text(
         "# skill\n", encoding="utf-8")
-    repo = _P(GRAPHCTL).parent.parent
-    _sh.copy2(repo / "slim" / "install.sh", pkg_dir / "install.sh")
-    (pkg_dir / "install.sh").chmod(0o755)
-    # ★install.sh 現在讀外部範本★:CLAUDE.md 區塊不再是腳本內的 heredoc,
-    # 而是隨包帶的 claude-block.md——沒帶這份檔案 install.sh 會直接 ERROR rc2。
-    _sh.copy2(repo / "slim" / "claude-block.md", pkg_dir / "claude-block.md")
+    _slim_copy_install_files(pkg_dir)
     return pkg_dir
 
 
@@ -12944,8 +12956,7 @@ def t_slim_uninstall_direct_install_restores_claude_md():
     # ★交付包 clone 到任意路徑(不是 ~/.lumos-slim)★——模擬「兩行版」使用者
     # 自己選的落點,例如 `git clone ... ~/dev/Citrus_Lumos`。
     pkg = _slim_make_pkg_at(root / "wherever-i-cloned-it")
-    _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
-    (pkg / "uninstall.sh").chmod(0o755)
+    _slim_copy_uninstall_files(pkg)
 
     # 假專案:CLAUDE.md 帶完整版 LUMOS:GRAPH-DISCIPLINE 區塊(模擬 Landmark)。
     proj = root / "proj"
@@ -13001,8 +13012,7 @@ def t_slim_uninstall_bin_refusal_does_not_block_claude_md_restore():
 
     fake_home = root / "home"
     pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")   # 固定落點,manifest+PKG 備援都拿得到基準
-    _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
-    (pkg / "uninstall.sh").chmod(0o755)
+    _slim_copy_uninstall_files(pkg)
     (fake_home / ".local" / "bin").mkdir(parents=True)
     env = dict(_os.environ, HOME=str(fake_home))
 
@@ -13050,7 +13060,7 @@ def t_slim_get_idempotent():
     subprocess.run(["git", "init", "-q", str(src_repo)], check=True)
     _slim_make_pkg_at(src_repo)
     _sh.copy2(repo / "slim" / "get.sh", src_repo / "get.sh")
-    _sh.copy2(repo / "slim" / "uninstall.sh", src_repo / "uninstall.sh")
+    _slim_copy_uninstall_files(src_repo)
     subprocess.run(["git", "-C", str(src_repo), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(src_repo), "-c", "user.email=t@t", "-c", "user.name=t",
                     "commit", "-qm", "init"], check=True)
@@ -13386,9 +13396,14 @@ def t_slim_gate_doctor_nameerror_counterfactual():
 def t_slim_gen_dist_ships_entrypoints():
     """★交付包完整性★:slim-gen 組交付包時只複製了 install.sh/README.md/skills,
     漏了 get.sh(curl|bash 入口)與 uninstall.sh——接手者拿到的包裡沒有一行安裝
-    入口、也沒有卸載腳本,等於那些功能不存在。斷言生成後 dist/ 內含這兩支,且
-    連同 install.sh 三支 .sh 都保留可執行位元(組包用 shutil.copy2 保留 mode,
-    但仍要機械鎖住,防止改用別的複製方式時悄悄退化成 0o644)。"""
+    入口、也沒有卸載腳本,等於那些功能不存在。★2026-08 Task 13 擴充★:安裝/卸載
+    邏輯搬進 Python 後,`install.py`/`uninstall.py` 才是真正的邏輯所在,`.sh`
+    只是薄殼——漏了任一個都會讓 `.sh` 呼叫失敗;`.ps1` 三支(install/uninstall/
+    get)是 Windows 入口,同樣不可漏。斷言生成後 dist/ 內含全部入口,且 `.sh`
+    三支保留可執行位元(組包用 shutil.copy2 保留 mode,但仍要機械鎖住,防止改用
+    別的複製方式時悄悄退化成 0o644)——`.py`/`.ps1` 的可執行性不靠 Unix mode
+    bit(前者一律經薄殼 `python <path>` 呼叫,後者靠 Windows PowerShell 執行
+    原則),不檢查可執行位元。"""
     import tempfile as _tf
     from pathlib import Path as _P
     repo = _P(GRAPHCTL).parent.parent
@@ -13399,7 +13414,10 @@ def t_slim_gen_dist_ships_entrypoints():
                        capture_output=True, text=True)
     check("slim-gen rc0", r.returncode == 0, r.stdout + r.stderr)
 
-    expected = ["get.sh", "uninstall.sh", "install.sh", "README.md", "claude-block.md",
+    expected = ["get.sh", "get.ps1",
+                "uninstall.sh", "uninstall.py", "uninstall.ps1",
+                "install.sh", "install.py", "install.ps1",
+                "README.md", "claude-block.md",
                 "scripts/lumos", "skills/lumos-project-notes/SKILL.md"]
     for rel in expected:
         p = dist / rel
@@ -13618,24 +13636,22 @@ def t_slim_install_guard_normal_project_still_works():
 
 
 def t_slim_install_symlink_cwd_audit_path_matches_write_path():
-    """★MINOR(2026-08-01 代碼審第四輪)★:第三層守衛與 CLAUDE.md 寫入路徑計算
-    必須用同一套 `pwd -P`(解 symlink),不能一個用 `pwd -P`、另一個用素樸
-    `$(pwd)`——否則透過 symlink 進入專案目錄時,守衛稽核印出的「將修改: …」
-    路徑會跟真正寫入完成後回報的路徑字串不一致,弱化第三層「把目標印出來讓
-    人眼抓錯」的價值(雖然兩者實際指向同一個檔案,不會寫錯地方)。
-    ★怎麼逼出分歧★:純粹用 `subprocess.run(cwd=<symlink 路徑>)` 不夠——OS
-    chdir(2) 一律解到實體路徑,bash 起手若沒有匹配的 `$PWD` 環境變數可承接,
-    `pwd`(無 -P)一樣會回退成實體路徑,測不出分歧。真實情境是使用者的互動
-    shell 先 `cd` 進 symlink(那個 shell 會把 `$PWD` 設成 symlink 形式的邏輯
-    路徑並 export),再從那裡呼叫 `bash install.sh`——子行程的 bash 會沿用繼承
-    到的 `$PWD`(經 stat 驗證與 getcwd() 同一個目的地就採信),此時素樸 `pwd`
-    回傳 symlink 形式、`pwd -P` 回傳實體形式,兩者才會真的分岔。這裡用
-    `env=dict(..., PWD=<symlink 路徑>)` 模擬這個情境(已手動驗證 bash 行為
-    確實如此)。
-    斷言:守衛開頭印的「將修改: X」與收尾印的「✓ CLAUDE.md …已安裝/更新: Y」
-    (Y 直接來自實際寫入用的 `$CLAUDE_MD` 變數)必須是同一個字串——這條測試在
-    `slim/install.sh:207` 改回素樸 `$(pwd)` 會翻紅(X 是 `pwd -P` 算出的實體
-    路徑、Y 會變成 symlink 形式的邏輯路徑,兩者不再相等)。"""
+    """★MINOR(2026-08-01 代碼審第四輪,bash 版本的原始缺陷/回歸情境)★:第三層
+    守衛與 CLAUDE.md 寫入路徑計算必須用同一套「已解 symlink 的實體路徑」,不能
+    一個用 `pwd -P`、另一個用素樸 `$(pwd)`——否則透過 symlink 進入專案目錄時,
+    守衛稽核印出的「將修改: …」路徑會跟真正寫入完成後回報的路徑字串不一致。
+
+    ★2026-08 Task 13 搬成 Python 後,這整類 bug 已被結構性消滅★:邏輯全部搬進
+    `install.py`,`目標專案`/`將修改` 兩行印出的路徑與實際寫入用的路徑都來自
+    同一個 `target_dir = Path.cwd().resolve()`(`Path.cwd()` 底層呼叫
+    `os.getcwd()`,這一律回傳實體路徑,不像 bash 的 `pwd` 內建指令有「邏輯路徑
+    ($PWD 追蹤)」與「實體路徑(`-P`)」兩種形式可能被混用)——沒有第二種路徑
+    表示法可以拿來跟它打架,也就不存在「一個用 -P、另一個沒用」這種可以犯的
+    錯誤。本測試因此從「回歸測試」變成「結構不可能重現的反事實確認」:即使刻意
+    透過 symlink cwd + 模擬互動 shell 已 `cd` 進 symlink 的情境(`env
+    PWD=<symlink 路徑>`,原 bash 版本用來逼出分歧的手法,這裡沿用只是為了不
+    削弱涵蓋面),斷言仍然必須成立——如果將來有人回頭在 install.sh 薄殼裡加
+    了什麼繞過 install.py、自己算路徑的邏輯,這條測試才擋得住。"""
     import tempfile as _tf, os as _os, re as _re
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-sliminst-symlink-"))
@@ -13677,6 +13693,211 @@ def t_slim_install_symlink_cwd_audit_path_matches_write_path():
 
     real_claude_md = real_proj / "CLAUDE.md"
     check("CLAUDE.md 確實寫在實體路徑底下", real_claude_md.exists(), "")
+
+
+def _slim_min_path_env():
+    """組一個「足夠跑 bash/python3/git,但不含任何 ~/.local/bin」的最小 PATH
+    字串——供 Windows PATH 提示測試模擬「使用者 PATH 沒加這個路徑」的情境,
+    同時不因為限縮過頭連 python3/bash/git 本身都找不到而讓 fixture 先炸掉。"""
+    import shutil as _sh2
+    from pathlib import Path as _P
+    dirs = []
+    for exe in (sys.executable, _sh2.which("bash"), _sh2.which("git")):
+        if exe:
+            d = str(_P(exe).parent)
+            if d not in dirs:
+                dirs.append(d)
+    dirs += ["/usr/bin", "/bin"]
+    return ":".join(dirs)
+
+
+def t_slim_install_sh_forwards_args():
+    """★薄殼轉發參數(2026-08 Task 13 新增)★:`install.sh` 現在只是薄殼,真正
+    邏輯全在同目錄的 `install.py`——這條測試只驗「轉發」這一件事本身,不牽涉
+    `install.py` 的任何業務邏輯:用一支*假* `install.py`(只把收到的 `sys.argv`
+    原樣印成 JSON)取代真正的實作,跑 `install.sh --force --here extra-arg`,
+    斷言 `install.sh` 轉發給它的參數逐一、逐序與命令列輸入相同。★不用真正的
+    install.py★是刻意的——這樣才是對「轉發」這個行為的獨立單元測試,不會被
+    `install.py` 內部邏輯(例如三層守衛提前 rc2)污染,那些已經有專屬測試蓋。"""
+    import tempfile as _tf, json as _j
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-fwd-"))
+    repo = _P(GRAPHCTL).parent.parent
+
+    pkg = root / "pkg"
+    pkg.mkdir()
+    import shutil as _sh
+    _sh.copy2(repo / "slim" / "install.sh", pkg / "install.sh")
+    (pkg / "install.sh").chmod(0o755)
+    (pkg / "install.py").write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "print(json.dumps(sys.argv[1:]))\n",
+        encoding="utf-8")
+
+    r = subprocess.run(["bash", str(pkg / "install.sh"), "--force", "--here", "extra-arg"],
+                       cwd=str(root), capture_output=True, text=True)
+    check("薄殼轉發:rc0(假 install.py 直接印完就結束)", r.returncode == 0, r.stdout + r.stderr)
+    got = _j.loads(r.stdout.strip())
+    check("★薄殼原樣轉發參數,逐一逐序相同★",
+          got == ["--force", "--here", "extra-arg"], f"轉發到: {got}")
+
+
+def t_slim_uninstall_sh_forwards_args():
+    """★薄殼轉發參數★:與 `t_slim_install_sh_forwards_args` 對稱,驗
+    `uninstall.sh` → `uninstall.py` 的參數轉發。"""
+    import tempfile as _tf, json as _j
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-fwd2-"))
+    repo = _P(GRAPHCTL).parent.parent
+
+    pkg = root / "pkg"
+    pkg.mkdir()
+    import shutil as _sh
+    _sh.copy2(repo / "slim" / "uninstall.sh", pkg / "uninstall.sh")
+    (pkg / "uninstall.sh").chmod(0o755)
+    (pkg / "uninstall.py").write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "print(json.dumps(sys.argv[1:]))\n",
+        encoding="utf-8")
+
+    r = subprocess.run(["bash", str(pkg / "uninstall.sh"), "--force"],
+                       cwd=str(root), capture_output=True, text=True)
+    check("薄殼轉發:rc0(假 uninstall.py 直接印完就結束)", r.returncode == 0, r.stdout + r.stderr)
+    got = _j.loads(r.stdout.strip())
+    check("★薄殼原樣轉發參數★", got == ["--force"], f"轉發到: {got}")
+
+
+def t_slim_install_windows_creates_cmd_shim():
+    """★Windows 分支邏輯測試,非真機驗證★(2026-08 Task 13)——這台機器沒有
+    Windows,無法驗證真實 `.cmd` 檔案系統/PATH 行為;用
+    `LUMOS_SLIM_SIMULATE_WINDOWS=1` 環境變數(見 `install.py` 的 `IS_WIN`
+    定義)逼同一份 Python 程式碼走 Windows 分支,驗證的是★程式邏輯本身★:
+    ①產生 `lumos.cmd` shim,內容用 `%~dp0`(批次檔自己所在目錄)相對定位、
+    不寫死 PKG 絕對路徑(維持「複製後與交付包解耦」,`~/.lumos-slim` 事後被
+    砍掉也不影響已裝好的東西——這是 Unix 版 `cp` 就自帶的特性,Windows shim
+    若寫死 PKG 路徑就會喪失這個特性)②同時複製一份 `lumos`(shim 實際呼叫的
+    目標,內容與 `scripts/lumos` 逐位元組相同)③★不★對 `lumos` 執行
+    chmod +x(Windows 不需要;驗證「真的沒呼叫 chmod」最直接的方式就是看
+    可執行位元有沒有被設起來——Unix 分支跑同一支 fixture 一定會設起來)
+    ④manifest 記錄的 `bin_sha256` 是 `lumos`(內容副本)的雜湊,直接可以拿
+    `scripts/lumos` 來源比對,語意跟 Unix 版一致(shim 本身內容固定、跟安裝
+    位置無關,拿它當比對基準沒有鑑別力,故不採用它)。
+    ★測不到什麼★:mklink、真實 cmd.exe/PowerShell 執行 `.cmd` 的行為、
+    Windows PATH 環境變數的真實生效方式——這些只有真機才驗得到,見
+    `slim/README.md`〈支援平台〉的誠實聲明,不要把這條測試的綠燈誤讀成
+    「Windows 已完整驗證」。"""
+    import tempfile as _tf, os as _os, hashlib as _hl, json as _j
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-win-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+
+    proj = root / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+
+    env = dict(_os.environ, HOME=str(fake_home), LUMOS_SLIM_SIMULATE_WINDOWS="1")
+    r = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                       capture_output=True, text=True, env=env)
+    check("Windows 模擬安裝 rc0", r.returncode == 0, r.stdout + r.stderr)
+
+    dst_shim = fake_home / ".local" / "bin" / "lumos.cmd"
+    dst_script = fake_home / ".local" / "bin" / "lumos"
+    check("★產生 .cmd shim★", dst_shim.is_file(), "")
+    shim_text = dst_shim.read_text(encoding="utf-8") if dst_shim.is_file() else ""
+    check("★shim 用 %~dp0 相對定位★", "%~dp0" in shim_text, shim_text)
+    check("★shim 不寫死 PKG 絕對路徑(維持與交付包解耦)★", str(pkg) not in shim_text, shim_text)
+    check("★同時複製 lumos 內容副本(shim 呼叫的目標)★", dst_script.is_file(), "")
+    if dst_script.is_file():
+        check("★不 chmod +x(Windows 分支跳過,證明走的是那個分支而非誤判)★",
+              dst_script.stat().st_mode & 0o111 == 0, oct(dst_script.stat().st_mode))
+        check("★lumos 內容副本與 PKG 來源逐位元組相同★",
+              dst_script.read_bytes() == (pkg / "scripts" / "lumos").read_bytes(), "")
+
+    manifest_path = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+    check("manifest 已寫", manifest_path.is_file(), "")
+    if manifest_path.is_file() and dst_script.is_file():
+        data = _j.loads(manifest_path.read_text(encoding="utf-8"))
+        expect_sha = _hl.sha256(dst_script.read_bytes()).hexdigest()
+        check("★manifest bin_sha256 對應 lumos 內容副本,與 Unix 版語意一致★",
+              data.get("bin_sha256") == expect_sha, str(data))
+
+
+def t_slim_install_windows_path_hint_message():
+    """★Windows 分支邏輯測試,非真機驗證★:PATH 缺 `~/.local/bin` 時,提示
+    文字要分平台——Windows 講「系統環境變數」,Unix 講 shell 設定檔(見
+    `install.py` main() 結尾的分支)。用同一個假交付包分別跑兩次安裝(一次
+    一般環境、一次 `LUMOS_SLIM_SIMULATE_WINDOWS=1`),兩次都把 PATH 限縮成
+    不含 `~/.local/bin`(但仍含 python3/bash/git,見 `_slim_min_path_env`,
+    否則薄殼自己會先因為找不到 python 而 rc2,測不到真正要測的分支),斷言
+    兩次印出的提示文字確實不同、且各自命中各自平台的關鍵字。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-winpath-"))
+    pkg = _slim_make_pkg_at(root / "pkg")
+    min_path = _slim_min_path_env()
+
+    def _run(simulate_win):
+        tag = "win" if simulate_win else "unix"
+        fake_home = root / f"home-{tag}"
+        (fake_home / ".local" / "bin").mkdir(parents=True)
+        proj = root / f"proj-{tag}"
+        proj.mkdir()
+        subprocess.run(["git", "init", "-q", str(proj)], check=True)
+        env = dict(_os.environ, HOME=str(fake_home), PATH=min_path)
+        if simulate_win:
+            env["LUMOS_SLIM_SIMULATE_WINDOWS"] = "1"
+        else:
+            env.pop("LUMOS_SLIM_SIMULATE_WINDOWS", None)
+        return subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                              capture_output=True, text=True, env=env)
+
+    r_unix = _run(False)
+    r_win = _run(True)
+    check("Unix 模擬安裝 rc0", r_unix.returncode == 0, r_unix.stdout + r_unix.stderr)
+    check("Windows 模擬安裝 rc0", r_win.returncode == 0, r_win.stdout + r_win.stderr)
+    check("★Unix 提示含「shell 設定檔」字樣★", "shell 設定檔" in r_unix.stderr, r_unix.stderr)
+    check("★Windows 提示含「系統環境變數」字樣★", "系統環境變數" in r_win.stderr, r_win.stderr)
+    check("★兩平台提示文字確實不同★", r_unix.stderr != r_win.stderr, "")
+
+
+def t_slim_uninstall_windows_removes_paired_files():
+    """★Windows 分支邏輯測試,非真機驗證★:卸載時 `lumos.cmd` shim 與 `lumos`
+    內容副本要成對移除(不是只清掉其中一個留下孤兒檔)。用
+    `LUMOS_SLIM_SIMULATE_WINDOWS=1` 裝一次、卸載一次(--force,聚焦驗證『配
+    對』這件事本身,不糾結 sha256 比對邏輯——那條已有 Unix 版的等價測試蓋過,
+    Windows 分支共用同一段比對程式碼)。斷言卸載後兩個檔案都不見了。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminst-winrm-"))
+
+    pkg = _slim_make_pkg_at(root / "pkg")
+    _slim_copy_uninstall_files(pkg)
+    fake_home = root / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+
+    proj = root / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=True)
+
+    env = dict(_os.environ, HOME=str(fake_home), LUMOS_SLIM_SIMULATE_WINDOWS="1")
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ Windows 模擬安裝 rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    dst_shim = fake_home / ".local" / "bin" / "lumos.cmd"
+    dst_script = fake_home / ".local" / "bin" / "lumos"
+    check("★前置★ .cmd shim 與內容副本都已裝上", dst_shim.is_file() and dst_script.is_file(), "")
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh"), "--force"], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("Windows 模擬卸載 rc0", ru.returncode == 0, ru.stdout + ru.stderr)
+    check("★lumos.cmd shim 已移除★", not dst_shim.exists(), "")
+    check("★lumos 內容副本已移除(成對清除,無孤兒檔)★", not dst_script.exists(), "")
 
 
 def main():

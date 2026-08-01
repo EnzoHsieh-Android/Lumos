@@ -356,12 +356,19 @@ def main():
     pkg_src = here.parent / "slim"
     pkg_dst = out.parent.parent
     if pkg_src.is_dir():
-        for item in ("install.sh", "get.sh", "uninstall.sh", "README.md", "claude-block.md", "skills"):
+        for item in ("install.sh", "install.py", "install.ps1",
+                     "get.sh", "get.ps1",
+                     "uninstall.sh", "uninstall.py", "uninstall.ps1",
+                     "README.md", "claude-block.md", "skills"):
             s = pkg_src / item
             if s.is_dir():
                 shutil.copytree(s, pkg_dst / item, dirs_exist_ok=True)
             elif s.is_file():
                 shutil.copy2(s, pkg_dst / item)
+        # ★可執行位元★:.sh 靠 chmod(Unix 執行必需);.py/.ps1 不需要——.py
+        # 一律由薄殼透過 `python <path>` 呼叫,.ps1 在 Windows 上執行權限由
+        # PowerShell 執行原則(ExecutionPolicy)控管,與檔案的 Unix mode bit
+        # 無關,chmod 對它們沒有意義,故不列入。
         for exe in ("install.sh", "get.sh", "uninstall.sh"):
             p = pkg_dst / exe
             if p.is_file():

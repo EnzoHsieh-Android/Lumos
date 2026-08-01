@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-01
 tags:
   - type/system
   - status/done
@@ -17,10 +17,12 @@ summary: |-
   KEY:★2026-07-31 Task 9 同型缺口預防性修復★——Task 9 把 CLAUDE.md 注入內容從腳本內嵌 heredoc 改成外部靜態範本 `slim/claude-block.md`(見 [[Systems/slim-install-安裝器]]),吸取上一條「漏了 get.sh/uninstall.sh」的教訓,新增檔案當下就同步把 `claude-block.md` 加進組包清單(`for item in (..., "claude-block.md", "skills")`),不是事後才補——`t_slim_gen_dist_ships_entrypoints` 的 expected 清單同步加了這一項
   DEP:scripts/lumos(唯一輸入源)｜scripts/test_lumos.py t_slim_gen/t_slim_gen_loop_registration/t_slim_gen_nested_loop_registration/t_slim_gen_keeps_comments/t_slim_gen_dist_ships_entrypoints
   TEST:25 checks 全綠(`python3 scripts/test_lumos.py -k slim_gen`)——真檔生成(--help==保留24支/py_compile 0 SyntaxWarning/dangling handler=0)+合成fixture(驗迴圈註冊真的被砍,現行白名單下無真實對象故必須合成)+巢狀迴圈合成fixture(`t_slim_gen_nested_loop_registration`,驗保留指令自己的巢狀註冊迴圈不被誤砍、頂層迴圈砍法不退化)+註解密度守衛(★產物註解密度不得低於原檔90%★,抓 ast.unparse 迴歸;哨兵 test_lumos.py 260→94 事故註解,2026-07-31 收尾時把原 brief 的 W4/百分比門檻哨兵換掉,見下方 DECISION)+交付包完整性守衛(`t_slim_gen_dist_ships_entrypoints`,斷言 dist/ 內 get.sh/uninstall.sh/install.sh/README.md/scripts/lumos/skills/lumos-project-notes/SKILL.md 皆存在、三支 .sh 皆有可執行位元)
+  KEY:★2026-08-01 補追加 Task 13——組包清單再擴充,與 [[Systems/slim-install-安裝器]]/[[Systems/slim-uninstall-一行卸載]] 同批,吸取 Task 6/Task 9 兩次「新增檔案沒同步進組包清單」教訓的第三次預防性修復★:`slim/install.sh`/`slim/uninstall.sh` 的邏輯搬進新的 `slim/install.py`/`slim/uninstall.py`(★真正的邏輯所在★,`.sh` 只是薄殼),另新增 `slim/install.ps1`/`slim/uninstall.ps1`/`slim/get.ps1`(Windows 入口)——`main()` 尾段組包清單的 `for item in (...)` 迴圈當下就同步加入這 5 個新檔,不是事後才補;`.py`/`.ps1` 不進「補 chmod 0o755」的迴圈(★.py 一律經薄殼 `python <path>` 呼叫、.ps1 執行權限由 Windows PowerShell 執行原則管,Unix mode bit 對它們無意義★,只有 `.sh` 三支需要可執行位元)。`t_slim_gen_dist_ships_entrypoints` 的 expected 清單同步擴充到 12 項並更新 docstring [test:t_slim_gen_dist_ships_entrypoints]。詳見 [[Verification/2026-08-01_slim-python移植]],報告 `.superpowers/sdd/公開精簡版_實作計畫/task-13-report.md`
 verified_by:
   - "[[Verification/2026-07-31_slim-gen生成器落地]]"
   - "[[Verification/2026-07-31_公開精簡版交付]]"
   - "[[Verification/2026-07-31_slim-claude-md第三次裁定取代與備份還原]]"
+  - "[[Verification/2026-08-01_slim-python移植]]"
 decisions:
   - content: t_slim_gen_keeps_comments 的斷言二次修正:原哨兵 W4 位於 _link_or_copy(scripts/lumos:7238),只被 _install_skills 呼叫、後者只從 cmd_install/cmd_uninstall 可達——兩支都在移除清單,W4 被砍是正當汰換,是 brief 挑錯哨兵,不是生成器漏砍。改用 test_lumos.py 260→94 那條事故註解(出現兩處:module-level TEST_PROFILES dict 字面值 + 保留指令閉包內的 discover_test_methods(),兩處都保證留在產物中)。門檻同時從「保住 N% 註解」(N=60→50,前手依實測 55% 下修過一次)改成「產物註解密度不得低於原檔的 90%」。
     id: d1
