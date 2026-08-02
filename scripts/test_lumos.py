@@ -10149,6 +10149,70 @@ def _mk_rank_vault():
     return d, v
 
 
+def t_search_multiword_fallback_reports_per_term_coverage():
+    """★M1.5(2026-08-02,Landmark 284 篇真庫實測逼出來的)★:回退觸發時,把逐詞覆蓋
+    印到 stderr。
+
+    ★為什麼需要★:回退之後搜尋★幾乎不可能再回 0★——你永遠會拿到看起來合理的東西,
+    而那可能只是常見詞的噪音。今天「0 筆」至少有時候代表「這個概念不在圖譜裡」,
+    回退把那個訊號吃掉了。實例:Landmark 上查「續會 門檻 計算」第一名是「停車折抵」,
+    看起來像排序爛——其實是「續會」全庫 0 篇(我查詢用詞猜錯),剩下兩個常見詞
+    (門檻 50/計算 35)把結果洗走。逐詞覆蓋一印就當場看穿。
+    ★這條買的是「把消失的訊號用另一種形式還回來」,不是「排序變準」。★
+
+    ★最強的一條斷言是「覆蓋數必須與逐詞搜尋一致」★:預檢那圈與主迴圈是兩份實作,
+    很容易漂移。實測就抓到一次——預檢原本沒套用「隱藏作廢節點」的過濾,覆蓋數
+    比實際搜得到的多(門檻 55 vs 50,差在 7 筆 superseded)。★覆蓋數若>實際,使用者
+    會以為「這個詞有東西」而其實搜不到,誤導方向與本功能要解的問題正好相反。★
+
+    ★翻紅釘★:拿掉覆蓋輸出 → ①②翻紅;拿掉預檢的 superseded 過濾 → ④翻紅。"""
+    import subprocess as sp, tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-mwcov-"))
+    v = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / sub).mkdir(parents=True, exist_ok=True)
+    def note(rel, body, status="done"):
+        (v / rel).write_text(f"---\ntype: system\nstatus: {status}\ntags:\n  - type/system\n---\n" + body,
+                             encoding="utf-8")
+    # 「戊」出現在 3 篇,★其中 1 篇是 superseded(該被排除)★;「己」1 篇;「庚」0 篇
+    note("Systems/n1.md", "# n1\n這裡談戊。\n")
+    note("Systems/n2.md", "# n2\n這裡也談戊。\n")
+    note("Systems/n3.md", "# n3\n這篇談戊但已作廢。\n", status="superseded")
+    note("Systems/n4.md", "# n4\n這裡談己。\n")
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+
+    r = lum("search", "戊 己 庚", "--any", "--files-only")
+    check("★前置★ 現場成立:回退真的觸發了(否則以下都在測沒發生的事)",
+          "多詞回退" in r.stderr, f"OUT:{r.stdout}\nERR:{r.stderr}")
+    # ① 有印覆蓋
+    check("★① 回退觸發時要印逐詞覆蓋★", "逐詞覆蓋" in r.stderr, r.stderr)
+    # ② 0 命中的詞要標星 + 額外提示
+    check("★② 全庫 0 命中的詞要標記出來(這是本功能的核心價值)★",
+          "★庚:0★" in r.stderr, r.stderr)
+    check("★② 並提醒「多半是用詞不一致」,別把結果當「圖譜沒有」★",
+          "用詞與圖譜用語不一致" in r.stderr, r.stderr)
+    # ③ 走 stderr,不得污染 stdout
+    check("★③ 覆蓋資訊只走 stderr,stdout 一個字都不能有★",
+          "逐詞覆蓋" not in r.stdout and "多詞回退" not in r.stdout, r.stdout)
+    # ④ ★覆蓋數必須與逐詞搜尋一致(superseded 要被排除)★
+    n_wu = lum("search", "戊", "--files-only").stdout.count(".md")
+    check("★前置★ 現場成立:「戊」有 superseded 篇存在,逐詞搜尋才會與未過濾版不同",
+          n_wu == 2, f"單獨搜「戊」= {n_wu} 篇(期望 2:n1/n2,n3 已作廢被藏)")
+    check("★④ 覆蓋數必須與逐詞搜尋完全一致(預檢與主迴圈是兩份實作,會漂移)★",
+          f"戊:{n_wu}" in r.stderr, f"逐詞搜尋={n_wu}\nstderr:{r.stderr}")
+
+    # ⑤ 回退沒觸發時不得印(片語存在)
+    note("Systems/n5.md", "# n5\n這裡有連續的 辛 壬 片語。\n")
+    r2 = lum("search", "辛 壬", "--any", "--files-only")
+    check("★前置★ 現場成立:片語「辛 壬」真的找得到(回退不該觸發)",
+          "n5.md" in r2.stdout, r2.stdout)
+    check("★⑤ 回退沒觸發時,一個字都不該印★",
+          "逐詞覆蓋" not in r2.stderr and "多詞回退" not in r2.stderr, r2.stderr)
+
+
 def t_search_multiword_fallback_is_opt_in_and_only_on_zero():
     """★2026-08-02:多詞查詢回退(Projects/檢索多詞回退_計劃 M1)★。
 

@@ -1346,10 +1346,17 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     _fb_used = False
     # ★預設關(any_terms=False)★:計劃 M1 只交付「可量測的一條路」,不動預設行為——
     # 要不要變預設留到 M4 拿多詞評測資料再裁,不憑「跑起來看起來對」就轉正。
+    _fb_cov = {}        # M1.5:逐詞覆蓋(term -> 命中篇數);只在回退真的觸發時才印
     if any_terms and (not regex) and len(_fb_terms) > 1:
         _fb_seen = False
         for _r in sorted(env.notes):
             if path_prefix and not _r.startswith(path_prefix):
+                continue
+            # ★與主迴圈同樣排除「真遺忘(superseded)」的節點★——不排的話逐詞覆蓋會
+            # 比實際搜得到的多(2026-08-02 實測:門檻 55 vs 搜尋顯示的 50,差在 7 筆
+            # 被隱藏的作廢節點)。覆蓋數若>實際,使用者會以為「這個詞有東西」而其實
+            # 搜不到,★誤導方向與本功能要解的問題正好相反★。
+            if not include_superseded and _is_forgotten(env, _r):
                 continue
             try:
                 _t = (env.vault / _r).read_text(encoding="utf-8-sig")
@@ -1358,12 +1365,35 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             if not include_code:
                 _t = re.sub(r"(?ms)^\s*```.*?^\s*```", "", _t)
                 _t = INLINE_CODE_RE.sub("", _t)
-            if needle in nfc(_t).lower():
+            _low = nfc(_t).lower()
+            # ★順手數逐詞覆蓋(M1.5)★:本圈本來就讀了每個檔、也做過同樣的排除,
+            # 多幾次子字串測試幾乎免費;不另開一圈。找到片語就 break,那時
+            # 覆蓋數不完整——但那條路不會回退、也就不會印,無害。
+            for _t2 in _fb_terms:
+                if _t2 in _low:
+                    _fb_cov[_t2] = _fb_cov.get(_t2, 0) + 1
+            if needle in _low:
                 _fb_seen = True
                 break
         if not _fb_seen:
             _fb_used = True
             matches = lambda s: any(t in nfc(s).lower() for t in _fb_terms)
+            # ★M1.5:把「查無」這個訊號用另一種形式還回來★
+            # 為什麼需要:回退之後搜尋★幾乎不可能再回 0★——你永遠會拿到看起來
+            # 合理的東西,而那可能只是常見詞的噪音。今天「0 筆」至少有時候代表
+            # 「這個概念不在圖譜裡」,回退把那個訊號吃掉了。
+            # 2026-08-02 Landmark 284 篇實測的實例:查「續會 門檻 計算」第一名是
+            # 「停車折抵」,看起來像排序爛——其實是「續會」全庫 0 篇(查詢用詞猜錯),
+            # 剩下兩個常見詞(門檻 50/計算 35)把結果洗走。逐詞覆蓋一印就當場看穿。
+            # ★走 stderr★:與既有的「已隱藏 N 筆作廢結果」同一慣例,不污染 stdout
+            # 的機器可讀輸出(--json/--files-only 的呼叫端會解析它)。
+            _cov_txt = "  ".join(f"★{t}:0★" if _fb_cov.get(t, 0) == 0 else f"{t}:{_fb_cov.get(t, 0)}"
+                                 for t in _fb_terms)
+            print(f"（多詞回退:整串片語全庫無命中,改用各詞 OR 召回;"
+                  f"逐詞覆蓋 {_cov_txt}）", file=sys.stderr)
+            if any(_fb_cov.get(t, 0) == 0 for t in _fb_terms):
+                print("  ★有詞在全庫 0 命中(標 ★)——多半是查詢用詞與圖譜用語不一致,"
+                      "先換那個詞再查,別把結果當「圖譜沒有」★", file=sys.stderr)
     if ranked and regex:
         print("(--ranked 不適用 --regex 模式,照舊輸出)", file=sys.stderr)
         ranked = False
