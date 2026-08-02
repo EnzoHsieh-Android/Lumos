@@ -49,6 +49,20 @@ description: 設計 spec／計劃寫完、進實作前的對抗審計硬閘—�
 
 ## 每一輪(照做)
 
+> ### ⚠ 一輪能丟多少:軟上限 1800 行(≈30K token)
+>
+> **派工前先量** `wc -l <工作副本/patch>`。超過就**拆開審**——切成多輪，或拆給多席各審一段。
+>
+> **為什麼**：審查員的任務是「在 N 行裡找出那個植入的錯」，而**脈絡越長注意力越差**是已發表的實測（有效脈絡約標稱值 60–70%，**退化在 32K token 就量得到**，報告退化幅度 13.9%–85%）。
+>
+> ★本專案自己的資料落在線的兩邊★（2026-08-02，`code-slim-python`）：r1/r2 各 **≈45K token（2778 行）→ 存活 findings 0／0**；r3–r6 各 ≈9–11K（415–529 行）→ **1／1／2／1**。而且方向是反的——**r1/r2 審的是全新、從沒被審過的碼，本該問題最多**。
+>
+> ★不是定論★（token 為粗估、小 diff 是剛改過的地方缺陷密度本高），但與退化的預測一致。門檻 1800 是**借用已發表的 32K 起點取略保守整數，不是本專案量出來的**。
+>
+> **超標不擋**（輪已經跑完才記帳，擋也來不及），但 `canary record --scope-lines N` 會在帳上標 `scope_oversize` 並當場喊——**那一輪的 caught 是弱證據**：審查員可能是「看不完」而不是「沒問題」，收斂宣稱要講小。
+
+
+
 1. **複製**計劃節點 → 工作副本 `/tmp/<id>-rN.md`。
    - **N／型別／席數／記帳模板一律問** `lumos loop next <id> [--tier ..] [--spec ..]`——帳本吐唯一下一動作,不靠記憶手算。`phase=escalate` 表 light 已 ratchet 須升級;`gate-pending` 表資訊不足要補參數。
    - ⚠ **settle loop 例外**:`loop next` 認不得 settle、會照 K-streak 誤報——settle loop 勿用它,直接問 gate(v1 已知限制)。
@@ -102,10 +116,11 @@ description: 設計 spec／計劃寫完、進實作前的對抗審計硬閘—�
 5. **記錄**:
    ```
    lumos canary record caught|missed --loop <id> --severity <worst> --findings <M> \
-     --auditor sonnet --spec <計劃節點.md> --reviewed <sha256> [--tier <t>] --note "r<N> type=<a-d> ..."
+     --auditor sonnet --spec <計劃節點.md> --reviewed <sha256> [--tier <t>] --scope-lines <這輪被審 spec 幾行> --note "r<N> type=<a-d> ..."
    ```
    - **時序**:caught 輪的 record 移到步驟 7 收尾**之後**——「fold → fold-check → grep=0 → record」連續序列,使 `--reviewed` 的 hash ＝ post-fold 版。missed 輪無 fold,當場 record 即收尾。
    - `<worst>` ＝ ④ 辯方重算後的存活 max(**非 ② 原評**);`<M>` ＝ ④ 裁決後存活折入的真 finding 條數(canary 不計;missed 輪不折記 0)——供收斂閘 G2 枯竭錨機械讀取。
+   - **`--scope-lines`**(純 telemetry,不進 gate):這輪被審材料幾行。canary 抓到只證該席醒著,而**東西越多越抓不到**是外部實測裡最主導的因素——不記就答不出「規模有沒有在灌水 caught 率」。`wc -l <工作副本>`。
    - **中斷恢復(第二帳)**:log 無該輪 record 但 spec 審計修正紀錄有該輪條目 → **人工補 record 再繼續**(防「折了沒記」窗:重派已折輪＋ratchet 訊號蒸發)。
 
 6. **漏抓 → 該輪判決不採信**(仍是一筆 missed record、仍算進 cap):**不折 findings**,直接下一輪(N+1、自動換 canary 類型、framing 加碼)。

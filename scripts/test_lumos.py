@@ -11374,6 +11374,90 @@ def t_need_src_guards_cannot_silently_disable_coverage():
           not missing, f"缺: {missing}")
 
 
+def t_canary_scope_lines_records_review_size():
+    """★把缺的變數記下來★(2026-08-02):canary 抓到只證審查員醒著,但外部實測指出
+    ★東西越多越抓不到★是最主導的因素(arXiv 2606.15689:抓得到合成缺陷不可靠地
+    預測抓得到真實缺陷,且 diff 大小是主導混淆變數)。本專案十輪 code-loop 的 diff
+    從 332 到 2770 行——★在帳上長得一模一樣★,等於無法回答「小 diff 上的 caught
+    是不是灌水」。
+
+    這一欄★不進任何 gate、不改任何判定★,純 telemetry;目的只有一個:讓
+    「caught 率 vs 被審規模」這個問題日後答得出來。
+
+    ★驗行為★:①給了就要真的寫進帳本(不是只收下不存)②不給時★整個鍵不存在★
+    (同 --findings 慣例,不寫 null 汙染舊帳)③負數擋下 rc2 ④★不影響 gate★——
+    帶不帶這欄,loop status 的判定必須完全一樣。"""
+    import json as _j
+    v = mkvault()
+    spec = v / "Projects" / "scopespec.md"
+    spec.write_text("scope spec\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    log = v.parent / ".canary-log.jsonl"
+    lid = f"sc-{_M1U}"
+
+    run(v, "canary", "record", "caught", "--loop", lid, "--severity", "clean", "--findings", "0",
+        "--auditor", "s1", "--reviewed", h, "--spec", str(spec), "--scope-lines", "2770", expect_rc=0)
+    rows = [_j.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    mine = [r for r in rows if r.get("loop") == lid]
+    check("★給了就要真的寫進帳本★", mine and mine[-1].get("scope_lines") == 2770,
+          str(mine[-1] if mine else None)[:200])
+
+    run(v, "canary", "record", "caught", "--loop", lid, "--severity", "clean", "--findings", "0",
+        "--auditor", "s2", "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    rows = [_j.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    mine = [r for r in rows if r.get("loop") == lid]
+    check("★不給時整個鍵不存在(不寫 null 汙染舊帳)★", "scope_lines" not in mine[-1],
+          str(mine[-1])[:200])
+
+    r = run(v, "canary", "record", "caught", "--loop", lid, "--severity", "clean", "--findings", "0",
+            "--auditor", "s3", "--reviewed", h, "--spec", str(spec), "--scope-lines", "-1")
+    check("★負數擋下 rc2★", r.returncode == 2, r.stderr[-150:])
+
+    # ★不影響 gate★:帶與不帶這欄,收斂判定必須一樣
+    g = run(v, "loop", "status", lid, "--need", "2", "--gate", "--spec", str(spec),
+            "--repo", str(v.parent))
+    lid2 = f"sc2-{_M1U}"
+    for a in ("t1", "t2"):
+        run(v, "canary", "record", "caught", "--loop", lid2, "--severity", "clean", "--findings", "0",
+            "--auditor", a, "--reviewed", h, "--spec", str(spec), expect_rc=0)
+    g2 = run(v, "loop", "status", lid2, "--need", "2", "--gate", "--spec", str(spec),
+             "--repo", str(v.parent))
+    check("★純 telemetry:帶了 scope-lines 的 loop 與沒帶的,gate 判定一致★",
+          g.returncode == g2.returncode, f"帶={g.returncode} 沒帶={g2.returncode}")
+
+    # ── 軟上限:超標要在帳上留記號並喊出來 ──
+    lid3 = f"sc4-{_M1U}"
+    ro = run(v, "canary", "record", "caught", "--loop", lid3, "--severity", "clean", "--findings", "0",
+             "--auditor", "big", "--reviewed", h, "--spec", str(spec), "--scope-lines", "2778", expect_rc=0)
+    rows = [_j.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    big = [r for r in rows if r.get("loop") == lid3][-1]
+    check("★超過軟上限要在帳上標 scope_oversize★(caught 是弱證據,事後查得到)",
+          big.get("scope_oversize") is True, str(big)[:200])
+    check("★而且要當場喊出來★(只記不喊等於沒人知道)",
+          "scope_oversize" in ro.stderr or "軟上限" in ro.stderr, ro.stderr[-200:])
+    check("★仍然照常留痕 rc0★(軟上限不擋——輪已經跑完,擋也來不及)",
+          ro.returncode == 0, ro.stderr[-150:])
+
+    # ★反誤傷★:沒超標不得標記、不得喊
+    lid4 = f"sc5-{_M1U}"
+    rs = run(v, "canary", "record", "caught", "--loop", lid4, "--severity", "clean", "--findings", "0",
+             "--auditor", "small", "--reviewed", h, "--spec", str(spec), "--scope-lines", "415", expect_rc=0)
+    rows = [_j.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    small = [r for r in rows if r.get("loop") == lid4][-1]
+    check("★沒超標不得標記(反誤傷)★", "scope_oversize" not in small, str(small)[:200])
+    check("★沒超標不得喊(反噪音)★", "軟上限" not in rs.stderr, rs.stderr[-150:])
+
+    # ★預防端★:警告要在派工之前出現,不是記帳之後才喊
+    nx0 = run(v, "loop", "next", f"sc6-{_M1U}", "--tier", "standard")
+    check("★loop next 必須在派工前就給量尺★(記帳時才喊已經來不及,輪跑完了)",
+          "scope_cap" in nx0.stdout and "wc -l" in nx0.stdout, nx0.stdout[-300:])
+
+    # loop next 的模板要提到它(否則沒人知道有這欄——cluster 帳 316:1 的教訓)
+    nx = run(v, "loop", "next", f"sc3-{_M1U}", "--tier", "standard")
+    check("★loop next 的記帳模板必須帶上它(不然沒人會用)★",
+          "--scope-lines" in nx.stdout, nx.stdout[-300:])
+
+
 def t_m1_loop_next():
     """M1包 #1 loop next:零記錄 rc2/plant-canary/tier 定錨+衝突 rc2/escalate/gate-pending/converged/cap/min-seats/json。"""
     print("t_m1_loop_next")

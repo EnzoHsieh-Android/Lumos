@@ -39,6 +39,20 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 
 ---
 
+
+> ### ⚠ 一輪能丟多少:軟上限 1800 行(≈30K token)
+>
+> **派工前先量** `wc -l <工作副本/patch>`。超過就**拆開審**——切成多輪，或拆給多席各審一段。
+>
+> **為什麼**：審查員的任務是「在 N 行裡找出那個植入的錯」，而**脈絡越長注意力越差**是已發表的實測（有效脈絡約標稱值 60–70%，**退化在 32K token 就量得到**，報告退化幅度 13.9%–85%）。
+>
+> ★本專案自己的資料落在線的兩邊★（2026-08-02，`code-slim-python`）：r1/r2 各 **≈45K token（2778 行）→ 存活 findings 0／0**；r3–r6 各 ≈9–11K（415–529 行）→ **1／1／2／1**。而且方向是反的——**r1/r2 審的是全新、從沒被審過的碼，本該問題最多**。
+>
+> ★不是定論★（token 為粗估、小 diff 是剛改過的地方缺陷密度本高），但與退化的預測一致。門檻 1800 是**借用已發表的 32K 起點取略保守整數，不是本專案量出來的**。
+>
+> **超標不擋**（輪已經跑完才記帳，擋也來不及），但 `canary record --scope-lines N` 會在帳上標 `scope_oversize` 並當場喊——**那一輪的 caught 是弱證據**：審查員可能是「看不完」而不是「沒問題」，收斂宣稱要講小。
+
+
 ## 步驟細節
 
 ### 1 · 產 diff 工作副本
@@ -98,9 +112,12 @@ Agent tool、`model: sonnet`(連 2 missed 升 opus)、**不告知 canary**、指
 ### 5 · 記錄
 ```bash
 lumos canary record caught|missed --loop code-<topic> \
-  --severity <辯方後存活 max> --findings <存活折入數> --auditor <模型>
+  --severity <辯方後存活 max> --findings <存活折入數> --auditor <模型> \
+  --scope-lines <這輪 diff 幾行>
 ```
 missed → 該輪不採信、findings 全不折、下一輪(換 canary 型、framing 加碼)。連 2 missed → 升 opus。
+
+> **`--scope-lines` 為什麼要填**:canary 抓到只證該席**醒著**,但外部實測指出**東西越多越抓不到**是最主導的因素(arXiv 2606.15689:抓得到合成缺陷**不可靠地預測**抓得到真實缺陷,且 **diff 大小是主導混淆變數**)。本專案十輪 code-loop 的 diff 從 332 到 2770 行,**在帳上長得一模一樣**——不填就永遠答不出「小 diff 上的 caught 是不是灌水」。**不進 gate、純 telemetry**;`wc -l <patch>` 即可。
 
 ### 6 · 問收斂
 ```bash

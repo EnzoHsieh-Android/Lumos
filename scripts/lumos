@@ -2473,7 +2473,7 @@ def _sha256_file(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None):
     """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
@@ -2522,12 +2522,28 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             return 2
         rec["reviewed_sha256"] = reviewed
     # ── M1包 #4 成本選配欄:非負整數,不給不寫鍵(同 --findings 慣例) ──
-    for _name, _val in (("tokens", tokens), ("wallclock_min", wallclock_min)):
+    # ★scope_lines(2026-08-02)★:這輪「被審材料有多少行」。
+    # 為什麼要記——canary 抓到只證審查員醒著,但★東西越多越抓不到★是外部實測裡
+    # 最主導的因素(arXiv 2606.15689:合成缺陷抓得到不可靠地預測真實缺陷抓得到,
+    # 且 diff 大小是主導混淆變數)。本專案十輪 code-loop 的 diff 從 332 到 2770 行,
+    # ★在帳上長得一模一樣★——等於無法回答「小 diff 上的 caught 是不是灌水」。
+    # 這一欄不改任何判定、不進任何 gate,★純粹是把缺的變數記下來★,好讓
+    # 「caught 率 vs 規模」這個問題日後答得出來(三種結果都有用:有關係→大 diff
+    # 要切開或加席;沒關係→這個擔心在本情境不成立、寫下來別再擔心;反過來→查)。
+    # ★不能回溯★:既有記錄沒有這個數字,時鐘從加上去那天才開始走。
+    for _name, _val in (("tokens", tokens), ("wallclock_min", wallclock_min),
+                        ("scope_lines", scope_lines)):
         if _val is not None:
             if _val < 0:
                 print(f"ERROR: --{_name.replace('_', '-')} 需非負整數,收到 {_val}", file=sys.stderr)
                 return 2
             rec[_name] = _val
+    if scope_lines is not None and scope_lines > _CANARY_SCOPE_SOFT_CAP_LINES:
+        rec["scope_oversize"] = True
+        print(f"⚠ 本輪被審材料 {scope_lines} 行,超過軟上限 {_CANARY_SCOPE_SOFT_CAP_LINES} 行"
+              f"(≈30K token,context rot 的已發表退化起點是 32K)。", file=sys.stderr)
+        print("  已在帳上標記 scope_oversize。★這一輪的 caught 是弱證據★——"
+              "審查員可能是「看不完」而不是「沒問題」;收斂宣稱請講小,下一輪拆開審。", file=sys.stderr)
     # ── M1包 #1 tier 定錨欄(選配;loop next/gate 讀首個帶 tier 記錄定錨) ──
     if tier is not None:
         if tier not in LOOP_TIERS:
@@ -3453,6 +3469,19 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
 
 
 _TIER_PARAMS = {"light": (1, 2), "standard": (3, 3), "high": (5, 3), "legacy": (1, 6)}  # tier→(width, cap)
+# ★一輪能丟多少給審查員的軟上限★(2026-08-02)
+# 為什麼有這條:審查員的任務是「在 N 行裡找出那個植入的錯」,而 context rot(脈絡越長、
+# 注意力越差)是已發表的實測現象——有效脈絡長度約標稱值的 60-70%,★退化在 32K token 就
+# 量得到★(不必塞爆),報告的退化幅度 13.9%-85%。
+# ★本專案自己的資料落在線的兩邊★:2026-08-02 的 code-slim-python,r1/r2 各 ≈45K token
+# (2778 行)→ 存活 findings ★0/0★;r3-r6 各 ≈9-11K token(415-529 行)→ 1/1/2/1。
+# 而且方向是反的:r1/r2 審的是全新、從沒被審過的碼(595 行 bash 整批換 Python + 三支新
+# .ps1),本該問題最多。★不是定論★(token 為粗估、小 diff 是剛改過的地方缺陷密度本高),
+# 但與退化的預測一致。
+# 門檻取 1800 行 ≈ 30K token,是★借用已發表的 32K 起點取略保守整數★,不是本專案量出來的。
+# 這是軟上限:超過不擋(輪已經跑完才記帳,擋也來不及),但★記進帳並要求收斂宣稱講小★。
+_CANARY_SCOPE_SOFT_CAP_LINES = 1800
+
 _CANARY_TYPES = ("a", "b", "c", "d")   # 壞交叉引用/未定義旗標/未定義欄位常數/未定義產物裸檔名
 
 
@@ -3535,7 +3564,18 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             rmode = "" if (light or eff_tier == "legacy") else f" --round r{n_next}"
             out["record_cmd"] = (f"lumos canary record caught|missed --loop {loop_id}{rmode}"
                                  f" --auditor <席> --severity <s> --findings <M>"
-                                 f" --spec <計劃節點.md> --reviewed <sha256> --tier {eff_tier}")
+                                 f" --spec <計劃節點.md> --reviewed <sha256> --tier {eff_tier}"
+                                 f" --scope-lines <這輪審了幾行>")
+            # ★預防端:警告必須在派工「之前」★——記帳時才喊已經來不及(輪跑完了)。
+            # loop next 是每輪第一步,所以量尺放這裡。
+            out["scope_cap"] = (
+                f"★派工前先量★ `wc -l <工作副本/patch>`:超過 {_CANARY_SCOPE_SOFT_CAP_LINES} 行"
+                f"(≈30K token)就★拆開審★——切成多輪,或拆給多席各審一段。"
+                "理由:審查員的任務是『在 N 行裡找出那個植入的錯』,而脈絡越長注意力越差是"
+                "已發表的實測(退化在 32K token 就量得到);本專案 2026-08-02 的資料落在線兩邊——"
+                "≈45K token 的兩輪存活 findings 各 0,≈9-11K 的四輪共 5,而大的那兩輪審的是"
+                "全新沒被審過的碼、本該問題最多。超標不擋,但會在帳上標 scope_oversize、"
+                "該輪 caught 視為弱證據。")
         # ★cluster 帳的選擇只有第一輪能做★(2026-08-02):模式由「第一個有效輪」定錨,之後
         # 要換只能開新 loop id。而 M2 落地至今 316 筆 canary 記錄裡★只有 1 筆帶 clusters★,
         # 且那一筆是開發它的 code-m2cluster 自己——34 個 panel loop 中有 33 個靜默落回
@@ -3555,7 +3595,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         else:
             print(f"[next] {loop_id}: phase={phase} tier={eff_tier} 下一輪 N={n_next}"
                   f" width={width} cap={cap}")
-            for k in ("canary_type", "record_cmd", "cluster_hint", "note"):
+            for k in ("canary_type", "record_cmd", "scope_cap", "cluster_hint", "note"):
                 if k in out:
                     print(f"  {k}: {out[k]}")
         return 0 if phase == "converged" else 1
@@ -11412,6 +11452,9 @@ def main():
                     help="M1包 雙 hash:計算當下真檔 sha256 存 result_sha256(record 於 fold 後執行=post-fold);須與 --reviewed 同現")
     cr.add_argument("--reviewed", help="M1包 雙 hash:派工當下真檔 sha256 hex(dispatch 快照);須與 --spec 同現")
     cr.add_argument("--tokens", type=int, help="M1包 成本欄:該輪 subagent tokens(非負整數,選配)")
+    cr.add_argument("--scope-lines", type=int, dest="scope_lines",
+                    help="這輪被審材料的行數(diff/spec;非負整數,選配)。★不進任何 gate★——"
+                         "純telemetry,供日後分析『caught 率是不是隨規模掉』(外部實測:規模是主導混淆變數)")
     cr.add_argument("--wallclock-min", type=int, dest="wallclock_min", help="M1包 成本欄:該輪 wall-clock 分鐘(非負整數,選配)")
     cr.add_argument("--tier", dest="rec_tier", choices=("light", "standard", "high"),
                     help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
@@ -11909,7 +11952,8 @@ def main():
                           args.severity, findings=args.findings, round_id=args.round_id,
                           capture_counts=args.capture_counts, clusters=args.clusters,
                           spec=args.rec_spec, reviewed=args.reviewed,
-                          tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier)
+                          tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,
+                          scope_lines=args.scope_lines)
 
     if args.cmd == "loop":
         if args.lcmd == "status":
