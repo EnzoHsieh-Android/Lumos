@@ -10227,7 +10227,10 @@ def t_search_multiword_fallback_scope_message_covers_path_and_superseded():
       r2:第二句硬寫的「有詞在★全庫★ 0 命中」同一個毛病
     ★用一個維度描述範圍,另一個維度就不在視野裡★——本測試把兩個維度都釘住。
 
-    ★翻紅釘★:把 `_sc` 的 path_prefix 那半拿掉 → `--path` 那兩條翻紅。"""
+    ★翻紅釘★:把 `_sc` 的 path_prefix 那半拿掉 → ★只有「必須揭露路徑範圍」那一條翻紅★。
+    (原 docstring 寫「那兩條翻紅」是★過度宣稱★,r3 審查員實跑打臉:另一條
+    「不得宣稱全庫」在突變後照樣綠——因為拿掉 path 那半之後訊息仍然沒說「全庫」。
+    ★同一天第 N 次:宣稱的東西比實際驗過的多。連翻紅釘的條數都要實跑過再寫。★)"""
     import subprocess as sp, tempfile as _tf
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-scope-"))
@@ -10252,7 +10255,22 @@ def t_search_multiword_fallback_scope_message_covers_path_and_superseded():
     check("★--path 限定時不得宣稱「全庫」★", "全庫" not in r.stderr, r.stderr)
     r2 = lum("search", "子丑 寅卯", "--files-only")
     check("★沒有 --path 時,訊息不得憑空冒出路徑範圍★",
-          "底下" not in r2.stderr and "未作廢的節點裡無命中" in r2.stderr, r2.stderr)
+          "底下" not in r2.stderr and "未作廢的節點的可見文字裡無命中" in r2.stderr, r2.stderr)
+
+    # ★第四個維度:--code(r3 codex 抓到)★——預設不搜程式碼區塊,說「節點裡無命中」
+    # 仍不精確:片語可能就在程式碼區塊裡。
+    note("Systems/s2.md", "# s2\n一般文字提到辰巳。\n```\n辰巳 午未 這個片語只在程式碼區塊裡\n```\n")
+    note("Projects/p2.md", "# p2\n一般文字提到午未。\n")
+    r3 = lum("search", "辰巳 午未", "--files-only")
+    check("★前置★ 現場成立:預設(不含 code)時回退觸發——片語只在程式碼區塊裡",
+          "多詞回退" in r3.stderr, r3.stderr)
+    check("★預設時必須講明範圍是「可見文字」(程式碼區塊不算)★",
+          "可見文字" in r3.stderr, r3.stderr)
+    r4 = lum("search", "辰巳 午未", "--code", "--files-only")
+    check("★前置★ 現場成立:加 --code 後片語真的找得到(所以不該回退)",
+          "s2.md" in r4.stdout, f"OUT:{r4.stdout}\nERR:{r4.stderr}")
+    check("★加 --code 時不得再說「可見文字」(範圍已含程式碼)★",
+          "可見文字" not in r4.stderr, r4.stderr)
 
 
 def t_search_multiword_fallback_r1_three_majors():
@@ -10296,7 +10314,7 @@ def t_search_multiword_fallback_r1_three_majors():
     check("★① 不得宣稱「全庫無命中」——片語其實存在,只是被歸檔了★",
           "全庫無命中" not in r.stderr, r.stderr)
     check("★① 必須講清楚範圍是「未作廢的節點」★",
-          "未作廢的節點裡無命中" in r.stderr, r.stderr)
+          "未作廢的節點" in r.stderr and "無命中" in r.stderr, r.stderr)
     # --include-superseded 時範圍才真的是全庫
     r2 = lum("search", "壬癸 甲乙", "--include-superseded", "--files-only")
     check("★① --include-superseded 時片語找得到,不該回退★",
