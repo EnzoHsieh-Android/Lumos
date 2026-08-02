@@ -10213,21 +10213,27 @@ def t_search_multiword_fallback_reports_per_term_coverage():
           "逐詞覆蓋" not in r2.stderr and "多詞回退" not in r2.stderr, r2.stderr)
 
 
-def t_search_multiword_fallback_is_opt_in_and_only_on_zero():
+def t_search_multiword_fallback_is_default_and_only_on_zero():
     """★2026-08-02:多詞查詢回退(Projects/檢索多詞回退_計劃 M1)★。
 
     背景:候選階段是整串子字串比對,`search "甲 乙 丙"` 只要那三個字沒連在一起出現過
     就是 0 候選——而 BM25F 本身完全會處理多詞,壞的是前面撈候選那道關卡。
 
+    ★2026-08-03 人裁翻預設★:回退改為預設開,`--no-any` 逃生。證據見
+    Projects/檢索多詞回退_計劃 M4(nDCG@5 0→0.767、MRR 0.95、第一名必看 7/10;
+    對照組 5 題逐檔完全相同)。★本測試的 ② 因此從「預設必須維持 0」改成
+    「`--no-any` 必須維持 0」——★方向相反,是刻意的行為變更,不是弱化★。
+
     ★這條測試守的是三件事,缺一不可★:
-    ① `--any` 能把「原本 0 候選」的多詞查詢救回來(修好了沒)
-    ② ★預設必須維持 0★——M1 只交付可量測的一條路,不動預設行為
+    ① 預設能把「原本 0 候選」的多詞查詢救回來(修好了沒)
+    ② ★`--no-any` 必須回到舊行為(0 候選)★——逃生口要真的逃得掉
     ③ ★fallback-only:片語真的存在時,回退絕不能觸發★
        這條最重要。若寫成「永遠 OR」,`_rank_score_candidates` 的 N/df/avgdl
        ★以候選集為語料★,擴召回會擾動所有既有查詢的排序——零回歸就不成立了。
 
     ★翻紅釘★:拿掉回退整段 → ① 翻紅;把 `if not _fb_seen:` 拿掉(變成永遠 OR)
-    → ③ 翻紅(存在片語的查詢會多撈到只含單詞的檔)。"""
+    → ③ 翻紅(存在片語的查詢會多撈到只含單詞的檔);把 `--no-any` 接線拿掉
+    → ② 翻紅(逃生口失效)。"""
     import subprocess as sp, tempfile as _tf
     from pathlib import Path as _P
     root = _P(_tf.mkdtemp(prefix="gctl-mwfb-"))
@@ -10257,38 +10263,42 @@ def t_search_multiword_fallback_is_opt_in_and_only_on_zero():
     r = lum("search", "甲", "--files-only")
     check("★前置★ 現場成立:單詞「甲」找得到 2 篇", r.stdout.count(".md") == 2, r.stdout)
 
-    # ② 預設不動:多詞片語「甲 乙」不相鄰 → 0
-    r = lum("search", "甲 乙", "--files-only")
-    check("★預設(無 --any)必須維持 0 候選——M1 不動預設行為★",
+    # ② --no-any 逃生:回到舊行為
+    r = lum("search", "甲 乙", "--no-any", "--files-only")
+    check("★--no-any 必須回到舊行為(0 候選)——逃生口要真的逃得掉★",
           "候選 0" in r.stdout or ".md" not in r.stdout, r.stdout)
 
-    # ① --any 救得回來
-    r = lum("search", "甲 乙", "--any", "--files-only")
-    check("★--any:原本 0 候選的多詞查詢救得回來★", "alpha.md" in r.stdout, r.stdout)
-    check("★--any 用 OR 不是 AND(只含「甲」的 beta 也該進候選)★", "beta.md" in r.stdout, r.stdout)
+    # ① 預設就救得回來(2026-08-03 起)
+    r = lum("search", "甲 乙", "--files-only")
+    check("★預設:原本 0 候選的多詞查詢救得回來★", "alpha.md" in r.stdout, r.stdout)
+    check("★用 OR 不是 AND(只含「甲」的 beta 也該進候選)★", "beta.md" in r.stdout, r.stdout)
+    r_flag = lum("search", "甲 乙", "--any", "--files-only")
+    check("★`--any` 保留相容:帶不帶結果必須一樣(它已是預設,不得變成別的意思)★",
+          r_flag.stdout == r.stdout, f"預設:\n{r.stdout}\n--any:\n{r_flag.stdout}")
 
     # ③ ★fallback-only★:片語真的存在時不得回退
-    r_plain = lum("search", "丙 丁", "--files-only")
+    r_plain = lum("search", "丙 丁", "--no-any", "--files-only")
     check("★前置★ 現場成立:多詞片語「丙 丁」本來就找得到(否則③在測一個不成立的現場)",
           "gamma.md" in r_plain.stdout, r_plain.stdout)
     check("★前置★ 現場成立:它★真的是多詞★——存在一個只含單詞的 delta,"
           "若偷偷 OR 就會被誤撈進來,這樣③才驗得出東西",
           "delta.md" not in r_plain.stdout, r_plain.stdout)
-    r_any = lum("search", "丙 丁", "--any", "--files-only")
-    check("★fallback-only:片語存在時 --any 的結果必須與預設完全相同(沒有偷偷擴召回)★",
+    r_any = lum("search", "丙 丁", "--files-only")
+    check("★fallback-only:片語存在時,結果必須與關掉回退完全相同(沒有偷偷擴召回)★",
           sorted(l for l in r_any.stdout.splitlines() if ".md" in l)
           == sorted(l for l in r_plain.stdout.splitlines() if ".md" in l),
           f"plain:\n{r_plain.stdout}\nany:\n{r_any.stdout}")
 
-    # 單詞 + --any:無多詞可拆,行為不變
+    # 單詞:無多詞可拆,開關都不影響
     r1 = lum("search", "甲", "--files-only")
-    r2 = lum("search", "甲", "--any", "--files-only")
-    check("★單詞查詢帶 --any 行為不變(沒有多詞可拆)★", r1.stdout == r2.stdout,
+    r2 = lum("search", "甲", "--no-any", "--files-only")
+    check("★單詞查詢開不開回退都一樣(沒有多詞可拆)★", r1.stdout == r2.stdout,
           f"{r1.stdout}\n---\n{r2.stdout}")
 
     # --regex 不受影響
-    r = lum("search", "甲|乙", "--any", "--regex", "--files-only")
-    check("★--regex 帶 --any 不得走回退(候選語意不同)★", r.returncode == 0, r.stderr[:200])
+    r = lum("search", "甲|乙", "--regex", "--files-only")
+    check("★--regex 不得走回退(候選語意不同)★",
+          r.returncode == 0 and "多詞回退" not in r.stderr, f"rc={r.returncode}\n{r.stderr[:200]}")
 
 
 def t_search_ranked():

@@ -1310,7 +1310,7 @@ def _is_forgotten(env, rel):
 
 def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
                ranked=False, top=20, as_json=False, include_superseded=False,
-               any_terms=False):
+               any_terms=True):
     """全文搜尋(frontmatter + body)。預設大小寫不敏感 substring;--regex 用正則。
     預設**排除 fenced code 區塊 + inline code**(對齊 doctor 連結抽取的慣例,--code 才含);
     context 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。職責=自由文字;結構化查詢走
@@ -1344,8 +1344,14 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     #   預檢誤判成「找得到」時只是不回退(維持現況),不會造成錯誤召回。
     _fb_terms = [t for t in nfc(term).lower().split() if t] if not regex else []
     _fb_used = False
-    # ★預設關(any_terms=False)★:計劃 M1 只交付「可量測的一條路」,不動預設行為——
-    # 要不要變預設留到 M4 拿多詞評測資料再裁,不憑「跑起來看起來對」就轉正。
+    # ★2026-08-03 起為預設(人裁)★——`--no-any` 逃生。翻預設的證據
+    # (Projects/檢索多詞回退_計劃 M4):
+    #   ①現況是「每個現實多詞查詢都回 0」(Landmark 284 篇 10/10、本庫快照 10/10)
+    #   ②回退後 nDCG@5 0→0.767、MRR 0.95、第一名為「必看」7/10
+    #     (雙評 Claude+Codex 跨家族、分歧交乾淨 opus 裁決)
+    #   ③★零回歸機械可證★(回退只在整串片語全庫無命中時觸發)+對照組 5 題逐檔完全相同
+    #   ④M1.5 逐詞覆蓋已把「查無」訊號還回來 ⑤查無任何機器消費端依賴「回 0」語意
+    # ★誠實邊界★:pooling bias(候選池半數來自回退自己的 top-10)、n=10、單一快照。
     _fb_cov = {}        # M1.5:逐詞覆蓋(term -> 命中篇數);只在回退真的觸發時才印
     if any_terms and (not regex) and len(_fb_terms) > 1:
         _fb_seen = False
@@ -11650,7 +11656,9 @@ def main():
     p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
     p.add_argument("--ranked", action="store_true", help="BM25F 相關性排序(2026-07-11 起已是預設,旗標保留相容)")
     p.add_argument("--any", action="store_true", dest="search_any",
-                   help="多詞查詢:整串片語全庫找不到時,退成各詞 OR 召回(預設關;實驗中,見 Projects/檢索多詞回退_計劃)")
+                   help="多詞回退(2026-08-03 起已是預設,旗標保留相容)")
+    p.add_argument("--no-any", action="store_true", dest="search_no_any",
+                   help="關閉多詞回退:整串片語找不到就回 0,不退成各詞 OR 召回")
     p.add_argument("--legacy", action="store_true", dest="search_legacy",
                    help="舊行為:字母序+全量輸出(轉正前預設;--regex 自動走此路)")
     p.add_argument("--top", type=int, default=0, help="相關性排序輸出上限(0=全量,預設;圖譜先行不靜默截斷)")
@@ -12007,7 +12015,7 @@ def main():
                           regex=args.regex, files_only=args.files_only,
                           include_code=args.code, ranked=_use_ranked, top=args.top,
                           as_json=args.search_json, include_superseded=args.include_superseded,
-                          any_terms=args.search_any)
+                          any_terms=not args.search_no_any)
 
     if args.cmd == "contracts":
         rel = None
