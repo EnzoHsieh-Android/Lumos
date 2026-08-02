@@ -442,6 +442,11 @@ def _main_guarded(argv=None):
         print(f"ERROR: 讀取既有 CLAUDE.md 時發現它不是合法 utf-8,已中止: {e}", file=sys.stderr)
         print("  本安裝器只處理 utf-8;不會在看不懂內容的情況下改寫你的 CLAUDE.md。", file=sys.stderr)
         print("  請先確認該檔編碼(或另存成 utf-8)後重跑。", file=sys.stderr)
+        # ★與下面 OSError 分支對稱地講一句半成品狀態(2026-08-02 交付包端到端真跑
+        # 時發現只有 OSError 那條有講)★——①CLI 與②skill 這時已經裝好了,只有
+        # ③CLAUDE.md 沒動;不講的話使用者會以為整件事失敗、跑去手動清理已裝好的東西。
+        print("  ★①全域指令與②skill 這時已經裝好、不會被回滾★,只有③CLAUDE.md 沒動;"
+              "修好編碼後重跑即可補上(重跑是冪等的)。", file=sys.stderr)
         return 2
     except OSError as e:
         print(f"ERROR: 安裝過程發生檔案系統錯誤,已中止: {e}", file=sys.stderr)

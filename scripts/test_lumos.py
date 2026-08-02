@@ -13929,6 +13929,15 @@ def t_slim_install_non_utf8_claude_md_reports_cleanly():
           ri.returncode == 2, f"rc={ri.returncode}\n{out}")
     check("★看不懂內容就不准改寫使用者的 CLAUDE.md(位元組原封不動)★",
           claude_md.read_bytes() == raw, repr(claude_md.read_bytes()[:60]))
+    # ★2026-08-02 對交付包端到端真跑時發現的不對稱★:OSError 分支有講「已完成的
+    # 步驟不會被回滾」,這條沒講——但這時 ①CLI 與 ②skill 其實已經裝好了,不講
+    # 使用者會以為整件事失敗、跑去手動清理。訊息不對稱本身就是缺陷。
+    check("★必須講明半成品狀態(①②已裝好、只有③沒動),否則使用者會誤以為全失敗★",
+          "不會被回滾" in out and "冪等" in out, out)
+    check("★前置★ 現場成立:①②這時真的已經裝好了(否則上一條在講一件沒發生的事)",
+          (fake_home / ".local" / "bin" / "lumos").exists()
+          and (fake_home / ".claude" / "skills" / "lumos-project-notes").is_dir(),
+          str(sorted(_os.listdir(fake_home / ".local" / "bin"))))
 
 
 def t_slim_get_ps1_every_git_call_checks_lastexitcode():
