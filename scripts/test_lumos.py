@@ -13710,6 +13710,269 @@ def t_slim_uninstall_manifest_parent_cleanup_is_best_effort():
         _os.chmod(share, orig_mode)
 
 
+def t_slim_uninstall_claude_md_write_failure_does_not_abort_remaining_steps():
+    """★2026-08-02 對照實驗抓到的合約違反(不是 reviewer 抓到的——四席裡三席
+    明確宣稱「各步互不阻擋、沒有任何一步會中止其他步驟」,而且講反了)★。
+
+    本檔 docstring 與圖譜宣告的 ★INVARIANT★ 是「五個步驟各自獨立、互不阻擋」。
+    但 `_restore_claude_md()`(步驟④)裡的 `unlink()`/`write_text()` 是裸呼叫,
+    `main()` 呼叫它時也沒有 try——CLAUDE.md 唯讀/磁碟滿/檔案被鎖住時直接拋
+    `PermissionError` 炸穿 `main()`,★排在它後面的步驟⑤(manifest)完全不會執行★,
+    使用者只看到一段 traceback。合約在 code 裡根本沒被兌現。
+
+    ★現場必須真的拋例外,不能只是讓它不被執行★(第④型假綠的教訓):把
+    `CLAUDE.md` 本身 chmod 成 `r--r--r--`——區塊移除算出來的新內容非空,走的是
+    `target.write_text(new)` 那一支,對唯讀檔開 'w' 必定 PermissionError。
+    父目錄權限不動,所以步驟⑤要動的 `~/.local/share/` 完全不受影響,⑤沒跑成
+    只可能是被④炸斷。
+
+    ★翻紅釘★:把 `_restore_claude_md()` 的 try/except 拿掉還原成裸呼叫,
+    「manifest 仍被移除」與「rc 是 2 不是 1」兩條斷言會翻紅(未捕捉例外的
+    exit code 正好是 1——所以 rc 那條刻意釘死 2,不收 `in (1, 2)`,否則就掉進
+    第②型「斷言太鬆」)。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    if hasattr(_os, "geteuid") and _os.geteuid() == 0:
+        check("★skip★ root 身分下權限不生效,此測試無意義", True, "running as root")
+        return
+    root = _P(_tf.mkdtemp(prefix="gctl-slimclaudemd-blocked-"))
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    proj = root / "proj"
+    proj.mkdir()
+    claude_md = proj / "CLAUDE.md"
+    claude_md.write_text("# 專案標題\n\n原有內容\n", encoding="utf-8")
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    check("★前置★ install.sh rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+
+    manifest = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+    check("★前置★ 安裝後 manifest 存在(否則⑤本來就沒事可做,測不到東西)",
+          manifest.is_file(), str(manifest))
+    before = claude_md.read_text(encoding="utf-8")
+    check("★前置★ 安裝後 CLAUDE.md 真的有 LUMOS-SLIM 區塊(④才有事可做)",
+          "LUMOS-SLIM:START" in before, before[:200])
+
+    orig_mode = claude_md.stat().st_mode
+    _os.chmod(claude_md, 0o444)
+    try:
+        ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                            capture_output=True, text=True, env=env)
+        out = ru.stdout + ru.stderr
+        check("★前置★ 現場成立:④ 真的踩到檔案系統錯誤(不是被跳過)",
+              "區塊移除/還原失敗" in out, out)
+        check("★前置★ 沒有未捕捉例外炸出 traceback",
+              "Traceback (most recent call last)" not in out, out)
+        check("★合約:④ 失敗不得阻擋⑤——manifest 仍被移除★",
+              not manifest.exists(), out)
+        check("★rc 必須是 2(彙總出來的錯誤),不是 1(未捕捉例外的 exit code)★",
+              ru.returncode == 2, f"rc={ru.returncode}\n{out}")
+        check("★④ 失敗時 CLAUDE.md 必須原封不動(不得半殘)★",
+              claude_md.read_text(encoding="utf-8") == before, out)
+    finally:
+        _os.chmod(claude_md, orig_mode)
+
+
+def t_slim_install_filesystem_error_reports_cleanly_without_traceback():
+    """★install 的例外處理跟 uninstall 是相反的語意,這條測試守的是這個差別★。
+
+    uninstall 宣告「各步互不阻擋」,所以它逐步吞 OSError 再彙總;install 的
+    `main()` 是★遇錯早退★(每一步依賴前一步,裝到一半就該停,而不是把 skill
+    裝進一個沒有 CLI 的環境)。所以 install 這邊★不能★學 uninstall 逐處包
+    try/except 讓它繼續跑——那會改掉它的順序語意。
+
+    install 真正該修的只有一件:例外別以 traceback 的形式丟給使用者。
+    `PermissionError` 的堆疊對使用者毫無用處,「權限不足,請確認 X 可寫」才有。
+
+    ★現場★:把 `~/.local/bin` chmod 成 `r-x`,`shutil.copyfile()` 寫不進去,
+    必定 PermissionError。★翻紅釘★:把 `_main_guarded()` 的 except 拿掉、
+    入口改回 `main()`,「沒有 traceback」與「rc==2」兩條會翻紅(未捕捉例外的
+    exit code 是 1)。
+
+    ★這條刻意不斷言「已完成的步驟被回滾」★——精簡版明確不做交易式回滾
+    (回滾自己也會失敗,而且刪使用者的東西風險更高),半成品狀態是已知且
+    刻意保留的,重跑 `--force` 收斂。斷言不存在的行為會變成假需求。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    if hasattr(_os, "geteuid") and _os.geteuid() == 0:
+        check("★skip★ root 身分下權限不生效,此測試無意義", True, "running as root")
+        return
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminstall-perm-"))
+
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    bin_dir = fake_home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+
+    proj = root / "proj"
+    proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案標題\n\n原有內容\n", encoding="utf-8")
+
+    orig_mode = bin_dir.stat().st_mode
+    _os.chmod(bin_dir, 0o500)
+    try:
+        ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                            capture_output=True, text=True, env=env)
+        out = ri.stdout + ri.stderr
+        check("★前置★ 現場成立:安裝真的踩到檔案系統錯誤(不是悄悄成功了)",
+              "檔案系統錯誤" in out, out)
+        check("★不得把 traceback 丟給使用者★",
+              "Traceback (most recent call last)" not in out, out)
+        check("★rc 必須是 2(可辨識的錯誤),不是 1(未捕捉例外的 exit code)★",
+              ri.returncode == 2, f"rc={ri.returncode}\n{out}")
+        check("★訊息必須可行動(講得出常見原因與下一步)★",
+              "權限" in out and "重跑" in out, out)
+        check("★CLAUDE.md 不得被動過(③ 排在失敗的① 之後,早退代表它沒跑到)★",
+              "LUMOS-SLIM" not in (proj / "CLAUDE.md").read_text(encoding="utf-8"), out)
+    finally:
+        _os.chmod(bin_dir, orig_mode)
+
+
+def t_slim_uninstall_claude_md_read_failure_does_not_abort_remaining_steps():
+    """★同一條合約的第二個破口,單 reviewer 抓到(2026-08-02)★:第一版修法只把
+    `_restore_claude_md()` 裡的 `unlink()`/`write_text()` 包進 try,★`read_text()`
+    留在 try 外面★——「檔案系統寫入」這個字眼讓我只掃了「寫」。
+
+    兩種真實觸發:①CLAUDE.md 讀不到(`chmod 000`)→ `PermissionError`(OSError
+    子類)②CLAUDE.md 內容不是合法 utf-8(中文專案裡別的編輯器存成 Big5、貼進
+    壞位元組都很真實)→ ★`UnicodeDecodeError` 不是 OSError 子類★(繼承
+    `ValueError`),連寫入那邊的 `except OSError` 都攔不到。兩者都炸穿 `main()`、
+    步驟⑤永遠不執行——★跟修之前的症狀一模一樣★,只是入口從寫換成讀。
+
+    ★翻紅釘★:把 `read_text()` 的 try/except 拿掉還原成裸呼叫,兩個場景的
+    「無 traceback」「manifest 仍被移除」「rc==2」都會翻紅。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    if hasattr(_os, "geteuid") and _os.geteuid() == 0:
+        check("★skip★ root 身分下權限不生效,此測試無意義", True, "running as root")
+        return
+
+    def _one(label, corrupt, expect_kw):
+        root = _P(_tf.mkdtemp(prefix="gctl-slimread-"))
+        fake_home = root / "home"
+        pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+        _slim_copy_uninstall_files(pkg)
+        (fake_home / ".local" / "bin").mkdir(parents=True)
+        env = dict(_os.environ, HOME=str(fake_home))
+        proj = root / "proj"
+        proj.mkdir()
+        claude_md = proj / "CLAUDE.md"
+        claude_md.write_text("# 專案標題\n\n原有內容\n", encoding="utf-8")
+
+        ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                            capture_output=True, text=True, env=env)
+        check(f"★前置★[{label}] install.sh rc0", ri.returncode == 0, ri.stdout + ri.stderr)
+        manifest = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+        check(f"★前置★[{label}] 安裝後 manifest 存在(⑤才有事可做)",
+              manifest.is_file(), str(manifest))
+
+        corrupt(claude_md)
+        ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                            capture_output=True, text=True, env=env)
+        out = ru.stdout + ru.stderr
+        check(f"★前置★[{label}] 現場成立:④ 真的踩到讀取失敗",
+              expect_kw in out, out)
+        check(f"[{label}] ★不得炸出 traceback★",
+              "Traceback (most recent call last)" not in out, out)
+        check(f"[{label}] ★合約:④ 讀失敗不得阻擋⑤——manifest 仍被移除★",
+              not manifest.exists(), out)
+        check(f"[{label}] ★rc 必須是 2,不是 1(未捕捉例外的 exit code)★",
+              ru.returncode == 2, f"rc={ru.returncode}\n{out}")
+        _os.chmod(claude_md, 0o644)
+
+    _one("讀不到", lambda f: _os.chmod(f, 0o000), "讀不到")
+    _one("非 utf-8",
+         lambda f: f.open("ab").write(b"\xff\xfe not utf-8\n"),
+         "不是合法 utf-8")
+
+
+def t_slim_install_non_utf8_claude_md_reports_cleanly():
+    """★install 側的姊妹漏洞(同一次 review 抓到)★:`_main_guarded()` 第一版
+    只接 `OSError`,但 `_merge_claude_md_text()` 讀的是★使用者既有的★
+    CLAUDE.md——那份檔案不是我們寫的、編碼不歸我們管。不是合法 utf-8 時拋的是
+    `UnicodeDecodeError`(繼承 `ValueError`,★不是 OSError★),攔不到,照樣
+    traceback + rc1,違反這次修法自己承諾的「例外別以 traceback 丟給使用者」。
+
+    ★同時守一條更重要的行為★:看不懂內容時★不得改寫使用者的 CLAUDE.md★
+    ——斷言那個位元組序列原封不動還在。
+
+    ★翻紅釘★:拿掉 `_main_guarded` 的 `except UnicodeDecodeError` 分支,
+    「無 traceback」與「rc==2」翻紅。"""
+    import tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-sliminstall-enc-"))
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+    proj = root / "proj"
+    proj.mkdir()
+    claude_md = proj / "CLAUDE.md"
+    raw = b"# Title\n\n\xff\xfe invalid utf8 content\n"
+    claude_md.write_bytes(raw)
+
+    ri = subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    out = ri.stdout + ri.stderr
+    check("★前置★ 現場成立:安裝真的踩到編碼問題(不是悄悄成功了)",
+          "不是合法 utf-8" in out, out)
+    check("★不得炸出 traceback★",
+          "Traceback (most recent call last)" not in out, out)
+    check("★rc 必須是 2,不是 1(未捕捉例外的 exit code)★",
+          ri.returncode == 2, f"rc={ri.returncode}\n{out}")
+    check("★看不懂內容就不准改寫使用者的 CLAUDE.md(位元組原封不動)★",
+          claude_md.read_bytes() == raw, repr(claude_md.read_bytes()[:60]))
+
+
+def t_slim_get_ps1_every_git_call_checks_lastexitcode():
+    """★2026-08-02 對照實驗抓到的不對稱★:`get.ps1` 的 `git pull` 那一支有檢
+    `$LASTEXITCODE`、`git clone` 那一支沒有——同一個函式裡一個有一個沒有,是
+    漏寫不是設計。漏掉時 clone 失敗(沒網路/沒權限/磁碟滿)會照樣往下走,
+    使用者拿到的錯誤訊息是「交付包內容可能不完整」,查錯方向整個被帶偏。
+
+    ★為什麼不能靠 `$ErrorActionPreference = "Stop"` 兜★:它只管 PowerShell
+    cmdlet,原生執行檔(git.exe)回非零 exit code 不會觸發終止;PS 7.3 起的
+    `$PSNativeCommandUseErrorActionPreference` 才改這行為,而本包要支援
+    Windows PowerShell 5.1。
+
+    ★這條測試驗得到什麼、驗不到什麼(誠實邊界)★——它是本專案假綠清單第③型
+    「驗寫法不驗行為」,★而且是刻意的★:這台機器沒有 PowerShell(開發環境是
+    macOS),無法執行任何一行 ps1。
+    - 驗得到:每一個呼叫 `git` 的行,後面幾行內出現 `$LASTEXITCODE` 檢查
+      ——也就是「新增 git 呼叫時不會忘了配一道檢查」這個★對稱性★。
+    - 驗不到:`$LASTEXITCODE` 在真實 PowerShell 裡對這些呼叫路徑是否確實
+      被設定、`return 2` 是否真的傳得回呼叫端。那需要真機,見
+      `t_slim_ps1_write_error_noterminating_under_stop_preference` 的同款聲明。
+      ★不得因為這條綠了就宣稱 get.ps1 在 Windows 上正確★。"""
+    import re as _re
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    text = (repo / "slim" / "get.ps1").read_text(encoding="utf-8")
+    code_lines = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
+
+    # ★只認「行首(可帶變數指派)的 git 呼叫」★——第一版用 `(?<![\w-])git\s`
+    # 掃全行,把錯誤訊息字串裡的「找不到 git 指令」「不是本包的 git clone」也
+    # 算成呼叫,三條斷言裡有一條當場翻紅。字串裡的 git 不是呼叫。
+    # 已知限制:管線中段的 git(`... | git ...`)抓不到——目前這支沒有,真要
+    # 新增那種寫法時這條會靜默漏掉,不是萬用偵測器。
+    git_lines = [i for i, ln in enumerate(code_lines)
+                 if _re.match(r'\s*(\$\w+\s*=\s*)?git\s', ln)]
+    check("★前置★ 真的找得到 git 呼叫行(找不到代表這條正則已經失效、測試在空轉)",
+          len(git_lines) >= 2, "\n".join(code_lines[i] for i in git_lines))
+
+    for i in git_lines:
+        window = "\n".join(code_lines[i + 1:i + 6])
+        check(f"★git 呼叫(行內容: {code_lines[i].strip()[:48]!r})後必須檢 $LASTEXITCODE★",
+              "$LASTEXITCODE" in window, window)
+
+
 def t_slim_uninstall_keeps_manifest_when_bin_refused():
     """★manifest 的清除有一個資料相依,不能無腦刪★:①bin 基於安全考量沒被
     移除時,manifest 必須留著——它是使用者之後加 `--force` 或手動確認時唯一的
@@ -14934,7 +15197,7 @@ def t_slim_ps1_error_branches_still_halt_via_return():
     expected_write_error_count = {
         "install.ps1": 1,
         "uninstall.ps1": 1,
-        "get.ps1": 4,
+        "get.ps1": 5,
     }
 
     for name, expected_count in expected_write_error_count.items():
@@ -14999,7 +15262,7 @@ def t_slim_ps1_write_error_noterminating_under_stop_preference():
       的保護)②每一處 `Write-Error` 呼叫「那一行本身」帶有
       `-ErrorAction Continue`/`SilentlyContinue`/`Ignore` 這種明確覆寫寫法
       (不是靠猜隔壁行、不是子字串比對整份檔案)③`Write-Error` 出現次數符合
-      預期(6 處:install.ps1=1、uninstall.ps1=1、get.ps1=4),沒有分支被漏改
+      預期(7 處:install.ps1=1、uninstall.ps1=1、get.ps1=5),沒有分支被漏改
       或多算 ④結構順序上,`$ErrorActionPreference = "Stop"` 賦值出現在所有
       `Write-Error` 呼叫「之前」(粗略對應函式內由上而下的執行順序;三支檔案
       邏輯本身是線性、沒有前置分支會跳過賦值,行號順序在這裡足以近似執行
@@ -15029,7 +15292,7 @@ def t_slim_ps1_write_error_noterminating_under_stop_preference():
     expected_write_error_count = {
         "install.ps1": 1,
         "uninstall.ps1": 1,
-        "get.ps1": 4,
+        "get.ps1": 5,
     }
 
     for name, expected_count in expected_write_error_count.items():

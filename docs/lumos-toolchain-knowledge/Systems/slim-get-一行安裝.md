@@ -2,12 +2,13 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-08-01
+updated: 2026-08-02
 tags:
   - type/system
   - status/done
 summary: |-
   FLOW:`curl -fsSL <raw-url>/get.sh | bash` → 檢查 `git` 存在(找不到→清楚錯誤訊息+rc2,不留 traceback) → `~/.lumos-slim` 已是合法 git repo(有 `.git`)→ `git pull --ff-only`(冪等更新)｜已存在但非 git repo→拒絕、rc2、印訊息｜不存在→`git clone` 首次安裝 → 檢查 `install.sh` 存在 → 執行 `~/.lumos-slim/install.sh "$@"`(額外參數如 `--force` 原樣轉發)
+  KEY:★`get.ps1` 的 `git clone` 漏檢 `$LASTEXITCODE`(2026-08-02 對照實驗抓到,已修)★——同一個 `Invoke-Get` 函式裡,`git pull` 那一支有檢 `$LASTEXITCODE`、`git clone` 那一支沒有,純粹是漏寫的不對稱。★不能靠 `$ErrorActionPreference = "Stop"` 兜底★:它只管 PowerShell cmdlet,原生執行檔(git.exe)回非零 exit code **不會**觸發終止(PS 7.3 起的 `$PSNativeCommandUseErrorActionPreference` 才改這行為,而本包要支援 Windows PowerShell 5.1)。漏掉的後果不是「靜默失敗」而是★把使用者帶去錯的方向★:clone 失敗(沒網路/私有 repo 沒權限/磁碟滿)後照樣往下走,下一段 `Test-Path $InstallScript` 判假,使用者看到的是「交付包內容可能不完整」——網路/權限問題被誤導成「這個包壞掉了」。修法=clone 後補 `$LASTEXITCODE -ne 0` → 講網路與存取權限的訊息 + return 2。★守的是對稱性不是行為★:綁定測試 `t_slim_get_ps1_every_git_call_checks_lastexitcode` 掃「每個行首 git 呼叫後幾行內要有 `$LASTEXITCODE`」,屬 [[Systems/測試假綠形態]] 第③型(驗寫法不驗行為)且★刻意如此★——開發機是 macOS 沒有 PowerShell,一行 ps1 都跑不了;它買到的是「新增 git 呼叫時不會忘了配一道檢查」,★不得因為它綠了就宣稱 get.ps1 在 Windows 上正確★(已知限制:管線中段的 git 抓不到)
   KEY:★固定落點理由★——舊版 [[Systems/slim-install-安裝器]] 用 `$(dirname "$0")` 定位自身;透過 `curl | bash` 執行時 `$0` 是 bash 本身/`/dev/stdin`,沒有穩定檔案位置可定位。固定 `~/.lumos-slim` 給包一個穩定的家,也讓 [[Systems/slim-uninstall-一行卸載]] 有東西可以拿來做 sha256 內容比對(見該節點的硬合約)
   KEY:★冪等的精確定義★——「不炸」指的是不出現 `git clone` 對非空目錄的爆炸式錯誤(`already exists and is not an empty directory`)。第二次執行呼叫到的 `install.sh` 仍有自己既有的碰撞保護(未帶 `--force` 時偵測到 `~/.local/bin/lumos` 已存在會拒絕、rc2)——這是 install.sh 既有的、刻意的安全行為,不是 get.sh 冪等性的破口;`get.sh` 本身把 `--force` 原樣轉發即可讓使用者一次到位重跑
   KEY:與本 repo 根目錄既有的 `get.sh`/`get.ps1`(完整版 Lumos 遠端一鍵裝,clone `EnzoHsieh-Android/Lumos` 後委派 `bootstrap`,見 [[Systems/lumos-cli-lifecycle]])是**兩支獨立腳本、不同交付對象**——本節點記的是 `slim/get.sh`,目標 repo 是精簡版交付庫 `citrus-android-developer/Citrus_Lumos`,只做「clone/更新+執行 install.sh」兩件事,不含 bootstrap 的專案層四分流/`_confirm_tty`/hooks 接線等機器層以外的邏輯——★這是刻意的功能子集,不是殘缺★
@@ -27,6 +28,7 @@ verified_by:
   - "[[Verification/2026-08-01_slim-windows兩缺陷修復]]"
   - "[[Verification/2026-08-01_slim-ps1早期分支exit修復]]"
   - "[[Verification/2026-08-01_slim-終審三缺陷修復]]"
+  - "[[Verification/2026-08-02_slim三缺陷修復_實驗產出]]"
 ---
 # slim-get-一行安裝
 
