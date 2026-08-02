@@ -10149,6 +10149,78 @@ def _mk_rank_vault():
     return d, v
 
 
+def t_search_multiword_fallback_r1_three_majors():
+    """★2026-08-03 code-loop r1 抓到的三條 major,一條一組斷言★。
+
+    ①「全庫無命中」措辭自相矛盾(slot3 major / slot2 minor,依規矩取高):
+      預檢刻意跳過 superseded(對的),但片語★只★在一篇作廢節點裡時,舊措辭印
+      「整串片語全庫無命中」,緊接著又印「已隱藏 1 筆作廢結果」——★兩行打架★,
+      使用者只看第一行會斷定「圖譜沒這東西」→ 可能重造一個已存在的節點。
+
+    ②未閉合 ``` 圍欄下,預檢與主迴圈判斷分岔(slot3,附實測):兩份實作——主迴圈逐行
+      toggle(圍欄後全隱形)、預檢整段 regex(剝不掉懸空半段)。後果是★逐詞覆蓋虛報
+      非零★,直接打臉 M1.5「告訴你哪個詞 0 命中」的存在理由。修法=抽 `_search_visible_lines`
+      給兩邊共用,★不是補正則★。
+
+    ③(在 governance/eval/retrieval_eval_multiword.py,非本檔範圍)對照臂要顯式 --no-any。
+
+    ★翻紅釘★:①把 `_scope_txt` 改回寫死「全庫無命中」→ ① 翻紅;
+    ②把預檢改回自己 regex 剝 fence → ② 翻紅。"""
+    import subprocess as sp, tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-mwr1-"))
+    v = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / sub).mkdir(parents=True, exist_ok=True)
+    def note(rel, body, status="done"):
+        (v / rel).write_text(f"---\ntype: system\nstatus: {status}\ntags:\n  - type/system\n---\n" + body,
+                             encoding="utf-8")
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+
+    # ── ① 片語只在作廢節點 ──
+    note("Systems/dead.md", "# dead\n這裡有 壬癸 甲乙 這個片語。\n", status="superseded")
+    note("Systems/live1.md", "# live1\n這裡只提到壬癸。\n")
+    note("Systems/live2.md", "# live2\n這裡只提到甲乙。\n")
+    r = lum("search", "壬癸 甲乙", "--files-only")
+    check("★前置★ 現場成立:回退真的觸發了", "多詞回退" in r.stderr, r.stderr)
+    check("★前置★ 現場成立:確實有 1 筆被當作廢藏起來(否則①在測不成立的現場)",
+          "已隱藏 1 筆作廢結果" in r.stderr, r.stderr)
+    check("★① 不得宣稱「全庫無命中」——片語其實存在,只是被歸檔了★",
+          "全庫無命中" not in r.stderr, r.stderr)
+    check("★① 必須講清楚範圍是「未作廢的節點」★",
+          "未作廢的節點裡無命中" in r.stderr, r.stderr)
+    # --include-superseded 時範圍才真的是全庫
+    r2 = lum("search", "壬癸 甲乙", "--include-superseded", "--files-only")
+    check("★① --include-superseded 時片語找得到,不該回退★",
+          "多詞回退" not in r2.stderr and "dead.md" in r2.stdout, f"OUT:{r2.stdout}\nERR:{r2.stderr}")
+
+    # ── ② 未閉合圍欄:覆蓋數必須與逐詞搜尋一致 ──
+    root2 = _P(_tf.mkdtemp(prefix="gctl-mwr1b-"))
+    v2 = root2 / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v2 / sub).mkdir(parents=True, exist_ok=True)
+    # 未閉合圍欄之後才出現「戊己」——主迴圈視為 code(搜不到)
+    (v2 / "Systems/fence.md").write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n"
+        "# fence\n這裡提到庚辛。\n```\n戊己 在未閉合圍欄之後\n", encoding="utf-8")
+    (v2 / "Systems/plain.md").write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n"
+        "# plain\n這裡提到庚辛。\n", encoding="utf-8")
+    def lum2(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v2), *a],
+                      capture_output=True, text=True)
+    n_alone = lum2("search", "戊己", "--files-only").stdout.count(".md")
+    check("★前置★ 現場成立:「戊己」在未閉合圍欄之後,單獨搜必須是 0 篇"
+          "(否則②在測一個不成立的現場)", n_alone == 0,
+          f"單獨搜「戊己」={n_alone} 篇\n{lum2('search','戊己','--files-only').stdout}")
+    r3 = lum2("search", "庚辛 戊己", "--files-only")
+    check("★前置★ 現場成立:回退觸發了(才有覆蓋可看)", "多詞回退" in r3.stderr, r3.stderr)
+    check("★② 覆蓋數不得虛報:單獨搜 0 篇的詞,覆蓋也必須是 0★",
+          "★戊己:0★" in r3.stderr, r3.stderr)
+
+
 def t_search_multiword_fallback_reports_per_term_coverage():
     """★M1.5(2026-08-02,Landmark 284 篇真庫實測逼出來的)★:回退觸發時,把逐詞覆蓋
     印到 stderr。

@@ -1308,6 +1308,29 @@ def _is_forgotten(env, rel):
     return str(n.fields.get("status") or "").strip().lower() == "superseded"
 
 
+def _search_visible_lines(lines, include_code):
+    """產生 (行號從1起, 原始行, 比對用 probe)——★search 的「哪些字看得見」唯一實作★。
+
+    ★為什麼要抽出來(2026-08-03 code-loop r1,slot3 附實測)★:多詞回退的預檢原本自己
+    寫了一份「整段 regex 剝 fence」,與主迴圈的「逐行 in_fence toggle」是★兩份實作★,
+    遇到★未閉合的 ``` 圍欄★就分岔:主迴圈把圍欄後全部視為 code(隱形),預檢的成對
+    regex 剝不掉懸空那半段(仍可見)。後果不是「回退多觸發一次」這種小事——是
+    ★逐詞覆蓋虛報非零★:實測單獨搜某詞 0 篇,覆蓋卻印該詞 1 篇,直接打臉 M1.5
+    「告訴你哪個詞 0 命中」的存在理由。
+    ★我原本在註解裡把這個邊界寫成「方向保守、無害」——那個評估只涵蓋了「回退觸發
+    與否」,沒涵蓋「覆蓋數字本身」。同一個坑今天第六次:用一個後果描述邊界,另一個
+    後果就不在視野裡。★ 修法不是補正則,是讓兩邊共用這一份。
+    """
+    in_fence = False
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("```"):       # fenced code 邊界
+            in_fence = not in_fence
+            continue
+        if in_fence and not include_code:
+            continue
+        yield i + 1, ln, (ln if include_code else INLINE_CODE_RE.sub("", ln))
+
+
 def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
                ranked=False, top=20, as_json=False, include_superseded=False,
                any_terms=True):
@@ -1368,10 +1391,9 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
                 _t = (env.vault / _r).read_text(encoding="utf-8-sig")
             except Exception:
                 continue
-            if not include_code:
-                _t = re.sub(r"(?ms)^\s*```.*?^\s*```", "", _t)
-                _t = INLINE_CODE_RE.sub("", _t)
-            _low = nfc(_t).lower()
+            # ★與主迴圈共用同一份「可見行」實作★(不再自己剝一次,見 _search_visible_lines)
+            _low = nfc("\n".join(pr for _no, _raw, pr
+                                  in _search_visible_lines(_t.split("\n"), include_code))).lower()
             # ★順手數逐詞覆蓋(M1.5)★:本圈本來就讀了每個檔、也做過同樣的排除,
             # 多幾次子字串測試幾乎免費;不另開一圈。找到片語就 break,那時
             # 覆蓋數不完整——但那條路不會回退、也就不會印,無害。
@@ -1395,7 +1417,17 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             # 的機器可讀輸出(--json/--files-only 的呼叫端會解析它)。
             _cov_txt = "  ".join(f"★{t}:0★" if _fb_cov.get(t, 0) == 0 else f"{t}:{_fb_cov.get(t, 0)}"
                                  for t in _fb_terms)
-            print(f"（多詞回退:整串片語全庫無命中,改用各詞 OR 召回;"
+            # ★措辭必須是「未作廢的節點裡無命中」不是「全庫無命中」★
+            # (2026-08-03 code-loop r1,slot3 附實測;slot2 同一處判 minor,依規矩取高)
+            # 為什麼:預檢刻意跳過 superseded(那是對的——被藏起來的東西對使用者等於
+            # 不存在,此時該回退)。但若片語★只★出現在一篇作廢節點裡,舊措辭會印
+            #   （多詞回退:整串片語★全庫無命中★…）
+            #   （已隱藏 1 筆作廢結果，--include-superseded 顯示）
+            # ★兩行自相矛盾★:第一行斷言全庫沒有,第二行承認有 1 筆被藏。使用者只看
+            # 最顯眼的第一行,會斷定「圖譜裡沒這東西」→ 可能重造一個已存在的節點。
+            # ★危險方向是「誤判為不存在」,比多顯示一點雜訊嚴重★。
+            _scope_txt = "未作廢的節點裡無命中" if not include_superseded else "全庫無命中"
+            print(f"（多詞回退:整串片語在{_scope_txt},改用各詞 OR 召回;"
                   f"逐詞覆蓋 {_cov_txt}）", file=sys.stderr)
             if any(_fb_cov.get(t, 0) == 0 for t in _fb_terms):
                 print("  ★有詞在全庫 0 命中(標 ★)——多半是查詢用詞與圖譜用語不一致,"
@@ -1421,16 +1453,10 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
                 if lines[i].strip() == "---":
                     fm_end = i + 1
                     break
-        hits, in_fence = [], False
-        for i, ln in enumerate(lines):
-            if ln.lstrip().startswith("```"):       # fenced code 邊界
-                in_fence = not in_fence
-                continue
-            if in_fence and not include_code:
-                continue
-            probe = ln if include_code else INLINE_CODE_RE.sub("", ln)
+        hits = []
+        for _no, ln, probe in _search_visible_lines(lines, include_code):
             if matches(probe):
-                hits.append((i + 1, ln))
+                hits.append((_no, ln))
         if not hits:
             continue
         # 真遺忘濾網(★插點=命中確認後、三路分岔前):預設藏 superseded,--include-superseded 逃生。

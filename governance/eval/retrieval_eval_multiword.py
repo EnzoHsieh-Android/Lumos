@@ -30,10 +30,19 @@ LUMOS = ROOT / "scripts" / "lumos"
 
 
 def search_files(vault, query, any_terms):
-    """回 [rel, ...] 依系統排序;空 = 該系統對此查詢什麼都沒回。"""
+    """回 [rel, ...] 依系統排序;空 = 該系統對此查詢什麼都沒回。
+
+    ★對照臂必須★顯式★傳 --no-any,不能只是「不加 --any」★(2026-08-03 code-loop r1,
+    slot4 與 Codex 兩席獨立抓到,皆附實測):本工具寫成的當下回退還是預設關,那時
+    「不加旗標」==「關掉回退」;同一份 diff 把預設翻開之後,★對照臂會靜默繼承新預設★,
+    兩臂都變成有回退,量出來是「有回退 vs 有回退」——而這支工具存在的唯一理由就是
+    量那個差異,它會對自己要量的東西視而不見。
+    實測對照:修前跑同一份語料印「候選 2→2、nDCG 0.860→0.860」(兩臂相同),
+    而翻預設★之前★跑出的歷史存證是「候選 0→80」。
+    ★通則:翻預設時,所有「靠不傳旗標來表示舊行為」的呼叫端都是待修清單★。
+    """
     args = [sys.executable, str(LUMOS), "--vault", str(vault), "search", query, "--files-only"]
-    if any_terms:
-        args.append("--any")
+    args.append("--any" if any_terms else "--no-any")
     r = subprocess.run(args, capture_output=True, text=True)
     out = []
     for ln in r.stdout.splitlines():
