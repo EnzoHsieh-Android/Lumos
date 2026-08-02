@@ -20,7 +20,35 @@ except Exception:
     pass
 
 GRAPHCTL = str(Path(__file__).resolve().parent / "lumos")
-PASS, FAIL = 0, 0
+PASS, FAIL, SKIP = 0, 0, 0
+
+
+class _SrcOnly(Exception):
+    """★這條測試需要「工具鏈來源 repo」才有的東西★(slim/ 交付包、get.sh、
+    docs/ 文件列舉、governance/golden/ 凍結語料、真圖譜事故…)。
+
+    背景(2026-08-02 在 Landmark clone 上實測):本套件會被 `lumos update` vendored
+    進消費端專案,但其中一大批測試驗的是★來源 repo 自己的產物★,在消費端必定紅。
+    實測 Landmark:更新前 8 紅、更新後 ★91 紅★(我這次的精簡版工作讓它變 10 倍)。
+    目前沒有實害(pre-push 的測試閘要求 `skills/lumos-project-notes/` 存在,消費端
+    沒有故跳過),但★一個會給假紅的套件,下一次就會被人用「反正它本來就紅」帶過★
+    ——那正是本專案這兩天一直在修的同一個病(閘給假紅 → 被 waive → 等於閘不存在)。
+
+    ★判定必須是狀態驅動、不是名單驅動★:`_need_src()` 檢查「那個檔案/目錄是不是
+    真的不在」。在來源 repo 一切照跑、零行為改變,不可能誤遮真失敗;只有在消費端
+    (東西真的不在)才轉成 skip。
+    """
+
+
+def _need_src(*rels):
+    """來源 repo 專用產物的守門:任一不存在 → 拋 _SrcOnly,由 runner 記成 skip。
+
+    ★只認檔案系統實況★——不看測試名字、不維護清單(分支簿記天生會漏,本專案
+    2026-08-01 才因同型的簿記漏一條被代碼審抓到)。"""
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    for rel in rels:
+        if not (repo / rel).exists():
+            raise _SrcOnly(f"需要來源 repo 的 {rel}(消費端專案沒有,非失敗)")
 
 
 def run(vault, *args, expect_rc=None):
@@ -3922,6 +3950,7 @@ def t_bootstrap_autoinit():
 
 def t_getsh_forwards_args():
     """bootstrap一鍵對稱 std F12:get.sh 真跑 bash——argv 轉發/未知旗標 warn/失敗傳播。"""
+    _need_src("get.sh")
     import os, subprocess, json as _j
     repo = Path(GRAPHCTL).resolve().parent.parent
     fake_home_dir = Path(tempfile.mkdtemp(prefix="gctl-getsh-"))
@@ -4415,6 +4444,7 @@ def t_fold_check_regression():
     """對現有已固化 spec 跑 fold-check:確認不 crash、rc in (0,1)。
     有 flag 是可接受的自指範例(value-drift 範例、審計紀錄舊值),人工判;此測試只守不 crash。
     """
+    _need_src("docs/lumos-toolchain-knowledge")
     spec = str(Path(__file__).resolve().parent.parent /
                "docs/lumos-toolchain-knowledge/Projects/主動影響幅度偵測_計劃.md")
     rc = run_lumos(["fold-check", spec])
@@ -6901,6 +6931,7 @@ def t_impact_end_to_end():
 
     此測試驗證「CLI + 真實 vault 掃描 + code→node 反查」全鏈正確。
     """
+    _need_src("docs/lumos-toolchain-knowledge")
     import json as _json
     import os as _os
 
@@ -7071,6 +7102,7 @@ def t_impact_incidents_regression():
     命中 scripts/lumos)。此測試證真圖譜上 incidents pipeline 有效 + 輸出良構。
     (「無 pitfall_when → incidents 空」的不誤傷行為由 t_match_incident_triggers 隔離覆蓋。)
     """
+    _need_src("docs/lumos-toolchain-knowledge")
     import json as _json
     out = run_lumos_capture(["impact", "--file", "scripts/lumos", "--repo", ".", "--json"])
     d = _json.loads(out)
@@ -7098,6 +7130,7 @@ def t_impact_incidents_smoke():
     2. lumos impact --file scripts/lumos --repo . --json → incidents 含探針節點。
     3. finally 清理探針節點(不留 doctor 髒)。
     """
+    _need_src("docs/lumos-toolchain-knowledge")
     import json as _json
     from pathlib import Path as _P
 
@@ -8118,6 +8151,7 @@ def _load_lm():
 
 def t_difficulty_panel_width():
     """loop 壓縮 T4:difficulty.params 加 panel_width(tier 驅動並行寬度);既有 need/maxr 不變。"""
+    _need_src("governance/autonomous_loop/difficulty.py")
     import importlib.util
     dp = Path(__file__).resolve().parent.parent / "governance" / "autonomous_loop" / "difficulty.py"
     spec = importlib.util.spec_from_file_location("difficulty_pw", dp)
@@ -11306,6 +11340,40 @@ def t_loop_next_cluster_hint_only_when_choice_is_open():
     check("★light 不得提(用不到 cluster 帳)★", "cluster_hint" not in dl, "")
 
 
+def t_need_src_guards_cannot_silently_disable_coverage():
+    """★守衛的失敗模式是「放行」,所以它自己壞掉時必須大聲★(2026-08-02)
+
+    `_need_src(...)` 讓「來源 repo 專用」的測試在消費端專案乾淨 skip 而非假紅
+    （實測 Landmark:vendored 套件更新後 91 紅,全是來源專用產物缺席；本機制後
+    降為 0 紅 / 61 skip）。但它有一個致命的失敗模式：★如果來源 repo 自己少了
+    某個產物，這些測試會在來源端也靜默 skip，覆蓋率無聲蒸發★——而 skip 不會
+    讓任何閘翻紅。
+
+    這正是昨天那條教訓的同型：**失敗模式是放行的守衛，壞掉時不會有人知道**。
+
+    ★驗行為★：直接掃本檔案裡所有 `_need_src("...")` 的實際呼叫參數，逐一斷言
+    那個路徑在來源 repo 真的存在。★自我維護★——之後任何人新增一處 `_need_src`，
+    這條測試自動涵蓋它，不需要維護第二份清單。
+
+    ★此測試自己也必須在來源 repo 跑得到★（不加 `_need_src` 守門，否則它會在
+    消費端 skip 掉，而那正是它該沉默的地方——消費端本來就缺那些產物）。"""
+    import re as _re9
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    src = Path(__file__).resolve().read_text(encoding="utf-8")
+    # ★只認「獨立成行的呼叫」★——不然 docstring 裡提到的 `_need_src(...)` 也會被掃進來
+    # (第一版就踩到,掃出一個叫 '...' 的假路徑)。
+    rels = sorted(set(_re9.findall(r'^\s*_need_src\(\s*"([^"]+)"', src, _re9.M)))
+    check("★前置★ 掃得到 _need_src 的呼叫參數(掃不到=這條測試自己失效了)",
+          len(rels) >= 5, f"只掃到 {rels}")
+    if not (repo / "skills" / "lumos-project-notes").is_dir():
+        # 消費端:那些產物本來就沒有,此測試無意義(且下面的斷言必假)
+        raise _SrcOnly("需要來源 repo(本測試只在來源端有意義)")
+    missing = [r for r in rels if not (repo / r).exists()]
+    check("★來源 repo 必須擁有每一個被守門的產物★"
+          "(缺了 → 對應測試會在來源端也靜默 skip、覆蓋無聲蒸發)",
+          not missing, f"缺: {missing}")
+
+
 def t_m1_loop_next():
     """M1包 #1 loop next:零記錄 rc2/plant-canary/tier 定錨+衝突 rc2/escalate/gate-pending/converged/cap/min-seats/json。"""
     print("t_m1_loop_next")
@@ -11497,6 +11565,7 @@ def t_docs_enumeration_drift():
     """文件裡的「手寫列舉/數字」對機械事實的漂移守衛(2026-07-29 使用者指出:
     有守衛的當場被咬住、沒守衛的全漏 → 把守衛面從命令數推廣到三類散落事實)。
     通則:凡文件宣稱一個可從碼機械推導的清單/數字,就該有一條這樣的測試。"""
+    _need_src("skills/lumos-project-notes")
     import re as _re
     from pathlib import Path as _P
     root = _P(__file__).resolve().parent.parent
@@ -11557,6 +11626,7 @@ def t_docs_enumeration_drift():
 
 def t_docs_command_count():
     """文件宣稱的頂層命令數 vs argparse 實數(2026-07-29 外審實錘:ARCHITECTURE 曾停在 44)。"""
+    _need_src("skills/lumos-project-notes")
     import re as _re
     from pathlib import Path as _P
     import subprocess as _sp
@@ -13030,6 +13100,7 @@ def _slim_copy_install_files(pkg_dir):
 def _slim_copy_uninstall_files(pkg_dir):
     """複製 `uninstall.sh`(薄殼)+ `uninstall.py`(真正邏輯)到 `pkg_dir`——
     與 `_slim_copy_install_files` 對稱,同款理由。"""
+    _need_src("slim")
     from pathlib import Path as _P
     import shutil as _sh
     pkg_dir = _P(pkg_dir)
@@ -13045,6 +13116,7 @@ def _slim_make_pkg_at(pkg_dir):
     在指定路徑——供 get.sh/uninstall.py 測試共用。★不寫死內容★:lumos 腳本
     內容隨呼叫端傳入,好讓 uninstall 的 sha256 比對測試能控制「符合」與
     「不符合」兩種情境。"""
+    _need_src("slim")
     from pathlib import Path as _P
     pkg_dir = _P(pkg_dir)
     (pkg_dir / "scripts").mkdir(parents=True, exist_ok=True)
@@ -14968,14 +15040,25 @@ def main():
             print(f"✗ -k '{_args.keyword}' 選中 0 個測試(t_ 名單無此子字串)——視為失敗", file=sys.stderr)
             return 1
     print(f"lumos 測試({len(tests)} 案例)")
+    global FAIL, SKIP
     for t in tests:
         try:
+            # ★單一處的自動規則,不往每支測試塞一行★:`t_slim_*` 整族驗的是「交付包」
+            # (slim/ 底下的產物 + slim-gen/slim-scan),那是來源 repo 專用。用前綴在
+            # 這裡一次涵蓋,★新增的 t_slim_* 自動繼承★——往 40 個函式各插一行才是
+            # 會漏的分支簿記(本專案 2026-08-01 剛因同型簿記漏一條被代碼審抓到)。
+            # 判定仍是狀態驅動:`slim/` 真的在(來源 repo)就照跑,零行為改變。
+            if t.__name__.startswith("t_slim_"):
+                _need_src("slim")
             t()
+        except _SrcOnly as e:
+            SKIP += 1
+            print(f"  - skip {t.__name__}: {e}")
         except Exception as e:
-            global FAIL
             FAIL += 1
             print(f"  ✗ {t.__name__} EXCEPTION: {e}")
-    print(f"\n{'─'*40}\n{PASS} passed, {FAIL} failed")
+    tail = f", {SKIP} skipped(來源 repo 專用)" if SKIP else ""
+    print(f"\n{'─'*40}\n{PASS} passed, {FAIL} failed{tail}")
     return 1 if FAIL else 0
 
 
