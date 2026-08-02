@@ -4919,6 +4919,56 @@ def t_pitfalls_diff():
           any(c["file"] == "訂單頁.py" for c in data["claims"]), r.stdout)
 
 
+def t_pitfalls_diff_prints_impact_lens_hint_human_only():
+    """★2026-08-02:code-loop 的「派 reviewer 前跑 impact --diff 附 manifest」原本
+    純紀律層、沒有任何機械提醒——當天編排者自己就忘了跑,而事後補跑第一行就是後來
+    被證實違反合約的那個節點。★本測試釘住那句提示存在,而且只存在於人可讀輸出。★
+
+    兩個斷言方向缺一不可:
+    ① 人可讀輸出要有提示,★且必須帶真實的 range★(印成寫死的佔位符等於沒用——
+       使用者無法直接複製貼上,提示的價值就沒了)。
+    ② `--json` ★絕不能★有這行。`--json` 是 pre-push 讀 verdict 的路徑
+       (scripts/hooks/pre-push:98),混進非 JSON 文字會讓解析端直接壞掉。
+
+    ★刻意不驗的事★:不驗「impact 真的被跑了」「manifest 真的餵進 reviewer」——
+    那不可觀測(派工在模型腦內),見 Projects/送審前impact鏡頭機械化_計劃 的誠實天花板。
+    這條只買「提示印得出來、且沒污染 JSON」。
+
+    ★翻紅釘★:把那行 print 拿掉 → ①翻紅;把它從 else 分支移到 as_json 分支外
+    (兩邊都印)→ ②翻紅。"""
+    import json as _json, subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-pflens-"))
+    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+    git("init"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    (root / "app.py").write_text("x = 2\n", encoding="utf-8")
+    git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c2")
+
+    rng = "HEAD~1..HEAD"
+    r = run(root, "pitfalls", "--diff", rng, "--repo", str(root))
+    check("★前置★ 現場成立:人可讀分支真的跑到了(印得出 tier 行)",
+          any(l.startswith("tier: ") for l in r.stdout.splitlines()), r.stdout)
+    check("★人可讀輸出要有送審前 impact 鏡頭提示★",
+          "lumos impact --diff" in r.stdout, r.stdout)
+    check("★提示必須帶真實 range,不能是寫死的佔位符(否則無法直接複製)★",
+          f"lumos impact --diff {rng}" in r.stdout, r.stdout)
+
+    rj = run(root, "pitfalls", "--diff", rng, "--repo", str(root), "--json")
+    check("★前置★ 現場成立:--json 這一跑確實產出了 JSON",
+          any(l.strip().startswith("{") for l in rj.stdout.splitlines()), rj.stdout)
+    check("★--json 絕不能混進提示文字(pre-push 讀它拿 verdict,混了就解析壞)★",
+          "lumos impact --diff" not in rj.stdout, rj.stdout)
+    body = [l for l in rj.stdout.splitlines() if l.strip()]
+    ok = True
+    for l in body:
+        try:
+            _json.loads(l)
+        except Exception:
+            ok = False
+    check("★--json 的每一行都必須是合法 JSON(沒有夾雜任何散文)★", ok, rj.stdout)
+
+
 def t_pitfalls_spec():
     root = Path(tempfile.mkdtemp(prefix="gctl-pf-"))
     (root / ".git").mkdir()

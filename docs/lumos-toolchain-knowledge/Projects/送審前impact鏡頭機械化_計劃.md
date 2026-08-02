@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-02
 updated: 2026-08-02
 related:
@@ -9,9 +9,9 @@ related:
   - "[[Verification/2026-08-02_slim三缺陷修復_實驗產出]]"
 tags:
   - type/project
-  - status/doing
+  - status/done
 summary: |-
-  FLOW:問題=code-loop skill 白紙黑字要求「派 reviewer 前跑 `lumos impact --diff` 並附 manifest 當第二鏡頭」,但★純紀律層、無任何機械提醒★ → 2026-08-02 實測我自己就忘了 → 修法待裁(A 免費提示 / B 提示+收據+閘)
+  FLOW:★2026-08-02 人裁 A 案、已落地★(B/C 加閘案不做,理由見下)。問題=code-loop skill 白紙黑字要求「派 reviewer 前跑 `lumos impact --diff` 並附 manifest 當第二鏡頭」,但★純紀律層、無任何機械提醒★ → 2026-08-02 實測我自己就忘了 → 修法=A 免費提示(已落地)
   KEY:★這不是工具缺口,是執行落差★——`impact --diff` 本來就會逐檔用 hunk 文字當 query 跑 BM25F,固定席(帶硬合約標記的節點)不參與排序競爭故永不被擠掉,hop1 撈得到「改 A 壞 B」的 B。今天跑起來第一行就是後來被證實違反合約的那個節點
   KEY:★誠實天花板(先寫,不得事後淡化)★:任何機械化只能證明「指令被執行過」,★證明不了「manifest 真的餵進 reviewer 的 prompt」★——派工發生在模型腦內,外部不可觀測。與 design-loop M0 進場硬否決同一種 honor-system 天花板
   KEY:★已排除的做法★把 impact 掛進 `pitfalls --diff`——實測 pitfalls 0.18s、impact 4.7s,而 pitfalls ★在 pre-push 熱路徑上逐 ref 跑★(scripts/hooks/pre-push:98),掛上去等於每次 push 慢 26 倍;`--incidents-only` 不便宜(4.73s,成本在載 vault 非排序)
@@ -58,7 +58,7 @@ summary: |-
 
 而 `pitfalls --diff` **在 pre-push 熱路徑上逐 ref 跑**（`scripts/hooks/pre-push:98`）。掛上去 = 每次 push 慢 26 倍。**不可接受。**
 
-## 兩個候選（待人裁）
+## 兩個候選（★2026-08-02 人裁：A★）
 
 ### A. 免費提示（不動任何 gate）
 
@@ -99,3 +99,49 @@ tier: standard
 - 收據的有效期怎麼定？綁 `head_sha` 的話，每多一個 fix commit 就得重跑 4.7s——會不會逼人用 `--no-verify`？
 - tier=standard 要不要也擋？今天那次正是 standard，**擋 high 不擋 standard 的話，今天這個案例還是漏的**。
 - 有沒有更強的版本：要求對每個固定席節點給一句裁決（同實驗三「強制逐檔裁決」的招）——**可機械檢查條數**，但會不會變成應付式填表？
+
+## ★裁定與落地（2026-08-02）★
+
+**採 A（免費提示），不做 B/C 的閘。**
+
+### 為什麼不加閘（★這條理由是寫計劃時才發現的，值得記★）
+
+B 的設計是「tier=high 且無收據 → 擋」。但**觸發本計劃的那次失敗，`tier` 是 `standard`**。
+
+> **照 B 做完，同一個失敗還是會再發生一次。**
+
+要真的擋到得連 `standard` 一起擋（C 案），但 `standard` 是最常見的分級，每次都逼跑
+4.7 秒＋一份收據——**很可能的結果是開始用 `--no-verify` 繞過，閘門變成裝飾**。
+
+★這是「加了守衛，但守在錯的門」★。加閘之前得先答出「怎麼在不擋住最常見路徑的前提下擋到它」，
+現在答不出來，所以不加。
+
+### 落地內容
+
+`_pitfall_diff_mode()` 的**人可讀分支**（`scripts/lumos`）多印一行：
+
+```
+tier: standard
+→ 派審查員前:lumos impact --diff <range>(附 manifest 當第二鏡頭,固定席=帶硬合約/事故的節點必答)
+```
+
+- **`--json` 分支一個字都沒動**——那是 pre-push 讀 verdict 的路徑，混進散文會讓解析端壞掉
+- **提示帶真實 range**，可直接複製貼上（寫死佔位符等於沒用）
+- **不真的跑 impact**：實測 0.18s vs 4.7s，而本函式在 pre-push 熱路徑逐 ref 跑
+
+### 驗證
+
+`t_pitfalls_diff_prints_impact_lens_hint_human_only`，6 條斷言，含兩條「現場成立」前置。
+
+**兩個還原翻紅釘各驗一條**：
+- 拿掉那行 print → 「人可讀要有提示」「提示要帶真實 range」翻紅
+- 把 print 移出 `else`（兩邊都印）→ 「`--json` 不得混進提示」「每行必須是合法 JSON」翻紅
+
+全套 2119 → **2125 全綠**。
+
+### 這條提示的效力（誠實）
+
+**它擋不住任何東西。** 忘了照樣跑得完全程。它買到的只有一件事：
+**在我一定會看的那個輸出上，把下一步寫出來。**
+
+夠不夠，要看之後的 Verification 節點裡還會不會再出現「派 reviewer 前沒跑 impact」這個形狀。
