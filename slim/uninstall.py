@@ -115,7 +115,7 @@ def _restore_claude_md(target: Path):
     if not target.exists():
         return 0, f"  (未安裝: {target} 的 LUMOS-SLIM 圖譜標籤區塊 — 檔案不存在)"
 
-    # ★讀也會失敗,而且漏掉讀比漏掉寫更容易(2026-08-02 單 reviewer 抓到:第一版
+    # ★讀也會失敗,而且漏掉讀比漏掉寫更容易(2026-08-02 複審抓到:第一版
     # 只把下面的 unlink()/write_text() 包起來,這一行 read_text() 留在 try 外面
     # ——「檔案系統寫入」這個字眼讓我只掃了寫。CLAUDE.md 被 chmod 000、或內容
     # 不是合法 utf-8(中文專案裡別的編輯器存成 Big5、貼進壞位元組都很真實)時,
@@ -156,7 +156,7 @@ def _restore_claude_md(target: Path):
 
     new = current[:m.start()] + restore_text + current[m.end():]
 
-    # ★這三處以前是裸呼叫(2026-08-02 對照實驗抓到)★:寫/刪本身可能拋 OSError
+    # ★這三處以前是裸呼叫(2026-08-02 補)★:寫/刪本身可能拋 OSError
     # (唯讀目錄、磁碟滿、Windows 檔案被別的程式鎖住),而 main() 呼叫本函式時
     # 也沒有 try——一拋就炸穿整支 main(),★後面的步驟⑤完全不會執行★,使用者
     # 只看到 traceback。那正好違反本檔 docstring 與圖譜 ★INVARIANT★ 宣稱的

@@ -80,7 +80,7 @@ function Invoke-Get {
   } else {
     Write-Host "首次安裝,clone 到 $Dest..."
     git clone -q $RepoUrl $Dest
-    # ★這道檢查以前漏了(2026-08-02 對照實驗抓到)★:同一個函式裡 `git pull`
+    # ★這道檢查以前漏了(2026-08-02 補)★:同一個函式裡 `git pull`
     # 那一支有檢 `$LASTEXITCODE`、`git clone` 這一支沒有,純粹是漏寫。
     # ★不能靠 `$ErrorActionPreference = "Stop"` 兜底★——它只管 PowerShell 自己
     # 的 cmdlet 錯誤,原生執行檔(git.exe)回非零 exit code ★不會★ 觸發終止
