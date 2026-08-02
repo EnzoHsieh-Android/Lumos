@@ -118,10 +118,15 @@ def eval_search(gs, split=None, k=5):
         if not lab or not any(v >= 1 for v in lab.values()):
             continue  # 無相關項的案例對 nDCG 無定義,跳過並記數
         n_rel = sum(1 for v in lab.values() if v >= 1)
-        legacy = [l.split(" (")[0] for l in _lum_lines("search", q, "--legacy", "--files-only")
+        # ★兩臂都必須顯式 --no-any★:2026-08-03 起多詞回退是 search 預設,「不傳旗標」
+        # 不再等於舊行為。本 gate 是「legacy vs ranked」的受控比較,吃到回退擴召回會讓
+        # 兩臂同時混入 OR 召回結果、基線失義。(code-loop r2 全局哨兵抓到;目前 goldset
+        # 唯一的多詞題「guard kill」剛好字面存在故回退不觸發——★是還沒踩到,不是沒有★,
+        # 下次換題就會中。)
+        legacy = [l.split(" (")[0] for l in _lum_lines("search", q, "--no-any", "--legacy", "--files-only")
                   if l.split(" (")[0].endswith(".md") and "/" in l]
         ranked = [x["node"] for x in
-                  _lum("search", q, "--ranked", "--top", "10", "--json").get("results", [])]
+                  _lum("search", q, "--no-any", "--ranked", "--top", "10", "--json").get("results", [])]
         row = {"id": cid, "split": case["split"], "n_rel": n_rel}
         all_rels = sorted(lab.values(), reverse=True)   # IDCG=完整金標(漏檢有懲罰,兩系統同尺)
         for name, order in (("legacy", legacy), ("ranked", ranked)):

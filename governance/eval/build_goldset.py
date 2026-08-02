@@ -41,9 +41,13 @@ def split_of(cid):
 
 def search_pool(q):
     """池 = legacy 命中前 8 ∪ ranked 前 8(去識別:只留節點名,洗牌)"""
-    legacy = [l.split(" (")[0] for l in lum_lines("search", q, "--legacy", "--files-only")
+  # ★必須顯式 --no-any★:2026-08-03 起多詞回退是 search 預設,「不傳旗標」不再等於
+  # 舊行為。本函式要的是★片語語意的候選池★,吃到回退擴召回會讓 goldset/評測基線
+  # 靜默混入 OR 召回的結果。(code-loop r2 全局哨兵抓到,真庫實測:
+  #  `search "殺傷力 SARIF" --legacy` → 21 篇,加 --no-any → 0 篇)
+    legacy = [l.split(" (")[0] for l in lum_lines("search", q, "--no-any", "--legacy", "--files-only")
               if l.split(" (")[0].endswith(".md") and "/" in l][:8]
-    ranked = [x["node"] for x in lum_json("search", q, "--ranked", "--top", "8", "--json").get("results", [])]
+    ranked = [x["node"] for x in lum_json("search", q, "--no-any", "--ranked", "--top", "8", "--json").get("results", [])]
     pool = list(dict.fromkeys(legacy + ranked))
     rnd = random.Random(hashlib.sha256((q + SALT).encode()).hexdigest())
     rnd.shuffle(pool)

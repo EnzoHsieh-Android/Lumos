@@ -203,7 +203,7 @@ def load_vault(vault: Path):
             fields, block_keys, lint = parse_frontmatter(fm_lines)
         else:
             fm_lines, fields, block_keys, lint = [], {}, set(), []
-        body_clean = INLINE_CODE_RE.sub("", FENCE_RE.sub("", body))
+        body_clean = _strip_code_text(body)   # ★不可換回 FENCE_RE:看不見未閉合圍欄→幽靈邊★
         # frontmatter 連結規則(對齊 Obsidian): 整個值恰為一個 wikilink 才索引,
         # 夾在散文中間的 [[..]] 不算;block scalar 整段排除(鐵則 2)
         fm_targets = []
@@ -1308,6 +1308,23 @@ def _is_forgotten(env, rel):
     return str(n.fields.get("status") or "").strip().lower() == "superseded"
 
 
+def _strip_code_text(text, include_code=False):
+    """把「程式碼區塊/inline code 以外看得見的文字」串成一段——★整段文字層的唯一實作★。
+
+    ★為什麼不用 `FENCE_RE.sub("")`(2026-08-03 code-loop r2,全局哨兵抓到,附兩處實測重現)★:
+    `FENCE_RE` 是成對非貪婪比對,★看不見未閉合的 ``` 圍欄★。同一個弱點原本散在四處,
+    其中兩處後果比 search 嚴重得多——
+      ① `load_vault()`:未閉合圍欄裡的 `[[wikilink]]` ★被當成真的圖譜邊索引進去★
+         → 幽靈連結進入持久化的圖結構(backlinks 實測會多報一條)。
+      ② `cmd_guard_trace()`:未閉合圍欄裡的測試名 ★被當成合約的真實佐證★
+         → 污染 ★INVARIANT★→[test:]→Verification 證據鏈,正好打臉該指令自己的保證。
+    逐行 toggle 的語意才是對的:未閉合圍欄之後一律視為 code(隱形),與主搜尋一致。
+    ★爆炸半徑實測=0★:改動當下全庫 220 篇沒有任何一篇有未閉合圍欄,故現有的邊與
+    證據鏈一個字都不會變;這是純防未來的修法。
+    """
+    return "\n".join(pr for _no, _raw, pr in _search_visible_lines(text.split("\n"), include_code))
+
+
 def _search_visible_lines(lines, include_code):
     """產生 (行號從1起, 原始行, 比對用 probe)——★search 的「哪些字看得見」唯一實作★。
 
@@ -1426,11 +1443,21 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             # ★兩行自相矛盾★:第一行斷言全庫沒有,第二行承認有 1 筆被藏。使用者只看
             # 最顯眼的第一行,會斷定「圖譜裡沒這東西」→ 可能重造一個已存在的節點。
             # ★危險方向是「誤判為不存在」,比多顯示一點雜訊嚴重★。
-            _scope_txt = "未作廢的節點裡無命中" if not include_superseded else "全庫無命中"
-            print(f"（多詞回退:整串片語在{_scope_txt},改用各詞 OR 召回;"
+            # ★訊息宣稱的範圍不得大於實際檢查的範圍★——這條在同一天被抓到★三次★:
+            #   r1:片語只在作廢節點時說「全庫無命中」(其實有,只是被藏)
+            #   r2:`--path` 限定時仍說「未作廢的節點裡/全庫」(其實只掃了子集)
+            # 兩次都是同一個錯:★用一個維度描述範圍,另一個維度就不在視野裡★。
+            # 既有慣例本來就有揭露路徑範圍(見本函式尾端 `suffix = f"(限 {path_prefix})"`),
+            # 這裡沒跟上。修法:範圍字串把「作廢」與「路徑」兩個維度都串進去。
+            _sc = []
+            if path_prefix:
+                _sc.append(f"{path_prefix} 底下")
+            _sc.append("未作廢的節點" if not include_superseded else "全部節點")
+            _scope_txt = "".join(_sc)
+            print(f"（多詞回退:整串片語在{_scope_txt}裡無命中,改用各詞 OR 召回;"
                   f"逐詞覆蓋 {_cov_txt}）", file=sys.stderr)
             if any(_fb_cov.get(t, 0) == 0 for t in _fb_terms):
-                print("  ★有詞在全庫 0 命中(標 ★)——多半是查詢用詞與圖譜用語不一致,"
+                print(f"  ★有詞在{_scope_txt}裡 0 命中(標 ★)——多半是查詢用詞與圖譜用語不一致,"
                       "先換那個詞再查,別把結果當「圖譜沒有」★", file=sys.stderr)
     if ranked and regex:
         print("(--ranked 不適用 --regex 模式,照舊輸出)", file=sys.stderr)
@@ -4570,7 +4597,8 @@ def cmd_guard_trace(env, node=None):
         if r.startswith("Verification/"):
             try:
                 raw = (env.vault / r).read_text(encoding="utf-8-sig")
-                verif_text[r] = INLINE_CODE_RE.sub("", FENCE_RE.sub("", raw))
+                # ★同上:未閉合圍欄裡的測試名會被當成真佐證,污染合約證據鏈★
+                verif_text[r] = _strip_code_text(raw)
             except Exception:
                 verif_text[r] = ""
     # 多平台:refs 帶 平台: 前綴(如 android:X),但 Verification 文字寫的是裸方法名 X →

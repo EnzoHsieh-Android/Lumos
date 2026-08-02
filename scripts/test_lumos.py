@@ -10149,6 +10149,112 @@ def _mk_rank_vault():
     return d, v
 
 
+def t_unclosed_fence_never_leaks_into_graph_or_evidence():
+    """★2026-08-03 code-loop r2 全局哨兵抓到的兩條既有 major★——同一個「未閉合 ``` 圍欄」
+    的坑,原本散在四處實作,其中兩處後果比 search 嚴重得多:
+
+    ① `load_vault()`:未閉合圍欄裡的 `[[wikilink]]` 被當成★真的圖譜邊★索引進去
+       → 幽靈連結進入持久化的圖結構(`backlinks` 會多報一條)。
+    ② `cmd_guard_trace()`:未閉合圍欄裡的測試名被當成★合約的真實佐證★
+       → 污染 ★INVARIANT★→[test:]→Verification 證據鏈,打臉該指令自己的保證。
+
+    根因都是 `FENCE_RE` 是成對非貪婪比對,★看不見未閉合的圍欄★。修法=改用
+    `_strip_code_text`(與主搜尋共用逐行 toggle 的單一實作)。
+
+    ★爆炸半徑實測=0★:修的當下全庫 220 篇沒有任何一篇有未閉合圍欄,現有的邊與
+    證據鏈一個字都不會變——這是純防未來。因此本測試必須★自己造一篇未閉合圍欄的
+    節點★當現場,否則什麼都驗不到(第⑤型:fixture 產不出有鑑別力的值)。
+
+    ★翻紅釘★:把兩處改回 `INLINE_CODE_RE.sub("", FENCE_RE.sub("", ...))` → 兩條主斷言各翻紅。"""
+    import subprocess as sp, tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-fence-"))
+    v = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / sub).mkdir(parents=True, exist_ok=True)
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+
+    (v / "Systems/target.md").write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n# target\n目標節點。\n",
+        encoding="utf-8")
+    # ★未閉合圍欄★——圍欄之後的 [[target]] 只是貼進來的程式碼範例,不是真的連結
+    (v / "Systems/leaky.md").write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n"
+        "# leaky\n下面貼一段範例,忘了收尾:\n```\n這行是範例: [[target]]\n",
+        encoding="utf-8")
+
+    r = lum("backlinks", "Systems/target.md")
+    check("★前置★ 現場成立:leaky.md 真的有未閉合圍欄(奇數個 ``` 標記)",
+          (v / "Systems/leaky.md").read_text(encoding="utf-8").count("```") % 2 == 1,
+          (v / "Systems/leaky.md").read_text(encoding="utf-8"))
+    check("★① 未閉合圍欄裡的 [[wikilink]] 不得被當成真的圖譜邊(幽靈連結)★",
+          "leaky" not in r.stdout, r.stdout)
+
+    # ② guard trace:未閉合圍欄裡的測試名不得被當成合約佐證
+    (v / "Systems/guarded.md").write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n"
+        "summary: |-\n  KEY:★INVARIANT★ 示範用硬合約 [test:t_demo_guard_xyz]\n---\n"
+        "# guarded\n內文。\n", encoding="utf-8")
+    (v / "Verification/2026-08-03_demo.md").write_text(
+        "---\ntype: verification\nstatus: pass\ndate: 2026-08-03\ntags:\n  - type/verification\n---\n"
+        "# demo\n這篇★沒有★真的驗過那個守衛,只是貼了一段忘了收尾的 log:\n"
+        "```\n某段輸出提到 t_demo_guard_xyz 這個名字\n", encoding="utf-8")
+    # ★這裡第一版是假綠(第 13 次),記為教訓★:原本呼叫 `guard trace t_demo_guard_xyz`
+    # ——但該指令吃的是★節點★不是測試名,實際回「ERROR: 找不到節點」,Verification
+    # 掃描那條路★一次都沒跑到★,把修法還原成 FENCE_RE 照樣全綠。
+    # ★通則(第④型的又一個面貌)★:現場不成立的原因可以只是「指令用法就錯了」——
+    # 而錯用法的輸出(ERROR)剛好也不含斷言要找的字串,於是斷言「碰巧」成立。
+    # 修法:①改用正確的節點參數 ②前置斷言必須確認★那條路真的產出了證據鏈輸出★
+    #      (看得到 `[test:...]  →` 這個箭頭),而不只是「fixture 檔案裡有那個字」。
+    r2 = lum("guard", "trace", "Systems/guarded")
+    check("★前置★ 現場成立:guard trace 真的跑到了證據鏈掃描(輸出有 [test:…] → 這一段)",
+          "[test:t_demo_guard_xyz]" in r2.stdout and "→" in r2.stdout, r2.stdout)
+    check("★② 未閉合圍欄裡的測試名不得被當成合約的真實佐證★",
+          "2026-08-03_demo" not in r2.stdout, r2.stdout)
+    check("★② 且必須明講「無 Verification 提到此守衛」(而不是靜默空白)★",
+          "無 Verification 提到此守衛" in r2.stdout, r2.stdout)
+
+
+def t_search_multiword_fallback_scope_message_covers_path_and_superseded():
+    """★2026-08-03 code-loop r2(codex minor / seatA major,依規矩取高)★:
+    回退訊息宣稱的範圍★不得大於實際檢查的範圍★。
+
+    同一個錯當天被抓到★三次★:
+      r1:片語只在作廢節點時說「全庫無命中」(其實有,只是被藏)
+      r2:`--path` 限定時仍說「未作廢的節點裡/全庫」(其實只掃了那個子集)
+      r2:第二句硬寫的「有詞在★全庫★ 0 命中」同一個毛病
+    ★用一個維度描述範圍,另一個維度就不在視野裡★——本測試把兩個維度都釘住。
+
+    ★翻紅釘★:把 `_sc` 的 path_prefix 那半拿掉 → `--path` 那兩條翻紅。"""
+    import subprocess as sp, tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-scope-"))
+    v = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / sub).mkdir(parents=True, exist_ok=True)
+    def note(rel, body):
+        (v / rel).write_text("---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n" + body,
+                             encoding="utf-8")
+    note("Systems/s1.md", "# s1\n這裡談子丑,也談寅卯。\n")
+    note("Projects/p1.md", "# p1\n這裡只談子丑。\n")
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+
+    r = lum("search", "子丑 寅卯", "--path", "Projects", "--files-only")
+    check("★前置★ 現場成立:限定 Projects 後回退真的觸發了", "多詞回退" in r.stderr, r.stderr)
+    check("★前置★ 現場成立:「寅卯」在 Systems 找得到——所以「全庫 0 命中」會是假話",
+          "s1.md" in lum("search", "寅卯", "--files-only").stdout, "fixture 壞了")
+    check("★--path 限定時,訊息必須揭露路徑範圍★",
+          "Projects" in r.stderr, r.stderr)
+    check("★--path 限定時不得宣稱「全庫」★", "全庫" not in r.stderr, r.stderr)
+    r2 = lum("search", "子丑 寅卯", "--files-only")
+    check("★沒有 --path 時,訊息不得憑空冒出路徑範圍★",
+          "底下" not in r2.stderr and "未作廢的節點裡無命中" in r2.stderr, r2.stderr)
+
+
 def t_search_multiword_fallback_r1_three_majors():
     """★2026-08-03 code-loop r1 抓到的三條 major,一條一組斷言★。
 
