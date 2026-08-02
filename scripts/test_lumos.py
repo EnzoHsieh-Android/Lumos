@@ -10149,6 +10149,84 @@ def _mk_rank_vault():
     return d, v
 
 
+def t_search_multiword_fallback_is_opt_in_and_only_on_zero():
+    """★2026-08-02:多詞查詢回退(Projects/檢索多詞回退_計劃 M1)★。
+
+    背景:候選階段是整串子字串比對,`search "甲 乙 丙"` 只要那三個字沒連在一起出現過
+    就是 0 候選——而 BM25F 本身完全會處理多詞,壞的是前面撈候選那道關卡。
+
+    ★這條測試守的是三件事,缺一不可★:
+    ① `--any` 能把「原本 0 候選」的多詞查詢救回來(修好了沒)
+    ② ★預設必須維持 0★——M1 只交付可量測的一條路,不動預設行為
+    ③ ★fallback-only:片語真的存在時,回退絕不能觸發★
+       這條最重要。若寫成「永遠 OR」,`_rank_score_candidates` 的 N/df/avgdl
+       ★以候選集為語料★,擴召回會擾動所有既有查詢的排序——零回歸就不成立了。
+
+    ★翻紅釘★:拿掉回退整段 → ① 翻紅;把 `if not _fb_seen:` 拿掉(變成永遠 OR)
+    → ③ 翻紅(存在片語的查詢會多撈到只含單詞的檔)。"""
+    import subprocess as sp, tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-mwfb-"))
+    v = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / sub).mkdir(parents=True, exist_ok=True)
+    def note(rel, body):
+        (v / rel).write_text("---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n" + body,
+                             encoding="utf-8")
+    # alpha 有「甲」與「乙」但★不相鄰★;beta 只有「甲」(→ ① 的現場)
+    # gamma 含★多詞且連續★的片語「丙 丁」;delta 只含「丙」(→ ③ 的現場)
+    # ★③ 的現場第一版是錯的,記為教訓(本專案第 12 次撞「測試假綠」)★:原本用「丙丁」
+    # (單一 token、中間無空白)當片語,於是 `len(_fb_terms) > 1` 這道閘直接判假、
+    # OR 路徑★一次都沒被執行★——把 fallback-only 守衛拿掉(改成永遠 OR)那個翻紅釘
+    # ★照樣全綠★。這正是 Systems/測試假綠形態 第④型「現場走不到被測分支」,
+    # 而且是這條測試自己犯的。要驗「不得偷偷 OR」,現場必須★真的是多詞★,
+    # 而且要存在一個「只含其中一詞」的檔可被誤撈,否則沒有鑑別力。
+    note("Systems/alpha.md", "# alpha\n甲的說明在這裡。\n另一段講乙的事。\n")
+    note("Systems/beta.md", "# beta\n只提到甲,沒有別的。\n")
+    note("Systems/gamma.md", "# gamma\n這裡有連續的 丙 丁 片語。\n")
+    note("Systems/delta.md", "# delta\n這裡只提到丙,沒有另一個字。\n")
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+
+    # ★前置★ 現場成立:單詞查詢本來就找得到(否則下面在測一個壞掉的 vault)
+    r = lum("search", "甲", "--files-only")
+    check("★前置★ 現場成立:單詞「甲」找得到 2 篇", r.stdout.count(".md") == 2, r.stdout)
+
+    # ② 預設不動:多詞片語「甲 乙」不相鄰 → 0
+    r = lum("search", "甲 乙", "--files-only")
+    check("★預設(無 --any)必須維持 0 候選——M1 不動預設行為★",
+          "候選 0" in r.stdout or ".md" not in r.stdout, r.stdout)
+
+    # ① --any 救得回來
+    r = lum("search", "甲 乙", "--any", "--files-only")
+    check("★--any:原本 0 候選的多詞查詢救得回來★", "alpha.md" in r.stdout, r.stdout)
+    check("★--any 用 OR 不是 AND(只含「甲」的 beta 也該進候選)★", "beta.md" in r.stdout, r.stdout)
+
+    # ③ ★fallback-only★:片語真的存在時不得回退
+    r_plain = lum("search", "丙 丁", "--files-only")
+    check("★前置★ 現場成立:多詞片語「丙 丁」本來就找得到(否則③在測一個不成立的現場)",
+          "gamma.md" in r_plain.stdout, r_plain.stdout)
+    check("★前置★ 現場成立:它★真的是多詞★——存在一個只含單詞的 delta,"
+          "若偷偷 OR 就會被誤撈進來,這樣③才驗得出東西",
+          "delta.md" not in r_plain.stdout, r_plain.stdout)
+    r_any = lum("search", "丙 丁", "--any", "--files-only")
+    check("★fallback-only:片語存在時 --any 的結果必須與預設完全相同(沒有偷偷擴召回)★",
+          sorted(l for l in r_any.stdout.splitlines() if ".md" in l)
+          == sorted(l for l in r_plain.stdout.splitlines() if ".md" in l),
+          f"plain:\n{r_plain.stdout}\nany:\n{r_any.stdout}")
+
+    # 單詞 + --any:無多詞可拆,行為不變
+    r1 = lum("search", "甲", "--files-only")
+    r2 = lum("search", "甲", "--any", "--files-only")
+    check("★單詞查詢帶 --any 行為不變(沒有多詞可拆)★", r1.stdout == r2.stdout,
+          f"{r1.stdout}\n---\n{r2.stdout}")
+
+    # --regex 不受影響
+    r = lum("search", "甲|乙", "--any", "--regex", "--files-only")
+    check("★--regex 帶 --any 不得走回退(候選語意不同)★", r.returncode == 0, r.stderr[:200])
+
+
 def t_search_ranked():
     import subprocess as sp, json
     d, v = _mk_rank_vault()

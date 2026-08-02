@@ -1309,7 +1309,8 @@ def _is_forgotten(env, rel):
 
 
 def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
-               ranked=False, top=20, as_json=False, include_superseded=False):
+               ranked=False, top=20, as_json=False, include_superseded=False,
+               any_terms=False):
     """全文搜尋(frontmatter + body)。預設大小寫不敏感 substring;--regex 用正則。
     預設**排除 fenced code 區塊 + inline code**(對齊 doctor 連結抽取的慣例,--code 才含);
     context 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。職責=自由文字;結構化查詢走
@@ -1327,6 +1328,42 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     else:
         needle = nfc(term).lower()
         matches = lambda s: needle in nfc(s).lower()
+    # ★多詞回退(2026-08-02;Projects/檢索多詞回退_計劃)★
+    # 問題:候選階段是★整串子字串比對★——`search "BM25 檢索 排序"` 只要那幾個字沒連在
+    # 一起出現過就是 0 候選。而 BM25F 本身完全會處理多詞(`impact --diff` 拿整段 hunk 當
+    # query 運作正常),壞的是前面這道撈候選的關卡。
+    # ★fallback-only,不是「永遠 OR」★:只在整串片語★全庫都找不到★時,才退成各詞 OR 召回。
+    #   為什麼不無條件 OR:`_rank_score_candidates` 的 N/df/avgdl ★以候選集為語料★,擴召回
+    #   會擾動所有既有查詢的排序。實測現有 goldset 30 題全部回 >0 候選 → 回退條件永不
+    #   觸發 → 那 30 題行為一行不變,★零回歸是機械可證的,不是量出來的★。
+    # ★為什麼用「掃描前預檢」而不是「掃完發現 0 再掃一次」★:後者要把整個主迴圈包進
+    #   兩趟結構,而 legacy 模式是★邊掃邊 print★,兩趟會把同一次查詢印兩份;改成先緩衝
+    #   再印等於為了一條死路重排主迴圈,風險不成比例。預檢只在多詞時跑,且一找到就 break。
+    # ★已知邊界(誠實)★:預檢用簡化的 fence/inline-code 剝除近似主迴圈的排除規則,不是
+    #   同一份實作。極端情況(未閉合的 ``` 圍欄)兩者判斷可能不一致——方向是★保守★:
+    #   預檢誤判成「找得到」時只是不回退(維持現況),不會造成錯誤召回。
+    _fb_terms = [t for t in nfc(term).lower().split() if t] if not regex else []
+    _fb_used = False
+    # ★預設關(any_terms=False)★:計劃 M1 只交付「可量測的一條路」,不動預設行為——
+    # 要不要變預設留到 M4 拿多詞評測資料再裁,不憑「跑起來看起來對」就轉正。
+    if any_terms and (not regex) and len(_fb_terms) > 1:
+        _fb_seen = False
+        for _r in sorted(env.notes):
+            if path_prefix and not _r.startswith(path_prefix):
+                continue
+            try:
+                _t = (env.vault / _r).read_text(encoding="utf-8-sig")
+            except Exception:
+                continue
+            if not include_code:
+                _t = re.sub(r"(?ms)^\s*```.*?^\s*```", "", _t)
+                _t = INLINE_CODE_RE.sub("", _t)
+            if needle in nfc(_t).lower():
+                _fb_seen = True
+                break
+        if not _fb_seen:
+            _fb_used = True
+            matches = lambda s: any(t in nfc(s).lower() for t in _fb_terms)
     if ranked and regex:
         print("(--ranked 不適用 --regex 模式,照舊輸出)", file=sys.stderr)
         ranked = False
@@ -11582,6 +11619,8 @@ def main():
     p.add_argument("--files-only", action="store_true", help="只列檔名+命中數")
     p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
     p.add_argument("--ranked", action="store_true", help="BM25F 相關性排序(2026-07-11 起已是預設,旗標保留相容)")
+    p.add_argument("--any", action="store_true", dest="search_any",
+                   help="多詞查詢:整串片語全庫找不到時,退成各詞 OR 召回(預設關;實驗中,見 Projects/檢索多詞回退_計劃)")
     p.add_argument("--legacy", action="store_true", dest="search_legacy",
                    help="舊行為:字母序+全量輸出(轉正前預設;--regex 自動走此路)")
     p.add_argument("--top", type=int, default=0, help="相關性排序輸出上限(0=全量,預設;圖譜先行不靜默截斷)")
@@ -11937,7 +11976,8 @@ def main():
         return cmd_search(env, args.term, path_prefix=args.path_prefix,
                           regex=args.regex, files_only=args.files_only,
                           include_code=args.code, ranked=_use_ranked, top=args.top,
-                          as_json=args.search_json, include_superseded=args.include_superseded)
+                          as_json=args.search_json, include_superseded=args.include_superseded,
+                          any_terms=args.search_any)
 
     if args.cmd == "contracts":
         rel = None

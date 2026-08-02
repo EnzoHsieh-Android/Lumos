@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-07-11
+updated: 2026-08-02
 self_audit: sonnet/2026-07-20
 tags:
   - type/system
@@ -11,13 +11,14 @@ summary: |-
   FLOW:tokenize(CJK bigram+ASCII拆分)→BM25F(欄位tf加權於飽和前,平滑IDF)→search --ranked只重排既有候選｜_reco(BFS-decay 1/2^k+共引同行×2飽和+Jaccard;G=0.6/0.25/0.15)×BM25F融合(R=0.6L+0.4G)→context --recommend｜impact --ranked(固定席=事故+合約,不占top_k;動態閾;stdin單包JSON prospective)→hook降噪(v1.1待接)
   KEY:[⚠2026-07-20 對帳:下列 held +106.8% 查無來源,三處記載互不相同、今日重跑為 +99.6%;必看 24/30 亦不重現(實為 19/30)——見本節點〈數字未對齊〉段與 [[Verification/2026-07-11_hook面v1.1轉正]] 更正註,待一次性重新凍結]
   KEY:search面已轉正預設(2026-07-11,goldset §6全過:修正尺 nDCG@5 +58.1%/held +106.8%;--legacy逃生,--regex走舊路,預設全量+逐檔命中明細——資訊零損失);hook面已轉正(2026-07-11:P@8 .707/中位3/p95 9;dyn_coef .55/direct_base .30/名額10;trigger delta-scoped;必看視野24/30=精度代價,見[[Verification/2026-07-11_hook面v1.1轉正]]);recommend面dormant;hop≥2需L>0、hop1只受靜態底線;結構前綴停用集(KEY:/FLOW:模板詞不算詞彙訊號);A1型別先驗:moc×0.4乘於詞彙分(train網格凍結,held零倒退,見[[Projects/節點靜態先驗_調研]])
-  KEY:★DEBT★ 多詞片語候選=legacy片語語意(0候選不回退)｜cochange proxy對圖譜related面太稀(兩vault實證,僅sanity check)｜hook接線v1.1待評測
+  KEY:★DEBT★ 多詞片語候選=legacy片語語意(0候選不回退)★2026-08-02 部分緩解:`--any` 旗標(預設關)在整串片語全庫無命中時退成各詞 OR 召回;fallback-only 故對既有查詢零回歸(現有 goldset 30 題全部回>0候選,回退條件永不觸發)。Landmark 284 篇真庫實測:10/10 現實多詞查詢在預設下全 0 命中,`--any` 後 7/10 第一名正確。★預設仍不開★,待補多詞評測題量測後再裁,見 [[Projects/檢索多詞回退_計劃]]★｜cochange proxy對圖譜related面太稀(兩vault實證,僅sanity check)｜hook接線v1.1待評測
   DEP:[[Systems/lumos-cli-read]][[Systems/cochange-guard]]
   TEST:t_tokenizer/search_ranked/context_recommend/impact_ranked/impact_diff/impact_hook_v11 全綠+全套1018 | VERIFY:[[Verification/2026-07-11_hook面v1.1轉正]] | VERIFY:[[Verification/2026-07-10_檢索排序v1]][[Verification/2026-07-11_檢索goldset評測]]
 related:
   - "[[Projects/檢索優化_計劃]]"
   - "[[Systems/lumos-cli-read]]"
   - "[[Projects/節點靜態先驗_調研]]"
+  - "[[Projects/檢索多詞回退_計劃]]"
 verified_by:
   - "[[Verification/2026-07-10_檢索排序v1]]"
   - "[[Verification/2026-07-11_檢索goldset評測]]"
