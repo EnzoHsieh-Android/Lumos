@@ -10149,6 +10149,113 @@ def _mk_rank_vault():
     return d, v
 
 
+def t_doctor_flags_unclosed_frontmatter():
+    """★2026-08-03 code-loop r4 抓到的既有 major★:`split_frontmatter` 假設 frontmatter
+    成對——少一個收尾 `---` 就回 `(None, 整份檔)`,於是★整份檔(含 frontmatter)當 body
+    索引★。實測後果有三:
+
+      ① 該節點的 ★INVARIANT★ ★從 contracts 完全消失★(合約登記簿靜默少一條)
+      ② block scalar 裡的 `[[wikilink]]` 變成★真的圖譜邊★(frontmatter 鐵則 2 靜默失效)
+      ③ `doctor` 輸出★完全不提這個檔★——連 Check S 的清單都沒有它(讀不到 type)
+
+    ★寫入端 `load_raw_for_edit` 對同一狀態明確 `raise ValueError("frontmatter 未閉合")`,
+    讀取端卻默默照收★。修法不動解析語意(那會牽動一堆讀取端),而是★把讀取端的沉默
+    補成響亮★:doctor 新增一道檢查,且放★硬 issue★——它會讓 pre-push 的 `doctor --ci`
+    擋下來,因為「靜默少一條合約」正是本工具最不能接受的事。
+
+    ★翻紅釘★:把該段檢查整段移除 → 三條主斷言翻紅。"""
+    import subprocess as sp, tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-fmbroken-"))
+    v = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / sub).mkdir(parents=True, exist_ok=True)
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+
+    (v / "Systems/good.md").write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n"
+        "summary: |-\n  KEY:★INVARIANT★ 正常節點的硬合約 [test:t_ok]\n---\n# good\n正常。\n",
+        encoding="utf-8")
+    # ★未閉合★:少了收尾的 ---
+    (v / "Systems/broken.md").write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n"
+        "summary: |-\n  KEY:★INVARIANT★ 這條會不會蒸發 [test:t_ghost]\n"
+        "# broken\n提到 [[Systems/good]]。\n", encoding="utf-8")
+
+    # ★前置★ 現場成立:三個症狀都要真的發生,否則這條測試在測一個不存在的問題
+    rc_ = lum("contracts")
+    check("★前置★ 現場成立:broken 的硬合約確實從 contracts 蒸發了",
+          "t_ghost" not in rc_.stdout and "t_ok" in rc_.stdout, rc_.stdout)
+    rb = lum("backlinks", "Systems/good")
+    check("★前置★ 現場成立:block scalar 裡的連結確實變成了真邊",
+          "broken" in rb.stdout, rb.stdout)
+
+    rd = lum("doctor")
+    check("★doctor 必須指名道姓點出未閉合的那一篇(不得靜默)★",
+          "broken.md" in rd.stdout, rd.stdout)
+    check("★而且要講清楚後果(不是只說格式錯)★",
+          "合約" in rd.stdout and "圖譜邊" in rd.stdout, rd.stdout)
+    rci = lum("doctor", "--ci")
+    check("★必須是硬 issue——pre-push 的 doctor --ci 要擋得下來★",
+          rci.returncode != 0, f"rc={rci.returncode}\n{rci.stdout[-400:]}")
+
+    # 正常 vault 不得誤報
+    (v / "Systems/broken.md").unlink()
+    rd2 = lum("doctor")
+    check("★正常 vault 不得誤報(沒 frontmatter 的檔也不算)★",
+          "沒有未閉合的 frontmatter" in rd2.stdout, rd2.stdout)
+
+
+def t_indented_closing_fence_never_swallows_real_claims():
+    """★2026-08-03 code-loop r4 潛伏缺陷獵人席抓到的既有 major★:
+    `FENCE_RE = re.compile(r"^```.*?^```", re.S|re.M)` ★錨在第 0 欄★——收尾圍欄
+    只要縮排一格,就會跟★下一個區塊的開頭★錯配,把中間的真散文★整段當程式碼吞掉★。
+
+    ★為什麼比未閉合圍欄那條更嚴重★:它餵的是治理機制本身——
+      `_refcheck_scan` → `loop status --gate` 的 **G1 硬閘**
+      `_impact_reverse_lookup` → **Edit/Write 前自動注入「必看合約」的 hook**
+    ★一個縮排的 ``` 就能把某節點的鐵則警告靜默關掉,或讓 G1 對著真的有壞引用的
+    spec 宣告通過★。
+
+    ★修法約束(非顯然)★:不能用 `_strip_code_text`——它連 inline code 一起剝,而
+    refcheck 要抽的路徑宣稱★正是寫在 inline code 裡★。故另立 `_strip_fences_text`
+    (只剝圍欄、留 inline),兩者共用唯一的 `_visible_lines` fence 判定。
+
+    ★翻紅釘★:把 `_refcheck_scan` 改回成對正則 `re.sub(r"(?ms)^```.*?^```","",text)`
+    → 「縮排收尾之後的宣稱也要被看到」翻紅(只會抽到第一條)。"""
+    import subprocess as sp, tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-fence2-"))
+    v = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / sub).mkdir(parents=True, exist_ok=True)
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
+    (root / "scripts" / "real.py").write_text("x = 1\n", encoding="utf-8")
+    sp.run(["git", "init", "-q", "."], cwd=root, capture_output=True)
+
+    # ★關鍵現場★:第一個圍欄開在第 0 欄、★收尾縮排 2 格★
+    spec = v / "Systems/payA.md"
+    spec.write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n"
+        "# payA\n正文提到 `scripts/real.py` 這個檔。\n"
+        "```\n示範程式碼\n  ```\n"
+        "真散文提到 `scripts/ghost.py` 這個不存在的檔。\n"
+        "```\n另一段\n```\n", encoding="utf-8")
+    r = sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "refcheck", str(spec),
+                "--repo", str(root)], capture_output=True, text=True)
+
+    check("★前置★ 現場成立:第一個圍欄的收尾★真的是縮排的★(否則測不到錯配)",
+          "\n  ```\n" in spec.read_text(encoding="utf-8"), spec.read_text(encoding="utf-8"))
+    check("★前置★ 現場成立:圍欄★之前★那條宣稱本來就抽得到(基準)",
+          "scripts/real.py" in r.stdout, r.stdout)
+    check("★縮排收尾★之後★的真宣稱也必須被看到(舊實作會整段吞掉)★",
+          "scripts/ghost.py" in r.stdout, r.stdout)
+    check("★而且要正確判定它 missing(不是靜默略過)★",
+          "missing" in r.stdout and "ghost.py" in r.stdout, r.stdout)
+
+
 def t_unclosed_fence_never_leaks_into_graph_or_evidence():
     """★2026-08-03 code-loop r2 全局哨兵抓到的兩條既有 major★——同一個「未閉合 ``` 圍欄」
     的坑,原本散在四處實作,其中兩處後果比 search 嚴重得多:
