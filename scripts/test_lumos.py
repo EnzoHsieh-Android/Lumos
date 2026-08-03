@@ -10257,20 +10257,29 @@ def t_search_multiword_fallback_scope_message_covers_path_and_superseded():
     check("★沒有 --path 時,訊息不得憑空冒出路徑範圍★",
           "底下" not in r2.stderr and "未作廢的節點的可見文字裡無命中" in r2.stderr, r2.stderr)
 
-    # ★第四個維度:--code(r3 codex 抓到)★——預設不搜程式碼區塊,說「節點裡無命中」
-    # 仍不精確:片語可能就在程式碼區塊裡。
-    note("Systems/s2.md", "# s2\n一般文字提到辰巳。\n```\n辰巳 午未 這個片語只在程式碼區塊裡\n```\n")
-    note("Projects/p2.md", "# p2\n一般文字提到午未。\n")
+    # ★第四個維度:--code(r3 抓到)★——預設不搜程式碼區塊,說「節點裡無命中」不精確。
+    # ★這段第一版是假綠(第 14 次,r4 Codex 實跑打臉)★:原 fixture 讓完整片語在
+    # code fence 裡★找得到★,於是加 --code 後根本★不觸發回退★,`(含程式碼區塊)`
+    # 那個分支一次都沒執行;斷言只檢查「成功搜尋的 stderr 不含可見文字」——那必然
+    # 成立,因為壓根沒有回退訊息。★又是第④型,而且是我為了修上一輪 finding 剛寫的。★
+    # 修法:現場改成「即使含程式碼區塊,片語仍不連續」,回退在兩種模式下都會觸發,
+    # 只有★範圍措辭★與★逐詞覆蓋數★會變——後者(午未 0→1)是額外的鑑別力來源。
+    note("Systems/s2.md", "# s2\n一般文字提到辰巳。\n")
+    note("Systems/s3.md", "# s3\n這裡是程式碼:\n```\n午未 只出現在程式碼區塊\n```\n")
     r3 = lum("search", "辰巳 午未", "--files-only")
-    check("★前置★ 現場成立:預設(不含 code)時回退觸發——片語只在程式碼區塊裡",
-          "多詞回退" in r3.stderr, r3.stderr)
+    check("★前置★ 現場成立:預設時回退觸發", "多詞回退" in r3.stderr, r3.stderr)
+    check("★前置★ 現場成立:預設看不見程式碼區塊,故「午未」覆蓋為 0",
+          "★午未:0★" in r3.stderr, r3.stderr)
     check("★預設時必須講明範圍是「可見文字」(程式碼區塊不算)★",
           "可見文字" in r3.stderr, r3.stderr)
     r4 = lum("search", "辰巳 午未", "--code", "--files-only")
-    check("★前置★ 現場成立:加 --code 後片語真的找得到(所以不該回退)",
-          "s2.md" in r4.stdout, f"OUT:{r4.stdout}\nERR:{r4.stderr}")
-    check("★加 --code 時不得再說「可見文字」(範圍已含程式碼)★",
-          "可見文字" not in r4.stderr, r4.stderr)
+    check("★前置★ 現場成立:加 --code 後★仍然觸發回退★(片語依然不連續)——"
+          "這才走得到 include_code 那個分支", "多詞回退" in r4.stderr, r4.stderr)
+    check("★前置★ 現場成立:加 --code 後「午未」看得見了(覆蓋 0→1),證明 --code 真的生效",
+          "午未:1" in r4.stderr and "★午未:0★" not in r4.stderr, r4.stderr)
+    check("★加 --code 時範圍必須說「(含程式碼區塊)」★",
+          "(含程式碼區塊)" in r4.stderr, r4.stderr)
+    check("★加 --code 時不得再說「可見文字」★", "可見文字" not in r4.stderr, r4.stderr)
 
 
 def t_search_multiword_fallback_r1_three_majors():
