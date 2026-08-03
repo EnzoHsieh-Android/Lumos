@@ -43,6 +43,7 @@ verified_by:
   - "[[Verification/2026-08-01_slim-manifest殘留與代碼審六輪]]"
   - "[[Verification/2026-08-02_slim三缺陷修復_實驗產出]]"
   - "[[Verification/2026-08-03_Windows真機驗證五缺陷修復]]"
+  - "[[Verification/2026-08-03_Windows回歸測試三缺陷]]"
 ---
 # slim-uninstall-一行卸載
 
