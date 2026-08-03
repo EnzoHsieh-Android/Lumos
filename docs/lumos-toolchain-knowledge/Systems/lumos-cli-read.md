@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-24
+updated: 2026-08-03
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -13,6 +13,8 @@ summary: |-
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
   KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向(stale/fail 驗證豁免——E1 拔死背書後不反咬漏寫)/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼);Check E1 失效背書(verified_by 指向 stale/fail/superseded 驗證→死背書;superseded=真遺忘第二刀 2026-07-26,同刀:Check3 skip 集+sync-verified-by 過濾+orphan 豁免四位一致)+ Check E2 建在被推翻決策上(決策 valid:false+ended → M2 共用 typed 索引查連入來源、updated 早於 ended → 落後邊;decision_refs 精化只標指到那條;M3 帳本抑制 terminal ts>=ended 跳過=主/補網不重報)+ Check E3 意圖鏈斷義(decision_refs 指翻案決策+dangling 浮出);關係層皆軟提醒;Check J regen 重生來源守衛[M1 2026-07-16]——regen 節點 provenance 分級:J-a 拒發明合約(INVARIANT 標記行需 [src:]/[git:] 意圖證據)+J-b DECISION 四態+J-c 證據指針 substring gate(共用 _validate_repo_ref 不經 top_dirs 靜默過濾;shallow 降 warn_soft 顯性)+J-d 唯讀提醒;與 lint 共用 check_regen_provenance 防兩入口漂移 [test:t_check_j_regen,t_check_j_git]);與 lint 分工——lint 只看單篇 node-local(regen 節點 Check J 為 opt-in 例外需檔案+git 存取)、predicts pre-push 會不會擋
   KEY:search 預設排除 fenced+inline code(對齊 doctor 連結抽取慣例,--code 才含)、大小寫不敏感 substring、--regex 切正則;結構化查詢走 contracts/decisions/stale 而非 search
+  KEY:★多詞回退(2026-08-03 人裁翻為預設,--no-any 逃生;--any 留相容)★——整串片語在檢查範圍內無命中時,退成各詞 OR 召回再交 BM25F 排序。★fallback-only 不是永遠 OR★:片語找得到就不觸發,故對既有查詢零回歸(機械可證+對照組 5 題逐檔實證)。同時印★逐詞覆蓋★到 stderr——回退後搜尋幾乎不可能再回 0,「查無」這個訊號會消失,逐詞覆蓋把它換一種形式還回來(某詞 0 命中會標 ★)。★訊息宣稱的範圍不得大於實際檢查的範圍★:範圍字串必須同時反映 --path／作廢與否／--code 三個維度(這條在 code-loop 四輪裡被抓到三次,每次都是漏掉其中一個維度) [test:t_search_multiword_fallback_is_default_and_only_on_zero,t_search_multiword_fallback_reports_per_term_coverage,t_search_multiword_fallback_scope_message_covers_path_and_superseded]
+  KEY:★預檢迴圈與主迴圈共用 `_search_visible_lines` 單一實作★(2026-08-03 code-loop r2)——原本預檢自己一份「整段 regex 剝 fence」,遇未閉合圍欄與主迴圈分岔,導致逐詞覆蓋虛報非零;同源修法也收編了 `load_vault`／`cmd_guard_trace`(見 [[Issues/2026-08-03_剝除與邊界解析的既有缺陷群]],★`FENCE_RE` 仍活在 refcheck 家族三處未收編★)
   KEY:★INVARIANT★ search 預設排除 status=superseded 節點但不排除 stale(真遺忘,GateMem 2026-07-24;stale 是待重驗警訊,藏了=製造新洞,doctor Check S 綁 stale+superseded 正是反例),--include-superseded 逃生;濾網插「命中確認後、三路分岔前」故 ranked/legacy/regex 三路一致、hidden 數=命中被藏筆數非全庫;隱藏數走 stderr(全模式含 --files-only,不污染 stdout)、--json 加 hidden_superseded 欄位 [test:t_search_forget_superseded] [audit:sonnet/2026-07-24]
   KEY:[缺口已補 2026-07-25]原「Check T 無 Python profile」缺口已補(TEST_PROFILES 加 python:行首錨+檔名錨+comment_strip=none),本合約隨之升回正式;★根因更正★:當初被判偽證據的真兇不是 dirs(Check T 掃描走全 repo 不吃 dirs),是 discover 對所有語言剝 C 式註解、test_lumos.py 中文註解的 status/* 與遠處 glob 字面 **/ 配對吃掉半個檔(260→94);詳 [[Projects/CheckT-Python-profile_計劃]]
   KEY:真遺忘只做 search 這一刀(2026-07-24 使用者裁定);context 基本鄰居/推薦、impact、doctor 對作廢驗證的不一致=已知殘留(impact 永不做預設藏——direct 命中是事故記憶);設計與三審見 [[Projects/真遺忘召回過濾_計劃]]
@@ -23,6 +25,8 @@ summary: |-
 related:
   - "[[Systems/lumos-cli-write]]"
   - "[[Systems/lumos-cli-lifecycle]]"
+  - "[[Projects/檢索多詞回退_計劃]]"
+  - "[[Issues/2026-08-03_剝除與邊界解析的既有缺陷群]]"
 decisions:
   - content: 讀寫原語嚴格分軌——13 個讀指令不改圖譜節點檔(context/show 寫 best-effort usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀;2026-07-21 修 A2 漂移後措辭);一切 frontmatter 寫入走 set/append/decision-* 等寫入原語(走 atomic_write_verify:寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename)
     id: d1
@@ -63,7 +67,7 @@ verified_by:
 
 ## 13 個原語(對應 cmd_* / scripts/lumos)
 - **進場三步(入口固定順序)**
-  - `search <詞> [--path Systems] [--regex] [--files-only] [--code] [--include-superseded]`(`cmd_search`):全文搜尋 frontmatter+body,大小寫不敏感 substring。**預設排除 fenced + inline code 區塊**(對齊 doctor 連結抽取慣例),`--code` 才含;`context` 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。**預設排除 `status=superseded` 節點(真遺忘;不排 stale)**,`--include-superseded` 逃生、隱藏數走 stderr(核心行為與回歸守衛見上方 summary KEY)。職責=自由文字,結構化查詢走 contracts/decisions/stale。
+  - `search <詞> [--path Systems] [--regex] [--files-only] [--code] [--include-superseded]`(`cmd_search`):全文搜尋 frontmatter+body,大小寫不敏感 substring。**預設排除 fenced + inline code 區塊**(對齊 doctor 連結抽取慣例),`--code` 才含;`context` 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。**預設排除 `status=superseded` 節點(真遺忘;不排 stale)**,`--include-superseded` 逃生、隱藏數走 stderr(核心行為與回歸守衛見上方 summary KEY)。**多詞查詢預設走回退**(2026-08-03；`--no-any` 關)，並印逐詞覆蓋到 stderr。職責=自由文字,結構化查詢走 contracts/decisions/stale。
   - `context <節點> [--brief]`(`cmd_context`):節點 + 鄰居 summary 壓縮索引(MemPalace closet)。**頭部直接攤出 ⚠ 合約**(extract_contracts);`--brief` 只給 meta + summary 首兩行 + 鄰居名單(壓 token)。
   - `show <節點> [--body-only]`(`cmd_show`,2026-07-21):**節點檔完整內容**(frontmatter+body)——context 是壓縮導航(不含 body),show 是完整真相讀取;解「規範禁 Read 圖譜但無全文入口」的結構性違章(外審 blocker,設計/審計 loop 見 [[Projects/lumos-show讀取入口_計劃]])。`--body-only` 以 `split_frontmatter` 剝離開頭 frontmatter;重開檔失敗(壞 symlink/race)→ stderr+rc2 不裸 traceback。
   - `contracts [節點]`(`cmd_contracts`):合約登記簿,列 `★INVARIANT★`(改=breaking)/ `★DEBT★`(可改);**只認 KEY 行前綴標準格式**;★INVARIANT★ 顯示綁定的 `[test:]`,未綁=⚠(doctor Check T 會擋)。
