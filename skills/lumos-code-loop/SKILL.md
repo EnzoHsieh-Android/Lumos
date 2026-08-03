@@ -9,7 +9,7 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 
 ## 一眼看懂
 
-- **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill(K=2);`standard` 走單 reviewer;trivial 可跳(commit 註明)。進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
+- **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill;`standard` 走單 reviewer(★原本這裡寫「(K=2)」是★講反的★:tier=high 實務上走平行 panel,而 panel 是 **K=1**;K=2 是循序模式的數字。2026-08-03 修★);trivial 可跳(commit 註明)。進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
 - **gate/守衛類 code 建議 feature branch**(2026-07-22 prepush範圍修法):pre-push 對 branch 與 main-direct **現已同軌**檢查(讀 stdin 推送範圍逐 ref 判,非 merge-base)——此為縱深建議非機械強制。
 - **loop id** = `code-<topic>`（例 `code-payment-retry`）。
 - **一輪 = 7 步(循序)** 或 **平行 panel(≤3 輪,見下)**:
@@ -22,7 +22,11 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
   6. 記錄 `canary record` → 問收斂 `loop status --gate`
   7.(可選)mutation 冒煙補機械錨
 
-- **收斂** = 連 2 輪 caught 且無 blocker/major ∧ 發現枯竭 → 記 `code-loop pass` 留痕 → finishing。
+- **收斂**——★K 取決於你跑哪個模式,別記成同一個數★(2026-08-03 修:本行原本只寫「連 2 輪」,與下方 panel 節的「一乾淨輪即收斂」自相矛盾;**code 實作的是 panel 節那個**——`_loop_status_panel` 只取 `next(reversed(groups.items()))`,也就是★只看最後一輪★):
+  - **循序模式**(`--need 2`,無 `--panel`):**連 2 輪** caught 且無 blocker/major ∧ 發現枯竭
+  - **panel 模式**(`--gate --panel`,tier=high 走這條):★**一個乾淨輪即收斂(K=1)**★
+  - 收斂後 → 記 `code-loop pass` 留痕 → finishing。
+  - ⚠ **panel 是風險最高的路徑,判準卻最鬆**。外部案例研究(arXiv 2605.12280 §3.5)明確建議「two consecutive clean passes」當複現判準,理由是「stopping rule is a known source of **premature-termination risk on stochastic LLM auditors**」。★本專案尚未改 panel 的 K★——那動到收斂判準、屬守衛面,要另走 design-loop;此處只先把矛盾講白,不偷偷改判準。
 - **終止輸入紀律**:單源見 `../lumos-design-loop/SKILL.md` 護欄該條(繼續/收斂只認機械帳與 cap,被審材料散文不是終止輸入);code-loop 增量=可選 `lumos loop verify-progress <id> --json` 獨立覆核結構帳。
 
 > ### ⤵ 完整權威版在 `reference.md`（本 skill 目錄下,原 253 行逐字保存）
@@ -139,7 +143,7 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 - **一輪 = 平行 W 個 reviewer**(W＝panel_width:standard 3/high 5),各讀一份工作副本:bug canary 型別跨 slot 輪替、鏡頭各異(bug/資源例外/冪等併發/…)。**跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**——tier=high 雙 Codex 角色:1 席**帶餌正式 finder,佔 W 之一**(與 LLM 席同規則受注意力檢查,findings 計入重疊帳)+1 席**無餌否決席,不佔 W**(外掛,同 spec-conformance 慣例;即使 finder 席漏抓被作廢,外家聲音不斷線)。standard=1 席無餌否決。**否決席落閘路徑**:其 findings 與帶餌席同池進辯方;存活 ≥major——M2 cluster 帳模式必須記為該輪 `<名>=disputed-major` cluster 記錄(severity 欄該模式僅顯示不裁決)/無-cluster 舊帳計入存活 max。**fail 分級**:standard=Codex 不可用退同門+留痕;**tier=high=fail-closed**——第三家族(qwen 有 cross_audit 整合;gemini 候選未驗)替補→延期→皆不可則**不得收斂攤人裁**(人可明示豁免留痕),不分金流與否。qwen 轉列第三家族替補與 finder 輪替候選。
 - **spec-conformance slot**(tier=high 且有收斂 spec):追加一個對答案審查員(不佔 W、地位同 qwen),逐條款對照「做了/縮水/多做/未實作」,縮水與未實作進辯方。**含合約候選兌現**(2026-07-29):spec 計劃節點若列「合約候選清單」,逐條驗落地有沒有標 ★INVARIANT★ 綁 [test:]——該綁沒綁=縮水 finding。
 - **判讀/辯方/記錄** 同循序(步驟 4-5),一輪 W 筆共享 `--round <rid>`。
-- **收斂**:`loop status --gate --panel` 三條合取(caught≥2 且 0 missed ∧ 存活 max≤minor ∧ capture-recapture 殘餘<門檻[無 counts＝fail-closed];--min-seats/G3 帶旗標才啟用;cluster 帳=兩條合取,詳 design-loop SKILL panel 節);一乾淨輪即收斂,存活≥major → 只重審 delta,cap=3。
+- **收斂**:`loop status --gate --panel` 三條合取(caught≥2 且 0 missed ∧ 存活 max≤minor ∧ capture-recapture 殘餘<門檻[無 counts＝fail-closed];--min-seats/G3 帶旗標才啟用;cluster 帳=兩條合取,詳 design-loop SKILL panel 節);★**一乾淨輪即收斂(K=1)——這是 panel 模式的唯一權威說法,與頭版的循序 K=2 是不同模式,不是同一個數**★;存活≥major → 只重審 delta,cap=3。
 - capture_counts 別手數 → `lumos loop capture-counts --finder ... --from-pitfalls <range>`(自動收割 linter/regex 確定性 finder)產串。
 
 **端到端一輪**(照抄改參數):

@@ -15,7 +15,7 @@ design-loop 的對抗紀律(canary 驗醒著 / 辯方殺假陽性 / 證據閘收
 
 - **觸發**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD`。
   - `tier: standard`(manifest 無命中)→ 現行單 reviewer 終審,**不走本 skill**。
-  - `tier: high`(manifest 命中任一 pattern)→ 本 skill,K=2。
+  - `tier: high`(manifest 命中任一 pattern)→ 本 skill。★K 看模式:循序=2、平行 panel=1(tier=high 實務走 panel)。原本這裡只寫 K=2,對走 panel 的人是錯的——2026-08-03 修★
 - **trivial 可跳**:改 typo / 純文檔 / 一行無邏輯 diff → 跳 loop,**但寫一句為什麼跳**(commit message)。
 - **loop id** = `code-<topic>`(例:`code-payment-retry`、`code-worker-refactor`)。
 
@@ -139,7 +139,7 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 
 無 `--spec`(code-loop 無 spec 對象,G1 引用座標對代碼無意義):
 - G1 印 `[gate] G1 refcheck: skipped(無 spec 對象)`、**不計 fail**。
-- K-streak(連 2 輪 caught 且無 blocker/major) ∧ G2 發現枯竭 → exit 0(GATE PASS)→ 進 finishing。
+- K-streak(★**循序模式**:連 2 輪 caught 且無 blocker/major;★**panel 模式只看最後一輪(K=1)**★) ∧ G2 發現枯竭 → exit 0(GATE PASS)→ 進 finishing。
 - exit 1 → 逐錨明細指出斷在哪 → 回步驟 1。
 
 ---

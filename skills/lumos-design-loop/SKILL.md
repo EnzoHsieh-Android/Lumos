@@ -134,7 +134,7 @@ description: 設計 spec／計劃寫完、進實作前的對抗審計硬閘—�
    ```
    lumos loop status <id> --need 2 --gate --spec <計劃節點.md> --repo <repo根>
    ```
-   K=2;證據閘 ＝ K-streak ∧ G1 引用座標 refcheck ∧ G2 發現枯竭。**exit 0(GATE PASS)出 loop**;exit 1 → 回 step 1(逐錨明細會指出斷在哪)。
+   K=2(★此為**循序**模式的數字;平行 panel 模式是 **K=1**,見下方 panel 節——★兩者別記成同一個數★,2026-08-03 補★);證據閘 ＝ K-streak ∧ G1 引用座標 refcheck ∧ G2 發現枯竭。**exit 0(GATE PASS)出 loop**;exit 1 → 回 step 1(逐錨明細會指出斷在哪)。
    - **`[NEEDS CLARIFICATION]` 慣例(borrow:spec-kit)**:spec 內任何未解的 `[NEEDS CLARIFICATION: 問題]` ＝ **視同 blocker,不得收斂**(gate 前自查 `grep -c 'NEEDS CLARIFICATION' <spec>` 必須 0)。含糊之處**寫成這個標記**而不是含糊帶過——把「還不確定」變機械可擋。
 
 > **派工模板**:審計員／辯方的完整 dispatch prompt(輪次語境加碼、查證義務、反駁路線客製)見同目錄 `templates.md` §1-2——**派工以模板為準**,本文 framing 是摘要。
@@ -186,7 +186,7 @@ description: 設計 spec／計劃寫完、進實作前的對抗審計硬閘—�
 
 > 回報遵 CLAUDE.md「對人回報用白話」規則(人話起手;canary 之類術語首次出現給一句人話,如 canary ＝ 偷埋的假錯驗審計員醒著)。
 
-1. **完整性**:收斂只證「連 2 輪醒著的審計員沒找到 blocker/major」,**不證沒有更深的問題**。完整性靠多輪 ＋ 多視角,不靠把門檻調嚴。
+1. **完整性**:收斂只證「醒著的審計員沒找到 blocker/major」——★循序模式是連 2 輪,平行 panel 模式★只有最後 1 輪★(K=1)★,**不證沒有更深的問題**。完整性靠多輪 ＋ 多視角,不靠把門檻調嚴。
 2. **整合性**:canary-caught／severity／哪些是「誤判」,三個都由植入者(你)自己判、無外部檢查。loop 是**可觀測 ＋ 摩擦 ＋ 地板,不是 oracle**。
 
 → **★caught ≠ 覆蓋★ 的外部實證與推論見 `reference.md` §E**——被問「收斂到底證明了什麼」之前先讀。
