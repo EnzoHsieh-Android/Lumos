@@ -14588,64 +14588,225 @@ def t_slim_uninstall_skill_backup_leaves_skills_dir_clean():
     _sh.rmtree(root, ignore_errors=True)
 
 
-def t_slim_ps1_utf8_bom_and_no_dbcs_quote_swallow():
-    """★2026-08-03 中文 Windows 11 真機驗證的 BLOCKER★:README 教的一行安裝指令
-    在 cp950 系統上 ★100% 失敗、什麼都沒裝★。
+def t_slim_install_skill_backup_also_leaves_skills_dir_clean():
+    """★2026-08-03 Windows 真機回歸測試:⑤ 只修了卸載端,★安裝端漏了★★。
 
-    根因:Windows PowerShell 5.1 從★磁碟★執行 .ps1 時,★沒有 BOM 就用系統 ANSI
-    codepage 讀檔★,不是 UTF-8。這幾支有大量中文註解,而 Windows 的
-    `MultiByteToWideChar` 對 DBCS ★前導位元組(0x81-0xFE)會無條件吃掉下一個位元組★
-    ——即使那個位元組不是合法尾碼。UTF-8 中文字的位元組序列裡,只要某個前導位元組
-    緊接著 `"`(0x22),★那個引號就消失了★,parser 配對錯亂,最後在一行★純 ASCII★
-    的程式碼上報 "The string is missing the terminator"。
+    `install.py` 的 `_install_skill` 仍把既有 skill 備份到 `~/.claude/skills/` 底下
+    改名——那正是 Claude Code 掃描 skill 的目錄,實測清單真的出現
+    `lumos-project-notes.bak.<ts>`。
 
-    ★這條測試驗的是真實失效機制,不是原始碼長相(不是第③型)★:直接在位元組層模擬
-    Windows 的 DBCS 吞噬規則,數出「會被吃掉幾個引號」。真機回報的數字是
-    get.ps1 少 5 個、install/uninstall 各少 1 個——★本測試在 macOS 上重現出完全
-    相同的 5/1/1★,是這個機制的獨立確認。
+    ★而且安裝端留下的比卸載端更糟★:**卸載器不會清它**(卸載只認
+    `lumos-project-notes` 這個名字),於是那份備份會★永遠留在 skills 目錄裡持續生效★。
 
-    修法=三支存成 UTF-8 with BOM(有 BOM 時 PowerShell 直接走 UTF-8,不碰 ANSI),
-    另加 .gitattributes 防 BOM 被工具剝掉。
+    修法:兩邊共用同一個落點 `~/.local/share/lumos-slim/backups/`。
+    ★不同落點就等於又製造一次「同一件事兩份實作」★——那是本專案今天已經
+    收編過三次的形狀。
 
-    ★誠實邊界★:BOM 存在與吞噬數為 0 都是機械可驗的;但「PowerShell 真的因此不再
-    parse error」★仍未在真機重驗★(開發機是 macOS)。本測試買的是「不會退回到已知
-    會爆的狀態」,不是「Windows 上一定沒問題」。"""
+    ★翻紅釘★:把 `_skill_backup_path` 換回 `_unique_backup_path` → 前兩條翻紅。"""
+    import tempfile as _tf, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-instbak-"))
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+    proj = root / "proj"; proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案\n\n內容\n", encoding="utf-8")
+
+    subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                   capture_output=True, text=True, env=env)
+    skills_dir = fake_home / ".claude" / "skills"
+    skill = skills_dir / "lumos-project-notes"
+    check("★前置★ 現場成立:第一次安裝真的裝好了 skill", skill.is_dir(), str(skill))
+    (skill / "MY_NOTE.md").write_text("使用者自己塞的\n", encoding="utf-8")
+
+    # ★重裝★才會觸發「備份既有 skill」那條分支
+    r2 = subprocess.run(["bash", str(pkg / "install.sh"), "--force"], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    out = r2.stdout + r2.stderr
+    check("★前置★ 現場成立:重裝真的走到了「備份既有 skill」那條分支",
+          "已備份既有 skill" in out, out)
+
+    leftovers = sorted(x.name for x in skills_dir.iterdir())
+    check("★安裝端的備份也不得留在 ~/.claude/skills/(會被當新 skill 載入,"
+          "而且★卸載器不會清它★)★",
+          leftovers == ["lumos-project-notes"], str(leftovers))
+    bak_root = fake_home / ".local" / "share" / "lumos-slim" / "backups"
+    baks = sorted(bak_root.glob("lumos-project-notes.bak.*")) if bak_root.is_dir() else []
+    check("★備份必須落在與卸載端相同的位置(不同落點=又一次兩份實作)★",
+          len(baks) == 1, str(baks))
+    check("★使用者塞的檔必須完好跟著搬過去★",
+          bool(baks) and (baks[0] / "MY_NOTE.md").is_file(), str(baks))
+    _sh.rmtree(root, ignore_errors=True)
+
+
+def t_slim_ps1_real_parser_accepts_both_execution_paths():
+    """★2026-08-03:推翻本專案長期掛著的「這台機器沒有 PowerShell,驗不了」★。
+
+    那句誠實邊界被當成免驗證通行證寫進多個節點,而它★對其中兩個機制是錯的★:
+      ・`$Args` 自動變數遮蔽 → PowerShell ★語言層★行為,跨平台一致
+      ・BOM 讓 `iex` 炸第 1 行 → 同上(`irm` 回字串、BOM 不被剝)
+    只有「Windows 磁碟執行時用系統 ANSI codepage 讀檔」才是真正 Windows-only。
+    PowerShell 7 Core 可 `brew install powershell`,前兩者在 macOS 上就驗得到。
+
+    ★通則(值得記進圖譜)★:遇到「跨平台語言層行為」不要直接套用「沒有那個執行環境」
+    這個免驗證通行證——★先問它到底是不是該平台獨有的行為★。
+
+    本測試在有 `pwsh` 時做兩件真事:
+      ① 用真 parser 解析三支 .ps1(磁碟路徑)
+      ② 讀成字串再 ParseInput(模擬 `irm | iex`,★不剝 BOM★)
+    沒有 pwsh 時明確 skip(不假裝驗過)。"""
+    import shutil as _sh, subprocess as _sp
+    from pathlib import Path as _P
+    pwsh = _sh.which("pwsh")
+    if not pwsh:
+        check("★skip★ 本機無 pwsh——★這是環境限制,不是「驗過了」★"
+              "(pwsh 可 brew install;有裝就會真的跑 parser)", True, "no pwsh")
+        return
+    repo = _P(GRAPHCTL).parent.parent
+    script = (
+        '$bad = 0\n'
+        'foreach ($f in @("slim/get.ps1","slim/install.ps1","slim/uninstall.ps1")) {\n'
+        '  $p = Join-Path $env:LUMOS_REPO $f\n'
+        '  $e1 = $null; $t1 = $null\n'
+        '  [void][System.Management.Automation.Language.Parser]::ParseFile($p, [ref]$t1, [ref]$e1)\n'
+        '  if ($e1.Count -ne 0) { "FILE-FAIL $f " + $e1[0].Message; $bad = 1 }\n'
+        '  $raw = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($p))\n'
+        '  $first = $raw.Split([char]10)[0]\n'
+        # ★不可用 $first.StartsWith("#")★:.NET 的 String.StartsWith(string) 預設是
+        # ★文化相關比對,會忽略 U+FEFF 這類零寬字元★——第一個字元明明是 BOM 也回 True,
+        # 這條檢查就永遠不會翻紅(自測踩到,第 16 次假綠的第二層)。改直接比對字元。
+        '  if ($first.Length -eq 0 -or $first[0] -ne [char]0x23) { "IEX-FAIL $f U+" + ("{0:X4}" -f [int][char]$first[0]); $bad = 1 }\n'
+        '}\n'
+        '$snippet = "# entry (Windows/PowerShell)" + [Environment]::NewLine + "Write-Output SNIP"\n'
+        '$plain  = try { Invoke-Expression $snippet | Out-Null; "OK" } catch { "FAIL" }\n'
+        '$bommed = try { Invoke-Expression ([char]0xFEFF + $snippet) | Out-Null; "OK" } catch { "FAIL" }\n'
+        '"MECH plain=$plain bommed=$bommed"\n'
+        'if ($bad -eq 0) { "ALL-OK" }\n')
+    import os as _os
+    r = _sp.run([pwsh, "-NoProfile", "-Command", script],
+                capture_output=True, text=True,
+                env=dict(_os.environ, LUMOS_REPO=str(repo)))
+    check("★前置★ 現場成立:pwsh 真的跑起來並回了結果(不是靜默失敗)",
+          r.returncode == 0 and r.stdout.strip() != "", f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+    check("★真 parser:三支 .ps1 從★磁碟★解析必須零錯誤★",
+          "FILE-FAIL" not in r.stdout, r.stdout + r.stderr)
+    # ★這段第一版是假綠(第 16 次)★:原本用 `ReadAllText` 讀檔再 `ParseInput`,兩處都錯——
+    #   ①`ReadAllText` ★會自動剝掉 BOM★,根本沒模擬到 irm 的行為
+    #   ②`ParseInput`／`ScriptBlock::Create` 都★容忍★開頭的 U+FEFF;
+    #     ★只有實際執行(`Invoke-Expression`)才失敗★——回報者的錯誤本來就是執行期的
+    #     command-not-found(他也寫了「非終止型、後續照跑」),不是 parse error。
+    # 於是把 BOM 加回去的翻紅釘★照樣全綠★。修法兩件:①改用保留 BOM 的讀法,檢查
+    # 第 1 行的第一個字元是不是 `#`(BOM 在前面時它就不再是註解)②另用合成片段
+    # ★真的執行★,自證這個機制存在。
+    check("★保留 BOM 的讀法下,每支 .ps1 的第 1 行仍必須是註解(BOM 會讓它不是)★",
+          "IEX-FAIL" not in r.stdout, r.stdout + r.stderr)
+    check("★前置★ 機制自證:無 BOM 的合成片段執行得起來",
+          "plain=OK" in r.stdout, r.stdout)
+    check("★機制自證:同一片段加上 BOM 就★執行失敗★——這正是 ASCII-only 勝過 BOM 的地方★",
+          "bommed=FAIL" in r.stdout, r.stdout)
+    check("★整體:磁碟與 irm 兩條路徑都過★", "ALL-OK" in r.stdout, r.stdout + r.stderr)
+
+
+def t_ps1_args_shadowing_is_real_language_behavior():
+    """★用真 PowerShell 證明 `$Args` 遮蔽不是傳說★——本專案先前只能掃原始碼長相,
+    現在可以直接跑(見 t_slim_ps1_real_parser_accepts_both_execution_paths 的說明)。
+
+    這條★不是在測本專案的碼★,是在測「合約背後的那個語言事實」還成不成立。
+    ★為什麼值得留★:合約 `param() 不得用 $Args` 的正當性完全建立在這個事實上;
+    哪天 PowerShell 改掉這個行為,這條會翻紅,提醒我們重新檢視合約是否還需要。"""
+    import shutil as _sh, subprocess as _sp
+    pwsh = _sh.which("pwsh")
+    if not pwsh:
+        check("★skip★ 本機無 pwsh——環境限制,不是「驗過了」", True, "no pwsh")
+        return
+    script = (
+        'function Bad  { param($Pkg, $Args)       ; "BAD="  + $Args.Count }\n'
+        'function Good { param($Pkg, $ScriptArgs) ; "GOOD=" + $ScriptArgs.Count }\n'
+        'Bad  -Pkg x -Args       @("--force","--here")\n'
+        'Good -Pkg x -ScriptArgs @("--force","--here")\n')
+    r = _sp.run([pwsh, "-NoProfile", "-Command", script], capture_output=True, text=True)
+    check("★前置★ 現場成立:pwsh 真的跑了兩個函式", "BAD=" in r.stdout and "GOOD=" in r.stdout,
+          r.stdout + r.stderr)
+    check("★語言事實:param 叫 $Args 時,傳進來的值★被自動變數蓋掉、count 為 0★",
+          "BAD=0" in r.stdout, r.stdout)
+    check("★對照:改名 $ScriptArgs 後 count 正確為 2(證明差異來自名字不是別的)★",
+          "GOOD=2" in r.stdout, r.stdout)
+
+
+def t_slim_ps1_ascii_only_no_bom():
+    """★2026-08-03 Windows 真機回歸測試:BOM 只是把問題搬家,不是解法★。
+
+    v1.4 給三支 `.ps1` 加了 BOM 修好「磁碟執行」,卻弄壞了 README 唯一教的
+    `irm ... | iex`——`irm` 回傳的是★普通字串★,PowerShell 不會替它剝 BOM,
+    於是 `U+FEFF` 成了第 1 行的內容,那行註解被當成指令執行:
+
+        Windows/PowerShell : The term 'Windows/PowerShell' is not recognized...
+        + ﻿# get.ps1 — ...一行安裝入口(Windows/PowerShell)
+
+    ★兩難★:無 BOM → 磁碟執行被 cp950 誤解碼;有 BOM → `irm | iex` 炸第 1 行。
+
+    ★正解是消滅問題不是搬家:ASCII-only + 無 BOM★,兩條路徑都不再需要 BOM。
+    中文說明搬到 `slim/WINDOWS-NOTES.md`(知識不丟,但不進 .ps1)。
+
+    ★這條紀律組織內部早就有★:LandmarkMember 的 CLAUDE.md〈Deploy 腳本踩雷規則〉
+    第 1 條「ASCII-only 規則」,理由一字不差,而且是踩了三輪 prod deploy 失敗才立的。
+    ★我設計這幾支檔案時沒有去查過——那正是 CLAUDE.md 第一條「圖譜先行」要防的。★
+
+    ★本測試是機械完備的★:斷言「零個非 ASCII 位元組」直接消滅整個問題類別
+    (不需要再模擬 DBCS 規則、也不需要判斷哪些字元危險)。"""
     from pathlib import Path as _P
     repo = _P(GRAPHCTL).parent.parent
-
-    def _dbcs_swallowed_quotes(b: bytes) -> int:
-        """模擬 Windows MultiByteToWideChar 的 DBCS 規則:前導位元組無條件吃下一個。"""
-        n = i = 0
-        while i < len(b) - 1:
-            if 0x81 <= b[i] <= 0xFE:
-                if b[i + 1] == 0x22:
-                    n += 1
-                i += 2
-            else:
-                i += 1
-        return n
-
     for name in ("get.ps1", "install.ps1", "uninstall.ps1"):
         raw = (repo / "slim" / name).read_bytes()
-        check(f"★{name} 必須是 UTF-8 with BOM(沒 BOM 中文 Windows 直接 parse error)★",
-              raw[:3] == b"\xef\xbb\xbf", repr(raw[:8]))
-        body = raw[3:]
-        # ★前置★:證明這個檔真的含會觸發 DBCS 規則的位元組,否則這條斷言在測空氣
-        check(f"★前置★ {name} 真的含 DBCS 前導位元組範圍的位元組(否則本測試沒鑑別力)",
-              any(0x81 <= x <= 0xFE for x in body), name)
-        # ★第一版這裡寫成 `check(..., True, "")` ——恆真斷言(假綠第①型),
-        # 由獨立審計員抓到:不管吞噬數算出多少都會 ✓,連「吞掉 0 個」這種
-        # 自相矛盾的訊息都照樣過。而旁邊那條「前置」只驗「檔案含 DBCS 範圍位元組」,
-        # 門檻鬆到幾乎任何含中文的檔都過,接不住這個洞。
-        # ★真正要斷言的是「這個檔真的有危險」——沒有危險就不需要 BOM★。
-        _n = _dbcs_swallowed_quotes(body)
-        check(f"★{name} 真的會被 DBCS 吞掉引號(實測 {_n} 個)——這才是 BOM 存在的理由★",
-              _n > 0, f"吞噬數={_n};若為 0 代表這個檔已無此風險,該重新檢視合約是否還需要")
+        check(f"★{name} 不得有 BOM(有 BOM 會讓 `irm | iex` 在第 1 行就炸)★",
+              raw[:3] != b"\xef\xbb\xbf", repr(raw[:8]))
+        bad = [(i, b) for i, b in enumerate(raw) if b > 127]
+        check(f"★{name} 必須是 ASCII-only(非 ASCII 位元組會在 cp950 下撞壞引號配對)★",
+              not bad,
+              f"發現 {len(bad)} 個非 ASCII 位元組,前幾個位移: {[i for i, _ in bad[:8]]}\n"
+              + (raw.decode("utf-8", "replace")[max(0, bad[0][0] - 60):bad[0][0] + 60] if bad else ""))
 
-    ga = repo / ".gitattributes"
-    check("★必須有 .gitattributes 釘住 .ps1 的編碼(否則 BOM 會被工具剝掉)★",
-          ga.is_file() and "*.ps1" in ga.read_text(encoding="utf-8"), 
-          ga.read_text(encoding="utf-8")[:200] if ga.is_file() else "(無 .gitattributes)")
+    notes = repo / "slim" / "WINDOWS-NOTES.md"
+    check("★中文設計說明必須有落點(不是刪掉,是搬家)★",
+          notes.is_file() and len(notes.read_text(encoding="utf-8")) > 500,
+          str(notes))
+
+
+def t_slim_ps1_args_param_not_shadowed_by_automatic_variable():
+    """★2026-08-03 Windows 真機回歸測試的 MAJOR★:`param($Pkg, $Args)` 讓
+    ★所有命令列參數靜默失效★——`--force` / `--here` / `-y` 全部收不到。
+
+    現象:明明加了 `--force`,卻仍印「已存在,加 --force 覆寫」。
+    根因:`$Args` 是 PowerShell ★自動變數★(該函式自己「未綁定的參數」),
+    會蓋掉呼叫端傳進來的值;於是 `@Args` splatting 展開成★空★。
+    最小重現(回報者提供,已納入 WINDOWS-NOTES.md):
+
+        function Invoke-Test { param($Pkg, $Args); ... }
+        Invoke-Test -Pkg "x" -Args @("--force")
+        → 函式內 $Args = []  count=0
+
+    ★這不是 v1.4 引入的★——前一版把邏輯包進函式時就在了,前一份回報沒抓到是
+    因為當時沒傳過任何參數。★「沒人用過的路徑不會有人回報」是真的盲區★。
+
+    ★誠實邊界★:這條是原始碼長相檢查(假綠第③型),★刻意如此★——開發機沒有
+    PowerShell 跑不了。它買的是「不會退回到已知會壞的寫法」。"""
+    import re as _re
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    for name in ("get.ps1", "install.ps1", "uninstall.ps1"):
+        text = (repo / "slim" / name).read_text(encoding="utf-8")
+        code = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
+        code_text = "\n".join(code)
+        check(f"★前置★ {name} 真的有 param(...) 與 splatting(否則本測試空轉)",
+              "param(" in code_text and "@" in code_text, code_text[:300])
+        check(f"★{name} 的 param 不得使用保留名 $Args(會被自動變數蓋掉)★",
+              not _re.search(r"param\([^)]*\$Args\b", code_text), code_text)
+        check(f"★{name} 不得對 $Args 做 splatting(@Args 會展開成空)★",
+              "@Args" not in code_text, code_text)
+        check(f"★{name} 入口必須把 $args 傳給非保留名的參數★",
+              _re.search(r"-ScriptArgs\s+\$args", code_text) is not None, code_text)
 
 
 def t_slim_ps1_subprocess_output_does_not_pollute_return():
@@ -15898,8 +16059,11 @@ def t_slim_ps1_scripts_avoid_session_killing_trailing_exit():
         check(f"★{name} 仍把 rc 寫回 $LASTEXITCODE 供呼叫端讀取★",
               "$LASTEXITCODE = $LASTEXITCODE" in text or "$global:LASTEXITCODE" in text,
               text)
-        check(f"★{name} 留有『此修法未在真機驗證』的誠實聲明★",
-              ("真機" in text and "驗證" in text), text)
+        # ★2026-08-03 改判準★:三支 .ps1 已改為 ASCII-only(見下方 BOM/DBCS 那條測試),
+        # 中文說明搬到 slim/WINDOWS-NOTES.md。誠實聲明因此也必須是英文,且改為
+        # ★指向那份筆記★——把「為什麼這樣寫」留在檔案裡是重點,語言是次要。
+        check(f"★{name} 必須指向 WINDOWS-NOTES.md(中文設計說明的落點)★",
+              "WINDOWS-NOTES.md" in text, text)
 
 
 def t_slim_ps1_error_branches_still_halt_via_return():
