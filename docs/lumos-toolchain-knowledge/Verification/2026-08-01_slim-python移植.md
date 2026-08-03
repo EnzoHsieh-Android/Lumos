@@ -2,7 +2,7 @@
 type: verification
 status: pass
 date: 2026-08-01
-valid_under: "分支 main;slim/install.py + slim/uninstall.py 現行版本(IS_WIN = os.name==\"nt\" or LUMOS_SLIM_SIMULATE_WINDOWS==\"1\");slim/install.sh、slim/uninstall.sh、slim/install.ps1、slim/uninstall.ps1、slim/get.ps1 現行版本;scripts/slim-gen.py 組包清單含全部新檔;Python3 stdlib 零依賴前提不變。★Windows 分支僅靠環境變數注入驗過分支邏輯,未在真機 Windows 上跑過★,見下方〈測不到什麼〉"
+valid_under: "分支 main;slim/install.py + slim/uninstall.py 現行版本(IS_WIN = os.name==\"nt\" or LUMOS_SLIM_SIMULATE_WINDOWS==\"1\");slim/install.sh、slim/uninstall.sh、slim/install.ps1、slim/uninstall.ps1、slim/get.ps1 現行版本;scripts/slim-gen.py 組包清單含全部新檔;Python3 stdlib 零依賴前提不變。★2026-08-03 更新:本標記已兌現——真機三輪驗證(v1.3/v1.4/v1.5)完成,v1.5 一次通過;逐項「有證據 vs 仍無證據」對照見 [[Verification/2026-08-03_Windows真機三輪驗證通過]] 與 slim/README.md。★本節點原文保留不改★(它記的是當時的狀態),但★不得再拿本段當「Windows 未驗證」的依據★。★ ★Windows 分支僅靠環境變數注入驗過分支邏輯,未在真機 Windows 上跑過★,見下方〈測不到什麼〉"
 revalidate_when: "改動 install.py/uninstall.py 的 IS_WIN 分支(_install_cli 的 shim 產生邏輯、PATH 提示訊息)、改動 install.sh/uninstall.sh/install.ps1/uninstall.ps1/get.ps1 五支薄殼的參數轉發方式、改動 scripts/slim-gen.py 的組包清單、或未來真的拿到 Windows 機器做真機驗證後(屆時要把本節點與 slim/README.md 的『未驗證』標記一併更新,不能讓已驗證的部分繼續掛著誠實標記)"
 tags:
   - type/verification
@@ -12,6 +12,8 @@ plan_refs:
 summary: |-
   TEST:`python3 scripts/test_lumos.py -k slim` 253 checks 全綠(40 支 t_slim_* 函式;`t_slim_(install|uninstall|get)*` 系列 19→24,新增 5 支:2 支薄殼轉發參數獨立單元測試 + 3 支 Windows 分支邏輯測試)。既有 19 支斷言一條未鬆——逐條改成驗 Python 實作(`bash install.sh`/`uninstall.sh` 透過薄殼呼叫 `install.py`/`uninstall.py`),行為斷言字串/rc/檔案狀態全部保留原樣。
   VERIFY:[[Systems/slim-install-安裝器]]、[[Systems/slim-uninstall-一行卸載]]、[[Systems/slim-gen-生成器]]、[[Systems/slim-get-一行安裝]]、[[Systems/slim-readme]] 的安裝/卸載邏輯從 bash-only 搬成 Python(stdlib only)+ 薄殼(`.sh`/`.ps1`),讓 Windows 真的能用——完整搬移對照表、Windows 分支測到什麼/沒測到什麼、發現的一個真 bug(備份路徑秒級時間戳碰撞)見報告 `.superpowers/sdd/公開精簡版_實作計畫/task-13-report.md`。
+related:
+  - "[[Verification/2026-08-03_Windows真機三輪驗證通過]]"
 ---
 # 2026-08-01_slim-python移植
 

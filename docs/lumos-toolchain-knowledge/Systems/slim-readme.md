@@ -31,6 +31,7 @@ verified_by:
   - "[[Verification/2026-07-31_slim-claude-md第三次裁定取代與備份還原]]"
   - "[[Verification/2026-08-01_slim-python移植]]"
   - "[[Verification/2026-08-01_slim-windows兩缺陷修復]]"
+  - "[[Verification/2026-08-03_Windows真機三輪驗證通過]]"
 related:
   - "[[Systems/slim-scan-掃描器]]"
   - "[[Systems/slim-get-一行安裝]]"
