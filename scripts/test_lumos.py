@@ -13763,7 +13763,13 @@ def t_slim_uninstall_backs_up_and_preserves_custom_files():
     check("uninstall.sh rc0", r2.returncode == 0, r2.stdout + r2.stderr)
 
     skills_dir = fake_home / ".claude" / "skills"
-    baks = sorted(skills_dir.glob("lumos-project-notes.bak.*"))
+    # ★2026-08-03 行為變更(真機驗證 MINOR⑤)★:備份不再留在 ~/.claude/skills/
+    # ——那是 Claude Code 掃描 skill 的目錄,留在那裡會被當成一個新 skill 載入。
+    _bak_root = fake_home / ".local" / "share" / "lumos-slim" / "backups"
+    baks = sorted(_bak_root.glob("lumos-project-notes.bak.*")) if _bak_root.is_dir() else []
+    check("★備份★不得★留在 ~/.claude/skills/(會被當成新 skill 載入)★",
+          not list(skills_dir.glob("lumos-project-notes.bak.*")),
+          str(sorted(x.name for x in skills_dir.iterdir())) if skills_dir.is_dir() else "(無)")
     check("★備份存在★ skill 目錄被備份成 .bak.<timestamp>而非直接刪除",
           len(baks) == 1, str(list(skills_dir.iterdir())))
     check("原 skill 路徑已不存在(被 mv 走,不是複製殘留)",
@@ -13815,7 +13821,7 @@ def t_slim_uninstall_refuses_foreign_bin():
           bin_path.read_text(encoding="utf-8") == "#!/bin/sh\necho USER OWN BINARY\n", "")
     check("★步驟互不阻擋★ bin 判定不符後,skill 目錄仍照常被備份(不再『判定失敗即中止』)",
           not (fake_home / ".claude" / "skills" / "lumos-project-notes").exists()
-          and any((fake_home / ".claude" / "skills").glob("lumos-project-notes.bak.*")),
+          and any((fake_home / ".local" / "share" / "lumos-slim" / "backups").glob("lumos-project-notes.bak.*")),
           str(list((fake_home / ".claude" / "skills").iterdir())))
 
     # --force 是唯一合法的繞過方式,且要明確帶
@@ -13861,7 +13867,7 @@ def t_slim_uninstall_idempotent_second_run():
     check("第一次 uninstall rc0", r1.returncode == 0, r1.stdout + r1.stderr)
 
     skills_dir = fake_home / ".claude" / "skills"
-    baks_after_1 = sorted(skills_dir.glob("lumos-project-notes.bak.*"))
+    baks_after_1 = sorted((fake_home / ".local" / "share" / "lumos-slim" / "backups").glob("lumos-project-notes.bak.*"))
     check("第一次跑完備份存在(前置條件)", len(baks_after_1) == 1, str(list(skills_dir.iterdir())))
     content_after_1 = ((baks_after_1[0] / "my-own-notes.txt").read_text(encoding="utf-8")
                         if baks_after_1 else None)
@@ -13872,7 +13878,7 @@ def t_slim_uninstall_idempotent_second_run():
     check("★minor-2★ 第二次 uninstall 不炸,rc=0(冪等——語意等同「本來就沒裝」)",
           r2.returncode == 0, r2.stdout + r2.stderr)
 
-    baks_after_2 = sorted(skills_dir.glob("lumos-project-notes.bak.*"))
+    baks_after_2 = sorted((fake_home / ".local" / "share" / "lumos-slim" / "backups").glob("lumos-project-notes.bak.*"))
     check("★minor-2★ 第二次不產生多餘的空備份目錄(數量不變,仍是 1)",
           len(baks_after_2) == len(baks_after_1) == 1, str(list(skills_dir.iterdir())))
     check("★minor-2★ 第一次備份出來的自訂檔,第二次跑完後仍完好",
@@ -14026,8 +14032,17 @@ def t_slim_uninstall_removes_manifest_when_bin_cleared():
                         capture_output=True, text=True, env=env)
     check("★卸載後 manifest 檔案真的不存在★(存在性斷言,不是掃原始碼)",
           not manifest.exists(), ru.stdout + ru.stderr)
-    check("★空的 lumos-slim/ 父目錄也一併清掉★",
-          not manifest.parent.exists(), ru.stdout + ru.stderr)
+    # ★2026-08-03 行為變更★:skill 備份現在落在 lumos-slim/backups/(不再留在
+    # ~/.claude/skills/,那會被當成新 skill 載入)。於是 lumos-slim/ 不再是空的,
+    # 「清空目錄」那步★正確地★不會觸發——但★刻意保留 ≠ 可以不講★,
+    # 彙總必須明說留了什麼、留在哪(否則就是原本 manifest 殘留那條缺陷的同一形狀)。
+    _bak = manifest.parent / "backups"
+    check("★前置★ 現場成立:這次卸載真的產生了 skill 備份(否則下面在測不成立的現場)",
+          _bak.is_dir() and any(_bak.iterdir()), ru.stdout + ru.stderr)
+    check("★有備份時 lumos-slim/ 正確地保留(它不是空的)★",
+          manifest.parent.exists(), ru.stdout + ru.stderr)
+    check("★但彙總必須明講留了什麼、留在哪(刻意保留不等於可以靜默)★",
+          "刻意保留" in ru.stdout and "backups" in ru.stdout, ru.stdout)
     check("★但 ~/.local/share 本身絕不能被動★(那是眾多工具共用的地方)",
           (fake_home / ".local" / "share").is_dir(), ru.stdout + ru.stderr)
     check("★乾淨卸載 rc0★", ru.returncode == 0, ru.stdout + ru.stderr)
@@ -14207,6 +14222,14 @@ def t_slim_uninstall_manifest_parent_cleanup_is_best_effort():
     check("★前置★ install.sh rc0", ri.returncode == 0, ri.stdout + ri.stderr)
 
     manifest = fake_home / ".local" / "share" / "lumos-slim" / "manifest.json"
+    # ★2026-08-03:先把 skill 拿掉,讓卸載★不會★產生備份★——備份會落在
+    # lumos-slim/backups/,那樣 lumos-slim/ 就不是空的、`rmdir` 這一步根本不會被
+    # 呼叫到,現場就不成立了(第④型)。這條測的是「rmdir 失敗時只印一句、不升級 rc」,
+    # 前提是 rmdir 真的會被嘗試。
+    import shutil as _sh
+    _skill = fake_home / ".claude" / "skills" / "lumos-project-notes"
+    if _skill.is_dir():
+        _sh.rmtree(_skill)
     share = manifest.parent.parent
     orig_mode = share.stat().st_mode
     _os.chmod(share, 0o500)          # r-x:lumos-slim/ 仍可寫(unlink 過),但不能被 rmdir
@@ -14452,6 +14475,207 @@ def t_slim_install_non_utf8_claude_md_reports_cleanly():
           (fake_home / ".local" / "bin" / "lumos").exists()
           and (fake_home / ".claude" / "skills" / "lumos-project-notes").is_dir(),
           str(sorted(_os.listdir(fake_home / ".local" / "bin"))))
+
+
+def t_slim_uninstall_readonly_pkg_files_still_removed():
+    """★2026-08-03 中文 Windows 真機驗證的 MAJOR★:卸載 `~/.lumos-slim` 時撞上
+    git 設成唯讀的 pack 檔(.idx/.pack)——`shutil.rmtree` 預設 `PermissionError`。
+
+    ★真正的傷害不是「刪不掉」,是「刪到一半」★:訊息只說「移除失敗」,聽起來像
+    什麼都沒動;實測 `.git` 目錄還在但 HEAD/config/index 已被刪掉,留下一個
+    「看起來像 repo、實際已損壞」的目錄。而 `get.ps1` 用 `Test-Path "$Dest\.git"`
+    判斷「是不是我們的 clone」→ True → 跑 `git pull` → rc=128 → 使用者看到
+    「可能有本地改動,或不是 fast-forward」——★完全指錯方向,把人鎖死★。
+
+    ★本測試驗真行為(不是掃長相)★:真的建一個含唯讀檔的 pkg,真的跑卸載,
+    斷言目錄★完全消失★。macOS 上的唯讀語意足以觸發同一條 rmtree 例外路徑。
+
+    ★翻紅釘★:把 `onerror`/`onexc` 拿掉 → 「完全移除」翻紅。"""
+    import tempfile as _tf, os as _os, stat as _st, shutil as _sh
+    from pathlib import Path as _P
+    if hasattr(_os, "geteuid") and _os.geteuid() == 0:
+        check("★skip★ root 身分下權限不生效", True, "running as root")
+        return
+    root = _P(_tf.mkdtemp(prefix="gctl-rdonly-"))
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+    proj = root / "proj"; proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案\n\n內容\n", encoding="utf-8")
+    subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                   capture_output=True, text=True, env=env)
+
+    # ★模擬 Windows 上 git 對 pack 檔設的唯讀屬性★
+    packdir = fake_home / ".lumos-slim" / ".git" / "objects" / "pack"
+    packdir.mkdir(parents=True, exist_ok=True)
+    idx = packdir / "p.idx"
+    idx.write_text("packdata\n", encoding="utf-8")
+    _os.chmod(idx, 0o444)
+    # ★這段第一版是假綠(第 15 次),記為教訓★:原本只 `chmod 444` 那個★檔案★,
+    # 以為就重現了 Windows 的情境——但 ★POSIX 與 Windows 的擋法根本不同★:
+    #   Windows:檔案的「唯讀屬性」本身就擋刪除
+    #   POSIX  :刪檔只看★父目錄★的寫入權,檔案自己 444 照刪不誤
+    # 於是 macOS 上 rmtree 兩種寫法都成功,把 onerror 拿掉的翻紅釘★照樣全綠★。
+    # 修法:改成讓★父目錄★不可寫(POSIX 上真的會擋),這是同一條 rmtree 例外路徑的
+    # 可及類比。★誠實邊界:這不是與 Windows 相同的機制,只是同樣會逼出 PermissionError
+    # 並讓 _on_rm_error 有機會補權限;真機 Windows 的唯讀屬性路徑仍未驗過。★
+    _os.chmod(packdir, 0o555)
+    check("★前置★ 現場成立:pack 目錄不可寫(POSIX 上這才擋得住 rmtree)",
+          not (packdir.stat().st_mode & _st.S_IWUSR), oct(packdir.stat().st_mode))
+    check("★前置★ 現場成立:pkg 內容像本包(否則 rmtree 那條分支根本不會走到)",
+          (fake_home / ".lumos-slim" / "scripts" / "lumos").is_file()
+          and (fake_home / ".lumos-slim" / "install.sh").is_file(), "pkg 結構不對")
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    out = ru.stdout + ru.stderr
+    check("★唯讀檔不得擋住移除——~/.lumos-slim 必須完全消失★",
+          not (fake_home / ".lumos-slim").exists(), out)
+    check("★不得留下半殘的目錄(那會讓 get.ps1 誤判成『可用的 clone』把人鎖死)★",
+          not (fake_home / ".lumos-slim" / ".git").exists(), out)
+    _sh.rmtree(root, ignore_errors=True)
+
+
+def t_slim_uninstall_skill_backup_leaves_skills_dir_clean():
+    """★2026-08-03 真機驗證的 MINOR⑤★:卸載後 `~/.claude/skills/` 底下留下
+    `lumos-project-notes.bak.<timestamp>`,而那個目錄含 `SKILL.md`——
+    ★下一個 Claude Code session 把它當成一個有效 skill 載入★,實測 skill 清單
+    真的多出一條。也就是★卸載沒有讓這個 skill 停止作用,只是換了個怪名字繼續生效★,
+    而訊息還印「已備份並移除」——它根本沒離開那個目錄。
+
+    設計意圖(怕誤刪使用者塞的東西)是對的,★落點錯了★:`~/.claude/skills/` 正是
+    Claude Code 掃描 skill 的目錄。改落 `~/.local/share/lumos-slim/backups/`
+    ——那裡已經是安裝器放 manifest 的地方,語意一致且不在任何掃描範圍。
+
+    ★同時釘住「刻意保留 ≠ 可以靜默」★:備份會讓 lumos-slim/ 不再是空的,
+    「清空目錄」那步正確地不觸發,但彙總必須明講留了什麼、留在哪——
+    否則就是原本 manifest 殘留那條缺陷的同一形狀。
+
+    ★翻紅釘★:落點改回 `_unique_backup_path(skill)` → 前兩條翻紅。"""
+    import tempfile as _tf, os as _os, shutil as _sh
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-bakloc-"))
+    fake_home = root / "home"
+    pkg = _slim_make_pkg_at(fake_home / ".lumos-slim")
+    _slim_copy_uninstall_files(pkg)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    env = dict(_os.environ, HOME=str(fake_home))
+    proj = root / "proj"; proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# 專案\n\n內容\n", encoding="utf-8")
+    subprocess.run(["bash", str(pkg / "install.sh")], cwd=str(proj),
+                   capture_output=True, text=True, env=env)
+
+    skills_dir = fake_home / ".claude" / "skills"
+    skill = skills_dir / "lumos-project-notes"
+    check("★前置★ 現場成立:skill 真的裝好了(否則備份分支不會走到)", skill.is_dir(), str(skill))
+    (skill / "MY_NOTE.md").write_text("使用者自己塞的筆記\n", encoding="utf-8")
+
+    ru = subprocess.run(["bash", str(pkg / "uninstall.sh")], cwd=str(proj),
+                        capture_output=True, text=True, env=env)
+    out = ru.stdout + ru.stderr
+    leftovers = sorted(x.name for x in skills_dir.iterdir()) if skills_dir.is_dir() else []
+    check("★~/.claude/skills/ 底下不得留下任何東西(留了會被當成新 skill 載入)★",
+          leftovers == [], str(leftovers))
+    bak_root = fake_home / ".local" / "share" / "lumos-slim" / "backups"
+    baks = sorted(bak_root.glob("lumos-project-notes.bak.*")) if bak_root.is_dir() else []
+    check("★備份必須真的存在於新落點(不是被直接刪掉)★", len(baks) == 1, str(baks))
+    check("★使用者自己塞的檔必須完好跟著搬過去★",
+          bool(baks) and (baks[0] / "MY_NOTE.md").is_file(), str(baks))
+    check("★彙總必須明講留了什麼、留在哪(刻意保留不等於可以靜默)★",
+          "刻意保留" in out and "backups" in out, out)
+    _sh.rmtree(root, ignore_errors=True)
+
+
+def t_slim_ps1_utf8_bom_and_no_dbcs_quote_swallow():
+    """★2026-08-03 中文 Windows 11 真機驗證的 BLOCKER★:README 教的一行安裝指令
+    在 cp950 系統上 ★100% 失敗、什麼都沒裝★。
+
+    根因:Windows PowerShell 5.1 從★磁碟★執行 .ps1 時,★沒有 BOM 就用系統 ANSI
+    codepage 讀檔★,不是 UTF-8。這幾支有大量中文註解,而 Windows 的
+    `MultiByteToWideChar` 對 DBCS ★前導位元組(0x81-0xFE)會無條件吃掉下一個位元組★
+    ——即使那個位元組不是合法尾碼。UTF-8 中文字的位元組序列裡,只要某個前導位元組
+    緊接著 `"`(0x22),★那個引號就消失了★,parser 配對錯亂,最後在一行★純 ASCII★
+    的程式碼上報 "The string is missing the terminator"。
+
+    ★這條測試驗的是真實失效機制,不是原始碼長相(不是第③型)★:直接在位元組層模擬
+    Windows 的 DBCS 吞噬規則,數出「會被吃掉幾個引號」。真機回報的數字是
+    get.ps1 少 5 個、install/uninstall 各少 1 個——★本測試在 macOS 上重現出完全
+    相同的 5/1/1★,是這個機制的獨立確認。
+
+    修法=三支存成 UTF-8 with BOM(有 BOM 時 PowerShell 直接走 UTF-8,不碰 ANSI),
+    另加 .gitattributes 防 BOM 被工具剝掉。
+
+    ★誠實邊界★:BOM 存在與吞噬數為 0 都是機械可驗的;但「PowerShell 真的因此不再
+    parse error」★仍未在真機重驗★(開發機是 macOS)。本測試買的是「不會退回到已知
+    會爆的狀態」,不是「Windows 上一定沒問題」。"""
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+
+    def _dbcs_swallowed_quotes(b: bytes) -> int:
+        """模擬 Windows MultiByteToWideChar 的 DBCS 規則:前導位元組無條件吃下一個。"""
+        n = i = 0
+        while i < len(b) - 1:
+            if 0x81 <= b[i] <= 0xFE:
+                if b[i + 1] == 0x22:
+                    n += 1
+                i += 2
+            else:
+                i += 1
+        return n
+
+    for name in ("get.ps1", "install.ps1", "uninstall.ps1"):
+        raw = (repo / "slim" / name).read_bytes()
+        check(f"★{name} 必須是 UTF-8 with BOM(沒 BOM 中文 Windows 直接 parse error)★",
+              raw[:3] == b"\xef\xbb\xbf", repr(raw[:8]))
+        body = raw[3:]
+        # ★前置★:證明這個檔真的含會觸發 DBCS 規則的位元組,否則這條斷言在測空氣
+        check(f"★前置★ {name} 真的含 DBCS 前導位元組範圍的位元組(否則本測試沒鑑別力)",
+              any(0x81 <= x <= 0xFE for x in body), name)
+        # ★第一版這裡寫成 `check(..., True, "")` ——恆真斷言(假綠第①型),
+        # 由獨立審計員抓到:不管吞噬數算出多少都會 ✓,連「吞掉 0 個」這種
+        # 自相矛盾的訊息都照樣過。而旁邊那條「前置」只驗「檔案含 DBCS 範圍位元組」,
+        # 門檻鬆到幾乎任何含中文的檔都過,接不住這個洞。
+        # ★真正要斷言的是「這個檔真的有危險」——沒有危險就不需要 BOM★。
+        _n = _dbcs_swallowed_quotes(body)
+        check(f"★{name} 真的會被 DBCS 吞掉引號(實測 {_n} 個)——這才是 BOM 存在的理由★",
+              _n > 0, f"吞噬數={_n};若為 0 代表這個檔已無此風險,該重新檢視合約是否還需要")
+
+    ga = repo / ".gitattributes"
+    check("★必須有 .gitattributes 釘住 .ps1 的編碼(否則 BOM 會被工具剝掉)★",
+          ga.is_file() and "*.ps1" in ga.read_text(encoding="utf-8"), 
+          ga.read_text(encoding="utf-8")[:200] if ga.is_file() else "(無 .gitattributes)")
+
+
+def t_slim_ps1_subprocess_output_does_not_pollute_return():
+    """★2026-08-03 真機驗證的 MAJOR★:安裝★成功★那次的收尾爆:
+
+        Cannot convert argument "exitCode", with value: "System.Object[]",
+        for "SetShouldExit" to type "System.Int32"
+
+    根因:PowerShell 函式的 `return` 會帶出函式內★所有未被消費的輸出★。
+    `& $Py.Source ...` 的 stdout 沒被指派給任何變數就進了輸出流,
+    `return $LASTEXITCODE` 再追加一個數字 → 呼叫端收到 ★Object[]★ 不是數字。
+
+    ★`$code = $LASTEXITCODE; return $code` 解決不了★——問題出在 `&` 的 stdout
+    進了輸出流,不是 return 的寫法。正解是 `| Out-Host`(直接進主機,不進 pipeline)。
+
+    ★誠實邊界★:這條是第③型(驗寫法不驗行為),★而且刻意如此★——開發機沒有
+    PowerShell,一行 .ps1 都跑不了。它買的是「每個 `&` 呼叫外部程式的地方都接了
+    `| Out-Host`」這個對稱性,不是「Windows 上真的回數字」。"""
+    import re as _re
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).parent.parent
+    for name in ("get.ps1", "install.ps1", "uninstall.ps1"):
+        txt = (repo / "slim" / name).read_text(encoding="utf-8-sig")
+        lines = [l for l in txt.splitlines() if not l.strip().startswith("#")]
+        calls = [l for l in lines if _re.match(r"\s*&\s+\$", l)]
+        check(f"★前置★ {name} 真的有 `&` 呼叫外部程式(找不到代表正則失效、測試空轉)",
+              len(calls) >= 1, "\n".join(lines[:40]))
+        for c in calls:
+            check(f"★{name} 的 `&` 呼叫必須接 | Out-Host(否則 return 帶出整包輸出變 Object[])★",
+                  "Out-Host" in c, c)
 
 
 def t_slim_get_ps1_every_git_call_checks_lastexitcode():

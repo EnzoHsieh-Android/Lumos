@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-08-02
+updated: 2026-08-03
 tags:
   - type/system
   - status/done
@@ -45,6 +45,7 @@ verified_by:
   - "[[Verification/2026-08-01_slim-終審三缺陷修復]]"
   - "[[Verification/2026-08-01_slim-manifest殘留與代碼審六輪]]"
   - "[[Verification/2026-08-02_slim三缺陷修復_實驗產出]]"
+  - "[[Verification/2026-08-03_Windows真機驗證五缺陷修復]]"
 related:
   - "[[Systems/slim-get-一行安裝]]"
   - "[[Systems/slim-uninstall-一行卸載]]"

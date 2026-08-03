@@ -2,12 +2,14 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-08-02
+updated: 2026-08-03
 tags:
   - type/system
   - status/done
 summary: |-
   FLOW:`curl -fsSL <raw-url>/get.sh | bash` → 檢查 `git` 存在(找不到→清楚錯誤訊息+rc2,不留 traceback) → `~/.lumos-slim` 已是合法 git repo(有 `.git`)→ `git pull --ff-only`(冪等更新)｜已存在但非 git repo→拒絕、rc2、印訊息｜不存在→`git clone` 首次安裝 → 檢查 `install.sh` 存在 → 執行 `~/.lumos-slim/install.sh "$@"`(額外參數如 `--force` 原樣轉發)
+  KEY:★INVARIANT★ 三支 `.ps1` 必須是 UTF-8 with BOM——Windows PowerShell 5.1 從磁碟執行 .ps1 時★沒有 BOM 就用系統 ANSI codepage 讀檔★,而 Windows 的 DBCS 前導位元組(0x81-0xFE)★會無條件吃掉下一個位元組★;中文註解的位元組序列讓某個前導位元組緊接著 `"`,引號消失、parser 配對錯亂,最後在★純 ASCII 那行★報 missing terminator。2026-08-03 中文 Windows 11(cp950)真機實測:★README 教的一行安裝指令 100% 失敗、什麼都沒裝★。★因果要分開講(獨立審計指出原敘述混淆)★:`irm | iex` 是下載成字串由 .NET 以 UTF-8 解碼、★不經磁碟★,所以 get.ps1 自己少的 5 個引號★不是★那條指令失敗的原因;真正炸的是它下游從★磁碟★執行的 `install.ps1`(少 1 個引號就夠讓 parser 崩)。get.ps1 的 5 個要等到有人照它註解建議「先 curl -o 存檔再跑」時才發作。★影響範圍是 CJK/雙位元組(DBCS)語系★(cp950/936/932/949),★不是「所有非西歐語系」★——cp1251 西里爾/1253 希臘/1254 土耳其/1255 希伯來/1256 阿拉伯/1257 波羅的海/1258 越南全都是★單位元組★編碼,與 cp1252 一樣不會觸發吞噬(原敘述誇大,獨立審計糾正)。`.gitattributes` 釘 `*.ps1 text working-tree-encoding=UTF-8 eol=CRLF` 防 BOM 被剝掉 [test:t_slim_ps1_utf8_bom_and_no_dbcs_quote_swallow] [audit:sonnet/2026-08-03]
+  KEY:★`&` 呼叫外部程式必須接 `| Out-Host`★——PowerShell 函式的 `return` 會帶出函式內所有未被消費的輸出,`&` 的 stdout 沒被指派就進了輸出流,`return $LASTEXITCODE` 再追加一個數字 → 呼叫端收到 ★Object[]★ 不是數字,實測 `SetShouldExit` 直接爆。★`$code = $LASTEXITCODE; return $code` 解決不了★(問題在 `&` 的 stdout 進了輸出流,不是 return 的寫法) [test:t_slim_ps1_subprocess_output_does_not_pollute_return]
   KEY:★`get.ps1` 的 `git clone` 漏檢 `$LASTEXITCODE`(2026-08-02 對照實驗抓到,已修)★——同一個 `Invoke-Get` 函式裡,`git pull` 那一支有檢 `$LASTEXITCODE`、`git clone` 那一支沒有,純粹是漏寫的不對稱。★不能靠 `$ErrorActionPreference = "Stop"` 兜底★:它只管 PowerShell cmdlet,原生執行檔(git.exe)回非零 exit code **不會**觸發終止(PS 7.3 起的 `$PSNativeCommandUseErrorActionPreference` 才改這行為,而本包要支援 Windows PowerShell 5.1)。漏掉的後果不是「靜默失敗」而是★把使用者帶去錯的方向★:clone 失敗(沒網路/私有 repo 沒權限/磁碟滿)後照樣往下走,下一段 `Test-Path $InstallScript` 判假,使用者看到的是「交付包內容可能不完整」——網路/權限問題被誤導成「這個包壞掉了」。修法=clone 後補 `$LASTEXITCODE -ne 0` → 講網路與存取權限的訊息 + return 2。★守的是對稱性不是行為★:綁定測試 `t_slim_get_ps1_every_git_call_checks_lastexitcode` 掃「每個行首 git 呼叫後幾行內要有 `$LASTEXITCODE`」,屬 [[Systems/測試假綠形態]] 第③型(驗寫法不驗行為)且★刻意如此★——開發機是 macOS 沒有 PowerShell,一行 ps1 都跑不了;它買到的是「新增 git 呼叫時不會忘了配一道檢查」,★不得因為它綠了就宣稱 get.ps1 在 Windows 上正確★(已知限制:管線中段的 git 抓不到)
   KEY:★固定落點理由★——舊版 [[Systems/slim-install-安裝器]] 用 `$(dirname "$0")` 定位自身;透過 `curl | bash` 執行時 `$0` 是 bash 本身/`/dev/stdin`,沒有穩定檔案位置可定位。固定 `~/.lumos-slim` 給包一個穩定的家,也讓 [[Systems/slim-uninstall-一行卸載]] 有東西可以拿來做 sha256 內容比對(見該節點的硬合約)
   KEY:★冪等的精確定義★——「不炸」指的是不出現 `git clone` 對非空目錄的爆炸式錯誤(`already exists and is not an empty directory`)。第二次執行呼叫到的 `install.sh` 仍有自己既有的碰撞保護(未帶 `--force` 時偵測到 `~/.local/bin/lumos` 已存在會拒絕、rc2)——這是 install.sh 既有的、刻意的安全行為,不是 get.sh 冪等性的破口;`get.sh` 本身把 `--force` 原樣轉發即可讓使用者一次到位重跑
@@ -29,6 +31,7 @@ verified_by:
   - "[[Verification/2026-08-01_slim-ps1早期分支exit修復]]"
   - "[[Verification/2026-08-01_slim-終審三缺陷修復]]"
   - "[[Verification/2026-08-02_slim三缺陷修復_實驗產出]]"
+  - "[[Verification/2026-08-03_Windows真機驗證五缺陷修復]]"
 ---
 # slim-get-一行安裝
 
