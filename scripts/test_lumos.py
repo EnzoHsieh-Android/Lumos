@@ -15232,7 +15232,7 @@ def t_slim_uninstall_readonly_pkg_files_still_removed():
 
     ★真正的傷害不是「刪不掉」,是「刪到一半」★:訊息只說「移除失敗」,聽起來像
     什麼都沒動;實測 `.git` 目錄還在但 HEAD/config/index 已被刪掉,留下一個
-    「看起來像 repo、實際已損壞」的目錄。而 `get.ps1` 用 `Test-Path "$Dest\.git"`
+    「看起來像 repo、實際已損壞」的目錄。而 `get.ps1` 用 `Test-Path "$Dest\\.git"`
     判斷「是不是我們的 clone」→ True → 跑 `git pull` → rc=128 → 使用者看到
     「可能有本地改動,或不是 fast-forward」——★完全指錯方向,把人鎖死★。
 
