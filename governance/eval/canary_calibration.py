@@ -53,6 +53,9 @@ def main():
     ap.add_argument("--reports", required=True)
     ap.add_argument("--config", default="unnamed", help="這批報告的配置名(模型×prompt)")
     ap.add_argument("--no-log", action="store_true", help="不寫累積帳(試跑)")
+    ap.add_argument("--log", default=None,
+                    help="累積帳路徑覆蓋(預設 governance/eval/calibration-log.jsonl;測試/隔離用——"
+                         "r3 終審:測試不得動生產帳)")
     a = ap.parse_args()
     plants = json.loads(pathlib.Path(a.plants).read_text(encoding="utf-8"))
     rdir = pathlib.Path(a.reports)
@@ -74,13 +77,39 @@ def main():
     print(f"\n  合計 caught {total}/{len(plants) * len(reports)}"
           f"  ★寬判訊號,嚴判需人抽驗;不進任何 gate★")
     if not a.no_log:
-        log = ROOT / "governance" / "eval" / "calibration-log.jsonl"
+        import uuid
+        log = pathlib.Path(a.log) if a.log else ROOT / "governance" / "eval" / "calibration-log.jsonl"
         entry = {"ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+                 "run_id": uuid.uuid4().hex,
                  "config": a.config, "plants": len(plants), "seats": len(rows),
                  "caught_total": total, "rows": rows}
+        # r2 終審修:①舊帳以半行(無換行)結尾時先補換行,否則本筆黏上去兩行俱毀
+        # ②自驗不用「末行」定位(併發下末行可能是別程序的;秒級 ts 會撞同秒)——
+        # 改唯一 run_id 全檔容錯掃描,沿 _jsonl_append_verified「以唯一鍵找回自己」慣例
+        prefix = ""
+        if log.exists():
+            old = log.read_text(encoding="utf-8")
+            if old and not old.endswith("\n"):
+                prefix = "\n"
         with log.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        print(f"  已記入 {log.relative_to(ROOT)}")
+            f.write(prefix + json.dumps(entry, ensure_ascii=False) + "\n")
+        found = False
+        for line in log.read_text(encoding="utf-8").splitlines():
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue   # 別人的半行不影響找回自己
+            if d.get("run_id") == entry["run_id"]:
+                found = True
+                break
+        if not found:
+            print("ERROR: calibration-log 讀回自驗失敗(找不到本次 run_id 的完整行)", file=sys.stderr)
+            return 2
+        try:
+            _shown = log.relative_to(ROOT)
+        except ValueError:
+            _shown = log   # --log 指到 ROOT 外(測試隔離)時原樣印
+        print(f"  已記入 {_shown}(讀回自驗 ✓)")
     return 0
 
 

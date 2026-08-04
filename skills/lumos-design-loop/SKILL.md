@@ -9,7 +9,7 @@ description: 設計 spec／計劃寫完、進實作前的對抗審計硬閘—�
 
 > ### ★收斂改走處置閘(2026-08-04 重設計;取代 K-streak/capture-recapture 硬閘)★
 > **一輪流程**:pre-flight 排乾 → ★隨機決定植不植 canary(d4 觀測非閘:判定強制留痕、miss 不作廢該席 findings、進跨輪累積帳)★ → 派 panel(派工含★錨定紀律★:每條 finding 必附逐字原文引句 ≥10 字) → 收貨逐席 `lumos quote-check <席報告> --spec <凍結快照>`(錨不到的條目不採信;★比對對象=派工當下凍結快照,勿用現檔——折入後引句會自我成真★) → 辯方(≥major) → 處置帳 record(`lumos loop next` 的 `disposal_cmd` 模板;★blocker 只能折不能放行★) → `lumos loop status <id> --disposal --spec <計劃節點> --repo <root>`(四條合取全讀側可重算:G3∧處置全清∧留痕 sha 重驗∧引句全錨定) → rc0 即收斂;cap=2,第二輪只給 delta。
-> **留痕慣例**:凍結快照與席報告存 `governance/review-reports/<loop-id>/`;record 的 --report/--snapshot 指向它們(★該 loop 首筆帶 findings-set 後,留痕轉強制★)。
+> **留痕慣例**:凍結快照與席報告存 `governance/review-reports/<loop-id>/`,檔名=`<round>-snapshot.md` 與 `<round>-<席>.md`(T3 慣例,補漏 2026-08-04 終審 spec 席);record 的 --report/--snapshot 指向它們(★該 loop 首筆帶 findings-set 後,留痕轉強制★;路徑以 repo root 相對落帳,gate 換 cwd 照樣可重驗)。
 > **下文舊 panel/K-streak/capture-recapture 節保留**:code-loop 仍單源引用;design-loop 新 loop 一律走處置閘,舊帳不回溯。
 
 **Claude 編排,lumos 出原語。** 你(主對話)用 Agent tool 派審計員、判讀、修 spec;lumos 出 `canary record`／`loop status` 記錄與算收斂。**lumos 不 spawn agent。**

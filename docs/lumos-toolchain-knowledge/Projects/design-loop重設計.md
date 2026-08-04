@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-04
 updated: 2026-08-04
 related:
@@ -14,7 +14,7 @@ related:
   - "[[Projects/design-loop重設計_實作計畫]]"
 tags:
   - type/project
-  - status/doing
+  - status/done
 summary: |-
   FLAG:DECISION
   KEY:★定位(使用者確認;r1 折入修正:閘便宜,審不淺)★——「初篩網」指★放行門檻★(不要求窮盡,一輪處置全清即走),★不是審查深度★:前提層錯誤(需求誤解/架構誤判/跨系統合約假設錯)明列本層職責——TDD 驗實作符不符 spec、E2E 驗跑不跑得通,對「spec 的理解本身錯不錯」★兩者都沒有 oracle★;表層缺陷照抓、抓完放行;終極要能★無人自跑★(從不亮綠燈的閘放進自主 loop=每件事卡死等人,★自動化是假的★)

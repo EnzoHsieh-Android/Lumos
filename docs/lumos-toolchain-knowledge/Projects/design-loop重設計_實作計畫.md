@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-04
 updated: 2026-08-04
 related:
@@ -10,7 +10,7 @@ related:
   - "[[Systems/lumos-cli-write]]"
 tags:
   - type/project
-  - status/doing
+  - status/done
 summary: |-
   FLAG:TECHNICAL
   KEY:本檔=[[Projects/design-loop重設計]](r1 已收斂、人裁放行)的 TDD 實作計畫。六包嚴格順序:★①相容雙讀→②quote-check+凍結快照→③--disposal gate(獨立路徑)→④skill 重寫(與③同批交付)→⑤收緊(留痕轉強制)→⑥離線校準★——順序鐵則=schema/產生器/skill/gate 消費端不同步的中間版本,不得存在任何強制檢查(r1 Codex 折入)
@@ -147,3 +147,17 @@ summary: |-
 - ✅ **T7（2026-08-04）**：`governance/eval/canary_calibration.py`——判定 import lumos 的
   `_quote_norm`（單一實作）；caught/mentioned/missed 三態寬判＋誠實聲明「不進任何 gate」；
   累積帳 calibration-log.jsonl；冒煙測試（`_need_src` 守門）。
+- ⚠️ **T8（2026-08-04）**：收尾四項全執行，終審★達 cap 未收斂→攤人裁★——
+  ①sync-check 核對：slim×3／guard-kill／公開精簡版×2／test-layers／lifecycle 判不相關；
+  假綠清單併入「斷言重疊型」（翻紅釘第二盲區，T1 教訓）；②Verification T1-T7 已 pass；
+  ③`pitfalls --diff` tier=high → code-loop panel 三輪（W=5＋Codex 雙席＋spec 席）：
+  r1＝2 missed，7 條 major 全機械 repro 後修（壞行 fail-open 寫讀兩側／判定輪取錯／巢狀引句截斷／
+  引句無下限／只驗 carrier／相對路徑／UnicodeDecodeError）；r2＝1 missed，抓到 r1 修復批自己的
+  回歸 3 條（__legacy 合組／全席缺欄跳過／vault.parent≠repo root）；r3＝5/5 caught 輪有效，
+  又出 3 major（__ 撞鍵 3 席重疊／不成對引號靜默丟棄／git-less root 邊角）——全部修畢＋測試釘
+  （新測試 5 支、全套 2302 綠），但★cap=3 到頂、無乾淨輪，發現未枯竭（capture-recapture 殘餘超門檻）★。
+  ④處置：pre-push 會擋 tier=high 無 pass 留痕——放行需人明示豁免（`lumos code-loop pass --note
+  "人裁豁免:達 cap,r1-r3 findings 均已修+測試釘,殘留=r3 修復批未經獨立輪"`）或加開 r4。
+  ★n_badlines 全域 fail-closed 三席異議留檔：裁 accepted（誤擋方向＋git 可修＋settle 前例），
+  配套＝rc2 訊息附壞行行號。★canary 生成觀察：資源類植入對 haiku 探針天生顯眼
+  （r1-s2/r2-s1 皆 recraft×2-fail），該兩席 caught 記弱證據。

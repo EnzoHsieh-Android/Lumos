@@ -12,6 +12,7 @@ verified_by:
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
   - "[[Verification/2026-07-16_replay校準baseline_v0]]"
   - "[[Verification/2026-08-04_design-loop重設計落地T1-T7]]"
+  - "[[Verification/2026-08-04_design-loop處置閘終審硬化]]"
 summary: |-
   KEY:★INVARIANT★ canary record/second 回報成功 ⟺ 該行已落盤且可讀回(readback 驗不到即 rc2 且不印 ✓ 行;出身=2026-07-28 回報成功未落盤事故) [test:t_canary_record_persist] [audit:sonnet/2026-07-29]
   KEY:[2026-08-04 d4,design-loop 限定]canary 在 design-loop ★降級為觀測★(不再一票否決:missed 不作廢該席 findings、不擋收斂;disposal 閘不消費 caught/missed)——判定強制留痕(--report/--snapshot,定錨後 rc2 強制)、進跨輪累積帳;離線校準歸 governance/eval/canary_calibration.py(fault seeding 文獻本職)。★code-loop 不跟進(刻意分流非漂移)★。脈絡=[[Projects/design-loop重設計]]+[[Projects/canary注意力檢查失效]]
@@ -21,6 +22,7 @@ summary: |-
   FLOW:對抗審計一份 spec → 在工作副本偷植 1 個純加性 canary(指向不存在章節/引用未定義詞)→ 不告訴審計員、正常跑審 → 判定:審計員清楚描述該瑕疵=抓到(只信同類同段 findings)/沒描述=放水(判決作廢、換 canary 重跑)→ `lumos canary record caught|missed` 記一筆 → `lumos gov` 第 4 源彙整成審計員可靠度史
   KEY:[2026-07-30]★caught≠覆蓋★外部實證入帳:植錯誤考審查系統實測**最強單席僅 71.6%、六模型並集才 83.3%**(arXiv 2606.19749,經 07-30 治理日報引入)——canary caught 只證該席**醒著**、不證審得夠廣;廣度只能靠多席×多鏡頭×跨家族買,買不到就把收斂宣稱講小
   KEY:[2026-07-30]跨家族席改**能力宣告制**:有外家→該席也帶 canary(舊「不帶canary只否決」作廢,理由=否決席無注意力檢查等於編排者自判);無外家→loop 照跑但 note 留「單家族」、收斂措辭降級為「單家族視角下未發現」。**刻意不採日報的「升主力席」**(連動佔W/capture帳/fail-closed,且與可攜性衝突:skill 要發給別人用,硬要求第二家 CLI=零依賴工具鏈加外部依賴)
+  KEY:[2026-08-04 終審實測]生成硬化的兩條校準觀察——★資源類植入對 haiku 探針天生顯眼★(同輪兩席 recraft×2 仍被探中,該席 caught 記弱證據;探針記法=probe:pass/recraft×N 進 record note);★植入 hunk 行數頭要程式自算★(手寫算錯=機械破綻,審計員靠 git 比對溯源抓到=caught 灌水來源)
   KEY:test-the-tester——這套方法論把判斷外包乾淨審計員,canary 是「注意力下限」探針,擋掉『審計員根本沒讀/只吐通用回應』失敗模式
   KEY:協議是主體(skill 規則),lumos 只做極小 helper:record 留痕 + gov 唯讀彙整;lumos 不 spawn agent、植入/判定留在對話/skill 層
   KEY:提交的文件永遠不含 canary;token(CANARY-<hex>)只是定位記號,非「抓到」的機械證明——唯一算數的是審計員正確描述了那個瑕疵
