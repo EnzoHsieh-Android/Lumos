@@ -10,6 +10,7 @@ related:
   - "[[Projects/design-loop提效_計劃]]"
   - "[[Projects/loop三輪壓縮_計劃]]"
   - "[[Issues/loop-next吐不可宣告的tier]]"
+  - "[[Projects/canary注意力檢查失效]]"
 tags:
   - type/project
   - status/doing
