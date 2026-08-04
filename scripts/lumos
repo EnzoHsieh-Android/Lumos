@@ -8119,8 +8119,11 @@ def _quote_norm(s):
     """quote-check 的唯一正規化(T2 design-loop重設計):NFC → 剝 markdown 強調記號(*/`)
     → 空白(含全形\u3000/換行)摺疊單空格。★抽取與比對共用這一份——嚴禁第二份實作★
     (2026-08-02 教訓:預檢與主迴圈兩份實作當場漂移)。不做 lower(保留大小寫語意)。"""
+    import re
     import unicodedata
     s = unicodedata.normalize("NFC", s)
+    # Landmark 真場實測(2026-08-04):blockquote 折行的續行 > 記號會進 hay,引句永遠比不中
+    s = re.sub(r"(?m)^\s*>\s?", "", s)
     s = s.replace("*", "").replace("`", "")
     return " ".join(s.split())
 
@@ -8134,19 +8137,27 @@ def _quote_rows(rtext, stext):
     引句止於★同型★閉引號:「…」內容許『』(r1 s1 席:原 [^」』]+ 在巢狀『就截斷,
     「規則『甲」被當前綴錨到,編造的後半永遠沒被驗);norm 後不足下限判 miss。"""
     import re
+    # 標籤容錯(Landmark 真場實測 2026-08-04):席位自然寫成 **引句**：/**引句（註記）**：——
+    # 只認裸「引句：」會把整份合規報告判成抽零條;容忍可選（…）註記與 * 強調記號
+    _Q_LABEL = r"引句(?:（[^）\n]{0,40}）)?\**[：:]\s*"
     quotes = [m.group(1) if m.group(1) is not None else m.group(2)
-              for m in re.finditer(r"引句[：:]\s*(?:「([^」]+)」|『([^』]+)』)", rtext)]
+              for m in re.finditer(_Q_LABEL + r"(?:「([^」]+)」|『([^』]+)』)", rtext)]
     # r3 修(s2 席):引號型態不成對(「…』)抽不出來會整條靜默消失=編造引句的逃逸口——
     # 「引句：」標記數 > 成功抽取數時,差額以格式 miss 入列(fail loud,不採信)
-    n_markers = len(re.findall(r"引句[：:]\s*[「『]", rtext))
+    n_markers = len(re.findall(_Q_LABEL + r"[「『]", rtext))
     if not quotes and not n_markers:
         return None
     hay = _quote_norm(stext)
+    hay_ns = hay.replace(" ", "")
     rows = []
     for q in quotes:
         nq = _quote_norm(q)
         too_short = len(nq) < _QUOTE_MIN_NORM_LEN
-        rows.append({"quote": q, "ok": (not too_short) and nq in hay,
+        # CJK 折行 fallback(Landmark 真場實測):快照句中折行使 norm 後多一個空格,
+        # 連續引句子字串必 miss——空白全剝再比一次(存在性檢查,黏合誤中風險可忽略:
+        # 引句有 10 字下限,跨句黏合要恰好湊出同字序)
+        anchored = nq in hay or nq.replace(" ", "") in hay_ns
+        rows.append({"quote": q, "ok": (not too_short) and anchored,
                      **({"too_short": True} if too_short else {})})
     for _ in range(n_markers - len(quotes)):
         rows.append({"quote": "(引號未閉合/開閉型態不符,無法抽取)", "ok": False, "malformed": True})

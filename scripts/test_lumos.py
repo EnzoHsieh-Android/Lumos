@@ -12401,6 +12401,49 @@ def t_calibration_readback_hardening():
           bool(last.get("run_id")), str(last)[:150])
 
 
+def t_quote_check_field_test_gaps():
+    """[Landmark 真場實測 2026-08-04 抓到的三個抽取/比對缺口](loop POS櫃位驗證接受RSNO_實作 r3)
+
+    ①標籤帶 markdown 強調/註記:席位自然寫成 `**引句**：「…」`/`**引句（Task 1，已確認）**：「…」`
+      ——原 regex 只認裸 `引句：`,三席報告全數抽零條(rc2 假「未遵守格式」)。
+    ②CJK 折行空格:快照在句中折行,norm 摺疊出「，␣Size」;報告引句連續無空格→子字串必 miss
+      (r3 實況兩條真引句被誤判編造)。修=空白全剝的 fallback 比對。
+    ③blockquote 折行:快照 `> …\\n> …` 的續行 `>` 記號進 hay→引句永遠比不中。修=norm 剝行首 >。
+    翻紅釘:各條把修法還原必翻紅;前置斷言=快照確為折行/引用格式。"""
+    v = mkvault()
+    d = v / "Projects"
+    snap = d / "fsnap.md"
+    snap.write_text(
+        "計畫正文:RSNO 負向查詢改用**專用** `MemoryCache` 實例，\n"
+        "  `SizeLimit=2048`、每 entry `Size=1` 與正向快取一致。\n"
+        "> 對應的殘餘風險由 Task 1 承接：預防交給人，\n"
+        "> **但撞了不靜默選錯家**由程式擋。兩者分工明確。\n",
+        encoding="utf-8")
+    check("★前置★ 現場成立:快照確為句中折行+縮排續行+blockquote 續行",
+          "，\n  `SizeLimit" in snap.read_text(encoding="utf-8")
+          and "\n> **但撞了" in snap.read_text(encoding="utf-8"), "")
+    rpt = d / "frpt.md"
+    rpt.write_text(
+        "[major] 甲\n**引句**：「RSNO 負向查詢改用專用 MemoryCache 實例，SizeLimit=2048、每 entry Size=1」\n"
+        "[major] 乙\n**引句（Task 3，總結）**：「預防交給人，但撞了不靜默選錯家由程式擋。兩者分工明確。」\n",
+        encoding="utf-8")
+    r = run(v, "quote-check", str(rpt), "--spec", str(snap), "--json")
+    import json as _j
+    check("★標籤粗體/註記變體抽得出引句(原:抽零條 rc2)★", r.returncode in (0, 1) and r.stdout.strip(),
+          f"rc={r.returncode} {r.stderr[:150]}")
+    if r.returncode in (0, 1):
+        dd = _j.loads(r.stdout)
+        check("★兩條引句都抽到★", dd["total"] == 2, r.stdout[:200])
+        check("★CJK 折行空格 fallback:連續引句對折行原文判 ok★",
+              dd["quotes"][0]["ok"] is True, r.stdout[:300])
+        check("★blockquote 續行 > 記號剝除:引句判 ok★",
+              dd["quotes"][1]["ok"] is True, r.stdout[:300])
+    # 收緊釘:編造引句在新規則下仍 miss(空白剝除不得把不同句黏成命中)
+    bad = d / "fbad.md"
+    bad.write_text("**引句**：「這句話快照裡根本沒有而且很長喔喔喔」\n", encoding="utf-8")
+    check("編造引句照樣 rc1", run(v, "quote-check", str(bad), "--spec", str(snap)).returncode == 1, "")
+
+
 def t_quote_check_nested_quotes_and_min_length():
     """[T8 終審 r1 findings 修復](loop code-dloop-redesign r1;s1-F2+否決席-F1 機械證實)
 
