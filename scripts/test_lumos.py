@@ -11854,6 +11854,83 @@ def t_loop_next_cluster_hint_only_when_choice_is_open():
     check("★light 不得提(用不到 cluster 帳)★", "cluster_hint" not in dl, "")
 
 
+def t_canary_record_disposal_fields_optional():
+    """[T1 相容雙讀](spec:Projects/design-loop重設計 六;plan:同名_實作計畫 T1)
+
+    record 新增六個★選配★欄(--report/--snapshot/--findings-set/--folded-set/
+    --accepted-set/--accept-reason)。鐵則:★全部不給=行為與今日完全相同★——
+    這是「相容雙讀先行」的第①包,任何中間版本不得打壞現行 design/code-loop 呼叫。
+
+    寫側驗證(給了才驗,違反 rc2):
+      folded∩accepted=∅ ∧ folded∪accepted==findings_set(集合核對,非總數——
+      r1 Codex:只核總數可被重複計數/虛構項配平);accepted 逐 id 附非空理由;
+      severity==blocker ⇒ accepted 必空(d1);report/snapshot 檔案存在且非空。
+
+    還原翻紅釘:把「聯集==findings_set」檢查還原掉 → 「缺 id 未處置必 rc2」翻紅。"""
+    import json as _j
+    v = mkvault()
+    lid = f"dsp-{_M1U}"
+    rpt = v / "Projects" / "rpt.md"
+    rpt.write_text("[major] x\n引句：「abc」\n", encoding="utf-8")
+    snap = v / "Projects" / "snap.md"
+    snap.write_text("spec snapshot abc\n", encoding="utf-8")
+
+    # ★相容鐵則★:零新參的舊呼叫 rc0,且記錄裡無任何新鍵
+    r0 = run(v, "canary", "record", "caught", "--loop", lid, "--severity", "minor",
+             "--findings", "2", "--auditor", "s1", expect_rc=0)
+    log = (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    last = _j.loads(log[-1])
+    check("★舊呼叫不變★:零新參 rc0 且無新鍵",
+          not any(k in last for k in ("report_path", "snapshot_path", "findings_set",
+                                      "folded_set", "accepted_set", "accept_reasons")), str(last)[:200])
+
+    # 完整合法寫入:全欄落帳且 sha256 可重算
+    r1 = run(v, "canary", "record", "caught", "--loop", lid, "--severity", "major",
+             "--auditor", "s1", "--report", str(rpt), "--snapshot", str(snap),
+             "--findings-set", "a,b,c", "--folded-set", "a,b", "--accepted-set", "c",
+             "--accept-reason", "c=文件精度級,成本不值", expect_rc=0)
+    last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+    check("★前置★ 現場成立:六欄全落帳", last.get("findings_set") == ["a", "b", "c"]
+          and last.get("folded_set") == ["a", "b"] and last.get("accepted_set") == ["c"]
+          and last.get("accept_reasons", {}).get("c") and last.get("report_sha256")
+          and last.get("snapshot_sha256"), str(last)[:300])
+    check("sha256 可重算(留痕的最低資格)", last["report_sha256"] == _sha256_of(rpt), "")
+
+    # 機械核對逐條 rc2
+    bad = [
+        # ★b 的理由給齊,讓「缺 b 未處置」成為唯一能 rc2 的路——否則聯集檢查被拔掉時
+        # 理由檢查會代打,翻紅釘假紅(2026-08-04 第一版就中了這型:斷言測的不是它宣稱的那條)
+        (["--findings-set", "a,b,c", "--folded-set", "a", "--accepted-set", "c",
+          "--accept-reason", "c=有理由"],
+         "★缺 b 未處置(聯集≠全集)必 rc2★"),
+        (["--findings-set", "a,b", "--folded-set", "a,b", "--accepted-set", "b"],
+         "folded∩accepted 非空必 rc2"),
+        (["--findings-set", "a", "--folded-set", "a", "--accepted-set", "",
+          "--accept-reason", "x=y"], "理由鍵集合≠accepted_set 必 rc2"),
+        (["--findings-set", "a,a", "--folded-set", "a,a"], "findings_set 重複 id 必 rc2"),
+    ]
+    for extra, name in bad:
+        rr = run(v, "canary", "record", "caught", "--loop", lid, "--severity", "minor",
+                 "--auditor", "s1", *extra)
+        check(name, rr.returncode == 2, f"rc={rr.returncode} {rr.stderr[:120]}")
+    # accepted 有 id 但沒給理由
+    rr = run(v, "canary", "record", "caught", "--loop", lid, "--severity", "minor",
+             "--auditor", "s1", "--findings-set", "a,b", "--folded-set", "a", "--accepted-set", "b")
+    check("accepted 無理由必 rc2(空殼放行擋在寫側)", rr.returncode == 2, rr.stderr[:120])
+    # d1:blocker 不得 accepted
+    rr = run(v, "canary", "record", "caught", "--loop", lid, "--severity", "blocker",
+             "--auditor", "s1", "--findings-set", "a", "--folded-set", "", "--accepted-set", "a",
+             "--accept-reason", "a=想放行")
+    check("★d1:blocker 輪 accepted 非空必 rc2★", rr.returncode == 2, rr.stderr[:120])
+    # 留痕檔不存在
+    rr = run(v, "canary", "record", "caught", "--loop", lid, "--severity", "minor",
+             "--auditor", "s1", "--report", str(v / "nope.md"))
+    check("--report 指向不存在檔必 rc2", rr.returncode == 2, rr.stderr[:120])
+    # blocker+全折(accepted 空)合法——d1 只擋 accepted,不擋折
+    run(v, "canary", "record", "caught", "--loop", lid, "--severity", "blocker",
+        "--auditor", "s1", "--findings-set", "a", "--folded-set", "a", expect_rc=0)
+
+
 def t_loop_next_legacy_emits_a_command_that_actually_runs():
     """★工具吐給你的指令必須跑得動——不然它會教出錯誤的習慣★(2026-08-04)
 

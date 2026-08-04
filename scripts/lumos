@@ -2684,7 +2684,7 @@ def _sha256_file(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None):
     """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
@@ -2761,6 +2761,65 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             print(f"ERROR: --tier 需 {'/'.join(LOOP_TIERS)},收到 {tier!r}", file=sys.stderr)
             return 2
         rec["tier"] = tier
+    # ── T1 相容雙讀(design-loop重設計 實作計畫):處置帳六選配欄——★全部不給=行為與今日相同★ ──
+    # 集合核對而非總數核對(r1 Codex:只核總數可被重複計數/虛構項配平);
+    # 「不給不寫鍵」同 --findings 慣例;違反一律 rc2(寫側就擋,不留到 gate)。
+    def _ids(raw):   # None=未給;""=明示空集合(兩者語意不同)
+        return None if raw is None else [x.strip() for x in raw.split(",") if x.strip()]
+    f_set, fo_set, ac_set = _ids(findings_set), _ids(folded_set), _ids(accepted_set)
+    if any(x is not None for x in (fo_set, ac_set, accept_reasons)) and f_set is None:
+        print("ERROR: --folded-set/--accepted-set/--accept-reason 須與 --findings-set 同現", file=sys.stderr)
+        return 2
+    if f_set is not None:
+        if not f_set:
+            print("ERROR: --findings-set 不得為空(沒 findings 就別帶處置欄)", file=sys.stderr)
+            return 2
+        if len(set(f_set)) != len(f_set):
+            print(f"ERROR: --findings-set 含重複 id: {f_set}", file=sys.stderr)
+            return 2
+        fo, ac = fo_set or [], ac_set or []
+        F, FO, AC = set(f_set), set(fo), set(ac)
+        if not FO <= F or not AC <= F:
+            print("ERROR: folded/accepted 含 findings-set 以外的 id", file=sys.stderr)
+            return 2
+        if FO & AC:
+            print(f"ERROR: folded 與 accepted 互斥,交集非空: {sorted(FO & AC)}", file=sys.stderr)
+            return 2
+        if FO | AC != F:
+            print(f"ERROR: 未處置的 finding: {sorted(F - FO - AC)}(folded∪accepted 必須=findings-set;"
+                  "每一條都要有去向)", file=sys.stderr)
+            return 2
+        reasons = {}
+        for item in (accept_reasons or []):
+            if "=" not in item:
+                print(f"ERROR: --accept-reason 格式須 id=理由,收到 {item!r}", file=sys.stderr)
+                return 2
+            k, _, v = item.partition("=")
+            reasons[k.strip()] = v.strip()
+        if set(reasons) != AC or any(not v for v in reasons.values()):
+            print(f"ERROR: accept_reasons 鍵集合須=accepted-set 且理由非空(accepted={sorted(AC)},"
+                  f" 有理由={sorted(reasons)})", file=sys.stderr)
+            return 2
+        if severity == "blocker" and AC:
+            print("ERROR: blocker 輪 accepted 必須為空——blocker 只能折不能放行(重設計 d1)", file=sys.stderr)
+            return 2
+        rec["findings_set"], rec["folded_set"], rec["accepted_set"] = f_set, fo, ac
+        if reasons:
+            rec["accept_reasons"] = reasons
+    for _flag, _p in (("--report", report), ("--snapshot", snapshot)):
+        if _p is None:
+            continue
+        try:
+            _h = _sha256_file(_p)
+        except OSError as e:
+            print(f"ERROR: {_flag} 讀不到: {e}", file=sys.stderr)
+            return 2
+        import os as _os
+        if _os.path.getsize(_p) == 0:
+            print(f"ERROR: {_flag} 是空檔——留痕的最低要求是非空({_p})", file=sys.stderr)
+            return 2
+        _k = "report" if _flag == "--report" else "snapshot"
+        rec[_k + "_path"], rec[_k + "_sha256"] = str(_p), _h
     path = env.vault.parent / ".canary-log.jsonl"
     rc = _jsonl_append_verified(path, rec, "token", token)
     if rc != 0:
@@ -11709,6 +11768,15 @@ def main():
     cr.add_argument("--wallclock-min", type=int, dest="wallclock_min", help="M1包 成本欄:該輪 wall-clock 分鐘(非負整數,選配)")
     cr.add_argument("--tier", dest="rec_tier", choices=("light", "standard", "high"),
                     help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
+    cr.add_argument("--report", help="[T1 處置帳] 審查員報告檔路徑(存 path+sha256;檔案須存在且非空)")
+    cr.add_argument("--snapshot", help="[T1 處置帳] 派工凍結快照檔路徑(quote-check 的比對對象;存 path+sha256)")
+    cr.add_argument("--findings-set", dest="findings_set",
+                    help="[T1 處置帳] 逐條 finding id 逗號串(集合核對的全集;與 folded/accepted 配套)")
+    cr.add_argument("--folded-set", dest="folded_set", help="[T1 處置帳] 折入計劃節點的 id 子集")
+    cr.add_argument("--accepted-set", dest="accepted_set",
+                    help="[T1 處置帳] 附理由放行的 id 子集(與 folded 互斥;聯集須=全集;blocker 輪必空)")
+    cr.add_argument("--accept-reason", dest="accept_reasons", action="append",
+                    help="[T1 處置帳] id=理由(可重複;鍵集合須=accepted-set,理由非空)")
 
     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
     lsub = lp.add_subparsers(dest="lcmd", required=True)
@@ -12209,7 +12277,9 @@ def main():
                           capture_counts=args.capture_counts, clusters=args.clusters,
                           spec=args.rec_spec, reviewed=args.reviewed,
                           tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,
-                          scope_lines=args.scope_lines)
+                          scope_lines=args.scope_lines, report=args.report, snapshot=args.snapshot,
+                          findings_set=args.findings_set, folded_set=args.folded_set,
+                          accepted_set=args.accepted_set, accept_reasons=args.accept_reasons)
 
     if args.cmd == "loop":
         if args.lcmd == "status":
