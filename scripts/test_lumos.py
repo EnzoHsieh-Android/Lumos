@@ -11854,6 +11854,257 @@ def t_loop_next_cluster_hint_only_when_choice_is_open():
     check("★light 不得提(用不到 cluster 帳)★", "cluster_hint" not in dl, "")
 
 
+def t_quote_check_normalization_and_verdict():
+    """[T2 錨定檢查](spec:Projects/design-loop重設計 三;plan:同名_實作計畫 T2)
+
+    `lumos quote-check <報告> --spec <凍結快照>`:報告內每條「引句：「…」」
+    norm 後必須是快照 norm 後的子字串。rc0=全 ok、rc1=有 miss、rc2=IO/零引句。
+
+    ★正規化是本命令的全部價值★:r1 實戰就有一條真引句因原文帶粗體記號被誤判
+    錨不到(審 design-loop重設計 時 s3 引「正確性歸下游」,原文是「**正確性歸下游**」)。
+    _quote_norm=NFC→剝 */`→空白(含全形)摺疊單空格。
+
+    ★單一實作鐵則★:抽取與比對共用一份 _quote_norm(2026-08-02 教訓:預檢與主迴圈
+    兩份實作當場漂移)——機械代理=全檔 `def _quote_norm` 恰一處。
+    翻紅釘:把剝記號步驟還原掉 → 粗體案例翻紅。"""
+    import json as _j
+    v = mkvault()
+    snap = v / "Projects" / "qsnap.md"
+    snap.write_text(
+        "# spec\n**正確性歸下游**：TDD 落地（測試是真 oracle）\n"
+        "閘只留可重算的；其餘降級成 `強制留痕` 的觀測，\n分兩行寫的一句話。\n",
+        encoding="utf-8")
+    rpt = v / "Projects" / "qrpt.md"
+    rpt.write_text(
+        "[major] 甲\n引句：「正確性歸下游：TDD 落地（測試是真 oracle）」\n"      # 粗體剝除後可對上
+        "[minor] 乙\n引句：「閘只留可重算的；其餘降級成 強制留痕 的觀測， 分兩行寫的一句話。」\n",  # 反引號+跨行
+        encoding="utf-8")
+    r = run(v, "quote-check", str(rpt), "--spec", str(snap))
+    check("★粗體/反引號/跨行三種正規化後全 ok(rc0)★", r.returncode == 0,
+          f"rc={r.returncode}\n{r.stdout[:300]}{r.stderr[:200]}")
+
+    # 編造引句 → miss → rc1,且 --json 逐條標得出哪條
+    bad = v / "Projects" / "qbad.md"
+    bad.write_text("引句：「正確性歸下游：TDD 落地」\n引句：「這句話快照裡根本沒有」\n", encoding="utf-8")
+    r2 = run(v, "quote-check", str(bad), "--spec", str(snap), "--json")
+    check("★前置★ 現場成立:真的抽到 2 條引句", r2.returncode == 1, f"rc={r2.returncode}")
+    d = _j.loads(r2.stdout)
+    check("編造引句判 miss、真引句判 ok(逐條可讀)",
+          [q["ok"] for q in d["quotes"]] == [True, False], r2.stdout[:300])
+
+    # 零引句=rc2(什麼都驗不了要 fail loud,不是靜默 rc0)
+    empty = v / "Projects" / "qempty.md"
+    empty.write_text("這份報告沒有任何引句樣式\n", encoding="utf-8")
+    check("★零引句 rc2(驗不了≠通過)★", run(v, "quote-check", str(empty), "--spec", str(snap)).returncode == 2, "")
+    check("快照不存在 rc2", run(v, "quote-check", str(rpt), "--spec", str(v / "no.md")).returncode == 2, "")
+
+    # 單一實作鐵則(機械代理)
+    src = (Path(__file__).resolve().parent / "lumos").read_text(encoding="utf-8")
+    check("★單一實作:全檔 `def _quote_norm` 恰一處★", src.count("def _quote_norm") == 1, "")
+
+
+def t_calibration_smoke():
+    """[T7](plan:design-loop重設計_實作計畫 T7)離線校準腳本冒煙:判定沿 lumos 的 _quote_norm
+    (單一實作,import 不複製);寬判(mentioned≠caught 分開列);不寫累積帳(--no-log)。"""
+    _need_src("governance/eval/canary_calibration.py")   # 缺=拋 _SrcOnly 由 runner 記 skip
+    import json as _j
+    import tempfile as _tf
+    d = Path(_tf.mkdtemp(prefix="calib-"))
+    (d / "plants.json").write_text(_j.dumps([
+        {"id": "P1", "file": "f.md", "type": "b", "token": "--ghost-flag", "nature": "未定義旗標"}]),
+        encoding="utf-8")
+    rdir = d / "r"; rdir.mkdir()
+    (rdir / "sA.md").write_text("[major] `--ghost-flag` 未定義,文中沒有定義它" + chr(10), encoding="utf-8")
+    (rdir / "sB.md").write_text("整份看起來不錯" + chr(10), encoding="utf-8")
+    src = Path(__file__).resolve().parent.parent / "governance" / "eval" / "canary_calibration.py"
+    r = subprocess.run([sys.executable, str(src), "--plants", str(d / "plants.json"),
+                        "--reports", str(rdir), "--config", "smoke-test", "--no-log"],
+                       capture_output=True, text=True)
+    check("★校準冒煙:rc0 且 caught 判定正確(sA ✓/sB ✗)★",
+          r.returncode == 0 and "caught 1/1" in r.stdout and "caught 0/1" in r.stdout,
+          f"rc={r.returncode} " + r.stdout[:300] + r.stderr[:200])
+    check("不進 gate 的誠實聲明在輸出上", "不進任何 gate" in r.stdout, "")
+
+
+def t_loop_next_disposal_cmd_actually_runs():
+    """[T5](plan:design-loop重設計_實作計畫 T5)loop next 的 disposal_cmd 模板★真跑 oracle★
+    (沿 t_loop_next_legacy 教訓:工具吐的指令必須跑得動,字串斷言只證長得對)。
+    record_cmd 原樣保留(code-loop 不受影響)。"""
+    import json as _j
+    v = mkvault()
+    spec = v / "Projects" / "t5spec.md"
+    spec.write_text("t5 spec\n規則甲。\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    rpt = v / "Projects" / "t5rpt.md"
+    rpt.write_text("引句：「規則甲。」\n", encoding="utf-8")
+    lid = f"t5-{_M1U}"
+    d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--json").stdout)
+    check("★前置★ 現場成立:panel tier 吐 disposal_cmd+disposal_gate",
+          "disposal_cmd" in d and "disposal_gate" in d and "record_cmd" in d, str(d)[:200])
+    filled = (d["disposal_cmd"].replace("caught|missed", "caught").replace("<席>", "s1")
+              .replace("<s>", "minor").replace("<id串>", "F1", 1)          # findings-set
+              .replace("--folded-set <id串>", "--folded-set F1")
+              .replace(" --accepted-set <id串>", "")     # accepted 缺省=空集合(argv 手切,'' 會變字面引號)
+              .replace(" --accept-reason <id=理由>", "")
+              .replace("<席報告.md>", str(rpt)).replace("<凍結快照.md>", str(spec))
+              .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h))
+    argv = filled.split()
+    check("★前置★ 填完無殘留佔位符", "<" not in filled and argv[0] == "lumos", filled)
+    rr = run(v, *argv[1:])
+    check("★disposal_cmd 模板真的跑得動(rc0)★", rr.returncode == 0,
+          f"rc={rr.returncode} {rr.stderr[:200]}")
+    g = (d["disposal_gate"].replace("<計劃節點.md>", str(spec)).replace("<root>", str(v.parent)))
+    rg = run(v, *g.split()[1:])
+    check("★disposal_gate 模板跑得動且對剛記的帳給出判定(rc0/1 非 rc2)★", rg.returncode in (0, 1),
+          f"rc={rg.returncode} {rg.stderr[:200]}")
+
+
+def t_disposal_loop_requires_provenance():
+    """[T6 收緊](plan:design-loop重設計_實作計畫 T6)
+
+    定錨規則(同 M2 cluster 前例):loop ★首筆帶 findings_set 的記錄★定錨為 disposal loop;
+    定錨後該 loop 後續 record ★必帶 --report+--snapshot★,缺=rc2(寫側擋)。
+    ★舊 loop/未定錨 loop 完全不受影響★(相容鐵則)。
+    翻紅釘:把強制檢查還原掉 → 「定錨後缺 report 必 rc2」翻紅。"""
+    v = mkvault()
+    d = v / "Projects"
+    rpt = d / "t6r.md"; rpt.write_text("引句：「x」\n", encoding="utf-8")
+    snap = d / "t6s.md"; snap.write_text("x\n", encoding="utf-8")
+    lid = f"t6-{_M1U}"
+    # 首筆帶 findings_set+留痕 → 定錨
+    run(v, "canary", "record", "caught", "--loop", lid, "--auditor", "s1", "--severity", "minor",
+        "--findings-set", "a", "--folded-set", "a", "--report", str(rpt), "--snapshot", str(snap),
+        expect_rc=0)
+    # 定錨後缺留痕 → rc2
+    rr = run(v, "canary", "record", "caught", "--loop", lid, "--auditor", "s2", "--severity", "minor")
+    check("★定錨後缺 --report/--snapshot 必 rc2(留痕轉強制)★", rr.returncode == 2, f"rc={rr.returncode} {rr.stderr[:150]}")
+    # 帶齊就過
+    run(v, "canary", "record", "missed", "--loop", lid, "--auditor", "s3", "--severity", "major",
+        "--report", str(rpt), "--snapshot", str(snap), expect_rc=0)
+    # ★相容:未定錨 loop 照舊自由★
+    run(v, "canary", "record", "caught", "--loop", f"t6free-{_M1U}", "--auditor", "s1",
+        "--severity", "minor", expect_rc=0)
+    check("★前置★ 現場成立:定錨 loop 與自由 loop 同庫共存", True, "")
+
+
+def t_loop_status_disposal_gate():
+    """[T4 處置閘](spec:Projects/design-loop重設計 三;plan:同名_實作計畫 T4)
+
+    `loop status <id> --disposal --spec <真檔> --repo <root>`:新閘走★獨立路徑★,
+    四條合取全部讀側可重算:①G3 hash 鏈 ②處置集合(重算,不信寫側)③留痕讀側重驗
+    (report/snapshot 存在且 sha256 與帳面一致——record 完刪檔照樣擋)④quote-check
+    對帳面 snapshot 重跑全 ok。
+
+    ★d4 合約★:canary kind=missed ★不進合取★——missed 席在場照樣可收斂(觀測非閘)。
+    ★相容合約★:同一帳不帶 --disposal 走舊路徑,行為與改動前一致(舊閘一行不動)。
+    翻紅釘:刪掉報告檔 → 條③翻紅(現場成立前置:record 當下檔案在)。"""
+    import json as _j
+    v = mkvault()
+    d = v / "Projects"
+    spec = d / "t4spec.md"
+    spec.write_text("# spec\n規則甲：只在 0 命中時回退。\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    snap = d / "t4snap.md"
+    snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
+    rpt = d / "t4rpt.md"
+    rpt.write_text("[minor] 甲\n引句：「規則甲：只在 0 命中時回退。」\n", encoding="utf-8")
+    lid = f"t4-{_M1U}"
+
+    # 判定輪 r1 兩席:席1 帶處置帳+留痕+雙 hash;席2=★missed★(d4:不得影響閘)
+    run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--auditor", "s1",
+        "--severity", "minor", "--findings-set", "F1,F2", "--folded-set", "F1",
+        "--accepted-set", "F2", "--accept-reason", "F2=精度級",
+        "--report", str(rpt), "--snapshot", str(snap),
+        "--spec", str(spec), "--reviewed", h, expect_rc=0)
+    run(v, "canary", "record", "missed", "--loop", lid, "--round", "r1", "--auditor", "s2",
+        "--severity", "major", "--report", str(rpt), "--snapshot", str(snap),
+        "--spec", str(spec), "--reviewed", h, expect_rc=0)   # T6:定錨後每席都要留痕(d4 判定留痕)
+
+    # 互斥
+    for extra in (["--panel"], ["--light"], ["--need", "3"]):
+        rr = run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent), *extra)
+        check(f"--disposal 與 {extra[0]} 互斥 rc2", rr.returncode == 2, f"rc={rr.returncode} {rr.stderr[:100]}")
+    check("--disposal 缺 --spec rc2(fail-closed,同 light 慣例)",
+          run(v, "loop", "status", lid, "--disposal", "--repo", str(v.parent)).returncode == 2, "")
+
+    r = run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    check("★四條合取全過→rc0;missed 席在場照樣收斂(d4:canary=觀測非閘)★",
+          r.returncode == 0, f"rc={r.returncode}\n{r.stdout[:400]}{r.stderr[:200]}")
+
+    # 舊路徑迴歸:同一帳不帶 --disposal 走舊 panel 閘(格式帶 round→須 --panel),行為不變
+    r_old = run(v, "loop", "status", lid, "--gate", "--panel", "--spec", str(spec), "--repo", str(v.parent))
+    check("★相容:同一帳走舊 panel 閘照舊 FAIL(1 caught+1 missed=輪無效)——舊閘一行不動★",
+          r_old.returncode == 1 and "輪有效" in r_old.stdout, f"rc={r_old.returncode}\n{r_old.stdout[:200]}")
+
+    # ③留痕讀側:record 完把報告檔改掉 → sha 不符 → FAIL
+    check("★前置★ 現場成立:record 當下報告檔在且剛才 rc0", rpt.exists(), "")
+    orig = rpt.read_text(encoding="utf-8")
+    rpt.write_text(orig + "事後竄改\n", encoding="utf-8")
+    r2 = run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    check("★留痕讀側重驗:報告被改(sha 不符)必 FAIL rc1★", r2.returncode == 1, f"rc={r2.returncode}\n{r2.stdout[:300]}")
+    rpt.write_text(orig, encoding="utf-8")
+
+    # ④quote-check 讀側:快照偷換成沒有該句的版本 → miss → FAIL
+    snap2 = d / "t4snap2.md"
+    snap2.write_text("# 別的內容\n", encoding="utf-8")
+    lid2 = f"t4b-{_M1U}"
+    run(v, "canary", "record", "caught", "--loop", lid2, "--round", "r1", "--auditor", "s1",
+        "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+        "--report", str(rpt), "--snapshot", str(snap2),
+        "--spec", str(spec), "--reviewed", h, expect_rc=0)
+    r3 = run(v, "loop", "status", lid2, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    check("★quote-check 讀側:引句錨不到快照必 FAIL rc1★", r3.returncode == 1, f"rc={r3.returncode}\n{r3.stdout[:300]}")
+
+    # ②處置集合讀側+blocker 線:blocker 席在場且有 accepted → FAIL(即使寫側當時個別合法)
+    lid3 = f"t4c-{_M1U}"
+    run(v, "canary", "record", "caught", "--loop", lid3, "--round", "r1", "--auditor", "s1",
+        "--severity", "minor", "--findings-set", "F1", "--folded-set", "",
+        "--accepted-set", "F1", "--accept-reason", "F1=可放",
+        "--report", str(rpt), "--snapshot", str(snap),
+        "--spec", str(spec), "--reviewed", h, expect_rc=0)
+    run(v, "canary", "record", "caught", "--loop", lid3, "--round", "r1", "--auditor", "s2",
+        "--severity", "blocker", "--report", str(rpt), "--snapshot", str(snap),
+        "--spec", str(spec), "--reviewed", h, expect_rc=0)   # T6 同上
+    r4 = run(v, "loop", "status", lid3, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    check("★blocker 在別席+本席 accepted:輪級重算必 FAIL(堵 Codex 的寫側盲區)★",
+          r4.returncode == 1, f"rc={r4.returncode}\n{r4.stdout[:300]}")
+
+
+def t_disposal_snapshot_provenance():
+    """[T3 凍結快照](spec:Projects/design-loop重設計 三;plan:同名_實作計畫 T3)
+
+    ★釘死反循環場景★:finding 折入真檔後,它的引句在「現檔」裡就存在了——
+    對現檔跑 quote-check 會假 ok(循環自證,r1 Codex 折入的洞)。
+    ★quote-check 的比對對象必須是派工當下的凍結快照★:同一份報告,
+    對快照跑必 miss(引句是審查員指出「該加而沒有」的內容)、對折入後現檔跑會 ok
+    ——兩者 rc 不同,就是這條合約的鑑別力所在。"""
+    v = mkvault()
+    d = v / "Projects"
+    snap = d / "t3snap.md"       # 派工當下凍結
+    snap.write_text("# spec v1\n規則甲：只在 0 命中時回退。\n", encoding="utf-8")
+    rpt = d / "t3rpt.md"
+    # 審查員的 finding:引的是它「建議加入」的句子(快照裡沒有)
+    rpt.write_text("[major] 缺逃生口\n引句：「規則乙：加 --escape 逃生口。」\n", encoding="utf-8")
+    cur = d / "t3cur.md"         # 折入後的現檔:把 finding 建議的句子折進去了
+    cur.write_text("# spec v2\n規則甲：只在 0 命中時回退。\n規則乙：加 --escape 逃生口。\n", encoding="utf-8")
+
+    r_snap = run(v, "quote-check", str(rpt), "--spec", str(snap))
+    r_cur = run(v, "quote-check", str(rpt), "--spec", str(cur))
+    check("★前置★ 現場成立:對折入後現檔跑會假 ok(循環自證真的會發生)", r_cur.returncode == 0,
+          f"rc={r_cur.returncode}")
+    check("★對凍結快照跑必 miss(rc1)——這就是「必須對快照驗」合約的鑑別力★",
+          r_snap.returncode == 1, f"rc={r_snap.returncode}")
+
+    # record 帶 --snapshot 落帳的 sha256 可重算=快照身分可稽核
+    import json as _j
+    lid = f"t3-{_M1U}"
+    run(v, "canary", "record", "caught", "--loop", lid, "--severity", "minor",
+        "--auditor", "s1", "--report", str(rpt), "--snapshot", str(snap), expect_rc=0)
+    last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+    check("snapshot_sha256 落帳且可重算(快照身分可稽核)",
+          last.get("snapshot_sha256") == _sha256_of(snap), str(last)[:200])
+
+
 def t_canary_record_disposal_fields_optional():
     """[T1 相容雙讀](spec:Projects/design-loop重設計 六;plan:同名_實作計畫 T1)
 
@@ -11927,8 +12178,10 @@ def t_canary_record_disposal_fields_optional():
              "--auditor", "s1", "--report", str(v / "nope.md"))
     check("--report 指向不存在檔必 rc2", rr.returncode == 2, rr.stderr[:120])
     # blocker+全折(accepted 空)合法——d1 只擋 accepted,不擋折
+    # (T6 生效後:本 loop 已定錨,須帶留痕——正確行為,非誤傷)
     run(v, "canary", "record", "caught", "--loop", lid, "--severity", "blocker",
-        "--auditor", "s1", "--findings-set", "a", "--folded-set", "a", expect_rc=0)
+        "--auditor", "s1", "--findings-set", "a", "--folded-set", "a",
+        "--report", str(rpt), "--snapshot", str(snap), expect_rc=0)
 
 
 def t_loop_next_legacy_emits_a_command_that_actually_runs():

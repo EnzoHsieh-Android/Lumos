@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-03
+updated: 2026-08-04
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -11,8 +11,10 @@ verified_by:
   - "[[Verification/2026-06-19_canary-audit]]"
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
   - "[[Verification/2026-07-16_replay校準baseline_v0]]"
+  - "[[Verification/2026-08-04_design-loop重設計落地T1-T7]]"
 summary: |-
   KEY:★INVARIANT★ canary record/second 回報成功 ⟺ 該行已落盤且可讀回(readback 驗不到即 rc2 且不印 ✓ 行;出身=2026-07-28 回報成功未落盤事故) [test:t_canary_record_persist] [audit:sonnet/2026-07-29]
+  KEY:[2026-08-04 d4,design-loop 限定]canary 在 design-loop ★降級為觀測★(不再一票否決:missed 不作廢該席 findings、不擋收斂;disposal 閘不消費 caught/missed)——判定強制留痕(--report/--snapshot,定錨後 rc2 強制)、進跨輪累積帳;離線校準歸 governance/eval/canary_calibration.py(fault seeding 文獻本職)。★code-loop 不跟進(刻意分流非漂移)★。脈絡=[[Projects/design-loop重設計]]+[[Projects/canary注意力檢查失效]]
   KEY:★INVARIANT★ second(第二判者)紀錄純 telemetry,永不影響 loop status 的 gate 輸出與 rc [test:t_canary_second] [audit:sonnet/2026-07-29]
   KEY:[2026-07-10]折入錨點污染型事故:編排者用工作副本(含canary)的字串當折入anchor→對真檔靜默落空(replace無assert)——防範:anchor一律取真檔原文+assert;fold-check未來方向補「紀錄宣稱vs正文存在」核對
   KEY:[2026-07-10]生成硬化三條進 skill——載重錨定/haiku 難度探針(FLAWS)/事故反轉(IBIR);missed-rate 升一級指標(lumos gov 分帳);見[[Projects/canary生成硬化_計劃]]

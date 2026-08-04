@@ -127,3 +127,23 @@ summary: |-
   10 斷言；相容鐵則驗過（零新參舊呼叫 rc0 無新鍵）；全套 2247 綠。
   ★過程教訓：第一版翻紅釘假紅——「缺 b 未處置」案例同時缺理由，拔掉聯集檢查後理由檢查
   代打 rc2；修法＝把理由給齊，讓目標檢查成為**唯一能翻紅的路**（斷言重疊型，T8 併入假綠清單）。★
+- ✅ **T2（2026-08-04）**：`lumos quote-check`＋`_quote_norm`（vault-free）落地；6 斷言
+  （粗體／反引號／跨行正規化、編造引句 miss、★零引句 rc2＝驗不了≠通過★、快照不存在 rc2、
+  單一實作機械代理 `def _quote_norm` 恰一處）；翻紅釘實測（拔正規化→粗體案例精準翻紅）。
+  附帶：新命令觸發漂移守衛（六份文件「53 個頂層命令」→54 同步）——列舉宣稱靠守衛不靠記憶的再一次實證。
+- ✅ **T3（2026-08-04）**：反循環合約釘死；`t_disposal_snapshot_provenance` 3 斷言——
+  前置先證明「對折入後現檔跑會假 ok」真的會發生，再釘「對凍結快照跑必 miss」；snapshot_sha256 可重算。
+- ✅ **T4（2026-08-04）**：`loop status --disposal` 獨立閘落地（`_loop_status_disposal`＋
+  `_quote_rows` 核心抽出共用）；`t_loop_status_disposal_gate` 10 斷言：互斥 rc2×3、缺 spec rc2、
+  ★四條合取全過 rc0 且 missed 席在場照樣收斂（d4 canary=觀測非閘）★、★舊 panel 閘一行不動★、
+  留痕讀側重驗（record 完竄改→FAIL）、quote-check 讀側、★blocker 在別席＋本席 accepted→輪級重算 FAIL
+  （堵 r1 Codex 的寫側盲區）★；翻紅釘實測（拔 sha 重驗→竄改照樣放行,精準翻紅）。
+- ✅ **T5（2026-08-04）**：`loop next` 吐 `disposal_cmd`＋`disposal_gate` 模板（record_cmd
+  原樣保留給 code-loop）＋真跑 oracle 測試；skill 三檔手術改——design-loop SKILL 定位修訂＋
+  處置閘流程節、templates 加★錨定紀律★與抑噪例外口、code-loop SKILL 加分流註記（刻意設計非漂移）。
+- ✅ **T6（2026-08-04）**：定錨收緊——loop 首筆帶 findings_set 後，後續 record 必帶
+  --report/--snapshot（rc2）；未定錨 loop 不受影響；翻紅釘實測。★T6 生效後正確地咬到 T4
+  測試場景（missed 席也要留痕＝d4 判定留痕），測試已跟上。★
+- ✅ **T7（2026-08-04）**：`governance/eval/canary_calibration.py`——判定 import lumos 的
+  `_quote_norm`（單一實作）；caught/mentioned/missed 三態寬判＋誠實聲明「不進任何 gate」；
+  累積帳 calibration-log.jsonl；冒煙測試（`_need_src` 守門）。

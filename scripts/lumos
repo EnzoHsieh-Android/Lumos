@@ -2821,6 +2821,21 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         _k = "report" if _flag == "--report" else "snapshot"
         rec[_k + "_path"], rec[_k + "_sha256"] = str(_p), _h
     path = env.vault.parent / ".canary-log.jsonl"
+    # ── T6 收緊(design-loop重設計 實作計畫):disposal 定錨後留痕轉強制 ──
+    # 定錨=該 loop 帳面已有任一筆帶 findings_set(同 M2 cluster「首個有效輪定錨」前例)。
+    # 定錨後每筆 record 必帶 report+snapshot;未定錨/舊 loop 完全不受影響(相容鐵則)。
+    if loop and path.exists() and not (report and snapshot):
+        try:
+            import json as _json6
+            _anchored = any(
+                _json6.loads(_l).get("loop") == loop and "findings_set" in _json6.loads(_l)
+                for _l in path.read_text(encoding="utf-8").splitlines() if _l.strip())
+        except (OSError, ValueError):
+            _anchored = False   # 帳面壞行由既有讀側守衛處理,寫側不因此誤擋
+        if _anchored:
+            print(f"ERROR: loop {loop!r} 已定錨為 disposal loop(帳面有 findings_set 記錄)——"
+                  "後續 record 必帶 --report 與 --snapshot(留痕強制;T6)", file=sys.stderr)
+            return 2
     rc = _jsonl_append_verified(path, rec, "token", token)
     if rc != 0:
         return rc
@@ -3506,7 +3521,7 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
     return 0
 
 
-def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None):
+def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None, disposal=False):
     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
     findings 數的源頭仍是 LLM 裁決——gate 機械化的是算術,不是數字的正確性(見設計 doc)。
@@ -3521,6 +3536,15 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
     explicit_need = need is not None
     if need is None:
         need = 2
+    if disposal:
+        # [T4 處置閘] 獨立路徑(design-loop重設計 d2/B5):與所有既有模式互斥,舊閘一行不動
+        if panel or light or settle is not None or explicit_need or min_seats is not None:
+            print("ERROR: --disposal 與 --panel/--light/--settle/--need/--min-seats 互斥(獨立閘路徑)",
+                  file=sys.stderr)
+            return 2
+        if spec is None:
+            print("ERROR: --disposal 需 --spec(fail-closed;G3 與留痕重驗無對象不可判)", file=sys.stderr)
+            return 2
     if settle is not None:
         # [S1] rc2 互斥/前置群(fail-closed;結清式收斂_計劃 2026-07-28)
         if panel or light:
@@ -3571,6 +3595,8 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         print("ERROR: --panel 要求本 loop 記錄全帶 round 欄(混用/legacy 記錄拒讀,防 None phantom 輪)",
               file=sys.stderr)
         return 2
+    if disposal:
+        return _loop_status_disposal(rounds, loop_id, spec)
     if not panel and n_round > 0:
         print("ERROR: canary-log 含 round 欄(panel 記錄)卻未加 --panel——拒絕靜默把一輪 W 筆當 W 輪",
               file=sys.stderr)
@@ -3852,6 +3878,16 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                                  f" --auditor <席> --severity <s> --findings <M>"
                                  f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}"
                                  f" --scope-lines <這輪審了幾行>")
+            # [T5 design-loop重設計] 處置閘模板(選用;record_cmd 原樣保留給 code-loop/舊流程)
+            if not light and eff_tier != "legacy":
+                out["disposal_cmd"] = (
+                    f"lumos canary record caught|missed --loop {loop_id}{rmode}"
+                    f" --auditor <席> --severity <s>"
+                    f" --findings-set <id串> --folded-set <id串> --accepted-set <id串>"
+                    f" --accept-reason <id=理由>"
+                    f" --report <席報告.md> --snapshot <凍結快照.md>"
+                    f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}")
+                out["disposal_gate"] = f"lumos loop status {loop_id} --disposal --spec <計劃節點.md> --repo <root>"
             if eff_tier == "legacy":
                 out["tier_hint"] = (
                     "★本 loop 無 tier 定錨,正在吃 legacy 判準(單席、cap 6——比 standard 的 cap 3 鬆)★。"
@@ -8037,6 +8073,165 @@ def _anchor_repo_root(repo):
     return None
 
 
+def _quote_norm(s):
+    """quote-check 的唯一正規化(T2 design-loop重設計):NFC → 剝 markdown 強調記號(*/`)
+    → 空白(含全形\u3000/換行)摺疊單空格。★抽取與比對共用這一份——嚴禁第二份實作★
+    (2026-08-02 教訓:預檢與主迴圈兩份實作當場漂移)。不做 lower(保留大小寫語意)。"""
+    import unicodedata
+    s = unicodedata.normalize("NFC", s)
+    s = s.replace("*", "").replace("`", "")
+    return " ".join(s.split())
+
+
+def _quote_rows(rtext, stext):
+    """quote-check 核心(T4 抽出供 CLI 與 disposal gate 共用——★單一實作★):
+    回 [{'quote','ok'},...];零引句回 None(呼叫端 fail loud)。"""
+    import re
+    quotes = re.findall(r"引句[：:]\s*[「『]([^」』]+)[」』]", rtext)
+    if not quotes:
+        return None
+    hay = _quote_norm(stext)
+    return [{"quote": q, "ok": _quote_norm(q) in hay} for q in quotes]
+
+
+def _loop_status_disposal(rounds, loop_id, spec):
+    """[T4] 處置閘(design-loop重設計 三):四條合取,全部讀側可重算——
+    ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(report/snapshot 存在且 sha 一致)
+    ④quote-check 對帳面 snapshot 全 ok。
+    ★canary caught/missed 不進合取(d4:觀測非閘;missed 不作廢 findings)★。
+    exit 0=收斂 / 1=未過 / 2=帳面損壞或參數錯。"""
+    from collections import OrderedDict
+    groups = OrderedDict()
+    for r in rounds:
+        groups.setdefault(r.get("round") or f"__seq{len(groups)}", []).append(r)
+    if not groups:
+        print(f"⏳ 無記錄 ({loop_id})")
+        return 1
+    rid, latest = next(reversed(groups.items()))
+    fails = []
+    # ── ① G3 hash 鏈(fail-closed:unbound 也擋——disposal 是新閘,無舊帳包袱) ──
+    try:
+        err, info = _hash_chain_check([latest], spec)
+    except OSError as e:
+        print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+        return 2
+    if err:
+        print(f"[disposal] G3 hash: ✗ — {err}")
+        fails.append("G3")
+    elif info == "unbound":
+        print("[disposal] G3 hash: ✗ — 判定輪未綁 hash(disposal 閘 fail-closed,record 帶 --spec/--reviewed)")
+        fails.append("G3")
+    else:
+        print(f"[disposal] G3 hash: ✓ — {info}")
+    # ── ② 處置集合(輪級重算,不信寫側) ──
+    carriers = [r for r in latest if "findings_set" in r]
+    if len(carriers) > 1:
+        print(f"ERROR: 判定輪 {rid} 有 {len(carriers)} 筆帶處置帳(每輪至多一筆;同 clusters 慣例)", file=sys.stderr)
+        return 2
+    carrier = carriers[0] if carriers else None
+    if carrier is None:
+        print("[disposal] 處置集合: ✗ — 判定輪無處置帳(record 帶 --findings-set/--folded-set/--accepted-set)")
+        fails.append("無處置帳")
+    else:
+        F = set(carrier.get("findings_set") or [])
+        FO = set(carrier.get("folded_set") or [])
+        AC = set(carrier.get("accepted_set") or [])
+        reasons = carrier.get("accept_reasons") or {}
+        bad = None
+        if FO & AC:
+            bad = f"folded∩accepted 非空: {sorted(FO & AC)}"
+        elif FO | AC != F:
+            bad = f"未處置: {sorted(F - FO - AC)}"
+        elif set(reasons) != AC or any(not str(v).strip() for v in reasons.values()):
+            bad = "accepted 理由缺席或空"
+        elif AC and any(r.get("severity") == "blocker" for r in latest):
+            bad = "★輪內有 blocker 席,accepted 必須為空(d1;輪級重算,不信寫側單席視角)★"
+        if bad:
+            print(f"[disposal] 處置集合: ✗ — {bad}")
+            fails.append("處置集合")
+        else:
+            print(f"[disposal] 處置集合: ✓ — {len(F)} 條全處置(折 {len(FO)}/放行 {len(AC)},理由齊)")
+    # ── ③ 留痕重驗 + ④ quote-check ──
+    if carrier is not None:
+        rp, sp = carrier.get("report_path"), carrier.get("snapshot_path")
+        if not rp or not sp:
+            print("[disposal] 留痕: ✗ — 判定輪未帶 report/snapshot(留痕缺席)")
+            fails.append("留痕缺席")
+        else:
+            ok = True
+            for label, pth, want in (("report", rp, carrier.get("report_sha256")),
+                                     ("snapshot", sp, carrier.get("snapshot_sha256"))):
+                try:
+                    got = _sha256_file(pth)
+                except OSError:
+                    print(f"[disposal] 留痕: ✗ — {label} 讀不到({pth})——record 完刪檔照樣擋")
+                    fails.append("留痕")
+                    ok = False
+                    continue
+                if got != want:
+                    print(f"[disposal] 留痕: ✗ — {label} sha256 與帳面不符(事後被改)")
+                    fails.append("留痕")
+                    ok = False
+            if ok:
+                print("[disposal] 留痕: ✓ — report/snapshot 存在且 sha256 與帳面一致")
+                rows = _quote_rows(Path(rp).read_text(encoding="utf-8"),
+                                   Path(sp).read_text(encoding="utf-8"))
+                if rows is None:
+                    print("[disposal] quote-check: ✗ — 報告零引句(驗不了≠通過)")
+                    fails.append("quote")
+                else:
+                    miss = [q for q in rows if not q["ok"]]
+                    if miss:
+                        print(f"[disposal] quote-check: ✗ — {len(miss)}/{len(rows)} 條錨不到快照")
+                        fails.append("quote")
+                    else:
+                        print(f"[disposal] quote-check: ✓ — {len(rows)} 條引句全數錨定")
+    # ── canary 觀測(不進合取——d4) ──
+    ca = sum(1 for r in latest if r.get("kind") == "caught")
+    mi = sum(1 for r in latest if r.get("kind") == "missed")
+    print(f"[disposal] canary(觀測,不進合取): caught {ca} / missed {mi}"
+          + ("——missed 席 findings ★不作廢★(d4),供跨輪累積帳" if mi else ""))
+    for i, r in enumerate(latest, 1):
+        print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
+    if fails:
+        print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+        return 1
+    print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定)")
+    return 0
+
+
+def cmd_quote_check(report, spec, as_json=False):
+    """錨定檢查(T2,vault-free):報告內每條「引句：「…」」norm 後須為凍結快照 norm 後的
+    子字串。rc0=全 ok、rc1=有 miss、rc2=IO/零引句(★驗不了≠通過,fail loud★)。
+    ★比對對象必須是派工當下的凍結快照,不是現檔★——對現檔跑,finding 折入後引句會
+    「自我成真」(重設計 r1 Codex 折入:循環自證)。"""
+    import json
+    import re
+    try:
+        rtext = Path(report).read_text(encoding="utf-8")
+        stext = Path(spec).read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"ERROR: 讀不到檔案: {e}", file=sys.stderr)
+        return 2
+    rows = _quote_rows(rtext, stext)
+    if rows is None:
+        print("ERROR: 報告內抽不到任何「引句：「…」」——驗不了≠通過;"
+              "席報告未遵守派工格式時,先補引句再記帳", file=sys.stderr)
+        return 2
+    miss = [r for r in rows if not r["ok"]]
+    if as_json:
+        print(json.dumps({"report": str(report), "spec": str(spec),
+                          "total": len(rows), "miss": len(miss), "quotes": rows},
+                         ensure_ascii=False))
+    else:
+        for i, r in enumerate(rows, 1):
+            mark = "✓" if r["ok"] else "✗"
+            print(f"  {mark} #{i} 「{r['quote'][:60]}」")
+        print(f"{'✅ 全數錨定' if not miss else f'⛔ {len(miss)}/{len(rows)} 條錨不到(miss 條不採信)'}"
+              f"(正規化=NFC+剝 */`+空白摺疊;比對對象應為派工凍結快照)")
+    return 0 if not miss else 1
+
+
 def cmd_anchor_verify(repo=None, as_json=False):
     """錨點完整性核對:baseline 內每個錨點檔算 sha256 比對。
     全符 rc=0;mismatch/缺檔 rc=1;baseline 不存在 rc=0+警示(漸進採用);參數錯 rc=2。
@@ -11783,6 +11978,8 @@ def main():
     ls = lsub.add_parser("status", help="算某 loop 收斂:連 K 輪 caught 且無 blocker/major")
     ls.add_argument("loop_id")
     ls.add_argument("--need", type=int, default=None, help="連續乾淨輪數 K(預設 2;--settle 下禁用)")
+    ls.add_argument("--disposal", action="store_true",
+                    help="[T4] 處置閘(獨立路徑,與 --panel/--light/--settle/--need/--min-seats 互斥;需 --spec)")
     ls.add_argument("--gate", action="store_true",
                     help="證據閘:K-streak(必要)∧ G1 refcheck 引用座標 ∧ G2 發現枯竭,全過才 rc 0")
     ls.add_argument("--spec", dest="gate_spec", help="--gate 必填:要核對引用座標的最終 spec md")
@@ -12069,6 +12266,11 @@ def main():
     aa.add_argument("--repo", dest="anchor_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     aa.add_argument("--note", required=True, help="一句話理由(必填,進留痕)")
 
+    p = sub.add_parser("quote-check", help="[T2 錨定檢查] 報告引句逐條對回凍結快照(vault-free;rc0 全 ok/rc1 有 miss/rc2 IO或零引句)")
+    p.add_argument("qc_report", metavar="報告.md")
+    p.add_argument("--spec", dest="qc_spec", required=True, metavar="凍結快照.md")
+    p.add_argument("--json", action="store_true", dest="qc_json")
+
     p = sub.add_parser("lint-watch", help="依賴版本落差掃描(vault-free):讀 .lumos/lint-watch.json 對比 registry 最新版")
     p.add_argument("--repo", dest="lint_watch_repo", default=".", help="repo root(含 .lumos/lint-watch.json 的資料夾,預設 .)")
     p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON manifest")
@@ -12177,6 +12379,8 @@ def main():
         return cmd_sqlfluff_sarif(out=args.sqlfluff_out)
     if args.cmd == "stylelint-sarif":
         return cmd_stylelint_sarif(out=args.stylelint_out)
+    if args.cmd == "quote-check":
+        return cmd_quote_check(args.qc_report, args.qc_spec, as_json=args.qc_json)
     if args.cmd == "anchor":
         if args.anchor_cmd == "verify":
             return cmd_anchor_verify(repo=args.anchor_repo, as_json=args.as_json)
@@ -12286,7 +12490,7 @@ def main():
             return cmd_loop_status(env, args.loop_id, args.need,
                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
                                    panel=args.panel, light=args.light, min_seats=args.min_seats,
-                                   settle=args.settle)
+                                   settle=args.settle, disposal=args.disposal)
         if args.lcmd == "compress":
             return cmd_loop_compress(args.compress_file, as_json=args.compress_json)
         if args.lcmd == "verify-progress":

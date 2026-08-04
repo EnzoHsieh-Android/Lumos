@@ -9,6 +9,11 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 
 ## 一眼看懂
 
+> ⚠ **與 design-loop 的分流註記(2026-08-04)**:design-loop 已改走★處置閘★(`--disposal`,見
+> 圖譜 [[Projects/design-loop重設計]]);**本 skill 沿用舊 panel 閘(--gate --panel),不得因同步衝動改本檔**
+> ——code-loop 定位是下游正確性防線之一、其 canary 型別(off-by-one 等)有失敗場景不與抑噪互打、
+> missed 率未見異常(9.3%)。兩邊判準不同是★刻意設計★,不是漂移。
+
 - **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill;`standard` 走單 reviewer(★原本這裡寫「(K=2)」是★講反的★:tier=high 實務上走平行 panel,而 panel 是 **K=1**;K=2 是循序模式的數字。2026-08-03 修★);trivial 可跳(commit 註明)。進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
 - **gate/守衛類 code 建議 feature branch**(2026-07-22 prepush範圍修法):pre-push 對 branch 與 main-direct **現已同軌**檢查(讀 stdin 推送範圍逐 ref 判,非 merge-base)——此為縱深建議非機械強制。
 - **loop id** = `code-<topic>`（例 `code-payment-retry`）。
