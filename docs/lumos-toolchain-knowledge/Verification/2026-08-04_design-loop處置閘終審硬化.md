@@ -4,6 +4,7 @@ status: pass
 date: 2026-08-04
 valid_under: scripts/lumos 單檔架構;.canary-log.jsonl 共用帳;_vault_repo_root 向上找 .git 的根判定;quote-check 引句樣式=「引句：「…」」
 revalidate_when: canary-log 分帳(per-loop 檔)時;round 分組/內部鍵規則變更;_quote_norm 或引句抽取 regex 變更;留痕路徑落帳規則變更
+self_audit: sonnet/2026-08-04
 plan_refs:
   - "[[Projects/design-loop重設計_實作計畫]]"
   - "[[Projects/design-loop重設計]]"

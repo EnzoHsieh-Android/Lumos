@@ -3,6 +3,7 @@ type: project
 status: done
 created: 2026-08-04
 updated: 2026-08-04
+self_audit: sonnet/2026-08-04
 related:
   - "[[Projects/design-loop重設計]]"
   - "[[Systems/loop-convergence-recording]]"
