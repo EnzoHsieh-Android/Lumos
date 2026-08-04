@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-04
 updated: 2026-08-04
 related:
@@ -9,9 +9,10 @@ related:
   - "[[Projects/design-loop判準重定位]]"
   - "[[Projects/canary生成硬化_計劃]]"
   - "[[Systems/convergence-evidence-gate]]"
+  - "[[Projects/design-loop重設計]]"
 tags:
   - type/project
-  - status/doing
+  - status/done
 summary: |-
   FLAG:TECHNICAL
   KEY:★問題:design-loop 的 canary 與它自己的派工模板互斥★——`templates.md:83` 官方抑噪紀律逐字寫「低嚴重度疑慮,給不出具體失敗場景就不要標」,而 design-loop 的四個 canary 型別(壞章節引用/未定義旗標/未定義欄位/未定義產物)★全部是低嚴重度、講不出失敗場景的文件級瑕疵★。審計員越聽話,越會漏抓
@@ -24,6 +25,13 @@ summary: |-
   KEY:★三條定案★——①canary record 強制留存審計員報告(不留不給記) ②「真 oracle」分類修正:canary 判定無留痕=實務上與自報無異,可重算的只剩 G3 hash ③`輪有效` 從硬閘降級為觀測(無留痕+強依賴配置的判定不配當閘的必要條件;與 canary second 的「純 telemetry」定位對齊)
   PRIOR-ART:①最小解在既有機制層——改 `lumos-design-loop/templates.md` 的抑噪紀律措辭 ＋/或 canary 型別清單,不動任何碼、不造新機制 ②世界解過=調查方法學的 attention check／instructed manipulation check:公認做法是「covert、與題材同型、嵌進真題裡」而非讓它突出;且 ★單一 check 不足以判定不專心★(Prolific 政策:>5 分鐘的研究須失敗 ≥2 次才可拒絕),★通過一個 check 不預測通過另一個★ ③裁定=borrow-design(借 attention-check 方法學,零依賴)
   DEP:skills/lumos-design-loop/templates.md §1｜skills/lumos-design-loop/SKILL.md 步驟 2/2.7/3｜scripts/lumos _round_valid_m2 / _loop_status_panel
+decisions:
+  - content: 2026-08-04 結案:實驗與追查結論(主假說未證實/歷史不可稽核/三條定案)全數併入 [[Projects/design-loop重設計]] d3
+    id: d1
+    context: 本案是調研性質,決定性產出=配對實驗+不可稽核追查
+    why_chosen: 修法歸重設計案統一裁定,避免兩案各自演化漂移
+    decided: 2026-08-04
+    valid: true
 ---
 # canary 注意力檢查失效（計劃）
 

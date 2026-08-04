@@ -11,6 +11,7 @@ related:
   - "[[Projects/loop三輪壓縮_計劃]]"
   - "[[Issues/loop-next吐不可宣告的tier]]"
   - "[[Projects/canary注意力檢查失效]]"
+  - "[[Projects/design-loop重設計]]"
 tags:
   - type/project
   - status/doing
@@ -38,6 +39,12 @@ decisions:
     id: d2
     context: _loop_status_panel 是 design-loop 與 code-loop 共用的同一段碼。design-loop 定位=抬品質(下游有 TDD+E2E 接),code-loop 定位=保正確(審要進 main 的 diff,下游沒有另一層)。處置判準的放寬絕不可連動到 code-loop
     why_chosen: 與現行 --panel/--light/--settle 完全同型,是這段碼既有的分流慣例,不引入新概念;B 案(看 loop id 前綴 code- 分流)把命名慣例變成語意承載,改個 id 就繞過去,脆;C 案(兩段碼拆開)最乾淨但會複製 hash 鏈與 min-seats 邏輯,而那正是本專案已經吃過虧的「多份實作立刻漂移」
+    decided: 2026-08-04
+    valid: true
+  - content: 2026-08-04 本案併入 [[Projects/design-loop重設計]],不再獨立推進;d1/d2 沿用進該案,其餘以該案為準
+    id: d3
+    context: 本案 r1 panel 輪無效(1 caught/4 missed),但查證揭露的問題(cluster 帳已是處置帳/G1 panel 不執行/canary 判定不可稽核)大於本案原範圍——五個錨有四個該降級,不是換兩個
+    why_chosen: 全流程重設計比局部換錨更對症;loop design-loop判準重定位 r1 帳保留(達 r1 未收斂、案被吸收)
     decided: 2026-08-04
     valid: true
 ---
