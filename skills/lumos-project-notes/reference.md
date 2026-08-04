@@ -727,7 +727,7 @@ python3 scripts/lumos recent --days 7
 4. **panel 變體**:一輪派 N 個審計員時,每個各給自己的 canary;漏抓自己 canary 的剔出投票。
 
 **收斂留痕(2026-06-19;讓多輪審計能機械終止)**:把每輪記成一筆帶 loop 的 canary——`lumos canary record caught|missed --loop <設計slug> --severity clean|minor|major|blocker --findings <存活折入條數> --auditor <模型>`(`severity`=忠實轉錄審計員的最嚴重 finding;`--findings`=辯方裁決後存活折入的真 finding 條數)。收斂查詢用**證據閘**:`lumos loop status <slug> --need 2 --gate --spec <spec md> --repo <root>`——輪次紀律(連 2 輪 caught+乾淨)為必要條件,合取 G1(spec 引用座標 refcheck 全 ok)與 G2(發現枯竭:findings 單調不增、末輪 ≤1 且末步下降)→ exit 0=GATE PASS(綠燈進實作)。missed/缺 severity/blocker/major/引用壞座標/發現未枯竭都讓它不收斂(逼修了再審);不帶 `--gate` 為舊版純輪次判準(向後相容);panel/light/settle 三模式判準各異(見 design-loop skill,settle=清單全結清∧G1∧G3)。`gov` 看得到整段輪歷史。
-> **gate 契約補注**:`--spec` 在 code-loop 情境可省略(`loop status --gate` G1 skip,無 spec 可驗引用座標屬預期);design/spec loop 仍帶 `--spec`(G1 會跑 refcheck 驗引用座標)。
+> **gate 契約補注**:`--spec` 在 code-loop 情境可省略(`loop status --gate` G1 skip,無 spec 可驗引用座標屬預期);design/spec loop 仍帶 `--spec`(G1 會跑 refcheck 驗引用座標)。**design-loop 新制(2026-08-04)**:收斂閘改 `loop status --disposal --spec <計劃> --repo <root>`(四條合取:G3∧處置帳全清∧留痕 sha 重驗∧quote-check 引句全錨定),舊 `--gate --panel` 留給 code-loop。
 
 **天花板**:canary 抓得到「審計員根本沒讀/只吐通用回應」,**抓不到「讀了但複雜權衡判錯」**;判定「有沒有抓到」「severity 多嚴重」都由植入者自己做、無外部檢查——canary/收斂是**降低放水機率的摩擦 + 可觀測地板**,不是閉合驗證或 oracle。設計全文見 `docs/design/2026-06-19-canary-audit.md`、`…-convergence-recording.md`。
 

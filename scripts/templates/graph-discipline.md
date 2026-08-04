@@ -37,7 +37,7 @@
 | 排查 / 對外支援 / 查 DB / 呼叫既有 API（動手前要懂為什麼 / 邊界 / 合約） | **`lumos-project-notes`**（先 search→context→contracts）|
 | 讀圖譜 / 寫筆記 / 巡檢 / 綁合約測試 / 動 `{{KG}}` | **`lumos-project-notes`** |
 | 跨專案共用業務規則（升格核心 / `core_refs` / 偏離） | **`lumos-core-knowledge`** |
-| 設計 spec 完成 → 進實作前：過 canary-護對抗審計 loop 到 `lumos loop status --gate` 收斂（trivial 可跳並註明；進場資格與 light/settle 模式見 skill） | **`lumos-design-loop`** |
+| 設計 spec 完成 → 進實作前：過處置閘審計 loop 到 `lumos loop status --disposal` 收斂（2026-08-04 新制：錨定引句＋處置帳全清，canary 降為觀測；trivial 可跳並註明；進場資格與 light/settle 見 skill） | **`lumos-design-loop`** |
 | 分支終審前：`lumos pitfalls --diff <merge-base>..HEAD` 出 `tier: high` → 對抗代碼審；收斂後 `lumos code-loop pass --note` 留痕才能 push（pre-push 硬擋無留痕的 tier=high） | **`lumos-code-loop`** |
 
 > 圖譜讀寫工具是 **lumos**（`scripts/lumos`，python3 零依賴；細節見 `lumos-project-notes` skill）。`lumos-*` 是 **user-scope skills**（唯一源在 `lumos-toolchain` repo、symlink 進 `~/.claude/skills/`）——每台機器首次裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill（如 vue / csharp）見文末〈架構參考 Skills〉。
