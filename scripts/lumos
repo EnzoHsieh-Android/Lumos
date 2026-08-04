@@ -3780,10 +3780,26 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 out["canary_type"] = {f"slot{i}": _CANARY_TYPES[(i + n_next - 1) % 4]
                                       for i in range(1, width + 1)}
             rmode = "" if (light or eff_tier == "legacy") else f" --round r{n_next}"
+            # ★`legacy` 不是可宣告值,不得吐進 record_cmd★(2026-08-04):`--tier` 的 choices
+            # 只有 light/standard/high(LOOP_TIERS),legacy 純粹是「無定錨舊帳 + legacy 格式」
+            # 的推導結果。原本這裡無條件吐 `--tier {eff_tier}`,legacy 下等於★發一條 argparse
+            # 當場擋掉的指令★;而使用者最自然的修復是「把 --tier 拿掉再跑一次」——拿掉就記不上
+            # 定錨,下一輪 next 又推成 legacy、又吐一條跑不動的指令。
+            # ★這個 bug 自己維持自己★:2026-08 三個走循序的 loop(code-slim-python /
+            # code-teardown-windows / code-slim-handoff)全數 tier=None,即此循環的產物;
+            # 其中 code-slim-python 吃到 legacy 的 cap 6(standard 是 3)才被逼停。
+            _tier_flag = f" --tier {eff_tier}" if eff_tier in LOOP_TIERS else ""
             out["record_cmd"] = (f"lumos canary record caught|missed --loop {loop_id}{rmode}"
                                  f" --auditor <席> --severity <s> --findings <M>"
-                                 f" --spec <計劃節點.md> --reviewed <sha256> --tier {eff_tier}"
+                                 f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}"
                                  f" --scope-lines <這輪審了幾行>")
+            if eff_tier == "legacy":
+                out["tier_hint"] = (
+                    "★本 loop 無 tier 定錨,正在吃 legacy 判準(單席、cap 6——比 standard 的 cap 3 鬆)★。"
+                    "legacy 不是可宣告值,★這個 loop 補標不了★:帳面已是 legacy 格式(記錄不帶 --round),"
+                    "補 --tier standard|high 會被格式一致性當場擋掉(rc2)。"
+                    "(--tier light 格式相容,但 cap=2 且帶 ratchet 語意,對已跑數輪的 loop 通常當場 cap-reached。)"
+                    "要走分級判準請★開新 loop id,並在第一筆 record 就帶 --tier★。")
             # ★預防端:警告必須在派工「之前」★——記帳時才喊已經來不及(輪跑完了)。
             # loop next 是每輪第一步,所以量尺放這裡。
             out["scope_cap"] = (

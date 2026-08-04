@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-28
+updated: 2026-08-04
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -43,6 +43,8 @@ decisions:
     why_chosen: tail-K 已天然涵蓋——missed 在窗內就不收斂、隨新輪滑出才放行;加特例反增複雜度
     decided: 2026-06-19
     valid: true
+related:
+  - "[[Issues/loop-next吐不可宣告的tier]]"
 ---
 # loop-convergence-recording
 

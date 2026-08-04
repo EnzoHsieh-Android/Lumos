@@ -11854,6 +11854,64 @@ def t_loop_next_cluster_hint_only_when_choice_is_open():
     check("★light 不得提(用不到 cluster 帳)★", "cluster_hint" not in dl, "")
 
 
+def t_loop_next_legacy_emits_a_command_that_actually_runs():
+    """★工具吐給你的指令必須跑得動——不然它會教出錯誤的習慣★(2026-08-04)
+
+    `loop next` 的 `record_cmd` 是「複製貼上用」的模板。但它原本無條件吐
+    `--tier {eff_tier}`,而 `legacy` ★不在 `--tier` 的 choices 裡★(只有
+    light/standard/high)——所以 legacy loop 拿到的是一條 argparse 當場擋掉的指令。
+
+    ★為什麼這比「一條壞指令」嚴重★:碰到 rc2 之後最自然的修復是「把 --tier 拿掉
+    再跑」。拿掉就記不上定錨 → 下一輪 next 又推成 legacy → 又吐一條跑不動的指令。
+    ★這個 bug 自己維持自己★。2026-08 三個走循序的 loop 全數 `tier=None`,即此循環
+    的產物;其中 code-slim-python 吃到 legacy 的 cap 6(standard 是 3)才被逼停。
+
+    ★驗行為(不是驗字串)★:把 next 吐的 record_cmd 佔位符填掉、★真的跑一次★,
+    必須 rc0。字串斷言只證「長得對」,真跑才證「用得了」。
+    同時驗 light/standard 仍照舊帶 --tier(修法不得誤傷可宣告的三檔)。"""
+    import json as _j
+    v = mkvault()
+    spec = v / "Projects" / "lgspec.md"
+    spec.write_text("legacy tier spec\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    lid = f"lg-{_M1U}"
+
+    # 造一筆 legacy 格式舊帳(不帶 --round、不帶 --tier)→ next 會推導成 legacy
+    run(v, "canary", "record", "caught", "--loop", lid, "--severity", "clean",
+        "--findings", "0", "--auditor", "s1", expect_rc=0)
+    r = run(v, "loop", "next", lid, "--json", "--spec", str(spec), "--repo", str(v.parent))
+    d = _j.loads(r.stdout)
+    check("★前置★ 現場成立:確實走到 legacy 推導路徑且吐得出模板(不是別的 tier / 別的 phase 混過去)",
+          d["tier"] == "legacy" and d["phase"] == "plant-canary", r.stdout[:300])
+
+    cmd = d["record_cmd"]
+    check("★legacy 不得出現在 record_cmd 的 --tier★(它不是可宣告值)",
+          "--tier legacy" not in cmd, cmd)
+
+    # ★真跑★:填掉佔位符,原樣執行 next 給的指令
+    filled = (cmd.replace("caught|missed", "caught").replace("<席>", "s2")
+                 .replace("<s>", "clean").replace("<M>", "0")
+                 .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h)
+                 .replace("<這輪審了幾行>", "10"))
+    argv = filled.split()
+    check("★前置★ 現場成立:填完沒有殘留佔位符(不然是在跑別的東西)",
+          "<" not in filled and argv[0] == "lumos", filled)
+    rr = run(v, *argv[1:])
+    check("★next 吐的指令必須真的跑得動★(rc0)", rr.returncode == 0,
+          f"rc={rr.returncode} cmd={filled}\n{rr.stderr[:300]}")
+
+    check("★要講清楚這個 loop 補標不了、得開新 id★(不然人只會困惑地把旗標拿掉)",
+          "開新 loop id" in d.get("tier_hint", "") and "cap 6" in d.get("tier_hint", ""),
+          d.get("tier_hint", "")[:200])
+
+    # 反誤傷:可宣告的三檔仍須照舊帶 --tier
+    ds = _j.loads(run(v, "loop", "next", f"lgs-{_M1U}", "--tier", "standard", "--json").stdout)
+    check("★standard 仍要帶 --tier★(修法不得誤傷可宣告檔)",
+          "--tier standard" in ds["record_cmd"] and "tier_hint" not in ds, ds["record_cmd"])
+    dli = _j.loads(run(v, "loop", "next", f"lgl-{_M1U}", "--tier", "light", "--json").stdout)
+    check("★light 仍要帶 --tier★", "--tier light" in dli["record_cmd"], dli["record_cmd"])
+
+
 def t_need_src_guards_cannot_silently_disable_coverage():
     """★守衛的失敗模式是「放行」,所以它自己壞掉時必須大聲★(2026-08-02)
 
