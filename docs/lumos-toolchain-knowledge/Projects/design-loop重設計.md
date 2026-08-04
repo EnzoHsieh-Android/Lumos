@@ -11,6 +11,7 @@ related:
   - "[[Projects/canary注意力檢查失效]]"
   - "[[Projects/design-loop判準重定位]]"
   - "[[Projects/design-loop提效_計劃]]"
+  - "[[Projects/design-loop重設計_實作計畫]]"
 tags:
   - type/project
   - status/doing
