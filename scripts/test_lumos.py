@@ -7467,6 +7467,56 @@ def t_codeloop_ledger():
                   rec2.get("note") == "no high", f"note={rec2.get('note')!r}")
 
 
+def t_codeloop_pass_survives_bookkeeping_commits():
+    """[修 Issues/code-loop-pass自失效追尾](2026-08-04 實戰:追尾三圈,每圈重付全套 pre-push 閘)
+
+    pass 綁 HEAD sha 嚴格等值,但 pass 自己會往★tracked★的 docs/.governance-log.jsonl
+    append 一行——照「先 commit 乾淨再 push」的普遍直覺把這行 commit 進去,HEAD 前進,
+    pass 立刻自失效。
+    修=簿記白名單豁免(可重算):留痕 sha 之後的 commit 若★只動簿記檔★
+    (docs/.governance-log.jsonl / docs/.usage-log.jsonl / governance/anchor-baseline.json /
+    governance/code-loop/)且留痕 sha 是目標 sha 的★祖先★→ 留痕仍有效;
+    任何其他檔一動照樣失效(豁免不外溢);改寫史(非祖先)拒認。
+    翻紅釘:拔白名單豁免 → 簿記案例翻紅;code commit 與 amend 案例=收緊釘(不得放行)。"""
+    import subprocess as _sp
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        (Path(d) / "docs").mkdir()
+        run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
+        branch = _git_branch(d)
+        pass_sha = (_codeloop_read(d, branch) or {}).get("head_sha", "")
+        g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        # 簿記 commit:pass 剛 append 的治理帳行(+留痕 json,同屬白名單)
+        g("add", "-A")
+        g("commit", "-qm", "gov bookkeeping")
+        check("★前置★ 現場成立:pass 後 HEAD 真的前進了(≠留痕 sha)",
+              bool(pass_sha) and _git_head(d) != pass_sha, f"pass_sha={pass_sha[:8]}")
+        chg = g("diff", "--name-only", pass_sha, "HEAD").stdout.splitlines()
+        check("★前置★ 現場成立:該 commit 只動簿記檔",
+              chg and all(f.startswith(("docs/.governance", "docs/.usage", "governance/code-loop/"))
+                          for f in chg), str(chg))
+        r = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+                    capture_output=True, text=True)
+        check("★pass 後純簿記 commit → 留痕仍有效 rc0(原:sha 過時追尾)★", r.returncode == 0,
+              f"rc={r.returncode}\n{r.stdout[:200]}")
+        # 收緊釘①:code commit → 豁免不外溢,照樣 blocked
+        (Path(d) / "app2.py").write_text("import requests\nrequests.post('http://y')\n",
+                                         encoding="utf-8")
+        g("add", "app2.py")
+        g("commit", "-qm", "more code")
+        r2 = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+                     capture_output=True, text=True)
+        check("★簿記豁免不外溢:code commit 後照樣 blocked rc1★", r2.returncode == 1,
+              f"rc={r2.returncode}\n{r2.stdout[:200]}")
+        # 收緊釘②:改寫史(amend)→ 留痕 sha 非祖先,拒認
+        run_lumos(["code-loop", "pass", "--note", "re-pass", "--repo", d])
+        g("commit", "-q", "--amend", "-m", "more code (amended)")
+        r3 = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+                     capture_output=True, text=True)
+        check("★改寫史後留痕 sha 非祖先 → 拒認 blocked rc1★", r3.returncode == 1,
+              f"rc={r3.returncode}\n{r3.stdout[:200]}")
+
+
 # ── code-loop check ──────────────────────────────────────────────────────────
 
 def t_codeloop_check():

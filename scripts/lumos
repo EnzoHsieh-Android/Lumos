@@ -11939,9 +11939,30 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         rec_status = rec.get("status", "")
         if rec_sha == marker_sha and rec_status in ("passed", "skipped"):
             return {"blocked": False, "reason": f"有效留痕({rec_status}@{marker_sha[:8]})", "tier": tier}
+        # 簿記白名單豁免([[Issues/code-loop-pass自失效追尾]] 2026-08-04):pass 自己會往
+        # tracked 的治理帳 append 一行,照「先 commit 再 push」直覺把它 commit 進去,
+        # HEAD 前進 → pass 自失效 → 追尾。豁免=留痕 sha 之後的 commit ★只動簿記檔★
+        # 且留痕 sha 是目標 sha 的★祖先★(改寫史拒認)→ 留痕仍有效。
+        # 「HEAD 移動→作廢」的原意=pass 不得蓋到新★代碼★——任何非白名單檔一動照樣失效。
+        if rec_sha and rec_sha != marker_sha and rec_status in ("passed", "skipped"):
+            _WL_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
+                         "governance/anchor-baseline.json")
+            _WL_DIR = "governance/code-loop/"
+            _anc = _sp.run(["git", "merge-base", "--is-ancestor", rec_sha, marker_sha],
+                           capture_output=True, text=True, cwd=str(repo_root))
+            if _anc.returncode == 0:
+                _df = _sp.run(["git", "diff", "--name-only", rec_sha, marker_sha],
+                              capture_output=True, text=True, cwd=str(repo_root))
+                _files = [f.strip() for f in _df.stdout.splitlines() if f.strip()]
+                if _df.returncode == 0 and all(
+                        f in _WL_FILES or f.startswith(_WL_DIR) for f in _files):
+                    return {"blocked": False,
+                            "reason": (f"有效留痕({rec_status}@{rec_sha[:8]}+簿記豁免:"
+                                       f"其後 {len(_files)} 檔皆白名單)"),
+                            "tier": tier}
         # 留痕存在但 sha 不符或狀態不對
         if rec_sha != marker_sha:
-            reason = f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]})"
+            reason = f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]};非純簿記增量)"
         else:
             reason = f"tier=high 且留痕狀態無效({rec_status!r})"
         return {"blocked": True, "reason": reason, "tier": tier}
@@ -11986,6 +12007,8 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
         _codeloop_gov_log(repo_root, branch, status, note or "", head_sha, ts)
         label = "✅" if status == "passed" else "⏭"
         print(f"{label} code-loop {status} [{branch}@{head_sha[:8]}] {note or ''}")
+        print("  (留痕綁本 sha;其後只准簿記檔 commit——治理帳/usage-log/anchor-baseline/"
+              "code-loop 留痕——動到其他檔即失效,需重跑 pass/skip)")
         return 0
 
     if subcmd == "check":
