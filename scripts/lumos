@@ -2710,7 +2710,7 @@ def _vault_repo_root(env):
     return env.vault.parent.resolve()
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None):
     """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
@@ -2725,6 +2725,12 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
            "kind": kind, "auditor": auditor or "", "token": token, "note": note or ""}
     if loop:
         rec["loop"] = loop
+    # D 前置(2026-08-05):植入型別/探針結果結構化——原散文 note 不可重算;
+    # 不給不寫鍵(T1 相容慣例)。D 本體開工條件=帶型別記錄攢滿 15 筆(canary-stats 可數)。
+    if canary_type:
+        rec["canary_type"] = canary_type
+    if probe:
+        rec["probe"] = probe
     if round_id:
         if round_id.startswith("__"):
             # r3 終審修(3 席重疊):__ 為讀側內部鍵保留字首(round-less 逐筆 __seqN)——
@@ -3510,6 +3516,29 @@ def cmd_loop_canary_stats(env, loop_id=None):
                 tail = f"  尾端連續missed={v['streak']}" if v["streak"] else ""
                 esc = "  ⚠ 連 2 missed → 升級模型(升 opus)" if v["streak"] >= 2 else ""
                 print(f"  {aud}\tcaught {v['caught']}\tmissed {v['missed']}{tail}{esc}")
+    # D 前置:型別×探針×caught 表(帶 canary_type 的記錄才入列;attr 攢滿 15 筆=D 本體開工條件)
+    typed = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            ct = d.get("canary_type")
+            if not ct or d.get("kind") not in ("caught", "missed"):
+                continue
+            if loop_id and d.get("loop") != loop_id:
+                continue
+            key = (ct, d.get("probe") or "-")
+            t = typed.setdefault(key, {"caught": 0, "missed": 0})
+            t[d["kind"]] += 1
+    except OSError:
+        pass
+    if typed:
+        total_typed = sum(v["caught"] + v["missed"] for v in typed.values())
+        print(f"  ── 型別×探針×caught(帶型別記錄 {total_typed} 筆;攢滿 15 筆=D 案開工條件)──")
+        for (ct, pb), v in sorted(typed.items()):
+            print(f"  {ct}\tprobe={pb}\tcaught {v['caught']}\tmissed {v['missed']}")
     if n_bad:
         print(f"  (帳面 {n_bad} 行不可解析,已跳過——壞行只影響觀測完整性,不進 gate)")
     print("  ★觀測非閘:caught 只證席位醒著,不證審得夠廣(caught≠覆蓋);missed 席 findings 不作廢(d4)★")
@@ -12292,6 +12321,10 @@ def main():
                     help="這輪審計員找到的最嚴重 finding(忠實轉錄)")
     cr.add_argument("--findings", type=int,
                     help="該輪辯方裁決後存活折入的真 findings 數(canary 不計;供 loop status --gate 枯竭錨)")
+    cr.add_argument("--canary-type", dest="canary_type",
+                    help="[D 前置] 植入型別(a/b/c/d/resource/off-by-one/incident-inv…;結構化取代散文 note)")
+    cr.add_argument("--probe", dest="probe",
+                    help="[D 前置] 難度探針結果(pass/recraftN/recraftN-fail;結構化取代散文 note)")
     cr.add_argument("--round", dest="round_id",
                     help="panel 輪 id(一輪 W 個平行審計員的記錄共享;供 loop status --panel 分組)")
     cr.add_argument("--capture-counts", dest="capture_counts",
@@ -12829,6 +12862,7 @@ def main():
                                      auditor=args.sec_auditor, note=args.sec_note)
         return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
                           args.severity, findings=args.findings, round_id=args.round_id,
+                          canary_type=args.canary_type, probe=args.probe,
                           capture_counts=args.capture_counts, clusters=args.clusters,
                           spec=args.rec_spec, reviewed=args.reviewed,
                           tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,

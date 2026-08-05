@@ -10667,6 +10667,31 @@ def t_search_multiword_fallback_is_default_and_only_on_zero():
           r.returncode == 0 and "多詞回退" not in r.stderr, f"rc={r.returncode}\n{r.stderr[:200]}")
 
 
+def t_canary_type_probe_fields():
+    """[D 前置 2026-08-05,Enzo 裁]植入型別與探針結果結構化——原散文 note 不可重算,
+    攢十輪也是考古材料。record 加 --canary-type/--probe 選配欄(T1 慣例:不給不寫鍵、
+    行為不變);canary-stats 加型別×探針×caught 表。D 本體開工條件=帶型別記錄攢滿 15 筆
+    (可重算,同防浮動條款款式)。翻紅釘:拔欄位寫入 → 落帳斷言翻紅。"""
+    import json as _j
+    v = mkvault()
+    lid = f"ct-{_M1U}"
+    run(v, "canary", "record", "caught", "--loop", lid, "--auditor", "s1", "--severity", "minor",
+        "--canary-type", "resource", "--probe", "recraft2-fail", expect_rc=0)
+    run(v, "canary", "record", "missed", "--loop", lid, "--auditor", "s2", "--severity", "minor",
+        "--canary-type", "off-by-one", "--probe", "pass", expect_rc=0)
+    run(v, "canary", "record", "caught", "--loop", lid, "--auditor", "s3", "--severity", "minor", expect_rc=0)
+    recs = [_j.loads(l) for l in (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()
+            if l.strip() and _j.loads(l).get("loop") == lid]
+    check("★--canary-type/--probe 落帳★", recs[0].get("canary_type") == "resource"
+          and recs[0].get("probe") == "recraft2-fail", str(recs[0])[:200])
+    check("★不給不寫鍵(相容鐵則)★", "canary_type" not in recs[2] and "probe" not in recs[2],
+          str(recs[2])[:200])
+    r = run(v, "loop", "canary-stats", lid)
+    check("★canary-stats 型別表:型別×探針×caught 可讀★", r.returncode == 0
+          and "resource" in r.stdout and "recraft2-fail" in r.stdout and "off-by-one" in r.stdout,
+          r.stdout[:400])
+
+
 def t_panel_k2_and_probe():
     """[A 案落地](plan:Projects/panel收斂判準改革_計劃;design-loop r1+r2 已收斂)
 

@@ -123,7 +123,8 @@ Agent tool、`model: sonnet`(連 2 missed 升 opus)、**不告知 canary**、指
 lumos canary record caught|missed --loop code-<topic> \
   --severity <辯方後存活 max> --findings <存活折入數> --auditor <模型> \
   --scope-lines <這輪 diff 幾行> \
-  --report <席報告路徑> --snapshot <工作副本路徑>   # 留痕(2026-08-05 起,見下)
+  --report <席報告路徑> --snapshot <工作副本路徑> \
+  --canary-type <型別> --probe <pass|recraftN|recraftN-fail>   # D 前置:結構化取代散文 note
 ```
 
 **留痕慣例(2026-08-05 借 design-loop T3;原:報告躺 scratchpad,session 一清就蒸發,帳上 note
