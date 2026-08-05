@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-04
-updated: 2026-08-04
+updated: 2026-08-05
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -12,6 +12,8 @@ verified_by:
   - "[[Verification/2026-07-05_code-loop必用守衛]]"
   - "[[Verification/2026-07-10_合約鏈補強234]]"
 summary: |-
+  KEY:[2026-08-05]missed 席 findings 改★機械 repro triage★(取代直接丟)——canary 硬閘不動(該席判決仍作廢),但 findings 逐條試真碼/真跑證實;證實走通道 a 折入(note 記「機械證實非席信用」)、repro 不出才丟。實證=T8 r1 missed 席兩條真 major 靠 repro 撈回,原「撈」是編排者裁量現為硬步驟(結構性誤殺的機制化補丁;與 design-loop d4 分流不變:代碼有真 oracle 故走 repro 不走「不作廢」)
+  KEY:[2026-08-05]席報告留痕慣例+收貨 quote-check(advisory)——報告落 governance/review-reports/<loop-id>/(原躺 scratchpad 蒸發,帳上 note 指空;T8 實錄);record 帶 --report/--snapshot 讓 sha 落帳(不帶 findings_set 不觸 T6 定錨);逐席 quote-check 對工作副本驗引句(§3 錨定紀律的機械收貨端;不進 gate,panel 判準一字不動)
   KEY:[2026-08-04]pass/skip 留痕的簿記白名單豁免([[Issues/code-loop-pass自失效追尾]])——留痕 sha 之後的 commit 只動簿記檔(治理帳/usage-log/anchor-baseline/code-loop 留痕)且留痕 sha 為目標祖先 → 留痕仍有效;其他檔一動照樣失效、改寫史拒認。「HEAD 移動→作廢」原意=pass 不得蓋到新代碼,此為精化非放寬(原嚴格等值下 pass 自己 append 的治理帳行被 commit 即自失效→追尾) [test:t_codeloop_pass_survives_bookkeeping_commits]
   KEY:[2026-07-18]codestage S1/S5 落地(設計[[Projects/code階段強化_計劃]],4輪審計30條折入+實質收斂人裁)——S1 真跑優先(綁約合約 pass 前必真跑綁定測試,解析三順位不得靜默跳過;紀律層)+確定性驗證器三通道參與(不佔canary席;M2帳下capture advisory裁決歸機械證實通道)/S5 辯方預設Codex+tier-high雙Codex角色(帶餌finder佔W+無餌否決席外掛,落閘=M2記disputed-major)+家族否決保護+fail分級(high外家缺席不得收斂攤人)
   KEY:[2026-07-10]panel 追加 spec-conformance slot(tier=high 且有收斂 spec→對答案審查員,四類:已實作/縮水/多做/未實作;templates §7.5)
