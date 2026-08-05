@@ -11,6 +11,7 @@ verified_by:
   - "[[Verification/2026-07-04_pitfalls-code-loop]]"
   - "[[Verification/2026-07-05_code-loop必用守衛]]"
   - "[[Verification/2026-07-10_合約鏈補強234]]"
+  - "[[Verification/2026-08-05_panel-K2與抽查落地]]"
 summary: |-
   KEY:[2026-08-05]pitfalls --diff 排除 governance/review-reports/ 路徑——歸檔證物(席報告/canary 快照 .patch)★故意★含 bug,當代碼掃=push 被自己的留痕擋下(C 慣例落地首推實錄);排除不外溢(收緊釘:同內容在該路徑外照掃) [test:t_pitfalls_diff_skips_review_report_artifacts]
   KEY:[2026-08-05]missed 席 findings 改★機械 repro triage★(取代直接丟)——canary 硬閘不動(該席判決仍作廢),但 findings 逐條試真碼/真跑證實;證實走通道 a 折入(note 記「機械證實非席信用」)、repro 不出才丟。實證=T8 r1 missed 席兩條真 major 靠 repro 撈回,原「撈」是編排者裁量現為硬步驟(結構性誤殺的機制化補丁;與 design-loop d4 分流不變:代碼有真 oracle 故走 repro 不走「不作廢」)

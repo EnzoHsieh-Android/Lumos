@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-05
 updated: 2026-08-05
 aliases:
@@ -12,7 +12,7 @@ related:
   - "[[Projects/design-loop重設計]]"
 tags:
   - type/project
-  - status/doing
+  - status/done
 summary: |-
   FLAG:DECISION
   KEY:★立案動機(r1 措辭校正)★——panel 是風險最高路徑(tier=high 專用)卻配最鬆判準(一個乾淨輪即收斂 K=1);convergence-evidence-gate 自認「未經檢驗的取捨」。★範圍(r1 收窄)★:design-loop 已改走 disposal 閘(2026-08-04),本案標的=★code-loop panel★。動機屬假設性風險非既遂觀測(r1 Codex F9:T8/RSNO 未收斂是三條合取全體作用,不能推「碰巧乾淨就會放行」)——但假設性風險有內部既遂實例支撐(見證據二 relmainnet)
@@ -55,11 +55,24 @@ K=1 是 convergence-evidence-gate 記錄在案的「未經檢驗的取捨」。�
    仍是必填 caught|missed——無餌輪兩個值語意都是錯的（d4 下不進合取故無機械後果，
    但帳面誠實性缺口）。落地時補 `--planted` 欄或 kind 第三值；過渡期 note 明記 planted:false。
 
+## 防浮動條款（2026-08-05 Enzo 裁定方向後定版）
+
+1. **凍結**：本次落地後，panel 收斂判準凍結，不受理論證型翻案。
+2. **唯一翻案通道＝抽查帳**：累積 **20 筆**抽查完成記錄（probe-* 輪）前不重開判準討論；
+   攢滿後照預先規則調——抽查漏率≈0 → 可裁 K 降回 1 或抽查率調低；漏率高 → 加嚴。
+   調鬆調緊都只走這條路。
+3. 本條款自身可重算（抽查輪筆數＝帳面機械事實），非口頭承諾。
+
 ## 下一步
 
 1. ~~r1 審~~（✅ 2026-08-05 走新制處置閘完成，見〈審計紀錄〉）。
-2. (a)+(e') 組合的細部 spec 補完（含上述落地面 1-7）→ 視 delta 規模決定 r2 或直接人裁放行。
-3. 收斂後 TDD 落地（守衛面：測試先紅後綠＋翻紅釘＋舊帳回放對照）。
+2. ~~細部補完＋TDD 落地~~（✅ 2026-08-05 Enzo 裁「開工」後完成：K=2 跨輪窗
+   [cutoff 2026-08-06 定錨不回溯，env 可覆寫]＋cluster 路同窗＋PASS 印決定性抽查判定
+   [sha256(loop_id+rid+該輪 token 集)%2，帳面輸入、人人可重算]＋撤銷自動化
+   [probe 輪冒 major → K=2 窗滑入髒輪 → gate 自然 FAIL，零新機制]；
+   `t_panel_k2_and_probe` 6 斷言紅→綠＋突變釘精準（拔 K=2 窗→3 條翻紅無誤傷）；
+   兩份 skill K 值段連動改寫；測試套件 pin 舊制防 cutoff 時間炸彈。全套 2344 綠。）
+3. 待補（不擋收工）：canary-stats 抽查稽核欄（落地面 8 部分）、回放腳本 v3 cluster 分層（落地面 7）。
 
 ## 回放輸出（凍結）
 

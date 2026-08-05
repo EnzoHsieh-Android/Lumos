@@ -19,6 +19,10 @@ try:
 except Exception:
     pass
 
+import os as _os_k2
+_os_k2.environ.setdefault("LUMOS_PANEL_K2_CUTOFF", "9999-12-31")
+# ↑ A案 K=2 cutoff pin(2026-08-05):既有 panel fixtures 建立於執行當日,不 pin 則 2026-08-06 起
+#   整批變「新 loop」使 K=1 PASS 迴歸測試誤紅;K=2 專屬測試(t_panel_k2_and_probe)顯式覆寫。
 GRAPHCTL = str(Path(__file__).resolve().parent / "lumos")
 PASS, FAIL, SKIP = 0, 0, 0
 
@@ -10661,6 +10665,65 @@ def t_search_multiword_fallback_is_default_and_only_on_zero():
     r = lum("search", "甲|乙", "--regex", "--files-only")
     check("★--regex 不得走回退(候選語意不同)★",
           r.returncode == 0 and "多詞回退" not in r.stderr, f"rc={r.returncode}\n{r.stderr[:200]}")
+
+
+def t_panel_k2_and_probe():
+    """[A 案落地](plan:Projects/panel收斂判準改革_計劃;design-loop r1+r2 已收斂)
+
+    ①K=2:cutoff(2026-08-06,env LUMOS_PANEL_K2_CUTOFF 可覆寫)起的新 panel loop,
+      收斂=★最後兩輪各自★過三條合取;單一乾淨輪 FAIL(訊息帶 K=2)。
+    ②舊帳不回溯:首筆 ts < cutoff 的 loop 沿 K=1(env 拉高 cutoff 模擬)。
+    ③抽查判定(e'):PASS 時印決定性判定——sha256(loop_id+判定輪 token 集)%2,
+      任何人可重算;兩次呼叫同值(冪等)。
+    ④撤銷自動化:PASS 後抽查輪(probe-*)冒 major → 重問 gate 自然 FAIL(K=2 窗滑入髒輪)。
+    翻紅釘:拔 K=2 窗 → ①翻紅;拔 cutoff 判定 → ②翻紅。"""
+    import subprocess as _sp
+    import os as _os
+    v = mkvault()
+    envK2 = dict(_os.environ, LUMOS_PANEL_K2_CUTOFF="2000-01-01")   # 讓「今天的 loop」吃新制
+    def runk2(*a):
+        return _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                       capture_output=True, text=True, env=envK2)
+    lid = f"k2a-{_M1U}"
+    def clean_round(rid):
+        for aud in ("s1", "s2"):
+            r = runk2("canary", "record", "caught", "--loop", lid, "--round", rid,
+                      "--auditor", aud, "--severity", "minor",
+                      *((("--capture-counts", "1"),)[0] if aud == "s1" else ()))
+            assert r.returncode == 0, r.stderr
+    clean_round("r1")
+    g1 = runk2("loop", "status", lid, "--gate", "--panel", "--repo", str(v.parent))
+    check("★K=2:單一乾淨輪 FAIL 且訊息帶 K=2★", g1.returncode == 1 and "K=2" in g1.stdout,
+          f"rc={g1.returncode}\n{g1.stdout[:400]}")
+    clean_round("r2")
+    g2 = runk2("loop", "status", lid, "--gate", "--panel", "--repo", str(v.parent))
+    check("★K=2:連續兩乾淨輪 PASS★", g2.returncode == 0, f"rc={g2.returncode}\n{g2.stdout[:400]}")
+    check("★PASS 印決定性抽查判定(應抽/免抽)★", "抽查" in g2.stdout, g2.stdout[:400])
+    g2b = runk2("loop", "status", lid, "--gate", "--panel", "--repo", str(v.parent))
+    line = [l for l in g2.stdout.splitlines() if "抽查" in l]
+    lineb = [l for l in g2b.stdout.splitlines() if "抽查" in l]
+    check("抽查判定冪等(兩次呼叫同值=可重算)", line and line == lineb, f"{line} vs {lineb}")
+    # ④ 撤銷自動化:抽查輪冒 major → 窗滑入 → FAIL
+    r = runk2("canary", "record", "caught", "--loop", lid, "--round", "probe-r3",
+              "--auditor", "s1", "--severity", "major", "--capture-counts", "1")
+    assert r.returncode == 0, r.stderr
+    r2 = runk2("canary", "record", "caught", "--loop", lid, "--round", "probe-r3",
+               "--auditor", "s2", "--severity", "minor")
+    g3 = runk2("loop", "status", lid, "--gate", "--panel", "--repo", str(v.parent))
+    check("★抽查輪冒 major → gate 自然撤銷 PASS(FAIL)★", g3.returncode == 1,
+          f"rc={g3.returncode}\n{g3.stdout[:300]}")
+    # ② 舊帳不回溯(cutoff 拉到未來 → 今天的 loop=舊制 K=1)
+    envOld = dict(_os.environ, LUMOS_PANEL_K2_CUTOFF="9999-12-31")
+    lid2 = f"k2b-{_M1U}"
+    for aud, extra in (("s1", ("--capture-counts", "1")), ("s2", ())):
+        _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "canary", "record", "caught",
+                 "--loop", lid2, "--round", "r1", "--auditor", aud, "--severity", "minor", *extra],
+                capture_output=True, text=True, env=envOld)
+    gold = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", lid2,
+                    "--gate", "--panel", "--repo", str(v.parent)],
+                   capture_output=True, text=True, env=envOld)
+    check("★舊帳不回溯:cutoff 前 loop 單乾淨輪照舊 PASS(K=1)★", gold.returncode == 0,
+          f"rc={gold.returncode}\n{gold.stdout[:300]}")
 
 
 def t_pitfalls_diff_skips_review_report_artifacts():

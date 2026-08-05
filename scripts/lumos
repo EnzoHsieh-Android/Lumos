@@ -3053,6 +3053,71 @@ def _panel_extra_checks(latest, min_seats, spec):
     return fails
 
 
+def _panel_k2_active(rounds):
+    """[A案 2026-08-05] K=2 適用判定:loop 首筆 ts 日期 ≥ cutoff(預設 2026-08-06)→新制。
+    舊帳不回溯(spec 落地面5,借 T6 定錨慣例);env LUMOS_PANEL_K2_CUTOFF 供測試/緊急覆寫。"""
+    import os
+    cutoff = os.environ.get("LUMOS_PANEL_K2_CUTOFF", "2026-08-06")
+    ts = str((rounds[0] if rounds else {}).get("ts") or "")
+    return ts[:10] >= cutoff
+
+
+def _panel_round_conjuncts(recs, quiet=False):
+    """單輪三條合取(輪有效∧存活≤minor∧capture-recapture 殘餘)——A案 K=2 抽出共用,
+    ★單一實作★:判定輪(quiet=False,輸出逐字同改動前)與 K=2 前一輪(quiet=True)同函式。
+    回 fails list。"""
+    order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+    fails = []
+    caught_recs = [r for r in recs if r.get("kind") == "caught"]
+    caught = len(caught_recs)
+    missed = sum(1 for r in recs if r.get("kind") == "missed")
+    if caught >= 2 and missed == 0:
+        if not quiet:
+            print(f"[panel] 輪有效(canary caught {caught}/{caught},near-perfect): ✓")
+    elif missed > 0:
+        if not quiet:
+            print(f"[panel] 輪有效: ✗ — {missed} missed(near-perfect 要求全 caught;中段分數弱訊號不背書收斂)")
+        fails.append("輪無效")
+    else:
+        if not quiet:
+            print(f"[panel] 輪有效: ✗ — canary caught {caught} <2(輪無效)")
+        fails.append("輪無效")
+    maxsev = max((order.get(r.get("severity", "clean"), 1) for r in caught_recs), default=0)
+    if maxsev >= 2:
+        if not quiet:
+            print(f"[panel] falsification+ODC(存活 max≤minor): ✗ — 存活 {'blocker' if maxsev==3 else 'major'}")
+        fails.append("存活≥major")
+    else:
+        if not quiet:
+            print("[panel] falsification+ODC(存活 max≤minor): ✓")
+    cc = next((r["capture_counts"] for r in recs if r.get("capture_counts")), None)
+    if cc is None:
+        if not quiet:
+            print("[panel] capture-recapture 殘餘: ✗ — 無 capture_counts(母體未證枯竭;panel 模式必帶)")
+        fails.append("無capture_counts")
+    else:
+        remaining = _estimate_remaining_defects(cc)
+        THRESH = 1.0
+        if remaining < THRESH:
+            if not quiet:
+                print(f"[panel] capture-recapture 殘餘: ✓ — 估計 {remaining:.2f} < {THRESH}")
+        else:
+            if not quiet:
+                print(f"[panel] capture-recapture 殘餘: ✗ — 估計 {remaining:.2f} ≥ {THRESH}(母體未枯竭)")
+            fails.append("殘餘超門檻")
+    return fails
+
+
+def _panel_probe_verdict(loop_id, rid, recs):
+    """[A案 e'] 決定性抽查判定:sha256(loop_id+判定輪 rid+該輪 token 排序串)%2==0 → 應抽。
+    輸入全部來自 append-only 帳(token=record 時 secrets 自動鑄造)——任何人可事後重算
+    「該不該抽」,不依賴編排者誠實(r1 折入:原「編排者擲 p」嚇阻不成立)。"""
+    import hashlib
+    toks = ",".join(sorted(str(r.get("token") or "") for r in recs))
+    h = int(hashlib.sha256(f"{loop_id}:{rid}:{toks}".encode("utf-8")).hexdigest(), 16)
+    return h % 2 == 0
+
+
 def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
     """平行 panel 收斂謂詞(loop 三輪壓縮)。無-cluster 舊帳:三條合取(輪有效∧存活max≤minor
     ∧capture-recapture 殘餘,fail-closed)。cluster 帳(M2,設計 Projects/design-loop提效_計劃;
@@ -3124,43 +3189,23 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
             print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
         print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: 輪無效[未定錨 cluster-intent])")
         return 1
-    order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
-    fails = []
-    caught_recs = [r for r in latest if r.get("kind") == "caught"]
-    caught = len(caught_recs)
-    missed = sum(1 for r in latest if r.get("kind") == "missed")
-    # near-perfect(2026-07-10,borrow mutation score 文獻:只有近滿分 caught-rate 才有強訊號,
-    # 中段分數與真實審計力相關弱)→ 輪有效 = caught≥2 且該輪 0 missed(全 caught)
-    if caught >= 2 and missed == 0:
-        print(f"[panel] 輪有效(canary caught {caught}/{caught},near-perfect): ✓")
-    elif missed > 0:
-        print(f"[panel] 輪有效: ✗ — {missed} missed(near-perfect 要求全 caught;中段分數弱訊號不背書收斂)")
-        fails.append("輪無效")
-    else:
-        print(f"[panel] 輪有效: ✗ — canary caught {caught} <2(輪無效)")
-        fails.append("輪無效")
-    # maxsev 只算 caught(醒著)審計員——missed 者 findings 已剔除(設計 §判定;review M1)
-    maxsev = max((order.get(r.get("severity", "clean"), 1) for r in caught_recs), default=0)
-    if maxsev >= 2:
-        print(f"[panel] falsification+ODC(存活 max≤minor): ✗ — 存活 {'blocker' if maxsev==3 else 'major'}")
-        fails.append("存活≥major")
-    else:
-        print("[panel] falsification+ODC(存活 max≤minor): ✓")
-    cc = next((r["capture_counts"] for r in latest if r.get("capture_counts")), None)
-    if cc is None:
-        # fail-closed(review C1):panel 的收斂本體就是 capture-recapture 結構信號,
-        # 沒 capture_counts 就無從證母體枯竭 → 不當「跳過」,當「未枯竭」擋。
-        # 否則不寫 counts 即繞過殘餘檢查、退回舊「2 caught+無 major」弱信號。
-        print("[panel] capture-recapture 殘餘: ✗ — 無 capture_counts(母體未證枯竭;panel 模式必帶)")
-        fails.append("無capture_counts")
-    else:
-        remaining = _estimate_remaining_defects(cc)
-        THRESH = 1.0
-        if remaining < THRESH:
-            print(f"[panel] capture-recapture 殘餘: ✓ — 估計 {remaining:.2f} < {THRESH}")
+    fails = _panel_round_conjuncts(latest)   # A案:三條合取抽出共用(輸出逐字同改動前)
+    # [A案 2026-08-05] K=2:cutoff 起的新 loop,收斂需最後★兩★輪各自過三條合取
+    # (AEGIS 非單調序列+relmainnet 既遂實例;design-loop r1+r2 收斂裁定)。舊帳不回溯。
+    k2 = _panel_k2_active(rounds)
+    if k2 and not fails:
+        rids = list(groups)
+        if len(rids) < 2:
+            print("[panel] K=2 前一輪: ✗ — 僅一輪(K=2 需連續兩個乾淨輪;第二輪材料全量)")
+            fails.append("K=2需第二輪")
         else:
-            print(f"[panel] capture-recapture 殘餘: ✗ — 估計 {remaining:.2f} ≥ {THRESH}(母體未枯竭)")
-            fails.append("殘餘超門檻")
+            prev_rid = rids[-2]
+            prev_fails = _panel_round_conjuncts(groups[prev_rid], quiet=True)
+            if prev_fails:
+                print(f"[panel] K=2 前一輪({prev_rid}): ✗ — {'/'.join(prev_fails)}")
+                fails.append("K=2前一輪未乾淨")
+            else:
+                print(f"[panel] K=2 前一輪({prev_rid}): ✓")
     fails += _panel_extra_checks(latest, min_seats, spec)
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('capture_counts','-')}\t{r.get('auditor','')}")
@@ -3169,7 +3214,12 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
     if fails:
         print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
-    print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ 存活≤minor ∧ capture-recapture 枯竭)")
+    if k2:
+        probe = _panel_probe_verdict(loop_id, rid, latest)
+        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: K=2 ∧ 輪有效 ∧ 存活≤minor ∧ capture-recapture 枯竭)")
+        print(f"[panel] 抽查判定(e',決定性可重算): {'★應抽查★——加開 probe-* 輪(不計 cap;冒 major 即自動撤銷收斂)' if probe else '免抽'}")
+    else:
+        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ 存活≤minor ∧ capture-recapture 枯竭)")
     return 0
 
 
@@ -3237,6 +3287,17 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
         print("  ── cluster ledger(僅計有效輪)──")
         for n, e in ledger.items():
             print(f"  {n}\t{e['state']}\t首現 {e['first']}\t末更 {e['last']}")
+    # [A案 2026-08-05] K=2(cluster 路同窗):fold 帳是累積的,故第二條件=前一輪也是有效輪
+    _k2c = _panel_k2_active(all_rounds or [])
+    if _k2c and not fails:
+        rids_ = list(groups)
+        prev_valid = len(rids_) >= 2 and valid_of.get(rids_[-2], False)
+        if not prev_valid:
+            print("[panel/cluster] K=2 前一輪: ✗ — " + ("僅一輪" if len(rids_) < 2 else f"前一輪 {rids_[-2]} 無效")
+                  + "(K=2 需連續兩個有效輪)")
+            fails.append("K=2前一輪未乾淨")
+        else:
+            print(f"[panel/cluster] K=2 前一輪({rids_[-2]}): ✓")
     fails += _panel_extra_checks(latest, min_seats, spec)   # M1包:cluster 路不得繞過(code-loop r1)
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
@@ -3245,8 +3306,14 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
     if fails:
         print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
-    print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ fold 後無 disputed-major"
-          f"[cluster 帳,{len(ledger)} 個 cluster])")
+    if _k2c:
+        probe = _panel_probe_verdict(loop_id, rid, latest)
+        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: K=2 ∧ 輪有效 ∧ fold 後無 disputed-major"
+              f"[cluster 帳,{len(ledger)} 個 cluster])")
+        print(f"[panel] 抽查判定(e',決定性可重算): {'★應抽查★——加開 probe-* 輪(不計 cap;冒 major 即自動撤銷收斂)' if probe else '免抽'}")
+    else:
+        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ fold 後無 disputed-major"
+              f"[cluster 帳,{len(ledger)} 個 cluster])")
     return 0
 
 
