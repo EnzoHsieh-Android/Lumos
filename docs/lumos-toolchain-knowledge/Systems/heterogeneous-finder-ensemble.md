@@ -14,6 +14,7 @@ related:
 tags:
   - type/system
   - status/done
+  - risk/守衛面
 summary: |-
   FLOW:code-loop 一輪 panel → 各 finder 產 finding-key(LLM reviewer 手動 --finder｜pitfalls --diff SARIF linter/regex 自動 --from-pitfalls｜測試失敗/mutation 存活)→ `lumos loop capture-counts` 跨 finder 正規化+數重疊 → capture_counts → `canary record --capture-counts` → `loop status --gate --panel` 判 capture-recapture 殘餘那條
   KEY:code review ≠ spec review——程式碼可執行+可靜態分析,最佳解是**異質 ensemble** 非純 LLM panel(文獻:AutoSafeCoder｜Multi-Agent Code Verification via Info Theory arxiv 2511.16708 submodularity｜Greptile TREX｜CodeRabbit sandbox｜PBR defect-type mapping)

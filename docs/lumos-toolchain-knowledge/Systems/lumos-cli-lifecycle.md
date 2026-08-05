@@ -7,6 +7,7 @@ self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/done
+  - risk/不可逆
 summary: |-
   KEY:[2026-08-05]來源 repo 自身的 reinject 路徑補齊——update 在來源 repo 改走 reinject-only(原:ERROR 拒跑);init 既有 vault 的來源-repo 分支照樣刷 CLAUDE.md 紀律區塊(原:「跳過 vendor/hooks」連 reinject 一起跳,範本更新後來源 repo 自己永不刷新,2026-08-04 實戰缺口) [test:t_source_repo_reinject_path]
   FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install/uninstall)→專案層每repo(init 建vault+vendor工具組+裝閘｜update 刷新vendored｜deinit 對稱反安裝)

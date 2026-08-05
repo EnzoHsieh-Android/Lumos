@@ -7,6 +7,7 @@ self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/deferred
+  - risk/守衛面
 summary: |-
   FLOW:lumos baseline approve <node>(算 hash→寫人工 approve 基線+留痕進 gov)｜lumos baseline status(唯讀印 vs 基線 diff)｜doctor Check C2(定位 core_base→比對當前 vs 基線→未 approve 差異 hard block,--ci 才硬擋)
   KEY:守「核心節點合約語意欄位」(summary｜decisions[].content｜valid_under)被靜默改/增/刪——一筆改錯沿 core_refs 擴散成全下游 session 真值;缺的不是 git revert,是「偵測+顯式 approve 閘」

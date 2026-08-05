@@ -7,6 +7,7 @@ self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/planned
+  - risk/守衛面
 verified_by:
   - "[[Verification/2026-06-23_nested-agent-permission-scope_design-loop收斂]]"
 summary: |-

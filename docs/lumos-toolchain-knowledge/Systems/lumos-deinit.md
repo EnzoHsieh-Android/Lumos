@@ -7,6 +7,7 @@ self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/done
+  - risk/不可逆
 verified_by:
   - "[[Verification/2026-06-26_lumos-deinit_跨平台]]"
 summary: |-

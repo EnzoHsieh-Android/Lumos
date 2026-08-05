@@ -10667,6 +10667,101 @@ def t_search_multiword_fallback_is_default_and_only_on_zero():
           r.returncode == 0 and "多詞回退" not in r.stderr, f"rc={r.returncode}\n{r.stderr[:200]}")
 
 
+def t_impact_contract_risk_axis():
+    """[標籤結構優化 2026-08-05]risk/ 家族接 impact 固定席——risk 標(金流/對外送出/不可逆/
+    守衛面)的節點被 diff 碰到時保送必看席(★RISK·值★),light 硬否決的 honor-system 有了
+    機械眼線。軸序:IRREVERSIBLE > INVARIANT > RISK(合約仍優先)。
+    翻紅釘:拔 risk 軸 → ①翻紅。"""
+    m = _load_lumos_module()
+    class _N:
+        def __init__(self, fields):
+            self.fields = fields
+            self.stem = "x"
+    # 只有 risk 標 → contract=RISK·金流
+    n1 = _N({"tags": ["type/system", "risk/金流"], "summary": "KEY:x"})
+    c1, _ = m._impact_contract(n1)
+    check("★risk 標節點=固定席資格(RISK·金流)★", c1 == "RISK·金流", repr(c1))
+    # INVARIANT 優先於 risk
+    n2 = _N({"tags": ["type/system", "risk/金流"],
+             "summary": "KEY:★INVARIANT★ 某合約 [test:t_x]"})
+    c2, _ = m._impact_contract(n2)
+    check("合約軸優先於 risk 軸", c2 == "INVARIANT", repr(c2))
+    # 無任何標 → None(行為不變)
+    n3 = _N({"tags": ["type/system"], "summary": "KEY:x"})
+    c3, _ = m._impact_contract(n3)
+    check("無標節點行為不變(None)", c3 is None, repr(c3))
+
+
+def t_context_header_extra_tag_families():
+    """[標籤結構優化 2026-08-05,Enzo:「是給你看的」]context 頭部顯示 type/status 以外的
+    tag 家族(priority/scope/feature/area/flag/risk)——實測 gap:節點標了 priority/P1,
+    進場 context 頭部完全不顯,寫給 AI 看的資訊在 AI 的主要讀路徑上隱形。
+    翻紅釘:拔頭部彙總 → ①翻紅。"""
+    v = mkvault()
+    (v / "Issues").mkdir(exist_ok=True)
+    (v / "Issues" / "標籤展示.md").write_text(
+        "---\ntype: issue\nstatus: open\ncreated: 2026-08-01\nupdated: 2026-08-01\n"
+        "tags:\n  - type/issue\n  - status/open\n  - priority/P1\n  - scope/pointsmall\n"
+        "  - flag/do-not-modify\nsummary: |-\n  KEY:x\n---\n# 標籤展示\n", encoding="utf-8")
+    r = run(v, "context", "Issues/標籤展示", "--brief")
+    head = "\n".join(r.stdout.splitlines()[:4])
+    check("★context 頭部顯示 priority/scope/flag 家族★",
+          "priority:P1" in head and "scope:pointsmall" in head and "flag:do-not-modify" in head,
+          head)
+    (v / "Issues" / "素節點.md").write_text(
+        "---\ntype: issue\nstatus: open\ncreated: 2026-08-01\nupdated: 2026-08-01\n"
+        "tags:\n  - type/issue\n  - status/open\nsummary: |-\n  KEY:x\n---\n# 素節點\n",
+        encoding="utf-8")
+    r2 = run(v, "context", "Issues/素節點", "--brief")
+    check("無額外家族時頭部不變(零噪音)", r2.returncode == 0
+          and "priority" not in r2.stdout.splitlines()[1], r2.stdout[:150])
+
+
+def t_lint_tag_value_enums():
+    """[標籤結構優化 2026-08-05]值域執法——Landmark 實測野化(status 13 值/FLAG 50+ 自由文字)。
+    cutoff 制(同 aliases 宣告制,created ≥ 2026-08-06 的新節點才擋,舊帳不回溯):
+    ①status 依 type 給合法值集 ②summary FLAG: 行收回 TECHNICAL/DECISION/ORIGIN 三值
+    ③priority tag 只認 P0-P3 ④risk tag 只認 金流/對外送出/不可逆/守衛面。
+    翻紅釘:拔 enum 檢查 → 各斷言翻紅。"""
+    v = mkvault()
+    def mk(name, fm_extra, summary="  KEY:x"):
+        (v / "Systems" / f"{name}.md").write_text(
+            f"---\ntype: system\nstatus: doing\ncreated: 2026-08-06\nupdated: 2026-08-06\n"
+            f"aliases: []\n{fm_extra}tags:\n  - type/system\nsummary: |-\n{summary}\n---\n# {name}\n",
+            encoding="utf-8")
+    # status 非法值
+    (v / "Systems" / "壞status.md").write_text(
+        "---\ntype: system\nstatus: shipping\ncreated: 2026-08-06\nupdated: 2026-08-06\n"
+        "aliases: []\ntags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# 壞status\n", encoding="utf-8")
+    r = run(v, "lint", "壞status")
+    check("★新節點 status 非法值=lint error★", r.returncode == 1 and "status" in r.stdout, r.stdout[:200])
+    # FLAG 野值(issue)
+    (v / "Issues").mkdir(exist_ok=True)
+    (v / "Issues" / "壞FLAG.md").write_text(
+        "---\ntype: issue\nstatus: open\ncreated: 2026-08-06\nupdated: 2026-08-06\n"
+        "aliases: []\ntags:\n  - type/issue\nsummary: |-\n  FLAG:P2已解決\n  KEY:x\n---\n# 壞FLAG\n",
+        encoding="utf-8")
+    r2 = run(v, "lint", "壞FLAG")
+    check("★新節點 FLAG 野值=lint error(收回三值,內容移 KEY 行)★",
+          r2.returncode == 1 and "FLAG" in r2.stdout, r2.stdout[:200])
+    # priority 野值
+    mk("壞priority", "")
+    p = v / "Systems" / "壞priority.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("  - type/system", "  - type/system\n  - priority/urgent"), encoding="utf-8")
+    r3 = run(v, "lint", "壞priority")
+    check("★priority 只認 P0-P3★", r3.returncode == 1 and "priority" in r3.stdout, r3.stdout[:200])
+    # 合法組合全過
+    mk("好節點", "")
+    g = v / "Systems" / "好節點.md"
+    g.write_text(g.read_text(encoding="utf-8").replace("  - type/system", "  - type/system\n  - priority/P1\n  - risk/金流\n  - scope/points"), encoding="utf-8")
+    check("合法值全過(priority/P1+risk/金流+scope 自由值)", run(v, "lint", "好節點").returncode == 0, "")
+    # 舊帳不回溯
+    (v / "Systems" / "舊野值.md").write_text(
+        "---\ntype: system\nstatus: shipping\ncreated: 2026-08-01\nupdated: 2026-08-01\n"
+        "tags:\n  - type/system\nsummary: |-\n  FLAG:隨便寫\n  KEY:x\n---\n# 舊野值\n", encoding="utf-8")
+    check("舊帳(cutoff 前)不回溯", run(v, "lint", "舊野值").returncode == 0, "")
+
+
 def t_canary_type_probe_fields():
     """[D 前置 2026-08-05,Enzo 裁]植入型別與探針結果結構化——原散文 note 不可重算,
     攢十輪也是考古材料。record 加 --canary-type/--probe 選配欄(T1 慣例:不給不寫鍵、

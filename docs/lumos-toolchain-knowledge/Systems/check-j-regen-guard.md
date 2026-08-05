@@ -7,6 +7,7 @@ self_audit: sonnet/2026-07-16
 tags:
   - type/system
   - status/done
+  - risk/守衛面
 related:
   - "[[Systems/check-t-sentinel]]"
   - "[[Systems/lumos-refcheck]]"

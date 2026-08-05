@@ -7,6 +7,7 @@ self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
+  - risk/守衛面
 summary: |-
   FLOW:git log(no-merges,quotePath=off,--diff時挖到range左端)→transaction過濾(>20檔tangled排除+exclude glob雙試)→pair計數→conf(A⇒B)=shared/freq(A)→rules列表/check對變更集警告漏改
   KEY:ROSE非對稱confidence(borrow-design,TSE 2005 error-prevention);門檻conf≥0.8/support≥3(config可覆寫,support硬底線2全域);警告型恆不擋(rc0;git失敗rc2);警告走stdout(hook 2>/dev/null只吞診斷)

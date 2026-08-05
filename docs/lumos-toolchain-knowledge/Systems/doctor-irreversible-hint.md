@@ -9,6 +9,7 @@ verified_by:
 tags:
   - type/system
   - status/done
+  - risk/守衛面
 summary: |-
   FLOW:doctor --ci → section("H") → [非 ci 印「互動模式略過」即跳]→ _scan_diff_for_irreversible_hints(str(env.vault)) → git diff --staged(優先)|HEAD~1..HEAD fallback → 逐 +行比對 7 條 pattern(跳 .md/.txt/.rst、測試檔、純注解)→ 有命中 warn_soft 提示「是否漏標 ★IRREVERSIBLE★」(hits[:8])|無命中 ok
   KEY:warn_soft 軟提示——不計 issues、不影響 rc;Check H 是「摩擦地板」提醒,不是合規守衛(NOPE hard block)

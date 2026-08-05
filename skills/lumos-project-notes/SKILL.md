@@ -92,6 +92,19 @@ vault 名 = 資料夾 basename,lumos 自動解析。**全程無需 Obsidian**(�
 
 ---
 
+## 標籤家族(2026-08-05 收編定版;值域 lint 自 2026-08-06 硬擋新節點,舊帳不回溯)
+
+| 家族 | 值域 | 語意/消費者 |
+|---|---|---|
+| `type/` `status/` | enum(status 依 type:system=doing/done/planned/deferred/rejected/superseded/stale;project=todo/doing/done/superseded;issue=open/doing/resolved/done/wontfix;verification=**pass**;moc=doing/done) | 生命週期;lint 硬擋野值 |
+| `priority/` | **P0-P3** | 處理優先級(P0 最急),主用 Issues |
+| `scope/` | 自由 kebab 值(pointsmall/concurrency…) | 業務域切片;★feature/ 與 area/ 已凍結,新寫入一律 scope/(讀側仍認舊帳)★ |
+| `risk/` | **金流/對外送出/不可逆/守衛面** | Systems 專用;消費者=impact ★固定席★(RISK·值 保送必看)+design-loop light 硬否決 |
+| `flag/` | 小寫語意標;已知有效:do-not-modify/security-relevant/depends-on-claude-code-internals/depends-on-obsidian-internals | 節點級警示,AI 讀 |
+
+- **這些是寫給 AI 看的**(2026-08-05 Enzo 定調):context 頭部自動攤出 type/status 以外全部家族——寫了就會被進場讀到,不用重複進 summary。
+- summary 的 `FLAG:` 行=語意類別,只收 TECHNICAL/DECISION/ORIGIN 三值(敘述內容放 KEY: 行);與 `flag/` tag 家族是兩回事。
+
 ## summary block(Systems/Issues 必有;掃一眼掌握全貌)
 
 每行一個前綴。Systems 重 `FLOW`+`KEY`+`DEP`+`TEST`;Issues 重 `FLAG`+`DECISION`+`KEY`;Verification 重 `TEST`+`VERIFY`。

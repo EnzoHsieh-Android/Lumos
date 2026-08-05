@@ -2289,6 +2289,40 @@ def cmd_lint(env, node):
             errs.append("缺 aliases 鍵(2026-08-05 起 system/issue 必須判過同義詞——"
                         "有就列(症狀語/縮寫/舊名),確定沒有寫 aliases: [];湊數別名比空更糟)")
 
+    # 值域執法(2026-08-05 標籤結構優化,Enzo 裁;cutoff 制不回溯——Landmark 實測野化:
+    # status 13 值同義混用、FLAG 50+ 自由文字淪為備註欄,可篩選性歸零)
+    _ENUM_CUTOFF = "2026-08-06"
+    _STATUS_ENUM = {
+        "system": {"doing", "done", "planned", "deferred", "rejected", "superseded", "stale"},
+        "project": {"todo", "doing", "done", "superseded"},
+        "issue": {"open", "doing", "resolved", "done", "wontfix"},
+        "verification": {"pass", "stale", "superseded"},
+        "moc": {"doing", "done"},
+    }
+    _PRIORITY_ENUM = {"P0", "P1", "P2", "P3"}
+    _RISK_ENUM = {"金流", "對外送出", "不可逆", "守衛面"}
+    _FLAG_ENUM = {"TECHNICAL", "DECISION", "ORIGIN"}
+    _created_e = str(n.fields.get("created") or n.fields.get("date") or "")
+    if _created_e >= _ENUM_CUTOFF:
+        _st = str(n.fields.get("status") or "")
+        if t in _STATUS_ENUM and _st and _st not in _STATUS_ENUM[t]:
+            errs.append(f"status『{_st}』不在 {t} 合法值集 {sorted(_STATUS_ENUM[t])}"
+                        "(同義詞歸一:resolved/done 擇一慣例、verification 用 pass)")
+        for tg in (n.fields.get("tags") or []):
+            if not isinstance(tg, str):
+                continue
+            if tg.startswith("priority/") and tg.split("/", 1)[1] not in _PRIORITY_ENUM:
+                errs.append(f"priority tag 只認 P0-P3,收到 {tg!r}")
+            if tg.startswith("risk/") and tg.split("/", 1)[1] not in _RISK_ENUM:
+                errs.append(f"risk tag 只認 {sorted(_RISK_ENUM)},收到 {tg!r}")
+            if tg.startswith(("feature/", "area/")):
+                warns.append(f"{tg!r}:feature/area 家族已凍結,新寫入請用 scope/(讀側仍認舊帳)")
+        import re as _re_f
+        _mflag = _re_f.search(r"^\s*FLAG:(\S+)", summ, _re_f.M)
+        if _mflag and _mflag.group(1) not in _FLAG_ENUM:
+            errs.append(f"FLAG:『{_mflag.group(1)}』不在三值集 {sorted(_FLAG_ENUM)}"
+                        "(FLAG=語意類別非備註欄;敘述內容移 KEY: 行)")
+
     # decisions 結構守衛(2026-07-29 外審實錘:id 縮排吞進 content block,parser 靜默降級、
     # doctor 全綠——「綠燈≠schema 有效」的活例。以正牌 parse_decisions 驗:
     # 壞型一(sibling 被吞)→ content 空;壞型二(entry 非 `- key:` 形)→ 整條被靜默丟棄=條數對不上)
@@ -5261,6 +5295,13 @@ def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, a
     out_e, in_e = env.edges
     meta = " | ".join(f"{k}:{n.fields[k]}" for k in ("type", "status", "created", "updated")
                       if isinstance(n.fields.get(k), str) and n.fields.get(k))
+    # 額外 tag 家族上頭部(2026-08-05,Enzo:「是給你(AI)看的」)——priority/scope/flag 等
+    # 寫給 AI 的分類資訊原本在進場主讀路徑(context 頭部)上隱形,實測 gap
+    _extra = [t for t in (n.fields.get("tags") or [])
+              if isinstance(t, str) and "/" in t
+              and not t.startswith(("type/", "status/"))]
+    if _extra:
+        meta += " | " + " | ".join(t.replace("/", ":", 1) for t in _extra)
     print(f"# {rel}")
     if meta:
         print(meta)
@@ -11317,6 +11358,15 @@ def _impact_contract(note):
         for line in summ.split("\n"):
             if IRREVERSIBLE_RE.match(line.strip()):
                 contract = "IRREVERSIBLE"  # 最高優先,覆蓋 INVARIANT
+                break
+
+    # RISK 軸(2026-08-05 標籤結構優化):risk/ 標節點保送固定席——light 硬否決的
+    # honor-system(「碰金流/對外/不可逆/守衛面就不給 light」靠自核)有了機械眼線。
+    # 軸序最低:合約標記存在時仍以合約身分出席。
+    if contract is None:
+        for tg in (note.fields.get("tags") or []):
+            if isinstance(tg, str) and tg.startswith("risk/"):
+                contract = "RISK·" + tg.split("/", 1)[1]
                 break
 
     return contract, combo

@@ -7,6 +7,7 @@ self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
+  - risk/守衛面
 verified_by:
   - "[[Verification/2026-06-20_autonomous-iteration-loop]]"
 summary: |-

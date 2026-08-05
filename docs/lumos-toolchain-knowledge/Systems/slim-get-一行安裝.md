@@ -6,6 +6,7 @@ updated: 2026-08-03
 tags:
   - type/system
   - status/done
+  - risk/不可逆
 summary: |-
   FLOW:`curl -fsSL <raw-url>/get.sh | bash` → 檢查 `git` 存在(找不到→清楚錯誤訊息+rc2,不留 traceback) → `~/.lumos-slim` 已是合法 git repo(有 `.git`)→ `git pull --ff-only`(冪等更新)｜已存在但非 git repo→拒絕、rc2、印訊息｜不存在→`git clone` 首次安裝 → 檢查 `install.sh` 存在 → 執行 `~/.lumos-slim/install.sh "$@"`(額外參數如 `--force` 原樣轉發)
   KEY:★INVARIANT★ 三支 `.ps1` 必須是 ★ASCII-only 且不加 BOM★(2026-08-03 Windows 真機★回歸★測試推翻了前一版的「必須加 BOM」)——★BOM 是兩難不是解法★:無 BOM → 磁碟執行時 PowerShell 5.1 用系統 ANSI codepage 讀,DBCS 前導位元組吃掉下一個位元組、撞壞引號配對(CJK 語系 parse error、什麼都沒裝);有 BOM → `irm | iex` 收到的是★普通字串★,PowerShell 不會替它剝 BOM,`U+FEFF` 成了第 1 行內容、那行註解被當成指令執行。v1.4 只是把問題從前者搬到後者,而★後者正是 README 唯一教的入口★。正解=消滅問題:ASCII-only 之後兩條路徑都不需要 BOM。中文設計說明搬 `slim/WINDOWS-NOTES.md`。★這條紀律組織內部早就有★——LandmarkMember 的 CLAUDE.md〈Deploy 腳本踩雷規則〉第 1 條「ASCII-only 規則」,理由一字不差,且是踩了三輪 prod deploy 失敗才立的;★我設計這幾支檔案時沒去查過,那正是 CLAUDE.md 第一條「圖譜先行」要防的★ [test:t_slim_ps1_ascii_only_no_bom,t_slim_ps1_real_parser_accepts_both_execution_paths](★獨立審計首輪判「不 legal」——不是道理不對,是★決定當時還沒進 git、而 HEAD 上的 code 正好相反★;另指出 .gitattributes 仍寫著舊的「必須加 BOM」、WINDOWS-NOTES.md 有斷鏈引用、verified_by 仍指向記錄舊設計的節點。四條殘留全部處理後才留痕★) [audit:sonnet/2026-08-03]

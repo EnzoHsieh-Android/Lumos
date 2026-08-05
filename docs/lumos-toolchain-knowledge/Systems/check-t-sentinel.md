@@ -7,6 +7,7 @@ self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/done
+  - risk/守衛面
 verified_by:
   - "[[Verification/2026-06-23_check-t-sentinel]]"
   - "[[Verification/2026-07-02_multiplatform-test-binding]]"

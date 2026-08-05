@@ -7,6 +7,7 @@ self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
+  - risk/守衛面
 verified_by:
   - "[[Verification/2026-07-03_convergence-evidence-gate]]"
   - "[[Verification/2026-07-09_loop三輪壓縮]]"

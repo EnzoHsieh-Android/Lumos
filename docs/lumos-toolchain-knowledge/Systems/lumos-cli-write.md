@@ -11,6 +11,7 @@ related:
   - "[[Systems/lumos-cli-read]]"
   - "[[Systems/lumos-cli-lifecycle]]"
 summary: |-
+  KEY:[2026-08-05 標籤收編]值域 lint(cutoff 2026-08-06 新節點硬擋,舊帳不回溯)——status 依 type enum(verification 用 pass)/summary FLAG: 三值(敘述移 KEY 行)/priority P0-P3/risk 四值;feature/area 凍結 warning 勸轉 scope/。schema 表單源=lumos-project-notes SKILL〈標籤家族〉 [test:t_lint_tag_value_enums]
   KEY:[2026-08-05]aliases 宣告制——system/issue 新節點(created≥2026-08-05)lint 硬擋「缺 aliases 鍵」;逼★判過★不逼有值(aliases: []=明示無同義詞,合法;湊數別名吃 3.5 檢索權重=主動污染排序)。配套:模板自帶 aliases: []+NEW_HINT 教學(來源限真實出現過的說法)+append 白名單納 aliases;兩庫回填 2026-08-05(toolchain 22 節點 23 條/Landmark 71 節點 152 條,grounded 規則) [test:t_lint_aliases_declared]
   KEY:[2026-08-05]decisions 結構守衛修假陽性——原始條數只認 entry 縮排層(恰 2 空格),alternatives_considered 巢狀清單不計(Landmark 回填實戰:照 ADR 規範寫巢狀清單被誤報「壞損」;真壞型 sibling 吞沒照抓) [test:t_lint_decisions_nested_list_not_false_positive]
   KEY:[2026-08-05]`new verification <名> --plan <計劃> --systems <A,B>` 一鍵雙向——建檔當下填 plan_refs+對每個 Systems append verified_by(寫後自驗沿 cmd_append);指到不存在節點 rc2 且不建檔(不留半套);把「事後 sync-verified-by 撿漏」變「寫入時就對」 [test:t_new_verification_bidirectional]
@@ -55,6 +56,7 @@ verified_by:
   - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
   - "[[2026-07-20_狀態標籤同步守衛]]"
   - "[[Verification/2026-08-05_流程優化六件落地]]"
+  - "[[Verification/2026-08-05_標籤結構收編落地]]"
 ---
 # lumos-cli-write
 

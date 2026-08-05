@@ -6,6 +6,7 @@ updated: 2026-08-03
 tags:
   - type/system
   - status/done
+  - risk/不可逆
 plan_refs:
   - "[[Projects/公開精簡版_計劃]]"
 summary: |-
