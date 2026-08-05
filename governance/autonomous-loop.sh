@@ -26,6 +26,42 @@ if [ ! -f "$REPORT" ]; then
   else log "今日無日報($TODAY),跳過"; exit 0; fi
 fi
 
+# ── 週期考卷(2026-08-05 掛載):雙庫檢索考卷 ≥7 天未跑就補跑——把「hook 調參靠記得」
+# 變「定期發生」;fail-open,考卷失敗只記 log 不阻斷 gap 流程。判定/漂移細節在
+# retrieval_eval.py 自己的 gate 輸出與 history jsonl,此處只管排程。
+run_exam(){ local repo="$1" tag="$2"
+  local hist="$repo/governance/eval/retrieval-eval-history.jsonl"
+  local gold="$repo/governance/eval/retrieval-goldset.json"
+  [ -f "$gold" ] || { log "考卷($tag):無 goldset,跳過"; return 0; }
+  # 取「最後一筆帶 ts 的 goldset 列」(單席快審 F3:末行可能是無 ts 的 auto-cochange 列→誤判 1970 天天重考)
+  local last; last="$(python3 -c '
+import json,sys
+last="1970-01-01"
+try:
+    for l in open(sys.argv[1],encoding="utf-8"):
+        try: d=json.loads(l)
+        except ValueError: continue
+        if d.get("ts") and d.get("mode","goldset")=="goldset": last=d["ts"]
+except OSError: pass
+print(last)' "$hist" 2>/dev/null || echo 1970-01-01)"
+  local last_s; last_s="$(date -j -f %F "$last" +%s 2>/dev/null || echo 0)"
+  local age=$(( ( $(date +%s) - last_s ) / 86400 ))
+  if [ "$age" -ge 7 ]; then
+    log "考卷($tag):距上次 ${age} 天(>7),補跑 held split"
+    (cd "$repo" && python3 governance/eval/retrieval_eval.py --goldset "$gold" --split held) > "$LOGDIR/exam-$tag-$TODAY.log" 2>&1 || true
+    # 完成判定看「gate 總判定」行,不看 rc——部分版本 gate FAIL 即回非零,那是調參訊號非執行失敗
+    if grep -q 'gate 總判定' "$LOGDIR/exam-$tag-$TODAY.log"; then
+      log "考卷($tag)完成:$(grep 'gate 總判定' "$LOGDIR/exam-$tag-$TODAY.log" | tail -1)"
+    else
+      log "⚠ 考卷($tag)執行失敗(fail-open 不阻斷),詳 $LOGDIR/exam-$tag-$TODAY.log"
+    fi
+  else
+    log "考卷($tag):${age} 天前跑過,略"
+  fi
+}
+run_exam "$REPO" toolchain
+[ -d "$HOME/backend/LandmarkMember/governance/eval" ] && run_exam "$HOME/backend/LandmarkMember" landmark
+
 SKIP_CAP=3; skip_n=0
 while : ; do
 GAP_JSON="$(cd "$REPO" && python3 -c "

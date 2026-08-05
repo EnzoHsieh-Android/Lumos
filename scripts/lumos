@@ -1213,7 +1213,7 @@ def _search_region(lineno, line, fm_end):
 
 _RANK_ASCII_RE = re.compile(r"[a-z0-9][a-z0-9_\-]*")
 _RANK_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]+")
-_RANK_FIELD_W = {"title": 4.0, "summary": 2.5, "tags": 1.5, "body": 1.0, "type": 0.5}
+_RANK_FIELD_W = {"title": 4.0, "aliases": 3.5, "summary": 2.5, "tags": 1.5, "body": 1.0, "type": 0.5}   # aliases=同義詞欄(2026-08-05,詞面落空最便宜解;權重略低於標題)
 
 
 def _rank_tokenize(text):
@@ -1263,7 +1263,10 @@ def _rank_fields(env, rel):
     f = n.fields if n else {}
     tags = f.get("tags")
     tags = " ".join(tags) if isinstance(tags, list) else str(tags or "")
+    aliases = f.get("aliases")
+    aliases = " ".join(str(a) for a in aliases) if isinstance(aliases, list) else str(aliases or "")
     return {"title": (n.stem if n else Path(rel).stem),
+            "aliases": aliases,
             "summary": str(f.get("summary") or ""),
             "tags": tags, "body": body, "type": str(f.get("type") or "")}
 
@@ -3375,6 +3378,62 @@ def cmd_loop_compress(file, as_json=False):
             print(f"- {s}")
     print(f"[compress] 輸入 {len(lines)} 行 → 保留 {len(pinned) + len(evidence) + len(open_items)} 行"
           f"(白名單 {len(pinned)}/證據 {len(evidence)}/未結 {len(open_items)})")
+    return 0
+
+
+def cmd_loop_canary_stats(env, loop_id=None):
+    """[d4 承諾的讀取面,2026-08-05] 跨輪 canary 累積帳彙總——寫入面(record note/caught/missed)
+    T1-T7 落地後一直只能人翻 JSONL,正是「機制蓋好在等一個記得用它的人」病(全流程體檢命名)。
+    席位×caught/missed×尾端連續 missed streak;streak≥2 印升級提示(「連 2 missed 升 opus」
+    規則的機械眼——原靠編排者記得)。純唯讀觀測恆 rc0;壞行跳過並註記(不進任何 gate)。"""
+    import json
+    from collections import OrderedDict
+    path = env.vault.parent / ".canary-log.jsonl"
+    if not path.exists():
+        print("⏳ 無 canary 帳")
+        return 0
+    per_loop = OrderedDict()   # loop -> OrderedDict(auditor -> {"caught":n,"missed":n,"streak":n})
+    n_bad = 0
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                n_bad += 1
+                continue
+            lp = d.get("loop")
+            kind = d.get("kind")
+            if not lp or kind not in ("caught", "missed"):
+                continue
+            aud = d.get("auditor") or "(無席名)"
+            seats = per_loop.setdefault(lp, OrderedDict())
+            st = seats.setdefault(aud, {"caught": 0, "missed": 0, "streak": 0})
+            st[kind] += 1
+            st["streak"] = st["streak"] + 1 if kind == "missed" else 0   # 尾端連續 missed(append 序)
+    except OSError as e:
+        print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
+        return 2
+    targets = [loop_id] if loop_id else list(per_loop)
+    if loop_id and loop_id not in per_loop:
+        print(f"⏳ 無記錄 ({loop_id})")
+        return 0
+    for lp in targets:
+        seats = per_loop[lp]
+        tc = sum(v["caught"] for v in seats.values())
+        tm = sum(v["missed"] for v in seats.values())
+        rate = f"{tc}/{tc+tm}" if (tc + tm) else "0/0"
+        print(f"[{lp}] caught {rate}(missed {tm})")
+        if loop_id:
+            for aud, v in seats.items():
+                tail = f"  尾端連續missed={v['streak']}" if v["streak"] else ""
+                esc = "  ⚠ 連 2 missed → 升級模型(升 opus)" if v["streak"] >= 2 else ""
+                print(f"  {aud}\tcaught {v['caught']}\tmissed {v['missed']}{tail}{esc}")
+    if n_bad:
+        print(f"  (帳面 {n_bad} 行不可解析,已跳過——壞行只影響觀測完整性,不進 gate)")
+    print("  ★觀測非閘:caught 只證席位醒著,不證審得夠廣(caught≠覆蓋);missed 席 findings 不作廢(d4)★")
     return 0
 
 
@@ -6178,8 +6237,13 @@ def load_raw_for_edit(path: Path):
 
 def _write_lf(path: Path, text: str):
     """寫 UTF-8 / LF / no-BOM,平台無關(不靠 text mode)。vault 唯一寫入原語。
-    用 write_bytes:write_text(newline=) 要 Python 3.10,違反本專案 ≥3.8。"""
-    path.write_bytes(text.encode("utf-8"))
+    用 write_bytes:write_text(newline=) 要 Python 3.10,違反本專案 ≥3.8。
+    [2026-08-05 單席快審 F2] tmp→os.replace 原子替換:防半寫毀檔(CLAUDE.md reinject 等
+    整檔覆寫消費者)。read-modify-write 的併發 last-write-wins 窗仍在(單機 CLI,不上鎖,accepted)。"""
+    import os as _os
+    tmp = path.with_name(path.name + ".tmp-wlf")
+    tmp.write_bytes(text.encode("utf-8"))
+    _os.replace(tmp, path)
 
 
 def atomic_write_verify(path: Path, new_lines, key, expected_check):
@@ -6850,13 +6914,27 @@ NEW_HINT = {
 }
 
 
-def cmd_new(env, ntype, name, today):
+def cmd_new(env, ntype, name, today, plan=None, systems=None):
     if ntype not in TEMPLATES:
         print(f"ERROR: type 須為 {sorted(TEMPLATES)}", file=sys.stderr)
         return 2
     if "/" in name or "\\" in name or ".." in name or name.startswith("."):
         print(f"ERROR: name 不得含路徑分隔符 / .. / 開頭點(防路徑逃脫): {name}", file=sys.stderr)
         return 2
+    # 一鍵雙向(2026-08-05 收尾優化):verification 建檔當下填 plan_refs+對面 verified_by——
+    # 把「事後 sync-verified-by 撿漏」變「寫入時就對」。僅 verification 收這兩旗標。
+    if (plan or systems) and ntype != "verification":
+        print("ERROR: --plan/--systems 僅 verification 型別適用", file=sys.stderr)
+        return 2
+    def _norm_rel(x):
+        x = x.strip().removesuffix(".md")
+        return x + ".md"
+    sys_rels = [_norm_rel(x) for x in (systems.split(",") if systems else []) if x.strip()]
+    plan_rels = [_norm_rel(x) for x in (plan.split(",") if plan else []) if x.strip()]
+    for rel in sys_rels + plan_rels:
+        if not (env.vault / rel).exists():
+            print(f"ERROR: --plan/--systems 指到不存在節點: {rel}(先建對象再連,不留半套雙向)", file=sys.stderr)
+            return 2
     folder, tmpl = TEMPLATES[ntype]
     path = env.vault / folder / f"{name}.md"
     if path.exists():
@@ -6865,6 +6943,26 @@ def cmd_new(env, ntype, name, today):
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = tmpl.format(today=today)
     _write_lf(path, f"---\n{fm}\n---\n# {name}\n")
+    self_rel = f"{folder}/{name}.md"
+    # 非跨檔交易(2026-08-05 單席快審 F1,誠實化):逐檔各自原子,中途失敗會留部分連結——
+    # 前置存在檢查擋掉最常見失敗;殘餘(磁碟滿/權限)接住例外、指路 sync-verified-by 撿漏
+    rc_side = 0
+    for rel in plan_rels:
+        try:
+            rc_side |= cmd_append(env, self_rel, "plan_refs", f"[[{rel.removesuffix('.md')}]]")
+        except OSError as e:
+            print(f"⚠ plan_refs 寫入失敗({rel}): {e}", file=sys.stderr)
+            rc_side = 2
+    for rel in sys_rels:
+        try:
+            rc_side |= cmd_append(env, rel, "verified_by", f"[[{folder}/{name}]]")
+        except OSError as e:
+            print(f"⚠ verified_by 寫入失敗({rel}): {e}", file=sys.stderr)
+            rc_side = 2
+    if rc_side:
+        print("⚠ 雙向連結部分失敗(檔案已建,非跨檔交易)——補救:lumos sync-verified-by --apply"
+              " + 手補 plan_refs;doctor 會抓殘缺", file=sys.stderr)
+        return 2
     print(f"✓ new {ntype}: {path.relative_to(env.vault)}")
     for line in NEW_HINT.get(ntype, []):
         print(f"  {line}")
@@ -7705,8 +7803,11 @@ def cmd_update(source=None, no_pull=False):
     root = vault.parent.parent  # docs/<slug>-knowledge → docs → 專案 root
     slug = vault.name[:-len("-knowledge")] if vault.name.endswith("-knowledge") else vault.name
     if root.resolve() == src.resolve():
-        print("ERROR: 當前就是 Lumos 來源本身,不需 update", file=sys.stderr)
-        return 2
+        # 來源 repo 自身:範本本地即最新,無 pull/vendor 之需——reinject-only
+        # (2026-08-05 實戰缺口修:改完範本後來源 repo 自己的 CLAUDE.md 原本無路可刷)
+        ri = _reinject_claude_block(root, slug)
+        print(f"lumos update — 來源 repo 自身:只刷新 CLAUDE.md 紀律區塊({ri.status})")
+        return 0 if ri.status in ("updated", "unchanged", "created", "appended") else 2
     print(f"lumos update — 來源 {src} → 本專案 {root}（slug={slug}）")
     rc = _vendor_toolchain(src, root, slug, no_pull=no_pull)
     return 2 if rc is None else rc
@@ -8025,7 +8126,8 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
     if with_hooks:
         src = _lumos_src()
         if root.resolve() == src.resolve():
-            print("\n  (當前就是 Lumos 來源本身,跳過 vendor/hooks)")
+            print("\n  (當前就是 Lumos 來源本身,跳過 vendor/hooks;CLAUDE.md 紀律區塊照刷)")
+            _do_reinject()   # 2026-08-05 修:原本連 reinject 一起跳過,範本更新後來源 repo 自己永不刷新
         elif existing is not None and not force:
             # 既有 vault 非 force:輕量路徑,只刷新 CLAUDE.md 紀律區塊
             _do_reinject()
@@ -8346,7 +8448,10 @@ def cmd_quote_check(report, spec, as_json=False):
     rows = _quote_rows(rtext, stext)
     if rows is None:
         print("ERROR: 報告內抽不到任何「引句：「…」」——驗不了≠通過;"
-              "席報告未遵守派工格式時,先補引句再記帳", file=sys.stderr)
+              "席報告未遵守派工格式時,先補引句再記帳。\n"
+              "  常見原因(Landmark 首測實錄):①標籤粗體/註記變體已容錯(**引句**：/引句（註）：可抽),"
+              "但『引文:』『Quote:』等別名不認 ②引號用半形 \"…\" 或【…】(只認「」『』) "
+              "③引句與標籤不同行 ④開閉引號不成對(會以格式 miss 入列,非零條)", file=sys.stderr)
         return 2
     miss = [r for r in rows if not r["ok"]]
     if as_json:
@@ -12162,6 +12267,10 @@ def main():
     ln.add_argument("--need", type=int, default=2, help="legacy 收斂窗 K(委派 gate 用,預設 2)")
     ln.add_argument("--spec", dest="gate_spec", help="gate 委派用 spec 檔;缺=判 converged 資訊不足→gate-pending")
     ln.add_argument("--repo", dest="gate_repo", help="repo root(gate 委派用)")
+    lcs = lsub.add_parser("canary-stats",
+                          help="[d4 讀取面] 跨輪 canary 累積帳:席位×caught/missed×尾端連續 missed;唯讀恆 rc0")
+    lcs.add_argument("loop_id", nargs="?", default=None, help="省略=全 loop 摘要")
+
     lcc = lsub.add_parser("capture-counts",
                           help="異質 finder 接線:多 --finder 的 finding-key → capture_counts + 殘餘估計(餵 canary record --capture-counts)")
     lcc.add_argument("--finder", dest="finders", action="append", default=[],
@@ -12287,6 +12396,8 @@ def main():
     p = sub.add_parser("new", help="依模板建檔")
     p.add_argument("type", choices=("system", "verification", "issue", "project"))
     p.add_argument("name")
+    p.add_argument("--plan", help="verification 專用:plan_refs 回指的計劃節點(逗號分隔)")
+    p.add_argument("--systems", help="verification 專用:同步 append verified_by 的 Systems(逗號分隔)")
 
     p = sub.add_parser("decision-supersede", help="T3 巢狀:翻盤一條決策(valid:false+superseded_by)")
     p.add_argument("note")
@@ -12640,6 +12751,8 @@ def main():
                           accepted_set=args.accepted_set, accept_reasons=args.accept_reasons)
 
     if args.cmd == "loop":
+        if args.lcmd == "canary-stats":
+            return cmd_loop_canary_stats(env, args.loop_id)
         if args.lcmd == "status":
             return cmd_loop_status(env, args.loop_id, args.need,
                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
@@ -12722,7 +12835,8 @@ def main():
     if args.cmd == "new":
         import datetime
         try:
-            return cmd_new(env, args.type, args.name, datetime.date.today().isoformat())
+            return cmd_new(env, args.type, args.name, datetime.date.today().isoformat(),
+                           plan=args.plan, systems=args.systems)
         except (ValueError, RuntimeError) as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2

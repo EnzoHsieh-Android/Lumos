@@ -2,12 +2,13 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-06-26
+updated: 2026-08-05
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/done
 summary: |-
+  KEY:[2026-08-05]來源 repo 自身的 reinject 路徑補齊——update 在來源 repo 改走 reinject-only(原:ERROR 拒跑);init 既有 vault 的來源-repo 分支照樣刷 CLAUDE.md 紀律區塊(原:「跳過 vendor/hooks」連 reinject 一起跳,範本更新後來源 repo 自己永不刷新,2026-08-04 實戰缺口) [test:t_source_repo_reinject_path]
   FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install/uninstall)→專案層每repo(init 建vault+vendor工具組+裝閘｜update 刷新vendored｜deinit 對稱反安裝)
   KEY:兩層分工——機器層(install/uninstall/bootstrap)動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Claude hooks);專案層(init/update/deinit)只動本 repo(docs/<slug>-knowledge、scripts/ vendored、CLAUDE.md 注入、core.hooksPath)
   KEY:bootstrap 一鍵對稱(2026-07-25)=step3 升級專案層四分流:有vault+vendored→接hooks｜中間態(有vault無vendored,_vault_in 只看名稱防假陽性疊動作)→提示補齊不自動動｜無vault→_confirm_tty 確認(印完整路徑+預設N)y 才 cmd_init(--init 免確認;一律 force=False+no_pull=True,LUMOS_HOME env 傳導自訂 home)｜非git→只機器層。get.sh 迴圈解析 --pull/--init 後整段委派 bootstrap;各步查 rc 失敗尾端彙報 rc1 不吞錯。與 teardown 成鏡像(bootstrap 不刪vault、teardown 不建vault,圖譜兩邊不碰)。設計 [[Projects/bootstrap一鍵對稱_計劃]]、驗證 [[Verification/2026-07-25_bootstrap一鍵對稱]]
@@ -52,6 +53,7 @@ related:
 verified_by:
   - "[[Verification/2026-07-06_CLAUDE注入re-sync]]"
   - "[[Verification/2026-07-25_bootstrap一鍵對稱]]"
+  - "[[Verification/2026-08-05_流程優化六件落地]]"
 ---
 # lumos-cli-lifecycle
 

@@ -2,12 +2,13 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-04
+updated: 2026-08-05
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/done
 summary: |-
+  KEY:[2026-08-05]search 排序加 aliases 欄(權重 3.5,略低於標題 4.0)——frontmatter aliases list 進 BM25F;同義詞落空(搜「作廢」圖譜寫「沖銷」)的最便宜解,寫入者留同義詞一次、檢索受益永久 [test:t_search_aliases_field]
   KEY:[2026-08-04]+quote-check(vault-free 讀命令):報告引句逐條對回凍結快照(_quote_norm 正規化;rc0 全 ok/rc1 miss/rc2 IO或零引句)——disposal 閘的④號合取同源消費 [test:t_quote_check_normalization_and_verdict]
   FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出(context/show 另寫 usage-log 事件帳;doctor --ci 寫 governance-log) → return 0(查無/正則錯=非0)
   KEY:read/traverse 13 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——context 與 show 寫 best-effort usage-log 事件帳(A2,2026-07-11 起)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀([[Projects/lumos-show讀取入口_計劃]] r4 收斂措辭,修 A2 起「零副作用」宣稱漂移);與 7 個寫入原語(set/append/new/decision-* …)互斥
@@ -56,6 +57,7 @@ verified_by:
   - "[[Verification/2026-07-15_主網M4_觸發與連鎖]]"
   - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
   - "[[Verification/2026-07-24_真遺忘search排除superseded]]"
+  - "[[Verification/2026-08-05_流程優化六件落地]]"
 ---
 # lumos-cli-read
 

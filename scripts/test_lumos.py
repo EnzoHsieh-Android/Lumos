@@ -10663,7 +10663,148 @@ def t_search_multiword_fallback_is_default_and_only_on_zero():
           r.returncode == 0 and "多詞回退" not in r.stderr, f"rc={r.returncode}\n{r.stderr[:200]}")
 
 
-def t_search_ranked():
+def t_loop_canary_stats():
+    """[d4 承諾的後半 2026-08-05]跨輪 canary 累積帳的★讀取面★——record 寫入面 T1-T7 落地後,
+    missed 率/席位慣性/連續 missed 一直只能人翻 JSONL(「機制蓋好沒人用」病的入口)。
+    `lumos loop canary-stats [<loop-id>]`:席位×caught/missed×尾端連續 missed streak;
+    連續 missed ≥2 印升級提示(「連 2 missed 升 opus」規則的機械眼);純唯讀恆 rc0,壞行跳過並註記。
+    翻紅釘:把 streak 計算改成總數 → 升級提示斷言翻紅。"""
+    import json as _j
+    v = mkvault()
+    lid = f"cs-{_M1U}"
+    for kind, aud in (("caught", "s1"), ("missed", "s2"), ("caught", "s1"),
+                      ("missed", "s2"), ("caught", "s3")):
+        run(v, "canary", "record", kind, "--loop", lid, "--auditor", aud,
+            "--severity", "minor", expect_rc=0)
+    (v.parent / ".canary-log.jsonl").open("a", encoding="utf-8").write("{bad\n")
+    r = run(v, "loop", "canary-stats", lid)
+    check("canary-stats rc0(唯讀觀測)", r.returncode == 0, r.stderr[:200])
+    check("★席位分帳:s1=2 caught、s2=2 missed、s3=1 caught★",
+          "s1" in r.stdout and "s2" in r.stdout and "s3" in r.stdout
+          and "2" in r.stdout, r.stdout[:400])
+    check("★連續 missed ≥2 印升級提示(連2missed升opus的機械眼)★",
+          "s2" in r.stdout and ("升" in r.stdout or "escalate" in r.stdout), r.stdout[:400])
+    check("壞行跳過並註記(不炸不擋)", "壞行" in r.stdout or "1 行不可解析" in r.stdout, r.stdout[:400])
+    # 全域視圖(無 loop-id):列出各 loop 摘要
+    r2 = run(v, "loop", "canary-stats")
+    check("無參數=全 loop 摘要視圖", r2.returncode == 0 and lid in r2.stdout, r2.stdout[:300])
+
+
+def t_source_repo_reinject_path():
+    """[2026-08-05 實戰缺口]來源 repo 自身沒有 reinject 路徑——update 拒跑(ERROR)、
+    init 既有 vault 在來源 repo 走「跳過 vendor/hooks」時連 _do_reinject 一起跳過
+    (2026-08-04 範本更新後,來源 repo 自己的 CLAUDE.md 只能直呼內部函式才刷新)。
+    修:①update 在來源 repo 改走 reinject-only(範本本地即最新,無 pull 之需)
+    ②init 既有 vault 的來源-repo 分支照樣 reinject。
+    翻紅釘:還原「跳過」分支 → 斷言②翻紅。"""
+    import subprocess as sp
+    import os
+    d = Path(tempfile.mkdtemp(prefix="gctl-src-"))
+    repo = d / "srcrepo"
+    (repo / "scripts" / "templates").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    v = repo / "docs" / "kg-knowledge"
+    for sub_ in ("Systems", "MOC"):
+        (v / sub_).mkdir(parents=True)
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    (repo / "scripts" / "templates" / "graph-discipline.md").write_text(
+        "紀律內容 v2(指向 {{KG}})\n", encoding="utf-8")
+    (repo / "CLAUDE.md").write_text(
+        "<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — x -->\n舊內容 v1\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n"
+        "使用者手寫區(不得動)\n", encoding="utf-8")
+    env2 = dict(os.environ, LUMOS_HOME=str(repo))
+    # ① update 在來源 repo:reinject-only rc0(原:ERROR rc2)
+    r = sp.run([sys.executable, GRAPHCTL, "update"], capture_output=True, text=True,
+               cwd=str(repo), env=env2)
+    body = (repo / "CLAUDE.md").read_text(encoding="utf-8")
+    check("★update 在來源 repo=reinject-only rc0(原:拒跑)★",
+          r.returncode == 0 and "紀律內容 v2" in body, f"rc={r.returncode} {r.stderr[:150]}")
+    check("sentinel 外使用者內容 byte-equal 保留", "使用者手寫區(不得動)" in body, body[-100:])
+    # ② init 既有 vault 在來源 repo:照樣 reinject
+    (repo / "scripts" / "templates" / "graph-discipline.md").write_text(
+        "紀律內容 v3(指向 {{KG}})\n", encoding="utf-8")
+    r2 = sp.run([sys.executable, GRAPHCTL, "init"], capture_output=True, text=True,
+                cwd=str(repo), env=env2)
+    body2 = (repo / "CLAUDE.md").read_text(encoding="utf-8")
+    check("★init 既有 vault 在來源 repo 照樣 reinject(原:跳過分支連 reinject 一起跳)★",
+          r2.returncode == 0 and "紀律內容 v3" in body2, f"rc={r2.returncode}\n{r2.stdout[:200]}")
+
+
+def t_quote_check_zero_extract_self_diagnosis():
+    """[2026-08-05]零引句 rc2 訊息要會教——Landmark 首測三席全因格式變體抽零條,
+    編排者得回來查 code 才懂;訊息附常見原因讓下個編排者自診。"""
+    v = mkvault()
+    d = v / "Projects"
+    snap = d / "zsnap.md"; snap.write_text("內容\n", encoding="utf-8")
+    rpt = d / "zrpt.md"; rpt.write_text("報告沒有任何引句樣式\n", encoding="utf-8")
+    r = run(v, "quote-check", str(rpt), "--spec", str(snap))
+    check("零引句 rc2 且訊息含自診清單(常見原因逐條,非只喊格式)", r.returncode == 2
+          and "常見原因" in r.stderr and "粗體" in r.stderr and "引號" in r.stderr,
+          r.stderr[:300])
+
+
+def t_new_verification_bidirectional():
+    """[收尾優化 2026-08-05]`lumos new verification X --plan Y --systems A,B` 一鍵雙向——
+    建檔當下填 plan_refs＋對每個 Systems append verified_by(原:手動兩邊寫,漏了靠
+    sync-verified-by 事後兜;把「事後撿漏」變「寫入時就對」)。
+    斷言:①plan_refs 落檔 ②各 Systems verified_by 回指 ③不存在的 system rc2 且不建檔
+    ④無旗標行為不變。翻紅釘:拔雙向 append → ②翻紅。"""
+    v = mkvault()
+    (v / "Systems" / "模組甲.md").write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n# 模組甲\n", encoding="utf-8")
+    (v / "Systems" / "模組乙.md").write_text(
+        "---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n# 模組乙\n", encoding="utf-8")
+    (v / "Projects" / "某計劃.md").write_text(
+        "---\ntype: project\nstatus: doing\ntags:\n  - type/project\n---\n# 某計劃\n", encoding="utf-8")
+    r = run(v, "new", "verification", "2026-08-05_雙向測", "--plan", "Projects/某計劃",
+            "--systems", "Systems/模組甲,Systems/模組乙")
+    check("new --plan/--systems rc0", r.returncode == 0, r.stderr[:200])
+    vf = (v / "Verification" / "2026-08-05_雙向測.md").read_text(encoding="utf-8")
+    check("★plan_refs 建檔即填★", 'plan_refs' in vf and "[[Projects/某計劃]]" in vf, vf[:300])
+    a = (v / "Systems" / "模組甲.md").read_text(encoding="utf-8")
+    b = (v / "Systems" / "模組乙.md").read_text(encoding="utf-8")
+    check("★兩個 Systems 的 verified_by 同步回指(雙向一步到位)★",
+          "[[Verification/2026-08-05_雙向測]]" in a and "[[Verification/2026-08-05_雙向測]]" in b,
+          a[:200] + b[:200])
+    # 不存在的 system → rc2 且不留半成品
+    r2 = run(v, "new", "verification", "2026-08-05_壞測", "--systems", "Systems/不存在")
+    check("★--systems 指到不存在節點 rc2 且不建檔(不留半套雙向)★",
+          r2.returncode == 2 and not (v / "Verification" / "2026-08-05_壞測.md").exists(),
+          f"rc={r2.returncode} {r2.stderr[:150]}")
+    # 相容:無旗標照舊
+    run(v, "new", "verification", "2026-08-05_素測", expect_rc=0)
+    check("無旗標行為不變", (v / "Verification" / "2026-08-05_素測.md").exists(), "")
+
+
+def t_search_aliases_field():
+    """[檢索優化 2026-08-05]frontmatter `aliases` 進 BM25F 高權重欄——同義詞落空的最便宜解
+    (BM25 詞面比對:圖譜寫「沖銷」、使用者搜「作廢」即 miss;aliases 由寫入者一次性留同義詞)。
+    斷言:①aliases 命中=候選+高分(勝 body 單次提及)②無 aliases 節點行為不變。
+    翻紅釘:把 aliases 欄從 _rank_fields 拿掉 → 排序斷言翻紅。"""
+    import subprocess as sp
+    import json
+    d = Path(tempfile.mkdtemp(prefix="gctl-alias-"))
+    v = d / "docs" / "a-knowledge"
+    (v / "Systems").mkdir(parents=True)
+    (v / "MOC").mkdir()
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    (v / "Systems" / "訂單作廢.md").write_text(
+        "---\ntype: system\nstatus: done\naliases:\n  - 沖銷\n  - 取消訂單\n"
+        "summary: |-\n  KEY:作廢流程核心\ntags:\n  - type/system\n---\n# 訂單作廢\n流程內文。\n",
+        encoding="utf-8")
+    (v / "Systems" / "旁支.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:別的\n---\n# 旁支\n"
+        "內文順帶提到沖銷一次,再提沖銷一次。\n", encoding="utf-8")
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+    r = lum("search", "沖銷", "--ranked", "--json")
+    check("★前置★ 現場成立:aliases 節點成為候選(frontmatter 全文命中)", r.returncode == 0
+          and "訂單作廢" in r.stdout, r.stdout[:300] + r.stderr[:200])
+    data = json.loads(r.stdout.strip().splitlines()[-1])
+    names = [x["node"] for x in data["results"]]
+    check("★aliases 高權重:同義詞命中勝 body 多次提及★",
+          names and "訂單作廢" in names[0], str(names))
     import subprocess as sp, json
     d, v = _mk_rank_vault()
     def lum(*a):
