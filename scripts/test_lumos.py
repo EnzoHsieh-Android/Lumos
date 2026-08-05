@@ -10663,6 +10663,44 @@ def t_search_multiword_fallback_is_default_and_only_on_zero():
           r.returncode == 0 and "多詞回退" not in r.stderr, f"rc={r.returncode}\n{r.stderr[:200]}")
 
 
+def t_pitfalls_diff_skips_review_report_artifacts():
+    """[2026-08-05 C 慣例實戰首擋]歸檔的審計證物(governance/review-reports/ 下的席報告與
+    canary 快照 .patch——裡面★故意★埋著資源/併發 bug)被 pitfalls --diff 當成代碼掃,
+    tier 直接 high、push 被自己的留痕擋下。修=掃描排除 governance/review-reports/ 路徑
+    (證物是文字紀錄,不是要合入的碼)。收緊釘:review-reports 外的同型 .patch/.py 照掃。"""
+    import subprocess as _sp
+    with tempfile.TemporaryDirectory() as d:
+        g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        g("init", "-q", "-b", "main")
+        g("config", "user.email", "t@t.t")
+        g("config", "user.name", "t")
+        (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "init")
+        g("checkout", "-qb", "feat")
+        rr = Path(d) / "governance" / "review-reports" / "code-x"
+        rr.mkdir(parents=True)
+        (rr / "r1-snapshot.patch").write_text(
+            "+++ b/app.py\n+import requests\n+fh = open('x')\n+requests.post('http://x')\n",
+            encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "archive artifacts")
+        r = _sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", "main..HEAD",
+                     "--no-lint", "--json", "--repo", d], capture_output=True, text=True)
+        import json as _j
+        data = _j.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+        check("★review-reports 下的證物不掃(tier 不因歸檔變 high)★",
+              data.get("tier") != "high" and not data.get("claims"),
+              f"tier={data.get('tier')} claims={data.get('claims')}")
+        # 收緊釘:同內容放在 review-reports 外照掃
+        (Path(d) / "app_real.py").write_text("import requests\nrequests.post('http://x')\n",
+                                             encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "real code")
+        r2 = _sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", "main..HEAD",
+                      "--no-lint", "--json", "--repo", d], capture_output=True, text=True)
+        data2 = _j.loads([l for l in r2.stdout.splitlines() if l.strip().startswith("{")][0])
+        check("★收緊釘:真代碼照掃(排除不外溢)★", data2.get("tier") == "high",
+              f"tier={data2.get('tier')}")
+
+
 def t_lint_decisions_nested_list_not_false_positive():
     """[Landmark 回填實戰抓到 2026-08-05]lint 的 decisions 結構守衛把 alternatives_considered
     ★巢狀清單★的 - 項也算進原始條數(raw=5 vs parsed=2)→照 ADR 規範寫 alternatives 清單
