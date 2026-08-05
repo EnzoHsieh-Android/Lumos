@@ -28,6 +28,8 @@ summary: |-
   DEP:[[Systems/check-t-sentinel]]
   TEST:t_maestro_profile_discover｜t_playwright_profile_discover｜t_load_platforms｜t_resolve_test_refs｜t_multiplatform_guard_list｜t_multiplatform_doctor_check_t｜t_archive_live_guard_multiplatform｜t_guard_trace_multiplatform｜t_guard_bind_scaffold_platform(333 passed)
   VERIFY:[[Verification/2026-07-02_multiplatform-test-binding]]
+aliases:
+  - 多平台合約測試綁定
 ---
 # 多平台合約測試綁定（test-profile multiplatform）
 

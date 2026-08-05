@@ -18,6 +18,8 @@ summary: |-
   KEY:★會半做正是因為打到不完整的來源★——`_teardown_global_claude(src_repo)` 拿臨時 repo 當 src,那裡沒有 `merge-claude-settings.py`,所以「刪 hook 檔」做了、「剪懸空註冊」跳過。這恰好就是該函式 docstring 自己警告的「不半做」情境,只是從另一個方向撞進來
   KEY:★通則:破壞性指令的測試,假 HOME 是最低門檻不是可選項★——同檔既有的 `_teardown_run(home, fn)` 就是為此存在的 helper,我沒用它。另一條:★不要假設接縫存在★,`LUMOS_SIMULATE_WINDOWS` 是我以為有的,實際上要自己加;假設落空時測試不是紅,是「真的執行」
   DECISION:[2026-08-01]復原=重跑 `lumos install`(重建全域指令+skills+`_sync_global_claude` 補回 hooks 與註冊),已逐項核對;測試改成假 HOME + 假 repo 雙隔離,並真的把接縫加進 CLI
+aliases:
+  - LUMOS_SIMULATE_WINDOWS
 ---
 # 測試未隔離 HOME，刪掉真機的 Claude hooks
 

@@ -23,6 +23,8 @@ related:
   - "[[Systems/test-profile-multiplatform]]"
 verified_by:
   - "[[Verification/2026-07-10_guard殺傷力驗證]]"
+aliases:
+  - 殺傷力驗證
 ---
 # guard-kill（殺傷力驗證）
 

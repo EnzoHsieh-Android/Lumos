@@ -16,6 +16,8 @@ summary: |-
   DECISION:[2026-07-07] exec-anchor-gate gap 標 covered(covered.jsonl,防 requeue 再燒);撿走 spec 真值錢的兩樣:runner -k 0案例假綠洞修 + pre-push 測試閘(皆已落地);G3 本體不做(使用者裁定 overcheck)
   KEY:守衛模型原則(使用者提出):守衛該長在「事件源」上——每種漂移向量在發生那刻被對應的閘接住;對已有事件閘的東西做收斂期輪詢=overcheck。唯一合法的重驗=無事件可掛的向量(世界變了 code 沒變 → 人)
   KEY:改進方向(未實作):gap 選題評估加一問「這 gap 有沒有更便宜的既有層解法?」;或 orchestrator prompt 給 brainstorm 階段加「先評估最小解在哪一層」步驟
+aliases:
+  - exec-anchor-gate
 ---
 # 自主 loop 加法偏食(結構性偏誤)
 

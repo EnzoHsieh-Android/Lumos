@@ -44,6 +44,8 @@ decisions:
     why_chosen: 漏洞已知且修復 planned 未落地時,留著入口=可被 poisoned spec 誘導 Edit/Bash 的活風險;dry-run 產出 pending 等人放行的價值不受影響
     decided: 2026-07-29
     valid: true
+aliases:
+  - confused deputy
 ---
 # nested-agent-permission-scope
 

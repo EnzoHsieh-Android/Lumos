@@ -17,6 +17,8 @@ summary: |-
   KEY:待查方向——①record 寫入的 vault/log 路徑解析是否受 cwd 影響(當時 session 有多次 cwd 漂移)②寫後是否缺 readback 自驗(嫌疑最大:回報成功僅代表函式跑完,未證檔案已 append)③硬化案=record 輸出印落盤絕對路徑+append 後讀回驗證該行存在(對齊「寫後自驗」家規),綁測試
   KEY:★結案(2026-07-29)★——機械面已閉:_jsonl_append_verified 寫後獨立重開檔讀回驗唯一鍵,驗不到即 rc2 且不印 ✓(合約 [test:t_canary_record_persist] 已過獨立 [audit:]);root cause 無法重現(當時 session 已結束、log 無殘跡),如實記「readback 防線已閉、根因未定」——防線不依賴根因定位
   DECISION:[2026-07-29]補記走明標路線(note 註明佚失事件+證據源),不偽裝原生紀錄——帳的誠實優先於帳的漂亮
+aliases:
+  - readback
 ---
 # canary record 未落盤事件（2026-07-29）
 

@@ -38,6 +38,8 @@ decisions:
     why_chosen: auditor 找洞(看到可疑就提、無動力深挖反證),辯方被逼構造推翻證據(專查 auditor 跳過的反方向);同樣 grep、目標命題相反→挖的角落不同。多派 auditor 只生更多起訴、同找洞方向
     decided: 2026-06-24
     valid: true
+aliases:
+  - 辯方
 ---
 # finding-refute
 

@@ -21,6 +21,8 @@ summary: |-
   KEY:設計哲學=宣告即契約需對帳——lint.json/lint-watch.json/test-layers.json 三個宣告檔都吃「宣告了不存在/跑不動的東西沒人知道」風險;lint-check 是 lint.json 這條的對帳器,同族收口
   DEP:scripts/lumos cmd_lint_check + _lintcheck_validate｜復用 _lint_run_and_parse(smoke)
   TEST:t_lintcheck_validate(格式校驗含 value 非 list 誤植案例)+t_lintcheck_cli(無檔rc0/空殼rc1/格式對rc0/smoke抓跑不動rc1/smoke真產SARIF rc0/非JSON rc2);全套 1236 passed
+aliases:
+  - lint 宣告健康檢查
 ---
 # lint-declaration-health——lint 宣告健康檢查(收「宣告了跑不動的東西」破口)
 

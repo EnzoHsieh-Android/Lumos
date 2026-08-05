@@ -44,6 +44,9 @@ decisions:
     why_chosen: 自信但經不起機械驗證的否決不該有否決權;disputed 升級人核精神保留,只改門票條件
     decided: 2026-07-03
     valid: true
+aliases:
+  - Confident Liar
+  - capture-recapture
 ---
 # convergence-evidence-gate
 

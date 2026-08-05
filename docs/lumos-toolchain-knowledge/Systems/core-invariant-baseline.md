@@ -35,6 +35,8 @@ decisions:
     why_chosen: 集合/唯一-key 比對對 mid-list 刪除穩定(刪一條 = 一個 key/hash 消失,不級聯);approve 強制 decided 唯一、碰撞或缺失報錯要人補,不自動編號
     decided: 2026-06-19
     valid: true
+aliases:
+  - core-content-baseline
 ---
 # core-invariant-baseline
 

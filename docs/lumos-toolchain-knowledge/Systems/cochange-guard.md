@@ -19,6 +19,8 @@ related:
   - "[[Systems/lumos-cli-lifecycle]]"
 verified_by:
   - "[[Verification/2026-07-10_cochange守衛]]"
+aliases:
+  - 共改漏改守衛
 ---
 # cochange-guard（共改漏改守衛）
 

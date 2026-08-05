@@ -25,6 +25,8 @@ summary: |-
   KEY:★精化★真正的軸=provenance(捕獲當下來源品質)非「衍生vs手寫」——openwiki 事後從 code 逆向工程 why(lossy 投影重建、註定漏)；lumos 決策當下第一手目擊(握真脈絡/被否方案)。導覽層須一分為二:指針/索引安全(錯得便宜+讀者 re-ground),合成敘事那半繼承無 oracle(自信錯敘事比沒敘事更毒)。lumos 唯一塌陷回同款失效=from-scratch 重生非合約 prose(常態 vs 例外);edge 是 provenance 非 verification(後者只覆蓋 [test:] 合約子集)
   DEP:[[Systems/canary-audit]]｜[[Systems/verification-rot-eval]]
   DECISION:留痕反例世界解——日後有人問「有自動生 wiki 就夠,幹嘛手寫圖譜?」直接指此節點:答案=openwiki 那套無法承載 code 讀不出的合約/驗證/不可漂移真相,且其新鮮≠正確(無 oracle)
+aliases:
+  - openwiki
 ---
 # 外部對照-code衍生wiki
 

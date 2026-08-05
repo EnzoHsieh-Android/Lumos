@@ -39,6 +39,8 @@ decisions:
     why_chosen: Check K 為純新增軟 Check、不得動 Check T;自己重掃才作用域乾淨;照 Check S 模板(warn_soft + _soft_list + gov_events warned/hard:False)複用既有結構
     decided: 2026-06-23
     valid: true
+aliases:
+  - Check K
 ---
 # check-t-sentinel
 

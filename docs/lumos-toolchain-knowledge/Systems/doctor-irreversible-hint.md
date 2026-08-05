@@ -38,6 +38,8 @@ decisions:
     why_chosen: 遵本檔既有慣例(可逆性 helper 群聚 + run_doctor 前向引用在呼叫時解析);lazy import 與 L339/L2298 等先例一致
     decided: 2026-06-25
     valid: true
+aliases:
+  - Check H
 ---
 # doctor-irreversible-hint
 

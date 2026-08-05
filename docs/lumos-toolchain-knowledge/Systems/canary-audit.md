@@ -57,6 +57,8 @@ decisions:
 related:
   - "[[Projects/規模影響判斷力假說]]"
   - "[[Projects/canary注意力檢查失效]]"
+aliases:
+  - test-the-tester
 ---
 # canary-audit
 

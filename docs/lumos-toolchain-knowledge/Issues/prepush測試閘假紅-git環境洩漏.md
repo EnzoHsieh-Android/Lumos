@@ -13,6 +13,8 @@ summary: |-
   KEY:★第一次診斷是錯的,留著當教訓★——先押 `GIT_DIR` 洩漏,實測把 GIT_DIR 指向本 repo 確實讓 65 條翻紅,「機制成立」就當成「找到真因」;修完再推,還是紅三條。**一個假說能重現出更嚴重的症狀,不代表它是眼前這個症狀的原因**
   KEY:★而且那個假說的前提也是錯的★:`git push` 並不會把 `GIT_DIR` export 給 hook——反證是每次 pre-push 跑完 repo 都沒被污染,而我手動設 `GIT_DIR` 跑的那兩次★把 127 筆測試 fixture commit 寫進了本 repo 的 main★(834→1029),得 reset 到乾淨基底重貼內容才救回來。env-strip 的修法保留(它正好防住我自己造成的這種傷害),但★不得宣稱它修的是 hook 環境★
   KEY:★這是「閘一直在給假紅」的事故,不是單純的 flaky★——一個持續給假紅的閘,下一次就會被人用 `--no-verify` waive 掉,等於閘自己把自己關了
+aliases:
+  - dirname
 ---
 # prepush測試閘假紅-git環境洩漏
 

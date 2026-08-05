@@ -23,6 +23,8 @@ verified_by:
   - "[[Verification/2026-07-10_檢索排序v1]]"
   - "[[Verification/2026-07-11_檢索goldset評測]]"
   - "[[Verification/2026-07-11_hook面v1.1轉正]]"
+aliases:
+  - 檢索排序與關聯推薦
 ---
 # retrieval-ranking（檢索排序與關聯推薦 v1）
 

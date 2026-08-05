@@ -39,6 +39,8 @@ decisions:
     why_chosen: shebang #!/usr/bin/env python3 Windows 不認;只 resolve 直譯器不夠,還要 resolve home 且正斜線化(Git Bash 才認);按 hook 檔名去重才能升級時取代舊 entry、不雙觸發
     decided: 2026-06-26
     valid: true
+aliases:
+  - 原生 Windows 支援
 ---
 # 原生 Windows 支援
 

@@ -2279,6 +2279,16 @@ def cmd_lint(env, node):
     if t in ("system", "issue") and not summ.strip():
         errs.append(f"{t} 節點必須有 summary block(放 FLOW:/KEY:/DEP: 等符號行)")
 
+    # aliases 宣告制(2026-08-05 Enzo 裁定,cutoff 起新 system/issue 逼「判過」不逼「有值」):
+    # aliases 吃 3.5 檢索權重,湊數別名主動污染排序——故 `aliases: []`=明示判過,合法;
+    # 缺鍵=沒判過,擋。舊節點不回溯(created < cutoff)。
+    _ALIASES_CUTOFF = "2026-08-05"
+    if t in ("system", "issue"):
+        _created = str(n.fields.get("created") or "")
+        if _created >= _ALIASES_CUTOFF and "aliases" not in n.fields:
+            errs.append("缺 aliases 鍵(2026-08-05 起 system/issue 必須判過同義詞——"
+                        "有就列(症狀語/縮寫/舊名),確定沒有寫 aliases: [];湊數別名比空更糟)")
+
     # decisions 結構守衛(2026-07-29 外審實錘:id 縮排吞進 content block,parser 靜默降級、
     # doctor 全綠——「綠燈≠schema 有效」的活例。以正牌 parse_decisions 驗:
     # 壞型一(sibling 被吞)→ content 空;壞型二(entry 非 `- key:` 形)→ 整條被靜默丟棄=條數對不上)
@@ -2296,7 +2306,9 @@ def cmd_lint(env, node):
                 continue
             if _in and _l.strip() and not _l.startswith(" "):
                 _in = False
-            if _in and re.match(r"^\s*-\s", _l):
+            if _in and re.match(r"^  -\s", _l):
+                # 只認 entry 縮排層(恰 2 空格):alternatives_considered 等巢狀清單(≥4 空格)
+                # 不是決策條目——2026-08-05 Landmark 回填實戰:照 ADR 規範寫巢狀清單被誤報壞損
                 _raw_items += 1
         if _raw_items != len(_parsed):
             errs.append(f"decisions 結構壞損:寫了 {_raw_items} 條、只解析出 {len(_parsed)} 條"
@@ -6048,7 +6060,7 @@ def cmd_export_html(env, out_path, standalone=False):
 # ═══════════════════════ 階段三: 寫側 T1(行級手術) ═══════════════════════
 
 SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen"}
-LIST_KEYS = {"verified_by", "plan_refs", "related", "tags"}
+LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases"}   # aliases 2026-08-05(回填/補詞走安全原語)
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -6883,10 +6895,12 @@ def cmd_rel_cascade_resume(env, cascade_id):
 
 TEMPLATES = {
     "system": ("Systems", "type: system\nstatus: doing\ncreated: {today}\nupdated: {today}\n"
+               "aliases: []\n"
                "tags:\n  - type/system\n  - status/doing\nsummary: |-\n  FLOW:\n  KEY:\n  DEP:\n  TEST:"),
     "verification": ("Verification", "type: verification\nstatus: pass\ndate: {today}\n"
                      "valid_under:\nrevalidate_when:\ntags:\n  - type/verification\n  - status/pass"),
     "issue": ("Issues", "type: issue\nstatus: open\ncreated: {today}\nupdated: {today}\n"
+              "aliases: []\n"
               "tags:\n  - type/issue\n  - status/open\nsummary: |-\n  FLAG:\n  DECISION:\n  KEY:"),
     "project": ("Projects", "type: project\nstatus: doing\ncreated: {today}\nupdated: {today}\n"
                 "tags:\n  - type/project\n  - status/doing"),
@@ -6900,9 +6914,11 @@ NEW_HINT = {
         "  └ 綁定別手寫: lumos guard bind <node> \"<KEY子字串>\" <測試名> / guard audit <node> \"<KEY子字串>\"",
         "可逆性: 不可逆動作(prod遷移/上架)標 ★IRREVERSIBLE★ + [rollback:decisions];改了難救標 ★CHECKPOINT★;外部不可逆(信已送/下游已消費)改用 [guard:decisions] 記冪等鍵/核可閘([guard:] 僅對 ★IRREVERSIBLE★ 生效;屬可逆性軸,與 lumos guard bind 的合約軸正交)",
         "組合覆蓋: 最重的鐵則(金額/權限/不可逆)在 ★INVARIANT★ 之後標 ★COMBO★ → doctor Check K 軟提醒補組合測試(別只測 happy-path)",
+        "aliases: 同義詞/縮寫/跨域說法(進 BM25F 權重 3.5)——來源限真實出現過的說法;沒有就留 [](湊數別名污染檢索)",
     ],
     "issue": [
         "填 summary 符號行: FLAG:<TECHNICAL/DECISION/ORIGIN>  DECISION:<決策簡述>  KEY:<關鍵發現>",
+        "aliases: 症狀語(人怎麼描述這問題)/縮寫/舊名——來源限真實出現過的說法;沒有就留 [](湊數別名污染檢索)",
     ],
     "verification": [
         "填 valid_under:<此驗證在什麼前提下成立>  revalidate_when:<改到什麼時該重驗>",

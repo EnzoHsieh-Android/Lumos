@@ -10663,6 +10663,80 @@ def t_search_multiword_fallback_is_default_and_only_on_zero():
           r.returncode == 0 and "多詞回退" not in r.stderr, f"rc={r.returncode}\n{r.stderr[:200]}")
 
 
+def t_lint_decisions_nested_list_not_false_positive():
+    """[Landmark 回填實戰抓到 2026-08-05]lint 的 decisions 結構守衛把 alternatives_considered
+    ★巢狀清單★的 - 項也算進原始條數(raw=5 vs parsed=2)→照 ADR 規範寫 alternatives 清單
+    反而被誤報「結構壞損」。修=原始計數只認 entry 縮排層(^␣␣-),巢狀(≥4 空格)不計。
+    收緊釘:真壞型(sibling 被吞成 content 空)照樣要抓。"""
+    v = mkvault()
+    (v / "Systems" / "正規ADR.md").write_text(
+        "---\ntype: system\nstatus: done\ncreated: 2026-08-01\nupdated: 2026-08-01\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n"
+        "decisions:\n"
+        "  - content: 選 A 方案\n"
+        "    context: 背景\n"
+        "    alternatives_considered:\n"
+        "      - B 方案:太貴\n"
+        "      - C 方案:太慢\n"
+        "      - D 方案:不相容\n"
+        "    why_chosen: 便宜\n"
+        "    trade_offs: 要維護\n"
+        "    decided: 2026-08-01\n"
+        "    valid: true\n"
+        "  - content: 第二條決策\n"
+        "    decided: 2026-08-01\n"
+        "    valid: true\n"
+        "---\n# 正規ADR\n", encoding="utf-8")
+    r = run(v, "lint", "正規ADR")
+    check("★照 ADR 規範的巢狀 alternatives 清單不得誤報結構壞損★", r.returncode == 0,
+          f"rc={r.returncode}\n{r.stdout[:300]}")
+    # 收緊釘:真壞型(id 縮排吞進 content block→content 空)照樣抓
+    (v / "Systems" / "真壞型.md").write_text(
+        "---\ntype: system\nstatus: done\ncreated: 2026-08-01\nupdated: 2026-08-01\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n"
+        "decisions:\n"
+        "  - 純字串不是dict\n"
+        "  - content: 好的\n"
+        "    decided: 2026-08-01\n"
+        "    valid: true\n"
+        "---\n# 真壞型\n", encoding="utf-8")
+    r2 = run(v, "lint", "真壞型")
+    check("★收緊釘:entry 非 dict 被靜默丟(raw 2/parsed 1)照樣報★", r2.returncode == 1
+          and "decisions" in r2.stdout, f"rc={r2.returncode}\n{r2.stdout[:200]}")
+
+
+def t_lint_aliases_declared():
+    """[aliases 硬性化 2026-08-05,Enzo 裁定]逼「判過」不逼「有值」——system/issue 新節點
+    (created ≥ 2026-08-05)必須★有 aliases 鍵★;`aliases: []`=明示「判過,無同義詞」合法。
+    直接逼「必須有別名」會製造湊數別名,而 aliases 吃 3.5 檢索權重,爛別名主動污染排序
+    ——同「不確定就不標」精神。舊節點不回溯(created 早於 cutoff 不管);verification/project 豁免。
+    翻紅釘:拔檢查 → 缺鍵案例翻紅。"""
+    v = mkvault()
+    (v / "Systems" / "新缺鍵.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-05\nupdated: 2026-08-05\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# 新缺鍵\n", encoding="utf-8")
+    r = run(v, "lint", "新缺鍵")
+    check("★新 system 缺 aliases 鍵=lint error(逼判過)★", r.returncode == 1 and "aliases" in r.stdout,
+          f"rc={r.returncode}\n{r.stdout[:200]}")
+    (v / "Systems" / "新明示空.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-05\nupdated: 2026-08-05\n"
+        "aliases: []\ntags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# 新明示空\n", encoding="utf-8")
+    check("★aliases: [] 明示空=合法(判過無同義詞)★",
+          run(v, "lint", "新明示空").returncode == 0, "")
+    (v / "Systems" / "舊節點.md").write_text(
+        "---\ntype: system\nstatus: done\ncreated: 2026-08-01\nupdated: 2026-08-01\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# 舊節點\n", encoding="utf-8")
+    check("舊節點(cutoff 前)不回溯", run(v, "lint", "舊節點").returncode == 0, "")
+    (v / "Projects" / "新計劃.md").write_text(
+        "---\ntype: project\nstatus: doing\ncreated: 2026-08-06\nupdated: 2026-08-06\n"
+        "tags:\n  - type/project\n---\n# 新計劃\n", encoding="utf-8")
+    check("project 型別豁免", run(v, "lint", "新計劃").returncode == 0, "")
+    # 模板起步天然合規
+    run(v, "new", "system", "模板起步", expect_rc=0)
+    check("★lumos new 模板自帶 aliases 欄→起步即合規★",
+          run(v, "lint", "模板起步").returncode == 0, "")
+
+
 def t_loop_canary_stats():
     """[d4 承諾的後半 2026-08-05]跨輪 canary 累積帳的★讀取面★——record 寫入面 T1-T7 落地後,
     missed 率/席位慣性/連續 missed 一直只能人翻 JSONL(「機制蓋好沒人用」病的入口)。

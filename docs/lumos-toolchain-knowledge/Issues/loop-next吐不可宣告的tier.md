@@ -19,6 +19,8 @@ summary: |-
   DECISION:[2026-08-04]修 record_cmd 不吐不可宣告值(`eff_tier in LOOP_TIERS` 才帶 --tier),並補 `tier_hint` 講清楚★這個 loop 補標不了、要開新 loop id★;不動 legacy 的 cap 6(那是收斂判準=守衛面,要走 design-loop 另案)
   DEP:scripts/lumos cmd_loop_next 的 emit()｜LOOP_TIERS｜_TIER_PARAMS
   TEST:t_loop_next_legacy_emits_a_command_that_actually_runs(7 條斷言;含還原翻紅釘與兩條現場成立前置)
+aliases:
+  - "invalid choice: 'legacy'"
 ---
 # loop next 吐出一條跑不動的指令（而修復它的自然反應會複製這個狀態）
 
