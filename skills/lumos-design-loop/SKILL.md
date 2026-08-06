@@ -8,8 +8,8 @@ description: 設計 spec／計劃寫完、進實作前的對抗審計硬閘—�
 > **定位(d4;★2026-08-04 重設計修訂:閘便宜,審不淺★)**:抬 spec 質量,**非保 spec 正確**——「初篩網」指★放行門檻★(一輪處置全清即走),**不是審查深度**:★前提層錯誤(需求誤解/架構誤判/跨系統合約假設錯)明列本層職責——TDD/E2E 對「spec 的理解本身錯不錯」沒有 oracle★。行為層正確性歸下游 code-loop＋測試＋驗證,漏網進逃逸帳。**前置加重一律拒**。完整重設計見圖譜 [[Projects/design-loop重設計]]。
 
 > ### ★收斂改走處置閘(2026-08-04 重設計;取代 K-streak/capture-recapture 硬閘)★
-> **一輪流程**:pre-flight 排乾 → ★隨機決定植不植 canary(d4 觀測非閘:判定強制留痕、miss 不作廢該席 findings、進跨輪累積帳)★ → 派 panel(派工含★錨定紀律★:每條 finding 必附逐字原文引句 ≥10 字) → 收貨逐席 `lumos quote-check <席報告> --spec <凍結快照>`(錨不到的條目不採信;★比對對象=派工當下凍結快照,勿用現檔——折入後引句會自我成真★) → 辯方(≥major) → 處置帳 record(`lumos loop next` 的 `disposal_cmd` 模板;★blocker 只能折不能放行★) → `lumos loop status <id> --disposal --spec <計劃節點> --repo <root>`(四條合取全讀側可重算:G3∧處置全清∧留痕 sha 重驗∧引句全錨定) → rc0 即收斂;cap=2,第二輪只給 delta。
-> **留痕慣例**:凍結快照與席報告存 `governance/review-reports/<loop-id>/`,檔名=`<round>-snapshot.md` 與 `<round>-<席>.md`(T3 慣例,補漏 2026-08-04 終審 spec 席);record 的 --report/--snapshot 指向它們(★該 loop 首筆帶 findings-set 後,留痕轉強制★;路徑以 repo root 相對落帳,gate 換 cwd 照樣可重驗)。
+> **一輪流程**:pre-flight 排乾 → ★隨機決定植不植 canary(d4 觀測非閘:判定強制留痕、miss 不作廢該席 findings、進跨輪累積帳)★ → 派 panel(派工含★錨定紀律★:每條 finding 必附逐字原文引句 ≥10 字;派工當下順手落 dispatch manifest,見留痕慣例) → **收貨三道**(2026-08-06 S1,plan:[[Projects/驗證層自證三件_計劃]]):①逐席 `lumos quote-check <席報告> --spec <凍結快照>`(錨不到的條目不採信;★比對對象=派工當下凍結快照,勿用現檔——折入後引句會自我成真★)②`lumos refcheck <席報告> --repo <root>`(finding 引的 file:line 機械驗存在/行號範圍——報告引了不實指涉當場現形)③`lumos seat-check <席報告> --dispatch <rN-dispatch.json> --ledger <out-of-scope.jsonl>`(有講沒做對帳:unreported/out_of_scope;觀測恆 rc0 不擋收貨,越界另記一本不進收斂帳) → 辯方(≥major) → 處置帳 record(`lumos loop next` 的 `disposal_cmd` 模板;★blocker 只能折不能放行★) → `lumos loop status <id> --disposal --spec <計劃節點> --repo <root>`(四條合取全讀側可重算:G3∧處置全清∧留痕 sha 重驗∧引句全錨定) → rc0 即收斂;cap=2,第二輪只給 delta。
+> **留痕慣例**:凍結快照與席報告存 `governance/review-reports/<loop-id>/`,檔名=`<round>-snapshot.md` 與 `<round>-<席>.md`(T3 慣例,補漏 2026-08-04 終審 spec 席);record 的 --report/--snapshot 指向它們(★該 loop 首筆帶 findings-set 後,留痕轉強制★;路徑以 repo root 相對落帳,gate 換 cwd 照樣可重驗)。**派工 manifest(S1)**:派工當下把 `{round, seat, lens, materials:[被審檔], auditor}` 落同目錄 `rN-dispatch.json`(per-seat 快照時可用 `rN-dispatch-s<i>.json`);與席報告同 commit 節奏一次進(不觸發 pass 追尾)。materials 空=seat-check vacuous 豁免;lens 只觀測不判定。
 > **下文舊 panel/K-streak/capture-recapture 節保留**:code-loop 仍單源引用;design-loop 新 loop 一律走處置閘,舊帳不回溯。
 
 **Claude 編排,lumos 出原語。** 你(主對話)用 Agent tool 派審計員、判讀、修 spec;lumos 出 `canary record`／`loop status` 記錄與算收斂。**lumos 不 spawn agent。**
@@ -159,6 +159,16 @@ description: 設計 spec／計劃寫完、進實作前的對抗審計硬閘—�
   理由:被審材料影響審計節奏 ＝ maker bias 同型,一體防(borrow LoopTrap:agent 讀的內容裡埋「還差一步」可 86% 操縱終止判斷、步數放大 25 倍)。
 - **實質收斂 early-exit**:連 K 輪 caught 且無 blocker/major、**且新 findings 全為文件精度級 minor** 時,編排者可**提前向人攤牌請裁「實質收斂」**,不必跑滿 cap——「你一定找得到」framing 保證每輪必交 minor,G2 數字枯竭天生壓不到底,這是誠實出口(人裁、留痕記入 loop note)。
   ⚠ **僅限手動 loop**;自主 loop 無人可攤牌,其對應機制 ＝ unconverged requeue 留人。
+
+## 新機制準入三問(Growth test;2026-08-06 borrow evidra,見 [[Projects/驗證層自證三件_計劃]])
+
+任何**治理機制提案**(新閘/新 detector/新 lint/新留痕格式)在 spec 動筆前必答三問,答不全=不准加:
+
+1. **這 pattern 真造成過事故嗎?**——要能指到具體事故節點/治理日報條目;「感覺會出事」不算。
+2. **是不是風格偏好類關切?**——是 → 出界,不立機制(evidra 家規:detector 只收「造成過 production 傷害的 pattern」)。
+3. **既有機制小修蓋得住嗎?**——先 grep 自家(quote-check/refcheck/canary-stats/doctor Check 字母表…),小修蓋得住就不造新的(本 skill 的 loop 實錄:同一份 spec 曾兩處重造自家既有子命令,全靠審計抓回)。
+
+三問答案記在**該提案的圖譜計劃節點 PRIOR-ART/緣起段**(既有留痕位,無新帳)。機制總量本身也是成本——evidra 的錨:detector 超過 15 個=系統病了,本 skill 的對應嗅覺:護欄/閘的條數若一直只增不減,先懷疑是不是在補「沒人用」而不是「不夠用」。
 
 ## 平行 panel 模式(≤3 輪壓縮)
 

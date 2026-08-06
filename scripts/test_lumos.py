@@ -17548,5 +17548,148 @@ def main():
     return 1 if FAIL else 0
 
 
+
+
+# ═══ 驗證層自證三件 S1/S2 落地(2026-08-06,plan:Projects/驗證層自證三件_計劃)═══
+
+def t_s2_loop_next_random_type_draw():
+    """[S2 同場補]canary 型別派工當下隨機抽(日報 gap③:固定輪替=可猜=答案印在考卷背面)。
+    ①slot 值域仍限 a-d ②同輪 slot 間不重複(width≤4;冗餘灌水 caught-rate 紀律的機械半)
+    ③跨多次呼叫 slot1 至少出現 2 種值(12 抽全同的機率 (1/4)^11≈0,非 flaky)
+    翻紅釘:改回 (i+n-1)%4 固定輪替 → ③翻紅(恆同值)。"""
+    print("t_s2_loop_next_random_type_draw")
+    import ast
+    v = mkvault()
+    lid = f"rndtype-{_M1U}"
+    seen_slot1 = set()
+    for _ in range(12):
+        r = run(v, "loop", "next", lid, "--tier", "standard")
+        line = next((l for l in r.stdout.splitlines() if "canary_type:" in l), "")
+        d = ast.literal_eval(line.split("canary_type:", 1)[1].strip())
+        vals = list(d.values())
+        check("slot 值域限 a-d", all(x in ("a", "b", "c", "d") for x in vals), line) if _ == 0 else None
+        if len(vals) <= 4 and len(set(vals)) != len(vals):
+            check("★同輪 slot 間不重複(width≤4)★", False, line)
+            return
+        seen_slot1.add(d.get("slot1"))
+    check("★同輪 slot 間不重複(width≤4)★", True, "")
+    check("★隨機抽:12 次呼叫 slot1 非恆同值★", len(seen_slot1) >= 2, str(seen_slot1))
+    # light 單席路徑:單值且在值域
+    r = run(v, "loop", "next", f"rndlight-{_M1U}", "--tier", "light")
+    line = next((l for l in r.stdout.splitlines() if "canary_type:" in l), "")
+    val = line.split("canary_type:", 1)[1].strip()
+    check("light 單席隨機抽仍在值域", val in ("a", "b", "c", "d"), line)
+
+
+def t_s2_canary_stats_type_coverage():
+    """[S2 回溯層]canary-stats 型別覆蓋率如實分層(plan r2 折入:數字要即時計算):
+    attr(結構化 canary_type)/note(散文 type=X regex fallback)/unknown 三層分開數,
+    印覆蓋率行——不硬猜、unknown 不併入任何型別。
+    翻紅釘:拔 note fallback 或 unknown 計數 → 斷言翻紅。"""
+    print("t_s2_canary_stats_type_coverage")
+    v = mkvault()
+    lid = f"cov-{_M1U}"
+    run(v, "canary", "record", "caught", "--loop", lid, "--auditor", "s1", "--severity", "minor",
+        "--canary-type", "b", expect_rc=0)
+    run(v, "canary", "record", "caught", "--loop", lid, "--auditor", "s2", "--severity", "minor",
+        "--note", "r1 type=c caught 舊慣例散文", expect_rc=0)
+    run(v, "canary", "record", "missed", "--loop", lid, "--auditor", "s3", "--severity", "minor",
+        "--note", "無型別線索的舊筆", expect_rc=0)
+    r = run(v, "loop", "canary-stats", lid)
+    check("★覆蓋率行:attr/note/unknown 三層分開數★", r.returncode == 0
+          and "attr 1" in r.stdout and "note 1" in r.stdout and "unknown 1" in r.stdout, r.stdout[:600])
+    check("note-derived 型別列出且標示來源", "c" in r.stdout and "note" in r.stdout, r.stdout[:600])
+
+
+def t_s1_seat_check():
+    """[S1 唯一新碼]seat-check 有講沒做對帳(evidra protocol_violation 語彙):
+    ①unreported=dispatch materials 在報告零觸及(路徑機械比對;lens 觀測不判定)
+    ②out_of_scope=finding 引句錨不進任何 material(證據 file:line 恆合法——只驗引句錨定)
+    ③空 materials=vacuous 豁免 ④恆 rc0(觀測);--ledger 時越界寫 out-of-scope.jsonl
+    翻紅釘:拔空 materials 豁免 → ③翻紅;拔 ledger append → ④斷言翻紅。"""
+    print("t_s1_seat_check")
+    import json as _j
+    v = mkvault()
+    d = v.parent / "seatcheck"
+    d.mkdir(exist_ok=True)
+    (d / "matA.md").write_text("# 材料A\n這段是被審材料的甲宣稱長這樣。\n", encoding="utf-8")
+    (d / "matB.md").write_text("# 材料B\n乙檔案的內容完全不同。\n", encoding="utf-8")
+    disp = d / "r1-dispatch.json"
+    disp.write_text(_j.dumps({"round": "r1", "seat": "s1", "lens": "正確性",
+                              "materials": [str(d / "matA.md"), str(d / "matB.md")],
+                              "auditor": "sonnet"}, ensure_ascii=False), encoding="utf-8")
+    # a) 觸及兩材料+引句錨定 matA → 無 unreported/out_of_scope
+    rep_ok = d / "rep-ok.md"
+    rep_ok.write_text("審了 matA.md 與 matB.md。\n引句:「這段是被審材料的甲宣稱長這樣」有問題。\n", encoding="utf-8")
+    r = run(v, "seat-check", str(rep_ok), "--dispatch", str(disp))
+    check("★乾淨報告:rc0 且無 unreported/out_of_scope★", r.returncode == 0
+          and "unreported 0" in r.stdout and "out_of_scope 0" in r.stdout, r.stdout[:400])
+    # b) 漏 matB → unreported 1
+    rep_miss = d / "rep-miss.md"
+    rep_miss.write_text("只審了 matA.md。\n引句:「這段是被審材料的甲宣稱長這樣」。\n", encoding="utf-8")
+    r = run(v, "seat-check", str(rep_miss), "--dispatch", str(disp))
+    check("★漏材料=unreported(仍 rc0 觀測)★", r.returncode == 0 and "unreported 1" in r.stdout,
+          r.stdout[:400])
+    # c) 引句錨不進任何材料 → out_of_scope + ledger append
+    led = d / "out-of-scope.jsonl"
+    rep_oos = d / "rep-oos.md"
+    rep_oos.write_text("審了 matA.md 與 matB.md。\n引句:「這句話在兩份材料都找不到來源喔」錨定外部。\n", encoding="utf-8")
+    r = run(v, "seat-check", str(rep_oos), "--dispatch", str(disp), "--ledger", str(led))
+    check("★引句出界=out_of_scope(仍 rc0)★", r.returncode == 0 and "out_of_scope 1" in r.stdout,
+          r.stdout[:400])
+    rows = [_j.loads(l) for l in led.read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("★越界帳 append:{round,seat,quote,reason}★", len(rows) == 1
+          and rows[0]["round"] == "r1" and rows[0]["seat"] == "s1" and rows[0]["quote"], str(rows)[:300])
+    # d) 空 materials → vacuous 豁免
+    disp_empty = d / "r1-dispatch-empty.json"
+    disp_empty.write_text(_j.dumps({"round": "r1", "seat": "s2", "lens": "-", "materials": [],
+                                    "auditor": "sonnet"}), encoding="utf-8")
+    r = run(v, "seat-check", str(rep_oos), "--dispatch", str(disp_empty))
+    check("★空 materials=vacuous 豁免(不判 unreported/out_of_scope)★", r.returncode == 0
+          and "vacuous" in r.stdout, r.stdout[:400])
+    # e) dispatch 讀不到=rc2(壞輸入 fail loud,非觀測靜默)
+    r = run(v, "seat-check", str(rep_ok), "--dispatch", str(d / "不存在.json"))
+    check("dispatch 缺檔=rc2", r.returncode == 2, str(r.returncode))
+
+
+def t_s2_snr_synthetic():
+    """[S2 前瞻層驗收②]合成樣本單測:低 SNR 題被標出(swap-candidate)、
+    高 SNR 題 keep、樣本不足(同席重跑<3)與分母=0 判 no-verdict 非高訊號。
+    翻紅釘:把分母=0 判成 keep/高訊號 → 斷言翻紅。"""
+    print("t_s2_snr_synthetic")
+    import json as _j, subprocess as _sp
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    snr = repo / "governance" / "eval" / "canary_snr.py"
+    _need_src("governance/eval")
+    rows = []
+    # P-low:跨席分不開(全席各半 caught)且席內重跑亂跳 → 低 SNR → swap-candidate
+    for seat in ("s1", "s2", "s3"):
+        for i in range(4):
+            rows.append({"plant": "P-low", "seat": seat, "run_id": f"r{i}", "caught": i % 2 == 0})
+    # P-high:席間分得開(s1 7/8 中、s2 1/8 中)且席內雜訊相對小 → SNR≥1 → keep
+    # (注意不能用「全中 vs 全漏」:席內變異=0 會正確落入分母=0 不裁決——那是 P-zero 的戲份)
+    for i in range(8):
+        rows.append({"plant": "P-high", "seat": "s1", "run_id": f"r{i}", "caught": i != 0})
+        rows.append({"plant": "P-high", "seat": "s2", "run_id": f"r{i}", "caught": i == 0})
+    # P-thin:每席只跑 1 次 → 樣本不足 → no-verdict
+    rows.append({"plant": "P-thin", "seat": "s1", "run_id": "r0", "caught": True})
+    rows.append({"plant": "P-thin", "seat": "s2", "run_id": "r0", "caught": False})
+    # P-zero:席內重跑全同(分母=0)→ no-verdict(非高訊號)
+    for i in range(3):
+        rows.append({"plant": "P-zero", "seat": "s1", "run_id": f"r{i}", "caught": True})
+        rows.append({"plant": "P-zero", "seat": "s2", "run_id": f"r{i}", "caught": False})
+    import tempfile as _tf
+    with _tf.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+        _j.dump(rows, f)
+        pth = f.name
+    r = _sp.run([sys.executable, str(snr), "--matrix", pth, "--json"], capture_output=True, text=True)
+    check("snr 腳本 rc0", r.returncode == 0, r.stderr[:300])
+    out = {row["plant"]: row for row in _j.loads(r.stdout)}
+    check("★低 SNR 題標 swap-candidate★", out["P-low"]["verdict"] == "swap-candidate", str(out.get("P-low")))
+    check("★高 SNR 題 keep★", out["P-high"]["verdict"] == "keep", str(out.get("P-high")))
+    check("★重跑<3=no-verdict★", out["P-thin"]["verdict"] == "no-verdict", str(out.get("P-thin")))
+    check("★分母=0=no-verdict 非高訊號★", out["P-zero"]["verdict"] == "no-verdict", str(out.get("P-zero")))
+
+
 if __name__ == "__main__":
     sys.exit(main())

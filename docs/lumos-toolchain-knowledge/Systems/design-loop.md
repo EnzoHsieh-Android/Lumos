@@ -15,8 +15,10 @@ verified_by:
   - "[[Verification/2026-07-16_dloop提效M2_cluster帳]]"
   - "[[Verification/2026-07-16_replay校準baseline_v0]]"
   - "[[Verification/2026-08-04_design-loop重設計落地T1-T7]]"
+  - "[[Verification/2026-08-06_驗證層自證三件S1S3落地]]"
 summary: |-
   KEY:[2026-08-04 重設計]★收斂改走處置閘★(--disposal;完整設計=[[Projects/design-loop重設計]],r1 panel 自審收斂+人裁放行)——定位修訂「閘便宜,審不淺」(前提層錯誤明列本層職責:TDD/E2E 對 spec 理解本身無 oracle);K-streak/capture-recapture/存活≤minor 硬閘退場(歷史實測 1/38 從未放行+capture-recapture 封閉母體前提不成立);canary 降級觀測(d4);錨定紀律=finding 必附逐字引句、quote-check 對凍結快照機械驗。舊 panel 閘保留給 code-loop(刻意分流)
+  KEY:[2026-08-06 收貨三道,plan:[[Projects/驗證層自證三件_計劃]]]收貨=quote-check(引句↔凍結快照)+refcheck(finding file:line↔repo 實在性)+★seat-check★(有講沒做對帳:dispatch manifest rN-dispatch.json 宣告 materials→unreported/out_of_scope,越界另記 out-of-scope.jsonl 不進收斂帳;lens 觀測不判定/空 materials vacuous 豁免/恆 rc0 觀測)[test:t_s1_seat_check];派工慣例同步=派工當下落 dispatch manifest;新機制準入三問(Growth test,borrow evidra)入 skill 護欄後段
   KEY:★定位★[2026-07-18 使用者裁定,見 decisions d4]——design-loop=抬 spec 質量,非保 spec 正確:一輪 panel 抓便宜的(矛盾/未定義詞/缺失敗路徑)就放行,正確性歸下游 code-loop+測試+驗證、漏網進逃逸帳;**前置加重一律拒**(日報 2026-07-18『保留題接閘』已拒收勿重提——保留題留離線 replay 校準,不進閘)
   KEY:[2026-07-18]S5 跨家族落地(見[[Projects/code階段強化_計劃]])——辯方預設 Codex(成本中性替換,d4 合規;不可用退 opus 註記)+≥3-run 多數決至少 1 run Codex+家族否決保護(外家 blocker 不得僅被同門多數推翻,須執行反證或第二外家);換手效應列 [[Projects/loop數據收集_計劃]] 觀察項(收斂輪數/辯方降級率)
   KEY:★經濟學★[2026-07-20 使用者裁定,見 decisions d5]——spec 品質目標=成本平衡非精確度漸近線:缺陷分層定價(清單型→pre-flight/撞自家現實型→圖譜接地/語意矛盾→一輪panel/深層錯→下游執行接地)+邊際遞減止損+反偏誤排序(執行接地>機械查>異家族>同家族多取樣,信號種類>家族)+標記不確定比消滅不確定便宜;逃逸帳=調價器。**精確度軍備競賽類提案(更強判官/更多輪/更細spec)一律先過此教義裁**

@@ -94,11 +94,11 @@ flowchart LR
     class NEW,N1,N2,N3,N4 new
 ```
 
-## 3. CLI 子命令家族 (54 個頂層命令)
+## 3. CLI 子命令家族 (55 個頂層命令)
 
 ```mermaid
 flowchart TB
-    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 54 個頂層命令)"]
+    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 55 個頂層命令)"]
 
     ROOT --> READ["讀取 / 導航"]
     ROOT --> HEALTH["巡檢 / 治理"]

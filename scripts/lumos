@@ -3551,28 +3551,46 @@ def cmd_loop_canary_stats(env, loop_id=None):
                 esc = "  ⚠ 連 2 missed → 升級模型(升 opus)" if v["streak"] >= 2 else ""
                 print(f"  {aud}\tcaught {v['caught']}\tmissed {v['missed']}{tail}{esc}")
     # D 前置:型別×探針×caught 表(帶 canary_type 的記錄才入列;attr 攢滿 15 筆=D 本體開工條件)
+    # S2 回溯層(2026-08-06,plan:驗證層自證三件):型別來源如實分層——attr(結構化欄位)/
+    # note(散文 type=X regex fallback,慣例寫法覆蓋率有限)/unknown(無任何線索,不硬猜)。
+    # 覆蓋率即時計算(該 plan r2 折入:寫死數字會被自己的新記錄打臉);D 案 15 筆條件只認 attr。
+    import re as _re
     typed = {}
+    n_attr = n_note = n_unknown = 0
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             try:
                 d = json.loads(line)
             except ValueError:
                 continue
-            ct = d.get("canary_type")
-            if not ct or d.get("kind") not in ("caught", "missed"):
+            if d.get("kind") not in ("caught", "missed"):
                 continue
             if loop_id and d.get("loop") != loop_id:
                 continue
-            key = (ct, d.get("probe") or "-")
+            ct = d.get("canary_type")
+            if ct:
+                n_attr += 1
+                key = (ct, d.get("probe") or "-", "attr")
+            else:
+                m = _re.search(r"type=([a-d])\b", d.get("note") or "")
+                if m:
+                    n_note += 1
+                    key = (m.group(1), "-", "note")
+                else:
+                    n_unknown += 1
+                    continue
             t = typed.setdefault(key, {"caught": 0, "missed": 0})
             t[d["kind"]] += 1
     except OSError:
         pass
-    if typed:
-        total_typed = sum(v["caught"] + v["missed"] for v in typed.values())
-        print(f"  ── 型別×探針×caught(帶型別記錄 {total_typed} 筆;攢滿 15 筆=D 案開工條件)──")
-        for (ct, pb), v in sorted(typed.items()):
-            print(f"  {ct}\tprobe={pb}\tcaught {v['caught']}\tmissed {v['missed']}")
+    if typed or n_unknown:
+        total = n_attr + n_note + n_unknown
+        print(f"  ── 型別×探針×caught(attr {n_attr} / note {n_note} / unknown {n_unknown} / 總 {total};"
+              f"attr 攢滿 15 筆=D 案開工條件)──")
+        for (ct, pb, src), v in sorted(typed.items()):
+            print(f"  {ct}\tprobe={pb}\tsrc={src}\tcaught {v['caught']}\tmissed {v['missed']}")
+        if n_unknown:
+            print(f"  (unknown {n_unknown} 筆無型別線索,不併入任何型別——如實分層,不硬猜)")
     if n_bad:
         print(f"  (帳面 {n_bad} 行不可解析,已跳過——壞行只影響觀測完整性,不進 gate)")
     print("  ★觀測非閘:caught 只證席位醒著,不證審得夠廣(caught≠覆蓋);missed 席 findings 不作廢(d4)★")
@@ -4102,11 +4120,17 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         out = {"phase": phase, "tier": eff_tier, "round": n_next, "width": width,
                "min_seats": width, "cap": cap, "advisory": "tier 由編排者宣告後定錨;lumos 只做映射與定錨讀取"}
         if phase == "plant-canary":
+            # 型別派工當下隨機抽(2026-08-06 S2 同場補,plan:驗證層自證三件):固定輪替
+            # =可猜=答案印在考卷背面(該 plan r1 審計語);同輪 slot 間仍不重複(width≤4 時
+            # 全 distinct;width>4 以重洗批次延續,重複最少化)——冗餘 canary 不算獨立注意力票。
+            import random
             if light or eff_tier == "legacy":
-                out["canary_type"] = _CANARY_TYPES[(n_next - 1) % 4]
+                out["canary_type"] = random.choice(_CANARY_TYPES)
             else:
-                out["canary_type"] = {f"slot{i}": _CANARY_TYPES[(i + n_next - 1) % 4]
-                                      for i in range(1, width + 1)}
+                pool = []
+                while len(pool) < width:
+                    pool.extend(random.sample(_CANARY_TYPES, len(_CANARY_TYPES)))
+                out["canary_type"] = {f"slot{i}": pool[i - 1] for i in range(1, width + 1)}
             rmode = "" if (light or eff_tier == "legacy") else f" --round r{n_next}"
             # ★`legacy` 不是可宣告值,不得吐進 record_cmd★(2026-08-04):`--tier` 的 choices
             # 只有 light/standard/high(LOOP_TIERS),legacy 純粹是「無定錨舊帳 + legacy 格式」
@@ -8621,6 +8645,80 @@ def cmd_quote_check(report, spec, as_json=False):
     return 0 if not miss else 1
 
 
+def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
+    """[S1 有講沒做對帳,2026-08-06](plan:Projects/驗證層自證三件_計劃;borrow evidra
+    protocol_violation)。收貨第三道(前兩道=quote-check/refcheck 既有直用):
+    - unreported = dispatch 宣告的 materials 在報告零觸及(路徑/檔名字串機械比對;
+      `lens` 為觀測欄位★不進判定★——抽象詞無機械 oracle,plan r2 折入)
+    - out_of_scope = 報告引句(「引句：「…」」抽取,同 quote-check 單一實作)錨不進
+      ★任何一份★ material(scope 三集合:materials=必查;repo 查證引用恆合法——本檢查
+      只驗引句錨定,不碰 file:line 證據;引句出界才記越界)
+    - materials 為空 → vacuous 豁免(不判兩類)
+    恆 rc0(觀測不擋,升閘須另過 loop);輸入壞損 rc2 fail loud。--ledger 時 out_of_scope
+    逐條 append {round,seat,quote,reason}(越界另記一本、不進收斂帳)。
+    ★射程:測的是報告與留痕的協議內一致性——席一致地說謊(引句自編但恰好錨得進)抓不到★"""
+    import json
+    try:
+        rtext = Path(report).read_text(encoding="utf-8")
+        disp = json.loads(Path(dispatch).read_text(encoding="utf-8"))
+        materials = disp.get("materials") or []
+        assert isinstance(materials, list)
+    except (OSError, UnicodeDecodeError, ValueError, AssertionError) as e:
+        print(f"ERROR: 讀 report/dispatch 失敗: {e}", file=sys.stderr)
+        return 2
+    out = {"report": str(report), "round": disp.get("round"), "seat": disp.get("seat"),
+           "lens": disp.get("lens"), "unreported": [], "out_of_scope": [], "vacuous": False}
+    if not materials:
+        out["vacuous"] = True
+        if as_json:
+            print(json.dumps(out, ensure_ascii=False))
+        else:
+            print("seat-check: materials 為空 → vacuous 豁免(不判 unreported/out_of_scope)")
+        return 0
+    mat_texts = {}
+    for mp in materials:
+        try:
+            mat_texts[mp] = _quote_norm(Path(mp).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            mat_texts[mp] = None   # 材料讀不到:不能當被觸及,也不能當錨定海;記 unreported 候選
+    # ① unreported:material 的路徑或檔名都沒出現在報告文字
+    for mp in materials:
+        name = Path(mp).name
+        if mp not in rtext and name not in rtext:
+            out["unreported"].append(mp)
+    # ② out_of_scope:引句錨不進任何 material(空白剝除 fallback 同 _quote_rows)
+    quotes = _quote_rows(rtext, "") or []
+    for q in quotes:
+        if q.get("malformed"):
+            continue
+        nq = _quote_norm(q["quote"])
+        anchored = any(h is not None and (nq in h or nq.replace(" ", "") in h.replace(" ", ""))
+                       for h in mat_texts.values())
+        if not anchored:
+            out["out_of_scope"].append(q["quote"])
+    if ledger and out["out_of_scope"]:
+        try:
+            with open(ledger, "a", encoding="utf-8") as f:
+                for q in out["out_of_scope"]:
+                    f.write(json.dumps({"round": disp.get("round"), "seat": disp.get("seat"),
+                                        "quote": q, "reason": "引句錨不進任何派工 material"},
+                                       ensure_ascii=False) + "\n")
+        except OSError as e:
+            print(f"ERROR: 越界帳寫入失敗: {e}", file=sys.stderr)
+            return 2
+    if as_json:
+        print(json.dumps(out, ensure_ascii=False))
+    else:
+        print(f"seat-check {Path(report).name}: unreported {len(out['unreported'])}"
+              f" / out_of_scope {len(out['out_of_scope'])}(materials {len(materials)};觀測恆 rc0)")
+        for mp in out["unreported"]:
+            print(f"  ⚠ unreported: {mp}(dispatch 宣告要查,報告零觸及)")
+        for q in out["out_of_scope"]:
+            print(f"  ⚠ out_of_scope: 「{q[:50]}」(錨不進任何 material{';已記越界帳' if ledger else ''})")
+        print("  ★觀測非閘:抓的是協議內一致性;lens 不判定;證據 file:line 恆合法★")
+    return 0
+
+
 def cmd_anchor_verify(repo=None, as_json=False):
     """錨點完整性核對:baseline 內每個錨點檔算 sha256 比對。
     全符 rc=0;mismatch/缺檔 rc=1;baseline 不存在 rc=0+警示(漸進採用);參數錯 rc=2。
@@ -12705,6 +12803,12 @@ def main():
     p.add_argument("--spec", dest="qc_spec", required=True, metavar="凍結快照.md")
     p.add_argument("--json", action="store_true", dest="qc_json")
 
+    p = sub.add_parser("seat-check", help="[S1 有講沒做對帳] 席報告對 dispatch manifest:unreported/out_of_scope(vault-free;觀測恆 rc0/輸入壞損 rc2)")
+    p.add_argument("sc_report", metavar="席報告.md")
+    p.add_argument("--dispatch", dest="sc_dispatch", required=True, metavar="rN-dispatch.json")
+    p.add_argument("--ledger", dest="sc_ledger", default=None, metavar="out-of-scope.jsonl", help="越界帳(append;越界另記一本、不進收斂帳)")
+    p.add_argument("--json", action="store_true", dest="sc_json")
+
     p = sub.add_parser("lint-watch", help="依賴版本落差掃描(vault-free):讀 .lumos/lint-watch.json 對比 registry 最新版")
     p.add_argument("--repo", dest="lint_watch_repo", default=".", help="repo root(含 .lumos/lint-watch.json 的資料夾,預設 .)")
     p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON manifest")
@@ -12815,6 +12919,8 @@ def main():
         return cmd_stylelint_sarif(out=args.stylelint_out)
     if args.cmd == "quote-check":
         return cmd_quote_check(args.qc_report, args.qc_spec, as_json=args.qc_json)
+    if args.cmd == "seat-check":
+        return cmd_seat_check(args.sc_report, args.sc_dispatch, ledger=args.sc_ledger, as_json=args.sc_json)
     if args.cmd == "anchor":
         if args.anchor_cmd == "verify":
             return cmd_anchor_verify(repo=args.anchor_repo, as_json=args.as_json)
