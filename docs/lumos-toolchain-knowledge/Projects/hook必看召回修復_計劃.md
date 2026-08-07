@@ -83,6 +83,11 @@ PRIOR-ART: ① 最小解層級——既有 impact --ranked 管線的謂詞/參�
   - [minor×5] tie-break 沿慣例、雙路 provenance 優先序、PRIOR-ART「無新機制」措辭如實、pre-flight 0.55 回指再勘誤、summary ②③舊值(哨兵)——全數折入。
 - **fold 迷你核對(r1 收尾)**:折入腳本兩段 replace 無 assert 靜默失效(驗收線/審計紀錄一度只在 summary 打勾、body 未落地)——核對員抓回,重補;教訓=程式化折入必帶 assert。
 
+## 合約候選清單(收斂時提名,候選≠已標——蓋章走 guard 流程與「不確定不標」鐵則)
+- rescued 恆 pinned:false 且不進固定席統計/顯示(固定席語意=合約/事故機械保證,不可稀釋)。
+- threshold/quota 永不作用於 rescued 桶;rescue 僅零 direct 時觸發。
+- A/B 敗訴=刪碼零殘留(沿 PPR 墓碑慣例)。
+
 ## 驗收線(A/B;r1 重寫——補 harness 機制與兩處明示偏離)
 - **A/B 開關=env knob**(沿 PPR 慣例使 history 自動記 knobs):`LUMOS_IMPACT_RESCUE_N`(0=off=A 臂;1/2=B 臂網格,轉正後預設寫死為選定值、knob 留逃生)、`LUMOS_IMPACT_BASENAME_MATCH`(0/1 同款)——均 LUMOS_IMPACT_ 前綴,`retrieval_eval.py` 的 knobs 記錄自動涵蓋。
 - **top 對齊**(承接 PPR S4c 教訓):A/B 評測跑 `--top 8`(=production hook 視野)——**touchpoint=retrieval_eval.py:164 的硬寫字面值 `"50"` 改可傳參**(r2 折入:eval 的 k 參數與 --top 現況脫鉤,不改這行「top 對齊」只是敘述;PPR 計劃記過同款 blocker,這次把修法繼承到位)。
