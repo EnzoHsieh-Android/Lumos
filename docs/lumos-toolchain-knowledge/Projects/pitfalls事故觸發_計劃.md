@@ -29,6 +29,8 @@ verified_by:
 > 解 [[pitfalls-lint-integration_計劃]] 的 ④ 事故語料進圖譜。原 pitfalls-code-loop v2。**與 ③/impact 分工釐清**:③=網搜通則坑(skill);impact=撈「引用該檔的結構節點」(file-specific);**④=補「跨檔按主題 pattern-trigger」impact 撈不到的**(如「凡碰 raw SQL 都看 N+1 事故」)。
 
 ## §1 架構
+
+> 落點(2026-08-08 補鏈,link-candidates 人裁採納):incidents 段的注入通道=`scripts/hooks/claude/impact-hook.py`(FLOW 所述 hook 併注入即此檔)。
 事故節點加機械 trigger → `lumos impact` 多算 `incidents` 段 → **復用既有 impact PreToolUse hook** 一併注入(不新增 hook)。三部分:frontmatter 慣例 + lumos 比對原語 + hook 復用。
 
 ## §2 trigger 表示

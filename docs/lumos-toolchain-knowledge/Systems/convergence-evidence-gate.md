@@ -25,7 +25,7 @@ summary: |-
   KEY:Confident Liar 條款(§2.5c)——unanchored(指控與 ground-truth 無字串交集)單獨不撐 reject;parse_fallback 遍不計票;disputed 門票從「qwen 喊 major」改「喊的 major 驗過還站著」
   KEY:誠實天花板——findings 數源頭仍是 LLM 裁決(gate 機械化算術非數字正確性);枯竭≠挖乾(同門盲點趨同);sentinel 擋混淆不擋對抗注入;§2.5c 是 prompt 層散文契約無機械回歸守衛;換 loop_id 洗紀錄仍可(hash 綁 loop 內容非 id);--spec 綁定向量已清償([2026-07-21 M1包]雙 hash 鏈落地,見[[Projects/loop機械脊椎M1包_計劃]]:record --spec/--reviewed 成對寫 reviewed/result 兩欄,gate 帶 --spec=聲明要驗——收斂窗 all-or-nothing+鏈續性+同輪雙欄一致+窗末=當前檔,G3 段;不帶 --spec 舊用法 advisory 不變;light 恆強制)
   KEY:平行 panel 收斂(2026-07-09,`--panel`,見 [[loop三輪壓縮_計劃]])——G2 序列枯竭是**循序深度**信號、配不上平行拓樸;panel 模式改 capture-recapture 殘餘估計(從 W 獨立審計員 findings 重疊估母體枯竭,取代 findings 序列遞減)+ 輪有效(caught≥2且0missed,near-perfect)+ 存活 max≤minor;無 capture_counts=fail-closed;legacy K-streak∧G1∧G2(無 --panel)完全不變
-  DEP:[[lumos-refcheck]](G1 消費 _refcheck_scan)｜[[canary-audit]](記錄面)｜cross_audit.py
+  DEP:[[lumos-refcheck]](G1 消費 _refcheck_scan)｜[[canary-audit]](記錄面)｜`governance/autonomous_loop/cross_audit.py`(2026-08-08 補鏈:原裸文字提及正名為標準引用)
   TEST:t_canary_findings 3 + t_loop_gate 16 checks(CLI)+ TestCrossAudit 新 4(unittest);352 passed 全綠
   VERIFY:[[2026-07-03_convergence-evidence-gate]]
 decisions:
