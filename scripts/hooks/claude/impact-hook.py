@@ -336,7 +336,8 @@ def build_ranked_context(data: dict) -> str:
     res = data.get("results", [])
     meta = data.get("meta", {})
     pins = [x for x in res if x.get("pinned")]
-    free = [x for x in res if not x.get("pinned")]
+    free = [x for x in res if not x.get("pinned") and not x.get("rescued")]
+    rescued = [x for x in res if x.get("rescued")]
     if pins:
         lines.append(f"必看(合約/事故固定席 {len(pins)}):")
         for x in pins:
@@ -349,6 +350,12 @@ def build_ranked_context(data: dict) -> str:
         for x in free:
             mk = {"direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
             lines.append(f"  {x.get('score',0):.2f} {mk} {x.get('node','?')}")
+    if rescued:
+        # R1 直連保底(plan:hook必看召回修復):分數不過閾但為僅有的直連節點——信心層級不同於排序席
+        lines.append(f"⛑ 直連保底({len(rescued)},分數未過閾、因直連被救回):")
+        for x in rescued:
+            hit = f"/{x['hit']}" if x.get("hit") == "basename-match" else ""
+            lines.append(f"  {x.get('score',0):.2f} 直接{hit} {x.get('node','?')}")
     if meta.get("truncated"):
         lines.append(f"  (+{meta['truncated']} 條低分截斷)")
     for stk, qs in (data.get("stack_questions") or {}).items():

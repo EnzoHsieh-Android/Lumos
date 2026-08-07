@@ -161,7 +161,8 @@ def eval_edit(gs, split=None, k=8):
         r = subprocess.run([sys.executable, str(LUMOS),
                             "impact", "--file", case["file"],
                             "--repo", os.environ.get("LUMOS_EVAL_REPO") or str(SNAP_ROOT or ROOT),
-                            "--ranked", "--top", "50", "--stdin-payload", "--json"],
+                            "--ranked", "--top", os.environ.get("LUMOS_EVAL_IMPACT_TOP", "50"),
+                            "--stdin-payload", "--json"],
                            capture_output=True, text=True, input=payload, cwd=ROOT)
         try:
             data = json.loads(r.stdout.strip().splitlines()[-1])
@@ -221,6 +222,13 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         verdict["search_lift_pct"] = round(lift, 1)
         verdict["search_gate"] = ln > 0 and lift >= 15.0
     erows = eval_edit(gs, split, k=k_edit)
+    # A/B 逐題對帳(hook必看召回修復 r2 折入):history 只存 rounded 比例,+1 筆判定
+    # 需整數逐題 rows——env 指定路徑時把 erows 落 JSON,兩臂各 dump 一份對帳。
+    _dump = os.environ.get("LUMOS_EVAL_DUMP_ROWS")
+    if _dump and erows:
+        with open(_dump, "w", encoding="utf-8") as f:
+            json.dump({"split": split, "k_edit": k_edit, "edit_rows": erows},
+                      f, ensure_ascii=False)
     if erows:
         fp, fn = _macro(erows, "fusion_p"), _macro(erows, "fusion_ndcg")
         bp, bn = _macro(erows, "bm25_p"), _macro(erows, "bm25_ndcg")

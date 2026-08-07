@@ -11405,9 +11405,19 @@ def _impact_reverse_lookup(rel_code_path, env, repo_root):
     - 路徑規範化(r3-F5):輸入若為絕對路徑先轉 repo-relative 再比對。
     - _refcheck_scan 的 top_dirs 靜默過濾照舊(§4 天花板 5)。
 
-    回傳: list[node_rel] — body inline-code 命中 rel_code_path 的節點清單。
+    回傳: list[(node_rel, hit)] — hit ∈ "body-inline-code"(完整路徑命中)|
+    "basename-match"(裸檔名容錯,R2 2026-08-07,plan:hook必看召回修復)。
+    同節點兩路皆中時完整路徑優先(單節點單筆,provenance 合併序明文)。
+
+    R2 裸檔名容錯:inline-code 中不含 `/` 的裸 token == 目標檔 basename,且該
+    basename 在 `git ls-files` 母體內唯一(tracked-only:untracked/ignored 混入會把
+    唯一誤判歧義;大小寫敏感)→ 命中。★不動共用的 _refcheck_scan★(其 `/` 過濾
+    是 refcheck CLI/G1 gate 的既有合約,此處自建第二條抽取路)。git 缺席/重名
+    → degrade 為不比對(裸檔名路靜默停用,完整路徑路不受影響)。
+    knob:LUMOS_IMPACT_BASENAME_MATCH(預設 0=off;A/B 考卷 B 臂開)。
     """
     import os
+    import subprocess
 
     repo_root = Path(repo_root)
 
@@ -11415,6 +11425,19 @@ def _impact_reverse_lookup(rel_code_path, env, repo_root):
     rp = str(rel_code_path)
     if os.path.isabs(rp):
         rp = os.path.relpath(rp, str(repo_root))
+
+    # R2:裸檔名比對的前置——目標檔 basename 在 tracked 母體唯一才啟用
+    base_ok = False
+    base = Path(rp).name
+    if int(_impact_knob("LUMOS_IMPACT_BASENAME_MATCH", 1)):   # 2026-08-07 考卷轉正預設 1(knob=0 留逃生)
+        try:
+            r = subprocess.run(["git", "-C", str(repo_root), "ls-files"],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                tracked = [ln for ln in r.stdout.splitlines() if ln.strip()]
+                base_ok = sum(1 for f in tracked if Path(f).name == base) == 1
+        except (OSError, subprocess.SubprocessError):
+            base_ok = False   # git 缺席=degrade
 
     hits = []
     for node_rel, note in env.notes.items():
@@ -11425,10 +11448,18 @@ def _impact_reverse_lookup(rel_code_path, env, repo_root):
         except OSError:
             continue
         claims, _n_missing, _n_oor, _n_ok = _refcheck_scan(text, repo_root)
+        hit = None
         for claim in claims:
             if claim["token"] == rp:
-                hits.append(node_rel)
-                break  # 同一節點只算一次
+                hit = "body-inline-code"   # 完整路徑優先
+                break
+        if hit is None and base_ok:
+            # 第二條抽取路:裸 token(無 /)——與 _refcheck_scan 同源的 span 抽取
+            spans = [s.strip("`") for s in INLINE_CODE_RE.findall(_strip_fences_text(text))]
+            if any(s == base for s in spans if "/" not in s):
+                hit = "basename-match"
+        if hit:
+            hits.append((node_rel, hit))   # 同一節點只算一次
     return hits
 
 
@@ -11778,9 +11809,11 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
     # incidents_only 真快速路(r1 終審親驗修正:原實作僅「不顯示」,反查/BFS 照跑——宣稱落空):
     # 事故比對只需 rel_file+內容,不需 direct/BFS → 整段跳過,冷卻窗成本回到近零。
     if incidents_only:
-        direct_rels = []
+        direct_pairs = []
     else:
-        direct_rels = _impact_reverse_lookup(file, env, repo_root_for_lookup)
+        direct_pairs = _impact_reverse_lookup(file, env, repo_root_for_lookup)
+    direct_rels = [n for n, _h in direct_pairs]
+    direct_hit = dict(direct_pairs)   # node → body-inline-code|basename-match(R2 provenance)
 
     # 6. 組裝影響清單:single multi-source BFS 保證 hop = 距最近直接節點的 min 距離(I1)。
     #
@@ -11808,7 +11841,7 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
         processed_direct.add(d_rel)
         direct_note = env.notes.get(d_rel)
         contract, combo = _impact_contract(direct_note) if direct_note else (None, False)
-        all_direct.append({"node": d_rel, "hit": "body-inline-code",
+        all_direct.append({"node": d_rel, "hit": direct_hit.get(d_rel, "body-inline-code"),
                            "contract": contract, "combo": combo})
         # core_refs 跨 repo 葉(r7-F2):hop=1 固定,不入 BFS
         if direct_note is not None:
@@ -11944,7 +11977,7 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 pinned = bool(x.get("contract"))   # 含合約的 direct 固定
                 results.append({"node": x["node"], "kind": "direct", "pinned": pinned,
                                 "score": round(_dbase + (1.0 - _dbase) * L, 4), "L": round(L, 4),
-                                "contract": x.get("contract")})
+                                "hit": x.get("hit"), "contract": x.get("contract")})
             _pin_hop = int(_impact_knob("LUMOS_IMPACT_PIN_HOP", 1))
             for x in all_indirect:
                 L = lex.get(x["node"], 0.0)
@@ -11981,10 +12014,27 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
         _quota = int(_impact_knob("LUMOS_IMPACT_FREE_QUOTA", 10))
         truncated = max(0, len(free) - min(int(top), _quota))
         free = free[:min(int(top), _quota)]
+        # R1 直連保底席(2026-08-07,plan:hook必看召回修復;第三桶明文):
+        # 觸發=截斷後最終 free 集零 direct 且存在被閾砍/截的 direct(缺口)。
+        # rescued 恆 pinned:false、threshold/quota 不作用其上、外掛於 free 之後(--top 例外,
+        # 同 pins safety_overflow 精神);tie-break 沿 free.sort 慣例 (-score, hop, node)。
+        # knob:LUMOS_IMPACT_RESCUE_N(2026-08-07 考卷轉正預設 1:held Σmust 12→14、
+        # P@8 0.6389→0.6944 雙升,gate 兩條全過;knob=0 留 A 臂逃生)。
+        rescued = []
+        _rescue_n = int(_impact_knob("LUMOS_IMPACT_RESCUE_N", 1))
+        if _rescue_n > 0 and not any(r["kind"] == "direct" for r in free):
+            _free_ids = {id(r) for r in free}
+            dropped = [r for r in results
+                       if r["kind"] == "direct" and not r["pinned"] and id(r) not in _free_ids]
+            dropped.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))
+            for r in dropped[:min(_rescue_n, len(dropped))]:
+                rr = dict(r)
+                rr["rescued"] = True
+                rescued.append(rr)
         # 姐妹去冗餘(顯示層,--json 全量不折)
-        final = pins + free
+        final = pins + free + rescued
         meta = {"candidates": len(all_direct) + len(all_indirect) + len(all_incidents),
-                "pinned": len(pins), "truncated": truncated,
+                "pinned": len(pins), "truncated": truncated, "rescued": len(rescued),
                 "safety_overflow": max(0, len(pins) - int(top))}
         if as_json:
             out_obj = {"file": rel_file, "results": final, "meta": meta}

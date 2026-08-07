@@ -5834,17 +5834,21 @@ def t_impact_reverse_lookup():
         "Systems/B.md": "---\ntype: system\nstatus: doing\n---\nbody 無關",
         "Systems/C.md": "---\ntype: system\nstatus: doing\ncore_refs: scripts/lumos\n---\ncore 節點",
     })
-    hits = _impact_reverse_lookup("scripts/lumos", env, repo)
+    # (hook必看召回修復 R2)回傳型別=(node, hit) 對;既有斷言同步改寫
+    pairs = _impact_reverse_lookup("scripts/lumos", env, repo)
+    hits = [n for n, _h in pairs]
     check("impact_reverse_lookup: A(body inline-code 命中) 在結果中",
-          "Systems/A.md" in hits, f"hits={hits}")
+          "Systems/A.md" in hits, f"pairs={pairs}")
+    check("impact_reverse_lookup: hit 標 body-inline-code",
+          dict(pairs).get("Systems/A.md") == "body-inline-code", f"pairs={pairs}")
     check("impact_reverse_lookup: B(無引用) 不在結果中",
-          "Systems/B.md" not in hits, f"hits={hits}")
+          "Systems/B.md" not in hits, f"pairs={pairs}")
     check("impact_reverse_lookup: C(core_refs 不算 code 反查 r7-F2) 不在結果中",
-          "Systems/C.md" not in hits, f"hits={hits}")
+          "Systems/C.md" not in hits, f"pairs={pairs}")
 
     # 絕對路徑輸入規範化後仍命中
     abs_path = str(repo / "scripts" / "lumos")
-    hits_abs = _impact_reverse_lookup(abs_path, env, repo)
+    hits_abs = [n for n, _h in _impact_reverse_lookup(abs_path, env, repo)]
     check("impact_reverse_lookup: 絕對路徑輸入規範化後仍命中 A",
           "Systems/A.md" in hits_abs, f"hits_abs={hits_abs}")
     check("impact_reverse_lookup: 絕對路徑輸入規範化後 C 仍不在",
@@ -17689,6 +17693,137 @@ def t_s2_snr_synthetic():
     check("★高 SNR 題 keep★", out["P-high"]["verdict"] == "keep", str(out.get("P-high")))
     check("★重跑<3=no-verdict★", out["P-thin"]["verdict"] == "no-verdict", str(out.get("P-thin")))
     check("★分母=0=no-verdict 非高訊號★", out["P-zero"]["verdict"] == "no-verdict", str(out.get("P-zero")))
+
+
+
+
+# ═══ hook必看召回修復 R1/R2(2026-08-07,plan:Projects/hook必看召回修復_計劃)═══
+
+def _hk_fixture(tmp_prefix="gctl-hk-"):
+    """fixture repo:vault+code 檔;A 節點引 scripts/tool_x.sh(direct),B 節點 wikilink A(hop1)
+    且 body 詞彙可被 query 命中(把 max_free 撐高→閾殺 direct)。回傳 (repo, vault)。"""
+    import shutil
+    repo = Path(tempfile.mkdtemp(prefix=tmp_prefix))
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "tool_x.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (repo / "scripts" / "tool_y.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    vault = repo / "docs" / "hk-knowledge"
+    for sub in ("Systems", "Verification", "Projects", "MOC", "Issues"):
+        (vault / sub).mkdir(parents=True, exist_ok=True)
+    (vault / "Systems" / "A直連.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/system\nrelated:\n  - \"[[Systems/B鄰居]]\"\n"
+        "summary: |-\n  KEY:x\n---\n# A直連\n管 `scripts/tool_x.sh` 的節點,詞彙刻意不含查詢字。\n",
+        encoding="utf-8")
+    (vault / "Systems" / "B鄰居.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/system\nrelated:\n  - \"[[Systems/A直連]]\"\n"
+        "summary: |-\n  KEY:x\n---\n# B鄰居\n"
+        "zebra quartz 檢索 zebra quartz 詞彙 zebra quartz 高分 zebra quartz。\n",
+        encoding="utf-8")
+    return repo, vault
+
+
+def _hk_impact(repo, file, query, extra_env=None, top="8"):
+    import subprocess, json as _j, os
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
+    r = subprocess.run([sys.executable, GRAPHCTL, "impact", "--file", file,
+                        "--repo", str(repo), "--ranked", "--top", top,
+                        "--stdin-payload", "--json"],
+                       capture_output=True, text=True, env=env,
+                       input=_j.dumps({"query": query, "prospective": {}}))
+    return _j.loads(r.stdout.strip().splitlines()[-1])
+
+
+def t_impact_direct_rescue():
+    """[R1 直連保底席]①零 direct 觸發(rescued:true/pinned:false/meta.rescued)②knob=0 不觸發
+    ③direct 存活不觸發 ④多 direct 全滅→觸發(r2 折入案例)+缺口/N 上限+tie-break。
+    翻紅釘:拔 rescue 邏輯 → ①④翻紅;rescued 誤標 pinned → ①翻紅。"""
+    print("t_impact_direct_rescue")
+    repo, vault = _hk_fixture()
+    q = "zebra quartz 檢索"
+    # ① N=1:direct 被閾殺(L=0),B 鄰居 L 高撐閾 → rescue
+    d = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "1"})
+    res = d["results"]
+    resc = [x for x in res if x.get("rescued")]
+    check("★零 direct 場景觸發保底:恰 1 筆 rescued★", len(resc) == 1, str(res)[:300])
+    check("★rescued 為 direct 且 pinned:false(第三桶不污染固定席)★",
+          resc and resc[0]["kind"] == "direct" and resc[0]["pinned"] is False, str(resc)[:200])
+    check("★meta.rescued 計數鍵★", d["meta"].get("rescued") == 1, str(d["meta"]))
+    # ② knob=0(A 臂)不觸發
+    d0 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "0"})
+    check("★knob=0 不觸發(A 臂=現行行為)★",
+          not any(x.get("rescued") for x in d0["results"]), str(d0["results"])[:200])
+    # ③ query 命中 direct 本身 → direct 存活 → 不觸發
+    d3 = _hk_impact(repo, "scripts/tool_x.sh", "管 節點 詞彙", {"LUMOS_IMPACT_RESCUE_N": "1"})
+    free_direct = [x for x in d3["results"] if x["kind"] == "direct" and not x.get("rescued")]
+    if free_direct:
+        check("direct 存活時不觸發", not any(x.get("rescued") for x in d3["results"]),
+              str(d3["results"])[:200])
+    # ④ 多 direct 全滅:再加一個引同檔的節點,兩 direct 皆 L=0 → 觸發且 N=1 只救 1(tie-break 字典序)
+    (vault / "Systems" / "C直連.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# C直連\n也管 `scripts/tool_x.sh`,同樣不含查詢字。\n",
+        encoding="utf-8")
+    d4 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "1"})
+    resc4 = [x for x in d4["results"] if x.get("rescued")]
+    check("★多 direct 全滅→照樣觸發(r2 折入:非「多 direct 必不觸發」)★",
+          len(resc4) == 1, str(resc4)[:200])
+    check("tie-break 同分取字典序(A直連 先於 C直連)",
+          resc4 and "A直連" in resc4[0]["node"], str(resc4)[:200])
+    d5 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "2"})
+    check("N=2 且缺口 2 → 救 2", sum(1 for x in d5["results"] if x.get("rescued")) == 2,
+          str(d5["results"])[:250])
+
+
+def t_impact_basename_match():
+    """[R2 裸檔名容錯]git fixture:①唯一裸檔名+knob on → direct 命中 hit=basename-match
+    ②knob off → 不命中 ③重名 basename → 跳過 ④完整路徑優先於裸檔名 ⑤非 git repo → degrade。
+    翻紅釘:拔 basename 抽取 → ①翻紅;拔唯一性檢查 → ③翻紅。"""
+    print("t_impact_basename_match")
+    import subprocess, os
+    repo, vault = _hk_fixture(tmp_prefix="gctl-hkbn-")
+    # 節點 D:裸檔名引用 tool_x.sh(無 /)
+    (vault / "Systems" / "D裸名.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# D裸名\n入口在 `tool_x.sh`(裸檔名慣例)。\n",
+        encoding="utf-8")
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+        subprocess.run(cmd, cwd=str(repo), capture_output=True)
+    on = {"LUMOS_IMPACT_BASENAME_MATCH": "1", "LUMOS_IMPACT_RESCUE_N": "0"}
+    d = _hk_impact(repo, "scripts/tool_x.sh", "", on)
+    dnodes = {x["node"]: x for x in d["results"] if x["kind"] == "direct"}
+    check("★唯一裸檔名命中:D裸名 進 direct★", any("D裸名" in n for n in dnodes), str(dnodes)[:300])
+    dd = next((x for n, x in dnodes.items() if "D裸名" in n), None)
+    check("★hit=basename-match(provenance 穿透 ranked)★",
+          dd is not None and dd.get("hit") == "basename-match", str(dd))
+    da = next((x for n, x in dnodes.items() if "A直連" in n), None)
+    check("★完整路徑優先:A直連 hit=body-inline-code★",
+          da is not None and da.get("hit") == "body-inline-code", str(da))
+    # ② knob off
+    doff = _hk_impact(repo, "scripts/tool_x.sh", "", {"LUMOS_IMPACT_BASENAME_MATCH": "0"})
+    check("★knob off 裸檔名不命中★",
+          not any("D裸名" in x["node"] for x in doff["results"]), str(doff["results"])[:200])
+    # ③ 重名:加同名檔 → 歧義跳過
+    (repo / "tool_x.sh").write_text("dup", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "dup"],
+                   cwd=str(repo), capture_output=True)
+    ddup = _hk_impact(repo, "scripts/tool_x.sh", "", on)
+    check("★重名 basename=歧義跳過不猜★",
+          not any("D裸名" in x["node"] for x in ddup["results"]), str(ddup["results"])[:200])
+    # ⑤ 非 git repo → degrade 不炸、無 basename 命中
+    repo2, vault2 = _hk_fixture(tmp_prefix="gctl-hknogit-")
+    (vault2 / "Systems" / "D裸名.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# D裸名\n入口在 `tool_x.sh`。\n",
+        encoding="utf-8")
+    dng = _hk_impact(repo2, "scripts/tool_x.sh", "", on)
+    check("★git 缺席 degrade:不炸且裸檔名不命中★",
+          not any("D裸名" in x["node"] for x in dng["results"]), str(dng["results"])[:200])
 
 
 if __name__ == "__main__":
