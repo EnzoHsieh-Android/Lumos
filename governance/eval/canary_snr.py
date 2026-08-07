@@ -72,7 +72,8 @@ def main():
     ap.add_argument("--json", action="store_true", dest="as_json")
     a = ap.parse_args()
     try:
-        rows = json.loads(open(a.matrix, encoding="utf-8").read())
+        with open(a.matrix, encoding="utf-8") as f:
+            rows = json.load(f)
         assert isinstance(rows, list) and all(
             {"plant", "seat", "run_id", "caught"} <= set(r) for r in rows)
     except (OSError, ValueError, AssertionError) as e:
