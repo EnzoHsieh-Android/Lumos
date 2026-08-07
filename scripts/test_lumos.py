@@ -17719,7 +17719,8 @@ def _hk_fixture(tmp_prefix="gctl-hk-"):
         "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
         "tags:\n  - type/system\nrelated:\n  - \"[[Systems/A直連]]\"\n"
         "summary: |-\n  KEY:x\n---\n# B鄰居\n"
-        "zebra quartz 檢索 zebra quartz 詞彙 zebra quartz 高分 zebra quartz。\n",
+        "zebra quartz 檢索 zebra quartz 詞彙 zebra quartz 高分 zebra quartz。\n"
+        "quokka wombat quokka wombat quokka wombat(第二組特徵詞,供水位測試撐閾)。\n",
         encoding="utf-8")
     return repo, vault
 
@@ -17824,6 +17825,97 @@ def t_impact_basename_match():
     dng = _hk_impact(repo2, "scripts/tool_x.sh", "", on)
     check("★git 缺席 degrade:不炸且裸檔名不命中★",
           not any("D裸名" in x["node"] for x in dng["results"]), str(dng["results"])[:200])
+
+
+
+
+def t_s2_waterline_rescue():
+    """[連結缺失補全 S2]水位謂詞:free direct<N 補至水位(need=N-count),非零 direct 特例。
+    ①1 direct 存活+N=2 → 補恰 1 席 ②1 direct 存活+N=1 → 不觸發(向下相容=舊零 direct 語意)
+    ③pinned direct 不計入 free 計數(合約 direct 固定席時仍可觸發)④dropped<need 補盡即止。
+    翻紅釘:補入數退回 dropped[:N] → ①翻紅(會補 2)。"""
+    print("t_s2_waterline_rescue")
+    repo, vault = _hk_fixture(tmp_prefix="gctl-wl-")
+    # D直連2:詞彙可被特定 query 命中(存活),A/C 直連死
+    (vault / "Systems" / "D直連2.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# D直連2\n"
+        "也引 `scripts/tool_x.sh`;特徵詞 quokka wombat quokka wombat quokka。\n", encoding="utf-8")
+    (vault / "Systems" / "C直連.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# C直連\n也管 `scripts/tool_x.sh`,無特徵詞。\n",
+        encoding="utf-8")
+    q = "quokka wombat"   # 勿含「特徵」——C 節點寫「無特徵詞」會被誤命中(首版夾具瑕疵)
+    # ① N=2:D 存活(free_direct=1)→ need=1,救 1(A/C 分數同 → 字典序 A)
+    d = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "2"})
+    resc = [x for x in d["results"] if x.get("rescued")]
+    check("★1 direct 存活+N=2 → 補恰 1 席(need=N-count)★", len(resc) == 1, str(d["results"])[:300])
+    # ② N=1:1≥1 不觸發
+    d1 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "1"})
+    check("★1 direct 存活+N=1 → 不觸發(向下相容)★",
+          not any(x.get("rescued") for x in d1["results"]), str(d1["results"])[:200])
+    # ③ pinned direct 不計入:給 D直連2 掛合約 → 變 pinned;free_direct=0 → N=1 觸發
+    p3 = vault / "Systems" / "D直連2.md"
+    p3.write_text(p3.read_text(encoding="utf-8").replace(
+        "KEY:x", "KEY:★INVARIANT★ 假合約 [test:t_x]"), encoding="utf-8")
+    d3 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "1"})
+    check("★pinned direct 不計入 free 計數 → N=1 仍觸發★",
+          sum(1 for x in d3["results"] if x.get("rescued")) == 1, str(d3["results"])[:300])
+    # ④ dropped<need:N=9 → 只補得出 dropped 數
+    d4 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "9"})
+    n_dropped = sum(1 for x in d4["results"] if x.get("rescued"))
+    check("dropped<need 補盡即止(不虛報)", 1 <= n_dropped <= 3, str(n_dropped))
+
+
+def t_link_candidates():
+    """[連結缺失補全 S1]候選生成:D1 純文字(完整路徑/檔名/複合詞 stem)、D2 鄰居家族
+    (四邊型單跳+剝後綴 LCS≥4 CJK / plan_refs 單跳)、已 direct 去重、CLI 互斥、schema 封閉。
+    翻紅釘:拔剝後綴 → 泛用尾綴誤報斷言翻紅;拔去重 → 已 direct 斷言翻紅。"""
+    print("t_link_candidates")
+    import subprocess, json as _j, os
+    repo, vault = _hk_fixture(tmp_prefix="gctl-lc-")
+    # E:純文字完整路徑(無反引號)→ D1
+    (vault / "Systems" / "E純文字.md").write_text(
+        "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# E純文字\n"
+        "本節掌管 scripts/tool_x.sh 的流程(刻意無反引號)。\n", encoding="utf-8")
+    # d 家族:工具X掃描_實作計畫(direct)+ 工具X掃描_計劃(related 鄰居,剝後綴 LCS=工具X掃描)
+    (vault / "Projects" / "工具X掃描_實作計畫.md").write_text(
+        "---\ntype: project\nstatus: done\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/project\nrelated:\n  - \"[[Projects/工具X掃描_計劃]]\"\n"
+        "  - \"[[Projects/無關主題_計劃]]\"\n---\n# 工具X掃描_實作計畫\n落點 `scripts/tool_x.sh`。\n",
+        encoding="utf-8")
+    (vault / "Projects" / "工具X掃描_計劃.md").write_text(
+        "---\ntype: project\nstatus: done\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/project\n---\n# 工具X掃描_計劃\n設計文,零 code 引用。\n", encoding="utf-8")
+    (vault / "Projects" / "無關主題_計劃.md").write_text(
+        "---\ntype: project\nstatus: done\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
+        "tags:\n  - type/project\n---\n# 無關主題_計劃\n只共享 _計劃 泛用尾綴。\n", encoding="utf-8")
+    # V:僅 plan_refs 單跳連 d → D2(b)
+    (vault / "Verification" / "V驗證.md").write_text(
+        "---\ntype: verification\nstatus: pass\ndate: 2026-08-07\n"
+        "plan_refs:\n  - \"[[Projects/工具X掃描_實作計畫]]\"\n"
+        "tags:\n  - type/verification\n---\n# V驗證\n零 code 引用。\n", encoding="utf-8")
+    def run_lc(*args):
+        env = dict(os.environ)
+        return subprocess.run([sys.executable, GRAPHCTL, "link-candidates", *args,
+                               "--repo", str(repo), "--json"],
+                              capture_output=True, text=True, env=env)
+    r = run_lc("scripts/tool_x.sh")
+    check("rc0", r.returncode == 0, r.stderr[:200])
+    d = _j.loads(r.stdout.strip().splitlines()[-1])
+    cand = {c["node"]: c for c in d["candidates"]}
+    check("★D1 純文字完整路徑命中★", any("E純文字" in n for n in cand), str(cand)[:300])
+    e = next((c for n, c in cand.items() if "E純文字" in n), None)
+    check("D1 signal+evidence 欄位", e and e["signal"] in ("plain-text", "both") and e["evidence"], str(e))
+    check("★D2 剝後綴 LCS 家族命中(工具X掃描_計劃)★", any("工具X掃描_計劃" in n for n in cand), str(cand)[:300])
+    check("★泛用尾綴不誤報(無關主題_計劃 不在)★", not any("無關主題" in n for n in cand), str(cand)[:300])
+    check("★D2(b) plan_refs 單跳命中(V驗證)★", any("V驗證" in n for n in cand), str(cand)[:300])
+    check("★已 direct 去重(A直連/工具X掃描_實作計畫 不在)★",
+          not any("A直連" in n or "實作計畫" in n for n in cand), str(cand)[:300])
+    # CLI 互斥
+    r2 = run_lc()
+    check("無參數=rc2", r2.returncode == 2, str(r2.returncode))
 
 
 if __name__ == "__main__":

@@ -85,7 +85,7 @@ PRIOR-ART: ① 最小解層級——既有 impact --ranked 管線的謂詞/參�
 
 ## 合約候選清單(收斂時提名,候選≠已標——蓋章走 guard 流程與「不確定不標」鐵則)
 - rescued 恆 pinned:false 且不進固定席統計/顯示(固定席語意=合約/事故機械保證,不可稀釋)。
-- threshold/quota 永不作用於 rescued 桶;rescue 僅零 direct 時觸發。
+- threshold/quota 永不作用於 rescued 桶;rescue 觸發=free direct 不足水位 N(★2026-08-07 由 [[Projects/連結缺失補全_計劃]] S2 考卷 A/B 重裁改寫:原「僅零 direct 觸發」為 N=1 特例;held Σmust 14→17、P@8 0.694→0.713 週閘翻綠★)。
 - A/B 敗訴=刪碼零殘留(沿 PPR 墓碑慣例)。
 
 ## 驗收線(A/B;r1 重寫——補 harness 機制與兩處明示偏離)

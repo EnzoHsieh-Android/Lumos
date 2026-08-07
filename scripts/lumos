@@ -8645,6 +8645,176 @@ def cmd_quote_check(report, spec, as_json=False):
     return 0 if not miss else 1
 
 
+
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_NODE_SUFFIX_RE = re.compile(r"(_計劃|_實作計畫|_調研)$")
+_NODE_DATEPFX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_")
+
+
+def _lc_strip_stem(node_rel):
+    """節點檔名 stem 剝節點型後綴與日期前綴(D2 防泛用尾綴誤報,plan:連結缺失補全 r1)。"""
+    s = Path(node_rel).stem
+    s = _NODE_DATEPFX_RE.sub("", s)
+    s = _NODE_SUFFIX_RE.sub("", s)
+    return s
+
+
+def _lc_lcs_cjk(a, b):
+    """最長公共連續子字串;回其中 CJK 字元數(演算法明文=逐對 LCS-substring)。"""
+    if not a or not b:
+        return 0
+    best = ""
+    # O(len(a)*len(b)) 樸素 DP;stem 長度小,夠用
+    prev = [0] * (len(b) + 1)
+    for i in range(1, len(a) + 1):
+        cur = [0] * (len(b) + 1)
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > len(best):
+                    best = a[i - cur[j]:i]
+        prev = cur
+    return sum(1 for ch in best if _CJK_RE.match(ch))
+
+
+def cmd_link_candidates(code_file=None, goldset=None, repo=None, as_json=False):
+    """[S1 連結缺失補全,2026-08-07](plan:Projects/連結缺失補全_計劃;borrow TLR 離線候選
+    +pitfalls-gapfill 人裁姿勢)。code→節點補鏈候選生成,★唯讀恆 rc0、不寫任何檔★——
+    補引用=人裁後的正常圖譜編輯(合約候選:自動寫入=maker bias 閉環,人閘不可拆)。
+
+    偵測器(全決定論,零 LLM):
+    - D1 純文字提及:節點可見文字(_visible_lines keep_fenced=False+INLINE_CODE_RE 剝——
+      即 search 的 include_code=False 同款組合;勿用保留 inline-code 的 _strip_fences_text)
+      含完整路徑/完整檔名;或含 stem 且 stem≥6 字元且含 _ 或 -(複合詞判準,防 config/system
+      這類單詞洪水)。
+    - D2 鄰居家族:direct 節點集 D 的單跳雙向鄰居(邊型統一四種:related/body-wikilink/
+      plan_refs/verified_by,不遞迴),且 (a) 剝後綴 stem 與某 d 的 LCS-substring ≥4 CJK
+      (防「_實作計畫」泛用尾綴誤報——r1 實測 11 檔同尾) 或 (b) 經 plan_refs/verified_by
+      單跳相連。
+    已 direct(含 basename-match)去重不出候選。CLI:code_file 與 goldset 互斥必居其一,
+    goldset 路徑為參數(vendored 工具不得寫死本專案治具路徑,合約候選)。
+    輸出 schema 封閉:{"file", "candidates":[{"node","signal","evidence","via"}]}。
+    """
+    import json
+    import os
+    if bool(code_file) == bool(goldset):
+        print("ERROR: <code-file> 與 --all-goldset 互斥且必居其一", file=sys.stderr)
+        return 2
+    repo_root = Path(repo or ".").resolve()
+    vault = _vault_in(repo_root)
+    if vault is None:
+        print("ERROR: vault 找不到(--repo 未指向含 docs/*-knowledge 的目錄)", file=sys.stderr)
+        return 2
+    env = Env(vault)
+    files = []
+    if goldset:
+        try:
+            gs = json.loads(Path(goldset).read_text(encoding="utf-8"))
+            files = sorted({c["file"] for c in gs.get("edit", []) if c.get("file")})
+        except (OSError, ValueError, TypeError) as e:
+            print(f"ERROR: goldset 讀取/格式失敗: {e}", file=sys.stderr)
+            return 2
+    else:
+        rp = str(code_file)
+        if os.path.isabs(rp):
+            rp = os.path.relpath(rp, str(repo_root))
+        if not (repo_root / rp).exists():
+            print(f"ERROR: code 檔不存在: {rp}", file=sys.stderr)
+            return 2
+        files = [rp]
+
+    # 節點文字/鄰接一次建(全庫 ~240 節點,單進程)
+    texts = {}
+    for node_rel in env.notes:
+        try:
+            texts[node_rel] = (env.vault / node_rel).read_text(encoding="utf-8-sig",
+                                                               errors="replace")
+        except OSError:
+            texts[node_rel] = ""
+    stems = {rel: Path(rel).name for rel in texts}
+    def _resolve(name):
+        name = name.strip()
+        for rel in texts:
+            if rel == name or rel == name + ".md" or Path(rel).stem == name:
+                return rel
+        return None
+    adj = {rel: {} for rel in texts}   # rel -> {nbr: set(edge_types)}
+    _WIKI = re.compile(r"\[\[([^\]|#]+)")
+    for rel, note in env.notes.items():
+        edges = []
+        for fld in ("related", "plan_refs", "verified_by"):
+            for v in as_list(note.fields.get(fld)):
+                m = _WIKI.match(str(v)) or re.match(r"(.+)", str(v).strip("[]\" "))
+                tgt = _resolve(m.group(1)) if m else None
+                if tgt:
+                    edges.append((tgt, fld))
+        for m in _WIKI.finditer(texts[rel]):
+            tgt = _resolve(m.group(1))
+            if tgt:
+                edges.append((tgt, "body-wikilink"))
+        for tgt, ty in edges:
+            if tgt == rel:
+                continue
+            adj[rel].setdefault(tgt, set()).add(ty)
+            adj[tgt].setdefault(rel, set()).add(ty)   # 單跳雙向
+
+    out_all = []
+    for rel_file in files:
+        pairs = _impact_reverse_lookup(rel_file, env, repo_root)
+        direct = {n for n, _h in pairs}
+        base = Path(rel_file).name
+        stem = Path(rel_file).stem
+        stem_ok = len(stem) >= 6 and ("_" in stem or "-" in stem)
+        cands = {}
+        # D1
+        for rel, text in texts.items():
+            if rel in direct:
+                continue
+            ev = []
+            for _no, ln in _visible_lines(text.split("\n"), keep_fenced=False):
+                probe = INLINE_CODE_RE.sub("", ln)
+                if rel_file in probe or base in probe or (stem_ok and stem in probe):
+                    ev.append(ln.strip()[:120])
+            if ev:
+                cands[rel] = {"node": rel, "signal": "plain-text",
+                              "evidence": ev[:3], "via": []}
+        # D2
+        for d in direct:
+            d_stem = _lc_strip_stem(d)
+            for nbr, types in adj.get(d, {}).items():
+                if nbr in direct:
+                    continue
+                hit_a = _lc_lcs_cjk(_lc_strip_stem(nbr), d_stem) >= 4
+                hit_b = bool(types & {"plan_refs", "verified_by"})
+                if hit_a or hit_b:
+                    c = cands.get(nbr)
+                    if c:
+                        c["signal"] = "both"
+                        if d not in c["via"]:
+                            c["via"].append(d)
+                    else:
+                        cands[nbr] = {"node": nbr, "signal": "neighbor-family",
+                                      "evidence": [], "via": [d]}
+        result = {"file": rel_file,
+                  "candidates": sorted(cands.values(), key=lambda c: c["node"])}
+        out_all.append(result)
+        if not as_json:
+            print(f"link-candidates {rel_file}: {len(result['candidates'])} 筆候選"
+                  f"(direct {len(direct)} 已去重)")
+            if not result["candidates"]:
+                print("  無")
+            for c in result["candidates"]:
+                via = f"  via {','.join(c['via'])}" if c["via"] else ""
+                ev = f"  「{c['evidence'][0][:60]}」" if c["evidence"] else ""
+                print(f"  [{c['signal']}] {c['node']}{via}{ev}")
+    if as_json:
+        print(json.dumps(out_all[0] if code_file else out_all, ensure_ascii=False))
+    if not as_json:
+        print("  ★唯讀候選,不寫檔;補引用=人裁後的正常圖譜編輯(人閘省不掉)★")
+    return 0
+
+
 def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
     """[S1 有講沒做對帳,2026-08-06](plan:Projects/驗證層自證三件_計劃;borrow evidra
     protocol_violation)。收貨第三道(前兩道=quote-check/refcheck 既有直用):
@@ -12031,14 +12201,21 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
         # 同 pins safety_overflow 精神);tie-break 沿 free.sort 慣例 (-score, hop, node)。
         # knob:LUMOS_IMPACT_RESCUE_N(2026-08-07 考卷轉正預設 1:held Σmust 12→14、
         # P@8 0.6389→0.6944 雙升,gate 兩條全過;knob=0 留 A 臂逃生)。
+        # S2 水位謂詞(2026-08-07,plan:連結缺失補全):free 內 direct(排除 pinned;截斷後
+        # 最終集)不足 N 席 → 補 need=max(0, N−count) 席(前案「僅零 direct 觸發」為 N=1 特例,
+        # 向下相容;前案合約候選之改寫經考卷 A/B 重裁,互引留痕見兩計劃節點)。
         rescued = []
-        _rescue_n = int(_impact_knob("LUMOS_IMPACT_RESCUE_N", 1))
-        if _rescue_n > 0 and not any(r["kind"] == "direct" for r in free):
+        # 2026-08-07 水位案考卷轉正 N=3(train 網格 {1,2,3} recall 軸選出;held 確認
+        # Σmust 14→17、P@8 0.6944→0.7130 週閘翻綠;knob 留逃生)
+        _rescue_n = int(_impact_knob("LUMOS_IMPACT_RESCUE_N", 3))
+        _free_direct = sum(1 for r in free if r["kind"] == "direct")
+        _need = max(0, _rescue_n - _free_direct)
+        if _rescue_n > 0 and _need > 0:
             _free_ids = {id(r) for r in free}
             dropped = [r for r in results
                        if r["kind"] == "direct" and not r["pinned"] and id(r) not in _free_ids]
             dropped.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))
-            for r in dropped[:min(_rescue_n, len(dropped))]:
+            for r in dropped[:_need]:
                 rr = dict(r)
                 rr["rescued"] = True
                 rescued.append(rr)
@@ -12864,6 +13041,12 @@ def main():
     p.add_argument("--spec", dest="qc_spec", required=True, metavar="凍結快照.md")
     p.add_argument("--json", action="store_true", dest="qc_json")
 
+    p = sub.add_parser("link-candidates", help="[補鏈候選] code→節點連結缺失候選生成(唯讀恆 rc0/不寫檔;人裁後補引用;輸入壞損 rc2)")
+    p.add_argument("lc_file", nargs="?", default=None, metavar="code檔", help="單檔模式(與 --all-goldset 互斥)")
+    p.add_argument("--all-goldset", dest="lc_goldset", default=None, metavar="goldset.json", help="對 goldset edit 卷全部 file 掃彙總(路徑為參數,不寫死)")
+    p.add_argument("--repo", dest="lc_repo", default=".", help="repo root(預設 .)")
+    p.add_argument("--json", action="store_true", dest="lc_json")
+
     p = sub.add_parser("seat-check", help="[S1 有講沒做對帳] 席報告對 dispatch manifest:unreported/out_of_scope(vault-free;觀測恆 rc0/輸入壞損 rc2)")
     p.add_argument("sc_report", metavar="席報告.md")
     p.add_argument("--dispatch", dest="sc_dispatch", required=True, metavar="rN-dispatch.json")
@@ -12982,6 +13165,9 @@ def main():
         return cmd_quote_check(args.qc_report, args.qc_spec, as_json=args.qc_json)
     if args.cmd == "seat-check":
         return cmd_seat_check(args.sc_report, args.sc_dispatch, ledger=args.sc_ledger, as_json=args.sc_json)
+    if args.cmd == "link-candidates":
+        return cmd_link_candidates(code_file=args.lc_file, goldset=args.lc_goldset,
+                                   repo=args.lc_repo, as_json=args.lc_json)
     if args.cmd == "anchor":
         if args.anchor_cmd == "verify":
             return cmd_anchor_verify(repo=args.anchor_repo, as_json=args.as_json)
