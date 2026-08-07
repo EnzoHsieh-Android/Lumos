@@ -11395,6 +11395,9 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
     return 1 if (n_missing or n_oor) else 0
 
 
+_BASENAME_COUNTS_CACHE = {}   # repo_root → {basename: count}(行程內;--diff 多檔免重跑 ls-files)
+
+
 def _impact_reverse_lookup(rel_code_path, env, repo_root):
     """給一支 code 路徑,反查「哪些圖譜節點的 body inline-code 引用了它」。
 
@@ -11414,7 +11417,7 @@ def _impact_reverse_lookup(rel_code_path, env, repo_root):
     唯一誤判歧義;大小寫敏感)→ 命中。★不動共用的 _refcheck_scan★(其 `/` 過濾
     是 refcheck CLI/G1 gate 的既有合約,此處自建第二條抽取路)。git 缺席/重名
     → degrade 為不比對(裸檔名路靜默停用,完整路徑路不受影響)。
-    knob:LUMOS_IMPACT_BASENAME_MATCH(預設 0=off;A/B 考卷 B 臂開)。
+    knob:LUMOS_IMPACT_BASENAME_MATCH(2026-08-07 轉正預設 1;0=逃生/A 臂)。ls-files 結果以 repo_root 為鍵行程內快取(--diff 多檔不重跑子行程)。
     """
     import os
     import subprocess
@@ -11430,14 +11433,22 @@ def _impact_reverse_lookup(rel_code_path, env, repo_root):
     base_ok = False
     base = Path(rp).name
     if int(_impact_knob("LUMOS_IMPACT_BASENAME_MATCH", 1)):   # 2026-08-07 考卷轉正預設 1(knob=0 留逃生)
-        try:
-            r = subprocess.run(["git", "-C", str(repo_root), "ls-files"],
-                               capture_output=True, text=True, timeout=10)
-            if r.returncode == 0:
-                tracked = [ln for ln in r.stdout.splitlines() if ln.strip()]
-                base_ok = sum(1 for f in tracked if Path(f).name == base) == 1
-        except (OSError, subprocess.SubprocessError):
-            base_ok = False   # git 缺席=degrade
+        key = str(repo_root)
+        counts = _BASENAME_COUNTS_CACHE.get(key)
+        if counts is None:
+            counts = {}
+            try:
+                r = subprocess.run(["git", "-C", str(repo_root), "ls-files"],
+                                   capture_output=True, text=True, timeout=10)
+                if r.returncode == 0:
+                    for ln in r.stdout.splitlines():
+                        if ln.strip():
+                            b = Path(ln).name
+                            counts[b] = counts.get(b, 0) + 1
+            except (OSError, subprocess.SubprocessError):
+                counts = {}   # git 缺席=degrade(空表=永不唯一)
+            _BASENAME_COUNTS_CACHE[key] = counts
+        base_ok = counts.get(base, 0) == 1
 
     hits = []
     for node_rel, note in env.notes.items():

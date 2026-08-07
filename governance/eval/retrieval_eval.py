@@ -225,7 +225,8 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
     # A/B 逐題對帳(hook必看召回修復 r2 折入):history 只存 rounded 比例,+1 筆判定
     # 需整數逐題 rows——env 指定路徑時把 erows 落 JSON,兩臂各 dump 一份對帳。
     _dump = os.environ.get("LUMOS_EVAL_DUMP_ROWS")
-    if _dump and erows:
+    if _dump:
+        # 恆覆寫(code-loop 外家審修):erows 空時寫 [],否則上一輪殘檔會被當本臂證據
         with open(_dump, "w", encoding="utf-8") as f:
             json.dump({"split": split, "k_edit": k_edit, "edit_rows": erows},
                       f, ensure_ascii=False)

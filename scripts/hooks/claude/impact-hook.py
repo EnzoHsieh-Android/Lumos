@@ -352,7 +352,7 @@ def build_ranked_context(data: dict) -> str:
             lines.append(f"  {x.get('score',0):.2f} {mk} {x.get('node','?')}")
     if rescued:
         # R1 直連保底(plan:hook必看召回修復):分數不過閾但為僅有的直連節點——信心層級不同於排序席
-        lines.append(f"⛑ 直連保底({len(rescued)},分數未過閾、因直連被救回):")
+        lines.append(f"⛑ 直連保底({len(rescued)},被閾值或名額截斷、因直連被救回):")
         for x in rescued:
             hit = f"/{x['hit']}" if x.get("hit") == "basename-match" else ""
             lines.append(f"  {x.get('score',0):.2f} 直接{hit} {x.get('node','?')}")
