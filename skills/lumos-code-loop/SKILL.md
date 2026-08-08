@@ -140,6 +140,8 @@ lumos canary record caught|missed --loop code-<topic> \
 ①`lumos quote-check <席報告> --spec <該席工作副本>`(carrier 報告供 disposal gate 錨定條;其餘席 advisory)
 ②`lumos refcheck <席報告> --repo <root>`(finding 引的 file:line 機械驗存在/範圍——引了不實指涉當場現形)
 ③`lumos seat-check <席報告> --dispatch <rN-dispatch.json> --ledger <out-of-scope.jsonl>`(有講沒做對帳,觀測恆 rc0)
+> ⚠ `lumos mutate`(變異測試,驗測試網破洞)是**手動唯讀工具,刻意不自動化**(2026-08-08 Enzo 裁,見 [[Projects/mutate接消費者_計劃]] 結案)——收貨時**可選**手動跑照洞,★勿接進自動流程/勿進閘★(避免過度測試+大檔爆炸;要接須先解 testmap 逐檔粒度)。
+
 **翻紅釘證據制(S3)**:blocker/major 折入採信=必附「先紅後綠」——一條當下翻紅的測試(或可執行重現指令+輸出),
 修完轉綠才記 folded,處置帳 note 記測試名/紅綠 rc;捏造的 bug 寫不出會紅的測試。文件精度 minor 豁免;
 「真但沙盒不可重現」→ accepted 明文理由。★誠實定位:v1=證據形式紀律+note 留痕,採信仍編排者;

@@ -1,12 +1,12 @@
 ---
 type: project
-status: doing
-blocked_on: Enzo 選型裁決(B 死消費者,見審計修正紀錄 r1)
+status: superseded
 created: 2026-08-08
 updated: 2026-08-08
+signed_off: 2026-08-08
 tags:
   - type/project
-  - status/doing
+  - status/superseded
 summary: |
   KEY:給 lumos mutate 一個自動消費者(現況零消費=蓋好沒人用病)——advisory 不進閘;核心張力=mutate 對大檔×全套測試爆炸、code-loop 收貨常含大檔,故消費者選型 A(code-loop 即時,踩爆炸)vs B(每日 autonomous-loop 過夜,無延遲無爆炸)傾向 B 先
   KEY:防爆三招=預算上限(sha256 抽樣)+跳過重測試檔(skipped:heavy-test)+總時限 partial;活口→mutation-survivors.jsonl→backlog gap 候選→人裁(不自動寫測試=maker bias 鐵則)
@@ -15,6 +15,8 @@ summary: |
   FLAG:DECISION
 ---
 # mutate接消費者_計劃
+
+> ★結案裁定(2026-08-08,Enzo signoff)★:**不接自動消費者、不進閘,mutate 停在手動唯讀觀測工具。** 理由=設計審證兩消費者皆有擋路(B 死/A 需大改)+機制無乾淨的家+避免過度測試(mutate=需要時照洞的手電筒,非全天候探照燈;測試天花板是 oracle 品質非數量)。本計劃擱置,四選一不再懸而未決。**未來若真要接:先解 testmap 逐檔粒度(大檔可用的鑰匙)+防爆,再另立新計劃,勿復用本節點。**
 
 > 緣起(2026-08-08,Enzo):`lumos mutate`(S4 落地)是唯讀觀測工具,現況無自動消費者=撞「蓋好沒人用」命名病(機制價值判準=對自動 loop 有沒有用)。本案給它一個必經之路上的消費者,advisory 不進閘。★核心張力(落地前實測已知)★:mutate 對「大檔×全套測試」= 乘法爆炸;code-loop 收貨處理的 tier=high diff 常含 scripts/lumos 這種大檔——直接接 code-loop 收貨=每次都踩爆炸點。故「接哪個消費者+怎麼防爆」是設計核心。
 
