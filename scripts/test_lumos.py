@@ -5028,6 +5028,53 @@ def t_pitfalls_ask_risk_classes():
     check("--check rc 語意不變(有節 rc0)", rc.returncode == 0, f"rc={rc.returncode}")
 
 
+def t_pitfalls_known_pitfall():
+    """[已知坑策展庫 v2]pitfalls 接 known-pitfall 節點(有 pitfall_ask+content-trigger)。
+    ①白名單擴充:append pitfall_when/set pitfall_ask/pitfall_source 可用 ②spec 文本命中 corpus
+    →pitfall_ask+source 攤出 ③無 pitfall_ask 的事故節點不誤觸 ④無 vault 降級=現況 ⑤--check rc 不變。
+    翻紅釘:拔 vault 掃描 → ②翻紅;拔白名單擴充 → ①翻紅。★正向案用 --repo str(v)★"""
+    print("t_pitfalls_known_pitfall")
+    import subprocess
+    v = mkvault()
+    # ① 白名單:建 known-pitfall 節點(走 lumos new/append/set)
+    r = run(v, "new", "system", "known-pitfall-rt")
+    node = "Systems/known-pitfall-rt.md"
+    ra = run(v, "append", node, "pitfall_when", "content:refresh.?token|refreshToken")
+    check("★白名單:append pitfall_when 可用(非 rc2)★", ra.returncode == 0, ra.stdout + ra.stderr)
+    rs1 = run(v, "set", node, "pitfall_ask", "並發 refresh:single-flight?token 輪換?")
+    rs2 = run(v, "set", node, "pitfall_source", "https://owasp.org/x")
+    check("★白名單:set pitfall_ask/source 可用★",
+          rs1.returncode == 0 and rs2.returncode == 0, rs1.stdout + rs2.stderr)
+    check("known-pitfall 節點 lint 過(含 aliases)", run(v, "lint", "known-pitfall-rt").returncode == 0, "")
+    # ② 正向命中:含 refresh token 的 spec,--repo str(v)(vault 本身當 root)
+    md = v / "MOC" / "feat.md"  # 放 vault 內任一位置
+    md.write_text("# s\n## 目標\n前端 refreshToken 靜默續期。\n## 實務隱患\n待答。\n", encoding="utf-8")
+    r = run(v, "pitfalls", str(md), "--repo", str(v))
+    check("★known-pitfall 命中:pitfall_ask 攤出★", "single-flight" in r.stdout, r.stdout[:600])
+    check("known-pitfall 命中:來源 URL 印出", "owasp.org" in r.stdout, r.stdout[:600])
+    # ③ 無 pitfall_ask 的事故節點不誤觸
+    (v / "Issues").mkdir(exist_ok=True)
+    (v / "Issues" / "incid.md").write_text(
+        "---\ntype: issue\nstatus: open\ncreated: 2026-08-09\nupdated: 2026-08-09\n"
+        "aliases: []\npitfall_when:\n  - \"content:refreshToken\"\n"
+        "tags:\n  - type/issue\nsummary: |-\n  KEY:x\n---\n# incid\n", encoding="utf-8")
+    r = run(v, "pitfalls", str(md), "--repo", str(v))
+    check("★無 pitfall_ask 的事故節點不誤觸(不進 known-pitfall)★",
+          r.stdout.count("incid") == 0, r.stdout[:600])
+    # ④ 無 vault 降級:對純 .git repo(無 vault)跑 → 不炸、無 known-pitfall
+    import tempfile as _tf
+    nov = Path(_tf.mkdtemp(prefix="gctl-novault-"))
+    (nov / ".git").mkdir()
+    md2 = nov / "s.md"
+    md2.write_text("# s\n## 目標\nrefreshToken 續期。\n## 實務隱患\n待答。\n", encoding="utf-8")
+    r = run(nov, "pitfalls", str(md2), "--repo", str(nov))
+    check("★無 vault 降級:不炸 rc0 且無 known-pitfall 段★",
+          r.returncode == 0 and "single-flight" not in r.stdout, f"rc={r.returncode}\n{r.stdout[:300]}")
+    # ⑤ --check rc 語意不變(known-pitfall 命中不改 rc)
+    rc = run(v, "pitfalls", str(md), "--repo", str(v), "--check")
+    check("--check rc 不變(known-pitfall advisory-only)", rc.returncode == 0, f"rc={rc.returncode}")
+
+
 def t_pitfalls_lint_integration():
     """Task 4: _pitfall_diff_mode 尾段整合——lint claims 合併/過濾/tier/fallback。"""
     import json as _json

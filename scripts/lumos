@@ -6220,8 +6220,8 @@ def cmd_export_html(env, out_path, standalone=False):
 
 # ═══════════════════════ 階段三: 寫側 T1(行級手術) ═══════════════════════
 
-SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen"}
-LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases"}   # aliases 2026-08-05(回填/補詞走安全原語)
+SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen", "pitfall_ask", "pitfall_source"}  # pitfall_* 2026-08-09 已知坑策展庫
+LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases", "pitfall_when"}   # aliases 2026-08-05;pitfall_when 2026-08-09(已知坑策展庫,content-trigger)
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -10686,9 +10686,14 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
             return 1
         print(f"✓ pitfalls --check: {'有節' if has_section else '零命中'}(命中類={hits})")
         return 0
+    # 已知坑策展庫(v2,2026-08-09):print/json 路徑才建 vault 掃 known-pitfall
+    # (--check 已在上面 return,保持 vault-free 0.18s——Env(vault) 實測 4.7s,不能每輪付)。
+    # known-pitfall = 有 pitfall_ask 的節點,pitfall_when content: 命中 corpus;advisory only。
+    known = _pitfall_scan_known(corpus, repo_root)
     if as_json:
         print(json.dumps({"hits": hits, "general": _PITFALL_GENERAL,
-                          "class_questions": {c: _PITFALL_QUESTIONS[c] for c in hits}}, ensure_ascii=False))
+                          "class_questions": {c: _PITFALL_QUESTIONS[c] for c in hits},
+                          "known_pitfalls": known}, ensure_ascii=False))
         return 0
     print("實務隱患提問(通用,恆答):")
     for q in _PITFALL_GENERAL:
@@ -10697,7 +10702,41 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
         print(f"命中風險類追問({', '.join(hits)}):")
         for c in hits:
             print(f"  - [{c}] {_PITFALL_QUESTIONS[c]}")
+    if known:
+        print("已知坑追問(世界已知,advisory——答或寫『已排除:理由』,panel 審):")
+        for k in known:
+            src = f"  (來源 {k['source']})" if k.get("source") else ""
+            print(f"  - {k['ask']}{src}")
     return 0
+
+
+def _pitfall_scan_known(corpus, repo_root):
+    """掃 vault 中「有 pitfall_ask 的 known-pitfall 節點」,pitfall_when content: 命中 corpus。
+    回 [{node, ask, source}];vault 缺=[](降級,vault-free 合約保住)。只 print/json 呼叫。"""
+    vault = _vault_in(repo_root)
+    if vault is None:
+        return []
+    try:
+        env = Env(vault)
+    except Exception:
+        return []
+    out = []
+    for node_rel, note in env.notes.items():
+        ask = note.fields.get("pitfall_ask")
+        if not ask:
+            continue
+        for trig in as_list(note.fields.get("pitfall_when")):
+            if not str(trig).startswith("content:"):
+                continue
+            pat = str(trig)[len("content:"):]
+            try:
+                if re.search(pat, corpus):
+                    out.append({"node": node_rel, "ask": str(ask),
+                                "source": note.fields.get("pitfall_source")})
+                    break
+            except re.error:
+                continue
+    return out
 
 
 def cmd_test_layers(diff=None, repo=None, as_json=False):

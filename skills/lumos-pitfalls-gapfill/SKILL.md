@@ -40,3 +40,8 @@ lumos context linter-gap實務隱患        # 無 → lumos new issue "linter-ga
 3. **量少邊角**:linter 覆蓋大宗;這只補殘餘新坑。跑太勤 = 噪音。
 
 > 設計見 `Projects/pitfalls網搜補漏_計劃`(解 `pitfalls-lint-integration_計劃` ③)。跳 design-loop(純散文 skill,design-loop 對散文空轉),驗收走 dogfood 真 stack。
+
+## 高危 pattern → known-pitfall 節點(已知坑策展庫 v2,2026-08-09)
+網搜坑放行後,若屬**高危設計 pattern**(認證/token/並發/快取/遷移…世界通用,非本 repo 專屬):除進 linter-gap 表,**另建 known-pitfall 節點**(快取式,第一次碰該 pattern 才建):
+`lumos new system known-pitfall-<pattern>` → `lumos append <node> pitfall_when "content:<寬 regex>"` → `lumos set <node> pitfall_ask "<一句隱患提問>"` → `lumos set <node> pitfall_source "<世界來源 URL>"`。
+之後任何 spec 文本命中該 regex,pitfalls 自動 advisory 攤出此坑(design-time,跨 session 記憶——不賭下顆 LLM 剛好熟)。★人放行才建,不自動(maker bias 鐵則);pitfall_when 走 append 存 block-list,勿手打 flow-list★。
