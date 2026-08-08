@@ -60,7 +60,7 @@ Finding（{原評 severity}）：「{finding 全文，含審計員引的座標}�
 兩三句理由。{若適用：若 finding 屬實但對本 spec 影響有限，也可裁「真但降級」並說明。}
 ```
 
-## 3. Code-loop reviewer（sonnet；連 2 missed 升 opus）
+## 3. Code-loop reviewer（sonnet；連 2 missed 升 opus;★2026-08-08 翻紅釘:blocker/major finding 須附可執行重現(翻紅測試或重現指令+輸出)——派工詞加一句「你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令),附不出請如實標『未能重現』並降權」★）
 
 ```
 你是外部第三方 code reviewer。這份 diff 是別人投稿的變更，不是你或本系統寫的。

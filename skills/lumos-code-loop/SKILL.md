@@ -9,10 +9,11 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 
 ## 一眼看懂
 
-> ⚠ **與 design-loop 的分流註記(2026-08-04)**:design-loop 已改走★處置閘★(`--disposal`,見
-> 圖譜 [[Projects/design-loop重設計]]);**本 skill 沿用舊 panel 閘(--gate --panel),不得因同步衝動改本檔**
-> ——code-loop 定位是下游正確性防線之一、其 canary 型別(off-by-one 等)有失敗場景不與抑噪互打、
-> missed 率未見異常(9.3%)。兩邊判準不同是★刻意設計★,不是漂移。
+> ★**2026-08-08 閘切換(取代 2026-08-04 分流註記)**★:本 skill 收斂改走**處置閘**(`loop status --disposal`,
+> 與 design-loop 同制)——原「刻意分流/不得改本檔」警語與 A 案防浮動條款經 **Enzo 具名推翻**
+> (signoff 留痕見 [[Projects/驗證層去模型化_計劃]];理由=canary 閘可信度被非平穩性論證動搖,條款自我引用)。
+> canary 同步降**觀測**(當輪煙霧偵測器:miss 不作廢該席 findings,只記帳;判讀=漏送分題強警報/漏難題弱訊號)。
+> **A 案(K=2+抽查)機制碼與 `t_panel_k2_and_probe` 保留不刪**(舊帳重放消費);舊 loop 帳不回溯。
 
 - **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill;`standard` 走單 reviewer(★原本這裡寫「(K=2)」是★講反的★:tier=high 實務上走平行 panel,而 panel 是 **K=1**;K=2 是循序模式的數字。2026-08-03 修★);trivial 可跳(commit 註明)。進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
 - **gate/守衛類 code 建議 feature branch**(2026-07-22 prepush範圍修法):pre-push 對 branch 與 main-direct **現已同軌**檢查(讀 stdin 推送範圍逐 ref 判,非 merge-base)——此為縱深建議非機械強制。
@@ -24,7 +25,9 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
   3. 三道防污染自檢
   4. 派乾淨 reviewer(不告知 canary)+ 抑噪紀律 + impact 鏡頭
   5. 判讀:canary caught? → 辯方殺假陽性 → 存活 max severity
-  6. 記錄 `canary record` → 問收斂 `loop status --gate`
+  6. 記錄 `canary record`(disposal 版模板:carrier 帶 --findings-set/--folded-set/--accepted-set,
+     `loop next` 已泛型吐 `disposal_cmd`——★只換閘不換記帳式,disposal 恆卡「無處置帳」★)
+     → 問收斂 `loop status --disposal --spec <凍結 diff/patch> --repo <root>`(2026-08-08 起;舊帳沿舊閘)
   7.(可選)mutation 冒煙補機械錨
 
 - **收斂**——★K 取決於你跑哪個模式,別記成同一個數★(2026-08-03 修:本行原本只寫「連 2 輪」,與下方 panel 節的「一乾淨輪即收斂」自相矛盾;**code 實作的是 panel 節那個**——`_loop_status_panel` 只取 `next(reversed(groups.items()))`,也就是★只看最後一輪★):
@@ -132,9 +135,16 @@ lumos canary record caught|missed --loop code-<topic> \
 工作副本(=審查快照,含 canary)存 `<round>-s<席>-snapshot.md` 或共用一份;record 帶
 `--report`/`--snapshot` 讓 sha 落帳可重算。code-loop record 不帶 findings_set,不會誤觸 T6 定錨。
 
-**收貨 quote-check(advisory,不進 gate——panel 判準一字不動)**:逐席
-`lumos quote-check <席報告> --spec <該席工作副本>`——派工模板本就要求逐字引句(§3 錨定紀律),
-這步讓它有機械收貨端:錨不到的條目=弱證據,判讀時要求補引句或降權;報告一旦過錨定,
+**收貨三道(2026-08-08,plan:[[Projects/驗證層去模型化_計劃]] S2a;前置=派工當下落
+`rN-dispatch.json`(`{round,seat,lens,materials,auditor}`,與席報告同目錄同 commit))**:
+①`lumos quote-check <席報告> --spec <該席工作副本>`(carrier 報告供 disposal gate 錨定條;其餘席 advisory)
+②`lumos refcheck <席報告> --repo <root>`(finding 引的 file:line 機械驗存在/範圍——引了不實指涉當場現形)
+③`lumos seat-check <席報告> --dispatch <rN-dispatch.json> --ledger <out-of-scope.jsonl>`(有講沒做對帳,觀測恆 rc0)
+**翻紅釘證據制(S3)**:blocker/major 折入採信=必附「先紅後綠」——一條當下翻紅的測試(或可執行重現指令+輸出),
+修完轉綠才記 folded,處置帳 note 記測試名/紅綠 rc;捏造的 bug 寫不出會紅的測試。文件精度 minor 豁免;
+「真但沙盒不可重現」→ accepted 明文理由。★誠實定位:v1=證據形式紀律+note 留痕,採信仍編排者;
+結構化欄位+讀側重跑=v2★。
+派工模板本就要求逐字引句(§3 錨定紀律),收貨端機械化:錨不到的條目=弱證據,判讀時要求補引句或降權;報告一旦過錨定,
 capture-recapture 的 finder 串也有了可信座標來源。
 missed → 該輪判決不採信(canary 硬閘不動)、下一輪(換 canary 型、framing 加碼)。連 2 missed → 升 opus。
 ★**missed 席 findings 不得直接丟——先過機械 repro triage(2026-08-05 正式化)**★:逐條試以真碼/真跑
