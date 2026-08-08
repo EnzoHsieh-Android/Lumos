@@ -16,6 +16,7 @@ verified_by:
   - "[[Verification/2026-08-04_design-loop處置閘終審硬化]]"
   - "[[Verification/2026-08-06_驗證層自證三件S1S3落地]]"
   - "[[Verification/2026-08-08_canary型別描述報表]]"
+  - "[[Verification/2026-08-08_驗證層去模型化落地]]"
 summary: |-
   KEY:[2026-08-05 D 前置,Enzo 裁]record 加 --canary-type/--probe 選配欄(不給不寫鍵)+canary-stats 型別×探針×caught 表——植入型別與探針結果★結構化★取代散文 note(散文帳不可重算,攢十輪也是考古材料);★D 案(型別輪替表數據驅動)開工條件=帶型別記錄攢滿 15 筆★(帳面可數,同 A 案防浮動條款款式);skill 派工/記帳模板同步帶兩欄 [test:t_canary_type_probe_fields]
   KEY:[2026-08-06 效度自檢落地,plan:[[Projects/驗證層自證三件_計劃]]]①型別派工當下★隨機抽★取代固定輪替(loop next;固定輪替=可猜=答案印考卷背面,同輪 slot 仍不重複)[test:t_s2_loop_next_random_type_draw] ②canary-stats 型別來源如實分層 attr/note/unknown+覆蓋率即時計算(D 案 15 筆條件只認 attr)[test:t_s2_canary_stats_type_coverage] ③前瞻層 SNR=governance/eval/canary_snr.py(跨席分辨力÷同席重跑雜訊;重跑<3/分母=0→不裁決非高訊號;swap-candidate 恆人裁)[test:t_s2_snr_synthetic]——★canary-log 非 SNR 合法輸入(無同題重跑配對鍵,母體錯置)★,真 SNR 接 calibration 固定題矩陣

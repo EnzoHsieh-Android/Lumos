@@ -8962,6 +8962,37 @@ def cmd_mutate(diff_range=None, repo=None, as_json=False, budget=None):
     truncated = max(0, len(all_muts) - cap)
     run_muts = all_muts[:cap]
 
+    # baseline 前置只跑一次(乾淨樹選測集全綠才續;非綠 abort——殺率不可信)
+    # ——★baseline 提到迴圈外★:原每變異重跑 baseline=N× 浪費(自審抓回);選測集乾淨結果與變異無關。
+    has_work = bool(run_muts) and bool(tests_for)
+    if has_work:
+        wt0 = Path(tempfile.mkdtemp(prefix="lumos-mut-base-"))
+        try:
+            r0 = subprocess.run(["git", "-C", str(root), "worktree", "add", "--detach", "-q",
+                                 str(wt0), "HEAD"], capture_output=True, text=True)
+            if r0.returncode != 0:
+                print(f"ERROR: worktree 建立失敗: {r0.stderr[:200]}", file=sys.stderr)
+                return 2
+            for tst in sorted(tests_for):
+                tp = wt0 / tst
+                if not tp.exists():
+                    continue
+                try:
+                    br = subprocess.run([sys.executable, str(tp)], cwd=str(wt0),
+                                        capture_output=True, text=True, timeout=300)
+                except subprocess.TimeoutExpired:
+                    print("ERROR: baseline 測試逾時——選測集過重,--mutation-budget 縮或改 per-file 測試",
+                          file=sys.stderr)
+                    return 2
+                if br.returncode != 0:
+                    print("ERROR: baseline 非全綠(選測集在乾淨樹已紅/flaky)——殺率不可信,abort",
+                          file=sys.stderr)
+                    return 2
+        finally:
+            subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(wt0)],
+                           capture_output=True)
+            shutil.rmtree(wt0, ignore_errors=True)
+
     results = []
     for m in run_muts:
         if not tests_for:
@@ -8976,22 +9007,7 @@ def cmd_mutate(diff_range=None, repo=None, as_json=False, budget=None):
             if r.returncode != 0:
                 print(f"ERROR: worktree 建立失敗: {r.stderr[:200]}", file=sys.stderr)
                 return 2
-            # baseline 前置:選測集在乾淨 worktree 須全綠
-            base_ok = True
-            for tst in sorted(tests_for):
-                tp = wt / tst
-                if not tp.exists():
-                    continue
-                br = subprocess.run([sys.executable, str(tp)], cwd=str(wt),
-                                    capture_output=True, text=True, timeout=120)
-                if br.returncode != 0:
-                    base_ok = False
-                    break
-            if not base_ok:
-                print(f"ERROR: baseline 非全綠(選測集在乾淨樹已紅/flaky)——殺率不可信,abort",
-                      file=sys.stderr)
-                return 2
-            # 套變異
+            # 套變異(baseline 已在迴圈外驗過)
             (wt / m["file"]).write_text(m["_src"], encoding="utf-8")
             killed = False
             for tst in sorted(tests_for):
