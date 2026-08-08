@@ -17918,5 +17918,83 @@ def t_link_candidates():
     check("無參數=rc2", r2.returncode == 2, str(r2.returncode))
 
 
+
+
+def t_mutate_diff():
+    """[驗證層去模型化 S4]diff 變異測試 v1:①ast 算子生成+殺/活判定 ②baseline 紅=rc2
+    ③cap 決定性(同 range 兩跑同結果) ④no-test-selected 分桶 ⑤--json schema ⑥互斥 rc 合約。
+    翻紅釘:拔 baseline 前置 → ②翻紅;拔 sha256 排序 → ③翻紅。"""
+    print("t_mutate_diff")
+    import subprocess, json as _j, os
+    repo = Path(tempfile.mkdtemp(prefix="gctl-mut-"))
+    def git(*a):
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                       cwd=str(repo), capture_output=True)
+    git("init", "-q")
+    src = repo / "src_mod.py"
+    tst = repo / "test_src_mod.py"
+    # src:兩個可變異點——check_limit 的 >=(測試蓋到,變異必死)、silent_flag 的 ==(測試沒蓋,變異活)
+    SRC = ("def check_limit(x):\n"
+           "    return x >= 10\n"
+           "\n"
+           "def silent_flag(y):\n"
+           "    return y == 3\n")
+    TST = ("import sys\nimport src_mod\n"
+           "assert src_mod.check_limit(10) is True\n"
+           "assert src_mod.check_limit(9) is False\n"
+           "print('ok')\n")
+    # 3 個共改 commit 餵 testmap 挖掘(support>=3)
+    for i in range(3):
+        src.write_text(SRC + f"# rev{i}\n", encoding="utf-8")
+        tst.write_text(TST + f"# rev{i}\n", encoding="utf-8")
+        git("add", "-A"); git("commit", "-qm", f"c{i}")
+    # 最後一筆:改 src 的兩行(diff 目標)
+    src.write_text(SRC.replace("x >= 10", "x >= 10  # touched").replace("y == 3", "y == 3  # touched"),
+                   encoding="utf-8")
+    tst.write_text(TST, encoding="utf-8")
+    git("add", "-A"); git("commit", "-qm", "change")
+    r = subprocess.run([sys.executable, GRAPHCTL, "testmap", "build", "--repo", str(repo)],
+                       capture_output=True, text=True)
+    def mut(*args):
+        return subprocess.run([sys.executable, GRAPHCTL, "mutate", "--repo", str(repo), *args],
+                              capture_output=True, text=True)
+    r1 = mut("--diff", "HEAD~1..HEAD", "--json")
+    check("mutate rc0(觀測有效)", r1.returncode == 0, r1.stderr[:300])
+    d = _j.loads(r1.stdout.strip().splitlines()[-1])
+    check("★schema:mutants/buckets/kill_rate 鍵齊★",
+          all(k in d for k in ("mutants", "buckets", "kill_rate")), str(d)[:200])
+    kinds = {m["bucket"] for m in d["mutants"]}
+    check("★蓋到的變異被殺(killed 桶非空)★", "killed" in kinds, str(d["mutants"])[:400])
+    check("★沒蓋到的變異存活(survived 桶非空=測試網的洞)★", "survived" in kinds,
+          str(d["mutants"])[:400])
+    surv = [m for m in d["mutants"] if m["bucket"] == "survived"]
+    check("活口帶 file:line+變異描述", surv and all(m.get("line") and m.get("op") for m in surv),
+          str(surv)[:200])
+    # ③ cap 決定性:兩跑結果一致
+    r2 = mut("--diff", "HEAD~1..HEAD", "--json")
+    d2 = _j.loads(r2.stdout.strip().splitlines()[-1])
+    check("★決定性:同 range 兩跑 mutants 序列一致★",
+          [(m["line"], m["op"], m["bucket"]) for m in d["mutants"]] ==
+          [(m["line"], m["op"], m["bucket"]) for m in d2["mutants"]], "兩跑不一致")
+    # ② baseline 紅 → rc2 fail loud
+    tst.write_text(TST + "assert False  # 故意紅\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-qm", "red")
+    r3 = mut("--diff", "HEAD~2..HEAD~1", "--json")
+    check("★baseline 非綠=rc2 fail loud(殺率不可被紅測試灌水)★", r3.returncode == 2,
+          f"rc={r3.returncode} {r3.stderr[:200]}")
+    git("revert", "-n", "HEAD"); git("commit", "-qm", "unred")
+    # ④ no-test-selected:動一個沒有 testmap 邊的新檔
+    orphan = repo / "orphan_mod.py"
+    orphan.write_text("def lonely(z):\n    return z > 5\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-qm", "orphan")
+    r4 = mut("--diff", "HEAD~1..HEAD", "--json")
+    d4 = _j.loads(r4.stdout.strip().splitlines()[-1])
+    check("★無測試邊的檔=no-test-selected 桶(不混報測試洞)★",
+          any(m["bucket"] == "no-test-selected" for m in d4["mutants"]), str(d4)[:300])
+    # ⑥ 互斥 rc 合約
+    r5 = mut()
+    check("無 --diff=rc2", r5.returncode == 2, str(r5.returncode))
+
+
 if __name__ == "__main__":
     sys.exit(main())
