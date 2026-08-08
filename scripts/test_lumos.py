@@ -5009,6 +5009,25 @@ def t_pitfalls_spec():
     check("pitfalls: md 不存在 rc 2", r.returncode == 2, f"rc={r.returncode}")
 
 
+def t_pitfalls_ask_risk_classes():
+    """[已知坑機械前置 S0]pitfalls spec 模式加「反問風險類」廣度問——在場 LLM 自我分類,
+    補寫死 4 類太少。①反問行出現(子字串對齊實際問句)②固定 3 問仍在③--check rc 語意不變。
+    翻紅釘:拔反問行 → ①翻紅。"""
+    print("t_pitfalls_ask_risk_classes")
+    v = mkvault()
+    root = v.parent
+    md = root / "feat.md"
+    md.write_text("# s\n## 目標\n前端加 refresh token 靜默續期。\n## 實務隱患\n併發見下。\n",
+                  encoding="utf-8")
+    r = run(root, "pitfalls", str(md), "--repo", str(root))
+    check("★反問行:列出此功能碰到的風險類★", "列出此功能碰到的風險類" in r.stdout, r.stdout[:500])
+    check("固定 3 問仍在(併發/效能/資源)",
+          all(w in r.stdout for w in ("併發", "效能", "資源")), r.stdout[:500])
+    # --check rc 語意不變(有實務隱患節 → rc0)
+    rc = run(root, "pitfalls", str(md), "--repo", str(root), "--check")
+    check("--check rc 語意不變(有節 rc0)", rc.returncode == 0, f"rc={rc.returncode}")
+
+
 def t_pitfalls_lint_integration():
     """Task 4: _pitfall_diff_mode 尾段整合——lint claims 合併/過濾/tier/fallback。"""
     import json as _json
