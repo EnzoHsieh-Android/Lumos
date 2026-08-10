@@ -10416,6 +10416,8 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
 
 _DELGUARD_STOP = frozenset("if else for while return import class def val var fun void public private static final new this true false null let const function".split())
 _DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/")
+# 與 pre-commit should_exclude 的 lock 排除規則對齊(`*package-lock.json|*yarn.lock|*pnpm-lock.yaml`)
+_DELGUARD_EXCLUDE_LOCKFILES = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
 DELGUARD_TOKEN_CAP = 40  # staged diff 抽出 token 數上限,超額截斷(dropped 計入輸出提示)
 DELGUARD_TOP_N = 10  # CLI 文字輸出逐條列出上限,其餘併入「另有 K 處命中」統計行
 
@@ -10424,7 +10426,8 @@ def _delguard_parse_diff(diff_text, graph_root):
     """從 staged diff 抽被刪識別字(token)＋vault(graph_root 下 .md)的 +/- 行分流。
     規則:只吃 `-` 行(跳過 ---/+++/hunk 頭/binary 檔段);token regex [A-Za-z_][A-Za-z0-9_]{2,};
     出現在同一份 diff 任何 `+` 行的 token 剔除(檔內改名/搬行即刻回收,降誤報);stopword 表剔除;
-    vault 與排除路徑(node_modules/ bin/ obj/ dist/ build/ __pycache__/ .git/)的檔案不抽 token,
+    vault 與排除路徑(node_modules/ bin/ obj/ dist/ build/ __pycache__/ .git/)、
+    以及 lockfile(package-lock.json/yarn.lock/pnpm-lock.yaml,與 pre-commit should_exclude 對齊)的檔案不抽 token,
     vault .md 的 diff 行另收進 vault_diffs 供 S2 純連結欄位判定用。
     回 {"tokens": [str...]  # 依出現序去重,cap 前不截
         ,"vault_diffs": {path: [line...]}}"""
@@ -10441,7 +10444,8 @@ def _delguard_parse_diff(diff_text, graph_root):
             m = re.search(r" b/(.+)$", ln)
             cur = m.group(1) if m else None
             is_vault = bool(cur) and cur.startswith(graph_root) and cur.endswith(".md")
-            is_excl = bool(cur) and any(seg in cur for seg in _DELGUARD_EXCLUDE_DIRS)
+            is_excl = bool(cur) and (any(seg in cur for seg in _DELGUARD_EXCLUDE_DIRS)
+                                      or cur.endswith(_DELGUARD_EXCLUDE_LOCKFILES))
             in_binary = False
             continue
         if ln.startswith("Binary files"):
@@ -10462,12 +10466,14 @@ def _delguard_parse_diff(diff_text, graph_root):
     return {"tokens": tokens, "vault_diffs": vault_diffs}
 
 
-def _delguard_confidence(tokens, repo_root, graph_root):
+def _delguard_confidence(tokens, repo_root, graph_root, timeout=None):
     """回 {token: "high"|"low"}。high=staged index 全域消失(排除 vault/排除域後零命中)。
     單次 git -c core.quotePath=off grep --cached -n -I -w -F -e t1 -e t2 ... --
     . ':(exclude)<graph_root>' ':(exclude)node_modules' ...;rc>1 視為失敗丟 RuntimeError(上層 fail-open)。
     命中歸屬在 python 端做:對 grep 輸出每行,用 Task 4 同款三件套 regex 判哪些 token 出現
-    (`-w` 是 git 側粗篩,py 側再精配)。快照契約:讀 staged index(--cached),worktree 未 add 的改動不影響結果。"""
+    (`-w` 是 git 側粗篩,py 側再精配)。快照契約:讀 staged index(--cached),worktree 未 add 的改動不影響結果。
+    timeout: 選用秒數上限,轉傳 subprocess.run;逾時拋 subprocess.TimeoutExpired,
+    落進呼叫端 cmd_delguard_check 既有 except Exception → 降級 rc0(行為契約自動成立)。"""
     import re, subprocess
     if not tokens:
         return {}
@@ -10477,7 +10483,7 @@ def _delguard_confidence(tokens, repo_root, graph_root):
     cmd += ["--", ".", f":(exclude){graph_root}"]
     for d in _DELGUARD_EXCLUDE_DIRS:
         cmd += [f":(exclude){d.rstrip('/')}"]
-    r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root)
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root, timeout=timeout)
     if r.returncode > 1:
         raise RuntimeError(f"git grep rc={r.returncode}: {r.stderr.strip()[:200]}")
     alive = set()
@@ -10489,10 +10495,12 @@ def _delguard_confidence(tokens, repo_root, graph_root):
     return {t: ("low" if t in alive else "high") for t in tokens}
 
 
-def _delguard_vault_scan(tokens, conf, graph_root_abs):
+def _delguard_vault_scan(tokens, conf, graph_root_abs, deadline_check=None):
     """回 [{"node": "Systems/憑證.md", "folder": "Systems", "line_no": int,
             "line": str(strip,截 160 字), "tokens": [..], "conf": "high"|"low"}...]
-       排序: (conf!=high, folder!="Systems", node, line_no)——高信心先、Systems 先。"""
+       排序: (conf!=high, folder!="Systems", node, line_no)——高信心先、Systems 先。
+       deadline_check: 選用 callable(),os.walk 外層迴圈每檔呼叫一次;回 True 立即
+       return 目前累積 hits(部分結果,呼叫端已知逾時語意)。"""
     import re, os
     if not tokens:
         return []
@@ -10501,6 +10509,9 @@ def _delguard_vault_scan(tokens, conf, graph_root_abs):
     hits = []
     for dirpath, _dirs, files in os.walk(graph_root_abs):
         for fn in files:
+            if deadline_check is not None and deadline_check():
+                hits.sort(key=lambda h: (h["conf"] != "high", h["folder"] != "Systems", h["node"], h["line_no"]))
+                return hits
             if not fn.endswith(".md"):
                 continue
             fp = os.path.join(dirpath, fn)
@@ -10558,7 +10569,8 @@ def cmd_delguard_check(repo=None, as_json=False):
         if not gr:
             return 0
         r = subprocess.run(["git", "-c", "core.quotePath=off", "diff", "--cached", "-M", "--no-color"],
-                           capture_output=True, text=True, cwd=root)
+                           capture_output=True, text=True, cwd=root,
+                           timeout=max(0.1, deadline - (time.monotonic() - t0)))
         parsed = _delguard_parse_diff(r.stdout, os.path.relpath(gr, root).replace(os.sep, "/"))
         tokens = parsed["tokens"][:DELGUARD_TOKEN_CAP]
         dropped = len(parsed["tokens"]) - len(tokens)
@@ -10568,14 +10580,15 @@ def cmd_delguard_check(repo=None, as_json=False):
             else:
                 print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
             return 0
-        conf = _delguard_confidence(tokens, root, os.path.relpath(gr, root).replace(os.sep, "/"))
+        rem = max(0.1, deadline - (time.monotonic() - t0))
+        conf = _delguard_confidence(tokens, root, os.path.relpath(gr, root).replace(os.sep, "/"), timeout=rem)
         if _over():
             if as_json:
                 _degraded_json("timeout", len(tokens))
             else:
                 print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
             return 0
-        hits = _delguard_vault_scan(tokens, conf, gr)
+        hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=lambda: time.monotonic() - t0 > deadline)
         fake = []
         for path, dl in parsed["vault_diffs"].items():
             rel = os.path.relpath(os.path.join(root, path), gr).replace(os.sep, "/")
@@ -10586,6 +10599,8 @@ def cmd_delguard_check(repo=None, as_json=False):
                               "fake_sync": fake, "degraded": False}, ensure_ascii=False))
             return 0
         if not hits:
+            if dropped:
+                print(f"delguard: 無命中;{dropped} 個符號超 cap 未掃(--json 看已掃全量)")
             return 0
         hi = sum(1 for h in hits if h["conf"] == "high")
         n_hit_tokens = len({t for h in hits for t in h["tokens"]})
@@ -10594,7 +10609,7 @@ def cmd_delguard_check(repo=None, as_json=False):
             print(f"  [{h['conf']}] {h['node']}:{h['line_no']} 「{h['line']}」 ← {','.join(h['tokens'])}")
         rest = len(hits) - min(len(hits), DELGUARD_TOP_N)
         if rest or dropped:
-            print(f"  …另有 {rest} 處命中/{dropped} 個符號超 cap 未展開(--json 看全量)")
+            print(f"  …另有 {rest} 處命中/{dropped} 個符號超 cap 未展開(--json 看已掃全量)")
         for n in fake:
             print(f"  ⚠ 假同步嫌疑: {n} 本次只掛連結(純連結編輯)但內文仍講被刪符號")
         print("  退場前自問: 1) 這次拿掉/反轉了什麼? 2) 上列原句逐句判:改動後還成立嗎?")

@@ -1614,7 +1614,9 @@ def t_precommit_vendored_exempt():
 
 def t_precommit_whitelist_drift_guard():
     """漂移守衛:pre-commit+post-commit 的豁免清單都必須涵蓋 _VENDORED_TOOLKIT 每項+兩夾+源守門
-    (post-commit 是 bypass 記帳端,漏對齊=例行 update 被記假 bypass 灌水;2026-07-25 實測踩過)。"""
+    (post-commit 是 bypass 記帳端,漏對齊=例行 update 被記假 bypass 灌水;2026-07-25 實測踩過)。
+    [終審 fix I3]同源第三份清單:delguard 的 _DELGUARD_EXCLUDE_DIRS/lockfile 排除規則
+    也要對齊 pre-commit should_exclude,免得兩處各自漂。"""
     m = _load_lumos()
     hooks_dir = Path(GRAPHCTL).resolve().parent / "hooks"
     for hook in ("pre-commit", "post-commit"):
@@ -1624,6 +1626,20 @@ def t_precommit_whitelist_drift_guard():
         for d in ("scripts/hooks/", "scripts/templates/"):
             check(f"{hook} 漂移守衛: 豁免清單含 {d}*", f"{d}*" in txt, d)
         check(f"{hook} 漂移守衛: 含源 repo 守門", "skills/lumos-project-notes" in txt, hook)
+
+    # delguard 排除域對齊 pre-commit should_exclude(第三份同源清單)
+    precommit_txt = (hooks_dir / "pre-commit").read_text(encoding="utf-8")
+    case_line = [l for l in precommit_txt.splitlines() if "node_modules" in l and "case" not in l][0]
+    for d in m._DELGUARD_EXCLUDE_DIRS:
+        check(f"delguard 漂移守衛: 排除域 {d} 對齊 pre-commit should_exclude",
+              d.rstrip("/") in case_line, case_line)
+    lock_line = [l for l in precommit_txt.splitlines() if "package-lock.json" in l][0]
+    lumos_src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    for lf in m._DELGUARD_EXCLUDE_LOCKFILES:
+        check(f"delguard 漂移守衛: lockfile {lf} 見於 pre-commit lock 排除行",
+              lf in lock_line, lock_line)
+        check(f"delguard 漂移守衛: lockfile {lf} 見於 _delguard_parse_diff 源碼(scripts/lumos)",
+              lf in lumos_src, lf)
 
 
 # ── Check T dart profile:test('id')/testWidgets('id') 字串名錨+檔名錨 *_test.dart ──
@@ -9821,6 +9837,28 @@ def _mk_delguard_headcount_repo():
     return root, "docs/kg-knowledge"
 
 
+def _mk_delguard_capflood_repo():
+    """delguard 終審 fix I2 fixture:staged 刪除 45 個獨特符號(超 DELGUARD_TOKEN_CAP=40),
+    僅第 0 個(capTok0)在 vault 有命中——用來釘 cap 截斷後 dropped>0 且刷屏降級措辭。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-delg-cap-"))
+    sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    sp.run(["git", "-C", str(root), "config", "user.email", "t@t.t"], capture_output=True)
+    sp.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
+    gr = root / "docs" / "kg-knowledge"
+    (gr / "Systems").mkdir(parents=True)
+    (root / "app").mkdir()
+    calls = "\n".join(f"    capTok{i}()" for i in range(45))
+    (root / "app" / "Foo.kt").write_text(f"fun x() {{\n{calls}\n}}\n", encoding="utf-8")
+    (gr / "Systems" / "sys.md").write_text(
+        "---\ntype: system\n---\n# sys\n用到 capTok0 做事。\n", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(root), "commit", "-qm", "init"], capture_output=True)
+    (root / "app" / "Foo.kt").write_text("fun x() {\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "app/Foo.kt"], capture_output=True)
+    return root, "docs/kg-knowledge"
+
+
 def t_delguard():
     """[delguard Task 1]LINK_KEYS 常數＋子集守衛斷言:
     ①LINK_KEYS 常數存在且值正確
@@ -9933,12 +9971,36 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     # 內部錯誤 fail-open:env 注入測試鉤子
     r = dg("--staged", env={"LUMOS_DELGUARD_RAISE": "1"})
     check("delguard 內部錯誤 fail-open rc0+訊息", r.returncode == 0 and "內部錯誤" in r.stdout, r.stdout[:200])
-    # 效能 benchmark:<1s(254 檔級 vault 用本 repo 真 vault 跑,40 token)
+    # 效能 benchmark:<1s(254 檔級 vault 用本 repo 真 vault 跑,40 token;
+    # 一併連 _delguard_confidence 計時,合計仍要 <1s——單看 vault_scan 會漏掉 git grep 那段成本)
     import time as _t
     toks = [f"zzNoSuchTok{i}" for i in range(40)]
+    real_gr = str(Path(GRAPHCTL).parent.parent / "docs" / "lumos-toolchain-knowledge")
     t0 = _t.monotonic()
-    mod._delguard_vault_scan(toks, {}, str(Path(GRAPHCTL).parent.parent / "docs" / "lumos-toolchain-knowledge"))
-    check("delguard benchmark vault 掃 <1s", _t.monotonic() - t0 < 1.0, f"{_t.monotonic()-t0:.2f}s")
+    mod._delguard_confidence(toks, str(root), gr)
+    mod._delguard_vault_scan(toks, {}, real_gr)
+    check("delguard benchmark(confidence+vault 掃)<1s", _t.monotonic() - t0 < 1.0, f"{_t.monotonic()-t0:.2f}s")
+
+    # [終審 fix I1]subprocess timeout 契約:_delguard_confidence 傳極小 timeout 應拋例外(fail-open 前提)
+    ok = False
+    try:
+        mod._delguard_confidence(["x"], str(root), gr, timeout=0.000001)
+    except Exception:
+        ok = True
+    check("delguard _delguard_confidence timeout= 逾時拋例外", ok, "no exception raised")
+
+    # [終審 fix I2]刷屏降級:45 個獨特被刪符號(超 cap=40)→ --json dropped>0;文字模式印「超 cap」統計行、
+    # 逐條列出不超過 top-10
+    root_cap, _gr_cap = _mk_delguard_capflood_repo()
+    r_cap = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--json"],
+                   capture_output=True, text=True, cwd=str(root_cap))
+    data_cap = json.loads(r_cap.stdout.strip().splitlines()[-1])
+    check("delguard --json cap 截斷後 dropped>0", data_cap.get("dropped", 0) > 0, str(data_cap)[:200])
+    r_cap_txt = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"],
+                        capture_output=True, text=True, cwd=str(root_cap))
+    check("delguard 文字模式含「超 cap」統計行", "超 cap" in r_cap_txt.stdout, r_cap_txt.stdout[:300])
+    n_hit_lines = sum(1 for ln in r_cap_txt.stdout.splitlines() if ln.strip().startswith("["))
+    check("delguard 逐條列出不超過 top-10", n_hit_lines <= mod.DELGUARD_TOP_N, r_cap_txt.stdout[:500])
 
     # [delguard fix r1] --json 降級契約:超時/內部錯誤兩條路徑都要印合法單行 JSON+degraded=True(rc0)
     r = dg("--staged", "--json", env={"LUMOS_DELGUARD_DEADLINE": "0"})
