@@ -260,7 +260,7 @@ def _delguard_vault_scan(tokens: list, conf: dict, graph_root_abs: str) -> list:
        排序: (conf!=high, folder!="Systems", node, line_no)——高信心先、Systems 先。"""
 ```
 
-- [ ] Step 1 失敗測試（沿用 Task 3 fixture；先 `git -C root add -A` 前的 vault 檔已就位）：
+- [x] Step 1 失敗測試（沿用 Task 3 fixture；先 `git -C root add -A` 前的 vault 檔已就位）：
 
 ```python
     hits = mod._delguard_vault_scan(["refreshPaywayCredentials", "helperStillUsed"], conf,
@@ -277,8 +277,8 @@ def _delguard_vault_scan(tokens: list, conf: dict, graph_root_abs: str) -> list:
     check("delguard \\b 詞界不誤配 V2", not any(h["node"] == "Systems/V2.md" for h in hits2), str(hits2))
 ```
 
-- [ ] Step 2 跑紅
-- [ ] Step 3 實作：
+- [x] Step 2 跑紅
+- [x] Step 3 實作：
 
 ```python
 def _delguard_vault_scan(tokens, conf, graph_root_abs):
@@ -310,8 +310,8 @@ def _delguard_vault_scan(tokens, conf, graph_root_abs):
     return hits
 ```
 
-- [ ] Step 4 跑綠
-- [ ] Step 5 commit＋勾 Task4 `feat(delguard): vault 三件套掃描+型別排序`
+- [x] Step 4 跑綠
+- [x] Step 5 commit＋勾 Task4 `feat(delguard): vault 三件套掃描+型別排序`
 
 ### Task 5：`_delguard_purelink` — S2 純連結 diff 判定（保守朝不報）
 

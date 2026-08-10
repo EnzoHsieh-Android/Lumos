@@ -9858,6 +9858,20 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     conf2 = mod._delguard_confidence(["refreshPaywayCredentials"], str(root), gr)
     check("delguard 快照=index 不被 worktree 救回", conf2.get("refreshPaywayCredentials") == "high", str(conf2))
 
+    # [delguard Task 4]_delguard_vault_scan:三件套 alternation 掃 vault＋型別排序
+    hits = mod._delguard_vault_scan(["refreshPaywayCredentials", "helperStillUsed"], conf,
+                                    str(root / gr))
+    check("delguard vault 命中 Systems 原句", any(h["node"] == "Systems/憑證.md" and "撈一次" in h["line"] for h in hits), str(hits))
+    check("delguard CJK 緊貼命中(re.ASCII)", any("還在講" in h["line"] and "helperStillUsed" in h["tokens"] for h in hits), str(hits))
+    check("delguard Projects 也報(型別只排序不壓低)", any(h["folder"] == "Projects" for h in hits), str(hits))
+    sys_idx = min(i for i, h in enumerate(hits) if h["folder"] == "Systems")
+    proj_idx = min(i for i, h in enumerate(hits) if h["folder"] == "Projects")
+    check("delguard Systems 排前", sys_idx < proj_idx, str([(h["folder"], h["conf"]) for h in hits]))
+    # 詞界:蓋 refreshPaywayCredentialsV2 不誤配
+    (root / gr / "Systems" / "V2.md").write_text("---\ntype: system\n---\n用 refreshPaywayCredentialsV2 取代。\n", encoding="utf-8")
+    hits2 = mod._delguard_vault_scan(["refreshPaywayCredentials"], conf, str(root / gr))
+    check("delguard \\b 詞界不誤配 V2", not any(h["node"] == "Systems/V2.md" for h in hits2), str(hits2))
+
 
 def t_canary_record_persist():
     """[S1] record 落盤自驗:印絕對路徑/token 讀回相符/readback 失敗 rc2 不印 ✓。"""

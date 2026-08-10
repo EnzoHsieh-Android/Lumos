@@ -10487,6 +10487,38 @@ def _delguard_confidence(tokens, repo_root, graph_root):
     return {t: ("low" if t in alive else "high") for t in tokens}
 
 
+def _delguard_vault_scan(tokens, conf, graph_root_abs):
+    """回 [{"node": "Systems/憑證.md", "folder": "Systems", "line_no": int,
+            "line": str(strip,截 160 字), "tokens": [..], "conf": "high"|"low"}...]
+       排序: (conf!=high, folder!="Systems", node, line_no)——高信心先、Systems 先。"""
+    import re, os
+    if not tokens:
+        return []
+    rx = re.compile(r"\b(?:" + "|".join(map(re.escape, tokens)) + r")\b", re.ASCII)
+    per = {t: re.compile(r"\b" + re.escape(t) + r"\b", re.ASCII) for t in tokens}
+    hits = []
+    for dirpath, _dirs, files in os.walk(graph_root_abs):
+        for fn in files:
+            if not fn.endswith(".md"):
+                continue
+            fp = os.path.join(dirpath, fn)
+            rel = os.path.relpath(fp, graph_root_abs)
+            folder = rel.split(os.sep, 1)[0]
+            try:
+                text = open(fp, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            for i, line in enumerate(text.splitlines(), 1):
+                if not rx.search(line):
+                    continue
+                ts = [t for t, p in per.items() if p.search(line)]
+                hits.append({"node": rel.replace(os.sep, "/"), "folder": folder, "line_no": i,
+                             "line": line.strip()[:160], "tokens": ts,
+                             "conf": "high" if any(conf.get(t) == "high" for t in ts) else "low"})
+    hits.sort(key=lambda h: (h["conf"] != "high", h["folder"] != "Systems", h["node"], h["line_no"]))
+    return hits
+
+
 def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。
