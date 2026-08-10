@@ -485,7 +485,7 @@ argparse 註冊（cochange 註冊區旁；dispatch 分支照 cochange 樣式）�
 **Files:** Modify `scripts/hooks/pre-commit`（Gate CC 區塊之後、Gate 1 之前）；Test `scripts/test_lumos.py`
 **Interfaces / Consumes:** Task 6 的 CLI；hook 既有變數 `CC_PY`、`REPO_ROOT`。
 
-- [ ] Step 1 失敗測試：
+- [x] Step 1 失敗測試：
 
 ```python
     hook = Path(GRAPHCTL).parent / "hooks" / "pre-commit"
@@ -497,8 +497,8 @@ argparse 註冊（cochange 註冊區旁；dispatch 分支照 cochange 樣式）�
         check(f"delguard 排除域對齊 pre-commit({d})", d.rstrip("/") in case_line, case_line)
 ```
 
-- [ ] Step 2 跑紅
-- [ ] Step 3 pre-commit 加區塊（Gate CC 的 `fi` 之後）：
+- [x] Step 2 跑紅
+- [x] Step 3 pre-commit 加區塊（Gate CC 的 `fi` 之後）：
 
 ```bash
 # Gate DG: code 側刪除傳播守衛 (advisory;spec=Projects/code側刪除傳播守衛_計劃)
@@ -508,8 +508,8 @@ if [[ -n "${CC_PY:-}" ]]; then
 fi
 ```
 
-- [ ] Step 4 跑綠＋手動煙霧：在 `_mk_delguard_repo` 產的 repo 裝 hook 實跑一次 commit，肉眼確認警告出現且 commit 成功（結果貼 PR/commit message）
-- [ ] Step 5 commit＋勾 Task7 `feat(delguard): pre-commit Gate DG(advisory)+排除域對齊斷言`
+- [x] Step 4 跑綠＋手動煙霧：在 `_mk_delguard_repo` 產的 repo 裝 hook 實跑一次 commit，肉眼確認警告出現且 commit 成功（結果貼 PR/commit message）
+- [x] Step 5 commit＋勾 Task7 `feat(delguard): pre-commit Gate DG(advisory)+排除域對齊斷言`
 
 ### Task 8：S3 問句進 skill 退場段＋圖譜收尾
 

@@ -9961,6 +9961,16 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     check("delguard 標頭計數=命中符號數(1個,非刪除總數2個)",
           "1 個被刪符號" in r.stdout and "2 個被刪符號" not in r.stdout, r.stdout[:300])
 
+    # [delguard Task 7]pre-commit Gate DG 掛載＋排除域對齊斷言
+    hook = Path(GRAPHCTL).parent / "hooks" / "pre-commit"
+    ht = hook.read_text(encoding="utf-8")
+    cond = "delguard --staged" in ht and "|| true" in ht.split("delguard --staged")[1][:40]
+    check("delguard Gate DG 已掛 pre-commit", cond, "gate missing")
+    # 排除域對齊:python 排除清單每一項都出現在 should_exclude 的 case 行裡
+    case_line = [l for l in ht.splitlines() if "node_modules" in l and "case" not in l][0]
+    for d in mod._DELGUARD_EXCLUDE_DIRS:
+        check(f"delguard 排除域對齊 pre-commit({d})", d.rstrip("/") in case_line, case_line)
+
 
 def t_canary_record_persist():
     """[S1] record 落盤自驗:印絕對路徑/token 讀回相符/readback 失敗 rc2 不印 ✓。"""
