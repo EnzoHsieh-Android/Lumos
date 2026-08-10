@@ -186,6 +186,13 @@ lumos append Systems/<模組> verified_by "[[Verification/<日期>_xxx]]"
 lumos stale --match "<變更關鍵字>"
 ```
 
+## 退場自問（code 有「拿掉/反轉」的改動時，收工前跑一遍）
+
+1. 這次改動**拿掉或反轉**了什麼？（函式/呼叫點/欄位/條件/預設值——過期幾乎都來自拿掉，不是新增）
+2. 把那些名字逐個丟 `lumos search <名> --code`（--code 必帶：search 預設排除 code block；另注意預設排除 superseded）。哪些節點內文在講它們？貼原句。
+3. 逐句判：改動後這句還成立嗎？成立→一句話為什麼；不成立→**現在改掉或標作廢**。
+⚠ 新增一條 verified_by/related 連結**不算同步**。有裝 delguard（pre-commit Gate DG）的 repo，S1 命中時會機械吐這三問；沒裝的 repo 靠這段自律。
+
 ## 資料夾 / 位置
 
 `docs/{slug}-knowledge/{Projects,Systems,Issues,Verification,MOC}`(隨 git 版控)。某主題筆記 >5 份 → 建/更新 MOC 索引。

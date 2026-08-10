@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-10
-updated: 2026-08-10
+updated: 2026-08-11
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/governance
 related:
   - "[[code側刪除傳播守衛_計劃]]"
@@ -16,6 +16,8 @@ summary: |-
   KEY:★每個 commit 都動 scripts/lumos(code)→pre-commit Gate 3 要求同 commit 帶圖譜 .md=勾本節點該 task checkbox★
   KEY:先驗值(replay 校準後以數據取代)=token cap 40/輸出 top-10/deadline 2.0s(env LUMOS_DELGUARD_DEADLINE 可覆寫,測試靠它注入超時)
   TEST:python3 scripts/test_lumos.py 全跑;新增 t_delguard()+_mk_delguard_repo() fixture,斷言風格沿 check(name,cond,detail)
+verified_by:
+  - "[[Verification/2026-08-11_delguard落地]]"
 ---
 # code側刪除傳播守衛_實作計畫
 
@@ -516,7 +518,7 @@ fi
 **Files:** Modify `skills/lumos-project-notes/SKILL.md`（「常見工作流」節後加退場段）；Modify spec 節點＋本節點（圖譜收尾）
 **Interfaces / Consumes:** 無 code。此 task 兌現 decision「advisory 版必須配 S3」的跨專案那一半（機械吐問句已由 Task 6 做掉）。
 
-- [ ] Step 1 在 `skills/lumos-project-notes/SKILL.md` 的「常見工作流」節之後加：
+- [x] Step 1 在 `skills/lumos-project-notes/SKILL.md` 的「常見工作流」節之後加：
 
 ```markdown
 ## 退場自問（code 有「拿掉/反轉」的改動時，收工前跑一遍）
@@ -527,9 +529,9 @@ fi
 ⚠ 新增一條 verified_by/related 連結**不算同步**。有裝 delguard（pre-commit Gate DG）的 repo，S1 命中時會機械吐這三問；沒裝的 repo 靠這段自律。
 ```
 
-- [ ] Step 2 圖譜收尾（同一 commit）：spec 節點 `lumos set Projects/code側刪除傳播守衛_計劃 status doing` 改 `done` 前先確認：待辦剩餘項（誤報帳格式、存量另案、v2 死碼判定）搬清楚＝留待辦不擋 done？——**不改 done**，改 `lumos set ... updated <日期>`＋body 待辦勾 S3 落點項、註「已裁定 skill 退場段（2026-08-10 Enzo）」；本實作計畫節點 `status` → `done`；建 `Verification/<日期>_delguard落地`（`plan_refs` 回指 spec＋本節點，記 t_delguard 全綠證據），`lumos append` 進兩節點 `verified_by`。
-- [ ] Step 3 `lumos lint` 兩節點＋`lumos doctor` 全綠
-- [ ] Step 4 commit＋勾 Task8 `feat(delguard): S3 問句入 skill 退場段+圖譜收尾`
+- [x] Step 2 圖譜收尾（同一 commit）：spec 節點 `lumos set Projects/code側刪除傳播守衛_計劃 status doing` 改 `done` 前先確認：待辦剩餘項（誤報帳格式、存量另案、v2 死碼判定）搬清楚＝留待辦不擋 done？——**不改 done**，改 `lumos set ... updated <日期>`＋body 待辦勾 S3 落點項、註「已裁定 skill 退場段（2026-08-10 Enzo）」；本實作計畫節點 `status` → `done`；建 `Verification/<日期>_delguard落地`（`plan_refs` 回指 spec＋本節點，記 t_delguard 全綠證據），`lumos append` 進兩節點 `verified_by`。
+- [x] Step 3 `lumos lint` 兩節點＋`lumos doctor` 全綠
+- [x] Step 4 commit＋勾 Task8 `feat(delguard): S3 問句入 skill 退場段+圖譜收尾`
 
 ---
 
