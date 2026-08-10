@@ -55,7 +55,7 @@ summary: |-
 **Files:** Modify `scripts/lumos`（`LIST_KEYS` 定義行正下方）；Test `scripts/test_lumos.py`
 **Interfaces / Produces:** `LINK_KEYS = ("verified_by", "plan_refs", "related", "core_refs")`（tuple，後續 Task 5 直接引用）
 
-- [ ] Step 1 寫失敗測試（加進 test_lumos.py，新函式 `t_delguard()` 起手；並把 `t_delguard` 註冊進檔尾的測試清單——先 grep `t_cochange` 在清單裡怎麼掛、照抄）：
+- [x] Step 1 寫失敗測試（加進 test_lumos.py，新函式 `t_delguard()` 起手；並把 `t_delguard` 註冊進檔尾的測試清單——先 grep `t_cochange` 在清單裡怎麼掛、照抄）：
 
 ```python
 def t_delguard():
@@ -70,15 +70,15 @@ def t_delguard():
     check("delguard 子集守衛 LINK_KEYS ⊆ LIST_KEYS∪{core_refs}", keys <= (listk | {"core_refs"}), f"{keys} vs {listk}")
 ```
 
-- [ ] Step 2 跑 `python3 scripts/test_lumos.py` 確認 t_delguard 三條紅（LINK_KEYS not found）
-- [ ] Step 3 在 `scripts/lumos` 的 `LIST_KEYS` 行正下方加：
+- [x] Step 2 跑 `python3 scripts/test_lumos.py` 確認 t_delguard 三條紅（LINK_KEYS not found）
+- [x] Step 3 在 `scripts/lumos` 的 `LIST_KEYS` 行正下方加：
 
 ```python
 LINK_KEYS = ("verified_by", "plan_refs", "related", "core_refs")  # S2「純連結欄位」子集(≠LIST_KEYS:那是 append 白名單,pitfall_when=content-trigger 不算連結);spec=Projects/code側刪除傳播守衛_計劃
 ```
 
-- [ ] Step 4 跑測試確認綠
-- [ ] Step 5 commit（staged：scripts/lumos＋test_lumos.py＋本節點勾 Task1）`feat(delguard): LINK_KEYS 純連結子集+守衛斷言`
+- [x] Step 4 跑測試確認綠
+- [x] Step 5 commit（staged：scripts/lumos＋test_lumos.py＋本節點勾 Task1）`feat(delguard): LINK_KEYS 純連結子集+守衛斷言`
 
 ### Task 2：`_delguard_parse_diff` — 從 staged diff 抽被刪識別字＋vault 檔 diff
 

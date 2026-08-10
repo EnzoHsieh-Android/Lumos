@@ -9770,6 +9770,24 @@ def t_cochange():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def t_delguard():
+    """[delguard Task 1]LINK_KEYS 常數＋子集守衛斷言:
+    ①LINK_KEYS 常數存在且值正確
+    ②子集守衛:LINK_KEYS ⊆ LIST_KEYS ∪ {core_refs}
+    翻紅釘:刪 LINK_KEYS 常數 → ①翻紅;LINK_KEYS 值偏離 → ①翻紅;
+           破壞子集關係 → ②翻紅。"""
+    print("t_delguard")
+    import re as _re
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    m = _re.search(r"^LINK_KEYS\s*=\s*\(([^)]*)\)", src, _re.M)
+    check("delguard LINK_KEYS 常數存在", m is not None, "LINK_KEYS not found")
+    keys = set(_re.findall(r'"(\w+)"', m.group(1))) if m else set()
+    check("delguard LINK_KEYS 值正確", keys == {"verified_by", "plan_refs", "related", "core_refs"}, str(keys))
+    lm = _re.search(r"^LIST_KEYS\s*=\s*\{([^}]*)\}", src, _re.M)
+    listk = set(_re.findall(r'"(\w+)"', lm.group(1))) if lm else set()
+    check("delguard 子集守衛 LINK_KEYS ⊆ LIST_KEYS∪{core_refs}", keys <= (listk | {"core_refs"}), f"{keys} vs {listk}")
+
+
 def t_canary_record_persist():
     """[S1] record 落盤自驗:印絕對路徑/token 讀回相符/readback 失敗 rc2 不印 ✓。"""
     import json as _json
