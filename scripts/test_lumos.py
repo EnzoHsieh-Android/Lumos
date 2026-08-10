@@ -9798,6 +9798,29 @@ def _mk_delguard_repo():
     return root, "docs/kg-knowledge"
 
 
+def _mk_delguard_headcount_repo():
+    """delguard fix r1 補測試 fixture:staged 刪兩個符號,僅一個在 vault 有命中——
+    用來釘標頭行計數=命中符號數(distinct),不是被刪符號總數。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-delg-hc-"))
+    sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    sp.run(["git", "-C", str(root), "config", "user.email", "t@t.t"], capture_output=True)
+    sp.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
+    gr = root / "docs" / "kg-knowledge"
+    (gr / "Systems").mkdir(parents=True)
+    (root / "app").mkdir()
+    (root / "app" / "Foo.kt").write_text(
+        "fun x() {\n    onlyMentionedHelper()\n    neverMentionedHelper()\n}\n", encoding="utf-8")
+    (gr / "Systems" / "sys.md").write_text(
+        "---\ntype: system\n---\n# sys\n用到 onlyMentionedHelper 做事。\n", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(root), "commit", "-qm", "init"], capture_output=True)
+    # staged 刪除:兩個符號都拿掉,但只有 onlyMentionedHelper 在 vault 有提及
+    (root / "app" / "Foo.kt").write_text("fun x() {\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "app/Foo.kt"], capture_output=True)
+    return root, "docs/kg-knowledge"
+
+
 def t_delguard():
     """[delguard Task 1]LINK_KEYS 常數＋子集守衛斷言:
     ①LINK_KEYS 常數存在且值正確
@@ -9916,6 +9939,27 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     t0 = _t.monotonic()
     mod._delguard_vault_scan(toks, {}, str(Path(GRAPHCTL).parent.parent / "docs" / "lumos-toolchain-knowledge"))
     check("delguard benchmark vault 掃 <1s", _t.monotonic() - t0 < 1.0, f"{_t.monotonic()-t0:.2f}s")
+
+    # [delguard fix r1] --json 降級契約:超時/內部錯誤兩條路徑都要印合法單行 JSON+degraded=True(rc0)
+    r = dg("--staged", "--json", env={"LUMOS_DELGUARD_DEADLINE": "0"})
+    check("delguard 超時降級 --json rc0", r.returncode == 0, str(r.returncode))
+    dj = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard 超時降級 --json degraded=True", dj.get("degraded") is True, str(dj))
+    check("delguard 超時降級 --json 形狀完整(tokens/hits/fake_sync)",
+          isinstance(dj.get("tokens"), int) and dj.get("hits") == [] and dj.get("fake_sync") == [], str(dj))
+    r = dg("--staged", "--json", env={"LUMOS_DELGUARD_RAISE": "1"})
+    check("delguard 內部錯誤 --json rc0", r.returncode == 0, str(r.returncode))
+    dj = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard 內部錯誤 --json degraded=True", dj.get("degraded") is True, str(dj))
+    check("delguard 內部錯誤 --json 形狀完整(tokens/hits/fake_sync)",
+          isinstance(dj.get("tokens"), int) and dj.get("hits") == [] and dj.get("fake_sync") == [], str(dj))
+
+    # [delguard fix r1] 標頭行計數=實際命中的 distinct 符號數,不是被刪符號總數
+    root_hc, _gr_hc = _mk_delguard_headcount_repo()
+    r = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"],
+               capture_output=True, text=True, cwd=str(root_hc))
+    check("delguard 標頭計數=命中符號數(1個,非刪除總數2個)",
+          "1 個被刪符號" in r.stdout and "2 個被刪符號" not in r.stdout, r.stdout[:300])
 
 
 def t_canary_record_persist():

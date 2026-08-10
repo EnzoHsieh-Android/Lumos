@@ -10535,29 +10535,25 @@ def _delguard_purelink(diff_lines):
     return all(item_re.match(c) or key_re.match(c) for c in changed)
 
 
-def _git_root():
-    """cwd 逐層向上找 .git,回 str 路徑;找不到回 None
-    (同 _cochange_repo_root/_anchor_repo_root 的 cwd-walk 慣例,無需另建同名 helper)。"""
-    p = Path.cwd()
-    for cand in (p, *p.parents):
-        if (cand / ".git").exists():
-            return str(cand)
-    return None
-
-
 def cmd_delguard_check(repo=None, as_json=False):
     """code 側刪除傳播守衛(advisory):staged diff 抽被刪 token → 兩檔信心 → grep vault 指名過期原句。
     恆 rc0(內部錯誤/超時皆 fail-open 放行;唯一輸出差異是訊息)。
-    vault-free repo(找不到 graph root)→ 靜默 rc0,不掃。"""
+    vault-free repo(找不到 graph root)→ 靜默 rc0,不掃。
+    --json 降級契約(超時/內部錯誤皆同款):單行合法 JSON
+    {"tokens": int, "hits": [], "fake_sync": [], "degraded": true, "reason": "timeout"|"error"},rc0。"""
     import json, os, subprocess, time
     t0 = time.monotonic()
     deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "2.0"))
     def _over():
         return time.monotonic() - t0 > deadline
+    def _degraded_json(reason, n_tokens):
+        print(json.dumps({"tokens": n_tokens, "hits": [], "fake_sync": [],
+                          "degraded": True, "reason": reason}, ensure_ascii=False))
+    tokens = []
     try:
         if os.environ.get("LUMOS_DELGUARD_RAISE"):
             raise RuntimeError("test hook")
-        root = repo or _git_root() or os.getcwd()
+        root = str(_cochange_repo_root(repo) or os.getcwd())
         gr = find_vault(Path(root))  # 既有 vault 偵測 helper;找不到→靜默 rc0(vault-free repo 不掃)
         if not gr:
             return 0
@@ -10567,10 +10563,18 @@ def cmd_delguard_check(repo=None, as_json=False):
         tokens = parsed["tokens"][:DELGUARD_TOKEN_CAP]
         dropped = len(parsed["tokens"]) - len(tokens)
         if _over():
-            print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整"); return 0
+            if as_json:
+                _degraded_json("timeout", len(tokens))
+            else:
+                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
+            return 0
         conf = _delguard_confidence(tokens, root, os.path.relpath(gr, root).replace(os.sep, "/"))
         if _over():
-            print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整"); return 0
+            if as_json:
+                _degraded_json("timeout", len(tokens))
+            else:
+                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
+            return 0
         hits = _delguard_vault_scan(tokens, conf, gr)
         fake = []
         for path, dl in parsed["vault_diffs"].items():
@@ -10584,7 +10588,8 @@ def cmd_delguard_check(repo=None, as_json=False):
         if not hits:
             return 0
         hi = sum(1 for h in hits if h["conf"] == "high")
-        print(f"⚠ delguard: code 側刪除傳播——{len(tokens)} 個被刪符號在圖譜仍被提及(高信心 {hi}/低信心 {len(hits)-hi})")
+        n_hit_tokens = len({t for h in hits for t in h["tokens"]})
+        print(f"⚠ delguard: code 側刪除傳播——{n_hit_tokens} 個被刪符號在圖譜仍被提及(高信心 {hi}/低信心 {len(hits)-hi})")
         for h in hits[:DELGUARD_TOP_N]:
             print(f"  [{h['conf']}] {h['node']}:{h['line_no']} 「{h['line']}」 ← {','.join(h['tokens'])}")
         rest = len(hits) - min(len(hits), DELGUARD_TOP_N)
@@ -10596,7 +10601,10 @@ def cmd_delguard_check(repo=None, as_json=False):
         print("  3) 還成立→一句話為什麼;不成立→現在改掉或標作廢。新增 verified_by/related 連結不算同步。")
         return 0
     except Exception as e:
-        print(f"delguard: 內部錯誤({e.__class__.__name__}),放行")
+        if as_json:
+            _degraded_json("error", len(tokens))
+        else:
+            print(f"delguard: 內部錯誤({e.__class__.__name__}),放行")
         return 0
 
 

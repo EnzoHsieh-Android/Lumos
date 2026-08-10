@@ -474,6 +474,12 @@ argparse 註冊（cochange 註冊區旁；dispatch 分支照 cochange 樣式）�
 - [x] Step 4 跑綠（全量 test_lumos.py，不許紅其他測試）
 - [x] Step 5 commit＋勾 Task6 `feat(delguard): 子命令組裝——deadline fail-open+top-10 輸出+S3 問句`
 
+> fix r1：--json 降級契約補齊（超時/內部錯誤兩條路徑皆輸出合法單行 JSON
+> `{"tokens","hits":[],"fake_sync":[],"degraded":true,"reason":"timeout"|"error"}`，rc0；成功路徑
+> `degraded` 已可觀察為 False，符合 Global Constraints「--json 含 tokens/hits/fake_sync/degraded」）、
+> 標頭計數改為實際命中的 distinct 符號數（`len({t for h in hits for t in h["tokens"]})`，不再是被
+> 刪符號原始總數）、`_git_root()` 刪除改用既有 `_cochange_repo_root(repo) or os.getcwd()`。
+
 ### Task 7：pre-commit Gate DG 掛載＋排除域對齊斷言
 
 **Files:** Modify `scripts/hooks/pre-commit`（Gate CC 區塊之後、Gate 1 之前）；Test `scripts/test_lumos.py`
