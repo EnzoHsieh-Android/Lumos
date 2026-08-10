@@ -3,6 +3,7 @@ type: project
 status: todo
 created: 2026-08-10
 updated: 2026-08-10
+self_audit: sonnet/2026-08-10
 related:
   - "[[關係層傳播守衛_計劃]]"
   - "[[cochange守衛_計劃]]"
