@@ -9872,6 +9872,14 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     hits2 = mod._delguard_vault_scan(["refreshPaywayCredentials"], conf, str(root / gr))
     check("delguard \\b 詞界不誤配 V2", not any(h["node"] == "Systems/V2.md" for h in hits2), str(hits2))
 
+    # [delguard Task 5]_delguard_purelink:S2 純連結 diff 判定(保守朝不報)
+    pl = mod._delguard_purelink(['+  - "[[Verification/2026-08-03_x]]"'])
+    check("delguard S2 純掛連結=True", pl is True, str(pl))
+    check("delguard S2 動 body=False", mod._delguard_purelink(['+  - "[[V/x]]"', "+登入不再撈憑證"]) is False, "")
+    check("delguard S2 pitfall_when 不算連結", mod._delguard_purelink(["+pitfall_when:", '+  - "撈憑證"']) is False, "")
+    check("delguard S2 鍵頭+列表項=True", mod._delguard_purelink(["+verified_by:", '+  - "[[V/x]]"']) is True, "")
+    check("delguard S2 空 diff=False(無變更不算純連結)", mod._delguard_purelink([]) is False, "")
+
 
 def t_canary_record_persist():
     """[S1] record 落盤自驗:印絕對路徑/token 讀回相符/readback 失敗 rc2 不印 ✓。"""

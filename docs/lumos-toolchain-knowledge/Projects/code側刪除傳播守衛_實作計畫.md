@@ -324,7 +324,7 @@ def _delguard_purelink(diff_lines: list) -> bool:
        其他任何 ± 行(含 pitfall_when:/tags: 鍵頭、body 文字、YAML 重排)→ False。"""
 ```
 
-- [ ] Step 1 失敗測試：
+- [x] Step 1 失敗測試：
 
 ```python
     pl = mod._delguard_purelink(['+  - "[[Verification/2026-08-03_x]]"'])
@@ -335,8 +335,8 @@ def _delguard_purelink(diff_lines: list) -> bool:
     check("delguard S2 空 diff=False(無變更不算純連結)", mod._delguard_purelink([]) is False, "")
 ```
 
-- [ ] Step 2 跑紅
-- [ ] Step 3 實作：
+- [x] Step 2 跑紅
+- [x] Step 3 實作：
 
 ```python
 def _delguard_purelink(diff_lines):
@@ -350,8 +350,8 @@ def _delguard_purelink(diff_lines):
     return all(item_re.match(c) or key_re.match(c) for c in changed)
 ```
 
-- [ ] Step 4 跑綠
-- [ ] Step 5 commit＋勾 Task5 `feat(delguard): S2 純連結 diff 判定(LINK_KEYS,保守朝不報)`
+- [x] Step 4 跑綠
+- [x] Step 5 commit＋勾 Task5 `feat(delguard): S2 純連結 diff 判定(LINK_KEYS,保守朝不報)`
 
 ### Task 6：`cmd_delguard_check` 組裝＋子命令註冊＋deadline/fail-open＋輸出
 
