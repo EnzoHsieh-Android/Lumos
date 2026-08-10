@@ -91,7 +91,7 @@ def _delguard_parse_diff(diff_text: str, graph_root: str) -> dict:
 ```
 規則（全抄 spec）：只吃 `-` 行（跳過 `---` 檔頭、`+++`、hunk 頭、binary 檔段）；token regex `[A-Za-z_][A-Za-z0-9_]{2,}`；**出現在同一份 diff 任何 `+` 行的 token 剔除**（檔內改名/搬行＝舊名即刻回收，降誤報）；stopword 表剔除（`if else for while return import class def val var fun void public private static final new this true false null let const function`）；vault（`graph_root` 前綴）與排除路徑（`node_modules/ bin/ obj/ dist/ build/ __pycache__/ .git/`）的檔案不抽 token，vault .md 的 diff 行另收進 `vault_diffs`。
 
-- [ ] Step 1 失敗測試（t_delguard 內續加；直接餵手工 diff 字串，不必 git）：
+- [x] Step 1 失敗測試（t_delguard 內續加；直接餵手工 diff 字串，不必 git）：
 
 ```python
     from importlib import machinery, util as _u
@@ -122,8 +122,10 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
 
 （注意：`renamedHelper` 案例——`-` 行有 `renamedHelper`、`+` 行是 `renamedHelperV2`，token 字面不同不會被回收，這是**已知低信心誤報源**（spec 明文 v1 不解）；測試斷言放寬為「或 V2 在」以免釘死尚未承諾的行為。真正要釘的回收案例＝同 token 在 `+` 行原樣出現。若要加嚴，補一組 `-foo()`/`+foo()` 的搬行 diff 斷言 `"foo" not in tokens`。）
 
-- [ ] Step 2 跑紅（AttributeError: no `_delguard_parse_diff`）
-- [ ] Step 3 實作（`cmd_cochange_check` 後方）：
+**實作偏差記錄（Task 2 執行時發現並修正）**：上段「或 V2 在」放寬斷言經實測**結構性恆假**——`tokens` 依 spec 只收 `-` 行，`renamedHelperV2` 只出現在 `+` 行，永遠不可能進 `tokens`；而 spec 又明文只回收「字面相同」的 token，`renamedHelper`≠`renamedHelperV2` 字面不同不得回收。兩者相加，該斷言對任何合規實作都恆假（非本實作特有 bug）。已將 `scripts/test_lumos.py` 內對應斷言改測兩個真正該釘的行為：①同字面（`keep` 同時原樣出現在 `-`/`+` 行）→ 回收剔除；②不同字面改名（`renamedHelper`→`renamedHelperV2`）→ 已知低信心誤報源，仍留在 `tokens`。實作（`_delguard_parse_diff` 本體、`_DELGUARD_STOP`、`_DELGUARD_EXCLUDE_DIRS`）維持逐字照抄，未動。詳見 task-2-report.md。
+
+- [x] Step 2 跑紅（AttributeError: no `_delguard_parse_diff`）
+- [x] Step 3 實作（`cmd_cochange_check` 後方）：
 
 ```python
 _DELGUARD_STOP = frozenset("if else for while return import class def val var fun void public private static final new this true false null let const function".split())
@@ -164,8 +166,8 @@ def _delguard_parse_diff(diff_text, graph_root):
     return {"tokens": tokens, "vault_diffs": vault_diffs}
 ```
 
-- [ ] Step 4 跑綠
-- [ ] Step 5 commit＋勾 Task2 `feat(delguard): staged diff 解析——被刪 token 抽取+vault diff 分流`
+- [x] Step 4 跑綠
+- [x] Step 5 commit＋勾 Task2 `feat(delguard): staged diff 解析——被刪 token 抽取+vault diff 分流`
 
 ### Task 3：`_delguard_confidence` — staged-index 兩檔信心（單次 git grep）
 

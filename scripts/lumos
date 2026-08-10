@@ -10414,6 +10414,52 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
     return 0
 
 
+_DELGUARD_STOP = frozenset("if else for while return import class def val var fun void public private static final new this true false null let const function".split())
+_DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/")
+
+
+def _delguard_parse_diff(diff_text, graph_root):
+    """從 staged diff 抽被刪識別字(token)＋vault(graph_root 下 .md)的 +/- 行分流。
+    規則:只吃 `-` 行(跳過 ---/+++/hunk 頭/binary 檔段);token regex [A-Za-z_][A-Za-z0-9_]{2,};
+    出現在同一份 diff 任何 `+` 行的 token 剔除(檔內改名/搬行即刻回收,降誤報);stopword 表剔除;
+    vault 與排除路徑(node_modules/ bin/ obj/ dist/ build/ __pycache__/ .git/)的檔案不抽 token,
+    vault .md 的 diff 行另收進 vault_diffs 供 S2 純連結欄位判定用。
+    回 {"tokens": [str...]  # 依出現序去重,cap 前不截
+        ,"vault_diffs": {path: [line...]}}"""
+    import re
+    tok_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+    tokens, seen, added = [], set(), set()
+    vault_diffs, cur, is_vault, is_excl, in_binary = {}, None, False, False, False
+    lines = diff_text.splitlines()
+    for ln in lines:  # 先收全 diff 的 + 行 token(回收表)
+        if ln.startswith("+") and not ln.startswith("+++"):
+            added.update(tok_re.findall(ln))
+    for ln in lines:
+        if ln.startswith("diff --git"):
+            m = re.search(r" b/(.+)$", ln)
+            cur = m.group(1) if m else None
+            is_vault = bool(cur) and cur.startswith(graph_root) and cur.endswith(".md")
+            is_excl = bool(cur) and any(seg in cur for seg in _DELGUARD_EXCLUDE_DIRS)
+            in_binary = False
+            continue
+        if ln.startswith("Binary files"):
+            in_binary = True
+            continue
+        if in_binary or cur is None:
+            continue
+        if is_vault and (ln.startswith("+") or ln.startswith("-")) and not ln.startswith(("+++", "---")):
+            vault_diffs.setdefault(cur, []).append(ln)
+            continue
+        if is_vault or is_excl:
+            continue
+        if ln.startswith("-") and not ln.startswith("---"):
+            for t in tok_re.findall(ln):
+                if t in _DELGUARD_STOP or t in added or t in seen:
+                    continue
+                seen.add(t); tokens.append(t)
+    return {"tokens": tokens, "vault_diffs": vault_diffs}
+
+
 def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。

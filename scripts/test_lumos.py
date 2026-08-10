@@ -9787,6 +9787,39 @@ def t_delguard():
     listk = set(_re.findall(r'"(\w+)"', lm.group(1))) if lm else set()
     check("delguard 子集守衛 LINK_KEYS ⊆ LIST_KEYS∪{core_refs}", keys <= (listk | {"core_refs"}), f"{keys} vs {listk}")
 
+    # [delguard Task 2]_delguard_parse_diff:staged diff 抽被刪識別字＋vault 檔 diff 分流
+    from importlib import machinery, util as _u
+    # 以 exec 載入 scripts/lumos 取函式(本檔既有慣例:直接 subprocess 打 CLI 或 exec 模組;此處走 exec)
+    spec_ = machinery.SourceFileLoader("lumos_mod", GRAPHCTL)
+    mod = _u.module_from_spec(_u.spec_from_loader("lumos_mod", spec_))
+    spec_.exec_module(mod)
+    DIFF = """diff --git a/app/Login.kt b/app/Login.kt
+--- a/app/Login.kt
++++ b/app/Login.kt
+@@ -10,3 +9,2 @@
+-        refreshPaywayCredentials()
+-        val keep = renamedHelper(x)
++        val keep = renamedHelperV2(x)
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchain-knowledge/Systems/pay.md
+--- a/docs/lumos-toolchain-knowledge/Systems/pay.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pay.md
+@@ -3,1 +3,2 @@
+ verified_by:
++  - "[[Verification/x]]"
+"""
+    out = mod._delguard_parse_diff(DIFF, "docs/lumos-toolchain-knowledge")
+    check("delguard 抽到被刪 token", "refreshPaywayCredentials" in out["tokens"], str(out["tokens"]))
+    # 修正(brief 原斷言結構性不可能為真,見 task-2-report.md):tokens 依 spec 只從 `-` 行收,
+    # "renamedHelperV2" 只出現在 `+` 行故永不可能進 tokens——"...or renamedHelperV2 in tokens" 恆假,
+    # 使整條斷言退化成「renamedHelper not in tokens」,但同一 spec 又明文只回收「字面相同」的 token,
+    # renamedHelper≠renamedHelperV2 字面不同,不得回收,故該分支恆假、整條斷言對任何合規實作恆假。
+    # 改測真正該釘的兩面:相同字面(keep 同時在 - / + 行原樣出現)→回收剔除;
+    # 不同字面改名(renamedHelper→renamedHelperV2)→已知低信心誤報源,spec 明文 v1 不解,仍留在 tokens。
+    check("delguard +行回收:同字面(keep)濾除、不同字面改名(renamedHelper)留為已知誤報",
+          "keep" not in out["tokens"] and "renamedHelper" in out["tokens"], str(out["tokens"]))
+    check("delguard stopword 剔除", "val" not in out["tokens"], str(out["tokens"]))
+    check("delguard vault diff 不進 tokens 且收進 vault_diffs", "verified_by" not in out["tokens"] and any(p.endswith("pay.md") for p in out["vault_diffs"]), str(out))
+
 
 def t_canary_record_persist():
     """[S1] record 落盤自驗:印絕對路徑/token 讀回相符/readback 失敗 rc2 不印 ✓。"""
