@@ -9880,6 +9880,43 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     check("delguard S2 鍵頭+列表項=True", mod._delguard_purelink(["+verified_by:", '+  - "[[V/x]]"']) is True, "")
     check("delguard S2 空 diff=False(無變更不算純連結)", mod._delguard_purelink([]) is False, "")
 
+    # [delguard Task 6]cmd_delguard_check 組裝＋子命令 CLI 整合測試
+    import subprocess as sp
+    import json
+
+    def dg(*a, cwd=None, env=None):
+        import os as _os
+        e = dict(_os.environ); e.update(env or {})
+        return sp.run([sys.executable, GRAPHCTL, "delguard", *a],
+                      capture_output=True, text=True, cwd=cwd or str(root), env=e)
+    r = dg("--staged", "--json")
+    check("delguard CLI rc0", r.returncode == 0, r.stderr)
+    data = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard 抓到 aff2329 形狀(高信心命中)", any(h["conf"] == "high" for h in data["hits"]), str(data)[:400])
+    r = dg("--staged")
+    check("delguard 警告走 stdout+S3 問句", "退場前自問" in r.stdout and r.returncode == 0, r.stdout[:400])
+    # 假同步嫌疑:vault 節點只掛連結+S1 命中
+    p = root / gr / "Systems" / "憑證.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("---\n# 憑證",
+        '---\n# 憑證').replace("type: system\n", 'type: system\nverified_by:\n  - "[[Verification/x]]"\n'), encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    r = dg("--staged", "--json")
+    fs = json.loads(r.stdout.strip().splitlines()[-1])["fake_sync"]
+    check("delguard S2 假同步嫌疑(純連結∧S1命中)", "Systems/憑證.md" in fs, str(fs))
+    # 超時降級:env 注 0 → rc0+降級訊息在 stdout
+    r = dg("--staged", env={"LUMOS_DELGUARD_DEADLINE": "0"})
+    check("delguard 超時 fail-open rc0", r.returncode == 0, str(r.returncode))
+    check("delguard 降級訊息在 stdout", "超時降級" in r.stdout, f"out={r.stdout!r} err={r.stderr!r}")
+    # 內部錯誤 fail-open:env 注入測試鉤子
+    r = dg("--staged", env={"LUMOS_DELGUARD_RAISE": "1"})
+    check("delguard 內部錯誤 fail-open rc0+訊息", r.returncode == 0 and "內部錯誤" in r.stdout, r.stdout[:200])
+    # 效能 benchmark:<1s(254 檔級 vault 用本 repo 真 vault 跑,40 token)
+    import time as _t
+    toks = [f"zzNoSuchTok{i}" for i in range(40)]
+    t0 = _t.monotonic()
+    mod._delguard_vault_scan(toks, {}, str(Path(GRAPHCTL).parent.parent / "docs" / "lumos-toolchain-knowledge"))
+    check("delguard benchmark vault 掃 <1s", _t.monotonic() - t0 < 1.0, f"{_t.monotonic()-t0:.2f}s")
+
 
 def t_canary_record_persist():
     """[S1] record 落盤自驗:印絕對路徑/token 讀回相符/readback 失敗 rc2 不印 ✓。"""

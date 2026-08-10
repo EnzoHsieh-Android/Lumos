@@ -367,7 +367,7 @@ def _delguard_purelink(diff_lines):
 ```
 JSON：`{"tokens": N, "hits": [...全量...], "fake_sync": [node...], "degraded": bool}`。
 
-- [ ] Step 1 失敗測試（整合，走 CLI）：
+- [x] Step 1 失敗測試（整合，走 CLI）：
 
 ```python
     def dg(*a, cwd=None, env=None):
@@ -404,8 +404,8 @@ JSON：`{"tokens": N, "hits": [...全量...], "fake_sync": [node...], "degraded"
     check("delguard benchmark vault 掃 <1s", _t.monotonic() - t0 < 1.0, f"{_t.monotonic()-t0:.2f}s")
 ```
 
-- [ ] Step 2 跑紅（unknown command delguard）
-- [ ] Step 3 實作 `cmd_delguard_check`：
+- [x] Step 2 跑紅（unknown command delguard）
+- [x] Step 3 實作 `cmd_delguard_check`：
 
 ```python
 def cmd_delguard_check(repo=None, as_json=False):
@@ -471,8 +471,8 @@ argparse 註冊（cochange 註冊區旁；dispatch 分支照 cochange 樣式）�
 
 （`_git_root`/`_find_graph_root` 若無同名既有 helper：grep `find_vault`/`rev-parse` 找現成的用，**不新造**；真沒有才就地寫兩個 10 行內的私有函式。）
 
-- [ ] Step 4 跑綠（全量 test_lumos.py，不許紅其他測試）
-- [ ] Step 5 commit＋勾 Task6 `feat(delguard): 子命令組裝——deadline fail-open+top-10 輸出+S3 問句`
+- [x] Step 4 跑綠（全量 test_lumos.py，不許紅其他測試）
+- [x] Step 5 commit＋勾 Task6 `feat(delguard): 子命令組裝——deadline fail-open+top-10 輸出+S3 問句`
 
 ### Task 7：pre-commit Gate DG 掛載＋排除域對齊斷言
 
