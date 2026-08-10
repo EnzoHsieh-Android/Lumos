@@ -9770,6 +9770,34 @@ def t_cochange():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _mk_delguard_repo():
+    """delguard Task 3 fixture:staged 刪除 Login.kt 兩呼叫,
+    refreshPaywayCredentials 全域消失(僅 Login.kt/vault 提過)、helperStillUsed 在 Other.kt 仍活。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-delg-"))
+    sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    sp.run(["git", "-C", str(root), "config", "user.email", "t@t.t"], capture_output=True)
+    sp.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
+    gr = root / "docs" / "kg-knowledge"
+    for sub in ("Systems", "Projects", "Verification", "Issues", "MOC"):
+        (gr / sub).mkdir(parents=True)
+    (root / "app").mkdir()
+    (root / "app" / "Login.kt").write_text(
+        "fun login() {\n    refreshPaywayCredentials()\n    helperStillUsed()\n}\n", encoding="utf-8")
+    (root / "app" / "Other.kt").write_text(
+        "fun other() { helperStillUsed() }\n", encoding="utf-8")
+    (gr / "Systems" / "憑證.md").write_text(
+        "---\ntype: system\n---\n# 憑證\n登入時 refreshPaywayCredentials 撈一次憑證。\n還在講helperStillUsed欄位。\n", encoding="utf-8")
+    (gr / "Projects" / "計劃.md").write_text(
+        "---\ntype: project\n---\n# 計劃\n預定用 refreshPaywayCredentials 重構。\n", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(root), "commit", "-qm", "init"], capture_output=True)
+    # staged 刪除:Login.kt 拿掉兩個呼叫(refreshPaywayCredentials 全域消失;helperStillUsed 在 Other.kt 仍活)
+    (root / "app" / "Login.kt").write_text("fun login() {\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "app/Login.kt"], capture_output=True)
+    return root, "docs/kg-knowledge"
+
+
 def t_delguard():
     """[delguard Task 1]LINK_KEYS 常數＋子集守衛斷言:
     ①LINK_KEYS 常數存在且值正確
@@ -9819,6 +9847,16 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
           "keep" not in out["tokens"] and "renamedHelper" in out["tokens"], str(out["tokens"]))
     check("delguard stopword 剔除", "val" not in out["tokens"], str(out["tokens"]))
     check("delguard vault diff 不進 tokens 且收進 vault_diffs", "verified_by" not in out["tokens"] and any(p.endswith("pay.md") for p in out["vault_diffs"]), str(out))
+
+    # [delguard Task 3]_delguard_confidence:staged-index 兩檔信心(單次 git grep)
+    root, gr = _mk_delguard_repo()
+    conf = mod._delguard_confidence(["refreshPaywayCredentials", "helperStillUsed"], str(root), gr)
+    check("delguard 全域消失=high", conf.get("refreshPaywayCredentials") == "high", str(conf))
+    check("delguard 仍有呼叫點=low", conf.get("helperStillUsed") == "low", str(conf))
+    # 快照契約:worktree 加回不影響(index 為準)
+    (root / "app" / "Login.kt").write_text("fun login() { refreshPaywayCredentials() }\n", encoding="utf-8")
+    conf2 = mod._delguard_confidence(["refreshPaywayCredentials"], str(root), gr)
+    check("delguard 快照=index 不被 worktree 救回", conf2.get("refreshPaywayCredentials") == "high", str(conf2))
 
 
 def t_canary_record_persist():

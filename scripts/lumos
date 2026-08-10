@@ -10460,6 +10460,33 @@ def _delguard_parse_diff(diff_text, graph_root):
     return {"tokens": tokens, "vault_diffs": vault_diffs}
 
 
+def _delguard_confidence(tokens, repo_root, graph_root):
+    """回 {token: "high"|"low"}。high=staged index 全域消失(排除 vault/排除域後零命中)。
+    單次 git -c core.quotePath=off grep --cached -n -I -w -F -e t1 -e t2 ... --
+    . ':(exclude)<graph_root>' ':(exclude)node_modules' ...;rc>1 視為失敗丟 RuntimeError(上層 fail-open)。
+    命中歸屬在 python 端做:對 grep 輸出每行,用 Task 4 同款三件套 regex 判哪些 token 出現
+    (`-w` 是 git 側粗篩,py 側再精配)。快照契約:讀 staged index(--cached),worktree 未 add 的改動不影響結果。"""
+    import re, subprocess
+    if not tokens:
+        return {}
+    cmd = ["git", "-c", "core.quotePath=off", "grep", "--cached", "-n", "-I", "-w", "-F"]
+    for t in tokens:
+        cmd += ["-e", t]
+    cmd += ["--", ".", f":(exclude){graph_root}"]
+    for d in _DELGUARD_EXCLUDE_DIRS:
+        cmd += [f":(exclude){d.rstrip('/')}"]
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root)
+    if r.returncode > 1:
+        raise RuntimeError(f"git grep rc={r.returncode}: {r.stderr.strip()[:200]}")
+    alive = set()
+    pats = {t: re.compile(r"\b" + re.escape(t) + r"\b", re.ASCII) for t in tokens}
+    for line in r.stdout.splitlines():
+        for t, p in pats.items():
+            if t not in alive and p.search(line):
+                alive.add(t)
+    return {t: ("low" if t in alive else "high") for t in tokens}
+
+
 def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。

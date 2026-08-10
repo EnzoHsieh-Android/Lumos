@@ -181,7 +181,7 @@ def _delguard_confidence(tokens: list, repo_root: str, graph_root: str) -> dict:
 ```
 命中歸屬在 python 端做：對 grep 輸出每行，用 Task 4 同款三件套 regex 判哪些 token 出現（`-w` 是 git 側粗篩，py 側再精配）。
 
-- [ ] Step 1 fixture＋失敗測試：
+- [x] Step 1 fixture＋失敗測試：
 
 ```python
 def _mk_delguard_repo():
@@ -220,8 +220,8 @@ def _mk_delguard_repo():
     check("delguard 快照=index 不被 worktree 救回", conf2.get("refreshPaywayCredentials") == "high", str(conf2))
 ```
 
-- [ ] Step 2 跑紅
-- [ ] Step 3 實作：
+- [x] Step 2 跑紅
+- [x] Step 3 實作：
 
 ```python
 def _delguard_confidence(tokens, repo_root, graph_root):
@@ -246,8 +246,8 @@ def _delguard_confidence(tokens, repo_root, graph_root):
     return {t: ("low" if t in alive else "high") for t in tokens}
 ```
 
-- [ ] Step 4 跑綠
-- [ ] Step 5 commit＋勾 Task3 `feat(delguard): staged-index 兩檔信心(單次 git grep 多 -e)`
+- [x] Step 4 跑綠
+- [x] Step 5 commit＋勾 Task3 `feat(delguard): staged-index 兩檔信心(單次 git grep 多 -e)`
 
 ### Task 4：`_delguard_vault_scan` — 三件套 alternation 掃 vault＋型別排序
 
