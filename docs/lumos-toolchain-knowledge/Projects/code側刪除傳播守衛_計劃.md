@@ -346,6 +346,6 @@ round(v, scale)
 - [ ] S1 的識別字抽取規則細化（哪些 token 值得抽、怎麼避開字串與註解；cap=40/top-10 為先驗值，replay 校準後以數據取代）
 - [ ] S2 的「純 list 欄位 diff」判定實作（讀 `LIST_KEYS` 常數，行級 diff 邊界照 S2 節定義）
 - [ ] 誤報樣本蒐集方式（v1 人工記錄；格式傾向 append-only jsonl；有數字再談升級硬擋）
-- [ ] S3 問句放 `lumos-project-notes` skill 的退場段（user-scope，跨專案生效）還是各專案 CLAUDE.md——**此項是 v1 交付的一部分，不是可延後項**：decision 明言「advisory 版必須配 S3 否則複製同一個失敗」，S1/S2 落地而 S3 懸空＝decision 未兌現
+- [x] S3 問句落點——**已裁定（2026-08-10 Enzo）：`lumos-project-notes` skill 退場段**（user-scope 跨專案生效、symlink 分發下 pull 即吃到；CLAUDE.md 方案落選＝覆蓋面只到有裝專案且要逐專案重跑安裝）。落地歸 [[code側刪除傳播守衛_實作計畫]] Task 8；此項仍是 v1 交付的一部分
 - [ ] **v2 候選：死碼判定**（「宣告處以外零引用＝死碼＝圖譜講它很可能過期」，補 S1 的死碼盲區——見天花板節能力邊界表；比存在性強一階，v1 不做）
 - [ ] 存量掃描**另案交付**（r2 折入：不在本計劃 v1 範圍——d1 落點、測試策略、效能預算全針對增量 S1/S2，存量需要自己的入口與**強於字面 grep 的判定**：`ArithUtil` token 在檔名 `ArithUtil.kt` 就有，含檔名 grep 與純內容 grep 給相反答案。開工時另立計劃節點，掛回實測 ③ 的證據；「兩個都要有」的「另一個」指的就是那一案）
