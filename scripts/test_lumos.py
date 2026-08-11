@@ -3952,6 +3952,39 @@ def t_bootstrap_autoinit():
         capture_output=True, text=True).stdout.strip() == "", "")
 
 
+def t_bootstrap_pull_failure_aborts():
+    """bootstrap --pull 拉不到最新 → rc2 中止,不往下走(與 _vendor_toolchain 同政策,不漂移)。
+
+    step1 pull 失敗若只警告,step3 的 auto-init 照樣把過期來源 vendor 進專案——同一個
+    降版坑,兩層都要堵。斷言中止且★沒走到 step2★(機器層安裝一步都不能做)。
+    """
+    import os, subprocess
+    if not hasattr(os, "setsid"):
+        print("  - skip(非 POSIX)")
+        return
+    fake_home = Path(tempfile.mkdtemp(prefix="gctl-bsfail-home-"))
+    src = Path(tempfile.mkdtemp(prefix="gctl-bsfail-src-"))
+    (src / "scripts").mkdir(parents=True)
+    (src / "scripts" / "lumos").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(src), "init"], capture_output=True)
+    subprocess.run(["git", "-C", str(src), "remote", "add", "origin",
+                    str(src / "no-such-remote.git")], capture_output=True)
+    proj = Path(tempfile.mkdtemp(prefix="gctl-bsfail-proj-"))
+    subprocess.run(["git", "-C", str(proj), "init"], capture_output=True)
+    r = subprocess.run(
+        [sys.executable, GRAPHCTL, "bootstrap", "--pull"],
+        cwd=str(proj), capture_output=True, text=True, timeout=120,
+        stdin=subprocess.DEVNULL, start_new_session=True,
+        env=dict(os.environ, HOME=str(fake_home), USERPROFILE=str(fake_home),
+                 LUMOS_HOME=str(src)))
+    check("bootstrap pull 失敗: rc2 中止", r.returncode == 2,
+          f"rc={r.returncode} out={r.stdout[-300:]} err={r.stderr[-300:]}")
+    check("bootstrap pull 失敗: 未進到 step2(機器層一步都沒做)",
+          "[2/3]" not in r.stdout, r.stdout[-300:])
+    check("bootstrap pull 失敗: 訊息指路 --allow-stale",
+          "--allow-stale" in r.stderr, r.stderr[-300:])
+
+
 def t_getsh_forwards_args():
     """bootstrap一鍵對稱 std F12:get.sh 真跑 bash——argv 轉發/未知旗標 warn/失敗傳播。"""
     _need_src("get.sh")
@@ -9044,6 +9077,91 @@ def t_update_resyncs_claude():
               f"使用者規則消失: {cm_text!r}")
 
 
+def _mk_vendor_src(td, with_remote=None):
+    """建最小 Lumos 來源 repo(git init + 探針 + 範本 + hooks 夾);with_remote=URL 則加 origin。"""
+    import subprocess
+    src = Path(td)
+    scripts_dir = src / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "install-graph-toolchain.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (scripts_dir / "lumos").write_text("#!/usr/bin/env python3\n# 來源版 lumos\n", encoding="utf-8")
+    tpl = scripts_dir / "templates"
+    tpl.mkdir()
+    (tpl / "graph-discipline.md").write_text("紀律:{{KG}}", encoding="utf-8")
+    (scripts_dir / "hooks").mkdir()
+    subprocess.run(["git", "-C", str(src), "init"], capture_output=True)
+    if with_remote:
+        subprocess.run(["git", "-C", str(src), "remote", "add", "origin", with_remote],
+                       capture_output=True)
+    return src
+
+
+def _run_vendor(src, root, **kw):
+    """以 LUMOS_HOME 指向 src 呼叫 _vendor_toolchain,回傳 rc(隔離 env)。"""
+    import os
+    mod = _load_lumos_mod("lumos_vendor_pull")
+    orig = os.environ.get("LUMOS_HOME")
+    try:
+        os.environ["LUMOS_HOME"] = str(src)
+        return mod._vendor_toolchain(src, root, "consumer", **kw)
+    finally:
+        if orig is None:
+            os.environ.pop("LUMOS_HOME", None)
+        else:
+            os.environ["LUMOS_HOME"] = orig
+
+
+def t_vendor_pull_failure_aborts():
+    """★pull 失敗即中止(fail-closed),不拿舊來源覆蓋專案★。
+
+    坑(消費端實戰咬過兩次):原本 `git pull --ff-only` 失敗只印一行警告就繼續 vendor
+    ——來源落後/有本機分歧時會靜默把舊版蓋掉專案裡較新的檔,而那行警告混在一堆輸出裡
+    很容易滑過去。改 fail-closed:有 remote 卻拉不到 → return None(cmd_update 轉 rc2),
+    且★中止前不得寫入專案任何一個檔★(半套比不做更糟)。
+    """
+    import subprocess
+    with tempfile.TemporaryDirectory() as src_td, tempfile.TemporaryDirectory() as proj_td:
+        # remote 指向不存在路徑 → 有 remote 但 pull 必失敗
+        src = _mk_vendor_src(src_td, with_remote=str(Path(src_td) / "no-such-remote.git"))
+        root = Path(proj_td)
+        subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+        rc = _run_vendor(src, root)
+        check("vendor pull 失敗: 回傳 None(呼叫端轉 rc2)", rc is None, f"rc={rc}")
+        check("vendor pull 失敗: 未寫入 vendored 檔(不留半套)",
+              not (root / "scripts" / "lumos").exists(),
+              f"專案被寫入: {list(root.rglob('*'))[:10]}")
+
+
+def t_vendor_no_remote_skips_pull():
+    """無 remote 的來源=離線 clone,不是「拉不到」——跳過 pull 照常 vendor,不得誤擋。
+
+    fail-closed 只針對「本來拉得到卻拉不到」;手動複製/slim 安裝出來的無 remote 來源
+    是合法離線情境,擋它等於把離線使用者鎖在門外。
+    """
+    import subprocess
+    with tempfile.TemporaryDirectory() as src_td, tempfile.TemporaryDirectory() as proj_td:
+        src = _mk_vendor_src(src_td)          # 無 remote
+        root = Path(proj_td)
+        subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+        rc = _run_vendor(src, root)
+        check("vendor 無 remote: 不中止(rc0)", rc == 0, f"rc={rc}")
+        check("vendor 無 remote: 照常 vendor 出檔案",
+              (root / "scripts" / "lumos").exists(), "vendored 檔沒出現")
+
+
+def t_vendor_allow_stale_overrides_pull_failure():
+    """--allow-stale 是逃生門:明示願意用現有來源,pull 失敗照樣繼續。"""
+    import subprocess
+    with tempfile.TemporaryDirectory() as src_td, tempfile.TemporaryDirectory() as proj_td:
+        src = _mk_vendor_src(src_td, with_remote=str(Path(src_td) / "no-such-remote.git"))
+        root = Path(proj_td)
+        subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+        rc = _run_vendor(src, root, allow_stale=True)
+        check("vendor allow_stale: pull 失敗仍繼續(rc0)", rc == 0, f"rc={rc}")
+        check("vendor allow_stale: 有 vendor 出檔案",
+              (root / "scripts" / "lumos").exists(), "vendored 檔沒出現")
+
+
 def t_init_existing_resyncs():
     """既有 vault + 非 force 跑 cmd_init → CLAUDE.md 紀律區塊被刷新(early-return 不繞過 reinject)。
 
@@ -9156,7 +9274,7 @@ def t_init_existing_no_pull():
         # ── monkeypatch:替換 _vendor_toolchain 為記錄 stub ────────────
         vendor_called = []
 
-        def _stub_vendor(s, r, sl, no_pull=False):
+        def _stub_vendor(s, r, sl, no_pull=False, **kw):   # **kw:吸收後加旗標(如 allow_stale)
             vendor_called.append((s, r, sl, no_pull))
             return 0  # 假裝成功但不執行任何動作
 
@@ -9217,7 +9335,7 @@ def t_init_force_uses_existing_vault_slug():
         mod = _load_lumos_mod("lumos_initslug")
         captured = []
 
-        def _stub_vendor(s, r, sl, no_pull=False):
+        def _stub_vendor(s, r, sl, no_pull=False, **kw):   # **kw:吸收後加旗標(如 allow_stale)
             captured.append(sl)
             return 0
 
