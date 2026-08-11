@@ -197,8 +197,10 @@ lumos stale --match "<變更關鍵字>"
    ★斷言必須含「畫面上出現什麼字」★——只斷言「有沒有被擋」等於白做（實例：折扣超過 100%
    確實被擋，但畫面顯示的是登入頁的「請輸入員工編號!」，單元測試結構上測不到）。
    寫法與七個坑見 `reference.md` 的〈產 maestro UI flow 的派工要求〉。
+   ★綁定前置★：`guard bind`／Check T **只認 `KEY:★INVARIANT★` 行**——該節點沒有合約行就
+   **別為了綁而標**（鐵則：不確定是不是合約就不標）；先只寫 flow 檔、在節點內文記一句指向它。
    沒裝置／起不了環境 → **明記「未驗＋原因」**，不得靜默跳過。
-⚠ 新增一條 verified_by/related 連結**不算同步**。有裝 delguard（pre-commit Gate DG）的 repo，S1 命中時會機械吐這三問；沒裝的 repo 靠這段自律。
+⚠ 新增一條 verified_by/related 連結**不算同步**。有裝 delguard（pre-commit Gate DG）的 repo，S1 命中時會機械吐**上面 1-3 這三問**（delguard 不管 UI，第 4 問純靠自律）；沒裝的 repo 四問全靠這段自律。
 
 ## 資料夾 / 位置
 

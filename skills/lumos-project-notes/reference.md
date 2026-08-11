@@ -882,7 +882,9 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
 17. **Verification 巡檢時機**：開工前、commit 圖譜更新前、重大環境/依賴/schema 變更後，跑健康檢查 eval 指令掃 `status: stale` 和過期 `valid_until`
 18. **verified_by 雙向同步**：新增/廢棄 Verification 時，**必須同步**更新對應 Systems 的 `verified_by`；改 Systems 時優先讀 `verified_by` 而非跑 backlinks（backlinks 含 Issues/Sessions 雜訊）
 
-## 產 maestro UI flow 的派工要求（Android UI 驗收；spec＝`Projects/Android側UI測試綁圖譜工作流_計劃`）
+## 產 maestro UI flow 的派工要求（Android UI 驗收）
+
+> 設計脈絡在 **lumos-toolchain 的** `Projects/Android側UI測試綁圖譜工作流_計劃`（本節是跨專案通用摘要；消費端專案的圖譜查不到那個節點是正常的）。
 
 派 agent 產 flow 時，prompt 必須含下列全部：
 
