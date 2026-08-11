@@ -10338,19 +10338,24 @@ diff --git a/docs/kg-legacy/notes.md b/docs/kg-legacy/notes.md
 
     # [r2 N3②]git diff rc!=0 不得靜默假成功:production 端要 raise 落 degraded/內部錯誤,
     # 不能回報「tokens=0」假裝掃描乾淨(有 vault 佈局但 cwd 不是 git repo,逼 git diff 失敗)
+    # [code-loop r3 P2]釘環境依賴:TMPDIR 若恰好落在某個外層 git repo 之下,git 會沿目錄樹往上
+    # 找到那個外層 .git,讓「cwd 非 git repo」的前提失守 → 本測假紅。用 GIT_CEILING_DIRECTORIES
+    # 擋在 fixture 目錄的父層,禁止 git 往上跨出去找 .git。
+    import os as _os_n3
     rz = Path(tempfile.mkdtemp(prefix="gctl-delg-nogit-"))
     tmp_repos.append(rz)
     (rz / "docs" / "kg-knowledge" / "Systems").mkdir(parents=True)  # vault 佈局但**無 .git**
     (rz / "docs" / "kg-knowledge" / "Systems" / "s.md").write_text(
         "---\ntype: system\n---\n內容\n", encoding="utf-8")
+    env_n3 = dict(_os_n3.environ, GIT_CEILING_DIRECTORIES=str(rz.parent))
     r = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--repo", "/nonexistent-zzz", "--json"],
-               capture_output=True, text=True, cwd=str(rz))
+               capture_output=True, text=True, cwd=str(rz), env=env_n3)
     check("delguard git diff 失敗(非 git repo cwd)rc0 fail-open", r.returncode == 0,
           f"rc={r.returncode} err={r.stderr[:200]}")
     dz = json.loads(r.stdout.strip().splitlines()[-1])
     check("delguard git diff 失敗:--json degraded=True(不是假成功 tokens=0)", dz.get("degraded") is True, str(dz))
     r_txt = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--repo", "/nonexistent-zzz"],
-                    capture_output=True, text=True, cwd=str(rz))
+                    capture_output=True, text=True, cwd=str(rz), env=env_n3)
     check("delguard git diff 失敗:文字模式印「內部錯誤」", "內部錯誤" in r_txt.stdout, r_txt.stdout[:200])
 
     # [r2 N4]capflood rest=0∧dropped>0:統計行仍要印(釘 `if rest or dropped` 的 or 語意,
