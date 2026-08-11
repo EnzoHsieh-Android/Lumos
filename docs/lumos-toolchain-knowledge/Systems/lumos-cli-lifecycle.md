@@ -23,6 +23,8 @@ summary: |-
   KEY:install 全域指令 Unix=symlink、Win=lumos.cmd shim;skills 經 _link_or_copy(Unix symlink / Win junction / 失敗 fallback copytree)
   KEY:_VENDORED_TOOLKIT 白名單=5檔(scripts/lumos、test_lumos.py、merge-claude-settings.py、graph-rename.sh、fetch-notesmd.sh)+scripts/hooks/+scripts/templates/兩夾,為 vendor(_vendor_toolchain)與 deinit(_deinit_remove_vendored)共用,避免漂移;★2026-07-25 pre-commit 圖譜閘也豁免此白名單★(精確路徑非 scripts/* 整夾,專案自有 scripts/foo.py 仍擋)——vendored .py 誤中 code 副檔名判定,致每次 lumos update 例行更新都撞閘、bypass 帳被灌水稀釋真訊號;豁免住兩個 hook(pre-commit 擋+post-commit 記 bypass 帳)★必須對齊★——只修前者時 post-commit 照記假 bypass 灌水(2026-07-25 實測踩過);且★源 repo 守門★:偵測 skills/lumos-project-notes(=Lumos 源)時豁免失效(源 repo 內這些檔=產品碼,豁免會弄弱自家閘)。bash 清單↔常數↔兩 hook 對齊靠 [test:t_precommit_whitelist_drift_guard]+行為測試 t_precommit_vendored_exempt(放行 vendored/仍擋使用者檔/源 repo 內仍擋)
   KEY:vendor 結尾 diff 自癒——逐檔 filecmp 比對 src↔target 差異即 shutil.copy2 覆補(installer 漏檔的安全網)
+  KEY:★2026-08-11 來源 pull 改 fail-closed★——有 remote 卻拉不到最新即中止,★中止點在寫任何檔之前(不留半套)★;政策收進 _pull_source_or_abort 單一函式,_vendor_toolchain(專案層)與 cmd_bootstrap(機器層)共用避免漂移。無 remote=離線 clone 不算失敗照跑(不誤擋手動複製/slim 安裝);逃生門 --allow-stale(update/init/bootstrap 三處齊備)。原行為只印警告續跑→消費端 mOrangePos 咬過兩次靜默降版 [test:t_vendor_pull_failure_aborts,t_vendor_no_remote_skips_pull,t_vendor_allow_stale_overrides_pull_failure,t_bootstrap_pull_failure_aborts]
+  KEY:★DEBT★ pull 成功但來源工作區髒(未提交改動)仍會被 vendor 出去——本輪未擋,因來源 repo 的 docs/.governance-log.jsonl 等簿記檔恆髒,一律擋會天天卡住;要做需先分「簿記檔 vs 實質檔」白名單
   KEY:來源 repo 自我保護——update/deinit 偵測 root==_lumos_src() 即 return 2(不可在 Lumos 源本身跑專案層指令)
   KEY:_scaffold_project 既有 vault 自動 skip(保護圖譜資料不被 init/update 動)
   KEY:cmd_init slug 決定順序=①--name ②既有 vault 資料夾名(去 -knowledge)③repo basename;②先於③是硬要求——否則既有 vault 上 --force 用 basename 建錯空 vault + 寫錯 CLAUDE.md {{KG}} 路徑(見 [[init-force-slug誤用basename]]) [test:t_init_force_uses_existing_vault_slug]
@@ -46,6 +48,12 @@ decisions:
     context: 安裝端與移除端各自列舉檔名會漂移(漏移/漏裝);installer 子流程可能漏檔
     why_chosen: 單一常數消除安裝/移除白名單漂移;結尾自癒比對 src↔target 差異即覆補,把「installer 漏檔」收斂成可驗證的最終一致
     decided: 2026-06-26
+    valid: true
+  - content: vendor/bootstrap 的來源 pull 改 fail-closed:有 remote 卻拉不到即中止,逃生門 --allow-stale
+    id: d4
+    context: 原行為:git pull --ff-only 失敗只印一行警告就繼續 vendor→拿當下來源(可能落後/有本機分歧)覆蓋消費專案。消費端 mOrangePos 實戰咬過兩次靜默降版,警告混在一堆輸出裡看不到。「拿不到最新」與「確定是最新」兩種狀態原本走同一條路
+    why_chosen: 備選A維持警告續跑(=現況,已證實會被滑過);備選B一律中止(會誤擋手動複製/slim 安裝的無 remote 來源,那是合法離線情境);備選C每次互動詢問(自動化/CI 場景不可用);選D精準 fail-closed——只有『有 remote 卻拉不到』才中止(無 remote=離線 clone 照跑),明示逃生門 --allow-stale 給離線/緊急。中止點在寫任何檔之前,不留半套。政策收進 _pull_source_or_abort 單一函式供專案層(_vendor_toolchain)與機器層(cmd_bootstrap)共用,避免兩處漂移(同 _VENDORED_TOOLKIT 白名單共用的既有教訓)。trade-off:來源長期離線又有 remote 的使用者每次要加旗標——以「誤擋一次的成本 << 靜默降版一次的成本」換
+    decided: 2026-08-11
     valid: true
 related:
   - "[[CLAUDE注入re-sync與版本標籤_計劃]]"

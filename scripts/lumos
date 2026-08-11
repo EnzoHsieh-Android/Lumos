@@ -7911,7 +7911,40 @@ _VENDORED_TOOLKIT = ("scripts/lumos", "scripts/test_lumos.py",
                      "scripts/fetch-notesmd.sh")
 
 
-def _vendor_toolchain(src, root, slug, no_pull=False):
+def _pull_source_or_abort(src, allow_stale=False):
+    """更新來源 clone;拉不到就中止。回傳 0=可繼續、None=中止(呼叫端不得再寫任何檔)。
+
+    ★為什麼 fail-closed★:原本 pull 失敗只印一行警告就繼續 vendor,來源落後或有本機
+    分歧時會靜默拿舊版蓋掉專案裡較新的檔——消費端實戰咬過兩次,那行警告混在一堆輸出裡
+    根本看不到。「拿不到最新」與「確定這是最新」是兩種狀態,不該用同一條路走完。
+
+    ★但無 remote 不算失敗★:手動複製 / slim 安裝出來的來源本就沒有 remote,那是合法的
+    離線情境,擋它等於把離線使用者鎖在門外。只有「有 remote 卻拉不到」才中止。
+    _vendor_toolchain(專案層) 與 cmd_bootstrap(機器層) 共用本函式,避免兩處政策漂移。
+    """
+    import subprocess
+    if not (src / ".git").is_dir():
+        print("  (來源非 git repo,跳過 pull)")
+        return 0
+    has_remote = subprocess.run(["git", "-C", str(src), "remote"],
+                                capture_output=True, text=True).stdout.strip()
+    if not has_remote:
+        print("  (來源無 remote:離線 clone,跳過 pull)")
+        return 0
+    print("  git pull 來源(取最新工具組)…")
+    if subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode == 0:
+        return 0
+    if allow_stale:
+        print("  ⚠ --allow-stale:pull 失敗,明示沿用現有來源繼續", file=sys.stderr)
+        return 0
+    print(f"ERROR: 來源 {src} 拉不到最新(非 ff / 網路不通 / 工作區擋住),已中止——\n"
+          f"  不拿可能過期的來源覆蓋你的專案(靜默降版是本專案咬過兩次的坑)。\n"
+          f"  先處理來源:cd {src} && git status && git pull --ff-only\n"
+          f"  確定要用現有來源:重跑並加 --allow-stale", file=sys.stderr)
+    return None
+
+
+def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
     """從 Lumos 來源 src vendor 工具組到專案 root(python 單一源 scaffold + hooks + 結尾自癒)。
     回傳 0;來源無效回傳 None。圖譜資料受 _scaffold_project 的 skip 保護不被動。
     cmd_update / cmd_init(--with-hooks) 共用。"""
@@ -7923,12 +7956,9 @@ def _vendor_toolchain(src, root, slug, no_pull=False):
               file=sys.stderr)
         return None
     if not no_pull:
-        if (src / ".git").is_dir():
-            print("  git pull 來源(取最新工具組)…")
-            if subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode != 0:
-                print("  ⚠ git pull 失敗(無 remote / 非 ff),用現有來源繼續", file=sys.stderr)
-        else:
-            print("  (來源非 git repo,跳過 pull)")
+        rc_p = _pull_source_or_abort(src, allow_stale)
+        if rc_p is None:
+            return None                      # fail-closed:一個檔都還沒動就退場
     # 安裝邏輯收進 python 單一源(scaffold + hooks);bash 安裝器僅留薄殼。
     _scaffold_project(root, slug)
     _install_hooks_py(root)
@@ -7969,7 +7999,7 @@ def _vendor_toolchain(src, root, slug, no_pull=False):
     return rc
 
 
-def cmd_update(source=None, no_pull=False):
+def cmd_update(source=None, no_pull=False, allow_stale=False):
     """從 Lumos 唯一源 repo 更新「本專案」vendored 的工具組。
     = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
     圖譜資料受 install-graph-toolchain 的 scaffold-skip 保護,不會被動。"""
@@ -7987,7 +8017,7 @@ def cmd_update(source=None, no_pull=False):
         print(f"lumos update — 來源 repo 自身:只刷新 CLAUDE.md 紀律區塊({ri.status})")
         return 0 if ri.status in ("updated", "unchanged", "created", "appended") else 2
     print(f"lumos update — 來源 {src} → 本專案 {root}（slug={slug}）")
-    rc = _vendor_toolchain(src, root, slug, no_pull=no_pull)
+    rc = _vendor_toolchain(src, root, slug, no_pull=no_pull, allow_stale=allow_stale)
     return 2 if rc is None else rc
 
 
@@ -8169,7 +8199,7 @@ def _confirm_tty(prompt):
         os.close(fd)
 
 
-def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False):
+def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow_stale=False):
     """一鍵在專案內裝好一切:自動 clone Lumos(若缺)→ user-scope skills → 全域 lumos → 專案層自動接線。
     專案層四分流(設計:Projects/bootstrap一鍵對稱_計劃):有 vault+vendored→接 hooks｜有 vault 無
     vendored(中間態)→提示跑 init 補齊｜無 vault→_confirm_tty 確認(y 才 auto-init;--init 免確認)｜
@@ -8185,8 +8215,10 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False):
     if (home / "scripts" / "lumos").exists():
         if pull:
             print(f"[1/3] Lumos 來源已在,git pull 更新: {home}")
-            if subprocess.run(["git", "-C", str(home), "pull", "--ff-only"]).returncode != 0:
-                print(f"WARN: git pull 失敗(來源有本機改動?),沿用現有 clone", file=sys.stderr)
+            # 與 _vendor_toolchain 共用政策:有 remote 卻拉不到就中止,不拿可能過期的
+            # 來源往下走(step3 的 auto-init 會把它 vendor 進專案 → 同一個降版坑)。
+            if _pull_source_or_abort(home, allow_stale) is None:
+                return 2
         else:
             print(f"[1/3] Lumos 來源已在: {home}（--pull 可拉最新 skills）")
     else:
@@ -8261,7 +8293,7 @@ def _slugify_vault(name: str):
     return s or "project"
 
 
-def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
+def cmd_init(name=None, force=False, with_hooks=True, no_pull=False, allow_stale=False):
     """在當前 repo 初始化知識圖譜:建 docs/<slug>-knowledge/{6 個資料夾} + .gitignore,
     預設並 vendor 工具組 + 裝 pre-commit/pre-push 閘(--no-hooks 只建圖譜輕量版)。
     像 `openspec init`:一行開好就能 `lumos new`。
@@ -8313,7 +8345,7 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False):
             # 新 vault 或 --force:完整 vendor(pull + copy2 + hooks + reinject)
             print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
             print("\n裝 hooks:vendor 工具組 + 啟用 pre-commit/pre-push 閘…")
-            rc = _vendor_toolchain(src, root, slug, no_pull=no_pull)
+            rc = _vendor_toolchain(src, root, slug, no_pull=no_pull, allow_stale=allow_stale)
             # _vendor_toolchain 已呼叫 _install_hooks_py + _reinject_claude_block;不重複
             if rc is None:
                 print("  ⚠ 來源不可用,略過 hooks(圖譜已建好)。日後補裝:lumos update")
@@ -9346,6 +9378,14 @@ _PITFALL_DIFF_PATTERNS = [
     (re.compile(r"\bINSERT\b|\bUPDATE\b|\bDELETE\b", re.I), "併發", "寫入有沒有交易包裹?"),
 ]
 _PITFALL_DIFF_SKIP_EXT = {".md", ".txt", ".rst"}
+
+# 簿記檔白名單(單一源,兩個消費者:pitfalls --diff 掃描排除 + code-loop 留痕失效豁免)。
+# 兩處分開寫過會漂移;pitfalls 這端 2026-08-11 才補上——治理帳裡記的 skip 理由本身在
+# 描述「命中 open(...)」,被當代碼掃就再次命中 → 再 skip → 再寫一行理由……自我餵食,
+# 實測誤觸發 9 次。這些檔是紀錄不是要合入的碼。
+_BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
+                      "docs/.ci-log.jsonl", "governance/anchor-baseline.json")
+_BOOKKEEPING_DIR = "governance/code-loop/"
 _PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
 LINT_CMD_TIMEOUT = 180
 
@@ -10740,6 +10780,10 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
                 and not cur_file.startswith("governance/review-reports/")
                 # ↑ 審計證物排除(2026-08-05):歸檔的席報告/canary 快照 .patch 裡★故意★埋著
                 #   資源/併發 bug——當成代碼掃會讓 push 被自己的留痕擋下(C 慣例首擋實錄)
+                and cur_file not in _BOOKKEEPING_FILES
+                and not cur_file.startswith(_BOOKKEEPING_DIR)
+                # ↑ 簿記帳排除(2026-08-11):治理帳記的 skip 理由在描述「命中 open(...)」,
+                #   掃自己的紀錄→再命中→再 skip→再寫一行……自我餵食,實測誤觸發 9 次
                 and not _PITFALL_DIFF_TEST_PAT.search(cur_file)
                 and not code.strip().startswith(("#", "//", "--", "/*", "*"))):
             for pat, axis, q in _PITFALL_DIFF_PATTERNS:
@@ -13125,9 +13169,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         # 且留痕 sha 是目標 sha 的★祖先★(改寫史拒認)→ 留痕仍有效。
         # 「HEAD 移動→作廢」的原意=pass 不得蓋到新★代碼★——任何非白名單檔一動照樣失效。
         if rec_sha and rec_sha != marker_sha and rec_status in ("passed", "skipped"):
-            _WL_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
-                         "governance/anchor-baseline.json")
-            _WL_DIR = "governance/code-loop/"
+            _WL_FILES, _WL_DIR = _BOOKKEEPING_FILES, _BOOKKEEPING_DIR
             _anc = _sp.run(["git", "merge-base", "--is-ancestor", rec_sha, marker_sha],
                            capture_output=True, text=True, cwd=str(repo_root))
             if _anc.returncode == 0:
@@ -13502,17 +13544,23 @@ def main():
     p = sub.add_parser("update", help="從 Lumos 唯一源更新本專案 vendored 工具組")
     p.add_argument("--source", help="Lumos 來源 repo 路徑(預設 $LUMOS_HOME 或 ~/harness/lumos-toolchain)")
     p.add_argument("--no-pull", action="store_true", help="不 git pull 來源,用現有")
+    p.add_argument("--allow-stale", action="store_true",
+                   help="來源拉不到最新時仍沿用現有(預設中止,防靜默降版)")
     p = sub.add_parser("bootstrap", help="一鍵裝好一切(clone Lumos+skills+全域+專案層自動接線;新 repo 經確認 auto-init)")
     p.add_argument("--init", action="store_true", dest="auto_init",
                    help="無 vault 的 repo 免確認直接 init 建圖譜(CI/非互動用;不映射 init --force)")
     p.add_argument("--lumos-url", help="Lumos repo URL(預設公開 repo / $LUMOS_URL)")
     p.add_argument("--lumos-home", help="Lumos clone 目標(預設 ~/harness/lumos-toolchain / $LUMOS_HOME)")
     p.add_argument("--pull", action="store_true", help="既有 Lumos clone 也 git pull 拉最新(預設沿用)")
+    p.add_argument("--allow-stale", action="store_true",
+                   help="--pull 拉不到最新時仍沿用現有 clone(預設中止,防靜默降版)")
     p = sub.add_parser("init", help="在當前 repo 初始化圖譜(建資料夾+.gitignore,預設並裝 pre-commit/pre-push 閘)")
     p.add_argument("--name", help="vault slug(預設 = repo 資料夾名小寫)")
     p.add_argument("--force", action="store_true", help="既有 vault 也重裝/更新 hooks 與工具組(vault 內容不動)")
     p.add_argument("--no-hooks", action="store_true", help="只建圖譜,不 vendor 工具/不裝 hooks(輕量版)")
     p.add_argument("--no-pull", action="store_true", help="vendor 工具時不 git pull 來源")
+    p.add_argument("--allow-stale", action="store_true",
+                   help="來源拉不到最新時仍沿用現有(預設中止,防靜默降版)")
     p = sub.add_parser("deinit", help="專案層反安裝(對稱 init):拆本 repo 的 hooks/工具組/CLAUDE.md 注入/圖譜")
     p.add_argument("--keep-graph", action="store_true", help="保留圖譜 vault,其餘照拆")
     p.add_argument("--dry-run", action="store_true", help="只印會動到什麼,不實際改動")
@@ -13683,13 +13731,15 @@ def main():
     if args.cmd == "teardown":
         return cmd_teardown(yes=args.yes, source=args.source)
     if args.cmd == "update":
-        return cmd_update(source=args.source, no_pull=args.no_pull)
+        return cmd_update(source=args.source, no_pull=args.no_pull,
+                          allow_stale=args.allow_stale)
     if args.cmd == "bootstrap":
         return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home, pull=args.pull,
-                             init=args.auto_init)
+                             init=args.auto_init, allow_stale=args.allow_stale)
     if args.cmd == "init":
         return cmd_init(name=args.name, force=args.force,
-                        with_hooks=not args.no_hooks, no_pull=args.no_pull)
+                        with_hooks=not args.no_hooks, no_pull=args.no_pull,
+                        allow_stale=args.allow_stale)
     if args.cmd == "deinit":
         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
                           yes=args.yes, source=args.source)

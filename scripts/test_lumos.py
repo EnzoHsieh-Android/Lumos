@@ -3986,6 +3986,39 @@ def t_bootstrap_autoinit():
         capture_output=True, text=True).stdout.strip() == "", "")
 
 
+def t_bootstrap_pull_failure_aborts():
+    """bootstrap --pull 拉不到最新 → rc2 中止,不往下走(與 _vendor_toolchain 同政策,不漂移)。
+
+    step1 pull 失敗若只警告,step3 的 auto-init 照樣把過期來源 vendor 進專案——同一個
+    降版坑,兩層都要堵。斷言中止且★沒走到 step2★(機器層安裝一步都不能做)。
+    """
+    import os, subprocess
+    if not hasattr(os, "setsid"):
+        print("  - skip(非 POSIX)")
+        return
+    fake_home = Path(tempfile.mkdtemp(prefix="gctl-bsfail-home-"))
+    src = Path(tempfile.mkdtemp(prefix="gctl-bsfail-src-"))
+    (src / "scripts").mkdir(parents=True)
+    (src / "scripts" / "lumos").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(src), "init"], capture_output=True)
+    subprocess.run(["git", "-C", str(src), "remote", "add", "origin",
+                    str(src / "no-such-remote.git")], capture_output=True)
+    proj = Path(tempfile.mkdtemp(prefix="gctl-bsfail-proj-"))
+    subprocess.run(["git", "-C", str(proj), "init"], capture_output=True)
+    r = subprocess.run(
+        [sys.executable, GRAPHCTL, "bootstrap", "--pull"],
+        cwd=str(proj), capture_output=True, text=True, timeout=120,
+        stdin=subprocess.DEVNULL, start_new_session=True,
+        env=dict(os.environ, HOME=str(fake_home), USERPROFILE=str(fake_home),
+                 LUMOS_HOME=str(src)))
+    check("bootstrap pull 失敗: rc2 中止", r.returncode == 2,
+          f"rc={r.returncode} out={r.stdout[-300:]} err={r.stderr[-300:]}")
+    check("bootstrap pull 失敗: 未進到 step2(機器層一步都沒做)",
+          "[2/3]" not in r.stdout, r.stdout[-300:])
+    check("bootstrap pull 失敗: 訊息指路 --allow-stale",
+          "--allow-stale" in r.stderr, r.stderr[-300:])
+
+
 def t_getsh_forwards_args():
     """bootstrap一鍵對稱 std F12:get.sh 真跑 bash——argv 轉發/未知旗標 warn/失敗傳播。"""
     _need_src("get.sh")
@@ -9078,6 +9111,91 @@ def t_update_resyncs_claude():
               f"使用者規則消失: {cm_text!r}")
 
 
+def _mk_vendor_src(td, with_remote=None):
+    """建最小 Lumos 來源 repo(git init + 探針 + 範本 + hooks 夾);with_remote=URL 則加 origin。"""
+    import subprocess
+    src = Path(td)
+    scripts_dir = src / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "install-graph-toolchain.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (scripts_dir / "lumos").write_text("#!/usr/bin/env python3\n# 來源版 lumos\n", encoding="utf-8")
+    tpl = scripts_dir / "templates"
+    tpl.mkdir()
+    (tpl / "graph-discipline.md").write_text("紀律:{{KG}}", encoding="utf-8")
+    (scripts_dir / "hooks").mkdir()
+    subprocess.run(["git", "-C", str(src), "init"], capture_output=True)
+    if with_remote:
+        subprocess.run(["git", "-C", str(src), "remote", "add", "origin", with_remote],
+                       capture_output=True)
+    return src
+
+
+def _run_vendor(src, root, **kw):
+    """以 LUMOS_HOME 指向 src 呼叫 _vendor_toolchain,回傳 rc(隔離 env)。"""
+    import os
+    mod = _load_lumos_mod("lumos_vendor_pull")
+    orig = os.environ.get("LUMOS_HOME")
+    try:
+        os.environ["LUMOS_HOME"] = str(src)
+        return mod._vendor_toolchain(src, root, "consumer", **kw)
+    finally:
+        if orig is None:
+            os.environ.pop("LUMOS_HOME", None)
+        else:
+            os.environ["LUMOS_HOME"] = orig
+
+
+def t_vendor_pull_failure_aborts():
+    """★pull 失敗即中止(fail-closed),不拿舊來源覆蓋專案★。
+
+    坑(消費端實戰咬過兩次):原本 `git pull --ff-only` 失敗只印一行警告就繼續 vendor
+    ——來源落後/有本機分歧時會靜默把舊版蓋掉專案裡較新的檔,而那行警告混在一堆輸出裡
+    很容易滑過去。改 fail-closed:有 remote 卻拉不到 → return None(cmd_update 轉 rc2),
+    且★中止前不得寫入專案任何一個檔★(半套比不做更糟)。
+    """
+    import subprocess
+    with tempfile.TemporaryDirectory() as src_td, tempfile.TemporaryDirectory() as proj_td:
+        # remote 指向不存在路徑 → 有 remote 但 pull 必失敗
+        src = _mk_vendor_src(src_td, with_remote=str(Path(src_td) / "no-such-remote.git"))
+        root = Path(proj_td)
+        subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+        rc = _run_vendor(src, root)
+        check("vendor pull 失敗: 回傳 None(呼叫端轉 rc2)", rc is None, f"rc={rc}")
+        check("vendor pull 失敗: 未寫入 vendored 檔(不留半套)",
+              not (root / "scripts" / "lumos").exists(),
+              f"專案被寫入: {list(root.rglob('*'))[:10]}")
+
+
+def t_vendor_no_remote_skips_pull():
+    """無 remote 的來源=離線 clone,不是「拉不到」——跳過 pull 照常 vendor,不得誤擋。
+
+    fail-closed 只針對「本來拉得到卻拉不到」;手動複製/slim 安裝出來的無 remote 來源
+    是合法離線情境,擋它等於把離線使用者鎖在門外。
+    """
+    import subprocess
+    with tempfile.TemporaryDirectory() as src_td, tempfile.TemporaryDirectory() as proj_td:
+        src = _mk_vendor_src(src_td)          # 無 remote
+        root = Path(proj_td)
+        subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+        rc = _run_vendor(src, root)
+        check("vendor 無 remote: 不中止(rc0)", rc == 0, f"rc={rc}")
+        check("vendor 無 remote: 照常 vendor 出檔案",
+              (root / "scripts" / "lumos").exists(), "vendored 檔沒出現")
+
+
+def t_vendor_allow_stale_overrides_pull_failure():
+    """--allow-stale 是逃生門:明示願意用現有來源,pull 失敗照樣繼續。"""
+    import subprocess
+    with tempfile.TemporaryDirectory() as src_td, tempfile.TemporaryDirectory() as proj_td:
+        src = _mk_vendor_src(src_td, with_remote=str(Path(src_td) / "no-such-remote.git"))
+        root = Path(proj_td)
+        subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+        rc = _run_vendor(src, root, allow_stale=True)
+        check("vendor allow_stale: pull 失敗仍繼續(rc0)", rc == 0, f"rc={rc}")
+        check("vendor allow_stale: 有 vendor 出檔案",
+              (root / "scripts" / "lumos").exists(), "vendored 檔沒出現")
+
+
 def t_init_existing_resyncs():
     """既有 vault + 非 force 跑 cmd_init → CLAUDE.md 紀律區塊被刷新(early-return 不繞過 reinject)。
 
@@ -9190,7 +9308,7 @@ def t_init_existing_no_pull():
         # ── monkeypatch:替換 _vendor_toolchain 為記錄 stub ────────────
         vendor_called = []
 
-        def _stub_vendor(s, r, sl, no_pull=False):
+        def _stub_vendor(s, r, sl, no_pull=False, **kw):   # **kw:吸收後加旗標(如 allow_stale)
             vendor_called.append((s, r, sl, no_pull))
             return 0  # 假裝成功但不執行任何動作
 
@@ -9251,7 +9369,7 @@ def t_init_force_uses_existing_vault_slug():
         mod = _load_lumos_mod("lumos_initslug")
         captured = []
 
-        def _stub_vendor(s, r, sl, no_pull=False):
+        def _stub_vendor(s, r, sl, no_pull=False, **kw):   # **kw:吸收後加旗標(如 allow_stale)
             captured.append(sl)
             return 0
 
@@ -11593,6 +11711,50 @@ def t_pitfalls_diff_skips_review_report_artifacts():
         data2 = _j.loads([l for l in r2.stdout.splitlines() if l.strip().startswith("{")][0])
         check("★收緊釘:真代碼照掃(排除不外溢)★", data2.get("tier") == "high",
               f"tier={data2.get('tier')}")
+
+
+def t_pitfalls_diff_skips_bookkeeping_ledgers():
+    """[2026-08-11 遞迴誤判實錄]簿記帳(docs/.governance-log.jsonl 等)被 pitfalls --diff
+    當代碼掃——治理帳裡記的 skip 理由本身在★描述★「pitfalls 命中 open(...)」,掃描器
+    掃到自己的歷史紀錄再次命中,tier 變 high 擋 push,只好再 skip 一次、再寫一行理由進
+    治理帳……自我餵食的迴圈,實測已誤觸發 9 次。修=比照 review-reports 排除簿記檔白名單
+    (與 code-loop 留痕豁免共用 _BOOKKEEPING_* 常數,避免兩處漂移)。收緊釘:同內容在白名單
+    外照掃。"""
+    import subprocess as _sp
+    with tempfile.TemporaryDirectory() as d:
+        g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        g("init", "-q", "-b", "main")
+        g("config", "user.email", "t@t.t")
+        g("config", "user.name", "t")
+        (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "init")
+        g("checkout", "-qb", "feat")
+        led = Path(d) / "docs"
+        led.mkdir(parents=True)
+        # 治理帳一行:理由文字裡引用了會觸發 [資源] pattern 的字樣(真實形態)
+        (led / ".governance-log.jsonl").write_text(
+            '{"gate": "code-loop", "kind": "skipped", "detail": "假陽性:命中 fh = open(\'x\') '
+            '——one-shot 程序退出即釋放"}\n', encoding="utf-8")
+        (Path(d) / "governance" / "code-loop").mkdir(parents=True)
+        (Path(d) / "governance" / "code-loop" / "main.json").write_text(
+            '{"note": "fh = open(\'y\') 假陽"}\n', encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "ledger append")
+        r = _sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", "main..HEAD",
+                     "--no-lint", "--json", "--repo", d], capture_output=True, text=True)
+        import json as _j
+        data = _j.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+        check("★簿記帳不掃(治理帳/code-loop 留痕不該把自己的理由掃成新命中)★",
+              data.get("tier") != "high" and not data.get("claims"),
+              f"tier={data.get('tier')} claims={data.get('claims')}")
+        # 收緊釘:同內容在白名單外照掃
+        (Path(d) / "app_real.py").write_text("fh = open('x')\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "real code")
+        r2 = _sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", "main..HEAD",
+                      "--no-lint", "--json", "--repo", d], capture_output=True, text=True)
+        data2 = _j.loads([l for l in r2.stdout.splitlines() if l.strip().startswith("{")][0])
+        check("★收緊釘:真代碼照掃(排除不外溢)★",
+              any(c.get("file") == "app_real.py" for c in (data2.get("claims") or [])),
+              f"claims={data2.get('claims')}")
 
 
 def t_lint_decisions_nested_list_not_false_positive():
