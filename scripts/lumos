@@ -10448,7 +10448,10 @@ def _delguard_parse_diff(diff_text, graph_root):
     def _flags(ln):
         m = re.search(r" b/(.+)$", ln)
         c = m.group(1) if m else None
-        vault = bool(c) and c.startswith(graph_root) and c.endswith(".md")
+        # ★路徑邊界★:c.startswith(graph_root) 對 graph_root="docs/kg" 會誤配手足目錄
+        # docs/kg-legacy/notes.md(字首相同、不同目錄)——必須是同一路徑或其子路徑
+        # (r2 code-loop 折入:r1 兩席點名、上一修波漏掉)
+        vault = bool(c) and (c == graph_root or c.startswith(graph_root + "/")) and c.endswith(".md")
         excl = bool(c) and (any(c.startswith(seg) or ("/" + seg) in c
                                 for seg in _DELGUARD_EXCLUDE_DIRS)
                             or c.endswith(_DELGUARD_EXCLUDE_LOCKFILES))
@@ -10486,7 +10489,10 @@ def _delguard_parse_diff(diff_text, graph_root):
         if is_vault and (ln.startswith("+") or ln.startswith("-")) and not _delguard_is_diff_header(ln):
             vault_diffs.setdefault(cur, []).append(ln)
             continue
-        if is_vault or is_excl:
+        # ★兩遍對稱★:第一遍收 `+` 行(回收表)時非 vault 的 .md 也跳過(見上 skip 判定);
+        # 這裡若漏跳,非 vault .md(如 README.md)的重排 diff 會把散文詞彙當 token 抽出去
+        # (r2 code-loop 折入:N5)
+        if is_vault or is_excl or cur.endswith(".md"):
             continue
         if ln.startswith("-") and not _delguard_is_diff_header(ln):
             fadd = added.get(cur) or frozenset()
@@ -10634,6 +10640,12 @@ def cmd_delguard_check(repo=None, as_json=False):
                             "diff", "--cached", "-M", "--no-color"],
                            capture_output=True, text=True, errors="replace", cwd=root,
                            timeout=max(0.1, deadline - (time.monotonic() - t0)))
+        if r.returncode != 0:
+            # ★不得靜默吞★:git diff 失敗時 r.stdout 恆空,若不擋下去會被
+            # _delguard_parse_diff 解析成「tokens=0」——長得像掃描乾淨的成功結果,
+            # 實際是沒掃到東西的失敗(r2 code-loop 折入:N3①)。丟進既有 except
+            # 才能落成 degraded=true/內部錯誤,而不是假成功。
+            raise RuntimeError(f"git diff rc={r.returncode}: {r.stderr[:200]}")
         parsed = _delguard_parse_diff(r.stdout, gr_rel)
         tokens = parsed["tokens"][:DELGUARD_TOKEN_CAP]
         dropped = len(parsed["tokens"]) - len(tokens)

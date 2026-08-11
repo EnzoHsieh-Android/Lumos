@@ -9862,6 +9862,30 @@ def _mk_delguard_capflood_repo():
     return root, "docs/kg-knowledge"
 
 
+def _mk_delguard_capflood_repo_single():
+    """[r2 N4]capflood 姊妹 fixture:同樣 45 個獨特符號超 cap(dropped>0),但僅 **1 個節點**
+    命中(rest=0)——釘 `if rest or dropped` 的 or 語意:12 節點版(rest>0)測不到「rest=0 但
+    dropped>0 仍要印統計行」這格,若被誤改成 `if rest and dropped` 兩版舊 fixture 都測不出來
+    (12 節點版 rest>0∧dropped>0 對 and/or 皆真,無鑑別力),必須靠這支單節點版翻紅。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-delg-cap1-"))
+    sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    sp.run(["git", "-C", str(root), "config", "user.email", "t@t.t"], capture_output=True)
+    sp.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
+    gr = root / "docs" / "kg-knowledge"
+    (gr / "Systems").mkdir(parents=True)
+    (root / "app").mkdir()
+    calls = "\n".join(f"    capTok{i}()" for i in range(45))
+    (root / "app" / "Foo.kt").write_text(f"fun x() {{\n{calls}\n}}\n", encoding="utf-8")
+    (gr / "Systems" / "sys0.md").write_text(
+        "---\ntype: system\n---\n# sys0\n用到 capTok0 做事。\n", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(root), "commit", "-qm", "init"], capture_output=True)
+    (root / "app" / "Foo.kt").write_text("fun x() {\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", "app/Foo.kt"], capture_output=True)
+    return root, "docs/kg-knowledge"
+
+
 def t_delguard():
     """[delguard Task 1]LINK_KEYS 常數＋子集守衛斷言:
     ①LINK_KEYS 常數存在且值正確
@@ -10234,7 +10258,7 @@ diff --git a/app/A.kt b/app/A.kt
     (ri / "app" / "New.kt").write_text("fun brandNewSymbol() {}\n", encoding="utf-8")
     sp.run(["git", "-C", str(ri), "add", "-A"], capture_output=True)
     r = _cli(ri, "--json")
-    check("delguard initial commit(無 HEAD)rc0 不炸",
+    check("delguard initial commit(無 HEAD)rc0 不炸(僅煙霧;initial commit 無先前內容可刪)",
           r.returncode == 0 and "Traceback" not in r.stderr, f"rc={r.returncode} err={r.stderr[:300]}")
 
     # [r1 O④]CJK 路徑/檔名照抽(core.quotePath=off)
@@ -10254,7 +10278,10 @@ diff --git a/app/A.kt b/app/A.kt
           any("cjkPathSymbol" in h["tokens"] for h in dc.get("hits", [])), r.stdout[:300])
 
     # [r1 O⑤]純 rename(git mv 未 commit)→ 沒有內容被刪,tokens=0
+    # [r2 N2]先關 diff.renames(有些環境的 ~/.gitconfig 全域開著,會讓「有 -M 才抓得到 rename」
+    # 這件事悄悄失去鑑別力——關掉後只剩 CLI 自己下的 `-M` 撐著偵測,拿掉 -M 才會翻紅
     rr = _mkrepo("gctl-delg-rename-")
+    sp.run(["git", "-C", str(rr), "config", "diff.renames", "false"], capture_output=True)
     (rr / "docs" / "kg-knowledge" / "Systems").mkdir(parents=True)
     (rr / "docs" / "kg-knowledge" / "Systems" / "s.md").write_text(
         "---\ntype: system\n---\n用 renameOnlySymbol 做事。\n", encoding="utf-8")
@@ -10286,9 +10313,78 @@ diff --git a/app/A.kt b/app/A.kt
     check("delguard S2 negative:純連結但無 S1 命中 → 不進 fake_sync",
           dn.get("fake_sync") == [], r.stdout[:300])
 
+    # ── [code-loop r2 修復波]釘測 ──────────────────────────────────────────
+    # [r2 N1]vault 前綴無路徑邊界:graph_root="docs/kg" 不得誤配手足目錄 docs/kg-legacy/
+    # (字首相同、不同目錄)。★注意★:手足目錄的 notes.md 本身仍是非 vault 的 .md,依 N5
+    # 修復(見下)一律不產 token——故本測的鑑別力落在 vault_diffs 路由(修復前是 True 誤判、
+    # 混進 vault_diffs;修復後正確排除),另搭一個真 code 檔的刪除證明同一 diff 其餘檔案
+    # 的抽取不受影響。
+    DIFF_SIBLING = """diff --git a/app/Real.kt b/app/Real.kt
+--- a/app/Real.kt
++++ b/app/Real.kt
+@@ -1,2 +1,1 @@
+-    boundaryCodeSymbol()
+diff --git a/docs/kg-legacy/notes.md b/docs/kg-legacy/notes.md
+--- a/docs/kg-legacy/notes.md
++++ b/docs/kg-legacy/notes.md
+@@ -1,1 +0,0 @@
+-siblingVaultSymbol 這裡提過
+"""
+    sib = mod._delguard_parse_diff(DIFF_SIBLING, "docs/kg")
+    check("delguard vault 前綴路徑邊界:手足目錄 docs/kg-legacy 不進 vault_diffs",
+          not sib["vault_diffs"], str(sib))
+    check("delguard vault 前綴路徑邊界:同一 diff 其餘 code 檔 token 正常抽到(不受牽連)",
+          "boundaryCodeSymbol" in sib["tokens"], str(sib))
+
+    # [r2 N3②]git diff rc!=0 不得靜默假成功:production 端要 raise 落 degraded/內部錯誤,
+    # 不能回報「tokens=0」假裝掃描乾淨(有 vault 佈局但 cwd 不是 git repo,逼 git diff 失敗)
+    rz = Path(tempfile.mkdtemp(prefix="gctl-delg-nogit-"))
+    tmp_repos.append(rz)
+    (rz / "docs" / "kg-knowledge" / "Systems").mkdir(parents=True)  # vault 佈局但**無 .git**
+    (rz / "docs" / "kg-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\n---\n內容\n", encoding="utf-8")
+    r = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--repo", "/nonexistent-zzz", "--json"],
+               capture_output=True, text=True, cwd=str(rz))
+    check("delguard git diff 失敗(非 git repo cwd)rc0 fail-open", r.returncode == 0,
+          f"rc={r.returncode} err={r.stderr[:200]}")
+    dz = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard git diff 失敗:--json degraded=True(不是假成功 tokens=0)", dz.get("degraded") is True, str(dz))
+    r_txt = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--repo", "/nonexistent-zzz"],
+                    capture_output=True, text=True, cwd=str(rz))
+    check("delguard git diff 失敗:文字模式印「內部錯誤」", "內部錯誤" in r_txt.stdout, r_txt.stdout[:200])
+
+    # [r2 N4]capflood rest=0∧dropped>0:統計行仍要印(釘 `if rest or dropped` 的 or 語意,
+    # 別被誤改成 and——舊 12 節點版 rest>0∧dropped>0 對 and/or 皆真,測不出這格)
+    root_cap1, _gr_cap1 = _mk_delguard_capflood_repo_single()
+    r_cap1 = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--json"],
+                     capture_output=True, text=True, cwd=str(root_cap1))
+    data_cap1 = json.loads(r_cap1.stdout.strip().splitlines()[-1])
+    check("delguard capflood 單節點版:dropped>0", data_cap1.get("dropped", 0) > 0, str(data_cap1)[:200])
+    r_cap1_txt = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"],
+                         capture_output=True, text=True, cwd=str(root_cap1))
+    rest1 = len(data_cap1["hits"]) - min(len(data_cap1["hits"]), mod.DELGUARD_TOP_N)
+    check("delguard capflood 單節點版:rest=0 前置(否則本測無鑑別力)", rest1 == 0, str(rest1))
+    expect1 = f"另有 {rest1} 處命中/{data_cap1['dropped']} 個符號超 cap 未展開"
+    check("delguard capflood 單節點版:rest=0∧dropped>0 統計行仍印(or 語意)",
+          expect1 in r_cap1_txt.stdout, r_cap1_txt.stdout[:300])
+
+    # [r2 N5]per-file 回收表 .md 不對稱:第二遍抽 token 時同樣跳過所有 .md(與第一遍一致),
+    # 非 vault 的 .md(如 README.md)不是 code,重排 diff 不該把散文詞彙當 token 抽出去
+    DIFF_README = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,2 @@
+-alphaLine betaLine
+-gammaLine deltaLine
++gammaLine deltaLine
++alphaLine betaLine
+"""
+    rmd = mod._delguard_parse_diff(DIFF_README, "docs/kg-knowledge")
+    check("delguard 非 vault .md 重排 diff:tokens=[]", rmd["tokens"] == [], str(rmd))
+
     # 收尾:清 tempdir(同 t_cochange 慣例;code-loop r1 I 洩漏修復)
     import shutil as _sh
-    for d in (root, root_cap, root_hc, *tmp_repos):
+    for d in (root, root_cap, root_hc, root_cap1, *tmp_repos):
         _sh.rmtree(d, ignore_errors=True)
 
 

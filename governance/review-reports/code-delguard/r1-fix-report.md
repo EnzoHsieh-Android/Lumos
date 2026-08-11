@@ -85,3 +85,7 @@
 ## 修不動／有疑義
 
 - `revalidate_when` 不在 `lumos append` 的 `LIST_KEYS` 白名單（也不在 `set` 的 `SCALAR_KEYS`），CLI 拒寫。改以 Edit 直接加一行 YAML list 項（一項一行，符合鐵則 2），`lumos lint` 0 問題。若這個鍵應該進 append 白名單，是另案。
+
+## code-loop r2 追加接受（不改碼）
+
+- **S2 重排判定的副作用方向（N6）**：`_delguard_purelink` 的重排判定（N：某 `-` 與某 `+` strip 後同內容→判「有動內容」）本意是防「純掛連結」誤報，但代價是「重排＋補連結」這個複合形狀——節點本次 diff 既重排了既有內容又補了一條 `verified_by` 連結——會因為「有動內容」而被排除出 S2 純連結判定，連帶漏掉假同步嫌疑標記（本該報而沒報）。這是 r1 N 修復本就選定的取捨方向的自然延伸，不是新缺陷,故不改碼。副作用方向已登記：換來的是**漏報（miss）**而非誤報（false positive）——advisory 層級下漏報比誤報溫和（不會訓練人無視警訊），可受。
