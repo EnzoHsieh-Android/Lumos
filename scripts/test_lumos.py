@@ -15187,6 +15187,14 @@ rel-cascade search set show stale stats sync-verified-by""".split())
                         capture_output=True, text=True, cwd=str(droot))
     check("slim delguard rc0", ds.returncode == 0, ds.stderr[:300])
     check("slim delguard 命中警告", "refreshPaywayCredentials" in ds.stdout and "退場前自問" in ds.stdout, ds.stdout[:300])
+
+    # slim 交付範本的「N 支」宣稱與 keep 清單同步(2026-08-11 code review 抓到三處 24 支殘留)
+    tpl_root = _P(GRAPHCTL).parent.parent / "slim"
+    for tpl in ("README.md", "claude-block.md", "skills/lumos-project-notes/reference.md"):
+        txt = (tpl_root / tpl).read_text(encoding="utf-8")
+        claims = _re.findall(r"(\d+) 支(?:指令|頂層命令|子集)", txt)
+        check(f"slim 範本 {tpl} 支數宣稱與 keep 同步", claims and all(int(c) == len(keep) for c in claims),
+              f"{tpl}: claims={claims} keep={len(keep)}")
     import shutil as _sh
     _sh.rmtree(droot, ignore_errors=True)
 
@@ -17074,7 +17082,7 @@ def t_slim_gate():
 
     # 第 1 道 負向:--help choices 不得出現任何移除指令(逐支列名)
     keep = set("""append archive backlinks context contracts decision-add decision-reindex
-decision-supersede decisions doctor export guard links lint map new recent
+decision-supersede decisions delguard doctor export guard links lint map new recent
 rel-cascade search set show stale stats sync-verified-by""".split())
     full = subprocess.run([sys.executable, GRAPHCTL, "--help"],
                           capture_output=True, text=True).stdout
