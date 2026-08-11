@@ -6221,7 +6221,7 @@ def cmd_export_html(env, out_path, standalone=False):
 # ═══════════════════════ 階段三: 寫側 T1(行級手術) ═══════════════════════
 
 SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen", "pitfall_ask", "pitfall_source"}  # pitfall_* 2026-08-09 已知坑策展庫
-LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases", "pitfall_when"}   # aliases 2026-08-05;pitfall_when 2026-08-09(已知坑策展庫,content-trigger)
+LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases", "pitfall_when", "core_refs"}   # aliases 2026-08-05;pitfall_when 2026-08-09(已知坑策展庫,content-trigger);core_refs 2026-08-11(升格加指針/降格拆指針,兩向都要 T1;值是純路徑非 wikilink——lumos-core-knowledge skill 明令禁跨 vault wikilink)
 LINK_KEYS = ("verified_by", "plan_refs", "related", "core_refs")  # S2「純連結欄位」子集(≠LIST_KEYS:那是 append 白名單,pitfall_when=content-trigger 不算連結);spec=Projects/code側刪除傳播守衛_計劃
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -6349,6 +6349,41 @@ def edit_fm_append(fm_lines, key, value):
         fm.insert(ins, key + ":")
         fm.insert(ins + 1, f"  - {item}")
     return fm
+
+
+def edit_fm_remove(fm_lines, key, value):
+    """T1 list 項移除(append 的逆操作,同一套 link_target 精確比對)。
+
+    回傳 (new_fm, removed_count)。removed_count==0 代表沒命中(呼叫端該報錯,
+    不可靜默 no-op——打錯字卻回成功是本函式最該防的失敗)。
+    命中多筆(歷史重複項)一次清乾淨。清完若 list 空了,連 key 行一起移除
+    (留 `key:` 裸鍵會被 YAML 解成 null,doctor/lint 對「有鍵無值」的判讀比沒鍵更糟)。
+    比對用 link_target():`[[A]]` / `[[Folder/A|alias]]` / 純路徑 `x/y.md` 一致處理,
+    保留路徑不做 basename-only(同 append dedup,避免 Systems/X 誤刪 Verification/X)。"""
+    fm = list(fm_lines)
+    tgt = link_target(value)
+    struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+    if key not in struct:
+        raise ValueError(f"此筆記無 {key}")
+    s, e, kind = struct[key]
+    if kind != "list":
+        raise ValueError(f"{key} 是 {kind} 型,remove 只移除 list 項")
+    hits = []
+    for j in range(s + 1, e + 1):
+        existing = fm[j].strip()
+        if existing.startswith("-") and link_target(existing[1:]) == tgt:
+            hits.append(j)
+    if not hits:
+        return fm, 0
+    for j in reversed(hits):
+        del fm[j]
+    # 清完是否還有存活項?沒有就把 key 行也拿掉(空 list 不留裸鍵)
+    struct2 = {k: (a, b, c) for k, a, b, c in fm_structure(fm)}
+    if key in struct2:
+        s2, e2, _ = struct2[key]
+        if not any(fm[j].strip().startswith("-") for j in range(s2 + 1, e2 + 1)):
+            del fm[s2:e2 + 1]
+    return fm, len(hits)
 
 
 def decisions_items(fm_lines):
@@ -6505,6 +6540,33 @@ def cmd_append(env, rel, key, value):
     atomic_write_verify(path, new_lines, key,
                         lambda f: any(link_target(x) == tgt for x in as_list(f.get(key))))
     print(f"✓ append {rel}: {key} += {value}")
+    return 0
+
+
+def cmd_remove(env, rel, key, value):
+    """T1 list 項移除(append 逆操作)。補的是 2026-08-11 實戰撞到的缺口:
+    死背書(verified_by 指向已 superseded 的驗證)、降格後殘留的 core_refs 指針,
+    都只能靠移除 list 項來收,但 set 只收純量、append 只能加,唯一合法退路
+    (obsidian processFrontMatter)還要 Obsidian 開著 → 實務上等於無路可走。
+
+    ★不命中一律 rc=2★:打錯字卻回成功,會讓呼叫端以為清乾淨了(死背書照舊掛著),
+    比報錯危險得多。"""
+    if key not in LIST_KEYS:
+        print(f"ERROR: remove 白名單={sorted(LIST_KEYS)};{key} 不在內", file=sys.stderr)
+        return 2
+    path = env.vault / rel
+    lines, s, e = load_raw_for_edit(path)
+    new_fm, n = edit_fm_remove(lines[1:e], key, value)
+    if n == 0:
+        cur = [str(x) for x in as_list(parse_frontmatter(lines[1:e])[0].get(key))]
+        print(f"ERROR: {rel} 的 {key} 找不到 {value}(比對 target={link_target(value)});"
+              f"現有 {len(cur)} 項:{cur[:8]}{' …' if len(cur) > 8 else ''}", file=sys.stderr)
+        return 2
+    new_lines = lines[:1] + new_fm + lines[e:]
+    tgt = link_target(value)
+    atomic_write_verify(path, new_lines, key,
+                        lambda f: not any(link_target(x) == tgt for x in as_list(f.get(key))))
+    print(f"✓ remove {rel}: {key} -= {value}" + (f"(命中 {n} 項)" if n > 1 else ""))
     return 0
 
 
@@ -13498,6 +13560,11 @@ def main():
     p.add_argument("note")
     p.add_argument("key")
     p.add_argument("value")
+    p = sub.add_parser("remove",
+                       help="list 欄位移除(append 逆操作;清死背書/降格後的 core_refs。不命中 rc=2)")
+    p.add_argument("note")
+    p.add_argument("key")
+    p.add_argument("value")
     sa = sub.add_parser("self-audit",
                         help="L4 自足性審計留痕:寫 self_audit:<model>/<date>(乾淨 agent 只讀圖譜還原審過;Check S 看)")
     sa.add_argument("node")
@@ -13972,7 +14039,7 @@ def main():
             return 2
 
     # T1 寫側
-    if args.cmd in ("set", "append"):
+    if args.cmd in ("set", "append", "remove"):
         rel = env.find(args.note)
         if rel is None:
             print(f"ERROR: 找不到筆記: {args.note}", file=sys.stderr)
@@ -13980,6 +14047,8 @@ def main():
         try:
             if args.cmd == "set":
                 return cmd_set(env, rel, args.key, args.value)
+            if args.cmd == "remove":
+                return cmd_remove(env, rel, args.key, args.value)
             return cmd_append(env, rel, args.key, args.value)
         except (ValueError, RuntimeError) as e:
             print(f"ERROR: {e}", file=sys.stderr)

@@ -532,6 +532,86 @@ def t_append_new_list():
           "plan_refs:" in txt and '- "[[某計劃]]"' in txt, txt)
 
 
+# ══ remove(T1 list 項移除,append 逆操作;2026-08-11 新增)══
+# 缺口來源:死背書(verified_by 指向 superseded 驗證)與降格後殘留 core_refs,
+# 都只能靠移除 list 項來收,但 set 只收純量、append 只能加 → 實務上無路可走。
+
+def t_remove_basic():
+    v = mkvault()
+    p = write(v, "Systems/S.md",
+              "type: system\nstatus: done\nverified_by:\n  - \"[[V1]]\"\n  - \"[[V2]]\"")
+    run(v, "remove", "S", "verified_by", "[[V1]]", expect_rc=0)
+    txt = read(p)
+    check("remove 基本: 移除命中項、保留其他項",
+          "[[V1]]" not in txt and "[[V2]]" in txt, txt)
+
+
+def t_remove_not_found_rc2_file_untouched():
+    """★最重要的牙齒★:打錯字卻回成功=呼叫端以為清乾淨了(死背書照舊掛著)。
+    不命中必須 rc=2,且原檔一個 byte 都不能動。"""
+    v = mkvault()
+    p = write(v, "Systems/S.md",
+              "type: system\nstatus: done\nverified_by:\n  - \"[[V1]]\"")
+    before = read(p)
+    r = run(v, "remove", "S", "verified_by", "[[打錯的名字]]")
+    check("remove 不命中: rc=2 且原檔未被改動(嚴禁靜默 no-op 回成功)",
+          r.returncode == 2 and read(p) == before,
+          f"rc={r.returncode}\nstderr={r.stderr}\n{read(p)}")
+
+
+def t_remove_last_item_drops_key():
+    """清空後留 `verified_by:` 裸鍵會被 YAML 解成 null,對 doctor/lint 比沒鍵更糟。"""
+    v = mkvault()
+    p = write(v, "Systems/S.md",
+              "type: system\nstatus: done\nverified_by:\n  - \"[[V1]]\"\naliases:\n  - 別名")
+    run(v, "remove", "S", "verified_by", "[[V1]]", expect_rc=0)
+    txt = read(p)
+    check("remove 清空最後一項: 連 key 行一起移除(不留裸鍵),其他欄位不受損",
+          "verified_by" not in txt and "aliases:" in txt and "- 別名" in txt, txt)
+
+
+def t_remove_exact_target_not_prefix():
+    """鏡像 append 的 BUG-1:[[A]] 不可誤刪 [[Projects/A_v2]](精確 target 比對)。"""
+    v = mkvault()
+    p = write(v, "Systems/S.md",
+              "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/A_v2]]\"\n  - \"[[A]]\"")
+    run(v, "remove", "S", "verified_by", "[[A]]", expect_rc=0)
+    txt = read(p)
+    check("remove 精確比對: [[A]] 只刪自己,不誤刪前綴相同的 [[Projects/A_v2]]",
+          "[[Projects/A_v2]]" in txt and '- "[[A]]"' not in txt, txt)
+
+
+def t_remove_alias_and_path_forms_match():
+    """[[Folder/X|顯示名]] 應被 [[Folder/X]] 命中(同 append dedup 的 link_target 語意)。"""
+    v = mkvault()
+    p = write(v, "Systems/S.md",
+              "type: system\nstatus: done\nverified_by:\n  - \"[[Verification/X|顯示名]]\"")
+    run(v, "remove", "S", "verified_by", "[[Verification/X]]", expect_rc=0)
+    check("remove 比對忽略 alias/heading(link_target 語意一致)",
+          "Verification/X" not in read(p), read(p))
+
+
+def t_remove_rejects_non_whitelist_key():
+    v = mkvault()
+    p = write(v, "Systems/S.md", "type: system\nstatus: done")
+    before = read(p)
+    r = run(v, "remove", "S", "status", "done")
+    check("remove 白名單: 純量 key(status)被拒 rc=2,原檔不動",
+          r.returncode == 2 and read(p) == before, f"rc={r.returncode}\n{r.stderr}")
+
+
+def t_remove_core_refs_roundtrip():
+    """降格拆指針的實戰路徑:core_refs 值是純路徑(非 wikilink),append/remove 都要能走。"""
+    v = mkvault()
+    p = write(v, "Systems/S.md", "type: system\nstatus: done")
+    run(v, "append", "S", "core_refs", "citrus-core-knowledge/Business/member/x.md", expect_rc=0)
+    check("core_refs 已入 append 白名單(升格加指針)",
+          "core_refs:" in read(p) and "member/x.md" in read(p), read(p))
+    run(v, "remove", "S", "core_refs", "citrus-core-knowledge/Business/member/x.md", expect_rc=0)
+    check("core_refs 可 remove(降格拆指針),清空後不留裸鍵",
+          "core_refs" not in read(p), read(p))
+
+
 # ── BUG-5: list 後接 sub-mapping(decisions)時,append verified_by 不插進 decisions ──
 def t_append_with_nested_decisions():
     v = mkvault()
