@@ -9,6 +9,7 @@ related:
   - "[[Systems/pitfalls-code-loop]]"
   - "[[Systems/test-profile-multiplatform]]"
   - "[[Systems/delguard]]"
+  - "[[Android側UI測試綁圖譜工作流_實作計畫]]"
 tags:
   - type/project
   - status/todo
@@ -302,4 +303,4 @@ mOrangePos `8f239db`：
 - [ ] **修 [[Systems/pitfalls-code-loop]] 自身的證據路徑**（r2-F11）：該節點第 17 行寫的是無前綴的 `review-reports/<loop>/ui-evidence/`，而 `pitfalls --diff` 的排除規則吃的是帶 `governance/` 前綴的路徑（`scripts/lumos:10740` 實查）——本 spec 引用時已修正，但**源頭節點才是該改的地方**
 - [ ] 「裝置 ready」的可檢查前置清單（各專案自填，如 `.maestro/README.md`）
 - [ ] 產 flow 的 agent prompt：要求斷言含「畫面上出現什麼字」＋四個坑的警告＋必須以檔案形式實跑通過
-- [ ] ★**「時機」這個第一缺口要由誰觸發**（r1-F6：v1 全部做完仍沒關上）★：決定「功能完成當下」的觸發者是人、skill 退場段、還是 hook——既有軟提醒實作只掛 pre-push，不是功能完成當下。硬要求／軟提醒之爭在這題答完之前是空的（傾向軟提醒：不是每個功能都有 UI 面）
+- [x] ★**「時機」觸發者已裁定（2026-08-11 Enzo）＝`lumos-project-notes` skill 退場段**★——收工前多問一句「這次有動到使用者看得到的畫面嗎」，user-scope 跨專案生效、零新機制；pre-push 軟提醒方案落選（觸發點在 push 前、不是功能完成當下）。★誠實記著：這是紀律不是機械閘，忘了就是忘了——第一缺口只從「完全沒有」變成「有人問」，沒有機械化★。落地見 [[Android側UI測試綁圖譜工作流_實作計畫]] Task 2
