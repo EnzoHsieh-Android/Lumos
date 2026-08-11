@@ -112,7 +112,7 @@ git commit -m "fix(kg): pitfalls-code-loop 證據路徑補 governance/ 前綴+�
 **Files:** Modify `skills/lumos-project-notes/SKILL.md`（既有「## 退場自問」節，第 189-194 行附近）
 **Interfaces / Consumes:** Task 1 已把 Android 通道寫進慣例節點；本 task 是「功能完成當下」的觸發點。
 
-- [ ] **Step 1：在既有退場自問的第 3 問之後、`⚠ 新增一條 verified_by...` 那行之前，插入第 4 問**
+- [x] **Step 1：在既有退場自問的第 3 問之後、`⚠ 新增一條 verified_by...` 那行之前，插入第 4 問**
 
 ```markdown
 4. **這次有動到使用者看得到的畫面嗎？**（Android／web UI 都算）
@@ -124,16 +124,16 @@ git commit -m "fix(kg): pitfalls-code-loop 證據路徑補 governance/ 前綴+�
    沒裝置／起不了環境 → **明記「未驗＋原因」**，不得靜默跳過。
 ```
 
-- [ ] **Step 2：驗證落點正確**
+- [x] **Step 2：驗證落點正確**
 
 Run：`grep -n "這次有動到使用者看得到的畫面嗎" -B 3 -A 2 skills/lumos-project-notes/SKILL.md`
 Expected：出現在第 3 問之後、`⚠ 新增一條 verified_by` 之前；且該節仍在「## 常見工作流」與「## 資料夾 / 位置」之間
 
-- [ ] **Step 3：全量測試**（skill 散文無專屬測試，跑全量確認沒撞到既有 skill 相關斷言）
+- [x] **Step 3：全量測試**（skill 散文無專屬測試，跑全量確認沒撞到既有 skill 相關斷言）
 
 Run：`python3 scripts/test_lumos.py 2>&1 | tail -2` → `0 failed`
 
-- [ ] **Step 4：commit**（skill 是 code 側，需同 commit 帶圖譜 → 勾本節點 Task 2 checkbox）
+- [x] **Step 4：commit**（skill 是 code 側，需同 commit 帶圖譜 → 勾本節點 Task 2 checkbox）
 
 ```bash
 git add skills/lumos-project-notes/SKILL.md docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_實作計畫.md
