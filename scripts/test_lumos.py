@@ -15164,9 +15164,9 @@ def t_slim_gen():
     m = _re.search(r"\{([a-z0-9,\-]+)\}", h.stdout)
     got = set(m.group(1).split(",")) if m else set()
     keep = set("""append archive backlinks context contracts decision-add decision-reindex
-decision-supersede decisions doctor export guard links lint map new recent
+decision-supersede decisions delguard doctor export guard links lint map new recent
 rel-cascade search set show stale stats sync-verified-by""".split())
-    check("產物 --help == 保留 24 支", got == keep, f"多={sorted(got-keep)} 少={sorted(keep-got)}")
+    check("產物 --help == 保留 25 支", got == keep, f"多={sorted(got-keep)} 少={sorted(keep-got)}")
 
     c = subprocess.run([sys.executable, "-W", "error::SyntaxWarning",
                         "-m", "py_compile", str(out)], capture_output=True, text=True)
@@ -15180,6 +15180,15 @@ rel-cascade search set show stale stats sync-verified-by""".split())
               if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)}
     dangling = {n for n in (called - defined) if n.startswith(("cmd_", "run_", "_"))}
     check("產物 dangling handler = 0", not dangling, str(sorted(dangling)))
+
+    # slim 產物 delguard 功能煙霧(AST 閉包完整性:helper/常數都要被帶進產物)
+    droot, dgr = _mk_delguard_repo()
+    ds = subprocess.run([sys.executable, str(out), "delguard", "--staged"],
+                        capture_output=True, text=True, cwd=str(droot))
+    check("slim delguard rc0", ds.returncode == 0, ds.stderr[:300])
+    check("slim delguard 命中警告", "refreshPaywayCredentials" in ds.stdout and "退場前自問" in ds.stdout, ds.stdout[:300])
+    import shutil as _sh
+    _sh.rmtree(droot, ignore_errors=True)
 
 
 def t_slim_gen_keeps_comments():
