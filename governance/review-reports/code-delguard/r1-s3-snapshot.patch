@@ -1,0 +1,667 @@
+diff --git a/scripts/hooks/pre-commit b/scripts/hooks/pre-commit
+index 03dd53c..267ed71 100755
+--- a/scripts/hooks/pre-commit
++++ b/scripts/hooks/pre-commit
+@@ -43,20 +43,26 @@ STAGED="$(git -c core.quotePath=off diff --cached --name-only)"
+ # 必須在 Gate 1 之前:後面每條路徑都顯式 exit,「末段」是不可達死碼;
+ # docs-only commit 在 Gate 2 就 exit 0,唯有這裡能覆蓋主場景(改文件漏同步夥伴)。
+ # 警告走 stdout(2>/dev/null 只吞診斷,含版本偏斜時舊 vendored lumos 的 argparse 錯)。
+ CC_PY="$(command -v python3 || command -v python || true)"
+ if [ -n "$CC_PY" ] && [ -f "$REPO_ROOT/scripts/lumos" ]; then
+   "$CC_PY" "$REPO_ROOT/scripts/lumos" cochange check --staged 2>/dev/null || true
+ else
+   echo "pre-commit: 無 python3 或 scripts/lumos,跳過 co-change 警告" >&2
+ fi
+ 
++# Gate DG: code 側刪除傳播守衛 (advisory;spec=Projects/code側刪除傳播守衛_計劃)
++# 警告走 stdout(2>/dev/null 只吞診斷);|| true 只兜 crash,hang 由 lumos 內部 deadline 兜(fail-open)
++if [[ -n "${CC_PY:-}" ]]; then
++  "$CC_PY" "$REPO_ROOT/scripts/lumos" delguard --staged 2>/dev/null || true
++fi
++
+ # Gate 1: 圖譜污染指紋 (2026-06-13 對抗審計 P0)
+ # 攔 notesmd-cli `frontmatter --edit` 的副作用: 日期欄位加引號 (Obsidian property
+ # 型別 date→text 靜默損傷,且通常伴隨整篇 frontmatter 鍵序重排)。
+ # 必須放在 Gate 2 之前 — 污染 commit 是 docs-only,Gate 2 的 code 判定對它直接放行。
+ if echo "$STAGED" | grep -qE "^${GRAPH_ROOT}/.*\.md$"; then
+   polluted="$(git -c core.quotePath=off diff --cached -- "$GRAPH_ROOT" \
+     | grep -E '^\+[[:space:]]*(date|created|updated|decided|ended):[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}"' || true)"
+   if [[ -n "$polluted" ]]; then
+     {
+       echo ""
+diff --git a/scripts/lumos b/scripts/lumos
+index 9f5d0be..4634397 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -6215,20 +6215,21 @@ def cmd_export_html(env, out_path, standalone=False):
+     Path(out_path).write_text(html, encoding="utf-8")
+     mode = "standalone(自包含/離線可開)" if standalone else "CDN"
+     print(f"✓ export html [{mode}]: {out_path}  ({len(model['nodes'])} 節點 / {len(model['edges'])} 邊)")
+     return 0
+ 
+ 
+ # ═══════════════════════ 階段三: 寫側 T1(行級手術) ═══════════════════════
+ 
+ SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen", "pitfall_ask", "pitfall_source"}  # pitfall_* 2026-08-09 已知坑策展庫
+ LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases", "pitfall_when"}   # aliases 2026-08-05;pitfall_when 2026-08-09(已知坑策展庫,content-trigger)
++LINK_KEYS = ("verified_by", "plan_refs", "related", "core_refs")  # S2「純連結欄位」子集(≠LIST_KEYS:那是 append 白名單,pitfall_when=content-trigger 不算連結);spec=Projects/code側刪除傳播守衛_計劃
+ DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
+ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+ 
+ 
+ def fm_structure(fm_lines):
+     """回傳 ordered [(key, start, end, kind)]，kind ∈ scalar/list/block。
+     end = 該 key 區塊最後一行的 index(含)。"""
+     out = []
+     i, n = 0, len(fm_lines)
+     while i < n:
+@@ -10406,20 +10407,229 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
+     if as_json:
+         print(json.dumps({"warnings": warnings, "checked": len(changed)},
+                          ensure_ascii=False))
+     else:
+         for w in warnings:
+             print(f"cochange: 改了 {w['changed']} 但未動 {w['missing']}"
+                   f"(歷史 {w['confidence']:.0%} 同改,共 {w['support']} 次)——確認是否漏改")
+     return 0
+ 
+ 
++_DELGUARD_STOP = frozenset("if else for while return import class def val var fun void public private static final new this true false null let const function".split())
++_DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/")
++# 與 pre-commit should_exclude 的 lock 排除規則對齊(`*package-lock.json|*yarn.lock|*pnpm-lock.yaml`)
++_DELGUARD_EXCLUDE_LOCKFILES = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
++DELGUARD_TOKEN_CAP = 40  # staged diff 抽出 token 數上限,超額截斷(dropped 計入輸出提示)
++DELGUARD_TOP_N = 10  # CLI 文字輸出逐條列出上限,其餘併入「另有 K 處命中」統計行
++
++
++def _delguard_parse_diff(diff_text, graph_root):
++    """從 staged diff 抽被刪識別字(token)＋vault(graph_root 下 .md)的 +/- 行分流。
++    規則:只吃 `-` 行(跳過 ---/+++/hunk 頭/binary 檔段);token regex [A-Za-z_][A-Za-z0-9_]{2,};
++    出現在同一份 diff 任何 `+` 行的 token 剔除(檔內改名/搬行即刻回收,降誤報);stopword 表剔除;
++    vault 與排除路徑(node_modules/ bin/ obj/ dist/ build/ __pycache__/ .git/)、
++    以及 lockfile(package-lock.json/yarn.lock/pnpm-lock.yaml,與 pre-commit should_exclude 對齊)的檔案不抽 token,
++    vault .md 的 diff 行另收進 vault_diffs 供 S2 純連結欄位判定用。
++    回 {"tokens": [str...]  # 依出現序去重,cap 前不截
++        ,"vault_diffs": {path: [line...]}}"""
++    import re
++    tok_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
++    tokens, seen, added = [], set(), set()
++    vault_diffs, cur, is_vault, is_excl, in_binary = {}, None, False, False, False
++    lines = diff_text.splitlines()
++    for ln in lines:  # 先收全 diff 的 + 行 token(回收表)
++        if ln.startswith("+") and not ln.startswith("+++"):
++            added.update(tok_re.findall(ln))
++    for ln in lines:
++        if ln.startswith("diff --git"):
++            m = re.search(r" b/(.+)$", ln)
++            cur = m.group(1) if m else None
++            is_vault = bool(cur) and cur.startswith(graph_root) and cur.endswith(".md")
++            is_excl = bool(cur) and (any(seg in cur for seg in _DELGUARD_EXCLUDE_DIRS)
++                                      or cur.endswith(_DELGUARD_EXCLUDE_LOCKFILES))
++            in_binary = False
++            continue
++        if ln.startswith("Binary files"):
++            in_binary = True
++            continue
++        if in_binary or cur is None:
++            continue
++        if is_vault and (ln.startswith("+") or ln.startswith("-")) and not ln.startswith(("+++", "---")):
++            vault_diffs.setdefault(cur, []).append(ln)
++            continue
++        if is_vault or is_excl:
++            continue
++        if ln.startswith("-") and not ln.startswith("---"):
++            for t in tok_re.findall(ln):
++                if t in _DELGUARD_STOP or t in added or t in seen:
++                    continue
++                seen.add(t); tokens.append(t)
++    return {"tokens": tokens, "vault_diffs": vault_diffs}
++
++
++def _delguard_confidence(tokens, repo_root, graph_root, timeout=None):
++    """回 {token: "high"|"low"}。high=staged index 全域消失(排除 vault/排除域後零命中)。
++    單次 git -c core.quotePath=off grep --cached -n -I -w -F -e t1 -e t2 ... --
++    . ':(exclude)<graph_root>' ':(exclude)node_modules' ...;rc>1 視為失敗丟 RuntimeError(上層 fail-open)。
++    命中歸屬在 python 端做:對 grep 輸出每行,用 Task 4 同款三件套 regex 判哪些 token 出現
++    (`-w` 是 git 側粗篩,py 側再精配)。快照契約:讀 staged index(--cached),worktree 未 add 的改動不影響結果。
++    timeout: 選用秒數上限,轉傳 subprocess.run;逾時拋 subprocess.TimeoutExpired,
++    落進呼叫端 cmd_delguard_check 既有 except Exception → 降級 rc0(行為契約自動成立)。"""
++    import re, subprocess
++    if not tokens:
++        return {}
++    cmd = ["git", "-c", "core.quotePath=off", "grep", "--cached", "-n", "-I", "-w", "-F"]
++    for t in tokens:
++        cmd += ["-e", t]
++    cmd += ["--", ".", f":(exclude){graph_root}"]
++    for d in _DELGUARD_EXCLUDE_DIRS:
++        cmd += [f":(exclude){d.rstrip('/')}"]
++    r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root, timeout=timeout)
++    if r.returncode > 1:
++        raise RuntimeError(f"git grep rc={r.returncode}: {r.stderr.strip()[:200]}")
++    alive = set()
++    pats = {t: re.compile(r"\b" + re.escape(t) + r"\b", re.ASCII) for t in tokens}
++    for line in r.stdout.splitlines():
++        for t, p in pats.items():
++            if t not in alive and p.search(line):
++                alive.add(t)
++    return {t: ("low" if t in alive else "high") for t in tokens}
++
++
++def _delguard_vault_scan(tokens, conf, graph_root_abs, deadline_check=None):
++    """回 [{"node": "Systems/憑證.md", "folder": "Systems", "line_no": int,
++            "line": str(strip,截 160 字), "tokens": [..], "conf": "high"|"low"}...]
++       排序: (conf!=high, folder!="Systems", node, line_no)——高信心先、Systems 先。
++       deadline_check: 選用 callable(),os.walk 外層迴圈每檔呼叫一次;回 True 立即
++       return 目前累積 hits(部分結果,呼叫端已知逾時語意)。"""
++    import re, os
++    if not tokens:
++        return []
++    rx = re.compile(r"\b(?:" + "|".join(map(re.escape, tokens)) + r")\b", re.ASCII)
++    per = {t: re.compile(r"\b" + re.escape(t) + r"\b", re.ASCII) for t in tokens}
++    hits = []
++    for dirpath, _dirs, files in os.walk(graph_root_abs):
++        for fn in files:
++            if deadline_check is not None and deadline_check():
++                hits.sort(key=lambda h: (h["conf"] != "high", h["folder"] != "Systems", h["node"], h["line_no"]))
++                return hits
++            if not fn.endswith(".md"):
++                continue
++            fp = os.path.join(dirpath, fn)
++            rel = os.path.relpath(fp, graph_root_abs)
++            folder = rel.split(os.sep, 1)[0]
++            try:
++                text = open(fp, encoding="utf-8", errors="replace").read()
++            except OSError:
++                continue
++            for i, line in enumerate(text.splitlines(), 1):
++                if not rx.search(line):
++                    continue
++                ts = [t for t, p in per.items() if p.search(line)]
++                hits.append({"node": rel.replace(os.sep, "/"), "folder": folder, "line_no": i,
++                             "line": line.strip()[:160], "tokens": ts,
++                             "conf": "high" if any(conf.get(t) == "high" for t in ts) else "low"})
++    hits.sort(key=lambda h: (h["conf"] != "high", h["folder"] != "Systems", h["node"], h["line_no"]))
++    return hits
++
++
++def _delguard_purelink(diff_lines):
++    """True=本檔 diff 只有「連結欄位鍵頭/連結列表項」的變更。
++       合格行(±開頭,剝符號後): `- "[[..]]"` 列表項,或 `<LINK_KEYS 之一>:` 鍵頭。
++       其他任何 ± 行(含 pitfall_when:/tags: 鍵頭、body 文字、YAML 重排)→ False。"""
++    import re
++    item_re = re.compile(r'^\s*-\s*"?\[\[[^\]]+\]\]"?\s*$')
++    key_re = re.compile(r"^(%s):\s*$" % "|".join(LINK_KEYS))
++    changed = [ln[1:] for ln in diff_lines
++               if ln[:1] in "+-" and not ln.startswith(("+++", "---"))]
++    if not changed:
++        return False
++    return all(item_re.match(c) or key_re.match(c) for c in changed)
++
++
++def cmd_delguard_check(repo=None, as_json=False):
++    """code 側刪除傳播守衛(advisory):staged diff 抽被刪 token → 兩檔信心 → grep vault 指名過期原句。
++    恆 rc0(內部錯誤/超時皆 fail-open 放行;唯一輸出差異是訊息)。
++    vault-free repo(找不到 graph root)→ 靜默 rc0,不掃。
++    --json 降級契約(超時/內部錯誤皆同款):單行合法 JSON
++    {"tokens": int, "hits": [], "fake_sync": [], "degraded": true, "reason": "timeout"|"error"},rc0。"""
++    import json, os, subprocess, time
++    t0 = time.monotonic()
++    deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "2.0"))
++    def _over():
++        return time.monotonic() - t0 > deadline
++    def _degraded_json(reason, n_tokens):
++        print(json.dumps({"tokens": n_tokens, "hits": [], "fake_sync": [],
++                          "degraded": True, "reason": reason}, ensure_ascii=False))
++    tokens = []
++    try:
++        if os.environ.get("LUMOS_DELGUARD_RAISE"):
++            raise RuntimeError("test hook")
++        root = str(_cochange_repo_root(repo) or os.getcwd())
++        gr = find_vault(Path(root))  # 既有 vault 偵測 helper;找不到→靜默 rc0(vault-free repo 不掃)
++        if not gr:
++            return 0
++        r = subprocess.run(["git", "-c", "core.quotePath=off", "diff", "--cached", "-M", "--no-color"],
++                           capture_output=True, text=True, cwd=root,
++                           timeout=max(0.1, deadline - (time.monotonic() - t0)))
++        parsed = _delguard_parse_diff(r.stdout, os.path.relpath(gr, root).replace(os.sep, "/"))
++        tokens = parsed["tokens"][:DELGUARD_TOKEN_CAP]
++        dropped = len(parsed["tokens"]) - len(tokens)
++        if _over():
++            if as_json:
++                _degraded_json("timeout", len(tokens))
++            else:
++                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
++            return 0
++        rem = max(0.1, deadline - (time.monotonic() - t0))
++        conf = _delguard_confidence(tokens, root, os.path.relpath(gr, root).replace(os.sep, "/"), timeout=rem)
++        if _over():
++            if as_json:
++                _degraded_json("timeout", len(tokens))
++            else:
++                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
++            return 0
++        hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=lambda: time.monotonic() - t0 > deadline)
++        fake = []
++        for path, dl in parsed["vault_diffs"].items():
++            rel = os.path.relpath(os.path.join(root, path), gr).replace(os.sep, "/")
++            if _delguard_purelink(dl) and any(h["node"] == rel for h in hits):
++                fake.append(rel)
++        if as_json:
++            print(json.dumps({"tokens": len(tokens), "dropped": dropped, "hits": hits,
++                              "fake_sync": fake, "degraded": False}, ensure_ascii=False))
++            return 0
++        if not hits:
++            if dropped:
++                print(f"delguard: 無命中;{dropped} 個符號超 cap 未掃(--json 看已掃全量)")
++            return 0
++        hi = sum(1 for h in hits if h["conf"] == "high")
++        n_hit_tokens = len({t for h in hits for t in h["tokens"]})
++        print(f"⚠ delguard: code 側刪除傳播——{n_hit_tokens} 個被刪符號在圖譜仍被提及(高信心 {hi}/低信心 {len(hits)-hi})")
++        for h in hits[:DELGUARD_TOP_N]:
++            print(f"  [{h['conf']}] {h['node']}:{h['line_no']} 「{h['line']}」 ← {','.join(h['tokens'])}")
++        rest = len(hits) - min(len(hits), DELGUARD_TOP_N)
++        if rest or dropped:
++            print(f"  …另有 {rest} 處命中/{dropped} 個符號超 cap 未展開(--json 看已掃全量)")
++        for n in fake:
++            print(f"  ⚠ 假同步嫌疑: {n} 本次只掛連結(純連結編輯)但內文仍講被刪符號")
++        print("  退場前自問: 1) 這次拿掉/反轉了什麼? 2) 上列原句逐句判:改動後還成立嗎?")
++        print("  3) 還成立→一句話為什麼;不成立→現在改掉或標作廢。新增 verified_by/related 連結不算同步。")
++        return 0
++    except Exception as e:
++        if as_json:
++            _degraded_json("error", len(tokens))
++        else:
++            print(f"delguard: 內部錯誤({e.__class__.__name__}),放行")
++        return 0
++
++
+ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
+     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。
+     供 _pitfall_diff_mode(印)與 loop capture-counts(收割成異質 finder)共用同一計算。"""
+     import subprocess
+     try:
+         # core.quotePath=false:CJK 檔名不轉義加引號(否則 "+++ b/" 前綴比對全失效,
+         # r2 panel major:CJK 檔名 pitfall 命中被靜默漏收/誤歸,同 test-layers/impact-diff 先例)
+         r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "-U3", diff_range],
+                            capture_output=True, text=True, cwd=str(repo_root))
+@@ -13354,20 +13564,25 @@ def main():
+                      help="解除 confidence 門檻(support 硬底線 2 仍全域生效)")
+     ccr.add_argument("--repo", dest="coch_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+     ccr.add_argument("--json", action="store_true", dest="coch_json", help="輸出 JSON manifest")
+     ccc = ccsub.add_parser("check", help="對變更集比對規則列漏改警告(advisory rc0;git 失敗 rc2)")
+     ccc.add_argument("--staged", action="store_true", dest="coch_staged", help="變更集=git staged")
+     ccc.add_argument("--diff", dest="coch_diff", default=None, metavar="A..B",
+                      help="變更集=diff range(pre-resolved 兩點如 main..HEAD;與 --staged 同給時 --diff 優先)")
+     ccc.add_argument("--repo", dest="coch_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+     ccc.add_argument("--json", action="store_true", dest="coch_json", help="輸出 JSON manifest")
+ 
++    dg = sub.add_parser("delguard", help="code 側刪除傳播守衛(advisory):staged 被刪符號→grep vault 指名過期原句;spec=Projects/code側刪除傳播守衛_計劃")
++    dg.add_argument("--staged", action="store_true", help="掃 staged diff(目前唯一模式,旗標留語意)")
++    dg.add_argument("--json", action="store_true")
++    dg.add_argument("--repo")
++
+     cl = sub.add_parser("code-loop", help="code-loop 留痕(vault-free):pass/skip 收斂紀錄 + check 查詢")
+     clsub = cl.add_subparsers(dest="clcmd", required=True)
+     for _clname, _clhelp in (
+         ("pass", "記錄本分支 HEAD 已過 code-loop 收斂(status=passed)"),
+         ("skip", "顯式跳過 code-loop 並留痕(status=skipped;同 bypass 哲學)"),
+         ("check", "跑判定式:tier=high∧無有效留痕→rc1 blocked;--json 輸出 verdict dict"),
+     ):
+         _clp = clsub.add_parser(_clname, help=_clhelp)
+         if _clname in ("pass", "skip"):
+             _clp.add_argument("--note", default="", help="理由(pass/skip 必填習慣;進治理帳)")
+@@ -13462,20 +13677,22 @@ def main():
+     if args.cmd == "lint-watch":
+         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
+     if args.cmd == "compose-metrics":
+         return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline, args.audit)
+     if args.cmd == "cochange":
+         if args.cccmd == "rules":
+             return cmd_cochange_rules(repo=args.coch_repo, show_all=args.coch_all,
+                                       as_json=args.coch_json)
+         return cmd_cochange_check(repo=args.coch_repo, staged=args.coch_staged,
+                                   diff_range=args.coch_diff, as_json=args.coch_json)
++    if args.cmd == "delguard":
++        return cmd_delguard_check(repo=args.repo, as_json=args.json)
+     if args.cmd == "code-loop":
+         note = getattr(args, "note", None) or ""
+         cl_json = getattr(args, "cl_json", False)
+         return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo, as_json=cl_json,
+                              diff_range=getattr(args, "cl_diff", None),
+                              at_sha=getattr(args, "cl_at_sha", None),
+                              marker_branch=getattr(args, "cl_branch", None))
+     if args.cmd == "loop" and args.lcmd == "capture-counts":
+         # 純機械原語(不碰圖譜):跨異質 finder 算 capture-recapture 重疊,vault-free
+         return cmd_loop_capture_counts(None, args.finders,
+@@ -10507,8 +10507,9 @@ def _delguard_confidence(tokens, repo_root, graph_root, timeout=None):
+     alive = set()
+     pats = {t: re.compile(r"\b" + re.escape(t) + r"\b", re.ASCII) for t in tokens}
+     for line in r.stdout.splitlines():
++        content = line.split(":", 2)[2]
+         for t, p in pats.items():
+-            if t not in alive and p.search(line):
++            if t not in alive and p.search(content):
+                 alive.add(t)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 8cf824f..3a5b9e7 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -1607,31 +1607,47 @@ def t_precommit_vendored_exempt():
+     # ④ ★源 repo 守門★:有 skills/lumos-project-notes(=Lumos 源)→ 豁免失效,vendored 檔仍擋
+     #    (否則源 repo 自家改 scripts/lumos 不帶圖譜會靜默放行=弄弱自家閘)
+     r4 = Path(tempfile.mkdtemp(prefix="gctl-pcv4-"))
+     (r4 / "skills" / "lumos-project-notes").mkdir(parents=True)
+     res4 = _precommit_run(r4, ["scripts/test_lumos.py"])
+     check("precommit 豁免: 源 repo 內豁免失效、仍擋", res4.returncode != 0, f"rc={res4.returncode}")
+ 
+ 
+ def t_precommit_whitelist_drift_guard():
+     """漂移守衛:pre-commit+post-commit 的豁免清單都必須涵蓋 _VENDORED_TOOLKIT 每項+兩夾+源守門
+-    (post-commit 是 bypass 記帳端,漏對齊=例行 update 被記假 bypass 灌水;2026-07-25 實測踩過)。"""
++    (post-commit 是 bypass 記帳端,漏對齊=例行 update 被記假 bypass 灌水;2026-07-25 實測踩過)。
++    [終審 fix I3]同源第三份清單:delguard 的 _DELGUARD_EXCLUDE_DIRS/lockfile 排除規則
++    也要對齊 pre-commit should_exclude,免得兩處各自漂。"""
+     m = _load_lumos()
+     hooks_dir = Path(GRAPHCTL).resolve().parent / "hooks"
+     for hook in ("pre-commit", "post-commit"):
+         txt = (hooks_dir / hook).read_text(encoding="utf-8")
+         for rel in m._VENDORED_TOOLKIT:
+             check(f"{hook} 漂移守衛: 豁免清單含 {rel}", rel in txt, rel)
+         for d in ("scripts/hooks/", "scripts/templates/"):
+             check(f"{hook} 漂移守衛: 豁免清單含 {d}*", f"{d}*" in txt, d)
+         check(f"{hook} 漂移守衛: 含源 repo 守門", "skills/lumos-project-notes" in txt, hook)
+ 
++    # delguard 排除域對齊 pre-commit should_exclude(第三份同源清單)
++    precommit_txt = (hooks_dir / "pre-commit").read_text(encoding="utf-8")
++    case_line = [l for l in precommit_txt.splitlines() if "node_modules" in l and "case" not in l][0]
++    for d in m._DELGUARD_EXCLUDE_DIRS:
++        check(f"delguard 漂移守衛: 排除域 {d} 對齊 pre-commit should_exclude",
++              d.rstrip("/") in case_line, case_line)
++    lock_line = [l for l in precommit_txt.splitlines() if "package-lock.json" in l][0]
++    lumos_src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    for lf in m._DELGUARD_EXCLUDE_LOCKFILES:
++        check(f"delguard 漂移守衛: lockfile {lf} 見於 pre-commit lock 排除行",
++              lf in lock_line, lock_line)
++        check(f"delguard 漂移守衛: lockfile {lf} 見於 _delguard_parse_diff 源碼(scripts/lumos)",
++              lf in lumos_src, lf)
++
+ 
+ # ── Check T dart profile:test('id')/testWidgets('id') 字串名錨+檔名錨 *_test.dart ──
+ def t_dart_profile_discovery():
+     m = _load_lumos()
+     root = Path(tempfile.mkdtemp(prefix="gctl-dartprof-"))
+     (root / "test").mkdir()
+     (root / "test" / "order_test.dart").write_text(
+         "void main() {\n"
+         "  test('alpha_check', () {});\n"
+         "  testWidgets('widget_flow', (tester) async {});\n"
+@@ -9763,20 +9779,268 @@ def t_cochange():
+     r = lum("cochange", "rules", "--json")
+     check("cochange 非數值門檻 fail-open rc0+提示", r.returncode == 0 and "非數值" in r.stdout, f"rc={r.returncode} out={r.stdout[:200]} err={r.stderr[:200]}")
+     (root / ".lumos" / "cochange.json").unlink()
+ 
+     # 清理 tempdir(code-loop r1:洩漏修復)
+     import shutil
+     for d in (root, empty, nogit):
+         shutil.rmtree(d, ignore_errors=True)
+ 
+ 
++def _mk_delguard_repo():
++    """delguard Task 3 fixture:staged 刪除 Login.kt 兩呼叫,
++    refreshPaywayCredentials 全域消失(僅 Login.kt/vault 提過)、helperStillUsed 在 Other.kt 仍活。"""
++    import subprocess as sp
++    root = Path(tempfile.mkdtemp(prefix="gctl-delg-"))
++    sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
++    sp.run(["git", "-C", str(root), "config", "user.email", "t@t.t"], capture_output=True)
++    sp.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
++    gr = root / "docs" / "kg-knowledge"
++    for sub in ("Systems", "Projects", "Verification", "Issues", "MOC"):
++        (gr / sub).mkdir(parents=True)
++    (root / "app").mkdir()
++    (root / "app" / "Login.kt").write_text(
++        "fun login() {\n    refreshPaywayCredentials()\n    helperStillUsed()\n}\n", encoding="utf-8")
++    (root / "app" / "Other.kt").write_text(
++        "fun other() { helperStillUsed() }\n", encoding="utf-8")
++    (gr / "Systems" / "憑證.md").write_text(
++        "---\ntype: system\n---\n# 憑證\n登入時 refreshPaywayCredentials 撈一次憑證。\n還在講helperStillUsed欄位。\n", encoding="utf-8")
++    (gr / "Projects" / "計劃.md").write_text(
++        "---\ntype: project\n---\n# 計劃\n預定用 refreshPaywayCredentials 重構。\n", encoding="utf-8")
++    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
++    sp.run(["git", "-C", str(root), "commit", "-qm", "init"], capture_output=True)
++    # staged 刪除:Login.kt 拿掉兩個呼叫(refreshPaywayCredentials 全域消失;helperStillUsed 在 Other.kt 仍活)
++    (root / "app" / "Login.kt").write_text("fun login() {\n}\n", encoding="utf-8")
++    sp.run(["git", "-C", str(root), "add", "app/Login.kt"], capture_output=True)
++    return root, "docs/kg-knowledge"
++
++
++def _mk_delguard_headcount_repo():
++    """delguard fix r1 補測試 fixture:staged 刪兩個符號,僅一個在 vault 有命中——
++    用來釘標頭行計數=命中符號數(distinct),不是被刪符號總數。"""
++    import subprocess as sp
++    root = Path(tempfile.mkdtemp(prefix="gctl-delg-hc-"))
++    sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
++    sp.run(["git", "-C", str(root), "config", "user.email", "t@t.t"], capture_output=True)
++    sp.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
++    gr = root / "docs" / "kg-knowledge"
++    (gr / "Systems").mkdir(parents=True)
++    (root / "app").mkdir()
++    (root / "app" / "Foo.kt").write_text(
++        "fun x() {\n    onlyMentionedHelper()\n    neverMentionedHelper()\n}\n", encoding="utf-8")
++    (gr / "Systems" / "sys.md").write_text(
++        "---\ntype: system\n---\n# sys\n用到 onlyMentionedHelper 做事。\n", encoding="utf-8")
++    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
++    sp.run(["git", "-C", str(root), "commit", "-qm", "init"], capture_output=True)
++    # staged 刪除:兩個符號都拿掉,但只有 onlyMentionedHelper 在 vault 有提及
++    (root / "app" / "Foo.kt").write_text("fun x() {\n}\n", encoding="utf-8")
++    sp.run(["git", "-C", str(root), "add", "app/Foo.kt"], capture_output=True)
++    return root, "docs/kg-knowledge"
++
++
++def _mk_delguard_capflood_repo():
++    """delguard 終審 fix I2 fixture:staged 刪除 45 個獨特符號(超 DELGUARD_TOKEN_CAP=40),
++    僅第 0 個(capTok0)在 vault 有命中——用來釘 cap 截斷後 dropped>0 且刷屏降級措辭。"""
++    import subprocess as sp
++    root = Path(tempfile.mkdtemp(prefix="gctl-delg-cap-"))
++    sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
++    sp.run(["git", "-C", str(root), "config", "user.email", "t@t.t"], capture_output=True)
++    sp.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
++    gr = root / "docs" / "kg-knowledge"
++    (gr / "Systems").mkdir(parents=True)
++    (root / "app").mkdir()
++    calls = "\n".join(f"    capTok{i}()" for i in range(45))
++    (root / "app" / "Foo.kt").write_text(f"fun x() {{\n{calls}\n}}\n", encoding="utf-8")
++    (gr / "Systems" / "sys.md").write_text(
++        "---\ntype: system\n---\n# sys\n用到 capTok0 做事。\n", encoding="utf-8")
++    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
++    sp.run(["git", "-C", str(root), "commit", "-qm", "init"], capture_output=True)
++    (root / "app" / "Foo.kt").write_text("fun x() {\n}\n", encoding="utf-8")
++    sp.run(["git", "-C", str(root), "add", "app/Foo.kt"], capture_output=True)
++    return root, "docs/kg-knowledge"
++
++
++def t_delguard():
++    """[delguard Task 1]LINK_KEYS 常數＋子集守衛斷言:
++    ①LINK_KEYS 常數存在且值正確
++    ②子集守衛:LINK_KEYS ⊆ LIST_KEYS ∪ {core_refs}
++    翻紅釘:刪 LINK_KEYS 常數 → ①翻紅;LINK_KEYS 值偏離 → ①翻紅;
++           破壞子集關係 → ②翻紅。"""
++    print("t_delguard")
++    import re as _re
++    src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    m = _re.search(r"^LINK_KEYS\s*=\s*\(([^)]*)\)", src, _re.M)
++    check("delguard LINK_KEYS 常數存在", m is not None, "LINK_KEYS not found")
++    keys = set(_re.findall(r'"(\w+)"', m.group(1))) if m else set()
++    check("delguard LINK_KEYS 值正確", keys == {"verified_by", "plan_refs", "related", "core_refs"}, str(keys))
++    lm = _re.search(r"^LIST_KEYS\s*=\s*\{([^}]*)\}", src, _re.M)
++    listk = set(_re.findall(r'"(\w+)"', lm.group(1))) if lm else set()
++    check("delguard 子集守衛 LINK_KEYS ⊆ LIST_KEYS∪{core_refs}", keys <= (listk | {"core_refs"}), f"{keys} vs {listk}")
++
++    # [delguard Task 2]_delguard_parse_diff:staged diff 抽被刪識別字＋vault 檔 diff 分流
++    from importlib import machinery, util as _u
++    # 以 exec 載入 scripts/lumos 取函式(本檔既有慣例:直接 subprocess 打 CLI 或 exec 模組;此處走 exec)
++    spec_ = machinery.SourceFileLoader("lumos_mod", GRAPHCTL)
++    mod = _u.module_from_spec(_u.spec_from_loader("lumos_mod", spec_))
++    spec_.exec_module(mod)
++    DIFF = """diff --git a/app/Login.kt b/app/Login.kt
++--- a/app/Login.kt
+++++ b/app/Login.kt
++@@ -10,3 +9,2 @@
++-        refreshPaywayCredentials()
++-        val keep = renamedHelper(x)
+++        val keep = renamedHelperV2(x)
++diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchain-knowledge/Systems/pay.md
++--- a/docs/lumos-toolchain-knowledge/Systems/pay.md
+++++ b/docs/lumos-toolchain-knowledge/Systems/pay.md
++@@ -3,1 +3,2 @@
++ verified_by:
+++  - "[[Verification/x]]"
++"""
++    out = mod._delguard_parse_diff(DIFF, "docs/lumos-toolchain-knowledge")
++    check("delguard 抽到被刪 token", "refreshPaywayCredentials" in out["tokens"], str(out["tokens"]))
++    # 修正(brief 原斷言結構性不可能為真,見 task-2-report.md):tokens 依 spec 只從 `-` 行收,
++    # "renamedHelperV2" 只出現在 `+` 行故永不可能進 tokens——"...or renamedHelperV2 in tokens" 恆假,
++    # 使整條斷言退化成「renamedHelper not in tokens」,但同一 spec 又明文只回收「字面相同」的 token,
++    # renamedHelper≠renamedHelperV2 字面不同,不得回收,故該分支恆假、整條斷言對任何合規實作恆假。
++    # 改測真正該釘的兩面:相同字面(keep 同時在 - / + 行原樣出現)→回收剔除;
++    # 不同字面改名(renamedHelper→renamedHelperV2)→已知低信心誤報源,spec 明文 v1 不解,仍留在 tokens。
++    check("delguard +行回收:同字面(keep)濾除、不同字面改名(renamedHelper)留為已知誤報",
++          "keep" not in out["tokens"] and "renamedHelper" in out["tokens"], str(out["tokens"]))
++    check("delguard stopword 剔除", "val" not in out["tokens"], str(out["tokens"]))
++    check("delguard vault diff 不進 tokens 且收進 vault_diffs", "verified_by" not in out["tokens"] and any(p.endswith("pay.md") for p in out["vault_diffs"]), str(out))
++
++    # [delguard Task 3]_delguard_confidence:staged-index 兩檔信心(單次 git grep)
++    root, gr = _mk_delguard_repo()
++    conf = mod._delguard_confidence(["refreshPaywayCredentials", "helperStillUsed"], str(root), gr)
++    check("delguard 全域消失=high", conf.get("refreshPaywayCredentials") == "high", str(conf))
++    check("delguard 仍有呼叫點=low", conf.get("helperStillUsed") == "low", str(conf))
++    # 快照契約:worktree 加回不影響(index 為準)
++    (root / "app" / "Login.kt").write_text("fun login() { refreshPaywayCredentials() }\n", encoding="utf-8")
++    conf2 = mod._delguard_confidence(["refreshPaywayCredentials"], str(root), gr)
++    check("delguard 快照=index 不被 worktree 救回", conf2.get("refreshPaywayCredentials") == "high", str(conf2))
++
++    # [delguard Task 4]_delguard_vault_scan:三件套 alternation 掃 vault＋型別排序
++    hits = mod._delguard_vault_scan(["refreshPaywayCredentials", "helperStillUsed"], conf,
++                                    str(root / gr))
++    check("delguard vault 命中 Systems 原句", any(h["node"] == "Systems/憑證.md" and "撈一次" in h["line"] for h in hits), str(hits))
++    check("delguard CJK 緊貼命中(re.ASCII)", any("還在講" in h["line"] and "helperStillUsed" in h["tokens"] for h in hits), str(hits))
++    check("delguard Projects 也報(型別只排序不壓低)", any(h["folder"] == "Projects" for h in hits), str(hits))
++    sys_idx = min(i for i, h in enumerate(hits) if h["folder"] == "Systems")
++    proj_idx = min(i for i, h in enumerate(hits) if h["folder"] == "Projects")
++    check("delguard Systems 排前", sys_idx < proj_idx, str([(h["folder"], h["conf"]) for h in hits]))
++    # 詞界:蓋 refreshPaywayCredentialsV2 不誤配
++    (root / gr / "Systems" / "V2.md").write_text("---\ntype: system\n---\n用 refreshPaywayCredentialsV2 取代。\n", encoding="utf-8")
++    hits2 = mod._delguard_vault_scan(["refreshPaywayCredentials"], conf, str(root / gr))
++    check("delguard \\b 詞界不誤配 V2", not any(h["node"] == "Systems/V2.md" for h in hits2), str(hits2))
++
++    # [delguard Task 5]_delguard_purelink:S2 純連結 diff 判定(保守朝不報)
++    pl = mod._delguard_purelink(['+  - "[[Verification/2026-08-03_x]]"'])
++    check("delguard S2 純掛連結=True", pl is True, str(pl))
++    check("delguard S2 動 body=False", mod._delguard_purelink(['+  - "[[V/x]]"', "+登入不再撈憑證"]) is False, "")
++    check("delguard S2 pitfall_when 不算連結", mod._delguard_purelink(["+pitfall_when:", '+  - "撈憑證"']) is False, "")
++    check("delguard S2 鍵頭+列表項=True", mod._delguard_purelink(["+verified_by:", '+  - "[[V/x]]"']) is True, "")
++    check("delguard S2 空 diff=False(無變更不算純連結)", mod._delguard_purelink([]) is False, "")
++
++    # [delguard Task 6]cmd_delguard_check 組裝＋子命令 CLI 整合測試
++    import subprocess as sp
++    import json
++
++    def dg(*a, cwd=None, env=None):
++        import os as _os
++        e = dict(_os.environ); e.update(env or {})
++        return sp.run([sys.executable, GRAPHCTL, "delguard", *a],
++                      capture_output=True, text=True, cwd=cwd or str(root), env=e)
++    r = dg("--staged", "--json")
++    check("delguard CLI rc0", r.returncode == 0, r.stderr)
++    data = json.loads(r.stdout.strip().splitlines()[-1])
++    check("delguard 抓到 aff2329 形狀(高信心命中)", any(h["conf"] == "high" for h in data["hits"]), str(data)[:400])
++    r = dg("--staged")
++    check("delguard 警告走 stdout+S3 問句", "退場前自問" in r.stdout and r.returncode == 0, r.stdout[:400])
++    # 假同步嫌疑:vault 節點只掛連結+S1 命中
++    p = root / gr / "Systems" / "憑證.md"
++    p.write_text(p.read_text(encoding="utf-8").replace("---\n# 憑證",
++        '---\n# 憑證').replace("type: system\n", 'type: system\nverified_by:\n  - "[[Verification/x]]"\n'), encoding="utf-8")
++    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
++    r = dg("--staged", "--json")
++    fs = json.loads(r.stdout.strip().splitlines()[-1])["fake_sync"]
++    check("delguard S2 假同步嫌疑(純連結∧S1命中)", "Systems/憑證.md" in fs, str(fs))
++    # 超時降級:env 注 0 → rc0+降級訊息在 stdout
++    r = dg("--staged", env={"LUMOS_DELGUARD_DEADLINE": "0"})
++    check("delguard 超時 fail-open rc0", r.returncode == 0, str(r.returncode))
++    check("delguard 降級訊息在 stdout", "超時降級" in r.stdout, f"out={r.stdout!r} err={r.stderr!r}")
++    # 內部錯誤 fail-open:env 注入測試鉤子
++    r = dg("--staged", env={"LUMOS_DELGUARD_RAISE": "1"})
++    check("delguard 內部錯誤 fail-open rc0+訊息", r.returncode == 0 and "內部錯誤" in r.stdout, r.stdout[:200])
++    # 效能 benchmark:<1s(254 檔級 vault 用本 repo 真 vault 跑,40 token;
++    # 一併連 _delguard_confidence 計時,合計仍要 <1s——單看 vault_scan 會漏掉 git grep 那段成本)
++    import time as _t
++    toks = [f"zzNoSuchTok{i}" for i in range(40)]
++    real_gr = str(Path(GRAPHCTL).parent.parent / "docs" / "lumos-toolchain-knowledge")
++    t0 = _t.monotonic()
++    mod._delguard_confidence(toks, str(root), gr)
++    mod._delguard_vault_scan(toks, {}, real_gr)
++    check("delguard benchmark(confidence+vault 掃)<1s", _t.monotonic() - t0 < 1.0, f"{_t.monotonic()-t0:.2f}s")
++
++    # [終審 fix I1]subprocess timeout 契約:_delguard_confidence 傳極小 timeout 應拋例外(fail-open 前提)
++    ok = False
++    try:
++        mod._delguard_confidence(["x"], str(root), gr, timeout=0.000001)
++    except Exception:
++        ok = True
++    check("delguard _delguard_confidence timeout= 逾時拋例外", ok, "no exception raised")
++
++    # [終審 fix I2]刷屏降級:45 個獨特被刪符號(超 cap=40)→ --json dropped>0;文字模式印「超 cap」統計行、
++    # 逐條列出不超過 top-10
++    root_cap, _gr_cap = _mk_delguard_capflood_repo()
++    r_cap = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--json"],
++                   capture_output=True, text=True, cwd=str(root_cap))
++    data_cap = json.loads(r_cap.stdout.strip().splitlines()[-1])
++    check("delguard --json cap 截斷後 dropped>0", data_cap.get("dropped", 0) > 0, str(data_cap)[:200])
++    r_cap_txt = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"],
++                        capture_output=True, text=True, cwd=str(root_cap))
++    check("delguard 文字模式含「超 cap」統計行", "超 cap" in r_cap_txt.stdout, r_cap_txt.stdout[:300])
++    n_hit_lines = sum(1 for ln in r_cap_txt.stdout.splitlines() if ln.strip().startswith("["))
++    check("delguard 逐條列出不超過 top-10", n_hit_lines <= mod.DELGUARD_TOP_N, r_cap_txt.stdout[:500])
++
++    # [delguard fix r1] --json 降級契約:超時/內部錯誤兩條路徑都要印合法單行 JSON+degraded=True(rc0)
++    r = dg("--staged", "--json", env={"LUMOS_DELGUARD_DEADLINE": "0"})
++    check("delguard 超時降級 --json rc0", r.returncode == 0, str(r.returncode))
++    dj = json.loads(r.stdout.strip().splitlines()[-1])
++    check("delguard 超時降級 --json degraded=True", dj.get("degraded") is True, str(dj))
++    check("delguard 超時降級 --json 形狀完整(tokens/hits/fake_sync)",
++          isinstance(dj.get("tokens"), int) and dj.get("hits") == [] and dj.get("fake_sync") == [], str(dj))
++    r = dg("--staged", "--json", env={"LUMOS_DELGUARD_RAISE": "1"})
++    check("delguard 內部錯誤 --json rc0", r.returncode == 0, str(r.returncode))
++    dj = json.loads(r.stdout.strip().splitlines()[-1])
++    check("delguard 內部錯誤 --json degraded=True", dj.get("degraded") is True, str(dj))
++    check("delguard 內部錯誤 --json 形狀完整(tokens/hits/fake_sync)",
++          isinstance(dj.get("tokens"), int) and dj.get("hits") == [] and dj.get("fake_sync") == [], str(dj))
++
++    # [delguard fix r1] 標頭行計數=實際命中的 distinct 符號數,不是被刪符號總數
++    root_hc, _gr_hc = _mk_delguard_headcount_repo()
++    r = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"],
++               capture_output=True, text=True, cwd=str(root_hc))
++    check("delguard 標頭計數=命中符號數(1個,非刪除總數2個)",
++          "1 個被刪符號" in r.stdout and "2 個被刪符號" not in r.stdout, r.stdout[:300])
++
++    # [delguard Task 7]pre-commit Gate DG 掛載＋排除域對齊斷言
++    hook = Path(GRAPHCTL).parent / "hooks" / "pre-commit"
++    ht = hook.read_text(encoding="utf-8")
++    cond = "delguard --staged" in ht and "|| true" in ht.split("delguard --staged")[1][:40]
++    check("delguard Gate DG 已掛 pre-commit", cond, "gate missing")
++    # 排除域對齊:python 排除清單每一項都出現在 should_exclude 的 case 行裡
++    case_line = [l for l in ht.splitlines() if "node_modules" in l and "case" not in l][0]
++    for d in mod._DELGUARD_EXCLUDE_DIRS:
++        check(f"delguard 排除域對齊 pre-commit({d})", d.rstrip("/") in case_line, case_line)
++
++
+ def t_canary_record_persist():
+     """[S1] record 落盤自驗:印絕對路徑/token 讀回相符/readback 失敗 rc2 不印 ✓。"""
+     import json as _json
+     v = mkvault()
+     log = v.parent / ".canary-log.jsonl"
+     r = run(v, "canary", "record", "caught", "--loop", "L1", "--auditor", "sonnet")
+     check("record rc0", r.returncode == 0, r.stderr)
+     check("輸出含 log 絕對路徑", str(log) in r.stdout, r.stdout)
+     tok = [w for w in r.stdout.split() if w.startswith("CANARY-")][0].rstrip(":")
+     rows = [_json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
