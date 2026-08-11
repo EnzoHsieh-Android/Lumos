@@ -145,7 +145,7 @@ git commit -m "feat(skill): 退場自問加第 4 問(UI 面→補可重放 flow 
 **Files:** Modify `skills/lumos-project-notes/reference.md`（新增一節，放在檔尾「Obsidian CLI」段之前或之後皆可，**與既有段落同層級 `##`**）
 **Interfaces / Consumes:** Task 2 的第 4 問指過來這一節。
 
-- [ ] **Step 1：新增整節**（逐字，這是派工給「產 flow 的 agent」的單源）
+- [x] **Step 1：新增整節**（逐字，這是派工給「產 flow 的 agent」的單源）
 
 ```markdown
 ## 產 maestro UI flow 的派工要求（Android UI 驗收；spec＝`Projects/Android側UI測試綁圖譜工作流_計劃`）
@@ -183,14 +183,14 @@ git commit -m "feat(skill): 退場自問加第 4 問(UI 面→補可重放 flow 
 版面一改就要重錄；`name:` 唯一性與 name↔檔名一致性都沒有機械守衛；`[kill:]` 第三階在 UI 層走不通（斷言被刪掉不會有任何機械檢查翻紅）。
 ```
 
-- [ ] **Step 2：驗證**
+- [x] **Step 2：驗證**
 
 Run：`grep -c "產 maestro UI flow 的派工要求" skills/lumos-project-notes/reference.md` → `1`
 Run：`python3 -c "import sys; sys.path.insert(0,'scripts'); import test_lumos as T; T.t_slim_skill_no_dangling() if hasattr(T,'t_slim_skill_no_dangling') else None; print('ok')"`（若無此函式名則跳過——slim 掃的是 `slim/skills/` 的副本，本 task 改的是主 skill，不影響）
 
-- [ ] **Step 3：全量測試** → `0 failed`
+- [x] **Step 3：全量測試** → `0 failed`
 
-- [ ] **Step 4：commit**（勾 Task 3 checkbox 同 commit）
+- [x] **Step 4：commit**（勾 Task 3 checkbox 同 commit）
 
 ### Task 4：A 段圖譜收尾
 
