@@ -3,6 +3,7 @@ type: project
 status: todo
 created: 2026-08-11
 updated: 2026-08-11
+self_audit: sonnet/2026-08-11
 related:
   - "[[test-layers軟提醒_計劃]]"
   - "[[Systems/pitfalls-code-loop]]"
@@ -281,6 +282,16 @@ mOrangePos `8f239db`：
 
 - **r2（2026-08-11，delta 輪 2 席：sonnet 新宣稱正確性／opus 折入一致性與整合；canary 1 caught 1 missed）**：★這輪抓的幾乎全是我 r1 折入時自己製造的錯★，折入 13 條——①示範測試名仍是中文（r1 只砍了類別前綴沒砍中文，兩席一致）＋補「反引號中文 Kotlin 測試名綁不上」這條真前置②JSON 範例 `root` 還是 `.`（散文改了、唯一會被複製的那塊沒改，兩席一致）③**19 條 kotlin 綁定實測只有 5 條**（r1 我信了席位數字沒自核，r2 兩席各自實跑 `guard list` 抓回）④`multiplatform` 鍵是推導結果非輸入，刪⑤命名慣例自己的示範違反自己（`smoke_manual_...` 少了 `05`）⑥「步驟區加不算」方向反了——Check T 不看 `---` 分界，放步驟區照樣綠但 flow 壞（第七型「綠燈但做錯」）⑦待辦 1「先綁非星標節點」機制上做不到（`guard bind`／Check T 只認 ★INVARIANT★）⑧**d2 的前提是錯的 → 翻盤成 d3**：S1 明文「紀律層規則非機械閘」、pre-push 擋的是留痕不是真跑、且已有 `code-loop skip --note` 出路，「沒裝置就 push 不了」的死鎖不存在⑨「上次實跑留痕」未定義且落在信任階梯最底層 → 隨 d2 一起撤⑩待辦 4 沒帶前置會讓終審 agent 開真單 → 補「已標可自動＋測試門店已確認」⑪frontmatter 證據路徑同步 `governance/` 前綴＋新增待辦修源頭節點⑫（一條為植入的假錯，不計）⑬d1 範圍宣告隨 d3 恢復一致（不動治理層）。
   **本 loop 兩次犯同一型錯**：r1 的 delguard 歸因、r2 的 d2 前提——都是「沒把 PRIOR-ART ① 的第二問（那一層現在做到哪了／那條規則實際長怎樣）跑完就下裁定」。這份 spec 的主題正是這件事，而它在自己的審計過程裡示範了兩次。
+
+## 合約候選清單（收斂時提名；★候選 ≠ 已標★，蓋章仍走 guard scaffold→bind→audit 與「不確定不標」鐵則）
+
+- **flow 的 `name:` 必須是識別字且等於檔名轉底線**——改了就從「可機械反推檔案」退化成「只能全庫 grep」
+- **`name:` 必須在 config 區塊、且該行無其他內容**——放步驟區／帶行尾註解都會造成「Check T 綠但 flow 壞」
+- **maestro 平台的 `root` 必須是 `.maestro/`**——指 `.` 會讓 doctor（pre-push 常跑）掃整個 Android repo
+- **雙平台宣告不可只宣告 maestro**——只宣告一個會讓既有 kotlin 綁定全懸空
+- **flow 只准跑測試門店／測試帳**——跑正式帳＝在真帳開真單（金流不可逆）
+
+★這五條目前都沒有機械守衛★（`[kill:]` 在 UI 層走不通、命名慣例無 linter），提名的意思是「日後若要蓋 ★INVARIANT★，先從這裡挑」，不是現在就標。
 
 ## 待辦
 
