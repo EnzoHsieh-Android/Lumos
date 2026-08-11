@@ -14,10 +14,13 @@ related:
 summary: |-
   FLOW:A 段(本 repo,可立即做完)=修 pitfalls-code-loop 證據路徑+補 Android 通道散文→skill 退場段加 UI 面問句(時機觸發者)→reference.md 加產 flow 派工要求→圖譜收尾;B 段(mOrangePos,需真裝置)=雙平台 config→測試名/flow name 改識別字+bind+audit→測試門店與裝置 ready 清單→真跑驗收含回歸釘翻紅
   KEY:spec 單源=[[Android側UI測試綁圖譜工作流_計劃]](design-loop r1/r2 雙 PASS,golden@governance/golden/Android側UI測試綁圖譜工作流/);本節點只管「怎麼落地」,行為合約以 spec 為準
+  KEY:★A 段(本 repo 4 task)已完成 2026-08-11★—慣例節點證據路徑+Android 通道／skill 退場自問第 4 問／reference.md 派工要求／圖譜收尾,全量 0 failed;驗證見 [[Verification/2026-08-11_AndroidUI工作流A段落地]]。★B 段(mOrangePos,需真裝置)未動★
   KEY:★兩 repo 分段,B 段驗不完不擋 A 段★—A 段全在 lumos-toolchain(散文/節點/skill),B 段在 mOrangePos 且要真裝置;B 段任一步驟卡住=明記未驗+原因,不得靜默跳過
   KEY:★時機觸發者已裁(2026-08-11 Enzo)=skill 退場段★—寫進 lumos-project-notes 既有退場自問(delguard S3 三問旁),user-scope 跨專案生效、零新機制;pre-push 軟提醒方案落選(觸發點是 push 前不是功能完成當下)
   KEY:★本計畫不新增任何機制★—唯一近似新增的是 Task 1 的路徑同源斷言,走「既有 t_precommit_whitelist_drift_guard 同型小修」而非新 detector(新機制準入三問已答,見 Task 1)
   TEST:A 段=python3 scripts/test_lumos.py 全綠 + lumos lint/doctor 0;B 段=mOrangePos 側 lumos doctor 0 + maestro test 檔案形式 rc0 + 回歸釘翻紅實測
+verified_by:
+  - "[[Verification/2026-08-11_AndroidUI工作流A段落地]]"
 ---
 # Android 側 UI 測試綁圖譜工作流_實作計畫
 
@@ -196,10 +199,10 @@ Run：`python3 -c "import sys; sys.path.insert(0,'scripts'); import test_lumos a
 
 **Files:** Create `docs/lumos-toolchain-knowledge/Verification/<今日>_AndroidUI工作流A段落地.md`；Modify 兩個 Projects 節點（`lumos set`／`append`）
 
-- [ ] **Step 1** `lumos new verification "<今日>_AndroidUI工作流A段落地"`，body 記：Task 1-3 的落地內容、路徑同源斷言先紅後綠的證據、全量套件結果（**以實測留痕為準，不記數字快照**）
-- [ ] **Step 2** `lumos set` 填 `valid_under`（如「lumos 現行 pitfalls 排除規則；lumos-project-notes skill v 現行」）與 `revalidate_when`（如「pitfalls --diff 排除路徑變更／退場自問改寫／maestro profile 變更」）；`lumos append` 加 `plan_refs` 回指本節點與 spec 節點
-- [ ] **Step 3** 兩個 Projects 節點各 `lumos append <節點> verified_by "[[Verification/<今日>_AndroidUI工作流A段落地]]"`
-- [ ] **Step 4** `lumos lint` 三節點 0 問題 → `lumos doctor` 0 issues → commit
+- [x] **Step 1** `lumos new verification "<今日>_AndroidUI工作流A段落地"`，body 記：Task 1-3 的落地內容、路徑同源斷言先紅後綠的證據、全量套件結果（**以實測留痕為準，不記數字快照**）
+- [x] **Step 2** `lumos set` 填 `valid_under`（如「lumos 現行 pitfalls 排除規則；lumos-project-notes skill v 現行」）與 `revalidate_when`（如「pitfalls --diff 排除路徑變更／退場自問改寫／maestro profile 變更」）；`lumos append` 加 `plan_refs` 回指本節點與 spec 節點
+- [x] **Step 3** 兩個 Projects 節點各 `lumos append <節點> verified_by "[[Verification/<今日>_AndroidUI工作流A段落地]]"`
+- [x] **Step 4** `lumos lint` 三節點 0 問題 → `lumos doctor` 0 issues → commit
 
 ---
 

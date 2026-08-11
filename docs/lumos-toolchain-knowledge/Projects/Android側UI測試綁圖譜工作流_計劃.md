@@ -71,6 +71,8 @@ decisions:
       接受:這正是既有紀律對 E2E 的既定態度,不為 UI 破例
     decided: 2026-08-11
     valid: true
+verified_by:
+  - "[[Verification/2026-08-11_AndroidUI工作流A段落地]]"
 ---
 # Android 側 UI 測試綁圖譜工作流_計劃
 
