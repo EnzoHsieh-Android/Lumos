@@ -10422,30 +10422,60 @@ DELGUARD_TOKEN_CAP = 40  # staged diff 抽出 token 數上限,超額截斷(dropp
 DELGUARD_TOP_N = 10  # CLI 文字輸出逐條列出上限,其餘併入「另有 K 處命中」統計行
 
 
+def _delguard_is_diff_header(ln):
+    """True=這行是 unified diff 的檔頭行(--- a/… / +++ b/… / …/dev/null),不是內容行。
+    ★不可寫成 startswith(("---","+++"))★——被刪的 SQL/Lua 註解行 `-- x` 在 diff 裡長成
+    `--- x`,那樣會被當檔頭吃掉、整行 token 靜默漏抽(2026-08-11 code-loop r1 s5 F6)。"""
+    return (ln.startswith("--- a/") or ln.startswith("+++ b/")
+            or ln.startswith("--- /dev/null") or ln.startswith("+++ /dev/null"))
+
+
 def _delguard_parse_diff(diff_text, graph_root):
     """從 staged diff 抽被刪識別字(token)＋vault(graph_root 下 .md)的 +/- 行分流。
-    規則:只吃 `-` 行(跳過 ---/+++/hunk 頭/binary 檔段);token regex [A-Za-z_][A-Za-z0-9_]{2,};
-    出現在同一份 diff 任何 `+` 行的 token 剔除(檔內改名/搬行即刻回收,降誤報);stopword 表剔除;
-    vault 與排除路徑(node_modules/ bin/ obj/ dist/ build/ __pycache__/ .git/)、
+    規則:只吃 `-` 行(跳過檔頭/hunk 頭/binary 檔段);token regex [A-Za-z_][A-Za-z0-9_]{2,};
+    出現在**同一檔** `+` 行的 token 剔除(檔內改名/搬行即刻回收,降誤報;
+    ★per-file 而非全 diff★——否則 CHANGELOG/文件檔提一句就把 code 檔真刪除滅聲,
+    2026-08-11 code-loop r1 C);stopword 表剔除;
+    vault 與排除路徑(node_modules/ bin/ obj/ dist/ build/ __pycache__/ .git/,
+    ★路徑段比對★:`src/robin/` 不得撞 `bin/`)、
     以及 lockfile(package-lock.json/yarn.lock/pnpm-lock.yaml,與 pre-commit should_exclude 對齊)的檔案不抽 token,
     vault .md 的 diff 行另收進 vault_diffs 供 S2 純連結欄位判定用。
     回 {"tokens": [str...]  # 依出現序去重,cap 前不截
         ,"vault_diffs": {path: [line...]}}"""
     import re
     tok_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
-    tokens, seen, added = [], set(), set()
-    vault_diffs, cur, is_vault, is_excl, in_binary = {}, None, False, False, False
+
+    def _flags(ln):
+        m = re.search(r" b/(.+)$", ln)
+        c = m.group(1) if m else None
+        vault = bool(c) and c.startswith(graph_root) and c.endswith(".md")
+        excl = bool(c) and (any(c.startswith(seg) or ("/" + seg) in c
+                                for seg in _DELGUARD_EXCLUDE_DIRS)
+                            or c.endswith(_DELGUARD_EXCLUDE_LOCKFILES))
+        return c, vault, excl
+
     lines = diff_text.splitlines()
-    for ln in lines:  # 先收全 diff 的 + 行 token(回收表)
-        if ln.startswith("+") and not ln.startswith("+++"):
-            added.update(tok_re.findall(ln))
+    # 第一遍:per-file 收 `+` 行 token(回收表);vault/.md/排除檔不收(文件提及不算「還活著」)
+    added, cur, skip, in_binary = {}, None, True, False
     for ln in lines:
         if ln.startswith("diff --git"):
-            m = re.search(r" b/(.+)$", ln)
-            cur = m.group(1) if m else None
-            is_vault = bool(cur) and cur.startswith(graph_root) and cur.endswith(".md")
-            is_excl = bool(cur) and (any(seg in cur for seg in _DELGUARD_EXCLUDE_DIRS)
-                                      or cur.endswith(_DELGUARD_EXCLUDE_LOCKFILES))
+            cur, is_v, is_e = _flags(ln)
+            skip = (cur is None) or is_v or is_e or cur.endswith(".md")
+            in_binary = False
+            continue
+        if ln.startswith("Binary files"):
+            in_binary = True
+            continue
+        if skip or in_binary:
+            continue
+        if ln.startswith("+") and not _delguard_is_diff_header(ln):
+            added.setdefault(cur, set()).update(tok_re.findall(ln))
+    # 第二遍:抽被刪 token(回收表只查同檔)＋vault diff 分流
+    tokens, seen = [], set()
+    vault_diffs, cur, is_vault, is_excl, in_binary = {}, None, False, False, False
+    for ln in lines:
+        if ln.startswith("diff --git"):
+            cur, is_vault, is_excl = _flags(ln)
             in_binary = False
             continue
         if ln.startswith("Binary files"):
@@ -10453,14 +10483,15 @@ def _delguard_parse_diff(diff_text, graph_root):
             continue
         if in_binary or cur is None:
             continue
-        if is_vault and (ln.startswith("+") or ln.startswith("-")) and not ln.startswith(("+++", "---")):
+        if is_vault and (ln.startswith("+") or ln.startswith("-")) and not _delguard_is_diff_header(ln):
             vault_diffs.setdefault(cur, []).append(ln)
             continue
         if is_vault or is_excl:
             continue
-        if ln.startswith("-") and not ln.startswith("---"):
+        if ln.startswith("-") and not _delguard_is_diff_header(ln):
+            fadd = added.get(cur) or frozenset()
             for t in tok_re.findall(ln):
-                if t in _DELGUARD_STOP or t in added or t in seen:
+                if t in _DELGUARD_STOP or t in fadd or t in seen:
                     continue
                 seen.add(t); tokens.append(t)
     return {"tokens": tokens, "vault_diffs": vault_diffs}
@@ -10489,8 +10520,15 @@ def _delguard_confidence(tokens, repo_root, graph_root, timeout=None):
     alive = set()
     pats = {t: re.compile(r"\b" + re.escape(t) + r"\b", re.ASCII) for t in tokens}
     for line in r.stdout.splitlines():
+        # ★只對內容域配 token★:git grep 輸出是 `path:lineno:content`,連路徑一起配
+        # 會被檔名撞名誤降級(刪掉 Login() → app/Login.kt 這個路徑本身讓 Login 判 low,
+        # 2026-08-11 code-loop r1 B)。len<3 的行(如 `Binary file … matches`)直接丟。
+        parts = line.split(":", 2)
+        if len(parts) < 3:
+            continue
+        content = parts[2]
         for t, p in pats.items():
-            if t not in alive and p.search(line):
+            if t not in alive and p.search(content):
                 alive.add(t)
     return {t: ("low" if t in alive else "high") for t in tokens}
 
@@ -10522,6 +10560,11 @@ def _delguard_vault_scan(tokens, conf, graph_root_abs, deadline_check=None):
             except OSError:
                 continue
             for i, line in enumerate(text.splitlines(), 1):
+                # 單巨檔也要能中止:只在 os.walk 外層檢查的話,一份幾十萬行的節點會整份掃完
+                # 才輪到下一次檢查,deadline 直接超支(2026-08-11 code-loop r1 H)
+                if deadline_check is not None and i % 2000 == 0 and deadline_check():
+                    hits.sort(key=lambda h: (h["conf"] != "high", h["folder"] != "Systems", h["node"], h["line_no"]))
+                    return hits
                 if not rx.search(line):
                     continue
                 ts = [t for t, p in per.items() if p.search(line)]
@@ -10535,13 +10578,21 @@ def _delguard_vault_scan(tokens, conf, graph_root_abs, deadline_check=None):
 def _delguard_purelink(diff_lines):
     """True=本檔 diff 只有「連結欄位鍵頭/連結列表項」的變更。
        合格行(±開頭,剝符號後): `- "[[..]]"` 列表項,或 `<LINK_KEYS 之一>:` 鍵頭。
-       其他任何 ± 行(含 pitfall_when:/tags: 鍵頭、body 文字、YAML 重排)→ False。"""
+       其他任何 ± 行(含 pitfall_when:/tags: 鍵頭、body 文字、YAML 重排)→ False。
+       ★縮排/重排也算動過內容★:某 `-` 與某 `+` 行 strip 後相同(純空白差異)=搬行/重縮排,
+       不是「只掛連結」,一律 False(保守朝報;2026-08-11 code-loop r1 N / spec C5)。"""
     import re
     item_re = re.compile(r'^\s*-\s*"?\[\[[^\]]+\]\]"?\s*$')
     key_re = re.compile(r"^(%s):\s*$" % "|".join(LINK_KEYS))
-    changed = [ln[1:] for ln in diff_lines
-               if ln[:1] in "+-" and not ln.startswith(("+++", "---"))]
+    plus = [ln[1:] for ln in diff_lines
+            if ln.startswith("+") and not _delguard_is_diff_header(ln)]
+    minus = [ln[1:] for ln in diff_lines
+             if ln.startswith("-") and not _delguard_is_diff_header(ln)]
+    changed = plus + minus
     if not changed:
+        return False
+    ms = {c.strip() for c in minus}
+    if any(p.strip() in ms for p in plus):
         return False
     return all(item_re.match(c) or key_re.match(c) for c in changed)
 
@@ -10554,7 +10605,10 @@ def cmd_delguard_check(repo=None, as_json=False):
     {"tokens": int, "hits": [], "fake_sync": [], "degraded": true, "reason": "timeout"|"error"},rc0。"""
     import json, os, subprocess, time
     t0 = time.monotonic()
-    deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "2.0"))
+    try:  # 亂設的 env 不該讓 pre-commit 印 traceback(fail-open 契約覆蓋設定錯誤)
+        deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "2.0"))
+    except (ValueError, TypeError):
+        deadline = 2.0
     def _over():
         return time.monotonic() - t0 > deadline
     def _degraded_json(reason, n_tokens):
@@ -10568,10 +10622,19 @@ def cmd_delguard_check(repo=None, as_json=False):
         gr = find_vault(Path(root))  # 既有 vault 偵測 helper;找不到→靜默 rc0(vault-free repo 不掃)
         if not gr:
             return 0
-        r = subprocess.run(["git", "-c", "core.quotePath=off", "diff", "--cached", "-M", "--no-color"],
-                           capture_output=True, text=True, cwd=root,
+        gr_rel = os.path.relpath(gr, root).replace(os.sep, "/")
+        # standalone vault repo(整個 repo 就是 vault,graph_root=".")→ 沒有 code 側可守,
+        # 且 "." 前綴會讓每個檔都判成 vault、路徑相對計算全歪 → 靜默 rc0(2026-08-11 code-loop r1 E)
+        if gr_rel == ".":
+            return 0
+        # diff 前綴固定:使用者 ~/.gitconfig 若設 diff.noprefix / diff.mnemonicPrefix,
+        # 檔頭會變成 `--- app/x` 或 `--- i/app/x`,` b/` 抽檔名整條失效 → token 全漏(r1 D)
+        r = subprocess.run(["git", "-c", "core.quotePath=off",
+                            "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
+                            "diff", "--cached", "-M", "--no-color"],
+                           capture_output=True, text=True, errors="replace", cwd=root,
                            timeout=max(0.1, deadline - (time.monotonic() - t0)))
-        parsed = _delguard_parse_diff(r.stdout, os.path.relpath(gr, root).replace(os.sep, "/"))
+        parsed = _delguard_parse_diff(r.stdout, gr_rel)
         tokens = parsed["tokens"][:DELGUARD_TOKEN_CAP]
         dropped = len(parsed["tokens"]) - len(tokens)
         if _over():
@@ -10581,7 +10644,7 @@ def cmd_delguard_check(repo=None, as_json=False):
                 print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
             return 0
         rem = max(0.1, deadline - (time.monotonic() - t0))
-        conf = _delguard_confidence(tokens, root, os.path.relpath(gr, root).replace(os.sep, "/"), timeout=rem)
+        conf = _delguard_confidence(tokens, root, gr_rel, timeout=rem)
         if _over():
             if as_json:
                 _degraded_json("timeout", len(tokens))

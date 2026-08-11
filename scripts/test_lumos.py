@@ -1633,13 +1633,13 @@ def t_precommit_whitelist_drift_guard():
     for d in m._DELGUARD_EXCLUDE_DIRS:
         check(f"delguard 漂移守衛: 排除域 {d} 對齊 pre-commit should_exclude",
               d.rstrip("/") in case_line, case_line)
+    # ★跨檔斷言★:三個 lockfile 名都要出現在 pre-commit 的**那一行** lock 排除規則裡。
+    # (code-loop r1 L:原本還有一條「lf 出現在 scripts/lumos 源碼」——lf 本來就是從
+    #  scripts/lumos 讀出來的常數值,恆真、零鑑別力,已刪。)
     lock_line = [l for l in precommit_txt.splitlines() if "package-lock.json" in l][0]
-    lumos_src = Path(GRAPHCTL).read_text(encoding="utf-8")
     for lf in m._DELGUARD_EXCLUDE_LOCKFILES:
         check(f"delguard 漂移守衛: lockfile {lf} 見於 pre-commit lock 排除行",
               lf in lock_line, lock_line)
-        check(f"delguard 漂移守衛: lockfile {lf} 見於 _delguard_parse_diff 源碼(scripts/lumos)",
-              lf in lumos_src, lf)
 
 
 # ── Check T dart profile:test('id')/testWidgets('id') 字串名錨+檔名錨 *_test.dart ──
@@ -9839,7 +9839,9 @@ def _mk_delguard_headcount_repo():
 
 def _mk_delguard_capflood_repo():
     """delguard 終審 fix I2 fixture:staged 刪除 45 個獨特符號(超 DELGUARD_TOKEN_CAP=40),
-    僅第 0 個(capTok0)在 vault 有命中——用來釘 cap 截斷後 dropped>0 且刷屏降級措辭。"""
+    僅 capTok0 在 vault 有命中,但**分佈在 12 個節點**(> DELGUARD_TOP_N=10)——
+    用來釘 cap 截斷後 dropped>0、且 top-10 截斷真的有鑑別力(命中數 12 > 上限 10,
+    舊 fixture 只有 1 個命中,`<= TOP_N` 斷言恆真、刪掉截斷邏輯也不翻紅;code-loop r1 J)。"""
     import subprocess as sp
     root = Path(tempfile.mkdtemp(prefix="gctl-delg-cap-"))
     sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
@@ -9850,8 +9852,9 @@ def _mk_delguard_capflood_repo():
     (root / "app").mkdir()
     calls = "\n".join(f"    capTok{i}()" for i in range(45))
     (root / "app" / "Foo.kt").write_text(f"fun x() {{\n{calls}\n}}\n", encoding="utf-8")
-    (gr / "Systems" / "sys.md").write_text(
-        "---\ntype: system\n---\n# sys\n用到 capTok0 做事。\n", encoding="utf-8")
+    for n in range(12):  # 12 > DELGUARD_TOP_N,讓 top-10 截斷有東西可截
+        (gr / "Systems" / f"sys{n}.md").write_text(
+            f"---\ntype: system\n---\n# sys{n}\n用到 capTok0 做事。\n", encoding="utf-8")
     sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
     sp.run(["git", "-C", str(root), "commit", "-qm", "init"], capture_output=True)
     (root / "app" / "Foo.kt").write_text("fun x() {\n}\n", encoding="utf-8")
@@ -9973,11 +9976,14 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     check("delguard 內部錯誤 fail-open rc0+訊息", r.returncode == 0 and "內部錯誤" in r.stdout, r.stdout[:200])
     # 效能 benchmark:<1s(254 檔級 vault 用本 repo 真 vault 跑,40 token;
     # 一併連 _delguard_confidence 計時,合計仍要 <1s——單看 vault_scan 會漏掉 git grep 那段成本)
+    # [code-loop r1 K]git grep 也改對**真 repo** 的 staged index 跑:原本打在 3 檔玩具 repo 上,
+    # 量級與現場差幾個數量級,等於沒量到 confidence 這段成本
     import time as _t
     toks = [f"zzNoSuchTok{i}" for i in range(40)]
+    real_root = str(Path(GRAPHCTL).parent.parent)
     real_gr = str(Path(GRAPHCTL).parent.parent / "docs" / "lumos-toolchain-knowledge")
     t0 = _t.monotonic()
-    mod._delguard_confidence(toks, str(root), gr)
+    mod._delguard_confidence(toks, real_root, "docs/lumos-toolchain-knowledge")
     mod._delguard_vault_scan(toks, {}, real_gr)
     check("delguard benchmark(confidence+vault 掃)<1s", _t.monotonic() - t0 < 1.0, f"{_t.monotonic()-t0:.2f}s")
 
@@ -9999,8 +10005,14 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     r_cap_txt = sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"],
                         capture_output=True, text=True, cwd=str(root_cap))
     check("delguard 文字模式含「超 cap」統計行", "超 cap" in r_cap_txt.stdout, r_cap_txt.stdout[:300])
+    # [code-loop r1 J]前置斷言:命中數必須真的超過 top-10,否則下面的截斷斷言恆真(無鑑別力)
+    check("delguard top-10 前置:fixture 命中數 > TOP_N",
+          len(data_cap["hits"]) > mod.DELGUARD_TOP_N, f"hits={len(data_cap['hits'])}")
     n_hit_lines = sum(1 for ln in r_cap_txt.stdout.splitlines() if ln.strip().startswith("["))
-    check("delguard 逐條列出不超過 top-10", n_hit_lines <= mod.DELGUARD_TOP_N, r_cap_txt.stdout[:500])
+    check("delguard 逐條列出剛好截到 top-10", n_hit_lines == mod.DELGUARD_TOP_N, r_cap_txt.stdout[:500])
+    rest_expect = len(data_cap["hits"]) - mod.DELGUARD_TOP_N
+    check("delguard 統計行報出被截掉的 rest(>0)",
+          rest_expect > 0 and f"另有 {rest_expect} 處命中" in r_cap_txt.stdout, r_cap_txt.stdout[:500])
 
     # [delguard fix r1] --json 降級契約:超時/內部錯誤兩條路徑都要印合法單行 JSON+degraded=True(rc0)
     r = dg("--staged", "--json", env={"LUMOS_DELGUARD_DEADLINE": "0"})
@@ -10032,6 +10044,252 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     case_line = [l for l in ht.splitlines() if "node_modules" in l and "case" not in l][0]
     for d in mod._DELGUARD_EXCLUDE_DIRS:
         check(f"delguard 排除域對齊 pre-commit({d})", d.rstrip("/") in case_line, case_line)
+    # [code-loop r1 M]Gate DG 條件必須連 scripts/lumos 存在也檢(未 vendored 的 repo 只有 python 也會跑)
+    dg_block = ht.split("Gate DG")[1][:400]
+    check("delguard Gate DG 條件含 -f scripts/lumos",
+          '-f "$REPO_ROOT/scripts/lumos"' in dg_block, dg_block[:200])
+
+    # ── [code-loop r1 修復波]釘測 ──────────────────────────────────────────
+    # [r1 A]排除域是路徑段比對,不是子字串:src/robin/ 不得被 bin/ 誤殺
+    DIFF_EXCL = """diff --git a/src/robin/Handler.kt b/src/robin/Handler.kt
+--- a/src/robin/Handler.kt
++++ b/src/robin/Handler.kt
+@@ -1,2 +1,1 @@
+-    robinOnlySymbol()
+diff --git a/node_modules/x/a.js b/node_modules/x/a.js
+--- a/node_modules/x/a.js
++++ b/node_modules/x/a.js
+@@ -1,2 +1,1 @@
+-    nodeRootSymbol()
+diff --git a/app/node_modules/y.js b/app/node_modules/y.js
+--- a/app/node_modules/y.js
++++ b/app/node_modules/y.js
+@@ -1,2 +1,1 @@
+-    nodeNestedSymbol()
+diff --git a/app/bin/z.kt b/app/bin/z.kt
+--- a/app/bin/z.kt
++++ b/app/bin/z.kt
+@@ -1,2 +1,1 @@
+-    binNestedSymbol()
+"""
+    ex = mod._delguard_parse_diff(DIFF_EXCL, "docs/kg-knowledge")["tokens"]
+    check("delguard 排除域路徑段:src/robin/ 不被 bin/ 誤殺", "robinOnlySymbol" in ex, str(ex))
+    check("delguard 排除域:根層 node_modules/ 仍排除", "nodeRootSymbol" not in ex, str(ex))
+    check("delguard 排除域:巢狀 app/node_modules/ 仍排除", "nodeNestedSymbol" not in ex, str(ex))
+    check("delguard 排除域:巢狀 app/bin/ 仍排除", "binNestedSymbol" not in ex, str(ex))
+
+    # [r1 C]回收表 per-file:別檔(CHANGELOG.md)提一句不得讓 code 檔的真刪除滅聲
+    DIFF_XFILE = """diff --git a/app/Risk.kt b/app/Risk.kt
+--- a/app/Risk.kt
++++ b/app/Risk.kt
+@@ -1,3 +1,2 @@
+-    computeUserRiskScore()
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,1 +1,2 @@
++- 移除 computeUserRiskScore 這支
+"""
+    xf = mod._delguard_parse_diff(DIFF_XFILE, "docs/kg-knowledge")["tokens"]
+    check("delguard 回收表 per-file:別檔 + 行不滅聲(computeUserRiskScore 仍在)",
+          "computeUserRiskScore" in xf, str(xf))
+
+    # [r1 O①]binary 檔段整段跳過,且不破壞後續檔案解析
+    DIFF_BIN = """diff --git a/assets/img.png b/assets/img.png
+Binary files a/assets/img.png and b/assets/img.png differ
+diff --git a/app/A.kt b/app/A.kt
+--- a/app/A.kt
++++ b/app/A.kt
+@@ -1,2 +1,1 @@
+-    afterBinarySymbol()
+"""
+    bt = mod._delguard_parse_diff(DIFF_BIN, "docs/kg-knowledge")["tokens"]
+    check("delguard binary 段跳過後續檔照抽", "afterBinarySymbol" in bt, str(bt))
+    check("delguard binary 段本身不抽 token", not any(t in bt for t in ("Binary", "differ", "png")), str(bt))
+
+    # [r1 O②]檔頭判定只認 `--- a/`/`--- /dev/null`:內容為 `-- SQL 註解` 的被刪行要抽
+    DIFF_SQL = """diff --git a/db/schema.sql b/db/schema.sql
+--- a/db/schema.sql
++++ b/db/schema.sql
+@@ -1,3 +1,1 @@
+--- legacyAuditTrigger 記錄用
+-DROP TABLE oldAuditTable;
+"""
+    st = mod._delguard_parse_diff(DIFF_SQL, "docs/kg-knowledge")["tokens"]
+    check("delguard SQL `--` 註解型被刪行照抽(不當檔頭吃掉)", "legacyAuditTrigger" in st, str(st))
+    check("delguard 一般被刪行照抽", "oldAuditTable" in st, str(st))
+    check("delguard 檔頭行不當內容抽(schema/sql 不進 tokens)",
+          "schema" not in st and "sql" not in st, str(st))
+
+    # [r1 N / spec C5]S2 純連結:同一連結行只改縮排(-舊/+新 strip 後同內容)= 動過內容,不算純掛連結
+    check("delguard S2 重縮排同內容=False(不判純連結)",
+          mod._delguard_purelink(['-  - "[[V/x]]"', '+    - "[[V/x]]"']) is False, "")
+
+    # [r1 O⑥]metachar token 直餵 vault_scan 不炸(regex 一律 re.escape)
+    try:
+        mod._delguard_vault_scan(["a.b{c", "x)y"], {}, str(root / gr))
+        meta_ok = True
+    except Exception as _e:
+        meta_ok = False
+    check("delguard metachar token 不炸 vault_scan", meta_ok, "regex escape missing")
+
+    # ── CLI 級釘測(fixture repo)──
+    tmp_repos = []
+
+    def _mkrepo(prefix):
+        p = Path(tempfile.mkdtemp(prefix=prefix))
+        for a in (["init", "-q"], ["config", "user.email", "t@t.t"], ["config", "user.name", "t"]):
+            sp.run(["git", "-C", str(p), *a], capture_output=True)
+        tmp_repos.append(p)
+        return p
+
+    def _cli(cwd, *a, env=None):
+        import os as _os
+        e = dict(_os.environ); e.update(env or {})
+        return sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", *a],
+                      capture_output=True, text=True, cwd=str(cwd), env=e)
+
+    # [r1 B]confidence 只配內容域:檔名撞 token(app/Login.kt)不得把 Login 降級成 low
+    rb = _mkrepo("gctl-delg-name-")
+    (rb / "docs" / "kg-knowledge" / "Systems").mkdir(parents=True)
+    (rb / "app").mkdir()
+    (rb / "app" / "Login.kt").write_text("fun doIt() {\n    helperStillUsed()\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rb), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(rb), "commit", "-qm", "init"], capture_output=True)
+    cb = mod._delguard_confidence(["Login", "helperStillUsed"], str(rb), "docs/kg-knowledge")
+    check("delguard confidence 檔名撞名不誤降級(Login=high)", cb.get("Login") == "high", str(cb))
+    check("delguard confidence 內容真命中仍 low(helperStillUsed)",
+          cb.get("helperStillUsed") == "low", str(cb))
+
+    # [r1 D]diff 前綴設定(diff.noprefix)不得打破解析
+    rd = _mkrepo("gctl-delg-noprefix-")
+    (rd / "docs" / "kg-knowledge" / "Systems").mkdir(parents=True)
+    (rd / "docs" / "kg-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\n---\n用 noPrefixVictimSymbol 做事。\n", encoding="utf-8")
+    (rd / "app").mkdir()
+    (rd / "app" / "P.kt").write_text("fun x() {\n    noPrefixVictimSymbol()\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rd), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(rd), "commit", "-qm", "init"], capture_output=True)
+    sp.run(["git", "-C", str(rd), "config", "diff.noprefix", "true"], capture_output=True)
+    (rd / "app" / "P.kt").write_text("fun x() {\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rd), "add", "-A"], capture_output=True)
+    r = _cli(rd, "--json")
+    dd = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard diff.noprefix=true 仍抽得到 token", dd.get("tokens", 0) > 0, r.stdout[:300])
+    check("delguard diff.noprefix=true 仍命中 vault",
+          any("noPrefixVictimSymbol" in h["tokens"] for h in dd.get("hits", [])), r.stdout[:300])
+
+    # [r1 E]standalone vault repo(整個 repo 就是 vault)→ 靜默 rc0,不炸
+    rv = _mkrepo("gctl-delg-vaultonly-")
+    for sub in ("MOC", "Systems"):
+        (rv / sub).mkdir()
+    # 節點內文帶 ASCII 識別字:少了這個,graph_root="." 誤判時也抽不到 token、測試會恆綠
+    (rv / "Systems" / "s.md").write_text(
+        "---\ntype: system\n---\n用 legacyVaultSymbol 做事。\n", encoding="utf-8")
+    (rv / "MOC" / "m.md").write_text(
+        "---\ntype: moc\n---\n索引也提 legacyVaultSymbol。\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rv), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(rv), "commit", "-qm", "init"], capture_output=True)
+    (rv / "Systems" / "s.md").write_text("---\ntype: system\n---\n改過的說明。\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rv), "add", "-A"], capture_output=True)
+    r = _cli(rv)
+    check("delguard standalone vault repo rc0 且靜默",
+          r.returncode == 0 and r.stdout.strip() == "", f"rc={r.returncode} out={r.stdout[:300]}")
+    r = _cli(rv, "--json")
+    check("delguard standalone vault repo --json 不炸(rc0)",
+          r.returncode == 0 and "Traceback" not in r.stderr, f"rc={r.returncode} err={r.stderr[:300]}")
+
+    # [r1 F]LUMOS_DELGUARD_DEADLINE 非數值 → fallback 2.0,不是 rc1 traceback
+    r = _cli(root, "--json", env={"LUMOS_DELGUARD_DEADLINE": "abc"})
+    check("delguard env deadline 非數值 fail-open rc0", r.returncode == 0, f"rc={r.returncode} err={r.stderr[:300]}")
+    dfl = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard env deadline 非數值後行為如常(未降級)", dfl.get("degraded") is False, str(dfl)[:200])
+
+    # [r1 G]非 UTF-8 staged 檔不得炸整支,正常檔照抽
+    rg = _mkrepo("gctl-delg-enc-")
+    (rg / "docs" / "kg-knowledge" / "Systems").mkdir(parents=True)
+    (rg / "docs" / "kg-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\n---\n用 encVictimSymbol 做事。\n", encoding="utf-8")
+    (rg / "app").mkdir()
+    (rg / "app" / "Big5.kt").write_bytes(b"// \xa4\xa4\xa4\xe5\nfun legacyBig5Fun() {}\n")
+    (rg / "app" / "Ok.kt").write_text("fun x() {\n    encVictimSymbol()\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rg), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(rg), "commit", "-qm", "init"], capture_output=True)
+    (rg / "app" / "Big5.kt").write_bytes(b"// \xa4\xa4\n")
+    (rg / "app" / "Ok.kt").write_text("fun x() {\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rg), "add", "-A"], capture_output=True)
+    r = _cli(rg, "--json")
+    de = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard 非 UTF-8 staged 檔:rc0 不降級", r.returncode == 0 and de.get("degraded") is False,
+          f"rc={r.returncode} out={r.stdout[:300]} err={r.stderr[:200]}")
+    check("delguard 非 UTF-8 staged 檔:正常檔 token 照抽",
+          any("encVictimSymbol" in h["tokens"] for h in de.get("hits", [])), r.stdout[:300])
+
+    # [r1 O③]initial commit(無 HEAD、只有 staged)→ rc0 不炸
+    ri = _mkrepo("gctl-delg-initial-")
+    (ri / "docs" / "kg-knowledge" / "Systems").mkdir(parents=True)
+    (ri / "docs" / "kg-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\n---\n內容\n", encoding="utf-8")
+    (ri / "app").mkdir()
+    (ri / "app" / "New.kt").write_text("fun brandNewSymbol() {}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(ri), "add", "-A"], capture_output=True)
+    r = _cli(ri, "--json")
+    check("delguard initial commit(無 HEAD)rc0 不炸",
+          r.returncode == 0 and "Traceback" not in r.stderr, f"rc={r.returncode} err={r.stderr[:300]}")
+
+    # [r1 O④]CJK 路徑/檔名照抽(core.quotePath=off)
+    rc = _mkrepo("gctl-delg-cjk-")
+    (rc / "docs" / "kg-knowledge" / "Systems").mkdir(parents=True)
+    (rc / "docs" / "kg-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\n---\n用 cjkPathSymbol 做事。\n", encoding="utf-8")
+    (rc / "app" / "登入模組").mkdir(parents=True)
+    (rc / "app" / "登入模組" / "登入.kt").write_text("fun x() {\n    cjkPathSymbol()\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rc), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(rc), "commit", "-qm", "init"], capture_output=True)
+    (rc / "app" / "登入模組" / "登入.kt").write_text("fun x() {\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rc), "add", "-A"], capture_output=True)
+    r = _cli(rc, "--json")
+    dc = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard CJK 路徑檔名照抽 token",
+          any("cjkPathSymbol" in h["tokens"] for h in dc.get("hits", [])), r.stdout[:300])
+
+    # [r1 O⑤]純 rename(git mv 未 commit)→ 沒有內容被刪,tokens=0
+    rr = _mkrepo("gctl-delg-rename-")
+    (rr / "docs" / "kg-knowledge" / "Systems").mkdir(parents=True)
+    (rr / "docs" / "kg-knowledge" / "Systems" / "s.md").write_text(
+        "---\ntype: system\n---\n用 renameOnlySymbol 做事。\n", encoding="utf-8")
+    (rr / "app").mkdir()
+    (rr / "app" / "Old.kt").write_text("fun x() {\n    renameOnlySymbol()\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rr), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(rr), "commit", "-qm", "init"], capture_output=True)
+    sp.run(["git", "-C", str(rr), "mv", "app/Old.kt", "app/New.kt"], capture_output=True)
+    r = _cli(rr, "--json")
+    dr = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard 純 rename tokens=0(-M 認得搬檔)", dr.get("tokens") == 0, r.stdout[:300])
+
+    # [r1 O⑦]S2 negative:節點只掛連結但**無 S1 命中** → 不進 fake_sync
+    rn = _mkrepo("gctl-delg-s2neg-")
+    grn = rn / "docs" / "kg-knowledge" / "Systems"
+    grn.mkdir(parents=True)
+    (grn / "無關.md").write_text("---\ntype: system\n---\n這裡完全沒提被刪的符號。\n", encoding="utf-8")
+    (rn / "app").mkdir()
+    (rn / "app" / "A.kt").write_text("fun x() {\n    s2NegSymbol()\n}\n", encoding="utf-8")
+    sp.run(["git", "-C", str(rn), "add", "-A"], capture_output=True)
+    sp.run(["git", "-C", str(rn), "commit", "-qm", "init"], capture_output=True)
+    (rn / "app" / "A.kt").write_text("fun x() {\n}\n", encoding="utf-8")
+    (grn / "無關.md").write_text(
+        '---\ntype: system\nverified_by:\n  - "[[Verification/x]]"\n---\n這裡完全沒提被刪的符號。\n',
+        encoding="utf-8")
+    sp.run(["git", "-C", str(rn), "add", "-A"], capture_output=True)
+    r = _cli(rn, "--json")
+    dn = json.loads(r.stdout.strip().splitlines()[-1])
+    check("delguard S2 negative:純連結但無 S1 命中 → 不進 fake_sync",
+          dn.get("fake_sync") == [], r.stdout[:300])
+
+    # 收尾:清 tempdir(同 t_cochange 慣例;code-loop r1 I 洩漏修復)
+    import shutil as _sh
+    for d in (root, root_cap, root_hc, *tmp_repos):
+        _sh.rmtree(d, ignore_errors=True)
 
 
 def t_canary_record_persist():
