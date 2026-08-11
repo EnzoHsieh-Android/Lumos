@@ -269,14 +269,47 @@ lumos guard audit <節點> "<KEY子字串>"        # 不補會停在 unaudited
 
 ## B 段實測紀錄（做完回填；★沒做的項目寫「未驗＋原因」，不得留空★）
 
+> **執行者回填 2026-08-11（消費端＝mOrangePos，commit `7a208e5`）**
+
 | 項目 | 結果 | 備註 |
 |---|---|---|
-| 雙平台 config 後既有綁定沒變紅 | 待填 | |
-| `guard bind` 兩條 ref 同行同括號 | 待填 | |
-| `guard audit` 後 doctor 0 | 待填 | |
-| flow 檔案形式實跑 rc0 | 待填 | |
-| **回歸釘翻紅** | 待填 | ★最關鍵★ |
-| 測試門店已確認／全部標僅手動 | 待填 | |
+| 雙平台 config 後既有綁定沒變紅 | ✅ 通過 | 切換前後皆「合約 5 條 — 真綁 5／懸空 0／偽證據 0／裸 0／未審 0」，`doctor` 0 issues。`default_platform: android` 讓既有不帶冒號的 ref 全歸 android，符合設計預期。★`maestro` 的 `root` 設 `.maestro/` 而非 `.`★ |
+| `guard bind` 兩條 ref 同行同括號 | ✅ 通過 | `↳ test: taxBaseUsesDiscountedAmount, maestro:smoke_06_setmeal_item_discount`（同行逗號分隔）。★但綁定對象與派工不同，見下方「假設不成立」★ |
+| `guard audit` 後 doctor 0 | ✅ 通過（**未新跑 audit**） | 綁的是既有合約「稅基恆為折扣後」，它原本就有 `[audit:sonnet/2026-07-28]`；`guard list` 未審 0、`doctor` 0 issues，故未重跑 audit。**若設計要求「新增 ref 就要重審」，這格算未做，需回頭補規範** |
+| flow 檔案形式實跑 rc0 | ✅ 通過 | `maestro test .maestro/smoke-05-manual-discount-over-100.yaml` → rc0（**非 inline**） |
+| **回歸釘翻紅** | ✅ **實測翻紅過** | 把 `R.string.input_err` 改回去 → rebuild → `install -r` → 同一支 flow **rc=1**，紅在 `Assert that "折扣超過上限。.*" is visible... FAILED`；還原後複跑 rc=0 轉綠 |
+| 測試門店已確認／全部標僅手動 | ⚠ **未驗＋原因** | **A5251 是否可隨意開單，未向人確認** → 依規範四支 flow 全標「僅手動、不進回歸集」。`smoke_01_cash_checkout` 會開真單且 App 端無回收路徑 |
+
+### ★派工假設不成立（執行時發現，未繞路硬做）★
+
+派工要求把 `smoke_05_manual_discount_over_100` 綁上「百分比不得超過 100%」的合約。
+**消費端全圖查無該星標合約行**——該規則在 `Systems/付款結帳主流程_checkAmount狀態機`
+是普通 `KEY:` 行（第 17、18 行）；全圖唯一與折扣相關的合約是「稅基恆為折扣後」。
+
+依鐵則「該節點沒有合約行就別為了綁而標」，**未自行新標合約**。改為綁既有合約，並
+**補強 `smoke_06` 使它真的驗稅基**（斷言 GST=`SGD 1.08` 對折後 12.00 課；回退成折前
+課稅會變 1.35）。`smoke_05` 無合約可綁 → 只寫 flow 檔、節點內文記一句指向它。
+
+> **回饋給設計**：派工預設「要綁的合約已經存在」。實務上**更常見的是規則有記錄、但沒被標成合約**。
+> 建議在 skill 的派工要求補一句：先跑 `lumos contracts <節點>` 確認有星標行，沒有就走「只寫 flow 不綁」那條路，
+> 別讓執行者面臨「要嘛違反鐵則、要嘛交不出來」的兩難。
+
+### 其他與派工描述不符之處
+
+- 派工提醒「Task 8 第 2 步重裝 APK 會清掉裝置設定」——**只適用別台機器編的 APK**（簽章不同才需先移除）。
+  ★同一台自己重 build 用 `adb install -r` 設定完整保留★：本輪重裝四次驗證，翻紅實驗前後
+  `KEY_DEVICE_NAME`／`KEY_RSNO`／`KEY_PUNCH_ID` 皆在。已更正寫進消費端 `.maestro/README.md`。
+- `plan_refs` **不能填跨 vault 的純文字**——實測 doctor Check 4 會判「斷鏈」。設計節點的指標改記在 Verification 內文。
+
+### 未驗清單（全部明記，無靜默跳過）
+
+| 未驗項目 | 原因 |
+|---|---|
+| 測試門店 A5251 可否隨意開單 | 未向人確認；在此之前全部 flow 標僅手動 |
+| `smoke_01` 納入回歸集 | 會開真單、App 端無回收路徑 |
+| smoke 3／4（PayNow 取碼→取消→關帳、取碼失敗→再滑一次） | 未跑；會產生真 2C2P sandbox 交易，第 4 條還需斷網 |
+| 實機 D3 驗收 | 簽章與本機不同，換版本要先移除、設定全掉 |
+| 新增 ref 是否需重跑 `guard audit` | 規範未明；本次沿用既有 audit 戳記 |
 
 ## 誠實天花板（交付時要講）
 
