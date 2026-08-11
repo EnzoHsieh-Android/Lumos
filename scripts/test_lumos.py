@@ -1641,6 +1641,17 @@ def t_precommit_whitelist_drift_guard():
         check(f"delguard 漂移守衛: lockfile {lf} 見於 pre-commit lock 排除行",
               lf in lock_line, lock_line)
 
+    # delguard/UI 證據路徑同源(2026-08-11,Android UI 工作流 r2-F11):
+    # pitfalls --diff 的排除規則與圖譜節點寫的路徑必須是同一個字串前綴
+    lumos_src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    excl = "governance/review-reports/"
+    check("delguard 證據路徑排除規則仍在 scripts/lumos", excl in lumos_src, excl)
+    node = (Path(GRAPHCTL).resolve().parent.parent / "docs" / "lumos-toolchain-knowledge"
+            / "Systems" / "pitfalls-code-loop.md").read_text(encoding="utf-8")
+    bad = "存 review-reports/"      # 無前綴的舊寫法
+    check("pitfalls-code-loop 節點證據路徑帶 governance/ 前綴",
+          bad not in node and excl in node, f"bad_present={bad in node} good_present={excl in node}")
+
 
 # ── Check T dart profile:test('id')/testWidgets('id') 字串名錨+檔名錨 *_test.dart ──
 def t_dart_profile_discovery():

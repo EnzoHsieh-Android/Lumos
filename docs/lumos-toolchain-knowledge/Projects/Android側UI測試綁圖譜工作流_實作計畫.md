@@ -68,7 +68,7 @@ summary: |-
 2. *是風格偏好嗎*：不是，是路徑字串對不對得上。
 3. *既有機制小修蓋得住嗎*：蓋得住——`t_precommit_whitelist_drift_guard` 已經是「跨檔同源清單」守衛，加一條斷言即可，**不新造 detector**。
 
-- [ ] **Step 1：寫失敗測試**（加進 `scripts/test_lumos.py` 的 `t_precommit_whitelist_drift_guard` 末尾）
+- [x] **Step 1：寫失敗測試**（加進 `scripts/test_lumos.py` 的 `t_precommit_whitelist_drift_guard` 末尾）
 
 ```python
     # delguard/UI 證據路徑同源(2026-08-11,Android UI 工作流 r2-F11):
@@ -83,23 +83,23 @@ summary: |-
           bad not in node and excl in node, f"bad_present={bad in node} good_present={excl in node}")
 ```
 
-- [ ] **Step 2：跑紅**
+- [x] **Step 2：跑紅**
 
 Run：`python3 -c "import sys; sys.path.insert(0,'scripts'); import test_lumos as T; T.t_precommit_whitelist_drift_guard(); print(T.PASS, T.FAIL)"`
 Expected：FAIL ≥1（節點目前是無前綴的 `存 review-reports/<loop>/ui-evidence/`）
 
-- [ ] **Step 3：修節點**——把 `Systems/pitfalls-code-loop.md` 第 17 行 KEY 內的 `截圖+console 證據存 review-reports/<loop>/ui-evidence/` 改成 `截圖+console 證據存 governance/review-reports/<loop-id>/ui-evidence/`，並在同一 KEY 行尾追加 Android 通道（★用 Edit 改 body／summary block，不手改 frontmatter 純量★）：
+- [x] **Step 3：修節點**——把 `Systems/pitfalls-code-loop.md` 第 17 行 KEY 內的 `截圖+console 證據存 review-reports/<loop>/ui-evidence/` 改成 `截圖+console 證據存 governance/review-reports/<loop-id>/ui-evidence/`，並在同一 KEY 行尾追加 Android 通道（★用 Edit 改 body／summary block，不手改 frontmatter 純量★）：
 
 ```
 ;★Android 通道(2026-08-11,[[Projects/Android側UI測試綁圖譜工作流_計劃]])★=maestro MCP list_devices→inspect_screen→run,與 Playwright/chrome 並列;★前置:只准對「已標可自動且測試門店已確認」的 flow 自動跑★(否則會在真裝置真後端開真單),未達條件的 flow 一律僅手動、終審走 lumos code-loop skip --note 留痕
 ```
 
-- [ ] **Step 4：跑綠＋全量**
+- [x] **Step 4：跑綠＋全量**
 
 Run：同 Step 2 指令 → FAIL 0；再 `python3 scripts/test_lumos.py 2>&1 | tail -2` → `0 failed`
 （⚠ 全量跑幾分鐘屬正常，**用單一前景呼叫等它跑完**，不要丟背景輪詢）
 
-- [ ] **Step 5：`lumos lint "Systems/pitfalls-code-loop"` 0 問題 → `lumos doctor` 0 issues → commit**
+- [x] **Step 5：`lumos lint "Systems/pitfalls-code-loop"` 0 問題 → `lumos doctor` 0 issues → commit**
 
 ```bash
 git add docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md scripts/test_lumos.py \
