@@ -11072,6 +11072,50 @@ def t_pitfalls_diff_skips_review_report_artifacts():
               f"tier={data2.get('tier')}")
 
 
+def t_pitfalls_diff_skips_bookkeeping_ledgers():
+    """[2026-08-11 遞迴誤判實錄]簿記帳(docs/.governance-log.jsonl 等)被 pitfalls --diff
+    當代碼掃——治理帳裡記的 skip 理由本身在★描述★「pitfalls 命中 open(...)」,掃描器
+    掃到自己的歷史紀錄再次命中,tier 變 high 擋 push,只好再 skip 一次、再寫一行理由進
+    治理帳……自我餵食的迴圈,實測已誤觸發 9 次。修=比照 review-reports 排除簿記檔白名單
+    (與 code-loop 留痕豁免共用 _BOOKKEEPING_* 常數,避免兩處漂移)。收緊釘:同內容在白名單
+    外照掃。"""
+    import subprocess as _sp
+    with tempfile.TemporaryDirectory() as d:
+        g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        g("init", "-q", "-b", "main")
+        g("config", "user.email", "t@t.t")
+        g("config", "user.name", "t")
+        (Path(d) / "README.md").write_text("init\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "init")
+        g("checkout", "-qb", "feat")
+        led = Path(d) / "docs"
+        led.mkdir(parents=True)
+        # 治理帳一行:理由文字裡引用了會觸發 [資源] pattern 的字樣(真實形態)
+        (led / ".governance-log.jsonl").write_text(
+            '{"gate": "code-loop", "kind": "skipped", "detail": "假陽性:命中 fh = open(\'x\') '
+            '——one-shot 程序退出即釋放"}\n', encoding="utf-8")
+        (Path(d) / "governance" / "code-loop").mkdir(parents=True)
+        (Path(d) / "governance" / "code-loop" / "main.json").write_text(
+            '{"note": "fh = open(\'y\') 假陽"}\n', encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "ledger append")
+        r = _sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", "main..HEAD",
+                     "--no-lint", "--json", "--repo", d], capture_output=True, text=True)
+        import json as _j
+        data = _j.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+        check("★簿記帳不掃(治理帳/code-loop 留痕不該把自己的理由掃成新命中)★",
+              data.get("tier") != "high" and not data.get("claims"),
+              f"tier={data.get('tier')} claims={data.get('claims')}")
+        # 收緊釘:同內容在白名單外照掃
+        (Path(d) / "app_real.py").write_text("fh = open('x')\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "real code")
+        r2 = _sp.run([sys.executable, GRAPHCTL, "pitfalls", "--diff", "main..HEAD",
+                      "--no-lint", "--json", "--repo", d], capture_output=True, text=True)
+        data2 = _j.loads([l for l in r2.stdout.splitlines() if l.strip().startswith("{")][0])
+        check("★收緊釘:真代碼照掃(排除不外溢)★",
+              any(c.get("file") == "app_real.py" for c in (data2.get("claims") or [])),
+              f"claims={data2.get('claims')}")
+
+
 def t_lint_decisions_nested_list_not_false_positive():
     """[Landmark 回填實戰抓到 2026-08-05]lint 的 decisions 結構守衛把 alternatives_considered
     ★巢狀清單★的 - 項也算進原始條數(raw=5 vs parsed=2)→照 ADR 規範寫 alternatives 清單
