@@ -881,3 +881,39 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
 16. **ADR 不可編造**：`decisions` 的 `context` / `alternatives_considered` / `why_chosen` / `trade_offs` 若無法從對話/code/commit 推得，**問使用者**，不可生成似是而非的內容污染學習資產
 17. **Verification 巡檢時機**：開工前、commit 圖譜更新前、重大環境/依賴/schema 變更後，跑健康檢查 eval 指令掃 `status: stale` 和過期 `valid_until`
 18. **verified_by 雙向同步**：新增/廢棄 Verification 時，**必須同步**更新對應 Systems 的 `verified_by`；改 Systems 時優先讀 `verified_by` 而非跑 backlinks（backlinks 含 Issues/Sessions 雜訊）
+
+## 產 maestro UI flow 的派工要求（Android UI 驗收）
+
+> 設計脈絡在 **lumos-toolchain 的** `Projects/Android側UI測試綁圖譜工作流_計劃`（本節是跨專案通用摘要；消費端專案的圖譜查不到那個節點是正常的）。
+
+派 agent 產 flow 時，prompt 必須含下列全部：
+
+**1 · 斷言要驗「使用者看到什麼」**
+```yaml
+- assertVisible: "折扣超過上限。.*"
+- assertNotVisible: "請輸入員工編號.*"   # 回歸釘：不可再退回誤用的字串
+```
+只斷言「流程有沒有被擋」等於白做——回傳值對、UI 拿它去換錯的字串，單元測試結構上測不到。
+
+**2 · 命名與位置（錯了會「Check T 綠但 flow 壞」）**
+- `name:` ＝檔名去副檔名轉底線（`smoke-05-x.yaml` → `smoke_05_x`），**識別字**、**該行無其他內容**（不得有行尾 `#` 註解）、**放在 `---` 之前的 config 區塊**。
+- 要綁的 Kotlin 測試函式名也必須是識別字——反引號中文名綁不上。
+
+**3 · 七個會「沉默地做錯事」的坑（回報成功但做的是別的事，比紅燈危險）**
+| 坑 | 症狀 |
+|---|---|
+| 同畫面兩個鍵盤共用同一組 `resource-id` | 用 `text:`／`id:` 選會打到另一個，不報錯 |
+| Maestro 的 `text:` 是**全字串正則** | `tapOn: "."` 匹配任意單一字元（實測把 3.25 打成 3125） |
+| 選付款方式會自動帶入金額 | 再自己輸入反而算錯 |
+| SeekBar 要 `swipe` 不能 `tap` | 起點落在元件外會靜默無效 |
+| `name:` 行帶行尾註解 | discover 抓不到 → Check T 判懸空（紅在 doctor，人會找錯方向） |
+| 人與 agent 同時操作同一台裝置 | 每個 `tapOn` 都點到「某個東西」→ 綠燈但畫面狀態已亂 |
+| `name:` 放在步驟區 | Check T 不看 `---` 分界 → 照樣判「存在」（綠），但 maestro 讀不到、flow 壞 |
+
+**4 · 完成判準**
+- ★以**檔案形式**實跑通過一次★才算完成（inline 跑得通 ≠ 寫成檔案跑得通：`runFlow` 相對路徑、`optional`、共用子流程都可能出錯）。
+- 跑之前先確認裝置 ready（各專案自填清單，如 `.maestro/README.md`）。
+- ★金流前置★：flow 只准跑**測試門店／測試帳**；測試門店未確認前，該 flow 標「僅手動、不進回歸集」，終審不得自動 `run`。
+
+**5 · 天花板（要講給人聽）**
+版面一改就要重錄；`name:` 唯一性與 name↔檔名一致性都沒有機械守衛；`[kill:]` 第三階在 UI 層走不通（斷言被刪掉不會有任何機械檢查翻紅）。

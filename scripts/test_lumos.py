@@ -1641,6 +1641,24 @@ def t_precommit_whitelist_drift_guard():
         check(f"delguard 漂移守衛: lockfile {lf} 見於 pre-commit lock 排除行",
               lf in lock_line, lock_line)
 
+    # delguard/UI 證據路徑同源(2026-08-11,Android UI 工作流 r2-F11):
+    # pitfalls --diff 的排除規則與圖譜節點寫的路徑必須是同一個字串前綴
+    lumos_src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    excl = "governance/review-reports/"
+    check("delguard 證據路徑排除規則仍在 scripts/lumos", excl in lumos_src, excl)
+    node = (Path(GRAPHCTL).resolve().parent.parent / "docs" / "lumos-toolchain-knowledge"
+            / "Systems" / "pitfalls-code-loop.md").read_text(encoding="utf-8")
+    # ★先切出「UI 層驗收慣例」那一行再驗★(2026-08-11 終審 F2:原寫法對整檔驗,
+    # 正面被另一條無關 KEY 行滿足、負面只認逐字舊寫法 → 刪整行/換措辭都不會紅=近乎恆真)
+    ui_lines = [l for l in node.splitlines() if "UI 層驗收慣例" in l]
+    check("pitfalls-code-loop 仍有 UI 層驗收慣例那條 KEY(整行被刪要紅)", len(ui_lines) == 1,
+          f"命中 {len(ui_lines)} 行")
+    ui = ui_lines[0] if ui_lines else ""
+    check("UI 驗收慣例的證據路徑帶 governance/ 前綴(換措辭掉前綴也要紅)",
+          excl in ui and "review-reports/" not in ui.replace(excl, ""),
+          ui[:160])
+    check("UI 驗收慣例含 Android(maestro)通道", "maestro" in ui, ui[:160])
+
 
 # ── Check T dart profile:test('id')/testWidgets('id') 字串名錨+檔名錨 *_test.dart ──
 def t_dart_profile_discovery():

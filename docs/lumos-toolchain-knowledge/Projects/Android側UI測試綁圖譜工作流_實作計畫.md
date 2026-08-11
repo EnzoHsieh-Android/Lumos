@@ -14,10 +14,13 @@ related:
 summary: |-
   FLOW:A 段(本 repo,可立即做完)=修 pitfalls-code-loop 證據路徑+補 Android 通道散文→skill 退場段加 UI 面問句(時機觸發者)→reference.md 加產 flow 派工要求→圖譜收尾;B 段(mOrangePos,需真裝置)=雙平台 config→測試名/flow name 改識別字+bind+audit→測試門店與裝置 ready 清單→真跑驗收含回歸釘翻紅
   KEY:spec 單源=[[Android側UI測試綁圖譜工作流_計劃]](design-loop r1/r2 雙 PASS,golden@governance/golden/Android側UI測試綁圖譜工作流/);本節點只管「怎麼落地」,行為合約以 spec 為準
+  KEY:★A 段(本 repo 4 task)已完成 2026-08-11★—慣例節點證據路徑+Android 通道／skill 退場自問第 4 問／reference.md 派工要求／圖譜收尾,全量 0 failed;驗證見 [[Verification/2026-08-11_AndroidUI工作流A段落地]]。★B 段(mOrangePos,需真裝置)未動★
   KEY:★兩 repo 分段,B 段驗不完不擋 A 段★—A 段全在 lumos-toolchain(散文/節點/skill),B 段在 mOrangePos 且要真裝置;B 段任一步驟卡住=明記未驗+原因,不得靜默跳過
   KEY:★時機觸發者已裁(2026-08-11 Enzo)=skill 退場段★—寫進 lumos-project-notes 既有退場自問(delguard S3 三問旁),user-scope 跨專案生效、零新機制;pre-push 軟提醒方案落選(觸發點是 push 前不是功能完成當下)
   KEY:★本計畫不新增任何機制★—唯一近似新增的是 Task 1 的路徑同源斷言,走「既有 t_precommit_whitelist_drift_guard 同型小修」而非新 detector(新機制準入三問已答,見 Task 1)
   TEST:A 段=python3 scripts/test_lumos.py 全綠 + lumos lint/doctor 0;B 段=mOrangePos 側 lumos doctor 0 + maestro test 檔案形式 rc0 + 回歸釘翻紅實測
+verified_by:
+  - "[[Verification/2026-08-11_AndroidUI工作流A段落地]]"
 ---
 # Android 側 UI 測試綁圖譜工作流_實作計畫
 
@@ -68,7 +71,7 @@ summary: |-
 2. *是風格偏好嗎*：不是，是路徑字串對不對得上。
 3. *既有機制小修蓋得住嗎*：蓋得住——`t_precommit_whitelist_drift_guard` 已經是「跨檔同源清單」守衛，加一條斷言即可，**不新造 detector**。
 
-- [ ] **Step 1：寫失敗測試**（加進 `scripts/test_lumos.py` 的 `t_precommit_whitelist_drift_guard` 末尾）
+- [x] **Step 1：寫失敗測試**（加進 `scripts/test_lumos.py` 的 `t_precommit_whitelist_drift_guard` 末尾）
 
 ```python
     # delguard/UI 證據路徑同源(2026-08-11,Android UI 工作流 r2-F11):
@@ -83,23 +86,23 @@ summary: |-
           bad not in node and excl in node, f"bad_present={bad in node} good_present={excl in node}")
 ```
 
-- [ ] **Step 2：跑紅**
+- [x] **Step 2：跑紅**
 
 Run：`python3 -c "import sys; sys.path.insert(0,'scripts'); import test_lumos as T; T.t_precommit_whitelist_drift_guard(); print(T.PASS, T.FAIL)"`
 Expected：FAIL ≥1（節點目前是無前綴的 `存 review-reports/<loop>/ui-evidence/`）
 
-- [ ] **Step 3：修節點**——把 `Systems/pitfalls-code-loop.md` 第 17 行 KEY 內的 `截圖+console 證據存 review-reports/<loop>/ui-evidence/` 改成 `截圖+console 證據存 governance/review-reports/<loop-id>/ui-evidence/`，並在同一 KEY 行尾追加 Android 通道（★用 Edit 改 body／summary block，不手改 frontmatter 純量★）：
+- [x] **Step 3：修節點**——把 `Systems/pitfalls-code-loop.md` 第 17 行 KEY 內的 `截圖+console 證據存 review-reports/<loop>/ui-evidence/` 改成 `截圖+console 證據存 governance/review-reports/<loop-id>/ui-evidence/`，並在同一 KEY 行尾追加 Android 通道（★用 Edit 改 body／summary block，不手改 frontmatter 純量★）：
 
 ```
 ;★Android 通道(2026-08-11,[[Projects/Android側UI測試綁圖譜工作流_計劃]])★=maestro MCP list_devices→inspect_screen→run,與 Playwright/chrome 並列;★前置:只准對「已標可自動且測試門店已確認」的 flow 自動跑★(否則會在真裝置真後端開真單),未達條件的 flow 一律僅手動、終審走 lumos code-loop skip --note 留痕
 ```
 
-- [ ] **Step 4：跑綠＋全量**
+- [x] **Step 4：跑綠＋全量**
 
 Run：同 Step 2 指令 → FAIL 0；再 `python3 scripts/test_lumos.py 2>&1 | tail -2` → `0 failed`
 （⚠ 全量跑幾分鐘屬正常，**用單一前景呼叫等它跑完**，不要丟背景輪詢）
 
-- [ ] **Step 5：`lumos lint "Systems/pitfalls-code-loop"` 0 問題 → `lumos doctor` 0 issues → commit**
+- [x] **Step 5：`lumos lint "Systems/pitfalls-code-loop"` 0 問題 → `lumos doctor` 0 issues → commit**
 
 ```bash
 git add docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md scripts/test_lumos.py \
@@ -112,7 +115,7 @@ git commit -m "fix(kg): pitfalls-code-loop 證據路徑補 governance/ 前綴+�
 **Files:** Modify `skills/lumos-project-notes/SKILL.md`（既有「## 退場自問」節，第 189-194 行附近）
 **Interfaces / Consumes:** Task 1 已把 Android 通道寫進慣例節點；本 task 是「功能完成當下」的觸發點。
 
-- [ ] **Step 1：在既有退場自問的第 3 問之後、`⚠ 新增一條 verified_by...` 那行之前，插入第 4 問**
+- [x] **Step 1：在既有退場自問的第 3 問之後、`⚠ 新增一條 verified_by...` 那行之前，插入第 4 問**
 
 ```markdown
 4. **這次有動到使用者看得到的畫面嗎？**（Android／web UI 都算）
@@ -124,16 +127,16 @@ git commit -m "fix(kg): pitfalls-code-loop 證據路徑補 governance/ 前綴+�
    沒裝置／起不了環境 → **明記「未驗＋原因」**，不得靜默跳過。
 ```
 
-- [ ] **Step 2：驗證落點正確**
+- [x] **Step 2：驗證落點正確**
 
 Run：`grep -n "這次有動到使用者看得到的畫面嗎" -B 3 -A 2 skills/lumos-project-notes/SKILL.md`
 Expected：出現在第 3 問之後、`⚠ 新增一條 verified_by` 之前；且該節仍在「## 常見工作流」與「## 資料夾 / 位置」之間
 
-- [ ] **Step 3：全量測試**（skill 散文無專屬測試，跑全量確認沒撞到既有 skill 相關斷言）
+- [x] **Step 3：全量測試**（skill 散文無專屬測試，跑全量確認沒撞到既有 skill 相關斷言）
 
 Run：`python3 scripts/test_lumos.py 2>&1 | tail -2` → `0 failed`
 
-- [ ] **Step 4：commit**（skill 是 code 側，需同 commit 帶圖譜 → 勾本節點 Task 2 checkbox）
+- [x] **Step 4：commit**（skill 是 code 側，需同 commit 帶圖譜 → 勾本節點 Task 2 checkbox）
 
 ```bash
 git add skills/lumos-project-notes/SKILL.md docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_實作計畫.md
@@ -145,7 +148,7 @@ git commit -m "feat(skill): 退場自問加第 4 問(UI 面→補可重放 flow 
 **Files:** Modify `skills/lumos-project-notes/reference.md`（新增一節，放在檔尾「Obsidian CLI」段之前或之後皆可，**與既有段落同層級 `##`**）
 **Interfaces / Consumes:** Task 2 的第 4 問指過來這一節。
 
-- [ ] **Step 1：新增整節**（逐字，這是派工給「產 flow 的 agent」的單源）
+- [x] **Step 1：新增整節**（逐字，這是派工給「產 flow 的 agent」的單源）
 
 ```markdown
 ## 產 maestro UI flow 的派工要求（Android UI 驗收；spec＝`Projects/Android側UI測試綁圖譜工作流_計劃`）
@@ -183,23 +186,23 @@ git commit -m "feat(skill): 退場自問加第 4 問(UI 面→補可重放 flow 
 版面一改就要重錄；`name:` 唯一性與 name↔檔名一致性都沒有機械守衛；`[kill:]` 第三階在 UI 層走不通（斷言被刪掉不會有任何機械檢查翻紅）。
 ```
 
-- [ ] **Step 2：驗證**
+- [x] **Step 2：驗證**
 
 Run：`grep -c "產 maestro UI flow 的派工要求" skills/lumos-project-notes/reference.md` → `1`
 Run：`python3 -c "import sys; sys.path.insert(0,'scripts'); import test_lumos as T; T.t_slim_skill_no_dangling() if hasattr(T,'t_slim_skill_no_dangling') else None; print('ok')"`（若無此函式名則跳過——slim 掃的是 `slim/skills/` 的副本，本 task 改的是主 skill，不影響）
 
-- [ ] **Step 3：全量測試** → `0 failed`
+- [x] **Step 3：全量測試** → `0 failed`
 
-- [ ] **Step 4：commit**（勾 Task 3 checkbox 同 commit）
+- [x] **Step 4：commit**（勾 Task 3 checkbox 同 commit）
 
 ### Task 4：A 段圖譜收尾
 
 **Files:** Create `docs/lumos-toolchain-knowledge/Verification/<今日>_AndroidUI工作流A段落地.md`；Modify 兩個 Projects 節點（`lumos set`／`append`）
 
-- [ ] **Step 1** `lumos new verification "<今日>_AndroidUI工作流A段落地"`，body 記：Task 1-3 的落地內容、路徑同源斷言先紅後綠的證據、全量套件結果（**以實測留痕為準，不記數字快照**）
-- [ ] **Step 2** `lumos set` 填 `valid_under`（如「lumos 現行 pitfalls 排除規則；lumos-project-notes skill v 現行」）與 `revalidate_when`（如「pitfalls --diff 排除路徑變更／退場自問改寫／maestro profile 變更」）；`lumos append` 加 `plan_refs` 回指本節點與 spec 節點
-- [ ] **Step 3** 兩個 Projects 節點各 `lumos append <節點> verified_by "[[Verification/<今日>_AndroidUI工作流A段落地]]"`
-- [ ] **Step 4** `lumos lint` 三節點 0 問題 → `lumos doctor` 0 issues → commit
+- [x] **Step 1** `lumos new verification "<今日>_AndroidUI工作流A段落地"`，body 記：Task 1-3 的落地內容、路徑同源斷言先紅後綠的證據、全量套件結果（**以實測留痕為準，不記數字快照**）
+- [x] **Step 2** `lumos set` 填 `valid_under`（如「lumos 現行 pitfalls 排除規則；lumos-project-notes skill v 現行」）與 `revalidate_when`（如「pitfalls --diff 排除路徑變更／退場自問改寫／maestro profile 變更」）；`lumos append` 加 `plan_refs` 回指本節點與 spec 節點
+- [x] **Step 3** 兩個 Projects 節點各 `lumos append <節點> verified_by "[[Verification/<今日>_AndroidUI工作流A段落地]]"`
+- [x] **Step 4** `lumos lint` 三節點 0 問題 → `lumos doctor` 0 issues → commit
 
 ---
 
