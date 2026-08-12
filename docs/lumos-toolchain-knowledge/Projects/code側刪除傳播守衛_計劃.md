@@ -2,13 +2,14 @@
 type: project
 status: todo
 created: 2026-08-10
-updated: 2026-08-11
+updated: 2026-08-12
 self_audit: sonnet/2026-08-10
 related:
   - "[[關係層傳播守衛_計劃]]"
   - "[[cochange守衛_計劃]]"
   - "[[Systems/cochange-guard]]"
   - "[[Systems/delguard]]"
+  - "[[Systems/check-y-symbol-existence]]"
 tags:
   - type/project
   - status/todo
@@ -352,4 +353,4 @@ round(v, scale)
 - [ ] 誤報樣本蒐集方式（v1 人工記錄；格式傾向 append-only jsonl；有數字再談升級硬擋）
 - [x] S3 問句落點——**已裁定（2026-08-10 Enzo）：`lumos-project-notes` skill 退場段**（user-scope 跨專案生效、symlink 分發下 pull 即吃到；CLAUDE.md 方案落選＝覆蓋面只到有裝專案且要逐專案重跑安裝）。落地歸 [[code側刪除傳播守衛_實作計畫]] Task 8；此項仍是 v1 交付的一部分
 - [ ] **v2 候選：死碼判定**（「宣告處以外零引用＝死碼＝圖譜講它很可能過期」，補 S1 的死碼盲區——見天花板節能力邊界表；比存在性強一階，v1 不做）
-- [ ] 存量掃描**另案交付**（r2 折入：不在本計劃 v1 範圍——d1 落點、測試策略、效能預算全針對增量 S1/S2，存量需要自己的入口與**強於字面 grep 的判定**：`ArithUtil` token 在檔名 `ArithUtil.kt` 就有，含檔名 grep 與純內容 grep 給相反答案。開工時另立計劃節點，掛回實測 ③ 的證據；「兩個都要有」的「另一個」指的就是那一案）
+- [x] ~~存量掃描另案交付~~ → ★**已由 [[Systems/check-y-symbol-existence]] 實現（另一條線 2026-08-12 獨立做出，合併時才發現）**★：doctor 掃 Systems 正文的 inline-code → 篩「方法/類別形狀」→ 比對 code haystack → 查無則軟提醒。它的節點自己寫明分工：**delguard 驗「被刪的符號圖譜還在講」（diff-based、commit 時）／Y 驗「圖譜提到的符號 repo 有沒有」（全量、隨時）**，且明講「守成因 D『寫的時候就錯』——code 從沒變過也會發生，★diff-based 守衛結構上抓不到★」。這正是本節點實測 ③「存量與增量抓的是不同東西，兩個都要有」的另一半。★別再另立計劃重造★；本節點 v2 候選（死碼判定＝呼叫點為零）仍未被覆蓋，那是第三型。
