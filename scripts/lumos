@@ -2404,6 +2404,37 @@ def cmd_lint(env, node):
         elif not _rollback_resolved(n, ref):  # ★CHECKPOINT★;guard_ref 不讀
             warns.append(f"{marker} 建議補回退([rollback:decisions]):{first_line(rclean, 40)}")
 
+    # ── Check U:全稱宣稱未綁測試(成因 G「過度概化」;2026-08-12 加) ──
+    # 由來:2026-08-12 LandmarkMember 全 24 篇交叉審計(389 主張/59 不一致)歸因出一類最毒的 drift
+    # ——★把單一模組的個別設計寫成系統通則★。實例:`背景排程總覽` 寫「服務 disabled 時也要寫心跳」
+    # 像通則,實際只有一支服務這樣做,現役的 SecurityAnomalyMonitorService 直接 return 不寫;
+    # 後人依樣畫葫蘆就會寫出不一致的新服務。
+    # PRIOR-ART(真搜):世界對這類的成熟解是**架構適應度函數**(ArchUnit/Deptrac)——「與其把規則
+    # 畫在沒人看的圖上,不如編成一違反就 fail build 的測試」。本檢查不取代那個做法,而是**提示該去做**:
+    # 若真是通則,寫成適應度函數會當場告訴你有沒有例外;若寫不出來,那它本來就不是通則。
+    # ★噪音實測(2026-08-12,LandmarkMember 30 篇 Systems / 261 條 KEY 行)★:
+    #   單看量詞(一律/必須/所有…)→ 命中 17%,抽樣多為用詞規範/操作指示 = 會被無視的 warn;
+    #   收緊成「分配式量詞 + 程式實體 + 義務語氣」三者同現 → 命中 1%(5 行),其中 3 條真陽性,
+    #   含 CustTransfer/滿額贈 的「折疊守衛(通則)」(自稱通則、零 [test:],且節點自己記載
+    #   2026-06-02 漏補一路到 07-21 才被使用者回報)。故採三訊號同現。
+    _U_DIST = r'(所有|每個|每支|每一|各個|凡是|凡|一律)'
+    _U_ENT = r'(Service|Repository|Controller|Job|服務|排程|查詢|端點|入口|呼叫點|實作|模組|節點|欄位)'
+    _U_MOD = r'(必須|都要|都必須|皆須|應該|一律要|要寫|要帶|不可|禁止)'
+    import re as _re_u
+    for _ln in summ.splitlines():
+        _s = _ln.strip()
+        if not _s.startswith("KEY:"):
+            continue
+        if "[test:" in _s or "★DEBT★" in _s:
+            continue          # 已綁證據 / 已自認技術債(不是在宣稱規則)→ 不吵
+        if (_re_u.search(_U_DIST, _s) and _re_u.search(_U_ENT, _s)
+                and _re_u.search(_U_MOD, _s)):
+            warns.append(
+                "疑似「通則」宣稱但未綁測試(Check U):" + first_line(_s[4:], 46) +
+                " → 若真是通則,寫成一支列舉所有實例的測試(適應度函數)並 [test:] 綁上;"
+                "若寫不出來,它八成只是某個模組的個別設計,★請改寫成限定範圍★"
+                "(誤報可加 [test:] 或改寫語氣消音)")
+
     if not errs and not warns:
         print(f"✓ lint {rel} — 0 問題")
         return 0

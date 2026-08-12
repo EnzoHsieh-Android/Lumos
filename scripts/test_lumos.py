@@ -4873,6 +4873,64 @@ def t_anchor():
     check("anchor: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
 
 
+# ══ Check U:全稱宣稱未綁測試(成因 G「過度概化」,2026-08-12)══
+# 由來:LandmarkMember 全 24 篇交叉審計歸因出「把單一模組的個別設計寫成系統通則」這一類。
+# 設計取捨:單看量詞噪音 17%(會被無視),三訊號同現降到 1% 且精度足夠 → 採三訊號。
+
+def _u_vault(key_line, created="2026-08-07"):
+    v = mkvault()
+    write(v, "Systems/S.md",
+          f"type: system\nstatus: done\ncreated: {created}\naliases: []\n"
+          f"summary: |-\n  FLOW:a→b\n  {key_line}",
+          body="# S\n")
+    return v
+
+
+def t_checku_fires_on_universal_claim_without_test():
+    """三訊號同現(分配式量詞+程式實體+義務語氣)且無 [test:] → 該吵。"""
+    v = _u_vault("KEY:凡顯示該表的查詢都必須按事件鍵折疊,否則一事件顯示 N 列")
+    r = run(v, "lint", "S")
+    check("Check U: 通則宣稱無 [test:] → warn",
+          "Check U" in r.stdout, r.stdout)
+
+
+def t_checku_silent_when_bound_to_test():
+    """★消音路徑★:同一句綁了 [test:] 就不該再吵(否則綁了也沒獎勵=沒人會綁)。"""
+    v = _u_vault("KEY:凡顯示該表的查詢都必須按事件鍵折疊 [test:FoldGuardAppliesToAllViews]")
+    r = run(v, "lint", "S")
+    check("Check U: 綁了 [test:] 不吵",
+          "Check U" not in r.stdout, r.stdout)
+
+
+def t_checku_silent_on_debt():
+    """★DEBT★ 是自認技術債、不是在宣稱規則 → 不吵。"""
+    v = _u_vault("KEY:★DEBT★ 凡呼叫此端點的服務都必須自行帶 correlationId,尚未收斂")
+    r = run(v, "lint", "S")
+    check("Check U: ★DEBT★ 不吵", "Check U" not in r.stdout, r.stdout)
+
+
+def t_checku_needs_all_three_signals():
+    """★防噪音的關鍵斷言★:只有量詞、缺程式實體或義務語氣 → 不該吵。
+    實測動機:單看量詞在真實圖譜命中 17%,多為用詞規範(「對人一律說『校正』」)。"""
+    only_q = _u_vault("KEY:對人一律說「校正」,不說「自癒」")
+    r1 = run(only_q, "lint", "S")
+    check("Check U: 只有量詞(用詞規範)不吵", "Check U" not in r1.stdout, r1.stdout)
+    no_mod = _u_vault("KEY:所有 Repository 都放在 Repositories/Implementations 目錄下")
+    r2 = run(no_mod, "lint", "S")
+    check("Check U: 缺義務語氣(純描述)不吵", "Check U" not in r2.stdout, r2.stdout)
+
+
+def t_checku_ignores_non_key_lines():
+    """只掃 KEY 行——FLOW/DEP 等其他前綴不在合約宣稱範圍。"""
+    v = mkvault()
+    write(v, "Systems/S.md",
+          "type: system\nstatus: done\ncreated: 2026-08-07\naliases: []\n"
+          "summary: |-\n  FLOW:凡所有服務都必須寫心跳\n  KEY:單純描述",
+          body="# S\n")
+    r = run(v, "lint", "S")
+    check("Check U: 非 KEY 行不掃", "Check U" not in r.stdout, r.stdout)
+
+
 def t_lint_aligned():
     import subprocess as sp
     import importlib.util as U
