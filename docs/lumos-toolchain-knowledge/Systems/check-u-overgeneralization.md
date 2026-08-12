@@ -15,6 +15,7 @@ aliases:
 related:
   - "[[Systems/lumos-cli-write]]"
   - "[[Systems/check-t-sentinel]]"
+  - "[[Systems/check-n-recomputable]]"
 summary: |-
   FLOW:lint 掃 summary KEY 行→三訊號同現(分配式量詞+程式實體+義務語氣)且無 [test:]、非技術債標記→warn 提示「若真是通則就編成適應度函數」
   KEY:★守的是成因 G「過度概化」★=把單一模組的個別設計寫成系統通則;後人依樣畫葫蘆就寫出不一致的新實作。來源=2026-08-12 LandmarkMember 全 24 篇交叉審計(389 主張/59 不一致)的歸因

@@ -1140,6 +1140,75 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
             ok("無失效檔案認領 (節點引用的 repo 路徑都存在)")
     print()
 
+    # ── Check N:可重算數字宣稱(存查詢不存答案;成因 F「寫死易漂的值」)──
+    # 由來:2026-08-12 LandmarkMember 全 24 篇交叉審計,★F 類每一批都復發★——
+    # 「共 5 處」(實為 7)、「8 場景通過」、「46 場景」(實為 40)、「9 個元件」(實為 8 少列一個)、
+    # 行號 173/392(實為 189/415)。2026-06-10 首跑就記過教訓「計數/清單型主張最會漂」,
+    # 但★沒有配任何機制★,兩個月後照樣復發。
+    # PRIOR-ART(真搜):世界的解是 doctest 那套「單一真相源」哲學——同一份東西既是文件也是
+    # 可執行檢查,不維護第二份。這裡的借法是★存查詢不存答案★:節點寫下「怎麼算」,
+    # doctor 每次重算並比對,數字漂了當場說。
+    # 語法(body 內,緊跟在數字後面):
+    #   <!--lumos:count=7 re=某正則 in=**/*.cs-->
+    # 安全:不執行 shell、不 eval;只用 python re + fnmatch 掃 repo,有檔數/位元組上限,
+    # 壞正則吞成單條提示不炸 doctor。
+    section("N", "可重算數字宣稱 (存查詢不存答案;數字漂了當場說。軟提醒、不擋 CI)")
+    if repo_root is None:
+        ok("(無 docs/ 佈局,略過數字重算)")
+    else:
+        import fnmatch as _fn
+        _CNT_RE = re.compile(r"<!--\s*lumos:count=(\d+)\s+re=(.+?)\s+in=(\S+?)\s*-->")
+        _MAX_FILES, _MAX_BYTES = 4000, 40_000_000
+        _drift, _bad, _n_marks = [], [], 0
+        for rel, n in sorted(notes.items()):
+            try:
+                text = (env.vault / rel).read_text(encoding="utf-8-sig")
+            except OSError:
+                continue
+            for m in _CNT_RE.finditer(text):
+                _n_marks += 1
+                claimed, pat, glob = int(m.group(1)), m.group(2), m.group(3)
+                try:
+                    cre = re.compile(pat)
+                except re.error as e:
+                    _bad.append(f"{rel} → 正則不合法({e}):{pat[:40]}")
+                    continue
+                actual, nf, nb = 0, 0, 0
+                try:
+                    for dp, dirs, files in os.walk(repo_root):
+                        dirs[:] = [d for d in dirs if d not in CODE_SKIP_DIRS]
+                        for f in files:
+                            fp = Path(dp) / f
+                            r_ = str(fp.relative_to(repo_root)).replace(os.sep, "/")
+                            if not (_fn.fnmatch(r_, glob) or _fn.fnmatch(f, glob)):
+                                continue
+                            nf += 1
+                            if nf > _MAX_FILES or nb > _MAX_BYTES:
+                                raise RuntimeError("掃描量超上限")
+                            try:
+                                body_ = fp.read_text(encoding="utf-8", errors="ignore")
+                            except OSError:
+                                continue
+                            nb += len(body_)
+                            actual += len(cre.findall(body_))
+                except RuntimeError as e:
+                    _bad.append(f"{rel} → {e}(收窄 in= 的 glob):{glob}")
+                    continue
+                if actual != claimed:
+                    _drift.append(f"{rel} → 宣稱 {claimed} / 實測 **{actual}**"
+                                  f"(re={pat[:30]} in={glob})")
+        if _drift or _bad:
+            warn_soft(_drift + _bad,
+                      f"{len(_drift)} 個數字宣稱與實測不符" +
+                      (f"、{len(_bad)} 個標記本身有問題" if _bad else "") + ":",
+                      "更新節點裡的數字(或修 re=/in=);★這正是這個標記存在的意義——"
+                      "數字會漂,所以別讓它靜靜地漂★")
+        elif _n_marks:
+            ok(f"{_n_marks} 個可重算數字宣稱全部對得上")
+        else:
+            ok("(無 lumos:count 標記;易漂的計數建議改用它——語法見 Systems/check-n-recomputable)")
+    print()
+
     # Check J: regen 重生來源守衛(from-scratch 節點的 provenance 分級+拒絕發明無證據合約)。
     # 與 cmd_lint 共用 check_regen_provenance(防兩入口規則漂移);映射表——
     # errs→warn(hard)計 issues/warns→warn_soft/gov_events→僅 --ci 落帳。

@@ -4873,6 +4873,78 @@ def t_anchor():
     check("anchor: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
 
 
+# ══ Check N:可重算數字宣稱(成因 F「寫死易漂的值」,2026-08-12)══
+# 由來:F 類在 LandmarkMember 五個批次★每一批都復發★(「共5處」實為7、「46場景」實為40、
+# 「9個元件」實為8…)。2026-06-10 就記過教訓卻沒配機制 → 兩個月後照樣復發。
+# 借 doctest 的「單一真相源」:存查詢不存答案,doctor 每次重算。
+
+def _n_repo(note_body, code_files):
+    """建一個帶 docs/ 佈局的假 repo(Check N 需要 repo_root 才會跑)。"""
+    import tempfile, os as _os
+    root = Path(tempfile.mkdtemp(prefix="gctl-n-"))
+    v = root / "docs" / "x-knowledge"
+    for d in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / d).mkdir(parents=True, exist_ok=True)
+    (v / "Systems" / "S.md").write_text(
+        "---\ntype: system\nstatus: done\ncreated: 2026-08-07\naliases: []\n"
+        "summary: |-\n  FLOW:a→b\n  KEY:x\n---\n\n# S\n" + note_body + "\n",
+        encoding="utf-8")
+    for rel, content in code_files.items():
+        fp = root / rel
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(content, encoding="utf-8")
+    return root, v
+
+
+def t_checkn_matches_when_count_correct():
+    root, v = _n_repo("修法：3 處 <!--lumos:count=3 re=NEEDLE in=**/*.cs-->",
+                      {"src/a.cs": "NEEDLE\nNEEDLE\n", "src/b.cs": "NEEDLE\n"})
+    r = run(v, "doctor")
+    check("Check N: 數字對得上 → 不吵",
+          "全部對得上" in r.stdout and "與實測不符" not in r.stdout, r.stdout)
+
+
+def t_checkn_reports_drift():
+    """★核心牙齒★:宣稱與實測不符要指名 claimed/actual,不能只說「有問題」。"""
+    root, v = _n_repo("修法：5 處 <!--lumos:count=5 re=NEEDLE in=**/*.cs-->",
+                      {"src/a.cs": "NEEDLE\nNEEDLE\n", "src/b.cs": "NEEDLE\n"})
+    r = run(v, "doctor")
+    check("Check N: 漂移被抓且同時報宣稱值與實測值",
+          "宣稱 5" in r.stdout and "實測 **3**" in r.stdout, r.stdout)
+
+
+def t_checkn_soft_does_not_fail_ci():
+    """軟提醒:數字漂了不該擋 CI(它是提示更新,不是錯誤)。"""
+    root, v = _n_repo("5 處 <!--lumos:count=5 re=NEEDLE in=**/*.cs-->",
+                      {"src/a.cs": "NEEDLE\n"})
+    r = run(v, "doctor", "--ci")
+    check("Check N: warn_soft 不影響 rc", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+
+
+def t_checkn_bad_regex_does_not_crash():
+    """★壞正則吞成單條提示,不炸 doctor★(節點內容是使用者輸入,不可信)。"""
+    root, v = _n_repo("<!--lumos:count=1 re=([unclosed in=**/*.cs-->", {"src/a.cs": "x\n"})
+    r = run(v, "doctor")
+    check("Check N: 壞正則不炸、落成提示",
+          "正則不合法" in r.stdout and "Traceback" not in r.stdout, r.stdout)
+
+
+def t_checkn_glob_scopes_the_count():
+    """in= 的 glob 真的有縮範圍(否則等於全 repo 掃,數字沒意義)。"""
+    root, v = _n_repo("<!--lumos:count=1 re=NEEDLE in=**/only/*.cs-->",
+                      {"src/only/a.cs": "NEEDLE\n", "src/other/b.cs": "NEEDLE\nNEEDLE\n"})
+    r = run(v, "doctor")
+    check("Check N: glob 有縮範圍(只數 only/ 下那 1 個)",
+          "全部對得上" in r.stdout, r.stdout)
+
+
+def t_checkn_silent_without_markers():
+    root, v = _n_repo("沒有任何標記的普通內文", {"src/a.cs": "x\n"})
+    r = run(v, "doctor")
+    check("Check N: 無標記時給引導不報錯",
+          "無 lumos:count 標記" in r.stdout, r.stdout)
+
+
 # ══ Check U:全稱宣稱未綁測試(成因 G「過度概化」,2026-08-12)══
 # 由來:LandmarkMember 全 24 篇交叉審計歸因出「把單一模組的個別設計寫成系統通則」這一類。
 # 設計取捨:單看量詞噪音 17%(會被無視),三訊號同現降到 1% 且精度足夠 → 採三訊號。
