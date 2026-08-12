@@ -14,6 +14,7 @@ aliases:
   - 存查詢不存答案
 related:
   - "[[Systems/check-u-overgeneralization]]"
+  - "[[Systems/check-y-symbol-existence]]"
 summary: |-
   FLOW:doctor 掃節點正文的 lumos:count 標記→用 re+glob 重掃 repo 算實際值→與宣稱值比對→不符則軟提醒
   KEY:★守的是成因 F「寫死易漂的值」★=計數與行號。此類在 LandmarkMember 五個批次★每一批都復發★:「共5處」實為7、「46場景」實為40、「9個元件」實為8、行號173/392實為189/415

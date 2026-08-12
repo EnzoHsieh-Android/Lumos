@@ -1152,6 +1152,78 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
     #   <!--lumos:count=7 re=某正則 in=**/*.cs-->
     # 安全:不執行 shell、不 eval;只用 python re + fnmatch 掃 repo,有檔數/位元組上限,
     # 壞正則吞成單條提示不炸 doctor。
+    # ── Check Y:被提及符號的存在性(成因 D「寫的時候就錯」)──
+    # 與 delguard 的分工:delguard 驗「被刪的符號圖譜還在講」(diff-based,只在 commit 時);
+    # 本檢查驗「圖譜提到的符號 repo 裡有沒有」(全量,寫錯當下就抓)——★code 從沒變過也抓得到★,
+    # 那正是成因 D(diff-based 機制結構上無效的那一類)。
+    # 首發實績:2026-08-12 抓到 [[活動報名]] 寫 `ActivityService.RegisterAsync`,實際是
+    # SubmitRegistrationAsync——★這條在同日 10 個 agent 的兩階段交叉審計中被漏掉★
+    # (實證員驗了行為、沒挑方法名)。
+    # ★噪音實測(LandmarkMember 30 篇 Systems)★:
+    #   寬鬆抽法(任何 PascalCase inline code)→ 930 候選 / 74 未命中(7%),抽樣多為環境變數名
+    #   (ADMIN_LOG_VIEWER_KEY)、DB 欄位(TBmemberdisc.WelcomeCouponNo)、會員編號範例、
+    #   別 repo 頁面(MemberDisc.aspx) = 精度極差;
+    #   收緊成「方法/類別形狀」(無底線/無數字/非全大寫/無副檔名,且 以 Async 結尾 或 帶點)
+    #   → 279 候選 / 1 未命中(0.4%),★該 1 條是真陽性★。
+    section("Y", "被提及符號存在性 (圖譜點名的方法/類別,repo 找不到 → 寫錯或已改名)")
+    if repo_root is None:
+        ok("(無 docs/ 佈局,略過符號存在性檢查)")
+    else:
+        _sym_re = re.compile(r"^[A-Z][A-Za-z]*(?:\.[A-Za-z][A-Za-z]*)*$")
+        _ext_re = re.compile(r"\.(aspx|html|cs|js|vue|sql|ps1|yml|json|md)$", re.I)
+
+        def _is_symbol_shaped(s):
+            """方法/類別形狀:排掉環境變數(全大寫/底線)、範例 ID(帶數字)、檔名(有副檔名)。
+            再要求「以 Async 結尾」或「帶點(Class.Method)」——這兩種形狀誤報率實測 0.4%。"""
+            if "_" in s or "/" in s or " " in s or _ext_re.search(s):
+                return False
+            if any(c.isdigit() for c in s) or s.isupper():
+                return False
+            if not _sym_re.match(s):
+                return False
+            return s.endswith("Async") or "." in s
+
+        _hay = build_code_haystack(repo_root)
+        _ghosts, _seen = [], set()
+        # ★只掃 Systems★:語意上只有它宣稱「現在長怎樣」。
+        # Projects 提的是「打算做的方法」(還沒寫)、Verification/Issues 記的是歷史狀態
+        # (當時存在、現已移除)——對那些節點報「repo 查無」是誤報而非發現。
+        # 實測佐證:全型別掃 → 37 命中(多為計劃中的未來方法/已移除的歷史方法);
+        # 限 Systems → 1 命中且為真陽性。
+        for rel, n in sorted(notes.items()):
+            if n.fields.get("type") != "system":
+                continue
+            try:
+                text = (env.vault / rel).read_text(encoding="utf-8-sig")
+            except OSError:
+                continue
+            # ★否定語境豁免★:節點常常「正確地記錄某符號已不存在」
+            # (例:「`RefundPointsAsync` 全庫零命中」「已移除 `GetRollingTotalAsync`」)。
+            # 對這種行報「repo 查無」是把正確的紀錄當錯誤——實測這是最大宗誤報,
+            # 且 2026-08-12 訂正圖譜時我們自己就寫了好幾條這種句子。
+            _NEG = ("零命中", "已移除", "不存在", "查無", "已刪", "從未", "已退役",
+                    "移除", "無此", "原記", "舊名", "改名", "已改",
+                    "removed", "no longer", "deleted", "renamed")
+            for _ln in _strip_fences_text(text).splitlines():
+                _neg = any(k in _ln for k in _NEG)
+                for raw in INLINE_CODE_RE.findall(_ln):
+                    s = raw.strip("`").strip()
+                    if not _is_symbol_shaped(s) or (rel, s) in _seen:
+                        continue
+                    _seen.add((rel, s))
+                    if _neg:
+                        continue
+                    if s.split(".")[-1] not in _hay:
+                        _ghosts.append(f"{rel} → `{s}`(repo 查無此符號)")
+        if _ghosts:
+            warn_soft(_ghosts,
+                      f"{len(_ghosts)} 個圖譜點名的符號在 repo 找不到:",
+                      "改名了?寫錯了?或本來就在別的 repo(那請改成非 inline-code 或註明來源)。"
+                      "★這類 code 從沒變過也會發生——diff-based 守衛(delguard)結構上抓不到★")
+        else:
+            ok("圖譜點名的方法/類別都在 repo 找得到")
+    print()
+
     section("N", "可重算數字宣稱 (存查詢不存答案;數字漂了當場說。軟提醒、不擋 CI)")
     if repo_root is None:
         ok("(無 docs/ 佈局,略過數字重算)")

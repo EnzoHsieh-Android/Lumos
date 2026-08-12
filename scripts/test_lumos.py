@@ -4873,6 +4873,68 @@ def t_anchor():
     check("anchor: --repo 不存在 rc=2", r.returncode == 2, f"rc={r.returncode}")
 
 
+# ══ Check Y:被提及符號存在性(成因 D「寫的時候就錯」,2026-08-12)══
+# 與 delguard 分工:delguard 驗「被刪的符號圖譜還在講」(diff-based);Y 驗「圖譜提到的符號
+# repo 有沒有」(全量)——★code 從沒變過也抓得到★,那正是 diff-based 結構上無效的那一類。
+
+def _y_repo(note_body, code, ntype="system"):
+    import tempfile
+    root = Path(tempfile.mkdtemp(prefix="gctl-y-"))
+    v = root / "docs" / "x-knowledge"
+    for d in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / d).mkdir(parents=True, exist_ok=True)
+    folder = {"system": "Systems", "project": "Projects"}[ntype]
+    (v / folder / "S.md").write_text(
+        f"---\ntype: {ntype}\nstatus: done\ncreated: 2026-08-07\naliases: []\n"
+        "summary: |-\n  FLOW:a→b\n  KEY:x\n---\n\n# S\n" + note_body + "\n",
+        encoding="utf-8")
+    (root / "src").mkdir(exist_ok=True)
+    (root / "src" / "a.cs").write_text(code, encoding="utf-8")
+    return root, v
+
+
+def t_checky_flags_missing_symbol():
+    """★首發實績的回歸★:圖譜寫 RegisterAsync、code 實為 SubmitRegistrationAsync。"""
+    root, v = _y_repo("流程見 `ActivityService.RegisterAsync`。",
+                      "public async Task SubmitRegistrationAsync() {}")
+    r = run(v, "doctor")
+    check("Check Y: repo 查無的符號被抓",
+          "RegisterAsync" in r.stdout and "查無此符號" in r.stdout, r.stdout)
+
+
+def t_checky_silent_when_symbol_exists():
+    root, v = _y_repo("流程見 `ActivityService.SubmitRegistrationAsync`。",
+                      "public async Task SubmitRegistrationAsync() {}")
+    r = run(v, "doctor")
+    check("Check Y: 符號存在不吵", "查無此符號" not in r.stdout, r.stdout)
+
+
+def t_checky_negation_context_exempt():
+    """★最大宗誤報的豁免★:節點常「正確地記錄某符號已不存在」,不該報它錯。"""
+    root, v = _y_repo("`RefundPointsAsync` 全庫零命中,已移除。", "public class X {}")
+    r = run(v, "doctor")
+    check("Check Y: 否定語境(零命中/已移除)豁免",
+          "查無此符號" not in r.stdout, r.stdout)
+
+
+def t_checky_systems_only():
+    """★只掃 Systems★:Projects 提的是「打算做的方法」,報它查無是誤報不是發現。"""
+    root, v = _y_repo("將新增 `PlannedService.DoItAsync`。", "public class X {}",
+                      ntype="project")
+    r = run(v, "doctor")
+    check("Check Y: Projects 不掃(未來方法)", "查無此符號" not in r.stdout, r.stdout)
+
+
+def t_checky_shape_filter_excludes_noise():
+    """★防噪音關鍵★:環境變數/範例 ID/檔名不是方法符號,不該進候選。
+    實測動機:寬鬆抽法在真實圖譜 7% 未命中,抽樣多為 ADMIN_LOG_VIEWER_KEY 這類。"""
+    root, v = _y_repo("設定 `ADMIN_LOG_VIEWER_KEY`、會員 `LM00001226`、頁面 `MemberDisc.aspx`。",
+                      "public class X {}")
+    r = run(v, "doctor")
+    check("Check Y: 全大寫/帶數字/有副檔名 皆不進候選",
+          "查無此符號" not in r.stdout, r.stdout)
+
+
 # ══ Check N:可重算數字宣稱(成因 F「寫死易漂的值」,2026-08-12)══
 # 由來:F 類在 LandmarkMember 五個批次★每一批都復發★(「共5處」實為7、「46場景」實為40、
 # 「9個元件」實為8…)。2026-06-10 就記過教訓卻沒配機制 → 兩個月後照樣復發。
