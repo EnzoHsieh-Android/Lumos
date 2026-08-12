@@ -4917,6 +4917,116 @@ def t_checky_negation_context_exempt():
           "查無此符號" not in r.stdout, r.stdout)
 
 
+def t_checky_deprecation_vocab_exempt():
+    """★2026-08-12 訂正一則誤判★:原以為「DB 欄位 vs Class.Method 難分」是結構限制,
+    實際去看案例才發現節點寫的是「棄用,不使用」——同一類否定語境,只是清單漏詞。
+    釘住「棄用/不使用」這組,防止再被誤判成無解問題。"""
+    root, v = _y_repo("| WelcomeCouponNo | 棄用，不使用 |\n- **不使用** `TBmemberdisc.WelcomeCouponNo`（此欄位棄用）",
+                      "public class X {}")
+    r = run(v, "doctor")
+    check("Check Y: 棄用/不使用 語境豁免", "查無此符號" not in r.stdout, r.stdout)
+
+
+def _dh_repo():
+    """建一個有 git 歷史的假 repo:c1 有 OldAsync、c2 改名成 NewAsync 但圖譜沒跟上。"""
+    import subprocess as sp, tempfile
+    root = Path(tempfile.mkdtemp(prefix="gctl-dh-"))
+    v = root / "docs" / "x-knowledge"
+    for d in ("Systems", "Projects", "Issues", "Verification", "MOC"):
+        (v / d).mkdir(parents=True, exist_ok=True)
+    (root / "src").mkdir(exist_ok=True)
+    def git(*a):
+        sp.run(["git", *a], cwd=root, capture_output=True)
+    def commit(msg):
+        git("add", "-A")
+        sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", msg],
+               cwd=root, capture_output=True)
+    git("init"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    note = ("---\ntype: system\nstatus: done\ncreated: 2026-08-07\naliases: []\n"
+            "summary: |-\n  FLOW:a→b\n  KEY:x\n---\n\n# S\n見 `Svc.OldAsync`。\n")
+    (v / "Systems" / "S.md").write_text(note, encoding="utf-8")
+    (root / "src" / "a.cs").write_text("public async Task OldAsync() {}\n", encoding="utf-8")
+    commit("c1")
+    (root / "src" / "a.cs").write_text("public async Task NewAsync() {}\n", encoding="utf-8")
+    commit("c2 rename")          # ★code 改名、圖譜沒動 → 幽靈符號誕生★
+    return root, v
+
+
+def t_drift_history_detects_persisting_ghost():
+    """★核心牙齒★:code 改名後圖譜沒跟上 → 重放要看得到幽靈符號。"""
+    root, v = _dh_repo()
+    r = run(v, "drift-history", "--every", "1")
+    check("drift-history: 抓到改名後留下的幽靈符號",
+          "OldAsync" in r.stdout, r.stdout)
+
+
+def t_drift_history_json_shape():
+    """--json 要吐可程式化消費的結構(供其他工具接)。"""
+    import json
+    root, v = _dh_repo()
+    r = run(v, "drift-history", "--every", "1", "--json")
+    try:
+        rows = json.loads(r.stdout.strip().splitlines()[-1])
+    except Exception as e:
+        check("drift-history: --json 可解析", False, f"{e}\n{r.stdout}"); return
+    ok = isinstance(rows, list) and rows and all(
+        {"sha", "date", "notes", "candidates", "ghosts"} <= set(x) for x in rows)
+    check("drift-history: --json 欄位齊全", ok, r.stdout)
+
+
+def t_drift_history_needs_repo_layout():
+    """standalone vault(無 docs/ 佈局)沒有 code 可對照 → 明確報錯不要假裝有結果。"""
+    v = mkvault()
+    write(v, "Systems/S.md", "type: system\nstatus: done\ncreated: 2026-08-07\naliases: []\n"
+                             "summary: |-\n  FLOW:a\n  KEY:x", body="# S\n")
+    r = run(v, "drift-history")
+    check("drift-history: 無 docs/ 佈局明確報錯(rc=2)",
+          r.returncode == 2, f"rc={r.returncode}\n{r.stdout}{r.stderr}")
+
+
+def t_checky_profile_switches_language():
+    """★通用性的真憑證★:換 symbol_profile=python,snake_case 方法才進候選、
+    PascalCase 不再被當方法。證明形狀規則是配置不是寫死。
+    (Enzo 2026-08-12 質疑:「只對這份圖譜適用嗎?」——這條測試就是答案)"""
+    import json
+    root, v = _y_repo("見 `mod.do_thing` 與 `SomeService.DoAsync`。",
+                      "def do_thing(): pass\n")
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "config.json").write_text(
+        json.dumps({"symbol_profile": "python"}), encoding="utf-8")
+    r = run(v, "doctor")
+    # python profile 下:mod.do_thing 存在 → 不吵;SomeService.DoAsync 不符 snake_case 形狀 → 不進候選
+    check("Check Y: python profile 下 snake_case 生效、PascalCase 不進候選",
+          "查無此符號" not in r.stdout, r.stdout)
+
+
+def t_checky_neg_extra_is_configurable():
+    """★語系/用語相依的部分可由專案自行增補★(例:某專案說「已封存」而非「已移除」)。"""
+    import json
+    root, v = _y_repo("`GhostService.OldAsync` 已封存。", "public class X {}")
+    r1 = run(v, "doctor")
+    check("Check Y: 未配置時「已封存」不被視為否定 → 會吵(前置)",
+          "查無此符號" in r1.stdout, r1.stdout)
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "config.json").write_text(
+        json.dumps({"neg_extra": ["已封存"]}), encoding="utf-8")
+    r2 = run(v, "doctor")
+    check("Check Y: neg_extra 補詞後即豁免", "查無此符號" not in r2.stdout, r2.stdout)
+
+
+def t_checky_unknown_profile_falls_back_loudly():
+    """未知 profile 要出警告並回預設,不可靜默——靜默失效正是本次要防的失敗型態。"""
+    import json
+    root, v = _y_repo("見 `Svc.GoneAsync`。", "public class X {}")
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "config.json").write_text(
+        json.dumps({"symbol_profile": "no-such-lang"}), encoding="utf-8")
+    r = run(v, "doctor")
+    check("Check Y: 未知 profile 出聲警告且回預設(不靜默)",
+          "未知 symbol_profile" in (r.stdout + r.stderr) and "查無此符號" in r.stdout,
+          r.stdout + r.stderr)
+
+
 def t_checky_systems_only():
     """★只掃 Systems★:Projects 提的是「打算做的方法」,報它查無是誤報不是發現。"""
     root, v = _y_repo("將新增 `PlannedService.DoItAsync`。", "public class X {}",

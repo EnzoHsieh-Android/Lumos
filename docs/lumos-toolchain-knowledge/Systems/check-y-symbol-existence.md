@@ -15,16 +15,18 @@ aliases:
 related:
   - "[[Systems/check-n-recomputable]]"
   - "[[Systems/check-u-overgeneralization]]"
+  - "[[Systems/drift-history]]"
 summary: |-
   FLOW:doctor 掃 Systems 節點正文的 inline-code→篩「方法/類別形狀」→比對 code haystack→查無則軟提醒
   KEY:★守的是成因 D「寫的時候就錯」★——code 從沒變過也會發生,故 ★diff-based 守衛(delguard)結構上抓不到★。與 delguard 分工:delguard 驗「被刪的符號圖譜還在講」(diff-based、commit 時);Y 驗「圖譜提到的符號 repo 有沒有」(全量、隨時)
   KEY:★首發實績★=抓到活動報名寫 ActivityService.RegisterAsync(實為 SubmitRegistrationAsync)、滿額贈寫 ListAvailableAsync/GetOrdersForRedeemAsync(實為 GetActivitiesAsync/GetOrderSelectionAsync)——★這三條在同日 10 個 agent 的兩階段交叉審計中全被漏掉★(實證員驗了行為、沒挑方法名)
   KEY:★只掃 Systems★是語意決定不是調參——只有 Systems 宣稱「現在長怎樣」;Projects 提未來方法、Verification/Issues 記歷史狀態,對它們報「查無」是誤報。實測:全型別 37 命中 → 限 Systems 4 命中
-  KEY:★否定語境豁免★=節點常「正確地記錄某符號已不存在」(「X 全庫零命中」「原記 X 無此方法」),對這種行報錯是把正確紀錄當錯誤;此為最大宗誤報,清單含 零命中/已移除/查無/無此/原記/舊名/改名 等
+  KEY:★否定語境豁免★=節點常「正確地記錄某符號已不存在」(「X 全庫零命中」「原記 X 無此方法」),對這種行報錯是把正確紀錄當錯誤;此為★唯一★誤報來源(2026-08-12 補足詞彙後真實圖譜誤報歸零),清單含 零命中/已移除/查無/無此/原記/舊名/改名/棄用/不使用/廢棄/停用 等
   DEP:[[Systems/lumos-cli-read]]
   TEST:5 條牙齒測試(含否定語境豁免、Projects 不掃、形狀過濾擋環境變數/範例ID/檔名)
 verified_by:
   - "[[Verification/2026-08-12_CheckY_符號存在性]]"
+  - "[[Verification/2026-08-12_通用性修正_profile化與歷史重放]]"
 ---
 
 # Check Y — 被提及符號存在性（幽靈符號守衛）
@@ -85,9 +87,15 @@ verified_by:
 
 ## 已知限制
 
-- **DB 欄位形狀與 `Class.Method` 難分**（`TBmemberdisc.WelcomeCouponNo` 仍會誤報一條）
 - **只認 C#/前端命名慣例**（`Async` 後綴、PascalCase）；其他語言棧需擴充形狀規則
 - 只驗「符號**存在**」，不驗「**用對地方**」——後者仍需交叉審計
+- 否定詞清單是**列舉式**，新的說法（例如「已封存」「凍結」）會漏——★但這是可增補的字典問題，不是結構限制★
+
+> 🔧 **2026-08-12 訂正一則自己的誤判**：本節點原寫「DB 欄位形狀與 `Class.Method` 難分（`TBmemberdisc.WelcomeCouponNo` 仍會誤報）」，
+> 把它當成**無解的結構限制**。實際去看節點原文才發現——那行寫的是「**棄用，不使用**」，
+> ★根本就是同一類否定語境，只是清單漏了「棄用/不使用」這組詞★。補進去之後誤報歸零。
+>
+> **教訓**：把「還沒解的」說成「解不了的」，會讓後人不去嘗試。**判定為結構限制之前，先看一眼實際案例。**
 
 ## 相關
 

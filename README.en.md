@@ -39,7 +39,7 @@ Lumos keeps that knowledge in a graph of Markdown notes (Obsidian-compatible, bu
 
 | Category | Files / Commands | Role |
 |---|---|---|
-| **CLI** | `scripts/lumos`, `scripts/test_lumos.py` | Pure python3 stdlib, zero dependencies, **59 top-level commands**. Read / write (write-then-self-verify) / inspect (`doctor`) / archive. |
+| **CLI** | `scripts/lumos`, `scripts/test_lumos.py` | Pure python3 stdlib, zero dependencies, **60 top-level commands**. Read / write (write-then-self-verify) / inspect (`doctor`) / archive. |
 | **Contract-guard scaffold** | `lumos guard list/scaffold/bind/audit/trace` | Dialogue-driven: list unbound `★INVARIANT★`, scaffold **red-by-default** test stubs, bind `[test:]`, stamp independent `[audit:]`. |
 | **Adversarial-audit loops** | `lumos pitfalls`, `code-loop`, `canary`, `loop`, `fold-check`, `refcheck` | `pitfalls --diff` classifies findings by tier (standard/high); tier=high branches go through canary-guarded `code-loop` (adversarial code review); `design-loop` audits a spec adversarially *before* implementation; `fold-check` catches design fold-drift. |
 | **Impact / integrity** | `lumos impact`, `anchor verify/approve`, `lumos testmap` | `impact` reverse-looks up graph nodes affected by a changed file (direct + indirect) and surfaces matched incidents via `pitfall_when`; `anchor` guards test/gate files from *silent* drift (a change detector — catches accidental/unnoticed edits; same-repo self-signed, not a trust root against deliberate attack); `testmap` builds a file↔test dependency map (naming/content/cochange signals) and `affected` suggests which tests to run for a diff (advisory; promoted via a two-layer gold-pair recall of 1.0 on a real repo). |

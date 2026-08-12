@@ -94,11 +94,11 @@ flowchart LR
     class NEW,N1,N2,N3,N4 new
 ```
 
-## 3. CLI 子命令家族 (59 個頂層命令)
+## 3. CLI 子命令家族 (60 個頂層命令)
 
 ```mermaid
 flowchart TB
-    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 59 個頂層命令)"]
+    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 60 個頂層命令)"]
 
     ROOT --> READ["讀取 / 導航"]
     ROOT --> HEALTH["巡檢 / 治理"]
@@ -110,10 +110,10 @@ flowchart TB
     ROOT --> CI["CI 回流觀測"]
     ROOT --> LIFE["安裝 / 生命週期"]
 
-    READ --> R["context · show · contracts · search<br/>links · backlinks · map · export<br/>decisions · stale · recent · stats"]
+    READ --> R["context · show · contracts · search<br/>links · backlinks · map · export<br/>decisions · stale · recent · stats · drift-history"]
     HEALTH --> H["doctor · lint · lint-watch · lint-check<br/>self-audit · sync-verified-by · gov<br/>spec-trace · signoff · rel-cascade · test-layers"]
     CI --> C["ci-wait · ci-status<br/>(觀測非強制:擋不了 push/merge)"]
-    WRITE --> W["set · append · new · archive<br/>decision-add · decision-supersede · decision-reindex"]
+    WRITE --> W["set · append · remove · new · archive<br/>decision-add · decision-supersede · decision-reindex"]
     GUARD --> G["guard {list · scaffold · bind · audit · trace}<br/>(★INVARIANT★→[test:]→[audit:] 綁定鏈)"]
     LOOP --> LP["pitfalls (--diff tier) · code-loop {pass/skip/check}<br/>canary {record · second} · loop {status·next·compress·verify-progress·capture-counts}<br/>fold-check · refcheck"]
     INTEG --> I["anchor {verify · approve}<br/>impact (影響半徑 + 事故觸發)<br/>cochange · testmap {build · affected}"]

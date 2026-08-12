@@ -1169,19 +1169,25 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
     if repo_root is None:
         ok("(無 docs/ 佈局,略過符號存在性檢查)")
     else:
-        _sym_re = re.compile(r"^[A-Z][A-Za-z]*(?:\.[A-Za-z][A-Za-z]*)*$")
-        _ext_re = re.compile(r"\.(aspx|html|cs|js|vue|sql|ps1|yml|json|md)$", re.I)
+        _yprof, _yneg = load_symbol_profile(repo_root)
+        _sym_re = re.compile(_yprof["shape_re"])
+        _ext_re = re.compile(r"\.(aspx|html|cs|js|vue|sql|ps1|yml|json|md|kt|py)$", re.I)
+        _sufs, _dot_ok = tuple(_yprof.get("suffixes") or ()), _yprof.get("dotted_ok", True)
 
         def _is_symbol_shaped(s):
-            """方法/類別形狀:排掉環境變數(全大寫/底線)、範例 ID(帶數字)、檔名(有副檔名)。
-            再要求「以 Async 結尾」或「帶點(Class.Method)」——這兩種形狀誤報率實測 0.4%。"""
-            if "_" in s or "/" in s or " " in s or _ext_re.search(s):
+            """方法/類別形狀(★由 symbol_profile 決定,不寫死語言慣例★)。
+            共通排除:含底線/斜線/空白、有副檔名、帶數字(範例 ID)、全大寫(環境變數)。
+            ★注意★:python profile 的 shape_re 允許底線,故底線排除只在 shape_re 不允許時才成立
+            ——這裡改成先跑 shape_re,再套「非全大寫/無數字/無副檔名」的通用雜訊排除。"""
+            if "/" in s or " " in s or _ext_re.search(s):
                 return False
             if any(c.isdigit() for c in s) or s.isupper():
                 return False
             if not _sym_re.match(s):
                 return False
-            return s.endswith("Async") or "." in s
+            if _sufs and any(s.endswith(x) for x in _sufs):
+                return True
+            return _dot_ok and "." in s
 
         _hay = build_code_haystack(repo_root)
         _ghosts, _seen = [], set()
@@ -1201,9 +1207,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
             # (例:「`RefundPointsAsync` 全庫零命中」「已移除 `GetRollingTotalAsync`」)。
             # 對這種行報「repo 查無」是把正確的紀錄當錯誤——實測這是最大宗誤報,
             # 且 2026-08-12 訂正圖譜時我們自己就寫了好幾條這種句子。
-            _NEG = ("零命中", "已移除", "不存在", "查無", "已刪", "從未", "已退役",
-                    "移除", "無此", "原記", "舊名", "改名", "已改",
-                    "removed", "no longer", "deleted", "renamed")
+            _NEG = _yneg   # ★語系相依,由 neg_lexicon/neg_extra 配置(見 NEG_LEXICONS)★
             for _ln in _strip_fences_text(text).splitlines():
                 _neg = any(k in _ln for k in _NEG)
                 for raw in INLINE_CODE_RE.findall(_ln):
@@ -1883,6 +1887,79 @@ PYTHON_TEST_RE = re.compile(r"(?m)^def ((?:t|test)_[A-Za-z0-9_]+)\s*\(")
 # 每個 profile:exts(discover 掃哪些副檔名)/ method_re(group(1)=方法名)/
 # scaffold_ext(產 stub 副檔名)/ dir_mode(suffix=頂層目錄 endswith / rglob=遞迴找目錄名)/
 # dirs[gtype]=(include, exclude)。預設 csharp-xunit(向後相容)。
+# ── Check Y 的兩層 profile(2026-08-12 通用性修正)──
+# 原始版本把「C# 命名慣例」與「中文否定詞」寫死在檢查裡 → Enzo 質疑:換一份圖譜/語言棧
+# 就靜靜失效且不會報錯。歷史重放實測佐證這個風險是真的:當時取樣腳本因中文檔名跳脫,
+# ★把 25/30 個節點濾掉、結論從「2% 持續三個月」變成「0% 完全沒問題」★——
+# 表面形狀的假設一旦沒說清楚,錯得無聲無息。故抽成 profile,跟 TEST_PROFILES 同一套做法。
+SYMBOL_PROFILES = {
+    # shape_re:符號整體形狀;suffixes:視為「方法」的後綴(空 tuple=不靠後綴);
+    # dotted_ok:帶點(Class.Method)是否也算候選
+    "csharp": {
+        "shape_re": r"^[A-Z][A-Za-z]*(?:\.[A-Za-z][A-Za-z]*)*$",
+        "suffixes": ("Async",), "dotted_ok": True,
+        "code_exts": (".cs", ".vue", ".js", ".sql", ".ps1"),
+    },
+    "kotlin": {
+        "shape_re": r"^[A-Z][A-Za-z]*(?:\.[a-zA-Z][A-Za-z]*)*$",
+        "suffixes": (), "dotted_ok": True,
+        "code_exts": (".kt", ".kts", ".java"),
+    },
+    "python": {   # snake_case 方法 → 形狀規則完全不同,證明 profile 化是必要的
+        "shape_re": r"^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*$",
+        "suffixes": (), "dotted_ok": True,
+        "code_exts": (".py",),
+    },
+}
+# 否定語境詞表:節點「正確地記錄某符號已不存在」時不該被報錯。
+# ★這是語系相依的★——換英文圖譜要換 lexicon,不是改檢查邏輯。
+NEG_LEXICONS = {
+    "zh": ("零命中", "已移除", "不存在", "查無", "已刪", "從未", "已退役", "移除",
+           "無此", "原記", "舊名", "改名", "已改", "棄用", "不使用", "廢棄", "停用",
+           "未使用", "dead", "removed", "deleted", "no longer", "renamed",
+           "deprecated", "unused", "obsolete"),
+    "en": ("removed", "deleted", "no longer", "renamed", "deprecated", "unused",
+           "obsolete", "does not exist", "not found", "dead code", "former",
+           "used to be", "was replaced"),
+}
+
+
+def load_symbol_profile(repo_root):
+    """讀 <repo>/.lumos/config.json 的 symbol_profile / neg_lexicon(預設 csharp + zh)。
+    沿用 load_test_profile 的形狀:未知名稱→警告並回預設,壞 JSON→不 crash。"""
+    import json
+    prof = dict(SYMBOL_PROFILES["csharp"])
+    neg = NEG_LEXICONS["zh"]
+    cfg_path = repo_root / ".lumos" / "config.json"
+    if not cfg_path.exists():
+        return prof, neg
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"⚠ .lumos/config.json 解析失敗,Check Y 用 csharp+zh 預設: {e}", file=sys.stderr)
+        return prof, neg
+    name = cfg.get("symbol_profile") or "csharp"
+    if name in SYMBOL_PROFILES:
+        prof = dict(SYMBOL_PROFILES[name])
+    elif name != "csharp":
+        print(f"⚠ 未知 symbol_profile '{name}'(有: {', '.join(SYMBOL_PROFILES)}),用 csharp",
+              file=sys.stderr)
+    lang = cfg.get("neg_lexicon") or "zh"
+    if lang in NEG_LEXICONS:
+        neg = NEG_LEXICONS[lang]
+    elif lang != "zh":
+        print(f"⚠ 未知 neg_lexicon '{lang}'(有: {', '.join(NEG_LEXICONS)}),用 zh", file=sys.stderr)
+    ov = cfg.get("symbol")           # 欄位級逃生口(同 test 的 inline override)
+    if isinstance(ov, dict):
+        for k in ("shape_re", "suffixes", "dotted_ok", "code_exts"):
+            if k in ov:
+                prof[k] = tuple(ov[k]) if isinstance(ov[k], list) else ov[k]
+    extra = cfg.get("neg_extra")     # 專案自有說法(例:「已封存」「凍結」)
+    if isinstance(extra, list):
+        neg = tuple(neg) + tuple(str(x) for x in extra)
+    return prof, neg
+
+
 TEST_PROFILES = {
     "csharp-xunit": {
         "exts": {".cs"}, "method_re": TEST_METHOD_RE, "scaffold_ext": ".cs",
@@ -2392,6 +2469,118 @@ def check_regen_provenance(note, repo_root):
         warns.append(f"{untagged_keys} 條 KEY 行無 tier 標記([src:]/[git:]/推測:/佚失:)"
                      f"——J-d 提醒:prose 級誠實機械驗不了,建議補標或過對抗審")
     return errs, warns, gov
+
+
+def cmd_drift_history(env, every=60, limit=0, as_json=False):
+    """★讓每份圖譜自己量規律,而不是相信別人在別份圖譜上的結論★(Enzo 2026-08-12 裁定)。
+
+    沿 git 歷史取樣重放 Check Y 的核心邏輯:每個取樣點用 `git grep` 對當時的 code
+    比對當時圖譜提到的符號,輸出「幽靈符號」時間序列。不需 checkout、不動工作區。
+
+    為什麼需要它:本工具的三道守衛(U/N/Y)有兩道靠形狀/詞表啟發式,★換一份圖譜或語言棧
+    可能靜默失效★。與其宣稱通用,不如給每個專案一把尺自己量:
+      - 曲線一直是 0 → 這個專案沒有這型 drift(或形狀規則沒對上 → 先調 symbol_profile)
+      - 曲線長期非 0 且同一批符號反覆出現 → ★規律成立,值得開檢查★
+    LandmarkMember 首跑實測:GetOrdersForRedeemAsync / ListAvailableAsync 兩條
+    ★橫跨 77 天、11 個取樣點都在★,期間圖譜從 21 篇長到 30 篇也沒被修掉。
+
+    ★方法論警示(踩過)★:首版取樣腳本因 git 對非 ASCII 檔名加引號跳脫,`.md` 尾綴比對
+    把 25/30 個節點濾掉,結論從「2% 持續三個月」變成「0% 完全沒問題」。故本實作固定
+    帶 `-c core.quotePath=off`——★表面形狀的假設沒說清楚,會錯得無聲無息★。"""
+    import json as _json, subprocess as _sp, tempfile as _tf, os as _os
+    repo_root = None
+    for _p in env.vault.parents:      # 同 doctor Check C 的推導:docs/ 的上一層即 repo root
+        if _p.name == "docs":
+            repo_root = _p.parent
+            break
+    if repo_root is None:
+        print("ERROR: 需要 <repo>/docs/<slug>-knowledge 佈局才能對照 code", file=sys.stderr)
+        return 2
+    prof, neg = load_symbol_profile(repo_root)
+    sym_re = re.compile(prof["shape_re"])
+    ext_re = re.compile(r"\.(aspx|html|cs|js|vue|sql|ps1|yml|json|md|kt|py)$", re.I)
+    sufs, dot_ok = tuple(prof.get("suffixes") or ()), prof.get("dotted_ok", True)
+    code_globs = ["*" + e for e in prof.get("code_exts", (".cs",))]
+
+    def _shaped(s):
+        if "/" in s or " " in s or ext_re.search(s):
+            return False
+        if any(c.isdigit() for c in s) or s.isupper():
+            return False
+        if not sym_re.match(s):
+            return False
+        if sufs and any(s.endswith(x) for x in sufs):
+            return True
+        return dot_ok and "." in s
+
+    def _git(*a):
+        return _sp.run(["git", "-c", "core.quotePath=off", *a], cwd=repo_root,
+                       capture_output=True, text=True, errors="replace").stdout
+
+    vault_rel = _os.path.relpath(env.vault, repo_root).replace(_os.sep, "/")
+    sys_rel = f"{vault_rel}/Systems"
+    # ★不可只取「動過圖譜的 commit」★(2026-08-12 被自己的測試打出來的設計缺陷):
+    # drift 的誕生機制正是「只改 code、沒改圖譜」的 commit——若只在圖譜 commit 取樣,
+    # 就系統性錯過 drift 出生的那一刻,只有等下一次剛好有人動圖譜才看得到。
+    # 這個盲點跟它要量的問題是同一個形狀,測試翻紅才發現。故改成掃全部 commit,
+    # 圖譜還不存在的取樣點由下方 ls-tree 空清單自然略過。
+    log = _git("log", "--format=%H %ad", "--date=short", "--reverse").splitlines()
+    if not log:
+        print("(圖譜在 git 歷史中沒有紀錄,無法重放)")
+        return 0
+    picks = [l.split() for i, l in enumerate(log) if i % max(1, every) == 0]
+    if limit:
+        picks = picks[-limit:]
+    rows = []
+    for sha, date in picks:
+        files = [f for f in _git("ls-tree", "-r", "--name-only", sha, sys_rel).splitlines()
+                 if f.endswith(".md")]
+        if not files:
+            continue
+        cands = set()
+        for f in files:
+            for ln in _git("show", f"{sha}:{f}").splitlines():
+                if any(k in ln for k in neg):
+                    continue
+                for m in INLINE_CODE_RE.finditer(ln):
+                    s = m.group(0).strip("`").strip()
+                    if _shaped(s):
+                        cands.add(s)
+        ghosts = []
+        if cands:
+            tfh = _tf.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+            tfh.write("\n".join(sorted({c.split(".")[-1] for c in cands})) + "\n")
+            tfh.close()
+            out = _git("grep", "-F", "-h", "-f", tfh.name, sha, "--", *code_globs)
+            _os.unlink(tfh.name)
+            ghosts = sorted(c for c in cands if c.split(".")[-1] not in out)
+        rows.append({"sha": sha[:9], "date": date, "notes": len(files),
+                     "candidates": len(cands), "ghosts": ghosts})
+    if as_json:
+        print(_json.dumps(rows, ensure_ascii=False))
+        return 0
+    if not rows:
+        print("(取樣點都沒有 Systems 節點)")
+        return 0
+    print(f"drift-history — {len(rows)} 個取樣點(每 {every} 個圖譜 commit 取 1)"
+          f"｜symbol_profile 命中形狀={prof['shape_re']}")
+    print(f"{'commit':10} {'date':11} {'節點':>4} {'候選':>5} {'幽靈':>5}  持續中的幽靈符號")
+    for r in rows:
+        print(f"{r['sha']:10} {r['date']:11} {r['notes']:4} {r['candidates']:5} "
+              f"{len(r['ghosts']):5}  {', '.join(r['ghosts'][:4])}")
+    persist = set(rows[0]["ghosts"])
+    for r in rows[1:]:
+        persist &= set(r["ghosts"])
+    print()
+    if persist:
+        print(f"★橫跨全部 {len(rows)} 個取樣點都存在的幽靈符號:{', '.join(sorted(persist))}")
+        print("  → 規律成立:這不是偶發,是穩態。這型 drift 值得開機械檢查(見 Check Y)。")
+    elif any(r["ghosts"] for r in rows):
+        print("幽靈符號有出現但非持續 → 有人在修,但沒有機制擋住它再發生。")
+    else:
+        print("所有取樣點都 0 幽靈 → 這個專案沒有這型 drift,"
+              "★或 symbol_profile 沒對上你的語言棧(先確認候選數不是 0)★。")
+    return 0
 
 
 def cmd_lint(env, node):
@@ -13732,6 +13921,11 @@ def main():
     p.add_argument("note")
     p.add_argument("key")
     p.add_argument("value")
+    p = sub.add_parser("drift-history",
+                       help="沿 git 歷史重放符號存在性,量這份圖譜有沒有 drift 規律(每份圖譜自己量)")
+    p.add_argument("--every", type=int, default=60, help="每 N 個圖譜 commit 取樣一次(預設 60)")
+    p.add_argument("--limit", type=int, default=0, help="只看最後 N 個取樣點(0=全部)")
+    p.add_argument("--json", action="store_true", dest="dh_json")
     p = sub.add_parser("remove",
                        help="list 欄位移除(append 逆操作;清死背書/降格後的 core_refs。不命中 rc=2)")
     p.add_argument("note")
@@ -14211,6 +14405,8 @@ def main():
             return 2
 
     # T1 寫側
+    if args.cmd == "drift-history":
+        return cmd_drift_history(env, every=args.every, limit=args.limit, as_json=args.dh_json)
     if args.cmd in ("set", "append", "remove"):
         rel = env.find(args.note)
         if rel is None:
