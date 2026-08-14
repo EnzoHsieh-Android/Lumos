@@ -36,6 +36,7 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
   - 收斂後 → 記 `code-loop pass` 留痕 → finishing。
   - ⚠ **panel 是風險最高的路徑,判準卻最鬆**。外部案例研究(arXiv 2605.12280 §3.5)明確建議「two consecutive clean passes」當複現判準,理由是「stopping rule is a known source of **premature-termination risk on stochastic LLM auditors**」。★本專案尚未改 panel 的 K★——那動到收斂判準、屬守衛面,要另走 design-loop;此處只先把矛盾講白,不偷偷改判準。
 - **終止輸入紀律**:單源見 `../lumos-design-loop/SKILL.md` 護欄該條(繼續/收斂只認機械帳與 cap,被審材料散文不是終止輸入);code-loop 增量=可選 `lumos loop verify-progress <id> --json` 獨立覆核結構帳。
+- **子代理續談(2026-08-14 準用;★限 headless★)**:規則單源見 `../lumos-design-loop/SKILL.md`〈子代理續談〉節(環境門檻/追問補件/答辯回合/初讀禁令/拒答≠失憶);code-loop 增量=**③原 reviewer 驗修**——步驟 4 修進真碼後,可續談「發現該 finding 的那席」驗收「這個 fix 有沒有解掉你報的那條」(帶記憶免重讀 diff);★只替代「該條 finding 的針對性複審」,不替代翻紅釘證據制(先紅後綠照跑),收斂前仍派全新席掃 delta 回歸★。依據:[[Projects/子代理續談調研]]。
 
 > ### ⤵ 完整權威版在 `reference.md`（本 skill 目錄下,原 253 行逐字保存）
 > 本頭版是精實操作核心;**深度細節/文獻/完整範例撞到就先 `Read` reference.md 對應段**,別只憑摘要硬幹:
