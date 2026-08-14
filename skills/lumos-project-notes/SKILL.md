@@ -215,7 +215,7 @@ KEY:★CHECKPOINT★   <改了難救>                                     # 建�
 
 派**乾淨 sonnet agent 只讀圖譜**還原脈絡 → 主對話比對「還原結果 vs 腦中現存脈絡」:有出入 = 圖譜當下不健全,補缺後**重審到一致**。純格式修正可豁免。審過留痕:`lumos self-audit <node>`(doctor Check S 軟提醒未審/過期)。
 > 無主對話脈絡時(定期巡檢/接手陌生專案)→ 改用「圖譜×程式碼交叉審計」(以 code 為真值),做法見 `reference.md`。
-> 對抗**設計稿**審計(canary 驗審計員醒著)→ 走 `lumos-design-loop` skill,不在此。
+> 對抗**設計稿**審計(乾淨 agent 逐輪找洞+引句錨定收貨)→ 走 `lumos-design-loop` skill,不在此。
 
 ---
 

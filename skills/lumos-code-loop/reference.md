@@ -3,9 +3,11 @@ name: lumos-code-loop
 description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff 命中 tier high 時觸發、派乾淨 reviewer 驗醒著、辯方殺假陽性、證據閘收斂才放行 finishing。對齊「收斂=終審綠燈」。觸發詞:分支終審、code review 對抗、pitfalls diff 命中 tier high、代碼審計 loop、終審前對抗審。
 ---
 
-# lumos-code-loop:canary-護的代碼對抗審計 loop(分支終審前的硬閘)
+# lumos-code-loop:代碼對抗審計 loop 參考層(分支終審前的硬閘)
 
-**Claude 編排,lumos 出原語。** 你(主對話)用 Agent tool 派 reviewer、判讀、修代碼;lumos 出 `canary record`/`loop status` 記錄與算收斂。lumos 不 spawn agent。
+> ⛔ **canary 協議已於 2026-08-14 停用**(Enzo 裁;單源=Systems/canary-audit d5 與 SKILL.md 頁頂告示)。本檔 canary 相關段(植入/判定/missed 懲罰)**僅供回放歷史帳判讀**;每輪記帳改 `canary record none`。
+
+**Claude 編排,lumos 出原語。** 你(主對話)用 Agent tool 派 reviewer、判讀、修代碼;lumos 出 `canary record none`/`loop status` 記錄與算收斂。lumos 不 spawn agent。
 
 design-loop 的對抗紀律(canary 驗醒著 / 辯方殺假陽性 / 證據閘收斂)1:1 搬到代碼終審,差異只在:① canary 是 bug hunk 非散文瑕疵、② G1 對代碼無意義故 skip、③ mutation 冒煙為可選機械錨補充。
 

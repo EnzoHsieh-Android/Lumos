@@ -1,5 +1,7 @@
 # Loop 派工 Prompt 模板（2026-07-07 Landmark 實戰抽取）
 
+> ⛔ **canary 協議已於 2026-08-14 停用**(單源=Systems/canary-audit d5)。本檔模板內 canary 植入/判定/missed 相關句**照跳過**;審計員/reviewer/辯方模板其餘部分照用。
+
 適用：lumos-design-loop / lumos-code-loop skill 的 agent 派工段落 + SDD 派工。佔位符用 `{}`。
 **分工**:§1-2 供 `lumos-design-loop`、§3-4 供 `lumos-code-loop`(該 skill 以 `../lumos-design-loop/templates.md` 引用本檔)、§5-6 供 design-loop 收斂後的 subagent-driven TDD 派工。派工以本檔為準;SKILL.md 內嵌 framing 是摘要,漂移時以本檔為權威。
 

@@ -3115,7 +3115,9 @@ def _vault_repo_root(env):
 
 
 def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None):
-    """記一筆 canary 審計留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵。
+    """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
+    僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
+    停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
     --clusters(M2):該輪 risk-cluster 三態帳(每輪至多一筆帶;讀側 loop status --panel 消費)。
@@ -3430,13 +3432,14 @@ def _estimate_remaining_defects(capture_counts):
 
 
 def _round_valid_m2(recs):
-    """M2 統一單位謂詞(有效輪):caught≥2 ∧ missed=0 ∧ 全部 kind ∈ {caught,missed}。
+    """M2 統一單位謂詞(有效輪):(caught+none)≥2 ∧ missed=0 ∧ 全部 kind ∈ 白名單。
     gate/fold/定錨/ledger/W 歸屬五處共用——嚴禁記錄級判定(2caught+1missed 輪的
-    clusters 掛 caught 記錄上也不得採納);未知 kind 使輪無效(既有 2303 謂詞對此是盲的)。"""
+    clusters 掛 caught 記錄上也不得採納);未知 kind 使輪無效(既有 2303 謂詞對此是盲的)。
+    kind=none(2026-08-14 協議停用,Systems/canary-audit d5)=無植入輪,計入席數。"""
     kinds = [r.get("kind") for r in recs]
-    if any(k not in ("caught", "missed") for k in kinds):
+    if any(k not in ("caught", "missed", "none") for k in kinds):
         return False
-    return kinds.count("caught") >= 2 and kinds.count("missed") == 0
+    return (kinds.count("caught") + kinds.count("none")) >= 2 and kinds.count("missed") == 0
 
 
 def _panel_extra_checks(latest, min_seats, spec):
@@ -3479,9 +3482,16 @@ def _panel_round_conjuncts(recs, quiet=False):
     order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
     fails = []
     caught_recs = [r for r in recs if r.get("kind") == "caught"]
+    # 2026-08-14 canary 協議停用(Systems/canary-audit d5):kind=none=無植入輪的純處置帳載體。
+    # none 制輪有效=記帳席數≥2 且零 missed(醒著證明改由 skill 層 quote-check 引句錨定機械把關);
+    # 舊 caught 分支原樣保留(歷史帳/混用輪回放不變)。
+    none_recs = [r for r in recs if r.get("kind") == "none"]
     caught = len(caught_recs)
     missed = sum(1 for r in recs if r.get("kind") == "missed")
-    if caught >= 2 and missed == 0:
+    if none_recs and missed == 0 and (caught + len(none_recs)) >= 2:
+        if not quiet:
+            print(f"[panel] 輪有效(no-canary 制,記帳席 {caught + len(none_recs)}): ✓")
+    elif caught >= 2 and missed == 0:
         if not quiet:
             print(f"[panel] 輪有效(canary caught {caught}/{caught},near-perfect): ✓")
     elif missed > 0:
@@ -3490,9 +3500,10 @@ def _panel_round_conjuncts(recs, quiet=False):
         fails.append("輪無效")
     else:
         if not quiet:
-            print(f"[panel] 輪有效: ✗ — canary caught {caught} <2(輪無效)")
+            print(f"[panel] 輪有效: ✗ — 記帳席不足(caught {caught}+none {len(none_recs)} <2,輪無效)")
         fails.append("輪無效")
-    maxsev = max((order.get(r.get("severity", "clean"), 1) for r in caught_recs), default=0)
+    # 嚴重度合取讀 caught+none(none 輪不讀會盲掉存活 findings——停用制下全輪都是 none)
+    maxsev = max((order.get(r.get("severity", "clean"), 1) for r in caught_recs + none_recs), default=0)
     if maxsev >= 2:
         if not quiet:
             print(f"[panel] falsification+ODC(存活 max≤minor): ✗ — 存活 {'blocker' if maxsev==3 else 'major'}")
@@ -3999,7 +4010,8 @@ def cmd_loop_verify_progress(env, loop_id, settle=None, as_json=False):
             print(f"ERROR: 第 {i} 筆 record 缺 kind——結構欄位缺失 fail-closed", file=sys.stderr)
             return 2
     def caught_ok(r):
-        return r.get("kind") == "caught" and bool(r.get("auditor"))
+        # none=協議停用制無植入輪(2026-08-14 d5),與 caught 同計合格輪
+        return r.get("kind") in ("caught", "none") and bool(r.get("auditor"))
     streak = 0
     for r in reversed(rounds):
         if caught_ok(r) and r.get("severity") in ("clean", "minor"):
@@ -4094,12 +4106,13 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
         print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
         return 2
     fails = []
-    # caught 輪(收緊定義):kind=caught ∧ auditor 非空;輪鍵=append 序(1-based)
+    # caught 輪(收緊定義):kind=caught|none ∧ auditor 非空;輪鍵=append 序(1-based)
+    # (none=協議停用制無植入輪,2026-08-14 d5)
     def is_caught_round(n):
         if not (1 <= n <= len(rounds)):
             return False   # 懸空輪 fail-closed
         r = rounds[n - 1]
-        return r.get("kind") == "caught" and bool(r.get("auditor"))
+        return r.get("kind") in ("caught", "none") and bool(r.get("auditor"))
     unsettled = []
     for e in entries:
         status = e["status"]
@@ -4246,8 +4259,9 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         if spec is None:
             print("ERROR: --light 需 --spec(light hash 強制 fail-closed,無驗證對象不可判)", file=sys.stderr)
             return 2
-        # ratchet 最先:任一 caught 筆 severity≥major → 永久 FAIL(missed 筆不觸發)
-        if any(r.get("kind") == "caught" and r.get("severity") in ("major", "blocker") for r in rounds):
+        # ratchet 最先:任一 caught/none 筆 severity≥major → 永久 FAIL(missed 筆不觸發;
+        # none=協議停用制的無植入輪——不納會使停用後 major 輪失去永久升級,閘變寬鬆)
+        if any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker") for r in rounds):
             print(f"⛔ LIGHT GATE FAIL ({loop_id}: ratchet——已有 caught 輪 severity≥major,永久升 standard;"
                   "開新 panel loop id(原 id+-std 後綴)承接,乾淨輪不洗回)")
             return 1
@@ -4256,7 +4270,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
             return 1
         last = rounds[-1]
         fails = []
-        if last.get("kind") != "caught":
+        if last.get("kind") not in ("caught", "none"):
             fails.append("retryable——末輪 missed(判決不採信;light cap=2 內可重試)")
         if last.get("severity") not in ("clean", "minor"):
             fails.append(f"severity={last.get('severity')} 不在 {{clean,minor}}")
@@ -4283,7 +4297,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         return 0
 
     def good(r):
-        return r.get("kind") == "caught" and r.get("severity") in ("clean", "minor")
+        return r.get("kind") in ("caught", "none") and r.get("severity") in ("clean", "minor")
 
     converged = len(rounds) >= need and all(good(r) for r in rounds[-need:])
     streak = 0                                  # 從尾往回的連續合格數(算「還需 N」)
@@ -4569,7 +4583,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         return 0 if phase == "converged" else 1
 
     # ⓪ escalate:light ratchet 永久態最先短路
-    if light and any(r.get("kind") == "caught" and r.get("severity") in ("major", "blocker")
+    if light and any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker")
                      for r in rounds):
         return emit("escalate", {"note": "light ratchet 已觸發——停止本 loop,開新 panel loop id(原 id+-std 後綴)承接"})
     if not rounds:
@@ -13734,8 +13748,8 @@ def main():
     cs2.add_argument("--verdict", dest="sec_verdict", metavar="agree|overturn", help="覆核結論")
     cs2.add_argument("--auditor", dest="sec_auditor", help="第二判者(必填;建議跨家族)")
     cs2.add_argument("--note", dest="sec_note", help="一句理由")
-    cr = csub.add_parser("record", help="記一筆 caught|missed")
-    cr.add_argument("kind", choices=("caught", "missed"))
+    cr = csub.add_parser("record", help="記一筆 caught|missed|none(none=無植入輪的純處置帳載體,2026-08-14 協議停用後的常態)")
+    cr.add_argument("kind", choices=("caught", "missed", "none"))
     cr.add_argument("--auditor", help="審計用的模型(如 sonnet)")
     cr.add_argument("--token", help="canary token(不給則自動鑄 CANARY-<隨機>)")
     cr.add_argument("--note", help="備註")

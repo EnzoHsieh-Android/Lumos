@@ -30,7 +30,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | **測試層軟提醒（diff 命中宣告棧→提醒該跑的測試層）** | `python3 scripts/lumos test-layers --diff <range> [--json]` — 恆 rc0 advisory;讀 .lumos/test-layers.json,無宣告靜默 |
 | **lint 宣告健康檢查（宣告了跑不動的 linter 抓出來）** | `python3 scripts/lumos lint-check [--repo R] [--smoke]` — 靜態格式校驗+--smoke 真跑冒煙;rc 0健康/1有問題/2非JSON |
 | 治理事件帳（某節點歷來被哪幾道閘攔過） | `python3 scripts/lumos gov [<筆記名>] [--since N]` — 唯讀彙整 bypass/rot/governance-log;本機可見性 |
-| **設計 spec 進實作前打磨**（canary-護審計 loop 到收斂） | 調用 **`lumos-design-loop`** skill;原語 `lumos canary record --loop/--severity/--findings` + `lumos loop status <id> --need 2 --gate --spec <md> --repo <root>`(證據閘:K-streak ∧ 引用座標 refcheck ∧ 發現枯竭)。收斂另有三模式:`--gate --panel`(不吃 --need)/`--light`/`--gate --spec --settle <清單.json>`(結清,互斥群 rc2);輔助原語 `loop next`(settle 不支援)/`loop compress`/`loop verify-progress`——詳 design-loop skill |
+| **設計 spec 進實作前打磨**（對抗審計 loop 到收斂;canary 協議 2026-08-14 已停用） | 調用 **`lumos-design-loop`** skill;原語 `lumos canary record --loop/--severity/--findings` + `lumos loop status <id> --need 2 --gate --spec <md> --repo <root>`(證據閘:K-streak ∧ 引用座標 refcheck ∧ 發現枯竭)。收斂另有三模式:`--gate --panel`(不吃 --need)/`--light`/`--gate --spec --settle <清單.json>`(結清,互斥群 rc2);輔助原語 `loop next`(settle 不支援)/`loop compress`/`loop verify-progress`——詳 design-loop skill |
 | 健康巡檢（orphans / unresolved / verified_by 同步 / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / ★INVARIANT★→測試綁定 + 獨立合法性審計；Check P 失效檔案認領(節點正文 inline-code 路徑指向已不存在的 repo 檔 → 軟提醒「圖譜指向死碼」)） | `python3 scripts/lumos doctor [--ci]` |
 | 讀單篇 decisions | `python3 scripts/lumos decisions <筆記名>` |
 | 全 vault 掃被推翻決策 | `python3 scripts/lumos decisions --superseded` |
@@ -717,7 +717,9 @@ python3 scripts/lumos recent --days 7
 
 ### 對抗設計審計的 canary（test-the-tester，2026-06-19）
 
-派乾淨 agent 對抗審計一份 **spec/設計稿**(挑毛病、找 blocker)時,**順手驗證審計員這輪有沒有認真讀**——放水審計員回報的「沒問題」是最危險的假乾淨。做法:
+> ⛔ **協議已於 2026-08-14 全面停用**(Enzo 裁,單源=Systems/canary-audit d5)——本節植入/判定/panel 變體全部**不再執行**,僅供回放歷史帳判讀。現行:輪記帳 `lumos canary record none ...`(純處置帳載體);「審計員有沒有讀」由 quote-check 引句錨定把關;收斂閘=design-loop `--disposal`/code-loop `--gate --panel`(none 制輪有效=記帳席≥2)。
+
+派乾淨 agent 對抗審計一份 **spec/設計稿**(挑毛病、找 blocker)時,**順手驗證審計員這輪有沒有認真讀**——放水審計員回報的「沒問題」是最危險的假乾淨。做法(★停用前舊制★):
 
 1. **植一個 canary**:在審計用的**工作副本**裡塞一個刻意、已知、**純加性**的瑕疵(只允許不牽動其他段落的型:**指向不存在章節的交叉引用**、或**約束引用未定義的詞**)。**禁用「與某段矛盾的需求」**那類非局部 canary(會污染審計員對被矛盾那段的真實意見)。給它一個唯一 token 當定位記號。**提交的文件永遠不含 canary。**
 2. **正常跑審計,不告訴 agent 有 canary**(講了就作弊)。

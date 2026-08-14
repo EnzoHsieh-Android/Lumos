@@ -1,12 +1,12 @@
 ---
 type: system
-status: done
+status: deferred
 created: 2026-06-26
-updated: 2026-08-05
+updated: 2026-08-14
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
-  - status/done
+  - status/deferred
   - risk/守衛面
 verified_by:
   - "[[Verification/2026-06-19_canary-audit]]"
@@ -17,7 +17,9 @@ verified_by:
   - "[[Verification/2026-08-06_驗證層自證三件S1S3落地]]"
   - "[[Verification/2026-08-08_canary型別描述報表]]"
   - "[[Verification/2026-08-08_驗證層去模型化落地]]"
+  - "[[Verification/2026-08-14_canary協議停用none制落地]]"
 summary: |-
+  KEY:★協議已停用(2026-08-14,Enzo 裁,d5)★植入/判定/抽樣分權/漏抓懲罰全停——caught/missed 譯不出「認真」且無下游消費=空轉;煙霧偵測角色被 quote-check 引句錨定機械蓋掉;record 加 kind=none 當純處置帳載體(五處閘謂詞納 none,t_loop_panel_none_kind 釘住);工具封存不拆、歷史帳唯讀;重啟條件=能分「真醒/演醒」的探針出現;D 案(型別輪替攢 15 筆)隨停用作廢(其前提跨期統計已被 d4 否決)
   KEY:[2026-08-05 D 前置,Enzo 裁]record 加 --canary-type/--probe 選配欄(不給不寫鍵)+canary-stats 型別×探針×caught 表——植入型別與探針結果★結構化★取代散文 note(散文帳不可重算,攢十輪也是考古材料);★D 案(型別輪替表數據驅動)開工條件=帶型別記錄攢滿 15 筆★(帳面可數,同 A 案防浮動條款款式);skill 派工/記帳模板同步帶兩欄 [test:t_canary_type_probe_fields]
   KEY:[2026-08-06 效度自檢落地,plan:[[Projects/驗證層自證三件_計劃]]]①型別派工當下★隨機抽★取代固定輪替(loop next;固定輪替=可猜=答案印考卷背面,同輪 slot 仍不重複)[test:t_s2_loop_next_random_type_draw] ②canary-stats 型別來源如實分層 attr/note/unknown+覆蓋率即時計算(D 案 15 筆條件只認 attr)[test:t_s2_canary_stats_type_coverage] ③前瞻層 SNR=governance/eval/canary_snr.py(跨席分辨力÷同席重跑雜訊;重跑<3/分母=0→不裁決非高訊號;swap-candidate 恆人裁)[test:t_s2_snr_synthetic]——★canary-log 非 SNR 合法輸入(無同題重跑配對鍵,母體錯置)★,真 SNR 接 calibration 固定題矩陣
   KEY:★INVARIANT★ canary record/second 回報成功 ⟺ 該行已落盤且可讀回(readback 驗不到即 rc2 且不印 ✓ 行;出身=2026-07-28 回報成功未落盤事故) [test:t_canary_record_persist] [audit:sonnet/2026-07-29]
@@ -29,6 +31,7 @@ summary: |-
   KEY:[2026-07-30]★caught≠覆蓋★外部實證入帳:植錯誤考審查系統實測**最強單席僅 71.6%、六模型並集才 83.3%**(arXiv 2606.19749,經 07-30 治理日報引入)——canary caught 只證該席**醒著**、不證審得夠廣;廣度只能靠多席×多鏡頭×跨家族買,買不到就把收斂宣稱講小
   KEY:[2026-07-30]跨家族席改**能力宣告制**:有外家→該席也帶 canary(舊「不帶canary只否決」作廢,理由=否決席無注意力檢查等於編排者自判);無外家→loop 照跑但 note 留「單家族」、收斂措辭降級為「單家族視角下未發現」。**刻意不採日報的「升主力席」**(連動佔W/capture帳/fail-closed,且與可攜性衝突:skill 要發給別人用,硬要求第二家 CLI=零依賴工具鏈加外部依賴)
   KEY:[2026-08-04 終審實測]生成硬化的兩條校準觀察——★資源類植入對 haiku 探針天生顯眼★(同輪兩席 recraft×2 仍被探中,該席 caught 記弱證據;探針記法=probe:pass/recraft×N 進 record note);★植入 hunk 行數頭要程式自算★(手寫算錯=機械破綻,審計員靠 git 比對溯源抓到=caught 灌水來源)
+  KEY:[2026-08-14 prior-art 掃描]同題 repo LoopX(huangruiteng/loopx,4.7k星,loop-engineering 狀態核心)的「canary」=發布工程金絲雀(promotion-readiness/premerge-gate/smoke 冒煙閘,全機械可重算),與本節點的注意力探針純撞名、無可借;掃描結論=世界對 loop 信任的解全押機械可重算閘、無人做 oracle 注意力層——佐證 08-04 重設計方向(canary 降觀測、閘只留可重算)本身就是業界同向解;僅讀 README+code 檔名層級,未深讀實作
   KEY:test-the-tester——這套方法論把判斷外包乾淨審計員,canary 是「注意力下限」探針,擋掉『審計員根本沒讀/只吐通用回應』失敗模式
   KEY:協議是主體(skill 規則),lumos 只做極小 helper:record 留痕 + gov 唯讀彙整;lumos 不 spawn agent、植入/判定留在對話/skill 層
   KEY:提交的文件永遠不含 canary;token(CANARY-<hex>)只是定位記號,非「抓到」的機械證明——唯一算數的是審計員正確描述了那個瑕疵
@@ -66,6 +69,12 @@ decisions:
     why_chosen: 煙霧偵測器不怕飽和(miss 越稀有訊號越大)、不需跨期統計(當輪對照即成立);閘體重全移可重算證據(處置帳/引句錨定/翻紅釘/變異測試)
     decided: 2026-08-08
     valid: true
+  - content: canary 協議全面停用(植入/判定/抽樣分權/漏抓懲罰全停);record 加 kind=none 當純處置帳載體,panel/light/循序/verify-progress/settle 五處閘謂詞納 none;工具封存不拆、歷史 caught/missed 帳唯讀可回放
+    id: d5
+    context: Enzo 論證:抓到不代表認真、沒抓到不代表不認真(d4 已承認非平穩性),此訊號翻譯不出任何結論、無下游消費=空轉;僅存的煙霧偵測角色(審計員沒讀/管線斷線)已被 quote-check 引句錨定機械蓋掉;prior-art 掃描(LoopX 等同題 repo)確認業界對 loop 信任全押機械可重算閘、無人做注意力探針層;同日 Landmark code-crossclaim 11 輪實跑亦暴露「輪有效 caught<2」規則絆人白跑一輪
+    why_chosen: 依家規「機制價值看對自動 loop 有沒有用」:無消費者的 telemetry 是死重;引句錨定用可重算方式蓋掉其僅存價值;停用(非拆除)可逆——日後若有能區分「真醒/演醒」的探針技術可重啟
+    decided: 2026-08-14
+    valid: true
 related:
   - "[[Projects/規模影響判斷力假說]]"
   - "[[Projects/canary注意力檢查失效]]"
@@ -73,6 +82,14 @@ aliases:
   - test-the-tester
 ---
 # canary-audit
+
+> ## ⛔ 協議已停用（2026-08-14，Enzo 裁；見 decisions d5）— 植入/判定/抽樣分權/漏抓懲罰全停
+>
+> 理由三腳：①caught/missed 翻譯不出「認真與否」（d4 已承認非平穩性），無下游消費＝空轉；②僅存的煙霧偵測角色被 **quote-check 引句錨定**機械蓋掉；③prior-art 掃描確認業界同題全押機械可重算閘、無人做注意力探針層。
+> **落地實證**：`record` 加 `kind=none`（無植入輪的純處置帳載體），panel／light／循序／verify-progress／settle 五處閘謂詞納 none，新測試 `t_loop_panel_none_kind` 三向釘（none 輪有效／嚴重度合取不盲 none 列／單席仍無效）＋既有 loop 系 215 測全綠。工具封存不拆；歷史 caught/missed 帳唯讀可回放。
+> **重啟條件**：出現能區分「真醒／演醒」的探針技術（eval-awareness 天花板見下）再議。
+>
+> ★以下正文是停用前的機制紀錄與歷史帳判讀依據，不是現行協議。★
 
 `lumos canary` + gov 第 4 源 + skill 協議 —— 給「對抗設計/spec 審計 loop」的 **test-the-tester**:每輪偷植一個已知瑕疵(canary)驗審計員有沒有在認真抓,放水的審計員判決作廢重跑。
 

@@ -8940,6 +8940,57 @@ def t_loop_panel_gate():
               r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
 
 
+def t_loop_panel_none_kind():
+    """canary 協議停用(2026-08-14,Systems/canary-audit d5):kind=none=無植入輪的純處置帳載體。
+    ①none×2 乾淨+高重疊 → 輪有效、rc0(停用後收斂閘不因無 caught 卡死)
+    ②none 輪帶 major → rc1(嚴重度合取必須讀 none 列——翻紅釘:只讀 caught 會盲掉存活 findings 假 PASS)
+    ③單席 none → 輪無效 rc1(panel 寬度證據仍要 ≥2 席)"""
+    import subprocess as _sp
+
+    def _mkvault(d):
+        v = Path(d) / "docs" / "y-knowledge"
+        (v / "MOC").mkdir(parents=True)
+        (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+
+    def _rec(d, *extra):
+        return _sp.run([sys.executable, GRAPHCTL, "canary", "record", *extra],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    def _gate(d):
+        return _sp.run([sys.executable, GRAPHCTL, "loop", "status", "PN", "--gate", "--panel"],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    # ① none×2 乾淨+高重疊 → rc0
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        r = _rec(d, "none", "--loop", "PN", "--round", "r1", "--token", "A",
+                 "--severity", "minor", "--capture-counts", "2,2,3")
+        check("none: record 接受 kind=none", r.returncode == 0, r.stderr)
+        _rec(d, "none", "--loop", "PN", "--round", "r1", "--token", "B", "--severity", "clean")
+        r = _gate(d)
+        check("none: 2 none+乾淨+高重疊 → rc0(no-canary 制輪有效)", r.returncode == 0,
+              f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+        check("none: 印 no-canary 制字樣", "no-canary" in r.stdout, r.stdout)
+
+    # ② none 輪帶 major → rc1(嚴重度合取讀 none 列)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "PN", "--round", "r1", "--token", "A",
+             "--severity", "major", "--capture-counts", "2,2")
+        _rec(d, "none", "--loop", "PN", "--round", "r1", "--token", "B", "--severity", "clean")
+        r = _gate(d)
+        check("none: 存活 major → rc1(嚴重度合取不得盲掉 none 列)", r.returncode == 1,
+              f"rc={r.returncode}\n{r.stdout}")
+
+    # ③ 單席 none → 輪無效 rc1
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "PN", "--round", "r1", "--token", "A",
+             "--severity", "clean", "--capture-counts", "2,2")
+        r = _gate(d)
+        check("none: 單席 → 輪無效 rc1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+
+
 def t_canary_round_field():
     """loop 壓縮 T2:canary record --round 留痕欄(panel 一輪 W 筆共享 round-id)。
     帶 --round → 記錄含 round 欄;不帶 → 無此欄(舊記錄格式逐位元不變)。"""

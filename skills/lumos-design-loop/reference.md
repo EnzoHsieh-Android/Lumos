@@ -1,5 +1,7 @@
 # lumos-design-loop:參考層
 
+> ⛔ **canary 協議已於 2026-08-14 停用**(Enzo 裁;單源=Systems/canary-audit d5 與 SKILL.md 頁頂告示)。本檔所有 canary 段(§A 生成硬化、§C 帶餌條款、caught/missed 判定)**僅供回放歷史帳判讀,不再是動作指令**;每輪記帳改 `canary record none`。
+
 > `SKILL.md` 是操作層(每輪都要走的步驟與判準)。這裡放**按需查閱**的深規、理據與出處。
 > `SKILL.md` 裡的指標會告訴你什麼時候該翻到這裡的哪一段——**撞到就讀，別憑摘要硬幹**。
 

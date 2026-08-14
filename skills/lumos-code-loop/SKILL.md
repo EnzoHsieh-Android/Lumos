@@ -1,11 +1,15 @@
 ---
 name: lumos-code-loop
-description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff 命中 tier high 時觸發、派乾淨 reviewer 驗醒著、辯方殺假陽性、證據閘收斂才放行 finishing。對齊「收斂=終審綠燈」。觸發詞:分支終審、code review 對抗、pitfalls diff 命中 tier high、代碼審計 loop、終審前對抗審。
+description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff 命中 tier high 時觸發、派乾淨 reviewer 找洞、辯方殺假陽性、證據閘收斂才放行 finishing。對齊「收斂=終審綠燈」。觸發詞:分支終審、code review 對抗、pitfalls diff 命中 tier high、代碼審計 loop、終審前對抗審。
 ---
 
-# lumos-code-loop:分支終審前的 canary-護對抗代碼審 loop
+# lumos-code-loop:分支終審前的對抗代碼審 loop
 
-**Claude 編排,lumos 出原語**:你用 Agent tool 派 reviewer、判讀、修碼;lumos 記錄與算收斂,不 spawn agent。機制與 design-loop 1:1,差異只在 canary 是 bug hunk、無 G1、mutation 冒煙為機械錨。
+> ## ⛔ canary 協議已停用(2026-08-14,Enzo 裁;單源=圖譜 Systems/canary-audit d5 + `../lumos-design-loop/SKILL.md` 頁頂告示)
+>
+> 植入/判定/漏抓懲罰停止;每輪記帳改 `lumos canary record none ...`(純處置帳載體,severity/findings/disposal 欄照記);panel 輪有效=記帳席 ≥2 且零 missed。下文殘留的 canary 步驟=歷史帳判讀用,不再執行。
+
+**Claude 編排,lumos 出原語**:你用 Agent tool 派 reviewer、判讀、修碼;lumos 記錄與算收斂,不 spawn agent。機制與 design-loop 1:1,差異=無 G1、mutation 冒煙為機械錨。
 
 ## 一眼看懂
 
@@ -21,17 +25,17 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 - **一輪 = 7 步(循序)** 或 **平行 panel(≤3 輪,見下)**:
 
   1. 產 diff 文字檔 → 複製工作副本
-  2. 工作副本植 1 個 bug canary hunk(類型輪替)
-  3. 三道防污染自檢
-  4. 派乾淨 reviewer(不告知 canary)+ 抑噪紀律 + impact 鏡頭
-  5. 判讀:canary caught? → 辯方殺假陽性 → 存活 max severity
-  6. 記錄 `canary record`(disposal 版模板:carrier 帶 --findings-set/--folded-set/--accepted-set,
+  2. ~~植 bug canary hunk~~ ⛔ 已停用(見頁頂)
+  3. ~~三道防污染自檢~~ ⛔ 隨植入停用(無植入即無污染面)
+  4. 派乾淨 reviewer + 抑噪紀律 + impact 鏡頭
+  5. 判讀:辯方殺假陽性 → 存活 max severity
+  6. 記錄 `canary record none`(disposal 版模板:carrier 帶 --findings-set/--folded-set/--accepted-set,
      `loop next` 已泛型吐 `disposal_cmd`——★只換閘不換記帳式,disposal 恆卡「無處置帳」★)
      → 問收斂 `loop status --disposal --spec <凍結 diff/patch> --repo <root>`(2026-08-08 起;舊帳沿舊閘)
   7.(可選)mutation 冒煙補機械錨
 
 - **收斂**——★K 取決於你跑哪個模式,別記成同一個數★(2026-08-03 修:本行原本只寫「連 2 輪」,與下方 panel 節的「一乾淨輪即收斂」自相矛盾;**code 實作的是 panel 節那個**——`_loop_status_panel` 只取 `next(reversed(groups.items()))`,也就是★只看最後一輪★):
-  - **循序模式**(`--need 2`,無 `--panel`):**連 2 輪** caught 且無 blocker/major ∧ 發現枯竭
+  - **循序模式**(`--need 2`,無 `--panel`):**連 2 輪**記帳乾淨(kind=none/caught 皆計)且無 blocker/major ∧ 發現枯竭
   - **panel 模式**(`--gate --panel`,tier=high 走這條):★**2026-08-06 起新 loop=K=2(連續兩個乾淨輪)＋收斂後決定性抽查判定**★(A案落地,見[[Projects/panel收斂判準改革_計劃]];PASS 訊息印「應抽查/免抽」——sha 公式可重算,應抽就加開 probe-* 輪:材料全量、席數可縮 3、不計 cap、冒 major 自動撤銷收斂;抽查上限 1 次/loop)。舊 loop(首筆早於 cutoff)沿 K=1
   - 收斂後 → 記 `code-loop pass` 留痕 → finishing。
   - ⚠ **panel 是風險最高的路徑,判準卻最鬆**。外部案例研究(arXiv 2605.12280 §3.5)明確建議「two consecutive clean passes」當複現判準,理由是「stopping rule is a known source of **premature-termination risk on stochastic LLM auditors**」。★本專案尚未改 panel 的 K★——那動到收斂判準、屬守衛面,要另走 design-loop;此處只先把矛盾講白,不偷偷改判準。
@@ -43,7 +47,7 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 >
 > | 你正要做 | Read reference.md 的 |
 > |---|---|
-> | 植 canary 要生成硬化(載重錨定/haiku 探針/事故反轉)、或 reviewer 結構紀律(禁互辯/meta-judge/≥3 run 多數決) | 步驟 2 + panel 節 |
+> | reviewer 結構紀律(禁互辯/meta-judge/≥3 run 多數決);~~植 canary 生成硬化~~(歷史帳判讀用) | 步驟 2 + panel 節 |
 > | 想懂抑噪為何**不設 findings 上限**(PR-Agent `num_max_findings=3` 的取捨)、辯方順產 fix 細節 | 步驟 3-4 |
 > | mutation 算子完整理由(Offutt/PItest/Stryker E-selective)、或 **code-loop≠design-loop** 的異質 ensemble 文獻論證 | 步驟 7 + 「差異」節 |
 > | capture-recapture 機械算法完整範例、端到端指令 | panel 節 |
@@ -63,7 +67,7 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 >
 > 門檻 1800 是**借用已發表的 32K 起點取略保守整數，不是本專案量出來的**。★兩次實驗反而浮出另一個假說★：量大影響的可能不是「有沒有看到」而是**判斷的自信度**——大 payload 的席位會**有把握地宣稱有缺陷的地方沒問題**（3/3 大 payload 席位講反、1/1 小 payload 席位找到，見 [[Projects/規模影響判斷力假說]]）。★該假說 n=4、觀察性、編碼者＝提出者，maker≠checker 未閉合，**不得據以動 gate**★；要動得先有一個為它設計的對照實驗，而且需要「會被漏掉的難針」（實驗二 7/7 全中＝天花板效應，測不出差別）。
 >
-> **超標不擋**（輪已經跑完才記帳，擋也來不及），但 `canary record --scope-lines N` 會在帳上標 `scope_oversize` 並當場喊——**那一輪的 caught 是弱證據**：審查員可能是「看不完」而不是「沒問題」，收斂宣稱要講小。
+> **超標不擋**（輪已經跑完才記帳，擋也來不及），但 `canary record --scope-lines N` 會在帳上標 `scope_oversize` 並當場喊——**那一輪的「乾淨」是弱證據**：審查員可能是「看不完」而不是「沒問題」，收斂宣稱要講小。
 
 
 ## 步驟細節
@@ -75,25 +79,11 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch
 ```
 副本對象＝diff 文字檔(非原始碼樹);植入/審查/判讀全在副本,真碼不動。座標權威＝此 `-U10` 檔(pitfalls 用 `-U3`,`@@` 位移不同)。
 
-### 2 · 植 bug canary(只進工作副本)
-工作副本 Diff 段插一段帶合法 `@@` 標頭的偽 hunk + 唯一 token。**類型輪替 `[(N−1) mod 4]`**:
-
-| (N−1)%4 | 類型 | 形態 |
-|---|---|---|
-| 0 | 邊界/off-by-one | `<`→`<=`、索引越界一格 |
-| 1 | 資源未釋放/鎖漏 | acquire 無 release、open 無 with |
-| 2 | None/例外未接 | 回傳未判 None、例外吃掉 |
-| 3 | 冪等/併發破壞 | SELECT→INSERT 無交易、TOCTOU |
-
-校準鐵則:認真審抓得到、不一眼看穿。生成硬化(載重錨定/haiku 難度探針/事故反轉)與 reviewer 結構紀律 → **單源見 `../lumos-design-loop/SKILL.md`,不在此雙寫**;code-loop 適配＝canary 植在 diff 主題核心邏輯型別、事故反轉查 `pitfall_when` 命中被改檔。
-
-### 2.5 · 三道防污染(不可違反)
-- **真碼永不含**:canary 只在工作副本;fix commit 必錨真 diff 的 file:line(canary 位置不在真 diff,對不上座標)。
-- **低耦合植入**:canary hunk 落在真改動集之外、與真改動弱耦合。
-- **溯源排除**:任何 finding 引用 canary file:line 或依賴其語意(含鄰接聯想幻影)→ 連 canary 一併排除、不折、不計。偏「多排」;誤排的假陰性由下一輪重挖兜底。
+### 2 · ~~植 bug canary~~ ⛔ 已停用(2026-08-14,見頁頂)
+本步驟與三道防污染自檢不再執行,直接進步驟 3。舊型別輪替表/生成硬化見 git 史與 design-loop reference §A(歷史帳判讀用)。reviewer 結構紀律 → **單源見 `../lumos-design-loop/SKILL.md`,不在此雙寫**。
 
 ### 3 · 派乾淨 reviewer
-Agent tool、`model: sonnet`(連 2 missed 升 opus)、**不告知 canary**、指向工作副本。
+Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus)、指向工作副本。
 
 **refute framing**:「你是外部第三方審別人投稿的 diff。逐 hunk 找洞:bug/邊界/資源/例外/冪等/併發,逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。」
 
@@ -109,8 +99,8 @@ Agent tool、`model: sonnet`(連 2 missed 升 opus)、**不告知 canary**、指
 第一次 missed 起加碼:「你一定找得到至少一個植入 bug;沒找到就是沒讀仔細。」
 
 ### 4 · 判讀 + 辯方
-- **canary**:caught ＝ 清楚點出植入 bug 的性質(如「off-by-one」「鎖未釋放」);光 token 或泛說「有問題」不算。
-- **max severity**:排掉 canary 及溯源影子後的存活 max。剝「誤判」要克制——只有能用真 diff file:line 反證才剝,判不準保留。
+- ~~canary 判定~~ **⛔ 已停用(見頁頂)**——「reviewer 有沒有真的讀」由收貨三道的 quote-check 引句錨定把關。
+- **max severity**:存活 max。剝「誤判」要克制——只有能用真 diff file:line 反證才剝,判不準保留。
 - **辯方(對每條 ≥major;預設 Codex,2026-07-18 S5)**:派 1 個 **Codex 辯方**(`codex exec --sandbox read-only`,乾淨脈絡)——判決單點最怕同門盲點,外家反證價值最高;Codex 不可用退 opus 並於留痕註記偏離。framing=「預設此 finding 假,構造反駁證據、必附 file:line(grep/Read 真碼),拿不出則維持」。可加 `git log`/`git show`(commit 考古常決定性)。辯方降級若順手附最小修法 → 轉 fix 佇列。
 - **該輪 severity** ＝ 辯方裁決後存活 max。
 - **修進真碼**:fix commit + 必要新測試。**修 bug 標配「還原翻紅釘」**——把 bug 還原回去、綁定測試必須翻紅的回歸測試(存在且全綠的測試可能什麼都沒驗;「存在」騙得過、「翻紅」騙不過)。
@@ -120,20 +110,19 @@ Agent tool、`model: sonnet`(連 2 missed 升 opus)、**不告知 canary**、指
     ```
   - **寫測試/審測試前對照 [[Systems/測試假綠形態]] 八型清單**(恆真斷言/斷言太鬆/驗寫法不驗行為/現場走不到被測分支/fixture 無鑑別力/根本沒去驗/白名單過寬/依賴環境巧合)。⚠ **對照過清單 ≠ 測試夠格**——清單是提示器不是偵測器,且★一定有第九型★。
   - 業務合約級隱患 → 另寫圖譜 ★INVARIANT★ 綁 `[test:]`;非合約級測試進套件靠回歸守。
-- **canary 判定抽樣分權(oracle品質包 S2)**:每累計 5 個 caught 輪抽 1 輪,把審計員原始報告+植入描述交乾淨第二判者判 caught/missed,結果記 `lumos canary second --id <CANARY-x> --verdict agree|overturn --auditor <模型>`(純 telemetry 不進 gate);抽中輪報告存 `governance/canary-samples/<id>.md`。分歧→下一輪 framing 復核。
+- ~~canary 判定抽樣分權~~ **⛔ 已停用**(隨協議停用;`canary second` 封存)。
 
 ### 5 · 記錄
 ```bash
-lumos canary record caught|missed --loop code-<topic> \
+lumos canary record none --loop code-<topic> \
   --severity <辯方後存活 max> --findings <存活折入數> --auditor <模型> \
   --scope-lines <這輪 diff 幾行> \
-  --report <席報告路徑> --snapshot <工作副本路徑> \
-  --canary-type <型別> --probe <pass|recraftN|recraftN-fail>   # D 前置:結構化取代散文 note
+  --report <席報告路徑> --snapshot <工作副本路徑>
 ```
 
 **留痕慣例(2026-08-05 借 design-loop T3;原:報告躺 scratchpad,session 一清就蒸發,帳上 note
 指向不存在的東西——T8 三輪實錄)**:席報告落 `governance/review-reports/<loop-id>/<round>-<席>.md`、
-工作副本(=審查快照,含 canary)存 `<round>-s<席>-snapshot.md` 或共用一份;record 帶
+工作副本(=審查快照)存 `<round>-s<席>-snapshot.md` 或共用一份;record 帶
 `--report`/`--snapshot` 讓 sha 落帳可重算。code-loop record 不帶 findings_set,不會誤觸 T6 定錨。
 
 **收貨三道(2026-08-08,plan:[[Projects/驗證層去模型化_計劃]] S2a;前置=派工當下落
@@ -149,14 +138,14 @@ lumos canary record caught|missed --loop code-<topic> \
 結構化欄位+讀側重跑=v2★。
 派工模板本就要求逐字引句(§3 錨定紀律),收貨端機械化:錨不到的條目=弱證據,判讀時要求補引句或降權;報告一旦過錨定,
 capture-recapture 的 finder 串也有了可信座標來源。
-missed → 該輪判決不採信(canary 硬閘不動)、下一輪(換 canary 型、framing 加碼)。連 2 missed → 升 opus。
-★**missed 席 findings 不得直接丟——先過機械 repro triage(2026-08-05 正式化)**★:逐條試以真碼/真跑
-證實(repro 腳本/grep 實查/測試重現);證實的走通道 a(執行證據)折入,record note 記「機械證實,
-非席信用」;repro 不出的才丟並記 triage 結果。實證:2026-08-04 T8 終審 r1,missed 席交出
-「判定輪取錯」與「巢狀引句截斷」兩條真 major,靠 repro 撈回——直接丟=結構性誤殺,
-而「撈」以前只是編排者裁量,現在是硬步驟。
+~~missed 懲罰~~ ⛔ 已停用(無植入即無漏抓;歷史帳回放照舊制判讀)。
+★**可疑席的 findings 不得直接丟——先過機械 repro triage(2026-08-05 正式化;停用制下觸發改為
+「quote-check 大面積錨不到/通用回應」的席)**★:逐條試以真碼/真跑證實(repro 腳本/grep 實查/
+測試重現);證實的走通道 a(執行證據)折入,record note 記「機械證實,非席信用」;repro 不出的才丟
+並記 triage 結果。實證:2026-08-04 T8 終審 r1 + 2026-08-14 Landmark code-crossclaim r4,
+可疑席各交出真 major 靠 repro 撈回——直接丟=結構性誤殺,「撈」是硬步驟不是裁量。
 
-> **`--scope-lines` 為什麼要填**:canary 抓到只證該席**醒著**,但外部實測指出**東西越多越抓不到**是最主導的因素(arXiv 2606.15689:抓得到合成缺陷**不可靠地預測**抓得到真實缺陷,且 **diff 大小是主導混淆變數**)。本專案十輪 code-loop 的 diff 從 332 到 2770 行,**在帳上長得一模一樣**——不填就永遠答不出「小 diff 上的 caught 是不是灌水」。**不進 gate、純 telemetry**;`wc -l <patch>` 即可。
+> **`--scope-lines` 為什麼要填**:外部實測指出**東西越多越抓不到**是最主導的因素(arXiv 2606.15689:抓得到合成缺陷**不可靠地預測**抓得到真實缺陷,且 **diff 大小是主導混淆變數**)。本專案十輪 code-loop 的 diff 從 332 到 2770 行,**在帳上長得一模一樣**——不填就永遠答不出「小 diff 上的 caught 是不是灌水」。**不進 gate、純 telemetry**;`wc -l <patch>` 即可。
 
 ### 6 · 問收斂
 ```bash
@@ -173,24 +162,24 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 
 ## 平行 panel 模式(≤3 輪,取代 6 輪循序)
 
-機械原語 loop-agnostic,直接可用;差別:跑 diff 文字檔、canary 是 bug hunk、無 G1。
+機械原語 loop-agnostic,直接可用;差別:跑 diff 文字檔、無 G1。
 
-- **一輪 = 平行 W 個 reviewer**(W＝panel_width:standard 3/high 5),各讀一份工作副本:bug canary 型別跨 slot 輪替、鏡頭各異(bug/資源例外/冪等併發/…)。**跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**——tier=high 雙 Codex 角色:1 席**帶餌正式 finder,佔 W 之一**(與 LLM 席同規則受注意力檢查,findings 計入重疊帳)+1 席**無餌否決席,不佔 W**(外掛,同 spec-conformance 慣例;即使 finder 席漏抓被作廢,外家聲音不斷線)。standard=1 席無餌否決。**否決席落閘路徑**:其 findings 與帶餌席同池進辯方;存活 ≥major——M2 cluster 帳模式必須記為該輪 `<名>=disputed-major` cluster 記錄(severity 欄該模式僅顯示不裁決)/無-cluster 舊帳計入存活 max。**fail 分級**:standard=Codex 不可用退同門+留痕;**tier=high=fail-closed**——第三家族(qwen 有 cross_audit 整合;gemini 候選未驗)替補→延期→皆不可則**不得收斂攤人裁**(人可明示豁免留痕),不分金流與否。qwen 轉列第三家族替補與 finder 輪替候選。
+- **一輪 = 平行 W 個 reviewer**(W＝panel_width:standard 3/high 5),各讀一份工作副本:鏡頭各異(bug/資源例外/冪等併發/…)(~~canary 型別輪替/帶餌無餌之分~~已隨協議停用——全部席同規則,Codex 席照佔 W 或外掛否決)。**跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**——tier=high 雙 Codex 角色:1 席**正式 finder,佔 W 之一**(findings 計入重疊帳)+1 席**否決席,不佔 W**(外掛,同 spec-conformance 慣例)。standard=1 席否決。**否決席落閘路徑**:其 findings 與帶餌席同池進辯方;存活 ≥major——M2 cluster 帳模式必須記為該輪 `<名>=disputed-major` cluster 記錄(severity 欄該模式僅顯示不裁決)/無-cluster 舊帳計入存活 max。**fail 分級**:standard=Codex 不可用退同門+留痕;**tier=high=fail-closed**——第三家族(qwen 有 cross_audit 整合;gemini 候選未驗)替補→延期→皆不可則**不得收斂攤人裁**(人可明示豁免留痕),不分金流與否。qwen 轉列第三家族替補與 finder 輪替候選。
 - **spec-conformance slot**(tier=high 且有收斂 spec):追加一個對答案審查員(不佔 W、地位同 qwen),逐條款對照「做了/縮水/多做/未實作」,縮水與未實作進辯方。**含合約候選兌現**(2026-07-29):spec 計劃節點若列「合約候選清單」,逐條驗落地有沒有標 ★INVARIANT★ 綁 [test:]——該綁沒綁=縮水 finding。
-- **判讀/辯方/記錄** 同循序(步驟 4-5,含 missed 席 repro triage 與留痕/quote-check 慣例),一輪 W 筆共享 `--round <rid>`。
-- **收斂**:`loop status --gate --panel` 三條合取(caught≥2 且 0 missed ∧ 存活 max≤minor ∧ capture-recapture 殘餘<門檻[無 counts＝fail-closed];--min-seats/G3 帶旗標才啟用;cluster 帳=兩條合取,詳 design-loop SKILL panel 節);★**2026-08-06 起新 loop=最後兩輪各自全過(K=2)+PASS 印抽查判定**★(A案;舊 loop 沿 K=1——gate 依首筆日期自動判,不用記);存活≥major → 只重審 delta,cap=3(K=2 的第二乾淨輪計入 cap;cap 頂未湊滿照攤人)。
+- **判讀/辯方/記錄** 同循序(步驟 4-5,含可疑席 repro triage 與留痕/quote-check 慣例),一輪 W 筆共享 `--round <rid>`。
+- **收斂**:`loop status --gate --panel` 三條合取(記帳席≥2 且 0 missed[none 制] ∧ 存活 max≤minor ∧ capture-recapture 殘餘<門檻[無 counts＝fail-closed];--min-seats/G3 帶旗標才啟用;cluster 帳=兩條合取,詳 design-loop SKILL panel 節);★**2026-08-06 起新 loop=最後兩輪各自全過(K=2)+PASS 印抽查判定**★(A案;舊 loop 沿 K=1——gate 依首筆日期自動判,不用記);存活≥major → 只重審 delta,cap=3(K=2 的第二乾淨輪計入 cap;cap 頂未湊滿照攤人)。
 - capture_counts 別手數 → `lumos loop capture-counts --finder ... --from-pitfalls <range>`(自動收割 linter/regex 確定性 finder)產串。
 
 **端到端一輪**(照抄改參數):
 ```bash
 TOPIC=fix-billing; RANGE=main..HEAD; RID=r1   # loop id=code-$TOPIC,TOPIC 勿再帶 code- 前綴
-# 1. 平行派 W 個乾淨 reviewer(各含輪替 canary)→ 收 findings 正規化 file:line
+# 1. 平行派 W 個乾淨 reviewer → 收 findings 正規化 file:line
 # 2. 算重疊(LLM 手動 --finder + 確定性 finder 自動)
 lumos loop capture-counts \
   --finder "billing.py:88,billing.py:120" --finder "billing.py:88,tax.py:12" \
   --from-pitfalls "$RANGE" --repo .
 # 3. 記這輪(W 筆共享 --round)
-lumos canary record caught --loop "code-$TOPIC" --round "$RID" \
+lumos canary record none --loop "code-$TOPIC" --round "$RID" \
   --auditor slot1 --severity minor --capture-counts "2,1,1"
 # 4. 問收斂
 lumos loop status "code-$TOPIC" --gate --panel --repo .
@@ -202,12 +191,12 @@ lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活
 
 ## 護欄 · 天花板 · 收斂後
 
-**護欄**:連 2 missed → 升 opus。cap＝6 筆(循序)/3 輪(panel);到頂未收斂 → 停、攤給人、記「達 cap 未收斂」,別無限燒。
+**護欄**:升級觸發=引句大面積錨不到/通用回應 → 升 opus(舊「連 2 missed」隨協議停用作廢)。cap＝6 筆(循序)/3 輪(panel);到頂未收斂 → 停、攤給人、記「達 cap 未收斂」,別無限燒。
 
 **誠實天花板**(收斂後必向人講):
 > 回報遵 CLAUDE.md「對人回報用白話」規則(mutation 之類術語首次出現給一句人話,如 mutation=故意改壞代碼看測試接不接得住)。
-1. pattern 掃描是提示器非偵測器(N+1/race 多形態 regex 抓不到);漏網靠 reviewer + canary + 測試。
-2. bug canary 校準與溯源排除靠植入者自律、人工判,偏多排,殘餘下一輪兜底。
+1. pattern 掃描是提示器非偵測器(N+1/race 多形態 regex 抓不到);漏網靠 reviewer + 測試。
+2. 收斂只證「這批 reviewer 挖不出新的」,不證乾淨;findings 存廢仍由編排者判,無外部 oracle。
 3. mutation 3-5 個是抽樣非覆蓋;死光≠測試充分;flaky 污染訊號。
 4. code-loop 少一道 G1(代碼無引用座標);衍生機械錨(mutation 全滅)留 v2。
 
@@ -233,7 +222,7 @@ lumos code-loop pass --note "<收斂理由/loop-id>"       # pre-push blocking:�
 ## 參考(需要才讀)
 
 **code-loop ≠ design-loop 換名字**(2026-07-09 文獻;設計見 `[[loop三輪壓縮_計劃]]`):代碼可執行+可靜態分析,最佳解是**異質 ensemble** 非「多個多樣 LLM」——
-- 確定性驗證器(linter SARIF/測試/type checker/mutation)**不佔 canary 席、不進輪有效**(跑真碼樹看不到文字副本裡的餌,記席必 missed;2026-07-18 codestage);參與三通道=(a) findings 憑執行證據機械證實折入 (b) 異質 finder 進 capture-recapture 帳(⚠ M2 cluster 帳下 advisory 不進合取,裁決權歸通道 a)(c) 跑真碼沿隔離 worktree 模式。錯誤剖面與 LLM 正交,才買到真獨立訊號、破「9 judge 2 票」。
+- 確定性驗證器(linter SARIF/測試/type checker/mutation)**不佔 reviewer 席、不進輪有效**(2026-07-18 codestage;原因原為「跑真碼樹看不到餌」——植入雖停用,不佔席照舊:它們的產出走機械通道,不是席報告);參與三通道=(a) findings 憑執行證據機械證實折入 (b) 異質 finder 進 capture-recapture 帳(⚠ M2 cluster 帳下 advisory 不進合取,裁決權歸通道 a)(c) 跑真碼沿隔離 worktree 模式。錯誤剖面與 LLM 正交,才買到真獨立訊號、破「9 judge 2 票」。
 - 辯方用**可執行 falsification**(跑測試/repro/mutation 確認或殺一條 finding)> 論證反證。
 
 **出處**:抑噪兩句 borrow PR-Agent;mutation 算子 borrow Offutt E-selective / PItest / Kurtz FSE2016;Survived/NoCoverage borrow Stryker;異質 ensemble borrow AutoSafeCoder(arxiv 2511.16708)、Greptile TREX / CodeRabbit。派工模板見 `../lumos-design-loop/templates.md` §3-4/§7.5。設計全文 `docs/design/2026-07-04-pitfalls-code-loop.md`。
