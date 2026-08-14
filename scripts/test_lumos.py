@@ -8943,8 +8943,12 @@ def t_loop_panel_gate():
 def t_loop_panel_none_kind():
     """canary 協議停用(2026-08-14,Systems/canary-audit d5):kind=none=無植入輪的純處置帳載體。
     ①none×2 乾淨+高重疊 → 輪有效、rc0(停用後收斂閘不因無 caught 卡死)
-    ②none 輪帶 major → rc1(嚴重度合取必須讀 none 列——翻紅釘:只讀 caught 會盲掉存活 findings 假 PASS)
-    ③單席 none → 輪無效 rc1(panel 寬度證據仍要 ≥2 席)"""
+    ②none 輪帶 major → rc1 且★敗因必須是嚴重度合取★(2026-08-14 終審 F5 補強:單席 K=2 場景
+      rc1 恆成立[差第二輪],只斷 rc 分不出 maxsev 有沒有讀 none 列——把 maxsev 還原成只讀
+      caught,rc 照樣 1 但 falsification+ODC 印 ✓;故加斷 stdout 的 ✗ 行才真的釘住)
+    ③單席 none → 輪無效 rc1(panel 寬度證據仍要 ≥2 席)
+    ④canary-stats 對停用制 loop 印提示而非「無記錄」(終審 F1:文檔點名的升級機械眼不得靜默瞎)
+    ⑤gov 對抗層折入帳計 none 輪 findings(終審 F2:只讀 caught 會使一級指標自停用日永凍 0)"""
     import subprocess as _sp
 
     def _mkvault(d):
@@ -8981,6 +8985,8 @@ def t_loop_panel_none_kind():
         r = _gate(d)
         check("none: 存活 major → rc1(嚴重度合取不得盲掉 none 列)", r.returncode == 1,
               f"rc={r.returncode}\n{r.stdout}")
+        check("none: ★敗因=嚴重度合取翻紅★(falsification+ODC 印 ✗;只斷 rc 分不出——F5)",
+              "falsification+ODC(存活 max≤minor): ✗" in r.stdout, r.stdout)
 
     # ③ 單席 none → 輪無效 rc1
     with tempfile.TemporaryDirectory() as d:
@@ -8989,6 +8995,25 @@ def t_loop_panel_none_kind():
              "--severity", "clean", "--capture-counts", "2,2")
         r = _gate(d)
         check("none: 單席 → 輪無效 rc1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+
+    # ④ canary-stats 對停用制 loop 印提示而非「無記錄」(F1)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "PN", "--round", "r1", "--token", "A", "--severity", "clean")
+        r = _sp.run([sys.executable, GRAPHCTL, "loop", "canary-stats", "PN"],
+                    cwd=str(Path(d)), capture_output=True, text=True)
+        check("none: canary-stats 印停用制提示", "停用制" in r.stdout, r.stdout)
+        check("none: canary-stats 不印「無記錄」誤導", "無記錄" not in r.stdout, r.stdout)
+
+    # ⑤ gov 對抗層折入帳計 none 輪 findings(F2)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "PN", "--round", "r1", "--token", "A",
+             "--severity", "minor", "--findings", "2")
+        r = _sp.run([sys.executable, GRAPHCTL, "gov", "--since", "3650"],
+                    cwd=str(Path(d)), capture_output=True, text=True)
+        check("none: gov 對抗層折入帳計入 none 輪 findings(折入 2 筆)",
+              "折入 2 筆" in r.stdout, r.stdout)
 
 
 def t_canary_round_field():

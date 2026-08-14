@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-05
+updated: 2026-08-14
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -17,7 +17,7 @@ verified_by:
   - "[[Verification/2026-08-04_design-loop處置閘終審硬化]]"
   - "[[Verification/2026-08-05_流程優化六件落地]]"
 summary: |-
-  KEY:[2026-08-05]`loop canary-stats [<id>]`——d4 跨輪累積帳的★讀取面★(席位×caught/missed×尾端連續 missed;streak≥2 印「升 opus」提示=該升級規則的機械眼);唯讀恆 rc0、壞行跳過註記、不進任何 gate [test:t_loop_canary_stats]
+  KEY:[2026-08-05]`loop canary-stats [<id>]`——d4 跨輪累積帳的★讀取面★(席位×caught/missed×尾端連續 missed;streak≥2 印「升 opus」提示=該升級規則的機械眼);唯讀恆 rc0、壞行跳過註記、不進任何 gate [test:t_loop_canary_stats]。★[2026-08-14 停用制適配]★協議停用(canary-audit d5)後升級訊號改看 quote-check,本報表轉歷史帳回放;對純 none 的停用制 loop 印停用提示而非「無記錄」(終審 F1:原樣會誤讀成什麼都沒發生),none 輪計數顯示但不入 caught/missed 統計 [test:t_loop_panel_none_kind]
   KEY:[2026-07-28]第四模式 settle(opt-in,`--settle 清單檔`)落地——收斂=清單全結清∧G1∧G3(末筆 result=現檔;K-streak/G2 由逐條存在證明取代,G2 印 advisory);caught 輪收緊=kind=caught∧auditor 非空;貶值=gate 讀時判不回寫;fail-closed 族(壞行 rc2 全檔/零條目/懸空輪);與 panel/light/need/min-seats 互斥 rc2;設計=[[Projects/結清式收斂_計劃]](五輪 design-loop+實質收斂人裁) [test:t_settle_gate];同計劃 [S2] loop compress(規則式白名單壓縮,[PIN] 口頭約定壓不掉)+[S3] loop verify-progress(結構帳覆核原語,note/clusters 散文免疫) 2026-07-28 落地 [test:t_loop_compress,t_loop_verify_progress]
   KEY:[2026-08-04]第五模式 disposal(opt-in,`--disposal`;design-loop 專用,見[[Projects/design-loop重設計]])——與 panel/light/settle/need/min-seats 互斥;四條合取★全讀側可重算★:G3∧處置集合重算(findings_set/folded/accepted 互斥+聯集+blocker 不得 accepted,輪級不信寫側)∧留痕 sha 重驗(record 完刪改照樣擋)∧quote-check 引句全錨定(對凍結快照防循環自證);★canary caught/missed 不進合取(d4 觀測)★;寫側 record 六選配欄+定錨後留痕強制 [test:t_loop_status_disposal_gate,t_canary_record_disposal_fields_optional];★終審硬化(2026-08-04 code-loop 三輪 panel 對抗審)★——壞行 rc2 fail-closed(訊息附行號;全帳域,同 settle 前例)/round 與 round-less 混用 rc2/round-id 禁 __ 保留字首(撞內部 __seqN 鍵=舊 carrier 冒充判定輪)/round-less 逐筆自成一輪/留痕重驗涵蓋判定輪★全席★(缺欄=FAIL 不跳過)/引句 norm 後 10 字下限+不成對引號(「…』)以格式 miss 入列/留痕路徑以 repo root(_vault_repo_root 向上找 .git,寫讀同根,--repo 顯式覆蓋)相對落帳 [test:t_disposal_gate_r1_panel_hardening,t_disposal_gate_r2_panel_hardening,t_disposal_gate_r3_panel_hardening];★Landmark 真場實測三缺口修(2026-08-04,首次他專案落地即抓到)★——引句標籤容錯(**引句**：/**引句（註記）**：,原只認裸標籤→合規報告抽零條)/CJK 折行空格 fallback(快照句中折行→norm 多一空格,連續引句必 miss;空白全剝再比一次)/blockquote 續行 > 記號剝除(norm 內);首戰績=RSNO r3:4/5 席全錨定、1 條轉寫誤差正確被拒、DISPOSAL GATE PASS [test:t_quote_check_field_test_gaps]
   KEY:[M2 2026-07-16]risk-cluster 三態帳(見[[Projects/design-loop提效_計劃]])——canary record --clusters '名=狀態'(resolved/accepted-minor:理由/disputed-major)→panel gate 首個有效輪定錨後改兩條合取(輪有效∧fold 後無 disputed-major);_round_valid_m2 統一謂詞(caught≥2∧missed=0∧kind 白名單)五處共用;無效輪豁免+警告區列帳;新生 cluster/capture-recapture 降 advisory;無-cluster 舊帳三條合取不變 [test:t_m2_cluster_gate]

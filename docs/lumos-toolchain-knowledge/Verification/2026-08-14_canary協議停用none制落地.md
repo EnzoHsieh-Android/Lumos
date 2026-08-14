@@ -8,8 +8,9 @@ tags:
   - type/verification
   - status/pass
 summary: |-
-  VERIFY:canary 協議停用(Systems/canary-audit d5)的工具面落地驗訖——①record kind 加 none(無植入輪純處置帳載體)②五處閘謂詞納 none:panel 輪有效(none 制=記帳席≥2 且 0 missed)/_round_valid_m2(五consumer共用)/light(ratchet+末輪+K-streak good)/verify-progress(caught_ok)/settle(is_caught_round)③嚴重度合取讀 caught+none(原只讀 caught,none 輪會盲掉存活 findings 假 PASS——新測試翻紅釘釘住)
-  TEST:t_loop_panel_none_kind 三向(none×2 乾淨→rc0/none 輪 major→rc1/單席→rc1)+既有 -k panel 49、-k canary 66、-k loop 215 全綠(舊帳回放語意未動)
+  VERIFY:canary 協議停用(Systems/canary-audit d5)的工具面落地驗訖——①record kind 加 none(無植入輪純處置帳載體)②五處閘謂詞納 none:panel 輪有效(none 制=記帳席≥2 且 0 missed)/_round_valid_m2(五consumer共用)/light(ratchet+末輪+K-streak good)/verify-progress(caught_ok)/settle(is_caught_round)③嚴重度合取讀 caught+none(原只讀 caught,none 輪會盲掉存活 findings 假 PASS)
+  VERIFY:[終審後補]單 reviewer 終審(sonnet,錨定紀律)交 6 條全採信——同型漏掃 4 處補齊:canary-stats 停用制提示(原對 none loop 回「無記錄」誤讀成沒發生)/gov 對抗層折入帳計 none(原永凍 0)/disposal 觀測行印 none 數/cluster 條1 顯示與謂詞同步;測試②斷言太鬆補強(斷 stdout ✗ 行)且突變實驗證明必翻紅;templates.md 權威指令塊改 record none+植入句逐段標停
+  TEST:t_loop_panel_none_kind 五向 9 斷言(none 輪有效/敗因=嚴重度合取/單席無效/canary-stats 提示/gov 折入帳)+-k panel·canary·loop·gov 回歸全綠
   KEY:設計原則=純加性——caught/missed 舊分支原樣保留,歷史帳回放與 A 案 K=2 機制碼不動;none 只是第三值
 ---
 # 2026-08-14_canary協議停用none制落地
@@ -19,7 +20,7 @@ summary: |-
 ## 改動與驗證
 
 1. **record 收 `none`**:parser choices 加值+docstring 標協議停用。測試:record none rc0。
-2. **panel 輪有效 none 制**(`_panel_round_conjuncts`):none 輪=記帳席≥2 且 0 missed 即有效;嚴重度合取改讀 caught+none——**不改會假 PASS**(maxsev 只算 caught 列,全 none 輪的 major 被盲掉),`t_loop_panel_none_kind` 第②向釘住。
+2. **panel 輪有效 none 制**(`_panel_round_conjuncts`):none 輪=記帳席≥2 且 0 missed 即有效;嚴重度合取改讀 caught+none——**不改會假 PASS**(maxsev 只算 caught 列,全 none 輪的 major 被盲掉)。★第②向釘的誠實史(2026-08-14 終審 F5)★:首版只斷 rc==1,被終審 reviewer 以突變實驗證明分不出這條修法(單席 K=2 場景 rc1 恆成立,敗因是差第二輪不是嚴重度)——正中假綠八型「斷言太鬆」;已補強為同時斷 stdout 的「falsification+ODC ✗」行,並以同型突變實驗證明補強後必翻紅(突變下該行印 ✓)。
 3. **`_round_valid_m2`**(gate/fold/定錨/ledger/W 歸屬五處共用):白名單納 none、席數計 caught+none。
 4. **light 閘**:ratchet(major 永久升級)與末輪判定納 none——ratchet 不納會使停用後 major 輪失去永久升級(閘變鬆)。
 5. **循序 K-streak `good()`/verify-progress `caught_ok`/settle `is_caught_round`**:一律 kind∈{caught,none}。

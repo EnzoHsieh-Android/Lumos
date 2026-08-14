@@ -152,18 +152,15 @@ binding constraints，3-6 條}
 
 ## 編排者判讀規則（prompt 之外、skill 正文用）
 
-- **canary caught 判準**：審計員清楚點出植入瑕疵的「性質」（off-by-one/未釋放/
-  未定義成員…）；token 出現或泛泛說「有問題」不算。
+- ~~canary caught 判準~~ **⛔ 已停用(2026-08-14 d5)**——無植入即無判定;「審計員有沒有讀」由 quote-check 引句錨定把關。(舊判準留供歷史帳回放:清楚點出植入瑕疵的「性質」才算;token 出現或泛泛說「有問題」不算。)
 - **剝除克制**：只有能指出 finding 客觀錯在哪（被 spec/code file:line 反證）才剝；
   判不準保留（寧可高估）。辯方只買 code 層假陽性，業務層留人。
 - **severity 錨（2026-07-16 M1，與 SKILL.md 判讀 ② 同句）：major=照 spec 字面實作會做出**錯的行為**或漏掉合約;文件精度/測試枚舉完整性/措辭=minor,除非漏的是合約級。**難判搖擺場換問法重問一次**(「這條 finding 若實作照做,具體錯在哪個行為?」),兩問等級不一致=取高並記 unstable(Sage 2026-07-27)。
 - style-bias 錨（2026-07-21，外審吸收）**：severity 按**後果**判（照 spec 實作會發生什麼），
   不按 finding 寫得多詳細/多有說服力判——2026 實證 judge 最大偏誤是 style（0.76-0.92），
   position 反而極小；一條寫得漂亮的 minor 仍是 minor，一條寫得潦草的 major 仍是 major。
-- **輪 severity = 辯方裁決後存活 findings 的 max**；findings 數 = 存活折入條數
-  （canary 不計）。
-- **canary 型別輪替** `[(N−1) mod 4]`，植入位置每輪換區段；code-loop canary hunk
-  必須落在真改動集之外的檔（低耦合）＋溯源排除連影子一起排。
+- **輪 severity = 辯方裁決後存活 findings 的 max**；findings 數 = 存活折入條數。
+- ~~canary 型別輪替/低耦合植入/溯源排除~~ **⛔ 已停用(2026-08-14 d5,無植入)**。
 
 ## 本次實戰的調參建議（skill 文本修訂候選）
 
@@ -205,12 +202,11 @@ repo:{repo 根}(可 Read/Grep 查證 diff 上下文)
 取代 6 輪同族循序。一輪 = **同一則訊息內平行派 W 個審計員**(§1 模板,但差異化):
 
 - **W 由 tier 定**：`difficulty.params(tier)['panel_width']`（standard=3 / high=5）。
-- **多樣化三軸**(「9 judge 2 票」:要獨立票不要數量)：
-  1. **canary 型別跨 slot 輪替** `[(slot) mod 4]`=a/b/c/d(每審計員一份工作副本、各植一型);d 型保裸檔名。
-  2. **鏡頭各異**:slot1 正確性/邏輯、slot2 邊界可執行、slot3 整合知識同步、(W>3)資源併發、回滾。
-  3. **≥1 跨家族**:一個 slot 走 qwen(cross_audit),**不帶 canary**——它是獨立性軸、只作否決(報 ≥major 且辯方沒駁倒→不收斂),不計注意力票、不作背書。
-- **判讀(編排者一次跨 W 份做)**:①逐同族審計員判 canary caught/missed;missed 者 findings 剔除 ②去重(嚴格合一「同段落同性質」,不偏多留)③對存活 ≥major 派 §2 辯方 ④數 capture_counts(各 distinct 缺陷被幾人找到)。
-- **記錄**(一輪 W 筆共享 round-id;M1包 code-loop r2 折入——模板即權威,雙 hash/tier 必入模板):
-  `lumos canary record caught|missed --loop <id> --round <rid> --auditor <slotN> --severity <s> --findings <M> --spec <計劃節點.md> --reviewed <派工時 sha256> --tier <standard|high> [--capture-counts "2,2,1"]`(counts 記該輪一筆即可)。
-- **問收斂**:`lumos loop status <id> --gate --panel --spec <計劃節點.md> --min-seats <W> --repo <root>`(M1包:缺 --spec 則 G3 hash 不啟用、缺 --min-seats 則兩席即可過——W 席承諾靠這兩旗標機械兌現) → 無-cluster 舊帳=三條合取(輪有效≥2caught ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<1.0[無counts=fail-closed])＋min-seats∧G3;cluster 帳(M2)=兩條合取(輪有效 ∧ fold後無disputed-major)＋min-seats∧G3,capture 降 advisory。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。
+- **多樣化軸**(「9 judge 2 票」:要獨立票不要數量;~~canary 型別輪替軸~~已隨協議停用):
+  1. **鏡頭各異**:slot1 正確性/邏輯、slot2 邊界可執行、slot3 整合知識同步、(W>3)資源併發、回滾。
+  2. **≥1 跨家族**:一個 slot 走 qwen(cross_audit)——獨立性軸、只作否決(報 ≥major 且辯方沒駁倒→不收斂)。
+- **判讀(編排者一次跨 W 份做)**:①逐席過收貨三道(quote-check/refcheck/seat-check;~~canary caught/missed 判定~~已停用) ②去重(嚴格合一「同段落同性質」,不偏多留)③對存活 ≥major 派 §2 辯方 ④數 capture_counts(各 distinct 缺陷被幾人找到)。
+- **記錄**(一輪 W 筆共享 round-id;M1包 code-loop r2 折入——模板即權威,雙 hash/tier 必入模板;kind 一律 `none`,2026-08-14 d5):
+  `lumos canary record none --loop <id> --round <rid> --auditor <slotN> --severity <s> --findings <M> --spec <計劃節點.md> --reviewed <派工時 sha256> --tier <standard|high> [--capture-counts "2,2,1"]`(counts 記該輪一筆即可)。
+- **問收斂**:`lumos loop status <id> --gate --panel --spec <計劃節點.md> --min-seats <W> --repo <root>`(M1包:缺 --spec 則 G3 hash 不啟用、缺 --min-seats 則兩席即可過——W 席承諾靠這兩旗標機械兌現) → 無-cluster 舊帳=三條合取(輪有效[記帳席≥2,none 制] ∧ 存活max≤minor[caught+none] ∧ capture-recapture殘餘<1.0[無counts=fail-closed])＋min-seats∧G3;cluster 帳(M2)=兩條合取(輪有效 ∧ fold後無disputed-major)＋min-seats∧G3,capture 降 advisory。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta,cap=3。
 - **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix/legacy→rc2,防 None phantom 輪)。

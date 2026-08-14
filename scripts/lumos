@@ -3039,7 +3039,9 @@ def cmd_gov(env, node=None, since_days=90, full=False):
         # findings 欄 2026-07-21(M1)起才有,舊輪無欄誠實另計不混入。
         fold_total, fold_sev, fold_aud, legacy_rounds = 0, {}, {}, 0
         for r in can:
-            if r["kind"] != "caught":
+            # none=停用制無植入輪(2026-08-14 d5):折入 findings 語意不變,照計——
+            # 只讀 caught 會使本帳(文檔標一級指標)自停用日起永凍 0(終審 F2)
+            if r["kind"] not in ("caught", "none"):
                 continue
             fnd = r.get("findings")
             if fnd is None:
@@ -3654,11 +3656,16 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
     # 條 1:判定輪(latest)有效——同一謂詞
     caught_recs = [r for r in latest if r.get("kind") == "caught"]
     n_caught, n_missed = len(caught_recs), sum(1 for r in latest if r.get("kind") == "missed")
+    n_none = sum(1 for r in latest if r.get("kind") == "none")   # 停用制輪(d5)
     if valid_of[rid]:
-        print(f"[panel/cluster] 條1 輪有效(caught {n_caught}≥2,0 missed): ✓")
+        # 顯示與謂詞同步(終審 F4:原字面只印 caught,none 制輪印出「caught 0≥2 ✓」自相矛盾)
+        if n_none:
+            print(f"[panel/cluster] 條1 輪有效(no-canary 制,記帳席 {n_caught + n_none}≥2,0 missed): ✓")
+        else:
+            print(f"[panel/cluster] 條1 輪有效(caught {n_caught}≥2,0 missed): ✓")
     else:
-        print(f"[panel/cluster] 條1 輪有效: ✗ — caught {n_caught}/missed {n_missed}"
-              f"(謂詞:caught≥2∧missed=0∧kind 全白名單)")
+        print(f"[panel/cluster] 條1 輪有效: ✗ — caught {n_caught}/none {n_none}/missed {n_missed}"
+              f"(謂詞:記帳席[caught+none]≥2∧missed=0∧kind 全白名單)")
         fails.append("輪無效")
     # fold(僅有效輪,append 序 last-wins)+ ledger(首現/末更輪僅計有效輪,與 advisory 同源)
     from collections import OrderedDict as _OD
@@ -3893,6 +3900,7 @@ def cmd_loop_canary_stats(env, loop_id=None):
         print("⏳ 無 canary 帳")
         return 0
     per_loop = OrderedDict()   # loop -> OrderedDict(auditor -> {"caught":n,"missed":n,"streak":n})
+    none_per_loop = {}         # loop -> n(kind=none 輪;停用制計數,不入 caught/missed 統計)
     n_bad = 0
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -3906,6 +3914,12 @@ def cmd_loop_canary_stats(env, loop_id=None):
                 continue
             lp = d.get("loop")
             kind = d.get("kind")
+            # 協議停用(2026-08-14 d5):kind=none 不入 caught/missed 統計(無植入無此語意),
+            # 但要計數——否則停用制 loop 在這裡回報「無記錄」,誤讀成什麼都沒發生
+            # (2026-08-14 終審 F1:本報表是文檔點名的「升級提示機械眼」,不可靜默瞎掉)。
+            if kind == "none" and lp:
+                none_per_loop[lp] = none_per_loop.get(lp, 0) + 1
+                continue
             if not lp or kind not in ("caught", "missed"):
                 continue
             aud = d.get("auditor") or "(無席名)"
@@ -3918,14 +3932,20 @@ def cmd_loop_canary_stats(env, loop_id=None):
         return 2
     targets = [loop_id] if loop_id else list(per_loop)
     if loop_id and loop_id not in per_loop:
-        print(f"⏳ 無記錄 ({loop_id})")
+        if none_per_loop.get(loop_id):
+            print(f"ℹ [{loop_id}] 停用制 loop:{none_per_loop[loop_id]} 輪 kind=none(無植入;"
+                  "canary-stats 僅回放歷史 caught/missed 帳,升級訊號改看 quote-check——d5)")
+        else:
+            print(f"⏳ 無記錄 ({loop_id})")
         return 0
     for lp in targets:
         seats = per_loop[lp]
         tc = sum(v["caught"] for v in seats.values())
         tm = sum(v["missed"] for v in seats.values())
         rate = f"{tc}/{tc+tm}" if (tc + tm) else "0/0"
-        print(f"[{lp}] caught {rate}(missed {tm})")
+        nn = none_per_loop.get(lp, 0)
+        print(f"[{lp}] caught {rate}(missed {tm})"
+              + (f"  +{nn} 輪 none(停用制,不入統計)" if nn else ""))
         if loop_id:
             for aud, v in seats.items():
                 tail = f"  尾端連續missed={v['streak']}" if v["streak"] else ""
@@ -9073,10 +9093,12 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
                             fails.append("quote")
                         else:
                             print(f"[disposal] quote-check: ✓ — {len(rows)} 條引句全數錨定")
-    # ── canary 觀測(不進合取——d4) ──
+    # ── canary 觀測(不進合取——d4;none=停用制無植入輪——d5) ──
     ca = sum(1 for r in latest if r.get("kind") == "caught")
     mi = sum(1 for r in latest if r.get("kind") == "missed")
+    nn = sum(1 for r in latest if r.get("kind") == "none")
     print(f"[disposal] canary(觀測,不進合取): caught {ca} / missed {mi}"
+          + (f" / none {nn}(協議停用,d5)" if nn else "")
           + ("——missed 席 findings ★不作廢★(d4),供跨輪累積帳" if mi else ""))
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
