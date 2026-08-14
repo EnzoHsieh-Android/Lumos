@@ -9001,6 +9001,42 @@ def t_capture_advisory():
         check("advisory: ⑥K=2 兩乾淨輪 rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
         check("advisory: ⑥前一輪摘要行內附殘餘觀測", "殘餘 obs" in r.stdout, r.stdout)
 
+    # ⑦ 壞型 counts(手改帳成字串)→ panel 觀測行印壞型、不得靜默算假 0.00(code-loop r1 s2 F2/s3 ④)
+    with tempfile.TemporaryDirectory() as d:
+        import json as _json7
+        _mkvault(d)
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "A",
+             "--severity", "minor", "--capture-counts", "1,1,1")
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "B", "--severity", "clean")
+        log = Path(d) / "docs" / ".canary-log.jsonl"
+        rows = [_json7.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+        rows[0]["capture_counts"] = "1,1,1"
+        log.write_text("\n".join(_json7.dumps(x, ensure_ascii=False) for x in rows) + "\n",
+                       encoding="utf-8")
+        r = _gate(d)
+        check("advisory: ⑦壞型 counts → 觀測行印壞型", "壞型" in r.stdout, r.stdout)
+        check("advisory: ⑦不得靜默算假 0.00", "估計 0.00" not in r.stdout, r.stdout)
+
+    # ⑧ K=2 前一輪 counts 壞型 → obs 印壞型不印假值
+    with tempfile.TemporaryDirectory() as d:
+        import json as _json8
+        _mkvault(d)
+        envK2 = dict(_os.environ, LUMOS_PANEL_K2_CUTOFF="2000-01-01")
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "A",
+             "--severity", "clean", "--capture-counts", "1,1")
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "B", "--severity", "clean")
+        _rec(d, "none", "--loop", "CA", "--round", "r2", "--token", "C",
+             "--severity", "clean", "--capture-counts", "2,2")
+        _rec(d, "none", "--loop", "CA", "--round", "r2", "--token", "D", "--severity", "clean")
+        log = Path(d) / "docs" / ".canary-log.jsonl"
+        rows = [_json8.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+        rows[0]["capture_counts"] = "1,1"
+        log.write_text("\n".join(_json8.dumps(x, ensure_ascii=False) for x in rows) + "\n",
+                       encoding="utf-8")
+        r = _gate(d, env=envK2)
+        check("advisory: ⑧前一輪壞型 → obs 印壞型", "殘餘 obs 壞型" in r.stdout, r.stdout)
+        check("advisory: ⑧不印假 obs 0.00", "殘餘 obs 0.00" not in r.stdout, r.stdout)
+
 
 def t_canary_stats_overlap():
     """canary-stats 席位重疊分布段(2026-08-14,計劃 S3)。
@@ -9055,6 +9091,20 @@ def t_canary_stats_overlap():
         r = _stats(d, "OV")
         check("overlap: ④無 counts rc0 不炸", r.returncode == 0, r.stderr)
         check("overlap: ④印無重疊數據", "無重疊數據" in r.stdout, r.stdout)
+
+    # ⑤ bool 混入(bool 是 int 子類,isinstance(int) 擋不住——code-loop r1 s2 F1)→ 壞型
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "OV", "--round", "r1", "--token", "A",
+             "--severity", "clean", "--capture-counts", "2,2")
+        log = Path(d) / "docs" / ".canary-log.jsonl"
+        rows = [_json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+        rows[0]["capture_counts"] = [True, True, False]
+        log.write_text("\n".join(_json.dumps(x, ensure_ascii=False) for x in rows) + "\n",
+                       encoding="utf-8")
+        r = _stats(d, "OV")
+        check("overlap: ⑤bool 混入 → 壞型(不得當 1/0 靜默算)", "壞型" in r.stdout, r.stdout)
+        check("overlap: ⑤badtype-only 訊息不說「不帶」", "全為壞型" in r.stdout, r.stdout)
 
 
 def t_loop_panel_none_kind():
@@ -9193,7 +9243,7 @@ def t_loop_capture_counts_cli():
         check("cli cc: 吐 --capture-counts 建議", "--capture-counts 3" in r.stdout, r.stdout)
         # 全獨發 → 殘餘 ≥1 → 續跑側
         r2 = run("--finder", "a", "--finder", "b", "--finder", "c")
-        check("cli cc: 全獨發=續跑側", "續跑側" in r2.stdout, r2.stdout)
+        check("cli cc: 全獨發=advisory 中性措辭(降級後不再判收斂/續跑)", "advisory 觀測" in r2.stdout and "續跑側" not in r2.stdout, r2.stdout)
         # 無 finder → 空、殘餘 0、不吐建議串
         r3 = run()
         check("cli cc: 空 rc0", r3.returncode == 0 and "distinct-findings=0" in r3.stdout, r3.stdout)
@@ -13240,13 +13290,13 @@ def t_m2_cluster_gate():
         check("M2 --gate: 對 panel no-op(兩呼叫同 rc)", r1.returncode == r2.returncode == 0,
               f"{r1.returncode}/{r2.returncode}")
 
-    # 無-cluster 舊帳迴歸:三條合取不變(fail-closed 保留)
+    # 無-cluster 舊帳迴歸(2026-08-14 降級後):capture advisory 不擋,合取剩輪有效∧存活
     with tempfile.TemporaryDirectory() as d:
         _mkvault(d)
         _round(d, "r1", ["caught", "caught"])            # 無 clusters,無 counts
         r = _st(d)
-        check("M2 迴歸: 無-cluster 舊帳 capture-recapture 仍 fail-closed rc1",
-              r.returncode == 1 and "capture_counts" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
+        check("M2 迴歸: 無-cluster 舊帳 capture 降 advisory → rc0+缺席提示",
+              r.returncode == 0 and "殘餘觀測缺席" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
 
 
 def t_testlayers_units():

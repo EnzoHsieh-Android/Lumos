@@ -3417,6 +3417,18 @@ def _capture_counts_from_finders(finders):
     return sorted(counter.values(), reverse=True)
 
 
+def _cc_ints(cc):
+    """capture_counts 型別守衛(2026-08-14 code-loop r1 s2 席):回純 int list,壞型回 None。
+    非 list/元素非 int/bool 混入(bool 是 int 子類,isinstance 擋不住)一律判壞型——
+    這些餵進 _estimate_remaining_defects 不炸、靜默算出假 0.0(最強假收斂訊號),
+    所以所有讀側呼叫點統一過這裡,壞型明示、不得靜默算。"""
+    if not isinstance(cc, list):
+        return None
+    if any(not isinstance(x, int) or isinstance(x, bool) for x in cc):
+        return None
+    return cc
+
+
 def _estimate_remaining_defects(capture_counts):
     """capture-recapture 殘餘缺陷估計(Chao1 偏差修正版)。
 
@@ -3478,7 +3490,7 @@ def _panel_k2_active(rounds):
 
 
 def _panel_round_conjuncts(recs, quiet=False):
-    """單輪三條合取(輪有效∧存活≤minor∧capture-recapture 殘餘)——A案 K=2 抽出共用,
+    """單輪兩條合取(輪有效∧存活≤minor;capture-recapture 殘餘=advisory 觀測,2026-08-14 降級)——A案 K=2 抽出共用,
     ★單一實作★:判定輪(quiet=False,輸出逐字同改動前)與 K=2 前一輪(quiet=True)同函式。
     回 fails list。"""
     order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
@@ -3521,10 +3533,15 @@ def _panel_round_conjuncts(recs, quiet=False):
         if not quiet:
             print("[panel] capture-recapture 殘餘(advisory,不進合取): 無 capture_counts,殘餘觀測缺席")
     else:
-        remaining = _estimate_remaining_defects(cc)
-        if not quiet:
-            note = "⚠ 低殘餘讀數無鑑別力(自帳對照 67% vs 79%,2026-08-14)" if remaining < 1.0 else ""
-            print(f"[panel] capture-recapture 殘餘(advisory,不進合取): 估計 {remaining:.2f} {note}".rstrip())
+        ccl = _cc_ints(cc)   # r1 s2:三個讀側呼叫點統一過型別守衛,壞型不得靜默算假 0.0
+        if ccl is None:
+            if not quiet:
+                print("[panel] capture-recapture 殘餘(advisory,不進合取): 壞型(counts 非 int list),不算")
+        else:
+            remaining = _estimate_remaining_defects(ccl)
+            if not quiet:
+                note = "⚠ 低殘餘讀數無鑑別力(自帳對照 67% vs 79%,2026-08-14)" if remaining < 1.0 else ""
+                print(f"[panel] capture-recapture 殘餘(advisory,不進合取): 估計 {remaining:.2f} {note}".rstrip())
     return fails
 
 
@@ -3539,7 +3556,7 @@ def _panel_probe_verdict(loop_id, rid, recs):
 
 
 def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
-    """平行 panel 收斂謂詞(loop 三輪壓縮)。無-cluster 舊帳:三條合取(輪有效∧存活max≤minor
+    """平行 panel 收斂謂詞(loop 三輪壓縮)。無-cluster 帳:兩條合取(輪有效∧存活max≤minor;殘餘=advisory
     ∧capture-recapture 殘餘,fail-closed)。cluster 帳(M2,設計 Projects/design-loop提效_計劃;
     golden: governance/golden/dloop-m2-cluster):首個有效輪帶 clusters 定錨 → 兩條合取
     (輪有效∧fold 後無 disputed-major),新生 cluster/capture-recapture 降 advisory,
@@ -3628,7 +3645,13 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
                 # 前一輪殘餘觀測行內附值(S2:quiet 路徑不重印整段,但 K=2 為新 loop 預設,
                 # 不附值則前一輪殘餘觀測在常態下整段消音——r1 邊界席 P8)
                 pcc = next((r["capture_counts"] for r in groups[prev_rid] if r.get("capture_counts")), None)
-                obs = f"殘餘 obs {_estimate_remaining_defects(pcc):.2f}" if pcc is not None else "殘餘 obs 缺席"
+                pccl = _cc_ints(pcc) if pcc is not None else None
+                if pcc is None:
+                    obs = "殘餘 obs 缺席"
+                elif pccl is None:
+                    obs = "殘餘 obs 壞型(counts 非 int list)"   # r1 s2:同守衛,壞型不印假值
+                else:
+                    obs = f"殘餘 obs {_estimate_remaining_defects(pccl):.2f}"
                 print(f"[panel] K=2 前一輪({prev_rid}): ✓ ({obs})")
     fails += _panel_extra_checks(latest, min_seats, spec)
     for i, r in enumerate(latest, 1):
@@ -3696,8 +3719,11 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
         print("[panel/cluster] (advisory) 新生 cluster: 判定輪無效,新生統計不適用")
     # advisory:capture-recapture(照算照印,不進合取;無 counts 不 fail-closed——cluster 帳接手守門)
     cc = next((r["capture_counts"] for r in latest if r.get("capture_counts")), None)
-    if cc is not None:
-        remaining = _estimate_remaining_defects(cc)
+    ccl = _cc_ints(cc) if cc is not None else None   # r1 s2/s3:讀側統一型別守衛
+    if cc is not None and ccl is None:
+        print("[panel/cluster] (advisory) capture-recapture: 壞型(counts 非 int list),不算")
+    elif ccl is not None:
+        remaining = _estimate_remaining_defects(ccl)
         print(f"[panel/cluster] (advisory) capture-recapture 殘餘估計: {remaining:.2f}(不進合取)")
     else:
         print("[panel/cluster] (advisory) capture-recapture: 無 counts(advisory,不擋)")
@@ -3788,7 +3814,7 @@ def cmd_loop_capture_counts(env, finders, from_pitfalls=None, repo=None):
     print(f"finders={n_finders} distinct-findings={n_distinct} "
           f"capture_counts={','.join(str(c) for c in cc) if cc else '(空)'}")
     print(f"remaining-estimate={remaining:.2f}  "
-          f"({'枯竭 <1.0 → 收斂側' if remaining < 1.0 else '殘餘 ≥1.0 → 續跑側'})")
+          "(advisory 觀測;2026-08-14 起不進收斂合取——鑑別力≈0,勿當收斂/續跑訊號)")
     if cc:
         print(f"→ canary record ... --capture-counts {','.join(str(c) for c in cc)}")
     return 0
@@ -3913,8 +3939,9 @@ def cmd_loop_canary_stats(env, loop_id=None):
         if cc is None or not lp:
             return
         o = overlap.setdefault(lp, {"counts": [], "badtype": 0})
-        if isinstance(cc, list) and all(isinstance(x, int) for x in cc):
-            o["counts"].extend(cc)
+        ccl = _cc_ints(cc)   # r1 s2 F1:bool 是 int 子類,守衛統一在 _cc_ints 排除
+        if ccl is not None:
+            o["counts"].extend(ccl)
         else:
             o["badtype"] += 1
     try:
@@ -3951,7 +3978,8 @@ def cmd_loop_canary_stats(env, loop_id=None):
         o = overlap.get(lp)
         bad = f";壞型 {o['badtype']} 筆(counts 非 int list,已跳過不計)" if o and o["badtype"] else ""
         if not o or not o["counts"]:
-            print(f"  重疊分布: 無重疊數據(該 loop 記錄不帶 capture_counts){bad}")
+            reason = "全為壞型,無可計數據" if (o and o["badtype"]) else "該 loop 記錄不帶 capture_counts"
+            print(f"  重疊分布: 無重疊數據({reason}){bad}")
             return
         cs = o["counts"]
         f1 = sum(1 for c in cs if c == 1)
@@ -13852,7 +13880,7 @@ def main():
     ls.add_argument("--spec", dest="gate_spec", help="--gate 必填:要核對引用座標的最終 spec md")
     ls.add_argument("--repo", dest="gate_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     ls.add_argument("--panel", action="store_true",
-                    help="平行 panel 模式:按 round-id 分組。無-cluster 舊帳=三條合取(輪有效∧存活max≤minor∧capture-recapture殘餘,fail-closed);cluster 帳(M2,首個有效輪帶 --clusters 定錨)=兩條合取(輪有效∧fold後無disputed-major),新生cluster/capture-recapture 降 advisory。--gate 對 panel 為相容 no-op(panel 判準恆生效)")
+                    help="平行 panel 模式:按 round-id 分組。無-cluster 帳=兩條合取(輪有效∧存活max≤minor;capture-recapture 殘餘=advisory 不進合取,2026-08-14 降級);cluster 帳(M2,首個有效輪帶 --clusters 定錨)=兩條合取(輪有效∧fold後無disputed-major),新生cluster/capture-recapture 同 advisory。--gate 對 panel 為相容 no-op(panel 判準恆生效)")
     ls.add_argument("--light", action="store_true",
                     help="M1包 light K=1 謂詞:單席 caught∧max≤minor∧欄位互證∧hash 雙欄(強制 fail-closed);ratchet=任一 caught 輪≥major 永久 FAIL;與 --panel 互斥;需 --spec")
     ls.add_argument("--settle", metavar="清單檔",

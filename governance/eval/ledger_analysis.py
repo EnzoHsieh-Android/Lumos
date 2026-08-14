@@ -1,4 +1,10 @@
 import json, collections, statistics
+def _cclist(cc):
+    # 2026-08-14 code-loop r1 s5 nit 修:帳上 capture_counts 是 list,str().split 解析必炸→C/D 段死碼
+    if isinstance(cc, list):
+        return [int(c) for c in cc]
+    return [int(c) for c in str(cc).strip("[] ").replace(" ", "").split(",") if c]
+
 ORDER={"clean":0,"minor":1,"major":2,"blocker":3}
 REPOS={"mOrangePos":"/Users/enzo/mOrangePos","Landmark":"/Users/enzo/backend/LandmarkMember","toolchain":"/Users/enzo/harness/lumos-toolchain","KDS":"/Users/enzo/Citrus_KDS"}
 def residual(cc):
@@ -67,7 +73,7 @@ for name,rows in allrows.items():
         for i,(rid,g) in enumerate(rl[:-1]):
             cc=next((x.get("capture_counts") for x in g if x.get("capture_counts")),None)
             if not cc: continue
-            try: ccl=[int(c) for c in str(cc).split(",")]
+            try: ccl=_cclist(cc)
             except ValueError: continue
             est=residual(ccl)
             if est<1.0:
@@ -88,7 +94,7 @@ for name,rows in allrows.items():
     for r in rows:
         cc=r.get("capture_counts")
         if not cc: continue
-        try: l=[int(c) for c in str(cc).split(",")]
+        try: l=_cclist(cc)
         except ValueError: continue
         f1t+=sum(1 for c in l if c==1); tot+=len(l); ns+=1
     if tot: print(f"[{name}] 有重疊數據輪 {ns} | 缺陷總數 {tot} | 只被一席抓到 {f1t}({round(100*f1t/tot)}%)")

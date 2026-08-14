@@ -203,7 +203,7 @@ repo:{repo 根}(可 Read/Grep 查證 diff 上下文)
 
 - **W 由 tier 定**：`difficulty.params(tier)['panel_width']`（standard=3 / high=5）。
 - **多樣化軸**(「9 judge 2 票」:要獨立票不要數量;~~canary 型別輪替軸~~已隨協議停用):
-  1. **鏡頭各異**:slot1 正確性/邏輯、slot2 邊界可執行、slot3 整合知識同步、(W>3)資源併發、回滾。
+  1. **鏡頭各異**(席名=<鏡頭>-<模型>):正確性/邏輯、邊界可執行、整合知識同步、(W>3)資源併發、回滾。
   2. **≥1 跨家族**:一個 slot 走 qwen(cross_audit)——獨立性軸、只作否決(報 ≥major 且辯方沒駁倒→不收斂)。
 - **判讀(編排者一次跨 W 份做)**:①逐席過收貨三道(quote-check/refcheck/seat-check;~~canary caught/missed 判定~~已停用) ②去重(嚴格合一「同段落同性質」,不偏多留)③對存活 ≥major 派 §2 辯方 ④數 capture_counts(各 distinct 缺陷被幾人找到)。
 - **記錄**(一輪 W 筆共享 round-id;M1包 code-loop r2 折入——模板即權威,雙 hash/tier 必入模板;kind 一律 `none`,2026-08-14 d5):

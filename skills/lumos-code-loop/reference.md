@@ -180,7 +180,7 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 程式碼有散文沒有的東西——**可執行 + 可靜態分析**。文獻(見 [[loop三輪壓縮_計劃]] 的 code-loop 差異節)證 code review 最佳解是**異質 ensemble**,非「多個多樣 LLM」:
 1. **panel 應異質,不只多樣 LLM**(borrow:AutoSafeCoder / Multi-Agent Code Verification via Information Theory,arxiv 2511.16708——submodularity 證異質分析器各加獨立資訊)。**確定性驗證器的參與方式=三通道,不佔 canary 席、不進「輪有效」判定**(它們跑真碼樹,看不到文字 diff 副本裡的誘餌,記席必然 missed;canary 票只驗 LLM 席注意力;2026-07-18 codestage 收斂裁定):
    - (a) 其 findings 憑執行證據依辯方路由「機械證實」直接折入;
-   - (b) 以**異質 finder** 進 capture-recapture 重疊帳(`loop capture-counts --finder/--from-pitfalls`);⚠ 兩套帳差異:無-cluster 舊帳 capture-recapture **進合取**(真裁決權);M2 cluster 帳 **advisory 不進合取**——該模式下裁決權由通道 (a) 承載(機械證實 findings 進 cluster 三態帳);
+   - (b) 以**異質 finder** 進 capture-recapture 重疊帳(`loop capture-counts --finder/--from-pitfalls`);⚠ 兩套帳差異(2026-08-14 起已無):兩套帳的 capture-recapture 均 **advisory 不進合取**(無-cluster 帳 2026-08-14 降級對齊 cluster 帳);裁決權由通道 (a) 承載(機械證實 findings 進 cluster 三態帳);
    - (c) 需跑真碼的(測試套件/type checker)沿 mutation 冒煙的**隔離 worktree** 模式。
    - 具體 finder:專案 `.lumos/lint.json` 宣告的社群 linter(SARIF)/測試套件/type checker/mutation 冒煙(步驟 7)。
    - **為何**:linter/測試/type 的錯誤剖面**與 LLM 正交**(真獨立資訊),直擊「9 judge 2 票」——純 LLM panel(即使多樣)仍相關,摻確定性工具才買到真獨立訊號。

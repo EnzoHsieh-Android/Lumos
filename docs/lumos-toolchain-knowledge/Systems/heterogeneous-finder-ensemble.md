@@ -67,7 +67,7 @@ design-loop 審 spec(散文),只有 LLM 審計員這一種 finder;完整性理�
 2. 把每個 reviewer 的 findings 正規化成 `file:line` → 一個 `--finder`。
 3. `lumos loop capture-counts --finder "<A>" --finder "<B>" --from-pitfalls <base>..HEAD --repo .` → 自動併入 linter/regex 確定性 finder、算重疊。
 4. 拿輸出的 `--capture-counts <串>` → `lumos canary record caught --loop code-<topic> --round rN --capture-counts <串> ...`。
-5. `lumos loop status code-<topic> --gate --panel` → capture-recapture 殘餘 <1.0 + 輪有效 + 存活 max≤minor 三條合取才 PASS。
+5. `lumos loop status code-<topic> --gate --panel` → 輪有效 + 存活 max≤minor 兩條合取 PASS;capture-recapture 殘餘=advisory 觀測(2026-08-14 降級,鑑別力≈0,見 [[Projects/收斂閘殘餘估計降級_計劃]])。
 
 ## 誠實邊界
 - 機械化只買「重疊算術正確」,不買「finding 本身正確」——finding 真偽仍靠 reviewer + 辯方可執行反證。
