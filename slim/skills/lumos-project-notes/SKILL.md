@@ -10,6 +10,7 @@ description: 維護專案知識圖譜（docs/{project}-knowledge/）— 追蹤�
 - **金科玉律**:所有改動/調研/計畫都**同一次工作內**同步進圖譜。查知識**優先讀圖譜**;與其他文件/記憶/臆測衝突以圖譜為準、向人確認。**但與行為事實(測試結果/實際執行/生產觀測)衝突時不自動判圖譜為真**——那是有東西壞了,查清哪邊錯並立事故節點(2026-07-29 外審吸收)。
 - **主工具 = `lumos`**(python3 零依賴,`find_vault` 自動鎖定 `docs/*-knowledge/`)。**禁止**用 Grep/Read/Edit/Write 直接碰 vault 的 .md——繞過寫後自驗與鐵則防護。需讀節點**完整 body**(決策全文/章節內文)→ `lumos show <節點> [--body-only]`(2026-07-21 新增,補「context 只給 summary 索引」的全文讀取缺口);context 仍是進場導航首選。
 - **進場三步**:`lumos search <關鍵字>` 定位 → `lumos context <節點>` 掃脈絡(頭部攤 ⚠ 合約) → `lumos contracts <節點>` 查硬合約。**然後**才 grep code / 查 DB 驗證。
+- **★命中≠查完★**:search 只給索引——命中節點要 `lumos show` 讀**全文**才准下結論;拿摘要判「圖譜沒記」是實證過的破口。「只是查個值」不是跳過圖譜的理由,是最該查的情境;每個子任務進場都重新走圖譜先行。
 - **寫完一個節點**:`lumos lint <節點>`(單檔快檢) → 收尾 `lumos doctor`(全圖)。
 - **紅燈不過夜**：main 上出現 CI 紅燈時，修不完也要在收尾報告明講「main 上有紅燈未解」，不得靜默收工。
 - **rich 節點** = Write/Edit 內文 + `summary` block;**純量/list/decisions 一律走 `lumos set`/`append`/`decision-add`**(別手改 frontmatter)。
