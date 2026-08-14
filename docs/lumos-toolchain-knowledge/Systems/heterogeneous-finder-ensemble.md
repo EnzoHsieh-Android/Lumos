@@ -2,10 +2,11 @@
 type: system
 status: done
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-08-14
 self_audit: sonnet/2026-07-24
 verified_by:
   - "[[Verification/2026-07-09_loop三輪壓縮]]"
+  - "[[Verification/2026-08-14_殘餘估計降級與重疊報表落地]]"
 related:
   - "[[pitfalls-code-loop]]"
   - "[[convergence-evidence-gate]]"
@@ -16,7 +17,7 @@ tags:
   - status/done
   - risk/守衛面
 summary: |-
-  FLOW:code-loop 一輪 panel → 各 finder 產 finding-key(LLM reviewer 手動 --finder｜pitfalls --diff SARIF linter/regex 自動 --from-pitfalls｜測試失敗/mutation 存活)→ `lumos loop capture-counts` 跨 finder 正規化+數重疊 → capture_counts → `canary record --capture-counts` → `loop status --gate --panel` 判 capture-recapture 殘餘那條
+  FLOW:code-loop 一輪 panel → 各 finder 產 finding-key(LLM reviewer 手動 --finder｜pitfalls --diff SARIF linter/regex 自動 --from-pitfalls｜測試失敗/mutation 存活)→ `lumos loop capture-counts` 跨 finder 正規化+數重疊 → capture_counts → `canary record --capture-counts` → `loop status --gate --panel` 印殘餘 advisory 觀測★2026-08-14 降 advisory 不進合取(鑑別力≈0:殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25;f1≤1 公式退化;見[[Projects/收斂閘殘餘估計降級_計劃]])★;canary-stats 重疊分布段同源消費
   KEY:code review ≠ spec review——程式碼可執行+可靜態分析,最佳解是**異質 ensemble** 非純 LLM panel(文獻:AutoSafeCoder｜Multi-Agent Code Verification via Info Theory arxiv 2511.16708 submodularity｜Greptile TREX｜CodeRabbit sandbox｜PBR defect-type mapping)
   KEY:異質 = 買真獨立票——確定性驗證器(SARIF linter/測試/type/mutation)錯誤剖面與 LLM 正交,直擊「9 judge 2 票」相關性天花板(純 LLM panel 即使多樣仍相關);重疊(同洞多 finder 中)= 更強收斂信號
   KEY:capture_counts 語意=各 distinct finding-key「被幾個 finder 找到」的次數列表;跨 finder 正規化(casefold+strip)、finder 內去重;降序回傳決定性。餵 _estimate_remaining_defects(Chao1)算殘餘
@@ -39,8 +40,8 @@ decisions:
     trade_offs: 需編排者把各 finder 命中收齊(--from-pitfalls 已把 linter 那半自動化);端到端無人跑仍待自主 orchestrator(暫停中)
     decided: 2026-07-09
     valid: true
-  - content: |-
-    id: d2
+  - id: d2
+    content: |-
       便利原語(--from-pitfalls 自動收割 linter 命中)與端到端無人跑是兩件事;前者不卡自主 loop 暫停,現在就做。
     context: 使用者追問「linter 命中→餵進去仍手動串」何意,釐清我把兩者混淆
     why_chosen: 手動路徑最煩的一步(手貼 linter file:line)純 lumos 機械可消,與自主 orchestrator 無關

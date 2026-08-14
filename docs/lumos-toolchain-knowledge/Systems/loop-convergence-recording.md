@@ -16,6 +16,7 @@ verified_by:
   - "[[Verification/2026-08-04_design-loop重設計落地T1-T7]]"
   - "[[Verification/2026-08-04_design-loop處置閘終審硬化]]"
   - "[[Verification/2026-08-05_流程優化六件落地]]"
+  - "[[Verification/2026-08-14_殘餘估計降級與重疊報表落地]]"
 summary: |-
   KEY:[2026-08-05]`loop canary-stats [<id>]`——d4 跨輪累積帳的★讀取面★(席位×caught/missed×尾端連續 missed;streak≥2 印「升 opus」提示=該升級規則的機械眼);唯讀恆 rc0、壞行跳過註記、不進任何 gate [test:t_loop_canary_stats]。★[2026-08-14 停用制適配]★協議停用(canary-audit d5)後升級訊號改看 quote-check,本報表轉歷史帳回放;對純 none 的停用制 loop 印停用提示而非「無記錄」(終審 F1:原樣會誤讀成什麼都沒發生),none 輪計數顯示但不入 caught/missed 統計 [test:t_loop_panel_none_kind]
   KEY:[2026-07-28]第四模式 settle(opt-in,`--settle 清單檔`)落地——收斂=清單全結清∧G1∧G3(末筆 result=現檔;K-streak/G2 由逐條存在證明取代,G2 印 advisory);caught 輪收緊=kind=caught∧auditor 非空;貶值=gate 讀時判不回寫;fail-closed 族(壞行 rc2 全檔/零條目/懸空輪);與 panel/light/need/min-seats 互斥 rc2;設計=[[Projects/結清式收斂_計劃]](五輪 design-loop+實質收斂人裁) [test:t_settle_gate];同計劃 [S2] loop compress(規則式白名單壓縮,[PIN] 口頭約定壓不掉)+[S3] loop verify-progress(結構帳覆核原語,note/clusters 散文免疫) 2026-07-28 落地 [test:t_loop_compress,t_loop_verify_progress]

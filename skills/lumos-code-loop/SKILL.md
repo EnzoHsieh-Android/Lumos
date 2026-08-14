@@ -167,7 +167,7 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 - **一輪 = 平行 W 個 reviewer**(W＝panel_width:standard 3/high 5),各讀一份工作副本:鏡頭各異(bug/資源例外/冪等併發/…)(~~canary 型別輪替/帶餌無餌之分~~已隨協議停用——全部席同規則,Codex 席照佔 W 或外掛否決)。**跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**——tier=high 雙 Codex 角色:1 席**正式 finder,佔 W 之一**(findings 計入重疊帳)+1 席**否決席,不佔 W**(外掛,同 spec-conformance 慣例)。standard=1 席否決。**否決席落閘路徑**:其 findings 與帶餌席同池進辯方;存活 ≥major——M2 cluster 帳模式必須記為該輪 `<名>=disputed-major` cluster 記錄(severity 欄該模式僅顯示不裁決)/無-cluster 舊帳計入存活 max。**fail 分級**:standard=Codex 不可用退同門+留痕;**tier=high=fail-closed**——第三家族(qwen 有 cross_audit 整合;gemini 候選未驗)替補→延期→皆不可則**不得收斂攤人裁**(人可明示豁免留痕),不分金流與否。qwen 轉列第三家族替補與 finder 輪替候選。
 - **spec-conformance slot**(tier=high 且有收斂 spec):追加一個對答案審查員(不佔 W、地位同 qwen),逐條款對照「做了/縮水/多做/未實作」,縮水與未實作進辯方。**含合約候選兌現**(2026-07-29):spec 計劃節點若列「合約候選清單」,逐條驗落地有沒有標 ★INVARIANT★ 綁 [test:]——該綁沒綁=縮水 finding。
 - **判讀/辯方/記錄** 同循序(步驟 4-5,含可疑席 repro triage 與留痕/quote-check 慣例),一輪 W 筆共享 `--round <rid>`。
-- **收斂**:`loop status --gate --panel` 三條合取(記帳席≥2 且 0 missed[none 制] ∧ 存活 max≤minor ∧ capture-recapture 殘餘<門檻[無 counts＝fail-closed];--min-seats/G3 帶旗標才啟用;cluster 帳=兩條合取,詳 design-loop SKILL panel 節);★**2026-08-06 起新 loop=最後兩輪各自全過(K=2)+PASS 印抽查判定**★(A案;舊 loop 沿 K=1——gate 依首筆日期自動判,不用記);存活≥major → 只重審 delta,cap=3(K=2 的第二乾淨輪計入 cap;cap 頂未湊滿照攤人)。
+- **收斂**:`loop status --gate --panel` 兩條合取(記帳席≥2 且 0 missed[none 制] ∧ 存活 max≤minor;capture-recapture 殘餘=advisory 觀測不進合取[2026-08-14 降級,鑑別力≈0 見 Projects/收斂閘殘餘估計降級_計劃];--min-seats/G3 帶旗標才啟用;cluster 帳=兩條合取,詳 design-loop SKILL panel 節);★**2026-08-06 起新 loop=最後兩輪各自全過(K=2)+PASS 印抽查判定**★(A案;舊 loop 沿 K=1——gate 依首筆日期自動判,不用記);存活≥major → 只重審 delta,cap=3(K=2 的第二乾淨輪計入 cap;cap 頂未湊滿照攤人)。
 - capture_counts 別手數 → `lumos loop capture-counts --finder ... --from-pitfalls <range>`(自動收割 linter/regex 確定性 finder)產串。
 
 **端到端一輪**(照抄改參數):
@@ -180,11 +180,11 @@ lumos loop capture-counts \
   --from-pitfalls "$RANGE" --repo .
 # 3. 記這輪(W 筆共享 --round)
 lumos canary record none --loop "code-$TOPIC" --round "$RID" \
-  --auditor slot1 --severity minor --capture-counts "2,1,1"
+  --auditor bug-sonnet --severity minor --capture-counts "2,1,1"   # 席名慣例:<鏡頭>-<模型>
 # 4. 問收斂
 lumos loop status "code-$TOPIC" --gate --panel --repo .
 # 5. 收斂後留痕才能 push
-lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活 major"
+lumos code-loop pass --note "panel 收斂:輪有效∧無存活 major(殘餘 obs X.XX advisory)"
 ```
 
 ---

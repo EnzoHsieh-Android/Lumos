@@ -103,7 +103,7 @@ cluster 帳模式同樣生效，不得繞。
 
 1. **輪有效**：caught≥2 且 0 missed（near-perfect）
 2. **存活 max ≤ minor**（只算 caught 席）
-3. **capture-recapture 殘餘 < 門檻**——★無 counts ＝ fail-closed★
+3. ~~capture-recapture 殘餘 < 門檻~~ **⛔ 2026-08-14 降 advisory 不進合取**(鑑別力≈0:67% vs 對照 79%,p≈0.25;見 Projects/收斂閘殘餘估計降級_計劃)——觀測行照印,無 counts 印缺席提示不 fail
 
 ### D2 · cluster 帳＝兩條合取
 

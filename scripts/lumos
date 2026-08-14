@@ -3513,21 +3513,18 @@ def _panel_round_conjuncts(recs, quiet=False):
     else:
         if not quiet:
             print("[panel] falsification+ODC(存活 max≤minor): ✓")
+    # capture-recapture 殘餘:★2026-08-14 降 advisory,不進合取★(Projects/收斂閘殘餘估計降級_計劃 S1/S2)
+    # 理由=鑑別力≈0(殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25)+f1≤1 公式退化+席獨立前提被自家
+    # 重疊分布(64-71% 單席獨佔)否定;舊「殘餘超門檻」「無capture_counts」兩條 fails 撤除。
     cc = next((r["capture_counts"] for r in recs if r.get("capture_counts")), None)
     if cc is None:
         if not quiet:
-            print("[panel] capture-recapture 殘餘: ✗ — 無 capture_counts(母體未證枯竭;panel 模式必帶)")
-        fails.append("無capture_counts")
+            print("[panel] capture-recapture 殘餘(advisory,不進合取): 無 capture_counts,殘餘觀測缺席")
     else:
         remaining = _estimate_remaining_defects(cc)
-        THRESH = 1.0
-        if remaining < THRESH:
-            if not quiet:
-                print(f"[panel] capture-recapture 殘餘: ✓ — 估計 {remaining:.2f} < {THRESH}")
-        else:
-            if not quiet:
-                print(f"[panel] capture-recapture 殘餘: ✗ — 估計 {remaining:.2f} ≥ {THRESH}(母體未枯竭)")
-            fails.append("殘餘超門檻")
+        if not quiet:
+            note = "⚠ 低殘餘讀數無鑑別力(自帳對照 67% vs 79%,2026-08-14)" if remaining < 1.0 else ""
+            print(f"[panel] capture-recapture 殘餘(advisory,不進合取): 估計 {remaining:.2f} {note}".rstrip())
     return fails
 
 
@@ -3628,7 +3625,11 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
                 print(f"[panel] K=2 前一輪({prev_rid}): ✗ — {'/'.join(prev_fails)}")
                 fails.append("K=2前一輪未乾淨")
             else:
-                print(f"[panel] K=2 前一輪({prev_rid}): ✓")
+                # 前一輪殘餘觀測行內附值(S2:quiet 路徑不重印整段,但 K=2 為新 loop 預設,
+                # 不附值則前一輪殘餘觀測在常態下整段消音——r1 邊界席 P8)
+                pcc = next((r["capture_counts"] for r in groups[prev_rid] if r.get("capture_counts")), None)
+                obs = f"殘餘 obs {_estimate_remaining_defects(pcc):.2f}" if pcc is not None else "殘餘 obs 缺席"
+                print(f"[panel] K=2 前一輪({prev_rid}): ✓ ({obs})")
     fails += _panel_extra_checks(latest, min_seats, spec)
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('capture_counts','-')}\t{r.get('auditor','')}")
@@ -3639,10 +3640,10 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
         return 1
     if k2:
         probe = _panel_probe_verdict(loop_id, rid, latest)
-        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: K=2 ∧ 輪有效 ∧ 存活≤minor ∧ capture-recapture 枯竭)")
+        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: K=2 ∧ 輪有效 ∧ 存活≤minor)")
         print(f"[panel] 抽查判定(e',決定性可重算): {'★應抽查★——加開 probe-* 輪(不計 cap;冒 major 即自動撤銷收斂)' if probe else '免抽'}")
     else:
-        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ 存活≤minor ∧ capture-recapture 枯竭)")
+        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ 存活≤minor)")
     return 0
 
 
@@ -3901,7 +3902,21 @@ def cmd_loop_canary_stats(env, loop_id=None):
         return 0
     per_loop = OrderedDict()   # loop -> OrderedDict(auditor -> {"caught":n,"missed":n,"streak":n})
     none_per_loop = {}         # loop -> n(kind=none 輪;停用制計數,不入 caught/missed 統計)
+    overlap = {}               # loop -> {"counts":[int...合併], "badtype":n}(S3 重疊分布;讀全部 kind 含 none)
     n_bad = 0
+
+    def _harvest_overlap(lp, d):
+        # S3(2026-08-14,收斂閘殘餘估計降級 S3):跨輪分布合併(各輪母體獨立,彙總為分布統計非去重)。
+        # 型別防禦(r1 邊界席 P7 實跑實證):非 list(如字串 "3,2,1")靜默進 _estimate 會算出假 0.0,
+        # 必須計壞型明示跳過,不得靜默算。
+        cc = d.get("capture_counts")
+        if cc is None or not lp:
+            return
+        o = overlap.setdefault(lp, {"counts": [], "badtype": 0})
+        if isinstance(cc, list) and all(isinstance(x, int) for x in cc):
+            o["counts"].extend(cc)
+        else:
+            o["badtype"] += 1
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -3914,6 +3929,7 @@ def cmd_loop_canary_stats(env, loop_id=None):
                 continue
             lp = d.get("loop")
             kind = d.get("kind")
+            _harvest_overlap(lp, d)
             # 協議停用(2026-08-14 d5):kind=none 不入 caught/missed 統計(無植入無此語意),
             # 但要計數——否則停用制 loop 在這裡回報「無記錄」,誤讀成什麼都沒發生
             # (2026-08-14 終審 F1:本報表是文檔點名的「升級提示機械眼」,不可靜默瞎掉)。
@@ -3930,11 +3946,24 @@ def cmd_loop_canary_stats(env, loop_id=None):
     except OSError as e:
         print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
         return 2
+    def _print_overlap(lp):
+        # S3 席位重疊分布(跨輪分布合併;席名=auditor 欄原文、鏡頭層不在帳內——誠實界線)
+        o = overlap.get(lp)
+        bad = f";壞型 {o['badtype']} 筆(counts 非 int list,已跳過不計)" if o and o["badtype"] else ""
+        if not o or not o["counts"]:
+            print(f"  重疊分布: 無重疊數據(該 loop 記錄不帶 capture_counts){bad}")
+            return
+        cs = o["counts"]
+        f1 = sum(1 for c in cs if c == 1)
+        print(f"  重疊分布(跨輪分布合併,非同一母體去重): 相異缺陷 {len(cs)} | 僅單席抓到 "
+              f"{f1}/{len(cs)}({round(100 * f1 / len(cs))}%){bad}")
+
     targets = [loop_id] if loop_id else list(per_loop)
     if loop_id and loop_id not in per_loop:
         if none_per_loop.get(loop_id):
             print(f"ℹ [{loop_id}] 停用制 loop:{none_per_loop[loop_id]} 輪 kind=none(無植入;"
                   "canary-stats 僅回放歷史 caught/missed 帳,升級訊號改看 quote-check——d5)")
+            _print_overlap(loop_id)   # r1 整合席 P5:重疊段不得被 none-only 提前返回吃掉
         else:
             print(f"⏳ 無記錄 ({loop_id})")
         return 0
@@ -3951,6 +3980,7 @@ def cmd_loop_canary_stats(env, loop_id=None):
                 tail = f"  尾端連續missed={v['streak']}" if v["streak"] else ""
                 esc = "  ⚠ 連 2 missed → 升級模型(升 opus)" if v["streak"] >= 2 else ""
                 print(f"  {aud}\tcaught {v['caught']}\tmissed {v['missed']}{tail}{esc}")
+            _print_overlap(lp)   # S3:指定 loop 查詢時附重疊分布
     # D 前置:型別×探針×caught 表(帶 canary_type 的記錄才入列;attr 攢滿 15 筆=D 本體開工條件)
     # S2 回溯層(2026-08-06,plan:驗證層自證三件):型別來源如實分層——attr(結構化欄位)/
     # note(散文 type=X regex fallback,慣例寫法覆蓋率有限)/unknown(無任何線索,不硬猜)。

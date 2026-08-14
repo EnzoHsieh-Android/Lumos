@@ -8897,14 +8897,18 @@ def t_loop_panel_gate():
         r = _gate(d, "--panel")
         check("panel: 存活 major → 不收斂 rc1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
 
-    # 殘餘超門檻(低重疊)→ 不收斂
+    # 殘餘超門檻 → advisory 不擋(2026-08-14 降級,Projects/收斂閘殘餘估計降級_計劃 S1;
+    # 舊期望 rc1 已反轉;斷言含觀測行存在性——只斷 rc 分不出 advisory 生效 vs 整段被刪)
     with tempfile.TemporaryDirectory() as d:
         _mkvault(d)
         _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A",
              "--severity", "minor", "--capture-counts", "1,1,1,1")
         _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "B", "--severity", "clean")
         r = _gate(d, "--panel")
-        check("panel: capture-recapture 殘餘超門檻 → rc1", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+        check("panel: 殘餘超門檻 → advisory 不擋 rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+        check("panel: 超門檻仍印 advisory 觀測行(含估計值)",
+              "advisory" in r.stdout and "6.00" in r.stdout, r.stdout)
+        check("panel: PASS 橫幅不再宣稱 capture 枯竭", "枯竭" not in r.stdout, r.stdout)
 
     # 混用守衛:--panel 但 log 無 round → rc2
     with tempfile.TemporaryDirectory() as d:
@@ -8920,14 +8924,15 @@ def t_loop_panel_gate():
         r = _gate(d)  # 無 --panel
         check("panel: 有 round 欄但無 --panel → rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
 
-    # C1 fail-closed:2 caught 乾淨但無 capture_counts → 不收斂(不得靜默跳過殘餘)
+    # 無 capture_counts → advisory 缺席提示不擋(2026-08-14 降級;舊 fail-closed rc1 反轉)
     with tempfile.TemporaryDirectory() as d:
         _mkvault(d)
         _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A", "--severity", "clean")
         _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "B", "--severity", "minor")
         r = _gate(d, "--panel")
-        check("panel: 無 capture_counts → fail-closed rc1(不繞過殘餘)",
-              r.returncode == 1, f"rc={r.returncode}\n{r.stdout}")
+        check("panel: 無 capture_counts → advisory 缺席提示不擋 rc0",
+              r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+        check("panel: 缺席提示行存在", "殘餘觀測缺席" in r.stdout, r.stdout)
 
     # I1 partial-mix:同 loop 有 round 欄記錄 + 無 round 欄記錄混用 → rc2(防 None phantom 輪)
     with tempfile.TemporaryDirectory() as d:
@@ -8938,6 +8943,118 @@ def t_loop_panel_gate():
         r = _gate(d, "--panel")
         check("panel: partial-mix(有/無 round 混用) → rc2 拒讀",
               r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
+
+
+def t_capture_advisory():
+    """capture-recapture 降 advisory(2026-08-14,Projects/收斂閘殘餘估計降級_計劃 S1/S2)。
+    ①超門檻→rc0+advisory 行 ②無 counts→rc0+缺席提示(t_loop_panel_gate 已覆蓋,此處驗互補面)
+    ③存活 major 照樣 rc1(只降 capture 沒鬆別條) ④低殘餘印無鑑別力警語
+    ⑤PASS 橫幅不含「capture-recapture 枯竭」 ⑥K=2 前一輪摘要行內附殘餘觀測值"""
+    import subprocess as _sp
+    import os as _os
+
+    def _mkvault(d):
+        v = Path(d) / "docs" / "y-knowledge"
+        (v / "MOC").mkdir(parents=True)
+        (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+
+    def _rec(d, *extra):
+        return _sp.run([sys.executable, GRAPHCTL, "canary", "record", *extra],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    def _gate(d, loop="CA", env=None):
+        return _sp.run([sys.executable, GRAPHCTL, "loop", "status", loop, "--gate", "--panel"],
+                       cwd=str(Path(d)), capture_output=True, text=True, env=env)
+
+    # ③ 存活 major 照樣 rc1(none 制輪)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "A",
+             "--severity", "major", "--capture-counts", "2,2")
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "B", "--severity", "clean")
+        r = _gate(d)
+        check("advisory: 存活 major 照樣 rc1(嚴重度合取未鬆)", r.returncode == 1,
+              f"rc={r.returncode}\n{r.stdout}")
+
+    # ④ 低殘餘 → 印無鑑別力警語(counts=2,2 → f1=0 → 殘餘 0.0)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "A",
+             "--severity", "minor", "--capture-counts", "2,2")
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "B", "--severity", "clean")
+        r = _gate(d)
+        check("advisory: 低殘餘 rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+        check("advisory: 低殘餘印無鑑別力警語", "無鑑別力" in r.stdout, r.stdout)
+        check("advisory: ⑤PASS 橫幅不含枯竭", "枯竭" not in r.stdout, r.stdout)
+
+    # ⑥ K=2 場景:兩輪乾淨,前一輪摘要行內附殘餘觀測(強制 K2 生效)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        envK2 = dict(_os.environ, LUMOS_PANEL_K2_CUTOFF="2000-01-01")
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "A",
+             "--severity", "clean", "--capture-counts", "2,2")
+        _rec(d, "none", "--loop", "CA", "--round", "r1", "--token", "B", "--severity", "minor")
+        _rec(d, "none", "--loop", "CA", "--round", "r2", "--token", "C",
+             "--severity", "clean", "--capture-counts", "2,2,2")
+        _rec(d, "none", "--loop", "CA", "--round", "r2", "--token", "D", "--severity", "clean")
+        r = _gate(d, env=envK2)
+        check("advisory: ⑥K=2 兩乾淨輪 rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+        check("advisory: ⑥前一輪摘要行內附殘餘觀測", "殘餘 obs" in r.stdout, r.stdout)
+
+
+def t_canary_stats_overlap():
+    """canary-stats 席位重疊分布段(2026-08-14,計劃 S3)。
+    ①none 記錄帶 counts → 重疊段印出且 f1 佔比正確 ②none-only loop 帶 --loop → 提前返回路徑仍印重疊段
+    ③counts 字串型(合法 JSON 錯型別)→ 壞型提示不靜默算 ④無 counts → 無重疊數據不炸"""
+    import subprocess as _sp
+    import json as _json
+
+    def _mkvault(d):
+        v = Path(d) / "docs" / "y-knowledge"
+        (v / "MOC").mkdir(parents=True)
+        (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+
+    def _rec(d, *extra):
+        return _sp.run([sys.executable, GRAPHCTL, "canary", "record", *extra],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    def _stats(d, *args):
+        return _sp.run([sys.executable, GRAPHCTL, "loop", "canary-stats", *args],
+                       cwd=str(Path(d)), capture_output=True, text=True)
+
+    # ①+② none-only loop:counts=[2,1,1]+[2,2] → 缺陷 5、f1=2(40%)
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "OV", "--round", "r1", "--token", "A",
+             "--severity", "minor", "--capture-counts", "2,1,1")
+        _rec(d, "none", "--loop", "OV", "--round", "r2", "--token", "B",
+             "--severity", "clean", "--capture-counts", "2,2")
+        r = _stats(d, "OV")
+        check("overlap: ②none-only --loop 查詢仍印重疊段", "重疊" in r.stdout, r.stdout)
+        check("overlap: ①f1 佔比正確(2/5=40%)", "2/5" in r.stdout and "40%" in r.stdout, r.stdout)
+        check("overlap: 跨輪合併語意標註", "跨輪分布合併" in r.stdout, r.stdout)
+
+    # ③ counts 為字串型(手改帳場景)→ 壞型提示,不靜默算
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "OV", "--round", "r1", "--token", "A",
+             "--severity", "clean", "--capture-counts", "2,2")
+        log = Path(d) / "docs" / ".canary-log.jsonl"
+        rows = [_json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+        rows[0]["capture_counts"] = "3,2,1"   # 合法 JSON、錯型別
+        log.write_text("\n".join(_json.dumps(x, ensure_ascii=False) for x in rows) + "\n",
+                       encoding="utf-8")
+        r = _stats(d, "OV")
+        check("overlap: ③字串型 counts → 壞型提示", "壞型" in r.stdout, r.stdout)
+        check("overlap: ③不靜默納入統計(缺陷數不含該筆)", "3/3" not in r.stdout, r.stdout)
+
+    # ④ 無 counts loop → 無重疊數據、不炸
+    with tempfile.TemporaryDirectory() as d:
+        _mkvault(d)
+        _rec(d, "none", "--loop", "OV", "--round", "r1", "--token", "A", "--severity", "clean")
+        r = _stats(d, "OV")
+        check("overlap: ④無 counts rc0 不炸", r.returncode == 0, r.stderr)
+        check("overlap: ④印無重疊數據", "無重疊數據" in r.stdout, r.stdout)
 
 
 def t_loop_panel_none_kind():

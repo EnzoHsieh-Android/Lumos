@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-03
-updated: 2026-08-05
+updated: 2026-08-14
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -13,6 +13,7 @@ verified_by:
   - "[[Verification/2026-07-09_loop三輪壓縮]]"
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
   - "[[Verification/2026-08-05_panel-K2與抽查落地]]"
+  - "[[Verification/2026-08-14_殘餘估計降級與重疊報表落地]]"
 summary: |-
   KEY:✅[2026-08-05 A案落地]panel K=1→★K=2★(cutoff 2026-08-06 起新 loop;首筆 ts 定錨不回溯,env LUMOS_PANEL_K2_CUTOFF 覆寫供測試)——最後兩輪★各自★過三條合取(前一輪 quiet 評估印一行摘要;單一實作 _panel_round_conjuncts 兩處共用);cluster 路同窗(前一輪須為有效輪)。+(e') 收斂後決定性抽查判定:PASS 印 sha256(loop_id+rid+該輪 token 集)%2 應抽/免抽——輸入全來自 append-only 帳,人人可事後重算,不依賴編排者誠實;應抽→加開 probe-* 輪(材料全量/席可縮 3/不計 cap/上限 1 次),★撤銷自動化=probe 冒 major 時 K=2 窗滑入髒輪 gate 自然 FAIL,零新機制★。防浮動條款:判準凍結,唯一翻案通道=攢滿 20 筆抽查帳。證據與五候選裁決全程=[[Projects/panel收斂判準改革_計劃]](design-loop r1+r2 收斂) [test:t_panel_k2_and_probe]
   KEY:★收斂 K 值依模式而異,而 skill 曾在四處講錯或漏標(2026-08-03 修)★——★循序模式 K=2★(`--need 2`,code:`all(good(r) for r in rounds[-need:])`);★平行 panel 模式 K=1★(code:`_loop_status_panel` 只取 `next(reversed(groups.items()))`,只看最後一輪)。錯處:①code-loop SKILL 頭版只寫「連 2 輪」與同份文件 panel 節的「一乾淨輪即收斂」自相矛盾 ②code-loop SKILL/reference 把 `tier: high` 標成「(K=2)」——★講反了★,tier=high 實務走 panel 即 K=1 ③design-loop 誠實天花板寫「連 2 輪醒著的審計員」,對 panel 使用者不成立。★後果★:看頭版的人與照 code 跑的人得到不同結論,而★兩邊都覺得自己在照規矩走★——2026-08-03 使用者問「本來不就是乾淨兩輪才放行嗎」才暴露,當時我四輪都跑在 panel 下卻用 K=2 的心智模型講話。
@@ -24,7 +25,7 @@ summary: |-
   KEY:G2 fail-closed(tail-K 缺 findings 欄位即擋)+ 欄位互證(clean⇒0、minor⇒≥1,矛盾即擋);G1 用 _refcheck_scan 只驗 spec→repo 指涉、不驗內部一致性(canary 保留地)
   KEY:Confident Liar 條款(§2.5c)——unanchored(指控與 ground-truth 無字串交集)單獨不撐 reject;parse_fallback 遍不計票;disputed 門票從「qwen 喊 major」改「喊的 major 驗過還站著」
   KEY:誠實天花板——findings 數源頭仍是 LLM 裁決(gate 機械化算術非數字正確性);枯竭≠挖乾(同門盲點趨同);sentinel 擋混淆不擋對抗注入;§2.5c 是 prompt 層散文契約無機械回歸守衛;換 loop_id 洗紀錄仍可(hash 綁 loop 內容非 id);--spec 綁定向量已清償([2026-07-21 M1包]雙 hash 鏈落地,見[[Projects/loop機械脊椎M1包_計劃]]:record --spec/--reviewed 成對寫 reviewed/result 兩欄,gate 帶 --spec=聲明要驗——收斂窗 all-or-nothing+鏈續性+同輪雙欄一致+窗末=當前檔,G3 段;不帶 --spec 舊用法 advisory 不變;light 恆強制)
-  KEY:平行 panel 收斂(2026-07-09,`--panel`,見 [[loop三輪壓縮_計劃]])——G2 序列枯竭是**循序深度**信號、配不上平行拓樸;panel 模式改 capture-recapture 殘餘估計(從 W 獨立審計員 findings 重疊估母體枯竭,取代 findings 序列遞減)+ 輪有效(caught≥2且0missed,near-perfect)+ 存活 max≤minor;無 capture_counts=fail-closed;legacy K-streak∧G1∧G2(無 --panel)完全不變
+  KEY:平行 panel 收斂(2026-07-09,`--panel`,見 [[loop三輪壓縮_計劃]])——G2 序列枯竭是**循序深度**信號、配不上平行拓樸;panel 模式合取=輪有效(記帳席≥2且0missed,none 制)∧存活 max≤minor;capture-recapture 殘餘估計★2026-08-14 降 advisory 不進合取(鑑別力≈0:殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25;f1≤1 公式退化;見[[Projects/收斂閘殘餘估計降級_計劃]])★——觀測行照印、無 counts 印缺席提示不 fail;legacy K-streak∧G1∧G2(無 --panel)完全不變
   DEP:[[lumos-refcheck]](G1 消費 _refcheck_scan)｜[[canary-audit]](記錄面)｜`governance/autonomous_loop/cross_audit.py`(2026-08-08 補鏈:原裸文字提及正名為標準引用)
   TEST:t_canary_findings 3 + t_loop_gate 16 checks(CLI)+ TestCrossAudit 新 4(unittest);352 passed 全綠
   VERIFY:[[2026-07-03_convergence-evidence-gate]]

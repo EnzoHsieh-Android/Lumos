@@ -172,8 +172,8 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
   - **跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**:tier=high 雙 Codex 角色——1 席帶餌正式 finder 佔 W(受注意力檢查,計入重疊帳)+1 席無餌否決席不佔 W(外掛;findings 與帶餌席同池進辯方,存活 ≥major 依帳模式落閘:M2=記 disputed-major cluster 記錄/舊帳=計存活 max);standard=1 席無餌否決。fail 分級:standard fail-open 退同門+註記/high fail-closed(第三家族替補→延期→外家缺席不得收斂攤人)。qwen 轉列第三家族替補。
 - **spec-conformance slot(2026-07-10,調研裁定③)**:tier=high 且該分支有收斂 spec(計劃節點)→ panel **追加**一個對答案審查員(不帶 canary、不佔 W 配額,地位同 Codex 無餌否決位):輸入=收斂 spec+diff,鏡頭=**逐條款對照**「說好的做了嗎/縮水/多做/未實作」四類;縮水與未實作視同 finding 進辯方流程。無 spec 的分支跳過並記一句。派工模板見 templates.md §7.5。
 - **判讀/記錄/收斂**:同 design-loop panel(步驟 4 辯方 + 步驟 5 記錄)——一輪 W 筆共享 round-id:
-  `lumos canary record caught|missed --loop code-<topic> --round <rid> --auditor <slotN> --severity <s> [--capture-counts "2,2,1"]`。
-- **問收斂**:`lumos loop status code-<topic> --gate --panel --repo <root>` → 四條合取(輪有效 caught≥2且0missed[near-perfect] ∧ 存活max≤minor[只算caught] ∧ capture-recapture殘餘<門檻[無counts=fail-closed]);**G1 本就對代碼 skip**,panel 模式不影響。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta hunk,cap=3。
+  `lumos canary record caught|missed --loop code-<topic> --round <rid> --auditor <鏡頭>-<模型> --severity <s> [--capture-counts "2,2,1"]`。
+- **問收斂**:`lumos loop status code-<topic> --gate --panel --repo <root>` → 兩條合取(輪有效[記帳席≥2,none 制] ∧ 存活max≤minor[caught+none];capture-recapture 殘餘=advisory 不進合取,2026-08-14 降級);**G1 本就對代碼 skip**,panel 模式不影響。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta hunk,cap=3。
 - **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix→rc2)。
 
 ### ⚠ code-loop 與 design-loop 的關鍵差異(2026-07-09 交叉查文獻;別全盤沿用)
@@ -203,7 +203,7 @@ lumos loop capture-counts \
 ```
 - 重疊計數(同洞被幾個 finder 中)是 capture-recapture 核心輸入,**人手數易錯 → 該機械化**。
 - **linter 免手貼:`--from-pitfalls <range>` 一鍵收割**——`loop capture-counts --finder "<LLM A>" --finder "<LLM B>" --from-pitfalls main..HEAD --repo <root>` 會自己跑 `pitfalls --diff`、按 source 分組(每個 linter driver / pitfalls 內建各一個確定性 finder)、把命中的 `file:line` 併進來一起算重疊。手動 `--finder` 留給 LLM reviewer,確定性 finder 自動來。
-- 拿到 `--capture-counts` 串 → `canary record caught --loop code-<topic> --round rN --capture-counts <串> …`;`loop status code-<topic> --gate --panel` 就用它判 capture-recapture 殘餘那條。
+- 拿到 `--capture-counts` 串 → `canary record caught --loop code-<topic> --round rN --capture-counts <串> …`;`loop status code-<topic> --gate --panel` 把它印成殘餘 advisory 觀測(不進合取);canary-stats 重疊分布段也吃它。
 
 ### 端到端一輪(照抄改參數)
 ```bash
@@ -219,11 +219,11 @@ lumos loop capture-counts \
 #    → 印 capture_counts=… 與可貼的 `--capture-counts <串>`
 # 3. 記這一輪(W 筆共享同一 --round;此處示意 caught 輪)
 lumos canary record caught --loop "code-$TOPIC" --round "$RID" \
-  --auditor slot1 --severity minor --capture-counts "2,1,1"
+  --auditor bug-sonnet --severity minor --capture-counts "2,1,1"
 # 4. 問收斂
 lumos loop status "code-$TOPIC" --gate --panel --repo .   # rc0=PASS → 進 finishing;rc1→修 delta 再下一輪(cap=3)
 # 5. 收斂後記留痕才能 push
-lumos code-loop pass --note "panel 收斂:capture-recapture 殘餘<1、無存活 major"
+lumos code-loop pass --note "panel 收斂:輪有效∧無存活 major(殘餘 obs X.XX advisory)"
 ```
 
 ## 護欄
