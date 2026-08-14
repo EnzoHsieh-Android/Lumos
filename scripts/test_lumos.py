@@ -1522,6 +1522,17 @@ def t_search():
     check("search --path 限定資料夾(Systems 命中被排除)", "Systems/A.md" not in r3.stdout, r3.stdout)
     r4 = run(v, "search", "Service.*代碼", "--regex", "--files-only", expect_rc=0)
     check("search --regex", "Systems/A.md" in r4.stdout, r4.stdout)
+    # ★圖譜先行注入(2026-08-14)★:有命中 → stderr 提醒「用 show 讀全文再下結論」。
+    # 防的失效模式=search 命中卻只掃摘要就判「圖譜沒記」(金鑰事故實證)。
+    r5 = run(v, "search", "ServiceType", expect_rc=0)
+    check("search 有命中 → stderr 提醒 show 全文", "命中≠查完" in r5.stderr and "lumos show" in r5.stderr, r5.stderr)
+    check("search 提醒走 stderr 不污染 stdout", "命中≠查完" not in r5.stdout, r5.stdout)
+    r6 = run(v, "search", "ServiceType", "--files-only", expect_rc=0)
+    check("search --files-only(機器消費端)不印提醒", "命中≠查完" not in r6.stderr, r6.stderr)
+    r7 = run(v, "search", "zzz_不存在的詞", expect_rc=0)
+    check("search 0 命中不印提醒(該走換詞重查而非 show)", "命中≠查完" not in r7.stderr, r7.stderr)
+    r8 = run(v, "search", "ServiceType", "--legacy", expect_rc=0)
+    check("search legacy 模式同樣提醒", "命中≠查完" in r8.stderr, r8.stderr)
 
 
 # ── search 尊重標籤哲學: 排除 code block + 標記區域(option A) ──

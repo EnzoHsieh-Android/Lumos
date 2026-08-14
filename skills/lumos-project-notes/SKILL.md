@@ -10,6 +10,7 @@ description: 維護專案知識圖譜（docs/{project}-knowledge/）— 追蹤�
 - **金科玉律**:所有改動/調研/計畫都**同一次工作內**同步進圖譜。查知識**優先讀圖譜**;與其他文件/記憶/臆測衝突以圖譜為準、向人確認。**但與行為事實(測試結果/實際執行/生產觀測)衝突時不自動判圖譜為真**——那是有東西壞了,查清哪邊錯並立事故節點(2026-07-29 外審吸收)。
 - **主工具 = `lumos`**(python3 零依賴,`find_vault` 自動鎖定 `docs/*-knowledge/`)。**禁止**用 Grep/Read/Edit/Write 直接碰 vault 的 .md——繞過寫後自驗與鐵則防護。需讀節點**完整 body**(決策全文/章節內文)→ `lumos show <節點> [--body-only]`(2026-07-21 新增,補「context 只給 summary 索引」的全文讀取缺口);context 仍是進場導航首選。
 - **進場三步**:`lumos search <關鍵字>` 定位 → `lumos context <節點>` 掃脈絡(頭部攤 ⚠ 合約) → `lumos contracts <節點>` 查硬合約。**然後**才 grep code / 查 DB 驗證。
+- **★命中≠查完★**:search 只給索引——命中節點要 `lumos show` 讀**全文**才准下結論;拿摘要判「圖譜沒記」是實證過的破口(2026-08-14 金鑰事故:值在節點第 64 行,靠摘要判成沒有)。★「只是查個值/查個狀態」不是跳過圖譜的理由,是最該查的情境★;每個**子任務**進場都重新觸發圖譜先行,不是 session 開頭一次。
 - **寫完一個節點**:`lumos lint <節點>`(單檔快檢) → 收尾 `lumos doctor`(全圖)。
 - **push 後拉回 CI 結論（僅當專案 `.lumos/config.json` 宣告 `ci` 區塊時；未宣告＝此條不存在）**：`lumos ci-wait` → 綠且 `verdict=green` 才收工；**rc1（紅）＝當輪修**（讀它印的失敗步驟＋log 尾段 → 修 → 推 → 再等，上限 2 次，仍紅則寫 Issue 攤給人）；rc0 但 verdict 是 `timeout`/`no-run`/`unavailable`/`undetermined` **不算綠**（分別是：還沒跑完要手動查／此 sha 沒觸發任何 workflow／環境缺 gh／跑完了但結論既非成功也非失敗——`cancelled`·`action_required`·`stale`，要人判）。**紅燈不過夜**：修不完也要在收尾報告明講「main 上有紅燈未解」，不得靜默收工。⚠ **這是觀測不是強制**：`ci-wait` 擋不了 push、也擋不了 merge，工具缺席／config 壞損一律 fail-open rc0；要「紅燈進不了 main」得在 GitHub 設 branch protection required check（本工具不碰 GitHub 設定）。
 - **rich 節點** = Write/Edit 內文 + `summary` block;**純量/list/decisions 一律走 `lumos set`/`append`/`decision-add`**(別手改 frontmatter)。
@@ -42,6 +43,19 @@ vault 名 = 資料夾 basename,lumos 自動解析。**全程無需 Obsidian**(�
 ## 核心圖譜接點(core-knowledge)
 
 看到 frontmatter `core_refs:` 或 summary `CORE:` 行 → **該主題權威在核心圖譜,專案筆記殘留描述不可當權威**(疑似快照 = drift 該清);語意異動改核心節點(走 `lumos-core-knowledge` skill),不在專案筆記改。
+
+## 跨 session 傳訊的形狀(2026-08-14 拍板)
+
+本專案改動需要**他專案配合**時,可用 `ListAgents`/`SendMessage` 直接通知對造 session(實測互動視窗雙向可用、能喚醒閒置 peer,見 [[Verification/2026-08-14_跨session傳訊互動視窗實測]])。
+
+> ★鐵則★ **訊息只傳「指標＋觸發」,不傳「內容本身」。**
+
+理由:訊息內容只活在對造那個 session 的記憶裡,視窗一關即蒸發;把協同結論當訊息送過去就算數 = 在圖譜之外長出第二個沒人維護的真相源。
+
+三步形狀:①先把改動寫進圖譜(跨專案規則走核心圖譜升格) ②訊息只說「我動了哪一條/去讀哪個節點/你那邊要跟什麼」 ③明確要求對造把跟進結果也寫回它自己的圖譜。
+
+⛔ **禁止**:拿傳訊當「問規則的捷徑」(規則權威在圖譜,不在誰的 session 記憶)、拿 peer session 當審計獨立席次(脈絡髒於全新子代理且更貴)、以及**把本 session 被閘擋下的動作轉請 peer 執行**(權限洗白;同機確實存在跳權限確認的 session,此條純自律無機械守衛)。
+> ⚠ 本節目前**沒有任何機械檢查**在守——對造沒把跟進寫回圖譜,工具不會知道。
 
 ---
 
