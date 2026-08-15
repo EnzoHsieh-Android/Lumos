@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-16
-self_audit: sonnet/2026-07-24
+self_audit: sonnet/2026-08-16
 tags:
   - type/system
   - status/done
@@ -13,7 +13,7 @@ summary: |-
   KEY:[2026-08-05]search 排序加 aliases 欄(權重 3.5,略低於標題 4.0)——frontmatter aliases list 進 BM25F;同義詞落空(搜「作廢」圖譜寫「沖銷」)的最便宜解,寫入者留同義詞一次、檢索受益永久 [test:t_search_aliases_field]
   KEY:[2026-08-04]+quote-check(vault-free 讀命令):報告引句逐條對回凍結快照(_quote_norm 正規化;rc0 全 ok/rc1 miss/rc2 IO或零引句)——disposal 閘的④號合取同源消費 [test:t_quote_check_normalization_and_verdict]
   FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出(context/show 另寫 usage-log 事件帳;doctor --ci 寫 governance-log) → return 0(查無/正則錯=非0)
-  KEY:[2026-08-16 query 結構化查詢]新讀原語 `query`——WHERE over 標籤家族(--tag 可重複=AND/--no-tag/--active 排收案態/--contract 沿 extract_contracts/--linked 1-hop 鄰域/--json);旗標 AND 疊加不發明查詢語言(borrow zk list);預設排除 superseded 對齊 search 真遺忘+--include-superseded 逃生;bare 無條件 rc2(對齊 stale --candidate);緣起=標籤收編後「欄位只有顯示沒有篩選」,Landmark 三情境實測見 [[Projects/圖譜結構化查詢_計劃]] [test:t_query_tag_and,t_query_contract_uses_real_parser,t_query_linked_scope,t_query_forget_superseded]
+  KEY:[2026-08-16 query 結構化查詢]新讀原語 `query`——WHERE over 標籤家族(--tag 可重複=AND/--no-tag/--active 排收案態/--contract 沿 extract_contracts/--linked 1-hop 鄰域/--json);旗標 AND 疊加不發明查詢語言(borrow zk list);預設排除 superseded 對齊 search 真遺忘+--include-superseded 逃生;bare 無條件 rc2(對齊 stale --candidate);緣起=標籤收編後「欄位只有顯示沒有篩選」,Landmark 三情境實測見 [[Projects/圖譜結構化查詢_計劃]] [test:t_query_tag_and,t_query_no_tag_and_active,t_query_contract_uses_real_parser,t_query_linked_scope,t_query_forget_superseded,t_query_bare_rc2,t_query_json]
   KEY:read/traverse 14 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——context 與 show 寫 best-effort usage-log 事件帳(A2,2026-07-11 起)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀([[Projects/lumos-show讀取入口_計劃]] r4 收斂措辭,修 A2 起「零副作用」宣稱漂移);與 7 個寫入原語(set/append/new/decision-* …)互斥
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
   KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向(stale/fail 驗證豁免——E1 拔死背書後不反咬漏寫)/plan_refs 意圖鏈 + 同名守衛 + frontmatter lint + Check T/R/H;Check P 失效檔案認領(inline-code 路徑指死碼);Check E1 失效背書(verified_by 指向 stale/fail/superseded 驗證→死背書;superseded=真遺忘第二刀 2026-07-26,同刀:Check3 skip 集+sync-verified-by 過濾+orphan 豁免四位一致)+ Check E2 建在被推翻決策上(決策 valid:false+ended → M2 共用 typed 索引查連入來源、updated 早於 ended → 落後邊;decision_refs 精化只標指到那條;M3 帳本抑制 terminal ts>=ended 跳過=主/補網不重報)+ Check E3 意圖鏈斷義(decision_refs 指翻案決策+dangling 浮出);關係層皆軟提醒;Check J regen 重生來源守衛[M1 2026-07-16]——regen 節點 provenance 分級:J-a 拒發明合約(INVARIANT 標記行需 [src:]/[git:] 意圖證據)+J-b DECISION 四態+J-c 證據指針 substring gate(共用 _validate_repo_ref 不經 top_dirs 靜默過濾;shallow 降 warn_soft 顯性)+J-d 唯讀提醒;與 lint 共用 check_regen_provenance 防兩入口漂移 [test:t_check_j_regen,t_check_j_git]);與 lint 分工——lint 只看單篇 node-local(regen 節點 Check J 為 opt-in 例外需檔案+git 存取)、predicts pre-push 會不會擋
@@ -87,7 +87,7 @@ verified_by:
   - `map <節點> [--depth 2]`(`cmd_map`):鄰域樹狀展開,`↺` 標已出現過(防環)。
   - `export --folders <…> [dot|mermaid]`(`cmd_export`):導出指定資料夾子圖為 graphviz dot / mermaid。
 - **結構化查詢(2026-08-16)**
-  - `query [--tag 家族/值]… [--no-tag …] [--active] [--contract] [--linked <節點>] [--include-superseded] [--json]`(`cmd_query`):**WHERE over 標籤家族**——旗標一律 AND 疊加,不發明查詢語言(borrow zk `list` 旗標語意)。`--active`=status 不在收案態(done/pass/superseded/resolved/wontfix);`--contract` 沿用 `extract_contracts` 只認 KEY 行標準格式(散文提及不算);`--linked`=範圍縮到該節點連入+連出 1-hop 鄰居(不含錨點);預設排除 superseded(對齊 search 真遺忘)、bare 無條件 rc2(對齊 stale --candidate 慣例)。緣起與 Landmark 三情境實測見 [[Projects/圖譜結構化查詢_計劃]]。
+  - `query [--tag 家族/值]… [--no-tag …] [--active] [--contract] [--linked <節點>] [--include-superseded] [--json]`(`cmd_query`):**WHERE over 標籤家族**——旗標一律 AND 疊加,不發明查詢語言(borrow zk `list` 旗標語意)。`--active`=status 不在收案態(done/pass/superseded/resolved/wontfix);`--contract` 沿用 `extract_contracts` 只認 KEY 行標準格式(散文提及不算);`--linked`=範圍縮到該節點連入+連出 1-hop 鄰居(不含錨點);預設排除 superseded(對齊 search 真遺忘)、bare 無條件 rc2(對齊 stale --candidate 慣例)。`--json` 輸出結構:`{results:[{node,status,tags}],hidden_superseded}`(tags=type/status 以外家族)。緣起與 Landmark 三情境實測見 [[Projects/圖譜結構化查詢_計劃]]。
 - **決策 / 重驗 / 概覽**
   - `decisions [節點] [--superseded]`(`cmd_decisions`):讀單篇 ADR 決策;`--superseded` 全 vault 掃 `valid:false` 被推翻的決策。
   - `stale [--match <字串>] [--candidate]`(`cmd_stale`):`status:stale` 清單;`--match` 掃 valid_under + revalidate_when 命中(含 Archive);`--candidate --match <關鍵字>` 聚焦活躍 Verification 的 revalidate_when(排 Archive)= 「改 X 時該重驗哪幾篇」。bare `--candidate` 或空 `--match` 直接 rc2 拒絕(避免列全部變噪音)。
