@@ -15,7 +15,7 @@
 
 repo 內的 `scripts/lumos`（python3 標準庫，零 Obsidian 依賴）是**日常操作圖譜的主要工具**。讀取、寫入、巡檢、歸檔一律先用 lumos；Obsidian CLI 只保留給 lumos 沒有的少數場景（見下節）。
 
-> **全域安裝**：本精簡版隨附 `install.sh`（不是 `lumos install`——那支子命令未交付），跑一次把 `lumos` 裝上 `~/.local/bin`，之後任何專案子目錄直接打 `lumos <cmd>`（find_vault 從 cwd 往上找 docs/*-knowledge）。下文一律用全域 `lumos`。★不要用 `python3 scripts/lumos`★——若你所在的專案本身 vendored 了完整版 `scripts/lumos`（checked in、非本精簡版安裝的），那個寫法會呼叫到**完整版全部指令**（支數以其 `--help` 為準），不是本精簡版的 25 支子集；`init`/`update` 等本精簡版未交付的指令在那條路徑上會**真的執行**，可能動到專案層 `CLAUDE.md`。全域安裝是本包唯一保證等價的路徑。
+> **全域安裝**：本精簡版隨附 `install.sh`（不是 `lumos install`——那支子命令未交付），跑一次把 `lumos` 裝上 `~/.local/bin`，之後任何專案子目錄直接打 `lumos <cmd>`（find_vault 從 cwd 往上找 docs/*-knowledge）。下文一律用全域 `lumos`。★不要用 `python3 scripts/lumos`★——若你所在的專案本身 vendored 了完整版 `scripts/lumos`（checked in、非本精簡版安裝的），那個寫法會呼叫到**完整版全部指令**（支數以其 `--help` 為準），不是本精簡版的 26 支子集；`init`/`update` 等本精簡版未交付的指令在那條路徑上會**真的執行**，可能動到專案層 `CLAUDE.md`。全域安裝是本包唯一保證等價的路徑。
 
 **禁止用 Grep/Glob/Read/Edit/Write 直接操作 `docs/{vault-name}/` 下的 .md 檔案。**
 lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合約測試綁定），是單純讀寫檔案做不到的；直接編輯也繞過寫後自驗與鐵則防護。
@@ -59,7 +59,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 
 > ⚠ **`doctor`／`lint` 有些檢查會建議跑本精簡版沒交付的指令**——這是從完整版原封繼承的訊息文字，**看到請忽略、不用照做**（判準是「打了會得到『未知指令』錯誤」，不是背下一份清單）。已知會出現的至少有 `lumos init`／`lumos update`／`lumos self-audit`／`lumos signoff`（後者出現在 regen 節點的證據檢查訊息裡，`lint` 和 `doctor` 都會印，建議「走 signoff 升級」）——這份列舉不保證窮盡。最常見的是 `CLAUDE.md` 紀律區塊比對（Check D）：sentinel 損壞或與範本不同步時會建議跑 `init`/`update` 修復；`CLAUDE.md` 相關的檢查在本版**沒有修復路徑**，那是刻意的（本版不注入、不更新任何 `CLAUDE.md`，見專案 README〈怎麼裝〉）。
 
-> **子命令全覽（本精簡版 25 支頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats`）+ 巡檢/治理（`doctor` `lint` `sync-verified-by` `rel-cascade`）+ 寫入（`set` `append` `new` `archive` `decision-add` `decision-supersede` `decision-reindex`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）+ 刪除傳播守衛（`delguard --staged`：commit 前抓「code 刪了、圖譜還在講」，advisory 不擋）。
+> **子命令全覽（本精簡版 26 支頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats`）+ 巡檢/治理（`doctor` `lint` `sync-verified-by` `rel-cascade`）+ 寫入（`set` `append` `new` `archive` `decision-add` `decision-supersede` `decision-reindex`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）+ 刪除傳播守衛（`delguard --staged`：commit 前抓「code 刪了、圖譜還在講」，advisory 不擋）。
 
 ### Obsidian CLI：僅限 GUI 檢視場景（指令已刪,見文末〈Obsidian〉節）
 

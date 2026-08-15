@@ -30,7 +30,7 @@ DROP_SKILLS = ("lumos-design-loop", "lumos-code-loop", "lumos-core-knowledge",
                "lumos-pitfalls-gapfill", "design-loop", "code-loop",
                "core-knowledge", "pitfalls-gapfill")
 
-KEEP = set("""append archive backlinks context contracts decision-add decision-reindex delguard
+KEEP = set("""append archive backlinks context contracts decision-add decision-reindex delguard query
 decision-supersede decisions doctor export guard links lint map new recent
 rel-cascade search set show stale stats sync-verified-by""".split())
 

@@ -15980,9 +15980,9 @@ def t_slim_gen():
     m = _re.search(r"\{([a-z0-9,\-]+)\}", h.stdout)
     got = set(m.group(1).split(",")) if m else set()
     keep = set("""append archive backlinks context contracts decision-add decision-reindex
-decision-supersede decisions delguard doctor export guard links lint map new recent
+decision-supersede decisions delguard doctor export guard links lint map new query recent
 rel-cascade search set show stale stats sync-verified-by""".split())
-    check("產物 --help == 保留 25 支", got == keep, f"多={sorted(got-keep)} 少={sorted(keep-got)}")
+    check("產物 --help == 保留 26 支", got == keep, f"多={sorted(got-keep)} 少={sorted(keep-got)}")
 
     c = subprocess.run([sys.executable, "-W", "error::SyntaxWarning",
                         "-m", "py_compile", str(out)], capture_output=True, text=True)
@@ -17898,7 +17898,7 @@ def t_slim_gate():
 
     # 第 1 道 負向:--help choices 不得出現任何移除指令(逐支列名)
     keep = set("""append archive backlinks context contracts decision-add decision-reindex
-decision-supersede decisions delguard doctor export guard links lint map new recent
+decision-supersede decisions delguard doctor export guard links lint map new query recent
 rel-cascade search set show stale stats sync-verified-by""".split())
     full = subprocess.run([sys.executable, GRAPHCTL, "--help"],
                           capture_output=True, text=True).stdout
@@ -19011,6 +19011,121 @@ def t_suite_strips_git_env_from_hook_invocation():
                        capture_output=True, text=True, env=env)
     check("★GIT_DIR 被污染時,建臨時 repo 的測試仍該全綠(env 已在進入點清掉)★",
           r.returncode == 0, (r.stdout + r.stderr)[-1500:])
+
+
+# ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
+
+def _mk_query_vault():
+    """query 測試共用小庫:標籤家族×狀態×合約×連結 交叉樣本。"""
+    v = mkvault()
+    write(v, "Systems/Pay.md",
+          "type: system\nstatus: done\ntags:\n  - type/system\n  - status/done\n  - risk/金流\n"
+          "summary: |-\n  KEY:★INVARIANT★ 金流恆等一條 [test:t_dummy]\n",
+          body="# Pay\n[[Systems/Hub]]\n")
+    write(v, "Systems/Prose.md",
+          "type: system\nstatus: done\ntags:\n  - type/system\n  - status/done\n  - risk/金流\n",
+          body="# Prose\n散文裡提到 ★INVARIANT★ 三個字但不是合約行\n")
+    write(v, "Issues/OpenPay.md",
+          "type: issue\nstatus: open\ntags:\n  - type/issue\n  - status/open\n  - risk/金流\n  - priority/P1\n",
+          body="# OpenPay\n[[Systems/Hub]]\n")
+    write(v, "Issues/DonePay.md",
+          "type: issue\nstatus: done\ntags:\n  - type/issue\n  - status/done\n  - risk/金流\n",
+          body="# DonePay\n")
+    write(v, "Systems/Hub.md",
+          "type: system\nstatus: doing\ntags:\n  - type/system\n  - status/doing\n",
+          body="# Hub\n[[Issues/Free]]\n")
+    write(v, "Issues/Free.md",
+          "type: issue\nstatus: open\ntags:\n  - type/issue\n  - status/open\n",
+          body="# Free\n")
+    write(v, "Systems/DeadPay.md",
+          "type: system\nstatus: superseded\ntags:\n  - type/system\n  - status/superseded\n  - risk/金流\n",
+          body="# DeadPay\n")
+    return v
+
+
+def t_query_tag_and():
+    """--tag 可重複=AND;命中列出 rel [status]。"""
+    v = _mk_query_vault()
+    r = run(v, "query", "--tag", "risk/金流", expect_rc=0)
+    for rel in ("Systems/Pay.md", "Systems/Prose.md", "Issues/OpenPay.md", "Issues/DonePay.md"):
+        check(f"單 tag 命中 {rel}", rel in r.stdout, r.stdout)
+    check("單 tag 不含無標節點 Hub", "Systems/Hub.md" not in r.stdout, r.stdout)
+    check("輸出帶狀態欄", "[open]" in r.stdout and "[done]" in r.stdout, r.stdout)
+    r2 = run(v, "query", "--tag", "risk/金流", "--tag", "priority/P1", expect_rc=0)
+    check("雙 tag=AND 只剩 OpenPay", "Issues/OpenPay.md" in r2.stdout, r2.stdout)
+    check("雙 tag=AND 排除單命中 Pay", "Systems/Pay.md" not in r2.stdout, r2.stdout)
+
+
+def t_query_no_tag_and_active():
+    """--no-tag 排除;--active=狀態不在收案態。"""
+    v = _mk_query_vault()
+    r = run(v, "query", "--tag", "risk/金流", "--no-tag", "type/issue", expect_rc=0)
+    check("--no-tag 排除 issue 型", "Issues/OpenPay.md" not in r.stdout and "Issues/DonePay.md" not in r.stdout, r.stdout)
+    check("--no-tag 保留 system 型", "Systems/Pay.md" in r.stdout, r.stdout)
+    r2 = run(v, "query", "--tag", "risk/金流", "--active", expect_rc=0)
+    check("--active 保留 open", "Issues/OpenPay.md" in r2.stdout, r2.stdout)
+    check("--active 排除 done", "Issues/DonePay.md" not in r2.stdout and "Systems/Pay.md" not in r2.stdout, r2.stdout)
+
+
+def t_query_contract_uses_real_parser():
+    """--contract 沿用 extract_contracts:只認 KEY 行標準格式,散文提及不算。"""
+    v = _mk_query_vault()
+    r = run(v, "query", "--tag", "risk/金流", "--contract", expect_rc=0)
+    check("真合約節點 Pay 命中", "Systems/Pay.md" in r.stdout, r.stdout)
+    check("★散文提及 Prose 不命中(真解析器)★", "Systems/Prose.md" not in r.stdout, r.stdout)
+    check("無合約 issue 不命中", "Issues/OpenPay.md" not in r.stdout, r.stdout)
+
+
+def t_query_linked_scope():
+    """--linked <節點>:範圍縮到連入+連出 1-hop 鄰居(不含錨點自己)。"""
+    v = _mk_query_vault()
+    # Hub 的鄰居:連入 Pay/OpenPay,連出 Free。DonePay/Prose 無連結不在鄰域。
+    r = run(v, "query", "--linked", "Hub", "--tag", "status/open", expect_rc=0)
+    check("鄰域內 open 命中 OpenPay", "Issues/OpenPay.md" in r.stdout, r.stdout)
+    check("鄰域內連出方向也算(Free)", "Issues/Free.md" in r.stdout, r.stdout)
+    check("鄰域外不入列(DonePay)", "Issues/DonePay.md" not in r.stdout, r.stdout)
+    check("錨點自己不入列", "Systems/Hub.md" not in r.stdout, r.stdout)
+    rbad = run(v, "query", "--linked", "沒這個節點", "--tag", "risk/金流")
+    check("--linked 查無節點 rc2", rbad.returncode == 2, f"rc={rbad.returncode}")
+
+
+def t_query_forget_superseded():
+    """預設排除 superseded(對齊 search 真遺忘鐵則);--include-superseded 逃生;隱藏數走 stderr。"""
+    v = _mk_query_vault()
+    r = run(v, "query", "--tag", "risk/金流", expect_rc=0)
+    check("預設排除 superseded(DeadPay 不出)", "Systems/DeadPay.md" not in r.stdout, r.stdout)
+    check("隱藏提示走 stderr 且計數=1", "已隱藏 1" in r.stderr, r.stderr)
+    check("隱藏提示不污染 stdout", "已隱藏" not in r.stdout, r.stdout)
+    r2 = run(v, "query", "--tag", "risk/金流", "--include-superseded", expect_rc=0)
+    check("--include-superseded 召回 DeadPay", "Systems/DeadPay.md" in r2.stdout, r2.stdout)
+    check("逃生模式不印隱藏提示", "已隱藏" not in r2.stderr, r2.stderr)
+
+
+def t_query_bare_rc2():
+    """無任何篩選旗標=rc2 拒絕(對齊 stale --candidate 慣例,不列全庫)。"""
+    v = _mk_query_vault()
+    r = run(v, "query")
+    check("bare query rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
+    check("錯誤訊息說明要帶條件", "--tag" in r.stderr, r.stderr)
+
+
+def t_query_json():
+    """--json:stdout 純 JSON,含 results(node/status/tags)與 hidden_superseded。"""
+    import json as _json
+    v = _mk_query_vault()
+    r = run(v, "query", "--tag", "risk/金流", "--json", expect_rc=0)
+    parsed = None
+    try:
+        parsed = _json.loads(r.stdout)
+    except Exception:
+        pass
+    check("--json stdout 合法 JSON", parsed is not None, r.stdout)
+    check("--json hidden_superseded=1", bool(parsed) and parsed.get("hidden_superseded") == 1, r.stdout)
+    nodes = [x.get("node") for x in (parsed or {}).get("results", [])]
+    check("--json results 含 Pay", "Systems/Pay.md" in nodes, r.stdout)
+    check("--json results 不含 DeadPay", "Systems/DeadPay.md" not in nodes, r.stdout)
+    st = next((x.get("status") for x in (parsed or {}).get("results", []) if x.get("node") == "Issues/OpenPay.md"), None)
+    check("--json 帶 status 欄", st == "open", r.stdout)
 
 
 def main():

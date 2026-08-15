@@ -6108,6 +6108,65 @@ def cmd_stale(env, match=None, candidate=False, legacy=False):
     return 0
 
 
+# query 收案態(--active 排除集):與各 type 的 status enum 對齊(2026-08-16 圖譜結構化查詢)
+QUERY_CLOSED_STATUSES = {"done", "pass", "superseded", "resolved", "wontfix"}
+
+
+def cmd_query(env, tags=None, no_tags=None, active=False, contract=False,
+              linked=None, include_superseded=False, as_json=False):
+    """結構化查詢:WHERE over 標籤家族(旗標一律 AND 疊加,不發明查詢語言)。
+    [[Projects/圖譜結構化查詢_計劃]] borrow-design 自 zk list 旗標語意。"""
+    tags = tags or []
+    no_tags = no_tags or []
+    if not (tags or no_tags or active or contract or linked):
+        print("ERROR: query 至少要帶一個條件(--tag/--no-tag/--active/--contract/--linked),"
+              "不帶條件=列全庫,無篩選意義(例: query --tag risk/金流 --active)。",
+              file=sys.stderr)
+        return 2
+    scope = None
+    if linked:
+        anchor = env.find(linked)
+        if anchor is None:
+            print(f"ERROR: 找不到筆記: {linked}", file=sys.stderr)
+            return 2
+        out_e, in_e = env.edges
+        scope = (set(out_e.get(anchor, ())) | set(in_e.get(anchor, ()))) - {anchor}
+    hits, hidden = [], 0
+    for rel in sorted(env.notes):
+        if scope is not None and rel not in scope:
+            continue
+        n = env.notes[rel]
+        ntags = set(as_list(n.fields.get("tags")))
+        if any(t not in ntags for t in tags):
+            continue
+        if any(t in ntags for t in no_tags):
+            continue
+        st = status_of(env, rel)
+        if active and st in QUERY_CLOSED_STATUSES:
+            continue
+        if contract and not extract_contracts(n)[0]:
+            continue
+        if st == "superseded" and not include_superseded:
+            hidden += 1
+            continue
+        hits.append((rel, st, sorted(t for t in ntags if not t.startswith(("type/", "status/")))))
+    if hidden:
+        print(f"（已隱藏 {hidden} 筆作廢結果，--include-superseded 顯示）", file=sys.stderr)
+    if as_json:
+        print(json.dumps({"results": [{"node": rel, "status": st, "tags": ts}
+                                      for rel, st, ts in hits],
+                          "hidden_superseded": hidden}, ensure_ascii=False, indent=2))
+        return 0
+    if not hits:
+        print("無節點符合條件")
+        return 0
+    for rel, st, ts in hits:
+        extra = f"  {','.join(ts)}" if ts else ""
+        print(f"{rel} [{st or 'no-status'}]{extra}")
+    print(f"\n{len(hits)} 節點命中")
+    return 0
+
+
 def cmd_recent(env, days):
     cutoff = time.time() - days * 86400
     rows = sorted(((n.mtime, rel) for rel, n in env.notes.items() if n.mtime >= cutoff),
@@ -14004,6 +14063,20 @@ def main():
     p.add_argument("--legacy", dest="stale_legacy", action="store_true",
                    help="bare 模式保舊字母序(預設=風險加權:對象中心性×陳舊天數,無鏈組後置)")
 
+    p = sub.add_parser("query", help="結構化查詢:WHERE over 標籤家族(旗標 AND 疊加)")
+    p.add_argument("--tag", action="append", default=[],
+                   help="家族/值(可重複=AND,例 --tag risk/金流 --tag priority/P1)")
+    p.add_argument("--no-tag", action="append", default=[], dest="no_tag",
+                   help="排除帶此 tag 的節點(可重複)")
+    p.add_argument("--active", action="store_true",
+                   help="只留未收案節點(status 不在 done/pass/superseded/resolved/wontfix)")
+    p.add_argument("--contract", action="store_true",
+                   help="只留帶 ★INVARIANT★ 合約的節點(extract_contracts 標準格式,散文提及不算)")
+    p.add_argument("--linked", help="範圍縮到此節點的連入+連出 1-hop 鄰居(不含節點自己)")
+    p.add_argument("--include-superseded", action="store_true",
+                   help="含 status=superseded 節點(預設真遺忘排除,對齊 search)")
+    p.add_argument("--json", dest="q_json", action="store_true", help="JSON 輸出")
+
     p = sub.add_parser("recent", help="最近 N 天修改的筆記")
     p.add_argument("--days", type=int, default=7)
 
@@ -14487,6 +14560,10 @@ def main():
         return cmd_decisions(env, superseded=True)
     if args.cmd == "stale":
         return cmd_stale(env, match=args.match, candidate=args.candidate, legacy=args.stale_legacy)
+    if args.cmd == "query":
+        return cmd_query(env, tags=args.tag, no_tags=args.no_tag, active=args.active,
+                         contract=args.contract, linked=args.linked,
+                         include_superseded=args.include_superseded, as_json=args.q_json)
     if args.cmd == "recent":
         return cmd_recent(env, args.days)
     if args.cmd == "stats":

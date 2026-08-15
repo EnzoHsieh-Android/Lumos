@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 DEFAULT_KEEP = """append archive backlinks context contracts decision-add decision-reindex
-decision-supersede decisions delguard doctor export guard links lint map new recent
+decision-supersede decisions delguard doctor export guard links lint map new query recent
 rel-cascade search set show stale stats sync-verified-by""".split()
 # delguard 2026-08-11 入列:消費端 pre-commit 已帶 Gate DG,slim 缺此命令=靜默死門
 # (stderr 被 2>/dev/null 吞+|| true 放行,守衛看似掛著實際永不響)。
