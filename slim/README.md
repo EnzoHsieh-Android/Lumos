@@ -172,6 +172,8 @@ lumos contracts <節點>     # 查硬合約
 
 `lumos search` 找到相關筆記 → `lumos context` 看該筆記加上鄰居的濃縮索引（合約會被突顯在最上面）→ `lumos contracts` 專門列出這個模組的硬合約（改了算 breaking 的那些）。三步做完，再去 grep 程式碼或查資料庫印證。
 
+需要**條件篩選**時用 `lumos query --tag 家族/值 [--tag …=AND] [--no-tag …] [--active] [--contract] [--linked <節點>] [--json]`——標籤欄位的 WHERE（例：`lumos query --tag risk/金流 --active` 一發列出「碰金流且還沒收案」的節點；`--contract`=只留帶硬合約的、`--linked`=縮到某節點的一階鄰居）。找「講到詞」用 search，篩「欄位條件」用 query；不帶任何條件會直接拒絕（避免列全庫）。
+
 ## Frontmatter 四條鐵則
 
 寫圖譜筆記時 frontmatter 有四條血換來的鐵則，違反會讓圖譜長出讀不到的 ghost 節點、甚至整篇 frontmatter 報廢（以下逐字轉錄自 `skills/lumos-project-notes/reference.md`）：
