@@ -2,14 +2,14 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-08-11
+updated: 2026-08-16
 tags:
   - type/system
   - status/done
 summary: |-
   FLOW:讀交付檔(README/SKILL.md/reference.md)逐行掃 → 真值取 `lumos --help` 解析出的指令全集減 KEEP 白名單得 removed 集合 → 五種形態各自 regex 對照 → 命中彙整成候選清單(不改檔,只印) → rc 0/1/2
   KEY:★不是自動改寫器★——裸 token/散文型形態必有假陽性(export/set/show/loop/impact 等本身是常見英文詞),故只出候選交人逐條裁,絕不自動改寫交付檔
-  KEY:removed 集合真值來源=`lumos --help` 解析 choices(非硬編清單),KEEP 白名單(25 支保留指令;2026-08-11 delguard 入列)寫死在腳本內——精簡版指令集若變動需同步改 KEEP(實錄:delguard 首次入列漏了此鏡與 t_slim_gate 鏡,靠本掃描器自己翻紅抓回;keep 鏡像共四面,見 [[公開精簡版_實作計畫]] 入列實錄)
+  KEY:removed 集合真值來源=`lumos --help` 解析 choices(非硬編清單),KEEP 白名單(26 支保留指令;2026-08-11 delguard、2026-08-16 query 入列)寫死在腳本內——精簡版指令集若變動需同步改 KEEP(實錄:delguard 首次入列漏了此鏡與 t_slim_gate 鏡,靠本掃描器自己翻紅抓回;keep 鏡像共四面,見 [[公開精簡版_實作計畫]] 入列實錄)
   KEY:五種懸空引用形態——①prefixed(`lumos <cmd>`帶前綴)②bare-token(反引號裸 token `<cmd>`)③skill-name(DROP_SKILLS 清單含簡稱如 design-loop/code-loop)④span-with-args(反引號內帶參數如 `loop status --gate`,與②共用同一個 regex,靠 span==first 判斷是②還是④)⑤prose(裸散文,無反引號無前綴直接嵌句子)
   KEY:★DEBT★(2026-08-01 代碼審 r6 方法論收穫)★掃描器只認「指令名」,認不得「路徑」★——`Projects/xxx_計劃`、`governance/golden/<id>/`、`docs/design/...` 這類指向完整版才有的檔案路徑,五種形態一條都比不到;`scripts/lumos` 保留的註解裡就有一批(那些註解是刻意原樣保留的 why-context,不該砍)。處置=不擴充掃描器(路徑型比對要維護一份「什麼路徑有交付」的清單,是新的漂移源),改在 `slim/README.md` 明講「註解裡看到查不到的路徑是正常的,不是你漏拿了什麼」並同樣不宣稱窮盡。★通則★:任何「我枚舉了 N 種形態」的守衛都要假設有第 N+1 種——驗證推到反例回歸,不推到「我列全了」的宣稱上
   KEY:★DEBT★ 形態⑤裸散文比對有 `len(cmd) < 4: continue` 短路——短於 4 字元的指令名(如 `gov`)不比對散文形態,因誤報率過高;取捨=刻意放過短指令的裸散文誤引,交形態①②接住剩餘案例,已知缺口是「`gov` 這類短指令若以裸散文提及則掃不到」
