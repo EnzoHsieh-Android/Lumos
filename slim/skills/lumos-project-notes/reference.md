@@ -36,6 +36,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | 反查連入/連出 | `lumos backlinks <筆記名>`／`links` |
 | 進場掃脈絡（節點 + 鄰居 closet 索引；頭部突顯 ⚠ 合約） | `lumos context <筆記名> [--brief]` |
 | **合約登記簿（動模組前查硬合約）** | `lumos contracts [筆記名]` — 列 ★INVARIANT★(改=breaking)/★DEBT★(可改);只認 KEY 行前綴標準格式 |
+| **條件篩選(標籤欄位 WHERE)** | `lumos query --tag 家族/值 [--tag …=AND] [--no-tag …] [--active] [--contract] [--linked <節點>] [--json]` — 「金流且未收案」「連到 X 且 open」一發拿清單;--active=排收案態、--contract=帶硬合約、--linked=1-hop 鄰域;bare 無條件 rc2。找「講到詞」用 search,篩「欄位條件」用 query |
 | **全文搜尋** | `lumos search <詞> [--path Systems] [--regex] [--files-only] [--top N] [--json]` — frontmatter+body,大小寫不敏感 substring;**預設 BM25F 相關性排序**(2026-07-11 轉正,goldset 評測修正尺 nDCG@5 +58.1%;只重排既有候選不擴召回,預設全量+逐檔命中明細,--top N 才截);`--legacy` 走舊字母序全量,`--regex` 自動走舊路;**A1 型別先驗:MOC 索引頁 ×0.4 降權**(仍在結果內只是後移;要找索引頁用 `--path MOC` 直達) |
 | 鄰域樹狀展開／畫圖 | `map <筆記名> --depth 2`／`export --folders Systems Projects` |
 
@@ -552,7 +553,7 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 ### 開工前：掌握現況
 ```bash
 # 掃進行中 / 被阻擋的工作(搜 tag)
-lumos search "status/doing"
+lumos query --tag status/doing
 lumos search "status/blocked"
 
 # 看最近的交接 / 異動

@@ -66,6 +66,7 @@ vault 名 = 資料夾 basename,lumos 自動解析。**全程無需 Obsidian**(�
 |---|---|
 | 進場掃脈絡(頭部突顯 ⚠ 合約 + valid_under 過期標紅) | `lumos context <節點> [--brief]` |
 | 全文搜尋(預設 BM25F 相關性排序) | `lumos search <詞> [--path Systems] [--top N]` |
+| 條件篩選(標籤欄位 WHERE) | `lumos query --tag 家族/值 [--active] [--contract] [--linked 節點]` |
 | 動模組前查硬合約 | `lumos contracts [節點]` |
 | 健康巡檢(orphans/verified_by 同步/合約綁定/鐵則 lint…) | `lumos doctor [--ci]` |
 | 單檔快檢(寫完立刻自驗,比 doctor 快) | `lumos lint <節點>` |
@@ -223,7 +224,7 @@ KEY:★CHECKPOINT★   <改了難救>                                     # 建�
 
 ```bash
 # 開工:掌握現況
-lumos search "status/doing"; lumos recent --days 7; lumos context Systems/<模組>
+lumos query --tag status/doing; lumos recent --days 7; lumos context Systems/<模組>
 
 # 改完 code:更新圖譜
 lumos set Systems/<模組> updated <日期>

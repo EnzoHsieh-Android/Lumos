@@ -44,6 +44,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | 反查連入/連出 | `python3 scripts/lumos backlinks <筆記名>`／`links` |
 | 進場掃脈絡（節點 + 鄰居 closet 索引；頭部突顯 ⚠ 合約） | `python3 scripts/lumos context <筆記名> [--brief]` |
 | **合約登記簿（動模組前查硬合約）** | `python3 scripts/lumos contracts [筆記名]` — 列 ★INVARIANT★(改=breaking)/★DEBT★(可改);只認 KEY 行前綴標準格式 |
+| **條件篩選(標籤欄位 WHERE)** | `python3 scripts/lumos query --tag 家族/值 [--tag …=AND] [--no-tag …] [--active] [--contract] [--linked <節點>] [--json]` — 「金流且未收案」「連到 X 且 open」一發拿清單;--active=排收案態、--contract=帶硬合約、--linked=1-hop 鄰域;bare 無條件 rc2。找「講到詞」用 search,篩「欄位條件」用 query |
 | **全文搜尋** | `python3 scripts/lumos search <詞> [--path Systems] [--regex] [--files-only] [--top N] [--json]` — frontmatter+body,大小寫不敏感 substring;**預設 BM25F 相關性排序**(2026-07-11 轉正,goldset 評測修正尺 nDCG@5 +58.1%;只重排既有候選不擴召回,預設全量+逐檔命中明細,--top N 才截);`--legacy` 走舊字母序全量,`--regex` 自動走舊路;**A1 型別先驗:MOC 索引頁 ×0.4 降權**(仍在結果內只是後移;要找索引頁用 `--path MOC` 直達) |
 | **spec 指涉宣稱機械核對(vault-free)** | `lumos refcheck <md檔> [--repo <root>] [--json]` — 抽 inline-code 檔路徑/行號、核對存在性/行號範圍、輸出證據 manifest(含行內容摘錄);design-loop 審計前先跑,存在性查證不靠 LLM。rc:全 ok=0/有 missing 或超界=1/參數錯=2 |
 | **實務隱患掃描(vault-free，三模式)** | `lumos pitfalls <md>` — 輸出提問清單(spec 潛在隱患);`lumos pitfalls <md> --check` — 缺「## 實務隱患」節 rc 1(逼補節);`lumos pitfalls --diff <merge-base>..HEAD` — 代碼變更風險 manifest + 尾行 `tier: high|standard`(`tier: high` → 調用 `lumos-code-loop` 做對抗代碼審)。**專案配 `.lumos/lint.json`(一棧一組指令、各輸出 SARIF)則 `--diff` 自動吃社群 linter**:偵測 diff 涉及棧→跑 lint→解析合併 SARIF→過濾到 diff 觸及行→併進 manifest(claim 帶 `source:"lint:<driver>"`);無宣告則 regex-only 分毫不變。lumos 只解 SARIF、不內建棧規則。`--no-lint`:`--diff` 只跑快的 regex 層(不跑專案 lint 指令)。**pre-push hook 單點把關(blocking)**(2026-07-06 ADR:撤除每回合 Stop nag——太擾民,push 才是把關時點):push 前跑 `--diff --no-lint`,tier=high 且無有效 pass/skip 留痕 → rc1 **硬擋 push**;提示三路(跑 lumos-code-loop / `lumos code-loop skip --note` / `git push --no-verify`);tier≠high 不誤傷 |
@@ -592,7 +593,7 @@ obsidian vault="{vault}" property:set path="Projects/xxx.md" name="tags" value="
 ### 開工前：掌握現況
 ```bash
 # 掃進行中 / 被阻擋的工作(搜 tag)
-python3 scripts/lumos search "status/doing"
+python3 scripts/lumos query --tag status/doing
 python3 scripts/lumos search "status/blocked"
 
 # 看最近的交接 / 異動

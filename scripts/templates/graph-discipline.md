@@ -10,6 +10,7 @@
 
 - ✋ **STOP 自檢**：正要 grep code、派 Explore、或查 DB 去搞懂「為什麼這樣 / 邊界 / 合約 / 欄位語意」——**停**，先 `lumos`，再下 code/DB 驗證。**不分任務類型**：開發、重構、排查、對外支援、查 DB、對帳全算「進場」（最常被合理化跳過的破口：把任務歸成「只是查資料」就略過圖譜。別這樣）。
 - **入口三步**：`lumos search <關鍵字>` 定位 → `lumos context <節點>` 掃脈絡（頭部攤 ⚠ 合約）→ `lumos contracts <節點>` 查硬合約 → 然後才 grep code / 查 DB 印證。
+- **條件篩選**：`lumos query --tag 家族/值 [--tag …=AND] [--active] [--contract] [--linked <節點>]`——標籤欄位的 WHERE（「金流且未收案」「連到 X 且還開著」一發拿清單）。找「講到詞」用 search；篩「欄位條件」用 query。
 - **自動輔助（不取代主動查）**：`impact` hook 會在 Edit/Write 動手前自動注入「必看合約/事故＋相關 top-8＋棧別效能檢核問」——看到就順手判波及；hook 只推「碰到的」，合約邊界仍要自己查。
 
 ### 其餘原則
