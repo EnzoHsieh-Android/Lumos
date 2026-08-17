@@ -19106,6 +19106,38 @@ def t_eval_universe_and_unjudged():
     check("rate=count/denom 一致", u["denom"] > 0 and abs(u["rate"] - u["count"] / u["denom"]) < 1e-9, str(u))
 
 
+def t_refresh_delta():
+    """T3:refresh_labels delta——已判不重出/未標全出/orphan 列出/file-gone skip/卷頭註記/rc 合約。"""
+    _need_src("governance/eval")
+    import json as _json
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    root, gs = _mk_eval_fixture()
+    gs["labels"]["S01"]["Projects/Old.md"] = {"final": 1}   # orphan:標過但語料無此檔
+    gpath = root / "goldset.json"
+    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
+    out = root / "delta"
+    r = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "refresh_labels.py"),
+                        "delta", "--goldset", str(gpath), "--repo", str(root),
+                        "--json", "--out", str(out)], capture_output=True, text=True)
+    check("delta rc0", r.returncode == 0, r.stderr[-300:])
+    d = _json.loads((Path(str(out) + ".json")).read_text(encoding="utf-8"))
+    s01 = next((c["unjudged"] for c in d["cases"] if c["id"] == "S01"), [])
+    check("未標全出(Gamma 在)", "Projects/Gamma.md" in s01, str(d["cases"]))
+    check("已判不重出(Beta 不在)", "Systems/Beta.md" not in s01, str(s01))
+    e01 = next((c["unjudged"] for c in d["cases"] if c["id"] == "E01"), [])
+    check("已判0 不重出(Alpha 不在)", "Systems/Alpha.md" not in e01, str(e01))
+    check("orphan 列出", any("Projects/Old.md" in o for o in d["orphans"]), str(d["orphans"]))
+    check("file-gone 進 skipped", any(x.startswith("E02") for x in d["skipped"]), str(d["skipped"]))
+    check("count/denom/rate 齊", all(k in d for k in ("count", "denom", "rate")), str(d)[:200])
+    sheet = Path(str(out) + "-sheet.md").read_text(encoding="utf-8")
+    check("卷頭註明 delta 片段", "delta 片段" in sheet and "不連號屬正常" in sheet, sheet[:200])
+    check("sheet 僅未標列(Beta 不在)", "Systems/Beta.md" not in sheet, sheet[:400])
+    r2 = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "refresh_labels.py"),
+                         "delta", "--goldset", str(root / "沒有.json"), "--repo", str(root)],
+                        capture_output=True, text=True)
+    check("goldset 缺=rc2", r2.returncode == 2, str(r2.returncode))
+
+
 # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
 
 def _mk_query_vault():
