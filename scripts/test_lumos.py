@@ -19016,6 +19016,30 @@ def t_suite_strips_git_env_from_hook_invocation():
           r.returncode == 0, (r.stdout + r.stderr)[-1500:])
 
 
+# ══ 標註刷新([[Projects/標註刷新_計劃]] r1 收斂版;[[Projects/標註刷新_實作計畫]]) ══
+
+def t_goldset_force_full_guard():
+    """T1:build_goldset 裸跑防護——無 --force-full 即 rc2 零寫入(拆「裸跑清空 429 筆金標」雷)。
+    fixture=把腳本複製進 tmp 假 repo 樹跑,防真 repo 金標被誤傷(即使防護壞了也只炸 tmp)。"""
+    _need_src("governance/eval")
+    import shutil as _sh
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    root = Path(tempfile.mkdtemp(prefix="gctl-goldguard-"))
+    (root / "governance" / "eval").mkdir(parents=True)
+    (root / "docs" / "kg-knowledge").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    _sh.copy(repo / "governance" / "eval" / "build_goldset.py", root / "governance" / "eval" / "build_goldset.py")
+    _sh.copy(repo / "scripts" / "lumos", root / "scripts" / "lumos")
+    r = subprocess.run([sys.executable, str(root / "governance" / "eval" / "build_goldset.py")],
+                       capture_output=True, text=True)
+    check("裸跑 rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr[-300:]}")
+    check("stderr 指路 --force-full", "--force-full" in r.stderr, r.stderr[-300:])
+    check("零寫入(無 goldset 檔產生)",
+          not (root / "governance" / "eval" / "retrieval-goldset.json").exists(), "")
+    check("零寫入(無 sheet 檔產生)",
+          not (root / "governance" / "eval" / "retrieval-labeling-sheet.md").exists(), "")
+
+
 # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
 
 def _mk_query_vault():

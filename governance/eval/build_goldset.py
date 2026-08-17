@@ -100,6 +100,20 @@ def edit_pool(file, delta):
 
 
 def main():
+    # ★裸跑防護(標註刷新 T1,2026-08-18)★:全量重建會把既有 labels 整本清空
+    # (下方對每題 {"final": None} 重建+覆寫檔案)。人工金標是累積數月的資產,
+    # 手滑跑一次即歸零——重建必須顯式帶 --force-full 表達意圖。
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="出卷器:全量重建 goldset+標註表(★會清空既有人工標註★)")
+    ap.add_argument("--force-full", action="store_true",
+                    help="確認全量重建(既有 labels 全部歸零重出);增量補標請改用 refresh_labels.py delta")
+    args = ap.parse_args()
+    if not args.force_full:
+        ap.print_usage(sys.stderr)
+        print("ERROR: 全量重建會清空既有人工標註,必須顯式 --force-full;"
+              "增量補標走 refresh_labels.py delta。", file=sys.stderr)
+        return 2
     random.seed(SALT)
     gs = {"snapshot_commit": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
                                             capture_output=True, text=True).stdout.strip(),
@@ -142,4 +156,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
