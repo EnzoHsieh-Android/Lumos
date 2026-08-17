@@ -146,6 +146,88 @@ def cmd_repin(args):
     return 0
 
 
+def cmd_merge(args):
+    def _load_rater(path):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+    a = _load_rater(args.a)
+    if a is None:
+        print(f"ERROR: A 席檔讀取失敗: {args.a}", file=sys.stderr)
+        return 2
+    b = _load_rater(args.b) if args.b else None
+    degraded = b is None
+    agreed, disputed = {}, {}
+    for cid, nodes in a.items():
+        for n, av in nodes.items():
+            bv = (b or {}).get(cid, {}).get(n)
+            if degraded or bv is None or int(av) != int(bv):
+                # 一致=同值(1 vs 2=不一致);degraded=B 席缺→全人裁(單席值放 a)
+                disputed.setdefault(cid, {})[n] = {"a": int(av),
+                                                   "b": None if (degraded or bv is None) else int(bv)}
+            else:
+                agreed.setdefault(cid, {})[n] = int(av)
+    result = {"agreed": agreed, "disputed": disputed, "degraded": degraded}
+    if degraded:
+        print("⚠ degraded:single-rater——B 席輸出缺/壞,全部進人裁桶", file=sys.stderr)
+    if args.out:
+        Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    if args.json or not args.out:
+        print(json.dumps(result, ensure_ascii=False))
+    n_a = sum(len(v) for v in agreed.values())
+    n_d = sum(len(v) for v in disputed.values())
+    print(f"merge: 一致 {n_a} / 人裁 {n_d}{'(degraded)' if degraded else ''}", file=sys.stderr)
+    return 0
+
+
+def cmd_apply(args):
+    gs = _read_goldset(args.goldset)
+    if gs is None:
+        return 2
+    try:
+        m = json.loads(Path(args.merge).read_text(encoding="utf-8"))
+        m["agreed"]; m["disputed"]
+    except (OSError, ValueError, KeyError) as e:
+        print(f"ERROR: merge 檔讀取失敗: {e}", file=sys.stderr)
+        return 2
+    adj = {}
+    if args.adjudication:
+        try:
+            adj = json.loads(Path(args.adjudication).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            print(f"ERROR: adjudication 檔讀取失敗: {e}", file=sys.stderr)
+            return 2
+    missing = [f"{cid}:{n}" for cid, nodes in m["disputed"].items()
+               for n in nodes if adj.get(cid, {}).get(n, {}).get("final") is None]
+    if missing:
+        print(f"⛔ apply 擋下:{len(missing)} 筆人裁缺 final(補進 adjudication 檔再跑):", file=sys.stderr)
+        for x in missing:
+            print(f"  {x}", file=sys.stderr)
+        return 1
+    today = datetime.date.today().isoformat()
+    n_new = 0
+    for cid, nodes in m["agreed"].items():
+        for n, val in nodes.items():
+            gs["labels"].setdefault(cid, {})[n] = {
+                "final": int(val), "claude": int(val), "gemini": int(val), "labeled_at": today}
+            n_new += 1
+    for cid, nodes in m["disputed"].items():
+        for n, votes in nodes.items():
+            a = adj[cid][n]
+            entry = {"final": int(a["final"]), "claude": votes.get("a"),
+                     "gemini": votes.get("b"), "labeled_at": today,
+                     "by": a.get("by", "deep-read")}
+            if a.get("why"):
+                entry["why"] = a["why"]
+            gs["labels"].setdefault(cid, {})[n] = entry
+            n_new += 1
+    _atomic_write_json(args.goldset, gs)
+    note = f";note={args.note}" if args.note else ""
+    print(f"✓ apply: 寫入 {n_new} 筆(人放行動作即本指令{note})")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -164,8 +246,21 @@ def main():
     r.add_argument("--target", help="要釘的 sha(預設=repo HEAD short;≠HEAD 走 worktree 釘定)")
     r.add_argument("--split", choices=["train", "held"])
 
+    mg = sub.add_parser("merge", help="雙評審合併(一致=同值;B 缺=degraded)")
+    mg.add_argument("--a", required=True, help="A 席 rater json({cid:{node:0|1|2}})")
+    mg.add_argument("--b", help="B 席 rater json;缺=degraded 全人裁")
+    mg.add_argument("--json", action="store_true")
+    mg.add_argument("--out", help="merge 結果輸出檔")
+
+    apl = sub.add_parser("apply", help="人放行:merge(+adjudication)寫進 goldset labels")
+    apl.add_argument("--merge", required=True)
+    apl.add_argument("--goldset", default=str(HERE / "retrieval-goldset.json"))
+    apl.add_argument("--adjudication", help="人裁檔({cid:{node:{final,by,why}}})")
+    apl.add_argument("--note", help="放行留言(印進輸出)")
+
     args = ap.parse_args()
-    return {"delta": cmd_delta, "repin": cmd_repin}[args.cmd](args)
+    return {"delta": cmd_delta, "repin": cmd_repin,
+            "merge": cmd_merge, "apply": cmd_apply}[args.cmd](args)
 
 
 if __name__ == "__main__":

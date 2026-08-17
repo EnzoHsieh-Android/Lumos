@@ -19203,6 +19203,57 @@ def t_eval_history_record_fields():
           "unjudged_count" in rec2 and rec2["unjudged_count"] is None, str(rec2))
 
 
+def t_refresh_merge_apply():
+    """T6:merge(一致=同值/1v2 人裁/B 缺 degraded)+apply(人放行寫入;缺人裁 rc1 不寫;atomic;既有零變動)。"""
+    _need_src("governance/eval")
+    import json as _json
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    script = repo / "governance" / "eval" / "refresh_labels.py"
+    root, gs = _mk_eval_fixture()
+    gpath = root / "goldset.json"
+    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
+    a = {"S01": {"Projects/Gamma.md": 2, "Systems/Hub.md": 1}}
+    b = {"S01": {"Projects/Gamma.md": 2, "Systems/Hub.md": 2}}
+    (root / "a.json").write_text(_json.dumps(a), encoding="utf-8")
+    (root / "b.json").write_text(_json.dumps(b), encoding="utf-8")
+    r = subprocess.run([sys.executable, str(script), "merge", "--a", str(root / "a.json"),
+                        "--b", str(root / "b.json"), "--out", str(root / "m.json"), "--json"],
+                       capture_output=True, text=True)
+    check("merge rc0", r.returncode == 0, r.stderr[-200:])
+    m = _json.loads((root / "m.json").read_text(encoding="utf-8"))
+    check("同值→agreed(Gamma=2)", m["agreed"].get("S01", {}).get("Projects/Gamma.md") == 2, str(m))
+    check("1v2→disputed(Hub)", "Systems/Hub.md" in m["disputed"].get("S01", {}), str(m))
+    check("非 degraded", m["degraded"] is False, str(m))
+    r2 = subprocess.run([sys.executable, str(script), "merge", "--a", str(root / "a.json"),
+                         "--b", str(root / "沒有.json"), "--out", str(root / "m2.json")],
+                        capture_output=True, text=True)
+    m2 = _json.loads((root / "m2.json").read_text(encoding="utf-8"))
+    check("B 缺→degraded 且全 disputed", m2["degraded"] is True and not m2["agreed"]
+          and "Projects/Gamma.md" in m2["disputed"].get("S01", {}), str(m2))
+    # apply:缺人裁 → rc1 不寫
+    before = gpath.read_bytes()
+    r3 = subprocess.run([sys.executable, str(script), "apply", "--merge", str(root / "m.json"),
+                         "--goldset", str(gpath)], capture_output=True, text=True)
+    check("apply 缺人裁 rc1", r3.returncode == 1, str(r3.returncode) + r3.stderr[-200:])
+    check("rc1 不寫(goldset 位元不變)", gpath.read_bytes() == before, "")
+    adj = {"S01": {"Systems/Hub.md": {"final": 1, "by": "user", "why": "字面碰到而已"}}}
+    (root / "adj.json").write_text(_json.dumps(adj, ensure_ascii=False), encoding="utf-8")
+    r4 = subprocess.run([sys.executable, str(script), "apply", "--merge", str(root / "m.json"),
+                         "--goldset", str(gpath), "--adjudication", str(root / "adj.json"),
+                         "--note", "test 放行"], capture_output=True, text=True)
+    check("apply 齊備 rc0", r4.returncode == 0, r4.stderr[-200:])
+    gs2 = _json.loads(gpath.read_text(encoding="utf-8"))
+    g = gs2["labels"]["S01"]["Projects/Gamma.md"]
+    check("agreed 寫入 final/claude/gemini/labeled_at",
+          g["final"] == 2 and g["claude"] == 2 and g["gemini"] == 2 and "labeled_at" in g, str(g))
+    h = gs2["labels"]["S01"]["Systems/Hub.md"]
+    check("disputed 寫入含 by/why 與兩席原值",
+          h["final"] == 1 and h["by"] == "user" and h["why"] == "字面碰到而已"
+          and h["claude"] == 1 and h["gemini"] == 2, str(h))
+    check("既有已判鍵零變動(Beta 原樣)",
+          gs2["labels"]["S01"]["Systems/Beta.md"] == {"final": 1, "claude": 1, "codex": 1}, str(gs2["labels"]["S01"]))
+
+
 # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
 
 def _mk_query_vault():
