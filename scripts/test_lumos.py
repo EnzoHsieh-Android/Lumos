@@ -19040,6 +19040,72 @@ def t_goldset_force_full_guard():
           not (root / "governance" / "eval" / "retrieval-labeling-sheet.md").exists(), "")
 
 
+def _mk_eval_fixture():
+    """標註刷新測試共用 fixture:tmp git repo+docs/kg-knowledge 小 vault+一支 code 檔。
+    回 (root, goldset_dict)。goldset 手造三態:S01 Beta 已判1/Gamma 未標;
+    E01 Alpha 已判0(不算未標)、其餘命中未標;E02 file-gone。"""
+    root = Path(tempfile.mkdtemp(prefix="gctl-evalfx-")) / "repo"
+    kg = root / "docs" / "kg-knowledge"
+    for sub in ("Systems", "Projects"):
+        (kg / sub).mkdir(parents=True)
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "app.py").write_text("def zeb():\n    return 1\n", encoding="utf-8")
+    (kg / "Systems" / "Alpha.md").write_text(
+        "---\ntype: system\nstatus: done\n---\n# Alpha\n本模組實作在 `src/app.py`。\n", encoding="utf-8")
+    (kg / "Systems" / "Beta.md").write_text(
+        "---\ntype: system\nstatus: done\n---\n# Beta\nzebrafish 核心規則。\n", encoding="utf-8")
+    (kg / "Projects" / "Gamma.md").write_text(
+        "---\ntype: project\nstatus: doing\n---\n# Gamma\nzebrafish 排程計劃,關聯 `src/app.py`。\n", encoding="utf-8")
+    import os
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.t"}
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                ["git", "commit", "-qm", "init"]):
+        subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True)
+    gs = {"snapshot_commit": "deadbee", "split_salt": "x",
+          "search": [{"id": "S01", "query": "zebrafish", "cat": "zh_short", "split": "held"}],
+          "edit": [{"id": "E01", "file": "src/app.py", "delta": "(x)", "commit": "deadbee", "split": "held"},
+                   {"id": "E02", "file": "src/gone.py", "delta": "(x)", "commit": "deadbee", "split": "held"}],
+          "labels": {"S01": {"Systems/Beta.md": {"final": 1, "claude": 1, "codex": 1}},
+                     "E01": {"Systems/Alpha.md": {"final": 0, "claude": 0, "codex": 0}}}}
+    return root, gs
+
+
+def _load_retrieval_eval(root):
+    """以 fixture 為根載入 retrieval_eval 模組(獨立實例,不污染其他測試)。"""
+    import importlib.util
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        f"retrieval_eval_fx_{id(root)}", repo / "governance" / "eval" / "retrieval_eval.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    m.ROOT = root
+    m.VAULT = root / "docs" / "kg-knowledge"
+    return m
+
+
+def t_eval_universe_and_unjudged():
+    """T2:共用原語——search_universe/edit_universe/collect_unjudged(三態判定唯一實作)。"""
+    _need_src("governance/eval")
+    root, gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    uni = m.search_universe("zebrafish")
+    check("search_universe 含 Beta", "Systems/Beta.md" in uni, str(uni))
+    check("search_universe 含 Gamma", "Projects/Gamma.md" in uni, str(uni))
+    e1 = m.edit_universe(gs["edit"][0])
+    check("edit_universe 回結果列表且含 node 欄", isinstance(e1, list) and all("node" in x for x in e1), str(e1)[:200])
+    check("edit_universe 命中 Alpha(inline-code 直連)", any(x["node"] == "Systems/Alpha.md" for x in e1), str(e1)[:300])
+    check("edit_universe file-gone 回 None", m.edit_universe(gs["edit"][1]) is None, "")
+    u = m.collect_unjudged(gs, "held")
+    check("unjudged 回傳五鍵", set(u) >= {"per_case", "skipped", "denom", "count", "rate"}, str(u)[:200])
+    check("S01:未標含 Gamma、不含已判 Beta",
+          "Projects/Gamma.md" in u["per_case"].get("S01", []) and
+          "Systems/Beta.md" not in u["per_case"].get("S01", []), str(u["per_case"]))
+    check("E01:已判0 的 Alpha 不算未標", "Systems/Alpha.md" not in u["per_case"].get("E01", []), str(u["per_case"]))
+    check("E02 file-gone 進 skipped", any(s.startswith("E02") for s in u["skipped"]), str(u["skipped"]))
+    check("rate=count/denom 一致", u["denom"] > 0 and abs(u["rate"] - u["count"] / u["denom"]) < 1e-9, str(u))
+
+
 # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
 
 def _mk_query_vault():

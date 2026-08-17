@@ -94,12 +94,108 @@ def _lum_lines(*args):
 
 
 def _labels_of(gs, cid):
-    """{node: int_final};final 為 None 視為未標=0。"""
+    """{node: int_final};final 為 None 視為未標=0。
+    ★計分專用★——「未標 vs 已判0」在此被刻意收斂(計分尺不變);
+    未標判定禁用本函式,走 collect_unjudged(標註刷新 S0 三態)。"""
     out = {}
     for node, v in gs["labels"].get(cid, {}).items():
         f = v.get("final")
         out[node] = int(f) if f is not None else 0
     return out
+
+
+# ── 標註刷新共用原語(S0 評測母體;delta/repin/unjudged-rate 三處同源單點)──
+
+def _search_arms(q):
+    """search 題兩臂(與 eval_search 同一組呼叫;--no-any 紀律同該處註解)。"""
+    legacy = [l.split(" (")[0] for l in _lum_lines("search", q, "--no-any", "--legacy", "--files-only")
+              if l.split(" (")[0].endswith(".md") and "/" in l]
+    ranked = [x["node"] for x in
+              _lum("search", q, "--no-any", "--ranked", "--top", "10", "--json").get("results", [])]
+    return legacy, ranked
+
+
+def search_universe(q):
+    """search 題評測母體=legacy(不截斷)∪ranked top10,保序去重。"""
+    legacy, ranked = _search_arms(q)
+    seen, uni = set(), []
+    for n in legacy + ranked:
+        if n not in seen:
+            seen.add(n)
+            uni.append(n)
+    return uni
+
+
+def edit_universe(case):
+    """edit 題評測母體=impact --top 50 原始 results(含 pinned 欄,固定席不受名額限制)。
+    file 不存在(相對快照/現況語料)或 impact 輸出不可解 → None(呼叫端記 skip)。"""
+    base = SNAP_ROOT or ROOT
+    if not (Path(base) / case["file"]).exists():
+        return None
+    payload = json.dumps({"query": case.get("delta", ""), "prospective": {}})
+    r = subprocess.run([sys.executable, str(LUMOS),
+                        "impact", "--file", case["file"],
+                        "--repo", os.environ.get("LUMOS_EVAL_REPO") or str(SNAP_ROOT or ROOT),
+                        "--ranked", "--top", os.environ.get("LUMOS_EVAL_IMPACT_TOP", "50"),
+                        "--stdin-payload", "--json"],
+                       capture_output=True, text=True, input=payload, cwd=ROOT)
+    try:
+        return json.loads(r.stdout.strip().splitlines()[-1]).get("results", [])
+    except (ValueError, IndexError):
+        return None
+
+
+def collect_unjudged(gs, split=None):
+    """S0 三態的唯一未標判定:母體內「labels 無此鍵或 final is None」=未標;已判(含0)不算。
+    回 {"per_case", "skipped", "denom", "count", "rate"}。"""
+    per_case, skipped, denom, count = {}, [], 0, 0
+    def _unj(cid, nodes):
+        nonlocal denom, count
+        lab = gs["labels"].get(cid, {})
+        unj = [n for n in nodes
+               if n not in lab or lab[n].get("final") is None]
+        denom += len(nodes)
+        count += len(unj)
+        if unj:
+            per_case[cid] = unj
+    for case in gs["search"]:
+        if split and case["split"] != split:
+            continue
+        _unj(case["id"], search_universe(case["query"]))
+    for case in gs["edit"]:
+        if split and case["split"] != split:
+            continue
+        res = edit_universe(case)
+        if res is None:
+            skipped.append(f"{case['id']}:file-gone")
+            continue
+        _unj(case["id"], [x["node"] for x in res])
+    return {"per_case": per_case, "skipped": skipped, "denom": denom,
+            "count": count, "rate": (count / denom) if denom else 0.0}
+
+
+def pin_snapshot(sha):
+    """語料快照釘定(從 main 抽出;refresh_labels 共用):worktree+atexit 清理。
+    成功→設 VAULT/SNAP_ROOT 回 True;失敗→印警告回 False(呼叫端自行決定退回現況)。"""
+    global VAULT, SNAP_ROOT
+    import tempfile, shutil, atexit
+    _wt = Path(tempfile.mkdtemp(prefix="lumos-eval-snap-"))
+    r = subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach",
+                        str(_wt), sha], capture_output=True, text=True)
+    if r.returncode == 0:
+        _sv = next((_wt / "docs").glob("*-knowledge"), None)
+        if _sv is not None:
+            VAULT = _sv
+            SNAP_ROOT = _wt
+            def _cleanup():
+                subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(_wt)],
+                               capture_output=True, text=True)
+                shutil.rmtree(_wt, ignore_errors=True)
+            atexit.register(_cleanup)
+            return True
+    shutil.rmtree(_wt, ignore_errors=True)   # 失敗路徑不留殘目錄
+    print(f"⚠ snapshot worktree 失敗({r.stderr.strip()[:80]}),退回現況 vault", file=sys.stderr)
+    return False
 
 
 def _macro(rows, key):
@@ -122,11 +218,8 @@ def eval_search(gs, split=None, k=5):
         # 不再等於舊行為。本 gate 是「legacy vs ranked」的受控比較,吃到回退擴召回會讓
         # 兩臂同時混入 OR 召回結果、基線失義。(code-loop r2 全局哨兵抓到;目前 goldset
         # 唯一的多詞題「guard kill」剛好字面存在故回退不觸發——★是還沒踩到,不是沒有★,
-        # 下次換題就會中。)
-        legacy = [l.split(" (")[0] for l in _lum_lines("search", q, "--no-any", "--legacy", "--files-only")
-                  if l.split(" (")[0].endswith(".md") and "/" in l]
-        ranked = [x["node"] for x in
-                  _lum("search", q, "--no-any", "--ranked", "--top", "10", "--json").get("results", [])]
+        # 下次換題就會中。)呼叫收斂進 _search_arms(與評測母體同源,標註刷新 T2)。
+        legacy, ranked = _search_arms(q)
         row = {"id": cid, "split": case["split"], "n_rel": n_rel}
         all_rels = sorted(lab.values(), reverse=True)   # IDCG=完整金標(漏檢有懲罰,兩系統同尺)
         for name, order in (("legacy", legacy), ("ranked", ranked)):
@@ -156,19 +249,11 @@ def eval_edit(gs, split=None, k=8):
         lab = _labels_of(gs, cid)
         if not lab or not any(v >= 1 for v in lab.values()):
             continue
-        payload = json.dumps({"query": case.get("delta", ""), "prospective": {}})
         # impact 自行從 --repo 解析 vault(不吃全域 --vault)→ 快照釘定須走 --repo(r1 終審親驗)
-        r = subprocess.run([sys.executable, str(LUMOS),
-                            "impact", "--file", case["file"],
-                            "--repo", os.environ.get("LUMOS_EVAL_REPO") or str(SNAP_ROOT or ROOT),
-                            "--ranked", "--top", os.environ.get("LUMOS_EVAL_IMPACT_TOP", "50"),
-                            "--stdin-payload", "--json"],
-                           capture_output=True, text=True, input=payload, cwd=ROOT)
-        try:
-            data = json.loads(r.stdout.strip().splitlines()[-1])
-        except (ValueError, IndexError):
+        # 呼叫收斂進 edit_universe(與評測母體同源,標註刷新 T2);None=file-gone/不可解,照舊跳。
+        res = edit_universe(case)
+        if res is None:
             continue
-        res = data.get("results", [])
         pins = [x for x in res if x.get("pinned")]
         free = [x for x in res if not x.get("pinned")]
         row = {"id": cid, "split": case["split"], "n_free": len(free), "n_pin": len(pins)}
@@ -298,24 +383,8 @@ def main():
         # 預設把評測 vault 釘在 goldset.snapshot_commit 的 worktree;--live-vault 才用現況(探索用)。
         _snap = gs.get("snapshot_commit")
         if _snap and not args.live_vault and not os.environ.get("LUMOS_EVAL_VAULT"):
-            import tempfile, shutil, atexit
-            _wt = Path(tempfile.mkdtemp(prefix="lumos-eval-snap-"))
-            r = subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach",
-                                str(_wt), _snap], capture_output=True, text=True)
-            if r.returncode == 0:
-                _sv = next((_wt / "docs").glob("*-knowledge"), None)
-                if _sv is not None:
-                    VAULT = _sv
-                    SNAP_ROOT = _wt
-                    print(f"(語料釘定 snapshot={_snap};--live-vault 可用現況)")
-                def _cleanup():
-                    subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(_wt)],
-                                   capture_output=True, text=True)
-                    shutil.rmtree(_wt, ignore_errors=True)
-                atexit.register(_cleanup)
-            else:
-                shutil.rmtree(_wt, ignore_errors=True)   # r2:失敗路徑不留殘目錄
-                print(f"⚠ snapshot worktree 失敗({r.stderr.strip()[:80]}),退回現況 vault", file=sys.stderr)
+            if pin_snapshot(_snap):
+                print(f"(語料釘定 snapshot={_snap};--live-vault 可用現況)")
         unl = sum(1 for c in gs["labels"].values() for v in c.values() if v.get("final") is None)
         if unl:
             print(f"⚠ 尚有 {unl} 個候選未定稿(final=None,視為 0)", file=sys.stderr)
