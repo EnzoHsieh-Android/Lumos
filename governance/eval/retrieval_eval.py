@@ -145,9 +145,38 @@ def edit_universe(case):
         return None
 
 
-def collect_unjudged(gs, split=None):
-    """S0 三態的唯一未標判定:母體內「labels 無此鍵或 final is None」=未標;已判(含0)不算。
-    回 {"per_case", "skipped", "denom", "count", "rate"}。"""
+# 計分觸及邊界(落地後發現 2026-08-18):全母體口徑實測連原快照都 54% 未標
+# (399/738;金標只批過出卷小池)→ repin 永不可過。未標判定收斂到「未標了會
+# 實際影響分數」的位置:search=兩臂各前 10(nDCG@5/MRR/R@10 觸及帶+餘裕)、
+# edit=free 前 k(P@top_k/nDCG 觸及)+全部固定席(pin_noise=事故指標,不受名額限制)。
+SEARCH_TOUCH = 10
+
+
+def _touched_search(legacy, ranked):
+    """search 題計分觸及集=兩臂各前 SEARCH_TOUCH,保序去重。"""
+    seen, out = set(), []
+    for n in legacy[:SEARCH_TOUCH] + ranked[:SEARCH_TOUCH]:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _touched_edit(res, k=8):
+    """edit 題計分觸及集=free 前 k+全部 pins,保序去重。"""
+    free = [x["node"] for x in res if not x.get("pinned")]
+    pins = [x["node"] for x in res if x.get("pinned")]
+    seen, out = set(), []
+    for n in free[:k] + pins:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def collect_unjudged(gs, split=None, k=8):
+    """S0 三態的唯一未標判定:計分觸及集內「labels 無此鍵或 final is None」=未標;
+    已判(含0)不算。回 {"per_case", "skipped", "denom", "count", "rate"}。"""
     per_case, skipped, denom, count = {}, [], 0, 0
     def _unj(cid, nodes):
         nonlocal denom, count
@@ -161,7 +190,8 @@ def collect_unjudged(gs, split=None):
     for case in gs["search"]:
         if split and case["split"] != split:
             continue
-        _unj(case["id"], search_universe(case["query"]))
+        legacy, ranked = _search_arms(case["query"])
+        _unj(case["id"], _touched_search(legacy, ranked))
     for case in gs["edit"]:
         if split and case["split"] != split:
             continue
@@ -169,7 +199,7 @@ def collect_unjudged(gs, split=None):
         if res is None:
             skipped.append(f"{case['id']}:file-gone")
             continue
-        _unj(case["id"], [x["node"] for x in res])
+        _unj(case["id"], _touched_edit(res, k))
     return {"per_case": per_case, "skipped": skipped, "denom": denom,
             "count": count, "rate": (count / denom) if denom else 0.0}
 

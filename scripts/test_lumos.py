@@ -19281,6 +19281,25 @@ def t_refresh_signal():
     check("history 缺=rc2", r4.returncode == 2, str(r4.returncode))
 
 
+def t_eval_touched_universe_bounds():
+    """T8 落地後發現修正:評測母體=「計分觸及集」——search 兩臂各取前 10、edit=free 前 k+全部 pins。
+    全母體口徑實測連原快照都 54% 未標(金標只批過出卷小池)→ repin 永不可過,母體必須收斂到
+    「未標了會實際影響分數」的位置。純函式直測邊界。"""
+    _need_src("governance/eval")
+    root, _ = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    legacy = [f"L{i}.md" for i in range(15)]
+    ranked = [f"R{i}.md" for i in range(15)] + ["L3.md"]
+    t = m._touched_search(legacy, ranked)
+    check("search 觸及=兩臂各前10 去重", set(t) == set(legacy[:10]) | set(ranked[:10]), str(t))
+    check("legacy 第11名起不入(L12 不在)", "L12.md" not in t, str(t))
+    res = ([{"node": f"F{i}.md", "pinned": False} for i in range(12)]
+           + [{"node": f"P{i}.md", "pinned": True} for i in range(20)])
+    te = m._touched_edit(res, k=8)
+    check("edit 觸及=free 前8+全部 pins", set(te) == {f"F{i}.md" for i in range(8)} | {f"P{i}.md" for i in range(20)}, str(te))
+    check("free 第9名起不入(F9 不在)", "F9.md" not in te, str(te))
+
+
 # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
 
 def _mk_query_vault():
