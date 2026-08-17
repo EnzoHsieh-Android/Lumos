@@ -228,6 +228,33 @@ def cmd_apply(args):
     return 0
 
 
+def cmd_signal(args):
+    """advisory:讀 history 最後一筆考卷輪(mode∈{goldset,goldset-transition})的 unjudged 欄。
+    輸出單行 `unjudged_rate=<x> count=<n> over=<yes|no>`;無欄=NA;恆 rc0(檔缺=rc2)。
+    週閘 bash 只 grep over=yes,邏輯全在此受測(spec T7 薄接線)。"""
+    try:
+        lines = Path(args.history).read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        print(f"ERROR: history 讀取失敗: {e}", file=sys.stderr)
+        return 2
+    last = None
+    for ln in lines:
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        if d.get("mode") in ("goldset", "goldset-transition"):
+            last = d
+    rate = (last or {}).get("unjudged_rate")
+    count = (last or {}).get("unjudged_count")
+    if rate is None:
+        print("unjudged_rate=NA count=NA over=no")
+        return 0
+    over = "yes" if rate >= args.threshold else "no"
+    print(f"unjudged_rate={rate} count={count} over={over}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -258,9 +285,13 @@ def main():
     apl.add_argument("--adjudication", help="人裁檔({cid:{node:{final,by,why}}})")
     apl.add_argument("--note", help="放行留言(印進輸出)")
 
+    sg = sub.add_parser("signal", help="讀 history 尾筆 unjudged_rate(advisory)")
+    sg.add_argument("--history", default=str(HERE / "retrieval-eval-history.jsonl"))
+    sg.add_argument("--threshold", type=float, default=0.10)
+
     args = ap.parse_args()
     return {"delta": cmd_delta, "repin": cmd_repin,
-            "merge": cmd_merge, "apply": cmd_apply}[args.cmd](args)
+            "merge": cmd_merge, "apply": cmd_apply, "signal": cmd_signal}[args.cmd](args)
 
 
 if __name__ == "__main__":

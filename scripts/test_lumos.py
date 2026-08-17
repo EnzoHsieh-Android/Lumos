@@ -19254,6 +19254,33 @@ def t_refresh_merge_apply():
           gs2["labels"]["S01"]["Systems/Beta.md"] == {"final": 1, "claude": 1, "codex": 1}, str(gs2["labels"]["S01"]))
 
 
+def t_refresh_signal():
+    """T7:signal——讀 history 最後一筆考卷輪的 unjudged_rate;無欄=NA;超線 over=yes;恆 rc0。"""
+    _need_src("governance/eval")
+    import json as _json
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    script = repo / "governance" / "eval" / "refresh_labels.py"
+    d = Path(tempfile.mkdtemp(prefix="gctl-signal-"))
+    def _run(lines):
+        h = d / f"h{len(lines)}.jsonl"
+        h.write_text("\n".join(_json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+        return subprocess.run([sys.executable, str(script), "signal", "--history", str(h)],
+                              capture_output=True, text=True)
+    r1 = _run([{"mode": "goldset", "ts": "2026-08-01"}])
+    check("無欄=NA 且 rc0", r1.returncode == 0 and "unjudged_rate=NA" in r1.stdout, r1.stdout)
+    r2 = _run([{"mode": "goldset", "unjudged_rate": 0.04, "unjudged_count": 3},
+               {"mode": "auto-cochange", "unjudged_rate": 0.99}])
+    check("取最後一筆考卷輪(auto 列不算)、未超線 over=no",
+          "unjudged_rate=0.04" in r2.stdout and "over=no" in r2.stdout, r2.stdout)
+    r3 = _run([{"mode": "goldset", "unjudged_rate": 0.04},
+               {"mode": "goldset-transition", "unjudged_rate": 0.12, "unjudged_count": 9}])
+    check("transition 輪也算考卷輪、超線 over=yes",
+          "unjudged_rate=0.12" in r3.stdout and "over=yes" in r3.stdout, r3.stdout)
+    r4 = subprocess.run([sys.executable, str(script), "signal", "--history", str(d / "無.jsonl")],
+                        capture_output=True, text=True)
+    check("history 缺=rc2", r4.returncode == 2, str(r4.returncode))
+
+
 # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
 
 def _mk_query_vault():

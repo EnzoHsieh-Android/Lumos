@@ -52,6 +52,20 @@ print(last)' "$hist" 2>/dev/null || echo 1970-01-01)"
     # 完成判定看「gate 總判定」行,不看 rc——部分版本 gate FAIL 即回非零,那是調參訊號非執行失敗
     if grep -q 'gate 總判定' "$LOGDIR/exam-$tag-$TODAY.log"; then
       log "考卷($tag)完成:$(grep 'gate 總判定' "$LOGDIR/exam-$tag-$TODAY.log" | tail -1)"
+      # ── 標註刷新 S4 薄接線(2026-08-18):unjudged 超通知線→產 delta 表+LINE 等人放行。
+      # 邏輯全在 refresh_labels.py signal(受測);此處只 grep over=yes,不看 rc(advisory)。
+      local sig; sig="$(cd "$repo" && python3 governance/eval/refresh_labels.py signal --history "$hist" 2>/dev/null || echo '')"
+      log "考卷($tag)未標率:${sig:-NA}"
+      if echo "$sig" | grep -q 'over=yes'; then
+        (cd "$repo" && python3 governance/eval/refresh_labels.py delta \
+          --out "$repo/governance/eval/retrieval-delta-$TODAY") >> "$LOGDIR/exam-$tag-$TODAY.log" 2>&1 || true
+        log "考卷($tag)未標率超線,已產 delta 表 retrieval-delta-$TODAY-sheet.md 等人放行補標"
+        MSG="📝 檢索考卷($tag)未標率超線($sig)——delta 表已備:governance/eval/retrieval-delta-$TODAY-sheet.md,補標流程見 Projects/標註刷新_計劃" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+print('LINE', line_notify.send(line_notify.build_message('labeling-refresh', os.environ['MSG'], None), t) if t else 'no-token')" || true
+      fi
     else
       log "⚠ 考卷($tag)執行失敗(fail-open 不阻斷),詳 $LOGDIR/exam-$tag-$TODAY.log"
     fi
