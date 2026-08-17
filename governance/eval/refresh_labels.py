@@ -117,6 +117,35 @@ def cmd_delta(args):
 
 
 
+def cmd_repin(args):
+    gs = _read_goldset(args.goldset)
+    if gs is None:
+        return 2
+    re_mod = _load_re()
+    root = Path(args.repo).resolve()
+    head = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    target = args.target or head
+    if not target:
+        print("ERROR: 取不到 repo HEAD 且未給 --target", file=sys.stderr)
+        return 2
+    # 斷言對象=要釘的那個語料:target≠HEAD 才需 worktree 釘定,否則直接用工作樹
+    snap = target if (head and target != head) else None
+    if not _setup(re_mod, args.repo, snap):
+        return 2
+    u = re_mod.collect_unjudged(gs, args.split)
+    if u["count"] > 0:
+        print(f"⛔ repin 擋下:評測母體尚有 {u['count']} 筆未標(先跑 delta→補標→apply):", file=sys.stderr)
+        for cid, nodes in sorted(u["per_case"].items()):
+            for n in nodes:
+                print(f"  {cid}: {n}", file=sys.stderr)
+        return 1
+    gs["snapshot_commit"] = target
+    _atomic_write_json(args.goldset, gs)
+    print(f"✓ repin: snapshot_commit → {target}(未標 0/{u['denom']};labels 未動)")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -129,9 +158,14 @@ def main():
     d.add_argument("--json", action="store_true")
     d.add_argument("--out", help="輸出前綴(產 <out>-sheet.md 與 <out>.json)")
 
+    r = sub.add_parser("repin", help="unjudged==0 才寫 snapshot_commit(rc0/1/2)")
+    r.add_argument("--goldset", default=str(HERE / "retrieval-goldset.json"))
+    r.add_argument("--repo", default=str(HERE.parents[1]))
+    r.add_argument("--target", help="要釘的 sha(預設=repo HEAD short;≠HEAD 走 worktree 釘定)")
+    r.add_argument("--split", choices=["train", "held"])
 
     args = ap.parse_args()
-    return {"delta": cmd_delta}[args.cmd](args)
+    return {"delta": cmd_delta, "repin": cmd_repin}[args.cmd](args)
 
 
 if __name__ == "__main__":

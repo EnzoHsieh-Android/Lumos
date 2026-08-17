@@ -19138,6 +19138,47 @@ def t_refresh_delta():
     check("goldset 缺=rc2", r2.returncode == 2, str(r2.returncode))
 
 
+def t_refresh_repin():
+    """T4:repin 機械閘——未標>0 rc1 且 goldset 逐位元不變;全判後 rc0 僅 snapshot_commit 變;壞輸入 rc2。"""
+    _need_src("governance/eval")
+    import json as _json
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    script = repo / "governance" / "eval" / "refresh_labels.py"
+    root, gs = _mk_eval_fixture()
+    gpath = root / "goldset.json"
+    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
+    before = gpath.read_bytes()
+    r = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(gpath),
+                        "--repo", str(root)], capture_output=True, text=True)
+    check("未標>0 → rc1 硬擋", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
+    check("rc1 吐 delta 清單(Gamma 在 stderr)", "Projects/Gamma.md" in r.stderr, r.stderr[-400:])
+    check("rc1 時 goldset 逐位元不變", gpath.read_bytes() == before, "")
+    # 補齊全部未標(用 delta --json 取清單,照單全判 0)
+    out = root / "d2"
+    subprocess.run([sys.executable, str(script), "delta", "--goldset", str(gpath),
+                    "--repo", str(root), "--json", "--out", str(out)],
+                   capture_output=True, text=True)
+    d = _json.loads(Path(str(out) + ".json").read_text(encoding="utf-8"))
+    gs2 = _json.loads(gpath.read_text(encoding="utf-8"))
+    for c in d["cases"]:
+        for n in c["unjudged"]:
+            gs2["labels"].setdefault(c["id"], {})[n] = {"final": 0}
+    gpath.write_text(_json.dumps(gs2, ensure_ascii=False), encoding="utf-8")
+    head = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    r2 = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(gpath),
+                         "--repo", str(root), "--target", head],
+                        capture_output=True, text=True)
+    check("全判後 rc0", r2.returncode == 0, r2.stderr[-300:] + r2.stdout[-200:])
+    gs3 = _json.loads(gpath.read_text(encoding="utf-8"))
+    check("snapshot_commit 更新為 target", gs3["snapshot_commit"] == head, gs3["snapshot_commit"])
+    gs2["snapshot_commit"] = head
+    check("其餘鍵零變動(labels 原樣)", gs3 == gs2, "")
+    r3 = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(root / "無.json"),
+                         "--repo", str(root)], capture_output=True, text=True)
+    check("壞輸入 rc2", r3.returncode == 2, str(r3.returncode))
+
+
 # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
 
 def _mk_query_vault():
