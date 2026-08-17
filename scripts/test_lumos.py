@@ -1708,6 +1708,9 @@ def t_precommit_whitelist_drift_guard():
     (post-commit 是 bypass 記帳端,漏對齊=例行 update 被記假 bypass 灌水;2026-07-25 實測踩過)。
     [終審 fix I3]同源第三份清單:delguard 的 _DELGUARD_EXCLUDE_DIRS/lockfile 排除規則
     也要對齊 pre-commit should_exclude,免得兩處各自漂。"""
+    # 尾段直讀來源 repo 圖譜節點(pitfalls-code-loop.md)——消費端沒有,整支轉 skip
+    # ([[Issues/vendored自測3紅_來源repo專用測試漏標skip]] 2026-08-17 Landmark 實錘)
+    _need_src("docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md")
     m = _load_lumos()
     hooks_dir = Path(GRAPHCTL).resolve().parent / "hooks"
     for hook in ("pre-commit", "post-commit"):
@@ -19128,6 +19131,41 @@ def t_query_json():
     check("--json 帶 status 欄", st == "open", r.stdout)
 
 
+def t_vendored_consumer_srconly_skip_regression():
+    """★消費端假紅回歸釘([[Issues/vendored自測3紅_來源repo專用測試漏標skip]] 2026-08-17)★:
+    Landmark 跑 lumos update 後 vendored 自測 3 紅,全是引用來源 repo 資產的測試
+    漏掛(或掛太粗)「來源 repo 專用」skip 守衛:
+    - t_precommit_whitelist_drift_guard 直讀 docs/lumos-toolchain-knowledge/Systems/
+      pitfalls-code-loop.md,無守衛 → 消費端 FileNotFoundError;
+    - t_s2_snr_synthetic 守衛掛在 `governance/eval`(目錄),但 Landmark **自己有**
+      governance/eval(檢索考卷),只是沒有 canary_snr.py → 守衛放行後炸兩條
+      (「snr 腳本 rc0」+ json 解析 EXCEPTION)。判準粒度必須到「真正要用的檔」。
+
+    ★驗行為不是驗寫法★:真的搭一個消費端模擬環境(scripts/ 有、docs/ 無、
+    governance/eval 目錄在但腳本不在——復刻 Landmark 的陷阱形狀),spawn 子進程
+    跑這兩支,斷言 rc0 + 記成 skip + 零 ✗。把守衛拿掉/改回目錄粒度,這條會紅。"""
+    import shutil as _sh
+    root = Path(tempfile.mkdtemp(prefix="gctl-consumer-sim-"))
+    (root / "scripts").mkdir()
+    src_scripts = Path(GRAPHCTL).resolve().parent
+    for f in ("lumos", "test_lumos.py"):
+        _sh.copy(src_scripts / f, root / "scripts" / f)
+    if (src_scripts / "hooks").is_dir():
+        _sh.copytree(src_scripts / "hooks", root / "scripts" / "hooks")
+    # 陷阱形狀:governance/eval 目錄存在(消費端有自己的考卷)但 canary_snr.py 不存在
+    (root / "governance" / "eval").mkdir(parents=True)
+    # docs/ 整個不存在(消費端 vault 是自己專案的,不叫 lumos-toolchain-knowledge)
+    for kw, tname in (("precommit_whitelist_drift_guard", "t_precommit_whitelist_drift_guard"),
+                      ("s2_snr_synthetic", "t_s2_snr_synthetic")):
+        r = subprocess.run([sys.executable, str(root / "scripts" / "test_lumos.py"), "-k", kw],
+                           capture_output=True, text=True)
+        check(f"★消費端模擬:{tname} rc0(不紅)★", r.returncode == 0,
+              (r.stdout + r.stderr)[-800:])
+        check(f"消費端模擬:{tname} 記成 skip(不是靜默綠)", f"skip {tname}" in r.stdout,
+              r.stdout[-800:])
+        check(f"消費端模擬:{tname} 零 ✗", "✗" not in r.stdout, r.stdout[-800:])
+
+
 def main():
     # ★把 git 的環境變數從進程 env 清掉(2026-08-01,pre-push 假紅實錘)★
     #
@@ -19301,7 +19339,10 @@ def t_s2_snr_synthetic():
     import json as _j, subprocess as _sp
     repo = Path(GRAPHCTL).resolve().parent.parent
     snr = repo / "governance" / "eval" / "canary_snr.py"
-    _need_src("governance/eval")
+    # ★判準粒度必須到「真正要用的檔」★:消費端(Landmark)自己有 governance/eval
+    # (檢索考卷),目錄粒度守衛會放行、然後 canary_snr.py 不存在炸兩條
+    # ([[Issues/vendored自測3紅_來源repo專用測試漏標skip]] 2026-08-17 實錘)
+    _need_src("governance/eval/canary_snr.py")
     rows = []
     # P-low:跨席分不開(全席各半 caught)且席內重跑亂跳 → 低 SNR → swap-candidate
     for seat in ("s1", "s2", "s3"):
