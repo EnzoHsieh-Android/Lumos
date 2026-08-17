@@ -40,15 +40,42 @@ def _read_goldset(path):
 
 
 def _atomic_write_json(path, obj):
-    """tmp+os.replace;goldset 寫入紀律(spec S2)。"""
+    """tmp(pid 後綴)+os.replace;goldset 寫入紀律(spec S2)。
+    ★單次寫入原子性;跨進程互斥另靠 _goldset_lock(code-r1 資源席:固定 tmp 名+無鎖
+    曾實測出「一方標註靜默消失+另一方假成功」)★"""
     p = Path(path)
-    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp = p.with_suffix(p.suffix + f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, p)
 
 
+class _goldset_lock:
+    """goldset 寫入互斥鎖(flock 非阻塞):apply/repin 讀改寫全程持有。
+    搶不到=另一寫入進行中 → 快速失敗,呼叫端 rc 非零、goldset 不動。"""
+    def __init__(self, goldset_path):
+        self.path = str(goldset_path) + ".lock"
+        self.fh = None
+    def __enter__(self):
+        import fcntl
+        self.fh = open(self.path, "w")
+        try:
+            fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self.fh.close()
+            self.fh = None
+            raise BlockingIOError("goldset 寫入鎖被占用")
+        return self
+    def __exit__(self, *a):
+        import fcntl
+        if self.fh:
+            fcntl.flock(self.fh, fcntl.LOCK_UN)
+            self.fh.close()
+        return False
+
+
 def _setup(re_mod, repo, snapshot=None):
-    """把 retrieval_eval 指向目標 repo/語料;--snapshot 走 worktree 釘定。"""
+    """把 retrieval_eval 指向目標 repo/語料;--snapshot 走 worktree 釘定。
+    釘定失敗=硬性失敗(呼叫端 rc2),不退回現況——與 retrieval_eval main() 的 fallback 語意不同。"""
     root = Path(repo).resolve()
     re_mod.ROOT = root
     vault = next((root / "docs").glob("*-knowledge"), None)
@@ -56,8 +83,16 @@ def _setup(re_mod, repo, snapshot=None):
         print(f"ERROR: {root} 下找不到 docs/*-knowledge", file=sys.stderr)
         return False
     re_mod.VAULT = vault
+    # ★LUMOS 在 import 當下用「refresh_labels 所在 repo」算死——跨庫 --repo 必須跟著換,
+    # 否則用錯版本的 lumos 算池且零錯誤訊息(code-r1 整合席 F1,逐字重現)★
+    target_lumos = root / "scripts" / "lumos"
+    if target_lumos.exists():
+        re_mod.LUMOS = target_lumos
+    elif root != Path(__file__).resolve().parents[2]:
+        print(f"⚠ {root} 無 scripts/lumos,沿用本體版本(跨庫版本可能不同步)", file=sys.stderr)
     if snapshot:
         if not re_mod.pin_snapshot(snapshot):
+            print("ERROR: 快照釘定失敗——本工具不退回現況(硬性失敗)", file=sys.stderr)
             return False
     return True
 
@@ -103,6 +138,7 @@ def cmd_delta(args):
         for n in c["unjudged"]:
             sheet.append(f"- [ ] {n} ｜標:____")
         sheet.append("")
+    # delta 表為觀測性產物(可重跑重算,非權威金標)——裸寫可接受,毋須 atomic(code-r1 f12 裁定)
     Path(out + "-sheet.md").write_text("\n".join(sheet), encoding="utf-8")
     Path(out + ".json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     if args.json:
@@ -125,12 +161,20 @@ def cmd_repin(args):
     root = Path(args.repo).resolve()
     head = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
+    # ★head 解析失敗=硬擋★(code-r1 bug 席 F3:非 git repo 時原判斷短路,
+    # 捏造 target 可被原樣寫入 snapshot_commit 而零驗證)
+    if not head:
+        print(f"ERROR: {root} 不是 git repo 或 HEAD 解析失敗——repin 需要可驗證的語料版本", file=sys.stderr)
+        return 2
     target = args.target or head
-    if not target:
-        print("ERROR: 取不到 repo HEAD 且未給 --target", file=sys.stderr)
+    # target 必須是真 commit(存在性驗證,不靠後續 worktree 碰運氣)
+    v = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet",
+                        f"{target}^{{commit}}"], capture_output=True, text=True)
+    if v.returncode != 0:
+        print(f"ERROR: --target {target} 不是本 repo 可解析的 commit", file=sys.stderr)
         return 2
     # 斷言對象=要釘的那個語料:target≠HEAD 才需 worktree 釘定,否則直接用工作樹
-    snap = target if (head and target != head) else None
+    snap = target if target != head else None
     if not _setup(re_mod, args.repo, snap):
         return 2
     u = re_mod.collect_unjudged(gs, args.split)
@@ -140,8 +184,17 @@ def cmd_repin(args):
             for n in nodes:
                 print(f"  {cid}: {n}", file=sys.stderr)
         return 1
-    gs["snapshot_commit"] = target
-    _atomic_write_json(args.goldset, gs)
+    try:
+        with _goldset_lock(args.goldset):
+            # 鎖內重讀再寫:母體計算期間若有併發 apply 寫入新標註,不得被本次整檔覆蓋回舊版
+            gs2 = _read_goldset(args.goldset)
+            if gs2 is None:
+                return 2
+            gs2["snapshot_commit"] = target
+            _atomic_write_json(args.goldset, gs2)
+    except BlockingIOError:
+        print("⛔ goldset 寫入鎖被占用(另一個 apply/repin 進行中),稍後再試;本次未寫入。", file=sys.stderr)
+        return 1
     print(f"✓ repin: snapshot_commit → {target}(未標 0/{u['denom']};labels 未動)")
     return 0
 
@@ -173,8 +226,15 @@ def cmd_merge(args):
         print("⚠ degraded:single-rater——B 席輸出缺/壞,全部進人裁桶", file=sys.stderr)
     if args.out:
         Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    if args.json or not args.out:
+    if args.json:
         print(json.dumps(result, ensure_ascii=False))
+    else:
+        # 人讀 diff 預覽(spec S2 放行介面:逐筆 node/建議 final/兩席原值——防盲簽,code-r1 spec 席縮水修回)
+        for cid in sorted(set(agreed) | set(disputed)):
+            for n, val in sorted(agreed.get(cid, {}).items()):
+                print(f"  一致  {cid} {n} → 建議 final={val}(A={val} B={val})")
+            for n, v in sorted(disputed.get(cid, {}).items()):
+                print(f"  人裁  {cid} {n} A={v['a']} B={v['b']} → 待 adjudication")
     n_a = sum(len(v) for v in agreed.values())
     n_d = sum(len(v) for v in disputed.values())
     print(f"merge: 一致 {n_a} / 人裁 {n_d}{'(degraded)' if degraded else ''}", file=sys.stderr)
@@ -182,6 +242,20 @@ def cmd_merge(args):
 
 
 def cmd_apply(args):
+    # ★鎖覆蓋整段讀改寫★(code-r1 資源席 F1:兩個 apply 併發=一方標註靜默消失+假成功)
+    try:
+        lock = _goldset_lock(args.goldset)
+        lock.__enter__()
+    except BlockingIOError:
+        print("⛔ goldset 寫入鎖被占用(另一個 apply/repin 進行中),稍後再試;本次未寫入。", file=sys.stderr)
+        return 1
+    try:
+        return _apply_locked(args)
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def _apply_locked(args):
     gs = _read_goldset(args.goldset)
     if gs is None:
         return 2

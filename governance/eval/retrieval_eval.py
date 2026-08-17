@@ -8,8 +8,12 @@
 import json, math, subprocess, sys, os, argparse, hashlib, datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-LUMOS = ROOT / "scripts" / "lumos"
+_SELF_ROOT = Path(__file__).resolve().parents[2]
+# LUMOS_EVAL_ROOT:測試/跨庫導向目標 repo(worktree 釘定的 git 根);預設=本體 repo
+ROOT = Path(os.environ.get("LUMOS_EVAL_ROOT") or _SELF_ROOT)
+# 目標 repo 有 vendored scripts/lumos 就用它,否則回退本體版本(與 refresh_labels._setup 同語意)
+LUMOS = (ROOT / "scripts" / "lumos") if (ROOT / "scripts" / "lumos").exists() \
+    else _SELF_ROOT / "scripts" / "lumos"
 _VENV = os.environ.get("LUMOS_EVAL_VAULT")
 VAULT = Path(_VENV) if _VENV else next((ROOT / "docs").glob("*-knowledge"), None)
 SNAP_ROOT = None   # 語料快照 worktree 根(釘定時設);impact 走 --repo,不理 --vault
@@ -115,20 +119,10 @@ def _search_arms(q):
     return legacy, ranked
 
 
-def search_universe(q):
-    """search 題評測母體=legacy(不截斷)∪ranked top10,保序去重。"""
-    legacy, ranked = _search_arms(q)
-    seen, uni = set(), []
-    for n in legacy + ranked:
-        if n not in seen:
-            seen.add(n)
-            uni.append(n)
-    return uni
-
-
 def edit_universe(case):
-    """edit 題評測母體=impact --top 50 原始 results(含 pinned 欄,固定席不受名額限制)。
-    file 不存在(相對快照/現況語料)或 impact 輸出不可解 → None(呼叫端記 skip)。"""
+    """edit 題候選撈取=impact --top 50 原始 results(含 pinned 欄,固定席不受名額限制)。
+    file 不存在(相對快照/現況語料)→ None=skip:file-gone(★S0 刻意行為變更,非重構等價:
+    舊碼靠 impact 反查不需檔案在磁碟,本版明確短路——code-r1 整合席記錄★);輸出不可解 → None。"""
     base = SNAP_ROOT or ROOT
     if not (Path(base) / case["file"]).exists():
         return None
@@ -213,18 +207,23 @@ def pin_snapshot(sha):
     r = subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach",
                         str(_wt), sha], capture_output=True, text=True)
     if r.returncode == 0:
+        # ★worktree add 一成功就註冊清理★(code-r1 bug 席:原重構把註冊搬進 _sv 判斷內,
+        # 「add 成功但該 commit 無 vault」路徑只 rmtree 不 worktree remove → git 登記殘影)
+        def _cleanup():
+            subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(_wt)],
+                           capture_output=True, text=True)
+            shutil.rmtree(_wt, ignore_errors=True)
+        atexit.register(_cleanup)
         _sv = next((_wt / "docs").glob("*-knowledge"), None)
         if _sv is not None:
             VAULT = _sv
             SNAP_ROOT = _wt
-            def _cleanup():
-                subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(_wt)],
-                               capture_output=True, text=True)
-                shutil.rmtree(_wt, ignore_errors=True)
-            atexit.register(_cleanup)
             return True
+        _cleanup()   # 無 vault:當場清(worktree remove+rmtree),atexit 重跑冪等
+        print(f"⚠ snapshot {sha} 內無 docs/*-knowledge,釘定失敗", file=sys.stderr)
+        return False
     shutil.rmtree(_wt, ignore_errors=True)   # 失敗路徑不留殘目錄
-    print(f"⚠ snapshot worktree 失敗({r.stderr.strip()[:80]}),退回現況 vault", file=sys.stderr)
+    print(f"⚠ snapshot worktree 失敗({r.stderr.strip()[:80]})", file=sys.stderr)
     return False
 
 
@@ -433,12 +432,15 @@ def main():
         # 之後新增的未標節點若進候選池一律計噪音,gate 會被「寫文件」這種無關演進打翻。
         # 預設把評測 vault 釘在 goldset.snapshot_commit 的 worktree;--live-vault 才用現況(探索用)。
         _snap = args.snapshot or gs.get("snapshot_commit")
-        _pinned = _snap
+        # ★goldset_snapshot 帳面語意=「這輪實際用的語料」★:只有真的釘定成功才記 sha;
+        # --live-vault/LUMOS_EVAL_VAULT 繞過釘定=用現況語料,帳面必須記 None(code-r1 bug 席 F2)。
+        _pinned = None
         if _snap and not args.live_vault and not os.environ.get("LUMOS_EVAL_VAULT"):
             if pin_snapshot(_snap):
+                _pinned = _snap
                 print(f"(語料釘定 snapshot={_snap};--live-vault 可用現況)")
             else:
-                _pinned = None   # 釘定失敗退回現況——帳面如實記 None,不謊稱已釘
+                print("(釘定失敗,退回現況 vault)", file=sys.stderr)
         unl = sum(1 for c in gs["labels"].values() for v in c.values() if v.get("final") is None)
         if unl:
             print(f"⚠ 尚有 {unl} 個候選未定稿(final=None,視為 0)", file=sys.stderr)
@@ -469,7 +471,9 @@ def main():
         unj = collect_unjudged(gs, "held")
         print(f"unjudged(held 評測母體): {unj['count']}/{unj['denom']}(rate={round(unj['rate'], 4)})"
               + (f" skipped={unj['skipped']}" if unj["skipped"] else ""))
-        hist = Path(__file__).parent / "retrieval-eval-history.jsonl"
+        # LUMOS_EVAL_HISTORY:測試導向 fixture 帳,避免 e2e 測試污染真 history(code-r1 修)
+        hist = Path(os.environ.get("LUMOS_EVAL_HISTORY")
+                    or Path(__file__).parent / "retrieval-eval-history.jsonl")
         with open(hist, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(_history_record(args, gates, ok, reports, unj, _pinned),
                                 ensure_ascii=False) + "\n")

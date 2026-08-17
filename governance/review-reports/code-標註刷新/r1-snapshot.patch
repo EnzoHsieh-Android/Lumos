@@ -1,0 +1,1163 @@
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index eb0c468..42d7ee9 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -45,20 +45,34 @@ try:
+ except OSError: pass
+ print(last)' "$hist" 2>/dev/null || echo 1970-01-01)"
+   local last_s; last_s="$(date -j -f %F "$last" +%s 2>/dev/null || echo 0)"
+   local age=$(( ( $(date +%s) - last_s ) / 86400 ))
+   if [ "$age" -ge 7 ]; then
+     log "考卷($tag):距上次 ${age} 天(>7),補跑 held split"
+     (cd "$repo" && python3 governance/eval/retrieval_eval.py --goldset "$gold" --split held) > "$LOGDIR/exam-$tag-$TODAY.log" 2>&1 || true
+     # 完成判定看「gate 總判定」行,不看 rc——部分版本 gate FAIL 即回非零,那是調參訊號非執行失敗
+     if grep -q 'gate 總判定' "$LOGDIR/exam-$tag-$TODAY.log"; then
+       log "考卷($tag)完成:$(grep 'gate 總判定' "$LOGDIR/exam-$tag-$TODAY.log" | tail -1)"
++      # ── 標註刷新 S4 薄接線(2026-08-18):unjudged 超通知線→產 delta 表+LINE 等人放行。
++      # 邏輯全在 refresh_labels.py signal(受測);此處只 grep over=yes,不看 rc(advisory)。
++      local sig; sig="$(cd "$repo" && python3 governance/eval/refresh_labels.py signal --history "$hist" 2>/dev/null || echo '')"
++      log "考卷($tag)未標率:${sig:-NA}"
++      if echo "$sig" | grep -q 'over=yes'; then
++        (cd "$repo" && python3 governance/eval/refresh_labels.py delta \
++          --out "$repo/governance/eval/retrieval-delta-$TODAY") >> "$LOGDIR/exam-$tag-$TODAY.log" 2>&1 || true
++        log "考卷($tag)未標率超線,已產 delta 表 retrieval-delta-$TODAY-sheet.md 等人放行補標"
++        MSG="📝 檢索考卷($tag)未標率超線($sig)——delta 表已備:governance/eval/retrieval-delta-$TODAY-sheet.md,補標流程見 Projects/標註刷新_計劃" python3 -c "
++import sys, os; sys.path.insert(0,'$REPO/governance')
++from autonomous_loop import line_notify
++t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
++print('LINE', line_notify.send(line_notify.build_message('labeling-refresh', os.environ['MSG'], None), t) if t else 'no-token')" || true
++      fi
+     else
+       log "⚠ 考卷($tag)執行失敗(fail-open 不阻斷),詳 $LOGDIR/exam-$tag-$TODAY.log"
+     fi
+   else
+     log "考卷($tag):${age} 天前跑過,略"
+   fi
+ }
+ run_exam "$REPO" toolchain
+ [ -d "$HOME/backend/LandmarkMember/governance/eval" ] && run_exam "$HOME/backend/LandmarkMember" landmark
+ 
+diff --git a/governance/eval/build_goldset.py b/governance/eval/build_goldset.py
+index a47f61e..3a6526f 100644
+--- a/governance/eval/build_goldset.py
++++ b/governance/eval/build_goldset.py
+@@ -93,20 +93,34 @@ def edit_pool(file, delta):
+     legacy = lum_json("impact", "--file", file, "--json")
+     legacy_nodes = [x["node"] for x in legacy.get("direct", [])[:5]] + \
+                    [x["node"] for x in legacy.get("indirect", [])[:5]]
+     pool = list(dict.fromkeys([x["node"] for x in ranked] + legacy_nodes))[:12]
+     rnd = random.Random(hashlib.sha256((file + SALT).encode()).hexdigest())
+     rnd.shuffle(pool)
+     return pool
+ 
+ 
+ def main():
++    # ★裸跑防護(標註刷新 T1,2026-08-18)★:全量重建會把既有 labels 整本清空
++    # (下方對每題 {"final": None} 重建+覆寫檔案)。人工金標是累積數月的資產,
++    # 手滑跑一次即歸零——重建必須顯式帶 --force-full 表達意圖。
++    import argparse
++    ap = argparse.ArgumentParser(
++        description="出卷器:全量重建 goldset+標註表(★會清空既有人工標註★)")
++    ap.add_argument("--force-full", action="store_true",
++                    help="確認全量重建(既有 labels 全部歸零重出);增量補標請改用 refresh_labels.py delta")
++    args = ap.parse_args()
++    if not args.force_full:
++        ap.print_usage(sys.stderr)
++        print("ERROR: 全量重建會清空既有人工標註,必須顯式 --force-full;"
++              "增量補標走 refresh_labels.py delta。", file=sys.stderr)
++        return 2
+     random.seed(SALT)
+     gs = {"snapshot_commit": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                                             capture_output=True, text=True).stdout.strip(),
+           "split_salt": SALT, "search": [], "edit": [], "labels": {}}
+     sheet = ["# 檢索評測標註表(人工金標)",
+              "",
+              "**怎麼標**:每個候選節點後面填 `2`(必看——回答這查詢/改這檔一定要看它)或 `1`(有用)。",
+              "**留白 = 0(噪音)**,所以只要標有價值的,省力。標完存檔告訴 Claude 解析回 goldset。",
+              ""]
+     i = 0
+@@ -135,11 +149,11 @@ def main():
+         sheet.append("")
+     out = Path(__file__).parent
+     (out / "retrieval-goldset.json").write_text(json.dumps(gs, ensure_ascii=False, indent=1), encoding="utf-8")
+     (out / "retrieval-labeling-sheet.md").write_text("\n".join(sheet), encoding="utf-8")
+     n_lab = sum(len(v) for v in gs["labels"].values())
+     print(f"✓ {len(gs['search'])} search + {len(gs['edit'])} edit 案例;候選標註列 {n_lab} 行")
+     print(f"  標註表: governance/eval/retrieval-labeling-sheet.md")
+ 
+ 
+ if __name__ == "__main__":
+-    main()
++    sys.exit(main())
+diff --git a/governance/eval/refresh_labels.py b/governance/eval/refresh_labels.py
+new file mode 100644
+index 0000000..4534f4f
+--- /dev/null
++++ b/governance/eval/refresh_labels.py
+@@ -0,0 +1,298 @@
++#!/usr/bin/env python3
++"""標註刷新工具(治理面;spec:Projects/標註刷新_計劃 r1 收斂版)。零依賴 stdlib。
++
++子命令:
++  delta   對目標語料算評測母體、diff labels → 未標清單+delta 標註表(觀測,恆 rc0;輸入壞 rc2)
++  repin   評測母體 unjudged==0 才寫 snapshot_commit(rc0=已重釘/rc1=有未標硬擋/rc2=輸入壞)
++  merge   雙評審輸出合併:一致(同值)→agreed;不一致→disputed;B 席缺→degraded 全 disputed
++  apply   人放行動作:把 merge(+人裁 adjudication)寫進 goldset labels(atomic;唯一寫 labels 入口)
++  signal  讀 history 最後一筆考卷的 unjudged_rate,advisory 輸出(週閘薄接線消費)
++
++母體/未標判定=retrieval_eval.collect_unjudged 單一實作(S0 同源紀律,禁另寫)。
++"""
++import argparse
++import datetime
++import importlib.util
++import json
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++HERE = Path(__file__).resolve().parent
++
++
++def _load_re():
++    spec = importlib.util.spec_from_file_location("retrieval_eval", HERE / "retrieval_eval.py")
++    m = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(m)
++    return m
++
++
++def _read_goldset(path):
++    try:
++        gs = json.loads(Path(path).read_text(encoding="utf-8"))
++        gs["labels"]; gs["search"]; gs["edit"]
++        return gs
++    except (OSError, ValueError, KeyError, TypeError) as e:
++        print(f"ERROR: goldset 讀取/結構失敗: {e}", file=sys.stderr)
++        return None
++
++
++def _atomic_write_json(path, obj):
++    """tmp+os.replace;goldset 寫入紀律(spec S2)。"""
++    p = Path(path)
++    tmp = p.with_suffix(p.suffix + ".tmp")
++    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=1), encoding="utf-8")
++    os.replace(tmp, p)
++
++
++def _setup(re_mod, repo, snapshot=None):
++    """把 retrieval_eval 指向目標 repo/語料;--snapshot 走 worktree 釘定。"""
++    root = Path(repo).resolve()
++    re_mod.ROOT = root
++    vault = next((root / "docs").glob("*-knowledge"), None)
++    if vault is None:
++        print(f"ERROR: {root} 下找不到 docs/*-knowledge", file=sys.stderr)
++        return False
++    re_mod.VAULT = vault
++    if snapshot:
++        if not re_mod.pin_snapshot(snapshot):
++            return False
++    return True
++
++
++def _orphans(re_mod, gs):
++    """labels 有鍵、目標語料查無節點檔(rename/刪除產物)→ 人工遷移清單。"""
++    out = []
++    base = re_mod.SNAP_ROOT or re_mod.ROOT
++    vault = next((Path(base) / "docs").glob("*-knowledge"), re_mod.VAULT)
++    for cid, nodes in gs["labels"].items():
++        for n in nodes:
++            if not (vault / n).exists():
++                out.append(f"{cid}:{n}")
++    return out
++
++
++def cmd_delta(args):
++    gs = _read_goldset(args.goldset)
++    if gs is None:
++        return 2
++    re_mod = _load_re()
++    if not _setup(re_mod, args.repo, args.snapshot):
++        return 2
++    u = re_mod.collect_unjudged(gs, args.split)
++    orphans = _orphans(re_mod, gs)
++    target = args.snapshot or "worktree"
++    cases = [{"id": cid, "unjudged": nodes} for cid, nodes in sorted(u["per_case"].items())]
++    result = {"target": target, "cases": cases, "skipped": u["skipped"], "orphans": orphans,
++              "count": u["count"], "denom": u["denom"], "rate": round(u["rate"], 4)}
++    out = args.out or str(HERE / "retrieval-delta")
++    sheet = ["# 檢索評測 delta 標註表(增量補標)",
++             "",
++             "> ★本卷為 delta 片段,案例不連號屬正常★——只列未標候選,已判金標不重出。",
++             "**怎麼標**:每個候選節點後面填 `2`(必看)或 `1`(有用);留白 = 0(噪音)。",
++             ""]
++    qmap = {c["id"]: c for c in gs["search"]}
++    fmap = {c["id"]: c for c in gs["edit"]}
++    for c in cases:
++        cid = c["id"]
++        head = (f"搜尋:「{qmap[cid]['query']}」" if cid in qmap
++                else f"編輯:`{fmap[cid]['file']}`")
++        sheet.append(f"## {cid}｜{head}")
++        for n in c["unjudged"]:
++            sheet.append(f"- [ ] {n} ｜標:____")
++        sheet.append("")
++    Path(out + "-sheet.md").write_text("\n".join(sheet), encoding="utf-8")
++    Path(out + ".json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
++    if args.json:
++        print(json.dumps(result, ensure_ascii=False))
++    else:
++        print(f"delta: 未標 {u['count']}/{u['denom']}(rate={result['rate']});"
++              f"skipped {len(u['skipped'])};orphans {len(orphans)} → {out}-sheet.md")
++    return 0
++
++
++
++
++
++
++def cmd_repin(args):
++    gs = _read_goldset(args.goldset)
++    if gs is None:
++        return 2
++    re_mod = _load_re()
++    root = Path(args.repo).resolve()
++    head = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
++                          capture_output=True, text=True).stdout.strip()
++    target = args.target or head
++    if not target:
++        print("ERROR: 取不到 repo HEAD 且未給 --target", file=sys.stderr)
++        return 2
++    # 斷言對象=要釘的那個語料:target≠HEAD 才需 worktree 釘定,否則直接用工作樹
++    snap = target if (head and target != head) else None
++    if not _setup(re_mod, args.repo, snap):
++        return 2
++    u = re_mod.collect_unjudged(gs, args.split)
++    if u["count"] > 0:
++        print(f"⛔ repin 擋下:評測母體尚有 {u['count']} 筆未標(先跑 delta→補標→apply):", file=sys.stderr)
++        for cid, nodes in sorted(u["per_case"].items()):
++            for n in nodes:
++                print(f"  {cid}: {n}", file=sys.stderr)
++        return 1
++    gs["snapshot_commit"] = target
++    _atomic_write_json(args.goldset, gs)
++    print(f"✓ repin: snapshot_commit → {target}(未標 0/{u['denom']};labels 未動)")
++    return 0
++
++
++def cmd_merge(args):
++    def _load_rater(path):
++        try:
++            return json.loads(Path(path).read_text(encoding="utf-8"))
++        except (OSError, ValueError):
++            return None
++    a = _load_rater(args.a)
++    if a is None:
++        print(f"ERROR: A 席檔讀取失敗: {args.a}", file=sys.stderr)
++        return 2
++    b = _load_rater(args.b) if args.b else None
++    degraded = b is None
++    agreed, disputed = {}, {}
++    for cid, nodes in a.items():
++        for n, av in nodes.items():
++            bv = (b or {}).get(cid, {}).get(n)
++            if degraded or bv is None or int(av) != int(bv):
++                # 一致=同值(1 vs 2=不一致);degraded=B 席缺→全人裁(單席值放 a)
++                disputed.setdefault(cid, {})[n] = {"a": int(av),
++                                                   "b": None if (degraded or bv is None) else int(bv)}
++            else:
++                agreed.setdefault(cid, {})[n] = int(av)
++    result = {"agreed": agreed, "disputed": disputed, "degraded": degraded}
++    if degraded:
++        print("⚠ degraded:single-rater——B 席輸出缺/壞,全部進人裁桶", file=sys.stderr)
++    if args.out:
++        Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
++    if args.json or not args.out:
++        print(json.dumps(result, ensure_ascii=False))
++    n_a = sum(len(v) for v in agreed.values())
++    n_d = sum(len(v) for v in disputed.values())
++    print(f"merge: 一致 {n_a} / 人裁 {n_d}{'(degraded)' if degraded else ''}", file=sys.stderr)
++    return 0
++
++
++def cmd_apply(args):
++    gs = _read_goldset(args.goldset)
++    if gs is None:
++        return 2
++    try:
++        m = json.loads(Path(args.merge).read_text(encoding="utf-8"))
++        m["agreed"]; m["disputed"]
++    except (OSError, ValueError, KeyError) as e:
++        print(f"ERROR: merge 檔讀取失敗: {e}", file=sys.stderr)
++        return 2
++    adj = {}
++    if args.adjudication:
++        try:
++            adj = json.loads(Path(args.adjudication).read_text(encoding="utf-8"))
++        except (OSError, ValueError) as e:
++            print(f"ERROR: adjudication 檔讀取失敗: {e}", file=sys.stderr)
++            return 2
++    missing = [f"{cid}:{n}" for cid, nodes in m["disputed"].items()
++               for n in nodes if adj.get(cid, {}).get(n, {}).get("final") is None]
++    if missing:
++        print(f"⛔ apply 擋下:{len(missing)} 筆人裁缺 final(補進 adjudication 檔再跑):", file=sys.stderr)
++        for x in missing:
++            print(f"  {x}", file=sys.stderr)
++        return 1
++    today = datetime.date.today().isoformat()
++    n_new = 0
++    for cid, nodes in m["agreed"].items():
++        for n, val in nodes.items():
++            gs["labels"].setdefault(cid, {})[n] = {
++                "final": int(val), "claude": int(val), "gemini": int(val), "labeled_at": today}
++            n_new += 1
++    for cid, nodes in m["disputed"].items():
++        for n, votes in nodes.items():
++            a = adj[cid][n]
++            entry = {"final": int(a["final"]), "claude": votes.get("a"),
++                     "gemini": votes.get("b"), "labeled_at": today,
++                     "by": a.get("by", "deep-read")}
++            if a.get("why"):
++                entry["why"] = a["why"]
++            gs["labels"].setdefault(cid, {})[n] = entry
++            n_new += 1
++    _atomic_write_json(args.goldset, gs)
++    note = f";note={args.note}" if args.note else ""
++    print(f"✓ apply: 寫入 {n_new} 筆(人放行動作即本指令{note})")
++    return 0
++
++
++def cmd_signal(args):
++    """advisory:讀 history 最後一筆考卷輪(mode∈{goldset,goldset-transition})的 unjudged 欄。
++    輸出單行 `unjudged_rate=<x> count=<n> over=<yes|no>`;無欄=NA;恆 rc0(檔缺=rc2)。
++    週閘 bash 只 grep over=yes,邏輯全在此受測(spec T7 薄接線)。"""
++    try:
++        lines = Path(args.history).read_text(encoding="utf-8").splitlines()
++    except OSError as e:
++        print(f"ERROR: history 讀取失敗: {e}", file=sys.stderr)
++        return 2
++    last = None
++    for ln in lines:
++        try:
++            d = json.loads(ln)
++        except ValueError:
++            continue
++        if d.get("mode") in ("goldset", "goldset-transition"):
++            last = d
++    rate = (last or {}).get("unjudged_rate")
++    count = (last or {}).get("unjudged_count")
++    if rate is None:
++        print("unjudged_rate=NA count=NA over=no")
++        return 0
++    over = "yes" if rate >= args.threshold else "no"
++    print(f"unjudged_rate={rate} count={count} over={over}")
++    return 0
++
++
++def main():
++    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    sub = ap.add_subparsers(dest="cmd", required=True)
++
++    d = sub.add_parser("delta", help="未標清單+delta 標註表(觀測)")
++    d.add_argument("--goldset", default=str(HERE / "retrieval-goldset.json"))
++    d.add_argument("--repo", default=str(HERE.parents[1]))
++    d.add_argument("--snapshot", help="對歷史 commit 語料算(worktree 釘定)")
++    d.add_argument("--split", choices=["train", "held"])
++    d.add_argument("--json", action="store_true")
++    d.add_argument("--out", help="輸出前綴(產 <out>-sheet.md 與 <out>.json)")
++
++    r = sub.add_parser("repin", help="unjudged==0 才寫 snapshot_commit(rc0/1/2)")
++    r.add_argument("--goldset", default=str(HERE / "retrieval-goldset.json"))
++    r.add_argument("--repo", default=str(HERE.parents[1]))
++    r.add_argument("--target", help="要釘的 sha(預設=repo HEAD short;≠HEAD 走 worktree 釘定)")
++    r.add_argument("--split", choices=["train", "held"])
++
++    mg = sub.add_parser("merge", help="雙評審合併(一致=同值;B 缺=degraded)")
++    mg.add_argument("--a", required=True, help="A 席 rater json({cid:{node:0|1|2}})")
++    mg.add_argument("--b", help="B 席 rater json;缺=degraded 全人裁")
++    mg.add_argument("--json", action="store_true")
++    mg.add_argument("--out", help="merge 結果輸出檔")
++
++    apl = sub.add_parser("apply", help="人放行:merge(+adjudication)寫進 goldset labels")
++    apl.add_argument("--merge", required=True)
++    apl.add_argument("--goldset", default=str(HERE / "retrieval-goldset.json"))
++    apl.add_argument("--adjudication", help="人裁檔({cid:{node:{final,by,why}}})")
++    apl.add_argument("--note", help="放行留言(印進輸出)")
++
++    sg = sub.add_parser("signal", help="讀 history 尾筆 unjudged_rate(advisory)")
++    sg.add_argument("--history", default=str(HERE / "retrieval-eval-history.jsonl"))
++    sg.add_argument("--threshold", type=float, default=0.10)
++
++    args = ap.parse_args()
++    return {"delta": cmd_delta, "repin": cmd_repin,
++            "merge": cmd_merge, "apply": cmd_apply, "signal": cmd_signal}[args.cmd](args)
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/governance/eval/retrieval_eval.py b/governance/eval/retrieval_eval.py
+index 6e26ece..633b202 100755
+--- a/governance/eval/retrieval_eval.py
++++ b/governance/eval/retrieval_eval.py
+@@ -87,53 +87,176 @@ def recall_at_k(ranked_labels, n_relevant, k):
+     return sum(1 for r in ranked_labels[:k] if r >= 1) / n_relevant
+ 
+ 
+ def _lum_lines(*args):
+     r = subprocess.run([sys.executable, str(LUMOS), "--vault", str(VAULT), *args],
+                        capture_output=True, text=True, cwd=ROOT)
+     return [l for l in r.stdout.splitlines() if l.strip()]
+ 
+ 
+ def _labels_of(gs, cid):
+-    """{node: int_final};final 為 None 視為未標=0。"""
++    """{node: int_final};final 為 None 視為未標=0。
++    ★計分專用★——「未標 vs 已判0」在此被刻意收斂(計分尺不變);
++    未標判定禁用本函式,走 collect_unjudged(標註刷新 S0 三態)。"""
+     out = {}
+     for node, v in gs["labels"].get(cid, {}).items():
+         f = v.get("final")
+         out[node] = int(f) if f is not None else 0
+     return out
+ 
+ 
++# ── 標註刷新共用原語(S0 評測母體;delta/repin/unjudged-rate 三處同源單點)──
++
++def _search_arms(q):
++    """search 題兩臂(與 eval_search 同一組呼叫;--no-any 紀律同該處註解)。"""
++    legacy = [l.split(" (")[0] for l in _lum_lines("search", q, "--no-any", "--legacy", "--files-only")
++              if l.split(" (")[0].endswith(".md") and "/" in l]
++    ranked = [x["node"] for x in
++              _lum("search", q, "--no-any", "--ranked", "--top", "10", "--json").get("results", [])]
++    return legacy, ranked
++
++
++def search_universe(q):
++    """search 題評測母體=legacy(不截斷)∪ranked top10,保序去重。"""
++    legacy, ranked = _search_arms(q)
++    seen, uni = set(), []
++    for n in legacy + ranked:
++        if n not in seen:
++            seen.add(n)
++            uni.append(n)
++    return uni
++
++
++def edit_universe(case):
++    """edit 題評測母體=impact --top 50 原始 results(含 pinned 欄,固定席不受名額限制)。
++    file 不存在(相對快照/現況語料)或 impact 輸出不可解 → None(呼叫端記 skip)。"""
++    base = SNAP_ROOT or ROOT
++    if not (Path(base) / case["file"]).exists():
++        return None
++    payload = json.dumps({"query": case.get("delta", ""), "prospective": {}})
++    r = subprocess.run([sys.executable, str(LUMOS),
++                        "impact", "--file", case["file"],
++                        "--repo", os.environ.get("LUMOS_EVAL_REPO") or str(SNAP_ROOT or ROOT),
++                        "--ranked", "--top", os.environ.get("LUMOS_EVAL_IMPACT_TOP", "50"),
++                        "--stdin-payload", "--json"],
++                       capture_output=True, text=True, input=payload, cwd=ROOT)
++    try:
++        return json.loads(r.stdout.strip().splitlines()[-1]).get("results", [])
++    except (ValueError, IndexError):
++        return None
++
++
++# 計分觸及邊界(落地後發現 2026-08-18):全母體口徑實測連原快照都 54% 未標
++# (399/738;金標只批過出卷小池)→ repin 永不可過。未標判定收斂到「未標了會
++# 實際影響分數」的位置:search=兩臂各前 10(nDCG@5/MRR/R@10 觸及帶+餘裕)、
++# edit=free 前 k(P@top_k/nDCG 觸及)+全部固定席(pin_noise=事故指標,不受名額限制)。
++SEARCH_TOUCH = 10
++
++
++def _touched_search(legacy, ranked):
++    """search 題計分觸及集=兩臂各前 SEARCH_TOUCH,保序去重。"""
++    seen, out = set(), []
++    for n in legacy[:SEARCH_TOUCH] + ranked[:SEARCH_TOUCH]:
++        if n not in seen:
++            seen.add(n)
++            out.append(n)
++    return out
++
++
++def _touched_edit(res, k=8):
++    """edit 題計分觸及集=free 前 k+全部 pins,保序去重。"""
++    free = [x["node"] for x in res if not x.get("pinned")]
++    pins = [x["node"] for x in res if x.get("pinned")]
++    seen, out = set(), []
++    for n in free[:k] + pins:
++        if n not in seen:
++            seen.add(n)
++            out.append(n)
++    return out
++
++
++def collect_unjudged(gs, split=None, k=8):
++    """S0 三態的唯一未標判定:計分觸及集內「labels 無此鍵或 final is None」=未標;
++    已判(含0)不算。回 {"per_case", "skipped", "denom", "count", "rate"}。"""
++    per_case, skipped, denom, count = {}, [], 0, 0
++    def _unj(cid, nodes):
++        nonlocal denom, count
++        lab = gs["labels"].get(cid, {})
++        unj = [n for n in nodes
++               if n not in lab or lab[n].get("final") is None]
++        denom += len(nodes)
++        count += len(unj)
++        if unj:
++            per_case[cid] = unj
++    for case in gs["search"]:
++        if split and case["split"] != split:
++            continue
++        legacy, ranked = _search_arms(case["query"])
++        _unj(case["id"], _touched_search(legacy, ranked))
++    for case in gs["edit"]:
++        if split and case["split"] != split:
++            continue
++        res = edit_universe(case)
++        if res is None:
++            skipped.append(f"{case['id']}:file-gone")
++            continue
++        _unj(case["id"], _touched_edit(res, k))
++    return {"per_case": per_case, "skipped": skipped, "denom": denom,
++            "count": count, "rate": (count / denom) if denom else 0.0}
++
++
++def pin_snapshot(sha):
++    """語料快照釘定(從 main 抽出;refresh_labels 共用):worktree+atexit 清理。
++    成功→設 VAULT/SNAP_ROOT 回 True;失敗→印警告回 False(呼叫端自行決定退回現況)。"""
++    global VAULT, SNAP_ROOT
++    import tempfile, shutil, atexit
++    _wt = Path(tempfile.mkdtemp(prefix="lumos-eval-snap-"))
++    r = subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach",
++                        str(_wt), sha], capture_output=True, text=True)
++    if r.returncode == 0:
++        _sv = next((_wt / "docs").glob("*-knowledge"), None)
++        if _sv is not None:
++            VAULT = _sv
++            SNAP_ROOT = _wt
++            def _cleanup():
++                subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(_wt)],
++                               capture_output=True, text=True)
++                shutil.rmtree(_wt, ignore_errors=True)
++            atexit.register(_cleanup)
++            return True
++    shutil.rmtree(_wt, ignore_errors=True)   # 失敗路徑不留殘目錄
++    print(f"⚠ snapshot worktree 失敗({r.stderr.strip()[:80]}),退回現況 vault", file=sys.stderr)
++    return False
++
++
+ def _macro(rows, key):
+     vals = [r[key] for r in rows if r.get(key) is not None]
+     return round(sum(vals) / len(vals), 4) if vals else None
+ 
+ 
+ def eval_search(gs, split=None, k=5):
+     """search 面:legacy 現行順序 vs ranked BM25F。主指標 nDCG@5;輔 MRR/Recall@10。"""
+     rows = []
+     for case in gs["search"]:
+         if split and case["split"] != split:
+             continue
+         cid, q = case["id"], case["query"]
+         lab = _labels_of(gs, cid)
+         if not lab or not any(v >= 1 for v in lab.values()):
+             continue  # 無相關項的案例對 nDCG 無定義,跳過並記數
+         n_rel = sum(1 for v in lab.values() if v >= 1)
+         # ★兩臂都必須顯式 --no-any★:2026-08-03 起多詞回退是 search 預設,「不傳旗標」
+         # 不再等於舊行為。本 gate 是「legacy vs ranked」的受控比較,吃到回退擴召回會讓
+         # 兩臂同時混入 OR 召回結果、基線失義。(code-loop r2 全局哨兵抓到;目前 goldset
+         # 唯一的多詞題「guard kill」剛好字面存在故回退不觸發——★是還沒踩到,不是沒有★,
+-        # 下次換題就會中。)
+-        legacy = [l.split(" (")[0] for l in _lum_lines("search", q, "--no-any", "--legacy", "--files-only")
+-                  if l.split(" (")[0].endswith(".md") and "/" in l]
+-        ranked = [x["node"] for x in
+-                  _lum("search", q, "--no-any", "--ranked", "--top", "10", "--json").get("results", [])]
++        # 下次換題就會中。)呼叫收斂進 _search_arms(與評測母體同源,標註刷新 T2)。
++        legacy, ranked = _search_arms(q)
+         row = {"id": cid, "split": case["split"], "n_rel": n_rel}
+         all_rels = sorted(lab.values(), reverse=True)   # IDCG=完整金標(漏檢有懲罰,兩系統同尺)
+         for name, order in (("legacy", legacy), ("ranked", ranked)):
+             labels = [lab.get(n, 0) for n in order]
+             row[f"{name}_ndcg"] = round(ndcg_at_k(labels, k, all_rels=all_rels), 4)
+             row[f"{name}_mrr"] = round(mrr(labels), 4)
+             row[f"{name}_r10"] = recall_at_k(labels, n_rel, 10)
+         rows.append(row)
+     return rows
+ 
+@@ -149,33 +272,25 @@ def eval_edit(gs, split=None, k=8):
+     ablation=同候選集重排(fusion=score/BM25-only=L/graph-only=結構分)。
+     固定席另計(安全機保,不算噪音);label2 固定席 recall 檢核。"""
+     rows = []
+     for case in gs["edit"]:
+         if split and case["split"] != split:
+             continue
+         cid = case["id"]
+         lab = _labels_of(gs, cid)
+         if not lab or not any(v >= 1 for v in lab.values()):
+             continue
+-        payload = json.dumps({"query": case.get("delta", ""), "prospective": {}})
+         # impact 自行從 --repo 解析 vault(不吃全域 --vault)→ 快照釘定須走 --repo(r1 終審親驗)
+-        r = subprocess.run([sys.executable, str(LUMOS),
+-                            "impact", "--file", case["file"],
+-                            "--repo", os.environ.get("LUMOS_EVAL_REPO") or str(SNAP_ROOT or ROOT),
+-                            "--ranked", "--top", os.environ.get("LUMOS_EVAL_IMPACT_TOP", "50"),
+-                            "--stdin-payload", "--json"],
+-                           capture_output=True, text=True, input=payload, cwd=ROOT)
+-        try:
+-            data = json.loads(r.stdout.strip().splitlines()[-1])
+-        except (ValueError, IndexError):
++        # 呼叫收斂進 edit_universe(與評測母體同源,標註刷新 T2);None=file-gone/不可解,照舊跳。
++        res = edit_universe(case)
++        if res is None:
+             continue
+-        res = data.get("results", [])
+         pins = [x for x in res if x.get("pinned")]
+         free = [x for x in res if not x.get("pinned")]
+         row = {"id": cid, "split": case["split"], "n_free": len(free), "n_pin": len(pins)}
+         # edit 面 nDCG 沿用候選集自證 IDCG:三排序共用同一 free 集,相對比較有效;
+         # 絕對值偏高(漏檢不罰),不得跨面引用(r1 panel s4)。
+         orders = {
+             "fusion": sorted(free, key=lambda x: (-x["score"], x["node"])),
+             "bm25": sorted(free, key=lambda x: (-x.get("L", 0.0), x["node"])),
+             "graph": sorted(free, key=lambda x: (-_graph_score(x), x["node"])),
+         }
+@@ -254,27 +369,48 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
+                     (a_n > b_n and a_p >= b_p - 0.02))
+         verdict["fusion_vs_bm25"] = beats(fp, fn, bp, bn)
+         verdict["fusion_vs_graph"] = beats(fp, fn, gp, gn)
+         verdict["free_median_le_topk"] = med is not None and med <= k_edit
+         verdict["free_p95_le_topk2"] = p95 is not None and p95 <= k_edit + 2
+         verdict["must_in_out_recall"] = round(must_hit / must_t, 4) if must_t else None
+         verdict["must_pinned_count"] = must_pin   # 唯一機保=固定席;in_out 含自由席無保底,勿混讀
+     return {"split": tag, "search": srows, "edit": erows, "verdict": verdict}
+ 
+ 
++def _history_record(args, gates, ok, reports, unj, pinned_sha):
++    """history 逐筆組裝(純函式,標註刷新 T5)。新欄:goldset_snapshot=實際釘定 sha、
++    unjudged_count/unjudged_rate(評測母體口徑;unj=None 時欄位保留值 None)。
++    --snapshot 覆寫輪(過渡雙跑的舊快照輪)mode 寫 goldset-transition——
++    autonomous-loop「取最後一筆 goldset 列」判定不受干擾。"""
++    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
++                          capture_output=True, text=True).stdout.strip()
++    knobs = {k: v for k, v in os.environ.items()
++             if k.startswith("LUMOS_IMPACT_") or k.startswith("LUMOS_RANK_")}
++    return {"mode": "goldset-transition" if getattr(args, "snapshot", None) else "goldset",
++            "ts": datetime.date.today().isoformat(),
++            "eval_head": head, "goldset_snapshot": pinned_sha,
++            "knobs": knobs or "frozen-defaults",
++            "vault_note": "活語料:節點增修致數字 ±1pp 漂移;重現=checkout eval_head 重跑",
++            "k": args.k, "gates": gates, "pass": ok,
++            "unjudged_count": (unj or {}).get("count"),
++            "unjudged_rate": (unj or {}).get("rate"),
++            "verdicts": {r["split"]: r["verdict"] for r in reports}}
++
++
+ def main():
+     global VAULT, SNAP_ROOT
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--auto", action="store_true", help="cochange proxy 自動金標(related 面)")
+     ap.add_argument("--goldset", help="人工標註 goldset.json 路徑")
+     ap.add_argument("--split", choices=["train", "held"], help="只跑該切分")
+     ap.add_argument("--live-vault", action="store_true", help="用現況 vault(預設釘 goldset snapshot;探索/漂移觀測用)")
++    ap.add_argument("--snapshot", help="覆寫釘定 sha(過渡雙跑的舊快照輪;該輪 mode=goldset-transition)")
+     ap.add_argument("-k", type=int, default=8)
+     args = ap.parse_args()
+     if VAULT is None:
+         print("ERROR: 找不到 vault", file=sys.stderr); return 2
+     if args.auto:
+         gold = cochange_goldset()
+         rows = eval_related(gold, k=args.k)
+         if not rows:
+             print("(cochange proxy 金標為空——knowledge git 史太稀薄,退回人工 goldset)")
+             return 0
+@@ -289,40 +425,27 @@ def main():
+     if args.goldset:
+         try:
+             gs = json.loads(Path(args.goldset).read_text(encoding="utf-8"))
+             gs["labels"]; gs["search"]; gs["edit"]
+         except (OSError, ValueError, KeyError, TypeError) as e:
+             print(f"ERROR: goldset 讀取/結構失敗: {e}", file=sys.stderr)
+             return 2
+         # 語料快照釘定(r1 終審折入,可重現性正解):labels 對應出題當下的 vault——
+         # 之後新增的未標節點若進候選池一律計噪音,gate 會被「寫文件」這種無關演進打翻。
+         # 預設把評測 vault 釘在 goldset.snapshot_commit 的 worktree;--live-vault 才用現況(探索用)。
+-        _snap = gs.get("snapshot_commit")
++        _snap = args.snapshot or gs.get("snapshot_commit")
++        _pinned = _snap
+         if _snap and not args.live_vault and not os.environ.get("LUMOS_EVAL_VAULT"):
+-            import tempfile, shutil, atexit
+-            _wt = Path(tempfile.mkdtemp(prefix="lumos-eval-snap-"))
+-            r = subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach",
+-                                str(_wt), _snap], capture_output=True, text=True)
+-            if r.returncode == 0:
+-                _sv = next((_wt / "docs").glob("*-knowledge"), None)
+-                if _sv is not None:
+-                    VAULT = _sv
+-                    SNAP_ROOT = _wt
+-                    print(f"(語料釘定 snapshot={_snap};--live-vault 可用現況)")
+-                def _cleanup():
+-                    subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(_wt)],
+-                                   capture_output=True, text=True)
+-                    shutil.rmtree(_wt, ignore_errors=True)
+-                atexit.register(_cleanup)
++            if pin_snapshot(_snap):
++                print(f"(語料釘定 snapshot={_snap};--live-vault 可用現況)")
+             else:
+-                shutil.rmtree(_wt, ignore_errors=True)   # r2:失敗路徑不留殘目錄
+-                print(f"⚠ snapshot worktree 失敗({r.stderr.strip()[:80]}),退回現況 vault", file=sys.stderr)
++                _pinned = None   # 釘定失敗退回現況——帳面如實記 None,不謊稱已釘
+         unl = sum(1 for c in gs["labels"].values() for v in c.values() if v.get("final") is None)
+         if unl:
+             print(f"⚠ 尚有 {unl} 個候選未定稿(final=None,視為 0)", file=sys.stderr)
+         reports = []
+         splits = [args.split] if args.split else [None, "train", "held"]
+         for sp in splits:
+             reports.append(report_goldset(gs, sp, k_edit=args.k))
+             print()
+         # gate 判定:全體 15% 提升 + held 不倒退 + hook P@k + fusion 雙勝
+         v_all = next(r["verdict"] for r in reports if r["split"] == "all") \
+@@ -335,28 +458,25 @@ def main():
+                  "非固定 p95 ≤ top_k+2": v_all.get("free_p95_le_topk2")}
+         if not args.split:
+             v_held = next(r["verdict"] for r in reports if r["split"] == "held")
+             gates["held-out 不倒退(lift>0)"] = (v_held.get("search_lift_pct") or 0) > 0
+         print("=== §6 gate ===")
+         ok = all(val is True for val in gates.values())  # fail-closed:無資料(None)不放行
+         for name, val in gates.items():
+             mark = "✅" if val else ("❌" if val is False else "–(無資料,fail-closed)")
+             print(f"  {mark} {name}")
+         print(f"gate 總判定: {'PASS — 可翻預設' if ok else 'FAIL — 維持 dormant'}")
++        # S4 未標率(評測母體口徑;held 專屬,train 不計)——與 delta/repin 同源 collect_unjudged
++        unj = collect_unjudged(gs, "held")
++        print(f"unjudged(held 評測母體): {unj['count']}/{unj['denom']}(rate={round(unj['rate'], 4)})"
++              + (f" skipped={unj['skipped']}" if unj["skipped"] else ""))
+         hist = Path(__file__).parent / "retrieval-eval-history.jsonl"
+         with open(hist, "a", encoding="utf-8") as fh:
+-            head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+-                                  capture_output=True, text=True).stdout.strip()
+-            knobs = {k: v for k, v in os.environ.items() if k.startswith("LUMOS_IMPACT_") or k.startswith("LUMOS_RANK_")}
+-            fh.write(json.dumps({"mode": "goldset", "ts": datetime.date.today().isoformat(),
+-                                 "eval_head": head, "knobs": knobs or "frozen-defaults",
+-                                 "vault_note": "活語料:節點增修致數字 ±1pp 漂移;重現=checkout eval_head 重跑",
+-                                 "k": args.k, "gates": gates, "pass": ok,
+-                                 "verdicts": {r["split"]: r["verdict"] for r in reports}},
++            fh.write(json.dumps(_history_record(args, gates, ok, reports, unj, _pinned),
+                                 ensure_ascii=False) + "\n")
+         return 0 if ok else 1
+     ap.print_help()
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a53018d..28699dc 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -1701,20 +1701,23 @@ def t_precommit_vendored_exempt():
+     (r4 / "skills" / "lumos-project-notes").mkdir(parents=True)
+     res4 = _precommit_run(r4, ["scripts/test_lumos.py"])
+     check("precommit 豁免: 源 repo 內豁免失效、仍擋", res4.returncode != 0, f"rc={res4.returncode}")
+ 
+ 
+ def t_precommit_whitelist_drift_guard():
+     """漂移守衛:pre-commit+post-commit 的豁免清單都必須涵蓋 _VENDORED_TOOLKIT 每項+兩夾+源守門
+     (post-commit 是 bypass 記帳端,漏對齊=例行 update 被記假 bypass 灌水;2026-07-25 實測踩過)。
+     [終審 fix I3]同源第三份清單:delguard 的 _DELGUARD_EXCLUDE_DIRS/lockfile 排除規則
+     也要對齊 pre-commit should_exclude,免得兩處各自漂。"""
++    # 尾段直讀來源 repo 圖譜節點(pitfalls-code-loop.md)——消費端沒有,整支轉 skip
++    # ([[Issues/vendored自測3紅_來源repo專用測試漏標skip]] 2026-08-17 Landmark 實錘)
++    _need_src("docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md")
+     m = _load_lumos()
+     hooks_dir = Path(GRAPHCTL).resolve().parent / "hooks"
+     for hook in ("pre-commit", "post-commit"):
+         txt = (hooks_dir / hook).read_text(encoding="utf-8")
+         for rel in m._VENDORED_TOOLKIT:
+             check(f"{hook} 漂移守衛: 豁免清單含 {rel}", rel in txt, rel)
+         for d in ("scripts/hooks/", "scripts/templates/"):
+             check(f"{hook} 漂移守衛: 豁免清單含 {d}*", f"{d}*" in txt, d)
+         check(f"{hook} 漂移守衛: 含源 repo 守門", "skills/lumos-project-notes" in txt, hook)
+ 
+@@ -19006,20 +19009,304 @@ def t_suite_strips_git_env_from_hook_invocation():
+     import os as _os5
+     env = dict(_os5.environ)
+     env["GIT_DIR"] = str(Path(GRAPHCTL).resolve().parent.parent / ".git")
+     r = subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                         "-k", "codeloop_guard_prepush"],
+                        capture_output=True, text=True, env=env)
+     check("★GIT_DIR 被污染時,建臨時 repo 的測試仍該全綠(env 已在進入點清掉)★",
+           r.returncode == 0, (r.stdout + r.stderr)[-1500:])
+ 
+ 
++# ══ 標註刷新([[Projects/標註刷新_計劃]] r1 收斂版;[[Projects/標註刷新_實作計畫]]) ══
++
++def t_goldset_force_full_guard():
++    """T1:build_goldset 裸跑防護——無 --force-full 即 rc2 零寫入(拆「裸跑清空 429 筆金標」雷)。
++    fixture=把腳本複製進 tmp 假 repo 樹跑,防真 repo 金標被誤傷(即使防護壞了也只炸 tmp)。"""
++    _need_src("governance/eval")
++    import shutil as _sh
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    root = Path(tempfile.mkdtemp(prefix="gctl-goldguard-"))
++    (root / "governance" / "eval").mkdir(parents=True)
++    (root / "docs" / "kg-knowledge").mkdir(parents=True)
++    (root / "scripts").mkdir()
++    _sh.copy(repo / "governance" / "eval" / "build_goldset.py", root / "governance" / "eval" / "build_goldset.py")
++    _sh.copy(repo / "scripts" / "lumos", root / "scripts" / "lumos")
++    r = subprocess.run([sys.executable, str(root / "governance" / "eval" / "build_goldset.py")],
++                       capture_output=True, text=True)
++    check("裸跑 rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr[-300:]}")
++    check("stderr 指路 --force-full", "--force-full" in r.stderr, r.stderr[-300:])
++    check("零寫入(無 goldset 檔產生)",
++          not (root / "governance" / "eval" / "retrieval-goldset.json").exists(), "")
++    check("零寫入(無 sheet 檔產生)",
++          not (root / "governance" / "eval" / "retrieval-labeling-sheet.md").exists(), "")
++
++
++def _mk_eval_fixture():
++    """標註刷新測試共用 fixture:tmp git repo+docs/kg-knowledge 小 vault+一支 code 檔。
++    回 (root, goldset_dict)。goldset 手造三態:S01 Beta 已判1/Gamma 未標;
++    E01 Alpha 已判0(不算未標)、其餘命中未標;E02 file-gone。"""
++    root = Path(tempfile.mkdtemp(prefix="gctl-evalfx-")) / "repo"
++    kg = root / "docs" / "kg-knowledge"
++    for sub in ("Systems", "Projects"):
++        (kg / sub).mkdir(parents=True)
++    (root / "src").mkdir(parents=True)
++    (root / "src" / "app.py").write_text("def zeb():\n    return 1\n", encoding="utf-8")
++    (kg / "Systems" / "Alpha.md").write_text(
++        "---\ntype: system\nstatus: done\n---\n# Alpha\n本模組實作在 `src/app.py`。\n", encoding="utf-8")
++    (kg / "Systems" / "Beta.md").write_text(
++        "---\ntype: system\nstatus: done\n---\n# Beta\nzebrafish 核心規則。\n", encoding="utf-8")
++    (kg / "Projects" / "Gamma.md").write_text(
++        "---\ntype: project\nstatus: doing\n---\n# Gamma\nzebrafish 排程計劃,關聯 `src/app.py`。\n", encoding="utf-8")
++    import os
++    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.t",
++           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.t"}
++    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
++                ["git", "commit", "-qm", "init"]):
++        subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True)
++    gs = {"snapshot_commit": "deadbee", "split_salt": "x",
++          "search": [{"id": "S01", "query": "zebrafish", "cat": "zh_short", "split": "held"}],
++          "edit": [{"id": "E01", "file": "src/app.py", "delta": "(x)", "commit": "deadbee", "split": "held"},
++                   {"id": "E02", "file": "src/gone.py", "delta": "(x)", "commit": "deadbee", "split": "held"}],
++          "labels": {"S01": {"Systems/Beta.md": {"final": 1, "claude": 1, "codex": 1}},
++                     "E01": {"Systems/Alpha.md": {"final": 0, "claude": 0, "codex": 0}}}}
++    return root, gs
++
++
++def _load_retrieval_eval(root):
++    """以 fixture 為根載入 retrieval_eval 模組(獨立實例,不污染其他測試)。"""
++    import importlib.util
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    spec = importlib.util.spec_from_file_location(
++        f"retrieval_eval_fx_{id(root)}", repo / "governance" / "eval" / "retrieval_eval.py")
++    m = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(m)
++    m.ROOT = root
++    m.VAULT = root / "docs" / "kg-knowledge"
++    return m
++
++
++def t_eval_universe_and_unjudged():
++    """T2:共用原語——search_universe/edit_universe/collect_unjudged(三態判定唯一實作)。"""
++    _need_src("governance/eval")
++    root, gs = _mk_eval_fixture()
++    m = _load_retrieval_eval(root)
++    uni = m.search_universe("zebrafish")
++    check("search_universe 含 Beta", "Systems/Beta.md" in uni, str(uni))
++    check("search_universe 含 Gamma", "Projects/Gamma.md" in uni, str(uni))
++    e1 = m.edit_universe(gs["edit"][0])
++    check("edit_universe 回結果列表且含 node 欄", isinstance(e1, list) and all("node" in x for x in e1), str(e1)[:200])
++    check("edit_universe 命中 Alpha(inline-code 直連)", any(x["node"] == "Systems/Alpha.md" for x in e1), str(e1)[:300])
++    check("edit_universe file-gone 回 None", m.edit_universe(gs["edit"][1]) is None, "")
++    u = m.collect_unjudged(gs, "held")
++    check("unjudged 回傳五鍵", set(u) >= {"per_case", "skipped", "denom", "count", "rate"}, str(u)[:200])
++    check("S01:未標含 Gamma、不含已判 Beta",
++          "Projects/Gamma.md" in u["per_case"].get("S01", []) and
++          "Systems/Beta.md" not in u["per_case"].get("S01", []), str(u["per_case"]))
++    check("E01:已判0 的 Alpha 不算未標", "Systems/Alpha.md" not in u["per_case"].get("E01", []), str(u["per_case"]))
++    check("E02 file-gone 進 skipped", any(s.startswith("E02") for s in u["skipped"]), str(u["skipped"]))
++    check("rate=count/denom 一致", u["denom"] > 0 and abs(u["rate"] - u["count"] / u["denom"]) < 1e-9, str(u))
++
++
++def t_refresh_delta():
++    """T3:refresh_labels delta——已判不重出/未標全出/orphan 列出/file-gone skip/卷頭註記/rc 合約。"""
++    _need_src("governance/eval")
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    root, gs = _mk_eval_fixture()
++    gs["labels"]["S01"]["Projects/Old.md"] = {"final": 1}   # orphan:標過但語料無此檔
++    gpath = root / "goldset.json"
++    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
++    out = root / "delta"
++    r = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "refresh_labels.py"),
++                        "delta", "--goldset", str(gpath), "--repo", str(root),
++                        "--json", "--out", str(out)], capture_output=True, text=True)
++    check("delta rc0", r.returncode == 0, r.stderr[-300:])
++    d = _json.loads((Path(str(out) + ".json")).read_text(encoding="utf-8"))
++    s01 = next((c["unjudged"] for c in d["cases"] if c["id"] == "S01"), [])
++    check("未標全出(Gamma 在)", "Projects/Gamma.md" in s01, str(d["cases"]))
++    check("已判不重出(Beta 不在)", "Systems/Beta.md" not in s01, str(s01))
++    e01 = next((c["unjudged"] for c in d["cases"] if c["id"] == "E01"), [])
++    check("已判0 不重出(Alpha 不在)", "Systems/Alpha.md" not in e01, str(e01))
++    check("orphan 列出", any("Projects/Old.md" in o for o in d["orphans"]), str(d["orphans"]))
++    check("file-gone 進 skipped", any(x.startswith("E02") for x in d["skipped"]), str(d["skipped"]))
++    check("count/denom/rate 齊", all(k in d for k in ("count", "denom", "rate")), str(d)[:200])
++    sheet = Path(str(out) + "-sheet.md").read_text(encoding="utf-8")
++    check("卷頭註明 delta 片段", "delta 片段" in sheet and "不連號屬正常" in sheet, sheet[:200])
++    check("sheet 僅未標列(Beta 不在)", "Systems/Beta.md" not in sheet, sheet[:400])
++    r2 = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "refresh_labels.py"),
++                         "delta", "--goldset", str(root / "沒有.json"), "--repo", str(root)],
++                        capture_output=True, text=True)
++    check("goldset 缺=rc2", r2.returncode == 2, str(r2.returncode))
++
++
++def t_refresh_repin():
++    """T4:repin 機械閘——未標>0 rc1 且 goldset 逐位元不變;全判後 rc0 僅 snapshot_commit 變;壞輸入 rc2。"""
++    _need_src("governance/eval")
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    script = repo / "governance" / "eval" / "refresh_labels.py"
++    root, gs = _mk_eval_fixture()
++    gpath = root / "goldset.json"
++    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
++    before = gpath.read_bytes()
++    r = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(gpath),
++                        "--repo", str(root)], capture_output=True, text=True)
++    check("未標>0 → rc1 硬擋", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
++    check("rc1 吐 delta 清單(Gamma 在 stderr)", "Projects/Gamma.md" in r.stderr, r.stderr[-400:])
++    check("rc1 時 goldset 逐位元不變", gpath.read_bytes() == before, "")
++    # 補齊全部未標(用 delta --json 取清單,照單全判 0)
++    out = root / "d2"
++    subprocess.run([sys.executable, str(script), "delta", "--goldset", str(gpath),
++                    "--repo", str(root), "--json", "--out", str(out)],
++                   capture_output=True, text=True)
++    d = _json.loads(Path(str(out) + ".json").read_text(encoding="utf-8"))
++    gs2 = _json.loads(gpath.read_text(encoding="utf-8"))
++    for c in d["cases"]:
++        for n in c["unjudged"]:
++            gs2["labels"].setdefault(c["id"], {})[n] = {"final": 0}
++    gpath.write_text(_json.dumps(gs2, ensure_ascii=False), encoding="utf-8")
++    head = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
++                          capture_output=True, text=True).stdout.strip()
++    r2 = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(gpath),
++                         "--repo", str(root), "--target", head],
++                        capture_output=True, text=True)
++    check("全判後 rc0", r2.returncode == 0, r2.stderr[-300:] + r2.stdout[-200:])
++    gs3 = _json.loads(gpath.read_text(encoding="utf-8"))
++    check("snapshot_commit 更新為 target", gs3["snapshot_commit"] == head, gs3["snapshot_commit"])
++    gs2["snapshot_commit"] = head
++    check("其餘鍵零變動(labels 原樣)", gs3 == gs2, "")
++    r3 = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(root / "無.json"),
++                         "--repo", str(root)], capture_output=True, text=True)
++    check("壞輸入 rc2", r3.returncode == 2, str(r3.returncode))
++
++
++def t_eval_history_record_fields():
++    """T5:_history_record 純函式——goldset_snapshot/unjudged_count/unjudged_rate 三欄;
++    --snapshot 覆寫 → mode=goldset-transition(mode 為既有欄位)。"""
++    _need_src("governance/eval")
++    import types
++    root, gs = _mk_eval_fixture()
++    m = _load_retrieval_eval(root)
++    unj = {"count": 3, "denom": 30, "rate": 0.1, "per_case": {}, "skipped": []}
++    args = types.SimpleNamespace(k=8, snapshot=None)
++    rec = m._history_record(args, gates={"g": True}, ok=True,
++                            reports=[{"split": "held", "verdict": {"v": 1}}],
++                            unj=unj, pinned_sha="285d429")
++    check("mode 預設 goldset", rec["mode"] == "goldset", str(rec))
++    check("goldset_snapshot 欄=實際釘定 sha", rec["goldset_snapshot"] == "285d429", str(rec))
++    check("unjudged 兩欄在", rec["unjudged_count"] == 3 and rec["unjudged_rate"] == 0.1, str(rec))
++    check("既有欄位仍在(ts/gates/pass/verdicts)",
++          all(k in rec for k in ("ts", "gates", "pass", "verdicts")), str(rec))
++    args2 = types.SimpleNamespace(k=8, snapshot="ab91051")
++    rec2 = m._history_record(args2, gates={}, ok=False, reports=[], unj=None, pinned_sha="ab91051")
++    check("--snapshot 覆寫 → mode=goldset-transition", rec2["mode"] == "goldset-transition", str(rec2))
++    check("unj=None 時兩欄為 None(欄位仍在)",
++          "unjudged_count" in rec2 and rec2["unjudged_count"] is None, str(rec2))
++
++
++def t_refresh_merge_apply():
++    """T6:merge(一致=同值/1v2 人裁/B 缺 degraded)+apply(人放行寫入;缺人裁 rc1 不寫;atomic;既有零變動)。"""
++    _need_src("governance/eval")
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    script = repo / "governance" / "eval" / "refresh_labels.py"
++    root, gs = _mk_eval_fixture()
++    gpath = root / "goldset.json"
++    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
++    a = {"S01": {"Projects/Gamma.md": 2, "Systems/Hub.md": 1}}
++    b = {"S01": {"Projects/Gamma.md": 2, "Systems/Hub.md": 2}}
++    (root / "a.json").write_text(_json.dumps(a), encoding="utf-8")
++    (root / "b.json").write_text(_json.dumps(b), encoding="utf-8")
++    r = subprocess.run([sys.executable, str(script), "merge", "--a", str(root / "a.json"),
++                        "--b", str(root / "b.json"), "--out", str(root / "m.json"), "--json"],
++                       capture_output=True, text=True)
++    check("merge rc0", r.returncode == 0, r.stderr[-200:])
++    m = _json.loads((root / "m.json").read_text(encoding="utf-8"))
++    check("同值→agreed(Gamma=2)", m["agreed"].get("S01", {}).get("Projects/Gamma.md") == 2, str(m))
++    check("1v2→disputed(Hub)", "Systems/Hub.md" in m["disputed"].get("S01", {}), str(m))
++    check("非 degraded", m["degraded"] is False, str(m))
++    r2 = subprocess.run([sys.executable, str(script), "merge", "--a", str(root / "a.json"),
++                         "--b", str(root / "沒有.json"), "--out", str(root / "m2.json")],
++                        capture_output=True, text=True)
++    m2 = _json.loads((root / "m2.json").read_text(encoding="utf-8"))
++    check("B 缺→degraded 且全 disputed", m2["degraded"] is True and not m2["agreed"]
++          and "Projects/Gamma.md" in m2["disputed"].get("S01", {}), str(m2))
++    # apply:缺人裁 → rc1 不寫
++    before = gpath.read_bytes()
++    r3 = subprocess.run([sys.executable, str(script), "apply", "--merge", str(root / "m.json"),
++                         "--goldset", str(gpath)], capture_output=True, text=True)
++    check("apply 缺人裁 rc1", r3.returncode == 1, str(r3.returncode) + r3.stderr[-200:])
++    check("rc1 不寫(goldset 位元不變)", gpath.read_bytes() == before, "")
++    adj = {"S01": {"Systems/Hub.md": {"final": 1, "by": "user", "why": "字面碰到而已"}}}
++    (root / "adj.json").write_text(_json.dumps(adj, ensure_ascii=False), encoding="utf-8")
++    r4 = subprocess.run([sys.executable, str(script), "apply", "--merge", str(root / "m.json"),
++                         "--goldset", str(gpath), "--adjudication", str(root / "adj.json"),
++                         "--note", "test 放行"], capture_output=True, text=True)
++    check("apply 齊備 rc0", r4.returncode == 0, r4.stderr[-200:])
++    gs2 = _json.loads(gpath.read_text(encoding="utf-8"))
++    g = gs2["labels"]["S01"]["Projects/Gamma.md"]
++    check("agreed 寫入 final/claude/gemini/labeled_at",
++          g["final"] == 2 and g["claude"] == 2 and g["gemini"] == 2 and "labeled_at" in g, str(g))
++    h = gs2["labels"]["S01"]["Systems/Hub.md"]
++    check("disputed 寫入含 by/why 與兩席原值",
++          h["final"] == 1 and h["by"] == "user" and h["why"] == "字面碰到而已"
++          and h["claude"] == 1 and h["gemini"] == 2, str(h))
++    check("既有已判鍵零變動(Beta 原樣)",
++          gs2["labels"]["S01"]["Systems/Beta.md"] == {"final": 1, "claude": 1, "codex": 1}, str(gs2["labels"]["S01"]))
++
++
++def t_refresh_signal():
++    """T7:signal——讀 history 最後一筆考卷輪的 unjudged_rate;無欄=NA;超線 over=yes;恆 rc0。"""
++    _need_src("governance/eval")
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    script = repo / "governance" / "eval" / "refresh_labels.py"
++    d = Path(tempfile.mkdtemp(prefix="gctl-signal-"))
++    def _run(lines):
++        h = d / f"h{len(lines)}.jsonl"
++        h.write_text("\n".join(_json.dumps(x) for x in lines) + "\n", encoding="utf-8")
++        return subprocess.run([sys.executable, str(script), "signal", "--history", str(h)],
++                              capture_output=True, text=True)
++    r1 = _run([{"mode": "goldset", "ts": "2026-08-01"}])
++    check("無欄=NA 且 rc0", r1.returncode == 0 and "unjudged_rate=NA" in r1.stdout, r1.stdout)
++    r2 = _run([{"mode": "goldset", "unjudged_rate": 0.04, "unjudged_count": 3},
++               {"mode": "auto-cochange", "unjudged_rate": 0.99}])
++    check("取最後一筆考卷輪(auto 列不算)、未超線 over=no",
++          "unjudged_rate=0.04" in r2.stdout and "over=no" in r2.stdout, r2.stdout)
++    r3 = _run([{"mode": "goldset", "unjudged_rate": 0.04},
++               {"mode": "goldset-transition", "unjudged_rate": 0.12, "unjudged_count": 9}])
++    check("transition 輪也算考卷輪、超線 over=yes",
++          "unjudged_rate=0.12" in r3.stdout and "over=yes" in r3.stdout, r3.stdout)
++    r4 = subprocess.run([sys.executable, str(script), "signal", "--history", str(d / "無.jsonl")],
++                        capture_output=True, text=True)
++    check("history 缺=rc2", r4.returncode == 2, str(r4.returncode))
++
++
++def t_eval_touched_universe_bounds():
++    """T8 落地後發現修正:評測母體=「計分觸及集」——search 兩臂各取前 10、edit=free 前 k+全部 pins。
++    全母體口徑實測連原快照都 54% 未標(金標只批過出卷小池)→ repin 永不可過,母體必須收斂到
++    「未標了會實際影響分數」的位置。純函式直測邊界。"""
++    _need_src("governance/eval")
++    root, _ = _mk_eval_fixture()
++    m = _load_retrieval_eval(root)
++    legacy = [f"L{i}.md" for i in range(15)]
++    ranked = [f"R{i}.md" for i in range(15)] + ["L3.md"]
++    t = m._touched_search(legacy, ranked)
++    check("search 觸及=兩臂各前10 去重", set(t) == set(legacy[:10]) | set(ranked[:10]), str(t))
++    check("legacy 第11名起不入(L12 不在)", "L12.md" not in t, str(t))
++    res = ([{"node": f"F{i}.md", "pinned": False} for i in range(12)]
++           + [{"node": f"P{i}.md", "pinned": True} for i in range(20)])
++    te = m._touched_edit(res, k=8)
++    check("edit 觸及=free 前8+全部 pins", set(te) == {f"F{i}.md" for i in range(8)} | {f"P{i}.md" for i in range(20)}, str(te))
++    check("free 第9名起不入(F9 不在)", "F9.md" not in te, str(te))
++
++
+ # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
+ 
+ def _mk_query_vault():
+     """query 測試共用小庫:標籤家族×狀態×合約×連結 交叉樣本。"""
+     v = mkvault()
+     write(v, "Systems/Pay.md",
+           "type: system\nstatus: done\ntags:\n  - type/system\n  - status/done\n  - risk/金流\n"
+           "summary: |-\n  KEY:★INVARIANT★ 金流恆等一條 [test:t_dummy]\n",
+           body="# Pay\n[[Systems/Hub]]\n")
+     write(v, "Systems/Prose.md",
+@@ -19121,20 +19408,55 @@ def t_query_json():
+         pass
+     check("--json stdout 合法 JSON", parsed is not None, r.stdout)
+     check("--json hidden_superseded=1", bool(parsed) and parsed.get("hidden_superseded") == 1, r.stdout)
+     nodes = [x.get("node") for x in (parsed or {}).get("results", [])]
+     check("--json results 含 Pay", "Systems/Pay.md" in nodes, r.stdout)
+     check("--json results 不含 DeadPay", "Systems/DeadPay.md" not in nodes, r.stdout)
+     st = next((x.get("status") for x in (parsed or {}).get("results", []) if x.get("node") == "Issues/OpenPay.md"), None)
+     check("--json 帶 status 欄", st == "open", r.stdout)
+ 
+ 
++def t_vendored_consumer_srconly_skip_regression():
++    """★消費端假紅回歸釘([[Issues/vendored自測3紅_來源repo專用測試漏標skip]] 2026-08-17)★:
++    Landmark 跑 lumos update 後 vendored 自測 3 紅,全是引用來源 repo 資產的測試
++    漏掛(或掛太粗)「來源 repo 專用」skip 守衛:
++    - t_precommit_whitelist_drift_guard 直讀 docs/lumos-toolchain-knowledge/Systems/
++      pitfalls-code-loop.md,無守衛 → 消費端 FileNotFoundError;
++    - t_s2_snr_synthetic 守衛掛在 `governance/eval`(目錄),但 Landmark **自己有**
++      governance/eval(檢索考卷),只是沒有 canary_snr.py → 守衛放行後炸兩條
++      (「snr 腳本 rc0」+ json 解析 EXCEPTION)。判準粒度必須到「真正要用的檔」。
++
++    ★驗行為不是驗寫法★:真的搭一個消費端模擬環境(scripts/ 有、docs/ 無、
++    governance/eval 目錄在但腳本不在——復刻 Landmark 的陷阱形狀),spawn 子進程
++    跑這兩支,斷言 rc0 + 記成 skip + 零 ✗。把守衛拿掉/改回目錄粒度,這條會紅。"""
++    import shutil as _sh
++    root = Path(tempfile.mkdtemp(prefix="gctl-consumer-sim-"))
++    (root / "scripts").mkdir()
++    src_scripts = Path(GRAPHCTL).resolve().parent
++    for f in ("lumos", "test_lumos.py"):
++        _sh.copy(src_scripts / f, root / "scripts" / f)
++    if (src_scripts / "hooks").is_dir():
++        _sh.copytree(src_scripts / "hooks", root / "scripts" / "hooks")
++    # 陷阱形狀:governance/eval 目錄存在(消費端有自己的考卷)但 canary_snr.py 不存在
++    (root / "governance" / "eval").mkdir(parents=True)
++    # docs/ 整個不存在(消費端 vault 是自己專案的,不叫 lumos-toolchain-knowledge)
++    for kw, tname in (("precommit_whitelist_drift_guard", "t_precommit_whitelist_drift_guard"),
++                      ("s2_snr_synthetic", "t_s2_snr_synthetic")):
++        r = subprocess.run([sys.executable, str(root / "scripts" / "test_lumos.py"), "-k", kw],
++                           capture_output=True, text=True)
++        check(f"★消費端模擬:{tname} rc0(不紅)★", r.returncode == 0,
++              (r.stdout + r.stderr)[-800:])
++        check(f"消費端模擬:{tname} 記成 skip(不是靜默綠)", f"skip {tname}" in r.stdout,
++              r.stdout[-800:])
++        check(f"消費端模擬:{tname} 零 ✗", "✗" not in r.stdout, r.stdout[-800:])
++
++
+ def main():
+     # ★把 git 的環境變數從進程 env 清掉(2026-08-01,pre-push 假紅實錘)★
+     #
+     # 症狀:同一個 commit、同一棵樹,直接跑 `python3 scripts/test_lumos.py` 是
+     # 2039 passed / 0 failed,但由 pre-push hook 跑同一支就 3~5 條紅,而且每次
+     # 紅的條數還不一樣。
+     #
+     # 真因:`git push` 會把 `GIT_DIR` 這類變數 export 給 hook,hook 再把整個
+     # env 傳給測試進程。大量測試會自己 `git init` 一個臨時 repo 再對它下 git
+     # 指令——但 `GIT_DIR` 一旦存在就★覆蓋 cwd 推斷★,那些 git 指令全部打到
+@@ -19294,21 +19616,24 @@ def t_s1_seat_check():
+ 
+ 
+ def t_s2_snr_synthetic():
+     """[S2 前瞻層驗收②]合成樣本單測:低 SNR 題被標出(swap-candidate)、
+     高 SNR 題 keep、樣本不足(同席重跑<3)與分母=0 判 no-verdict 非高訊號。
+     翻紅釘:把分母=0 判成 keep/高訊號 → 斷言翻紅。"""
+     print("t_s2_snr_synthetic")
+     import json as _j, subprocess as _sp
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     snr = repo / "governance" / "eval" / "canary_snr.py"
+-    _need_src("governance/eval")
++    # ★判準粒度必須到「真正要用的檔」★:消費端(Landmark)自己有 governance/eval
++    # (檢索考卷),目錄粒度守衛會放行、然後 canary_snr.py 不存在炸兩條
++    # ([[Issues/vendored自測3紅_來源repo專用測試漏標skip]] 2026-08-17 實錘)
++    _need_src("governance/eval/canary_snr.py")
+     rows = []
+     # P-low:跨席分不開(全席各半 caught)且席內重跑亂跳 → 低 SNR → swap-candidate
+     for seat in ("s1", "s2", "s3"):
+         for i in range(4):
+             rows.append({"plant": "P-low", "seat": seat, "run_id": f"r{i}", "caught": i % 2 == 0})
+     # P-high:席間分得開(s1 7/8 中、s2 1/8 中)且席內雜訊相對小 → SNR≥1 → keep
+     # (注意不能用「全中 vs 全漏」:席內變異=0 會正確落入分母=0 不裁決——那是 P-zero 的戲份)
+     for i in range(8):
+         rows.append({"plant": "P-high", "seat": "s1", "run_id": f"r{i}", "caught": i != 0})
+         rows.append({"plant": "P-high", "seat": "s2", "run_id": f"r{i}", "caught": i == 0})

@@ -19089,9 +19089,9 @@ def t_eval_universe_and_unjudged():
     _need_src("governance/eval")
     root, gs = _mk_eval_fixture()
     m = _load_retrieval_eval(root)
-    uni = m.search_universe("zebrafish")
-    check("search_universe 含 Beta", "Systems/Beta.md" in uni, str(uni))
-    check("search_universe 含 Gamma", "Projects/Gamma.md" in uni, str(uni))
+    uni = m._touched_search(*m._search_arms("zebrafish"))
+    check("計分觸及集含 Beta", "Systems/Beta.md" in uni, str(uni))
+    check("計分觸及集含 Gamma", "Projects/Gamma.md" in uni, str(uni))
     e1 = m.edit_universe(gs["edit"][0])
     check("edit_universe 回結果列表且含 node 欄", isinstance(e1, list) and all("node" in x for x in e1), str(e1)[:200])
     check("edit_universe 命中 Alpha(inline-code 直連)", any(x["node"] == "Systems/Alpha.md" for x in e1), str(e1)[:300])
@@ -19298,6 +19298,211 @@ def t_eval_touched_universe_bounds():
     te = m._touched_edit(res, k=8)
     check("edit 觸及=free 前8+全部 pins", set(te) == {f"F{i}.md" for i in range(8)} | {f"P{i}.md" for i in range(20)}, str(te))
     check("free 第9名起不入(F9 不在)", "F9.md" not in te, str(te))
+
+
+def _mk_eval_fixture2():
+    """雙 commit fixture:c1=基礎三節點;c2=+Delta.md(也講 zebrafish)。回 (root, gs, c1, c2)。"""
+    import os
+    root, gs = _mk_eval_fixture()
+    c1 = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root,
+                        capture_output=True, text=True).stdout.strip()
+    (root / "docs" / "kg-knowledge" / "Systems" / "Delta.md").write_text(
+        "---\ntype: system\nstatus: done\n---\n# Delta\nzebrafish 新規則,關聯 `src/app.py`。\n",
+        encoding="utf-8")
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.t"}
+    subprocess.run(["git", "add", "-A"], cwd=root, env=env, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "add delta"], cwd=root, env=env, capture_output=True)
+    c2 = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root,
+                        capture_output=True, text=True).stdout.strip()
+    return root, gs, c1, c2
+
+
+def t_refresh_snapshot_pinning():
+    """code-r1 修:歷史快照釘定路徑真覆蓋——--snapshot c1 看不到 c2 才加的節點(釘定壞掉=翻紅);
+    假 ref rc2;釘到無 vault 的 commit 不留 stale worktree;repin 對捏造 target rc2。"""
+    _need_src("governance/eval")
+    import json as _json
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    script = repo / "governance" / "eval" / "refresh_labels.py"
+    root, gs, c1, c2 = _mk_eval_fixture2()
+    gpath = root / "goldset.json"
+    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
+    r_now = subprocess.run([sys.executable, str(script), "delta", "--goldset", str(gpath),
+                            "--repo", str(root), "--json", "--out", str(root / "dn")],
+                           capture_output=True, text=True)
+    d_now = _json.loads((root / "dn.json").read_text(encoding="utf-8"))
+    all_now = [n for c in d_now["cases"] for n in c["unjudged"]]
+    check("現況 delta 看得到 c2 節點 Delta", any("Delta.md" in n for n in all_now), str(all_now))
+    r_c1 = subprocess.run([sys.executable, str(script), "delta", "--goldset", str(gpath),
+                           "--repo", str(root), "--snapshot", c1, "--json", "--out", str(root / "d1")],
+                          capture_output=True, text=True)
+    check("--snapshot c1 rc0", r_c1.returncode == 0, r_c1.stderr[-300:])
+    d_c1 = _json.loads((root / "d1.json").read_text(encoding="utf-8"))
+    all_c1 = [n for c in d_c1["cases"] for n in c["unjudged"]]
+    check("★釘定生效:c1 看不到 Delta(釘定壞掉此條翻紅)★",
+          not any("Delta.md" in n for n in all_c1), str(all_c1))
+    r_bad = subprocess.run([sys.executable, str(script), "delta", "--goldset", str(gpath),
+                            "--repo", str(root), "--snapshot", "beefdead0bad"],
+                           capture_output=True, text=True)
+    check("假 ref 釘定失敗=rc2(硬性,非退回現況)", r_bad.returncode == 2, str(r_bad.returncode))
+    # 釘到「有 commit 但無 docs vault」→ False 且不留 stale worktree 登記
+    novault = Path(tempfile.mkdtemp(prefix="gctl-novault-")) / "r"
+    (novault / "x").mkdir(parents=True)
+    (novault / "x" / "f.txt").write_text("1", encoding="utf-8")
+    import os
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.t"}
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "c"]):
+        subprocess.run(cmd, cwd=novault, env=env, capture_output=True)
+    nv1 = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=novault,
+                         capture_output=True, text=True).stdout.strip()
+    (novault / "docs" / "kg-knowledge").mkdir(parents=True)
+    (novault / "docs" / "kg-knowledge" / "N.md").write_text("---\ntype: system\nstatus: done\n---\n# N\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=novault, env=env, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "c2"], cwd=novault, env=env, capture_output=True)
+    m = _load_retrieval_eval(novault)
+    ok = m.pin_snapshot(nv1)   # c1 無 docs vault
+    wl = subprocess.run(["git", "worktree", "list"], cwd=novault, capture_output=True, text=True).stdout
+    check("無 vault commit 釘定回 False", ok is False, str(ok))
+    check("★不留 stale worktree(登記清乾淨)★", "lumos-eval-snap" not in wl, wl)
+    # repin:target 為捏造 sha → rc2(驗證存在性,不寫)
+    before = gpath.read_bytes()
+    r_fk = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(gpath),
+                           "--repo", str(root), "--target", "beefdead0bad"],
+                          capture_output=True, text=True)
+    check("repin 捏造 target=rc2 且不寫", r_fk.returncode == 2 and gpath.read_bytes() == before,
+          f"rc={r_fk.returncode}")
+    # repin:非 git repo → rc2(head 解析失敗不得靜默通過)
+    ng = Path(tempfile.mkdtemp(prefix="gctl-nogit-")) / "r"
+    (ng / "docs" / "kg-knowledge").mkdir(parents=True)
+    r_ng = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(gpath),
+                           "--repo", str(ng), "--target", "abc1234"],
+                         capture_output=True, text=True)
+    check("非 git repo repin=rc2", r_ng.returncode == 2, str(r_ng.returncode))
+
+
+def t_refresh_atomic_and_lock():
+    """code-r1 修:①原子寫鑑別測試——攔截 os.replace 令其炸,原檔必須完好(裸寫實作此條翻紅);
+    ②寫入鎖——鎖被持有時 apply 快速失敗不寫。"""
+    _need_src("governance/eval")
+    import json as _json, importlib.util
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("refresh_labels_t", repo / "governance" / "eval" / "refresh_labels.py")
+    rl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rl)
+    d = Path(tempfile.mkdtemp(prefix="gctl-atomic-"))
+    tgt = d / "g.json"
+    tgt.write_text('{"orig": true}', encoding="utf-8")
+    orig_replace = rl.os.replace
+    def boom(*a, **k):
+        raise OSError("simulated crash at replace")
+    rl.os.replace = boom
+    try:
+        try:
+            rl._atomic_write_json(tgt, {"new": 1})
+        except OSError:
+            pass
+        check("★replace 炸掉時原檔完好(裸寫實作此條翻紅)★",
+              _json.loads(tgt.read_text(encoding="utf-8")) == {"orig": True}, tgt.read_text(encoding="utf-8"))
+    finally:
+        rl.os.replace = orig_replace
+    # ② 鎖:持鎖時 apply 不寫、非零退出、訊息講清楚
+    import fcntl
+    root, gs = _mk_eval_fixture()
+    gpath = root / "goldset.json"
+    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
+    (root / "m.json").write_text(_json.dumps({"agreed": {"S01": {"Projects/Gamma.md": 2}}, "disputed": {}, "degraded": False}), encoding="utf-8")
+    lock = open(str(gpath) + ".lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    before = gpath.read_bytes()
+    r = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "refresh_labels.py"),
+                        "apply", "--merge", str(root / "m.json"), "--goldset", str(gpath)],
+                       capture_output=True, text=True)
+    fcntl.flock(lock, fcntl.LOCK_UN); lock.close()
+    check("持鎖時 apply 非零退出", r.returncode != 0, str(r.returncode))
+    check("持鎖時 goldset 不寫", gpath.read_bytes() == before, "")
+    check("鎖衝突訊息講清楚", "鎖" in r.stderr or "lock" in r.stderr.lower(), r.stderr[-200:])
+
+
+def t_refresh_full_chain_and_eval_e2e():
+    """code-r1 修:①S2 端到端鏈——delta 真輸出→雙評審→merge→apply(含 degraded 半鏈)→repin 綠;
+    ②retrieval_eval main() CLI 真跑——stdout 未標行+history 三新欄+--snapshot=transition。"""
+    _need_src("governance/eval")
+    import json as _json, os
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    script = repo / "governance" / "eval" / "refresh_labels.py"
+    root, gs, c1, c2 = _mk_eval_fixture2()
+    gpath = root / "goldset.json"
+    gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
+    # ① 鏈:delta 輸出當 rater 底稿
+    subprocess.run([sys.executable, str(script), "delta", "--goldset", str(gpath),
+                    "--repo", str(root), "--json", "--out", str(root / "dc")],
+                   capture_output=True, text=True)
+    d = _json.loads((root / "dc.json").read_text(encoding="utf-8"))
+    a = {c["id"]: {n: 0 for n in c["unjudged"]} for c in d["cases"]}
+    b = _json.loads(_json.dumps(a))
+    first_cid = d["cases"][0]["id"]; first_node = d["cases"][0]["unjudged"][0]
+    b[first_cid][first_node] = 1   # 製造一筆 1v0 不一致
+    (root / "ra.json").write_text(_json.dumps(a), encoding="utf-8")
+    (root / "rb.json").write_text(_json.dumps(b), encoding="utf-8")
+    subprocess.run([sys.executable, str(script), "merge", "--a", str(root / "ra.json"),
+                    "--b", str(root / "rb.json"), "--out", str(root / "mc.json")],
+                   capture_output=True, text=True)
+    adj = {first_cid: {first_node: {"final": 0, "by": "user", "why": "chain 測試"}}}
+    (root / "adjc.json").write_text(_json.dumps(adj, ensure_ascii=False), encoding="utf-8")
+    r_apply = subprocess.run([sys.executable, str(script), "apply", "--merge", str(root / "mc.json"),
+                              "--goldset", str(gpath), "--adjudication", str(root / "adjc.json")],
+                             capture_output=True, text=True)
+    check("鏈:apply rc0", r_apply.returncode == 0, r_apply.stderr[-300:])
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root,
+                          capture_output=True, text=True).stdout.strip()
+    r_repin = subprocess.run([sys.executable, str(script), "repin", "--goldset", str(gpath),
+                              "--repo", str(root), "--target", head],
+                             capture_output=True, text=True)
+    check("鏈:補標後 repin 綠", r_repin.returncode == 0, r_repin.stderr[-400:])
+    gs_after = _json.loads(gpath.read_text(encoding="utf-8"))
+    check("鏈:goldset 解析無損且既有標註零變動",
+          gs_after["labels"]["S01"]["Systems/Beta.md"] == {"final": 1, "claude": 1, "codex": 1}, "")
+    # ①b degraded 半鏈:B 缺 → merge degraded → apply(全人裁)→ gemini 欄=None
+    root2, gs2 = _mk_eval_fixture()
+    g2 = root2 / "goldset.json"
+    g2.write_text(_json.dumps(gs2, ensure_ascii=False), encoding="utf-8")
+    (root2 / "ra.json").write_text(_json.dumps({"S01": {"Projects/Gamma.md": 1}}), encoding="utf-8")
+    subprocess.run([sys.executable, str(script), "merge", "--a", str(root2 / "ra.json"),
+                    "--out", str(root2 / "m2.json")], capture_output=True, text=True)
+    (root2 / "adj2.json").write_text(_json.dumps({"S01": {"Projects/Gamma.md": {"final": 1, "by": "user"}}}), encoding="utf-8")
+    subprocess.run([sys.executable, str(script), "apply", "--merge", str(root2 / "m2.json"),
+                    "--goldset", str(g2), "--adjudication", str(root2 / "adj2.json")],
+                   capture_output=True, text=True)
+    lab = _json.loads(g2.read_text(encoding="utf-8"))["labels"]["S01"]["Projects/Gamma.md"]
+    check("degraded 半鏈:gemini 欄落地為 None", lab.get("gemini") is None and lab["final"] == 1, str(lab))
+    # ② eval CLI e2e(history 寫入導向 fixture,避免污染真帳)
+    hist = root / "hist.jsonl"
+    env = {**os.environ, "LUMOS_EVAL_HISTORY": str(hist)}
+    r_ev = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "retrieval_eval.py"),
+                           "--goldset", str(gpath), "--split", "held", "--live-vault"],
+                          capture_output=True, text=True, env=env, cwd=root)
+    check("eval CLI e2e:stdout 有未標行", "unjudged(held 評測母體)" in r_ev.stdout, r_ev.stdout[-400:])
+    rec = _json.loads(hist.read_text(encoding="utf-8").splitlines()[-1])
+    check("eval CLI e2e:history 三新欄落帳", all(k in rec for k in ("goldset_snapshot", "unjudged_count", "unjudged_rate")), str(rec)[:300])
+    check("★--live-vault 未釘定時 goldset_snapshot 必須誠實記 None★", rec["goldset_snapshot"] is None, str(rec.get("goldset_snapshot")))
+    env_tr = {**env, "LUMOS_EVAL_ROOT": str(root)}
+    r_tr = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "retrieval_eval.py"),
+                           "--goldset", str(gpath), "--split", "held", "--snapshot", c1],
+                          capture_output=True, text=True, env=env_tr, cwd=root)
+    rec2 = _json.loads(hist.read_text(encoding="utf-8").splitlines()[-1])
+    check("--snapshot 輪:mode=goldset-transition 且 goldset_snapshot=c1",
+          rec2["mode"] == "goldset-transition" and rec2["goldset_snapshot"] == c1, str(rec2)[:300])
+
+
+def t_eval_scoring_llm_free_guard():
+    """spec 合約候選④守衛:計分腳本不得出現 LLM 呼叫痕跡(靜態 drift guard,粗但有牙)。"""
+    _need_src("governance/eval")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    src = (repo / "governance" / "eval" / "retrieval_eval.py").read_text(encoding="utf-8")
+    for tok in ("generativelanguage", "anthropic", "openai", "gemini -m", "claude -p"):
+        check(f"計分路徑無 LLM 痕跡:{tok}", tok not in src, tok)
 
 
 # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══

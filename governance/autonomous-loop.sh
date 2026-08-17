@@ -57,14 +57,22 @@ print(last)' "$hist" 2>/dev/null || echo 1970-01-01)"
       local sig; sig="$(cd "$repo" && python3 governance/eval/refresh_labels.py signal --history "$hist" 2>/dev/null || echo '')"
       log "考卷($tag)未標率:${sig:-NA}"
       if echo "$sig" | grep -q 'over=yes'; then
+        # ★rc+產物存在雙查後才通報★(code-r1 資源席 F2:原 || true 吞錯照發「已產表」=假成功);
+        # token 走 env 傳遞(code-r1 外家席:inline $() 展開含引號的 token 會炸 python 且被 || true 吞掉)
+        local delta_rc=0
         (cd "$repo" && python3 governance/eval/refresh_labels.py delta \
-          --out "$repo/governance/eval/retrieval-delta-$TODAY") >> "$LOGDIR/exam-$tag-$TODAY.log" 2>&1 || true
-        log "考卷($tag)未標率超線,已產 delta 表 retrieval-delta-$TODAY-sheet.md 等人放行補標"
-        MSG="📝 檢索考卷($tag)未標率超線($sig)——delta 表已備:governance/eval/retrieval-delta-$TODAY-sheet.md,補標流程見 Projects/標註刷新_計劃" python3 -c "
-import sys, os; sys.path.insert(0,'$REPO/governance')
+          --out "$repo/governance/eval/retrieval-delta-$TODAY") >> "$LOGDIR/exam-$tag-$TODAY.log" 2>&1 || delta_rc=$?
+        if [ "$delta_rc" -eq 0 ] && [ -f "$repo/governance/eval/retrieval-delta-$TODAY-sheet.md" ]; then
+          log "考卷($tag)未標率超線,已產 delta 表 retrieval-delta-$TODAY-sheet.md 等人放行補標"
+          MSG="📝 檢索考卷($tag)未標率超線($sig)——delta 表已備:governance/eval/retrieval-delta-$TODAY-sheet.md,補標流程見 Projects/標註刷新_計劃" \
+          LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')  # \$REPO(工具鏈本體)刻意非 \$repo:line_notify 模組只存在於本體
 from autonomous_loop import line_notify
-t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+t=os.environ.get('LINE_TOKEN','')
 print('LINE', line_notify.send(line_notify.build_message('labeling-refresh', os.environ['MSG'], None), t) if t else 'no-token')" || true
+        else
+          log "⚠ 考卷($tag)未標率超線但 delta 表產製失敗(rc=$delta_rc),不通報假成功;詳 $LOGDIR/exam-$tag-$TODAY.log"
+        fi
       fi
     else
       log "⚠ 考卷($tag)執行失敗(fail-open 不阻斷),詳 $LOGDIR/exam-$tag-$TODAY.log"
