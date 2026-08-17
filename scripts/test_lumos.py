@@ -19179,6 +19179,30 @@ def t_refresh_repin():
     check("壞輸入 rc2", r3.returncode == 2, str(r3.returncode))
 
 
+def t_eval_history_record_fields():
+    """T5:_history_record 純函式——goldset_snapshot/unjudged_count/unjudged_rate 三欄;
+    --snapshot 覆寫 → mode=goldset-transition(mode 為既有欄位)。"""
+    _need_src("governance/eval")
+    import types
+    root, gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    unj = {"count": 3, "denom": 30, "rate": 0.1, "per_case": {}, "skipped": []}
+    args = types.SimpleNamespace(k=8, snapshot=None)
+    rec = m._history_record(args, gates={"g": True}, ok=True,
+                            reports=[{"split": "held", "verdict": {"v": 1}}],
+                            unj=unj, pinned_sha="285d429")
+    check("mode 預設 goldset", rec["mode"] == "goldset", str(rec))
+    check("goldset_snapshot 欄=實際釘定 sha", rec["goldset_snapshot"] == "285d429", str(rec))
+    check("unjudged 兩欄在", rec["unjudged_count"] == 3 and rec["unjudged_rate"] == 0.1, str(rec))
+    check("既有欄位仍在(ts/gates/pass/verdicts)",
+          all(k in rec for k in ("ts", "gates", "pass", "verdicts")), str(rec))
+    args2 = types.SimpleNamespace(k=8, snapshot="ab91051")
+    rec2 = m._history_record(args2, gates={}, ok=False, reports=[], unj=None, pinned_sha="ab91051")
+    check("--snapshot 覆寫 → mode=goldset-transition", rec2["mode"] == "goldset-transition", str(rec2))
+    check("unj=None 時兩欄為 None(欄位仍在)",
+          "unjudged_count" in rec2 and rec2["unjudged_count"] is None, str(rec2))
+
+
 # ══ query 結構化查詢(WHERE over 標籤家族;[[Projects/圖譜結構化查詢_計劃]]) ══
 
 def _mk_query_vault():

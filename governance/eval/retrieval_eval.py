@@ -346,6 +346,26 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
     return {"split": tag, "search": srows, "edit": erows, "verdict": verdict}
 
 
+def _history_record(args, gates, ok, reports, unj, pinned_sha):
+    """history 逐筆組裝(純函式,標註刷新 T5)。新欄:goldset_snapshot=實際釘定 sha、
+    unjudged_count/unjudged_rate(評測母體口徑;unj=None 時欄位保留值 None)。
+    --snapshot 覆寫輪(過渡雙跑的舊快照輪)mode 寫 goldset-transition——
+    autonomous-loop「取最後一筆 goldset 列」判定不受干擾。"""
+    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    knobs = {k: v for k, v in os.environ.items()
+             if k.startswith("LUMOS_IMPACT_") or k.startswith("LUMOS_RANK_")}
+    return {"mode": "goldset-transition" if getattr(args, "snapshot", None) else "goldset",
+            "ts": datetime.date.today().isoformat(),
+            "eval_head": head, "goldset_snapshot": pinned_sha,
+            "knobs": knobs or "frozen-defaults",
+            "vault_note": "活語料:節點增修致數字 ±1pp 漂移;重現=checkout eval_head 重跑",
+            "k": args.k, "gates": gates, "pass": ok,
+            "unjudged_count": (unj or {}).get("count"),
+            "unjudged_rate": (unj or {}).get("rate"),
+            "verdicts": {r["split"]: r["verdict"] for r in reports}}
+
+
 def main():
     global VAULT, SNAP_ROOT
     ap = argparse.ArgumentParser()
@@ -353,6 +373,7 @@ def main():
     ap.add_argument("--goldset", help="人工標註 goldset.json 路徑")
     ap.add_argument("--split", choices=["train", "held"], help="只跑該切分")
     ap.add_argument("--live-vault", action="store_true", help="用現況 vault(預設釘 goldset snapshot;探索/漂移觀測用)")
+    ap.add_argument("--snapshot", help="覆寫釘定 sha(過渡雙跑的舊快照輪;該輪 mode=goldset-transition)")
     ap.add_argument("-k", type=int, default=8)
     args = ap.parse_args()
     if VAULT is None:
@@ -381,10 +402,13 @@ def main():
         # 語料快照釘定(r1 終審折入,可重現性正解):labels 對應出題當下的 vault——
         # 之後新增的未標節點若進候選池一律計噪音,gate 會被「寫文件」這種無關演進打翻。
         # 預設把評測 vault 釘在 goldset.snapshot_commit 的 worktree;--live-vault 才用現況(探索用)。
-        _snap = gs.get("snapshot_commit")
+        _snap = args.snapshot or gs.get("snapshot_commit")
+        _pinned = _snap
         if _snap and not args.live_vault and not os.environ.get("LUMOS_EVAL_VAULT"):
             if pin_snapshot(_snap):
                 print(f"(語料釘定 snapshot={_snap};--live-vault 可用現況)")
+            else:
+                _pinned = None   # 釘定失敗退回現況——帳面如實記 None,不謊稱已釘
         unl = sum(1 for c in gs["labels"].values() for v in c.values() if v.get("final") is None)
         if unl:
             print(f"⚠ 尚有 {unl} 個候選未定稿(final=None,視為 0)", file=sys.stderr)
@@ -411,16 +435,13 @@ def main():
             mark = "✅" if val else ("❌" if val is False else "–(無資料,fail-closed)")
             print(f"  {mark} {name}")
         print(f"gate 總判定: {'PASS — 可翻預設' if ok else 'FAIL — 維持 dormant'}")
+        # S4 未標率(評測母體口徑;held 專屬,train 不計)——與 delta/repin 同源 collect_unjudged
+        unj = collect_unjudged(gs, "held")
+        print(f"unjudged(held 評測母體): {unj['count']}/{unj['denom']}(rate={round(unj['rate'], 4)})"
+              + (f" skipped={unj['skipped']}" if unj["skipped"] else ""))
         hist = Path(__file__).parent / "retrieval-eval-history.jsonl"
         with open(hist, "a", encoding="utf-8") as fh:
-            head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
-                                  capture_output=True, text=True).stdout.strip()
-            knobs = {k: v for k, v in os.environ.items() if k.startswith("LUMOS_IMPACT_") or k.startswith("LUMOS_RANK_")}
-            fh.write(json.dumps({"mode": "goldset", "ts": datetime.date.today().isoformat(),
-                                 "eval_head": head, "knobs": knobs or "frozen-defaults",
-                                 "vault_note": "活語料:節點增修致數字 ±1pp 漂移;重現=checkout eval_head 重跑",
-                                 "k": args.k, "gates": gates, "pass": ok,
-                                 "verdicts": {r["split"]: r["verdict"] for r in reports}},
+            fh.write(json.dumps(_history_record(args, gates, ok, reports, unj, _pinned),
                                 ensure_ascii=False) + "\n")
         return 0 if ok else 1
     ap.print_help()
