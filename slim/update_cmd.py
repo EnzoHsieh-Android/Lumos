@@ -32,13 +32,13 @@ def _slim_update():
         if r.returncode != 0:
             print(f"ERROR: {dest} 更新失敗(可能有本地改動,或不是 fast-forward)。",
                   file=sys.stderr)
-            print("  " + (r.stderr or r.stdout).strip()[:1000], file=sys.stderr)   # 不掐頭:git 關鍵原因常在開頭(終審外家雙席)
+            print("  " + (r.stderr or r.stdout).strip()[-1000:], file=sys.stderr)   # 截尾保留:實測 git 的 fatal: 關鍵行在尾端(r2 delta 實證,推翻前註解)
             print("  若你動過裡面的檔案:這是 --ff-only 的保護不是壞掉——確認沒有要留"
                   "的東西後,備份/刪掉該目錄再重跑一行安裝。", file=sys.stderr)
             return 2
         _pull_msg = r.stdout.strip().splitlines()
         if _pull_msg:
-            print(_pull_msg[-1])   # 「Already up to date.」/「Fast-forward」——讓使用者知道這次有沒有拉到新東西(終審 s2)
+            print(_pull_msg[0])   # 首行=「Already up to date.」或「Updating a..b」——有沒有拉到新東西一眼可判(r2 delta 實證:末行是 diffstat 碎片)
         inst = dest / "install.py"
         if not inst.is_file():
             print(f"ERROR: {inst} 不存在——交付包內容可能不完整;請重跑一行安裝。",

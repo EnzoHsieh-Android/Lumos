@@ -20731,7 +20731,8 @@ def t_slim_update_tool_only_real():
     翻紅釘:拿掉 --tool-only 支援→守衛拒絕(rc2)或 CLAUDE.md 被動,此測必紅。"""
     import tempfile as _tf
     import subprocess as _sp
-    inst = Path(GRAPHCTL).parent.parent / "dist" / "install.py"   # 組裝後交付包(slim/ 工廠無 scripts/lumos 可裝)
+    out = _slim_update_product()                     # 現生隔離交付包(dist/ 不進版控,讀 repo 產物=CI 乾淨簽出必炸——r2 delta blocker)
+    inst = out.parent.parent / "install.py"
     fake_home = Path(_tf.mkdtemp(prefix="gctl-toolonly-home-"))
     cwd = Path(_tf.mkdtemp(prefix="gctl-toolonly-cwd-"))   # 非專案根:無 .git/docs/CLAUDE.md
     env = dict(__import__("os").environ, HOME=str(fake_home))
