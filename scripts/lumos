@@ -4520,7 +4520,7 @@ _CANARY_TYPES = ("a", "b", "c", "d")   # 壞交叉引用/未定義旗標/未定�
 
 # ── 派工編制資料化(Projects/派工編制資料化_計劃):編制宣告表+對帳原語 ──
 # 編制數字單源=本表(skill 散文降解說);數值逐條抄自 lumos-design-loop/lumos-code-loop SKILL 現值。
-# code/standard(循序)v1 刻意不入表:既有 tier↔格式守衛使循序 code loop 無法錨定 standard(上游缺陷另案)。
+# code/standard(循序)於 2026-08-18 循序codeloop-tier錨定案補列(v1 曾因 tier↔格式守衛誤擋而不入表,守衛已修)。
 _ROSTER_EXTERNAL_KEYS = ("codex", "gemini", "qwen", "gpt")
 _ROSTER_CLAUDE_KEYS = ("sonnet", "opus", "haiku", "claude")
 
@@ -4547,6 +4547,9 @@ _TIER_ROSTER = {
         _rseat("鏡頭4", "claude", True, "required"),
         _rseat("鏡頭5", "claude", True, "required"),
         _rseat("外家否決", "external", False, "note-if-absent")]},
+    ("code", "standard"): {"mode": "sequential", "seats": [
+        _rseat("單reviewer", "claude", True, "required"),
+        _rseat("外家否決", "external", False, "note-if-absent", "standard 退同門+留痕")]},
     ("code", "high"): {"mode": "panel", "seats": [
         _rseat("鏡頭1", "claude", True, "required"),
         _rseat("鏡頭2", "claude", True, "required"),
@@ -4751,9 +4754,16 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         eff_tier = "standard" if panel_fmt else "legacy"   # 無定錨舊帳 fallback
     width, cap = _TIER_PARAMS[eff_tier]
     light = eff_tier == "light"
-    # ── tier↔格式一致性(code-loop r1 折入:格式推導可被繞——high 漏帶 --round 會走鬆的 legacy 閘) ──
+    # seq=循序 code loop(skill 設計行為:code 的 standard 走單 reviewer 循序;
+    # 2026-08-18 循序codeloop-tier錨定案——not panel_fmt 是硬規格,code+standard 的 panel 帳照 panel 樣式走)
+    seq = (eff_tier == "standard" and _roster_kind(loop_id) == "code" and not panel_fmt)
+    if seq:
+        width = 1   # 單 reviewer;cap 沿 _TIER_PARAMS["standard"][1]=3(分量本就正確,不另覆寫)
+    # ── tier↔格式一致性(code-loop r1 折入:格式推導可被繞——high 漏帶 --round 會走鬆的 legacy 閘;
+    #    2026-08-18 放寬單一象限:code∧standard∧無round=循序設計行為,不再誤擋——歷史三個循序 loop
+    #    因此被迫落 legacy cap6,見 Issues/loop-next吐不可宣告的tier) ──
     if rounds:
-        if eff_tier in ("standard", "high") and not panel_fmt:
+        if eff_tier in ("standard", "high") and not panel_fmt and not seq:
             print(f"ERROR: tier={eff_tier} 要求 panel 格式(記錄帶 --round),帳面為 legacy 格式——"
                   "格式衝突(補 record 帶 --round,或 tier 錯誤則開新 loop id)", file=sys.stderr)
             return 2
@@ -4775,14 +4785,14 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             # =可猜=答案印在考卷背面(該 plan r1 審計語);同輪 slot 間仍不重複(width≤4 時
             # 全 distinct;width>4 以重洗批次延續,重複最少化)——冗餘 canary 不算獨立注意力票。
             import random
-            if light or eff_tier == "legacy":
+            if light or eff_tier == "legacy" or seq:
                 out["canary_type"] = random.choice(_CANARY_TYPES)
             else:
                 pool = []
                 while len(pool) < width:
                     pool.extend(random.sample(_CANARY_TYPES, len(_CANARY_TYPES)))
                 out["canary_type"] = {f"slot{i}": pool[i - 1] for i in range(1, width + 1)}
-            rmode = "" if (light or eff_tier == "legacy") else f" --round r{n_next}"
+            rmode = "" if (light or eff_tier == "legacy" or seq) else f" --round r{n_next}"
             # ★`legacy` 不是可宣告值,不得吐進 record_cmd★(2026-08-04):`--tier` 的 choices
             # 只有 light/standard/high(LOOP_TIERS),legacy 純粹是「無定錨舊帳 + legacy 格式」
             # 的推導結果。原本這裡無條件吐 `--tier {eff_tier}`,legacy 下等於★發一條 argparse
@@ -4807,12 +4817,21 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                     f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}")
                 out["disposal_gate"] = f"lumos loop status {loop_id} --disposal --spec <計劃節點.md> --repo <root>"
             if eff_tier == "legacy":
-                out["tier_hint"] = (
-                    "★本 loop 無 tier 定錨,正在吃 legacy 判準(單席、cap 6——比 standard 的 cap 3 鬆)★。"
-                    "legacy 不是可宣告值,★這個 loop 補標不了★:帳面已是 legacy 格式(記錄不帶 --round),"
-                    "補 --tier standard|high 會被格式一致性當場擋掉(rc2)。"
-                    "(--tier light 格式相容,但 cap=2 且帶 ratchet 語意,對已跑數輪的 loop 通常當場 cap-reached。)"
-                    "要走分級判準請★開新 loop id,並在第一筆 record 就帶 --tier★。")
+                if _roster_kind(loop_id) == "code":
+                    # 循序codeloop-tier錨定案:standard 對 code 循序已格式相容,但補標=cap 陷阱——警告式,不邀請
+                    out["tier_hint"] = (
+                        "★本 loop 無 tier 定錨,正在吃 legacy 判準(單席、cap 6——比 standard 的 cap 3 鬆)★。"
+                        "legacy 不是可宣告值。補 --tier high 會被格式一致性當場擋掉(rc2);"
+                        "--tier standard 格式相容(code 循序=設計行為,2026-08-18 守衛修正)——"
+                        "但★既有輪數會整批計入 cap=3★,已跑 ≥3 筆的 loop 一補標下一步即 cap-reached。"
+                        "要走分級判準請★開新 loop id,並在第一筆 record 就帶 --tier★。")
+                else:
+                    out["tier_hint"] = (
+                        "★本 loop 無 tier 定錨,正在吃 legacy 判準(單席、cap 6——比 standard 的 cap 3 鬆)★。"
+                        "legacy 不是可宣告值,★這個 loop 補標不了★:帳面已是 legacy 格式(記錄不帶 --round),"
+                        "補 --tier standard|high 會被格式一致性當場擋掉(rc2)。"
+                        "(--tier light 格式相容,但 cap=2 且帶 ratchet 語意,對已跑數輪的 loop 通常當場 cap-reached。)"
+                        "要走分級判準請★開新 loop id,並在第一筆 record 就帶 --tier★。")
             # ★預防端:警告必須在派工「之前」★——記帳時才喊已經來不及(輪跑完了)。
             # loop next 是每輪第一步,所以量尺放這裡。
             out["scope_cap"] = (
@@ -4830,7 +4849,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         # 且那一筆是開發它的 code-m2cluster 自己——34 個 panel loop 中有 33 個靜默落回
         # 無-cluster 舊帳。根因不是機制不好,是★沒有任何地方在該選的時候提起它★。
         # 只在 N=1 提(那是選擇真正還開著的唯一時刻),避免對已定錨的 loop 噴無效噪音。
-        if phase == "plant-canary" and not light and eff_tier != "legacy" and n_next == 1:
+        if phase == "plant-canary" and not light and eff_tier != "legacy" and not seq and n_next == 1:
             out["cluster_hint"] = (
                 "★本 loop 第一輪——cluster 帳只有現在能選(模式由第一個有效輪定錨,之後要換只能開新 loop id)★:"
                 "若預期 findings 會散成★性質不同★的風險群(例:「規格縮水」與「邊界 bug」),"

@@ -24,6 +24,17 @@ aliases:
 ---
 # loop next 吐出一條跑不動的指令（而修復它的自然反應會複製這個狀態）
 
+> ## ✅ 病根已修（2026-08-18）— 守衛 kind-aware,循序 code loop 可錨定 standard
+>
+> 原結案（08-04）只修了下游症狀（record_cmd 不吐不可宣告值+tier_hint）。2026-08-18
+> [[Projects/循序codeloop-tier錨定_計劃]] 把 tier↔格式守衛改為認 loop 種類:**code∧standard∧無 round
+> =循序設計行為,放行**（width=1、cap=3,第 3 輪攤人）;其餘象限零收緊（code+standard 全 panel 照舊合法）。
+> **實證**:TDD 六組測試先紅後綠+全量 2810 綠;tier_hint 對 code 循序 loop 改警告式
+> （補標會把既有輪數整批計入 cap=3——不邀請補標,建議開新 loop id）。
+>
+> ★以下「症狀/根因/修法」是當時的排查紀錄;「補標不了」的宣稱對 code 循序 loop 已不成立。★
+
+
 ## 症狀
 
 `lumos loop next <legacy-loop> --json` 的 `record_cmd` 長這樣：

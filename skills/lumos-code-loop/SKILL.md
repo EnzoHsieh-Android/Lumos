@@ -19,7 +19,7 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
 > canary 同步降**觀測**(當輪煙霧偵測器:miss 不作廢該席 findings,只記帳;判讀=漏送分題強警報/漏難題弱訊號)。
 > **A 案(K=2+抽查)機制碼與 `t_panel_k2_and_probe` 保留不刪**(舊帳重放消費);舊 loop 帳不回溯。
 
-- **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill;`standard` 走單 reviewer(★原本這裡寫「(K=2)」是★講反的★:tier=high 實務上走平行 panel,而 panel 是 **K=1**;K=2 是循序模式的數字。2026-08-03 修★);trivial 可跳(commit 註明)。進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
+- **何時**:分支終審前跑 `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走本 skill;`standard` 走單 reviewer(★2026-08-18 起循序 loop 可正常錨定 `--tier standard`(cap 3),守衛誤擋已修——首筆 record 就帶 --tier★;★原本這裡寫「(K=2)」是★講反的★:tier=high 實務上走平行 panel,而 panel 是 **K=1**;K=2 是循序模式的數字。2026-08-03 修★);trivial 可跳(commit 註明)。進場可先 `lumos testmap affected --diff <merge-base>..HEAD` 拿建議測試清單(advisory,需先 `testmap build` 過)。
 - **gate/守衛類 code 建議 feature branch**(2026-07-22 prepush範圍修法):pre-push 對 branch 與 main-direct **現已同軌**檢查(讀 stdin 推送範圍逐 ref 判,非 merge-base)——此為縱深建議非機械強制。
 - **loop id** = `code-<topic>`（例 `code-payment-retry`）。
 - **一輪 = 7 步(循序)** 或 **平行 panel(≤3 輪,見下)**:
@@ -192,7 +192,7 @@ lumos code-loop pass --note "panel 收斂:輪有效∧無存活 major(殘餘 obs
 
 ## 護欄 · 天花板 · 收斂後
 
-**護欄**:升級觸發=引句大面積錨不到/通用回應 → 升 opus(舊「連 2 missed」隨協議停用作廢)。cap＝6 筆(循序)/3 輪(panel);到頂未收斂 → 停、攤給人、記「達 cap 未收斂」,別無限燒。
+**護欄**:升級觸發=引句大面積錨不到/通用回應 → 升 opus(舊「連 2 missed」隨協議停用作廢)。cap＝6 筆(循序無定錨 legacy 帳)/**3 筆(錨定 standard 的循序,2026-08-18 守衛修正後可錨定——第 3 輪即攤人)**/3 輪(panel);到頂未收斂 → 停、攤給人、記「達 cap 未收斂」,別無限燒。
 
 **誠實天花板**(收斂後必向人講):
 > 回報遵 CLAUDE.md「對人回報用白話」規則(mutation 之類術語首次出現給一句人話,如 mutation=故意改壞代碼看測試接不接得住)。

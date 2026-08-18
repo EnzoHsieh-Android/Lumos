@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-18
 updated: 2026-08-18
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/graph-governance
 aliases:
   - 循序 tier 錨定
@@ -86,6 +86,10 @@ PRIOR-ART: ① 最小解層級——非新機制,是既有守衛(cmd_loop_next t
 ## 合約候選(收斂時複核,候選≠已標)
 
 - 「high 恆要求 panel 格式(兩 kind 皆然)」——守衛放寬後的不變邊界。
+
+## 落地(2026-08-18)
+
+同日完成:TDD 六組先紅後綠、全量 2810/0 零倒退;skill 護欄 cap 三檔修真、昨案範圍刀 supersede、事故節點病根結案橫幅。驗證=[[Verification/2026-08-18_循序tier錨定落地]]。
 
 ## 審計修正紀錄
 

@@ -20301,10 +20301,12 @@ def t_tier_roster_table():
     """S1 防雙真相釘:panel 條目佔 W 席數==width、single=1;requirement 恆裸枚舉;無 code/standard。"""
     m = _load_lumos_module()
     tbl = m._TIER_ROSTER
-    check("roster: 表存在且含四組合", set(tbl.keys()) ==
-          {("design", "light"), ("design", "standard"), ("design", "high"), ("code", "high")},
+    check("roster: 表存在且含五組合", set(tbl.keys()) ==
+          {("design", "light"), ("design", "standard"), ("design", "high"), ("code", "high"),
+           ("code", "standard")},
           str(sorted(tbl.keys())))
-    check("roster: 無 code/standard(v1 範圍釘)", ("code", "standard") not in tbl, "")
+    check("roster: code/standard 補列(循序 tier 錨定案 supersede v1 範圍釘)",
+          tbl.get(("code", "standard"), {}).get("mode") == "sequential", str(tbl.get(("code", "standard"))))
     allowed_req = {"required", "required-fail-closed", "note-if-absent", "conditional"}
     for (kind, tier), entry in tbl.items():
         seats = entry["seats"]
@@ -20462,6 +20464,116 @@ def t_loop_status_roster_check():
     sf.write_text("[]", encoding="utf-8")
     rs = run(vault, "loop", "status", "rl-nolog", "--settle", str(sf), "--gate", "--spec", str(spec), "--repo", str(repo), "--roster")
     check("status-roster: --settle 模式觀測有印", "[roster]" in rs.stdout, rs.stdout[:400] + rs.stderr[:200])
+
+
+
+
+# ── 循序codeloop-tier錨定(Projects/循序codeloop-tier錨定_計劃):守衛 kind-aware+seq 樣式 ──
+def _seq_rec(vault, loop, tier=None, rid=None, sev="minor"):
+    import json as _j
+    row = {"ts": "2026-08-18T12:00:00+08:00", "kind": "none", "loop": loop,
+           "severity": sev, "auditor": "reviewer-sonnet", "note": "x"}
+    if tier:
+        row["tier"] = tier
+    if rid:
+        row["round"] = rid
+    with open(vault.parent / ".canary-log.jsonl", "a", encoding="utf-8") as f:
+        f.write(_j.dumps(row, ensure_ascii=False) + "\n")
+
+
+def t_seq_code_std_anchor():
+    """S1/S2:code- loop 錨定 standard 循序格式放行;width=1/cap=3/單值 canary/無 --round。"""
+    import json as _j
+    vault = mkvault()
+    sp = vault.parent / "seq-spec.md"
+    sp.write_text("# s\n", encoding="utf-8")
+    _seq_rec(vault, "code-seqfix", tier="standard")
+    r = run(vault, "loop", "next", "code-seqfix", "--spec", str(sp), "--json")
+    check("seq-anchor: code+standard 無 round 不再 rc2", r.returncode != 2, r.stderr[:300])
+    d = _j.loads(r.stdout.strip())
+    check("seq-anchor: width=1/min_seats=1/cap=3",
+          d["width"] == 1 and d["min_seats"] == 1 and d["cap"] == 3, str({k: d[k] for k in ("width", "min_seats", "cap")}))
+    check("seq-anchor: canary_type 單值非 slot dict", isinstance(d.get("canary_type"), str), str(d.get("canary_type")))
+    check("seq-anchor: record_cmd 帶 --tier standard 且不帶 --round",
+          "--tier standard" in d.get("record_cmd", "") and "--round" not in d.get("record_cmd", ""),
+          d.get("record_cmd", "")[:200])
+    # ★前置斷言(守衛還活著):design loop 同格式照樣 rc2——放行的只有 code 象限
+    _seq_rec(vault, "dz-seqfix", tier="standard")
+    rd = run(vault, "loop", "next", "dz-seqfix", "--json")
+    check("seq-anchor: ★前置★ design+standard 無 round 仍 rc2(守衛未被整條拆掉)",
+          rd.returncode == 2 and "panel 格式" in rd.stderr, f"rc={rd.returncode} {rd.stderr[:200]}")
+
+
+def t_seq_code_std_panel_ok():
+    """r1 折入零收緊釘:code+standard 帶 --round 照舊合法,吐 panel 樣式。"""
+    import json as _j
+    vault = mkvault()
+    sp = vault.parent / "seq-spec.md"
+    sp.write_text("# s\n", encoding="utf-8")
+    _seq_rec(vault, "code-seqpanel", tier="standard", rid="r1")
+    r = run(vault, "loop", "next", "code-seqpanel", "--spec", str(sp), "--json")
+    check("seq-panel-ok: code+standard 帶 round 不 rc2(零收緊)", r.returncode != 2, r.stderr[:300])
+    d = _j.loads(r.stdout.strip())
+    check("seq-panel-ok: panel 樣式(canary dict/width=3/record_cmd 帶 --round)",
+          isinstance(d.get("canary_type"), dict) and d["width"] == 3 and "--round" in d.get("record_cmd", ""),
+          str({k: d.get(k) for k in ("canary_type", "width")})[:200])
+
+
+def t_seq_guard_regression_grid():
+    """回歸格:其餘象限一格不動(high 兩 kind/indeterminate/light 兩 kind)。"""
+    vault = mkvault()
+    _seq_rec(vault, "code-hg", tier="high")
+    r1 = run(vault, "loop", "next", "code-hg", "--json")
+    check("回歸格: code+high 無 round 仍 rc2", r1.returncode == 2, f"rc={r1.returncode}")
+    _seq_rec(vault, "dz-hg", tier="high")
+    r2 = run(vault, "loop", "next", "dz-hg", "--json")
+    check("回歸格: design+high 無 round 仍 rc2", r2.returncode == 2, f"rc={r2.returncode}")
+    _seq_rec(vault, "codestage8", tier="standard")
+    r3 = run(vault, "loop", "next", "codestage8", "--json")
+    check("回歸格: indeterminate+standard 無 round 仍 rc2(走嚴)", r3.returncode == 2, f"rc={r3.returncode}")
+    _seq_rec(vault, "code-lg", tier="light", rid="r1")
+    r4 = run(vault, "loop", "next", "code-lg", "--json")
+    check("回歸格: code+light 帶 round 仍 rc2(既有 light 守衛)", r4.returncode == 2, f"rc={r4.returncode}")
+    _seq_rec(vault, "dz-lg", tier="light", rid="r1")
+    r5 = run(vault, "loop", "next", "dz-lg", "--json")
+    check("回歸格: design+light 帶 round 仍 rc2", r5.returncode == 2, f"rc={r5.returncode}")
+
+
+def t_seq_cap_and_roster():
+    """cap 行為:3 筆循序後 cap-reached;roster 吐單 reviewer+否決席。"""
+    import json as _j
+    vault = mkvault()
+    sp = vault.parent / "seq-spec.md"
+    sp.write_text("# s\n", encoding="utf-8")
+    for _ in range(3):
+        _seq_rec(vault, "code-seqcap", tier="standard")
+    r = run(vault, "loop", "next", "code-seqcap", "--spec", str(sp), "--json")
+    d = _j.loads(r.stdout.strip())
+    check("seq-cap: 3 筆後 cap-reached(買到第 3 輪攤人)", d.get("phase") == "cap-reached", str(d.get("phase")))
+    r2 = run(vault, "loop", "next", "code-seqr", "--tier", "standard", "--json")
+    d2 = _j.loads(r2.stdout.strip())
+    seats = (d2.get("roster") or {}).get("seats", [])
+    check("seq-roster: code/standard 吐單 reviewer(佔W)+外家否決(不佔W)",
+          sum(1 for s in seats if s["occupies_w"]) == 1
+          and any(s["family"] == "external" and not s["occupies_w"] for s in seats), str(seats)[:300])
+
+
+def t_seq_tier_hint_warning():
+    """S3 測試收口:code- legacy loop 的 tier_hint 含整批計入警告;design 措辭不含。"""
+    import json as _j
+    vault = mkvault()
+    sp = vault.parent / "seq-spec.md"
+    sp.write_text("# s\n", encoding="utf-8")
+    _seq_rec(vault, "code-oldseq")          # 無 tier=legacy 推導
+    r = run(vault, "loop", "next", "code-oldseq", "--spec", str(sp), "--json")
+    d = _j.loads(r.stdout.strip())
+    check("tier-hint: ★前置★ 走到派工階段(hint 有吐)", bool(d.get("tier_hint")), str(d.get("phase")))
+    check("tier-hint: code legacy loop 含「整批計入」警告", "整批計入" in d.get("tier_hint", ""), d.get("tier_hint", "")[:300])
+    _seq_rec(vault, "dz-oldseq")
+    r2 = run(vault, "loop", "next", "dz-oldseq", "--spec", str(sp), "--json")
+    d2 = _j.loads(r2.stdout.strip())
+    check("tier-hint: ★前置★ design 端 hint 也有吐(非 vacuous)", bool(d2.get("tier_hint")), str(d2.get("phase")))
+    check("tier-hint: design legacy loop 措辭不含該警告", "整批計入" not in d2.get("tier_hint", ""), d2.get("tier_hint", "")[:300])
 
 
 if __name__ == "__main__":
