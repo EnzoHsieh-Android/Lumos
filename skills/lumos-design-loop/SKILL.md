@@ -186,6 +186,7 @@ pitfalls 現在多一問「列出此功能碰哪些風險類」——**廣度靠
 
 6 輪同族循序 ＝ 相關信號(「9 judge 2 票」)且 framing 對抗 G2 收斂逼跑滿 cap。壓縮 ＝ **買獨立廣度,不買相關深度**。
 
+- **★編制數字單源=`lumos loop next` 吐的 roster 欄(`_TIER_ROSTER`,2026-08-18 派工編制資料化)★**——本節散文為解說,漂移以 roster 為準;收斂時可跑 `loop status <id> --roster --repo <root>` 對帳應派 vs 實派(advisory)。
 - **一輪 ＝ 平行派 W 個多樣審計員**(W 由 tier 的 `difficulty.params.panel_width`:standard=3／high=5),**不同鏡頭**(正確性／邊界／整合)。(~~不同 canary 型別~~已隨協議停用。)**席名慣例(2026-08-14)**:record 的 `--auditor` 建議 `<鏡頭>-<模型>`(如 `correctness-sonnet`)——供 canary-stats 重疊分布跨輪席位分析;純慣例無機械檢查。
   - **r1 其中一席改無鏡頭通才席**:窄鏡頭的隧道視野漏掉的洞被通才一發抓走——首輪買廣度;r2+ delta 輪恢復鏡頭分工買深度。
   - **跨家族席**(Codex CLI／qwen)——**規則見 `reference.md` §C**(沒有外家怎麼辦、為何不升主力席;帶 canary 條款已隨協議停用)。

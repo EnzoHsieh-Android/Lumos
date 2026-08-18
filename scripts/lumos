@@ -4237,7 +4237,7 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
     return 0
 
 
-def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None, disposal=False):
+def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None, disposal=False, roster=False):
     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
     findings 數的源頭仍是 LLM 裁決——gate 機械化的是算術,不是數字的正確性(見設計 doc)。
@@ -4304,6 +4304,13 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
     except OSError as e:
         print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
         return 2
+
+    if roster:
+        # [派工編制資料化] advisory 觀測——恆在各模式分支 early-return 之前印,rc 完全不動
+        try:
+            _roster_observe(env, loop_id, rounds, repo)
+        except Exception as e:   # 觀測絕不擋閘:任何意外只降級為警告
+            print(f"[roster] ⚠ 觀測失敗(advisory,不影響判定): {e}")
 
     # 混用守衛(R2-F1 footgun):panel 記錄(有 round 欄)與 legacy 模式不可混用。
     # 用 all/any 而非單向 any:partial-mix(部分有 round、部分沒)也擋——否則 round-less
@@ -4511,6 +4518,183 @@ _CANARY_SCOPE_SOFT_CAP_LINES = 1800
 _CANARY_TYPES = ("a", "b", "c", "d")   # 壞交叉引用/未定義旗標/未定義欄位常數/未定義產物裸檔名
 
 
+# ── 派工編制資料化(Projects/派工編制資料化_計劃):編制宣告表+對帳原語 ──
+# 編制數字單源=本表(skill 散文降解說);數值逐條抄自 lumos-design-loop/lumos-code-loop SKILL 現值。
+# code/standard(循序)v1 刻意不入表:既有 tier↔格式守衛使循序 code loop 無法錨定 standard(上游缺陷另案)。
+_ROSTER_EXTERNAL_KEYS = ("codex", "gemini", "qwen", "gpt")
+_ROSTER_CLAUDE_KEYS = ("sonnet", "opus", "haiku", "claude")
+
+
+def _rseat(slot, family, occ, req, note=None):
+    d = {"slot": slot, "family": family, "occupies_w": occ, "requirement": req}
+    if note:
+        d["note"] = note
+    return d
+
+
+_TIER_ROSTER = {
+    ("design", "light"): {"mode": "single", "seats": [
+        _rseat("通才", "claude", True, "required")]},
+    ("design", "standard"): {"mode": "panel", "seats": [
+        _rseat("鏡頭1", "claude", True, "required", "r1 其中一席通才(slot 命名慣例,非 lens 值域)"),
+        _rseat("鏡頭2", "claude", True, "required"),
+        _rseat("鏡頭3", "claude", True, "required"),
+        _rseat("外家否決", "external", False, "note-if-absent")]},
+    ("design", "high"): {"mode": "panel", "seats": [
+        _rseat("鏡頭1", "claude", True, "required"),
+        _rseat("鏡頭2", "claude", True, "required"),
+        _rseat("鏡頭3", "claude", True, "required"),
+        _rseat("鏡頭4", "claude", True, "required"),
+        _rseat("鏡頭5", "claude", True, "required"),
+        _rseat("外家否決", "external", False, "note-if-absent")]},
+    ("code", "high"): {"mode": "panel", "seats": [
+        _rseat("鏡頭1", "claude", True, "required"),
+        _rseat("鏡頭2", "claude", True, "required"),
+        _rseat("鏡頭3", "claude", True, "required"),
+        _rseat("鏡頭4", "claude", True, "required"),
+        _rseat("外家finder", "external", True, "required-fail-closed"),
+        _rseat("外家否決", "external", False, "required-fail-closed"),
+        _rseat("spec-conformance", "claude", False, "conditional", "有收斂 spec 才應派")]},
+}
+
+
+def _roster_kind(loop_id):
+    """loop id 前綴三值判:code-(含連字號)=code;code 開頭無連字號=None(indeterminate,
+    歷史帳實有 code側刪除傳播守衛/codestage);其餘=design。"""
+    if loop_id.startswith("code-"):
+        return "code"
+    if loop_id.startswith("code"):
+        return None
+    return "design"
+
+
+def _roster_family(auditor):
+    """auditor 字串→(family, dual_hit)。lower() 子串比對;判序寫死 external 先比、先命中先贏。"""
+    s = (auditor or "").lower()
+    ext = any(k in s for k in _ROSTER_EXTERNAL_KEYS)
+    cla = any(k in s for k in _ROSTER_CLAUDE_KEYS)
+    if ext:
+        return ("external", cla)
+    if cla:
+        return ("claude", False)
+    return ("unknown", False)
+
+
+def _roster_dispatch_entries(loop_dir, rid):
+    """解析一輪的 rN-dispatch*.json → (auditor 串列, 跳過檔數)。三種真實形狀:
+    ①dict 頂層 auditor ②dict 帶 seats 陣列 ③頂層 list;壞損 JSON 與不符形狀同一處置=跳過不計。"""
+    import json as _json
+    auditors, skipped = [], 0
+    for f in sorted(loop_dir.glob(f"{rid}-dispatch*.json")):
+        try:
+            obj = _json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            print(f"[roster] ⚠ {f.name} 壞損/不符形狀,跳過不計")
+            skipped += 1
+            continue
+        if isinstance(obj, dict) and "auditor" in obj:
+            elems = [obj]
+        elif isinstance(obj, dict) and isinstance(obj.get("seats"), list):
+            elems = obj["seats"]
+        elif isinstance(obj, list):
+            elems = obj
+        else:
+            print(f"[roster] ⚠ {f.name} 壞損/不符形狀,跳過不計")
+            skipped += 1
+            continue
+        for e in elems:
+            auditors.append(e.get("auditor") if isinstance(e, dict) else None)
+    return auditors, skipped
+
+
+def _roster_observe(env, loop_id, rounds, repo):
+    """loop status --roster 觀測段(advisory 恆不影響 rc):應派(_TIER_ROSTER)vs 實派(dispatch 快照)
+    逐輪分桶對帳。落點=cmd_loop_status 入口、各模式分支 early-return 之前(四模式皆吃得到)。"""
+    kind = _roster_kind(loop_id)
+    if kind is None:
+        print(f"[roster] {loop_id}: kind 無法判定(code 開頭但非 code- 慣例),跳過對帳")
+        return
+    tier = next((r.get("tier") for r in rounds if r.get("tier")), None)
+    print(f"[roster] {loop_id}: kind={kind}(依前綴推定) tier={tier or '無定錨'}")
+    if tier is None:
+        print("[roster] tier 無定錨(legacy/零記錄帳),無編制可對")
+        return
+    entry = _TIER_ROSTER.get((kind, tier))
+    if entry is None:
+        print(f"[roster] 無編制宣告(組合 {kind}/{tier} 未定義),跳過對帳")
+        return
+    root = Path(repo).resolve() if repo else _vault_repo_root(env)
+    loop_dir = root / "governance" / "review-reports" / loop_id
+    rids = []
+    for r in rounds:
+        rid = r.get("round")
+        if rid and rid not in rids:
+            rids.append(rid)
+    if loop_dir.is_dir():
+        import re as _re
+        for f in sorted(loop_dir.glob("*-dispatch*.json")):
+            m = _re.match(r"^(r\d+)-dispatch", f.name)
+            if m and m.group(1) not in rids:
+                rids.append(m.group(1))
+    if not rids:
+        print("[roster] 無輪記錄與派工快照,無可對帳")
+        return
+    seats = entry["seats"]
+    req_c = [s for s in seats if s["requirement"] in ("required", "required-fail-closed") and s["family"] == "claude"]
+    req_e = [s for s in seats if s["requirement"] in ("required", "required-fail-closed") and s["family"] == "external"]
+    nia = [s for s in seats if s["requirement"] == "note-if-absent"]
+    for rid in rids:
+        auditors, _skipped = _roster_dispatch_entries(loop_dir, rid) if loop_dir.is_dir() else ([], 0)
+        if not auditors:
+            print(f"[roster] {rid}: 無派工快照可對帳(舊帳/未落)")
+            continue
+        fams = [(a, *_roster_family(a)) for a in auditors]
+        n_c = sum(1 for _, f, _d in fams if f == "claude")
+        exts = [a for a, f, _d in fams if f == "external"]
+        unks = [a for a, f, _d in fams if f == "unknown"]
+        duals = [a for a, _f, d in fams if d]
+        hedge = f"可能缺(另有 {len(unks)} 席家族無法辨識)" if unks else "缺"
+        print(f"[roster] {rid}: 實派 {len(auditors)} 席(claude {n_c}/external {len(exts)}/unknown {len(unks)})"
+              f";應派 required claude {len(req_c)}+external {len(req_e)}")
+        if len(exts) < len(req_e):
+            fc = any(s["requirement"] == "required-fail-closed" for s in req_e)
+            msg = f"[roster] {rid}: external_missing——外家桶{hedge}(實 {len(exts)}/應 {len(req_e)})"
+            if fc:
+                msg += ";fail-closed 紀律未滿足(轉述,不阻斷)"
+            print(msg)
+        if n_c < len(req_c):
+            print(f"[roster] {rid}: seat_shortfall——claude 桶{hedge}(實 {n_c}/應 {len(req_c)})")
+        if len(req_e) >= 2:
+            from collections import Counter as _Counter
+            for name, cnt in _Counter(exts).items():
+                if cnt >= 2:
+                    print(f"[roster] {rid}: ⚠ 外家疑似兼任({cnt} 席同名:{name})")
+        if nia and not exts:
+            print(f"[roster] {rid}: 單家族,收斂宣稱要講小(note-if-absent 席缺,不算 shortfall)")
+        for s in seats:
+            if s["requirement"] == "conditional":
+                print(f"[roster] {rid}: 條件席 {s['slot']}——條件:{s.get('note', '?')}——應派與否編排者自對")
+        for a in unks:
+            print(f"[roster] {rid}: unknown 席列出不判定:{a}")
+        for a in duals:
+            print(f"[roster] {rid}: ⚠ 雙家族關鍵字命中:{a}(判序 external 先贏)")
+
+
+def _roster_next_payload(loop_id, eff_tier):
+    """loop next 的應派 roster:(dict|None, note|None)。legacy=單席通才慣例;
+    indeterminate 與查表 miss=None+對應 note(per-command 訊息:next 無對帳可跳,不印「跳過對帳」)。"""
+    kind = _roster_kind(loop_id)
+    if kind is None:
+        return None, "kind 無法判定(code 開頭但非 code- 慣例)"
+    if eff_tier == "legacy":
+        return {"mode": "single", "seats": [_rseat("通才", "claude", True, "required")]}, None
+    entry = _TIER_ROSTER.get((kind, eff_tier))
+    if entry is None:
+        return None, f"無編制宣告(組合 {kind}/{eff_tier} 未定義)"
+    return entry, None
+
+
+
 def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None):
     """M1包 #1(loop機械脊椎M1包_計劃):帳本吐唯一下一動作。唯讀指針——lumos 不 spawn agent,
     編排仍是 Claude(Systems/design-loop 分工)。phase 五值:escalate/gate-pending/converged/
@@ -4581,6 +4765,10 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
     def emit(phase, extra=None):
         out = {"phase": phase, "tier": eff_tier, "round": n_next, "width": width,
                "min_seats": width, "cap": cap, "advisory": "tier 由編排者宣告後定錨;lumos 只做映射與定錨讀取"}
+        _roster, _rnote = _roster_next_payload(loop_id, eff_tier)
+        out["roster"] = _roster
+        if _rnote:
+            out["roster_note"] = _rnote
         if phase == "plant-canary":
             # 型別派工當下隨機抽(2026-08-06 S2 同場補,plan:驗證層自證三件):固定輪替
             # =可猜=答案印在考卷背面(該 plan r1 審計語);同輪 slot 間仍不重複(width≤4 時
@@ -4655,6 +4843,13 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         else:
             print(f"[next] {loop_id}: phase={phase} tier={eff_tier} 下一輪 N={n_next}"
                   f" width={width} cap={cap}")
+            if out.get("roster"):
+                for s in out["roster"]["seats"]:
+                    print(f"  應派: {s['slot']} family={s['family']}"
+                          f" 佔W={'是' if s['occupies_w'] else '否'} requirement={s['requirement']}"
+                          + (f" note={s['note']}" if s.get("note") else ""))
+            elif out.get("roster_note"):
+                print(f"  應派: —({out['roster_note']})")
             for k in ("canary_type", "record_cmd", "scope_cap", "cluster_hint", "note"):
                 if k in out:
                     print(f"  {k}: {out[k]}")
@@ -13977,6 +14172,9 @@ def main():
                          "與 --panel/--light/--need/--min-seats 互斥,需 --gate+--spec")
     ls.add_argument("--min-seats", type=int, dest="min_seats",
                     help="M1包 席數下限:判定輪相異 auditor 數<N 即 FAIL(同席重複 append 不計;不帶=行為不變)")
+    ls.add_argument("--roster", action="store_true",
+                    help="[派工編制資料化] 編制對帳觀測(advisory 恆不影響 rc):應派(_TIER_ROSTER)vs 實派"
+                         "(rN-dispatch*.json)逐輪分桶比;與所有模式相容,建議配 --repo")
     lc = lsub.add_parser("compress", help="[S2] 結構化壓縮:長跑上下文規則式三欄(白名單壓不掉/證據/未結)")
     lc.add_argument("compress_file", metavar="檔")
     lc.add_argument("--json", dest="compress_json", action="store_true")
@@ -14548,7 +14746,7 @@ def main():
             return cmd_loop_status(env, args.loop_id, args.need,
                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
                                    panel=args.panel, light=args.light, min_seats=args.min_seats,
-                                   settle=args.settle, disposal=args.disposal)
+                                   settle=args.settle, disposal=args.disposal, roster=args.roster)
         if args.lcmd == "compress":
             return cmd_loop_compress(args.compress_file, as_json=args.compress_json)
         if args.lcmd == "verify-progress":

@@ -20275,5 +20275,182 @@ def t_mutate_diff():
     check("無 --diff=rc2", r5.returncode == 2, str(r5.returncode))
 
 
+
+
+# ── 派工編制資料化(Projects/派工編制資料化_計劃):_TIER_ROSTER+loop next roster+status --roster ──
+def _mk_roster_fixture():
+    """vault+repo+design standard panel 帳(r1 兩席)+dispatch 目錄。"""
+    import json as _j
+    vault = mkvault()
+    repo = Path(tempfile.mkdtemp(prefix="gctl-roster-repo-"))
+    spec = repo / "spec.md"
+    spec.write_text("# s\n", encoding="utf-8")
+    def rec(loop, rid, auditor, tier="standard", sev="minor"):
+        row = {"ts": "2026-08-18T10:00:00+08:00", "kind": "none", "loop": loop,
+               "round": rid, "severity": sev, "auditor": auditor, "tier": tier, "note": rid}
+        with open(vault.parent / ".canary-log.jsonl", "a", encoding="utf-8") as f:
+            f.write(_j.dumps(row, ensure_ascii=False) + "\n")
+    def disp(loop, name, obj):
+        d = repo / "governance" / "review-reports" / loop
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(_j.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    return vault, repo, spec, rec, disp
+
+
+def t_tier_roster_table():
+    """S1 防雙真相釘:panel 條目佔 W 席數==width、single=1;requirement 恆裸枚舉;無 code/standard。"""
+    m = _load_lumos_module()
+    tbl = m._TIER_ROSTER
+    check("roster: 表存在且含四組合", set(tbl.keys()) ==
+          {("design", "light"), ("design", "standard"), ("design", "high"), ("code", "high")},
+          str(sorted(tbl.keys())))
+    check("roster: 無 code/standard(v1 範圍釘)", ("code", "standard") not in tbl, "")
+    allowed_req = {"required", "required-fail-closed", "note-if-absent", "conditional"}
+    for (kind, tier), entry in tbl.items():
+        seats = entry["seats"]
+        w = sum(1 for s in seats if s["occupies_w"])
+        if entry["mode"] == "panel":
+            check(f"roster: {kind}/{tier} 佔W=={m._TIER_PARAMS[tier][0]}",
+                  w == m._TIER_PARAMS[tier][0], f"got {w}")
+        else:
+            check(f"roster: {kind}/{tier} single 佔W=1", w == 1, f"got {w}")
+        check(f"roster: {kind}/{tier} requirement 全裸枚舉",
+              all(s["requirement"] in allowed_req for s in seats),
+              str([s["requirement"] for s in seats]))
+    ch = tbl[("code", "high")]["seats"]
+    check("roster: code/high 外家 finder 佔W+required-fail-closed",
+          any(s["family"] == "external" and s["occupies_w"] and s["requirement"] == "required-fail-closed" for s in ch), str(ch))
+    check("roster: code/high spec-conformance conditional 不佔W",
+          any(s["requirement"] == "conditional" and not s["occupies_w"] for s in ch), str(ch))
+
+
+def t_roster_family_classify():
+    """auditor 字串→家族:大小寫不敏感、雙命中 external 先贏、未知=unknown。"""
+    m = _load_lumos_module()
+    fam = m._roster_family
+    check("family: gemini→external", fam("veto-gemini")[0] == "external", str(fam("veto-gemini")))
+    check("family: bug-sonnet→claude", fam("bug-sonnet")[0] == "claude", str(fam("bug-sonnet")))
+    check("family: 大寫 Codex→external(真帳樣本)", fam("slot5-Codex跨家族")[0] == "external", str(fam("slot5-Codex跨家族")))
+    check("family: 未知→unknown", fam("mystery-model")[0] == "unknown", str(fam("mystery-model")))
+    d = fam("sonnet-vs-gemini-arbiter")
+    check("family: 雙家族命中→external+dual 標", d[0] == "external" and d[1] is True, str(d))
+    check("family: 單命中 dual=False", fam("veto-gemini")[1] is False, str(fam("veto-gemini")))
+
+
+def t_loop_next_roster():
+    """S2:loop next 吐應派 roster;查表 miss/indeterminate/legacy 各走明訂路徑。"""
+    import json as _j
+    vault, repo, spec, rec, disp = _mk_roster_fixture()
+    # design/standard 零記錄
+    r = run(vault, "loop", "next", "dz-roster", "--tier", "standard", "--json")
+    d = _j.loads(r.stdout.strip())
+    check("next-roster: design/standard roster 欄存在", isinstance(d.get("roster"), dict), r.stdout[:300])
+    seats = d["roster"]["seats"]
+    check("next-roster: design/standard 3佔W+1否決", sum(1 for s in seats if s["occupies_w"]) == 3
+          and any(s["family"] == "external" and not s["occupies_w"] for s in seats), str(seats)[:300])
+    rh = run(vault, "loop", "next", "dz-roster", "--tier", "standard")
+    check("next-roster: 人讀輸出含「應派」行", "應派" in rh.stdout, rh.stdout[:400])
+    # code/high
+    r2 = run(vault, "loop", "next", "code-rz", "--tier", "high", "--json")
+    d2 = _j.loads(r2.stdout.strip())
+    s2 = d2["roster"]["seats"]
+    check("next-roster: code/high 席組成(5佔W 含外家 finder+2不佔W)",
+          sum(1 for s in s2 if s["occupies_w"]) == 5 and sum(1 for s in s2 if not s["occupies_w"]) == 2,
+          str(s2)[:300])
+    # 查表 miss:code+light
+    r3 = run(vault, "loop", "next", "code-rz2", "--tier", "light", "--json")
+    d3 = _j.loads(r3.stdout.strip())
+    check("next-roster: code/light 查表 miss→roster null+無編制宣告",
+          d3.get("roster") is None and "無編制宣告" in r3.stdout, r3.stdout[:300])
+    # indeterminate id(codestage 型)
+    r4 = run(vault, "loop", "next", "codestage9", "--tier", "standard", "--json")
+    d4 = _j.loads(r4.stdout.strip())
+    check("next-roster: indeterminate→roster null+kind 無法判定",
+          d4.get("roster") is None and "kind 無法判定" in r4.stdout, r4.stdout[:300])
+    # legacy 推導:無 tier 無 round 舊帳→單席通才,不炸
+    import json as _jj
+    with open(vault.parent / ".canary-log.jsonl", "a", encoding="utf-8") as f:
+        f.write(_jj.dumps({"ts": "2026-08-18T09:00:00+08:00", "kind": "caught", "loop": "oldloop",
+                           "severity": "minor", "auditor": "sonnet"}) + "\n")
+    r5 = run(vault, "loop", "next", "oldloop", "--json")
+    check("next-roster: legacy 推導不炸", r5.returncode != 2, r5.stderr[:200])
+    d5 = _j.loads(r5.stdout.strip())
+    check("next-roster: legacy 給單席通才", isinstance(d5.get("roster"), dict)
+          and len(d5["roster"]["seats"]) == 1, r5.stdout[:300])
+
+
+def t_loop_status_roster_check():
+    """S3:--roster 觀測對帳(分桶/兼任/unknown 降級/conditional/三形狀/rc 不變/四模式落點)。"""
+    import json as _j
+    vault, repo, spec, rec, disp = _mk_roster_fixture()
+    L = "rl-obs"
+    rec(L, "r1", "lens1-sonnet"); rec(L, "r1", "lens2-sonnet")
+    # r1 dispatch:三形狀並用——dict 頂層/seats 陣列/頂層 list;claude 3 席、外家缺
+    disp(L, "r1-dispatch-s1.json", {"round": "r1", "seat": "s1", "auditor": "lens1-sonnet"})
+    disp(L, "r1-dispatch-s2.json", {"seats": [{"auditor": "lens2-sonnet"}]})
+    disp(L, "r1-dispatch-s3.json", [{"auditor": "lens3-opus"}])
+    base = ["loop", "status", L, "--disposal", "--spec", str(spec), "--repo", str(repo)]
+    r0 = run(vault, *base)
+    r1 = run(vault, *base, "--roster")
+    check("status-roster: rc 與不帶 --roster 完全一致(advisory 釘)", r0.returncode == r1.returncode,
+          f"{r0.returncode} vs {r1.returncode}")
+    check("status-roster: 不帶 --roster 輸出零 diff(無 [roster] 行)", "[roster]" not in r0.stdout, r0.stdout[:200])
+    check("status-roster: 三形狀共解析 3 席(claude 桶足)", "[roster]" in r1.stdout, r1.stdout[:600])
+    check("status-roster: note-if-absent 外家缺→單家族措辭且不算 shortfall",
+          "單家族" in r1.stdout and "seat_shortfall" not in r1.stdout, r1.stdout[:800])
+    # code/high:外家 required-fail-closed 缺(溢編頂替:總數 6 席但外家 0)+unknown+壞損+不符形狀
+    C = "code-obs"
+    rec(C, "r1", "lens1-sonnet", tier="high")
+    rec(C, "r1", "lens2-sonnet", tier="high")
+    for i in range(1, 6):
+        disp(C, f"r1-dispatch-s{i}.json", {"auditor": f"lens{i}-sonnet"})
+    disp(C, "r1-dispatch-spec.json", {"auditor": "spec-sonnet"})
+    disp(C, "r1-dispatch-junk.json", {"whatever": 1})            # 合法 JSON 不符形狀→跳過
+    (repo / "governance" / "review-reports" / C / "r1-dispatch-bad.json").write_text("{broken", encoding="utf-8")
+    rc1 = run(vault, "loop", "status", C, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
+    check("status-roster: 外家桶空→external_missing(溢編總數夠也喊)", "external_missing" in rc1.stdout, rc1.stdout[:800])
+    check("status-roster: required-fail-closed 措辭(轉述不阻斷)", "fail-closed 紀律未滿足" in rc1.stdout, rc1.stdout[:800])
+    check("status-roster: conditional 席印條件行", "條件" in rc1.stdout, rc1.stdout[:800])
+    # 兼任:同名外家佔 2 席
+    C2 = "code-dual"
+    rec(C2, "r1", "veto-gemini", tier="high")
+    rec(C2, "r1", "lens1-sonnet", tier="high")
+    for i in range(1, 5):
+        disp(C2, f"r1-dispatch-s{i}.json", {"auditor": f"lens{i}-sonnet"})
+    disp(C2, "r1-dispatch-s5.json", {"auditor": "veto-gemini"})
+    disp(C2, "r1-dispatch-s6.json", {"auditor": "veto-gemini"})
+    rd = run(vault, "loop", "status", C2, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
+    check("status-roster: 同名外家佔兩席→兼任警示", "兼任" in rd.stdout, rd.stdout[:800])
+    # unknown 降級:外家席由野名字頂→措辭「可能缺」不下定論
+    C3 = "code-unk"
+    rec(C3, "r1", "lens1-sonnet", tier="high")
+    rec(C3, "r1", "lens2-sonnet", tier="high")
+    for i in range(1, 5):
+        disp(C3, f"r1-dispatch-s{i}.json", {"auditor": f"lens{i}-sonnet"})
+    disp(C3, "r1-dispatch-s5.json", {"auditor": "mystery-model-x"})
+    disp(C3, "r1-dispatch-s6.json", {"auditor": "mystery-model-y"})
+    ru = run(vault, "loop", "status", C3, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
+    check("status-roster: unknown 桶非空→降級措辭「可能缺」", "可能缺" in ru.stdout, ru.stdout[:800])
+    # 無 dispatch 輪→vacuous 措辭
+    V = "rl-vac"
+    rec(V, "r1", "lens1-sonnet"); rec(V, "r1", "lens2-sonnet")
+    rv = run(vault, "loop", "status", V, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
+    check("status-roster: 無派工快照→vacuous 措辭", "無派工快照" in rv.stdout, rv.stdout[:600])
+    # kind indeterminate→跳過對帳
+    K = "codestage7"
+    rec(K, "r1", "lens1-sonnet"); rec(K, "r1", "lens2-sonnet")
+    rk = run(vault, "loop", "status", K, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
+    check("status-roster: indeterminate id→kind 無法判定跳過", "kind 無法判定" in rk.stdout, rk.stdout[:600])
+    # 四模式落點:--panel/--light/--settle 也吃得到觀測(前置斷言:各模式呼叫本身有輸出)
+    rp = run(vault, "loop", "status", L, "--panel", "--spec", str(spec), "--repo", str(repo), "--roster")
+    check("status-roster: --panel 模式觀測有印", "[roster]" in rp.stdout, rp.stdout[:400] + rp.stderr[:200])
+    rl = run(vault, "loop", "status", "rl-nolog", "--light", "--spec", str(spec), "--repo", str(repo), "--roster")
+    check("status-roster: --light 模式觀測有印", "[roster]" in rl.stdout, rl.stdout[:400] + rl.stderr[:200])
+    sf = repo / "settle.json"
+    sf.write_text("[]", encoding="utf-8")
+    rs = run(vault, "loop", "status", "rl-nolog", "--settle", str(sf), "--gate", "--spec", str(spec), "--repo", str(repo), "--roster")
+    check("status-roster: --settle 模式觀測有印", "[roster]" in rs.stdout, rs.stdout[:400] + rs.stderr[:200])
+
+
 if __name__ == "__main__":
     sys.exit(main())

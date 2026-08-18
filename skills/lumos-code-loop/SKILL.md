@@ -164,6 +164,7 @@ lumos loop status code-<topic> --need 2 --gate --repo <repo根>
 
 機械原語 loop-agnostic,直接可用;差別:跑 diff 文字檔、無 G1。
 
+- **★編制數字單源=`lumos loop next` 吐的 roster 欄(`_TIER_ROSTER`,2026-08-18 派工編制資料化)★**——本段散文為解說,與 roster 打架時以 roster 為準;收斂時可跑 `loop status <id> --roster --repo <root>` 對帳「應派 vs 實派」(advisory 恆不影響 rc;循序 code/standard v1 不涵蓋)。
 - **一輪 = 平行 W 個 reviewer**(W＝panel_width:standard 3/high 5),各讀一份工作副本:鏡頭各異(bug/資源例外/冪等併發/…)(~~canary 型別輪替/帶餌無餌之分~~已隨協議停用——全部席同規則,Codex 席照佔 W 或外掛否決)。**跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**——tier=high 雙 Codex 角色:1 席**正式 finder,佔 W 之一**(findings 計入重疊帳)+1 席**否決席,不佔 W**(外掛,同 spec-conformance 慣例)。standard=1 席否決。**否決席落閘路徑**:其 findings 與帶餌席同池進辯方;存活 ≥major——M2 cluster 帳模式必須記為該輪 `<名>=disputed-major` cluster 記錄(severity 欄該模式僅顯示不裁決)/無-cluster 舊帳計入存活 max。**fail 分級**:standard=Codex 不可用退同門+留痕;**tier=high=fail-closed**——第三家族(qwen 有 cross_audit 整合;gemini 候選未驗)替補→延期→皆不可則**不得收斂攤人裁**(人可明示豁免留痕),不分金流與否。qwen 轉列第三家族替補與 finder 輪替候選。
 - **spec-conformance slot**(tier=high 且有收斂 spec):追加一個對答案審查員(不佔 W、地位同 qwen),逐條款對照「做了/縮水/多做/未實作」,縮水與未實作進辯方。**含合約候選兌現**(2026-07-29):spec 計劃節點若列「合約候選清單」,逐條驗落地有沒有標 ★INVARIANT★ 綁 [test:]——該綁沒綁=縮水 finding。
 - **判讀/辯方/記錄** 同循序(步驟 4-5,含可疑席 repro triage 與留痕/quote-check 慣例),一輪 W 筆共享 `--round <rid>`。
