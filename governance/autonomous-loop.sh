@@ -100,10 +100,10 @@ log "選中 gap:$GAP_JSON"
 # loop 入口比 pre-push 嚴:missing baseline 亦硬擋(無人看顧場景無人眼兜底)。
 if [ ! -f "$REPO/governance/anchor-baseline.json" ] || ! (cd "$REPO" && python3 scripts/lumos anchor verify); then
   log "錨點完整性失敗(anchor verify 不過或 baseline 缺失),loop 拒跑"
-  MSG="⚠ 錨點完整性失敗,自主 loop 拒跑(anchor verify)" python3 -c "
+  MSG="⚠ 錨點完整性失敗,自主 loop 拒跑(anchor verify)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
-t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+t=os.environ.get('LINE_TOKEN','')
 print('LINE', line_notify.send(line_notify.build_message('anchor-integrity', os.environ['MSG'], None), t) if t else 'no-token')" || true
   exit 1
 fi
@@ -175,10 +175,10 @@ if [ "$CONVERGED" != "True" ]; then
   else
     MSG="⚠ 今日 spec 未收斂、未放行(撞 cap)"; log "未收斂(converged=$CONVERGED),不放行,scratch 不入庫。"
   fi
-  MSG="$MSG" python3 -c "
+  MSG="$MSG" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
-t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+t=os.environ.get('LINE_TOKEN','')
 print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
   # 副作用 A:未收斂 gap 回 backlog 降分 + 累計 unconverged;達 3 次 → covered(放棄自動、留人),不立即消失
   RQ="$(echo "$GAP_JSON" | python3 -c "
@@ -196,10 +196,10 @@ fi
 # ── tier 收檔守衛:不信自報 converged——wrapper 自算 tier、以其 need 重驗 gate ──
 if [ -z "$SPEC" ] || [ ! -f "$SPEC" ]; then
   log "tier 守衛擋下:converged=True 但 spec_path 空或不存在($SPEC)"
-  MSG="⚠ tier 守衛擋下:自報收斂但 spec_path 無效" python3 -c "
+  MSG="⚠ tier 守衛擋下:自報收斂但 spec_path 無效" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
-t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+t=os.environ.get('LINE_TOKEN','')
 print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
   RQ="$(echo "$GAP_JSON" | python3 -c "
 import sys, json; sys.path.insert(0,'$REPO/governance')
@@ -225,10 +225,10 @@ NEED_FINAL="$NEED"
 if [ "$TIER_FINAL" = "high" ] && [ "$NEED_FINAL" -lt 3 ]; then NEED_FINAL=3; fi
 if ! (cd "$REPO" && python3 scripts/lumos --vault "$SCRATCH/kg" loop status "$TOPIC" --need "$NEED_FINAL" --gate --spec "$SPEC" --repo "$REPO"); then
   log "tier 守衛擋下:自報收斂但 gate 重驗不過(自算 tier=$TIER_FINAL, need=$NEED_FINAL)"
-  MSG="⚠ tier 守衛擋下:自報收斂但 gate 重驗不過(tier=$TIER_FINAL)" python3 -c "
+  MSG="⚠ tier 守衛擋下:自報收斂但 gate 重驗不過(tier=$TIER_FINAL)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
-t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+t=os.environ.get('LINE_TOKEN','')
 print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
   RQ="$(echo "$GAP_JSON" | python3 -c "
 import sys, json; sys.path.insert(0,'$REPO/governance')
@@ -241,10 +241,10 @@ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DI
 fi
 if [ "$TIER_FINAL" = "high" ] && [ "$CROSS_VERDICT" != "endorsed" ]; then
   log "tier 守衛擋下:high 級 cross_verdict=$CROSS_VERDICT 非乾淨 endorsed,不放行"
-  MSG="⚠ tier 守衛擋下:high 級複核非乾淨 endorsed(=$CROSS_VERDICT)" python3 -c "
+  MSG="⚠ tier 守衛擋下:high 級複核非乾淨 endorsed(=$CROSS_VERDICT)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
-t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+t=os.environ.get('LINE_TOKEN','')
 print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
   RQ="$(echo "$GAP_JSON" | python3 -c "
 import sys, json; sys.path.insert(0,'$REPO/governance')
@@ -260,10 +260,10 @@ if [ "$MODE" = "--dry-run" ]; then
   cp "$SPEC" "$PENDING/" 2>/dev/null || true
   printf '%s\n' "$REPORT_MD" > "$PENDING/$(basename "$SPEC" .md)-confidence.md"
   log "dry-run:收斂!spec + 可信度報告寫入 $PENDING/(repo 未動)"
-  python3 -c "
+  LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
-t='$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)'
+t=os.environ.get('LINE_TOKEN','')
 print('LINE', line_notify.send(line_notify.build_message('$TOPIC','(dry-run)收斂[跨家族:$CROSS_VERDICT]、待你看 pending/',None),t) if t else 'no-token')" || true
 else
   cd "$REPO"; BR="auto/spec-$TOPIC-$TODAY"

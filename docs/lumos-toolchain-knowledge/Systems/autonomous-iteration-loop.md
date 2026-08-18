@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-07-25
+updated: 2026-08-18
 self_audit: sonnet/2026-07-24
 tags:
   - type/system
@@ -108,3 +108,7 @@ decisions:
 - 實作計畫:`docs/superpowers/plans/2026-06-20-autonomous-iteration-loop.md`。
 - 下游產物(loop 自己選中、brainstorm 出來的):`docs/design/2026-06-20-judge-severity-gate.md`、`docs/design/2026-06-22-cross-family-audit.md`。
 - 真機觀察日誌:`governance/autonomous_loop/DRYRUN-OBSERVE.md`、spike 結果 `SPIKE-RESULT.md`。
+
+## 近期修正
+
+- 2026-08-18 token 傳遞硬化(code-loop code-標註刷新 r1 另案收尾):七處 LINE 通知的 token 由 shell 內插(`t='$(cat …)'`,token 含引號會炸 python 且被 || true 吞)改為 `LINE_TOKEN` 環境變數傳遞+`os.environ.get`,行為不變、注入面拆除。
