@@ -20395,7 +20395,7 @@ def t_loop_status_roster_check():
     check("status-roster: rc 與不帶 --roster 完全一致(advisory 釘)", r0.returncode == r1.returncode,
           f"{r0.returncode} vs {r1.returncode}")
     check("status-roster: 不帶 --roster 輸出零 diff(無 [roster] 行)", "[roster]" not in r0.stdout, r0.stdout[:200])
-    check("status-roster: 三形狀共解析 3 席(claude 桶足)", "[roster]" in r1.stdout, r1.stdout[:600])
+    check("status-roster: 三形狀共解析 3 席(claude 桶足)", "實派 3 席" in r1.stdout and "claude 3" in r1.stdout, r1.stdout[:600])
     check("status-roster: note-if-absent 外家缺→單家族措辭且不算 shortfall",
           "單家族" in r1.stdout and "seat_shortfall" not in r1.stdout, r1.stdout[:800])
     # code/high:外家 required-fail-closed 缺(溢編頂替:總數 6 席但外家 0)+unknown+壞損+不符形狀
@@ -20436,6 +20436,18 @@ def t_loop_status_roster_check():
     rec(V, "r1", "lens1-sonnet"); rec(V, "r1", "lens2-sonnet")
     rv = run(vault, "loop", "status", V, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
     check("status-roster: 無派工快照→vacuous 措辭", "無派工快照" in rv.stdout, rv.stdout[:600])
+    # 非字串 auditor(數字/巢狀物)不炸:計 unknown、其餘輪照常對帳(major 修的翻紅釘)
+    C4 = "code-badtype"
+    rec(C4, "r1", "lens1-sonnet", tier="high")
+    rec(C4, "r1", "lens2-sonnet", tier="high")
+    for i in range(1, 5):
+        disp(C4, f"r1-dispatch-s{i}.json", {"auditor": f"lens{i}-sonnet"})
+    disp(C4, "r1-dispatch-s5.json", {"auditor": 12345})
+    disp(C4, "r1-dispatch-s6.json", {"auditor": {"nested": "obj"}})
+    rb = run(vault, "loop", "status", C4, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
+    check("status-roster: ★前置★ 非字串 auditor 該輪真的走到逐輪對帳(無整段觀測失敗)",
+          "觀測失敗" not in rb.stdout and "實派 6 席" in rb.stdout, rb.stdout[:800])
+    check("status-roster: 非字串 auditor 計 unknown 不炸", "unknown 2" in rb.stdout, rb.stdout[:800])
     # kind indeterminate→跳過對帳
     K = "codestage7"
     rec(K, "r1", "lens1-sonnet"); rec(K, "r1", "lens2-sonnet")
