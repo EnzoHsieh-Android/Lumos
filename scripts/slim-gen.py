@@ -353,6 +353,10 @@ def main():
             _anchor,
             _anchor + '    if len(sys.argv) > 1 and sys.argv[1] == "update":'
                       "   # 精簡版 update 前置攔截(生成期拼接;update 必須為第一參數)\n"
+                      "        if len(sys.argv) > 2:"
+                      "   # update 不吃任何參數(含 --help)——终審 s1:否則 update --help 會靜默觸發真更新\n"
+                      '            print("ERROR: update 不吃任何參數——用法: lumos update(見 README 更新方式節)", file=sys.stderr)\n'
+                      "            return 2\n"
                       "        return _slim_update()\n",
             1)
         new_text = new_text.replace(_tail, tmpl.read_text(encoding="utf-8") + "\n\n" + _tail, 1)

@@ -370,9 +370,12 @@ def main(argv=None):
 
     # ⓪ 注入目標守衛(見模組 docstring)。--tool-only(update 通道)只更新工具本身,
     #    無注入目標可言:整段守衛與下方 ③ CLAUDE.md 合併一併跳過。
-    target_dir = Path.cwd().resolve()
-    target_claude_md = target_dir / "CLAUDE.md"
+    # cwd 取值也在 tool_only 下跳過(終審 s2 實跑重現:stale cwd 下 Path.cwd() 拋
+    # FileNotFoundError,--tool-only 本應與 cwd 完全無關卻整體 rc2,訊息還指向無關原因)
+    target_dir = target_claude_md = None
     if not tool_only:
+        target_dir = Path.cwd().resolve()
+        target_claude_md = target_dir / "CLAUDE.md"
         print(f"目標專案: {target_dir}")
         print(f"將修改: {target_claude_md}")
 
@@ -448,7 +451,7 @@ def main(argv=None):
         print(f"  {bin_dir} 已在 PATH")
 
     print()
-    print("裝好了。驗證: lumos --help")
+    print("更新完成。驗證: lumos --help" if tool_only else "裝好了。驗證: lumos --help")
     print("更新:之後跑 `lumos update`(拉最新精簡版重裝),或重跑一行安裝。出問題也可直接改 Python 原始碼(單檔、標準庫)。")
     return 0
 

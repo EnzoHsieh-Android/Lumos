@@ -20622,6 +20622,19 @@ def t_slim_update_injection():
                          "--outfile", str(iso.parent / "d" / "scripts" / "lumos")],
                         capture_output=True, text=True)
     check("injection: 模板語法壞→rc 非 0 不出貨(拼接先於 ast.parse 自檢)", r3.returncode != 0, f"rc={r3.returncode}")
+    # 錨點非唯一→拒絕出貨(終審 s3:此守衛原零覆蓋;src 在字串常數裡多藏一個 def main():)
+    (iso.parent / "slim" / "update_cmd.py").write_text("def _slim_update():\n    return 0\n", encoding="utf-8")
+    dup = iso.parent / "dupmain.py"
+    dup.write_text(
+        Path(GRAPHCTL).read_text(encoding="utf-8").replace(
+            'if __name__ == "__main__":',
+            'DUP = """def main():\n"""\nif __name__ == "__main__":', 1),
+        encoding="utf-8")
+    r4 = subprocess.run([sys.executable, str(iso / "slim-gen.py"), "--src", str(dup),
+                         "--outfile", str(iso.parent / "d2" / "scripts" / "lumos")],
+                        capture_output=True, text=True)
+    check("injection: 錨點非唯一→拒絕出貨", r4.returncode != 0 and "拒絕出貨" in r4.stderr,
+          f"rc={r4.returncode} {r4.stderr[:150]}")
 
 
 def t_slim_update_behavior():
@@ -20656,6 +20669,8 @@ def t_slim_update_behavior():
     git(origin, "commit", "-qm", "v1")
     dest = fake_home / ".lumos-slim"
     _sp.run(["git", "clone", "-q", str(origin), str(dest)], capture_output=True, text=True)
+    git(dest, "config", "user.email", "t@t")   # 慣例:每 repo 設身分(CI 容器無 passwd 身分會假紅)
+    git(dest, "config", "user.name", "t")
     # ②⑤ 正常路:pull ok+假 install.py 被以 --force --tool-only 呼叫
     r2 = upd()
     check("behavior②: 正常路 rc0", r2.returncode == 0, f"rc={r2.returncode} {r2.stderr[:300]}")
@@ -20678,8 +20693,11 @@ def t_slim_update_behavior():
     # ④ PATH 無 git→rc2
     r4 = upd({"PATH": "/nonexistent"})
     check("behavior④: PATH 無 git→rc2", r4.returncode == 2, f"rc={r4.returncode} {r4.stderr[:200]}")
-    # ⑦ 裸打→argparse usage,無 traceback
-    r7 = upd(None, "--help")
+    # ⑦ 裸打→argparse usage,無 traceback;update 帶任何參數→rc2 拒絕(不靜默觸發真更新——終審 s1)
+    r7 = _sp.run([sys.executable, str(out), "update", "--help"], capture_output=True, text=True, env=env)
+    check("behavior⑦b: update --help→rc2 拒絕且未觸發更新", r7.returncode == 2
+          and "不吃任何參數" in r7.stderr and "FAKE-INSTALL" not in r7.stdout,
+          f"rc={r7.returncode} {r7.stderr[:200]}")
     r7b = _sp.run([sys.executable, str(out)], capture_output=True, text=True, env=env)
     check("behavior⑦: 裸打→usage+rc2 無 traceback",
           r7b.returncode == 2 and "Traceback" not in r7b.stderr and "usage" in r7b.stderr,
@@ -20698,16 +20716,31 @@ def t_slim_update_behavior():
     m = _ilu.module_from_spec(spec)
     spec.loader.exec_module(m)
     orig_home = m.Path.home
-    class _Boom:
-        @staticmethod
-        def raise_():
-            raise RuntimeError("no home")
+    # ★m.Path is pathlib.Path(from-import 共享全域類)——本 patch 動的是行程級狀態;
+    # 套件測試現為單執行緒循序跑,若未來平行化須改 subclass patch★
     try:
         m.Path.home = staticmethod(lambda: (_ for _ in ()).throw(RuntimeError("no home")))
         rc = m._slim_update()
         check("behavior⑩: Path.home 拋 RuntimeError→回 2 不拋例外", rc == 2, f"rc={rc}")
     finally:
         m.Path.home = orig_home
+
+
+def t_slim_update_tool_only_real():
+    """spec 測試⑥:真 install.py --force --tool-only——任意 cwd 跑 rc0、CLAUDE.md 零觸碰。
+    翻紅釘:拿掉 --tool-only 支援→守衛拒絕(rc2)或 CLAUDE.md 被動,此測必紅。"""
+    import tempfile as _tf
+    import subprocess as _sp
+    inst = Path(GRAPHCTL).parent.parent / "dist" / "install.py"   # 組裝後交付包(slim/ 工廠無 scripts/lumos 可裝)
+    fake_home = Path(_tf.mkdtemp(prefix="gctl-toolonly-home-"))
+    cwd = Path(_tf.mkdtemp(prefix="gctl-toolonly-cwd-"))   # 非專案根:無 .git/docs/CLAUDE.md
+    env = dict(__import__("os").environ, HOME=str(fake_home))
+    r = _sp.run([sys.executable, str(inst), "--force", "--tool-only"],
+                capture_output=True, text=True, env=env, cwd=str(cwd))
+    check("tool-only真檔: 任意 cwd rc0(守衛未攔)", r.returncode == 0, r.stderr[:300])
+    check("tool-only真檔: ★CLAUDE.md 未被建立/未被改★", not (cwd / "CLAUDE.md").exists(), "")
+    check("tool-only真檔: CLI 落假 HOME", (fake_home / ".local" / "bin" / "lumos").is_file(), "")
+    check("tool-only真檔: 結尾訊息=更新語意非首次安裝", "更新完成" in r.stdout, r.stdout[-300:])
 
 
 def t_slim_update_textpins():
