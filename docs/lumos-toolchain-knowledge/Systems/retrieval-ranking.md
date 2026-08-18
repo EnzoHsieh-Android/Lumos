@@ -10,6 +10,7 @@ tags:
 summary: |-
   FLOW:tokenize(CJK bigram+ASCII拆分)→BM25F(欄位tf加權於飽和前,平滑IDF)→search --ranked只重排既有候選｜_reco(BFS-decay 1/2^k+共引同行×2飽和+Jaccard;G=0.6/0.25/0.15)×BM25F融合(R=0.6L+0.4G)→context --recommend｜impact --ranked(固定席=事故+合約,不占top_k;動態閾;stdin單包JSON prospective)→hook降噪(v1.1待接)
   KEY:★2026-08-03 一次性重新凍結(認領本節點原本掛著的「尚無人認領」待辦)★——eval_head=`8680ac1`、語料釘 snapshot=`285d429`、knobs=frozen-defaults,已入 `governance/eval/retrieval-eval-history.jsonl`:**search nDCG@5 整體 legacy 0.5411→ranked 0.8556(+58.1%,n=30)｜train +46.0%(n=21)｜held +99.6%(n=9,MRR 1.0)｜edit P@8 fusion 0.7298｜必看視野 19/30｜gate 7/7 PASS**。★與 2026-07-20 那次重跑逐項相同 → 尺是穩定可重現的,當初對不上的只有「+106.8%」與「24/30」這兩個★被沿用進句子、卻不對應任何一次實跑★的數★(歷程與三處出處對照見本節點〈數字已統一〉段)
+  KEY:[2026-08-18 query 品質閘,plan:[[Projects/edit面查詢品質閘_計劃]]]impact ranked 加 _impact_query_junk——剝 shebang 首行後壓縮殘餘<MINLEN(預設 1=僅 shebang/空白)→視同空查詢(L 臂靜默;事故探針刻意不受閘);held hook P@8 0.6842→0.7467 六閘全綠;★E15 教訓:短真代碼的 L 撐動態閾殺 hop1 噪,「短≠無訊息」,長度分支撤★;旋鈕 LUMOS_IMPACT_QGATE_MINLEN(<=0/NaN/Inf=停用);觀測=query_gated 欄(--diff 聚合轉發) [test:t_impact_query_junk_unit,t_impact_query_gate_e2e]
   KEY:[2026-08-18 標註刷新落地,plan:[[Projects/標註刷新_計劃]]]語料前進解鎖——delta 補標流水線(refresh_labels.py delta/repin/merge/apply/signal)+重釘機械閘(計分觸及集 unjudged==0 才准動 snapshot_commit,rc1 硬擋)+考卷常設未標率(history 新欄 goldset_snapshot/unjudged_count/unjudged_rate;週閘超 10% 自動產表+LINE 等人放行);評測母體=計分觸及集(search 兩臂各前10/edit free 前8+全固定席)——全召回口徑實測連原快照都 54% 未標故收斂;B 席=Gemini Flash(Codex 到期);build_goldset 裸跑加 --force-full 拆清空金標雷 [test:t_refresh_delta,t_refresh_repin,t_refresh_merge_apply,t_eval_touched_universe_bounds]
   KEY:[2026-08-07 hook必看召回修復落地,plan:[[Projects/hook必看召回修復_計劃]]]①驗屍 11 筆必看 miss 歸因:直連被動態閾砍 6/裸檔名 1/連結缺失 4——★動態閾現行係數=0.65(v1.2)非本節點舊記 .55,以此行為準★ ②R1 直連保底席轉正(第三桶:rescued 恆 pinned:false,threshold/quota 不作用,LUMOS_IMPACT_RESCUE_N 預設 1)③R2 裸檔名容錯轉正(反查第二條抽取路,git ls-files 唯一母體,BASENAME_MATCH 預設 1,hit provenance 穿透)④held A/B:P@8 0.6389→0.6944、Σmust 12→14(E14/E15 救回)⑤[2026-08-07 同日續,plan:[[Projects/連結缺失補全_計劃]]]S2 水位謂詞轉正(free direct<N 補至 need=N−count;N=3 train 網格選出;前案「僅零 direct」候選經考卷重裁改寫)——held Σmust→17、P@8→0.7130,★週閘 hook P@top_k ≥0.70 翻綠(v1.1 以來首次)★;新暴露兩紅如實記:p95=11>10(N=3 外加席 vs 席數閘語意未跟)、graph-only 0.7269>fusion(direct 在 fusion 權重偏低的訊號,未動排序);S1=lumos link-candidates 補鏈候選(唯讀,人裁待辦)[test:t_impact_direct_rescue][test:t_s2_waterline_rescue][test:t_link_candidates][test:t_impact_basename_match] | VERIFY:[[Verification/2026-08-07_hook必看召回修復落地]]
   KEY:search面已轉正預設(2026-07-11,goldset §6全過:修正尺 nDCG@5 +58.1%/held +99.6%(2026-08-03 凍結值);--legacy逃生,--regex走舊路,預設全量+逐檔命中明細——資訊零損失);hook面已轉正(2026-07-11:P@8 .707/中位3/p95 9;dyn_coef .55/direct_base .30/名額10;trigger delta-scoped;必看視野19/30=精度代價(2026-08-03 凍結值;原記 24/30 不重現),見[[Verification/2026-07-11_hook面v1.1轉正]]);recommend面dormant;hop≥2需L>0、hop1只受靜態底線;結構前綴停用集(KEY:/FLOW:模板詞不算詞彙訊號);A1型別先驗:moc×0.4乘於詞彙分(train網格凍結,held零倒退,見[[Projects/節點靜態先驗_調研]])
@@ -28,6 +29,7 @@ verified_by:
   - "[[Verification/2026-08-07_hook必看召回修復落地]]"
   - "[[Verification/2026-08-07_連結缺失補全落地]]"
   - "[[Verification/2026-08-18_標註刷新落地]]"
+  - "[[Verification/2026-08-18_edit面查詢品質閘落地]]"
 aliases:
   - 檢索排序與關聯推薦
 ---

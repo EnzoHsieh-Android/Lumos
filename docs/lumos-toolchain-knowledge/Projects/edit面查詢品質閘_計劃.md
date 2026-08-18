@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-18
 updated: 2026-08-18
 tags:
   - type/project
-  - status/doing
+  - status/done
 summary: |-
   KEY:落地 [[Projects/檢索edit面真紅_計劃]] EXP1(離線 held 0.6842→0.7092 零倒退)——impact ranked 的 query 品質閘:★低資訊判準(r1 改版)=剝 shebang 首行後壓縮空白殘餘 <20 字→視同空查詢(L 臂靜默)★,沿既有空查詢語意,不新增公式;觸發族=純 shebang(E05/E14)+短文(E01/E15,模擬零倒退);shebang+真內容不誤殺;事故探針刻意不受閘
   KEY:落點=scripts/lumos impact ranked 融合塊(`query = (_payload.get("query") or "")` 之後、lex 計算之前)加 `_impact_query_junk(query)` 判準;--diff 聚合路徑(query=hunk 文字)同一落點自然生效;JSON 輸出加 `query_gated: true` 觀測欄(僅觸發時)
@@ -96,3 +96,14 @@ if query and _impact_query_junk(query):   # r1:原生空 query 不進判準、�
   - [minor][整合] stderr 自動鏈無人讀→誠實定位句(JSON 欄為主承載)。
   - 謂詞席證偽一條:「diff 標頭使長度永不觸發」不成立(標頭天生被濾,實測留痕)。
 \n
+
+## 落地後發現(2026-08-18,設計逃逸如實入帳)
+
+- **長度分支有害,判準收窄(MINLEN 預設 20→1=「僅 shebang/空白」)**:r1 收斂版的低資訊判準(<20 字)在 held 實跑造成 E15 倒退 0.67→0.38——機制:E15 的 17 字真代碼行「if len(argv) < 3:」有訊息,其 L 分把動態門檻撐高殺掉 7 個 hop1 噪音;閘掉後全分歸平、門檻塌回地板、噪音全湧回。★「短」≠「無訊息」,原低資訊假說的長度分支被 held 證據反證★;shebang 案(E05/E14)的收益全來自 shebang 分支。收窄後 held 0.7467 零倒退。修正走 TDD(單測反轉+邊界改 0/1+旋鈕高值仍可閘供網格)。
+
+## 驗收實錄(2026-08-18)
+
+- 考卷:held hook P@8 **0.6842→0.7467**(零單案倒退;E05 0.25→0.62/E14 0.38→0.62/E15 保持 0.67);train 零觸發不動(0.6667)。★六閘全綠:「gate 總判定: PASS」——fusion 勝 graph-only 與 free p95 兩顆與本案無關的老紅燈被連帶治癒(垃圾 L 拉平分數的位次污染同源)★。全在凍結預設參數(knobs=frozen-defaults)下達成。
+- Landmark 真機:junk query 正確 gated(0.40s,輸出健全,固定席保留),正常 query 13 筆零影響。
+- 回歸:全量 2748 passed;既有救援測試 2 支顯式帶閘停用旋鈕(驗救援語意與閘正交,逃生門合約首用)。
+

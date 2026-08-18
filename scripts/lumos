@@ -13060,6 +13060,24 @@ def _impact_knob(name, default):
     except ValueError:
         return default
 
+def _impact_query_junk(query):
+    """query 品質閘判準(edit面查詢品質閘_計劃 S1;落地後發現收窄版):
+    剝 shebang 首行後,壓縮全部空白的殘餘 < MINLEN → junk(視同空查詢,L 臂靜默)。
+    ★MINLEN 預設 1=「僅 shebang/空白」才算垃圾★——原 20 字低資訊假說被 held 反證
+    (E15 的 17 字真代碼行有訊息:其 L 分撐高動態門檻殺 hop1 噪音,閘掉反湧回,
+    0.67→0.38 倒退;shebang 案 E05/E14 的收益不靠長度分支)。旋鈕留給網格消融。
+    非 str 防呆回 False;MINLEN<=0/NaN/Inf=整閘停用(旋鈕語意連續)。"""
+    if not isinstance(query, str):
+        return False
+    minlen = _impact_knob("LUMOS_IMPACT_QGATE_MINLEN", 1)
+    if not (minlen > 0) or minlen == float("inf"):   # <=0/NaN(比較恆假)/Inf → 停用
+        return False
+    q = query.strip()
+    if q.startswith("#!"):
+        q = q.split("\n", 1)[1] if "\n" in q else ""
+    return len("".join(q.split())) < minlen
+
+
 
 def _match_incident_triggers(file_rel, file_content, env):
     """給被碰 code 檔(路徑 + 內容),掃全圖有 pitfall_when 的事故節點,比對觸發條件。
@@ -13333,7 +13351,14 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
             results.append({"node": x["node"], "kind": "incident", "pinned": True,
                             "score": 1.0, "matched_by": x.get("matched_by"),
                             "contract": x.get("contract")})
+        gated = False   # 查詢品質閘觸發旗標(未觸發路徑必為 False,防 NameError)
         if not incidents_only:
+            # query 品質閘(edit面查詢品質閘_計劃 S2):低資訊 query 視同空查詢——
+            # 只覆寫 lex 用局部變數;事故探針 _delta_q 刻意不受閘(安全網寧多勿漏)
+            if query and _impact_query_junk(query):
+                query = ""
+                gated = True
+                print("(query 品質閘:文本為檔頭雜訊/過短,L 臂靜默)", file=sys.stderr)
             # 詞彙分:對 direct+indirect 候選跑 BM25F(query 為空則全 0)
             cand = [x["node"] for x in all_direct] + [x["node"] for x in all_indirect]
             lex = {}
@@ -13418,6 +13443,8 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 "safety_overflow": max(0, len(pins) - int(top))}
         if as_json:
             out_obj = {"file": rel_file, "results": final, "meta": meta}
+            if gated:
+                out_obj["query_gated"] = True
             # 棧別效能追問(pitfalls棧別效能追問_計劃 T2):完整 ranked 模式(非 incidents-only
             # 冷卻快速路)且目標檔命中問題表 → 附該棧檢核問(全表);單源=_STACK_PERF_QUESTIONS,hook 只格式化
             if not incidents_only and not _PITFALL_DIFF_TEST_PAT.search(rel_file):
@@ -13542,7 +13569,10 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
             data = _json.loads(buf.getvalue().strip().splitlines()[-1])
         except (ValueError, IndexError):
             continue
-        per_file_meta.append({"file": f, **data.get("meta", {})})
+        _pm = {"file": f, **data.get("meta", {})}
+        if data.get("query_gated"):
+            _pm["query_gated"] = True   # 觀測欄聚合轉發(r1 f5:code-loop 鏡頭可見)
+        per_file_meta.append(_pm)
         for x in data.get("results", []):
             cur = merged.get(x["node"])
             if cur is None:

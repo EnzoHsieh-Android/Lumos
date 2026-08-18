@@ -19016,6 +19016,118 @@ def t_suite_strips_git_env_from_hook_invocation():
           r.returncode == 0, (r.stdout + r.stderr)[-1500:])
 
 
+# ══ edit面查詢品質閘([[Projects/edit面查詢品質閘_計劃]] r1 收斂版) ══
+
+def t_impact_query_junk_unit():
+    """①判準單測:低資訊判準(剝 shebang 行後壓縮空白殘餘<MINLEN)/防呆/旋鈕語意連續。"""
+    import os
+    m = _load_lumos()
+    def junk(q, minlen=None):
+        old = os.environ.get("LUMOS_IMPACT_QGATE_MINLEN")
+        try:
+            if minlen is not None:
+                os.environ["LUMOS_IMPACT_QGATE_MINLEN"] = str(minlen)
+            else:
+                os.environ.pop("LUMOS_IMPACT_QGATE_MINLEN", None)
+            return m._impact_query_junk(q)
+        finally:
+            if old is None:
+                os.environ.pop("LUMOS_IMPACT_QGATE_MINLEN", None)
+            else:
+                os.environ["LUMOS_IMPACT_QGATE_MINLEN"] = old
+    check("純 shebang 行=junk", junk("#!/usr/bin/env python3") is True, "")
+    check("shebang+換行空白=junk(殘餘空)", junk("#!/bin/sh\n   \n") is True, "")
+    check("★shebang+大段真內容不誤殺★", junk("#!/usr/bin/env python3\ndef real_function_with_logic(argv):\n    return argv") is False, "")
+    check("★短文非 junk(落地後發現:E15 17 字真代碼被閘致倒退,長度假說撤)★", junk("if len(argv) < 3:") is False, "")
+    check("短佔位敘述非 junk(E01 型,預設 MINLEN=1)", junk("(結構性變更)") is False, "")
+    check("正常長敘述非 junk", junk("重構檢索排序的融合權重計算,抽出共用函式並補回歸測試") is False, "")
+    check("稀疏空白預設不觸發(壓縮後 2 字 ≥1)", junk("A" + " " * 30 + "B") is False, "")
+    check("旋鈕語意:MINLEN=20 時短文仍可閘(網格消融用)", junk("if len(argv) < 3:", 20) is True, "")
+    check("shebang+殘餘 1 字:預設非 junk(邊界)", junk("#!/bin/sh\nx") is False, "")
+    check("非字串防呆:int 不炸回 False", junk(123) is False, "")
+    check("非字串防呆:None 不炸回 False", junk(None) is False, "")
+    check("MINLEN=0 整閘停用(shebang 也 False)", junk("#!/bin/sh", 0) is False, "")
+    check("MINLEN 負值=停用", junk("#!/bin/sh", -5) is False, "")
+    check("MINLEN=nan=停用", junk("#!/bin/sh", "nan") is False, "")
+
+
+def _mk_qgate_fixture():
+    """查詢閘 e2e fixture:git repo+vault(direct/hop1/hop2 各有)+code 檔。"""
+    import os, subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-qgate-")) / "repo"
+    kg = root / "docs" / "kg-knowledge"
+    (kg / "Systems").mkdir(parents=True)
+    (kg / "Projects").mkdir(parents=True)
+    (root / "src").mkdir()
+    (root / "src" / "app.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    (kg / "Systems" / "Direct.md").write_text(
+        "---\ntype: system\nstatus: done\n---\n# Direct\n實作在 `src/app.py`。\n", encoding="utf-8")
+    (kg / "Systems" / "Hop1.md").write_text(
+        "---\ntype: system\nstatus: done\n---\n# Hop1\n關聯 [[Systems/Direct]]。python 模組說明。\n", encoding="utf-8")
+    (kg / "Projects" / "Hop2.md").write_text(
+        "---\ntype: project\nstatus: doing\n---\n# Hop2\n連到 [[Systems/Hop1]]。python env 環境設定計劃。\n", encoding="utf-8")
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.t"}
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "init"]):
+        sp.run(cmd, cwd=root, env=env, capture_output=True)
+    return root
+
+
+def t_impact_query_gate_e2e():
+    """②③④⑤:stdin 路徑觸發(gated 欄+stderr 註記+hop2 退場+direct 基分)/正常與空 query 不標/
+    --diff 聚合轉發/incidents-only 不標/旋鈕 0 停用。"""
+    import json as _json, subprocess as sp, os
+    root = _mk_qgate_fixture()
+    def impact(payload, *extra, env_extra=None):
+        env = {**os.environ, **(env_extra or {})}
+        return sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/app.py",
+                       "--repo", str(root), "--ranked", "--stdin-payload", "--json", *extra],
+                      capture_output=True, text=True, input=_json.dumps(payload), env=env)
+    # ② junk query 觸發
+    r = sp.run if False else impact({"query": "#!/usr/bin/env python3", "prospective": {}})
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("junk:query_gated 欄在", d.get("query_gated") is True, r.stdout[-300:])
+    check("junk:stderr 品質閘註記在", "品質閘" in r.stderr, r.stderr[-200:])
+    frees = [x for x in d.get("results", []) if not x.get("pinned")]
+    check("junk:全部 L=0", all((x.get("L") or 0) == 0 for x in frees), str(frees)[:300])
+    check("junk:hop≥2 免詞彙背書者退場", not any(x.get("kind") == "indirect" and (x.get("hop") or 0) >= 2 for x in frees), str(frees)[:300])
+    check("junk:direct=基分 0.30", any(x.get("kind") == "direct" and abs(x["score"] - 0.30) < 1e-6 for x in frees), str(frees)[:300])
+    # 正常 query 不標
+    r2 = impact({"query": "python 模組 env 環境 設定 說明 相關的長查詢文本", "prospective": {}})
+    d2 = _json.loads(r2.stdout.strip().splitlines()[-1])
+    check("正常 query:無 gated 欄", "query_gated" not in d2, r2.stdout[-200:])
+    check("正常 query:無 stderr 註記", "品質閘" not in r2.stderr, r2.stderr[-200:])
+    # 原生空 query 不標
+    r3 = impact({"query": "", "prospective": {}})
+    d3 = _json.loads(r3.stdout.strip().splitlines()[-1])
+    check("空 query:無 gated 欄(不誤標)", "query_gated" not in d3, r3.stdout[-200:])
+    # ④ incidents-only 不標
+    r4 = impact({"query": "#!/usr/bin/env python3", "prospective": {}}, "--incidents-only")
+    d4 = _json.loads(r4.stdout.strip().splitlines()[-1])
+    check("incidents-only:無 gated 欄", "query_gated" not in d4, r4.stdout[-200:])
+    # ⑤ 旋鈕 0=整閘停用
+    r5 = impact({"query": "#!/usr/bin/env python3", "prospective": {}},
+                env_extra={"LUMOS_IMPACT_QGATE_MINLEN": "0"})
+    d5 = _json.loads(r5.stdout.strip().splitlines()[-1])
+    check("旋鈕0:shebang 也不被閘", "query_gated" not in d5, r5.stdout[-200:])
+    # ③ --diff 聚合轉發
+    import subprocess as sp2
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.t"}
+    # 新增純 shebang 檔=垃圾 hunk(收窄版判準下,實質小改動不再觸發——那是對的)
+    (root / "src" / "app.py").write_text("#!/usr/bin/env python3\ndef f():\n    return 1\n", encoding="utf-8")
+    # 讓 diff 的 hunk 只有 shebang 行:對既有檔頂部插入 shebang
+    sp2.run(["git", "add", "-A"], cwd=root, env=env, capture_output=True)
+    sp2.run(["git", "commit", "-qm", "add shebang"], cwd=root, env=env, capture_output=True)
+    rd = sp2.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD~1..HEAD",
+                  "--repo", str(root), "--json"],
+                 capture_output=True, text=True, cwd=root)
+    dd = _json.loads(rd.stdout.strip().splitlines()[-1])
+    metas = dd.get("meta", {}).get("per_file", [])
+    check("--diff:hunk 為純 shebang 時聚合 per_file 轉發 query_gated",
+          any(x.get("query_gated") for x in metas), rd.stdout[-400:])
+
+
 # ══ 標註刷新([[Projects/標註刷新_計劃]] r1 收斂版;[[Projects/標註刷新_實作計畫]]) ══
 
 def t_goldset_force_full_guard():
@@ -19908,12 +20020,12 @@ def _hk_impact(repo, file, query, extra_env=None, top="8"):
 def t_impact_direct_rescue():
     """[R1 直連保底席]①零 direct 觸發(rescued:true/pinned:false/meta.rescued)②knob=0 不觸發
     ③direct 存活不觸發 ④多 direct 全滅→觸發(r2 折入案例)+缺口/N 上限+tie-break。
-    翻紅釘:拔 rescue 邏輯 → ①④翻紅;rescued 誤標 pinned → ①翻紅。"""
+    ★本測驗救援語意,合成短 query 會觸發查詢品質閘故顯式停用(QGATE_MINLEN=0,逃生門合約)★。翻紅釘:拔 rescue 邏輯 → ①④翻紅;rescued 誤標 pinned → ①翻紅。"""
     print("t_impact_direct_rescue")
     repo, vault = _hk_fixture()
     q = "zebra quartz 檢索"
     # ① N=1:direct 被閾殺(L=0),B 鄰居 L 高撐閾 → rescue
-    d = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "1"})
+    d = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_QGATE_MINLEN": "0", "LUMOS_IMPACT_RESCUE_N": "1"})
     res = d["results"]
     resc = [x for x in res if x.get("rescued")]
     check("★零 direct 場景觸發保底:恰 1 筆 rescued★", len(resc) == 1, str(res)[:300])
@@ -19921,11 +20033,11 @@ def t_impact_direct_rescue():
           resc and resc[0]["kind"] == "direct" and resc[0]["pinned"] is False, str(resc)[:200])
     check("★meta.rescued 計數鍵★", d["meta"].get("rescued") == 1, str(d["meta"]))
     # ② knob=0(A 臂)不觸發
-    d0 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "0"})
+    d0 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_QGATE_MINLEN": "0", "LUMOS_IMPACT_RESCUE_N": "0"})
     check("★knob=0 不觸發(A 臂=現行行為)★",
           not any(x.get("rescued") for x in d0["results"]), str(d0["results"])[:200])
     # ③ query 命中 direct 本身 → direct 存活 → 不觸發
-    d3 = _hk_impact(repo, "scripts/tool_x.sh", "管 節點 詞彙", {"LUMOS_IMPACT_RESCUE_N": "1"})
+    d3 = _hk_impact(repo, "scripts/tool_x.sh", "管 節點 詞彙", {"LUMOS_IMPACT_QGATE_MINLEN": "0", "LUMOS_IMPACT_RESCUE_N": "1"})
     free_direct = [x for x in d3["results"] if x["kind"] == "direct" and not x.get("rescued")]
     if free_direct:
         check("direct 存活時不觸發", not any(x.get("rescued") for x in d3["results"]),
@@ -19935,13 +20047,13 @@ def t_impact_direct_rescue():
         "---\ntype: system\nstatus: doing\ncreated: 2026-08-07\nupdated: 2026-08-07\n"
         "tags:\n  - type/system\nsummary: |-\n  KEY:x\n---\n# C直連\n也管 `scripts/tool_x.sh`,同樣不含查詢字。\n",
         encoding="utf-8")
-    d4 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "1"})
+    d4 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_QGATE_MINLEN": "0", "LUMOS_IMPACT_RESCUE_N": "1"})
     resc4 = [x for x in d4["results"] if x.get("rescued")]
     check("★多 direct 全滅→照樣觸發(r2 折入:非「多 direct 必不觸發」)★",
           len(resc4) == 1, str(resc4)[:200])
     check("tie-break 同分取字典序(A直連 先於 C直連)",
           resc4 and "A直連" in resc4[0]["node"], str(resc4)[:200])
-    d5 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "2"})
+    d5 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_QGATE_MINLEN": "0", "LUMOS_IMPACT_RESCUE_N": "2"})
     check("N=2 且缺口 2 → 救 2", sum(1 for x in d5["results"] if x.get("rescued")) == 2,
           str(d5["results"])[:250])
 
@@ -20000,7 +20112,7 @@ def t_s2_waterline_rescue():
     """[連結缺失補全 S2]水位謂詞:free direct<N 補至水位(need=N-count),非零 direct 特例。
     ①1 direct 存活+N=2 → 補恰 1 席 ②1 direct 存活+N=1 → 不觸發(向下相容=舊零 direct 語意)
     ③pinned direct 不計入 free 計數(合約 direct 固定席時仍可觸發)④dropped<need 補盡即止。
-    翻紅釘:補入數退回 dropped[:N] → ①翻紅(會補 2)。"""
+    ★本測驗救援語意,合成短 query 會觸發查詢品質閘故顯式停用(QGATE_MINLEN=0,逃生門合約)★。翻紅釘:補入數退回 dropped[:N] → ①翻紅(會補 2)。"""
     print("t_s2_waterline_rescue")
     repo, vault = _hk_fixture(tmp_prefix="gctl-wl-")
     # D直連2:詞彙可被特定 query 命中(存活),A/C 直連死
@@ -20014,22 +20126,22 @@ def t_s2_waterline_rescue():
         encoding="utf-8")
     q = "quokka wombat"   # 勿含「特徵」——C 節點寫「無特徵詞」會被誤命中(首版夾具瑕疵)
     # ① N=2:D 存活(free_direct=1)→ need=1,救 1(A/C 分數同 → 字典序 A)
-    d = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "2"})
+    d = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_QGATE_MINLEN": "0", "LUMOS_IMPACT_RESCUE_N": "2"})
     resc = [x for x in d["results"] if x.get("rescued")]
     check("★1 direct 存活+N=2 → 補恰 1 席(need=N-count)★", len(resc) == 1, str(d["results"])[:300])
     # ② N=1:1≥1 不觸發
-    d1 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "1"})
+    d1 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_QGATE_MINLEN": "0", "LUMOS_IMPACT_RESCUE_N": "1"})
     check("★1 direct 存活+N=1 → 不觸發(向下相容)★",
           not any(x.get("rescued") for x in d1["results"]), str(d1["results"])[:200])
     # ③ pinned direct 不計入:給 D直連2 掛合約 → 變 pinned;free_direct=0 → N=1 觸發
     p3 = vault / "Systems" / "D直連2.md"
     p3.write_text(p3.read_text(encoding="utf-8").replace(
         "KEY:x", "KEY:★INVARIANT★ 假合約 [test:t_x]"), encoding="utf-8")
-    d3 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "1"})
+    d3 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_QGATE_MINLEN": "0", "LUMOS_IMPACT_RESCUE_N": "1"})
     check("★pinned direct 不計入 free 計數 → N=1 仍觸發★",
           sum(1 for x in d3["results"] if x.get("rescued")) == 1, str(d3["results"])[:300])
     # ④ dropped<need:N=9 → 只補得出 dropped 數
-    d4 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_RESCUE_N": "9"})
+    d4 = _hk_impact(repo, "scripts/tool_x.sh", q, {"LUMOS_IMPACT_QGATE_MINLEN": "0", "LUMOS_IMPACT_RESCUE_N": "9"})
     n_dropped = sum(1 for x in d4["results"] if x.get("rescued"))
     check("dropped<need 補盡即止(不虛報)", 1 <= n_dropped <= 3, str(n_dropped))
 
