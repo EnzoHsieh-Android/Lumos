@@ -20677,6 +20677,8 @@ def t_slim_update_behavior():
     check("behavior②⑤: 假 install.py 收到 --force 與 --tool-only",
           "FAKE-INSTALL" in r2.stdout and "--force" in r2.stdout and "--tool-only" in r2.stdout,
           r2.stdout[:300])
+    check("behavior②b: pull 結果首行有印(Already up to date.)——r3 折入的翻紅釘",
+          "Already up to date." in r2.stdout, r2.stdout[:300])
     # ⑧ install.py 被刪→rc2(存在預檢)
     (dest / "install.py").unlink()
     git(dest, "add", "-A"); git(dest, "commit", "-qm", "rm")
