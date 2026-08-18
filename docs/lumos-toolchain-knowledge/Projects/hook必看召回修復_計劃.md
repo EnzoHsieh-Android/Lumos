@@ -2,12 +2,12 @@
 type: project
 status: done
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-08-18
 tags:
   - type/project
   - status/done
 summary: |
-  KEY:治全系統唯一紅燈(hook P@8 0.639/must recall 0.6)——2026-08-07 驗屍 11 筆必看 miss 歸因:①直連被動態閾砍 6 筆(direct 基底 0.30+L≈0<動態閾 0.65×max_free;v1.1/v1.2 買精度的明碼代價)②裸檔名 1 筆③連結缺失 4 筆(r1 勘誤 E20 改判)
+  KEY:★紅燈已轉綠(2026-08-18):標註刷新首批補標(held@285d429 21 筆)後 hook P@8 0.6944→0.7458≥0.70,見 [[Projects/標註刷新_計劃]]★——原:治全系統唯一紅燈(hook P@8 0.639/must recall 0.6)——2026-08-07 驗屍 11 筆必看 miss 歸因:①直連被動態閾砍 6 筆(direct 基底 0.30+L≈0<動態閾 0.65×max_free;v1.1/v1.2 買精度的明碼代價)②裸檔名 1 筆③連結缺失 4 筆(r1 勘誤 E20 改判)
   KEY:兩帖藥(r1 折入後)=R1 直連保底席(最終 free 集零 direct 觸發;準固定席外掛 pins+rescued+free,--top 例外明示;rescued 欄位穿透 ranked schema+hook 顯示跟進)+R2 裸檔名容錯(反查端自建抽取路不動共用 _refcheck_scan;git ls-files 母體唯一才比對;hit provenance 穿透);第三帖(Drift 符號錨/TLR 補連結)deferred 另立
   KEY:r1 panel(2026-08-07):3 caught/s1 missed(a 型連兩日有席漏);15 條全折 max=blocker(R2 修錯層/E20 分類錯→②1 筆③4 筆/R1 名額矛盾→外掛模型/A-B harness knob+top8 對齊/雙庫偏離明示)
   KEY:r2 delta(2026-08-07):2 caught/s3 missed(b 型旗標,引句含針卻未點性質);12 條全折 max=blocker(rescued×pinned 二分桶交互→第三桶明文/gate② split 定 held+R2 held 不可見性聲明/rows 落地 --dump-rows/top8 touchpoint 繼承/多 direct 論證勘誤/母體數字縮尺)
