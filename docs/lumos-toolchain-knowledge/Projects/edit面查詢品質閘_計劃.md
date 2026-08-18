@@ -107,3 +107,7 @@ if query and _impact_query_junk(query):   # r1:原生空 query 不進判準、�
 - Landmark 真機:junk query 正確 gated(0.40s,輸出健全,固定席保留),正常 query 13 筆零影響。
 - 回歸:全量 2748 passed;既有救援測試 2 支顯式帶閘停用旋鈕(驗救援語意與閘正交,逃生門合約首用)。
 
+## code 終審紀錄(2026-08-18)
+
+tier=standard 單審:max=minor 一條(救援測試旋鈕在收窄後為前瞻防護、docstring 因果敘述過時→已修真);四特別鏡頭(NaN 寫法/gated 作用域/聚合零影響/假綠八型對照)逐項核實無誤。留痕 governance/review-reports/code-edit面查詢品質閘/。
+

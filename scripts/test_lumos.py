@@ -20020,7 +20020,7 @@ def _hk_impact(repo, file, query, extra_env=None, top="8"):
 def t_impact_direct_rescue():
     """[R1 直連保底席]①零 direct 觸發(rescued:true/pinned:false/meta.rescued)②knob=0 不觸發
     ③direct 存活不觸發 ④多 direct 全滅→觸發(r2 折入案例)+缺口/N 上限+tie-break。
-    ★本測驗救援語意,合成短 query 會觸發查詢品質閘故顯式停用(QGATE_MINLEN=0,逃生門合約)★。翻紅釘:拔 rescue 邏輯 → ①④翻紅;rescued 誤標 pinned → ①翻紅。"""
+    ★QGATE_MINLEN=0 為前瞻防護:現行預設 1(僅 shebang)下本測 query 不會被閘,旋鈕確保未來網格調高 MINLEN 時救援語意測試仍與閘正交(code-標註刷新後單審 minor 修正敘述)★。翻紅釘:拔 rescue 邏輯 → ①④翻紅;rescued 誤標 pinned → ①翻紅。"""
     print("t_impact_direct_rescue")
     repo, vault = _hk_fixture()
     q = "zebra quartz 檢索"
@@ -20112,7 +20112,7 @@ def t_s2_waterline_rescue():
     """[連結缺失補全 S2]水位謂詞:free direct<N 補至水位(need=N-count),非零 direct 特例。
     ①1 direct 存活+N=2 → 補恰 1 席 ②1 direct 存活+N=1 → 不觸發(向下相容=舊零 direct 語意)
     ③pinned direct 不計入 free 計數(合約 direct 固定席時仍可觸發)④dropped<need 補盡即止。
-    ★本測驗救援語意,合成短 query 會觸發查詢品質閘故顯式停用(QGATE_MINLEN=0,逃生門合約)★。翻紅釘:補入數退回 dropped[:N] → ①翻紅(會補 2)。"""
+    ★QGATE_MINLEN=0 為前瞻防護:現行預設 1(僅 shebang)下本測 query 不會被閘,旋鈕確保未來網格調高 MINLEN 時救援語意測試仍與閘正交(code-標註刷新後單審 minor 修正敘述)★。翻紅釘:補入數退回 dropped[:N] → ①翻紅(會補 2)。"""
     print("t_s2_waterline_rescue")
     repo, vault = _hk_fixture(tmp_prefix="gctl-wl-")
     # D直連2:詞彙可被特定 query 命中(存活),A/C 直連死
