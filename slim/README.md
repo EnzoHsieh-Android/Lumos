@@ -1,6 +1,6 @@
 # Lumos 公開精簡版
 
-這是知識圖譜工具 lumos 的**離職交接精簡版**——目的只有一個：讓接手的人能讀懂既有專案留下的知識圖譜（`docs/{project}-knowledge/`）。可讀是目標，可維護是加分，本包不設任何機械強制（不擋 commit、不擋 push、不裝任何 hook）。
+這是知識圖譜工具 lumos 的**精簡版**——目的只有一個：讓接手的人能讀懂既有專案留下的知識圖譜（`docs/{project}-knowledge/`）。可讀是目標，可維護是加分，本包不設任何機械強制（不擋 commit、不擋 push、不裝任何 hook）。
 
 ## 支援平台
 
@@ -158,7 +158,7 @@ curl -fsSL https://raw.githubusercontent.com/citrus-android-developer/Citrus_Lum
 
 **兩行版安裝（見〈怎麼裝〉）不會建立這個路徑**——你自己挑地方 clone、直接跑那個路徑下的 `install.sh`，`~/.lumos-slim` 從頭到尾不會存在，這是正常、支援的用法，不是錯誤操作。★2026-07-31 起★：卸載腳本比對 `~/.local/bin/lumos` 的**主要**依據已經改成 `install.sh` 裝機時另外寫的一份身分證 manifest（`~/.local/share/lumos-slim/manifest.json`），不依賴 `~/.lumos-slim` 存不存在；只有在讀不到這份 manifest 時，才會退回舊版做法（拿 `~/.lumos-slim/scripts/lumos` 當比對基準）。
 
-**可以自己刪掉嗎？可以**，留著或刪掉都不影響卸載——比對基準已經不靠這個目錄。留著的唯一理由是可以用〈怎麼裝〉的一行/兩行指令再跑一次做冪等更新（雖然本包是凍結快照，不會有真正的新版本可拉，見下方〈凍結聲明〉）。
+**可以自己刪掉嗎？可以**，留著或刪掉都不影響卸載——比對基準已經不靠這個目錄。留著的唯一理由是可以用〈怎麼裝〉的一行/兩行指令再跑一次做冪等更新（跟 `lumos update` 走同一條路，見下方〈更新方式〉）。
 
 ## 進場三步
 
@@ -171,8 +171,6 @@ lumos contracts <節點>     # 查硬合約
 ```
 
 `lumos search` 找到相關筆記 → `lumos context` 看該筆記加上鄰居的濃縮索引（合約會被突顯在最上面）→ `lumos contracts` 專門列出這個模組的硬合約（改了算 breaking 的那些）。三步做完，再去 grep 程式碼或查資料庫印證。
-
-需要**條件篩選**時用 `lumos query --tag 家族/值 [--tag …=AND] [--no-tag …] [--active] [--contract] [--linked <節點>] [--json]`——標籤欄位的 WHERE（例：`lumos query --tag risk/金流 --active` 一發列出「碰金流且還沒收案」的節點；`--contract`=只留帶硬合約的、`--linked`=縮到某節點的一階鄰居）。找「講到詞」用 search，篩「欄位條件」用 query；不帶任何條件會直接拒絕（避免列全庫）。
 
 ## Frontmatter 四條鐵則
 
@@ -206,7 +204,7 @@ KEY:★DEBT★ <已知偶然行為,可改不算 breaking>
 
 ### ⚠ doctor 有些建議指向本包沒給的指令，看到請忽略
 
-`doctor`／`lint` 有幾個檢查項是從完整版原封繼承的，訊息裡會叫你跑本精簡版沒交付的指令修復——已知至少有 `lumos init`、`lumos update`、`lumos self-audit <node>`、`lumos signoff <node>`（最後一支出現在 `lint` 對 regen 節點的證據檢查訊息裡）——**這份列舉不保證窮盡**，跑了只會得到「未知指令」錯誤才是判準。看到本精簡版沒有的指令名就知道不必照做，該檢查項在本版沒有機械修復路徑。
+`doctor`／`lint` 有幾個檢查項是從完整版原封繼承的，訊息裡會叫你跑本精簡版沒交付的指令修復——已知至少有 `lumos init`、`lumos self-audit <node>`、`lumos signoff <node>`（最後一支出現在 `lint` 對 regen 節點的證據檢查訊息裡；`lumos update` 曾在此清單——本版起它**存在**了,見〈更新方式〉）——**這份列舉不保證窮盡**，跑了只會得到「未知指令」錯誤才是判準。看到本精簡版沒有的指令名就知道不必照做，該檢查項在本版沒有機械修復路徑。
 
 ### ⚠ 程式碼註解裡也會提到本包沒交付的檔案
 
@@ -214,7 +212,7 @@ KEY:★DEBT★ <已知偶然行為,可改不算 breaking>
 
 本包附的 `slim-scan` 掃描器只掃**指令名**的懸空引用，掃不到這種**路徑型**的——所以這裡也一樣不宣稱窮盡。
 
-相關的是 **Check D（`CLAUDE.md` 紀律區塊比對）**：這項檢查在**找不到任何 sentinel 區塊時會自動略過**（印「尚未注入」，不算 issue）。本包安裝器若在你的專案裡發現完整版 `<!-- LUMOS:GRAPH-DISCIPLINE:START -->` 那個 sentinel 區塊，會整段取代成本包自己的 `<!-- LUMOS-SLIM:START/END -->` 區塊（見〈會不會動我專案的 CLAUDE.md〉），取代後 `LUMOS:GRAPH-DISCIPLINE` 這個 sentinel 就不存在了，Check D 因此自動略過，不會再報「跟範本不同步」——但如果你手動把完整版區塊裝回去（或還有其他人跑更新流程把它裝回來），Check D 又會恢復檢查，屆時建議的修復指令（`lumos init`/`lumos update`）本版一樣沒有，解法只能是忽略或自己手動比對範本改。
+相關的是 **Check D（`CLAUDE.md` 紀律區塊比對）**：這項檢查在**找不到任何 sentinel 區塊時會自動略過**（印「尚未注入」，不算 issue）。本包安裝器若在你的專案裡發現完整版 `<!-- LUMOS:GRAPH-DISCIPLINE:START -->` 那個 sentinel 區塊，會整段取代成本包自己的 `<!-- LUMOS-SLIM:START/END -->` 區塊（見〈會不會動我專案的 CLAUDE.md〉），取代後 `LUMOS:GRAPH-DISCIPLINE` 這個 sentinel 就不存在了，Check D 因此自動略過，不會再報「跟範本不同步」——但如果你手動把完整版區塊裝回去（或還有其他人跑更新流程把它裝回來），Check D 又會恢復檢查，屆時建議的修復指令裡 `lumos init` 本版沒有（`lumos update` 存在但只更新工具本身、不會動 CLAUDE.md），解法只能是忽略或自己手動比對範本改。
 
 ## 範圍聲明
 
@@ -222,13 +220,54 @@ KEY:★DEBT★ <已知偶然行為,可改不算 breaking>
 
 ★**移除的是入口不是全部程式碼**★——被砍的是那些功能對應的頂層指令入口；它們共用的底層程式碼（helper 函式）有些仍留在檔案裡供保留指令呼叫，**別誤讀成「功能其實還在,只是沒寫在說明裡」**。凡是這份 README 或技能說明沒教的操作，一律視為沒有。
 
+## 選配:把圖譜同步閘掛到你的專案(opt-in,安裝器不代勞)
+
+本包的 `hooks/` 目錄帶了兩支 git hook:**pre-commit**(擋「改了 code 卻不同步圖譜」的 commit)與 **post-commit**(有人用後門跳過時留一筆痕)。★安裝器刻意不裝、不設定——要用是你自己掛★,不掛也完全不影響讀圖譜。
+
+**三步接法**(在你想掛的那個專案根目錄下):
+
+```bash
+# ① clone 本包(裝過 lumos 的話你已經有了)
+git clone https://github.com/citrus-android-developer/Citrus_Lumos ~/Citrus_Lumos
+
+# ② 在目標專案裡把 git 的 hooks 路徑指過去(絕對路徑,已真機驗證)
+cd /path/to/你的專案
+git config core.hooksPath ~/Citrus_Lumos/hooks
+
+# ③ 驗證:隨便改一個 code 檔 commit,應該被擋(或看到圖譜同步提示)
+```
+
+想讓**全隊**都吃到閘,改用「入 repo」變體:把 `~/Citrus_Lumos/hooks/*` 複製進專案的 `scripts/hooks/`、commit 進版控,然後每人各跑一次 `git config core.hooksPath scripts/hooks`(相對路徑)。
+
+**掛之前要知道的五件事**:
+
+1. **沒圖譜=沉睡**。專案裡還沒有 `docs/*-knowledge/` 圖譜目錄之前,pre-commit 是**完全靜默的 no-op**——這是設計不是壞掉。第一批節點建出來之後閘才醒。
+2. **hooksPath 是排他的**。`core.hooksPath` 一設,該專案 `.git/hooks/` 裡**原有的 hooks 全部停用**(git 不會合併兩邊)。專案本來就有 husky/自家 hooks 的話,別直接用上面的接法——把本包兩支 hook 的內容合併進你既有的 hooks 才對。
+3. **精簡版沒有 pre-push 閘**。完整版還有一道 push 前的硬擋,本包刻意不帶;這兩支只管 commit 面。
+4. **後門存在且會留痕**。`git commit --no-verify` 可跳過 pre-commit(業界標準做法),但 post-commit 永遠會跑、會把這筆 bypass 記下來——跳得過,躲不掉帳。
+5. **停用一行搞定**:`git config --unset core.hooksPath`(原 `.git/hooks` 立刻恢復生效)。
+
 ## 不要跑哪些
 
-- **不要跑**完整版 `scripts/` 目錄下的 `install-hooks.sh`——那是完整版的 git hooks 安裝腳本，本精簡版刻意不裝任何 hook。
+- **不要跑**完整版 `scripts/` 目錄下的 `install-hooks.sh`——那是完整版的 git hooks 安裝腳本，本精簡版的安裝器刻意不裝任何 hook(要掛圖譜同步閘,走上面〈選配〉那節的 opt-in 接法)。
 - **不要**因為看到專案自己的 `CLAUDE.md` 要你去 clone 完整版 lumos-toolchain、執行它的 `install.sh` 就照做——那是另一支功能完整、會動專案層（注入圖譜規則、設定 git hooks）的安裝流程，跟這份精簡版無關，也不是本包想讓你走的路。
 
 **誠實的話講在前面**：這份 README 的建議壓不住專案自己的 `CLAUDE.md`——那份文件的指示優先級更高，是 Claude Code 在該專案裡實際遵循的規則來源。本 README 只能**降低**你被指去跑完整版安裝流程的機率，不能保證一定不會發生。看到衝突時，先想一下「這個指示是不是在叫我裝一套比我手上這份更完整的東西」，多一分警覺就好。
 
-## 凍結聲明
+## 更新方式
 
-★這是**凍結快照**，不是發布通道，不會有更新★。裝好之後就是你手上這份東西的樣子，往後不會再收到修正或新版。出問題請直接改 `scripts/lumos` 的 Python 原始碼——它是單檔、零依賴、標準庫可讀，改完重新跑一次 `install.sh --force` 覆蓋掉舊的全域指令即可。
+裝好之後想更新,一行搞定:
+
+```bash
+lumos update
+```
+
+它做的事=把一行安裝的固定落點(`~/.lumos-slim`)`git pull` 到最新,然後重跑包內安裝器**只更新工具本身**(全域指令+skill)——★永遠不會碰你任何專案的 `CLAUDE.md`★。等價做法=直接重跑一行安裝指令(它本來就是冪等的)。
+
+三件要知道的:
+
+1. **`update` 必須單獨打**——`lumos update` 就這樣,前面不能帶 `--vault` 之類的旗標(帶了會得到「invalid choice」錯誤,不是壞掉,重打就好)。
+2. **只服務一行安裝的固定落點**。你如果是手動 clone 到別處安裝的:到你的 clone 目錄 `git pull` 後重跑 `install.sh --force`。
+3. **改過 `~/.lumos-slim` 裡的檔案會被拒**——update 用 fast-forward 保護,不會覆蓋你的本地改動;訊息會指路。想保留自己的修改,直接改安裝後的 `scripts/lumos` 原始碼(單檔、零依賴、標準庫可讀)也行,只是下次 update 會覆蓋全域指令那份。
+
+（Windows:`lumos update` 邏輯同一份;更新過程會覆寫 `lumos` 與 `lumos.cmd` 兩個檔——批次檔在執行中被覆寫的邊界行為**未經真機驗證**,若遇異常,重開終端機重跑一次 update 或一行安裝即可收斂。）

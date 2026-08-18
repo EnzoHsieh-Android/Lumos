@@ -15757,7 +15757,7 @@ def t_slim_scan_python():
     import json as _j
     d = _j.loads(rs.stdout)
     tokens = {c["token"] for c in d["candidates"]}
-    for want in ("init", "update", "self-audit"):
+    for want in ("init", "self-audit"):   # update 2026-08-19 自期望移除:已入 slim-scan KEEP(精簡版有 update 了)
         check(f"★C1★ slim-scan --python 掃到產物字串常數指向已移除指令 {want}",
               want in tokens, str(sorted(tokens)))
 
@@ -15885,7 +15885,7 @@ def t_slim_gen_loop_registration():
     gen = str(_P(GRAPHCTL).parent / "slim-gen.py")
     out = root / "out.py"
     r = subprocess.run([sys.executable, gen, "--src", str(src), "--outfile", str(out),
-                        "--keep", "keepme"], capture_output=True, text=True)
+                        "--keep", "keepme", "--no-update-inject"], capture_output=True, text=True)
     check("slim-gen 合成 fixture rc0", r.returncode == 0, r.stdout + r.stderr)
     txt = out.read_text(encoding="utf-8")
     check("迴圈註冊的 dropme 被砍出註冊清單", "'dropme'" not in txt and '"dropme"' not in txt, txt[:400])
@@ -15938,7 +15938,7 @@ def t_slim_gen_nested_loop_registration():
     gen = str(_P(GRAPHCTL).parent / "slim-gen.py")
     out = root / "out.py"
     r = subprocess.run([sys.executable, gen, "--src", str(src), "--outfile", str(out),
-                        "--keep", "keepme", "otherkeep"], capture_output=True, text=True)
+                        "--keep", "keepme", "otherkeep", "--no-update-inject"], capture_output=True, text=True)
     check("slim-gen 巢狀迴圈 fixture rc0", r.returncode == 0, r.stdout + r.stderr)
     txt = out.read_text(encoding="utf-8")
     # ★缺陷重現★:直接查『迴圈本體』(osub.add_parser 呼叫)還在不在——不能只
@@ -17783,7 +17783,7 @@ def t_slim_readme_assertions():
         ("lumos contracts", "進場三步-contracts"),
         ("鐵則", "frontmatter 四條鐵則"),
         ("移除的是入口不是全部程式碼", "功能子集聲明(★後半句才是 helper 澄清★)"),
-        ("凍結快照", "★凍結聲明:不是發布通道★"),
+        ("lumos update", "〈更新方式〉章(2026-08-19 取代凍結聲明)"),
         ("install-hooks.sh", "明講不要跑哪些"),
         ("doctor", "合約鏈與 doctor 解法"),
     ):
@@ -17803,7 +17803,7 @@ def t_slim_readme_assertions():
                        capture_output=True, text=True)
     import json as _j3
     cands = _j3.loads(r.stdout)["candidates"] if r.stdout.strip() else []
-    reviewed_exception = {("init", "prefixed"), ("update", "prefixed"),
+    reviewed_exception = {("init", "prefixed"),   # ("update","prefixed") 2026-08-19 刪:update 已存在,舊「本包沒有」豁免語意反轉
                           ("self-audit", "prefixed"), ("signoff", "prefixed")}
     # ★2026-08-01 新增的「程式碼註解裡也會提到本包沒交付的檔案」揭露段★——同樣是
     # 自我指涉的誠實揭露(告訴讀者這些字串在註解裡看到是正常的)。★但這裡不放行
@@ -17853,20 +17853,16 @@ def t_slim_skill_reference_scan_assertions():
     reviewed = {
         ("reference.md", 18, "install", "prefixed"),
         ("reference.md", 18, "init", "bare-token"),
-        ("reference.md", 18, "update", "bare-token"),
         ("reference.md", 59, "install", "bare-token"),
         ("reference.md", 59, "uninstall", "bare-token"),
-        ("reference.md", 59, "update", "bare-token"),
         ("reference.md", 59, "bootstrap", "bare-token"),
         ("reference.md", 59, "init", "bare-token"),
         ("reference.md", 59, "deinit", "bare-token"),
         ("reference.md", 59, "teardown", "bare-token"),
         ("reference.md", 61, "init", "prefixed"),
-        ("reference.md", 61, "update", "prefixed"),
         ("reference.md", 61, "self-audit", "prefixed"),
         ("reference.md", 61, "signoff", "prefixed"),
         ("reference.md", 61, "init", "bare-token"),
-        ("reference.md", 61, "update", "bare-token"),
         ("reference.md", 246, "gov", "bare-token"),
         ("reference.md", 497, "spec-trace", "bare-token"),
         ("reference.md", 653, "self-audit", "prefixed"),
@@ -20574,6 +20570,156 @@ def t_seq_tier_hint_warning():
     d2 = _j.loads(r2.stdout.strip())
     check("tier-hint: ★前置★ design 端 hint 也有吐(非 vacuous)", bool(d2.get("tier_hint")), str(d2.get("phase")))
     check("tier-hint: design legacy loop 措辭不含該警告", "整批計入" not in d2.get("tier_hint", ""), d2.get("tier_hint", "")[:300])
+
+
+
+
+# ── 精簡版update指令(Projects/精簡版update指令_計劃):生成期拼接+_slim_update 行為 ──
+def _slim_update_product():
+    """生成一份含 update 拼接的 slim 產物,回傳路徑(供行為測試共用)。"""
+    import tempfile as _tf
+    root = Path(_tf.mkdtemp(prefix="gctl-slimupd-"))
+    gen = str(Path(GRAPHCTL).parent / "slim-gen.py")
+    out = root / "dist" / "scripts" / "lumos"   # 交付包組裝落 out.parent.parent(=dist)
+    r = subprocess.run([sys.executable, gen, "--outfile", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return out
+
+
+def t_slim_update_injection():
+    """S1/S2:產物含 _slim_update+main() 攔截;模板缺席/語法壞→生成硬失敗;複製清單補檔+hooks 位元。"""
+    import tempfile as _tf
+    import shutil as _sh
+    out = _slim_update_product()
+    txt = out.read_text(encoding="utf-8")
+    check("injection: 產物含 _slim_update 定義", "def _slim_update(" in txt, "")
+    check("injection: main() 後有 update 前置攔截(含長度守衛)",
+          'len(sys.argv) > 1 and sys.argv[1] == "update"' in txt, "")
+    # 攔截行必須在 def main(): 之後、且在其函式體開頭區
+    mi = txt.index("def main():")
+    check("injection: 攔截在 main() 體內", txt.index('sys.argv[1] == "update"') > mi, "")
+    # dist 包:hooks 兩支+WINDOWS-NOTES 隨包且 hooks 可執行
+    dist = out.parent.parent
+    for f in ("hooks/pre-commit", "hooks/post-commit", "WINDOWS-NOTES.md"):
+        check(f"injection: 交付包含 {f}", (dist / f).is_file(), str(sorted(x.name for x in dist.iterdir())))
+    import os as _os
+    for f in ("hooks/pre-commit", "hooks/post-commit"):
+        pth = dist / f
+        if pth.is_file():
+            check(f"injection: {f} 可執行位元", _os.access(pth, _os.X_OK), oct(pth.stat().st_mode))
+    # 模板缺席→硬失敗:把 slim-gen 複製到孤立目錄(here 改變,找不到 ../slim/update_cmd.py)
+    iso = Path(_tf.mkdtemp(prefix="gctl-slimiso-")) / "scripts"
+    iso.mkdir(parents=True)
+    _sh.copy2(Path(GRAPHCTL).parent / "slim-gen.py", iso / "slim-gen.py")
+    r2 = subprocess.run([sys.executable, str(iso / "slim-gen.py"), "--src", GRAPHCTL,
+                         "--outfile", str(iso.parent / "d" / "scripts" / "lumos")],
+                        capture_output=True, text=True)
+    check("injection: 模板缺席→生成 rc 非 0(fail loud)", r2.returncode != 0, f"rc={r2.returncode}")
+    # 模板語法壞→ast.parse 自檢攔下 rc1 不出貨
+    (iso.parent / "slim").mkdir()
+    (iso.parent / "slim" / "update_cmd.py").write_text("def _slim_update(:\n  broken\n", encoding="utf-8")
+    r3 = subprocess.run([sys.executable, str(iso / "slim-gen.py"), "--src", GRAPHCTL,
+                         "--outfile", str(iso.parent / "d" / "scripts" / "lumos")],
+                        capture_output=True, text=True)
+    check("injection: 模板語法壞→rc 非 0 不出貨(拼接先於 ast.parse 自檢)", r3.returncode != 0, f"rc={r3.returncode}")
+
+
+def t_slim_update_behavior():
+    """S1:_slim_update 全路徑行為(fail loud rc2/pull+重裝/--tool-only 傳遞/邊界)。"""
+    import tempfile as _tf
+    import subprocess as _sp
+    out = _slim_update_product()
+    fake_home = Path(_tf.mkdtemp(prefix="gctl-slimhome-"))
+    env = dict(__import__("os").environ, HOME=str(fake_home))
+    def upd(extra_env=None, *args):
+        e = dict(env)
+        if extra_env:
+            e.update(extra_env)
+        return _sp.run([sys.executable, str(out), *(args or ("update",))],
+                       capture_output=True, text=True, env=e)
+    # ① 無固定落點→rc2+指路
+    r1 = upd()
+    check("behavior①: 無 ~/.lumos-slim→rc2", r1.returncode == 2, f"rc={r1.returncode} {r1.stderr[:200]}")
+    check("behavior①: 指路訊息(重跑一行安裝)", "一行安裝" in r1.stderr or "一行安裝" in r1.stdout,
+          r1.stderr[:300])
+    # 佈本地 git 源(origin)與 clone(dest)
+    origin = fake_home / "origin"
+    origin.mkdir()
+    (origin / "install.py").write_text(
+        "import sys\nprint('FAKE-INSTALL argv=', sys.argv[1:])\nsys.exit(0)\n", encoding="utf-8")
+    def git(cwd, *a):
+        return _sp.run(["git", "-C", str(cwd), *a], capture_output=True, text=True)
+    git(origin, "init", "-q")
+    git(origin, "config", "user.email", "t@t")
+    git(origin, "config", "user.name", "t")
+    git(origin, "add", "-A")
+    git(origin, "commit", "-qm", "v1")
+    dest = fake_home / ".lumos-slim"
+    _sp.run(["git", "clone", "-q", str(origin), str(dest)], capture_output=True, text=True)
+    # ②⑤ 正常路:pull ok+假 install.py 被以 --force --tool-only 呼叫
+    r2 = upd()
+    check("behavior②: 正常路 rc0", r2.returncode == 0, f"rc={r2.returncode} {r2.stderr[:300]}")
+    check("behavior②⑤: 假 install.py 收到 --force 與 --tool-only",
+          "FAKE-INSTALL" in r2.stdout and "--force" in r2.stdout and "--tool-only" in r2.stdout,
+          r2.stdout[:300])
+    # ⑧ install.py 被刪→rc2(存在預檢)
+    (dest / "install.py").unlink()
+    git(dest, "add", "-A"); git(dest, "commit", "-qm", "rm")
+    r8 = upd()
+    check("behavior⑧: install.py 不存在→rc2", r8.returncode == 2, f"rc={r8.returncode} {r8.stderr[:200]}")
+    git(dest, "revert", "-n", "HEAD"); git(dest, "commit", "-qm", "restore")
+    # ③ 分岔→--ff-only 拒 rc2
+    (origin / "f2.txt").write_text("x", encoding="utf-8")
+    git(origin, "add", "-A"); git(origin, "commit", "-qm", "adv")
+    (dest / "local.txt").write_text("y", encoding="utf-8")
+    git(dest, "add", "-A"); git(dest, "commit", "-qm", "diverge")
+    r3 = upd()
+    check("behavior③: 分岔→--ff-only 拒 rc2", r3.returncode == 2, f"rc={r3.returncode} {r3.stderr[:200]}")
+    # ④ PATH 無 git→rc2
+    r4 = upd({"PATH": "/nonexistent"})
+    check("behavior④: PATH 無 git→rc2", r4.returncode == 2, f"rc={r4.returncode} {r4.stderr[:200]}")
+    # ⑦ 裸打→argparse usage,無 traceback
+    r7 = upd(None, "--help")
+    r7b = _sp.run([sys.executable, str(out)], capture_output=True, text=True, env=env)
+    check("behavior⑦: 裸打→usage+rc2 無 traceback",
+          r7b.returncode == 2 and "Traceback" not in r7b.stderr and "usage" in r7b.stderr,
+          f"rc={r7b.returncode} {r7b.stderr[:200]}")
+    # ⑨ 全域旗標前置→argparse invalid choice,fail loud 非 crash
+    r9 = _sp.run([sys.executable, str(out), "--vault", str(fake_home), "update"],
+                 capture_output=True, text=True, env=env)
+    check("behavior⑨: --vault 前置→invalid choice rc2 無 traceback",
+          r9.returncode == 2 and "invalid choice" in r9.stderr and "Traceback" not in r9.stderr,
+          f"rc={r9.returncode} {r9.stderr[:200]}")
+    # Path.home 拋例外→rc2 不拋(模組級)
+    m = None
+    import importlib.util as _ilu
+    from importlib.machinery import SourceFileLoader as _SFL
+    spec = _ilu.spec_from_file_location("slimprod", str(out), loader=_SFL("slimprod", str(out)))
+    m = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    orig_home = m.Path.home
+    class _Boom:
+        @staticmethod
+        def raise_():
+            raise RuntimeError("no home")
+    try:
+        m.Path.home = staticmethod(lambda: (_ for _ in ()).throw(RuntimeError("no home")))
+        rc = m._slim_update()
+        check("behavior⑩: Path.home 拋 RuntimeError→回 2 不拋例外", rc == 2, f"rc={rc}")
+    finally:
+        m.Path.home = orig_home
+
+
+def t_slim_update_textpins():
+    """S3 文字釘:README 有〈更新方式〉+lumos update;五關鍵詞於 README/install.py 全滅。"""
+    readme = (Path(GRAPHCTL).parent.parent / "slim" / "README.md").read_text(encoding="utf-8")
+    inst = (Path(GRAPHCTL).parent.parent / "slim" / "install.py").read_text(encoding="utf-8")
+    check("textpin: README 含 lumos update", "lumos update" in readme, "")
+    check("textpin: README 含〈更新方式〉章", "更新方式" in readme, "")
+    for kw in ("不會有更新", "凍結快照", "不是發布通道", "不會有真正的新版本可拉", "〈凍結聲明〉"):
+        check(f"textpin: README 不含「{kw}」", kw not in readme, "")
+        check(f"textpin: install.py 不含「{kw}」", kw not in inst, "")
+    check("textpin: install.py 含 --tool-only 穩定介面", "--tool-only" in inst, "")
 
 
 if __name__ == "__main__":

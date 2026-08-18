@@ -306,6 +306,8 @@ def main():
     ap.add_argument("--outfile", default=str(here.parent / "dist" / "scripts" / "lumos"))
     ap.add_argument("--keep", nargs="*", default=None, help="覆蓋預設保留清單(測試用)")
     ap.add_argument("--emit-manifest", action="store_true")
+    ap.add_argument("--no-update-inject", action="store_true",
+                    help="跳過 update 指令拼接(合成 fixture 測試用;真實生成勿帶——拼接錨點缺失時 fail loud 是刻意保證)")
     a = ap.parse_args()
 
     keep = set(a.keep) if a.keep is not None else set(DEFAULT_KEEP)
@@ -331,6 +333,29 @@ def main():
 
     dels, inserts = collect_edits(tree, funcs, drop, keep, removed)
     new_text = apply_edits(text, dels, inserts)
+
+    # [精簡版update指令] 生成期拼接——★必須先於下方 ast.parse 自檢★:模板縮排/語法壞
+    # =生成 rc1 不出貨,不會壞在使用者端(拼在自檢後=自檢存在理由失效)。
+    if a.no_update_inject:
+        tmpl = None
+    else:
+        tmpl = here.parent / "slim" / "update_cmd.py"
+    if tmpl is not None:
+        if not tmpl.is_file():
+            print(f"ERROR: 找不到拼接模板 {tmpl}——update 指令會漏拼,拒絕出貨。", file=sys.stderr)
+            return 1
+        _anchor = "def main():\n"
+        _tail = 'if __name__ == "__main__":'
+        if new_text.count(_anchor) != 1 or new_text.count(_tail) != 1:
+            print("ERROR: 拼接錨點(def main(): / if __name__)非唯一,拒絕出貨。", file=sys.stderr)
+            return 1
+        new_text = new_text.replace(
+            _anchor,
+            _anchor + '    if len(sys.argv) > 1 and sys.argv[1] == "update":'
+                      "   # 精簡版 update 前置攔截(生成期拼接;update 必須為第一參數)\n"
+                      "        return _slim_update()\n",
+            1)
+        new_text = new_text.replace(_tail, tmpl.read_text(encoding="utf-8") + "\n\n" + _tail, 1)
 
     # 產物必須自己 parse 得過(行級手術最容易壞的地方就是刪出語法洞)
     try:
@@ -361,7 +386,8 @@ def main():
         for item in ("install.sh", "install.py", "install.ps1",
                      "get.sh", "get.ps1",
                      "uninstall.sh", "uninstall.py", "uninstall.ps1",
-                     "README.md", "claude-block.md", "skills"):
+                     "README.md", "claude-block.md", "skills",
+                     "hooks", "WINDOWS-NOTES.md", ".gitattributes"):   # hooks/WINDOWS/gitattributes 2026-08-19 補列(工廠漂移治理;.gitattributes=hooks CRLF 防護,發行 repo 08-11 立;update_cmd.py 刻意不入列——生成期模板非交付物)
             s = pkg_src / item
             if s.is_dir():
                 shutil.copytree(s, pkg_dst / item, dirs_exist_ok=True)

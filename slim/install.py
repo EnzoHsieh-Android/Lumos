@@ -362,14 +362,21 @@ def main(argv=None):
 
     force = "--force" in argv
     here = "--here" in argv
+    # ★--tool-only=跨版本穩定介面,勿改名/勿移除★:產物 CLI 的 `lumos update` 生成期
+    # 寫死呼叫本旗標;本檔旗標判讀是寬鬆 in-argv(未知旗標靜默忽略),拿掉此旗標=
+    # 已布署舊版 CLI 的 update 會★靜默退回完整安裝路徑★(專案根守衛+CLAUDE.md 注入)
+    # ——正是它要隔離的事故。守衛=來源 repo t_slim_update_behavior 真檔測試長駐。
+    tool_only = "--tool-only" in argv
 
-    # ⓪ 注入目標守衛(見模組 docstring)。
+    # ⓪ 注入目標守衛(見模組 docstring)。--tool-only(update 通道)只更新工具本身,
+    #    無注入目標可言:整段守衛與下方 ③ CLAUDE.md 合併一併跳過。
     target_dir = Path.cwd().resolve()
     target_claude_md = target_dir / "CLAUDE.md"
-    print(f"目標專案: {target_dir}")
-    print(f"將修改: {target_claude_md}")
+    if not tool_only:
+        print(f"目標專案: {target_dir}")
+        print(f"將修改: {target_claude_md}")
 
-    if not here:
+    if not here and not tool_only:
         home = Path.home()
         home_phys = home.resolve() if home.is_dir() else home
         if target_dir == home_phys:
@@ -416,16 +423,18 @@ def main(argv=None):
 
     # ③ 專案層 CLAUDE.md —— 用策展後的精簡版紀律區塊取代完整版(若有)/附加。
     # 範本 = 本包隨附的 claude-block.md(靜態檔,不在腳本裡手刻字串)。
-    block_template = pkg / "claude-block.md"
-    if not block_template.is_file():
-        print(f"ERROR: 找不到 {block_template}", file=sys.stderr)
-        return 2
-    template_text = block_template.read_text(encoding="utf-8")
-    merge_rc, new_text = _merge_claude_md_text(target_claude_md, template_text)
-    if merge_rc != 0:
-        return merge_rc
-    target_claude_md.write_text(new_text, encoding="utf-8")
-    print(f"✓ CLAUDE.md 精簡版紀律區塊已安裝/更新: {target_claude_md}")
+    # --tool-only(update 通道)跳過:更新工具本身永不碰任何專案的 CLAUDE.md。
+    if not tool_only:
+        block_template = pkg / "claude-block.md"
+        if not block_template.is_file():
+            print(f"ERROR: 找不到 {block_template}", file=sys.stderr)
+            return 2
+        template_text = block_template.read_text(encoding="utf-8")
+        merge_rc, new_text = _merge_claude_md_text(target_claude_md, template_text)
+        if merge_rc != 0:
+            return merge_rc
+        target_claude_md.write_text(new_text, encoding="utf-8")
+        print(f"✓ CLAUDE.md 精簡版紀律區塊已安裝/更新: {target_claude_md}")
 
     path_entries = os.environ.get("PATH", "").split(os.pathsep)
     if str(bin_dir) not in path_entries:
@@ -440,7 +449,7 @@ def main(argv=None):
 
     print()
     print("裝好了。驗證: lumos --help")
-    print("★這是凍結快照,不是發布通道——不會有更新。出問題請直接改 Python 原始碼。★")
+    print("更新:之後跑 `lumos update`(拉最新精簡版重裝),或重跑一行安裝。出問題也可直接改 Python 原始碼(單檔、標準庫)。")
     return 0
 
 

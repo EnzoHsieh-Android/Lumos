@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-18
-updated: 2026-08-18
+updated: 2026-08-19
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/graph-governance
 aliases:
   - slim update
@@ -79,6 +79,10 @@ slim-gen 重生成 → dist/ → 內容同步進 Citrus_Lumos clone(**路徑釘=
 
 - 「update 只認固定落點 `~/.lumos-slim`,手動 clone 不猜路徑」——與 get 腳本的固定落點契約同源。
 - 「install.py 恆接受 `--tool-only`(跨版本穩定介面;拿掉/改名=已布署舊 CLI 靜默退回完整安裝)」——std-r1 s2 折入。
+
+## 落地(2026-08-19)
+
+TDD 33 斷言先紅後綠+5 個既有測試期望修真、全量 2842/0;真遠端 E2E 過(pull+--tool-only 重裝,CLAUDE.md 零觸碰);發行 repo 推 31533ec,dist↔發行 diff 歸零。意外考古:發行 repo 08-11 曾有「安裝器代複製 hooks」功能被 08-14 工廠同步靜默蓋掉(佚失記錄入 Verification,復活另案)。驗證=[[Verification/2026-08-19_精簡版update指令落地]]。
 
 ## 審計修正紀錄
 
