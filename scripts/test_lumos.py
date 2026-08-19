@@ -20758,5 +20758,30 @@ def t_slim_update_textpins():
     check("textpin: install.py 含 --tool-only 穩定介面", "--tool-only" in inst, "")
 
 
+
+
+def t_bootstrap_url_self_origin():
+    """鏡像自足:bootstrap 預設 clone URL=執行腳本所屬 clone 的 origin(查無才退硬編碼)。"""
+    import tempfile as _tf
+    import subprocess as _sp
+    m = _load_lumos_module()
+    repo = Path(_tf.mkdtemp(prefix="gctl-selforigin-")) / "cl"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "lumos").write_text("# stub\n", encoding="utf-8")
+    _sp.run(["git", "init", "-q", str(repo)], capture_output=True)
+    _sp.run(["git", "-C", str(repo), "remote", "add", "origin",
+             "https://example.com/mirror/Full.git"], capture_output=True)
+    got = m._self_repo_origin(script=repo / "scripts" / "lumos")
+    check("self-origin: 讀到 clone 自己的 origin", got == "https://example.com/mirror/Full.git", str(got))
+    _sp.run(["git", "-C", str(repo), "remote", "remove", "origin"], capture_output=True)
+    check("self-origin: 無 origin→None", m._self_repo_origin(script=repo / "scripts" / "lumos") is None, "")
+    plain = Path(_tf.mkdtemp(prefix="gctl-selforigin2-")) / "x" / "scripts"
+    plain.mkdir(parents=True)
+    (plain / "lumos").write_text("# stub\n", encoding="utf-8")
+    check("self-origin: 非 git→None", m._self_repo_origin(script=plain / "lumos") is None, "")
+    import inspect
+    src = inspect.getsource(m.cmd_bootstrap)
+    check("self-origin: bootstrap 接線(_self_repo_origin 在解析鏈中)", "_self_repo_origin" in src, "")
+
 if __name__ == "__main__":
     sys.exit(main())
