@@ -20771,17 +20771,44 @@ def t_bootstrap_url_self_origin():
     _sp.run(["git", "init", "-q", str(repo)], capture_output=True)
     _sp.run(["git", "-C", str(repo), "remote", "add", "origin",
              "https://example.com/mirror/Full.git"], capture_output=True)
+    # ★vendored 業務副本(無工具鏈身分)→不信 origin(單審 blocker 釘:否則業務 repo 被 clone 成來源+全域 symlink 永久指錯)
+    check("self-origin: ★vendored 業務副本→None(身分探針)★",
+          m._self_repo_origin(script=repo / "scripts" / "lumos") is None, "")
+    # 補上工具鏈身分標記→才信
+    (repo / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (repo / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# s\n", encoding="utf-8")
     got = m._self_repo_origin(script=repo / "scripts" / "lumos")
-    check("self-origin: 讀到 clone 自己的 origin", got == "https://example.com/mirror/Full.git", str(got))
+    check("self-origin: 工具鏈 clone→讀到自己的 origin", got == "https://example.com/mirror/Full.git", str(got))
     _sp.run(["git", "-C", str(repo), "remote", "remove", "origin"], capture_output=True)
     check("self-origin: 無 origin→None", m._self_repo_origin(script=repo / "scripts" / "lumos") is None, "")
     plain = Path(_tf.mkdtemp(prefix="gctl-selforigin2-")) / "x" / "scripts"
     plain.mkdir(parents=True)
     (plain / "lumos").write_text("# stub\n", encoding="utf-8")
     check("self-origin: 非 git→None", m._self_repo_origin(script=plain / "lumos") is None, "")
+    # 行為級接線釘(取代原字串包含假綠斷言,單審抓到):真呼叫解析鏈驗優先順序
+    import os as _os
+    _sp.run(["git", "-C", str(repo), "remote", "add", "origin",
+             "https://example.com/mirror/Full.git"], capture_output=True)
+    old_env = _os.environ.pop("LUMOS_URL", None)
+    try:
+        check("self-origin: 解析鏈③本 clone origin 生效",
+              m._bootstrap_url(script=repo / "scripts" / "lumos") == "https://example.com/mirror/Full.git", "")
+        _os.environ["LUMOS_URL"] = "https://env.example/x.git"
+        check("self-origin: 解析鏈②env 蓋過 origin",
+              m._bootstrap_url(script=repo / "scripts" / "lumos") == "https://env.example/x.git", "")
+        check("self-origin: 解析鏈①旗標蓋過 env",
+              m._bootstrap_url("https://flag.example/y.git", script=repo / "scripts" / "lumos") == "https://flag.example/y.git", "")
+        del _os.environ["LUMOS_URL"]
+        check("self-origin: 解析鏈④無訊號退硬編碼上游",
+              m._bootstrap_url(script=plain / "lumos") == "https://github.com/EnzoHsieh-Android/Lumos", "")
+    finally:
+        if old_env is not None:
+            _os.environ["LUMOS_URL"] = old_env
+        else:
+            _os.environ.pop("LUMOS_URL", None)
     import inspect
-    src = inspect.getsource(m.cmd_bootstrap)
-    check("self-origin: bootstrap 接線(_self_repo_origin 在解析鏈中)", "_self_repo_origin" in src, "")
+    check("self-origin: cmd_bootstrap 走 _bootstrap_url(單一解析點)",
+          "_bootstrap_url(" in inspect.getsource(m.cmd_bootstrap), "")
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -8999,13 +8999,19 @@ def _confirm_tty(prompt):
 
 def _self_repo_origin(script=None):
     """執行中腳本所屬 clone 的 origin URL(全域 lumos=symlink 進來源 clone,resolve 後可定位)。
-    非 git repo/無 origin/git 不可用 → None(呼叫端退硬編碼預設)。
+    非 git repo/無 origin/git 不可用/★非工具鏈本體★ → None(呼叫端退硬編碼預設)。
     用途=鏡像自足(2026-08-19):從 Citrus_Lumos_Full 之類鏡像 clone 裝起的機器,bootstrap
-    自動 clone 的預設來源=鏡像自己,不會漏回上游 repo。"""
+    自動 clone 的預設來源=鏡像自己,不會漏回上游 repo。
+    ★身分探針(單審 blocker 修)★:vendored 進業務專案的 scripts/lumos 是普通已提交檔——沒有
+    這道探針,在業務 repo 裡跑 bootstrap 會把★業務 repo 的 origin★clone 成工具鏈來源,且全域
+    symlink 從此指錯、無聲。判別鍵=skills/lumos-project-notes/SKILL.md(user-scope skill 唯一
+    源,永不 vendor 進消費專案;同 install.py 來源 repo 判定慣例)。"""
     import subprocess
     repo = Path(script or __file__).resolve().parent.parent
     if not (repo / ".git").exists():
         return None
+    if not (repo / "skills" / "lumos-project-notes" / "SKILL.md").is_file():
+        return None   # vendored 消費副本/無關 repo:不信其 origin
     try:
         r = subprocess.run(["git", "-C", str(repo), "remote", "get-url", "origin"],
                            capture_output=True, text=True)
@@ -9013,6 +9019,14 @@ def _self_repo_origin(script=None):
         return None
     u = r.stdout.strip()
     return u if (r.returncode == 0 and u) else None
+
+
+def _bootstrap_url(lumos_url=None, script=None):
+    """bootstrap 預設 clone URL 解析鏈:旗標 > $LUMOS_URL > 本 clone origin(鏡像自足,含身分探針)
+    > 硬編碼上游。抽成函式=解析順序可被行為測試釘住(單審抓到原字串包含斷言=假綠)。"""
+    import os
+    return (lumos_url or os.environ.get("LUMOS_URL") or _self_repo_origin(script=script)
+            or "https://github.com/EnzoHsieh-Android/Lumos")
 
 
 def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow_stale=False):
@@ -9025,8 +9039,7 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
     import os, subprocess
     home = Path(lumos_home or os.environ.get("LUMOS_HOME")
                 or (Path.home() / "harness" / "lumos-toolchain")).expanduser()
-    url = (lumos_url or os.environ.get("LUMOS_URL") or _self_repo_origin()
-           or "https://github.com/EnzoHsieh-Android/Lumos")   # 解析鏈:旗標>env>本 clone origin(鏡像自足)>硬編碼
+    url = _bootstrap_url(lumos_url)   # 解析鏈:旗標>env>本 clone origin(鏡像自足+身分探針)>硬編碼
     # 1) 確保 Lumos 來源在(缺則自動 clone;--pull 則既有 clone 也拉最新)
     # 存在性判定=scripts/lumos(真正要執行的檔;code-loop r1 F3:與 get.sh 同判準,免部分 clone 下兩端不一致)
     if (home / "scripts" / "lumos").exists():
