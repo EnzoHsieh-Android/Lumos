@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-05
+updated: 2026-08-20
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
@@ -54,6 +54,12 @@ decisions:
     context: 原行為:git pull --ff-only 失敗只印一行警告就繼續 vendor→拿當下來源(可能落後/有本機分歧)覆蓋消費專案。消費端 mOrangePos 實戰咬過兩次靜默降版,警告混在一堆輸出裡看不到。「拿不到最新」與「確定是最新」兩種狀態原本走同一條路
     why_chosen: 備選A維持警告續跑(=現況,已證實會被滑過);備選B一律中止(會誤擋手動複製/slim 安裝的無 remote 來源,那是合法離線情境);備選C每次互動詢問(自動化/CI 場景不可用);選D精準 fail-closed——只有『有 remote 卻拉不到』才中止(無 remote=離線 clone 照跑),明示逃生門 --allow-stale 給離線/緊急。中止點在寫任何檔之前,不留半套。政策收進 _pull_source_or_abort 單一函式供專案層(_vendor_toolchain)與機器層(cmd_bootstrap)共用,避免兩處漂移(同 _VENDORED_TOOLKIT 白名單共用的既有教訓)。trade-off:來源長期離線又有 remote 的使用者每次要加旗標——以「誤擋一次的成本 << 靜默降版一次的成本」換
     decided: 2026-08-11
+    valid: true
+  - content: Citrus_Lumos_Full 鏡像與本工具鏈分家:本 repo 不再推送鏡像、不再視其為同步目標;鏡像自帶安裝入口與更新路線,獨立演進
+    id: d5
+    context: 鏡像原為本 repo 單向同步的複本(remote 名 Full),其安裝入口(get.sh/get.ps1/README/ONBOARDING/ARCHITECTURE)與 bootstrap 解析鏈第四段全部寫死指向上游 EnzoHsieh-Android/Lumos——2026-08-19 的 _self_repo_origin 只讓「已有 clone」的機器自足,curl 一鍵安裝那條路仍會把使用者拉回上游。2026-08-20 已在鏡像端把活路徑改指其自身(鏡像 commit e00de16,測試 2858/0),但只要本 repo 再推一次就會全部洗回去。
+    why_chosen: Enzo 2026-08-20 明示「不再往 Full 推、讓它自足、與本工具鏈分離」。考慮過的替代:①維持單向同步、鏡像端改動每次手動重打(靠人記得,零守衛,已知會漂)②本 repo 加同步前守衛,推鏡像前檢查其活檔不得出現上游 URL(仍保留耦合,且多一道機制要養)③分家(採用)。選③因為它把耦合從根拔掉而非再加一道閘看守,與「機制總量本身是成本」一致;且鏡像更新路線(clone 自身 origin → lumos update 拉該 origin)2026-08-20 實測已自足,不需本 repo 參與。TRADE-OFFS:★兩邊從此會分岔——本 repo 之後的修正不會自動流到鏡像,鏡像要拿新功能得自己合併★;Verification/2026-08-19 記載的「鏡像已同步至最新 main」自此降為歷史快照、不再維持為真;移除 remote 只擋誤推,不擋有人手動 git remote add 再推,無機械守衛,靠本決策留痕。
+    decided: 2026-08-20
     valid: true
 related:
   - "[[CLAUDE注入re-sync與版本標籤_計劃]]"
