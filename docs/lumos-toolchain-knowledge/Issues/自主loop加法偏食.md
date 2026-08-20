@@ -5,6 +5,7 @@ created: 2026-07-07
 updated: 2026-07-07
 related:
   - "[[autonomous-iteration-loop]]"
+  - "[[Issues/只退場不痛的機制]]"
 tags:
   - type/issue
   - status/open
