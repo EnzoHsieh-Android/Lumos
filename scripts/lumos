@@ -2880,7 +2880,77 @@ def cmd_signoff(env, node, note, by=None):
     return 0
 
 
-def cmd_gov(env, node=None, since_days=90, full=False):
+# ★gov --stats 的 gate 全集★(2026-08-20,計劃:Projects/閘觸發帳統計_計劃)
+# 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
+# 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
+_KNOWN_GATES = ("L2", "L3", "anchor-approve", "canary", "check-e1", "check-e2", "check-e3",
+                "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "kill", "signoff")
+
+# 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+# (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+_STATS_ABSENT_DISCLAIMER = (
+    "  未出現 ≠ 無用。本帳看不到硬擋事件(anchor verify 擋下 push 時不寫任何帳),也分不出四種\n"
+    "  「沒出現」:跑了沒事／接了帳但沒被觸發／守的功能從沒被用過／本次執行根本沒載入該來源\n"
+    "  (ci 帳是條件載入)。要拿這份清單談退場,先確認該閘在本帳的 gate 名單之內、且來源本次有載入。"
+)
+
+
+# 哪些 gate 的 nodes 欄語意不是「圖譜節點」。★為什麼要標★:anchor-approve 記的是錨點
+# 檔案(ANCHOR_FILES:scripts/hooks/pre-push、scripts/test_lumos.py …),與其他 gate 的圖譜
+# 節點名不同質,同欄並列會被誤讀成可互相比較。★不能用「值裡有沒有 /」偵測★——cmd_gov 的
+# mapper 讀進來時已把路徑 stem 成 pre-push,偵測不到(2026-08-20 實作時測試翻紅抓到)。
+_STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑"}
+
+
+def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
+    """gov --stats:純數字報表 + 未出現清單。恆不影響 rc、不改既有輸出。
+    ★三層數字不可互相冒充★:原始行(帳檔寫入)/去重列(本函式計數依據)/呈現行(預設畫面另折一層)。"""
+    print()
+    print("─" * 33)
+    print(f"[stats] 載入源: {', '.join(loaded) if loaded else '(無)'}")
+    print(f"[stats] 窗口: 近 {since_days} 天(自 {cutoff} 起)")
+    if node:
+        print(f"[stats] ⚠ 已縮限至節點 {node},以下統計僅為該節點視角")
+    if not ded and not rows:
+        print("  窗口內無資料")
+        return
+    agg = {}
+    for src, bucket in ((rows, "raw"), (ded, "ded")):
+        for r in src:
+            a = agg.setdefault(r["gate"], {"raw": 0, "ded": 0, "nodes": set(),
+                                           "commits": set(), "dates": set()})
+            a[bucket] += 1
+            if bucket == "ded":
+                a["nodes"].update(n for n in r["nodes"] if n)
+                if r["commit"]:
+                    a["commits"].add(r["commit"])
+                d = (r["ts"] or "")[:10]
+                if len(d) == 10 and d[4] == "-":
+                    a["dates"].add(d)
+    print()
+    print(f"  {'gate':16}{'去重後筆數':>10}{'原始行數':>10}{'不同 nodes 值數':>16}"
+          f"{'不同 commit 數':>14}  {'首見日':10} {'末見日':10}")
+    for g in sorted(agg):
+        a = agg[g]
+        nd = f"n/a" if not a["nodes"] else str(len(a["nodes"]))
+        cm = "n/a" if not a["commits"] else str(len(a["commits"]))
+        d1 = min(a["dates"]) if a["dates"] else "n/a"
+        d2 = max(a["dates"]) if a["dates"] else "n/a"
+        _sem = _STATS_NODE_SEMANTICS.get(g)
+        tag = f"  ({_sem})" if (_sem and a["nodes"]) else ""
+        print(f"  {g:16}{a['ded']:>10}{a['raw']:>10}{nd:>16}{cm:>14}  {d1:10} {d2:10}{tag}")
+    absent = [g for g in _KNOWN_GATES if g not in agg]
+    print()
+    if node:
+        print("  (縮限模式:不記節點的來源必然零列——結構產物非訊號,不列未出現清單)")
+    else:
+        print(f"  未出現的 gate({len(absent)}):{', '.join(absent) if absent else '無'}")
+        print(_STATS_ABSENT_DISCLAIMER)
+    print()
+    print("  註:以上為「去重列」計數,★不等於 gov 預設畫面的行數★——預設畫面另有一層呈現折疊。")
+
+
+def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
     """唯讀彙整七帳(bypass/rot-queue/governance/canary/kill/signoff/ci)→ 治理事件時間軸。
     本機開發可見性工具(非合規物)。L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖。
     去噪(2026-07-25,呈現層——帳本身不動):同日同類 advisory(軟/warned/無 detail,如 Check S
@@ -2894,11 +2964,13 @@ def cmd_gov(env, node=None, since_days=90, full=False):
         return Path(str(s)).stem.lower()
 
     rows = []
+    loaded = []          # --stats 要印「本次實際載入哪幾源」(ci 帳是條件載入,非固定七本)
 
     def load(name, mapper):
         p = docs / name
         if not p.exists():
             return
+        loaded.append(name.lstrip(".").replace("-log.jsonl", "").replace(".jsonl", ""))
         for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
@@ -3059,6 +3131,10 @@ def cmd_gov(env, node=None, since_days=90, full=False):
         print(f"  對抗層增量帳(折入=測試綠後仍被抓;長期趨零=機關裝飾該砍): "
               f"折入 {fold_total} 筆缺陷 [{sev_s}] | 依審計員: {aud_s} {legacy_s}".rstrip())
     print(f"\n{len(ded)} 筆(近 {since_days} 天)")
+    if stats:
+        # 原始行也要吃 node 縮限,否則同一張表兩欄母體不同(去重欄已縮、原始欄沒縮)
+        _raw = [r for r in rows if (not node) or stem(node) in r["nodes"]]
+        _render_gov_stats(_raw, ded, loaded, since_days, cutoff, node)
     return 0
 
 
@@ -14156,6 +14232,8 @@ def main():
     p.add_argument("node", nargs="?")
     p.add_argument("--since", type=int, default=90, help="近 N 天(預設 90)")
     p.add_argument("--full", action="store_true", help="關去噪:advisory 逐筆完整列(預設同日同類折疊)")
+    p.add_argument("--stats", action="store_true",
+                   help="附加唯讀數字報表:每道閘的筆數/nodes/commit/起訖日 + 未出現的閘清單(恆 rc0,不做判定)")
 
     cp = sub.add_parser("canary", help="審計員 canary 留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵")
     csub = cp.add_subparsers(dest="ccmd", required=True)
@@ -14769,7 +14847,7 @@ def main():
     if args.cmd == "signoff":
         return cmd_signoff(env, args.node, note=args.note, by=args.by)
     if args.cmd == "gov":
-        return cmd_gov(env, args.node, since_days=args.since, full=args.full)
+        return cmd_gov(env, args.node, since_days=args.since, full=args.full, stats=args.stats)
 
     if args.cmd == "ci-wait":
         return cmd_ci_wait(env, timeout=args.cw_timeout, repo_dir=args.cw_repo,

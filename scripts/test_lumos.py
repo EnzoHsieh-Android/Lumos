@@ -2960,6 +2960,199 @@ def t_gov_query():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _stats_fixture(prefix, gov_lines, extra=None):
+    """建一個最小 vault + docs 帳檔;回 (root, vault)。呼叫端負責 rmtree。"""
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    vault = root / "docs" / "kg"
+    (vault / "MOC").mkdir(parents=True)
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
+    docs = root / "docs"
+    (docs / ".governance-log.jsonl").write_bytes("".join(gov_lines).encode("utf-8"))
+    for name, body in (extra or {}).items():
+        (docs / name).write_bytes(body.encode("utf-8"))
+    return root, vault
+
+
+def t_gov_stats_fields():
+    import shutil
+    gov = [
+        '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"check-s","kind":"warned","hard":false,"nodes":["N1"]}\n',
+        '{"ts":"2026-06-03T09:00:00","commit":"bbb","gate":"check-s","kind":"warned","hard":false,"nodes":["N2"]}\n',
+    ]
+    root, vault = _stats_fixture("gctl-stf-", gov)
+    try:
+        r = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0)
+        out = r.stdout
+        check("stats: 六欄表頭齊全", all(k in out for k in
+              ("去重後筆數", "原始行數", "不同 nodes 值數", "不同 commit 數", "首見日", "末見日")), out)
+        check("stats: check-s 筆數 2", "check-s" in out and "2026-06-01" in out and "2026-06-03" in out, out)
+        check("stats: 載入源清單印在表頭", "載入源" in out, out)
+        check("stats: 實際窗口印在表頭", "窗口" in out, out)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_gov_stats_three_layers():
+    import shutil
+    dup = '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"check-s","kind":"warned","hard":false,"nodes":["N1"]}\n'
+    root, vault = _stats_fixture("gctl-st3-", [dup, dup, dup])
+    try:
+        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        seg = [l for l in out.splitlines() if l.strip().startswith("check-s")]
+        check("stats: 三行重複 → 去重 1 / 原始 3", bool(seg) and " 1 " in seg[0] and " 3 " in seg[0], out)
+        check("stats: 印出「不等於預設畫面行數」聲明", "預設畫面" in out and "呈現折疊" in out, out)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_gov_stats_na_columns():
+    import shutil
+    gov = [
+        '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"code-loop","kind":"passed","hard":false,"nodes":[]}\n',
+        '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"anchor-approve","kind":"approved","hard":false,"nodes":["scripts/hooks/pre-push"]}\n',
+        '{"ts":"2026-06-03T09:00:00","commit":"ccc","gate":"anchor-approve","kind":"approved","hard":false,"nodes":[]}\n',
+    ]
+    extra = {".canary-log.jsonl":
+             '{"ts":"2026-06-04T09:00:00","kind":"none","token":"T1","auditor":"a","severity":"minor"}\n'}
+    root, vault = _stats_fixture("gctl-stna-", gov, extra)
+    try:
+        full = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        out = full[full.index("[stats]"):]     # 只看統計區塊(既有輸出也有以 gate 名起頭的行)
+        cl = [l for l in out.splitlines() if l.strip().startswith("code-loop")]
+        check("stats: code-loop 全列 nodes 空 → n/a 非 0", bool(cl) and "n/a" in cl[0] and " 0 " not in cl[0], out)
+        aa = [l for l in out.splitlines() if l.strip().startswith("anchor-approve")]
+        check("stats: anchor-approve 部分列空仍算得出值(1)", bool(aa) and " 1 " in aa[0], out)
+        check("stats: anchor-approve 標檔案路徑語意", bool(aa) and "檔案路徑" in aa[0], out)
+        cn = [l for l in out.splitlines() if l.strip().startswith("canary")]
+        check("stats: canary commit 欄 n/a", bool(cn) and "n/a" in cn[0], out)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_gov_stats_date_na():
+    import shutil
+    gov = [
+        '{"ts":"","commit":"aaa","gate":"check-k","kind":"warned","hard":false,"nodes":["N1"]}\n',
+        '{"ts":"","commit":"bbb","gate":"check-k","kind":"warned","hard":false,"nodes":["N2"]}\n',
+    ]
+    root, vault = _stats_fixture("gctl-stdt-", gov)
+    try:
+        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        ck = [l for l in out.splitlines() if l.strip().startswith("check-k")]
+        check("stats: 全列無 ts → 首見/末見 n/a 但筆數仍計", bool(ck) and ck[0].count("n/a") >= 2 and " 2 " in ck[0], out)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_gov_stats_gate_drift():
+    """漂移釘:掃全檔 \"gate\": \"字面值\",全部必須在 _KNOWN_GATES 內。"""
+    import re as _re
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    lits = set(_re.findall(r'"gate": "([a-zA-Z0-9_-]+)"', src))
+    m = _stats_known_gates()
+    check("stats: 原始碼 gate 字面值全在 _KNOWN_GATES", lits and lits <= set(m),
+          f"漏: {sorted(lits - set(m))}")
+    check("stats: _KNOWN_GATES 非空且含 check-s/canary", "check-s" in m and "canary" in m, str(m))
+
+
+def _stats_known_gates():
+    import importlib.machinery, importlib.util, sys as _sys
+    loader = importlib.machinery.SourceFileLoader("lm_kg", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lm_kg", loader)
+    mod = importlib.util.module_from_spec(spec)
+    old = _sys.argv
+    _sys.argv = ["lumos"]
+    try:
+        loader.exec_module(mod)
+    except SystemExit:
+        pass
+    finally:
+        _sys.argv = old
+    return getattr(mod, "_KNOWN_GATES", ())
+
+
+def t_gov_stats_absent_list():
+    import shutil
+    gov = ['{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"check-s","kind":"warned","hard":false,"nodes":["N1"]}\n']
+    root, vault = _stats_fixture("gctl-stab-", gov)
+    try:
+        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("stats: 未出現清單含零筆 gate", "未出現" in out and "check-r" in out, out)
+        d = _stats_disclaimer()
+        check("stats: 限制聲明來自單一常數且逐字印出", d and d.strip() and d.strip() in out, out[-800:])
+        for frag in ("硬擋", "沒載入", "從沒被用過", "跑了沒事"):
+            check(f"stats: 限制聲明含子句「{frag}」", frag in d, d)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _stats_disclaimer():
+    import importlib.machinery, importlib.util, sys as _sys
+    loader = importlib.machinery.SourceFileLoader("lm_dc", GRAPHCTL)
+    spec = importlib.util.spec_from_loader("lm_dc", loader)
+    mod = importlib.util.module_from_spec(spec)
+    old = _sys.argv
+    _sys.argv = ["lumos"]
+    try:
+        loader.exec_module(mod)
+    except SystemExit:
+        pass
+    finally:
+        _sys.argv = old
+    return getattr(mod, "_STATS_ABSENT_DISCLAIMER", "")
+
+
+def t_gov_stats_layout_and_node():
+    import shutil
+    gov = ['{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"check-s","kind":"warned","hard":false,"nodes":["N1"]}\n']
+    root, vault = _stats_fixture("gctl-stly-", gov)
+    try:
+        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        head = [l for l in out.splitlines() if l.startswith("[stats]")]
+        check("stats: 不帶 node 表頭恰兩行", len(head) == 2, str(head))
+        check("stats: 表頭序=載入源→窗口", len(head) == 2 and "載入源" in head[0] and "窗口" in head[1], str(head))
+        base = run(vault, "gov", "--since", "9999", expect_rc=0).stdout
+        check("stats: 統計區塊附加在既有輸出之後", out.startswith(base.rstrip("\n")[:60]), out[:120])
+        out2 = run(vault, "gov", "N1", "--since", "9999", "--stats", expect_rc=0).stdout
+        head2 = [l for l in out2.splitlines() if l.startswith("[stats]")]
+        check("stats: 帶 node 表頭三行且第三行為縮限警示", len(head2) == 3 and "縮限" in head2[2], str(head2))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_gov_stats_rc_and_full():
+    import shutil
+    gov = ['{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"check-s","kind":"warned","hard":false,"nodes":["N1"]}\n']
+    root, vault = _stats_fixture("gctl-strc-", gov)
+    try:
+        a = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        b = run(vault, "gov", "--since", "9999", "--full", "--stats", expect_rc=0).stdout
+        seg = lambda t: t[t.index("[stats]"):]
+        check("stats: --full 併用時統計段逐字元不變", seg(a) == seg(b), seg(a)[:200] + "\n---\n" + seg(b)[:200])
+        plain = run(vault, "gov", "--since", "9999", expect_rc=0).stdout
+        check("stats: 不帶 --stats 無統計段", "[stats]" not in plain, plain)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_gov_stats_window_and_parse():
+    import shutil
+    gov = [
+        '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"check-s","kind":"warned","hard":false,"nodes":["N1"]}\n',
+        'NOT JSON AT ALL\n',
+        '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"check-s","kind":"warned","hard":false}\n',
+    ]
+    root, vault = _stats_fixture("gctl-stwn-", gov)
+    try:
+        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        ck = [l for l in out.splitlines() if l.strip().startswith("check-s")]
+        check("stats: 壞損行跳過、缺 nodes 鍵不炸", bool(ck) and " 2 " in ck[0], out)
+        out2 = run(vault, "gov", "--since", "1", "--stats", expect_rc=0).stdout
+        check("stats: 窗口內零列 → 印無資料後結束", "窗口內無資料" in out2, out2)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def t_marker_doc_sync():
     import pathlib
     repo = pathlib.Path(__file__).resolve().parent.parent
