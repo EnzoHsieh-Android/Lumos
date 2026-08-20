@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-20
 tags:
   - type/system
   - status/done
@@ -23,6 +23,16 @@ verified_by:
   - "[[Verification/2026-07-31_接手者演練複審修復]]"
 ---
 # slim-skill-修剪
+
+> ## ⛔ 已凍結（2026-08-20）— 精簡版交付庫已分家，改這裡不會傳到任何人手上
+>
+> 精簡版的家搬到 `citrus-android-developer/Citrus_Lumos` 自行演進了。本節點描述的 `slim/` 來源檔
+> **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+> 要改精簡版請去那個 repo 直接改。詳見 `slim/FROZEN.md` 與 [[Systems/lumos-cli-lifecycle]] d6。
+>
+> ★以下內容是凍結當下的設計紀錄，仍然是本 repo 內 `slim/` 的真實描述；但它與交付庫的實況
+> 從 2026-08-20 起可能分岔。★
+
 
 公開精簡版交付前,對「直接複製」的 `skills/lumos-project-notes/`（`SKILL.md` + `reference.md`）做懸空引用修剪——原始檔教了大量已被精簡版砍掉的指令（`pitfalls`／`impact`／`canary`／`loop`／`self-audit`／`signoff`／`spec-trace`／`install`／`bootstrap` 等 29 支)與不交付的 skill（`lumos-design-loop`／`lumos-core-knowledge` 等)，直接複製給接手者會教他們去用不存在的東西。詳見 [[Projects/公開精簡版_實作計畫]] Task 4。
 

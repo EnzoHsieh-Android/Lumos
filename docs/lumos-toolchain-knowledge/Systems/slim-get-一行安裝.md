@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-08-03
+updated: 2026-08-20
 tags:
   - type/system
   - status/done
@@ -38,6 +38,16 @@ verified_by:
   - "[[Verification/2026-08-03_Windows真機三輪驗證通過]]"
 ---
 # slim-get-一行安裝
+
+> ## ⛔ 已凍結（2026-08-20）— 精簡版交付庫已分家，改這裡不會傳到任何人手上
+>
+> 精簡版的家搬到 `citrus-android-developer/Citrus_Lumos` 自行演進了。本節點描述的 `slim/` 來源檔
+> **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+> 要改精簡版請去那個 repo 直接改。詳見 `slim/FROZEN.md` 與 [[Systems/lumos-cli-lifecycle]] d6。
+>
+> ★以下內容是凍結當下的設計紀錄，仍然是本 repo 內 `slim/` 的真實描述；但它與交付庫的實況
+> 從 2026-08-20 起可能分岔。★
+
 
 公開精簡版的一行安裝入口(`slim/get.sh`)。解決 [[Systems/slim-install-安裝器]] 原本「必須先手動拿到交付包才能跑 `install.sh`」的問題:`curl -fsSL <raw-url>/get.sh | bash` 把交付包 clone 到固定落點 `~/.lumos-slim`,再自動執行包內的 `install.sh`。已存在時走 `git pull` 冪等更新,不會對非空目錄硬 `git clone` 炸掉;`git` 指令本身不存在時給清楚錯誤訊息而非 Python/bash traceback。詳見 [[Projects/公開精簡版_實作計畫]] Task 6(一行安裝／卸載)。
 

@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-08-01
+updated: 2026-08-20
 tags:
   - type/system
   - status/done
@@ -38,6 +38,16 @@ decisions:
     valid: true
 ---
 # slim-gen-生成器
+
+> ## ⛔ 已凍結（2026-08-20）— 精簡版交付庫已分家，改這裡不會傳到任何人手上
+>
+> 精簡版的家搬到 `citrus-android-developer/Citrus_Lumos` 自行演進了。本節點描述的 `slim/` 來源檔
+> **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+> 要改精簡版請去那個 repo 直接改。詳見 `slim/FROZEN.md` 與 [[Systems/lumos-cli-lifecycle]] d6。
+>
+> ★以下內容是凍結當下的設計紀錄，仍然是本 repo 內 `slim/` 的真實描述；但它與交付庫的實況
+> 從 2026-08-20 起可能分岔。★
+
 
 公開精簡版交付前的 AST 生成器。從 `scripts/lumos` 單檔 CLI 生成「只留 24 支保留指令」的精簡版,產物給離職接手者(或開源使用者)。核心價值主張(見〈公開精簡版計劃〉〈誠實天花板〉):Python 原始碼是可讀語言,精簡版必須是「接手者改得動」的完整原始碼,不是打包後的黑盒——因此保留原始碼裡所有事故脈絡註解,行級手術是唯一能做到這點的實作方式。詳見 [[Projects/公開精簡版_實作計畫]] Task 2。
 

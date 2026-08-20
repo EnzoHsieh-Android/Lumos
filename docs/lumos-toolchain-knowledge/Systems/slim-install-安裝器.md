@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-08-03
+updated: 2026-08-20
 tags:
   - type/system
   - status/done
@@ -54,6 +54,16 @@ related:
   - "[[Systems/slim-uninstall-一行卸載]]"
 ---
 # slim-install-安裝器
+
+> ## ⛔ 已凍結（2026-08-20）— 精簡版交付庫已分家，改這裡不會傳到任何人手上
+>
+> 精簡版的家搬到 `citrus-android-developer/Citrus_Lumos` 自行演進了。本節點描述的 `slim/` 來源檔
+> **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+> 要改精簡版請去那個 repo 直接改。詳見 `slim/FROZEN.md` 與 [[Systems/lumos-cli-lifecycle]] d6。
+>
+> ★以下內容是凍結當下的設計紀錄，仍然是本 repo 內 `slim/` 的真實描述；但它與交付庫的實況
+> 從 2026-08-20 起可能分岔。★
+
 
 公開精簡版交付前的機器層安裝器。隨交付包一起走(`$(dirname "$0")` 定位自身,不吃路徑參數),做三件事:①裝全域 `lumos` 指令,★2026-07-31 Task 10 新增★同步寫身分證 manifest(`~/.local/share/lumos-slim/manifest.json`,含安裝當下的 bin sha256)②實體複製 `skills/lumos-project-notes` 到 `~/.claude/skills/`(非 symlink,交付包可被刪掉/搬走後 skill 仍在)③(Task 9 裁定第三次變更)在執行目錄(專案根)的 `CLAUDE.md` 裡放策展過的精簡版紀律區塊,取代掉完整版(若有)。**裁定演進**:①原裁定絕不碰 CLAUDE.md ②Task 8 開放只准附加、檔尾、絕不覆蓋完整版區塊、兩套規則並存 ③Task 9 發現「兩套規則並存」本身是問題,裁定改成有完整版區塊就整段移除、**原地換成**精簡版區塊;移除前策展吸收完整版裡仍然有效的內容、先把原文位元組級備份(base64 藏進精簡版區塊自己的 HTML 註解裡),`uninstall.sh` 能精確還原 ④**Task 10(本次,端到端實測抓到真 bug)**:發現 `uninstall.sh` 原本拿 `~/.lumos-slim/scripts/lumos` 當比對基準,但那個固定落點只有走 `get.sh` 才會存在——README 也在教的「直接 clone 交付包跑 install.sh」這條路不會建立它,導致卸載時比對基準必然缺失、腳本中止、CLAUDE.md 還原沒機會執行。裁定:install.sh 多寫一份 manifest 當穩定身分證,不依賴 `~/.lumos-slim`。**只動使用者 `$HOME` 與這一份 CLAUDE.md,不碰專案其餘任何檔案**——反誤傷測試 `t_slim_install_no_project_touch`。仍明確不做:不 scaffold 圖譜、不 vendor 工具進專案、不設 `core.hooksPath`、不裝任何 Claude hook。⑤**Task 11(本次,真實事故驅動——同一支腳本被子代理在本 repo 根目錄誤跑過兩次,見上方 ★INVARIANT★)**:在做那三件事之前,先加一道「注入目標守衛」——不像專案根/是 lumos 工具鏈來源 repo 兩種危險目標都拒絕(rc2、不動任何檔案),動手前不論過不過都先印出目標絕對路徑;`--here` 旗標明示可繞過前兩層。詳見 [[Projects/公開精簡版_實作計畫]] Task 3、Task 8、Task 9、Task 10(★端到端實測抓到真 bug:manifest 身分證 + uninstall 步驟互不阻擋★)、Task 11(★注入目標守衛★)、Task 12(★分支終審第四輪代碼審修復:`--here` 逃生閥回歸測試 fixture 換真、CLAUDE.md 寫入路徑改用已解 symlink 的 `TARGET_CLAUDE_MD`★)。
 

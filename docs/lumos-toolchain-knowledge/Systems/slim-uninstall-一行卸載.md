@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-31
-updated: 2026-08-03
+updated: 2026-08-20
 tags:
   - type/system
   - status/done
@@ -48,6 +48,16 @@ verified_by:
   - "[[Verification/2026-08-03_Windows真機三輪驗證通過]]"
 ---
 # slim-uninstall-一行卸載
+
+> ## ⛔ 已凍結（2026-08-20）— 精簡版交付庫已分家，改這裡不會傳到任何人手上
+>
+> 精簡版的家搬到 `citrus-android-developer/Citrus_Lumos` 自行演進了。本節點描述的 `slim/` 來源檔
+> **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+> 要改精簡版請去那個 repo 直接改。詳見 `slim/FROZEN.md` 與 [[Systems/lumos-cli-lifecycle]] d6。
+>
+> ★以下內容是凍結當下的設計紀錄，仍然是本 repo 內 `slim/` 的真實描述；但它與交付庫的實況
+> 從 2026-08-20 起可能分岔。★
+
 
 公開精簡版的一行卸載入口(`slim/uninstall.sh`)。給接手者「不想要就乾淨移除」的路,不用自己猜要刪什麼——安全紀律是這支腳本的重點,比功能本身重要,見上方合約性 KEY 行。用法與 [[Systems/slim-get-一行安裝]] 對稱:`curl -fsSL <raw-url>/uninstall.sh | bash`,或裝好後直接跑 `~/.lumos-slim/uninstall.sh`。詳見 [[Projects/公開精簡版_實作計畫]] Task 6(一行安裝／卸載)、Task 8(CLAUDE.md sentinel 對稱移除)、Task 9(裁定第三次變更:對稱移除升級成對稱還原)、Task 10(★2026-07-31 端到端實測抓到真 bug:步驟改成互不阻擋、bin 比對基準改用 install.sh 寫的 manifest★)。
 
