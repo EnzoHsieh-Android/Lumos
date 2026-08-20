@@ -69,6 +69,7 @@ verified_by:
   - "[[Verification/2026-07-06_CLAUDE注入re-sync]]"
   - "[[Verification/2026-07-25_bootstrap一鍵對稱]]"
   - "[[Verification/2026-08-05_流程優化六件落地]]"
+  - "[[Verification/2026-08-19_精簡版update指令落地]]"
 ---
 # lumos-cli-lifecycle
 
