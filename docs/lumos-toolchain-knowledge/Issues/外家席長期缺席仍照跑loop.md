@@ -7,7 +7,7 @@ aliases: []
 tags:
   - type/issue
   - status/open
-  - priority/P1
+  - priority/P2
   - scope/loop-engineering
 summary: |-
   FLAG:DECISION
@@ -41,6 +41,14 @@ summary: |-
 
 - memory `retrieval-v1-and-codex` 早已記載「Codex 到期,外家現役=Gemini API」——★該記載已過時,Gemini 也不可用★。
 - `lumos-design-loop` 的能力宣告制原語意=「有就用,沒有就講小」;本單主張這個語意需要一個**時間維度的補充**。
+
+## ✅ 管道已恢復(2026-08-20 當日)
+
+- Enzo 換付費 key → **gemini-3-flash-preview 可用**(實測 200、serviceTier=standard、12s 級延遲)。★pro 系(gemini-3.1-pro-preview)本 key 額度仍=0,勿當預設★。
+- 呼叫固定成 `scripts/external-seat.sh`(單發無狀態;歷來手打 curl 連摔逾時的教訓收進腳本註解)。
+- **首跑實戰驗收**:對剛收斂的 gov-stats spec 當否決席,5 條 findings——**1 條真洞折入**(動態閘名逃逸字面值掃描,前三輪九個同門席皆未抓,已加測試釘)、1 條被 spec 既有定義駁掉、2 條措辭歧義補明。★單次樣本不足下品質結論,但「同門三輪漏、外家一發中」與本單立案動機一致★。
+
+**未解的部分**:「連續幾輪無外家」仍無人統計、歷史已收斂 loop 的家族純度仍未盤;本單不關,降 P2。
 
 ## 待裁
 

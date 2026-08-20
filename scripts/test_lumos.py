@@ -3052,6 +3052,12 @@ def t_gov_stats_gate_drift():
     m = _stats_known_gates()
     check("stats: 原始碼 gate 字面值全在 _KNOWN_GATES", lits and lits <= set(m),
           f"漏: {sorted(lits - set(m))}")
+    # ★外家席(gemini-3-flash,2026-08-20 首跑)抓到的洞:動態閘名(f-string/變數)會逃過字面值掃描,
+    # 測試綠燈但名單漏 gate。釘法:全檔「"gate": 後面不是字串字面值」的位置恰為 1 處
+    # (scripts/lumos:2989 讀側 passthrough,合法)——新冒出第 2 處=有人用動態閘名,翻紅逼人審。
+    dyn = _re.findall(r'"gate": [^"]', src)
+    check("stats: 動態 gate 寫點恰為 1 處(讀側 passthrough)", len(dyn) == 1,
+          f"實際 {len(dyn)} 處——新增動態閘名會逃過漂移掃描,請改用字面值或更新 _KNOWN_GATES 與本釘")
     check("stats: _KNOWN_GATES 非空且含 check-s/canary", "check-s" in m and "canary" in m, str(m))
 
 
