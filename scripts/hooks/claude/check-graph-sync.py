@@ -402,27 +402,26 @@ def main() -> int:
         graph_rel = graph_root
 
     msg = [
-        f"⚠️  這個 turn 改了 {len(rel)} 個原始碼檔但沒看到對應的圖譜更新:",
+        f"提醒:這一輪改了 {len(rel)} 個程式碼檔,但知識筆記沒有跟著動:",
         *[f"   • {r}" for r in rel],
         "",
-        f"圖譜位置: {graph_rel}/",
+        "程式碼只記「現在長怎樣」;為什麼這樣改、改動牽連到哪裡,要寫進筆記,下一個 session 才接得上。",
+        "筆記放在這裡:",
+        f"   {graph_rel}/",
     ]
 
     # #5: 反查改的檔案出現在哪幾篇筆記
     mentions = find_notes_mentioning(rel, graph_root)
     if mentions:
-        msg += ["", "以下圖譜筆記提到這些檔名/symbol (可能需要更新):"]
+        msg += ["", "這幾篇筆記有提到你改的檔案或名稱,最可能需要更新:"]
         for stem, notes in mentions.items():
             msg.append(f"   • {stem} → {', '.join(notes)}")
 
     msg += [
         "",
-        "依 lumos-project-notes skill,功能異動要同步:",
-        "   - Systems/*.md (受影響的 system note)",
-        "   - Verification/{date}_{topic}.md (驗證紀錄)",
-        "   - decisions 區塊 (若有設計選擇)",
+        "通常要跟著改的是:受影響功能的說明(Systems)、這次驗證了什麼(Verification)、有做設計選擇的話寫進 decisions。",
         "",
-        "若這次只是 typo / refactor / 格式不改變行為,可忽略此提醒。",
+        "如果這次只是改錯字、整理排版、重構但行為沒變,這條提醒可以略過。",
     ]
     print("\n".join(msg), file=sys.stderr)
     return 0

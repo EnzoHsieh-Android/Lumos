@@ -30,7 +30,7 @@ done
 GRAPHCTL="$REPO_ROOT/scripts/lumos"
 PY="$(command -v python3 || command -v python || true)"
 if [[ -z "$PY" || ! -f "$GRAPHCTL" ]]; then
-  echo "pre-push: 無 python3 或 lumos,跳過圖譜巡檢(GitHub Actions CI 在 push 後兜底)" >&2
+  echo "提醒:這台機器找不到 python3 或 lumos,推送前的知識庫檢查這次沒跑;推上去之後 CI 會再跑一遍兜底。" >&2
   exit 0
 fi
 
@@ -38,12 +38,15 @@ fi
 if ! "$PY" "$GRAPHCTL" anchor verify; then
   {
     echo ""
-    echo "🚫 pre-push: anchor verify 失敗——驗證器檔案與 baseline 不符,push 已擋下"
+    echo "擋下:負責把關的檔案(測試程式、hook 腳本)跟登記過的版本不一樣。"
+    echo "這些檔案是裁判,裁判被改過而沒人簽名,後面所有「測試綠、檢查過」都不可信,所以先擋。"
     echo ""
-    echo "請選一條:"
-    echo "  1. 非刻意改動 → git checkout 還原錨點檔後重 push"
-    echo "  2. 刻意改錨點 → lumos anchor approve --note \"理由\" 後重 push"
-    echo "  3. 確屬可接受 → git push --no-verify(留 PR diff 與缺 approve 事件的對帳痕)"
+    echo "三條路選一條:"
+    echo "  1. 不是故意改的 → 把那個檔還原再推:"
+    echo "       git checkout -- <檔案>"
+    echo "  2. 是故意改的 → 簽名登記新版本再推:"
+    echo "       lumos anchor approve --note \"為什麼改\""
+    echo "  3. 真的要先推 → git push --no-verify(CI 之後會發現少了簽名紀錄)"
     echo ""
   } >&2
   exit 1
@@ -53,16 +56,18 @@ fi
 # 事件點修法:push 前全量跑一次(實測 ~32s)。消費專案不跑——skills/ 只存在於源 repo(不 vendor),
 # 消費端自己的測試歸自己的 CI/hooks 管,lumos 不越俎。逃生:git push --no-verify(自負)。
 if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_lumos.py" ]]; then
-  echo "pre-push: 跑 test_lumos.py 全量(源 repo 測試閘,~32s)…" >&2
+  echo "推送前先跑全部測試(大約半分鐘)…" >&2
   if ! "$PY" "$REPO_ROOT/scripts/test_lumos.py" >/tmp/lumos-prepush-tests.log 2>&1; then
     {
       echo ""
-      echo "🚫 pre-push: test_lumos.py 有紅——push 已擋下(完整輸出: /tmp/lumos-prepush-tests.log)"
+      echo "擋下:test_lumos.py 有紅,有測試沒過。"
+      echo "完整輸出在這裡:"
+      echo "   /tmp/lumos-prepush-tests.log"
       tail -15 /tmp/lumos-prepush-tests.log | sed 's/^/    /'
       echo ""
-      echo "請選一條:"
-      echo "  1. 修到綠再 push(正途)"
-      echo "  2. 確屬可接受(如 flaky/環境因素) → git push --no-verify(自負)"
+      echo "兩條路選一條:"
+      echo "  1. 修到全綠再推(正常做法)。"
+      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
       echo ""
     } >&2
     exit 1
@@ -99,7 +104,8 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   if printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
     {
       echo ""
-      echo "⚠ pre-push:$_rref tier=high(代碼形態風險命中 $_range,見下)"
+      echo "提醒:這次推送的程式碼裡有高風險寫法(像是沒包交易的寫入、沒關的檔案控制代碼、沒限流的外部呼叫),tier=high。"
+      echo "命中的地方列在下面:"
       "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
       echo ""
     } >&2
@@ -111,12 +117,14 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
         --repo "$REPO_ROOT" >/dev/null 2>&1 || cl_rc=$?
       if [[ "$cl_rc" -eq 1 ]]; then
         {
-          echo "🚫 pre-push: $_rref tier=high 代碼未過 code-loop → push 已擋下"
+          echo "擋下:高風險的程式碼改動還沒經過對抗審查,或審查留痕已經失效。"
+          echo "高風險改動不能只靠寫的人自己看一遍——規則是先讓一批沒有脈絡的審查員找洞,留下紀錄,才能推。"
           echo ""
-          echo "請選一條:"
-          echo "  1. 跑 lumos-code-loop 終審 → 收斂後重 push"
-          echo "  2. 確屬可接受(假陽/刻意略過) → lumos code-loop skip --note \"<理由>\" → 重 push(留痕)"
-          echo "  3. 緊急繞過 → git push --no-verify(自負、無痕)"
+          echo "三條路選一條:"
+          echo "  1. 跑一輪代碼對抗審查(用 lumos-code-loop 這個 skill),通過後留痕再推。"
+          echo "  2. 確定是誤判或刻意不審 → 留一句理由跳過,再推:"
+          echo "       lumos code-loop skip --note \"為什麼跳過\""
+          echo "  3. 緊急 → git push --no-verify(本機不留痕,但 CI 會把這次推送標紅)"
           echo ""
         } >&2
         exit 1
@@ -124,12 +132,12 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       # rc=0(已收斂/skip):放行;rc≠0/1(異常):fail-open 放行
     else
       # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,high 亦 advisory
-      echo "💡 pre-push: $_rref 非分支 ref、tier=high——advisory 放行(tag 內容 gate 另訂策略)" >&2
+      echo "提醒:這次推的是 tag 不是分支,高風險檢查只提醒不擋(advisory)。" >&2
     fi
   elif printf '%s' "$pf_json" | grep -q '"stack_questions": *{"'; then
     {
       echo ""
-      echo "💡 pre-push:$_rref 棧別效能檢核(advisory,不擋;終審留痕請含答案)"
+      echo "提醒:這次改到的技術棧有幾個效能上該問自己的問題(不擋,advisory),列在下面;審查留痕裡建議帶一句答案。"
       "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
       echo ""
     } >&2 || true
@@ -151,13 +159,13 @@ fi
 
 {
   echo ""
-  echo "🚫 pre-push: lumos doctor 發現圖譜問題(見上方),push 已擋下"
+  echo "擋下:知識庫健康檢查發現問題(細節在上面)。"
+  echo "有問題的筆記推上去,下一個讀它的人會拿到錯的合約或斷掉的連結。"
   echo ""
-  echo "請選一條:"
-  echo "  1. 修圖譜(補連結 / verified_by / plan_refs…)後重 push"
-  echo "  2. 確認非真問題(疑 lumos bug)→ 走並跑期裁決協議"
-  echo "     (lumos_計劃 §11:本地重現 → 讀 finding → Check1-3 可用 bash 裁決)"
-  echo "  3. 確屬可接受 → git push --no-verify(GitHub Actions CI 在 push 後仍跑全套,留審計)"
+  echo "三條路選一條:"
+  echo "  1. 照上面的提示把筆記修好再推。"
+  echo "  2. 覺得是檢查工具本身判錯 → 本機重跑一次確認,真的是工具錯就開一張 Issue 記下來。"
+  echo "  3. 真的要先推 → git push --no-verify(CI 還是會跑全套,紅了會看到)"
   echo ""
 } >&2
 exit 1

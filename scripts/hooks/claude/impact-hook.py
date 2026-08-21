@@ -242,8 +242,8 @@ def extract_delta_query(payload: dict, cap_tokens: int = 512, cap_chars: int = 8
 
 
 _INJECT_INSTRUCTION = (
-    "動手前先判上列直接/間接節點會不會被你這次改動影響、需不需要同步更新圖譜。"
-    "消掉不相關的,對真正受影響的:該同步就同步,不確定就記一句。"
+    "動手前看一眼上面這些筆記:這次改動會不會影響到它們講的事?"
+    "真的有關的就順手更新,不確定的先在筆記裡記一句,不相關的跳過。"
 )
 
 
@@ -266,7 +266,7 @@ def build_additional_context(impact_data: dict) -> str:
     indirect = impact_data.get("indirect", [])
 
     if direct:
-        lines.append("直接關聯:")
+        lines.append("直接提到這個檔的筆記:")
         for item in direct:
             node = item.get("node", "?")
             contract = item.get("contract")
@@ -283,7 +283,7 @@ def build_additional_context(impact_data: dict) -> str:
                 lines.append(f"  {node}  ({hit})")
 
     if indirect:
-        lines.append("間接關聯:")
+        lines.append("透過連結間接牽到的筆記:")
         for item in indirect:
             node = item.get("node", "?")
             hop = item.get("hop", "?")
@@ -308,7 +308,7 @@ def build_additional_context(impact_data: dict) -> str:
 
     incidents = impact_data.get("incidents", [])
     if incidents:
-        lines.append("相關事故:")
+        lines.append("這個檔過去出過的事故(改之前先看):")
         for item in incidents:
             node = item.get("node", "?")
             matched_by = item.get("matched_by", "?")
@@ -340,27 +340,27 @@ def build_ranked_context(data: dict) -> str:
     free = [x for x in res if not x.get("pinned") and not x.get("rescued")]
     rescued = [x for x in res if x.get("rescued")]
     if pins:
-        lines.append(f"必看(合約/事故固定席 {len(pins)}):")
+        lines.append(f"必看——這 {len(pins)} 篇帶著不能破壞的合約或出過事故:")
         for x in pins:
             mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
             ct = f" ★{x['contract']}★" if x.get("contract") else ""
             mb = f"  (trigger: {x['matched_by']})" if x.get("matched_by") else ""
             lines.append(f"  {mk}{ct} {x.get('node','?')}{mb}")
     if free:
-        lines.append(f"相關(排序 top {len(free)}):")
+        lines.append(f"可能相關的 {len(free)} 篇(依關聯度排序):")
         for x in free:
             mk = {"direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
             lines.append(f"  {x.get('score',0):.2f} {mk} {x.get('node','?')}")
     if rescued:
         # R1 直連保底(plan:hook必看召回修復):分數不過閾但為僅有的直連節點——信心層級不同於排序席
-        lines.append(f"⛑ 直連保底({len(rescued)},被閾值或名額截斷、因直連被救回):")
+        lines.append(f"另外 {len(rescued)} 篇分數不高但直接提到這個檔,一併列出:")
         for x in rescued:
             hit = f"/{x['hit']}" if x.get("hit") == "basename-match" else ""
             lines.append(f"  {x.get('score',0):.2f} 直接{hit} {x.get('node','?')}")
     if meta.get("truncated"):
-        lines.append(f"  (+{meta['truncated']} 條低分截斷)")
+        lines.append(f"  (+{meta['truncated']} 條低分截斷,沒列出來)")
     for stk, qs in (data.get("stack_questions") or {}).items():
-        lines.append(f"[{stk} 效能檢核——動手時順答]")
+        lines.append(f"[{stk} 效能檢核——動手時順答這幾個問題]")
         for q in qs:
             lines.append(f"  - {q}")
     lines.append("")

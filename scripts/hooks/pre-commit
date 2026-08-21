@@ -47,7 +47,7 @@ CC_PY="$(command -v python3 || command -v python || true)"
 if [ -n "$CC_PY" ] && [ -f "$REPO_ROOT/scripts/lumos" ]; then
   "$CC_PY" "$REPO_ROOT/scripts/lumos" cochange check --staged 2>/dev/null || true
 else
-  echo "pre-commit: 無 python3 或 scripts/lumos,跳過 co-change 警告" >&2
+  echo "提醒:這台機器找不到 python3 或 scripts/lumos,所以「漏改夥伴檔」的提醒這次沒跑。" >&2
 fi
 
 # Gate DG: code 側刪除傳播守衛 (advisory;spec=Projects/code側刪除傳播守衛_計劃)
@@ -67,14 +67,17 @@ if echo "$STAGED" | grep -qE "^${GRAPH_ROOT}/.*\.md$"; then
   if [[ -n "$polluted" ]]; then
     {
       echo ""
-      echo "🚫 圖譜污染指紋: frontmatter 日期欄位被加引號 (典型來源 = notesmd-cli frontmatter --edit)"
-      echo "   Obsidian property 型別會從 date 變 text,且通常伴隨整篇鍵序重排 — diff 不可審"
+      echo "擋下:有筆記的日期欄位被加上了引號(例如 created: \"2026-08-21\")。"
+      echo "這幾乎都是某個編輯工具順手改的,不是人打的;它會讓日期欄位變成純文字,而且通常整篇欄位順序都被重排——這種 diff 沒辦法審。"
       echo ""
+      echo "被改到的行:"
       echo "$polluted" | head -5 | sed 's/^/   /'
       echo ""
-      echo "   檢視: git diff --cached -- ${GRAPH_ROOT}"
-      echo "   還原: git checkout -- <file>"
-      echo "   確屬刻意 (極罕見) → git commit --no-verify"
+      echo "看完整改動:"
+      echo "   git diff --cached -- ${GRAPH_ROOT}"
+      echo "還原那個檔:"
+      echo "   git checkout -- <檔案>"
+      echo "真的是刻意要這樣(非常少見)→ git commit --no-verify"
       echo ""
     } >&2
     exit 1
@@ -95,11 +98,11 @@ if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
     rel="${f#$GRAPH_ROOT/}"; rel="${rel%.md}"
     if ! out="$("$CC_PY" "$REPO_ROOT/scripts/lumos" lint "$rel" 2>&1)"; then
       lint_fail=1
-      { echo ""; echo "🚫 lumos lint 未過: $f"; echo "$out" | sed 's/^/   /'; } >&2
+      { echo ""; echo "擋下:這篇筆記的格式檢查沒過——$f"; echo "$out" | sed 's/^/   /'; } >&2
     fi
   done < <(echo "$STAGED" | grep -E "^${GRAPH_ROOT}/.*\.md$" || true)
   if [[ "$lint_fail" == 1 ]]; then
-    { echo ""; echo "   修到 lint 綠再 commit;確屬刻意 → git commit --no-verify(留一句為什麼)"; echo ""; } >&2
+    { echo ""; echo "格式錯的筆記進了版控,之後的工具會讀錯(合約標記消失、連結變鬼節點)。照上面的提示修好再 commit。"; echo "真的要先進去 → git commit --no-verify,並在訊息裡留一句為什麼。"; echo ""; } >&2
     exit 1
   fi
 fi
@@ -144,25 +147,25 @@ fi
 # ── 印警告並擋 ──
 {
   echo ""
-  echo "🚫 Pre-commit graph sync gate (git native hook): commit 改了原始碼但沒同步圖譜"
+  echo "擋下:這次 commit 改了程式碼,但知識筆記一個字都沒動。"
+  echo "程式碼記的是「現在長怎樣」,筆記記的是「為什麼這樣做」——只改其中一邊,下一個人(或下一個 session 的 Claude)就會拿舊的理由去理解新的程式碼。"
   echo ""
-  echo "Staged code files (${#src_files[@]}):"
+  echo "這次改到的程式碼(${#src_files[@]} 個):"
   for f in "${src_files[@]:0:10}"; do echo "   • $f"; done
   if [[ ${#src_files[@]} -gt 10 ]]; then
-    echo "   ... 還有 $(( ${#src_files[@]} - 10 )) 個"
+    echo "   … 還有 $(( ${#src_files[@]} - 10 )) 個"
   fi
   echo ""
-  echo "圖譜目錄 ${GRAPH_ROOT}/ 內無任何 .md 被 staged。"
+  echo "筆記放在這個資料夾,這次沒有任何一篇被加進 commit:"
+  echo "   ${GRAPH_ROOT}/"
   echo ""
-  echo "依 lumos-project-notes skill,功能異動必須同步更新:"
-  echo "   • Systems/*.md  受影響的 system note"
-  echo "   • Verification/{date}_{topic}.md  驗證紀錄"
-  echo "   • Issues/*.md  相關 issue 狀態"
+  echo "通常要跟著改的是:受影響功能的說明(Systems)、這次驗證了什麼(Verification)、相關問題單的狀態(Issues)。"
   echo ""
-  echo "請選一條繼續:"
-  echo "   1. 更新圖譜後 git add docs/...-knowledge/...md 再重試 commit"
-  echo "   2. 確認此 commit 不需圖譜 (typo/格式/註解/WIP) → 加 --no-verify 跳過"
-  echo "      例: git commit --no-verify -m 'fix: typo in PointService'"
+  echo "兩條路選一條:"
+  echo "   1. 把該改的筆記改一改,加進 commit,再提交一次。"
+  echo "   2. 這次真的不需要動筆記(改錯字、排版、註解、還在進行中的半成品)→ 跳過這道檢查:"
+  echo "        git commit --no-verify -m '<訊息>'"
+  echo "      跳過會留下紀錄,不是偷偷放行。"
   echo ""
 } >&2
 

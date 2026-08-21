@@ -7806,7 +7806,7 @@ def t_impact_hook_incidents_inject():
     j = json.loads(out)
     ctx = j["hookSpecificOutput"]["additionalContext"]
     check("impact_hook_incidents_inject: additionalContext 含「相關事故」或 incident",
-          "相關事故" in ctx or "incident" in ctx.lower() or "⚠事故" in ctx,   # v1.1 ranked 格式=固定席段
+          "出過的事故" in ctx or "incident" in ctx.lower() or "⚠事故" in ctx,   # 2026-08-22 白話:「相關事故」→「這個檔過去出過的事故」
           f"ctx={ctx!r}")
     check("impact_hook_incidents_inject: additionalContext 含事故節點名稱",
           "Issues/N1" in ctx,
@@ -7845,8 +7845,8 @@ def t_impact_hook_incidents_inject():
              "contract": "INVARIANT", "combo": False},
         ],
     })
-    check("impact_hook_incidents_inject: build_additional_context 含「相關事故」標題",
-          "相關事故" in ctx_build,
+    check("impact_hook_incidents_inject: build_additional_context 含事故段標題",
+          "出過的事故" in ctx_build,
           f"ctx_build={ctx_build!r}")
     check("impact_hook_incidents_inject: build_additional_context 含事故節點名稱",
           "Issues/SQL_NPlus1" in ctx_build,
@@ -14008,7 +14008,7 @@ def t_impact_hook_stack_questions():
     txt_with_nodes = m.build_ranked_context(
         {"results": [{"node": "Systems/x", "kind": "direct", "pinned": False, "score": 0.5}],
          "meta": {}, "stack_questions": {"kt": ["問?"]}})
-    check("有節點時仍接指令", "上列直接/間接節點" in txt_with_nodes, txt_with_nodes)
+    check("有節點時仍接指令", "動手前看一眼上面這些筆記" in txt_with_nodes, txt_with_nodes)
 
     buf2 = io.StringIO()
     with contextlib.redirect_stdout(buf2):

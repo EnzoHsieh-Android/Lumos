@@ -11394,8 +11394,8 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
                          ensure_ascii=False))
     else:
         for w in warnings:
-            print(f"cochange: 改了 {w['changed']} 但未動 {w['missing']}"
-                  f"(歷史 {w['confidence']:.0%} 同改,共 {w['support']} 次)——確認是否漏改")
+            print(f"提醒:改了 {w['changed']} 但沒動 {w['missing']}——這兩個檔過去 {w['confidence']:.0%} 的時候是一起改的"
+                  f"(共 {w['support']} 次)。確認一下是不是漏改了。")
     return 0
 
 
@@ -11651,7 +11651,7 @@ def cmd_delguard_check(repo=None, as_json=False):
             if as_json:
                 _degraded_json("timeout", len(tokens))
             else:
-                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
+                print(f"提醒:「刪掉的東西筆記還在不在講」這項檢查超時降級({deadline}s 內沒掃完),先放行;這次結果不完整,已記一筆在治理帳。")
             return 0
         rem = max(0.1, deadline - (time.monotonic() - t0))
         conf = _delguard_confidence(tokens, root, gr_rel, timeout=rem)
@@ -11678,16 +11678,16 @@ def cmd_delguard_check(repo=None, as_json=False):
             return 0
         hi = sum(1 for h in hits if h["conf"] == "high")
         n_hit_tokens = len({t for h in hits for t in h["tokens"]})
-        print(f"⚠ delguard: code 側刪除傳播——{n_hit_tokens} 個被刪符號在圖譜仍被提及(高信心 {hi}/低信心 {len(hits)-hi})")
+        print(f"提醒:這次刪掉的東西,有 {n_hit_tokens} 個被刪符號還在筆記裡被提到(確定沒別處在用的 {hi} 個/不確定的 {len(hits)-hi} 個)。筆記講的東西已經不在了,讀的人會被誤導。")
         for h in hits[:DELGUARD_TOP_N]:
             print(f"  [{h['conf']}] {h['node']}:{h['line_no']} 「{h['line']}」 ← {','.join(h['tokens'])}")
         rest = len(hits) - min(len(hits), DELGUARD_TOP_N)
         if rest or dropped:
             print(f"  …另有 {rest} 處命中/{dropped} 個符號超 cap 未展開(--json 看已掃全量)")
         for n in fake:
-            print(f"  ⚠ 假同步嫌疑: {n} 本次只掛連結(純連結編輯)但內文仍講被刪符號")
-        print("  退場前自問: 1) 這次拿掉/反轉了什麼? 2) 上列原句逐句判:改動後還成立嗎?")
-        print("  3) 還成立→一句話為什麼;不成立→現在改掉或標作廢。新增 verified_by/related 連結不算同步。")
+            print(f"  提醒:{n} 這次只加了連結、正文沒改,但正文還在講已經被刪掉的東西。")
+        print("  退場前自問:這次到底拿掉或改變了什麼?上面每一句,改完之後還是對的嗎?")
+        print("  還對的寫一句為什麼;不對的現在就改掉或標過期。光是幫筆記加連結,不算更新內容。")
         return 0
     except subprocess.TimeoutExpired:
         # git diff/grep 子程序逾時漏出來——那是「超時」不是「內部錯誤」(2026-08-21 體檢 #9:
@@ -11696,7 +11696,7 @@ def cmd_delguard_check(repo=None, as_json=False):
         if as_json:
             _degraded_json("timeout", len(locals().get("tokens", [])))
         else:
-            print(f"delguard: 超時降級(子程序逾時),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
+            print(f"提醒:「刪掉的東西筆記還在不在講」這項檢查超時降級(git 子程序逾時),先放行;這次結果不完整,已記一筆在治理帳。")
         return 0
     except Exception as e:
         _gr = locals().get("gr")
@@ -11714,7 +11714,7 @@ def cmd_delguard_check(repo=None, as_json=False):
         if as_json:
             _degraded_json("error", len(locals().get("tokens", [])))
         else:
-            print(f"delguard: 內部錯誤({e.__class__.__name__}),放行(已記治理帳 delguard/degraded)")
+            print(f"提醒:「刪掉的東西筆記還在不在講」這項檢查自己出了內部錯誤({e.__class__.__name__}),先放行;已記一筆在治理帳。")
         return 0
 
 
@@ -11859,8 +11859,8 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
         # 混進 JSON 會讓解析端壞掉)。
         # ★誠實天花板★:這只是提醒,擋不住任何東西——忘了照樣跑得完全程。真正的閘
         # (收據+判定式)屬守衛面、須先過完整 design-loop,本次刻意不做(人裁 A 案)。
-        print(f"→ 派審查員前:lumos impact --diff {diff_range}"
-              "(附 manifest 當第二鏡頭,固定席=帶硬合約/事故的節點必答)")
+        print("派審查員之前,先看這次改動牽連到哪些筆記(帶硬合約或出過事故的一定要看):")
+        print(f"    lumos impact --diff {diff_range}")
     return 0
 
 
@@ -12004,7 +12004,7 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
                           "class_questions": {c: _PITFALL_QUESTIONS[c] for c in hits},
                           "known_pitfalls": known}, ensure_ascii=False))
         return 0
-    print("實務隱患提問(通用,恆答):")
+    print("這幾題每次都要想一下(寫進「實務隱患」節):")
     for q in _PITFALL_GENERAL:
         print(f"  - {q}")
     if hits:
@@ -12012,7 +12012,7 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
         for c in hits:
             print(f"  - [{c}] {_PITFALL_QUESTIONS[c]}")
     if known:
-        print("已知坑追問(世界已知,advisory——答或寫『已排除:理由』,panel 審):")
+        print("這是業界已知的常見坑,順手答一下(不擋;答或寫「已排除:理由」都可以,審查員會看):")
         for k in known:
             src = f"  (來源 {k['source']})" if k.get("source") else ""
             print(f"  - {k['ask']}{src}")
@@ -14238,9 +14238,9 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
         _codeloop_write(repo_root, branch, status, note or "", head_sha, ts)
         _codeloop_gov_log(repo_root, branch, status, note or "", head_sha, ts)
         label = "✅" if status == "passed" else "⏭"
-        print(f"{label} code-loop {status} [{branch}@{head_sha[:8]}] {note or ''}")
-        print("  (留痕綁本 sha;其後只准簿記檔 commit——治理帳/usage-log/anchor-baseline/"
-              "code-loop 留痕——動到其他檔即失效,需重跑 pass/skip)")
+        what = "審查通過,已留痕" if status == "passed" else "刻意跳過審查,已留痕"
+        print(f"{label} code-loop {status}:{what}(分支 {branch},版本 {head_sha[:8]})" + (f"——{note}" if note else ""))
+        print("  這筆紀錄只認目前這個版本:之後再改任何程式碼(工具自己的紀錄檔除外)它就失效,要重跑一次 pass 或 skip。")
         return 0
 
     if subcmd == "check":
@@ -14255,10 +14255,10 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
             print(_cljson.dumps(verdict, ensure_ascii=False))
         else:
             if blocked:
-                print(f"⚠ code-loop check: BLOCKED [{branch}@{head_sha[:8]}] {reason}",
+                print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
                       file=sys.stderr)
             else:
-                print(f"✅ code-loop check: OK [{branch}@{head_sha[:8]}] tier={tier} {reason}")
+                print(f"✅ code-loop check: OK——可以推(分支 {branch},版本 {head_sha[:8]},tier={tier}):{reason}")
         return 1 if blocked else 0
 
     print(f"ERROR: 未知子命令 {subcmd!r}", file=sys.stderr)
