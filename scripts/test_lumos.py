@@ -8577,6 +8577,7 @@ def t_codeloop_check_diff():
         v = _j.loads(r.stdout)
         check("不給 --diff 現行為不變", v["tier"] == "high", r.stdout)
         # 3. --at-sha/--branch 綁指定座標:對 feat 分支寫 pass,再用 --branch feat/--at-sha head 查得有效
+        (Path(d) / "docs").mkdir(exist_ok=True)   # 讓 pass 也寫 tracked 治理帳(步驟 7 退讀用)
         cl(d, "pass", "--note", "reviewed")   # 對當前 checkout(feat)寫 pass
         feat_branch = g("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
         # checkout 切到 main(模擬推非當前 checkout 分支)
@@ -8596,6 +8597,20 @@ def t_codeloop_check_diff():
         r = cl(d, "check", "--diff", f"{empty_tree}..{head}", "--at-sha", head, "--branch", "newbr", "--json")
         v = _j.loads(r.stdout)
         check("empty-tree 保守掃 high blocked", v["tier"] == "high", r.stdout)
+        # 7. CI 情境(2026-08-22 實紅):governance/code-loop/ 被 gitignore,CI checkout 沒有 marker 檔,
+        #    但 pass/skip 同時寫進 tracked 的 docs/.governance-log.jsonl → check 必須退而讀治理帳。
+        import shutil as _sh
+        _sh.rmtree(Path(d) / "governance" / "code-loop", ignore_errors=True)
+        has_log = (Path(d) / "docs" / ".governance-log.jsonl").exists()
+        check("★前置★ marker 已刪、治理帳仍在", has_log and not (Path(d) / "governance" / "code-loop").exists(), str(has_log))
+        r = cl(d, "check", "--diff", f"{mb}..{head}", "--at-sha", head, "--branch", feat_branch, "--json")
+        v = _j.loads(r.stdout)
+        check("★無 marker 檔時退讀治理帳,同座標留痕仍放行(CI 後盾才真的有牙)★",
+              r.returncode == 0 and not v["blocked"] and "治理帳" in v["reason"], f"{r.returncode} {r.stdout}")
+        # 治理帳裡的 sha 不符目標 → 仍 blocked(退讀不等於放水)
+        r = cl(d, "check", "--diff", f"{mb}..{head}", "--at-sha", empty_tree, "--branch", feat_branch, "--json")
+        v = _j.loads(r.stdout)
+        check("退讀治理帳:sha 不符照樣 blocked", r.returncode == 1 and v["blocked"], r.stdout)
         # 7. --diff 壞格式 fail-open 不 blocked
         r = cl(d, "check", "--diff", "bad..range", "--json")
         v = _j.loads(r.stdout)

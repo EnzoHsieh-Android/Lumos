@@ -14060,11 +14060,40 @@ def _codeloop_read(repo_root, branch):
     safe = _codeloop_branch_filename(branch)
     p = Path(repo_root) / "governance" / "code-loop" / f"{safe}.json"
     if not p.exists():
-        return None
+        return _codeloop_read_from_ledger(repo_root, branch)
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _codeloop_read_from_ledger(repo_root, branch):
+    """marker 檔不在時(governance/code-loop/ 被 gitignore,CI 的乾淨 checkout 一定沒有)
+    退而讀 tracked 的 docs/.governance-log.jsonl:取該分支最後一筆 gate=code-loop 事件,
+    還原成 marker 同形 dict(status/head_sha/note)。沒有就回 None。
+    2026-08-22 實紅:CI 後盾 #5 上線後第一筆 tier=high 推送因 marker 不在 checkout 而假紅。"""
+    import json
+    path = Path(repo_root) / "docs" / ".governance-log.jsonl"
+    if not path.exists():
+        return None
+    last = None
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or '"code-loop"' not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            if ev.get("gate") == "code-loop" and ev.get("branch") == branch and ev.get("head_sha"):
+                last = ev
+    except OSError:
+        return None
+    if last is None:
+        return None
+    return {"status": last.get("kind"), "head_sha": last.get("head_sha"),
+            "note": last.get("detail"), "ts": last.get("ts"), "_source": "ledger"}
 
 
 def _codeloop_write(repo_root, branch, status, note, head_sha, ts):
@@ -14165,7 +14194,8 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         rec_sha = rec.get("head_sha", "")
         rec_status = rec.get("status", "")
         if rec_sha == marker_sha and rec_status in ("passed", "skipped"):
-            return {"blocked": False, "reason": f"有效留痕({rec_status}@{marker_sha[:8]})", "tier": tier}
+            _src = "治理帳" if rec.get("_source") == "ledger" else "marker"
+            return {"blocked": False, "reason": f"有效留痕({rec_status}@{marker_sha[:8]},來源 {_src})", "tier": tier}
         # 簿記白名單豁免([[Issues/code-loop-pass自失效追尾]] 2026-08-04):pass 自己會往
         # tracked 的治理帳 append 一行,照「先 commit 再 push」直覺把它 commit 進去,
         # HEAD 前進 → pass 自失效 → 追尾。豁免=留痕 sha 之後的 commit ★只動簿記檔★
@@ -14181,8 +14211,9 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
                 _files = [f.strip() for f in _df.stdout.splitlines() if f.strip()]
                 if _df.returncode == 0 and all(
                         f in _WL_FILES or f.startswith(_WL_DIR) for f in _files):
+                    _src = "治理帳" if rec.get("_source") == "ledger" else "marker"
                     return {"blocked": False,
-                            "reason": (f"有效留痕({rec_status}@{rec_sha[:8]}+簿記豁免:"
+                            "reason": (f"有效留痕({rec_status}@{rec_sha[:8]},來源 {_src}+簿記豁免:"
                                        f"其後 {len(_files)} 檔皆白名單)"),
                             "tier": tier}
         # 留痕存在但 sha 不符或狀態不對

@@ -47,6 +47,10 @@ decisions:
     why_chosen: 需醒著訊號(無則蓋章 reviewer 連 2 LGTM 空轉收斂,r9 opus 都漏抓);mutation 只驗測試層抓不到審查層敷衍;三道防污染把污染封到「必留可見痕跡」
     decided: 2026-07-04
     valid: true
+  - content: code-loop check 在 marker 檔不在時退讀 tracked 的治理帳(docs/.governance-log.jsonl 最後一筆該分支 code-loop 事件)。起因:governance/code-loop/ 被 gitignore,CI 後盾(#5)的乾淨 checkout 永遠沒有 marker,上線後第一筆 tier=high 推送(6097b85)假紅。放行/封鎖規則不變(同 sha 或純簿記增量才放行),只是來源多一個;reason 會標「來源 marker/治理帳」。
+    id: d3
+    decided: 2026-08-22
+    valid: true
 related:
   - "[[Projects/impact-diff橋接_計劃]]"
 ---
