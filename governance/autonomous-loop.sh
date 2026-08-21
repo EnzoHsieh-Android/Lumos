@@ -93,7 +93,23 @@ mode='pr' if '$MODE'=='--pr' else 'dryrun'
 g=gap_select.select('$REPORT','$SCRIPT_DIR/backlog.jsonl','$PENDING',mode,'$TODAY','$SCRIPT_DIR/covered.jsonl')
 print(json.dumps(g, ensure_ascii=False) if g else '')
 ")"
-[ -n "$GAP_JSON" ] || { log "無可展開 gap(N=1 gate 或 backlog 空),結束"; exit 0; }
+if [ -z "$GAP_JSON" ]; then
+  # ★體檢 #2(2026-08-21)★:N=1 閘被 pending/ 裡的舊檔卡住 38 天,每天 rc=0 靜默結束——
+  # 「排程有跑、什麼都沒做、回報成功」是最糟的失敗形態。pending 超過 3 天就喊人,不再默默退出。
+  STALE="$(find "$PENDING" -maxdepth 1 -name '*.md' -mtime +3 2>/dev/null | head -5)"
+  if [ -n "$STALE" ]; then
+    log "⚠ pending/ 有超過 3 天未放行的檔,N=1 閘卡住自主 loop:$(echo "$STALE" | tr '\n' ' ')"
+    MSG="自主 loop 被 pending/ 卡住 >3 天(放行或歸檔到 pending/archive/):$(echo "$STALE" | xargs -n1 basename | tr '\n' ' ')" \
+    python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t=os.environ.get('LINE_TOKEN','')
+print('LINE', line_notify.send(line_notify.build_message('autonomous-loop', os.environ['MSG'], None), t) if t else 'no-token')" || true
+  else
+    log "無可展開 gap(backlog 空或 N=1 閘),結束"
+  fi
+  exit 0
+fi
 log "選中 gap:$GAP_JSON"
 
 # 錨點完整性:驗證器被污染時跑出的「收斂/綠」全是假訊號,寧停。

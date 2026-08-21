@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-18
+updated: 2026-08-21
 self_audit: sonnet/2026-08-21
 tags:
   - type/system
@@ -11,8 +11,10 @@ tags:
 verified_by:
   - "[[Verification/2026-06-20_autonomous-iteration-loop]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
 summary: |-
   FLOW:cron 10:10 → autonomous-loop.sh:驗當日日報存在(真模式無報即跳;dry-run fallback 最近一份)→ gap_select(日報 gaps + backlog 去重排序選 top-1;N=1 gate:有 pending/open PR 則只進 backlog)→ claude -p orchestrator(真執行:brainstorm spec → design-loop ≤6 輪[opus auditor + canary a/b/c + judge 判 caught 並回報 severity + 強制地面事實查證]→ loop status --need 2 收斂 → §2.5 qwen3-max 跨家族複核)→ 收斂+endorsed/degraded → 放行閘(dry-run 寫 governance/pending/;真模式 branch+PR+LINE)→ 停等人放行
+  KEY:★事故(2026-08-21 體檢 #2)★ N=1 閘被 pending/ 兩個 07-14 舊檔卡死 **38 天**,每日 launchd 準時跑、rc=0、「無可展開 gap」——排程有跑/什麼都沒做/回報成功;處置=舊檔歸檔 pending/archive/+pending >3 天即發 LINE 喊人(見 [[Verification/2026-08-21_工具鏈體檢修復批]])
   KEY:定調=自動備料+自審+停在放行閘等人,不是無人迭代;放行(merge PR)永遠人手動,人從「每天發起鏈」變「每天 review 1 個 PR」
   KEY:N=1 同時只 1 個待放行 spec——上一個未清(pending 條目/open auto/spec- PR)前,新 gap 只進 backlog 不展開,PR 永不堆
   KEY:全自動判收斂仍是沒閉合的迴歸——judge/cross-family 只把自評推遠一層未消滅,末端人 review PR 是最後也唯一真兜底(誠實天花板)

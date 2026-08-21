@@ -3814,6 +3814,30 @@ def t_merge_settings_dedupe():
     check("merge: check-graph-sync 同 hook 只一筆(去重遷移)", len(cmds) == 1, f"got {len(cmds)}: {cmds}")
 
 
+def t_merge_dedupes_preexisting_duplicates():
+    """體檢 #1(2026-08-21):舊版安裝器留下同一 hook 兩份註冊(真機 settings.json 實證:
+    verification-rot-check/check-graph-sync 各兩份,每次事件跑兩遍)。merger 每次執行都要自癒去重。"""
+    import json, os, subprocess, sys
+    fake_home = Path(tempfile.mkdtemp(prefix="gctl-dedupe-"))
+    (fake_home / ".claude" / "hooks").mkdir(parents=True)
+    (fake_home / ".claude" / "hooks" / "check-graph-sync.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    (fake_home / ".claude" / "hooks" / "verification-rot-check.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    settings = fake_home / ".claude" / "settings.json"
+    dup = lambda name, matcher=None: dict(({"matcher": matcher} if matcher else {}),
+                                          hooks=[{"type": "command", "command": f"python3 \"{fake_home}/.claude/hooks/{name}\"", "timeout": 10}])
+    settings.write_text(json.dumps({"hooks": {
+        "Stop": [dup("check-graph-sync.py"), dup("check-graph-sync.py")],
+        "PostToolUse": [dup("verification-rot-check.py", "Bash"), dup("verification-rot-check.py", "Bash")],
+    }}), encoding="utf-8")
+    env = dict(os.environ, HOME=str(fake_home), USERPROFILE=str(fake_home))
+    merge = str(Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py")
+    r = subprocess.run([sys.executable, merge, "--prune-only"], env=env, capture_output=True, text=True)
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    check("merge dedupe: Stop 兩份→一份", len(data["hooks"]["Stop"]) == 1, str(data["hooks"]["Stop"]))
+    check("merge dedupe: PostToolUse 兩份→一份", len(data["hooks"]["PostToolUse"]) == 1, str(data["hooks"]["PostToolUse"]))
+    check("merge dedupe: 輸出有 [dedupe] 留痕", "[dedupe]" in r.stdout, r.stdout)
+
+
 def t_hook_cmd_home_resolved():
     # W3:hook command 路徑前綴。${HOME} 只有 POSIX shell 展開;native Windows(Claude Code
     # 經 cmd/PowerShell 跑 hook)不展開 → L1/L3 靜默不觸發。Windows 須用解析後的絕對 home。

@@ -175,6 +175,19 @@ def main() -> int:
             print(f"  [add ] {event} hook")
             changed = True
 
+    # ★自癒去重(2026-08-21 體檢 #1)★:舊版安裝器在 _equivalent 上線前已把同一 hook 註冊兩次
+    # (verification-rot-check / check-graph-sync 各兩份,每次事件跑兩遍、Sonnet 呼叫翻倍)。
+    # 合併後再掃一次,等價項只留第一份;與 --prune-only 一樣是修復動作,每次執行都跑。
+    for event, entries in settings["hooks"].items():
+        kept = []
+        for e in entries:
+            if any(_equivalent(e, k) for k in kept):
+                print(f"  [dedupe] {event} hook 重複註冊,移除一份")
+                changed = True
+                continue
+            kept.append(e)
+        settings["hooks"][event] = kept
+
     if not changed:
         print("settings.json 已經是最新狀態,無需修改")
         return 0
