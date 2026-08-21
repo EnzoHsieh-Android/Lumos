@@ -15180,7 +15180,9 @@ def t_docs_command_count():
     # skills/…/reference.md(49)同時漂移卻全綠的原因(2026-07-29 外審實錘)。
     # 排除:外審歸檔(逐字歷史紀錄,不得回改)、圖譜(決策條目會引述當時數字)、.git。
     # golden/ 是凍結語料(過去 loop 的 spec 快照,replay 校準用),與外審歸檔同性質:歷史不得回改。
-    skip = ("governance/external-reviews/", "governance/golden/",
+    # l4-audit/ 是自足性審計的逐節點證據(claims/verify 檔,2026-08-21 起),引用的數字是
+    # 「審計當下或歷史快照」的值——同樣不得為了過守衛回改證據。
+    skip = ("governance/external-reviews/", "governance/golden/", "governance/l4-audit/",
             "-knowledge/", "/.git/", "node_modules/")
     scanned = 0
     for p in sorted(root.rglob("*.md")):
