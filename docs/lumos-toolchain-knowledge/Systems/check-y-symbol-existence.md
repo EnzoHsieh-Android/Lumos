@@ -3,6 +3,7 @@ type: system
 status: done
 created: 2026-08-12
 updated: 2026-08-12
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -20,13 +21,14 @@ summary: |-
   FLOW:doctor 掃 Systems 節點正文的 inline-code→篩「方法/類別形狀」→比對 code haystack→查無則軟提醒
   KEY:★守的是成因 D「寫的時候就錯」★——code 從沒變過也會發生,故 ★diff-based 守衛(delguard)結構上抓不到★。與 delguard 分工:delguard 驗「被刪的符號圖譜還在講」(diff-based、commit 時);Y 驗「圖譜提到的符號 repo 有沒有」(全量、隨時)
   KEY:★首發實績★=抓到活動報名寫 ActivityService.RegisterAsync(實為 SubmitRegistrationAsync)、滿額贈寫 ListAvailableAsync/GetOrdersForRedeemAsync(實為 GetActivitiesAsync/GetOrderSelectionAsync)——★這三條在同日 10 個 agent 的兩階段交叉審計中全被漏掉★(實證員驗了行為、沒挑方法名)
-  KEY:★只掃 Systems★是語意決定不是調參——只有 Systems 宣稱「現在長怎樣」;Projects 提未來方法、Verification/Issues 記歷史狀態,對它們報「查無」是誤報。實測:全型別 37 命中 → 限 Systems 4 命中
-  KEY:★否定語境豁免★=節點常「正確地記錄某符號已不存在」(「X 全庫零命中」「原記 X 無此方法」),對這種行報錯是把正確紀錄當錯誤;此為★唯一★誤報來源(2026-08-12 補足詞彙後真實圖譜誤報歸零),清單含 零命中/已移除/查無/無此/原記/舊名/改名/棄用/不使用/廢棄/停用 等
+  KEY:★只掃 Systems★是語意決定不是調參——只有 Systems 宣稱「現在長怎樣」;Projects 提未來方法、Verification/Issues 記歷史狀態,對它們報「查無」是誤報。實測:全型別 37 命中 → 限 Systems 1 命中且為真陽性★原記 4,程式碼註解 scripts/lumos:1197 為 1(2026-08-21 程式碼實證)★
+  KEY:★否定語境豁免★=節點常「正確地記錄某符號已不存在」(「X 全庫零命中」「原記 X 無此方法」),對這種行報錯是把正確紀錄當錯誤;此為★唯一★誤報來源(2026-08-12 補足詞彙後真實圖譜誤報歸零),清單以 `NEG_LEXICONS["zh"]` 為準(scripts/lumos:1925-1930,截至 2026-08-21 共 26 詞,含中英文「已移除/查無/棄用/deprecated/unused/obsolete」等);★本行不再列舉,列舉必漂(2026-08-21 程式碼實證)★
   DEP:[[Systems/lumos-cli-read]]
-  TEST:5 條牙齒測試(含否定語境豁免、Projects 不掃、形狀過濾擋環境變數/範例ID/檔名)
+  TEST:`t_checky_*` 牙齒測試(截至 2026-08-21 共 9 條;含否定語境豁免、Projects 不掃、形狀過濾、profile 切換、neg_extra 可設定)★原記 5 條(2026-08-21 程式碼實證)★
 verified_by:
   - "[[Verification/2026-08-12_CheckY_符號存在性]]"
   - "[[Verification/2026-08-12_通用性修正_profile化與歷史重放]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 ---
 
 # Check Y — 被提及符號存在性（幽靈符號守衛）
@@ -63,7 +65,7 @@ verified_by:
 只有 `Systems` 宣稱「**現在長怎樣**」。
 `Projects` 提的是「打算做的方法」（還沒寫）、`Verification`/`Issues` 記的是歷史狀態（當時存在、現已移除）——對那些節點報「repo 查無」是**誤報而非發現**。
 
-實測：全型別掃 **37 命中**（多為計劃中的未來方法／已移除的歷史方法）→ 限 Systems **4 命中**。
+實測：全型別掃 **37 命中**（多為計劃中的未來方法／已移除的歷史方法）→ 限 Systems **1 命中**(且為真陽性;原文寫 4,(2026-08-21 程式碼實證)依程式碼註解更正)。
 
 ### ② 形狀過濾——擋掉不是符號的東西
 
@@ -87,7 +89,7 @@ verified_by:
 
 ## 已知限制
 
-- **只認 C#/前端命名慣例**（`Async` 後綴、PascalCase）；其他語言棧需擴充形狀規則
+- ~~只認 C#/前端命名慣例~~ ★已過時(2026-08-21 程式碼實證)★:2026-08-12 通用性修正後已 profile 化——內建 csharp/kotlin/python 三組 `SYMBOL_PROFILES`(scripts/lumos:1899-1920),可由 `.lumos/config.json` 的 `symbol_profile`/`symbol` 欄位切換或覆寫(`load_symbol_profile`,1937-1966)
 - 只驗「符號**存在**」，不驗「**用對地方**」——後者仍需交叉審計
 - 否定詞清單是**列舉式**，新的說法（例如「已封存」「凍結」）會漏——★但這是可增補的字典問題，不是結構限制★
 

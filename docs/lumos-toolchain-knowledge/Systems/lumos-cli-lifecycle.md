@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-20
-self_audit: sonnet/2026-06-26
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -11,7 +11,7 @@ tags:
 summary: |-
   KEY:[2026-08-05]來源 repo 自身的 reinject 路徑補齊——update 在來源 repo 改走 reinject-only(原:ERROR 拒跑);init 既有 vault 的來源-repo 分支照樣刷 CLAUDE.md 紀律區塊(原:「跳過 vendor/hooks」連 reinject 一起跳,範本更新後來源 repo 自己永不刷新,2026-08-04 實戰缺口) [test:t_source_repo_reinject_path]
   FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install/uninstall)→專案層每repo(init 建vault+vendor工具組+裝閘｜update 刷新vendored｜deinit 對稱反安裝)
-  KEY:兩層分工——機器層(install/uninstall/bootstrap)動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Claude hooks);專案層(init/update/deinit)只動本 repo(docs/<slug>-knowledge、scripts/ vendored、CLAUDE.md 注入、core.hooksPath)
+  KEY:兩層分工——機器層(install/uninstall)只動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Claude hooks);★bootstrap 跨兩層(2026-08-21 程式碼實證):機器層之外 step3 會動當前 repo 的 core.hooksPath/vault/CLAUDE.md(見下行四分流)★;專案層(init/update/deinit)只動本 repo(docs/<slug>-knowledge、scripts/ vendored、CLAUDE.md 注入、core.hooksPath)
   KEY:bootstrap 一鍵對稱(2026-07-25)=step3 升級專案層四分流:有vault+vendored→接hooks｜中間態(有vault無vendored,_vault_in 只看名稱防假陽性疊動作)→提示補齊不自動動｜無vault→_confirm_tty 確認(印完整路徑+預設N)y 才 cmd_init(--init 免確認;一律 force=False+no_pull=True,LUMOS_HOME env 傳導自訂 home)｜非git→只機器層。get.sh 迴圈解析 --pull/--init 後整段委派 bootstrap;各步查 rc 失敗尾端彙報 rc1 不吞錯。與 teardown 成鏡像(bootstrap 不刪vault、teardown 不建vault,圖譜兩邊不碰)。設計 [[Projects/bootstrap一鍵對稱_計劃]]、驗證 [[Verification/2026-07-25_bootstrap一鍵對稱]]
   KEY:_confirm_tty(curl|bash 安全確認)三階=①stdin.isatty→input(),EOFError 落②非當 False ②os.open('/dev/tty',O_RDWR) 低階 fd(r+ 對 tty 炸 not seekable,Codex 真機實證)+os.write+select timeout 30s+os.read(有控制終端≠有人回答) ③None=跳過;答案嚴格 y/yes 預設 N;測試接縫 LUMOS_TTY/LUMOS_TTY_TIMEOUT
   KEY:teardown(2026-07-24)=一鍵反安裝,跨兩層:全域hook清理→deinit(keep_graph=True)→uninstall,★永遠保留圖譜文件★;範圍=當前 repo+機器全域(非全機所有 repo,deinit 只吃當前 toplevel)。順序「全域先」因 deinit 會刪 vendored merge-claude-settings.py 而 _teardown_global_claude 要用它;全域清理走 merge --prune-only(只剪懸空不 re-add)+壞 settings JSON 先驗跳過不刪 .py。設計/審計 [[Projects/teardown一鍵拆機_計劃]]、[[Verification/2026-07-24_teardown一鍵拆機]]
@@ -25,7 +25,7 @@ summary: |-
   KEY:vendor 結尾 diff 自癒——逐檔 filecmp 比對 src↔target 差異即 shutil.copy2 覆補(installer 漏檔的安全網)
   KEY:★2026-08-11 來源 pull 改 fail-closed★——有 remote 卻拉不到最新即中止,★中止點在寫任何檔之前(不留半套)★;政策收進 _pull_source_or_abort 單一函式,_vendor_toolchain(專案層)與 cmd_bootstrap(機器層)共用避免漂移。無 remote=離線 clone 不算失敗照跑(不誤擋手動複製/slim 安裝);逃生門 --allow-stale(update/init/bootstrap 三處齊備)。原行為只印警告續跑→消費端 mOrangePos 咬過兩次靜默降版 [test:t_vendor_pull_failure_aborts,t_vendor_no_remote_skips_pull,t_vendor_allow_stale_overrides_pull_failure,t_bootstrap_pull_failure_aborts]
   KEY:★DEBT★ pull 成功但來源工作區髒(未提交改動)仍會被 vendor 出去——本輪未擋,因來源 repo 的 docs/.governance-log.jsonl 等簿記檔恆髒,一律擋會天天卡住;要做需先分「簿記檔 vs 實質檔」白名單
-  KEY:來源 repo 自我保護——update/deinit 偵測 root==_lumos_src() 即 return 2(不可在 Lumos 源本身跑專案層指令)
+  KEY:來源 repo 自我保護——deinit 偵測 root==_lumos_src() 即 return 2;★update 自 2026-08-05 起**不再拒跑**,改走 reinject-only 分支(只刷 CLAUDE.md,通常 rc0;見本節點 2026-08-05 行)——本行原寫 update 也 return 2,屬同節點 KEY 行新舊未同步(2026-08-21 程式碼實證)★
   KEY:_scaffold_project 既有 vault 自動 skip(保護圖譜資料不被 init/update 動)
   KEY:cmd_init slug 決定順序=①--name ②既有 vault 資料夾名(去 -knowledge)③repo basename;②先於③是硬要求——否則既有 vault 上 --force 用 basename 建錯空 vault + 寫錯 CLAUDE.md {{KG}} 路徑(見 [[init-force-slug誤用basename]]) [test:t_init_force_uses_existing_vault_slug]
   DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit/cmd_teardown｜_vendor_toolchain/_install_skills/_install_hooks_py/_sync_global_claude/_teardown_global_claude/_link_or_copy/_scaffold_project｜merge-claude-settings.py(--prune-only)｜_VENDORED_TOOLKIT/_SKILLS 常數｜_lumos_src/_vault_in
@@ -77,6 +77,7 @@ verified_by:
   - "[[Verification/2026-08-05_流程優化六件落地]]"
   - "[[Verification/2026-08-19_精簡版update指令落地]]"
   - "[[Verification/2026-08-20_gov-stats落地]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 ---
 # lumos-cli-lifecycle
 

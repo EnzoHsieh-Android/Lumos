@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-14
-self_audit: sonnet/2026-07-24
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -20,9 +20,10 @@ verified_by:
   - "[[Verification/2026-08-14_canary協議停用none制落地]]"
   - "[[Verification/2026-08-18_派工編制資料化落地]]"
   - "[[Verification/2026-08-18_循序tier錨定落地]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 summary: |-
   KEY:★[2026-08-14]canary 協議停用(單源=[[Systems/canary-audit]] d5)★——植入/判定/抽樣分權/漏抓懲罰全停;輪記帳改 `canary record none`(純處置帳載體),panel 輪有效=記帳席≥2;skill 頁頂掛告示、植入步驟標停用;「審計員有沒有讀」由 quote-check 引句錨定把關;落地驗證=[[Verification/2026-08-14_canary協議停用none制落地]]
-  KEY:[2026-08-04 重設計]★收斂改走處置閘★(--disposal;完整設計=[[Projects/design-loop重設計]],r1 panel 自審收斂+人裁放行)——定位修訂「閘便宜,審不淺」(前提層錯誤明列本層職責:TDD/E2E 對 spec 理解本身無 oracle);K-streak/capture-recapture/存活≤minor 硬閘退場(歷史實測 1/38 從未放行+capture-recapture 封閉母體前提不成立);canary 降級觀測(d4);錨定紀律=finding 必附逐字引句、quote-check 對凍結快照機械驗。舊 panel 閘保留給 code-loop——★2026-08-08 撤銷:code-loop 亦改走處置閘(Enzo 具名推翻防浮動條款,見[[Projects/驗證層去模型化_計劃]];A 案機制碼保留供舊帳重放)★
+  KEY:[2026-08-04 重設計]★收斂改走處置閘★(--disposal;完整設計=[[Projects/design-loop重設計]],r1 panel 自審收斂+人裁放行)——定位修訂「閘便宜,審不淺」(前提層錯誤明列本層職責:TDD/E2E 對 spec 理解本身無 oracle);★(2026-08-21 程式碼實證)更正:三合一「退場」不準確——只有 capture-recapture 降 advisory;panel 的「輪有效∧存活≤minor」仍是必要合取,且 2026-08-05 起新 loop 加嚴為 K=2(連兩輪各自過);「K-streak」在程式碼專指 legacy 模式(K=2∧G1∧G2),與 panel 合取是兩套;「1/38」全庫查無出處★ capture-recapture 降 advisory(封閉母體前提不成立);canary 降級觀測(d4);錨定紀律=finding 必附逐字引句、quote-check 對凍結快照機械驗。舊 panel 閘保留給 code-loop——★2026-08-08 撤銷:code-loop 亦改走處置閘(Enzo 具名推翻防浮動條款,見[[Projects/驗證層去模型化_計劃]];A 案機制碼保留供舊帳重放)★
   KEY:[2026-08-06 收貨三道,plan:[[Projects/驗證層自證三件_計劃]]]收貨=quote-check(引句↔凍結快照)+refcheck(finding file:line↔repo 實在性)+★seat-check★(有講沒做對帳:dispatch manifest rN-dispatch.json 宣告 materials→unreported/out_of_scope,越界另記 out-of-scope.jsonl 不進收斂帳;lens 觀測不判定/空 materials vacuous 豁免/恆 rc0 觀測)[test:t_s1_seat_check];派工慣例同步=派工當下落 dispatch manifest;新機制準入三問(Growth test,borrow evidra)入 skill 護欄後段
   KEY:★定位★[2026-07-18 使用者裁定,見 decisions d4]——design-loop=抬 spec 質量,非保 spec 正確:一輪 panel 抓便宜的(矛盾/未定義詞/缺失敗路徑)就放行,正確性歸下游 code-loop+測試+驗證、漏網進逃逸帳;**前置加重一律拒**(日報 2026-07-18『保留題接閘』已拒收勿重提——保留題留離線 replay 校準,不進閘)
   KEY:[2026-07-18]S5 跨家族落地(見[[Projects/code階段強化_計劃]])——辯方預設 Codex(成本中性替換,d4 合規;不可用退 opus 註記)+≥3-run 多數決至少 1 run Codex+家族否決保護(外家 blocker 不得僅被同門多數推翻,須執行反證或第二外家);換手效應列 [[Projects/loop數據收集_計劃]] 觀察項(收斂輪數/辯方降級率)
@@ -41,7 +42,7 @@ summary: |-
   KEY:收斂判準K=2——連2輪 caught 且 severity∈{clean,minor};max cap=6筆record,到頂未收斂則停、攤給人
   KEY:實質收斂 early-exit(2026-07-07 Landmark 實戰調參)——連K輪 caught 無 blocker/major 且新 findings 全為文件精度級 minor → 編排者可提前攤牌請人裁「實質收斂」不跑滿 cap(「你一定找得到」framing 使 G2 數字枯竭壓不到底的誠實出口;僅手動 loop,自主 loop 走 unconverged requeue)
   KEY:派工模板權威=skills/lumos-design-loop/templates.md(6角色 dispatch prompt+編排者判讀規則,Landmark 實戰抽取;SKILL 內嵌 framing 是摘要,漂移以模板為準)
-  KEY:平行 panel 模式(2026-07-09,≤3輪壓縮,見 [[loop三輪壓縮_計劃]])——買獨立廣度非相關深度:一輪平行 W 個多樣審計員(tier→panel_width);收斂判準改結構信號(無-cluster 兩條合取:輪有效∧存活max≤minor;capture-recapture 殘餘★2026-08-14 降 advisory 不進合取(鑑別力≈0:殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25;f1≤1 公式退化;見[[Projects/收斂閘殘餘估計降級_計劃]])★;M2 cluster 帳=兩條合取,詳[[Systems/loop-convergence-recording]])取代 K-streak∧G2 序列;`loop status --gate --panel`;混用守衛防 None phantom 輪;legacy(無--panel)完全不變
+  KEY:平行 panel 模式(2026-07-09,≤3輪壓縮,見 [[loop三輪壓縮_計劃]])——買獨立廣度非相關深度:一輪平行 W 個多樣審計員(tier→panel_width);收斂判準改結構信號(無-cluster 兩條合取:輪有效∧存活max≤minor;★(2026-08-21 程式碼實證)2026-08-05 起 cutoff 後的新 loop 為 K=2——最後**兩輪**各自過此合取(`_panel_k2_active`,scripts/lumos:3557-3563、3705-3708);今日所有新 panel loop 皆走 K=2★;capture-recapture 殘餘★2026-08-14 降 advisory 不進合取(鑑別力≈0:殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25;f1≤1 公式退化;見[[Projects/收斂閘殘餘估計降級_計劃]])★;M2 cluster 帳=兩條合取,詳[[Systems/loop-convergence-recording]])取代 K-streak∧G2 序列;`loop status --gate --panel`;混用守衛防 None phantom 輪;legacy(無--panel)完全不變
   DEP:lumos canary record --loop/--severity｜lumos loop status --need(Component A 原語)｜skills/lumos-design-loop/SKILL.md
   TEST:Component A 原語有 test_lumos.py 覆蓋;B 是 skill 非 code,以 design-loop 自跑收斂為驗證
   VERIFY:[[Verification/2026-06-19_design-loop]]

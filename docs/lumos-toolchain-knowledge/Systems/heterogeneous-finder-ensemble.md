@@ -3,10 +3,11 @@ type: system
 status: done
 created: 2026-07-09
 updated: 2026-08-14
-self_audit: sonnet/2026-07-24
+self_audit: sonnet/2026-08-21
 verified_by:
   - "[[Verification/2026-07-09_loop三輪壓縮]]"
   - "[[Verification/2026-08-14_殘餘估計降級與重疊報表落地]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 related:
   - "[[pitfalls-code-loop]]"
   - "[[convergence-evidence-gate]]"
@@ -24,7 +25,7 @@ summary: |-
   KEY:--from-pitfalls <range> 按 `source` 分組——每個 linter driver / pitfalls 內建各一個確定性 finder(免手貼);共用 _pitfall_diff_collect(純計算不印,與 _pitfall_diff_mode 印分離);capture-counts 是 vault-free 純機械原語
   KEY:誠實邊界——重疊計數機械化只買「算術正確」不買「finding 正確」;capture-recapture 小樣本出極端值當一個信號非 oracle;辯方可執行 falsification(跑測試/repro 殺假陽)是 code-loop 另一半、非本節點
   DEP:[[pitfalls-code-loop]](--from-pitfalls 收割 pitfalls --diff 命中)｜[[convergence-evidence-gate]](loop status --panel 消費 capture_counts)｜[[loop-convergence-recording]](_estimate_remaining_defects/canary record --capture-counts)｜[[canary-audit]]
-  TEST:t_capture_counts_from_finders(5)+t_loop_capture_counts_cli(7)+t_loop_capture_counts_from_pitfalls(5)+t_pitfalls_diff(11)+t_pitfalls_lint_integration(15,重構後逐鍵不變);865 passed
+  TEST:t_capture_counts_from_finders(5)+t_loop_capture_counts_cli(7)+t_loop_capture_counts_from_pitfalls(5)+t_pitfalls_diff(截至 2026-08-21 為 12;★原記 11(2026-08-21 程式碼實證)★)+t_pitfalls_lint_integration(15,重構後逐鍵不變);全量當時 865 passed(★現為 2885 級,數字已漂,以 CI 為準★)
   VERIFY:[[2026-07-09_loop三輪壓縮]]
 decisions:
   - id: d1

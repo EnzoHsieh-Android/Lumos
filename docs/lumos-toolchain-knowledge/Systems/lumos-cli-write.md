@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-11
-self_audit: sonnet/2026-07-24
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -17,11 +17,11 @@ summary: |-
   KEY:[2026-08-05]aliases 宣告制——system/issue 新節點(created≥2026-08-05)lint 硬擋「缺 aliases 鍵」;逼★判過★不逼有值(aliases: []=明示無同義詞,合法;湊數別名吃 3.5 檢索權重=主動污染排序)。配套:模板自帶 aliases: []+NEW_HINT 教學(來源限真實出現過的說法)+append 白名單納 aliases;兩庫回填 2026-08-05(toolchain 22 節點 23 條/Landmark 71 節點 152 條,grounded 規則) [test:t_lint_aliases_declared]
   KEY:[2026-08-05]decisions 結構守衛修假陽性——原始條數只認 entry 縮排層(恰 2 空格),alternatives_considered 巢狀清單不計(Landmark 回填實戰:照 ADR 規範寫巢狀清單被誤報「壞損」;真壞型 sibling 吞沒照抓) [test:t_lint_decisions_nested_list_not_false_positive]
   KEY:[2026-08-05]`new verification <名> --plan <計劃> --systems <A,B>` 一鍵雙向——建檔當下填 plan_refs+對每個 Systems append verified_by(寫後自驗沿 cmd_append);指到不存在節點 rc2 且不建檔(不留半套);把「事後 sync-verified-by 撿漏」變「寫入時就對」 [test:t_new_verification_bidirectional]
-  FLOW:set/append/self-audit/decision-*→load_raw_for_edit(讀raw,拒BOM/CRLF)→line-based改fm→atomic_write_verify(寫tmp→re-parse自驗值正確+無新lint指紋→os.replace)→敗則tmp丟棄原檔不動
+  FLOW:set/append/self-audit/decision-*→load_raw_for_edit(讀raw,拒BOM/CRLF)→line-based改fm→atomic_write_verify(★(2026-08-21 程式碼實證)實際順序:先在**記憶體**對 new_lines re-parse+expected_check+lint 指紋比對→全過才建 tmp 寫入→os.replace;檢查失敗時 tmp 根本未建立★)→敗則原檔不動
   KEY:[2026-08-11]新增 `remove <note> <key> <value>`=append 逆操作(T1 list 項移除)。缺口來自實戰:死背書(verified_by 指向已 superseded 的驗證)與降格後殘留 core_refs,都只能靠移除 list 項來收,而 set 只收純量、append 只能加,唯一退路 obsidian processFrontMatter 需 Obsidian 執行中→實務無路可走。比對沿用 link_target()(精確 target,不做前綴/basename 匹配);★不命中一律 rc=2★(靜默 no-op 回成功=呼叫端以為清乾淨了,比報錯危險);清空後連 key 行一併移除(裸鍵被 YAML 解成 null 比沒鍵更糟);core_refs 納入 LIST_KEYS(升格加/降格拆兩向都走 T1)。★不支援巢狀 dict 型 list 項★(core-knowledge facet 的 implements 需 T3 手術層,非本次範圍)。實戰驗收:LandmarkMember doctor E1 死背書 14→0、C 指針轉「無」。詳 [[Verification/2026-08-11_T1_remove_list項移除]]
   KEY:8個寫入原語(set/append/remove/new/archive/decision-add/decision-supersede/self-audit)是「專案層」圖譜寫入的唯一安全路徑,取代手改 frontmatter / obsidian property:set
-  KEY:T1 寫後自驗 atomic——所有 fm mutation 經 atomic_write_verify:寫 .lumos-tmp → re-parse 斷言該 key 寫成目標值 + 無引入新 lint 指紋 → os.replace 原子換入;任一步失敗 tmp 丟棄、原檔零變動 [test:t_set_minimal_diff,t_append_exact_dedup]
-  KEY:set 走 SCALAR_KEYS 白名單{status,updated,created,type,self_audit,signed_off,regen[M1 2026-07-16 from-scratch守衛宣告欄]}、append 走 LIST_KEYS{verified_by,plan_refs,related,tags};白名單外 key 直接 rc2(list 用 append、decisions 翻盤/新增走 decision-*) [test:t_append_block_key_rejected]
+  KEY:T1 寫後自驗 atomic——所有 fm mutation 經 atomic_write_verify:記憶體 re-parse 斷言該 key 寫成目標值 + 無引入新 lint 指紋 → 通過才寫 .lumos-tmp → os.replace 原子換入;任一步失敗原檔零變動(★(2026-08-21 程式碼實證)原文「先寫 tmp 再驗」順序寫反;保證不變★) [test:t_set_minimal_diff,t_append_exact_dedup]
+  KEY:set 走 SCALAR_KEYS 白名單(截至 2026-08-21 共 9 鍵:status,updated,created,type,self_audit,signed_off,regen,pitfall_ask,pitfall_source;scripts/lumos:7035)、append 走 LIST_KEYS(7 鍵:verified_by,plan_refs,related,tags,aliases,pitfall_when,core_refs;7036)★原文列舉漏 pitfall_*/aliases/pitfall_when,(2026-08-21 程式碼實證);以常數為準勿再列舉★;白名單外 key 直接 rc2(list 用 append、decisions 翻盤/新增走 decision-*) [test:t_append_block_key_rejected]
   KEY:鐵則1(多wikilink必YAML list)由 append 結構性保證——一項一行 + link_target dedup,絕不字串塞多個[[]];鐵則3/4(含「: 」長文引號化、日期 bare)由 fmt_scalar/_fmt_decision_value 包辦
   KEY:decisions[] 是巢狀結構,只能走 decision-add/decision-supersede/decision-reindex 的 surgical line-based 手術(非 ruamel round-trip,避免 reflow 破壞最小 diff);要求 2-space 縮排
   KEY:[M1/P2 2026-07-15]決策穩定 ID——add 指派 id:d<max+1>(翻案永不重用)、supersede 唯一命中(子字串多重命中 rc=2 列候選/#dN 精確定址)+回傳全域 id <rel>#d<N>(dispatcher 解包,CLI 對外仍 int rc)、reindex 冪等回填(混合狀態 max+1 不撞號);寫後自驗升級 ID 精確驗證(有 id 時)
@@ -61,6 +61,7 @@ verified_by:
   - "[[Verification/2026-08-05_流程優化六件落地]]"
   - "[[Verification/2026-08-05_標籤結構收編落地]]"
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 ---
 # lumos-cli-write
 
@@ -71,7 +72,7 @@ verified_by:
 ## 七個原語(對應 `cmd_*`)
 | 指令 | 結構層 | 做什麼 |
 |---|---|---|
-| `set <node> <key> <value>` | 純量 | 改 `SCALAR_KEYS`={status,updated,created,type,self_audit,signed_off,regen};行級手術最小 diff |
+| `set <node> <key> <value>` | 純量 | 改 `SCALAR_KEYS`(以 scripts/lumos 常數為準,2026-08-21 為 9 鍵);行級手術最小 diff |
 | `append <node> <key> "[[x]]"` | list | 追加 `LIST_KEYS`={verified_by,plan_refs,related,tags};鐵則1 安全格式 + `link_target` dedup |
 | `self-audit <node> [--model][--date]` | 純量 | 寫 `self_audit: <model>/<date>` 節點級自足性審計戳記(內部即 `set self_audit`) |
 | `decision-add <node> "<content>" --decided DATE [--context][--why]` | 巢狀 | append 一條 ADR 決策(無 `decisions:` 則在 fm 末尾建) |

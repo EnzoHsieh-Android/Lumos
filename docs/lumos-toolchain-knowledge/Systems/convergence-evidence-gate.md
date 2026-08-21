@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-07-03
 updated: 2026-08-14
-self_audit: sonnet/2026-07-24
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -14,9 +14,10 @@ verified_by:
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
   - "[[Verification/2026-08-05_panel-K2與抽查落地]]"
   - "[[Verification/2026-08-14_殘餘估計降級與重疊報表落地]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 summary: |-
-  KEY:✅[2026-08-05 A案落地]panel K=1→★K=2★(cutoff 2026-08-06 起新 loop;首筆 ts 定錨不回溯,env LUMOS_PANEL_K2_CUTOFF 覆寫供測試)——最後兩輪★各自★過三條合取(前一輪 quiet 評估印一行摘要;單一實作 _panel_round_conjuncts 兩處共用);cluster 路同窗(前一輪須為有效輪)。+(e') 收斂後決定性抽查判定:PASS 印 sha256(loop_id+rid+該輪 token 集)%2 應抽/免抽——輸入全來自 append-only 帳,人人可事後重算,不依賴編排者誠實;應抽→加開 probe-* 輪(材料全量/席可縮 3/不計 cap/上限 1 次),★撤銷自動化=probe 冒 major 時 K=2 窗滑入髒輪 gate 自然 FAIL,零新機制★。防浮動條款:判準凍結,唯一翻案通道=攢滿 20 筆抽查帳。證據與五候選裁決全程=[[Projects/panel收斂判準改革_計劃]](design-loop r1+r2 收斂) [test:t_panel_k2_and_probe]
-  KEY:★收斂 K 值依模式而異,而 skill 曾在四處講錯或漏標(2026-08-03 修)★——★循序模式 K=2★(`--need 2`,code:`all(good(r) for r in rounds[-need:])`);★平行 panel 模式 K=1★(code:`_loop_status_panel` 只取 `next(reversed(groups.items()))`,只看最後一輪)。錯處:①code-loop SKILL 頭版只寫「連 2 輪」與同份文件 panel 節的「一乾淨輪即收斂」自相矛盾 ②code-loop SKILL/reference 把 `tier: high` 標成「(K=2)」——★講反了★,tier=high 實務走 panel 即 K=1 ③design-loop 誠實天花板寫「連 2 輪醒著的審計員」,對 panel 使用者不成立。★後果★:看頭版的人與照 code 跑的人得到不同結論,而★兩邊都覺得自己在照規矩走★——2026-08-03 使用者問「本來不就是乾淨兩輪才放行嗎」才暴露,當時我四輪都跑在 panel 下卻用 K=2 的心智模型講話。
+  KEY:✅[2026-08-05 A案落地]panel K=1→★K=2★(cutoff 2026-08-06 起新 loop;首筆 ts 定錨不回溯,env LUMOS_PANEL_K2_CUTOFF 覆寫供測試)——最後兩輪★各自★過合取(★(2026-08-21 程式碼實證)2026-08-14 capture-recapture 降 advisory 後剩**兩條**:輪有效∧存活≤minor;scripts/lumos:3568-3569 docstring 已改「兩條」,3705 呼叫處註解仍寫「三條」屬程式碼註解漂移★;前一輪 quiet 評估印一行摘要;單一實作 _panel_round_conjuncts 兩處共用);cluster 路同窗(前一輪須為有效輪)。+(e') 收斂後決定性抽查判定:PASS 印 sha256(loop_id+rid+該輪 token 集)%2 應抽/免抽——輸入全來自 append-only 帳,人人可事後重算,不依賴編排者誠實;應抽→加開 probe-* 輪(材料全量/席可縮 3/不計 cap/上限 1 次——★(2026-08-21 程式碼實證)這三個參數**程式碼零實作**:cap 計數含全部 distinct round 無 probe 排除、無次數上限、無席數檢查;只在 code-loop SKILL.md 散文,屬人守紀律。機械化的只有應抽/免抽判定與「probe 冒 major 自然 FAIL」★),★撤銷自動化=probe 冒 major 時 K=2 窗滑入髒輪 gate 自然 FAIL,零新機制★。防浮動條款:判準凍結,唯一翻案通道=攢滿 20 筆抽查帳。證據與五候選裁決全程=[[Projects/panel收斂判準改革_計劃]](design-loop r1+r2 收斂) [test:t_panel_k2_and_probe]
+  KEY:[★歷史紀錄,2026-08-03 當時;panel K=1 已於 2026-08-05 A案改 K=2 見上行,今日所有新 panel loop 皆 K=2(2026-08-21 程式碼實證)★]收斂 K 值依模式而異,而 skill 曾在四處講錯或漏標(2026-08-03 修)——★循序模式 K=2★(`--need 2`,code:`all(good(r) for r in rounds[-need:])`);★平行 panel 模式 K=1★(code:`_loop_status_panel` 只取 `next(reversed(groups.items()))`,只看最後一輪)。錯處:①code-loop SKILL 頭版只寫「連 2 輪」與同份文件 panel 節的「一乾淨輪即收斂」自相矛盾 ②code-loop SKILL/reference 把 `tier: high` 標成「(K=2)」——★講反了★,tier=high 實務走 panel 即 K=1 ③design-loop 誠實天花板寫「連 2 輪醒著的審計員」,對 panel 使用者不成立。★後果★:看頭版的人與照 code 跑的人得到不同結論,而★兩邊都覺得自己在照規矩走★——2026-08-03 使用者問「本來不就是乾淨兩輪才放行嗎」才暴露,當時我四輪都跑在 panel 下卻用 K=2 的心智模型講話。
   KEY:~~panel 判準最鬆(K=1)未經檢驗~~——✅2026-08-05 A案已解(上行);歷史脈絡保留:外部案例研究 arXiv 2605.12280 §3.5 明確建議「two consecutive clean passes」當複現判準,具名理由=「stopping rule is a known source of ★premature-termination risk on stochastic LLM auditors★」;但那是 N=1 case study,且 panel 的 K=1 當初是用「多席平行買廣度」換來的,該取捨可能仍成立。★本次刻意只修文件矛盾、不動判準★(動判準屬守衛面,要另走 design-loop)。★同篇論文另外兩條直接證據★:嚴重度評審間一致度 κ=0.46 vs 分類 κ=0.80(支持「嚴重度不該單獨當閘」);四家廠商 ×3 跑,★聯集才抓到全部 5 個種子缺陷★,而 Anthropic 那家嚴重度一致度最低(0.57)、誤報最高(1.33)——支持跨家族席,且★我們自己就是那一門★
   KEY:[2026-07-10]panel 輪有效升級 near-perfect——caught≥2 且 0 missed(中段分數弱訊號不背書收斂;borrow mutation score 文獻,見[[Projects/收斂閘caught-rate修正_計劃]])
   FLOW:每輪 canary record --findings N(辯方存活折入條數)→loop status --gate --spec <md> --repo <root>→K-streak(必要)∧G1(_refcheck_scan 引用座標 0 missing/0 超界)∧G2(findings 單調不增+末輪≤1+末步下降,K=1 退化末輪=0)∧G3(帶 --spec=聲明 hash 驗證:收斂窗雙 hash 鏈四驗,窗內無 hash=FAIL 非 advisory;不帶 --spec 舊用法不驗——[2026-07-21 M1包])→全過 GATE PASS rc0｜cross_audit:_build_prompt sentinel 定界+_parse_worst 末行優先回(sev,parse_fallback)→§2.5c 計票:≥major 經機械驗證存活才 +1 reject,全反證=endorsed-after-refute 放行

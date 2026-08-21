@@ -4,6 +4,7 @@ status: done
 created: 2026-08-11
 updated: 2026-08-11
 aliases: []
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -24,6 +25,7 @@ summary: |-
   TEST:t_delguard(scripts/test_lumos.py,85 條:S1 抽取/信心/掃描/S2/S3/fail-open/deadline/邊界輸入/鑑別力翻紅驗證)+t_precommit_whitelist_drift_guard 擴充;全量 2515/0@95c4224
 verified_by:
   - "[[Verification/2026-08-11_delguard落地]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 ---
 # delguard — code 側刪除傳播守衛（S1+S2+S3）
 

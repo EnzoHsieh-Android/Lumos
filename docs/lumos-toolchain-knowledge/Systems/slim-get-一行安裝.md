@@ -3,6 +3,7 @@ type: system
 status: done
 created: 2026-07-31
 updated: 2026-08-20
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -36,6 +37,7 @@ verified_by:
   - "[[Verification/2026-08-03_Windows真機驗證五缺陷修復]]"
   - "[[Verification/2026-08-03_Windows回歸測試三缺陷]]"
   - "[[Verification/2026-08-03_Windows真機三輪驗證通過]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 ---
 # slim-get-一行安裝
 

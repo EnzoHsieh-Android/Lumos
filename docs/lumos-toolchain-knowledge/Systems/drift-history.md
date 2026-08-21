@@ -3,6 +3,7 @@ type: system
 status: done
 created: 2026-08-12
 updated: 2026-08-12
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -24,6 +25,7 @@ summary: |-
   TEST:3 條牙齒測試(改名後幽靈可見、--json 結構、無 docs 佈局 rc=2)
 verified_by:
   - "[[Verification/2026-08-12_通用性修正_profile化與歷史重放]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 ---
 
 # drift-history — 讓每份圖譜自己量規律

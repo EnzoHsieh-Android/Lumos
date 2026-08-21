@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-07-26
-self_audit: sonnet/2026-07-24
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -12,6 +12,7 @@ verified_by:
   - "[[Verification/2026-06-19_reversibility-governance-ledger]]"
   - "[[Verification/2026-07-10_審計loop研究硬化]]"
   - "[[Verification/2026-07-10_合約鏈補強234]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 summary: |-
   KEY:[2026-07-10]signoff 簽核留痕(validation 那半:lumos signoff → .signoff-log.jsonl+frontmatter signed_off;gov 第6支load)
   KEY:[2026-07-10]gov 加 canary 分帳段(per-auditor caught/missed+missed-rate+type 分佈;missed-rate 一級指標)
@@ -22,7 +23,7 @@ summary: |-
   KEY:可逆性標記僅限 type=system;標在 Issue/Verification → error 標錯型別;type 缺失/非字串不崩不誤報
   KEY:[rollback:]/[guard:] v1 唯一支援形式 = decisions,語義=本節點 decisions[] 有 ≥1 條非空 rollback/guard 內容;其他 ref 值視為未解析
   KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);六來源 = bypass-log(L2)/rot-queue(L3)/governance-log(doctor)/canary-log/kill-log/signoff-log;dedup 在讀時做
-  KEY:gov 三檔皆 gitignore local-only,是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
+  KEY:gov 彙整多本帳(截至 2026-08-21 為 7 源:bypass/rot-queue/governance/signoff/kill/canary/ci,ci 條件載入),★(2026-08-21 程式碼實證)帳檔**已被 git 追蹤**(bypass/canary/governance/signoff 在 `git ls-files` 內;.gitignore 只忽略 ci-log)——原記「皆 gitignore local-only」已不成立★;仍是本機開發可見性工具,非合規物;L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖
   KEY:Check H(後加)僅 --ci 掃 git diff,正則命中疑似不可逆動作(prod/smtp/DROP TABLE…)而無不可逆標記時軟提醒,不擋
   KEY:gov 去噪(2026-07-24,呈現層——帳本身一筆不動):advisory(軟/warned/無 token 無 detail,如 Check S 每次 doctor 全名單重喊)同(日,gate,kind,node)跨 commit 折 ×N、同群 >6 節點收單行摘要「N 節點(前3…) ×次數」;--full 回完整逐筆(審計逃生口)。canary/kill/signoff/L2 有 detail/token 恆逐筆;canary 分帳不受影響。實測本日 300 筆→17 行 [test:t_gov_denoise]
   KEY:對抗層增量帳(2026-07-26,borrow arXiv 2605.25665 實戰報告欄)=canary 分帳尾加「折入 N 筆缺陷[severity 分佈]|依審計員」——折入=caught 輪辯方裁決後存活折入的真缺陷(測試綠後仍被抓,天生=測試漏掉的);長期趨零=整套對抗機關裝飾品該砍,這是驗證層對自己的驗證。missed 輪不計;findings 欄 M1(07-21)前舊輪誠實另計。首跑真帳:近 90 天折入 866 筆(blocker 404/major 403/minor 59)——機關非裝飾實證 [test:t_gov_adversarial_increment]
@@ -82,7 +83,7 @@ decisions:
 ### `lumos gov` 唯讀彙整
 - 六來源（`cmd_gov`）：`.bypass-log.jsonl`（L2 繞過）、`.rot-queue.jsonl`（L3 rot）、`.governance-log.jsonl`（doctor `--ci`）、`.canary-log.jsonl`（canary 審計）、`.kill-log.jsonl`（殺傷力驗證，2026-07-10）、`.signoff-log.jsonl`（業務簽核，2026-07-10）。
 - dedup 在**讀時**做，key = `(commit, frozenset(nodes), gate, kind, token)`；`nodes` 寫入即 stem 化，讀時 stem 比對。
-- 預設 `--since 90`（單位：天）；三檔皆 gitignore，**本機開發可見性工具，非合規物**（移除了原提案的歐盟 Art.12 合規宣稱）。
+- 預設 `--since 90`（單位：天）；★(2026-08-21 程式碼實證)帳檔已入 git 追蹤,非 gitignore★；**本機開發可見性工具，非合規物**（移除了原提案的歐盟 Art.12 合規宣稱）。
 - 已知限制（輸出明確標示）：L2 繞過無 node、L3 以 Verification 為鍵 → 對 Systems 節點為**部分**視圖；v1 不載 vault graph 做 Systems↔Verification 反查 join。
 
 ### Check H（spec 後加，commit 2482746）

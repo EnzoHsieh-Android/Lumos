@@ -3,7 +3,7 @@ type: system
 status: deferred
 created: 2026-06-26
 updated: 2026-08-14
-self_audit: sonnet/2026-07-24
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/deferred
@@ -18,6 +18,7 @@ verified_by:
   - "[[Verification/2026-08-08_canary型別描述報表]]"
   - "[[Verification/2026-08-08_驗證層去模型化落地]]"
   - "[[Verification/2026-08-14_canary協議停用none制落地]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 summary: |-
   KEY:★協議已停用(2026-08-14,Enzo 裁,d5)★植入/判定/抽樣分權/漏抓懲罰全停——caught/missed 譯不出「認真」且無下游消費=空轉;煙霧偵測角色被 quote-check 引句錨定機械蓋掉;record 加 kind=none 當純處置帳載體(五處閘謂詞納 none,t_loop_panel_none_kind 釘住);工具封存不拆、歷史帳唯讀;重啟條件=能分「真醒/演醒」的探針出現;D 案(型別輪替攢 15 筆)隨停用作廢(其前提跨期統計已被 d4 否決)
   KEY:[2026-08-05 D 前置,Enzo 裁]record 加 --canary-type/--probe 選配欄(不給不寫鍵)+canary-stats 型別×探針×caught 表——植入型別與探針結果★結構化★取代散文 note(散文帳不可重算,攢十輪也是考古材料);★D 案(型別輪替表數據驅動)開工條件=帶型別記錄攢滿 15 筆★(帳面可數,同 A 案防浮動條款款式);skill 派工/記帳模板同步帶兩欄 [test:t_canary_type_probe_fields]

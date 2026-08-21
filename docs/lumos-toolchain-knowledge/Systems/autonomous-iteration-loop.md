@@ -3,13 +3,14 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-18
-self_audit: sonnet/2026-07-24
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
   - risk/守衛面
 verified_by:
   - "[[Verification/2026-06-20_autonomous-iteration-loop]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 summary: |-
   FLOW:cron 10:10 → autonomous-loop.sh:驗當日日報存在(真模式無報即跳;dry-run fallback 最近一份)→ gap_select(日報 gaps + backlog 去重排序選 top-1;N=1 gate:有 pending/open PR 則只進 backlog)→ claude -p orchestrator(真執行:brainstorm spec → design-loop ≤6 輪[opus auditor + canary a/b/c + judge 判 caught 並回報 severity + 強制地面事實查證]→ loop status --need 2 收斂 → §2.5 qwen3-max 跨家族複核)→ 收斂+endorsed/degraded → 放行閘(dry-run 寫 governance/pending/;真模式 branch+PR+LINE)→ 停等人放行
   KEY:定調=自動備料+自審+停在放行閘等人,不是無人迭代;放行(merge PR)永遠人手動,人從「每天發起鏈」變「每天 review 1 個 PR」
@@ -21,7 +22,7 @@ summary: |-
   KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.00269,2026-07-24 裁定:語意合約唯一真獨立寫入閘=真跑測試或人,LLM judge=換皮提案者)②PoE 型防竄改帳+逐筆授權+可重播(arXiv 2607.05397,2026-07-25 裁定:價值不靠敵人成立——無人 loop 自己的遙測可不可信;現成便宜前例 2.7ms;07-26 再添 PROJECTMEM arXiv 2606.12329:本機零依賴 append-only 指紋鏈+寫入前驗內容實證可行,「要裝東西太重」藉口拿掉)③日報吸收管線升格為不可信輸入面(調研員每天真讀外部網頁,今天靠人眼把關,無人化後=夾帶指令/假結論的真通道)。框架修正(使用者 2026-07-25):「內部系統無敵意下毒」對——敵意攻擊框架(IssueTrojanBench 66.5%)不適用單人私有 repo;但無人化後「幻覺 agent 寫錯圖譜+改自己成績單」效果同下毒,主角不需是敵人。同日拒:審計加對抗步(design-loop d4 前置加重一律拒,可審≠審得出=07-23 已記天花板換新引用)/spec 夾帶掃描(spec 作者=自己人,威脅不成立)
   KEY:紀律抗壓縮(Governance Decay arXiv 2606.22528,2026-07-26 對帳)=長跑對話的摘要壓縮會悄悄刪安全規矩(違規率 0→65-95%)——lumos 架構已結構性counter:規矩不住對話記憶(CLAUDE.md 每輪重注入/圖譜在硬碟/impact hook 每次動手前重推合約/orchestrator 每日 fresh spawn),「每輪從硬碟重讀紀律」該篇藥方=本設計既有形狀。殘餘面(誠實):對話中途的口頭約定(未落圖譜者)確實隨壓縮衰減——正是「退場必寫」存在的理由,重要裁定必須離開對話住進硬碟
   DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result}.py + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
-  TEST:scripts/test_autonomous_loop.py 27 passed;dry-run 端到端真機跑通 06-20→06-26(cron 已上 10:10)
+  TEST:scripts/test_autonomous_loop.py 全綠(截至 2026-08-21 為 53 tests;★原記 27(2026-08-21 程式碼實證)★);dry-run 端到端真機跑通 06-20→06-26(cron 已上 10:10)
   VERIFY:[[Verification/2026-06-20_autonomous-iteration-loop]]
 decisions:
   - content: 定調為「自動備料 + 自審 + 停在放行閘等人」,而非「無人迭代」;放行(merge PR)永遠人手動,自動只到「備好待放行 spec」,絕不自動實作 / 自動 merge
@@ -77,15 +78,15 @@ decisions:
 ## 架構(5 組件 + cron 入口)
 - `governance/autonomous-loop.sh` — **由 `daily-governance.sh` 串接呼叫**(launchd 09:30 單次喚醒同腳本內接續;舊「獨立 cron 10:10」已棄——閉蓋睡眠醒不來,2026-07-24 L4 審計修真)。驗當日 `governance/reports/governance-<date>.json` 存在(真模式無報即跳、不視為錯;dry-run fallback 最近一份)→ gap_select → 派 orchestrator → 解析回傳 → 收斂則放行閘。主流程包 `while`(skip → continue 選下一個,`SKIP_CAP=3` 防空燒)。
 - `autonomous_loop/gap_select.py` — 讀日報 `gaps[]`(真 schema `{weakness, suggestion}`)+ `backlog.jsonl`,去重排序選 top-1;**N=1 gate**(`pending_exists`:dry-run 查 `governance/pending/*.md`、真模式 `gh pr list head:auto/spec-`);`covered.jsonl` 永久排除已被既有 spec 覆蓋的 gap。
-- `autonomous_loop/backlog.py` — backlog 讀寫 / value_score 衰減 / 淘汰 / 排序。
+- `autonomous_loop/backlog.py` — backlog 讀寫 / value_score 衰減 / 淘汰 / 排序。(★covered.jsonl 的讀寫**不在此檔**,全在 `gap_select.py`(2026-08-21 程式碼實證)★)
 - `autonomous_loop/cross_audit.py` — qwen3-max(DashScope 國際 endpoint)跨家族複核;回 `{status, worst_severity, ...}`,`status==degraded` 為 fail-open(no_key / http / timeout)。
 - `autonomous_loop/orchestrator-prompt.md` — `claude -p` orchestrator 的 prompt 模板(brainstorm + design-loop + §2.5 跨家族 + 輸出單一 JSON)。
 - `confidence_report.py` / `line_notify.py` / `orchestrator_result.py` — 可信度報告 body、LINE 傳輸層復用 + 待放行訊息 body、從 orchestrator result 文字提取最後一個合法 JSON(容錯敘述夾雜 `{clean,minor}` 干擾)。
 
 ## 收斂與放行門檻
-- **CONVERGED** = `lumos loop status <topic> --need 2` exit 0 = **連 2 輪 canary caught 且 severity ∈ {clean,minor}**(漏抓那輪不採信收斂的一半)。失控保護:design-loop max cap = 6 輪、N=1、連續撞 cap → 停 + LINE 告警。
+- **CONVERGED** = `lumos loop status <topic> --need 2` exit 0 = **連 2 輪 canary caught 且 severity ∈ {clean,minor}**(漏抓那輪不採信收斂的一半)。失控保護:design-loop max cap = 6 輪、N=1、撞 cap → 停 + LINE 告警(★(2026-08-21 程式碼實證)是**單次**撞 cap 即發 LINE 並 exit 0,無「連續」計次邏輯;原文「連續撞 cap」不準★)。
 - 收斂後走 **§2.5 跨家族複核**:`endorsed`/`degraded` → 放行;`disputed`(major+ 異議)→ 退回 opus 續審,`cross_reject_count` 達 2 → 停、不放行、`cross_verdict=disputed`(必伴 `converged:false`)。
-- 放行閘:dry-run 寫 `governance/pending/<date>-<topic>.md`(+ confidence);真模式(`--pr`)commit 到 `auto/spec-<topic>-<date>` branch、`gh pr create`、發 LINE。**⚠ 真 PR 模式(--pr)的 branch+PR+LINE 路徑尚未真機驗證**——Verification 節點的 pass 範圍僅涵蓋 dry-run;切換至 --pr 前須重驗放行閘全路徑(見 [[Verification/2026-06-20_autonomous-iteration-loop]] `revalidate_when`)。
+- 放行閘:dry-run 寫 `governance/pending/<date>-<topic>.md`(+ confidence);真模式(`--pr`)commit 到 `auto/spec-<topic>-<date>` branch、`gh pr create`(★(2026-08-21 程式碼實證)--pr 分支**不發 LINE**,LINE 只在 dry-run 分支;autonomous-loop.sh:268-275★)。**⚠ 真 PR 模式(--pr)的 branch+PR+LINE 路徑尚未真機驗證**——Verification 節點的 pass 範圍僅涵蓋 dry-run;切換至 --pr 前須重驗放行閘全路徑(見 [[Verification/2026-06-20_autonomous-iteration-loop]] `revalidate_when`)。
 
 ## design-loop 對 skill 預設的覆寫(autonomous 版)
 - **opus auditor 起手**(覆寫 skill「sonnet 起手、連 2 missed 才升 opus」)。
@@ -111,4 +112,4 @@ decisions:
 
 ## 近期修正
 
-- 2026-08-18 token 傳遞硬化(code-loop code-標註刷新 r1 另案收尾):七處 LINE 通知的 token 由 shell 內插(`t='$(cat …)'`,token 含引號會炸 python 且被 || true 吞)改為 `LINE_TOKEN` 環境變數傳遞+`os.environ.get`,行為不變、注入面拆除。
+- 2026-08-18 token 傳遞硬化(code-loop code-標註刷新 r1 另案收尾):六處 LINE 通知的 token(★原記七處,commit 9fcb761 實為六處(2026-08-21 程式碼實證)★) 由 shell 內插(`t='$(cat …)'`,token 含引號會炸 python 且被 || true 吞)改為 `LINE_TOKEN` 環境變數傳遞+`os.environ.get`,行為不變、注入面拆除。

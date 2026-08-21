@@ -3,6 +3,7 @@ type: system
 status: done
 created: 2026-08-12
 updated: 2026-08-12
+self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
@@ -26,6 +27,7 @@ summary: |-
   TEST:6 條牙齒測試(含壞正則不炸、glob 真的縮範圍、軟提醒不影響 rc)
 verified_by:
   - "[[Verification/2026-08-12_CheckN_可重算數字宣稱]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 ---
 
 # Check N — 可重算數字宣稱（存查詢不存答案）
@@ -48,7 +50,7 @@ F 類（寫死易漂的值）在 2026-08-12 那輪全 24 篇交叉審計中**每
 |---|---|---|
 | 點數商城 | 「共 5 處」「5 處全部放寬」 | **7 處** |
 | QA驗收清單 | 「46 場景」 | **40**（§9.4 被砍） |
-| 會員專區 | 「8 個元件」 | **9**（漏列 `AddressEditModal`） |
+| 會員專區 | 「8 個元件」 | **9**（漏列 `AddressEditModal`）★scripts/lumos:1145 註解寫反向「9 個(實為 8)」——兩處不一致,原始事故來源未再查(2026-08-21 程式碼實證)★ |
 | 票券帳務字典 | `TicketRepository.cs:173/392` | **189/415** |
 | 滿額贈 | 「11 情境通過」 | 早已不只 |
 

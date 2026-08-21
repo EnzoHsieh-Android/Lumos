@@ -3,12 +3,13 @@ type: system
 status: done
 created: 2026-07-02
 updated: 2026-07-30
-self_audit: sonnet/2026-07-02
+self_audit: sonnet/2026-08-21
 related:
   - "[[Systems/check-t-sentinel]]"
 verified_by:
   - "[[Verification/2026-07-02_multiplatform-test-binding]]"
   - "[[Verification/2026-07-25_CheckT-Python-profile]]"
+  - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 plan_refs:
   - "[[Projects/多平台合約測試綁定_計劃]]"
 tags:
@@ -26,7 +27,7 @@ summary: |-
   KEY:dart profile(2026-07-26,taroko_app Flutter 接入)=第 6 個 profile:DART_TEST_RE 認 test('id')/testWidgets('id')(識別字名才可綁,含空白 NO MATCH 同 playwright 設計)+檔名錨 *_test.dart+comment_strip=c-style(Dart 有雙式註解)+scaffold_name={m}_test;dirs pure=test/、behavioral 含 integration_test/ [test:t_dart_profile_discovery]
   KEY:python profile(2026-07-25,[[Projects/CheckT-Python-profile_計劃]])=第 5 個 profile:行首錨 PYTHON_TEST_RE+檔名錨 file_name_match(basename fnmatch,新欄位,與 maestro file_must_match 內容錨是兩機制)+comment_strip="none"+scaffold_name 模板;discover_test_methods 的註解剝離改語言感知(c-style 預設向後相容)——根因:原對所有語言剝 /*..*/,Python 檔中文註解/字串的巧合配對會吃掉大段內容(本 repo 實測 260→94)。新欄位放 TEST_PROFILES dict 靜態值(multiplatform 路徑繞過 load_test_profile,dict 直達兩路徑都吃到)
   DEP:[[Systems/check-t-sentinel]]
-  TEST:t_maestro_profile_discover｜t_playwright_profile_discover｜t_load_platforms｜t_resolve_test_refs｜t_multiplatform_guard_list｜t_multiplatform_doctor_check_t｜t_archive_live_guard_multiplatform｜t_guard_trace_multiplatform｜t_guard_bind_scaffold_platform(333 passed)
+  TEST:t_maestro_profile_discover｜t_playwright_profile_discover｜t_load_platforms｜t_resolve_test_refs｜t_multiplatform_guard_list｜t_multiplatform_doctor_check_t｜t_archive_live_guard_multiplatform｜t_guard_trace_multiplatform｜t_guard_bind_scaffold_platform(全綠(★「333」為當時全量口徑,已漂;相關 9 支測試現合計 25 斷言全過(2026-08-21 程式碼實證)★))
   VERIFY:[[Verification/2026-07-02_multiplatform-test-binding]]
 aliases:
   - 多平台合約測試綁定
