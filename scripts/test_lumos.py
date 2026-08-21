@@ -5298,6 +5298,15 @@ def t_checkn_reports_drift():
           "宣稱 5" in r.stdout and "實測 **3**" in r.stdout, r.stdout)
 
 
+def t_checkn_skips_fenced_examples():
+    """語法範例寫在 ``` 圍欄裡不該被當真標記掃——Check N 自己的節點就因此每次 doctor 都喊一條假漂移
+    (2026-08-21 L4 清帳抓到:「會響但沒人理」的噪音來源之一)。"""
+    body = "語法：\n```markdown\n- 7 處 <!--lumos:count=7 re=某正則 in=**/PointsMall*.cs-->\n```\n真的：2 處 <!--lumos:count=2 re=NEEDLE in=**/*.cs-->"
+    root, v = _n_repo(body, {"src/a.cs": "NEEDLE\nNEEDLE\n"})
+    r = run(v, "doctor")
+    check("Check N: 圍欄內範例不掃、圍欄外真標記照掃", "與實測不符" not in r.stdout and "全部對得上" in r.stdout, r.stdout)
+
+
 def t_checkn_soft_does_not_fail_ci():
     """軟提醒:數字漂了不該擋 CI(它是提示更新,不是錯誤)。"""
     root, v = _n_repo("5 處 <!--lumos:count=5 re=NEEDLE in=**/*.cs-->",

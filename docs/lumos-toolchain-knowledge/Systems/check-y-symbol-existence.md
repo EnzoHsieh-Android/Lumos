@@ -24,7 +24,7 @@ summary: |-
   KEY:★只掃 Systems★是語意決定不是調參——只有 Systems 宣稱「現在長怎樣」;Projects 提未來方法、Verification/Issues 記歷史狀態,對它們報「查無」是誤報。實測:全型別 37 命中 → 限 Systems 1 命中且為真陽性★原記 4,程式碼註解 scripts/lumos:1197 為 1(2026-08-21 程式碼實證)★
   KEY:★否定語境豁免★=節點常「正確地記錄某符號已不存在」(「X 全庫零命中」「原記 X 無此方法」),對這種行報錯是把正確紀錄當錯誤;此為★唯一★誤報來源(2026-08-12 補足詞彙後真實圖譜誤報歸零),清單以 `NEG_LEXICONS["zh"]` 為準(scripts/lumos:1925-1930,截至 2026-08-21 共 26 詞,含中英文「已移除/查無/棄用/deprecated/unused/obsolete」等);★本行不再列舉,列舉必漂(2026-08-21 程式碼實證)★
   DEP:[[Systems/lumos-cli-read]]
-  TEST:`t_checky_*` 牙齒測試(截至 2026-08-21 共 9 條;含否定語境豁免、Projects 不掃、形狀過濾、profile 切換、neg_extra 可設定)★原記 5 條(2026-08-21 程式碼實證)★
+  TEST:`t_checky_*` 牙齒測試(共 9 條 <!--lumos:count=9 re=(?m)^def t_checky_ in=scripts/test_lumos.py-->;含否定語境豁免、Projects 不掃、形狀過濾、profile 切換、neg_extra 可設定)★原記 5 條(2026-08-21 程式碼實證)★
 verified_by:
   - "[[Verification/2026-08-12_CheckY_符號存在性]]"
   - "[[Verification/2026-08-12_通用性修正_profile化與歷史重放]]"
