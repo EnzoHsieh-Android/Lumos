@@ -27,9 +27,9 @@ PRIOR-ART: ① 最小解=落帳點加一筆;② 世界解=CI 系統的 run recor
 
 ## 設計
 
-- `run_doctor(... ci=True)` 在既有 `_append_governance_log(env.vault, gov_events)` 之前,**無條件**在 `gov_events` 末尾加 `{"gate": "doctor-run", "kind": "ran", "hard": False, "nodes": [], "note": "issues=<n> gates=<本次有事件的 check-* gate 數>"}`(★欄位名 `note`——`cmd_gov` 的 governance mapper 讀 `d.get("note")`,不是 `detail`;light r1 M1★)。乾淨 run 因此恆有一筆可寫。
+- `run_doctor(... ci=True)` 在既有 `_append_governance_log(env.vault, gov_events)` 之前,**無條件**在 `gov_events` 末尾加 `{"gate": "doctor-run", "kind": "ran", "hard": False, "nodes": [], "detail": "issues=<n> gates=<本次有事件的 check-* gate 數>"}`。乾淨 run 因此恆有一筆可寫。
 - **不改判定、不改 rc、不改純 `doctor`**(仍不寫帳)。
-- `gov` 時間軸(非 `--full`)**明確過濾** `gate == "doctor-run"` 的列(★在去噪摺疊之前、以 gate 名直接濾,不是靠 `_is_advisory` 摺疊——該摺疊只認 `kind=="warned"`,新事件是 `ran` 不會被折;light r1 B1★);`--full` 與 `--stats` 照列(stats 要看得到它才能當棘輪分母)。`node` 縮限模式下 nodes 為空本就不命中,無需特判。
+- `gov` 時間軸(非 `--full`)**隱藏** `doctor-run` 列(否則 500+ 筆灌版面);`--full` 與 `--stats` 照列(stats 要看得到它才能當棘輪分母)。
 - `_KNOWN_GATES` 加 `doctor-run`;`_STATS_NODE_SEMANTICS` 不需(nodes 空,stats 印 n/a)。
 - dedup 鍵含 commit,同 commit 多次 `--ci` 在 `gov` 顯示上折成一筆;★帳本原始行保留每一次★(棘輪讀原始行)。
 
@@ -37,11 +37,7 @@ PRIOR-ART: ① 最小解=落帳點加一筆;② 世界解=CI 系統的 run recor
 
 不做棘輪本身;不回溯補歷史 run;不改 `_append_governance_log` 的零事件 early-return(由呼叫端保證非空)。
 
-## 審計修正紀錄
-
-- **light r1(2026-08-21,1 席通才)**:blocker 1(「隱藏」無機制定義,`_is_advisory` 只折 warned)/major 1(事件鍵 `detail` 應為 `note`)。兩條存活 → ★light 誤判,依規則升 standard,開 `doctor-run事件-std`★。
-
-## light 資格自核(★已 ratchet 升 standard,本段留作紀錄★)
+## light 資格自核
 
 不碰金流/對外送/不可逆/守衛面判定(只加一筆帳,不改任何閘的裁決);不動 ★INVARIANT★;預估 <20 行含測試;非演算法密集 → 走 light。
 
