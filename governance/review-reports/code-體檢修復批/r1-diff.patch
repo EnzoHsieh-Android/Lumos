@@ -1,0 +1,396 @@
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index 6bbc636..7af2630 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -93,7 +93,23 @@ mode='pr' if '$MODE'=='--pr' else 'dryrun'
+ g=gap_select.select('$REPORT','$SCRIPT_DIR/backlog.jsonl','$PENDING',mode,'$TODAY','$SCRIPT_DIR/covered.jsonl')
+ print(json.dumps(g, ensure_ascii=False) if g else '')
+ ")"
+-[ -n "$GAP_JSON" ] || { log "無可展開 gap(N=1 gate 或 backlog 空),結束"; exit 0; }
++if [ -z "$GAP_JSON" ]; then
++  # ★體檢 #2(2026-08-21)★:N=1 閘被 pending/ 裡的舊檔卡住 38 天,每天 rc=0 靜默結束——
++  # 「排程有跑、什麼都沒做、回報成功」是最糟的失敗形態。pending 超過 3 天就喊人,不再默默退出。
++  STALE="$(find "$PENDING" -maxdepth 1 -name '*.md' -mtime +3 2>/dev/null | head -5)"
++  if [ -n "$STALE" ]; then
++    log "⚠ pending/ 有超過 3 天未放行的檔,N=1 閘卡住自主 loop:$(echo "$STALE" | tr '\n' ' ')"
++    MSG="自主 loop 被 pending/ 卡住 >3 天(放行或歸檔到 pending/archive/):$(echo "$STALE" | xargs -n1 basename | tr '\n' ' ')" \
++    python3 -c "
++import sys, os; sys.path.insert(0,'$REPO/governance')
++from autonomous_loop import line_notify
++t=os.environ.get('LINE_TOKEN','')
++print('LINE', line_notify.send(line_notify.build_message('autonomous-loop', os.environ['MSG'], None), t) if t else 'no-token')" || true
++  else
++    log "無可展開 gap(backlog 空或 N=1 閘),結束"
++  fi
++  exit 0
++fi
+ log "選中 gap:$GAP_JSON"
+ 
+ # 錨點完整性:驗證器被污染時跑出的「收斂/綠」全是假訊號,寧停。
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index b31b8b8..fc1240b 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -32,6 +32,7 @@ CODE_EXTS = {
+     ".go",                                                    # Go
+     ".rs",                                                    # Rust
+     ".c", ".cc", ".cpp", ".h", ".hpp",                        # C/C++
++    ".sh", ".ps1",                                            # shell(2026-08-21 體檢 #7 補;四份清單由 t_code_exts_four_lists_agree 釘)
+ }
+ 
+ # === 即使副檔名對也要排除的路徑/檔名 ===
+@@ -338,7 +339,7 @@ def emit_queue_patrol(project_root: Path) -> None:
+     print(
+         f"📋 rot-queue 累積 {len(entries)} 筆 finding 涵蓋 {len(verifs)} 篇 Verification "
+         f"(oldest: {oldest[:10]})。"
+-        f"\n   跑 `scripts/rot-queue-digest.sh` review 後 `--clear`,避免堆成黑洞。",
++        f"\n   跑 `lumos gov` 看 L3 rot 事件(rot-queue-digest.sh 從未存在,2026-08-21 更正)。",
+         file=sys.stderr,
+     )
+ 
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index e098cca..be47046 100644
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -35,6 +35,7 @@ CODE_EXTS = {
+     ".go",                                                    # Go
+     ".rs",                                                    # Rust
+     ".c", ".cc", ".cpp", ".h", ".hpp",                        # C/C++
++    ".sh", ".ps1",                                            # shell(2026-08-21 體檢 #7 補;四份清單由 t_code_exts_four_lists_agree 釘)
+ }
+ 
+ # === 即使副檔名對也要排除的路徑/檔名 ===
+diff --git a/scripts/hooks/post-commit b/scripts/hooks/post-commit
+index 03c1870..59d0d1a 100755
+--- a/scripts/hooks/post-commit
++++ b/scripts/hooks/post-commit
+@@ -9,7 +9,7 @@
+ #   必然繞過了 L2 → append 結構化事件到 docs/.bypass-log.jsonl。
+ #
+ #   只記錄、不阻擋、不問理由——bypass 本來就是被認可的逃生口,這裡要的是
+-#   「率」不是「罪」;weekly 由 rot-queue-digest.sh 一併顯示 bypass 率。
++#   「率」不是「罪」;weekly 由 `lumos gov --since 7` 顯示 bypass 率(原寫 rot-queue-digest.sh,從未存在,2026-08-21 更正)。
+ #   (L1 警告被忽略的最終結果就是一筆 bypass commit,同一個訊號,不另外追蹤)
+ #
+ # 判定邏輯與 scripts/hooks/pre-commit 完全對齊 (CODE_EXTS_RE / 排除規則 /
+@@ -43,7 +43,7 @@ CHANGED="$(git -c core.quotePath=off diff-tree --no-commit-id --name-only -r HEA
+ [[ -z "$CHANGED" ]] && exit 0
+ 
+ # code 副檔名與排除規則 (對齊 pre-commit / check-graph-sync.py CODE_EXTS)
+-CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp)$'
++CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);四份清單由 t_code_exts_four_lists_agree 釘
+ 
+ should_exclude() {
+   local path="$1"
+@@ -103,7 +103,7 @@ PYEOF
+ {
+   echo ""
+   echo "📋 L2 bypass 已留痕 (docs/.bypass-log.jsonl): ${#src_files[@]} 個 code 檔未帶圖譜異動"
+-  echo "   weekly 跑 scripts/rot-queue-digest.sh 會顯示 bypass 率;若此 commit 其實該補圖譜,趁記憶新鮮補上"
++  echo "   weekly 跑 lumos gov --since 7 會顯示 bypass 率;若此 commit 其實該補圖譜,趁記憶新鮮補上"
+   echo ""
+ } >&2
+ 
+diff --git a/scripts/hooks/pre-commit b/scripts/hooks/pre-commit
+index 8d9d597..77a8c08 100755
+--- a/scripts/hooks/pre-commit
++++ b/scripts/hooks/pre-commit
+@@ -81,8 +81,28 @@ if echo "$STAGED" | grep -qE "^${GRAPH_ROOT}/.*\.md$"; then
+   fi
+ fi
+ 
++# Gate L: staged 圖譜 .md 逐檔 lumos lint (2026-08-21 體檢 #6)
++# 為什麼:lint 自 2026-06 起沒有任何 hook/CI 呼叫,它的每條鐵則(YAML list/白名單/枚舉/frontmatter
++# 閉合)全靠人記得跑——「有機制,沒接線」。硬擋:lint rc≠0 即擋,訊息原樣轉出。
++# 只跑 staged 的圖譜檔(每檔 <1s),不跑全 vault。找不到 python/lumos → 跳過(與 Gate CC 同語意)。
++if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
++  lint_fail=0
++  while IFS= read -r f; do
++    [[ -z "$f" ]] && continue
++    [[ -f "$f" ]] || continue          # 刪除的檔不 lint
++    if ! out="$("$CC_PY" "$REPO_ROOT/scripts/lumos" lint "$f" 2>&1)"; then
++      lint_fail=1
++      { echo ""; echo "🚫 lumos lint 未過: $f"; echo "$out" | sed 's/^/   /'; } >&2
++    fi
++  done < <(echo "$STAGED" | grep -E "^${GRAPH_ROOT}/.*\.md$" || true)
++  if [[ "$lint_fail" == 1 ]]; then
++    { echo ""; echo "   修到 lint 綠再 commit;確屬刻意 → git commit --no-verify(留一句為什麼)"; echo ""; } >&2
++    exit 1
++  fi
++fi
++
+ # Gate 2: code 副檔名 (對齊 check-graph-sync.py CODE_EXTS)
+-CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp)$'
++CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);四份清單由 t_code_exts_four_lists_agree 釘
+ 
+ # 排除路徑
+ should_exclude() {
+diff --git a/scripts/lumos b/scripts/lumos
+index b42c9a8..97b3252 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2894,7 +2894,7 @@ def cmd_signoff(env, node, note, by=None):
+ # ★gov --stats 的 gate 全集★(2026-08-20,計劃:Projects/閘觸發帳統計_計劃)
+ # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
+ # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
+-_KNOWN_GATES = ("L2", "L3", "anchor-approve", "canary", "check-e1", "check-e2", "check-e3", "doctor-run",
++_KNOWN_GATES = ("L2", "L3", "anchor-approve", "canary", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
+                 "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "kill", "signoff")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+@@ -8987,10 +8987,11 @@ def _scaffold_project(root: Path, slug: str):
+     print(f"  ✓ scaffold {kg}(帳檔 .gitignore → {kg.parent / '.gitignore'})")
+ 
+ 
+-_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py", "ci-status-hook.py")
++_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py")
+ # 已撤除的全域 hook：install/update 主動刪其殘留真檔(否則 _prune_dangling 因「非懸空」不剪、nag 不停)。
+ # code-loop-guard.py:2026-07-06 ADR 撤除 Stop nag(見 Projects/code-loop必用守衛_計劃)。撤別的 hook 在此補。
+-_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py",)
++# verification-rot-check.py:2026-08-21 體檢 #8 撤除(核心從未觸發、每次 Bash 付啟動成本;見 Verification/2026-08-21_工具鏈體檢修復批)。
++_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py", "verification-rot-check.py")
+ 
+ 
+ def _sync_global_claude(src_repo: Path):
+@@ -11572,6 +11573,18 @@ def _delguard_purelink(diff_lines):
+     return all(item_re.match(c) or key_re.match(c) for c in changed)
+ 
+ 
++def _delguard_log_degraded(gr, reason, n_tokens):
++    """★體檢 #9(2026-08-21)★:delguard 降級(超時/內部錯誤)一律寫治理帳 gate=delguard kind=degraded。
++    之前只印一行「放行」——一天印 5 次、無處可數;現在 gov --stats 看得到降級率。best-effort 靜默。
++    commit 欄=當下 HEAD(pre-commit 時=上一個 commit),note 標 reason。"""
++    try:
++        if gr:
++            _append_governance_log(Path(gr), [{"gate": "delguard", "kind": "degraded", "hard": False,
++                                               "nodes": [], "note": f"reason={reason} tokens={n_tokens}"}])
++    except Exception:
++        pass
++
++
+ def cmd_delguard_check(repo=None, as_json=False):
+     """code 側刪除傳播守衛(advisory):staged diff 抽被刪 token → 兩檔信心 → grep vault 指名過期原句。
+     恆 rc0(內部錯誤/超時皆 fail-open 放行;唯一輸出差異是訊息)。
+@@ -11581,7 +11594,7 @@ def cmd_delguard_check(repo=None, as_json=False):
+     import json, os, subprocess, time
+     t0 = time.monotonic()
+     try:  # 亂設的 env 不該讓 pre-commit 印 traceback(fail-open 契約覆蓋設定錯誤)
+-        deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "2.0"))
++        deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "5.0"))  # 2.0 在本 repo 幾乎必超(2026-08-21 一天降級 5+ 次)
+     except (ValueError, TypeError):
+         deadline = 2.0
+     def _over():
+@@ -11619,18 +11632,20 @@ def cmd_delguard_check(repo=None, as_json=False):
+         tokens = parsed["tokens"][:DELGUARD_TOKEN_CAP]
+         dropped = len(parsed["tokens"]) - len(tokens)
+         if _over():
++            _delguard_log_degraded(gr, "timeout", len(tokens))
+             if as_json:
+                 _degraded_json("timeout", len(tokens))
+             else:
+-                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
++                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
+             return 0
+         rem = max(0.1, deadline - (time.monotonic() - t0))
+         conf = _delguard_confidence(tokens, root, gr_rel, timeout=rem)
+         if _over():
++            _delguard_log_degraded(gr, "timeout", len(tokens))
+             if as_json:
+                 _degraded_json("timeout", len(tokens))
+             else:
+-                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
++                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
+             return 0
+         hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=lambda: time.monotonic() - t0 > deadline)
+         fake = []
+@@ -11659,11 +11674,27 @@ def cmd_delguard_check(repo=None, as_json=False):
+         print("  退場前自問: 1) 這次拿掉/反轉了什麼? 2) 上列原句逐句判:改動後還成立嗎?")
+         print("  3) 還成立→一句話為什麼;不成立→現在改掉或標作廢。新增 verified_by/related 連結不算同步。")
+         return 0
++    except subprocess.TimeoutExpired:
++        # git diff/grep 子程序逾時漏出來——那是「超時」不是「內部錯誤」(2026-08-21 體檢 #9:
++        # 當天印的「內部錯誤(TimeoutExpired)」全屬此類,誤導讀者以為壞了)
++        _delguard_log_degraded(locals().get("gr"), "timeout", len(locals().get("tokens", [])))
++        if as_json:
++            _degraded_json("timeout", len(locals().get("tokens", [])))
++        else:
++            print(f"delguard: 超時降級(子程序逾時),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
++        return 0
+     except Exception as e:
++        _gr = locals().get("gr")
++        if not _gr:   # 例外可能發生在 gr 算出來之前(測試鉤子/早期 git 失敗)→ 自己找 vault 再落帳
++            try:
++                _gr = find_vault(Path(str(_cochange_repo_root(repo) or os.getcwd())))
++            except Exception:
++                _gr = None
++        _delguard_log_degraded(_gr, f"error:{e.__class__.__name__}", len(locals().get("tokens", [])))
+         if as_json:
+-            _degraded_json("error", len(tokens))
++            _degraded_json("error", len(locals().get("tokens", [])))
+         else:
+-            print(f"delguard: 內部錯誤({e.__class__.__name__}),放行")
++            print(f"delguard: 內部錯誤({e.__class__.__name__}),放行(已記治理帳 delguard/degraded)")
+         return 0
+ 
+ 
+diff --git a/scripts/merge-claude-settings.py b/scripts/merge-claude-settings.py
+index 428e47d..437c1e0 100755
+--- a/scripts/merge-claude-settings.py
++++ b/scripts/merge-claude-settings.py
+@@ -64,18 +64,10 @@ HOOK_ENTRIES = {
+             ],
+         }
+     ],
+-    "PostToolUse": [
+-        {
+-            "matcher": "Bash",
+-            "hooks": [
+-                {
+-                    "type": "command",
+-                    "command": _hook_cmd("verification-rot-check.py"),
+-                    "timeout": 60,
+-                }
+-            ],
+-        }
+-    ],
++    # NOTE(2026-08-21 體檢 #8):verification-rot-check(PostToolUse/Bash,每次 Bash 都觸發、
++    # 逐候選 claude -p 25s)撤除——docs/.rot-check-cache.json 與 .rot-queue.jsonl 從未被建立,
++    # 核心邏輯從沒跑到卻每次付啟動成本;且註冊曾重複兩份。要復活先修到核心可觸發再接回。
++    "PostToolUse": [],
+     "Stop": [
+         {
+             "hooks": [
+@@ -175,6 +167,19 @@ def main() -> int:
+             print(f"  [add ] {event} hook")
+             changed = True
+ 
++    # ★自癒去重(2026-08-21 體檢 #1)★:舊版安裝器在 _equivalent 上線前已把同一 hook 註冊兩次
++    # (verification-rot-check / check-graph-sync 各兩份,每次事件跑兩遍、Sonnet 呼叫翻倍)。
++    # 合併後再掃一次,等價項只留第一份;與 --prune-only 一樣是修復動作,每次執行都跑。
++    for event, entries in settings["hooks"].items():
++        kept = []
++        for e in entries:
++            if any(_equivalent(e, k) for k in kept):
++                print(f"  [dedupe] {event} hook 重複註冊,移除一份")
++                changed = True
++                continue
++            kept.append(e)
++        settings["hooks"][event] = kept
++
+     if not changed:
+         print("settings.json 已經是最新狀態,無需修改")
+         return 0
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 0fd96f3..7780757 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -341,7 +341,7 @@ def t_install_global_hook_sync():
+     fake = Path(tempfile.mkdtemp(prefix="gctl-gsync-"))
+     r = run_sync(fake)
+     hooks = fake / ".claude" / "hooks"
+-    for h in ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py"):
++    for h in ("check-graph-sync.py", "impact-hook.py"):   # rot-check 2026-08-21 撤除
+         check(f"global sync: {h} copied", (hooks / h).exists(), f"stderr={r.stderr[-200:]}")
+     st = fake / ".claude" / "settings.json"
+     check("global sync: settings.json 產生", st.exists(), f"stderr={r.stderr[-200:]}")
+@@ -3814,6 +3814,82 @@ def t_merge_settings_dedupe():
+     check("merge: check-graph-sync 同 hook 只一筆(去重遷移)", len(cmds) == 1, f"got {len(cmds)}: {cmds}")
+ 
+ 
++def t_precommit_lints_staged_graph_nodes():
++    """體檢 #6(2026-08-21):`lumos lint` 從未被任何 hook/CI 呼叫——它的每條規則全靠人記得跑。
++    pre-commit 對 staged 的圖譜 .md 跑 lint,rc≠0 擋;乾淨節點放行。"""
++    import subprocess, os, shutil
++    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit"
++    def run_case(body):
++        root = Path(tempfile.mkdtemp(prefix="gctl-pclint-"))
++        subprocess.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
++        (root / "scripts").mkdir(); shutil.copy(GRAPHCTL, root / "scripts" / "lumos")
++        kg = root / "docs" / "x-knowledge"; (kg / "Systems").mkdir(parents=True)
++        (kg / "Systems" / "S.md").write_text(body, encoding="utf-8")
++        subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
++        r = subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True,
++                           env=dict(os.environ, GIT_DIR=str(root / ".git")))
++        shutil.rmtree(root, ignore_errors=True); return r
++    # 壞節點:多 wikilink 寫成單字串(鐵則 2,lint 硬擋)
++    bad = "---\ntype: system\nstatus: doing\nverified_by: \"[[Verification/a]] [[Verification/b]]\"\n---\n# S\n"
++    r = run_case(bad)
++    check("pre-commit lint: 壞節點擋下(rc1)", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
++    check("pre-commit lint: 訊息指名 lint", "lint" in (r.stdout + r.stderr), r.stderr[-300:])
++    good = "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:test\n---\n# S\n"
++    r = run_case(good)
++    check("pre-commit lint: 乾淨節點放行(rc0)", r.returncode == 0, f"rc={r.returncode}\n{r.stderr[-300:]}")
++
++
++def t_code_exts_four_lists_agree():
++    """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
++    check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天
++    scripts/external-seat.sh 溜過同步閘。本測試釘四份一致,並要求含 shell 腳本副檔名。"""
++    import re as _re
++    root = Path(GRAPHCTL).resolve().parent
++    def bash_set(path):
++        m = _re.search(r"CODE_EXTS_RE='\\\.\(([^)]*)\)\$'", path.read_text(encoding="utf-8"))
++        return set("." + x for x in m.group(1).split("|")) if m else set()
++    def py_set(path):
++        src = path.read_text(encoding="utf-8")
++        m = _re.search(r"^CODE_EXTS\s*=\s*\{(.*?)^\}", src, _re.S | _re.M)
++        return set(_re.findall(r'"(\.[a-z0-9]+)"', m.group(1))) if m else set()
++    lists = {
++        "pre-commit": bash_set(root / "hooks" / "pre-commit"),
++        "post-commit": bash_set(root / "hooks" / "post-commit"),
++        "check-graph-sync.py": py_set(root / "hooks" / "claude" / "check-graph-sync.py"),
++        "impact-hook.py": py_set(root / "hooks" / "claude" / "impact-hook.py"),
++    }
++    ref = lists["pre-commit"]
++    check("code-exts: 四份清單都抓得到", all(lists.values()), str({k: len(v) for k, v in lists.items()}))
++    for k, v in lists.items():
++        check(f"code-exts: {k} 與 pre-commit 一致", v == ref, f"{k}: +{sorted(v - ref)} -{sorted(ref - v)}")
++    for ext in (".sh", ".ps1"):
++        check(f"code-exts: 含 {ext}(外家席腳本溜過同步閘的教訓)", ext in ref, str(sorted(ref)))
++
++
++def t_merge_dedupes_preexisting_duplicates():
++    """體檢 #1(2026-08-21):舊版安裝器留下同一 hook 兩份註冊(真機 settings.json 實證:
++    verification-rot-check/check-graph-sync 各兩份,每次事件跑兩遍)。merger 每次執行都要自癒去重。"""
++    import json, os, subprocess, sys
++    fake_home = Path(tempfile.mkdtemp(prefix="gctl-dedupe-"))
++    (fake_home / ".claude" / "hooks").mkdir(parents=True)
++    (fake_home / ".claude" / "hooks" / "check-graph-sync.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
++    (fake_home / ".claude" / "hooks" / "verification-rot-check.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
++    settings = fake_home / ".claude" / "settings.json"
++    dup = lambda name, matcher=None: dict(({"matcher": matcher} if matcher else {}),
++                                          hooks=[{"type": "command", "command": f"python3 \"{fake_home}/.claude/hooks/{name}\"", "timeout": 10}])
++    settings.write_text(json.dumps({"hooks": {
++        "Stop": [dup("check-graph-sync.py"), dup("check-graph-sync.py")],
++        "PostToolUse": [dup("verification-rot-check.py", "Bash"), dup("verification-rot-check.py", "Bash")],
++    }}), encoding="utf-8")
++    env = dict(os.environ, HOME=str(fake_home), USERPROFILE=str(fake_home))
++    merge = str(Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py")
++    r = subprocess.run([sys.executable, merge, "--prune-only"], env=env, capture_output=True, text=True)
++    data = json.loads(settings.read_text(encoding="utf-8"))
++    check("merge dedupe: Stop 兩份→一份", len(data["hooks"]["Stop"]) == 1, str(data["hooks"]["Stop"]))
++    check("merge dedupe: PostToolUse 兩份→一份", len(data["hooks"]["PostToolUse"]) == 1, str(data["hooks"]["PostToolUse"]))
++    check("merge dedupe: 輸出有 [dedupe] 留痕", "[dedupe]" in r.stdout, r.stdout)
++
++
+ def t_hook_cmd_home_resolved():
+     # W3:hook command 路徑前綴。${HOME} 只有 POSIX shell 展開;native Windows(Claude Code
+     # 經 cmd/PowerShell 跑 hook)不展開 → L1/L3 靜默不觸發。Windows 須用解析後的絕對 home。
+@@ -11050,8 +11126,17 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
+     r = dg("--staged", env={"LUMOS_DELGUARD_DEADLINE": "0"})
+     check("delguard 超時 fail-open rc0", r.returncode == 0, str(r.returncode))
+     check("delguard 降級訊息在 stdout", "超時降級" in r.stdout, f"out={r.stdout!r} err={r.stderr!r}")
++    # ★體檢 #9(2026-08-21)★:降級(超時/內部錯誤)必須落治理帳——「逾時即放行」一天印 5 次卻無處可數
++    _gl = root / gr.split("/")[0] / ".governance-log.jsonl" if "/" in gr else root / ".governance-log.jsonl"
++    _gl = (root / gr).parent / ".governance-log.jsonl"
++    _rows = [json.loads(l) for l in _gl.read_text(encoding="utf-8").splitlines() if l.strip()] if _gl.exists() else []
++    _deg = [x for x in _rows if x.get("gate") == "delguard" and x.get("kind") == "degraded"]
++    check("delguard 降級寫治理帳 gate=delguard kind=degraded", len(_deg) >= 1, str(_rows[-3:]))
++    check("delguard 降級事件 note 標 reason=timeout", _deg and "timeout" in (_deg[-1].get("note") or ""), str(_deg[-1:]))
+     # 內部錯誤 fail-open:env 注入測試鉤子
+     r = dg("--staged", env={"LUMOS_DELGUARD_RAISE": "1"})
++    _rows = [json.loads(l) for l in _gl.read_text(encoding="utf-8").splitlines() if l.strip()] if _gl.exists() else []
++    check("delguard 內部錯誤也落帳 reason=error", any(x.get("gate") == "delguard" and "error" in (x.get("note") or "") for x in _rows), str(_rows[-2:]))
+     check("delguard 內部錯誤 fail-open rc0+訊息", r.returncode == 0 and "內部錯誤" in r.stdout, r.stdout[:200])
+     # 效能 benchmark:<1s(254 檔級 vault 用本 repo 真 vault 跑,40 token;
+     # 一併連 _delguard_confidence 計時,合計仍要 <1s——單看 vault_scan 會漏掉 git grep 那段成本)

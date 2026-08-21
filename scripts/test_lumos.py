@@ -3837,6 +3837,19 @@ def t_precommit_lints_staged_graph_nodes():
     good = "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:test\n---\n# S\n"
     r = run_case(good)
     check("pre-commit lint: 乾淨節點放行(rc0)", r.returncode == 0, f"rc={r.returncode}\n{r.stderr[-300:]}")
+    # ★同檔名不同資料夾(code-loop r1 s1 抓到):壞的 staged、好的已存在 → 必須 lint 到 staged 那個★
+    root = Path(tempfile.mkdtemp(prefix="gctl-pclint-dup-"))
+    subprocess.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    (root / "scripts").mkdir(); shutil.copy(GRAPHCTL, root / "scripts" / "lumos")
+    kg = root / "docs" / "x-knowledge"; (kg / "Systems").mkdir(parents=True); (kg / "Issues").mkdir()
+    (kg / "Issues" / "dup.md").write_text("---\ntype: issue\nstatus: open\naliases: []\nsummary: |-\n  KEY:ok\n---\n# dup\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"], capture_output=True)
+    (kg / "Systems" / "dup.md").write_text(bad, encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    r = subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True, env=dict(os.environ, GIT_DIR=str(root / ".git")))
+    shutil.rmtree(root, ignore_errors=True)
+    check("pre-commit lint: 同檔名不同夾仍 lint 到 staged 的壞節點(rc1)", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
 
 
 def t_code_exts_four_lists_agree():

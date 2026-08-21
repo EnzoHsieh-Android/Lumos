@@ -100,6 +100,7 @@ if [ -z "$GAP_JSON" ]; then
   if [ -n "$STALE" ]; then
     log "⚠ pending/ 有超過 3 天未放行的檔,N=1 閘卡住自主 loop:$(echo "$STALE" | tr '\n' ' ')"
     MSG="自主 loop 被 pending/ 卡住 >3 天(放行或歸檔到 pending/archive/):$(echo "$STALE" | xargs -n1 basename | tr '\n' ' ')" \
+    LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" \
     python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
