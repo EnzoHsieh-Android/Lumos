@@ -114,35 +114,10 @@ S3:17 `_codeloop_range()` 有/無 upstream 兩路;18 pass high 無 --loop rc2 �
 - 外家同族兩席算兩席(編制表只分 claude/external):現況只有 gemini 一家可用,本案照表;是否該要求異族,另案。
 - `_codeloop_range()` 無 upstream 時「預設分支」取 `origin/HEAD` → 無 origin 時退 `main`;與 pre-push 的 stdin 範圍仍可能不同(例如 force-push 歷史改寫)——不同即擋、印提示,不猜。
 
-## ⛔ 達 cap 未收斂(2026-08-21)——停手,攤給人
-
-| 輪 | 席 | blocker | major |
-|---|---|---|---|
-| r1 | 5 同門+1 外家 | 10 | 24 |
-| r2 | 5 同門+1 外家 | 9 | 15 |
-| r3 | 5 同門+**2 外家** | ~10 | ~14 |
-
-★三輪 blocker 數**沒有下降趨勢**★——與 gov-stats 案(blocker→blocker→major)不同,這案每改一版就撞到新的地基問題。這本身就是結論。
-
-**r3 的結構性 blocker(不是措辭能解的)**:
-1. **棘輪地基缺席**:治理帳只在有警告時才寫,★「乾淨的 run」在帳裡零痕跡★——棘輪永遠無法確認「已清」,「最新 run 不出現→不升」判不出來。三席(同門 s3、外家 s6/s7)獨立抓到。要做棘輪,doctor --ci 得先每次寫一筆 run 標記——那是另一個前置改動。
-2. **S3 的 pass↔push 綁定在跟 git 打架**:range 符號名 vs sha 永不相等(外家 s7)、amend 改 HEAD 即失效(外家 s6)、首推/多 ref/rebase 各自不同源(同門 s2 兩 blocker)。把閘綁在「兩邊算出同一個 range」上,結構上脆。
-3. **Check A 的實作層**:`_strip_fences_text` 丟行號、同行多標記配對未定、引號內 `"` 截斷、`by_stem` 不認資料夾——全可解,但 spec 自己就有 3 處未標承認句、全庫實掃 59 處要補。
-
-## 裁定建議(編排者)
-
-**不放行,拆三案、地基先行**:
-- **Check A 獨立立案**(地基最實):修實作層四條,存量 59 處在實作 PR 補標。
-- **棘輪的地基先做**:doctor --ci 每次寫 `doctor-run` 事件(幾行 code,獨立小案),累積夠 20 run 後棘輪再立案——否則棘輪蓋上去也判不出東西。
-- **S3 重設計**:不綁 range;`code-loop check` 在 push 當下**自己算**外家窗(從 canary-log/dispatch),loop id 綁分支命名慣例 `code-<branch>`(現有 kind 推斷已用此前綴),重用即擋。另案再審。
-
-放行/拆案/退回,要人裁。
-
 ## 審計修正紀錄
 
 - **r1 panel(2026-08-21,五席同門+★外家否決席 gemini-3-flash 首次到位★)**:blocker 10 / major 24 / minor 5。★裁定=不補丁,重寫 v2:砍 S4/S5(無獨立事故、不擋、搭便車——s5-F7/F8)、三件全硬★。blocker 逐條:s2-F1/s1-F2/s4-F1 ack 純量撞閘→改 list 鍵;s2-F4 tier 不在 loop status→S3 改掛 code-loop pass(自跑 pitfalls 判 tier);s3-F1 否定句誤判→前綴豁免;s3-F2 Issue 節點自撞→例句入圍欄;s3-F5 棘輪基線→判準改「最近 20 run 連續」且上線先清 check-e1 5 組;s3-F8 自簽→標天花板+落帳可數;s3-F9 waived 子字串→明確旗標;s4-F3 閘可繞→綁放行點;s5-F1 漏抓不可量→改人工盤點 Verification;s6-1 冷啟動→min(K,輪數)。major 全數折入(路徑鍵/連續 run/升級落帳/dispatch 無 ts/席數照編制/nodes 語意登記/範圍句自相矛盾/A 帶欄違規/退場條件逐條指名指令/Growth test 逐件)。**收貨**:六席引句全數錨定(外家席報告做了一次純格式正規化:粗體標籤→裸標籤,內容未動);refcheck 全 ok。**辯方路由**:blocker 皆經編排者以 file:line/實跑資料自核(含實算治理帳證實 s3-F5),路由 i。
 
-- **r3 panel(2026-08-21,五席同門+★兩席外家 gemini-3-flash(前提層/可實作性兩鏡頭)★,cap)**:blocker ~10 / major ~14。七席引句全數錨定(本輪外家無省略號失格)。結構性:棘輪「乾淨 run 零痕跡」(s3+s6+s7 三席獨立);S3 range 綁定符號/sha 型別不符(s7)、amend 失效(s6)、首推/多 ref 不同源(s2×2);Check A 行號/多標記/引號/by_stem 四條實作層(s4);spec 自身 3 處未標承認句(s1);`_strip_fences_text` 未閉合圍欄語意寫反(s1+s5);`_KNOWN_GATES` 漂移釘第二道未處理(s5,r2 已提未折——編排者漏折,如實)。★未折入,cap 已滿,攤人★。
 - **r2 panel(2026-08-21,五席同門+外家 gemini-3-flash)**:blocker 9 / major 15 / minor 4(外家 6 條中 2 條引句含省略號不採信;其 #1「loop id 可重用」論點編排者自核成立,以自查名義折入)。★裁定=v3 重寫★:S3 閘從 pass 移到 push 檢查點 `code-loop check`(留痕綁 range+HEAD,不同源即擋)、skip 在 high 改破窗制、撤 `--no-loop`、撤 `external-absent`(loop next 唯讀契約)、輪序改 append 序、進行中輪不計;S2 run 改「含 check-* 事件的 commit」、鍵改 stem(路徑不可實作)、append 序;S1 加 H 型、欄位加引號、issue 須 `Issues/` 前綴、撤區段豁免、圍欄改 `_strip_fences_text`(★同日早上我給 Check N 加的正則正是檔頭明禁的 FENCE_RE,本輪抓到已另 commit 修正★)、r1 宣稱的圍欄修法確認未落地列為實作第一步;退場條件 S3 改用 `gov --full` 逐筆計;加「本 PR 怎麼過自己規則」段。**收貨**:五席同門引句全錨定、refcheck 2 條 missing(皆為引用他檔的大括號展開寫法,判格式)。
 - **r1 pre-flight(2026-08-21,機械掃)**:①S3 把 design/high 與 code/high 混為「tier=high」——編制表只有 code/high 是 fail-closed,已限縮 ②「存量 38 處」無法重現(依詞表 28~51),改以實掃為準 ③`downgraded=` 無失敗條件,補日期格式+不得未來 ④`--findings-doc` 在無 `--findings` 時未定義,補驗證並順帶補既有 `--findings` 非負 ⑤雙入口範本引錯(Check N 是 doctor 單入口,應抄 Check J)⑥`check-a` 落帳無測試、S4 各模式無逐模式測試,已補。
 
