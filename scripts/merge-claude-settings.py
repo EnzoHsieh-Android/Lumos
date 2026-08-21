@@ -64,18 +64,10 @@ HOOK_ENTRIES = {
             ],
         }
     ],
-    "PostToolUse": [
-        {
-            "matcher": "Bash",
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": _hook_cmd("verification-rot-check.py"),
-                    "timeout": 60,
-                }
-            ],
-        }
-    ],
+    # NOTE(2026-08-21 體檢 #8):verification-rot-check(PostToolUse/Bash,每次 Bash 都觸發、
+    # 逐候選 claude -p 25s)撤除——docs/.rot-check-cache.json 與 .rot-queue.jsonl 從未被建立,
+    # 核心邏輯從沒跑到卻每次付啟動成本;且註冊曾重複兩份。要復活先修到核心可觸發再接回。
+    "PostToolUse": [],
     "Stop": [
         {
             "hooks": [

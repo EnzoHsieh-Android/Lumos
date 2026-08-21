@@ -81,8 +81,28 @@ if echo "$STAGED" | grep -qE "^${GRAPH_ROOT}/.*\.md$"; then
   fi
 fi
 
+# Gate L: staged 圖譜 .md 逐檔 lumos lint (2026-08-21 體檢 #6)
+# 為什麼:lint 自 2026-06 起沒有任何 hook/CI 呼叫,它的每條鐵則(YAML list/白名單/枚舉/frontmatter
+# 閉合)全靠人記得跑——「有機制,沒接線」。硬擋:lint rc≠0 即擋,訊息原樣轉出。
+# 只跑 staged 的圖譜檔(每檔 <1s),不跑全 vault。找不到 python/lumos → 跳過(與 Gate CC 同語意)。
+if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
+  lint_fail=0
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    [[ -f "$f" ]] || continue          # 刪除的檔不 lint
+    if ! out="$("$CC_PY" "$REPO_ROOT/scripts/lumos" lint "$f" 2>&1)"; then
+      lint_fail=1
+      { echo ""; echo "🚫 lumos lint 未過: $f"; echo "$out" | sed 's/^/   /'; } >&2
+    fi
+  done < <(echo "$STAGED" | grep -E "^${GRAPH_ROOT}/.*\.md$" || true)
+  if [[ "$lint_fail" == 1 ]]; then
+    { echo ""; echo "   修到 lint 綠再 commit;確屬刻意 → git commit --no-verify(留一句為什麼)"; echo ""; } >&2
+    exit 1
+  fi
+fi
+
 # Gate 2: code 副檔名 (對齊 check-graph-sync.py CODE_EXTS)
-CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp)$'
+CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);四份清單由 t_code_exts_four_lists_agree 釘
 
 # 排除路徑
 should_exclude() {

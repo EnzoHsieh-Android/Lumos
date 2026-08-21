@@ -35,6 +35,7 @@ CODE_EXTS = {
     ".go",                                                    # Go
     ".rs",                                                    # Rust
     ".c", ".cc", ".cpp", ".h", ".hpp",                        # C/C++
+    ".sh", ".ps1",                                            # shell(2026-08-21 體檢 #7 補;四份清單由 t_code_exts_four_lists_agree 釘)
 }
 
 # === 即使副檔名對也要排除的路徑/檔名 ===

@@ -341,7 +341,7 @@ def t_install_global_hook_sync():
     fake = Path(tempfile.mkdtemp(prefix="gctl-gsync-"))
     r = run_sync(fake)
     hooks = fake / ".claude" / "hooks"
-    for h in ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py"):
+    for h in ("check-graph-sync.py", "impact-hook.py"):   # rot-check 2026-08-21 撤除
         check(f"global sync: {h} copied", (hooks / h).exists(), f"stderr={r.stderr[-200:]}")
     st = fake / ".claude" / "settings.json"
     check("global sync: settings.json 產生", st.exists(), f"stderr={r.stderr[-200:]}")
@@ -3812,6 +3812,58 @@ def t_merge_settings_dedupe():
     stop = data["hooks"]["Stop"]
     cmds = [h["command"] for e in stop for h in e["hooks"] if "check-graph-sync" in h["command"]]
     check("merge: check-graph-sync 同 hook 只一筆(去重遷移)", len(cmds) == 1, f"got {len(cmds)}: {cmds}")
+
+
+def t_precommit_lints_staged_graph_nodes():
+    """體檢 #6(2026-08-21):`lumos lint` 從未被任何 hook/CI 呼叫——它的每條規則全靠人記得跑。
+    pre-commit 對 staged 的圖譜 .md 跑 lint,rc≠0 擋;乾淨節點放行。"""
+    import subprocess, os, shutil
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit"
+    def run_case(body):
+        root = Path(tempfile.mkdtemp(prefix="gctl-pclint-"))
+        subprocess.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+        (root / "scripts").mkdir(); shutil.copy(GRAPHCTL, root / "scripts" / "lumos")
+        kg = root / "docs" / "x-knowledge"; (kg / "Systems").mkdir(parents=True)
+        (kg / "Systems" / "S.md").write_text(body, encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+        r = subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True,
+                           env=dict(os.environ, GIT_DIR=str(root / ".git")))
+        shutil.rmtree(root, ignore_errors=True); return r
+    # 壞節點:多 wikilink 寫成單字串(鐵則 2,lint 硬擋)
+    bad = "---\ntype: system\nstatus: doing\nverified_by: \"[[Verification/a]] [[Verification/b]]\"\n---\n# S\n"
+    r = run_case(bad)
+    check("pre-commit lint: 壞節點擋下(rc1)", r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+    check("pre-commit lint: 訊息指名 lint", "lint" in (r.stdout + r.stderr), r.stderr[-300:])
+    good = "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:test\n---\n# S\n"
+    r = run_case(good)
+    check("pre-commit lint: 乾淨節點放行(rc0)", r.returncode == 0, f"rc={r.returncode}\n{r.stderr[-300:]}")
+
+
+def t_code_exts_four_lists_agree():
+    """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
+    check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天
+    scripts/external-seat.sh 溜過同步閘。本測試釘四份一致,並要求含 shell 腳本副檔名。"""
+    import re as _re
+    root = Path(GRAPHCTL).resolve().parent
+    def bash_set(path):
+        m = _re.search(r"CODE_EXTS_RE='\\\.\(([^)]*)\)\$'", path.read_text(encoding="utf-8"))
+        return set("." + x for x in m.group(1).split("|")) if m else set()
+    def py_set(path):
+        src = path.read_text(encoding="utf-8")
+        m = _re.search(r"^CODE_EXTS\s*=\s*\{(.*?)^\}", src, _re.S | _re.M)
+        return set(_re.findall(r'"(\.[a-z0-9]+)"', m.group(1))) if m else set()
+    lists = {
+        "pre-commit": bash_set(root / "hooks" / "pre-commit"),
+        "post-commit": bash_set(root / "hooks" / "post-commit"),
+        "check-graph-sync.py": py_set(root / "hooks" / "claude" / "check-graph-sync.py"),
+        "impact-hook.py": py_set(root / "hooks" / "claude" / "impact-hook.py"),
+    }
+    ref = lists["pre-commit"]
+    check("code-exts: 四份清單都抓得到", all(lists.values()), str({k: len(v) for k, v in lists.items()}))
+    for k, v in lists.items():
+        check(f"code-exts: {k} 與 pre-commit 一致", v == ref, f"{k}: +{sorted(v - ref)} -{sorted(ref - v)}")
+    for ext in (".sh", ".ps1"):
+        check(f"code-exts: 含 {ext}(外家席腳本溜過同步閘的教訓)", ext in ref, str(sorted(ref)))
 
 
 def t_merge_dedupes_preexisting_duplicates():
@@ -11074,8 +11126,17 @@ diff --git a/docs/lumos-toolchain-knowledge/Systems/pay.md b/docs/lumos-toolchai
     r = dg("--staged", env={"LUMOS_DELGUARD_DEADLINE": "0"})
     check("delguard 超時 fail-open rc0", r.returncode == 0, str(r.returncode))
     check("delguard 降級訊息在 stdout", "超時降級" in r.stdout, f"out={r.stdout!r} err={r.stderr!r}")
+    # ★體檢 #9(2026-08-21)★:降級(超時/內部錯誤)必須落治理帳——「逾時即放行」一天印 5 次卻無處可數
+    _gl = root / gr.split("/")[0] / ".governance-log.jsonl" if "/" in gr else root / ".governance-log.jsonl"
+    _gl = (root / gr).parent / ".governance-log.jsonl"
+    _rows = [json.loads(l) for l in _gl.read_text(encoding="utf-8").splitlines() if l.strip()] if _gl.exists() else []
+    _deg = [x for x in _rows if x.get("gate") == "delguard" and x.get("kind") == "degraded"]
+    check("delguard 降級寫治理帳 gate=delguard kind=degraded", len(_deg) >= 1, str(_rows[-3:]))
+    check("delguard 降級事件 note 標 reason=timeout", _deg and "timeout" in (_deg[-1].get("note") or ""), str(_deg[-1:]))
     # 內部錯誤 fail-open:env 注入測試鉤子
     r = dg("--staged", env={"LUMOS_DELGUARD_RAISE": "1"})
+    _rows = [json.loads(l) for l in _gl.read_text(encoding="utf-8").splitlines() if l.strip()] if _gl.exists() else []
+    check("delguard 內部錯誤也落帳 reason=error", any(x.get("gate") == "delguard" and "error" in (x.get("note") or "") for x in _rows), str(_rows[-2:]))
     check("delguard 內部錯誤 fail-open rc0+訊息", r.returncode == 0 and "內部錯誤" in r.stdout, r.stdout[:200])
     # 效能 benchmark:<1s(254 檔級 vault 用本 repo 真 vault 跑,40 token;
     # 一併連 _delguard_confidence 計時,合計仍要 <1s——單看 vault_scan 會漏掉 git grep 那段成本)

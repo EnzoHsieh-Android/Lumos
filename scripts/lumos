@@ -2894,7 +2894,7 @@ def cmd_signoff(env, node, note, by=None):
 # ★gov --stats 的 gate 全集★(2026-08-20,計劃:Projects/閘觸發帳統計_計劃)
 # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
 # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
-_KNOWN_GATES = ("L2", "L3", "anchor-approve", "canary", "check-e1", "check-e2", "check-e3", "doctor-run",
+_KNOWN_GATES = ("L2", "L3", "anchor-approve", "canary", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
                 "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "kill", "signoff")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
@@ -8987,10 +8987,11 @@ def _scaffold_project(root: Path, slug: str):
     print(f"  ✓ scaffold {kg}(帳檔 .gitignore → {kg.parent / '.gitignore'})")
 
 
-_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py", "ci-status-hook.py")
+_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py")
 # 已撤除的全域 hook：install/update 主動刪其殘留真檔(否則 _prune_dangling 因「非懸空」不剪、nag 不停)。
 # code-loop-guard.py:2026-07-06 ADR 撤除 Stop nag(見 Projects/code-loop必用守衛_計劃)。撤別的 hook 在此補。
-_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py",)
+# verification-rot-check.py:2026-08-21 體檢 #8 撤除(核心從未觸發、每次 Bash 付啟動成本;見 Verification/2026-08-21_工具鏈體檢修復批)。
+_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py", "verification-rot-check.py")
 
 
 def _sync_global_claude(src_repo: Path):
@@ -11572,6 +11573,18 @@ def _delguard_purelink(diff_lines):
     return all(item_re.match(c) or key_re.match(c) for c in changed)
 
 
+def _delguard_log_degraded(gr, reason, n_tokens):
+    """★體檢 #9(2026-08-21)★:delguard 降級(超時/內部錯誤)一律寫治理帳 gate=delguard kind=degraded。
+    之前只印一行「放行」——一天印 5 次、無處可數;現在 gov --stats 看得到降級率。best-effort 靜默。
+    commit 欄=當下 HEAD(pre-commit 時=上一個 commit),note 標 reason。"""
+    try:
+        if gr:
+            _append_governance_log(Path(gr), [{"gate": "delguard", "kind": "degraded", "hard": False,
+                                               "nodes": [], "note": f"reason={reason} tokens={n_tokens}"}])
+    except Exception:
+        pass
+
+
 def cmd_delguard_check(repo=None, as_json=False):
     """code 側刪除傳播守衛(advisory):staged diff 抽被刪 token → 兩檔信心 → grep vault 指名過期原句。
     恆 rc0(內部錯誤/超時皆 fail-open 放行;唯一輸出差異是訊息)。
@@ -11581,7 +11594,7 @@ def cmd_delguard_check(repo=None, as_json=False):
     import json, os, subprocess, time
     t0 = time.monotonic()
     try:  # 亂設的 env 不該讓 pre-commit 印 traceback(fail-open 契約覆蓋設定錯誤)
-        deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "2.0"))
+        deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "5.0"))  # 2.0 在本 repo 幾乎必超(2026-08-21 一天降級 5+ 次)
     except (ValueError, TypeError):
         deadline = 2.0
     def _over():
@@ -11619,18 +11632,20 @@ def cmd_delguard_check(repo=None, as_json=False):
         tokens = parsed["tokens"][:DELGUARD_TOKEN_CAP]
         dropped = len(parsed["tokens"]) - len(tokens)
         if _over():
+            _delguard_log_degraded(gr, "timeout", len(tokens))
             if as_json:
                 _degraded_json("timeout", len(tokens))
             else:
-                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
+                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
             return 0
         rem = max(0.1, deadline - (time.monotonic() - t0))
         conf = _delguard_confidence(tokens, root, gr_rel, timeout=rem)
         if _over():
+            _delguard_log_degraded(gr, "timeout", len(tokens))
             if as_json:
                 _degraded_json("timeout", len(tokens))
             else:
-                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整")
+                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
             return 0
         hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=lambda: time.monotonic() - t0 > deadline)
         fake = []
@@ -11659,11 +11674,27 @@ def cmd_delguard_check(repo=None, as_json=False):
         print("  退場前自問: 1) 這次拿掉/反轉了什麼? 2) 上列原句逐句判:改動後還成立嗎?")
         print("  3) 還成立→一句話為什麼;不成立→現在改掉或標作廢。新增 verified_by/related 連結不算同步。")
         return 0
-    except Exception as e:
+    except subprocess.TimeoutExpired:
+        # git diff/grep 子程序逾時漏出來——那是「超時」不是「內部錯誤」(2026-08-21 體檢 #9:
+        # 當天印的「內部錯誤(TimeoutExpired)」全屬此類,誤導讀者以為壞了)
+        _delguard_log_degraded(locals().get("gr"), "timeout", len(locals().get("tokens", [])))
         if as_json:
-            _degraded_json("error", len(tokens))
+            _degraded_json("timeout", len(locals().get("tokens", [])))
         else:
-            print(f"delguard: 內部錯誤({e.__class__.__name__}),放行")
+            print(f"delguard: 超時降級(子程序逾時),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
+        return 0
+    except Exception as e:
+        _gr = locals().get("gr")
+        if not _gr:   # 例外可能發生在 gr 算出來之前(測試鉤子/早期 git 失敗)→ 自己找 vault 再落帳
+            try:
+                _gr = find_vault(Path(str(_cochange_repo_root(repo) or os.getcwd())))
+            except Exception:
+                _gr = None
+        _delguard_log_degraded(_gr, f"error:{e.__class__.__name__}", len(locals().get("tokens", [])))
+        if as_json:
+            _degraded_json("error", len(locals().get("tokens", [])))
+        else:
+            print(f"delguard: 內部錯誤({e.__class__.__name__}),放行(已記治理帳 delguard/degraded)")
         return 0
 
 

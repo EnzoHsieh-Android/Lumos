@@ -32,6 +32,7 @@ CODE_EXTS = {
     ".go",                                                    # Go
     ".rs",                                                    # Rust
     ".c", ".cc", ".cpp", ".h", ".hpp",                        # C/C++
+    ".sh", ".ps1",                                            # shell(2026-08-21 體檢 #7 補;四份清單由 t_code_exts_four_lists_agree 釘)
 }
 
 # === 即使副檔名對也要排除的路徑/檔名 ===
@@ -338,7 +339,7 @@ def emit_queue_patrol(project_root: Path) -> None:
     print(
         f"📋 rot-queue 累積 {len(entries)} 筆 finding 涵蓋 {len(verifs)} 篇 Verification "
         f"(oldest: {oldest[:10]})。"
-        f"\n   跑 `scripts/rot-queue-digest.sh` review 後 `--clear`,避免堆成黑洞。",
+        f"\n   跑 `lumos gov` 看 L3 rot 事件(rot-queue-digest.sh 從未存在,2026-08-21 更正)。",
         file=sys.stderr,
     )
 
