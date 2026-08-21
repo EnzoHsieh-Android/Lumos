@@ -202,7 +202,7 @@ def t_loop_gate():
 
     r = run(vault, "loop", "status", "g3", "--need", "2", "--gate", "--repo", str(repo))
     check("gate 案14(新契約): 缺 --spec → G1 skip,g3 收斂 rc 0",
-          r.returncode == 0 and "skipped" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
+          r.returncode == 0 and "跳過" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
 
 
 def t_loop_gate_need3():
@@ -225,7 +225,7 @@ def t_loop_gate_no_spec():
     rec("ns1", "minor", 2); rec("ns1", "minor", 3)
     r = run(vault, "loop", "status", "ns1", "--need", "2", "--gate", "--repo", str(repo))
     check("gate no-spec: G1 skip 但 G2 未枯竭 → rc 1",
-          r.returncode == 1 and "skipped" in r.stdout and "G2" in r.stdout, r.stdout)
+          r.returncode == 1 and "跳過" in r.stdout and "G2" in r.stdout, r.stdout)
 
 
 def t_write_lf_roundtrip():
@@ -718,7 +718,7 @@ def t_check_e2_build_on_superseded():
           "type: verification\nstatus: pass\ndate: 2026-01-01\nupdated: 2026-01-01\nplan_refs:\n  - \"[[Projects/D2]]\"", body="# C\n")
     r = run(v, "doctor")
     check("E2 只抓落後的 A 共 1 條(已跟上 B / 缺 ended C 未誤報)",
-          "發現 1 條可能建在被推翻決策上" in r.stdout, r.stdout)
+          "有 1 處可能建在被推翻的決策上" in r.stdout, r.stdout)
     check("E2 點名 A→D 落後邊", "Systems/A.md --verified_by--> Projects/D.md" in r.stdout, r.stdout)
     check("E2 不報已跟上的 B(updated 晚於 ended)", "Verification/B --" not in r.stdout, r.stdout)
     check("E2 不報缺 ended 的 C(無從時序比對)", "Verification/C --" not in r.stdout, r.stdout)
@@ -744,7 +744,7 @@ def t_decision_id_assignment():
     r = run(v, "decision-add", "S", "第一條決策", "--decided", "2026-07-15")
     check("M1 add 無 decisions → rc=0", r.returncode == 0, r.stderr)
     check("M1 首條指派 id: d1", "id: d1" in read(p), read(p))
-    check("M1 輸出帶 id", "id=d1" in r.stdout, r.stdout)
+    check("M1 輸出帶 id", "編號 d1" in r.stdout, r.stdout)
     r = run(v, "decision-add", "S", "第二條決策", "--decided", "2026-07-15")
     check("M1 第二條接續 d2(單調計數)", "id: d2" in read(p) and r.returncode == 0, read(p))
 
@@ -951,7 +951,7 @@ def t_check_e2_ledger_suppress():
     write(v, "Systems/A.md",
           "type: system\nstatus: done\nupdated: 2026-06-01\nverified_by:\n  - \"[[Projects/D]]\"", body="# A\n")
     r = run(v, "doctor")
-    check("M3 抑制前:E2 標 A(落後邊)", "發現 1 條可能建在被推翻決策上" in r.stdout, r.stdout)
+    check("M3 抑制前:E2 標 A(落後邊)", "有 1 處可能建在被推翻的決策上" in r.stdout, r.stdout)
     # 主網判過:cascade + prune A(terminal ts=今>=ended)→ 補網不重報
     lm = _lm(); env = lm.Env(v)
     gid = "Projects/D.md#d1"
@@ -960,7 +960,7 @@ def t_check_e2_ledger_suppress():
         "--edge", "verified_by", "--by", "human", expect_rc=0)
     r = run(v, "doctor")
     check("M3 抑制後:主/補網不重報(pruned terminal ts>=ended → E2 跳過)",
-          "無「建在被推翻決策上」的落後邊" in r.stdout, r.stdout)
+          "沒有筆記建在被推翻的決策上" in r.stdout, r.stdout)
 
 
 # ══ M4/S1-S4 觸發+typed hop-1+連鎖 ══
@@ -993,7 +993,7 @@ def t_supersede_triggers_cascade():
         "--edge", "verified_by", "--by", "ai", expect_rc=0)
     r = run(v, "doctor")
     check("M4 E2E:觸發建帳→prune→補網 E2 不重報",
-          "無「建在被推翻決策上」的落後邊" in r.stdout, r.stdout)
+          "沒有筆記建在被推翻的決策上" in r.stdout, r.stdout)
 
 
 def t_supersede_trigger_skip_and_failopen():
@@ -1128,7 +1128,7 @@ def t_e3_reads_ai_field_e2_does_not():
           "type: verification\nstatus: pass\ndate: 2026-05-02\ndecision_refs_ai:\n  - \"Projects/D.md#d1\"", body="# Vai\n")
     r = run(v, "doctor")
     check("E3 firing 讀 decision_refs_ai(ai 填的也提醒)",
-          "發現 1 條意圖鏈斷義" in r.stdout and "Vai" in r.stdout, r.stdout)
+          "有 1 份驗證紀錄引用的決策已經被翻案" in r.stdout and "Vai" in r.stdout, r.stdout)
     # E2 抑制:A 只有 ai 欄指向「別條 d2」→ 不得抑制(ai 碰不到抑制)→ A 仍被節點級標
     write(v, "Systems/A.md",
           "type: system\nstatus: done\nupdated: 2026-06-01\nverified_by:\n  - \"[[Projects/D]]\"\n"
@@ -1305,9 +1305,9 @@ def t_check_e3_intent_chain():
           "type: verification\nstatus: pass\ndate: 2026-06-11\ndecision_refs:\n"
           "  - \"Projects/D.md#d9\"\n  - \"Projects/Nope.md#d1\"", body="# VC\n")
     r = run(v, "doctor")
-    check("E3 抓斷義 1 條(指 d1 翻案)", "發現 1 條意圖鏈斷義" in r.stdout and "Verification/VA" in r.stdout, r.stdout)
+    check("E3 抓斷義 1 條(指 d1 翻案)", "有 1 份驗證紀錄引用的決策已經被翻案" in r.stdout and "Verification/VA" in r.stdout, r.stdout)
     check("E3 不報有效 d2", "Verification/VB.md → " not in r.stdout, r.stdout)
-    check("E3 dangling 2 條浮出(未指派 id+節點不存在)", "發現 2 條 dangling" in r.stdout, r.stdout)
+    check("E3 dangling 2 條浮出(未指派 id+節點不存在)", "有 2 個決策引用指向不存在的決策" in r.stdout, r.stdout)
 
 
 def t_check_e2_decision_refs_refinement():
@@ -1331,7 +1331,7 @@ def t_check_e2_decision_refs_refinement():
           "type: system\nstatus: done\nupdated: 2026-06-01\nverified_by:\n  - \"[[Projects/D]]\"", body="# C\n")
     r = run(v, "doctor")
     check("E2 精化:A(指到那條)+C(無 refs)共 2 條,B(指別條)不冤枉",
-          "發現 2 條可能建在被推翻決策上" in r.stdout, r.stdout)
+          "有 2 處可能建在被推翻的決策上" in r.stdout, r.stdout)
     check("E2 精化點名 A 與 C", "Systems/A.md --" in r.stdout and "Systems/C.md --" in r.stdout, r.stdout)
     check("E2 精化不報 B", "Systems/B.md --" not in r.stdout, r.stdout)
 
@@ -2176,7 +2176,7 @@ def t_lint():
     # system 缺 summary → error
     write(v, "Systems/NoSum.md", "type: system\nstatus: doing", body="# NS\n")
     r = run(v, "lint", "Systems/NoSum")
-    check("lint: system 缺 summary → rc1", r.returncode == 1 and "summary" in r.stdout, r.stdout)
+    check("lint: system 缺 summary → rc1", r.returncode == 1 and "摘要區塊" in r.stdout, r.stdout)
     # ghost trap(單字串多 wikilink)→ error(複用 frontmatter 指紋)
     write(v, "Systems/Ghost.md",
           "type: system\nstatus: doing\nrelated: \"[[A]], [[B]]\"\nsummary: |-\n  KEY:x", body="# Gh\n")
@@ -2863,7 +2863,7 @@ def t_reversibility_lint():
     write(v, "Issues/Bad.md",
           "type: issue\nstatus: open\nsummary: |-\n  KEY:★IRREVERSIBLE★ 標錯地方", body="# B\n")
     r = run(v, "lint", "Issues/Bad")
-    check("lint: 可逆性標記在非 Systems → rc1", r.returncode == 1 and "只能在 Systems" in r.stdout, r.stdout)
+    check("lint: 可逆性標記在非 Systems → rc1", r.returncode == 1 and "只能標在功能筆記(Systems)" in r.stdout, r.stdout)
     # ── [guard:decisions] 事前預防路徑(與 rollback 兩軌任一合規)──
     write(v, "Systems/Gd1.md",
           "type: system\nstatus: doing\n"
@@ -3001,7 +3001,7 @@ def t_gov_hides_run_marker_unless_full():
         check("run-marker: --stats 去重筆數 == 2(斷數字)", bool(row) and " 2 " in row[0], seg)
         # 尾端「N 筆」須與實際印出一致(不含被隱藏的 doctor-run)
         import re as _re
-        m = _re.search(r"\n(\d+) 筆\(近", plain)
+        m = _re.search(r"\n近 \d+ 天共 (\d+) 筆", plain)
         shown = sum(1 for l in plain.splitlines() if _re.match(r"^\d{4}-\d{2}-\d{2} \[", l))
         check("run-marker: 預設尾端筆數 == 實際印出事件行數", m is not None and int(m.group(1)) == shown, f"tail={m.group(1) if m else None} shown={shown}")
     finally:
@@ -3072,7 +3072,7 @@ def t_gov_stats_three_layers():
         out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
         seg = [l for l in out.splitlines() if l.strip().startswith("check-s")]
         check("stats: 三行重複 → 去重 1 / 原始 3", bool(seg) and " 1 " in seg[0] and " 3 " in seg[0], out)
-        check("stats: 印出「不等於預設畫面行數」聲明", "預設畫面" in out and "呈現折疊" in out, out)
+        check("stats: 印出「不等於預設畫面行數」聲明", "預設畫面" in out and "折疊" in out, out)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -3747,7 +3747,7 @@ def _mk_git_vault():
 
 def t_check_h_irreversible_hint():
     import subprocess
-    HEAD = "疑似碰外部不可逆"  # warn_soft head 的特徵詞
+    HEAD = "疑似碰到做了就回不去的操作"  # warn_soft head 的特徵詞
 
     # 1. smoke:staged 含 prod requests.post → 提示
     root, vault = _mk_git_vault()
@@ -5002,8 +5002,8 @@ def t_context_valid_under_warning():
     write(v, "Verification/old.md",
           'type: verification\nstatus: pass\ndate: 2020-01-01\nvalid_under:\n  - "DB schema v1 未變"')
     r = run(v, "context", "Verification/old")
-    check("context: valid_under 警示 header", "⚠ 使用前驗證(valid_under" in r.stdout, r.stdout)
-    check("context: >90 天紅標", "⚠ 節點已" in r.stdout, r.stdout)
+    check("context: valid_under 警示 header", "valid_under" in r.stdout, r.stdout)
+    check("context: >90 天紅標", "天沒更新" in r.stdout, r.stdout)
     check("context: 條件內容印出", "DB schema v1 未變" in r.stdout, r.stdout)
 
     # 新節點(date=今天 → 有警示但無紅標)
@@ -5011,8 +5011,8 @@ def t_context_valid_under_warning():
     write(v, "Verification/fresh.md",
           f'type: verification\nstatus: pass\ndate: {today}\nvalid_under:\n  - "並發 <= 1000 RPS"')
     r2 = run(v, "context", "Verification/fresh")
-    check("context: 新節點有警示", "⚠ 使用前驗證(valid_under" in r2.stdout, r2.stdout)
-    check("context: 新節點無紅標", "⚠ 節點已" not in r2.stdout, r2.stdout)
+    check("context: 新節點有警示", "valid_under" in r2.stdout, r2.stdout)
+    check("context: 新節點無紅標", "天沒更新" not in r2.stdout, r2.stdout)
 
     # 無 valid_under → 不印警示
     write(v, "Systems/plain.md", 'type: system\nstatus: done\nupdated: 2020-01-01')
@@ -5113,7 +5113,7 @@ def t_doctor_check_p():
     # 案例 6:無 docs/ 佈局(mkvault 的 vault 不在 docs/ 下)→ Check P 略過
     v2 = mkvault()
     r2 = run(v2, "doctor")
-    check("Check P: 無 docs/ 佈局略過", "略過失效認領" in r2.stdout, r2.stdout)
+    check("Check P: 無 docs/ 佈局略過", "檔案路徑檢查跳過" in r2.stdout, r2.stdout)
 
 
 def _mk_refcheck_repo():
@@ -5254,7 +5254,7 @@ def t_anchor():
 
     # 重 approve(容忍缺檔:警示 + 只寫存在的 4 個)→ verify 回 0
     r = run(vault, "anchor", "approve", "--repo", str(root), "--note", "重簽")
-    check("anchor: 缺檔重 approve rc=0 帶警示", r.returncode == 0 and "缺失" in r.stdout,
+    check("anchor: 缺檔重 approve rc=0 帶警示", r.returncode == 0 and "不存在" in r.stdout,
           f"rc={r.returncode}\n{r.stdout}")
     data = _json.loads(bp.read_text(encoding="utf-8"))
     check("anchor: 重簽後 baseline 4 錨點", len(data["anchors"]) == 4, str(data["anchors"].keys()))
@@ -5516,7 +5516,7 @@ def t_checkn_silent_without_markers():
     root, v = _n_repo("沒有任何標記的普通內文", {"src/a.cs": "x\n"})
     r = run(v, "doctor")
     check("Check N: 無標記時給引導不報錯",
-          "無 lumos:count 標記" in r.stdout, r.stdout)
+          "沒有任何數字帶重算標記" in r.stdout, r.stdout)
 
 
 # ══ Check U:全稱宣稱未綁測試(成因 G「過度概化」,2026-08-12)══
@@ -5537,7 +5537,7 @@ def t_checku_fires_on_universal_claim_without_test():
     v = _u_vault("KEY:凡顯示該表的查詢都必須按事件鍵折疊,否則一事件顯示 N 列")
     r = run(v, "lint", "S")
     check("Check U: 通則宣稱無 [test:] → warn",
-          "Check U" in r.stdout, r.stdout)
+          "疑似「通則」宣稱但未綁測試" in r.stdout, r.stdout)
 
 
 def t_checku_silent_when_bound_to_test():
@@ -9221,7 +9221,7 @@ def t_panel_near_perfect_and_gov_ledger():
         _rec(d, "caught", "--loop", "NP2", "--round", "r1", "--token", "A", "--severity", "clean")
         r = _sp.run([sys.executable, GRAPHCTL, "loop", "status", "NP2", "--gate", "--panel"],
                     cwd=str(Path(d)), capture_output=True, text=True)
-        check("near-perfect: 1caught 0missed → 輪無效 rc1(else 分支)", r.returncode == 1 and "<2" in r.stdout,
+        check("near-perfect: 1caught 0missed → 輪無效 rc1(else 分支)", r.returncode == 1 and "少於 2 人" in r.stdout,
               f"rc={r.returncode}\n{r.stdout}")
 
     # gov 分帳:無 --auditor 的 record 歸 '?' 桶(終審 F2:不誤吞 note 首字)
@@ -9298,7 +9298,7 @@ def t_loop_panel_gate():
         r = _gate(d, "--panel")
         check("panel: 殘餘超門檻 → advisory 不擋 rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
         check("panel: 超門檻仍印 advisory 觀測行(含估計值)",
-              "advisory" in r.stdout and "6.00" in r.stdout, r.stdout)
+              "僅供參考" in r.stdout and "6.00" in r.stdout, r.stdout)
         check("panel: PASS 橫幅不再宣稱 capture 枯竭", "枯竭" not in r.stdout, r.stdout)
 
     # 混用守衛:--panel 但 log 無 round → rc2
@@ -9323,7 +9323,7 @@ def t_loop_panel_gate():
         r = _gate(d, "--panel")
         check("panel: 無 capture_counts → advisory 缺席提示不擋 rc0",
               r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
-        check("panel: 缺席提示行存在", "殘餘觀測缺席" in r.stdout, r.stdout)
+        check("panel: 缺席提示行存在", "沒有重疊數據" in r.stdout, r.stdout)
 
     # I1 partial-mix:同 loop 有 round 欄記錄 + 無 round 欄記錄混用 → rc2(防 None phantom 輪)
     with tempfile.TemporaryDirectory() as d:
@@ -9405,7 +9405,7 @@ def t_capture_advisory():
         log.write_text("\n".join(_json7.dumps(x, ensure_ascii=False) for x in rows) + "\n",
                        encoding="utf-8")
         r = _gate(d)
-        check("advisory: ⑦壞型 counts → 觀測行印壞型", "壞型" in r.stdout, r.stdout)
+        check("advisory: ⑦壞型 counts → 觀測行印壞型", "格式不對" in r.stdout, r.stdout)
         check("advisory: ⑦不得靜默算假 0.00", "估計 0.00" not in r.stdout, r.stdout)
 
     # ⑧ K=2 前一輪 counts 壞型 → obs 印壞型不印假值
@@ -9472,7 +9472,7 @@ def t_canary_stats_overlap():
         log.write_text("\n".join(_json.dumps(x, ensure_ascii=False) for x in rows) + "\n",
                        encoding="utf-8")
         r = _stats(d, "OV")
-        check("overlap: ③字串型 counts → 壞型提示", "壞型" in r.stdout, r.stdout)
+        check("overlap: ③字串型 counts → 壞型提示", "格式不對" in r.stdout, r.stdout)
         check("overlap: ③不靜默納入統計(缺陷數不含該筆)", "3/3" not in r.stdout, r.stdout)
 
     # ④ 無 counts loop → 無重疊數據、不炸
@@ -9494,8 +9494,8 @@ def t_canary_stats_overlap():
         log.write_text("\n".join(_json.dumps(x, ensure_ascii=False) for x in rows) + "\n",
                        encoding="utf-8")
         r = _stats(d, "OV")
-        check("overlap: ⑤bool 混入 → 壞型(不得當 1/0 靜默算)", "壞型" in r.stdout, r.stdout)
-        check("overlap: ⑤badtype-only 訊息不說「不帶」", "全為壞型" in r.stdout, r.stdout)
+        check("overlap: ⑤bool 混入 → 壞型(不得當 1/0 靜默算)", "格式不對" in r.stdout, r.stdout)
+        check("overlap: ⑤badtype-only 訊息不說「不帶」", "全部格式不對" in r.stdout, r.stdout)
 
 
 def t_loop_panel_none_kind():
@@ -9532,7 +9532,7 @@ def t_loop_panel_none_kind():
         r = _gate(d)
         check("none: 2 none+乾淨+高重疊 → rc0(no-canary 制輪有效)", r.returncode == 0,
               f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
-        check("none: 印 no-canary 制字樣", "no-canary" in r.stdout, r.stdout)
+        check("none: 印 no-canary 制字樣", "都記了帳" in r.stdout, r.stdout)
 
     # ② none 輪帶 major → rc1(嚴重度合取讀 none 列)
     with tempfile.TemporaryDirectory() as d:
@@ -12281,7 +12281,7 @@ def t_search_multiword_fallback_scope_message_covers_path_and_superseded():
     check("★--path 限定時不得宣稱「全庫」★", "全庫" not in r.stderr, r.stderr)
     r2 = lum("search", "子丑 寅卯", "--files-only")
     check("★沒有 --path 時,訊息不得憑空冒出路徑範圍★",
-          "底下" not in r2.stderr and "未作廢的節點的可見文字裡無命中" in r2.stderr, r2.stderr)
+          "底下" not in r2.stderr and "未作廢的節點的可見文字裡找不到完全一致" in r2.stderr, r2.stderr)
 
     # ★第四個維度:--code(r3 抓到)★——預設不搜程式碼區塊,說「節點裡無命中」不精確。
     # ★這段第一版是假綠(第 14 次,r4 Codex 實跑打臉)★:原 fixture 讓完整片語在
@@ -12349,7 +12349,7 @@ def t_search_multiword_fallback_r1_three_majors():
     check("★① 不得宣稱「全庫無命中」——片語其實存在,只是被歸檔了★",
           "全庫無命中" not in r.stderr, r.stderr)
     check("★① 必須講清楚範圍是「未作廢的節點」★",
-          "未作廢的節點" in r.stderr and "無命中" in r.stderr, r.stderr)
+          "未作廢的節點" in r.stderr and "找不到完全一致" in r.stderr, r.stderr)
     # --include-superseded 時範圍才真的是全庫
     r2 = lum("search", "壬癸 甲乙", "--include-superseded", "--files-only")
     check("★① --include-superseded 時片語找得到,不該回退★",
@@ -12424,7 +12424,7 @@ def t_search_multiword_fallback_reports_per_term_coverage():
     check("★② 全庫 0 命中的詞要標記出來(這是本功能的核心價值)★",
           "★庚:0★" in r.stderr, r.stderr)
     check("★② 並提醒「多半是用詞不一致」,別把結果當「圖譜沒有」★",
-          "用詞與圖譜用語不一致" in r.stderr, r.stderr)
+          "跟圖譜裡的說法不一樣" in r.stderr, r.stderr)
     # ③ 走 stderr,不得污染 stdout
     check("★③ 覆蓋資訊只走 stderr,stdout 一個字都不能有★",
           "逐詞覆蓋" not in r.stdout and "多詞回退" not in r.stdout, r.stdout)
@@ -13504,7 +13504,7 @@ def t_m2_cluster_gate():
         check("M2 gate: 首個有效輪 resolved+accepted-minor → PASS(K=1)",
               r.returncode == 0 and "PASS" in r.stdout, f"rc={r.returncode}\n{r.stdout}{r.stderr}")
         check("M2 ledger: accepted-minor 理由顯示", "小字可忍" in r.stdout, r.stdout)
-        check("M2 advisory: 無 counts 不 fail-closed", "advisory" in r.stdout, r.stdout)
+        check("M2 advisory: 無 counts 不 fail-closed", "僅供參考" in r.stdout, r.stdout)
         check("M2 advisory: 新生 cluster 計數+名單格式", "新生 cluster: 2 個" in r.stdout and "a,b" in r.stdout, r.stdout)
 
     # disputed-major 擋
@@ -13645,7 +13645,7 @@ def t_m2_cluster_gate():
         _round(d, "r2", ["caught", "missed"], 0, "b=resolved")   # 判定輪無效
         r = _st(d)
         check("M2 advisory: 判定輪無效 → 新生統計不適用+FAIL",
-              r.returncode == 1 and "不適用" in r.stdout, r.stdout)
+              r.returncode == 1 and "不統計" in r.stdout, r.stdout)
     with tempfile.TemporaryDirectory() as d:
         _mkvault(d)
         for i, tok in enumerate(("A", "B")):
@@ -13655,7 +13655,7 @@ def t_m2_cluster_gate():
             _rec(d, "caught", "--loop", "CL", "--round", "r1", *extra)
         r = _st(d)
         check("M2 advisory: capture 殘餘超門檻仍 PASS(不進合取)",
-              r.returncode == 0 and "advisory" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
+              r.returncode == 0 and "僅供參考" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
     # 無效輪同名多筆:警告區全列(不覆蓋)
     with tempfile.TemporaryDirectory() as d:
         _mkvault(d)
@@ -13680,7 +13680,7 @@ def t_m2_cluster_gate():
         log.write_text("".join(_j.dumps(x, ensure_ascii=False) + "\n" for x in rows), encoding="utf-8")
         r = _st(d)
         check("M2 零有效輪: cluster-intent+unknown-kind 不放行(未定錨嚴格謂詞)",
-              r.returncode == 1 and "未定錨" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
+              r.returncode == 1 and "還沒定下來" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
     # --gate 對 panel no-op
     with tempfile.TemporaryDirectory() as d:
         _mkvault(d)
@@ -13696,7 +13696,7 @@ def t_m2_cluster_gate():
         _round(d, "r1", ["caught", "caught"])            # 無 clusters,無 counts
         r = _st(d)
         check("M2 迴歸: 無-cluster 舊帳 capture 降 advisory → rc0+缺席提示",
-              r.returncode == 0 and "殘餘觀測缺席" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
+              r.returncode == 0 and "沒有重疊數據" in r.stdout, f"rc={r.returncode}\n{r.stdout}")
 
 
 def t_testlayers_units():
@@ -14049,7 +14049,7 @@ def t_e2_ledger_tz_boundary():
     cid_file.write_text("\n".join(out) + "\n", encoding="utf-8")
     r = run(v, "doctor")
     check("E2 時區跨日:本地今日的判定(UTC 表示為昨日)不得重報",
-          "無「建在被推翻決策上」的落後邊" in r.stdout, r.stdout)
+          "沒有筆記建在被推翻的決策上" in r.stdout, r.stdout)
     print("  ✓ t_e2_ledger_tz_boundary")
 
 
@@ -14140,7 +14140,7 @@ def t_m1_hash_chain():
     run(v, "canary", "record", "caught", "--loop", f"hc4-{_M1U}", "--severity", "minor", "--findings", "1", expect_rc=0)
     run(v, "canary", "record", "caught", "--loop", f"hc4-{_M1U}", "--severity", "clean", "--findings", "0", expect_rc=0)
     r = run(v, "loop", "status", f"hc4-{_M1U}", "--need", "2", "--gate", "--spec", str(spec3), "--repo", str(v.parent))
-    check("聲明式無 hash FAIL", r.returncode == 1 and "未綁" in r.stdout)
+    check("聲明式無 hash FAIL", r.returncode == 1 and "沒留下" in r.stdout)
     # 不帶 --spec 舊用法不變(G1 skip 可 PASS)
     r = run(v, "loop", "status", f"hc4-{_M1U}", "--need", "2", "--gate", "--repo", str(v.parent))
     check("不帶 --spec 舊用法 rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout[-200:]}")
@@ -14231,7 +14231,7 @@ def t_loop_next_cluster_hint_only_when_choice_is_open():
           d["phase"] == "plant-canary" and d["round"] == 1 and d["tier"] == "standard", r.stdout[:200])
     check("★N=1(選擇還開著)必須提示 cluster 帳★", "cluster_hint" in d, r.stdout[:300])
     check("★提示要講清楚『只有現在能選』★(不然看到也不知道有時效)",
-          "第一輪" in d.get("cluster_hint", "") and "開新 loop id" in d.get("cluster_hint", ""),
+          "第一輪" in d.get("cluster_hint", "") and "開新編號" in d.get("cluster_hint", ""),
           d.get("cluster_hint", "")[:200])
     check("★文字模式也要印出來★(不能只有 --json 看得到)",
           "cluster_hint" in run(v, "loop", "next", lid, "--tier", "standard").stdout, "")
@@ -14687,7 +14687,7 @@ def t_disposal_gate_r3_panel_hardening():
     rr = run(v, "canary", "record", "caught", "--loop", lid1, "--round", "__seq0",
              "--auditor", "s1", "--severity", "minor")
     check("★--round __ 開頭=內部保留字首 rc2(撞鍵可讓舊 carrier 冒充最新處置帳)★",
-          rr.returncode == 2 and "保留字首" in rr.stderr, f"rc={rr.returncode} {rr.stderr[:150]}")
+          rr.returncode == 2 and "保留這個字首" in rr.stderr, f"rc={rr.returncode} {rr.stderr[:150]}")
 
     # ── ② 混用守衛:round-less + 帶 round 同 loop → disposal rc2 明確訊息 ──
     lid2 = f"r3b-{_M1U}"
@@ -14980,7 +14980,7 @@ def t_loop_next_legacy_emits_a_command_that_actually_runs():
           f"rc={rr.returncode} cmd={filled}\n{rr.stderr[:300]}")
 
     check("★要講清楚這個 loop 補標不了、得開新 id★(不然人只會困惑地把旗標拿掉)",
-          "開新 loop id" in d.get("tier_hint", "") and "cap 6" in d.get("tier_hint", ""),
+          "開新的審查編號" in d.get("tier_hint", "") and "最多 6 輪" in d.get("tier_hint", ""),
           d.get("tier_hint", "")[:200])
 
     # 反誤傷:可宣告的三檔仍須照舊帶 --tier
@@ -15263,7 +15263,7 @@ def t_show():
     check("show 含 body 標題行", "# 秀測試" in r.stdout and "body-內文-唯一標記" in r.stdout)
     # 2. 找不到 → stderr 訊息 + rc2
     r = run(v, "show", "不存在的節點名", expect_rc=2)
-    check("show 找不到 rc2+stderr", "找不到筆記" in r.stderr)
+    check("show 找不到 rc2+stderr", "找不到叫" in r.stderr)
     # 3. --body-only → 無 frontmatter 鍵行、有 body
     r = run(v, "show", "秀測試", "--body-only", expect_rc=0)
     check("body-only 無 frontmatter 鍵行", "type: system" not in r.stdout and not r.stdout.startswith("---"))
@@ -20832,7 +20832,7 @@ def t_loop_status_roster_check():
     V = "rl-vac"
     rec(V, "r1", "lens1-sonnet"); rec(V, "r1", "lens2-sonnet")
     rv = run(vault, "loop", "status", V, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
-    check("status-roster: 無派工快照→vacuous 措辭", "無派工快照" in rv.stdout, rv.stdout[:600])
+    check("status-roster: 無派工快照→vacuous 措辭", "沒有派工快照" in rv.stdout, rv.stdout[:600])
     # 非字串 auditor(數字/巢狀物)不炸:計 unknown、其餘輪照常對帳(major 修的翻紅釘)
     C4 = "code-badtype"
     rec(C4, "r1", "lens1-sonnet", tier="high")
@@ -20849,7 +20849,7 @@ def t_loop_status_roster_check():
     K = "codestage7"
     rec(K, "r1", "lens1-sonnet"); rec(K, "r1", "lens2-sonnet")
     rk = run(vault, "loop", "status", K, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
-    check("status-roster: indeterminate id→kind 無法判定跳過", "kind 無法判定" in rk.stdout, rk.stdout[:600])
+    check("status-roster: indeterminate id→kind 無法判定跳過", "看不出是設計審還是代碼審" in rk.stdout, rk.stdout[:600])
     # 四模式落點:--panel/--light/--settle 也吃得到觀測(前置斷言:各模式呼叫本身有輸出)
     rp = run(vault, "loop", "status", L, "--panel", "--spec", str(spec), "--repo", str(repo), "--roster")
     check("status-roster: --panel 模式觀測有印", "[roster]" in rp.stdout, rp.stdout[:400] + rp.stderr[:200])
@@ -20896,7 +20896,7 @@ def t_seq_code_std_anchor():
     _seq_rec(vault, "dz-seqfix", tier="standard")
     rd = run(vault, "loop", "next", "dz-seqfix", "--json")
     check("seq-anchor: ★前置★ design+standard 無 round 仍 rc2(守衛未被整條拆掉)",
-          rd.returncode == 2 and "panel 格式" in rd.stderr, f"rc={rd.returncode} {rd.stderr[:200]}")
+          rd.returncode == 2 and "都要帶輪次" in rd.stderr, f"rc={rd.returncode} {rd.stderr[:200]}")
 
 
 def t_seq_code_std_panel_ok():
@@ -20963,7 +20963,7 @@ def t_seq_tier_hint_warning():
     r = run(vault, "loop", "next", "code-oldseq", "--spec", str(sp), "--json")
     d = _j.loads(r.stdout.strip())
     check("tier-hint: ★前置★ 走到派工階段(hint 有吐)", bool(d.get("tier_hint")), str(d.get("phase")))
-    check("tier-hint: code legacy loop 含「整批計入」警告", "整批計入" in d.get("tier_hint", ""), d.get("tier_hint", "")[:300])
+    check("tier-hint: code legacy loop 含「整批計入」警告", "整批算進" in d.get("tier_hint", ""), d.get("tier_hint", "")[:300])
     _seq_rec(vault, "dz-oldseq")
     r2 = run(vault, "loop", "next", "dz-oldseq", "--spec", str(sp), "--json")
     d2 = _j.loads(r2.stdout.strip())

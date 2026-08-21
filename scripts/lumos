@@ -127,7 +127,7 @@ def parse_frontmatter(fm_lines):
             continue
         key, val = m.group(1), m.group(2).strip()
         if key in seen:
-            lint.append(f"鐵則4 同層重複鍵: {key}")
+            lint.append(f"同一層欄位名重複,工具不知道該信哪個: {key}")
         seen.add(key)
         if val in ("|", "|-", ">", ">-"):
             block = []
@@ -154,9 +154,9 @@ def parse_frontmatter(fm_lines):
                     item = strip_quotes(ms.group(1).strip())
                     items.append(item)
                     if "]], [[" in item or "]],[[" in item:
-                        lint.append(f"鐵則1 單字串多 wikilink: {key} 項 → ghost 節點風險")
+                        lint.append(f"一個欄位塞了多個連結卻寫成一串字,會被當成一個不存在的 ghost 筆記,要拆成一行一項: {key} 項")
                 if RULE3_RE.match(l2):
-                    lint.append(f"鐵則3 未引號值含「: 」: {l2.strip()[:60]}")
+                    lint.append(f"欄位值裡有「冒號+空白」又沒加引號,讀出來會被切斷,整個值請用引號包起來: {l2.strip()[:60]}")
                 i += 1
             fields[key] = items
             continue
@@ -167,11 +167,11 @@ def parse_frontmatter(fm_lines):
             continue
         fields[key] = sval
         if "]], [[" in sval or "]],[[" in sval:
-            lint.append(f"鐵則1 單字串多 wikilink: {key} → ghost 節點風險")
+            lint.append(f"一個欄位塞了多個連結卻寫成一串字,會被當成一個不存在的 ghost 筆記,要拆成一行一項: {key}")
         i += 1
     for line in fm_lines:
         if QUOTED_DATE_RE.match(line):
-            lint.append(f"污染指紋 日期加引號(property 型別損傷): {line.strip()}")
+            lint.append(f"日期加了引號會被當成文字、排序比較都失效,引號拿掉: {line.strip()}")
     return fields, block_keys, lint
 
 
@@ -495,14 +495,14 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             elif dest != rel:
                 incoming[dest] += 1
 
-    section("1/4", "Verification orphans (沒掛進任何 Systems.verified_by / 無 incoming link)")
+    section("1/4", "驗證紀錄有沒有掛到它驗證的功能上(沒掛的驗證紀錄等於沒人找得到)")
     # [真遺忘第二刀 2026-07-26] superseded 豁免 orphan 檢查——E1 判死背書叫拔、拔了變 orphan
     # 再被這裡唸=刀子咬尾巴;作廢=該遺忘無事可辦(stale/fail 不豁免:待重驗,orphan 提醒仍有用)。
     orphans = [rel for rel in notes
                if rel.startswith("Verification/") and incoming[rel] == 0
                and status_of(env, rel).strip() != "superseded"]
     if not orphans:
-        ok("沒有 Verification orphan")
+        ok("每份驗證紀錄都有被引用")
     elif suggest:
         print(f"  {C['Y']}⚠{C['X']} 發現 {len(orphans)} 個 Verification 沒任何 incoming link(附推薦掛載 Systems):")
         for o in sorted(orphans):
@@ -518,7 +518,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         print(f"  {C['B']}建議動作{C['X']}: 確認後 `lumos append <Systems> verified_by \"[[<本篇>]]\"`"
               ";若推薦理由是「本篇正文連向」(verified_by 漏寫)→ `lumos sync-verified-by` 可批次補。")
     else:
-        warn(sorted(orphans), f"發現 {len(orphans)} 個 Verification 沒任何 incoming link:",
+        warn(sorted(orphans), f"有 {len(orphans)} 份驗證紀錄沒被任何筆記引用(等於沒人找得到):",
              "找到它驗證的 Systems 並補進 verified_by(`--suggest` 看推薦掛載目標)")
     print()
 
@@ -531,7 +531,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     # ★寫入端 `load_raw_for_edit` 對同一狀態明確 raise ValueError,讀取端卻默默照收★
     # ——這道檢查就是把讀取端的沉默補成響亮。放硬 issue(不是軟提醒):它會讓
     # pre-push 的 `doctor --ci` 擋下來,因為靜默少一條合約正是本工具最不能接受的事。
-    section("1.5/4", "未閉合 frontmatter (整份檔被當 body 索引 → 合約靜默蒸發)")
+    section("1.5/4", "筆記開頭的欄位區塊有沒有正確收尾(沒收尾整篇會被當成正文,合約標記就消失了)")
     _fm_broken = []
     for _rel in sorted(env.notes):
         try:
@@ -547,21 +547,21 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         ok("沒有未閉合的 frontmatter")
     else:
         warn(_fm_broken,
-             f"發現 {len(_fm_broken)} 篇 frontmatter 開了沒收(以 --- 起頭但找不到收尾 ---):",
+             f"有 {len(_fm_broken)} 篇筆記開頭欄位區塊沒收尾(有起頭的 --- 沒有結尾的 ---),整篇會被當成正文:",
              "補上收尾的 `---`。★在補之前該檔的硬合約不會出現在 contracts、"
              "block scalar 裡的 [[連結]] 會變成真的圖譜邊★")
     print()
 
-    section("2/4", "Unresolved wikilinks (破連結)")
+    section("2/4", "有沒有連到不存在筆記的連結")
     if not unresolved:
-        ok("沒有 unresolved wikilink")
+        ok("沒有連到不存在筆記的連結")
     else:
         warn([f"[[{t}]]" for t in sorted(unresolved)],
-             f"發現 {len(unresolved)} 個 unresolved wikilink targets:",
+             f"有 {len(unresolved)} 個連結連到不存在的筆記:",
              "建立目標筆記 / 修正打錯的名字 / 移除過時引用")
     print()
 
-    section("3/4", "verified_by 雙向同步 (Verification → Systems 漏寫)")
+    section("3/4", "驗證紀錄說它驗了某功能,功能那邊有沒有反向登記")
     # 以 resolve 到的 rel 比對:path 式 [[Verification/X]] 與 basename [[X]] 等價(同篇),
     # 但 [[Projects/X]] 與 Verification/X 不同篇(第二輪審計 NEW-B)。存 Verification 的 rel。
     expected = defaultdict(set)
@@ -588,13 +588,13 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         if missed:
             missing.append(f"{sys_rel} 漏: {' | '.join(missed)}")
     if not missing:
-        ok("所有 Verification 都已掛進對應 Systems 的 verified_by")
+        ok("每份驗證紀錄都掛到了它驗證的功能上")
     else:
-        warn(missing, f"發現 {len(missing)} 個 Systems 的 verified_by 漏寫:",
+        warn(missing, f"有 {len(missing)} 篇功能筆記沒反向登記它的驗證紀錄(verified_by 漏寫):",
              "對每個 Systems 補上漏寫的 verified_by")
     print()
 
-    section("4/4", "plan_refs 意圖鏈 (計劃結案後的迭代驗證,計劃有沒有跟上)")
+    section("4/4", "計劃結案之後又有新驗證,計劃本身有沒有跟著更新")
     chain = []
     for rel, n in notes.items():
         if not rel.startswith("Verification/"):
@@ -619,36 +619,36 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 chain.append(f"{notes[dest].stem} (status:{status}, updated:{p_updated}) "
                              f"結案後有較新驗證: {n.stem}")
     if not chain:
-        ok("意圖鏈完整 (無結案計劃漏接迭代驗證、無 plan_refs 斷鏈)")
+        ok("每個結案計劃都有跟上它後來的驗證,沒有斷掉的引用")
     else:
-        warn(sorted(chain), f"發現 {len(chain)} 個意圖鏈問題:",
+        warn(sorted(chain), f"有 {len(chain)} 個計劃結案後沒跟上新驗證、或引用斷掉:",
              "結案計劃有較新驗證 → 更新計劃本體; 斷鏈 → 修正 plan_refs 路徑")
     print()
 
-    section("G", "同名 basename 守衛 (連結解析歧義)")
+    section("G", "有沒有兩篇筆記同檔名(連結會分不清要連哪一篇)")
     if not collisions:
-        ok("無同名筆記,basename 解析無歧義")
+        ok("沒有同檔名的筆記,連結不會連錯")
     else:
         warn([f"{s}: {' , '.join(sorted(rs))}" for s, rs in sorted(collisions.items())],
-             f"發現 {len(collisions)} 組同名 basename — 不帶路徑的 [[連結]] 解析有歧義:",
+             f"有 {len(collisions)} 組筆記同檔名——不帶資料夾的連結會分不清要連哪篇:",
              "改名其一,或全 vault 引用改用完整路徑形態")
     print()
 
-    section("L", "frontmatter lint (鐵則 1/3/4 指紋 + 污染指紋; python 版加值)")
+    section("L", "筆記開頭欄位的格式有沒有踩到已知會讓工具讀錯的寫法")
     lint_lines = []
     for rel, n in sorted(notes.items()):
         for l in n.lint:
             lint_lines.append(f"{rel}: {l}")
     if not lint_lines:
-        ok("無鐵則指紋、無污染指紋")
+        ok("筆記開頭欄位沒踩到已知會讀錯的寫法")
     else:
-        warn(lint_lines, f"發現 {len(lint_lines)} 個 frontmatter 指紋:",
+        warn(lint_lines, f"有 {len(lint_lines)} 處開頭欄位踩到已知會讀錯的寫法:",
              "鐵則修法見 lumos-project-notes skill; 污染指紋見 pre-commit Gate 1 指引")
     print()
 
     # Check M: 狀態標籤漂移(status 欄位 vs tags 的 status/*;反正規化完整性,
     # 兜住繞過 set status 同步的寫入路徑;見 Projects/狀態標籤同步守衛_計劃)
-    section("M", "狀態標籤漂移 (status 欄位 vs tags 的 status/* 不一致)")
+    section("M", "狀態欄位跟狀態標籤有沒有講同一件事")
     drift_lines = []
     for rel, n in sorted(notes.items()):
         st = n.fields.get("status")
@@ -658,15 +658,15 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             if isinstance(tg, str) and tg.startswith("status/") and tg != f"status/{st.strip()}":
                 drift_lines.append(f"{rel}: status={st} vs {tg}")
     if not drift_lines:
-        ok("status 欄位與 status/* 標籤全同步")
+        ok("狀態欄位跟狀態標籤一致")
     else:
-        warn(drift_lines, f"發現 {len(drift_lines)} 處狀態標籤漂移:",
+        warn(drift_lines, f"有 {len(drift_lines)} 篇的狀態欄位跟狀態標籤不一致(漂移):",
              "`lumos set <節點> status <值>` 會連標籤一起同步;手改請對齊兩處")
     print()
 
     # Check C: core_refs 跨 repo 指針完整性(只在有 core_refs 時跑)
     import os
-    section("C", "core_refs 跨 repo 指針 (指向核心知識 repo 的檔案是否存在)")
+    section("C", "指向跨專案核心知識庫的指針,對方檔案還在不在")
     repo_root = None
     for p in env.vault.parents:
         if p.name == "docs":
@@ -687,7 +687,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         first_seg = core_refs_all[0][1].split("/", 1)[0]
         core_base = repo_root.parent / first_seg
     if not core_refs_all:
-        ok("無 core_refs 指針")
+        ok("沒有指向跨專案核心知識庫的指針")
     elif core_base is None or not core_base.is_dir():
         # 核心 repo 不在此環境(如 CI 未 checkout 跨 repo)→ 跳過,不誤判懸空
         print(f"  {C['Y']}—{C['X']} 核心 repo 不在此環境(CI 未 checkout?),跳過跨 repo 檢查"
@@ -704,23 +704,23 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             if not target.exists():
                 dangling.append(f"{rel} → {ref}")
         if not dangling:
-            ok(f"所有 core_refs 指針有效 ({len(core_refs_all)} 條)")
+            ok(f"{len(core_refs_all)} 個跨專案指針都指到存在的檔")
         else:
-            warn(dangling, f"發現 {len(dangling)} 條懸空 core_refs (指向核心 repo 不存在的檔):",
+            warn(dangling, f"有 {len(dangling)} 個跨專案指針指向核心知識庫裡不存在的檔:",
                  "核心 repo 改名/移檔 → 修專案 core_refs 路徑(指針紀律不留快照,懸空=權威失聯)")
     print()
 
     # Check T: ★INVARIANT★ 合約測試綁定(載重宣稱必須認領存在的可執行證據)
     # 「形式 → 真」缺的那一環:doctor 不執行測試,但強制每條 ★INVARIANT★ 指向一個
     # 真實存在的測試 → 杜絕「裸合約」(宣稱無證據)與「懸空 test_ref」(綁了不存在的測試)。
-    section("T", "★INVARIANT★ 合約測試綁定 (載重宣稱有沒有綁可執行證據)")
+    section("T", "標成「不能破壞的合約」的規則,有沒有綁到一條真的會跑的測試")
     inv_all = []
     for rel, n in sorted(notes.items()):
         invs, _ = extract_contracts(n)
         for inv in invs:
             inv_all.append((rel, inv))
     if not inv_all:
-        ok("無 ★INVARIANT★ 合約 (無載重宣稱需綁測試)")
+        ok("沒有標成「不能破壞的合約」的規則,不需要綁測試")
     else:
         naked, bound, unaudited = [], [], []
         for rel, inv in inv_all:
@@ -762,17 +762,17 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             ok(f"{len(bound)} 條 ★INVARIANT★ 都綁了真實可執行測試方法且經獨立審計 "
                "(0 裸合約 / 0 偽證據 / 0 懸空 / 0 未審 / 0 未定義平台)")
         if bad_platform:
-            warn(bad_platform, f"發現 {len(bad_platform)} 條 test_ref 平台前綴未定義於 config platforms:",
+            warn(bad_platform, f"有 {len(bad_platform)} 條測試綁定寫了未定義的平台前綴(設定檔 platforms 裡沒這個平台):",
                  "config.json 的 platforms 補該平台,或修正 [test:平台:名] 的平台前綴")
         if naked:
             warn([f"{r}: {first_line(c, 70)}" for r, c, _ in naked],
-                 f"發現 {len(naked)} 條裸 ★INVARIANT★ (載重宣稱沒綁測試 → 無法機械驗真):",
+                 f"發現 {len(naked)} 條裸 ★INVARIANT★:標成不能破壞的合約,卻沒綁任何測試,沒人能機械驗證它還成不成立:",
                  "在 invariant 行尾加 [test:測試名],並寫對應測試")
         if fake:
-            warn(fake, f"發現 {len(fake)} 條偽證據 test_ref (綁的名字不是真測試方法 → 無法執行):",
+            warn(fake, f"發現 {len(fake)} 條偽證據:合約綁的名字不是真的測試方法,跑不起來:",
                  "確認 [test:] 名字 = 該平台 profile 認的真測試方法名(別綁到散文/工具方法/拼錯屬性)")
         if dangling:
-            warn(dangling, f"發現 {len(dangling)} 條懸空 test_ref (綁的測試在程式碼中不存在):",
+            warn(dangling, f"有 {len(dangling)} 條合約綁的測試在程式碼裡找不到(懸空):",
                  "建立該測試,或修正 [test:] 名稱")
         if unaudited:
             warn([f"{r}: {first_line(c, 70)}" for r, c in unaudited],
@@ -783,7 +783,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     print()
 
     # Check R: 可逆性回退綁定(★IRREVERSIBLE★ 動手前要有實質回退;★CHECKPOINT★ 軟提醒)
-    section("R", "可逆性回退綁定 (★IRREVERSIBLE★ 動手前要有實質回退)")
+    section("R", "標成「做了就回不去」的動作,有沒有寫清楚怎麼回退或怎麼防")
     rev_err, rev_soft = [], []
     for rel, nnote in sorted(notes.items()):
         for marker, clean, ref, guard_ref in extract_reversibility(nnote):
@@ -801,10 +801,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     if not rev_err and not rev_soft:
         ok("無未綁回退的可逆性標記")
     if rev_err:
-        warn(rev_err, f"發現 {len(rev_err)} 條 ★IRREVERSIBLE★ 缺實質回退/標錯型別:",
+        warn(rev_err, f"發現 {len(rev_err)} 條 ★IRREVERSIBLE★ 缺實質回退/標錯型別:標成做了回不去,卻沒寫怎麼回退或怎麼防:",
              "標記行加 [rollback:decisions](有回退)或 [guard:decisions](冪等鍵/核可閘),decisions[] 要有非空 rollback/guard;★ 僅用於 Systems")
     if rev_soft:
-        warn_soft(rev_soft, f"{len(rev_soft)} 條 ★CHECKPOINT★ 建議補回退(不擋):",
+        warn_soft(rev_soft, f"{len(rev_soft)} 條標成「有存檔點」的動作建議補寫回退方式(不擋):",
                   "加 [rollback:decisions] + decisions rollback")
     print()
 
@@ -812,7 +812,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     #   無 self_audit(或格式非法) = 從未跑 L4;self_audit 日期 < updated = 節點更新後未重審(過期)。
     # 真實性無法機械驗(lumos 不 spawn agent),只給「摩擦地板」提醒派乾淨 agent 跑自足性審計
     # (只讀圖譜還原現況),過了 `lumos self-audit <node>` 留痕。同 maker/checker 誠實天花板。
-    section("S", "L4 自足性審計提醒 (Systems 無 self_audit 或已過期 → 派乾淨 agent 還原審)")
+    section("S", "功能筆記有沒有被不知道背景的人重新確認過內容還站得住(提醒,不擋)")
     sa_missing, sa_stale = [], []
     for rel, n in sorted(notes.items()):
         if n.fields.get("type") != "system":
@@ -846,14 +846,14 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         warn_soft(lines, head, advice)
 
     if not sa_missing and not sa_stale:
-        ok("所有 Systems 都有 self_audit 且未過期")
+        ok("每篇功能筆記都有人重新確認過,而且確認之後沒再改動")
     if sa_missing:
         _soft_list(sa_missing,
-                   f"{len(sa_missing)} 個 Systems 從未跑 L4 自足性審計(無 self_audit):",
+                   f"有 {len(sa_missing)} 篇功能筆記從來沒被不知道背景的人重新確認過內容還站不站得住:",
                    "派無脈絡乾淨 agent 只讀圖譜還原現況,過了 `lumos self-audit <node>` 留痕;輕量無需則略過")
     if sa_stale:
         _soft_list(sa_stale,
-                   f"{len(sa_stale)} 個 Systems 的 self_audit 已過期(節點更新後未重審):",
+                   f"有 {len(sa_stale)} 篇功能筆記在上次確認之後又改過,需要再確認一次:",
                    "重派乾淨 agent 還原審後 `lumos self-audit <node>` 重新留痕")
     print()
 
@@ -861,7 +861,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     #   邊還對不對):某節點 verified_by 指向的 Verification 已 stale/fail = 死背書(掛著給人假安心感、
     #   驗證其實已失效)。ghost 目標交既有 ghost 檢查,這裡跳過(不重疊職責)。
     #   設計見 Projects/關係層傳播守衛_計劃 [S6](phase-1 MVP,免前置、純 frontmatter)。
-    section("E1", "失效背書 (verified_by 指向的驗證已 stale/fail/superseded → 死背書)")
+    section("E1", "筆記引用的驗證紀錄,是不是已經失效或被推翻了(拿失效的驗證當依據)")
     dead_endorse = []
     for rel, n in sorted(notes.items()):
         for item in as_list(n.fields.get("verified_by")):
@@ -873,10 +873,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 dead_endorse.append(f"{rel} → [[{vrel}]] (status={vst})")
                 gov_events.append({"gate": "check-e1", "kind": "warned", "hard": False, "nodes": [n.stem]})
     if not dead_endorse:
-        ok("無失效背書 (所有 verified_by 指向的驗證都非 stale/fail/superseded)")
+        ok("筆記引用的驗證紀錄都還有效")
     else:
         _soft_list(dead_endorse,
-                   f"發現 {len(dead_endorse)} 條失效背書(驗證已 stale/fail 卻還掛著):",
+                   f"發現 {len(dead_endorse)} 條失效背書(引用的驗證已經失效或被推翻,還掛著當依據):",
                    "重跑驗證改回 pass、或改標記/移除該 verified_by;死背書給假安心感,是關係層頭號腐爛之一")
     print()
 
@@ -886,7 +886,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     #   啟發(可能人早手動確認過但沒動 updated),故 warn_soft。內聯 typed 反查(不建 [P0] 可重用 index——doctor
     #   本就掃全圖,補網不需;主網 proactive 連鎖才需 P0)。設計見 Projects/關係層傳播守衛_計劃 [S7]。
     #   已知限制:無 cascade ledger(主網 future)→ 判過無關卻沒動 A.updated 的會每次重報;量少時手動 bump 消音。
-    section("E2", "建在被推翻決策上 (指向某節點的邊,該節點決策已翻案而來源未跟上)")
+    section("E2", "有沒有筆記建立在已經被推翻的決策上、卻沒跟著改")
 
     import datetime
     def _ymd(s):
@@ -956,10 +956,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 gov_events.append({"gate": "check-e2", "kind": "warned", "hard": False,
                                    "nodes": [notes[arel].stem]})
     if not build_on_dead:
-        ok("無「建在被推翻決策上」的落後邊")
+        ok("沒有筆記建在被推翻的決策上")
     else:
         _soft_list(build_on_dead,
-                   f"發現 {len(build_on_dead)} 條可能建在被推翻決策上的邊(時序法啟發、非定論):",
+                   f"有 {len(build_on_dead)} 處可能建在被推翻的決策上(用時間順序推的,不是定論):",
                    "查該邊是否真受翻案影響:是→更新來源節點跟上新決策;否→已確認無關可 bump 來源 updated 消音;純語意矛盾留 AI 交叉審")
     print()
 
@@ -967,7 +967,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     #   <節點rel>#dN,M1/P2 決策穩定 ID)指向的那條決策已 valid:false → 本驗證建在被推翻的意圖上。
     #   dangling ref(格式壞/節點不存在/id 未指派)也浮出——不靜默通過,對齊 M2 反靜默紀律。
     #   設計見 Projects/關係層主網_實作計畫 M1;取代母計劃 [S8] 的高噪音 advisory。
-    section("E3", "意圖鏈斷義 (decision_refs 指向的決策已翻案 → 建在被推翻意圖上)")
+    section("E3", "驗證紀錄引用的決策,是不是已經被翻案了")
     e3_broken, e3_dangling = [], []
     for rel, n in sorted(notes.items()):
         # [自動養成 不對稱信任] firing 向讀「聯集」decision_refs + decision_refs_ai(放寬)
@@ -996,36 +996,36 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 e3_broken.append(f"{rel} → {s} (決策已翻案 ended={d.get('ended', '?')})")
                 gov_events.append({"gate": "check-e3", "kind": "warned", "hard": False, "nodes": [n.stem]})
     if not e3_broken and not e3_dangling:
-        ok("無意圖鏈斷義 (decision_refs 指向的決策都仍有效)")
+        ok("驗證紀錄引用的決策都還有效")
     if e3_broken:
         _soft_list(e3_broken,
-                   f"發現 {len(e3_broken)} 條意圖鏈斷義(所指決策已被推翻):",
+                   f"有 {len(e3_broken)} 份驗證紀錄引用的決策已經被翻案:",
                    "本驗證實作的意圖已翻案:重驗並更新、或改指新決策、或標 stale")
     if e3_dangling:
         _soft_list(e3_dangling,
-                   f"發現 {len(e3_dangling)} 條 dangling decision_ref(指向不存在的決策):",
+                   f"有 {len(e3_dangling)} 個決策引用指向不存在的決策:",
                    "修正 ref 格式/目標;若目標節點決策未編號先跑 lumos decision-reindex <節點>")
     print()
 
     # Check H: 漏標可逆性提醒(軟,不擋,不計 issues)——僅 --ci 掃 diff,提示疑似漏標 ★IRREVERSIBLE★
-    section("H", "漏標可逆性提醒 (diff 碰 prod/外部 API/寄送 → 是否漏標 ★IRREVERSIBLE★?)")
+    section("H", "這次改動碰到正式環境、外部 API 或寄送,筆記有沒有標「做了就回不去」(提醒,不擋)")
     if not ci:
         print("  (僅 --ci 模式掃 diff;互動模式略過)")
     else:
         hint_hits = _scan_diff_for_irreversible_hints(str(env.vault))
         if not hint_hits:
-            ok("diff 無疑似不可逆操作行(或無 staged/HEAD diff)")
+            ok("這次改動沒碰到疑似做了就回不去的操作")
         else:
             warn_soft(
                 hint_hits,
-                f"diff 發現 {len(hint_hits)} 行疑似碰外部不可逆操作:",
+                f"這次改動有 {len(hint_hits)} 行疑似碰到做了就回不去的操作(正式環境/外部 API/寄送):",
                 "確認相關 Systems 節點已標 ★IRREVERSIBLE★ [rollback:decisions] 或 [guard:decisions];若確認可逆可忽略",
             )
     print()
 
     # Check K: ★COMBO★ 組合覆蓋提醒(軟,不擋,不計 issues)——標了 ★COMBO★ 的最重 ★INVARIANT★
     #   只綁 1 個 [test:] 標記 → 提醒補組合。數 [test:] 標記個數(TEST_REF_RE,非展開名數),免 [test:a,b] 逗號繞過。
-    section("K", "★COMBO★ 組合覆蓋提醒 (最重鐵則只綁 1 個 [test:] → 補組合)")
+    section("K", "最重要的合約是不是只綁了一條測試(提醒補組合情境)")
     combo_thin, combo_any = [], False
     for rel, n in sorted(notes.items()):
         invs, _ = extract_contracts(n)
@@ -1037,20 +1037,20 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 combo_thin.append(inv.replace("★COMBO★", "").strip())
                 gov_events.append({"gate": "check-k", "kind": "warned", "hard": False, "nodes": [n.stem]})
     if not combo_any:
-        ok("無 ★COMBO★ 標記 (無鐵則宣告需組合覆蓋)")
+        ok("沒有標成「最重要合約」的規則,不需要組合測試")
     elif combo_thin:
         _soft_list(combo_thin,
-                   f"{len(combo_thin)} 條 ★COMBO★ 鐵則只綁 1 個 [test:] happy-path:",
+                   f"有 {len(combo_thin)} 條最重要的合約只綁了一條測試(只測正常路徑):",
                    "為這條最重鐵則補一條組合情境測試(多條件交叉),別只測 happy-path")
     else:
-        ok("★COMBO★ 鐵則都綁了 ≥2 個 [test:] 標記")
+        ok("最重要的合約都綁了兩條以上的測試")
     print()
 
     # Check D: 紀律區塊漂移守衛(內容比對)
     # 範本 scripts/templates/graph-discipline.md ↔ CLAUDE.md sentinel block body。
     # guard: 範本不存在 → skip(不算 issue);CLAUDE.md absent → skip(未注入過的 repo 不罰)。
     # broken → 報漂移(算 issue,但不取 .body 避免 crash)。
-    section("D", "紀律區塊漂移守衛 (CLAUDE.md 紀律區塊 ↔ 範本 graph-discipline.md 內容比對)")
+    section("D", "專案 CLAUDE.md 裡的工具鏈紀律區塊,跟範本有沒有對上")
     if repo_root is None:
         print("  (無 docs/ 佈局,略過 Check D)")
     else:
@@ -1075,20 +1075,20 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 if _d_state == "absent":
                     print("  (CLAUDE.md 無 sentinel 區塊,略過 Check D — 尚未注入)")
                 elif _d_state == "broken":
-                    warn(["CLAUDE.md 紀律區塊 sentinel 損壞(只有 START 或只有 END),跑 lumos init/update 修復"],
+                    warn(["CLAUDE.md 紀律區塊的起訖標記 sentinel 損壞(只剩頭或只剩尾)——用 lumos update(或 lumos init)修復"],
                          "CLAUDE.md sentinel 損壞(broken)— 無法比對,視為漂移:",
                          "lumos init --force 或 lumos update 修復 sentinel 再重驗")
                 else:
                     # found: 比對 body
                     if _d_span.body == expected_body:
-                        ok("CLAUDE.md 紀律區塊與範本同步(0 漂移)")
+                        ok("CLAUDE.md 的工具鏈紀律區塊跟範本一致")
                     else:
-                        warn(["CLAUDE.md 紀律區塊與範本 graph-discipline.md 不同步,跑 lumos update/init 刷新"],
+                        warn(["CLAUDE.md 紀律區塊跟範本不同步——用 lumos update(或 lumos init)刷新"],
                              "CLAUDE.md 紀律區塊漂移(與範本不一致):",
                              "lumos update 或 lumos init --force 刷新 CLAUDE.md 紀律區塊")
     print()
 
-    section("V", "valid_under 過期率 (進場提示覆蓋 + 日齡 proxy;軟提醒、不擋 CI)")
+    section("V", "寫了「這個結論在什麼前提下成立」的筆記,有多少超過 90 天沒回頭看(提醒,不擋)")
     vu_total, vu_stale = [], []
     for rel, n in sorted(notes.items()):
         if not _conds(n.fields.get("valid_under")):
@@ -1098,7 +1098,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         if age is not None and age > 90:
             vu_stale.append(f"{rel}(已 {age} 天未更新)")
     if not vu_total:
-        ok("無 valid_under 節點 (無進場提示需量)")
+        ok("沒有筆記寫「這個結論在什麼前提下成立」,這項不用量")
     elif vu_stale:
         rate = len(vu_stale) / len(vu_total)
         warn_soft(vu_stale,
@@ -1108,9 +1108,9 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         ok(f"0/{len(vu_total)} (0%) — 所有 valid_under 節點 ≤90 天")
     print()
 
-    section("P", "失效檔案認領 (節點正文 inline-code 路徑指向已不存在的檔;軟提醒、不擋 CI)")
+    section("P", "筆記提到的程式檔路徑,檔案還在不在(提醒,不擋)")
     if repo_root is None:
-        ok("(無 docs/ 佈局,略過失效認領檢查)")
+        ok("(這個專案沒有 docs/ 資料夾,檔案路徑檢查跳過)")
     else:
         top_dirs = {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
         _suffix_re = re.compile(r":([^/]+)$")
@@ -1149,10 +1149,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                     stale_claims.append(f"{loc} → {token}(已不存在)")
         if stale_claims:
             warn_soft(stale_claims,
-                      f"{len(stale_claims)} 個節點引用指向已不存在的 repo 路徑(圖譜指向死碼?):",
+                      f"有 {len(stale_claims)} 處筆記提到的程式檔路徑已經不存在(碼被刪或搬了?):",
                       "碼被刪/改名?更新節點正文的路徑引用,或補對應節點")
         else:
-            ok("無失效檔案認領 (節點引用的 repo 路徑都存在)")
+            ok("筆記提到的程式檔都還在")
     print()
 
     # ── Check N:可重算數字宣稱(存查詢不存答案;成因 F「寫死易漂的值」)──
@@ -1180,9 +1180,9 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     #   別 repo 頁面(MemberDisc.aspx) = 精度極差;
     #   收緊成「方法/類別形狀」(無底線/無數字/非全大寫/無副檔名,且 以 Async 結尾 或 帶點)
     #   → 279 候選 / 1 未命中(0.4%),★該 1 條是真陽性★。
-    section("Y", "被提及符號存在性 (圖譜點名的方法/類別,repo 找不到 → 寫錯或已改名)")
+    section("Y", "筆記點名的方法或類別,程式碼裡找不找得到(寫錯或已改名;提醒,不擋)")
     if repo_root is None:
-        ok("(無 docs/ 佈局,略過符號存在性檢查)")
+        ok("(這個專案沒有 docs/ 資料夾,符號檢查跳過)")
     else:
         _yprof, _yneg = load_symbol_profile(repo_root)
         _sym_re = re.compile(_yprof["shape_re"])
@@ -1236,16 +1236,16 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                         _ghosts.append(f"{rel} → `{s}`(repo 查無此符號)")
         if _ghosts:
             warn_soft(_ghosts,
-                      f"{len(_ghosts)} 個圖譜點名的符號在 repo 找不到:",
+                      f"有 {len(_ghosts)} 個筆記點名的方法或類別在程式碼裡找不到(寫錯或改名了?):",
                       "改名了?寫錯了?或本來就在別的 repo(那請改成非 inline-code 或註明來源)。"
                       "★這類 code 從沒變過也會發生——diff-based 守衛(delguard)結構上抓不到★")
         else:
-            ok("圖譜點名的方法/類別都在 repo 找得到")
+            ok("筆記點名的方法和類別在程式碼裡都找得到")
     print()
 
-    section("N", "可重算數字宣稱 (存查詢不存答案;數字漂了當場說。軟提醒、不擋 CI)")
+    section("N", "筆記裡帶重算標記的數字,重算一遍還對不對(提醒,不擋)")
     if repo_root is None:
-        ok("(無 docs/ 佈局,略過數字重算)")
+        ok("(這個專案沒有 docs/ 資料夾,數字重算跳過)")
     else:
         import fnmatch as _fn
         _CNT_RE = re.compile(r"<!--\s*lumos:count=(\d+)\s+re=(.+?)\s+in=(\S+?)\s*-->")
@@ -1302,7 +1302,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         elif _n_marks:
             ok(f"{_n_marks} 個可重算數字宣稱全部對得上")
         else:
-            ok("(無 lumos:count 標記;易漂的計數建議改用它——語法見 Systems/check-n-recomputable)")
+            ok("(沒有任何數字帶重算標記;筆記裡容易過期的數字建議加標記讓工具自己重算)")
     print()
 
     # Check J: regen 重生來源守衛(from-scratch 節點的 provenance 分級+拒絕發明無證據合約)。
@@ -1311,7 +1311,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     _regen_rels = [(rel_, n_) for rel_, n_ in sorted(notes.items())
                    if isinstance(n_.fields.get("regen"), str) and n_.fields.get("regen").strip()]
     if _regen_rels:
-        section("J", "regen 重生來源守衛 (provenance 分級;J-a 拒發明合約/J-c 證據指針機械驗)")
+        section("J", "從程式碼重建出來的筆記,每條主張有沒有標清楚是有證據、推測、還是找不到出處(regen 重生來源守衛)")
         _jroot = repo_root if repo_root is not None else _repo_root_from_env(env)
         j_err_lines, j_soft_lines = [], []
         for rel_, n_ in _regen_rels:
@@ -1323,20 +1323,20 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 gov_events.append({"gate": "check-j", "kind": "blocked", "hard": True,
                                    "nodes": [n_.stem]})
         if j_err_lines:
-            warn(j_err_lines, f"{len(j_err_lines)} 條 regen 節點違反重生來源守衛:",
+            warn(j_err_lines, f"{len(j_err_lines)} 條重建筆記的主張沒標清楚出處(違反 regen 重生來源守衛):",
                  "補 [src:路徑(:行號)]/[git:sha] 證據、或改標 推測:/佚失:(合約不能建在推測上)")
         else:
-            ok(f"{len(_regen_rels)} 個 regen 節點證據指針全數可驗")
+            ok(f"{len(_regen_rels)} 篇重建筆記的證據指針都驗得到")
         if j_soft_lines:
-            warn_soft(j_soft_lines, f"{len(j_soft_lines)} 條 J-d/降級提醒(軟,不擋):")
+            warn_soft(j_soft_lines, f"{len(j_soft_lines)} 條重建筆記的提醒(不擋):")
         print()
 
     # Check N: 版本 nudge(軟提醒,dev-machine advisory;不算 issue、不擋 CI)
     if repo_root is not None:
         _nudge = _version_nudge(repo_root)
         if _nudge:
-            section("N", "版本更新提示 (dev-machine advisory;不算 issue、不擋 CI)")
-            warn_soft([_nudge], _nudge, "跑 lumos update 刷新紀律區塊與工具組版本")
+            section("W", "工具鏈版本有沒有落後(提醒,不擋)")
+            warn_soft([_nudge], _nudge, "用這個指令把工具鏈和紀律區塊更新到最新:lumos update")
             print()
 
     if ci:
@@ -1713,13 +1713,13 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             _sc.append("未作廢的節點" if not include_superseded else "全部節點")
             _sc.append("(含程式碼區塊)" if include_code else "的可見文字")
             _scope_txt = "".join(_sc)
-            print(f"（多詞回退:整串片語在{_scope_txt}裡無命中,改用各詞 OR 召回;"
-                  f"逐詞覆蓋 {_cov_txt}）", file=sys.stderr)
+            print(f"(多詞回退:你查的整串詞在{_scope_txt}裡找不到完全一致的,改成每個詞分開查、有出現就算;"
+                  f"逐詞覆蓋 {_cov_txt})", file=sys.stderr)
             if any(_fb_cov.get(t, 0) == 0 for t in _fb_terms):
-                print(f"  ★有詞在{_scope_txt}裡 0 命中(標 ★)——多半是查詢用詞與圖譜用語不一致,"
-                      "先換那個詞再查,別把結果當「圖譜沒有」★", file=sys.stderr)
+                print(f"  提醒:標 ★ 的那個詞在{_scope_txt}裡 0 命中——多半是你用的詞跟圖譜裡的說法不一樣,"
+                      "不代表圖譜沒記這件事;先換個說法再查一次", file=sys.stderr)
     if ranked and regex:
-        print("(--ranked 不適用 --regex 模式,照舊輸出)", file=sys.stderr)
+        print("(--regex 模式不做相關性排序,照舊順序輸出)", file=sys.stderr)
         ranked = False
     _cand_hits = {}     # ranked:rel -> hit 行數(候選=legacy 命中集,不擴召回)
     _cand_detail = {}   # ranked:rel -> (hits, fm_end) 供逐檔明細輸出
@@ -1770,7 +1770,7 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     # 真遺忘:隱藏提示一律走 stderr(全模式含 --files-only;stderr 不污染 stdout 機器可讀輸出)。
     # 印隱藏數=遺忘可審計(GateMem);不印=靜默遺忘,正是本案要堵的洞。
     if hidden_superseded:
-        print(f"（已隱藏 {hidden_superseded} 筆作廢結果，--include-superseded 顯示）", file=sys.stderr)
+        print(f"(已隱藏 {hidden_superseded} 筆作廢結果;要看的話加 --include-superseded)", file=sys.stderr)
     if ranked:
         import json as _json
         scored = _rank_score_candidates(env, term, list(_cand_hits))
@@ -1797,21 +1797,21 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
                 if len(d_hits) > 8:
                     print(f"    … 還有 {len(d_hits) - 8} 處")
             trunc = f"top {len(scored)} / " if len(scored) < len(_cand_hits) else ""
-            print(f"\n({trunc}候選 {len(_cand_hits)};相關性排序,--legacy 走舊字母序)")
+            print(f"\n({trunc}共 {len(_cand_hits)} 篇候選,照相關性排序;想照檔名排加 --legacy)")
         # ★圖譜先行注入(2026-08-14 Enzo 裁)★:search 命中卻只掃摘要就下「圖譜沒記」的結論,
         # 是實證過的失效模式(金鑰明明在節點第 64 行,靠摘要判成「沒有」)。有命中就提醒一句,
         # 走 stderr 與逐詞覆蓋同慣例;--json/--files-only 不印(機器消費端)。
         if scored and not as_json and not files_only:
-            print("★命中≠查完:節點內容用 lumos show <節點> 讀全文再下結論——"
-                  "search 只給索引,拿摘要判「圖譜沒記」是已實證的破口★", file=sys.stderr)
+            print("提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。"
+                  "下結論前先讀全文:lumos show <節點>", file=sys.stderr)
         return 0
     suffix = f"(限 {path_prefix})" if path_prefix else ""
     if not include_code:
         suffix += " [已排除 code block,--code 可含]"
     print(f"\n{total_hits} 處 / {total_files} 篇{suffix}")
     if total_files and not files_only:
-        print("★命中≠查完:節點內容用 lumos show <節點> 讀全文再下結論——"
-              "search 只給索引,拿摘要判「圖譜沒記」是已實證的破口★", file=sys.stderr)
+        print("提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。"
+              "下結論前先讀全文:lumos show <節點>", file=sys.stderr)
     return 0
 
 
@@ -2397,15 +2397,15 @@ def cmd_contracts(env, rel=None):
         for x in inv:
             clean, refs = strip_test_refs(x)
             print(f"  ★INVARIANT★ {clean}")
-            print(f"      ↳ test: {', '.join(refs)}" if refs else "      ↳ ⚠ 未綁測試(無可執行證據)")
+            print(f"      ↳ 綁的測試: {', '.join(refs)}" if refs else "      ↳ 提醒:沒綁測試,沒有可執行的證據")
             n_inv += 1
         for x in debt:
             print(f"  ★DEBT★ {x}")
             n_debt += 1
     if n_inv == 0 and n_debt == 0:
-        print("(無合約標記)" if rel else "(全 vault 無合約標記 — 用 ★INVARIANT★/★DEBT★ 前綴標 KEY 行)")
+        print("(這篇沒有登記任何「動了會壞」的合約)" if rel else "(整個圖譜都沒有登記合約——要標的話在 KEY 行前面加 ★INVARIANT★ 或 ★DEBT★)")
     else:
-        print(f"\n合約 {n_inv} 條(改=breaking) | 技術債 {n_debt} 條(可改)")
+        print(f"\n合約 {n_inv} 條(改了就是破壞性變更) | 技術債 {n_debt} 條(可以改)")
     return 0
 
 
@@ -2627,7 +2627,7 @@ def cmd_lint(env, node):
     predicts pre-push 會不會擋(error 即 doctor --ci 會擋的同類)。"""
     rel = env.find(node)
     if rel is None:
-        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     n = env.notes[rel]
     errs = list(n.lint)          # frontmatter 指紋(ghost trap / 重複鍵 / 日期引號…)= error
@@ -2635,14 +2635,14 @@ def cmd_lint(env, node):
 
     t = n.fields.get("type")
     if not isinstance(t, str) or not t:
-        errs.append("缺 type(frontmatter 必須有 type)")
+        errs.append("沒寫 type(這篇是功能、問題還是驗證紀錄?),工具沒辦法分類——在開頭欄位加一行 type: <類型>")
     elif t not in KNOWN_TYPES:
-        errs.append(f"未知 type『{t}』(應為 {'/'.join(sorted(KNOWN_TYPES))})")
+        errs.append(f"type『{t}』工具不認得,會被歸錯類——改成其中一個:{'/'.join(sorted(KNOWN_TYPES))}")
 
     summ = n.fields.get("summary")
     summ = summ if isinstance(summ, str) else ""
     if t in ("system", "issue") and not summ.strip():
-        errs.append(f"{t} 節點必須有 summary block(放 FLOW:/KEY:/DEP: 等符號行)")
+        errs.append(f"{t} 筆記沒有摘要區塊(FLOW:/KEY:/DEP: 那幾行),沒人能快速看懂這篇在講什麼——補上,範本可看 lumos new 產生的骨架")
 
     # aliases 宣告制(2026-08-05 Enzo 裁定,cutoff 起新 system/issue 逼「判過」不逼「有值」):
     # aliases 吃 3.5 檢索權重,湊數別名主動污染排序——故 `aliases: []`=明示判過,合法;
@@ -2651,8 +2651,8 @@ def cmd_lint(env, node):
     if t in ("system", "issue"):
         _created = str(n.fields.get("created") or "")
         if _created >= _ALIASES_CUTOFF and "aliases" not in n.fields:
-            errs.append("缺 aliases 鍵(2026-08-05 起 system/issue 必須判過同義詞——"
-                        "有就列(症狀語/縮寫/舊名),確定沒有寫 aliases: [];湊數別名比空更糟)")
+            errs.append("沒寫 aliases:要想過一次這件事有沒有別的叫法(症狀語/縮寫/舊名),別人換個說法才搜得到——"
+                        "有就列出來,確定沒有就明確寫 aliases: [](湊數的別名比空的更糟)")
 
     # 值域執法(2026-08-05 標籤結構優化,Enzo 裁;cutoff 制不回溯——Landmark 實測野化:
     # status 13 值同義混用、FLAG 50+ 自由文字淪為備註欄,可篩選性歸零)
@@ -2671,22 +2671,22 @@ def cmd_lint(env, node):
     if _created_e >= _ENUM_CUTOFF:
         _st = str(n.fields.get("status") or "")
         if t in _STATUS_ENUM and _st and _st not in _STATUS_ENUM[t]:
-            errs.append(f"status『{_st}』不在 {t} 合法值集 {sorted(_STATUS_ENUM[t])}"
-                        "(同義詞歸一:resolved/done 擇一慣例、verification 用 pass)")
+            errs.append(f"status『{_st}』不是 {t} 允許的狀態值,篩選統計會漏掉這篇——改成其中一個:{sorted(_STATUS_ENUM[t])}"
+                        "(同義詞要歸一:resolved/done 擇一、verification 用 pass)")
         for tg in (n.fields.get("tags") or []):
             if not isinstance(tg, str):
                 continue
             if tg.startswith("priority/") and tg.split("/", 1)[1] not in _PRIORITY_ENUM:
-                errs.append(f"priority tag 只認 P0-P3,收到 {tg!r}")
+                errs.append(f"priority 標籤只能是 P0 到 P3 四級,你寫的是 {tg!r}")
             if tg.startswith("risk/") and tg.split("/", 1)[1] not in _RISK_ENUM:
-                errs.append(f"risk tag 只認 {sorted(_RISK_ENUM)},收到 {tg!r}")
+                errs.append(f"risk 標籤只能是 {sorted(_RISK_ENUM)} 之一,你寫的是 {tg!r}")
             if tg.startswith(("feature/", "area/")):
-                warns.append(f"{tg!r}:feature/area 家族已凍結,新寫入請用 scope/(讀側仍認舊帳)")
+                warns.append(f"{tg!r}:feature/ 和 area/ 這兩種標籤已停用,新筆記改用 scope/ 開頭(舊筆記查詢仍認)")
         import re as _re_f
         _mflag = _re_f.search(r"^\s*FLAG:(\S+)", summ, _re_f.M)
         if _mflag and _mflag.group(1) not in _FLAG_ENUM:
-            errs.append(f"FLAG:『{_mflag.group(1)}』不在三值集 {sorted(_FLAG_ENUM)}"
-                        "(FLAG=語意類別非備註欄;敘述內容移 KEY: 行)")
+            errs.append(f"FLAG:『{_mflag.group(1)}』不是允許的三種分類之一 {sorted(_FLAG_ENUM)}"
+                        "(FLAG 是分類欄不是備註欄;想寫的說明移到 KEY: 那行)")
 
     # decisions 結構守衛(2026-07-29 外審實錘:id 縮排吞進 content block,parser 靜默降級、
     # doctor 全綠——「綠燈≠schema 有效」的活例。以正牌 parse_decisions 驗:
@@ -2710,11 +2710,11 @@ def cmd_lint(env, node):
                 # 不是決策條目——2026-08-05 Landmark 回填實戰:照 ADR 規範寫巢狀清單被誤報壞損
                 _raw_items += 1
         if _raw_items != len(_parsed):
-            errs.append(f"decisions 結構壞損:寫了 {_raw_items} 條、只解析出 {len(_parsed)} 條"
-                        "(entry 須為 `- id:`/`- content:` 起頭的 dict;用 lumos decision-add 寫入)")
+            errs.append(f"decisions 格式跑掉了:寫了 {_raw_items} 條、工具只認得出 {len(_parsed)} 條,其他等於白寫"
+                        "(每條要以 `- id:`/`- content:` 起頭;別手改,用 lumos decision-add 寫入)")
         for _di, _d in enumerate(_parsed):
             if not str(_d.get("content") or "").strip():
-                errs.append(f"decisions[{_di}] content 為空(常見成因:sibling 鍵縮排錯位被吞進 block scalar)")
+                errs.append(f"第 {_di} 條 decisions 沒有內容,通常是旁邊欄位縮排錯、被吞進上一欄了——檢查縮排或改用 lumos decision-add 重寫")
 
     # 狀態標籤漂移守衛:status 欄位 vs tags 的 status/*(反正規化的完整性檢查,
     # 兜住繞過 set status 同步的寫入路徑;見 Projects/狀態標籤同步守衛_計劃)
@@ -2722,7 +2722,7 @@ def cmd_lint(env, node):
     if isinstance(_st, str) and _st.strip():
         for _tg in as_list(n.fields.get("tags")):
             if isinstance(_tg, str) and _tg.startswith("status/") and _tg != f"status/{_st.strip()}":
-                errs.append(f"status 欄位({_st})與標籤({_tg})漂移(lumos set status 會自動同步;手改請對齊)")
+                errs.append(f"status 欄位({_st})和狀態標籤({_tg})寫的不一樣(漂移),靠標籤篩狀態會抓錯——用 lumos set <節點> status <值> 改,兩邊會自動同步")
 
     _regen_val = n.fields.get("regen")
     _lint_is_regen = isinstance(_regen_val, str) and bool(_regen_val.strip())
@@ -2733,7 +2733,7 @@ def cmd_lint(env, node):
             continue
         ms = SYMBOLISH_RE.match(line)
         if ms and ms.group(1) not in SYMBOL_NAMES:
-            warns.append(f"非標準符號行『{ms.group(1)}:』(typo? 符號應為 {'/'.join(sorted(SYMBOL_NAMES))})")
+            warns.append(f"非標準符號行『{ms.group(1)}:』,看起來像打錯字,這行不會被當成摘要——標準符號是 {'/'.join(sorted(SYMBOL_NAMES))}")
         for mark, rx in (("★INVARIANT★", INVARIANT_RE), ("★DEBT★", DEBT_RE)):
             if mark in line and not rx.match(line):
                 # 雙報消歧 predicate(Check J):regen 節點的 KEY:推測:★INVARIANT★ 由 J 專屬訊息
@@ -2742,15 +2742,15 @@ def cmd_lint(env, node):
                 if (_lint_is_regen and REGEN_PREFIX_RE.match(line)
                         and ("★INVARIANT★" in line or "★IRREVERSIBLE★" in line)):
                     continue
-                errs.append(f"{mark} 必須是 KEY 行前綴(KEY:{mark} ...),否則 contracts/doctor 抓不到:{line[:48]}")
+                errs.append(f"{mark} 必須是 KEY 行前綴(寫成 KEY:{mark} ...),放別處工具掃合約會直接漏看:{line[:48]}")
 
     invs, _ = extract_contracts(n)
     for inv in invs:
         clean, refs = strip_test_refs(inv)
         if not refs:
-            errs.append(f"裸 ★INVARIANT★(沒綁 [test:],Check T 會擋):{first_line(clean, 48)}")
+            errs.append(f"裸 ★INVARIANT★:標成不能破壞的合約卻沒綁測試,沒人能機械驗證它——行尾加 [test:測試名](健檢會擋):{first_line(clean, 48)}")
         elif not invariant_audit_refs(inv):
-            errs.append(f"★INVARIANT★ 綁了測試但未獨立審計(缺 [audit:],pre-push 會擋):{first_line(clean, 48)}")
+            errs.append(f"★INVARIANT★ 綁了測試但未獨立審計:還沒有不知道脈絡的人確認這條是真合約、測試夠不夠格——審過後用 lumos guard audit 補 [audit:](推送會擋):{first_line(clean, 48)}")
 
     # Check J 單檔版(regen 重生來源守衛):共用 check_regen_provenance,映射表——
     # errs→errs(rc1)/warns→warns(顯示不計 rc)/gov_events→lint 一律不落帳(高頻)。
@@ -2762,12 +2762,12 @@ def cmd_lint(env, node):
     # Check R 單檔版:可逆性回退綁定 + 標錯型別
     for marker, rclean, ref, guard_ref in extract_reversibility(n):
         if t != "system":
-            errs.append(f"{marker} 只能在 Systems 節點(本節點 type={t!r}):{first_line(rclean, 40)}")
+            errs.append(f"{marker} 只能標在功能筆記(Systems)上,這篇是 {t!r},標了也不會被當合約檢查:{first_line(rclean, 40)}")
         elif marker == "★IRREVERSIBLE★":
             if not (_rollback_resolved(n, ref) or _guard_resolved(n, guard_ref)):
-                errs.append(f"{marker} 缺實質回退(行尾加 [rollback:decisions] 或 [guard:decisions],decisions[] 要有非空 rollback/guard):{first_line(rclean, 40)}")
+                errs.append(f"{marker} 缺實質回退:標成做了回不去,卻沒寫出事怎麼退——行尾加 [rollback:decisions] 或 [guard:decisions],並在 decisions 寫上回退/防護內容:{first_line(rclean, 40)}")
         elif not _rollback_resolved(n, ref):  # ★CHECKPOINT★;guard_ref 不讀
-            warns.append(f"{marker} 建議補回退([rollback:decisions]):{first_line(rclean, 40)}")
+            warns.append(f"{marker} 建議補回退(不擋):改了難救的動作最好寫下怎麼退,行尾加 [rollback:decisions]:{first_line(rclean, 40)}")
 
     # ── Check U:全稱宣稱未綁測試(成因 G「過度概化」;2026-08-12 加) ──
     # 由來:2026-08-12 LandmarkMember 全 24 篇交叉審計(389 主張/59 不一致)歸因出一類最毒的 drift
@@ -2795,9 +2795,9 @@ def cmd_lint(env, node):
         if (_re_u.search(_U_DIST, _s) and _re_u.search(_U_ENT, _s)
                 and _re_u.search(_U_MOD, _s)):
             warns.append(
-                "疑似「通則」宣稱但未綁測試(Check U):" + first_line(_s[4:], 46) +
-                " → 若真是通則,寫成一支列舉所有實例的測試(適應度函數)並 [test:] 綁上;"
-                "若寫不出來,它八成只是某個模組的個別設計,★請改寫成限定範圍★"
+                "疑似「通則」宣稱但未綁測試:這行寫得像「所有 X 都必須…」,但沒有測試證明對每個實例都成立:" + first_line(_s[4:], 46) +
+                " → 真是通則就寫一支列舉所有實例的測試並 [test:] 綁上;"
+                "寫不出來就八成只是某個模組的個別設計,★請改寫成限定範圍★"
                 "(誤報可加 [test:] 或改寫語氣消音)")
 
     if not errs and not warns:
@@ -2809,7 +2809,7 @@ def cmd_lint(env, node):
     for w in warns:
         print(f"  ⚠ {w}")
     print(f"\n{len(errs)} error / {len(warns)} warning"
-          + ("" if errs else "(warning 不阻擋,但建議補)"))
+          + ("(error 不修,提交會被擋)" if errs else "(warning 不擋,但建議順手補)"))
     return 1 if errs else 0
 
 
@@ -2822,7 +2822,7 @@ def cmd_spec_trace(env, node, as_json=False):
     import json
     rel = env.find(node)
     if rel is None:
-        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     plan_stem = env.notes[rel].stem
     try:
@@ -2880,7 +2880,7 @@ def cmd_signoff(env, node, note, by=None):
         return 2
     rel = env.find(node)
     if rel is None:
-        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     today = datetime.date.today().isoformat()
     commit = ""
@@ -2933,10 +2933,10 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
     ★三層數字不可互相冒充★:原始行(帳檔寫入)/去重列(本函式計數依據)/呈現行(預設畫面另折一層)。"""
     print()
     print("─" * 33)
-    print(f"[stats] 載入源: {', '.join(loaded) if loaded else '(無)'}")
-    print(f"[stats] 窗口: 近 {since_days} 天(自 {cutoff} 起)")
+    print(f"[stats] 載入源(這次實際讀了哪些帳): {', '.join(loaded) if loaded else '(無)'}")
+    print(f"[stats] 窗口: 近 {since_days} 天(從 {cutoff} 起算)")
     if node:
-        print(f"[stats] ⚠ 已縮限至節點 {node},以下統計僅為該節點視角")
+        print(f"[stats] 提醒:已縮限到 {node} 這一篇,以下數字只看它,不是全庫")
     if not ded and not rows:
         print("  窗口內無資料")
         return
@@ -2968,12 +2968,12 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
     absent = [g for g in _KNOWN_GATES if g not in agg]
     print()
     if node:
-        print("  (縮限模式:不記節點的來源必然零列——結構產物非訊號,不列未出現清單)")
+        print("  (只看單一節點時,有些帳本來就不記節點、一定是零,所以不列「哪些閘從沒出現」)")
     else:
-        print(f"  未出現的 gate({len(absent)}):{', '.join(absent) if absent else '無'}")
+        print(f"  這段時間完全沒觸發過的閘({len(absent)} 道):{', '.join(absent) if absent else '無'}")
         print(_STATS_ABSENT_DISCLAIMER)
     print()
-    print("  註:以上為「去重列」計數,★不等於 gov 預設畫面的行數★——預設畫面另有一層呈現折疊。")
+    print("  註:這張表是「去重後」的筆數,跟不加 --stats 的畫面行數不是同一套算法——預設畫面還會再折疊一次。")
 
 
 def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
@@ -3103,7 +3103,7 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
     for ln in lines:
         print(ln)
     if node:
-        print("\n(註:L2 繞過無 node、L3 以 Verification 為鍵;對 Systems 節點為部分視圖)")
+        print("\n(註:有兩類事件天生不帶節點或用別的鍵記,所以只看單一節點時這份清單不是全貌)")
     # canary missed 分帳(2026-07-10,borrow mutation 文獻:missed 類別要分類追蹤,
     # missed-rate 是一級指標非異常事件)。per-auditor 計數 + note 的 type=X best-effort 分佈。
     can = [r for r in ded if r["gate"] == "canary"]
@@ -3119,7 +3119,7 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
             if m:
                 tt = by_type.setdefault(m.group(1), {"caught": 0, "missed": 0})
                 tt[r["kind"]] = tt.get(r["kind"], 0) + 1
-        print("\ncanary 分帳(missed-rate 一級指標):")
+        print("\ncanary 分帳(各審查員的漏抓率 missed-rate,這是最看重的一項):")
         for aud, st in sorted(by_aud.items()):
             tot = st["caught"] + st["missed"]
             if tot:
@@ -3133,8 +3133,8 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
         if _sec:
             _ag = sum(1 for r in _sec if "verdict=agree" in r.get("detail", ""))
             _ov = len(_sec) - _ag
-            print(f"  第二判者覆核: {len(_sec)} 筆(agree {_ag} / overturn {_ov}"
-                  + (f" ← 分歧率 {_ov/len(_sec):.0%},翻盤輪值得回看" if _ov else "") + ")")
+            print(f"  覆核紀錄: {len(_sec)} 筆(同意原判 {_ag} / 翻盤 {_ov}"
+                  + (f" ← 分歧率 {_ov/len(_sec):.0%},翻盤的那幾輪值得回頭看" if _ov else "") + ")")
         # 對抗層增量帳(2026-07-26,borrow arXiv 2605.25665 實戰報告欄):折入=caught 輪辯方裁決後
         # 存活折入的真缺陷數——測試綠後仍被對抗層(canary 護審/辯方/跨家族)抓到,天生就是「測試漏掉的」。
         # 長期趨零=整套機關裝飾品該砍;這是驗證層對自己的驗證。missed 輪判決不採信不計;
@@ -3158,10 +3158,10 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
         sev_s = " ".join(f"{k} {v}" for k, v in sorted(fold_sev.items())) or "無"
         aud_s = " · ".join(f"{k} {v}" for k, v in sorted(fold_aud.items())) or "無"
         legacy_s = f"(另 {legacy_rounds} 舊輪無 findings 欄不計)" if legacy_rounds else ""
-        print(f"  對抗層增量帳(折入=測試綠後仍被抓;長期趨零=機關裝飾該砍): "
+        print(f"  對抗層增量帳(測試都綠了之後審查還抓到、折回去修的缺陷;長期趨零就代表這層審查沒用、該砍): "
               f"折入 {fold_total} 筆缺陷 [{sev_s}] | 依審計員: {aud_s} {legacy_s}".rstrip())
     _shown = len(ded) if full else sum(1 for r in ded if r["gate"] != "doctor-run")
-    print(f"\n{_shown} 筆(近 {since_days} 天)")
+    print(f"\n近 {since_days} 天共 {_shown} 筆治理事件")
     if stats:
         # 原始行也要吃 node 縮限,否則同一張表兩欄母體不同(去重欄已縮、原始欄沒縮)
         _raw = [r for r in rows if (not node) or stem(node) in r["nodes"]]
@@ -3250,14 +3250,14 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         if round_id.startswith("__"):
             # r3 終審修(3 席重疊):__ 為讀側內部鍵保留字首(round-less 逐筆 __seqN)——
             # 使用者 round-id 撞鍵可讓新輪併入舊輪、舊 carrier 冒充最新處置帳偽 PASS
-            print(f"ERROR: --round 不得以 __ 開頭(內部保留字首): {round_id!r}", file=sys.stderr)
+            print(f"擋下:輪次編號不能用 __ 開頭(工具內部保留這個字首),換一個: {round_id!r}", file=sys.stderr)
             return 2
         rec["round"] = round_id   # panel 一輪 W 筆共享 round-id(loop status --panel 分組)
     if capture_counts:
         try:
             rec["capture_counts"] = [int(x) for x in str(capture_counts).split(",") if x.strip()]
         except ValueError:
-            print(f"ERROR: --capture-counts 需逗號分隔整數,收到 {capture_counts!r}", file=sys.stderr)
+            print(f"擋下:--capture-counts 要用逗號分隔的整數(像 2,1,1),你給的是 {capture_counts!r}", file=sys.stderr)
             return 2
     if severity:
         rec["severity"] = severity
@@ -3266,22 +3266,22 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
     if clusters is not None:   # 空字串也進解析器 → rc2(帶旗標即須有效內容,勿被 falsy 吞)
         parsed, err = _parse_clusters(clusters)
         if err:
-            print(f"ERROR: --clusters {err}", file=sys.stderr)
+            print(f"擋下:--clusters 分組設定寫錯了——{err}", file=sys.stderr)
             return 2
         rec["clusters"] = parsed   # dict{名:狀態},同 capture_counts 寫側轉型慣例
     # ── M1包 #3 雙 hash 鏈(loop機械脊椎M1包_計劃):--spec/--reviewed 必須同現 ──
     if (spec is None) != (reviewed is None):
-        print("ERROR: hash 雙欄必須成對(--spec 與 --reviewed 同現;reviewed=派工當下真檔 sha256)",
+        print("擋下:--spec(被審文件)和 --reviewed(它的內容指紋)要一起給、或都不給,你只給了一個;--reviewed 填派工當下那份文件的 sha256",
               file=sys.stderr)
         return 2
     if spec is not None:
         try:
             rec["result_sha256"] = _sha256_file(spec)   # record 於 fold 後執行=post-fold hash
         except OSError as e:
-            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
             return 2
         if not re.fullmatch(r"[0-9a-f]{64}", str(reviewed)):
-            print(f"ERROR: --reviewed 需 64 位 sha256 hex,收到 {reviewed!r}", file=sys.stderr)
+            print(f"擋下:--reviewed 要填 64 碼的 sha256 指紋,你給的格式不對: {reviewed!r}", file=sys.stderr)
             return 2
         rec["reviewed_sha256"] = reviewed
     # ── M1包 #4 成本選配欄:非負整數,不給不寫鍵(同 --findings 慣例) ──
@@ -3298,19 +3298,19 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
                         ("scope_lines", scope_lines)):
         if _val is not None:
             if _val < 0:
-                print(f"ERROR: --{_name.replace('_', '-')} 需非負整數,收到 {_val}", file=sys.stderr)
+                print(f"擋下:--{_name.replace('_', '-')} 只能填 0 或正整數,你給的是 {_val}", file=sys.stderr)
                 return 2
             rec[_name] = _val
     if scope_lines is not None and scope_lines > _CANARY_SCOPE_SOFT_CAP_LINES:
         rec["scope_oversize"] = True
-        print(f"⚠ 本輪被審材料 {scope_lines} 行,超過軟上限 {_CANARY_SCOPE_SOFT_CAP_LINES} 行"
-              f"(≈30K token,context rot 的已發表退化起點是 32K)。", file=sys.stderr)
-        print("  已在帳上標記 scope_oversize。★這一輪的 caught 是弱證據★——"
-              "審查員可能是「看不完」而不是「沒問題」;收斂宣稱請講小,下一輪拆開審。", file=sys.stderr)
+        print(f"提醒:這輪要審的東西有 {scope_lines} 行,超過建議的軟上限 {_CANARY_SCOPE_SOFT_CAP_LINES} 行"
+              f"(外部研究認為材料太多審查員容易看不完、漏審)。", file=sys.stderr)
+        print("  不擋你記錄,但帳上已標成 scope_oversize,這一輪抓到的結果算弱證據——"
+              "審查員可能是「看不完」而不是「沒問題」;收斂結論講保守一點,下一輪拆開審。", file=sys.stderr)
     # ── M1包 #1 tier 定錨欄(選配;loop next/gate 讀首個帶 tier 記錄定錨) ──
     if tier is not None:
         if tier not in LOOP_TIERS:
-            print(f"ERROR: --tier 需 {'/'.join(LOOP_TIERS)},收到 {tier!r}", file=sys.stderr)
+            print(f"擋下:--tier 分級只能是 {'/'.join(LOOP_TIERS)} 之一,你給的是 {tier!r}", file=sys.stderr)
             return 2
         rec["tier"] = tier
     # ── T1 相容雙讀(design-loop重設計 實作計畫):處置帳六選配欄——★全部不給=行為與今日相同★ ──
@@ -3320,40 +3320,40 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         return None if raw is None else [x.strip() for x in raw.split(",") if x.strip()]
     f_set, fo_set, ac_set = _ids(findings_set), _ids(folded_set), _ids(accepted_set)
     if any(x is not None for x in (fo_set, ac_set, accept_reasons)) and f_set is None:
-        print("ERROR: --folded-set/--accepted-set/--accept-reason 須與 --findings-set 同現", file=sys.stderr)
+        print("擋下:--folded-set/--accepted-set/--accept-reason 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
         return 2
     if f_set is not None:
         if not f_set:
-            print("ERROR: --findings-set 不得為空(沒 findings 就別帶處置欄)", file=sys.stderr)
+            print("擋下:--findings-set 不能是空的;這輪沒有任何發現的話,處置那幾個選項就別帶", file=sys.stderr)
             return 2
         if len(set(f_set)) != len(f_set):
-            print(f"ERROR: --findings-set 含重複 id: {f_set}", file=sys.stderr)
+            print(f"擋下:--findings-set 裡有重複 id: {f_set}", file=sys.stderr)
             return 2
         fo, ac = fo_set or [], ac_set or []
         F, FO, AC = set(f_set), set(fo), set(ac)
         if not FO <= F or not AC <= F:
-            print("ERROR: folded/accepted 含 findings-set 以外的 id", file=sys.stderr)
+            print("擋下:折掉(folded)或放行(accepted)的清單裡有 id 不在發現清單(findings-set)裡", file=sys.stderr)
             return 2
         if FO & AC:
-            print(f"ERROR: folded 與 accepted 互斥,交集非空: {sorted(FO & AC)}", file=sys.stderr)
+            print(f"擋下:同一個發現不能既折掉又放行,這幾個兩邊都有: {sorted(FO & AC)}", file=sys.stderr)
             return 2
         if FO | AC != F:
-            print(f"ERROR: 未處置的 finding: {sorted(F - FO - AC)}(folded∪accepted 必須=findings-set;"
-                  "每一條都要有去向)", file=sys.stderr)
+            print(f"擋下:這幾個發現還沒處置: {sorted(F - FO - AC)}——每一條都要說清楚是折掉還是放行,"
+                  "折掉加放行要剛好等於全部發現", file=sys.stderr)
             return 2
         reasons = {}
         for item in (accept_reasons or []):
             if "=" not in item:
-                print(f"ERROR: --accept-reason 格式須 id=理由,收到 {item!r}", file=sys.stderr)
+                print(f"擋下:--accept-reason 要寫成 id=理由,你給的是 {item!r}", file=sys.stderr)
                 return 2
             k, _, v = item.partition("=")
             reasons[k.strip()] = v.strip()
         if set(reasons) != AC or any(not v for v in reasons.values()):
-            print(f"ERROR: accept_reasons 鍵集合須=accepted-set 且理由非空(accepted={sorted(AC)},"
-                  f" 有理由={sorted(reasons)})", file=sys.stderr)
+            print(f"擋下:每個放行的發現都要附非空理由,不多不少(放行的有 {sorted(AC)},"
+                  f" 附了理由的有 {sorted(reasons)})", file=sys.stderr)
             return 2
         if severity == "blocker" and AC:
-            print("ERROR: blocker 輪 accepted 必須為空——blocker 只能折不能放行(重設計 d1)", file=sys.stderr)
+            print("擋下:這輪有 blocker 等級的問題,blocker 只能折掉修正、不能放行,放行清單必須是空的", file=sys.stderr)
             return 2
         rec["findings_set"], rec["folded_set"], rec["accepted_set"] = f_set, fo, ac
         if reasons:
@@ -3364,11 +3364,11 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         try:
             _h = _sha256_file(_p)
         except OSError as e:
-            print(f"ERROR: {_flag} 讀不到: {e}", file=sys.stderr)
+            print(f"擋下:{_flag} 指的檔案讀不到: {e}", file=sys.stderr)
             return 2
         import os as _os
         if _os.path.getsize(_p) == 0:
-            print(f"ERROR: {_flag} 是空檔——留痕的最低要求是非空({_p})", file=sys.stderr)
+            print(f"擋下:{_flag} 指的是空檔,留痕最少要有內容({_p})", file=sys.stderr)
             return 2
         _k = "report" if _flag == "--report" else "snapshot"
         # [r1 終審修+r2 修] 落帳路徑正規化:repo root 底下存相對路徑、之外存絕對——
@@ -3405,14 +3405,14 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         except OSError:
             _anchored = False   # 整檔讀不到=環境層問題,寫側不因此誤擋
         if _anchored:
-            print(f"ERROR: loop {loop!r} 已定錨為 disposal loop(帳面有 findings_set 記錄)——"
-                  "後續 record 必帶 --report 與 --snapshot(留痕強制;T6)", file=sys.stderr)
+            print(f"擋下:{loop!r} 這個審查編號已經走「每個發現都要處置」的嚴格模式(之前的記錄帶了發現清單),"
+                  "之後每筆記錄都要帶 --report(審查報告)和 --snapshot(凍結快照)留痕", file=sys.stderr)
             return 2
     rc = _jsonl_append_verified(path, rec, "token", token)
     if rc != 0:
         return rc
-    print(f"✓ canary {kind} 留痕: {token}" + (f" (auditor={auditor})" if auditor else "")
-          + f" → {path.resolve()}")
+    print(f"✓ 這筆審查結果({kind})記下來了,憑證 {token}" + (f" (審查員 {auditor})" if auditor else "")
+          + f"\n    寫入 {path.resolve()}")
     return 0
 
 
@@ -3426,7 +3426,7 @@ def _jsonl_append_verified(path, rec, key_field, key_value):
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError as e:
-        print(f"ERROR: 寫入 {path} 失敗: {e}", file=sys.stderr)
+        print(f"擋下:寫不進記錄檔({e}):\n    {path}", file=sys.stderr)
         return 2
     try:
         with open(path, encoding="utf-8", errors="replace") as f:   # 獨立重開檔(非同 fd)
@@ -3440,9 +3440,9 @@ def _jsonl_append_verified(path, rec, key_field, key_value):
                 if isinstance(d, dict) and d.get(key_field) == key_value:
                     return 0
     except (OSError, ValueError) as e:
-        print(f"canary record: 落盤自驗失敗({path.resolve()}): 讀回失敗 {e}", file=sys.stderr)
+        print(f"canary record: 落盤自驗失敗——寫完讀回來檢查時讀不到({e}),這筆不算記成功:\n    {path.resolve()}", file=sys.stderr)
         return 2
-    print(f"canary record: 落盤自驗失敗({path.resolve()}): 寫入回報成功但讀不回該筆",
+    print(f"canary record: 落盤自驗失敗——系統說寫成功了,但讀回來找不到這一筆,這筆不算記成功:\n    {path.resolve()}",
           file=sys.stderr)
     return 2
 
@@ -3455,13 +3455,13 @@ def cmd_canary_second(env, ref_id=None, verdict=None, auditor=None, note=None):
     import datetime
     import secrets
     if not ref_id or not verdict:
-        print("ERROR: canary second 需 --id 與 --verdict", file=sys.stderr)
+        print("擋下:覆核要帶 --id(要覆核哪一筆)和 --verdict(同意還是推翻)", file=sys.stderr)
         return 2
     if verdict not in ("agree", "overturn"):
-        print(f"ERROR: --verdict 僅收 agree/overturn,收到 {verdict!r}", file=sys.stderr)
+        print(f"擋下:--verdict 只能是 agree(同意)或 overturn(推翻),你給的是 {verdict!r}", file=sys.stderr)
         return 2
     if not auditor:
-        print("ERROR: canary second 需 --auditor(分權紀錄無名則失義)", file=sys.stderr)
+        print("擋下:覆核要帶 --auditor 寫明是誰覆核的;分權的意義就在於記得清楚是不同的人", file=sys.stderr)
         return 2
     path = env.vault.parent / ".canary-log.jsonl"
     found = False
@@ -3480,14 +3480,14 @@ def cmd_canary_second(env, ref_id=None, verdict=None, auditor=None, note=None):
                     orig_auditor = (d.get("auditor") or "").strip()
                     break
     except OSError as e:
-        print(f"ERROR: 讀不到 canary log {path}: {e}", file=sys.stderr)
+        print(f"擋下:審查記錄檔讀不到({e}):\n    {path}", file=sys.stderr)
         return 2
     if not found:
-        print(f"ERROR: --id {ref_id} 不在 canary log(無原判可覆核)", file=sys.stderr)
+        print(f"擋下:記錄裡找不到編號 {ref_id} 的原判,沒東西可覆核", file=sys.stderr)
         return 2
     if orig_auditor and orig_auditor.strip().lower() == auditor.strip().lower():
         # 分權的核心:同一判者自覆核=沒有第二個人,字面擊穿 S2(2026-07-29 終審 Codex)
-        print(f"ERROR: --auditor 與原判者相同({orig_auditor})——第二判者須為不同判者(分權)",
+        print(f"擋下:覆核的人跟原判的人是同一位({orig_auditor}),覆核必須換不同的人(分權才有意義)",
               file=sys.stderr)
         return 2
     token = "CANARY-" + secrets.token_hex(4)
@@ -3497,7 +3497,7 @@ def cmd_canary_second(env, ref_id=None, verdict=None, auditor=None, note=None):
     rc = _jsonl_append_verified(path, rec, "token", token)
     if rc != 0:
         return rc
-    print(f"✓ canary second 留痕: {token} (ref={ref_id} verdict={verdict} auditor={auditor})"
+    print(f"✓ 覆核記下來了,憑證 {token}(覆核原判 {ref_id},結論 {verdict},覆核者 {auditor})"
           f" → {path.resolve()}")
     return 0
 
@@ -3570,20 +3570,20 @@ def _panel_extra_checks(latest, min_seats, spec):
     if min_seats:
         seats = len({a for r in latest if (a := r.get("auditor"))})
         if seats < min_seats:
-            print(f"[panel] min-seats: ✗ — 席數不足({min_seats} 席制僅 {seats} 相異席;同席重複/空席不計)")
+            print(f"[panel] min-seats 審查人數: ✗ — 規定 {min_seats} 個不同的人,實際只有 {seats} 個(同一人重複或沒填名字的不算)")
             fails.append("席數不足")
         else:
-            print(f"[panel] min-seats: ✓ — {seats} 相異席 ≥ {min_seats}")
+            print(f"[panel] min-seats 審查人數: ✓ — {seats} 個不同的人,達到規定的 {min_seats}")
     if spec is not None:
         err, info = _hash_chain_check([latest], spec)   # OSError 上拋至 cmd_loop_status 統一 rc2
         if err:
-            print(f"[panel] G3 hash: ✗ — {err}")
+            print(f"[panel] G3 文件有沒有被事後改過: ✗ — {err}")
             fails.append("G3")
         elif info == "unbound":
-            print("[panel] G3 hash: ✗ — 判定輪未綁 spec hash(帶 --spec 即要求驗證)")
+            print("[panel] G3 文件有沒有被事後改過: ✗ — 判定輪的記錄沒帶文件指紋,沒辦法驗")
             fails.append("G3")
         else:
-            print(f"[panel] G3 hash: ✓ — {info}(同輪雙欄一致∧末 result=當前檔)")
+            print(f"[panel] G3 文件有沒有被事後改過: ✓ — {info}(同輪每筆指紋一致、最後一筆等於現在的檔)")
     return fails
 
 
@@ -3611,44 +3611,44 @@ def _panel_round_conjuncts(recs, quiet=False):
     missed = sum(1 for r in recs if r.get("kind") == "missed")
     if none_recs and missed == 0 and (caught + len(none_recs)) >= 2:
         if not quiet:
-            print(f"[panel] 輪有效(no-canary 制,記帳席 {caught + len(none_recs)}): ✓")
+            print(f"[panel] 輪有效: ✓ — {caught + len(none_recs)} 個人都記了帳")
     elif caught >= 2 and missed == 0:
         if not quiet:
-            print(f"[panel] 輪有效(canary caught {caught}/{caught},near-perfect): ✓")
+            print(f"[panel] 輪有效: ✓ — {caught} 個人全部抓到植入的錯(near-perfect)")
     elif missed > 0:
         if not quiet:
-            print(f"[panel] 輪有效: ✗ — {missed} missed(near-perfect 要求全 caught;中段分數弱訊號不背書收斂)")
+            print(f"[panel] 輪有效: ✗ — 有 {missed} 人漏掉植入的錯(near-perfect 規則要求全員抓到;有人漏審的輪不能拿來當收斂證據)")
         fails.append("輪無效")
     else:
         if not quiet:
-            print(f"[panel] 輪有效: ✗ — 記帳席不足(caught {caught}+none {len(none_recs)} <2,輪無效)")
+            print(f"[panel] 輪有效: ✗ — 記帳的人不夠(抓到 {caught} 人+無植入 {len(none_recs)} 人,少於 2 人,這輪無效)")
         fails.append("輪無效")
     # 嚴重度合取讀 caught+none(none 輪不讀會盲掉存活 findings——停用制下全輪都是 none)
     maxsev = max((order.get(r.get("severity", "clean"), 1) for r in caught_recs + none_recs), default=0)
     if maxsev >= 2:
         if not quiet:
-            print(f"[panel] falsification+ODC(存活 max≤minor): ✗ — 存活 {'blocker' if maxsev==3 else 'major'}")
+            print(f"[panel] falsification+ODC(存活 max≤minor): ✗ — 這輪還留著 {'blocker' if maxsev==3 else 'major'} 等級的問題沒解決,太嚴重不能過")
         fails.append("存活≥major")
     else:
         if not quiet:
-            print("[panel] falsification+ODC(存活 max≤minor): ✓")
+            print("[panel] falsification+ODC(存活 max≤minor): ✓ — 留下的問題都在可接受等級")
     # capture-recapture 殘餘:★2026-08-14 降 advisory,不進合取★(Projects/收斂閘殘餘估計降級_計劃 S1/S2)
     # 理由=鑑別力≈0(殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25)+f1≤1 公式退化+席獨立前提被自家
     # 重疊分布(64-71% 單席獨佔)否定;舊「殘餘超門檻」「無capture_counts」兩條 fails 撤除。
     cc = next((r["capture_counts"] for r in recs if r.get("capture_counts")), None)
     if cc is None:
         if not quiet:
-            print("[panel] capture-recapture 殘餘(advisory,不進合取): 無 capture_counts,殘餘觀測缺席")
+            print("[panel] capture-recapture 漏網估計(僅供參考,不影響過不過): 沒有重疊數據,算不出來")
     else:
         ccl = _cc_ints(cc)   # r1 s2:三個讀側呼叫點統一過型別守衛,壞型不得靜默算假 0.0
         if ccl is None:
             if not quiet:
-                print("[panel] capture-recapture 殘餘(advisory,不進合取): 壞型(counts 非 int list),不算")
+                print("[panel] capture-recapture 漏網估計(僅供參考,不影響過不過): 數據格式不對,不算")
         else:
             remaining = _estimate_remaining_defects(ccl)
             if not quiet:
                 note = "⚠ 低殘餘讀數無鑑別力(自帳對照 67% vs 79%,2026-08-14)" if remaining < 1.0 else ""
-                print(f"[panel] capture-recapture 殘餘(advisory,不進合取): 估計 {remaining:.2f} {note}".rstrip())
+                print(f"[panel] capture-recapture 漏網估計(僅供參考,不影響過不過): 估計還有 {remaining:.2f} 個沒被抓到 {note}".rstrip())
     return fails
 
 
@@ -3675,12 +3675,12 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
         rid_ = r.get("round")
         if rid_ in groups and next(reversed(groups)) != rid_:
             # M2:round-id 被其他 round 隔開後重現=帳本次序損壞(append-only 不容跳寫)
-            print(f"ERROR: round-id {rid_!r} 非連續重現(被其他輪隔開;append-only 帳次序損壞)",
+            print(f"擋下:第 {rid_!r} 輪的記錄被別的輪次隔開後又出現(非連續重現),帳的順序亂了,沒辦法判斷",
                   file=sys.stderr)
             return 2
         groups.setdefault(rid_, []).append(r)
     if not groups:
-        print(f"⏳ 無 panel 輪記錄 ({loop_id})")
+        print(f"⏳ {loop_id} 還沒有任何一輪的多人審查記錄")
         return 1
     # ── M2 讀側型別防禦:clusters 欄必須是 dict[str,str](寫側轉型慣例;手改/損壞 → rc2 非 traceback)
     for r in rounds:
@@ -3728,10 +3728,10 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
     _cluster_intent = any("clusters" in r for r in rounds)
     rid, latest = next(reversed(groups.items()))
     if _cluster_intent and not valid_of[rid]:
-        print(f"[panel] 輪有效: ✗ — cluster-intent loop 判定輪 {rid} 無效(M2 謂詞:caught≥2∧missed=0∧kind 白名單)")
+        print(f"[panel] 輪有效: ✗ — 分組追蹤模式下第 {rid} 輪無效(要至少 2 人抓到、0 人漏掉)")
         for i, r in enumerate(latest, 1):
             print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
-        print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: 輪無效[未定錨 cluster-intent])")
+        print(f"⛔ PANEL GATE FAIL({loop_id} 第 {rid} 輪沒通過:這輪無效,分組模式也還沒定下來)")
         return 1
     fails = _panel_round_conjuncts(latest)   # A案:三條合取抽出共用(輸出逐字同改動前)
     # [A案 2026-08-05] K=2:cutoff 起的新 loop,收斂需最後★兩★輪各自過三條合取
@@ -3740,13 +3740,13 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
     if k2 and not fails:
         rids = list(groups)
         if len(rids) < 2:
-            print("[panel] K=2 前一輪: ✗ — 僅一輪(K=2 需連續兩個乾淨輪;第二輪材料全量)")
+            print("[panel] K=2 連續兩輪乾淨: ✗ — 目前只有一輪(規則要連續兩輪都合格;第二輪要審全量材料)")
             fails.append("K=2需第二輪")
         else:
             prev_rid = rids[-2]
             prev_fails = _panel_round_conjuncts(groups[prev_rid], quiet=True)
             if prev_fails:
-                print(f"[panel] K=2 前一輪({prev_rid}): ✗ — {'/'.join(prev_fails)}")
+                print(f"[panel] K=2 連續兩輪乾淨: ✗ — 前一輪 {prev_rid} 沒過({'/'.join(prev_fails)})")
                 fails.append("K=2前一輪未乾淨")
             else:
                 # 前一輪殘餘觀測行內附值(S2:quiet 路徑不重印整段,但 K=2 為新 loop 預設,
@@ -3759,21 +3759,21 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
                     obs = "殘餘 obs 壞型(counts 非 int list)"   # r1 s2:同守衛,壞型不印假值
                 else:
                     obs = f"殘餘 obs {_estimate_remaining_defects(pccl):.2f}"
-                print(f"[panel] K=2 前一輪({prev_rid}): ✓ ({obs})")
+                print(f"[panel] K=2 連續兩輪乾淨: ✓ — 前一輪 {prev_rid} 也合格({obs})")
     fails += _panel_extra_checks(latest, min_seats, spec)
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('capture_counts','-')}\t{r.get('auditor','')}")
     for line in _cost_summary(rounds):
         print(line)
     if fails:
-        print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+        print(f"⛔ PANEL GATE FAIL({loop_id} 第 {rid} 輪沒通過,卡在:{'/'.join(fails)})")
         return 1
     if k2:
         probe = _panel_probe_verdict(loop_id, rid, latest)
-        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: K=2 ∧ 輪有效 ∧ 存活≤minor)")
-        print(f"[panel] 抽查判定(e',決定性可重算): {'★應抽查★——加開 probe-* 輪(不計 cap;冒 major 即自動撤銷收斂)' if probe else '免抽'}")
+        print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、留下的問題都在可接受等級)")
+        print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
     else:
-        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ 存活≤minor)")
+        print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、留下的問題都在可接受等級)")
     return 0
 
 
@@ -3791,11 +3791,11 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
     if valid_of[rid]:
         # 顯示與謂詞同步(終審 F4:原字面只印 caught,none 制輪印出「caught 0≥2 ✓」自相矛盾)
         if n_none:
-            print(f"[panel/cluster] 條1 輪有效(no-canary 制,記帳席 {n_caught + n_none}≥2,0 missed): ✓")
+            print(f"[panel/cluster] 輪有效: ✓ — {n_caught + n_none} 人記帳、沒人漏審")
         else:
-            print(f"[panel/cluster] 條1 輪有效(caught {n_caught}≥2,0 missed): ✓")
+            print(f"[panel/cluster] 輪有效: ✓ — {n_caught} 人抓到植入的錯、沒人漏")
     else:
-        print(f"[panel/cluster] 條1 輪有效: ✗ — caught {n_caught}/none {n_none}/missed {n_missed}"
+        print(f"[panel/cluster] 輪有效: ✗ — 抓到 {n_caught} 人/無植入 {n_none} 人/漏掉 {n_missed} 人"
               f"(謂詞:記帳席[caught+none]≥2∧missed=0∧kind 全白名單)")
         fails.append("輪無效")
     # fold(僅有效輪,append 序 last-wins)+ ledger(首現/末更輪僅計有效輪,與 advisory 同源)
@@ -3813,27 +3813,27 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
                     ledger[name]["last"] = rid_
     disputed = [n for n, e in ledger.items() if e["state"].split(":", 1)[0] == "disputed-major"]
     if disputed:
-        print(f"[panel/cluster] 條2 fold 後無 disputed-major: ✗ — {len(disputed)} 個: {','.join(disputed)}")
+        print(f"[panel/cluster] 有沒有分組還卡在爭議且嚴重(disputed-major): ✗ — 還有 {len(disputed)} 組: {','.join(disputed)}")
         fails.append("存在disputed-major")
     else:
-        print("[panel/cluster] 條2 fold 後無 disputed-major: ✓")
+        print("[panel/cluster] 有沒有分組還卡在爭議且嚴重(disputed-major): ✓ — 沒有")
     # advisory:新生 cluster(僅基於有效輪;判定輪無效 → 不適用)
     if valid_of[rid]:
         born = [n for n, e in ledger.items() if e["first"] == rid]
-        print(f"[panel/cluster] (advisory) 新生 cluster: {len(born)} 個"
+        print(f"[panel/cluster] (僅供參考)這輪新生 cluster: {len(born)} 個"
               + (f": {','.join(born)}" if born else ""))
     else:
-        print("[panel/cluster] (advisory) 新生 cluster: 判定輪無效,新生統計不適用")
+        print("[panel/cluster] (僅供參考)新生 cluster: 這輪無效,不統計")
     # advisory:capture-recapture(照算照印,不進合取;無 counts 不 fail-closed——cluster 帳接手守門)
     cc = next((r["capture_counts"] for r in latest if r.get("capture_counts")), None)
     ccl = _cc_ints(cc) if cc is not None else None   # r1 s2/s3:讀側統一型別守衛
     if cc is not None and ccl is None:
-        print("[panel/cluster] (advisory) capture-recapture: 壞型(counts 非 int list),不算")
+        print("[panel/cluster] (僅供參考)capture-recapture 漏網估計: 數據格式不對,不算")
     elif ccl is not None:
         remaining = _estimate_remaining_defects(ccl)
-        print(f"[panel/cluster] (advisory) capture-recapture 殘餘估計: {remaining:.2f}(不進合取)")
+        print(f"[panel/cluster] (僅供參考)capture-recapture 漏網估計: 還有約 {remaining:.2f} 個沒抓到(不影響過不過)")
     else:
-        print("[panel/cluster] (advisory) capture-recapture: 無 counts(advisory,不擋)")
+        print("[panel/cluster] (僅供參考)capture-recapture 漏網估計: 沒有重疊數據,算不出來")
     # 警告區:無效輪攜帶的 clusters(已忽略;資料本在 canary-log,顯示即留痕——status 唯讀)
     for rid_, recs in groups.items():
         if valid_of[rid_]:
@@ -3855,26 +3855,26 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
         rids_ = list(groups)
         prev_valid = len(rids_) >= 2 and valid_of.get(rids_[-2], False)
         if not prev_valid:
-            print("[panel/cluster] K=2 前一輪: ✗ — " + ("僅一輪" if len(rids_) < 2 else f"前一輪 {rids_[-2]} 無效")
+            print("[panel/cluster] K=2 連續兩輪乾淨: ✗ — " + ("目前只有一輪" if len(rids_) < 2 else f"前一輪 {rids_[-2]} 無效")
                   + "(K=2 需連續兩個有效輪)")
             fails.append("K=2前一輪未乾淨")
         else:
-            print(f"[panel/cluster] K=2 前一輪({rids_[-2]}): ✓")
+            print(f"[panel/cluster] K=2 連續兩輪乾淨: ✓ — 前一輪 {rids_[-2]} 也合格")
     fails += _panel_extra_checks(latest, min_seats, spec)   # M1包:cluster 路不得繞過(code-loop r1)
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
     for line in _cost_summary(all_rounds or []):
         print(line)
     if fails:
-        print(f"⛔ PANEL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+        print(f"⛔ PANEL GATE FAIL({loop_id} 第 {rid} 輪沒通過,卡在:{'/'.join(fails)})")
         return 1
     if _k2c:
         probe = _panel_probe_verdict(loop_id, rid, latest)
-        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: K=2 ∧ 輪有效 ∧ fold 後無 disputed-major"
+        print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、沒有分組卡在 disputed-major"
               f"[cluster 帳,{len(ledger)} 個 cluster])")
-        print(f"[panel] 抽查判定(e',決定性可重算): {'★應抽查★——加開 probe-* 輪(不計 cap;冒 major 即自動撤銷收斂)' if probe else '免抽'}")
+        print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
     else:
-        print(f"✅ PANEL GATE PASS ({loop_id} 輪 {rid}: 輪有效 ∧ fold 後無 disputed-major"
+        print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、沒有分組卡在 disputed-major"
               f"[cluster 帳,{len(ledger)} 個 cluster])")
     return 0
 
@@ -4078,14 +4078,14 @@ def cmd_loop_canary_stats(env, loop_id=None):
             st[kind] += 1
             st["streak"] = st["streak"] + 1 if kind == "missed" else 0   # 尾端連續 missed(append 序)
     except OSError as e:
-        print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
+        print(f"擋下:審查記錄檔讀不到({e}),沒有它算不出下一步。先確認檔案在不在、有沒有讀取權限:\n    {path}", file=sys.stderr)
         return 2
     def _print_overlap(lp):
         # S3 席位重疊分布(跨輪分布合併;席名=auditor 欄原文、鏡頭層不在帳內——誠實界線)
         o = overlap.get(lp)
-        bad = f";壞型 {o['badtype']} 筆(counts 非 int list,已跳過不計)" if o and o["badtype"] else ""
+        bad = f";另有 {o['badtype']} 筆重疊數據格式不對(壞型,不是整數清單),已跳過不計" if o and o["badtype"] else ""
         if not o or not o["counts"]:
-            reason = "全為壞型,無可計數據" if (o and o["badtype"]) else "該 loop 記錄不帶 capture_counts"
+            reason = "數據全部格式不對(壞型),沒得算" if (o and o["badtype"]) else "這個審查編號的記錄沒帶重疊數據 capture_counts"
             print(f"  重疊分布: 無重疊數據({reason}){bad}")
             return
         cs = o["counts"]
@@ -4100,7 +4100,7 @@ def cmd_loop_canary_stats(env, loop_id=None):
                   "canary-stats 僅回放歷史 caught/missed 帳,升級訊號改看 quote-check——d5)")
             _print_overlap(loop_id)   # r1 整合席 P5:重疊段不得被 none-only 提前返回吃掉
         else:
-            print(f"⏳ 無記錄 ({loop_id})")
+            print(f"⏳ 無記錄({loop_id} 目前一筆記錄都還沒有)")
         return 0
     for lp in targets:
         seats = per_loop[lp]
@@ -4253,32 +4253,32 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
     (零依賴家規:JSON 非 YAML——stdlib 可解)。"""
     import json
     if n_badlines:
-        print(f"ERROR: canary-log 含 {n_badlines} 行不可解析——settle 輪鍵=append 序,壞行使序號位移,"
-              "fail-closed 及於整個共用檔(修復或歸檔壞行後重跑)", file=sys.stderr)
+        print(f"擋下:審查記錄檔有 {n_badlines} 行讀不懂;輪次是照行序算的,壞行會讓後面全部歪掉,"
+              "所以整個檔先不信。修好或搬走壞的那幾行再重跑", file=sys.stderr)
         return 2
     try:
         data = json.loads(Path(settle_path).read_text(encoding="utf-8-sig"))
     except OSError as e:
-        print(f"ERROR: 讀不到 --settle 清單檔 {settle_path}: {e}", file=sys.stderr)
+        print(f"擋下:--settle 指的清單檔讀不到({e}):\n    {settle_path}", file=sys.stderr)
         return 2
     except ValueError as e:
-        print(f"ERROR: --settle 清單檔非合法 JSON: {e}", file=sys.stderr)
+        print(f"擋下:--settle 清單檔不是合法的 JSON: {e}", file=sys.stderr)
         return 2
     entries = data.get("entries") if isinstance(data, dict) else None
     if not isinstance(entries, list) or not entries:
-        print("ERROR: 清單需 {\"entries\":[...]} 且至少 1 條——零條目全結清恆真=零證明,拒收",
+        print("擋下:清單要長成 {\"entries\":[...]} 而且至少一條;零條目的「全部收尾」等於什麼都沒證明,不收",
               file=sys.stderr)
         return 2
     for i, e in enumerate(entries, 1):
         if not isinstance(e, dict) or not all(k in e for k in ("id", "kind", "status", "spec_sha")):
-            print(f"ERROR: 條目 #{i} 缺必要欄(id/kind/status/spec_sha)", file=sys.stderr)
+            print(f"擋下:清單第 {i} 條少了必填欄位(id/kind/status/spec_sha 都要有)", file=sys.stderr)
             return 2
         if e["kind"] not in ("mech", "semantic") or e["status"] not in ("unverified", "mech-ok", "llm-ok"):
-            print(f"ERROR: 條目 {e.get('id')} kind/status 非法(kind=mech|semantic,"
-                  "status=unverified|mech-ok|llm-ok)", file=sys.stderr)
+            print(f"擋下:清單條目 {e.get('id')} 的 kind 或 status 填了不認得的值(kind 只能是 mech 或 semantic,"
+                  "status 只能是 unverified / mech-ok / llm-ok)", file=sys.stderr)
             return 2
         if e["status"] == "llm-ok" and not isinstance(e.get("verified_in_round"), int):
-            print(f"ERROR: 條目 {e.get('id')} llm-ok 缺 verified_in_round(int)——空席背書洞,schema 強制",
+            print(f"擋下:清單條目 {e.get('id')} 標了 llm-ok 卻沒寫是第幾輪驗的(verified_in_round),不寫就等於沒人背書",
                   file=sys.stderr)
             return 2
     repo_root = _anchor_repo_root(repo)
@@ -4288,7 +4288,7 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
         cur_sha = _sha256_file(spec)
         text = Path(spec).read_text(encoding="utf-8-sig")
     except OSError as e:
-        print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+        print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
         return 2
     fails = []
     # caught 輪(收緊定義):kind=caught|none ∧ auditor 非空;輪鍵=append 序(1-based)
@@ -4311,36 +4311,36 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
         if why:
             unsettled.append((e["id"], why))
     if unsettled:
-        print(f"[settle] 清單全結清: ✗ — {len(unsettled)}/{len(entries)} 條未結清")
+        print(f"[settle] 清單全結清: ✗ — {len(entries)} 條裡還有 {len(unsettled)} 條沒收尾")
         for eid, why in unsettled:
             print(f"    {eid}: {why}")
         fails.append("清單未結清")
     else:
-        print(f"[settle] 清單全結清: ✓ — {len(entries)} 條(mech-ok/llm-ok 依 kind 各就終態)")
+        print(f"[settle] 清單全結清: ✓ — {len(entries)} 條全部收尾了")
     claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
     bad = [c for c in claims if c["status"] in ("missing", "line_out_of_range")]
     if bad:
-        print(f"[settle] G1 refcheck: ✗ — {len(bad)} 條壞宣稱")
+        print(f"[settle] G1 文件裡的檔案/行號引用對不對: ✗ — 有 {len(bad)} 條對不上真正的程式碼")
         fails.append("G1")
     else:
-        print(f"[settle] G1 refcheck: ✓ — {len(claims)} 條宣稱全 ok")
+        print(f"[settle] G1 文件裡的檔案/行號引用對不對: ✓ — {len(claims)} 條全部對得上")
     last = rounds[-1] if rounds else None
     if last is None:
-        print("[settle] G3 末筆對齊: ✗ — settle 帳零 record(fail-closed)")
+        print("[settle] G3 最後一筆記錄的文件指紋對不對得上現在的文件: ✗ — 一筆記錄都沒有")
         fails.append("G3")
     elif last.get("result_sha256") != cur_sha:
-        print("[settle] G3 末筆對齊: ✗ — 末筆 result hash≠當前 spec(缺欄同 ✗;off-fold 改版後請重審一輪)")
+        print("[settle] G3 最後一筆記錄的文件指紋對不對得上現在的文件: ✗ — 對不上(文件在最後一輪審完之後又改過了,請重審一輪)")
         fails.append("G3")
     else:
-        print("[settle] G3 末筆對齊: ✓")
+        print("[settle] G3 最後一筆記錄的文件指紋對不對得上現在的文件: ✓")
     fs = [r.get("findings") for r in rounds[-3:]]
-    print(f"[settle] G2(advisory,不進合取): findings 近況={fs}")
+    print(f"[settle] G2(僅供參考,不影響過不過)各輪問題數: {fs}")
     for i, r in enumerate(rounds, 1):
         print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
     if fails:
-        print(f"⛔ SETTLE GATE FAIL ({loop_id}: {'/'.join(fails)})")
+        print(f"⛔ SETTLE GATE FAIL({loop_id} 沒通過,卡在:{'/'.join(fails)})")
         return 1
-    print(f"✅ SETTLE GATE PASS ({loop_id}: 清單全結清 ∧ G1 ∧ G3)")
+    print(f"✅ SETTLE GATE PASS({loop_id} 通過:清單全收尾、引用對得上、文件沒被事後改過)")
     return 0
 
 
@@ -4354,7 +4354,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
     天花板:收斂=連 K 輪醒著的審計員沒找到 blocker/major,非完整正確;severity 自報(見設計 doc)。"""
     import json
     if light and panel:
-        print("ERROR: --light 與 --panel 互斥(light=單席 legacy 格式;三模式各自一條路)", file=sys.stderr)
+        print("擋下:--light 和 --panel 不能一起用(light 是單人審、panel 是多人審,兩條不同的路),擇一", file=sys.stderr)
         return 2
     explicit_need = need is not None
     if need is None:
@@ -4362,32 +4362,32 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
     if disposal:
         # [T4 處置閘] 獨立路徑(design-loop重設計 d2/B5):與所有既有模式互斥,舊閘一行不動
         if panel or light or settle is not None or explicit_need or min_seats is not None:
-            print("ERROR: --disposal 與 --panel/--light/--settle/--need/--min-seats 互斥(獨立閘路徑)",
+            print("擋下:--disposal 是獨立的一套閘,不能跟 --panel/--light/--settle/--need/--min-seats 一起用",
                   file=sys.stderr)
             return 2
         if spec is None:
-            print("ERROR: --disposal 需 --spec(fail-closed;G3 與留痕重驗無對象不可判)", file=sys.stderr)
+            print("擋下:--disposal 一定要帶 --spec 指定被審的文件,不然沒辦法比對文件有沒有被改、留痕對不對(寧可擋也不猜)", file=sys.stderr)
             return 2
     if settle is not None:
         # [S1] rc2 互斥/前置群(fail-closed;結清式收斂_計劃 2026-07-28)
         if panel or light:
-            print("ERROR: --settle 與 --panel/--light 互斥(v1 只接 legacy 路徑)", file=sys.stderr)
+            print("擋下:--settle 不能跟 --panel 或 --light 一起用(目前只接單人審的記錄格式)", file=sys.stderr)
             return 2
         if explicit_need:
-            print("ERROR: --settle 不數輪,顯式 --need 無意義(靜默忽略會誤導)——拿掉 --need", file=sys.stderr)
+            print("擋下:--settle 模式不數輪數,--need 在這裡沒意義;與其默默忽略誤導你,不如請你拿掉 --need", file=sys.stderr)
             return 2
         if min_seats is not None:
-            print("ERROR: --settle 與 --min-seats 併用 rc2(該檢查定義在 need 窗上,settle 拔窗後無定義域;"
+            print("擋下:--settle 不能跟 --min-seats 一起用(人數檢查是算在最近幾輪上的,settle 模式沒有「最近幾輪」這個概念;"
                   "auditor 非空職能由 caught 定義收緊承接)", file=sys.stderr)
             return 2
         if not gate:
-            print("ERROR: --settle 需 --gate(fail-closed)", file=sys.stderr)
+            print("擋下:--settle 要搭 --gate 一起用,不然沒有東西可判", file=sys.stderr)
             return 2
         if spec is None:
-            print("ERROR: --settle 需 --spec(條目 spec_sha 與 G3 皆比對現檔,無對象不可判)", file=sys.stderr)
+            print("擋下:--settle 一定要帶 --spec 指定被審的文件,每條收尾記錄和文件指紋都要跟現在的檔比對", file=sys.stderr)
             return 2
     if min_seats is not None and min_seats < 1:
-        print(f"ERROR: --min-seats 需正整數,收到 {min_seats}(負/零=門檻失義;code-loop r2 折入)", file=sys.stderr)
+        print(f"擋下:--min-seats 要填正整數(至少幾個人審),你給的是 {min_seats}", file=sys.stderr)
         return 2
     need = max(1, need)
     path = env.vault.parent / ".canary-log.jsonl"
@@ -4417,14 +4417,14 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         try:
             _roster_observe(env, loop_id, rounds, repo)
         except Exception as e:   # 觀測絕不擋閘:任何意外只降級為警告
-            print(f"[roster] ⚠ 觀測失敗(advisory,不影響判定): {e}")
+            print(f"[roster] 提醒:派工名單對帳失敗,不影響過不過關: {e}")
 
     # 混用守衛(R2-F1 footgun):panel 記錄(有 round 欄)與 legacy 模式不可混用。
     # 用 all/any 而非單向 any:partial-mix(部分有 round、部分沒)也擋——否則 round-less
     # 記錄在 panel 模式會形成 None phantom 組、可能成「最新輪」偽過(review I1)。
     n_round = sum(1 for r in rounds if "round" in r)
     if panel and rounds and n_round != len(rounds):
-        print("ERROR: --panel 要求本 loop 記錄全帶 round 欄(混用/legacy 記錄拒讀,防 None phantom 輪)",
+        print("擋下:--panel 模式要求這個編號的每筆記錄都帶輪次,現在有記錄沒帶(混用或舊格式),不讀——不然會多算出一個不存在的 phantom 輪",
               file=sys.stderr)
         return 2
     if disposal:
@@ -4434,7 +4434,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
                                      bad_linenos=bad_linenos)
     if not panel and n_round > 0:
-        print("ERROR: canary-log 含 round 欄(panel 記錄)卻未加 --panel——拒絕靜默把一輪 W 筆當 W 輪",
+        print("擋下:這個編號的記錄帶了輪次(多人審格式),但你沒加 --panel;不加的話一輪裡 W 個人的記錄會被當成 W 輪,所以不算",
               file=sys.stderr)
         return 2
     if settle is not None:
@@ -4443,22 +4443,22 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         try:
             return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec)
         except OSError as e:   # G3 --spec 不可讀:與 legacy G1 對稱 rc2(code-loop r2 折入)
-            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
             return 2
 
     # ── M1包 #2:light K=1 謂詞(loop機械脊椎M1包_計劃;hash 強制 fail-closed) ──
     if light:
         if spec is None:
-            print("ERROR: --light 需 --spec(light hash 強制 fail-closed,無驗證對象不可判)", file=sys.stderr)
+            print("擋下:--light 一定要帶 --spec 指定被審的文件,沒有對象就沒辦法驗文件有沒有被改", file=sys.stderr)
             return 2
         # ratchet 最先:任一 caught/none 筆 severity≥major → 永久 FAIL(missed 筆不觸發;
         # none=協議停用制的無植入輪——不納會使停用後 major 輪失去永久升級,閘變寬鬆)
         if any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker") for r in rounds):
-            print(f"⛔ LIGHT GATE FAIL ({loop_id}: ratchet——已有 caught 輪 severity≥major,永久升 standard;"
-                  "開新 panel loop id(原 id+-std 後綴)承接,乾淨輪不洗回)")
+            print(f"⛔ LIGHT GATE FAIL({loop_id}):曾經有一輪抓到 major 以上的問題,light 這個最寬鬆的規則從此永久失效(ratchet),"
+                  "之後再乾淨的輪也洗不回來。開新的審查編號(原編號加 -std)換嚴格規則接著審")
             return 1
         if not rounds:
-            print(f"⏳ 無記錄 ({loop_id})")
+            print(f"⏳ 無記錄({loop_id} 目前一筆記錄都還沒有)")
             return 1
         last = rounds[-1]
         fails = []
@@ -4472,7 +4472,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         try:
             err, info = _hash_chain_check([[last]], spec)
         except OSError as e:   # 與 legacy G1 對稱 rc2(code-loop r2 折入)
-            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
             return 2
         if err:
             fails.append(err)
@@ -4483,9 +4483,9 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         for line in _cost_summary(rounds):
             print(line)
         if fails:
-            print(f"⛔ LIGHT GATE FAIL ({loop_id}): " + "；".join(fails))
+            print(f"⛔ LIGHT GATE FAIL({loop_id} 沒通過,卡在):" + "；".join(fails))
             return 1
-        print(f"✅ LIGHT GATE PASS ({loop_id}: 單席 caught∧max≤minor∧互證∧hash 鏈驗訖 K=1)")
+        print(f"✅ LIGHT GATE PASS({loop_id} 通過:單人審完、沒有中等以上問題、記錄互相對得上、文件沒被事後改過)")
         return 0
 
     def good(r):
@@ -4500,10 +4500,10 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
             break
     if not gate:
         if converged:
-            print(f"✅ CONVERGED ({loop_id}, 連 {need} 輪 caught+乾淨;共 {len(rounds)} 輪)")
+            print(f"✅ CONVERGED({loop_id} 連續 {need} 輪審完且乾淨,判定收斂;總共跑了 {len(rounds)} 輪)")
             rc = 0
         else:
-            print(f"⏳ 還需 {need - streak} 輪乾淨 ({loop_id}, 已 {len(rounds)} 輪)")
+            print(f"⏳ 還需連續 {need - streak} 輪乾淨才算收斂({loop_id} 目前跑了 {len(rounds)} 輪)")
             rc = 1
         for i, r in enumerate(rounds, 1):       # 留痕:每輪一行 tab 分隔
             print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
@@ -4517,28 +4517,28 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         return 2
     fails = []
     if converged:
-        print(f"[gate] K-streak(--need {need}): ✓")
+        print(f"[gate] K-streak 連續乾淨輪數(要 {need} 輪): ✓")
     else:
-        print(f"[gate] K-streak(--need {need}): ✗ — 還需 {need - streak} 輪 caught+乾淨(已 {len(rounds)} 輪)")
+        print(f"[gate] K-streak 連續乾淨輪數(要 {need} 輪): ✗ — 還差 {need - streak} 輪審完且乾淨(目前 {len(rounds)} 輪)")
         fails.append("K-streak")
     if spec is None:
-        print("[gate] G1 refcheck(引用座標): skipped(無 spec 對象,code-loop 情境)")
+        print("[gate] G1 文件裡的檔案/行號引用對不對: 跳過(沒帶 --spec,沒有比對對象)")
     else:
         try:
             text = Path(spec).read_text(encoding="utf-8-sig")
         except OSError as e:
-            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
             return 2
         claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
         bad = [c for c in claims if c["status"] in ("missing", "line_out_of_range")]
         if bad:
-            print(f"[gate] G1 refcheck(引用座標): ✗ — {len(bad)} 條壞宣稱")
+            print(f"[gate] G1 文件裡的檔案/行號引用對不對: ✗ — 有 {len(bad)} 條引用對不上真正的程式碼")
             for c in bad:
                 loc = f"{c['token']}:{c['line']}" if c["line"] else c["token"]
                 print(f"    {loc}({c['status']})")
             fails.append("G1")
         else:
-            print(f"[gate] G1 refcheck(引用座標): ✓ — {len(claims)} 條宣稱全 ok")
+            print(f"[gate] G1 文件裡的檔案/行號引用對不對: ✓ — {len(claims)} 條全部對得上")
     tail = rounds[-need:]
     fs = [r.get("findings") for r in tail]
     g2_fail = ""
@@ -4561,43 +4561,43 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
             if not drained:
                 g2_fail = f"findings={fs} 未枯竭(需單調不增、末輪 ≤1 且末輪=0 或末步嚴格下降)"
     if g2_fail:
-        print(f"[gate] G2 發現枯竭: ✗ — {g2_fail}")
+        print(f"[gate] G2 每輪找到的問題數有沒有遞減到零: ✗ — {g2_fail}")
         fails.append("G2")
     else:
-        print(f"[gate] G2 發現枯竭: ✓ — findings={fs}")
+        print(f"[gate] G2 每輪找到的問題數有沒有遞減到零: ✓ — 各輪問題數 {fs}")
     if min_seats:   # legacy gate 消費;**逐輪**驗非空(code-loop r2 Codex:整窗聯集會讓「一有一空」過關)
         bad = [i for i, r in enumerate(tail, 1)
                if len({a for a in [r.get("auditor")] if a}) < min_seats]
         if bad:
-            print(f"[gate] min-seats: ✗ — 窗內第 {','.join(map(str, bad))} 輪席數不足"
-                  f"({min_seats} 席制;逐輪驗非空,空席不計)")
+            print(f"[gate] min-seats 審查人數: ✗ — 第 {','.join(map(str, bad))} 輪席數不足"
+                  f"(規定每輪至少 {min_seats} 人;沒填名字的不算)")
             fails.append("席數不足")
         else:
-            print(f"[gate] min-seats: ✓ — 窗內 {len(tail)} 輪逐輪 ≥ {min_seats}")
+            print(f"[gate] min-seats 審查人數: ✓ — 最近 {len(tail)} 輪每輪都有 {min_seats} 人以上")
     # ── M1包 #3 G3 雙 hash 鏈(帶 --spec=聲明要驗;收斂窗=tail need 筆) ──
     if spec is not None:
         try:
             err, info = _hash_chain_check([[r] for r in tail], spec)
         except OSError as e:   # 對稱 G1 rc2(code-loop r2 折入;G1 讀 text 過≠hash 讀 bytes 必過,race 窗)
-            print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+            print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
             return 2
         if err:
-            print(f"[gate] G3 hash 鏈: ✗ — {err}")
+            print(f"[gate] G3 文件有沒有被事後改過(hash 鏈): ✗ — {err}")
             fails.append("G3")
         elif info == "unbound":
-            print("[gate] G3 hash 鏈: ✗ — 收斂窗未綁 spec hash(帶 --spec 即要求驗證;"
-                  "請重審一輪並於 record 帶 --spec/--reviewed)")
+            print("[gate] G3 文件有沒有被事後改過(hash 鏈): ✗ — 這幾輪都沒留下「審的是哪份文件」的指紋;"
+                  "請重審一輪,記錄時帶 --spec 和 --reviewed")
             fails.append("G3")
         else:
-            print(f"[gate] G3 hash 鏈: ✓ — {info}")
+            print(f"[gate] G3 文件有沒有被事後改過(hash 鏈): ✓ — {info}")
     for i, r in enumerate(rounds, 1):
         print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('findings', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
     for line in _cost_summary(rounds):
         print(line)
     if fails:
-        print(f"⛔ GATE FAIL ({loop_id}: {'/'.join(fails)})")
+        print(f"⛔ GATE FAIL({loop_id} 沒通過,卡在:{'/'.join(fails)})")
         return 1
-    print(f"✅ GATE PASS ({loop_id}: K-streak ∧ G1 ∧ G2 ∧ G3)")
+    print(f"✅ GATE PASS({loop_id} 四關全過:連續乾淨輪數、引用對得上、問題數遞減、文件沒被改過)")
     return 0
 
 
@@ -4699,7 +4699,7 @@ def _roster_dispatch_entries(loop_dir, rid):
         try:
             obj = _json.loads(f.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, ValueError):
-            print(f"[roster] ⚠ {f.name} 壞損/不符形狀,跳過不計")
+            print(f"[roster] 提醒:派工快照 {f.name} 壞掉或格式不對,跳過不算")
             skipped += 1
             continue
         if isinstance(obj, dict) and "auditor" in obj:
@@ -4709,7 +4709,7 @@ def _roster_dispatch_entries(loop_dir, rid):
         elif isinstance(obj, list):
             elems = obj
         else:
-            print(f"[roster] ⚠ {f.name} 壞損/不符形狀,跳過不計")
+            print(f"[roster] 提醒:派工快照 {f.name} 壞掉或格式不對,跳過不算")
             skipped += 1
             continue
         for e in elems:
@@ -4723,16 +4723,16 @@ def _roster_observe(env, loop_id, rounds, repo):
     逐輪分桶對帳。落點=cmd_loop_status 入口、各模式分支 early-return 之前(四模式皆吃得到)。"""
     kind = _roster_kind(loop_id)
     if kind is None:
-        print(f"[roster] {loop_id}: kind 無法判定(code 開頭但非 code- 慣例),跳過對帳")
+        print(f"[roster] {loop_id}:看不出是設計審還是代碼審(名稱 code 開頭但不是 code- 格式),跳過派工對帳")
         return
     tier = next((r.get("tier") for r in rounds if r.get("tier")), None)
-    print(f"[roster] {loop_id}: kind={kind}(依前綴推定) tier={tier or '無定錨'}")
+    print(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'}")
     if tier is None:
-        print("[roster] tier 無定錨(legacy/零記錄帳),無編制可對")
+        print("[roster] 這個編號沒指定過分級(舊格式或還沒記錄),沒有編制表可以對")
         return
     entry = _TIER_ROSTER.get((kind, tier))
     if entry is None:
-        print(f"[roster] 無編制宣告(組合 {kind}/{tier} 未定義),跳過對帳")
+        print(f"[roster] 無編制宣告:{kind}/{tier} 這個組合沒定義該派誰,跳過對帳")
         return
     root = Path(repo).resolve() if repo else _vault_repo_root(env)
     loop_dir = root / "governance" / "review-reports" / loop_id
@@ -4748,7 +4748,7 @@ def _roster_observe(env, loop_id, rounds, repo):
             if m and m.group(1) not in rids:
                 rids.append(m.group(1))
     if not rids:
-        print("[roster] 無輪記錄與派工快照,無可對帳")
+        print("[roster] 沒有輪次記錄也沒有派工快照,沒東西可對")
         return
     seats = entry["seats"]
     req_c = [s for s in seats if s["requirement"] in ("required", "required-fail-closed") and s["family"] == "claude"]
@@ -4757,7 +4757,7 @@ def _roster_observe(env, loop_id, rounds, repo):
     for rid in rids:
         auditors, _skipped = _roster_dispatch_entries(loop_dir, rid) if loop_dir.is_dir() else ([], 0)
         if not auditors:
-            print(f"[roster] {rid}: 無派工快照可對帳(舊帳/未落)")
+            print(f"[roster] {rid}:沒有派工快照可對(舊記錄或還沒寫入)")
             continue
         fams = [(a, *_roster_family(a)) for a in auditors]
         n_c = sum(1 for _, f, _d in fams if f == "claude")
@@ -4769,26 +4769,26 @@ def _roster_observe(env, loop_id, rounds, repo):
               f";應派 required claude {len(req_c)}+external {len(req_e)}")
         if len(exts) < len(req_e):
             fc = any(s["requirement"] == "required-fail-closed" for s in req_e)
-            msg = f"[roster] {rid}: external_missing——外家桶{hedge}(實 {len(exts)}/應 {len(req_e)})"
+            msg = f"[roster] {rid}:external_missing——外部審查員{hedge}不夠(實際 {len(exts)} 席,應有 {len(req_e)} 席)"
             if fc:
-                msg += ";fail-closed 紀律未滿足(轉述,不阻斷)"
+                msg += ";這席規定缺席就不能放行,fail-closed 紀律未滿足(這裡只轉述,不擋)"
             print(msg)
         if n_c < len(req_c):
-            print(f"[roster] {rid}: seat_shortfall——claude 桶{hedge}(實 {n_c}/應 {len(req_c)})")
+            print(f"[roster] {rid}:seat_shortfall——claude 審查員{hedge}不夠(實際 {n_c} 席,應有 {len(req_c)} 席)")
         if len(req_e) >= 2:
             from collections import Counter as _Counter
             for name, cnt in _Counter(exts).items():
                 if cnt >= 2:
-                    print(f"[roster] {rid}: ⚠ 外家疑似兼任({cnt} 席同名:{name})")
+                    print(f"[roster] {rid}:提醒,外部審查員疑似一人兼任多席({cnt} 席都叫 {name})")
         if nia and not exts:
-            print(f"[roster] {rid}: 單家族,收斂宣稱要講小(note-if-absent 席缺,不算 shortfall)")
+            print(f"[roster] {rid}:單家族(只有同一家模型在審),收斂結論要講保守一點(選配席缺席不算短少)")
         for s in seats:
             if s["requirement"] == "conditional":
-                print(f"[roster] {rid}: 條件席 {s['slot']}——條件:{s.get('note', '?')}——應派與否編排者自對")
+                print(f"[roster] {rid}:{s['slot']} 是條件席(條件:{s.get('note', '?')}),該不該派由編排者自己對")
         for a in unks:
-            print(f"[roster] {rid}: unknown 席列出不判定:{a}")
+            print(f"[roster] {rid}:看不出 {a} 是哪一家的審查員,列出但不判定")
         for a in duals:
-            print(f"[roster] {rid}: ⚠ 雙家族關鍵字命中:{a}(判序 external 先贏)")
+            print(f"[roster] {rid}:提醒,{a} 的名字同時像兩家,先當成外部審查員算")
 
 
 def _roster_next_payload(loop_id, eff_tier):
@@ -4834,7 +4834,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         return 2
     n_round = sum(1 for r in rounds if "round" in r)
     if rounds and n_round not in (0, len(rounds)):
-        print("ERROR: canary-log round 欄混用(partial-mix)——帳損壞,同 status 拒讀", file=sys.stderr)
+        print("擋下:這個審查編號的記錄有的帶輪次、有的不帶,格式前後不一致,沒辦法判斷收斂。打開審查記錄檔 .canary-log.jsonl,把這個編號的每一筆格式改一致", file=sys.stderr)
         return 2
     panel_fmt = n_round > 0
     if panel_fmt:   # 讀側損壞守衛不得因缺 --spec 提前 return 而繞過(code-loop r2 折入)
@@ -4843,7 +4843,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             rid = r["round"]
             if rid != cur_rid:
                 if rid in seen:
-                    print(f"ERROR: round-id {rid!r} 非連續重現(append-only 帳次序損壞)——同 status 拒讀",
+                    print(f"擋下:第 {rid!r} 輪的記錄被別的輪次隔開後又出現(非連續重現),這本帳只能照時間往後加,順序亂了就沒辦法判斷收斂。檢查 .canary-log.jsonl 裡這個編號的寫入順序",
                           file=sys.stderr)
                     return 2
                 seen.add(rid)
@@ -4851,12 +4851,12 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
     # ── tier 解析:定錨優先(v8);僅無定錨舊帳按格式推導;零記錄 rc2 ──
     anchor = next((r["tier"] for r in rounds if r.get("tier")), None)
     if tier and anchor and tier != anchor:
-        print(f"ERROR: --tier {tier} 與帳面定錨 {anchor} 衝突(定錨優先;要換 tier 開新 loop id)", file=sys.stderr)
+        print(f"擋下:你這次指定的分級是 {tier},但這個審查編號第一筆記錄就定成 {anchor} 了。分級第一筆定下就不能中途換——要換請開新的審查編號", file=sys.stderr)
         return 2
     eff_tier = anchor or tier
     if eff_tier is None:
         if not rounds:
-            print("ERROR: 零記錄 loop 需明示 --tier(不猜——猜錯模式撞混用守衛)", file=sys.stderr)
+            print("擋下:這是全新的審查編號,還沒有任何記錄,工具不會幫你猜分級(猜錯之後格式兜不起來反而卡住)。第一次呼叫請加 --tier 指定分級", file=sys.stderr)
             return 2
         eff_tier = "standard" if panel_fmt else "legacy"   # 無定錨舊帳 fallback
     width, cap = _TIER_PARAMS[eff_tier]
@@ -4871,18 +4871,18 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
     #    因此被迫落 legacy cap6,見 Issues/loop-next吐不可宣告的tier) ──
     if rounds:
         if eff_tier in ("standard", "high") and not panel_fmt and not seq:
-            print(f"ERROR: tier={eff_tier} 要求 panel 格式(記錄帶 --round),帳面為 legacy 格式——"
-                  "格式衝突(補 record 帶 --round,或 tier 錯誤則開新 loop id)", file=sys.stderr)
+            print(f"擋下:{eff_tier} 這個分級規定每筆記錄都要帶輪次(--round),但這個編號目前的記錄全都沒帶,兩邊對不上。"
+                  "之後記錄請帶 --round;如果一開始分級就選錯,請開新的審查編號", file=sys.stderr)
             return 2
         if light and panel_fmt:
-            print("ERROR: tier=light 為單席 legacy 格式,帳面卻帶 --round(panel 格式)——格式衝突", file=sys.stderr)
+            print("擋下:light 分級只能用單人、不分輪次的記錄,但這個編號的記錄帶了輪次(--round),兩邊對不上。確認分級選對了沒;選錯請開新的審查編號", file=sys.stderr)
             return 2
     rounds_count = len({r["round"] for r in rounds}) if panel_fmt else len(rounds)
     n_next = rounds_count + 1
 
     def emit(phase, extra=None):
         out = {"phase": phase, "tier": eff_tier, "round": n_next, "width": width,
-               "min_seats": width, "cap": cap, "advisory": "tier 由編排者宣告後定錨;lumos 只做映射與定錨讀取"}
+               "min_seats": width, "cap": cap, "advisory": "分級由編排者第一筆記錄時宣告、之後定死;工具只照分級查表,不自己判斷"}
         _roster, _rnote = _roster_next_payload(loop_id, eff_tier)
         out["roster"] = _roster
         if _rnote:
@@ -4927,30 +4927,24 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 if _roster_kind(loop_id) == "code":
                     # 循序codeloop-tier錨定案:standard 對 code 循序已格式相容,但補標=cap 陷阱——警告式,不邀請
                     out["tier_hint"] = (
-                        "★本 loop 無 tier 定錨,正在吃 legacy 判準(單席、cap 6——比 standard 的 cap 3 鬆)★。"
-                        "legacy 不是可宣告值。補 --tier high 會被格式一致性當場擋掉(rc2);"
-                        "--tier standard 格式相容(code 循序=設計行為,2026-08-18 守衛修正)——"
-                        "但★既有輪數會整批計入 cap=3★,已跑 ≥3 筆的 loop 一補標下一步即 cap-reached。"
-                        "要走分級判準請★開新 loop id,並在第一筆 record 就帶 --tier★。")
+                        "提醒:這個審查編號從沒指定過分級,現在用最寬鬆的舊規則在跑(單人審、最多 6 輪;正式的 standard 只給 3 輪)。"
+                        "想中途改嚴:補 --tier high 會因格式不合直接被擋;補 --tier standard 格式相容,"
+                        "但已經跑過的輪數會整批算進 3 輪上限,跑過 3 輪以上的一補標下一步就到頂。"
+                        "要走嚴格規則,請開新的審查編號,並在第一筆記錄就帶 --tier。")
                 else:
                     out["tier_hint"] = (
-                        "★本 loop 無 tier 定錨,正在吃 legacy 判準(單席、cap 6——比 standard 的 cap 3 鬆)★。"
-                        "legacy 不是可宣告值,★這個 loop 補標不了★:帳面已是 legacy 格式(記錄不帶 --round),"
-                        "補 --tier standard|high 會被格式一致性當場擋掉(rc2)。"
-                        "(--tier light 格式相容,但 cap=2 且帶 ratchet 語意,對已跑數輪的 loop 通常當場 cap-reached。)"
-                        "要走分級判準請★開新 loop id,並在第一筆 record 就帶 --tier★。")
+                        "提醒:這個審查編號從沒指定過分級,現在用最寬鬆的舊規則在跑(單人審、最多 6 輪),而且沒辦法事後補分級——"
+                        "記錄格式已經定型(不帶輪次),補 --tier standard 或 high 會直接被擋;"
+                        "--tier light 格式相容但只給 2 輪,跑過幾輪的通常一補就到頂。"
+                        "要走嚴格規則,請開新的審查編號,並在第一筆記錄就帶 --tier。")
             # ★預防端:警告必須在派工「之前」★——記帳時才喊已經來不及(輪跑完了)。
             # loop next 是每輪第一步,所以量尺放這裡。
             out["scope_cap"] = (
-                f"★派工前先量★ `wc -l <工作副本/patch>`:超過 {_CANARY_SCOPE_SOFT_CAP_LINES} 行"
-                f"(≈30K token)就★拆開審★——切成多輪,或拆給多席各審一段。"
-                "理由:審查員的任務是『在 N 行裡找出那個植入的錯』,而脈絡越長注意力越差是"
-                "已發表的實測(退化在 32K token 就量得到)。"
-                "★這條門檻純粹借自外部文獻——本專案自己跑過三次對照實驗都測不出規模效應,"
-                "不得引用自家資料當佐證★(原本這裡寫「本專案資料落在線兩邊」,該宣稱已撤:"
-                "兩組審的根本不是同一份碼;之後兩次刻意設計的實驗一次撞天花板 7/7、一次撞"
-                "地板 0/6,見 Projects/規模影響判斷力假說)。"
-                "超標不擋,但會在帳上標 scope_oversize、該輪 caught 視為弱證據。")
+                f"派工前先量這輪要審的東西有多少行(wc -l <工作副本或 patch>):超過 {_CANARY_SCOPE_SOFT_CAP_LINES} 行"
+                "就拆開審——切成多輪,或分給多人各審一段。"
+                "材料太長審查員會看不完、漏東西,這是外部研究的結論;"
+                "本專案自己跑過三次對照實驗都量不到這個效應,所以別拿自家資料當佐證。"
+                "超標不擋,但帳上會標成範圍過大、那輪抓到的結果算弱證據。")
         # ★cluster 帳的選擇只有第一輪能做★(2026-08-02):模式由「第一個有效輪」定錨,之後
         # 要換只能開新 loop id。而 M2 落地至今 316 筆 canary 記錄裡★只有 1 筆帶 clusters★,
         # 且那一筆是開發它的 code-m2cluster 自己——34 個 panel loop 中有 33 個靜默落回
@@ -4958,25 +4952,25 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         # 只在 N=1 提(那是選擇真正還開著的唯一時刻),避免對已定錨的 loop 噴無效噪音。
         if phase == "plant-canary" and not light and eff_tier != "legacy" and not seq and n_next == 1:
             out["cluster_hint"] = (
-                "★本 loop 第一輪——cluster 帳只有現在能選(模式由第一個有效輪定錨,之後要換只能開新 loop id)★:"
-                "若預期 findings 會散成★性質不同★的風險群(例:「規格縮水」與「邊界 bug」),"
-                "改用 `--clusters '名=resolved|accepted-minor:理由|disputed-major'` 逐群追蹤,"
-                "gate 改判「無 disputed-major」——不把不同性質的問題壓成單一 max severity(一軸會遮蔽另一軸)。"
-                "單一主題、findings 同性質的 loop 用預設(無-cluster)即可。")
+                "這是第一輪,要不要把發現分組追蹤只有現在能決定(第一個有效輪定下模式,之後要換只能開新編號):"
+                "如果預期發現會散成性質不同的幾群(例如「規格縮水」和「邊界 bug」),"
+                "記錄時加 --clusters '群名=resolved|accepted-minor:理由|disputed-major' 逐群追蹤,"
+                "收斂改看「沒有爭議且嚴重的群」——不然不同性質的問題被壓成一個最高等級,一邊會蓋掉另一邊。"
+                "單一主題、發現性質相同的用預設(不分組)就好。")
         if extra:
             out.update(extra)
         if as_json:
             print(_json.dumps(out, ensure_ascii=False))
         else:
-            print(f"[next] {loop_id}: phase={phase} tier={eff_tier} 下一輪 N={n_next}"
-                  f" width={width} cap={cap}")
+            print(f"[next] {loop_id}:現在狀態 {phase},分級 {eff_tier},接下來第 {n_next} 輪,"
+                  f"這輪要 {width} 人審,最多跑 {cap} 輪")
             if out.get("roster"):
                 for s in out["roster"]["seats"]:
-                    print(f"  應派: {s['slot']} family={s['family']}"
-                          f" 佔W={'是' if s['occupies_w'] else '否'} requirement={s['requirement']}"
-                          + (f" note={s['note']}" if s.get("note") else ""))
+                    print(f"  應派: {s['slot']}(家族 {s['family']},"
+                          f"{'算' if s['occupies_w'] else '不算'}進人數,派工要求:{s['requirement']})"
+                          + (f" 備註:{s['note']}" if s.get("note") else ""))
             elif out.get("roster_note"):
-                print(f"  應派: —({out['roster_note']})")
+                print(f"  應派: 目前算不出該派誰——{out['roster_note']}")
             for k in ("canary_type", "record_cmd", "scope_cap", "cluster_hint", "note"):
                 if k in out:
                     print(f"  {k}: {out[k]}")
@@ -4985,12 +4979,12 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
     # ⓪ escalate:light ratchet 永久態最先短路
     if light and any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker")
                      for r in rounds):
-        return emit("escalate", {"note": "light ratchet 已觸發——停止本 loop,開新 panel loop id(原 id+-std 後綴)承接"})
+        return emit("escalate", {"note": "這個編號曾抓到 major 以上的問題,light 最寬鬆的規則從此失效——停掉這個編號,開新的(原編號加 -std)換嚴格規則接著審"})
     if not rounds:
         return emit("plant-canary")
     # ① gate-pending:判 converged 需 gate 結果,資訊不足絕不背書(先於 cap)
     if spec is None:
-        return emit("gate-pending", {"note": "缺 --spec,gate 判定資訊不足——跑 loop status --gate 附完整參數自判"})
+        return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關——用 lumos loop status <編號> --gate 帶完整參數自己判"})
     # ② full-basis gate 委派(靜默跑既有謂詞,零新判定邏輯)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
@@ -5001,10 +4995,10 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         sys.stderr.write(buf.getvalue())
         return 2
     if rc == 0:
-        return emit("converged", {"gate_basis": "full(G 合取+hash 委派既有謂詞全過)"})
+        return emit("converged", {"gate_basis": "四關全過(連續乾淨輪數、引用對得上、問題數遞減、文件沒被改過)"})
     # ③ cap(資訊充分且未 PASS)
     if rounds_count >= cap:
-        return emit("cap-reached", {"note": f"cap={cap} 到頂未收斂——停,攤給人裁(別無限燒)"})
+        return emit("cap-reached", {"note": f"跑滿 {cap} 輪還沒收斂——停下來,剩下的交給人裁決,別無限燒下去"})
     # ④ plant-canary
     return emit("plant-canary")
 
@@ -5181,7 +5175,7 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
         return 2
     rel = env.find(node)
     if rel is None:
-        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     inv, _ = extract_contracts(env.notes[rel])
     # 比對 invariant 語義本體(去掉 [test:..] 後綴),避免子字串誤命中既有測試名
@@ -5267,7 +5261,7 @@ def cmd_guard_bind(env, node, invariant_substr, method, platform=None):
     ref = f"{platform}:{method}" if platform else method
     rel = env.find(node)
     if rel is None:
-        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     path = env.vault / rel
     try:
@@ -5355,7 +5349,7 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
         return 2
     rel = env.find(node)
     if rel is None:
-        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     path = env.vault / rel
     try:
@@ -5545,7 +5539,7 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
     import datetime
     rel = env.find(node)
     if rel is None:
-        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     path = env.vault / rel
     recipes, err = _kill_read_recipes(path)
@@ -5780,7 +5774,7 @@ def cmd_guard_audit(env, node, invariant_substr, model="sonnet", date=None):
     stamp = f"{model}/{date}"
     rel = env.find(node)
     if rel is None:
-        print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     path = env.vault / rel
     try:
@@ -5835,7 +5829,7 @@ def cmd_guard_trace(env, node=None):
     if node:
         rel = env.find(node)
         if rel is None:
-            print(f"ERROR: 找不到節點 {node}", file=sys.stderr)
+            print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
             return 2
     # 預掃所有 Verification 全文 → 之後查「哪篇提到某測試方法名」。
     # 剝 fenced/inline code(對齊 load_vault 的 body 連結抽取慣例 — code block 內宣告不算證據)。
@@ -6116,13 +6110,13 @@ def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, a
     vu = _conds(n.fields.get("valid_under"))
     if vu:
         age = _node_age_days(n)
-        flag = f"[⚠ 節點已 {age} 天未更新,前提條件可能失效]" if (age is not None and age > 90) else ""
-        print(f"⚠ 使用前驗證(valid_under){flag}:")
+        flag = f"[這篇已經 {age} 天沒更新,前提可能過期了]" if (age is not None and age > 90) else ""
+        print(f"提醒:動這篇之前先確認下面的前提還成立(valid_under){flag}:")
         for c in vu:
             print(f"  {c}")
     inv, debt = extract_contracts(n)
     if inv or debt:
-        print("⚠ 合約(動前必讀):")
+        print("提醒:這篇有「動了會壞」的合約,動手前一定要看:")
         for x in inv:
             print(f"  ★INVARIANT★ {x}")
         for x in debt:
@@ -7326,8 +7320,8 @@ def atomic_write_verify(path: Path, new_lines, key, expected_check):
 
 def cmd_set(env, rel, key, value):
     if key not in SCALAR_KEYS:
-        print(f"ERROR: set 白名單={sorted(SCALAR_KEYS)};{key} 不在內"
-              f"(list 用 append;decisions 翻盤/新增用 decision-supersede / decision-add)", file=sys.stderr)
+        print(f"擋下:{key} 不能用 set 改,檔案沒動。set 只能改這些純量欄位:{sorted(SCALAR_KEYS)}"
+              f"(清單欄位用 lumos append;決策新增/翻案用 lumos decision-add / decision-supersede)", file=sys.stderr)
         return 2
     path = env.vault / rel
     lines, s, e = load_raw_for_edit(path)
@@ -7349,7 +7343,7 @@ def cmd_set(env, rel, key, value):
         return True
 
     atomic_write_verify(path, new_lines, key, _check)
-    print(f"✓ set {rel}: {key} = {exp}" + (";tags 的 status/* 已同步" if tag_synced else ""))
+    print(f"✓ set {rel}: {key} 已改成 {exp}" + ("(狀態標籤 status/* 也同步改了)" if tag_synced else ""))
     return 0
 
 
@@ -7366,14 +7360,14 @@ def cmd_self_audit(env, rel, model="sonnet", date=None):
         try:
             datetime.date.fromisoformat(date)
         except ValueError:
-            print(f"ERROR: --date 須為 YYYY-MM-DD:{date!r}", file=sys.stderr)
+            print(f"擋下:--date 要寫成 年-月-日(例如 2026-08-22),你給的是 {date!r}", file=sys.stderr)
             return 2
     return cmd_set(env, rel, "self_audit", f"{model}/{date}")
 
 
 def cmd_append(env, rel, key, value):
     if key not in LIST_KEYS:
-        print(f"ERROR: append 白名單={sorted(LIST_KEYS)};{key} 不在內", file=sys.stderr)
+        print(f"擋下:{key} 不能用 append 加,檔案沒動。append 只能加這些清單欄位:{sorted(LIST_KEYS)}(純量欄位用 lumos set)", file=sys.stderr)
         return 2
     path = env.vault / rel
     lines, s, e = load_raw_for_edit(path)
@@ -7382,7 +7376,7 @@ def cmd_append(env, rel, key, value):
     tgt = link_target(value)
     atomic_write_verify(path, new_lines, key,
                         lambda f: any(link_target(x) == tgt for x in as_list(f.get(key))))
-    print(f"✓ append {rel}: {key} += {value}")
+    print(f"✓ append {rel}: {key} 多了一項 {value}")
     return 0
 
 
@@ -7395,21 +7389,21 @@ def cmd_remove(env, rel, key, value):
     ★不命中一律 rc=2★:打錯字卻回成功,會讓呼叫端以為清乾淨了(死背書照舊掛著),
     比報錯危險得多。"""
     if key not in LIST_KEYS:
-        print(f"ERROR: remove 白名單={sorted(LIST_KEYS)};{key} 不在內", file=sys.stderr)
+        print(f"擋下:{key} 不能用 remove 刪,檔案沒動。remove 只能動這些清單欄位:{sorted(LIST_KEYS)}", file=sys.stderr)
         return 2
     path = env.vault / rel
     lines, s, e = load_raw_for_edit(path)
     new_fm, n = edit_fm_remove(lines[1:e], key, value)
     if n == 0:
         cur = [str(x) for x in as_list(parse_frontmatter(lines[1:e])[0].get(key))]
-        print(f"ERROR: {rel} 的 {key} 找不到 {value}(比對 target={link_target(value)});"
-              f"現有 {len(cur)} 項:{cur[:8]}{' …' if len(cur) > 8 else ''}", file=sys.stderr)
+        print(f"擋下:{rel} 的 {key} 裡沒有 {value}(比對用的目標是 {link_target(value)}),可能打錯字或早就不在了,檔案沒動;"
+              f"目前有 {len(cur)} 項:{cur[:8]}{' …' if len(cur) > 8 else ''}", file=sys.stderr)
         return 2
     new_lines = lines[:1] + new_fm + lines[e:]
     tgt = link_target(value)
     atomic_write_verify(path, new_lines, key,
                         lambda f: not any(link_target(x) == tgt for x in as_list(f.get(key))))
-    print(f"✓ remove {rel}: {key} -= {value}" + (f"(命中 {n} 項)" if n > 1 else ""))
+    print(f"✓ remove {rel}: {key} 拿掉了 {value}" + (f"(共拿掉 {n} 項)" if n > 1 else ""))
     return 0
 
 
@@ -7534,7 +7528,7 @@ def cmd_decision_add(env, rel, content, decided, context=None, why=None):
     [M1/P2]:指派穩定 id d<max+1> 並回傳 (rc, 全域決策id <rel>#d<N>);dispatcher 解包後
     CLI 對外仍只回整數 rc。"""
     if not DATE_RE.match(decided):
-        raise ValueError(f"--decided 需 YYYY-MM-DD,得到: {decided}")
+        raise ValueError(f"擋下:--decided 要寫成 年-月-日(例如 2026-08-22),你給的是 {decided}")
     path = env.vault / rel
     lines, s_fm, e_fm = load_raw_for_edit(path)
     fm = lines[1:e_fm]
@@ -7571,7 +7565,7 @@ def cmd_decision_add(env, rel, content, decided, context=None, why=None):
                    and needle in nfc(str(d.get("content", "")))
                    for d in parse_decisions(_fm_of(new_lines)))
     atomic_write_verify(path, new_lines, "decisions", _check)
-    print(f"✓ decision-add {rel}: 「{content[:30]}」(id={new_id}, valid:true)")
+    print(f"✓ decision-add {rel}: 記下一條決策「{content[:30]}」(編號 {new_id},目前有效)")
     return 0, f"{rel}#{new_id}"
 
 
@@ -7894,7 +7888,7 @@ def cmd_impact_node(node_arg, repo=None, as_json=False):
     env = Env(vault)
     rel = env.find(node_arg)
     if rel is None:
-        print(f"ERROR: 找不到節點: {node_arg}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {node_arg} 的筆記,先確認名稱或路徑", file=sys.stderr)
         return 2
     neighbors, ambigs = _typed_hop1(env, rel)
     if as_json:
@@ -7999,15 +7993,15 @@ NEW_HINT = {
 
 def cmd_new(env, ntype, name, today, plan=None, systems=None):
     if ntype not in TEMPLATES:
-        print(f"ERROR: type 須為 {sorted(TEMPLATES)}", file=sys.stderr)
+        print(f"擋下:這個筆記類型工具不認得,沒建檔。可用的類型:{sorted(TEMPLATES)}", file=sys.stderr)
         return 2
     if "/" in name or "\\" in name or ".." in name or name.startswith("."):
-        print(f"ERROR: name 不得含路徑分隔符 / .. / 開頭點(防路徑逃脫): {name}", file=sys.stderr)
+        print(f"擋下:名稱不能有斜線、「..」或以點開頭,不然檔案可能跑到圖譜外面: {name}", file=sys.stderr)
         return 2
     # 一鍵雙向(2026-08-05 收尾優化):verification 建檔當下填 plan_refs+對面 verified_by——
     # 把「事後 sync-verified-by 撿漏」變「寫入時就對」。僅 verification 收這兩旗標。
     if (plan or systems) and ntype != "verification":
-        print("ERROR: --plan/--systems 僅 verification 型別適用", file=sys.stderr)
+        print("擋下:--plan/--systems 只有建驗證紀錄(verification)時才能用,其他類型請拿掉", file=sys.stderr)
         return 2
     def _norm_rel(x):
         x = x.strip().removesuffix(".md")
@@ -8016,12 +8010,12 @@ def cmd_new(env, ntype, name, today, plan=None, systems=None):
     plan_rels = [_norm_rel(x) for x in (plan.split(",") if plan else []) if x.strip()]
     for rel in sys_rels + plan_rels:
         if not (env.vault / rel).exists():
-            print(f"ERROR: --plan/--systems 指到不存在節點: {rel}(先建對象再連,不留半套雙向)", file=sys.stderr)
+            print(f"擋下:你要連的 {rel} 還不存在,沒建檔——先把那篇建起來再回來連,免得只連一半", file=sys.stderr)
             return 2
     folder, tmpl = TEMPLATES[ntype]
     path = env.vault / folder / f"{name}.md"
     if path.exists():
-        print(f"ERROR: 已存在: {path}", file=sys.stderr)
+        print(f"擋下:這個名字的筆記已經有了,沒重複建: {path}", file=sys.stderr)
         return 2
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = tmpl.format(today=today)
@@ -8034,22 +8028,21 @@ def cmd_new(env, ntype, name, today, plan=None, systems=None):
         try:
             rc_side |= cmd_append(env, self_rel, "plan_refs", f"[[{rel.removesuffix('.md')}]]")
         except OSError as e:
-            print(f"⚠ plan_refs 寫入失敗({rel}): {e}", file=sys.stderr)
+            print(f"提醒:筆記建好了,但幫你回掛到計劃 {rel} 的 plan_refs 沒寫成功: {e}", file=sys.stderr)
             rc_side = 2
     for rel in sys_rels:
         try:
             rc_side |= cmd_append(env, rel, "verified_by", f"[[{folder}/{name}]]")
         except OSError as e:
-            print(f"⚠ verified_by 寫入失敗({rel}): {e}", file=sys.stderr)
+            print(f"提醒:筆記建好了,但幫你回掛到 {rel} 的 verified_by 沒寫成功: {e}", file=sys.stderr)
             rc_side = 2
     if rc_side:
-        print("⚠ 雙向連結部分失敗(檔案已建,非跨檔交易)——補救:lumos sync-verified-by --apply"
-              " + 手補 plan_refs;doctor 會抓殘缺", file=sys.stderr)
+        print("提醒:筆記建好了,但自動補的反向連結有一部分沒成功,健檢會抓到。補救先跑:\n    lumos sync-verified-by --apply\n  再手動補上沒連到的 plan_refs", file=sys.stderr)
         return 2
-    print(f"✓ new {ntype}: {path.relative_to(env.vault)}")
+    print(f"✓ new {ntype}: 骨架建好了 {path.relative_to(env.vault)}")
     for line in NEW_HINT.get(ntype, []):
         print(f"  {line}")
-    print(f"  寫完跑 lumos lint {name}(單檔快檢標籤/格式)→ 全圖再 lumos doctor;完整規範見 lumos-project-notes skill")
+    print(f"  內容填完先檢查這一篇,再跑全圖健檢:\n    lumos lint {name}\n    lumos doctor\n  (寫法規範在 lumos-project-notes skill)")
     return 0
 
 
@@ -9360,13 +9353,13 @@ def _anchor_repo_root(repo):
     if repo is not None:
         p = Path(repo)
         if not p.is_dir():
-            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            print(f"擋下:--repo 指的不是目錄: {repo}", file=sys.stderr)
             return None
         return p
     for cand in (Path.cwd(), *Path.cwd().parents):
         if (cand / ".git").exists():
             return cand
-    print("ERROR: cwd 逐層向上找不到 .git repo,請用 --repo 指定", file=sys.stderr)
+    print("擋下:從目前目錄往上找不到 git repo,用 --repo 指定專案根目錄", file=sys.stderr)
     return None
 
 
@@ -9458,12 +9451,12 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
             return 2
         if rid_ in groups and next(reversed(groups)) != rid_:
             # 同 panel 守衛:round-id 被其他輪隔開後重現=append-only 帳次序損壞
-            print(f"ERROR: round-id {rid_!r} 非連續重現(被其他輪隔開;append-only 帳次序損壞)",
+            print(f"擋下:第 {rid_!r} 輪的記錄被別的輪次隔開後又出現(非連續重現),帳的順序亂了,沒辦法判斷",
                   file=sys.stderr)
             return 2
         groups.setdefault(rid_, []).append(r)
     if not groups:
-        print(f"⏳ 無記錄 ({loop_id})")
+        print(f"⏳ 無記錄({loop_id} 目前一筆記錄都還沒有)")
         return 1
     rid, latest = next(reversed(groups.items()))
 
@@ -9475,7 +9468,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     try:
         err, info = _hash_chain_check([latest], spec)
     except OSError as e:
-        print(f"ERROR: 讀不到 --spec {spec}: {e}", file=sys.stderr)
+        print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
         return 2
     if err:
         print(f"[disposal] G3 hash: ✗ — {err}")
@@ -9598,15 +9591,15 @@ def cmd_quote_check(report, spec, as_json=False):
         stext = Path(spec).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
         # UnicodeDecodeError 非 OSError——非 UTF-8 檔原本直接 traceback(r1 s4 席)
-        print(f"ERROR: 讀不到檔案: {e}", file=sys.stderr)
+        print(f"擋下:檔案讀不到: {e}", file=sys.stderr)
         return 2
     rows = _quote_rows(rtext, stext)
     if rows is None:
-        print("ERROR: 報告內抽不到任何「引句：「…」」——驗不了≠通過;"
-              "席報告未遵守派工格式時,先補引句再記帳。\n"
-              "  常見原因(Landmark 首測實錄):①標籤粗體/註記變體已容錯(**引句**：/引句（註）：可抽),"
-              "但『引文:』『Quote:』等別名不認 ②引號用半形 \"…\" 或【…】(只認「」『』) "
-              "③引句與標籤不同行 ④開閉引號不成對(會以格式 miss 入列,非零條)", file=sys.stderr)
+        print("擋下:這份審查報告裡一句「引句：「…」」都抽不到;驗不了不等於通過——"
+              "審查員沒照派工格式寫的話,先補引句再記帳。\n"
+              "  常見原因:①標籤寫成『引文:』『Quote:』等別名(只認「引句」;粗體或加註記的變體可以)"
+              " ②引號用半形 \"…\" 或【…】(只認「」『』) "
+              "③引句跟標籤不在同一行 ④開閉引號不成對(這種會列成錨不到,不是零條)", file=sys.stderr)
         return 2
     miss = [r for r in rows if not r["ok"]]
     if as_json:
@@ -9618,8 +9611,8 @@ def cmd_quote_check(report, spec, as_json=False):
             mark = "✓" if r["ok"] else "✗"
             short = f"(<{_QUOTE_MIN_NORM_LEN} 字下限)" if r.get("too_short") else ""
             print(f"  {mark} #{i} 「{r['quote'][:60]}」{short}")
-        print(f"{'✅ 全數錨定' if not miss else f'⛔ {len(miss)}/{len(rows)} 條錨不到(miss 條不採信)'}"
-              f"(正規化=NFC+剝 */`+空白摺疊;比對對象應為派工凍結快照)")
+        print(f"{'✅ 全數錨定:報告裡每句引言都能在凍結快照找到原文' if not miss else f'⛔ {len(rows)} 句引言有 {len(miss)} 句在凍結快照裡找不到(找不到的那幾句不採信)'}"
+              f"(比對時忽略粗體、反引號和空白差異;比對對象應該是派工當下的凍結快照)")
     return 0 if not miss else 1
 
 
@@ -9677,12 +9670,12 @@ def cmd_link_candidates(code_file=None, goldset=None, repo=None, as_json=False):
     import json
     import os
     if bool(code_file) == bool(goldset):
-        print("ERROR: <code-file> 與 --all-goldset 互斥且必居其一", file=sys.stderr)
+        print("擋下:要嘛給一個程式檔、要嘛用 --all-goldset,兩個選一個", file=sys.stderr)
         return 2
     repo_root = Path(repo or ".").resolve()
     vault = _vault_in(repo_root)
     if vault is None:
-        print("ERROR: vault 找不到(--repo 未指向含 docs/*-knowledge 的目錄)", file=sys.stderr)
+        print("擋下:找不到知識圖譜(--repo 指的目錄底下沒有 docs/*-knowledge)", file=sys.stderr)
         return 2
     env = Env(vault)
     files = []
@@ -9691,14 +9684,14 @@ def cmd_link_candidates(code_file=None, goldset=None, repo=None, as_json=False):
             gs = json.loads(Path(goldset).read_text(encoding="utf-8"))
             files = sorted({c["file"] for c in gs.get("edit", []) if c.get("file")})
         except (OSError, ValueError, TypeError) as e:
-            print(f"ERROR: goldset 讀取/格式失敗: {e}", file=sys.stderr)
+            print(f"擋下:標準答案集(goldset)讀不到或格式不對: {e}", file=sys.stderr)
             return 2
     else:
         rp = str(code_file)
         if os.path.isabs(rp):
             rp = os.path.relpath(rp, str(repo_root))
         if not (repo_root / rp).exists():
-            print(f"ERROR: code 檔不存在: {rp}", file=sys.stderr)
+            print(f"擋下:這個程式檔不存在: {rp}", file=sys.stderr)
             return 2
         files = [rp]
 
@@ -10048,7 +10041,7 @@ def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
         materials = disp.get("materials") or []
         assert isinstance(materials, list)
     except (OSError, UnicodeDecodeError, ValueError, AssertionError) as e:
-        print(f"ERROR: 讀 report/dispatch 失敗: {e}", file=sys.stderr)
+        print(f"擋下:審查報告或派工單讀不到: {e}", file=sys.stderr)
         return 2
     out = {"report": str(report), "round": disp.get("round"), "seat": disp.get("seat"),
            "lens": disp.get("lens"), "unreported": [], "out_of_scope": [], "vacuous": False}
@@ -10057,7 +10050,7 @@ def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
         if as_json:
             print(json.dumps(out, ensure_ascii=False))
         else:
-            print("seat-check: materials 為空 → vacuous 豁免(不判 unreported/out_of_scope)")
+            print("seat-check: 派工單沒列任何要查的材料,沒東西可對(vacuous 豁免,不判漏查或出界)")
         return 0
     mat_texts = {}
     for mp in materials:
@@ -10088,18 +10081,18 @@ def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
                                         "quote": q, "reason": "引句錨不進任何派工 material"},
                                        ensure_ascii=False) + "\n")
         except OSError as e:
-            print(f"ERROR: 越界帳寫入失敗: {e}", file=sys.stderr)
+            print(f"擋下:出界引句的記錄寫不進去: {e}", file=sys.stderr)
             return 2
     if as_json:
         print(json.dumps(out, ensure_ascii=False))
     else:
-        print(f"seat-check {Path(report).name}: unreported {len(out['unreported'])}"
-              f" / out_of_scope {len(out['out_of_scope'])}(materials {len(materials)};觀測恆 rc0)")
+        print(f"seat-check {Path(report).name}: 派工要查但報告沒碰 unreported {len(out['unreported'])}"
+              f" / 引句超出派工範圍 out_of_scope {len(out['out_of_scope'])}(派工材料 {len(materials)} 份;只觀測不擋)")
         for mp in out["unreported"]:
-            print(f"  ⚠ unreported: {mp}(dispatch 宣告要查,報告零觸及)")
+            print(f"  ⚠ unreported: {mp}(派工單說要查這份,報告裡一個字都沒提到)")
         for q in out["out_of_scope"]:
-            print(f"  ⚠ out_of_scope: 「{q[:50]}」(錨不進任何 material{';已記越界帳' if ledger else ''})")
-        print("  ★觀測非閘:抓的是協議內一致性;lens 不判定;證據 file:line 恆合法★")
+            print(f"  ⚠ out_of_scope: 「{q[:50]}」(這句引言不在派工的任何一份材料裡{';已記進出界帳' if ledger else ''})")
+        print("  (這項只觀測不擋:看的是報告有沒有照派工單走,不評審查角度;引 file:line 當證據一律算合法)")
     return 0
 
 
@@ -10114,12 +10107,12 @@ def cmd_anchor_verify(repo=None, as_json=False):
         return 2
     bp = repo_root / _ANCHOR_BASELINE_REL
     if not bp.exists():
-        print("anchor: baseline 不存在(未啟用)——`lumos anchor approve --note` 建立後生效")
+        print("anchor: 還沒有基準線,驗證器防竄改檢查未啟用——建立後才生效:\n    lumos anchor approve --note \"理由\"")
         return 0
     try:
         data = json.loads(bp.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        print(f"ERROR: baseline 讀取失敗: {e}", file=sys.stderr)
+        print(f"擋下:基準線檔讀不到: {e}", file=sys.stderr)
         return 2
     mismatches = []
     for rel, expected in sorted(data.get("anchors", {}).items()):
@@ -10133,13 +10126,13 @@ def cmd_anchor_verify(repo=None, as_json=False):
     if as_json:
         print(json.dumps({"ok": not mismatches, "mismatches": mismatches}, ensure_ascii=False))
     elif mismatches:
-        print("✗ anchor verify 失敗——驗證器檔案與 baseline 不符:")
+        print("✗ anchor verify 失敗——驗證器(測試/檢查腳本)的內容跟上次核可的基準線不一樣:")
         for m in mismatches:
             act = m["actual"] if m["actual"] == "(缺檔)" else m["actual"][:16] + "…"
             print(f"  {m['file']}(期望 {m['expected'][:16]}… 實際 {act})")
-        print("非刻意 → git checkout 還原;刻意改錨點 → lumos anchor approve --note \"理由\"")
+        print("不是故意改的 → 用 git checkout 還原;是刻意改的 → 重新核可並留理由:\n    lumos anchor approve --note \"理由\"")
     else:
-        print(f"✓ anchor verify — {len(data.get('anchors', {}))} 個錨點全符")
+        print(f"✓ anchor verify — {len(data.get('anchors', {}))} 個驗證器檔案都跟基準線一致,沒被動過")
     return 1 if mismatches else 0
 
 
@@ -10150,7 +10143,7 @@ def cmd_anchor_approve(repo=None, note=None, vault=None):
     import hashlib
     import datetime
     if not note or not note.strip():
-        print("ERROR: --note 必填(留痕理由)", file=sys.stderr)
+        print("擋下:核可一定要帶 --note 寫理由,不然以後沒人知道為什麼改", file=sys.stderr)
         return 2
     repo_root = _anchor_repo_root(repo)
     if repo_root is None:
@@ -10163,7 +10156,7 @@ def cmd_anchor_approve(repo=None, note=None, vault=None):
         else:
             absent.append(rel)
     if absent:
-        print(f"⚠ 錨點檔缺失(不入 baseline): {', '.join(absent)}")
+        print(f"提醒:這些驗證器檔案不存在,沒列進基準線: {', '.join(absent)}")
     bp = repo_root / _ANCHOR_BASELINE_REL
     prev = {}
     if bp.exists():
@@ -13065,12 +13058,12 @@ def cmd_fold_check(path, as_json=False):
     import json
     md = Path(path)
     if not md.is_file():
-        print(f"ERROR: 找不到檔案: {path}", file=sys.stderr)
+        print(f"擋下:找不到這個檔案: {path}", file=sys.stderr)
         return 2
     try:
         text = md.read_text(encoding="utf-8-sig")
     except OSError as e:
-        print(f"ERROR: 讀不到 {path}: {e}", file=sys.stderr)
+        print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
         return 2
 
     mirror_sections = _fold_mirror_sections(text)
@@ -13088,21 +13081,21 @@ def cmd_fold_check(path, as_json=False):
         }, ensure_ascii=False))
     else:
         print(f"fold-check {md}")
-        print("── 鏡像段(逐段確認與 body 一致)──")
+        print("── 鏡像段(摘要跟正文互相對照的段落,請逐段確認有沒有兜起來)──")
         for s in mirror_sections:
-            print(f"  ☐ 複查 {s}:與 body 一致?")
+            print(f"  ☐ 複查 {s}:跟正文寫的一樣嗎?")
         if not mirror_sections:
             print("  (無鏡像段)")
         if value_drift:
             print("── value-drift ──")
             for item in value_drift:
-                print(f"  ⚠ value-drift: 「{item['key']} {item['a']}」vs 「{item['key']} {item['b']}」")
+                print(f"  ⚠ value-drift 前後寫的不一樣: 一處「{item['key']} {item['a']}」,另一處「{item['key']} {item['b']}」——確認哪個才對")
         if reverse_omission:
             print("── reverse-omission ──")
             for item in reverse_omission:
-                print(f"  ⚠ reverse-omission: {item['present_in']} 有「{item['token']}」{item['missing_in']} 無")
+                print(f"  ⚠ reverse-omission 只寫了一邊: {item['present_in']} 提到「{item['token']}」,{item['missing_in']} 沒提——是不是漏寫了")
         if not has_flag:
-            print("✓ 無 flag")
+            print("✓ 無 flag(沒發現前後矛盾或漏寫)")
 
     return 1 if has_flag else 0
 
@@ -13115,12 +13108,12 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
     import json
     md = Path(md_path)
     if not md.is_file():
-        print(f"ERROR: 找不到檔案: {md_path}", file=sys.stderr)
+        print(f"擋下:找不到這個檔案: {md_path}", file=sys.stderr)
         return 2
     if repo is not None:
         repo_root = Path(repo)
         if not repo_root.is_dir():
-            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            print(f"擋下:--repo 指的不是目錄: {repo}", file=sys.stderr)
             return 2
     else:
         repo_root = None
@@ -13129,12 +13122,12 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
                 repo_root = cand
                 break
         if repo_root is None:
-            print("ERROR: cwd 逐層向上找不到 .git repo,請用 --repo 指定", file=sys.stderr)
+            print("擋下:從目前目錄往上找不到 git repo,用 --repo 指定專案根目錄", file=sys.stderr)
             return 2
     try:
         text = md.read_text(encoding="utf-8-sig")
     except OSError as e:
-        print(f"ERROR: 讀不到 {md_path}: {e}", file=sys.stderr)
+        print(f"擋下:檔案讀不到({e}): {md_path}", file=sys.stderr)
         return 2
 
     claims, n_missing, n_oor, n_ok = _refcheck_scan(text, repo_root)
@@ -13142,13 +13135,13 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
         print(json.dumps({"claims": claims, "missing": n_missing,
                           "out_of_range": n_oor, "ok": n_ok}, ensure_ascii=False))
     else:
-        print(f"refcheck {md} (repo={repo_root})")
+        print(f"refcheck {md}(對照的程式碼在 {repo_root})")
         for c in claims:
             loc = f"{c['token']}:{c['line']}" if c["line"] else c["token"]
             mark = "✓" if c["status"] == "ok" else "✗"
             tail = f" | {c['excerpt']}" if c["excerpt"] and "\n" not in c["excerpt"] else ""
             print(f"  {mark} {c['status']:<17} {loc}{tail}")
-        print(f"統計: ok {n_ok} / missing {n_missing} / out_of_range {n_oor}")
+        print(f"統計: 對得上 ok {n_ok} / 檔案不存在 missing {n_missing} / 行號超出檔案長度 out_of_range {n_oor}")
     return 1 if (n_missing or n_oor) else 0
 
 
@@ -13560,7 +13553,7 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
     if repo is not None:
         repo_root = Path(repo)
         if not repo_root.is_dir():
-            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            print(f"擋下:--repo 指的不是目錄: {repo}", file=sys.stderr)
             return 2
     else:
         repo_root = None
@@ -14214,7 +14207,7 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
     if repo is not None:
         repo_root = Path(repo)
         if not repo_root.is_dir():
-            print(f"ERROR: --repo 不是目錄: {repo}", file=sys.stderr)
+            print(f"擋下:--repo 指的不是目錄: {repo}", file=sys.stderr)
             return 2
     else:
         repo_root = None
@@ -14877,7 +14870,7 @@ def main():
        (args.cmd == "decisions" and not args.superseded):
         rel = env.find(getattr(args, "note", None) or "")
         if rel is None:
-            print(f"ERROR: 找不到筆記: {args.note}", file=sys.stderr)
+            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
             return 2
         if args.cmd == "links":
             return cmd_links(env, rel)
@@ -14896,7 +14889,7 @@ def main():
         # --legacy 逃生;--regex 自動走舊路(候選語意不同,靜默、不印 fallback note)
         _use_ranked = not args.search_legacy and not args.regex
         if args.ranked and args.regex:
-            print("(--ranked 不適用 --regex 模式,照舊輸出)", file=sys.stderr)
+            print("(--regex 模式不做相關性排序,照舊順序輸出)", file=sys.stderr)
         return cmd_search(env, args.term, path_prefix=args.path_prefix,
                           regex=args.regex, files_only=args.files_only,
                           include_code=args.code, ranked=_use_ranked, top=args.top,
@@ -14908,7 +14901,7 @@ def main():
         if args.note:
             rel = env.find(args.note)
             if rel is None:
-                print(f"ERROR: 找不到筆記: {args.note}", file=sys.stderr)
+                print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
                 return 2
         return cmd_contracts(env, rel)
 
@@ -15021,7 +15014,7 @@ def main():
     if args.cmd in ("set", "append", "remove"):
         rel = env.find(args.note)
         if rel is None:
-            print(f"ERROR: 找不到筆記: {args.note}", file=sys.stderr)
+            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
             return 2
         try:
             if args.cmd == "set":
@@ -15076,7 +15069,7 @@ def main():
             return 2
         rel = env.find(args.note)
         if rel is None:
-            print(f"ERROR: 找不到筆記: {args.note}", file=sys.stderr)
+            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
             return 2
         try:
             # [M1/P2] 兩函式回 (rc, 全域決策id);dispatcher 解包,CLI 對外仍只回整數 rc
