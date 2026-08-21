@@ -1325,6 +1325,12 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
             print()
 
     if ci:
+        # ★run 標記(2026-08-21,doctor-run事件_計劃)★:乾淨 run 也要留痕——帳本只記警告時,
+        # 分不出「修好了」與「還在」(「已清」=該 run 有標記但無該節點的 check-* 事件)。
+        # nodes 恆空、不進 issues、不改 rc;gov 預設畫面隱藏(見 cmd_gov),--full/--stats 照列。
+        _gates_hit = len({e.get("gate") for e in gov_events if str(e.get("gate", "")).startswith("check-")})
+        gov_events.append({"gate": "doctor-run", "kind": "ran", "hard": False, "nodes": [],
+                           "note": f"issues={issues} gates={_gates_hit}"})
         _append_governance_log(env.vault, gov_events)
 
     print(f"{C['B']}─────────────────────────────────{C['X']}")
@@ -2888,7 +2894,7 @@ def cmd_signoff(env, node, note, by=None):
 # ★gov --stats 的 gate 全集★(2026-08-20,計劃:Projects/閘觸發帳統計_計劃)
 # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
 # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
-_KNOWN_GATES = ("L2", "L3", "anchor-approve", "canary", "check-e1", "check-e2", "check-e3",
+_KNOWN_GATES = ("L2", "L3", "anchor-approve", "canary", "check-e1", "check-e2", "check-e3", "doctor-run",
                 "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "kill", "signoff")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
@@ -3047,6 +3053,10 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
     else:
         agg = {}          # (date,gate,kind) -> {node: 次數}(保序靠 dict 插入序)
         for r in ded:
+            # doctor-run 標記只畫 run 邊界,預設畫面隱藏(否則每次 --ci 一行灌版面);
+            # ★只在印出迴圈 continue,不動 ded——ded 與 --stats 共用,濾掉就沒了棘輪分母★
+            if r["gate"] == "doctor-run":
+                continue
             if _is_advisory(r):
                 g = agg.setdefault((r["ts"][:10], r["gate"], r["kind"]), {})
                 nk = ",".join(r["nodes"]) or "-"
@@ -3056,7 +3066,7 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
                 else:
                     r["_drop"] = True
         for r in ded:
-            if r.get("_drop"):
+            if r.get("_drop") or r["gate"] == "doctor-run":   # 第二處印出迴圈同樣隱藏 run 標記
                 continue
             mark = "硬擋" if r["hard"] else "軟"
             if r.get("_agg"):
@@ -3135,7 +3145,8 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
         legacy_s = f"(另 {legacy_rounds} 舊輪無 findings 欄不計)" if legacy_rounds else ""
         print(f"  對抗層增量帳(折入=測試綠後仍被抓;長期趨零=機關裝飾該砍): "
               f"折入 {fold_total} 筆缺陷 [{sev_s}] | 依審計員: {aud_s} {legacy_s}".rstrip())
-    print(f"\n{len(ded)} 筆(近 {since_days} 天)")
+    _shown = len(ded) if full else sum(1 for r in ded if r["gate"] != "doctor-run")
+    print(f"\n{_shown} 筆(近 {since_days} 天)")
     if stats:
         # 原始行也要吃 node 縮限,否則同一張表兩欄母體不同(去重欄已縮、原始欄沒縮)
         _raw = [r for r in rows if (not node) or stem(node) in r["nodes"]]
@@ -8966,9 +8977,14 @@ def _scaffold_project(root: Path, slug: str):
         (kg / d).mkdir(parents=True, exist_ok=True)
     _write_lf(kg / "MOC" / "index.md",
               f"---\ntype: moc\nstatus: doing\n---\n# {slug} 知識圖譜總索引\n")
-    _write_lf(kg / ".gitignore",
-              ".bypass-log.jsonl\n.rot-queue.jsonl\n.governance-log.jsonl\n.canary-log.jsonl\n.kill-log.jsonl\n.signoff-log.jsonl\n")
-    print(f"  ✓ scaffold {kg}")
+    # ★帳檔落在 docs/(vault.parent,見 _append_governance_log 等),.gitignore 必須寫在同一層★——
+    # 2026-06-26 起一直寫在 vault 內,對上一層的帳檔一個都沒忽略到(L4 清帳 2026-08-21 抓到:
+    # 本 repo 帳檔因此全被追蹤,筆記「皆 gitignore」長期為假)。改寫到 docs/.gitignore;
+    # 既有 repo 已追蹤的帳檔不受影響(gitignore 不 untrack),要不要 untrack 是另一個決定。
+    _write_lf(kg.parent / ".gitignore",
+              ".bypass-log.jsonl\n.rot-queue.jsonl\n.governance-log.jsonl\n.canary-log.jsonl\n"
+              ".kill-log.jsonl\n.signoff-log.jsonl\n.usage-log.jsonl\n.ci-log.jsonl\n")
+    print(f"  ✓ scaffold {kg}(帳檔 .gitignore → {kg.parent / '.gitignore'})")
 
 
 _GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "verification-rot-check.py", "impact-hook.py", "ci-status-hook.py")

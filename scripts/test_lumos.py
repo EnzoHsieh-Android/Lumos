@@ -252,7 +252,19 @@ def t_scaffold_project():
     for d in ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC"):
         check(f"scaffold: 建 {d} 夾", (kg / d).is_dir(), f"rc={r.returncode} {r.stderr}")
     check("scaffold: MOC/index.md", (kg / "MOC" / "index.md").exists(), "")
-    check("scaffold: .gitignore", (kg / ".gitignore").exists(), "")
+    # ★帳檔寫在 docs/(vault.parent),.gitignore 必須放同一層才生效——2026-08-21 L4 清帳抓到原本
+    # 寫在 vault 內、從沒忽略到任何帳檔(本 repo 的帳檔因此被追蹤)。★
+    dg = proj / "docs" / ".gitignore"
+    check("scaffold: docs/.gitignore 與帳檔同層", dg.exists(), "")
+    body = dg.read_text(encoding="utf-8") if dg.exists() else ""
+    for name in (".governance-log.jsonl", ".canary-log.jsonl", ".usage-log.jsonl"):
+        check(f"scaffold: docs/.gitignore 含 {name}", name in body, body)
+    check("scaffold: vault 內不再放無效 .gitignore", not (kg / ".gitignore").exists(), "")
+    import subprocess as _sp
+    _sp.run(["git", "init", "-q"], cwd=str(proj))
+    (proj / "docs" / ".governance-log.jsonl").write_text("{}\n", encoding="utf-8")
+    ci = _sp.run(["git", "check-ignore", "-q", "docs/.governance-log.jsonl"], cwd=str(proj))
+    check("scaffold: 帳檔真的被 git 忽略", ci.returncode == 0, f"rc={ci.returncode}")
 
 
 def t_install_skills_unix():
@@ -2933,6 +2945,66 @@ def t_governance_log_write():
         check("gov-log: 純 doctor 不寫", not log.exists(), "不該寫")
     finally:
         import shutil
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _run_marker_repo(prefix):
+    """乾淨 vault + git repo(--ci 落帳需要 HEAD)。回 (root, vault, docs)。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    vault = root / "docs" / "kg"
+    (vault / "MOC").mkdir(parents=True)
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
+    sp.run(["git", "init", "-q"], cwd=str(root))
+    sp.run(["git", "add", "-A"], cwd=str(root))
+    sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], cwd=str(root))
+    return root, vault, root / "docs"
+
+
+def t_doctor_ci_writes_run_marker():
+    """乾淨 run 也要留痕——否則帳本分不出「修好了」與「還在」(doctor-run事件_計劃)。"""
+    import json, shutil
+    root, vault, docs = _run_marker_repo("gctl-runmark-")
+    try:
+        r = run(vault, "doctor", "--ci")
+        log = docs / ".governance-log.jsonl"
+        rows = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()] if log.exists() else []
+        runs = [x for x in rows if x.get("gate") == "doctor-run"]
+        check("run-marker: 乾淨 --ci 恰一筆 doctor-run", len(runs) == 1, f"rc={r.returncode} rows={rows}")
+        check("run-marker: kind=ran/hard=false/nodes=[]",
+              runs and runs[0].get("kind") == "ran" and runs[0].get("hard") is False and runs[0].get("nodes") == [], str(runs))
+        check("run-marker: note 含 issues=0", runs and "issues=0" in (runs[0].get("note") or ""), str(runs))
+        check("run-marker: rc 不變(乾淨=0)", r.returncode == 0, r.stdout)
+        log.unlink()
+        run(vault, "doctor")
+        check("run-marker: 純 doctor 仍不寫", not log.exists(), "")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_gov_hides_run_marker_unless_full():
+    import shutil, subprocess as sp
+    root, vault, docs = _run_marker_repo("gctl-runhide-")
+    try:
+        run(vault, "doctor", "--ci")
+        (root / "x.txt").write_text("1", encoding="utf-8")
+        sp.run(["git", "add", "-A"], cwd=str(root))
+        sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "two"], cwd=str(root))
+        run(vault, "doctor", "--ci")
+        plain = run(vault, "gov", "--since", "9999").stdout
+        full = run(vault, "gov", "--since", "9999", "--full").stdout
+        stats = run(vault, "gov", "--since", "9999", "--stats").stdout
+        check("run-marker: gov 預設不印 doctor-run", "doctor-run" not in plain, plain)
+        check("run-marker: gov --full 印兩行", full.count("[doctor-run/ran") == 2, full)
+        seg = stats[stats.index("[stats]"):] if "[stats]" in stats else ""
+        row = [l for l in seg.splitlines() if l.strip().startswith("doctor-run")]
+        check("run-marker: --stats 去重筆數 == 2(斷數字)", bool(row) and " 2 " in row[0], seg)
+        # 尾端「N 筆」須與實際印出一致(不含被隱藏的 doctor-run)
+        import re as _re
+        m = _re.search(r"\n(\d+) 筆\(近", plain)
+        shown = sum(1 for l in plain.splitlines() if _re.match(r"^\d{4}-\d{2}-\d{2} \[", l))
+        check("run-marker: 預設尾端筆數 == 實際印出事件行數", m is not None and int(m.group(1)) == shown, f"tail={m.group(1) if m else None} shown={shown}")
+    finally:
         shutil.rmtree(root, ignore_errors=True)
 
 

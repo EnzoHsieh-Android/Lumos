@@ -78,6 +78,7 @@ verified_by:
   - "[[Verification/2026-08-19_精簡版update指令落地]]"
   - "[[Verification/2026-08-20_gov-stats落地]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-08-21_doctor-run事件落地]]"
 ---
 # lumos-cli-lifecycle
 

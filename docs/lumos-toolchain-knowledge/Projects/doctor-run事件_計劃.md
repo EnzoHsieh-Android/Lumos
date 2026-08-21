@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-21
 updated: 2026-08-21
 tags:
   - type/project
-  - status/doing
+  - status/done
 related:
   - "[[Projects/檢核收緊五件_計劃]]"
 ---
@@ -37,6 +37,10 @@ PRIOR-ART: ① 最小解=落帳點加一筆;② 世界解=CI 系統的 run recor
 ## 範圍刀
 
 不做棘輪本身;不回溯補歷史 run;不改 `_append_governance_log` 的零事件 early-return(由呼叫端保證非空)。
+
+## ✅ 人裁放行並落地(2026-08-21)
+
+K=2 形式未收斂(四輪每輪一條真缺陷,皆折入),Enzo「順便修掉」=放行+附帶修 gitignore 層級 bug。落地:[[Verification/2026-08-21_doctor-run事件落地]](2901/0)。
 
 ## 審計修正紀錄
 
