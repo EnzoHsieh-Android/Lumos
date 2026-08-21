@@ -16,7 +16,9 @@ fi
 python3 - "$PROMPT_FILE" "$OUT" "$MODEL" "$GEMINI_API_KEY" <<'PY'
 import sys, json, subprocess
 pf, out, model, key = sys.argv[1:5]
-body = json.dumps({"contents": [{"parts": [{"text": open(pf, encoding="utf-8").read()}]}],
+with open(pf, encoding="utf-8") as _f:
+    prompt_text = _f.read()
+body = json.dumps({"contents": [{"parts": [{"text": prompt_text}]}],
                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 8000}})
 r = subprocess.run(["curl", "-sS", "-m", "180",
     f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
@@ -28,7 +30,11 @@ except ValueError:
 if "candidates" not in d:
     sys.exit(f"ERROR: {json.dumps(d.get('error', d), ensure_ascii=False)[:300]}")
 txt = d["candidates"][0]["content"]["parts"][0]["text"]
-open(out, "w", encoding="utf-8").write(txt) if out != "/dev/stdout" else print(txt)
+if out == "/dev/stdout":
+    print(txt)
+else:
+    with open(out, "w", encoding="utf-8") as _f:
+        _f.write(txt)
 u = d.get("usageMetadata", {})
 print(f"[external-seat] model={model} tokens={u.get('totalTokenCount')} tier={u.get('serviceTier')}", file=sys.stderr)
 PY
