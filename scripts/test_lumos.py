@@ -3852,6 +3852,25 @@ def t_precommit_lints_staged_graph_nodes():
     check("pre-commit lint: 同檔名不同夾仍 lint 到 staged 的壞節點(rc1)", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
 
 
+def t_doctor_soft_sections_truncate_by_default():
+    """體檢 #10(2026-08-21):doctor 每次印幾十行軟提醒([P]19 行/[Y]6 行…全是歷史或自指噪音),
+    重要的硬提醒被淹沒、Claude 一整天沒讀過一條。預設每個軟段最多列 3 條+「另 N 條(--verbose)」;
+    `--verbose` 全列;`--ci` 視同 verbose(CI 日誌要完整)。硬檢查(warn)不受影響。"""
+    v = mkvault()
+    # Check S(軟):5 個 system 節點皆無 self_audit → 5 條軟提醒
+    for i in range(5):
+        write(v, f"Systems/S{i}.md", "type: system\nstatus: doing\nsummary: |-\n  KEY:x", body=f"# S{i}\n")
+    plain = run(v, "doctor").stdout
+    verbose = run(v, "doctor", "--verbose").stdout
+    ci = run(v, "doctor", "--ci").stdout
+    sect = lambda out: out[out.index("[S]"):out.index("[E1]")] if "[S]" in out and "[E1]" in out else out
+    n_plain, n_verbose, n_ci = (sect(o).count("• Systems/S") for o in (plain, verbose, ci))
+    check("doctor quiet: 預設軟段最多 3 條", n_plain == 3, f"{n_plain}\n{sect(plain)}")
+    check("doctor quiet: 預設印「另 2 條」提示含 --verbose", "另 2 條" in sect(plain) and "--verbose" in sect(plain), sect(plain))
+    check("doctor quiet: --verbose 全列 5 條", n_verbose == 5, f"{n_verbose}")
+    check("doctor quiet: --ci 視同 verbose 全列", n_ci == 5, f"{n_ci}")
+
+
 def t_code_exts_four_lists_agree():
     """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天
@@ -18419,7 +18438,7 @@ def t_slim_gate_doctor_nameerror_counterfactual():
     check("★C3 反事實★ fixture: 生成 rc0", r.returncode == 0, r.stdout + r.stderr)
 
     text = dist_cli.read_text(encoding="utf-8")
-    marker = "def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):"
+    marker = "def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False):"  # 2026-08-21 +verbose(體檢 #10)
     check("★C3 反事實★ 產物含預期的 run_doctor 簽名(竄改點存在,前提沒漂移)",
           marker in text, "")
     tampered = text.replace(

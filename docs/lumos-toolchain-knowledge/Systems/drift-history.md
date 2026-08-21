@@ -52,7 +52,7 @@ Enzo 2026-08-12 的質疑：
 
 ## LandmarkMember 首跑（2026-08-12）
 
-`GetOrdersForRedeemAsync` / `ListAvailableAsync` **橫跨全部取樣點**，
+GetOrdersForRedeemAsync(Landmark 他庫符號) / ListAvailableAsync(Landmark 他庫符號) **橫跨全部取樣點**，
 從 2026-05-26 到 2026-07-15 期間圖譜從 23 篇長到 27 篇、候選符號從 108 長到 149，
 **這兩條一次都沒被修掉**——同期 10 個 agent 的兩階段交叉審計也沒抓到。
 

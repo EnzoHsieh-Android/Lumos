@@ -443,7 +443,7 @@ def _append_governance_log(vault, events):
         pass
 
 
-def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
+def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False):
     C = {k: (v if color else "") for k, v in
          dict(R="\033[31m", Y="\033[33m", G="\033[32m", B="\033[1m", X="\033[0m").items()}
     notes, by_stem, resolve = env.notes, env.by_stem, env.resolve
@@ -467,11 +467,19 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
             print(f"  {C['B']}建議動作{C['X']}: {advice}")
         issues += len(lines)
 
+    _verbose = verbose or ci   # --ci 視同 verbose:CI 日誌要完整;互動預設收斂(體檢 #10)
+    _SOFT_CAP = 3
+
     def warn_soft(lines, head, advice=None):
         # 軟提醒:印出但不動 issues → 不影響 rc(R3-MAJOR-3)
+        # ★預設每段最多 3 條★(2026-08-21 體檢 #10):軟段([P]19 行/[Y]6 行…)多為歷史/自指噪音,
+        # 每次跑幾十行把硬提醒淹掉、Claude 一整天沒讀過一條;其餘收成一行,--verbose 全列。
         print(f"  {C['Y']}⚠{C['X']} {head}")
-        for l in lines:
+        shown = list(lines) if _verbose else list(lines)[:_SOFT_CAP]
+        for l in shown:
             print(f"      • {l}")
+        if len(lines) > len(shown):
+            print(f"      … 另 {len(lines) - len(shown)} 條(lumos doctor --verbose 看全部)")
         if advice:
             print(f"  {C['B']}建議{C['X']}: {advice}")
 
@@ -1108,6 +1116,11 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
         _suffix_re = re.compile(r":([^/]+)$")
         stale_claims = []
         for rel, n in sorted(notes.items()):
+            # ★體檢 #10(2026-08-21)降噪★:Verification 是「當時的紀錄」,引用當時路徑是它的職責,
+            # 碼搬走不該叫它改;superseded/stale 節點同理。只守「宣稱現況」的活節點。
+            if n.fields.get("type") == "verification" or \
+               str(n.fields.get("status", "")).strip() in ("superseded", "stale"):
+                continue
             try:
                 text = (env.vault / rel).read_text(encoding="utf-8-sig")
             except OSError:
@@ -1117,6 +1130,8 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False):
             seen_paths = set()
             for raw in spans:
                 if "://" in raw or any(c in raw for c in "*<>?"):
+                    continue
+                if "{" in raw or "}" in raw:      # 大括號展開寫法 a/{x,y}.md 不是路徑(體檢 #10 實測假陽性)
                     continue
                 m = _suffix_re.search(raw)
                 if m:
@@ -14259,7 +14274,8 @@ def main():
 
     d = sub.add_parser("doctor", help="圖譜健康巡檢")
     d.add_argument("--strict", action="store_true", help="有 finding 即 exit 1 (CI 用)")
-    d.add_argument("--ci", action="store_true", help="CI 模式 = --strict + 無色彩")
+    d.add_argument("--ci", action="store_true", help="CI 模式 = --strict + 無色彩(+軟提醒全列)")
+    d.add_argument("--verbose", action="store_true", help="軟提醒全列(預設每段最多 3 條,硬檢查不受影響)")
     d.add_argument("--suggest", action="store_true",
                    help="orphan Verification 附推薦掛載 Systems(從正文連結/plan_refs/feature 推斷,供人確認)")
 
@@ -14855,7 +14871,7 @@ def main():
 
     if args.cmd == "doctor":
         color = sys.stdout.isatty() and not args.ci
-        return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest, ci=args.ci)
+        return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest, ci=args.ci, verbose=args.verbose)
 
     if args.cmd in ("links", "backlinks", "context", "map", "show") or \
        (args.cmd == "decisions" and not args.superseded):

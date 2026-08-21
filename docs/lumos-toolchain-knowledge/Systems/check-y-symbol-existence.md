@@ -50,8 +50,8 @@ verified_by:
 | 節點 | 圖譜寫 | 實際 |
 |---|---|---|
 | 活動報名 | `ActivityService.RegisterAsync` | `SubmitRegistrationAsync` |
-| 滿額贈 | `ListAvailableAsync` | `GetActivitiesAsync` |
-| 滿額贈 | `GetOrdersForRedeemAsync` | `GetOrderSelectionAsync` |
+| 滿額贈 | ListAvailableAsync(Landmark 他庫符號) | GetActivitiesAsync(Landmark 他庫符號) |
+| 滿額贈 | GetOrdersForRedeemAsync(Landmark 他庫符號) | GetOrderSelectionAsync(Landmark 他庫符號) |
 
 ★**這三條在同一天 10 個 agent 的兩階段交叉審計中全被漏掉**★——
 實證員驗的是「行為對不對」，方法名寫錯了但行為描述正確，就滑過去了。
