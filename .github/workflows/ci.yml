@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # code-loop gate 要算 before..sha 的 diff(體檢 #5)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -23,6 +25,28 @@ jobs:
         run: python scripts/test_lumos.py
       - name: Graph doctor (strict)
         run: python scripts/lumos doctor --ci
+      - name: code-loop gate (push 後盾;體檢 #5)
+        # `git push --no-verify` 會整個跳過 pre-push——測試/doctor/anchor 這裡都已重跑,唯獨 tier=high
+        # 的對抗審查閘沒人補查,繞過零留痕。本步在 push 事件重算 pitfalls tier 並比對留痕:
+        # rc1=高風險 diff 無 pass/skip 留痕 → CI 紅(可見的痕跡;ci-wait/ci-log 會收到)。
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          EMPTY=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          case "$BEFORE" in 0000000000000000000000000000000000000000|"") BEFORE="$EMPTY";; esac
+          git cat-file -e "$BEFORE^{commit}" 2>/dev/null || BEFORE="$EMPTY"
+          echo "range: $BEFORE..$SHA branch=$BRANCH"
+          python scripts/lumos code-loop check --diff "$BEFORE..$SHA" --at-sha "$SHA" --branch "$BRANCH" --repo . || {
+            rc=$?
+            if [ "$rc" -eq 1 ]; then
+              echo "::error::tier=high 代碼無 code-loop 留痕——本機 pre-push 被繞過(--no-verify)或留痕失效;補 lumos code-loop pass|skip --note 後重推"
+              exit 1
+            fi
+            exit "$rc"
+          }
       - name: Anchor verify (baseline 缺失必紅)
         run: |
           test -f governance/anchor-baseline.json || { echo "anchor baseline 缺失"; exit 1; }
