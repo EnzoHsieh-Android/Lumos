@@ -20522,7 +20522,12 @@ def main():
             # 判定仍是狀態驅動:`slim/` 真的在(來源 repo)就照跑,零行為改變。
             if t.__name__.startswith("t_slim_"):
                 _need_src("slim")
+            _fail_before = FAIL
             t()
+            if FAIL > _fail_before:
+                # 殺傷力驗證歸因用(2026-08-22 首跑判「弱證據」):失敗要跟測試名同一行,
+                # lumos guard kill 的 _kill_attribute 才能把紅燈歸到綁定測試頭上。
+                print(f"  ✗ FAILED {t.__name__}({FAIL - _fail_before} 條斷言)")
         except _SrcOnly as e:
             SKIP += 1
             print(f"  - skip {t.__name__}: {e}")

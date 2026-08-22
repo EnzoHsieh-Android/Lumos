@@ -30,6 +30,10 @@ decisions:
     id: d1
     decided: 2026-08-22
     valid: true
+  - content: 歸因需要測試輸出把「失敗標記」和「測試名」放同一行或 5 行內:test_lumos.py 的 runner 在每支失敗測試後印「✗ FAILED <名>(N 條斷言)」。2026-08-22 第一次真跑 kill(canary-audit 落盤自驗配方)判 killed_unattributed 就是因為這個。
+    id: d2
+    decided: 2026-08-22
+    valid: true
 ---
 # guard-kill（殺傷力驗證）
 
