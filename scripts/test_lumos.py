@@ -20137,6 +20137,143 @@ def t_eval_universe_and_unjudged():
     check("rate=count/denom 一致", u["denom"] > 0 and abs(u["rate"] - u["count"] / u["denom"]) < 1e-9, str(u))
 
 
+def t_goldset_append():
+    """★加題只加不碰既有★:append 新 edit 題,既有題目與 labels 必須一字不動。
+
+    既有 labels 是累積數月的雙評審資產(build_goldset 裸跑防護就是為它立的)。
+    加題如果動到既有,等於用一個「擴充」動作偷偷換尺。
+    翻紅釘:把 append_edit_cases 改成重建 gs["edit"] → 第 1、2 條翻紅。"""
+    _need_src("governance/eval")
+    import importlib.util, json as _json
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "build_goldset_fx2", repo / "governance" / "eval" / "build_goldset.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+    gs = {"edit": [{"id": "E01", "file": "a.py", "delta": "x", "split": "train"},
+                   {"id": "E02", "file": "b.py", "delta": "y", "split": "held"}],
+          "labels": {"E01": {"N1.md": {"final": 2}}, "E02": {"N2.md": {"final": 1}}},
+          "search": [], "snapshot_commit": "abc"}
+    before = _json.dumps(gs, sort_keys=True)
+
+    new = [({"file": "c.py", "delta": "z", "commit": "s1"}, ["N3.md", "N4.md"]),
+           ({"file": "a.py", "delta": "dup", "commit": "s2"}, ["N9.md"]),   # 已有 file → 該跳過
+           ({"file": "d.py", "delta": "w", "commit": "s3"}, [])]            # 空池 → 該跳過
+    out = m.append_edit_cases(gs, new)
+
+    check("★既有兩題原封不動★", [e["id"] for e in out["edit"]][:2] == ["E01", "E02"],
+          str(out["edit"])[:200])
+    check("★既有 labels 一字不動★",
+          out["labels"]["E01"] == {"N1.md": {"final": 2}} and out["labels"]["E02"] == {"N2.md": {"final": 1}},
+          str(out["labels"])[:200])
+    ids = [e["id"] for e in out["edit"]]
+    check("新題接續編號 E03", "E03" in ids, str(ids))
+    check("★重複 file 不重出題★", sum(1 for e in out["edit"] if e["file"] == "a.py") == 1, str(ids))
+    check("★空池題不進卷★", not any(e["file"] == "d.py" for e in out["edit"]), str(ids))
+    check("新題 labels 全是未標(等 delta 補)",
+          all(v == {"final": None} for v in out["labels"]["E03"].values()), str(out["labels"].get("E03")))
+    check("新題有分到 split", out["edit"][-1].get("split") in ("train", "held"), str(out["edit"][-1]))
+    # 傳進來的 gs 不該被就地改壞(純函式紀律)
+    check("★不就地竄改輸入★", _json.dumps(gs, sort_keys=True) == before, "輸入被改了")
+
+
+def t_must_see_ratchet():
+    """★must-see 棘輪★:必看項(標2)的個數不准比上一筆 PASS 少,少一個就紅。
+
+    為什麼是棘輪不是門檻:定數字一定被問「為什麼 0.75 不是 0.8」,而且 held 不該反覆看。
+    ★語意也對——標 2 的意思就是「必看」,掉一個就是缺陷,沒有「掉 20% 以內可接受」。★
+    今天 21 個 must-see 只有 7 個坐固定席、14 個靠排序撐;棘輪正好守這個:
+    排序一動把某個 must-see 擠出前 k,立刻紅。
+
+    ★對照列要同 goldset_rev★:換尺(補標/加題→labels 變)那一刻舊個數不能拿來比,
+    否則會拿舊尺的數字擋新尺,變成恆紅。
+    翻紅釘:把 must_ratchet 改成恆回 (True, "") → 第 2 條翻紅。"""
+    _need_src("governance/eval")
+    import json as _json
+    root, gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+
+    rev = m.goldset_rev(gs)
+    check("rev 是穩定短 hash", isinstance(rev, str) and 6 <= len(rev) <= 16, rev)
+    gs2 = _json.loads(_json.dumps(gs)); gs2["labels"].setdefault("S01", {})["新節點.md"] = {"final": 2}
+    check("★labels 一變 rev 就變(換尺看得出來)★", m.goldset_rev(gs2) != rev, f"{rev} vs {m.goldset_rev(gs2)}")
+
+    hist = [{"pass": True, "goldset_rev": rev, "verdicts": {"train": {"must_in_out_count": 10}}}]
+    ok, msg = m.must_ratchet(hist, rev, "train", 9)
+    check("★退步一個就擋★", ok is False and "10" in msg and "9" in msg, f"ok={ok} msg={msg}")
+    ok2, _ = m.must_ratchet(hist, rev, "train", 10)
+    check("持平放行", ok2 is True)
+    ok3, _ = m.must_ratchet(hist, rev, "train", 12)
+    check("進步放行", ok3 is True)
+    ok4, msg4 = m.must_ratchet(hist, "別的rev", "train", 1)
+    check("★換尺後不拿舊數字比(否則恆紅)★", ok4 is True and ("基線" in msg4 or "首次" in msg4), msg4)
+    ok5, msg5 = m.must_ratchet([], rev, "train", 1)
+    check("★沒有歷史時放行並註明建立基線★", ok5 is True and msg5 != "", msg5)
+    hist_fail = [{"pass": False, "goldset_rev": rev, "verdicts": {"train": {"must_in_out_count": 99}}}]
+    ok6, _ = m.must_ratchet(hist_fail, rev, "train", 1)
+    check("★只拿 PASS 的當基線(FAIL 輪的數字不算數)★", ok6 is True)
+
+
+def t_build_goldset_junk_filter():
+    """★出卷器不准撿垃圾★:dotfile / vendor 壓縮檔選進 edit 題 = 候選池空 = 廢題。
+
+    2026-08-22 實測:既有 20 題裡 4 題是廢題(E01 .gitignore、E11 governance/.gitignore、
+    E16 vendor/3d-force-graph.min.js、E17 vendor/marked.min.js),候選池全空、labels 無鍵、
+    eval 直接跳過 → train 名義 8 實際 6、held 名義 12 實際 10。
+    ★所謂「樣本太小」有一半是出卷器的 git-log 掃法撿到垃圾,不是題庫真的小。★
+    翻紅釘:把 _is_junk_edit_file 改成恆回 False → 前兩條翻紅。"""
+    _need_src("governance/eval")
+    import importlib.util
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "build_goldset_fx", repo / "governance" / "eval" / "build_goldset.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    j = m._is_junk_edit_file
+    check("dotfile 排除(.gitignore)", j(".gitignore") is True)
+    check("巢狀 dotfile 也排除", j("governance/.gitignore") is True)
+    check("vendor 壓縮檔排除", j("scripts/vendor/marked.min.js") is True)
+    check("任何 vendor/ 底下都排除", j("vendor/x.js") is True)
+    check("★正常 code 檔不排除★", j("scripts/lumos") is False)
+    check("★正常 py 不排除★", j("governance/eval/retrieval_eval.py") is False)
+    check("★.min.js 但不在 vendor 也排除(壓縮檔沒有可讀 delta)★", j("web/app.min.js") is True)
+
+    # ★裸跑防護不准被拿掉★:全量重建會清空累積數月的人工標註(2026-08-18 立)。
+    # 這條釘死「沒帶 --force-full 就非 0 退出」,免得日後有人為了方便把它拔了。
+    r = subprocess.run([sys.executable, str(repo / "governance" / "eval" / "build_goldset.py")],
+                       capture_output=True, text=True, cwd=str(repo))
+    check("★裸跑 build_goldset 必須擋(否則會清空既有標註)★", r.returncode != 0,
+          f"rc={r.returncode} out={r.stdout[:150]}")
+    check("擋下時要說得出替代路徑", "refresh_labels" in (r.stdout + r.stderr), (r.stdout + r.stderr)[:200])
+
+
+def t_eval_ablation_gate():
+    """★消融前置閘★:有未標候選就擋,免得「尺的偏見」被讀成「改動有害」。
+
+    2026-08-22 真的踩過:一個檢索改動讓 edit train 未標從 4→9,多出的 5 個全計 0,
+    分母才 48 → -5.4%,當時被讀成「改動有害」並據此撤回;實際是尺對「改善」有系統性
+    偏見(改善→浮出新節點→沒標過→計 0→被罰)。
+    ★不改尺★——改尺方案在 Projects/標註刷新_計劃 已明文拒(既有門檻與 history 全失效),
+    這裡補的是「消融前先確認可解讀」這道流程閘。
+    翻紅釘:把 ablation_blocked 改成恆回 False → 第 1、2 條翻紅。"""
+    _need_src("governance/eval")
+    root, gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+
+    blocked, n, msg = m.ablation_blocked(gs, "held")
+    check("有未標 → 擋", blocked is True and n > 0, f"blocked={blocked} n={n}")
+    check("訊息講得出補標指令", "refresh_labels.py delta" in msg, msg[:200])
+    check("★訊息要說清楚為什麼不能比★", "不是改動的效果" in msg or "尺的偏見" in msg, msg[:200])
+
+    # 把該 split 觸及集全部標掉 → 應放行
+    u = m.collect_unjudged(gs, "held")
+    for cid, nodes in u["per_case"].items():
+        gs["labels"].setdefault(cid, {})
+        for nd in nodes:
+            gs["labels"][cid][nd] = {"final": 0}
+    blocked2, n2, _ = m.ablation_blocked(gs, "held")
+    check("★補標後放行(閘會收斂,不是恆擋)★", blocked2 is False and n2 == 0, f"blocked={blocked2} n={n2}")
+
+
 def t_refresh_delta():
     """T3:refresh_labels delta——已判不重出/未標全出/orphan 列出/file-gone skip/卷頭註記/rc 合約。"""
     _need_src("governance/eval")

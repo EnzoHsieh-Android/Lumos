@@ -168,6 +168,42 @@ def _touched_edit(res, k=8):
     return out
 
 
+def ablation_blocked(gs, split=None, k=8):
+    """★消融前置閘(2026-08-22)★ — 回 (blocked: bool, count: int, msg: str)。
+
+    要擋的事:**這把尺對「改善」有系統性偏見。**
+    候選池是 goldset 建檔當時從系統自己的 top-N 抓的;計分把未標當 0
+    (`_labels_of`,那是 Projects/標註刷新_計劃 2026-08-17 明文裁過的——
+    bpref/condensed-list 這類「只算已判」的改尺方案被拒,理由是一改尺既有門檻
+    數字與整本 history 全失效;解法定為 delta 補標消滅未標,不動尺)。
+
+    於是:**改善檢索 → 浮出新節點 → 新節點沒標過 → 全部計 0 → 改動被罰。**
+
+    2026-08-22 實例:`_rank_tokenize` 補英文去尾 s,edit train 的未標從 4 個變 9 個,
+    多出的 5 個全計 0;edit train 有效題 6 × k=8 = 分母 48——**5 個零分足以解釋
+    整個 -0.036(-5.4%)**,而那個數字當時被讀成「改動有害」並據此撤回。
+
+    ★該計劃當初設計的觸發情境是「語料前進」,沒想到「code 改動」也會讓候選浮出。★
+    本閘補的是這個缺口,不是改尺。
+    """
+    u = collect_unjudged(gs, split, k=k)
+    n = u["count"]
+    if not n:
+        return False, 0, ""
+    cases = ", ".join(sorted(u["per_case"])[:6])
+    more = "…" if len(u["per_case"]) > 6 else ""
+    msg = (
+        f"這輪有 {n} 個候選從來沒標過(散在 {len(u['per_case'])} 題:{cases}{more}),"
+        f"計分時它們一律算 0 分。\n"
+        f"改動如果讓新節點浮上來,那些新節點就落在這 {n} 個裡面,"
+        f"分數一定往下掉——★掉的是尺的偏見,不是改動的效果,這輪結果不能拿來比。★\n"
+        f"先把那幾筆補標,再回來量:\n"
+        f"    python3 governance/eval/refresh_labels.py delta --goldset <goldset.json>\n"
+        f"(接著 merge → apply;補完 unjudged 歸零這道閘就會放行)"
+    )
+    return True, n, msg
+
+
 def collect_unjudged(gs, split=None, k=8):
     """S0 三態的唯一未標判定:計分觸及集內「labels 無此鍵或 final is None」=未標;
     已判(含0)不算。回 {"per_case", "skipped", "denom", "count", "rate"}。"""
@@ -372,7 +408,75 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         verdict["free_p95_le_topk2"] = p95 is not None and p95 <= k_edit + 2
         verdict["must_in_out_recall"] = round(must_hit / must_t, 4) if must_t else None
         verdict["must_pinned_count"] = must_pin   # 唯一機保=固定席;in_out 含自由席無保底,勿混讀
+        verdict["must_in_out_count"] = must_hit   # ★棘輪比的是個數不是比率★——
+        verdict["must_total"] = must_t            #   比率會被「總數變了」稀釋,個數不會
     return {"split": tag, "search": srows, "edit": erows, "verdict": verdict}
+
+
+def _read_history():
+    """讀 history jsonl → list[dict]。壞行跳過(帳是 append-only,torn 行不該讓評測掛掉)。
+    路徑解析與寫入端同源:LUMOS_EVAL_HISTORY 優先(測試 fixture 帳,不污染真帳)。"""
+    hp = Path(os.environ.get("LUMOS_EVAL_HISTORY")
+              or Path(__file__).parent / "retrieval-eval-history.jsonl")
+    if not hp.exists():
+        return []
+    rows = []
+    for line in hp.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    return rows
+
+
+def goldset_rev(gs):
+    """labels 的穩定短 hash = 「這把尺的版本」。
+
+    補標、加題、移題都會改 labels → rev 變 → ★換尺★。history 每列記這個,
+    比較只在同 rev 內做——不然會拿舊尺的數字擋新尺的結果,變成恆紅。
+    (Projects/標註刷新_計劃 2026-08-22:一本帳 + goldset_rev,不分兩本;
+     分兩本最後一定沒人看第二本。)
+    """
+    payload = json.dumps(gs.get("labels", {}), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def must_ratchet(history, rev, split, count):
+    """★must-see 棘輪(2026-08-22)★ — 回 (ok: bool, msg: str)。
+
+    判準:必看項(labels 標 2)出現在輸出內的**個數**,不准比「同一 goldset_rev 下
+    最近一筆 PASS」少。少一個就 FAIL。
+
+    ★為什麼是棘輪不是數字門檻★:定門檻一定被問「為什麼 0.75 不是 0.8」,而且要定得
+    有依據就得反覆看 held(違反 held 紀律)。棘輪不用選數字、不用看 held,
+    **語意也對——標 2 的意思就是「必看」,掉一個就是缺陷,沒有「掉 20% 以內可接受」**。
+
+    ★守的是什麼★:2026-08-22 實測 train 的 21 個 must-see 只有 7 個坐固定席(機械保證),
+    其餘 14 個靠排序撐。排序一動把某個必看項擠出前 k,棘輪立刻紅——
+    這比任何比率門檻都貼近事故的形狀。
+
+    無同 rev 的 PASS 基線 → **放行並註明建立基線**(不能因為沒對照就擋,那是恆紅)。
+    """
+    base = None
+    for row in reversed(history):
+        if not row.get("pass"):
+            continue                      # ★只拿 PASS 輪當基線★:FAIL 輪的數字不算數
+        if row.get("goldset_rev") != rev:
+            continue                      # ★換尺不比★
+        v = (row.get("verdicts") or {}).get(split) or {}
+        if v.get("must_in_out_count") is not None:
+            base = v["must_in_out_count"]
+            break
+    if base is None:
+        return True, f"must-see 棘輪:同尺(rev {rev})沒有可比的 PASS 基線,本輪建立基線 = {count}"
+    if count < base:
+        return False, (f"must-see 棘輪擋下:必看項從 {base} 個掉到 {count} 個。"
+                       f"標 2 = 必看,掉一個就是缺陷——不是「掉一點點可接受」的那種指標。"
+                       f"先確認是排序把它擠出前 k,還是那題的標註該重看。")
+    return True, ""
 
 
 def _history_record(args, gates, ok, reports, unj, pinned_sha):
@@ -386,6 +490,7 @@ def _history_record(args, gates, ok, reports, unj, pinned_sha):
              if k.startswith("LUMOS_IMPACT_") or k.startswith("LUMOS_RANK_")}
     return {"mode": "goldset-transition" if getattr(args, "snapshot", None) else "goldset",
             "ts": datetime.date.today().isoformat(),
+            "goldset_rev": getattr(args, "_goldset_rev", None),   # 這把尺的版本,比較只在同 rev 內做
             "eval_head": head, "goldset_snapshot": pinned_sha,
             "knobs": knobs or "frozen-defaults",
             "vault_note": "活語料:節點增修致數字 ±1pp 漂移;重現=checkout eval_head 重跑",
@@ -403,6 +508,9 @@ def main():
     ap.add_argument("--split", choices=["train", "held"], help="只跑該切分")
     ap.add_argument("--live-vault", action="store_true", help="用現況 vault(預設釘 goldset snapshot;探索/漂移觀測用)")
     ap.add_argument("--snapshot", help="覆寫釘定 sha(過渡雙跑的舊快照輪;該輪 mode=goldset-transition)")
+    ap.add_argument("--ablation", action="store_true",
+                    help="消融模式(比較改動前後用):★有任何未標候選就擋下、rc 3★。"
+                         "不帶這旗標維持原行為(只印警告不擋)")
     ap.add_argument("-k", type=int, default=8)
     args = ap.parse_args()
     if VAULT is None:
@@ -444,6 +552,13 @@ def main():
         unl = sum(1 for c in gs["labels"].values() for v in c.values() if v.get("final") is None)
         if unl:
             print(f"⚠ 尚有 {unl} 個候選未定稿(final=None,視為 0)", file=sys.stderr)
+        if args.ablation:
+            # ★母體口徑★:用 collect_unjudged 而非上面那個 unl——後者只數 labels 內
+            # final=None,漏掉「根本不在候選池」的新節點,而那正是消融踩到的地雷。
+            _blocked, _n, _msg = ablation_blocked(gs, args.split, k=args.k)
+            if _blocked:
+                print(f"\n⛔ 消融模式擋下這輪\n{_msg}", file=sys.stderr)
+                return 3
         reports = []
         splits = [args.split] if args.split else [None, "train", "held"]
         for sp in splits:
@@ -461,6 +576,22 @@ def main():
         if not args.split:
             v_held = next(r["verdict"] for r in reports if r["split"] == "held")
             gates["held-out 不倒退(lift>0)"] = (v_held.get("search_lift_pct") or 0) > 0
+        # ★must-see 棘輪(2026-08-22)★:P@8 抓「推了一堆垃圾」,棘輪抓「該推的沒推」——
+        # 兩種壞都要擋,所以★並存不是擇一★。
+        # ☆刻意不換掉 hook P@top_k☆:換掉就是把現在 FAIL 的門檻拿走,動機會被讀成
+        #   「gate 紅了就換尺」。並存才誠實。
+        _rev = goldset_rev(gs)
+        args._goldset_rev = _rev
+        _rat_split = args.split or "all"
+        _rat_v = (next((r["verdict"] for r in reports if r["split"] == _rat_split), None)
+                  or reports[0]["verdict"])
+        _rat_n = _rat_v.get("must_in_out_count")
+        if _rat_n is not None:
+            _hist_rows = _read_history()
+            _rat_ok, _rat_msg = must_ratchet(_hist_rows, _rev, _rat_split, _rat_n)
+            gates["must-see 不退步(棘輪)"] = _rat_ok
+            if _rat_msg:
+                print(f"  ↳ {_rat_msg}")
         print("=== §6 gate ===")
         ok = all(val is True for val in gates.values())  # fail-closed:無資料(None)不放行
         for name, val in gates.items():
