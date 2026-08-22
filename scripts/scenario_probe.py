@@ -7,6 +7,13 @@
   3. 從事件流抓工具呼叫順序;判準 = 期望的 `lumos <指令>` 出現在任何「禁止先做」的工具/指令之前
   4. 報告每個情境:過/不過、第一個工具呼叫是什麼、全部工具序列
 
+判準的三個刻意設計(外審 2026-08-22 提過,裁定不改):
+  - Skill 調用不算「敲到指令」——要測的就是「調了 skill 之後有沒有真的敲 lumos」。
+  - forbid_before 對非 Bash 工具只比對工具名(Grep/Read/Edit…),不看內容;要禁的是「那一類動作」。
+  - 副本裡 Claude 自己的 hooks(impact 注入等)照常觸發——探針量的是 Claude 在真實環境(規則+hook)下的行為;
+    hook 注入不是工具呼叫,不會被算成它自己敲的指令。
+  - 不開放 Agent 工具:子代理內部的動作對事件流是隱形的,會造成假通過/假失敗。
+
 用法:
   scripts/scenario_probe.py [--scenarios governance/scenarios/commands.jsonl] [--only s01,s02]
                             [--max-turns 6] [--timeout 240] [--model ...] [--out 報告.json]
@@ -72,7 +79,8 @@ def run_one(sc, workdir, max_turns, timeout, model):
     cmd = ["claude", "-p", sc["prompt"], "--output-format", "stream-json", "--verbose",
            "--max-turns", str(max_turns), "--no-session-persistence",
            "--permission-mode", "acceptEdits",
-           "--allowedTools", "Bash", "Read", "Grep", "Glob", "Edit", "Write", "Skill", "Agent"]
+           "--allowedTools", "Bash", "Read", "Grep", "Glob", "Edit", "Write", "Skill",
+           "--disallowedTools", "Agent"]
     if model:
         cmd += ["--model", model]
     env = dict(os.environ)
@@ -118,22 +126,29 @@ def main():
     # skills 走 ~/.claude(symlink 回本 repo),不用複製
     print(f"臨時副本: {work}", file=sys.stderr)
     results = []
-    for sc in scs:
-        res = run_one(sc, work, a.max_turns, a.timeout, a.model)
-        results.append(res)
-        mark = "✓" if res["passed"] else "✗"
-        ft = f"{res['first_tool'][0]}: {res['first_tool'][1][:70]}" if res["first_tool"] else "(沒有任何工具呼叫)"
-        print(f"  {mark} {res['id']:22s} {res['secs']:6.1f}s  第一動作→ {ft}", flush=True)
-        if not res["passed"]:
-            print(f"      {res['reason']}", flush=True)
-        subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work))
-        subprocess.run(["git", "clean", "-qfd"], cwd=str(work))
-    n = len(results); p = sum(1 for r in results if r["passed"])
-    print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令")
-    if a.out:
-        Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n}, ensure_ascii=False, indent=1), encoding="utf-8")
-    if not a.keep:
-        shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        for sc in scs:
+            try:
+                res = run_one(sc, work, a.max_turns, a.timeout, a.model)
+            except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
+                res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                       "reason": f"儀器例外: {type(e).__name__}: {e}", "first_tool": None,
+                       "n_calls": 0, "calls": [], "secs": 0, "stderr": ""}
+            results.append(res)
+            mark = "✓" if res["passed"] else "✗"
+            ft = f"{res['first_tool'][0]}: {res['first_tool'][1][:70]}" if res["first_tool"] else "(沒有任何工具呼叫)"
+            print(f"  {mark} {res['id']:22s} {res['secs']:6.1f}s  第一動作→ {ft}", flush=True)
+            if not res["passed"]:
+                print(f"      {res['reason']}", flush=True)
+            subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work))
+            subprocess.run(["git", "clean", "-qfdx"], cwd=str(work))   # -x:連 gitignore 的產出也清,情境之間不互染
+    finally:
+        n = len(results); p = sum(1 for r in results if r["passed"])
+        print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令")
+        if a.out:
+            Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n}, ensure_ascii=False, indent=1), encoding="utf-8")
+        if not a.keep:
+            shutil.rmtree(tmp, ignore_errors=True)
     return 0 if p == n else 1
 
 
