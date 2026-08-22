@@ -14435,8 +14435,11 @@ def _bound_tests_for_diff(repo_root, diff_range):
     vault = _vault_in(repo_root)
     if vault is None:
         return [], "no-pins"
-    env = Env(vault)
-    _, split, default, methods_for, hay_for = _platform_test_index(repo_root)
+    try:
+        env = Env(vault)
+        _, split, default, methods_for, hay_for = _platform_test_index(repo_root)
+    except Exception as e:   # 設定檔壞(多平台沒填 default_platform 等)→ fail-open 記 no-config,不能炸成假 rc1
+        return [], f"no-config:{str(e)[:80]}"
     items = []
     for node in pins:
         n = env.notes.get(node) or env.notes.get(node[:-3] if node.endswith(".md") else node + ".md")
@@ -14452,7 +14455,8 @@ def _bound_tests_for_diff(repo_root, diff_range):
                 if not _KILL_METHOD_OK_RE.fullmatch(method or ""):
                     items.append((node, plat, method, "bad-name")); continue
                 try:
-                    real = method in methods_for(plat)
+                    mset = methods_for(plat)
+                    real = method in mset or ("." in method and method.rsplit(".", 1)[-1] in mset)   # Class.Method 寫法:集合是扁平方法名
                     fake = (not real) and (method in (hay_for(plat) or ""))
                 except Exception:
                     real, fake = False, False
@@ -14508,10 +14512,15 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note=""):
         note = skip_note or ("env LUMOS_SKIP_BOUND_TESTS=1" if not skip else "")
         _bound_tests_log(repo_root, "skipped", [], note)
         return {"status": "skipped", "ran": 0, "red": [], "secs": 0.0, "reason": note}
+    if str(diff_range or "").startswith("4b825dc642cb6eb9a060e54bf8d69288fbee4904"):
+        # 新分支首推:pre-push 給的是 EMPTY_TREE..sha(整個 repo 當 diff),固定席=全庫合約,跟這次改動無關 → fail-open
+        _bound_tests_log(repo_root, "diff-unavailable", [], "新分支首推無 merge-base,受波及範圍不可算")
+        return {"status": "diff-unavailable", "ran": 0, "red": [], "secs": 0.0, "reason": "新分支首推,受波及範圍不可算(整個 repo 當 diff 沒意義);下次推送就會算"}
     items, why = _bound_tests_for_diff(repo_root, diff_range)
     if why:
-        _bound_tests_log(repo_root, why, [], diff_range)
-        return {"status": why, "ran": 0, "red": [], "secs": 0.0, "reason": why}
+        kind = why.split(":", 1)[0]
+        _bound_tests_log(repo_root, kind, [], why if ":" in why else diff_range)
+        return {"status": kind, "ran": 0, "red": [], "secs": 0.0, "reason": why}
     results, err = _run_bound_tests(repo_root, items)
     if results is None:
         _bound_tests_log(repo_root, "no-config", sorted({i[0] for i in items}), err)
@@ -14539,6 +14548,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     import subprocess as _sp
 
     # 留痕比對座標:優先用傳入的(hook 綁被推送 ref),否則讀 checkout
+    _codeloop_guard_verdict.last_bound = None   # 每次呼叫先清,提早 fail-open 的分支不會拿到上一輪的殘留
     marker_sha = at_sha or _codeloop_git_head(repo_root)
     marker_branch = branch or _codeloop_git_branch(repo_root)
     if not marker_sha:

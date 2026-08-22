@@ -1,0 +1,405 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 256eaf2..e0fee4d 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -28,12 +28,13 @@ jobs:
+       - name: code-loop gate (push 後盾;體檢 #5)
+         # `git push --no-verify` 會整個跳過 pre-push——測試/doctor/anchor 這裡都已重跑,唯獨 tier=high
+         # 的對抗審查閘沒人補查,繞過零留痕。本步在 push 事件重算 pitfalls tier 並比對留痕:
+         # rc1=高風險 diff 無 pass/skip 留痕 → CI 紅(可見的痕跡;ci-wait/ci-log 會收到)。
+         if: github.event_name == 'push'
+         env:
++          LUMOS_SKIP_BOUND_TESTS: "1"   # 受波及合約測試在本機 pre-push 真跑;CI 已跑全套當後盾,不重跑
+           BEFORE: ${{ github.event.before }}
+           SHA: ${{ github.sha }}
+           BRANCH: ${{ github.ref_name }}
+         run: |
+           EMPTY=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+           case "$BEFORE" in 0000000000000000000000000000000000000000|"") BEFORE="$EMPTY";; esac
+diff --git a/scripts/lumos b/scripts/lumos
+index 885c72a..af55651 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2943,13 +2943,13 @@ def cmd_signoff(env, node, note, by=None):
+ 
+ # ★gov --stats 的 gate 全集★(2026-08-20,計劃:Projects/閘觸發帳統計_計劃)
+ # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
+ # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
+ # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
+ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
+-                "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "design-loop", "kill", "signoff")
++                "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+ # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+ _STATS_ABSENT_DISCLAIMER = (
+     "  未出現 ≠ 無用。本帳看不到硬擋事件(anchor verify 擋下 push 時不寫任何帳),也分不出四種\n"
+     "  「沒出現」:跑了沒事／接了帳但沒被觸發／守的功能從沒被用過／本次執行根本沒載入該來源\n"
+@@ -2958,13 +2958,13 @@ _STATS_ABSENT_DISCLAIMER = (
+ 
+ 
+ # 哪些 gate 的 nodes 欄語意不是「圖譜節點」。★為什麼要標★:anchor-approve 記的是錨點
+ # 檔案(ANCHOR_FILES:scripts/hooks/pre-push、scripts/test_lumos.py …),與其他 gate 的圖譜
+ # 節點名不同質,同欄並列會被誤讀成可互相比較。★不能用「值裡有沒有 /」偵測★——cmd_gov 的
+ # mapper 讀進來時已把路徑 stem 成 pre-push,偵測不到(2026-08-20 實作時測試翻紅抓到)。
+-_STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑", "design-loop": "此來源記的是審查編號"}
++_STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑", "design-loop": "此來源記的是審查編號", "bound-tests": "no-config/no-pins 也記一筆,採用率看得見"}
+ 
+ 
+ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
+     """gov --stats:純數字報表 + 未出現清單。恆不影響 rc、不改既有輸出。
+     ★三層數字不可互相冒充★:原始行(帳檔寫入)/去重列(本函式計數依據)/呈現行(預設畫面另折一層)。"""
+     print()
+@@ -14388,13 +14388,148 @@ def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts):
+         with open(path, "a", encoding="utf-8") as f:
+             f.write(json.dumps(event, ensure_ascii=False) + "\n")
+     except OSError:
+         pass
+ 
+ 
+-def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None):
++
++# ── 受波及合約測試真跑閘(Projects/受波及合約測試真跑閘_計劃;design-loop bound-tests-gate-c r1 PASS)────
++# 改到相依功能時,impact 固定席上的合約綁了什麼測試,在 code-loop check(pre-push 每次都呼叫)就真跑一遍;
++# 紅/懸空/方法名不合法 → BLOCKED。掛在「擋」的路徑(check)不掛「記錄」的路徑(pass)——r1 架構席抓的。
++# 假綠三防:①測試名要在該平台真測試集合(同 Check T);②去重鍵=解析後完整指令(同 kill);③方法名重驗同 kill。
++# fail-open 四情境(無 run_cmd / diff 算不出 / 無固定席 / 固定席沒綁)都寫 gate=bound-tests 帳,零觸發看得見。
++_BOUND_TESTS_WHOLE_SUITE_TIMEOUT = 600.0   # 同 kill baseline 的下限
++
++
++def _bound_tests_log(repo_root, kind, nodes, note):
++    """治理帳 gate=bound-tests(獨立 gate,kind 裸結果詞;fail-open,寫不進不影響判定)。"""
++    try:
++        vault = _vault_in(repo_root)
++        if vault is not None:
++            _append_governance_log(vault, [{"gate": "bound-tests", "kind": kind, "hard": kind == "red",
++                                            "nodes": list(nodes), "note": note}])
++    except Exception:
++        pass
++
++
++def _bound_tests_for_diff(repo_root, diff_range):
++    """impact 固定席 → 各節點 ★INVARIANT★ 的 [test:] → (node, platform, method, status)。
++    status ∈ real / dangling / fake / bad-name。回 (items, reason_if_none)。"""
++    import io as _io, contextlib as _ctx, json as _json
++    buf = _io.StringIO()
++    try:
++        with _ctx.redirect_stdout(buf), _ctx.redirect_stderr(_io.StringIO()):
++            rc = cmd_impact_diff(diff_range, repo=str(repo_root), as_json=True)
++    except SystemExit:
++        rc = 2
++    except Exception:
++        rc = 2
++    if rc != 0:
++        return [], "diff-unavailable"
++    try:
++        data = _json.loads(buf.getvalue().strip().splitlines()[-1])
++    except Exception:
++        return [], "diff-unavailable"
++    pins = [r["node"] for r in data.get("results", []) if r.get("pinned") and r.get("contract")]
++    if not pins:
++        return [], "no-pins"
++    vault = _vault_in(repo_root)
++    if vault is None:
++        return [], "no-pins"
++    env = Env(vault)
++    _, split, default, methods_for, hay_for = _platform_test_index(repo_root)
++    items = []
++    for node in pins:
++        n = env.notes.get(node) or env.notes.get(node[:-3] if node.endswith(".md") else node + ".md")
++        if n is None:
++            continue
++        inv, _ = extract_contracts(n)
++        for x in inv:
++            try:
++                pairs = resolve_test_refs(x, split, default)
++            except ValueError as e:
++                items.append((node, "?", str(e)[:60], "bad-name")); continue
++            for plat, method in pairs:
++                if not _KILL_METHOD_OK_RE.fullmatch(method or ""):
++                    items.append((node, plat, method, "bad-name")); continue
++                try:
++                    real = method in methods_for(plat)
++                    fake = (not real) and (method in (hay_for(plat) or ""))
++                except Exception:
++                    real, fake = False, False
++                items.append((node, plat, method, "real" if real else ("fake" if fake else "dangling")))
++    if not items:
++        return [], "no-bound"
++    return items, None
++
++
++def _run_bound_tests(repo_root, items):
++    """逐 (platform, method) 真跑;去重鍵=解析後完整指令。回 results[(node, plat, method, verdict, detail, secs)]。"""
++    import shlex as _shlex, os as _os
++    try:
++        pdata = load_platforms(repo_root)
++    except ValueError as e:
++        return None, f"config platforms 壞: {e}"
++    plats = pdata["platforms"]
++    per_test = float(_os.environ.get("LUMOS_TEST_TIMEOUT", "180") or 0) or None   # 同 runner 變數;0=不限
++    results, seen = [], {}
++    for node, plat, method, status in items:
++        if status != "real":
++            results.append((node, plat, method, "red", {"dangling": "綁的測試在程式碼裡找不到(懸空)",
++                                                       "fake": "綁的名字不是真的測試方法(偽證據)",
++                                                       "bad-name": "測試名不合法或平台前綴未定義"}[status], 0.0))
++            continue
++        pentry = plats.get(plat) or {}
++        run_cmd = pentry.get("run_cmd")
++        if not run_cmd:
++            return None, "no-config"
++        whole = "{method}" not in run_cmd
++        cmd = run_cmd if whole else run_cmd.replace("{method}", _shlex.quote(method))
++        root = str(pentry.get("root") or repo_root)
++        key = (root, cmd)
++        if key in seen:
++            rc, tail, secs, to = seen[key]
++        else:
++            timeout = max(_BOUND_TESTS_WHOLE_SUITE_TIMEOUT, per_test or 0) if whole else per_test
++            rc, tail, secs, to = _kill_run(cmd, root, timeout if timeout else 10 ** 6)
++            seen[key] = (rc, tail, secs, to)
++        if to:
++            results.append((node, plat, method, "red", f"超時(>{int(timeout)}s)", secs))
++        elif rc != 0:
++            results.append((node, plat, method, "red", f"rc={rc} {tail[-120:].strip()}", secs))
++        else:
++            results.append((node, plat, method, "green", "whole-suite" if whole else "", secs))
++    return results, None
++
++
++def _bound_tests_check(repo_root, diff_range, skip=False, skip_note=""):
++    """回 dict{status, ran, red:[…], secs, reason}。status ∈ green/red/skipped/no-config/no-pins/no-bound/diff-unavailable。"""
++    import os as _os
++    if skip or _os.environ.get("LUMOS_SKIP_BOUND_TESTS") == "1":
++        note = skip_note or ("env LUMOS_SKIP_BOUND_TESTS=1" if not skip else "")
++        _bound_tests_log(repo_root, "skipped", [], note)
++        return {"status": "skipped", "ran": 0, "red": [], "secs": 0.0, "reason": note}
++    items, why = _bound_tests_for_diff(repo_root, diff_range)
++    if why:
++        _bound_tests_log(repo_root, why, [], diff_range)
++        return {"status": why, "ran": 0, "red": [], "secs": 0.0, "reason": why}
++    results, err = _run_bound_tests(repo_root, items)
++    if results is None:
++        _bound_tests_log(repo_root, "no-config", sorted({i[0] for i in items}), err)
++        return {"status": "no-config", "ran": 0, "red": [], "secs": 0.0, "reason": err}
++    red = [(n, p, m, d) for n, p, m, v, d, _ in results if v == "red"]
++    secs = round(sum(r[5] for r in results), 1)
++    ran = sum(1 for r in results if r[3] == "green")
++    if red:
++        _bound_tests_log(repo_root, "red", sorted({r[0] for r in red}), f"{len(red)} 紅/{len(results)}")
++        return {"status": "red", "ran": ran, "red": red, "secs": secs,
++                "reason": "受波及合約的測試沒過:" + ";".join(f"{n} [{m}] {d}" for n, p, m, d in red[:6])}
++    _bound_tests_log(repo_root, "green", sorted({r[0] for r in results}), f"{ran} 綠 {secs}s")
++    return {"status": "green", "ran": ran, "red": [], "secs": secs, "reason": f"受波及合約測試 {ran} 支全綠({secs}s)"}
++
++def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note=""):
+     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
+     AND 無有效 pass/skip 留痕 → blocked=True。
+     留痕座標(prepush範圍修法 #2):at_sha/branch 給了則綁該座標(hook 傳被推送 ref 的
+     local_sha 與 remote_ref 分支),否則讀當前 checkout HEAD/branch(向後相容)。
+     diff_range 給了則跳 merge-base 推導直接算 tier;否則沿 merge-base..HEAD 現行為。
+     fail-open:pitfalls 出錯 / 非 git / 無 merge-base → tier 視作非 high(不 blocked)。
+@@ -14422,12 +14557,18 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+                     return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
+                 break
+         if not mb:
+             return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
+         diff_range = f"{mb}..HEAD"
+ 
++    # 2.5 受波及合約測試真跑(不分 tier;紅就擋)
++    bt = _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note)
++    _codeloop_guard_verdict.last_bound = bt
++    if bt["status"] == "red":
++        return {"blocked": True, "reason": bt["reason"], "tier": "unknown", "bound_tests": bt}
++
+     # 3. 跑 pitfalls --diff <range> --no-lint --json 取 tier
+     try:
+         import sys as _sys
+         graphctl = Path(__file__).resolve()
+         r = _sp.run([_sys.executable, str(graphctl), "pitfalls",
+                      "--diff", diff_range, "--no-lint", "--json",
+@@ -14482,13 +14623,13 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+         return {"blocked": True, "reason": reason, "tier": tier}
+ 
+     # 5. 無留痕
+     return {"blocked": True, "reason": "tier=high 且無留痕(尚未跑 code-loop pass/skip)", "tier": tier}
+ 
+ 
+-def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None):
++def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False):
+     """code-loop 留痕讀寫。
+     pass  → status=passed(綁 HEAD sha);
+     skip  → status=skipped(綁 HEAD sha,留逃生痕);
+     check → 跑判定式回報 verdict(blocked=tier=high∧無有效留痕);--json 輸出 verdict dict。
+     rc: 0=OK / 1=check:blocked / 2=參數錯。
+     """
+@@ -14525,25 +14666,40 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None,
+         print("  這筆紀錄只認目前這個版本:之後再改任何程式碼(工具自己的紀錄檔除外)它就失效,要重跑一次 pass 或 skip。")
+         return 0
+ 
+     if subcmd == "check":
+         # Task 2: 完整判定式(tier-high∧無有效留痕 → blocked)
+         import json as _cljson
++        if skip_bound and not (note or "").strip():
++            print("擋下:--skip-bound-tests 要帶 --note 寫為什麼不跑受波及合約的測試(會進治理帳被統計)", file=sys.stderr)
++            return 2
+         verdict = _codeloop_guard_verdict(repo_root, diff_range=diff_range,
+-                                          at_sha=at_sha, branch=marker_branch)
++                                          at_sha=at_sha, branch=marker_branch,
++                                          skip_bound=skip_bound, skip_note=note or "")
++        bt = getattr(_codeloop_guard_verdict, "last_bound", None)
++        if bt is not None and "bound_tests" not in verdict:
++            verdict["bound_tests"] = bt
+         blocked = verdict["blocked"]
+         reason = verdict["reason"]
+         tier = verdict["tier"]
+         if as_json:
+             print(_cljson.dumps(verdict, ensure_ascii=False))
+         else:
+             if blocked:
+                 print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
+                       file=sys.stderr)
+             else:
+                 print(f"✅ code-loop check: OK——可以推(分支 {branch},版本 {head_sha[:8]},tier={tier}):{reason}")
++            if bt is not None:
++                _st = bt.get("status")
++                if _st in ("green", "red"):
++                    print(f"  受波及合約測試:{bt.get('reason')}", file=sys.stderr if _st == "red" else sys.stdout)
++                    if _st == "red":
++                        print("  真的跑不了(外部 DB 不在、環境缺)→ 留痕跳過:\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
++                elif _st == "no-config":
++                    print("  提醒:這個專案沒設測試指令(.lumos/config.json 的 test.run_cmd),受波及合約的測試沒有跑——合約測試閘等於沒開。")
+         return 1 if blocked else 0
+ 
+     print(f"擋下:沒有 {subcmd!r} 這個子命令", file=sys.stderr)
+     return 2
+ 
+ 
+@@ -15148,12 +15304,15 @@ def main():
+             _clp.add_argument("--diff", dest="cl_diff", default=None,
+                               help="直接指定 diff 範圍 <A..B> 算 tier(跳 merge-base 推導;prepush範圍修法)")
+             _clp.add_argument("--at-sha", dest="cl_at_sha", default=None,
+                               help="留痕比對綁此 sha(hook 傳被推送 ref 的 local_sha;預設讀 checkout HEAD)")
+             _clp.add_argument("--branch", dest="cl_branch", default=None,
+                               help="留痕比對綁此 branch(hook 傳 remote_ref 分支名;預設讀 checkout branch)")
++            _clp.add_argument("--skip-bound-tests", dest="cl_skip_bound", action="store_true",
++                              help="不真跑受波及合約的測試(要配 --note 理由;進治理帳被統計;CI 用環境變數 LUMOS_SKIP_BOUND_TESTS=1)")
++            _clp.add_argument("--note", default="", help="--skip-bound-tests 的理由")
+         _clp.add_argument("--repo", dest="cl_repo", default=None,
+                           help="repo root(預設 cwd 逐層向上找 .git)")
+ 
+     _fill_help_when(ap)
+     args = ap.parse_args()
+ 
+@@ -15249,12 +15408,13 @@ def main():
+     if args.cmd == "code-loop":
+         note = getattr(args, "note", None) or ""
+         cl_json = getattr(args, "cl_json", False)
+         return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo, as_json=cl_json,
+                              diff_range=getattr(args, "cl_diff", None),
+                              at_sha=getattr(args, "cl_at_sha", None),
++                             skip_bound=getattr(args, "cl_skip_bound", False),
+                              marker_branch=getattr(args, "cl_branch", None))
+     if args.cmd == "loop" and args.lcmd == "capture-counts":
+         # 純機械原語(不碰圖譜):跨異質 finder 算 capture-recapture 重疊,vault-free
+         return cmd_loop_capture_counts(None, args.finders,
+                                        from_pitfalls=args.cc_pitfalls, repo=args.cc_repo)
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 6e11f80..aa3c550 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -4172,12 +4172,92 @@ def t_context_big_output_hints_brief():
+     check("--brief 不提示", "這篇的脈絡輸出" not in r2.stderr, r2.stderr)
+     r3 = run(v, "context", "Systems/N1")
+     check("小節點不提示", "這篇的脈絡輸出" not in r3.stderr, r3.stderr)
+     print("  ✓ t_context_big_output_hints_brief")
+ 
+ 
++def _mk_bound_tests_repo(d, run_cmd='python3 tests/run.py {method}', contract_test="t_pay_ok"):
++    """受波及合約測試真跑閘 fixture:Systems/Pay 綁 [test:<contract_test>] 指向 app/pay.py;
++    tests/run.py 是假的測試執行器:方法名存在且 tests/RED 不存在 → rc0,否則 rc1。"""
++    import subprocess as _sp, json as _j
++    d = Path(d)
++    _sp.run(["git", "init", "-q", str(d)])
++    (d / "app").mkdir(); (d / "app" / "pay.py").write_text("def charge(x):\n    return x\n", encoding="utf-8")
++    (d / "tests").mkdir()
++    (d / "tests" / "test_pay.py").write_text("def t_pay_ok():\n    assert True\n", encoding="utf-8")
++    (d / "tests" / "run.py").write_text(
++        "import sys, os\n"
++        "m = sys.argv[1] if len(sys.argv) > 1 else ''\n"
++        "red = os.path.exists(os.path.join(os.path.dirname(__file__), 'RED'))\n"
++        "print('ran', m)\n"
++        "sys.exit(1 if red else 0)\n", encoding="utf-8")
++    (d / ".lumos").mkdir()
++    cfg = {"test_profile": "python", "test": {"method_regex": "(?m)^def (t_[A-Za-z0-9_]+)\\s*\\("}}
++    if run_cmd:
++        cfg["test"]["run_cmd"] = run_cmd
++    (d / ".lumos" / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
++    kg = d / "docs" / "x-knowledge"; (kg / "Systems").mkdir(parents=True)
++    (kg / "Systems" / "Pay.md").write_text(
++        "---\ntype: system\nstatus: doing\nsummary: |-\n  FLOW:charge\n"
++        f"  KEY:★INVARIANT★ 金額不得為負 [test:{contract_test}] [audit:x/2026-08-22]\n  DEP:`app/pay.py`\n---\n# Pay\n主邏輯在 `app/pay.py`。\n", encoding="utf-8")
++    def commit(m):
++        _sp.run(["git", "-C", str(d), "add", "-A"])
++        _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", m, "--no-verify"])
++    commit("base")
++    (d / "app" / "pay.py").write_text("def charge(x):\n    return abs(x)\n", encoding="utf-8")
++    commit("change pay")
++    return d
++
++
++def t_bound_tests_gate():
++    """受波及合約測試真跑閘(Projects/受波及合約測試真跑閘_計劃,design-loop bound-tests-gate-c r1 PASS):
++    code-loop check 在判 tier 前,把 impact 固定席上合約綁的 [test:] 真跑;紅/懸空/方法名不合法 → BLOCKED;
++    沒 run_cmd 等四情境 fail-open 但寫帳;--skip-bound-tests 留痕。"""
++    import subprocess as _sp, json as _j, os as _os, shutil as _sh
++    lumos_real = str(Path(__file__).resolve().parent / "lumos")
++    def check_cmd(d, *extra, env=None):
++        e = dict(_os.environ); e.pop("LUMOS_SKIP_BOUND_TESTS", None); e.update(env or {})
++        return _sp.run([sys.executable, lumos_real, "code-loop", "check", "--diff", "HEAD~1..HEAD", "--json", "--repo", str(d), *extra],
++                       capture_output=True, text=True, env=e)
++    def gov_kinds(d):
++        p = Path(d) / "docs" / ".governance-log.jsonl"
++        return [_j.loads(l)["kind"] for l in p.read_text(encoding="utf-8").splitlines() if '"bound-tests"' in l] if p.exists() else []
++    # ① 綠:合約測試真跑綠 → 不擋,verdict 帶 bound_tests.ran=1
++    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-bt-"))
++    r = check_cmd(d); v = _j.loads(r.stdout)
++    check("★綠:真跑 1 支、不擋★", r.returncode == 0 and not v["blocked"] and v.get("bound_tests", {}).get("ran") == 1, r.stdout + r.stderr[-300:])
++    check("綠寫治理帳 gate=bound-tests kind=green", "green" in gov_kinds(d), str(gov_kinds(d)))
++    # ② 紅:同一支測試翻紅 → BLOCKED,訊息點名合約與測試
++    (Path(d) / "tests" / "RED").write_text("", encoding="utf-8")
++    r = check_cmd(d); v = _j.loads(r.stdout)
++    check("★紅:BLOCKED rc1,點名 Pay 與 t_pay_ok★", r.returncode == 1 and v["blocked"] and "Pay" in v["reason"] and "t_pay_ok" in v["reason"], r.stdout)
++    check("紅寫治理帳 kind=red", "red" in gov_kinds(d), str(gov_kinds(d)))
++    # ③ 逃生門:--skip-bound-tests --note → 不擋,kind=skipped
++    r = check_cmd(d, "--skip-bound-tests", "--note", "外部 DB 不在"); v = _j.loads(r.stdout)
++    check("逃生門:不擋且留痕 skipped", r.returncode == 0 and "skipped" in gov_kinds(d), r.stdout + r.stderr[-200:])
++    r = check_cmd(d, "--skip-bound-tests")
++    check("逃生門沒 --note → 拒絕(rc2)", r.returncode == 2, r.stderr[-200:])
++    # ④ CI 環境變數跳過
++    r = check_cmd(d, env={"LUMOS_SKIP_BOUND_TESTS": "1"}); v = _j.loads(r.stdout)
++    check("LUMOS_SKIP_BOUND_TESTS=1 → 不擋", r.returncode == 0 and not v["blocked"], r.stdout)
++    _sh.rmtree(d, ignore_errors=True)
++    # ⑤ 懸空:合約綁不存在的測試名,即使 run_cmd 會回 0 也要紅(假綠第一防)
++    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-bt2-"), contract_test="t_ghost")
++    r = check_cmd(d); v = _j.loads(r.stdout)
++    check("★懸空測試名 → 紅(不靠 rc)★", r.returncode == 1 and "t_ghost" in v["reason"], r.stdout)
++    _sh.rmtree(d, ignore_errors=True)
++    # ⑥ 沒 run_cmd → 不擋,但寫帳 no-config(零觸發要看得見)
++    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-bt3-"), run_cmd=None)
++    r = check_cmd(d); v = _j.loads(r.stdout)
++    check("沒 run_cmd → 不擋、帳記 no-config", r.returncode == 0 and "no-config" in gov_kinds(d), r.stdout + str(gov_kinds(d)))
++    r = _sp.run([sys.executable, lumos_real, "gov", "--stats", "--since", "9999", "--repo", str(d)] if False else [sys.executable, lumos_real, "--vault", str(Path(d) / "docs" / "x-knowledge"), "gov", "--stats", "--since", "9999"], capture_output=True, text=True)
++    check("gov --stats 列 bound-tests 閘", "bound-tests" in r.stdout, r.stdout[-600:])
++    _sh.rmtree(d, ignore_errors=True)
++    print("  ✓ t_bound_tests_gate")
++
++
+ def t_code_exts_four_lists_agree():
+     """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
+     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天
+     scripts/external-seat.sh 溜過同步閘。本測試釘四份一致,並要求含 shell 腳本副檔名。"""
+     import re as _re
+     root = Path(GRAPHCTL).resolve().parent

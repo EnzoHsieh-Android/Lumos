@@ -4252,6 +4252,21 @@ def t_bound_tests_gate():
     r = _sp.run([sys.executable, lumos_real, "gov", "--stats", "--since", "9999", "--repo", str(d)] if False else [sys.executable, lumos_real, "--vault", str(Path(d) / "docs" / "x-knowledge"), "gov", "--stats", "--since", "9999"], capture_output=True, text=True)
     check("gov --stats 列 bound-tests 閘", "bound-tests" in r.stdout, r.stdout[-600:])
     _sh.rmtree(d, ignore_errors=True)
+    # ⑦ 外審 blocker:設定檔壞(多平台沒填 default_platform)→ 不能炸成假 rc1,要 fail-open 記 no-config
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-bt4-"))
+    (Path(d) / ".lumos" / "config.json").write_text(_j.dumps({"platforms": {"a": {"profile": "python", "root": "."}, "b": {"profile": "python", "root": "."}}}), encoding="utf-8")
+    r = check_cmd(d)
+    ok_json = r.stdout.strip().startswith("{")
+    check("★設定檔壞 → 不炸、fail-open、帳記 no-config★", r.returncode == 0 and ok_json and "no-config" in gov_kinds(d), r.stdout[:200] + r.stderr[-300:])
+    _sh.rmtree(d, ignore_errors=True)
+    # ⑧ 外審 major:新分支首推 EMPTY_TREE..sha → 整 repo 當 diff 沒意義 → fail-open
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-bt5-"))
+    (Path(d) / "tests" / "RED").write_text("", encoding="utf-8")   # 若真跑會紅
+    head = _sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    r = _sp.run([sys.executable, lumos_real, "code-loop", "check", "--diff", f"4b825dc642cb6eb9a060e54bf8d69288fbee4904..{head}", "--json", "--repo", str(d)], capture_output=True, text=True)
+    v = _j.loads(r.stdout)
+    check("★新分支首推 → 不跑合約測試、不擋★", not v["blocked"] and v.get("bound_tests", {}).get("status") == "diff-unavailable", r.stdout)
+    _sh.rmtree(d, ignore_errors=True)
     print("  ✓ t_bound_tests_gate")
 
 
