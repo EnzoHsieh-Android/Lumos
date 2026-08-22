@@ -344,6 +344,42 @@ def emit_queue_patrol(project_root: Path) -> None:
     )
 
 
+def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
+    """對每支改動的 code 檔跑 lumos impact --file --json,收「直接相關且帶合約/事故」的節點,
+    扣掉這輪已動的圖譜檔。任何失敗回 []。"""
+    import json as _json
+    lumos = None
+    for cand in (project_root / "scripts" / "lumos", Path.home() / ".local" / "bin" / "lumos"):
+        if cand.exists():
+            lumos = cand; break
+    if lumos is None:
+        return []
+    touched = set()
+    for f in all_paths:
+        if is_graph_file(f, graph_root):
+            try:
+                touched.add(str(Path(f).resolve().relative_to(graph_root.resolve())))
+            except (ValueError, OSError):
+                pass
+    want = {}
+    for f in src_files[:4]:
+        try:
+            r = subprocess.run([sys.executable, str(lumos), "impact", "--file", str(f), "--json", "--repo", str(project_root)],
+                               capture_output=True, text=True, timeout=20)
+            d = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+        except Exception:
+            continue
+        for item in (d.get("direct") or []):
+            if item.get("contract") or item.get("combo"):
+                want[item["node"]] = "合約"
+        for item in (d.get("incidents") or []):
+            nd = item.get("node") if isinstance(item, dict) else item
+            if nd:
+                want[nd] = "事故"
+    out = [f"{n}({why})" for n, why in want.items() if n not in touched]
+    return out[:cap]
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read())
@@ -381,6 +417,14 @@ def main() -> int:
     # 閘門 3
     graph_touched_via_edit = any(is_graph_file(f, graph_root) for f in file_paths)
     if graph_touched_via_edit or touched_graph_via_cli(bash_commands):
+        # 2026-08-22(圖譜同步覆蓋):動過圖譜不等於動對篇——拿 impact 算「跟你改的碼直接相關、
+        # 帶合約或出過事故、這輪卻沒動」的筆記點名。只提醒,不擋。
+        missing = _impact_missing(src_files, file_paths, project_root, graph_root)
+        if missing:
+            print("\n".join([
+                f"提醒:這一輪動了筆記,但 impact 說下面這些筆記跟你改的程式碼直接相關(帶合約或出過事故),這輪還沒動:",
+                *[f"   • {m}" for m in missing],
+                "確定不受影響就略過;受影響的現在補,別等到 pre-push。"]), file=sys.stderr)
         return 0
 
     # ── 印提醒 ──

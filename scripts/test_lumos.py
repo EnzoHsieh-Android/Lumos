@@ -3852,6 +3852,39 @@ def t_precommit_lints_staged_graph_nodes():
     check("pre-commit lint: 同檔名不同夾仍 lint 到 staged 的壞節點(rc1)", r.returncode == 1, f"rc={r.returncode}\n{r.stderr[-300:]}")
 
 
+def t_precommit_sync_nudge_names_missing_pinned_nodes():
+    """圖譜同步覆蓋(2026-08-22,Enzo:「偶有沒能同步完全」):Gate 3 只看「有沒有任何一篇圖譜檔 staged」,
+    動錯篇也過。現在過關前跑 impact --sync-check,點名「跟改到的 code 直接相關(合約)卻沒動」的篇;只提醒不擋。"""
+    import subprocess, os, shutil
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit"
+    root = Path(tempfile.mkdtemp(prefix="gctl-sync-"))
+    subprocess.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    (root / "scripts").mkdir(); shutil.copy(GRAPHCTL, root / "scripts" / "lumos")
+    (root / "app").mkdir(); (root / "app" / "pay.py").write_text("def charge():\n    return 1\n", encoding="utf-8")
+    kg = root / "docs" / "x-knowledge"; (kg / "Systems").mkdir(parents=True); (kg / "Issues").mkdir()
+    # 跟 app/pay.py 直接相關、帶合約的功能筆記
+    (kg / "Systems" / "Pay.md").write_text(
+        "---\ntype: system\nstatus: doing\nsummary: |-\n  FLOW:charge\n  KEY:★INVARIANT★ 金額不得為負 [test:t_charge] [audit:x/2026-08-22]\n  DEP:`app/pay.py`\n---\n# Pay\n主邏輯在 `app/pay.py`。\n", encoding="utf-8")
+    (kg / "Issues" / "Other.md").write_text("---\ntype: issue\nstatus: open\naliases: []\nsummary: |-\n  KEY:無關\n---\n# Other\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"], capture_output=True)
+    # 改 code + 只動一篇無關的筆記 → Gate 3 放行,但要點名 Systems/Pay
+    (root / "app" / "pay.py").write_text("def charge(x):\n    return x\n", encoding="utf-8")
+    (kg / "Issues" / "Other.md").write_text("---\ntype: issue\nstatus: open\naliases: []\nsummary: |-\n  KEY:無關改一下\n---\n# Other\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    r = subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True, env=dict(os.environ, GIT_DIR=str(root / ".git")))
+    out = r.stdout + r.stderr
+    check("sync nudge: 動錯篇仍放行(rc0,只提醒)", r.returncode == 0, f"rc={r.returncode}\n{out[-400:]}")
+    check("★sync nudge: 點名直接相關卻沒動的 Systems/Pay★", "Systems/Pay" in out and "沒動" in out, out[-600:])
+    # 補動 Systems/Pay → 不再點名
+    (kg / "Systems" / "Pay.md").write_text((kg / "Systems" / "Pay.md").read_text(encoding="utf-8") + "\n改了。\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    r = subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True, env=dict(os.environ, GIT_DIR=str(root / ".git")))
+    check("sync nudge: 動對篇就不點名", "Systems/Pay" not in (r.stdout + r.stderr), (r.stdout + r.stderr)[-400:])
+    shutil.rmtree(root, ignore_errors=True)
+    print("  ✓ t_precommit_sync_nudge_names_missing_pinned_nodes")
+
+
 def t_doctor_soft_sections_truncate_by_default():
     """體檢 #10(2026-08-21):doctor 每次印幾十行軟提醒([P]19 行/[Y]6 行…全是歷史或自指噪音),
     重要的硬提醒被淹沒、Claude 一整天沒讀過一條。預設每個軟段最多列 3 條+「另 N 條(--verbose)」;

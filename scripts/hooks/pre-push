@@ -29,6 +29,28 @@ done
 # 無 lumos / python3 → 降級放行(不為缺環境 brick push,CI 兜底)
 GRAPHCTL="$REPO_ROOT/scripts/lumos"
 PY="$(command -v python3 || command -v python || true)"
+
+# ── 圖譜同步覆蓋點名(2026-08-22,提醒不擋):動過圖譜不等於動對篇。impact --sync-check 算
+# 「跟這批 code 直接相關(固定席:合約/事故/直接相依)、卻沒在這批裡動到」的筆記,點名前 8 篇。
+sync_nudge() {   # $1=diff range(或 staged)  $2=場景字
+  local _py; _py="$(command -v python3 || command -v python || true)"
+  [ -n "$_py" ] && [ -f "$REPO_ROOT/scripts/lumos" ] || return 0
+  "$_py" "$REPO_ROOT/scripts/lumos" impact --diff "$1" --sync-check --json --repo "$REPO_ROOT" 2>/dev/null | "$_py" -c '
+import json,sys
+try:
+    d=json.loads(sys.stdin.read().strip().splitlines()[-1])
+except Exception:
+    sys.exit(0)
+miss=[m for m in (d.get("sync") or {}).get("missing",[]) if m.get("pinned")]
+if not miss: sys.exit(0)
+miss.sort(key=lambda m:-m.get("score",0))
+print("")
+print("提醒:'"$2"'有動到筆記,但 impact 算出這些筆記跟改到的程式碼直接相關(合約 / 事故 / 直接相依),這次沒動:")
+for m in miss[:8]: print("   • %s  ←%s"%(m["node"],",".join(m.get("files",[])[:2])))
+if len(miss)>8: print("   … 還有 %d 篇(lumos impact --diff '"$1"' --sync-check 看全部)"%(len(miss)-8))
+print("確定不受影響就略過;受影響的補完再提交。這裡只提醒不擋。")
+' >&2 || true
+}
 if [[ -z "$PY" || ! -f "$GRAPHCTL" ]]; then
   echo "提醒:這台機器找不到 python3 或 lumos,推送前的知識庫檢查這次沒跑;推上去之後 CI 會再跑一遍兜底。" >&2
   exit 0
@@ -100,6 +122,8 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   fi
   [[ -z "$_EMPTY_TREE" ]] && continue   # 連空樹都算不出=git 環境壞,advisory 放行
 
+  # 圖譜同步覆蓋點名(2026-08-22,提醒不擋):分開幾個 commit 各自過關、整批卻漏掉的篇在這裡浮出
+  sync_nudge "$_range" "這批推送 "
   pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
   if printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
     {

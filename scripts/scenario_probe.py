@@ -97,9 +97,26 @@ def run_one(sc, workdir, max_turns, timeout, model):
         err = "timeout"
     calls = tool_calls_from_stream(out.splitlines())
     ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
+    # ⑩ 答案對不對(工具鏈補強十件):情境可帶 answer_expect=[regex…],最後回覆文字要全部命中
+    final = ""
+    for ln in out.splitlines():
+        ln = ln.strip()
+        if not ln.startswith("{"):
+            continue
+        try:
+            ev = json.loads(ln)
+        except Exception:
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "result":
+            final = ev.get("result") or ""
+    if ok and sc.get("answer_expect"):
+        miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
+        if miss_a:
+            ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
-            "calls": calls[:12], "secs": round(time.time() - t0, 1), "stderr": err if not ok else ""}
+            "calls": calls[:12], "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+            "answer": (final or "")[:1500]}
 
 
 def main():

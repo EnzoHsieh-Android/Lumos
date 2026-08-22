@@ -107,6 +107,29 @@ if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
   fi
 fi
 
+
+# ── 圖譜同步覆蓋點名(2026-08-22,提醒不擋):動過圖譜不等於動對篇。impact --sync-check 算
+# 「跟這批 code 直接相關(固定席:合約/事故/直接相依)、卻沒在這批裡動到」的筆記,點名前 8 篇。
+sync_nudge() {   # $1=diff range(或 staged)  $2=場景字
+  local _py; _py="$(command -v python3 || command -v python || true)"
+  [ -n "$_py" ] && [ -f "$REPO_ROOT/scripts/lumos" ] || return 0
+  "$_py" "$REPO_ROOT/scripts/lumos" impact --diff "$1" --sync-check --json --repo "$REPO_ROOT" 2>/dev/null | "$_py" -c '
+import json,sys
+try:
+    d=json.loads(sys.stdin.read().strip().splitlines()[-1])
+except Exception:
+    sys.exit(0)
+miss=[m for m in (d.get("sync") or {}).get("missing",[]) if m.get("pinned")]
+if not miss: sys.exit(0)
+miss.sort(key=lambda m:-m.get("score",0))
+print("")
+print("提醒:'"$2"'有動到筆記,但 impact 算出這些筆記跟改到的程式碼直接相關(合約 / 事故 / 直接相依),這次沒動:")
+for m in miss[:8]: print("   • %s  ←%s"%(m["node"],",".join(m.get("files",[])[:2])))
+if len(miss)>8: print("   … 還有 %d 篇(lumos impact --diff '"$1"' --sync-check 看全部)"%(len(miss)-8))
+print("確定不受影響就略過;受影響的補完再提交。這裡只提醒不擋。")
+' >&2 || true
+}
+
 # Gate 2: code 副檔名 (對齊 check-graph-sync.py CODE_EXTS)
 CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);四份清單由 t_code_exts_four_lists_agree 釘
 
@@ -139,8 +162,9 @@ done <<< "$STAGED"
 # Gate 2: 沒 code → 放行
 [[ ${#src_files[@]} -eq 0 ]] && exit 0
 
-# Gate 3: 有圖譜 .md staged → 放行
+# Gate 3: 有圖譜 .md staged → 放行(但先點名「該動卻沒動」的篇,2026-08-22)
 if echo "$STAGED" | grep -qE "^${GRAPH_ROOT}/.*\.md$"; then
+  sync_nudge staged "這次 commit "
   exit 0
 fi
 

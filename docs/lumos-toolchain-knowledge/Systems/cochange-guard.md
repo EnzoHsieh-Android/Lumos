@@ -18,6 +18,7 @@ summary: |-
 related:
   - "[[Projects/cochange守衛_計劃]]"
   - "[[Systems/lumos-cli-lifecycle]]"
+  - "[[Systems/graph-sync-coverage]]"
 verified_by:
   - "[[Verification/2026-07-10_cochange守衛]]"
 aliases:

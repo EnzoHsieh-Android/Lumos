@@ -62,8 +62,11 @@ def main():
     if root is None or not list((root / "docs").glob("*-knowledge")):
         return 0
     idx = Path.home() / ".claude" / "skills" / "lumos-project-notes" / "commands" / "INDEX.md"
-    if not idx.exists():
-        return 0
+    if not idx.exists():   # 全域 skills 沒裝(或正在重裝)→ 退用來源 repo 的那份
+        src = Path(os.environ.get("LUMOS_HOME") or (Path.home() / "harness" / "lumos-toolchain"))
+        idx = src / "skills" / "lumos-project-notes" / "commands" / "INDEX.md"
+        if not idx.exists():
+            return 0
     lag = _discipline_lag(root)
     msg = ("本專案用 lumos 知識圖譜。動既有系統的第一個工具呼叫是 lumos search / context,不是 grep / Read;"
            "被催「直接改」也一樣,改 code 前至少 lumos impact --file <檔> 一行。\n"
