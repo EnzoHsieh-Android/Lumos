@@ -11,6 +11,7 @@
 | 「我要改 X,會波及到什麼?」 | `lumos impact --file <檔>` 或 `--diff <範圍>` | grep 找得到呼叫點,找不到「哪些筆記/驗證/決策會因此失效」 |
 | 「哪些東西是金流/未收案/連到某節點的?」 | `lumos query --tag 家族/值 [--active] [--linked 節點]` | 這是欄位篩選,grep 字串會漏掉同義標籤 |
 | 「這個詞圖譜裡有沒有記?」 | `lumos search <詞>`;0 命中就換同義詞再搜 | 用 grep 判「沒記」,以前真的錯過 |
+| 中文查詢 | 概念之間加空白:`作廢 收回 點數`,不要 `作廢訂單點數怎麼收回` | 黏成一串當片語比對,幾乎必定 0 筆 |
 | 「這篇筆記完整內容」 | `lumos show <節點>` | search 只給索引行,下結論前要讀全文 |
 | 「最近誰改了什麼 / 現在在做什麼」 | `lumos recent --days 7`、`lumos query --tag status/doing` | git log 看不到圖譜層的進度 |
 | 「我刪掉/改名了一個函式,筆記會不會還在講它?」 | `lumos search <舊名> --code` 逐句判 | delguard 只在 commit 時提醒,而且逾時會放行 |

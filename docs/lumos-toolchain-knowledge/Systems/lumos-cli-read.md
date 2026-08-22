@@ -52,6 +52,10 @@ decisions:
     why_chosen: cwd-based 定位讓任何專案子目錄直接 lumos <cmd> 都鎖到正確 vault,機器層工具(全域 lumos/skills)則一次裝好共用
     decided: 2026-06-26
     valid: true
+  - content: 中文查詢要在概念之間加空白(Landmark 2026-08-11 手寫在自家 CLAUDE.md 的實測規則,Enzo 2026-08-22 要求注入所有專案):①注入範本對照表加一列 ②search 在「查詢是一串 ≥4 個中日韓字、沒空白、0 命中」時自己提示改寫範例 ③索引子檔與 skill 頭版同步。
+    id: d4
+    decided: 2026-08-22
+    valid: true
 verified_by:
   - "[[Verification/2026-07-14_relguard_E1失效背書]]"
   - "[[Verification/2026-07-14_relguard_E2建在被推翻決策上]]"

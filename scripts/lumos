@@ -1616,6 +1616,22 @@ def _search_visible_lines(lines, include_code):
         yield _no, ln, (ln if include_code else INLINE_CODE_RE.sub("", ln))
 
 
+def _cjk_nospace_hint(term, hits, regex=False):
+    """中文黏成一串沒斷詞就幾乎必定 0 筆(Landmark 2026-08-11 實測 8 句 3 句 0 筆):整串當片語比對,
+    整串找不到才退成各詞分開找,而一串中文沒有「各詞」可退。0 命中且查詢含 ≥4 個中日韓字、沒有空白 → 提示。"""
+    if hits or regex:
+        return None
+    t = (term or "").strip()
+    if " " in t or len(t) < 4:
+        return None
+    cjk = sum(1 for ch in t if "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff" or "\uac00" <= ch <= "\ud7af")
+    if cjk < 4:
+        return None
+    return ("提醒:0 筆,而且你查的是一串沒有空白的中文。搜尋會先把整串當片語比對,整串找不到才退成各詞分開找——"
+            "一串中文沒有「各詞」可退,所以自然問句幾乎必定 0 筆。把概念之間加空白再查一次,例如「作廢訂單點數怎麼收回」改成:\n"
+            "    lumos search \"作廢 收回 點數\"")
+
+
 def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
                ranked=False, top=20, as_json=False, include_superseded=False,
                any_terms=True):
@@ -1813,6 +1829,10 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
         # ★圖譜先行注入(2026-08-14 Enzo 裁)★:search 命中卻只掃摘要就下「圖譜沒記」的結論,
         # 是實證過的失效模式(金鑰明明在節點第 64 行,靠摘要判成「沒有」)。有命中就提醒一句,
         # 走 stderr 與逐詞覆蓋同慣例;--json/--files-only 不印(機器消費端)。
+        if not scored and not as_json and not files_only:
+            _h = _cjk_nospace_hint(term, 0, regex)
+            if _h:
+                print(_h, file=sys.stderr)
         if scored and not as_json and not files_only:
             print("提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。"
                   "下結論前先讀全文:lumos show <節點>", file=sys.stderr)
@@ -1821,6 +1841,9 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     if not include_code:
         suffix += " [已排除 code block,--code 可含]"
     print(f"\n{total_hits} 處 / {total_files} 篇{suffix}")
+    _h = _cjk_nospace_hint(term, total_files, regex)
+    if _h and not files_only:
+        print(_h, file=sys.stderr)
     if total_files and not files_only:
         print("提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。"
               "下結論前先讀全文:lumos show <節點>", file=sys.stderr)

@@ -4083,6 +4083,21 @@ def t_finding_kind_ledger_and_stats():
     print("  ✓ t_finding_kind_ledger_and_stats")
 
 
+def t_search_cjk_nospace_hint():
+    """中文黏成一串 0 筆 → 提示加空白(Landmark CLAUDE.md 2026-08-11 的手寫規則,2026-08-22 收進工具與注入範本)。"""
+    v = mkvault()
+    write(v, "Systems/Pay.md", "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:作廢訂單時收回點數\n---\n# Pay\n作廢 訂單 要 收回 點數。\n")
+    r = run(v, "search", "作廢訂單點數怎麼收回")
+    check("★黏成一串 0 筆 → 提示加空白★", "加空白" in r.stderr and "作廢 收回 點數" in r.stderr, r.stderr)
+    r2 = run(v, "search", "作廢 收回 點數")
+    check("加空白後命中,不提示", "Pay" in r2.stdout and "加空白" not in r2.stderr, r2.stdout + r2.stderr)
+    r3 = run(v, "search", "nothinghere")
+    check("英文 0 筆不提示(不是斷詞問題)", "加空白" not in r3.stderr, r3.stderr)
+    r4 = run(v, "search", "作廢訂單點數怎麼收回", "--files-only")
+    check("--files-only(機器消費)不提示", "加空白" not in r4.stderr, r4.stderr)
+    print("  ✓ t_search_cjk_nospace_hint")
+
+
 def t_code_exts_four_lists_agree():
     """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天
