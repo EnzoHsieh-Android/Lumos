@@ -345,40 +345,24 @@ def emit_queue_patrol(project_root: Path) -> None:
 
 
 def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
-    """對每支改動的 code 檔跑 lumos impact --file --json,收「直接相關且帶合約/事故」的節點,
-    扣掉這輪已動的圖譜檔。任何失敗回 []。"""
-    import json as _json
-    lumos = None
-    for cand in (project_root / "scripts" / "lumos", Path.home() / ".local" / "bin" / "lumos"):
-        if cand.exists():
-            lumos = cand; break
+    """跟 pre-commit/pre-push 同一條路:lumos impact --diff HEAD --sync-check --json(工作樹 vs HEAD),
+    取「固定席未動」的前 cap 篇。lumos 尋路同 impact-hook._find_lumos_script 的順序(PATH 先、repo 後);
+    rc 協定同它:rc≠0 視為沒資料,fail-open 回 []。"""
+    import json as _json, shutil as _shutil
+    lumos = _shutil.which("lumos") or (str(project_root / "scripts" / "lumos") if (project_root / "scripts" / "lumos").exists() else None)
     if lumos is None:
         return []
-    touched = set()
-    for f in all_paths:
-        if is_graph_file(f, graph_root):
-            try:
-                touched.add(str(Path(f).resolve().relative_to(graph_root.resolve())))
-            except (ValueError, OSError):
-                pass
-    want = {}
-    for f in src_files[:4]:
-        try:
-            r = subprocess.run([sys.executable, str(lumos), "impact", "--file", str(f), "--json", "--repo", str(project_root)],
-                               capture_output=True, text=True, timeout=20)
-            d = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
-        except Exception:
-            continue
-        for item in (d.get("direct") or []):
-            if item.get("contract") or item.get("combo"):
-                want[item["node"]] = "合約"
-        for item in (d.get("incidents") or []):
-            nd = item.get("node") if isinstance(item, dict) else item
-            if nd:
-                want[nd] = "事故"
-    out = [f"{n}({why})" for n, why in want.items() if n not in touched]
-    return out[:cap]
-
+    try:
+        r = subprocess.run([sys.executable, lumos, "impact", "--diff", "HEAD", "--sync-check", "--json", "--repo", str(project_root)],
+                           capture_output=True, text=True, timeout=25)
+        if r.returncode != 0 or not r.stdout.strip():
+            return []
+        d = _json.loads(r.stdout.strip().splitlines()[-1])
+    except Exception:
+        return []
+    miss = [m for m in (d.get("sync") or {}).get("missing", []) if m.get("pinned")]
+    miss.sort(key=lambda m: -m.get("score", 0))
+    return [m["node"] for m in miss[:cap]]
 
 def main() -> int:
     try:
@@ -422,7 +406,7 @@ def main() -> int:
         missing = _impact_missing(src_files, file_paths, project_root, graph_root)
         if missing:
             print("\n".join([
-                f"提醒:這一輪動了筆記,但 impact 說下面這些筆記跟你改的程式碼直接相關(帶合約或出過事故),這輪還沒動:",
+                f"提醒:這一輪動了筆記,但 impact 說下面這些筆記跟你改的程式碼直接相關(合約 / 事故 / 直接相依),還沒動:",
                 *[f"   • {m}" for m in missing],
                 "確定不受影響就略過;受影響的現在補,別等到 pre-push。"]), file=sys.stderr)
         return 0

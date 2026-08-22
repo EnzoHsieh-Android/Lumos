@@ -3875,7 +3875,7 @@ def t_precommit_sync_nudge_names_missing_pinned_nodes():
     r = subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True, env=dict(os.environ, GIT_DIR=str(root / ".git")))
     out = r.stdout + r.stderr
     check("sync nudge: 動錯篇仍放行(rc0,只提醒)", r.returncode == 0, f"rc={r.returncode}\n{out[-400:]}")
-    check("★sync nudge: 點名直接相關卻沒動的 Systems/Pay★", "Systems/Pay" in out and "沒動" in out, out[-600:])
+    check("★sync nudge: 點名直接相關卻沒動的 Systems/Pay★", "Systems/Pay" in out and "沒動" in out, out[-800:])
     # 補動 Systems/Pay → 不再點名
     (kg / "Systems" / "Pay.md").write_text((kg / "Systems" / "Pay.md").read_text(encoding="utf-8") + "\n改了。\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
@@ -5966,6 +5966,16 @@ def t_pitfalls_diff_ignores_data_files_and_string_literals():
     r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
     d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
     check("真的 open( 照樣 high(反誤傷)", d["tier"] == "high" and any(c["line"] == 2 for c in d["claims"]), r.stdout)
+    # 外審 major(2026-08-22):收緊後漏掃 COUNT(*) / 別名欄位 / 跨行 UPDATE → 回歸釘
+    (root / "sql.py").write_text(
+        "cur.execute(\"SELECT COUNT(*) FROM orders WHERE status='open'\")\n"
+        "conn.execute(\"\"\"\n    UPDATE users\n    SET status = 'active'\n\"\"\")\n"
+        "q = 'SELECT u.id, u.name FROM users u'\n", encoding="utf-8")
+    commit("sql")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    kinds = {c["class"] for c in d["claims"]}
+    check("★COUNT(*) FROM / 別名欄位 / 跨行 UPDATE 照樣抓到(反漏掃)★", d["tier"] == "high" and {"效能", "併發"} <= kinds, r.stdout[:400])
     print("  ✓ t_pitfalls_diff_ignores_data_files_and_string_literals")
 
 

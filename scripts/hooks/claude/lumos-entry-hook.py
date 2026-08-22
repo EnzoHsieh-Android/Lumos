@@ -33,7 +33,8 @@ def _discipline_lag(root):
     end = cm.find("<!-- LUMOS:GRAPH-DISCIPLINE:END -->")
     if start < 0 or end < 0:
         return None
-    body = cm[cm.find("\n", start) + 1:end].strip("\n")
+    norm = lambda t: "\n".join(l.rstrip() for l in t.replace("\r\n", "\n").split("\n")).strip("\n")
+    body = norm(cm[cm.find("\n", start) + 1:end])
     src = Path(os.environ.get("LUMOS_HOME") or (Path.home() / "harness" / "lumos-toolchain"))
     tpl = src / "scripts" / "templates" / "graph-discipline.md"
     if not tpl.exists():
@@ -43,7 +44,7 @@ def _discipline_lag(root):
         return None
     slug = kgs[0].name[:-len("-knowledge")]
     try:
-        expected = tpl.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip("\n")
+        expected = norm(tpl.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/"))
     except OSError:
         return None
     if body == expected:

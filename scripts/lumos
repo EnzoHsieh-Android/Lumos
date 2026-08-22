@@ -10351,10 +10351,11 @@ _STACK_PERF_QUESTIONS = {
 _PITFALL_DIFF_PATTERNS = [
     (re.compile(r"requests\.\w+\(|httpx\.\w+\(", re.I), "資源", "HTTP 呼叫有沒有 timeout?", False),
     (re.compile(r"\bopen\s*\(", re.I), "資源", "檔案 handle 有沒有 with/確定 close?", False),
-    (re.compile(r"\bSELECT\s+(?:\*|\d|\w+(?:\s*,\s*\w+)*\s+FROM\b)", re.I), "效能", "是否在迴圈內、造成 N+1?", True),
+    # SELECT … FROM(欄位任意:COUNT(*)、u.id、別名都算)或 SELECT 常數;表名限 ASCII 識別字起頭,「UPDATE 失敗」這種訊息文字不算
+    (re.compile(r"\bSELECT\b.*\bFROM\b|\bSELECT\s+\d", re.I), "效能", "是否在迴圈內、造成 N+1?", True),
     (re.compile(r"\btime\.sleep\s*\(", re.I), "效能", "sleep 在迴圈裡會不會累積延遲?", False),
     (re.compile(r"\bthreading\.|\bLock\s*\(|global\s+\w+", re.I), "併發", "共享狀態有沒有鎖保護?", False),
-    (re.compile(r"\bINSERT\s+INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b", re.I), "併發", "寫入有沒有交易包裹?", True),
+    (re.compile(r"\bINSERT\s+INTO\b|\bUPDATE\s+[A-Za-z_`\"\[][\w.`\"\]]*\s*$|\bUPDATE\s+[A-Za-z_`\"\[][\w.`\"\]]*\s+(?:SET|AS\b|\w+\s+SET)|\bDELETE\s+FROM\b", re.I), "併發", "寫入有沒有交易包裹?", True),
 ]
 _PITFALL_DIFF_SKIP_EXT = {".md", ".txt", ".rst",
                           # 資料/紀錄檔不是代碼(工具鏈補強十件 #7,2026-08-22):探針結果 JSON、
@@ -14004,7 +14005,7 @@ def _impact_diff_seed_ok(f):
 
 
 def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as_json=False,
-                    sync_check=False):
+                    sync_check=False, sync_only=False):
     """code-loop 橋接:對整段 diff 的每支改動 code 檔跑 ranked impact(query=該檔 hunk 文字),
     聚合成「受影響功能面」manifest——固定席(合約/事故)全保、非固定取跨檔最高分 top-N。
     定位=審計員鏡頭(advisory,人判),非自動推播(hook 面 goldset 評測未過線,故不接 hook)。
@@ -14112,6 +14113,9 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
                                     "free_total": sum(1 for v in merged.values() if not v["pinned"]),
                                     "per_file": per_file_meta}}, ensure_ascii=False))
         return 0
+    if sync_only and sync is not None:
+        _print_sync_nudge(sync, diff_range)
+        return 0
     print(f"受影響功能面({diff_range};{len(files)} 檔;固定席 {len(pins)}+top {len(free)}——審計鏡頭,人判):")
     for v in pins + free:
         mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{v.get('hop','?')}"}.get(v["kind"], "")
@@ -14121,15 +14125,27 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
     if not merged:
         print("  (無節點引用這些檔——圖譜對此 diff 無覆蓋)")
     if sync is not None:
-        print(f"\n落成核對(分支動過 {len(sync['touched_nodes'])} 個節點):")
-        if not sync["missing"]:
-            print("  ✓ 預期受影響節點全數已同步")
-        else:
-            for v in sync["missing"]:
-                mark = "⚠必看" if v["pinned"] else "  "
-                print(f"  {mark} 未同步 {v['node']}  ←{','.join(v['files'][:2])}")
-            print("  (advisory:漏了還是不用?逐條判;固定席可信度高,自由席人判)")
+        _print_sync_nudge(sync, diff_range)
     return 0
+
+
+def _print_sync_nudge(sync, diff_range, cap=8):
+    """落成核對的唯一呈現(2026-08-22 架構對齊席抓到三套並存後收斂成這一份):
+    固定席(合約/事故/直接相依)優先、最多 cap 篇;hooks(pre-commit/pre-push/Stop)只呼叫,不自己重排。"""
+    miss = sorted(sync["missing"], key=lambda m: (not m["pinned"], -m.get("score", 0)))
+    print(f"\n落成核對(這批動過 {len(sync['touched_nodes'])} 篇筆記):")
+    if not miss:
+        print("  ✓ 預期受影響的筆記全數已同步")
+        return
+    pinned = [m for m in miss if m["pinned"]]
+    print(f"  提醒:下面這些筆記跟改到的程式碼直接相關(合約 / 事故 / 直接相依),這批沒動:" if pinned
+          else "  提醒:下面這些筆記可能受影響,這批沒動(自由席,可信度較低,人判):")
+    for v in miss[:cap]:
+        mark = "⚠必看" if v["pinned"] else "  "
+        print(f"  {mark} {v['node']}  ←{','.join(v['files'][:2])}")
+    if len(miss) > cap:
+        print(f"  … 還有 {len(miss) - cap} 篇(lumos impact --diff {diff_range} --sync-check --json 看全部)")
+    print("  確定不受影響就略過;受影響的現在補。這裡只提醒不擋。")
 
 
 # ── code-loop 留痕(Task 1) ────────────────────────────────────────────────────
@@ -14862,6 +14878,8 @@ def main():
     p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
     p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
     p.add_argument("--diff", dest="impact_diff", help="diff range(如 main..HEAD):聚合各改動檔的 ranked impact 成受影響功能面 manifest(code-loop 審計鏡頭)")
+    p.add_argument("--sync-only", action="store_true", dest="impact_sync_only",
+                   help="配 --sync-check:只印「該動卻沒動」的點名(hooks 用),不印受影響功能面")
     p.add_argument("--sync-check", action="store_true", dest="impact_sync",
                    help="落成核對(配 --diff):預期受影響節點 vs 分支實際動過節點 → 未同步清單(advisory)")
     p.add_argument("--repo", dest="impact_repo", help="repo root(缺則退回 find_vault;hook 必傳)")
@@ -15051,7 +15069,8 @@ def main():
             return cmd_impact_diff(args.impact_diff, repo=args.impact_repo,
                                    depth=args.impact_depth, top=args.impact_top,
                                    min_score=args.impact_min, as_json=args.impact_json,
-                                   sync_check=args.impact_sync)
+                                   sync_check=args.impact_sync or args.impact_sync_only,
+                                   sync_only=args.impact_sync_only)
         if not args.impact_file:
             print("擋下:impact 要給 --file <檔案> 或 --diff <起點..終點>", file=sys.stderr)
             return 2

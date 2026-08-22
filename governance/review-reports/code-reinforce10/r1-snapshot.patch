@@ -1,0 +1,1045 @@
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index 7ad2b73..b023b31 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -78,14 +78,43 @@ print('LINE', line_notify.send(line_notify.build_message('labeling-refresh', os.
+       log "⚠ 考卷($tag)執行失敗(fail-open 不阻斷),詳 $LOGDIR/exam-$tag-$TODAY.log"
+     fi
+   else
+     log "考卷($tag):${age} 天前跑過,略"
+   fi
+ }
++# ── 情境探針週抽(工具鏈補強十件 #1,2026-08-22):每週抽 8 題看 Claude 會不會自己敲 lumos——
++# 改了 CLAUDE.md 區塊或 skill 之後「規則有沒有退化」要有數字可看,不靠有人想起來重測。
++# fail-open:探針失敗只記 log;有題沒過才 LINE。上限每週一次、8 題,避免變成燒 token 的機器。
++run_probe(){
++  local hist="$REPO/governance/scenarios/history.jsonl"
++  local week; week="$(date +%G-W%V)"
++  if grep -q "\"seed\": \"$week\"" "$hist" 2>/dev/null; then
++    log "情境探針:本週($week)已抽過,跳過"; return 0
++  fi
++  command -v claude >/dev/null 2>&1 || { log "情境探針:沒有 claude CLI,跳過"; return 0; }
++  log "情境探針:本週($week)抽 8 題開跑"
++  (cd "$REPO" && python3 scripts/scenario_probe.py \
++      --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl \
++      --sample 8 --seed "$week" --timeout 600 --ts "$TODAY" --history "$hist" \
++      --out "$REPO/governance/scenarios/run-$TODAY-weekly.json") > "$LOGDIR/probe-$TODAY.log" 2>&1 || true
++  local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1)"
++  log "情境探針結果:${line:-無結果(看 $LOGDIR/probe-$TODAY.log)}"
++  local pp tt; pp="${line%%/*}"; tt="$(echo "$line" | sed -E 's#^[0-9]+/([0-9]+) .*#\1#')"
++  if [ -n "$line" ] && [ "$pp" != "$tt" ]; then
++    MSG="情境探針本週有題沒過:$line(沒過的題在 governance/scenarios/history.jsonl;改規則後用 scripts/scenario_probe.py --only <id> 重跑)" \
++    LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
++import sys, os; sys.path.insert(0,'$REPO/governance')
++from autonomous_loop import line_notify
++t=os.environ.get('LINE_TOKEN','')
++print('LINE', line_notify.send(line_notify.build_message('scenario-probe', os.environ['MSG'], None), t) if t else 'no-token')" || true
++  fi
++}
++
+ run_exam "$REPO" toolchain
+ [ -d "$HOME/backend/LandmarkMember/governance/eval" ] && run_exam "$HOME/backend/LandmarkMember" landmark
++run_probe
+ 
+ SKIP_CAP=3; skip_n=0
+ while : ; do
+ GAP_JSON="$(cd "$REPO" && python3 -c "
+ import sys, json; sys.path.insert(0,'governance')
+ from autonomous_loop import gap_select
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index 07dd76e..a34bf07 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -341,12 +341,48 @@ def emit_queue_patrol(project_root: Path) -> None:
+         f"(oldest: {oldest[:10]})。"
+         f"\n   跑 `lumos gov` 看 L3 rot 事件(rot-queue-digest.sh 從未存在,2026-08-21 更正)。",
+         file=sys.stderr,
+     )
+ 
+ 
++def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
++    """對每支改動的 code 檔跑 lumos impact --file --json,收「直接相關且帶合約/事故」的節點,
++    扣掉這輪已動的圖譜檔。任何失敗回 []。"""
++    import json as _json
++    lumos = None
++    for cand in (project_root / "scripts" / "lumos", Path.home() / ".local" / "bin" / "lumos"):
++        if cand.exists():
++            lumos = cand; break
++    if lumos is None:
++        return []
++    touched = set()
++    for f in all_paths:
++        if is_graph_file(f, graph_root):
++            try:
++                touched.add(str(Path(f).resolve().relative_to(graph_root.resolve())))
++            except (ValueError, OSError):
++                pass
++    want = {}
++    for f in src_files[:4]:
++        try:
++            r = subprocess.run([sys.executable, str(lumos), "impact", "--file", str(f), "--json", "--repo", str(project_root)],
++                               capture_output=True, text=True, timeout=20)
++            d = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
++        except Exception:
++            continue
++        for item in (d.get("direct") or []):
++            if item.get("contract") or item.get("combo"):
++                want[item["node"]] = "合約"
++        for item in (d.get("incidents") or []):
++            nd = item.get("node") if isinstance(item, dict) else item
++            if nd:
++                want[nd] = "事故"
++    out = [f"{n}({why})" for n, why in want.items() if n not in touched]
++    return out[:cap]
++
++
+ def main() -> int:
+     try:
+         payload = json.loads(sys.stdin.read())
+     except json.JSONDecodeError:
+         return 0  # 寧可漏報
+ 
+@@ -378,12 +414,20 @@ def main() -> int:
+     if not src_files:
+         return 0
+ 
+     # 閘門 3
+     graph_touched_via_edit = any(is_graph_file(f, graph_root) for f in file_paths)
+     if graph_touched_via_edit or touched_graph_via_cli(bash_commands):
++        # 2026-08-22(圖譜同步覆蓋):動過圖譜不等於動對篇——拿 impact 算「跟你改的碼直接相關、
++        # 帶合約或出過事故、這輪卻沒動」的筆記點名。只提醒,不擋。
++        missing = _impact_missing(src_files, file_paths, project_root, graph_root)
++        if missing:
++            print("\n".join([
++                f"提醒:這一輪動了筆記,但 impact 說下面這些筆記跟你改的程式碼直接相關(帶合約或出過事故),這輪還沒動:",
++                *[f"   • {m}" for m in missing],
++                "確定不受影響就略過;受影響的現在補,別等到 pre-push。"]), file=sys.stderr)
+         return 0
+ 
+     # ── 印提醒 ──
+     project_root_resolved = project_root.resolve()
+     rel: list[str] = []
+     seen: set[str] = set()
+diff --git a/scripts/hooks/claude/lumos-entry-hook.py b/scripts/hooks/claude/lumos-entry-hook.py
+index 3a94030..09fd618 100755
+--- a/scripts/hooks/claude/lumos-entry-hook.py
++++ b/scripts/hooks/claude/lumos-entry-hook.py
+@@ -19,27 +19,63 @@ def _repo_root(cwd):
+                            capture_output=True, text=True, timeout=10)
+     except Exception:
+         return None
+     return Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+ 
+ 
++def _discipline_lag(root):
++    """CLAUDE.md 紀律區塊跟來源範本不一樣 → 一行提醒(工具鏈補強十件 #8)。
++    比內容不比版本號——版本號手動 bump,範本改了常沒 bump。來源不在、沒 sentinel 都靜默。"""
++    try:
++        cm = (root / "CLAUDE.md").read_text(encoding="utf-8").replace("\r\n", "\n")
++    except OSError:
++        return None
++    start = cm.find("<!-- LUMOS:GRAPH-DISCIPLINE:START")
++    end = cm.find("<!-- LUMOS:GRAPH-DISCIPLINE:END -->")
++    if start < 0 or end < 0:
++        return None
++    body = cm[cm.find("\n", start) + 1:end].strip("\n")
++    src = Path(os.environ.get("LUMOS_HOME") or (Path.home() / "harness" / "lumos-toolchain"))
++    tpl = src / "scripts" / "templates" / "graph-discipline.md"
++    if not tpl.exists():
++        return None
++    kgs = sorted((root / "docs").glob("*-knowledge"))
++    if not kgs:
++        return None
++    slug = kgs[0].name[:-len("-knowledge")]
++    try:
++        expected = tpl.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip("\n")
++    except OSError:
++        return None
++    if body == expected:
++        return None
++    return ("提醒:這個專案 CLAUDE.md 裡的 lumos 紀律區塊跟來源的最新版不一樣(規則可能已經更新),"
++            "有空跑一次:\n    lumos update")
++
++
+ def main():
+     try:
+         payload = json.loads(sys.stdin.read() or "{}")
+     except ValueError:
+         payload = {}
+     cwd = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+     root = _repo_root(cwd)
+     if root is None or not list((root / "docs").glob("*-knowledge")):
+         return 0
+     idx = Path.home() / ".claude" / "skills" / "lumos-project-notes" / "commands" / "INDEX.md"
+-    if not idx.exists():
+-        return 0
++    if not idx.exists():   # 全域 skills 沒裝(或正在重裝)→ 退用來源 repo 的那份
++        src = Path(os.environ.get("LUMOS_HOME") or (Path.home() / "harness" / "lumos-toolchain"))
++        idx = src / "skills" / "lumos-project-notes" / "commands" / "INDEX.md"
++        if not idx.exists():
++            return 0
++    lag = _discipline_lag(root)
+     msg = ("本專案用 lumos 知識圖譜。動既有系統的第一個工具呼叫是 lumos search / context,不是 grep / Read;"
+            "被催「直接改」也一樣,改 code 前至少 lumos impact --file <檔> 一行。\n"
+            f"不確定該敲哪個指令 → 讀索引(4k 字元,按情境分八類,只開需要的子檔):\n    {idx}")
++    if lag:
++        msg += "\n" + lag
+     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                              "additionalContext": msg}}, ensure_ascii=False))
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/scripts/hooks/pre-commit b/scripts/hooks/pre-commit
+index d368ae0..0d96605 100755
+--- a/scripts/hooks/pre-commit
++++ b/scripts/hooks/pre-commit
+@@ -104,12 +104,35 @@ if [[ -n "${CC_PY:-}" && -f "$REPO_ROOT/scripts/lumos" ]]; then
+   if [[ "$lint_fail" == 1 ]]; then
+     { echo ""; echo "格式錯的筆記進了版控,之後的工具會讀錯(合約標記消失、連結變鬼節點)。照上面的提示修好再 commit。"; echo "真的要先進去 → git commit --no-verify,並在訊息裡留一句為什麼。"; echo ""; } >&2
+     exit 1
+   fi
+ fi
+ 
++
++# ── 圖譜同步覆蓋點名(2026-08-22,提醒不擋):動過圖譜不等於動對篇。impact --sync-check 算
++# 「跟這批 code 直接相關(固定席:合約/事故/直接相依)、卻沒在這批裡動到」的筆記,點名前 8 篇。
++sync_nudge() {   # $1=diff range(或 staged)  $2=場景字
++  local _py; _py="$(command -v python3 || command -v python || true)"
++  [ -n "$_py" ] && [ -f "$REPO_ROOT/scripts/lumos" ] || return 0
++  "$_py" "$REPO_ROOT/scripts/lumos" impact --diff "$1" --sync-check --json --repo "$REPO_ROOT" 2>/dev/null | "$_py" -c '
++import json,sys
++try:
++    d=json.loads(sys.stdin.read().strip().splitlines()[-1])
++except Exception:
++    sys.exit(0)
++miss=[m for m in (d.get("sync") or {}).get("missing",[]) if m.get("pinned")]
++if not miss: sys.exit(0)
++miss.sort(key=lambda m:-m.get("score",0))
++print("")
++print("提醒:'"$2"'有動到筆記,但 impact 算出這些筆記跟改到的程式碼直接相關(合約 / 事故 / 直接相依),這次沒動:")
++for m in miss[:8]: print("   • %s  ←%s"%(m["node"],",".join(m.get("files",[])[:2])))
++if len(miss)>8: print("   … 還有 %d 篇(lumos impact --diff '"$1"' --sync-check 看全部)"%(len(miss)-8))
++print("確定不受影響就略過;受影響的補完再提交。這裡只提醒不擋。")
++' >&2 || true
++}
++
+ # Gate 2: code 副檔名 (對齊 check-graph-sync.py CODE_EXTS)
+ CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);四份清單由 t_code_exts_four_lists_agree 釘
+ 
+ # 排除路徑
+ should_exclude() {
+   local path="$1"
+@@ -136,14 +159,15 @@ while IFS= read -r f; do
+   src_files+=("$f")
+ done <<< "$STAGED"
+ 
+ # Gate 2: 沒 code → 放行
+ [[ ${#src_files[@]} -eq 0 ]] && exit 0
+ 
+-# Gate 3: 有圖譜 .md staged → 放行
++# Gate 3: 有圖譜 .md staged → 放行(但先點名「該動卻沒動」的篇,2026-08-22)
+ if echo "$STAGED" | grep -qE "^${GRAPH_ROOT}/.*\.md$"; then
++  sync_nudge staged "這次 commit "
+   exit 0
+ fi
+ 
+ # ── 印警告並擋 ──
+ {
+   echo ""
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 500bd76..4248c1b 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -26,12 +26,34 @@ while IFS= read -r _line; do
+   [[ -n "$_line" ]] && _PP_LINES+=("$_line")
+ done
+ 
+ # 無 lumos / python3 → 降級放行(不為缺環境 brick push,CI 兜底)
+ GRAPHCTL="$REPO_ROOT/scripts/lumos"
+ PY="$(command -v python3 || command -v python || true)"
++
++# ── 圖譜同步覆蓋點名(2026-08-22,提醒不擋):動過圖譜不等於動對篇。impact --sync-check 算
++# 「跟這批 code 直接相關(固定席:合約/事故/直接相依)、卻沒在這批裡動到」的筆記,點名前 8 篇。
++sync_nudge() {   # $1=diff range(或 staged)  $2=場景字
++  local _py; _py="$(command -v python3 || command -v python || true)"
++  [ -n "$_py" ] && [ -f "$REPO_ROOT/scripts/lumos" ] || return 0
++  "$_py" "$REPO_ROOT/scripts/lumos" impact --diff "$1" --sync-check --json --repo "$REPO_ROOT" 2>/dev/null | "$_py" -c '
++import json,sys
++try:
++    d=json.loads(sys.stdin.read().strip().splitlines()[-1])
++except Exception:
++    sys.exit(0)
++miss=[m for m in (d.get("sync") or {}).get("missing",[]) if m.get("pinned")]
++if not miss: sys.exit(0)
++miss.sort(key=lambda m:-m.get("score",0))
++print("")
++print("提醒:'"$2"'有動到筆記,但 impact 算出這些筆記跟改到的程式碼直接相關(合約 / 事故 / 直接相依),這次沒動:")
++for m in miss[:8]: print("   • %s  ←%s"%(m["node"],",".join(m.get("files",[])[:2])))
++if len(miss)>8: print("   … 還有 %d 篇(lumos impact --diff '"$1"' --sync-check 看全部)"%(len(miss)-8))
++print("確定不受影響就略過;受影響的補完再提交。這裡只提醒不擋。")
++' >&2 || true
++}
+ if [[ -z "$PY" || ! -f "$GRAPHCTL" ]]; then
+   echo "提醒:這台機器找不到 python3 或 lumos,推送前的知識庫檢查這次沒跑;推上去之後 CI 會再跑一遍兜底。" >&2
+   exit 0
+ fi
+ 
+ # 錨點完整性:驗證器(runner/hooks)沒被動過,後面的「doctor 過/測試綠」才可信(repo 層,vault 無關)
+@@ -97,12 +119,14 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+   else
+     # 一般情形:增量 endpoint diff
+     _range="$_rsha..$_lsha"
+   fi
+   [[ -z "$_EMPTY_TREE" ]] && continue   # 連空樹都算不出=git 環境壞,advisory 放行
+ 
++  # 圖譜同步覆蓋點名(2026-08-22,提醒不擋):分開幾個 commit 各自過關、整批卻漏掉的篇在這裡浮出
++  sync_nudge "$_range" "這批推送 "
+   pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
+   if printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
+     {
+       echo ""
+       echo "提醒:這次推送的程式碼裡有高風險寫法(像是沒包交易的寫入、沒關的檔案控制代碼、沒限流的外部呼叫),tier=high。"
+       echo "命中的地方列在下面:"
+diff --git a/scripts/lumos b/scripts/lumos
+index 2432eda..a3cef68 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -415,12 +415,25 @@ def _suggest_systems_for_orphan(env, rel, n):
+                 continue
+             add(sr, 1, f"feature 提到「{st}」")
+     return sorted(((s, sc, r) for s, (sc, r) in cands.items()),
+                   key=lambda x: (-x[1], -len(env.notes[x[0]].stem or "")))
+ 
+ 
++def _loop_gov_mark(env, loop_id, kind, note=""):
++    """設計/代碼審查迴圈的結案方式進治理帳(工具鏈補強十件 #6):gate=design-loop,
++    kind=converged(閘過了)| cap-reached(跑滿上限沒過)。gov --stats 用它算「達上限卻從沒過關」=人裁放行。
++    fail-open:寫不進去不影響判定輸出。"""
++    if env is None:
++        return
++    try:
++        _append_governance_log(env.vault, [{"gate": "design-loop", "kind": kind, "hard": False,
++                                            "nodes": [loop_id], "note": note}])
++    except Exception:
++        pass
++
++
+ def _append_governance_log(vault, events):
+     """寫者=doctor --ci + anchor approve:把 gate findings append 到 docs/.governance-log.jsonl。
+     非 git / 取不到 HEAD → 跳過(不報錯)。dedup 留給讀時(lumos gov)。"""
+     if not events:
+         return
+     import json
+@@ -2906,13 +2919,13 @@ def cmd_signoff(env, node, note, by=None):
+ 
+ 
+ # ★gov --stats 的 gate 全集★(2026-08-20,計劃:Projects/閘觸發帳統計_計劃)
+ # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
+ # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
+ _KNOWN_GATES = ("L2", "L3", "anchor-approve", "canary", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
+-                "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "kill", "signoff")
++                "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "design-loop", "kill", "signoff")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+ # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+ _STATS_ABSENT_DISCLAIMER = (
+     "  未出現 ≠ 無用。本帳看不到硬擋事件(anchor verify 擋下 push 時不寫任何帳),也分不出四種\n"
+     "  「沒出現」:跑了沒事／接了帳但沒被觸發／守的功能從沒被用過／本次執行根本沒載入該來源\n"
+@@ -2921,13 +2934,13 @@ _STATS_ABSENT_DISCLAIMER = (
+ 
+ 
+ # 哪些 gate 的 nodes 欄語意不是「圖譜節點」。★為什麼要標★:anchor-approve 記的是錨點
+ # 檔案(ANCHOR_FILES:scripts/hooks/pre-push、scripts/test_lumos.py …),與其他 gate 的圖譜
+ # 節點名不同質,同欄並列會被誤讀成可互相比較。★不能用「值裡有沒有 /」偵測★——cmd_gov 的
+ # mapper 讀進來時已把路徑 stem 成 pre-push,偵測不到(2026-08-20 實作時測試翻紅抓到)。
+-_STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑"}
++_STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑", "design-loop": "此來源記的是審查編號"}
+ 
+ 
+ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
+     """gov --stats:純數字報表 + 未出現清單。恆不影響 rc、不改既有輸出。
+     ★三層數字不可互相冒充★:原始行(帳檔寫入)/去重列(本函式計數依據)/呈現行(預設畫面另折一層)。"""
+     print()
+@@ -2969,12 +2982,26 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
+     if node:
+         print("  (只看單一節點時,有些帳本來就不記節點、一定是零,所以不列「哪些閘從沒出現」)")
+     else:
+         print(f"  這段時間完全沒觸發過的閘({len(absent)} 道):{', '.join(absent) if absent else '無'}")
+         print(_STATS_ABSENT_DISCLAIMER)
+     print()
++    # 設計迴圈結案方式(工具鏈補強十件 #6):達上限卻從沒過關的審查編號 = 人裁放行。
++    # 只看 gate=design-loop 的事件(2026-08-22 起才記;之前的迴圈沒帳,算不出來,這裡如實講)。
++    dl = [r for r in ded if r.get("gate") == "design-loop"]
++    if dl:
++        by = {}
++        for r in dl:
++            for nd_ in (r.get("nodes") or []):
++                by.setdefault(nd_, set()).add(r.get("kind"))
++        conv = sum(1 for k in by.values() if "converged" in k)
++        capped = sum(1 for k in by.values() if "cap-reached" in k and "converged" not in k)
++        print(f"  審查迴圈結案方式(只算有記帳的 {len(by)} 個編號):閘過了 {conv} 個、跑滿上限沒過關(人裁放行) {capped} 個"
++              + (f"——人裁放行率 {capped / len(by):.0%}" if by else ""))
++        print("  (2026-08-22 起 loop next / loop status 才會記這個帳;更早的迴圈沒資料,不在分母)")
++        print()
+     print("  註:這張表是「去重後」的筆數,跟不加 --stats 的畫面行數不是同一套算法——預設畫面還會再折疊一次。")
+ 
+ 
+ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
+     """唯讀彙整七帳(bypass/rot-queue/governance/canary/kill/signoff/ci)→ 治理事件時間軸。
+     本機開發可見性工具(非合規物)。L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖。
+@@ -3658,13 +3685,13 @@ def _panel_probe_verdict(loop_id, rid, recs):
+     import hashlib
+     toks = ",".join(sorted(str(r.get("token") or "") for r in recs))
+     h = int(hashlib.sha256(f"{loop_id}:{rid}:{toks}".encode("utf-8")).hexdigest(), 16)
+     return h % 2 == 0
+ 
+ 
+-def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
++def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None, env=None):
+     """平行 panel 收斂謂詞(loop 三輪壓縮)。無-cluster 帳:兩條合取(輪有效∧存活max≤minor;殘餘=advisory
+     ∧capture-recapture 殘餘,fail-closed)。cluster 帳(M2,設計 Projects/design-loop提效_計劃;
+     golden: governance/golden/dloop-m2-cluster):首個有效輪帶 clusters 定錨 → 兩條合取
+     (輪有效∧fold 後無 disputed-major),新生 cluster/capture-recapture 降 advisory,
+     無效輪 clusters 忽略+警告區列帳(不蒸發)。讀側 rc2 類:round-id 非連續/型別損壞/
+     有效輪 W 歸屬衝突/有效輪級混用。"""
+@@ -3717,13 +3744,13 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
+             if not anchor_cluster and has_c:
+                 print(f"擋下:這個審查編號從第 {anchor_rid} 輪起就定成不分組,但第 {rid_} 輪帶了分組"
+                       f";想用分組追蹤請開新的審查編號,既有的不能中途改", file=sys.stderr)
+                 return 2
+     if anchor_rid is not None and anchor_cluster:
+         return _loop_status_panel_clusters(groups, valid_of, loop_id,
+-                                           min_seats=min_seats, spec=spec, all_rounds=rounds)
++                                           min_seats=min_seats, spec=spec, all_rounds=rounds, env=env)
+     # ── 無-cluster 舊帳(或零有效輪=未定錨):既有三條合取,fail-closed 不變 ──
+     # cluster-intent 但未定錨(零有效輪):條 1 改用 M2 嚴格謂詞(unknown-kind 盲區補;
+     # 純無-cluster loop 不受影響——舊行為迴歸保證只對真 legacy 帳)
+     _cluster_intent = any("clusters" in r for r in rounds)
+     rid, latest = next(reversed(groups.items()))
+     if _cluster_intent and not valid_of[rid]:
+@@ -3767,19 +3794,21 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
+     if fails:
+         print(f"⛔ PANEL GATE FAIL({loop_id} 第 {rid} 輪沒通過,卡在:{'/'.join(fails)})")
+         return 1
+     if k2:
+         probe = _panel_probe_verdict(loop_id, rid, latest)
+         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、留下的問題都在可接受等級)")
++        _loop_gov_mark(env, loop_id, "converged", "gate PASS")
+         print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
+     else:
+         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、留下的問題都在可接受等級)")
++        _loop_gov_mark(env, loop_id, "converged", "gate PASS")
+     return 0
+ 
+ 
+-def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=None, all_rounds=None):
++def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=None, all_rounds=None, env=None):
+     """M2 cluster 帳 gate:兩條合取(判定輪有效 ∧ fold 後無 disputed-major)。
+     fold 只採有效輪(last-wins,同名跨輪最後狀態勝);無效輪 clusters 警告區列帳不蒸發;
+     新生 cluster 與 capture-recapture 皆 advisory 不進合取。"""
+     order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+     rid, latest = next(reversed(groups.items()))
+     fails = []
+@@ -3868,16 +3897,18 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
+         print(f"⛔ PANEL GATE FAIL({loop_id} 第 {rid} 輪沒通過,卡在:{'/'.join(fails)})")
+         return 1
+     if _k2c:
+         probe = _panel_probe_verdict(loop_id, rid, latest)
+         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、沒有分組卡在 disputed-major"
+               f"[cluster 帳,{len(ledger)} 個 cluster])")
++        _loop_gov_mark(env, loop_id, "converged", "panel gate PASS")
+         print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
+     else:
+         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、沒有分組卡在 disputed-major"
+               f"[cluster 帳,{len(ledger)} 個 cluster])")
++        _loop_gov_mark(env, loop_id, "converged", "panel gate PASS")
+     return 0
+ 
+ 
+ def cmd_loop_capture_counts(env, finders, from_pitfalls=None, repo=None):
+     """異質 panel 接線的機械生產者(code-loop 三輪壓縮):把各 finder 的 finding-key
+     彙成 capture_counts + 算殘餘估計,吐出可直接餵 `canary record --capture-counts` 的逗號串。
+@@ -4239,13 +4270,13 @@ def cmd_loop_verify_progress(env, loop_id, settle=None, as_json=False):
+             print(f"  last={out['last']}")
+         if "settle" in out:
+             print(f"  settle={out['settle']}")
+     return 0
+ 
+ 
+-def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
++def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo, env=None):
+     """settle 收斂閘([S1] 結清式收斂_計劃,2026-07-28):清單全結清 ∧ G1 refcheck ∧ G3(末筆 result=現檔)。
+     K-streak/G2 由「逐條存在證明」取代(G2 印 advisory 不進合取)。
+     caught 輪定義收緊:kind=caught ∧ auditor 非空;否則視同 missed(貶值 llm-ok)。
+     fail-closed 族:log 壞行=rc2(及於整個共用檔——壞行無法歸屬 loop);清單檔不可讀/格式非法/
+     零條目/llm-ok 缺 verified_in_round=rc2;懸空輪/非 caught 輪的 llm-ok=貶值視同未結清。
+     清單檔=JSON {"entries":[{id,kind:mech|semantic,claim,status,verified_in_round?,spec_sha}]}
+@@ -4337,12 +4368,13 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
+     for i, r in enumerate(rounds, 1):
+         print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
+     if fails:
+         print(f"⛔ SETTLE GATE FAIL({loop_id} 沒通過,卡在:{'/'.join(fails)})")
+         return 1
+     print(f"✅ SETTLE GATE PASS({loop_id} 通過:清單全收尾、引用對得上、文件沒被事後改過)")
++    _loop_gov_mark(env, loop_id, "converged", "gate PASS")
+     return 0
+ 
+ 
+ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None, disposal=False, roster=False):
+     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
+     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
+@@ -4428,22 +4460,22 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
+         return 2
+     if disposal:
+         # 留痕解析根:預設=寫側同源的 _vault_repo_root(對稱);顯式 --repo 覆蓋
+         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
+         _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
+         return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
+-                                     bad_linenos=bad_linenos)
++                                     bad_linenos=bad_linenos, env=env)
+     if not panel and n_round > 0:
+         print("擋下:這個編號的記錄帶了輪次(多人審格式),但你沒加 --panel;不加的話一輪裡 W 個人的記錄會被當成 W 輪,所以不算",
+               file=sys.stderr)
+         return 2
+     if settle is not None:
+-        return _loop_status_settle(rounds, n_badlines, loop_id, settle, spec, repo)
++        return _loop_status_settle(rounds, n_badlines, loop_id, settle, spec, repo, env=env)
+     if panel:
+         try:
+-            return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec)
++            return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec, env=env)
+         except OSError as e:   # G3 --spec 不可讀:與 legacy G1 對稱 rc2(code-loop r2 折入)
+             print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
+             return 2
+ 
+     # ── M1包 #2:light K=1 謂詞(loop機械脊椎M1包_計劃;hash 強制 fail-closed) ──
+     if light:
+@@ -4482,12 +4514,13 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
+         for line in _cost_summary(rounds):
+             print(line)
+         if fails:
+             print(f"⛔ LIGHT GATE FAIL({loop_id} 沒通過,卡在):" + "；".join(fails))
+             return 1
+         print(f"✅ LIGHT GATE PASS({loop_id} 通過:單人審完、沒有中等以上問題、記錄互相對得上、文件沒被事後改過)")
++        _loop_gov_mark(env, loop_id, "converged", "gate PASS")
+         return 0
+ 
+     def good(r):
+         return r.get("kind") in ("caught", "none") and r.get("severity") in ("clean", "minor")
+ 
+     converged = len(rounds) >= need and all(good(r) for r in rounds[-need:])
+@@ -4594,12 +4627,13 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
+     for line in _cost_summary(rounds):
+         print(line)
+     if fails:
+         print(f"⛔ GATE FAIL({loop_id} 沒通過,卡在:{'/'.join(fails)})")
+         return 1
+     print(f"✅ GATE PASS({loop_id} 四關全過:連續乾淨輪數、引用對得上、問題數遞減、文件沒被改過)")
++    _loop_gov_mark(env, loop_id, "converged", "gate PASS")
+     return 0
+ 
+ 
+ _TIER_PARAMS = {"light": (1, 2), "standard": (3, 3), "high": (5, 3), "legacy": (1, 6)}  # tier→(width, cap)
+ # ★一輪能丟多少給審查員的軟上限★(2026-08-02)
+ # 為什麼有這條:審查員的任務是「在 N 行裡找出那個植入的錯」,而 context rot(脈絡越長、
+@@ -4642,31 +4676,35 @@ _TIER_ROSTER = {
+     ("design", "light"): {"mode": "single", "seats": [
+         _rseat("通才", "claude", True, "required")]},
+     ("design", "standard"): {"mode": "panel", "seats": [
+         _rseat("鏡頭1", "claude", True, "required", "r1 其中一席通才(slot 命名慣例,非 lens 值域)"),
+         _rseat("鏡頭2", "claude", True, "required"),
+         _rseat("鏡頭3", "claude", True, "required"),
++        _rseat("架構對齊", "claude", False, "required", "2026-08-22:設計有沒有照既有模組邊界與做法;不佔 W"),
+         _rseat("外家否決", "external", False, "note-if-absent")]},
+     ("design", "high"): {"mode": "panel", "seats": [
+         _rseat("鏡頭1", "claude", True, "required"),
+         _rseat("鏡頭2", "claude", True, "required"),
+         _rseat("鏡頭3", "claude", True, "required"),
+         _rseat("鏡頭4", "claude", True, "required"),
+         _rseat("鏡頭5", "claude", True, "required"),
++        _rseat("架構對齊", "claude", False, "required", "2026-08-22:設計有沒有照既有模組邊界與做法;不佔 W"),
+         _rseat("外家否決", "external", False, "note-if-absent")]},
+     ("code", "standard"): {"mode": "sequential", "seats": [
+         _rseat("單reviewer", "claude", True, "required"),
++        _rseat("架構對齊", "claude", False, "required", "2026-08-22:這寫法跟專案既有的一不一樣;不佔 W"),
+         _rseat("外家否決", "external", False, "note-if-absent", "standard 退同門+留痕")]},
+     ("code", "high"): {"mode": "panel", "seats": [
+         _rseat("鏡頭1", "claude", True, "required"),
+         _rseat("鏡頭2", "claude", True, "required"),
+         _rseat("鏡頭3", "claude", True, "required"),
+         _rseat("鏡頭4", "claude", True, "required"),
+         _rseat("外家finder", "external", True, "required-fail-closed"),
+         _rseat("外家否決", "external", False, "required-fail-closed"),
+-        _rseat("spec-conformance", "claude", False, "conditional", "有收斂 spec 才應派")]},
++        _rseat("spec-conformance", "claude", False, "conditional", "有收斂 spec 才應派"),
++        _rseat("架構對齊", "claude", False, "required", "2026-08-22:這寫法跟專案既有的一不一樣;不佔 W")]},
+ }
+ 
+ 
+ def _roster_kind(loop_id):
+     """loop id 前綴三值判:code-(含連字號)=code;code 開頭無連字號=None(indeterminate,
+     歷史帳實有 code側刪除傳播守衛/codestage);其餘=design。"""
+@@ -4991,15 +5029,17 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+                              spec=spec, repo=repo, panel=(panel_fmt and not light),
+                              light=light, min_seats=width)   # 恆傳(light/legacy=1;code-loop r1 折入)
+     if rc == 2:
+         sys.stderr.write(buf.getvalue())
+         return 2
+     if rc == 0:
++        _loop_gov_mark(env, loop_id, "converged", "loop next 判四關全過")
+         return emit("converged", {"gate_basis": "四關全過(連續乾淨輪數、引用對得上、問題數遞減、文件沒被改過)"})
+     # ③ cap(資訊充分且未 PASS)
+     if rounds_count >= cap:
++        _loop_gov_mark(env, loop_id, "cap-reached", f"cap={cap} tier={eff_tier}")
+         return emit("cap-reached", {"note": f"跑滿 {cap} 輪還沒收斂——停下來,剩下的交給人裁決,別無限燒下去"})
+     # ④ plant-canary
+     return emit("plant-canary")
+ 
+ 
+ # ───────────── guard: 合約守衛 scaffold(對談驅動)─────────────
+@@ -9407,13 +9447,13 @@ def _quote_rows(rtext, stext):
+                      **({"too_short": True} if too_short else {})})
+     for _ in range(n_markers - len(quotes)):
+         rows.append({"quote": "(引號未閉合/開閉型態不符,無法抽取)", "ok": False, "malformed": True})
+     return rows
+ 
+ 
+-def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None):
++def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None):
+     """[T4] 處置閘(design-loop重設計 三):四條合取,全部讀側可重算——
+     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
+     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
+     ④quote-check 對 carrier 的帳面 snapshot 全 ok。
+     ★canary caught/missed 不進合取(d4:觀測非閘;missed 不作廢 findings)★。
+     壞行 fail-closed(r1 四席重疊:原壞行靜默跳過→latest 判錯輪可偽 PASS);
+@@ -9571,12 +9611,13 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+     for i, r in enumerate(latest, 1):
+         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
+     if fails:
+         print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+         return 1
+     print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定)")
++    _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
+     return 0
+ 
+ 
+ def cmd_quote_check(report, spec, as_json=False):
+     """錨定檢查(T2,vault-free):報告內每條「引句：「…」」norm 後須為凍結快照 norm 後的
+     子字串。rc0=全 ok、rc1=有 miss、rc2=IO/零引句(★驗不了≠通過,fail loud★)。
+@@ -10302,21 +10343,33 @@ _STACK_PERF_QUESTIONS = {
+         "有沒有索引支撐?會不會大表全掃?",
+         "交易範圍會不會鎖太久?",
+         "SARGable:索引在卻被寫法廢掉——WHERE 欄位側有沒有函式包用(ISNULL/CAST 包欄位=逐列運算廢索引;CONVERT(date,欄) 是文件化特例可 seek)?參數型別對得上欄位嗎(C# string 預設 nvarchar 打 varchar 欄=隱式轉換整表掃)?",
+     ],
+ }
+ # diff 模式:代碼形態 pattern:(regex, 形態類軸, 提問)——類軸限 併發/效能/資源(非四業務類)
++# 第四欄 in_strings:SQL 本來就寫在字串裡,要看字串;其餘只看真代碼(字串字面先剝掉,#7)。
++# SQL 三條收緊成真的 SQL 形狀——「UPDATE 失敗」這種訊息文字不算。
+ _PITFALL_DIFF_PATTERNS = [
+-    (re.compile(r"requests\.\w+\(|httpx\.\w+\(", re.I), "資源", "HTTP 呼叫有沒有 timeout?"),
+-    (re.compile(r"\bopen\s*\(", re.I), "資源", "檔案 handle 有沒有 with/確定 close?"),
+-    (re.compile(r"\bSELECT\b", re.I), "效能", "是否在迴圈內、造成 N+1?"),
+-    (re.compile(r"\btime\.sleep\s*\(", re.I), "效能", "sleep 在迴圈裡會不會累積延遲?"),
+-    (re.compile(r"\bthreading\.|\bLock\s*\(|global\s+\w+", re.I), "併發", "共享狀態有沒有鎖保護?"),
+-    (re.compile(r"\bINSERT\b|\bUPDATE\b|\bDELETE\b", re.I), "併發", "寫入有沒有交易包裹?"),
++    (re.compile(r"requests\.\w+\(|httpx\.\w+\(", re.I), "資源", "HTTP 呼叫有沒有 timeout?", False),
++    (re.compile(r"\bopen\s*\(", re.I), "資源", "檔案 handle 有沒有 with/確定 close?", False),
++    (re.compile(r"\bSELECT\s+(?:\*|\d|\w+(?:\s*,\s*\w+)*\s+FROM\b)", re.I), "效能", "是否在迴圈內、造成 N+1?", True),
++    (re.compile(r"\btime\.sleep\s*\(", re.I), "效能", "sleep 在迴圈裡會不會累積延遲?", False),
++    (re.compile(r"\bthreading\.|\bLock\s*\(|global\s+\w+", re.I), "併發", "共享狀態有沒有鎖保護?", False),
++    (re.compile(r"\bINSERT\s+INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b", re.I), "併發", "寫入有沒有交易包裹?", True),
+ ]
+-_PITFALL_DIFF_SKIP_EXT = {".md", ".txt", ".rst"}
++_PITFALL_DIFF_SKIP_EXT = {".md", ".txt", ".rst",
++                          # 資料/紀錄檔不是代碼(工具鏈補強十件 #7,2026-08-22):探針結果 JSON、
++                          # 治理帳、log 裡記的指令字串被當代碼掃,三批推送連判 high。
++                          ".json", ".jsonl", ".csv", ".log", ".lock", ".svg", ".html", ".patch", ".diff"}
++_PITFALL_STRLIT_RE = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
++
++
++def _strip_string_literals(code):
++    """把一行代碼裡的字串字面挖空(保留引號),讓 pitfalls 的 open(/UPDATE 正則只看真代碼——
++    print("…open(…") 這種訊息文字不算資源風險(#7)。單行粗剝,跨行字串不處理(剝不掉就照掃,寧誤傷不漏)。"""
++    return _PITFALL_STRLIT_RE.sub('""', code)
+ 
+ # 簿記檔白名單(單一源,兩個消費者:pitfalls --diff 掃描排除 + code-loop 留痕失效豁免)。
+ # 兩處分開寫過會漂移;pitfalls 這端 2026-08-11 才補上——治理帳裡記的 skip 理由本身在
+ # 描述「命中 open(...)」,被當代碼掃就再次命中 → 再 skip → 再寫一行理由……自我餵食,
+ # 實測誤觸發 9 次。這些檔是紀錄不是要合入的碼。
+ _BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
+@@ -11706,12 +11759,52 @@ def cmd_delguard_check(repo=None, as_json=False):
+             _degraded_json("error", len(locals().get("tokens", [])))
+         else:
+             print(f"提醒:「刪掉的東西筆記還在不在講」這項檢查自己出了內部錯誤({e.__class__.__name__}),先放行;已記一筆在治理帳。")
+         return 0
+ 
+ 
++
++_ARCH_IDIOM_SKILL = {"kt": "kotlin-idioms", "kts": "kotlin-idioms", "cs": "csharp-idioms", "vue": "vue-idioms",
++                     "ts": "vue-idioms", "js": "vue-idioms"}
++_ARCH_QUESTIONS = [
++    "分層與依賴方向:新碼放的層、它呼叫誰、誰呼叫它,跟對照檔一樣嗎?有沒有跨層直呼?",
++    "命名與錯誤處理:命名慣例、例外/錯誤回傳、日誌方式,跟對照檔一樣嗎?",
++    "第二種做法:有沒有引入專案裡原本沒有的做法(另一套 DI/狀態管理/HTTP client、自造已有的工具函式)?",
++]
++
++
++def _arch_alignment_hints(added, repo_root, per_file=3):
++    """每支改動 code 檔 → 同資料夾同副檔名、檔名最相似的既有檔(排除自己與測試檔),當架構對齊的對照組。
++    回 {"files": {改動檔: [對照檔…]}, "idiom_skills": [skill 名], "questions": [三問]};沒有對照就空。"""
++    import difflib
++    out_files = {}
++    skills = set()
++    for f in added:
++        if _PITFALL_DIFF_TEST_PAT.search(f):
++            continue
++        pf = Path(f)
++        ext = pf.suffix.lstrip(".").lower()
++        if not ext or ext in {e.lstrip(".") for e in _PITFALL_DIFF_SKIP_EXT}:
++            continue
++        if ext in _ARCH_IDIOM_SKILL:
++            skills.add(_ARCH_IDIOM_SKILL[ext])
++        d = Path(repo_root) / pf.parent
++        try:
++            sibs = [p for p in d.iterdir() if p.is_file() and p.suffix == pf.suffix and p.name != pf.name
++                    and not _PITFALL_DIFF_TEST_PAT.search(p.name)
++                    and not re.search(r"(Tests?|Spec)\.\w+$", p.name)]   # OrderServiceTest.kt / FooSpec.cs 這型
++        except OSError:
++            continue
++        if not sibs:
++            continue
++        sibs.sort(key=lambda p: -difflib.SequenceMatcher(None, p.stem.lower(), pf.stem.lower()).ratio())
++        out_files[f] = [str(p.relative_to(repo_root)).replace(os.sep, "/") for p in sibs[:per_file]]
++    if not out_files:
++        return {}
++    return {"files": out_files, "idiom_skills": sorted(skills), "questions": list(_ARCH_QUESTIONS)}
++
+ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
+     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。
+     供 _pitfall_diff_mode(印)與 loop capture-counts(收割成異質 finder)共用同一計算。"""
+     import subprocess
+     try:
+@@ -11754,14 +11847,15 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+                 and cur_file not in _BOOKKEEPING_FILES
+                 and not cur_file.startswith(_BOOKKEEPING_DIR)
+                 # ↑ 簿記帳排除(2026-08-11):治理帳記的 skip 理由在描述「命中 open(...)」,
+                 #   掃自己的紀錄→再命中→再 skip→再寫一行……自我餵食,實測誤觸發 9 次
+                 and not _PITFALL_DIFF_TEST_PAT.search(cur_file)
+                 and not code.strip().startswith(("#", "//", "--", "/*", "*"))):
+-            for pat, axis, q in _PITFALL_DIFF_PATTERNS:
+-                if pat.search(code):
++            code_nostr = _strip_string_literals(code)
++            for pat, axis, q, in_strings in _PITFALL_DIFF_PATTERNS:
++                if pat.search(code if in_strings else code_nostr):
+                     claims.append({"file": cur_file, "line": new_ln, "class": axis,
+                                    "pattern": pat.pattern, "question": q})
+                     break
+         new_ln += 1                           # 新增行推進新檔行號
+ 
+     # 棧別效能追問(T1):非測試檔的副檔名命中問題表 → 附該棧三問(去重,首見即收)
+@@ -11770,18 +11864,23 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+         if _PITFALL_DIFF_TEST_PAT.search(f):
+             continue
+         ext = Path(f).suffix.lstrip(".").lower()
+         if ext in _STACK_PERF_QUESTIONS and ext not in stack_qs:
+             stack_qs[ext] = _STACK_PERF_QUESTIONS[ext]
+ 
++    # ── 架構對齊三問(2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法)──
++    # 對每支改動的 code 檔,列同資料夾、同副檔名、最相似檔名的 3 個既有檔當「對照組」;
++    # 審查員/編排者拿這三個檔去問「分層與依賴方向 / 命名與錯誤處理 / 有沒有引入第二種做法」。
++    arch = _arch_alignment_hints(added, repo_root)
++
+     # ── Task 4: lint 整合 ─────────────────────────────────────────────────
+     config = None if no_lint else _lint_load_config(repo_root)
+     if config is None:
+         # fallback: no_lint 或無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
+         return {"claims": claims, "tier": "high" if claims else "standard",
+-                "stack_questions": stack_qs}
++                "stack_questions": stack_qs, "arch_alignment": arch}
+ 
+     # 有 config: 補 source 到 regex claims
+     for c in claims:
+         c["source"] = "pitfalls-builtin"
+ 
+     cmds = _lint_stacks_for_diff(added, config)
+@@ -11808,13 +11907,13 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+     else:
+         filtered_marker = False  # 未對齊 → 全收 + 標記
+ 
+     all_claims = lint_claims + claims
+     out = {"claims": all_claims, "tier": "high" if all_claims else "standard",
+            "lint_ran": lint_ran, "lint_skipped": lint_skipped,
+-           "stack_questions": stack_qs}
++           "stack_questions": stack_qs, "arch_alignment": arch}
+     if filtered_marker is not None:
+         out["filtered"] = filtered_marker
+     return out
+ 
+ 
+ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
+@@ -11835,12 +11934,21 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
+             else:
+                 print(f"  {c['file']}:{c['line']} [{c.get('class','')}] {c.get('question','')}")
+         for stk, qs in data.get("stack_questions", {}).items():
+             print(f"  [{stk} 效能檢核]")
+             for q in qs:
+                 print(f"    - {q}")
++        arch = data.get("arch_alignment") or {}
++        if arch:
++            print("  [架構對齊] 新寫法跟專案既有的一不一樣?拿同層最像的既有檔當對照,逐問:")
++            for q in arch["questions"]:
++                print(f"    - {q}")
++            for f, sibs in list(arch["files"].items())[:6]:
++                print(f"    {f} ← 對照 {', '.join(sibs)}")
++            if arch.get("idiom_skills"):
++                print(f"    慣例 skill:{', '.join(arch['idiom_skills'])}(審查員派工時一併附上)")
+         print(f"tier: {data['tier']}")
+         # ★送審前 impact 鏡頭提示(2026-08-02;Projects/送審前impact鏡頭機械化_計劃 A 案)★
+         # 為什麼在這裡:code-loop skill 要求「派 reviewer 前跑 impact --diff 並附 manifest
+         # 當第二鏡頭」,但那是★純紀律層、沒有任何機械提醒★——2026-08-02 實測編排者自己
+         # 就忘了跑,而事後補跑第一行就是後來被證實違反合約的那個節點。
+         # ★為什麼只印字不真的跑 impact★:實測 pitfalls 0.18s / impact 4.7s,而本函式
+@@ -13900,13 +14008,16 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
+     """code-loop 橋接:對整段 diff 的每支改動 code 檔跑 ranked impact(query=該檔 hunk 文字),
+     聚合成「受影響功能面」manifest——固定席(合約/事故)全保、非固定取跨檔最高分 top-N。
+     定位=審計員鏡頭(advisory,人判),非自動推播(hook 面 goldset 評測未過線,故不接 hook)。
+     rc: 0=成功 / 2=git 失敗 / 3=vault 缺。"""
+     import json as _json
+     import subprocess as _sp
+-    if diff_range.startswith("-"):
++    if diff_range == "staged":
++        # 圖譜同步覆蓋(2026-08-22):pre-commit 要對「這次 commit 的內容」算波及,用 staged 代替 range
++        diff_range = "--staged"
++    elif diff_range.startswith("-"):
+         # 同 pitfalls/cochange-check:'-' 開頭值會被 git 誤認成選項,查詢命令 rc2 拒收
+         print("擋下:--diff 的值不能用 - 開頭(會被當成選項)", file=sys.stderr)
+         return 2
+     repo_root = Path(repo) if repo else None
+     if repo_root is None:
+         for cand in (Path.cwd(), *Path.cwd().parents):
+@@ -14284,12 +14395,117 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None,
+         return 1 if blocked else 0
+ 
+     print(f"擋下:沒有 {subcmd!r} 這個子命令", file=sys.stderr)
+     return 2
+ 
+ 
++
++# ── 每個子指令「這是幹嘛 / 什麼時候用」(Projects/工具鏈補強十件_計劃 #3)──────────
++# 來源=skills/lumos-project-notes/commands/ 索引子檔的情境欄;建完 parser 由 _fill_help_when 灌進
++# 每個子指令的 description,讓 `lumos X --help` 第一行就講人話。t_every_subcommand_has_when 釘非空。
++HELP_WHEN = {
++    "doctor": "整個圖譜健不健康。收工前跑;紅的段先修,--verbose 看全部提醒,--ci 給 pre-push 和 CI 用。",
++    "links": "這篇筆記連出去哪些筆記。改上游前看下游用。",
++    "backlinks": "哪些筆記連到這篇。想知道「誰依賴它」的時候。",
++    "map": "以某篇為中心把關係展成樹。想看這一帶長什麼樣。",
++    "context": "進場第一步之二:這篇的來龍去脈、合約、前提、鄰居一次攤開。search 定位到之後用。",
++    "show": "讀一篇筆記全文。search 只給索引行,下結論前要用它讀全文。",
++    "contracts": "動某模組前看有什麼不能碰:列出標成 ★INVARIANT★ / ★DEBT★ 的規則與綁的測試。",
++    "lint": "剛寫完一篇,確認沒寫壞(欄位、標籤、合約標記)。比 doctor 快,只看這篇。",
++    "gov": "這篇或這段時間被哪幾道閘攔過。--stats 給純數字表。",
++    "canary": "審查迴圈的記帳:record 記一輪結果,second 找人覆核某一筆。",
++    "second": "覆核某一筆審查判定,必須換不同的人。",
++    "record": "記一輪審查結果:誰審的、嚴重度、幾條發現、各自怎麼處置、審的是哪份文件(指紋)。",
++    "loop": "審查迴圈的查詢:next 問下一步、status 問過不過、verify-progress 只讀帳本、canary-stats 看歷史抓漏率。",
++    "status": "這個審查編號過關了沒。多人審加 --panel,嚴格處置閘加 --disposal,單人 --light,結清模式 --settle。",
++    "compress": "長跑的審查上下文太長,規則式壓成三欄。",
++    "verify-progress": "不看散文,只從帳本結構欄位看審到哪了(防被報告措辭帶風向)。",
++    "next": "每輪開頭問:第幾輪、要幾人、派誰、怎麼記帳。第一次一定帶 --tier。",
++    "canary-stats": "各審查員歷史抓到/漏掉比率。觀測用,不影響過不過。",
++    "capture-counts": "多個找錯工具的結果合併估漏網,吐給 record --capture-counts。",
++    "guard": "合約綁測試那一套:list 看狀態、scaffold 產骨架、bind 綁上、audit 留審計、trace 看證據鏈、kill 驗殺傷力。",
++    "list": "每條合約綁測試的狀態:真綁 / 懸空 / 偽證據 / 裸 / 未審。",
++    "scaffold": "幫某條合約產一個測試骨架(預設紅燈,斷言留 TODO)。",
++    "bind": "把寫好的測試綁回合約的 KEY 行([test:])。別手改。",
++    "audit": "某條合約被不知道脈絡的人審過了,留 [audit:] 戳記。",
++    "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
++    "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住。",
++    "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。",
++    "spec-trace": "計劃結案前看哪些條款沒有驗證紀錄認領。",
++    "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認)。",
++    "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by。預設 dry-run,--apply 才寫。",
++    "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
++    "decisions": "當初為什麼這樣決定、翻案了嗎。--superseded 全庫掃被推翻的。",
++    "stale": "我改了某個流程/環境,哪些驗證該重驗(--candidate --match <關鍵字>);或列已過期的驗證。",
++    "query": "按欄位條件篩筆記:金流且未收案、連到 X 且還開著。至少給一個條件。",
++    "recent": "最近 N 天動了哪些筆記。開工掌握現況用。",
++    "stats": "圖譜多大、各資料夾幾篇。",
++    "export": "把圖譜畫成 mermaid / dot / 互動 html。",
++    "set": "改一篇的單一值欄位(status / updated / type…)。改 status 會連帶同步標籤。別手改開頭欄位。",
++    "append": "往清單欄位加一項(verified_by / related / tags…),自動去重。",
++    "drift-history": "沿 git 歷史重放:筆記點名的符號在 code 裡消失的規律,這份圖譜有沒有這型漂移。",
++    "remove": "從清單欄位拿掉一項(死背書、降格的指針)。找不到會拒絕,不會亂刪。",
++    "self-audit": "某篇功能筆記我重新確認過還站得住,留 self_audit 戳記。",
++    "new": "依範本建一篇新筆記。驗證紀錄加 --plan / --systems 自動雙向連。",
++    "decision-supersede": "推翻一條舊決策:舊的標 valid:false 並指向新的,並開一本連鎖帳。",
++    "decision-reindex": "舊筆記的決策沒編號,補上 dN。--all 全部。",
++    "rel-cascade": "翻案後逐篇確認鄰居筆記要不要跟著改:confirm / prune 寫回帳本,list 看活動,resume 接續。",
++    "decision-add": "在某篇記一條決策,回編號。",
++    "install": "把 lumos 指令裝成全域可用(symlink 到 ~/.local/bin)並同步 skills / hooks。",
++    "uninstall": "移除全域 lumos 指令。",
++    "archive": "把老的驗證紀錄歸檔。先 dry-run 再 --apply。",
++    "update": "專案裡的工具組舊了,從唯一來源更新(含 CLAUDE.md 紀律區塊)。",
++    "bootstrap": "新機器第一次裝:clone 來源、裝全域指令、skills、專案接線。",
++    "init": "新專案要用圖譜:建資料夾、.gitignore、pre-commit / pre-push。",
++    "deinit": "專案不用了,拆掉專案層(hooks / 工具組 / CLAUDE.md 注入),圖譜保留。",
++    "teardown": "連機器全域一起拆(CLI / skills / hooks),圖譜保留。",
++    "fold-check": "一份文件前後寫的數字 / 設定對不對得上(折入審查結果後用)。",
++    "refcheck": "文件裡引的 檔案:行號 還存不存在。",
++    "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
++    "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
++    "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
++    "ci-status": "只看上次 CI 結果,不打網路。",
++    "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
++    "build": "挖掘檔案↔測試的關係,存成地圖。",
++    "affected": "改了這些檔,具體該跑哪幾個測試(建議,不擋)。",
++    "test-layers": "改了這些檔,該跑哪一層測試(單元 / 整合 / UI)的提醒,不擋。",
++    "lint-check": ".lumos/lint.json 宣告的 linter 真的跑得動嗎。--smoke 真跑。",
++    "sqlfluff-sarif": "把 sqlfluff 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
++    "stylelint-sarif": "把 stylelint 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
++    "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
++    "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
++    "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
++    "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
++    "mutate": "對這段 diff 做變異測試,看測試網密不密。",
++    "link-candidates": "哪些 code 沒有任何筆記連到它,列候選;要不要補由人裁。",
++    "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
++    "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
++    "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
++    "cochange": "改了 A 檔,歷史上常一起改的 B 檔要不要跟著改。rules 看規則,check 對變更集比對。",
++    "rules": "列出共改規則集。",
++    "cochange check": "對這次變更集比對規則,列出可能漏改的夥伴檔(提醒不擋)。",
++    "code-loop check": "我現在推得上去嗎:tier=high 又沒有效留痕就 BLOCKED,並講原因。",
++    "delguard": "commit 時自動跑:刪掉 / 改名的符號,筆記還在不在講它。",
++    "code-loop": "高風險改動推送前的留痕:pass 審過、skip 刻意不審、check 現在推得上去嗎。",
++    "pass": "代碼審過了,留痕綁當下版本;之後再改 code 就失效要重跑。",
++    "skip": "刻意不審,留痕寫理由(合法,但會被統計)。",
++}
++
++
++def _fill_help_when(parser, parent=""):
++    """遞迴把 HELP_WHEN 灌進每個沒有 description 的子指令,讓 `lumos X --help` 第一行講人話。
++    同名二層子指令(cochange check / code-loop check)先查「父 子」鍵再退回單名。"""
++    for act in parser._actions:
++        if isinstance(act, argparse._SubParsersAction):
++            for name, sp in act.choices.items():
++                if not sp.description:
++                    when = HELP_WHEN.get(f"{parent} {name}".strip()) or HELP_WHEN.get(name)
++                    if when:
++                        sp.description = "什麼時候用:" + when
++                _fill_help_when(sp, name)
++
+ def main():
+     ap = argparse.ArgumentParser(prog="lumos", description=__doc__,
+                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+     ap.add_argument("--vault", type=Path, default=None,
+                     help="vault 路徑 (預設自動找 docs/*-knowledge)")
+     sub = ap.add_subparsers(dest="cmd", required=True)
+@@ -14780,12 +14996,13 @@ def main():
+                               help="留痕比對綁此 sha(hook 傳被推送 ref 的 local_sha;預設讀 checkout HEAD)")
+             _clp.add_argument("--branch", dest="cl_branch", default=None,
+                               help="留痕比對綁此 branch(hook 傳 remote_ref 分支名;預設讀 checkout branch)")
+         _clp.add_argument("--repo", dest="cl_repo", default=None,
+                           help="repo root(預設 cwd 逐層向上找 .git)")
+ 
++    _fill_help_when(ap)
+     args = ap.parse_args()
+ 
+     # install/uninstall/update/bootstrap 不需要 Env(vault),先處理
+     if args.cmd == "install":
+         return cmd_install(force=args.force)
+     if args.cmd == "uninstall":
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 1aaa4de..022e084 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -94,31 +94,68 @@ def run_one(sc, workdir, max_turns, timeout, model):
+         err = r.stderr[-400:]
+     except subprocess.TimeoutExpired as e:
+         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+         err = "timeout"
+     calls = tool_calls_from_stream(out.splitlines())
+     ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
++    # ⑩ 答案對不對(工具鏈補強十件):情境可帶 answer_expect=[regex…],最後回覆文字要全部命中
++    final = ""
++    for ln in out.splitlines():
++        ln = ln.strip()
++        if not ln.startswith("{"):
++            continue
++        try:
++            ev = json.loads(ln)
++        except Exception:
++            continue
++        if isinstance(ev, dict) and ev.get("type") == "result":
++            final = ev.get("result") or ""
++    if ok and sc.get("answer_expect"):
++        miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
++        if miss_a:
++            ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
+     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
+             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
+-            "calls": calls[:12], "secs": round(time.time() - t0, 1), "stderr": err if not ok else ""}
++            "calls": calls[:12], "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
++            "answer": (final or "")[:1500]}
+ 
+ 
+ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--scenarios", default=str(ROOT / "governance" / "scenarios" / "commands.jsonl"))
+     ap.add_argument("--only", default="")
+     ap.add_argument("--max-turns", type=int, default=8)
+     ap.add_argument("--timeout", type=int, default=240)
+     ap.add_argument("--model", default="")
+     ap.add_argument("--out", default="")
+     ap.add_argument("--keep", action="store_true", help="保留臨時副本")
++    ap.add_argument("--sample", type=int, default=0, help="只抽 N 題(決定性:依 --seed 輪轉,給自主迴圈每週抽查用)")
++    ap.add_argument("--seed", default="", help="抽樣種子(例:週數);同種子同題")
++    ap.add_argument("--history", default="", help="把本次摘要 append 到這個 jsonl(ts/passed/total/failed)")
++    ap.add_argument("--ts", default="", help="寫進 history 的時間戳(排程端給)")
++    ap.add_argument("--dry-list", action="store_true", help="只印抽到的題目 id,不跑(測抽樣用)")
+     a = ap.parse_args()
+-    scs = [json.loads(l) for l in Path(a.scenarios).read_text(encoding="utf-8").splitlines() if l.strip()]
++    scs = []
++    for f in a.scenarios.split(","):
++        scs += [json.loads(l) for l in Path(f).read_text(encoding="utf-8").splitlines() if l.strip()]
+     if a.only:
+         keep = set(a.only.split(","))
+         scs = [s for s in scs if s["id"] in keep or s["id"].split("-")[0] in keep]
++    if a.sample and a.sample < len(scs):
++        # 決定性輪轉:同一種子永遠抽同一組;種子換(每週)就換一組,幾週下來全部輪過
++        import hashlib
++        h = int(hashlib.sha256(a.seed.encode("utf-8")).hexdigest(), 16)
++        start = h % len(scs)
++        scs = [scs[(start + i * 3) % len(scs)] for i in range(a.sample)]
++        seen, uniq = set(), []
++        for s_ in scs:
++            if s_["id"] not in seen:
++                seen.add(s_["id"]); uniq.append(s_)
++        scs = uniq
++    if a.dry_list:
++        print(",".join(s_["id"] for s_ in scs)); return 0
+     tmp = Path(tempfile.mkdtemp(prefix="lumos-probe-"))
+     work = tmp / "repo"
+     # 複製工作樹(含未 commit 的改動——索引/筆記常是剛寫還沒 commit),再在副本裡 commit 成乾淨狀態
+     work.mkdir(parents=True)
+     subprocess.run(["rsync", "-a", "--exclude", "node_modules", "--exclude", ".venv",
+                     f"{ROOT}/", f"{work}/"], check=True)
+@@ -146,12 +183,16 @@ def main():
+             subprocess.run(["git", "clean", "-qfdx"], cwd=str(work))   # -x:連 gitignore 的產出也清,情境之間不互染
+     finally:
+         n = len(results); p = sum(1 for r in results if r["passed"])
+         print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令")
+         if a.out:
+             Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n}, ensure_ascii=False, indent=1), encoding="utf-8")
++        if a.history:
++            with open(a.history, "a", encoding="utf-8") as hf:
++                hf.write(json.dumps({"ts": a.ts, "seed": a.seed, "passed": p, "total": n,
++                                     "failed": [r["id"] for r in results if not r["passed"]]}, ensure_ascii=False) + "\n")
+         if not a.keep:
+             shutil.rmtree(tmp, ignore_errors=True)
+     return 0 if p == n else 1
+ 
+ 
+ if __name__ == "__main__":
