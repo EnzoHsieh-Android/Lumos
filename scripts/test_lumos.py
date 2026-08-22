@@ -4175,6 +4175,86 @@ def t_context_big_output_hints_brief():
     print("  ✓ t_context_big_output_hints_brief")
 
 
+def _mk_bound_tests_repo(d, run_cmd='python3 tests/run.py {method}', contract_test="t_pay_ok"):
+    """受波及合約測試真跑閘 fixture:Systems/Pay 綁 [test:<contract_test>] 指向 app/pay.py;
+    tests/run.py 是假的測試執行器:方法名存在且 tests/RED 不存在 → rc0,否則 rc1。"""
+    import subprocess as _sp, json as _j
+    d = Path(d)
+    _sp.run(["git", "init", "-q", str(d)])
+    (d / "app").mkdir(); (d / "app" / "pay.py").write_text("def charge(x):\n    return x\n", encoding="utf-8")
+    (d / "tests").mkdir()
+    (d / "tests" / "test_pay.py").write_text("def t_pay_ok():\n    assert True\n", encoding="utf-8")
+    (d / "tests" / "run.py").write_text(
+        "import sys, os\n"
+        "m = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        "red = os.path.exists(os.path.join(os.path.dirname(__file__), 'RED'))\n"
+        "print('ran', m)\n"
+        "sys.exit(1 if red else 0)\n", encoding="utf-8")
+    (d / ".lumos").mkdir()
+    cfg = {"test_profile": "python", "test": {"method_regex": "(?m)^def (t_[A-Za-z0-9_]+)\\s*\\("}}
+    if run_cmd:
+        cfg["test"]["run_cmd"] = run_cmd
+    (d / ".lumos" / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
+    kg = d / "docs" / "x-knowledge"; (kg / "Systems").mkdir(parents=True)
+    (kg / "Systems" / "Pay.md").write_text(
+        "---\ntype: system\nstatus: doing\nsummary: |-\n  FLOW:charge\n"
+        f"  KEY:★INVARIANT★ 金額不得為負 [test:{contract_test}] [audit:x/2026-08-22]\n  DEP:`app/pay.py`\n---\n# Pay\n主邏輯在 `app/pay.py`。\n", encoding="utf-8")
+    def commit(m):
+        _sp.run(["git", "-C", str(d), "add", "-A"])
+        _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", m, "--no-verify"])
+    commit("base")
+    (d / "app" / "pay.py").write_text("def charge(x):\n    return abs(x)\n", encoding="utf-8")
+    commit("change pay")
+    return d
+
+
+def t_bound_tests_gate():
+    """受波及合約測試真跑閘(Projects/受波及合約測試真跑閘_計劃,design-loop bound-tests-gate-c r1 PASS):
+    code-loop check 在判 tier 前,把 impact 固定席上合約綁的 [test:] 真跑;紅/懸空/方法名不合法 → BLOCKED;
+    沒 run_cmd 等四情境 fail-open 但寫帳;--skip-bound-tests 留痕。"""
+    import subprocess as _sp, json as _j, os as _os, shutil as _sh
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+    def check_cmd(d, *extra, env=None):
+        e = dict(_os.environ); e.pop("LUMOS_SKIP_BOUND_TESTS", None); e.update(env or {})
+        return _sp.run([sys.executable, lumos_real, "code-loop", "check", "--diff", "HEAD~1..HEAD", "--json", "--repo", str(d), *extra],
+                       capture_output=True, text=True, env=e)
+    def gov_kinds(d):
+        p = Path(d) / "docs" / ".governance-log.jsonl"
+        return [_j.loads(l)["kind"] for l in p.read_text(encoding="utf-8").splitlines() if '"bound-tests"' in l] if p.exists() else []
+    # ① 綠:合約測試真跑綠 → 不擋,verdict 帶 bound_tests.ran=1
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-bt-"))
+    r = check_cmd(d); v = _j.loads(r.stdout)
+    check("★綠:真跑 1 支、不擋★", r.returncode == 0 and not v["blocked"] and v.get("bound_tests", {}).get("ran") == 1, r.stdout + r.stderr[-300:])
+    check("綠寫治理帳 gate=bound-tests kind=green", "green" in gov_kinds(d), str(gov_kinds(d)))
+    # ② 紅:同一支測試翻紅 → BLOCKED,訊息點名合約與測試
+    (Path(d) / "tests" / "RED").write_text("", encoding="utf-8")
+    r = check_cmd(d); v = _j.loads(r.stdout)
+    check("★紅:BLOCKED rc1,點名 Pay 與 t_pay_ok★", r.returncode == 1 and v["blocked"] and "Pay" in v["reason"] and "t_pay_ok" in v["reason"], r.stdout)
+    check("紅寫治理帳 kind=red", "red" in gov_kinds(d), str(gov_kinds(d)))
+    # ③ 逃生門:--skip-bound-tests --note → 不擋,kind=skipped
+    r = check_cmd(d, "--skip-bound-tests", "--note", "外部 DB 不在"); v = _j.loads(r.stdout)
+    check("逃生門:不擋且留痕 skipped", r.returncode == 0 and "skipped" in gov_kinds(d), r.stdout + r.stderr[-200:])
+    r = check_cmd(d, "--skip-bound-tests")
+    check("逃生門沒 --note → 拒絕(rc2)", r.returncode == 2, r.stderr[-200:])
+    # ④ CI 環境變數跳過
+    r = check_cmd(d, env={"LUMOS_SKIP_BOUND_TESTS": "1"}); v = _j.loads(r.stdout)
+    check("LUMOS_SKIP_BOUND_TESTS=1 → 不擋", r.returncode == 0 and not v["blocked"], r.stdout)
+    _sh.rmtree(d, ignore_errors=True)
+    # ⑤ 懸空:合約綁不存在的測試名,即使 run_cmd 會回 0 也要紅(假綠第一防)
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-bt2-"), contract_test="t_ghost")
+    r = check_cmd(d); v = _j.loads(r.stdout)
+    check("★懸空測試名 → 紅(不靠 rc)★", r.returncode == 1 and "t_ghost" in v["reason"], r.stdout)
+    _sh.rmtree(d, ignore_errors=True)
+    # ⑥ 沒 run_cmd → 不擋,但寫帳 no-config(零觸發要看得見)
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-bt3-"), run_cmd=None)
+    r = check_cmd(d); v = _j.loads(r.stdout)
+    check("沒 run_cmd → 不擋、帳記 no-config", r.returncode == 0 and "no-config" in gov_kinds(d), r.stdout + str(gov_kinds(d)))
+    r = _sp.run([sys.executable, lumos_real, "gov", "--stats", "--since", "9999", "--repo", str(d)] if False else [sys.executable, lumos_real, "--vault", str(Path(d) / "docs" / "x-knowledge"), "gov", "--stats", "--since", "9999"], capture_output=True, text=True)
+    check("gov --stats 列 bound-tests 閘", "bound-tests" in r.stdout, r.stdout[-600:])
+    _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_bound_tests_gate")
+
+
 def t_code_exts_four_lists_agree():
     """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天
