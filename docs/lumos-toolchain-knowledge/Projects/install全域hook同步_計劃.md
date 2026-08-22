@@ -2,7 +2,7 @@
 type: project
 status: done
 created: 2026-07-22
-updated: 2026-07-22
+updated: 2026-08-22
 tags:
   - type/project
   - status/done
@@ -22,6 +22,13 @@ summary: |-
   PRIOR-ART:①最小解=抽既有 ②③ 成函式+install 呼叫,零新機制;撤除檔清理對稱 2026-07-06 ADR ②世界解=無需外求(內部分工重構) ③裁定=borrow-design(既有 _prune_dangling/copy 復用)
 verified_by:
   - "[[Verification/2026-07-22_install全域hook同步]]"
+decisions:
+  - content: 撤除全域 hook 改兩階段:先換 exit 0 空殼一版(相容期),下一版才真刪檔;teardown 兩組都清
+    id: d1
+    context: install 一刀刪撤除 hook 的真檔,但正在跑的 session 啟動時讀進的 settings 快照還註冊著它,每次觸發都報錯;2026-08-22 有人為此手寫空殼補回去兩次
+    why_chosen: 根因是工具鏈沒有發布流程(版本號寫死 v1.0、消費端無法釘版回滾),連最基本的相容期都表達不出來。兩階段是最小解:零新指令、零新機制,只把既有常數拆成 STUB/DELETE 兩組
+    decided: 2026-08-22
+    valid: true
 ---
 # install全域hook同步_計劃
 
@@ -63,3 +70,19 @@ lumos 兩類更新方式：**symlink 類**（skills/CLI，`git pull` 即活）vs
 - **machine-global 寫入 blast radius**：`~/.claude/settings.json` 是使用者全域 config，改壞會影響該機所有 Claude Code 專案（2026-07-07 事故前例）。緩解＝只復用既有已測 `_prune_dangling`＋merge、TDD 重測「既有內容保留/冪等/不誤剪」、假 HOME 隔離測試。
 - **假 HOME 測試**：測試須 `env HOME=<tmp>` 隔離，**嚴禁碰真 `~/.claude/settings.json`**（跑測試的開發機自己會被改）。既有 install 測試的假 HOME 慣例沿用。
 - **撤除清單維護**：「已撤除 hook 主動刪」清單（現只 code-loop-guard）未來撤別的 hook 要補——與 merge-claude-settings 的移除註解對稱，漂移風險記。
+
+## 2026-08-22 後續:撤除改兩階段(結案後的延伸)
+
+本計劃 2026-07-22 結案時,撤除 hook 是**一刀刪真檔**(見上面 KEY「懸空 vs 真檔」那條——
+當時只想到 `_prune_dangling` 對非懸空的真檔不剪,所以要主動刪)。
+
+**漏想的是:刪檔會炸掉正在跑的 session。** 它在啟動當下讀進的 settings 快照還註冊著那支,
+檔案不在了就每次觸發都報錯。2026-08-22 有人為此手寫空殼補回去兩次(每跑一次 install 被刪一次)。
+
+已改兩階段(見 d1 與 [[Verification/2026-08-22_成本欄接上與撤除兩階段]]):
+`_RETIRED_STUB_CLAUDE_HOOKS` 先換 exit 0 空殼一版,`_RETIRED_CLAUDE_HOOKS` 才真刪;
+teardown 兩組都清。撤新 hook 先進 STUB,下一版移到 DELETE。
+
+★這只解了症狀★——根因是工具鏈自己沒有發布流程(版本號寫死 v1.0 從沒 bump、消費端無法
+釘版或回滾),所以連「上一版留著、下一版才刪」都表達不出來,只能靠常數手動分兩組。
+**沒有機械守衛逼下一個人先進 STUB;重驗條件=下次有人撤 hook 時看他有沒有照做。**

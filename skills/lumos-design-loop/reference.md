@@ -150,11 +150,13 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏�
 5. **記錄**(kind 一律 `none`——停用制的純處置帳載體):
    ```
    lumos canary record none --loop <id> --severity <worst> --findings <M> \
-     --auditor sonnet --spec <計劃節點.md> --reviewed <sha256> [--tier <t>] --scope-lines <這輪被審 spec 幾行> --note "r<N> ..."
+     --auditor sonnet --spec <計劃節點.md> --reviewed <sha256> [--tier <t>] --scope-lines <這輪被審 spec 幾行> \
+     --tokens <該席回報的 tokens> --wallclock-min <該席跑幾分鐘> --note "r<N> ..."
    ```
    - **時序**:有折入的輪,record 移到步驟 7 收尾**之後**——「fold → fold-check → record」連續序列,使 `--reviewed` 的 hash ＝ post-fold 版。空手輪(存活 0)當場 record 即收尾。
    - `<worst>` ＝ ④ 辯方重算後的存活 max(**非 ② 原評**);`<M>` ＝ ④ 裁決後存活折入的真 finding 條數——供收斂閘 G2 枯竭錨機械讀取。
    - **`--scope-lines`**(純 telemetry,不進 gate):這輪被審材料幾行。**東西越多越抓不到**是外部實測裡最主導的因素——不記就答不出「規模有沒有在灌水乾淨輪」。`wc -l <工作副本>`。
+   - **`--tokens` / `--wallclock-min`**(純 telemetry,不進 gate,2026-08-22 接上):派席的子代理跑完時,結束通知本來就帶 token 數與秒數——**眼前就有,以前沒人往帳裡塞**,結果這兩個欄自建成以來零筆。**消費者只有一個**:Enzo 在週報看「本週派席共花多少錢、多少小時」,據以決定要不要砍週抽題數、或把某 tier 的席數降一級。★量不到就不要送 0 冒充量過★——少一個參數,帳上是空的,一眼看得出沒量。
    - **中斷恢復(第二帳)**:log 無該輪 record 但 spec 審計修正紀錄有該輪條目 → **人工補 record 再繼續**(防「折了沒記」窗:重派已折輪＋ratchet 訊號蒸發)。
 
 6. ~~漏抓懲罰~~ **⛔ 已停用**(無植入即無漏抓;歷史帳的 missed 輪回放時仍照舊制判讀)。

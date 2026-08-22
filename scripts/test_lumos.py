@@ -380,6 +380,65 @@ def t_install_global_hook_sync():
     s2 = (fake4 / ".claude" / "settings.json").read_text(encoding="utf-8")
     check("global sync: 冪等(跑兩次 settings 一致)", s1 == s2)
 
+    # 5. ★撤除兩階段★:剛撤的 hook 換 exit 0 空殼(不是刪檔)——正在跑的 session 啟動時
+    #    讀進的 settings 快照還註冊著它,一刀刪檔會讓那些 session 每次觸發都報錯。
+    fake5 = Path(tempfile.mkdtemp(prefix="gctl-gsync5-"))
+    h5 = fake5 / ".claude" / "hooks"; h5.mkdir(parents=True)
+    (h5 / "verification-rot-check.py").write_text("# 舊的真實作,會做事\nraise SystemExit(2)\n",
+                                                  encoding="utf-8")
+    run_sync(fake5)
+    stub = h5 / "verification-rot-check.py"
+    check("撤除兩階段: 相容期 hook 檔案還在(沒被一刀刪)", stub.exists())
+    if stub.exists():
+        body = stub.read_text(encoding="utf-8")
+        check("撤除兩階段: 內容已換成空殼(舊實作不再跑)", "raise SystemExit(2)" not in body, body[:80])
+        rc = _sp.run([sys.executable, str(stub)], capture_output=True, text=True,
+                     input='{"hook_event_name":"PostToolUse"}')
+        check("撤除兩階段: 空殼跑起來 exit 0(舊 session 觸發不報錯)", rc.returncode == 0,
+              f"rc={rc.returncode} err={rc.stderr[-160:]}")
+    # 過了相容期的(code-loop-guard)仍是真刪 —— 已由第 2 段覆蓋
+    # 6. teardown 要連空殼一起清掉(相容期檔案不能留在拆機後的機器上)
+    fake6 = Path(tempfile.mkdtemp(prefix="gctl-gsync6-"))
+    h6 = fake6 / ".claude" / "hooks"; h6.mkdir(parents=True)
+    (h6 / "verification-rot-check.py").write_text("# stub\n", encoding="utf-8")
+    (fake6 / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    code6 = ("import sys;from pathlib import Path;"
+             "import importlib.util;from importlib.machinery import SourceFileLoader;"
+             "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
+             "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+             "m._teardown_global_claude(Path(sys.argv[2]))")
+    _sp.run([sys.executable, "-c", code6, GRAPHCTL, str(repo)],
+            env=dict(os.environ, HOME=str(fake6), USERPROFILE=str(fake6)),
+            capture_output=True, text=True)
+    check("撤除兩階段: teardown 連相容期空殼一起清掉",
+          not (h6 / "verification-rot-check.py").exists())
+
+
+def t_per_test_timeout():
+    """per-test 超時:卡住的測試要被打斷、判紅、印出名字,不能拖垮整輪。
+    翻紅釘:把 run_with_timeout 改成直接 fn() → 第 2 條永遠等不到 TestTimeout。"""
+    import time
+    check("超時 helper: 正常跑完照回傳值", run_with_timeout(lambda: 42, 5) == 42)
+    t0 = time.time()
+    try:
+        run_with_timeout(lambda: time.sleep(30), 1)
+        check("超時 helper: 卡住的要拋 TestTimeout", False, "沒拋,等於沒有超時保護")
+    except TestTimeout:
+        dt = time.time() - t0
+        check("超時 helper: 卡住的要拋 TestTimeout", True)
+        check("超時 helper: 真的在時限附近打斷(不是等它跑完)", dt < 5, f"實際等了 {dt:.1f}s")
+    check("超時 helper: seconds<=0 = 不設限(平台退路)", run_with_timeout(lambda: 7, 0) == 7)
+
+
+def t_timeout_override_names_exist():
+    """★覆寫表的名字必須真的存在★:改名後覆寫靜默失效,那支回到全域上限被誤殺,
+    而誤殺長得跟「真的卡死」一模一樣——是最難查的一種紅。
+    翻紅釘:把 TIMEOUT_OVERRIDE 的鍵改成不存在的名字 → 這條翻紅。"""
+    names = {k for k in globals() if k.startswith("t_")}
+    for k in TIMEOUT_OVERRIDE:
+        check(f"超時覆寫: {k} 真的是一支測試(沒被改名)", k in names,
+              f"覆寫表有 {k} 但 t_ 名單裡沒有——覆寫已靜默失效")
+
 
 def t_hooks_python_fallback():
     import pathlib
@@ -20505,6 +20564,52 @@ def t_vendored_consumer_srconly_skip_regression():
         check(f"消費端模擬:{tname} 零 ✗", "✗" not in r.stdout, r.stdout[-800:])
 
 
+# ── per-test 超時(2026-08-22 立;症狀真實發生)────────────────────────────
+# 症狀:全套跑到某支會卡死——CPU 只走 3 秒、牆鐘走了 7 分鐘,得人工 kill 整輪,
+# 而且看不出是卡在哪一支。一輪 10 分鐘的套件卡住一次就等於整輪報廢。
+#
+# ★超時判紅,不判 skip★:沒跑完就是沒驗過。判 skip 會讓消費 rc 的一方(pre-push /
+# CI)把「沒驗」當「驗過」——這個 repo 已經為同型假綠付過代價(-k 選中 0 個也判紅)。
+#
+# 用 SIGALRM:單進程、零依賴、不影響既有測試。沒有 SIGALRM 的平台(Windows)自動
+# 退回「不設限」,行為與加這條之前完全一致。
+import os as _os_timeout
+import time as _time_slow
+
+TEST_TIMEOUT_SEC = int(_os_timeout.environ.get("LUMOS_TEST_TIMEOUT", "180"))
+# 每支耗時,收尾印最慢五支。★這不是效能監控,是超時上限的校準依據★:
+# 上限要對「現在最慢那支」有足夠餘裕,否則慢一點的機器(CI)會假紅,
+# 然後下一步就是有人把 LUMOS_TEST_TIMEOUT 設 0 繞過——閘變裝飾。
+SLOWEST = []
+# 天生就慢的測試(輪詢 CI 這種)給自己的上限。
+# ★不要為了遷就最慢那支把全域上限拉高★——那會讓真的卡死也要等到那個上限才被打斷,
+# 等於把偵測能力送掉。實測(2026-08-22 本機):t_ci_wait 132.3s、次慢 25.8s,
+# 所以全域 180s 對「一般測試」有 7x 餘裕,只有 t_ci_wait 需要單獨放寬。
+TIMEOUT_OVERRIDE = {"t_ci_wait": 450}          # 132.3s → 餘裕 3.4x
+
+
+class TestTimeout(Exception):
+    pass
+
+
+def run_with_timeout(fn, seconds):
+    """跑 fn,超過 seconds 秒拋 TestTimeout。seconds<=0 或平台無 SIGALRM = 不設限。"""
+    import signal
+    if seconds <= 0 or not hasattr(signal, "SIGALRM"):
+        return fn()
+
+    def _boom(signum, frame):
+        raise TestTimeout(f"超過 {seconds}s 未結束")
+
+    old = signal.signal(signal.SIGALRM, _boom)
+    signal.alarm(seconds)
+    try:
+        return fn()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
 def main():
     # ★把 git 的環境變數從進程 env 清掉(2026-08-01,pre-push 假紅實錘)★
     #
@@ -20555,7 +20660,9 @@ def main():
             if t.__name__.startswith("t_slim_"):
                 _need_src("slim")
             _fail_before = FAIL
-            t()
+            _t_start = _time_slow.time()
+            run_with_timeout(t, TIMEOUT_OVERRIDE.get(t.__name__, TEST_TIMEOUT_SEC))
+            SLOWEST.append((_time_slow.time() - _t_start, t.__name__))
             if FAIL > _fail_before:
                 # 殺傷力驗證歸因用(2026-08-22 首跑判「弱證據」):失敗要跟測試名同一行,
                 # lumos guard kill 的 _kill_attribute 才能把紅燈歸到綁定測試頭上。
@@ -20563,9 +20670,23 @@ def main():
         except _SrcOnly as e:
             SKIP += 1
             print(f"  - skip {t.__name__}: {e}")
+        except TestTimeout as e:
+            # ★判紅不判 skip★:沒跑完 = 沒驗過。名字印出來,才知道要去修哪一支。
+            FAIL += 1
+            print(f"  ✗ TIMEOUT {t.__name__}: {e}"
+                  f"(調整:LUMOS_TEST_TIMEOUT=<秒>,0=不設限)")
         except Exception as e:
             FAIL += 1
             print(f"  ✗ {t.__name__} EXCEPTION: {e}")
+    if SLOWEST:
+        top = sorted(SLOWEST, reverse=True)[:5]
+        print(f"\n最慢 5 支(超時上限 {TEST_TIMEOUT_SEC}s;餘裕 = 上限 / 最慢):")
+        for sec, name in top:
+            lim = TIMEOUT_OVERRIDE.get(name, TEST_TIMEOUT_SEC)
+            ratio = (lim / sec) if sec > 0 else float("inf")
+            flag = "  ⚠ 餘裕不足 3 倍" if ratio < 3 else ""
+            lim_note = f"/上限 {lim}s" if name in TIMEOUT_OVERRIDE else ""
+            print(f"  {sec:6.1f}s  {name}{lim_note}  (餘裕 {ratio:.0f}x){flag}")
     tail = f", {SKIP} skipped(來源 repo 專用)" if SKIP else ""
     print(f"\n{'─'*40}\n{PASS} passed, {FAIL} failed{tail}")
     return 1 if FAIL else 0

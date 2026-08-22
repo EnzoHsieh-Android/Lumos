@@ -209,6 +209,44 @@ r=orchestrator_result.extract_json(o.get('result',''))
 print(json.dumps(r, ensure_ascii=False) if r else 'NO_JSON')
 ")"
 log "orchestrator 回傳:$PARSED"
+
+# ── 成本落帳(★填既有欄,不建新機制★)──────────────────────────────────────────
+# `claude -p --output-format json` 的頂層本來就吐 total_cost_usd / duration_ms /
+# num_turns / usage,一直沒人接;canary 帳的 --tokens / --wallclock-min 兩個欄也早就
+# 在、零筆填過。這裡把兩邊接起來:抽出來 log 一行 + 記進既有欄。
+# ★fail-open★——抽不到就只 log 一句,絕不影響 loop(與 run_probe / run_nags 同款)。
+COST_OUT="$(cd "$REPO" && python3 -c "
+import json, sys
+sys.path.insert(0, 'governance')
+from autonomous_loop import orchestrator_result as orr
+try:
+    o = json.load(open('$ORCH_OUT'))
+except Exception:
+    sys.exit(0)
+c = orr.extract_cost(o)
+if not c:
+    sys.exit(0)
+print('US\$%s | %s 分鐘 | %s 輪 | %s tokens(另快取讀 %s)' % (
+    c['usd'], c['wallclock_min'], c['turns'], c['tokens'], c['cache_read']))
+print(' '.join(orr.cost_cli_args(c)))
+" 2>/dev/null)" || COST_OUT=""
+if [ -n "$COST_OUT" ]; then
+  log "本輪成本:$(echo "$COST_OUT" | head -1)"
+  COST_ARGS="$(echo "$COST_OUT" | tail -1)"
+  # ★fail-open 但不靜默★:記帳失敗不擋 loop,但一定要喊出來。
+  # 依據 Issues/canary-record未落盤事件(2026-07-28 三筆回報成功卻沒落盤,靠外審清點才發現):
+  # 那次的教訓是「回報成功 ≠ 已落盤」,record 已加寫後讀回自驗、驗不到回 rc2。
+  # 這裡若把 rc 吞掉,等於重新製造同一個靜默窗口——所以判 rc、失敗 log 一行。
+  # shellcheck disable=SC2086  # 故意不加引號:要拆成多個參數
+  if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY" \
+          --auditor orchestrator --note "自主迴圈整輪成本(claude -p 實際回傳,非估算)" \
+          $COST_ARGS) >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
+    log "本輪成本:算出來了但★沒落帳★——record 失敗,帳上會是空的(詳情 $LOGDIR/cost-$TODAY.log)"
+  fi
+else
+  log "本輪成本:沒抽到——orchestrator 輸出裡沒有成本欄,或形狀變了(看 $ORCH_OUT)"
+fi
+
 case "$PARSED" in PARSE_FAIL*|NO_JSON*|"") log "orchestrator 輸出無法解析,中止(log $ORCH_OUT)"; exit 1;; esac
 
 get(){ echo "$PARSED" | python3 -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }

@@ -9133,10 +9133,38 @@ def _scaffold_project(root: Path, slug: str):
 
 
 _GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py")
-# 已撤除的全域 hook：install/update 主動刪其殘留真檔(否則 _prune_dangling 因「非懸空」不剪、nag 不停)。
-# code-loop-guard.py:2026-07-06 ADR 撤除 Stop nag(見 Projects/code-loop必用守衛_計劃)。撤別的 hook 在此補。
-# verification-rot-check.py:2026-08-21 體檢 #8 撤除(核心從未觸發、每次 Bash 付啟動成本;見 Verification/2026-08-21_工具鏈體檢修復批)。
-_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py", "verification-rot-check.py")
+# ★撤除 hook 要分兩階段,不能一刀刪檔★(2026-08-22 立;症狀真實發生過)
+#
+# 症狀:`lumos install` 把已撤除 hook 的真檔刪掉,但★正在跑的 session★在啟動當下讀進的
+# settings 快照裡還註冊著那支——檔案不在了,那些 session 每次觸發都報錯。2026-08-22 有人
+# 為此手寫空殼補回去兩次(每跑一次 install 就被刪一次)。
+#
+# 兩階段:
+#   階段一 STUB   —— 這一版換成 exit 0 空殼。舊 session 照樣觸發、什麼都不做、不報錯;
+#                     新 session 讀到的 settings 已剪乾淨,根本不會叫它。
+#   階段二 DELETE —— 確認沒有 session 還帶著舊註冊(隔一版/隔一天)才真刪檔。
+# 撤新的 hook:先加進 STUB;下一版把它從 STUB 移到 DELETE。
+#
+# code-loop-guard.py:2026-07-06 ADR 撤除 Stop nag(見 Projects/code-loop必用守衛_計劃)——早過相容期,直接刪。
+# verification-rot-check.py:2026-08-21 體檢 #8 撤除(核心從未觸發、每次 Bash 付啟動成本;
+#   見 Verification/2026-08-21_工具鏈體檢修復批)——相容期中,留空殼。
+_RETIRED_STUB_CLAUDE_HOOKS = ("verification-rot-check.py",)
+_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py",)
+
+_RETIRED_HOOK_STUB_BODY = (
+    "#!/usr/bin/env python3\n"
+    '"""已撤除 hook 的相容期空殼——什麼都不做,直接放行。\n'
+    "\n"
+    "存在的唯一理由:正在跑的 session 在啟動當下讀進的 settings 快照可能還註冊著這支。\n"
+    "真檔一旦刪掉,那些 session 每次觸發都會報錯(2026-08-22 實際發生過)。新開的\n"
+    "session 讀到的 settings 已經剪乾淨,不會叫到這裡。\n"
+    "\n"
+    "下一版從 _RETIRED_STUB_CLAUDE_HOOKS 移到 _RETIRED_CLAUDE_HOOKS 即真刪。\n"
+    '"""\n'
+    "import sys\n"
+    "\n"
+    "sys.exit(0)\n"
+)
 
 
 def _sync_global_claude(src_repo: Path):
@@ -9152,7 +9180,13 @@ def _sync_global_claude(src_repo: Path):
         s = src_dir / f
         if s.exists():
             shutil.copy2(s, chooks / f)
-    for f in _RETIRED_CLAUDE_HOOKS:           # ② 撤除 hook 殘留真檔主動刪
+    for f in _RETIRED_STUB_CLAUDE_HOOKS:      # ②a 相容期:換 exit 0 空殼,★不刪檔★
+        stub = chooks / f                     #     (刪了會炸掉還帶著舊註冊的 session)
+        if stub.is_symlink():
+            stub.unlink()                     #     symlink 先拆,免得寫穿到來源檔
+        stub.write_text(_RETIRED_HOOK_STUB_BODY, encoding="utf-8")
+        stub.chmod(0o755)
+    for f in _RETIRED_CLAUDE_HOOKS:           # ②b 過了相容期:真刪殘留檔
         stale = chooks / f
         if stale.exists() or stale.is_symlink():
             stale.unlink()
@@ -9178,8 +9212,8 @@ def _teardown_global_claude(src_repo: Path):
                   "(避免刪了檔卻剪不掉註冊、留懸空)", file=sys.stderr)
             return False
     removed = []                              # ② rm 我方 hook 真檔
-    for f in _GLOBAL_CLAUDE_HOOKS + _RETIRED_CLAUDE_HOOKS:
-        p = chooks / f
+    for f in _GLOBAL_CLAUDE_HOOKS + _RETIRED_CLAUDE_HOOKS + _RETIRED_STUB_CLAUDE_HOOKS:
+        p = chooks / f            # ★含相容期空殼★:拆機後機器上不該留我方任何檔
         if p.exists() or p.is_symlink():
             p.unlink(); removed.append(f)
     merge = src_repo / "scripts" / "merge-claude-settings.py"   # ③ prune-only 剪懸空我方註冊

@@ -146,6 +146,57 @@ class TestOrchestratorResult(unittest.TestCase):
         self.assertIsNone(orchestrator_result.extract_json("no json {clean,minor} here"))
 
 
+class TestExtractCost(unittest.TestCase):
+    """成本欄落帳:claude -p --output-format json 的頂層本來就吐 cost/duration/turns,
+    以前沒人接。抽取必須 fail-open——形狀一變就回 None,絕不讓 loop 因為記帳失敗而中斷。"""
+
+    def test_extracts_all_fields(self):
+        from autonomous_loop import orchestrator_result
+        c = orchestrator_result.extract_cost({
+            "total_cost_usd": 2.2043, "duration_ms": 99920, "num_turns": 13,
+            "usage": {"input_tokens": 1200, "output_tokens": 38376,
+                      "cache_read_input_tokens": 900000},
+        })
+        self.assertEqual(c["usd"], 2.2043)
+        self.assertEqual(c["wallclock_min"], 2)          # 99920ms → 1.665 分 → round=2
+        self.assertEqual(c["turns"], 13)
+        self.assertEqual(c["tokens"], 39576)             # in+out,★不含 cache_read★
+        self.assertEqual(c["cache_read"], 900000)
+
+    def test_missing_usage_still_returns_what_it_has(self):
+        from autonomous_loop import orchestrator_result
+        c = orchestrator_result.extract_cost({"total_cost_usd": 0.5, "duration_ms": 20000})
+        self.assertEqual(c["usd"], 0.5)
+        self.assertEqual(c["wallclock_min"], 0)          # 20 秒 → 0 分,不四捨五入成 1(不假造)
+        self.assertIsNone(c["tokens"])
+        self.assertIsNone(c["turns"])
+
+    def test_none_when_nothing_useful(self):
+        from autonomous_loop import orchestrator_result
+        self.assertIsNone(orchestrator_result.extract_cost({"result": "文字", "is_error": False}))
+        self.assertIsNone(orchestrator_result.extract_cost(None))
+        self.assertIsNone(orchestrator_result.extract_cost("不是 dict"))
+
+    def test_bad_shapes_fail_open(self):
+        """★反假綠★:欄位型別壞掉(字串當數字)不能拋例外,也不能默默記出垃圾數字。"""
+        from autonomous_loop import orchestrator_result
+        c = orchestrator_result.extract_cost({"total_cost_usd": "貴", "duration_ms": None,
+                                              "num_turns": [], "usage": "壞"})
+        self.assertIsNone(c)
+
+    def test_cli_line_omits_missing_fields(self):
+        """組出來的記帳參數只帶真的有值的欄——沒有的不要送 0 冒充量過。"""
+        from autonomous_loop import orchestrator_result
+        self.assertEqual(
+            orchestrator_result.cost_cli_args({"usd": 1.0, "wallclock_min": 3,
+                                               "tokens": 500, "turns": 2, "cache_read": 0}),
+            ["--tokens", "500", "--wallclock-min", "3"])
+        self.assertEqual(
+            orchestrator_result.cost_cli_args({"usd": 1.0, "wallclock_min": None,
+                                               "tokens": None, "turns": 2, "cache_read": 0}),
+            [])
+
+
 class TestCrossAudit(unittest.TestCase):
     def setUp(self):
         from autonomous_loop import cross_audit
