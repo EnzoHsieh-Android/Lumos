@@ -18,7 +18,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 BIN="$REPO_ROOT/scripts/bin/notesmd-cli"
 
 if [[ ! -x "$BIN" ]]; then
-  echo "ERROR: 找不到 notesmd-cli,先跑: scripts/fetch-notesmd.sh" >&2
+  echo "擋下:找不到改名工具 notesmd-cli,先跑這個抓下來:" >&2; echo "    scripts/fetch-notesmd.sh" >&2
   exit 2
 fi
 
@@ -36,7 +36,7 @@ for d in "$REPO_ROOT"/docs/*-knowledge; do
 done
 [[ -z "$VAULT" && -d "$REPO_ROOT/docs/knowledge" ]] && VAULT="knowledge"
 if [[ -z "$VAULT" ]]; then
-  echo "ERROR: 找不到 docs/*-knowledge vault" >&2
+  echo "擋下:目前目錄底下找不到知識圖譜(docs/*-knowledge)" >&2
   exit 2
 fi
 

@@ -875,7 +875,7 @@ def t_rel_cascade_prewrite_validation():
     # ①檔不存在
     r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", "c-19990101000000-deadbeef",
             "--from", gid, "--edge", "verified_by", "--by", "ai")
-    check("M3 檔不存在 rc=2(confirm 永不建檔)", r.returncode == 2 and "永不建檔" in r.stderr, r.stderr)
+    check("M3 檔不存在 rc=2(confirm 永不建檔)", r.returncode == 2 and "不會自己建" in r.stderr, r.stderr)
     # ②裸 dN
     r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid, "--from", "d1",
             "--edge", "verified_by", "--by", "ai")
@@ -893,7 +893,7 @@ def t_rel_cascade_prewrite_validation():
     tp.write_text('{"event":"header","ts":"2026-', encoding="utf-8")
     r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", "c-20260101000000-aaaaaaaa",
             "--from", gid, "--edge", "verified_by", "--by", "ai")
-    check("M3 torn header 寫前拒 rc=2", r.returncode == 2 and "header 損毀" in r.stderr, r.stderr)
+    check("M3 torn header 寫前拒 rc=2", r.returncode == 2 and "開頭壞了" in r.stderr, r.stderr)
     r = run(v, "rel-cascade", "resume", "c-20260101000000-aaaaaaaa")
     check("M3 torn header resume rc=1(救不回信號)", r.returncode == 1 and "不可恢復" in r.stderr, r.stderr)
 
@@ -1171,7 +1171,7 @@ def t_dref_codeloop_hardening():
             lm._append_decision_ref(lm.Env(v), "Systems/A.md", "decision_refs", bad)
             check(f"FIX4 拒不可序列化字元({tag})", False, "未 raise")
         except ValueError as e:
-            check(f"FIX4 拒不可序列化字元({tag})", "不可序列化" in str(e), str(e))
+            check(f"FIX4 拒不可序列化字元({tag})", "不能用的字元" in str(e), str(e))
     # FIX3: E3 同 ref 兩欄不重複計
     write(v, "Projects/E.md",
           "type: project\nstatus: done\ndecisions:\n"
@@ -4511,7 +4511,7 @@ def t_getsh_forwards_args():
     check("get.sh: rc0", r.returncode == 0, r.stderr[-200:])
     got = _j.loads(argv_file.read_text(encoding="utf-8"))
     check("get.sh: 兩旗標都轉發(非只 $1)", got == ["bootstrap", "--pull", "--init"], f"{got}")
-    check("get.sh: 未知旗標 warn 忽略", "未知旗標 --wat" in r.stderr, r.stderr[-200:])
+    check("get.sh: 未知旗標 warn 忽略", "不認得 --wat" in r.stderr, r.stderr[-200:])
     check("get.sh: 不再自跑 install --force(委派)", "install" not in " ".join(got), f"{got}")
     # 失敗傳播:shim 回非零 → get.sh exit 非零(set -e)
     shim.write_text("#!/usr/bin/env python3\nimport sys; sys.exit(3)\n", encoding="utf-8")
@@ -9649,7 +9649,7 @@ def t_loop_capture_counts_cli():
         check("cli cc: 吐 --capture-counts 建議", "--capture-counts 3" in r.stdout, r.stdout)
         # 全獨發 → 殘餘 ≥1 → 續跑側
         r2 = run("--finder", "a", "--finder", "b", "--finder", "c")
-        check("cli cc: 全獨發=advisory 中性措辭(降級後不再判收斂/續跑)", "advisory 觀測" in r2.stdout and "續跑側" not in r2.stdout, r2.stdout)
+        check("cli cc: 全獨發=advisory 中性措辭(降級後不再判收斂/續跑)", "僅供參考" in r2.stdout and "續跑側" not in r2.stdout, r2.stdout)
         # 無 finder → 空、殘餘 0、不吐建議串
         r3 = run()
         check("cli cc: 空 rc0", r3.returncode == 0 and "distinct-findings=0" in r3.stdout, r3.stdout)
@@ -12130,7 +12130,7 @@ def t_doctor_flags_unclosed_frontmatter():
     check("★doctor 必須指名道姓點出未閉合的那一篇(不得靜默)★",
           "broken.md" in rd.stdout, rd.stdout)
     check("★而且要講清楚後果(不是只說格式錯)★",
-          "合約" in rd.stdout and "圖譜邊" in rd.stdout, rd.stdout)
+          "合約" in rd.stdout and "連結" in rd.stdout, rd.stdout)
     rci = lum("doctor", "--ci")
     check("★必須是硬 issue——pre-push 的 doctor --ci 要擋得下來★",
           rci.returncode != 0, f"rc={rci.returncode}\n{rci.stdout[-400:]}")
@@ -13595,7 +13595,7 @@ def t_m2_cluster_gate():
         _round(d, "r2", ["caught", "caught"], 1, "a=resolved")
         r = _st(d)
         check("M2 混用: 定錨無-cluster 後續帶 → rc2+指路開新 loop",
-              r.returncode == 2 and "開新 loop id" in r.stderr, f"rc={r.returncode}\n{r.stderr}")
+              r.returncode == 2 and "開新的審查編號" in r.stderr, f"rc={r.returncode}\n{r.stderr}")
     # 混用:定錨 cluster 後續有效輪半帶 → rc2;無效輪不帶=豁免
     with tempfile.TemporaryDirectory() as d:
         _mkvault(d)
@@ -13610,7 +13610,7 @@ def t_m2_cluster_gate():
         _round(d, "r1", ["caught", "caught"], 1, "a=resolved")
         _round(d, "r2", ["caught", "caught"])            # 有效輪半帶 → rc2
         r = _st(d)
-        check("M2 混用: 有效輪半帶 → rc2", r.returncode == 2 and "半帶" in r.stderr, r.stderr)
+        check("M2 混用: 有效輪半帶 → rc2", r.returncode == 2 and "沒帶分組" in r.stderr, r.stderr)
 
     # W 歸屬:有效輪 >1 筆帶 → rc2;無效輪多筆帶 → 豁免列警告
     with tempfile.TemporaryDirectory() as d:
@@ -13620,7 +13620,7 @@ def t_m2_cluster_gate():
         _rec(d, "caught", "--loop", "CL", "--round", "r1", "--token", "B", "--severity", "clean",
              "--clusters", "b=resolved")
         r = _st(d)
-        check("M2 W歸屬: 有效輪雙帶 → rc2", r.returncode == 2 and "至多一筆" in r.stderr, r.stderr)
+        check("M2 W歸屬: 有效輪雙帶 → rc2", r.returncode == 2 and "只能有一筆" in r.stderr, r.stderr)
     with tempfile.TemporaryDirectory() as d:
         _mkvault(d)
         _rec(d, "caught", "--loop", "CL", "--round", "r1", "--token", "A", "--clusters", "a=disputed-major")
@@ -14715,7 +14715,7 @@ def t_disposal_gate_r3_panel_hardening():
     r2 = run(v, "loop", "status", lid2, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
     check("★前置★ 現場成立:同 loop 混有 round-less 與帶 round 記錄", r2.returncode == 2, f"rc={r2.returncode}")
     check("★混用=rc2 明確訊息(不再落進「非連續重現」誤導)★",
-          "混用" in r2.stderr, r2.stderr[:200])
+          "有的帶輪次、有的不帶" in r2.stderr, r2.stderr[:200])
 
     # ── ③ 開閉引號型態不符→格式 miss(不得靜默消失) ──
     bad = d / "r3bad.md"
@@ -15302,7 +15302,7 @@ def t_show():
     broken.symlink_to(v / "Systems" / "不存在的目標檔.md")
     r = run(v, "show", "斷鏈")
     check("重開檔失敗 rc2", r.returncode == 2, f"rc={r.returncode}")
-    check("重開檔失敗 stderr 無 traceback", "讀檔失敗" in r.stderr and "Traceback" not in r.stderr, r.stderr[:120])
+    check("重開檔失敗 stderr 無 traceback", "讀不到" in r.stderr and "Traceback" not in r.stderr, r.stderr[:120])
     # 8. 無 frontmatter 檔 --body-only → 印整檔
     (v / "Systems" / "裸檔.md").write_bytes("# 裸檔標題\n純內文無fm\n".encode("utf-8"))
     r = run(v, "show", "裸檔", "--body-only", expect_rc=0)

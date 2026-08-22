@@ -14,7 +14,7 @@ ARGS=()
 for a in "$@"; do
   case "$a" in
     --pull|--init) ARGS+=("$a") ;;
-    *) echo "WARN: 未知旗標 $a(忽略;只認 --pull/--init)" >&2 ;;
+    *) echo "提醒:不認得 $a 這個選項,略過(只認 --pull 和 --init)" >&2 ;;
   esac
 done
 

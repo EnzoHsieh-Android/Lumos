@@ -548,8 +548,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     else:
         warn(_fm_broken,
              f"有 {len(_fm_broken)} 篇筆記開頭欄位區塊沒收尾(有起頭的 --- 沒有結尾的 ---),整篇會被當成正文:",
-             "補上收尾的 `---`。★在補之前該檔的硬合約不會出現在 contracts、"
-             "block scalar 裡的 [[連結]] 會變成真的圖譜邊★")
+             "補上收尾的 `---`。沒補之前,這篇的合約查不到,正文裡的 [[連結]] 也會被當成真的連結")
     print()
 
     section("2/4", "有沒有連到不存在筆記的連結")
@@ -802,7 +801,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         ok("無未綁回退的可逆性標記")
     if rev_err:
         warn(rev_err, f"發現 {len(rev_err)} 條 ★IRREVERSIBLE★ 缺實質回退/標錯型別:標成做了回不去,卻沒寫怎麼回退或怎麼防:",
-             "標記行加 [rollback:decisions](有回退)或 [guard:decisions](冪等鍵/核可閘),decisions[] 要有非空 rollback/guard;★ 僅用於 Systems")
+             "在那一行加 [rollback:decisions](寫怎麼退)或 [guard:decisions](寫怎麼防重複做),並在 decisions 裡填上內容;這種標記只能放在 Systems 筆記")
     if rev_soft:
         warn_soft(rev_soft, f"{len(rev_soft)} 條標成「有存檔點」的動作建議補寫回退方式(不擋):",
                   "加 [rollback:decisions] + decisions rollback")
@@ -1019,7 +1018,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             warn_soft(
                 hint_hits,
                 f"這次改動有 {len(hint_hits)} 行疑似碰到做了就回不去的操作(正式環境/外部 API/寄送):",
-                "確認相關 Systems 節點已標 ★IRREVERSIBLE★ [rollback:decisions] 或 [guard:decisions];若確認可逆可忽略",
+                "去對應的 Systems 筆記確認有沒有標 ★IRREVERSIBLE★ 並寫好回退或防護;確定其實可逆就忽略",
             )
     print()
 
@@ -1237,8 +1236,8 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         if _ghosts:
             warn_soft(_ghosts,
                       f"有 {len(_ghosts)} 個筆記點名的方法或類別在程式碼裡找不到(寫錯或改名了?):",
-                      "改名了?寫錯了?或本來就在別的 repo(那請改成非 inline-code 或註明來源)。"
-                      "★這類 code 從沒變過也會發生——diff-based 守衛(delguard)結構上抓不到★")
+                      "可能改名了、寫錯了、或本來就在別的 repo(那就別用行內程式碼格式寫,或註明來源)。"
+                      "這種問題就算程式碼從沒改過也會發生,只看改動的檢查抓不到,所以才在這裡提")
         else:
             ok("筆記點名的方法和類別在程式碼裡都找得到")
     print()
@@ -1618,7 +1617,7 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
         try:
             pat = re.compile(term, re.IGNORECASE)
         except re.error as e:
-            print(f"ERROR: 正則無效: {e}", file=sys.stderr)
+            print(f"擋下:你給的正則表達式不合法({e}),換一個", file=sys.stderr)
             return 2
         matches = lambda s: pat.search(s) is not None
     else:
@@ -2123,7 +2122,7 @@ def load_platforms(repo_root):
         try:
             cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         except Exception as e:
-            print(f"⚠ .lumos/config.json 解析失敗,退回 legacy 單 profile: {e}", file=sys.stderr)
+            print(f"提醒:.lumos/config.json 讀不了({e}),先用預設的單一設定跑", file=sys.stderr)
             cfg = {}
     plats = cfg.get("platforms")
     if not isinstance(plats, dict) or not plats:
@@ -2138,10 +2137,10 @@ def load_platforms(repo_root):
     out = {}
     for plat, spec in plats.items():
         if not isinstance(spec, dict):
-            raise ValueError(f"platforms['{plat}'] 應為物件(收到 {type(spec).__name__})")
+            raise ValueError(f"設定檔 platforms['{plat}'] 要是一個物件,現在是 {type(spec).__name__}")
         pname = spec.get("profile")
         if pname not in TEST_PROFILES:
-            raise ValueError(f"platforms['{plat}'].profile '{pname}' 未知(有: {', '.join(TEST_PROFILES)})")
+            raise ValueError(f"設定檔 platforms['{plat}'].profile 填了 '{pname}',工具不認得(可用: {', '.join(TEST_PROFILES)})")
         root_str = spec.get("root", ".")
         root = (repo_root / root_str).resolve()   # 明寫基底 repo_root(非 cwd),見 D1
         if not root.exists():
@@ -2153,10 +2152,10 @@ def load_platforms(repo_root):
         if len(out) == 1:
             default = next(iter(out))
         else:
-            raise ValueError(f"多平台 config 有 {len(out)} 個平台但未指定 default_platform"
+            raise ValueError(f"設定了 {len(out)} 個平台,但沒說預設是哪個(default_platform)"
                              f"(無前綴 [test:X] 不知歸屬);請加 default_platform")
     elif default not in out:
-        raise ValueError(f"default_platform '{default}' 不在 platforms({', '.join(out)})")
+        raise ValueError(f"預設平台 '{default}' 不在平台清單裡(有的是: {', '.join(out)})")
     return {"multiplatform": True, "default_platform": default, "platforms": out}
 
 
@@ -2201,7 +2200,7 @@ def resolve_test_refs(inv_text, platforms, default_platform):
             if plat not in platforms:
                 raise ValueError(
                     f"[test:{seg}] 的平台前綴 '{plat}' 未定義於 platforms"
-                    f"({', '.join(platforms)});不 fallback 避免誤綁")
+                    f"({', '.join(platforms)});不猜,免得綁錯平台")
             out.append((plat, name))
         else:
             out.append((default_platform, seg))
@@ -2529,7 +2528,7 @@ def cmd_drift_history(env, every=60, limit=0, as_json=False):
             repo_root = _p.parent
             break
     if repo_root is None:
-        print("ERROR: 需要 <repo>/docs/<slug>-knowledge 佈局才能對照 code", file=sys.stderr)
+        print("擋下:這項要專案同時有程式碼和 docs/<名稱>-knowledge 圖譜才能對照,這裡沒有這種佈局", file=sys.stderr)
         return 2
     prof, neg = load_symbol_profile(repo_root)
     sym_re = re.compile(prof["shape_re"])
@@ -2608,13 +2607,13 @@ def cmd_drift_history(env, every=60, limit=0, as_json=False):
         persist &= set(r["ghosts"])
     print()
     if persist:
-        print(f"★橫跨全部 {len(rows)} 個取樣點都存在的幽靈符號:{', '.join(sorted(persist))}")
+        print(f"在全部 {len(rows)} 個取樣點都出現的幽靈符號(筆記點名但程式碼裡沒有):{', '.join(sorted(persist))}")
         print("  → 規律成立:這不是偶發,是穩態。這型 drift 值得開機械檢查(見 Check Y)。")
     elif any(r["ghosts"] for r in rows):
         print("幽靈符號有出現但非持續 → 有人在修,但沒有機制擋住它再發生。")
     else:
         print("所有取樣點都 0 幽靈 → 這個專案沒有這型 drift,"
-              "★或 symbol_profile 沒對上你的語言棧(先確認候選數不是 0)★。")
+              "或者是符號比對規則沒對上你的語言(先確認候選數不是 0)。")
     return 0
 
 
@@ -2828,7 +2827,7 @@ def cmd_spec_trace(env, node, as_json=False):
     try:
         text = (env.vault / rel).read_text(encoding="utf-8-sig")
     except OSError as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
+        print(f"擋下:{ex}", file=sys.stderr)
         return 2
     ids = sorted({int(m) for m in SPEC_CLAUSE_RE.findall(text)})
     if not ids:
@@ -2876,7 +2875,7 @@ def cmd_signoff(env, node, note, by=None):
     import datetime
     import subprocess
     if not (note or "").strip():
-        print("ERROR: --note 必填(確認了什麼,給未來的人看)", file=sys.stderr)
+        print("擋下:簽核一定要帶 --note 寫你確認了什麼,給以後的人看", file=sys.stderr)
         return 2
     rel = env.find(node)
     if rel is None:
@@ -2896,7 +2895,7 @@ def cmd_signoff(env, node, note, by=None):
                                  "node": rel, "by": by or "", "note": note,
                                  "commit": commit}, ensure_ascii=False) + "\n")
     except OSError as ex:
-        print(f"ERROR: signoff-log 寫入失敗: {ex}", file=sys.stderr)
+        print(f"擋下:簽核記錄寫不進去: {ex}", file=sys.stderr)
         return 2
     rc = cmd_set(env, rel, "signed_off", today)
     if rc != 0:
@@ -3688,15 +3687,15 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
             c = r["clusters"]
             if (not isinstance(c, dict)
                     or any(not isinstance(k, str) or not isinstance(v, str) for k, v in c.items())):
-                print(f"ERROR: 記錄 clusters 欄非 dict{{名:狀態}} 結構(損壞/手改 JSONL?): {c!r}",
+                print(f"擋下:有筆記錄的分組欄不是「群名:狀態」的形式(檔案壞了或被手改過?): {c!r}",
                       file=sys.stderr)
                 return 2
     valid_of = {rid_: _round_valid_m2(recs) for rid_, recs in groups.items()}
     # ── M2 W 歸屬:有效輪同輪 >1 筆帶 clusters → rc2(無效輪多筆帶=豁免,列警告區)
     for rid_, recs in groups.items():
         if valid_of[rid_] and sum(1 for r in recs if "clusters" in r) > 1:
-            print(f"ERROR: 輪 {rid_} 有 {sum(1 for r in recs if 'clusters' in r)} 筆記錄帶 clusters"
-                  f"(每輪至多一筆;衝突不靜默取第一筆)", file=sys.stderr)
+            print(f"擋下:第 {rid_} 輪有 {sum(1 for r in recs if 'clusters' in r)} 筆記錄都帶了分組,一輪只能有一筆"
+                  f"(工具不會默默挑第一筆,請自己決定留哪筆)", file=sys.stderr)
             return 2
     # ── M2 定錨:第一個有效輪定模式(無效輪不定錨——首輪全 missed 的新 loop 不得鎖死)
     anchor_rid, anchor_cluster = None, False
@@ -3712,12 +3711,12 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
                 continue
             has_c = any("clusters" in r for r in recs)
             if anchor_cluster and not has_c:
-                print(f"ERROR: 本 loop 已定錨 cluster 帳(定錨輪 {anchor_rid}),有效輪 {rid_} 未帶"
-                      f" clusters(半帶);補該輪 cluster 記錄或開新 loop id", file=sys.stderr)
+                print(f"擋下:這個審查編號從第 {anchor_rid} 輪起就是分組追蹤模式,但第 {rid_} 輪沒帶分組"
+                      f";補那一輪的分組記錄,或開新的審查編號", file=sys.stderr)
                 return 2
             if not anchor_cluster and has_c:
-                print(f"ERROR: 本 loop 已定錨無-cluster 模式(定錨輪 {anchor_rid}),有效輪 {rid_} 帶了"
-                      f" clusters;要用 cluster 帳請開新 loop id(不升級既有 loop)", file=sys.stderr)
+                print(f"擋下:這個審查編號從第 {anchor_rid} 輪起就定成不分組,但第 {rid_} 輪帶了分組"
+                      f";想用分組追蹤請開新的審查編號,既有的不能中途改", file=sys.stderr)
                 return 2
     if anchor_rid is not None and anchor_cluster:
         return _loop_status_panel_clusters(groups, valid_of, loop_id,
@@ -3796,7 +3795,7 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
             print(f"[panel/cluster] 輪有效: ✓ — {n_caught} 人抓到植入的錯、沒人漏")
     else:
         print(f"[panel/cluster] 輪有效: ✗ — 抓到 {n_caught} 人/無植入 {n_none} 人/漏掉 {n_missed} 人"
-              f"(謂詞:記帳席[caught+none]≥2∧missed=0∧kind 全白名單)")
+              f"(規則:記帳的人至少 2 個、沒人漏掉、每筆記錄的種類都合法)")
         fails.append("輪無效")
     # fold(僅有效輪,append 序 last-wins)+ ledger(首現/末更輪僅計有效輪,與 advisory 同源)
     from collections import OrderedDict as _OD
@@ -3921,7 +3920,7 @@ def cmd_loop_capture_counts(env, finders, from_pitfalls=None, repo=None):
     print(f"finders={n_finders} distinct-findings={n_distinct} "
           f"capture_counts={','.join(str(c) for c in cc) if cc else '(空)'}")
     print(f"remaining-estimate={remaining:.2f}  "
-          "(advisory 觀測;2026-08-14 起不進收斂合取——鑑別力≈0,勿當收斂/續跑訊號)")
+          "(僅供參考,不影響收斂判定——實測這個數字分不出好壞,別拿它決定要不要續跑)")
     if cc:
         print(f"→ canary record ... --capture-counts {','.join(str(c) for c in cc)}")
     return 0
@@ -3995,7 +3994,7 @@ def cmd_loop_compress(file, as_json=False):
     try:
         lines = Path(file).read_text(encoding="utf-8-sig").splitlines()
     except OSError as e:
-        print(f"ERROR: 讀不到 {file}: {e}", file=sys.stderr)
+        print(f"擋下:檔案讀不到({e}): {file}", file=sys.stderr)
         return 2
     pinned, evidence, open_items = [], [], []
     for ln in lines:
@@ -4182,17 +4181,17 @@ def cmd_loop_verify_progress(env, loop_id, settle=None, as_json=False):
                 try:
                     d = json.loads(line)
                 except ValueError:
-                    print("ERROR: canary-log 含不可解析行——驗證器 fail-closed(結構完整性破損,"
-                          "輪序不可信)", file=sys.stderr)
+                    print("擋下:審查記錄檔有讀不懂的行,輪次順序不可信,整個檔先不信"
+                          "(修好或搬走壞行再重跑)", file=sys.stderr)
                     return 2
                 if d.get("loop") == loop_id:
                     rounds.append(d)
     except OSError as e:
-        print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
+        print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
         return 2
     for i, r in enumerate(rounds, 1):
         if not isinstance(r.get("kind"), str):
-            print(f"ERROR: 第 {i} 筆 record 缺 kind——結構欄位缺失 fail-closed", file=sys.stderr)
+            print(f"擋下:審查記錄第 {i} 筆少了 kind 欄位(抓到/漏掉/無植入),缺欄位就不信整份", file=sys.stderr)
             return 2
     def caught_ok(r):
         # none=協議停用制無植入輪(2026-08-14 d5),與 caught 同計合格輪
@@ -4218,7 +4217,7 @@ def cmd_loop_verify_progress(env, loop_id, settle=None, as_json=False):
             entries = data["entries"]
             assert isinstance(entries, list) and entries
         except (OSError, ValueError, KeyError, AssertionError) as e:
-            print(f"ERROR: settle 清單檔不可讀/格式非法: {e}", file=sys.stderr)
+            print(f"擋下:結清清單檔讀不到或格式不對: {e}", file=sys.stderr)
             return 2
         def is_caught_round(n):
             return isinstance(n, int) and 1 <= n <= len(rounds) and caught_ok(rounds[n - 1])
@@ -4409,7 +4408,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
                 if d.get("loop") == loop_id:
                     rounds.append(d)
     except OSError as e:
-        print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
+        print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
         return 2
 
     if roster:
@@ -4830,7 +4829,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 if d.get("loop") == loop_id:
                     rounds.append(d)
     except OSError as e:
-        print(f"ERROR: 讀 {path} 失敗: {e}", file=sys.stderr)
+        print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
         return 2
     n_round = sum(1 for r in rounds if "round" in r)
     if rounds and n_round not in (0, len(rounds)):
@@ -5163,15 +5162,15 @@ def _tautology_warn(claim, clean):
 def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
                        out_dir=None, template=None, klass=None, platform=None):
     if gtype not in GUARD_TYPES:
-        print(f"ERROR: --type 須為 {'|'.join(GUARD_TYPES)}(收到 {gtype})", file=sys.stderr)
+        print(f"擋下:--type 只能是 {'|'.join(GUARD_TYPES)} 之一,你給的是 {gtype}", file=sys.stderr)
         return 2
     if not IDENT_RE.match(method):
-        print(f"ERROR: --method『{method}』非合法識別字(只允許字母/數字/底線,不可數字開頭)。"
-              f"\n  (Kotlin 反引號測試名含空白 → CLI 不支援,請手動編輯 .md 的 [test:] 與測試檔)",
+        print(f"擋下:--method『{method}』不是合法的方法名(只能用字母/數字/底線,不能數字開頭)。"
+              f"\n  Kotlin 那種反引號包住、含空白的測試名這裡不支援,請直接手改筆記裡的 [test:] 和測試檔",
               file=sys.stderr)
         return 2
     if klass is not None and not IDENT_RE.match(klass):
-        print(f"ERROR: --class『{klass}』非合法識別字", file=sys.stderr)
+        print(f"擋下:--class『{klass}』不是合法的類別名(只能用字母/數字/底線,不能數字開頭)", file=sys.stderr)
         return 2
     rel = env.find(node)
     if rel is None:
@@ -5181,11 +5180,11 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     # 比對 invariant 語義本體(去掉 [test:..] 後綴),避免子字串誤命中既有測試名
     matched = [x for x in inv if invariant_substr in strip_test_refs(x)[0]]
     if not matched:
-        print(f"ERROR: {rel} 沒有含『{invariant_substr}』的 ★INVARIANT★(已排除 [test:] 後綴)",
+        print(f"擋下:{rel} 裡找不到內容含『{invariant_substr}』的合約行(比對時不算 [test:] 那段)",
               file=sys.stderr)
         return 2
     if len(matched) > 1:
-        print(f"ERROR: 『{invariant_substr}』命中 {len(matched)} 條,請給更精確子字串", file=sys.stderr)
+        print(f"擋下:『{invariant_substr}』同時對到 {len(matched)} 條合約,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
         return 2
     clean, _ = strip_test_refs(matched[0])
     _tautology_warn(claim, clean)
@@ -5194,17 +5193,17 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     try:
         pdata = load_platforms(repo_root)
     except ValueError as ex:
-        print(f"ERROR: config platforms 設定錯誤: {ex}", file=sys.stderr)
+        print(f"擋下:設定檔的 platforms 區塊有問題: {ex}", file=sys.stderr)
         return 2
     if platform is None:
         if len(pdata["platforms"]) == 1:
             platform = next(iter(pdata["platforms"]))
         else:
-            print(f"ERROR: 多平台 config 有 {len(pdata['platforms'])} 個平台,scaffold 請用 --platform 指定"
+            print(f"擋下:這個專案設定了 {len(pdata['platforms'])} 個平台,要幫哪個平台產守衛請用 --platform 指定"
                   f"(可選: {', '.join(pdata['platforms'])})", file=sys.stderr)
             return 2
     elif platform not in pdata["platforms"]:
-        print(f"ERROR: --platform '{platform}' 不在 config platforms({', '.join(pdata['platforms'])})",
+        print(f"擋下:--platform '{platform}' 不在設定檔的平台清單裡(有的是: {', '.join(pdata['platforms'])})",
               file=sys.stderr)
         return 2
     pentry = pdata["platforms"][platform]
@@ -5212,8 +5211,7 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     tpl_path = Path(template) if template else \
         (platform_root / ".lumos" / "guard-templates" / f"{gtype}.tmpl")   # 範本走該平台 root(審計 r4)
     if not tpl_path.exists():
-        print(f"ERROR: 找不到範本 {tpl_path}\n  範本是技術棧專屬、放專案 "
-              f".lumos/guard-templates/<type>.tmpl;lumos 語言無關不內建。先建範本再 scaffold。",
+        print(f"擋下:找不到守衛範本,沒辦法產生。範本跟技術棧綁在一起,工具不內建,要自己放在專案的\n    .lumos/guard-templates/<type>.tmpl\n  先建好範本再來產:{tpl_path}",
               file=sys.stderr)
         return 2
     klass = klass or (method + "Tests")  # 不複用 method 當類名(避免 class==method 同名)
@@ -5228,10 +5226,10 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
               file=sys.stderr)
     out = Path(out_dir) if out_dir else _detect_test_dir(platform_root, gtype, profile)
     if out is None:
-        print("ERROR: 偵測不到測試專案目錄,請給 --out", file=sys.stderr)
+        print("擋下:猜不到測試專案放哪,用 --out 指定輸出目錄", file=sys.stderr)
         return 2
     if not out.is_dir():
-        print(f"ERROR: 輸出目錄不存在: {out}(打錯路徑?先 mkdir 或修正 --out)", file=sys.stderr)
+        print(f"擋下:輸出目錄不存在,是不是路徑打錯?先建好目錄或改 --out: {out}", file=sys.stderr)
         return 2
     # scaffold_name 模板(python="test_{m}"→test_X.py 命中該 profile 檔名錨;無模板走 klass 慣例。
     # std F2:預設 XTests.py 會被 python 檔名錨排除,scaffold 產物必須自己能被 Check T 掃到)
@@ -5239,7 +5237,7 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
     _base = _tpl.format(m=method) if _tpl else klass
     target = out / f"{_base}{profile['scaffold_ext']}"
     if target.exists():
-        print(f"ERROR: {target} 已存在,不覆寫(避免蓋掉既有守衛)", file=sys.stderr)
+        print(f"擋下:這個檔已經存在,不覆寫(怕蓋掉你寫好的守衛): {target}", file=sys.stderr)
         return 2
     _write_lf(target, text)
     print(f"✓ 已產 stub: {target}")
@@ -5255,7 +5253,7 @@ def cmd_guard_scaffold(env, node, invariant_substr, method, gtype, claim,
 
 def cmd_guard_bind(env, node, invariant_substr, method, platform=None):
     if not IDENT_RE.match(method):
-        print(f"ERROR: method『{method}』非合法識別字", file=sys.stderr)
+        print(f"擋下:method『{method}』不是合法的方法名(只能用字母/數字/底線,不能數字開頭)", file=sys.stderr)
         return 2
     # 多平台:平台另帶(method 維持識別字、不含冒號),寫成 [test:平台:方法]。IDENT_RE 不放寬。
     ref = f"{platform}:{method}" if platform else method
@@ -5267,18 +5265,18 @@ def cmd_guard_bind(env, node, invariant_substr, method, platform=None):
     try:
         lines, _, e = load_raw_for_edit(path)
     except (ValueError, RuntimeError) as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
+        print(f"擋下:{ex}", file=sys.stderr)
         return 2
     target_idx = None
     for i in range(1, e):
         # 比對去掉 [test:..] 後的行(子字串不誤命中既有測試名)
         if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in TEST_REF_RE.sub("", lines[i]):
             if target_idx is not None:
-                print(f"ERROR: 『{invariant_substr}』命中多條 KEY 行,請給更精確子字串", file=sys.stderr)
+                print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
                 return 2
             target_idx = i
     if target_idx is None:
-        print(f"ERROR: {rel} 找不到含『{invariant_substr}』的 ★INVARIANT★ KEY 行", file=sys.stderr)
+        print(f"擋下:{rel} 裡找不到內容含『{invariant_substr}』的合約 KEY 行", file=sys.stderr)
         return 2
     line = lines[target_idx]
     m = TEST_REF_RE.search(line)
@@ -5306,7 +5304,7 @@ def cmd_guard_bind(env, node, invariant_substr, method, platform=None):
     try:
         atomic_write_verify(path, new_lines, f"[test:{ref}]", check)
     except (ValueError, RuntimeError) as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
+        print(f"擋下:{ex}", file=sys.stderr)
         return 2
     print(f"✓ 綁定 [test:{ref}] → {rel} 的 ★INVARIANT★")
     print("  下一步: lumos doctor — 方法須已存在於 code,否則 Check T 顯示懸空")
@@ -5345,7 +5343,7 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
     """宣告一條壞法配方進 kill_recipes + KEY 行補 [kill:recipes](同檔一次 atomic 寫)。"""
     import json
     if old == new:
-        print("ERROR: old 與 new 相同,配方無語意", file=sys.stderr)
+        print("擋下:要替換的舊字串和新字串一模一樣,這個突變配方等於沒改", file=sys.stderr)
         return 2
     rel = env.find(node)
     if rel is None:
@@ -5355,28 +5353,28 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
     try:
         lines, _, e = load_raw_for_edit(path)
     except (ValueError, RuntimeError) as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
+        print(f"擋下:{ex}", file=sys.stderr)
         return 2
     # 定位 KEY 行(去標記後比對,避免子字串誤中標記文字)
     target_idx = None
     for i in range(1, e):
         if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in INV_TAG_RE.sub("", lines[i]):
             if target_idx is not None:
-                print(f"ERROR: 『{invariant_substr}』命中多條 KEY 行,請給更精確子字串", file=sys.stderr)
+                print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
                 return 2
             target_idx = i
     if target_idx is None:
-        print(f"ERROR: {rel} 找不到含『{invariant_substr}』的 ★INVARIANT★ KEY 行", file=sys.stderr)
+        print(f"擋下:{rel} 裡找不到內容含『{invariant_substr}』的合約 KEY 行", file=sys.stderr)
         return 2
     # 解析綁定測試:--test 或 KEY 行唯一 [test:] ref;0 個 → 硬報(kill 驗的就是綁定)
     line = lines[target_idx]
     refs = invariant_test_refs(line)
     if test is None:
         if len(refs) == 0:
-            print("ERROR: 該合約無 [test:] 綁定(naked)——kill 驗的是綁定測試,先 guard bind", file=sys.stderr)
+            print("擋下:這條合約還沒綁測試;殺手測試驗的就是綁的那條測試,先用 lumos guard bind 綁上", file=sys.stderr)
             return 2
         if len(refs) > 1:
-            print(f"ERROR: 該合約綁多個測試({', '.join(refs)}),--test 指明哪一個", file=sys.stderr)
+            print(f"擋下:這條合約綁了好幾條測試({', '.join(refs)}),用 --test 指明要驗哪一條", file=sys.stderr)
             return 2
         test = refs[0]
     recipe = {"invariant": invariant_substr, "test": test, "file": file,
@@ -5385,11 +5383,11 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
         recipe["platform"] = platform
     recipes, err = _kill_read_recipes(path)
     if recipes is None:
-        print(f"ERROR: {err}", file=sys.stderr)
+        print(f"擋下:{err}", file=sys.stderr)
         return 2
     for r in recipes:
         if r.get("invariant") == invariant_substr and r.get("file") == file and r.get("old") == old:
-            print("ERROR: 重複配方(同 invariant 同 file/old),先手動移除舊條", file=sys.stderr)
+            print("擋下:同一條合約、同檔、同一個舊字串的突變配方已經有了,先把舊的那條手動拿掉", file=sys.stderr)
             return 2
     recipes.append(recipe)
     blob = json.dumps(recipes, ensure_ascii=False)
@@ -5436,7 +5434,7 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
     try:
         atomic_write_verify(path, new_lines, "[kill:recipes]", check)
     except (ValueError, RuntimeError) as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
+        print(f"擋下:{ex}", file=sys.stderr)
         return 2
     print(f"✓ kill 配方寫入 {rel}(invariant『{invariant_substr[:24]}…』, test={test})")
     print("  下一步: lumos guard kill 跑殺傷力驗證(worktree 隔離,弄壞→測試必須翻紅)")
@@ -5544,18 +5542,18 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
     path = env.vault / rel
     recipes, err = _kill_read_recipes(path)
     if recipes is None:
-        print(f"ERROR: {err}", file=sys.stderr)
+        print(f"擋下:{err}", file=sys.stderr)
         return 2
     if invariant_substr:
         recipes = [r for r in recipes if invariant_substr in r.get("invariant", "")]
     if not recipes:
-        print("ERROR: 無配方可跑(kill-add 先宣告;或子字串不匹配)", file=sys.stderr)
+        print("擋下:沒有任何突變配方可跑——先用 lumos kill-add 宣告,或檢查你給的片段對不對得到合約", file=sys.stderr)
         return 2
     repo_root = _repo_root_from_env(env)
     try:
         pdata = load_platforms(repo_root)
     except ValueError as ex:
-        print(f"ERROR: config 壞: {ex}", file=sys.stderr)
+        print(f"擋下:設定檔讀不了: {ex}", file=sys.stderr)
         return 2
     plats = pdata["platforms"]
     default_plat = pdata["default_platform"]
@@ -5589,8 +5587,8 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
             continue
         run_cmd = pentry.get("run_cmd")
         if not run_cmd:
-            print(f"ERROR: 平台 '{plat}' 未宣告 run_cmd(多平台=platforms.{plat}.run_cmd;"
-                  f"legacy=test.run_cmd)——kill 不可用", file=sys.stderr)
+            print(f"擋下:平台 '{plat}' 沒設定「怎麼跑測試」的指令,殺手測試跑不起來"
+                  f"(多平台設在 platforms.{plat}.run_cmd;單平台設在 test.run_cmd)", file=sys.stderr)
             return 2
         proot = Path(pentry["root"])
         commit = ""
@@ -5780,18 +5778,18 @@ def cmd_guard_audit(env, node, invariant_substr, model="sonnet", date=None):
     try:
         lines, _, e = load_raw_for_edit(path)
     except (ValueError, RuntimeError) as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
+        print(f"擋下:{ex}", file=sys.stderr)
         return 2
     target_idx = None
     for i in range(1, e):
         # 比對去掉 [test:]/[audit:] 後的行(子字串不誤命中既有標記內容)
         if INVARIANT_RE.match(lines[i].strip()) and invariant_substr in INV_TAG_RE.sub("", lines[i]):
             if target_idx is not None:
-                print(f"ERROR: 『{invariant_substr}』命中多條 KEY 行,請給更精確子字串", file=sys.stderr)
+                print(f"擋下:『{invariant_substr}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
                 return 2
             target_idx = i
     if target_idx is None:
-        print(f"ERROR: {rel} 找不到含『{invariant_substr}』的 ★INVARIANT★ KEY 行", file=sys.stderr)
+        print(f"擋下:{rel} 裡找不到內容含『{invariant_substr}』的合約 KEY 行", file=sys.stderr)
         return 2
     line = lines[target_idx]
     m = AUDIT_REF_RE.search(line)
@@ -5814,7 +5812,7 @@ def cmd_guard_audit(env, node, invariant_substr, model="sonnet", date=None):
     try:
         atomic_write_verify(path, new_lines, f"[audit:{stamp}]", check)
     except (ValueError, RuntimeError) as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
+        print(f"擋下:{ex}", file=sys.stderr)
         return 2
     print(f"✓ 留痕 [audit:{stamp}] → {rel} 的 ★INVARIANT★")
     print("  前提:這條合法性已由無脈絡的獨立 agent 判過(maker≠checker)。doctor Check T 不再報『未審』。")
@@ -6081,7 +6079,7 @@ def cmd_show(env, rel, body_only=False):
         text = p.read_text(encoding="utf-8-sig")  # -sig: 同 load_vault 慣例,BOM 不外洩進輸出
     except Exception as e:
         # load_vault 容忍讀檔失敗節點(壞 symlink/權限/race 刪檔)照進索引 → 重開檔須自防
-        print(f"ERROR: 讀檔失敗: {rel}: {e}", file=sys.stderr)
+        print(f"擋下:檔案讀不到({e}): {rel}", file=sys.stderr)
         return 2
     if body_only:
         _, text = split_frontmatter(text)  # 無 frontmatter → (None, 原文) → 印整檔
@@ -6341,12 +6339,12 @@ def _stale_days(n, today):
 
 def cmd_stale(env, match=None, candidate=False, legacy=False):
     if match is not None and not match.strip():          # NEW-1:空 --match 會 "" in c 恆真=全掃
-        print("ERROR: --match 不可為空字串", file=sys.stderr)
+        print("擋下:--match 要給關鍵字,不能是空的", file=sys.stderr)
         return 2
     if candidate and not match:                          # Finding 6:bare --candidate ≈ 列全部=噪音
-        print("ERROR: --candidate 必須配 --match <關鍵字>(例: stale --candidate --match DispatchLog)。\n"
-              "  語意=『改某流程時,哪些活躍 Verification 的 revalidate_when 提到該關鍵字 → 該重驗』;\n"
-              "  本圖譜每篇 Verification 都有 revalidate_when,不帶 --match = 列全部,無篩選意義。",
+        print("擋下:--candidate 要配 --match <關鍵字> 一起用。\n"
+              "  它的用途是「我要改某個流程,哪些驗證紀錄寫了改到這個就該重驗」;\n"
+              "  不給關鍵字等於列出全部,沒有篩選意義。例如:\n    lumos stale --candidate --match DispatchLog",
               file=sys.stderr)
         return 2
     if candidate:
@@ -6435,15 +6433,15 @@ def cmd_query(env, tags=None, no_tags=None, active=False, contract=False,
     tags = tags or []
     no_tags = no_tags or []
     if not (tags or no_tags or active or contract or linked):
-        print("ERROR: query 至少要帶一個條件(--tag/--no-tag/--active/--contract/--linked),"
-              "不帶條件=列全庫,無篩選意義(例: query --tag risk/金流 --active)。",
+        print("擋下:query 至少要給一個篩選條件(--tag/--no-tag/--active/--contract/--linked),"
+              "不給等於列出整個圖譜。例如:\n    lumos query --tag risk/金流 --active",
               file=sys.stderr)
         return 2
     scope = None
     if linked:
         anchor = env.find(linked)
         if anchor is None:
-            print(f"ERROR: 找不到筆記: {linked}", file=sys.stderr)
+            print(f"擋下:--linked 指的筆記在圖譜裡找不到: {linked}", file=sys.stderr)
             return 2
         out_e, in_e = env.edges
         scope = (set(out_e.get(anchor, ())) | set(in_e.get(anchor, ()))) - {anchor}
@@ -7045,7 +7043,7 @@ def cmd_export_html(env, out_path, standalone=False):
             try:
                 src = _fetch_text(url, vendor / f"{name}.min.js").replace("</script", "<\\/script")
             except Exception as e:
-                print(f"ERROR: --standalone 需抓 {name}(此機需一次網路): {e}", file=sys.stderr)
+                print(f"擋下:--standalone 模式要先下載 {name},這台機器至少要連一次網,現在抓不到: {e}", file=sys.stderr)
                 return 2
             html = html.replace(tag, f"<script>{src}</script>")
         html = html.replace(_FONT_LINKS, "<!-- standalone: 字體退化系統字(無外部 CDN) -->")
@@ -7099,7 +7097,7 @@ def fmt_scalar(key, value):
     v = value.strip()
     if key in DATE_KEYS:
         if not DATE_RE.match(v):
-            raise ValueError(f"{key} 需 YYYY-MM-DD,得到: {v}")
+            raise ValueError(f"{key} 要寫成 年-月-日(例如 2026-08-22),你給的是 {v}")
         return v  # bare,絕不加引號
     # YAML 型別劫持守衛: true/false/null/yes/no/~ 與純數字當 status 會被解析成 bool/num/null
     if v.lower() in ("true", "false", "null", "yes", "no", "on", "off", "~") or \
@@ -7125,7 +7123,7 @@ def edit_fm_scalar(fm_lines, key, value):
     if key in struct:
         s, e, kind = struct[key]
         if kind != "scalar":
-            raise ValueError(f"{key} 是 {kind} 型,set 只改純量(list 用 append,巢狀用 T3)")
+            raise ValueError(f"{key} 是{kind}型欄位,set 只能改單一值的欄位(清單用 lumos append;決策用 lumos decision-add)")
         fm[s] = f"{key}: {formatted}"
     else:
         # 插在開頭純量區之後(第一個 list/block key 之前,否則末尾)
@@ -7164,7 +7162,7 @@ def edit_fm_append(fm_lines, key, value):
     if key in struct:
         s, e, kind = struct[key]
         if kind != "list":
-            raise ValueError(f"{key} 是 {kind} 型,append 只加 list 項")
+            raise ValueError(f"{key} 是{kind}型欄位,append 只能加進清單型欄位")
         # dedup: 精確 full-target 比對(保留路徑;非子字串、非 basename-only)
         for j in range(s + 1, e + 1):
             existing = fm[j].strip()
@@ -7201,10 +7199,10 @@ def edit_fm_remove(fm_lines, key, value):
     tgt = link_target(value)
     struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
     if key not in struct:
-        raise ValueError(f"此筆記無 {key}")
+        raise ValueError(f"這篇筆記沒有 {key} 這個欄位")
     s, e, kind = struct[key]
     if kind != "list":
-        raise ValueError(f"{key} 是 {kind} 型,remove 只移除 list 項")
+        raise ValueError(f"{key} 是{kind}型欄位,remove 只能從清單型欄位拿掉項目")
     hits = []
     for j in range(s + 1, e + 1):
         existing = fm[j].strip()
@@ -7263,21 +7261,21 @@ def load_raw_for_edit(path: Path):
     回傳 (all_lines, fm_start, fm_end_exclusive)。fm = all_lines[1:fm_end]。"""
     raw = path.read_bytes()
     if raw.startswith(b"\xef\xbb\xbf"):
-        raise ValueError("T1 不寫 BOM 檔(慣例外),請用 obsidian CLI / 先正規化")
+        raise ValueError("這個檔開頭帶 BOM 標記,工具不寫這種檔;先把檔案存成不帶 BOM 的 UTF-8")
     if b"\r\n" in raw:
-        raise ValueError("此檔是 CRLF(慣例要求 LF)。Windows 常見=git autocrlf;"
-                         "修:確認 .gitattributes 已套用(vault 標 eol=lf)+ `git add --renormalize .`,"
-                         "或單檔 `dos2unix`。lumos 不靜默改行尾。")
+        raise ValueError("這個檔的換行是 Windows 式(CRLF),工具只寫 Unix 式(LF)。Windows 上常是 git autocrlf 造成的;"
+                         "修法:確認 .gitattributes 有套用(圖譜目錄標 eol=lf)再跑 git add --renormalize .,"
+                         "或單檔跑 dos2unix。工具不會偷偷幫你改行尾。")
     lines = raw.decode("utf-8").split("\n")
     if not lines or lines[0].strip() != "---":
-        raise ValueError("無 frontmatter,T1 不處理")
+        raise ValueError("這篇筆記開頭沒有欄位區塊(---),沒辦法改欄位")
     fm_end = None
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
             fm_end = i
             break
     if fm_end is None:
-        raise ValueError("frontmatter 未閉合")
+        raise ValueError("開頭欄位區塊沒收尾(有起頭的 --- 沒有結尾的 ---),先補上")
     return lines, 1, fm_end
 
 
@@ -7304,10 +7302,10 @@ def atomic_write_verify(path: Path, new_lines, key, expected_check):
             break
     fields, _, new_lint = parse_frontmatter(new_fm_lines)
     if not expected_check(fields):
-        raise RuntimeError(f"自驗失敗:{key} 寫入後值不符預期")
+        raise RuntimeError(f"寫完讀回來檢查,{key} 的值跟要寫的不一樣,這次寫入不算成功")
     introduced = set(new_lint) - orig_lint
     if introduced:
-        raise RuntimeError("自驗失敗:引入新 frontmatter 指紋:" + "; ".join(sorted(introduced)))
+        raise RuntimeError("寫完讀回來檢查,發現欄位區塊多了會讀錯的寫法,這次寫入不算成功:" + "; ".join(sorted(introduced)))
     import os
     tmp = path.with_suffix(path.suffix + ".lumos-tmp")
     try:
@@ -7429,15 +7427,15 @@ def cmd_decision_supersede(env, rel, match, by, ended=None):
     [P1]:ended 缺則自動補今日 + 同步 bump 頂層 updated(單次 atomic,供 E2 時序法)。"""
     import datetime
     if ended and not DATE_RE.match(ended):
-        raise ValueError(f"--ended 需 YYYY-MM-DD,得到: {ended}")
+        raise ValueError(f"--ended 要寫成 年-月-日(例如 2026-08-22),你給的是 {ended}")
     path = env.vault / rel
     lines, s_fm, e_fm = load_raw_for_edit(path)
     fm = lines[1:e_fm]
     loc = decisions_items(fm)
     if loc is None:
-        raise ValueError("此筆記無 decisions")
+        raise ValueError("這篇筆記還沒有任何決策紀錄(decisions)")
     if not loc[2]:  # block 存在但解析不到項目(Bug2:0-indent / 非標準縮排)
-        raise ValueError("decisions 區塊解析不到項目(本工具要求 2-space 縮排,不支援 0-indent/tab)")
+        raise ValueError("決策區塊(decisions)讀不出任何一條,通常是縮排不對:工具只認兩個空白的縮排,不認 tab 或不縮排")
     _, _, items, _, sub = loc
     pad = " " * sub
     needle = nfc(match)
@@ -7449,18 +7447,18 @@ def cmd_decision_supersede(env, rel, match, by, ended=None):
                 if any(re.match(rf"^{pad}id:\s*{re.escape(want)}\s*$", fm[i])
                        for i in range(st, en + 1))]
         if not hits:
-            raise ValueError(f"以 {match} 定址查無決策——該節點決策可能尚無 id,先跑 lumos decision-reindex {rel}")
+            raise ValueError(f"找不到編號 {match} 的決策,可能這篇的決策還沒編號;先跑:\n    lumos decision-reindex {rel}")
     else:
         hits = [(st, en) for (st, en) in items
                 if needle in nfc("\n".join(fm[st:en + 1]))]
         if not hits:
-            raise ValueError(f"找不到 content 含「{match}」的決策")
+            raise ValueError(f"找不到內容含「{match}」的決策")
         if len(hits) > 1:
             # [M1/R12] 選擇端唯一命中:first-match 會「先改錯項、再用錯項 id 精確驗證它改成功」
             cands = "; ".join(first_line(fm[st].split("content:", 1)[-1].strip(), 40)
                               for (st, _) in hits[:5])
-            raise ValueError(f"「{match}」命中 {len(hits)} 條決策,拒絕 first-match(防改錯項)。"
-                             f"候選: {cands} …改用更長子字串或 --match \"#dN\" 精確定址")
+            raise ValueError(f"「{match}」命中 {len(hits)} 條決策,分不清要改哪條,不敢亂猜。"
+                             f"候選: {cands} …改用更長的片段,或用 --match \"#dN\" 指定編號")
     st, en = hits[0]
     valid_line = None
     for i in range(st, en + 1):
@@ -7468,11 +7466,11 @@ def cmd_decision_supersede(env, rel, match, by, ended=None):
             valid_line = i
             break
     if valid_line is None:
-        raise ValueError("該決策無 valid 欄位(或縮排非標準 2-space),T3 不自動 supersede(請手動 / 確認結構)")
+        raise ValueError("這條決策沒有 valid 欄位(或縮排不是兩個空白),工具不敢自動翻案,請手動處理或先修結構")
     # Bug3: 已 superseded 不重插(免重複鍵)。同 sub_indent 已有 superseded_by → 拒
     for i in range(st, en + 1):
         if re.match(rf"^{pad}superseded_by:\s", fm[i]):
-            raise ValueError("該決策已有 superseded_by(已翻盤過),不重複 supersede;要改取代者請手動編輯")
+            raise ValueError("這條決策已經被翻案過了(有 superseded_by),不重複翻;要改成被誰取代請手動編輯")
     fm[valid_line] = f"{pad}valid: false"
     # [P1] ended 選填 → 缺則自動補今日(E2 時序法要 ended 才判得了「鄰居晚於翻案沒?」)
     if not ended:
@@ -7591,9 +7589,9 @@ def cmd_decision_reindex(env, rel=None, all_mode=False):
     fm = lines[1:e_fm]
     loc = decisions_items(fm)
     if loc is None:
-        raise ValueError("此筆記無 decisions")
+        raise ValueError("這篇筆記還沒有任何決策紀錄(decisions)")
     if not loc[2]:
-        raise ValueError("decisions 區塊解析不到項目(本工具要求 2-space 縮排,不支援 0-indent/tab)")
+        raise ValueError("決策區塊(decisions)讀不出任何一條,通常是縮排不對:工具只認兩個空白的縮排,不認 tab 或不縮排")
     _, _, items, _, sub = loc
     pad = " " * sub
     nxt = _max_decision_id(fm) + 1
@@ -7654,12 +7652,12 @@ def _ledger_append(path, obj):
     import json
     data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
     if len(data) > 4096:
-        raise ValueError(f"事件行 {len(data)}B 超過 4KB 上限,寫前拒絕(不截斷、不靜默破壞原子假設)")
+        raise ValueError(f"這筆事件有 {len(data)} 位元組,超過 4KB 上限,不寫(不截斷,免得寫一半)")
     fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
     try:
         written = os.write(fd, data)
         if written != len(data):
-            raise RuntimeError(f"帳本短寫({written}/{len(data)}B,疑磁碟滿)——本筆事件未完整落盤,重試前先查空間")
+            raise RuntimeError(f"帳本短寫:只寫進 {written}/{len(data)} 位元組,可能磁碟滿了——這筆沒完整寫入,重試前先查空間")
     finally:
         os.close(fd)
 
@@ -7688,7 +7686,7 @@ def rel_cascade_create(env, root_gid, node_rel):
         finally:
             os.close(fd)
         return cid
-    raise RuntimeError("cascade-id 同名重試逾上限(99)——目錄異常?")
+    raise RuntimeError("連續 99 次都撞到同名的 cascade 編號,目錄可能有問題")
 
 
 def _ledger_read(path):
@@ -7728,14 +7726,14 @@ def _ledger_fold(transitions):
 def _validate_cascade_id(cid):
     # [code-loop r1 A3] fullmatch 非 match——match+$ 會放過尾端換行(re 的 $ 容忍結尾 \n)
     if not CASCADE_ID_RE.fullmatch(cid) or ".." in cid:
-        raise ValueError(f"cascade-id 含非法字元(限 [A-Za-z0-9._-],擋 ../): {cid}")
+        raise ValueError(f"cascade 編號只能用字母、數字、點、底線、連字號(不能有 ../ 這種): {cid}")
 
 
 def _validate_from_gid(from_id):
     if re.fullmatch(r"d\d+", from_id.strip()):
-        raise ValueError(f"--from 需全域格式 <節點rel>#d<N>,裸 {from_id} 拒收(裸格式會讓折疊鍵跨節點誤合)")
+        raise ValueError(f"--from 要寫完整的 <筆記路徑>#d<編號>,只給裸的 {from_id} 不收(不帶路徑會跟別篇的同號決策搞混)")
     if not re.fullmatch(r".+#d\d+", from_id.strip()):
-        raise ValueError(f"--from 格式非 <節點rel>#d<N>: {from_id}")
+        raise ValueError(f"--from 格式要是 <筆記路徑>#d<編號>,你給的是: {from_id}")
 
 
 def _append_decision_ref(env, rel, field, ref):
@@ -7748,7 +7746,7 @@ def _append_decision_ref(env, rel, field, ref):
     #   strip_quotes 不反跳脫、CRLF 檔案守衛只認 \r\n 序列認不出裸 CR;合法 <rel>#dN 永不含這些。
     #   「凡控制字元一律拒」比枚舉個案完整(delta reviewer:漏 \r)。
     if '"' in ref or '\\' in ref or any(ord(c) < 0x20 for c in ref):
-        raise ValueError(f"decision_ref 含不可序列化字元(\"/\\/控制字元): {ref!r}")
+        raise ValueError(f"決策引用裡有不能用的字元(引號、斜線、控制字元): {ref!r}")
     path = env.vault / rel
     lines, s_fm, e_fm = load_raw_for_edit(path)
     fm = lines[1:e_fm]
@@ -7757,7 +7755,7 @@ def _append_decision_ref(env, rel, field, ref):
     if field in struct:
         s, e, kind = struct[field]
         if kind != "list":
-            raise ValueError(f"{field} 是 {kind} 型,不可 append decision_ref")
+            raise ValueError(f"{field} 是{kind}型欄位,沒辦法往裡面加決策引用")
         for j in range(s + 1, e + 1):
             if fm[j].lstrip().startswith("-") and strip_quotes(fm[j].lstrip()[1:].strip()) == ref:
                 return False   # exact 已存在
@@ -7786,15 +7784,15 @@ def cmd_rel_cascade_write(env, verb, neighbor, cascade_id, from_id, edge, by):
     _validate_from_gid(from_id)
     nrel = env.find(neighbor)
     if nrel is None:
-        raise ValueError(f"找不到鄰居節點: {neighbor}")
+        raise ValueError(f"找不到相鄰的那篇筆記: {neighbor}")
     p = _rel_cascade_dir(env) / (cascade_id + ".jsonl")
     if not p.exists():
-        raise ValueError(f"cascade 檔不存在: {cascade_id}——帳本由 decision-supersede 觸發端建立,confirm/prune 永不建檔")
+        raise ValueError(f"找不到 cascade 帳本 {cascade_id}——帳本只會在 decision-supersede 翻案時建立,confirm/prune 不會自己建")
     header, _ = _ledger_read(p)
     if header is None:
-        raise ValueError("header 損毀/不合法,寫前驗證拒(該 cascade 交 resume 標不可恢復+補網 E2 兜底)")
+        raise ValueError("cascade 帳本的開頭壞了,不寫;用 resume 會把它標成不可恢復,後續靠健檢的 E2 補抓")
     if header.get("root_decision_id") != from_id.strip():
-        raise ValueError(f"--from 不屬本 cascade(header root={header.get('root_decision_id')});v1 全鏈同源")
+        raise ValueError(f"--from 指的決策不屬本 cascade(這本帳的起點是 {header.get('root_decision_id')}),一本帳只追同一條翻案鏈")
     state = "confirmed" if verb == "confirm" else "pruned"
     _ledger_append(p, {"event": "transition", "ts": _utc_ts(), "neighbor": nrel,
                        "edge_type": edge, "from_decision_id": from_id.strip(),
@@ -7883,7 +7881,7 @@ def cmd_impact_node(node_arg, repo=None, as_json=False):
     start = Path(repo).resolve() if repo else Path.cwd()
     vault = find_vault(start)
     if vault is None:
-        print("ERROR: 找不到 vault(docs/*-knowledge)", file=sys.stderr)
+        print("擋下:目前目錄底下找不到知識圖譜(docs/*-knowledge)", file=sys.stderr)
         return 2
     env = Env(vault)
     rel = env.find(node_arg)
@@ -7917,7 +7915,7 @@ def cmd_rel_cascade_resume(env, cascade_id):
     _validate_cascade_id(cascade_id)
     p = _rel_cascade_dir(env) / (cascade_id + ".jsonl")
     if not p.exists():
-        raise ValueError(f"cascade 檔不存在: {cascade_id}")
+        raise ValueError(f"找不到 cascade 帳本: {cascade_id}")
     header, trans = _ledger_read(p)
     if header is None:
         print(f"✗ {cascade_id}: header 損毀,root 不可恢復——本 cascade 放棄,交補網 E2 兜底", file=sys.stderr)
@@ -7970,23 +7968,23 @@ TEMPLATES = {
 # new 後印出的「寫入當下教學」:符號行怎麼填 + 合約鏈,讓正確格式在執行 CLI 的此刻就在 context。
 NEW_HINT = {
     "system": [
-        "填 summary 符號行: FLOW:<流程 a→b→c>  KEY:<關鍵概念/欄位>  DEP:[[依賴模組]]  TEST:<測試狀態>",
-        "合約用 KEY 行前綴: ★INVARIANT★=業務合約(改=breaking),必綁 [test:測試名] 再經獨立 [audit:];★DEBT★=偶然可改",
-        "  └ 綁定別手寫: lumos guard bind <node> \"<KEY子字串>\" <測試名> / guard audit <node> \"<KEY子字串>\"",
-        "可逆性: 不可逆動作(prod遷移/上架)標 ★IRREVERSIBLE★ + [rollback:decisions];改了難救標 ★CHECKPOINT★;外部不可逆(信已送/下游已消費)改用 [guard:decisions] 記冪等鍵/核可閘([guard:] 僅對 ★IRREVERSIBLE★ 生效;屬可逆性軸,與 lumos guard bind 的合約軸正交)",
-        "組合覆蓋: 最重的鐵則(金額/權限/不可逆)在 ★INVARIANT★ 之後標 ★COMBO★ → doctor Check K 軟提醒補組合測試(別只測 happy-path)",
-        "aliases: 同義詞/縮寫/跨域說法(進 BM25F 權重 3.5)——來源限真實出現過的說法;沒有就留 [](湊數別名污染檢索)",
+        "骨架建好了,摘要那幾行還是空的,要自己填:FLOW:<流程 a→b→c>  KEY:<關鍵概念/欄位>  DEP:[[依賴模組]]  TEST:<測試狀態>",
+        "要標「動了會壞」的合約,寫在 KEY 行最前面:★INVARIANT★ 是業務合約(改了就是破壞性變更),一定要綁測試 [test:測試名],再讓不知道脈絡的人審過留 [audit:];★DEBT★ 是可以改的技術債",
+        "  綁測試、留審計別手改檔案,用指令:\n    lumos guard bind <節點> \"<KEY 片段>\" <測試名>\n    lumos guard audit <節點> \"<KEY 片段>\"",
+        "牽涉做了就回不去的動作(正式環境遷移、上架)要標 ★IRREVERSIBLE★ 並加 [rollback:decisions] 寫怎麼退;改了難救但還救得回的標 ★CHECKPOINT★;退不了的外部動作(信已寄、下游已吃)改用 [guard:decisions] 寫怎麼防重複",
+        "最重要的合約(牽涉金額、權限、不可逆)在 ★INVARIANT★ 後面再加 ★COMBO★,健檢會提醒你多測幾種組合情境,別只測最順的那條路",
+        "aliases 寫「別人可能怎麼稱呼這件事」(同義詞、縮寫、跨領域說法),會影響搜尋;只能寫真的出現過的說法,亂湊反而讓搜尋變差,沒有就留 []",
     ],
     "issue": [
-        "填 summary 符號行: FLAG:<TECHNICAL/DECISION/ORIGIN>  DECISION:<決策簡述>  KEY:<關鍵發現>",
-        "aliases: 症狀語(人怎麼描述這問題)/縮寫/舊名——來源限真實出現過的說法;沒有就留 [](湊數別名污染檢索)",
+        "骨架建好了,摘要那幾行還是空的,要自己填:FLAG:<TECHNICAL/DECISION/ORIGIN 三選一>  DECISION:<決策簡述>  KEY:<關鍵發現>",
+        "aliases 寫「大家實際上怎麼描述這個問題」(症狀語、縮寫、舊名),只寫真的出現過的說法,沒有就留 []",
     ],
     "verification": [
-        "填 valid_under:<此驗證在什麼前提下成立>  revalidate_when:<改到什麼時該重驗>",
-        "從對應 Systems 用 verified_by 回掛本篇(或 lumos sync-verified-by 補);summary 可選 TEST:/VERIFY:",
+        "填 valid_under:<這個驗證在什麼前提下才算數>  revalidate_when:<改到什麼時候該重新驗>",
+        "讓它驗證的 Systems 筆記用 verified_by 連回這篇(或事後跑 lumos sync-verified-by 補),不然只有單向連結,健檢會抓;摘要可選填 TEST:/VERIFY:",
     ],
     "project": [
-        "計劃節點: 落地的 Verification 用 plan_refs 回指本節點(意圖鏈,doctor Check 4 把關)",
+        "這個計劃做完後,落地的驗證紀錄要用 plan_refs 連回這篇,不然工具追不到計劃有沒有被驗證過",
     ],
 }
 
@@ -8116,10 +8114,10 @@ def cmd_archive(env, days, apply, today):
     print(f"lumos archive — vault: {env.vault}")
     print(f"  cutoff: {cutoff} (--days {days})  mode: {'APPLY' if apply else 'DRY-RUN(--apply 真執行)'}")
     if repo_root is None:
-        print("  ⚠ 無法定位 repo root → 活守衛護欄停用(本次純按年齡歸檔)")
+        print("  提醒:找不到專案根目錄,沒辦法查哪些驗證還有測試守著,這次只看年齡歸檔")
     if guards_all_dead:
-        print("  ⚠ ★INVARIANT★ 綁定的測試都不在 code(守衛已刪/裸合約)→ 活守衛護欄本次停用"
-              "(0 受護 ≠ 全部都能放心歸檔)")
+        print("  提醒:合約綁的測試在程式碼裡一個都找不到(被刪了或根本沒綁),沒辦法判斷哪些驗證還有守衛"
+              "(這不代表全部都能放心歸檔)")
     if protected:
         print(f"  活守衛護欄:{len(protected)} 篇早於 cutoff 但仍背書存活守衛(綁定測試還在 code)→ 保留不歸檔")
         for rel, backs in protected:
@@ -8303,14 +8301,14 @@ def cmd_teardown(yes=False, source=None):
             ["git", "rev-parse", "--show-toplevel"], text=True,
             stderr=subprocess.DEVNULL).strip())
     except Exception:
-        print("ERROR: 非 git 目錄,teardown 需可靠 repo root(不 fallback cwd)", file=sys.stderr)
+        print("擋下:這裡不是 git 專案,拆除需要確定的專案根目錄,不會拿目前目錄猜", file=sys.stderr)
         return 2
     src = _lumos_src(source)
     if root.resolve() == src.resolve():
-        print("ERROR: 當前就是 Lumos 來源本身,teardown 拒絕執行", file=sys.stderr)
+        print("擋下:你現在就在 Lumos 工具鏈的來源 repo 裡,不能在這裡拆它自己", file=sys.stderr)
         return 2
     if _selfdelete_risk(root):   # Windows 自刪(見 _selfdelete_risk)——在任何 mutation 之前擋
-        print("ERROR: Windows 上不能用專案自帶的那份 lumos 拆自己"
+        print("擋下:Windows 上不能用專案自帶的那份 lumos 拆它自己"
               f"({Path(__file__).resolve()})——最後刪 vendored 時會刪到執行中的檔案,"
               "留下拆一半的狀態。", file=sys.stderr)
         print("  改用全域指令重跑:  lumos teardown", file=sys.stderr)
@@ -8320,7 +8318,7 @@ def cmd_teardown(yes=False, source=None):
     # 確認——★拒絕/取消前零 mutation★(std F13)
     if not yes:
         if not sys.stdin.isatty():
-            print("ERROR: 非互動環境且未加 --yes,拒絕 teardown。加 --yes 確認。", file=sys.stderr)
+            print("擋下:這不是互動式終端、沒辦法問你確認,又沒加 --yes,不拆。確定要拆就加 --yes", file=sys.stderr)
             return 2
         print("teardown 將拆【當前 repo 專案層】(pre-commit/pre-push 閘、CLAUDE.md 注入、vendored 工具)")
         print("  +【機器全域】(~/.local/bin/lumos、user-scope skills、~/.claude 全域 hooks)。")
@@ -8335,8 +8333,8 @@ def cmd_teardown(yes=False, source=None):
             # 對齊 cmd_deinit 與 _confirm_tty 的既有硬化(同一現場,Windows 真機踩過):
             # 破壞性操作安全預設=拒絕(rc2,同上面非互動分支),不是往下做。
             # ★不要拿 --yes 當解法★——那等於跳過確認直接執行破壞性操作。
-            print("ERROR: 讀不到確認輸入(stdin EOF),拒絕 teardown。"
-                  "確定要拆再加 --yes。", file=sys.stderr)
+            print("擋下:等不到你的確認輸入,不拆。"
+                  "確定要拆再加 --yes", file=sys.stderr)
             return 2
         if ans not in ("y", "yes"):
             print("已取消(未改動)。")
@@ -8363,17 +8361,17 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
             ["git", "rev-parse", "--show-toplevel"], text=True,
             stderr=subprocess.DEVNULL).strip())
     except Exception:
-        print("ERROR: 非 git 目錄,deinit 需可靠 repo root(不 fallback cwd)", file=sys.stderr)
+        print("擋下:這裡不是 git 專案,移除需要確定的專案根目錄,不會拿目前目錄猜", file=sys.stderr)
         return 2
     # pre-flight 守衛①:來源 repo 自我保護(對齊 cmd_update 的 root==src → return 2)
     src = _lumos_src(source)
     if root.resolve() == src.resolve():
-        print("ERROR: 當前就是 Lumos 來源本身,deinit 拒絕執行", file=sys.stderr)
+        print("擋下:你現在就在 Lumos 工具鏈的來源 repo 裡,不能在這裡移除它自己", file=sys.stderr)
         return 2
     # ★dry-run 例外(2026-08-02 代碼審 r2)★:純預覽、零 mutation,不會走到刪自己那一步,
     # 擋它只是誤傷合法的唯讀操作(而且使用者正想用它看看會動到什麼)。
     if not dry_run and _selfdelete_risk(root):   # Windows 自刪——mutation 之前擋
-        print("ERROR: Windows 上不能用專案自帶的那份 lumos 拆自己"
+        print("擋下:Windows 上不能用專案自帶的那份 lumos 拆它自己"
               f"({Path(__file__).resolve()})——最後刪 vendored 時會刪到執行中的檔案,"
               "留下拆一半的狀態。", file=sys.stderr)
         print("  改用全域指令重跑:  lumos deinit", file=sys.stderr)
@@ -8408,7 +8406,7 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
         return 0
     if will_delete_vault and not yes:
         if not sys.stdin.isatty():
-            print("ERROR: 非互動環境(stdin 非 tty)且未加 --yes,拒絕刪圖譜。加 --yes 確認。",
+            print("擋下:這不是互動式終端、沒辦法問你確認,又沒加 --yes,不刪圖譜。確定要刪就加 --yes",
                   file=sys.stderr)
             return 2
         files = [f for f in vault.rglob("*") if f.is_file()]
@@ -8423,7 +8421,7 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
         except EOFError:
             # isatty() 在某些終端/Windows 回 True 但 stdin 其實 EOF → 讀不到確認。
             # 破壞性操作安全預設:拒刪(對齊上面非互動 rc2)。
-            print("ERROR: 讀不到確認輸入(stdin EOF),拒絕刪圖譜。加 --yes 確認。", file=sys.stderr)
+            print("擋下:等不到你的確認輸入,不刪圖譜。確定要刪再加 --yes", file=sys.stderr)
             return 2
         if ans != "y":
             print("已取消。")
@@ -8835,10 +8833,10 @@ def _pull_source_or_abort(src, allow_stale=False):
     if allow_stale:
         print("  ⚠ --allow-stale:pull 失敗,明示沿用現有來源繼續", file=sys.stderr)
         return 0
-    print(f"ERROR: 來源 {src} 拉不到最新(非 ff / 網路不通 / 工作區擋住),已中止——\n"
-          f"  不拿可能過期的來源覆蓋你的專案(靜默降版是本專案咬過兩次的坑)。\n"
-          f"  先處理來源:cd {src} && git status && git pull --ff-only\n"
-          f"  確定要用現有來源:重跑並加 --allow-stale", file=sys.stderr)
+    print(f"擋下:工具鏈來源拉不到最新版(可能是網路不通、有本地改動擋住、或歷史分岔),先停。\n"
+          f"  不會拿可能過期的來源蓋掉你的專案——默默裝到舊版這個坑踩過兩次。\n"
+          f"  先去來源那邊處理:\n    cd {src} && git status && git pull --ff-only\n"
+          f"  確定就要用現在這份來源:重跑並加 --allow-stale", file=sys.stderr)
     return None
 
 
@@ -8849,8 +8847,8 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
     import subprocess, shutil, filecmp
     installer = src / "scripts" / "install-graph-toolchain.sh"  # 仍作來源有效性探針(薄殼亦在)
     if not installer.exists():
-        print(f"ERROR: 找不到 Lumos 來源 {src}（無 scripts/install-graph-toolchain.sh）\n"
-              f"  用 --source <path> 指定、設 $LUMOS_HOME、或 clone 到 ~/harness/lumos-toolchain",
+        print(f"擋下:找不到 Lumos 工具鏈的來源({src} 底下沒有安裝腳本)。\n"
+              f"  三種解法擇一:--source <路徑> 指定、設環境變數 $LUMOS_HOME、或 clone 到 ~/harness/lumos-toolchain",
               file=sys.stderr)
         return None
     if not no_pull:
@@ -8904,7 +8902,7 @@ def cmd_update(source=None, no_pull=False, allow_stale=False):
     src = _lumos_src(source)
     vault = find_vault(Path.cwd())
     if vault is None:
-        print("ERROR: 當前目錄找不到 docs/*-knowledge 專案 vault", file=sys.stderr)
+        print("擋下:目前目錄底下找不到知識圖譜(docs/*-knowledge)", file=sys.stderr)
         return 2
     root = vault.parent.parent  # docs/<slug>-knowledge → docs → 專案 root
     slug = vault.name[:-len("-knowledge")] if vault.name.endswith("-knowledge") else vault.name
@@ -9161,7 +9159,7 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
         print(f"[1/3] clone Lumos → {home} …")
         home.parent.mkdir(parents=True, exist_ok=True)
         if subprocess.run(["git", "clone", url, str(home)]).returncode != 0:
-            print(f"ERROR: clone 失敗。手動 `git clone {url} {home}` 後重試", file=sys.stderr)
+            print(f"擋下:自動下載失敗。手動跑這行再重試:\n    git clone {url} {home}", file=sys.stderr)
             return 2
     # 2) 全域 lumos → 指向 Lumos 來源(非 vendored copy);install --force 已連帶裝 user-scope skills
     print("[2/3] 裝全域 lumos(+ user-scope skills)…")
@@ -9169,7 +9167,7 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
     rc2 = subprocess.run([sys.executable, str(home / "scripts" / "lumos"),
                           "install", "--force"]).returncode
     if rc2 != 0:                                  # std F8:不吞錯
-        print(f"  ⚠ install --force 失敗 rc={rc2}", file=sys.stderr)
+        print(f"  提醒:重新安裝(install --force)失敗,回傳碼 {rc2}", file=sys.stderr)
         failures.append("install")
     # 3) 專案層自動接線(四分流;git toplevel 才算專案)
     try:
@@ -9424,18 +9422,18 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     exit 0=收斂 / 1=未過 / 2=帳面損壞或參數錯。"""
     from collections import OrderedDict
     if n_badlines:
-        print(f"ERROR: canary-log 含 {n_badlines} 行不可解析——disposal 閘 fail-closed"
-              "(壞行使「判定輪=最後一輪」不可信;修帳或隔離壞行後再問)"
+        print(f"擋下:審查記錄檔有 {n_badlines} 行讀不懂,沒辦法確定「最後一輪」是哪輪,先不判"
+              "(修好或搬走壞行再問)"
               + (f"——壞行行號: {bad_linenos}" if bad_linenos else "")
-              + "(帳在 git 版控下,diff 定位一分鐘可修;全帳域檢查=共用帳完整性,同 settle 前例)",
+              + "(檔案有 git 版控,對照上一版找出壞行一分鐘就能修)",
               file=sys.stderr)
         return 2
     # r3 修:round 與 round-less 混用=rc2(同 panel 混用守衛精神;原樣混排會落進
     # 「非連續重現」的誤導訊息,或與內部 __seq 鍵互動出偽輪)
     n_round_ = sum(1 for r in rounds if "round" in r)
     if rounds and 0 < n_round_ < len(rounds):
-        print("ERROR: 本 loop 混用帶 round 與無 round 的記錄——disposal 判定輪不可定義,"
-              "統一補 --round 或全部不帶", file=sys.stderr)
+        print("擋下:這個審查編號的記錄有的帶輪次、有的不帶,分不出哪輪是判定輪;"
+              "統一補 --round,或全部不帶", file=sys.stderr)
         return 2
     groups = OrderedDict()
     for r in rounds:
@@ -9447,7 +9445,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
             continue
         if rid_.startswith("__"):
             # r3 修(3 席重疊):防舊帳/手改帳撞內部鍵(寫側已擋新寫入,讀側防守舊資料)
-            print(f"ERROR: 帳面 round-id {rid_!r} 撞內部保留字首 __(手改帳或舊版寫入)", file=sys.stderr)
+            print(f"擋下:記錄裡有輪次編號 {rid_!r} 用了工具保留的 __ 字首(手改過或舊版寫的),先改掉", file=sys.stderr)
             return 2
         if rid_ in groups and next(reversed(groups)) != rid_:
             # 同 panel 守衛:round-id 被其他輪隔開後重現=append-only 帳次序損壞
@@ -9481,7 +9479,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     # ── ② 處置集合(輪級重算,不信寫側) ──
     carriers = [r for r in latest if "findings_set" in r]
     if len(carriers) > 1:
-        print(f"ERROR: 判定輪 {rid} 有 {len(carriers)} 筆帶處置帳(每輪至多一筆;同 clusters 慣例)", file=sys.stderr)
+        print(f"擋下:第 {rid} 輪有 {len(carriers)} 筆記錄都帶了處置結果,一輪只能有一筆", file=sys.stderr)
         return 2
     carrier = carriers[0] if carriers else None
     if carrier is None:
@@ -9896,16 +9894,16 @@ def cmd_mutate(diff_range=None, repo=None, as_json=False, budget=None):
     import shutil
     import hashlib
     if not diff_range:
-        print("ERROR: mutate 需 --diff <range>", file=sys.stderr)
+        print("擋下:mutate 要用 --diff <起點..終點> 指定要變異哪段改動", file=sys.stderr)
         return 2
     root = _anchor_repo_root(repo)
     if root is None:
-        print("ERROR: 找不到 repo root", file=sys.stderr)
+        print("擋下:找不到 git 專案根目錄", file=sys.stderr)
         return 2
     cap = int(budget) if budget else _MUTATE_CAP_DEFAULT
     targets = _mutate_diff_targets(root, diff_range)
     if targets is None:
-        print(f"ERROR: git diff 失敗(range={diff_range})", file=sys.stderr)
+        print(f"擋下:git 算不出這段差異,確認起點終點存不存在: {diff_range}", file=sys.stderr)
         return 2
     # 選測:對原始 diff range 跑 testmap affected 取聯集
     tm = subprocess.run([sys.executable, str(Path(__file__).resolve()), "testmap", "affected",
@@ -9942,7 +9940,7 @@ def cmd_mutate(diff_range=None, repo=None, as_json=False, budget=None):
             r0 = subprocess.run(["git", "-C", str(root), "worktree", "add", "--detach", "-q",
                                  str(wt0), "HEAD"], capture_output=True, text=True)
             if r0.returncode != 0:
-                print(f"ERROR: worktree 建立失敗: {r0.stderr[:200]}", file=sys.stderr)
+                print(f"擋下:建不出臨時工作副本(git worktree): {r0.stderr[:200]}", file=sys.stderr)
                 return 2
             for tst in sorted(tests_for):
                 tp = wt0 / tst
@@ -9952,11 +9950,11 @@ def cmd_mutate(diff_range=None, repo=None, as_json=False, budget=None):
                     br = subprocess.run([sys.executable, str(tp)], cwd=str(wt0),
                                         capture_output=True, text=True, timeout=300)
                 except subprocess.TimeoutExpired:
-                    print("ERROR: baseline 測試逾時——選測集過重,--mutation-budget 縮或改 per-file 測試",
+                    print("擋下:還沒開始變異,光跑一次基準測試就超時了——選到的測試太重,用 --mutation-budget 縮小範圍,或改成逐檔測試",
                           file=sys.stderr)
                     return 2
                 if br.returncode != 0:
-                    print("ERROR: baseline 非全綠(選測集在乾淨樹已紅/flaky)——殺率不可信,abort",
+                    print("擋下:還沒變異,基準測試在乾淨的程式碼上就已經紅了(或不穩定),這樣算出來的殺率不能信,先停",
                           file=sys.stderr)
                     return 2
         finally:
@@ -9976,7 +9974,7 @@ def cmd_mutate(diff_range=None, repo=None, as_json=False, budget=None):
             r = subprocess.run(["git", "-C", str(root), "worktree", "add", "--detach", "-q",
                                 str(wt), "HEAD"], capture_output=True, text=True)
             if r.returncode != 0:
-                print(f"ERROR: worktree 建立失敗: {r.stderr[:200]}", file=sys.stderr)
+                print(f"擋下:建不出臨時工作副本(git worktree): {r.stderr[:200]}", file=sys.stderr)
                 return 2
             # 套變異(baseline 已在迴圈外驗過)
             (wt / m["file"]).write_text(m["_src"], encoding="utf-8")
@@ -10955,16 +10953,16 @@ def _compose_metrics_mode(repo, as_json, update_baseline, audit=False):
         with open(cfg_path, encoding="utf-8") as fh:
             cfg = json.load(fh)
     except Exception as e:
-        print(f"ERROR: compose-metrics.json 解析失敗: {e}", file=sys.stderr)
+        print(f"擋下:compose-metrics.json 讀不了(JSON 格式壞了?): {e}", file=sys.stderr)
         return 2
 
     if not isinstance(cfg, dict) or "modules" not in cfg:
-        print("ERROR: compose-metrics.json 必須是 dict 且含 modules 鍵", file=sys.stderr)
+        print("擋下:compose-metrics.json 最外層要是物件、而且要有 modules 這個鍵", file=sys.stderr)
         return 2
 
     for entry in cfg["modules"]:
         if not isinstance(entry, dict) or not all(k in entry for k in ("name", "metrics_dir", "reports_dir")):
-            print("ERROR: compose-metrics.json 每條 module 必須含 name/metrics_dir/reports_dir", file=sys.stderr)
+            print("擋下:compose-metrics.json 裡每個 module 都要有 name、metrics_dir、reports_dir 三個欄位", file=sys.stderr)
             return 2
 
     def _agg_subset(mod):
@@ -11126,14 +11124,14 @@ def _lint_watch_mode(repo_root, as_json):
             with open(cfg_path, encoding="utf-8") as fh:
                 entries = json.load(fh)
         except Exception as e:
-            print(f"ERROR: lint-watch.json 解析失敗: {e}", file=sys.stderr)
+            print(f"擋下:lint-watch.json 讀不了(JSON 格式壞了?): {e}", file=sys.stderr)
             return 2
         if not isinstance(entries, list):
-            print("ERROR: lint-watch.json 必須是 JSON 陣列", file=sys.stderr)
+            print("擋下:lint-watch.json 最外層要是陣列", file=sys.stderr)
             return 2
         for entry in entries:
             if not isinstance(entry, dict) or not all(k in entry for k in ("name", "registry", "current")):
-                print("ERROR: lint-watch.json 每條必須含 name/registry/current", file=sys.stderr)
+                print("擋下:lint-watch.json 裡每一條都要有 name、registry、current 三個欄位", file=sys.stderr)
                 return 2
 
     candidates, failed, checked = [], [], 0
@@ -11204,7 +11202,7 @@ def _cochange_load_config(repo_root):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
-                raise ValueError("必須是 JSON object")
+                raise ValueError("內容要是一個 JSON 物件")
             for k in ("min_support", "min_confidence", "max_changeset"):
                 if k in data:
                     cfg[k] = data[k]
@@ -11303,14 +11301,14 @@ def cmd_cochange_rules(repo=None, show_all=False, as_json=False):
     import json
     root = _cochange_repo_root(repo)
     if root is None:
-        print("ERROR: 找不到 git repo(--repo 指定或在 repo 內執行)", file=sys.stderr)
+        print("擋下:找不到 git 專案,請在專案裡執行,或用 --repo 指定", file=sys.stderr)
         return 2
     cfg, notes = _cochange_load_config(root)
     for n in notes:
         print(n)
     rules, n_txn, n_files, err = _cochange_mine(root, cfg)
     if rules is None:
-        print(f"ERROR: {err}", file=sys.stderr)
+        print(f"擋下:{err}", file=sys.stderr)
         return 2
     out = []
     for (a, b), (conf, sup) in rules.items():
@@ -11334,15 +11332,15 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
     import json
     import subprocess as sp
     if not staged and not diff_range:
-        print("ERROR: 需指定 --staged 或 --diff <A..B>", file=sys.stderr)
+        print("擋下:要告訴工具看哪段改動:--staged(暫存區)或 --diff <起點..終點>", file=sys.stderr)
         return 2
     if diff_range and diff_range.startswith("-"):
         # 同 pitfalls/impact-diff:'-' 開頭值會被 git 誤認成選項,查詢命令 rc2 拒收
-        print("ERROR: --diff 不接受以 '-' 開頭的值", file=sys.stderr)
+        print("擋下:--diff 的值不能用 - 開頭(會被當成選項)", file=sys.stderr)
         return 2
     root = _cochange_repo_root(repo)
     if root is None:
-        print("ERROR: 找不到 git repo(--repo 指定或在 repo 內執行)", file=sys.stderr)
+        print("擋下:找不到 git 專案,請在專案裡執行,或用 --repo 指定", file=sys.stderr)
         return 2
     cfg, notes = _cochange_load_config(root)
     for n in notes:
@@ -11355,7 +11353,7 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
             upto = base
     rules, _t, _f, err = _cochange_mine(root, cfg, upto=upto)
     if rules is None:
-        print(f"ERROR: {err}", file=sys.stderr)
+        print(f"擋下:{err}", file=sys.stderr)
         return 2
     if diff_range:
         cmd = ["git", "-C", str(root), "-c", "core.quotePath=off",
@@ -11365,7 +11363,7 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
                "diff", "--cached", "--name-only"]
     d = sp.run(cmd, capture_output=True, text=True)
     if d.returncode != 0:
-        print(f"ERROR: {(d.stderr or 'git diff 失敗').strip()}", file=sys.stderr)
+        print(f"擋下:git 算不出差異: {(d.stderr or '').strip() or '原因不明'}", file=sys.stderr)
         return 2
     changed = {ln.strip() for ln in d.stdout.splitlines() if ln.strip()}
     changed = {f for f in changed if not _cochange_excluded(f, cfg["exclude"])}
@@ -11722,10 +11720,10 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
         r = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "-U3", diff_range],
                            capture_output=True, text=True, cwd=str(repo_root))
     except FileNotFoundError:
-        print("ERROR: 無 git", file=sys.stderr)
+        print("擋下:這台機器找不到 git 指令", file=sys.stderr)
         return None
     if r.returncode != 0:
-        print(f"ERROR: git diff {diff_range} 失敗: {r.stderr.strip()}", file=sys.stderr)
+        print(f"擋下:git 算不出 {diff_range} 這段差異: {r.stderr.strip()}", file=sys.stderr)
         return None
     added = {}
     claims = []
@@ -11968,15 +11966,15 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
         if diff.startswith("-"):
             # --diff 值直接進 git 當 positional;'-' 開頭會被 git 誤認成選項(可寫任意檔,
             # 如 --output=<path>——r2 panel major 實測驗證)。查詢命令慣例=usage-error rc2。
-            print("ERROR: --diff 不接受以 '-' 開頭的值", file=sys.stderr)
+            print("擋下:--diff 的值不能用 - 開頭(會被當成選項)", file=sys.stderr)
             return 2
         return _pitfall_diff_mode(diff, repo_root, as_json, no_lint)
     if md is None:
-        print("ERROR: pitfalls 需 <md檔> 或 --diff <range>", file=sys.stderr)
+        print("擋下:pitfalls 要給一個 .md 檔,或用 --diff <起點..終點> 指定改動範圍", file=sys.stderr)
         return 2
     mp = Path(md)
     if not mp.is_file():
-        print(f"ERROR: 找不到檔案: {md}", file=sys.stderr)
+        print(f"擋下:找不到這個檔案: {md}", file=sys.stderr)
         return 2
     text = mp.read_text(encoding="utf-8-sig")
     corpus = _pitfall_strip_spec(text)
@@ -12048,7 +12046,7 @@ def cmd_test_layers(diff=None, repo=None, as_json=False):
     import json
     import subprocess
     if not diff:
-        print("ERROR: test-layers 需 --diff <range>", file=sys.stderr)
+        print("擋下:test-layers 要用 --diff <起點..終點> 指定改動範圍", file=sys.stderr)
         return 2
     if diff.startswith("-"):
         # --diff 值直接進 git 當 positional;'-' 開頭會被 git 誤認成選項(可寫檔),
@@ -12363,7 +12361,7 @@ _TESTMAP_EMPTY = {"map_built_at": None, "built_at_commit": None, "stale": False,
 
 def cmd_testmap_affected(diff=None, repo=None, as_json=False):
     if not diff:
-        print("ERROR: testmap affected 需 --diff <range>", file=sys.stderr)
+        print("擋下:testmap affected 要用 --diff <起點..終點> 指定改動範圍", file=sys.stderr)
         return 2
     try:
         return _testmap_affected_inner(diff, repo, as_json)
@@ -12680,7 +12678,7 @@ def cmd_ci_wait(env, timeout=600.0, repo_dir=None, sha=None, branch=None,
 
     root = repo_dir or _anchor_repo_root(None)
     if root is None or not Path(root).is_dir():
-        print(f"ERROR: --repo-dir 需為存在的目錄: {repo_dir!r}", file=sys.stderr)
+        print(f"擋下:--repo-dir 指的目錄不存在: {repo_dir!r}", file=sys.stderr)
         return 2
     enabled, cfg = _ci_config(root)
     if not enabled:
@@ -12785,7 +12783,7 @@ def cmd_ci_status(env, repo_dir=None, as_json=False):
     import datetime
     root = repo_dir or _anchor_repo_root(None)
     if root is None or not Path(root).is_dir():
-        print(f"ERROR: --repo-dir 需為存在的目錄: {repo_dir!r}", file=sys.stderr)
+        print(f"擋下:--repo-dir 指的目錄不存在: {repo_dir!r}", file=sys.stderr)
         return 2
     enabled, _cfg = _ci_config(root)
     if not enabled:
@@ -13907,7 +13905,7 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
     import subprocess as _sp
     if diff_range.startswith("-"):
         # 同 pitfalls/cochange-check:'-' 開頭值會被 git 誤認成選項,查詢命令 rc2 拒收
-        print("ERROR: --diff 不接受以 '-' 開頭的值", file=sys.stderr)
+        print("擋下:--diff 的值不能用 - 開頭(會被當成選項)", file=sys.stderr)
         return 2
     repo_root = Path(repo) if repo else None
     if repo_root is None:
@@ -13916,13 +13914,13 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
                 repo_root = cand
                 break
     if repo_root is None or not (repo_root / ".git").exists():
-        print("ERROR: 找不到 git repo(--repo 指定)", file=sys.stderr)
+        print("擋下:找不到 git 專案,用 --repo 指定", file=sys.stderr)
         return 2
     # core.quotePath=false:CJK 檔名不轉義加引號(否則 startswith/endswith 過濾全失效,r2 panel major)
     r = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
                  "diff", "--name-only", diff_range], capture_output=True, text=True)
     if r.returncode != 0:
-        print(f"ERROR: git diff 失敗: {r.stderr.strip()[:200]}", file=sys.stderr)
+        print(f"擋下:git 算不出差異: {r.stderr.strip()[:200]}", file=sys.stderr)
         return 2
     files = []
     for f in r.stdout.splitlines():
@@ -14247,13 +14245,13 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                 repo_root = cand
                 break
         if repo_root is None:
-            print("ERROR: 找不到 git repo root(.git),請用 --repo 指定", file=sys.stderr)
+            print("擋下:找不到 git 專案根目錄,用 --repo 指定", file=sys.stderr)
             return 2
 
     branch = _codeloop_git_branch(repo_root)
     head_sha = _codeloop_git_head(repo_root)
     if not head_sha:
-        print("ERROR: 無法取得 HEAD sha(git 指令失敗?)", file=sys.stderr)
+        print("擋下:問不到目前的 git 版本號(git 指令失敗?)", file=sys.stderr)
         return 2
     ts = _codeloop_git_ts(repo_root)
 
@@ -14285,7 +14283,7 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                 print(f"✅ code-loop check: OK——可以推(分支 {branch},版本 {head_sha[:8]},tier={tier}):{reason}")
         return 1 if blocked else 0
 
-    print(f"ERROR: 未知子命令 {subcmd!r}", file=sys.stderr)
+    print(f"擋下:沒有 {subcmd!r} 這個子命令", file=sys.stderr)
     return 2
 
 
@@ -14825,11 +14823,11 @@ def main():
         return cmd_lint_check(repo=args.lc_repo, smoke=args.lc_smoke, as_json=args.lc_json)
     if args.cmd == "impact":
         if sum(1 for x in (args.impact_file, args.impact_diff, args.impact_node) if x) > 1:
-            print("ERROR: --file/--diff/--node 三擇一,不可同給", file=sys.stderr)
+            print("擋下:--file、--diff、--node 只能選一個用", file=sys.stderr)
             return 2
         if args.impact_node:
             if args.impact_depth is not None:
-                print("ERROR: --node 為單層 typed 列舉,與 --depth 互斥(無深度語意)", file=sys.stderr)
+                print("擋下:--node 只列直接相連的一層,沒有「深度」可言,不能搭 --depth", file=sys.stderr)
                 return 2
             return cmd_impact_node(args.impact_node, repo=args.impact_repo, as_json=args.impact_json)
         if args.impact_diff:
@@ -14838,7 +14836,7 @@ def main():
                                    min_score=args.impact_min, as_json=args.impact_json,
                                    sync_check=args.impact_sync)
         if not args.impact_file:
-            print("ERROR: impact 需要 --file <檔> 或 --diff <range>", file=sys.stderr)
+            print("擋下:impact 要給 --file <檔案> 或 --diff <起點..終點>", file=sys.stderr)
             return 2
         return cmd_impact(args.impact_file, repo=args.impact_repo,
                           depth=args.impact_depth, as_json=args.impact_json,
@@ -14889,7 +14887,7 @@ def main():
 
     vault = args.vault or find_vault(Path.cwd())
     if vault is None or not vault.is_dir():
-        print("ERROR: 找不到 vault (docs/*-knowledge),可用 --vault 指定", file=sys.stderr)
+        print("擋下:找不到知識圖譜(docs/*-knowledge),用 --vault 指定", file=sys.stderr)
         return 2
     env = Env(vault)
 
@@ -15031,12 +15029,12 @@ def main():
     if args.cmd == "self-audit":
         rel = env.find(args.node)
         if rel is None:
-            print(f"ERROR: 找不到筆記: {args.node}", file=sys.stderr)
+            print(f"擋下:圖譜裡找不到叫 {args.node} 的筆記,先確認名稱或路徑", file=sys.stderr)
             return 2
         try:
             return cmd_self_audit(env, rel, args.model, args.date)
         except (ValueError, RuntimeError) as e:
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"擋下:{e}", file=sys.stderr)
             return 2
 
     # T1 寫側
@@ -15054,7 +15052,7 @@ def main():
                 return cmd_remove(env, rel, args.key, args.value)
             return cmd_append(env, rel, args.key, args.value)
         except (ValueError, RuntimeError) as e:
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"擋下:{e}", file=sys.stderr)
             return 2
     if args.cmd == "new":
         import datetime
@@ -15062,7 +15060,7 @@ def main():
             return cmd_new(env, args.type, args.name, datetime.date.today().isoformat(),
                            plan=args.plan, systems=args.systems)
         except (ValueError, RuntimeError) as e:
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"擋下:{e}", file=sys.stderr)
             return 2
     if args.cmd == "rel-cascade":
         try:
@@ -15071,32 +15069,32 @@ def main():
                                           ("--from", args.rc_from), ("--edge", args.rc_edge),
                                           ("--by", args.rc_by)) if not v]
                 if missing:
-                    print(f"ERROR: rel-cascade {args.verb} 缺參數: {' '.join(missing)}", file=sys.stderr)
+                    print(f"擋下:rel-cascade {args.verb} 少給了參數: {' '.join(missing)}", file=sys.stderr)
                     return 2
                 return cmd_rel_cascade_write(env, args.verb, args.arg, args.rc_cid,
                                              args.rc_from, args.rc_edge, args.rc_by)
             if args.verb == "resume":
                 if not args.arg:
-                    print("ERROR: rel-cascade resume 需 <cascade-id>", file=sys.stderr)
+                    print("擋下:rel-cascade resume 要給要接續的 cascade 編號", file=sys.stderr)
                     return 2
                 return cmd_rel_cascade_resume(env, args.arg)
             return cmd_rel_cascade_list(env, stale_days=args.rc_stale)
         except (ValueError, RuntimeError, OSError) as e:
             # [code-loop r1 B3] 含 OSError:磁碟滿/權限/TOCTOU 檔案消失/O_NOFOLLOW 拒 symlink
             #   ——帳本走檔案系統,IO 例外是本分支常態失敗面,裸 traceback 會破壞 rc=2 行式協議
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"擋下:{e}", file=sys.stderr)
             return 2
 
     if args.cmd == "decision-reindex" and getattr(args, "reindex_all", False):
         try:
             return cmd_decision_reindex(env, all_mode=True)
         except (ValueError, RuntimeError, OSError) as e:   # [code-loop r1 A] 寫檔面 IO 例外 → rc=2 非裸 traceback
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"擋下:{e}", file=sys.stderr)
             return 2
 
     if args.cmd in ("decision-supersede", "decision-add", "decision-reindex"):
         if args.cmd == "decision-reindex" and not args.note:
-            print("ERROR: decision-reindex 需 <節點> 或 --all", file=sys.stderr)
+            print("擋下:decision-reindex 要給一篇筆記,或用 --all 全部重編", file=sys.stderr)
             return 2
         rel = env.find(args.note)
         if rel is None:
@@ -15132,7 +15130,7 @@ def main():
         except (ValueError, RuntimeError, OSError) as e:   # [code-loop 最終 delta A] 補 OSError:
             # 單節點 decision-supersede/add/reindex 皆走 atomic_write_verify 寫檔,IO 例外(磁碟滿/
             # 權限/BrokenPipe)本該 rc=2 非裸 traceback——與 --all/rel-cascade dispatcher 一致
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"擋下:{e}", file=sys.stderr)
             return 2
     if args.cmd == "archive":
         import datetime
