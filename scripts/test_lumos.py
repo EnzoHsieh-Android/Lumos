@@ -15289,8 +15289,11 @@ def t_canary_scope_lines_records_review_size():
 def t_m1_loop_next():
     """M1包 #1 loop next:零記錄 rc2/plant-canary/tier 定錨+衝突 rc2/escalate/gate-pending/converged/cap/min-seats/json。"""
     print("t_m1_loop_next")
-    import json as _j
+    import json as _j, subprocess as _sp
     v = mkvault()
+    # 治理帳要 git HEAD 才寫(#6 的結案帳用):給 vault 上層一個 commit
+    _sp.run(["git", "init", "-q", str(v.parent)]); _sp.run(["git", "-C", str(v.parent), "add", "-A"])
+    _sp.run(["git", "-C", str(v.parent), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"])
     spec = v / "Projects" / "nspec.md"
     spec.write_text("next spec\n", encoding="utf-8")
     h = _sha256_of(spec)
@@ -15328,6 +15331,13 @@ def t_m1_loop_next():
     r = run(v, "loop", "next", f"nx3-{_M1U}", "--json", "--spec", str(spec), "--repo", str(v.parent))
     d = _j.loads(r.stdout)
     check("cap-reached", d["phase"] == "cap-reached" and r.returncode == 1)
+    # ── 工具鏈補強十件 #6:結案方式進治理帳,gov --stats 算人裁放行率 ──
+    glog = v.parent / ".governance-log.jsonl"
+    gtxt = glog.read_text(encoding="utf-8") if glog.exists() else ""
+    check("★converged 進治理帳(gate=design-loop)★", '"gate": "design-loop"' in gtxt and '"converged"' in gtxt and f"nx-{_M1U}" in gtxt, gtxt[-400:])
+    check("★cap-reached 進治理帳★", '"cap-reached"' in gtxt and f"nx3-{_M1U}" in gtxt, gtxt[-400:])
+    rg = run(v, "gov", "--stats", "--since", "9999")
+    check("★gov --stats 印人裁放行:1 個過關、1 個達上限★", "閘過了 1 個" in rg.stdout and "人裁放行) 1 個" in rg.stdout, rg.stdout)
     # min-seats:panel 同席灌筆不計——high 定錨,同一 auditor 5 筆
     for i in range(5):
         run(v, "canary", "record", "caught", "--loop", f"nx4-{_M1U}", "--round", "r1", "--auditor", "same",

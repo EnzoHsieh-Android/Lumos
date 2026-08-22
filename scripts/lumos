@@ -418,6 +418,19 @@ def _suggest_systems_for_orphan(env, rel, n):
                   key=lambda x: (-x[1], -len(env.notes[x[0]].stem or "")))
 
 
+def _loop_gov_mark(env, loop_id, kind, note=""):
+    """設計/代碼審查迴圈的結案方式進治理帳(工具鏈補強十件 #6):gate=design-loop,
+    kind=converged(閘過了)| cap-reached(跑滿上限沒過)。gov --stats 用它算「達上限卻從沒過關」=人裁放行。
+    fail-open:寫不進去不影響判定輸出。"""
+    if env is None:
+        return
+    try:
+        _append_governance_log(env.vault, [{"gate": "design-loop", "kind": kind, "hard": False,
+                                            "nodes": [loop_id], "note": note}])
+    except Exception:
+        pass
+
+
 def _append_governance_log(vault, events):
     """寫者=doctor --ci + anchor approve:把 gate findings append 到 docs/.governance-log.jsonl。
     非 git / 取不到 HEAD → 跳過(不報錯)。dedup 留給讀時(lumos gov)。"""
@@ -2909,7 +2922,7 @@ def cmd_signoff(env, node, note, by=None):
 # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
 # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
 _KNOWN_GATES = ("L2", "L3", "anchor-approve", "canary", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
-                "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "kill", "signoff")
+                "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "design-loop", "kill", "signoff")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
 # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
@@ -2924,7 +2937,7 @@ _STATS_ABSENT_DISCLAIMER = (
 # 檔案(ANCHOR_FILES:scripts/hooks/pre-push、scripts/test_lumos.py …),與其他 gate 的圖譜
 # 節點名不同質,同欄並列會被誤讀成可互相比較。★不能用「值裡有沒有 /」偵測★——cmd_gov 的
 # mapper 讀進來時已把路徑 stem 成 pre-push,偵測不到(2026-08-20 實作時測試翻紅抓到)。
-_STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑"}
+_STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑", "design-loop": "此來源記的是審查編號"}
 
 
 def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
@@ -2972,6 +2985,20 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
         print(f"  這段時間完全沒觸發過的閘({len(absent)} 道):{', '.join(absent) if absent else '無'}")
         print(_STATS_ABSENT_DISCLAIMER)
     print()
+    # 設計迴圈結案方式(工具鏈補強十件 #6):達上限卻從沒過關的審查編號 = 人裁放行。
+    # 只看 gate=design-loop 的事件(2026-08-22 起才記;之前的迴圈沒帳,算不出來,這裡如實講)。
+    dl = [r for r in ded if r.get("gate") == "design-loop"]
+    if dl:
+        by = {}
+        for r in dl:
+            for nd_ in (r.get("nodes") or []):
+                by.setdefault(nd_, set()).add(r.get("kind"))
+        conv = sum(1 for k in by.values() if "converged" in k)
+        capped = sum(1 for k in by.values() if "cap-reached" in k and "converged" not in k)
+        print(f"  審查迴圈結案方式(只算有記帳的 {len(by)} 個編號):閘過了 {conv} 個、跑滿上限沒過關(人裁放行) {capped} 個"
+              + (f"——人裁放行率 {capped / len(by):.0%}" if by else ""))
+        print("  (2026-08-22 起 loop next / loop status 才會記這個帳;更早的迴圈沒資料,不在分母)")
+        print()
     print("  註:這張表是「去重後」的筆數,跟不加 --stats 的畫面行數不是同一套算法——預設畫面還會再折疊一次。")
 
 
@@ -3661,7 +3688,7 @@ def _panel_probe_verdict(loop_id, rid, recs):
     return h % 2 == 0
 
 
-def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
+def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None, env=None):
     """平行 panel 收斂謂詞(loop 三輪壓縮)。無-cluster 帳:兩條合取(輪有效∧存活max≤minor;殘餘=advisory
     ∧capture-recapture 殘餘,fail-closed)。cluster 帳(M2,設計 Projects/design-loop提效_計劃;
     golden: governance/golden/dloop-m2-cluster):首個有效輪帶 clusters 定錨 → 兩條合取
@@ -3720,7 +3747,7 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
                 return 2
     if anchor_rid is not None and anchor_cluster:
         return _loop_status_panel_clusters(groups, valid_of, loop_id,
-                                           min_seats=min_seats, spec=spec, all_rounds=rounds)
+                                           min_seats=min_seats, spec=spec, all_rounds=rounds, env=env)
     # ── 無-cluster 舊帳(或零有效輪=未定錨):既有三條合取,fail-closed 不變 ──
     # cluster-intent 但未定錨(零有效輪):條 1 改用 M2 嚴格謂詞(unknown-kind 盲區補;
     # 純無-cluster loop 不受影響——舊行為迴歸保證只對真 legacy 帳)
@@ -3770,13 +3797,15 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None):
     if k2:
         probe = _panel_probe_verdict(loop_id, rid, latest)
         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、留下的問題都在可接受等級)")
+        _loop_gov_mark(env, loop_id, "converged", "gate PASS")
         print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
     else:
         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、留下的問題都在可接受等級)")
+        _loop_gov_mark(env, loop_id, "converged", "gate PASS")
     return 0
 
 
-def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=None, all_rounds=None):
+def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=None, all_rounds=None, env=None):
     """M2 cluster 帳 gate:兩條合取(判定輪有效 ∧ fold 後無 disputed-major)。
     fold 只採有效輪(last-wins,同名跨輪最後狀態勝);無效輪 clusters 警告區列帳不蒸發;
     新生 cluster 與 capture-recapture 皆 advisory 不進合取。"""
@@ -3871,10 +3900,12 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
         probe = _panel_probe_verdict(loop_id, rid, latest)
         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、沒有分組卡在 disputed-major"
               f"[cluster 帳,{len(ledger)} 個 cluster])")
+        _loop_gov_mark(env, loop_id, "converged", "panel gate PASS")
         print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
     else:
         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、沒有分組卡在 disputed-major"
               f"[cluster 帳,{len(ledger)} 個 cluster])")
+        _loop_gov_mark(env, loop_id, "converged", "panel gate PASS")
     return 0
 
 
@@ -4242,7 +4273,7 @@ def cmd_loop_verify_progress(env, loop_id, settle=None, as_json=False):
     return 0
 
 
-def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
+def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo, env=None):
     """settle 收斂閘([S1] 結清式收斂_計劃,2026-07-28):清單全結清 ∧ G1 refcheck ∧ G3(末筆 result=現檔)。
     K-streak/G2 由「逐條存在證明」取代(G2 印 advisory 不進合取)。
     caught 輪定義收緊:kind=caught ∧ auditor 非空;否則視同 missed(貶值 llm-ok)。
@@ -4340,6 +4371,7 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo):
         print(f"⛔ SETTLE GATE FAIL({loop_id} 沒通過,卡在:{'/'.join(fails)})")
         return 1
     print(f"✅ SETTLE GATE PASS({loop_id} 通過:清單全收尾、引用對得上、文件沒被事後改過)")
+    _loop_gov_mark(env, loop_id, "converged", "gate PASS")
     return 0
 
 
@@ -4431,16 +4463,16 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
         _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
         return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
-                                     bad_linenos=bad_linenos)
+                                     bad_linenos=bad_linenos, env=env)
     if not panel and n_round > 0:
         print("擋下:這個編號的記錄帶了輪次(多人審格式),但你沒加 --panel;不加的話一輪裡 W 個人的記錄會被當成 W 輪,所以不算",
               file=sys.stderr)
         return 2
     if settle is not None:
-        return _loop_status_settle(rounds, n_badlines, loop_id, settle, spec, repo)
+        return _loop_status_settle(rounds, n_badlines, loop_id, settle, spec, repo, env=env)
     if panel:
         try:
-            return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec)
+            return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec, env=env)
         except OSError as e:   # G3 --spec 不可讀:與 legacy G1 對稱 rc2(code-loop r2 折入)
             print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
             return 2
@@ -4485,6 +4517,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
             print(f"⛔ LIGHT GATE FAIL({loop_id} 沒通過,卡在):" + "；".join(fails))
             return 1
         print(f"✅ LIGHT GATE PASS({loop_id} 通過:單人審完、沒有中等以上問題、記錄互相對得上、文件沒被事後改過)")
+        _loop_gov_mark(env, loop_id, "converged", "gate PASS")
         return 0
 
     def good(r):
@@ -4597,6 +4630,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         print(f"⛔ GATE FAIL({loop_id} 沒通過,卡在:{'/'.join(fails)})")
         return 1
     print(f"✅ GATE PASS({loop_id} 四關全過:連續乾淨輪數、引用對得上、問題數遞減、文件沒被改過)")
+    _loop_gov_mark(env, loop_id, "converged", "gate PASS")
     return 0
 
 
@@ -4994,9 +5028,11 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         sys.stderr.write(buf.getvalue())
         return 2
     if rc == 0:
+        _loop_gov_mark(env, loop_id, "converged", "loop next 判四關全過")
         return emit("converged", {"gate_basis": "四關全過(連續乾淨輪數、引用對得上、問題數遞減、文件沒被改過)"})
     # ③ cap(資訊充分且未 PASS)
     if rounds_count >= cap:
+        _loop_gov_mark(env, loop_id, "cap-reached", f"cap={cap} tier={eff_tier}")
         return emit("cap-reached", {"note": f"跑滿 {cap} 輪還沒收斂——停下來,剩下的交給人裁決,別無限燒下去"})
     # ④ plant-canary
     return emit("plant-canary")
@@ -9410,7 +9446,7 @@ def _quote_rows(rtext, stext):
     return rows
 
 
-def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None):
+def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None):
     """[T4] 處置閘(design-loop重設計 三):四條合取,全部讀側可重算——
     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
@@ -9574,6 +9610,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
     print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定)")
+    _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
     return 0
 
 
