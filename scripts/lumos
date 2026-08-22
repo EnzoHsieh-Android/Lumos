@@ -6226,6 +6226,47 @@ def cmd_show(env, rel, body_only=False):
     return 0
 
 
+_STALE_CELL_RE = re.compile(r"^(待辦|待裁|待放行|待處理|未做|還沒做|尚未|未動|沒做|TODO|todo)$")
+
+
+def _stale_status_claims(env, rel):
+    """★狀態表過期偵測(2026-08-22)★ — 回 [(行號, 目標節點, 目標status, 行內容)]。
+
+    要抓的病:一篇筆記用表格記「這幾件事的進度」,其中一格寫著待辦,但那一格連到的
+    節點 status 已經是 done。**看表會得到與事實相反的結論。**
+
+    2026-08-22 真實案例:某調研的候選狀態表寫「③ 建議升優先」,而它指的那個計劃
+    同一天就 status:done 交付完畢了(S1-S4 全落地)。讀表的人(AI)照著表回報
+    「四個候選一個都沒動」——四項裡有兩項半是錯的。
+
+    ★判準為什麼是這三條(窄到只剩真陽性)★:全 vault 掃描實測——
+      ①「同一行有待辦詞 + 連到已完成」= 28 處,抽驗三分之一是誤報
+         (長 KEY 行裡剛好夾著「未做」兩個字,或「B 可機械未做」是判準名稱的一部分)
+      ② 收窄成「表格行 + 待辦詞獨佔一整格 + 連到已完成」= **1 處**,正是上面那個真案例。
+    誤報的代價是變成背景噪音(參 check-s 喊 18,283 次沒人看),所以寧可窄。
+    """
+    try:
+        text = (env.vault / rel).read_text(encoding="utf-8-sig")
+    except Exception:
+        return []
+    hits = []
+    for i, line in enumerate(text.splitlines(), 1):
+        s = line.lstrip()
+        if not s.startswith("|"):
+            continue
+        cells = [c.strip() for c in s.strip().strip("|").split("|")]
+        if not any(_STALE_CELL_RE.match(c) for c in cells):
+            continue
+        for m in re.finditer(r"\[\[(.+?)\]\]", line):
+            tgt = env.resolve(nfc(m.group(1).split("|")[0].strip()))
+            if not tgt:
+                continue
+            st = str((env.notes[tgt].fields.get("status") or ""))
+            if st in ("done", "resolved", "pass"):
+                hits.append((i, tgt, st, s.strip()))
+    return hits
+
+
 def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, as_json=False):
     """節點 + 鄰居 summary 壓縮索引 — MemPalace closet 具象化
     brief=True: 只給 meta + summary 首兩行 + 鄰居名單(壓 token 用)"""
@@ -6244,6 +6285,11 @@ def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, a
     print(f"# {rel}")
     if meta:
         print(meta)
+    for (_ln, _tgt, _st, _line) in _stale_status_claims(env, rel):
+        print(f"⚠ 這篇第 {_ln} 行的表格說某件事還沒做,但它指的那篇已經做完了"
+              f"(狀態 {_st}):")
+        print(f"    {_tgt}")
+        print(f"  照這張表回報進度會講反。要嘛去讀那篇確認,要嘛把這一格改掉。")
     vu = _conds(n.fields.get("valid_under"))
     if vu:
         age = _node_age_days(n)

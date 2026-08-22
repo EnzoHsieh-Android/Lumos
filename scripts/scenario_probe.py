@@ -78,11 +78,19 @@ def judge(calls, expect, forbid_before):
 
 
 def run_one(sc, workdir, max_turns, timeout, model):
+    # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
+    # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
+    # 題目標 allow_agent:true 才放行,其餘照舊禁。
+    allow_agent = bool(sc.get("allow_agent"))
+    tools = ["Bash", "Read", "Grep", "Glob", "Edit", "Write", "Skill"]
+    if allow_agent:
+        tools.append("Agent")
     cmd = ["claude", "-p", sc["prompt"], "--output-format", "stream-json", "--verbose",
            "--max-turns", str(max_turns), "--no-session-persistence",
            "--permission-mode", "acceptEdits",
-           "--allowedTools", "Bash", "Read", "Grep", "Glob", "Edit", "Write", "Skill",
-           "--disallowedTools", "Agent"]
+           "--allowedTools", *tools]
+    if not allow_agent:
+        cmd += ["--disallowedTools", "Agent"]
     if model:
         cmd += ["--model", model]
     env = dict(os.environ)

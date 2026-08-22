@@ -440,6 +440,33 @@ def t_timeout_override_names_exist():
               f"覆寫表有 {k} 但 t_ 名單裡沒有——覆寫已靜默失效")
 
 
+def t_stale_status_table():
+    """★狀態表過期偵測★:表格說某件事還沒做,但它指的節點已 done → context 頭部要喊。
+
+    真實案例(2026-08-22):某調研的候選表寫「建議升優先」,它指的計劃同一天就 done 了,
+    照表回報進度講反。★判準要窄★——全 vault 實測「同行有待辦詞」28 處、三分之一誤報;
+    收成「表格行 + 待辦詞獨佔一格」剩 1 處真陽性。誤報的代價是變背景噪音。
+    翻紅釘:把判準放寬回「同一行含待辦詞」→ 第 3、4 條反例會翻紅。"""
+    v = mkvault()
+    write(v, "Projects/已完成.md", "type: project\nstatus: done")
+    write(v, "Projects/進行中.md", "type: project\nstatus: doing")
+    write(v, "Projects/表.md", "type: project\nstatus: doing",
+          "# 表\n\n"
+          "| # | 狀態 | 說明 |\n|---|---|---|\n"
+          "| A | 待放行 | 見 [[Projects/已完成]] |\n"
+          "| B | 待裁 | 見 [[Projects/進行中]] |\n"
+          "| C | 這條講的是 B 可機械未做的那型 | 見 [[Projects/已完成]] |\n\n"
+          "- 散文行:某某還沒做,見 [[Projects/已完成]]\n")
+    r = run(v, "context", "Projects/表")
+    o = r.stdout
+    check("表格說待放行、指的那篇已 done → 有喊", "已經做完了" in o, o[:400])
+    check("喊的是對的那一篇", "Projects/已完成" in o, o[:400])
+    check("★指向未完成的那格不喊★", o.count("已經做完了") == 1,
+          f"喊了 {o.count('已經做完了')} 次,應該只有 1 次\n{o[:400]}")
+    check("★待辦詞夾在長句裡不算(否則長 KEY 行全中)★", "| C |" not in o, o[:400])
+    check("★散文行不算(只看表格)★", "散文行" not in o, o[:400])
+
+
 def t_hooks_python_fallback():
     import pathlib
     repo = pathlib.Path(GRAPHCTL).resolve().parent.parent

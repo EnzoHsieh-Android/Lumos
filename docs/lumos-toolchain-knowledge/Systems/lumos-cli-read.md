@@ -72,6 +72,7 @@ verified_by:
   - "[[Verification/2026-08-05_流程優化六件落地]]"
   - "[[Verification/2026-08-05_標籤結構收編落地]]"
   - "[[Verification/2026-08-16_圖譜結構化查詢query落地]]"
+  - "[[Verification/2026-08-22_狀態表過期偵測]]"
 ---
 # lumos-cli-read
 
