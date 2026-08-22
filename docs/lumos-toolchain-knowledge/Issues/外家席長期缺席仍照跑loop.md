@@ -1,12 +1,12 @@
 ---
 type: issue
-status: open
+status: resolved
 created: 2026-08-20
 updated: 2026-08-20
 aliases: []
 tags:
   - type/issue
-  - status/open
+  - status/resolved
   - priority/P2
   - scope/loop-engineering
 summary: |-
@@ -14,8 +14,21 @@ summary: |-
   KEY:maker≠checker 是整套驗證的地基,而跨家族審查席已連續缺席數週:Codex 帳號不支援可用模型、Gemini pro 免費額度 limit=0、flash 逾時
   KEY:2026-08-20 gov-stats 案三輪 panel 九席全為 claude 家族;處置是在文件加一句「收斂宣稱要講小」,★缺席未被當成 blocker 處理★
   DECISION:[2026-08-20]立案,未處置——需裁「地基缺席時 loop 還能不能算數」
+decisions:
+  - content: Enzo 2026-08-22 裁:不硬擋(成本考量)。處置=外家席已恢復(Gemini flash,scripts/external-seat.sh);high 缺外家時收斂結論降級成「單家族視角下未發現」並留痕,roster 轉述;skill 文字同步改。
+    id: d1
+    decided: 2026-08-22
+    valid: true
 ---
 # 外家席長期缺席仍照跑loop
+
+> ## ✅ 已結案(2026-08-22)— 不硬擋,降級+留痕
+>
+> 外家席已恢復(Gemini flash);缺席時收斂結論降級、留痕、roster 轉述。**實證**:2026-08-21 起的 panel 輪有外家席記錄。
+>
+> ⚠ 純自律,不擋——Enzo 成本考量裁定。
+>
+> ★以下「症狀 / 根因」是當時的排查紀錄,不是現況。★
 
 > 白話:整套驗證哲學建立在「做的人不能是驗的人」。跨家族審查席就是為此存在的。**它壞了好幾週,我們照跑,只在文件上加一句但書。**
 

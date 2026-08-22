@@ -3022,11 +3022,10 @@ def t_gov_query():
         '{"ts":"2026-06-19T09:00:00","commit":"def","gate":"check-r","kind":"blocked","hard":true,"nodes":["OrderSvc"]}\n'.encode("utf-8"))
     try:
         r = run(vault, "gov")
-        check("gov: 三來源合併", "check-r" in r.stdout and "skip graph" in r.stdout and "schema 變" in r.stdout, r.stdout)
+        check("gov: 兩來源合併", "check-r" in r.stdout and "skip graph" in r.stdout, r.stdout)
+        check("gov: L3 rot-queue 已拆(2026-08-22),不再讀", "schema 變" not in r.stdout, r.stdout)
         r = run(vault, "gov", "OrderSvc")
         check("gov <node>: 命中 governance-log 事件", "check-r" in r.stdout, r.stdout)
-        r = run(vault, "gov", "Foo")
-        check("gov <node>: stem 命中 rot-queue", "schema 變" in r.stdout, r.stdout)
     finally:
         import shutil
         shutil.rmtree(root, ignore_errors=True)

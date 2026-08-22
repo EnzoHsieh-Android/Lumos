@@ -34,6 +34,8 @@ decisions:
     id: d2
     decided: 2026-08-22
     valid: true
+verified_by:
+  - "[[Verification/2026-08-22_guard-kill首次真跑]]"
 ---
 # guard-kill（殺傷力驗證）
 

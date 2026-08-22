@@ -290,10 +290,9 @@ lumos teardown -y        # 跳過互動確認(非互動環境用)
 
 ## 8. 治理事件帳(`lumos gov`)
 
-治理訊號以前散在各 hook。`lumos gov` 是**唯讀彙整器**,讀七個本機 JSONL(bypass/rot-queue/governance/canary/kill/signoff/ci):
+治理訊號以前散在各 hook。`lumos gov` 是**唯讀彙整器**,讀六個本機 JSONL(bypass/governance/canary/kill/signoff/ci;rot-queue 的 L3 hook 已於 2026-08-21 撤除、帳 2026-08-22 拆出):
 
 - `docs/.bypass-log.jsonl` —— L2 pre-commit 繞過(post-commit 寫)
-- `docs/.rot-queue.jsonl` —— L3 verification-rot 發現
 - `docs/.governance-log.jsonl` —— `doctor --ci` 發現(Check T / Check R),單一寫者
 
 ```bash
