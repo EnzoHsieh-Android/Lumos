@@ -81,8 +81,37 @@ print('LINE', line_notify.send(line_notify.build_message('labeling-refresh', os.
     log "考卷($tag):${age} 天前跑過,略"
   fi
 }
+# ── 情境探針週抽(工具鏈補強十件 #1,2026-08-22):每週抽 8 題看 Claude 會不會自己敲 lumos——
+# 改了 CLAUDE.md 區塊或 skill 之後「規則有沒有退化」要有數字可看,不靠有人想起來重測。
+# fail-open:探針失敗只記 log;有題沒過才 LINE。上限每週一次、8 題,避免變成燒 token 的機器。
+run_probe(){
+  local hist="$REPO/governance/scenarios/history.jsonl"
+  local week; week="$(date +%G-W%V)"
+  if grep -q "\"seed\": \"$week\"" "$hist" 2>/dev/null; then
+    log "情境探針:本週($week)已抽過,跳過"; return 0
+  fi
+  command -v claude >/dev/null 2>&1 || { log "情境探針:沒有 claude CLI,跳過"; return 0; }
+  log "情境探針:本週($week)抽 8 題開跑"
+  (cd "$REPO" && python3 scripts/scenario_probe.py \
+      --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl \
+      --sample 8 --seed "$week" --timeout 600 --ts "$TODAY" --history "$hist" \
+      --out "$REPO/governance/scenarios/run-$TODAY-weekly.json") > "$LOGDIR/probe-$TODAY.log" 2>&1 || true
+  local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1)"
+  log "情境探針結果:${line:-無結果(看 $LOGDIR/probe-$TODAY.log)}"
+  local pp tt; pp="${line%%/*}"; tt="$(echo "$line" | sed -E 's#^[0-9]+/([0-9]+) .*#\1#')"
+  if [ -n "$line" ] && [ "$pp" != "$tt" ]; then
+    MSG="情境探針本週有題沒過:$line(沒過的題在 governance/scenarios/history.jsonl;改規則後用 scripts/scenario_probe.py --only <id> 重跑)" \
+    LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t=os.environ.get('LINE_TOKEN','')
+print('LINE', line_notify.send(line_notify.build_message('scenario-probe', os.environ['MSG'], None), t) if t else 'no-token')" || true
+  fi
+}
+
 run_exam "$REPO" toolchain
 [ -d "$HOME/backend/LandmarkMember/governance/eval" ] && run_exam "$HOME/backend/LandmarkMember" landmark
+run_probe
 
 SKIP_CAP=3; skip_n=0
 while : ; do

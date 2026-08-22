@@ -33,4 +33,5 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
 ## 再深一層(按需開)
 | 要做 | 開 |
 |---|---|
-| 席位紀律(禁互辯、多數決)、抑噪為何不設上限、辯方順產 fix、mutation 算子理由、capture-recapture 算法、完整範例、全部歷史修正 | `reference.md` |
+| 席位紀律、抑噪、辯方順產 fix | `reference.md`〈步驟 3 — 派乾淨 reviewer〉〈步驟 4 — 判讀 + 辯方〉 |
+| mutation 算子理由、capture-recapture、完整範例、全部歷史修正 | `reference.md`〈舊頭版全文〉 |

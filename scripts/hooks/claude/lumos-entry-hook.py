@@ -22,6 +22,36 @@ def _repo_root(cwd):
     return Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
 
 
+def _discipline_lag(root):
+    """CLAUDE.md 紀律區塊跟來源範本不一樣 → 一行提醒(工具鏈補強十件 #8)。
+    比內容不比版本號——版本號手動 bump,範本改了常沒 bump。來源不在、沒 sentinel 都靜默。"""
+    try:
+        cm = (root / "CLAUDE.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    except OSError:
+        return None
+    start = cm.find("<!-- LUMOS:GRAPH-DISCIPLINE:START")
+    end = cm.find("<!-- LUMOS:GRAPH-DISCIPLINE:END -->")
+    if start < 0 or end < 0:
+        return None
+    body = cm[cm.find("\n", start) + 1:end].strip("\n")
+    src = Path(os.environ.get("LUMOS_HOME") or (Path.home() / "harness" / "lumos-toolchain"))
+    tpl = src / "scripts" / "templates" / "graph-discipline.md"
+    if not tpl.exists():
+        return None
+    kgs = sorted((root / "docs").glob("*-knowledge"))
+    if not kgs:
+        return None
+    slug = kgs[0].name[:-len("-knowledge")]
+    try:
+        expected = tpl.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip("\n")
+    except OSError:
+        return None
+    if body == expected:
+        return None
+    return ("提醒:這個專案 CLAUDE.md 裡的 lumos 紀律區塊跟來源的最新版不一樣(規則可能已經更新),"
+            "有空跑一次:\n    lumos update")
+
+
 def main():
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -34,9 +64,12 @@ def main():
     idx = Path.home() / ".claude" / "skills" / "lumos-project-notes" / "commands" / "INDEX.md"
     if not idx.exists():
         return 0
+    lag = _discipline_lag(root)
     msg = ("本專案用 lumos 知識圖譜。動既有系統的第一個工具呼叫是 lumos search / context,不是 grep / Read;"
            "被催「直接改」也一樣,改 code 前至少 lumos impact --file <檔> 一行。\n"
            f"不確定該敲哪個指令 → 讀索引(4k 字元,按情境分八類,只開需要的子檔):\n    {idx}")
+    if lag:
+        msg += "\n" + lag
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
                                              "additionalContext": msg}}, ensure_ascii=False))
     return 0

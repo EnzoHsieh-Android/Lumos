@@ -111,11 +111,31 @@ def main():
     ap.add_argument("--model", default="")
     ap.add_argument("--out", default="")
     ap.add_argument("--keep", action="store_true", help="保留臨時副本")
+    ap.add_argument("--sample", type=int, default=0, help="只抽 N 題(決定性:依 --seed 輪轉,給自主迴圈每週抽查用)")
+    ap.add_argument("--seed", default="", help="抽樣種子(例:週數);同種子同題")
+    ap.add_argument("--history", default="", help="把本次摘要 append 到這個 jsonl(ts/passed/total/failed)")
+    ap.add_argument("--ts", default="", help="寫進 history 的時間戳(排程端給)")
+    ap.add_argument("--dry-list", action="store_true", help="只印抽到的題目 id,不跑(測抽樣用)")
     a = ap.parse_args()
-    scs = [json.loads(l) for l in Path(a.scenarios).read_text(encoding="utf-8").splitlines() if l.strip()]
+    scs = []
+    for f in a.scenarios.split(","):
+        scs += [json.loads(l) for l in Path(f).read_text(encoding="utf-8").splitlines() if l.strip()]
     if a.only:
         keep = set(a.only.split(","))
         scs = [s for s in scs if s["id"] in keep or s["id"].split("-")[0] in keep]
+    if a.sample and a.sample < len(scs):
+        # 決定性輪轉:同一種子永遠抽同一組;種子換(每週)就換一組,幾週下來全部輪過
+        import hashlib
+        h = int(hashlib.sha256(a.seed.encode("utf-8")).hexdigest(), 16)
+        start = h % len(scs)
+        scs = [scs[(start + i * 3) % len(scs)] for i in range(a.sample)]
+        seen, uniq = set(), []
+        for s_ in scs:
+            if s_["id"] not in seen:
+                seen.add(s_["id"]); uniq.append(s_)
+        scs = uniq
+    if a.dry_list:
+        print(",".join(s_["id"] for s_ in scs)); return 0
     tmp = Path(tempfile.mkdtemp(prefix="lumos-probe-"))
     work = tmp / "repo"
     # 複製工作樹(含未 commit 的改動——索引/筆記常是剛寫還沒 commit),再在副本裡 commit 成乾淨狀態
@@ -149,6 +169,10 @@ def main():
         print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令")
         if a.out:
             Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n}, ensure_ascii=False, indent=1), encoding="utf-8")
+        if a.history:
+            with open(a.history, "a", encoding="utf-8") as hf:
+                hf.write(json.dumps({"ts": a.ts, "seed": a.seed, "passed": p, "total": n,
+                                     "failed": [r["id"] for r in results if not r["passed"]]}, ensure_ascii=False) + "\n")
         if not a.keep:
             shutil.rmtree(tmp, ignore_errors=True)
     return 0 if p == n else 1

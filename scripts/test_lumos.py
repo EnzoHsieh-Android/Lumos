@@ -3931,6 +3931,76 @@ def t_every_subcommand_has_when():
     print("  ✓ t_every_subcommand_has_when")
 
 
+def t_probe_weekly_sample_deterministic():
+    """工具鏈補強十件 #1:自主迴圈每週抽 8 題——同種子同題、換種子換題、合併兩份情境檔。"""
+    import subprocess as _sp
+    root = Path(__file__).resolve().parent.parent
+    sc = f"{root}/governance/scenarios/commands.jsonl,{root}/governance/scenarios/paraphrase.jsonl"
+    def pick(seed):
+        r = _sp.run([sys.executable, str(root / "scripts" / "scenario_probe.py"), "--scenarios", sc,
+                     "--sample", "8", "--seed", seed, "--dry-list"], capture_output=True, text=True)
+        return r.stdout.strip().split(",")
+    a, b, c = pick("2026-W34"), pick("2026-W34"), pick("2026-W35")
+    check("同種子抽同一組", a == b and len(a) == 8, f"{a} vs {b}")
+    check("換種子換一組", a != c, f"{a} vs {c}")
+    check("抽樣跨兩份情境檔", any(x.startswith("v") for x in a + c) and any(x.startswith("s") for x in a + c), f"{a} {c}")
+    print("  ✓ t_probe_weekly_sample_deterministic")
+
+
+def t_skill_reference_pointers_resolve():
+    """工具鏈補強十件 #9:五份 SKILL.md 頭版裡「`reference.md`〈X〉」「`templates.md`〈X〉」的 X,
+    對應檔案裡必須真的有一個標題含 X——2026-08-22 人工比對時七個指標三個指到不存在的標題。"""
+    import re as _re
+    root = Path(__file__).resolve().parent.parent / "skills"
+    bad = []
+    for sk in sorted(root.glob("lumos-*/SKILL.md")):
+        text = sk.read_text(encoding="utf-8")
+        refs = {}
+        for fname in ("reference.md", "templates.md"):
+            fp = sk.parent / fname
+            refs[fname] = [l.lstrip("#").strip() for l in fp.read_text(encoding="utf-8").splitlines()
+                           if l.startswith("#")] if fp.exists() else None
+        # 抓「`reference.md`〈A〉〈B〉」這種串:檔名後面緊接的一串〈…〉
+        for m in _re.finditer(r"`(reference\.md|templates\.md)`[^〈|\n]*((?:〈[^〉]+〉)+)", text):
+            fname, chain = m.group(1), m.group(2)
+            heads = refs.get(fname)
+            if heads is None:
+                bad.append(f"{sk.parent.name}: 指到不存在的 {fname}"); continue
+            for x in _re.findall(r"〈([^〉]+)〉", chain):
+                key = x.replace("`", "")
+                if not any(key in h.replace("`", "") for h in heads):
+                    bad.append(f"{sk.parent.name}/{fname}: 找不到標題含「{x}」")
+    check("★頭版指到的 reference/templates 段落都存在★", not bad, "\n".join(bad))
+    print("  ✓ t_skill_reference_pointers_resolve")
+
+
+def t_entry_hook_index_and_lag():
+    """工具鏈補強十件 #8:session 入口 hook——有圖譜的專案印索引路徑;紀律區塊跟來源範本不同就多一行提醒;
+    沒圖譜的專案靜默。"""
+    import json as _j, os as _os, subprocess as _sp
+    root = Path(__file__).resolve().parent.parent
+    hook = root / "scripts" / "hooks" / "claude" / "lumos-entry-hook.py"
+    def run_hook(cwd, env_extra=None):
+        env = dict(_os.environ); env.update(env_extra or {})
+        r = _sp.run([sys.executable, str(hook)], input=_j.dumps({"cwd": str(cwd)}), capture_output=True, text=True, env=env)
+        return r.stdout.strip()
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d); _sp.run(["git", "init", "-q", str(d)])
+        check("無圖譜專案靜默", run_hook(d) == "", run_hook(d))
+        (d / "docs" / "x-knowledge").mkdir(parents=True)
+        tpl = (root / "scripts" / "templates" / "graph-discipline.md").read_text(encoding="utf-8")
+        body = tpl.replace("{{KG}}", "docs/x-knowledge/").strip("\n")
+        (d / "CLAUDE.md").write_text("# x\n<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 -->\n" + body + "\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
+        out = run_hook(d, {"LUMOS_HOME": str(root)})
+        ctx = _j.loads(out)["hookSpecificOutput"]["additionalContext"]
+        check("有圖譜 → 印索引路徑", "commands/INDEX.md" in ctx and "lumos search" in ctx, ctx)
+        check("區塊=範本 → 不提醒落後", "lumos update" not in ctx, ctx)
+        (d / "CLAUDE.md").write_text("# x\n<!-- LUMOS:GRAPH-DISCIPLINE:START v0.9 -->\n舊的規則\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
+        ctx = _j.loads(run_hook(d, {"LUMOS_HOME": str(root)}))["hookSpecificOutput"]["additionalContext"]
+        check("★區塊≠範本 → 提醒 lumos update★", "lumos update" in ctx, ctx)
+    print("  ✓ t_entry_hook_index_and_lag")
+
+
 def t_code_exts_four_lists_agree():
     """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天
