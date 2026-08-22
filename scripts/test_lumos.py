@@ -5969,6 +5969,37 @@ def t_pitfalls_diff_ignores_data_files_and_string_literals():
     print("  ✓ t_pitfalls_diff_ignores_data_files_and_string_literals")
 
 
+def t_pitfalls_diff_arch_alignment_hints():
+    """架構對齊鏡頭(2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法):
+    pitfalls --diff 對每支改動 code 檔列同層最像的既有檔當對照組+三問+慣例 skill;沒有鄰居就不印。"""
+    import json as _json, subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-arch-"))
+    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+    def commit(m): git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", m)
+    git("init")
+    svc = root / "app" / "services"; svc.mkdir(parents=True)
+    (svc / "OrderService.kt").write_text("class OrderService\n", encoding="utf-8")
+    (svc / "PaymentService.kt").write_text("class PaymentService\n", encoding="utf-8")
+    (svc / "OrderServiceTest.kt").write_text("class OrderServiceTest\n", encoding="utf-8")
+    (root / "lonely").mkdir(); (root / "lonely" / "x.py").write_text("x = 1\n", encoding="utf-8")
+    commit("init")
+    (svc / "RefundService.kt").write_text("class RefundService\n", encoding="utf-8")
+    (root / "lonely" / "x.py").write_text("x = 2\n", encoding="utf-8")
+    commit("add")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    arch = d.get("arch_alignment") or {}
+    sibs = arch.get("files", {}).get("app/services/RefundService.kt", [])
+    check("★新 Service 的對照組=同層既有 Service(排除測試檔)★",
+          "app/services/OrderService.kt" in sibs and "app/services/PaymentService.kt" in sibs
+          and not any("Test" in x for x in sibs), str(arch)[:300])
+    check("沒鄰居的檔不列對照", "lonely/x.py" not in arch.get("files", {}), str(arch)[:300])
+    check("依副檔名附慣例 skill", "kotlin-idioms" in arch.get("idiom_skills", []), str(arch)[:300])
+    r2 = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root))
+    check("人讀輸出有[架構對齊]三問", "[架構對齊]" in r2.stdout and "第二種做法" in r2.stdout, r2.stdout[-500:])
+    print("  ✓ t_pitfalls_diff_arch_alignment_hints")
+
+
 def t_pitfalls_diff_prints_impact_lens_hint_human_only():
     """★2026-08-02:code-loop 的「派 reviewer 前跑 impact --diff 附 manifest」原本
     純紀律層、沒有任何機械提醒——當天編排者自己就忘了跑,而事後補跑第一行就是後來
@@ -20971,8 +21002,8 @@ def t_loop_next_roster():
     r2 = run(vault, "loop", "next", "code-rz", "--tier", "high", "--json")
     d2 = _j.loads(r2.stdout.strip())
     s2 = d2["roster"]["seats"]
-    check("next-roster: code/high 席組成(5佔W 含外家 finder+2不佔W)",
-          sum(1 for s in s2 if s["occupies_w"]) == 5 and sum(1 for s in s2 if not s["occupies_w"]) == 2,
+    check("next-roster: code/high 席組成(5佔W 含外家 finder+3不佔W 含架構對齊)",
+          sum(1 for s in s2 if s["occupies_w"]) == 5 and sum(1 for s in s2 if not s["occupies_w"]) == 3,
           str(s2)[:300])
     # 查表 miss:code+light
     r3 = run(vault, "loop", "next", "code-rz2", "--tier", "light", "--json")
@@ -21006,13 +21037,14 @@ def t_loop_status_roster_check():
     disp(L, "r1-dispatch-s1.json", {"round": "r1", "seat": "s1", "auditor": "lens1-sonnet"})
     disp(L, "r1-dispatch-s2.json", {"seats": [{"auditor": "lens2-sonnet"}]})
     disp(L, "r1-dispatch-s3.json", [{"auditor": "lens3-opus"}])
+    disp(L, "r1-dispatch-s4.json", [{"auditor": "arch-sonnet"}])   # 2026-08-22 架構對齊席(required,不佔 W)
     base = ["loop", "status", L, "--disposal", "--spec", str(spec), "--repo", str(repo)]
     r0 = run(vault, *base)
     r1 = run(vault, *base, "--roster")
     check("status-roster: rc 與不帶 --roster 完全一致(advisory 釘)", r0.returncode == r1.returncode,
           f"{r0.returncode} vs {r1.returncode}")
     check("status-roster: 不帶 --roster 輸出零 diff(無 [roster] 行)", "[roster]" not in r0.stdout, r0.stdout[:200])
-    check("status-roster: 三形狀共解析 3 席(claude 桶足)", "實派 3 席" in r1.stdout and "claude 3" in r1.stdout, r1.stdout[:600])
+    check("status-roster: 三形狀共解析 4 席(claude 桶足,含架構對齊)", "實派 4 席" in r1.stdout and "claude 4" in r1.stdout, r1.stdout[:600])
     check("status-roster: note-if-absent 外家缺→單家族措辭且不算 shortfall",
           "單家族" in r1.stdout and "seat_shortfall" not in r1.stdout, r1.stdout[:800])
     # code/high:外家 required-fail-closed 缺(溢編頂替:總數 6 席但外家 0)+unknown+壞損+不符形狀
