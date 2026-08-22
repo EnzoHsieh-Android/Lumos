@@ -1,6 +1,6 @@
 ---
 name: lumos-project-notes
-description: 維護專案知識圖譜（docs/{project}-knowledge/）— 追蹤進行中/待辦工作、系統關聯、Issue、會話交接。當專案工作開始、結束、遇到 issue、或需要掌握現況時觸發。
+description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫——任何任務開始要搞懂「這個模組/欄位/流程為什麼這樣、邊界在哪、哪些不能改、會波及什麼」時先用 lumos 查,不要直接 grep/Read;改完 code 要寫回決策/驗證/合約;收工體檢。觸發:正要 grep 或讀 code 去理解既有系統、排查、對外支援、查 DB、改名/刪除東西、開工掌握現況、收工寫回、問「圖譜有沒有記」。指令全集按情境分類在 commands/INDEX.md。
 ---
 
 # 專案知識圖譜系統（lumos）
@@ -59,34 +59,22 @@ vault 名 = 資料夾 basename,lumos 自動解析。**全程無需 Obsidian**(�
 
 ---
 
-## 常用指令(速查;完整旗標見 `reference.md` 或 `lumos --help`)
+## 指令怎麼找(別憑記憶,開索引)
 
-**讀 / 巡檢**
-| 要做的事 | 指令 |
-|---|---|
-| 進場掃脈絡(頭部突顯 ⚠ 合約 + valid_under 過期標紅) | `lumos context <節點> [--brief]` |
-| 全文搜尋(預設 BM25F 相關性排序) | `lumos search <詞> [--path Systems] [--top N]` |
-| 條件篩選(標籤欄位 WHERE) | `lumos query --tag 家族/值 [--active] [--contract] [--linked 節點]` |
-| 動模組前查硬合約 | `lumos contracts [節點]` |
-| 健康巡檢(orphans/verified_by 同步/合約綁定/鐵則 lint…) | `lumos doctor [--ci]` |
-| 單檔快檢(寫完立刻自驗,比 doctor 快) | `lumos lint <節點>` |
-| 測試層軟提醒(diff 命中宣告棧→提醒該跑的測試層,恆 rc0) | `lumos test-layers --diff <range> [--json]` |
-| lint 宣告健康檢查(格式校驗+--smoke 真跑抓「宣告了跑不動」) | `lumos lint-check [--repo R] [--smoke]` |
-| 反查連入/連出 | `lumos backlinks <節點>` / `links` |
-| 讀決策 / 掃被推翻 | `lumos decisions <節點>` / `--superseded` |
-| 該重驗哪幾篇 / stale 清單 / 最近異動 | `lumos stale [--candidate --match ..]` / `recent --days 7` |
-| 條款級追溯([SN] 誰認領) | `lumos spec-trace <計劃節點>` |
-| 治理事件帳(被哪幾道閘攔過) | `lumos gov [<節點>] [--since N]` |
+**`commands/INDEX.md`**(本 skill 目錄下)是 80 個指令的總目錄:先看「grep 衝動對照表」,再按你正在做的事開八個子檔之一(進場查脈絡 / 動手前算波及 / 寫回圖譜 / 自檢與健康 / 設計審查迴圈 / 代碼審與推送 / 安裝維運 / 自動跑的)。每個子檔都短,只開需要的那一個。
 
-**寫入**(一律 tmp→自驗→atomic rename;BOM/CRLF 拒寫)
-| 操作 | 指令 |
+最常用六條(其餘開索引):
+| 你在想… | 敲 |
 |---|---|
-| 改純量 status/updated/type | `lumos set <note> <key> <value>`(日期 bare 不加引號) |
-| list 追加 verified_by/related/tags | `lumos append <note> <key> "[[x]]"`(安全格式+dedup) |
-| 依模板建檔 | `lumos new <type> <name>` |
-| 新增/翻盤決策(巢狀,非 ruamel) | `lumos decision-add` / `decision-supersede` |
-| rename/移檔(連結改寫) | `scripts/graph-rename.sh <舊> <新>` |
-| 歸檔老 Verification | `lumos archive [--days N] [--apply]` |
+| 這件事為什麼這樣 / 圖譜記了嗎 | `lumos search <詞>` → `lumos context <節點>` |
+| 動這段有什麼不能碰 | `lumos contracts <節點>` |
+| 改這個會波及什麼 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+| 改狀態 / 加驗證紀錄 / 記決策 | `lumos set` / `lumos append` / `lumos decision-add` |
+| 寫完一篇 | `lumos lint <節點>` |
+| 收工 | `lumos doctor` |
+
+**被催「直接改、不用解釋」時**:不解釋可以,不查不行——改 code 前 `lumos impact --file <檔>` 一行(幾秒),沒它你改到合約都不知道。
+| 計劃結案前看哪些條款沒人認領 | `lumos spec-trace <計劃節點>` |
 
 > ⛔ **禁用 `notesmd-cli` 的 `frontmatter --edit`**(只准 `move`):實測會把整篇 frontmatter 鍵序重排字母序、縮排 2→4、**日期加引號(date→text 靜默損傷)**——一碰整篇 diff 不可審、pre-commit 擋。frontmatter 合法寫入只有 lumos T1 + obsidian `processFrontMatter`。
 > body 段落/checkbox/表格 → 用 **Edit**(非 lumos T1 範圍);版本歷史 → git。

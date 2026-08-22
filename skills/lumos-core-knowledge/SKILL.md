@@ -1,6 +1,6 @@
 ---
 name: lumos-core-knowledge
-description: 跨專案核心圖譜(core-knowledge)的讀寫規範——核心業務規則的查詢、升格、偏離登記、純度治理。當對話涉及「跨專案共用的業務規則」「升格為核心」「core_refs 指針」「偏離核心」或直接操作 $CORE_KNOWLEDGE_ROOT 時觸發。與 lumos-project-notes(專案層)分工:專案的事歸專案 skill,跨專案的事歸這份。
+description: 跨專案共用的核心業務規則怎麼查、怎麼升格、怎麼登記偏離——規則放在 core-knowledge 這個共用圖譜,專案筆記用 core_refs 指過去。觸發:對話提到「這條規則別的專案也在用」「升格為核心」「core_refs」「跟核心規則不一樣/偏離」,或直接要動 $CORE_KNOWLEDGE_ROOT。專案自己的事歸 lumos-project-notes,跨專案的事歸這份。
 ---
 
 # 跨專案核心圖譜(core-knowledge)

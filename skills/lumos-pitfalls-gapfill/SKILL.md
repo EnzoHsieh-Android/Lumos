@@ -1,6 +1,6 @@
 ---
 name: lumos-pitfalls-gapfill
-description: linter 未收錄的新坑用網搜補漏——WebSearch 找某 stack 的新 gotcha/pitfall(linter 沒抓的)→ 反證預篩(派 refuter 駁倒即丟)→ 駁不倒進候選(非定論)→ 人輕量放行 → 進圖譜 linter-gap 實務隱患節點(節點自去重)。邊角、量少、無機械 oracle 人閘省不掉。觸發詞:網搜補漏、linter 沒收錄的坑、pitfalls 網搜、新 gotcha 補漏、偏科層補殘餘。
+description: linter 抓不到的新坑用網搜補——WebSearch 找某技術棧最近的 gotcha,派反駁者試著推翻,推不翻的進候選,人輕量放行後寫進圖譜的實務隱患筆記。觸發:有人說「網搜補漏」「linter 沒收錄的坑」「這個 stack 最近有什麼新雷」、pitfalls 清單想補殘餘。量少、沒有機械判準,人那一關省不掉。
 ---
 
 # lumos-pitfalls-gapfill:linter 未收錄新坑的網搜補漏(block ③)

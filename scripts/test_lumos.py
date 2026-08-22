@@ -3871,6 +3871,41 @@ def t_doctor_soft_sections_truncate_by_default():
     check("doctor quiet: --ci 視同 verbose 全列", n_ci == 5, f"{n_ci}")
 
 
+def t_command_index_complete():
+    """指令索引不漏(Projects/指令索引與情境測試_計劃 2026-08-22):
+    skills/lumos-project-notes/commands/*.md 必須提到 argparse 裡的每個頂層子指令,
+    以及 loop/canary/guard/testmap/anchor/cochange/code-loop/rel-cascade 的每個二層子指令。
+    新加指令忘了寫「什麼時候用」→ 這條紅。"""
+    import re as _re
+    import subprocess as _sp
+    root = Path(__file__).resolve().parent.parent
+    cmd_dir = root / "skills" / "lumos-project-notes" / "commands"
+    check("索引目錄存在且有總目錄", (cmd_dir / "INDEX.md").exists(), str(cmd_dir))
+    corpus = "\n".join(p.read_text(encoding="utf-8") for p in sorted(cmd_dir.glob("*.md")))
+    lumos_real = str(root / "scripts" / "lumos")
+    def subs(*prefix):
+        r = _sp.run([sys.executable, lumos_real, *prefix, "--help"], capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        pos = out.find("positional arguments:")
+        m = _re.search(r"\{([a-z0-9,\-]+)\}", out[pos:] if pos >= 0 else out)
+        return m.group(1).split(",") if m else []
+    top = subs()
+    check("argparse 頂層子指令可列舉", len(top) >= 60, str(len(top)))
+    missing = [c for c in top if f"lumos {c}" not in corpus]
+    check("★每個頂層子指令都在索引裡有「什麼時候用」★", not missing, f"缺: {missing}")
+    missing2 = []
+    for parent in ("loop", "canary", "guard", "testmap", "anchor", "cochange", "code-loop", "rel-cascade"):
+        for sc in subs(parent):
+            if f"{parent} {sc}" not in corpus and f"`{sc}`" not in corpus:
+                missing2.append(f"{parent} {sc}")
+    check("★二層子指令也都有歸位★", not missing2, f"缺: {missing2}")
+    idx = (cmd_dir / "INDEX.md").read_text(encoding="utf-8")
+    check("總目錄控制在 4.5k 字元內(分塊的意義)", len(idx) <= 4500, str(len(idx)))
+    for p in sorted(cmd_dir.glob("0*.md")):
+        check(f"子檔 {p.name} 在總目錄被指到", p.name in idx, p.name)
+    print("  ✓ t_command_index_complete")
+
+
 def t_code_exts_four_lists_agree():
     """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天

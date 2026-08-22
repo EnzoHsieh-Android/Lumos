@@ -1,6 +1,6 @@
 ---
 name: lumos-design-loop
-description: 設計 spec／計劃寫完、進實作前的對抗審計硬閘——派乾淨 agent 逐輪找洞、引句錨定機械收貨、處置帳全清才放行實作。用在:剛寫完 spec／設計要進實作、問「這份設計審過沒／收斂了沒」、或指名 design loop／對抗審計。
+description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈——讓幾個不知道脈絡的審查員輪流挑毛病,每輪用 lumos loop next 派席、lumos canary record 記帳、lumos loop status --disposal 判過不過,連續乾淨才放行實作;跑滿上限沒過就攤給人裁。觸發:剛寫完 spec/設計/計劃筆記準備動手、有人問「這份設計審過沒」、指名 design loop 或對抗審計。小改動可跳過但要在計劃筆記註明。指令速查在 lumos-project-notes 的 commands/05-設計審查迴圈.md。
 ---
 
 # lumos-design-loop:設計審計 loop(進實作前的硬閘)
