@@ -10305,15 +10305,27 @@ _STACK_PERF_QUESTIONS = {
     ],
 }
 # diff 模式:代碼形態 pattern:(regex, 形態類軸, 提問)——類軸限 併發/效能/資源(非四業務類)
+# 第四欄 in_strings:SQL 本來就寫在字串裡,要看字串;其餘只看真代碼(字串字面先剝掉,#7)。
+# SQL 三條收緊成真的 SQL 形狀——「UPDATE 失敗」這種訊息文字不算。
 _PITFALL_DIFF_PATTERNS = [
-    (re.compile(r"requests\.\w+\(|httpx\.\w+\(", re.I), "資源", "HTTP 呼叫有沒有 timeout?"),
-    (re.compile(r"\bopen\s*\(", re.I), "資源", "檔案 handle 有沒有 with/確定 close?"),
-    (re.compile(r"\bSELECT\b", re.I), "效能", "是否在迴圈內、造成 N+1?"),
-    (re.compile(r"\btime\.sleep\s*\(", re.I), "效能", "sleep 在迴圈裡會不會累積延遲?"),
-    (re.compile(r"\bthreading\.|\bLock\s*\(|global\s+\w+", re.I), "併發", "共享狀態有沒有鎖保護?"),
-    (re.compile(r"\bINSERT\b|\bUPDATE\b|\bDELETE\b", re.I), "併發", "寫入有沒有交易包裹?"),
+    (re.compile(r"requests\.\w+\(|httpx\.\w+\(", re.I), "資源", "HTTP 呼叫有沒有 timeout?", False),
+    (re.compile(r"\bopen\s*\(", re.I), "資源", "檔案 handle 有沒有 with/確定 close?", False),
+    (re.compile(r"\bSELECT\s+(?:\*|\d|\w+(?:\s*,\s*\w+)*\s+FROM\b)", re.I), "效能", "是否在迴圈內、造成 N+1?", True),
+    (re.compile(r"\btime\.sleep\s*\(", re.I), "效能", "sleep 在迴圈裡會不會累積延遲?", False),
+    (re.compile(r"\bthreading\.|\bLock\s*\(|global\s+\w+", re.I), "併發", "共享狀態有沒有鎖保護?", False),
+    (re.compile(r"\bINSERT\s+INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b", re.I), "併發", "寫入有沒有交易包裹?", True),
 ]
-_PITFALL_DIFF_SKIP_EXT = {".md", ".txt", ".rst"}
+_PITFALL_DIFF_SKIP_EXT = {".md", ".txt", ".rst",
+                          # 資料/紀錄檔不是代碼(工具鏈補強十件 #7,2026-08-22):探針結果 JSON、
+                          # 治理帳、log 裡記的指令字串被當代碼掃,三批推送連判 high。
+                          ".json", ".jsonl", ".csv", ".log", ".lock", ".svg", ".html", ".patch", ".diff"}
+_PITFALL_STRLIT_RE = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
+
+
+def _strip_string_literals(code):
+    """把一行代碼裡的字串字面挖空(保留引號),讓 pitfalls 的 open(/UPDATE 正則只看真代碼——
+    print("…open(…") 這種訊息文字不算資源風險(#7)。單行粗剝,跨行字串不處理(剝不掉就照掃,寧誤傷不漏)。"""
+    return _PITFALL_STRLIT_RE.sub('""', code)
 
 # 簿記檔白名單(單一源,兩個消費者:pitfalls --diff 掃描排除 + code-loop 留痕失效豁免)。
 # 兩處分開寫過會漂移;pitfalls 這端 2026-08-11 才補上——治理帳裡記的 skip 理由本身在
@@ -11757,8 +11769,9 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
                 #   掃自己的紀錄→再命中→再 skip→再寫一行……自我餵食,實測誤觸發 9 次
                 and not _PITFALL_DIFF_TEST_PAT.search(cur_file)
                 and not code.strip().startswith(("#", "//", "--", "/*", "*"))):
-            for pat, axis, q in _PITFALL_DIFF_PATTERNS:
-                if pat.search(code):
+            code_nostr = _strip_string_literals(code)
+            for pat, axis, q, in_strings in _PITFALL_DIFF_PATTERNS:
+                if pat.search(code if in_strings else code_nostr):
                     claims.append({"file": cur_file, "line": new_ln, "class": axis,
                                    "pattern": pat.pattern, "question": q})
                     break
@@ -14287,6 +14300,111 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
     return 2
 
 
+
+# ── 每個子指令「這是幹嘛 / 什麼時候用」(Projects/工具鏈補強十件_計劃 #3)──────────
+# 來源=skills/lumos-project-notes/commands/ 索引子檔的情境欄;建完 parser 由 _fill_help_when 灌進
+# 每個子指令的 description,讓 `lumos X --help` 第一行就講人話。t_every_subcommand_has_when 釘非空。
+HELP_WHEN = {
+    "doctor": "整個圖譜健不健康。收工前跑;紅的段先修,--verbose 看全部提醒,--ci 給 pre-push 和 CI 用。",
+    "links": "這篇筆記連出去哪些筆記。改上游前看下游用。",
+    "backlinks": "哪些筆記連到這篇。想知道「誰依賴它」的時候。",
+    "map": "以某篇為中心把關係展成樹。想看這一帶長什麼樣。",
+    "context": "進場第一步之二:這篇的來龍去脈、合約、前提、鄰居一次攤開。search 定位到之後用。",
+    "show": "讀一篇筆記全文。search 只給索引行,下結論前要用它讀全文。",
+    "contracts": "動某模組前看有什麼不能碰:列出標成 ★INVARIANT★ / ★DEBT★ 的規則與綁的測試。",
+    "lint": "剛寫完一篇,確認沒寫壞(欄位、標籤、合約標記)。比 doctor 快,只看這篇。",
+    "gov": "這篇或這段時間被哪幾道閘攔過。--stats 給純數字表。",
+    "canary": "審查迴圈的記帳:record 記一輪結果,second 找人覆核某一筆。",
+    "second": "覆核某一筆審查判定,必須換不同的人。",
+    "record": "記一輪審查結果:誰審的、嚴重度、幾條發現、各自怎麼處置、審的是哪份文件(指紋)。",
+    "loop": "審查迴圈的查詢:next 問下一步、status 問過不過、verify-progress 只讀帳本、canary-stats 看歷史抓漏率。",
+    "status": "這個審查編號過關了沒。多人審加 --panel,嚴格處置閘加 --disposal,單人 --light,結清模式 --settle。",
+    "compress": "長跑的審查上下文太長,規則式壓成三欄。",
+    "verify-progress": "不看散文,只從帳本結構欄位看審到哪了(防被報告措辭帶風向)。",
+    "next": "每輪開頭問:第幾輪、要幾人、派誰、怎麼記帳。第一次一定帶 --tier。",
+    "canary-stats": "各審查員歷史抓到/漏掉比率。觀測用,不影響過不過。",
+    "capture-counts": "多個找錯工具的結果合併估漏網,吐給 record --capture-counts。",
+    "guard": "合約綁測試那一套:list 看狀態、scaffold 產骨架、bind 綁上、audit 留審計、trace 看證據鏈、kill 驗殺傷力。",
+    "list": "每條合約綁測試的狀態:真綁 / 懸空 / 偽證據 / 裸 / 未審。",
+    "scaffold": "幫某條合約產一個測試骨架(預設紅燈,斷言留 TODO)。",
+    "bind": "把寫好的測試綁回合約的 KEY 行([test:])。別手改。",
+    "audit": "某條合約被不知道脈絡的人審過了,留 [audit:] 戳記。",
+    "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
+    "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住。",
+    "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。",
+    "spec-trace": "計劃結案前看哪些條款沒有驗證紀錄認領。",
+    "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認)。",
+    "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by。預設 dry-run,--apply 才寫。",
+    "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
+    "decisions": "當初為什麼這樣決定、翻案了嗎。--superseded 全庫掃被推翻的。",
+    "stale": "我改了某個流程/環境,哪些驗證該重驗(--candidate --match <關鍵字>);或列已過期的驗證。",
+    "query": "按欄位條件篩筆記:金流且未收案、連到 X 且還開著。至少給一個條件。",
+    "recent": "最近 N 天動了哪些筆記。開工掌握現況用。",
+    "stats": "圖譜多大、各資料夾幾篇。",
+    "export": "把圖譜畫成 mermaid / dot / 互動 html。",
+    "set": "改一篇的單一值欄位(status / updated / type…)。改 status 會連帶同步標籤。別手改開頭欄位。",
+    "append": "往清單欄位加一項(verified_by / related / tags…),自動去重。",
+    "drift-history": "沿 git 歷史重放:筆記點名的符號在 code 裡消失的規律,這份圖譜有沒有這型漂移。",
+    "remove": "從清單欄位拿掉一項(死背書、降格的指針)。找不到會拒絕,不會亂刪。",
+    "self-audit": "某篇功能筆記我重新確認過還站得住,留 self_audit 戳記。",
+    "new": "依範本建一篇新筆記。驗證紀錄加 --plan / --systems 自動雙向連。",
+    "decision-supersede": "推翻一條舊決策:舊的標 valid:false 並指向新的,並開一本連鎖帳。",
+    "decision-reindex": "舊筆記的決策沒編號,補上 dN。--all 全部。",
+    "rel-cascade": "翻案後逐篇確認鄰居筆記要不要跟著改:confirm / prune 寫回帳本,list 看活動,resume 接續。",
+    "decision-add": "在某篇記一條決策,回編號。",
+    "install": "把 lumos 指令裝成全域可用(symlink 到 ~/.local/bin)並同步 skills / hooks。",
+    "uninstall": "移除全域 lumos 指令。",
+    "archive": "把老的驗證紀錄歸檔。先 dry-run 再 --apply。",
+    "update": "專案裡的工具組舊了,從唯一來源更新(含 CLAUDE.md 紀律區塊)。",
+    "bootstrap": "新機器第一次裝:clone 來源、裝全域指令、skills、專案接線。",
+    "init": "新專案要用圖譜:建資料夾、.gitignore、pre-commit / pre-push。",
+    "deinit": "專案不用了,拆掉專案層(hooks / 工具組 / CLAUDE.md 注入),圖譜保留。",
+    "teardown": "連機器全域一起拆(CLI / skills / hooks),圖譜保留。",
+    "fold-check": "一份文件前後寫的數字 / 設定對不對得上(折入審查結果後用)。",
+    "refcheck": "文件裡引的 檔案:行號 還存不存在。",
+    "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
+    "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
+    "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
+    "ci-status": "只看上次 CI 結果,不打網路。",
+    "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
+    "build": "挖掘檔案↔測試的關係,存成地圖。",
+    "affected": "改了這些檔,具體該跑哪幾個測試(建議,不擋)。",
+    "test-layers": "改了這些檔,該跑哪一層測試(單元 / 整合 / UI)的提醒,不擋。",
+    "lint-check": ".lumos/lint.json 宣告的 linter 真的跑得動嗎。--smoke 真跑。",
+    "sqlfluff-sarif": "把 sqlfluff 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
+    "stylelint-sarif": "把 stylelint 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
+    "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
+    "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
+    "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
+    "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
+    "mutate": "對這段 diff 做變異測試,看測試網密不密。",
+    "link-candidates": "哪些 code 沒有任何筆記連到它,列候選;要不要補由人裁。",
+    "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+    "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
+    "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
+    "cochange": "改了 A 檔,歷史上常一起改的 B 檔要不要跟著改。rules 看規則,check 對變更集比對。",
+    "rules": "列出共改規則集。",
+    "cochange check": "對這次變更集比對規則,列出可能漏改的夥伴檔(提醒不擋)。",
+    "code-loop check": "我現在推得上去嗎:tier=high 又沒有效留痕就 BLOCKED,並講原因。",
+    "delguard": "commit 時自動跑:刪掉 / 改名的符號,筆記還在不在講它。",
+    "code-loop": "高風險改動推送前的留痕:pass 審過、skip 刻意不審、check 現在推得上去嗎。",
+    "pass": "代碼審過了,留痕綁當下版本;之後再改 code 就失效要重跑。",
+    "skip": "刻意不審,留痕寫理由(合法,但會被統計)。",
+}
+
+
+def _fill_help_when(parser, parent=""):
+    """遞迴把 HELP_WHEN 灌進每個沒有 description 的子指令,讓 `lumos X --help` 第一行講人話。
+    同名二層子指令(cochange check / code-loop check)先查「父 子」鍵再退回單名。"""
+    for act in parser._actions:
+        if isinstance(act, argparse._SubParsersAction):
+            for name, sp in act.choices.items():
+                if not sp.description:
+                    when = HELP_WHEN.get(f"{parent} {name}".strip()) or HELP_WHEN.get(name)
+                    if when:
+                        sp.description = "什麼時候用:" + when
+                _fill_help_when(sp, name)
+
 def main():
     ap = argparse.ArgumentParser(prog="lumos", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -14783,6 +14901,7 @@ def main():
         _clp.add_argument("--repo", dest="cl_repo", default=None,
                           help="repo root(預設 cwd 逐層向上找 .git)")
 
+    _fill_help_when(ap)
     args = ap.parse_args()
 
     # install/uninstall/update/bootstrap 不需要 Env(vault),先處理

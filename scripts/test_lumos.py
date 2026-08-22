@@ -3906,6 +3906,31 @@ def t_command_index_complete():
     print("  ✓ t_command_index_complete")
 
 
+def t_every_subcommand_has_when():
+    """工具鏈補強十件 #3:每個子指令(含二層)的 `--help` 第一段要有「什麼時候用:」——
+    Claude 在情境測試裡常敲 `lumos X --help` 確認,空的 help 等於逼它猜。"""
+    import re as _re
+    import subprocess as _sp
+    root = Path(__file__).resolve().parent.parent
+    lumos_real = str(root / "scripts" / "lumos")
+    def helptext(*prefix):
+        r = _sp.run([sys.executable, lumos_real, *prefix, "--help"], capture_output=True, text=True)
+        return r.stdout + r.stderr
+    def subs(*prefix):
+        out = helptext(*prefix); pos = out.find("positional arguments:")
+        m = _re.search(r"\{([a-z0-9,\-]+)\}", out[pos:] if pos >= 0 else out)
+        return m.group(1).split(",") if m else []
+    missing = []
+    for c in subs():
+        if "什麼時候用:" not in helptext(c):
+            missing.append(c)
+        for sc in subs(c):
+            if "什麼時候用:" not in helptext(c, sc):
+                missing.append(f"{c} {sc}")
+    check("★每個子指令 --help 都有「什麼時候用」★", not missing, f"缺: {missing}")
+    print("  ✓ t_every_subcommand_has_when")
+
+
 def t_code_exts_four_lists_agree():
     """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天
@@ -5807,6 +5832,38 @@ def t_pitfalls_diff():
     data = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
     check("pitfalls --diff: CJK 檔名命中且檔名不轉義",
           any(c["file"] == "訂單頁.py" for c in data["claims"]), r.stdout)
+
+
+def t_pitfalls_diff_ignores_data_files_and_string_literals():
+    """工具鏈補強十件 #7:資料檔(.json/.jsonl…)與字串字面裡的 open(/UPDATE 不算代碼風險——
+    2026-08-22 三批推送被探針結果 JSON 和 print 文字連判 high,閘被訓練成「先想怎麼 skip」。"""
+    import json as _json, subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-pfd7-"))
+    def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+    def commit(m): git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", m)
+    git("init"); (root / "app.py").write_text("x = 1\n", encoding="utf-8"); commit("init")
+    # ① 資料檔帶 open( / UPDATE → 不算
+    (root / "run.json").write_text('{"calls": ["open(path)", "UPDATE t SET a=1"]}\n', encoding="utf-8")
+    (root / "log.jsonl").write_text('{"cmd": "requests.post(url)"}\n', encoding="utf-8")
+    commit("data")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("★資料檔(.json/.jsonl)不掃 → standard★", d["tier"] == "standard" and not d["claims"], r.stdout)
+    # ② 字串字面裡的關鍵字 → 不算;真的 open( → 算
+    (root / "app.py").write_text(
+        "def f():\n"
+        "    print(\"擋下:檔案 handle 有沒有 with/確定 close? open(\")\n"
+        "    msg = 'UPDATE 失敗'\n", encoding="utf-8")
+    commit("strings")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("★字串字面裡的 open(/UPDATE 不算★", d["tier"] == "standard" and not d["claims"], r.stdout)
+    (root / "app.py").write_text("def g(p):\n    fh = open(p)\n    return fh.read()\n", encoding="utf-8")
+    commit("real")
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    d = _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+    check("真的 open( 照樣 high(反誤傷)", d["tier"] == "high" and any(c["line"] == 2 for c in d["claims"]), r.stdout)
+    print("  ✓ t_pitfalls_diff_ignores_data_files_and_string_literals")
 
 
 def t_pitfalls_diff_prints_impact_lens_hint_human_only():
