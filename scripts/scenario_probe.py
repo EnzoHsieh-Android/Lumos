@@ -69,6 +69,8 @@ def judge(calls, expect, forbid_before):
         return False, f"沒敲到期望指令: {missing}", None
     first = min(exp_idx.values())
     for i, (name, summ) in enumerate(calls[:first]):
+        if name in ("Read", "Grep", "Glob") and "/.claude/skills/" in summ:
+            continue   # 讀索引/skill 手冊是期望行為,不算「先做了別的」
         for f in forbid_before:
             if re.search(f, name) or (name == "Bash" and re.search(f, summ)):
                 return False, f"在敲 lumos 之前先做了 {name}: {summ[:80]!r}", first

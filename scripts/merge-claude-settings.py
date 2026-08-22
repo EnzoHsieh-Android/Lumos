@@ -33,6 +33,17 @@ def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
 HOOK_ENTRIES = {
     "SessionStart": [
         {
+            # 開場一行:第一步敲 lumos + 指令索引在哪(Projects/指令索引與情境測試_計劃 2026-08-22)。
+            # 沒有 docs/*-knowledge 的專案靜默。
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": _hook_cmd("lumos-entry-hook.py"),
+                    "timeout": 10,
+                }
+            ],
+        },
+        {
             # CI 紅燈後備網(CI回流閉環_計劃 [S2b]):主路徑是 push 後同輪 lumos ci-wait,
             # 這支只在主路徑沒跑完(session 中斷/關機)時兜底,開場推播紅燈。
             # 總開關:專案未宣告 .lumos/config.json 的 ci 區塊即完全靜默(零侵入)。

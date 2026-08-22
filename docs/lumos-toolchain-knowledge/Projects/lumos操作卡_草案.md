@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: superseded
 created: 2026-08-21
 updated: 2026-08-21
 tags:
   - type/project
-  - status/doing
+  - status/superseded
 related:
   - "[[Projects/工具鏈全環節體檢_調研]]"
 ---
