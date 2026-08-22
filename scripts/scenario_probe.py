@@ -60,7 +60,7 @@ def judge(calls, expect, forbid_before):
     forbid_before:任何一條命中(工具名或 Bash 指令字串)若發生在「第一條 expect 命中」之前 → 不過。"""
     exp_idx = {}
     for i, (name, summ) in enumerate(calls):
-        hay = summ if name == "Bash" else ""
+        hay = summ if name == "Bash" else f"{name}:{summ}"   # 非 Bash 工具用「工具名:參數」比,紀律題可寫 Edit:docs/…
         for e in expect:
             if e not in exp_idx and re.search(e, hay):
                 exp_idx[e] = i

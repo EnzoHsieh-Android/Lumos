@@ -2985,6 +2985,18 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
         print(f"  這段時間完全沒觸發過的閘({len(absent)} 道):{', '.join(absent) if absent else '無'}")
         print(_STATS_ABSENT_DISCLAIMER)
     print()
+    # 流程自產工作量(Issues/流程自產工作量未量測):處置帳裡標了 finding_kinds 的輪,算 code/spec/process 佔比
+    fk = {"code": 0, "spec": 0, "process": 0}; fk_rounds = 0
+    for r in rows:
+        if r.get("gate") == "canary" and isinstance(r.get("finding_kinds"), dict):
+            fk_rounds += 1
+            for v in r["finding_kinds"].values():
+                if v in fk: fk[v] += 1
+    tot = sum(fk.values())
+    if tot:
+        print(f"  發現在修什麼(只算有標 --finding-kind 的 {fk_rounds} 輪,共 {tot} 條):程式缺陷 {fk['code']}({fk['code']/tot:.0%})、被審文件缺陷 {fk['spec']}({fk['spec']/tot:.0%})、流程自己要求的文件/留痕 {fk['process']}({fk['process']/tot:.0%})")
+        print("  (process 佔比就是「流程自產工作量」;2026-08-22 起才有標,之前的輪沒資料)")
+        print()
     # 設計迴圈結案方式(工具鏈補強十件 #6):達上限卻從沒過關的審查編號 = 人裁放行。
     # 只看 gate=design-loop 的事件(2026-08-22 起才記;之前的迴圈沒帳,算不出來,這裡如實講)。
     dl = [r for r in ded if r.get("gate") == "design-loop"]
@@ -3002,7 +3014,51 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
     print("  註:這張表是「去重後」的筆數,跟不加 --stats 的畫面行數不是同一套算法——預設畫面還會再折疊一次。")
 
 
-def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
+def _render_gov_nags(ded, min_days):
+    """機制空轉偵測(Issues/自足性審計提醒空轉四十六天 的出口,2026-08-22):
+    同一道軟閘對同一篇筆記,從第一次提醒到最後一次提醒跨 ≥ min_days 天,而且最後一次提醒就在最近一次
+    doctor 體檢那天(=還在喊、沒人理)。有就列出並回 rc1(給自主迴圈週報當訊號),沒有 rc0。
+    只看 kind=warned 的軟閘;硬擋的本來就擋得住人,不會空轉。"""
+    import datetime as _dt
+    runs = [r["ts"] for r in ded if r.get("gate") == "doctor-run"]
+    last_run = max(runs) if runs else None          # 完整時間戳:同一天處理完再體檢,要能當場消失
+    span = {}   # (gate,node) -> [first_ts,last_ts,count]
+    for r in ded:
+        if r.get("kind") != "warned" or r.get("hard"):
+            continue
+        for nd in r.get("nodes") or []:
+            k = (r["gate"], nd)
+            t = r["ts"]
+            if k not in span:
+                span[k] = [t, t, 1]
+            else:
+                span[k][0] = min(span[k][0], t); span[k][1] = max(span[k][1], t); span[k][2] += 1
+    out = []
+    for (g, nd), (ft, lt, c) in span.items():
+        f, l = ft[:10], lt[:10]
+        try:
+            days = (_dt.date.fromisoformat(l) - _dt.date.fromisoformat(f)).days
+        except ValueError:
+            continue
+        # 「還在喊」= 最後一次提醒不早於最近一次體檢(體檢會先寫提醒再寫 doctor-run,同秒內算還在喊)
+        still = (last_run is None) or (lt[:19] >= last_run[:19])
+        if days >= min_days and still:
+            out.append((days, g, nd, f, l, c))
+    if not out:
+        print(f"沒有空轉的提醒:沒有任何閘對同一篇連續喊超過 {min_days} 天還沒人理。")
+        return 0
+    out.sort(reverse=True)
+    print(f"提醒:下面這些是「同一道閘對同一篇連續喊了 ≥{min_days} 天、最近一次體檢({(last_run or '?')[:16]})還在喊」的空轉清單,共 {len(out)} 組。")
+    print("機制有在跑,只是沒人去看——要嘛處理那篇,要嘛承認這道提醒對它無效、把它降成不提醒。")
+    for days, g, nd, f, l, c in out[:30]:
+        print(f"  {days:>4} 天  {g:10} {nd}  ({f} → {l},喊了 {c} 次)")
+    if len(out) > 30:
+        print(f"  … 還有 {len(out) - 30} 組")
+    print("處理完一篇後它自然從清單消失;要看某篇被哪幾道閘喊:lumos gov <篇名>")
+    return 1
+
+
+def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
     """唯讀彙整七帳(bypass/rot-queue/governance/canary/kill/signoff/ci)→ 治理事件時間軸。
     本機開發可見性工具(非合規物)。L2 無 node、L3 以 Verification 為鍵 → 對 Systems 為部分視圖。
     去噪(2026-07-25,呈現層——帳本身不動):同日同類 advisory(軟/warned/無 detail,如 Check S
@@ -3056,6 +3112,7 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
          "gate": "canary", "kind": d.get("kind", "?"), "hard": False, "nodes": [],
          "token": d.get("token", ""), "auditor": d.get("auditor") or "?",
          "findings": d.get("findings"), "severity": d.get("severity", ""),
+         "finding_kinds": d.get("finding_kinds"),
          # [S2] second 行的 verdict/ref 併進 detail(否則分歧訊號在治理帳全程隱形)
          "detail": ((f"verdict={d.get('verdict','?')} ref={d.get('ref','')} · "
                      if d.get("kind") == "second" else "")
@@ -3082,6 +3139,8 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False):
     if node:
         q = stem(node)
         ded = [r for r in ded if q in r["nodes"]]
+    if nags:
+        return _render_gov_nags(rows, nags)   # 用去重前的原始列:去重鍵含 commit,兩次體檢間沒 commit 會折掉最後一次日期
     # ── 去噪(呈現層):advisory(軟/warned/無 token/無 detail)同(日,gate,kind,node)折 ×N;
     #    同(日,gate,kind)群 >6 節點再收單行摘要。canary/kill/signoff/L2 等有 detail/token 逐筆保留。
     def _is_advisory(r):
@@ -3249,7 +3308,7 @@ def _vault_repo_root(env):
     return env.vault.parent.resolve()
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None):
     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
@@ -3384,6 +3443,24 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         rec["findings_set"], rec["folded_set"], rec["accepted_set"] = f_set, fo, ac
         if reasons:
             rec["accept_reasons"] = reasons
+        # 流程自產工作量(Issues/流程自產工作量未量測 的入口,2026-08-22):每條發現標它在修什麼——
+        # code(程式缺陷)/ spec(被審文件本身的缺陷)/ process(流程要求產出的規格文件、留痕格式、範本)。
+        # 選填;給了就要全集對得上。幾個月後 gov --stats 算「findings 有幾成在修流程自己要求的東西」。
+        if finding_kinds:
+            kinds = {}
+            for item in finding_kinds:
+                if "=" not in item:
+                    print(f"擋下:--finding-kind 要寫成 id=code|spec|process,你給的是 {item!r}", file=sys.stderr)
+                    return 2
+                k, _, v = item.partition("="); k, v = k.strip(), v.strip()
+                if v not in ("code", "spec", "process"):
+                    print(f"擋下:--finding-kind 的值只能是 code / spec / process,{k} 給的是 {v!r}", file=sys.stderr)
+                    return 2
+                kinds[k] = v
+            if set(kinds) != F:
+                print(f"擋下:--finding-kind 要每條發現各標一個(發現有 {sorted(F)},標了 {sorted(kinds)})", file=sys.stderr)
+                return 2
+            rec["finding_kinds"] = kinds
     for _flag, _p in (("--report", report), ("--snapshot", snapshot)):
         if _p is None:
             continue
@@ -14561,6 +14638,8 @@ def main():
     p.add_argument("--full", action="store_true", help="關去噪:advisory 逐筆完整列(預設同日同類折疊)")
     p.add_argument("--stats", action="store_true",
                    help="附加唯讀數字報表:每道閘的筆數/nodes/commit/起訖日 + 未出現的閘清單(恆 rc0,不做判定)")
+    p.add_argument("--nags", type=int, default=0, metavar="天數", dest="gov_nags",
+                   help="只列「同一道閘對同一篇連續提醒 ≥ 天數、而且最近一次體檢還在喊」的空轉清單(有就 rc1;自主迴圈週報用)")
 
     cp = sub.add_parser("canary", help="審計員 canary 留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵")
     csub = cp.add_subparsers(dest="ccmd", required=True)
@@ -14608,6 +14687,8 @@ def main():
                     help="[T1 處置帳] 附理由放行的 id 子集(與 folded 互斥;聯集須=全集;blocker 輪必空)")
     cr.add_argument("--accept-reason", dest="accept_reasons", action="append",
                     help="[T1 處置帳] id=理由(可重複;鍵集合須=accepted-set,理由非空)")
+    cr.add_argument("--finding-kind", dest="finding_kinds", action="append",
+                    help="每條發現在修什麼:id=code(程式缺陷)|spec(被審文件缺陷)|process(流程要求的文件/留痕/範本);選填,給了要全集對得上——量「流程自產工作量」用")
 
     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
     lsub = lp.add_subparsers(dest="lcmd", required=True)
@@ -15178,7 +15259,7 @@ def main():
     if args.cmd == "signoff":
         return cmd_signoff(env, args.node, note=args.note, by=args.by)
     if args.cmd == "gov":
-        return cmd_gov(env, args.node, since_days=args.since, full=args.full, stats=args.stats)
+        return cmd_gov(env, args.node, since_days=args.since, full=args.full, stats=args.stats, nags=args.gov_nags)
 
     if args.cmd == "ci-wait":
         return cmd_ci_wait(env, timeout=args.cw_timeout, repo_dir=args.cw_repo,
@@ -15198,7 +15279,8 @@ def main():
                           tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,
                           scope_lines=args.scope_lines, report=args.report, snapshot=args.snapshot,
                           findings_set=args.findings_set, folded_set=args.folded_set,
-                          accepted_set=args.accepted_set, accept_reasons=args.accept_reasons)
+                          accepted_set=args.accepted_set, accept_reasons=args.accept_reasons,
+                          finding_kinds=getattr(args, 'finding_kinds', None))
 
     if args.cmd == "loop":
         if args.lcmd == "canary-stats":

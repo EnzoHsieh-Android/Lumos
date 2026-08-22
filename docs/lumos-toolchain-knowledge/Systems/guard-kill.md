@@ -22,10 +22,14 @@ related:
   - "[[Projects/guard殺傷力驗證_計劃]]"
   - "[[Systems/check-t-sentinel]]"
   - "[[Systems/test-profile-multiplatform]]"
-verified_by:
   - "[[Verification/2026-07-10_guard殺傷力驗證]]"
 aliases:
   - 殺傷力驗證
+decisions:
+  - content: 拿掉 2026-07-10 那份已 stale 的驗證背書(態數升級後前提不成立,E1 連喊 24 天 207 次沒人理——機制空轉週報首批)。目前 guard kill 沒有有效驗證紀錄;重驗要在有 kill 配方的消費端專案跑一輪,排進下一批。
+    id: d1
+    decided: 2026-08-22
+    valid: true
 ---
 # guard-kill（殺傷力驗證）
 

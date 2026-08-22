@@ -4034,6 +4034,56 @@ def t_entry_hook_index_and_lag():
     print("  ✓ t_entry_hook_index_and_lag")
 
 
+def t_gov_nags_detects_idle_reminders():
+    """機制空轉偵測(Issues/自足性審計提醒空轉四十六天 的出口):同一軟閘對同一篇連喊 ≥N 天且最近一次體檢還在喊 → 列出 rc1;
+    已經不喊的(最後一次早於最近體檢)不算;硬擋不算;沒有就 rc0。"""
+    import json as _j, subprocess as _sp
+    v = mkvault()
+    _sp.run(["git", "init", "-q", str(v.parent)]); _sp.run(["git", "-C", str(v.parent), "add", "-A"])
+    _sp.run(["git", "-C", str(v.parent), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"])
+    log = v.parent / ".governance-log.jsonl"
+    rows = []
+    def ev(ts, gate, kind, nodes, hard=False):
+        rows.append({"ts": ts, "commit": "abc", "gate": gate, "kind": kind, "hard": hard, "nodes": nodes, "note": ""})
+    for d in ("2026-08-01", "2026-08-10", "2026-08-20"):
+        ev(f"{d}T09:00:00+08:00", "check-s", "warned", ["Systems/Idle.md"])       # 連喊 19 天,最近還在
+        ev(f"{d}T09:00:00+08:00", "check-e1", "warned", ["Systems/Fixed.md"]) if d != "2026-08-20" else None   # 8/10 後不喊了
+        ev(f"{d}T09:00:00+08:00", "check-t", "warned", ["Systems/Hard.md"], hard=True)   # 硬擋不算
+        ev(f"{d}T09:00:00+08:00", "doctor-run", "ran", [])   # 真實 doctor --ci 同一批 append,同秒
+    log.write_text("\n".join(_j.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+    r = run(v, "gov", "--nags", "14", "--since", "9999")
+    check("★連喊 ≥14 天且最近還在喊 → 列出+rc1★", r.returncode == 1 and "idle" in r.stdout.lower(), r.stdout)
+    check("已經不喊的不算", "fixed" not in r.stdout.lower(), r.stdout)
+    check("硬擋不算", "hard" not in r.stdout.lower(), r.stdout)
+    r = run(v, "gov", "--nags", "30", "--since", "9999")
+    check("門檻抬到 30 天 → 沒有空轉 rc0", r.returncode == 0 and "沒有空轉" in r.stdout, r.stdout)
+    print("  ✓ t_gov_nags_detects_idle_reminders")
+
+
+def t_finding_kind_ledger_and_stats():
+    """流程自產工作量(Issues/流程自產工作量未量測 的入口):record 可為每條發現標 code/spec/process,
+    全集要對得上;gov --stats 算 process 佔比。"""
+    import json as _j, subprocess as _sp
+    v = mkvault(); spec = v / "Projects" / "fk.md"; spec.write_text("s\n", encoding="utf-8"); h = _sha256_of(spec)
+    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「s」\n", encoding="utf-8")
+    snap = v.parent / "r1-snapshot.md"; snap.write_text("s\n", encoding="utf-8")
+    base = ["canary", "record", "none", "--loop", "fk-loop", "--round", "r1", "--auditor", "a", "--severity", "minor",
+            "--findings", "3", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f2", "--accepted-set", "f3",
+            "--accept-reason", "f3=文件精度", "--report", str(rep), "--snapshot", str(snap),
+            "--spec", str(spec), "--reviewed", h, "--tier", "standard"]
+    r = run(v, *base, "--finding-kind", "f1=code", "--finding-kind", "f2=banana")
+    check("值域外 → rc2", r.returncode == 2 and "code / spec / process" in r.stderr, r.stderr)
+    r = run(v, *base, "--finding-kind", "f1=code")
+    check("沒標齊 → rc2", r.returncode == 2 and "每條發現各標一個" in r.stderr, r.stderr)
+    r = run(v, *base, "--finding-kind", "f1=code", "--finding-kind", "f2=process", "--finding-kind", "f3=process")
+    check("標齊 → 記錄成功", r.returncode == 0, r.stderr)
+    last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+    check("帳上有 finding_kinds", last.get("finding_kinds") == {"f1": "code", "f2": "process", "f3": "process"}, str(last)[:300])
+    r = run(v, "gov", "--stats", "--since", "9999")
+    check("★gov --stats 算出 process 佔比 67%★", "流程自己要求的文件/留痕 2(67%)" in r.stdout, r.stdout)
+    print("  ✓ t_finding_kind_ledger_and_stats")
+
+
 def t_code_exts_four_lists_agree():
     """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天

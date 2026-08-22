@@ -93,7 +93,7 @@ run_probe(){
   command -v claude >/dev/null 2>&1 || { log "情境探針:沒有 claude CLI,跳過"; return 0; }
   log "情境探針:本週($week)抽 8 題開跑"
   (cd "$REPO" && python3 scripts/scenario_probe.py \
-      --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl \
+      --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl,governance/scenarios/discipline.jsonl \
       --sample 8 --seed "$week" --timeout 600 --ts "$TODAY" --history "$hist" \
       --out "$REPO/governance/scenarios/run-$TODAY-weekly.json") > "$LOGDIR/probe-$TODAY.log" 2>&1 || true
   local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1)"
@@ -109,9 +109,29 @@ print('LINE', line_notify.send(line_notify.build_message('scenario-probe', os.en
   fi
 }
 
+# ── 機制空轉週報(Issues/自足性審計提醒空轉四十六天 的出口,2026-08-22):同一道閘對同一篇連喊 ≥14 天
+# 還沒人理,就是「機制有跑、沒人看」——每週跑一次 gov --nags,有就 LINE,不再靠順手 grep 發現。
+run_nags(){ local repo="$1" tag="$2"
+  local stamp="$repo/governance/nags-last-week.txt"; local week; week="$(date +%G-W%V)"
+  [ "$(cat "$stamp" 2>/dev/null)" = "$week" ] && { log "空轉週報($tag):本週已跑"; return 0; }
+  local out; out="$(cd "$repo" && python3 scripts/lumos gov --nags 14 --since 120 2>/dev/null || true)"
+  echo "$week" > "$stamp"
+  log "空轉週報($tag):$(echo "$out" | head -1)"
+  if echo "$out" | grep -q "空轉清單"; then
+    MSG="[$tag] 機制空轉週報:$(echo "$out" | head -1 | cut -c1-80);清單:$(echo "$out" | grep -E '^\s+[0-9]+ 天' | head -5 | sed -E 's/^ +//' | tr '\n' ';')" \
+    LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t=os.environ.get('LINE_TOKEN','')
+print('LINE', line_notify.send(line_notify.build_message('gov-nags', os.environ['MSG'], None), t) if t else 'no-token')" || true
+  fi
+}
+
 run_exam "$REPO" toolchain
 [ -d "$HOME/backend/LandmarkMember/governance/eval" ] && run_exam "$HOME/backend/LandmarkMember" landmark
 run_probe
+run_nags "$REPO" toolchain
+[ -d "$HOME/backend/LandmarkMember/docs" ] && run_nags "$HOME/backend/LandmarkMember" landmark
 
 SKIP_CAP=3; skip_n=0
 while : ; do
