@@ -84,6 +84,9 @@ print('LINE', line_notify.send(line_notify.build_message('labeling-refresh', os.
 # ── 情境探針週抽(工具鏈補強十件 #1,2026-08-22):每週抽 8 題看 Claude 會不會自己敲 lumos——
 # 改了 CLAUDE.md 區塊或 skill 之後「規則有沒有退化」要有數字可看,不靠有人想起來重測。
 # fail-open:探針失敗只記 log;有題沒過才 LINE。上限每週一次、8 題,避免變成燒 token 的機器。
+# ★--max-turns 18 不是隨便給的★:absence 題組(缺席推論)天生要「查不到→換方法再查」,
+# 實測要 11-12 步才給得出答案;預設 8 會在它開口之前截斷 → 三題全假紅(2026-08-22 實測)。
+# 既有三個題庫 2-3 步就收,提高上限對它們無影響(未逐題複驗,見驗證節點誠實缺口)。
 run_probe(){
   local hist="$REPO/governance/scenarios/history.jsonl"
   local week; week="$(date +%G-W%V)"
@@ -93,8 +96,8 @@ run_probe(){
   command -v claude >/dev/null 2>&1 || { log "情境探針:沒有 claude CLI,跳過"; return 0; }
   log "情境探針:本週($week)抽 8 題開跑"
   (cd "$REPO" && python3 scripts/scenario_probe.py \
-      --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl,governance/scenarios/discipline.jsonl \
-      --sample 8 --seed "$week" --timeout 600 --ts "$TODAY" --history "$hist" \
+      --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl,governance/scenarios/discipline.jsonl,governance/scenarios/absence.jsonl \
+      --sample 8 --seed "$week" --timeout 600 --max-turns 18 --ts "$TODAY" --history "$hist" \
       --out "$REPO/governance/scenarios/run-$TODAY-weekly.json") > "$LOGDIR/probe-$TODAY.log" 2>&1 || true
   local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1)"
   log "情境探針結果:${line:-無結果(看 $LOGDIR/probe-$TODAY.log)}"

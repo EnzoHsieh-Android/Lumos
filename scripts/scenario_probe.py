@@ -121,9 +121,18 @@ def run_one(sc, workdir, max_turns, timeout, model):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--repo", default=str(ROOT),
+                    help="要被探的專案根目錄(預設=本 repo)。★探別的專案必須給★——"
+                         "沒給的話不論在哪個目錄執行,複製的都是 lumos-toolchain 自己,"
+                         "題目再怎麼寫都是在探錯的 repo(2026-08-22 實際踩過)")
     ap.add_argument("--scenarios", default=str(ROOT / "governance" / "scenarios" / "commands.jsonl"))
     ap.add_argument("--only", default="")
-    ap.add_argument("--max-turns", type=int, default=8)
+    # ★預設 8 → 18(2026-08-22)★:實測既有題庫最慢 6 步(s02/s11),8 只留 2 步餘裕;
+    # absence 題組天生要「查不到→換方法再查」,最慢 12 步——吃預設會在它開口之前截斷,
+    # 三題全假紅。假紅的下一步永遠是有人把閘關掉,所以預設本身要夠。
+    # ★為什麼不設更大★:步數上限不是「越寬越安全」。給太多步,那些其實在瞎繞的題也可能
+    # 繞到答對,反而把問題蓋掉。18 = 最慢那題(12 步)加一半餘裕,不是拍腦袋。
+    ap.add_argument("--max-turns", type=int, default=18)
     ap.add_argument("--timeout", type=int, default=240)
     ap.add_argument("--model", default="")
     ap.add_argument("--out", default="")
@@ -157,13 +166,17 @@ def main():
     work = tmp / "repo"
     # 複製工作樹(含未 commit 的改動——索引/筆記常是剛寫還沒 commit),再在副本裡 commit 成乾淨狀態
     work.mkdir(parents=True)
+    src = Path(a.repo).resolve()
+    if not (src / ".git").exists():
+        print(f"✗ --repo {src} 不是 git repo(找不到 .git),停手", file=sys.stderr)
+        return 2
     subprocess.run(["rsync", "-a", "--exclude", "node_modules", "--exclude", ".venv",
-                    f"{ROOT}/", f"{work}/"], check=True)
+                    f"{src}/", f"{work}/"], check=True)
     subprocess.run(["git", "config", "core.hooksPath", "/dev/null"], cwd=str(work))
     subprocess.run(["git", "add", "-A"], cwd=str(work))
     subprocess.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local", "commit", "-qm", "probe snapshot", "--no-verify"], cwd=str(work))
     # skills 走 ~/.claude(symlink 回本 repo),不用複製
-    print(f"臨時副本: {work}", file=sys.stderr)
+    print(f"探的是: {src}\n臨時副本: {work}", file=sys.stderr)
     results = []
     try:
         for sc in scs:
