@@ -4098,6 +4098,24 @@ def t_search_cjk_nospace_hint():
     print("  ✓ t_search_cjk_nospace_hint")
 
 
+def t_context_big_output_hints_brief():
+    """大節點 context 提示 --brief(Landmark 2026-08-11 實測 43KB→19KB;2026-08-22 收進工具):>20KB 才提示,--brief 不提示。"""
+    v = mkvault()
+    # write() 自己包 --- ,fm 只給內容(第一版把 --- 也塞進去 → 雙 frontmatter 全壞、輸出 760B、測試假綠)
+    write(v, "Systems/Big.md", "type: system\nstatus: doing\nsummary: |-\n  KEY:big", "# Big\n" + ("很長的內容行。" * 40 + "\n") * 120)
+    for i in range(100):
+        write(v, f"Systems/N{i}.md", f"type: system\nstatus: doing\nsummary: |-\n  KEY:鄰居 {i} " + "說明文字" * 60 + "\nrelated:\n  - \"[[Systems/Big]]\"", f"# N{i}\n")
+    r = run(v, "context", "Systems/Big")
+    big_out = len(r.stdout.encode("utf-8")) > 20_000
+    check("★前置★ fixture 的 context 輸出真的 >20KB(否則下一條是假綠)", big_out, f"{len(r.stdout.encode())}B")
+    check("★輸出 >20KB 時提示 --brief★", "--brief" in r.stderr and "提醒" in r.stderr, f"{len(r.stdout.encode())}B {r.stderr[-200:]}")
+    r2 = run(v, "context", "Systems/Big", "--brief")
+    check("--brief 不提示", "這篇的脈絡輸出" not in r2.stderr, r2.stderr)
+    r3 = run(v, "context", "Systems/N1")
+    check("小節點不提示", "這篇的脈絡輸出" not in r3.stderr, r3.stderr)
+    print("  ✓ t_context_big_output_hints_brief")
+
+
 def t_code_exts_four_lists_agree():
     """體檢 #7(2026-08-21):「什麼算 code 檔」有四份獨立清單(pre-commit/post-commit 的 bash regex、
     check-graph-sync.py/impact-hook.py 的 CODE_EXTS),零漂移守衛,且全部漏 .sh——當天

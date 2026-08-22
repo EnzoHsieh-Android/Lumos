@@ -56,6 +56,10 @@ decisions:
     id: d4
     decided: 2026-08-22
     valid: true
+  - content: Landmark CLAUDE.md 的三條圖譜查詢體悟收進注入範本與工具(Enzo 2026-08-22):0 筆看逐詞覆蓋 ★ 詞換同義、換三次再問人、不轉 grep;大節點先 --brief(context 輸出 >20KB 時工具自己提示);單篇內部新舊打架時有日期的 KEY 行 > 正文,衝突去 code 裁再修圖譜。「遙控本機≠網頁遠端版」進 skill 頭版。
+    id: d5
+    decided: 2026-08-22
+    valid: true
 verified_by:
   - "[[Verification/2026-07-14_relguard_E1失效背書]]"
   - "[[Verification/2026-07-14_relguard_E2建在被推翻決策上]]"
