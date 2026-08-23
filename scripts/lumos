@@ -890,7 +890,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 ac_oldfmt.append(f"{rel} (about_code_stamp {stamp} 沒有正文雜湊段,舊格式)")
                 gov_events.append({"gate": "check-s2", "kind": "warned", "hard": False, "nodes": [n.stem]})
             elif expired:
-                ac_stale.append(f"{rel} (about_code_stamp 正文雜湊 {sh} → 現在 {nh})")
+                ac_stale.append(f"{rel} (about_code_stamp 正文雜湊 {sh} → 現在 {nh if nh is not None else '讀不到正文'})")
                 gov_events.append({"gate": "check-s2", "kind": "warned", "hard": False, "nodes": [n.stem]})
         if not ac_stale and not ac_oldfmt:
             ok("每篇有 about_code 標籤的筆記,標了之後正文都沒再改")
@@ -7706,11 +7706,16 @@ def note_body_hash(vault, rel):
     ★必須 utf-8-sig★:BOM 檔否則 split_frontmatter 切不出 frontmatter、整檔算進雜湊,
     「只改 frontmatter 不過期」就破(std-r3 arch+s1 兩席抓到)。無快取、無 git、無子行程。
     """
-    import hashlib
     try:
         text = (Path(vault) / rel).read_text(encoding="utf-8-sig")
     except Exception:
         return None
+    return _body_hash_of_text(text)
+
+
+def _body_hash_of_text(text):
+    """正文雜湊的唯一公式(note_body_hash 讀現在的檔、migrate-stamp 讀 git show 的舊檔,兩者共用)。"""
+    import hashlib
     _, body = split_frontmatter(text)
     return hashlib.sha256(body.rstrip().encode("utf-8")).hexdigest()[:12]
 
@@ -7743,14 +7748,19 @@ def cmd_about_code_restamp(env, rel, by="claude"):
     ★沒有批次模式★——一口氣把所有可疑標籤洗白正是橡皮章(Codex r3 f1)。
     沒有 about_code 的節點擋下:沒東西可核。
     """
+    if str(by).strip().startswith("batch-"):
+        print(f"擋下:--by 不能以 batch- 開頭({by})——那是批次預標的命名空間,重標完會被 `about-code revert --batch` 當成批次一起撤掉"
+              f"(合約候選 #4:人工修正過的不被誤撤)。用 claude、你的名字之類。", file=sys.stderr)
+        return 2
+    asked = rel
     try:
         rel = env.find(rel)
     except Exception as e:
-        print(f"擋下:找不到 {rel}({e})", file=sys.stderr)
+        print(f"擋下:找不到節點 {asked}({e})", file=sys.stderr)
         return 2
-    n = env.notes.get(rel)
+    n = env.notes.get(rel) if rel else None
     if n is None:
-        print(f"擋下:找不到 {rel}", file=sys.stderr)
+        print(f"擋下:找不到節點 {asked}", file=sys.stderr)
         return 2
     if not as_list(n.fields.get("about_code")):
         print(f"擋下:{rel} 沒有 about_code,沒東西可核。先 lumos append <節點> about_code <檔> 再 restamp。", file=sys.stderr)
@@ -7758,7 +7768,7 @@ def cmd_about_code_restamp(env, rel, by="claude"):
     h = note_body_hash(env.vault, rel)
     if h is None:
         print(f"擋下:{rel} 讀不到正文", file=sys.stderr)
-        return 1
+        return 2
     import datetime
     stamp = f"{by}/{datetime.date.today().isoformat()}/{h}"
     rc = cmd_set(env, rel, "about_code_stamp", stamp)
@@ -7798,10 +7808,7 @@ def cmd_about_code_migrate_stamp(env, at_commit, repo_root=None, dry_run=False):
             print(f"  ⚠ {rel}:git show {spec} 失敗(當時可能還沒有這篇),跳過", file=sys.stderr)
             failed += 1
             continue
-        text = r.stdout.decode("utf-8-sig", errors="replace")
-        _, body = split_frontmatter(text)
-        import hashlib
-        h = hashlib.sha256(body.rstrip().encode("utf-8")).hexdigest()[:12]
+        h = _body_hash_of_text(r.stdout.decode("utf-8-sig", errors="replace"))
         new = f"{who}/{day}/{h}"
         if dry_run:
             print(f"  [dry-run] {rel}: {new}")
@@ -14062,7 +14069,7 @@ def _impact_about_counts(env):
     counts = {}
     for n in env.notes.values():
         for f in as_list(n.fields.get("about_code")):
-            f = str(f).strip()
+            f = str(f).replace("\\", "/").strip().removeprefix("./")
             if f:
                 counts[f] = counts.get(f, 0) + 1
     _ABOUT_COUNTS_CACHE[key] = counts
@@ -14077,7 +14084,8 @@ def _impact_mark_about(env, results, rel_file):
     懶觸發:先查欄位,命中才讀該篇正文算雜湊(無 git、無子行程)。計劃:Projects/固定席扇出降權_計劃。"""
     if int(_impact_knob("LUMOS_IMPACT_ABOUT", 1)) == 0:
         return
-    target = str(rel_file).replace("\\", "/")
+    _norm = lambda s: str(s).replace("\\", "/").strip().removeprefix("./")
+    target = _norm(rel_file)
     counts = _impact_about_counts(env)
     if counts.get(target, 0) >= int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8)):
         return
@@ -14085,7 +14093,7 @@ def _impact_mark_about(env, results, rel_file):
         n = env.notes.get(r["node"])
         if n is None:
             continue
-        vals = [str(x).strip() for x in as_list(n.fields.get("about_code"))]
+        vals = [_norm(x) for x in as_list(n.fields.get("about_code"))]
         if target not in vals:
             continue
         expired, _nh, _sh = about_code_expired(env.vault, r["node"], n.fields.get("about_code_stamp"))

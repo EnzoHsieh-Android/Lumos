@@ -620,6 +620,11 @@ def t_note_body_hash_and_restamp():
     check("沒有 about_code 的節點 restamp 擋下 rc2(沒東西可核)", r4.returncode == 2, f"rc={r4.returncode} {r4.stderr[-150:]}")
     r5 = run(v, "about-code", "restamp", "--expired")
     check("★沒有 --expired 批次模式(橡皮章)★", r5.returncode != 0, r5.stderr[-150:])
+    # code-loop r1 s1f2:--by 不准以 batch- 開頭,否則重標完又回到 revert --batch 的命名空間、之後被整批撤
+    r6 = run(v, "about-code", "restamp", "Systems/R1", "--by", "batch-2026-08-23")
+    check("★--by batch-* 擋下 rc2(會被 revert 誤撤)★", r6.returncode == 2 and "batch-" in r6.stderr, f"rc={r6.returncode} {r6.stderr[-150:]}")
+    r7 = run(v, "about-code", "restamp", "Systems/不存在")
+    check("找不到節點:訊息回顯使用者打的名字,不印 None", r7.returncode == 2 and "不存在" in r7.stderr and "None" not in r7.stderr, r7.stderr[-150:])
 
 
 def t_about_code_migrate_stamp():
@@ -693,8 +698,8 @@ def t_impact_about_hit():
     翻紅釘:拿掉 stable sort → ①「排在非事故 pins 首位」翻紅。"""
     import subprocess as sp, json, os as _os
     root, v = _about_impact_fixture()
-    def lum(*a, env=None, stdin=None):
-        e = {**_os.environ, **(env or {})}
+    def lum(*a, env_extra=None, stdin=None):
+        e = {**_os.environ, **(env_extra or {})}
         r = sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True, cwd=root, input=stdin, env=e)
         return r, (json.loads(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 and r.stdout.strip() else None)
     payload = json.dumps({"query": "def save(x): q='SELECT id FROM t'", "prospective": {"src/svc.py": "def save(x):\n    q='SELECT id FROM t'\n"}})
@@ -714,7 +719,7 @@ def t_impact_about_hit():
     free = next((x for x in d["results"] if "Free" in x["node"]), None)
     check("★⑨free 候選 about 命中 → 仍 free(不是第四條入口)★", free is not None and not free.get("pinned"), str(free))
     # ②③⑧ knob=0:無 about_hit 鍵,pinned 判定逐 byte 相同,pins 序列=原序(B 在 A 前)
-    r0, d0 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload, env={"LUMOS_IMPACT_ABOUT": "0"})
+    r0, d0 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload, env_extra={"LUMOS_IMPACT_ABOUT": "0"})
     check("⑧knob=0 → 任一項無 about_hit 鍵", all("about_hit" not in x for x in d0["results"]), str(d0["results"])[:200])
     strip = lambda rs: [{k: v for k, v in x.items() if k != "about_hit"} for x in rs]
     check("★②pinned 判定與 knob=0 逐 byte 相同(只差排序與鍵)★", sorted(json.dumps(x, sort_keys=True) for x in strip(d["results"])) == sorted(json.dumps(x, sort_keys=True) for x in d0["results"]), "")
@@ -744,6 +749,11 @@ def t_impact_about_hit():
     sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "about-code", "restamp", "Systems/A-about"], capture_output=True)
     _, d11 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
     check("★⑪about_code 純量字串 → 仍命中(as_list)★", next(x for x in d11["results"] if "A-about" in x["node"]).get("about_hit") is True, str(d11["results"])[:300])
+    # code-loop r1 s1f3:值寫成 ./src/svc.py 也要對得上
+    pa.write_text(pa.read_text(encoding="utf-8").replace("about_code: src/svc.py", "about_code: ./src/svc.py"), encoding="utf-8")
+    sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "about-code", "restamp", "Systems/A-about"], capture_output=True)
+    _, d14 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+    check("⑭about_code 值帶 ./ 前綴 → 仍命中", next(x for x in d14["results"] if "A-about" in x["node"]).get("about_hit") is True, "")
 
 
 def t_impact_about_giant_file():
@@ -795,10 +805,8 @@ def t_doctor_about_code_expiry():
     check("⑨作廢節點不列", "作廢.md" not in out, "")
     check("訊息先叫人看標籤、提 restamp", "還對不對" in out and "restamp" in out, out[-600:])
     check("不計 issues(doctor rc0)", r.returncode == 0, f"rc={r.returncode}")
-    r0 = run(v, "doctor", env_extra={"LUMOS_IMPACT_ABOUT": "0"}) if "env_extra" in run.__code__.co_varnames else None
-    if r0 is None:
-        import subprocess as _sp
-        r0 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "doctor"], capture_output=True, text=True, env={**_os.environ, "LUMOS_IMPACT_ABOUT": "0"})
+    import subprocess as _sp
+    r0 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "doctor"], capture_output=True, text=True, env={**_os.environ, "LUMOS_IMPACT_ABOUT": "0"})
     check("⑥knob=0 → 整段略過、不列", "改過.md" not in s2(r0.stdout) and "總開關" in s2(r0.stdout), s2(r0.stdout)[-400:])
 
 

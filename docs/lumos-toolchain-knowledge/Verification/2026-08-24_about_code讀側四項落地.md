@@ -64,3 +64,11 @@ A 席(12:19)到最終寫入(22:19)之間正文動過、且在 83 篇內的:只 `
 棘輪訊息改白話;`loop status --panel` 兩個行話標籤(falsification+ODC、capture-recapture)換掉。
 ★history 的 key 一個字沒動★(帳本連續);自動迴圈 grep 的「gate 總判定」與測試釘的「unjudged(held 評測母體)」兩個錨字串保留在句內。
 同步改了三條測試斷言字串。白話標準本身沒有圖譜節點,在 session 記憶(tool-output-plain-style)——★若要升格成規則,應立 Systems 節點★。
+
+## 代碼審(code-about-code-read r1,standard:單席 + 架構席 + Codex 外家)
+
+單席 4 條(1 major):★`restamp --by batch-2026-08-23` 會讓重標完的節點回到批次命名空間、之後 `revert --batch` 整批撤掉★——合約候選 #4 在這條路上破;
+修:`--by` 以 `batch-` 開頭擋下 rc2(翻紅測試)。minor 三條:找不到節點印 `None`、`./` 前綴對不上、S2 讀不到正文印 `None`——全修。
+架構席 5 條(2 major):測試用 `run.__code__.co_varnames` 偵測參數(全檔無先例、分支永遠走不到)→ 刪;migrate 重抄雜湊公式 → 抽 `_body_hash_of_text` 單一實作;
+rc 1→2、測試參數名 `env`→`env_extra`。⚠ 評測輸出白話化與 `retrieval_eval_multiword.py` 的括號式不同形——刻意(Enzo 08-24 裁評測也白話),那支之後跟上。
+Codex:未找到否決級(唯讀沙盒跑不了測試,靜態審)。修後全套 3146 綠。
