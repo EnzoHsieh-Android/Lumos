@@ -64,7 +64,8 @@ def main():
     pool = json.loads(pathlib.Path(a.pool).read_text(encoding="utf-8"))
     k = a.k
 
-    print(f"=== 多詞回退量測(k={k};語料釘 {a.vault}) ===")
+    print(f"=== 中文多詞查詢的「0 筆回退」量測(整串查無 → 拆詞 OR 再查;語料釘 {a.vault}) ===")
+    print(f"  每行:題號 查詢 | 候選數 無回退→有回退 | 排序品質 nDCG@{k} 無→有 | 前 {k} 名對的比例 | 第一名的標註(2=必看/1=有用/0=不相干,★=第一名不相干)")
     rows = []
     for cid in sorted(pool):
         q = pool[cid]["query"]
@@ -100,14 +101,15 @@ def main():
     def mac(key):
         return round(sum(r[key] for r in rows) / n, 4) if n else 0.0
     print()
-    print(f"[實驗組 n={n}] nDCG@{k}: 無回退={mac('base_ndcg')} 有回退={mac('fb_ndcg')}")
-    print(f"  MRR: {mac('base_mrr')} → {mac('fb_mrr')} | P@{k}: {mac('base_p')} → {mac('fb_p')}")
+    print(f"整體({n} 題,原本整串查是 0 筆的那種):")
+    print(f"  排序品質 nDCG@{k}:無回退 {mac('base_ndcg')} → 有回退 {mac('fb_ndcg')}    ← 回退有沒有把對的撈回來、還排得前")
+    print(f"  第一個對的答案多靠前(MRR):{mac('base_mrr')} → {mac('fb_mrr')}  |  前 {k} 名對的比例:{mac('base_p')} → {mac('fb_p')}")
     top1_good = sum(1 for r in rows if (r["top1_label"] or 0) >= 2)
     top1_any = sum(1 for r in rows if (r["top1_label"] or 0) >= 1)
-    print(f"  ★第一名品質★:標 2(必看) {top1_good}/{n}｜標 ≥1(至少有用) {top1_any}/{n}")
+    print(f"  第一名的品質:{top1_good}/{n} 題第一名就是必看、{top1_any}/{n} 題第一名至少有用(剩下的第一名是雜訊)")
     zero = [r["cid"] for r in rows if r["fb_ndcg"] == 0]
     if zero:
-        print(f"  ★回退後仍 0 分的題★: {zero}")
+        print(f"  ★回退了還是一篇都撈不到的題★: {zero}    ← 這些是拆詞也救不了的,要看分詞或同義詞")
     print()
     print("★誠實邊界★:候選池半數來自 --any 自己的 top-10(pooling bias),"
           "「更好的系統會找到但它沒找到」的節點可能不在池裡;"
