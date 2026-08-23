@@ -455,6 +455,39 @@ def t_probe_sandbox_cannot_push():
     check("沙盒③: ★bare repo 的 main 沒動★(真的沒推出去)", after == before, f"{before[:8]} → {after[:8]}")
 
 
+def t_empty_list_bracket_is_list():
+    """★`aliases: []` 必須被認成清單,不是純量★。
+
+    2026-08-23 design-loop r3 席一順手抓到:範本寫 `aliases: []`(YAML 合法空清單),
+    但 fm_structure 判 list 的規則是「冒號後是空字串」——`[]` 不是空字串 → 判 scalar →
+    從範本建的節點第一次 `lumos append aliases` 必敗。全庫 15 篇在這狀態。
+    翻紅釘:把 fm_structure 的 `[]` 分支拿掉 → 第 1、2 條翻紅。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location("lumos_el", GRAPHCTL, loader=SourceFileLoader("lumos_el", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    fm = ["type: system", "aliases: []", "tags:", "  - type/system"]
+    kinds = {k: kind for k, s, e, kind in m.fm_structure(fm)}
+    check("`aliases: []` 判成 list", kinds.get("aliases") == "list", str(kinds))
+    out = m.edit_fm_append(fm, "aliases", "新別名")
+    check("append 進 `[]` 成功且變成多行清單", "  - 新別名" in out and "aliases: []" not in out, str(out))
+    # 反例:真的純量不能被誤判
+    fm2 = ["type: system", "status: done", "self_audit: sonnet/2026-08-23"]
+    k2 = {k: kind for k, s, e, kind in m.fm_structure(fm2)}
+    check("★純量不受影響★", k2.get("status") == "scalar" and k2.get("self_audit") == "scalar", str(k2))
+    # 非空 inline list 不在本次範圍——明確標「仍判 scalar」,免得有人以為也修了
+    fm3 = ["aliases: [a, b]"]
+    k3 = {k: kind for k, s, e, kind in m.fm_structure(fm3)}
+    check("非空 inline list `[a, b]` 本次不處理(仍 scalar,append 會擋不會壞)", k3.get("aliases") == "scalar", str(k3))
+    # 真檔 e2e:從範本建節點 → append aliases 要成功
+    v = mkvault()
+    r0 = run(v, "new", "system", "範本節點")
+    r1 = run(v, "append", "Systems/範本節點", "aliases", "別名一")
+    check("★e2e:範本建的節點 append aliases rc0★", r1.returncode == 0, r1.stderr[-200:])
+    txt = (v / "Systems" / "範本節點.md").read_text(encoding="utf-8")
+    check("e2e:檔案裡 aliases 變成多行清單含別名", "  - 別名一" in txt, txt[:300])
+
+
 def t_per_test_timeout():
     """per-test 超時:卡住的測試要被打斷、判紅、印出名字,不能拖垮整輪。
     翻紅釘:把 run_with_timeout 改成直接 fn() → 第 2 條永遠等不到 TestTimeout。"""

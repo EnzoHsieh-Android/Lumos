@@ -7271,6 +7271,13 @@ def fm_structure(fm_lines):
             while i < n and (fm_lines[i].startswith(" ") or not fm_lines[i].strip()):
                 i += 1
             out.append((key, start, i - 1, "list"))
+        elif val == "[]":
+            # YAML 合法空清單(範本 `aliases: []` 就是這樣寫)。2026-08-23 前被判成 scalar →
+            # 從範本建的節點第一次 append 必敗,全庫 15 篇在此狀態。★只認空的 `[]`★,
+            # 非空 inline list(`[a, b]`)仍當 scalar——那要真的解析逗號與引號,不在本次,
+            # 且 append 遇到它會被擋(不會壞),可接受。
+            out.append((key, start, start, "list"))
+            i += 1
         else:
             out.append((key, start, start, "scalar"))
             i += 1
@@ -7348,6 +7355,9 @@ def edit_fm_append(fm_lines, key, value):
         s, e, kind = struct[key]
         if kind != "list":
             raise ValueError(f"{key} 是{kind}型欄位,append 只能加進清單型欄位")
+        # `key: []` 空清單 → 改寫成多行格式的開頭 `key:`,後面照常插第一項
+        if s == e and TOP_KEY_RE.match(fm[s]) and TOP_KEY_RE.match(fm[s]).group(2).strip() == "[]":
+            fm[s] = f"{key}:"
         # dedup: 精確 full-target 比對(保留路徑;非子字串、非 basename-only)
         for j in range(s + 1, e + 1):
             existing = fm[j].strip()
