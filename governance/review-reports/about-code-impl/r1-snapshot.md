@@ -232,10 +232,7 @@ r1 版的問題用實測打穿:`Issues/hook卸載殘留註冊`(事故類,`pitfal
 ★這是負向作用,「零退化」承諾在有欄的節點上不成立。★
 
 ★改寫後的規則:about_code **只加分、不降級**★
-- 節點有 `about_code` 欄且含目標檔 → 標 **`about_hit: true`**;★前提:它已經由三條既有路徑之一進了候選集★
-  (沒字串提到、沒圖邊、不是事故觸發的節點,about_code 再命中也不會被掃到——about_code **不是第四條入口**,
-  只在既有候選裡重排;impl-r1 s1f3 抓到原句「不論它由哪條路徑進來」會被讀成獨立促升)。
-  pinned 者排固定席前段,free 者不動位置
+- 節點有 `about_code` 欄且含目標檔 → **固定席前排,`hit="about"`**(不論它由哪條路徑進來)
 - 節點有 `about_code` 欄但不含目標檔 → **照三條既有路徑判**,該保送還是保送,只是排在 about 命中者之後
 - 節點沒有 `about_code` 欄 → 三條既有路徑照舊
 
@@ -369,12 +366,12 @@ held 撞到失效條件——改 `scripts/lumos`(巨型單檔)那題 22 個誤�
 | 1 | `about_code` 進 `LIST_KEYS`、`about_code_stamp` 進 `SCALAR_KEYS` | `scripts/lumos:7243-7244` | ✅ 2026-08-23 done,測試釘 append/set/remove 三路 |
 | 2 | 範本加 `about_code:` 空欄 | ✅ 2026-08-23 done:system/issue 範本 + NEW_HINT 兩段提示(事故類「只寫出事那幾支」) | `[]` bug ✅([[Issues/範本空清單被判成純量]]);★範圍刀:只 system/issue,同 aliases★ |
 | 3 | 純量欄位刪除原語 | ✅ 2026-08-23 done:`remove <節點> <key>` 不帶 value=整欄拿掉 | 不加新子命令(一個指令學一次);守衛:骨架欄 type/status/created 擋、清單欄不准省 value |
-| 4 | `cmd_impact` 讀 `about_code`:四處 `results.append` 都加 **`about_hit`**(★不動既有 `hit` 欄★);`pins = [...]` 後加 stable sort;總開關 `LUMOS_IMPACT_ABOUT` | incident `:14178` / direct `:14203` / indirect pinned `:14214` / indirect free `:14223` / `pins` `:14226`(impl-r1 s1f4 校正;舊行號整批過期) | 三條路徑各自獨立(s3f9);★`hit` 欄是既有來源標記(body-inline-code/basename-match),hook `:358`、lumos `:14310` 在讀,覆寫會靜默失真(impl-r1 s1f2 blocker)★ |
+| 4 | `cmd_impact` 讀 `about_code`:三處 `results.append` 都加 `hit="about"`;`:14073` 後加 stable sort | `:13955/:13977/:14028/:14073` | 三條路徑各自獨立,不是改一處(s3f9) |
 | 5 | 過期判準:**批次** `git log --name-only --format=%cs -c core.quotepath=false` 一次拿全庫 | ✅ 2026-08-23 done:`git_last_change_dates(repo_root, vault)`,行程內快取,fail-open | 翻紅釘實證:★拿掉 quotepath 旗標連英文檔都撈不到★(路徑帶中文目錄名整條被跳脫),表空且不報錯 |
 | 6 | 過期檢查:**不併入 Check S**(它只掃 type:system,事故類驗不到,s3f11)→ 另開迴圈但同輸出格式 | `run_doctor` | 這是 archf4「第三套機制」的回歸,但 r3 證實併入 Check S 會漏——★兩害取輕,留痕★ |
 | 7 | `lumos about-code revert --batch <日期>` 子命令 | ✅ 2026-08-23 done,含 --dry-run | 翻紅釘:比對改「含日期」→人工修正的被誤撤,精確比對第一段才對;新指令觸發三道登記守衛(help/索引/六份文件指令數 61→62) |
 | 8 | 雙評審:**寫轉換函式** `{node:[files]}` → `{node:{file:1}}` 再餵 `cmd_merge`;`cmd_apply` 不能重用(寫入目標是 goldset 不是 frontmatter),另寫 | ✅ 2026-08-23 `about_code_to_rater(a, b)`,真餵 merge 驗過 | ★候選集=兩席聯集★:A 列 B 沒列的,B 側填 0(那是反對票不是沒意見);翻紅釘驗過。apply 那半未做 |
-| 9 | hook 顯示層加 `about` 標示(讀 `about_hit`,不讀 `hit`) | `impact-hook.py:344-348` | 不改看不到(s2f5/s3f9);hook 一律帶 `--ranked`,`build_context` 那條是死碼不用動(impl-r1 已驗) |
+| 9 | hook 顯示層加 `about` 標示 | `impact-hook.py:344-347` | 不改看不到(s2f5/s3f9) |
 | 10 | 新指標「固定席前 3 位必看命中率」 | `retrieval_eval.py` | 甲案成績單 |
 
 ★#6 誠實記★:r1 架構席判「過期守衛另立=第三套機制」為 major,折成併入 Check S;
@@ -385,70 +382,51 @@ r3 證實併入後事故類節點驗不到。兩個都是真問題,選「另開�
 
 #1/#2/#3/#5/#7/#8 已落地,存量 83 篇已寫入。剩四項全碰設計判斷,規格如下,★每項都標明「光看 P@8 量不到」★。
 
-### #4 impact 讀 about_code:只加分、不降級、排前排(★impl-r1 折入後版★)
+### #4 impact 讀 about_code:只加分、不降級、排前排
 
-- **總開關(impl-r1 s1f5 blocker)**:`LUMOS_IMPACT_ABOUT`,走 `_impact_knob`(`scripts/lumos:13883`),
-  預設 1、0=整個 about 判定關閉(不標 `about_hit`、不排序、不掃巨檔計數)。同這支檔其他八個排序旋鈕的
-  「預設開/0 逃生」慣例(`LUMOS_IMPACT_BASENAME_MATCH :13609` 同款)。★下面所有「關閉 about 時」都指 knob=0★。
-- **判定**:候選節點 `as_list(fields.get("about_code"))` 含目標檔(repo 相對路徑精確比對)→ 加欄位
-  **`about_hit: True`**。★必包 `as_list`★(impl-r1 s1f6:單值清單可能存成字串,`in` 退化成子字串比對;
-  既有兩處讀 about_code 都包了,`:7680`)。★不覆寫既有 `hit` 欄★(impl-r1 s1f2:那欄存的是
-  body-inline-code / basename-match 來源標記,`impact-hook.py:358` 與 `scripts/lumos:14310` 在讀)。
-  四處 `results.append`(incident `:14178` / direct `:14203` / indirect pinned `:14214` / indirect free `:14223`)
-  都加這個欄位,★不改任何一條路徑的 pinned 邏輯★(零退化的精確範圍)。
-- **排序**:`pins = [...]`(`:14226`)之後加一道 stable sort:`about_hit` 者在前,其餘保持原序。
+- **判定**:候選節點 `fields.get("about_code")` 含目標檔(repo 相對路徑精確比對)→ `hit="about"`。
+  三條保送路徑(direct `:13955` / indirect `:13977` / incident `:14028`)各自的 `results.append` 都加這個判定,
+  ★不改任何一條路徑的 pinned 邏輯★(零退化的精確範圍)。
+- **排序**:`pins = [...]`(`:14073`)之後加一道 stable sort:`hit=="about"` 者在前,其餘保持原序。
   ★不動 `contract_priority`,不動 free/rescued★。
 - **過期**:`about_code_stamp` 日期 < `git_last_change_dates()` 該檔日期 → 視同沒有 about_code 欄。
   git 缺席 → 用 `updated` 欄;兩者都沒有 → 視同沒過期(fail-open,不信任就等於沒加分,不會壞)。
-- **巨檔門檻**:`cmd_impact` 開頭全掃 `env.notes` 的 `about_code` 建 `{檔: 節點數}`,
-  ★以 `id(env)` 為鍵掛行程內快取★(impl-r1 s1f7;同 `_BASENAME_COUNTS_CACHE :13587` 慣例,`--diff` 多檔共用 env 免重掃);
+- **巨檔門檻**:`cmd_impact` 開頭全掃 `env.notes` 的 `about_code` 建 `{檔: 節點數}`;
   目標檔命中 ≥ `LUMOS_IMPACT_ABOUT_MAX`(預設 8)→ 本次關閉 about 加分(仍三軸照舊)。單一實作,hook/CLI/eval 共用。
-- **測試**:①有欄含目標 → pinned 且 `about_hit` 且排首位 ②有欄不含 → pinned 判定與 knob=0 時逐 byte 相同
-  ③無欄 → 同② ④過期 → 同② ⑤巨檔 ≥8 → 同② ⑥翻紅釘:拿掉 stable sort → ①的「排首位」翻紅
-  ⑦★direct 候選的 `hit` 欄在 about 命中後仍是原值★(impl-r1 s1f2 指出原六條都抓不到這個)
-  ⑧knob=0 → 輸出與改動前逐 byte 相同。
+- **測試**:①有欄含目標 → pinned 且 hit=about 且排首位 ②有欄不含 → pinned 判定與關閉 about 時逐 byte 相同
+  ③無欄 → 同② ④過期 → 同② ⑤巨檔 ≥8 → 同② ⑥翻紅釘:拿掉 stable sort → ①的「排首位」翻紅。
 - **預期**:P@8 **不變**(不計固定席);must-see 棘輪 **不變**(召回不動);固定席噪音數 **不變**(只排序)。
   ★唯一會動的是 #10 那個新指標★。
 
-### #6 過期檢查:另開迴圈,輸出對齊 Check S(★impl-r1 折入後版★)
+### #6 過期檢查:另開迴圈,輸出對齊 Check S
 
 - 掃全部 type(不只 system),有 `about_code_stamp` 的節點比 stamp 日期 vs git 最後改動日期。
-- 過期 → warn_soft(不擋、不計 issues)。★訊息格式照 Check S **實際**寫法★(impl-r1 s1f8 blocker:原寫的
-  「X 天前標、改過 N 次」Check S 根本沒有,而且 `git_last_change_dates` 只回最後日期不回次數,要次數就得
-  重新逐篇跑 git——正是 #5 剛修掉的病):
-  標題「有 {N} 篇筆記的 about_code 標了之後正文又改過,標記可能過期」,
-  每行 `f"{rel} (about_code_stamp {stamp_date} < git 最後改動 {git_date})"`(對齊 `:868` 的 `sa_stale` 行格式)。
+- 過期 → warn_soft(不擋、不計 issues),訊息格式照 Check S:「這篇 X 天前標的 about_code,之後改過 N 次,可能過期」。
 - ★不併入 Check S★(r3 s3f11:它只掃 system)——但呼叫同一支 `git_last_change_dates`,不另算。
-- **repo_root 哪來(impl-r1 s1f9 major)**:`run_doctor` 簽名沒有 repo_root,CLI 派發也沒解析 `--repo`。
-  ★不改簽名★(`test_lumos.py:19210` 有反事實測試逐字釘簽名字串,改了要連動)——在新迴圈裡自己從 `vault`
-  往上找 `.git`(對齊 `cmd_impact :14024` 的後備寫法),找不到 → 整段跳過並 `ok("about_code 過期檢查:找不到 git,略過")`。
-- 測試:①issue 類過期要被列 ②未過期不列 ③無 stamp 不列 ④git 缺席 → 略過且不報錯。
+- 測試:①issue 類過期要被列 ②未過期不列 ③無 stamp 不列 ④git 缺席退回 updated 欄。
 
 ### #9 hook 顯示:`about` 標示
 
-- `impact-hook.py:344-348` pins 顯示迴圈加:`x.get("about_hit")` → 行首標 `★關於★`(讀新欄位,不碰 `hit`)。
+- `impact-hook.py:344-347` pins 顯示迴圈加:`hit=="about"` → 行首標 `★關於★`。
 - 測試:既有 hook 測試加一條斷言。
 
 ### #10 新指標:固定席前 3 位必看命中率
 
 - `retrieval_eval.py` 的 `eval_edit` 加 `pin_top3_must`:每題固定席前 3 席裡標 2 的個數 / min(3, 該題標 2 總數)。
 - 只印、進 history、★不進 gate★(甲案收窄後它是唯一會動的數字,先觀測一個月再決定要不要閘)。
-- ★分母為 0 的題(有標 1 沒標 2)→ 該題回 None、不進平均★(impl-r1 s1f10;fixture 要造一題這種的)。
 - 測試:fixture 造「about 命中排首位」與「不排」兩種,斷言指標差異。
 
 ### ★這四項的 tier 判斷★
-原自判:#4「只加一道 stable sort,不動評分」light 可;#6「warn_soft 不擋」light 可。
-★impl-r1 s1f1 判 light 誤判,我認★:本文件自己在 A 層那節寫「動 `impact` 排序=演算法密集,light 硬否決」,
-#4 動的正是 `cmd_impact` ranked 融合區塊(`:14171-14267`)。自判「這次不影響」不能替代審查——
-這份文件 r1/r2 已經連續兩次被打穿「不影響」的自判。**升 standard,新編號 `about-code-impl-std`**,
-light 那輪的乾淨度不洗回來。
+#4 動 impact 排序(演算法密集?)——**只加一道 stable sort,不動評分**,我判 light 可;
+#6 加 doctor 檢查(守衛面?)——**warn_soft 不擋**,我判 light 可。
+★但這是我自判,light 審的第一個問題就該是「tier 對不對」★——審查員判不對就升完整迴圈。
 
 ## ★合約候選(design-loop 第 9 步;候選≠已標)★
 
 1. **about_code 只加分不降級**——有欄無命中的節點,pinned 判定與現況逐 byte 相同。
    [test 候選:t_about_code_no_demote——建有欄不含目標檔的事故節點,斷言仍 pinned]
 2. **無 about 欄的節點,固定席內相對順序不變**——about 命中者插前,其餘保持三軸排序。
-   [test 候選:斷言 pins 去掉 about_hit 者後,序列與 `LUMOS_IMPACT_ABOUT=0` 時一致]
+   [test 候選:斷言 pins 去掉 hit=about 者後,序列與關閉 about 時一致]
 3. **過期即不信**——stamp 日期 < git 最後改動日期的節點,其 about_code 視同不存在。
 4. **批次回滾只動 stamp 第一段 = batch-<日期> 的節點**——人工修正過的不被誤撤。
 
@@ -503,14 +481,6 @@ Check S 只掃 type:system,事故類節點(spec 自己的核心例子)過期永�
 
 ★三席共 26 條 blocker/major 在 r3 仍出,而且 ① 是設計層問題:r2 為救召回做的改動,讓 about_code 失去了
 「降噪」這個本案立案目標。**這不是再折一輪能收的,要人裁方向。**★
-
-### impl-r1(2026-08-23;light 單席 s1,審剩四項規格)——★light 誤判,升 standard★
-10 條全折、無一放行:f1 tier 自判矛盾 → 升 `about-code-impl-std`;f2 `hit="about"` 覆寫既有來源標記 → 另開 `about_hit` 欄;
-f3 讀側「不論哪條路徑」促升措辭 → 改窄範圍(about 不是第四條入口);f4 四個行號整批過期 → 校正;
-f5 無總開關 → `LUMOS_IMPACT_ABOUT` knob;f6 沒包 `as_list` → 補;f7 巨檔計數無快取 → 掛;
-f8 #6 訊息格式與「改過 N 次」皆無據 → 對齊 Check S 實際格式、拿掉次數;f9 doctor 無 repo_root → 迴圈內自找 .git 不改簽名;
-f10 新指標分母 0 → 回 None。#9/#10 主體已讀無 finding。
-★教訓:「只加一道排序」這種自我描述,要拿「它動到哪個欄位、哪個區塊」去驗,不是看 diff 行數。★
 
 ### ★人裁(2026-08-23 Enzo):甲——收窄目標★
 三選一(甲收窄/乙恢復降級加豁免/丙擱置)裁甲。處置:
