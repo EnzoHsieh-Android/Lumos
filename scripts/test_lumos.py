@@ -10328,7 +10328,7 @@ def t_loop_panel_gate():
         r = _gate(d, "--panel")
         check("panel: 殘餘超門檻 → advisory 不擋 rc0", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
         check("panel: 超門檻仍印 advisory 觀測行(含估計值)",
-              "僅供參考" in r.stdout and "6.00" in r.stdout, r.stdout)
+              "只供參考" in r.stdout and "6.00" in r.stdout, r.stdout)
         check("panel: PASS 橫幅不再宣稱 capture 枯竭", "枯竭" not in r.stdout, r.stdout)
 
     # 混用守衛:--panel 但 log 無 round → rc2
@@ -10574,7 +10574,7 @@ def t_loop_panel_none_kind():
         check("none: 存活 major → rc1(嚴重度合取不得盲掉 none 列)", r.returncode == 1,
               f"rc={r.returncode}\n{r.stdout}")
         check("none: ★敗因=嚴重度合取翻紅★(falsification+ODC 印 ✗;只斷 rc 分不出——F5)",
-              "falsification+ODC(存活 max≤minor): ✗" in r.stdout, r.stdout)
+              "留下的問題嚴不嚴重(最高只能到 minor): ✗" in r.stdout, r.stdout)
 
     # ③ 單席 none → 輪無效 rc1
     with tempfile.TemporaryDirectory() as d:

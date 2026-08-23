@@ -372,7 +372,10 @@ def _pctl(vals, p):
 
 def report_goldset(gs, split=None, k_search=5, k_edit=8):
     tag = split or "all"
-    print(f"=== 人工 goldset 評測(split={tag}) ===")
+    _n_s = sum(1 for c in gs["search"] if not split or c["split"] == split)
+    _n_e = sum(1 for c in gs["edit"] if not split or c["split"] == split)
+    _tag_plain = {"train": "調參用的那一半(train)", "held": "沒見過的那一半(held,防背題)", "all": "全部題目"}.get(tag, tag)
+    print(f"=== 考卷:{_tag_plain}——{_n_s} 題搜尋、{_n_e} 題改程式 ===")
     srows = eval_search(gs, split, k=k_search)
     verdict = {}
     if srows:
@@ -380,8 +383,9 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         lm, rm = _macro(srows, "legacy_mrr"), _macro(srows, "ranked_mrr")
         lr, rr = _macro(srows, "legacy_r10"), _macro(srows, "ranked_r10")
         lift = (rn - ln) / ln * 100 if ln else 0.0   # ln=0 → fail-closed(不給 inf 免費過 gate)
-        print(f"[search n={len(srows)}] nDCG@{k_search}: legacy={ln} ranked={rn} (提升 {lift:+.1f}%)")
-        print(f"  MRR: legacy={lm} ranked={rm} | Recall@10: legacy={lr} ranked={rr}")
+        print(f"搜尋(打一句話找筆記,{len(srows)} 題有答案):")
+        print(f"  前 {k_search} 名的品質 {rn}(舊排序 {ln}),{'好了' if lift >= 0 else '★退了★'} {abs(lift):.1f}%    ← 這是主要的尺(nDCG@{k_search})")
+        print(f"  第一個對的答案多靠前:{rm}(舊 {lm};1.0=都在第一名)  |  前 10 名撈到該撈的比例:{rr}(舊 {lr})")
         verdict["search_lift_pct"] = round(lift, 1)
         verdict["search_gate"] = ln > 0 and lift >= 15.0
     erows = eval_edit(gs, split, k=k_edit)
@@ -397,10 +401,12 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         fp, fn = _macro(erows, "fusion_p"), _macro(erows, "fusion_ndcg")
         bp, bn = _macro(erows, "bm25_p"), _macro(erows, "bm25_ndcg")
         gp, gn = _macro(erows, "graph_p"), _macro(erows, "graph_ndcg")
-        print(f"[edit n={len(erows)}] P@{k_edit}: fusion={fp} bm25={bp} graph={gp}")
-        print(f"  nDCG@{k_edit}: fusion={fn} bm25={bn} graph={gn}")
+        print(f"改程式時的推薦(給一支檔,推該看的筆記,{len(erows)} 題有答案):")
+        _pct = lambda x: f"{x*100:.0f}%" if x is not None else "無資料"
+        print(f"  前 {k_edit} 名裡對的比例 {_pct(fp)}    ← 主要的尺(P@{k_edit});只比文字 {_pct(bp)}、只比圖結構 {_pct(gp)}——綜合要贏這兩個才算有用")
+        print(f"  對的有沒有排前面(nDCG@{k_edit}):{fn}(只比文字 {bn}、只比圖 {gn})")
         pt3 = _macro(erows, "pin_top3_must")
-        print(f"  固定席前3必看命中率(about_code 成績單,不閘): {pt3}")
+        print(f"  固定席前 3 位是必看的比率:{pt3}    ← about_code「關於」標籤的成績單,只看不閘(它只重排固定席,其他尺量不到它)")
 
         frees = [r["n_free"] for r in erows]
         med, p95 = _pctl(frees, 0.5), _pctl(frees, 0.95)
@@ -408,9 +414,12 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         must_hit = sum(r["must_in_out"] for r in erows)
         must_pin = sum(r["must_pinned"] for r in erows)
         pin_noise = sum(r["pin_noise"] for r in erows)
-        print(f"  非固定項數: 中位={med} p95={p95} | must-see(標2) {must_hit}/{must_t} 在輸出內"
-              f"(僅 {must_pin} 個坐固定席——機械保證只涵蓋合約/事故類,其餘經排序無保底)"
-              f" | 固定席噪音 {pin_noise} 條")
+        print(f"  推薦量:每題通常推 {med} 篇、最多的題推 {p95} 篇(關卡用全部題目算:一般題 ≤{k_edit}、最多的題 ≤{k_edit + 2})")
+        print(f"  必看的筆記:{must_t} 篇裡 {must_hit} 篇有推出來;其中 {must_pin} 篇是靠合約/事故硬保的固定席,其餘靠排序、沒有保底")
+        print(f"  固定席裡不相干的筆記:{pin_noise} 條    ← 噪音,越少越好(目前只印不閘)")
+        verdict["hook_p"] = fp
+        verdict["free_median"] = med
+        verdict["free_p95"] = p95
         verdict["hook_p_gate"] = fp is not None and fp >= 0.70
         verdict["hook_p"] = fp
         # fusion 各勝至少一主指標,另一指標不倒退超過 0.02
@@ -487,11 +496,11 @@ def must_ratchet(history, rev, split, count):
             base = v["must_in_out_count"]
             break
     if base is None:
-        return True, f"must-see 棘輪:同尺(rev {rev})沒有可比的 PASS 基線,本輪建立基線 = {count}"
+        return True, f"必看棘輪:這版答案(標註版本 {rev[:6]})還沒有通過的紀錄可以比,這次的 {count} 篇就當基線,下次不准比它少"
     if count < base:
-        return False, (f"must-see 棘輪擋下:必看項從 {base} 個掉到 {count} 個。"
-                       f"標 2 = 必看,掉一個就是缺陷——不是「掉一點點可接受」的那種指標。"
-                       f"先確認是排序把它擠出前 k,還是那題的標註該重看。")
+        return False, (f"必看棘輪擋下:必看的筆記上次推出 {base} 篇、這次只剩 {count} 篇。"
+                       f"必看少推一篇就是缺陷,不是「掉一點點可接受」的那種數字。"
+                       f"先看是排序把它擠出前幾名,還是那題的標註該重看。")
     return True, ""
 
 
@@ -608,16 +617,30 @@ def main():
             gates["must-see 不退步(棘輪)"] = _rat_ok
             if _rat_msg:
                 print(f"  ↳ {_rat_msg}")
-        print("=== §6 gate ===")
+        print(f"=== {len(gates)} 道關卡(全過才算這次改動沒把東西弄壞) ===")
         ok = all(val is True for val in gates.values())  # fail-closed:無資料(None)不放行
+        _lift_all = v_all.get("search_lift_pct")
+        _lift_held = (next((r["verdict"] for r in reports if r["split"] == "held"), {}) or {}).get("search_lift_pct") if not args.split else None
+        _hp = v_all.get("hook_p")
+        _plain = {   # ★history 的 key 不動(帳本連續),只有印出來的字換白話★
+            "search nDCG@5 提升≥15%": f"搜尋:新排序比舊法好 {_lift_all:+.1f}%(門檻:至少 +15%)" if _lift_all is not None else "搜尋:新排序要比舊法好至少 15%(無資料)",
+            "hook P@top_k ≥0.70": f"推薦:前 8 名裡 {_hp*100:.0f}% 是對的(門檻:至少 70%)" if _hp is not None else "推薦:前 8 名至少 70% 是對的(無資料)",
+            "fusion 勝 BM25-only": "推薦:綜合排序沒輸給「只比文字」(輸了=圖譜那部分是裝飾)",
+            "fusion 勝 graph-only": "推薦:綜合排序沒輸給「只比圖結構」(輸了=文字那部分是裝飾)",
+            "非固定中位 ≤ top_k": f"推薦量:一般題推 {v_all.get('free_median')} 篇,沒超過 {args.k or 8}",
+            "非固定 p95 ≤ top_k+2": f"推薦量:最多的題推 {v_all.get('free_p95')} 篇,沒超過 {(args.k or 8) + 2}",
+            "held-out 不倒退(lift>0)": f"沒見過的題也沒退步:{_lift_held:+.1f}%(怕的是只在調參題上變好)" if _lift_held is not None else "沒見過的題也沒退步(無資料)",
+            "must-see 不退步(棘輪)": "必看的筆記沒有比上次少推(棘輪:只准上不准下;少一篇就紅)",
+        }
         for name, val in gates.items():
-            mark = "✅" if val else ("❌" if val is False else "–(無資料,fail-closed)")
-            print(f"  {mark} {name}")
-        print(f"gate 總判定: {'PASS — 可翻預設' if ok else 'FAIL — 維持 dormant'}")
+            mark = "✅" if val else ("❌" if val is False else "–(無資料,照規矩當沒過)")
+            print(f"  {mark} {_plain.get(name, name)}")
+        print(f"gate 總判定: {f'PASS — {len(gates)} 關全過,這次改動可以留' if ok else 'FAIL — 有關卡沒過,上面 ❌ 那條就是要處理的'}")
         # S4 未標率(評測母體口徑;held 專屬,train 不計)——與 delta/repin 同源 collect_unjudged
         unj = collect_unjudged(gs, "held")
-        print(f"unjudged(held 評測母體): {unj['count']}/{unj['denom']}(rate={round(unj['rate'], 4)})"
-              + (f" skipped={unj['skipped']}" if unj["skipped"] else ""))
+        print(f"沒批過答案的候選 unjudged(held 評測母體): {unj['count']}/{unj['denom']}(rate={round(unj['rate'], 4)})"
+              + (f" skipped={unj['skipped']}" if unj["skipped"] else "")
+              + ("    ← 不是 0 的話分數會被「沒批=算錯」拖低,先補標再比" if unj["count"] else "    ← 0 = 分數沒被「沒批=算錯」拖低"))
         # LUMOS_EVAL_HISTORY:測試導向 fixture 帳,避免 e2e 測試污染真 history(code-r1 修)
         hist = Path(os.environ.get("LUMOS_EVAL_HISTORY")
                     or Path(__file__).parent / "retrieval-eval-history.jsonl")
