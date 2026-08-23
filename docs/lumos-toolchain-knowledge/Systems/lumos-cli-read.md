@@ -2,12 +2,13 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-16
+updated: 2026-08-23
 self_audit: sonnet/2026-08-16
 tags:
   - type/system
   - status/done
 summary: |-
+  KEY:[2026-08-23]`git_last_change_dates(repo_root, vault)`——一次 git log 拿 vault 每檔最後改動日期(行程內快取;git 缺席回 {} fail-open)。是 about_code 過期判準的材料(計劃 [[Projects/固定席扇出降權_計劃]] #5):逐篇 83 次 5.3s vs 批次 0.22s;★必帶 -c core.quotepath=false★,vault 路徑帶中文目錄名,沒旗標整條路徑被八進位跳脫、表是空的且不報錯(翻紅釘實證連英文檔都撈不到)。尚未接進 impact,只是原語
   KEY:[2026-08-05]檢索考卷加 synonym 類(toolchain 4 題/landmark 3 題,查詢用別名期望命中帶 aliases 節點;檢索實跑 ground、單標註者、goldset 註記題集變更)——aliases 欄的貢獻自此每週考卷自動量;出題日 held 基線:toolchain ranked nDCG@5=0.789、landmark=0.840
   KEY:[2026-08-05 標籤收編]context 頭部攤出 type/status 以外全部 tag 家族(priority/scope/flag/risk…,`家族:值` 併入 meta 行)——寫給 AI 的分類資訊原本在進場主讀路徑隱形 [test:t_context_header_extra_tag_families];impact 固定席加第三軸 RISK·值(risk/ 標節點保送必看,軸序 IRREVERSIBLE>INVARIANT>RISK) [test:t_impact_contract_risk_axis]
   KEY:[2026-08-05]search 排序加 aliases 欄(權重 3.5,略低於標題 4.0)——frontmatter aliases list 進 BM25F;同義詞落空(搜「作廢」圖譜寫「沖銷」)的最便宜解,寫入者留同義詞一次、檢索受益永久 [test:t_search_aliases_field]

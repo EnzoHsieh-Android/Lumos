@@ -455,6 +455,55 @@ def t_probe_sandbox_cannot_push():
     check("沙盒③: ★bare repo 的 main 沒動★(真的沒推出去)", after == before, f"{before[:8]} → {after[:8]}")
 
 
+def t_git_last_change_dates_batch():
+    """★一次 git log 拿全庫每個檔的最後改動日期★(工具清單 #5,about_code 過期判準的材料)。
+
+    design-loop about-code-field r3 實測:逐篇 `git log -1 -- <檔>` 83 次 5.3s,批次 0.22s,
+    差 18 倍;且 vault 檔名幾乎全中文,不加 `-c core.quotepath=false` 輸出是八進位跳脫、對不回路徑。
+    翻紅釘:①拿掉 quotepath 旗標 → 第 2 條翻紅 ②改成逐檔呼叫 → 第 4 條(呼叫次數)翻紅。"""
+    import subprocess as _sp, tempfile as _tf
+    from pathlib import Path as _P
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location("lumos_gd", GRAPHCTL, loader=SourceFileLoader("lumos_gd", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+    root = _P(_tf.mkdtemp(prefix="gd-"))
+    _sp.run(["git", "init", "-q", str(root)], check=True)
+    kg = root / "docs" / "x-knowledge" / "Systems"; kg.mkdir(parents=True)
+    def commit(name, date):
+        (kg / name).write_text(f"# {name}\n{date}\n", encoding="utf-8")   # 內容帶日期,每次 commit 都有 diff
+        _sp.run(["git", "add", "-A"], cwd=str(root), check=True)
+        _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", name, "--no-verify"],
+                cwd=str(root), check=True, env={**__import__("os").environ, "GIT_COMMITTER_DATE": f"{date}T12:00:00", "GIT_AUTHOR_DATE": f"{date}T12:00:00"})
+    commit("英文.md", "2026-08-01")
+    commit("中文檔名測試.md", "2026-08-10")
+    commit("英文.md", "2026-08-20")          # 再改一次,日期要是最新的
+
+    dates = m.git_last_change_dates(root, root / "docs" / "x-knowledge")
+    check("回 dict", isinstance(dates, dict), type(dates).__name__)
+    check("★中文檔名對得回(quotepath 旗標)★", "Systems/中文檔名測試.md" in dates, str(list(dates)[:4]))
+    check("英文檔取最新一次改動日期", dates.get("Systems/英文.md") == "2026-08-20", str(dates.get("Systems/英文.md")))
+    check("中文檔日期正確", dates.get("Systems/中文檔名測試.md") == "2026-08-10", str(dates.get("Systems/中文檔名測試.md")))
+    # 只准呼叫 git 一次:用 PATH 上的假 git 計數
+    import os as _os
+    shim = _P(_tf.mkdtemp(prefix="gitshim-")); cnt = shim / "count"
+    (shim / "git").write_text(f"#!/bin/sh\necho x >> {cnt}\nexec /usr/bin/git \"$@\"\n", encoding="utf-8"); (shim / "git").chmod(0o755)
+    real_git = _sp.run(["which", "git"], capture_output=True, text=True).stdout.strip()
+    (shim / "git").write_text(f"#!/bin/sh\necho x >> {cnt}\nexec {real_git} \"$@\"\n", encoding="utf-8")
+    old = _os.environ.get("PATH", ""); _os.environ["PATH"] = f"{shim}:{old}"
+    m._GIT_DATES_CACHE.clear()     # 第一次呼叫已快取;要數的是「冷呼叫幾次 git」
+    try:
+        m.git_last_change_dates(root, root / "docs" / "x-knowledge")
+    finally:
+        _os.environ["PATH"] = old
+    n = len(cnt.read_text().splitlines()) if cnt.exists() else 0
+    check("★整個 vault 只呼叫 git 一次(不是逐檔)★", n == 1, f"呼叫了 {n} 次")
+    # git 缺席/失敗 → 回空 dict 不炸(fail-open,呼叫端退回 updated 欄位)
+    nogit = _P(_tf.mkdtemp(prefix="nogit-")) / "docs" / "y-knowledge"; nogit.mkdir(parents=True)
+    check("不是 git repo → 回空 dict 不炸", m.git_last_change_dates(nogit.parent.parent, nogit) == {}, "")
+
+
 def t_remove_scalar_field():
     """★純量欄位可以整個拿掉★:`lumos remove <節點> <key>`(不帶 value)。
 

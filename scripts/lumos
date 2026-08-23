@@ -13480,6 +13480,47 @@ def cmd_refcheck(md_path, repo=None, as_json=False):
     return 1 if (n_missing or n_oor) else 0
 
 
+_GIT_DATES_CACHE = {}   # (repo_root, vault) → {vault 相對路徑: 最後改動日期}(行程內)
+
+
+def git_last_change_dates(repo_root, vault):
+    """★一次 git log 拿 vault 底下每個檔的最後改動日期★(工具清單 #5,2026-08-23)。
+
+    回 {vault 相對路徑: "YYYY-MM-DD"}。git 缺席/不是 repo/失敗 → 回 {}(fail-open,
+    呼叫端退回 frontmatter 的 updated 欄)。
+
+    為什麼要批次:design-loop about-code-field r3 實測逐篇 `git log -1 -- <檔>` 83 次 5.3s,
+    批次 0.22s,差 18 倍;impact 跑在 PreToolUse hook,逐篇會把它拖進秒級。
+    為什麼要 `-c core.quotepath=false`:vault 檔名幾乎全中文,預設輸出是八進位跳脫
+    (`\347\257\204…`),對不回路徑——★沒這旗標整張表是空的,而且不報錯★。
+    用 `updated` 欄的問題:席三抽 15 篇,5 篇(33%)落後 git 實際改動日期——正文改了沒 lumos set。
+    """
+    import subprocess
+    key = (str(repo_root), str(vault))
+    if key in _GIT_DATES_CACHE:
+        return _GIT_DATES_CACHE[key]
+    out = {}
+    try:
+        rel_vault = os.path.relpath(str(vault), str(repo_root))
+        r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotepath=false",
+                            "log", "--name-only", "--format=@%cs", "--", rel_vault],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            cur = None
+            prefix = rel_vault.rstrip("/") + "/"
+            for line in r.stdout.splitlines():
+                if line.startswith("@"):
+                    cur = line[1:11]
+                elif line.strip() and cur and line.startswith(prefix):
+                    rel = line[len(prefix):]
+                    if rel not in out:          # log 是新→舊,第一次看到就是最新
+                        out[rel] = cur
+    except (OSError, subprocess.SubprocessError):
+        out = {}
+    _GIT_DATES_CACHE[key] = out
+    return out
+
+
 _BASENAME_COUNTS_CACHE = {}   # repo_root → {basename: count}(行程內;--diff 多檔免重跑 ls-files)
 
 
