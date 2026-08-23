@@ -31,6 +31,7 @@ verified_by:
   - "[[Verification/2026-08-18_標註刷新落地]]"
   - "[[Verification/2026-08-18_edit面查詢品質閘落地]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-08-24_about_code讀側四項落地]]"
 aliases:
   - 檢索排序與關聯推薦
 ---

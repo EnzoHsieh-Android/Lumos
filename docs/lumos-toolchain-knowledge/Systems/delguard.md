@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-08-11
 updated: 2026-08-21
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/20d0869a4d67
 aliases: []
 self_audit: sonnet/2026-08-21
 tags:

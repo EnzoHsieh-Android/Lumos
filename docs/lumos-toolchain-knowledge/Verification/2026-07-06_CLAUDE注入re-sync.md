@@ -3,7 +3,7 @@ type: verification
 status: pass
 created: 2026-07-06
 updated: 2026-07-06
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/7abda31e12c7
 plan_refs:
   - "[[CLAUDE注入re-sync與版本標籤_計劃]]"
 related:

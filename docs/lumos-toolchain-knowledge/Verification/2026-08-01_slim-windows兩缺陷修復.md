@@ -4,7 +4,7 @@ status: pass
 date: 2026-08-01
 valid_under: "分支 main;slim/install.py 現行版本(_pick_windows_interpreter() 直譯器 fallback、碰撞偵測同時看 dst_shim);slim/install.ps1、slim/uninstall.ps1、slim/get.ps1 現行版本(收尾用 $global:LASTEXITCODE = $LASTEXITCODE,不呼叫裸 exit)。★Windows 分支僅靠 LUMOS_SLIM_SIMULATE_WINDOWS=1 環境變數注入驗過分支邏輯與靜態結構,shutil.which() 真實 Windows PATH 解析行為與 .ps1 的 exit 語意修法完全沒有真機驗證★,見下方〈測不到什麼〉"
 revalidate_when: "改動 install.py 的 _pick_windows_interpreter()/_install_cli() 碰撞偵測、改動三支 .ps1 的收尾寫法、或未來真的拿到 Windows 機器做真機驗證後(屆時要把本節點與 slim/README.md 的『未驗證』標記一併更新,不能讓已驗證的部分繼續掛著誠實標記)"
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/e003e9b4061d
 tags:
   - type/verification
   - status/pass

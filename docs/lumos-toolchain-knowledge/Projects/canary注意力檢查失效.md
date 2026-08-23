@@ -3,7 +3,7 @@ type: project
 status: done
 created: 2026-08-04
 updated: 2026-08-04
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/912856db341c
 related:
   - "[[Systems/canary-audit]]"
   - "[[Systems/design-loop]]"

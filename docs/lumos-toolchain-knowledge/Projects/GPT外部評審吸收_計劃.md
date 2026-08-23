@@ -3,7 +3,7 @@ type: project
 status: doing
 created: 2026-07-17
 updated: 2026-07-17
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/a7f4b7c3b461
 tags:
   - type/project
   - status/doing

@@ -4,7 +4,7 @@ status: pass
 feature: reversibility-governance-ledger
 commit: e3edaf3
 date: 2026-06-26
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/70aaefd5b2c9
 valid_under:
   - macOS / python3 / lumos test_lumos.py subprocess harness
   - vault 為全專案結構(root/docs/<slug>-knowledge),gov 測用此非 bare mkvault

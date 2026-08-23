@@ -263,6 +263,18 @@ def pin_snapshot(sha):
     return False
 
 
+def pin_top3_must(pins, lab):
+    """★甲案成績單:固定席前 3 位的必看命中率★(Projects/固定席扇出降權_計劃 工具清單 #10)。
+    about_code 收窄後只動固定席內順序,P@8/must-see 都量不到它——這是唯一會動的數字。
+    = 前 3 席裡標 2 的個數 / min(3, 該題標 2 總數);該題沒標 2 → None(不進平均)。只印、進 verdict/history,★不進 gate★(先觀測一個月)。"""
+    pinned = [x for x in pins if x.get("pinned")]
+    must_total = sum(1 for v in lab.values() if v == 2)
+    if must_total == 0:
+        return None
+    hit = sum(1 for x in pinned[:3] if lab.get(x["node"], 0) == 2)
+    return round(hit / min(3, must_total), 4)
+
+
 def _macro(rows, key):
     vals = [r[key] for r in rows if r.get(key) is not None]
     return round(sum(vals) / len(vals), 4) if vals else None
@@ -346,6 +358,7 @@ def eval_edit(gs, split=None, k=8):
         row["must_in_out"] = sum(1 for n in must if n in out_nodes)
         row["must_pinned"] = sum(1 for n in must if n in pin_nodes)
         row["pin_noise"] = sum(1 for x in pins if lab.get(x["node"], 0) == 0)
+        row["pin_top3_must"] = pin_top3_must(pins, lab)   # #10:固定席前 3 位必看命中率(pins 保留 impact 輸出順序)
         rows.append(row)
     return rows
 
@@ -386,6 +399,8 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         gp, gn = _macro(erows, "graph_p"), _macro(erows, "graph_ndcg")
         print(f"[edit n={len(erows)}] P@{k_edit}: fusion={fp} bm25={bp} graph={gp}")
         print(f"  nDCG@{k_edit}: fusion={fn} bm25={bn} graph={gn}")
+        pt3 = _macro(erows, "pin_top3_must")
+        print(f"  固定席前3必看命中率(about_code 成績單,不閘): {pt3}")
 
         frees = [r["n_free"] for r in erows]
         med, p95 = _pctl(frees, 0.5), _pctl(frees, 0.95)
@@ -410,6 +425,7 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         verdict["must_pinned_count"] = must_pin   # 唯一機保=固定席;in_out 含自由席無保底,勿混讀
         verdict["must_in_out_count"] = must_hit   # ★棘輪比的是個數不是比率★——
         verdict["must_total"] = must_t            #   比率會被「總數變了」稀釋,個數不會
+        verdict["pin_top3_must"] = pt3            # #10 甲案成績單:只觀測不閘(接線照 fusion_p:row→_macro→verdict→history)
     return {"split": tag, "search": srows, "edit": erows, "verdict": verdict}
 
 

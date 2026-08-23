@@ -869,6 +869,41 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                    "重派乾淨 agent 還原審後 `lumos self-audit <node>` 重新留痕")
     print()
 
+    # Check S2: about_code 過期(軟,不擋,不計 issues)——工具清單 #6(Projects/固定席扇出降權_計劃,2026-08-24):
+    #   有 about_code_stamp 的節點(全 type,不只 system——事故類也標),比「現在正文雜湊」vs stamp 第三段;
+    #   不同=標了之後正文改過(標籤可能不對);沒第三段/非 12 碼 hex=舊格式。跳過 stale/superseded(同 Check S)。
+    #   ★不併入 Check S★(它只掃 system,r3 s3f11);★不用 git★(三輪設計審實證日期制表達不了順序);
+    #   受總開關 LUMOS_IMPACT_ABOUT(0=整段略過,s1f6:只關一半等於沒關)。訊息先叫人看標籤對不對,restamp 不是萬靈丹(Codex r3 f1)。
+    section("S2", "語意「關於」標籤(about_code)標了之後正文有沒有又改過(提醒,不擋)")
+    if int(_impact_knob("LUMOS_IMPACT_ABOUT", 1)) == 0:
+        ok("(about 總開關 LUMOS_IMPACT_ABOUT=0,過期檢查略過)")
+    else:
+        ac_stale, ac_oldfmt = [], []
+        for rel, n in sorted(notes.items()):
+            stamp = n.fields.get("about_code_stamp")
+            if not isinstance(stamp, str) or not stamp.strip():
+                continue
+            if str(n.fields.get("status", "")).strip() in ("stale", "superseded"):
+                continue
+            expired, nh, sh = about_code_expired(env.vault, rel, stamp)
+            if sh is None:
+                ac_oldfmt.append(f"{rel} (about_code_stamp {stamp} 沒有正文雜湊段,舊格式)")
+                gov_events.append({"gate": "check-s2", "kind": "warned", "hard": False, "nodes": [n.stem]})
+            elif expired:
+                ac_stale.append(f"{rel} (about_code_stamp 正文雜湊 {sh} → 現在 {nh})")
+                gov_events.append({"gate": "check-s2", "kind": "warned", "hard": False, "nodes": [n.stem]})
+        if not ac_stale and not ac_oldfmt:
+            ok("每篇有 about_code 標籤的筆記,標了之後正文都沒再改")
+        if ac_stale:
+            _soft_list(ac_stale,
+                       f"有 {len(ac_stale)} 篇筆記的 about_code 標了之後正文又改過,標籤可能過期:",
+                       "先看這篇的 about_code 對現在的正文還對不對:對 → `lumos about-code restamp <節點>`;不對 → set/append/remove 修完再 restamp")
+        if ac_oldfmt:
+            _soft_list(ac_oldfmt,
+                       f"有 {len(ac_oldfmt)} 篇的 about_code_stamp 是舊格式(沒有正文雜湊),量不出有沒有過期:",
+                       "批次預標的跑一次 `lumos about-code migrate-stamp --at <標註當時 commit>`;單篇核過就 `lumos about-code restamp <節點>`")
+    print()
+
     # Check E1: 失效背書(軟,不擋,不計 issues)——關係層語意檢查(補 Check 3 只查邊存不存在、不查
     #   邊還對不對):某節點 verified_by 指向的 Verification 已 stale/fail = 死背書(掛著給人假安心感、
     #   驗證其實已失效)。ghost 目標交既有 ghost 檢查,這裡跳過(不重疊職責)。
@@ -2946,7 +2981,7 @@ def cmd_signoff(env, node, note, by=None):
 # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
 # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
 _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
-                "check-j", "check-k", "check-r", "check-s", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests")
+                "check-j", "check-k", "check-r", "check-s", "check-s2", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
 # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
@@ -7660,6 +7695,125 @@ def about_code_to_rater(a, b):
         if fb is not None:
             rb[node] = {f: (1 if f in fb else 0) for f in union}
     return ra, rb
+
+
+def note_body_hash(vault, rel):
+    """★正文雜湊:about_code 過期守衛的尺★(about-code-impl-std r2/r3,2026-08-24)。
+
+    回 frontmatter 之外正文(rstrip 後)的 sha256 前 12 碼;檔不存在/讀不到 → None。
+    為什麼是雜湊不是日期:三輪設計審實證「日期/commit 數」表達不了「標記在同日序列的哪一格」
+    (83 篇首日就誤判 2 篇),而守衛要答的只是「標記時看的正文跟現在一樣嗎」——直接比正文最老實。
+    ★必須 utf-8-sig★:BOM 檔否則 split_frontmatter 切不出 frontmatter、整檔算進雜湊,
+    「只改 frontmatter 不過期」就破(std-r3 arch+s1 兩席抓到)。無快取、無 git、無子行程。
+    """
+    import hashlib
+    try:
+        text = (Path(vault) / rel).read_text(encoding="utf-8-sig")
+    except Exception:
+        return None
+    _, body = split_frontmatter(text)
+    return hashlib.sha256(body.rstrip().encode("utf-8")).hexdigest()[:12]
+
+
+def _stamp_parts(stamp):
+    """about_code_stamp 三段 `<誰>/<日期>/<正文雜湊12碼>`;第三段非 12 碼 hex 視同沒有(舊格式)。"""
+    if not isinstance(stamp, str):
+        return None, None, None
+    parts = [x.strip() for x in stamp.split("/")]
+    who = parts[0] if len(parts) >= 1 else None
+    day = parts[1] if len(parts) >= 2 else None
+    h = parts[2] if len(parts) >= 3 else None
+    if h is not None and not (len(h) == 12 and all(c in "0123456789abcdef" for c in h)):
+        h = None
+    return who, day, h
+
+
+def about_code_expired(vault, rel, stamp):
+    """過期 = 現在正文雜湊 ≠ stamp 第三段(或沒有第三段/舊格式)。回 (expired: bool, now_hash, stamp_hash)。"""
+    _, _, sh = _stamp_parts(stamp)
+    nh = note_body_hash(vault, rel)
+    return (sh is None or nh is None or nh != sh), nh, sh
+
+
+def cmd_about_code_restamp(env, rel, by="claude"):
+    """★restamp = 「我剛核過這篇的 about_code 對現在的正文仍然正確」★(工具清單 #11,std-r3 釘語意)。
+
+    三段全換:`<by>/<今天>/<現在正文雜湊>`。第一段離開 batch- 後,`revert --batch` 不再撤它
+    (合約候選 #4「人工修正過的不被誤撤」在官方工具這條路上成立;std-r3 s1f2)。
+    ★沒有批次模式★——一口氣把所有可疑標籤洗白正是橡皮章(Codex r3 f1)。
+    沒有 about_code 的節點擋下:沒東西可核。
+    """
+    try:
+        rel = env.find(rel)
+    except Exception as e:
+        print(f"擋下:找不到 {rel}({e})", file=sys.stderr)
+        return 2
+    n = env.notes.get(rel)
+    if n is None:
+        print(f"擋下:找不到 {rel}", file=sys.stderr)
+        return 2
+    if not as_list(n.fields.get("about_code")):
+        print(f"擋下:{rel} 沒有 about_code,沒東西可核。先 lumos append <節點> about_code <檔> 再 restamp。", file=sys.stderr)
+        return 2
+    h = note_body_hash(env.vault, rel)
+    if h is None:
+        print(f"擋下:{rel} 讀不到正文", file=sys.stderr)
+        return 1
+    import datetime
+    stamp = f"{by}/{datetime.date.today().isoformat()}/{h}"
+    rc = cmd_set(env, rel, "about_code_stamp", stamp)
+    if rc == 0:
+        print(f"✓ restamp {rel}:about_code_stamp = {stamp}(表示你核過標籤對現在的正文仍正確)")
+    return rc
+
+
+def cmd_about_code_migrate_stamp(env, at_commit, repo_root=None, dry_run=False):
+    """★一次性:batch-* 兩段式 stamp 補第三段,用「標註當時 commit」的正文算★(Codex r3 f2:用現在的=橡皮章)。
+
+    `git show <commit>:<path>` 逐篇取當時正文(路徑當參數傳,不經 git 輸出,無 quotepath 問題);
+    第一、二段不動。寫入後 doctor/impact 用現在的正文比——標完之後改過的自然變「過期」進人核清單。
+    已三段式的跳過(冪等);非 batch- 的(人工修正過)不動。
+    """
+    import subprocess
+    root = Path(repo_root).resolve() if repo_root else _vault_repo_root(env)
+    if root is None:
+        print("擋下:找不到 repo 根(給 --repo)", file=sys.stderr)
+        return 2
+    rel_vault = os.path.relpath(str(Path(env.vault).resolve()), str(root.resolve()))   # macOS /var→/private/var
+    targets = []
+    for rel, n in sorted(env.notes.items()):
+        stamp = n.fields.get("about_code_stamp")
+        who, day, h = _stamp_parts(stamp)
+        if who is None or not who.startswith("batch-") or h is not None:
+            continue
+        targets.append((rel, who, day))
+    if not targets:
+        print(f"✓ migrate-stamp:0 篇要補(batch-* 兩段式的都補過了)")
+        return 0
+    done, failed = 0, 0
+    for rel, who, day in targets:
+        spec = f"{at_commit}:{rel_vault}/{rel}"
+        r = subprocess.run(["git", "-C", str(root), "show", spec], capture_output=True)
+        if r.returncode != 0:
+            print(f"  ⚠ {rel}:git show {spec} 失敗(當時可能還沒有這篇),跳過", file=sys.stderr)
+            failed += 1
+            continue
+        text = r.stdout.decode("utf-8-sig", errors="replace")
+        _, body = split_frontmatter(text)
+        import hashlib
+        h = hashlib.sha256(body.rstrip().encode("utf-8")).hexdigest()[:12]
+        new = f"{who}/{day}/{h}"
+        if dry_run:
+            print(f"  [dry-run] {rel}: {new}")
+            done += 1
+            continue
+        if cmd_set(env, rel, "about_code_stamp", new) == 0:
+            done += 1
+        else:
+            failed += 1
+    tail = f",{failed} 篇失敗" if failed else ""
+    print(f"✓ migrate-stamp(@{at_commit[:8]}):補了 {done} 篇{tail};之後跑 lumos doctor 看哪些「標完之後正文改過」要人核")
+    return 0 if failed == 0 else 1
 
 
 def cmd_about_code_revert(env, batch_date, dry_run=False):
@@ -13564,8 +13718,9 @@ _GIT_DATES_CACHE = {}   # (repo_root, vault) → {vault 相對路徑: 最後改�
 def git_last_change_dates(repo_root, vault):
     """★一次 git log 拿 vault 底下每個檔的最後改動日期★(工具清單 #5,2026-08-23)。
 
-    回 {vault 相對路徑: "YYYY-MM-DD"}。git 缺席/不是 repo/失敗 → 回 {}(fail-open,
-    呼叫端退回 frontmatter 的 updated 欄)。
+    回 {vault 相對路徑: "YYYY-MM-DD"}。git 缺席/不是 repo/失敗 → 回 {}(fail-open)。
+    ★2026-08-24:about_code 過期判準已改記正文雜湊(note_body_hash),本函式不再是它的材料、目前無呼叫者★
+    (三輪設計審實證日期表達不了「標記在同日序列的哪一格」);保留供日後批次日期需求。
 
     為什麼要批次:design-loop about-code-field r3 實測逐篇 `git log -1 -- <檔>` 83 次 5.3s,
     批次 0.22s,差 18 倍;impact 跑在 PreToolUse hook,逐篇會把它拖進秒級。
@@ -13893,6 +14048,50 @@ def _impact_collect(direct_node_rel, env, depth=2):
         })
 
     return {"direct": direct_list, "indirect": indirect_list}
+
+
+_ABOUT_COUNTS_CACHE = {}   # str(vault) → {repo 相對路徑: 幾篇 about_code 命中它}(行程內;--diff 多檔共用 env 免重掃)
+
+
+def _impact_about_counts(env):
+    """★巨檔門檻的材料:全掃 env.notes 的 about_code 建 {檔: 節點數}★(工具清單 #4;獨立頂層函式對齊 _impact_* 分工)。
+    快取鍵用路徑字串(既有 _BASENAME_COUNTS_CACHE/_GIT_DATES_CACHE 同款;id(env) 是全庫沒先例的第二種做法)。"""
+    key = str(env.vault)
+    if key in _ABOUT_COUNTS_CACHE:
+        return _ABOUT_COUNTS_CACHE[key]
+    counts = {}
+    for n in env.notes.values():
+        for f in as_list(n.fields.get("about_code")):
+            f = str(f).strip()
+            if f:
+                counts[f] = counts.get(f, 0) + 1
+    _ABOUT_COUNTS_CACHE[key] = counts
+    return counts
+
+
+def _impact_mark_about(env, results, rel_file):
+    """★about_code 只加分不降級★:對已進候選集的 results 項,about_code 含目標檔且 stamp 未過期 → 加 `about_hit: True`
+    (只在 True 時出鍵;★不覆寫既有 hit 欄★;不改任何 pinned 判定——about 不是第四條入口)。
+    總開關 LUMOS_IMPACT_ABOUT(預設 1;0=整段不跑、不讀正文);巨檔門檻 LUMOS_IMPACT_ABOUT_MAX(預設 8):
+    目標檔被 ≥N 篇 about 命中時關閉加分(巨檔上「關於」無鑑別力,held 實證 22 誤放)。
+    懶觸發:先查欄位,命中才讀該篇正文算雜湊(無 git、無子行程)。計劃:Projects/固定席扇出降權_計劃。"""
+    if int(_impact_knob("LUMOS_IMPACT_ABOUT", 1)) == 0:
+        return
+    target = str(rel_file).replace("\\", "/")
+    counts = _impact_about_counts(env)
+    if counts.get(target, 0) >= int(_impact_knob("LUMOS_IMPACT_ABOUT_MAX", 8)):
+        return
+    for r in results:
+        n = env.notes.get(r["node"])
+        if n is None:
+            continue
+        vals = [str(x).strip() for x in as_list(n.fields.get("about_code"))]
+        if target not in vals:
+            continue
+        expired, _nh, _sh = about_code_expired(env.vault, r["node"], n.fields.get("about_code_stamp"))
+        if expired:
+            continue
+        r["about_hit"] = True
 
 
 def _impact_knob(name, default):
@@ -14237,8 +14436,13 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 R = round(0.60 * L + 0.40 * G, 4)
                 results.append({"node": x["node"], "kind": "indirect", "pinned": False,
                                 "score": R, "L": round(L, 4), "hop": hop, "contract": contract})
+        # about_code 語意欄位(工具清單 #4):只標記、不動 pinned;--incidents-only 快速路徑整段跳過
+        if not incidents_only:
+            _impact_mark_about(env, results, rel_file)
         # 分固定/非固定;非固定過閾+排序+補到 top_k
         pins = [r for r in results if r["pinned"]]
+        # 固定席內 stable sort:事故永遠最前(std-r1 s1f10),其次 about 命中者,其餘保持三軸原序
+        pins.sort(key=lambda r: (r["kind"] != "incident", not r.get("about_hit", False)))
         free = [r for r in results if not r["pinned"]]
         max_free = max((r["score"] for r in free), default=0.0)
         thresh = max(float(min_score), _impact_knob("LUMOS_IMPACT_DYN_COEF", 0.65) * max_free)
@@ -14973,8 +15177,10 @@ HELP_WHEN = {
     "append": "往清單欄位加一項(verified_by / related / tags…),自動去重。",
     "drift-history": "沿 git 歷史重放:筆記點名的符號在 code 裡消失的規律,這份圖譜有沒有這型漂移。",
     "remove": "從清單欄位拿掉一項(死背書、降格的指針);不帶值=把純量欄位整個拿掉(骨架欄擋)。找不到會拒絕,不會亂刪。",
-    "about-code": "語意「關於」欄位 about_code 的批次操作。目前只有 revert:整批撤某天的預標。",
-    "about-code revert": "預標標錯一整批時,按批次日期整批撤掉(stamp 第一段 batch-<日期>);人工修正過的不動。先 --dry-run 看會撤哪些。",
+    "about-code": "語意「關於」欄位 about_code 的操作:revert 整批撤、restamp 核過後重標、migrate-stamp 一次性補雜湊。",
+    "about-code revert": "預標標錯一整批時,按批次日期整批撤掉(stamp 第一段 batch-<日期>);人工修正過或 restamp 過的不動。先 --dry-run 看會撤哪些。",
+    "about-code restamp": "doctor 說某篇 about_code 可能過期、你看過標籤對現在的正文仍然對 → 用這個重標(三段全換);標籤不對就先 set/append/remove 修完再 restamp。",
+    "about-code migrate-stamp": "只跑一次:把批次預標的兩段式 stamp 補上第三段(用標註當時那個 commit 的正文算),之後 doctor 才量得出哪些標完又改過。",
     "self-audit": "某篇功能筆記我重新確認過還站得住,留 self_audit 戳記。",
     "new": "依範本建一篇新筆記。驗證紀錄加 --plan / --systems 自動雙向連。",
     "decision-supersede": "推翻一條舊決策:舊的標 valid:false 並指向新的,並開一本連鎖帳。",
@@ -15084,6 +15290,13 @@ def main():
     acr = acsub.add_parser("revert", help="整批撤銷某天的預標:stamp 第一段 == batch-<日期> 的節點,拿掉 about_code 與 stamp;人工修正過的(claude/…)不動")
     acr.add_argument("--batch", required=True, metavar="YYYY-MM-DD", help="批次日期")
     acr.add_argument("--dry-run", action="store_true", help="只列不撤")
+    acs = acsub.add_parser("restamp", help="核過這篇 about_code 對現在正文仍正確 → stamp 三段全換 <by>/<今天>/<正文雜湊>;沒有批次模式")
+    acs.add_argument("node", help="節點路徑(如 Systems/xxx)")
+    acs.add_argument("--by", default="claude", help="第一段「誰核的」(預設 claude)")
+    acm = acsub.add_parser("migrate-stamp", help="一次性:batch-* 兩段式 stamp 用「標註當時 commit」的正文補第三段雜湊")
+    acm.add_argument("--at", required=True, metavar="COMMIT", help="標註當時的 commit(最終寫入 commit 的前一個)")
+    acm.add_argument("--repo", dest="acm_repo", default=None, help="repo 根(預設從 vault 往上找)")
+    acm.add_argument("--dry-run", action="store_true", help="只列不寫")
     cp = sub.add_parser("canary", help="審計員 canary 留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵")
     csub = cp.add_subparsers(dest="ccmd", required=True)
     cs2 = csub.add_parser("second", help="[oracle品質包 S2] 第二判者覆核留痕(抽樣分權,telemetry-only,不進 gate)")
@@ -15728,6 +15941,10 @@ def main():
     if args.cmd == "about-code":
         if args.accmd == "revert":
             return cmd_about_code_revert(env, args.batch, dry_run=args.dry_run)
+        if args.accmd == "restamp":
+            return cmd_about_code_restamp(env, args.node, by=args.by)
+        if args.accmd == "migrate-stamp":
+            return cmd_about_code_migrate_stamp(env, args.at, repo_root=args.acm_repo, dry_run=args.dry_run)
     if args.cmd == "canary":
         if args.ccmd == "second":
             return cmd_canary_second(env, ref_id=args.sec_ref, verdict=args.sec_verdict,

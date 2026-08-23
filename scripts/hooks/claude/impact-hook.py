@@ -345,7 +345,9 @@ def build_ranked_context(data: dict) -> str:
             mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
             ct = f" ★{x['contract']}★" if x.get("contract") else ""
             mb = f"  (trigger: {x['matched_by']})" if x.get("matched_by") else ""
-            lines.append(f"  {mk}{ct} {x.get('node','?')}{mb}")
+            # about_code 語意欄位命中(工具清單 #9):讀 about_hit(只在 True 時存在),不碰既有 hit 來源標記
+            ab = "★關於★" if x.get("about_hit") else ""
+            lines.append(f"  {ab}{mk}{ct} {x.get('node','?')}{mb}")
     if free:
         lines.append(f"可能相關的 {len(free)} 篇(依關聯度排序):")
         for x in free:

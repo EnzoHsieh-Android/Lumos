@@ -576,8 +576,234 @@ def t_about_code_revert_partial_fail():
     check("輸出講清楚撤了 1 篇、1 篇失敗", "1 篇" in buf.getvalue() and ("失敗" in buf.getvalue() or "失敗" in err.getvalue()), buf.getvalue()[-200:] + err.getvalue()[-200:])
 
 
+def t_note_body_hash_and_restamp():
+    """★正文雜湊過期守衛 + restamp 語意★(about-code-impl-std r2/r3 折入:工具清單 #11)。
+
+    三輪設計審的結論:過期判準用日期/commit 數表達不了「標記在同日序列的哪一格」(83 篇首日就誤判 2 篇),
+    改記正文 sha256 前 12 碼當 stamp 第三段。restamp = 「人核過標籤仍對」→ 三段全換 claude/<今天>/<雜湊>,
+    離開 batch- 後 revert --batch 不再撤它(合約候選 #4);沒有批次模式(Codex r3:一口氣洗白=橡皮章)。
+    翻紅釘:①把 utf-8-sig 改回 utf-8 → BOM 條翻紅 ②restamp 不換第一段 → revert 條翻紅。"""
+    m = _load_lumos_module()
+    v = mkvault()
+    write(v, "Systems/H1.md", "type: system\nstatus: done\nabout_code:\n  - scripts/lumos\nabout_code_stamp: batch-2026-08-23/2026-08-23", body="# H1\n\n正文。\n")
+    h1 = m.note_body_hash(v, "Systems/H1.md")
+    check("雜湊 12 碼 hex", isinstance(h1, str) and len(h1) == 12 and all(c in "0123456789abcdef" for c in h1), repr(h1))
+    run(v, "set", "Systems/H1", "updated", "2026-08-24"); run(v, "append", "Systems/H1", "about_code", "scripts/x.py")
+    check("★只改 frontmatter 雜湊不變★", m.note_body_hash(v, "Systems/H1.md") == h1)
+    (v / "Systems" / "H1.md").write_text((v / "Systems" / "H1.md").read_text(encoding="utf-8") + "多一行\n", encoding="utf-8")
+    check("正文改一字雜湊變", m.note_body_hash(v, "Systems/H1.md") != h1)
+    # BOM 檔:必須用 utf-8-sig 讀,否則 frontmatter 切不出、整檔算進雜湊
+    bom_body = "# B\n\n內容\n"
+    (v / "Systems" / "B1.md").write_bytes(("\ufeff---\ntype: system\nstatus: done\n---\n" + bom_body).encode("utf-8"))
+    (v / "Systems" / "B2.md").write_text("---\ntype: system\nstatus: done\nupdated: 2026-01-01\n---\n" + bom_body, encoding="utf-8")
+    check("★BOM 檔與無 BOM 檔同正文 → 同雜湊(utf-8-sig)★", m.note_body_hash(v, "Systems/B1.md") == m.note_body_hash(v, "Systems/B2.md"))
+    check("無 frontmatter 檔也能算(防呆分支,不崩)", isinstance(m.note_body_hash(v, "Systems/B1.md"), str))
+    check("檔不存在 → None 不崩", m.note_body_hash(v, "Systems/nope.md") is None)
+
+    # restamp:三段全換、第一段離開 batch-
+    write(v, "Systems/R1.md", "type: system\nstatus: done\nabout_code:\n  - scripts/lumos\nabout_code_stamp: batch-2026-08-23/2026-08-23", body="# R1\n正文\n")
+    r = run(v, "about-code", "restamp", "Systems/R1")
+    check("restamp rc0", r.returncode == 0, r.stderr[-200:])
+    st = m.Env(v).notes["Systems/R1.md"].fields.get("about_code_stamp")
+    parts = str(st).split("/")
+    check("★三段式、第一段 claude、第三段=現在正文雜湊★", len(parts) == 3 and parts[0] == "claude" and parts[2] == m.note_body_hash(v, "Systems/R1.md"), str(st))
+    r2 = run(v, "about-code", "restamp", "Systems/R1", "--by", "enzo")
+    check("--by 改第一段", "enzo/" in (v / "Systems" / "R1.md").read_text(encoding="utf-8"), r2.stderr[-100:])
+    rv = run(v, "about-code", "revert", "--batch", "2026-08-23")
+    check("★restamp 過的不被 revert --batch 撤(合約候選 #4)★", "scripts/lumos" in (v / "Systems" / "R1.md").read_text(encoding="utf-8"), rv.stdout[-200:] + rv.stderr[-200:])
+    # 沒有 stamp 的新節點第一次也用同一指令
+    write(v, "Systems/N1.md", "type: system\nstatus: done\nabout_code:\n  - a.py", body="# N1\n")
+    r3 = run(v, "about-code", "restamp", "Systems/N1")
+    check("無 stamp 節點 restamp 建三段", r3.returncode == 0 and "claude/" in (v / "Systems" / "N1.md").read_text(encoding="utf-8"), r3.stderr[-150:])
+    write(v, "Systems/N2.md", "type: system\nstatus: done", body="# N2\n")
+    r4 = run(v, "about-code", "restamp", "Systems/N2")
+    check("沒有 about_code 的節點 restamp 擋下 rc2(沒東西可核)", r4.returncode == 2, f"rc={r4.returncode} {r4.stderr[-150:]}")
+    r5 = run(v, "about-code", "restamp", "--expired")
+    check("★沒有 --expired 批次模式(橡皮章)★", r5.returncode != 0, r5.stderr[-150:])
+
+
+def t_about_code_migrate_stamp():
+    """★83 篇存量遷移:用標註當時 commit 的正文算雜湊,不用現在的★(Codex r3 f2 blocker:現在正文=橡皮章)。
+
+    migrate-stamp --at <commit>:對 batch-* 兩段式節點,git show <commit>:<path> 取當時正文算第三段,
+    第一、二段不動。標完之後改過正文的,寫入後自然跟現在雜湊對不上 → doctor 列給人核。
+    翻紅釘:把 git show 換成讀現在的檔 → 「改過的那篇第三段≠現在雜湊」翻紅。"""
+    import subprocess as _sp, tempfile as _tf, os as _os
+    from pathlib import Path as _P
+    m = _load_lumos_module()
+    root = _P(_tf.mkdtemp(prefix="mig-")); _sp.run(["git", "init", "-q", str(root)], check=True)
+    kg = root / "docs" / "k" / "Systems"; kg.mkdir(parents=True)
+    genv = {**_os.environ, "GIT_COMMITTER_DATE": "2026-08-23T22:00:00", "GIT_AUTHOR_DATE": "2026-08-23T22:00:00"}
+    def commit(msg):
+        _sp.run(["git", "add", "-A"], cwd=str(root), check=True)
+        _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg, "--no-verify"], cwd=str(root), check=True, env=genv)
+    fm = "---\ntype: system\nstatus: done\nabout_code:\n  - scripts/lumos\nabout_code_stamp: batch-2026-08-23/2026-08-23\n---\n"
+    (kg / "未改.md").write_text(fm + "# 未改\n舊正文\n", encoding="utf-8")
+    (kg / "有改.md").write_text(fm + "# 有改\n舊正文\n", encoding="utf-8")
+    (kg / "人工.md").write_text(fm.replace("batch-2026-08-23", "claude") + "# 人工\n", encoding="utf-8")
+    commit("label time")
+    at = _sp.run(["git", "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True).stdout.strip()
+    old_hash_changed = m.note_body_hash(root / "docs" / "k", "Systems/有改.md")
+    (kg / "有改.md").write_text(fm + "# 有改\n新正文\n", encoding="utf-8")   # 標完之後改了(未 commit)
+    r = _sp.run([sys.executable, GRAPHCTL, "--vault", str(root / "docs" / "k"), "about-code", "migrate-stamp", "--at", at, "--repo", str(root)], capture_output=True, text=True)
+    check("migrate rc0", r.returncode == 0, r.stderr[-300:])
+    env = m.Env(root / "docs" / "k")
+    s_un = str(env.notes["Systems/未改.md"].fields.get("about_code_stamp")).split("/")
+    s_ch = str(env.notes["Systems/有改.md"].fields.get("about_code_stamp")).split("/")
+    check("未改:第三段=現在雜湊", len(s_un) == 3 and s_un[2] == m.note_body_hash(root / "docs" / "k", "Systems/未改.md"), "/".join(s_un))
+    check("★有改:第三段=標註當時雜湊,≠現在雜湊(之後 doctor 會列它)★", len(s_ch) == 3 and s_ch[2] == old_hash_changed and s_ch[2] != m.note_body_hash(root / "docs" / "k", "Systems/有改.md"), "/".join(s_ch))
+    check("第一、二段不動(仍是 batch)", s_un[0] == "batch-2026-08-23" and s_un[1] == "2026-08-23", "/".join(s_un))
+    check("人工修正過的(claude/)不動", str(env.notes["Systems/人工.md"].fields.get("about_code_stamp")) == "claude/2026-08-23", str(env.notes["Systems/人工.md"].fields.get("about_code_stamp")))
+    r2 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(root / "docs" / "k"), "about-code", "migrate-stamp", "--at", at, "--repo", str(root)], capture_output=True, text=True)
+    check("再跑一次:已三段式的跳過,rc0 冪等", r2.returncode == 0 and "0 篇" in r2.stdout, r2.stdout[-200:])
+
+
+def _about_impact_fixture(prefix="gctl-about-"):
+    """#4 專用 fixture:git repo + 三篇 pinned(兩合約 direct + 一事故)+ 一篇 free(indirect)+ 一篇有 about 欄不含目標。
+    ★cmd_impact 不吃 --vault,靠 --repo/cwd 找 vault★(std-r3 s2f1)——一律 cwd=root 跑。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    def g(*a): sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+    g("init", "-q"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    v = root / "docs" / "z-knowledge"
+    for d in ("Systems", "Issues", "MOC"): (v / d).mkdir(parents=True)
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    def note(rel, fm, body):
+        (v / rel).write_text("---\n" + fm + "\n---\n" + body, encoding="utf-8")
+    # 兩篇含合約 direct:A 有 about 命中,B 沒 about 欄;名字讓 B 原序在前(A 要靠 about 才排前)
+    note("Systems/A-about.md", "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ A [test:X]\nabout_code:\n  - src/svc.py\nabout_code_stamp: claude/2026-08-24/PLACEHOLDER", "# A\n實作在 `src/svc.py`。\n")
+    note("Systems/0-B-plain.md", "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ B [test:Y]", "# B\n`src/svc.py` 也在這。\n")
+    # 有欄但不含目標(事故類,靠事故路徑保送)
+    note("Issues/SQL注入.md", "type: issue\nstatus: open\npitfall_when:\n  - \"content:SELECT.*FROM\"\nabout_code:\n  - src/other.py\nabout_code_stamp: claude/2026-08-24/PLACEHOLDER\nsummary: |-\n  FLAG:TECHNICAL", "# SQL\n坑。\n")
+    # free(無合約 direct):about 命中也不該升固定席
+    note("Systems/Free.md", "type: system\nstatus: done\nsummary: |-\n  KEY:普通\nabout_code:\n  - src/svc.py\nabout_code_stamp: claude/2026-08-24/PLACEHOLDER", "# Free\n提到 `src/svc.py`。\n")
+    (root / "src").mkdir(); (root / "src" / "svc.py").write_text("def save(x):\n    pass\n", encoding="utf-8")
+    # 把 PLACEHOLDER 換成真雜湊
+    m = _load_lumos_module()
+    for rel in ("Systems/A-about.md", "Issues/SQL注入.md", "Systems/Free.md"):
+        pth = v / rel; txt = pth.read_text(encoding="utf-8")
+        pth.write_text(txt.replace("PLACEHOLDER", m.note_body_hash(v, rel)), encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "init")
+    return root, v
+
+
+def t_impact_about_hit():
+    """★#4:impact 讀 about_code——只加分不降級、排前排、事故永遠最前、過期不信、總開關、巨檔門檻★
+    (about-code-impl-std 三輪折入版;計劃 Projects/固定席扇出降權_計劃)。
+    翻紅釘:拿掉 stable sort → ①「排在非事故 pins 首位」翻紅。"""
+    import subprocess as sp, json, os as _os
+    root, v = _about_impact_fixture()
+    def lum(*a, env=None, stdin=None):
+        e = {**_os.environ, **(env or {})}
+        r = sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True, cwd=root, input=stdin, env=e)
+        return r, (json.loads(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 and r.stdout.strip() else None)
+    payload = json.dumps({"query": "def save(x): q='SELECT id FROM t'", "prospective": {"src/svc.py": "def save(x):\n    q='SELECT id FROM t'\n"}})
+    r, d = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+    check("rc0", r.returncode == 0, r.stderr[-300:])
+    pins = [x for x in d["results"] if x.get("pinned")]
+    names = [x["node"] for x in pins]
+    a = next((x for x in pins if "A-about" in x["node"]), None)
+    check("①A(合約 direct,about 命中)仍 pinned 且 about_hit", a is not None and a.get("about_hit") is True, str(pins)[:300])
+    inc_idx = [i for i, x in enumerate(pins) if x["kind"] == "incident"]
+    non_inc = [x for x in pins if x["kind"] != "incident"]
+    check("★⑩事故 pin 永遠在最前(即使不帶 about)★", inc_idx == list(range(len(inc_idx))), str(names))
+    check("★①A 排在非事故 pins 首位(B 原序在前但沒 about)★", non_inc and "A-about" in non_inc[0]["node"], str(names))
+    check("⑦direct 候選既有 hit 欄沒被蓋掉", a.get("hit") in ("body-inline-code", "basename-match"), str(a))
+    sql = next((x for x in pins if "SQL" in x["node"]), None)
+    check("有欄不含目標(事故)→ 仍 pinned、無 about_hit 鍵", sql is not None and "about_hit" not in sql, str(sql))
+    free = next((x for x in d["results"] if "Free" in x["node"]), None)
+    check("★⑨free 候選 about 命中 → 仍 free(不是第四條入口)★", free is not None and not free.get("pinned"), str(free))
+    # ②③⑧ knob=0:無 about_hit 鍵,pinned 判定逐 byte 相同,pins 序列=原序(B 在 A 前)
+    r0, d0 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload, env={"LUMOS_IMPACT_ABOUT": "0"})
+    check("⑧knob=0 → 任一項無 about_hit 鍵", all("about_hit" not in x for x in d0["results"]), str(d0["results"])[:200])
+    strip = lambda rs: [{k: v for k, v in x.items() if k != "about_hit"} for x in rs]
+    check("★②pinned 判定與 knob=0 逐 byte 相同(只差排序與鍵)★", sorted(json.dumps(x, sort_keys=True) for x in strip(d["results"])) == sorted(json.dumps(x, sort_keys=True) for x in d0["results"]), "")
+    p0 = [x["node"] for x in d0["results"] if x.get("pinned") and x["kind"] != "incident"]
+    check("⑧knob=0 pins 序列=三軸原序(B 在 A 前)", p0 and "0-B-plain" in p0[0], str(p0))
+    # ④過期:正文改一字(不 commit)→ 視同無欄
+    pa = v / "Systems" / "A-about.md"; pa.write_text(pa.read_text(encoding="utf-8") + "改了\n", encoding="utf-8")
+    r4, d4 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+    a4 = next(x for x in d4["results"] if "A-about" in x["node"])
+    check("★④正文改一字(未 commit)→ 過期,無 about_hit、仍 pinned★", "about_hit" not in a4 and a4.get("pinned"), str(a4))
+    # ⑬ 只改 frontmatter → 不過期(先把正文還原)
+    pa.write_text(pa.read_text(encoding="utf-8").replace("改了\n", ""), encoding="utf-8")
+    sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "set", "Systems/A-about", "updated", "2026-08-24"], capture_output=True)
+    r13, d13 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+    check("⑬只改 frontmatter → 仍 about_hit", next(x for x in d13["results"] if "A-about" in x["node"]).get("about_hit") is True, "")
+    # ④b 舊格式(兩段)→ 視同無欄
+    sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "set", "Systems/A-about", "about_code_stamp", "batch-2026-08-23/2026-08-23"], capture_output=True)
+    _, d4b = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+    check("④b stamp 無第三段 → 無 about_hit", "about_hit" not in next(x for x in d4b["results"] if "A-about" in x["node"]), "")
+    sp.run([sys.executable, GRAPHCTL, "about-code", "restamp", "Systems/A-about", "--repo", str(root)], capture_output=True, cwd=root)
+    sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "about-code", "restamp", "Systems/A-about"], capture_output=True)
+    # ⑫ --incidents-only → 無 about_hit 鍵
+    _, d12 = lum("impact", "--file", "src/svc.py", "--ranked", "--incidents-only", "--stdin-payload", "--json", stdin=payload)
+    check("⑫--incidents-only → 任一項無 about_hit 鍵", d12 is not None and all("about_hit" not in x for x in d12["results"]), str(d12)[:200])
+    # ⑪ about_code 存成純量字串 → 仍命中
+    pa.write_text(pa.read_text(encoding="utf-8").replace("about_code:\n  - src/svc.py", "about_code: src/svc.py"), encoding="utf-8")
+    sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "about-code", "restamp", "Systems/A-about"], capture_output=True)
+    _, d11 = lum("impact", "--file", "src/svc.py", "--ranked", "--stdin-payload", "--json", stdin=payload)
+    check("★⑪about_code 純量字串 → 仍命中(as_list)★", next(x for x in d11["results"] if "A-about" in x["node"]).get("about_hit") is True, str(d11["results"])[:300])
+
+
+def t_impact_about_giant_file():
+    """★⑤巨檔門檻:目標檔被 ≥ LUMOS_IMPACT_ABOUT_MAX(預設 8)篇 about 命中 → 本次關閉 about 加分★(獨立 vault,s2 要求)。"""
+    import subprocess as sp, json, os as _os
+    root, v = _about_impact_fixture(prefix="gctl-giant-")
+    m = _load_lumos_module()
+    for i in range(8):
+        rel = f"Systems/G{i}.md"
+        (v / rel).write_text(f"---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ G{i} [test:G]\nabout_code:\n  - src/svc.py\nabout_code_stamp: claude/2026-08-24/x\n---\n# G{i}\n`src/svc.py`。\n", encoding="utf-8")
+        txt = (v / rel).read_text(encoding="utf-8"); (v / rel).write_text(txt.replace("/x\n", "/" + m.note_body_hash(v, rel) + "\n"), encoding="utf-8")
+    def lum(env=None):
+        r = sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/svc.py", "--ranked", "--json"], capture_output=True, text=True, cwd=root, env={**_os.environ, **(env or {})})
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    d = lum()
+    check("★⑤≥8 篇命中 → 全部無 about_hit(門檻關閉)★", all("about_hit" not in x for x in d["results"]), str([x["node"] for x in d["results"] if x.get("about_hit")]))
+    d2 = lum({"LUMOS_IMPACT_ABOUT_MAX": "100"})
+    check("門檻調高 → 有 about_hit", any(x.get("about_hit") for x in d2["results"]), "")
+
+
+def t_doctor_about_code_expiry():
+    """★#6:doctor 另開迴圈(Check S2)列「about_code 標了之後正文又改過」的節點★——全 type、跳過作廢、
+    舊格式另列、受總開關;warn_soft 不擋、不計 issues;訊息先叫人看標籤對不對,不把 restamp 當萬靈丹。
+    翻紅釘:把雜湊比對改成恆 False → ①翻紅。"""
+    import os as _os
+    m = _load_lumos_module(); v = mkvault()
+    def mk(rel, extra_fm, body, stamp_hash=True):
+        write(v, rel, "type: " + ("issue" if rel.startswith("Issues") else "system") + "\nstatus: done\nabout_code:\n  - scripts/lumos\n" + extra_fm, body=body)
+        if stamp_hash:
+            h = m.note_body_hash(v, rel)
+            run(v, "set", rel[:-3], "about_code_stamp", f"claude/2026-08-24/{h}")
+    mk("Issues/改過.md", "", "# 改過\n舊\n"); (v / "Issues" / "改過.md").write_text((v / "Issues" / "改過.md").read_text(encoding="utf-8") + "新\n", encoding="utf-8")
+    mk("Systems/沒改.md", "", "# 沒改\n")
+    mk("Systems/只改欄位.md", "", "# 欄位\n"); run(v, "set", "Systems/只改欄位", "updated", "2026-08-25")
+    mk("Systems/舊格式.md", "about_code_stamp: batch-2026-08-23/2026-08-23", "# 舊\n", stamp_hash=False)
+    mk("Systems/壞雜湊.md", "about_code_stamp: claude/2026-08-24/notahexvalue", "# 壞\n", stamp_hash=False)
+    mk("Systems/作廢.md", "", "# 作廢\n舊\n"); run(v, "set", "Systems/作廢", "status", "superseded"); (v / "Systems" / "作廢.md").write_text((v / "Systems" / "作廢.md").read_text(encoding="utf-8") + "新\n", encoding="utf-8")
+    write(v, "Systems/無stamp.md", "type: system\nstatus: done", body="# 無\n")
+    r = run(v, "doctor")
+    def s2(txt):
+        i = txt.find("語意「關於」標籤"); j = txt.find("\n\n", i)
+        return txt[i:j if j > 0 else None]
+    out = s2(r.stdout)
+    check("①issue 類正文改了 → 列", "改過" in out and "標了之後正文又改過" in out, out[-800:])
+    check("②沒改不列", "沒改.md" not in out, "")
+    check("③無 stamp 不列", "無stamp" not in out, "")
+    check("④⑦舊格式/壞雜湊 → 列為舊格式", "舊格式.md" in out and "壞雜湊.md" in out and "舊格式" in out, out[-600:])
+    check("⑤只改 frontmatter → 不列", "只改欄位" not in out, "")
+    check("⑨作廢節點不列", "作廢.md" not in out, "")
+    check("訊息先叫人看標籤、提 restamp", "還對不對" in out and "restamp" in out, out[-600:])
+    check("不計 issues(doctor rc0)", r.returncode == 0, f"rc={r.returncode}")
+    r0 = run(v, "doctor", env_extra={"LUMOS_IMPACT_ABOUT": "0"}) if "env_extra" in run.__code__.co_varnames else None
+    if r0 is None:
+        import subprocess as _sp
+        r0 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "doctor"], capture_output=True, text=True, env={**_os.environ, "LUMOS_IMPACT_ABOUT": "0"})
+    check("⑥knob=0 → 整段略過、不列", "改過.md" not in s2(r0.stdout) and "總開關" in s2(r0.stdout), s2(r0.stdout)[-400:])
+
+
 def t_git_last_change_dates_batch():
-    """★一次 git log 拿全庫每個檔的最後改動日期★(工具清單 #5,about_code 過期判準的材料)。
+    """★一次 git log 拿全庫每個檔的最後改動日期★(工具清單 #5;★原為 about_code 過期判準的材料,2026-08-24 該判準改記正文雜湊後本函式暫無呼叫者,保留★)。
 
     design-loop about-code-field r3 實測:逐篇 `git log -1 -- <檔>` 83 次 5.3s,批次 0.22s,
     差 18 倍;且 vault 檔名幾乎全中文,不加 `-c core.quotepath=false` 輸出是八進位跳脫、對不回路徑。
@@ -8277,6 +8503,13 @@ def t_impact_hook_v11_delta_and_format():
     ], "meta": {"truncated": 4}})
     check("ranked 格式: 固定席+分數+截斷注記", "⚠事故" in ctx and "0.93" in ctx and "+4 條低分截斷" in ctx, ctx[:200])
     check("ranked 格式: 含動手前指令", "動手前" in ctx, ctx[-80:])
+    # 工具清單 #9:about 命中的固定席行首標 ★關於★(讀 about_hit,不碰 hit)
+    ctx9 = m.build_ranked_context({"results": [
+        {"node": "Systems/A.md", "kind": "direct", "pinned": True, "score": 0.3, "hit": "basename-match", "about_hit": True, "contract": "INVARIANT"},
+        {"node": "Systems/B.md", "kind": "direct", "pinned": True, "score": 0.3, "hit": "body-inline-code", "contract": "INVARIANT"},
+    ], "meta": {}})
+    la = next(l for l in ctx9.splitlines() if "Systems/A.md" in l); lb = next(l for l in ctx9.splitlines() if "Systems/B.md" in l)
+    check("★#9 about 命中行有 ★關於★、未命中行沒有★", "★關於★" in la and "★關於★" not in lb, la + " | " + lb)
 
 
 def t_impact_hook_ttl():
@@ -20652,6 +20885,34 @@ def t_eval_history_record_fields():
     check("--snapshot 覆寫 → mode=goldset-transition", rec2["mode"] == "goldset-transition", str(rec2))
     check("unj=None 時兩欄為 None(欄位仍在)",
           "unjudged_count" in rec2 and rec2["unjudged_count"] is None, str(rec2))
+
+
+def t_eval_pin_top3_must():
+    """★#10 新指標 pin_top3_must:固定席前 3 位必看命中率★(甲案成績單;只印、進 verdict/history、不進 gate)。
+    分母 min(3, 標 2 總數);該題沒標 2 → None 不進平均(_macro 自動排除)。接線照 fusion_p:row → _macro → verdict。
+    翻紅釘:把分母改成固定 3 → 「1 必看命中 → 1.0」翻紅。"""
+    _need_src("governance/eval")
+    root, gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    P = lambda n: {"node": n, "pinned": True, "score": 1.0}
+    F = lambda n: {"node": n, "pinned": False, "score": 0.5}
+    check("2 必看在前 3 → 1.0", m.pin_top3_must([P("a"), P("b"), P("c"), P("d")], {"a": 2, "b": 2, "c": 0}) == 1.0, "")
+    check("2 必看只 1 個在前 3 → 0.5", m.pin_top3_must([P("a"), P("c"), P("x"), P("b")], {"a": 2, "b": 2}) == 0.5, "")
+    check("★只有 1 個必看且命中 → 1.0(分母 min(3,1))★", m.pin_top3_must([P("a"), P("c"), P("x")], {"a": 2, "c": 1}) == 1.0, "")
+    check("5 必看前 3 全中 → 1.0(分母 min(3,5))", m.pin_top3_must([P(c) for c in "abcde"], {c: 2 for c in "abcde"}) == 1.0, "")
+    check("沒標 2 → None", m.pin_top3_must([P("a")], {"a": 1}) is None, "")
+    check("free 不算固定席", m.pin_top3_must([F("a"), P("b")], {"a": 2, "b": 2}) == 0.5, "")
+    # 接線:eval_edit row 有欄、report_goldset verdict 有欄、不在 gates
+    canned = [P("Systems/Alpha.md"), P("Systems/Hub.md"), F("Projects/Gamma.md")]
+    gs["labels"]["E01"] = {"Systems/Alpha.md": {"final": 2, "claude": 2, "codex": 2}, "Systems/Hub.md": {"final": 1, "claude": 1, "codex": 1}}
+    m.edit_universe = lambda case: canned
+    rows = m.eval_edit(gs)
+    check("eval_edit row 有 pin_top3_must", rows and all("pin_top3_must" in r for r in rows), str(rows)[:200])
+    rep = m.report_goldset(gs)
+    check("★verdict 有 pin_top3_must(接到 history 那層)★", "pin_top3_must" in rep["verdict"], str(rep["verdict"])[:300])
+    src = (root / "x").read_text(encoding="utf-8") if (root / "x").exists() else open(m.__file__, encoding="utf-8").read()
+    gates_src = src[src.find("gates = {"):src.find("gates = {") + 600]
+    check("不進 gates", "pin_top3_must" not in gates_src, gates_src[:200])
 
 
 def t_refresh_merge_apply():

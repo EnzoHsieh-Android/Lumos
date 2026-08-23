@@ -3,7 +3,7 @@ type: system
 status: doing
 created: 2026-08-22
 updated: 2026-08-22
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 aliases:
   - 受波及合約測試真跑閘
   - bound tests

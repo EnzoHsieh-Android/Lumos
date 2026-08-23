@@ -4,7 +4,7 @@ status: doing
 created: 2026-07-18
 updated: 2026-07-18
 signed_off: 2026-07-18
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/3c9a45faa505
 tags:
   - type/project
   - status/doing

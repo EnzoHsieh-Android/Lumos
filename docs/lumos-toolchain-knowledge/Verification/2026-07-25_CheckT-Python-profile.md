@@ -2,7 +2,7 @@
 type: verification
 status: pass
 date: 2026-07-25
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/8c62a8c1c583
 valid_under:
   - "TEST_PROFILES.python:行首錨 PYTHON_TEST_RE+檔名錨 file_name_match(fnmatch)+comment_strip=none+scaffold_name 模板"
   - "discover_test_methods 依 profile.comment_strip 分流(c-style 預設向後相容/none 不剝);檔名錨在 ext 後、讀檔前"

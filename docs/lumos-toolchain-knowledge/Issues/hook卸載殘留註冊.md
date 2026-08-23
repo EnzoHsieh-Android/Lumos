@@ -3,7 +3,7 @@ type: issue
 status: done
 created: 2026-07-07
 updated: 2026-07-07
-about_code_stamp: batch-2026-08-23/2026-08-23
+about_code_stamp: batch-2026-08-23/2026-08-23/dd37750a8de4
 related:
   - "[[lumos-cli-lifecycle]]"
   - "[[code-loop必用守衛_計劃]]"
