@@ -455,6 +455,45 @@ def t_probe_sandbox_cannot_push():
     check("沙盒③: ★bare repo 的 main 沒動★(真的沒推出去)", after == before, f"{before[:8]} → {after[:8]}")
 
 
+def t_remove_scalar_field():
+    """★純量欄位可以整個拿掉★:`lumos remove <節點> <key>`(不帶 value)。
+
+    2026-08-23 design-loop about-code-field r3 抓到:回滾要「刪 stamp」,但 cmd_set 只能覆寫、
+    edit_fm_remove 對非 list 直接 raise——純量欄位沒有刪除原語,回滾最後一步是空的。
+    設計:不加新子命令,remove 對純量=省略 value 即整欄拿掉(一個指令學一次)。
+    ★守衛★:type/status/created 是筆記骨架,刪了 lint/doctor 全炸——硬擋 rc2。
+    翻紅釘:把 cmd_remove 的純量分支拿掉 → 第 1、2 條翻紅。"""
+    v = mkvault()
+    write(v, "Systems/S.md", "type: system\nstatus: done\nself_audit: sonnet/2026-08-23\nregen: yes")
+    r = run(v, "remove", "Systems/S", "self_audit")
+    check("★純量欄省略 value → 整欄拿掉,rc0★", r.returncode == 0, r.stderr[-200:])
+    txt = (v / "Systems" / "S.md").read_text(encoding="utf-8")
+    check("檔案裡 self_audit 那行消失", "self_audit" not in txt, txt[:200])
+    check("其他欄位原封不動", "regen: yes" in txt and "status: done" in txt, txt[:200])
+    # 守衛:骨架欄位不准刪
+    r2 = run(v, "remove", "Systems/S", "type")
+    check("★type 不准刪,rc2★", r2.returncode == 2 and "骨架" in r2.stderr, f"rc={r2.returncode} {r2.stderr[-150:]}")
+    check("擋下時檔案沒動", "type: system" in (v / "Systems" / "S.md").read_text(encoding="utf-8"))
+    # 不存在的欄位
+    r3 = run(v, "remove", "Systems/S", "self_audit")
+    check("欄位已不在 → rc2 講清楚", r3.returncode == 2, r3.stderr[-150:])
+    # list 欄位省略 value 不准(避免誤刪整個 verified_by)
+    write(v, "Systems/T.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Verification/x]]\"")
+    r4 = run(v, "remove", "Systems/T", "verified_by")
+    check("★清單欄位省略 value 不准整欄刪(要逐值),rc2★", r4.returncode == 2, r4.stderr[-150:])
+
+    # 工具清單 #1:about_code / about_code_stamp 進白名單——append/set/remove 三條路都要通
+    write(v, "Systems/A.md", "type: system\nstatus: done")
+    ra = run(v, "append", "Systems/A", "about_code", "scripts/lumos")
+    check("about_code 進 LIST_KEYS:append rc0", ra.returncode == 0, ra.stderr[-150:])
+    rs = run(v, "set", "Systems/A", "about_code_stamp", "codex/2026-08-23")
+    check("about_code_stamp 進 SCALAR_KEYS:set rc0", rs.returncode == 0, rs.stderr[-150:])
+    rr = run(v, "remove", "Systems/A", "about_code_stamp")
+    check("about_code_stamp 可整欄拿掉(回滾路徑):rc0", rr.returncode == 0, rr.stderr[-150:])
+    txt = (v / "Systems" / "A.md").read_text(encoding="utf-8")
+    check("三步後:about_code 在、stamp 不在", "scripts/lumos" in txt and "about_code_stamp" not in txt, txt[:200])
+
+
 def t_empty_list_bracket_is_list():
     """★`aliases: []` 必須被認成清單,不是純量★。
 

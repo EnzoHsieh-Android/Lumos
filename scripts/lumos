@@ -7240,8 +7240,8 @@ def cmd_export_html(env, out_path, standalone=False):
 
 # ═══════════════════════ 階段三: 寫側 T1(行級手術) ═══════════════════════
 
-SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen", "pitfall_ask", "pitfall_source"}  # pitfall_* 2026-08-09 已知坑策展庫
-LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases", "pitfall_when", "core_refs"}   # aliases 2026-08-05;pitfall_when 2026-08-09(已知坑策展庫,content-trigger);core_refs 2026-08-11(升格加指針/降格拆指針,兩向都要 T1;值是純路徑非 wikilink——lumos-core-knowledge skill 明令禁跨 vault wikilink)
+SCALAR_KEYS = {"status", "updated", "created", "type", "self_audit", "signed_off", "regen", "pitfall_ask", "pitfall_source", "about_code_stamp"}  # about_code_stamp 2026-08-23(語意欄位基礎,計劃:固定席扇出降權)  # pitfall_* 2026-08-09 已知坑策展庫
+LIST_KEYS = {"verified_by", "plan_refs", "related", "tags", "aliases", "pitfall_when", "core_refs", "about_code"}   # aliases 2026-08-05;pitfall_when 2026-08-09(已知坑策展庫,content-trigger);core_refs 2026-08-11(升格加指針/降格拆指針,兩向都要 T1;值是純路徑非 wikilink——lumos-core-knowledge skill 明令禁跨 vault wikilink)
 LINK_KEYS = ("verified_by", "plan_refs", "related", "core_refs")  # S2「純連結欄位」子集(≠LIST_KEYS:那是 append 白名單,pitfall_when=content-trigger 不算連結);spec=Projects/code側刪除傳播守衛_計劃
 DATE_KEYS = {"updated", "created", "date", "decided", "ended"}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -7580,9 +7580,17 @@ def cmd_remove(env, rel, key, value):
     (obsidian processFrontMatter)還要 Obsidian 開著 → 實務上等於無路可走。
 
     ★不命中一律 rc=2★:打錯字卻回成功,會讓呼叫端以為清乾淨了(死背書照舊掛著),
-    比報錯危險得多。"""
+    比報錯危險得多。
+
+    ★2026-08-23 擴充:value 省略 = 把純量欄位整個拿掉★(design-loop about-code-field r3:
+    回滾要「刪 stamp」,但 set 只能覆寫、沒有刪除原語——回滾最後一步是空的)。
+    不加新子命令,remove 一個指令學一次。守衛:type/status/created 是筆記骨架,刪了 lint/doctor
+    全炸,硬擋;清單欄位不准省略 value(避免一句話誤刪整個 verified_by)。"""
+    if value is None:
+        return _cmd_remove_scalar(env, rel, key)
     if key not in LIST_KEYS:
-        print(f"擋下:{key} 不能用 remove 刪,檔案沒動。remove 只能動這些清單欄位:{sorted(LIST_KEYS)}", file=sys.stderr)
+        print(f"擋下:{key} 不能用 remove 刪,檔案沒動。remove 只能動這些清單欄位:{sorted(LIST_KEYS)}"
+              f"(純量欄位要整個拿掉:不帶 value)", file=sys.stderr)
         return 2
     path = env.vault / rel
     lines, s, e = load_raw_for_edit(path)
@@ -7597,6 +7605,37 @@ def cmd_remove(env, rel, key, value):
     atomic_write_verify(path, new_lines, key,
                         lambda f: not any(link_target(x) == tgt for x in as_list(f.get(key))))
     print(f"✓ remove {rel}: {key} 拿掉了 {value}" + (f"(共拿掉 {n} 項)" if n > 1 else ""))
+    return 0
+
+
+_SKELETON_KEYS = ("type", "status", "created")   # 刪了筆記就不是筆記:lint/doctor/分類全依賴
+
+
+def _cmd_remove_scalar(env, rel, key):
+    """remove 的純量分支:整欄拿掉。"""
+    if key in _SKELETON_KEYS:
+        print(f"擋下:{key} 是筆記骨架欄位,拿掉了 lint/doctor/分類全會炸,檔案沒動。"
+              f"要改值用 lumos set", file=sys.stderr)
+        return 2
+    if key in LIST_KEYS:
+        print(f"擋下:{key} 是清單欄位,不准一句話整欄拿掉(誤刪整個 verified_by 這種事發生過一次就夠了),"
+              f"檔案沒動。要逐值拿:lumos remove <節點> {key} <值>", file=sys.stderr)
+        return 2
+    if key not in SCALAR_KEYS:
+        print(f"擋下:{key} 不在可動的純量欄位清單裡:{sorted(SCALAR_KEYS)},檔案沒動", file=sys.stderr)
+        return 2
+    path = env.vault / rel
+    lines, s, e = load_raw_for_edit(path)
+    fm = lines[1:e]
+    struct = {k: (a, b, kind) for k, a, b, kind in fm_structure(fm)}
+    if key not in struct:
+        print(f"擋下:{rel} 沒有 {key} 這個欄位,沒東西可拿,檔案沒動", file=sys.stderr)
+        return 2
+    a, b, kind = struct[key]
+    new_fm = fm[:a] + fm[b + 1:]
+    new_lines = lines[:1] + new_fm + lines[e:]
+    atomic_write_verify(path, new_lines, key, lambda f: key not in f)
+    print(f"✓ remove {rel}: {key} 整欄拿掉了")
     return 0
 
 
@@ -15147,10 +15186,11 @@ def main():
     p.add_argument("--limit", type=int, default=0, help="只看最後 N 個取樣點(0=全部)")
     p.add_argument("--json", action="store_true", dest="dh_json")
     p = sub.add_parser("remove",
-                       help="list 欄位移除(append 逆操作;清死背書/降格後的 core_refs。不命中 rc=2)")
+                       help="list 欄位移除(append 逆操作;清死背書/降格後的 core_refs。不命中 rc=2);"
+                            "不帶 value=把純量欄位整個拿掉(骨架欄 type/status/created 擋)")
     p.add_argument("note")
     p.add_argument("key")
-    p.add_argument("value")
+    p.add_argument("value", nargs="?", default=None)
     sa = sub.add_parser("self-audit",
                         help="L4 自足性審計留痕:寫 self_audit:<model>/<date>(乾淨 agent 只讀圖譜還原審過;Check S 看)")
     sa.add_argument("node")
