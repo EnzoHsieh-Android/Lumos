@@ -455,6 +455,40 @@ def t_probe_sandbox_cannot_push():
     check("沙盒③: ★bare repo 的 main 沒動★(真的沒推出去)", after == before, f"{before[:8]} → {after[:8]}")
 
 
+def t_about_code_to_rater_format():
+    """★about_code 預標 → refresh_labels merge 吃的格式★(工具清單 #8)。
+
+    merge 吃 {題:{候選:0|1|2}};about_code 預標是 {節點:[檔清單]}——r3 實測字面呼叫直接
+    AttributeError。轉換:節點當「題」、檔當「候選」、列了=1、沒列=0。
+    ★關鍵:候選集要是兩席的聯集★——A 列了 B 沒列的檔,B 那邊要填 0(明確判「不關於」),
+    不能留空(留空 merge 會當 B 沒意見 → 進 disputed 桶當人裁,而那其實是 B 的反對票)。
+    翻紅釘:候選集改成只用 A 席的 → 第 3 條翻紅(B 獨有的檔消失)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location("lumos_ac", GRAPHCTL, loader=SourceFileLoader("lumos_ac", GRAPHCTL))
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    A = {"Systems/X.md": ["a.py", "b.py"], "Systems/Y.md": [], "Systems/Z.md": ["c.py"]}
+    B = {"Systems/X.md": ["a.py", "d.py"], "Systems/Y.md": ["e.py"]}   # Z 沒標
+    ra, rb = m.about_code_to_rater(A, B)
+    check("X:A 列 a,b → a=1 b=1;B 列 a,d → d 在 A 側=0", ra["Systems/X.md"] == {"a.py": 1, "b.py": 1, "d.py": 0}, str(ra["Systems/X.md"]))
+    check("X:B 側 b=0 d=1", rb["Systems/X.md"] == {"a.py": 1, "b.py": 0, "d.py": 1}, str(rb["Systems/X.md"]))
+    check("★B 獨有的 d 出現在兩席(聯集)★", "d.py" in ra["Systems/X.md"] and "d.py" in rb["Systems/X.md"])
+    check("Y:A 空清單、B 列 e → A 側 e=0", ra["Systems/Y.md"] == {"e.py": 0} and rb["Systems/Y.md"] == {"e.py": 1}, str(ra["Systems/Y.md"]))
+    check("★Z 只有 A 標過 → B 側不出現(真的沒意見,讓 merge 判 degraded/disputed)★", "Systems/Z.md" in ra and "Systems/Z.md" not in rb, str(list(rb)))
+    # 餵進真的 merge 跑一次,確認格式相容
+    import json as _json, tempfile as _tf, subprocess as _sp
+    from pathlib import Path as _P
+    d = _P(_tf.mkdtemp(prefix="acr-"))
+    (d / "a.json").write_text(_json.dumps(ra), encoding="utf-8"); (d / "b.json").write_text(_json.dumps(rb), encoding="utf-8")
+    repo = _P(GRAPHCTL).resolve().parent.parent
+    r = _sp.run([sys.executable, str(repo / "governance" / "eval" / "refresh_labels.py"), "merge",
+                 "--a", str(d / "a.json"), "--b", str(d / "b.json"), "--json"], capture_output=True, text=True)
+    check("★餵進 refresh_labels merge 不炸★", r.returncode == 0, r.stderr[-200:])
+    res = _json.loads(r.stdout.strip().splitlines()[-1])
+    check("merge 結果:a.py 兩席一致 → agreed", res["agreed"].get("Systems/X.md", {}).get("a.py") == 1, str(res["agreed"]))
+    check("merge 結果:b.py/d.py 不一致 → disputed", set(res["disputed"].get("Systems/X.md", {})) == {"b.py", "d.py"}, str(res["disputed"]))
+
+
 def t_about_code_revert_batch():
     """★整批撤銷某天的 about_code 預標★(工具清單 #7)。
 
