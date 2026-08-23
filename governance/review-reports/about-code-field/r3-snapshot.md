@@ -362,22 +362,3 @@ B 回滾指令不存在→改新增子命令 `about-code revert`;C stamp 格式�
 D「讀側不變」r1 自稱已刪卻殘留兩處→改;E 61 篇殘留→83;F 過期判準 `updated` 紀律不足(33% 落後)→改用 git 日期;
 G 範本要加欄、反向計數要單一實作;H 棘輪「安全帶」→「後照鏡」;I 單席預標沿用當 A 席。
 ★r1 教訓:只改被點名的段落、沒全文 grep 分身——r2 三席有兩席抓的就是這個。★
-
-### r3(2026-08-23;s1/s2/s3 三席)——★達上限未收斂,攤給人裁★
-23 條 findings,**7 條 blocker**,★未折入★(到頂規矩:不由編排者裁)。歸併後三個層級:
-
-**① 設計層(s2f1 blocker、s2f2/s2f3/s2f4 major)——r2 的「只加分不降級」救了召回,但把案子的目標救沒了**:
-現在沒有任何機制在剔除噪音(扇出層明寫不動產線、巨檔門檻只關 about 加分、22 個誤放本來就是三軸保送進來的);
-about_code 對 P@8 零影響(P@8 不計固定席);「主案」「成績單看噪音數」「巨檔門檻恢復鑑別力」三句全是降級時代的殘留。
-**席二原話:誰剔噪音?spec 沒人誠實說「現在沒人剔,只是排後面」。**
-
-**② 工具層(s1f1/s1f3/s3f10/s3f11/s3f13/s3f14 blocker+major)——字面開工會崩的五處**:
-純量 stamp 沒有刪除原語(cmd_set 只能覆寫);`about_code: []` 會被 fm_structure 判成 scalar → append 必敗
-(★既有 aliases: [] 同款 bug★);git log 逐篇 100ms×83=5.3s vs 批次 0.22s(且中文檔名要 -c core.quotepath=false);
-Check S 只掃 type:system,事故類節點(spec 自己的核心例子)過期永遠驗不到;refresh_labels merge 吃 {cid:{node:int}},
-預標是 {node:[files]},字面呼叫丟 AttributeError。
-
-**③ 流程層(s3f12 blocker、s1f7 major)——沒有「合約候選」節、沒有「本案新增工具清單」彙整**。
-
-★三席共 26 條 blocker/major 在 r3 仍出,而且 ① 是設計層問題:r2 為救召回做的改動,讓 about_code 失去了
-「降噪」這個本案立案目標。**這不是再折一輪能收的,要人裁方向。**★
