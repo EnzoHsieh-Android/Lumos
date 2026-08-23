@@ -455,6 +455,55 @@ def t_probe_sandbox_cannot_push():
     check("沙盒③: ★bare repo 的 main 沒動★(真的沒推出去)", after == before, f"{before[:8]} → {after[:8]}")
 
 
+def t_about_code_revert_batch():
+    """★整批撤銷某天的 about_code 預標★(工具清單 #7)。
+
+    計劃的回滾路徑:批次寫入時 stamp 第一段固定 `batch-<日期>`;撤=找 stamp 第一段等於它的節點,
+    逐值拿掉 about_code、整欄拿掉 stamp。★最怕誤撤人工修正過的★——那些 stamp 第一段會變成
+    `claude/…`,不在 batch 範圍。r3 抓到原本寫的 `query --field` 根本不存在,所以這是新子命令。
+    翻紅釘:把比對改成「stamp 含日期字串」(非第一段精確比對)→ 第 3 條翻紅(人工修正的被誤撤)。"""
+    import json as _json
+    v = mkvault()
+    # 三篇:批次標的 / 人工修正過的(同日期但第一段不同) / 別天批次的
+    write(v, "Systems/B1.md", "type: system\nstatus: done\nabout_code:\n  - scripts/lumos\n  - scripts/hooks/pre-push\nabout_code_stamp: batch-2026-08-23/2026-08-23")
+    write(v, "Systems/M1.md", "type: system\nstatus: done\nabout_code:\n  - scripts/lumos\nabout_code_stamp: claude/2026-08-23")
+    write(v, "Systems/B2.md", "type: system\nstatus: done\nabout_code:\n  - scripts/lumos\nabout_code_stamp: batch-2026-08-20/2026-08-20")
+    write(v, "Systems/N0.md", "type: system\nstatus: done")   # 沒欄位的,不該被碰
+
+    r = run(v, "about-code", "revert", "--batch", "2026-08-23", "--dry-run")
+    check("dry-run rc0 且列出會撤的", r.returncode == 0 and "B1" in r.stdout and "M1" not in r.stdout, r.stdout[:300] + r.stderr[-200:])
+    b1_before = (v / "Systems" / "B1.md").read_text(encoding="utf-8")
+    check("dry-run 沒動檔案", "about_code_stamp" in b1_before)
+
+    r2 = run(v, "about-code", "revert", "--batch", "2026-08-23")
+    check("真撤 rc0", r2.returncode == 0, r2.stderr[-200:])
+    b1 = (v / "Systems" / "B1.md").read_text(encoding="utf-8")
+    check("★B1:about_code 與 stamp 都拿掉★", "about_code" not in b1, b1[:200])
+    m1 = (v / "Systems" / "M1.md").read_text(encoding="utf-8")
+    check("★M1 人工修正過的(claude/…)原封不動★", "about_code_stamp: claude/2026-08-23" in m1 and "scripts/lumos" in m1, m1[:200])
+    b2 = (v / "Systems" / "B2.md").read_text(encoding="utf-8")
+    check("B2 別天批次的原封不動", "batch-2026-08-20" in b2, b2[:200])
+    n0 = (v / "Systems" / "N0.md").read_text(encoding="utf-8")
+    check("N0 沒欄位的沒被動", n0.count("\n") <= 5, n0)
+    check("輸出講了撤幾篇", "1 篇" in r2.stdout or "1 個" in r2.stdout, r2.stdout[:200])
+    r3 = run(v, "about-code", "revert", "--batch", "2026-01-01")
+    check("沒有該批次 → rc2 講清楚,不是靜默成功", r3.returncode == 2, f"rc={r3.returncode} {r3.stderr[-150:]}")
+
+    # 工具清單 #2:範本加 about_code 空欄——只在 system/issue(固定席會碰的兩類,同 aliases 範圍)
+    for kind, sub in (("system", "Systems"), ("issue", "Issues")):
+        run(v, "new", kind, f"範本{kind}")
+        txt = (v / sub / f"範本{kind}.md").read_text(encoding="utf-8")
+        check(f"★{kind} 範本有 about_code: []★", "about_code: []" in txt, txt[:300])
+        ra = run(v, "append", f"{sub}/範本{kind}", "about_code", "scripts/lumos")
+        check(f"{kind} 範本建的節點 append about_code rc0(靠 [] 修法)", ra.returncode == 0, ra.stderr[-150:])
+    for kind, sub in (("project", "Projects"), ("verification", "Verification")):
+        run(v, "new", kind, f"範本{kind}")
+        txt = (v / sub / f"範本{kind}.md").read_text(encoding="utf-8")
+        check(f"{kind} 範本★不加★about_code(範圍刀:固定席只碰 system/issue)", "about_code" not in txt, txt[:200])
+    rn = run(v, "new", "system", "提示測試")
+    check("NEW_HINT 提到 about_code 怎麼填", "about_code" in rn.stdout, rn.stdout[:400])
+
+
 def t_git_last_change_dates_batch():
     """★一次 git log 拿全庫每個檔的最後改動日期★(工具清單 #5,about_code 過期判準的材料)。
 

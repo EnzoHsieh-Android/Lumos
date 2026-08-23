@@ -7639,6 +7639,42 @@ def _cmd_remove_scalar(env, rel, key):
     return 0
 
 
+def cmd_about_code_revert(env, batch_date, dry_run=False):
+    """★整批撤銷某天的 about_code 預標★(工具清單 #7,2026-08-23)。
+
+    批次寫入時 stamp 第一段固定 `batch-<日期>`;本指令找第一段★精確等於★它的節點,
+    逐值拿掉 about_code、整欄拿掉 stamp。人工修正過的 stamp 第一段會變(`claude/…`),
+    不在範圍——★這是本指令最怕誤傷的那類,比對用精確字串不用包含★。
+    r3 抓到原計劃寫的 `lumos query --field` 根本不存在,所以這是新子命令。
+    """
+    want = f"batch-{batch_date}"
+    targets = []
+    for rel, n in sorted(env.notes.items()):
+        stamp = n.fields.get("about_code_stamp")
+        if not isinstance(stamp, str):
+            continue
+        if stamp.split("/", 1)[0].strip() == want:
+            targets.append((rel, [str(x) for x in as_list(n.fields.get("about_code"))]))
+    if not targets:
+        print(f"擋下:沒有任何節點的 about_code_stamp 第一段是 {want},沒東西可撤。"
+              f"(人工修正過的會是 claude/… 之類,不算批次;日期格式 YYYY-MM-DD)", file=sys.stderr)
+        return 2
+    print(f"{'[dry-run] ' if dry_run else ''}批次 {want}:{len(targets)} 篇")
+    for rel, vals in targets:
+        print(f"  {rel}  about_code {len(vals)} 項")
+    if dry_run:
+        return 0
+    done = 0
+    for rel, vals in targets:
+        for v in vals:
+            if cmd_remove(env, rel, "about_code", v) != 0:
+                print(f"  ⚠ {rel} 拿 {v} 失敗,這篇停在半途,其餘繼續", file=sys.stderr)
+        if _cmd_remove_scalar(env, rel, "about_code_stamp") == 0:
+            done += 1
+    print(f"✓ about-code revert:撤了 {done} 篇(批次 {want})")
+    return 0 if done == len(targets) else 1
+
+
 def _fm_of(all_lines):
     """從完整檔行抽 frontmatter 行(供 decision 自驗用 parse_decisions 重解)。"""
     for i in range(1, len(all_lines)):
@@ -8189,11 +8225,13 @@ def cmd_rel_cascade_resume(env, cascade_id):
 TEMPLATES = {
     "system": ("Systems", "type: system\nstatus: doing\ncreated: {today}\nupdated: {today}\n"
                "aliases: []\n"
+               "about_code: []\n"
                "tags:\n  - type/system\n  - status/doing\nsummary: |-\n  FLOW:\n  KEY:\n  DEP:\n  TEST:"),
     "verification": ("Verification", "type: verification\nstatus: pass\ndate: {today}\n"
                      "valid_under:\nrevalidate_when:\ntags:\n  - type/verification\n  - status/pass"),
     "issue": ("Issues", "type: issue\nstatus: open\ncreated: {today}\nupdated: {today}\n"
               "aliases: []\n"
+              "about_code: []\n"
               "tags:\n  - type/issue\n  - status/open\nsummary: |-\n  FLAG:\n  DECISION:\n  KEY:"),
     "project": ("Projects", "type: project\nstatus: doing\ncreated: {today}\nupdated: {today}\n"
                 "tags:\n  - type/project\n  - status/doing"),
@@ -8208,10 +8246,12 @@ NEW_HINT = {
         "牽涉做了就回不去的動作(正式環境遷移、上架)要標 ★IRREVERSIBLE★ 並加 [rollback:decisions] 寫怎麼退;改了難救但還救得回的標 ★CHECKPOINT★;退不了的外部動作(信已寄、下游已吃)改用 [guard:decisions] 寫怎麼防重複",
         "最重要的合約(牽涉金額、權限、不可逆)在 ★INVARIANT★ 後面再加 ★COMBO★,健檢會提醒你多測幾種組合情境,別只測最順的那條路",
         "aliases 寫「別人可能怎麼稱呼這件事」(同義詞、縮寫、跨領域說法),會影響搜尋;只能寫真的出現過的說法,亂湊反而讓搜尋變差,沒有就留 []",
+        "about_code 寫「這篇主要在講哪幾支程式檔的行為」(repo 相對路徑,0~3 支)——判準:改那支檔的人不看這篇會不會做錯事?會就列;只是順帶提到的不列。純方法論筆記留 []。改這些檔時它會排固定席前排",
     ],
     "issue": [
         "骨架建好了,摘要那幾行還是空的,要自己填:FLAG:<TECHNICAL/DECISION/ORIGIN 三選一>  DECISION:<決策簡述>  KEY:<關鍵發現>",
         "aliases 寫「大家實際上怎麼描述這個問題」(症狀語、縮寫、舊名),只寫真的出現過的說法,沒有就留 []",
+        "about_code 寫「這次事故發生在哪幾支程式檔」(repo 相對路徑)——★事故類優先填★:改那支檔的人不看這篇會再犯。只寫出事的那幾支,不用列所有相關的",
     ],
     "verification": [
         "填 valid_under:<這個驗證在什麼前提下才算數>  revalidate_when:<改到什麼時候該重新驗>",
@@ -14894,7 +14934,9 @@ HELP_WHEN = {
     "set": "改一篇的單一值欄位(status / updated / type…)。改 status 會連帶同步標籤。別手改開頭欄位。",
     "append": "往清單欄位加一項(verified_by / related / tags…),自動去重。",
     "drift-history": "沿 git 歷史重放:筆記點名的符號在 code 裡消失的規律,這份圖譜有沒有這型漂移。",
-    "remove": "從清單欄位拿掉一項(死背書、降格的指針)。找不到會拒絕,不會亂刪。",
+    "remove": "從清單欄位拿掉一項(死背書、降格的指針);不帶值=把純量欄位整個拿掉(骨架欄擋)。找不到會拒絕,不會亂刪。",
+    "about-code": "語意「關於」欄位 about_code 的批次操作。目前只有 revert:整批撤某天的預標。",
+    "about-code revert": "預標標錯一整批時,按批次日期整批撤掉(stamp 第一段 batch-<日期>);人工修正過的不動。先 --dry-run 看會撤哪些。",
     "self-audit": "某篇功能筆記我重新確認過還站得住,留 self_audit 戳記。",
     "new": "依範本建一篇新筆記。驗證紀錄加 --plan / --systems 自動雙向連。",
     "decision-supersede": "推翻一條舊決策:舊的標 valid:false 並指向新的,並開一本連鎖帳。",
@@ -14999,6 +15041,11 @@ def main():
     p.add_argument("--nags", type=int, default=0, metavar="天數", dest="gov_nags",
                    help="只列「同一道閘對同一篇連續提醒 ≥ 天數、而且最近一次體檢還在喊」的空轉清單(有就 rc1;自主迴圈週報用)")
 
+    ac = sub.add_parser("about-code", help="語意「關於」欄位 about_code 的批次操作(計劃:固定席扇出降權)")
+    acsub = ac.add_subparsers(dest="accmd", required=True)
+    acr = acsub.add_parser("revert", help="整批撤銷某天的預標:stamp 第一段 == batch-<日期> 的節點,拿掉 about_code 與 stamp;人工修正過的(claude/…)不動")
+    acr.add_argument("--batch", required=True, metavar="YYYY-MM-DD", help="批次日期")
+    acr.add_argument("--dry-run", action="store_true", help="只列不撤")
     cp = sub.add_parser("canary", help="審計員 canary 留痕(test-the-tester):某輪對抗審計有沒有抓到植入瑕疵")
     csub = cp.add_subparsers(dest="ccmd", required=True)
     cs2 = csub.add_parser("second", help="[oracle品質包 S2] 第二判者覆核留痕(抽樣分權,telemetry-only,不進 gate)")
@@ -15640,6 +15687,9 @@ def main():
                            grace=args.cw_grace, as_json=args.cw_json)
     if args.cmd == "ci-status":
         return cmd_ci_status(env, repo_dir=args.cs_repo, as_json=args.cs_json)
+    if args.cmd == "about-code":
+        if args.accmd == "revert":
+            return cmd_about_code_revert(env, args.batch, dry_run=args.dry_run)
     if args.cmd == "canary":
         if args.ccmd == "second":
             return cmd_canary_second(env, ref_id=args.sec_ref, verdict=args.sec_verdict,

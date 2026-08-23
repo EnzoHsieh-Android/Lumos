@@ -1,4 +1,4 @@
-# C — CLI 表層審計（`scripts/lumos`，61 個頂層子命令）
+# C — CLI 表層審計（`scripts/lumos`，62 個頂層子命令）
 
 方法論：`docs/.usage-log.jsonl`（166 行，全機）只記 `context`/`show` 兩種讀取命令，其餘一律沒有機器級「這條命令被叫過幾次」的帳。改用四種代理證據交叉：① `lumos gov --stats` 讀 `.governance-log.jsonl`（20566 行,唯一真被 hook 動過的帳）② `.canary-log.jsonl`（487 行）③ `git log` 訊息命中數 ④ `grep -rc "lumos <cmd>"` over `skills/ CLAUDE.md`（是否被教過）。四者沒有一個是「使用次數」的正確代理，只能疊出「有沒有留下任何痕跡」的下界。
 
@@ -29,7 +29,7 @@ Claude Code 側的 PreToolUse hook 是例外的真自動注入:`scripts/hooks/cl
 
 `grep -rc "lumos <cmd>\b" skills/ CLAUDE.md` 得零的有 11 個:`ci-status decision-reindex deinit delguard drift-history export link-candidates map rel-cascade remove teardown`。
 
-但這組要再切一刀——`skills/lumos-project-notes/reference.md:86` 有一整段「61 個頂層命令全覽」,把全部 61 個命令名字都提了一次(逗號隔開的清單),沒有語法、沒有範例、沒有「何時用」。扣掉這行純報數的提及後:
+但這組要再切一刀——`skills/lumos-project-notes/reference.md:86` 有一整段「62 個頂層命令全覽」,把全部 61 個命令名字都提了一次(逗號隔開的清單),沒有語法、沒有範例、沒有「何時用」。扣掉這行純報數的提及後:
 
 - **真的連名字都只出現這一次、沒有第二處任何教學/範例的 8 個**:`ci-status` `decision-reindex` `deinit` `drift-history` `link-candidates` `rel-cascade` `remove` `teardown`。
 - **有一行真範例但沒被寫進「教學路徑」的 2 個**:`map`(`reference.md:59` 表格一行 `map <筆記名> --depth 2`)、`export`(同表格 `export --folders Systems Projects`)——比前一組好一點,但都不在 CLAUDE.md 的「入口三步」或任何 skill 的主敘事裡,一個沒讀過 reference.md 全文的 Claude 撞不到。

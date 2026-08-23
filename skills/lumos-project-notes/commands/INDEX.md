@@ -26,7 +26,7 @@
 | 你正在… | 開這個子檔 | 裡面有 |
 |---|---|---|
 | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export |
-| 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates |
+| 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
 | 改完東西,要寫回圖譜 | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
 | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
 | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | loop next / loop status / canary record / canary second / quote-check / seat-check / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
