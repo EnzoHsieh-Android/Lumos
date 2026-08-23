@@ -538,6 +538,44 @@ def t_about_code_revert_batch():
     check("NEW_HINT 提到 about_code 怎麼填", "about_code" in rn.stdout, rn.stdout[:400])
 
 
+def t_about_code_revert_partial_fail():
+    """★revert 單篇部分失敗不准刪 stamp、不准算成功★(about-code-impl-std r1 s3f8)。
+
+    審查員抓到:某篇有一個值拿不掉,原碼照樣刪 stamp、照樣 done+=1——下次 revert 找不到這篇,
+    殘值永遠留著,而且回報「撤成功」是假的。重現時還發現更糟:清單重複值會讓第一次 remove
+    把兩個都拿掉、第二次拋 ValueError 沒人接,整個指令崩潰。
+    修法:值先去重;單篇任一值失敗(含例外)→ 跳過刪 stamp、不計 done、rc 非 0、其餘篇繼續。
+    翻紅釘:把「失敗就跳過刪 stamp」拿掉 → 第 2 條翻紅。"""
+    v = mkvault()
+    # 重複值:修前直接崩潰
+    write(v, "Systems/D1.md", "type: system\nstatus: done\nabout_code:\n  - scripts/lumos\n  - scripts/lumos\nabout_code_stamp: batch-2026-08-23/2026-08-23")
+    r = run(v, "about-code", "revert", "--batch", "2026-08-23")
+    d1 = (v / "Systems" / "D1.md").read_text(encoding="utf-8")
+    check("重複值:rc0 且欄位與 stamp 都拿掉(不崩潰)", r.returncode == 0 and "about_code" not in d1, f"rc={r.returncode} {r.stderr[-200:]}")
+
+    # 部分失敗:直呼函式、把 cmd_remove 換成對第二個值必敗的假貨
+    m = _load_lumos_module()
+    write(v, "Systems/P1.md", "type: system\nstatus: done\nabout_code:\n  - a.py\n  - b.py\nabout_code_stamp: batch-2026-08-24/2026-08-24")
+    write(v, "Systems/P2.md", "type: system\nstatus: done\nabout_code:\n  - c.py\nabout_code_stamp: batch-2026-08-24/2026-08-24")
+    real = m.cmd_remove
+    def fake(env, rel, key, value=None):
+        if value == "b.py":
+            raise ValueError("假裝拿不掉")
+        return real(env, rel, key, value)
+    m.cmd_remove = fake
+    import io, contextlib
+    buf, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+        rc = m.cmd_about_code_revert(m.Env(v), "2026-08-24")
+    m.cmd_remove = real
+    p1 = (v / "Systems" / "P1.md").read_text(encoding="utf-8")
+    p2 = (v / "Systems" / "P2.md").read_text(encoding="utf-8")
+    check("★部分失敗那篇:stamp 留著(下次還找得到)★", "about_code_stamp: batch-2026-08-24" in p1, p1[:200])
+    check("部分失敗那篇:不崩潰,rc 非 0", rc != 0, f"rc={rc} {err.getvalue()[-200:]}")
+    check("其餘篇照撤", "about_code" not in p2, p2[:200])
+    check("輸出講清楚撤了 1 篇、1 篇失敗", "1 篇" in buf.getvalue() and ("失敗" in buf.getvalue() or "失敗" in err.getvalue()), buf.getvalue()[-200:] + err.getvalue()[-200:])
+
+
 def t_git_last_change_dates_batch():
     """★一次 git log 拿全庫每個檔的最後改動日期★(工具清單 #5,about_code 過期判準的材料)。
 

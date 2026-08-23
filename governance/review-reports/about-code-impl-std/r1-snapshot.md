@@ -218,8 +218,8 @@ about_code_stamp: codex/2026-08-23
 ### 讀側怎麼用(★r1 大幅改寫★)
 
 **r1 發現原設計打錯靶(s1f2/s1f3/s1f4 major、s2f1 blocker)**:固定席保送有★三條獨立路徑★——
-①`direct` + 合約(`scripts/lumos:14202` `pinned = bool(contract)`)②`indirect` + 合約且 hop≤1
-(`:14213`)③`incident`(事故類)不看合約一律保送(`:14178`)。原設計只改①。(行號 std-r1 s2f1 校正)
+①`direct` + 合約(`scripts/lumos:14049` `pinned = bool(contract)`)②`indirect` + 合約且 hop≤1
+(`:14062`)③`incident`(事故類)不看合約一律保送(`:14025`)。原設計只改①。
 **實測 E10 改 pre-push:8 席固定席只有 1 席是 direct,6 席是 indirect**——原修法字面上攔不到它們。
 
 ★r2 再改寫(s3f1/s3f2 blocker):r1 版「有欄但不含 → 降自由席」★會讓已標記的節點比沒標更差★★
@@ -289,7 +289,7 @@ N 要用考卷驗(train 掃 N∈{5,8,12}、held 驗一次)。
 
 ★r1 改寫(archf4 major:原設計會長成第三套「宣稱 vs 事實」機制;s1f5:「讀側不變」宣稱錯)★
 
-**不另立機制,併入 Check S**(★此句已被 r3 s3f11 翻案:Check S 只掃 system,事故類驗不到→另開迴圈同輸出格式;見工具清單 #6。std-r1 s1f2 抓到這裡沒改★)。Check S 現在只比 `self_audit` 的日期與 `updated`
+**不另立機制,併入 Check S**。Check S 現在只比 `self_audit` 的日期與 `updated`
 (`scripts/lumos:823-841`,零讀盤)。about_code 的過期判定改成同一形狀:
 `about_code_stamp` 記 **日期**(不記雜湊),過期判準 = `updated` > stamp 日期。
 ★代價★:正文沒改只改 frontmatter 也算「可能過期」(偽陽性)——接受,因為 Check S 本來就這樣,
@@ -300,25 +300,12 @@ N 要用考卷驗(train 掃 N∈{5,8,12}、held 驗一次)。
 落後於 git 最後改動日期**(正文改了沒 `lumos set updated`)。用 `updated` 當過期判準會**沉默放過**
 這些節點——偽陰性,代價比偽陽性高(正是 about_code 要防的那個方向)。
 **處置**:過期判準改成 **git 最後改動日期**(`git log -1 --format=%cs -- <檔>`)> stamp 日期;
-git 缺席時退回 `updated`(★std-r1 再改:git 缺席視同無欄,不退回 updated★)。這跟 Check S 不再完全同形,但 Check S 本身也該這樣修——另立 Issue 不在本案。
+git 缺席時退回 `updated`。這跟 Check S 不再完全同形,但 Check S 本身也該這樣修——另立 Issue 不在本案。
 
 **讀側**:`impact` 遇到過期的節點 → **不信它的 about_code**(當沒有欄位處理),退回三軸既有路徑。★這確實是讀側多一個判斷(s1f5 對)★,但成本是比兩個日期字串,
-不是算雜湊;席二實測 impact 全庫重讀 0.75s,這個判斷毫秒級,**不構成熱路徑問題**(★std-r1 s3f6:這句只算了比字串,沒算 git log 那 0.2s——見下方懶觸發★)
+不是算雜湊;席二實測 impact 全庫重讀 0.75s,這個判斷毫秒級,**不構成熱路徑問題**
 (s1f5「進熱路徑」那半駁回,「讀側不變」那半接受——原句已刪)。
-降級方式對齊 E1 的 warn_soft 慣例(archf3 minor):doctor 列出、不擋;impact 退路徑、印一行★到 stderr★
-(std-r1 ext-e3:「印一行」與測試「逐 byte 相同」打架——定義:提示只走 stderr,逐 byte 比的是 JSON stdout / results 物件)。
-
-★std-r1 改寫(s1f1 blocker、ext-e2 major、s2f7/s3f6/s1f4 major 三席獨立撞到)★:**「日期」這把尺太粗,會信到已過期的標記**——
-① 筆記改了還沒 commit,git log 看不到;② 標完當天又 commit 一次,日期相同、嚴格小於判不出來。
-兩種都是「偽陰性」,正是這道守衛要防的方向。**處置(不加子行程數)**:
-- 批次 git log 本來就逐 commit 掃,順手數「最後改動日當天這檔有幾個 commit」:新 helper
-  `git_last_change_info(repo_root, vault)` 回 `{rel: (date, n_same_day)}`;`git_last_change_dates` 改成它的薄包裝(回傳型別不變,既有測試不動)。
-- 再一次批次 `git status --porcelain -- <vault>` 抓沒 commit 的:`git_dirty_notes(repo_root, vault)` 回 set,同款行程內快取。
-- **過期 = git_date > stamp_date,或 (git_date == stamp_date 且 n_same_day ≥ 2),或 rel 在 dirty set**。
-- ★代價(誠實)★:標記當天若先改兩次 commit 才標,會被誤判過期——方向是「不加分」,安全;doctor 會列出來,人看一眼 `lumos set about_code_stamp` 就好。
-- **git 缺席 → about_code 視同不存在**(不再退回 `updated`;std-r1 順手砍掉這條 33% 不可靠的後備,讀側與 doctor「找不到 git 就略過」一致)。
-- **成本(s2f7/s3f6 實測 0.215s 全庫 git log;hook 每次是新行程,行程內快取對 hook 無用)**:★懶觸發★——只有「至少一個候選節點的 about_code 含目標檔」時才呼叫 git;
-  `--incidents-only` 快速路徑(hook 冷卻期)**完全不碰 about**(s1f4)。沒命中就零成本;命中時 +0.2s 一次,可接受、且在總開關之下。
+降級方式對齊 E1 的 warn_soft 慣例(archf3 minor):doctor 列出、不擋;impact 退路徑、印一行。
 
 ### ★離線驗證結果(2026-08-23,見 [[Verification/2026-08-23_關於欄位離線預標驗證]])★
 
@@ -382,12 +369,12 @@ held 撞到失效條件——改 `scripts/lumos`(巨型單檔)那題 22 個誤�
 | 1 | `about_code` 進 `LIST_KEYS`、`about_code_stamp` 進 `SCALAR_KEYS` | `scripts/lumos:7243-7244` | ✅ 2026-08-23 done,測試釘 append/set/remove 三路 |
 | 2 | 範本加 `about_code:` 空欄 | ✅ 2026-08-23 done:system/issue 範本 + NEW_HINT 兩段提示(事故類「只寫出事那幾支」) | `[]` bug ✅([[Issues/範本空清單被判成純量]]);★範圍刀:只 system/issue,同 aliases★ |
 | 3 | 純量欄位刪除原語 | ✅ 2026-08-23 done:`remove <節點> <key>` 不帶 value=整欄拿掉 | 不加新子命令(一個指令學一次);守衛:骨架欄 type/status/created 擋、清單欄不准省 value |
-| 4 | `cmd_impact` 讀 `about_code`:四處 `results.append` 命中時加 **`about_hit: True`**(只在 True 時出鍵;★不動既有 `hit` 欄★);`pins` 後 stable sort 鍵 `(kind!="incident", not about_hit)`;總開關 `LUMOS_IMPACT_ABOUT`;懶觸發 git;計數切 `_impact_about_counts` | incident `:14178` / direct `:14203` / indirect pinned `:14214` / indirect free `:14223` / `pins` `:14226`(impl-r1 s1f4 校正;舊行號整批過期) | 三條路徑各自獨立(s3f9);★`hit` 欄是既有來源標記(body-inline-code/basename-match),hook `:358`、lumos `:14310` 在讀,覆寫會靜默失真(impl-r1 s1f2 blocker)★ |
-| 5 | 過期判準:**批次** `git log --name-only --format=@%cs -c core.quotepath=false`(`@` 前綴是分隔關鍵,s1f8)一次拿全庫;★std-r1 擴充:同 pass 數同日 commit 數(`git_last_change_info`)+ `git status --porcelain` 抓 dirty(`git_dirty_notes`)★ | ✅ 2026-08-23 done:`git_last_change_dates(repo_root, vault)`,行程內快取,fail-open | 翻紅釘實證:★拿掉 quotepath 旗標連英文檔都撈不到★(路徑帶中文目錄名整條被跳脫),表空且不報錯 |
-| 6 | 過期檢查:**不併入 Check S**(它只掃 type:system,事故類驗不到,s3f11)→ 另開迴圈但同輸出格式;複用 `run_doctor` 既有 `repo_root`(`:681-685`) | `run_doctor`,逐行格式對齊 `:844` | 這是 archf4「第三套機制」的回歸,但 r3 證實併入 Check S 會漏——★兩害取輕,留痕★ |
-| 7 | `lumos about-code revert --batch <日期>` 子命令 | ✅ 2026-08-23 done,含 --dry-run;★std-r1 s3f8 修:單篇部分失敗原本照刪 stamp 照算成功(重複值甚至直接崩潰)→ 去重、失敗留 stamp 不計、rc 非 0,翻紅釘驗過★ | 翻紅釘:比對改「含日期」→人工修正的被誤撤,精確比對第一段才對;新指令觸發三道登記守衛(help/索引/六份文件指令數 61→62) |
+| 4 | `cmd_impact` 讀 `about_code`:四處 `results.append` 都加 **`about_hit`**(★不動既有 `hit` 欄★);`pins = [...]` 後加 stable sort;總開關 `LUMOS_IMPACT_ABOUT` | incident `:14178` / direct `:14203` / indirect pinned `:14214` / indirect free `:14223` / `pins` `:14226`(impl-r1 s1f4 校正;舊行號整批過期) | 三條路徑各自獨立(s3f9);★`hit` 欄是既有來源標記(body-inline-code/basename-match),hook `:358`、lumos `:14310` 在讀,覆寫會靜默失真(impl-r1 s1f2 blocker)★ |
+| 5 | 過期判準:**批次** `git log --name-only --format=%cs -c core.quotepath=false` 一次拿全庫 | ✅ 2026-08-23 done:`git_last_change_dates(repo_root, vault)`,行程內快取,fail-open | 翻紅釘實證:★拿掉 quotepath 旗標連英文檔都撈不到★(路徑帶中文目錄名整條被跳脫),表空且不報錯 |
+| 6 | 過期檢查:**不併入 Check S**(它只掃 type:system,事故類驗不到,s3f11)→ 另開迴圈但同輸出格式 | `run_doctor` | 這是 archf4「第三套機制」的回歸,但 r3 證實併入 Check S 會漏——★兩害取輕,留痕★ |
+| 7 | `lumos about-code revert --batch <日期>` 子命令 | ✅ 2026-08-23 done,含 --dry-run | 翻紅釘:比對改「含日期」→人工修正的被誤撤,精確比對第一段才對;新指令觸發三道登記守衛(help/索引/六份文件指令數 61→62) |
 | 8 | 雙評審:**寫轉換函式** `{node:[files]}` → `{node:{file:1}}` 再餵 `cmd_merge`;`cmd_apply` 不能重用(寫入目標是 goldset 不是 frontmatter),另寫 | ✅ 2026-08-23 `about_code_to_rater(a, b)`,真餵 merge 驗過 | ★候選集=兩席聯集★:A 列 B 沒列的,B 側填 0(那是反對票不是沒意見);翻紅釘驗過。apply 那半未做 |
-| 9 | hook 顯示層加 `about` 標示(讀 `about_hit`,不讀 `hit`) | `scripts/hooks/claude/impact-hook.py:344-348` | 不改看不到(s2f5/s3f9);hook 一律帶 `--ranked`,`build_additional_context`(非 ranked 那條)是死碼不用動(impl-r1 已驗;函式名 std-r1 校正) |
+| 9 | hook 顯示層加 `about` 標示(讀 `about_hit`,不讀 `hit`) | `impact-hook.py:344-348` | 不改看不到(s2f5/s3f9);hook 一律帶 `--ranked`,`build_context` 那條是死碼不用動(impl-r1 已驗) |
 | 10 | 新指標「固定席前 3 位必看命中率」 | `retrieval_eval.py` | 甲案成績單 |
 
 ★#6 誠實記★:r1 架構席判「過期守衛另立=第三套機制」為 major,折成併入 Check S;
@@ -398,48 +385,48 @@ r3 證實併入後事故類節點驗不到。兩個都是真問題,選「另開�
 
 #1/#2/#3/#5/#7/#8 已落地,存量 83 篇已寫入。剩四項全碰設計判斷,規格如下,★每項都標明「光看 P@8 量不到」★。
 
-### #4 impact 讀 about_code:只加分、不降級、排前排(★std-r1 折入後版★)
+### #4 impact 讀 about_code:只加分、不降級、排前排(★impl-r1 折入後版★)
 
-- **總開關(impl-r1 s1f5)**:`LUMOS_IMPACT_ABOUT`,走 `_impact_knob`(`scripts/lumos:13883`),
-  預設 1、0=整個 about 判定關閉(不標、不排序、不掃計數、不呼叫 git)。同 `LUMOS_IMPACT_BASENAME_MATCH :13609` 的「預設開/0 逃生」慣例。★下面所有「關閉 about 時」都指 knob=0★。
-- **判定**:候選節點 `as_list(fields.get("about_code"))` 含目標檔(repo 相對路徑精確比對;值指到不存在的檔不驗、只是永遠不命中,s2f10)→ 在 results 項加 **`about_hit: True`**。
-  ★只有 True 才出現這個鍵★(std-r1 s2f2 blocker:寫 `about_hit: False` 會讓「knob=0 逐 byte 相同」必敗)。
-  ★必包 `as_list`★(impl-r1 s1f6;既有**一處**讀 about_code 的 `:7680` 有包——「兩處」是 impl-r1 寫錯,std-r1 三席都抓到)。
-  ★不覆寫既有 `hit` 欄★(impl-r1 s1f2)。四處 `results.append`(incident `:14178` / direct `:14203` / indirect pinned `:14214` / indirect free `:14223`)
-  都走同一個判定,★不改任何一條路徑的 pinned 邏輯★——**about_hit 不是第四條入口,free 候選命中後仍是 free**(std-r1 ext-e1:測試①原寫「→ pinned」會被讀成促升)。
-- **排序**:`pins = [...]`(`:14226`)之後加一道 stable sort,鍵 = `(kind != "incident", not about_hit)`——
-  ★事故筆記永遠在最前★(std-r1 s1f10:原寫法會讓「關於」一般筆記壓過同檔事故),事故內部再按 about_hit,其餘保持原序。
-  ★不動 `contract_priority`,不動 free/rescued★。`cmd_impact_diff` 有自己的純分數排序(`:14339`),**本案不碰**(s3f7,明寫範圍外)。
-- **過期**:照「過期守衛」節 std-r1 改寫版:git_date > stamp 或同日 ≥2 commit 或 dirty → 視同沒有 about_code;git 缺席 → 同上。★懶觸發★:先掃候選有無 about 命中,有才呼叫 git helper;`--incidents-only` 整段跳過。
-- **巨檔門檻**:獨立頂層函式 `_impact_about_counts(env)`(★切出去,不 inline 進 `cmd_impact`★,對齊 `_impact_reverse_lookup/_impact_contract/_impact_bfs` 的分工,arch ⚠)
-  全掃 `env.notes` 建 `{檔: 節點數}`,★行程內快取鍵 `str(env.vault)`★(arch/s3f4/s1f6/s2f8:既有兩個快取都用路徑字串鍵,`id(env)` 是全庫沒先例的第二種做法,且 id 回收後可能撞);
+- **總開關(impl-r1 s1f5 blocker)**:`LUMOS_IMPACT_ABOUT`,走 `_impact_knob`(`scripts/lumos:13883`),
+  預設 1、0=整個 about 判定關閉(不標 `about_hit`、不排序、不掃巨檔計數)。同這支檔其他八個排序旋鈕的
+  「預設開/0 逃生」慣例(`LUMOS_IMPACT_BASENAME_MATCH :13609` 同款)。★下面所有「關閉 about 時」都指 knob=0★。
+- **判定**:候選節點 `as_list(fields.get("about_code"))` 含目標檔(repo 相對路徑精確比對)→ 加欄位
+  **`about_hit: True`**。★必包 `as_list`★(impl-r1 s1f6:單值清單可能存成字串,`in` 退化成子字串比對;
+  既有兩處讀 about_code 都包了,`:7680`)。★不覆寫既有 `hit` 欄★(impl-r1 s1f2:那欄存的是
+  body-inline-code / basename-match 來源標記,`impact-hook.py:358` 與 `scripts/lumos:14310` 在讀)。
+  四處 `results.append`(incident `:14178` / direct `:14203` / indirect pinned `:14214` / indirect free `:14223`)
+  都加這個欄位,★不改任何一條路徑的 pinned 邏輯★(零退化的精確範圍)。
+- **排序**:`pins = [...]`(`:14226`)之後加一道 stable sort:`about_hit` 者在前,其餘保持原序。
+  ★不動 `contract_priority`,不動 free/rescued★。
+- **過期**:`about_code_stamp` 日期 < `git_last_change_dates()` 該檔日期 → 視同沒有 about_code 欄。
+  git 缺席 → 用 `updated` 欄;兩者都沒有 → 視同沒過期(fail-open,不信任就等於沒加分,不會壞)。
+- **巨檔門檻**:`cmd_impact` 開頭全掃 `env.notes` 的 `about_code` 建 `{檔: 節點數}`,
+  ★以 `id(env)` 為鍵掛行程內快取★(impl-r1 s1f7;同 `_BASENAME_COUNTS_CACHE :13587` 慣例,`--diff` 多檔共用 env 免重掃);
   目標檔命中 ≥ `LUMOS_IMPACT_ABOUT_MAX`(預設 8)→ 本次關閉 about 加分(仍三軸照舊)。單一實作,hook/CLI/eval 共用。
-- **測試**(fixture 基於 `t_impact_ranked :13919`):
-  ①★原本就 pinned 的候選★(direct+合約)有欄含目標 → 仍 pinned、`about_hit`、排在非事故 pins 首位
-  ②有欄不含 → JSON results 與 knob=0 時逐 byte 相同 ③無欄 → 同② ④過期(三種:跨日 / 同日兩 commit / dirty)→ 同②
-  ⑤巨檔 ≥8 → 同② ⑥翻紅釘:拿掉 stable sort → ①翻紅 ⑦direct 候選的 `hit` 欄在 about 命中後仍是原值
-  ⑧knob=0 → 輸出與改動前逐 byte 相同 ⑨★free 候選(indirect 無合約)命中 → 仍 free、位置不動★
-  ⑩★事故 pin 不帶 about vs 一般 pin 帶 about → 事故仍在前★ ⑪★about_code 存成純量字串(單值)→ 仍命中★(s2f9)
-  ⑫`--incidents-only` → 不呼叫 git(monkeypatch helper 計數為 0)。
-- **預期**:P@8 **不變**;must-see 棘輪 **不變**;固定席噪音數 **不變**(只排序)。★唯一會動的是 #10 那個新指標★。
+- **測試**:①有欄含目標 → pinned 且 `about_hit` 且排首位 ②有欄不含 → pinned 判定與 knob=0 時逐 byte 相同
+  ③無欄 → 同② ④過期 → 同② ⑤巨檔 ≥8 → 同② ⑥翻紅釘:拿掉 stable sort → ①的「排首位」翻紅
+  ⑦★direct 候選的 `hit` 欄在 about 命中後仍是原值★(impl-r1 s1f2 指出原六條都抓不到這個)
+  ⑧knob=0 → 輸出與改動前逐 byte 相同。
+- **預期**:P@8 **不變**(不計固定席);must-see 棘輪 **不變**(召回不動);固定席噪音數 **不變**(只排序)。
+  ★唯一會動的是 #10 那個新指標★。
 
-### #6 過期檢查:另開迴圈,輸出對齊 Check S(★std-r1 折入後版★)
+### #6 過期檢查:另開迴圈,輸出對齊 Check S(★impl-r1 折入後版★)
 
-- 掃全部 type(不只 system),有 `about_code_stamp` 的節點套「過期守衛」節 std-r1 的同一條規則(跨日 / 同日 ≥2 / dirty),呼叫同一組 helper,不另算。
-- 過期 → warn_soft(不擋、不計 issues)。訊息照 Check S **實際**寫法:
+- 掃全部 type(不只 system),有 `about_code_stamp` 的節點比 stamp 日期 vs git 最後改動日期。
+- 過期 → warn_soft(不擋、不計 issues)。★訊息格式照 Check S **實際**寫法★(impl-r1 s1f8 blocker:原寫的
+  「X 天前標、改過 N 次」Check S 根本沒有,而且 `git_last_change_dates` 只回最後日期不回次數,要次數就得
+  重新逐篇跑 git——正是 #5 剛修掉的病):
   標題「有 {N} 篇筆記的 about_code 標了之後正文又改過,標記可能過期」,
-  每行 `f"{rel} (about_code_stamp {stamp_date} < git 最後改動 {git_date}{' / 同日再改' if same_day else ''}{' / 未 commit' if dirty else ''})"`
-  (對齊 **`:844`** 的 `sa_stale` 逐行格式——impl-r1 寫 `:868` 是該節結尾彙總行,s3f2/s1f7 校正)。
-- ★不併入 Check S★(r3 s3f11)。
-- **repo_root 哪來(std-r1 arch major,取代 impl-r1 s1f9 的寫法)**:`run_doctor` 從 Check C 起就有區域變數 `repo_root`
-  (`scripts/lumos:681-685`,vault 往上找 `docs` 取其上層),Check D/P/Y/N 四段全直接複用——**新迴圈也複用它,不再自己找**。
-  impl-r1 寫的「對齊 cmd_impact `:14024`」是錯的引用(那行是 `vault.parent.parent` 定值,不是找 .git;s1f3/s2f3/s3f5 三席都抓到)。
-  `repo_root is None` 或 helper 回空 → `ok("(找不到 git,about_code 過期檢查略過)")`,對齊 D/P/Y/N 的略過句式。
-- 測試:①issue 類過期要被列 ②未過期不列 ③無 stamp 不列 ④git 缺席(vault 不在 docs/ 下)→ 略過且不報錯 ⑤同日兩 commit → 列、訊息帶「同日再改」。
+  每行 `f"{rel} (about_code_stamp {stamp_date} < git 最後改動 {git_date})"`(對齊 `:868` 的 `sa_stale` 行格式)。
+- ★不併入 Check S★(r3 s3f11:它只掃 system)——但呼叫同一支 `git_last_change_dates`,不另算。
+- **repo_root 哪來(impl-r1 s1f9 major)**:`run_doctor` 簽名沒有 repo_root,CLI 派發也沒解析 `--repo`。
+  ★不改簽名★(`test_lumos.py:19210` 有反事實測試逐字釘簽名字串,改了要連動)——在新迴圈裡自己從 `vault`
+  往上找 `.git`(對齊 `cmd_impact :14024` 的後備寫法),找不到 → 整段跳過並 `ok("about_code 過期檢查:找不到 git,略過")`。
+- 測試:①issue 類過期要被列 ②未過期不列 ③無 stamp 不列 ④git 缺席 → 略過且不報錯。
 
 ### #9 hook 顯示:`about` 標示
 
-- `scripts/hooks/claude/impact-hook.py:344-348` pins 顯示迴圈加:`x.get("about_hit")` → 行首標 `★關於★`(讀新欄位,不碰 `hit`)。
+- `impact-hook.py:344-348` pins 顯示迴圈加:`x.get("about_hit")` → 行首標 `★關於★`(讀新欄位,不碰 `hit`)。
 - 測試:既有 hook 測試加一條斷言。
 
 ### #10 新指標:固定席前 3 位必看命中率
@@ -447,9 +434,6 @@ r3 證實併入後事故類節點驗不到。兩個都是真問題,選「另開�
 - `retrieval_eval.py` 的 `eval_edit` 加 `pin_top3_must`:每題固定席前 3 席裡標 2 的個數 / min(3, 該題標 2 總數)。
 - 只印、進 history、★不進 gate★(甲案收窄後它是唯一會動的數字,先觀測一個月再決定要不要閘)。
 - ★分母為 0 的題(有標 1 沒標 2)→ 該題回 None、不進平均★(impl-r1 s1f10;fixture 要造一題這種的)。
-- ★接線(std-r1 s3f3 major)★:只加在 `eval_edit` 的每題 row 不夠——要照 `must_pinned_count` 的路徑走完:
-  row → `report_goldset` 的 macro 平均(`_macro()` `:266-268`,None 自動排除)→ `verdict["pin_top3_must"]`(`:410` 旁)→ history 行。
-  `gates` 字典(`:569-575`)不加。測試斷言要打在 verdict 與 history 那層,不只 row。
 - 測試:fixture 造「about 命中排首位」與「不排」兩種,斷言指標差異。
 
 ### ★這四項的 tier 判斷★
@@ -465,8 +449,7 @@ light 那輪的乾淨度不洗回來。
    [test 候選:t_about_code_no_demote——建有欄不含目標檔的事故節點,斷言仍 pinned]
 2. **無 about 欄的節點,固定席內相對順序不變**——about 命中者插前,其餘保持三軸排序。
    [test 候選:斷言 pins 去掉 about_hit 者後,序列與 `LUMOS_IMPACT_ABOUT=0` 時一致]
-3. **過期即不信**——git 最後改動日 > stamp 日、或同日 ≥2 commit、或工作樹未 commit 的節點,其 about_code 視同不存在;git 缺席亦視同不存在。
-   (★天花板誠實★:同日「先改兩次再標」會誤判過期——方向安全;標記當天多次 commit 才標的節點要人 `lumos set about_code_stamp` 重標。)
+3. **過期即不信**——stamp 日期 < git 最後改動日期的節點,其 about_code 視同不存在。
 4. **批次回滾只動 stamp 第一段 = batch-<日期> 的節點**——人工修正過的不被誤撤。
 
 ## 誠實缺口
@@ -485,7 +468,7 @@ light 那輪的乾淨度不洗回來。
   不是 18 個獨立樣本。且 goldset 已換版(train 11 題),驗證用的是 8 題舊切分。
 - ★(s1f1)本文「38 席/18 噪音」是土法算的,工具口徑是 15 條噪音★——兩者分母不同(土法含 incident 軸)。
   上線後一律用 `retrieval_eval.py` 印的數字,本文數字只當方向參考。
-- (s2f5)hook 顯示層(`scripts/hooks/claude/impact-hook.py:358`)只認 basename-match,要加 `about` 的標示,否則新訊號在最常用介面上看不到。
+- (s2f5)hook 顯示層(`impact-hook.py:358`)只認 basename-match,要加 `about` 的標示,否則新訊號在最常用介面上看不到。
 
 ## 審計修正紀錄
 
@@ -528,17 +511,6 @@ f5 無總開關 → `LUMOS_IMPACT_ABOUT` knob;f6 沒包 `as_list` → 補;f7 巨
 f8 #6 訊息格式與「改過 N 次」皆無據 → 對齊 Check S 實際格式、拿掉次數;f9 doctor 無 repo_root → 迴圈內自找 .git 不改簽名;
 f10 新指標分母 0 → 回 None。#9/#10 主體已讀無 finding。
 ★教訓:「只加一道排序」這種自我描述,要拿「它動到哪個欄位、哪個區塊」去驗,不是看 diff 行數。★
-
-### std-r1(2026-08-23;about-code-impl-std,s1/s2/s3 三席 + arch + 外家 Codex;Gemini 版作廢)
-s1 10 條(1 blocker)/ s2 10 條(1 blocker)/ s3 8 條 / arch 2 major+1 ⚠ / Codex 3 major。去重後折入:
-**A 日期粒度偽陰性**(s1f1 blocker + ext-e2 + 三席成本條):未 commit 與同日再 commit 都判不出→ helper 擴充同日計數+dirty set,git 缺席視同無欄,懶觸發、incidents-only 跳過;
-**B `about_hit: False` 破逐 byte**(s2f2 blocker)→ 只在 True 出鍵;**C 測試①被讀成促升**(ext-e1)→ 明寫 fixture 原本就 pinned、加 free 仍 free 測試;
-**D 事故被 about 壓過**(s1f10)→ 排序鍵事故優先;**E 印一行 vs 逐 byte**(ext-e3)→ stderr/stdout 分開定義;
-**F doctor 重找 repo_root 第四種寫法**(arch major + s1f3/s2f3/s3f5 的 `:14024` 錯引)→ 複用 Check C 既有變數;
-**G 快取鍵 `id(env)`**(arch major + s3f4/s1f6/s2f8)→ `str(env.vault)`;計數切頂層函式(arch ⚠);
-**H 新指標沒接到 history**(s3f3)→ 明寫 row→macro→verdict→history;**I revert 部分失敗照刪 stamp**(s3f8,★code★)→ 已修+翻紅釘;
-**J 引用精度**(s1f2 併入 Check S 標題句、`:868`→`:844`、「兩處」→一處、`@%cs`、`build_additional_context`、讀側三條路徑行號、`cmd_impact_diff` 範圍外、純量字串測試)→ 全改。
-放行:無。不採信:s1f9(引句錨不到,但函式名我自己查了順手改)。Gemini 五條作廢不計(看不到 vault;Enzo 裁外家一律 Codex)。
 
 ### ★人裁(2026-08-23 Enzo):甲——收窄目標★
 三選一(甲收窄/乙恢復降級加豁免/丙擱置)裁甲。處置:

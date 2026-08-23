@@ -7687,15 +7687,30 @@ def cmd_about_code_revert(env, batch_date, dry_run=False):
         print(f"  {rel}  about_code {len(vals)} 項")
     if dry_run:
         return 0
-    done = 0
+    done, failed = 0, 0
     for rel, vals in targets:
-        for v in vals:
-            if cmd_remove(env, rel, "about_code", v) != 0:
-                print(f"  ⚠ {rel} 拿 {v} 失敗,這篇停在半途,其餘繼續", file=sys.stderr)
+        # std-r1 s3f8:單篇任一值拿不掉 → ★stamp 留著★(下次 revert 還找得到它)、不算撤成功;
+        # 值先去重——清單重複時第一次 remove 會把同值全拿掉,第二次拋 ValueError(實測崩潰)
+        bad = None
+        for v in list(dict.fromkeys(vals)):
+            try:
+                if cmd_remove(env, rel, "about_code", v) != 0:
+                    bad = v
+                    break
+            except Exception as e:   # noqa: BLE001 — 一篇壞不該拖垮整批
+                bad = f"{v}({e})"
+                break
+        if bad is not None:
+            print(f"  ⚠ {rel} 拿 {bad} 失敗:這篇 stamp 保留、不算撤成功,其餘繼續", file=sys.stderr)
+            failed += 1
+            continue
         if _cmd_remove_scalar(env, rel, "about_code_stamp") == 0:
             done += 1
-    print(f"✓ about-code revert:撤了 {done} 篇(批次 {want})")
-    return 0 if done == len(targets) else 1
+        else:
+            failed += 1
+    tail = f",{failed} 篇失敗(stamp 還在,修好再跑一次)" if failed else ""
+    print(f"✓ about-code revert:撤了 {done} 篇(批次 {want}){tail}")
+    return 0 if failed == 0 and done == len(targets) else 1
 
 
 def _fm_of(all_lines):
