@@ -4,6 +4,7 @@ status: done
 created: 2026-07-17
 updated: 2026-07-27
 self_audit: sonnet/2026-07-27
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -22,6 +23,8 @@ summary: |-
   KEY:2026 現況三鐵則——①前端:oxlint/Biome 崛起但 eslint-plugin-vue 自帶compiler產改造AST,oxlint 官方明說不完整相容→Vue專案 ESLint 仍主力,oxlint 當前置加速器(eslint-plugin-oxlint 讓ESLint跳過已覆蓋規則) ②.NET:.NET10 起 Roslyn analyzer 是 SDK 核心,NetAnalyzers 內建,第三方疊加 ③Kotlin:detekt(bug/實踐)+ktlint或ktfmt(格式)分工,別重複
   DEP:[[Systems/lint-version-watch]]
   DEP:[[Systems/pitfalls-lint-adapter]]
+about_code:
+  - configs/detekt/android.yml
 ---
 # linter 精選目錄——各語言該掌握的 linter（2026-07 社群現況）
 

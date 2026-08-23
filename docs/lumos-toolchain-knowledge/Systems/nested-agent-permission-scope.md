@@ -4,6 +4,7 @@ status: planned
 created: 2026-06-26
 updated: 2026-06-26
 self_audit: sonnet/2026-06-26
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/planned
@@ -47,6 +48,8 @@ decisions:
     valid: true
 aliases:
   - confused deputy
+about_code:
+  - governance/autonomous-loop.sh
 ---
 # nested-agent-permission-scope
 

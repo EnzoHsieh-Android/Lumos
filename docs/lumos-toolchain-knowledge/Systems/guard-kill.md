@@ -4,6 +4,7 @@ status: done
 created: 2026-07-10
 updated: 2026-07-24
 self_audit: sonnet/2026-07-24
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -36,6 +37,8 @@ decisions:
     valid: true
 verified_by:
   - "[[Verification/2026-08-22_guard-kill首次真跑]]"
+about_code:
+  - scripts/lumos
 ---
 # guard-kill（殺傷力驗證）
 

@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-08-14
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -53,6 +54,8 @@ decisions:
     valid: true
 related:
   - "[[Issues/loop-next吐不可宣告的tier]]"
+about_code:
+  - scripts/lumos
 ---
 # loop-convergence-recording
 

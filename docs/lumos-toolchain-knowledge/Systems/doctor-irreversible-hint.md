@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-06-26
 self_audit: sonnet/2026-06-26
+about_code_stamp: batch-2026-08-23/2026-08-23
 verified_by:
   - "[[Verification/2026-06-25_doctor-irreversible-hint]]"
 tags:
@@ -41,6 +42,8 @@ decisions:
     valid: true
 aliases:
   - Check H
+about_code:
+  - scripts/lumos
 ---
 # doctor-irreversible-hint
 

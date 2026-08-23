@@ -3,6 +3,7 @@ type: project
 status: done
 created: 2026-07-10
 updated: 2026-07-10
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/project
   - status/done
@@ -32,6 +33,8 @@ related:
   - "[[Systems/check-t-sentinel]]"
   - "[[Systems/check-r-guard]]"
   - "[[Systems/test-profile-multiplatform]]"
+about_code:
+  - scripts/lumos
 ---
 # guard殺傷力驗證_計劃
 

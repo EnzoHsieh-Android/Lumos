@@ -3,6 +3,7 @@ type: system
 status: doing
 created: 2026-08-22
 updated: 2026-08-22
+about_code_stamp: batch-2026-08-23/2026-08-23
 aliases:
   - 受波及合約測試真跑閘
   - bound tests
@@ -20,6 +21,10 @@ summary: |-
   TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config 十斷言);本 repo 實跑 42 支 29s
 verified_by:
   - "[[Verification/2026-08-22_受波及合約測試真跑閘落地]]"
+about_code:
+  - .github/workflows/ci.yml
+  - scripts/hooks/pre-push
+  - scripts/lumos
 ---
 # bound-tests-gate
 

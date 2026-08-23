@@ -3,6 +3,7 @@ type: project
 status: done
 created: 2026-08-04
 updated: 2026-08-04
+about_code_stamp: batch-2026-08-23/2026-08-23
 related:
   - "[[Systems/canary-audit]]"
   - "[[Systems/design-loop]]"
@@ -32,6 +33,8 @@ decisions:
     why_chosen: 修法歸重設計案統一裁定,避免兩案各自演化漂移
     decided: 2026-08-04
     valid: true
+about_code:
+  - scripts/lumos
 ---
 # canary 注意力檢查失效（計劃）
 

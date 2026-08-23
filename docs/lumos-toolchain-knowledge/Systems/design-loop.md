@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-08-14
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -77,6 +78,8 @@ decisions:
     why_chosen: 三自家實證支撐(6輪漏抓/replay首輪廣度/codestage blocker 型態分佈);與 d4 抬質量定位、北極星(正常改動變快)、逃逸帳架構完全同線;分層定價讓每塊錢花在該類缺陷最便宜的抓取層
     decided: 2026-07-20
     valid: true
+about_code:
+  - scripts/lumos
 ---
 # design-loop
 

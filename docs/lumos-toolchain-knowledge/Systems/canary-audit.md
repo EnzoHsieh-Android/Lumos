@@ -4,6 +4,7 @@ status: deferred
 created: 2026-06-26
 updated: 2026-08-14
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/deferred
@@ -83,6 +84,10 @@ aliases:
   - test-the-tester
 kill_recipes: |-
   [{"invariant": "canary record/second 回報成功", "test": "t_canary_record_persist", "file": "scripts/lumos", "old": "    print(f\"canary record: 落盤自驗失敗——系統說寫成功了,但讀回來找不到這一筆,這筆不算記成功:\\n    {path.resolve()}\",\n          file=sys.stderr)\n    return 2", "new": "    print(f\"canary record: 落盤自驗失敗——系統說寫成功了,但讀回來找不到這一筆,這筆不算記成功:\\n    {path.resolve()}\",\n          file=sys.stderr)\n    return 0", "note": "讀回找不到那筆卻回成功:使用者以為記了,帳上沒有"}]
+about_code:
+  - governance/eval/canary_calibration.py
+  - governance/eval/canary_snr.py
+  - scripts/lumos
 ---
 # canary-audit
 

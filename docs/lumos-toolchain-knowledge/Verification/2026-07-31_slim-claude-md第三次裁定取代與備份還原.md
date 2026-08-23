@@ -4,6 +4,7 @@ status: pass
 feature: Task 9——CLAUDE.md 注入裁定第三次變更:有完整版 LUMOS:GRAPH-DISCIPLINE 區塊就整段策展取代(原地換位置)、位元組級備份(base64 藏在精簡版區塊自己的 HTML 註解裡)、uninstall 可精確還原
 commit: 0f07e56(主實作)/4db7474(補實作計畫節點紀錄)
 date: 2026-07-31
+about_code_stamp: batch-2026-08-23/2026-08-23
 valid_under:
   - "install.sh/uninstall.sh 對完整版 sentinel 的判定仍是前綴匹配 `<!-- LUMOS:GRAPH-DISCIPLINE:START` + 完整匹配 `<!-- LUMOS:GRAPH-DISCIPLINE:END -->`(與 scripts/lumos 的 _CLAUDE_START_PREFIX/_CLAUDE_END 同款,未改版)"
   - "備份格式仍是 base64 藏在 `<!-- LUMOS-SLIM:FULL-BACKUP:BASE64:... -->` 這個固定字面樣式的 HTML 註解裡"
@@ -15,6 +16,10 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+about_code:
+  - scripts/slim-gen.py
+  - slim/install.sh
+  - slim/uninstall.sh
 ---
 # 2026-07-31_slim-claude-md第三次裁定取代與備份還原
 

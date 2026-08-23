@@ -4,6 +4,7 @@ status: done
 created: 2026-07-03
 updated: 2026-08-14
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -52,6 +53,9 @@ decisions:
 aliases:
   - Confident Liar
   - capture-recapture
+about_code:
+  - governance/autonomous_loop/cross_audit.py
+  - scripts/lumos
 ---
 # convergence-evidence-gate
 

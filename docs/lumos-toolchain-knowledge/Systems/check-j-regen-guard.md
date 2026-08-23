@@ -4,6 +4,7 @@ status: done
 created: 2026-07-16
 updated: 2026-07-16
 self_audit: sonnet/2026-07-16
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -26,6 +27,8 @@ summary: |-
   DEP:[[Systems/lumos-refcheck]]｜[[Systems/check-t-sentinel]]
   TEST:27 格綠(t_check_j_regen 24+t_check_j_git 3,含 shallow clone 真實測+token 消毒迴歸);全套 1157
   VERIFY:[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]
+about_code:
+  - scripts/lumos
 ---
 # check-j-regen-guard
 

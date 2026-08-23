@@ -4,6 +4,7 @@ status: done
 created: 2026-07-02
 updated: 2026-07-02
 self_audit: sonnet/2026-07-24
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -32,6 +33,8 @@ decisions:
     why_chosen: canary 相容性是 spec 標明「不可違反」的設計約束
     decided: 2026-07-02
     valid: true
+about_code:
+  - scripts/lumos
 ---
 # lumos-refcheck
 

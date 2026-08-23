@@ -4,6 +4,7 @@ status: done
 created: 2026-07-10
 updated: 2026-07-24
 self_audit: sonnet/2026-07-24
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -23,6 +24,9 @@ verified_by:
   - "[[Verification/2026-07-10_cochange守衛]]"
 aliases:
   - 共改漏改守衛
+about_code:
+  - scripts/hooks/pre-commit
+  - scripts/lumos
 ---
 # cochange-guard（共改漏改守衛）
 

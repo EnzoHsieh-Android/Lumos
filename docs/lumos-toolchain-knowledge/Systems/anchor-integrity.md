@@ -4,6 +4,7 @@ status: done
 created: 2026-07-02
 updated: 2026-07-28
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -34,6 +35,10 @@ decisions:
     why_chosen: 分層——baseline 守驗證器(runner+hooks),測試守被驗物(lumos 行為);改壞 lumos 由 test_lumos.py 抓,前提「runner 沒被動」正是 baseline 守的
     decided: 2026-07-02
     valid: true
+about_code:
+  - governance/autonomous-loop.sh
+  - scripts/hooks/pre-push
+  - scripts/lumos
 ---
 # anchor-integrity
 

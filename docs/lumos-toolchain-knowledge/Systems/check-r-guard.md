@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-06-26
 self_audit: sonnet/2026-06-26
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -38,6 +39,8 @@ decisions:
     why_chosen: 漂移守衛測試斷言 [guard: 須同時出現在模板與 skill,tuple 擴充與兩檔同步必須原子化否則測試紅燈
     decided: 2026-06-24
     valid: true
+about_code:
+  - scripts/lumos
 ---
 # check-r-guard
 

@@ -3,6 +3,7 @@ type: project
 status: doing
 created: 2026-07-21
 updated: 2026-07-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/project
   - status/doing
@@ -27,6 +28,8 @@ summary: |-
   DECISION:方案 A(人工宣告+壓縮 loop+硬 ratchet)+機械建議拆兩方向(硬否決 reliable/軟提示 advisory);拒「機械大部分自動定檔」(踩誠實天花板)
   DEP:[[Systems/risk-tiered-review]](硬否決複用 RISK_CLASSES+ratchet 只升不降)｜[[Systems/design-loop]](壓縮 loop 派工/canary/K=1 原語)｜[[Systems/convergence-evidence-gate]](loop status gate 認第三檔)｜skills/lumos-design-loop(進場提示+派工模板)
   PRIOR-ART:①最小解=既有 risk-tiered-review 三檔化+複用 RISK_CLASSES 偵測器+M1 pre-flight+design-loop提效 已埋通才席,借既有機制小修非造新機制 ②世界解過沒=LLM cascade/routing(ICML2025 dekoninck25a/ICLR2024 uncertainty routing)+self-refine 3輪plateau 已於 [[Projects/design-loop提效_計劃]] 2026-07-16 真搜並吸收,本題同機制家族引用該搜尋(便宜先掃/不確定才升級=正統;路由用可觀測訊號非模型口頭 confidence) ③裁定=borrow-design(借 cascade 事前決策思想+tiering,原生實作於 skill/loop status/risk-tiered-review)
+about_code:
+  - scripts/lumos
 ---
 # design-loop輕量檔_計劃
 

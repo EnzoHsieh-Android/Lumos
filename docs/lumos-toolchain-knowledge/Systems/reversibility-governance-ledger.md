@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-07-26
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -57,6 +58,8 @@ decisions:
     why_chosen: Check R 只對 error 級(irreversible 缺實質回退、標錯型別)呼叫 warn(),對 checkpoint/懸空呼叫 warn_soft();回歸測 t_reversibility_doctor 斷言「只有 checkpoint 缺回退 → rc0」
     decided: 2026-06-19
     valid: true
+about_code:
+  - scripts/lumos
 ---
 # reversibility-governance-ledger
 

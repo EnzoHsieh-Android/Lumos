@@ -4,6 +4,7 @@ status: done
 created: 2026-07-04
 updated: 2026-07-04
 self_audit: sonnet/2026-07-24
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -39,6 +40,10 @@ decisions:
     why_chosen: 寫做得到的;損失=escalate 輪少 2 輪預算,fail-closed 方向不受影響(收檔守衛以自算 tier 重驗)
     decided: 2026-07-04
     valid: true
+about_code:
+  - governance/autonomous-loop.sh
+  - governance/autonomous_loop/confidence_report.py
+  - governance/autonomous_loop/difficulty.py
 ---
 # risk-tiered-review
 

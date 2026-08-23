@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-06-26
 self_audit: sonnet/2026-06-26
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -39,6 +40,8 @@ decisions:
     why_chosen: 破壞性操作的安全預設是拒絕,對齊非互動中止;讀不到確認絕不刪
     decided: 2026-06-26
     valid: true
+about_code:
+  - scripts/lumos
 ---
 # lumos-deinit
 

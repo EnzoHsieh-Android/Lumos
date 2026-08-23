@@ -4,6 +4,7 @@ status: done
 created: 2026-07-02
 updated: 2026-07-30
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 related:
   - "[[Systems/check-t-sentinel]]"
 verified_by:
@@ -31,6 +32,8 @@ summary: |-
   VERIFY:[[Verification/2026-07-02_multiplatform-test-binding]]
 aliases:
   - 多平台合約測試綁定
+about_code:
+  - scripts/lumos
 ---
 # 多平台合約測試綁定（test-profile multiplatform）
 

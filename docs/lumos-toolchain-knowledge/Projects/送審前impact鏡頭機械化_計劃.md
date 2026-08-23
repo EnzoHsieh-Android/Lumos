@@ -3,6 +3,7 @@ type: project
 status: done
 created: 2026-08-02
 updated: 2026-08-02
+about_code_stamp: batch-2026-08-23/2026-08-23
 related:
   - "[[Systems/retrieval-ranking]]"
   - "[[Systems/cochange-guard]]"
@@ -17,6 +18,8 @@ summary: |-
   KEY:★已排除的做法★把 impact 掛進 `pitfalls --diff`——實測 pitfalls 0.18s、impact 4.7s,而 pitfalls ★在 pre-push 熱路徑上逐 ref 跑★(scripts/hooks/pre-push:98),掛上去等於每次 push 慢 26 倍;`--incidents-only` 不便宜(4.73s,成本在載 vault 非排序)
   DEP:scripts/lumos cmd_impact_diff / cmd_code_loop / _codeloop_guard_verdict｜governance/code-loop/<branch>.json｜skills/lumos-code-loop/SKILL.md
   PRIOR-ART:①最小解在既有機制層——`governance/code-loop/<branch>.json` 收據+`_codeloop_guard_verdict` 判定式已是成熟樣板,新增一種收據即可,不造新機制 ②世界解過=CI required checks／PR gate「附上證據才能合併」,同型 ③裁定=borrow-design(沿用本專案既有收據+判定式模式,不引任何依賴)
+about_code:
+  - scripts/lumos
 ---
 # 送審前 impact 鏡頭機械化（計劃）
 

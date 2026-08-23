@@ -3,6 +3,7 @@ type: project
 status: done
 created: 2026-07-05
 updated: 2026-07-06
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/project
   - status/done
@@ -17,6 +18,8 @@ summary: |-
   DECISION:subagent-driven TDD;基線=先跑 test_lumos.py 取
   DEP:[[CLAUDE注入re-sync與版本標籤_計劃]]
   TEST:T1 DONE — 16 checks green(t_extract_span_found/absent/broken);全量 752 passed(基線 736)|T2 DONE — 37 checks green(t_reinject_updates_existing/idempotent/creates_when_absent/appends_when_no_sentinel/preserves_outside/sentinel_broken/bom_crlf_normalized/no_template);全量 789 passed|T3 DONE — 9 checks green(t_scaffold_no_longer_injects/t_update_resyncs_claude/t_init_existing_resyncs);全量 798 passed|T3-review DONE — I-1既有vault非force只reinject不pull+I-2移除重複_install_hooks_py;新增t_init_existing_no_pull(4 checks);全量 802 passed|T4 DONE — Check D(字母D)+_expected_claude_body helper;4 tests 11 checks;全量 813 passed;本repo doctor 0 issues|T5 DONE — LUMOS_VERSION=v1.0+_START_TEMPLATE版本插值+_parse_sentinel_version+_version_nudge(dev-machine advisory)+Check N soft;5 tests 13 checks;826 passed;本repo doctor 0 issues Check D 0漂移;修復_make_check_d_block/_make_block停止內聯START常數
+about_code:
+  - scripts/lumos
 ---
 # CLAUDE 注入 re-sync + 版本標籤 Implementation Plan
 

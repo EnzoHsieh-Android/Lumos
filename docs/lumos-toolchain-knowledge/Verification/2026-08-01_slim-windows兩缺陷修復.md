@@ -4,6 +4,7 @@ status: pass
 date: 2026-08-01
 valid_under: "分支 main;slim/install.py 現行版本(_pick_windows_interpreter() 直譯器 fallback、碰撞偵測同時看 dst_shim);slim/install.ps1、slim/uninstall.ps1、slim/get.ps1 現行版本(收尾用 $global:LASTEXITCODE = $LASTEXITCODE,不呼叫裸 exit)。★Windows 分支僅靠 LUMOS_SLIM_SIMULATE_WINDOWS=1 環境變數注入驗過分支邏輯與靜態結構,shutil.which() 真實 Windows PATH 解析行為與 .ps1 的 exit 語意修法完全沒有真機驗證★,見下方〈測不到什麼〉"
 revalidate_when: "改動 install.py 的 _pick_windows_interpreter()/_install_cli() 碰撞偵測、改動三支 .ps1 的收尾寫法、或未來真的拿到 Windows 機器做真機驗證後(屆時要把本節點與 slim/README.md 的『未驗證』標記一併更新,不能讓已驗證的部分繼續掛著誠實標記)"
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/verification
   - status/pass
@@ -12,6 +13,11 @@ plan_refs:
 summary: |-
   TEST:`python3 scripts/test_lumos.py -k slim` 272 checks 全綠(新增 4 支 t_slim_* 函式:`t_slim_install_windows_shim_does_not_hardcode_python_when_only_python3_available`、`t_slim_install_windows_collision_detects_orphan_cmd_shim`、`t_slim_ps1_scripts_avoid_session_killing_trailing_exit`;既有 268 checks 零鬆動)。前兩支均實測過「紅→綠」:`git stash` 只還原 `slim/install.py` 重跑,兩支測試各自對應斷言確實翻紅(shim 寫死 `python`/孤兒 `lumos.cmd` 被無聲覆寫),回補修復後轉綠,非稻草人。
   VERIFY:[[Systems/slim-install-安裝器]]、[[Systems/slim-uninstall-一行卸載]] 的 Windows 專屬缺陷修復——①`.cmd` shim 不再寫死呼叫字面 `python`,改成安裝當下偵測可用直譯器寫進 shim ②Windows 路徑碰撞偵測同時看 `lumos` 與 `lumos.cmd`,不再只看前者 ③三支 `.ps1` 薄殼收尾不再呼叫裸 `exit`(保險性修法,未真機驗證)。詳見報告 `.superpowers/sdd/公開精簡版_實作計畫/task-14-report.md`。
+about_code:
+  - slim/get.ps1
+  - slim/install.ps1
+  - slim/install.py
+  - slim/uninstall.ps1
 ---
 # 2026-08-01_slim-windows兩缺陷修復
 

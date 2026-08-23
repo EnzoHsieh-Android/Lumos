@@ -4,6 +4,7 @@ status: pass
 feature: reversibility-governance-ledger
 commit: e3edaf3
 date: 2026-06-26
+about_code_stamp: batch-2026-08-23/2026-08-23
 valid_under:
   - macOS / python3 / lumos test_lumos.py subprocess harness
   - vault 為全專案結構(root/docs/<slug>-knowledge),gov 測用此非 bare mkvault
@@ -11,6 +12,8 @@ revalidate_when:
   - 動到 extract_reversibility / _rollback_resolved / _guard_resolved / parse_decisions 的 rollback/guard 解析
   - 動到 run_doctor 的 warn_soft / Check R / Check H 或 cmd_gov 四來源 dedup
   - 新增/改 ★IRREVERSIBLE★ / ★CHECKPOINT★ / [rollback:] / [guard:] marker 字串(需同步 graph-discipline + SKILL.md,漂移測試守)
+about_code:
+  - scripts/lumos
 ---
 # Verification: reversibility-governance-ledger
 

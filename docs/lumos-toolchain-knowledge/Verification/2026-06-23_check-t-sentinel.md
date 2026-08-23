@@ -4,6 +4,7 @@ status: pass
 feature: "[[Systems/check-t-sentinel]]"
 commit: 15fd6ad
 date: 2026-06-26
+about_code_stamp: batch-2026-08-23/2026-08-23
 valid_under:
   - "scripts/lumos cmd_doctor 維持 Check 段尾順序 T→R→S→H→K→V、section(\"K\") 不被改名/占用"
   - "TEST_REF_RE 維持「數 [test:] 標記個數」語義(非展開名數)、★COMBO★ 仍為 ★INVARIANT★ 之後行內標記"
@@ -15,6 +16,8 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+about_code:
+  - scripts/lumos
 ---
 # Verification: check-t-sentinel(Check K ★COMBO★ 軟提醒)
 

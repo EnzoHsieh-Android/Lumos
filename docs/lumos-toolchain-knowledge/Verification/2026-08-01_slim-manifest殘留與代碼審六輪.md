@@ -4,12 +4,15 @@ status: pass
 date: 2026-08-01
 valid_under: macOS/Linux 真跑;Windows 路徑僅靠 LUMOS_SLIM_SIMULATE_WINDOWS 旗標模擬,★無真機驗證★
 revalidate_when: slim/uninstall.py 的清理步驟增減、bin_cleared 判斷式改動、manifest schema 或落點變動、或首次拿到 Windows 真機
+about_code_stamp: batch-2026-08-23/2026-08-23
 plan_refs:
   - "[[Projects/公開精簡版_實作計畫]]"
   - "[[Projects/公開精簡版_計劃]]"
 tags:
   - type/verification
   - status/pass
+about_code:
+  - slim/uninstall.py
 ---
 # 2026-08-01_slim-manifest殘留與代碼審六輪
 

@@ -4,6 +4,7 @@ status: done
 created: 2026-08-12
 updated: 2026-08-21
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -28,6 +29,8 @@ summary: |-
 verified_by:
   - "[[Verification/2026-08-12_CheckN_可重算數字宣稱]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+about_code:
+  - scripts/lumos
 ---
 
 # Check N — 可重算數字宣稱（存查詢不存答案）

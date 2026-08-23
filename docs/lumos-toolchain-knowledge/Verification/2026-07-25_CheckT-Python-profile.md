@@ -2,6 +2,7 @@
 type: verification
 status: pass
 date: 2026-07-25
+about_code_stamp: batch-2026-08-23/2026-08-23
 valid_under:
   - "TEST_PROFILES.python:行首錨 PYTHON_TEST_RE+檔名錨 file_name_match(fnmatch)+comment_strip=none+scaffold_name 模板"
   - "discover_test_methods 依 profile.comment_strip 分流(c-style 預設向後相容/none 不剝);檔名錨在 ext 後、讀檔前"
@@ -19,6 +20,8 @@ summary: |-
   KEY:★根因修★=discover_test_methods 原對所有語言剝 C 式註解,test_lumos.py 中文註解 status/* 與 27 萬字元外 glob 字面 **/ 配對、吃掉半個檔(260→94,166 個測試蒸發)——既有地雷,每次 doctor 都在踩,至今無合約指到被吃區間才沒發作。修=comment_strip 語言感知(python=none:行首錨天然排除被註解 # def,不需 hash 剝離器)
   KEY:python profile 誠實天花板(留檔)=無框架註冊標記可錨,行首無斷言 helper 仍判 real;三引號內欄位0 def 極罕誤認;c-style 對 .cs 字串字面 /* 誤剝=既有病另立;haystack 語言範圍與 discover 不一致=訊息措辭失準不影響 real 判定
   VERIFY:design-loop r1 light(canary caught;審計員實測揪出根因改寫整個計劃——原 dirs 診斷是錯的)+std 單席 Codex(2b+4M+1m 全折:行首錨/scaffold_name/file_name_match 型別明定/multiplatform dict 直達/對照組 .cs);TDD 紅→綠
+about_code:
+  - scripts/lumos
 ---
 # 2026-07-25_CheckT-Python-profile
 

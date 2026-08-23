@@ -4,6 +4,7 @@ status: done
 created: 2026-08-12
 updated: 2026-08-12
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -29,6 +30,8 @@ verified_by:
   - "[[Verification/2026-08-12_CheckU_過度概化守衛]]"
   - "[[Verification/2026-08-12_通用性修正_profile化與歷史重放]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+about_code:
+  - scripts/lumos
 ---
 
 # Check U — 全稱宣稱未綁測試（過度概化守衛）

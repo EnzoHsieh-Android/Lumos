@@ -4,6 +4,7 @@ status: done
 created: 2026-07-31
 updated: 2026-08-20
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -47,6 +48,10 @@ verified_by:
   - "[[Verification/2026-08-03_Windows回歸測試三缺陷]]"
   - "[[Verification/2026-08-03_Windows真機三輪驗證通過]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+about_code:
+  - slim/uninstall.ps1
+  - slim/uninstall.py
+  - slim/uninstall.sh
 ---
 # slim-uninstall-一行卸載
 

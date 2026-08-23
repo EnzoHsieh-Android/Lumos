@@ -4,6 +4,7 @@ status: done
 created: 2026-07-09
 updated: 2026-08-14
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 verified_by:
   - "[[Verification/2026-07-09_loop三輪壓縮]]"
   - "[[Verification/2026-08-14_殘餘估計降級與重疊報表落地]]"
@@ -48,6 +49,8 @@ decisions:
     why_chosen: 手動路徑最煩的一步(手貼 linter file:line)純 lumos 機械可消,與自主 orchestrator 無關
     decided: 2026-07-09
     valid: true
+about_code:
+  - scripts/lumos
 ---
 # heterogeneous-finder-ensemble
 

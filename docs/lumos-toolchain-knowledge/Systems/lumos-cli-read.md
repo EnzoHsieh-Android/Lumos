@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-08-23
 self_audit: sonnet/2026-08-16
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -74,6 +75,8 @@ verified_by:
   - "[[Verification/2026-08-05_標籤結構收編落地]]"
   - "[[Verification/2026-08-16_圖譜結構化查詢query落地]]"
   - "[[Verification/2026-08-22_狀態表過期偵測]]"
+about_code:
+  - scripts/lumos
 ---
 # lumos-cli-read
 

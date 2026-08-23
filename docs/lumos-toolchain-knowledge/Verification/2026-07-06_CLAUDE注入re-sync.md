@@ -3,6 +3,7 @@ type: verification
 status: pass
 created: 2026-07-06
 updated: 2026-07-06
+about_code_stamp: batch-2026-08-23/2026-08-23
 plan_refs:
   - "[[CLAUDE注入re-sync與版本標籤_計劃]]"
 related:
@@ -17,6 +18,8 @@ summary: |-
   VERIFY:_extract_claude_block_span 三態(found/absent/broken,text[start:end]==body 不變量)+ _reinject_claude_block 6-status(覆蓋 sentinel 之間 body + diff,sentinel 外 byte-equal 合約)+ 解耦注入 from _scaffold_project + 接線 _vendor_toolchain(copy2 後,修順序)/cmd_init(既有 vault 只 re-inject 不 pull/重裝 hooks)+ doctor Check D 內容比對漂移守衛(_expected_claude_body 單一源)+ LUMOS_VERSION 版本戳(body 外→不觸發 Check D)+ Check N nudge(soft advisory,來源不可達靜默 skip)
   KEY:版本=標籤/advisory 非正確性守衛,內容比對(Check D)才是守衛——code 落實無偷用版本當 oracle(終審實證);design-loop 3 輪(架構折穩、glue 天花板轉 TDD,見 [[CLAUDE注入re-sync與版本標籤_計劃]])
   KEY:誠實天花板=doctor --no-verify 繞得過;nudge 只在來源可達的開發機生效(CI skip);非 oracle
+about_code:
+  - scripts/lumos
 ---
 # 2026-07-06 CLAUDE 注入 re-sync + 版本標籤驗證
 

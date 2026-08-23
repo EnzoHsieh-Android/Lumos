@@ -3,6 +3,7 @@ type: project
 status: doing
 created: 2026-07-16
 updated: 2026-07-16
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/project
   - status/doing
@@ -31,6 +32,8 @@ decisions:
     valid: true
 verified_by:
   - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
+about_code:
+  - scripts/lumos
 ---
 # from-scratch重生守衛_計劃
 

@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-07-24
 self_audit: sonnet/2026-07-24
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -40,6 +41,9 @@ decisions:
     why_chosen: disputed 必須真能進未收斂出口才有意義；文案區分讓人看得出是被駁回還是耗盡輪數
     decided: 2026-06-22
     valid: true
+about_code:
+  - governance/autonomous-loop.sh
+  - governance/autonomous_loop/cross_audit.py
 ---
 # cross-family-audit
 

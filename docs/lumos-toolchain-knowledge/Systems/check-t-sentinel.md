@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-06-26
 self_audit: sonnet/2026-06-26
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -43,6 +44,8 @@ decisions:
     valid: true
 aliases:
   - Check K
+about_code:
+  - scripts/lumos
 ---
 # check-t-sentinel
 

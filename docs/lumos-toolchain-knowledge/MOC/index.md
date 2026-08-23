@@ -1,6 +1,7 @@
 ---
 type: moc
 status: doing
+about_code_stamp: batch-2026-08-23/2026-08-23
 ---
 # lumos-toolchain 知識圖譜總索引
 

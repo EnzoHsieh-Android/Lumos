@@ -4,6 +4,7 @@ status: done
 created: 2026-07-17
 updated: 2026-07-27
 self_audit: sonnet/2026-07-27
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -24,6 +25,8 @@ summary: |-
   TEST:t_lintcheck_validate(格式校驗含 value 非 list 誤植案例)+t_lintcheck_cli(無檔rc0/空殼rc1/格式對rc0/smoke抓跑不動rc1/smoke真產SARIF rc0/非JSON rc2);全套 1236 passed
 aliases:
   - lint 宣告健康檢查
+about_code:
+  - scripts/lumos
 ---
 # lint-declaration-health——lint 宣告健康檢查(收「宣告了跑不動的東西」破口)
 

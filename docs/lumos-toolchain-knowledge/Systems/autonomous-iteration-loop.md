@@ -4,6 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-08-21
 self_audit: sonnet/2026-08-21
+about_code_stamp: batch-2026-08-23/2026-08-23
 tags:
   - type/system
   - status/done
@@ -65,6 +66,11 @@ decisions:
     why_chosen: 人放行閘=最高槓桿不動;恢復後首輪吃到全部新紀律
     decided: 2026-07-11
     valid: true
+about_code:
+  - governance/autonomous-loop.sh
+  - governance/autonomous_loop/cross_audit.py
+  - governance/autonomous_loop/gap_select.py
+  - governance/daily-governance.sh
 ---
 # autonomous-iteration-loop
 
