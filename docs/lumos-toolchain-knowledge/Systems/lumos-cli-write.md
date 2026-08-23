@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-11
+updated: 2026-08-23
 self_audit: sonnet/2026-08-21
 tags:
   - type/system
@@ -19,6 +19,7 @@ summary: |-
   KEY:[2026-08-05]`new verification <名> --plan <計劃> --systems <A,B>` 一鍵雙向——建檔當下填 plan_refs+對每個 Systems append verified_by(寫後自驗沿 cmd_append);指到不存在節點 rc2 且不建檔(不留半套);把「事後 sync-verified-by 撿漏」變「寫入時就對」 [test:t_new_verification_bidirectional]
   FLOW:set/append/self-audit/decision-*→load_raw_for_edit(讀raw,拒BOM/CRLF)→line-based改fm→atomic_write_verify(★(2026-08-21 程式碼實證)實際順序:先在**記憶體**對 new_lines re-parse+expected_check+lint 指紋比對→全過才建 tmp 寫入→os.replace;檢查失敗時 tmp 根本未建立★)→敗則原檔不動
   KEY:[2026-08-11]新增 `remove <note> <key> <value>`=append 逆操作(T1 list 項移除)。缺口來自實戰:死背書(verified_by 指向已 superseded 的驗證)與降格後殘留 core_refs,都只能靠移除 list 項來收,而 set 只收純量、append 只能加,唯一退路 obsidian processFrontMatter 需 Obsidian 執行中→實務無路可走。比對沿用 link_target()(精確 target,不做前綴/basename 匹配);★不命中一律 rc=2★(靜默 no-op 回成功=呼叫端以為清乾淨了,比報錯危險);清空後連 key 行一併移除(裸鍵被 YAML 解成 null 比沒鍵更糟);core_refs 納入 LIST_KEYS(升格加/降格拆兩向都走 T1)。★不支援巢狀 dict 型 list 項★(core-knowledge facet 的 implements 需 T3 手術層,非本次範圍)。實戰驗收:LandmarkMember doctor E1 死背書 14→0、C 指針轉「無」。詳 [[Verification/2026-08-11_T1_remove_list項移除]]
+  KEY:[2026-08-23]`remove <note> <key>`★不帶 value=把純量欄位整個拿掉★(design-loop about-code-field r3 抓到:回滾要刪 stamp,但 set 只能覆寫、remove 只動 list——純量沒有刪除原語)。不加新子命令,一個指令學一次。守衛三條:type/status/created 骨架欄硬擋(刪了 lint/doctor/分類全炸)/清單欄不准省 value(一句話誤刪整個 verified_by)/欄位不在 rc2。同批 about_code 進 LIST_KEYS、about_code_stamp 進 SCALAR_KEYS(語意欄位基礎,計劃 [[Projects/固定席扇出降權_計劃]])
   KEY:8個寫入原語(set/append/remove/new/archive/decision-add/decision-supersede/self-audit)是「專案層」圖譜寫入的唯一安全路徑,取代手改 frontmatter / obsidian property:set
   KEY:T1 寫後自驗 atomic——所有 fm mutation 經 atomic_write_verify:記憶體 re-parse 斷言該 key 寫成目標值 + 無引入新 lint 指紋 → 通過才寫 .lumos-tmp → os.replace 原子換入;任一步失敗原檔零變動(★(2026-08-21 程式碼實證)原文「先寫 tmp 再驗」順序寫反;保證不變★) [test:t_set_minimal_diff,t_append_exact_dedup]
   KEY:set 走 SCALAR_KEYS 白名單(9 鍵 <!--lumos:count=9 re=\"[a-z_]+\"(?=[^}\n]*\}  # pitfall_\* 2026-08-09) in=scripts/lumos-->:status,updated,created,type,self_audit,signed_off,regen,pitfall_ask,pitfall_source;scripts/lumos:7035)、append 走 LIST_KEYS(7 鍵 <!--lumos:count=7 re=\"[a-z_]+\"(?=[^}\n]*\}   # aliases 2026-08-05) in=scripts/lumos-->:verified_by,plan_refs,related,tags,aliases,pitfall_when,core_refs;7036)★原文列舉漏 pitfall_*/aliases/pitfall_when,(2026-08-21 程式碼實證);以常數為準勿再列舉★;白名單外 key 直接 rc2(list 用 append、decisions 翻盤/新增走 decision-*) [test:t_append_block_key_rejected]
