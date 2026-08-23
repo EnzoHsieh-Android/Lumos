@@ -414,6 +414,47 @@ def t_install_global_hook_sync():
           not (h6 / "verification-rot-check.py").exists())
 
 
+def t_probe_sandbox_cannot_push():
+    """★探針沙盒推不出去★:被測 AI 在副本裡做什麼都行,但 push 必須被擋。
+
+    2026-08-23 事故:守衛題的情境是「沒有我就開工做」,被測 AI 真的改檔並 push,
+    副本 rsync 來的 .git/config 帶著 remote,一筆 author=probe@local 的假快照上了主幹。
+    三道:拔 remote / pre-push 硬擋 / 假身分。本測試★真的試 push★,不只看設定。
+    翻紅釘:把 make_sandbox 裡拔 remote 與 pre-push 那兩段拿掉 → 第 2、3 條翻紅。"""
+    import importlib.util, subprocess as _sp, tempfile as _tf
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("probe_fx", repo / "scripts" / "scenario_probe.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+    # 造一個「有 remote 的來源 repo」——remote 指向本機另一個 bare repo,push 成功會真的寫進去
+    bare = _P(_tf.mkdtemp(prefix="probe-bare-")) / "origin.git"
+    _sp.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    src = _P(_tf.mkdtemp(prefix="probe-src-")) / "repo"
+    src.mkdir()
+    _sp.run(["git", "init", "-q", str(src)], check=True)
+    (src / "a.txt").write_text("x\n", encoding="utf-8")
+    _sp.run(["git", "add", "a.txt"], cwd=str(src), check=True)
+    _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], cwd=str(src), check=True)
+    _sp.run(["git", "remote", "add", "origin", str(bare)], cwd=str(src), check=True)
+    _sp.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=str(src), check=True)
+    before = _sp.run(["git", "rev-parse", "main"], cwd=str(bare), capture_output=True, text=True).stdout.strip()
+
+    work = m.make_sandbox(src)
+    remotes = _sp.run(["git", "remote"], cwd=str(work), capture_output=True, text=True).stdout.split()
+    check("沙盒①: remote 全部拔掉", remotes == [], str(remotes))
+
+    # 被測 AI 如果自己把 remote 加回來再 push——pre-push 要擋
+    _sp.run(["git", "remote", "add", "origin", str(bare)], cwd=str(work), check=True)
+    (work / "b.txt").write_text("被測 AI 亂改\n", encoding="utf-8")
+    _sp.run(["git", "add", "b.txt"], cwd=str(work), check=True)
+    _sp.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local", "commit", "-qm", "evil", "--no-verify"], cwd=str(work), check=True)
+    r = _sp.run(["git", "push", "origin", "HEAD:main"], cwd=str(work), capture_output=True, text=True)
+    check("沙盒②: 加回 remote 後 push 仍被 pre-push 擋(rc≠0)", r.returncode != 0, f"rc={r.returncode}")
+    after = _sp.run(["git", "rev-parse", "main"], cwd=str(bare), capture_output=True, text=True).stdout.strip()
+    check("沙盒③: ★bare repo 的 main 沒動★(真的沒推出去)", after == before, f"{before[:8]} → {after[:8]}")
+
+
 def t_per_test_timeout():
     """per-test 超時:卡住的測試要被打斷、判紅、印出名字,不能拖垮整輪。
     翻紅釘:把 run_with_timeout 改成直接 fn() → 第 2 條永遠等不到 TestTimeout。"""

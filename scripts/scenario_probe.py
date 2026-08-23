@@ -77,6 +77,39 @@ def judge(calls, expect, forbid_before):
     return True, "ok", first
 
 
+def make_sandbox(src):
+    """複製工作樹到臨時目錄,並★切斷所有能把東西推出去的路★。回副本路徑。
+
+    2026-08-23 事故:守衛題 a05 的情境是「沒有我就開工做」,被測 AI 真的改了計劃檔並 push——
+    臨時副本是 rsync 來的,.git/config 裡的 remote 跟著複製,push 就直接推到真遠端,
+    主幹多了一筆 author=probe@local 的「probe snapshot」(已覆蓋)。
+    隔離不只是「動到的只是副本」,還要「副本推不出去」。三道:
+      ① 拔掉所有 remote(沒有目標就沒得推)
+      ② pre-push hook 寫死 exit 1(就算被測 AI 自己加回 remote 也擋;hooksPath 指向副本內的專用目錄)
+      ③ 假身分 probe@local 維持——即使前兩道都失效,GitHub 上也認得出這不是人
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="lumos-probe-"))
+    work = tmp / "repo"
+    work.mkdir(parents=True)
+    subprocess.run(["rsync", "-a", "--exclude", "node_modules", "--exclude", ".venv",
+                    f"{src}/", f"{work}/"], check=True)
+    # ① 拔 remote
+    r = subprocess.run(["git", "remote"], cwd=str(work), capture_output=True, text=True)
+    for name in r.stdout.split():
+        subprocess.run(["git", "remote", "remove", name], cwd=str(work))
+    # ② 副本專用 hooks 目錄:pre-push 硬擋;其餘 hook 不存在=不跑(取代原本指向 /dev/null 的做法)
+    hooks = tmp / "hooks"
+    hooks.mkdir()
+    (hooks / "pre-push").write_text("#!/bin/sh\necho '探針沙盒:禁止 push' >&2\nexit 1\n", encoding="utf-8")
+    (hooks / "pre-push").chmod(0o755)
+    subprocess.run(["git", "config", "core.hooksPath", str(hooks)], cwd=str(work))
+    # commit 成乾淨狀態(含未 commit 的改動——索引/筆記常是剛寫還沒 commit)
+    subprocess.run(["git", "add", "-A"], cwd=str(work))
+    subprocess.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local",
+                    "commit", "-qm", "probe snapshot", "--no-verify"], cwd=str(work))
+    return work
+
+
 def run_one(sc, workdir, max_turns, timeout, model):
     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
@@ -170,19 +203,11 @@ def main():
         scs = uniq
     if a.dry_list:
         print(",".join(s_["id"] for s_ in scs)); return 0
-    tmp = Path(tempfile.mkdtemp(prefix="lumos-probe-"))
-    work = tmp / "repo"
-    # 複製工作樹(含未 commit 的改動——索引/筆記常是剛寫還沒 commit),再在副本裡 commit 成乾淨狀態
-    work.mkdir(parents=True)
     src = Path(a.repo).resolve()
     if not (src / ".git").exists():
         print(f"✗ --repo {src} 不是 git repo(找不到 .git),停手", file=sys.stderr)
         return 2
-    subprocess.run(["rsync", "-a", "--exclude", "node_modules", "--exclude", ".venv",
-                    f"{src}/", f"{work}/"], check=True)
-    subprocess.run(["git", "config", "core.hooksPath", "/dev/null"], cwd=str(work))
-    subprocess.run(["git", "add", "-A"], cwd=str(work))
-    subprocess.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local", "commit", "-qm", "probe snapshot", "--no-verify"], cwd=str(work))
+    work = make_sandbox(src)
     # skills 走 ~/.claude(symlink 回本 repo),不用複製
     print(f"探的是: {src}\n臨時副本: {work}", file=sys.stderr)
     results = []
