@@ -22,11 +22,12 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—�
    - `lumos quote-check <席報告> --spec <凍結快照>`:引句對不回快照的條目丟掉(比對對象是派工當下的快照,不是現檔)。
    - `lumos refcheck <席報告> --repo <根>`:報告引的 file:line 要存在。
    - `lumos seat-check <席報告> --dispatch <rN-dispatch.json>`:派工要查的材料有沒有都碰到。
-5. **判讀**:severity 以「照 spec 字面實作會做出錯的行為或漏掉合約」為 major;措辭、文件精度是 minor。剝掉審查員誤判要能指出客觀錯在哪,判不準就保留。存活 ≥major 的:有可執行證據且你自己查過 → 直接折;多席獨立一致 → 直接折;只有低共識的才派一個辯方(預設外家 `scripts/external-seat.sh`,不給它審查員的結論)去反駁,必須附 file:line 才能降級。
+5. **判讀**:severity 以「照 spec 字面實作會做出錯的行為或漏掉合約」為 major;措辭、文件精度是 minor。剝掉審查員誤判要能指出客觀錯在哪,判不準就保留。存活 ≥major 的:有可執行證據且你自己查過 → 直接折;多席獨立一致 → 直接折;只有低共識的才派一個辯方(★預設外家 Codex:`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住;它能開檔查證。`scripts/external-seat.sh` 是 Gemini、看不到 vault,只當 Codex 不可用時的備援,其 ≥major 不算否決票——2026-08-23 實測五條 major 四條沒查證就判★;不給它審查員的結論)去反駁,必須附 file:line 才能降級。
 6. **折入**:只折存活的真問題進計劃筆記,寫進「審計修正紀錄」。折完 `lumos fold-check <計劃.md>` 看前後矛盾;每折一條「訂正既有規則」的,拿關鍵詞全文 grep 找散落的同句變體一起改;再派一個便宜 agent 只看本輪 diff 核對鏡像段有沒有跟上。`git commit`。
 7. **記帳**(折完才記,指紋要是折入後的版本):
    ```
    lumos canary record none --loop <編號> --round rN --auditor <席> --severity <存活最高> --findings <存活條數> \
+     # ★light 分級不帶 --round(單人不分輪;帶了 `loop status --light` 會拒讀,2026-08-23 踩過)★ \
      --findings-set <id串> --folded-set <id串> --accepted-set <id串> --accept-reason <id=理由> \
      --report <rN-席.md> --snapshot <rN-snapshot.md> --spec <計劃.md> --reviewed <sha256> --scope-lines <行數>
    ```
