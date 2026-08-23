@@ -26,7 +26,7 @@ summary: |-
   FLAG:DECISION
   KEY:★甲案收窄(2026-08-23 Enzo 裁,design-loop 三輪到頂後)★——about_code 只做固定席排序+語意欄位基礎,不做降噪;對 P@8 零影響(不計固定席);噪音數不變只變位置;降噪回扇出另案。新成績單=固定席前 3 位必看命中率(要新加指標)
   KEY:主案=語意「關於」欄位 about_code(模型離線預標、雙評審寫入、讀側查欄位可重算);扇出降權/提到的位置降為★過渡方案★。Enzo 裁:字串比對有結構性天花板,要質的提升得信任模型語意
-  KEY:★r2 設計層改動★——r1 版「有 about 欄但不含目標檔→降自由席」被實測打穿(事故筆記 hook卸載殘留註冊 改 test_lumos.py 時會被降;加上 about 對必看本有 2/9、3/5 漏標,降級=把必看踢出固定席,「零退化」在有欄節點上不成立)→改「只加分不降級」:about 命中→固定席前排,不命中→照三軸既有路徑。噪音剔除改由巨檔門檻與扇出承擔,about_code 不碰召回。另:回滾改新增子命令 about-code revert(既有 query 無 --field);過期判準改 git 最後改動日期(updated 欄 33% 落後;★此句已被 std-r2 換成正文雜湊,見下一行★)
+  KEY:★r2 設計層改動★——r1 版「有 about 欄但不含目標檔→降自由席」被實測打穿(事故筆記 hook卸載殘留註冊 改 test_lumos.py 時會被降;加上 about 對必看本有 2/9、3/5 漏標,降級=把必看踢出固定席,「零退化」在有欄節點上不成立)→改「只加分不降級」:about 命中→固定席前排,不命中→照三軸既有路徑。噪音剔除改由巨檔門檻與扇出承擔,about_code 不碰召回。另:回滾改新增子命令 about-code revert(既有 query 無 --field);過期判準改 git 最後改動日期(updated 欄 33% 落後)
   KEY:★r1 六洞全折★——「與考卷必看同一把尺」宣稱作廢(「關於」比「必看」嚴,是精確度子集非等價物);讀側打錯靶(固定席三軸:direct/indirect/incident,原只改 direct;實測 E10 八席只一席 direct);範圍 61→83 篇;巨檔門檻=about 命中≥N(暫定 8)關閉判定;過期守衛:r1「併入 Check S、記日期」→ r3 另開迴圈 → ★std-r2 改記正文雜湊(日期/commit 數都表達不了「標記在同日序列的哪一格」,Codex+s1 實證 83 篇上線首日就誤判 2 篇)★;寫入走 refresh_labels 同款雙評審
   KEY:離線驗證(Codex 預標 83 篇)——train 18 噪音零誤放、必看 7/9;held 撞巨檔失效(改 scripts/lumos 那題 22 誤放,排除後 0/60)。★「零誤放」的 distinct 樣本遠小於 18,且 goldset 已換版★
   KEY:誠實天花板——判準文字與考卷裁決都經我手(同源循環,只能靠上線後 held 量一次打破);過擬合風險高(train 8 題);P@8 門檻在新尺上未校準;hook 顯示層要加 about 標示
@@ -203,7 +203,7 @@ about_code:
 about_code_stamp: codex/2026-08-23/3f9a1c0b7e2d
 ```
 (★std-r2★:三段式 `<誰標>/<日期>/<正文 sha256 前 12>`;批次寫入時誰標=`batch-<日期>`;revert 只看第一段不受影響。
-r2 曾統一成兩段「記日期不記雜湊」——std-r2 證明日期表達不了順序,★繞回 r1「欄位設計」節原本含雜湊的三段格式★(r1 原文 `<sha256 前 12 碼>/<誰標>/<日期>`,r2 為同形 Check S 改掉;過期守衛節的 r1 段是日期制,兩節當時就不一致——s3f2 抓到「繞回」一詞歧義),見過期守衛節。)
+r2 曾統一成兩段「記日期不記雜湊」——std-r2 證明日期表達不了順序,★繞回 r1 的雜湊設計★,見過期守衛節。)
 
 語意:**這篇筆記主要在講這幾支檔的行為**(不是「提到」)。
 ★判準給模型的原話★:「改這支檔的人,不看這篇會不會做錯事?會 → 列;只是順帶提到 → 不列。」
@@ -276,7 +276,7 @@ N 要用考卷驗(train 掃 N∈{5,8,12}、held 驗一次)。
 ★單一實作,hook/CLI/eval 共用★,否則三邊會算出不同的巨檔判定。
 
 ★回滾路徑(r2 改寫;s1f1/s3f3 blocker:`lumos query` 沒有 `--field/--match`;s1f2/s3f4:`remove` 要三個位置參數)★
-批次預標寫入時 `about_code_stamp` **第一段(誰標)**固定寫 `batch-<日期>`(★std-r2 後三段式:`batch-2026-08-23/2026-08-23/<正文雜湊 12 碼>`;s3f3 抓到此處範例沒跟上——apply 那半未做,照抄兩段式會讓新資料落地即被判舊格式★)。
+批次預標寫入時 `about_code_stamp` **第一段(誰標)**固定寫 `batch-<日期>`(格式 `batch-2026-08-23/2026-08-23`)。
 整批撤=**本案要新增一個子命令** `lumos about-code revert --batch <日期>`:掃 `env.notes`、
 找 stamp 第一段 = `batch-<日期>` 的節點、對每篇把 `about_code` 清單逐值 `cmd_remove` 並刪 stamp。
 ★這是本案新增的工具清單第一項★,不是既有指令的組合(既有 `query` 只能按 tag 篩、`remove` 逐值)。
@@ -291,7 +291,7 @@ N 要用考卷驗(train 掃 N∈{5,8,12}、held 驗一次)。
 
 **不另立機制,併入 Check S**(★此句已被 r3 s3f11 翻案:Check S 只掃 system,事故類驗不到→另開迴圈同輸出格式;見工具清單 #6。std-r1 s1f2 抓到這裡沒改★)。Check S 現在只比 `self_audit` 的日期與 `updated`
 (`scripts/lumos:823-841`,零讀盤)。about_code 的過期判定改成同一形狀:
-`about_code_stamp` 記 **日期**(不記雜湊),過期判準 = `updated` > stamp 日期。(★r1/r2 日期制整段已被 std-r2 正文雜湊取代,以下到「讀側」段皆留痕★)
+`about_code_stamp` 記 **日期**(不記雜湊),過期判準 = `updated` > stamp 日期。
 ★代價★:正文沒改只改 frontmatter 也算「可能過期」(偽陽性)——接受,因為 Check S 本來就這樣,
 **一致性比精確性重要**(接手的人只要學一套)。
 格式沿 `self_audit` 兩段式:`about_code_stamp: codex/2026-08-23`(archf2 minor)。
@@ -299,10 +299,10 @@ N 要用考卷驗(train 掃 N∈{5,8,12}、held 驗一次)。
 ★r2 補(s3f5 major):`updated` 欄本身紀律不足★——席三抽 15 篇,**5 篇(33%)的 `updated`
 落後於 git 最後改動日期**(正文改了沒 `lumos set updated`)。用 `updated` 當過期判準會**沉默放過**
 這些節點——偽陰性,代價比偽陽性高(正是 about_code 要防的那個方向)。
-**處置**(★已被 std-r2 取代,留痕★):過期判準改成 **git 最後改動日期**(`git log -1 --format=%cs -- <檔>`)> stamp 日期;
+**處置**:過期判準改成 **git 最後改動日期**(`git log -1 --format=%cs -- <檔>`)> stamp 日期;
 git 缺席時退回 `updated`(★std-r1 再改:git 缺席視同無欄,不退回 updated★)。這跟 Check S 不再完全同形,但 Check S 本身也該這樣修——另立 Issue 不在本案。
 
-**讀側**(過期定義見 std-r2;本段其餘仍成立):`impact` 遇到過期的節點 → **不信它的 about_code**(當沒有欄位處理),退回三軸既有路徑。★這確實是讀側多一個判斷(s1f5 對)★,但成本是比兩個日期字串,
+**讀側**:`impact` 遇到過期的節點 → **不信它的 about_code**(當沒有欄位處理),退回三軸既有路徑。★這確實是讀側多一個判斷(s1f5 對)★,但成本是比兩個日期字串,
 不是算雜湊;席二實測 impact 全庫重讀 0.75s,這個判斷毫秒級,**不構成熱路徑問題**(★std-r1 s3f6:這句只算了比字串,沒算 git log 那 0.2s——見下方懶觸發★)
 (s1f5「進熱路徑」那半駁回,「讀側不變」那半接受——原句已刪)。
 降級方式對齊 E1 的 warn_soft 慣例(archf3 minor):doctor 列出、不擋;impact 退路徑、印一行★到 stderr★
@@ -324,28 +324,16 @@ git 缺席時退回 `updated`(★std-r1 再改:git 缺席視同無欄,不退回 
 s1f3/s2f1/arch 三席撞 `git status` 漏 quotepath;s2f2 rename 格式;s2f4 stamp 日期怎麼抽;arch ⚠/s3f3 快取歸屬——這一整串都是「用 git 推測正文有沒有變」的下游)★★
 **根本問法錯了**:守衛要答的是「標記時看的正文,跟現在一樣嗎」,那就**直接記正文雜湊**,不要拿日期或 commit 去推:
 - stamp 加第三段:`about_code_stamp: <誰>/<日期>/<正文 sha256 前 12 碼>`。正文 = `split_frontmatter(text)[1].rstrip()`(frontmatter 之外的全部;
-  ★讀檔必用 `read_text(encoding="utf-8-sig")`★(std-r3 arch major + s1f3:全檔 20+ 處讀 vault 都用 sig,BOM 檔否則切不出 frontmatter、整檔算進雜湊,「只改 frontmatter 不過期」就破);
-  第三段必須是 12 碼 hex,否則視同舊格式(s2 minor:`lumos set` 不驗格式,任何字串都寫得進去);
   `lumos set`/`append` 只動 frontmatter,**不會**讓它過期——about_code 自己就在 frontmatter 裡,重標不會自我過期)。
 - **過期 = 現在算出的正文雜湊 ≠ stamp 第三段**。stamp 沒第三段(舊格式)→ 視同過期,doctor 列「舊格式,請重標」。
 - 新 helper `note_body_hash(vault, rel)`(讀檔→split→hash;★無快取,無 git,無子行程★)。impact 只對「about 命中的候選」算(懶觸發,幾次讀檔、毫秒級);doctor 對所有有 stamp 的節點算。
-- **恢復動作成立**:`lumos about-code restamp <節點>` 重算第三段——這次重標真的會讓它不再過期(ext-f1 要求的可操作性)。
-  ★std-r3 語意釘死(Codex f1 blocker「橡皮章」+ s1f2 blocker「跟 revert 打架」)★:
-  restamp 的意思是「**我(人或 Claude)剛核過這篇的 about_code 對現在的正文仍然正確**」——所以它**三段全換**:`claude/<今天>/<新雜湊>`
-  (`--by <誰>` 可改第一段,預設 claude)。第一段離開 `batch-` 後,`revert --batch` 就不會再撤它(合約候選 #4 在「用官方工具修正」這條路上成立)。
-  沒有 stamp 的節點(增量新寫的)第一次也用同一指令。★`--expired` 批次模式拿掉★——一口氣把所有可疑標籤洗白正是橡皮章。
-  doctor 的訊息不說「重標」,說:「先看這篇的 about_code 對現在的正文還對不對:對 → `restamp`;不對 → `set/append/remove` 修完再 `restamp`」。
-  ★已知限制(s1f4 minor)★:BOM/CRLF 檔 `load_raw_for_edit` 直接拒寫,restamp 會 loud fail,目前 vault 零此類檔。
+- **恢復動作成立**:`lumos about-code restamp <節點>`(或 `--expired` 批次)重算第三段——這次重標真的會讓它不再過期(ext-f1 要求的可操作性)。
 - **git 完全退場**:`git_last_change_info`/`git_dirty_notes` ★不建★;`git_last_change_dates`(#5,已 ship)保留但本案不再呼叫(工具清單 #5 誠實標「暫無呼叫者」);
   未 commit 的改動自然被抓到(讀的是工作樹);中文路徑、rename、quotepath、快取歸屬、hook 每次新行程——全部不再是問題。
 - **代價(誠實)**:正文改一個字就過期(比日期嚴)——這正是要的方向;doctor 每天會列出來,restamp 一行。
   跟 Check S(日期制)不同形——r1 架構席「第三套機制」那條在這裡**再次**被推翻,理由是兩輪五席實證日期制表達不了順序;留痕,不再折回。
-- **83 篇存量遷移**(★std-r3 改寫,Codex f2 blocker:「用現在的正文算」=橡皮章,標完之後改過的會被洗成新鮮;s2f5:遷移一次性用 git 可以,但別重寫 quotepath 坑★):
-  `lumos about-code migrate-stamp --at <commit>`(一次性,做完可留著當工具):對每篇 `batch-*` 兩段式節點,
-  用 `git show <commit>:<vault 相對路徑>`(★路徑當參數傳,不經 git 輸出,無 quotepath 問題★)取出**標註當時**的正文算雜湊 → 寫成第三段(第一、二段不動,仍是 batch)。
-  `<commit>` = 最終寫入 commit 的前一個(`dbd104f^`,2026-08-23 22:19;B 席 Opus 讀的是那時的正文)。
-  ★寫入後立刻由 doctor/impact 用現在的正文比:標完之後改過正文的那幾篇自然就是「過期」,進 doctor 清單給人核(核過才 restamp)——不需要任何人猜哪幾篇★。
-  另列「12:19(A 席讀)到 22:19 之間正文動過的」(`git diff --name-only 54b3334 dbd104f^ -- <vault>`,一次性)給人掃一眼——A/B 兩席可能讀到不同版本。
+- **83 篇存量遷移**:本案實作第一步,批次對現有 `batch-2026-08-23/2026-08-23` 補第三段(用**現在**的正文算)。
+  ★天花板★:標完到現在有改過正文的那幾篇,標記可能已經不對但雜湊會說「沒過期」——遷移時用 git 列出 08-23 之後改過正文的清單,人掃一眼。
 - `LUMOS_IMPACT_ABOUT=0` ★也關 doctor #6 的迴圈★(s1f6:總開關只關一半等於沒關)。
 
 ### ★離線驗證結果(2026-08-23,見 [[Verification/2026-08-23_關於欄位離線預標驗證]])★
@@ -410,14 +398,14 @@ held 撞到失效條件——改 `scripts/lumos`(巨型單檔)那題 22 個誤�
 | 1 | `about_code` 進 `LIST_KEYS`、`about_code_stamp` 進 `SCALAR_KEYS` | `scripts/lumos:7243-7244` | ✅ 2026-08-23 done,測試釘 append/set/remove 三路 |
 | 2 | 範本加 `about_code:` 空欄 | ✅ 2026-08-23 done:system/issue 範本 + NEW_HINT 兩段提示(事故類「只寫出事那幾支」) | `[]` bug ✅([[Issues/範本空清單被判成純量]]);★範圍刀:只 system/issue,同 aliases★ |
 | 3 | 純量欄位刪除原語 | ✅ 2026-08-23 done:`remove <節點> <key>` 不帶 value=整欄拿掉 | 不加新子命令(一個指令學一次);守衛:骨架欄 type/status/created 擋、清單欄不准省 value |
-| 4 | `cmd_impact` 讀 `about_code`:四處 `results.append` 命中時加 **`about_hit: True`**(只在 True 時出鍵;★不動既有 `hit` 欄★);`pins` 後 stable sort 鍵 `(kind!="incident", not about_hit)`;總開關 `LUMOS_IMPACT_ABOUT`;★about 命中後才讀該篇正文算 `note_body_hash`,不得呼叫 `git_last_change_dates`★(Codex r3 f3:原寫「懶觸發 git」是 std-r1 殘句);計數切 `_impact_about_counts`(計數路徑也要 `as_list`,s2 minor) | incident `:14178` / direct `:14203` / indirect pinned `:14214` / indirect free `:14223` / `pins` `:14226`(impl-r1 s1f4 校正;舊行號整批過期) | 三條路徑各自獨立(s3f9);★`hit` 欄是既有來源標記(body-inline-code/basename-match),hook `:358`、lumos `:14310` 在讀,覆寫會靜默失真(impl-r1 s1f2 blocker)★ |
-| 5 | 過期判準:**批次** `git log --name-only --format=@%cs -c core.quotepath=false`(`@` 前綴是分隔關鍵,s1f8)一次拿全庫。★std-r2:本案改記正文雜湊,這支 helper **保留但暫無呼叫者**(s3f4 要求 ✅ 只蓋已 ship 的那半;std-r1 擬的擴充不建);★它與其測試的 docstring 還寫「about_code 過期判準的材料」,實作時改掉(std-r3 s3f5)★ | ✅ 2026-08-23 done:`git_last_change_dates(repo_root, vault)`,行程內快取,fail-open | 翻紅釘實證:★拿掉 quotepath 旗標連英文檔都撈不到★(路徑帶中文目錄名整條被跳脫),表空且不報錯 |
+| 4 | `cmd_impact` 讀 `about_code`:四處 `results.append` 命中時加 **`about_hit: True`**(只在 True 時出鍵;★不動既有 `hit` 欄★);`pins` 後 stable sort 鍵 `(kind!="incident", not about_hit)`;總開關 `LUMOS_IMPACT_ABOUT`;懶觸發 git;計數切 `_impact_about_counts` | incident `:14178` / direct `:14203` / indirect pinned `:14214` / indirect free `:14223` / `pins` `:14226`(impl-r1 s1f4 校正;舊行號整批過期) | 三條路徑各自獨立(s3f9);★`hit` 欄是既有來源標記(body-inline-code/basename-match),hook `:358`、lumos `:14310` 在讀,覆寫會靜默失真(impl-r1 s1f2 blocker)★ |
+| 5 | 過期判準:**批次** `git log --name-only --format=@%cs -c core.quotepath=false`(`@` 前綴是分隔關鍵,s1f8)一次拿全庫。★std-r2:本案改記正文雜湊,這支 helper **保留但暫無呼叫者**(s3f4 要求 ✅ 只蓋已 ship 的那半;std-r1 擬的擴充不建)★ | ✅ 2026-08-23 done:`git_last_change_dates(repo_root, vault)`,行程內快取,fail-open | 翻紅釘實證:★拿掉 quotepath 旗標連英文檔都撈不到★(路徑帶中文目錄名整條被跳脫),表空且不報錯 |
 | 6 | 過期檢查:**不併入 Check S**(它只掃 type:system,事故類驗不到,s3f11)→ 另開迴圈但同輸出格式;★std-r2:比正文雜湊,不需 git/repo_root;受總開關★ | `run_doctor`,逐行格式對齊 `sa_stale` 段 | 這是 archf4「第三套機制」的回歸,但 r3 證實併入 Check S 會漏——★兩害取輕,留痕★ |
 | 7 | `lumos about-code revert --batch <日期>` 子命令 | ✅ 2026-08-23 done,含 --dry-run;★std-r1 s3f8 修:單篇部分失敗原本照刪 stamp 照算成功(重複值甚至直接崩潰)→ 去重、失敗留 stamp 不計、rc 非 0,翻紅釘驗過★ | 翻紅釘:比對改「含日期」→人工修正的被誤撤,精確比對第一段才對;新指令觸發三道登記守衛(help/索引/六份文件指令數 61→62) |
 | 8 | 雙評審:**寫轉換函式** `{node:[files]}` → `{node:{file:1}}` 再餵 `cmd_merge`;`cmd_apply` 不能重用(寫入目標是 goldset 不是 frontmatter),另寫 | ✅ 2026-08-23 `about_code_to_rater(a, b)`,真餵 merge 驗過 | ★候選集=兩席聯集★:A 列 B 沒列的,B 側填 0(那是反對票不是沒意見);翻紅釘驗過。apply 那半未做 |
 | 9 | hook 顯示層加 `about` 標示(讀 `about_hit`,不讀 `hit`) | `scripts/hooks/claude/impact-hook.py:344-348` | 不改看不到(s2f5/s3f9);hook 一律帶 `--ranked`,`build_additional_context`(非 ranked 那條)是死碼不用動(impl-r1 已驗;函式名 std-r1 校正) |
 | 10 | 新指標「固定席前 3 位必看命中率」 | `retrieval_eval.py` | 甲案成績單;接線照 `fusion_p`(s1f5) |
-| 11 | ★std-r2 新增、std-r3 釘語意★ `lumos about-code restamp <節點> [--by <誰>]`(三段全換=人核過)與 `migrate-stamp --at <commit>`(只補第三段,一次性);`note_body_hash(vault, rel)` helper(utf-8-sig) | ★兩處接線★(s2f4):argparse 二層註冊(`about-code` 底下與 `revert` 並列)**和** dispatch 分支(漏了會靜默 rc=2);登記守衛只有 `t_every_subcommand_has_when`(help)會擋,索引那道不掃 about-code、文件指令數已在 #7 算過——★索引要人工補★(s3f4) | ext-f1/Codex f1/s1f2:恢復動作要能解除過期、但不能是橡皮章、不能跟 revert 打架 |
+| 11 | ★std-r2 新增★ `lumos about-code restamp <節點>|--expired`:重算 stamp 第三段(正文雜湊);`note_body_hash(vault, rel)` helper;83 篇存量遷移補第三段 | argparse 二層子命令同 `revert` | ext-f1:恢復動作必須真的能解除過期 |
 
 ★#6 誠實記★:r1 架構席判「過期守衛另立=第三套機制」為 major,折成併入 Check S;
 r3 證實併入後事故類節點驗不到。兩個都是真問題,選「另開但同輸出格式」——接手的人看到的是同一種提示,
@@ -460,17 +448,13 @@ r3 證實併入後事故類節點驗不到。兩個都是真問題,選「另開�
 ### #6 過期檢查:另開迴圈,輸出對齊 Check S(★std-r2 折入後版★)
 
 - `LUMOS_IMPACT_ABOUT=0` → 整段 `ok("(about 總開關關閉,過期檢查略過)")`(s1f6)。
-- 掃全部 type(不只 system)、★跳過 `status: stale/superseded`★(對齊 Check S 與另四處軟檢查的慣例;arch r3 minor,引句錨不到但我自己查了 `:832`),有 `about_code_stamp` 的節點算 `note_body_hash` 比 stamp 第三段。★不需要 git、不需要 repo_root★。
+- 掃全部 type(不只 system),有 `about_code_stamp` 的節點算 `note_body_hash` 比 stamp 第三段。★不需要 git、不需要 repo_root★(std-r2 後 arch major「重找 repo_root」與 s1f9 一起消失)。
 - 過期 → warn_soft(不擋、不計 issues)。訊息照 Check S **實際**逐行寫法(`sa_stale` 那段,錨:grep `self_audit {sa_date} < updated`):
-  `head`=「有 {N} 篇筆記的 about_code 標了之後正文又改過,標記可能過期」、`advice`=「先看 about_code 對現在的正文還對不對:對 → lumos about-code restamp <節點>;不對 → 修完再 restamp」
-  (★head/advice 分兩個參數★,對齊 Check S 等五處 warn_soft 呼叫慣例,arch r3 minor;訊息不得說「重標」二字當萬靈丹,Codex f1),
+  標題「有 {N} 篇筆記的 about_code 標了之後正文又改過,標記可能過期(`lumos about-code restamp <節點>` 重標)」,
   每行 `f"{rel} (about_code_stamp {stamp} 正文雜湊 {old12} → 現在 {new12})"`;舊格式另列「{rel} (stamp 無雜湊段,舊格式,請 restamp)」。
   (s2f3 那個「同日 `<` 自相矛盾」訊息隨日期制一起消失。)
 - ★不併入 Check S★(r3 s3f11)。
-- 測試:①issue 類正文改了 → 列 ②未改不列 ③無 stamp 不列 ④舊格式(兩段)→ 列為舊格式 ⑤只改 frontmatter(`lumos set updated`)→ 不列 ⑥knob=0 → 整段略過、不列
-  ⑦★第三段非 12 碼 hex → 列為舊格式★ ⑧★BOM 檔(utf-8-sig 寫入)未改 → 不列★ ⑨status: superseded 的過期節點 → 不列。
-  ★#4 測試注意(s2f1 major)★:`cmd_impact` **不吃全域 `--vault`**,自己從 `--repo`/cwd 找 vault——fixture 要照 `t_impact_ranked` 的寫法給 `--repo`,
-  否則會打到真 vault 還以為測到了;#6 的 doctor 測試走 `--vault` 沒這問題。巨檔門檻那條(要 ≥8 篇指同一檔)★用獨立 vault★,別跟其他 12 條共用 fixture。
+- 測試:①issue 類正文改了 → 列 ②未改不列 ③無 stamp 不列 ④舊格式(兩段)→ 列為舊格式 ⑤只改 frontmatter(`lumos set updated`)→ 不列 ⑥knob=0 → 整段略過、不列。
 
 ### #9 hook 顯示:`about` 標示
 
@@ -502,10 +486,9 @@ light 那輪的乾淨度不洗回來。
    [test 候選:斷言 pins 去掉 about_hit 者後,序列與 `LUMOS_IMPACT_ABOUT=0` 時一致]
 3. **過期即不信**——正文雜湊 ≠ stamp 第三段(或無第三段)的節點,其 about_code 視同不存在。重標(`about-code restamp`)後必不過期。
    [test 候選:改正文一字→視同無欄;restamp→恢復;只改 frontmatter→不過期]
-4. **批次回滾只動 stamp 第一段 = batch-<日期> 的節點**——人工修正過的(含 `restamp` 過的,第一段已變 `claude/…`)不被誤撤。
-   [test 候選:restamp 後 revert --batch 不碰它;★fixture 用三段式值★(s3f7)]
 5. **about 判定不覆寫 results 的 `hit` 欄**(impl-r1 s1f2;std-r2 s3f5 升格)——direct 候選的 `hit` 永遠是 body-inline-code/basename-match 來源標記。
    [test 候選:#4 測試⑦]
+4. **批次回滾只動 stamp 第一段 = batch-<日期> 的節點**——人工修正過的不被誤撤。
 
 ## 誠實缺口
 
@@ -589,19 +572,6 @@ s1 7(2 blocker)/ s2 7(1 blocker)/ s3 5(1 blocker)/ arch 1 major+1 ⚠ / Codex 3(
 放行:無。不採信:s1f2 引句錨不到(同題 Codex f1 採信)。
 ★教訓:r2 把 r1 的雜湊改成日期是為了「跟 Check S 同形」——一致性壓過了正確性;std-r1 在日期上打補丁(計數+dirty)又生出五個下游洞。
 錯的尺上修再多也是錯的,該換尺時換尺。★
-
-### std-r3(2026-08-24 凌晨;s1/s2/s3 + arch + Codex)——★達上限(3 輪)未收斂,攤給人裁★
-s1 5(2 blocker)/ s2 7(0 blocker,3 major)/ s3 7(1 blocker)/ arch 3(1 major)/ Codex 3(2 blocker)。去重後全折:
-**A restamp 是橡皮章**(Codex f1)+ **B restamp 跟 revert 打架**(s1f2)→ 語意釘死:restamp=人核過、三段全換、無批次模式、doctor 先叫人看標籤;
-**C 83 篇遷移也是橡皮章**(Codex f2)→ 用標註當時 commit 的正文算雜湊(git show 一次性),改過的自然變「過期」進人核清單;
-**D 回滾路徑節範例兩段式**(s3f3 blocker)→ 改;**E summary 第 3 行 KEY 還寫 git 日期**(s1f1 blocker;上輪只改了第 4 行)→ 標;
-**F utf-8-sig**(arch major + s1f3)→ 明寫;**G 工具清單 #4「懶觸發 git」殘句**(Codex f3)→ 改;
-**H r1/r2 日期制舊句未標取代**(s3f1)→ 標;**I restamp 接線兩處+守衛哪道會擋**(s2f4/s3f4)→ 寫;
-**J impact 不吃 --vault 的測試陷阱、巨檔 fixture 獨立、第三段格式驗證、as_list 計數路徑**(s2)→ 寫;
-**K 合約候選編號、三段式 fixture、docstring 過時、head/advice、跳過作廢節點**(minor 五條)→ 改。
-不採信:arch 第 3 條引句錨不到(內容我自己查了照改);駁回:s3f2「r1 沒有雜湊」——r1 欄位設計節原文就是三段含 sha(r2 折入腳本留有原句),但「繞回」措辭有歧義,改清楚。
-★三輪走勢★:r1 抓設計層(排序/欄位/開關)、r2 抓尺選錯(日期→雜湊)、r3 抓的全是新方案的語意與接線(橡皮章、遷移證據、編碼、範例)——
-沒有一條再動方向。**攤給人的問題只有一個:折完的這版,要再開一輪(新編號)審 delta,還是直接進實作、剩下的交給測試與代碼審?**
 
 ### ★人裁(2026-08-23 Enzo):甲——收窄目標★
 三選一(甲收窄/乙恢復降級加豁免/丙擱置)裁甲。處置:
