@@ -122,7 +122,7 @@ git 歷史是舊專案最容易拿到的目擊者:blame 找到改這段的 commi
 
 ## 實務隱患
 
-- **編假 why——機械把關的真實範圍(r1 四席實錘後改寫)**:Check J **只掃 frontmatter 的 summary 行,正文不掃**;硬擋=J-a(★INVARIANT★ 缺意圖證據)、J-b(DECISION 行缺標記)、J-c(懸空 [src:]/[git:] 指針,只驗存在不驗「證據真的支持主張」);J-d 對沒標身分的 KEY 行**只計數提醒**;FLOW/DEP **零檢查**。所以「機械防瞎編」只對合約級成立,prose 級誠實機械驗不了(J-d 提醒文字自己就這麼寫)——prose 的防線是步驟 6 交叉審計。regen 章仍是宣告制,不蓋完全繞過(既有 ★DEBT★)。回頭條件:實跑驗證抽查;之後任何一次發現未蓋章的重建節點,立案機械偵測(from-scratch 計劃已留未來項)。
+- **編假 why——機械把關的真實範圍(r1 四席實錘後改寫)**:Check J **只掃 frontmatter 的 summary 行,正文不掃**;硬擋=J-a(★INVARIANT★ 缺意圖證據)、J-b(DECISION 行缺標記)、J-c(懸空 [src:]/[git:] 指針,只驗存在不驗「證據真的支持主張」);J-d 對沒標身分的 KEY 行**只計數提醒**;FLOW/DEP **零檢查**。所以「機械防瞎編」只對合約級成立,prose 級誠實機械驗不了(J-d 提醒文字自己就這麼寫)——prose 的防線是步驟 6 的變體 B 雙 agent 交叉審計。regen 章仍是宣告制,不蓋完全繞過(既有 ★DEBT★)。回頭條件:實跑驗證抽查;之後任何一次發現未蓋章的重建節點,立案機械偵測(from-scratch 計劃已留未來項)。
 - **蓋章半成品中間態(r1 三席實錘)**:蓋了 regen 章、summary 只有 FLOW/DEP 或沒寫完的節點,check_regen_provenance 零錯誤零警告靜默全綠——機械層**分不出半成品與成品**。緩解=步驟 4 的「寫完→蓋章→lint→同 commit」時序紀律+步驟 6 交叉審計兜底。回頭條件:交叉審計若抓到半成品節點 ≥1 次,把「蓋章但無任何 DECISION/身分標記」升為 doctor 軟提醒立案。
 - **併發還原(r1 兩席實錘)**:兩個 session 同時還原同一模組——`lumos new` 存在性檢查與寫檔間無鎖(TOCTOU),分頭寫同一篇=git 層 last-write-wins/merge conflict,無「哪份重建可信」的裁決機制。緩解=d1 任務驅動下同模組同時還原機率低+git 衝突是唯一柵欄;老實承認沒有機械鎖。回頭條件:真實發生一次,接到 [[Issues/同工作區多session並行改動]] 立機械案。
 - **注入面改動**:graph-discipline 範本動所有專案 CLAUDE.md 受管區塊——sentinel 機制既有,改動=一行入口+「八類→九類」;過設計審+情境探針才推。
