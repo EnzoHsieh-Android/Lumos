@@ -71,7 +71,7 @@ def main():
     lag = _discipline_lag(root)
     msg = ("本專案用 lumos 知識圖譜。動既有系統的第一個工具呼叫是 lumos search / context,不是 grep / Read;"
            "被催「直接改」也一樣,改 code 前至少 lumos impact --file <檔> 一行。\n"
-           f"不確定該敲哪個指令 → 讀索引(4k 字元,按情境分八類,只開需要的子檔):\n    {idx}")
+           f"不確定該敲哪個指令 → 讀索引(4k 字元,按情境分九類,只開需要的子檔):\n    {idx}")
     if lag:
         msg += "\n" + lag
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
