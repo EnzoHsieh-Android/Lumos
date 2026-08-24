@@ -1,0 +1,247 @@
+---
+type: project
+status: doing
+created: 2026-08-24
+updated: 2026-08-24
+summary: |-
+  FLAG:DECISION
+  KEY:立案(2026-08-24 Enzo「好」)——Check S 是「喊了等人看」:兩篇樞紐筆記被喊 44/40 天(546/499 次)沒人理,終於派乾淨 agent 審=2/2 全站不住、12 處真漂移(8+4,v5-r1 s3f5 重數)(三處「照做出錯」級:讀側 2+寫側 archive 語法 1,v5-r2 s2f6 補數)。抽檢命中率 100%,問題不在閘在「沒人看」;backlog 的「腐化偵測延遲」gap 與這題同主題(★s3 r1 訂正:該 gap 從未被 loop 試過——兩次啃不動的是寫閘與治理帳,立案理由改為 44 天實證而非 loop 敗績★;落地時該 gap 標 covered)
+  KEY:方案(★d1 裁定版:全自動閉環★)=每週派乾淨 agent 審「從未確認+過期」功能筆記(N=2/週,PR 高者先)——PASS→自動戳(auto- 前綴留痕);FAIL→★另一 agent 修筆記→第三個乾淨 agent 複審(maker/checker 分離)→PASS 自動戳+commit★;連續兩輪 FAIL 才落 pending 喊人(Enzo:都靠人工閘難免疏漏,人=兜底非主閘)
+  KEY:成本錨——乾淨 agent 一篇 ~10 分鐘/1-2 美金(今天實測),對照 orchestrator 一輪 34-68 美金;零新演算法,全現成零件(gov --nags 資料同源、claude -p 派工、self-audit 戳)
+  DEP:[[Systems/autonomous-iteration-loop]]｜governance/autonomous-loop.sh｜governance/autonomous_loop/selfaudit.py(本案交付物)
+plan_refs: []
+related:
+  - "[[Systems/autonomous-iteration-loop]]"
+tags:
+  - type/project
+  - status/doing
+decisions:
+  - content: FAIL 路徑改全自動:審→修(另一 agent)→複審(第三個乾淨 agent,maker/checker 分離)→PASS 自動戳+commit;連續兩輪 FAIL 才落 pending 喊人(人=兜底非主閘)
+    id: d1
+    context: v1 設計 FAIL→pending 等人放行;Enzo 裁:都靠人工閘難免疏漏——pending 匣一樣會躺(44 天空轉正是人工閘失效的實證),偵測到不足就該自己審自己放行
+    why_chosen: 機械不靠自覺(設計原則 2);自動放行的誠實線=修者不自驗+乾淨複審;人保留在連續失敗的逃生梯
+    decided: 2026-08-24
+    valid: true
+  - content: d1 的「連續兩輪 FAIL」定義=同次派工內「審計 FAIL+修復後複審仍 FAIL」兩關;pending 未歸檔期間跳過=可逆(人歸檔即恢復自動重試)
+    id: d2
+    context: r2 s1f1:d1 原文與 skip 永久語意可兩讀;r3 s3f3:設計節講死了但 d1 本身沒補註,單讀 d1 仍歧義
+    why_chosen: 決策文字不可手改,以新決策澄清舊決策;skip jsonl 已刪、pending 檔存在即跳過的設計使可逆性機械成立
+    decided: 2026-08-24
+    valid: true
+  - content: 三輪達上限後裁甲:開 selfaudit-loop-v5 再審一輪 delta(容器統一探針沙盒+回寫柵欄+query 家族出口+週帳判別鍵)
+    id: d3
+    context: v5 兩個新結構決定沒有審查員看過;本案三輪的翻車模式=先例失真(worktree 不隔離/沙盒自己有 bug/死碼引用),新決定更需要無脈絡眼睛驗
+    why_chosen: 一輪成本低、對症本案的失敗模式
+    decided: 2026-08-24
+    valid: true
+  - content: d4:範圍刀越界視同修復鏈失敗、落 pending 停自動重試——d1/d2 授權字面只蓋「兩輪皆敗」,越界發生在複審前;裁定理由=越界代表自動鏈無法安全繼續,與「敗」同屬「自動修不動攤人」的 d1 精神(v5-r2 s2f5 抓散文擴權,折入時補立此決策;Enzo 可否決)
+    id: d4
+    decided: 2026-08-24
+    valid: true
+---
+# 自足性審計閉環_計劃
+
+> 白話:體檢每天喊「這篇筆記該找沒背景的人重新確認」,喊了一個半月沒人動——今天真的派人去看,
+> 兩篇全是爛的。所以把「派沒背景的 agent 去看」變成每週自動的事:站得住自動蓋章,站不住把
+> 修正建議放進待放行匣等人。機器修筆記有三道韁繩(修者不自驗、乾淨複審、範圍刀);蓋的章寫明是 agent 看過。(v1「機器不改筆記」已被 d1 取代)
+
+## 症狀(會翻紅的指令)
+
+```
+python3 scripts/lumos gov --nags 14 --since 120
+```
+2026-08-24 前:兩組 44/40 天空轉(546/499 次)。本案成功=同款空轉結構性不再累積(≥14 天即有審計紀錄)。
+佐證:2026-08-24 手動派審 2/2 站不住(governance/review-reports/self-audit/ 兩份報告,12 處漂移——r1 紀錄宣稱此數已修,實際漏了本行,v5-r2 s2f2 抓到:宣稱已修要 grep 驗)。
+
+## 設計(v5;r3 上限輪 33 條折入後版)
+
+**架構**:全邏輯在 `governance/autonomous_loop/selfaudit.py`;loop 每日進場呼叫(傳 `--quota 2`;關=改呼叫行,可 commit 的開關)。
+★隔離容器統一=探針沙盒(make_sandbox,三層拆彈)★——worktree 全退場(r3 arch 實測:worktree 共用主樹 .git,
+remote/hooks 都在,帶 Bash agent 進去=沙盒事故前狀態;且審計沙盒 rsync 現況、修復 worktree 從 HEAD=兩邊看不同版,
+Codex r3 抓到的版本歪斜由統一容器消解)。★make_sandbox 的清理 bug(未定義變數,週週 NameError 被吞、/tmp 漏 41 個沙盒)
+已於 2026-08-24 修+清——先例修好才引用(r3 s2 實測抓到)★。
+
+1. **選目標**:前置重構抽純函式 `_self_audit_lists(notes) -> (missing: [rel], stale: [(rel, sa_date, upd)])`
+   (不碰 gov_events;doctor 端重建落帳與顯示,測試①含落帳回歸)。
+   ★CLI 出口改掛 query 家族★:`lumos query --self-audit-due --json`(query 無 positional、旗標切模式合形)。
+   ★接線三刀(v5-r1 arch f3/s2f7/s3f2/Codex 提示)★:①「至少一個篩選條件」守衛的判準要把新旗標算進去
+   ②與守衛判準的既有五旗標(--tag/--no-tag/--active/--contract/--linked——照 cmd_query 現行 guard 逐字;v5-r2 s1f4 抓原清單抄錯:漏 --no-tag、誤列 --include-superseded)併用=rc2 擋下(語意不同不硬融);--include-superseded 是顯示層開關非篩選,與 --self-audit-due 併用也 rc2(本模式自帶「跳過作廢」,放寬顯示與其矛盾)
+   ③輸出=既有投影★超集★:保留 node/status/tags 三欄、加 stem/repo_rel/self_audit_state——舊消費者照樣找得到自己的鍵(★超集只動 --self-audit-due 模式,其他旗標組合的輸出一位元組不動,v5-r2 s3f10★)。
+   檔名用 stem(依賴 Check G 全庫 stem 唯一硬閘);CLI 用 rel;範圍刀用 repo_rel。
+2. **派工(審計/修復/複審同容器)**:每輪 `make_sandbox(repo)` 建沙盒(rsync 現況+commit=派工快照;三層拆彈);
+   ★審計脈絡隔離改在 rsync 階段排除,不是建好後才刪(v5-r2 三席 blocker:s1f1/s3f1/Codex#1 附可跑重現——
+   快照 commit 之後才刪,583 個被追蹤的檔全變成未提交刪除,範圍刀每次必判越界,修復鏈名存實亡)★:
+   make_sandbox 加排除清單參數,rsync 就不抄 `governance/review-reports/`、`governance/pending/`、
+   `governance/l4-audit/`、`docs/.governance-log.jsonl`、`docs/.canary-log.jsonl`(=治理帳+審計產物整組;列舉入測試);
+   快照 commit 把「不存在」收進基線,範圍刀不需另設白名單;pending/ 在 gitignore 但 rsync 照抄實體檔——
+   排除層放 rsync 正好連這個也蓋掉(v5-r2 s3f6)。agent 在沙盒跑 lumos 對缺帳全部安靜降級
+   (讀有 exists 守衛、寫是 append 自建檔;v5-r2 s1 逐讀取點驗過,隔離不弄炸工具)。
+   ★清單維護註記(v5-r2 arch#2):repo 已有兩份簿記清單(scripts/lumos 的 _BOOKKEEPING_FILES 與 _COCHANGE_DEFAULT_EXCLUDE),
+   本清單用途不同(脈絡隔離非掃描豁免)、成員不同,不硬併;selfaudit.py 內單一定義+註解互指,防第四份漂移★;
+   審計/複審 agent `--allowedTools "Read,Grep,Glob,Bash"`——★誠實邊界(v5-r1 Codex f1)★:沙盒保證的是
+   ★主樹檔案零風險★;對外面(agent 可重加 remote、--no-verify、主機憑證都在)守不住機械——這與 orchestrator
+   每日跑的天花板完全相同(agent 本需 API 憑證),非本案新增;緩解=prompt 明禁對外+報告全文留檔抽查,
+   殘餘寫進例外註解重驗條件;修 agent 加 Edit;
+   報告由 selfaudit.py 落盤主樹;認證 env 照 orchestrator;`subprocess.run(timeout=900)`;
+   派工實作=同 repo python import `scenario_probe.make_sandbox`(模組內互 import 既有慣例;s2f3 說清楚)。
+   ★函式切縫(v5-r2 s3f7 blocker:只點名 _self_audit_lists 的話,測試⑤「派工後改主樹」的 fixture 組不出來)★:
+   selfaudit.py 至少拆 `snapshot_sha(path)`/`dispatch_note(note, runner)`/`apply_write_fence(path, expected_sha, new_text)→ok|stale`/
+   `run_week(...)` 四個可獨立呼叫的縫,runner 可注入。
+3. **VERDICT**:同 v4(報告檔尾行嚴格正則;is_error 判正常結束;fail-closed)。
+4. **處置(d1/d2)**:
+   - ★回寫柵欄=鐵則:任何主樹寫入前必過★(v5-r1 s1f2/Codex f2:原版只掛 FAIL 鏈,PASS 蓋章一樣會給
+     派工後被改的內容發假認證)。★快照 sha 定形(v5-r1 s1f1)★:selfaudit.py 派工那一刻對主樹該篇
+     `hashlib.sha256(path.read_bytes())` 整檔計算並持有;柵欄比對=同函式同演算法,兩邊永遠同空間。
+     ★粒度是刻意的(v5-r2 arch#1):既有 note_body_hash 特地排除 frontmatter(它答「about 宣稱對正文還成立嗎」);
+     柵欄答「派工期間有沒有任何人動過這篇」,frontmatter 改動(如 lumos set 改狀態)也算,所以用整檔——
+     同類先例存在但問題不同,刻意不沿用★。
+   - PASS → 柵欄過 → 蓋章 `auto-<model>` +commit(★git add 只列該篇 pathspec,絕不 add -A——
+     [[Issues/同工作區多session並行改動]] 的「提交夾帶」實例,v5-r1 s1f4★;單行訊息含三 model,本案自定測試釘)。
+   - FAIL → 修復鏈(全程沙盒):修 agent 修該篇 → 範圍刀=`git -C <sandbox> diff --name-only`(相對沙盒 repo 根,
+     與 repo_rel 同空間嚴格相等)→ 複審(同沙盒,結構性無報告)→ 複審 PASS → ★回寫柵欄★:
+     ★copy 回主樹前比對「主樹該篇現況 sha256 == 派工快照 sha」——不等=主樹已變,放棄回寫、落 pending(第五結局
+     「audit-stale」),不靜默覆蓋——殘窗見下方 TOCTOU 誠實段(v5-r2 s2f3:絕對化原句與誠實段打架,就地改)★(r3 s1f5/Codex f1 blocker;引 [[Issues/同工作區多session並行改動]]:
+     同日三次事件、兩次實害的開放事故,本案是第一個帶回寫的自動化,柵欄是對它的機械回應)→ 柵欄過=copy+蓋章+commit(★pathspec 規則同 PASS:git add 只列該篇,絕不 add -A——FAIL 鏈搬的內容更多、夾帶風險更高;v5-r2 s1f5 抓到規則只掛 PASS★)。
+   - 複審 FAIL / 範圍刀越界 → 記週帳(kind 分 fail/abort)+落 `pending/selfaudit/<日期>-<stem>.md`;柵欄擋下只記週帳 kind=stale、★不落 pending★(v5-r2 s2f4:原句三結局全落 pending,與三行後的分流打架,以分流為準;越界歸「修復鏈失敗」的授權見 d4)
+     ★結局分流(v5-r1 s1f3:d1「兩輪」授權只蓋「修復鏈失敗」)★:複審 FAIL 與範圍刀越界=修復鏈失敗
+     →落 pending+不再自動重試;★柵欄擋下(stale)=時序巧合非失敗→不落 pending、不鎖,記週帳後重新排隊
+     (主樹變了=新內容,下輪照常入選)★。
+   - 跳過判定=pending/selfaudit/ 未歸檔檔案(可逆,d2)。
+   - ★週帳 `governance/selfaudit-week.jsonl`★:`{"week","stem","kind","ts"}`,week=ISO 週鍵 `%G-W%V`(v5-r2 s3f9),
+     kind∈★started★/done/fail/abort/stale/★orphan★/nag——★派工前先 append kind=started(耐久預約,v5-r1 Codex f4:
+     程序中斷在終局列前,下次不重複消耗配額)★;PASS 記 done(v5-r1 s3f1:原版五種 kind 沒一種給 PASS,配額空轉);
+     ★有 started 無終局=下次進場補記 kind=orphan(v5-r2 s1f6/s3f5:與越界的 abort 分家——orphan=行程被殺,與筆記無關,
+     不落 pending、本週不重派、下週照常入選;abort=修復鏈真的出事,落 pending 停自動重試)★;
+     ★配額=quota−(本週 started 行數−其中終局為 stale 的行數)(v5-r2 s1f2/Codex#2 附重現:stale 是時序巧合,
+     預約不釋放的話同一篇撞兩次柵欄就吃光整週名額,退化成另一種「沒人看」)★;nag 不佔額;喊人每檔每週一次;
+     ★選序固定(v5-r2 s3f4):先過 pending 濾網→取 flock→讀配額→append started→放鎖→才派工——pending 該擋的不浪費預約★;
+     ★flock 只鎖「讀配額→append started」與終局 append 兩小段,不抱著跑派工(v5-r2 三席 s1f3/s3f2/Codex#3:
+     原寫法整段持鎖最壞約 90 分鐘,第二個進場的 loop 會掛死);鎖模式照 repo 唯一先例 `_goldset_lock`(refresh_labels.py):
+     LOCK_EX|LOCK_NB 快速失敗,搶不到=本輪跳過 selfaudit 段、印一行(v5-r2 arch#3 抓先例未引);
+     耐久預約已提供跨程序「已佔用」信號,窄鎖不開回雙派工的洞★;
+     壞行=跳過+警告、但計入已用額(讀 fail-open 慣例+計額保守,v5-r1 s2f10)。
+     ★PRIOR-ART 誠實(v5-r2 arch#4):started 預約是三本既有事件帳(governance-log/canary-log/ci-log)都沒有的新形狀
+     (它們全是事後記一行),本案自創,非沿用慣例★。
+   - ★TOCTOU 殘窗誠實(v5-r1 s1f5/Codex f3)★:柵欄比對→copy→蓋章→commit 在同一函式毫秒級連續執行,
+     「絕不靜默覆蓋」修正為「殘窗=毫秒級,極小機率併發改動仍可能被蓋,git 史可回溯」;
+     重驗條件:月報柵欄擋下(stale)次數>0 → 檢視殘窗是否需要升級(如 flock 主樹檔)。
+5. **成本**:同 v4(log 白話一行+canary record tokens/分鐘;美元重驗=log grep)。測試⑥用★注入假 runner★
+   (monkeypatch subprocess 層,不真派 agent,s2f9);真派留首跑,記 DRYRUN-OBSERVE。
+6. **執行模式白名單(d1)**:寫入清單加「回寫柵欄通過的那一篇」;例外註解帶重驗條件(同 v4)。
+7. **doctor 文案**:同 v4。
+8. **觀測條款**:同 v4(首月抽查;誤放→quota 0 關自動)。
+## 不做什麼(邊界)
+
+- 自動修僅限被審那篇筆記正文/frontmatter(範圍刀機械擋);不動 code、不動其他筆記;不動 Check S 本身;不碰 design/code-loop;不審 Systems 以外 type(Check S 口徑);★Landmark repo 不在本案(30 篇 system 另議)★。
+- 不新增評測尺——成功看 nags 清單與 pending 產出,兩者都既有。
+
+## 連動(s3 r1)
+
+- `Systems/autonomous-iteration-loop` 筆記加本機制一節;doctor Check S 文案改(§7);DRYRUN-OBSERVE.md 記首輪實跑;
+  backlog「腐化偵測延遲」條標 covered;★Landmark repo 不在本案★(邊界節已留句);
+  pending 檔處置=歸檔到 `pending/archive/`(既有慣例),v1「可直接刪」作廢;PASS/FAIL 記 governance-log 事件(gate=selfaudit)。
+
+★連動補註(v5-r1 s3f7)★:回寫柵欄只是對 [[Issues/同工作區多session並行改動]] 的★部分機械回應★
+(蓋的是「本機制的回寫」這一面;該 Issue 的全域問題與重驗條件不因此清空,落地後回該 Issue 補一行「selfaudit 面已有柵欄」)。
+
+## PRIOR-ART
+
+`PRIOR-ART: borrow-design`——派工/LINE 抄 run_nags/run_probe;★沙盒=`scenario_probe.make_sandbox`(=審計/修復/複審統一容器;[[Issues/探針沙盒能推到真遠端]] 的重驗條件屬探針題射程,★本案只迴避不兌現★——v5-r1 三席糾正「兌現」措辭)★;週帳=append-only jsonl(判別鍵照 governance-log 的 gate+kind 慣例——v5-r1 arch:原引 covered.jsonl 不同形);判定同源 Check S(不另立);
+「agent 審+人放行修正」= design-loop 收貨模式的單席簡化。零新依賴。
+
+## 測試(草)
+
+(全部走 `test_autonomous_loop.py` 直接 import selfaudit.py;CLI 出口走 subprocess;派工層注入假 runner)
+①`_self_audit_lists` 同集+doctor --ci 落帳回歸 ②`query --self-audit-due --json`:投影超集(node/status/tags+新欄)/PR 序/與 doctor 同集/★與既有旗標併用 rc2(逐一含 --no-tag、--include-superseded;v5-r2 s1f4)★/★單獨用時過「至少一篩選」守衛★/★既有旗標組合輸出零變動★
+③選目標:配額公式含 stale 釋放(★同 stem 兩次 stale 後照樣入選、名額不被吃,v5-r2 s1f2★)、nag 不佔額、★pending 濾網在預約之前★、兩篇完成同週選零;★started 無終局=補記 orphan、本週不重派、不落 pending★;★flock:兩進場用兩個行程/兩個 open 控柄模擬(v5-r2 s3f3:同控柄 flock 不自阻,照抄會測了個寂寞;樣板照 t_refresh_atomic_and_lock),後到者快速失敗不超額★
+④VERDICT 文法全 fail-closed ⑤PASS→柵欄過→戳 auto-<model>+commit(單行格式釘;★另造主樹派工後被改場景→PASS 也擋下、kind=stale★;★commit 只含該篇 pathspec——主樹另有 dirty 檔不被夾帶★)⑥FAIL 鏈(假 runner):修→複審 PASS→柵欄過→copy+戳+commit(★commit 同樣只含該篇 pathspec,v5-r2 s1f5★)
+⑦★回寫柵欄:派工後主樹該篇被改→放棄回寫、記週帳 kind=stale、★不落 pending★、重新排隊,主樹改動原封不動(v5-r2 s2f4 改齊分流)★ ⑧範圍刀:沙盒 diff 越界→abort+pending、主樹無變化;★快照基線不含審計脈絡→乾淨修復時 diff 恰為單篇(rsync 排除層的回歸,v5-r2 三席 blocker)★
+⑨gap_select 不連坐 ⑩週帳:中斷補殘、喊人每檔每週一次、壞行 fail-closed ⑪成本落帳 ⑫沙盒清理:★逐結局分支(PASS/FAIL/stale/越界/例外/timeout)各斷言父目錄不殘留★(v5-r2 s3f8;41 個殘留沙盒的回歸)
+⑬翻紅釘:柵欄拿掉→⑦紅;範圍刀拿掉→⑧紅;fail-closed 反轉→④紅。
+
+## 實務隱患
+
+- **守衛面**:自動蓋章會不會洗掉真問題?→ PASS 才蓋,prompt 是「找站不住」框架(2/2 抓到證明有牙);auto- 前綴留追溯。
+  ★自動修會不會把筆記改壞?★→ 三層:修者不自驗(乾淨複審)、範圍刀(只准動該篇,diff 越界作廢)、lint 必綠;
+  最壞情況=修錯但複審也漏 → 筆記錯法換一種,但有 git 史+commit 訊息三 model 署名可回溯,且下輪 Check S 過期會再抓。
+  人工閘的對照組不是「零錯」——是 44 天沒人看(實證):自動鏈的錯誤率要跟「根本沒人處理」比,不是跟完美比。
+- **成本**:N=2/週×~2 美金,月 ~16 美金,可忽略;timeout 護欄。
+- **回滾**:N=0 寫死值改 0 即整段關;pending 檔歸檔 pending/archive/(既有慣例;v1「可直接刪」作廢)。
+- **併發**:selfaudit 彼此循序無搶寫;★與主樹其他寫入者(人/其他 session)的共享面=回寫那一刻★——回寫柵欄機械擋(見 §4;[[Issues/同工作區多session並行改動]] 是實證背景),不再宣稱「無共享寫」。
+
+## 審計修正紀錄
+
+### r1(2026-08-24;s1/s2/s3 + arch + Codex 五席,審 v2)
+s1 7(3 blocker)/ s2 10(3 blocker)/ s3 10(1 blocker)/ arch 5(1 major)+3⚠ / Codex ★9★(1 blocker+8 major;r1 帳誤記 6——r2 s3f1 抓到,同款計數錯第三犯,帳只追加、以此為準)。全折、零放行,v3 重寫設計節:
+**A 判定 import 不可行**(五席同抓:Check S 在 950 行閉包內)→ 前置重構抽 `_self_audit_lists` 頂層函式+翻紅釘;
+**B pending 連坐凍結自主 loop**(s1/s2/s3 三席 blocker:pending_exists glob 任何 .md 就停選 gap——38 天病灶的新觸發源)→ 子目錄+不連坐測試+自帶喊人;
+**C 執行模式無合法路徑**(Codex blocker:loop 鎖 dry-run、PASS 要寫檔)→ 白名單例外授權=d1 人裁,範圍刀機械驗,不解整體禁令;
+**D bash 不可測+timeout 無落地**(s2 f2 blocker+f9 major:macOS 無 timeout、claude -p 無旗標、母版零測試)→ 全邏輯進 python 模組;
+**E 語意偷換**(s1f4 blocker:doctor 說「人確認」、-auto 是 agent)→ 文案改「人或乾淨 agent」+安全論證訂正;
+**F 工具面未定**(arch major/s2f3:照 orchestrator 模板抄會把 Edit 給唯讀審計員,confused-deputy 裁定在同檔沒被引用)→ 審/複審唯讀、修 agent 才有 Edit;
+**G VERDICT 文法與真相源**(Codex f3/s2f6)→ 報告檔尾行嚴格正則;**H 重派抑制**(s2f5/s1f6)→ skip 檔照 covered.jsonl;
+**I 成本落帳**(s2f4)、**J per-篇週戳**(s2f10)、**K 立案宣稱錯**(s3f4:「loop 兩次啃不動」不實,改 44 天實證)、
+auto/ 前綴(arch)、knob 改寫死(arch)、認證 env 兩行(s2f3)、連動清單(s3 七項)、mkdir(s2f8)。
+★教訓:v1「全現成零件拼裝」的自評,被五席拆出 38 條(7+10+10+5+9 逐份數;初記 31 同款抄摘要錯)——「拼裝」最大的坑不在零件在接縫(pending 連坐/dry-run 合約/閉包 import),
+拼之前要把每個零件的「隔壁是誰」看一遍。★
+
+### r2(2026-08-24;s1/s2/s3 + arch + Codex,審 v3)
+逐檔數:s1 7(2 blocker)/ s2 8(3 blocker)/ s3 9(0 blocker 5 major)/ arch 6+1⚠(2 major)/ Codex 7(3 blocker+4 major;初記 4 blocker——r3 s3f1 抓到第四犯:總數 grep 了、嚴重度沒 grep)=37 條。全折、零放行,v4 重寫設計節:
+**A Env 跨層 import 治理模組第一例**(arch)→ CLI 唯讀出口 `--candidates --json`,subprocess 慣例歸位;
+**B 唯讀工具面自相矛盾**(Codex f1 寫不了報告+s2f7 砍掉實測手段)→ 報告由 wrapper 落盤;審計/複審進探針式沙盒,Bash 解禁而主樹零風險;
+**C 範圍刀砍不回+路徑空間錯位**(Codex f2+s2f2)→ 修復進 worktree,刀驗 worktree diff、repo_rel 同空間,越界=丟 worktree;
+**D 複審隔離只是嘴上**(s1f2)→ 複審同 worktree(HEAD 建,結構性看不到報告);
+**E 配額與週戳**(Codex f4 每日跑會 14 篇/週+s2f6 無 schema+s1f6/s2f5 SLA 10 天)→ 週帳 jsonl 定形、每日進場補殘、喊人每檔每週一次;
+**F 抽函式切口**(s1f3/s2f1/Codex f3 gov_events+形狀互斥)→ 純函式回原始元組、落帳留 doctor、測試①加落帳回歸;
+**G d1「連續兩輪」語意**(s1f1)→ 講死=審+複審;skip jsonl 刪除,pending 檔存在即跳過(可逆,arch ⚠ 消解);
+**H auto/ 斜線破文法**(arch/s2f8)→ auto- 連字號;pending 檔名用 stem(s2f3);mkdir(s2f4);成本重驗=log grep(Codex f7);
+**I r1 漏折補**(s1f4:Codex r1 f9「2/2 撐不起誤放率」)→ 觀測條款首月抽查;例外註解帶重驗條件(arch);三 model 署名走 trailer(arch);
+s3 九條(帳面/殘句)已於輪中先折。★教訓:v3 的「隔離」「範圍刀」都是宣稱層——r2 全部換成結構層(沙盒/worktree/同空間比對),
+「寫著安全」和「構造上安全」的差距就是這 37 條。★
+
+### r3(2026-08-24;上限輪,審 v4)
+逐檔數(嚴重度亦逐檔對總表):s1 6(1 blocker)/ s2 9(1 blocker)/ s3 5(0 blocker)/ arch 5+1⚠(4 major)/ Codex 8(1 blocker)=33。
+★達上限未收斂★。全折,v5 重寫設計節:
+**A worktree 死刑**(arch 實測:共用主樹 .git,remote/hooks 都在,帶 Bash agent=沙盒事故前狀態;Codex:審計沙盒現況 vs 修復 worktree HEAD=版本歪斜)→ 容器統一探針沙盒,worktree 退場(arch ⚠ 雙軌並用一併消解);
+**B 回寫柵欄**(s1f5/Codex f1 blocker:copy 回主樹靜默蓋掉派工期間人的改動;[[Issues/同工作區多session並行改動]] 同日三實害開放事故沒被引用)→ copy 前比對主樹雜湊,變了=audit-stale 落 pending,絕不靜默覆蓋;併發宣稱改寫;
+**C 先例本身是壞的**(s2 實測:make_sandbox 清理 NameError 週週被吞、/tmp 漏 41 個沙盒)→ ★當場修+清,先例修好才引用★;
+**D 死碼先例聲稱**(s2f6/arch:「照既有自動 commit 格式」引的是 07-29 停用死碼)→ 刪聲稱,格式本案自定測試釘;PASS 分支補 commit(s1f3);
+**E CLI 出口換家族**(s1f1/s2f1 argparse 撞必填 node;arch:同名多動作僅兩慣例都不合)→ `lumos query --self-audit-due --json`;
+**F 週帳判別鍵**(arch/s1f6:混形狀無判別、nag 吃配額)→ kind 欄+配額只數真派工;越界結局定義(s1f4);
+**G 測試⑥假 runner**(s2f9)、stem 依賴 Check G 引用(s2f5)、標題殘留(s1f2)、import 說清楚(s2f3)、
+s3 五條(帳面第四犯→記憶再鎖緊「嚴重度也要 grep」、auto/ 殘兩處、d2 澄清決策、PRIOR-ART 補沙盒/worktree/事故筆記、沙盒 Issue 重驗條件兌現)。放行:無。
+★三輪走勢:r1 打接縫(pending 連坐/import/語意偷換)、r2 打宣稱層安全(換結構層)、r3 打結構層的先例本身(worktree 不隔離/沙盒有 bug/死碼引用)——
+每一輪都在「我以為有先例」的地方翻車;v5 的新決定(容器統一+回寫柵欄)★沒有任何審查員看過★。★
+
+### v5-r1(2026-08-24;新編號 selfaudit-loop-v5,人裁甲後;五席審 v5 delta)
+逐檔數(嚴重度對總表):s1 5(2 blocker)/ s2 10(4 blocker)/ s3 8(0 blocker)/ arch 6(3 major,其中 1 條標 ⚠;v5-r2 s2f1 訂記法:無排除項不寫 +1)/ Codex 4(3 blocker)=33。全折、零放行,v6:
+**A 柵欄升鐵則**(s1f2/Codex f2:PASS 蓋章一樣撞主樹漂移=發假認證)→ 任何主樹寫入前必過;快照 sha 定形(s1f1:誰/何時/sha256 整檔,兩邊同函式);
+**B TOCTOU 誠實**(s1f5/Codex f3)→ 殘窗毫秒級明寫+月報重驗條件;**C 結局分流**(s1f3:柵欄擋下=時序巧合,不鎖、重新排隊;越界=修復鏈失敗,落 pending);
+**D commit 夾帶**(s1f4)→ pathspec 明列絕不 add -A;**E 週帳 started 預約**(Codex f4:中斷不重耗配額)+PASS 記 done(s3f1:五種 kind 沒一種給 PASS)+flock(s2f9);
+**F 沙盒洩漏清單擴**(s2f2/f3:l4-audit 以筆記名命名的舊審計檔+治理帳)→ 治理帳+審計產物整組刪;
+**G 網路天花板誠實**(Codex f1/s2f4:agent 可重加 remote+--no-verify,憑證都在)→「主樹零風險」限定於檔案面,對外=與 orchestrator 同天花板明寫;
+**H「重驗條件由本案兌現」撤回**(arch f6/s2f4/s3f4:迴避≠驗證);**I query 三刀**(arch f3/s2f7/s3f2:守衛判準/旗標互斥/投影超集);
+PRIOR-ART worktree 殘句刪(三席)、covered→governance-log 引用(arch f4)、「三次實害」與「11 處」數字修(arch f5/s3f5/f6)、
+DEP 補交付物(s3f8)、連動補部分回應註記(s3f7)、清理自寫逐分支(s2f8)、dry-run 呼叫位置(s2f5)、壞行語意(s2f10)。
+★本輪正面訊號:回寫柵欄被架構席驗出與 about_code 雜湊守衛同構、r3 帳五席條數首次全對——四犯後的規矩生效。★
+
+### v5-r2(2026-08-24;五席審 v6 delta)
+逐檔數(嚴重度對總表):s1 6(1 blocker)/ s2 6(1 blocker)/ s3 10(2 blocker)/ arch 4(0 blocker 4 major)/ Codex 3(1 blocker)=29。全折、零放行,v7:
+**A 排除層取代事後刪**(s1f1/s3f1/Codex#1 三席 blocker,附可跑重現:快照 commit 後才刪 583 個被追蹤檔=範圍刀每次必判越界,
+自動修復鏈名存實亡——r1 抓沙盒洩漏、抓範圍刀空間的席各看一半,這輪才有人追完因果線)→ 隔離改在 rsync 排除+快照基線收進「不存在」,
+順帶蓋掉 gitignore 下 pending 實體檔被抄(s3f6)、三清單漂移註記(arch#2);
+**B stale 釋放預約**(s1f2/Codex#2):配額扣 started 減 stale 終局,時序巧合不吃名額;
+**C 窄鎖**(s1f3/s3f2/Codex#3):flock 只鎖預約與終局兩小段,LOCK_EX|LOCK_NB 照 _goldset_lock 先例(arch#3),原整段持鎖最壞 90 分鐘會掛死第二進場;
+**D orphan/abort 分家**(s1f6/s3f5):行程被殺≠修復鏈出事,補記 kind=orphan 不落 pending;
+**E 旗標清單抄錯**(s1f4):守衛五旗標漏 --no-tag 誤列 --include-superseded,照 cmd_query 逐字修+兩旗標各自 rc2;
+**F pathspec 補掛 FAIL 分支**(s1f5):風險更高的分支原本沒這條安全線;**G 切縫**(s3f7 blocker):四函式縫入 spec,測試⑤才組得出來;
+**H 選序固定**(s3f4)+flock 測試防同控柄自阻(s3f3)+⑫逐分支(s3f8)+週鍵定形(s3f9)+超集限新模式(s3f10);
+**I 矛盾殘句三處**(s2f2/f3/f4):11 處/絕不靜默覆蓋/三結局全落 pending——★r1 紀錄宣稱「數字已修」但漏了症狀節,「宣稱已修要 grep 驗」再犯一例★;
+**J 越界授權補決策 d4**(s2f5:d1/d2 只蓋「兩輪皆敗」,越界在複審前就中止,散文擴權→立 d4 明記)+帳面記法兩處(s2f1/f6)+柵欄粒度理由補寫(arch#1)+started 新形狀誠實標註(arch#4)。
+撈回紀錄:s2#6 引句過短、s3#4 引句省略拼接——兩條主張均 grep 機械驗實後撈回(quote-check 不採信+人工重現,照收貨紀律)。
+★走勢:r1 打「新決定沒人看過」,r2 打「折入彼此打架」——五席裡三席獨立撞上同一顆 blocker(排除時機),
+說明 delta 審的價值在「兩個各自合理的折入撞在一起」這種單席視角看不見的洞。★
+
+## 下一步
+
+v5-r3(最後一輪):審 v7 delta(rsync 排除層/stale 釋放配額/窄鎖+NB/orphan 分家/切縫/d4)。乾淨即收斂進實作;不乾淨=達上限攤人。
