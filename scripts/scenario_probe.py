@@ -237,7 +237,9 @@ def main():
                 hf.write(json.dumps({"ts": a.ts, "seed": a.seed, "passed": p, "total": n,
                                      "failed": [r["id"] for r in results if not r["passed"]]}, ensure_ascii=False) + "\n")
         if not a.keep:
-            shutil.rmtree(tmp, ignore_errors=True)
+            # r3 s2 實測抓到:原寫 rmtree(tmp) 但 tmp 是 make_sandbox 的區域變數,這裡 NameError、
+            # 被 finally 吞掉——每週漏一個沙盒目錄,/tmp 已積 40 個。work=<tmp>/repo,清父目錄。
+            shutil.rmtree(work.parent, ignore_errors=True)
     return 0 if p == n else 1
 
 
