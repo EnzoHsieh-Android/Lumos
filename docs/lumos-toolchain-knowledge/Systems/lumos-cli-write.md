@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-23
-self_audit: sonnet/2026-08-21
+self_audit: claude-fable/2026-08-24
 tags:
   - type/system
   - status/done
@@ -70,18 +70,19 @@ verified_by:
 
 > 源起:CLI 核心非日報觸發。
 
-## 七個原語(對應 `cmd_*`)
+## 八個原語(對應 `cmd_*`;2026-08-24 自足性審計補回漏列的 remove)
 | 指令 | 結構層 | 做什麼 |
 |---|---|---|
-| `set <node> <key> <value>` | 純量 | 改 `SCALAR_KEYS`(以 scripts/lumos 常數為準,2026-08-21 為 9 鍵);行級手術最小 diff |
-| `append <node> <key> "[[x]]"` | list | 追加 `LIST_KEYS`={verified_by,plan_refs,related,tags};鐵則1 安全格式 + `link_target` dedup |
+| `set <node> <key> <value>` | 純量 | 改 `SCALAR_KEYS`(以 scripts/lumos 常數為準,2026-08-24 為 10 鍵含 about_code_stamp);行級手術最小 diff |
+| `append <node> <key> "[[x]]"` | list | 追加 `LIST_KEYS`(以常數為準,2026-08-24 為 8 項,含 about_code/core_refs/pitfall_when/aliases);鐵則1 安全格式 + `link_target` dedup |
+| `remove <node> <key> [value]` | list/純量 | 逐值拿掉 list 項(清死背書 verified_by/拔 core_refs);不帶 value=整欄拿掉純量(骨架欄 type/status/created 擋);同受 atomic_write_verify 保護 |
 | `self-audit <node> [--model][--date]` | 純量 | 寫 `self_audit: <model>/<date>` 節點級自足性審計戳記(內部即 `set self_audit`) |
 | `decision-add <node> "<content>" --decided DATE [--context][--why]` | 巢狀 | append 一條 ADR 決策(無 `decisions:` 則在 fm 末尾建) |
 | `decision-supersede <node> "<content子字串>" --by "..." [--ended DATE]` | 巢狀 | 把該條決策標 `valid:false` + 補 `superseded_by`/`ended` |
 | `new <type> <name>` | 建檔 | 依 `TEMPLATES`(system/verification/issue/project)建檔 + 印「寫入當下教學」(符號行/合約鏈) |
-| `archive <days> [--apply]` | 移檔 | 滾動歸檔老 Verification(另見 `cmd_archive` 的「活守衛護欄」邏輯) |
+| `archive [--days N] [--apply]` | 移檔 | 滾動歸檔老 Verification(days 是選填旗標預設 180,非位置參數;另見 `cmd_archive` 的「活守衛護欄」邏輯) |
 
-`new`/`archive` 嚴格說是建檔/移檔而非 fm mutation;前五個(set/append/self-audit/decision-add/decision-supersede)才走 `atomic_write_verify`。
+`new`/`archive` 嚴格說是建檔/移檔而非 fm mutation;其餘六個(set/append/remove/self-audit/decision-add/decision-supersede)走 `atomic_write_verify`。
 
 ## T1 寫後自驗 atomic(核心不變式)
 所有 frontmatter mutation 都經 `atomic_write_verify(path, new_lines, key, expected_check)`:
@@ -93,7 +94,7 @@ verified_by:
 `_write_lf` 是 vault 唯一寫入原語:`write_bytes` 強制 UTF-8/LF/no-BOM,平台無關(不靠 text mode、不需 Python 3.10 的 `newline=`)。
 
 ## 格式鐵則由原語結構性保證(不靠人手)
-鐵則完整清單(鐵則2/5 等)在 `CLAUDE.md`;本節點只處理寫入相關鐵則(1/3/4)。
+鐵則完整清單在 `skills/lumos-project-notes/reference.md`(格式鐵則 1-4;CLAUDE.md 的「三條鐵則」是另一套工作紀律,別混——2026-08-24 審計訂正);本節點只處理寫入相關鐵則(1/3/4)。
 
 - **鐵則1(多 wikilink 必 YAML list)**:`append` 天生一項一行寫 list,用 `link_target` 比對 dedup,絕不字串串接多個 `[[]]`。
 - **鐵則3(含「: 」長文引號化)**:`_fmt_decision_value` 對含 `: `/特殊起首字元的值自動加引號;summary 走 block scalar。
@@ -111,4 +112,4 @@ verified_by:
 - 操作表:`lumos-project-notes` skill SKILL.md(寫入原語表 + obsidian fallback 對照)。
 - 鐵則總綱:`CLAUDE.md`(純量/list/decisions 一律走 lumos,別手改 frontmatter)。
 - 實作落點:`scripts/lumos` `cmd_set`/`cmd_append`/`cmd_self_audit`/`cmd_decision_add`/`cmd_decision_supersede`/`cmd_new`/`cmd_archive` + `atomic_write_verify`/`load_raw_for_edit`/`_write_lf`。
-- 回歸測試:`scripts/test_lumos.py` `t_set_*`/`t_append_*`/`t_decision_*`/`t_archive_*`/`t_new_*`。
+- 回歸測試:`scripts/test_lumos.py` `t_set_*`/`t_append_*`/`t_remove_*`/`t_decision_*`/`t_archive_*`/`t_new_*`。

@@ -209,7 +209,8 @@ from autonomous_loop import orchestrator_result
 try: o=json.load(open('$ORCH_OUT'))
 except Exception as e: print('PARSE_FAIL:'+str(e)); sys.exit(0)
 r=orchestrator_result.extract_json(o.get('result',''))
-print(json.dumps(r, ensure_ascii=False) if r else 'NO_JSON')
+# 解析不到時把死因帶出來(2026-08-24 實踩:API 529 過載殺掉整輪,log 只寫 NO_JSON,死因要人工解剖 json 才看得到)
+print(json.dumps(r, ensure_ascii=False) if r else 'NO_JSON:' + ('is_error=' + str(o.get('is_error')) + ' | ' + str(o.get('result',''))[-160:]).replace(chr(10), ' '))
 ")"
 log "orchestrator 回傳:$PARSED"
 
@@ -250,7 +251,7 @@ else
   log "本輪成本:沒抽到——orchestrator 輸出裡沒有成本欄,或形狀變了(看 $ORCH_OUT)"
 fi
 
-case "$PARSED" in PARSE_FAIL*|NO_JSON*|"") log "orchestrator 輸出無法解析,中止(log $ORCH_OUT)"; exit 1;; esac
+case "$PARSED" in PARSE_FAIL*|NO_JSON*|"") log "orchestrator 輸出無法解析,中止——死因看上一行(常見:API 過載=天氣,gap 留在 backlog 下輪自然重抽;log $ORCH_OUT)"; exit 1;; esac
 
 get(){ echo "$PARSED" | python3 -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
 SKIPPED="$(get skipped)"; CONVERGED="$(get converged)"; TOPIC="$(get topic)"; SPEC="$(get spec_path)"
