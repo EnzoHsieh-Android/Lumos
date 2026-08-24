@@ -32,7 +32,7 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—�
      --report <rN-席.md> --snapshot <rN-snapshot.md> --spec <計劃.md> --reviewed <sha256> --scope-lines <行數>
    ```
    每個發現都要有去向(折掉或放行,放行要理由);blocker 只能折不能放行。順手每條標它在修什麼 `--finding-kind <id>=code|spec|process`(程式缺陷 / 被審文件缺陷 / 流程自己要求的文件)——這是「流程自產工作量」唯一的量法。**折了忘記記帳**(帳上沒這輪、但計劃筆記的審計修正紀錄有)→ 人工補記一筆再繼續,不然這輪等於沒發生。
-8. **問閘**:`lumos loop status <編號> --disposal --spec <計劃.md> --repo <根>`。✅ 過 → 出迴圈;⛔ 沒過 → 訊息會講卡在哪一關,回第 1 步。spec 裡還有 `[NEEDS CLARIFICATION]` 視同 blocker。settle 結清模式的迴圈不要用 `loop next`(它認不得 settle 會誤報),直接問 `loop status --settle`。
+8. **問閘**——記帳型態決定問哪個閘(兩閘互斥,問錯會被擋下並指路):單席循序/一輪一筆處置帳 → `lumos loop status <編號> --disposal --spec <計劃.md> --repo <根>`;**多席 panel(每席各記一筆)→ `lumos loop status <編號> --gate --panel --min-seats 3 --spec … --repo …`**(2026-08-06 後的迴圈 K=2 連續兩輪乾淨、第二輪審全量)。✅ 過 → 出迴圈;⛔ 沒過 → 訊息會講卡在哪一關,回第 1 步。spec 裡還有 `[NEEDS CLARIFICATION]` 視同 blocker。settle 結清模式的迴圈不要用 `loop next`(它認不得 settle 會誤報),直接問 `loop status --settle`。
 9. **過了之後**:自問「這份 spec 哪些行為是『改了就壞』級?」列成**合約候選**寫進計劃筆記——候選不等於已標,蓋章仍走 `guard scaffold → bind → audit` 和「不確定不標」鐵則;下游代碼審會驗候選有沒有兌現。
 
 ## 停手與護欄

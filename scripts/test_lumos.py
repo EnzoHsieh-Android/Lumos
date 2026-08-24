@@ -15625,6 +15625,47 @@ def t_loop_status_disposal_gate():
           r4.returncode == 1, f"rc={r4.returncode}\n{r4.stdout[:300]}")
 
 
+def t_loop_status_disposal_panel_routing():
+    """[修 Issues/設計迴圈問閘指令與panel記帳互斥 d1](2026-08-24 指路不代選)
+
+    多席 panel 型記帳(一輪多筆帶處置)丟給 --disposal:照舊 rc2 擋下,
+    但擋下訊息必須指路到 --gate --panel --min-seats(自主迴圈讀指路續跑;
+    此前只擋不指,照 skill 字面走的人第一次必撞後自己猜閘)。
+    翻紅釘:拿掉指路 print → 錨字串斷言翻紅。前置斷言:多席擋下本身成立。"""
+    v = mkvault()
+    d = v / "Projects"
+    spec = d / "rt-spec.md"
+    spec.write_text("# spec\n路由規則甲確實存在於本份文件之中。\n", encoding="utf-8")
+    h = _sha256_of(spec)
+    snap = d / "rt-snap.md"
+    snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
+    rpt = d / "rt-rpt.md"
+    rpt.write_text("[minor] 甲\n引句：「路由規則甲確實存在於本份文件之中。」\n", encoding="utf-8")
+    lid = f"rt-route-{_M1U}"
+    for seat in ("s1", "s2"):
+        run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--auditor", seat,
+            "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+            "--report", str(rpt), "--snapshot", str(snap),
+            "--spec", str(spec), "--reviewed", h, expect_rc=0)
+    r = run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    err = (r.stderr or "") + (r.stdout or "")
+    check("★前置★ 多席帶處置 → disposal rc2 擋下(現場成立)", r.returncode == 2 and "帶了處置結果" in err,
+          f"rc={r.returncode}\n{err[:300]}")
+    check("★擋下訊息指路到 panel 閘(--gate --panel --min-seats)★",
+          "--gate --panel --min-seats" in err and "連續兩輪" in err,
+          f"{err[:400]}")
+    # 單席一筆:不觸發多席擋,也不該印指路(訊息只在撞牆時出現)
+    lid2 = f"rt-single-{_M1U}"
+    run(v, "canary", "record", "caught", "--loop", lid2, "--round", "r1", "--auditor", "s1",
+        "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+        "--report", str(rpt), "--snapshot", str(snap),
+        "--spec", str(spec), "--reviewed", h, expect_rc=0)
+    r2 = run(v, "loop", "status", lid2, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    err2 = (r2.stderr or "") + (r2.stdout or "")
+    check("單席一筆:不印指路(rc0 且無 panel 提示)", r2.returncode == 0 and "--gate --panel --min-seats" not in err2,
+          f"rc={r2.returncode}\n{err2[:300]}")
+
+
 def t_disposal_gate_r1_panel_hardening():
     """[T8 終審 r1 findings 修復](plan:design-loop重設計_實作計畫 T8;loop code-dloop-redesign r1)
 
