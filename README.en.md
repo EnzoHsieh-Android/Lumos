@@ -177,7 +177,7 @@ Enforcement layers, fastest to hardest:
 
 | Layer | Command | Scope |
 |---|---|---|
-| **impact** | `lumos impact --file <file>` (+ PreToolUse hook) | Before editing code: pushes affected graph nodes (direct + indirect) + matched incidents; informational, never blocks |
+| **impact** | `lumos impact --file <file>` (+ PreToolUse hook) | Before editing code: pushes affected graph nodes + matched incidents; pinned seats admit hard contracts (INVARIANT/IRREVERSIBLE) and incidents only — soft RISK-tagged hub notes go to a capped "guard-reference" lane; notes semantically *about* the file (model-prelabeled `about_code`) surface first; informational, never blocks |
 | **lint** | `lumos lint <node>` | One file, no repo scan — predicts what pre-push will reject |
 | **doctor** | `lumos doctor [--ci]` | Whole graph: orphans, broken links, `verified_by` sync, **Check T** (contract→test→audit), **Check R** (reversibility), frontmatter lint |
 | **code-loop** | `lumos code-loop check` | tier=high branch not yet passed adversarial code review → pre-push single-point hard-block |

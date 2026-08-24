@@ -228,8 +228,12 @@ lumos loop capture-counts --finder ... [--from-pitfalls <range>]  # 異質 finde
 lumos fold-check <spec>                               # 抓設計「折入漂移」(鏡像段/值漂移/反向遺漏)
 lumos refcheck <spec> --repo . [--json]              # spec→repo 指涉的機械核對(missing/行號越界)
 lumos impact --file <檔> [--depth N] [--json]        # 反查受影響關聯節點(直/間接)+ 命中事故(pitfall_when)
-lumos impact --file <檔> --ranked [--stdin-payload]  # 融合排序+固定席降噪(已接 PreToolUse hook:窗外 top-8/窗內 incidents-only 快速路)
-lumos impact --diff <base>..HEAD [--json]            # 受影響功能面 manifest(code-loop 審計鏡頭:合約/事故固定席+top-8,advisory 人判)
+lumos impact --file <檔> --ranked [--stdin-payload]  # 融合排序+固定席(已接 PreToolUse hook:窗外 top-8/窗內 incidents-only 快速路)
+                                                     # 2026-08-24 起:間接保送只認硬合約(INVARIANT/IRREVERSIBLE);RISK 軟標記樞紐降入
+                                                     # JSON 頂層 lane「守衛面參考」小節(cap 3;held 噪音 -52%、首屏必看率 4.4x、必看零損失)
+                                                     # about_code 語意欄位命中(該筆記真的在講這支檔)→ 固定席前排+hook 標 ★關於★
+lumos impact --diff <base>..HEAD [--json]            # 受影響功能面 manifest(code-loop 審計鏡頭:合約/事故固定席+top-8;lane 不進 manifest)
+lumos about-code revert|restamp|migrate-stamp        # 語意「關於」欄位維運:整批撤預標 / 人核後重標(正文雜湊三段 stamp)/ 一次性補雜湊
 lumos cochange rules|check [--json]                  # git 史挖共改規則;pre-commit Gate CC 警告漏改夥伴(advisory)
 lumos testmap build [--repo R] [--json]              # 檔案↔測試依賴地圖:三路訊號(naming/content/cochange)挖邊存 .lumos/testmap.json
 lumos testmap affected --diff <range> [--json]       # 依 diff 推薦該跑測試+「無已知測試」裸檔+map 陳舊三訊號提醒(advisory 恆 rc0)

@@ -286,7 +286,8 @@ def output_top3_must(res, lab):
     must_total = sum(1 for v in lab.values() if v == 2)
     if must_total == 0:
         return None
-    top = [x for x in res if not x.get("lane")][:3]   # v4-r2 Codex:lane 是掛「參考」標籤的獨立小節,不算首屏前三
+    _p3, _f3, _ = split_buckets(res)   # 分桶唯一實作(arch:別再自寫排除式)
+    top = (_p3 + _f3)[:3]   # lane 是掛「參考」標籤的獨立小節,不算首屏前三(v4-r2 Codex)
     hit = sum(1 for x in top if lab.get(x["node"], 0) == 2)
     return round(hit / min(3, must_total), 4)
 
@@ -644,7 +645,7 @@ def main():
         args._goldset_rev = _rev
         # per-split 棘輪(pin-denoise-a-v4 #5):全體之外 held 單獨也不准退——
         # 「held 少一筆、train 多一筆,全體不退」的漏洞(Codex r3 f4)由此關上
-        _rat_splits = [args.split] if args.split else ["all", "held"]
+        _rat_splits = [args.split] if args.split else ["all", "train", "held"]   # 三個都上(code-r1 Codex:漏 train=互抵漏洞鏡像)
         _hist_rows = _read_history()
         for _rat_split in _rat_splits:
             _rat_v = next((r["verdict"] for r in reports if r["split"] == _rat_split), None)
@@ -654,8 +655,7 @@ def main():
             if _rat_n is None:
                 continue
             _rat_ok, _rat_msg = must_ratchet(_hist_rows, _rev, _rat_split, _rat_n)
-            _gname = "must-see 不退步(棘輪)" if _rat_split in ("all", args.split) else f"must-see 不退步({_rat_split} 棘輪)"
-            gates[_gname] = _rat_ok
+            gates["must-see 不退步(棘輪)" if _rat_split in ("all", args.split) else f"must-see 不退步({_rat_split} 棘輪)"] = _rat_ok
             if _rat_msg:
                 print(f"  ↳ [{_rat_split}] {_rat_msg}")
             _pn = _rat_v.get("pin_noise")
@@ -679,6 +679,8 @@ def main():
             "held-out 不倒退(lift>0)": f"沒見過的題(搜尋)也沒退步:{_lift_held:+.1f}%(怕的是只在調參題上變好)" if _lift_held is not None else "沒見過的題也沒退步(無資料)",
             "must-see 不退步(棘輪)": "必看的筆記沒有比上次少推(棘輪:只准上不准下;少一篇就紅)",
             "must-see 不退步(held 棘輪)": "沒見過的那一半單獨看,必看也沒少推(防「訓練題多推、生題少推」互抵)",
+            "must-see 不退步(train 棘輪)": "調參那一半單獨看,必看也沒少推(防反向互抵)",
+            "固定席噪音不回漲(train 棘輪)": "調參那一半單獨看,噪音也沒回漲",
             "固定席噪音不回漲(棘輪)": "固定席裡不相干的筆記沒有比上次多(降噪主目標的守門,只准降不准升)",
             "固定席噪音不回漲(held 棘輪)": "沒見過的那一半單獨看,噪音也沒回漲",
         }

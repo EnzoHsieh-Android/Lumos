@@ -1,0 +1,668 @@
+diff --git a/governance/eval/build_goldset.py b/governance/eval/build_goldset.py
+index ebc8226..70cb39b 100644
+--- a/governance/eval/build_goldset.py
++++ b/governance/eval/build_goldset.py
+@@ -149,22 +149,23 @@ def edit_cases(n=20):
+         for l in show.splitlines():
+             if l.startswith("+") and not l.startswith("+++") and len(l) > 8:
+                 hunk = l[1:].strip()[:100]
+                 break
+         cases.append({"file": f, "delta": hunk or "(結構性變更)", "commit": sha[:8]})
+     return cases
+ 
+ 
+ def edit_pool(file, delta):
+     payload = json.dumps({"query": delta, "prospective": {}})
+-    ranked = lum_json("impact", "--file", file, "--ranked", "--top", "8",
+-                      "--stdin-payload", "--json", stdin=payload).get("results", [])
++    _rk = lum_json("impact", "--file", file, "--ranked", "--top", "8",
++                   "--stdin-payload", "--json", stdin=payload)
++    ranked = _rk.get("results", []) + _rk.get("lane", [])   # v4:lane 候選人看得到,要進未來標註池
+     legacy = lum_json("impact", "--file", file, "--json")
+     legacy_nodes = [x["node"] for x in legacy.get("direct", [])[:5]] + \
+                    [x["node"] for x in legacy.get("indirect", [])[:5]]
+     pool = list(dict.fromkeys([x["node"] for x in ranked] + legacy_nodes))[:12]
+     rnd = random.Random(hashlib.sha256((file + SALT).encode()).hexdigest())
+     rnd.shuffle(pool)
+     return pool
+ 
+ 
+ def _run_append(n):
+diff --git a/governance/eval/retrieval_eval.py b/governance/eval/retrieval_eval.py
+index bf2139d..8afc68f 100755
+--- a/governance/eval/retrieval_eval.py
++++ b/governance/eval/retrieval_eval.py
+@@ -127,21 +127,24 @@ def edit_universe(case):
+     if not (Path(base) / case["file"]).exists():
+         return None
+     payload = json.dumps({"query": case.get("delta", ""), "prospective": {}})
+     r = subprocess.run([sys.executable, str(LUMOS),
+                         "impact", "--file", case["file"],
+                         "--repo", os.environ.get("LUMOS_EVAL_REPO") or str(SNAP_ROOT or ROOT),
+                         "--ranked", "--top", os.environ.get("LUMOS_EVAL_IMPACT_TOP", "50"),
+                         "--stdin-payload", "--json"],
+                        capture_output=True, text=True, input=payload, cwd=ROOT)
+     try:
+-        return json.loads(r.stdout.strip().splitlines()[-1]).get("results", [])
++        d = json.loads(r.stdout.strip().splitlines()[-1])
++        # pin-denoise-a-v4:lane 是獨立頂層鍵——合併進候選清單(lane 項保留 "lane" 欄位標記),
++        # 下游一律用明文鍵過濾(split_buckets),不靠 pinned 二分
++        return d.get("results", []) + d.get("lane", [])
+     except (ValueError, IndexError):
+         return None
+ 
+ 
+ # 計分觸及邊界(落地後發現 2026-08-18):全母體口徑實測連原快照都 54% 未標
+ # (399/738;金標只批過出卷小池)→ repin 永不可過。未標判定收斂到「未標了會
+ # 實際影響分數」的位置:search=兩臂各前 10(nDCG@5/MRR/R@10 觸及帶+餘裕)、
+ # edit=free 前 k(P@top_k/nDCG 觸及)+全部固定席(pin_noise=事故指標,不受名額限制)。
+ SEARCH_TOUCH = 10
+ 
+@@ -149,24 +152,35 @@ SEARCH_TOUCH = 10
+ def _touched_search(legacy, ranked):
+     """search 題計分觸及集=兩臂各前 SEARCH_TOUCH,保序去重。"""
+     seen, out = set(), []
+     for n in legacy[:SEARCH_TOUCH] + ranked[:SEARCH_TOUCH]:
+         if n not in seen:
+             seen.add(n)
+             out.append(n)
+     return out
+ 
+ 
++def split_buckets(res):
++    """★三桶分流的唯一實作★(pin-denoise-a-v4 arch:同檔兩種 free 定義=接手的人要猜):
++    pins=pinned 真值;lane=帶 lane 欄位(參考道,不進 P@8 計分、視同 pins 納入未標檢查);
++    free=其餘(★含 rescued——它進 P@8 母體是 2026-08-07 具名護欄「誠實計噪」的刻意設計,勿排★)。"""
++    pins = [x for x in res if x.get("pinned")]
++    lane = [x for x in res if not x.get("pinned") and x.get("lane")]
++    free = [x for x in res if not x.get("pinned") and not x.get("lane")]
++    return pins, free, lane
++
++
+ def _touched_edit(res, k=8):
+-    """edit 題計分觸及集=free 前 k+全部 pins,保序去重。"""
+-    free = [x["node"] for x in res if not x.get("pinned")]
+-    pins = [x["node"] for x in res if x.get("pinned")]
++    """edit 題計分觸及集=free 前 k+全部 pins+全部 lane(lane 視同 pins:人看得到就要標過)。"""
++    _p, _f, _l = split_buckets(res)
++    free = [x["node"] for x in _f]
++    pins = [x["node"] for x in _p] + [x["node"] for x in _l]
+     seen, out = set(), []
+     for n in free[:k] + pins:
+         if n not in seen:
+             seen.add(n)
+             out.append(n)
+     return out
+ 
+ 
+ def ablation_blocked(gs, split=None, k=8):
+     """★消融前置閘(2026-08-22)★ — 回 (blocked: bool, count: int, msg: str)。
+@@ -265,24 +279,44 @@ def pin_snapshot(sha):
+ 
+ def output_top3_must(res, lab):
+     """★成績單乙案(2026-08-24 Enzo 裁):輸出前 3 名的必看命中率★(Projects/固定席扇出降權_計劃 調研節)。
+     量的是「人打開 hook 先看到的三行是不是該看的」——不限固定席(甲案 pin_top3_must 是死表:
+     必看 15/69 坐固定席、事故恆最前,前 3 席組成幾乎不變)。res 順序=impact 輸出順序(pins→free→rescued)。
+     = 前 3 項裡標 2 的個數 / min(3, 該題標 2 總數);沒標 2 → None。只印、進 verdict/history,★不進 gate★。
+     歸因:數字動了要分是 about 還是排序,拿 LUMOS_IMPACT_ABOUT=0 離線對照。"""
+     must_total = sum(1 for v in lab.values() if v == 2)
+     if must_total == 0:
+         return None
+-    hit = sum(1 for x in res[:3] if lab.get(x["node"], 0) == 2)
++    top = [x for x in res if not x.get("lane")][:3]   # v4-r2 Codex:lane 是掛「參考」標籤的獨立小節,不算首屏前三
++    hit = sum(1 for x in top if lab.get(x["node"], 0) == 2)
+     return round(hit / min(3, must_total), 4)
+ 
+ 
++def pin_noise_ratchet(history, rev, split, count):
++    """★固定席噪音棘輪(pin-denoise-a-v4 #4b,2026-08-24 knob 轉正時啟用)★——方向與 must 棘輪相反:只准降不准升。
++    比同 goldset rev 最近一筆 PASS 的 pin_noise;沒基線 → 放行並建基線。回 (ok, msg)。"""
++    base = None
++    for rec in reversed(history):
++        if not rec.get("pass") or rec.get("goldset_rev") != rev:
++            continue
++        v = (rec.get("verdicts") or {}).get(split) or {}   # verdicts={split: verdict}(同 must_ratchet 讀法)
++        if isinstance(v, dict) and v.get("pin_noise") is not None:
++            base = v["pin_noise"]
++            break
++    if base is None:
++        return True, f"噪音棘輪:這版答案(標註版本 {rev[:6]})還沒有基線,這次的 {count} 條當基線,下次不准比它多"
++    if count > base:
++        return False, (f"噪音棘輪擋下:固定席不相干筆記從 {base} 條漲到 {count} 條。"
++                       f"降噪是本案主目標,回漲就是回歸——先查是哪條保送路徑鬆了。")
++    return True, ""
++
++
+ def _macro(rows, key):
+     vals = [r[key] for r in rows if r.get(key) is not None]
+     return round(sum(vals) / len(vals), 4) if vals else None
+ 
+ 
+ def eval_search(gs, split=None, k=5):
+     """search 面:legacy 現行順序 vs ranked BM25F。主指標 nDCG@5;輔 MRR/Recall@10。"""
+     rows = []
+     for case in gs["search"]:
+         if split and case["split"] != split:
+@@ -325,22 +359,21 @@ def eval_edit(gs, split=None, k=8):
+             continue
+         cid = case["id"]
+         lab = _labels_of(gs, cid)
+         if not lab or not any(v >= 1 for v in lab.values()):
+             continue
+         # impact 自行從 --repo 解析 vault(不吃全域 --vault)→ 快照釘定須走 --repo(r1 終審親驗)
+         # 呼叫收斂進 edit_universe(與評測母體同源,標註刷新 T2);None=file-gone/不可解,照舊跳。
+         res = edit_universe(case)
+         if res is None:
+             continue
+-        pins = [x for x in res if x.get("pinned")]
+-        free = [x for x in res if not x.get("pinned")]
++        pins, free, lane_items = split_buckets(res)   # v4:free 不含 lane(P@8 母體);out_nodes 含 lane(下方讀完整 res)
+         row = {"id": cid, "split": case["split"], "n_free": len(free), "n_pin": len(pins)}
+         # edit 面 nDCG 沿用候選集自證 IDCG:三排序共用同一 free 集,相對比較有效;
+         # 絕對值偏高(漏檢不罰),不得跨面引用(r1 panel s4)。
+         orders = {
+             "fusion": sorted(free, key=lambda x: (-x["score"], x["node"])),
+             "bm25": sorted(free, key=lambda x: (-x.get("L", 0.0), x["node"])),
+             "graph": sorted(free, key=lambda x: (-_graph_score(x), x["node"])),
+         }
+ 
+         n_rel_free = sum(1 for x in free if lab.get(x["node"], 0) >= 1)
+@@ -429,20 +462,21 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
+                     (a_n > b_n and a_p >= b_p - 0.02))
+         verdict["fusion_vs_bm25"] = beats(fp, fn, bp, bn)
+         verdict["fusion_vs_graph"] = beats(fp, fn, gp, gn)
+         verdict["free_median_le_topk"] = med is not None and med <= k_edit
+         verdict["free_p95_le_topk2"] = p95 is not None and p95 <= k_edit + 2
+         verdict["must_in_out_recall"] = round(must_hit / must_t, 4) if must_t else None
+         verdict["must_pinned_count"] = must_pin   # 唯一機保=固定席;in_out 含自由席無保底,勿混讀
+         verdict["must_in_out_count"] = must_hit   # ★棘輪比的是個數不是比率★——
+         verdict["must_total"] = must_t            #   比率會被「總數變了」稀釋,個數不會
+         verdict["out_top3_must"] = pt3            # #10 乙案(2026-08-24):只觀測不閘;舊 key pin_top3_must 語意不同不沿用
++        verdict["pin_noise"] = pin_noise          # v4 #4b:進 verdict,棘輪讀它
+     return {"split": tag, "search": srows, "edit": erows, "verdict": verdict}
+ 
+ 
+ def _read_history():
+     """讀 history jsonl → list[dict]。壞行跳過(帳是 append-only,torn 行不該讓評測掛掉)。
+     路徑解析與寫入端同源:LUMOS_EVAL_HISTORY 優先(測試 fixture 帳,不污染真帳)。"""
+     hp = Path(os.environ.get("LUMOS_EVAL_HISTORY")
+               or Path(__file__).parent / "retrieval-eval-history.jsonl")
+     if not hp.exists():
+         return []
+@@ -601,44 +635,59 @@ def main():
+                  "非固定 p95 ≤ top_k+2": v_all.get("free_p95_le_topk2")}
+         if not args.split:
+             v_held = next(r["verdict"] for r in reports if r["split"] == "held")
+             gates["held-out 不倒退(lift>0)"] = (v_held.get("search_lift_pct") or 0) > 0
+         # ★must-see 棘輪(2026-08-22)★:P@8 抓「推了一堆垃圾」,棘輪抓「該推的沒推」——
+         # 兩種壞都要擋,所以★並存不是擇一★。
+         # ☆刻意不換掉 hook P@top_k☆:換掉就是把現在 FAIL 的門檻拿走,動機會被讀成
+         #   「gate 紅了就換尺」。並存才誠實。
+         _rev = goldset_rev(gs)
+         args._goldset_rev = _rev
+-        _rat_split = args.split or "all"
+-        _rat_v = (next((r["verdict"] for r in reports if r["split"] == _rat_split), None)
+-                  or reports[0]["verdict"])
+-        _rat_n = _rat_v.get("must_in_out_count")
+-        if _rat_n is not None:
+-            _hist_rows = _read_history()
++        # per-split 棘輪(pin-denoise-a-v4 #5):全體之外 held 單獨也不准退——
++        # 「held 少一筆、train 多一筆,全體不退」的漏洞(Codex r3 f4)由此關上
++        _rat_splits = [args.split] if args.split else ["all", "held"]
++        _hist_rows = _read_history()
++        for _rat_split in _rat_splits:
++            _rat_v = next((r["verdict"] for r in reports if r["split"] == _rat_split), None)
++            if _rat_v is None:
++                continue
++            _rat_n = _rat_v.get("must_in_out_count")
++            if _rat_n is None:
++                continue
+             _rat_ok, _rat_msg = must_ratchet(_hist_rows, _rev, _rat_split, _rat_n)
+-            gates["must-see 不退步(棘輪)"] = _rat_ok
++            _gname = "must-see 不退步(棘輪)" if _rat_split in ("all", args.split) else f"must-see 不退步({_rat_split} 棘輪)"
++            gates[_gname] = _rat_ok
+             if _rat_msg:
+-                print(f"  ↳ {_rat_msg}")
++                print(f"  ↳ [{_rat_split}] {_rat_msg}")
++            _pn = _rat_v.get("pin_noise")
++            if _pn is not None:
++                _pn_ok, _pn_msg = pin_noise_ratchet(_hist_rows, _rev, _rat_split, _pn)
++                gates["固定席噪音不回漲(棘輪)" if _rat_split in ("all", args.split) else f"固定席噪音不回漲({_rat_split} 棘輪)"] = _pn_ok
++                if _pn_msg:
++                    print(f"  ↳ [{_rat_split}] {_pn_msg}")
+         print(f"=== {len(gates)} 道關卡(全過才算這次改動沒把東西弄壞) ===")
+         ok = all(val is True for val in gates.values())  # fail-closed:無資料(None)不放行
+         _lift_all = v_all.get("search_lift_pct")
+         _lift_held = (next((r["verdict"] for r in reports if r["split"] == "held"), {}) or {}).get("search_lift_pct") if not args.split else None
+         _hp = v_all.get("hook_p")
+         _plain = {   # ★history 的 key 不動(帳本連續),只有印出來的字換白話★
+             "search nDCG@5 提升≥15%": f"搜尋:新排序比舊法好 {_lift_all:+.1f}%(門檻:至少 +15%)" if _lift_all is not None else "搜尋:新排序要比舊法好至少 15%(無資料)",
+             "hook P@top_k ≥0.70": f"推薦:前 8 名裡 {_hp*100:.0f}% 是對的(門檻:至少 70%)" if _hp is not None else "推薦:前 8 名至少 70% 是對的(無資料)",
+             "fusion 勝 BM25-only": "推薦:綜合排序沒輸給「只比文字」(輸了=圖譜那部分是裝飾)",
+             "fusion 勝 graph-only": "推薦:綜合排序沒輸給「只比圖結構」(輸了=文字那部分是裝飾)",
+             "非固定中位 ≤ top_k": f"推薦量:一般題推 {v_all.get('free_median')} 篇,沒超過 {args.k or 8}",
+             "非固定 p95 ≤ top_k+2": f"推薦量:最多的題推 {v_all.get('free_p95')} 篇,沒超過 {(args.k or 8) + 2}",
+-            "held-out 不倒退(lift>0)": f"沒見過的題也沒退步:{_lift_held:+.1f}%(怕的是只在調參題上變好)" if _lift_held is not None else "沒見過的題也沒退步(無資料)",
++            "held-out 不倒退(lift>0)": f"沒見過的題(搜尋)也沒退步:{_lift_held:+.1f}%(怕的是只在調參題上變好)" if _lift_held is not None else "沒見過的題也沒退步(無資料)",
+             "must-see 不退步(棘輪)": "必看的筆記沒有比上次少推(棘輪:只准上不准下;少一篇就紅)",
++            "must-see 不退步(held 棘輪)": "沒見過的那一半單獨看,必看也沒少推(防「訓練題多推、生題少推」互抵)",
++            "固定席噪音不回漲(棘輪)": "固定席裡不相干的筆記沒有比上次多(降噪主目標的守門,只准降不准升)",
++            "固定席噪音不回漲(held 棘輪)": "沒見過的那一半單獨看,噪音也沒回漲",
+         }
+         for name, val in gates.items():
+             mark = "✅" if val else ("❌" if val is False else "–(無資料,照規矩當沒過)")
+             print(f"  {mark} {_plain.get(name, name)}")
+         print(f"gate 總判定: {f'PASS — {len(gates)} 關全過,這次改動可以留' if ok else 'FAIL — 有關卡沒過,上面 ❌ 那條就是要處理的'}")
+         # S4 未標率(評測母體口徑;held 專屬,train 不計)——與 delta/repin 同源 collect_unjudged
+         unj = collect_unjudged(gs, "held")
+         print(f"沒批過答案的候選 unjudged(held 評測母體): {unj['count']}/{unj['denom']}(rate={round(unj['rate'], 4)})"
+               + (f" skipped={unj['skipped']}" if unj["skipped"] else "")
+               + ("    ← 不是 0 的話分數會被「沒批=算錯」拖低,先補標再比" if unj["count"] else "    ← 0 = 分數沒被「沒批=算錯」拖低"))
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index 966e237..476882f 100644
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -354,35 +354,43 @@ def build_ranked_context(data: dict) -> str:
+             mk = {"direct": "直接", "indirect": f"hop{x.get('hop','?')}"}.get(x.get("kind"), "")
+             lines.append(f"  {x.get('score',0):.2f} {mk} {x.get('node','?')}")
+     if rescued:
+         # R1 直連保底(plan:hook必看召回修復):分數不過閾但為僅有的直連節點——信心層級不同於排序席
+         lines.append(f"另外 {len(rescued)} 篇分數不高但直接提到這個檔,一併列出:")
+         for x in rescued:
+             hit = f"/{x['hit']}" if x.get("hit") == "basename-match" else ""
+             lines.append(f"  {x.get('score',0):.2f} 直接{hit} {x.get('node','?')}")
+     if meta.get("truncated"):
+         lines.append(f"  (+{meta['truncated']} 條低分截斷,沒列出來)")
++    # pin-denoise-a-v4:參考道(JSON 獨立頂層鍵;.get 條件鍵慣例——knob=0 時鍵不存在)
++    lane = data.get("lane", [])
++    if lane:
++        lines.append(f"守衛面參考——這 {len(lane)} 篇是軟標記樞紐,跟每支檔都近,未被本次改動直接證實相關:")
++        for x in lane:
++            lines.append(f"  {x.get('score',0):.2f} hop{x.get('hop','?')} {x.get('node','?')}")
++        if meta.get("lane_truncated"):
++            lines.append(f"  (另有 {meta['lane_truncated']} 條守衛面參考未列出)")
+     for stk, qs in (data.get("stack_questions") or {}).items():
+         lines.append(f"[{stk} 效能檢核——動手時順答這幾個問題]")
+         for q in qs:
+             lines.append(f"  - {q}")
+     lines.append("")
+     # 收尾指令只在真的列了節點時附(單 reviewer 終審 minor:僅檢核問題時
+     # 「判上列節點」答非所問,會弱化對提問的聚焦——檢核段標題已自帶指令)
+-    if res:
++    if res or lane:
+         lines.append(_INJECT_INSTRUCTION)
+     return "\n".join(lines)
+ 
+ 
+ def inject_ranked_context(data: dict) -> None:
+-    """ranked 版注入:results 與 stack_questions 皆空 → 不輸出。"""
+-    if not data.get("results") and not data.get("stack_questions"):
++    """ranked 版注入:results/stack_questions/lane 皆空 → 不輸出(lane-only 的題也要注入,v4 Codex f2)。"""
++    if not data.get("results") and not data.get("stack_questions") and not data.get("lane"):
+         return
+     print(json.dumps({"hookSpecificOutput": {
+         "hookEventName": "PreToolUse",
+         "additionalContext": build_ranked_context(data),
+     }}, ensure_ascii=False))
+ 
+ 
+ def inject_additional_context(impact_data: dict) -> None:
+     """非空影響集 → 印 hookSpecificOutput JSON 到 stdout;空集合 → 不輸出。
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index e7f1d3e..d0bc6dc 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -14417,20 +14417,21 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+     incident_node_set = {x["node"] for x in all_incidents}
+     if incident_node_set:
+         all_direct = [x for x in all_direct if x["node"] not in incident_node_set]
+         all_indirect = [x for x in all_indirect if x["node"] not in incident_node_set]
+ 
+     # 8.5 ranked 融合(階段三,spec §3):固定席(事故+含合約 direct+深度內合約 indirect)不占 top_k;
+     # 非固定按 R=0.6L+0.4G 排,過 max(min_score, 0.25×最高非固定分) 閾;姐妹去冗餘於顯示層。
+     if ranked or incidents_only:
+         query = (_payload.get("query") or "") if stdin_payload else ""
+         results = []
++        lane_raw = []   # 參考道原料(--incidents-only 不進 indirect 迴圈也要有定義)
+         # 固定席:事故(kind=incident)恆固定
+         for x in all_incidents:
+             results.append({"node": x["node"], "kind": "incident", "pinned": True,
+                             "score": 1.0, "matched_by": x.get("matched_by"),
+                             "contract": x.get("contract")})
+         gated = False   # 查詢品質閘觸發旗標(未觸發路徑必為 False,防 NameError)
+         if not incidents_only:
+             # query 品質閘(edit面查詢品質閘_計劃 S2):低資訊 query 視同空查詢——
+             # 只覆寫 lex 用局部變數;事故探針 _delta_q 刻意不受閘(安全網寧多勿漏)
+             if query and _impact_query_junk(query):
+@@ -14448,27 +14449,43 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+                     lex[_r] = (s / _mx) if _mx > 0 else 0.0
+             eff_depth = depth if depth is not None else 2
+             _dbase = _impact_knob("LUMOS_IMPACT_DIRECT_BASE", 0.30)
+             for x in all_direct:
+                 L = lex.get(x["node"], 0.0)
+                 pinned = bool(x.get("contract"))   # 含合約的 direct 固定
+                 results.append({"node": x["node"], "kind": "direct", "pinned": pinned,
+                                 "score": round(_dbase + (1.0 - _dbase) * L, 4), "L": round(L, 4),
+                                 "hit": x.get("hit"), "contract": x.get("contract")})
+             _pin_hop = int(_impact_knob("LUMOS_IMPACT_PIN_HOP", 1))
++            # ★pin-denoise-a-v4(2026-08-24,四輪設計審收斂)★:硬合約保送——knob=1 時 indirect 保送只認
++            # INVARIANT/IRREVERSIBLE;RISK·* 類(樞紐筆記搭便車,held 噪音 58/96 的主力)降入「參考道」:
++            # ★獨立容器 lane_raw,自始不進 results★(pinned:False 會被四處「非 pinned=free」分流吃回自由席、
++            # 再被動態門檻砍出輸出——v3 r2 實測);JSON 用獨立頂層鍵 "lane"(決策 d2:沒學過 lane 的讀者
++            # 結構性不受影響,diff 聚合/hook free 桶/守衛全免改)。
++            # ★2026-08-24 考卷轉正預設 1(knob=0 留逃生)★:train LANE_N∈{2,3,5} 不敏感取 3;
++            # 候選臂 held 噪音 82→39(-52%)、out_top3_must 0.083→0.367、must 兩棘輪零退、九關全過。
++            _hard_pin = int(_impact_knob("LUMOS_IMPACT_HARD_PIN", 1))
+             for x in all_indirect:
+                 L = lex.get(x["node"], 0.0)
+                 hop = x.get("hop", 2)
+                 contract = x.get("contract")
+                 # 合約固定席 hop 上限(v1.2 旋鈕):合約密集圖(Landmark 考卷實證)hop2 合約
+                 # 搭便車氾濫(51 席噪音)——收窄後 hop2 合約降入自由席按分數競爭(L≈0 者被閾殺)
+                 if contract and hop <= min(eff_depth, _pin_hop):
++                    if _hard_pin and contract not in ("INVARIANT", "IRREVERSIBLE"):
++                        # RISK·* 降參考道:score 用 indirect 自由席同款 R 公式(常數 0.70 全員同分,
++                        # cap 挑誰會退化成字母序——v3 r3 s1f2);kind 保留 indirect(lane 是欄位不是 kind)
++                        G = 0.60 * min(1.0, 2.0 / (2 ** hop))
++                        lane_raw.append({"node": x["node"], "kind": "indirect", "pinned": False,
++                                         "lane": "soft-guard", "score": round(0.60 * L + 0.40 * G, 4),
++                                         "L": round(L, 4), "hop": hop, "contract": contract})
++                        continue
+                     results.append({"node": x["node"], "kind": "indirect", "pinned": True,
+                                     "score": round(0.40 + 0.30, 4), "L": round(L, 4),
+                                     "hop": hop, "contract": contract})
+                     continue
+                 # hop≥2 需 L>底線(遠端節點要足夠詞彙證據背書)
+                 if hop >= 2 and L <= _impact_knob("LUMOS_IMPACT_LMIN_HOP2", 0.0):
+                     continue
+                 G = 0.60 * min(1.0, 2.0 / (2 ** hop))
+                 R = round(0.60 * L + 0.40 * G, 4)
+                 results.append({"node": x["node"], "kind": "indirect", "pinned": False,
+@@ -14512,45 +14529,64 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+         _need = max(0, _rescue_n - _free_direct)
+         if _rescue_n > 0 and _need > 0:
+             _free_ids = {id(r) for r in free}
+             dropped = [r for r in results
+                        if r["kind"] == "direct" and not r["pinned"] and id(r) not in _free_ids]
+             dropped.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))
+             for r in dropped[:_need]:
+                 rr = dict(r)
+                 rr["rescued"] = True
+                 rescued.append(rr)
++        # 參考道:產生端 cap(三處輸出同一份,口徑合一——被 cap 砍的必看會誠實掉 must_in_out,棘輪有效)
++        lane_items = []
++        _lane_trunc = 0
++        if lane_raw:
++            lane_raw.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))   # 同 free/rescued 三鍵慣例
++            _lane_n = int(_impact_knob("LUMOS_IMPACT_LANE_N", 3))
++            lane_items = lane_raw[:_lane_n]
++            _lane_trunc = len(lane_raw) - len(lane_items)
+         # 姐妹去冗餘(顯示層,--json 全量不折)
+         final = pins + free + rescued
+         meta = {"candidates": len(all_direct) + len(all_indirect) + len(all_incidents),
+                 "pinned": len(pins), "truncated": truncated, "rescued": len(rescued),
+                 "safety_overflow": max(0, len(pins) - int(top))}
++        if lane_raw:
++            meta["lane"] = len(lane_items)
++            meta["lane_truncated"] = _lane_trunc
+         if as_json:
+             out_obj = {"file": rel_file, "results": final, "meta": meta}
++            if lane_items:   # 條件鍵(同 query_gated/stack_questions 慣例):knob=0 或空 → 鍵不存在
++                out_obj["lane"] = lane_items
+             if gated:
+                 out_obj["query_gated"] = True
+             # 棧別效能追問(pitfalls棧別效能追問_計劃 T2):完整 ranked 模式(非 incidents-only
+             # 冷卻快速路)且目標檔命中問題表 → 附該棧檢核問(全表);單源=_STACK_PERF_QUESTIONS,hook 只格式化
+             if not incidents_only and not _PITFALL_DIFF_TEST_PAT.search(rel_file):
+                 _ext = Path(rel_file).suffix.lstrip(".").lower()
+                 if _ext in _STACK_PERF_QUESTIONS:
+                     out_obj["stack_questions"] = {_ext: _STACK_PERF_QUESTIONS[_ext]}
+             print(json.dumps(out_obj, ensure_ascii=False))
+         else:
+             print(f"改動 {rel_file} — 相關 top(固定席 {len(pins)}):")
+             for r in final:
+                 mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{r.get('hop','?')}"}.get(r["kind"], "")
+                 ct = f" ★{r['contract']}★" if r.get("contract") else ""
+                 pin = " [固定]" if r["pinned"] else ""
+                 print(f"  {r['score']:5.2f} {mk} {r['node']}{ct}{pin}")
+             if meta["truncated"]:
+                 print(f"  (+{meta['truncated']} 條低分截斷;--json 全量)")
++            if lane_items:
++                print(f"守衛面參考(軟標記樞紐,未被本次改動直接證實相關,{len(lane_items)} 條):")
++                for r in lane_items:
++                    print(f"  {r.get('score', 0):5.2f} hop{r.get('hop', '?')} {r.get('node', '?')}  ({r.get('contract', '')})")
++                if meta.get("lane_truncated"):
++                    print(f"  (另有 {meta['lane_truncated']} 條守衛面參考未列出)")
+             if meta["safety_overflow"]:
+                 print(f"  safety overflow: {meta['safety_overflow']}")
+         return 0
+ 
+     # 9. 輸出
+     if as_json:
+         print(json.dumps(
+             {"file": rel_file, "direct": all_direct, "indirect": all_indirect,
+              "incidents": all_incidents},
+             ensure_ascii=False,
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 06561fe..2c4312b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -845,20 +845,86 @@ def t_loop_disposal_zero_findings():
+     lp.write_text(orig, encoding="utf-8")
+     check("★findings 壞值 → rc2 擋下、不 traceback★", g4.returncode == 2 and "Traceback" not in g4.stderr and ("壞" in g4.stderr or "手改" in g4.stderr or "格式" in g4.stderr), f"rc={g4.returncode} {g4.stderr[-250:]}")
+     # 反向:有發現卻沒處置帳,仍要 FAIL(不能被空輪分支放水)
+     r2 = run(v, "canary", "record", "none", "--loop", "zf-loop2", "--round", "r1", "--auditor", "s1",
+              "--severity", "major", "--findings", "2", "--report", str(rpt), "--snapshot", str(spec),
+              "--spec", str(spec), "--reviewed", sha, "--scope-lines", "2", "--tier", "standard")
+     g2 = run(v, "loop", "status", "zf-loop2", "--disposal", "--spec", str(spec), "--repo", str(v))
+     check("★有發現沒處置帳 → 照樣 FAIL★", g2.returncode != 0 and "FAIL" in g2.stdout, g2.stdout[-200:])
+ 
+ 
++def _hardpin_fixture(prefix="gctl-hp-"):
++    """pin-denoise-a-v4 fixture:目標檔 src/svc.py;三種 indirect 鄰居(INVARIANT/RISK·守衛面/無合約)
++    +一個 direct 合約+一個事故。indirect 靠「hub 筆記提到檔案、鄰居 wikilink hub」構圖(hop1)。"""
++    import subprocess as sp
++    root = Path(tempfile.mkdtemp(prefix=prefix))
++    def g(*a): sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
++    g("init", "-q"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
++    v = root / "docs" / "z-knowledge"
++    for d in ("Systems", "Issues", "MOC"): (v / d).mkdir(parents=True)
++    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
++    def note(rel, fm, body):
++        (v / rel).write_text("---\n" + fm + "\n---\n" + body, encoding="utf-8")
++    note("Systems/Hub.md", "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ hub [test:X]", "# Hub\n實作在 `src/svc.py`。\n")
++    note("Systems/Inv1.md", "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ inv [test:Y]", "# Inv1\n[[Systems/Hub]]\n")
++    note("Systems/Risk1.md", "type: system\nstatus: done\ntags:\n  - risk/守衛面\nsummary: |-\n  KEY:守衛", "# Risk1\n[[Systems/Hub]]\n")
++    note("Systems/Risk2.md", "type: system\nstatus: done\ntags:\n  - risk/守衛面\nsummary: |-\n  KEY:守衛二", "# Risk2\n[[Systems/Hub]]\n")
++    note("Systems/Plain.md", "type: system\nstatus: done\nsummary: |-\n  KEY:普通", "# Plain\n[[Systems/Hub]]\n")
++    note("Issues/事故.md", "type: issue\nstatus: open\npitfall_when:\n  - \"content:DANGER\"\nsummary: |-\n  FLAG:TECHNICAL", "# 事故\n坑。\n")
++    (root / "src").mkdir(); (root / "src" / "svc.py").write_text("def save(x):\n    pass\n", encoding="utf-8")
++    g("add", "-A"); g("commit", "-qm", "init")
++    return root, v
++
++
++def t_impact_hard_pin_lane():
++    """★pin-denoise-a-v4:硬合約保送+參考道★(計劃 Projects/固定席降噪A層_計劃,四輪設計審收斂版)。
++    預設(2026-08-24 考卷轉正=1):indirect hop≤1 只有 INVARIANT/IRREVERSIBLE 保送;RISK 類降入 JSON 獨立頂層鍵 lane
++    (不進 results),score=R 公式、cap LUMOS_IMPACT_LANE_N、meta lane/lane_truncated。knob=0 逃生:輸出與舊制逐 byte 同、無 lane 鍵。
++    翻紅釘:拿掉 lane 收集 → ③翻紅。"""
++    import subprocess as sp, json, os as _os
++    root, v = _hardpin_fixture()
++    def lum(env_extra=None, *extra):
++        r = sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/svc.py", "--ranked", "--json", *extra],
++                   capture_output=True, text=True, cwd=root, env={**_os.environ, **(env_extra or {})})
++        return r, json.loads(r.stdout.strip().splitlines()[-1])
++    r0, d0 = lum({"LUMOS_IMPACT_HARD_PIN": "0"})   # 逃生臂(2026-08-24 轉正後預設=1)
++    check("①knob=0 逃生:無 lane 鍵(條件鍵兩態)、行為=舊制", "lane" not in d0, str(list(d0)))
++    risk_pinned0 = [x for x in d0["results"] if "Risk" in x["node"] and x.get("pinned")]
++    check("前置:舊制 RISK indirect 是固定席", len(risk_pinned0) == 2, str(d0["results"])[:300])
++    r1, d1 = lum()   # 預設臂=硬合約保送開
++    check("②knob=1:RISK 類不再 pinned、不在 results", all("Risk" not in x["node"] for x in d1["results"] if x.get("pinned")) and all("Risk" not in x["node"] for x in d1["results"]), str([x["node"] for x in d1["results"]]))
++    check("③★被降者在 JSON 頂層 lane 鍵★", "lane" in d1 and {x["node"] for x in d1["lane"]} == {"Systems/Risk1.md", "Systems/Risk2.md"}, str(d1.get("lane")))
++    check("④INVARIANT indirect 仍保送;事故不受影響", any("Inv1" in x["node"] and x.get("pinned") for x in d1["results"]), str([x["node"] for x in d1["results"] if x.get("pinned")]))
++    check("lane 項欄位:lane 標記/pinned False/kind 保留 indirect/score 是 R 公式非 0.70", all(x.get("lane") == "soft-guard" and x.get("pinned") is False and x.get("kind") == "indirect" and x.get("score") != 0.7 for x in d1["lane"]), str(d1["lane"]))
++    check("meta 計數", d1["meta"].get("lane") == 2 and d1["meta"].get("lane_truncated") == 0, str(d1["meta"]))
++    # free 集不動:knob=0/1 的 results 逐 byte 同(除 RISK pinned 項移除外——直接比 free 部分)
++    free0 = [x for x in d0["results"] if not x.get("pinned")]
++    free1 = [x for x in d1["results"] if not x.get("pinned")]
++    check("⑤free 集合與排序完全不動(逐 byte)", json.dumps(free0, sort_keys=True) == json.dumps(free1, sort_keys=True), "")
++    # cap
++    r2, d2 = lum({"LUMOS_IMPACT_HARD_PIN": "1", "LUMOS_IMPACT_LANE_N": "1"})
++    check("⑥cap=1:lane 1 條、lane_truncated=1;JSON=同一份(無另一口徑)", len(d2["lane"]) == 1 and d2["meta"]["lane_truncated"] == 1, str(d2["meta"]))
++    # ⑭ lane 集 ⊆ 改前 pinned 集(降級不生新候選——消融閘安全論證的機械釘)
++    pinned0 = {x["node"] for x in d0["results"] if x.get("pinned")}
++    check("★⑭lane ⊆ 改前 pinned(不生新未標候選)★", {x["node"] for x in d1["lane"]} <= pinned0, str(pinned0))
++    # 人讀分支不炸
++    r3 = sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/svc.py", "--ranked"], capture_output=True, text=True, cwd=root, env={**_os.environ, "LUMOS_IMPACT_HARD_PIN": "1"})
++    check("⑦人讀分支不 KeyError 且有守衛面參考小節", r3.returncode == 0 and "守衛面參考" in r3.stdout, r3.stdout[-300:] + r3.stderr[-200:])
++    # diff 聚合不含 lane
++    r4 = sp.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD", "--json"], capture_output=True, text=True, cwd=root, env={**_os.environ, "LUMOS_IMPACT_HARD_PIN": "1"})
++    if r4.returncode == 0 and r4.stdout.strip():
++        d4 = json.loads(r4.stdout.strip().splitlines()[-1])
++        check("⑧--diff 聚合不含 lane 節點", all("Risk" not in x.get("node", "") for x in d4.get("results", [])), str(d4)[:200])
++    else:
++        check("⑧--diff 跑不動(fixture 無 diff)可接受", True, "")
++
++
+ def t_git_last_change_dates_batch():
+     """★一次 git log 拿全庫每個檔的最後改動日期★(工具清單 #5;★原為 about_code 過期判準的材料,2026-08-24 該判準改記正文雜湊後本函式暫無呼叫者,保留★)。
+ 
+     design-loop about-code-field r3 實測:逐篇 `git log -1 -- <檔>` 83 次 5.3s,批次 0.22s,
+     差 18 倍;且 vault 檔名幾乎全中文,不加 `-c core.quotepath=false` 輸出是八進位跳脫、對不回路徑。
+     翻紅釘:①拿掉 quotepath 旗標 → 第 2 條翻紅 ②改成逐檔呼叫 → 第 4 條(呼叫次數)翻紅。"""
+     import subprocess as _sp, tempfile as _tf
+     from pathlib import Path as _P
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+@@ -8553,20 +8619,32 @@ def t_impact_hook_v11_delta_and_format():
+     ], "meta": {"truncated": 4}})
+     check("ranked 格式: 固定席+分數+截斷注記", "⚠事故" in ctx and "0.93" in ctx and "+4 條低分截斷" in ctx, ctx[:200])
+     check("ranked 格式: 含動手前指令", "動手前" in ctx, ctx[-80:])
+     # 工具清單 #9:about 命中的固定席行首標 ★關於★(讀 about_hit,不碰 hit)
+     ctx9 = m.build_ranked_context({"results": [
+         {"node": "Systems/A.md", "kind": "direct", "pinned": True, "score": 0.3, "hit": "basename-match", "about_hit": True, "contract": "INVARIANT"},
+         {"node": "Systems/B.md", "kind": "direct", "pinned": True, "score": 0.3, "hit": "body-inline-code", "contract": "INVARIANT"},
+     ], "meta": {}})
+     la = next(l for l in ctx9.splitlines() if "Systems/A.md" in l); lb = next(l for l in ctx9.splitlines() if "Systems/B.md" in l)
+     check("★#9 about 命中行有 ★關於★、未命中行沒有★", "★關於★" in la and "★關於★" not in lb, la + " | " + lb)
++    # pin-denoise-a-v4 ⑫:lane 小節、lane-only 也注入、無 lane 鍵不炸
++    ctx_lane = m.build_ranked_context({"results": [{"node": "Systems/Y.md", "kind": "direct", "pinned": False, "score": 0.9}],
++        "lane": [{"node": "Systems/R.md", "kind": "indirect", "score": 0.4, "hop": 1, "lane": "soft-guard"}],
++        "meta": {"lane": 1, "lane_truncated": 2}})
++    check("★lane 小節+未列出提示★", "守衛面參考" in ctx_lane and "Systems/R.md" in ctx_lane and "另有 2 條" in ctx_lane, ctx_lane[:300])
++    ctx_nolane = m.build_ranked_context({"results": [{"node": "Systems/Y.md", "kind": "direct", "pinned": False, "score": 0.9}], "meta": {}})
++    check("無 lane 鍵不炸、無小節", "守衛面參考" not in ctx_nolane, "")
++    import io as _io, contextlib as _cl
++    buf = _io.StringIO()
++    with _cl.redirect_stdout(buf):
++        m.inject_ranked_context({"results": [], "lane": [{"node": "Systems/R.md", "score": 0.4, "hop": 1}], "meta": {"lane": 1}})
++    check("★lane-only 也注入(空判斷閘含 lane)★", "守衛面參考" in buf.getvalue(), buf.getvalue()[:200])
+ 
+ 
+ def t_impact_hook_ttl():
+     """Task 10: _ttl_should_inject TTL 冷卻窗 + 惰性清理 >24h session 目錄。
+ 
+     測試對象是 scripts/hooks/claude/impact-hook.py 的:
+       - _ttl_should_inject(session_id, file_abs, ttl_sec) -> bool
+       - _backdate_marker(session_id, file_abs, seconds_ago)  (測試輔助)
+     """
+     import importlib.util
+@@ -13607,21 +13685,21 @@ def t_search_multiword_fallback_is_default_and_only_on_zero():
+           f"{r1.stdout}\n---\n{r2.stdout}")
+ 
+     # --regex 不受影響
+     r = lum("search", "甲|乙", "--regex", "--files-only")
+     check("★--regex 不得走回退(候選語意不同)★",
+           r.returncode == 0 and "多詞回退" not in r.stderr, f"rc={r.returncode}\n{r.stderr[:200]}")
+ 
+ 
+ def t_impact_contract_risk_axis():
+     """[標籤結構優化 2026-08-05]risk/ 家族接 impact 固定席——risk 標(金流/對外送出/不可逆/
+-    守衛面)的節點被 diff 碰到時保送必看席(★RISK·值★),light 硬否決的 honor-system 有了
++    守衛面)的節點被 diff 碰到時分類(★2026-08-24 起 RISK 類 indirect 不再保送——見 t_impact_hard_pin_lane★);本測試只驗 _impact_contract 分類值席(★RISK·值★),light 硬否決的 honor-system 有了
+     機械眼線。軸序:IRREVERSIBLE > INVARIANT > RISK(合約仍優先)。
+     翻紅釘:拔 risk 軸 → ①翻紅。"""
+     m = _load_lumos_module()
+     class _N:
+         def __init__(self, fields):
+             self.fields = fields
+             self.stem = "x"
+     # 只有 risk 標 → contract=RISK·金流
+     n1 = _N({"tags": ["type/system", "risk/金流"], "summary": "KEY:x"})
+     c1, _ = m._impact_contract(n1)
+@@ -20960,20 +21038,74 @@ def t_eval_output_top3_must():
+     rows = m.eval_edit(gs)
+     check("eval_edit row 有 out_top3_must", rows and all("out_top3_must" in r for r in rows), str(rows)[:200])
+     check("row 不再有舊 key pin_top3_must", all("pin_top3_must" not in r for r in rows), "")
+     rep = m.report_goldset(gs)
+     check("★verdict 有 out_top3_must(接到 history)★", "out_top3_must" in rep["verdict"], str(rep["verdict"])[:300])
+     src = open(m.__file__, encoding="utf-8").read()
+     gates_src = src[src.find("gates = {"):src.find("gates = {") + 600]
+     check("不進 gates", "top3" not in gates_src, gates_src[:200])
+ 
+ 
++def t_eval_lane_buckets():
++    """★pin-denoise-a-v4 eval 側:split_buckets 唯一分流+lane 口徑四釘★——
++    ⑨cap 內 lane 計入 must_in_out 但不計 P@8 ⑮output_top3_must 母體不含 lane
++    ⑪rescued 仍在 P@8 母體(誠實計噪護欄回歸)⑭觸及集 lane 視同 pins。
++    翻紅釘:split_buckets 把 lane 併回 free → ⑨⑮ 翻紅。"""
++    _need_src("governance/eval")
++    root, gs = _mk_eval_fixture()
++    m = _load_retrieval_eval(root)
++    P = lambda n: {"node": n, "pinned": True, "score": 1.0}
++    F = lambda n, s=0.5: {"node": n, "pinned": False, "score": s}
++    RS = lambda n: {"node": n, "pinned": False, "rescued": True, "score": 0.3}
++    LN = lambda n: {"node": n, "pinned": False, "lane": "soft-guard", "kind": "indirect", "score": 0.4}
++    res = [P("p1"), F("f1"), RS("r1"), LN("l1")]
++    pins, free, lane = m.split_buckets(res)
++    check("分桶:pins/free(含 rescued)/lane", [x["node"] for x in pins] == ["p1"] and [x["node"] for x in free] == ["f1", "r1"] and [x["node"] for x in lane] == ["l1"], str((pins, free, lane)))
++    check("★⑪rescued 在 free=P@8 母體(勿排,護欄回歸)★", any(x.get("rescued") for x in free), "")
++    check("★⑭觸及集:lane 視同 pins★", "l1" in m._touched_edit(res) , str(m._touched_edit(res)))
++    check("★⑮output_top3_must 母體不含 lane★", m.output_top3_must([LN("a"), F("b"), F("c"), F("d")], {"a": 2, "b": 2}) == 0.5, str(m.output_top3_must([LN("a"), F("b"), F("c"), F("d")], {"a": 2, "b": 2})))
++    # ⑨:lane 計入 must_in_out、不計 P@8——走 eval_edit 全鏈
++    gs["labels"]["E01"] = {"Systems/Alpha.md": {"final": 2, "claude": 2, "codex": 2}, "Systems/Lane.md": {"final": 2, "claude": 2, "codex": 2}}
++    m.edit_universe = lambda case: [P("Systems/Alpha.md"), F("Systems/Free.md"), LN("Systems/Lane.md")]
++    rows = m.eval_edit(gs)
++    row = rows[0]
++    check("★⑨lane 計入 must_in_out★", row["must_in_out"] == 2, str(row))
++    check("⑨lane 不計 free 母體(n_free 只算真 free)", row["n_free"] == 1, str(row))
++    # edit_pool 含 lane(⑬)
++    import json as _json
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    import importlib.util
++    from importlib.machinery import SourceFileLoader
++    spec = importlib.util.spec_from_file_location("bg", str(repo / "governance" / "eval" / "build_goldset.py"), loader=SourceFileLoader("bg", str(repo / "governance" / "eval" / "build_goldset.py")))
++    bg = importlib.util.module_from_spec(spec); spec.loader.exec_module(bg)
++    bg.lum_json = lambda *a, **kw: ({"results": [{"node": "A.md"}], "lane": [{"node": "L.md", "lane": "soft-guard"}]} if "--ranked" in a else {"direct": [], "indirect": []})
++    pool = bg.edit_pool("src/x.py", "delta")
++    check("★⑬edit_pool 含 lane 候選★", "L.md" in pool and "A.md" in pool, str(pool))
++
++
++def t_pin_noise_ratchet():
++    """★固定席噪音棘輪(v4 #4b)★:同 rev PASS 基線、只准降不准升;無基線建基線;換 rev 不比。
++    翻紅釘:方向反了(count<base 才擋)→ 第 2 條翻紅。"""
++    _need_src("governance/eval")
++    root, gs = _mk_eval_fixture()
++    m = _load_retrieval_eval(root)
++    H = [{"pass": True, "goldset_rev": "aaa", "verdicts": {"held": {"pin_noise": 40}}}]
++    ok, msg = m.pin_noise_ratchet(H, "aaa", "held", 39)
++    check("降了 → 過", ok is True, msg)
++    ok2, msg2 = m.pin_noise_ratchet(H, "aaa", "held", 41)
++    check("★漲了 → 擋★", ok2 is False and "漲" in msg2, msg2)
++    ok3, msg3 = m.pin_noise_ratchet(H, "bbb", "held", 99)
++    check("換 rev → 建基線放行", ok3 is True and "基線" in msg3, msg3)
++    ok4, _ = m.pin_noise_ratchet([{"pass": False, "goldset_rev": "aaa", "verdicts": {"held": {"pin_noise": 1}}}], "aaa", "held", 99)
++    check("FAIL 輪不當基線", ok4 is True, "")
++
++
+ def t_refresh_merge_apply():
+     """T6:merge(一致=同值/1v2 人裁/B 缺 degraded)+apply(人放行寫入;缺人裁 rc1 不寫;atomic;既有零變動)。"""
+     _need_src("governance/eval")
+     import json as _json
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     script = repo / "governance" / "eval" / "refresh_labels.py"
+     root, gs = _mk_eval_fixture()
+     gpath = root / "goldset.json"
+     gpath.write_text(_json.dumps(gs, ensure_ascii=False), encoding="utf-8")
+     a = {"S01": {"Projects/Gamma.md": 2, "Systems/Hub.md": 1}}

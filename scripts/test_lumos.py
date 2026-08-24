@@ -866,6 +866,7 @@ def _hardpin_fixture(prefix="gctl-hp-"):
         (v / rel).write_text("---\n" + fm + "\n---\n" + body, encoding="utf-8")
     note("Systems/Hub.md", "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ hub [test:X]", "# Hub\n實作在 `src/svc.py`。\n")
     note("Systems/Inv1.md", "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ inv [test:Y]", "# Inv1\n[[Systems/Hub]]\n")
+    note("Systems/Irr1.md", "type: system\nstatus: done\nsummary: |-\n  KEY:★IRREVERSIBLE★ irr [test:Z]", "# Irr1\n[[Systems/Hub]]\n")
     note("Systems/Risk1.md", "type: system\nstatus: done\ntags:\n  - risk/守衛面\nsummary: |-\n  KEY:守衛", "# Risk1\n[[Systems/Hub]]\n")
     note("Systems/Risk2.md", "type: system\nstatus: done\ntags:\n  - risk/守衛面\nsummary: |-\n  KEY:守衛二", "# Risk2\n[[Systems/Hub]]\n")
     note("Systems/Plain.md", "type: system\nstatus: done\nsummary: |-\n  KEY:普通", "# Plain\n[[Systems/Hub]]\n")
@@ -893,7 +894,7 @@ def t_impact_hard_pin_lane():
     r1, d1 = lum()   # 預設臂=硬合約保送開
     check("②knob=1:RISK 類不再 pinned、不在 results", all("Risk" not in x["node"] for x in d1["results"] if x.get("pinned")) and all("Risk" not in x["node"] for x in d1["results"]), str([x["node"] for x in d1["results"]]))
     check("③★被降者在 JSON 頂層 lane 鍵★", "lane" in d1 and {x["node"] for x in d1["lane"]} == {"Systems/Risk1.md", "Systems/Risk2.md"}, str(d1.get("lane")))
-    check("④INVARIANT indirect 仍保送;事故不受影響", any("Inv1" in x["node"] and x.get("pinned") for x in d1["results"]), str([x["node"] for x in d1["results"] if x.get("pinned")]))
+    check("④INVARIANT+IRREVERSIBLE indirect 仍保送;事故不受影響", any("Inv1" in x["node"] and x.get("pinned") for x in d1["results"]) and any("Irr1" in x["node"] and x.get("pinned") for x in d1["results"]), str([x["node"] for x in d1["results"] if x.get("pinned")]))
     check("lane 項欄位:lane 標記/pinned False/kind 保留 indirect/score 是 R 公式非 0.70", all(x.get("lane") == "soft-guard" and x.get("pinned") is False and x.get("kind") == "indirect" and x.get("score") != 0.7 for x in d1["lane"]), str(d1["lane"]))
     check("meta 計數", d1["meta"].get("lane") == 2 and d1["meta"].get("lane_truncated") == 0, str(d1["meta"]))
     # free 集不動:knob=0/1 的 results 逐 byte 同(除 RISK pinned 項移除外——直接比 free 部分)
@@ -909,13 +910,12 @@ def t_impact_hard_pin_lane():
     # 人讀分支不炸
     r3 = sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/svc.py", "--ranked"], capture_output=True, text=True, cwd=root, env={**_os.environ, "LUMOS_IMPACT_HARD_PIN": "1"})
     check("⑦人讀分支不 KeyError 且有守衛面參考小節", r3.returncode == 0 and "守衛面參考" in r3.stdout, r3.stdout[-300:] + r3.stderr[-200:])
-    # diff 聚合不含 lane
+    # diff 聚合不含 lane(code-r1 s1f3:工作樹要真的髒,否則 files=[] 空集恆真=假綠)
+    (root / "src" / "svc.py").write_text("def save(x):\n    return x\n", encoding="utf-8")
     r4 = sp.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD", "--json"], capture_output=True, text=True, cwd=root, env={**_os.environ, "LUMOS_IMPACT_HARD_PIN": "1"})
-    if r4.returncode == 0 and r4.stdout.strip():
-        d4 = json.loads(r4.stdout.strip().splitlines()[-1])
-        check("⑧--diff 聚合不含 lane 節點", all("Risk" not in x.get("node", "") for x in d4.get("results", [])), str(d4)[:200])
-    else:
-        check("⑧--diff 跑不動(fixture 無 diff)可接受", True, "")
+    d4 = json.loads(r4.stdout.strip().splitlines()[-1])
+    check("⑧前置:diff 非空(防空集恆真)", d4.get("files"), str(d4)[:150])
+    check("⑧--diff 聚合不含 lane 節點", d4["results"] and all("Risk" not in x.get("node", "") for x in d4["results"]), str(d4)[:200])
 
 
 def t_git_last_change_dates_batch():
@@ -21074,8 +21074,7 @@ def t_eval_lane_buckets():
     import json as _json
     repo = Path(GRAPHCTL).resolve().parent.parent
     import importlib.util
-    from importlib.machinery import SourceFileLoader
-    spec = importlib.util.spec_from_file_location("bg", str(repo / "governance" / "eval" / "build_goldset.py"), loader=SourceFileLoader("bg", str(repo / "governance" / "eval" / "build_goldset.py")))
+    spec = importlib.util.spec_from_file_location("bg", str(repo / "governance" / "eval" / "build_goldset.py"))
     bg = importlib.util.module_from_spec(spec); spec.loader.exec_module(bg)
     bg.lum_json = lambda *a, **kw: ({"results": [{"node": "A.md"}], "lane": [{"node": "L.md", "lane": "soft-guard"}]} if "--ranked" in a else {"direct": [], "indirect": []})
     pool = bg.edit_pool("src/x.py", "delta")

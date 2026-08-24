@@ -139,7 +139,7 @@ flowchart TB
 ```mermaid
 flowchart TB
     subgraph BEFORE["🟣 動手前 (Claude hooks · 推播,不擋)"]
-        PRE["PreToolUse: impact-hook<br/>Edit/Write 前注入<br/>受影響關聯節點 + 命中事故 (pitfall_when)"]
+        PRE["PreToolUse: impact-hook<br/>Edit/Write 前注入<br/>硬合約/事故固定席 + ★關於★語意標記<br/>+ 守衛面參考 lane (軟標記樞紐, cap 3)"]
         POSTT["PostToolUse<br/>自足性 / verification-rot 後驗"]
     end
 
