@@ -8,7 +8,7 @@ summary: |-
   KEY:立案(2026-08-24 Enzo「開」)——held 固定席噪音 96 條(live 口徑;考卷 82)佔比過半,out_top3_must held 0.083 被它拖死。逐條分解:58 條=「間接一跳+RISK 類軟合約」樞紐筆記(pitfalls-code-loop 7x/lumos-cli-read 6x/lumos-refcheck 6x…)搭便車
   KEY:★v2(r1 五席打掉 v1 後改)★主案=間接保送只認 INVARIANT/IRREVERSIBLE;被降的 RISK 類 indirect 進**獨立參考道**(不佔固定席、不進自由席計分/門檻/名額、輸出尾端標「守衛面參考」上限 3 條)。★about/治標籤全退出本案★(v1 的豁免=翻前案已鎖決策+兩條測試機械擋+在震央 scripts/lumos 撞巨檔門檻必死;治標籤=把 impacts 語意塞進 about 欄)。參考道使 P@8 逐 byte 不變、must_in_out 結構性不退
   KEY:已試已殺留痕——扇出二元砍除(2026-08-23):P@8 +5 格但必看 26→23 被棘輪擋;勿憑直覺復活,重試須過同款考卷
-  KEY:尺=固定席噪音數(主目標;★不押絕對值,以 knob=1 臂考卷實測為準★)+ P@8 逐 byte 不變(結構保證)+ must_in_out 不退(結構保證)+ out_top3_must 應升;★本案凍結 goldset 標籤★(Codex f4:改標籤→換 rev→棘輪重立基線,守衛蒸發);per-split 棘輪與 eval/hook top 口徑錯位(PPR 案舊坑)列工具清單;症狀指令見正文
+  KEY:尺=固定席噪音數(主目標,-43/96)+ P@8 逐 byte 不變(結構保證)+ must_in_out 不退(結構保證)+ out_top3_must 應升;★本案凍結 goldset 標籤★(Codex f4:改標籤→換 rev→棘輪重立基線,守衛蒸發);per-split 棘輪與 eval/hook top 口徑錯位(PPR 案舊坑)列工具清單;症狀指令見正文
   DEP:[[Projects/固定席扇出降權_計劃]]｜[[Systems/retrieval-ranking]]
 plan_refs: []
 related:
@@ -63,25 +63,17 @@ E08 `design-loop`(管自主迴圈測試,about 沒標 test_autonomous_loop)——
    ★併名陷阱(s2f2)★:`RISK·不可逆`(軟標籤)與 `IRREVERSIBLE`(硬合約)是兩個機制、中文撞名——實作用字串精確比對,文件裡兩者並列時必註明。
 2. **參考道(reference lane)——★r2 折入版:獨立容器+產生階段 cap★**:被 1 降的節點★自始不進 `results` 共用清單★
    (s1/s2 各自實測:`pinned:False` 會被四處既有「非 pinned=free」分流吃回自由席,把門檻拉高、真候選被擠光),
-   收進獨立 `lane_items`;★r3 釘死安置模型(s2f1 blocker:「不進 results」與「final=...+lane_items」自相矛盾)★:
-   **JSON 輸出用獨立頂層鍵 `"lane"`,`results` 完全不含 lane**——沒學過 lane 的既有讀者
-   (★`cmd_impact_diff` 聚合(三席 r3 同抓的漏網消費點,code-loop 在用)、hook free 桶、`_bound_tests_for_diff`★)
-   結構性不受影響;要用 lane 的地方**明文 opt-in**(名單見 #2b)。★diff 聚合明文:lane 不進 --diff 清單與 sync-check★
-   (軟參考不屬代碼審波及口徑;測試釘)。
-   ★cap 在產生階段★:`LUMOS_IMPACT_LANE_N`(預設 3,考卷網格轉正——轉正數字待跑,同 HARD_PIN 一起)內
-   排序鍵 `(-score, hop, node)`(★同 free/rescued 三鍵慣例,arch r3:漏 hop 是漂移★),
-   截斷後這一份=JSON `lane` 鍵=人讀=hook,兩個口徑合一——被 cap 砍掉的必看會真的掉 must_in_out,棘輪有效。
-   欄位:`lane: "soft-guard"`、`pinned: False`;★score=indirect 自由席同款 R 公式(0.60L+0.40G)★
-   (s1f2:原「保留原 score」=舊保送分支的常數 0.70,全員同分,cap 挑誰退化成字母序——改用 R 公式才有鑑別力,
-   也才真的是「rescued 慣例」的分數精神);`meta["lane"]` 計數、`meta["lane_truncated"]` 被 cap 砍的條數
-   (★命名沿既有 `meta.truncated` 慣例,arch r3★;hook 顯示「另有 N 條守衛面參考未列出」)。
-   ★opt-in 名單(#2b;獨立鍵模型下「不改就不受影響」,要 lane 的才改)★:
-   ①`cmd_impact` 人讀純文字分支加 lane 小節(kind 表加 lane、score 用 `.get`)②hook `build_ranked_context` 新小節讀 `data["lane"]`
-   ③`retrieval_eval.py` `edit_universe`(★現在只抽 `results` 鍵,lane 要一併帶出,s2f1a★)
-   ④`eval_edit`:★只動兩處★——`out_nodes`/`must_in_out` 讀 results ∪ lane(cap 內 lane 計入),`free` 讀 results 且★明文排除 rescued★
-   (它現在被算進 P@8 母體只是僥倖沒進前 k,r2 s2f5;獨立回歸測試釘,arch ⚠)——
-   ★不准整段先濾 res★(s1f3:順手 `res=[...非 lane]` 會讓 must_in_out 永久漏算 lane、棘輪失義;測試⑨釘這個)
-   ⑤`_touched_edit`:lane 視同 pins 納入未標檢查——★與 eval_edit 共用同一個分桶 helper,免得同檔兩種 free 定義★(arch r3 major)。
+   收進獨立 `lane_items`;★cap 在產生階段★(arch r2:rescued 的限量就在產生端,三處輸出同一份):
+   `LUMOS_IMPACT_LANE_N`(預設 3,考卷網格轉正)內排序鍵 `(-score, node)`(同 free tie-break 慣例),
+   截斷後這一份=JSON=人讀=hook,★兩個口徑合一★——被 cap 砍掉的必看會真的掉 must_in_out,棘輪重新有效
+   (Codex r2 f1:「JSON 綠燈、人看不到」的偷換口徑由此消滅)。
+   欄位:`lane: "soft-guard"`、`pinned: False`、保留原 score;`meta["lane"]` 計數、`meta["lane_dropped"]` 被 cap 砍的條數
+   (hook 顯示「另有 N 條守衛面參考未列出」,s2f7);`final = pins + free + rescued + lane_items`。
+   ★下游分流全站清單(工具清單 #2b,漏一處就重演舊坑)★:
+   `scripts/lumos` free 過濾(lane 不在 results 天然不進)、人讀純文字分支(★要加 lane 小節,score 用 .get,s2f3 抓到會 KeyError★)、
+   `impact-hook.py` 自己的 free 桶(既有已排除 rescued,要加排除 lane,s2f4)、
+   `retrieval_eval.py` `eval_edit` free 分流(★排除 lane,並順手把 rescued 的排除釘成明文——它現在被算進 P@8 母體只是僥倖沒進前 k,s2f5★)、
+   `retrieval_eval.py` `_touched_edit`(消融閘的觸及集:lane 視同 pins 無條件納入未標檢查,否則安全網覆蓋縮水,s1f4/s2f2)。
    ★為什麼不是降自由席★(r1 的血):有動態門檻+名額,被降的會被整個砍出輸出——前案「降級≠保留」舊坑;參考道=結構性保留。
    ★為什麼不是 about 豁免★:翻前案已鎖決策+兩條測試機械擋+巨檔門檻讓豁免在震央必死——r1 三票否決,v1 作廢。
    ★為什麼不擴 rescued★(arch r1 ⚠):語意不同(缺口補席 vs 整類降級保留),但實作同家族——獨立容器、產生端限量、
@@ -101,11 +93,8 @@ E08 `design-loop`(管自主迴圈測試,about 沒標 test_autonomous_loop)——
 
 ## 落地驗收(照症狀指令)
 
-- 固定席噪音:★驗收不押絕對值★(近似估計 held -40% 上下)——以 `LUMOS_IMPACT_HARD_PIN=1` 臂的考卷實測為準;
-  ★pin_noise 棘輪協定(Codex r3 f3:「進閘」三個字不可實作)★:per-split、基線=knob 轉正那輪 PASS 的實測值、
-  gate 只在轉正後啟用、方向「不准變多」——全部明寫進 #4b。
-- ★must_in_out 一句話講死(Codex r3 f2:原文同時寫「不退」與「可能掉」)★:cap 內結構性不退;
-  被 cap 砍的會誠實掉數字且棘輪抓——「可能掉」是 cap 的刻意代價,不是 bug;驗收看棘輪不看零變化。
+- 固定席噪音:★驗收不押絕對值★(近似估計 held -40% 上下)——以 `LUMOS_IMPACT_HARD_PIN=1` 臂的考卷實測為準(Codex r2 f3:預設 0 是死碼,驗收必須明寫在候選臂上跑);
+  ★pin_noise 現況只印不閘——工具清單 #4b:進 verdict+gate「不准變多」,knob 轉正時啟用★。
 - P@8/nDCG:**逐 byte 相同**(測試釘)。must_in_out:不變(測試釘:被降節點仍在 JSON results)。
 - out_top3_must held 0.083→應升(觀測)。
 - ★eval/hook top 口徑錯位(r1 s2f12,PPR 案舊坑)★:參考道不受 `--top` 截斷(同 rescued;s2 查證屬實)→ 錯位不影響本案;
@@ -117,15 +106,15 @@ E08 `design-loop`(管自主迴圈測試,about 沒標 test_autonomous_loop)——
 | # | 項目 | 錨 |
 |---|---|---|
 | 1 | indirect 保送條件加 contract 值過濾(knob=1 時);★被降者收進獨立 `lane_items`,不進 `results`★ | `if contract and hop <= min(` |
-| 2 | lane 產生端 cap(`LUMOS_IMPACT_LANE_N` 預設 3,排序 `(-score, hop, node)`;score=R 公式)、`meta["lane"]`/`meta["lane_truncated"]`、★JSON 獨立頂層鍵 `"lane"`,`results`/`final` 不含 lane★ | `out_obj = {"file": rel_file, "results": final` |
-| 2b | ★opt-in 名單(獨立鍵模型)★:人讀分支/hook 新小節/`edit_universe` 帶出 lane 鍵/`eval_edit`(free 排除 rescued 明文;out_nodes ∪ lane;★不准整段先濾★)/`_touched_edit` 共用分桶 helper;★diff 聚合與 sync-check 明文不含 lane(測試釘)★ | 各檔 grep `not x.get("pinned")` + `cmd_impact_diff` |
+| 2 | lane 產生端 cap(`LUMOS_IMPACT_LANE_N` 預設 3,排序 `(-score, node)`)、`meta["lane"]`/`meta["lane_dropped"]`、`final = pins + free + rescued + lane_items` | `final = pins + free + rescued` |
+| 2b | ★下游分流全站清單★:人讀純文字分支加 lane 小節(score 用 `.get`;kind 表加 lane)/hook free 桶排除 lane/eval `eval_edit` 排除 lane★並把 rescued 排除釘明文★/`_touched_edit` lane 視同 pins 納入 | 各檔 grep `not x.get("pinned")` |
 | 3 | hook 顯示新小節「守衛面參考(軟標記樞紐,未被本次改動直接證實相關)」+「另有 N 條未列出」 | `build_ranked_context` |
 | 4 | eval:P@8 母體排除 lane(含 rescued 明文化) | `eval_edit` |
 | 4b | pin_noise 進 verdict+gate「不准變多」(knob 轉正時啟用;現況只印,Codex r2 f3) | `must_ratchet` 旁 |
 | 5 | per-split must 棘輪(呼叫端 `main()` 改,函式已支援) | `must_ratchet` |
-| 6 | 測試:①knob=0 逐 byte ②P@8 母體不含 lane ③被降者在 JSON `lane` 鍵且 cap 內 ④事故/INVARIANT indirect 不受影響 ⑤翻紅釘:拿掉 lane→must_in_out 掉(常設回歸,s2 r3:別跟一次性突變混列)⑥人讀分支不 KeyError ⑦hook 不重複顯示 ⑧lane_truncated>0 警告行 ⑨★cap 內 lane 計入 must_in_out 即使不計 P@8★(s1f3 的釘)⑩★`cmd_impact_diff` 輸出與 sync-check 不含 lane★(r3 三席同抓,原八條全漏這路徑)⑪rescued 排除 P@8 的獨立回歸 | test_lumos |
-| 7 | 文件同步:`Systems/lumos-cli-read.md:14`「risk/標節點保送必看」句改寫——★其綁定測試 `t_impact_contract_risk_axis` 只測分類函式、落地後照樣綠=假綠(s2f3 blocker)★:句子改綁新行為測試(#6①④),舊綁定解除;★該測試自己的 docstring「保送必看席」也要改(s1f5)★;`skills/lumos-code-loop/reference.md:94/113`(--diff manifest 句)、`Systems/retrieval-ranking.md:11`(s3f3:三份都給行號) | — |
-| 8 | 前案回寫:四處「扇出=A 層降噪主角」標「已由 pin-denoise-a 取代(硬合約+參考道);★扇出**二元砍除**已試已殺,分級降權未試★(s3f4:別把沒試過的設計空間一起封死)」 | 前案 summary/258/393/399-404(s1 r3 核過行號現況準確) |
+| 6 | 測試:①knob=0 逐 byte ②P@8 母體不含 lane(含 `_touched_edit` 口徑,s2f2)③被降者在 JSON 且 cap 內 ④事故/INVARIANT indirect 不受影響 ⑤翻紅釘:拿掉 lane 容器→must_in_out 掉 ⑥人讀分支不 KeyError ⑦hook 不重複顯示(f4)⑧lane_dropped>0 時警告行 | test_lumos |
+| 7 | 文件同步(★v2 重推,s3f1★):`Systems/lumos-cli-read.md:14`(「risk/標節點保送必看」句★落地後變假,行為合約級,連動其綁定測試★)、`skills/lumos-code-loop/reference.md`(--diff manifest 描述)、`Systems/retrieval-ranking.md`;02 檔不用動(v2 無 about 角色) | — |
+| 8 | 前案回寫(s3f2):[[Projects/固定席扇出降權_計劃]] 四處「扇出=A 層降噪主角」標「已由 pin-denoise-a v2 取代(硬合約+參考道);扇出已試已殺」 | 前案 summary/258/393/399-404 |
 | 9 | impacts_code 證據轉交(s3f3):E06/E08/E12+s1f2 的 12 處「必看但 about 不含」整批記進前案 impacts_code 後案節 | 前案「下一步:影響欄位」 |
 
 ## 已試已殺(留痕,勿復活)
@@ -135,7 +124,7 @@ E08 `design-loop`(管自主迴圈測試,about 沒標 test_autonomous_loop)——
 
 ## 尺(v2)
 
-- **固定席噪音數**:主目標;★不押絕對值(82→39 減法已在 §3 作廢,此處 r3 s1f4 抓到殘留)★;棘輪協定見落地驗收。
+- **固定席噪音數**:主目標(held 82→~39);落地時進閘「不准變多」。
 - **P@8/nDCG**:逐 byte 不變(結構保證+測試釘;v1「應零影響」的講法錯,s2f11)。
 - **must_in_out**:結構性不退(被降者仍在輸出);棘輪當覆核。★棘輪現況只比全體、換 rev 重立基線(Codex f4)——per-split 版列工具清單★。
 - **out_top3_must**:觀測,held 應升。
@@ -169,7 +158,7 @@ arch ⚠(要不要擴 rescued)已在主案 v2 §2 正面回答。放行:無。
 ★教訓:v1 用一小時寫的主案,三個承重點全是「沒對前案已鎖的決策與機械測試」——立案時 `lumos decisions <前案> `+grep 測試,比反事實跑得快更重要。★
 
 ### r2(2026-08-24;s1/s2/s3 + arch + Codex,五席)
-s1 5(2 blocker,含 patch 副本實測)/ s2 8(3 blocker,含工具清單逐項可執行表)/ s3 3(2 major)/ arch 2+2⚠(1 major)/ ★Codex 4(1 blocker+3 major;r2 紀錄原誤記 3 條、f2/f4 折入時漏署名——r3 s3f1 抓到,此處更正★)。全折:
+s1 5(2 blocker,含 patch 副本實測)/ s2 8(3 blocker,含工具清單逐項可執行表)/ s3 3(2 major)/ arch 2+2⚠(1 major)/ Codex 3(1 blocker)。全折:
 **A lane 會被「非 pinned=free」分流吃回自由席**(s1f1 實測灌爆門檻+s2f1 四處分流)→ 獨立容器 lane_items+全站分流清單 #2b;
 **B JSON/人看口徑偷換**(Codex f1+s2f3 人讀分支 KeyError+arch cap 層級)→ cap 在產生階段、三處同一份、meta 計數+未列出提示、棘輪重新有效;
 **C eval 側**(s1f4/s2f2 `_touched_edit` 消融閘覆蓋縮水;s2f5 rescued 現在其實被算進 P@8 母體只是僥倖)→ #2b/#4 明文;
@@ -178,20 +167,6 @@ s1 5(2 blocker,含 patch 副本實測)/ s2 8(3 blocker,含工具清單逐項可�
 meta 慣例(arch)、per-split 落點(s2)、pin_noise 拆句(s2f8)、payload 觀測(s2)。放行:無。
 arch ⚠×2:lane 字串命名(kind 先例,採納不改)、eval 排除無先例(以 #2b 明文化+rescued 對稱處理回答)。
 
-### r3(2026-08-24;上限輪;s1/s2/s3 + arch + Codex)
-s1 6(2 blocker)/ s2 5(2 blocker)/ s3 4 major / arch 3+2⚠(1 major)/ Codex 3(1 blocker)。★達上限未收斂★。全折:
-**A 安置模型講死**(s2f1 blocker「不進 results」vs「final+=lane」自相矛盾;Codex f1/s1f1/s2f2 三席同抓 `cmd_impact_diff` 這條三輪沒人看過的消費路徑)
-→ JSON 獨立頂層鍵 `"lane"`,results 不含;沒學過的讀者結構性安全、要用的 opt-in;diff/sync-check 明文不含+測試⑩;
-**B lane score 常數 0.70 無鑑別力**(s1f2)→ R 公式;排序鍵補 hop(arch);
-**C eval 精度**(s1f3 順手全濾會讓棘輪失義→測試⑨;arch major 同檔兩種 free 定義→共用 helper;edit_universe 要帶 lane 鍵 s2f1a);
-**D 假綠綁定**(s2f3 blocker:綁的測試只測分類函式永遠綠)→ 改綁行為測試+測試 docstring 一起改(s1f5);
-**E 作廢數字殘留兩處**(s1f4 blocker:summary KEY 與尺節還寫 82→39)+ must_in_out 矛盾句(Codex f2)→ 統一;
-**F pin_noise 棘輪協定明寫**(Codex f3);**G r2 帳 Codex 錯數與漏署名**(s3f1)→ 更正;
-**H 扇出措辭**(s3f4:殺的是二元砍除,分級降權未試);文件錨補行號(s3f3);meta 命名沿 truncated 慣例、
-LANE_N 轉正數字待跑(arch ⚠,與 HARD_PIN 同輪網格);`_RISK_ENUM` 錨兩點分開指(s1f6)。放行:無。
-★三輪走勢:r1 打掉 about 豁免(方向)、r2 打掉降自由席與口徑偷換(機制)、r3 打掉安置模糊與漏網消費點(接線)。
-r3 的修法(獨立 JSON 鍵)是折入時新定的,★沒有任何審查員看過★——這是攤給人裁的核心事實。★
+## 下一步
 
-## 下一步(達上限,人裁)
-
-選項:甲=開新編號一輪 delta 審(只審獨立鍵模型+r3 折入);乙=直接進實作(獨立鍵模型交給 11 條測試+code-loop);丙=擱置。
+r3(上限輪):五席審 v3 delta(參考道獨立容器/cap/全站分流清單/工具清單 2b-9/驗收改寫)。過了才動手;沒過攤人裁。
