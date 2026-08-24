@@ -17,6 +17,13 @@ related:
 tags:
   - type/project
   - status/doing
+decisions:
+  - content: 三輪達上限後裁甲:開新編號 pin-denoise-a-v4 再審一輪 delta(獨立 JSON 鍵安置模型+r3 折入)
+    id: d1
+    context: r3 折入的核心修法(lane 用 JSON 獨立頂層鍵)是折入時新定、沒有審查員看過;動的是 hook 機械保證面;安置模型正是本案連續三輪被打的同一類洞
+    why_chosen: 一輪成本低;新結構決定該有沒脈絡的眼睛看過再動手
+    decided: 2026-08-24
+    valid: true
 ---
 # 固定席降噪A層_計劃
 
