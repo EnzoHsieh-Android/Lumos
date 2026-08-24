@@ -263,15 +263,16 @@ def pin_snapshot(sha):
     return False
 
 
-def pin_top3_must(pins, lab):
-    """★甲案成績單:固定席前 3 位的必看命中率★(Projects/固定席扇出降權_計劃 工具清單 #10)。
-    about_code 收窄後只動固定席內順序,P@8/must-see 都量不到它——這是唯一會動的數字。
-    = 前 3 席裡標 2 的個數 / min(3, 該題標 2 總數);該題沒標 2 → None(不進平均)。只印、進 verdict/history,★不進 gate★(先觀測一個月)。"""
-    pinned = [x for x in pins if x.get("pinned")]
+def output_top3_must(res, lab):
+    """★成績單乙案(2026-08-24 Enzo 裁):輸出前 3 名的必看命中率★(Projects/固定席扇出降權_計劃 調研節)。
+    量的是「人打開 hook 先看到的三行是不是該看的」——不限固定席(甲案 pin_top3_must 是死表:
+    必看 15/69 坐固定席、事故恆最前,前 3 席組成幾乎不變)。res 順序=impact 輸出順序(pins→free→rescued)。
+    = 前 3 項裡標 2 的個數 / min(3, 該題標 2 總數);沒標 2 → None。只印、進 verdict/history,★不進 gate★。
+    歸因:數字動了要分是 about 還是排序,拿 LUMOS_IMPACT_ABOUT=0 離線對照。"""
     must_total = sum(1 for v in lab.values() if v == 2)
     if must_total == 0:
         return None
-    hit = sum(1 for x in pinned[:3] if lab.get(x["node"], 0) == 2)
+    hit = sum(1 for x in res[:3] if lab.get(x["node"], 0) == 2)
     return round(hit / min(3, must_total), 4)
 
 
@@ -358,7 +359,7 @@ def eval_edit(gs, split=None, k=8):
         row["must_in_out"] = sum(1 for n in must if n in out_nodes)
         row["must_pinned"] = sum(1 for n in must if n in pin_nodes)
         row["pin_noise"] = sum(1 for x in pins if lab.get(x["node"], 0) == 0)
-        row["pin_top3_must"] = pin_top3_must(pins, lab)   # #10:固定席前 3 位必看命中率(pins 保留 impact 輸出順序)
+        row["out_top3_must"] = output_top3_must(res, lab)   # #10 乙案:輸出前 3 名必看命中率(res=人看到的順序)
         rows.append(row)
     return rows
 
@@ -405,8 +406,8 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         _pct = lambda x: f"{x*100:.0f}%" if x is not None else "無資料"
         print(f"  前 {k_edit} 名裡對的比例 {_pct(fp)}    ← 主要的尺(P@{k_edit});只比文字 {_pct(bp)}、只比圖結構 {_pct(gp)}——綜合要贏這兩個才算有用")
         print(f"  對的有沒有排前面(nDCG@{k_edit}):{fn}(只比文字 {bn}、只比圖 {gn})")
-        pt3 = _macro(erows, "pin_top3_must")
-        print(f"  固定席前 3 位是必看的比率:{pt3}    ← about_code「關於」標籤的成績單,只看不閘(它只重排固定席,其他尺量不到它)")
+        pt3 = _macro(erows, "out_top3_must")
+        print(f"  輸出前 3 名是必看的比率:{pt3}    ← 人打開 hook 先看到的三行準不準;只看不閘(歸因用 LUMOS_IMPACT_ABOUT=0 對照)")
 
         frees = [r["n_free"] for r in erows]
         med, p95 = _pctl(frees, 0.5), _pctl(frees, 0.95)
@@ -434,7 +435,7 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         verdict["must_pinned_count"] = must_pin   # 唯一機保=固定席;in_out 含自由席無保底,勿混讀
         verdict["must_in_out_count"] = must_hit   # ★棘輪比的是個數不是比率★——
         verdict["must_total"] = must_t            #   比率會被「總數變了」稀釋,個數不會
-        verdict["pin_top3_must"] = pt3            # #10 甲案成績單:只觀測不閘(接線照 fusion_p:row→_macro→verdict→history)
+        verdict["out_top3_must"] = pt3            # #10 乙案(2026-08-24):只觀測不閘;舊 key pin_top3_must 語意不同不沿用
     return {"split": tag, "search": srows, "edit": erows, "verdict": verdict}
 
 

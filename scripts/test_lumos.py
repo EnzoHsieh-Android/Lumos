@@ -20895,32 +20895,34 @@ def t_eval_history_record_fields():
           "unjudged_count" in rec2 and rec2["unjudged_count"] is None, str(rec2))
 
 
-def t_eval_pin_top3_must():
-    """★#10 新指標 pin_top3_must:固定席前 3 位必看命中率★(甲案成績單;只印、進 verdict/history、不進 gate)。
-    分母 min(3, 標 2 總數);該題沒標 2 → None 不進平均(_macro 自動排除)。接線照 fusion_p:row → _macro → verdict。
-    翻紅釘:把分母改成固定 3 → 「1 必看命中 → 1.0」翻紅。"""
+def t_eval_output_top3_must():
+    """★指標乙案(2026-08-24 Enzo 裁):輸出前 3 名必看命中率——量人打開 hook 先看到的三行,不限固定席★。
+    甲案版(pin_top3_must,只量固定席)實測是死表:必看 15/69 坐固定席、事故恆最前,前 3 席組成幾乎不變。
+    分母 min(3, 標 2 總數);沒標 2 → None 不進平均;接線照 fusion_p(row→_macro→verdict→history,不進 gate)。
+    history 舊 key pin_top3_must 不追改(語意不同,新 key 免混讀)。
+    翻紅釘:把母體改回只取 pinned → 「free 也算」那條翻紅。"""
     _need_src("governance/eval")
     root, gs = _mk_eval_fixture()
     m = _load_retrieval_eval(root)
     P = lambda n: {"node": n, "pinned": True, "score": 1.0}
     F = lambda n: {"node": n, "pinned": False, "score": 0.5}
-    check("2 必看在前 3 → 1.0", m.pin_top3_must([P("a"), P("b"), P("c"), P("d")], {"a": 2, "b": 2, "c": 0}) == 1.0, "")
-    check("2 必看只 1 個在前 3 → 0.5", m.pin_top3_must([P("a"), P("c"), P("x"), P("b")], {"a": 2, "b": 2}) == 0.5, "")
-    check("★只有 1 個必看且命中 → 1.0(分母 min(3,1))★", m.pin_top3_must([P("a"), P("c"), P("x")], {"a": 2, "c": 1}) == 1.0, "")
-    check("5 必看前 3 全中 → 1.0(分母 min(3,5))", m.pin_top3_must([P(c) for c in "abcde"], {c: 2 for c in "abcde"}) == 1.0, "")
-    check("沒標 2 → None", m.pin_top3_must([P("a")], {"a": 1}) is None, "")
-    check("free 不算固定席", m.pin_top3_must([F("a"), P("b")], {"a": 2, "b": 2}) == 0.5, "")
-    # 接線:eval_edit row 有欄、report_goldset verdict 有欄、不在 gates
+    check("前 3(含 free)全必看 → 1.0", m.output_top3_must([P("a"), F("b"), F("c")], {"a": 2, "b": 2, "c": 2}) == 1.0, "")
+    check("★free 排第 2 的必看也算(乙案核心:不限固定席)★", m.output_top3_must([P("x"), F("a")], {"a": 2, "x": 0}) == 1.0, "")
+    check("2 必看只 1 個進前 3 → 0.5", m.output_top3_must([P("a"), P("x"), P("y"), F("b")], {"a": 2, "b": 2}) == 0.5, "")
+    check("5 必看前 3 全中 → 1.0(分母 min(3,5))", m.output_top3_must([F(c) for c in "abcde"], {c: 2 for c in "abcde"}) == 1.0, "")
+    check("沒標 2 → None", m.output_top3_must([P("a")], {"a": 1}) is None, "")
+    check("第 4 名以後不算", m.output_top3_must([F("x"), F("y"), F("z"), F("a")], {"a": 2}) == 0.0, "")
     canned = [P("Systems/Alpha.md"), P("Systems/Hub.md"), F("Projects/Gamma.md")]
     gs["labels"]["E01"] = {"Systems/Alpha.md": {"final": 2, "claude": 2, "codex": 2}, "Systems/Hub.md": {"final": 1, "claude": 1, "codex": 1}}
     m.edit_universe = lambda case: canned
     rows = m.eval_edit(gs)
-    check("eval_edit row 有 pin_top3_must", rows and all("pin_top3_must" in r for r in rows), str(rows)[:200])
+    check("eval_edit row 有 out_top3_must", rows and all("out_top3_must" in r for r in rows), str(rows)[:200])
+    check("row 不再有舊 key pin_top3_must", all("pin_top3_must" not in r for r in rows), "")
     rep = m.report_goldset(gs)
-    check("★verdict 有 pin_top3_must(接到 history 那層)★", "pin_top3_must" in rep["verdict"], str(rep["verdict"])[:300])
-    src = (root / "x").read_text(encoding="utf-8") if (root / "x").exists() else open(m.__file__, encoding="utf-8").read()
+    check("★verdict 有 out_top3_must(接到 history)★", "out_top3_must" in rep["verdict"], str(rep["verdict"])[:300])
+    src = open(m.__file__, encoding="utf-8").read()
     gates_src = src[src.find("gates = {"):src.find("gates = {") + 600]
-    check("不進 gates", "pin_top3_must" not in gates_src, gates_src[:200])
+    check("不進 gates", "top3" not in gates_src, gates_src[:200])
 
 
 def t_refresh_merge_apply():
