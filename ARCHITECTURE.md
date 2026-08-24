@@ -1,6 +1,6 @@
 # Lumos 架構圖
 
-> 「圖譜即合約」工具組的**唯一源 → 分發 → 消費端**模型。一張圖看懂:什麼東西住在哪、用哪個指令裝到哪、為什麼非這樣分不可。
+> 「圖譜即合約」工具組的**唯一源 → 分發 → 消費端**模型:所有東西只在一個 repo 維護(唯一源),裝到兩種地方生效——整台機器共用的(給 AI 的操作手冊),和複製進每個專案的(指令與檢查程式)。一張圖看懂什麼住哪、用哪個指令裝、為什麼非這樣分不可。
 
 ## 1. 全景:唯一源 → 兩種 scope → 消費端
 
@@ -11,7 +11,7 @@ flowchart TB
         CLI["scripts/lumos<br/>(python3 標準庫單檔 CLI)"]
         TEST["scripts/test_lumos.py"]
         GHOOKS["scripts/hooks/<br/>git: pre-commit / post-commit / pre-push"]
-        CHOOKS["scripts/hooks/claude/<br/>PreToolUse (impact 注入) · PostToolUse (自足性/rot 後驗)"]
+        CHOOKS["scripts/hooks/claude/<br/>SessionStart (進場提示/CI 狀態) · 改檔前 (波及注入) · 改檔後 (自動複查)"]
         INST["安裝器<br/>get.sh · get.ps1 · install.sh<br/>install-hooks.sh · install-graph-toolchain.sh · merge-claude-settings.py"]
         TPL["scripts/templates/graph-discipline.md<br/>(圖譜先行紀律範本)"]
         RENAME["scripts/graph-rename.sh · fetch-notesmd.sh<br/>(notesmd move 封印)"]
@@ -21,7 +21,7 @@ flowchart TB
     subgraph USER["① user-scope (每台機器一份)"]
         direction TB
         USKILL["~/.claude/skills/lumos-*<br/>(symlink → Lumos repo)"]
-        UCHOOK["~/.claude/hooks/ + settings.json<br/>(L1/L3 + 註冊)"]
+        UCHOOK["~/.claude/hooks/ + settings.json<br/>(給 AI 的提示 hooks + 註冊)"]
         UBIN["~/.local/bin/lumos<br/>(全域指令 symlink)"]
     end
 
@@ -57,7 +57,7 @@ flowchart TB
     class PROJ,PCLI,PHOOK,PCLAUDE,PGRAPH,CONSUMER proj
 ```
 
-**為什麼分兩種 scope**:CI 只 checkout 專案 repo(要能跑 `scripts/lumos doctor`)、git hook 是 per-repo —— 所以 CLI/hooks **必須 vendor 進各專案**。skills 是純方法論文件,user-scope symlink 共用一份就好,不必 vendor(否則各專案副本會漂移)。
+**為什麼分兩種 scope(生效範圍)**:CI 只會抓你的專案 repo、git hook 也是一個 repo 一份——所以指令和檢查程式**必須複製進每個專案**(術語叫 vendor)。skills 是純方法論文件,整台機器用捷徑(symlink)共用一份就好,不複製——複製了反而各專案的副本會各自過期。
 
 ## 2. 安裝 / 生命週期指令做了什麼
 
@@ -68,7 +68,7 @@ flowchart LR
         B1["clone Lumos<br/>(--pull: 既有也拉最新)"] --> B2["install.sh<br/>→ skills symlink"]
         B2 --> B3["lumos install<br/>→ 全域 lumos"]
         B3 --> B4["install-hooks.sh<br/>→ repo git hooks"]
-        B4 --> B5["⟳ 重啟 session<br/>(L1/L3 載入)"]
+        B4 --> B5["⟳ 重啟 session<br/>(提示 hooks 生效)"]
     end
 
     subgraph UPD["lumos update (升級既有專案)"]
@@ -132,9 +132,9 @@ flowchart TB
 
 ## 4. 強制力管線 (圖譜不腐爛的機制)
 
-由「動手前推播 → commit 把關 → push 硬閘 → CI → **回流當輪修**」五段;訊號主動推到眼前(impact),硬閘擋在提交與推送點,CI 結論由 `lumos ci-wait` 拉回同一輪(需專案宣告 `.lumos/config.json` 的 `ci` 區塊才啟用;未宣告=此段不存在)。
+五段接力:「動手前推播 → 提交把關 → 推送硬閘 → CI → 結果拉回當輪修」。動手前,系統主動把「你要改的檔會波及哪些筆記」推到眼前;硬的關卡擋在提交與推送兩個點;推上去之後 `lumos ci-wait` 把雲端測試結論拉回同一輪工作裡修(這段要專案在 `.lumos/config.json` 宣告 `ci` 區塊才啟用)。
 
-> ⚠ **第五段是觀測不是強制**(2026-07-29 外審正名):`ci-wait` 只把雲端結論拉回來給人/agent 當輪修,**擋不了 push 也擋不了 merge**;gh 缺席、config 壞損、逾時、無 run 一律 fail-open rc0。要「紅燈進不了 main」得在 GitHub 開 branch protection required check——那是本工具**不碰**的設定面。前四段才是硬閘。
+> ⚠ **第五段是觀測不是強制**:`ci-wait` 只負責把雲端結論拉回來讓你當輪修,**擋不了 push 也擋不了 merge**;查不到結果時一律放行不誤擋。要做到「紅燈進不了主幹」,得在 GitHub 開分支保護(required check)——那是平台設定,本工具不碰。前四段才是硬閘。
 
 ```mermaid
 flowchart TB
@@ -167,4 +167,8 @@ flowchart TB
     class BEFORE,PRE,POSTT push
 ```
 
-> **地板不是 oracle**:PreToolUse 是推播(可被無視)、git 閘可 `--no-verify` 繞(自負、留痕)。守得掉「忘了/隨手漏」,守不掉「刻意繞+不誠實」——那留給人。
+> **地板不是萬能裁判**:動手前的推播可以被無視、git 關卡可以用 `--no-verify` 繞過(後果自負、會留痕)。這套機制守得住「忘了/隨手漏」,守不住「刻意繞+不誠實」——那一層永遠留給人。
+
+---
+
+> **接手圖譜是空的舊專案?** 工具組附「節點還原」七步 SOP(從 code 和 git 把脈絡還原成節點,惰性生長不攤平)——白話版見 [README §6](README.md),操作全文在 `skills/lumos-project-notes` 的 reference。
