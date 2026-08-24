@@ -10,7 +10,7 @@ summary: |-
   KEY:四裁定——d1 任務驅動+最小骨架不攤平;d2 指針級快寫/why 級逐句標身分;d3 第一版純文件層不建 CLI;d4 放置=全文進 reference.md、commands/09 薄查表(08 已佔用,「八類」三處同步改九類)
   KEY:★r1 審計(2026-08-24,5 席)實錘要點★:Check J 只掃 summary、KEY 行只提醒不擋、FLOW/DEP 零檢查——「機械防瞎編」宣稱降級為「合約級硬擋+其餘靠交叉審計」;蓋章半成品機械全綠是已知中間態;冷啟動=code-only 重建,openwiki 節點裁的「圖譜史底料」緩解在本場景結構性缺席,補償=雙 agent 交叉審計(16.3% 不一致率教訓)
   KEY:★r2 審計(2026-08-24,5 席)實錘要點★:標記語序硬規定(推測:/佚失: 緊貼行首標籤,走查席實測重現 blocker)/變體 B 引用走樣全對齊原文(逐節點 12–15 條、❌→Verification+verified_by、刪 self-audit 錯綁、「必跑」明標本案延伸)/舊節點先 diff 別覆寫/★第四條去降級/實跑樣本 1→0 誠實化/考古機密紅線/「八類」活文字四處/合約候選放 Projects 計劃筆記/guard 指令指 reference 實形
-  KEY:★d3 澄清(2026-08-24)★:d3 context 的「08 檔」是撞號發現前的歷史用語,現行編號一律以 d4 的 09 為準(決策文字不可改,以本行澄清;r2 s2 抓到單讀 d3 會誤導)
+  KEY:★d3/d4 文字澄清(2026-08-24)★:d3 context 的「08 檔」是撞號發現前的歷史用語,現行編號以 d4 的 09 為準;d4 的「三處」是 r2 發現第四處(SessionStart hook)之前的清單,現行以 [S3] 的四處為準(決策文字不可改,以本行澄清;r2 s2 與鏡像核對分別抓到單讀會誤導)
   DEP:[[Systems/check-j-regen-guard]]｜[[Systems/外部對照-code衍生wiki]]｜[[Projects/from-scratch重生守衛_計劃]]
 plan_refs: []
 related:
