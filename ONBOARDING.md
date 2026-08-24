@@ -13,7 +13,7 @@ clone 專案後,在專案裡跑一個指令,**連 Lumos 都會自動幫你 clone
 ```bash
 git clone <你的專案> && cd <你的專案>
 python3 scripts/lumos bootstrap     # 自動:clone Lumos + skills + 全域 lumos + repo hooks
-# 然後重啟 Claude Code session(L1/L3 hooks 要 session start 載入)
+# 然後重啟 Claude Code session(給 AI 的提示 hooks 要在 session 開頭載入)
 ```
 
 之後再 clone 別的專案,因為機器已設定好,只要 `python3 scripts/lumos bootstrap`(或 `scripts/install-hooks.sh --force`)即可。
@@ -23,7 +23,7 @@ python3 scripts/lumos bootstrap     # 自動:clone Lumos + skills + 全域 lumos
 > **全新、還沒帶 `scripts/lumos` 的專案**改走兩條指令:
 > ```bash
 > cd <你的專案> && curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
-> # 一鍵到底(2026-07-25 起):機器層+專案層 auto-init(會先問一句,按 y 建圖譜+工具+hooks);顆粒操作(只 init/只 install)見 README 4b
+> # 一鍵到底:機器層+專案層一次裝好(會先問一句,按 y 建圖譜+工具+hooks);顆粒操作見 README 3b
 > ```
 > **原生 Windows(PowerShell)**改用 `get.ps1` 入口:`irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex`(全域 lumos 用 `.cmd` shim、skills 用 junction),重啟 session 後 `cd <你的專案>; lumos init`。詳見 [README 4c](README.md)。
 > (離線/企業內網仍可用手動 `install-graph-toolchain`,見維護者備註。)
@@ -49,7 +49,7 @@ cd <你的專案> && scripts/install-hooks.sh --force
 | `git` | 全部 | 無法運作 |
 | `python3` | lumos CLI + hooks merge(純標準庫,不裝套件) | 無法運作 |
 | Claude Code | skills / hooks 才會 fire | 工具能跑,但 AI 不會自動載方法論 |
-| Claude Max 訂閱 | 第三層 AI 後驗(L3)才划算 | L3 後驗會吃配額/降級,其餘正常 |
+| Claude Max 訂閱 | 「提交後派 AI 自動複查」那層才划算 | 該層會吃配額/降級,其餘功能正常 |
 | notesmd-cli(選用) | rename/移檔(`graph-rename.sh`) | 只有改檔名時才需要;`fetch-notesmd.sh` 可抓 |
 
 ---
@@ -77,7 +77,7 @@ scripts/install-hooks.sh --force
 ```
 裝三樣:
 - **git hooks**(pre-commit 擋「改 code 沒更新圖譜」/ post-commit 留痕 / pre-push 跑 lumos doctor)— 透過 `core.hooksPath`,**per-clone 必裝一次**
-- **Claude hooks**(L1 收工提醒 / L3 提交後 AI 後驗)→ 複製到 `~/.claude/hooks/`
+- **Claude hooks**(收工提醒/提交後 AI 自動複查)→ 複製到 `~/.claude/hooks/`
 - **settings 註冊** → merge 進 `~/.claude/settings.json`
 
 > `--force` 是必要的:你機器上可能有舊版 Claude hooks,不 force 會被 skip 不更新。
@@ -119,6 +119,8 @@ lumos new <type> <名稱>       # 依模板建節點(system/verification/issue/p
 lumos archive --days 180      # 滾動歸檔(dry-run 預設;活守衛護欄保護仍存活的守衛證據)
 ```
 body 內容(進度段落、checkbox、表格)用 Edit;rename/移檔用 `scripts/graph-rename.sh`。
+
+**接手的專案圖譜是空的?** 走「節點還原」七步(從 code 和 git 把脈絡撈回來落成節點):快查表 `~/.claude/skills/lumos-project-notes/commands/09-節點還原.md`,README 第 6 節有白話版。
 
 ---
 

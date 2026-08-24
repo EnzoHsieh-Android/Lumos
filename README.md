@@ -6,340 +6,276 @@
 >
 > (路摸思:點亮咒。一邊照「程式碼」——把藏起來的為什麼、決策、硬合約照出來;一邊照「需求」——用繞不過的對話逼出理解,讓人走對路。Lumos 不替你把需求變對,它把路照亮、讓你自己走對。)
 
-「**圖譜即合約**」方法論的**完整工具組唯一源**。把每一次全 AI 迭代織進「已理解的布」:知識圖譜是專案的唯一真相來源(為什麼這樣設計 / 邊界 / 不可改的合約),用 **commit-time 強制力與可執行合約測試**確保它不腐爛。
+---
 
-> **本治理建立在 [Claude Code](https://claude.com/claude-code) 之上。** 整套規範以 Claude Code 為執行的 AI agent 來設計:`skills/` 是 user-scope 的 Claude Code skills(symlink 到 `~/.claude/skills/`)、紀律注入專案的 `CLAUDE.md`、L1/L3 在 Claude Code session start 載入、`[audit:]` 獨立合法性審計用**乾淨的 Claude agent**(maker ≠ checker)。`scripts/lumos` CLI 本身是純 python、哪裡都能跑;但「先讀後動 / 退場寫回 / 獨立審計」這條完整迴圈假設 agent 就是 Claude Code。
+## 0. 一分鐘搞懂
+
+AI 寫大部分 code 的時代,最貴的不是「寫得出來」,是「**還有沒有人懂這個系統**」。
+
+Lumos 讓專案多帶一本**知識圖譜**——一疊互相連結的 Markdown 筆記,專記 code 自己說不出的事:**為什麼**這樣設計、**哪裡**不能亂動、**驗證過沒有**。然後用 git hooks(提交/推送時自動執行的檢查程式)把「改了 code 卻不更新筆記」這條路堵住——讓「不寫回」比「寫回」更麻煩。
+
+- 給**人**:接手陌生專案時有一張活地圖,不用從幾萬行 code 逆向猜。
+- 給 **AI**:動手前先讀圖譜(知道哪面是承重牆),做完被規則逼著把「為什麼」寫回去。整套流程以 [Claude Code](https://claude.com/claude-code) 為預設的執行代理設計;指令本體純 python、哪裡都能跑。
 
 ---
 
-## 1. Lumos 解決什麼
+## 1. 解決什麼問題
 
-當 AI 寫了大部分的 code,瓶頸就從「生不生得出 code」變成「**我們還懂不懂這系統、看不看得出某個改動是錯的**」。Code 只告訴你「現在長這樣」,它說不出:
+Code 只告訴你「現在長這樣」。它說不出:
 
-- **為什麼**這樣設計(決策、被否決的方案)。
-- **邊界**在哪。
-- 哪些行為是**合約**(改了 = breaking)、哪些是**偶然**(可隨意重構)。
-- 有沒有**驗證過**、在什麼前提下成立。
+- **為什麼**是這個設計(當初比較過什麼、否決了什麼)。
+- **邊界**在哪(這個模組管到哪為止)。
+- 哪些行為是**合約**(改了=別的東西會壞)、哪些只是**剛好長這樣**(可以放心重構)。
+- 有沒有**驗證過**、在什麼前提下才成立。
 - 這個動作**可不可逆**、搞砸了怎麼收回。
 
-Lumos 把這些知識存成一張 Markdown 筆記圖譜(Obsidian 相容,但**核心不需要 Obsidian app**;僅兩支選配 Claude hook 的部分功能在無 Obsidian 時自動降級),用零依賴的 python CLI + git hooks 讓「**不更新圖譜**」比「更新圖譜」更難。
+這些知識傳統上活在老鳥腦裡,人一走就沒了;AI 時代更慘——AI 每個 session 都是新人。Lumos 把它們存成圖譜,用工具保鮮。
+
+(筆記格式與 Obsidian 相容,但**不需要裝 Obsidian**;工具鏈自己就能讀寫。)
 
 ---
 
 ## 2. 核心理念:圖譜即合約
 
-- **圖譜是意圖與合約的真相。** 圖譜與其他文件 / 記憶 / 臆測衝突 → 以圖譜為準。**但行為事實不是**——「現在實際跑成什麼樣」的權威是測試 / 執行結果 / 生產觀測；兩者衝突時不自動判圖譜為真，那代表有東西壞了，查清哪邊錯並立事故節點（2026-07-29 外部評審吸收：本專案自己出過「圖譜寫舊態、程式已更新」的活例，照舊規則會把正確的碼判成錯）。
-- **先讀再動。** 動既有系統前,第一個動作是 `lumos`,不是 `grep` / `Read` / 查 DB。圖譜先給你合約與邊界,code/DB 只拿來印證細節。
-- **退場寫回。** 做完把決策 / 驗證 / 合約寫回圖譜。
-- **commit-time 強制。** pre-commit 硬擋「改 code 沒更新圖譜」;`lumos doctor` 證明圖譜內部一致、且每條載重宣稱都綁了可執行測試。
+四句話講完:
+
+1. **圖譜是「意圖」的真相來源。** 「當初為什麼、規則是什麼」以圖譜為準。但「現在實際跑成什麼樣」的權威是測試和生產環境——兩邊打架時不是自動信圖譜,而是查清哪邊錯了、記一筆事故。
+2. **先讀再動。** 要動既有系統,第一個動作是查圖譜(`lumos search`),不是 grep。圖譜先給你邊界和地雷,code 拿來印證細節。
+3. **退場寫回。** 做完當場把決策、驗證結果寫回圖譜——趁你還是「目擊者」的時候寫,別留給日後的人當考古學家。
+4. **提交時強制。** 上面三條靠自覺都會爛。所以 pre-commit(提交前檢查)硬擋「改 code 沒動圖譜」;`lumos doctor` 定期驗整張圖的一致性。
 
 ---
 
-## 3. 工具組內容
+## 3. 快速上手
 
-| 類別 | 檔案 / 命令 | 作用 |
-|---|---|---|
-| **CLI** | `scripts/lumos`、`scripts/test_lumos.py` | 純 python3 標準庫、零依賴、62 個頂層命令。讀 / 寫(寫後自驗)/ 巡檢(`doctor`)/ 歸檔。 |
-| **合約守衛 scaffold** | `lumos guard list/scaffold/bind/audit/trace/kill` | 對談驅動:列未綁的 `★INVARIANT★`、套範本產**預設紅燈**測試 stub、綁 `[test:]`、蓋獨立 `[audit:]`;`kill` 沙盒真弄壞驗殺傷力。 |
-| **檢索與推薦** | `lumos search`(預設相關性排序)、`impact --ranked`(已接 hook)、`context --recommend`(dormant) | BM25F+圖分融合;search 與 hook 面均經人工 goldset 評測轉正(§6 門檻;評測釘語料快照可重現)。評測器 `governance/eval/retrieval_eval.py`。 |
-| **對抗審計 loop** | `lumos pitfalls`、`code-loop`、`canary`、`loop`、`fold-check`、`refcheck` | `pitfalls --diff` 分 tier;tier=high 走 canary 護的 `code-loop`(對抗代碼審);`design-loop` 在進實作前審 spec;`fold-check` 抓設計折入漂移。 |
-| **影響 / 完整性** | `lumos impact`、`anchor verify/approve`、`lumos testmap` | `impact` 由改動的檔反查受影響關聯節點(直接/間接)+ 命中事故(`pitfall_when`);`anchor` 守測試/閘檔不被**無聲**竄改(改動偵測:防意外/無痕漂移;同 repo 內自簽,非防蓄意攻擊的信任根);`testmap` 建檔案↔測試依賴地圖(naming/content/cochange 三路訊號),`affected` 依 diff 推薦該跑測試(advisory,Landmark 真庫金標雙層 recall 1.0 轉正)。 |
-| **git hooks** | `scripts/hooks/` | pre-commit 硬擋「改 code 沒帶圖譜」;post-commit 留繞過痕跡;pre-push 跑 `doctor --ci` **+ anchor verify + tier=high 未過 code-loop 硬擋**。 |
-| **Claude hooks** | `scripts/hooks/claude/` | PreToolUse:改 code 前注入 impact 影響半徑;PostToolUse:自足性 / verification-rot 後驗。(2026-07-06 ADR:撤除 Stop 每回合 code-loop nag——太擾民,code-loop 由 pre-push 單點把關) |
-| **安裝器** | `get.sh`、`get.ps1`、`install.sh`、`scripts/merge-claude-settings.py`(底層 `install-hooks.sh` / `install-graph-toolchain.sh`) | `get.sh` 一鍵到底(機器層+專案層 auto-init,2026-07-25);`get.ps1`(Win)仍兩步(機器層+手動 `lumos init`)。設 hooks / 合併 Claude settings。 |
-| **紀律範本** | `scripts/templates/graph-discipline.md` | 「圖譜先行」紀律,注入各專案 `CLAUDE.md`。 |
-| **skills** | `lumos-project-notes`、`core-knowledge`、`design-loop`、`code-loop`、`pitfalls-gapfill` | 寫給 **AI** 的圖譜讀寫規範與對抗審計 loop 編排(user-scope 共用)。 |
-
----
-
-## 4. 快速上手
-
-### 4a. 已導入 Lumos 的專案
-clone 後在裡面跑一個指令——**連 Lumos 都自動幫你 clone**:
+### 3a. 專案已經在用 Lumos(接手的人)
 
 ```bash
 git clone <你的專案> && cd <你的專案>
-python3 scripts/lumos bootstrap     # 自動:clone Lumos(若缺)+ user-scope skills + 全域 lumos + repo hooks
+python3 scripts/lumos bootstrap     # 一鍵:自動裝好 Lumos 本體、skills、全域指令、hooks
 ```
 
-然後**重啟 Claude Code session**(L1/L3 hooks 在 session start 載入)。
+然後**重啟 Claude Code session**(有些提示是在 session 開頭載入的)。
 
-> `bootstrap` 預設**不**拉更新。日後更新:`git -C ~/harness/lumos-toolchain pull`(全 symlink),或 `lumos bootstrap --pull`。
+### 3b. 全新專案要導入(一條指令)
 
-### 4b. 全新專案導入(一條指令)
-
-**站在你的專案裡跑**(連 Lumos 都自動 clone;2026-07-25 起 get.sh 委派 bootstrap,一鍵到底):
+站在你的專案目錄裡跑:
 
 ```bash
 cd <你的專案>
 curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
-# 會問「要把 <路徑> 建成 lumos 專案嗎? [y/N]」→ 按 y 即建圖譜+工具+hooks;然後重啟 Claude Code session
+# 它會問「要把 <路徑> 建成 lumos 專案嗎? [y/N]」→ 按 y;然後重啟 Claude Code session
 ```
 
-- 機器層(clone Lumos+skills+全域 `lumos`)＋專案層(確認後 auto-init)一次完成;**問句預設 N**,站在不想導入的 repo(如 dotfiles)按 Enter 就跳過。
-- 非互動/CI:`… | bash -s -- --init` 免確認直接建;`--pull` 拉最新。可先 `curl -fsSL <url> -o get.sh` 審閱再跑。
-- 站在**非 git 目錄**跑 → 只裝機器層(同舊行為)。
+- 問句**預設是 N**:站在不想導入的目錄(例如 dotfiles)按 Enter 就跳過,不會誤裝。
+- 不想盲跑遠端腳本?先 `curl -fsSL <網址> -o get.sh` 下載審閱再執行。
+- CI 等非互動環境:結尾加 `-s -- --init` 免確認直接建。
 
-**顆粒操作(進階)**:只建專案層用 `lumos init`(slug 預設取資料夾名,`--name` 自訂;既有 vault **絕不覆寫**,`--no-hooks` 輕量版);只裝機器層用 `lumos install`。安裝↔卸載對稱:`bootstrap/get.sh ↔ teardown`(一鍵)、`install ↔ uninstall`(機器層)、`init ↔ deinit`(專案層)。
+<details><summary>Windows(原生 PowerShell)</summary>
 
-<details><summary>進階/離線:手動 install-graph-toolchain</summary>
+前置:Git for Windows、python 在 PATH、Claude Code。
+
+```powershell
+irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex
+# 重啟 Claude Code session;若找不到 lumos,把 %USERPROFILE%\.local\bin 加進 PATH
+cd <你的專案>; lumos init
+```
+</details>
+
+<details><summary>顆粒安裝/離線(進階)</summary>
+
+只建專案層:`lumos init`(圖譜資料夾名稱預設取專案名,`--name` 自訂;既有圖譜**絕不覆寫**;`--no-hooks` 只建圖譜不裝檢查)。只裝機器層:`lumos install`。手動離線:
 
 ```bash
 git clone https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
-cd ~/harness/lumos-toolchain && ./install.sh        # user-scope skills(symlink)
-python3 scripts/lumos install                       # (選用)全域 `lumos` 上 PATH
+cd ~/harness/lumos-toolchain && ./install.sh
+python3 scripts/lumos install
 scripts/install-graph-toolchain.sh --target <專案路徑> --slug <名稱>
 ```
 </details>
 
-### 4c. Windows(原生 PowerShell)
-前置:Git for Windows(自帶 bash 跑 git hooks)、python on PATH、Claude Code。
+### 為什麼分「機器層」和「專案層」兩層?
 
-```powershell
-irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex
-# 重啟 Claude Code session(L1/L3 在 session start 載入)
-# 若 lumos 找不到:把 %USERPROFILE%\.local\bin 加進 PATH
-cd <你的專案>; lumos init
-```
-
-`get.ps1` 裝「機器層」:clone Lumos(若缺)+ 呼叫 `lumos install` —— 全域 `lumos` 用 `%USERPROFILE%\.local\bin\lumos.cmd` shim、user-scope skills 用目錄 **junction**(`mklink /J`,失敗才退回複製),皆零權限免 admin;個別 Claude hook 的 `.py` 一律**複製**到 `~/.claude/hooks/`。接著 `lumos init` 同 Unix 建專案層(圖譜骨架 + vendor 工具 + git/Claude hooks)。
-
-### 為什麼分兩層裝?
-CI 只 checkout 專案 repo、git hook 是 per-repo,所以**工具組必須 vendor 進各專案**;而 **skills 是 user-scope**(一份共用、symlink 到 `~/.claude/skills/`)。對 Lumos clone `git pull` 會即時更新 skills + 全域 CLI;專案裡 vendored 的工具組用 `lumos update` 刷新。
+- **專案層**:CI 只會抓你的專案 repo、git hooks 也是一個 repo 一份——所以檢查工具必須**複製一份進每個專案**(term: vendor)。更新用 `lumos update`。
+- **機器層**:給 AI 看的操作手冊(skills)是**整台機器共用一份**,用捷徑(symlink)連到 Claude Code 的目錄——對 Lumos 目錄 `git pull` 一次,所有專案同時吃到新版。
 
 ---
 
-## 5. 心智模型:節點與標籤
+## 4. 心智模型:圖譜裡有什麼
 
-### 節點型別(frontmatter 的 `type:`)
-`system`(模組:流程、合約、依賴)· `verification`(測試/審計紀錄)· `issue`(發現)· `project`(計劃)· `moc`(索引)。
+### 節點=一篇筆記,分五種
 
-### `summary` 符號行(Systems / Issues)
-`summary:` block scalar,每行一個前綴,讓你掃一眼就掌握模組:
+| 型別 | 記什麼 |
+|---|---|
+| `system` | 一個模組:流程怎麼跑、依賴誰、有什麼合約 |
+| `verification` | 一次測試/審計的紀錄(在什麼前提下驗的、何時該重驗) |
+| `issue` | 一個發現/事故 |
+| `project` | 一個計劃/設計 |
+| `moc` | 導覽頁(Map of Content,圖譜的目錄) |
 
-| 前綴 | 意義 | 前綴 | 意義 |
-|---|---|---|---|
-| `FLOW:` | 核心流程 `a→b→c` | `VERIFY:` | 驗證連結 `[[..]]` |
-| `KEY:` | 關鍵概念/欄位 | `DECISION:` | 決策指針(簡版) |
-| `DEP:` | 依賴模組 `[[..]]` | `FLAG:` | 語意標記(`TECHNICAL`/`ORIGIN`…) |
-| `TEST:` | 測試狀態 | `AUTH:` | 認證方式 |
+### 摘要行:掃一眼就懂一個模組
 
-### 三條強制的「鏈」(Lumos 的差異化)
+每篇筆記開頭有幾行帶前綴的摘要:`FLOW:`(流程)`KEY:`(關鍵事實)`DEP:`(依賴誰)`TEST:`(測試狀態)`DECISION:`(決策)——設計目的是**只讀開頭就能掌握全貌**,不用讀完整篇。
 
-**合約鏈** —— *這是不是規則、有沒有被證明?*
+### 三條「鏈」:Lumos 跟一般 wiki 差在哪
+
+一般 wiki 的問題:寫的人說了算,錯了沒人知道。Lumos 給三種載重宣稱掛上「不掛證據就過不了關」的鏈:
+
+**合約鏈**——這是不是真規則?
 ```
-KEY:★INVARIANT★ <業務合約;改 = breaking> [test:方法名] [audit:模型/日期]
-                 └ 宣稱          └ 可執行證據    └ 無脈絡獨立 agent 的合法性判決
-KEY:★DEBT★ <已知偶然行為;可改、不算 breaking>
+KEY:★INVARIANT★ <業務合約;改了=會壞> [test:測試方法名] [audit:模型/日期]
 ```
-- `★INVARIANT★` **必須**綁 `[test:]`(一個真的存在於 code 的測試方法)——否則 `doctor` 報「裸合約」並擋。
-- 然後**必須**帶 `[audit:]` —— 由**無對話脈絡的 agent** 判決「這真的是合約、測試不是套套邏輯」(maker ≠ checker)。缺 = 「未審」,`--ci` 下擋。
-- *不確定是不是合約就不標。* 嚴禁從 code 反推「應該是合約吧」。
+- `★INVARIANT★`(不變量,唸作「這條是合約」)**必須**綁一個真實存在的測試(`[test:]`)——空口宣稱,`doctor` 會擋。
+- 還要過一次**獨立審計**(`[audit:]`):派一個不知道前因後果的乾淨 AI 判「這真的是合約嗎?測試是不是在自己騙自己?」——寫的人不能自己當裁判。
+- 拿不準是不是合約?**就不要標**。嚴禁看著 code 反推「這應該是規則吧」。
+- 另有 `★DEBT★` 標「已知只是剛好長這樣,可以改」。
 
-**可逆性鏈** —— *能不能 undo、怎麼 undo?*(僅 Systems)
+**可逆性鏈**——搞砸了收得回來嗎?
 ```
-KEY:★IRREVERSIBLE★ <收不回:prod 遷移 / 上架> [rollback:decisions]
-KEY:★CHECKPOINT★   <改了難救:部署測試機>
-未標 = 可逆(git/測試級,放手)
+KEY:★IRREVERSIBLE★ <收不回:例如正式環境的資料庫遷移> [rollback:decisions]
+KEY:★CHECKPOINT★   <改了難救:例如部署到測試機>
 ```
-- `★IRREVERSIBLE★` **必須**帶 `[rollback:decisions]`,且節點 `decisions[]` 要有一條非空 `rollback` 欄位(實際回退 SQL / 補償步驟)——否則 `doctor` 的 **Check R** 擋。
-- `★CHECKPOINT★` *建議*帶(缺 = warning,不擋)。
-- **天花板**:`[rollback:]` 證明*你寫下了 undo 路徑*,**不**證明它跑得動、或還符合現行 schema——同 `[test:]`/`[audit:]` 的誠實。別把「有回退」當「安全」。
+標了「不可逆」就**必須**寫下回退步驟(真的 SQL、真的補償流程),`doctor` 會查。沒標=可逆,放手改。
 
-### frontmatter 欄位
-`status`(`doing`/`pass`/`open`/`done`/`stale`/`superseded`…)· `verified_by` / `plan_refs` / `related` / `tags`(list)· `decisions[]`(ADR:`content`/`context`/`alternatives_considered`/`why_chosen`/`trade_offs`/`decided`/`valid`/`superseded_by`/`rollback`)· `valid_under` / `revalidate_when`(重驗條件)· `core_refs`(指向跨專案核心圖譜)。
+**誠實天花板**(重要):工具能證明的是「測試存在、回退有寫、獨立審過」這些**形式**;「規則今天還符不符合業務、回退真的跑得動嗎」只有人能答。別把「有掛證據」當「絕對安全」。
 
-> ⚠ 多個 wikilink 必須是 YAML **list**、一項一行(`- "[[A]]"`)。單字串 `"[[A]], [[B]]"` 會長出 ghost 節點。純量/list/decisions 一律走 `lumos set`/`append`/`decision-add`(安全格式 + 寫後自驗),別手改。
+### 寫入請走指令,別手改開頭欄位
+
+筆記開頭的結構化欄位(狀態、連結、決策)一律用 `lumos set` / `append` / `decision-add` 寫——指令會自動排版+寫完自驗。手改最常見的坑:多個連結擠在同一行,會長出「幽靈節點」。
 
 ---
 
-## 6. 日常工作流
+## 5. 日常怎麼用
 
 ```
-進場 ── lumos search <關鍵字> → lumos context <節點> → lumos contracts <節點>   (動 grep/DB 前先讀圖譜)
-設計 ── spec 進實作前:design-loop(canary 護的對抗審計)到 lumos loop status 收斂;設計寫成計劃節點(Projects/X_計劃)
-動工 ── 改動;改 code 前 impact hook 自動注入受影響關聯節點 + 命中事故;新增 INVARIANT 時 guard scaffold → bind → audit
-寫回 ── lumos set/append/decision-add 記決策、驗證、合約
-自驗 ── lumos lint <節點>        (快、單檔——寫完一個節點馬上跑)
-       ── lumos doctor           (全圖健康)
-終審 ── lumos testmap affected --diff <base>..HEAD 拿建議測試清單(advisory);lumos pitfalls --diff 分 tier;tier=high → code-loop(canary 護對抗代碼審)→ code-loop pass 記留痕
-提交 ── pre-commit 擋 code-without-graph;pre-push 跑 doctor --ci + anchor verify + code-loop 硬擋
+進場 ── lumos search <關鍵字> → lumos context <節點> → lumos contracts <節點>   (動手前先讀圖譜)
+設計 ── 寫成計劃筆記,進實作前跑 design-loop(派幾個不知情的 AI 審稿挑洞)
+動工 ── 改 code;改到檔案時 hook 自動把「會波及哪些筆記、踩過什麼雷」推到你眼前
+寫回 ── lumos set / append / decision-add 記決策、驗證、合約
+自驗 ── lumos lint <節點>(單篇快檢)→ lumos doctor(全圖健檢)
+終審 ── lumos pitfalls --diff 算這批改動的風險級;高風險走 code-loop(對抗式代碼審)
+提交 ── pre-commit 擋「改 code 沒帶圖譜」;pre-push 再跑全套把關
 ```
 
-強制力,由快到硬:
+強制力從軟到硬:
 
-| 層 | 指令 | 範圍 |
+| 層 | 做什麼 | 擋不擋 |
 |---|---|---|
-| **impact** | `lumos impact --file <檔>`(+ PreToolUse hook) | 改 code 前推播受影響關聯節點(直/間接)+ 命中事故;推播不擋 |
-| **lint** | `lumos lint <節點>` | 單檔、不掃 repo——預判 pre-push 會不會擋 |
-| **doctor** | `lumos doctor [--ci]` | 全圖:orphan、斷連、`verified_by` 同步、**Check T**(合約→test→audit)、**Check R**(可逆性)、frontmatter lint |
-| **code-loop** | `lumos code-loop check` | tier=high 分支未過對抗代碼審 → pre-push 單點硬擋 |
-| **pre-push** | `doctor --ci` + `anchor verify` + `code-loop check` | push 前三合一硬擋 |
+| impact 推播 | 改 code 前告訴你會波及哪些筆記 | 只提醒 |
+| `lumos lint` | 單篇筆記快檢 | 提前預警 |
+| `lumos doctor` | 全圖健檢(孤兒、斷連、裸合約、缺回退) | `--ci` 模式會擋 |
+| `code-loop` | 高風險改動沒過代碼審 | push 時硬擋 |
+| pre-push | 健檢+完整性驗證+代碼審留痕,三合一 | 硬擋 |
 
 ---
 
-## 6.5 Brownfield:接手與還原
+## 6. 接手舊專案(Brownfield 還原)
 
-接手一個**已經在跑、但圖譜是空的**專案(自己 vibe 一個月的、或公司的舊系統)怎麼辦?Lumos 的答案不是把整個 repo 攤平自動生文件(那是無查核的合成敘事),而是**節點還原 SOP**——七步、任何技術棧:
+接手一個**已經在跑、但圖譜是空的**專案(自己 vibe 一個月的、或公司的舊系統)怎麼辦?Lumos 的答案不是把整個 repo 攤平自動生文件(那種產出沒人查核過,錯得很自信),而是**節點還原 SOP**——七步、任何技術棧:
 
-1. **惰性生長**:節點不一次補完。進場先查(`lumos search`)——**有就照既有慣例用;殘缺就 diff 補;沒有才產一篇**。圖譜沿著實際被動過的面慢慢長回原始樣貌。
-2. **先看懂再動手**:從看得到的行為(畫面文字/log/錯誤碼)錨定到 code → 追資料流圈出「誰還共用它」(承重牆)→ git 考古還原「為什麼」(blame 到 squash 就去讀 PR 討論串)。
-3. **還原的每句話標出處**:有 code/git 證據的標證據;推論老實標「推測」;查不到標「佚失」——重建守衛(Check J)機械把關,嚴禁從現狀反編故事。
-4. **出口必過交叉查核**:兩個乾淨 agent,一個只讀筆記萃取主張、一個只讀 code 逐條判真假,才算還原完成。
-5. **典型觸發=加新功能之前**:先還原關聯面,新功能踩在節點上開發——共用面清單與合約候選直接變成新功能的護欄,不破壞架構、不重造輪子。
+1. **惰性生長**:節點不一次補完。進場先查——**有就照著用;殘缺就補;沒有才產一篇**。圖譜沿著實際被動過的地方慢慢長。
+2. **先看懂再動手**:從看得到的行為(畫面文字/log/錯誤碼)反查到 code → 追資料流圈出「誰還共用它」(那就是承重牆)→ 從 git 歷史還原「為什麼」(blame 追到被壓平的 commit,就去讀 PR 討論串)。
+3. **每句話標出處**:有 code/git 證據的標證據;推論老實標「推測」;查不到標「佚失」——有機械檢查把關,嚴禁看著現狀編故事。
+4. **出口必過交叉查核**:兩個互不知情的 AI,一個只讀筆記列出裡面的可驗證主張、一個只讀 code 逐條判真假,對完才算還原完成。
+5. **典型用法=加新功能之前**:先還原會碰到的關聯面,新功能踩在節點上開發——共用面清單和合約候選直接變成新功能的護欄,不破壞架構、不重造輪子。
 
-操作全文:`skills/lumos-project-notes` 的 `reference.md`〈節點還原(brownfield 冷啟動)〉;快查表 `commands/09-節點還原.md`;設計脈絡 `docs/lumos-toolchain-knowledge/Projects/節點還原SOP_計劃.md`(六輪 30 席審計史)。
+操作全文:`skills/lumos-project-notes` 的 `reference.md`〈節點還原(brownfield 冷啟動)〉;快查表 `commands/09-節點還原.md`;設計脈絡與審計史 `docs/lumos-toolchain-knowledge/Projects/節點還原SOP_計劃.md`。
+
+---
 
 ## 7. 指令參考
 
-**讀**
+工具是一支零依賴 python 指令,62 個頂層命令;**權威清單以 `lumos --help` 為準**,這裡列日常會用到的。
+
+**讀圖譜**
 ```bash
-lumos context <節點> [--brief]    # 節點 + 鄰居壓縮索引(合約突顯在頂部)
-lumos contracts [<節點>]          # 合約登記簿:★INVARIANT★(含綁定測試)/ ★DEBT★
-lumos search <關鍵字> [--path P] [--top N]  # 全文搜尋;預設 BM25F 相關性排序(正主頂位;--legacy 舊字母序,--regex 走舊路)
-lumos context <節點> --recommend [--top 8]  # 相關節點推薦(圖分×詞彙融合;dormant 旗標)
-lumos links / backlinks <節點>    # 連出 / 連入
-lumos map <節點> [--depth N]      # 鄰域樹
-lumos decisions [<節點>] [--superseded]   # ADR 決策 / 掃被推翻的
-lumos stale [--match S] [--candidate]     # stale 驗證 / 「改 X 時該重驗哪幾篇」(預設樞紐度×日齡風險排序;--legacy 字母序)
-lumos recent [N] · lumos stats · lumos export --format mermaid|dot|html
+lumos search <關鍵字>             # 全文搜尋,相關性排序(中文概念之間記得加空白)
+lumos context <節點> [--brief]    # 這個節點+鄰居的壓縮視圖,合約放最上面
+lumos contracts [<節點>]          # 合約總表:哪些 ★INVARIANT★、綁了什麼測試
+lumos decisions <節點>            # 這裡做過哪些決策、翻案了沒
+lumos impact --file <檔>          # 改這個檔會波及哪些筆記、踩過什麼雷
+lumos map <節點> · links · backlinks · recent · stats   # 鄰域樹/連結/近況
 ```
 
-**寫**(都寫後自驗)
+**寫圖譜**(都會寫完自驗)
 ```bash
-lumos new system|issue|project|verification <名稱>   # scaffold 節點(印出怎麼填標籤)
-lumos set <節點> <欄位> <值>                          # 純量欄位(status/updated/...)
-lumos append <節點> verified_by|plan_refs|related|tags "[[X]]"
-lumos decision-add <節點> "<內容>" --decided 日期 [--context ..] [--why ..]
-lumos decision-supersede <節點> "<子字串>" --by "..." [--ended 日期]
+lumos new system|issue|project|verification <名稱>   # 建新筆記骨架
+lumos set <節點> <欄位> <值>                          # 改狀態等單值欄位
+lumos append <節點> related|verified_by|... "[[X]]"   # 加連結(一次一項)
+lumos decision-add <節點> "<內容>" --decided 日期      # 記決策
 ```
 
 **合約與驗證**
 ```bash
-lumos guard list [--unbound]                         # ★INVARIANT★ 綁定狀態(real/dangling/fake/naked)+ 審計狀態
-lumos guard scaffold --node S --invariant "<子字串>" --method M --type pure|behavioral|state --claim "..." [--platform P]
-lumos guard bind  <節點> "<子字串>" <方法> [--platform P]   # 把 [test:方法] 寫回 KEY 行(多平台:[test:P:方法])
-lumos guard audit <節點> "<子字串>" [--model sonnet] [--date 日期]   # 獨立審計後蓋 [audit:]
-lumos guard trace [<節點>]                           # 合約 → 守衛測試 → Verification 證據鏈
-lumos guard kill-add <節點> "<子字串>" --recipe '<JSON>'   # 宣告「業務上怎麼弄壞」配方
-lumos guard kill <節點> [--platform P]               # 殺傷力驗證:worktree 沙盒真弄壞→綁定測試必翻紅(survived=稻草人)
-lumos sync-verified-by [--apply]                     # 補漏寫的 verified_by(doctor Check 3)
+lumos guard list [--unbound]     # 哪些合約還沒綁測試
+lumos guard scaffold / bind / audit    # 產測試骨架 → 綁定 → 獨立審計(完整流程見 skills)
+lumos guard kill <節點>          # 殺傷力驗證:沙盒裡真的弄壞它,看測試會不會翻紅
+lumos signoff <節點> --note ".." # 業務簽核留痕(「規則還符不符合業務」那半,工具答不了)
 ```
 
-**對抗審計 loop / 影響 / 完整性**
+**審查迴圈與風險**
 ```bash
-lumos pitfalls --diff <base>..HEAD [--no-lint]       # 掃 diff 隱患、分 tier(standard/high);high → 走 code-loop
-lumos code-loop check [--json]                        # tier=high 未過對抗代碼審 → rc1(pre-push 單點硬擋)
-lumos code-loop pass|skip --note "<理由>"            # pass/skip 都記進 code-loop 留痕(綁 HEAD sha;skip=假陽性逃生閥,繞行也留痕)
-lumos canary record caught|missed --loop <id> ...    # design-loop/code-loop 的 canary 醒著紀錄
-lumos loop status <id> --need 2 --gate                # 收斂閘(legacy 序列:K-streak∧G1∧G2∧G3)
-lumos loop status <id> --gate --panel [--min-seats W] # panel 閘(不吃 --need;輪有效∧存活max≤minor∧capture-recapture殘餘/cluster 帳)
-lumos loop status <id> --gate --spec <spec.md> --settle <清單.json>   # 結清模式(opt-in:清單全結清∧G1∧G3;--spec 必填)
-lumos loop compress <筆記檔> / lumos loop verify-progress <id>   # [S2] 白名單壓縮 / [S3] 結構帳覆核原語
-lumos loop capture-counts --finder ... [--from-pitfalls <range>]  # 異質 finder(LLM+linter+測試)算重疊→capture_counts(--from-pitfalls 自動收割 linter,免手貼)
-lumos fold-check <spec>                               # 抓設計「折入漂移」(鏡像段/值漂移/反向遺漏)
-lumos refcheck <spec> --repo . [--json]              # spec→repo 指涉的機械核對(missing/行號越界)
-lumos impact --file <檔> [--depth N] [--json]        # 反查受影響關聯節點(直/間接)+ 命中事故(pitfall_when)
-lumos impact --file <檔> --ranked [--stdin-payload]  # 融合排序+固定席(已接 PreToolUse hook:窗外 top-8/窗內 incidents-only 快速路)
-                                                     # 2026-08-24 起:間接保送只認硬合約(INVARIANT/IRREVERSIBLE);RISK 軟標記樞紐降入
-                                                     # JSON 頂層 lane「守衛面參考」小節(cap 3;held 噪音 -52%、首屏必看率 4.4x、必看零損失)
-                                                     # about_code 語意欄位命中(該筆記真的在講這支檔)→ 固定席前排+hook 標 ★關於★
-lumos impact --diff <base>..HEAD [--json]            # 受影響功能面 manifest(code-loop 審計鏡頭:合約/事故固定席+top-8;lane 不進 manifest)
-lumos about-code revert|restamp|migrate-stamp        # 語意「關於」欄位維運:整批撤預標 / 人核後重標(正文雜湊三段 stamp)/ 一次性補雜湊
-lumos cochange rules|check [--json]                  # git 史挖共改規則;pre-commit Gate CC 警告漏改夥伴(advisory)
-lumos testmap build [--repo R] [--json]              # 檔案↔測試依賴地圖:三路訊號(naming/content/cochange)挖邊存 .lumos/testmap.json
-lumos testmap affected --diff <range> [--json]       # 依 diff 推薦該跑測試+「無已知測試」裸檔+map 陳舊三訊號提醒(advisory 恆 rc0)
-lumos anchor verify | approve --note "<理由>"        # 測試/閘檔完整性:驗指紋 / 刻意改後核可基線
-lumos ci-wait [--timeout 600] [--json]               # push 後同輪等 GitHub Actions 結論(綠 rc0/紅 rc1+失敗步驟+log 尾段/非成功非失敗=undetermined rc0 要人判);觀測非強制,擋不了 push·merge;需 .lumos/config.json 宣告 ci 區塊才啟用
-lumos ci-status [--json]                             # 唯讀查最後一次 CI 結果(不打網路,供離線與 SessionStart hook)
+lumos pitfalls --diff <範圍>     # 算這批改動的風險級(standard/high)
+lumos code-loop check|pass|skip  # 高風險改動的代碼審留痕(pre-push 會查)
+lumos loop status <編號> ...     # 設計/代碼審迴圈的收斂判定(細節見 skills)
+lumos testmap affected --diff .. # 依改動推薦該跑哪些測試(建議性質)
+lumos anchor verify|approve      # 測試/檢查檔的防篡改指紋
+lumos ci-wait / ci-status        # push 後等 CI 結果 / 查上次結果
 ```
 
-**治理與巡檢**
+**體檢與治理**
 ```bash
-lumos lint <節點>                # 單檔快檢(標籤/格式/合約/可逆性)
-lumos doctor [--ci] [--suggest]  # 全圖健康;--ci = strict + 無色(會擋)
-lumos gov [<節點>] [--since N]    # 唯讀治理事件帳:某節點被哪幾道閘攔過、硬擋 vs 軟
-lumos spec-trace <計劃節點>       # 計劃條款 [S1].. 認領掃描(未被 Verification 認領→rc1;opt-in)
-lumos signoff <節點> --note ".."  # 業務簽核留痕(validation 那半;寫 signoff-log+frontmatter)
+lumos lint <節點>                # 單篇快檢
+lumos doctor [--ci]              # 全圖健檢(--ci 會擋)
+lumos gov [<節點>]               # 本機流水帳:誰被哪道關卡攔過(唯讀,不上傳)
+lumos spec-trace <計劃節點>       # 計劃裡的條款,哪些還沒被驗證紀錄認領
 ```
 
-**安裝 / 生命週期**
+**安裝生命週期**(裝↔卸對稱)
 ```bash
-lumos install [--force] · lumos uninstall          # 全域 lumos symlink 到 ~/.local/bin
-lumos update [--source PATH] [--no-pull]           # 從 Lumos 唯一源刷新本專案 vendored 工具組
-lumos bootstrap [--pull] [--init]                  # 一鍵全套(安裝;--init 免確認建新專案)
-lumos teardown [-y]                                # 一鍵拆機(當前 repo + 機器全域,保留圖譜)
-lumos archive [--days N] [--apply]                 # 滾動歸檔老的 pass Verification(活守衛受保護)
+lumos bootstrap                  # 一鍵全裝          ↔  lumos teardown   # 一鍵全拆(圖譜永遠保留)
+lumos install                    # 只裝機器層        ↔  lumos uninstall
+lumos init [--no-hooks]          # 只建專案層        ↔  lumos deinit [--keep-graph] [--dry-run]
+lumos update                     # 刷新本專案內的工具組
 ```
 
-### 卸載
-
-安裝側有 `bootstrap`(一鍵)＋ `install`/`init`(顆粒);卸載側對稱——`teardown`(一鍵)＋ `uninstall`/`deinit`(顆粒)。**分層速記**:整台機器一次拆 → `teardown`;只拆一個 repo → `deinit`;只移全域 CLI → `uninstall`。
-
-**① 一鍵拆機(首選)** — 拆「當前 repo 專案層 ＋ 機器全域(CLI/skills/全域 hooks)」,**永遠保留圖譜文件**:
-```bash
-lumos teardown           # 全域 hook 清理 → deinit(--keep-graph) → uninstall,一次拆乾淨(互動確認)
-lumos teardown -y        # 跳過互動確認(非互動環境用)
-```
-- **範圍 = 當前 repo ＋ 機器全域**:別的 repo 的裝設、bootstrap 來源 clone **都不動**(要拆別的 repo 到那個 repo 再跑一次)。
-- 補了「全域 `~/.claude` hook 殘留」的清理(`uninstall` 單獨跑不清這塊)。
-- 確認訊息會列出仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外的空白/換行(F4)、`uninstall` 會移除**全部 lumos 家族 skills**(含 csharp/kotlin/vue-idioms,不只 `lumos-*`;你自己名字不同的 skill 不碰)。
-
-**② 顆粒操作**(teardown 就是建在這兩個之上):
-
-- **專案層 `deinit`**(只拆這一個 repo,全域＋其他 repo 不動)——用途:多個 repo 用 lumos,只想清掉其中一個:
-  ```bash
-  lumos deinit              # 完整逆轉 init:拆閘 + 移工具組 + 剝 CLAUDE.md 區塊 + 刪圖譜(互動確認)
-  lumos deinit --keep-graph     # 保留圖譜,只拆其餘
-  lumos deinit --dry-run        # 只預演,不改動
-  lumos deinit -y               # 跳過互動確認(CI/非互動環境用)
-  lumos deinit --source <path>  # 指定 Lumos 來源(自我保護比對用)
-  ```
-  deinit 不自動 commit、不碰機器共用項;standalone vault(圖譜=repo 根)自動保留防誤刪整個 repo。`scripts/hooks`/`scripts/templates` 只刪 lumos 的檔、**你放在裡面的自有檔會保留**(F9 修 2026-07-24)。
-- **機器層 `uninstall`**(只移全域 `~/.local/bin/lumos` + user-scope skills,各 repo 裝設不動)。
-
-> 手動完整版(不用 teardown 時):每個專案 `lumos deinit` → `lumos uninstall` → 視需要 `rm -rf ~/harness/lumos-toolchain`。
-
-權威清單以 `lumos --help` 為準。
+> 拆哪層記這句:整台機器一次拆=`teardown`;只拆這個 repo=`deinit`;只移全域指令=`uninstall`。teardown 永遠保留圖譜文件;deinit 預設互動確認、可 `--dry-run` 先預演。
 
 ---
 
 ## 8. 治理事件帳(`lumos gov`)
 
-治理訊號以前散在各 hook。`lumos gov` 是**唯讀彙整器**,讀六個本機 JSONL(bypass/governance/canary/kill/signoff/ci;rot-queue 的 L3 hook 已於 2026-08-21 撤除、帳 2026-08-22 拆出):
-
-- `docs/.bypass-log.jsonl` —— L2 pre-commit 繞過(post-commit 寫)
-- `docs/.governance-log.jsonl` —— `doctor --ci` 發現(Check T / Check R),單一寫者
+每道關卡攔了誰、誰繞過了什麼,都落在本機的流水帳裡(不進 git、不上傳)。`lumos gov` 一次讀給你看:
 
 ```bash
-lumos gov                # 全部 gate 事件的時間軸
-lumos gov OrderService   # 這節點被哪幾道閘攔過、硬擋 vs 軟、附日期
+lumos gov                # 全部關卡事件的時間軸
+lumos gov OrderService   # 這個節點被哪幾道關攔過、硬擋還是提醒
 ```
 
-> 這是**本機開發可見性**工具(三檔皆 gitignore),不是合規物。L2 繞過事件無 node、L3 以 Verification 路徑為鍵,故對 Systems 節點的 per-node 視圖是部分的——輸出會標明。
+用途是**開發時的可見性**(哪裡一直在響=哪裡該處理),不是稽核合規文件。
 
 ---
 
 ## 9. 更新方式
 
-- **skills + 全域 CLI**(symlink):`git -C ~/harness/lumos-toolchain pull`——即時,免重裝。
-- **某專案的 vendored 工具組 + `CLAUDE.md` 紀律區塊**:在該專案跑 `lumos update`(拉 Lumos 源、重 vendor、重注入)。圖譜資料受保護。
+- **skills+全域指令**:對 Lumos 目錄 `git pull` 即可(捷徑連結,即時生效)。
+- **某個專案內的工具組+紀律區塊**:在那個專案跑 `lumos update`。圖譜資料不會被動到。
 
 ---
 
 ## 10. 設計原則
 
-- **DRY / YAGNI / TDD**、頻繁提交;CLI 純標準庫、可在 CI 跑。
-- **別治理過頭。** 只標載重的;軟的維持軟;不疊沒有對等價值的 ceremony。
-- **誠實的天花板。** 工具證的是*形式*(測試存在、回退有寫、乾淨 agent 審過),不是*validation*(規則符不符合今天的業務、回退跑不跑得動)——那留給人。
-- **maker ≠ checker。** 沒有標準答案的判斷(這是不是真合約?測試是不是套套邏輯?)交給無脈絡的獨立 agent,不是作者本人。
+- **零依賴**:純 python 標準庫,CI 直接跑,不帶任何套件。
+- **別治理過頭**:只給載重的宣稱掛鏈;軟提醒維持軟;不疊沒有對等價值的儀式。
+- **誠實的天花板**:工具證形式,不證業務正確;講不出的就明說講不出。
+- **寫的人不能自己當裁判**(maker ≠ checker):沒有標準答案的判斷,交給不知情的獨立 AI。
 
 ---
 
 ## 邊界與延伸閱讀
 
-Lumos 只放**通用的圖譜工具組**。各專案**自己的東西不進這裡**:業務圖譜內容、app 的發版/部署腳本(如 `release.sh`)、技術棧 skill(vue/csharp 等 project-scope skill)。
+Lumos 只放**通用的圖譜工具組**。各專案自己的東西(業務圖譜內容、發版腳本、技術棧 skill)不進這裡。
 
 - 上手細節:[ONBOARDING.md](ONBOARDING.md)
-- 架構全景:[ARCHITECTURE.md](ARCHITECTURE.md)(唯一源→兩種 scope→消費端、生命週期指令、子命令、強制力管線)
-- 與 SDD 的差異:[SDD-vs-Lumos.md](SDD-vs-Lumos.md)
+- 架構全景:[ARCHITECTURE.md](ARCHITECTURE.md)
+- 與 SDD(規格驅動開發)的差異:[SDD-vs-Lumos.md](SDD-vs-Lumos.md)

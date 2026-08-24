@@ -16598,7 +16598,8 @@ def t_docs_command_count():
             continue
         text = p.read_text(encoding="utf-8", errors="replace")
         nums = set(_re.findall(r"(\d+) 個頂層命令", text)) | set(
-            _re.findall(r"(\d+) top-level commands", text))
+            _re.findall(r"(\d+) top-level commands", text)) | set(
+            _re.findall(r"(\d+) 是頂層命令數", text))  # 換措辭逃法實例:ARCHITECTURE 曾寫「53 是頂層命令數」躲過本守衛(2026-08-24)
         if not nums:
             continue
         scanned += 1

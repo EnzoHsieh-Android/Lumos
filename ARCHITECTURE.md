@@ -128,7 +128,7 @@ flowchart TB
     class R,H,W,G,LP,I,ST,C,L leaf
 ```
 
-> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面 53 是頂層命令數,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
+> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 62 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
 
 ## 4. 強制力管線 (圖譜不腐爛的機制)
 
