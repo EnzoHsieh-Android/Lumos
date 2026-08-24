@@ -810,6 +810,48 @@ def t_doctor_about_code_expiry():
     check("⑥knob=0 → 整段略過、不列", "改過.md" not in s2(r0.stdout) and "總開關" in s2(r0.stdout), s2(r0.stdout)[-400:])
 
 
+def t_loop_disposal_zero_findings():
+    """★零發現的乾淨輪,處置閘要能過★(2026-08-24 code-out-top3 實踩:record 說「沒發現別帶處置選項」、
+    disposal 閘又要求「無處置帳 ✗」——兩邊打架,乾淨輪永遠過不了。手冊語意=「每個發現都有去向即過」,
+    零發現視同全處置(vacuous),這是閘漏了 findings=0 分支的 bug 不是語意變更。
+    翻紅釘:把空輪分支拿掉 → 第 2 條翻紅。"""
+    import subprocess as sp, hashlib, tempfile
+    v = mkvault()
+    spec = Path(tempfile.mkdtemp(prefix="zf-")) / "spec.patch"
+    spec.write_text("diff --git a/x b/x\n+clean\n", encoding="utf-8")
+    rpt = spec.parent / "r1-s1.md"; rpt.write_text("# clean\n已讀,無 finding\n", encoding="utf-8")
+    sha = hashlib.sha256(spec.read_bytes()).hexdigest()
+    r = run(v, "canary", "record", "none", "--loop", "zf-loop", "--round", "r1", "--auditor", "s1",
+            "--severity", "clean", "--findings", "0", "--report", str(rpt), "--snapshot", str(spec),
+            "--spec", str(spec), "--reviewed", sha, "--scope-lines", "2", "--tier", "standard")
+    check("clean 輪記帳 rc0", r.returncode == 0, r.stderr[-200:])
+    g = run(v, "loop", "status", "zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
+    check("★零發現輪處置閘 PASS(vacuous:沒有發現=每個發現都有去向)★", g.returncode == 0 and "PASS" in g.stdout, g.stdout[-300:] + g.stderr[-200:])
+    check("訊息講明是零發現空輪", "0 條發現" in g.stdout or "零發現" in g.stdout or "無發現" in g.stdout, g.stdout[-300:])
+    # r1 blocker 折入:空輪不准跳過留痕重驗;橫幅不准宣稱沒做的「引句全錨定」
+    check("★空輪仍跑全席留痕重驗★", "留痕: ✓" in g.stdout, g.stdout[-400:])
+    check("★空輪橫幅不宣稱引句全錨定(沒驗的不寫)★", "引句全錨定" not in g.stdout and ("引句" in g.stdout), g.stdout[-300:])
+    import shutil as _sh
+    hid = spec.parent / "hidden"; _sh.move(str(rpt), str(hid))
+    g3 = run(v, "loop", "status", "zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
+    _sh.move(str(hid), str(rpt))
+    check("★空輪留痕檔被刪 → FAIL(不是免驗通行證)★", g3.returncode != 0 and "留痕" in g3.stdout, g3.stdout[-300:])
+    # r1 f2:帳上 findings 手改成壞值 → fail-closed rc2,不 traceback
+    lp = v.parent / ".canary-log.jsonl"
+    check("前置:找得到帳本", lp.exists(), str(lp))
+    orig = lp.read_text(encoding="utf-8")
+    lp.write_text(orig.replace('"findings": 0', '"findings": "x"', 1), encoding="utf-8")
+    g4 = run(v, "loop", "status", "zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
+    lp.write_text(orig, encoding="utf-8")
+    check("★findings 壞值 → rc2 擋下、不 traceback★", g4.returncode == 2 and "Traceback" not in g4.stderr and ("壞" in g4.stderr or "手改" in g4.stderr or "格式" in g4.stderr), f"rc={g4.returncode} {g4.stderr[-250:]}")
+    # 反向:有發現卻沒處置帳,仍要 FAIL(不能被空輪分支放水)
+    r2 = run(v, "canary", "record", "none", "--loop", "zf-loop2", "--round", "r1", "--auditor", "s1",
+             "--severity", "major", "--findings", "2", "--report", str(rpt), "--snapshot", str(spec),
+             "--spec", str(spec), "--reviewed", sha, "--scope-lines", "2", "--tier", "standard")
+    g2 = run(v, "loop", "status", "zf-loop2", "--disposal", "--spec", str(spec), "--repo", str(v))
+    check("★有發現沒處置帳 → 照樣 FAIL★", g2.returncode != 0 and "FAIL" in g2.stdout, g2.stdout[-200:])
+
+
 def t_git_last_change_dates_batch():
     """★一次 git log 拿全庫每個檔的最後改動日期★(工具清單 #5;★原為 about_code 過期判準的材料,2026-08-24 該判準改記正文雜湊後本函式暫無呼叫者,保留★)。
 

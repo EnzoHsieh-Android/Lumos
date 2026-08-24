@@ -1,0 +1,194 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index e850a99..dade0c8 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -9982,45 +9982,67 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+         print("[disposal] G3 hash: ✗ — 判定輪未綁 hash(disposal 閘 fail-closed,record 帶 --spec/--reviewed)")
+         fails.append("G3")
+     else:
+         print(f"[disposal] G3 hash: ✓ — {info}")
+     # ── ② 處置集合(輪級重算,不信寫側) ──
+     carriers = [r for r in latest if "findings_set" in r]
+     if len(carriers) > 1:
+         print(f"擋下:第 {rid} 輪有 {len(carriers)} 筆記錄都帶了處置結果,一輪只能有一筆", file=sys.stderr)
+         return 2
+     carrier = carriers[0] if carriers else None
++    # findings 欄壞值(手改帳/舊寫入殘留)→ fail-closed rc2,同 clusters 型別防禦慣例(不 traceback)
++    def _findings_zero(r):
++        v = r.get("findings")
++        if v is None:
++            return False       # 沒填 ≠ 明說 0(legacy 帳缺欄不放行,逐筆成輪加固測試釘的)
++        try:
++            return int(v) == 0
++        except (TypeError, ValueError):
++            return None        # 壞值
++    _fz = [_findings_zero(r) for r in latest]
++    if any(x is None for x in _fz):
++        print("擋下:有筆記錄的 findings 欄不是整數(檔案壞了或被手改過?)——fail-closed,先修帳", file=sys.stderr)
++        return 2
++    vacuous = False
+     if carrier is None:
+-        print("[disposal] 處置集合: ✗ — 判定輪無處置帳(record 帶 --findings-set/--folded-set/--accepted-set)")
+-        fails.append("無處置帳")
++        # 零發現的乾淨輪:record 端明文「沒發現別帶處置選項」,這裡再要求處置帳=兩邊打架、乾淨輪永遠過不了
++        # (2026-08-24 code-out-top3 實踩)。手冊語意=「每個發現都有去向即過」→ 0 條發現視同全處置(vacuous)。
++        # ★vacuous 只免「處置集合」這一項★——留痕重驗照跑(r1 blocker:免驗通行證);引句無可驗,橫幅不宣稱。
++        if latest and all(_fz):
++            vacuous = True
++            print("[disposal] 處置集合: ✓ — 這輪 0 條發現,沒有東西要處置(空輪;留痕仍要重驗)")
++        else:
++            print("[disposal] 處置集合: ✗ — 判定輪有發現但無處置帳(record 帶 --findings-set/--folded-set/--accepted-set)")
++            fails.append("無處置帳")
+     else:
+         F = set(carrier.get("findings_set") or [])
+         FO = set(carrier.get("folded_set") or [])
+         AC = set(carrier.get("accepted_set") or [])
+         reasons = carrier.get("accept_reasons") or {}
+         bad = None
+         if FO & AC:
+             bad = f"folded∩accepted 非空: {sorted(FO & AC)}"
+         elif FO | AC != F:
+             bad = f"未處置: {sorted(F - FO - AC)}"
+         elif set(reasons) != AC or any(not str(v).strip() for v in reasons.values()):
+             bad = "accepted 理由缺席或空"
+         elif AC and any(r.get("severity") == "blocker" for r in latest):
+             bad = "★輪內有 blocker 席,accepted 必須為空(d1;輪級重算,不信寫側單席視角)★"
+         if bad:
+             print(f"[disposal] 處置集合: ✗ — {bad}")
+             fails.append("處置集合")
+         else:
+             print(f"[disposal] 處置集合: ✓ — {len(F)} 條全處置(折 {len(FO)}/放行 {len(AC)},理由齊)")
+-    # ── ③ 留痕重驗(判定輪全席) + ④ quote-check(carrier) ──
+-    if carrier is not None:
+-        rp, sp = carrier.get("report_path"), carrier.get("snapshot_path")
++    # ── ③ 留痕重驗(判定輪全席) + ④ quote-check(carrier;vacuous 輪無引句可驗,只跑 ③) ──
++    if carrier is not None or vacuous:
++        _qsrc = carrier if carrier is not None else latest[-1]
++        rp, sp = _qsrc.get("report_path"), _qsrc.get("snapshot_path")
+         if not rp or not sp:
+             print("[disposal] 留痕: ✗ — 判定輪未帶 report/snapshot(留痕缺席)")
+             fails.append("留痕缺席")
+         else:
+             ok = True
+             n_files = 0
+             # 全席重驗:T6 定錨後每席都被迫留痕,讀側就得每席都重驗——
+             # 只驗 carrier 等於把 missed 席留痕降回「寫側形式要求」(r1 否決席 finding)。
+             for i, r in enumerate(latest, 1):
+                 for label, key in (("report", "report_path"), ("snapshot", "snapshot_path")):
+@@ -10040,20 +10062,23 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+                         print(f"[disposal] 留痕: ✗ — {rid}.{i} {label} 讀不到({pth})——record 完刪檔照樣擋")
+                         fails.append("留痕")
+                         ok = False
+                         continue
+                     if got != want:
+                         print(f"[disposal] 留痕: ✗ — {rid}.{i} {label} sha256 與帳面不符(事後被改)")
+                         fails.append("留痕")
+                         ok = False
+             if ok:
+                 print(f"[disposal] 留痕: ✓ — 判定輪全席 {n_files} 份留痕存在且 sha256 與帳面一致")
++            if ok and vacuous and carrier is None:
++                print("[disposal] quote-check: —(零發現報告無引句可驗,略過;橫幅不宣稱錨定)")
++            elif ok:
+                 try:
+                     rows = _quote_rows(_prov_path(rp).read_text(encoding="utf-8"),
+                                        _prov_path(sp).read_text(encoding="utf-8"))
+                 except (OSError, UnicodeDecodeError) as e:
+                     # sha 讀二進位過了,text 讀可炸(非 UTF-8)——FAIL 不 traceback(r1 s4 席)
+                     print(f"[disposal] quote-check: ✗ — 報告/快照讀不成文字({e.__class__.__name__})")
+                     fails.append("quote")
+                     rows = None
+                 else:
+                     if rows is None:
+@@ -10073,21 +10098,24 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+     mi = sum(1 for r in latest if r.get("kind") == "missed")
+     nn = sum(1 for r in latest if r.get("kind") == "none")
+     print(f"[disposal] canary(觀測,不進合取): caught {ca} / missed {mi}"
+           + (f" / none {nn}(協議停用,d5)" if nn else "")
+           + ("——missed 席 findings ★不作廢★(d4),供跨輪累積帳" if mi else ""))
+     for i, r in enumerate(latest, 1):
+         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
+     if fails:
+         print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
+         return 1
+-    print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定)")
++    if vacuous and carrier is None:
++        print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 0 發現空輪 ∧ 留痕可重算;引句無可驗不宣稱)")
++    else:
++        print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定)")
+     _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
+     return 0
+ 
+ 
+ def cmd_quote_check(report, spec, as_json=False):
+     """錨定檢查(T2,vault-free):報告內每條「引句：「…」」norm 後須為凍結快照 norm 後的
+     子字串。rc0=全 ok、rc1=有 miss、rc2=IO/零引句(★驗不了≠通過,fail loud★)。
+     ★比對對象必須是派工當下的凍結快照,不是現檔★——對現檔跑,finding 折入後引句會
+     「自我成真」(重設計 r1 Codex 折入:循環自證)。"""
+     import json
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 3d71304..06561fe 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -803,20 +803,62 @@ def t_doctor_about_code_expiry():
+     check("④⑦舊格式/壞雜湊 → 列為舊格式", "舊格式.md" in out and "壞雜湊.md" in out and "舊格式" in out, out[-600:])
+     check("⑤只改 frontmatter → 不列", "只改欄位" not in out, "")
+     check("⑨作廢節點不列", "作廢.md" not in out, "")
+     check("訊息先叫人看標籤、提 restamp", "還對不對" in out and "restamp" in out, out[-600:])
+     check("不計 issues(doctor rc0)", r.returncode == 0, f"rc={r.returncode}")
+     import subprocess as _sp
+     r0 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "doctor"], capture_output=True, text=True, env={**_os.environ, "LUMOS_IMPACT_ABOUT": "0"})
+     check("⑥knob=0 → 整段略過、不列", "改過.md" not in s2(r0.stdout) and "總開關" in s2(r0.stdout), s2(r0.stdout)[-400:])
+ 
+ 
++def t_loop_disposal_zero_findings():
++    """★零發現的乾淨輪,處置閘要能過★(2026-08-24 code-out-top3 實踩:record 說「沒發現別帶處置選項」、
++    disposal 閘又要求「無處置帳 ✗」——兩邊打架,乾淨輪永遠過不了。手冊語意=「每個發現都有去向即過」,
++    零發現視同全處置(vacuous),這是閘漏了 findings=0 分支的 bug 不是語意變更。
++    翻紅釘:把空輪分支拿掉 → 第 2 條翻紅。"""
++    import subprocess as sp, hashlib, tempfile
++    v = mkvault()
++    spec = Path(tempfile.mkdtemp(prefix="zf-")) / "spec.patch"
++    spec.write_text("diff --git a/x b/x\n+clean\n", encoding="utf-8")
++    rpt = spec.parent / "r1-s1.md"; rpt.write_text("# clean\n已讀,無 finding\n", encoding="utf-8")
++    sha = hashlib.sha256(spec.read_bytes()).hexdigest()
++    r = run(v, "canary", "record", "none", "--loop", "zf-loop", "--round", "r1", "--auditor", "s1",
++            "--severity", "clean", "--findings", "0", "--report", str(rpt), "--snapshot", str(spec),
++            "--spec", str(spec), "--reviewed", sha, "--scope-lines", "2", "--tier", "standard")
++    check("clean 輪記帳 rc0", r.returncode == 0, r.stderr[-200:])
++    g = run(v, "loop", "status", "zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
++    check("★零發現輪處置閘 PASS(vacuous:沒有發現=每個發現都有去向)★", g.returncode == 0 and "PASS" in g.stdout, g.stdout[-300:] + g.stderr[-200:])
++    check("訊息講明是零發現空輪", "0 條發現" in g.stdout or "零發現" in g.stdout or "無發現" in g.stdout, g.stdout[-300:])
++    # r1 blocker 折入:空輪不准跳過留痕重驗;橫幅不准宣稱沒做的「引句全錨定」
++    check("★空輪仍跑全席留痕重驗★", "留痕: ✓" in g.stdout, g.stdout[-400:])
++    check("★空輪橫幅不宣稱引句全錨定(沒驗的不寫)★", "引句全錨定" not in g.stdout and ("引句" in g.stdout), g.stdout[-300:])
++    import shutil as _sh
++    hid = spec.parent / "hidden"; _sh.move(str(rpt), str(hid))
++    g3 = run(v, "loop", "status", "zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
++    _sh.move(str(hid), str(rpt))
++    check("★空輪留痕檔被刪 → FAIL(不是免驗通行證)★", g3.returncode != 0 and "留痕" in g3.stdout, g3.stdout[-300:])
++    # r1 f2:帳上 findings 手改成壞值 → fail-closed rc2,不 traceback
++    lp = v.parent / ".canary-log.jsonl"
++    check("前置:找得到帳本", lp.exists(), str(lp))
++    orig = lp.read_text(encoding="utf-8")
++    lp.write_text(orig.replace('"findings": 0', '"findings": "x"', 1), encoding="utf-8")
++    g4 = run(v, "loop", "status", "zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
++    lp.write_text(orig, encoding="utf-8")
++    check("★findings 壞值 → rc2 擋下、不 traceback★", g4.returncode == 2 and "Traceback" not in g4.stderr and ("壞" in g4.stderr or "手改" in g4.stderr or "格式" in g4.stderr), f"rc={g4.returncode} {g4.stderr[-250:]}")
++    # 反向:有發現卻沒處置帳,仍要 FAIL(不能被空輪分支放水)
++    r2 = run(v, "canary", "record", "none", "--loop", "zf-loop2", "--round", "r1", "--auditor", "s1",
++             "--severity", "major", "--findings", "2", "--report", str(rpt), "--snapshot", str(spec),
++             "--spec", str(spec), "--reviewed", sha, "--scope-lines", "2", "--tier", "standard")
++    g2 = run(v, "loop", "status", "zf-loop2", "--disposal", "--spec", str(spec), "--repo", str(v))
++    check("★有發現沒處置帳 → 照樣 FAIL★", g2.returncode != 0 and "FAIL" in g2.stdout, g2.stdout[-200:])
++
++
+ def t_git_last_change_dates_batch():
+     """★一次 git log 拿全庫每個檔的最後改動日期★(工具清單 #5;★原為 about_code 過期判準的材料,2026-08-24 該判準改記正文雜湊後本函式暫無呼叫者,保留★)。
+ 
+     design-loop about-code-field r3 實測:逐篇 `git log -1 -- <檔>` 83 次 5.3s,批次 0.22s,
+     差 18 倍;且 vault 檔名幾乎全中文,不加 `-c core.quotepath=false` 輸出是八進位跳脫、對不回路徑。
+     翻紅釘:①拿掉 quotepath 旗標 → 第 2 條翻紅 ②改成逐檔呼叫 → 第 4 條(呼叫次數)翻紅。"""
+     import subprocess as _sp, tempfile as _tf
+     from pathlib import Path as _P
+     import importlib.util
+     from importlib.machinery import SourceFileLoader

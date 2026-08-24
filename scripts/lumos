@@ -9989,9 +9989,31 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         print(f"擋下:第 {rid} 輪有 {len(carriers)} 筆記錄都帶了處置結果,一輪只能有一筆", file=sys.stderr)
         return 2
     carrier = carriers[0] if carriers else None
+    # findings 欄壞值(手改帳/舊寫入殘留)→ fail-closed rc2,同 clusters 型別防禦慣例(不 traceback)
+    def _findings_zero(r):
+        v = r.get("findings")
+        if v is None:
+            return False       # 沒填 ≠ 明說 0(legacy 帳缺欄不放行,逐筆成輪加固測試釘的)
+        try:
+            return int(v) == 0
+        except (TypeError, ValueError):
+            return None        # 壞值
+    _fz = [_findings_zero(r) for r in latest]
+    if any(x is None for x in _fz):
+        print("擋下:有筆記錄的 findings 欄不是整數(檔案壞了或被手改過?)——fail-closed。"
+              "對照 git 上一版找出壞行改回整數:\n    git diff HEAD -- docs/.canary-log.jsonl", file=sys.stderr)
+        return 2
+    vacuous = False
     if carrier is None:
-        print("[disposal] 處置集合: ✗ — 判定輪無處置帳(record 帶 --findings-set/--folded-set/--accepted-set)")
-        fails.append("無處置帳")
+        # 零發現的乾淨輪:record 端明文「沒發現別帶處置選項」,這裡再要求處置帳=兩邊打架、乾淨輪永遠過不了
+        # (2026-08-24 code-out-top3 實踩)。手冊語意=「每個發現都有去向即過」→ 0 條發現視同全處置(vacuous)。
+        # ★vacuous 只免「處置集合」這一項★——留痕重驗照跑(r1 blocker:免驗通行證);引句無可驗,橫幅不宣稱。
+        if latest and all(_fz):
+            vacuous = True
+            print("[disposal] 處置集合: ✓ — 這輪 0 條發現,沒有東西要處置(空輪;留痕仍要重驗)")
+        else:
+            print("[disposal] 處置集合: ✗ — 判定輪有發現但無處置帳(record 帶 --findings-set/--folded-set/--accepted-set)")
+            fails.append("無處置帳")
     else:
         F = set(carrier.get("findings_set") or [])
         FO = set(carrier.get("folded_set") or [])
@@ -10011,9 +10033,10 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
             fails.append("處置集合")
         else:
             print(f"[disposal] 處置集合: ✓ — {len(F)} 條全處置(折 {len(FO)}/放行 {len(AC)},理由齊)")
-    # ── ③ 留痕重驗(判定輪全席) + ④ quote-check(carrier) ──
-    if carrier is not None:
-        rp, sp = carrier.get("report_path"), carrier.get("snapshot_path")
+    # ── ③ 留痕重驗(判定輪全席) + ④ quote-check(carrier;vacuous 輪無引句可驗,只跑 ③) ──
+    if carrier is not None or vacuous:
+        _qsrc = carrier if carrier is not None else latest[-1]
+        rp, sp = _qsrc.get("report_path"), _qsrc.get("snapshot_path")
         if not rp or not sp:
             print("[disposal] 留痕: ✗ — 判定輪未帶 report/snapshot(留痕缺席)")
             fails.append("留痕缺席")
@@ -10047,6 +10070,9 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
                         ok = False
             if ok:
                 print(f"[disposal] 留痕: ✓ — 判定輪全席 {n_files} 份留痕存在且 sha256 與帳面一致")
+            if ok and vacuous and carrier is None:
+                print("[disposal] quote-check: —(零發現報告無引句可驗,略過;橫幅不宣稱錨定)")
+            elif ok:
                 try:
                     rows = _quote_rows(_prov_path(rp).read_text(encoding="utf-8"),
                                        _prov_path(sp).read_text(encoding="utf-8"))
@@ -10080,7 +10106,10 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     if fails:
         print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
-    print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定)")
+    if vacuous and carrier is None:
+        print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 0 發現空輪 ∧ 留痕可重算;引句無可驗不宣稱)")
+    else:
+        print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定)")
     _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
     return 0
 
