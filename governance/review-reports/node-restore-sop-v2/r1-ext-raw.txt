@@ -1,0 +1,1474 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/enzo/harness/lumos-toolchain
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 01a0340c-0a70-7e10-9f62-038c23b7ac9c
+--------
+user
+你是外家否決席審查員(read-only 沙盒,靜態審)。審設計 spec 第 4 版:/tmp/node-restore-sop-v2-r1.md(182 行,「接手既有專案還原成知識圖譜節點」七步 SOP;前三輪已審 89 條全折入)。本輪是 delta 輪:重點=①「使用場景」節與「問世界第二輪」等標明「未經迴圈審查」的新內容 ②各步驟「(世界解:…)」句 ③步驟 6 的「引用實體機械掃描」與雙軌留痕段 ④[S1]–[S9] 落地件。對照 repo=目前工作目錄;調研原檔 governance/review-reports/node-restore-sop/web-research.md。任務:找「照字面實作/執行會做出錯的行為、與 repo 現況不符的宣稱、內部矛盾」。特別實查:「refcheck/lumos search --code 既有零件」真的能掃筆記引用的函式/欄位存在性嗎(讀 scripts/lumos 的 refcheck 與 search --code 實作,它們各認什麼格式)?「lumos search/context」在步驟 4 前置與使用場景節的用法參數對嗎?雙軌留痕描述與 reference.md 1029-1052 及 L4 清帳(docs/lumos-toolchain-knowledge/Verification/2026-08-21_L4交叉審計30節點清帳.md)一致嗎?每條 finding:severity+逐字引句(≥10 字,「」引號,格式「引句:「…」」)+問題+查證 file:line。找不到否決級就明說。最後一行:最嚴重 severity。
+codex
+我會先依 repo 指路完整讀規矩與圖譜入口，再逐段核對 spec、調研原檔及指定實作；這輪只做靜態審，不改任何檔案。
+exec
+/bin/zsh -lc "sed -n '1,240p' CLAUDE.md && sed -n '1,240p' docs/lumos-toolchain-knowledge/MOC/index.md && nl -ba /tmp/node-restore-sop-v2-r1.md && nl -ba governance/review-reports/node-restore-sop/web-research.md" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+# CLAUDE.md
+<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+## 知識圖譜先行（必讀，優先級最高）
+
+**`docs/lumos-toolchain-knowledge/` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 它主要的讀者是下一個 session 的 AI（偶爾是人），所以寫的時候以「沒有脈絡的人讀得懂」為準。 行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
+
+### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
+
+| 你心裡想的是… | 先敲這個 |
+|---|---|
+| 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（Landmark 實測 8 句 3 句 0 筆） |
+| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+| 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+| 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+| 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
+| 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+| 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+| 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+| 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+| 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+
+查得到才算先行（Landmark 2026-08-11 實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
+
+★第四條（2026-08-22 Enzo 裁，成本理由：判斷錯本來就要重查一次，這兩分鐘是提前付）★：**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講，就失去意義）。同日實測：一天內六次判斷失準，**全部是「只信一個來源、沒去對第二個」**——搜錯詞、自己腳本有 bug、讀錯欄位名、用錯工具、看了張過期的表；其中四次是另一個 session 拿它自己的數字打臉才發現。**只有這個場合要派，其他查詢照常**（實測「帶否定斷言」的回覆一天 31 次太多，加上「會決定動不動手」這一刀才降到個位數）。
+
+兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
+
+Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆記」給你——但它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
+
+**不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（4k，按你正在做的事分八類，只開需要的子檔）。
+
+### 三條鐵則
+
+1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。
+4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。
+
+### 給人看的回報用白話
+先一句人話或比喻，再往下講；術語和 file:line 能不用就不用，非用不可就當場一句解釋。設計動筆前先問世界（最小解在哪一層、世界解過沒、裁定＝借用既有設計為預設 / 真沒輪子才自建 / 採用新依賴在零依賴家規下幾乎不選），一行 `PRIOR-ART:` 記進計劃筆記。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
+
+### 遇到這些情境就調用對應 skill
+
+| 你正在做的事 | 調用 |
+|---|---|
+| 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
+| 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
+| 設計 spec 寫完、要進實作前的審查迴圈 | **`lumos-design-loop`** |
+| 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
+
+> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill 見文末〈架構參考 Skills〉。
+<!-- LUMOS:GRAPH-DISCIPLINE:END -->
+---
+type: moc
+status: doing
+about_code_stamp: batch-2026-08-23/2026-08-23/70a11d6e2e82
+---
+# lumos-toolchain 知識圖譜總索引
+
+Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識圖譜。節點現況以 code 為準,完整設計史/收斂史指回 `docs/design/`。狀態標記:無標=已實作;`[planned]`=設計收斂未落地;`[deferred]`=擱置;`[rejected]`=評估後不做(輕方案落地)。
+
+> **慣例**:節點內嵌的 `scripts/lumos:行號`(或 `@行號`、`:行號`)是**近似導航參考**,code 重構後可能漂移——以 code 現況與函式名為準,行號僅供快速定位。
+
+## 設計審計 loop(進實作前的把關)
+- [[Systems/design-loop]] — canary-護的設計審計 loop;Claude 編排、lumos 出原語,連 2 輪 caught 才放行實作。
+- [[Systems/canary-audit]] — test-the-tester:每輪偷植已知假錯驗審計員有沒有認真抓(防假陰性/放水)。
+- [[Systems/loop-convergence-recording]] — `canary record --loop/--severity` + `loop status --need` 算收斂、可機械終止多輪。
+- [[Systems/finding-refute]] — 辯方 refute:對 ≥major finding 派獨立 opus 強制 file:line 反證才降(防假陽性,對稱 canary)。
+- [[Systems/judge-severity-gate]] — 讓 judge 覆蓋 severity 維度,堵「收斂門檻沒覆蓋處偷工」。
+- [[Systems/cross-family-audit]] — 換模型家族複核(qwen3-max),解 opus 審 opus 的自我偏好偏心。
+- [[Systems/judge-perturbation-stability]] `[rejected]` — 評審擾動穩定性;評估後改走輕量 confidence_report.py。
+
+## doctor 合約 / 可逆性檢查
+- [[Systems/check-t-sentinel]] — Check T:★INVARIANT★ 合約綁可執行測試 `[test:]`(+ stub 紅燈哨兵)。
+- [[Systems/check-r-guard]] — Check R:不可逆動作(★IRREVERSIBLE★)動手前要有實質 `[rollback:]`/`[guard:]`。
+- [[Systems/reversibility-governance-ledger]] — 可逆性綁定 + gov 治理事件帳(某節點被哪幾道閘攔過)。
+- [[Systems/doctor-irreversible-hint]] — `[H]` 軟提醒:掃 diff 碰 prod/外部 API → 是否漏標 ★IRREVERSIBLE★。
+- [[Systems/check-j-regen-guard]] — Check J:from-scratch 重建節點 provenance 分級(regen 蓋章+[src:]/[git:]/推測:/佚失: 標身分;拒發明無證據合約、假指針機械擋)。
+- [[Systems/core-invariant-baseline]] `[deferred]` — 核心節點已知良好快照 + 可回退(pivot 為 content-baseline,擱置)。
+
+## 自主治理 / loop engineering
+- [[Systems/autonomous-iteration-loop]] — 日報 gap→brainstorm→design-loop→收斂備 pending 的無人看顧自主迭代。
+- [[Systems/verification-rot-eval]] `[planned]` — 從圖譜史抽衝突測試集定期回測 L3 腐化偵測(設計收斂未落地)。
+
+## 安全與權限
+- [[Systems/nested-agent-permission-scope]] — 子 agent 權限收窄(maker≠checker 的審計員不繼承主對話權限)。
+
+## 平台支援
+- [[Systems/native-windows-support]] — 原生 Windows(get.ps1 / mklink / junction / hook 路徑正斜線化)。
+- [[Systems/lumos-deinit]] — 專案層反安裝指令(對稱 `lumos init`);四重閘保護不可逆的 vault rmtree。
+
+## 完整性 / 影響 / 漂移守衛
+- [[Systems/guard-kill]] — 殺傷力驗證:宣告壞法→worktree 隔離→綁定測試必翻紅;survived=稻草人證據(合約鏈最後一哩)。
+- [[Systems/cochange-guard]] — co-change 漏改守衛:git 歷史挖共改規則(ROSE 非對稱 confidence),pre-commit Gate CC 警告漏改夥伴(advisory)。
+
+## 檢索與推薦
+- [[Systems/retrieval-ranking]] — BM25F 排序+圖分融合推薦+impact 降噪(search 與 hook 面均已轉正——§6 七盞全綠;recommend 面 dormant)。
+
+## CLI 核心原語
+- [[Systems/lumos-cli-read]] — 讀/巡檢:doctor/context/contracts/search/links/backlinks/map/export/decisions/stale/recent/stats。
+- [[Systems/lumos-cli-write]] — 寫:set/append/new/archive/decision-add/decision-supersede/self-audit;T1 寫後自驗 atomic。
+- [[Systems/lumos-cli-lifecycle]] — install/uninstall/update/bootstrap/init/deinit;機器層 vs 專案層分工。
+
+## 外部對照 / PRIOR-ART
+- [[Systems/外部對照-code衍生wiki]] — langchain-ai/openwiki(11.6k★ code 衍生 wiki)反例世界解:站在 lumos 導覽層、賭注相反(code 衍生+可丟 vs 圖譜手寫+機械守);核心論點=重生保新鮮≠正確、無輸出 oracle(maker-only),反證 lumos「圖譜即真相/合約驗證層」的必要。
+
+## 外部設計 / 計畫文件(圖譜外,但屬本工具鏈)
+- `docs/design/` — 各功能設計稿(含 design-loop 收斂紀錄,18 份)。
+- `docs/superpowers/plans/` — 實作計畫(TDD 任務分解)。
+- `docs/methodology/` — 「圖譜即合約」方法論。
+- `governance/reports/` — AI 治理日報(研究 → gap → 觸發上述功能的 provenance,各 Verification/Systems 節點內有溯源)。
+     1	---
+     2	type: project
+     3	status: doing
+     4	created: 2026-08-24
+     5	updated: 2026-08-24
+     6	summary: |-
+     7	  FLAG:DECISION
+     8	  KEY:立案(2026-08-24 Enzo 開新任務)——「接手既有專案,把功能脈絡還原成圖譜節點」的 SOP。盤點確認缺口結構性:守衛半邊有(Check J/regen 章),產出半邊全空——無 SOP 文件、無「建哪些/從哪開始/多深算夠」指引;commands/ 子檔 grep regen 零命中(索引路由斷點);62 個 CLI 子指令無掃 repo 產節點者
+     9	  KEY:方案=七步 SOP(步驟 0–6,任何技術棧):填骨架導覽頁→錨點階梯定位→追流圈承重牆(grep+第二來源)→git+非 git 考古還原 why→落節點蓋 regen 章(why 走 DECISION 行接 J-b 硬擋)→合約候選不升格→出口=變體 B 交叉審計+雙軌留痕(Verification+verified_by+self-audit 蓋章;r3 依 L4 清帳先例定案)。種子=brownfield 影片五步,通用化+補驗證層
+    10	  KEY:四裁定——d1 任務驅動+最小骨架不攤平;d2 指針級快寫/why 級逐句標身分;d3 第一版純文件層不建 CLI;d4 放置=全文進 reference.md、commands/09 薄查表(08 已佔用;「八類」活文字三輪各多找一處、現為五處,見 [S3])
+    11	  KEY:★r1 審計(2026-08-24,5 席)實錘要點★:Check J 只掃 summary、KEY 行只提醒不擋、FLOW/DEP 零檢查——「機械防瞎編」宣稱降級為「合約級硬擋+其餘靠交叉審計」;蓋章半成品機械全綠是已知中間態;冷啟動=code-only 重建,openwiki 節點裁的「圖譜史底料」緩解在本場景結構性缺席,補償=雙 agent 交叉審計(16.3%——30 個被點名節點的有偏樣本,非全圖譜)
+    12	  KEY:★r2 審計(2026-08-24,5 席)實錘要點★:標記語序硬規定(推測:/佚失: 緊貼行首標籤——★r3 精化:標籤後可有空白,是「不可夾文字」★;走查席實測重現 blocker)/變體 B 引用走樣全對齊原文(逐節點 12–15 條、❌→Verification+verified_by、刪 self-audit 錯綁(★r3 翻案:恢復雙軌——r2 只看指令說明沒對 L4 先例★)、「必跑」明標本案延伸)/舊節點先 diff 別覆寫/★第四條去降級/實跑樣本 1→0 誠實化/考古機密紅線/「八類」活文字四處(★r3:+第五處★)/合約候選放 Projects 計劃筆記/guard 指令指 reference 實形
+    13	  KEY:★審查狀態(2026-08-24)★:standard 三輪跑滿達上限未收斂(r1=39/r2=25/r3=25 條,全折零放行;r3 仍 3 blocker 已折入);Enzo 裁甲(d7):開 node-restore-sop-v2 審 v4 delta(r3 折入面+d6/問世界未審補入);乾淨→進實作 [S1]–[S9]
+    14	  KEY:★r3 審計(2026-08-24,5 席,上限輪)實錘要點★:self-audit 翻案恢復雙軌(L4 清帳先例+Check S 只讀該欄;r2 兩席只看指令說明沒對先例=審查員自己犯★第四條)+PASS 批次也建 Verification/摘要 KEY 殘留舊結論=「半改句」第四次(兩席 blocker)/「八類」第五處(SKILL.md 換措辭逃過三輪,清單改掃法)/[S6] 探針判準明定(照抄題庫會判死正確走 SOP 的模型)/共用面落 KEY 行別塞 DEP/計數不寫死/立 d5 澄清+d6 使用者裁定/問世界第二輪折入(動態差分定位/reflexion 假設對帳/引用實體機械掃描)
+    15	  KEY:★d3/d4 文字澄清(2026-08-24)★:d3 context 的「08 檔」是撞號發現前的歷史用語,現行編號以 d4 的 09 為準;d4 的「三處」是 r2 發現第四處(SessionStart hook)之前的清單,現行以 [S3] 的五處為準;正式澄清已立 d5(r3 架構席:先例=新決策+KEY 行雙軌,單靠 KEY 行是第二種做法;r3 通才席:decisions 指令只印決策內容前 100 字,光靠本行照樣看不到)
+    16	  DEP:[[Systems/check-j-regen-guard]]｜[[Systems/外部對照-code衍生wiki]]｜[[Projects/from-scratch重生守衛_計劃]]
+    17	plan_refs: []
+    18	related:
+    19	  - "[[Systems/check-j-regen-guard]]"
+    20	  - "[[Systems/外部對照-code衍生wiki]]"
+    21	  - "[[Projects/from-scratch重生守衛_計劃]]"
+    22	tags:
+    23	  - type/project
+    24	  - status/doing
+    25	decisions:
+    26	  - content: SOP 預設任務驅動:還原跟著「這次要動哪裡」走;第一天只建一篇最小骨架 MOC(純指針),不整倉攤平
+    27	    id: d1
+    28	    context: openwiki 對照節點已裁「圖譜只長在動過的地方」是家規非缺陷;全倉攤平=無 oracle 的大量合成敘事=openwiki 失效模式;影片流程本身也是任務驅動。另一選項①全倉掃描攤平:排除,理由如上;②純任務驅動零骨架:排除,第一天連錨點都找不到,一篇指針 MOC 錯得便宜
+    29	    why_chosen: 指針層便宜安全可先鋪;why 層跟著任務走才有還原品質。代價:冷啟動覆蓋率永遠輸 openwiki 式工具——接受,那是刻意不搶的地盤
+    30	    decided: 2026-08-24
+    31	    valid: true
+    32	  - content: 還原產出一律蓋 regen 章;內容二分:指針級(在哪/誰用/流向,[src:] 天生可驗)快寫,why 級(為什麼/邊界)逐句標 [git:]/推測:/佚失:,無證據老實標推測,嚴禁從現狀反推發明合約
+    33	    id: d2
+    34	    context: openwiki 對照節點「導覽層一分為二」裁定的直接應用;影片 SOP 無此區分,AI 逆向 why 會編得非常自信。另一選項①指針級免蓋章:排除,蓋章成本一行、且不蓋=Check J 全繞過;②全部當 why 級逐句考古:排除,指針錯得便宜,逐句考古讓步驟 0-2 慢十倍沒人會照做
+    35	    why_chosen: 指針錯了讀者走到現場自己修正;自信但錯的敘事比沒有敘事更毒。代價:靠紀律蓋章(宣告制),機械偵測留給 from-scratch 計劃的未來項
+    36	    decided: 2026-08-24
+    37	    valid: true
+    38	  - content: 第一版落文件層:skill 子檔+索引路由+注入範本一行;不建掃描/生成 CLI
+    39	    id: d3
+    40	    context: 最小解在哪一層的裁定。盤點顯示斷點在路由與流程文件(commands/ 索引 grep regen 零命中),不在工具;且 from-scratch 計劃 M3(git-rationale 收割/diff 重生)已排隊未做,另起工具案會撞。另一選項①寫 lumos scan/seed 指令:排除,還沒實跑過 SOP 就機械化=把沒驗過的流程焊死;②只加 INDEX 一行不寫 08 檔:排除,路由通了內容還是空的
+    41	    why_chosen: 文件層一天可交付、探針可驗、可整體 revert。代價:全靠紀律無機械逼。回頭條件:SOP 真實跑 ≥3 次後,固定出現的機械化點(如 git 考古的固定指令序列)再立工具案
+    42	    decided: 2026-08-24
+    43	    valid: true
+    44	  - content: 放置層:SOP 七步全文進 skill 的 reference.md(與既有重生守衛段相鄰),commands/09-節點還原.md 只留薄查表(何時敲哪個指令+指標);編號用 09(08 已被佔用),三處「分八類」措辭同步改九類
+    45	    id: d4
+    46	    context: r1 架構席對照 commands/05、06 慣例:多步驟流程的鄰居一律薄表+指到別處(skill 或 reference.md),敘事本體不進 commands;且 08-自動跑的.md 已存在,r1 三席獨立抓到撞號。另一選項①照原案全文塞 commands/08:排除,撞號+立第二種先例;②不建子檔只改 INDEX:d3 已排除過,路由通了內容還是空的
+    47	    why_chosen: 同層鄰居一致性——下一個要放長方法論的人不用在兩種先例間猜;reference.md 本來就是敘事型深規的家(重生守衛、自足性審計都住那)。代價:讀者多一跳(查表→reference),與 05/06 現況相同
+    48	    decided: 2026-08-24
+    49	    valid: true
+    50	  - content: d5(澄清決策,r3 立):新檔編號=09(d3 context 的「08 檔」是撞號發現前用語);「八類」活文字=五處以 [S3] 為準(d4 的「三處」是 r2 前清單)
+    51	    id: d5
+    52	    context: r2 s2 抓到 d3 殘留 08 舊字、鏡像核對抓到 d4 三處過時;第一版只用摘要 KEY 行澄清,r3 架構席判第二種做法(先例=自足性審計 d2「以新決策澄清舊決策」+驗證層去模型化的 decision-add+KEY 行雙軌),r3 通才席實測 decisions 指令只印決策內容前 100 字、KEY 行澄清照指定查詢路徑看不到。另一選項①維持 KEY 行單軌:排除,查詢路徑失效+違反先例;②decision-supersede d3/d4:排除,兩決策核心裁定(文件層/放置)未翻案,只有清單字過時
+    53	    why_chosen: 新決策走 decisions[] 通道,lumos decisions 印得到;KEY 行保留成雙軌,兩條查詢路徑都接住
+    54	    decided: 2026-08-24
+    55	    valid: true
+    56	  - content: d6(Enzo 2026-08-24 三則裁定):①典型觸發=新功能開發前先還原關聯面,還原產出(共用面+合約候選)=新功能 spec 的護欄素材;②惰性生長=需要沒有→產、有→照慣例用、殘缺→diff 補,絕不整倉攤平;③哲學與流程記進 README([S8])與 Systems 節點([S9]),補全 brownfield 拼圖;另指示問世界第二輪(網搜),折入動態差分/reflexion 對帳/實體掃描等世界解
+    57	    id: d6
+    58	    context: Enzo 於 r3 進行中連發三則指示(原話:「依照這個SOP還原基於codebase能還原的事實,讓新功能基於這個事實,延續既有的開發框架和元件」「需要但沒有的時候產、有的時候照既有慣例使用」「紀錄在readme和圖譜中,補全brownField的那一塊拼圖」),與 d1 任務驅動同向、把原則補成進場動作。折入於 r3 快照凍結後,未經迴圈審查
+    59	    why_chosen: 使用者裁定,非審查發現;三則互相咬合成完整生長哲學:觸發(新功能前置)+分岔(有/殘缺/無)+記錄面(README+圖譜)
+    60	    decided: 2026-08-24
+    61	    valid: true
+    62	  - content: d7(Enzo 裁甲,2026-08-24):開新編號 node-restore-sop-v2 審一輪 v4 delta——範圍=r3 折入面(self-audit 雙軌翻案/探針判準/[S2] 查表/五處清單/d5)+未經迴圈審查的補入面(d6 使用場景節/問世界第二輪世界解折入)
+    63	    id: d7
+    64	    context: standard 三輪跑滿達上限未收斂(r3 仍 3 blocker 已折入);攤人選項甲=新編號 delta 輪/乙=直接進實作/丙=其他,Enzo 裁甲。乙被排除的含義:未審補入面(場景節+世界解)體量不小,Enzo 選多一輪保險而非交下游把關
+    65	    why_chosen: 與 selfaudit-loop-v5 同款先例:上限後未審的結構內容開新編號補審,乾淨輪不洗回原迴圈;成本約一輪五席
+    66	    decided: 2026-08-24
+    67	    valid: true
+    68	---
+    69	# 節點還原SOP_計劃
+    70	
+    71	> 白話:接手一個已經在跑、但圖譜是空的(或很稀疏的)專案時,現在的工具鏈只管「重建筆記不准瞎編」(守衛),
+    72	> 沒人告訴你「該建哪些節點、從哪開始、還原到多深」(產出)。這個計劃把後半段寫成一份任何技術棧都能走的
+    73	> SOP:從看得到的行為反查 code、追資料流圈出承重牆、考古還原為什麼、落成蓋了重建章的節點、列出合約候選
+    74	> 但不冒充合約,出口用兩個乾淨 agent 交叉查核(一個讀筆記、一個讀 code)。種子是 Enzo 給的 brownfield
+    75	> 教學影片五步流程,這裡通用化、並補上影片沒有的驗證層。(v2:r1 五席 39 條原始發現全數折入)
+    76	
+    77	## 症狀(會翻紅的指令)
+    78	
+    79	```
+    80	grep -rl regen skills/lumos-project-notes/commands/ | wc -l
+    81	```
+    82	
+    83	2026-08-24 實測輸出 0:八個指令子檔沒有任何一個提到重建/還原,照 INDEX.md 的情境分類走不到重生守衛(唯一指路的是注入範本裡一句「寫法在 skill」)。
+    84	
+    85	其他由獨立盤點(乾淨 agent、不帶結論派工)確認的空白:62 個 CLI 子指令(2026-08-24 實測 `--help`;r1 前誤記 59)沒有掃 repo 產節點的;README/ONBOARDING/methodology 只講裝機不講建內容;「該先建哪些/建到什麼程度算夠」零指引;[[Systems/外部對照-code衍生wiki]] 明文承認冷啟動全覆蓋是對手優勢。
+    86	
+    87	本案成功=①上面那條 grep ≥1 命中 ②情境探針 ≥3 題全過(整批全過才算,probe 的整批判定語意;題型如「被丟進陌生舊專案要改功能」) ③真實 brownfield repo 實跑還原 ≥2 篇節點:`lumos lint`(含 Check J)綠,**且**變體 B 交叉審計(見步驟 6)過——Check J 綠只證「合約行帶了形狀有效、未懸空的證據指針」(J-c 只驗指針存在,不驗證據真的支持主張;r2 外家糾正上一版「合約級沒瞎編」仍高估),防瞎編的主力是交叉審計,不是 lint(r1 實錘:Check J 只掃 summary、KEY 行只提醒不擋)。
+    88	
+    89	## PRIOR-ART(問世界)
+    90	
+    91	- **種子:brownfield 教學影片**(TikTok @one.ai186,15:50,Enzo 2026-08-24 提供逐段筆記,存 `governance/review-reports/node-restore-sop/seed-brownfield-video-notes.md`)——五步:定位畫面是誰在管→追資料流+誰共用→spec+guardrail(給 AI 的護欄條款;forbidden 段把看懂的禁區寫死)→小步+review→回歸測試。精神對(先看懂再動手、共用面=承重牆、Brownfield 的 Clean Code=跟前人一致),兩個洞:①理解活在對話裡,session 關了蒸發 ②guardrail 是 maker 自律,沒有查核層。
+    92	  **種子取捨三項(r1 s3 抓到靜默丟棄,補明)**:①影片分「AI 輔助/純指揮」兩條路線——本 SOP **只寫純指揮路線**,刻意排除:本工具鏈的執行者就是 agent,人手貼檔案的路線不是本 SOP 的對象;②「包裝過的錯誤紀錄=部落知識」——吸收,進步驟 2(圈出專案自己的錯誤語言);③「不要在 production 裸用」警告——吸收,進步驟 6 出口警語。
+    93	- **openwiki**([[Systems/外部對照-code衍生wiki]])——全倉自動攤平的世界解。本 SOP 反著用:不學它攤平(無 oracle——沒有獨立查核者判對錯——的大量合成敘事),學它被記下的教訓(導覽層一分為二:指針安全、合成敘事有毒)。**同節點對本案最不利的半句也要引(r1 s3 抓到選擇性引用)**:lumos 唯一塌陷回 openwiki 失效模式的例外=from-scratch 重生,而它裁的緩解②「真重生對『圖譜史+code』非 code-only」在冷啟動場景**結構性不存在**(圖譜就是空的)——這不是邊角,是本 SOP 的定義場景。補償=步驟 6 的雙 agent 交叉審計+還原批次過乾淨 agent 對抗抽查;[[Projects/from-scratch重生守衛_計劃]] 的 M2(from-scratch 節點強制過對抗審)落地後,改引用那道機械閘(回頭條件)。
+    94	- **repowise**([[Projects/from-scratch重生守衛_計劃]] 記過的最接近先行者)——從 git 歷史挖 architectural decision。
+    95	- **內部既有零件**:Check J(重建守衛,只掃 summary,J-a/J-b/J-c 硬擋、J-d 提醒,詳見實務隱患第一條)、`lumos set <節點> regen from-scratch/<日期>` 蓋章、`lumos link-candidates <code檔>`(還原後查該連的既有節點,接進步驟 4)、**變體 B:圖譜×程式碼交叉審計**(reference.md〈變體 B〉,觸發詞就含「接手陌生專案」;與本 SOP 的分工:變體 B=已有筆記的事後查核,本 SOP 步驟 0–5=筆記從零到有的產出,步驟 6 出口採用變體 B——含兩條明標為本案延伸的裁定,見步驟 6)、scenario probe、`lumos init`。
+    96	- **問世界第二輪(2026-08-24 Enzo 指示網搜;★r3 後折入,未經迴圈審查★)**:這個題目在學界叫 feature/concept location(Dit 等 2013 綜述:文字/靜態/動態/歷史四族,混合勝單一)與 architecture recovery。折入的世界解:動態差分定位(Wilde 的 software reconnaissance,1995)、reflexion 式假設對帳(Murphy & Notkin,FSE 1995)、引用實體機械掃描(DocAgent Verifier 思路,2025)、Feathers《Working Effectively with Legacy Code》的 seam/特徵化測試/golden master、squash 考古路線(squash commit 留 PR 號→討論串是第一現場;MSR 綜述:理由主要藏在 issue tracker)、Martraire《Living Documentation》的策展先於自產與知識分工、DocAgent 的依賴拓撲序。明說查不到的:minified code 的靜態定位無成熟解(動態法/source map 之外)。調研全文與來源連結存 governance/review-reports/node-restore-sop/web-research.md。
+    97	- **裁定=借用既有設計**:SOP 是「組合現成零件+補流程文件」;第一版不建新 CLI、不採任何依賴(d3)。
+    98	
+    99	## 使用場景(Enzo 指定,2026-08-24;d6。★本節於 r3 快照凍結後折入,未經迴圈審查★)
+   100	
+   101	最典型的觸發:**要在龐大既有 codebase 上加新功能**——先把新功能會碰到的關聯面照本 SOP 還原成節點(只記 codebase 能證的事實),新功能的設計踩在這些節點上:沿用既有框架與元件、不破壞架構、不重造輪子。還原產出直接變成新功能 spec 的護欄素材:共用面清單=不准亂動的承重牆,合約候選=改了就壞的紅線(對應種子影片 forbidden 段的機械化來源);下游 code-loop 的架構對齊席負責抓「跟既有寫法不一樣」。一魚兩吃:這塊功能落成節點,新功能拿到正確脈絡。
+   102	
+   103	**生長哲學=惰性**:節點不整倉攤平,進場先查(`lumos search`/`context`)——**有→照既有慣例用;有但殘缺→照步驟 4 前置 diff 補;沒有→走七步產一篇**。圖譜沿著實際被動過的面慢慢長回原始樣貌,永遠不欠「全倉還原」的債(世界解:Strangler fig 漸進接管在知識層的同構,Fowler 2004)。
+   104	
+   105	## 設計:七步 SOP(任何技術棧,編號步驟 0–6)
+   106	
+   107	適用場景:裝了 lumos、圖譜空或稀疏的既有專案;或本專案裡目擊紀錄佚失的舊模組。核心原則:**還原跟著任務走(d1)、產出落成節點而非留在對話、每條 why 亮身分(d2)、出口必過交叉查核**。
+   108	
+   109	**步驟 0|進場與最小骨架**
+   110	圖譜空 → `lumos init` 裝殼。init **已經自動建好** `MOC/index.md` 空殼(r1 三席實錘)——**填它,不要另建**(`lumos new` 沒有 moc 型,另建也做不到;真另寫一篇會變成兩個互不知道的入口)。正文用 Edit 填:這個 repo 是做什麼的、幾個大件、各自入口在哪(檔案/目錄指針)。只寫指針不寫敘事。**先策展再自產**(世界解:Martraire):README/既有 ADR/測試名先撿,撿得到的算有證據,撿不到才寫推測。**整頁當「假設」經營**(世界解:reflexion models,1995):骨架標推測起步,之後每次任務跑出的實際依賴(步驟 2 追流、impact 結果)回頭對帳——猜對的升有證據、猜錯的改寫、猜了但不存在的刪;導覽頁從一次性靜態填寫變成會收斂的活假設。骨架停手線(可數,不用牆鐘):**一篇、指針 ≤30 行、不展開**;超大 monorepo 只列第一層大件,子件留給之後的任務驅動。
+   111	
+   112	**步驟 1|錨點階梯定位**
+   113	從可觀察行為抓錨,反查到負責的 code 單元。冷啟動場景本步驟(含 2–3)**直接讀 code 不算違反「lumos 優先」鐵則**——那條管的是圖譜有料時;空圖譜 search 必 0 筆,不用跑滿換詞協定(r2 走查席抓到沒明講豁免)。錨點按便宜到貴排:
+   114	① **獨特字串**:網頁=畫面文字/元素 class;CLI=--help 或輸出文字;後端=log 訊息/錯誤碼;mobile=字串資源檔。
+   115	② 字串抓不到(minify/混淆、生成碼)→ **識別子**:i18n 是兩跳(畫面文字→語系檔抓 key→再搜誰用 key);函式名/類名/路由字串/協定欄位名/硬體暫存器位址。
+   116	③ 都沒有(embedded 韌體、宣告式資料管線——可觀察面是波形或排程行為,不是文字)→ **結構文件**:建置腳本、DAG 定義、接腳表、部署設定,從結構往回收斂。
+   117	④ 一到三級全滅(minify/DI/宣告式讓文字錨點失效)→ **動態差分**(世界解:software reconnaissance,1995):準備「會踩到該功能」與「不會踩到」兩個情境各跑一次,收執行軌跡或覆蓋率相減——只在前者出現的 code 就是該功能專屬;依賴注入與宣告式的間接性在執行期都已解掉,動態法天然免疫。**錨點信度**:單一技術命中=低信度,兩種獨立技術(如文字+依賴圖、文字+動態)交叉命中才算高信度(feature location 綜述的量化結論)。
+   118	承認:③④ 這兩級最貴也最容易漏,embedded/資料管線是本 SOP 的弱區(r1 s3 實錘),實跑驗證沒覆蓋到這兩類棧之前,對它們只有「階梯方向」沒有「驗過的流程」。
+   119	
+   120	**步驟 2|追流+圈承重牆**
+   121	這個單元的輸入從哪來、輸出到哪去、**誰還共用它**。查共用面**至少兩個來源**:①拿單元名全域搜用法;②該棧的間接接線處——DI/IoC 設定、路由表、DAG 依賴清單、建置依賴圖、事件訂閱表;③加分來源:git co-change(長期一起被改的檔案=行為上的共用面,與靜態依賴互補)、或步驟 1 若跑了動態差分,兩情境軌跡的**交集**就是共用基礎設施的機械化定義(世界解:reconnaissance 同款)(r1 s3 blocker:純 grep 對依賴注入/反射/隱式介面會**默默漏抓**,找到一部分以為找全了,正是「改 A 壞 B」在還原階段重演)。**要下「沒有別人共用」這種否定結論、且它會決定少建節點時,照 CLAUDE.md ★第四條:派乾淨 agent 拿原始問題去對一次——這個場合原規則沒有降級選項(r2 抓到本文曾自己加「換詞重搜」備案稀釋強制性,已刪;換詞重搜是一般查詢紀律,不能替代派乾淨 agent)**。順手圈出**專案自己的錯誤語言**(包裝過的 logger、錯誤碼表——部落知識,git 考古不出來,種子影片點名的經典坑)。產出:FLOW 一行+共用清單。已有圖譜的專案先敲 `lumos impact --file <檔>`;冷啟動場景這條備援不存在,兩來源紀律就是唯一防線。
+   122	
+   123	**步驟 3|考古還原 why(git 為主,非 git 補位)**
+   124	git 歷史是舊專案最容易拿到的目擊者:blame 找到改這段的 commit、log 讀訊息、revert/fix 紀錄、PR 描述。**招式具體化(世界解:git pickaxe/MSR)**:`git log -S'字串'` 找這行哪次進來/離開、`-G` 吃正則、`git log -L` 追單一函式全史;blame 撞到搬家雜訊用 `git blame <sha>^ -- 檔` 從上一版重跳;**blame 到 squash commit 別停**——撈 PR 編號去讀討論串,理由主要藏在 issue/PR 裡(MSR 綜述),squash 只抹平 git 內的顆粒,forge 上的第一現場還在。**git 沉默不等於 why 佚失**(r1 s3):squash 政策抹平細粒度、郵件補丁流沒有 PR、資料管線邏輯常改在外部平台、韌體 why 常在硬體資料手冊——git 挖不到時先問一圈**非 git 來源**(issue tracker、wiki、部署文件、資料手冊),都沒有才標佚失。標身分:答得出來源的標 `[git:sha]` 或 `[src:路徑:行號]`;推論標 `推測:`;查不到標 `佚失:`。**語序硬規定(r2 實測重現、r3 精化)**:標籤後可有空白,但 `推測:`/`佚失:` 必須是**第一個非空白內容**——`DECISION:推測:依據…`、`DECISION: 推測:依據…` 都合法;夾了文字(`DECISION: 原因不明,推測:…`)正則就比對不到照樣紅,錯誤訊息也不會解釋為什麼。**佚失是合格產出,不是步驟做壞了**——整個專案大量佚失(squash 起家)是預期結果;此刻正是最想編一個合理 why 的時刻,老實標比編漂亮重要。嚴禁從「現在長怎樣」反推發明「當初為什麼」;**`推測:` 行不准引用具體識別子當佐證**(檔名/函式名/欄位名——編造最常長在「像真的」的細節上;有把握引就該去驗證後改標 [src:])。**考古摘錄的紅線(r2 補的一整類)**:git log/PR/issue 常夾憑證、資安事件細節、內部人事內容——這些**不入圖譜**;挖到憑證照該專案安全流程處理,筆記只記「why 涉敏感背景,細節不錄」。圖譜會被索引、被 commit,把深處的敏感內容摘上檯面等於擴大外洩面。
+   125	
+   126	**步驟 4|落節點**
+   127	**落筆前先查這篇是不是已存在**:`lumos search <模組名>`——舊節點還在(哪怕殘缺)就照重生守衛第一條 **diff 更新、別整篇換**(操作重述,字句以 reference〈重生守衛〉原文為準;保住殘存目擊內容;適用場景裡「目擊佚失的舊模組」正是這型,r2 通才席抓到七步漏了這條前置);真的從零才走下面全流程。起手 `lumos new system <模組>` 建骨架——骨架只有 FLOW/KEY/DEP/TEST 四行,**DECISION 行要手動加**(符號表把 DECISION 列在 Issues 下,但 system 筆記用它有先例、J-b 就是為它設的);摘要這幾行不在 set/append 指令值域,只能 Edit 手改,**注意 YAML 縮排與結尾 `---`**(記憶裡同日兩犯的坑)。摘要行分工(r1 通才席實錘,接上現成硬擋):
+   128	- FLOW=流程怎麼跑、DEP=依賴誰(指針級,快寫;注意 Check J **完全不掃**這兩種行)
+   129	- KEY=關鍵事實(指針級居多;沒標身分會吃 J-d 計數提醒,提醒不擋、屬預期噪音)。**步驟 2 的共用清單落在這裡**:`KEY:共用面:被 X/Y 使用(承重牆)[src:…]`——別塞 DEP,DEP 是反方向「這篇依賴誰」(r3 抓到查最重的產出沒地方放)
+   130	- **DECISION=考古出來的 why 放這裡**——J-b 對 DECISION 行是**硬擋**(缺 [src:]/[git:]/推測:/佚失: 直接紅),把 why 放 KEY 行等於自願放棄現成的機械保護
+   131	蓋章與時序:**正文與身分標記全部寫完 → `lumos set <節點> regen from-scratch/<日期>` 蓋章 → `lumos lint <節點>` → 同一次 commit**;不留「蓋了章還沒標完」的中間態過夜(機械層分不出半成品,見實務隱患)。落完跑 `lumos link-candidates <該模組主要 code 檔>` 看有沒有既有節點該連(接線,r1 通才席抓到掛名未接)。**多節點同批落時按依賴拓撲序**(先底層後上層——上層筆記寫時底層事實已就位;世界解:DocAgent 消融結論)。**知識分工**(世界解:Martraire):半衰期短、跟單檔綁死的細節就地寫 code 註解,長脈絡與跨檔 why 才進圖譜——別讓圖譜吸走本該住在 code 旁的東西。
+   132	
+   133	**步驟 5|合約候選,不升格**
+   134	「改了就壞」的清單,開成章節 `## 合約候選(收斂時複核,候選≠已標)`,**放在這次還原批次的計劃筆記裡**(Projects/<主題>_計劃——還原批次照鐵則本來就要開計劃筆記),**不塞進 Systems 節點**:用過合約候選章節的先例**全在 Projects、零篇在 Systems**(逐字同款短版 3 篇,其餘同族變體;總數不寫死——r2 數 13、r3 兩席數 16,「計數型主張最會漂」的 L4 教訓②當場示範)。Systems 節點只在對應 KEY 行旁註「合約候選」字樣。**本步到此為止——標候選就是純文件動作。** 升格是**另一次任務**,走 code 側正常紀律,順序明列(r1 外家抓到缺步驟):取得意圖證據→把該行改標 ★INVARIANT★(regen 節點須附 [src:]/[git:],J-a 擋發明)→`lumos guard scaffold`→寫測試→`guard bind`→`guard audit`,全鏈走完才算合約——三個 guard 指令都有必帶參數(scaffold 要 --node/--invariant/--method/--type/--claim 等),**實形照 reference.md〈lumos guard〉段敲,本文不重抄防漂移**(r2 外家抓到裸寫序列照敲直接報錯)。專案沒測試→升格前先補特徵化測試(characterization test,世界解:Feathers 2004:把現況行為釘住,不判對錯;綁的測試證「改了就壞」是真的,不證行為是對的)——**這也屬升格任務,不在本 SOP 交付範圍**。施工法三招(同屬升格任務):綁不上測試≠降格,標「待 seam」(Feathers:seam=不改這裡的 code 就能換這裡行為的切點,先開 seam 才綁得上);golden master(大量輸入+輸出快照)最適合 AI 代產;綁上後跑 mutation 驗收——變異不翻紅的測試不算數(接本專案既有反假綠紀律)。且承認:embedded/資料管線補測試是基礎設施問題(要先搭 harness/模擬器),成本另計,不是「叫 AI 補幾條」就有。
+   135	
+   136	**步驟 6|出口:交叉查核+接回既有紀律**
+   137	還原批次收尾先跑一道**引用實體機械掃描**(世界解:DocAgent Verifier 的便宜版):機器逐篇掃「筆記引用的檔名/函式/欄位是否真的存在於 code」(refcheck/`lumos search --code` 既有零件)——防編造第一道濾網,比派 agent 便宜一個數量級、可重算;掃完才跑**變體 B 交叉審計**,照 reference.md 原文的機制原樣用(r2 三席抓到上一版借名走樣,此處全對齊):**逐節點**各派兩個乾淨 agent——階段一只讀單篇筆記,萃取 **12~15 條可被程式碼驗證的具體主張、且逐條必須可證偽**(原文兩句分開抄,別合併——「可驗證」比「可證偽」寬);階段二只讀 code(禁讀 docs)逐條判 ✅/❌/❓。處置照原文:❌=修筆記(**以 code 為準**;code 本身是 bug 就開 Issue,不改筆記遷就)→**建 Verification 紀錄→相關 Systems 的 `verified_by` 雙向同步**——這就是出口的正式留痕。留痕**雙軌**:除上述 Verification+verified_by 外,逐節點**照樣蓋 `lumos self-audit`**——r2 曾判「錯綁」刪掉,r3 翻案:L4 清帳(同構的雙 agent 交叉審計)30 節點全蓋章+Verification 雙軌是真實先例,且體檢 Check S 只讀 self_audit 欄,不蓋=已審過的節點被誤報「從未審過」。r2 那次只看指令說明沒對先例,正是★第四條要防的「只信一個來源」——這次是審查員自己犯,r3 抓回。**PASS 批次也建一篇批次 Verification**(L4 先例同款),不是只有 ❌ 才留(r3 外家抓到 PASS 零留痕缺口)。**兩條本 SOP 自加的延伸裁定(變體 B 原文是選配巡檢手法,沒有這兩條;明標出處是本案,r2 架構席抓到上一版沒標)**:①還原批次**必跑**——理由:30 個被點名過期節點的清帳(有偏樣本:被軟閘點名的高危群)實測 16.3% 主張與 code 不一致,還原型節點同屬高危;②❓(找不到驗證點)不可原樣放行——回頭把該句改標 `推測:`/`佚失:` 或修掉。審計抓到要修的,**開新 commit、重跑 lint**——步驟 4 的「同一次 commit」管首次落節點的原子性,「中間態」專指「蓋了章但身分標記沒寫完」;審計後修正是正常的後續 commit,不算中間態(r2 抓到兩步銜接沒講)。之後要動手改 code,從這裡起全走現行流程:`lumos impact`、design-loop、code-loop。**警語(種子影片吸收)**:還原完直接動 production 級 code 前,至少讓改動走完 code-loop;還原節點內容日後被行為事實打臉→照 CLAUDE.md 既有規則立事故筆記,錯的節點標作廢或 supersede,這就是還原內容的收回路徑。
+   138	
+   139	### 還原到多深算夠(深度停手線——與步驟 0 的骨架停手線是兩條規則,r3 抓到同名兩義)
+   140	
+   141	夠=**這次任務要動的面+它的共用面**有節點;不追求覆蓋率、不為還原而還原。骨架層永遠只有指針。深挖由下一個任務驅動——這是家規「圖譜只長在動過的地方」的冷啟動版,不是妥協。
+   142	
+   143	## 落地件(spec-trace 對齊用;r1 通才席抓到原版零 [SN] 標記,補齊)
+   144	
+   145	1. [S1] `skills/lumos-project-notes/reference.md` 新增**獨立 `##` 大節**〈節點還原(brownfield 冷啟動)〉、目錄加一項——體量是端到端流程,照「自足性審計」自佔目錄項的先例,不塞進「合約性標記」大節當子節(r2 架構席 ⚠ 裁定;d4「與重生守衛相鄰」指主題相近、互設指標,不指同一大節)。內容範圍明定(r3 抓到兩讀)=步驟 0–6 本體+兩條停手線+「機械把關真實範圍」技術事實(隱患第一條);PRIOR-ART/其餘隱患/審計紀錄留在本計劃筆記不搬。落地時轉 reference 慣例格式(### 小節+編號清單;「步驟 N|」偽標題 reference 查無先例,不沿用)。
+   146	2. [S2] `skills/lumos-project-notes/commands/09-節點還原.md`(新檔;08 已被佔用,r1 三席實錘):薄查表——體例照 05/06,列這幾排(r3 抓到內容清單未給;**不得含已廢動作**):進場判斷→`lumos search/context`(有→照慣例用;殘缺→diff 補;沒有→往下);步驟 0→`lumos init`+Edit 填 MOC;步驟 1–3→讀 code/git(冷啟動豁免,無 lumos 指令);步驟 4→`lumos new system`+Edit 摘要+`lumos set … regen …`+`lumos lint`+`lumos link-candidates`;步驟 5→合約候選章節(計劃筆記);升格→guard 三指令(指 reference);步驟 6→變體 B 派工+Verification+`lumos self-audit`。深規全文一行指到 reference.md。
+   147	3. [S3] `skills/lumos-project-notes/commands/INDEX.md`:「接手陌生/舊專案、圖譜是空的」情境路由+「grep 衝動對照表」對應行;「二、八類子檔」標題改九類。**「八類」活文字五處**(r1 三處→r2 第四處→r3 第五處,一輪多一處——教訓:別信列死的清單,落地時拿「八類」「八個子檔」兩式全 repo 再掃一次防第六處):INDEX.md:24 標題、CLAUDE.md 受管區塊與 `scripts/templates/graph-discipline.md:29` 的「分八類」(靠重跑注入分發)、`scripts/hooks/claude/lumos-entry-hook.py:74`(SessionStart 提示——工具鏈程式碼,注入蓋不到,直接改字隨 install 分發)、`skills/lumos-project-notes/SKILL.md:9`「八個子檔」(r3 抓到:換措辭逃過三輪 grep)。歷史計劃/驗證筆記是時間快照,不改。
+   148	4. [S4] `skills/lumos-project-notes/SKILL.md`:進場節加一行「圖譜空或稀疏 → 走節點還原 SOP(commands/09-節點還原.md)」。
+   149	5. [S5] `scripts/templates/graph-discipline.md`:注入範本加一行冷啟動入口(分發需重跑安裝,交付說明註明)。
+   150	6. [S6] 情境探針 ≥3 題,寫進 `governance/scenarios/commands.jsonl`(scenario_probe 預設語料):口語、不帶工具字眼。**判準明定(r3 抓到與冷啟動豁免衝突)**:冷啟動題**不把 Grep/Read 放 forbid_before**(步驟 1 豁免——照抄既有題庫寫法會把正確走 SOP 的模型判死);expect=先命中 `lumos init|lumos search`,forbid_before=`Edit|Write`(動手改之前要先進場);另至少一題測「圖譜有料→照慣例用」(expect `lumos search`,forbid_before 照既有題庫)。過線=三題全過。
+   151	7. [S7] 實跑驗證:真實 brownfield repo 還原 ≥2 篇節點,lint 綠+變體 B 交叉審計過,留 Verification 筆記 `plan_refs` 連回本篇。**前置(r3 抓到裸接風險)**:首跑必選**自有** repo(候選 Enzo 名下專案,落地時裁);要用外部/第三方 repo,先立 secret-scan 機械案才准(前置條件非回頭條件)。跑完對既有檢索考卷跑一次評測,推薦精確度不得降(檢索稀釋隱患的觀察門檻)。
+   152	8. [S8] `README.md` 加〈brownfield:接手與還原〉一節(d6):惰性生長哲學+七步一句話版+指向 skill——對人的門面。
+   153	9. [S9] `docs/lumos-toolchain-knowledge/Systems/節點還原.md` 權威節點(d6):機制脈絡、連本計劃與 reference 段——圖譜自己也要有這塊拼圖。
+   154	
+   155	## 實務隱患
+   156	
+   157	- **編假 why——機械把關的真實範圍(r1 四席實錘後改寫)**:Check J **只掃 frontmatter 的 summary 行,正文不掃**;硬擋=J-a(★INVARIANT★ 缺意圖證據)、J-b(DECISION 行缺標記)、J-c(懸空 [src:]/[git:] 指針,只驗存在不驗「證據真的支持主張」);J-d 對沒標身分的 KEY 行**只計數提醒**;FLOW/DEP **零檢查**。所以「機械防瞎編」只對合約級成立,prose 級誠實機械驗不了(J-d 提醒文字自己就這麼寫)——prose 的防線是步驟 6 的變體 B 雙 agent 交叉審計。regen 章仍是宣告制,不蓋完全繞過(既有 ★DEBT★)。回頭條件:實跑驗證抽查;之後任何一次發現未蓋章的重建節點,立案機械偵測(from-scratch 計劃已留未來項)。
+   158	- **蓋章半成品中間態(r1 三席實錘)**:蓋了 regen 章、summary 只有 FLOW/DEP 或沒寫完的節點,check_regen_provenance 零錯誤零警告靜默全綠——機械層**分不出半成品與成品**。緩解=步驟 4 的「寫完→蓋章→lint→同 commit」時序紀律+步驟 6 交叉審計兜底。回頭條件:交叉審計若抓到半成品節點 ≥1 次,把「蓋章但無任何 DECISION/身分標記」升為 doctor 軟提醒立案。
+   159	- **併發還原(r1 兩席實錘)**:兩個 session 同時還原同一模組——`lumos new` 存在性檢查與寫檔間無鎖(TOCTOU),分頭寫同一篇=git 層 last-write-wins/merge conflict,無「哪份重建可信」的裁決機制。緩解=d1 任務驅動下同模組同時還原機率低+git 衝突是唯一柵欄;老實承認沒有機械鎖。回頭條件:真實發生一次,接到 [[Issues/同工作區多session並行改動]] 立機械案。
+   160	- **注入面改動**:graph-discipline 範本動所有專案 CLAUDE.md 受管區塊——sentinel 機制既有,改動=一行入口+「八類→九類」;過設計審+情境探針才推。回頭條件(r3 外家抓到只有推前閘):推送後第一週重跑情境探針全套,紅了 revert 該行。
+   161	- **骨架節點腐化**:只寫指針(錯得便宜,讀者走到現場自己發現)、不寫合成敘事;既有 stale/doctor 兜底;步驟 0 的 reflexion 對帳鉤(見該步)讓骨架每被一次任務踩到就修一次。回頭條件:[S7] 實跑 repo 的骨架 MOC 在下一次任務進場時抽查一次;爛了立防腐案。
+   162	- **指針節點規模化稀釋檢索(r3 通才席補)**:d2 鼓勵快寫指針級節點,大批薄節點疊加可能稀釋 search/context 訊噪比,「查得到才算先行」變難。回頭條件:[S7] 實跑後對既有檢索考卷跑評測,推薦精確度不得降;之後每次大批還原(≥5 篇)後同樣抽查。
+   163	- **考古內容外洩(r2 補的一整類,無既有政策可繼承)**:git 歷史/PR/issue 常夾憑證與敏感內容,摘進圖譜=從深處撈上檯面被索引擴散。防線=步驟 3 紅線(敏感細節不入圖譜);目前純紀律無機械掃描。回頭條件:[S7] 實跑時人工檢查還原筆記零敏感內容;第一次用在非自有 codebase 前,先立 secret-scan 機械案。
+   164	- **金流/對外送出/不可逆**:不涉及——已排除:本案交付(skill 檔+索引+範本行)純文件、無 runtime 行為、不寄任何東西、可整體 revert。**範圍講清(r1 通才席)**:可 revert 的是 SOP 交付物;照 SOP 還原出來的節點內容錯了,收回路徑=步驟 6 寫的事故筆記+作廢/supersede,不在「整體 revert」一句裡。
+   165	- **實跑次數=0(r2 通才席糾正:上一版寫「樣本=1」不符現況)**:全庫 0 個蓋過 regen 章的節點、[S7] 未認領——七步從未被完整執行過,通篇是純設計文件;[S7] 跑完也只有 1 個 repo 樣本,embedded/資料管線兩類弱區仍不在內。回頭條件:每次真實接手新專案跑 SOP,把棧特異問題補回 reference 段;連兩次不用補=主張站住;弱區兩類遇到真實案例前,對外只稱「驗過的棧」不稱「任何棧」。
+   166	
+   167	## 審計修正紀錄
+   168	
+   169	- **r1(2026-08-24,5 席:s1 通才/s2 失敗模式/s3 通用性/arch 架構對齊/ext Codex 外家)**:原始 39 條(s1=11 含 1 併入、s2=9、s3=10、arch=4 含 1⚠、ext=5),去重後 22 個獨立問題,全數折入、零放行。實錘要點:08 撞號(三席)、spec-trace 零 [SN](s1)、MOC 該填不該建(三席)、Check J 覆蓋高估家族(四席:只掃 summary/KEY 只警/FLOW/DEP 零檢查/J-c 只驗存在/「只擋 J-a」低估 J-b J-c)、蓋章半成品靜默綠(三席)、承重牆 grep 靜默漏抓 DI/宣告式(s3 blocker)、自足性審計借名弱化→改用變體 B 雙 agent(s3 blocker)、選擇性引用 openwiki(s3)、步驟 5 測試碼與「純文件」自相矛盾(兩席)、升格序列缺改標步驟(ext)、併發零交代(兩席)、種子三項靜默丟棄(s3)、62≠59(兩席)、link-candidates 掛名未接線(s1)、非 git 考古來源(s3)、佚失=合格產出(s2)、停手線改可數(s2)、合約候選章節格式(s3)、放置層照 05/06 慣例(arch major,立 d4)、探針落點指名(arch)、變體 B 補進 PRIOR-ART(arch ⚠)、回滾範圍講清(s1)。
+   170	  收貨紀律:s2 兩條引句用省略號拼接錨定失敗(F5/F6),其主張分別由 s1/ext 的錨定引句與本席機械重現(scripts/lumos:2508-2576 實讀、shallow 降級 warn 實讀)獨立證實後收貨;s3 F5.2 引句 <10 字錨定失敗,主張由 grep 既有章節標題獨立證實後收貨——★r2 更正:當時寫「四篇同款」不精確,逐字同款實為 3 篇、另 10 篇同族變體;正文據此句寫出的段落已在 r2 一併修正(r2 s2 抓到收貨句本身沒通過它自稱做過的驗證)★。
+   171	
+   172	- **r2(2026-08-24,5 席:s1 通才/s2 折入銜接查證/s3 可執行性走查/arch 架構對齊 delta/ext Codex 外家)**:原始 25 條(s1=4、s2=6、s3=6——★首記寫 5,漏數走查席用段落標題寫的步驟 1 minor,grep 逐檔數才抓回,當場更正★、arch=4 含 2⚠、ext=5),全數折入、零放行。實錘要點:推測:/佚失: 語序硬規定(走查席真跑重現 blocker,J-b 對句中標記照樣紅)、變體 B 引用走樣三面向(選配→強制沒標出處/漏 Verification+verified_by 留痕/self-audit 錯綁+批次 vs 逐節點,三席+外家合圍)、guard 三指令裸寫序列照敲報錯(ext)、「合約候選放哪篇」r1 只訂了格式沒訂位置(走查席:13 篇先例全在 Projects)、★第四條被本文自己加降級選項(s2)、「四篇同款」收貨句未通過自稱的驗證(s2)、「八類」清單漏 SessionStart hook 第四處(ext+s2)、d3 殘留 08 舊字(s2,摘要澄清行處理)、原子 commit 與審計後修正銜接(s2)、舊節點 diff 更新前置(s1)、樣本=1 實為 0(s1)、考古機密外洩整類缺口(s1)、16.3% 樣本範圍誇大(s2)、Check J「合約級沒瞎編」仍高估(ext)、步驟 1 與 lumos 優先鐵則衝突未豁免(s3)、system 骨架無 DECISION 行(s3)、summary 手改陷阱(s3)、[S1] 巢狀層級⚠裁獨立大節(arch)、步驟N|偽標題落地轉格式(arch)。
+   173	  收貨紀律:ext#4(八類)引號寫法不同錨定失敗、s2 #3/#8 巢狀引號截短與轉錄省略——主張分別由本席 grep 四處活文字、讀 spec 原文兩行獨立證實後收貨;s1/s3/arch 其餘引句全數錨定。
+   174	
+   175	- **r3(2026-08-24,5 席,上限輪)**:原始 25 條(s1=4、s2=3、s3=11、arch=2 含 1⚠、ext=5),全數折入、零放行。實錘要點:★self-audit 翻案★——r2「刪錯綁」被 delta 席用 L4 清帳先例推翻(先例=雙軌全蓋;Check S 只讀 self_audit 欄;r2 兩席只看指令說明沒對先例=審查員自己犯★第四條),恢復雙軌+PASS 批次也建 Verification(外家同時抓到 PASS 零留痕);摘要 KEY 殘留舊結論(兩席 blocker,「半改句」第四次發作——改正文沒同步摘要);「八類」第五處(SKILL.md「八個子檔」換措辭逃過三輪,清單改成掃法);[S6] 探針判準與冷啟動豁免衝突(照抄題庫會判死正確模型,明定新判準);共用清單無落地欄位(落 KEY 行);合約候選計數 13→16 又漂(兩席,改不寫死);「緊貼」過窄(正則允許標籤後空白,兩席);「可證偽」合併原文兩句;d3/d4 澄清 KEY 行單軌=第二種做法(arch:先例是新決策雙軌)+decisions 指令印不到澄清(s1)→立 d5;[S1] 範圍/[S2] 查表內容/[S7] repo 前置補齊;檢索稀釋新隱患;注入面/骨架腐化補回頭條件;停手線同名分義。
+   176	  收貨紀律:s3 報告初版引句標籤帶括號註記抽不到(整形後全錨定);外家 #5、s1 #3 引句 <10 字或巢狀截短——主張由本席 grep(隱患條數、decisions 指令行為)獨立證實後收貨;本席轉錄 arch 報告手誤一字(缺→縺)修正後錨定。
+   177	  ★併入(非審計發現,r3 快照凍結後折入、未經本迴圈審查)★:①Enzo 三則裁定立 d6(使用場景/惰性生長/README+圖譜),新增〈使用場景〉節與 [S8][S9];②Enzo 指示網搜「問世界第二輪」,折入動態差分定位/reflexion 對帳/引用實體機械掃描等(見 PRIOR-ART 第二輪與各步驟「世界解:」標記)——攤人時列為已知未審事項。
+   178	
+   179	## 下一步
+   180	
+   181	★達上限未收斂後 Enzo 裁甲(2026-08-24,d7)★:開新編號 `node-restore-sop-v2` 審一輪 v4 delta(r3 折入面+d6 使用場景節+問世界第二輪世界解)。乾淨→進實作 [S1]–[S9];仍有存活 ≥major→再攤人。
+   182	
+     1	# 問世界第二輪:brownfield 節點還原的世界解調研(2026-08-24,Enzo 指示網搜)
+     2	
+     3	> 由 general-purpose agent 網搜六方向產出;摘錄要點+全部來源連結。折入結論見計劃筆記 PRIOR-ART 與各步驟「世界解:」標記。
+     4	
+     5	## 1. Feature location / concept location
+     6	Wilde & Scully「Software Reconnaissance」(1995);Chen & Rajlich ASDG(2000);PROMESIR(TSE 2007);Dit/Revelle/Gethers/Poshyvanyk 分類學綜述(2013)。四族:文字(IR)/靜態(依賴圖)/動態(執行軌跡)/歷史(co-change);混合勝單一。Reconnaissance 招:功能會踩/不會踩兩情境各跑一次收軌跡相減=該功能專屬 code;兩情境交集=共用基礎設施(承重牆機械化定義)。minify 靜態定位查不到成熟解(動態法/source map 之外);Spring 框架感知分析器(JASMINE/TAI-E/YASA,未確認成熟度)對零依賴哲學太重。
+     7	折入:步驟 1 第四級動態差分錨點+錨點信度分級(兩獨立技術交叉才高信度);步驟 2 第三來源 co-change+軌跡交集。
+     8	
+     9	## 2. Software archaeology / MSR
+    10	Hipikat(Cubranic & Murphy ~2003-2005:code/bug 單/郵件/文件連成專案記憶);git pickaxe(-S/-G)與 log -L;MSR 綜述:設計理由主要在 issue tracker;ADR 體系(Nygard 2011、adr-tools、log4brains);CommitDistill(2026,未確認成熟度)。squash 後:中間 commit 沒了,但 squash 訊息留 PR 號,PR/issue 討論串存活——第一現場移到 forge。
+    11	折入:步驟 3 招式具體化(-S/-G/-L、blame ^ 重跳、squash→PR 號→討論串、issue 優先);決策四欄與 Nygard ADR 同構(確認對齊,不引工具)。不採:log4brains 是往後寫的工具,對往回挖沒幫助;CommitDistill 太新。
+    12	
+    13	## 3. Feathers《Working Effectively with Legacy Code》(2004)
+    14	characterization tests(釘現在的行為,不判對錯)、seams(不改這裡 code 就能換行為的切點)、legacy change algorithm;golden master/approval testing(Nicolas Carlo 整理);approval 100% 覆蓋也要配 mutation 驗證會翻紅。
+    15	折入:步驟 5 「待 seam」標記、golden master 適合 AI 代產、mutation 當升格驗收、語意對齊(測試證「改了就壞」是真的,不證行為是對的)。不採:整套「先測試後改碼」為改碼設計,知識還原流程只吸收這段。
+    16	
+    17	## 4. Strangler fig / Living documentation
+    18	Strangler fig(Fowler 2004;Azure/AWS 正式 pattern)=漸進接管正典——惰性生長的世界名字。Martraire《Living Documentation》(2019):知識多半已在系統裡只是形式不對;curation 勝 creation;就地增註。
+    19	折入:步驟 0 先策展再自產;步驟 4 知識分工(短半衰期進 code 註解,長脈絡進圖譜)。不採:自動生成鏈預設有人維護 code 內標記,對接手第 0 天沒用。
+    20	
+    21	## 5. 2024-2026 AI 專用做法
+    22	ArchAgent(arXiv 2601.13007:靜態分析+LLM,消融證明餵依賴脈絡提升正確率——支持步驟 2 在步驟 4 前);DocAgent(arXiv 2504.08725:五 agent 含 Verifier,依賴拓撲序先底層後上層,消融證明順序至關重要;Truthfulness 檢查=引用實體存在性,細節未確認);DeepDiscovery(2026,未確認);hallucination 文獻 factuality vs faithfulness——逆向補 why 是 faithfulness 風險,主流解 citation-grounded(=lumos 證據身分制的文獻名字);Aider repo map(tree-sitter+PageRank+預算截斷)、Cline Memory Bank、CLAUDE.md 慣例——「先建 map 再動手」已是業界標配。
+    23	折入:步驟 6 前置引用實體機械掃描;步驟 3 推測不准引具體識別子;步驟 4 拓撲序;步驟 0 可拿 repo map 思路當初稿產生器(保持惰性)。
+    24	
+    25	## 6. Architecture recovery
+    26	Reflexion Models(Murphy/Notkin/Sullivan,FSE 1995):人猜高層模型→工具算實際依賴對帳(收斂/背離/缺席)→迭代;NetBSD 25 萬行幾小時可用。自動聚類族(整倉攤平)不採——違反惰性哲學、對業務 why 無貢獻;綜述:僅約 54% recovery 方法有工具。
+    27	折入:步驟 0 導覽頁=reflexion 式假設+三態對帳鉤。
+    28	
+    29	## 綜合排序(調研員裁)
+    30	1. 動態差分定位(補唯一能力死角,一招帶承重牆機械化) 2. reflexion 假設對帳(成本近零,把最弱一步變會收斂) 3. 引用實體機械掃描(便宜可重算,正對「閘只留可重算的」)。緊追:seam/golden master/mutation;squash→PR 考古路線。
+    31	
+    32	## 誠實聲明
+    33	minified 靜態定位查不到成熟解;software archaeology 一詞出處年份未確認;JASMINE/TAI-E/YASA、DeepDiscovery、DocAgent Verifier 內部機制、CommitDistill 成熟度皆未確認;書名/工具/論文皆有搜尋實據無自造。
+    34	
+    35	## Sources
+    36	- Dit et al., Feature Location in Source Code: A Taxonomy and Survey (2013) https://onlinelibrary.wiley.com/doi/full/10.1002/smr.567
+    37	- Murphy & Notkin, Software Reflexion Models (FSE 1995) https://www.cs.ubc.ca/~murphy/papers/rm/fse95.html
+    38	- MSR for software architecture — systematic mapping (2025) https://www.sciencedirect.com/science/article/pii/S0950584925000163
+    39	- Hipikat https://www.semanticscholar.org/paper/fc041feb5271efca959d0f54722338d419330cf0
+    40	- Git pickaxe https://git-scm.com/book/en/v2/Git-Tools-Searching ; blame 招式 https://tekin.co.uk/2020/11/patterns-for-searching-git-revision-histories
+    41	- GitHub squash merge https://docs.github.com/en/pull-requests/reference/pull-request-merges
+    42	- log4brains https://github.com/thomvaill/log4brains ; ADR tooling https://adr.github.io/adr-tooling/
+    43	- Characterization test https://en.wikipedia.org/wiki/Characterization_test ; understandlegacycode.com https://understandlegacycode.com/blog/characterization-tests-or-approval-tests/
+    44	- Strangler fig https://en.wikipedia.org/wiki/Strangler_fig_pattern ; Azure https://learn.microsoft.com/en-us/azure/architecture/patterns/strangler-fig
+    45	- Martraire, Living Documentation https://www.oreilly.com/library/view/living-documentation-continuous/9780134689418/
+    46	- ArchAgent (2026) https://arxiv.org/abs/2601.13007 ; DocAgent (2025) https://arxiv.org/abs/2504.08725
+    47	- Hallucination survey https://dl.acm.org/doi/10.1145/3703155 ; faithfulness https://arxiv.org/pdf/2501.00269
+    48	- CommitDistill (2026) https://arxiv.org/html/2605.18284
+    49	- repo map / memory bank 實務 https://hackernoon.com/the-complete-guide-to-ai-agent-memory-files-claudemd-agentsmd-and-beyond
+
+codex
+入口資料已讀到；接下來我會鎖定 delta 段的逐字命令，並直接追 `refcheck`、`search --code`、`context` 的 parser 與匹配邏輯，再對指定留痕先例逐行比對。
+exec
+/bin/zsh -lc "nl -ba /tmp/node-restore-sop-v2-r1.md | sed -n '50,165p'; rg -n \"refcheck|--code|def .*search|def .*context|add_parser\\(['\\\"]search|add_parser\\(['\\\"]context\" scripts/lumos; rg -n \"self-audit|verified_by|Verification|variant|變體 B|1029|交叉審\" skills/lumos-project-notes/reference.md docs/lumos-toolchain-knowledge/Verification/2026-08-21_L4交叉審計30節點清帳.md" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+    50	  - content: d5(澄清決策,r3 立):新檔編號=09(d3 context 的「08 檔」是撞號發現前用語);「八類」活文字=五處以 [S3] 為準(d4 的「三處」是 r2 前清單)
+    51	    id: d5
+    52	    context: r2 s2 抓到 d3 殘留 08 舊字、鏡像核對抓到 d4 三處過時;第一版只用摘要 KEY 行澄清,r3 架構席判第二種做法(先例=自足性審計 d2「以新決策澄清舊決策」+驗證層去模型化的 decision-add+KEY 行雙軌),r3 通才席實測 decisions 指令只印決策內容前 100 字、KEY 行澄清照指定查詢路徑看不到。另一選項①維持 KEY 行單軌:排除,查詢路徑失效+違反先例;②decision-supersede d3/d4:排除,兩決策核心裁定(文件層/放置)未翻案,只有清單字過時
+    53	    why_chosen: 新決策走 decisions[] 通道,lumos decisions 印得到;KEY 行保留成雙軌,兩條查詢路徑都接住
+    54	    decided: 2026-08-24
+    55	    valid: true
+    56	  - content: d6(Enzo 2026-08-24 三則裁定):①典型觸發=新功能開發前先還原關聯面,還原產出(共用面+合約候選)=新功能 spec 的護欄素材;②惰性生長=需要沒有→產、有→照慣例用、殘缺→diff 補,絕不整倉攤平;③哲學與流程記進 README([S8])與 Systems 節點([S9]),補全 brownfield 拼圖;另指示問世界第二輪(網搜),折入動態差分/reflexion 對帳/實體掃描等世界解
+    57	    id: d6
+    58	    context: Enzo 於 r3 進行中連發三則指示(原話:「依照這個SOP還原基於codebase能還原的事實,讓新功能基於這個事實,延續既有的開發框架和元件」「需要但沒有的時候產、有的時候照既有慣例使用」「紀錄在readme和圖譜中,補全brownField的那一塊拼圖」),與 d1 任務驅動同向、把原則補成進場動作。折入於 r3 快照凍結後,未經迴圈審查
+    59	    why_chosen: 使用者裁定,非審查發現;三則互相咬合成完整生長哲學:觸發(新功能前置)+分岔(有/殘缺/無)+記錄面(README+圖譜)
+    60	    decided: 2026-08-24
+    61	    valid: true
+    62	  - content: d7(Enzo 裁甲,2026-08-24):開新編號 node-restore-sop-v2 審一輪 v4 delta——範圍=r3 折入面(self-audit 雙軌翻案/探針判準/[S2] 查表/五處清單/d5)+未經迴圈審查的補入面(d6 使用場景節/問世界第二輪世界解折入)
+    63	    id: d7
+    64	    context: standard 三輪跑滿達上限未收斂(r3 仍 3 blocker 已折入);攤人選項甲=新編號 delta 輪/乙=直接進實作/丙=其他,Enzo 裁甲。乙被排除的含義:未審補入面(場景節+世界解)體量不小,Enzo 選多一輪保險而非交下游把關
+    65	    why_chosen: 與 selfaudit-loop-v5 同款先例:上限後未審的結構內容開新編號補審,乾淨輪不洗回原迴圈;成本約一輪五席
+    66	    decided: 2026-08-24
+    67	    valid: true
+    68	---
+    69	# 節點還原SOP_計劃
+    70	
+    71	> 白話:接手一個已經在跑、但圖譜是空的(或很稀疏的)專案時,現在的工具鏈只管「重建筆記不准瞎編」(守衛),
+    72	> 沒人告訴你「該建哪些節點、從哪開始、還原到多深」(產出)。這個計劃把後半段寫成一份任何技術棧都能走的
+    73	> SOP:從看得到的行為反查 code、追資料流圈出承重牆、考古還原為什麼、落成蓋了重建章的節點、列出合約候選
+    74	> 但不冒充合約,出口用兩個乾淨 agent 交叉查核(一個讀筆記、一個讀 code)。種子是 Enzo 給的 brownfield
+    75	> 教學影片五步流程,這裡通用化、並補上影片沒有的驗證層。(v2:r1 五席 39 條原始發現全數折入)
+    76	
+    77	## 症狀(會翻紅的指令)
+    78	
+    79	```
+    80	grep -rl regen skills/lumos-project-notes/commands/ | wc -l
+    81	```
+    82	
+    83	2026-08-24 實測輸出 0:八個指令子檔沒有任何一個提到重建/還原,照 INDEX.md 的情境分類走不到重生守衛(唯一指路的是注入範本裡一句「寫法在 skill」)。
+    84	
+    85	其他由獨立盤點(乾淨 agent、不帶結論派工)確認的空白:62 個 CLI 子指令(2026-08-24 實測 `--help`;r1 前誤記 59)沒有掃 repo 產節點的;README/ONBOARDING/methodology 只講裝機不講建內容;「該先建哪些/建到什麼程度算夠」零指引;[[Systems/外部對照-code衍生wiki]] 明文承認冷啟動全覆蓋是對手優勢。
+    86	
+    87	本案成功=①上面那條 grep ≥1 命中 ②情境探針 ≥3 題全過(整批全過才算,probe 的整批判定語意;題型如「被丟進陌生舊專案要改功能」) ③真實 brownfield repo 實跑還原 ≥2 篇節點:`lumos lint`(含 Check J)綠,**且**變體 B 交叉審計(見步驟 6)過——Check J 綠只證「合約行帶了形狀有效、未懸空的證據指針」(J-c 只驗指針存在,不驗證據真的支持主張;r2 外家糾正上一版「合約級沒瞎編」仍高估),防瞎編的主力是交叉審計,不是 lint(r1 實錘:Check J 只掃 summary、KEY 行只提醒不擋)。
+    88	
+    89	## PRIOR-ART(問世界)
+    90	
+    91	- **種子:brownfield 教學影片**(TikTok @one.ai186,15:50,Enzo 2026-08-24 提供逐段筆記,存 `governance/review-reports/node-restore-sop/seed-brownfield-video-notes.md`)——五步:定位畫面是誰在管→追資料流+誰共用→spec+guardrail(給 AI 的護欄條款;forbidden 段把看懂的禁區寫死)→小步+review→回歸測試。精神對(先看懂再動手、共用面=承重牆、Brownfield 的 Clean Code=跟前人一致),兩個洞:①理解活在對話裡,session 關了蒸發 ②guardrail 是 maker 自律,沒有查核層。
+    92	  **種子取捨三項(r1 s3 抓到靜默丟棄,補明)**:①影片分「AI 輔助/純指揮」兩條路線——本 SOP **只寫純指揮路線**,刻意排除:本工具鏈的執行者就是 agent,人手貼檔案的路線不是本 SOP 的對象;②「包裝過的錯誤紀錄=部落知識」——吸收,進步驟 2(圈出專案自己的錯誤語言);③「不要在 production 裸用」警告——吸收,進步驟 6 出口警語。
+    93	- **openwiki**([[Systems/外部對照-code衍生wiki]])——全倉自動攤平的世界解。本 SOP 反著用:不學它攤平(無 oracle——沒有獨立查核者判對錯——的大量合成敘事),學它被記下的教訓(導覽層一分為二:指針安全、合成敘事有毒)。**同節點對本案最不利的半句也要引(r1 s3 抓到選擇性引用)**:lumos 唯一塌陷回 openwiki 失效模式的例外=from-scratch 重生,而它裁的緩解②「真重生對『圖譜史+code』非 code-only」在冷啟動場景**結構性不存在**(圖譜就是空的)——這不是邊角,是本 SOP 的定義場景。補償=步驟 6 的雙 agent 交叉審計+還原批次過乾淨 agent 對抗抽查;[[Projects/from-scratch重生守衛_計劃]] 的 M2(from-scratch 節點強制過對抗審)落地後,改引用那道機械閘(回頭條件)。
+    94	- **repowise**([[Projects/from-scratch重生守衛_計劃]] 記過的最接近先行者)——從 git 歷史挖 architectural decision。
+    95	- **內部既有零件**:Check J(重建守衛,只掃 summary,J-a/J-b/J-c 硬擋、J-d 提醒,詳見實務隱患第一條)、`lumos set <節點> regen from-scratch/<日期>` 蓋章、`lumos link-candidates <code檔>`(還原後查該連的既有節點,接進步驟 4)、**變體 B:圖譜×程式碼交叉審計**(reference.md〈變體 B〉,觸發詞就含「接手陌生專案」;與本 SOP 的分工:變體 B=已有筆記的事後查核,本 SOP 步驟 0–5=筆記從零到有的產出,步驟 6 出口採用變體 B——含兩條明標為本案延伸的裁定,見步驟 6)、scenario probe、`lumos init`。
+    96	- **問世界第二輪(2026-08-24 Enzo 指示網搜;★r3 後折入,未經迴圈審查★)**:這個題目在學界叫 feature/concept location(Dit 等 2013 綜述:文字/靜態/動態/歷史四族,混合勝單一)與 architecture recovery。折入的世界解:動態差分定位(Wilde 的 software reconnaissance,1995)、reflexion 式假設對帳(Murphy & Notkin,FSE 1995)、引用實體機械掃描(DocAgent Verifier 思路,2025)、Feathers《Working Effectively with Legacy Code》的 seam/特徵化測試/golden master、squash 考古路線(squash commit 留 PR 號→討論串是第一現場;MSR 綜述:理由主要藏在 issue tracker)、Martraire《Living Documentation》的策展先於自產與知識分工、DocAgent 的依賴拓撲序。明說查不到的:minified code 的靜態定位無成熟解(動態法/source map 之外)。調研全文與來源連結存 governance/review-reports/node-restore-sop/web-research.md。
+    97	- **裁定=借用既有設計**:SOP 是「組合現成零件+補流程文件」;第一版不建新 CLI、不採任何依賴(d3)。
+    98	
+    99	## 使用場景(Enzo 指定,2026-08-24;d6。★本節於 r3 快照凍結後折入,未經迴圈審查★)
+   100	
+   101	最典型的觸發:**要在龐大既有 codebase 上加新功能**——先把新功能會碰到的關聯面照本 SOP 還原成節點(只記 codebase 能證的事實),新功能的設計踩在這些節點上:沿用既有框架與元件、不破壞架構、不重造輪子。還原產出直接變成新功能 spec 的護欄素材:共用面清單=不准亂動的承重牆,合約候選=改了就壞的紅線(對應種子影片 forbidden 段的機械化來源);下游 code-loop 的架構對齊席負責抓「跟既有寫法不一樣」。一魚兩吃:這塊功能落成節點,新功能拿到正確脈絡。
+   102	
+   103	**生長哲學=惰性**:節點不整倉攤平,進場先查(`lumos search`/`context`)——**有→照既有慣例用;有但殘缺→照步驟 4 前置 diff 補;沒有→走七步產一篇**。圖譜沿著實際被動過的面慢慢長回原始樣貌,永遠不欠「全倉還原」的債(世界解:Strangler fig 漸進接管在知識層的同構,Fowler 2004)。
+   104	
+   105	## 設計:七步 SOP(任何技術棧,編號步驟 0–6)
+   106	
+   107	適用場景:裝了 lumos、圖譜空或稀疏的既有專案;或本專案裡目擊紀錄佚失的舊模組。核心原則:**還原跟著任務走(d1)、產出落成節點而非留在對話、每條 why 亮身分(d2)、出口必過交叉查核**。
+   108	
+   109	**步驟 0|進場與最小骨架**
+   110	圖譜空 → `lumos init` 裝殼。init **已經自動建好** `MOC/index.md` 空殼(r1 三席實錘)——**填它,不要另建**(`lumos new` 沒有 moc 型,另建也做不到;真另寫一篇會變成兩個互不知道的入口)。正文用 Edit 填:這個 repo 是做什麼的、幾個大件、各自入口在哪(檔案/目錄指針)。只寫指針不寫敘事。**先策展再自產**(世界解:Martraire):README/既有 ADR/測試名先撿,撿得到的算有證據,撿不到才寫推測。**整頁當「假設」經營**(世界解:reflexion models,1995):骨架標推測起步,之後每次任務跑出的實際依賴(步驟 2 追流、impact 結果)回頭對帳——猜對的升有證據、猜錯的改寫、猜了但不存在的刪;導覽頁從一次性靜態填寫變成會收斂的活假設。骨架停手線(可數,不用牆鐘):**一篇、指針 ≤30 行、不展開**;超大 monorepo 只列第一層大件,子件留給之後的任務驅動。
+   111	
+   112	**步驟 1|錨點階梯定位**
+   113	從可觀察行為抓錨,反查到負責的 code 單元。冷啟動場景本步驟(含 2–3)**直接讀 code 不算違反「lumos 優先」鐵則**——那條管的是圖譜有料時;空圖譜 search 必 0 筆,不用跑滿換詞協定(r2 走查席抓到沒明講豁免)。錨點按便宜到貴排:
+   114	① **獨特字串**:網頁=畫面文字/元素 class;CLI=--help 或輸出文字;後端=log 訊息/錯誤碼;mobile=字串資源檔。
+   115	② 字串抓不到(minify/混淆、生成碼)→ **識別子**:i18n 是兩跳(畫面文字→語系檔抓 key→再搜誰用 key);函式名/類名/路由字串/協定欄位名/硬體暫存器位址。
+   116	③ 都沒有(embedded 韌體、宣告式資料管線——可觀察面是波形或排程行為,不是文字)→ **結構文件**:建置腳本、DAG 定義、接腳表、部署設定,從結構往回收斂。
+   117	④ 一到三級全滅(minify/DI/宣告式讓文字錨點失效)→ **動態差分**(世界解:software reconnaissance,1995):準備「會踩到該功能」與「不會踩到」兩個情境各跑一次,收執行軌跡或覆蓋率相減——只在前者出現的 code 就是該功能專屬;依賴注入與宣告式的間接性在執行期都已解掉,動態法天然免疫。**錨點信度**:單一技術命中=低信度,兩種獨立技術(如文字+依賴圖、文字+動態)交叉命中才算高信度(feature location 綜述的量化結論)。
+   118	承認:③④ 這兩級最貴也最容易漏,embedded/資料管線是本 SOP 的弱區(r1 s3 實錘),實跑驗證沒覆蓋到這兩類棧之前,對它們只有「階梯方向」沒有「驗過的流程」。
+   119	
+   120	**步驟 2|追流+圈承重牆**
+   121	這個單元的輸入從哪來、輸出到哪去、**誰還共用它**。查共用面**至少兩個來源**:①拿單元名全域搜用法;②該棧的間接接線處——DI/IoC 設定、路由表、DAG 依賴清單、建置依賴圖、事件訂閱表;③加分來源:git co-change(長期一起被改的檔案=行為上的共用面,與靜態依賴互補)、或步驟 1 若跑了動態差分,兩情境軌跡的**交集**就是共用基礎設施的機械化定義(世界解:reconnaissance 同款)(r1 s3 blocker:純 grep 對依賴注入/反射/隱式介面會**默默漏抓**,找到一部分以為找全了,正是「改 A 壞 B」在還原階段重演)。**要下「沒有別人共用」這種否定結論、且它會決定少建節點時,照 CLAUDE.md ★第四條:派乾淨 agent 拿原始問題去對一次——這個場合原規則沒有降級選項(r2 抓到本文曾自己加「換詞重搜」備案稀釋強制性,已刪;換詞重搜是一般查詢紀律,不能替代派乾淨 agent)**。順手圈出**專案自己的錯誤語言**(包裝過的 logger、錯誤碼表——部落知識,git 考古不出來,種子影片點名的經典坑)。產出:FLOW 一行+共用清單。已有圖譜的專案先敲 `lumos impact --file <檔>`;冷啟動場景這條備援不存在,兩來源紀律就是唯一防線。
+   122	
+   123	**步驟 3|考古還原 why(git 為主,非 git 補位)**
+   124	git 歷史是舊專案最容易拿到的目擊者:blame 找到改這段的 commit、log 讀訊息、revert/fix 紀錄、PR 描述。**招式具體化(世界解:git pickaxe/MSR)**:`git log -S'字串'` 找這行哪次進來/離開、`-G` 吃正則、`git log -L` 追單一函式全史;blame 撞到搬家雜訊用 `git blame <sha>^ -- 檔` 從上一版重跳;**blame 到 squash commit 別停**——撈 PR 編號去讀討論串,理由主要藏在 issue/PR 裡(MSR 綜述),squash 只抹平 git 內的顆粒,forge 上的第一現場還在。**git 沉默不等於 why 佚失**(r1 s3):squash 政策抹平細粒度、郵件補丁流沒有 PR、資料管線邏輯常改在外部平台、韌體 why 常在硬體資料手冊——git 挖不到時先問一圈**非 git 來源**(issue tracker、wiki、部署文件、資料手冊),都沒有才標佚失。標身分:答得出來源的標 `[git:sha]` 或 `[src:路徑:行號]`;推論標 `推測:`;查不到標 `佚失:`。**語序硬規定(r2 實測重現、r3 精化)**:標籤後可有空白,但 `推測:`/`佚失:` 必須是**第一個非空白內容**——`DECISION:推測:依據…`、`DECISION: 推測:依據…` 都合法;夾了文字(`DECISION: 原因不明,推測:…`)正則就比對不到照樣紅,錯誤訊息也不會解釋為什麼。**佚失是合格產出,不是步驟做壞了**——整個專案大量佚失(squash 起家)是預期結果;此刻正是最想編一個合理 why 的時刻,老實標比編漂亮重要。嚴禁從「現在長怎樣」反推發明「當初為什麼」;**`推測:` 行不准引用具體識別子當佐證**(檔名/函式名/欄位名——編造最常長在「像真的」的細節上;有把握引就該去驗證後改標 [src:])。**考古摘錄的紅線(r2 補的一整類)**:git log/PR/issue 常夾憑證、資安事件細節、內部人事內容——這些**不入圖譜**;挖到憑證照該專案安全流程處理,筆記只記「why 涉敏感背景,細節不錄」。圖譜會被索引、被 commit,把深處的敏感內容摘上檯面等於擴大外洩面。
+   125	
+   126	**步驟 4|落節點**
+   127	**落筆前先查這篇是不是已存在**:`lumos search <模組名>`——舊節點還在(哪怕殘缺)就照重生守衛第一條 **diff 更新、別整篇換**(操作重述,字句以 reference〈重生守衛〉原文為準;保住殘存目擊內容;適用場景裡「目擊佚失的舊模組」正是這型,r2 通才席抓到七步漏了這條前置);真的從零才走下面全流程。起手 `lumos new system <模組>` 建骨架——骨架只有 FLOW/KEY/DEP/TEST 四行,**DECISION 行要手動加**(符號表把 DECISION 列在 Issues 下,但 system 筆記用它有先例、J-b 就是為它設的);摘要這幾行不在 set/append 指令值域,只能 Edit 手改,**注意 YAML 縮排與結尾 `---`**(記憶裡同日兩犯的坑)。摘要行分工(r1 通才席實錘,接上現成硬擋):
+   128	- FLOW=流程怎麼跑、DEP=依賴誰(指針級,快寫;注意 Check J **完全不掃**這兩種行)
+   129	- KEY=關鍵事實(指針級居多;沒標身分會吃 J-d 計數提醒,提醒不擋、屬預期噪音)。**步驟 2 的共用清單落在這裡**:`KEY:共用面:被 X/Y 使用(承重牆)[src:…]`——別塞 DEP,DEP 是反方向「這篇依賴誰」(r3 抓到查最重的產出沒地方放)
+   130	- **DECISION=考古出來的 why 放這裡**——J-b 對 DECISION 行是**硬擋**(缺 [src:]/[git:]/推測:/佚失: 直接紅),把 why 放 KEY 行等於自願放棄現成的機械保護
+   131	蓋章與時序:**正文與身分標記全部寫完 → `lumos set <節點> regen from-scratch/<日期>` 蓋章 → `lumos lint <節點>` → 同一次 commit**;不留「蓋了章還沒標完」的中間態過夜(機械層分不出半成品,見實務隱患)。落完跑 `lumos link-candidates <該模組主要 code 檔>` 看有沒有既有節點該連(接線,r1 通才席抓到掛名未接)。**多節點同批落時按依賴拓撲序**(先底層後上層——上層筆記寫時底層事實已就位;世界解:DocAgent 消融結論)。**知識分工**(世界解:Martraire):半衰期短、跟單檔綁死的細節就地寫 code 註解,長脈絡與跨檔 why 才進圖譜——別讓圖譜吸走本該住在 code 旁的東西。
+   132	
+   133	**步驟 5|合約候選,不升格**
+   134	「改了就壞」的清單,開成章節 `## 合約候選(收斂時複核,候選≠已標)`,**放在這次還原批次的計劃筆記裡**(Projects/<主題>_計劃——還原批次照鐵則本來就要開計劃筆記),**不塞進 Systems 節點**:用過合約候選章節的先例**全在 Projects、零篇在 Systems**(逐字同款短版 3 篇,其餘同族變體;總數不寫死——r2 數 13、r3 兩席數 16,「計數型主張最會漂」的 L4 教訓②當場示範)。Systems 節點只在對應 KEY 行旁註「合約候選」字樣。**本步到此為止——標候選就是純文件動作。** 升格是**另一次任務**,走 code 側正常紀律,順序明列(r1 外家抓到缺步驟):取得意圖證據→把該行改標 ★INVARIANT★(regen 節點須附 [src:]/[git:],J-a 擋發明)→`lumos guard scaffold`→寫測試→`guard bind`→`guard audit`,全鏈走完才算合約——三個 guard 指令都有必帶參數(scaffold 要 --node/--invariant/--method/--type/--claim 等),**實形照 reference.md〈lumos guard〉段敲,本文不重抄防漂移**(r2 外家抓到裸寫序列照敲直接報錯)。專案沒測試→升格前先補特徵化測試(characterization test,世界解:Feathers 2004:把現況行為釘住,不判對錯;綁的測試證「改了就壞」是真的,不證行為是對的)——**這也屬升格任務,不在本 SOP 交付範圍**。施工法三招(同屬升格任務):綁不上測試≠降格,標「待 seam」(Feathers:seam=不改這裡的 code 就能換這裡行為的切點,先開 seam 才綁得上);golden master(大量輸入+輸出快照)最適合 AI 代產;綁上後跑 mutation 驗收——變異不翻紅的測試不算數(接本專案既有反假綠紀律)。且承認:embedded/資料管線補測試是基礎設施問題(要先搭 harness/模擬器),成本另計,不是「叫 AI 補幾條」就有。
+   135	
+   136	**步驟 6|出口:交叉查核+接回既有紀律**
+   137	還原批次收尾先跑一道**引用實體機械掃描**(世界解:DocAgent Verifier 的便宜版):機器逐篇掃「筆記引用的檔名/函式/欄位是否真的存在於 code」(refcheck/`lumos search --code` 既有零件)——防編造第一道濾網,比派 agent 便宜一個數量級、可重算;掃完才跑**變體 B 交叉審計**,照 reference.md 原文的機制原樣用(r2 三席抓到上一版借名走樣,此處全對齊):**逐節點**各派兩個乾淨 agent——階段一只讀單篇筆記,萃取 **12~15 條可被程式碼驗證的具體主張、且逐條必須可證偽**(原文兩句分開抄,別合併——「可驗證」比「可證偽」寬);階段二只讀 code(禁讀 docs)逐條判 ✅/❌/❓。處置照原文:❌=修筆記(**以 code 為準**;code 本身是 bug 就開 Issue,不改筆記遷就)→**建 Verification 紀錄→相關 Systems 的 `verified_by` 雙向同步**——這就是出口的正式留痕。留痕**雙軌**:除上述 Verification+verified_by 外,逐節點**照樣蓋 `lumos self-audit`**——r2 曾判「錯綁」刪掉,r3 翻案:L4 清帳(同構的雙 agent 交叉審計)30 節點全蓋章+Verification 雙軌是真實先例,且體檢 Check S 只讀 self_audit 欄,不蓋=已審過的節點被誤報「從未審過」。r2 那次只看指令說明沒對先例,正是★第四條要防的「只信一個來源」——這次是審查員自己犯,r3 抓回。**PASS 批次也建一篇批次 Verification**(L4 先例同款),不是只有 ❌ 才留(r3 外家抓到 PASS 零留痕缺口)。**兩條本 SOP 自加的延伸裁定(變體 B 原文是選配巡檢手法,沒有這兩條;明標出處是本案,r2 架構席抓到上一版沒標)**:①還原批次**必跑**——理由:30 個被點名過期節點的清帳(有偏樣本:被軟閘點名的高危群)實測 16.3% 主張與 code 不一致,還原型節點同屬高危;②❓(找不到驗證點)不可原樣放行——回頭把該句改標 `推測:`/`佚失:` 或修掉。審計抓到要修的,**開新 commit、重跑 lint**——步驟 4 的「同一次 commit」管首次落節點的原子性,「中間態」專指「蓋了章但身分標記沒寫完」;審計後修正是正常的後續 commit,不算中間態(r2 抓到兩步銜接沒講)。之後要動手改 code,從這裡起全走現行流程:`lumos impact`、design-loop、code-loop。**警語(種子影片吸收)**:還原完直接動 production 級 code 前,至少讓改動走完 code-loop;還原節點內容日後被行為事實打臉→照 CLAUDE.md 既有規則立事故筆記,錯的節點標作廢或 supersede,這就是還原內容的收回路徑。
+   138	
+   139	### 還原到多深算夠(深度停手線——與步驟 0 的骨架停手線是兩條規則,r3 抓到同名兩義)
+   140	
+   141	夠=**這次任務要動的面+它的共用面**有節點;不追求覆蓋率、不為還原而還原。骨架層永遠只有指針。深挖由下一個任務驅動——這是家規「圖譜只長在動過的地方」的冷啟動版,不是妥協。
+   142	
+   143	## 落地件(spec-trace 對齊用;r1 通才席抓到原版零 [SN] 標記,補齊)
+   144	
+   145	1. [S1] `skills/lumos-project-notes/reference.md` 新增**獨立 `##` 大節**〈節點還原(brownfield 冷啟動)〉、目錄加一項——體量是端到端流程,照「自足性審計」自佔目錄項的先例,不塞進「合約性標記」大節當子節(r2 架構席 ⚠ 裁定;d4「與重生守衛相鄰」指主題相近、互設指標,不指同一大節)。內容範圍明定(r3 抓到兩讀)=步驟 0–6 本體+兩條停手線+「機械把關真實範圍」技術事實(隱患第一條);PRIOR-ART/其餘隱患/審計紀錄留在本計劃筆記不搬。落地時轉 reference 慣例格式(### 小節+編號清單;「步驟 N|」偽標題 reference 查無先例,不沿用)。
+   146	2. [S2] `skills/lumos-project-notes/commands/09-節點還原.md`(新檔;08 已被佔用,r1 三席實錘):薄查表——體例照 05/06,列這幾排(r3 抓到內容清單未給;**不得含已廢動作**):進場判斷→`lumos search/context`(有→照慣例用;殘缺→diff 補;沒有→往下);步驟 0→`lumos init`+Edit 填 MOC;步驟 1–3→讀 code/git(冷啟動豁免,無 lumos 指令);步驟 4→`lumos new system`+Edit 摘要+`lumos set … regen …`+`lumos lint`+`lumos link-candidates`;步驟 5→合約候選章節(計劃筆記);升格→guard 三指令(指 reference);步驟 6→變體 B 派工+Verification+`lumos self-audit`。深規全文一行指到 reference.md。
+   147	3. [S3] `skills/lumos-project-notes/commands/INDEX.md`:「接手陌生/舊專案、圖譜是空的」情境路由+「grep 衝動對照表」對應行;「二、八類子檔」標題改九類。**「八類」活文字五處**(r1 三處→r2 第四處→r3 第五處,一輪多一處——教訓:別信列死的清單,落地時拿「八類」「八個子檔」兩式全 repo 再掃一次防第六處):INDEX.md:24 標題、CLAUDE.md 受管區塊與 `scripts/templates/graph-discipline.md:29` 的「分八類」(靠重跑注入分發)、`scripts/hooks/claude/lumos-entry-hook.py:74`(SessionStart 提示——工具鏈程式碼,注入蓋不到,直接改字隨 install 分發)、`skills/lumos-project-notes/SKILL.md:9`「八個子檔」(r3 抓到:換措辭逃過三輪 grep)。歷史計劃/驗證筆記是時間快照,不改。
+   148	4. [S4] `skills/lumos-project-notes/SKILL.md`:進場節加一行「圖譜空或稀疏 → 走節點還原 SOP(commands/09-節點還原.md)」。
+   149	5. [S5] `scripts/templates/graph-discipline.md`:注入範本加一行冷啟動入口(分發需重跑安裝,交付說明註明)。
+   150	6. [S6] 情境探針 ≥3 題,寫進 `governance/scenarios/commands.jsonl`(scenario_probe 預設語料):口語、不帶工具字眼。**判準明定(r3 抓到與冷啟動豁免衝突)**:冷啟動題**不把 Grep/Read 放 forbid_before**(步驟 1 豁免——照抄既有題庫寫法會把正確走 SOP 的模型判死);expect=先命中 `lumos init|lumos search`,forbid_before=`Edit|Write`(動手改之前要先進場);另至少一題測「圖譜有料→照慣例用」(expect `lumos search`,forbid_before 照既有題庫)。過線=三題全過。
+   151	7. [S7] 實跑驗證:真實 brownfield repo 還原 ≥2 篇節點,lint 綠+變體 B 交叉審計過,留 Verification 筆記 `plan_refs` 連回本篇。**前置(r3 抓到裸接風險)**:首跑必選**自有** repo(候選 Enzo 名下專案,落地時裁);要用外部/第三方 repo,先立 secret-scan 機械案才准(前置條件非回頭條件)。跑完對既有檢索考卷跑一次評測,推薦精確度不得降(檢索稀釋隱患的觀察門檻)。
+   152	8. [S8] `README.md` 加〈brownfield:接手與還原〉一節(d6):惰性生長哲學+七步一句話版+指向 skill——對人的門面。
+   153	9. [S9] `docs/lumos-toolchain-knowledge/Systems/節點還原.md` 權威節點(d6):機制脈絡、連本計劃與 reference 段——圖譜自己也要有這塊拼圖。
+   154	
+   155	## 實務隱患
+   156	
+   157	- **編假 why——機械把關的真實範圍(r1 四席實錘後改寫)**:Check J **只掃 frontmatter 的 summary 行,正文不掃**;硬擋=J-a(★INVARIANT★ 缺意圖證據)、J-b(DECISION 行缺標記)、J-c(懸空 [src:]/[git:] 指針,只驗存在不驗「證據真的支持主張」);J-d 對沒標身分的 KEY 行**只計數提醒**;FLOW/DEP **零檢查**。所以「機械防瞎編」只對合約級成立,prose 級誠實機械驗不了(J-d 提醒文字自己就這麼寫)——prose 的防線是步驟 6 的變體 B 雙 agent 交叉審計。regen 章仍是宣告制,不蓋完全繞過(既有 ★DEBT★)。回頭條件:實跑驗證抽查;之後任何一次發現未蓋章的重建節點,立案機械偵測(from-scratch 計劃已留未來項)。
+   158	- **蓋章半成品中間態(r1 三席實錘)**:蓋了 regen 章、summary 只有 FLOW/DEP 或沒寫完的節點,check_regen_provenance 零錯誤零警告靜默全綠——機械層**分不出半成品與成品**。緩解=步驟 4 的「寫完→蓋章→lint→同 commit」時序紀律+步驟 6 交叉審計兜底。回頭條件:交叉審計若抓到半成品節點 ≥1 次,把「蓋章但無任何 DECISION/身分標記」升為 doctor 軟提醒立案。
+   159	- **併發還原(r1 兩席實錘)**:兩個 session 同時還原同一模組——`lumos new` 存在性檢查與寫檔間無鎖(TOCTOU),分頭寫同一篇=git 層 last-write-wins/merge conflict,無「哪份重建可信」的裁決機制。緩解=d1 任務驅動下同模組同時還原機率低+git 衝突是唯一柵欄;老實承認沒有機械鎖。回頭條件:真實發生一次,接到 [[Issues/同工作區多session並行改動]] 立機械案。
+   160	- **注入面改動**:graph-discipline 範本動所有專案 CLAUDE.md 受管區塊——sentinel 機制既有,改動=一行入口+「八類→九類」;過設計審+情境探針才推。回頭條件(r3 外家抓到只有推前閘):推送後第一週重跑情境探針全套,紅了 revert 該行。
+   161	- **骨架節點腐化**:只寫指針(錯得便宜,讀者走到現場自己發現)、不寫合成敘事;既有 stale/doctor 兜底;步驟 0 的 reflexion 對帳鉤(見該步)讓骨架每被一次任務踩到就修一次。回頭條件:[S7] 實跑 repo 的骨架 MOC 在下一次任務進場時抽查一次;爛了立防腐案。
+   162	- **指針節點規模化稀釋檢索(r3 通才席補)**:d2 鼓勵快寫指針級節點,大批薄節點疊加可能稀釋 search/context 訊噪比,「查得到才算先行」變難。回頭條件:[S7] 實跑後對既有檢索考卷跑評測,推薦精確度不得降;之後每次大批還原(≥5 篇)後同樣抽查。
+   163	- **考古內容外洩(r2 補的一整類,無既有政策可繼承)**:git 歷史/PR/issue 常夾憑證與敏感內容,摘進圖譜=從深處撈上檯面被索引擴散。防線=步驟 3 紅線(敏感細節不入圖譜);目前純紀律無機械掃描。回頭條件:[S7] 實跑時人工檢查還原筆記零敏感內容;第一次用在非自有 codebase 前,先立 secret-scan 機械案。
+   164	- **金流/對外送出/不可逆**:不涉及——已排除:本案交付(skill 檔+索引+範本行)純文件、無 runtime 行為、不寄任何東西、可整體 revert。**範圍講清(r1 通才席)**:可 revert 的是 SOP 交付物;照 SOP 還原出來的節點內容錯了,收回路徑=步驟 6 寫的事故筆記+作廢/supersede,不在「整體 revert」一句裡。
+   165	- **實跑次數=0(r2 通才席糾正:上一版寫「樣本=1」不符現況)**:全庫 0 個蓋過 regen 章的節點、[S7] 未認領——七步從未被完整執行過,通篇是純設計文件;[S7] 跑完也只有 1 個 repo 樣本,embedded/資料管線兩類弱區仍不在內。回頭條件:每次真實接手新專案跑 SOP,把棧特異問題補回 reference 段;連兩次不用補=主張站住;弱區兩類遇到真實案例前,對外只稱「驗過的棧」不稱「任何棧」。
+67:#   要「只剝圍欄、★保留 inline code★」→ `_strip_fences_text`(refcheck 家族要這個)
+1412:def _search_region(lineno, line, fm_end):
+1613:    ②的消費端是治理機制本身(refcheck → design-loop 的 G1 硬閘、Edit/Write 前
+1628:    """只剝 fenced code block,★保留 inline code★——給 refcheck 家族用。
+1630:    ★為什麼不能用 `_strip_code_text`★:那支連 inline code 一起剝,而 refcheck
+1637:def _search_visible_lines(lines, include_code):
+1670:def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
+1674:    預設**排除 fenced code 區塊 + inline code**(對齊 doctor 連結抽取的慣例,--code 才含);
+1771:            #   r3:第四個維度 `--code`(codex minor)——預設不搜 code block,片語若只
+1877:        suffix += " [已排除 code block,--code 可含]"
+4411:    """settle 收斂閘([S1] 結清式收斂_計劃,2026-07-28):清單全結清 ∧ G1 refcheck ∧ G3(末筆 result=現檔)。
+4484:    claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
+4514:    --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
+4680:    # ── 證據閘(--gate):K-streak(必要)∧ G1 refcheck(--spec 可選)∧ G2 發現枯竭 ──
+4698:        claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
+6305:def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, as_json=False):
+7993:def cmd_decision_add(env, rel, content, decided, context=None, why=None):
+9857:    """--repo 顯式優先;省略時 cwd 逐層向上找 .git(同 refcheck 慣例)。失敗印錯回 None。"""
+10562:    protocol_violation)。收貨第三道(前兩道=quote-check/refcheck 既有直用):
+10720:    _refcheck_scan 與 check_regen_provenance(Check J 的 [src:] 驗證)共用——
+10721:    J-c 不得走 _refcheck_scan 抽取入口(inline-code 抽取 + top_dirs 靜默過濾會把假目錄放行,
+10752:def _refcheck_scan(text, repo_root):
+10753:    """refcheck 抽取+核對核心(不列印):回 (claims, n_missing, n_oor, n_ok)。
+10754:    cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。
+12465:    對齊 difficulty.assess_spec 慣例、獨立實作(同 refcheck 對 Check P 不共用)。"""
+13706:def cmd_refcheck(md_path, repo=None, as_json=False):
+13736:    claims, n_missing, n_oor, n_ok = _refcheck_scan(text, repo_root)
+13741:        print(f"refcheck {md}(對照的程式碼在 {repo_root})")
+13801:    - 複用 _refcheck_scan(text, repo_root) 抽取 body inline-code 路徑;
+13804:    - _refcheck_scan 的 top_dirs 靜默過濾照舊(§4 天花板 5)。
+13812:    唯一誤判歧義;大小寫敏感)→ 命中。★不動共用的 _refcheck_scan★(其 `/` 過濾
+13813:    是 refcheck CLI/G1 gate 的既有合約,此處自建第二條抽取路)。git 缺席/重名
+13856:        claims, _n_missing, _n_oor, _n_ok = _refcheck_scan(text, repo_root)
+13863:            # 第二條抽取路:裸 token(無 /)——與 _refcheck_scan 同源的 span 抽取
+14598:        print(f"改動 {rel_file} (由讀盤 refcheck 抽取)")
+15244:    "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
+15274:    "refcheck": "文件裡引的 檔案:行號 還存不存在。",
+15336:    p = sub.add_parser("context", help="節點+鄰居壓縮索引")
+15432:                    help="證據閘:K-streak(必要)∧ G1 refcheck 引用座標 ∧ G2 發現枯竭,全過才 rc 0")
+15529:    p = sub.add_parser("search", help="全文搜尋(frontmatter+body);取代 obsidian search")
+15534:    p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
+15685:    p = sub.add_parser("refcheck", help="spec 指涉宣稱確定性核對(vault-free):inline-code 路徑/行號 → 存在性 manifest")
+15687:    p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+15861:    if args.cmd == "refcheck":
+15862:        return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+docs/lumos-toolchain-knowledge/Verification/2026-08-21_L4交叉審計30節點清帳.md:11:# 2026-08-21_L4交叉審計30節點清帳
+docs/lumos-toolchain-knowledge/Verification/2026-08-21_L4交叉審計30節點清帳.md:13:> 白話:那道「自足性審計該重做了」的提醒響了 46 天、落在 30 個節點上沒人理([[Issues/自足性審計提醒空轉四十六天]])。這次一口氣清掉——**不是批次蓋章**,是每個節點兩個乾淨 agent 做交叉審計(一個只讀筆記萃取主張、一個只讀程式碼逐條判真假),❌ 的逐條修進筆記後才蓋章。全程證據落 `governance/l4-audit/2026-08-21/`(每節點 claims+verify 檔)。
+docs/lumos-toolchain-knowledge/Verification/2026-08-21_L4交叉審計30節點清帳.md:64:- 30 節點全部 `lumos self-audit <node> --model sonnet --date 2026-08-21` 蓋章——★同日同戳,但每個戳對應一份獨立 claims+verify 檔,可逐節點回查,與「批次補戳」可區分★。
+skills/lumos-project-notes/reference.md:62:| 健康巡檢（orphans / unresolved / verified_by 同步 / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / ★INVARIANT★→測試綁定 + 獨立合法性審計；Check P 失效檔案認領(節點正文 inline-code 路徑指向已不存在的 repo 檔 → 軟提醒「圖譜指向死碼」)） | `python3 scripts/lumos doctor [--ci]` |
+skills/lumos-project-notes/reference.md:66:| **改某流程前查「該重驗哪幾篇」** | `python3 scripts/lumos stale --candidate --match "<關鍵字>"` — 聚焦活躍 Verification 的 `revalidate_when`(未來重驗條件、排 Archive);比純 `--match` 窄(後者含 valid_under 快照 + Archive) |
+skills/lumos-project-notes/reference.md:69:| **條款級追溯（計劃 [SN] 條款誰認領了）** | `python3 scripts/lumos spec-trace <計劃節點> [--json]` — 計劃 body 標 `[S1]`/`[S2]`…,回指(plan_refs)的 Verification 提及即認領;未認領 rc1。opt-in,無標記=不追溯 |
+skills/lumos-project-notes/reference.md:84:| **影響幅度偵測(關聯節點自動修復地基,vault-free)** | `lumos impact --file <code路徑> [--repo <root>] [--json] [--depth N]` — 算「改這支 code 波及哪些圖譜節點」:①直接(body inline-code 反查,不掃 core_refs)②間接(多源 BFS hop 1..depth,related/verified_by/plan_refs/body-wikilink 雙向,cycle guard)③相關事故(節點 `pitfall_when` glob/content-regex 命中被碰檔;去重:既結構又 trigger 命中只列 incidents)。標 direction/contract/combo。**已掛 PreToolUse hook(v1.1 降噪版,2026-07-11 goldset §6 全過轉正)**:Claude Edit/Write/MultiEdit code 時動手前自動注入「必看(合約/事故固定席)+相關 top-8(帶分數,改動內容當查詢詞)」——從全量 40+ 行縮到數行;TTL 20min 冷卻窗內走 `--incidents-only` 快速路(事故安全面每次看)。據此判受影響節點需不需同步。rc:0/3(vault 缺)。**`lumos impact --diff <base>..HEAD [--json]`(2026-07-11 橋接)**:聚合整段 diff 各改動檔的 ranked impact(query=該檔 hunk)成受影響功能面 manifest(固定席全保+非固定 top-8+來源檔標注)——code-loop 派 reviewer 前跑、當第二鏡頭(advisory 人判;--diff 聚合版不接 hook——單檔版已轉正接 hook,見 impact 行)。**`--sync-check`(落成核對)**:同 range 的預期受影響節點 vs 實際動過節點 → 未同步清單(code-loop 收斂後、pass 留痕前跑) |
+skills/lumos-project-notes/reference.md:94:| list 追加 verified_by/plan_refs/related/tags | `lumos append <note> <key> "[[x]]"` | 鐵則1 安全格式、自動 dedup |
+skills/lumos-project-notes/reference.md:97:| 滾動歸檔老 Verification | `lumos archive [--days N] [--apply]` | 單遍移檔 + path 式入連結正規化成 basename；dry-run 預設；**活守衛護欄**：仍背書存活守衛(綁定測試在 code)的 Verification 不按年齡歸檔 |
+skills/lumos-project-notes/reference.md:114:> **子命令全覽（62 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers`）+ 寫入（`set` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` 折入漂移 / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `link-candidates` code→節點補鏈候選 / `mutate` diff 變異測試(驗測試網,觀測)）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `compose-metrics` `lint-check`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown`）。
+skills/lumos-project-notes/reference.md:158:# 追加一條 verified_by(frontmatter list → lumos,自動 dedup)
+skills/lumos-project-notes/reference.md:159:python3 scripts/lumos append Systems/Billing verified_by "[[Verification/2026-03-27_xxx]]"
+skills/lumos-project-notes/reference.md:183:# 一次到位:orphans / 破連結 / verified_by 同步 / plan_refs 意圖鏈 / 同名守衛 / 鐵則 lint / 合約測試綁定
+skills/lumos-project-notes/reference.md:203:lumos append Systems/<模組> verified_by "[[Verification/<日期>_xxx]]"
+skills/lumos-project-notes/reference.md:228:├── Verification/      # 驗證紀錄（每個功能的測試結果）
+skills/lumos-project-notes/reference.md:246:`docs/{slug}-knowledge/{Projects,Systems,Issues,Verification,MOC}`(隨 git 版控)。某主題筆記 >5 份 → 建/更新 MOC 索引。
+skills/lumos-project-notes/reference.md:292:verified_by:
+skills/lumos-project-notes/reference.md:293:  - "[[Verification/2026-04-07_API審計修復]]"
+skills/lumos-project-notes/reference.md:294:  - "[[Verification/2026-05-04_點數圈存顯示]]"
+skills/lumos-project-notes/reference.md:326:1. **多個 wikilink 必須是 YAML list，一項一連結**。❌ `verified_by: "[[A]], [[B]]"`（單一字串）→ Obsidian 把整串從第一個 `[[` 貪婪吃到最後一個 `]]` 當成**一個**超長連結 → 圖譜長出亂碼灰色 ghost 節點；在 Obsidian 點到該節點還會**自動建立含 `]], [[` 的垃圾檔案**（檔名中的 `/` 切成巢狀資料夾）。✅ 寫法見上方 `related` / `verified_by` 範例。
+skills/lumos-project-notes/reference.md:352:1. **多 wikilink 必須是 YAML list,一項一行**。❌ `verified_by: "[[A]], [[B]]"`(單字串)→ 貪婪吃成一個超長連結 → ghost 節點 + 垃圾檔。✅ list 一項一連結。
+skills/lumos-project-notes/reference.md:416:- **Verification**: TEST + VERIFY（測試結果、驗證紀錄）
+skills/lumos-project-notes/reference.md:423:每行一個前綴。Systems 重 `FLOW`+`KEY`+`DEP`+`TEST`;Issues 重 `FLAG`+`DECISION`+`KEY`;Verification 重 `TEST`+`VERIFY`。
+skills/lumos-project-notes/reference.md:510:- **不重複**:guard 怎麼寫的細節 / lab CI 真機證據,寫進對應 `Verification/2026-06-14_lumos_*.md`,KEY 行只留 `[test:]` 指針。流程已知限制見 [[2026-06-14_lumos_guard審計_已知限制]]。
+skills/lumos-project-notes/reference.md:571:lumos guard scaffold --node <Systems/X> --invariant "<KEY行子字串>" \
+skills/lumos-project-notes/reference.md:576:lumos guard trace [<node>]          # 合約→守衛測試→Verification 證據鏈(reverse:改某模組會動到哪些守衛/驗證)
+skills/lumos-project-notes/reference.md:581:**改某模組前查爆炸半徑**:`lumos guard trace Systems/X` 列出該節點每條 ★INVARIANT★ → 綁的測試方法 → 哪篇 Verification 背書(grep 輸出某測試名即反查「這守衛紅了會牽動誰」)。
+skills/lumos-project-notes/reference.md:583:**補 verified_by 漏寫**(doctor Check 3 的零判斷項自動修):
+skills/lumos-project-notes/reference.md:585:lumos sync-verified-by            # dry-run:列 Verification 連到 Systems 但 verified_by 漏列的
+skills/lumos-project-notes/reference.md:588:> 只補 verified_by 這一項。orphan 補掛 / plan_refs 斷鏈需**語意判斷**,doctor 只報不自動修(亂補會掛錯節點)。
+skills/lumos-project-notes/reference.md:590:- **scaffold 產的是預設紅燈 stub**:套技術棧範本(`.lumos/guard-templates/<type>.tmpl`,專案自備、lumos 語言無關不內建),填好 class/method/invariant/claim/TestIds 前綴,**斷言留 `// TODO` + `Assert.Fail(...)`**——逼你填到綠,不准假綠。
+skills/lumos-project-notes/reference.md:597:3. **重大 invariant 的 claim 等同重大決策**:確認時順手把 `decisions[]` 的 context/why 補上(見下節),別只留一句斷言。
+skills/lumos-project-notes/reference.md:598:4. **殘餘誠實**:人可能確認一條錯的 invariant——這是 validation 的天花板,工具只保證 claim 被攤開+明確確認,不保證人一定對。別吹過頭。
+skills/lumos-project-notes/reference.md:607:> **多平台(單一圖譜跨平台綁測試,見 [[Systems/test-profile-multiplatform]])**:圖譜記錄橫跨前後端的系統時,用 `platforms` 多根多 profile map,讓 `[test:平台:方法]` 綁到不同 repo 的測試。`default_platform` 給無前綴裸 ref 的歸屬(多平台缺省即報錯)。`load_platforms`/`resolve_test_refs` 以「config 有無 `platforms` 鍵」為 legacy 信號,舊 `test_profile`/裸 ref 照舊。`guard bind/scaffold --platform` 指定平台(`--method` 維持識別字、平台另帶,bind 寫 `[test:平台:方法]`)。Check T/`classify_invariants`/`cmd_archive` 各 ref 對其平台的 root+profile 判定(跨 repo)。
+skills/lumos-project-notes/reference.md:772:### verified_by 欄位（Verification 反向索引）
+skills/lumos-project-notes/reference.md:774:**所有 Systems 筆記應有 `verified_by` 陣列**，列出**驗證過此模組的 Verification 筆記 wikilink**。改 Systems 時直接看 frontmatter 就知道哪些驗證會受影響，不用每次跑 `backlinks` 反查 + 過濾雜訊。
+skills/lumos-project-notes/reference.md:777:verified_by:
+skills/lumos-project-notes/reference.md:778:  - "[[Verification/2026-04-07_API審計修復]]"
+skills/lumos-project-notes/reference.md:779:  - "[[Verification/2026-05-04_點數圈存顯示]]"
+skills/lumos-project-notes/reference.md:780:  - "[[Verification/2026-05-08_runbook_auto_rollback_e2e]]"
+skills/lumos-project-notes/reference.md:784:- Obsidian 內建 `backlinks` 已能反查引用關係，但會混入所有引用者（Issues、Sessions、Projects），需手動過濾 `Verification/` path
+skills/lumos-project-notes/reference.md:785:- `verified_by` 是**結構化、過濾後的純驗證索引**：Claude `property:read` 一次取出，不需要 eval 過濾
+skills/lumos-project-notes/reference.md:786:- 改 Systems 時可直接 iterate `verified_by`，逐一檢查並標 `stale`，比 backlinks 後處理更直接
+skills/lumos-project-notes/reference.md:790:1. **建立新 Verification 紀錄時** → **同時**把該 Verification 的 wikilink 加進**所有相關 Systems** 的 `verified_by`（Verification 的「## 相關模組」列了幾個 Systems，就要更新幾個）
+skills/lumos-project-notes/reference.md:791:2. **廢棄/刪除 Verification 時** → **同時**把對應 wikilink 從相關 Systems 的 `verified_by` 移除
+skills/lumos-project-notes/reference.md:793:   - 先讀 `verified_by`（一個 property:read 命令）
+skills/lumos-project-notes/reference.md:796:   - **不再需要先跑 backlinks 再過濾 Verification path**（除非懷疑 `verified_by` 不同步）
+skills/lumos-project-notes/reference.md:797:4. **發現 verified_by 與 backlinks 不一致** → 跑同步檢查 eval（見下方），把缺漏補上
+skills/lumos-project-notes/reference.md:802:# 加入新的 verified_by 條目 → lumos append(鐵則1 安全 YAML list 格式、自動去重)
+skills/lumos-project-notes/reference.md:803:python3 scripts/lumos append Systems/OrderService verified_by "[[Verification/2026-05-04_點數圈存顯示]]"
+skills/lumos-project-notes/reference.md:811:**自動同步檢查** → `lumos doctor`（巡檢用,Check 3「verified_by 雙向同步」直接掃出漏寫的 Systems,不必再寫 eval）：
+skills/lumos-project-notes/reference.md:814:python3 scripts/lumos doctor    # 含「所有 Verification 都已掛進對應 Systems 的 verified_by」檢查
+skills/lumos-project-notes/reference.md:817:> 注意：歷史筆記的 `verified_by` 可能殘留字串型值（非 list）;lumos 讀取已內建正規化,obsidian eval fallback 才需自己 `Array.isArray(raw) ? raw.map(String) : ...`。
+skills/lumos-project-notes/reference.md:819:### plan_refs 欄位（Verification → 計劃的意圖鏈）
+skills/lumos-project-notes/reference.md:821:**落地或迭代某個計劃節點的 Verification 應有 `plan_refs` 陣列（選填）**，反指它對應的計劃筆記。意圖鏈 = 計劃（動工前的共識）→ 實作 → Verification 回指；有了這條邊，「後續翻盤有沒有回頭對照計劃」就從個人習慣變成 graph-doctor Check 4 可機械檢查的事。
+skills/lumos-project-notes/reference.md:829:- **單向指針，不雙寫**：計劃側不設 `fulfilled_by` 鏡像欄位——那會跟 Systems 的 `verified_by` 形成雙軌雙寫，必 drift。要看某計劃落地了哪些驗證，反查 `plan_refs` 即得。
+skills/lumos-project-notes/reference.md:840:其餘變更**不寫計劃**：節點 `decisions[]` 一條 + Verification 即可——一條 decision 就是微型計劃（superseded 條目自帶意圖凍結語意）。常態工作流維持「對話敲定 → 依當下脈絡開發 → 事後沉澱」，計劃節點是大型變更的 opt-in，不是進場義務。
+skills/lumos-project-notes/reference.md:842:> **⚠ 橋接任何 spec/SDD 工具的預設輸出路徑（必讀）**：各家工具都有自己的 spec 落點——`superpowers:brainstorming` → `docs/superpowers/specs/YYYY-MM-DD-*.md`、`writing-plans` 有自己的落點、`OpenSpec` → `openspec/`、其他 SDD / spec-driven 框架亦各有目錄——**在本紀律下一律覆寫成 lumos 計劃節點**（`Projects/<主題>_計劃.md`，`type: project`），**不另存 `docs/superpowers/specs/`、`openspec/` 或任何 repo 路徑**。理由:「圖譜即唯一真相」涵蓋計劃/設計,不只 code;spec 散在 repo 檔 = 圖譜外的第二真相源,必 drift。多數此類工具也明示「user/專案偏好可覆寫預設 spec 路徑」,本紀律即該覆寫。落地的 Verification 用 `plan_refs` 回指該計劃節點。
+skills/lumos-project-notes/reference.md:844:**條款級追溯（opt-in，2026-07-10）**：計劃的規格 bullet 可標 `[S1]`/`[S2]`…；落地的 Verification（有 plan_refs 回指）在 body 提及 `[SN]` 即認領；`lumos spec-trace <計劃節點>` 掃未認領（rc1）。大計劃建議標，小計劃不用。一篇 Verification 盡量只回指一個計劃（條款 ID 無計劃域，多計劃回指會交叉記帳）。
+skills/lumos-project-notes/reference.md:848:1. **寫 Verification 時，工作對應某個計劃節點** → 填 `plan_refs`。**含迭代/翻盤該計劃範圍的後續驗證，不只首輪落地**（意圖鏈斷裂的高發點正是第二輪之後）。
+skills/lumos-project-notes/reference.md:849:2. **動 Systems 筆記前** → 順手確認 Projects/ 是否有 `status: doing` 的計劃引用該 system（`grep -l "目標System" docs/{vault}/Projects/*_計劃*.md` 即可），有 → 本次 Verification 填 `plan_refs`。
+skills/lumos-project-notes/reference.md:850:3. **翻盤計劃中某條決策** → 改計劃本體（bump `updated` + 決策註記或 `decisions[].valid: false`），不是只改 Systems。graph-doctor Check 4 靠「計劃 `updated` 早於回指 Verification 的檔名日期」偵測漏做。
+skills/lumos-project-notes/reference.md:851:4. **計劃改名/歸檔** → `plan_refs` 是 frontmatter 字串，Obsidian 不會自動改寫（body wikilink 才會）→ 主動修各 Verification 的 `plan_refs`，graph-doctor Check 4 會抓斷鏈兜底。
+skills/lumos-project-notes/reference.md:876:5. **測試完成** → 更新 `TEST:` 和 `VERIFY:` 行，同時建立 Verification 紀錄並填 `valid_under` / `revalidate_when`
+skills/lumos-project-notes/reference.md:877:6. **新增 Verification** → **必須同步**把該 Verification 的 wikilink 加進相關 Systems 的 `verified_by`（雙向同步）
+skills/lumos-project-notes/reference.md:878:7. **環境/依賴變更** → 主動掃 Verification 看誰的 `valid_under` 命中變更條件 → 標記 `status: stale` 並提示使用者重跑
+skills/lumos-project-notes/reference.md:879:8. **Systems 筆記改 DEP/KEY 行** → 優先讀 `verified_by` 取出相關 Verification 清單 → 逐一比對 `valid_under` → 命中的標 `stale`（不再先跑 backlinks）
+skills/lumos-project-notes/reference.md:880:9. **廢棄 Verification** → 從相關 Systems 的 `verified_by` 移除對應 wikilink
+skills/lumos-project-notes/reference.md:881:10. **Verification 對應某計劃節點（含後續迭代/翻盤）** → 填 `plan_refs` 反指計劃（見 plan_refs 欄位章節）
+skills/lumos-project-notes/reference.md:889:1. **先讀對應 Systems 筆記的 `verified_by`**（最快，O(1) frontmatter 讀取）：
+skills/lumos-project-notes/reference.md:891:   obsidian vault="{vault}" property:read path="Systems/相關系統.md" name="verified_by"
+skills/lumos-project-notes/reference.md:893:2. **若 Systems 無 `verified_by` 或不確定完整性，再 fallback search**：
+skills/lumos-project-notes/reference.md:895:   obsidian vault="{vault}" search query="功能關鍵字" path="Verification"
+skills/lumos-project-notes/reference.md:897:3. **同步檢查**：跑「verified_by 自動同步檢查 eval」確認 Systems 的 verified_by 是否完整（見上方）
+skills/lumos-project-notes/reference.md:903:- **沒有** → 寫新測試，跑完後建立驗證紀錄並更新對應 Systems 的 `verified_by`
+skills/lumos-project-notes/reference.md:905:**Claude 必做的有效性檢查**（讀到 Verification 時自動跑）：
+skills/lumos-project-notes/reference.md:912:每完成一個功能並測試通過後，在 `Verification/` 建立驗證紀錄。**`valid_under` 與 `revalidate_when` 是必填欄位**（讓未來的人/AI 知道這份驗證在什麼條件下還算數）：
+skills/lumos-project-notes/reference.md:915:obsidian vault="{vault}" create path="Verification/{日期}_{功能名稱}" content="---\ntype: verification\nstatus: pass\nfeature: {功能描述}\ncommit: {commit hash}\ndate: {日期}\nvalid_under:\n  - \"DB schema v1.0.20（Member 表結構未變）\"\n  - \"並發 ≤ 1000 RPS\"\n  - \"三竹 SMS API v2\"\n  - \"Android 14 + 三星 One UI 6.0（若涉及行動端）\"\nrevalidate_when:\n  - \"Member 表結構變更（加欄位/改型別）\"\n  - \"RPS 超過 1200（30 櫃位尖峰再 2x）\"\n  - \"三竹 API 改版\"\n  - \"Android 16 GA\"\ntags:\n  - type/verification\n  - status/pass\n---\n# 驗證：{功能名稱}\n\n## 變更範圍\n- ...\n\n## 測試項目\n\n### 1. {測試場景}\n| 步驟 | 預期 | 結果 |\n|------|------|------|\n| ... | ... | ✅/❌ |\n\n## 測試方式\n{如何測試：API 呼叫、瀏覽器、腳本等}\n\n## 相關模組\n- [[Systems/xxx]]"
+skills/lumos-project-notes/reference.md:945:- 對應計劃若有 `[SN]` 條款標記 → 本 Verification body 提及所認領的 `[SN]`（spec-trace 靠這個算帳）
+skills/lumos-project-notes/reference.md:950:- **建立 Verification 後同步更新 Systems**：Verification 的「## 相關模組」列了幾個 Systems wikilink，就要更新幾個 Systems 的 `verified_by` 欄位（追加，不是覆蓋），雙向同步缺一不可
+skills/lumos-project-notes/reference.md:954:### Verification 健康檢查（巡檢時必做）
+skills/lumos-project-notes/reference.md:956:開工前、commit 圖譜更新前、重大環境變動後，用 lumos 掃 Verification：
+skills/lumos-project-notes/reference.md:965:# Systems 改動後查 verified_by + 反向連結
+skills/lumos-project-notes/reference.md:969:# verified_by 雙向同步漏寫 → doctor Check 3 一次掃全 vault
+skills/lumos-project-notes/reference.md:976:1. 列給使用者看：哪些 Verification 過期 / stale
+skills/lumos-project-notes/reference.md:982:> （以下為 2026-08-22 搬入版，精簡重述 decisions/verified_by/plan_refs 各節；兩版並存）
+skills/lumos-project-notes/reference.md:987:- **Verification** 必填 `valid_under`(有效條件:版本/規模/schema)+ `revalidate_when`(重驗觸發)。建 Verification **同步**把 wikilink 加進相關 Systems 的 `verified_by`(雙向,缺一不可;漏寫 `lumos sync-verified-by --apply` 補)。
+skills/lumos-project-notes/reference.md:988:- **plan_refs**:落地某計劃的 Verification(含後續迭代)填 `plan_refs` 反指計劃節點(意圖鏈,doctor Check 4 把關)。
+skills/lumos-project-notes/reference.md:1002:**時機**：每次對圖譜的**實質內容更新**完成後（新增/修改 Systems、Issues、Verification、decisions、summary）。純格式修正（typo、缺欄位補登、連結修復）可豁免，但修完建議至少跑一次健康巡檢。
+skills/lumos-project-notes/reference.md:1024:| 一致，無模糊點 | ✅ 圖譜自足 | 記錄審計 PASS（commit message 或 Verification 註記）|
+skills/lumos-project-notes/reference.md:1034:**留痕（2026-06-23）**：審過且補到一致後，`lumos self-audit <node> [--model sonnet] [--date YYYY-MM-DD]` 蓋 `self_audit: <model>/<date>` 戳記到該節點 frontmatter（純量、走 T1 寫入）。語意：「這整篇被無脈絡乾淨 agent 還原審過」——**節點級**戳記，有別於 ★INVARIANT★ 軸的行級 `[audit:]`（驗單條合約合法性），兩軸獨立。**工具只記留痕，不證明審計真乾淨**（同 guard audit 的 maker/checker 誠實前提）。
+skills/lumos-project-notes/reference.md:1038:### 變體 B：圖譜×程式碼交叉審計（無主對話脈絡時用，以 code 為真值）
+skills/lumos-project-notes/reference.md:1043:- 挑載重最高的：流程順序、方法/類別名、欄位語意、invariant、邊界規則
+skills/lumos-project-notes/reference.md:1052:**判定與處置**（主對話執行）：❌ = 圖譜腐爛 → 修筆記（過時決策標 superseded、錯誤描述更正並註明「YYYY-MM-DD 程式碼實證」）→ 建 Verification 紀錄審計結果 → 相關 Systems 的 `verified_by` 雙向同步。**修正一律以 code 為準**——除非 code 本身是 bug（那就開 Issue，不改筆記遷就）。
+skills/lumos-project-notes/reference.md:1055:1. 最高頻腐爛型態 = 「**決策在別篇筆記被推翻、本篇沒跟上**」——hooks 抓不到（改 code 時只同步了主筆記），交叉審計是目前唯一掃得出它的機制
+skills/lumos-project-notes/reference.md:1067:派**乾淨 sonnet agent 只讀圖譜**還原脈絡 → 主對話比對「還原結果 vs 腦中現存脈絡」:有出入 = 圖譜當下不健全,補缺後**重審到一致**。純格式修正可豁免。審過留痕:`lumos self-audit <node>`(doctor Check S 軟提醒未審/過期)。
+skills/lumos-project-notes/reference.md:1068:> 無主對話脈絡時(定期巡檢/接手陌生專案)→ 改用「圖譜×程式碼交叉審計」(以 code 為真值),做法見 `reference.md`。
+skills/lumos-project-notes/reference.md:1108:⚠ 新增一條 verified_by/related 連結**不算同步**。有裝 delguard（pre-commit Gate DG）的 repo，S1 命中時會機械吐**上面 1-3 這三問**（delguard 不管 UI，第 4 問純靠自律）；沒裝的 repo 四問全靠這段自律。
+skills/lumos-project-notes/reference.md:1121:本專案改動需要**他專案配合**時,可用 `ListAgents`/`SendMessage` 直接通知對造 session(實測互動視窗雙向可用、能喚醒閒置 peer,見 [[Verification/2026-08-14_跨session傳訊互動視窗實測]])。
+skills/lumos-project-notes/reference.md:1205:14. **Verification 豁免**：Verification 筆記不需要 `summary` 和 `updated` 欄位（有 `feature` + `date` 已足夠），**但 `valid_under` + `revalidate_when` 是必填**
+skills/lumos-project-notes/reference.md:1208:17. **Verification 巡檢時機**：開工前、commit 圖譜更新前、重大環境/依賴/schema 變更後，跑健康檢查 eval 指令掃 `status: stale` 和過期 `valid_until`
+skills/lumos-project-notes/reference.md:1209:18. **verified_by 雙向同步**：新增/廢棄 Verification 時，**必須同步**更新對應 Systems 的 `verified_by`；改 Systems 時優先讀 `verified_by` 而非跑 backlinks（backlinks 含 Issues/Sessions 雜訊）
+
+exec
+/bin/zsh -lc "nl -ba /tmp/node-restore-sop-v2-r1.md | sed -n '133,154p'; nl -ba skills/lumos-project-notes/reference.md | sed -n '1020,1055p'; nl -ba docs/lumos-toolchain-knowledge/Verification/2026-08-21_L4交叉審計30節點清帳.md | sed -n '1,180p'; rg -n \"def cmd_refcheck|def cmd_search|def cmd_context|refcheck|search_parser|--code\" scripts/lumos" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+   133	**步驟 5|合約候選,不升格**
+   134	「改了就壞」的清單,開成章節 `## 合約候選(收斂時複核,候選≠已標)`,**放在這次還原批次的計劃筆記裡**(Projects/<主題>_計劃——還原批次照鐵則本來就要開計劃筆記),**不塞進 Systems 節點**:用過合約候選章節的先例**全在 Projects、零篇在 Systems**(逐字同款短版 3 篇,其餘同族變體;總數不寫死——r2 數 13、r3 兩席數 16,「計數型主張最會漂」的 L4 教訓②當場示範)。Systems 節點只在對應 KEY 行旁註「合約候選」字樣。**本步到此為止——標候選就是純文件動作。** 升格是**另一次任務**,走 code 側正常紀律,順序明列(r1 外家抓到缺步驟):取得意圖證據→把該行改標 ★INVARIANT★(regen 節點須附 [src:]/[git:],J-a 擋發明)→`lumos guard scaffold`→寫測試→`guard bind`→`guard audit`,全鏈走完才算合約——三個 guard 指令都有必帶參數(scaffold 要 --node/--invariant/--method/--type/--claim 等),**實形照 reference.md〈lumos guard〉段敲,本文不重抄防漂移**(r2 外家抓到裸寫序列照敲直接報錯)。專案沒測試→升格前先補特徵化測試(characterization test,世界解:Feathers 2004:把現況行為釘住,不判對錯;綁的測試證「改了就壞」是真的,不證行為是對的)——**這也屬升格任務,不在本 SOP 交付範圍**。施工法三招(同屬升格任務):綁不上測試≠降格,標「待 seam」(Feathers:seam=不改這裡的 code 就能換這裡行為的切點,先開 seam 才綁得上);golden master(大量輸入+輸出快照)最適合 AI 代產;綁上後跑 mutation 驗收——變異不翻紅的測試不算數(接本專案既有反假綠紀律)。且承認:embedded/資料管線補測試是基礎設施問題(要先搭 harness/模擬器),成本另計,不是「叫 AI 補幾條」就有。
+   135	
+   136	**步驟 6|出口:交叉查核+接回既有紀律**
+   137	還原批次收尾先跑一道**引用實體機械掃描**(世界解:DocAgent Verifier 的便宜版):機器逐篇掃「筆記引用的檔名/函式/欄位是否真的存在於 code」(refcheck/`lumos search --code` 既有零件)——防編造第一道濾網,比派 agent 便宜一個數量級、可重算;掃完才跑**變體 B 交叉審計**,照 reference.md 原文的機制原樣用(r2 三席抓到上一版借名走樣,此處全對齊):**逐節點**各派兩個乾淨 agent——階段一只讀單篇筆記,萃取 **12~15 條可被程式碼驗證的具體主張、且逐條必須可證偽**(原文兩句分開抄,別合併——「可驗證」比「可證偽」寬);階段二只讀 code(禁讀 docs)逐條判 ✅/❌/❓。處置照原文:❌=修筆記(**以 code 為準**;code 本身是 bug 就開 Issue,不改筆記遷就)→**建 Verification 紀錄→相關 Systems 的 `verified_by` 雙向同步**——這就是出口的正式留痕。留痕**雙軌**:除上述 Verification+verified_by 外,逐節點**照樣蓋 `lumos self-audit`**——r2 曾判「錯綁」刪掉,r3 翻案:L4 清帳(同構的雙 agent 交叉審計)30 節點全蓋章+Verification 雙軌是真實先例,且體檢 Check S 只讀 self_audit 欄,不蓋=已審過的節點被誤報「從未審過」。r2 那次只看指令說明沒對先例,正是★第四條要防的「只信一個來源」——這次是審查員自己犯,r3 抓回。**PASS 批次也建一篇批次 Verification**(L4 先例同款),不是只有 ❌ 才留(r3 外家抓到 PASS 零留痕缺口)。**兩條本 SOP 自加的延伸裁定(變體 B 原文是選配巡檢手法,沒有這兩條;明標出處是本案,r2 架構席抓到上一版沒標)**:①還原批次**必跑**——理由:30 個被點名過期節點的清帳(有偏樣本:被軟閘點名的高危群)實測 16.3% 主張與 code 不一致,還原型節點同屬高危;②❓(找不到驗證點)不可原樣放行——回頭把該句改標 `推測:`/`佚失:` 或修掉。審計抓到要修的,**開新 commit、重跑 lint**——步驟 4 的「同一次 commit」管首次落節點的原子性,「中間態」專指「蓋了章但身分標記沒寫完」;審計後修正是正常的後續 commit,不算中間態(r2 抓到兩步銜接沒講)。之後要動手改 code,從這裡起全走現行流程:`lumos impact`、design-loop、code-loop。**警語(種子影片吸收)**:還原完直接動 production 級 code 前,至少讓改動走完 code-loop;還原節點內容日後被行為事實打臉→照 CLAUDE.md 既有規則立事故筆記,錯的節點標作廢或 supersede,這就是還原內容的收回路徑。
+   138	
+   139	### 還原到多深算夠(深度停手線——與步驟 0 的骨架停手線是兩條規則,r3 抓到同名兩義)
+   140	
+   141	夠=**這次任務要動的面+它的共用面**有節點;不追求覆蓋率、不為還原而還原。骨架層永遠只有指針。深挖由下一個任務驅動——這是家規「圖譜只長在動過的地方」的冷啟動版,不是妥協。
+   142	
+   143	## 落地件(spec-trace 對齊用;r1 通才席抓到原版零 [SN] 標記,補齊)
+   144	
+   145	1. [S1] `skills/lumos-project-notes/reference.md` 新增**獨立 `##` 大節**〈節點還原(brownfield 冷啟動)〉、目錄加一項——體量是端到端流程,照「自足性審計」自佔目錄項的先例,不塞進「合約性標記」大節當子節(r2 架構席 ⚠ 裁定;d4「與重生守衛相鄰」指主題相近、互設指標,不指同一大節)。內容範圍明定(r3 抓到兩讀)=步驟 0–6 本體+兩條停手線+「機械把關真實範圍」技術事實(隱患第一條);PRIOR-ART/其餘隱患/審計紀錄留在本計劃筆記不搬。落地時轉 reference 慣例格式(### 小節+編號清單;「步驟 N|」偽標題 reference 查無先例,不沿用)。
+   146	2. [S2] `skills/lumos-project-notes/commands/09-節點還原.md`(新檔;08 已被佔用,r1 三席實錘):薄查表——體例照 05/06,列這幾排(r3 抓到內容清單未給;**不得含已廢動作**):進場判斷→`lumos search/context`(有→照慣例用;殘缺→diff 補;沒有→往下);步驟 0→`lumos init`+Edit 填 MOC;步驟 1–3→讀 code/git(冷啟動豁免,無 lumos 指令);步驟 4→`lumos new system`+Edit 摘要+`lumos set … regen …`+`lumos lint`+`lumos link-candidates`;步驟 5→合約候選章節(計劃筆記);升格→guard 三指令(指 reference);步驟 6→變體 B 派工+Verification+`lumos self-audit`。深規全文一行指到 reference.md。
+   147	3. [S3] `skills/lumos-project-notes/commands/INDEX.md`:「接手陌生/舊專案、圖譜是空的」情境路由+「grep 衝動對照表」對應行;「二、八類子檔」標題改九類。**「八類」活文字五處**(r1 三處→r2 第四處→r3 第五處,一輪多一處——教訓:別信列死的清單,落地時拿「八類」「八個子檔」兩式全 repo 再掃一次防第六處):INDEX.md:24 標題、CLAUDE.md 受管區塊與 `scripts/templates/graph-discipline.md:29` 的「分八類」(靠重跑注入分發)、`scripts/hooks/claude/lumos-entry-hook.py:74`(SessionStart 提示——工具鏈程式碼,注入蓋不到,直接改字隨 install 分發)、`skills/lumos-project-notes/SKILL.md:9`「八個子檔」(r3 抓到:換措辭逃過三輪 grep)。歷史計劃/驗證筆記是時間快照,不改。
+   148	4. [S4] `skills/lumos-project-notes/SKILL.md`:進場節加一行「圖譜空或稀疏 → 走節點還原 SOP(commands/09-節點還原.md)」。
+   149	5. [S5] `scripts/templates/graph-discipline.md`:注入範本加一行冷啟動入口(分發需重跑安裝,交付說明註明)。
+   150	6. [S6] 情境探針 ≥3 題,寫進 `governance/scenarios/commands.jsonl`(scenario_probe 預設語料):口語、不帶工具字眼。**判準明定(r3 抓到與冷啟動豁免衝突)**:冷啟動題**不把 Grep/Read 放 forbid_before**(步驟 1 豁免——照抄既有題庫寫法會把正確走 SOP 的模型判死);expect=先命中 `lumos init|lumos search`,forbid_before=`Edit|Write`(動手改之前要先進場);另至少一題測「圖譜有料→照慣例用」(expect `lumos search`,forbid_before 照既有題庫)。過線=三題全過。
+   151	7. [S7] 實跑驗證:真實 brownfield repo 還原 ≥2 篇節點,lint 綠+變體 B 交叉審計過,留 Verification 筆記 `plan_refs` 連回本篇。**前置(r3 抓到裸接風險)**:首跑必選**自有** repo(候選 Enzo 名下專案,落地時裁);要用外部/第三方 repo,先立 secret-scan 機械案才准(前置條件非回頭條件)。跑完對既有檢索考卷跑一次評測,推薦精確度不得降(檢索稀釋隱患的觀察門檻)。
+   152	8. [S8] `README.md` 加〈brownfield:接手與還原〉一節(d6):惰性生長哲學+七步一句話版+指向 skill——對人的門面。
+   153	9. [S9] `docs/lumos-toolchain-knowledge/Systems/節點還原.md` 權威節點(d6):機制脈絡、連本計劃與 reference 段——圖譜自己也要有這塊拼圖。
+   154	
+  1020	**判定與處置**（主對話執行）：
+  1021	
+  1022	| Agent 還原結果 vs 主對話脈絡 | 判定 | 處置 |
+  1023	|---|---|---|
+  1024	| 一致，無模糊點 | ✅ 圖譜自足 | 記錄審計 PASS（commit message 或 Verification 註記）|
+  1025	| 缺漏（主對話知道但 agent 還原不出來）| ❌ 圖譜不健全 | 把缺的脈絡補進對應筆記（summary/decisions/內文）→ **重派 agent 直到一致** |
+  1026	| 誤讀（agent 還原出與現實相反的結論）| ❌ 圖譜誤導 | 通常是過時決策沒標 superseded、summary 沒更新、或 frontmatter 解析失敗讓 property 隱性消失 → 修正後重審 |
+  1027	| agent 自己回報「模糊/矛盾」| ⚠️ 視同缺漏 | 逐條釐清補寫 |
+  1028	
+  1029	**注意**：
+  1030	- 審計 agent 與主對話相同，優先用 obsidian CLI 查詢（圖譜感知能力：backlinks/property:read/eval）；CLI 不可用時才降級 Read/Grep（唯讀豁免）
+  1031	- 主對話**不可把自己的脈絡餵給 agent**（污染測試），prompt 只給「審哪些模組」的範圍
+  1032	- 比對時注意 agent 還原不出來的東西，到底是「圖譜缺漏」還是「本來就不該進圖譜」（如一次性對話細節）——後者不用補
+  1033	
+  1034	**留痕（2026-06-23）**：審過且補到一致後，`lumos self-audit <node> [--model sonnet] [--date YYYY-MM-DD]` 蓋 `self_audit: <model>/<date>` 戳記到該節點 frontmatter（純量、走 T1 寫入）。語意：「這整篇被無脈絡乾淨 agent 還原審過」——**節點級**戳記，有別於 ★INVARIANT★ 軸的行級 `[audit:]`（驗單條合約合法性），兩軸獨立。**工具只記留痕，不證明審計真乾淨**（同 guard audit 的 maker/checker 誠實前提）。
+  1035	- **doctor Check S（軟提醒、不擋）**：`type=system` 節點**無 `self_audit`** → 列「從未跑 L4」；`self_audit` 日期 **< `updated`** → 列「節點更新後未重審（過期）」。用 `warn_soft`、不計 issues、`doctor --ci` 仍 exit 0，是摩擦地板不是 gate（真實性機器驗不了）。
+  1036	- `[H]` 漏標可逆性提醒（`doctor --ci` 才跑）:掃 diff 碰 prod/外部 API/寄送 → 軟提醒「是否漏標 ★IRREVERSIBLE★」。只提醒、不擋。
+  1037	
+  1038	### 變體 B：圖譜×程式碼交叉審計（無主對話脈絡時用，以 code 為真值）
+  1039	
+  1040	標準自足性審計需要「主對話脈絡」當比對基準。**沒有脈絡時**（定期巡檢、接手陌生專案、審很久沒動的大節點），改用程式碼當真值，兩階段、每節點各派一個乾淨 Sonnet agent：
+  1041	
+  1042	**階段一（還原）**：agent **只讀單篇 Systems 筆記**（禁讀 code/其他筆記/git log），萃取 12~15 條「可被程式碼驗證的具體主張」：
+  1043	- 挑載重最高的：流程順序、方法/類別名、欄位語意、invariant、邊界規則
+  1044	- 必須可證偽（「設計良好」這種不算）；筆記有提檔案/方法名就照抄
+  1045	- 只取 `valid: true`（或 partial 的「仍有效」部分）的決策，被推翻的不要
+  1046	- 輸出：`C1. [主張] | 預期驗證點: [檔案/方法]`
+  1047	
+  1048	**階段二（實證）**：另一個 agent **只讀程式碼（嚴格禁讀 docs/——那是被審計對象）**，逐條判定：
+  1049	- ✅ 一致（附 file:line 證據）／❌ 不一致（說明 code 實際）／❓ 找不到（說明搜過哪裡）
+  1050	- 多節點時兩階段都可並行（一節點一 agent）
+  1051	
+  1052	**判定與處置**（主對話執行）：❌ = 圖譜腐爛 → 修筆記（過時決策標 superseded、錯誤描述更正並註明「YYYY-MM-DD 程式碼實證」）→ 建 Verification 紀錄審計結果 → 相關 Systems 的 `verified_by` 雙向同步。**修正一律以 code 為準**——除非 code 本身是 bug（那就開 Issue，不改筆記遷就）。
+  1053	
+  1054	**實戰教訓（2026-06-10 四大節點首跑，60 主張 85% 一致）**：
+  1055	1. 最高頻腐爛型態 = 「**決策在別篇筆記被推翻、本篇沒跟上**」——hooks 抓不到（改 code 時只同步了主筆記），交叉審計是目前唯一掃得出它的機制
+     1	---
+     2	type: verification
+     3	status: pass
+     4	date: 2026-08-21
+     5	valid_under: "各節點 updated 不晚於 2026-08-21;scripts/lumos 對應函式未重構"
+     6	revalidate_when: "任一受審節點再被 updated;doctor Check S 再報該節點過期;計數型主張被引用前先重數"
+     7	tags:
+     8	  - type/verification
+     9	  - status/pass
+    10	---
+    11	# 2026-08-21_L4交叉審計30節點清帳
+    12	
+    13	> 白話:那道「自足性審計該重做了」的提醒響了 46 天、落在 30 個節點上沒人理([[Issues/自足性審計提醒空轉四十六天]])。這次一口氣清掉——**不是批次蓋章**,是每個節點兩個乾淨 agent 做交叉審計(一個只讀筆記萃取主張、一個只讀程式碼逐條判真假),❌ 的逐條修進筆記後才蓋章。全程證據落 `governance/l4-audit/2026-08-21/`(每節點 claims+verify 檔)。
+    14	
+    15	## 總帳
+    16	
+    17	**30 節點 / 445 條主張**:✅ 338(78.8%)・❌ 70(16.3%)・❓ 21(4.9%)・⏭ 16(自標不可驗)。
+    18	
+    19	| 節點 | ✅ | ❌ | ❓ | ⏭ |
+    20	|---|---|---|---|---|
+    21	| anchor-integrity | 13 | 0 | 2 | 0 |
+    22	| autonomous-iteration-loop | 8 | 6 | 0 | 0 |
+    23	| canary-audit | 15 | 0 | 0 | 0 |
+    24	| check-n-recomputable | 12 | 1 | 1 | 0 |
+    25	| check-u-overgeneralization | 9 | 0 | 3 | 0 |
+    26	| check-y-symbol-existence | 8 | 5 | 3 | 0 |
+    27	| convergence-evidence-gate | 14 | 5 | 0 | 0 |
+    28	| delguard | 15 | 0 | 0 | 0 |
+    29	| design-loop | 11 | 3 | 0 | 0 |
+    30	| drift-history | 14 | 0 | 1 | 0 |
+    31	| heterogeneous-finder-ensemble | 14 | 1 | 0 | 0 |
+    32	| known-pitfall-refresh-token | 5 | 1 | 2 | 4 |
+    33	| loop-convergence-recording | 10 | 3 | 0 | 0 |
+    34	| lumos-cli-lifecycle | 15 | 3 | 0 | 0 |
+    35	| lumos-cli-write | 12 | 3 | 0 | 0 |
+    36	| pitfalls-code-loop | 10 | 5 | 0 | 0 |
+    37	| retrieval-ranking | 17 | 3 | 0 | 0 |
+    38	| reversibility-governance-ledger | 12 | 3 | 0 | 0 |
+    39	| slim-gen-生成器 | 11 | 3 | 0 | 0 |
+    40	| slim-get-一行安裝 | 15 | 0 | 0 | 0 |
+    41	| slim-install-安裝器 | 10 | 3 | 0 | 0 |
+    42	| slim-readme | 7 | 8 | 0 | 0 |
+    43	| slim-scan-掃描器 | 8 | 6 | 0 | 0 |
+    44	| slim-skill-修剪 | 11 | 3 | 0 | 0 |
+    45	| slim-uninstall-一行卸載 | 12 | 2 | 0 | 0 |
+    46	| test-profile-multiplatform | 13 | 1 | 0 | 0 |
+    47	| 效能檢核目錄 | 10 | 1 | 1 | 1 |
+    48	| 測試假綠形態 | 12 | 1 | 2 | 3 |
+    49	| 診斷迴圈先行 | 4 | 0 | 5 | 5 |
+    50	| 開發工作流總覽 | 11 | 0 | 1 | 3 |
+    51	
+    52	## ❌ 的形態分布(70 條)
+    53	
+    54	1. **計數/版本號漂移——絕大多數**:「24 支」→26、「225 checks」→474、「35 行」→51、「5 條測試」→9、「16 詞」→26、「11999 行」→15047、「374/865/333 passed」全過期。★協議 2026-06-10 首跑就寫下「計數型主張最會漂」,本次證明的是**知道了仍照寫**★。處置:數字一律補「截至 2026-08-21」或改成「以常數/CI 為準」。
+    55	2. **同節點 KEY 行新舊未同步**(協議教訓 #4 的形態):lifecycle 一行說 update 已改 reinject-only、另一行仍說 update return 2;convergence-gate 一行記 K=2 落地、另一行仍以 K=1 作結論。
+    56	3. **真腐爛(機制已改、筆記沒跟)**:check-y 仍寫「只認 C# 慣例」(已 profile 化三語言);design-loop 寫「三道硬閘退場」(只退一道,且新 loop 加嚴 K=2);reversibility 寫「帳檔皆 gitignore」(已進版控);lumos-cli-write 的 atomic 流程順序寫反(先驗再寫 tmp,非先寫後驗);autonomous 的 --pr 分支不發 LINE。
+    57	4. **「寫了紀律、code 零檢查」**:效能檢核「pass --note 須含答案」、convergence-gate 的 probe 輪「席縮 3/不計 cap/限 1 次」——★全是 skill 散文,程式碼零實作★。已在節點標明,另餵 [[Issues/寫下風險當成處理風險]]。
+    58	5. **程式碼註解自身漂移**(順帶抓到,非圖譜問題):scripts/lumos:1145 事故數字方向與筆記相反;3705 仍寫「三條合取」;4218 docstring 仍寫 caught-only。未改 code,留痕於各節點。
+    59	
+    60	## 處置
+    61	
+    62	- 70 條 ❌ 全數以「(2026-08-21 程式碼實證)」標記修入對應節點;**修正一律以 code 為準**,未改任何程式碼。
+    63	- 21 條 ❓ 多為「筆記引用他庫事故/外部論文」或方法論陳述,repo 內無對應物,不處置。
+    64	- 30 節點全部 `lumos self-audit <node> --model sonnet --date 2026-08-21` 蓋章——★同日同戳,但每個戳對應一份獨立 claims+verify 檔,可逐節點回查,與「批次補戳」可區分★。
+    65	
+    66	## 誠實邊界
+    67	
+    68	- 審計員皆 sonnet 單一家族;階段一/二分離(萃取不看 code、實證不看圖譜)是獨立性來源,不是跨家族。
+    69	- 萃取只取 12-20 條載重最高主張,**不是全文逐句**;一致率 78.8% 是抽樣主張的一致率。
+    70	- 7 個 slim 節點已凍結(交付庫分家),仍審是因 repo 內 slim/ 仍在且測試仍跑;其描述對交付庫的實況不再保證。
+    71	
+    72	## 附帶:證據目錄豁免命令數守衛(2026-08-21 push 時抓到)
+    73	
+    74	`t_` 命令數守衛掃全 repo `*.md` 比對「N 個頂層命令」與 argparse,掃到 `governance/l4-audit/` 的 verify 檔(引用歷史快照的「53 支」)翻紅。★證據檔不得為了過守衛回改★——處置=把 `governance/l4-audit/` 加入該守衛的 skip 清單,與 `golden/`、`external-reviews/` 同性質(歷史歸檔)。改動 `scripts/test_lumos.py` 一處,anchor 已核。
+    75	
+    76	## 後續:計數型主張改可重算(2026-08-21 同日)
+    77	
+    78	70 條 ❌ 的大宗是寫死數字漂了;「補截至日期」只是讓數字誠實地過期,不是讓它不過期。既有機制 Check N([[Systems/check-n-recomputable]])正是為此而建,★但 30 個受審節點零使用★(該節點自述「存量節點不會自動獲得保護」,本次實證)。
+    79	
+    80	套用 **7 個標記**(只挑 regex 可靠計數的):`t_checky_*` 測試數(9)、slim-gen `DEFAULT_KEEP`(26)、slim-scan `KEEP`(27)、`SCALAR_KEYS`(9)、`LIST_KEYS`(7)、gov 載入源數(7)、`_KNOWN_GATES`(15)。**陷阱門實測**:故意改錯一個 → doctor 當場 2→3 條不符,改回 → 復原。
+    81	
+    82	★不能套的★:多行 tuple 內的詞數(如 `NEG_LEXICONS` 26 詞)、執行期才知道的數(「474 checks」)——regex 靜態計數構不到;這類在節點內維持「以常數/CI 為準」措辭。
+    83	
+    84	**順帶修一條噪音源**:Check N 把圍欄內的語法範例當真標記掃,自家節點+08-12 驗證節點每次 doctor 各喊一條假漂移(又一例「會響但沒人理」)。修=掃描前抹掉 ``` 圍欄區段;TDD 先紅後綠 `t_checkn_skips_fenced_examples`,Check N 現「7 個全部對得上」。
+67:#   要「只剝圍欄、★保留 inline code★」→ `_strip_fences_text`(refcheck 家族要這個)
+1613:    ②的消費端是治理機制本身(refcheck → design-loop 的 G1 硬閘、Edit/Write 前
+1628:    """只剝 fenced code block,★保留 inline code★——給 refcheck 家族用。
+1630:    ★為什麼不能用 `_strip_code_text`★:那支連 inline code 一起剝,而 refcheck
+1670:def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
+1674:    預設**排除 fenced code 區塊 + inline code**(對齊 doctor 連結抽取的慣例,--code 才含);
+1771:            #   r3:第四個維度 `--code`(codex minor)——預設不搜 code block,片語若只
+1877:        suffix += " [已排除 code block,--code 可含]"
+4411:    """settle 收斂閘([S1] 結清式收斂_計劃,2026-07-28):清單全結清 ∧ G1 refcheck ∧ G3(末筆 result=現檔)。
+4484:    claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
+4514:    --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
+4680:    # ── 證據閘(--gate):K-streak(必要)∧ G1 refcheck(--spec 可選)∧ G2 發現枯竭 ──
+4698:        claims, n_missing, n_oor, _n_ok = _refcheck_scan(text, repo_root)
+6305:def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, as_json=False):
+9857:    """--repo 顯式優先;省略時 cwd 逐層向上找 .git(同 refcheck 慣例)。失敗印錯回 None。"""
+10562:    protocol_violation)。收貨第三道(前兩道=quote-check/refcheck 既有直用):
+10720:    _refcheck_scan 與 check_regen_provenance(Check J 的 [src:] 驗證)共用——
+10721:    J-c 不得走 _refcheck_scan 抽取入口(inline-code 抽取 + top_dirs 靜默過濾會把假目錄放行,
+10752:def _refcheck_scan(text, repo_root):
+10753:    """refcheck 抽取+核對核心(不列印):回 (claims, n_missing, n_oor, n_ok)。
+10754:    cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。
+12465:    對齊 difficulty.assess_spec 慣例、獨立實作(同 refcheck 對 Check P 不共用)。"""
+13706:def cmd_refcheck(md_path, repo=None, as_json=False):
+13736:    claims, n_missing, n_oor, n_ok = _refcheck_scan(text, repo_root)
+13741:        print(f"refcheck {md}(對照的程式碼在 {repo_root})")
+13801:    - 複用 _refcheck_scan(text, repo_root) 抽取 body inline-code 路徑;
+13804:    - _refcheck_scan 的 top_dirs 靜默過濾照舊(§4 天花板 5)。
+13812:    唯一誤判歧義;大小寫敏感)→ 命中。★不動共用的 _refcheck_scan★(其 `/` 過濾
+13813:    是 refcheck CLI/G1 gate 的既有合約,此處自建第二條抽取路)。git 缺席/重名
+13856:        claims, _n_missing, _n_oor, _n_ok = _refcheck_scan(text, repo_root)
+13863:            # 第二條抽取路:裸 token(無 /)——與 _refcheck_scan 同源的 span 抽取
+14598:        print(f"改動 {rel_file} (由讀盤 refcheck 抽取)")
+15244:    "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
+15274:    "refcheck": "文件裡引的 檔案:行號 還存不存在。",
+15432:                    help="證據閘:K-streak(必要)∧ G1 refcheck 引用座標 ∧ G2 發現枯竭,全過才 rc 0")
+15534:    p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
+15685:    p = sub.add_parser("refcheck", help="spec 指涉宣稱確定性核對(vault-free):inline-code 路徑/行號 → 存在性 manifest")
+15687:    p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+15861:    if args.cmd == "refcheck":
+15862:        return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+
+exec
+/bin/zsh -lc "nl -ba scripts/lumos | sed -n '1620,1795p'; nl -ba scripts/lumos | sed -n '10735,10835p'; nl -ba scripts/lumos | sed -n '13690,13765p'; nl -ba scripts/lumos | sed -n '15520,15545p'; nl -ba scripts/lumos | sed -n '15675,15695p'; nl -ba scripts/lumos | sed -n '6300,6375p'" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+  1620	            in_fence = not in_fence
+  1621	            continue
+  1622	        if in_fence and not keep_fenced:
+  1623	            continue
+  1624	        yield i + 1, ln
+  1625	
+  1626	
+  1627	def _strip_fences_text(text):
+  1628	    """只剝 fenced code block,★保留 inline code★——給 refcheck 家族用。
+  1629	
+  1630	    ★為什麼不能用 `_strip_code_text`★:那支連 inline code 一起剝,而 refcheck
+  1631	    要抽的路徑宣稱★正是寫在 inline code 裡★(`` `scripts/foo.py:12` ``)。
+  1632	    用錯會讓所有宣稱憑空消失、G1 對著空清單宣告通過。
+  1633	    """
+  1634	    return "\n".join(ln for _no, ln in _visible_lines(text.split("\n")))
+  1635	
+  1636	
+  1637	def _search_visible_lines(lines, include_code):
+  1638	    """產生 (行號從1起, 原始行, 比對用 probe)——★search 的「哪些字看得見」唯一實作★。
+  1639	
+  1640	    ★為什麼要抽出來(2026-08-03 code-loop r1,slot3 附實測)★:多詞回退的預檢原本自己
+  1641	    寫了一份「整段 regex 剝 fence」,與主迴圈的「逐行 in_fence toggle」是★兩份實作★,
+  1642	    遇到★未閉合的 ``` 圍欄★就分岔:主迴圈把圍欄後全部視為 code(隱形),預檢的成對
+  1643	    regex 剝不掉懸空那半段(仍可見)。後果不是「回退多觸發一次」這種小事——是
+  1644	    ★逐詞覆蓋虛報非零★:實測單獨搜某詞 0 篇,覆蓋卻印該詞 1 篇,直接打臉 M1.5
+  1645	    「告訴你哪個詞 0 命中」的存在理由。
+  1646	    ★我原本在註解裡把這個邊界寫成「方向保守、無害」——那個評估只涵蓋了「回退觸發
+  1647	    與否」,沒涵蓋「覆蓋數字本身」。同一個坑今天第六次:用一個後果描述邊界,另一個
+  1648	    後果就不在視野裡。★ 修法不是補正則,是讓兩邊共用這一份。
+  1649	    """
+  1650	    for _no, ln in _visible_lines(lines, keep_fenced=include_code):
+  1651	        yield _no, ln, (ln if include_code else INLINE_CODE_RE.sub("", ln))
+  1652	
+  1653	
+  1654	def _cjk_nospace_hint(term, hits, regex=False):
+  1655	    """中文黏成一串沒斷詞就幾乎必定 0 筆(Landmark 2026-08-11 實測 8 句 3 句 0 筆):整串當片語比對,
+  1656	    整串找不到才退成各詞分開找,而一串中文沒有「各詞」可退。0 命中且查詢含 ≥4 個中日韓字、沒有空白 → 提示。"""
+  1657	    if hits or regex:
+  1658	        return None
+  1659	    t = (term or "").strip()
+  1660	    if " " in t or len(t) < 4:
+  1661	        return None
+  1662	    cjk = sum(1 for ch in t if "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff" or "\uac00" <= ch <= "\ud7af")
+  1663	    if cjk < 4:
+  1664	        return None
+  1665	    return ("提醒:0 筆,而且你查的是一串沒有空白的中文。搜尋會先把整串當片語比對,整串找不到才退成各詞分開找——"
+  1666	            "一串中文沒有「各詞」可退,所以自然問句幾乎必定 0 筆。把概念之間加空白再查一次,例如「作廢訂單點數怎麼收回」改成:\n"
+  1667	            "    lumos search \"作廢 收回 點數\"")
+  1668	
+  1669	
+  1670	def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
+  1671	               ranked=False, top=20, as_json=False, include_superseded=False,
+  1672	               any_terms=True):
+  1673	    """全文搜尋(frontmatter + body)。預設大小寫不敏感 substring;--regex 用正則。
+  1674	    預設**排除 fenced code 區塊 + inline code**(對齊 doctor 連結抽取的慣例,--code 才含);
+  1675	    context 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。職責=自由文字;結構化查詢走
+  1676	    contracts/decisions/stale/doctor。取代 obsidian search(2026-06-13)。
+  1677	    2026-07-11 起 ranked(BM25F 相關性排序)為 CLI 預設(goldset 評測 §6 search 面全過,
+  1678	    數字見 Verification/2026-07-11_檢索goldset評測);只重排既有候選、不擴召回、預設全量;
+  1679	    --legacy 走舊字母序,--regex 自動走舊路。"""
+  1680	    if regex:
+  1681	        try:
+  1682	            pat = re.compile(term, re.IGNORECASE)
+  1683	        except re.error as e:
+  1684	            print(f"擋下:你給的正則表達式不合法({e}),換一個", file=sys.stderr)
+  1685	            return 2
+  1686	        matches = lambda s: pat.search(s) is not None
+  1687	    else:
+  1688	        needle = nfc(term).lower()
+  1689	        matches = lambda s: needle in nfc(s).lower()
+  1690	    # ★多詞回退(2026-08-02;Projects/檢索多詞回退_計劃)★
+  1691	    # 問題:候選階段是★整串子字串比對★——`search "BM25 檢索 排序"` 只要那幾個字沒連在
+  1692	    # 一起出現過就是 0 候選。而 BM25F 本身完全會處理多詞(`impact --diff` 拿整段 hunk 當
+  1693	    # query 運作正常),壞的是前面這道撈候選的關卡。
+  1694	    # ★fallback-only,不是「永遠 OR」★:只在整串片語★全庫都找不到★時,才退成各詞 OR 召回。
+  1695	    #   為什麼不無條件 OR:`_rank_score_candidates` 的 N/df/avgdl ★以候選集為語料★,擴召回
+  1696	    #   會擾動所有既有查詢的排序。實測現有 goldset 30 題全部回 >0 候選 → 回退條件永不
+  1697	    #   觸發 → 那 30 題行為一行不變,★零回歸是機械可證的,不是量出來的★。
+  1698	    # ★為什麼用「掃描前預檢」而不是「掃完發現 0 再掃一次」★:後者要把整個主迴圈包進
+  1699	    #   兩趟結構,而 legacy 模式是★邊掃邊 print★,兩趟會把同一次查詢印兩份;改成先緩衝
+  1700	    #   再印等於為了一條死路重排主迴圈,風險不成比例。預檢只在多詞時跑,且一找到就 break。
+  1701	    # ★已知邊界(誠實)★:預檢用簡化的 fence/inline-code 剝除近似主迴圈的排除規則,不是
+  1702	    #   同一份實作。極端情況(未閉合的 ``` 圍欄)兩者判斷可能不一致——方向是★保守★:
+  1703	    #   預檢誤判成「找得到」時只是不回退(維持現況),不會造成錯誤召回。
+  1704	    _fb_terms = [t for t in nfc(term).lower().split() if t] if not regex else []
+  1705	    _fb_used = False
+  1706	    # ★2026-08-03 起為預設(人裁)★——`--no-any` 逃生。翻預設的證據
+  1707	    # (Projects/檢索多詞回退_計劃 M4):
+  1708	    #   ①現況是「每個現實多詞查詢都回 0」(Landmark 284 篇 10/10、本庫快照 10/10)
+  1709	    #   ②回退後 nDCG@5 0→0.767、MRR 0.95、第一名為「必看」7/10
+  1710	    #     (雙評 Claude+Codex 跨家族、分歧交乾淨 opus 裁決)
+  1711	    #   ③★零回歸機械可證★(回退只在整串片語全庫無命中時觸發)+對照組 5 題逐檔完全相同
+  1712	    #   ④M1.5 逐詞覆蓋已把「查無」訊號還回來 ⑤查無任何機器消費端依賴「回 0」語意
+  1713	    # ★誠實邊界★:pooling bias(候選池半數來自回退自己的 top-10)、n=10、單一快照。
+  1714	    _fb_cov = {}        # M1.5:逐詞覆蓋(term -> 命中篇數);只在回退真的觸發時才印
+  1715	    if any_terms and (not regex) and len(_fb_terms) > 1:
+  1716	        _fb_seen = False
+  1717	        for _r in sorted(env.notes):
+  1718	            if path_prefix and not _r.startswith(path_prefix):
+  1719	                continue
+  1720	            # ★與主迴圈同樣排除「真遺忘(superseded)」的節點★——不排的話逐詞覆蓋會
+  1721	            # 比實際搜得到的多(2026-08-02 實測:門檻 55 vs 搜尋顯示的 50,差在 7 筆
+  1722	            # 被隱藏的作廢節點)。覆蓋數若>實際,使用者會以為「這個詞有東西」而其實
+  1723	            # 搜不到,★誤導方向與本功能要解的問題正好相反★。
+  1724	            if not include_superseded and _is_forgotten(env, _r):
+  1725	                continue
+  1726	            try:
+  1727	                _t = (env.vault / _r).read_text(encoding="utf-8-sig")
+  1728	            except Exception:
+  1729	                continue
+  1730	            # ★與主迴圈共用同一份「可見行」實作★(不再自己剝一次,見 _search_visible_lines)
+  1731	            _low = nfc("\n".join(pr for _no, _raw, pr
+  1732	                                  in _search_visible_lines(_t.split("\n"), include_code))).lower()
+  1733	            # ★順手數逐詞覆蓋(M1.5)★:本圈本來就讀了每個檔、也做過同樣的排除,
+  1734	            # 多幾次子字串測試幾乎免費;不另開一圈。找到片語就 break,那時
+  1735	            # 覆蓋數不完整——但那條路不會回退、也就不會印,無害。
+  1736	            for _t2 in _fb_terms:
+  1737	                if _t2 in _low:
+  1738	                    _fb_cov[_t2] = _fb_cov.get(_t2, 0) + 1
+  1739	            if needle in _low:
+  1740	                _fb_seen = True
+  1741	                break
+  1742	        if not _fb_seen:
+  1743	            _fb_used = True
+  1744	            matches = lambda s: any(t in nfc(s).lower() for t in _fb_terms)
+  1745	            # ★M1.5:把「查無」這個訊號用另一種形式還回來★
+  1746	            # 為什麼需要:回退之後搜尋★幾乎不可能再回 0★——你永遠會拿到看起來
+  1747	            # 合理的東西,而那可能只是常見詞的噪音。今天「0 筆」至少有時候代表
+  1748	            # 「這個概念不在圖譜裡」,回退把那個訊號吃掉了。
+  1749	            # 2026-08-02 Landmark 284 篇實測的實例:查「續會 門檻 計算」第一名是
+  1750	            # 「停車折抵」,看起來像排序爛——其實是「續會」全庫 0 篇(查詢用詞猜錯),
+  1751	            # 剩下兩個常見詞(門檻 50/計算 35)把結果洗走。逐詞覆蓋一印就當場看穿。
+  1752	            # ★走 stderr★:與既有的「已隱藏 N 筆作廢結果」同一慣例,不污染 stdout
+  1753	            # 的機器可讀輸出(--json/--files-only 的呼叫端會解析它)。
+  1754	            _cov_txt = "  ".join(f"★{t}:0★" if _fb_cov.get(t, 0) == 0 else f"{t}:{_fb_cov.get(t, 0)}"
+  1755	                                 for t in _fb_terms)
+  1756	            # ★措辭必須是「未作廢的節點裡無命中」不是「全庫無命中」★
+  1757	            # (2026-08-03 code-loop r1,slot3 附實測;slot2 同一處判 minor,依規矩取高)
+  1758	            # 為什麼:預檢刻意跳過 superseded(那是對的——被藏起來的東西對使用者等於
+  1759	            # 不存在,此時該回退)。但若片語★只★出現在一篇作廢節點裡,舊措辭會印
+  1760	            #   （多詞回退:整串片語★全庫無命中★…）
+  1761	            #   （已隱藏 1 筆作廢結果，--include-superseded 顯示）
+  1762	            # ★兩行自相矛盾★:第一行斷言全庫沒有,第二行承認有 1 筆被藏。使用者只看
+  1763	            # 最顯眼的第一行,會斷定「圖譜裡沒這東西」→ 可能重造一個已存在的節點。
+  1764	            # ★危險方向是「誤判為不存在」,比多顯示一點雜訊嚴重★。
+  1765	            # ★訊息宣稱的範圍不得大於實際檢查的範圍★——這條在同一天被抓到★三次★:
+  1766	            #   r1:片語只在作廢節點時說「全庫無命中」(其實有,只是被藏)
+  1767	            #   r2:`--path` 限定時仍說「未作廢的節點裡/全庫」(其實只掃了子集)
+  1768	            # 兩次都是同一個錯:★用一個維度描述範圍,另一個維度就不在視野裡★。
+  1769	            # 既有慣例本來就有揭露路徑範圍(見本函式尾端 `suffix = f"(限 {path_prefix})"`),
+  1770	            # 這裡沒跟上。修法:範圍字串把「作廢」與「路徑」兩個維度都串進去。
+  1771	            #   r3:第四個維度 `--code`(codex minor)——預設不搜 code block,片語若只
+  1772	            #       存在於程式碼區塊裡,說「節點裡無命中」仍不精確。
+  1773	            _sc = []
+  1774	            if path_prefix:
+  1775	                _sc.append(f"{path_prefix} 底下")
+  1776	            _sc.append("未作廢的節點" if not include_superseded else "全部節點")
+  1777	            _sc.append("(含程式碼區塊)" if include_code else "的可見文字")
+  1778	            _scope_txt = "".join(_sc)
+  1779	            print(f"(多詞回退:你查的整串詞在{_scope_txt}裡找不到完全一致的,改成每個詞分開查、有出現就算;"
+  1780	                  f"逐詞覆蓋 {_cov_txt})", file=sys.stderr)
+  1781	            if any(_fb_cov.get(t, 0) == 0 for t in _fb_terms):
+  1782	                print(f"  提醒:標 ★ 的那個詞在{_scope_txt}裡 0 命中——多半是你用的詞跟圖譜裡的說法不一樣,"
+  1783	                      "不代表圖譜沒記這件事;先換個說法再查一次", file=sys.stderr)
+  1784	    if ranked and regex:
+  1785	        print("(--regex 模式不做相關性排序,照舊順序輸出)", file=sys.stderr)
+  1786	        ranked = False
+  1787	    _cand_hits = {}     # ranked:rel -> hit 行數(候選=legacy 命中集,不擴召回)
+  1788	    _cand_detail = {}   # ranked:rel -> (hits, fm_end) 供逐檔明細輸出
+  1789	    total_files = total_hits = 0
+  1790	    hidden_superseded = 0   # 真遺忘:命中但因 superseded 被藏的結果筆數(★命中後才算,非全庫 superseded 數)
+  1791	    for rel in sorted(env.notes):
+  1792	        if path_prefix and not rel.startswith(path_prefix):
+  1793	            continue
+  1794	        try:
+  1795	            text = (env.vault / rel).read_text(encoding="utf-8-sig")
+ 10735	    if target.is_dir() or not line:
+ 10736	        return "ok", ""
+ 10737	    if "-" in line:
+ 10738	        lo, hi = (int(x) for x in line.split("-", 1))
+ 10739	    else:
+ 10740	        lo = hi = int(line)
+ 10741	    try:
+ 10742	        file_lines = target.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+ 10743	    except OSError:
+ 10744	        file_lines = None
+ 10745	    if file_lines is None or lo < 1 or hi > len(file_lines):
+ 10746	        return "line_out_of_range", ""
+ 10747	    if lo == hi:
+ 10748	        return "ok", file_lines[lo - 1]
+ 10749	    return "ok", file_lines[lo - 1] + "\n…\n" + file_lines[hi - 1]
+ 10750	
+ 10751	
+ 10752	def _refcheck_scan(text, repo_root):
+ 10753	    """refcheck 抽取+核對核心(不列印):回 (claims, n_missing, n_oor, n_ok)。
+ 10754	    cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。
+ 10755	    核對段走 _validate_repo_ref(與 Check J 共用);抽取段(inline-code+top_dirs 過濾)維持原規則。"""
+ 10756	    top_dirs = {p.name for p in repo_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
+ 10757	    _suffix_re = re.compile(r":([^/]+)$")
+ 10758	    # ★不可換回 FENCE_RE★(見 _visible_lines):此處餵 G1 硬閘與 impact hook
+ 10759	    spans = [s.strip("`") for s in INLINE_CODE_RE.findall(_strip_fences_text(text))]
+ 10760	    seen = set()
+ 10761	    claims = []
+ 10762	    for raw in spans:
+ 10763	        if "://" in raw or any(c in raw for c in "*<>?"):
+ 10764	            continue
+ 10765	        m = _suffix_re.search(raw)
+ 10766	        if m:
+ 10767	            token, sfx = raw[:m.start()], m.group(1)
+ 10768	            line = sfx if re.fullmatch(r"\d+(?:-\d+)?", sfx) else ""
+ 10769	        else:
+ 10770	            token, line = raw, ""
+ 10771	        if "/" not in token or (token, line) in seen:
+ 10772	            continue
+ 10773	        if token.split("/")[0] not in top_dirs:
+ 10774	            continue
+ 10775	        seen.add((token, line))
+ 10776	        status, excerpt = _validate_repo_ref(repo_root, token, line)
+ 10777	        claim = {"token": token, "line": line, "status": status, "excerpt": excerpt}
+ 10778	        if status == "ok" and (repo_root / token).is_dir():
+ 10779	            claim["dir"] = True
+ 10780	        claims.append(claim)
+ 10781	
+ 10782	    n_missing = sum(1 for c in claims if c["status"] == "missing")
+ 10783	    n_oor = sum(1 for c in claims if c["status"] == "line_out_of_range")
+ 10784	    n_ok = sum(1 for c in claims if c["status"] == "ok")
+ 10785	    return claims, n_missing, n_oor, n_ok
+ 10786	
+ 10787	
+ 10788	PITFALL_CLASSES = {
+ 10789	    "payment": [r"金流", r"payment", r"stripe", r"billing", r"退款", r"refund", r"扣款"],
+ 10790	    "external-send": [r"寄送", r"送出", r"\bsend\b", r"webhook", r"notify", r"LINE 推送", r"\bmail\b", r"簡訊", r"對外"],
+ 10791	    "prod-irreversible": [r"\bprod\b", r"production", r"遷移", r"migration", r"不可逆", r"DROP TABLE", r"DELETE FROM", r"上架"],
+ 10792	    "self-governance": [r"錨點", r"anchor verify", r"收斂判準", r"canary", r"審計閘", r"pre-push hook"],
+ 10793	}
+ 10794	_PITFALL_COMPILED = {c: [re.compile(p, re.I) for p in pats] for c, pats in PITFALL_CLASSES.items()}
+ 10795	_PITFALL_GENERAL = [
+ 10796	    "併發——同資源兩請求同時進來會怎樣?",
+ 10797	    "效能——這段會進熱路徑/大資料量嗎?",
+ 10798	    "資源——連線/檔案/鎖有沒有確定釋放?",
+ 10799	    # 風險類廣度反問(已知坑機械前置 S0,2026-08-08):寫死 4 類太少,改反問在場 LLM
+ 10800	    # 自我分類——分類是語意判斷,不該 regex 猜。★三處同步:此處+templates.md:31+design-loop skill★
+ 10801	    "列出此功能碰到的風險類(不限既有金流/寄送/不可逆/守衛面:認證/並發/快取/遷移/PII/限流/狀態同步…),逐類答隱患;無則寫『無+為什麼』。",
+ 10802	]
+ 10803	_PITFALL_QUESTIONS = {
+ 10804	    "payment": "冪等鍵怎麼設計?重複扣款如何防?部分失敗怎麼補償/對帳?",
+ 10805	    "external-send": "重試會不會風暴?收端如何去重?超時與速率上限?",
+ 10806	    "prod-irreversible": "回滾路徑?遷移順序與鎖表窗口?",
+ 10807	    "self-governance": "誤擋的逃生口?繞過有沒有留痕?",
+ 10808	}
+ 10809	_PITFALL_BLACKLIST = ("方案評比", "canary 相容性", "誠實天花板", "審計修正紀錄")
+ 10810	# 棧別效能追問(pitfalls棧別效能追問_計劃 T1):diff 命中該棧檔案時附進 manifest。
+ 10811	# 內容源=圖譜 Systems/效能檢核目錄「人判提問」欄,每棧取最載重 3-5 問(kt=6 cs=4 vue=4 sql=3;idioms ⚠不可機檢條目優先入問+2026-07-20 洩漏/裝箱補(R1 並行/R3 競態等);2026-07-19 使用者補全)——
+ 10812	# 目錄改動須同步此表、反向亦然(散落漂移家規);提問式>陳述式(逼答哲學,Vercel 56% 跳過實證)。
+ 10813	_STACK_PERF_QUESTIONS = {
+ 10814	    "kt": [
+ 10815	        "Compose:昂貴計算有沒有 remember?不穩定型別/缺穩定 key 會不會讓重組失控(stability report 可查)?",
+ 10816	        "協程:互不依賴的等待有沒有並行(coroutineScope+async)?有沒有 GlobalScope 裸用/scope 沒跟生命週期(viewModelScope)?",
+ 10817	        "Dispatchers 選對了嗎(IO 密集≠Default)?suspend 函式 main-safe 嗎?async 吞例外/長運算 ensureActive?",
+ 10818	        "Flow/Channel 選型:狀態=StateFlow/事件=SharedFlow/單消費=Channel,選反漏事件或黏著重放;背壓 buffer/conflate?repeatOnLifecycle?shareIn 有沒有放函式回傳(每叫一次漏一條熱流,idioms R5)?",
+ 10819	        "大集合長鏈有沒有 asSequence(每步 map/filter 生中間 List)?熱路徑 value class 有沒有被泛型/可空觸發裝箱?",
+ 10820	        "洩漏:單例/SDK/companion 有沒有持 Activity Context 或 View(該給 applicationContext)?長活物件持 ViewModel/View 引用?",
+ 10821	        "啟動:Application onCreate/首幀前有沒有同步重活(eager SDK init/磁碟 IO/大 JSON 解析)?拖冷啟+ANR 面;刻意暖機=正當取捨但要寫明理由(延後 init 可能把延遲挪到首筆業務,更糟)?",
+ 10822	    ],
+ 10823	    "cs": [
+ 10824	        "熱路徑有沒有阻塞異步(.Result/.Wait)?互不依賴的 await 有沒有 Task.WhenAll 並行?CancellationToken 斷鏈?",
+ 10825	        "查詢有沒有 N+1/SELECT * 進大表?大結果集有分頁、過濾聚合下推到資料層嗎?",
+ 10826	        "熱讀路徑該不該上快取?熱路徑有沒有短命大物件(該用 Span/ValueTask)?",
+ 10827	        "LINQ:IEnumerable 有沒有被多次枚舉(查詢重跑,該 ToList 一次)?長鏈中間集合要不要收斂?",
+ 10828	        "連線生命週期:SqlConnection 有沒有 using 包好(漏包=池名額洩漏→TimeoutException,CA2000 預設關、機器沒在抓)?迴圈內反覆開連線?交易入口 open 後、建交易前例外,連線收得回嗎?",
+ 10829	    ],
+ 10830	    "vue": [
+ 10831	        "互不依賴的 await 有沒有 Promise.all 並行?這個互動會不會卡主線程(INP>200ms)?",
+ 10832	        "LCP 元素有沒有被誤加 lazy loading?圖片有沒有寬高(防 CLS)?",
+ 10833	        "新依賴 bundle 多重?能不能動態載入?",
+ 10834	        "async watch 有沒有處理競態(舊回應蓋掉新資料)?深層 watch 成本有意識嗎?v-for 子項 prop 有沒有預算成 per-item 值?",
+ 10835	        "響應原語選型:大 API 回應/大列表有沒有整包 ref()/reactive()(深響應逐層 Proxy,大 JSON 可膨脹數倍記憶體)?不需深追蹤的大資料該 shallowRef/markRaw;ESLint 無規則可抓,量級自判?",
+ 13690	        if not mirror_sections:
+ 13691	            print("  (無鏡像段)")
+ 13692	        if value_drift:
+ 13693	            print("── value-drift ──")
+ 13694	            for item in value_drift:
+ 13695	                print(f"  ⚠ value-drift 前後寫的不一樣: 一處「{item['key']} {item['a']}」,另一處「{item['key']} {item['b']}」——確認哪個才對")
+ 13696	        if reverse_omission:
+ 13697	            print("── reverse-omission ──")
+ 13698	            for item in reverse_omission:
+ 13699	                print(f"  ⚠ reverse-omission 只寫了一邊: {item['present_in']} 提到「{item['token']}」,{item['missing_in']} 沒提——是不是漏寫了")
+ 13700	        if not has_flag:
+ 13701	            print("✓ 無 flag(沒發現前後矛盾或漏寫)")
+ 13702	
+ 13703	    return 1 if has_flag else 0
+ 13704	
+ 13705	
+ 13706	def cmd_refcheck(md_path, repo=None, as_json=False):
+ 13707	    """spec 指涉宣稱確定性核對(vault-free):inline-code 檔路徑/行號 → 存在性 manifest。
+ 13708	    抽取規則同 doctor Check P step 1-2(刻意複製、不共用——去重粒度不同:
+ 13709	    Check P 是 token 級,這裡是 (token, line);同檔多行號各自成 claim)。
+ 13710	    只驗 spec→repo 指涉,不驗 spec 內部一致性(canary 保留地)。"""
+ 13711	    import json
+ 13712	    md = Path(md_path)
+ 13713	    if not md.is_file():
+ 13714	        print(f"擋下:找不到這個檔案: {md_path}", file=sys.stderr)
+ 13715	        return 2
+ 13716	    if repo is not None:
+ 13717	        repo_root = Path(repo)
+ 13718	        if not repo_root.is_dir():
+ 13719	            print(f"擋下:--repo 指的不是目錄: {repo}", file=sys.stderr)
+ 13720	            return 2
+ 13721	    else:
+ 13722	        repo_root = None
+ 13723	        for cand in (Path.cwd(), *Path.cwd().parents):
+ 13724	            if (cand / ".git").exists():
+ 13725	                repo_root = cand
+ 13726	                break
+ 13727	        if repo_root is None:
+ 13728	            print("擋下:從目前目錄往上找不到 git repo,用 --repo 指定專案根目錄", file=sys.stderr)
+ 13729	            return 2
+ 13730	    try:
+ 13731	        text = md.read_text(encoding="utf-8-sig")
+ 13732	    except OSError as e:
+ 13733	        print(f"擋下:檔案讀不到({e}): {md_path}", file=sys.stderr)
+ 13734	        return 2
+ 13735	
+ 13736	    claims, n_missing, n_oor, n_ok = _refcheck_scan(text, repo_root)
+ 13737	    if as_json:
+ 13738	        print(json.dumps({"claims": claims, "missing": n_missing,
+ 13739	                          "out_of_range": n_oor, "ok": n_ok}, ensure_ascii=False))
+ 13740	    else:
+ 13741	        print(f"refcheck {md}(對照的程式碼在 {repo_root})")
+ 13742	        for c in claims:
+ 13743	            loc = f"{c['token']}:{c['line']}" if c["line"] else c["token"]
+ 13744	            mark = "✓" if c["status"] == "ok" else "✗"
+ 13745	            tail = f" | {c['excerpt']}" if c["excerpt"] and "\n" not in c["excerpt"] else ""
+ 13746	            print(f"  {mark} {c['status']:<17} {loc}{tail}")
+ 13747	        print(f"統計: 對得上 ok {n_ok} / 檔案不存在 missing {n_missing} / 行號超出檔案長度 out_of_range {n_oor}")
+ 13748	    return 1 if (n_missing or n_oor) else 0
+ 13749	
+ 13750	
+ 13751	_GIT_DATES_CACHE = {}   # (repo_root, vault) → {vault 相對路徑: 最後改動日期}(行程內)
+ 13752	
+ 13753	
+ 13754	def git_last_change_dates(repo_root, vault):
+ 13755	    """★一次 git log 拿 vault 底下每個檔的最後改動日期★(工具清單 #5,2026-08-23)。
+ 13756	
+ 13757	    回 {vault 相對路徑: "YYYY-MM-DD"}。git 缺席/不是 repo/失敗 → 回 {}(fail-open)。
+ 13758	    ★2026-08-24:about_code 過期判準已改記正文雜湊(note_body_hash),本函式不再是它的材料、目前無呼叫者★
+ 13759	    (三輪設計審實證日期表達不了「標記在同日序列的哪一格」);保留供日後批次日期需求。
+ 13760	
+ 13761	    為什麼要批次:design-loop about-code-field r3 實測逐篇 `git log -1 -- <檔>` 83 次 5.3s,
+ 13762	    批次 0.22s,差 18 倍;impact 跑在 PreToolUse hook,逐篇會把它拖進秒級。
+ 13763	    為什麼要 `-c core.quotepath=false`:vault 檔名幾乎全中文,預設輸出是八進位跳脫
+ 13764	    (`\347\257\204…`),對不回路徑——★沒這旗標整張表是空的,而且不報錯★。
+ 13765	    用 `updated` 欄的問題:席三抽 15 篇,5 篇(33%)落後 git 實際改動日期——正文改了沒 lumos set。
+ 15520	
+ 15521	    p = sub.add_parser("signoff", help="業務簽核留痕(validation):人點頭 → .signoff-log.jsonl + frontmatter signed_off")
+ 15522	    p.add_argument("node")
+ 15523	    p.add_argument("--note", required=True, help="確認了什麼(必填,給未來的人看)")
+ 15524	    p.add_argument("--by", help="誰確認的")
+ 15525	
+ 15526	    p = sub.add_parser("sync-verified-by", help="補 Check 3 漏寫的 verified_by(dry-run 預設)")
+ 15527	    p.add_argument("--apply", action="store_true", help="真寫入(否則 dry-run 只列)")
+ 15528	
+ 15529	    p = sub.add_parser("search", help="全文搜尋(frontmatter+body);取代 obsidian search")
+ 15530	    p.add_argument("term")
+ 15531	    p.add_argument("--path", dest="path_prefix", help="限資料夾前綴(如 Systems)")
+ 15532	    p.add_argument("--regex", action="store_true", help="term 當正則(預設 substring 大小寫不敏感)")
+ 15533	    p.add_argument("--files-only", action="store_true", help="只列檔名+命中數")
+ 15534	    p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
+ 15535	    p.add_argument("--ranked", action="store_true", help="BM25F 相關性排序(2026-07-11 起已是預設,旗標保留相容)")
+ 15536	    p.add_argument("--any", action="store_true", dest="search_any",
+ 15537	                   help="多詞回退(2026-08-03 起已是預設,旗標保留相容)")
+ 15538	    p.add_argument("--no-any", action="store_true", dest="search_no_any",
+ 15539	                   help="關閉多詞回退:整串片語找不到就回 0,不退成各詞 OR 召回")
+ 15540	    p.add_argument("--legacy", action="store_true", dest="search_legacy",
+ 15541	                   help="舊行為:字母序+全量輸出(轉正前預設;--regex 自動走此路)")
+ 15542	    p.add_argument("--top", type=int, default=0, help="相關性排序輸出上限(0=全量,預設;圖譜先行不靜默截斷)")
+ 15543	    p.add_argument("--json", dest="search_json", action="store_true", help="相關性排序 JSON manifest")
+ 15544	    p.add_argument("--include-superseded", dest="include_superseded", action="store_true",
+ 15545	                   help="含已作廢(superseded)節點(預設排除;真遺忘,不影響 stale)")
+ 15675	    p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
+ 15676	
+ 15677	    p = sub.add_parser("teardown", help="一鍵拆機:當前 repo 專案層 + 機器全域(CLI/skills/hooks),保留圖譜")
+ 15678	    p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(非互動環境必須)")
+ 15679	    p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
+ 15680	
+ 15681	    p = sub.add_parser("fold-check", help="折入後一致性複查(vault-free):列舉鏡像段 + value-drift/reverse-omission flag")
+ 15682	    p.add_argument("path", help="要核對的 markdown 檔路徑")
+ 15683	    p.add_argument("--json", dest="as_json", action="store_true", help="JSON 輸出(供機器讀)")
+ 15684	
+ 15685	    p = sub.add_parser("refcheck", help="spec 指涉宣稱確定性核對(vault-free):inline-code 路徑/行號 → 存在性 manifest")
+ 15686	    p.add_argument("md", help="要核對的 markdown 檔")
+ 15687	    p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+ 15688	    p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
+ 15689	
+ 15690	    p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
+ 15691	    p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
+ 15692	    p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
+ 15693	    p.add_argument("--diff", dest="impact_diff", help="diff range(如 main..HEAD):聚合各改動檔的 ranked impact 成受影響功能面 manifest(code-loop 審計鏡頭)")
+ 15694	    p.add_argument("--sync-only", action="store_true", dest="impact_sync_only",
+ 15695	                   help="配 --sync-check:只印「該動卻沒動」的點名(hooks 用),不印受影響功能面")
+  6300	            if st in ("done", "resolved", "pass"):
+  6301	                hits.append((i, tgt, st, s.strip()))
+  6302	    return hits
+  6303	
+  6304	
+  6305	def cmd_context(env, rel, brief=False, recommend=False, top=8, min_score=0.20, as_json=False):
+  6306	    """節點 + 鄰居 summary 壓縮索引 — MemPalace closet 具象化
+  6307	    brief=True: 只給 meta + summary 首兩行 + 鄰居名單(壓 token 用)"""
+  6308	    n = env.notes[rel]
+  6309	    _usage_log(env, rel, "context")
+  6310	    out_e, in_e = env.edges
+  6311	    meta = " | ".join(f"{k}:{n.fields[k]}" for k in ("type", "status", "created", "updated")
+  6312	                      if isinstance(n.fields.get(k), str) and n.fields.get(k))
+  6313	    # 額外 tag 家族上頭部(2026-08-05,Enzo:「是給你(AI)看的」)——priority/scope/flag 等
+  6314	    # 寫給 AI 的分類資訊原本在進場主讀路徑(context 頭部)上隱形,實測 gap
+  6315	    _extra = [t for t in (n.fields.get("tags") or [])
+  6316	              if isinstance(t, str) and "/" in t
+  6317	              and not t.startswith(("type/", "status/"))]
+  6318	    if _extra:
+  6319	        meta += " | " + " | ".join(t.replace("/", ":", 1) for t in _extra)
+  6320	    print(f"# {rel}")
+  6321	    if meta:
+  6322	        print(meta)
+  6323	    for (_ln, _tgt, _st, _line) in _stale_status_claims(env, rel):
+  6324	        print(f"⚠ 這篇第 {_ln} 行的表格說某件事還沒做,但它指的那篇已經做完了"
+  6325	              f"(狀態 {_st}):")
+  6326	        print(f"    {_tgt}")
+  6327	        print(f"  照這張表回報進度會講反。要嘛去讀那篇確認,要嘛把這一格改掉。")
+  6328	    vu = _conds(n.fields.get("valid_under"))
+  6329	    if vu:
+  6330	        age = _node_age_days(n)
+  6331	        flag = f"[這篇已經 {age} 天沒更新,前提可能過期了]" if (age is not None and age > 90) else ""
+  6332	        print(f"提醒:動這篇之前先確認下面的前提還成立(valid_under){flag}:")
+  6333	        for c in vu:
+  6334	            print(f"  {c}")
+  6335	    inv, debt = extract_contracts(n)
+  6336	    if inv or debt:
+  6337	        print("提醒:這篇有「動了會壞」的合約,動手前一定要看:")
+  6338	        for x in inv:
+  6339	            print(f"  ★INVARIANT★ {x}")
+  6340	        for x in debt:
+  6341	            print(f"  ★DEBT★ {x}")
+  6342	    summ = n.fields.get("summary")
+  6343	    if isinstance(summ, str) and summ:
+  6344	        lines = summ.split("\n")
+  6345	        if brief:
+  6346	            lines = lines[:2]
+  6347	        print("summary:")
+  6348	        for l in lines:
+  6349	            print(f"  {first_line(l, 100) if brief else l}")
+  6350	    for key in ("verified_by", "plan_refs", "core_refs"):
+  6351	        vals = as_list(n.fields.get(key))
+  6352	        if vals:
+  6353	            print(f"{key}: {', '.join(vals)}")
+  6354	    for label, rows in (("→ 連出", sorted(set(out_e.get(rel, [])))),
+  6355	                        ("← 連入", sorted(set(in_e.get(rel, []))))):
+  6356	        print(f"{label} ({len(rows)}):")
+  6357	        for d in rows:
+  6358	            if brief:
+  6359	                print(f"  • {d} [{status_of(env, d)}]")
+  6360	                continue
+  6361	            nb = env.notes[d]
+  6362	            s = nb.fields.get("summary")
+  6363	            hint = first_line(s if isinstance(s, str) else "")
+  6364	            print(f"  • {d} [{status_of(env, d)}]" + (f" — {hint}" if hint else ""))
+  6365	    if recommend:
+  6366	        recos = _reco_fused(env, rel, top=top, min_score=min_score)
+  6367	        if as_json:
+  6368	            import json as _json
+  6369	            print(_json.dumps({"node": rel, "recommend": recos}, ensure_ascii=False))
+  6370	        else:
+  6371	            print("\n相關節點推薦(圖分×詞彙融合 top-%d):" % top)
+  6372	            shown = {}
+  6373	            for x in recos:
+  6374	                key = re.sub(r"_[^_]+$", "", Path(x["node"]).stem)
+  6375	                if key in shown:
+
+exec
+/bin/zsh -lc "rg -n 'forbid_before|\"expect\"|commands.jsonl' governance scripts | head -80; rg -n '八類|八個子檔' --glob '"'!docs/**'"' --glob '"'!governance/review-reports/**'"' .; python3 scripts/lumos context --help; python3 scripts/lumos search --help | sed -n '1,80p'" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 348ms:
+usage: lumos context [-h] [--brief] [--recommend] [--top CTX_TOP]
+                     [--min-score CTX_MIN] [--json]
+                     note
+
+什麼時候用:進場第一步之二:這篇的來龍去脈、合約、前提、鄰居一次攤開。search 定位到之後用。
+
+positional arguments:
+  note
+
+options:
+  -h, --help           show this help message and exit
+  --brief              壓縮版(meta+summary 首兩行+鄰居名單)
+  --recommend          尾列相關節點推薦(圖分×詞彙融合;dormant v1)
+  --top CTX_TOP        --recommend 輸出上限
+  --min-score CTX_MIN  --recommend 分數底線
+  --json               --recommend JSON 輸出
+usage: lumos search [-h] [--path PATH_PREFIX] [--regex] [--files-only]
+                    [--code] [--ranked] [--any] [--no-any] [--legacy]
+                    [--top TOP] [--json] [--include-superseded]
+                    term
+
+什麼時候用:進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。
+
+positional arguments:
+  term
+
+options:
+  -h, --help            show this help message and exit
+  --path PATH_PREFIX    限資料夾前綴(如 Systems)
+  --regex               term 當正則(預設 substring 大小寫不敏感)
+  --files-only          只列檔名+命中數
+  --code                含 code block(預設排除,對齊 doctor)
+  --ranked              BM25F 相關性排序(2026-07-11 起已是預設,旗標保留相容)
+  --any                 多詞回退(2026-08-03 起已是預設,旗標保留相容)
+  --no-any              關閉多詞回退:整串片語找不到就回 0,不退成各詞 OR 召回
+  --legacy              舊行為:字母序+全量輸出(轉正前預設;--regex 自動走此路)
+  --top TOP             相關性排序輸出上限(0=全量,預設;圖譜先行不靜默截斷)
+  --json                相關性排序 JSON manifest
+  --include-superseded  含已作廢(superseded)節點(預設排除;真遺忘,不影響 stale)
+
+exec
+/bin/zsh -lc "rg -n \"架構對齊席|architecture.*seat|架構.*席\" skills governance docs/lumos-toolchain-knowledge/Systems scripts | head -40; nl -ba scripts/scenario_probe.py | sed -n '52,82p'; nl -ba skills/lumos-project-notes/reference.md | sed -n '1208,1216p'" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+skills/lumos-design-loop/SKILL.md:20:3. **派審查員**:Agent、`model: sonnet`、指向工作副本。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。派工當下把 `{round, seat, lens, materials, auditor}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`,凍結快照存 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
+skills/lumos-design-loop/templates.md:200:## 7.6 架構對齊席派工(code-loop 與 design-loop 皆派;2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法)
+scripts/lumos:14759:    """落成核對的唯一呈現(2026-08-22 架構對齊席抓到三套並存後收斂成這一份):
+scripts/lumos:14890:# 紅/懸空/方法名不合法 → BLOCKED。掛在「擋」的路徑(check)不掛「記錄」的路徑(pass)——r1 架構席抓的。
+docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md:7:  - 架構對齊席
+docs/lumos-toolchain-knowledge/Systems/arch-alignment-lens.md:14:  FLOW:pitfalls --diff 列對照檔→loop next 吐「架構對齊」席→派工用 templates §7.6 三問→finding 進處置閘
+scripts/test_lumos.py:22244:    disp(L, "r1-dispatch-s4.json", [{"auditor": "arch-sonnet"}])   # 2026-08-22 架構對齊席(required,不佔 W)
+scripts/test_lumos.py:22251:    check("status-roster: 三形狀共解析 4 席(claude 桶足,含架構對齊)", "實派 4 席" in r1.stdout and "claude 4" in r1.stdout, r1.stdout[:600])
+docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md:17:  KEY:掛在 check(擋的路徑)不掛 pass——design-loop bound-tests-gate-c r1 架構席抓到的;去重鍵=解析後完整指令(同 kill);超時用 runner 同名 LUMOS_TEST_TIMEOUT,whole-suite 600s(同 kill)
+docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md:45:`bound-tests-gate-c` r1 四席(通才/正確性邊界/可執行性成本/架構對齊)20 條:19 折 1 放行(hermetic:run_cmd 是專案自宣告指令,與 CI 同信任邊界)。我自己記帳走歪兩次(處置帳一輪只能一筆;每席都要留痕)才過閘,編號 -b/-c 是這樣來的。
+docs/lumos-toolchain-knowledge/Systems/canary-audit.md:65:  KEY:★2026-08-02 外部實測入帳:規模是主導混淆變數★——[Bigger Isn't Always Better](arXiv 2606.15689) 跨合成變異與真實 PR 的基準,兩條結論:①**抓得到合成缺陷不可靠地預測抓得到真實缺陷** ②**diff 大小是主導混淆變數**(越大越抓不到,跨模型架構一致);它給實務的第一條建議就是「設計合成基準時要控制 diff 大小」。★對本機制的影響★:lumos 的宣稱本來就是窄的(caught=該席醒著,不證覆蓋),故★未被推翻★;但**帳本完全沒記被審材料的規模**——2026-08-02 當天十輪 code-loop 的 diff 從 332 到 2770 行,在帳上長得一模一樣。處置=`canary record --scope-lines N`(純 telemetry、不進任何 gate、不改任何判定),並接進 `loop next` 的記帳模板與兩支 skill,避免重蹈 cluster 三態帳「有機制沒人用」(316:1)的覆轍。★不能回溯★:既有 461 筆(本 repo 316 + Landmark 145)沒有這個數字,時鐘從落地日起走。★預期三種結果都有用★:有關係→大 diff 要切開審或加席;沒關係→這個擔心在本情境不成立、寫下來別再擔心(同實驗⑨長期腐化的結局);反過來→查。[test:t_canary_scope_lines_records_review_size](翻紅釘:突變A 收下但不寫進帳本→「給了就要真的寫進帳本」與「負數擋下」翻紅;突變B 從 loop next 模板拿掉→「模板必須帶上它」翻紅)★誠實揭露★:搜尋摘要提到的「92% F1 degradation」具體數字,我在 PDF 原文裡未能可靠抽出(字型嵌入導致擷取不完整),故只採方向性結論、不引用該數字
+governance/review-reports/code-bound-tests/r1-snapshot.patch:64:+# 紅/懸空/方法名不合法 → BLOCKED。掛在「擋」的路徑(check)不掛「記錄」的路徑(pass)——r1 架構席抓的。
+governance/review-reports/code-canary-off/r1-snapshot.patch:424:   KEY:★2026-08-02 外部實測入帳:規模是主導混淆變數★——[Bigger Isn't Always Better](arXiv 2606.15689) 跨合成變異與真實 PR 的基準,兩條結論:①**抓得到合成缺陷不可靠地預測抓得到真實缺陷** ②**diff 大小是主導混淆變數**(越大越抓不到,跨模型架構一致);它給實務的第一條建議就是「設計合成基準時要控制 diff 大小」。★對本機制的影響★:lumos 的宣稱本來就是窄的(caught=該席醒著,不證覆蓋),故★未被推翻★;但**帳本完全沒記被審材料的規模**——2026-08-02 當天十輪 code-loop 的 diff 從 332 到 2770 行,在帳上長得一模一樣。處置=`canary record --scope-lines N`(純 telemetry、不進任何 gate、不改任何判定),並接進 `loop next` 的記帳模板與兩支 skill,避免重蹈 cluster 三態帳「有機制沒人用」(316:1)的覆轍。★不能回溯★:既有 461 筆(本 repo 316 + Landmark 145)沒有這個數字,時鐘從落地日起走。★預期三種結果都有用★:有關係→大 diff 要切開審或加席;沒關係→這個擔心在本情境不成立、寫下來別再擔心(同實驗⑨長期腐化的結局);反過來→查。[test:t_canary_scope_lines_records_review_size](翻紅釘:突變A 收下但不寫進帳本→「給了就要真的寫進帳本」與「負數擋下」翻紅;突變B 從 loop next 模板拿掉→「模板必須帶上它」翻紅)★誠實揭露★:搜尋摘要提到的「92% F1 degradation」具體數字,我在 PDF 原文裡未能可靠抽出(字型嵌入導致擷取不完整),故只採方向性結論、不引用該數字
+governance/golden/rel-mainnet/spec.md:30:    context: gate 三條件過二:輪有效+嚴重度收斂(blocker→blocker→全 minor,架構三輪未翻);統計殘餘未枯竭(r3 五條單席發現→推估 ~2.5 條未發現)。skill 自承 framing 逼每輪必交 minor、G2 數字枯竭天生壓不到底,誠實出口=人裁
+governance/review-reports/bound-tests-gate/r1-arch.md:1:# r1 架構對齊席
+governance/review-reports/about-code-impl/r1-snapshot.md:377:★#6 誠實記★:r1 架構席判「過期守衛另立=第三套機制」為 major,折成併入 Check S;
+governance/review-reports/code-pin-denoise/r1-arch.md:1:# code-pin-denoise r1 架構對齊審查(arch-sonnet 席)
+governance/review-reports/about-code-impl-std/r1-snapshot.md:380:★#6 誠實記★:r1 架構席判「過期守衛另立=第三套機制」為 major,折成併入 Check S;
+governance/review-reports/pin-denoise-a/r1-arch.md:23:一度懷疑 spec 下一步「design-loop(standard,3席+架構+外家 Codex)」(spec 第 94 行)跟已知的「Codex 到期,外家轉 Gemini」記載(`docs/lumos-toolchain-knowledge/Issues/外家席長期缺席仍照跑loop.md:55`)衝突。但派工紀錄 `governance/review-reports/pin-denoise-a/r1-dispatch.json` 顯示本輪 `ext-codex` 席(`"auditor":"codex exec --sandbox read-only"`)實際被派且已交回 `r1-ext.md` 的實質內容(非缺席)——即本案這一輪外家確實是 Codex,是本專案第二個來源(loop 執行紀錄)反證了單一來源(Issue 筆記)的過期判斷,不列入不對齊(對照 CLAUDE.md「只信一個來源、沒去對第二個」的教訓)。
+governance/review-reports/about-code-impl-std/r2-snapshot.md:393:★#6 誠實記★:r1 架構席判「過期守衛另立=第三套機制」為 major,折成併入 Check S;
+governance/review-reports/about-code-impl-std/r1-s1.md:41:**問題**:同一份文件對「about_code 過期檢查要不要併進 Check S」給出兩個相反答案。文件確實在「★#6 誠實記★」段落坦承這是 r1→r3 的翻案(「r1 架構席判『過期守衛另立=第三套機制』為 major,折成併入 Check S;r3 證實併入後事故類節點驗不到」),但「過期守衛」那一節的本文從未回頭改寫——標題仍然是斬釘截鐵的「**不另立機制,併入 Check S**」,沒有任何但書指向後面的翻案。這正是文件自己在 r2 審計紀錄裡點名過的教訓(「r1 教訓:只改被點名的段落、沒全文 grep 分身」)在 r3→人裁這一輪又犯了一次——只在工具清單追加了修正,沒有回頭訂正「過期守衛」節的頭句。任何人只讀「過期守衛」一節(它被 522 行文件的審查要求明列為重點依賴節)會照著已被證明錯誤的「併入 Check S」去實作,重現 r3 抓到的「事故類節點過期永遠驗不到」那個坑。
+governance/review-reports/about-code-impl-std/r3-snapshot.md:334:  跟 Check S(日期制)不同形——r1 架構席「第三套機制」那條在這裡**再次**被推翻,理由是兩輪五席實證日期制表達不了順序;留痕,不再折回。
+governance/review-reports/about-code-impl-std/r3-snapshot.md:410:★#6 誠實記★:r1 架構席判「過期守衛另立=第三套機制」為 major,折成併入 Check S;
+governance/review-reports/about-code-impl-std/r3-arch.md:68:  但 spec 有明講理由並留痕:「跟 Check S(日期制)不同形——r1 架構席『第三套機制』那條在這裡再次被推翻,理由是
+governance/review-reports/node-restore-sop-v2/r1-snapshot.md:15:  KEY:★d3/d4 文字澄清(2026-08-24)★:d3 context 的「08 檔」是撞號發現前的歷史用語,現行編號以 d4 的 09 為準;d4 的「三處」是 r2 發現第四處(SessionStart hook)之前的清單,現行以 [S3] 的五處為準;正式澄清已立 d5(r3 架構席:先例=新決策+KEY 行雙軌,單靠 KEY 行是第二種做法;r3 通才席:decisions 指令只印決策內容前 100 字,光靠本行照樣看不到)
+governance/review-reports/node-restore-sop-v2/r1-snapshot.md:46:    context: r1 架構席對照 commands/05、06 慣例:多步驟流程的鄰居一律薄表+指到別處(skill 或 reference.md),敘事本體不進 commands;且 08-自動跑的.md 已存在,r1 三席獨立抓到撞號。另一選項①照原案全文塞 commands/08:排除,撞號+立第二種先例;②不建子檔只改 INDEX:d3 已排除過,路由通了內容還是空的
+governance/review-reports/node-restore-sop-v2/r1-snapshot.md:52:    context: r2 s2 抓到 d3 殘留 08 舊字、鏡像核對抓到 d4 三處過時;第一版只用摘要 KEY 行澄清,r3 架構席判第二種做法(先例=自足性審計 d2「以新決策澄清舊決策」+驗證層去模型化的 decision-add+KEY 行雙軌),r3 通才席實測 decisions 指令只印決策內容前 100 字、KEY 行澄清照指定查詢路徑看不到。另一選項①維持 KEY 行單軌:排除,查詢路徑失效+違反先例;②decision-supersede d3/d4:排除,兩決策核心裁定(文件層/放置)未翻案,只有清單字過時
+governance/review-reports/node-restore-sop-v2/r1-snapshot.md:101:最典型的觸發:**要在龐大既有 codebase 上加新功能**——先把新功能會碰到的關聯面照本 SOP 還原成節點(只記 codebase 能證的事實),新功能的設計踩在這些節點上:沿用既有框架與元件、不破壞架構、不重造輪子。還原產出直接變成新功能 spec 的護欄素材:共用面清單=不准亂動的承重牆,合約候選=改了就壞的紅線(對應種子影片 forbidden 段的機械化來源);下游 code-loop 的架構對齊席負責抓「跟既有寫法不一樣」。一魚兩吃:這塊功能落成節點,新功能拿到正確脈絡。
+governance/review-reports/node-restore-sop-v2/r1-snapshot.md:137:還原批次收尾先跑一道**引用實體機械掃描**(世界解:DocAgent Verifier 的便宜版):機器逐篇掃「筆記引用的檔名/函式/欄位是否真的存在於 code」(refcheck/`lumos search --code` 既有零件)——防編造第一道濾網,比派 agent 便宜一個數量級、可重算;掃完才跑**變體 B 交叉審計**,照 reference.md 原文的機制原樣用(r2 三席抓到上一版借名走樣,此處全對齊):**逐節點**各派兩個乾淨 agent——階段一只讀單篇筆記,萃取 **12~15 條可被程式碼驗證的具體主張、且逐條必須可證偽**(原文兩句分開抄,別合併——「可驗證」比「可證偽」寬);階段二只讀 code(禁讀 docs)逐條判 ✅/❌/❓。處置照原文:❌=修筆記(**以 code 為準**;code 本身是 bug 就開 Issue,不改筆記遷就)→**建 Verification 紀錄→相關 Systems 的 `verified_by` 雙向同步**——這就是出口的正式留痕。留痕**雙軌**:除上述 Verification+verified_by 外,逐節點**照樣蓋 `lumos self-audit`**——r2 曾判「錯綁」刪掉,r3 翻案:L4 清帳(同構的雙 agent 交叉審計)30 節點全蓋章+Verification 雙軌是真實先例,且體檢 Check S 只讀 self_audit 欄,不蓋=已審過的節點被誤報「從未審過」。r2 那次只看指令說明沒對先例,正是★第四條要防的「只信一個來源」——這次是審查員自己犯,r3 抓回。**PASS 批次也建一篇批次 Verification**(L4 先例同款),不是只有 ❌ 才留(r3 外家抓到 PASS 零留痕缺口)。**兩條本 SOP 自加的延伸裁定(變體 B 原文是選配巡檢手法,沒有這兩條;明標出處是本案,r2 架構席抓到上一版沒標)**:①還原批次**必跑**——理由:30 個被點名過期節點的清帳(有偏樣本:被軟閘點名的高危群)實測 16.3% 主張與 code 不一致,還原型節點同屬高危;②❓(找不到驗證點)不可原樣放行——回頭把該句改標 `推測:`/`佚失:` 或修掉。審計抓到要修的,**開新 commit、重跑 lint**——步驟 4 的「同一次 commit」管首次落節點的原子性,「中間態」專指「蓋了章但身分標記沒寫完」;審計後修正是正常的後續 commit,不算中間態(r2 抓到兩步銜接沒講)。之後要動手改 code,從這裡起全走現行流程:`lumos impact`、design-loop、code-loop。**警語(種子影片吸收)**:還原完直接動 production 級 code 前,至少讓改動走完 code-loop;還原節點內容日後被行為事實打臉→照 CLAUDE.md 既有規則立事故筆記,錯的節點標作廢或 supersede,這就是還原內容的收回路徑。
+governance/review-reports/node-restore-sop-v2/r1-snapshot.md:145:1. [S1] `skills/lumos-project-notes/reference.md` 新增**獨立 `##` 大節**〈節點還原(brownfield 冷啟動)〉、目錄加一項——體量是端到端流程,照「自足性審計」自佔目錄項的先例,不塞進「合約性標記」大節當子節(r2 架構席 ⚠ 裁定;d4「與重生守衛相鄰」指主題相近、互設指標,不指同一大節)。內容範圍明定(r3 抓到兩讀)=步驟 0–6 本體+兩條停手線+「機械把關真實範圍」技術事實(隱患第一條);PRIOR-ART/其餘隱患/審計紀錄留在本計劃筆記不搬。落地時轉 reference 慣例格式(### 小節+編號清單;「步驟 N|」偽標題 reference 查無先例,不沿用)。
+governance/review-reports/node-restore-sop-v2/r1-snapshot.md:169:- **r1(2026-08-24,5 席:s1 通才/s2 失敗模式/s3 通用性/arch 架構對齊/ext Codex 外家)**:原始 39 條(s1=11 含 1 併入、s2=9、s3=10、arch=4 含 1⚠、ext=5),去重後 22 個獨立問題,全數折入、零放行。實錘要點:08 撞號(三席)、spec-trace 零 [SN](s1)、MOC 該填不該建(三席)、Check J 覆蓋高估家族(四席:只掃 summary/KEY 只警/FLOW/DEP 零檢查/J-c 只驗存在/「只擋 J-a」低估 J-b J-c)、蓋章半成品靜默綠(三席)、承重牆 grep 靜默漏抓 DI/宣告式(s3 blocker)、自足性審計借名弱化→改用變體 B 雙 agent(s3 blocker)、選擇性引用 openwiki(s3)、步驟 5 測試碼與「純文件」自相矛盾(兩席)、升格序列缺改標步驟(ext)、併發零交代(兩席)、種子三項靜默丟棄(s3)、62≠59(兩席)、link-candidates 掛名未接線(s1)、非 git 考古來源(s3)、佚失=合格產出(s2)、停手線改可數(s2)、合約候選章節格式(s3)、放置層照 05/06 慣例(arch major,立 d4)、探針落點指名(arch)、變體 B 補進 PRIOR-ART(arch ⚠)、回滾範圍講清(s1)。
+governance/review-reports/node-restore-sop-v2/r1-snapshot.md:172:- **r2(2026-08-24,5 席:s1 通才/s2 折入銜接查證/s3 可執行性走查/arch 架構對齊 delta/ext Codex 外家)**:原始 25 條(s1=4、s2=6、s3=6——★首記寫 5,漏數走查席用段落標題寫的步驟 1 minor,grep 逐檔數才抓回,當場更正★、arch=4 含 2⚠、ext=5),全數折入、零放行。實錘要點:推測:/佚失: 語序硬規定(走查席真跑重現 blocker,J-b 對句中標記照樣紅)、變體 B 引用走樣三面向(選配→強制沒標出處/漏 Verification+verified_by 留痕/self-audit 錯綁+批次 vs 逐節點,三席+外家合圍)、guard 三指令裸寫序列照敲報錯(ext)、「合約候選放哪篇」r1 只訂了格式沒訂位置(走查席:13 篇先例全在 Projects)、★第四條被本文自己加降級選項(s2)、「四篇同款」收貨句未通過自稱的驗證(s2)、「八類」清單漏 SessionStart hook 第四處(ext+s2)、d3 殘留 08 舊字(s2,摘要澄清行處理)、原子 commit 與審計後修正銜接(s2)、舊節點 diff 更新前置(s1)、樣本=1 實為 0(s1)、考古機密外洩整類缺口(s1)、16.3% 樣本範圍誇大(s2)、Check J「合約級沒瞎編」仍高估(ext)、步驟 1 與 lumos 優先鐵則衝突未豁免(s3)、system 骨架無 DECISION 行(s3)、summary 手改陷阱(s3)、[S1] 巢狀層級⚠裁獨立大節(arch)、步驟N|偽標題落地轉格式(arch)。
+governance/review-reports/node-restore-sop-v2/r1-ext-raw.txt:146:    15	  KEY:★d3/d4 文字澄清(2026-08-24)★:d3 context 的「08 檔」是撞號發現前的歷史用語,現行編號以 d4 的 09 為準;d4 的「三處」是 r2 發現第四處(SessionStart hook)之前的清單,現行以 [S3] 的五處為準;正式澄清已立 d5(r3 架構席:先例=新決策+KEY 行雙軌,單靠 KEY 行是第二種做法;r3 通才席:decisions 指令只印決策內容前 100 字,光靠本行照樣看不到)
+governance/review-reports/node-restore-sop-v2/r1-ext-raw.txt:177:    46	    context: r1 架構席對照 commands/05、06 慣例:多步驟流程的鄰居一律薄表+指到別處(skill 或 reference.md),敘事本體不進 commands;且 08-自動跑的.md 已存在,r1 三席獨立抓到撞號。另一選項①照原案全文塞 commands/08:排除,撞號+立第二種先例;②不建子檔只改 INDEX:d3 已排除過,路由通了內容還是空的
+governance/review-reports/node-restore-sop-v2/r1-ext-raw.txt:183:    52	    context: r2 s2 抓到 d3 殘留 08 舊字、鏡像核對抓到 d4 三處過時;第一版只用摘要 KEY 行澄清,r3 架構席判第二種做法(先例=自足性審計 d2「以新決策澄清舊決策」+驗證層去模型化的 decision-add+KEY 行雙軌),r3 通才席實測 decisions 指令只印決策內容前 100 字、KEY 行澄清照指定查詢路徑看不到。另一選項①維持 KEY 行單軌:排除,查詢路徑失效+違反先例;②decision-supersede d3/d4:排除,兩決策核心裁定(文件層/放置)未翻案,只有清單字過時
+governance/review-reports/node-restore-sop-v2/r1-ext-raw.txt:232:   101	最典型的觸發:**要在龐大既有 codebase 上加新功能**——先把新功能會碰到的關聯面照本 SOP 還原成節點(只記 codebase 能證的事實),新功能的設計踩在這些節點上:沿用既有框架與元件、不破壞架構、不重造輪子。還原產出直接變成新功能 spec 的護欄素材:共用面清單=不准亂動的承重牆,合約候選=改了就壞的紅線(對應種子影片 forbidden 段的機械化來源);下游 code-loop 的架構對齊席負責抓「跟既有寫法不一樣」。一魚兩吃:這塊功能落成節點,新功能拿到正確脈絡。
+governance/review-reports/node-restore-sop-v2/r1-ext-raw.txt:268:   137	還原批次收尾先跑一道**引用實體機械掃描**(世界解:DocAgent Verifier 的便宜版):機器逐篇掃「筆記引用的檔名/函式/欄位是否真的存在於 code」(refcheck/`lumos search --code` 既有零件)——防編造第一道濾網,比派 agent 便宜一個數量級、可重算;掃完才跑**變體 B 交叉審計**,照 reference.md 原文的機制原樣用(r2 三席抓到上一版借名走樣,此處全對齊):**逐節點**各派兩個乾淨 agent——階段一只讀單篇筆記,萃取 **12~15 條可被程式碼驗證的具體主張、且逐條必須可證偽**(原文兩句分開抄,別合併——「可驗證」比「可證偽」寬);階段二只讀 code(禁讀 docs)逐條判 ✅/❌/❓。處置照原文:❌=修筆記(**以 code 為準**;code 本身是 bug 就開 Issue,不改筆記遷就)→**建 Verification 紀錄→相關 Systems 的 `verified_by` 雙向同步**——這就是出口的正式留痕。留痕**雙軌**:除上述 Verification+verified_by 外,逐節點**照樣蓋 `lumos self-audit`**——r2 曾判「錯綁」刪掉,r3 翻案:L4 清帳(同構的雙 agent 交叉審計)30 節點全蓋章+Verification 雙軌是真實先例,且體檢 Check S 只讀 self_audit 欄,不蓋=已審過的節點被誤報「從未審過」。r2 那次只看指令說明沒對先例,正是★第四條要防的「只信一個來源」——這次是審查員自己犯,r3 抓回。**PASS 批次也建一篇批次 Verification**(L4 先例同款),不是只有 ❌ 才留(r3 外家抓到 PASS 零留痕缺口)。**兩條本 SOP 自加的延伸裁定(變體 B 原文是選配巡檢手法,沒有這兩條;明標出處是本案,r2 架構席抓到上一版沒標)**:①還原批次**必跑**——理由:30 個被點名過期節點的清帳(有偏樣本:被軟閘點名的高危群)實測 16.3% 主張與 code 不一致,還原型節點同屬高危;②❓(找不到驗證點)不可原樣放行——回頭把該句改標 `推測:`/`佚失:` 或修掉。審計抓到要修的,**開新 commit、重跑 lint**——步驟 4 的「同一次 commit」管首次落節點的原子性,「中間態」專指「蓋了章但身分標記沒寫完」;審計後修正是正常的後續 commit,不算中間態(r2 抓到兩步銜接沒講)。之後要動手改 code,從這裡起全走現行流程:`lumos impact`、design-loop、code-loop。**警語(種子影片吸收)**:還原完直接動 production 級 code 前,至少讓改動走完 code-loop;還原節點內容日後被行為事實打臉→照 CLAUDE.md 既有規則立事故筆記,錯的節點標作廢或 supersede,這就是還原內容的收回路徑。
+governance/review-reports/node-restore-sop-v2/r1-ext-raw.txt:276:   145	1. [S1] `skills/lumos-project-notes/reference.md` 新增**獨立 `##` 大節**〈節點還原(brownfield 冷啟動)〉、目錄加一項——體量是端到端流程,照「自足性審計」自佔目錄項的先例,不塞進「合約性標記」大節當子節(r2 架構席 ⚠ 裁定;d4「與重生守衛相鄰」指主題相近、互設指標,不指同一大節)。內容範圍明定(r3 抓到兩讀)=步驟 0–6 本體+兩條停手線+「機械把關真實範圍」技術事實(隱患第一條);PRIOR-ART/其餘隱患/審計紀錄留在本計劃筆記不搬。落地時轉 reference 慣例格式(### 小節+編號清單;「步驟 N|」偽標題 reference 查無先例,不沿用)。
+governance/review-reports/node-restore-sop-v2/r1-ext-raw.txt:300:   169	- **r1(2026-08-24,5 席:s1 通才/s2 失敗模式/s3 通用性/arch 架構對齊/ext Codex 外家)**:原始 39 條(s1=11 含 1 併入、s2=9、s3=10、arch=4 含 1⚠、ext=5),去重後 22 個獨立問題,全數折入、零放行。實錘要點:08 撞號(三席)、spec-trace 零 [SN](s1)、MOC 該填不該建(三席)、Check J 覆蓋高估家族(四席:只掃 summary/KEY 只警/FLOW/DEP 零檢查/J-c 只驗存在/「只擋 J-a」低估 J-b J-c)、蓋章半成品靜默綠(三席)、承重牆 grep 靜默漏抓 DI/宣告式(s3 blocker)、自足性審計借名弱化→改用變體 B 雙 agent(s3 blocker)、選擇性引用 openwiki(s3)、步驟 5 測試碼與「純文件」自相矛盾(兩席)、升格序列缺改標步驟(ext)、併發零交代(兩席)、種子三項靜默丟棄(s3)、62≠59(兩席)、link-candidates 掛名未接線(s1)、非 git 考古來源(s3)、佚失=合格產出(s2)、停手線改可數(s2)、合約候選章節格式(s3)、放置層照 05/06 慣例(arch major,立 d4)、探針落點指名(arch)、變體 B 補進 PRIOR-ART(arch ⚠)、回滾範圍講清(s1)。
+governance/review-reports/node-restore-sop-v2/r1-ext-raw.txt:303:   172	- **r2(2026-08-24,5 席:s1 通才/s2 折入銜接查證/s3 可執行性走查/arch 架構對齊 delta/ext Codex 外家)**:原始 25 條(s1=4、s2=6、s3=6——★首記寫 5,漏數走查席用段落標題寫的步驟 1 minor,grep 逐檔數才抓回,當場更正★、arch=4 含 2⚠、ext=5),全數折入、零放行。實錘要點:推測:/佚失: 語序硬規定(走查席真跑重現 blocker,J-b 對句中標記照樣紅)、變體 B 引用走樣三面向(選配→強制沒標出處/漏 Verification+verified_by 留痕/self-audit 錯綁+批次 vs 逐節點,三席+外家合圍)、guard 三指令裸寫序列照敲報錯(ext)、「合約候選放哪篇」r1 只訂了格式沒訂位置(走查席:13 篇先例全在 Projects)、★第四條被本文自己加降級選項(s2)、「四篇同款」收貨句未通過自稱的驗證(s2)、「八類」清單漏 SessionStart hook 第四處(ext+s2)、d3 殘留 08 舊字(s2,摘要澄清行處理)、原子 commit 與審計後修正銜接(s2)、舊節點 diff 更新前置(s1)、樣本=1 實為 0(s1)、考古機密外洩整類缺口(s1)、16.3% 樣本範圍誇大(s2)、Check J「合約級沒瞎編」仍高估(ext)、步驟 1 與 lumos 優先鐵則衝突未豁免(s3)、system 骨架無 DECISION 行(s3)、summary 手改陷阱(s3)、[S1] 巢狀層級⚠裁獨立大節(arch)、步驟N|偽標題落地轉格式(arch)。
+    52	                        summ = json.dumps(inp, ensure_ascii=False)[:200]
+    53	                    calls.append((name, summ))
+    54	    return calls
+    55	
+    56	
+    57	def judge(calls, expect, forbid_before):
+    58	    """回 (passed, reason, first_hit_index)。
+    59	    expect:每條 regex 必須各自命中至少一次(對 Bash 指令字串比對)。
+    60	    forbid_before:任何一條命中(工具名或 Bash 指令字串)若發生在「第一條 expect 命中」之前 → 不過。"""
+    61	    exp_idx = {}
+    62	    for i, (name, summ) in enumerate(calls):
+    63	        hay = summ if name == "Bash" else f"{name}:{summ}"   # 非 Bash 工具用「工具名:參數」比,紀律題可寫 Edit:docs/…
+    64	        for e in expect:
+    65	            if e not in exp_idx and re.search(e, hay):
+    66	                exp_idx[e] = i
+    67	    missing = [e for e in expect if e not in exp_idx]
+    68	    if missing:
+    69	        return False, f"沒敲到期望指令: {missing}", None
+    70	    first = min(exp_idx.values())
+    71	    for i, (name, summ) in enumerate(calls[:first]):
+    72	        if name in ("Read", "Grep", "Glob") and "/.claude/skills/" in summ:
+    73	            continue   # 讀索引/skill 手冊是期望行為,不算「先做了別的」
+    74	        for f in forbid_before:
+    75	            if re.search(f, name) or (name == "Bash" and re.search(f, summ)):
+    76	                return False, f"在敲 lumos 之前先做了 {name}: {summ[:80]!r}", first
+    77	    return True, "ok", first
+    78	
+    79	
+    80	def make_sandbox(src):
+    81	    """複製工作樹到臨時目錄,並★切斷所有能把東西推出去的路★。回副本路徑。
+    82	
+  1208	17. **Verification 巡檢時機**：開工前、commit 圖譜更新前、重大環境/依賴/schema 變更後，跑健康檢查 eval 指令掃 `status: stale` 和過期 `valid_until`
+  1209	18. **verified_by 雙向同步**：新增/廢棄 Verification 時，**必須同步**更新對應 Systems 的 `verified_by`；改 Systems 時優先讀 `verified_by` 而非跑 backlinks（backlinks 含 Issues/Sessions 雜訊）
+  1210	
+  1211	### 指令怎麼找(別憑記憶,開索引)
+  1212	
+  1213	**`commands/INDEX.md`**(本 skill 目錄下)是 80 個指令的總目錄:先看「grep 衝動對照表」,再按你正在做的事開八個子檔之一(進場查脈絡 / 動手前算波及 / 寫回圖譜 / 自檢與健康 / 設計審查迴圈 / 代碼審與推送 / 安裝維運 / 自動跑的)。每個子檔都短,只開需要的那一個。
+  1214	
+  1215	最常用六條(其餘開索引):
+  1216	| 你在想… | 敲 |
+
+codex
+1. **blocker**  
+   引句:「機器逐篇掃『筆記引用的檔名/函式/欄位是否真的存在於 code』(refcheck/`lumos search --code` 既有零件)」  
+   問題:`refcheck` 只抽取 inline code 中含 `/`、且首段是 repo 頂層目錄的「檔案路徑[:行號]」，完全不解析函式名或欄位名；裸函式、類別、欄位會因沒有 `/` 被跳過。`lumos search --code` 更不是搜尋 codebase：它仍只遍歷 `env.notes`，`--code` 僅表示把筆記內 fenced/inline code 納入全文搜尋。因此照本句實作，函式／欄位存在性根本沒有被掃，甚至可得到「零 claim、rc 0」的假綠結果。這直接擊穿步驟 6 宣稱的第一道防編造濾網。  
+   查證:`/tmp/node-restore-sop-v2-r1.md:137`; `scripts/lumos:1637-1651`; `scripts/lumos:1670-1676`; `scripts/lumos:1717-1732`; `scripts/lumos:10752-10776`; `scripts/lumos:13706-13710`; `scripts/lumos:13736-13748`; `scripts/lumos:15529-15534`; `scripts/lumos:15685-15688`
+
+2. **major**  
+   引句:「進場判斷→`lumos search/context`(有→照慣例用;殘缺→diff 補;沒有→往下)」  
+   問題:`search/context` 不是可執行命令形狀，且兩者都要求 positional argument：`search <term>`、`context <note>`。正確流程應是先 `lumos search <詞>`，再把命中的精確節點交給 `lumos context <節點>`。目前 [S2] 是要求落地者把這一排寫入「何時敲哪個指令」薄查表，照字面會產出不能執行的指引；使用場景第 103 行的 `lumos search`/`context` 同樣省略必要參數。  
+   查證:`/tmp/node-restore-sop-v2-r1.md:103`; `/tmp/node-restore-sop-v2-r1.md:146`; `scripts/lumos:15529-15531`; `scripts/lumos:6305-6309`；實跑 `python3 scripts/lumos context --help` 顯示必填 `note`，`search --help` 顯示必填 `term`。
+
+3. **major**  
+   引句:「兩情境軌跡的交集就是共用基礎設施的機械化定義」  
+   問題:正、負兩個情境的軌跡交集，只能證明「這兩次執行都走過」，不能證明它是其他功能也共用的基礎設施，更不能取代「誰還共用它」的掃描。測試啟動器、登入、遙測、快取雜訊都可能進交集；反之條件分支或取樣不足也會漏掉真正共用面。照字面把交集直接登記成承重牆，會製造假共用面與漏共用面。調研原檔也只是將交集稱為共用基礎設施，沒有提出可排除執行雜訊或外推到其他消費者的驗證條件。  
+   查證:`/tmp/node-restore-sop-v2-r1.md:121`; `governance/review-reports/node-restore-sop/web-research.md:6-7`
+
+4. **major**  
+   引句:「『八類』活文字五處……落地時拿『八類』『八個子檔』兩式全 repo 再掃一次防第六處」  
+   問題:第六處現在已經存在，不是待落地時才可能出現：`skills/lumos-project-notes/reference.md` 仍寫「開八個子檔之一」。[S3] 的明列落地面沒有包含它，而 [S1] 又要求修改同一份 `reference.md`；照清單實作後會留下 active 指引自相矛盾，九類索引仍有一個入口宣稱八類。  
+   查證:`/tmp/node-restore-sop-v2-r1.md:147`; `skills/lumos-project-notes/reference.md:1211-1213`; 另五處現況見 `CLAUDE.md:31`, `scripts/templates/graph-discipline.md:29`, `scripts/hooks/claude/lumos-entry-hook.py:74`, `skills/lumos-project-notes/SKILL.md:9`, `skills/lumos-project-notes/commands/INDEX.md:24`
+
+雙軌留痕本身核對一致：變體 B 原文要求 ❌ 建 Verification 並同步 `verified_by`；`self-audit` 是節點級戳記，Check S 只讀該欄；L4 清帳確實同時有批次 Verification 與 30 節點逐篇 `self-audit`。PASS 批次建 Verification 則是本 SOP 明標的延伸，與 L4 的 pass Verification 先例相符。查證:`skills/lumos-project-notes/reference.md:1034-1035,1038-1052`; `docs/lumos-toolchain-knowledge/Verification/2026-08-21_L4交叉審計30節點清帳.md:1-13,60-64`
+
+最嚴重 severity：blocker
+tokens used
+122,048
+1. **blocker**  
+   引句:「機器逐篇掃『筆記引用的檔名/函式/欄位是否真的存在於 code』(refcheck/`lumos search --code` 既有零件)」  
+   問題:`refcheck` 只抽取 inline code 中含 `/`、且首段是 repo 頂層目錄的「檔案路徑[:行號]」，完全不解析函式名或欄位名；裸函式、類別、欄位會因沒有 `/` 被跳過。`lumos search --code` 更不是搜尋 codebase：它仍只遍歷 `env.notes`，`--code` 僅表示把筆記內 fenced/inline code 納入全文搜尋。因此照本句實作，函式／欄位存在性根本沒有被掃，甚至可得到「零 claim、rc 0」的假綠結果。這直接擊穿步驟 6 宣稱的第一道防編造濾網。  
+   查證:`/tmp/node-restore-sop-v2-r1.md:137`; `scripts/lumos:1637-1651`; `scripts/lumos:1670-1676`; `scripts/lumos:1717-1732`; `scripts/lumos:10752-10776`; `scripts/lumos:13706-13710`; `scripts/lumos:13736-13748`; `scripts/lumos:15529-15534`; `scripts/lumos:15685-15688`
+
+2. **major**  
+   引句:「進場判斷→`lumos search/context`(有→照慣例用;殘缺→diff 補;沒有→往下)」  
+   問題:`search/context` 不是可執行命令形狀，且兩者都要求 positional argument：`search <term>`、`context <note>`。正確流程應是先 `lumos search <詞>`，再把命中的精確節點交給 `lumos context <節點>`。目前 [S2] 是要求落地者把這一排寫入「何時敲哪個指令」薄查表，照字面會產出不能執行的指引；使用場景第 103 行的 `lumos search`/`context` 同樣省略必要參數。  
+   查證:`/tmp/node-restore-sop-v2-r1.md:103`; `/tmp/node-restore-sop-v2-r1.md:146`; `scripts/lumos:15529-15531`; `scripts/lumos:6305-6309`；實跑 `python3 scripts/lumos context --help` 顯示必填 `note`，`search --help` 顯示必填 `term`。
+
+3. **major**  
+   引句:「兩情境軌跡的交集就是共用基礎設施的機械化定義」  
+   問題:正、負兩個情境的軌跡交集，只能證明「這兩次執行都走過」，不能證明它是其他功能也共用的基礎設施，更不能取代「誰還共用它」的掃描。測試啟動器、登入、遙測、快取雜訊都可能進交集；反之條件分支或取樣不足也會漏掉真正共用面。照字面把交集直接登記成承重牆，會製造假共用面與漏共用面。調研原檔也只是將交集稱為共用基礎設施，沒有提出可排除執行雜訊或外推到其他消費者的驗證條件。  
+   查證:`/tmp/node-restore-sop-v2-r1.md:121`; `governance/review-reports/node-restore-sop/web-research.md:6-7`
+
+4. **major**  
+   引句:「『八類』活文字五處……落地時拿『八類』『八個子檔』兩式全 repo 再掃一次防第六處」  
+   問題:第六處現在已經存在，不是待落地時才可能出現：`skills/lumos-project-notes/reference.md` 仍寫「開八個子檔之一」。[S3] 的明列落地面沒有包含它，而 [S1] 又要求修改同一份 `reference.md`；照清單實作後會留下 active 指引自相矛盾，九類索引仍有一個入口宣稱八類。  
+   查證:`/tmp/node-restore-sop-v2-r1.md:147`; `skills/lumos-project-notes/reference.md:1211-1213`; 另五處現況見 `CLAUDE.md:31`, `scripts/templates/graph-discipline.md:29`, `scripts/hooks/claude/lumos-entry-hook.py:74`, `skills/lumos-project-notes/SKILL.md:9`, `skills/lumos-project-notes/commands/INDEX.md:24`
+
+雙軌留痕本身核對一致：變體 B 原文要求 ❌ 建 Verification 並同步 `verified_by`；`self-audit` 是節點級戳記，Check S 只讀該欄；L4 清帳確實同時有批次 Verification 與 30 節點逐篇 `self-audit`。PASS 批次建 Verification 則是本 SOP 明標的延伸，與 L4 的 pass Verification 先例相符。查證:`skills/lumos-project-notes/reference.md:1034-1035,1038-1052`; `docs/lumos-toolchain-knowledge/Verification/2026-08-21_L4交叉審計30節點清帳.md:1-13,60-64`
+
+最嚴重 severity：blocker
