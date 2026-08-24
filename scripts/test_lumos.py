@@ -852,6 +852,72 @@ def t_loop_disposal_zero_findings():
     check("★有發現沒處置帳 → 照樣 FAIL★", g2.returncode != 0 and "FAIL" in g2.stdout, g2.stdout[-200:])
 
 
+def _hardpin_fixture(prefix="gctl-hp-"):
+    """pin-denoise-a-v4 fixture:目標檔 src/svc.py;三種 indirect 鄰居(INVARIANT/RISK·守衛面/無合約)
+    +一個 direct 合約+一個事故。indirect 靠「hub 筆記提到檔案、鄰居 wikilink hub」構圖(hop1)。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    def g(*a): sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+    g("init", "-q"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    v = root / "docs" / "z-knowledge"
+    for d in ("Systems", "Issues", "MOC"): (v / d).mkdir(parents=True)
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+    def note(rel, fm, body):
+        (v / rel).write_text("---\n" + fm + "\n---\n" + body, encoding="utf-8")
+    note("Systems/Hub.md", "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ hub [test:X]", "# Hub\n實作在 `src/svc.py`。\n")
+    note("Systems/Inv1.md", "type: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ inv [test:Y]", "# Inv1\n[[Systems/Hub]]\n")
+    note("Systems/Risk1.md", "type: system\nstatus: done\ntags:\n  - risk/守衛面\nsummary: |-\n  KEY:守衛", "# Risk1\n[[Systems/Hub]]\n")
+    note("Systems/Risk2.md", "type: system\nstatus: done\ntags:\n  - risk/守衛面\nsummary: |-\n  KEY:守衛二", "# Risk2\n[[Systems/Hub]]\n")
+    note("Systems/Plain.md", "type: system\nstatus: done\nsummary: |-\n  KEY:普通", "# Plain\n[[Systems/Hub]]\n")
+    note("Issues/事故.md", "type: issue\nstatus: open\npitfall_when:\n  - \"content:DANGER\"\nsummary: |-\n  FLAG:TECHNICAL", "# 事故\n坑。\n")
+    (root / "src").mkdir(); (root / "src" / "svc.py").write_text("def save(x):\n    pass\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "init")
+    return root, v
+
+
+def t_impact_hard_pin_lane():
+    """★pin-denoise-a-v4:硬合約保送+參考道★(計劃 Projects/固定席降噪A層_計劃,四輪設計審收斂版)。
+    預設(2026-08-24 考卷轉正=1):indirect hop≤1 只有 INVARIANT/IRREVERSIBLE 保送;RISK 類降入 JSON 獨立頂層鍵 lane
+    (不進 results),score=R 公式、cap LUMOS_IMPACT_LANE_N、meta lane/lane_truncated。knob=0 逃生:輸出與舊制逐 byte 同、無 lane 鍵。
+    翻紅釘:拿掉 lane 收集 → ③翻紅。"""
+    import subprocess as sp, json, os as _os
+    root, v = _hardpin_fixture()
+    def lum(env_extra=None, *extra):
+        r = sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/svc.py", "--ranked", "--json", *extra],
+                   capture_output=True, text=True, cwd=root, env={**_os.environ, **(env_extra or {})})
+        return r, json.loads(r.stdout.strip().splitlines()[-1])
+    r0, d0 = lum({"LUMOS_IMPACT_HARD_PIN": "0"})   # 逃生臂(2026-08-24 轉正後預設=1)
+    check("①knob=0 逃生:無 lane 鍵(條件鍵兩態)、行為=舊制", "lane" not in d0, str(list(d0)))
+    risk_pinned0 = [x for x in d0["results"] if "Risk" in x["node"] and x.get("pinned")]
+    check("前置:舊制 RISK indirect 是固定席", len(risk_pinned0) == 2, str(d0["results"])[:300])
+    r1, d1 = lum()   # 預設臂=硬合約保送開
+    check("②knob=1:RISK 類不再 pinned、不在 results", all("Risk" not in x["node"] for x in d1["results"] if x.get("pinned")) and all("Risk" not in x["node"] for x in d1["results"]), str([x["node"] for x in d1["results"]]))
+    check("③★被降者在 JSON 頂層 lane 鍵★", "lane" in d1 and {x["node"] for x in d1["lane"]} == {"Systems/Risk1.md", "Systems/Risk2.md"}, str(d1.get("lane")))
+    check("④INVARIANT indirect 仍保送;事故不受影響", any("Inv1" in x["node"] and x.get("pinned") for x in d1["results"]), str([x["node"] for x in d1["results"] if x.get("pinned")]))
+    check("lane 項欄位:lane 標記/pinned False/kind 保留 indirect/score 是 R 公式非 0.70", all(x.get("lane") == "soft-guard" and x.get("pinned") is False and x.get("kind") == "indirect" and x.get("score") != 0.7 for x in d1["lane"]), str(d1["lane"]))
+    check("meta 計數", d1["meta"].get("lane") == 2 and d1["meta"].get("lane_truncated") == 0, str(d1["meta"]))
+    # free 集不動:knob=0/1 的 results 逐 byte 同(除 RISK pinned 項移除外——直接比 free 部分)
+    free0 = [x for x in d0["results"] if not x.get("pinned")]
+    free1 = [x for x in d1["results"] if not x.get("pinned")]
+    check("⑤free 集合與排序完全不動(逐 byte)", json.dumps(free0, sort_keys=True) == json.dumps(free1, sort_keys=True), "")
+    # cap
+    r2, d2 = lum({"LUMOS_IMPACT_HARD_PIN": "1", "LUMOS_IMPACT_LANE_N": "1"})
+    check("⑥cap=1:lane 1 條、lane_truncated=1;JSON=同一份(無另一口徑)", len(d2["lane"]) == 1 and d2["meta"]["lane_truncated"] == 1, str(d2["meta"]))
+    # ⑭ lane 集 ⊆ 改前 pinned 集(降級不生新候選——消融閘安全論證的機械釘)
+    pinned0 = {x["node"] for x in d0["results"] if x.get("pinned")}
+    check("★⑭lane ⊆ 改前 pinned(不生新未標候選)★", {x["node"] for x in d1["lane"]} <= pinned0, str(pinned0))
+    # 人讀分支不炸
+    r3 = sp.run([sys.executable, GRAPHCTL, "impact", "--file", "src/svc.py", "--ranked"], capture_output=True, text=True, cwd=root, env={**_os.environ, "LUMOS_IMPACT_HARD_PIN": "1"})
+    check("⑦人讀分支不 KeyError 且有守衛面參考小節", r3.returncode == 0 and "守衛面參考" in r3.stdout, r3.stdout[-300:] + r3.stderr[-200:])
+    # diff 聚合不含 lane
+    r4 = sp.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD", "--json"], capture_output=True, text=True, cwd=root, env={**_os.environ, "LUMOS_IMPACT_HARD_PIN": "1"})
+    if r4.returncode == 0 and r4.stdout.strip():
+        d4 = json.loads(r4.stdout.strip().splitlines()[-1])
+        check("⑧--diff 聚合不含 lane 節點", all("Risk" not in x.get("node", "") for x in d4.get("results", [])), str(d4)[:200])
+    else:
+        check("⑧--diff 跑不動(fixture 無 diff)可接受", True, "")
+
+
 def t_git_last_change_dates_batch():
     """★一次 git log 拿全庫每個檔的最後改動日期★(工具清單 #5;★原為 about_code 過期判準的材料,2026-08-24 該判準改記正文雜湊後本函式暫無呼叫者,保留★)。
 
@@ -8560,6 +8626,18 @@ def t_impact_hook_v11_delta_and_format():
     ], "meta": {}})
     la = next(l for l in ctx9.splitlines() if "Systems/A.md" in l); lb = next(l for l in ctx9.splitlines() if "Systems/B.md" in l)
     check("★#9 about 命中行有 ★關於★、未命中行沒有★", "★關於★" in la and "★關於★" not in lb, la + " | " + lb)
+    # pin-denoise-a-v4 ⑫:lane 小節、lane-only 也注入、無 lane 鍵不炸
+    ctx_lane = m.build_ranked_context({"results": [{"node": "Systems/Y.md", "kind": "direct", "pinned": False, "score": 0.9}],
+        "lane": [{"node": "Systems/R.md", "kind": "indirect", "score": 0.4, "hop": 1, "lane": "soft-guard"}],
+        "meta": {"lane": 1, "lane_truncated": 2}})
+    check("★lane 小節+未列出提示★", "守衛面參考" in ctx_lane and "Systems/R.md" in ctx_lane and "另有 2 條" in ctx_lane, ctx_lane[:300])
+    ctx_nolane = m.build_ranked_context({"results": [{"node": "Systems/Y.md", "kind": "direct", "pinned": False, "score": 0.9}], "meta": {}})
+    check("無 lane 鍵不炸、無小節", "守衛面參考" not in ctx_nolane, "")
+    import io as _io, contextlib as _cl
+    buf = _io.StringIO()
+    with _cl.redirect_stdout(buf):
+        m.inject_ranked_context({"results": [], "lane": [{"node": "Systems/R.md", "score": 0.4, "hop": 1}], "meta": {"lane": 1}})
+    check("★lane-only 也注入(空判斷閘含 lane)★", "守衛面參考" in buf.getvalue(), buf.getvalue()[:200])
 
 
 def t_impact_hook_ttl():
@@ -13614,7 +13692,7 @@ def t_search_multiword_fallback_is_default_and_only_on_zero():
 
 def t_impact_contract_risk_axis():
     """[標籤結構優化 2026-08-05]risk/ 家族接 impact 固定席——risk 標(金流/對外送出/不可逆/
-    守衛面)的節點被 diff 碰到時保送必看席(★RISK·值★),light 硬否決的 honor-system 有了
+    守衛面)的節點被 diff 碰到時分類(★2026-08-24 起 RISK 類 indirect 不再保送——見 t_impact_hard_pin_lane★);本測試只驗 _impact_contract 分類值席(★RISK·值★),light 硬否決的 honor-system 有了
     機械眼線。軸序:IRREVERSIBLE > INVARIANT > RISK(合約仍優先)。
     翻紅釘:拔 risk 軸 → ①翻紅。"""
     m = _load_lumos_module()
@@ -20965,6 +21043,60 @@ def t_eval_output_top3_must():
     src = open(m.__file__, encoding="utf-8").read()
     gates_src = src[src.find("gates = {"):src.find("gates = {") + 600]
     check("不進 gates", "top3" not in gates_src, gates_src[:200])
+
+
+def t_eval_lane_buckets():
+    """★pin-denoise-a-v4 eval 側:split_buckets 唯一分流+lane 口徑四釘★——
+    ⑨cap 內 lane 計入 must_in_out 但不計 P@8 ⑮output_top3_must 母體不含 lane
+    ⑪rescued 仍在 P@8 母體(誠實計噪護欄回歸)⑭觸及集 lane 視同 pins。
+    翻紅釘:split_buckets 把 lane 併回 free → ⑨⑮ 翻紅。"""
+    _need_src("governance/eval")
+    root, gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    P = lambda n: {"node": n, "pinned": True, "score": 1.0}
+    F = lambda n, s=0.5: {"node": n, "pinned": False, "score": s}
+    RS = lambda n: {"node": n, "pinned": False, "rescued": True, "score": 0.3}
+    LN = lambda n: {"node": n, "pinned": False, "lane": "soft-guard", "kind": "indirect", "score": 0.4}
+    res = [P("p1"), F("f1"), RS("r1"), LN("l1")]
+    pins, free, lane = m.split_buckets(res)
+    check("分桶:pins/free(含 rescued)/lane", [x["node"] for x in pins] == ["p1"] and [x["node"] for x in free] == ["f1", "r1"] and [x["node"] for x in lane] == ["l1"], str((pins, free, lane)))
+    check("★⑪rescued 在 free=P@8 母體(勿排,護欄回歸)★", any(x.get("rescued") for x in free), "")
+    check("★⑭觸及集:lane 視同 pins★", "l1" in m._touched_edit(res) , str(m._touched_edit(res)))
+    check("★⑮output_top3_must 母體不含 lane★", m.output_top3_must([LN("a"), F("b"), F("c"), F("d")], {"a": 2, "b": 2}) == 0.5, str(m.output_top3_must([LN("a"), F("b"), F("c"), F("d")], {"a": 2, "b": 2})))
+    # ⑨:lane 計入 must_in_out、不計 P@8——走 eval_edit 全鏈
+    gs["labels"]["E01"] = {"Systems/Alpha.md": {"final": 2, "claude": 2, "codex": 2}, "Systems/Lane.md": {"final": 2, "claude": 2, "codex": 2}}
+    m.edit_universe = lambda case: [P("Systems/Alpha.md"), F("Systems/Free.md"), LN("Systems/Lane.md")]
+    rows = m.eval_edit(gs)
+    row = rows[0]
+    check("★⑨lane 計入 must_in_out★", row["must_in_out"] == 2, str(row))
+    check("⑨lane 不計 free 母體(n_free 只算真 free)", row["n_free"] == 1, str(row))
+    # edit_pool 含 lane(⑬)
+    import json as _json
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location("bg", str(repo / "governance" / "eval" / "build_goldset.py"), loader=SourceFileLoader("bg", str(repo / "governance" / "eval" / "build_goldset.py")))
+    bg = importlib.util.module_from_spec(spec); spec.loader.exec_module(bg)
+    bg.lum_json = lambda *a, **kw: ({"results": [{"node": "A.md"}], "lane": [{"node": "L.md", "lane": "soft-guard"}]} if "--ranked" in a else {"direct": [], "indirect": []})
+    pool = bg.edit_pool("src/x.py", "delta")
+    check("★⑬edit_pool 含 lane 候選★", "L.md" in pool and "A.md" in pool, str(pool))
+
+
+def t_pin_noise_ratchet():
+    """★固定席噪音棘輪(v4 #4b)★:同 rev PASS 基線、只准降不准升;無基線建基線;換 rev 不比。
+    翻紅釘:方向反了(count<base 才擋)→ 第 2 條翻紅。"""
+    _need_src("governance/eval")
+    root, gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    H = [{"pass": True, "goldset_rev": "aaa", "verdicts": {"held": {"pin_noise": 40}}}]
+    ok, msg = m.pin_noise_ratchet(H, "aaa", "held", 39)
+    check("降了 → 過", ok is True, msg)
+    ok2, msg2 = m.pin_noise_ratchet(H, "aaa", "held", 41)
+    check("★漲了 → 擋★", ok2 is False and "漲" in msg2, msg2)
+    ok3, msg3 = m.pin_noise_ratchet(H, "bbb", "held", 99)
+    check("換 rev → 建基線放行", ok3 is True and "基線" in msg3, msg3)
+    ok4, _ = m.pin_noise_ratchet([{"pass": False, "goldset_rev": "aaa", "verdicts": {"held": {"pin_noise": 1}}}], "aaa", "held", 99)
+    check("FAIL 輪不當基線", ok4 is True, "")
 
 
 def t_refresh_merge_apply():

@@ -11,7 +11,7 @@ tags:
 summary: |-
   KEY:[2026-08-23]`git_last_change_dates(repo_root, vault)`——一次 git log 拿 vault 每檔最後改動日期(行程內快取;git 缺席回 {} fail-open)。是 about_code 過期判準的材料(計劃 [[Projects/固定席扇出降權_計劃]] #5):逐篇 83 次 5.3s vs 批次 0.22s;★必帶 -c core.quotepath=false★,vault 路徑帶中文目錄名,沒旗標整條路徑被八進位跳脫、表是空的且不報錯(翻紅釘實證連英文檔都撈不到)。尚未接進 impact,只是原語
   KEY:[2026-08-05]檢索考卷加 synonym 類(toolchain 4 題/landmark 3 題,查詢用別名期望命中帶 aliases 節點;檢索實跑 ground、單標註者、goldset 註記題集變更)——aliases 欄的貢獻自此每週考卷自動量;出題日 held 基線:toolchain ranked nDCG@5=0.789、landmark=0.840
-  KEY:[2026-08-05 標籤收編]context 頭部攤出 type/status 以外全部 tag 家族(priority/scope/flag/risk…,`家族:值` 併入 meta 行)——寫給 AI 的分類資訊原本在進場主讀路徑隱形 [test:t_context_header_extra_tag_families];impact 固定席加第三軸 RISK·值(risk/ 標節點保送必看,軸序 IRREVERSIBLE>INVARIANT>RISK) [test:t_impact_contract_risk_axis]
+  KEY:[2026-08-05 標籤收編]context 頭部攤出 type/status 以外全部 tag 家族(priority/scope/flag/risk…,`家族:值` 併入 meta 行)——寫給 AI 的分類資訊原本在進場主讀路徑隱形 [test:t_context_header_extra_tag_families];impact 合約軸 RISK·值分類(軸序 IRREVERSIBLE>INVARIANT>RISK) [test:t_impact_contract_risk_axis];★2026-08-24 pin-denoise-a-v4:RISK 類 indirect 不再保送必看——LUMOS_IMPACT_HARD_PIN=1 時降入 JSON 頂層 lane 參考道(預設 0 待考卷轉正)[test:t_impact_hard_pin_lane]★
   KEY:[2026-08-05]search 排序加 aliases 欄(權重 3.5,略低於標題 4.0)——frontmatter aliases list 進 BM25F;同義詞落空(搜「作廢」圖譜寫「沖銷」)的最便宜解,寫入者留同義詞一次、檢索受益永久 [test:t_search_aliases_field]
   KEY:[2026-08-04]+quote-check(vault-free 讀命令):報告引句逐條對回凍結快照(_quote_norm 正規化;rc0 全 ok/rc1 miss/rc2 IO或零引句)——disposal 閘的④號合取同源消費 [test:t_quote_check_normalization_and_verdict]
   FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出(context/show 另寫 usage-log 事件帳;doctor --ci 寫 governance-log) → return 0(查無/正則錯=非0)

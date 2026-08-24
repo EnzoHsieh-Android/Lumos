@@ -156,8 +156,9 @@ def edit_cases(n=20):
 
 def edit_pool(file, delta):
     payload = json.dumps({"query": delta, "prospective": {}})
-    ranked = lum_json("impact", "--file", file, "--ranked", "--top", "8",
-                      "--stdin-payload", "--json", stdin=payload).get("results", [])
+    _rk = lum_json("impact", "--file", file, "--ranked", "--top", "8",
+                   "--stdin-payload", "--json", stdin=payload)
+    ranked = _rk.get("results", []) + _rk.get("lane", [])   # v4:lane 候選人看得到,要進未來標註池
     legacy = lum_json("impact", "--file", file, "--json")
     legacy_nodes = [x["node"] for x in legacy.get("direct", [])[:5]] + \
                    [x["node"] for x in legacy.get("indirect", [])[:5]]

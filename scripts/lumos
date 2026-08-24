@@ -14424,6 +14424,7 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
     if ranked or incidents_only:
         query = (_payload.get("query") or "") if stdin_payload else ""
         results = []
+        lane_raw = []   # 參考道原料(--incidents-only 不進 indirect 迴圈也要有定義)
         # 固定席:事故(kind=incident)恆固定
         for x in all_incidents:
             results.append({"node": x["node"], "kind": "incident", "pinned": True,
@@ -14455,6 +14456,14 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                                 "score": round(_dbase + (1.0 - _dbase) * L, 4), "L": round(L, 4),
                                 "hit": x.get("hit"), "contract": x.get("contract")})
             _pin_hop = int(_impact_knob("LUMOS_IMPACT_PIN_HOP", 1))
+            # ★pin-denoise-a-v4(2026-08-24,四輪設計審收斂)★:硬合約保送——knob=1 時 indirect 保送只認
+            # INVARIANT/IRREVERSIBLE;RISK·* 類(樞紐筆記搭便車,held 噪音 58/96 的主力)降入「參考道」:
+            # ★獨立容器 lane_raw,自始不進 results★(pinned:False 會被四處「非 pinned=free」分流吃回自由席、
+            # 再被動態門檻砍出輸出——v3 r2 實測);JSON 用獨立頂層鍵 "lane"(決策 d2:沒學過 lane 的讀者
+            # 結構性不受影響,diff 聚合/hook free 桶/守衛全免改)。
+            # ★2026-08-24 考卷轉正預設 1(knob=0 留逃生)★:train LANE_N∈{2,3,5} 不敏感取 3;
+            # 候選臂 held 噪音 82→39(-52%)、out_top3_must 0.083→0.367、must 兩棘輪零退、九關全過。
+            _hard_pin = int(_impact_knob("LUMOS_IMPACT_HARD_PIN", 1))
             for x in all_indirect:
                 L = lex.get(x["node"], 0.0)
                 hop = x.get("hop", 2)
@@ -14462,6 +14471,14 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 # 合約固定席 hop 上限(v1.2 旋鈕):合約密集圖(Landmark 考卷實證)hop2 合約
                 # 搭便車氾濫(51 席噪音)——收窄後 hop2 合約降入自由席按分數競爭(L≈0 者被閾殺)
                 if contract and hop <= min(eff_depth, _pin_hop):
+                    if _hard_pin and contract not in ("INVARIANT", "IRREVERSIBLE"):
+                        # RISK·* 降參考道:score 用 indirect 自由席同款 R 公式(常數 0.70 全員同分,
+                        # cap 挑誰會退化成字母序——v3 r3 s1f2);kind 保留 indirect(lane 是欄位不是 kind)
+                        G = 0.60 * min(1.0, 2.0 / (2 ** hop))
+                        lane_raw.append({"node": x["node"], "kind": "indirect", "pinned": False,
+                                         "lane": "soft-guard", "score": round(0.60 * L + 0.40 * G, 4),
+                                         "L": round(L, 4), "hop": hop, "contract": contract})
+                        continue
                     results.append({"node": x["node"], "kind": "indirect", "pinned": True,
                                     "score": round(0.40 + 0.30, 4), "L": round(L, 4),
                                     "hop": hop, "contract": contract})
@@ -14519,13 +14536,26 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 rr = dict(r)
                 rr["rescued"] = True
                 rescued.append(rr)
+        # 參考道:產生端 cap(三處輸出同一份,口徑合一——被 cap 砍的必看會誠實掉 must_in_out,棘輪有效)
+        lane_items = []
+        _lane_trunc = 0
+        if lane_raw:
+            lane_raw.sort(key=lambda r: (-r["score"], r.get("hop", 0), r["node"]))   # 同 free/rescued 三鍵慣例
+            _lane_n = int(_impact_knob("LUMOS_IMPACT_LANE_N", 3))
+            lane_items = lane_raw[:_lane_n]
+            _lane_trunc = len(lane_raw) - len(lane_items)
         # 姐妹去冗餘(顯示層,--json 全量不折)
         final = pins + free + rescued
         meta = {"candidates": len(all_direct) + len(all_indirect) + len(all_incidents),
                 "pinned": len(pins), "truncated": truncated, "rescued": len(rescued),
                 "safety_overflow": max(0, len(pins) - int(top))}
+        if lane_raw:
+            meta["lane"] = len(lane_items)
+            meta["lane_truncated"] = _lane_trunc
         if as_json:
             out_obj = {"file": rel_file, "results": final, "meta": meta}
+            if lane_items:   # 條件鍵(同 query_gated/stack_questions 慣例):knob=0 或空 → 鍵不存在
+                out_obj["lane"] = lane_items
             if gated:
                 out_obj["query_gated"] = True
             # 棧別效能追問(pitfalls棧別效能追問_計劃 T2):完整 ranked 模式(非 incidents-only
@@ -14544,6 +14574,12 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
                 print(f"  {r['score']:5.2f} {mk} {r['node']}{ct}{pin}")
             if meta["truncated"]:
                 print(f"  (+{meta['truncated']} 條低分截斷;--json 全量)")
+            if lane_items:
+                print(f"守衛面參考(軟標記樞紐,未被本次改動直接證實相關,{len(lane_items)} 條):")
+                for r in lane_items:
+                    print(f"  {r.get('score', 0):5.2f} hop{r.get('hop', '?')} {r.get('node', '?')}  ({r.get('contract', '')})")
+                if meta.get("lane_truncated"):
+                    print(f"  (另有 {meta['lane_truncated']} 條守衛面參考未列出)")
             if meta["safety_overflow"]:
                 print(f"  safety overflow: {meta['safety_overflow']}")
         return 0

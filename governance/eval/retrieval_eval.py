@@ -134,7 +134,10 @@ def edit_universe(case):
                         "--stdin-payload", "--json"],
                        capture_output=True, text=True, input=payload, cwd=ROOT)
     try:
-        return json.loads(r.stdout.strip().splitlines()[-1]).get("results", [])
+        d = json.loads(r.stdout.strip().splitlines()[-1])
+        # pin-denoise-a-v4:lane 是獨立頂層鍵——合併進候選清單(lane 項保留 "lane" 欄位標記),
+        # 下游一律用明文鍵過濾(split_buckets),不靠 pinned 二分
+        return d.get("results", []) + d.get("lane", [])
     except (ValueError, IndexError):
         return None
 
@@ -156,10 +159,21 @@ def _touched_search(legacy, ranked):
     return out
 
 
+def split_buckets(res):
+    """★三桶分流的唯一實作★(pin-denoise-a-v4 arch:同檔兩種 free 定義=接手的人要猜):
+    pins=pinned 真值;lane=帶 lane 欄位(參考道,不進 P@8 計分、視同 pins 納入未標檢查);
+    free=其餘(★含 rescued——它進 P@8 母體是 2026-08-07 具名護欄「誠實計噪」的刻意設計,勿排★)。"""
+    pins = [x for x in res if x.get("pinned")]
+    lane = [x for x in res if not x.get("pinned") and x.get("lane")]
+    free = [x for x in res if not x.get("pinned") and not x.get("lane")]
+    return pins, free, lane
+
+
 def _touched_edit(res, k=8):
-    """edit 題計分觸及集=free 前 k+全部 pins,保序去重。"""
-    free = [x["node"] for x in res if not x.get("pinned")]
-    pins = [x["node"] for x in res if x.get("pinned")]
+    """edit 題計分觸及集=free 前 k+全部 pins+全部 lane(lane 視同 pins:人看得到就要標過)。"""
+    _p, _f, _l = split_buckets(res)
+    free = [x["node"] for x in _f]
+    pins = [x["node"] for x in _p] + [x["node"] for x in _l]
     seen, out = set(), []
     for n in free[:k] + pins:
         if n not in seen:
@@ -272,8 +286,28 @@ def output_top3_must(res, lab):
     must_total = sum(1 for v in lab.values() if v == 2)
     if must_total == 0:
         return None
-    hit = sum(1 for x in res[:3] if lab.get(x["node"], 0) == 2)
+    top = [x for x in res if not x.get("lane")][:3]   # v4-r2 Codex:lane 是掛「參考」標籤的獨立小節,不算首屏前三
+    hit = sum(1 for x in top if lab.get(x["node"], 0) == 2)
     return round(hit / min(3, must_total), 4)
+
+
+def pin_noise_ratchet(history, rev, split, count):
+    """★固定席噪音棘輪(pin-denoise-a-v4 #4b,2026-08-24 knob 轉正時啟用)★——方向與 must 棘輪相反:只准降不准升。
+    比同 goldset rev 最近一筆 PASS 的 pin_noise;沒基線 → 放行並建基線。回 (ok, msg)。"""
+    base = None
+    for rec in reversed(history):
+        if not rec.get("pass") or rec.get("goldset_rev") != rev:
+            continue
+        v = (rec.get("verdicts") or {}).get(split) or {}   # verdicts={split: verdict}(同 must_ratchet 讀法)
+        if isinstance(v, dict) and v.get("pin_noise") is not None:
+            base = v["pin_noise"]
+            break
+    if base is None:
+        return True, f"噪音棘輪:這版答案(標註版本 {rev[:6]})還沒有基線,這次的 {count} 條當基線,下次不准比它多"
+    if count > base:
+        return False, (f"噪音棘輪擋下:固定席不相干筆記從 {base} 條漲到 {count} 條。"
+                       f"降噪是本案主目標,回漲就是回歸——先查是哪條保送路徑鬆了。")
+    return True, ""
 
 
 def _macro(rows, key):
@@ -332,8 +366,7 @@ def eval_edit(gs, split=None, k=8):
         res = edit_universe(case)
         if res is None:
             continue
-        pins = [x for x in res if x.get("pinned")]
-        free = [x for x in res if not x.get("pinned")]
+        pins, free, lane_items = split_buckets(res)   # v4:free 不含 lane(P@8 母體);out_nodes 含 lane(下方讀完整 res)
         row = {"id": cid, "split": case["split"], "n_free": len(free), "n_pin": len(pins)}
         # edit 面 nDCG 沿用候選集自證 IDCG:三排序共用同一 free 集,相對比較有效;
         # 絕對值偏高(漏檢不罰),不得跨面引用(r1 panel s4)。
@@ -436,6 +469,7 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         verdict["must_in_out_count"] = must_hit   # ★棘輪比的是個數不是比率★——
         verdict["must_total"] = must_t            #   比率會被「總數變了」稀釋,個數不會
         verdict["out_top3_must"] = pt3            # #10 乙案(2026-08-24):只觀測不閘;舊 key pin_top3_must 語意不同不沿用
+        verdict["pin_noise"] = pin_noise          # v4 #4b:進 verdict,棘輪讀它
     return {"split": tag, "search": srows, "edit": erows, "verdict": verdict}
 
 
@@ -608,16 +642,28 @@ def main():
         #   「gate 紅了就換尺」。並存才誠實。
         _rev = goldset_rev(gs)
         args._goldset_rev = _rev
-        _rat_split = args.split or "all"
-        _rat_v = (next((r["verdict"] for r in reports if r["split"] == _rat_split), None)
-                  or reports[0]["verdict"])
-        _rat_n = _rat_v.get("must_in_out_count")
-        if _rat_n is not None:
-            _hist_rows = _read_history()
+        # per-split 棘輪(pin-denoise-a-v4 #5):全體之外 held 單獨也不准退——
+        # 「held 少一筆、train 多一筆,全體不退」的漏洞(Codex r3 f4)由此關上
+        _rat_splits = [args.split] if args.split else ["all", "held"]
+        _hist_rows = _read_history()
+        for _rat_split in _rat_splits:
+            _rat_v = next((r["verdict"] for r in reports if r["split"] == _rat_split), None)
+            if _rat_v is None:
+                continue
+            _rat_n = _rat_v.get("must_in_out_count")
+            if _rat_n is None:
+                continue
             _rat_ok, _rat_msg = must_ratchet(_hist_rows, _rev, _rat_split, _rat_n)
-            gates["must-see 不退步(棘輪)"] = _rat_ok
+            _gname = "must-see 不退步(棘輪)" if _rat_split in ("all", args.split) else f"must-see 不退步({_rat_split} 棘輪)"
+            gates[_gname] = _rat_ok
             if _rat_msg:
-                print(f"  ↳ {_rat_msg}")
+                print(f"  ↳ [{_rat_split}] {_rat_msg}")
+            _pn = _rat_v.get("pin_noise")
+            if _pn is not None:
+                _pn_ok, _pn_msg = pin_noise_ratchet(_hist_rows, _rev, _rat_split, _pn)
+                gates["固定席噪音不回漲(棘輪)" if _rat_split in ("all", args.split) else f"固定席噪音不回漲({_rat_split} 棘輪)"] = _pn_ok
+                if _pn_msg:
+                    print(f"  ↳ [{_rat_split}] {_pn_msg}")
         print(f"=== {len(gates)} 道關卡(全過才算這次改動沒把東西弄壞) ===")
         ok = all(val is True for val in gates.values())  # fail-closed:無資料(None)不放行
         _lift_all = v_all.get("search_lift_pct")
@@ -630,8 +676,11 @@ def main():
             "fusion 勝 graph-only": "推薦:綜合排序沒輸給「只比圖結構」(輸了=文字那部分是裝飾)",
             "非固定中位 ≤ top_k": f"推薦量:一般題推 {v_all.get('free_median')} 篇,沒超過 {args.k or 8}",
             "非固定 p95 ≤ top_k+2": f"推薦量:最多的題推 {v_all.get('free_p95')} 篇,沒超過 {(args.k or 8) + 2}",
-            "held-out 不倒退(lift>0)": f"沒見過的題也沒退步:{_lift_held:+.1f}%(怕的是只在調參題上變好)" if _lift_held is not None else "沒見過的題也沒退步(無資料)",
+            "held-out 不倒退(lift>0)": f"沒見過的題(搜尋)也沒退步:{_lift_held:+.1f}%(怕的是只在調參題上變好)" if _lift_held is not None else "沒見過的題也沒退步(無資料)",
             "must-see 不退步(棘輪)": "必看的筆記沒有比上次少推(棘輪:只准上不准下;少一篇就紅)",
+            "must-see 不退步(held 棘輪)": "沒見過的那一半單獨看,必看也沒少推(防「訓練題多推、生題少推」互抵)",
+            "固定席噪音不回漲(棘輪)": "固定席裡不相干的筆記沒有比上次多(降噪主目標的守門,只准降不准升)",
+            "固定席噪音不回漲(held 棘輪)": "沒見過的那一半單獨看,噪音也沒回漲",
         }
         for name, val in gates.items():
             mark = "✅" if val else ("❌" if val is False else "–(無資料,照規矩當沒過)")

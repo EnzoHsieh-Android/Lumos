@@ -361,6 +361,14 @@ def build_ranked_context(data: dict) -> str:
             lines.append(f"  {x.get('score',0):.2f} 直接{hit} {x.get('node','?')}")
     if meta.get("truncated"):
         lines.append(f"  (+{meta['truncated']} 條低分截斷,沒列出來)")
+    # pin-denoise-a-v4:參考道(JSON 獨立頂層鍵;.get 條件鍵慣例——knob=0 時鍵不存在)
+    lane = data.get("lane", [])
+    if lane:
+        lines.append(f"守衛面參考——這 {len(lane)} 篇是軟標記樞紐,跟每支檔都近,未被本次改動直接證實相關:")
+        for x in lane:
+            lines.append(f"  {x.get('score',0):.2f} hop{x.get('hop','?')} {x.get('node','?')}")
+        if meta.get("lane_truncated"):
+            lines.append(f"  (另有 {meta['lane_truncated']} 條守衛面參考未列出)")
     for stk, qs in (data.get("stack_questions") or {}).items():
         lines.append(f"[{stk} 效能檢核——動手時順答這幾個問題]")
         for q in qs:
@@ -368,14 +376,14 @@ def build_ranked_context(data: dict) -> str:
     lines.append("")
     # 收尾指令只在真的列了節點時附(單 reviewer 終審 minor:僅檢核問題時
     # 「判上列節點」答非所問,會弱化對提問的聚焦——檢核段標題已自帶指令)
-    if res:
+    if res or lane:
         lines.append(_INJECT_INSTRUCTION)
     return "\n".join(lines)
 
 
 def inject_ranked_context(data: dict) -> None:
-    """ranked 版注入:results 與 stack_questions 皆空 → 不輸出。"""
-    if not data.get("results") and not data.get("stack_questions"):
+    """ranked 版注入:results/stack_questions/lane 皆空 → 不輸出(lane-only 的題也要注入,v4 Codex f2)。"""
+    if not data.get("results") and not data.get("stack_questions") and not data.get("lane"):
         return
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",

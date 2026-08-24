@@ -8,6 +8,7 @@ tags:
   - type/system
   - status/done
 summary: |-
+  KEY:[2026-08-24 固定席降噪A層落地,plan:[[Projects/固定席降噪A層_計劃]]]硬合約保送——LUMOS_IMPACT_HARD_PIN=1 時 indirect hop≤1 保送只認 INVARIANT/IRREVERSIBLE;RISK·* 類降入★JSON 獨立頂層鍵 lane 參考道★(產生端 cap LUMOS_IMPACT_LANE_N=3、R 公式分數、不進 results/free/P@8、視同 pins 進未標檢查;沒學過 lane 的讀者結構性不受影響=決策 d2)。預設 0 待 train/held 網格轉正 [test:t_impact_hard_pin_lane]
   FLOW:tokenize(CJK bigram+ASCII拆分)→BM25F(欄位tf加權於飽和前,平滑IDF)→search --ranked只重排既有候選｜_reco(BFS-decay 2/2^k 即 2^(1-k),k=1 時 B=1.0(★原記 1/2^k,(2026-08-21 程式碼實證)scripts/lumos:5992 為 `min(1.0, 2.0/(2**k))`★)+共引同行×2飽和+Jaccard;G=0.6/0.25/0.15)×BM25F融合(R=0.6L+0.4G)→context --recommend｜impact --ranked(固定席=事故+合約,不占top_k;動態閾;stdin單包JSON prospective)→hook降噪(v1.1待接)
   KEY:★2026-08-03 一次性重新凍結(認領本節點原本掛著的「尚無人認領」待辦)★——eval_head=`8680ac1`、語料釘 snapshot=`285d429`、knobs=frozen-defaults,已入 `governance/eval/retrieval-eval-history.jsonl`:**search nDCG@5 整體 legacy 0.5411→ranked 0.8556(+58.1%,n=30)｜train +46.0%(n=21)｜held +99.6%(n=9,MRR 1.0)｜edit P@8 fusion 0.7298｜必看視野 19/30｜gate 7/7 PASS**。★與 2026-07-20 那次重跑逐項相同 → 尺是穩定可重現的,當初對不上的只有「+106.8%」與「24/30」這兩個★被沿用進句子、卻不對應任何一次實跑★的數★(歷程與三處出處對照見本節點〈數字已統一〉段)
   KEY:[2026-08-18 query 品質閘,plan:[[Projects/edit面查詢品質閘_計劃]]]impact ranked 加 _impact_query_junk——剝 shebang 首行後壓縮殘餘<MINLEN(預設 1=僅 shebang/空白)→視同空查詢(L 臂靜默;事故探針刻意不受閘);held hook P@8 0.6842→0.7467 六閘全綠;★E15 教訓:短真代碼的 L 撐動態閾殺 hop1 噪,「短≠無訊息」,長度分支撤★;旋鈕 LUMOS_IMPACT_QGATE_MINLEN(<=0/NaN/Inf=停用);觀測=query_gated 欄(--diff 聚合轉發) [test:t_impact_query_junk_unit,t_impact_query_gate_e2e]
@@ -32,6 +33,7 @@ verified_by:
   - "[[Verification/2026-08-18_edit面查詢品質閘落地]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-24_about_code讀側四項落地]]"
+  - "[[Verification/2026-08-24_固定席降噪A層落地]]"
 aliases:
   - 檢索排序與關聯推薦
 ---

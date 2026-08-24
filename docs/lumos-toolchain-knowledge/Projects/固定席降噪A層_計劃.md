@@ -1,6 +1,6 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-24
 updated: 2026-08-24
 summary: |-
@@ -16,7 +16,7 @@ related:
   - "[[Systems/retrieval-ranking]]"
 tags:
   - type/project
-  - status/doing
+  - status/done
 decisions:
   - content: 三輪達上限後裁甲:開新編號 pin-denoise-a-v4 再審一輪 delta(獨立 JSON 鍵安置模型+r3 折入)
     id: d1
@@ -30,6 +30,8 @@ decisions:
     why_chosen: 安全性>一致性:漏教一個讀者的代價(v2/v3 各抓過一輪)高於維護第二種安置法;architecture 席 r2 核可留痕後轉正式決策
     decided: 2026-08-24
     valid: true
+verified_by:
+  - "[[Verification/2026-08-24_固定席降噪A層落地]]"
 ---
 # 固定席降噪A層_計劃
 
