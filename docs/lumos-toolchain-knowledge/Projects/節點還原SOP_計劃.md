@@ -11,7 +11,7 @@ summary: |-
   KEY:★r1 審計(2026-08-24,5 席)實錘要點★:Check J 只掃 summary、KEY 行只提醒不擋、FLOW/DEP 零檢查——「機械防瞎編」宣稱降級為「合約級硬擋+其餘靠交叉審計」;蓋章半成品機械全綠是已知中間態;冷啟動=code-only 重建,openwiki 節點裁的「圖譜史底料」緩解在本場景結構性缺席,補償=雙 agent 交叉審計(16.3%——30 個被點名節點的有偏樣本,非全圖譜)
   KEY:★r2 審計(2026-08-24,5 席)實錘要點★:標記語序硬規定(推測:/佚失: 緊貼行首標籤——★r3 精化:標籤後可有空白,是「不可夾文字」★;走查席實測重現 blocker)/變體 B 引用走樣全對齊原文(逐節點 12–15 條、❌→Verification+verified_by、刪 self-audit 錯綁(★r3 翻案:恢復雙軌——r2 只看指令說明沒對 L4 先例★)、「必跑」明標本案延伸)/舊節點先 diff 別覆寫/★第四條去降級/實跑樣本 1→0 誠實化/考古機密紅線/「八類」活文字四處(★r3:+第五處★)/合約候選放 Projects 計劃筆記/guard 指令指 reference 實形
   KEY:★審查狀態(2026-08-24)★:standard 三輪跑滿達上限未收斂(r1=39/r2=25/r3=25 條,全折零放行;r3 仍 3 blocker 已折入);Enzo 裁甲(d7):開 node-restore-sop-v2 審 v4 delta(r3 折入面+d6/問世界未審補入);乾淨→進實作 [S1]–[S9]
-  KEY:★v2-r1 delta 審計(2026-08-24,5 席)實錘要點★:機械掃描宣稱被四席合圍擊穿(refcheck 只認 path 格式、search --code 搜筆記非 codebase→改「指針級核對+誠實邊界」,函式級=變體 B 階段二本職)/動態差分兩紅線(前置不成立退 ③;金流/不可逆禁生產跑「會踩到」情境——操作層 runtime 風險,隱患金流條補操作層)/「天然免疫」「量化」「便宜一個數量級」等轉述加碼全撤(調研原檔無此保證)/交集=候選線索非定義/「八類」第六處(reference.md:1213)/r3 紀錄漏折 Sonnet 限定自首補折/三分岔健全支補免動作+定正本防雙處漂移/d7「乾淨」明定=panel K=1/reflexion 對帳動作講死(紀律非機械)
+  KEY:★v2-r1 delta 審計(2026-08-24,5 席)實錘要點★:機械掃描宣稱被四席合圍擊穿(refcheck 只認 path[:行號] 格式、search --code 搜筆記非 codebase→改「指針級核對+誠實邊界」,函式級=變體 B 階段二本職)/動態差分兩紅線(前置不成立退 ③;金流/不可逆禁生產跑「會踩到」情境——操作層 runtime 風險,隱患金流條補操作層)/「天然免疫」「量化」「便宜一個數量級」等轉述加碼全撤(調研原檔無此保證)/交集=候選線索非定義/「八類」第六處(reference.md:1213)/r3 紀錄漏折 Sonnet 限定自首補折/三分岔健全支補免動作+定正本防雙處漂移/d7「乾淨」明定=panel K=1/reflexion 對帳動作講死(紀律非機械)
   KEY:★r3 審計(2026-08-24,5 席,上限輪)實錘要點★:self-audit 翻案恢復雙軌(L4 清帳先例+Check S 只讀該欄;r2 兩席只看指令說明沒對先例=審查員自己犯★第四條)+PASS 批次也建 Verification/摘要 KEY 殘留舊結論=「半改句」第四次(兩席 blocker)/「八類」第五處(SKILL.md 換措辭逃過三輪,清單改掃法)/[S6] 探針判準明定(照抄題庫會判死正確走 SOP 的模型)/共用面落 KEY 行別塞 DEP/計數不寫死/立 d5 澄清+d6 使用者裁定/問世界第二輪折入(動態差分定位/reflexion 假設對帳/引用實體機械掃描)
   KEY:★d3/d4 文字澄清(2026-08-24)★:d3 context 的「08 檔」是撞號發現前的歷史用語,現行編號以 d4 的 09 為準;d4 的「三處」是 r2 發現第四處(SessionStart hook)之前的清單,現行以 [S3] 的六處(v2-r1 又補一處)為準;正式澄清已立 d5(r3 架構席:先例=新決策+KEY 行雙軌,單靠 KEY 行是第二種做法;r3 通才席:decisions 指令只印決策內容前 100 字,光靠本行照樣看不到)
   DEP:[[Systems/check-j-regen-guard]]｜[[Systems/外部對照-code衍生wiki]]｜[[Projects/from-scratch重生守衛_計劃]]
@@ -72,7 +72,7 @@ decisions:
 > 白話:接手一個已經在跑、但圖譜是空的(或很稀疏的)專案時,現在的工具鏈只管「重建筆記不准瞎編」(守衛),
 > 沒人告訴你「該建哪些節點、從哪開始、還原到多深」(產出)。這個計劃把後半段寫成一份任何技術棧都能走的
 > SOP:從看得到的行為反查 code、追資料流圈出承重牆、考古還原為什麼、落成蓋了重建章的節點、列出合約候選
-> 但不冒充合約,出口用兩個乾淨 agent 交叉查核(一個讀筆記、一個讀 code)。種子是 Enzo 給的 brownfield
+> 但不冒充合約,出口用兩個乾淨 Sonnet agent 交叉查核(一個讀筆記、一個讀 code)。種子是 Enzo 給的 brownfield
 > 教學影片五步流程,這裡通用化、並補上影片沒有的驗證層。(v2:r1 五席 39 條原始發現全數折入)
 
 ## 症狀(會翻紅的指令)
@@ -144,7 +144,7 @@ git 歷史是舊專案最容易拿到的目擊者:blame 找到改這段的 commi
 ## 落地件(spec-trace 對齊用;r1 通才席抓到原版零 [SN] 標記,補齊)
 
 1. [S1] `skills/lumos-project-notes/reference.md` 新增**獨立 `##` 大節**〈節點還原(brownfield 冷啟動)〉、目錄加一項——體量是端到端流程,照「自足性審計」自佔目錄項的先例,不塞進「合約性標記」大節當子節(r2 架構席 ⚠ 裁定;d4「與重生守衛相鄰」指主題相近、互設指標,不指同一大節)。內容範圍明定(r3 抓到兩讀)=步驟 0–6 本體+兩條停手線+「機械把關真實範圍」技術事實(隱患第一條);PRIOR-ART/其餘隱患/審計紀錄留在本計劃筆記不搬。落地時轉 reference 慣例格式(### 小節+編號清單;「步驟 N|」偽標題 reference 查無先例,不沿用)。
-2. [S2] `skills/lumos-project-notes/commands/09-節點還原.md`(新檔;08 已被佔用,r1 三席實錘):薄查表——體例照 05/06,列這幾排(r3 抓到內容清單未給;**不得含已廢動作**):進場判斷→先 `lumos search <詞>` 再 `lumos context <節點>`(三分岔以〈使用場景〉節為正本,此表只放指標);步驟 0→`lumos init`+Edit 填 MOC;步驟 1–3→讀 code/git(冷啟動豁免,無 lumos 指令);步驟 4→`lumos new system`+Edit 摘要+`lumos set … regen …`+`lumos lint`+`lumos link-candidates`;步驟 5→合約候選章節(計劃筆記);升格→guard 三指令(指 reference);步驟 6→變體 B 派工+Verification+`lumos self-audit`。深規全文一行指到 reference.md。
+2. [S2] `skills/lumos-project-notes/commands/09-節點還原.md`(新檔;08 已被佔用,r1 三席實錘):薄查表——體例照 05/06,列這幾排(r3 抓到內容清單未給;**不得含已廢動作**):進場判斷→先 `lumos search <詞>` 再 `lumos context <節點>`(三分岔以〈使用場景〉節為正本,此表只放指標);步驟 0→`lumos init`+Edit 填 MOC;步驟 1–3→讀 code/git(冷啟動豁免,無 lumos 指令);步驟 4→`lumos new system`+Edit 摘要+`lumos set … regen …`+`lumos lint`+`lumos link-candidates`;步驟 5→合約候選章節(計劃筆記);升格→guard 三指令(指 reference);步驟 6→變體 B 派工(逐節點雙 Sonnet)+Verification+`lumos self-audit`。深規全文一行指到 reference.md。
 3. [S3] `skills/lumos-project-notes/commands/INDEX.md`:「接手陌生/舊專案、圖譜是空的」情境路由+「grep 衝動對照表」對應行;「二、八類子檔」標題改九類。**「八類」活文字六處**(r1 三處→r2 四→r3 五→v2-r1 六,一輪多一處——教訓成立:別信列死的清單,落地時兩式再全掃防第七處):INDEX.md:24 標題、CLAUDE.md 受管區塊與 `scripts/templates/graph-discipline.md:29` 的「分八類」(靠重跑注入分發)、`scripts/hooks/claude/lumos-entry-hook.py:74`(SessionStart 提示——工具鏈程式碼,注入蓋不到,直接改字隨 install 分發)、`skills/lumos-project-notes/SKILL.md:9`「八個子檔」(r3 抓到)、**`skills/lumos-project-notes/reference.md:1213`「開八個子檔之一(+逐字列的八個分類名)」(v2-r1 兩席抓到——「防第六處」的掃法一用就中;那行的分類名清單也要跟著補第九個)**。歷史計劃/驗證筆記是時間快照,不改。
 4. [S4] `skills/lumos-project-notes/SKILL.md`:進場節加一行「圖譜空或稀疏 → 走節點還原 SOP(commands/09-節點還原.md)」。
 5. [S5] `scripts/templates/graph-discipline.md`:注入範本加一行冷啟動入口(分發需重跑安裝,交付說明註明)。
