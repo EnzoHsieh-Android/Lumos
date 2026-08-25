@@ -16,15 +16,16 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—�
 
 ## 一輪怎麼跑(照這個順序)
 1. **準備材料**:複製計劃筆記到工作副本 `/tmp/<編號>-rN.md`,`sha256sum <計劃筆記>` 留下這輪的指紋。`wc -l` 超過 1800 行就拆開審(外部研究:材料太多審查員看不完;本專案自己量不到這效應,但照做)。
-2. **先機械排乾**(每輪):`lumos refcheck <副本> --repo <根> --json`——引的檔案/行號不存在直接修真檔;`lumos prose-lint <計劃.md>`——中文模糊措辭掃描(只提醒不擋,rc 恆 0);掃出的類別歸編排者排乾,派工詞明寫「此掃描可及類別,席位不得報」;`lumos pitfalls <計劃.md> --check`——沒有「實務隱患」節先補;它反問的每個風險類都要逐類答進去,判「不碰」也要寫「已排除:理由」,不准靜默略過(排除理由也是審查對象)。**首輪再多一步**:派一個便宜 agent 拿固定清單掃未定義的詞、壞引用、範圍自相矛盾,命中直接修真檔,不算 findings。
+2. **先機械排乾**(每輪):`lumos refcheck <副本> --repo <根> --json`——引的檔案/行號不存在直接修真檔;`lumos prose-lint <計劃.md>`——中文模糊措辭掃描(只提醒不擋,rc 恆 0);掃出的類別歸編排者排乾,派工詞明寫「此掃描可及類別,席位不得報」;`lumos pitfalls <計劃.md> --check`——沒有「實務隱患」節先補;它反問的每個風險類都要逐類答進去,判「不碰」也要寫「已排除:理由」,不准靜默略過(排除理由也是審查對象)。**首輪再多一步**:派一個便宜 agent 拿固定清單掃①未定義的詞②壞引用③範圍自相矛盾④**機械宣稱驗語意**(spec 每句「某函式/機制會做 X」,開檔讀該段碼驗語意,**不只驗存在**——存在性抓到壞行號、語意誤宣稱要靠這條)。分流:①②③與存在類命中=直接修真檔不算 findings;**語意類命中=修真檔+逐條(含修改前→後對照)寫進 rN-intake.md 留痕;動到「核心裁定」節的=升級為正式 finding 交席位審,前掃不得自行改裁定**。
 3. **派審查員**:Agent、`model: sonnet`、指向工作副本。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。派工當下把 `{round, seat, lens, materials, auditor}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`,凍結快照存 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
 4. **收貨三道(全機械,錨不到的不採信)**:
    - `lumos quote-check <席報告> --spec <凍結快照>`:引句對不回快照的條目丟掉(比對對象是派工當下的快照,不是現檔)。
    - `lumos refcheck <席報告> --repo <根>`:報告引的 file:line 要存在。
    - `lumos seat-check <席報告> --dispatch <rN-dispatch.json>`:派工要查的材料有沒有都碰到。
+   - 三道之外(非取代):編排者對「佐證通道」與錨不到引句做**機械重現**,留痕 `rN-intake.md`(命令+輸出+HIT/MISS;判準與 MISS 處置見 templates.md〈編排者判讀規則〉——此步是人工判讀+機械留痕,不是全機械)。
 5. **判讀**:severity 以「照 spec 字面實作會做出錯的行為或漏掉合約」為 major;措辭、文件精度是 minor。席報告帶 blocking 宣告時與 severity 綁定:blocking:否 ↔ minor、blocking:是 ↔ major/blocker,兩欄矛盾=報告退回該席重判(編排者人工核,無機械擋)。**兩層不互改**:blocking 是審查員層宣告,accepted 是編排者處置層裁量——被放行的 major 仍標 blocking:是+附 accept-reason,不回頭改席報告。剝掉審查員誤判要能指出客觀錯在哪,判不準就保留。存活 ≥major 的:有可執行證據且你自己查過 → 直接折;多席獨立一致 → 直接折;只有低共識的才派一個辯方(★預設外家 Codex:`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住;它能開檔查證。`scripts/external-seat.sh` 是 Gemini、看不到 vault,只當 Codex 不可用時的備援,其 ≥major 不算否決票——2026-08-23 實測五條 major 四條沒查證就判★;不給它審查員的結論)去反駁,必須附 file:line 才能降級。
 6. **折入**:只折存活的真問題進計劃筆記,寫進「審計修正紀錄」。折完 `lumos fold-check <計劃.md>` 看前後矛盾;每折一條「訂正既有規則」的,拿關鍵詞全文 grep 找散落的同句變體一起改;再派一個便宜 agent 只看本輪 diff 核對鏡像段有沒有跟上——**鏡像核對的材料必須含 `governance/review-reports/<編號>/` 席報告目錄,只看計劃筆記查不到外移的細節**。審計修正紀錄寫法(2026-08-25 d4 瘦身,新案適用、舊案不回溯):每輪固定兩行——「rN(日期,席數):N 條/blocking N/一句結論」+指標到席報告目錄;兩行裡的 blocking 數帳上無對應欄位(canary-log 只有席級 severity),來源=席報告總結句;行為斷言必配具體例(輸入→預期),寫不出例=該斷言即 blocking。`git commit`。
-7. **記帳**(折完才記,指紋要是折入後的版本。★記帳型態(2026-08-25 d5):散文設計審=處置帳——**各席一筆留痕**(severity/findings/report/snapshot/spec/reviewed,**不帶三個 set**)+同輪**僅一筆彙總 carrier** 帶 --findings-set/--folded-set/--accepted-set;兩筆都帶處置清單就擋、帳不能撤只能換編號重記(實撞過);「每席各帶一筆 severity 帳」的 panel 型態僅舊迴圈帳面重放存在,新迴圈一律處置帳★):
+7. **記帳**(折完才記,指紋要是折入後的版本。★carrier 選席 SOP:記帳前對候選席報告跑 quote-check,選全錨席當 carrier(carrier=記帳載體非證據總集,全輪證據=各席報告 sha 留痕+rN-intake.md)★★記帳型態(2026-08-25 d5):散文設計審=處置帳——**各席一筆留痕**(severity/findings/report/snapshot/spec/reviewed,**不帶三個 set**)+同輪**僅一筆彙總 carrier** 帶 --findings-set/--folded-set/--accepted-set;兩筆都帶處置清單就擋、帳不能撤只能換編號重記(實撞過);「每席各帶一筆 severity 帳」的 panel 型態僅舊迴圈帳面重放存在,新迴圈一律處置帳★):
    ```
    lumos canary record none --loop <編號> --round rN --auditor <席> --severity <存活最高> --findings <存活條數> \
      # ★light 分級不帶 --round(單人不分輪;帶了 `loop status --light` 會拒讀,2026-08-23 踩過)★ \

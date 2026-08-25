@@ -37,7 +37,10 @@ Spec 檔案：{工作副本路徑 /tmp/<id>-rN.md}
 輸出格式：逐條 finding，每條標 severity（blocker/major/minor）＋ blocking 宣告：
 「blocking: 是/否」加一句判準（不改，實作者會做錯決定或做出壞系統嗎？）——
 blocking:否 ↔ minor、blocking:是 ↔ major/blocker，兩欄不得矛盾（矛盾=整份退回重判）。
-每條附：spec 哪一段、問題是什麼、（若涉及程式碼）你查證到的 file:line 證據；
+每條附：spec 哪一段、問題是什麼、（若涉及程式碼）你查證到的佐證；
+★卷證規則（2026-08-25,[[Projects/迴圈摩擦三修_計劃]] d1）：「引句:」格式行**限逐字出自凍結審材**；
+審材外查證所得走佐證通道,格式固定「file: `路徑:行號`」＋敘述——**反引號必加**（refcheck 只抽反引號
+inline-code,漏了連存在性都驗不到）,不得用引句格式主張審材外內容。★
 逐字引句寫成「引句:「…」」單獨一行、≥10 字、避免在引句內再包「」（巢狀會被機械收貨截斷）。
 若某節沒問題也要說「已讀，無 finding」。逐節讀，你一定找得到至少一個未定義的詞、壞引用或不一致；
 {missed 後加碼：沒找到就是你沒讀仔細}。最後給一行總結：最嚴重 severity 是什麼、blocking 共幾條。
@@ -163,6 +166,8 @@ binding constraints，3-6 條}
   不按 finding 寫得多詳細/多有說服力判——2026 實證 judge 最大偏誤是 style（0.76-0.92），
   position 反而極小；一條寫得漂亮的 minor 仍是 minor，一條寫得潦草的 major 仍是 major。
 - **blocking↔severity 綁定（2026-08-25 [S3],[[Projects/設計審收斂重定義_計劃]]）**：blocking:否 ↔ minor;blocking:是 ↔ major/blocker——席報告兩欄矛盾=整份退回該席重判(編排者人工核,無機械擋;矛盾率在實測輪抽驗)。**兩層不互改**：blocking 是審查員層宣告,accepted 是編排者處置層裁量——被放行的 major 仍標 blocking:是+附 accept-reason,不回頭改席報告;cluster 三態帳無 accepted-major 態,散文處置不用 cluster 帳。
+- **carrier 選席 SOP（2026-08-25 d1）**：記帳前對候選席報告跑 quote-check,選全錨席當 carrier——carrier=記帳載體、非證據總集（機制兜底=d5 記帳型態:各席一筆帶 report+sha,僅 carrier 帶三個 set）。
+- **rN-intake.md 收貨紀錄（2026-08-25 d1;新增於收貨三道之外,非取代）**：編排者對佐證通道與錨不到引句的機械重現留痕檔,落 `governance/review-reports/<迴圈>/rN-intake.md`。每條格式=重現命令+輸出摘錄+**HIT/MISS 結論**;判準=命令必須能重現該席宣稱的那個結果,只證存在的查詢不算;**MISS=該條佐證不採信,其支撐的 finding 退回該席補證或降級**。此步為編排者人工判讀+機械留痕,非全機械。前掃語意類修正也逐條記這裡,**必含「修改前原句→修改後」對照**,派工詞告知席位可覆核推翻。
 - **輪 severity = 辯方裁決後存活 findings 的 max**；findings 數 = 存活折入條數。
 - ~~canary 型別輪替/低耦合植入/溯源排除~~ **⛔ 已停用(2026-08-14 d5,無植入)**。
 

@@ -23,7 +23,9 @@ verified_by:
   - "[[Verification/2026-08-18_循序tier錨定落地]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-25_設計審收斂重定義落地]]"
+  - "[[Verification/2026-08-25_迴圈摩擦兩修落地]]"
 summary: |-
+  KEY:★迴圈摩擦兩修落地(2026-08-25,[[Projects/迴圈摩擦三修_計劃]] v2 單輪過處置閘;d3 重寫訊號改形撤回見該案 decisions)★——①卷證規則:引句限逐字出自凍結審材,審材外佐證走「file: 反引號路徑:行號」通道(refcheck 只抽反引號);編排者機械重現留痕 rN-intake.md(命令+輸出+HIT/MISS,MISS=佐證不採信退回該席);carrier 選全錨席=記帳載體非證據總集 ②首輪前掃加「機械宣稱驗語意」(分流:語意類修正含前後對照留痕,動核心裁定升正式 finding) ③rewrite 收尾寫入端 lumos loop rewrite 首用(血緣 prev/successor 入治理帳,連續第二次自動警告)
   KEY:★d5 落地(2026-08-25,[[Projects/設計審收斂重定義_計劃]] 處置閘單輪 PASS)★——散文設計審回歸處置閘為正閘:新迴圈一律 --disposal,單輪「每發現折掉或附理由接受」即收斂(輪級規則:同輪有 blocker 席→accepted 必空);panel/K=2=舊制帳僅存已定錨 panel 記帳的舊迴圈(code-loop 自 08-08 亦處置閘——d5 原行文「留給 code-loop」誤標,同日 d2 訂正,教訓:下筆前沒回查本篇 08-08 KEY);記帳型態=各席一筆留痕(無 findings_set)+一輪僅一筆彙總 carrier;★首例實證=本案自己:pc-v2 r1 五席 27 審項/缺陷 21 全折,單輪機械收斂★;配套:prose-lint 子命令(排乾,頂層命令 62→63)/blocking↔severity 綁定+判準句入 templates/審計紀錄兩行瘦身/治理帳 rewrite 值獨立分桶;[S6] 實測=下一個真實設計迴圈,d1 升級條件(末輪 ≥major 席數≥2)屆時判
   KEY:★問世界:散文收斂(2026-08-25,調研歸檔 governance/review-reports/prose-convergence/)★——四傳統(Fagan-Gilb 密度門檻/需求工程機器前移/期刊兩輪上限+IETF 粗共識/Google Nit 不擋)零一家用「連續乾淨」審散文;2026 受控實驗:多輪重審散文全劣於單輪(FP+62%,false positive pressure);折入候選:閘改殘餘 blocking 密度+non-blocking 不擋/「新發現全 non-blocking」=收斂成功/weak-word lint 前移+行為斷言配例——動閘語意,已立案並過閘([[Projects/設計審收斂重定義_計劃]]):便宜半全落地(見 d5 落地 KEY),B 軌閘語意改造暫緩掛升級條件
   KEY:★收斂實證(2026-08-25,節點還原案 6 輪+代碼審對照)★——散文 spec 設計審 6 輪全未機械收斂(153 條全折;每折平均新生 1-2 處措辭面,「半改句」單日五發),同日 code 側一輪 minor 收斂+實作後驗證全過:再證「便宜初篩網/正確性歸下游」定位,散文無 oracle;跑滿攤人=panel K=2 下的正常出口非失敗;待加強:①cluster 分群帳(現有機制,首輪就開,「文件精度」群 accepted-minor 不擋收斂)②被審 spec 瘦身(審計史外移)
