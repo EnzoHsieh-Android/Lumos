@@ -1,0 +1,62 @@
+---
+type: project
+summary: |-
+  FLAG:DECISION
+  KEY:立案(2026-08-25 Enzo「ok」;問世界歸檔 governance/review-reports/loop-friction/)——v1 提三修,r1 五席 25 審項/blocking 21 打穿 d3:雙訊號(波及 30%+核心命中≥2)回代不成立(同案兩算法 27%/32% 跨線;pc-v2 健康輪 30.2%+命中 3 誤傷)、兩訊號相關非獨立、r1 折入無 git 前版分母空——★Enzo 裁甲:整份重寫開 loop-friction-v2,d3 撤回回縮,本版=v2 只餘兩修★(rewrite 收尾入治理帳,血緣 note 可查,寫入端 lumos loop rewrite 同日補建=設計審案帳面件兌現)
+  KEY:v2 兩修——d1 卷證規則(引句限凍結審材;佐證格式固定 file: 反引號路徑:行號,refcheck 只抽反引號 inline-code 實測;機械重現留痕進 rN-intake.md;carrier=記帳載體非證據總集)/d2 前掃加機械宣稱驗語意(分流:存在類直接修,語意類修+留痕、動核心裁定升正式 finding)——症狀拆兩根因(審材外引用 vs 巢狀截斷,d1 只治前者)
+  DEP:[[Projects/設計審收斂重定義_計劃]]｜[[Projects/連鎖佇列軟提醒_計劃]]
+status: doing
+created: 2026-08-25
+updated: 2026-08-25
+tags:
+  - type/project
+  - status/doing
+---
+
+# 迴圈摩擦三修_計劃
+
+> 白話:v1 想一次修三處摩擦,審查把第三處(重寫門檻換形狀)整個打掉——數據上站不住,撤回等帳面積累。本版(v2)只做兩件:①審查引句立「卷證規則」(引句只准出自凍結審材,材料外佐證走固定格式的另一條通道);②首輪前掃加「機械宣稱驗語意」。
+
+PRIOR-ART:世界調研歸檔 `governance/review-reports/loop-friction/web-research.md`;v2 實際引用=法庭卷證規則(事實陳述必引卷內,卷外可剔)/Gerrit 錨定與敘述雙通道/LLM 宣稱驗證管線(抽取→檢索→比對);Fagan 5% 與編輯界結構判準改列**未來訊號案素材**(本版不用)。裁定=借用既有形態、零新機制;量測數據歸檔 `governance/review-reports/loop-friction/measurements.md`。
+
+## 症狀(會翻紅的證據;r1 折入:拆成兩個不同根因)
+
+①a **審材外引用**:code-cascade-reminder r1 carrier 兩句引句錨在 patch 外現碼→disposal 閘 quote 關 FAIL(帳:該迴圈 r2-dispatch.json note 明載);r2 派工詞限定「引句只出自 delta」後全數錨定——d1 治這個。①b **巢狀引號截斷**:code-prose-conv-impl r1 是引句內含「」被機械收貨截斷(templates 既有規則本就禁止,r1 席位未遵守)——這是既有規則的執行問題,**d1 不宣稱治它**,靠派工詞明句+編排者收貨把關(loop-friction r1 五席實測:三席全錨、兩句截斷全因快照自身帶「」)。②**語意誤宣稱**:cascade 案 r1 最重三條(E2 兜底不實等)全是「spec 說某機制會做 X、實際不會」型;首輪前掃驗了存在性(抓到壞行號)卻放過語意;prose-lint 對此類天生無感(cascade 快照 0 命中;prose 快照 4 命中全是詞表自我指涉誤報——「零命中」的舊宣稱不精確,r1 s1 席實測訂正)。
+
+## 核心裁定
+
+- **d1 卷證規則(治①a)**:「引句:」格式行**限逐字出自凍結審材**。審材外佐證走佐證通道,**格式固定「file: `路徑:行號`」——反引號必加**(refcheck 的抽取正則只認反引號 inline-code,無反引號連 manifest 都進不了,r1 s2 席現場實測)——存在性 refcheck 守。**真偽=編排者機械重現,且必留痕**:重現命令+輸出摘錄寫進 `governance/review-reports/<迴圈>/rN-intake.md`(收貨紀錄檔,新慣例;卷證=事後可查,不是編排者口頭說「我驗過」)。**carrier 語意**:carrier=記帳載體、非證據總集——全輪證據=各席報告(皆 sha 留痕)+rN-intake.md;「選全錨席」只為滿足閘的引句重驗,不改變證據集(r1 ext 席條 2 的澄清)。已排除「閘支援多材料錨定」:動閘碼,SOP 實測不足再議。
+- **d2 前掃驗語意(治②)**:首輪前掃固定清單加第四類「spec 每句機械宣稱,開檔讀該段碼驗語意,不只驗存在」。**分流(r1 ext 席條 7:語意修正不得繞審計)**:存在性/引用類命中=直接修真檔不算 findings(機械);**語意類**命中=修真檔+逐條(證據命令+結論)寫進 rN-intake.md 留痕;**動到「核心裁定」節的語意修正=升級為正式 finding 交席位審**,前掃不得自行改裁定。prose-lint 維持措辭衛生定位。
+- **d3 重寫訊號:撤回回縮(Enzo 裁甲,2026-08-25)**:本案**不動**現行重寫出口(SKILL 現文「>1 條 blocking/300 字,自定 heuristic、校準前只當攤人訊號」原樣;既有校準結論「上修 2 條/300 字待下案再驗」維持,出處=[[Verification/2026-08-25_設計審收斂重定義落地]])。v1 雙訊號草案撤回理由:回代不成立(measurements.md:同案兩算法 27%/32% 跨 30% 線;pc-v2 健康輪 30.2%+命中 3 條=誤傷)、兩訊號高度相關合取無增益、最常見的 r1 折入無 git 前版分母無定義。未來訊號案前置=先立波及分子/分母/基準 sha 的帳面 schema、積累 ≥5 案。
+- **d4 落點**:v2 交付=純 skill 文件(templates.md/SKILL.md)+圖譜寫回;rewrite 收尾寫入端(`lumos loop rewrite`)為設計審收斂重定義 d3 帳面件的兌現、已於裁甲當日先行落地並釘測試(t_loop_rewrite_mark),不佔本案條款。
+
+## 落地件
+
+1. [S1] templates.md:審查員輸出格式段加卷證兩句(引句限凍結審材;佐證通道固定格式含反引號);編排者判讀規則段加 carrier 選席 SOP+rN-intake.md 收貨留痕慣例。正本歸屬循既有聲明(templates 權威、SKILL 摘要),不另立。
+2. [S2] SKILL.md:步驟 2 前掃加第四類(含分流與升級規則);步驟 4 收貨加「機械重現留痕於 rN-intake.md」一句;步驟 7 記帳加 carrier 選席 SOP。**重寫出口段一字不動**(d3 回縮)。
+3. [S3] 圖譜寫回(r1 s1 席訂正目標位置):[[Verification/2026-08-25_設計審收斂重定義落地]] 的校準 KEY 補「雙訊號嘗試已撤回(loop-friction r1),2 條/300 字結論維持待下案」;[[Projects/連鎖佇列軟提醒_計劃]] 下一步段「門檻建議上修」句補指本案;本案 Verification 認領 [S1]-[S3]。
+4. [S4] 實測掛鉤(下一個真實設計迴圈):carrier 首選席即全錨、加開 delta 輪數=0→d1 收斂;前掃語意類抓漏 ≥1(若 spec 有)→d2 生效;rN-intake.md 真的被寫→留痕慣例活著。
+
+## 行為斷言(每條配例;r1 訂正:斷言須有鑑別力)
+
+- 例1:templates.md grep「限逐字出自凍結審材」與「file: `」各 ≥1 處(兩字串現檔皆 0 命中,落地後 >0——有鑑別力)。
+- 例2:SKILL.md grep「驗語意」與「不只驗存在」(現檔 0 命中)。
+- 例3:SKILL.md 重寫出口段**仍含**「300 字」與「暫用」(d3 回縮的不動證明)。
+- 例4:SKILL.md grep「rN-intake」≥1 處(現檔 0 命中)。
+- 例5(掛 [S4]):下案收貨後 `governance/review-reports/<迴圈>/r1-intake.md` 存在且含 ≥1 組「命令+輸出」。
+
+## 實務隱患
+
+- **rN-intake.md 是新留痕慣例,無機械擋**——沒人寫它不會有閘紅。回頭條件:[S4] 下案跑完檢查該檔存在性(例5);連兩案缺席→升級為 record 的必帶欄位再議。
+- **佐證反引號靠派工詞+人查**:refcheck 抽得到才驗得到,席位漏反引號=該條佐證靜默失守——收貨時編排者過一眼佐證行格式,r1 實測五席可遵守引句紀律,同理可期。
+- **d2 語意類升級判斷靠編排者**:留痕(rN-intake.md 逐條)使其可審計,無機械擋;[S4] 觀察。
+- **金流/對外/不可逆**:不涉及;全文件改動可整體 revert。
+
+## 審計修正紀錄
+
+- r1(2026-08-25,5 席:s1 通才/s2 機械/s3 設計/arch/ext=Codex):25 審項/blocking 21/一句結論:d3 雙訊號被四路證死(回代造假象、健康輪誤傷、訊號相關、分母無定義),d1 歸因半錯+機械重現無留痕+refcheck 格式碰運氣,d2 直接修繞審計,[S3] 目標句寫錯檔,例1 無鑑別力——**Enzo 裁甲:整份重寫,d3 撤回,本版=v2**;rewrite 收尾入治理帳(血緣 note:prev=loop-friction;successor=loop-friction-v2),寫入端同日補建並首用。
+- 詳帳:`governance/review-reports/loop-friction/r1-*.md`+`measurements.md`;收貨:三席引句全錨,arch/ext 各一句遭快照自身巢狀「」截斷,編排者機械重現全中(r1-intake 慣例本案起用,見 governance/review-reports/loop-friction/r1-intake.md)。
+
+## 下一步
+
+loop-friction-v2 r1 審本版→過閘→[S1]-[S3] 實作→[S4] 掛下案。
