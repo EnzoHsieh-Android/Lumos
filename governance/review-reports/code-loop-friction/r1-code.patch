@@ -1,0 +1,176 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 863cd2d..1ff622c 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -424,20 +424,55 @@ def _loop_gov_mark(env, loop_id, kind, note=""):
+     fail-open:寫不進去不影響判定輸出。"""
+     if env is None:
+         return
+     try:
+         _append_governance_log(env.vault, [{"gate": "design-loop", "kind": kind, "hard": False,
+                                             "nodes": [loop_id], "note": note}])
+     except Exception:
+         pass
+ 
+ 
++def cmd_loop_rewrite(env, loop_id, successor, note):
++    """人裁「整份重寫」的收尾記帳(設計審收斂重定義 d3 帳面件的寫入端;2026-08-25 第一次真實
++    rewrite 事件時補建)。寫 gate=design-loop kind=rewrite 事件到治理帳,note 機械帶血緣
++    (prev=舊編號;successor=新編號)——「連續兩次判重寫→強制攤人,不得三開」靠沿 note 鏈查,
++    本指令寫入前自動查一跳:若本編號自己就是某次 rewrite 的 successor,印強制攤人警告(advisory)。"""
++    if not successor or successor.strip() == loop_id.strip():
++        print("擋下:--successor 要給新開的迴圈編號,而且不能跟舊編號一樣——重寫=換新編號載新版,同號沒有「重寫」可言", file=sys.stderr)
++        return 2
++    # 血緣一跳查詢:這個編號是不是已經是上一次重寫的產物?
++    chain_prev = None
++    try:
++        import json as _j
++        gl = env.vault.parent / ".governance-log.jsonl"
++        if gl.exists():
++            for line in gl.read_text(encoding="utf-8").splitlines():
++                try:
++                    o = _j.loads(line)
++                except ValueError:
++                    continue
++                if o.get("gate") == "design-loop" and o.get("kind") == "rewrite" \
++                        and f"successor={loop_id.strip()}" in str(o.get("note", "")):
++                    chain_prev = (o.get("nodes") or [None])[0]
++    except OSError:
++        pass
++    lineage = f"prev={loop_id.strip()};successor={successor.strip()};{note or ''}".rstrip(";")
++    _loop_gov_mark(env, loop_id.strip(), "rewrite", lineage)
++    print(f"✓ 迴圈 {loop_id} 以「人裁整份重寫」收尾,入治理帳;新版由 {successor} 接手審。")
++    print("  在意的原因:重寫不重置攤人義務——這筆帳讓「gov --stats」的放行率統計不失真,也讓血緣可查。")
++    if chain_prev:
++        print(f"  ★這已是連續第二次判重寫(上一段血緣:{chain_prev} → {loop_id})——強制攤人,不得三開★")
++    print("  之後查血緣:")
++    print("    lumos gov --stats")
++    return 0
++
++
+ def _append_governance_log(vault, events):
+     """寫者=doctor --ci + anchor approve:把 gate findings append 到 docs/.governance-log.jsonl。
+     非 git / 取不到 HEAD → 跳過(不報錯)。dedup 留給讀時(lumos gov)。"""
+     if not events:
+         return
+     import json
+     import datetime
+     import subprocess
+     try:
+         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+@@ -15403,20 +15438,21 @@ HELP_WHEN = {
+     "link-candidates": "哪些 code 沒有任何筆記連到它,列候選;要不要補由人裁。",
+     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
+     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
+     "cochange": "改了 A 檔,歷史上常一起改的 B 檔要不要跟著改。rules 看規則,check 對變更集比對。",
+     "rules": "列出共改規則集。",
+     "cochange check": "對這次變更集比對規則,列出可能漏改的夥伴檔(提醒不擋)。",
+     "code-loop check": "我現在推得上去嗎:tier=high 又沒有效留痕就 BLOCKED,並講原因。",
+     "delguard": "commit 時自動跑:刪掉 / 改名的符號,筆記還在不在講它。",
+     "code-loop": "高風險改動推送前的留痕:pass 審過、skip 刻意不審、check 現在推得上去嗎。",
++    "loop rewrite": "人裁判「整份重寫」後收尾:記 rewrite 事件+血緣(prev/successor)進治理帳;連續第二次判重寫會警告強制攤人。",
+     "pass": "代碼審過了,留痕綁當下版本;之後再改 code 就失效要重跑。",
+     "skip": "刻意不審,留痕寫理由(合法,但會被統計)。",
+ }
+ 
+ 
+ def _fill_help_when(parser, parent=""):
+     """遞迴把 HELP_WHEN 灌進每個沒有 description 的子指令,讓 `lumos X --help` 第一行講人話。
+     同名二層子指令(cochange check / code-loop check)先查「父 子」鍵再退回單名。"""
+     for act in parser._actions:
+         if isinstance(act, argparse._SubParsersAction):
+@@ -15556,20 +15592,24 @@ def main():
+     ls.add_argument("--roster", action="store_true",
+                     help="[派工編制資料化] 編制對帳觀測(advisory 恆不影響 rc):應派(_TIER_ROSTER)vs 實派"
+                          "(rN-dispatch*.json)逐輪分桶比;與所有模式相容,建議配 --repo")
+     lc = lsub.add_parser("compress", help="[S2] 結構化壓縮:長跑上下文規則式三欄(白名單壓不掉/證據/未結)")
+     lc.add_argument("compress_file", metavar="檔")
+     lc.add_argument("--json", dest="compress_json", action="store_true")
+     lv = lsub.add_parser("verify-progress", help="[S3] 獨立進度驗證器:直讀帳只吃結構欄位,散文注入免疫")
+     lv.add_argument("vp_loop_id", metavar="loop_id")
+     lv.add_argument("--settle", dest="vp_settle", metavar="清單檔")
+     lv.add_argument("--json", dest="vp_json", action="store_true")
++    lr = lsub.add_parser("rewrite", help="人裁「整份重寫」收尾:記 rewrite 事件+血緣 note(prev/successor),自動查「連續兩次」")
++    lr.add_argument("rw_loop_id", metavar="loop_id")
++    lr.add_argument("--successor", dest="rw_successor", required=True, help="接手的新迴圈編號")
++    lr.add_argument("--note", dest="rw_note", default="", help="一句為什麼判重寫(人裁依據)")
+     ln = lsub.add_parser("next", help="M1包 機械脊椎:帳本吐唯一下一動作(phase/輪數/canary 型別/席數/記帳模板);唯讀指針,不 spawn agent")
+     ln.add_argument("loop_id")
+     ln.add_argument("--tier", dest="next_tier", choices=("light", "standard", "high"),
+                     help="編排者宣告 tier(有帳面定錨時須一致否則 rc2;零記錄必填)")
+     ln.add_argument("--json", action="store_true", dest="next_json", help="機讀輸出")
+     ln.add_argument("--need", type=int, default=2, help="legacy 收斂窗 K(委派 gate 用,預設 2)")
+     ln.add_argument("--spec", dest="gate_spec", help="gate 委派用 spec 檔;缺=判 converged 資訊不足→gate-pending")
+     ln.add_argument("--repo", dest="gate_repo", help="repo root(gate 委派用)")
+     lcs = lsub.add_parser("canary-stats",
+                           help="[d4 讀取面] 跨輪 canary 累積帳:席位×caught/missed×尾端連續 missed;唯讀恆 rc0")
+@@ -16158,20 +16198,22 @@ def main():
+         if args.lcmd == "status":
+             return cmd_loop_status(env, args.loop_id, args.need,
+                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
+                                    panel=args.panel, light=args.light, min_seats=args.min_seats,
+                                    settle=args.settle, disposal=args.disposal, roster=args.roster)
+         if args.lcmd == "compress":
+             return cmd_loop_compress(args.compress_file, as_json=args.compress_json)
+         if args.lcmd == "verify-progress":
+             return cmd_loop_verify_progress(env, args.vp_loop_id, settle=args.vp_settle,
+                                             as_json=args.vp_json)
++        if args.lcmd == "rewrite":
++            return cmd_loop_rewrite(env, args.rw_loop_id, args.rw_successor, args.rw_note)
+         if args.lcmd == "next":
+             return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json,
+                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)
+         # capture-counts 已在 vault-free 段提前處理(見上)
+ 
+     if args.cmd == "guard":
+         if args.gcmd == "list":
+             return cmd_guard_list(env, unbound_only=args.unbound)
+         if args.gcmd == "scaffold":
+             return cmd_guard_scaffold(env, args.node, args.invariant, args.method,
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 9323850..7fc2277 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3780,20 +3780,41 @@ def t_gov_stats_three_layers():
+     root, vault = _stats_fixture("gctl-st3-", [dup, dup, dup])
+     try:
+         out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+         seg = [l for l in out.splitlines() if l.strip().startswith("check-s")]
+         check("stats: 三行重複 → 去重 1 / 原始 3", bool(seg) and " 1 " in seg[0] and " 3 " in seg[0], out)
+         check("stats: 印出「不等於預設畫面行數」聲明", "預設畫面" in out and "折疊" in out, out)
+     finally:
+         shutil.rmtree(root, ignore_errors=True)
+ 
+ 
++def t_loop_rewrite_mark():
++    """rewrite 寫入端(2026-08-25 第一次真實事件時補建):事件+血緣 note/連續第二次警告/同號 rc2。"""
++    import json as _json
++    import subprocess as _sp
++    v = mkvault()
++    _sp.run(["git", "init", "-q"], cwd=str(v.parent))
++    _sp.run(["git", "add", "-A"], cwd=str(v.parent))
++    _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], cwd=str(v.parent))
++    r1 = run(v, "loop", "rewrite", "lf-a", "--successor", "lf-b", "--note", "測試判重寫")
++    check("rewrite: rc0+白話收尾訊息", r1.returncode == 0 and "人裁整份重寫」收尾" in r1.stdout, r1.stdout)
++    gl = v.parent / ".governance-log.jsonl"
++    recs = [_json.loads(x) for x in gl.read_text(encoding="utf-8").splitlines() if x.strip()]
++    rw = [o for o in recs if o.get("gate") == "design-loop" and o.get("kind") == "rewrite"]
++    check("rewrite: 事件入帳+血緣 note 帶 prev 與 successor",
++          len(rw) == 1 and "prev=lf-a" in rw[0]["note"] and "successor=lf-b" in rw[0]["note"], str(rw))
++    r2 = run(v, "loop", "rewrite", "lf-b", "--successor", "lf-c", "--note", "又判重寫")
++    check("rewrite: 連續第二次→強制攤人警告", "連續第二次判重寫" in r2.stdout and "不得三開" in r2.stdout, r2.stdout)
++    check("rewrite: 同號 rc2", run(v, "loop", "rewrite", "lf-x", "--successor", "lf-x", expect_rc=2).returncode == 2, "")
++    print("  ✓ t_loop_rewrite_mark")
++
++
+ def t_gov_stats_rewrite_bucket():
+     """d3(設計審收斂重定義 2026-08-25):rewrite 收尾獨立計數——只有 rewrite 的編號
+     不再悄悄掉出 conv/capped 兩桶讓放行率失真。"""
+     import shutil
+     gov = [
+         '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"design-loop","kind":"converged","hard":false,"nodes":["L1"]}\n',
+         '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L2"],"note":"prev=L2-v0"}\n',
+         # L3=先 cap-reached 後人裁 rewrite(最貼近真實流程的組合;r1 主審 F6:漏排除會掉回「人裁放行」桶)
+         '{"ts":"2026-06-03T09:00:00","commit":"ccc","gate":"design-loop","kind":"cap-reached","hard":false,"nodes":["L3"]}\n',
+         '{"ts":"2026-06-03T10:00:00","commit":"ddd","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L3"],"note":"prev=L3-v0"}\n',

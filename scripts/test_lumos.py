@@ -3805,6 +3805,16 @@ def t_loop_rewrite_mark():
     r2 = run(v, "loop", "rewrite", "lf-b", "--successor", "lf-c", "--note", "又判重寫")
     check("rewrite: 連續第二次→強制攤人警告", "連續第二次判重寫" in r2.stdout and "不得三開" in r2.stdout, r2.stdout)
     check("rewrite: 同號 rc2", run(v, "loop", "rewrite", "lf-x", "--successor", "lf-x", expect_rc=2).returncode == 2, "")
+    # 前綴碰撞不得偽造血緣(clf r1 主審 F1:successor=lf-a 不可誤中 successor=lf-a2 的帳)
+    run(v, "loop", "rewrite", "pfx-src", "--successor", "pfx-a2", "--note", "鋪前綴")
+    r3 = run(v, "loop", "rewrite", "pfx-a", "--successor", "pfx-b", "--note", "全新編號")
+    check("rewrite: 前綴編號不誤判連續重寫", "連續第二次判重寫" not in r3.stdout, r3.stdout)
+    # 壞 JSON 行(非物件)不炸血緣查找
+    gl2 = v.parent / ".governance-log.jsonl"
+    with open(gl2, "a", encoding="utf-8") as f:
+        f.write('"just a string"\n[1,2]\n')
+    r4 = run(v, "loop", "rewrite", "pfx-c", "--successor", "pfx-d")
+    check("rewrite: 帳內非物件 JSON 行不炸", r4.returncode == 0, str(r4.returncode))
     print("  ✓ t_loop_rewrite_mark")
 
 

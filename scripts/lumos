@@ -443,16 +443,22 @@ def cmd_loop_rewrite(env, loop_id, successor, note):
     chain_prev = None
     try:
         import json as _j
+        import re as _re
         gl = env.vault.parent / ".governance-log.jsonl"
+        # 邊界比對:successor=<id> 後面必須是分號或字串結尾——裸子字串會讓前綴編號互撞
+        # (successor=lf-a 誤中 successor=lf-a2;clf r1 主審 F1 實驗重現),偽造連續重寫警告。
+        _pat = _re.compile(r"successor=" + _re.escape(loop_id.strip()) + r"(;|$)")
         if gl.exists():
             for line in gl.read_text(encoding="utf-8").splitlines():
                 try:
                     o = _j.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(o, dict):
+                    continue          # 非物件 JSON 行(壞帳)跳過,不炸整個指令
                 if o.get("gate") == "design-loop" and o.get("kind") == "rewrite" \
-                        and f"successor={loop_id.strip()}" in str(o.get("note", "")):
-                    chain_prev = (o.get("nodes") or [None])[0]
+                        and _pat.search(str(o.get("note", ""))):
+                    chain_prev = (o.get("nodes") or [None])[0]   # 多筆時取最後一筆(帳序=時序,最近的血緣)
     except OSError:
         pass
     lineage = f"prev={loop_id.strip()};successor={successor.strip()};{note or ''}".rstrip(";")
