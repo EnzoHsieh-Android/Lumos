@@ -15328,6 +15328,20 @@ def t_doctor_cascade_reminder():
     r3 = run(v, "doctor")
     check("E4: 全部判定→整段靜默(不印 0 張)", "[E4]" not in r3.stdout and "連鎖待辦單" not in r3.stdout,
           r3.stdout[-300:])
+    # broken-only 分支(ccr r1 主審鏡頭3:此前零覆蓋)
+    (rcd / "c-broken-only.jsonl").write_text("{oops not json\n", encoding="utf-8")
+    r4 = run(v, "doctor")
+    check("E4: 只有損毀帳本→損毀專屬訊息", "張連鎖帳本開頭損毀,待辦單內容救不回來" in r4.stdout
+          and "零筆判定" not in r4.stdout, r4.stdout[-400:])
+    (rcd / "c-broken-only.jsonl").unlink()
+    # CASCADE-EMPTY 指路措辭(ccr r1 主審鏡頭4:零鄰居時不得對空清單講「上面列的每個」)
+    write(v, "Projects/E.md", "type: project\nstatus: done")
+    run(v, "decision-add", "E", "孤兒決策", "--decided", "2026-07-01", expect_rc=0)
+    re_ = run(v, "decision-supersede", "E", "孤兒決策", "--by", "新孤兒", expect_rc=0)
+    check("T1b: 零鄰居時不講「上面列的每個 NEIGHBOR」", "CASCADE-EMPTY" in re_.stderr
+          and "上面列的每個" not in re_.stderr, re_.stderr[-400:])
+    check("T1b: 零鄰居仍指路(含指令與待辦單語意)", "已開連鎖待辦單" in re_.stderr
+          and "lumos rel-cascade list" in re_.stderr, re_.stderr[-400:])
     print("  ✓ t_doctor_cascade_reminder")
 
 

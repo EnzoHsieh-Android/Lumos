@@ -1016,9 +1016,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                    "查該邊是否真受翻案影響:是→更新來源節點跟上新決策;否→已確認無關可 bump 來源 updated 消音;純語意矛盾留 AI 交叉審")
 
     # Check E4: 翻案開的連鎖待辦單有沒有人跟([T1] Projects/連鎖佇列軟提醒_計劃,2026-08-25)。
-    #   刻意全靜默設計:乾淨時整段不印(不佔版面);天數=UTC-aware fromisoformat 相減 .days
-    #   (照 cmd_rel_cascade_list 慣例,勿混本地日期——E2 的 tz 跨日雷);未來 ts 記 0 天;
-    #   ts 缺失/非法照計入、天數標不明。
+    #   刻意全靜默設計:乾淨時整段不印(不佔版面;同 Check W 既有先例);天數=UTC-aware fromisoformat
+    #   相減 .days(照 cmd_rel_cascade_list 慣例,勿混本地日期——E2 的 tz 跨日雷);未來 ts 記 0 天;
+    #   ts 缺失/非法照計入、天數標不明。擺位:留在 E2 後(統計就在 E2 迴圈收的)——★勿移到 E3 後:
+    #   會落進 t_check_e3 系測試的 [E3]..[H] 切片窗★;段名 E4 取新增序,非畫面序(ccr r1 兩席對照後裁)。
     if _casc_unseen_ts or _casc_broken:
         section("E4", "翻案開的連鎖待辦單有沒有人跟")
         import datetime as _dt4
@@ -1044,8 +1045,11 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         else:
             _head4 = f"{_casc_broken} 張連鎖帳本開頭損毀,待辦單內容救不回來——多半是翻案當下寫入被打斷,需人工檢視"
         warn_soft(_lines4, _head4, advice="lumos rel-cascade list")
+        # nodes=[] 是刻意偏離「每違規節點各一筆」慣例:cascade 帳本不是圖譜節點、無 stem 可填,
+        # 聚合計數走 note 欄(全庫唯一同形狀的是 doctor-run 彙總事件)。
         gov_events.append({"gate": "check-cascade", "kind": "warned", "hard": False, "nodes": [],
                            "note": f"unseen={len(_casc_unseen_ts)} broken={_casc_broken}"})
+        print()
     print()
 
     # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
@@ -3018,7 +3022,7 @@ def cmd_signoff(env, node, note, by=None):
 # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
 # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
 # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
-_KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
+_KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
                 "check-j", "check-k", "check-r", "check-s", "check-s2", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
@@ -16303,8 +16307,12 @@ def main():
                             _n = cascade_surface(env, rel, _decision_id, stream=sys.stderr)
                             if not _n:
                                 print("CASCADE-EMPTY 無 typed 連入鄰居(本次翻案無已知依賴面)", file=sys.stderr)
-                            # [T1b 連鎖佇列軟提醒] 開單當下就用人話指路(Issue 修法 A;doctor E4 是事後巡檢面)
-                            print(f"已開連鎖待辦單 {_cid}:上面列的每個 NEIGHBOR 都要回頭判——還受這條決策影響就 confirm、無關就 prune;下一步:", file=sys.stderr)
+                            # [T1b 連鎖佇列軟提醒] 開單當下就用人話指路(Issue 修法 A;doctor E4 是事後巡檢面)。
+                            #   零鄰居時不得講「上面列的每個」(ccr r1 主審實跑抓的空清單矛盾)。
+                            if _n:
+                                print(f"已開連鎖待辦單 {_cid}:上面列的每個 NEIGHBOR 都要回頭判——還受這條決策影響就 confirm、無關就 prune;下一步:", file=sys.stderr)
+                            else:
+                                print(f"已開連鎖待辦單 {_cid}(目前無已知依賴面,暫無可判項);之後有筆記以 verified_by/plan_refs 連進來時回頭判。查單:", file=sys.stderr)
                             print("    lumos rel-cascade list", file=sys.stderr)
                         else:
                             print("CASCADE-SKIP 決策無 id(節點未 reindex),本次不開 cascade;補網 E2 兜底", file=sys.stderr)
