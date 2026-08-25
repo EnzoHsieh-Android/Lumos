@@ -23,6 +23,7 @@ verified_by:
   - "[[Verification/2026-08-18_循序tier錨定落地]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
 summary: |-
+  KEY:★收斂實證(2026-08-25,節點還原案 6 輪+代碼審對照)★——散文 spec 設計審 6 輪全未機械收斂(153 條全折;每折平均新生 1-2 處措辭面,「半改句」單日五發),同日 code 側一輪 minor 收斂+實作後驗證全過:再證「便宜初篩網/正確性歸下游」定位,散文無 oracle;跑滿攤人=panel K=2 下的正常出口非失敗;待加強:①cluster 分群帳(現有機制,首輪就開,「文件精度」群 accepted-minor 不擋收斂)②被審 spec 瘦身(審計史外移)
   KEY:★問閘雙軌(2026-08-24,[[Issues/設計迴圈問閘指令與panel記帳互斥]] d1 落地)★——記帳型態決定閘:單席循序一輪一筆處置帳→--disposal;多席 panel 每席各記→--gate --panel --min-seats 3(08-06 後 K=2);兩閘互斥,問錯 CLI 會擋下並指路(指令獨立行);漂移守衛 t_loop_status_disposal_panel_routing
   KEY:★[2026-08-14]canary 協議停用(單源=[[Systems/canary-audit]] d5)★——植入/判定/抽樣分權/漏抓懲罰全停;輪記帳改 `canary record none`(純處置帳載體),panel 輪有效=記帳席≥2;skill 頁頂掛告示、植入步驟標停用;「審計員有沒有讀」由 quote-check 引句錨定把關;落地驗證=[[Verification/2026-08-14_canary協議停用none制落地]]
   KEY:[2026-08-04 重設計]★收斂改走處置閘★(--disposal;完整設計=[[Projects/design-loop重設計]],r1 panel 自審收斂+人裁放行)——定位修訂「閘便宜,審不淺」(前提層錯誤明列本層職責:TDD/E2E 對 spec 理解本身無 oracle);★(2026-08-21 程式碼實證)更正:三合一「退場」不準確——只有 capture-recapture 降 advisory;panel 的「輪有效∧存活≤minor」仍是必要合取,且 2026-08-05 起新 loop 加嚴為 K=2(連兩輪各自過);「K-streak」在程式碼專指 legacy 模式(K=2∧G1∧G2),與 panel 合取是兩套;「1/38」全庫查無出處★ capture-recapture 降 advisory(封閉母體前提不成立);canary 降級觀測(d4);錨定紀律=finding 必附逐字引句、quote-check 對凍結快照機械驗。舊 panel 閘保留給 code-loop——★2026-08-08 撤銷:code-loop 亦改走處置閘(Enzo 具名推翻防浮動條款,見[[Projects/驗證層去模型化_計劃]];A 案機制碼保留供舊帳重放)★
