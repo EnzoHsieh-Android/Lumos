@@ -1,0 +1,232 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index e529579..6b24fc1 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -3058,22 +3058,22 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
+         print()
+     # 設計迴圈結案方式(工具鏈補強十件 #6):達上限卻從沒過關的審查編號 = 人裁放行。
+     # 只看 gate=design-loop 的事件(2026-08-22 起才記;之前的迴圈沒帳,算不出來,這裡如實講)。
+     dl = [r for r in ded if r.get("gate") == "design-loop"]
+     if dl:
+         by = {}
+         for r in dl:
+             for nd_ in (r.get("nodes") or []):
+                 by.setdefault(nd_, set()).add(r.get("kind"))
+         conv = sum(1 for k in by.values() if "converged" in k)
+-        capped = sum(1 for k in by.values() if "cap-reached" in k and "converged" not in k)
+-        rewrote = sum(1 for k in by.values() if "rewrite" in k and "converged" not in k and "cap-reached" not in k)
++        capped = sum(1 for k in by.values() if "cap-reached" in k and "converged" not in k and "rewrite" not in k)
++        rewrote = sum(1 for k in by.values() if "rewrite" in k and "converged" not in k)
+         print(f"  審查迴圈結案方式(只算有記帳的 {len(by)} 個編號):閘過了 {conv} 個、跑滿上限沒過關(人裁放行) {capped} 個、人裁判整份重寫收尾 {rewrote} 個"
+               + (f"——人裁放行率 {capped / len(by):.0%}" if by else ""))
+         print("  (2026-08-22 起 loop next / loop status 才會記這個帳;更早的迴圈沒資料,不在分母)")
+         print()
+     print("  註:這張表是「去重後」的筆數,跟不加 --stats 的畫面行數不是同一套算法——預設畫面還會再折疊一次。")
+ 
+ 
+ def _render_gov_nags(ded, min_days):
+     """機制空轉偵測(Issues/自足性審計提醒空轉四十六天 的出口,2026-08-22):
+     同一道軟閘對同一篇筆記,從第一次提醒到最後一次提醒跨 ≥ min_days 天,而且最後一次提醒就在最近一次
+@@ -13674,43 +13674,50 @@ def cmd_prose_lint(path):
+     """
+     md = Path(path)
+     if not md.is_file():
+         print(f"擋下:找不到這個檔案: {path}", file=sys.stderr)
+         return 2
+     try:
+         text = md.read_text(encoding="utf-8-sig")
+     except OSError as e:
+         print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
+         return 2
++    except UnicodeDecodeError:
++        print(f"擋下:這個檔案不是 UTF-8 文字(裡面有壞位元組,常見於從 Word/Outlook 貼上的內容)——prose-lint 只掃文字 spec: {path}", file=sys.stderr)
++        return 2
+     hits = []
+     in_fence = False
++    fence_open_ln = 0
+     for ln, line in enumerate(text.splitlines(), 1):
+-        if line.lstrip().startswith("```"):
++        if line.lstrip().startswith(("```", "~~~")):
+             in_fence = not in_fence
++            fence_open_ln = ln if in_fence else 0
+             continue
+-        if in_fence or "引句:" in line or "引句:" in line:
++        if in_fence or "引句:" in line or "引句：" in line:
+             continue
+         for family, words in _PROSE_WEAK_WORDS:
+             for w in words:
+                 start = 0
+                 while True:
+                     idx = line.find(w, start)
+                     if idx < 0:
+                         break
+                     frag = line[max(0, idx - 12):idx + len(w) + 12].strip()
+                     hits.append((ln, family, w, frag))
+                     start = idx + len(w)
+     n_words = sum(len(ws) for _, ws in _PROSE_WEAK_WORDS)
++    if in_fence:
++        print(f"提醒:第 {fence_open_ln} 行開的程式碼圍欄沒關(``` 或 ~~~ 不成對)——它之後的內容全都沒被掃;補上關閉圍欄再重掃一次才準。")
+     if not hits:
+         print(f"✓ prose-lint {md.name} — 沒掃到模糊措辭(詞表保守首版 {n_words} 個詞;掃不到不代表精確,詞表在下一個真實設計迴圈校準)")
+         return 0
+-    print(f"掃到 {len(hits)} 處模糊措辭({md.name})。這不擋任何事(rc 仍是 0)——在意的原因:spec 裡的模糊詞會讓實作者自行腦補、審查員也錨不住:")
++    print(f"提醒:掃到 {len(hits)} 處模糊措辭({md.name}),不擋任何事(rc 仍是 0)——在意的原因:spec 裡的模糊詞會讓實作者自行腦補、審查員也錨不住:")
+     shown = hits[:40]
+     for ln, family, w, frag in shown:
+         print(f"  第 {ln} 行 「{w}」({family}):…{frag}…")
+     if len(hits) > len(shown):
+         print(f"  (其餘 {len(hits) - len(shown)} 處省略,全部列會淹掉重點)")
+     print("處理方式:能量化就量化;不能量化的,寫明「誰、什麼時候、用什麼判準」。改完重掃:")
+     print(f"    lumos prose-lint {path}")
+     return 0
+ 
+ 
+@@ -15734,27 +15741,27 @@ def main():
+     p = sub.add_parser("deinit", help="專案層反安裝(對稱 init):拆本 repo 的 hooks/工具組/CLAUDE.md 注入/圖譜")
+     p.add_argument("--keep-graph", action="store_true", help="保留圖譜 vault,其餘照拆")
+     p.add_argument("--dry-run", action="store_true", help="只印會動到什麼,不實際改動")
+     p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(CI/非互動用)")
+     p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
+ 
+     p = sub.add_parser("teardown", help="一鍵拆機:當前 repo 專案層 + 機器全域(CLI/skills/hooks),保留圖譜")
+     p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(非互動環境必須)")
+     p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
+ 
+-    p = sub.add_parser("prose-lint", help="spec 白話健檢:掃中文模糊措辭(恆 rc0 只提醒不擋;排除 code fence 與引句行)")
+-    p.add_argument("path", help="要掃的 markdown 檔路徑")
+-
+     p = sub.add_parser("fold-check", help="折入後一致性複查(vault-free):列舉鏡像段 + value-drift/reverse-omission flag")
+     p.add_argument("path", help="要核對的 markdown 檔路徑")
+     p.add_argument("--json", dest="as_json", action="store_true", help="JSON 輸出(供機器讀)")
+ 
++    p = sub.add_parser("prose-lint", help="spec 白話健檢:掃中文模糊措辭(恆 rc0 只提醒不擋;排除 code fence 與引句行)")
++    p.add_argument("path", help="要掃的 markdown 檔路徑")
++
+     p = sub.add_parser("refcheck", help="spec 指涉宣稱確定性核對(vault-free):inline-code 路徑/行號 → 存在性 manifest")
+     p.add_argument("md", help="要核對的 markdown 檔")
+     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
+ 
+     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
+     p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
+     p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
+     p.add_argument("--diff", dest="impact_diff", help="diff range(如 main..HEAD):聚合各改動檔的 ranked impact 成受影響功能面 manifest(code-loop 審計鏡頭)")
+     p.add_argument("--sync-only", action="store_true", dest="impact_sync_only",
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 39e0356..80d60d6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3787,27 +3787,31 @@ def t_gov_stats_three_layers():
+         shutil.rmtree(root, ignore_errors=True)
+ 
+ 
+ def t_gov_stats_rewrite_bucket():
+     """d3(設計審收斂重定義 2026-08-25):rewrite 收尾獨立計數——只有 rewrite 的編號
+     不再悄悄掉出 conv/capped 兩桶讓放行率失真。"""
+     import shutil
+     gov = [
+         '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"design-loop","kind":"converged","hard":false,"nodes":["L1"]}\n',
+         '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L2"],"note":"prev=L2-v0"}\n',
++        # L3=先 cap-reached 後人裁 rewrite(最貼近真實流程的組合;r1 主審 F6:漏排除會掉回「人裁放行」桶)
++        '{"ts":"2026-06-03T09:00:00","commit":"ccc","gate":"design-loop","kind":"cap-reached","hard":false,"nodes":["L3"]}\n',
++        '{"ts":"2026-06-03T10:00:00","commit":"ddd","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L3"],"note":"prev=L3-v0"}\n',
+     ]
+     root, vault = _stats_fixture("gctl-rw-", gov)
+     try:
+         out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+-        check("stats: rewrite 收尾獨立計數", "人裁判整份重寫收尾 1 個" in out, out)
+-        check("stats: 分母含 rewrite 編號(2 個)", "只算有記帳的 2 個編號" in out, out)
++        check("stats: rewrite 收尾獨立計數(含 cap-reached+rewrite 組合共 2 個)", "人裁判整份重寫收尾 2 個" in out, out)
++        check("stats: 分母含 rewrite 編號(3 個)", "只算有記帳的 3 個編號" in out, out)
+         check("stats: converged 照算", "閘過了 1 個" in out, out)
++        check("stats: cap-reached+rewrite 不落「人裁放行」桶(F6)", "跑滿上限沒過關(人裁放行) 0 個" in out, out)
+     finally:
+         shutil.rmtree(root, ignore_errors=True)
+ 
+ 
+ def t_gov_stats_na_columns():
+     import shutil
+     gov = [
+         '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"code-loop","kind":"passed","hard":false,"nodes":[]}\n',
+         '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"anchor-approve","kind":"approved","hard":false,"nodes":["scripts/hooks/pre-push"]}\n',
+         '{"ts":"2026-06-03T09:00:00","commit":"ccc","gate":"anchor-approve","kind":"approved","hard":false,"nodes":[]}\n',
+@@ -6206,20 +6210,33 @@ def t_prose_lint():
+         out = run_lumos_capture(["prose-lint", p])
+         check("prose-lint: 掃到正文弱詞(盡量+必要時)", "「盡量」" in out and "「必要時」" in out, out)
+         check("prose-lint: fence 內不掃", "fence裡不掃" not in out, out)
+         check("prose-lint: 引句行不掃", "這句是引文" not in out, out)
+         check("prose-lint: 掃到東西 rc 仍 0(advisory)", run_lumos(["prose-lint", p]) == 0, "")
+         with open(p, "w", encoding="utf-8") as f:
+             f.write("# t\n\n這行乾乾淨淨。\n")
+         check("prose-lint: 乾淨檔 rc0 且訊息講明詞表保守", run_lumos(["prose-lint", p]) == 0
+               and "詞表保守首版" in run_lumos_capture(["prose-lint", p]), "")
+         check("prose-lint: 檔案不存在 rc2", run_lumos(["prose-lint", p + ".nope"]) == 2, "")
++        # ── 邊界四釘(code-loop code-prose-conv-impl r1 主審 F1/F2/F3/F5,2026-08-25)──
++        with open(p, "w", encoding="utf-8") as f:
++            f.write("# t\n\n~~~\n儘量tilde圍欄不掃\n~~~\n\n引句：「大概這句全形冒號引文」\n")
++        out2 = run_lumos_capture(["prose-lint", p])
++        check("prose-lint: ~~~ 圍欄內不掃(F1)", "tilde圍欄不掃" not in out2, out2)
++        check("prose-lint: 全形冒號引句行也排除(F3)", "全形冒號引文" not in out2, out2)
++        with open(p, "w", encoding="utf-8") as f:
++            f.write("# t\n\n```\n沒關的圍欄\n\n後面這行有盡量兩字。\n")
++        out3 = run_lumos_capture(["prose-lint", p])
++        check("prose-lint: 未閉合圍欄要警告而非靜默吞掉全文(F2)", "圍欄沒關" in out3, out3)
++        with open(p, "wb") as f:
++            f.write(b"# t\n\xff\xfe broken bytes\n")
++        check("prose-lint: 非 UTF-8 檔 rc2 乾淨擋下不 traceback(F5)", run_lumos(["prose-lint", p]) == 2, "")
+     finally:
+         os.remove(p)
+ 
+ 
+ def t_refcheck():
+     import json as _json
+     root = _mk_refcheck_repo()
+ 
+     # ---- 案例 1/3/4/5/7 + 目錄型:綜合 spec ----
+     md_all = root / "spec-all.md"
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index f095f67..fabd650 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -682,22 +682,22 @@ KEY:★CHECKPOINT★   <改了難救>                                     # 建
+ - **升級**:查證後補 [src:]/[git:] 或走 `lumos signoff`;**佚失的 why 正確輸出是「佚失:」,嚴禁編一個合理的**。深規見 `reference.md`〈重生守衛〉段。
+ 
+ ---
+ 
+ 
+ ---
+ 
+ 
+ ### 設計審查收斂閘(現行;從舊 canary 節抽出的兩句,因為是全檔唯一出處)
+ 
+-> 現行:輪記帳 `lumos canary record none ...`(純處置帳載體);「審計員有沒有讀」由 quote-check 引句錨定把關;收斂閘=design-loop `loop status --disposal` / code-loop `--gate --panel`。(原句全文見〈歷史與停用〉canary 節第一段。)
+-> **gate 契約補注**:`--spec` 在 code-loop 情境可省略(`loop status --gate` G1 skip,無 spec 可驗引用座標屬預期);design/spec loop 仍帶 `--spec`(G1 會跑 refcheck 驗引用座標)。**design-loop 新制(2026-08-04)**:收斂閘改 `loop status --disposal --spec <計劃> --repo <root>`(四條合取:G3∧處置帳全清∧留痕 sha 重驗∧quote-check 引句全錨定),舊 `--gate --panel` 留給 code-loop。
++> 現行:輪記帳 `lumos canary record none ...`(純處置帳載體);「審計員有沒有讀」由 quote-check 引句錨定把關;收斂閘=design-loop 與 code-loop 皆 `loop status --disposal`(code-loop 自 2026-08-08 起;見 lumos-code-loop skill);`--gate --panel` 僅供已定錨 panel 記帳的舊迴圈帳面重放。(原句全文見〈歷史與停用〉canary 節第一段。)
++> **gate 契約補注**:`--spec` 在 code-loop 情境可省略(`loop status --gate` G1 skip,無 spec 可驗引用座標屬預期);design/spec loop 仍帶 `--spec`(G1 會跑 refcheck 驗引用座標)。**design-loop 新制(2026-08-04)**:收斂閘改 `loop status --disposal --spec <計劃> --repo <root>`(四條合取:G3∧處置帳全清∧留痕 sha 重驗∧quote-check 引句全錨定);panel 閘(`--gate --panel`)僅供已定錨 panel 記帳的舊迴圈與帳面重放——code-loop 自 2026-08-08 起亦走處置閘(2026-08-25 d2 訂正,原「留給 code-loop」說法過期)。
+ 
+ ## 決策與驗證
+ 
+ ### decisions 欄位（ADR：決策時間有效性 + 為什麼選/為什麼不選）
+ 
+ **有重大架構/技術決策的筆記必須有 `decisions` 陣列。** 追蹤「為什麼當初選 A 後來改 B」，讓過期決策不污染 Claude Code 的上下文，並讓「為什麼不選 B」的學習資產保留下來。
+ 
+ > 設計理由：純粹只記「選了什麼、被誰取代」會掉資訊——下次有人想再考慮被推翻的方案時，看不到「當初為什麼放棄、放棄理由現在是否還成立」。`context` / `alternatives_considered` / `why_chosen` / `trade_offs` 是業界 ADR 標準四欄位，**「為什麼選 / 為什麼不選」才是真正的決策智慧，「選了什麼」只是結果。**
+ 
+ ```yaml
+@@ -1263,15 +1263,15 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
+ 派乾淨 agent 對抗審計一份 **spec/設計稿**(挑毛病、找 blocker)時,**順手驗證審計員這輪有沒有認真讀**——放水審計員回報的「沒問題」是最危險的假乾淨。做法(★停用前舊制★):
+ 
+ 1. **植一個 canary**:在審計用的**工作副本**裡塞一個刻意、已知、**純加性**的瑕疵(只允許不牽動其他段落的型:**指向不存在章節的交叉引用**、或**約束引用未定義的詞**)。**禁用「與某段矛盾的需求」**那類非局部 canary(會污染審計員對被矛盾那段的真實意見)。給它一個唯一 token 當定位記號。**提交的文件永遠不含 canary。**
+ 2. **正常跑審計,不告訴 agent 有 canary**(講了就作弊)。
+ 3. **判定**:唯一算數的是 agent **清楚且正確描述了那個瑕疵**(光是 token 出現不算)。
+    - **抓到** → 這輪是醒的;只信它對**同類、同段**的真實 findings(不是全面合格證)。移除 canary、依真實 findings 改。`lumos canary record caught --auditor <模型>`。
+    - **沒抓到** → 放水。**這輪判決作廢**,換不同 canary 重跑。`lumos canary record missed --auditor <模型>`。連 2 次 missed 就升級模型/把文件切小(升級前 `lumos gov --since 7` 看 missed 史)。
+ 4. **panel 變體**:一輪派 N 個審計員時,每個各給自己的 canary;漏抓自己 canary 的剔出投票。
+ 
+ **收斂留痕(2026-06-19;讓多輪審計能機械終止)**:把每輪記成一筆帶 loop 的 canary——`lumos canary record caught|missed --loop <設計slug> --severity clean|minor|major|blocker --findings <存活折入條數> --auditor <模型>`(`severity`=忠實轉錄審計員的最嚴重 finding;`--findings`=辯方裁決後存活折入的真 finding 條數)。收斂查詢用**證據閘**:`lumos loop status <slug> --need 2 --gate --spec <spec md> --repo <root>`——輪次紀律(連 2 輪 caught+乾淨)為必要條件,合取 G1(spec 引用座標 refcheck 全 ok)與 G2(發現枯竭:findings 單調不增、末輪 ≤1 且末步下降)→ exit 0=GATE PASS(綠燈進實作)。missed/缺 severity/blocker/major/引用壞座標/發現未枯竭都讓它不收斂(逼修了再審);不帶 `--gate` 為舊版純輪次判準(向後相容);panel/light/settle 三模式判準各異(見 design-loop skill,settle=清單全結清∧G1∧G3)。`gov` 看得到整段輪歷史。
+-> **gate 契約補注**:`--spec` 在 code-loop 情境可省略(`loop status --gate` G1 skip,無 spec 可驗引用座標屬預期);design/spec loop 仍帶 `--spec`(G1 會跑 refcheck 驗引用座標)。**design-loop 新制(2026-08-04)**:收斂閘改 `loop status --disposal --spec <計劃> --repo <root>`(四條合取:G3∧處置帳全清∧留痕 sha 重驗∧quote-check 引句全錨定),舊 `--gate --panel` 留給 code-loop。
++> **gate 契約補注**:`--spec` 在 code-loop 情境可省略(`loop status --gate` G1 skip,無 spec 可驗引用座標屬預期);design/spec loop 仍帶 `--spec`(G1 會跑 refcheck 驗引用座標)。**design-loop 新制(2026-08-04)**:收斂閘改 `loop status --disposal --spec <計劃> --repo <root>`(四條合取:G3∧處置帳全清∧留痕 sha 重驗∧quote-check 引句全錨定);panel 閘(`--gate --panel`)僅供已定錨 panel 記帳的舊迴圈與帳面重放——code-loop 自 2026-08-08 起亦走處置閘(2026-08-25 d2 訂正,原「留給 code-loop」說法過期)。
+ 
+ **天花板**:canary 抓得到「審計員根本沒讀/只吐通用回應」,**抓不到「讀了但複雜權衡判錯」**;判定「有沒有抓到」「severity 多嚴重」都由植入者自己做、無外部檢查——canary/收斂是**降低放水機率的摩擦 + 可觀測地板**,不是閉合驗證或 oracle。設計全文見 `docs/design/2026-06-19-canary-audit.md`、`…-convergence-recording.md`。
+ 
+ 
