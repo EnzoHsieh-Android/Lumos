@@ -3787,6 +3787,27 @@ def t_gov_stats_three_layers():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_loop_rewrite_mark():
+    """rewrite 寫入端(2026-08-25 第一次真實事件時補建):事件+血緣 note/連續第二次警告/同號 rc2。"""
+    import json as _json
+    import subprocess as _sp
+    v = mkvault()
+    _sp.run(["git", "init", "-q"], cwd=str(v.parent))
+    _sp.run(["git", "add", "-A"], cwd=str(v.parent))
+    _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], cwd=str(v.parent))
+    r1 = run(v, "loop", "rewrite", "lf-a", "--successor", "lf-b", "--note", "測試判重寫")
+    check("rewrite: rc0+白話收尾訊息", r1.returncode == 0 and "人裁整份重寫」收尾" in r1.stdout, r1.stdout)
+    gl = v.parent / ".governance-log.jsonl"
+    recs = [_json.loads(x) for x in gl.read_text(encoding="utf-8").splitlines() if x.strip()]
+    rw = [o for o in recs if o.get("gate") == "design-loop" and o.get("kind") == "rewrite"]
+    check("rewrite: 事件入帳+血緣 note 帶 prev 與 successor",
+          len(rw) == 1 and "prev=lf-a" in rw[0]["note"] and "successor=lf-b" in rw[0]["note"], str(rw))
+    r2 = run(v, "loop", "rewrite", "lf-b", "--successor", "lf-c", "--note", "又判重寫")
+    check("rewrite: 連續第二次→強制攤人警告", "連續第二次判重寫" in r2.stdout and "不得三開" in r2.stdout, r2.stdout)
+    check("rewrite: 同號 rc2", run(v, "loop", "rewrite", "lf-x", "--successor", "lf-x", expect_rc=2).returncode == 2, "")
+    print("  ✓ t_loop_rewrite_mark")
+
+
 def t_gov_stats_rewrite_bucket():
     """d3(設計審收斂重定義 2026-08-25):rewrite 收尾獨立計數——只有 rewrite 的編號
     不再悄悄掉出 conv/capped 兩桶讓放行率失真。"""

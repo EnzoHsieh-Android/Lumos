@@ -431,6 +431,41 @@ def _loop_gov_mark(env, loop_id, kind, note=""):
         pass
 
 
+def cmd_loop_rewrite(env, loop_id, successor, note):
+    """人裁「整份重寫」的收尾記帳(設計審收斂重定義 d3 帳面件的寫入端;2026-08-25 第一次真實
+    rewrite 事件時補建)。寫 gate=design-loop kind=rewrite 事件到治理帳,note 機械帶血緣
+    (prev=舊編號;successor=新編號)——「連續兩次判重寫→強制攤人,不得三開」靠沿 note 鏈查,
+    本指令寫入前自動查一跳:若本編號自己就是某次 rewrite 的 successor,印強制攤人警告(advisory)。"""
+    if not successor or successor.strip() == loop_id.strip():
+        print("擋下:--successor 要給新開的迴圈編號,而且不能跟舊編號一樣——重寫=換新編號載新版,同號沒有「重寫」可言", file=sys.stderr)
+        return 2
+    # 血緣一跳查詢:這個編號是不是已經是上一次重寫的產物?
+    chain_prev = None
+    try:
+        import json as _j
+        gl = env.vault.parent / ".governance-log.jsonl"
+        if gl.exists():
+            for line in gl.read_text(encoding="utf-8").splitlines():
+                try:
+                    o = _j.loads(line)
+                except ValueError:
+                    continue
+                if o.get("gate") == "design-loop" and o.get("kind") == "rewrite" \
+                        and f"successor={loop_id.strip()}" in str(o.get("note", "")):
+                    chain_prev = (o.get("nodes") or [None])[0]
+    except OSError:
+        pass
+    lineage = f"prev={loop_id.strip()};successor={successor.strip()};{note or ''}".rstrip(";")
+    _loop_gov_mark(env, loop_id.strip(), "rewrite", lineage)
+    print(f"✓ 迴圈 {loop_id} 以「人裁整份重寫」收尾,入治理帳;新版由 {successor} 接手審。")
+    print("  在意的原因:重寫不重置攤人義務——這筆帳讓「gov --stats」的放行率統計不失真,也讓血緣可查。")
+    if chain_prev:
+        print(f"  ★這已是連續第二次判重寫(上一段血緣:{chain_prev} → {loop_id})——強制攤人,不得三開★")
+    print("  之後查血緣:")
+    print("    lumos gov --stats")
+    return 0
+
+
 def _append_governance_log(vault, events):
     """寫者=doctor --ci + anchor approve:把 gate findings append 到 docs/.governance-log.jsonl。
     非 git / 取不到 HEAD → 跳過(不報錯)。dedup 留給讀時(lumos gov)。"""
@@ -15563,6 +15598,10 @@ def main():
     lv.add_argument("vp_loop_id", metavar="loop_id")
     lv.add_argument("--settle", dest="vp_settle", metavar="清單檔")
     lv.add_argument("--json", dest="vp_json", action="store_true")
+    lr = lsub.add_parser("rewrite", help="人裁「整份重寫」收尾:記 rewrite 事件+血緣 note(prev/successor),自動查「連續兩次」")
+    lr.add_argument("rw_loop_id", metavar="loop_id")
+    lr.add_argument("--successor", dest="rw_successor", required=True, help="接手的新迴圈編號")
+    lr.add_argument("--note", dest="rw_note", default="", help="一句為什麼判重寫(人裁依據)")
     ln = lsub.add_parser("next", help="M1包 機械脊椎:帳本吐唯一下一動作(phase/輪數/canary 型別/席數/記帳模板);唯讀指針,不 spawn agent")
     ln.add_argument("loop_id")
     ln.add_argument("--tier", dest="next_tier", choices=("light", "standard", "high"),
@@ -16165,6 +16204,8 @@ def main():
         if args.lcmd == "verify-progress":
             return cmd_loop_verify_progress(env, args.vp_loop_id, settle=args.vp_settle,
                                             as_json=args.vp_json)
+        if args.lcmd == "rewrite":
+            return cmd_loop_rewrite(env, args.rw_loop_id, args.rw_successor, args.rw_note)
         if args.lcmd == "next":
             return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json,
                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)
