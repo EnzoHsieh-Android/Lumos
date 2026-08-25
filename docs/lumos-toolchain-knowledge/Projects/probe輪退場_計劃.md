@@ -80,7 +80,7 @@ PRIOR-ART:借用=①d5(散文審回歸處置閘,2026-08-25)之延伸——同一
 - 詳帳:`governance/review-reports/probe-retire/r1-*.md`+r1-intake.md(收貨:s1/s2 全錨、s3/arch 註記格式由編排者逐主張核原文、ext 一句快照巢狀截斷機械重現)。
 
 - r1@v2(2026-08-25,5 席:s1 通才/s2 機械/s3 治理/arch/ext=Codex):18 審項/blocking 11/一句結論:v1 十五條核銷(九組乾淨一組半);新洞=判準放寬(d2 裁定補正)、code-loop 自家 reference §4 整段漏列、「皆單輪收斂」進裁定佐證被治理帳自證為兩輪(d1→d3 更正)、10074 指路虛設(改 cutoff 拒判)、K=2 第二輪消失(d4 誠實承認+回頭條件)——**全數折入零放行**(blocker 席在輪,accepted 必空);「先裁後動」治理席 git log 親驗成立。
-- 詳帳:`governance/review-reports/probe-retire-v2/r1-*.md`+r1-intake.md。
+- 詳帳:`governance/review-reports/probe-retire-v2/r1-*.md`+r1-intake.md。★r1 記帳自首:編排者曾在未跑 quote-check 時於 intake 寫「全數錨定」——處置閘 quote 關抓包(carrier 實際 0 句可抽);intake 誠實重寫,r2 delta 輪修復閘判。收貨檔慣例無機械守衛的首個反面教材,回寫迴圈摩擦案 [S4]★
 
 ## 下一步
 
