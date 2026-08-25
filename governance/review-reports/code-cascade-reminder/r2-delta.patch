@@ -1,0 +1,149 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index aa75517..863cd2d 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1009,23 +1009,24 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+                 gov_events.append({"gate": "check-e2", "kind": "warned", "hard": False,
+                                    "nodes": [notes[arel].stem]})
+     if not build_on_dead:
+         ok("沒有筆記建在被推翻的決策上")
+     else:
+         _soft_list(build_on_dead,
+                    f"有 {len(build_on_dead)} 處可能建在被推翻的決策上(用時間順序推的,不是定論):",
+                    "查該邊是否真受翻案影響:是→更新來源節點跟上新決策;否→已確認無關可 bump 來源 updated 消音;純語意矛盾留 AI 交叉審")
+ 
+     # Check E4: 翻案開的連鎖待辦單有沒有人跟([T1] Projects/連鎖佇列軟提醒_計劃,2026-08-25)。
+-    #   刻意全靜默設計:乾淨時整段不印(不佔版面);天數=UTC-aware fromisoformat 相減 .days
+-    #   (照 cmd_rel_cascade_list 慣例,勿混本地日期——E2 的 tz 跨日雷);未來 ts 記 0 天;
+-    #   ts 缺失/非法照計入、天數標不明。
++    #   刻意全靜默設計:乾淨時整段不印(不佔版面;同 Check W 既有先例);天數=UTC-aware fromisoformat
++    #   相減 .days(照 cmd_rel_cascade_list 慣例,勿混本地日期——E2 的 tz 跨日雷);未來 ts 記 0 天;
++    #   ts 缺失/非法照計入、天數標不明。擺位:留在 E2 後(統計就在 E2 迴圈收的)——★勿移到 E3 後:
++    #   會落進 t_check_e3 系測試的 [E3]..[H] 切片窗★;段名 E4 取新增序,非畫面序(ccr r1 兩席對照後裁)。
+     if _casc_unseen_ts or _casc_broken:
+         section("E4", "翻案開的連鎖待辦單有沒有人跟")
+         import datetime as _dt4
+         _now4 = _dt4.datetime.now(_dt4.timezone.utc)
+         _daysv, _no_ts = [], 0
+         for _ts4 in _casc_unseen_ts:
+             try:
+                 _d04 = _dt4.datetime.fromisoformat(_ts4)
+                 if _d04.tzinfo is None:
+                     _d04 = _d04.replace(tzinfo=_dt4.timezone.utc)
+@@ -1037,22 +1038,25 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+             _age4 = f"最老 {max(_daysv)} 天" if _daysv else "建立時間不明"
+             if _daysv and _no_ts:
+                 _age4 += f",另 {_no_ts} 張建立時間不明"
+             _head4 = (f"{len(_casc_unseen_ts)} 張連鎖待辦單自建立後零筆判定({_age4})——"
+                       "決策翻案後,引用它的筆記還成不成立沒人回頭判(撤稿研究:沒提醒時 94.6% 的引用不承認撤稿)")
+             if _casc_broken:
+                 _lines4.append(f"另有 {_casc_broken} 張帳本開頭損毀(root 不可恢復),需人工檢視")
+         else:
+             _head4 = f"{_casc_broken} 張連鎖帳本開頭損毀,待辦單內容救不回來——多半是翻案當下寫入被打斷,需人工檢視"
+         warn_soft(_lines4, _head4, advice="lumos rel-cascade list")
++        # nodes=[] 是刻意偏離「每違規節點各一筆」慣例:cascade 帳本不是圖譜節點、無 stem 可填,
++        # 聚合計數走 note 欄(全庫唯一同形狀的是 doctor-run 彙總事件)。
+         gov_events.append({"gate": "check-cascade", "kind": "warned", "hard": False, "nodes": [],
+                            "note": f"unseen={len(_casc_unseen_ts)} broken={_casc_broken}"})
++        print()
+     print()
+ 
+     # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
+     #   <節點rel>#dN,M1/P2 決策穩定 ID)指向的那條決策已 valid:false → 本驗證建在被推翻的意圖上。
+     #   dangling ref(格式壞/節點不存在/id 未指派)也浮出——不靜默通過,對齊 M2 反靜默紀律。
+     #   設計見 Projects/關係層主網_實作計畫 M1;取代母計劃 [S8] 的高噪音 advisory。
+     section("E3", "驗證紀錄引用的決策,是不是已經被翻案了")
+     e3_broken, e3_dangling = [], []
+     for rel, n in sorted(notes.items()):
+         # [自動養成 不對稱信任] firing 向讀「聯集」decision_refs + decision_refs_ai(放寬)
+@@ -3011,21 +3015,21 @@ def cmd_signoff(env, node, note, by=None):
+         print("⚠ ledger 已記但 frontmatter 戳記失敗(見上)", file=sys.stderr)
+         return rc
+     print(f"✓ signoff {rel} — {today}{('(' + by + ')') if by else ''}: {note[:60]}")
+     return 0
+ 
+ 
+ # ★gov --stats 的 gate 全集★(2026-08-20,計劃:Projects/閘觸發帳統計_計劃)
+ # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
+ # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
+ # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
+-_KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
++_KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
+                 "check-j", "check-k", "check-r", "check-s", "check-s2", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+ # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+ _STATS_ABSENT_DISCLAIMER = (
+     "  未出現 ≠ 無用。本帳看不到硬擋事件(anchor verify 擋下 push 時不寫任何帳),也分不出四種\n"
+     "  「沒出現」:跑了沒事／接了帳但沒被觸發／守的功能從沒被用過／本次執行根本沒載入該來源\n"
+     "  (ci 帳是條件載入)。要拿這份清單談退場,先確認該閘在本帳的 gate 名單之內、且來源本次有載入。"
+ )
+ 
+@@ -16296,22 +16300,26 @@ def main():
+                 #   輸出協議:supersede stdout 首行已印且逐字不變;cascade 面全走 stderr;
+                 #   失敗 fail-open(stderr 記 CASCADE-ERROR、rc 仍 0、補網 E2 兜底)。
+                 if rc == 0:
+                     try:
+                         if _decision_id:
+                             _cid = rel_cascade_create(env, _decision_id, rel)
+                             print(f"CASCADE {_cid} ROOT {_decision_id}", file=sys.stderr)
+                             _n = cascade_surface(env, rel, _decision_id, stream=sys.stderr)
+                             if not _n:
+                                 print("CASCADE-EMPTY 無 typed 連入鄰居(本次翻案無已知依賴面)", file=sys.stderr)
+-                            # [T1b 連鎖佇列軟提醒] 開單當下就用人話指路(Issue 修法 A;doctor E4 是事後巡檢面)
+-                            print(f"已開連鎖待辦單 {_cid}:上面列的每個 NEIGHBOR 都要回頭判——還受這條決策影響就 confirm、無關就 prune;下一步:", file=sys.stderr)
++                            # [T1b 連鎖佇列軟提醒] 開單當下就用人話指路(Issue 修法 A;doctor E4 是事後巡檢面)。
++                            #   零鄰居時不得講「上面列的每個」(ccr r1 主審實跑抓的空清單矛盾)。
++                            if _n:
++                                print(f"已開連鎖待辦單 {_cid}:上面列的每個 NEIGHBOR 都要回頭判——還受這條決策影響就 confirm、無關就 prune;下一步:", file=sys.stderr)
++                            else:
++                                print(f"已開連鎖待辦單 {_cid}(目前無已知依賴面,暫無可判項);之後有筆記以 verified_by/plan_refs 連進來時回頭判。查單:", file=sys.stderr)
+                             print("    lumos rel-cascade list", file=sys.stderr)
+                         else:
+                             print("CASCADE-SKIP 決策無 id(節點未 reindex),本次不開 cascade;補網 E2 兜底", file=sys.stderr)
+                     except Exception as _e:   # fail-open:決策寫入已 atomic 完成,不回滾
+                         print(f"CASCADE-ERROR {_e}", file=sys.stderr)
+                 return rc
+             rc, _decision_id = cmd_decision_add(env, rel, args.content, args.decided,
+                                                 context=args.context, why=args.why)
+             return rc
+         except (ValueError, RuntimeError, OSError) as e:   # [code-loop 最終 delta A] 補 OSError:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 6f3cf48..9323850 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -15321,20 +15321,34 @@ def t_doctor_cascade_reminder():
+     check("E4: --ci 落 check-cascade 事件", gov.exists() and "check-cascade" in gov.read_text(encoding="utf-8"),
+           gov.read_text(encoding="utf-8")[-300:] if gov.exists() else "未寫")
+     # 例2+例5:全部判定(prune 掉唯一鄰居)+移除損毀檔 → 整段靜默
+     (rcd / "c-broken-test.jsonl").unlink()
+     gid = "Projects/D.md#d1"
+     run(v, "rel-cascade", "prune", "A", "--cascade-id", cid1.stem, "--from", gid,
+         "--edge", "verified_by", "--by", "human", expect_rc=0)
+     r3 = run(v, "doctor")
+     check("E4: 全部判定→整段靜默(不印 0 張)", "[E4]" not in r3.stdout and "連鎖待辦單" not in r3.stdout,
+           r3.stdout[-300:])
++    # broken-only 分支(ccr r1 主審鏡頭3:此前零覆蓋)
++    (rcd / "c-broken-only.jsonl").write_text("{oops not json\n", encoding="utf-8")
++    r4 = run(v, "doctor")
++    check("E4: 只有損毀帳本→損毀專屬訊息", "張連鎖帳本開頭損毀,待辦單內容救不回來" in r4.stdout
++          and "零筆判定" not in r4.stdout, r4.stdout[-400:])
++    (rcd / "c-broken-only.jsonl").unlink()
++    # CASCADE-EMPTY 指路措辭(ccr r1 主審鏡頭4:零鄰居時不得對空清單講「上面列的每個」)
++    write(v, "Projects/E.md", "type: project\nstatus: done")
++    run(v, "decision-add", "E", "孤兒決策", "--decided", "2026-07-01", expect_rc=0)
++    re_ = run(v, "decision-supersede", "E", "孤兒決策", "--by", "新孤兒", expect_rc=0)
++    check("T1b: 零鄰居時不講「上面列的每個 NEIGHBOR」", "CASCADE-EMPTY" in re_.stderr
++          and "上面列的每個" not in re_.stderr, re_.stderr[-400:])
++    check("T1b: 零鄰居仍指路(含指令與待辦單語意)", "已開連鎖待辦單" in re_.stderr
++          and "lumos rel-cascade list" in re_.stderr, re_.stderr[-400:])
+     print("  ✓ t_doctor_cascade_reminder")
+ 
+ 
+ import secrets as _sec
+ _M1U = _sec.token_hex(3)   # m1 測試 loop id 唯一後綴(canary-log 落共用 tempdir,跨執行累積)
+ 
+ 
+ def _sha256_of(p):
+     import hashlib
+     return hashlib.sha256(Path(p).read_bytes()).hexdigest()
