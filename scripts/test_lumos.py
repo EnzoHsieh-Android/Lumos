@@ -3787,6 +3787,24 @@ def t_gov_stats_three_layers():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_gov_stats_rewrite_bucket():
+    """d3(設計審收斂重定義 2026-08-25):rewrite 收尾獨立計數——只有 rewrite 的編號
+    不再悄悄掉出 conv/capped 兩桶讓放行率失真。"""
+    import shutil
+    gov = [
+        '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"design-loop","kind":"converged","hard":false,"nodes":["L1"]}\n',
+        '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L2"],"note":"prev=L2-v0"}\n',
+    ]
+    root, vault = _stats_fixture("gctl-rw-", gov)
+    try:
+        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("stats: rewrite 收尾獨立計數", "人裁判整份重寫收尾 1 個" in out, out)
+        check("stats: 分母含 rewrite 編號(2 個)", "只算有記帳的 2 個編號" in out, out)
+        check("stats: converged 照算", "閘過了 1 個" in out, out)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def t_gov_stats_na_columns():
     import shutil
     gov = [
@@ -6174,6 +6192,29 @@ def _mk_refcheck_repo():
     (root / "scripts" / "real.py").write_text(
         "L1 = 1\nL2 = 2\nL3 = 3\nL4 = 4\nL5 = 5\n", encoding="utf-8")
     return root
+
+
+def t_prose_lint():
+    """[S1] 設計審收斂重定義(2026-08-25):模糊措辭掃描 advisory;fence 與引句行排除;恆 rc0。"""
+    import os
+    import tempfile
+    fd, p = tempfile.mkstemp(suffix=".md", prefix="proselint-")
+    os.close(fd)
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("# t\n\n盡量在必要時處理。\n\n```\n儘量fence裡不掃\n```\n\n引句:「大概這句是引文」\n")
+        out = run_lumos_capture(["prose-lint", p])
+        check("prose-lint: 掃到正文弱詞(盡量+必要時)", "「盡量」" in out and "「必要時」" in out, out)
+        check("prose-lint: fence 內不掃", "fence裡不掃" not in out, out)
+        check("prose-lint: 引句行不掃", "這句是引文" not in out, out)
+        check("prose-lint: 掃到東西 rc 仍 0(advisory)", run_lumos(["prose-lint", p]) == 0, "")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("# t\n\n這行乾乾淨淨。\n")
+        check("prose-lint: 乾淨檔 rc0 且訊息講明詞表保守", run_lumos(["prose-lint", p]) == 0
+              and "詞表保守首版" in run_lumos_capture(["prose-lint", p]), "")
+        check("prose-lint: 檔案不存在 rc2", run_lumos(["prose-lint", p + ".nope"]) == 2, "")
+    finally:
+        os.remove(p)
 
 
 def t_refcheck():
@@ -16589,7 +16630,11 @@ def t_docs_command_count():
     # golden/ 是凍結語料(過去 loop 的 spec 快照,replay 校準用),與外審歸檔同性質:歷史不得回改。
     # l4-audit/ 是自足性審計的逐節點證據(claims/verify 檔,2026-08-21 起),引用的數字是
     # 「審計當下或歷史快照」的值——同樣不得為了過守衛回改證據。
+    # review-reports/ 是 loop 留痕(席報告/快照的 sha256 記在 canary 帳,disposal/panel 閘會重驗——
+    # 回改=打斷留痕驗證,實錘:2026-08-25 62→63 時兩份舊席報告已被帳綁死);audits/ 是審計當下的證據快照。
+    # 兩者與外審歸檔同性質:歷史不得回改,命令數過期屬正常。
     skip = ("governance/external-reviews/", "governance/golden/", "governance/l4-audit/",
+            "governance/review-reports/", "governance/audits/",
             "-knowledge/", "/.git/", "node_modules/")
     scanned = 0
     for p in sorted(root.rglob("*.md")):

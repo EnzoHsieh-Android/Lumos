@@ -34,10 +34,13 @@ Spec 檔案：{工作副本路徑 /tmp/<id>-rN.md}
    熱路徑/大資料量嗎？資源——連線/鎖有沒有確定釋放？回滾路徑？遷移順序與鎖表窗口？ **★列出此功能碰哪些風險類（不限固定類），逐類答隱患；無則寫「無+為什麼」★**（S0 反問，2026-08-08；與 scripts/lumos:_PITFALL_GENERAL 同步）
    {pitfalls 命中風險類的追問，如：欄位語意交付外部廠商後的合約風險？}
 
-輸出格式：逐條 finding，每條標 severity（blocker/major/minor），附：spec 哪一段、
-問題是什麼、（若涉及程式碼）你查證到的 file:line 證據。若某節沒問題也要說
-「已讀，無 finding」。逐節讀，你一定找得到至少一個未定義的詞、壞引用或不一致；
-{missed 後加碼：沒找到就是你沒讀仔細}。最後給一行總結：最嚴重 severity 是什麼。
+輸出格式：逐條 finding，每條標 severity（blocker/major/minor）＋ blocking 宣告：
+「blocking: 是/否」加一句判準（不改，實作者會做錯決定或做出壞系統嗎？）——
+blocking:否 ↔ minor、blocking:是 ↔ major/blocker，兩欄不得矛盾（矛盾=整份退回重判）。
+每條附：spec 哪一段、問題是什麼、（若涉及程式碼）你查證到的 file:line 證據；
+逐字引句寫成「引句:「…」」單獨一行、≥10 字、避免在引句內再包「」（巢狀會被機械收貨截斷）。
+若某節沒問題也要說「已讀，無 finding」。逐節讀，你一定找得到至少一個未定義的詞、壞引用或不一致；
+{missed 後加碼：沒找到就是你沒讀仔細}。最後給一行總結：最嚴重 severity 是什麼、blocking 共幾條。
 ```
 
 > **light 檔用法(單席通才,M0 2026-07-21;M1包 機械化)**:light 路徑用本 §1 模板派**單一**審計員——{輪次語境}省略、審查鏡頭改「**無鏡頭通才**:全份逐節挑洞」。收斂=`loop status <id> --light --gate --spec ..`(**K=1 機械謂詞,不再人裁**;FAIL 分因 retryable/ratchet)見 SKILL〈light 檔〉。
@@ -159,6 +162,7 @@ binding constraints，3-6 條}
 - style-bias 錨（2026-07-21，外審吸收）**：severity 按**後果**判（照 spec 實作會發生什麼），
   不按 finding 寫得多詳細/多有說服力判——2026 實證 judge 最大偏誤是 style（0.76-0.92），
   position 反而極小；一條寫得漂亮的 minor 仍是 minor，一條寫得潦草的 major 仍是 major。
+- **blocking↔severity 綁定（2026-08-25 [S3],[[Projects/設計審收斂重定義_計劃]]）**：blocking:否 ↔ minor;blocking:是 ↔ major/blocker——席報告兩欄矛盾=整份退回該席重判(編排者人工核,無機械擋;矛盾率在實測輪抽驗)。**兩層不互改**：blocking 是審查員層宣告,accepted 是編排者處置層裁量——被放行的 major 仍標 blocking:是+附 accept-reason,不回頭改席報告;cluster 三態帳無 accepted-major 態,散文處置不用 cluster 帳。
 - **輪 severity = 辯方裁決後存活 findings 的 max**；findings 數 = 存活折入條數。
 - ~~canary 型別輪替/低耦合植入/溯源排除~~ **⛔ 已停用(2026-08-14 d5,無植入)**。
 

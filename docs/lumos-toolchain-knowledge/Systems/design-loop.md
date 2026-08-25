@@ -22,8 +22,10 @@ verified_by:
   - "[[Verification/2026-08-18_派工編制資料化落地]]"
   - "[[Verification/2026-08-18_循序tier錨定落地]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-08-25_設計審收斂重定義落地]]"
 summary: |-
-  KEY:★問世界:散文收斂(2026-08-25,調研歸檔 governance/review-reports/prose-convergence/)★——四傳統(Fagan-Gilb 密度門檻/需求工程機器前移/期刊兩輪上限+IETF 粗共識/Google Nit 不擋)零一家用「連續乾淨」審散文;2026 受控實驗:多輪重審散文全劣於單輪(FP+62%,false positive pressure);折入候選:閘改殘餘 blocking 密度+non-blocking 不擋/「新發現全 non-blocking」=收斂成功/weak-word lint 前移+行為斷言配例——動閘語意,待立案走設計迴圈,不偷改
+  KEY:★d5 落地(2026-08-25,[[Projects/設計審收斂重定義_計劃]] 處置閘單輪 PASS)★——散文設計審回歸處置閘為正閘:新迴圈一律 --disposal,單輪「每發現折掉或附理由接受」即收斂(輪級規則:同輪有 blocker 席→accepted 必空);panel/K=2=舊制帳僅存已定錨 panel 記帳的舊迴圈(code-loop 自 08-08 亦處置閘——d5 原行文「留給 code-loop」誤標,同日 d2 訂正,教訓:下筆前沒回查本篇 08-08 KEY);記帳型態=各席一筆留痕(無 findings_set)+一輪僅一筆彙總 carrier;★首例實證=本案自己:pc-v2 r1 五席 27 審項/缺陷 21 全折,單輪機械收斂★;配套:prose-lint 子命令(排乾,頂層命令 62→63)/blocking↔severity 綁定+判準句入 templates/審計紀錄兩行瘦身/治理帳 rewrite 值獨立分桶;[S6] 實測=下一個真實設計迴圈,d1 升級條件(末輪 ≥major 席數≥2)屆時判
+  KEY:★問世界:散文收斂(2026-08-25,調研歸檔 governance/review-reports/prose-convergence/)★——四傳統(Fagan-Gilb 密度門檻/需求工程機器前移/期刊兩輪上限+IETF 粗共識/Google Nit 不擋)零一家用「連續乾淨」審散文;2026 受控實驗:多輪重審散文全劣於單輪(FP+62%,false positive pressure);折入候選:閘改殘餘 blocking 密度+non-blocking 不擋/「新發現全 non-blocking」=收斂成功/weak-word lint 前移+行為斷言配例——動閘語意,已立案並過閘([[Projects/設計審收斂重定義_計劃]]):便宜半全落地(見 d5 落地 KEY),B 軌閘語意改造暫緩掛升級條件
   KEY:★收斂實證(2026-08-25,節點還原案 6 輪+代碼審對照)★——散文 spec 設計審 6 輪全未機械收斂(153 條全折;每折平均新生 1-2 處措辭面,「半改句」單日五發),同日 code 側一輪 minor 收斂+實作後驗證全過:再證「便宜初篩網/正確性歸下游」定位,散文無 oracle;跑滿攤人=panel K=2 下的正常出口非失敗;待加強:①cluster 分群帳(現有機制,首輪就開,「文件精度」群 accepted-minor 不擋收斂)②被審 spec 瘦身(審計史外移)
   KEY:★問閘雙軌(2026-08-24,[[Issues/設計迴圈問閘指令與panel記帳互斥]] d1 落地)★——記帳型態決定閘:單席循序一輪一筆處置帳→--disposal;多席 panel 每席各記→--gate --panel --min-seats 3(08-06 後 K=2);兩閘互斥,問錯 CLI 會擋下並指路(指令獨立行);漂移守衛 t_loop_status_disposal_panel_routing
   KEY:★[2026-08-14]canary 協議停用(單源=[[Systems/canary-audit]] d5)★——植入/判定/抽樣分權/漏抓懲罰全停;輪記帳改 `canary record none`(純處置帳載體),panel 輪有效=記帳席≥2;skill 頁頂掛告示、植入步驟標停用;「審計員有沒有讀」由 quote-check 引句錨定把關;落地驗證=[[Verification/2026-08-14_canary協議停用none制落地]]
