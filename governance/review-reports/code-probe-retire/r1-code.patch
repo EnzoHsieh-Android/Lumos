@@ -1,0 +1,262 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 3a856c4..3973ebb 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -3833,20 +3833,30 @@ def _panel_extra_checks(latest, min_seats, spec):
+ 
+ def _panel_k2_active(rounds):
+     """[A案 2026-08-05] K=2 適用判定:loop 首筆 ts 日期 ≥ cutoff(預設 2026-08-06)→新制。
+     舊帳不回溯(spec 落地面5,借 T6 定錨慣例);env LUMOS_PANEL_K2_CUTOFF 供測試/緊急覆寫。"""
+     import os
+     cutoff = os.environ.get("LUMOS_PANEL_K2_CUTOFF", "2026-08-06")
+     ts = str((rounds[0] if rounds else {}).get("ts") or "")
+     return ts[:10] >= cutoff
+ 
+ 
++def _panel_retired_for(rounds):
++    """[probe輪退場 d1/甲裁 2026-08-25] panel 閘退役判定:loop 首筆 ts 日期 ≥ cutoff(預設
++    2026-08-26)=新迴圈,panel 閘拒判並指路處置閘;舊迴圈(cutoff 前定錨)照常回放。
++    env LUMOS_PANEL_RETIRE_CUTOFF 供測試/緊急覆寫。"""
++    import os
++    cutoff = os.environ.get("LUMOS_PANEL_RETIRE_CUTOFF", "2026-08-26")
++    ts = str((rounds[0] if rounds else {}).get("ts") or "")
++    return bool(ts) and ts[:10] >= cutoff
++
++
+ def _panel_round_conjuncts(recs, quiet=False):
+     """單輪兩條合取(輪有效∧存活≤minor;capture-recapture 殘餘=advisory 觀測,2026-08-14 降級)——A案 K=2 抽出共用,
+     ★單一實作★:判定輪(quiet=False,輸出逐字同改動前)與 K=2 前一輪(quiet=True)同函式。
+     回 fails list。"""
+     order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+     fails = []
+     caught_recs = [r for r in recs if r.get("kind") == "caught"]
+     # 2026-08-14 canary 協議停用(Systems/canary-audit d5):kind=none=無植入輪的純處置帳載體。
+     # none 制輪有效=記帳席數≥2 且零 missed(醒著證明改由 skill 層 quote-check 引句錨定機械把關);
+     # 舊 caught 分支原樣保留(歷史帳/混用輪回放不變)。
+@@ -3906,20 +3916,26 @@ def _panel_probe_verdict(loop_id, rid, recs):
+     return h % 2 == 0
+ 
+ 
+ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None, env=None):
+     """平行 panel 收斂謂詞(loop 三輪壓縮)。無-cluster 帳:兩條合取(輪有效∧存活max≤minor;殘餘=advisory
+     ∧capture-recapture 殘餘,fail-closed)。cluster 帳(M2,設計 Projects/design-loop提效_計劃;
+     golden: governance/golden/dloop-m2-cluster):首個有效輪帶 clusters 定錨 → 兩條合取
+     (輪有效∧fold 後無 disputed-major),新生 cluster/capture-recapture 降 advisory,
+     無效輪 clusters 忽略+警告區列帳(不蒸發)。讀側 rc2 類:round-id 非連續/型別損壞/
+     有效輪 W 歸屬衝突/有效輪級混用。"""
++    if _panel_retired_for(rounds):
++        print("擋下:panel 閘自 2026-08-25 甲裁後僅供舊迴圈回放,這個編號是之後才開的新迴圈——", file=sys.stderr)
++        print("  多席審查改用彙總記帳(處置清單只掛一席,其餘席只留痕),然後問處置閘:", file=sys.stderr)
++        print("    lumos loop status <編號> --disposal --spec … --repo …", file=sys.stderr)
++        print("  (詳 Projects/probe輪退場_計劃;帳不可撤,已誤記多筆處置清單就換編號重記)", file=sys.stderr)
++        return 2
+     from collections import OrderedDict
+     groups = OrderedDict()
+     for r in rounds:
+         rid_ = r.get("round")
+         if rid_ in groups and next(reversed(groups)) != rid_:
+             # M2:round-id 被其他 round 隔開後重現=帳本次序損壞(append-only 不容跳寫)
+             print(f"擋下:第 {rid_!r} 輪的記錄被別的輪次隔開後又出現(非連續重現),帳的順序亂了,沒辦法判斷",
+                   file=sys.stderr)
+             return 2
+         groups.setdefault(rid_, []).append(r)
+@@ -4009,21 +4025,21 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None, env=None):
+         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('capture_counts','-')}\t{r.get('auditor','')}")
+     for line in _cost_summary(rounds):
+         print(line)
+     if fails:
+         print(f"⛔ PANEL GATE FAIL({loop_id} 第 {rid} 輪沒通過,卡在:{'/'.join(fails)})")
+         return 1
+     if k2:
+         probe = _panel_probe_verdict(loop_id, rid, latest)
+         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、留下的問題都在可接受等級)")
+         _loop_gov_mark(env, loop_id, "converged", "gate PASS")
+-        print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
++        print(f"[panel] 抽查判定(觀測,任何人都能重算出同樣結果): {'本輪落在應抽樣——2026-08-25 起 panel 僅回放、不再加開 probe 輪(詳 Issues/probe輪三參數只在散文)' if probe else '免抽'}")
+     else:
+         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、留下的問題都在可接受等級)")
+         _loop_gov_mark(env, loop_id, "converged", "gate PASS")
+     return 0
+ 
+ 
+ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=None, all_rounds=None, env=None):
+     """M2 cluster 帳 gate:兩條合取(判定輪有效 ∧ fold 後無 disputed-major)。
+     fold 只採有效輪(last-wins,同名跨輪最後狀態勝);無效輪 clusters 警告區列帳不蒸發;
+     新生 cluster 與 capture-recapture 皆 advisory 不進合取。"""
+@@ -4112,21 +4128,21 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
+     for line in _cost_summary(all_rounds or []):
+         print(line)
+     if fails:
+         print(f"⛔ PANEL GATE FAIL({loop_id} 第 {rid} 輪沒通過,卡在:{'/'.join(fails)})")
+         return 1
+     if _k2c:
+         probe = _panel_probe_verdict(loop_id, rid, latest)
+         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、沒有分組卡在 disputed-major"
+               f"[cluster 帳,{len(ledger)} 個 cluster])")
+         _loop_gov_mark(env, loop_id, "converged", "panel gate PASS")
+-        print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
++        print(f"[panel] 抽查判定(觀測,任何人都能重算出同樣結果): {'本輪落在應抽樣——2026-08-25 起 panel 僅回放、不再加開 probe 輪(詳 Issues/probe輪三參數只在散文)' if probe else '免抽'}")
+     else:
+         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、沒有分組卡在 disputed-major"
+               f"[cluster 帳,{len(ledger)} 個 cluster])")
+         _loop_gov_mark(env, loop_id, "converged", "panel gate PASS")
+     return 0
+ 
+ 
+ def cmd_loop_capture_counts(env, finders, from_pitfalls=None, repo=None):
+     """異質 panel 接線的機械生產者(code-loop 三輪壓縮):把各 finder 的 finding-key
+     彙成 capture_counts + 算殘餘估計,吐出可直接餵 `canary record --capture-counts` 的逗號串。
+@@ -10064,23 +10080,27 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+         fails.append("G3")
+     elif info == "unbound":
+         print("[disposal] G3 hash: ✗ — 判定輪未綁 hash(disposal 閘 fail-closed,record 帶 --spec/--reviewed)")
+         fails.append("G3")
+     else:
+         print(f"[disposal] G3 hash: ✓ — {info}")
+     # ── ② 處置集合(輪級重算,不信寫側) ──
+     carriers = [r for r in latest if "findings_set" in r]
+     if len(carriers) > 1:
+         print(f"擋下:第 {rid} 輪有 {len(carriers)} 筆記錄都帶了處置結果,一輪只能有一筆", file=sys.stderr)
+-        print("  這種「多席各自記帳」是 panel 型,不歸 --disposal 管(它只收一輪一筆處置帳的循序記帳)。改問:", file=sys.stderr)
+-        print("    lumos loop status <編號> --gate --panel --min-seats 3 --spec … --repo …", file=sys.stderr)
+-        print("  (2026-08-06 後的迴圈要連續兩輪乾淨才過)", file=sys.stderr)
++        if _panel_retired_for(rounds):
++            print("  多席審查(2026-08-25 甲裁後)一律彙總記帳:處置清單只掛一席,其餘席只留痕(severity/report)。", file=sys.stderr)
++            print("  帳不可撤——換一個新編號照上式重記,再問 --disposal。(詳 Projects/probe輪退場_計劃)", file=sys.stderr)
++        else:
++            print("  這種「多席各自記帳」是 panel 型,不歸 --disposal 管(它只收一輪一筆處置帳的循序記帳)。改問:", file=sys.stderr)
++            print("    lumos loop status <編號> --gate --panel --min-seats 3 --spec … --repo …", file=sys.stderr)
++            print("  (2026-08-06 後的迴圈要連續兩輪乾淨才過;此路僅供 2026-08-25 前定錨的舊迴圈)", file=sys.stderr)
+         return 2
+     carrier = carriers[0] if carriers else None
+     # findings 欄壞值(手改帳/舊寫入殘留)→ fail-closed rc2,同 clusters 型別防禦慣例(不 traceback)
+     def _findings_zero(r):
+         v = r.get("findings")
+         if v is None:
+             return False       # 沒填 ≠ 明說 0(legacy 帳缺欄不放行,逐筆成輪加固測試釘的)
+         try:
+             return int(v) == 0
+         except (TypeError, ValueError):
+@@ -10108,20 +10128,22 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+         reasons = carrier.get("accept_reasons") or {}
+         bad = None
+         if FO & AC:
+             bad = f"folded∩accepted 非空: {sorted(FO & AC)}"
+         elif FO | AC != F:
+             bad = f"未處置: {sorted(F - FO - AC)}"
+         elif set(reasons) != AC or any(not str(v).strip() for v in reasons.values()):
+             bad = "accepted 理由缺席或空"
+         elif AC and any(r.get("severity") == "blocker" for r in latest):
+             bad = "★輪內有 blocker 席,accepted 必須為空(d1;輪級重算,不信寫側單席視角)★"
++        elif AC and str(loop_id).startswith("code-") and any(r.get("severity") in ("major", "blocker") for r in latest):
++            bad = "★code 迴圈輪內有 major 以上的席,accepted 必須為空——major 一律折,不得附理由放行(probe輪退場 d2,Enzo 2026-08-25 裁:與 panel 時代 max≤minor 同嚴度;散文設計審不受此限)★"
+         if bad:
+             print(f"[disposal] 處置集合: ✗ — {bad}")
+             fails.append("處置集合")
+         else:
+             print(f"[disposal] 處置集合: ✓ — {len(F)} 條全處置(折 {len(FO)}/放行 {len(AC)},理由齊)")
+     # ── ③ 留痕重驗(判定輪全席) + ④ quote-check(carrier;vacuous 輪無引句可驗,只跑 ③) ──
+     if carrier is not None or vacuous:
+         _qsrc = carrier if carrier is not None else latest[-1]
+         rp, sp = _qsrc.get("report_path"), _qsrc.get("snapshot_path")
+         if not rp or not sp:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 80063ec..12f40d8 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -48,20 +48,24 @@ def _need_src(*rels):
+     """來源 repo 專用產物的守門:任一不存在 → 拋 _SrcOnly,由 runner 記成 skip。
+ 
+     ★只認檔案系統實況★——不看測試名字、不維護清單(分支簿記天生會漏,本專案
+     2026-08-01 才因同型的簿記漏一條被代碼審抓到)。"""
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     for rel in rels:
+         if not (repo / rel).exists():
+             raise _SrcOnly(f"需要來源 repo 的 {rel}(消費端專案沒有,非失敗)")
+ 
+ 
++import os as _os_mod
++_os_mod.environ.setdefault("LUMOS_PANEL_RETIRE_CUTOFF", "9999-12-31")   # probe輪退場 d1:既有 panel 行為測試凍結在退役前語意;退役行為由 t_panel_probe_retired 自帶 cutoff 覆寫驗
++
++
+ def run(vault, *args, expect_rc=None):
+     r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vault), *args],
+                        capture_output=True, text=True)
+     if expect_rc is not None and r.returncode != expect_rc:
+         raise AssertionError(f"rc={r.returncode} 預期 {expect_rc}\n{r.stdout}\n{r.stderr}")
+     return r
+ 
+ 
+ def check(name, cond, detail=""):
+     global PASS, FAIL
+@@ -3811,20 +3815,70 @@ def t_loop_rewrite_mark():
+     check("rewrite: 前綴編號不誤判連續重寫", "連續第二次判重寫" not in r3.stdout, r3.stdout)
+     # 壞 JSON 行(非物件)不炸血緣查找
+     gl2 = v.parent / ".governance-log.jsonl"
+     with open(gl2, "a", encoding="utf-8") as f:
+         f.write('"just a string"\n[1,2]\n')
+     r4 = run(v, "loop", "rewrite", "pfx-c", "--successor", "pfx-d")
+     check("rewrite: 帳內非物件 JSON 行不炸", r4.returncode == 0, str(r4.returncode))
+     print("  ✓ t_loop_rewrite_mark")
+ 
+ 
++def t_panel_probe_retired():
++    """probe輪退場 d1/d2(Enzo 甲裁 2026-08-25)行為級三釘:(a)新迴圈問 panel 被拒+指路
++    (b)code-* major 席+非空 accepted → disposal FAIL;同構散文案 PASS (c)舊迴圈 panel 印行
++    為觀測語意(不含義務句)。"""
++    import subprocess as _sp
++    import os as _os
++    v = mkvault()
++    env2 = dict(_os.environ)
++    env2["LUMOS_PANEL_RETIRE_CUTOFF"] = "2000-01-01"   # 一切迴圈都算「新」→驗拒判
++    # (a) 新迴圈問 panel 被拒
++    run(v, "canary", "record", "none", "--loop", "pr-new", "--round", "r1", "--auditor", "a",
++        "--severity", "minor", "--findings", "1", expect_rc=0)
++    ra = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", "pr-new",
++                  "--gate", "--panel"], capture_output=True, text=True, env=env2)
++    check("retired: 新迴圈問 panel 拒判 rc2", ra.returncode == 2, f"{ra.returncode} {ra.stderr[-200:]}")
++    check("retired: 拒判訊息指路 --disposal", "--disposal" in ra.stderr and "僅供舊迴圈回放" in ra.stderr, ra.stderr[-300:])
++    # (b) code-* major+accepted → FAIL;散文同構 → PASS(用 --disposal,無 spec 綁定的最小帳)
++    specf = v / "Systems" / "strict-spec.md"
++    specf.write_text("---\ntype: system\nstatus: done\n---\n# s\n引句素材行,長度超過十個字元。\n", encoding="utf-8")
++    import hashlib as _hl
++    sha = _hl.sha256(specf.read_bytes()).hexdigest()
++    for lp, sev in (("code-strict-t", "major"), ("prose-strict-t", "major")):
++        run(v, "canary", "record", "none", "--loop", lp, "--round", "r1", "--auditor", "s1",
++            "--severity", sev, "--findings", "1",
++            "--findings-set", "f1", "--accepted-set", "f1", "--accept-reason", "f1=測試放行",
++            "--report", str(specf), "--snapshot", str(specf),
++            "--spec", str(specf), "--reviewed", sha, expect_rc=0)
++    rb = run(v, "loop", "status", "code-strict-t", "--disposal", "--spec", str(specf))
++    check("retired: code-* major+accepted → FAIL 且訊息講 major 一律折",
++          rb.returncode == 1 and "major 一律折" in rb.stdout, rb.stdout[-400:])
++    rc_ = run(v, "loop", "status", "prose-strict-t", "--disposal", "--spec", str(specf))
++    check("retired: 散文同構(major+accepted)不觸發 code 嚴格則訊息",
++          "major 一律折" not in rc_.stdout, rc_.stdout[-400:])
++    # (c) 舊迴圈(harness cutoff=9999 → 視為舊)panel PASS 印行=觀測語意
++    _u = _sec.token_hex(3)
++    for rnd in ("r1", "r2"):
++        for seat in ("a1", "a2"):
++            run(v, "canary", "record", "none", "--loop", f"pr-old-{_u}", "--round", rnd,
++                "--auditor", seat, "--severity", "clean", "--findings", "0", expect_rc=0)
++    envk2 = dict(_os.environ, LUMOS_PANEL_K2_CUTOFF="2000-01-01")
++    rd = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", f"pr-old-{_u}",
++                  "--gate", "--panel"], capture_output=True, text=True, env=envk2)
++    if rd.returncode == 0:
++        check("retired: 舊迴圈 PASS 印行不含義務句", "才算做完" not in rd.stdout and "要——加開一輪" not in rd.stdout, rd.stdout[-300:])
++        check("retired: 舊迴圈 PASS 印行含觀測字樣", ("抽查判定" in rd.stdout and "觀測" in rd.stdout), rd.stdout[-300:])
++    else:
++        check("retired: 舊迴圈 panel 應可判(fixture 帳問題)", False, rd.stdout[-300:] + rd.stderr[-200:])
++    print("  ✓ t_panel_probe_retired")
++
++
+ def t_gov_stats_rewrite_bucket():
+     """d3(設計審收斂重定義 2026-08-25):rewrite 收尾獨立計數——只有 rewrite 的編號
+     不再悄悄掉出 conv/capped 兩桶讓放行率失真。"""
+     import shutil
+     gov = [
+         '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"design-loop","kind":"converged","hard":false,"nodes":["L1"]}\n',
+         '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L2"],"note":"prev=L2-v0"}\n',
+         # L3=先 cap-reached 後人裁 rewrite(最貼近真實流程的組合;r1 主審 F6:漏排除會掉回「人裁放行」桶)
+         '{"ts":"2026-06-03T09:00:00","commit":"ccc","gate":"design-loop","kind":"cap-reached","hard":false,"nodes":["L3"]}\n',
+         '{"ts":"2026-06-03T10:00:00","commit":"ddd","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L3"],"note":"prev=L3-v0"}\n',

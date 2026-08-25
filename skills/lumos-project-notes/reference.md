@@ -1258,7 +1258,7 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
 
 ### 對抗設計審計的 canary（test-the-tester，2026-06-19）
 
-> ⛔ **協議已於 2026-08-14 全面停用**(Enzo 裁,單源=Systems/canary-audit d5)——本節植入/判定/panel 變體全部**不再執行**,僅供回放歷史帳判讀。現行:輪記帳 `lumos canary record none ...`(純處置帳載體);「審計員有沒有讀」由 quote-check 引句錨定把關;收斂閘=design-loop `--disposal`/code-loop `--gate --panel`(none 制輪有效=記帳席≥2)。
+> ⛔ **協議已於 2026-08-14 全面停用**(Enzo 裁,單源=Systems/canary-audit d5)——本節植入/判定/panel 變體全部**不再執行**,僅供回放歷史帳判讀。現行:輪記帳 `lumos canary record none ...`(純處置帳載體);「審計員有沒有讀」由 quote-check 引句錨定把關;收斂閘=design-loop 與 code-loop 皆 `--disposal`(code-loop 08-08 起;多席 2026-08-25 甲裁後亦然,`--gate --panel` 僅舊迴圈回放;none 制輪有效=記帳席≥2)。
 
 派乾淨 agent 對抗審計一份 **spec/設計稿**(挑毛病、找 blocker)時,**順手驗證審計員這輪有沒有認真讀**——放水審計員回報的「沒問題」是最危險的假乾淨。做法(★停用前舊制★):
 

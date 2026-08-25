@@ -64,7 +64,7 @@ PRIOR-ART:借用=①d5(散文審回歸處置閘,2026-08-25)之延伸——同一
 - 例1:`grep -c "再開一輪 probe" skills/lumos-code-loop/SKILL.md` 現檔 1→落地後 0;`grep -c "僅供.*舊迴圈回放" skills/lumos-code-loop/SKILL.md` 現檔 0→落地後 ≥1。
 - 例2:`grep -c "不再加開 probe 輪" scripts/lumos` 現檔 0→落地後 2;「要——加開一輪」字樣落地後 0(整句改寫非追加)。
 - 例3:t_panel_probe_retired 行為級三釘各自可翻紅:(a)新迴圈問 panel 拒判 (b)code-* major+accepted→FAIL 且同構散文案 PASS (c)舊迴圈印行新句;另 disposal PASS 輸出不含「抽查」。
-- 例4:reference.md:180 與 :374 區域落地後含「回放」語意字樣;`grep -c "判準凍結" Systems/convergence-evidence-gate 對應檔` 維持 1(凍結句原文仍在)。
+- 例4:reference.md:180 與 :374 區域落地後含「回放」語意字樣;`grep -c "判準凍結" Systems/convergence-evidence-gate 對應檔` ≥1 且原句逐字仍在(落地後實測=2:⛔ 告示自引該詞屬預期——cpr r1 arch 席訂正斷言目標)。
 - 例5:canary-log `"round": "probe-` 維持 0(零帳面遷移)。
 
 ## 實務隱患

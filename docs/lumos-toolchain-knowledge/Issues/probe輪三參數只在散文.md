@@ -1,12 +1,12 @@
 ---
 type: issue
-status: open
+status: resolved
 created: 2026-08-21
 updated: 2026-08-21
 aliases: []
 tags:
   - type/issue
-  - status/open
+  - status/resolved
   - priority/P2
   - scope/loop-engineering
 summary: |-

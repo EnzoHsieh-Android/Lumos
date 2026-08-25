@@ -3865,10 +3865,20 @@ def t_panel_probe_retired():
     rd = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", f"pr-old-{_u}",
                   "--gate", "--panel"], capture_output=True, text=True, env=envk2)
     if rd.returncode == 0:
-        check("retired: 舊迴圈 PASS 印行不含義務句", "才算做完" not in rd.stdout and "要——加開一輪" not in rd.stdout, rd.stdout[-300:])
+        check("retired: 舊迴圈 PASS 印行不含義務句", "加開一輪 probe-* 抽查" not in rd.stdout and "要——加開一輪" not in rd.stdout, rd.stdout[-300:])  # 「才算做完」半條係文件用語非 CLI 輸出,cpr r1 主審抓的裝飾斷言已拔;紅證靠 sha 硬幣的限制照實承認
         check("retired: 舊迴圈 PASS 印行含觀測字樣", ("抽查判定" in rd.stdout and "觀測" in rd.stdout), rd.stdout[-300:])
     else:
         check("retired: 舊迴圈 panel 應可判(fixture 帳問題)", False, rd.stdout[-300:] + rd.stderr[-200:])
+    # 第四釘(cpr r1 主審 B):退役迴圈+多 carrier 的分流訊息
+    for seat in ("x1", "x2"):
+        run(v, "canary", "record", "none", "--loop", "code-mc-t", "--round", "r1", "--auditor", seat,
+            "--severity", "minor", "--findings", "1", "--findings-set", "f1", "--folded-set", "f1",
+            "--report", str(specf), "--snapshot", str(specf), "--spec", str(specf), "--reviewed", sha,
+            expect_rc=0)
+    re2 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", "code-mc-t",
+                   "--disposal", "--spec", str(specf)], capture_output=True, text=True, env=env2)
+    check("retired: 多 carrier 分流訊息(新迴圈不再指路 panel)", re2.returncode == 2
+          and "彙總記帳" in re2.stderr and "--gate --panel" not in re2.stderr, re2.stderr[-300:])
     print("  ✓ t_panel_probe_retired")
 
 
