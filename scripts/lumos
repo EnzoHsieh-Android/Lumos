@@ -3840,6 +3840,16 @@ def _panel_k2_active(rounds):
     return ts[:10] >= cutoff
 
 
+def _panel_retired_for(rounds):
+    """[probe輪退場 d1/甲裁 2026-08-25] panel 閘退役判定:loop 首筆 ts 日期 ≥ cutoff(預設
+    2026-08-26)=新迴圈,panel 閘拒判並指路處置閘;舊迴圈(cutoff 前定錨)照常回放。
+    env LUMOS_PANEL_RETIRE_CUTOFF 供測試/緊急覆寫。"""
+    import os
+    cutoff = os.environ.get("LUMOS_PANEL_RETIRE_CUTOFF", "2026-08-26")
+    ts = str((rounds[0] if rounds else {}).get("ts") or "")
+    return bool(ts) and ts[:10] >= cutoff
+
+
 def _panel_round_conjuncts(recs, quiet=False):
     """單輪兩條合取(輪有效∧存活≤minor;capture-recapture 殘餘=advisory 觀測,2026-08-14 降級)——A案 K=2 抽出共用,
     ★單一實作★:判定輪(quiet=False,輸出逐字同改動前)與 K=2 前一輪(quiet=True)同函式。
@@ -3913,6 +3923,12 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None, env=None):
     (輪有效∧fold 後無 disputed-major),新生 cluster/capture-recapture 降 advisory,
     無效輪 clusters 忽略+警告區列帳(不蒸發)。讀側 rc2 類:round-id 非連續/型別損壞/
     有效輪 W 歸屬衝突/有效輪級混用。"""
+    if _panel_retired_for(rounds):
+        print("擋下:panel 閘自 2026-08-25 甲裁後僅供舊迴圈回放,這個編號是之後才開的新迴圈——", file=sys.stderr)
+        print("  多席審查改用彙總記帳(處置清單只掛一席,其餘席只留痕),然後問處置閘:", file=sys.stderr)
+        print("    lumos loop status <編號> --disposal --spec … --repo …", file=sys.stderr)
+        print("  (詳 Projects/probe輪退場_計劃;帳不可撤,已誤記多筆處置清單就換編號重記)", file=sys.stderr)
+        return 2
     from collections import OrderedDict
     groups = OrderedDict()
     for r in rounds:
@@ -4016,7 +4032,7 @@ def _loop_status_panel(rounds, loop_id, min_seats=None, spec=None, env=None):
         probe = _panel_probe_verdict(loop_id, rid, latest)
         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、留下的問題都在可接受等級)")
         _loop_gov_mark(env, loop_id, "converged", "gate PASS")
-        print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
+        print(f"[panel] 抽查判定(觀測,任何人都能重算出同樣結果): {'本輪落在應抽樣——2026-08-25 起 panel 僅回放、不再加開 probe 輪(詳 Issues/probe輪三參數只在散文)' if probe else '免抽'}")
     else:
         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、留下的問題都在可接受等級)")
         _loop_gov_mark(env, loop_id, "converged", "gate PASS")
@@ -4119,7 +4135,7 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:連續兩輪乾淨、這輪有效、沒有分組卡在 disputed-major"
               f"[cluster 帳,{len(ledger)} 個 cluster])")
         _loop_gov_mark(env, loop_id, "converged", "panel gate PASS")
-        print(f"[panel] 要不要額外抽查(任何人都能重算出同樣結果): {'要——加開一輪 probe-* 抽查(不算進輪數上限;抽出 major 以上就自動撤銷收斂)' if probe else '免抽'}")
+        print(f"[panel] 抽查判定(觀測,任何人都能重算出同樣結果): {'本輪落在應抽樣——2026-08-25 起 panel 僅回放、不再加開 probe 輪(詳 Issues/probe輪三參數只在散文)' if probe else '免抽'}")
     else:
         print(f"✅ PANEL GATE PASS({loop_id} 第 {rid} 輪通過:這輪有效、沒有分組卡在 disputed-major"
               f"[cluster 帳,{len(ledger)} 個 cluster])")
@@ -10071,9 +10087,13 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     carriers = [r for r in latest if "findings_set" in r]
     if len(carriers) > 1:
         print(f"擋下:第 {rid} 輪有 {len(carriers)} 筆記錄都帶了處置結果,一輪只能有一筆", file=sys.stderr)
-        print("  這種「多席各自記帳」是 panel 型,不歸 --disposal 管(它只收一輪一筆處置帳的循序記帳)。改問:", file=sys.stderr)
-        print("    lumos loop status <編號> --gate --panel --min-seats 3 --spec … --repo …", file=sys.stderr)
-        print("  (2026-08-06 後的迴圈要連續兩輪乾淨才過)", file=sys.stderr)
+        if _panel_retired_for(rounds):
+            print("  多席審查(2026-08-25 甲裁後)一律彙總記帳:處置清單只掛一席,其餘席只留痕(severity/report)。", file=sys.stderr)
+            print("  帳不可撤——換一個新編號照上式重記,再問 --disposal。(詳 Projects/probe輪退場_計劃)", file=sys.stderr)
+        else:
+            print("  這種「多席各自記帳」是 panel 型,不歸 --disposal 管(它只收一輪一筆處置帳的循序記帳)。改問:", file=sys.stderr)
+            print("    lumos loop status <編號> --gate --panel --min-seats 3 --spec … --repo …", file=sys.stderr)
+            print("  (2026-08-06 後的迴圈要連續兩輪乾淨才過;此路僅供 2026-08-25 前定錨的舊迴圈)", file=sys.stderr)
         return 2
     carrier = carriers[0] if carriers else None
     # findings 欄壞值(手改帳/舊寫入殘留)→ fail-closed rc2,同 clusters 型別防禦慣例(不 traceback)
@@ -10115,6 +10135,8 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
             bad = "accepted 理由缺席或空"
         elif AC and any(r.get("severity") == "blocker" for r in latest):
             bad = "★輪內有 blocker 席,accepted 必須為空(d1;輪級重算,不信寫側單席視角)★"
+        elif AC and str(loop_id).startswith("code-") and any(r.get("severity") in ("major", "blocker") for r in latest):
+            bad = "★code 迴圈輪內有 major 以上的席,accepted 必須為空——major 一律折,不得附理由放行(probe輪退場 d2,Enzo 2026-08-25 裁:與 panel 時代 max≤minor 同嚴度;散文設計審不受此限)★"
         if bad:
             print(f"[disposal] 處置集合: ✗ — {bad}")
             fails.append("處置集合")

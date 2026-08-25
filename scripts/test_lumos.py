@@ -55,6 +55,10 @@ def _need_src(*rels):
             raise _SrcOnly(f"需要來源 repo 的 {rel}(消費端專案沒有,非失敗)")
 
 
+import os as _os_mod
+_os_mod.environ.setdefault("LUMOS_PANEL_RETIRE_CUTOFF", "9999-12-31")   # probe輪退場 d1:既有 panel 行為測試凍結在退役前語意;退役行為由 t_panel_probe_retired 自帶 cutoff 覆寫驗
+
+
 def run(vault, *args, expect_rc=None):
     r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vault), *args],
                        capture_output=True, text=True)
@@ -3816,6 +3820,56 @@ def t_loop_rewrite_mark():
     r4 = run(v, "loop", "rewrite", "pfx-c", "--successor", "pfx-d")
     check("rewrite: 帳內非物件 JSON 行不炸", r4.returncode == 0, str(r4.returncode))
     print("  ✓ t_loop_rewrite_mark")
+
+
+def t_panel_probe_retired():
+    """probe輪退場 d1/d2(Enzo 甲裁 2026-08-25)行為級三釘:(a)新迴圈問 panel 被拒+指路
+    (b)code-* major 席+非空 accepted → disposal FAIL;同構散文案 PASS (c)舊迴圈 panel 印行
+    為觀測語意(不含義務句)。"""
+    import subprocess as _sp
+    import os as _os
+    v = mkvault()
+    env2 = dict(_os.environ)
+    env2["LUMOS_PANEL_RETIRE_CUTOFF"] = "2000-01-01"   # 一切迴圈都算「新」→驗拒判
+    # (a) 新迴圈問 panel 被拒
+    run(v, "canary", "record", "none", "--loop", "pr-new", "--round", "r1", "--auditor", "a",
+        "--severity", "minor", "--findings", "1", expect_rc=0)
+    ra = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", "pr-new",
+                  "--gate", "--panel"], capture_output=True, text=True, env=env2)
+    check("retired: 新迴圈問 panel 拒判 rc2", ra.returncode == 2, f"{ra.returncode} {ra.stderr[-200:]}")
+    check("retired: 拒判訊息指路 --disposal", "--disposal" in ra.stderr and "僅供舊迴圈回放" in ra.stderr, ra.stderr[-300:])
+    # (b) code-* major+accepted → FAIL;散文同構 → PASS(用 --disposal,無 spec 綁定的最小帳)
+    specf = v / "Systems" / "strict-spec.md"
+    specf.write_text("---\ntype: system\nstatus: done\n---\n# s\n引句素材行,長度超過十個字元。\n", encoding="utf-8")
+    import hashlib as _hl
+    sha = _hl.sha256(specf.read_bytes()).hexdigest()
+    for lp, sev in (("code-strict-t", "major"), ("prose-strict-t", "major")):
+        run(v, "canary", "record", "none", "--loop", lp, "--round", "r1", "--auditor", "s1",
+            "--severity", sev, "--findings", "1",
+            "--findings-set", "f1", "--accepted-set", "f1", "--accept-reason", "f1=測試放行",
+            "--report", str(specf), "--snapshot", str(specf),
+            "--spec", str(specf), "--reviewed", sha, expect_rc=0)
+    rb = run(v, "loop", "status", "code-strict-t", "--disposal", "--spec", str(specf))
+    check("retired: code-* major+accepted → FAIL 且訊息講 major 一律折",
+          rb.returncode == 1 and "major 一律折" in rb.stdout, rb.stdout[-400:])
+    rc_ = run(v, "loop", "status", "prose-strict-t", "--disposal", "--spec", str(specf))
+    check("retired: 散文同構(major+accepted)不觸發 code 嚴格則訊息",
+          "major 一律折" not in rc_.stdout, rc_.stdout[-400:])
+    # (c) 舊迴圈(harness cutoff=9999 → 視為舊)panel PASS 印行=觀測語意
+    _u = _sec.token_hex(3)
+    for rnd in ("r1", "r2"):
+        for seat in ("a1", "a2"):
+            run(v, "canary", "record", "none", "--loop", f"pr-old-{_u}", "--round", rnd,
+                "--auditor", seat, "--severity", "clean", "--findings", "0", expect_rc=0)
+    envk2 = dict(_os.environ, LUMOS_PANEL_K2_CUTOFF="2000-01-01")
+    rd = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", f"pr-old-{_u}",
+                  "--gate", "--panel"], capture_output=True, text=True, env=envk2)
+    if rd.returncode == 0:
+        check("retired: 舊迴圈 PASS 印行不含義務句", "才算做完" not in rd.stdout and "要——加開一輪" not in rd.stdout, rd.stdout[-300:])
+        check("retired: 舊迴圈 PASS 印行含觀測字樣", ("抽查判定" in rd.stdout and "觀測" in rd.stdout), rd.stdout[-300:])
+    else:
+        check("retired: 舊迴圈 panel 應可判(fixture 帳問題)", False, rd.stdout[-300:] + rd.stderr[-200:])
+    print("  ✓ t_panel_probe_retired")
 
 
 def t_gov_stats_rewrite_bucket():

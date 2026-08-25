@@ -6,12 +6,12 @@ summary: |-
   KEY:★d2(Enzo 第二裁)★:code-* 迴圈處置閘輪級加嚴——輪內任一席 severity ≥ major 則 accepted 必空(major 一律折),與 panel「max≤minor」同嚴度;散文維持 d5 現制。d4「防線不降級」由此成立
   KEY:r1 打穿 v1 前提——panel 非「僅舊帳回放」:多席現役唯一通閘(08-24 互斥案實據)且無 quote-check(收貨比處置閘薄),probe 為其唯一 PASS 後複核;教義互斥(08-08 被翻紀錄 vs SKILL 步驟7);本版=v2,範圍擴為路由統一+退場
   DEP:[[Issues/probe輪三參數只在散文]]｜[[Systems/convergence-evidence-gate]]
-status: doing
+status: done
 created: 2026-08-25
 updated: 2026-08-25
 tags:
   - type/project
-  - status/doing
+  - status/done
 decisions:
   - content: Enzo 裁甲(2026-08-25,r1 攤牌後):多席 code-loop(含 high)收斂閘統一走處置閘(d5 型記帳:各席留痕+一輪一筆彙總 carrier),panel 閘轉純歷史回放;probe 抽查輪隨宿主退場(義務拔除、判定碼保留降觀測)。此裁定同時具名處置防浮動條款:panel 判準凍結句保留(回放語意),「攢 20 筆抽查帳」翻案通道隨 panel 退役正式作廢——先例同 08-08 具名推翻與 canary 停用(皆業主先裁後動,本次亦然:r1 五席 19 審項/blocking 15 攤牌在前,實作在裁定之後)
     id: d1

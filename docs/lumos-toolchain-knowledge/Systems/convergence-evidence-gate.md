@@ -16,7 +16,9 @@ verified_by:
   - "[[Verification/2026-08-05_panel-K2與抽查落地]]"
   - "[[Verification/2026-08-14_殘餘估計降級與重疊報表落地]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-08-25_probe輪退場與多席路由統一落地]]"
 summary: |-
+  KEY:★[2026-08-25 甲裁]panel 閘退役(僅舊迴圈回放)+probe 抽查義務退場+「20 筆抽查帳」通道作廢(Enzo 具名);code 迴圈處置閘加嚴(major 必折,d2)——詳頁頂告示與 [[Projects/probe輪退場_計劃]]★
   KEY:★兩套閘並存的路由(2026-08-24 補接線)★——本節點管 panel 閘 K 語意;另一套 --disposal(單席處置合取)與 panel 互斥,記帳型態決定問哪個,撞牆時 CLI 指路;分岔全文與實測見 [[Issues/設計迴圈問閘指令與panel記帳互斥]]
   KEY:✅[2026-08-05 A案落地]panel K=1→★K=2★(cutoff 2026-08-06 起新 loop;首筆 ts 定錨不回溯,env LUMOS_PANEL_K2_CUTOFF 覆寫供測試)——最後兩輪★各自★過合取(★(2026-08-21 程式碼實證)2026-08-14 capture-recapture 降 advisory 後剩**兩條**:輪有效∧存活≤minor;scripts/lumos:3568-3569 docstring 已改「兩條」,3705 呼叫處註解仍寫「三條」屬程式碼註解漂移★;前一輪 quiet 評估印一行摘要;單一實作 _panel_round_conjuncts 兩處共用);cluster 路同窗(前一輪須為有效輪)。+(e') 收斂後決定性抽查判定:PASS 印 sha256(loop_id+rid+該輪 token 集)%2 應抽/免抽——輸入全來自 append-only 帳,人人可事後重算,不依賴編排者誠實;應抽→加開 probe-* 輪(材料全量/席可縮 3/不計 cap/上限 1 次——★(2026-08-21 程式碼實證)這三個參數**程式碼零實作**:cap 計數含全部 distinct round 無 probe 排除、無次數上限、無席數檢查;只在 code-loop SKILL.md 散文,屬人守紀律。機械化的只有應抽/免抽判定與「probe 冒 major 自然 FAIL」★),★撤銷自動化=probe 冒 major 時 K=2 窗滑入髒輪 gate 自然 FAIL,零新機制★。防浮動條款:判準凍結,唯一翻案通道=攢滿 20 筆抽查帳。證據與五候選裁決全程=[[Projects/panel收斂判準改革_計劃]](design-loop r1+r2 收斂) [test:t_panel_k2_and_probe]
   KEY:[★歷史紀錄,2026-08-03 當時;panel K=1 已於 2026-08-05 A案改 K=2 見上行,今日所有新 panel loop 皆 K=2(2026-08-21 程式碼實證)★]收斂 K 值依模式而異,而 skill 曾在四處講錯或漏標(2026-08-03 修)——★循序模式 K=2★(`--need 2`,code:`all(good(r) for r in rounds[-need:])`);★平行 panel 模式 K=1★(code:`_loop_status_panel` 只取 `next(reversed(groups.items()))`,只看最後一輪)。錯處:①code-loop SKILL 頭版只寫「連 2 輪」與同份文件 panel 節的「一乾淨輪即收斂」自相矛盾 ②code-loop SKILL/reference 把 `tier: high` 標成「(K=2)」——★講反了★,tier=high 實務走 panel 即 K=1 ③design-loop 誠實天花板寫「連 2 輪醒著的審計員」,對 panel 使用者不成立。★後果★:看頭版的人與照 code 跑的人得到不同結論,而★兩邊都覺得自己在照規矩走★——2026-08-03 使用者問「本來不就是乾淨兩輪才放行嗎」才暴露,當時我四輪都跑在 panel 下卻用 K=2 的心智模型講話。
@@ -59,6 +61,12 @@ about_code:
   - scripts/lumos
 ---
 # convergence-evidence-gate
+
+> ⛔ **panel 閘退役告示(2026-08-25,Enzo 甲裁;[[Projects/probe輪退場_計劃]] decisions d3)**
+> **理由**:多席 code-loop 統一走處置閘(d5 型彙總記帳)——panel 路徑無 quote-check 收貨、其 PASS 後唯一複核(probe 抽查輪)上線三週零執行且三配套零實作。
+> **落地實證**:新迴圈(首筆 ts ≥ 2026-08-26)問 `--gate --panel` 一律拒判並指路 `--disposal`(cutoff 機制,t_panel_probe_retired 三釘);抽查判定印行降純觀測;code 迴圈處置閘同步加嚴(輪內有 major 席則 accepted 必空,d2)。
+> **回放條件**:2026-08-25 前定錨 panel 帳的舊迴圈照常可判(判定碼、K=2、兩條合取原樣);「判準凍結」句仍有效(語意=回放判準不漂);「攢 20 筆抽查帳」翻案通道隨 probe 退場正式作廢(Enzo 具名)。
+> 以下 KEY 中 panel/K=2/抽查相關行=退役前機制紀錄,供回放判讀,不是現行協議。
 
 design-loop 收斂判準升級:**輪次算術 → 機械證據錨 + 發現枯竭**。四組件:`canary record --findings`(記錄面)、`loop status --gate`(判準面)、cross_audit sentinel 定界+解析硬化(根因修)、§2.5c 計票語意(prompt 層)。
 

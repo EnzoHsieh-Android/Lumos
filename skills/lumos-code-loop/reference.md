@@ -325,7 +325,7 @@ lumos code-loop pass --note "<收斂理由/loop-id>"       # pre-push blocking:�
 - **spec-conformance slot(2026-07-10,調研裁定③)**:tier=high 且該分支有收斂 spec(計劃節點)→ panel **追加**一個對答案審查員(不帶 canary、不佔 W 配額,地位同 Codex 無餌否決位):輸入=收斂 spec+diff,鏡頭=**逐條款對照**「說好的做了嗎/縮水/多做/未實作」四類;縮水與未實作視同 finding 進辯方流程。無 spec 的分支跳過並記一句。派工模板見 templates.md §7.5。
 - **判讀/記錄/收斂**:同 design-loop panel(步驟 4 辯方 + 步驟 5 記錄)——一輪 W 筆共享 round-id:
   `lumos canary record caught|missed --loop code-<topic> --round <rid> --auditor <鏡頭>-<模型> --severity <s> [--capture-counts "2,2,1"]`。
-- **問收斂**:`lumos loop status code-<topic> --gate --panel --repo <root>` → 兩條合取(輪有效[記帳席≥2,none 制] ∧ 存活max≤minor[caught+none];capture-recapture 殘餘=advisory 不進合取,2026-08-14 降級);**G1 本就對代碼 skip**,panel 模式不影響。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta hunk,cap=3。
+- **問收斂**(★2026-08-25 甲裁([[Projects/probe輪退場_計劃]] d3):多席 code-loop 亦走處置閘(彙總記帳),panel 僅供 2026-08-25 前定錨的舊迴圈回放,本段僅回放判讀用★):現行=彙總記帳問 `--disposal`;舊迴圈回放:`lumos loop status code-<topic> --gate --panel --repo <root>` → 兩條合取(輪有效[記帳席≥2,none 制] ∧ 存活max≤minor[caught+none];capture-recapture 殘餘=advisory 不進合取,2026-08-14 降級);**G1 本就對代碼 skip**,panel 模式不影響。一乾淨輪即收斂;存活≥major→fix→下一輪只重審 delta hunk,cap=3。
 - **混用守衛**:`--panel` 要求本 loop 記錄全帶 round(partial-mix→rc2)。
 
 
@@ -360,7 +360,7 @@ lumos loop capture-counts \
 lumos canary record caught --loop "code-$TOPIC" --round "$RID" \
   --auditor bug-sonnet --severity minor --capture-counts "2,1,1"
 # 4. 問收斂
-lumos loop status "code-$TOPIC" --gate --panel --repo .   # rc0=PASS → 進 finishing;rc1→修 delta 再下一輪(cap=3)
+lumos loop status "code-$TOPIC" --disposal --spec "$PATCH" --repo .   # 2026-08-25 起;舊迴圈回放才用 --gate --panel。rc0=PASS → 進 finishing;rc1→修 delta 再下一輪(cap=3)
 # 5. 收斂後記留痕才能 push
 lumos code-loop pass --note "panel 收斂:輪有效∧無存活 major(殘餘 obs X.XX advisory)"
 ```
@@ -368,7 +368,7 @@ lumos code-loop pass --note "panel 收斂:輪有效∧無存活 major(殘餘 obs
 
 - **收斂**——★K 取決於你跑哪個模式,別記成同一個數★(2026-08-03 修:本行原本只寫「連 2 輪」,與下方 panel 節的「一乾淨輪即收斂」自相矛盾;**code 實作的是 panel 節那個**——`_loop_status_panel` 只取 `next(reversed(groups.items()))`,也就是★只看最後一輪★):
   - **循序模式**(`--need 2`,無 `--panel`):**連 2 輪**記帳乾淨(kind=none/caught 皆計)且無 blocker/major ∧ 發現枯竭
-  - **panel 模式**(`--gate --panel`,tier=high 走這條):★**2026-08-06 起新 loop=K=2(連續兩個乾淨輪)＋收斂後決定性抽查判定**★(A案落地,見[[Projects/panel收斂判準改革_計劃]];PASS 訊息印「應抽查/免抽」——sha 公式可重算,應抽就加開 probe-* 輪:材料全量、席數可縮 3、不計 cap、冒 major 自動撤銷收斂;抽查上限 1 次/loop)。舊 loop(首筆早於 cutoff)沿 K=1
+  - **panel 模式**(`--gate --panel`;★2026-08-25 甲裁([[Projects/probe輪退場_計劃]] d3):多席 code-loop 亦走處置閘(彙總記帳),panel 僅供 2026-08-25 前定錨的舊迴圈回放,本段僅回放判讀用★——tier=high 現行也改多席彙總+--disposal):回放判讀:2026-08-06 起的舊 loop=K=2+收斂後抽查判定(A案,見[[Projects/panel收斂判準改革_計劃]];抽查判定印行 2026-08-25 起降純觀測,probe-* 加開義務退場——三配套從未實作,詳 [[Issues/probe輪三參數只在散文]]);更早舊 loop 沿 K=1
   - 收斂後 → 記 `code-loop pass` 留痕 → finishing。
   - ⚠ **panel 是風險最高的路徑,判準卻最鬆**。外部案例研究(arXiv 2605.12280 §3.5)明確建議「two consecutive clean passes」當複現判準,理由是「stopping rule is a known source of **premature-termination risk on stochastic LLM auditors**」。★本專案尚未改 panel 的 K★——那動到收斂判準、屬守衛面,要另走 design-loop;此處只先把矛盾講白,不偷偷改判準。
 
@@ -380,7 +380,7 @@ lumos code-loop pass --note "panel 收斂:輪有效∧無存活 major(殘餘 obs
 - **一輪 = 平行 W 個 reviewer**(W＝panel_width:standard 3/high 5),各讀一份工作副本:鏡頭各異(bug/資源例外/冪等併發/…)(~~canary 型別輪替/帶餌無餌之分~~已隨協議停用——全部席同規則,Codex 席照佔 W 或外掛否決)。**跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**——tier=high 雙 Codex 角色:1 席**正式 finder,佔 W 之一**(findings 計入重疊帳)+1 席**否決席,不佔 W**(外掛,同 spec-conformance 慣例)。standard=1 席否決。**否決席落閘路徑**:其 findings 與帶餌席同池進辯方;存活 ≥major——M2 cluster 帳模式必須記為該輪 `<名>=disputed-major` cluster 記錄(severity 欄該模式僅顯示不裁決)/無-cluster 舊帳計入存活 max。**fail 分級**:standard=Codex 不可用退同門+留痕;**tier=high=fail-closed**——第三家族(qwen 有 cross_audit 整合;gemini 候選未驗)替補→延期→皆不可則**不得收斂攤人裁**(人可明示豁免留痕),不分金流與否。qwen 轉列第三家族替補與 finder 輪替候選。
 - **spec-conformance slot**(tier=high 且有收斂 spec):追加一個對答案審查員(不佔 W、地位同 qwen),逐條款對照「做了/縮水/多做/未實作」,縮水與未實作進辯方。**含合約候選兌現**(2026-07-29):spec 計劃節點若列「合約候選清單」,逐條驗落地有沒有標 ★INVARIANT★ 綁 [test:]——該綁沒綁=縮水 finding。
 - **判讀/辯方/記錄** 同循序(步驟 4-5,含可疑席 repro triage 與留痕/quote-check 慣例),一輪 W 筆共享 `--round <rid>`。
-- **收斂**:`loop status --gate --panel` 兩條合取(記帳席≥2 且 0 missed[none 制] ∧ 存活 max≤minor;capture-recapture 殘餘=advisory 觀測不進合取[2026-08-14 降級,鑑別力≈0 見 Projects/收斂閘殘餘估計降級_計劃];--min-seats/G3 帶旗標才啟用;cluster 帳=兩條合取,詳 design-loop SKILL panel 節);★**2026-08-06 起新 loop=最後兩輪各自全過(K=2)+PASS 印抽查判定**★(A案;舊 loop 沿 K=1——gate 依首筆日期自動判,不用記);存活≥major → 只重審 delta,cap=3(K=2 的第二乾淨輪計入 cap;cap 頂未湊滿照攤人)。
+- **收斂**(★2026-08-25 甲裁([[Projects/probe輪退場_計劃]] d3):多席 code-loop 亦走處置閘(彙總記帳),panel 僅供 2026-08-25 前定錨的舊迴圈回放,本段僅回放判讀用★;現行=--disposal+code 迴圈 major 必折[d2]):舊迴圈回放:`loop status --gate --panel` 兩條合取(記帳席≥2 且 0 missed[none 制] ∧ 存活 max≤minor;capture-recapture 殘餘=advisory 觀測不進合取[2026-08-14 降級,鑑別力≈0 見 Projects/收斂閘殘餘估計降級_計劃];--min-seats/G3 帶旗標才啟用;cluster 帳=兩條合取,詳 design-loop SKILL panel 節);★**2026-08-06 起新 loop=最後兩輪各自全過(K=2)+PASS 印抽查判定**★(A案;舊 loop 沿 K=1——gate 依首筆日期自動判,不用記);存活≥major → 只重審 delta,cap=3(K=2 的第二乾淨輪計入 cap;cap 頂未湊滿照攤人)。
 - capture_counts 別手數 → `lumos loop capture-counts --finder ... --from-pitfalls <range>`(自動收割 linter/regex 確定性 finder)產串。
 
 
@@ -395,8 +395,8 @@ lumos loop capture-counts \
 # 3. 記這輪(W 筆共享 --round)
 lumos canary record none --loop "code-$TOPIC" --round "$RID" \
   --auditor bug-sonnet --severity minor --capture-counts "2,1,1"   # 席名慣例:<鏡頭>-<模型>
-# 4. 問收斂
-lumos loop status "code-$TOPIC" --gate --panel --repo .
+# 4. 問收斂(2026-08-25 甲裁後現行;舊迴圈回放才用 --gate --panel)
+lumos loop status "code-$TOPIC" --disposal --spec <凍結patch> --repo .
 # 5. 收斂後留痕才能 push
 ```
 

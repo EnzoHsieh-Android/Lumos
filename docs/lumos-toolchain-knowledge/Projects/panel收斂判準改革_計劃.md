@@ -34,6 +34,10 @@ summary: |-
 ## 被翻紀錄(2026-08-08)
 本計劃之 A 案收斂制(K=2+決定性抽查)與**防浮動條款**(「落地後不得論證型翻案;唯一通道=20 筆抽查帳」)已由 Enzo 具名推翻——見 [[Projects/驗證層去模型化_計劃]](S2b,signoff 留痕):條款前提「canary 閘可信」被非平穩性論證動搖,陷自我引用。code-loop 收斂改走 `--disposal`;**A 案機制碼與 `t_panel_k2_and_probe` 迴歸測試保留不刪**(舊帳重放/golden replay 消費)。
 
+## 被翻紀錄二(2026-08-25,與上段是兩件不同的事)
+
+上段(08-08)翻的是**閘切換**(canary 可信度前提動搖→code-loop 收斂改走 --disposal,當時實作只落到單席)。本段翻的是**多席路由+抽查機制**:Enzo 甲裁([[Projects/probe輪退場_計劃]] decisions d3)——多席 code-loop(含 high)亦統一走處置閘(d5 型彙總記帳),panel 閘轉純歷史回放(新迴圈 cutoff 拒判);probe 抽查輪義務退場(零觸發三週+三配套零實作);本計劃防浮動條款的「唯一翻案通道=攢滿 20 筆抽查帳」隨之正式作廢(具名),「判準凍結」句保留為回放語意。配套加嚴:code 迴圈處置閘輪內有 major 席則 accepted 必空(decisions d2),與本計劃 A 案「存活 max≤minor」同嚴度。
+
 ## 為什麼現在立案
 
 K=1 是 convergence-evidence-gate 記錄在案的「未經檢驗的取捨」。本案動機為**假設性風險**（r1 校正：T8/RSNO 未收斂是三條合取共同作用的結果，不構成「碰巧乾淨就會放行」的觀測證據）——但 relmainnet 提供了一個**既遂實例**：r2 通過全部三條真合取，r3 冒出 major。範圍：**code-loop panel**（design-loop 已走 disposal 閘）。
