@@ -3065,8 +3065,8 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
             for nd_ in (r.get("nodes") or []):
                 by.setdefault(nd_, set()).add(r.get("kind"))
         conv = sum(1 for k in by.values() if "converged" in k)
-        capped = sum(1 for k in by.values() if "cap-reached" in k and "converged" not in k)
-        rewrote = sum(1 for k in by.values() if "rewrite" in k and "converged" not in k and "cap-reached" not in k)
+        capped = sum(1 for k in by.values() if "cap-reached" in k and "converged" not in k and "rewrite" not in k)
+        rewrote = sum(1 for k in by.values() if "rewrite" in k and "converged" not in k)
         print(f"  審查迴圈結案方式(只算有記帳的 {len(by)} 個編號):閘過了 {conv} 個、跑滿上限沒過關(人裁放行) {capped} 個、人裁判整份重寫收尾 {rewrote} 個"
               + (f"——人裁放行率 {capped / len(by):.0%}" if by else ""))
         print("  (2026-08-22 起 loop next / loop status 才會記這個帳;更早的迴圈沒資料,不在分母)")
@@ -13681,13 +13681,18 @@ def cmd_prose_lint(path):
     except OSError as e:
         print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
         return 2
+    except UnicodeDecodeError:
+        print(f"擋下:這個檔案不是 UTF-8 文字(裡面有壞位元組,常見於從 Word/Outlook 貼上的內容)——prose-lint 只掃文字 spec: {path}", file=sys.stderr)
+        return 2
     hits = []
     in_fence = False
+    fence_open_ln = 0
     for ln, line in enumerate(text.splitlines(), 1):
-        if line.lstrip().startswith("```"):
+        if line.lstrip().startswith(("```", "~~~")):
             in_fence = not in_fence
+            fence_open_ln = ln if in_fence else 0
             continue
-        if in_fence or "引句:" in line or "引句:" in line:
+        if in_fence or "引句:" in line or "引句：" in line:
             continue
         for family, words in _PROSE_WEAK_WORDS:
             for w in words:
@@ -13700,10 +13705,12 @@ def cmd_prose_lint(path):
                     hits.append((ln, family, w, frag))
                     start = idx + len(w)
     n_words = sum(len(ws) for _, ws in _PROSE_WEAK_WORDS)
+    if in_fence:
+        print(f"提醒:第 {fence_open_ln} 行開的程式碼圍欄沒關(``` 或 ~~~ 不成對)——它之後的內容全都沒被掃;補上關閉圍欄再重掃一次才準。")
     if not hits:
         print(f"✓ prose-lint {md.name} — 沒掃到模糊措辭(詞表保守首版 {n_words} 個詞;掃不到不代表精確,詞表在下一個真實設計迴圈校準)")
         return 0
-    print(f"掃到 {len(hits)} 處模糊措辭({md.name})。這不擋任何事(rc 仍是 0)——在意的原因:spec 裡的模糊詞會讓實作者自行腦補、審查員也錨不住:")
+    print(f"提醒:掃到 {len(hits)} 處模糊措辭({md.name}),不擋任何事(rc 仍是 0)——在意的原因:spec 裡的模糊詞會讓實作者自行腦補、審查員也錨不住:")
     shown = hits[:40]
     for ln, family, w, frag in shown:
         print(f"  第 {ln} 行 「{w}」({family}):…{frag}…")
@@ -15741,12 +15748,12 @@ def main():
     p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(非互動環境必須)")
     p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
 
-    p = sub.add_parser("prose-lint", help="spec 白話健檢:掃中文模糊措辭(恆 rc0 只提醒不擋;排除 code fence 與引句行)")
-    p.add_argument("path", help="要掃的 markdown 檔路徑")
-
     p = sub.add_parser("fold-check", help="折入後一致性複查(vault-free):列舉鏡像段 + value-drift/reverse-omission flag")
     p.add_argument("path", help="要核對的 markdown 檔路徑")
     p.add_argument("--json", dest="as_json", action="store_true", help="JSON 輸出(供機器讀)")
+
+    p = sub.add_parser("prose-lint", help="spec 白話健檢:掃中文模糊措辭(恆 rc0 只提醒不擋;排除 code fence 與引句行)")
+    p.add_argument("path", help="要掃的 markdown 檔路徑")
 
     p = sub.add_parser("refcheck", help="spec 指涉宣稱確定性核對(vault-free):inline-code 路徑/行號 → 存在性 manifest")
     p.add_argument("md", help="要核對的 markdown 檔")

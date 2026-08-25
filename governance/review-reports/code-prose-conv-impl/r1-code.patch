@@ -1,0 +1,312 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index fcb1bbb..e529579 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -413,21 +413,21 @@ def _suggest_systems_for_orphan(env, rel, n):
+         for sr, st in matched:
+             if any(st != o and st in o for o in stems):   # st 是另一命中 stem 的子字串 → 丟(留更具體者)
+                 continue
+             add(sr, 1, f"feature 提到「{st}」")
+     return sorted(((s, sc, r) for s, (sc, r) in cands.items()),
+                   key=lambda x: (-x[1], -len(env.notes[x[0]].stem or "")))
+ 
+ 
+ def _loop_gov_mark(env, loop_id, kind, note=""):
+     """設計/代碼審查迴圈的結案方式進治理帳(工具鏈補強十件 #6):gate=design-loop,
+-    kind=converged(閘過了)| cap-reached(跑滿上限沒過)。gov --stats 用它算「達上限卻從沒過關」=人裁放行。
++    kind=converged(閘過了)| cap-reached(跑滿上限沒過)| rewrite(人裁判整份重寫、開新編號收尾;設計審收斂重定義 d3,2026-08-25;note 必寫前編號)。gov --stats 三種分開計數。
+     fail-open:寫不進去不影響判定輸出。"""
+     if env is None:
+         return
+     try:
+         _append_governance_log(env.vault, [{"gate": "design-loop", "kind": kind, "hard": False,
+                                             "nodes": [loop_id], "note": note}])
+     except Exception:
+         pass
+ 
+ 
+@@ -3059,21 +3059,22 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
+     # 設計迴圈結案方式(工具鏈補強十件 #6):達上限卻從沒過關的審查編號 = 人裁放行。
+     # 只看 gate=design-loop 的事件(2026-08-22 起才記;之前的迴圈沒帳,算不出來,這裡如實講)。
+     dl = [r for r in ded if r.get("gate") == "design-loop"]
+     if dl:
+         by = {}
+         for r in dl:
+             for nd_ in (r.get("nodes") or []):
+                 by.setdefault(nd_, set()).add(r.get("kind"))
+         conv = sum(1 for k in by.values() if "converged" in k)
+         capped = sum(1 for k in by.values() if "cap-reached" in k and "converged" not in k)
+-        print(f"  審查迴圈結案方式(只算有記帳的 {len(by)} 個編號):閘過了 {conv} 個、跑滿上限沒過關(人裁放行) {capped} 個"
++        rewrote = sum(1 for k in by.values() if "rewrite" in k and "converged" not in k and "cap-reached" not in k)
++        print(f"  審查迴圈結案方式(只算有記帳的 {len(by)} 個編號):閘過了 {conv} 個、跑滿上限沒過關(人裁放行) {capped} 個、人裁判整份重寫收尾 {rewrote} 個"
+               + (f"——人裁放行率 {capped / len(by):.0%}" if by else ""))
+         print("  (2026-08-22 起 loop next / loop status 才會記這個帳;更早的迴圈沒資料,不在分母)")
+         print()
+     print("  註:這張表是「去重後」的筆數,跟不加 --stats 的畫面行數不是同一套算法——預設畫面還會再折疊一次。")
+ 
+ 
+ def _render_gov_nags(ded, min_days):
+     """機制空轉偵測(Issues/自足性審計提醒空轉四十六天 的出口,2026-08-22):
+     同一道軟閘對同一篇筆記,從第一次提醒到最後一次提醒跨 ≥ min_days 天,而且最後一次提醒就在最近一次
+     doctor 體檢那天(=還在喊、沒人理)。有就列出並回 rc1(給自主迴圈週報當訊號),沒有 rc0。
+@@ -13648,20 +13649,78 @@ def _fold_reverse_omission(text):
+     for tok in sorted(body_tokens - summary_tokens):
+         omissions.append({
+             "token": tok,
+             "present_in": "body",
+             "missing_in": "summary",
+         })
+ 
+     return omissions
+ 
+ 
++_PROSE_WEAK_WORDS = (
++    # [S1] 設計審收斂重定義(2026-08-25):保守首版,寧漏勿噪;詞表在下一個真實設計迴圈([S6])校準
++    ("模糊程度", ("盡量", "儘量", "大概", "差不多", "若干")),
++    ("未定承諾", ("原則上", "理論上", "基本上", "或許", "應該沒問題")),
++    ("開放結尾", ("之類", "諸如此類", "視情況", "必要時", "另行")),
++    ("未量化時間", ("盡快", "儘快", "短期內", "一段時間")),
++)
++
++
++def cmd_prose_lint(path):
++    """spec 白話健檢([S1] 設計審收斂重定義 2026-08-25):掃中文模糊措辭。
++
++    恆 rc0(advisory:掃到也不擋,擋人的判斷歸審查與人);檔案讀不到才 rc2。
++    排除 code fence 內容與「引句:」行(引的是別人的原文,不歸 spec 作者改)。
++    design-loop 排乾步驟必跑;派工詞明寫「此掃描可及類別,席位不得報」。
++    """
++    md = Path(path)
++    if not md.is_file():
++        print(f"擋下:找不到這個檔案: {path}", file=sys.stderr)
++        return 2
++    try:
++        text = md.read_text(encoding="utf-8-sig")
++    except OSError as e:
++        print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
++        return 2
++    hits = []
++    in_fence = False
++    for ln, line in enumerate(text.splitlines(), 1):
++        if line.lstrip().startswith("```"):
++            in_fence = not in_fence
++            continue
++        if in_fence or "引句:" in line or "引句:" in line:
++            continue
++        for family, words in _PROSE_WEAK_WORDS:
++            for w in words:
++                start = 0
++                while True:
++                    idx = line.find(w, start)
++                    if idx < 0:
++                        break
++                    frag = line[max(0, idx - 12):idx + len(w) + 12].strip()
++                    hits.append((ln, family, w, frag))
++                    start = idx + len(w)
++    n_words = sum(len(ws) for _, ws in _PROSE_WEAK_WORDS)
++    if not hits:
++        print(f"✓ prose-lint {md.name} — 沒掃到模糊措辭(詞表保守首版 {n_words} 個詞;掃不到不代表精確,詞表在下一個真實設計迴圈校準)")
++        return 0
++    print(f"掃到 {len(hits)} 處模糊措辭({md.name})。這不擋任何事(rc 仍是 0)——在意的原因:spec 裡的模糊詞會讓實作者自行腦補、審查員也錨不住:")
++    shown = hits[:40]
++    for ln, family, w, frag in shown:
++        print(f"  第 {ln} 行 「{w}」({family}):…{frag}…")
++    if len(hits) > len(shown):
++        print(f"  (其餘 {len(hits) - len(shown)} 處省略,全部列會淹掉重點)")
++    print("處理方式:能量化就量化;不能量化的,寫明「誰、什麼時候、用什麼判準」。改完重掃:")
++    print(f"    lumos prose-lint {path}")
++    return 0
++
++
+ def cmd_fold_check(path, as_json=False):
+     """折入後一致性複查輔助:列舉鏡像段 + value-drift + reverse-omission flag。
+ 
+     rc = (value_drift 或 reverse_omission 非空) ? 1 : 0
+     --json schema: {path, mirror_sections, value_drift, reverse_omission}
+     """
+     import json
+     md = Path(path)
+     if not md.is_file():
+         print(f"擋下:找不到這個檔案: {path}", file=sys.stderr)
+@@ -15267,20 +15326,21 @@ HELP_WHEN = {
+     "decision-add": "在某篇記一條決策,回編號。",
+     "install": "把 lumos 指令裝成全域可用(symlink 到 ~/.local/bin)並同步 skills / hooks。",
+     "uninstall": "移除全域 lumos 指令。",
+     "archive": "把老的驗證紀錄歸檔。先 dry-run 再 --apply。",
+     "update": "專案裡的工具組舊了,從唯一來源更新(含 CLAUDE.md 紀律區塊)。",
+     "bootstrap": "新機器第一次裝:clone 來源、裝全域指令、skills、專案接線。",
+     "init": "新專案要用圖譜:建資料夾、.gitignore、pre-commit / pre-push。",
+     "deinit": "專案不用了,拆掉專案層(hooks / 工具組 / CLAUDE.md 注入),圖譜保留。",
+     "teardown": "連機器全域一起拆(CLI / skills / hooks),圖譜保留。",
+     "fold-check": "一份文件前後寫的數字 / 設定對不對得上(折入審查結果後用)。",
++    "prose-lint": "spec 動筆後的白話健檢:掃中文模糊措辭,只提醒不擋(設計審排乾步驟用)。",
+     "refcheck": "文件裡引的 檔案:行號 還存不存在。",
+     "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
+     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
+     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
+     "ci-status": "只看上次 CI 結果,不打網路。",
+     "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
+     "build": "挖掘檔案↔測試的關係,存成地圖。",
+     "affected": "改了這些檔,具體該跑哪幾個測試(建議,不擋)。",
+     "test-layers": "改了這些檔,該跑哪一層測試(單元 / 整合 / UI)的提醒,不擋。",
+     "lint-check": ".lumos/lint.json 宣告的 linter 真的跑得動嗎。--smoke 真跑。",
+@@ -15674,20 +15734,23 @@ def main():
+     p = sub.add_parser("deinit", help="專案層反安裝(對稱 init):拆本 repo 的 hooks/工具組/CLAUDE.md 注入/圖譜")
+     p.add_argument("--keep-graph", action="store_true", help="保留圖譜 vault,其餘照拆")
+     p.add_argument("--dry-run", action="store_true", help="只印會動到什麼,不實際改動")
+     p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(CI/非互動用)")
+     p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
+ 
+     p = sub.add_parser("teardown", help="一鍵拆機:當前 repo 專案層 + 機器全域(CLI/skills/hooks),保留圖譜")
+     p.add_argument("-y", "--yes", action="store_true", help="跳過互動確認(非互動環境必須)")
+     p.add_argument("--source", help="Lumos 來源 repo 路徑(僅供自我保護比對)")
+ 
++    p = sub.add_parser("prose-lint", help="spec 白話健檢:掃中文模糊措辭(恆 rc0 只提醒不擋;排除 code fence 與引句行)")
++    p.add_argument("path", help="要掃的 markdown 檔路徑")
++
+     p = sub.add_parser("fold-check", help="折入後一致性複查(vault-free):列舉鏡像段 + value-drift/reverse-omission flag")
+     p.add_argument("path", help="要核對的 markdown 檔路徑")
+     p.add_argument("--json", dest="as_json", action="store_true", help="JSON 輸出(供機器讀)")
+ 
+     p = sub.add_parser("refcheck", help="spec 指涉宣稱確定性核對(vault-free):inline-code 路徑/行號 → 存在性 manifest")
+     p.add_argument("md", help="要核對的 markdown 檔")
+     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
+ 
+     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
+@@ -15852,20 +15915,22 @@ def main():
+     if args.cmd == "bootstrap":
+         return cmd_bootstrap(lumos_url=args.lumos_url, lumos_home=args.lumos_home, pull=args.pull,
+                              init=args.auto_init, allow_stale=args.allow_stale)
+     if args.cmd == "init":
+         return cmd_init(name=args.name, force=args.force,
+                         with_hooks=not args.no_hooks, no_pull=args.no_pull,
+                         allow_stale=args.allow_stale)
+     if args.cmd == "deinit":
+         return cmd_deinit(keep_graph=args.keep_graph, dry_run=args.dry_run,
+                           yes=args.yes, source=args.source)
++    if args.cmd == "prose-lint":
++        return cmd_prose_lint(args.path)
+     if args.cmd == "fold-check":
+         return cmd_fold_check(args.path, as_json=args.as_json)
+     if args.cmd == "refcheck":
+         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+     if args.cmd == "pitfalls":
+         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
+                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
+     if args.cmd == "testmap":
+         if args.tmcmd == "build":
+             return cmd_testmap_build(repo=args.tm_repo, as_json=args.tm_json)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 2fbd541..39e0356 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3780,20 +3780,38 @@ def t_gov_stats_three_layers():
+     root, vault = _stats_fixture("gctl-st3-", [dup, dup, dup])
+     try:
+         out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+         seg = [l for l in out.splitlines() if l.strip().startswith("check-s")]
+         check("stats: 三行重複 → 去重 1 / 原始 3", bool(seg) and " 1 " in seg[0] and " 3 " in seg[0], out)
+         check("stats: 印出「不等於預設畫面行數」聲明", "預設畫面" in out and "折疊" in out, out)
+     finally:
+         shutil.rmtree(root, ignore_errors=True)
+ 
+ 
++def t_gov_stats_rewrite_bucket():
++    """d3(設計審收斂重定義 2026-08-25):rewrite 收尾獨立計數——只有 rewrite 的編號
++    不再悄悄掉出 conv/capped 兩桶讓放行率失真。"""
++    import shutil
++    gov = [
++        '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"design-loop","kind":"converged","hard":false,"nodes":["L1"]}\n',
++        '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L2"],"note":"prev=L2-v0"}\n',
++    ]
++    root, vault = _stats_fixture("gctl-rw-", gov)
++    try:
++        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
++        check("stats: rewrite 收尾獨立計數", "人裁判整份重寫收尾 1 個" in out, out)
++        check("stats: 分母含 rewrite 編號(2 個)", "只算有記帳的 2 個編號" in out, out)
++        check("stats: converged 照算", "閘過了 1 個" in out, out)
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
+ def t_gov_stats_na_columns():
+     import shutil
+     gov = [
+         '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"code-loop","kind":"passed","hard":false,"nodes":[]}\n',
+         '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"anchor-approve","kind":"approved","hard":false,"nodes":["scripts/hooks/pre-push"]}\n',
+         '{"ts":"2026-06-03T09:00:00","commit":"ccc","gate":"anchor-approve","kind":"approved","hard":false,"nodes":[]}\n',
+     ]
+     extra = {".canary-log.jsonl":
+              '{"ts":"2026-06-04T09:00:00","kind":"none","token":"T1","auditor":"a","severity":"minor"}\n'}
+     root, vault = _stats_fixture("gctl-stna-", gov, extra)
+@@ -6169,20 +6187,43 @@ def t_doctor_check_p():
+ 
+ def _mk_refcheck_repo():
+     """temp repo:scripts/real.py(5行) + 頂層 scripts/ 目錄;refcheck 用 --repo 顯式指定,免 git。"""
+     root = Path(tempfile.mkdtemp(prefix="gctl-refcheck-"))
+     (root / "scripts").mkdir()
+     (root / "scripts" / "real.py").write_text(
+         "L1 = 1\nL2 = 2\nL3 = 3\nL4 = 4\nL5 = 5\n", encoding="utf-8")
+     return root
+ 
+ 
++def t_prose_lint():
++    """[S1] 設計審收斂重定義(2026-08-25):模糊措辭掃描 advisory;fence 與引句行排除;恆 rc0。"""
++    import os
++    import tempfile
++    fd, p = tempfile.mkstemp(suffix=".md", prefix="proselint-")
++    os.close(fd)
++    try:
++        with open(p, "w", encoding="utf-8") as f:
++            f.write("# t\n\n盡量在必要時處理。\n\n```\n儘量fence裡不掃\n```\n\n引句:「大概這句是引文」\n")
++        out = run_lumos_capture(["prose-lint", p])
++        check("prose-lint: 掃到正文弱詞(盡量+必要時)", "「盡量」" in out and "「必要時」" in out, out)
++        check("prose-lint: fence 內不掃", "fence裡不掃" not in out, out)
++        check("prose-lint: 引句行不掃", "這句是引文" not in out, out)
++        check("prose-lint: 掃到東西 rc 仍 0(advisory)", run_lumos(["prose-lint", p]) == 0, "")
++        with open(p, "w", encoding="utf-8") as f:
++            f.write("# t\n\n這行乾乾淨淨。\n")
++        check("prose-lint: 乾淨檔 rc0 且訊息講明詞表保守", run_lumos(["prose-lint", p]) == 0
++              and "詞表保守首版" in run_lumos_capture(["prose-lint", p]), "")
++        check("prose-lint: 檔案不存在 rc2", run_lumos(["prose-lint", p + ".nope"]) == 2, "")
++    finally:
++        os.remove(p)
++
++
+ def t_refcheck():
+     import json as _json
+     root = _mk_refcheck_repo()
+ 
+     # ---- 案例 1/3/4/5/7 + 目錄型:綜合 spec ----
+     md_all = root / "spec-all.md"
+     md_all.write_text(
+         "# t\n"
+         "缺:`scripts/ghost.py` 實作。\n"
+         "在:`scripts/real.py:3` 與超界 `scripts/real.py:99` 與裸 `scripts/real.py`。\n"
+@@ -16582,21 +16623,25 @@ def t_docs_command_count():
+                  capture_output=True, text=True, timeout=60).stdout
+     _m = _re.search(r"\{([a-z0-9,\-]+)\}", _h)
+     actual = len(set(_m.group(1).split(","))) if _m else 0
+     check("命令數真值取自 --help choices(非原始碼 regex)", actual > 40, f"actual={actual}")
+     # 掃**全部活文件**而非手維護清單——固定三檔的舊寫法正是 AGENTS.md(44)與
+     # skills/…/reference.md(49)同時漂移卻全綠的原因(2026-07-29 外審實錘)。
+     # 排除:外審歸檔(逐字歷史紀錄,不得回改)、圖譜(決策條目會引述當時數字)、.git。
+     # golden/ 是凍結語料(過去 loop 的 spec 快照,replay 校準用),與外審歸檔同性質:歷史不得回改。
+     # l4-audit/ 是自足性審計的逐節點證據(claims/verify 檔,2026-08-21 起),引用的數字是
+     # 「審計當下或歷史快照」的值——同樣不得為了過守衛回改證據。
++    # review-reports/ 是 loop 留痕(席報告/快照的 sha256 記在 canary 帳,disposal/panel 閘會重驗——
++    # 回改=打斷留痕驗證,實錘:2026-08-25 62→63 時兩份舊席報告已被帳綁死);audits/ 是審計當下的證據快照。
++    # 兩者與外審歸檔同性質:歷史不得回改,命令數過期屬正常。
+     skip = ("governance/external-reviews/", "governance/golden/", "governance/l4-audit/",
++            "governance/review-reports/", "governance/audits/",
+             "-knowledge/", "/.git/", "node_modules/")
+     scanned = 0
+     for p in sorted(root.rglob("*.md")):
+         rel = p.relative_to(root).as_posix()
+         if any(s.strip("/") in rel for s in skip):
+             continue
+         text = p.read_text(encoding="utf-8", errors="replace")
+         nums = set(_re.findall(r"(\d+) 個頂層命令", text)) | set(
+             _re.findall(r"(\d+) top-level commands", text)) | set(
+             _re.findall(r"(\d+) 是頂層命令數", text))  # 換措辭逃法實例:ARCHITECTURE 曾寫「53 是頂層命令數」躲過本守衛(2026-08-24)

@@ -3794,13 +3794,17 @@ def t_gov_stats_rewrite_bucket():
     gov = [
         '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"design-loop","kind":"converged","hard":false,"nodes":["L1"]}\n',
         '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L2"],"note":"prev=L2-v0"}\n',
+        # L3=先 cap-reached 後人裁 rewrite(最貼近真實流程的組合;r1 主審 F6:漏排除會掉回「人裁放行」桶)
+        '{"ts":"2026-06-03T09:00:00","commit":"ccc","gate":"design-loop","kind":"cap-reached","hard":false,"nodes":["L3"]}\n',
+        '{"ts":"2026-06-03T10:00:00","commit":"ddd","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L3"],"note":"prev=L3-v0"}\n',
     ]
     root, vault = _stats_fixture("gctl-rw-", gov)
     try:
         out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
-        check("stats: rewrite 收尾獨立計數", "人裁判整份重寫收尾 1 個" in out, out)
-        check("stats: 分母含 rewrite 編號(2 個)", "只算有記帳的 2 個編號" in out, out)
+        check("stats: rewrite 收尾獨立計數(含 cap-reached+rewrite 組合共 2 個)", "人裁判整份重寫收尾 2 個" in out, out)
+        check("stats: 分母含 rewrite 編號(3 個)", "只算有記帳的 3 個編號" in out, out)
         check("stats: converged 照算", "閘過了 1 個" in out, out)
+        check("stats: cap-reached+rewrite 不落「人裁放行」桶(F6)", "跑滿上限沒過關(人裁放行) 0 個" in out, out)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -6213,6 +6217,19 @@ def t_prose_lint():
         check("prose-lint: 乾淨檔 rc0 且訊息講明詞表保守", run_lumos(["prose-lint", p]) == 0
               and "詞表保守首版" in run_lumos_capture(["prose-lint", p]), "")
         check("prose-lint: 檔案不存在 rc2", run_lumos(["prose-lint", p + ".nope"]) == 2, "")
+        # ── 邊界四釘(code-loop code-prose-conv-impl r1 主審 F1/F2/F3/F5,2026-08-25)──
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("# t\n\n~~~\n儘量tilde圍欄不掃\n~~~\n\n引句：「大概這句全形冒號引文」\n")
+        out2 = run_lumos_capture(["prose-lint", p])
+        check("prose-lint: ~~~ 圍欄內不掃(F1)", "tilde圍欄不掃" not in out2, out2)
+        check("prose-lint: 全形冒號引句行也排除(F3)", "全形冒號引文" not in out2, out2)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("# t\n\n```\n沒關的圍欄\n\n後面這行有盡量兩字。\n")
+        out3 = run_lumos_capture(["prose-lint", p])
+        check("prose-lint: 未閉合圍欄要警告而非靜默吞掉全文(F2)", "圍欄沒關" in out3, out3)
+        with open(p, "wb") as f:
+            f.write(b"# t\n\xff\xfe broken bytes\n")
+        check("prose-lint: 非 UTF-8 檔 rc2 乾淨擋下不 traceback(F5)", run_lumos(["prose-lint", p]) == 2, "")
     finally:
         os.remove(p)
 
