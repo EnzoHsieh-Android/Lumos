@@ -1,0 +1,1760 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/enzo/harness/lumos-toolchain
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 01a0379f-f581-7773-abf5-419c01d5f3cb
+--------
+user
+你是外部否決席,審一份設計 spec:/tmp/cascade-reminder-r1.md(59 行;repo=/Users/enzo/harness/lumos-toolchain,可讀檔查證)。spec 要做的事:decision-supersede 翻案會自動開連鎖待辦帳本(governance/rel-cascade/*.jsonl),歷來沒人跟單,解法=lumos doctor 加一段軟提醒(transitions==0 的帳本數+最老天數)。你的任務:找會讓實作者做錯的洞——特別是 spec 對 scripts/lumos 實碼的宣稱(warn_soft:486/_ledger_read:8162/_rel_cascade_dir:8103/cmd_rel_cascade_list:8288/E2 兜底:8391)有沒有不實、行為斷言例1-5 有沒有跟實碼形狀打架的。每條 finding:severity(blocker/major/minor)+「blocking: 是/否」+一句判準(不改會做錯嗎;blocking:否對應minor、是對應major/blocker,不得矛盾)+逐字引句獨立一行,格式為 引句:「原文片段」,片段至少10字、片段內不要有中文引號字符。沒問題的節寫已讀無finding。最後總結:最嚴重 severity、blocking 幾條。
+codex
+我會先依 repo 指引讀 `CLAUDE.md` 與知識圖譜入口，再逐行對照 spec 指定的 `scripts/lumos` 實碼位置與行為例 1–5；全程唯讀。
+exec
+/bin/zsh -lc "sed -n '1,240p' CLAUDE.md && sed -n '1,220p' docs/lumos-toolchain-knowledge/MOC/index.md && nl -ba /tmp/cascade-reminder-r1.md && nl -ba scripts/lumos | sed -n '450,510p;8070,8420p'" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+# CLAUDE.md
+<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+## 知識圖譜先行（必讀，優先級最高）
+
+**`docs/lumos-toolchain-knowledge/` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 它主要的讀者是下一個 session 的 AI（偶爾是人），所以寫的時候以「沒有脈絡的人讀得懂」為準。 行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
+
+### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
+
+| 你心裡想的是… | 先敲這個 |
+|---|---|
+| 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（Landmark 實測 8 句 3 句 0 筆） |
+| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+| 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+| 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+| 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
+| 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+| 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+| 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+| 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+| 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+
+查得到才算先行（Landmark 2026-08-11 實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
+
+★第四條（2026-08-22 Enzo 裁，成本理由：判斷錯本來就要重查一次，這兩分鐘是提前付）★：**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講，就失去意義）。同日實測：一天內六次判斷失準，**全部是「只信一個來源、沒去對第二個」**——搜錯詞、自己腳本有 bug、讀錯欄位名、用錯工具、看了張過期的表；其中四次是另一個 session 拿它自己的數字打臉才發現。**只有這個場合要派，其他查詢照常**（實測「帶否定斷言」的回覆一天 31 次太多，加上「會決定動不動手」這一刀才降到個位數）。
+
+兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
+
+Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆記」給你——但它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
+
+**接手圖譜還是空的專案 → 先走節點還原 SOP**（`lumos-project-notes` 的 `commands/09-節點還原.md`：七步把脈絡還原成節點；需要才產、有就照慣例用）。
+**不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（4k，按你正在做的事分九類，只開需要的子檔）。
+
+### 三條鐵則
+
+1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。
+4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。
+
+### 給人看的回報用白話
+先一句人話或比喻，再往下講；術語和 file:line 能不用就不用，非用不可就當場一句解釋。設計動筆前先問世界（最小解在哪一層、世界解過沒、裁定＝借用既有設計為預設 / 真沒輪子才自建 / 採用新依賴在零依賴家規下幾乎不選），一行 `PRIOR-ART:` 記進計劃筆記。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
+
+### 遇到這些情境就調用對應 skill
+
+| 你正在做的事 | 調用 |
+|---|---|
+| 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
+| 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
+| 設計 spec 寫完、要進實作前的審查迴圈 | **`lumos-design-loop`** |
+| 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
+
+> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill 見文末〈架構參考 Skills〉。
+<!-- LUMOS:GRAPH-DISCIPLINE:END -->
+---
+type: moc
+status: doing
+about_code_stamp: batch-2026-08-23/2026-08-23/70a11d6e2e82
+---
+# lumos-toolchain 知識圖譜總索引
+
+Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識圖譜。節點現況以 code 為準,完整設計史/收斂史指回 `docs/design/`。狀態標記:無標=已實作;`[planned]`=設計收斂未落地;`[deferred]`=擱置;`[rejected]`=評估後不做(輕方案落地)。
+
+> **慣例**:節點內嵌的 `scripts/lumos:行號`(或 `@行號`、`:行號`)是**近似導航參考**,code 重構後可能漂移——以 code 現況與函式名為準,行號僅供快速定位。
+
+## 設計審計 loop(進實作前的把關)
+- [[Systems/design-loop]] — canary-護的設計審計 loop;Claude 編排、lumos 出原語,連 2 輪 caught 才放行實作。
+- [[Systems/canary-audit]] — test-the-tester:每輪偷植已知假錯驗審計員有沒有認真抓(防假陰性/放水)。
+- [[Systems/loop-convergence-recording]] — `canary record --loop/--severity` + `loop status --need` 算收斂、可機械終止多輪。
+- [[Systems/finding-refute]] — 辯方 refute:對 ≥major finding 派獨立 opus 強制 file:line 反證才降(防假陽性,對稱 canary)。
+- [[Systems/judge-severity-gate]] — 讓 judge 覆蓋 severity 維度,堵「收斂門檻沒覆蓋處偷工」。
+- [[Systems/cross-family-audit]] — 換模型家族複核(qwen3-max),解 opus 審 opus 的自我偏好偏心。
+- [[Systems/judge-perturbation-stability]] `[rejected]` — 評審擾動穩定性;評估後改走輕量 confidence_report.py。
+
+## doctor 合約 / 可逆性檢查
+- [[Systems/check-t-sentinel]] — Check T:★INVARIANT★ 合約綁可執行測試 `[test:]`(+ stub 紅燈哨兵)。
+- [[Systems/check-r-guard]] — Check R:不可逆動作(★IRREVERSIBLE★)動手前要有實質 `[rollback:]`/`[guard:]`。
+- [[Systems/reversibility-governance-ledger]] — 可逆性綁定 + gov 治理事件帳(某節點被哪幾道閘攔過)。
+- [[Systems/doctor-irreversible-hint]] — `[H]` 軟提醒:掃 diff 碰 prod/外部 API → 是否漏標 ★IRREVERSIBLE★。
+- [[Systems/check-j-regen-guard]] — Check J:from-scratch 重建節點 provenance 分級(regen 蓋章+[src:]/[git:]/推測:/佚失: 標身分;拒發明無證據合約、假指針機械擋)。
+- [[Systems/core-invariant-baseline]] `[deferred]` — 核心節點已知良好快照 + 可回退(pivot 為 content-baseline,擱置)。
+
+## 自主治理 / loop engineering
+- [[Systems/autonomous-iteration-loop]] — 日報 gap→brainstorm→design-loop→收斂備 pending 的無人看顧自主迭代。
+- [[Systems/verification-rot-eval]] `[planned]` — 從圖譜史抽衝突測試集定期回測 L3 腐化偵測(設計收斂未落地)。
+
+## 安全與權限
+- [[Systems/nested-agent-permission-scope]] — 子 agent 權限收窄(maker≠checker 的審計員不繼承主對話權限)。
+
+## 平台支援
+- [[Systems/native-windows-support]] — 原生 Windows(get.ps1 / mklink / junction / hook 路徑正斜線化)。
+- [[Systems/lumos-deinit]] — 專案層反安裝指令(對稱 `lumos init`);四重閘保護不可逆的 vault rmtree。
+
+## 完整性 / 影響 / 漂移守衛
+- [[Systems/guard-kill]] — 殺傷力驗證:宣告壞法→worktree 隔離→綁定測試必翻紅;survived=稻草人證據(合約鏈最後一哩)。
+- [[Systems/cochange-guard]] — co-change 漏改守衛:git 歷史挖共改規則(ROSE 非對稱 confidence),pre-commit Gate CC 警告漏改夥伴(advisory)。
+
+## 檢索與推薦
+- [[Systems/retrieval-ranking]] — BM25F 排序+圖分融合推薦+impact 降噪(search 與 hook 面均已轉正——§6 七盞全綠;recommend 面 dormant)。
+
+## CLI 核心原語
+- [[Systems/lumos-cli-read]] — 讀/巡檢:doctor/context/contracts/search/links/backlinks/map/export/decisions/stale/recent/stats。
+- [[Systems/lumos-cli-write]] — 寫:set/append/new/archive/decision-add/decision-supersede/self-audit;T1 寫後自驗 atomic。
+- [[Systems/lumos-cli-lifecycle]] — install/uninstall/update/bootstrap/init/deinit;機器層 vs 專案層分工。
+
+## 外部對照 / PRIOR-ART
+- [[Systems/外部對照-code衍生wiki]] — langchain-ai/openwiki(11.6k★ code 衍生 wiki)反例世界解:站在 lumos 導覽層、賭注相反(code 衍生+可丟 vs 圖譜手寫+機械守);核心論點=重生保新鮮≠正確、無輸出 oracle(maker-only),反證 lumos「圖譜即真相/合約驗證層」的必要。
+
+## 外部設計 / 計畫文件(圖譜外,但屬本工具鏈)
+- `docs/design/` — 各功能設計稿(含 design-loop 收斂紀錄,18 份)。
+- `docs/superpowers/plans/` — 實作計畫(TDD 任務分解)。
+- `docs/methodology/` — 「圖譜即合約」方法論。
+- `governance/reports/` — AI 治理日報(研究 → gap → 觸發上述功能的 provenance,各 Verification/Systems 節點內有溯源)。
+     1	---
+     2	type: project
+     3	summary: |-
+     4	  FLAG:DECISION
+     5	  KEY:立案(2026-08-25,自 [[Issues/連鎖佇列開了沒人跟完]] P1)——decision-supersede 自動開的連鎖待辦單沒人跟(3 張裡 2 張零判定空轉 21/14 天,第 3 張=本案編排者自己開了不知道);解=doctor 加一段 warn_soft 軟提醒(零新命令零新機制,借既有帳本讀取),transitions==0 才報、全判定靜默、損毀歸 E2 不重喊
+     6	  KEY:本案兼 [[Projects/設計審收斂重定義_計劃]] [S6] 實測載體:新制全套首次用在非自指真案(prose-lint 排乾/blocking 宣告綁定/d5 處置記帳/兩行審計格式)
+     7	status: doing
+     8	created: 2026-08-25
+     9	updated: 2026-08-25
+    10	tags:
+    11	  - type/project
+    12	  - status/doing
+    13	---
+    14	
+    15	# 連鎖佇列軟提醒_計劃
+    16	
+    17	> 白話:決策翻案時系統會自動開一張「誰引用了舊決策,去判一下還成不成立」的待辦單,但開完沒有任何東西提醒你——歷來三張,兩張至今零筆判定,第三張是本案編排者自己開的、直到立這個案才發現。解法不造新機制:doctor 收工體檢多印一行軟提醒。
+    18	
+    19	PRIOR-ART:最小解在 doctor 既有 soft-check 層(`warn_soft`,scripts/lumos:486,不擋、只提醒);世界解=撤稿研究:無提醒時撤稿後引用僅 5.4% 承認撤稿(歸檔於 [[Issues/連鎖佇列開了沒人跟完]] PRIOR-ART 節);裁定=**借用**既有 doctor soft-check 形態+既有帳本讀取(`_ledger_read` scripts/lumos:8162、`_rel_cascade_dir` scripts/lumos:8103),零新命令、零新機制。
+    20	
+    21	## 症狀(會翻紅的證據)
+    22	
+    23	`governance/rel-cascade/` 歷來 3 張帳本:前兩張(2026-08-04/2026-08-11)建立後**零筆 confirm/prune**,分別空轉 21/14 天;第三張(2026-08-25)開單人當下不知道有單。翻紅指令:對含零判定帳本的 repo 跑 `lumos doctor`,現行輸出**沒有任何一行**提到連鎖待辦——[T2] 測試釘住「修後有這一行」。Issue 立案=[[Issues/連鎖佇列開了沒人跟完]](P1;2026-08-13 實測 2/2 空轉)。
+    24	
+    25	## 核心裁定
+    26	
+    27	- **d1 落點=doctor 軟提醒,不是 pre-push**:doctor 是收工必跑(鐵則 3),pre-push 已擠;`warn_soft` 形態=印提醒不動 rc。已排除 pre-push advisory:同一行資訊兩處印=第二真相源,先一處實測。
+    28	- **d2 判定條件=帳本 transitions 為零筆**(只有 header)。語意=「這張單你從沒看過」,不是「沒做完」——帳本沒有分母(該判幾個鄰居不入帳,`cmd_rel_cascade_list` docstring 明言「不判開放/完成精確分類」,scripts/lumos:8288)。已排除「判到一半棄坑」偵測:那是活動齡問題,`rel-cascade list --stale N` 既有旗標已覆蓋,首版不重做。
+    29	- **d3 訊息照工具輸出三段式**:發生什麼(N 張連鎖待辦單自建立後零筆判定,最老 X 天)→為何在意(被翻案決策的引用筆記沒人回頭判,世界對照=94.6% 的撤稿引用不承認撤稿)→指令獨立一行(`lumos rel-cascade list`)。
+    30	- **d4 header 損毀帳本跳過不報**:損毀已有補網 E2 兜底(scripts/lumos:8391 註明),本提醒重報=同一事兩處喊。已排除:理由如上。
+    31	
+    32	## 落地件
+    33	
+    34	1. [T1] doctor 內加一段 soft check:掃 `governance/rel-cascade/*.jsonl`,計 transitions==0 的帳本數與最老天數,>0 就 `warn_soft` 一段;目錄不存在→靜默跳過。
+    35	2. [T2] 測試 `t_doctor_cascade_reminder`:零判定帳本→輸出含提醒行;有一筆 transition→不計入;header 損毀→跳過不炸;doctor rc 不因此改變。
+    36	3. [T3] Issue [[Issues/連鎖佇列開了沒人跟完]] 結案橫幅+本計劃雙向連;Systems 側 KEY 寫回(關係層傳播守衛的筆記)。
+    37	
+    38	## 行為斷言(每條配例)
+    39	
+    40	- 例1:repo 有兩張僅 header 的帳本(建立日 2026-08-04/2026-08-11,今天 2026-08-25)→ doctor 輸出含「2 張連鎖待辦單還沒人看過(最老 21 天)」語意的提醒段+獨立指令行 `lumos rel-cascade list`。
+    41	- 例2:某帳本有 1 筆 transition(confirm 或 prune 任一)→ 不列入「沒人看過」計數;三張裡一張有判定→提醒行報 2 不報 3。
+    42	- 例3:某帳本 header 行是壞 JSON → 該檔跳過,doctor 不 traceback、提醒行計數不含它。
+    43	- 例4:`governance/rel-cascade/` 目錄不存在 → 無提醒行、無錯誤。
+    44	- 例5:全部帳本都有判定 → 完全無此段輸出(靜默,不印「0 張」佔版面)。
+    45	
+    46	## 實務隱患
+    47	
+    48	- **併發/效能**:doctor 每跑掃一次目錄,現況 3 檔、每檔數行,量級無虞;帳本 append-only、讀壞行為 `_ledger_read` 既有語意,無鎖問題。
+    49	- **誤報面**:「判過一筆即靜音」可能放過「跟到一半棄坑」——已排除(d2,活動齡歸 --stale 既有旗標);若 [T2] 落地後實測有此案例再議,回頭條件=下一次巡檢發現 confirmed>0 但明顯未跟完的帳本。
+    50	- **守衛面**:加的是不動 rc 的軟行,整段可 revert;不碰金流/對外/不可逆。
+    51	- **提醒疲勞**:doctor 軟提醒已有多段,再加一段的邊際噪音——控制:全判定時完全靜默(例5),不印空狀態。
+    52	
+    53	## 審計修正紀錄
+    54	
+    55	(待 r1)
+    56	
+    57	## 下一步
+    58	
+    59	r1 設計審(standard,本案兼 [[Projects/設計審收斂重定義_計劃]] [S6] 實測載體:prose-lint 排乾入場、blocking 宣告+綁定、d5 處置記帳、兩行審計格式)→過閘→[T1]–[T3] 實作→code-loop→推送。
+   450	    path = vault.parent / ".governance-log.jsonl"
+   451	    try:
+   452	        with open(path, "a", encoding="utf-8") as f:
+   453	            for e in events:
+   454	                f.write(json.dumps({"ts": ts, "commit": commit, **e}, ensure_ascii=False) + "\n")
+   455	    except OSError:
+   456	        pass
+   457	
+   458	
+   459	def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False):
+   460	    C = {k: (v if color else "") for k, v in
+   461	         dict(R="\033[31m", Y="\033[33m", G="\033[32m", B="\033[1m", X="\033[0m").items()}
+   462	    notes, by_stem, resolve = env.notes, env.by_stem, env.resolve
+   463	    print(f"{C['B']}lumos doctor{C['X']} — vault: {C['B']}{env.vault}{C['X']} (self-contained, no Obsidian)")
+   464	    print()
+   465	    issues = 0
+   466	    gov_events = []          # 本輪 gate findings → governance-log(--ci 才寫)
+   467	
+   468	    def section(idx, title):
+   469	        print(f"{C['B']}[{idx}]{C['X']} {title}")
+   470	
+   471	    def ok(msg):
+   472	        print(f"  {C['G']}✓{C['X']} {msg}")
+   473	
+   474	    def warn(lines, head, advice=None):
+   475	        nonlocal issues
+   476	        print(f"  {C['Y']}⚠{C['X']} {head}")
+   477	        for l in lines:
+   478	            print(f"      • {l}")
+   479	        if advice:
+   480	            print(f"  {C['B']}建議動作{C['X']}: {advice}")
+   481	        issues += len(lines)
+   482	
+   483	    _verbose = verbose or ci   # --ci 視同 verbose:CI 日誌要完整;互動預設收斂(體檢 #10)
+   484	    _SOFT_CAP = 3
+   485	
+   486	    def warn_soft(lines, head, advice=None):
+   487	        # 軟提醒:印出但不動 issues → 不影響 rc(R3-MAJOR-3)
+   488	        # ★預設每段最多 3 條★(2026-08-21 體檢 #10):軟段([P]19 行/[Y]6 行…)多為歷史/自指噪音,
+   489	        # 每次跑幾十行把硬提醒淹掉、Claude 一整天沒讀過一條;其餘收成一行,--verbose 全列。
+   490	        print(f"  {C['Y']}⚠{C['X']} {head}")
+   491	        shown = list(lines) if _verbose else list(lines)[:_SOFT_CAP]
+   492	        for l in shown:
+   493	            print(f"      • {l}")
+   494	        if len(lines) > len(shown):
+   495	            print(f"      … 另 {len(lines) - len(shown)} 條(lumos doctor --verbose 看全部)")
+   496	        if advice:
+   497	            print(f"  {C['B']}建議{C['X']}: {advice}")
+   498	
+   499	    collisions = {s: rs for s, rs in by_stem.items() if len(rs) > 1}
+   500	
+   501	    incoming = defaultdict(int)
+   502	    unresolved = set()
+   503	    for rel, n in notes.items():
+   504	        for t in n.targets:
+   505	            dest = resolve(t)
+   506	            if dest is None:
+   507	                unresolved.add(t)
+   508	            elif dest != rel:
+   509	                incoming[dest] += 1
+   510	
+  8070	    for (st, en) in items:
+  8071	        if not any(re.match(rf"^{pad}id:\s*d\d+\s*$", fm[i]) for i in range(st, en + 1)):
+  8072	            plan.append((st, f"d{nxt}"))
+  8073	            nxt += 1
+  8074	    if not plan:
+  8075	        print(f"✓ reindex {rel}: 全部決策已有 id,無需回填(冪等)")
+  8076	        return 0
+  8077	    pre_ids = {str(d.get("id", "")).strip() for d in parse_decisions(fm) if d.get("id")}
+  8078	    for st, did in reversed(plan):
+  8079	        fm[st + 1:st + 1] = [f"{pad}id: {did}"]   # 插在 dash(content)行之後
+  8080	    new_lines = lines[:1] + fm + lines[e_fm:]
+  8081	
+  8082	    def _check(_fields):
+  8083	        ds = parse_decisions(_fm_of(new_lines))
+  8084	        ids = [str(d.get("id", "")).strip() for d in ds]
+  8085	        return (all(re.fullmatch(r"d\d+", i) for i in ids)          # 全數有 id
+  8086	                and len(ids) == len(set(ids))                        # 唯一
+  8087	                and pre_ids <= set(ids))                             # 既有 id 未被動
+  8088	    atomic_write_verify(path, new_lines, "decisions", _check)
+  8089	    print(f"✓ reindex {rel}: 回填 {len(plan)} 條 id({plan[0][1]}..{plan[-1][1]});既有 {len(pre_ids)} 條跳過")
+  8090	    return 0
+  8091	
+  8092	
+  8093	# ── [M3/S5b] rel-cascade ledger:連鎖判定的 append-only 帳本 ──
+  8094	# 設計/合約見 Projects/關係層主網_實作計畫 M3(3 輪 design-loop 釘死):
+  8095	# 每 cascade 一檔 governance/rel-cascade/<cascade-id>.jsonl;行帶 event 判別欄
+  8096	# (header|transition);重放折疊=只折 transition、同粒度鍵取檔內物理序最後一筆(沿
+  8097	# canary-log 慣例:讀 append 序、不 ts-sort);torn 行(壞 JSON)=未提交,跳過。
+  8098	
+  8099	CASCADE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+  8100	REL_CASCADE_EDGES = ("verified_by", "plan_refs")   # 方向語意明確的邊(related 弱,v1 恆不展)
+  8101	
+  8102	
+  8103	def _rel_cascade_dir(env):
+  8104	    """帳本目錄=<repo root>/governance/rel-cascade(可追蹤逐 cascade 檔,非 vault-parent 隱藏帳慣例——
+  8105	    刻意設計)。repo root:docs/<slug>-knowledge 型= docs 的上層;standalone vault=vault 自身
+  8106	    (絕不往系統 temp 等共用父層爬;.jsonl 非 .md,load_vault 不掃、無污染)。"""
+  8107	    root = env.vault.parent.parent if env.vault.parent.name == "docs" else env.vault
+  8108	    return root / "governance" / "rel-cascade"
+  8109	
+  8110	
+  8111	def _utc_ts():
+  8112	    import datetime
+  8113	    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+  8114	
+  8115	
+  8116	def _ledger_append(path, obj):
+  8117	    """[M3 並行合約] O_APPEND fd + 單次 os.write() 整行 bytes(≤4KB 寫前拒,不截斷)。
+  8118	    POSIX regular file 實務原子;Windows/跨平台 best-effort、預期單寫者(誠實降級,r1 D10)。
+  8119	    無 O_CREAT——confirm/prune 永不建檔(建檔只屬觸發端 rel_cascade_create,r2 R4)。
+  8120	    [code-loop r1] O_NOFOLLOW 拒 symlink 終點(字元白名單擋不住,CX1);os.write 回傳驗滿寫
+  8121	    (ENOSPC 短寫會留中段殘行且 rc=0 假成功,B1)——短寫即 RuntimeError,呼叫端 rc=2。"""
+  8122	    import json
+  8123	    data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+  8124	    if len(data) > 4096:
+  8125	        raise ValueError(f"這筆事件有 {len(data)} 位元組,超過 4KB 上限,不寫(不截斷,免得寫一半)")
+  8126	    fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
+  8127	    try:
+  8128	        written = os.write(fd, data)
+  8129	        if written != len(data):
+  8130	            raise RuntimeError(f"帳本短寫:只寫進 {written}/{len(data)} 位元組,可能磁碟滿了——這筆沒完整寫入,重試前先查空間")
+  8131	    finally:
+  8132	        os.close(fd)
+  8133	
+  8134	
+  8135	def rel_cascade_create(env, root_gid, node_rel):
+  8136	    """[M3 定址合約] 觸發端唯一鑄造者:mint cascade-id=c-<UTC秒ts>-<sha1(root全域id)[:8]>(-<n>)?
+  8137	    + O_CREAT|O_EXCL 建檔寫 header。同秒撞名遞增序號(不等下秒;上限 99 防異常迴圈)。
+  8138	    純生成、不含節點名——中文 rel 無淨化問題(r1 D5 消解)。回 cascade_id。"""
+  8139	    import datetime, hashlib, json
+  8140	    d = _rel_cascade_dir(env)
+  8141	    d.mkdir(parents=True, exist_ok=True)
+  8142	    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+  8143	    base = f"c-{ts}-{hashlib.sha1(root_gid.encode('utf-8')).hexdigest()[:8]}"
+  8144	    for suffix in [""] + [f"-{i}" for i in range(1, 100)]:
+  8145	        cid = base + suffix
+  8146	        p = d / (cid + ".jsonl")
+  8147	        try:
+  8148	            fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+  8149	        except FileExistsError:
+  8150	            continue
+  8151	        try:
+  8152	            hdr = json.dumps({"event": "header", "ts": _utc_ts(),
+  8153	                              "root_decision_id": root_gid, "node": node_rel},
+  8154	                             ensure_ascii=False) + "\n"
+  8155	            os.write(fd, hdr.encode("utf-8"))
+  8156	        finally:
+  8157	            os.close(fd)
+  8158	        return cid
+  8159	    raise RuntimeError("連續 99 次都撞到同名的 cascade 編號,目錄可能有問題")
+  8160	
+  8161	
+  8162	def _ledger_read(path):
+  8163	    """重放讀取:append 序逐行 parse;壞 JSON 行跳過(torn=未提交事件,丟棄正確)。
+  8164	    header=首行且 event:header 才算(torn header → None,root 不可恢復)。回 (header|None, transitions)。"""
+  8165	    import json
+  8166	    try:
+  8167	        raw = path.read_text(encoding="utf-8")
+  8168	    except (FileNotFoundError, OSError):
+  8169	        return None, []
+  8170	    header, trans = None, []
+  8171	    for i, line in enumerate(raw.splitlines()):
+  8172	        try:
+  8173	            o = json.loads(line)
+  8174	        except ValueError:
+  8175	            continue
+  8176	        if i == 0 and o.get("event") == "header" \
+  8177	                and str(o.get("root_decision_id", "")).strip() and str(o.get("node", "")).strip():
+  8178	            # [code-loop r1 CX2] 必要欄位齊才算合法 header——空殼 {"event":"header"} 會讓
+  8179	            #   resume 拿空 root 靜默 rc=0 裝成功,而非走「不可恢復 rc=1」救援語意
+  8180	            header = o
+  8181	        elif o.get("event") == "transition":
+  8182	            trans.append(o)
+  8183	    return header, trans
+  8184	
+  8185	
+  8186	def _ledger_fold(transitions):
+  8187	    """狀態折疊:同 (neighbor×edge_type×from_decision_id) 取物理序最後一筆。"""
+  8188	    state = {}
+  8189	    for t in transitions:
+  8190	        k = (t.get("neighbor"), t.get("edge_type"), t.get("from_decision_id"))
+  8191	        if all(k):
+  8192	            state[k] = t
+  8193	    return state
+  8194	
+  8195	
+  8196	def _validate_cascade_id(cid):
+  8197	    # [code-loop r1 A3] fullmatch 非 match——match+$ 會放過尾端換行(re 的 $ 容忍結尾 \n)
+  8198	    if not CASCADE_ID_RE.fullmatch(cid) or ".." in cid:
+  8199	        raise ValueError(f"cascade 編號只能用字母、數字、點、底線、連字號(不能有 ../ 這種): {cid}")
+  8200	
+  8201	
+  8202	def _validate_from_gid(from_id):
+  8203	    if re.fullmatch(r"d\d+", from_id.strip()):
+  8204	        raise ValueError(f"--from 要寫完整的 <筆記路徑>#d<編號>,只給裸的 {from_id} 不收(不帶路徑會跟別篇的同號決策搞混)")
+  8205	    if not re.fullmatch(r".+#d\d+", from_id.strip()):
+  8206	        raise ValueError(f"--from 格式要是 <筆記路徑>#d<編號>,你給的是: {from_id}")
+  8207	
+  8208	
+  8209	def _append_decision_ref(env, rel, field, ref):
+  8210	    """[decision_refs 自動養成 T1] 把精確 decision_ref(<rel>#dN)append 到 field
+  8211	    (decision_refs=human/cascade-confirmed | decision_refs_ai=AI 填)。**exact-string dedup**
+  8212	    ——不用 link_target(它 split('#') 會把 #dN 剝掉,導致同節點不同決策誤 dedup 成一條)。
+  8213	    值一律引號化(含 #// 安全)。走 atomic_write_verify。回 True=新增 / False=已存在。"""
+  8214	    ref = ref.strip()
+  8215	    # [code-loop r1 CX3/B + delta] 顯式拒 " / \ / 任何 C0 控制字元(<0x20,含裸 \r/\n/\t)——
+  8216	    #   strip_quotes 不反跳脫、CRLF 檔案守衛只認 \r\n 序列認不出裸 CR;合法 <rel>#dN 永不含這些。
+  8217	    #   「凡控制字元一律拒」比枚舉個案完整(delta reviewer:漏 \r)。
+  8218	    if '"' in ref or '\\' in ref or any(ord(c) < 0x20 for c in ref):
+  8219	        raise ValueError(f"決策引用裡有不能用的字元(引號、斜線、控制字元): {ref!r}")
+  8220	    path = env.vault / rel
+  8221	    lines, s_fm, e_fm = load_raw_for_edit(path)
+  8222	    fm = lines[1:e_fm]
+  8223	    struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+  8224	    quoted = '"' + ref + '"'   # ref 已排除 "/\ → 純引號包裹即安全 round-trip(含 #// 無虞)
+  8225	    if field in struct:
+  8226	        s, e, kind = struct[field]
+  8227	        if kind != "list":
+  8228	            raise ValueError(f"{field} 是{kind}型欄位,沒辦法往裡面加決策引用")
+  8229	        for j in range(s + 1, e + 1):
+  8230	            if fm[j].lstrip().startswith("-") and strip_quotes(fm[j].lstrip()[1:].strip()) == ref:
+  8231	                return False   # exact 已存在
+  8232	        indent = "  "
+  8233	        for j in range(s + 1, e + 1):
+  8234	            if fm[j].lstrip().startswith("-"):
+  8235	                indent = fm[j][:len(fm[j]) - len(fm[j].lstrip())]
+  8236	                break
+  8237	        last = e
+  8238	        while last > s and not fm[last].strip():
+  8239	            last -= 1
+  8240	        fm.insert(last + 1, f"{indent}- {quoted}")
+  8241	    else:
+  8242	        fm.append(field + ":")
+  8243	        fm.append(f"  - {quoted}")
+  8244	    new_lines = lines[:1] + fm + lines[e_fm:]
+  8245	    atomic_write_verify(path, new_lines, field,
+  8246	                        lambda f: any(str(x).strip() == ref for x in as_list(f.get(field))))
+  8247	    return True
+  8248	
+  8249	
+  8250	def cmd_rel_cascade_write(env, verb, neighbor, cascade_id, from_id, edge, by):
+  8251	    """[M3] confirm|prune:append 一筆 transition。寫前驗證(R4):檔存在(不存在→拒,建檔只屬觸發端)、
+  8252	    header 合法(torn→拒,與 resume rc=1 救援語意按指令類別分流)、--from==header root(全鏈同源)。"""
+  8253	    _validate_cascade_id(cascade_id)
+  8254	    _validate_from_gid(from_id)
+  8255	    nrel = env.find(neighbor)
+  8256	    if nrel is None:
+  8257	        raise ValueError(f"找不到相鄰的那篇筆記: {neighbor}")
+  8258	    p = _rel_cascade_dir(env) / (cascade_id + ".jsonl")
+  8259	    if not p.exists():
+  8260	        raise ValueError(f"找不到 cascade 帳本 {cascade_id}——帳本只會在 decision-supersede 翻案時建立,confirm/prune 不會自己建")
+  8261	    header, _ = _ledger_read(p)
+  8262	    if header is None:
+  8263	        raise ValueError("cascade 帳本的開頭壞了,不寫;用 resume 會把它標成不可恢復,後續靠健檢的 E2 補抓")
+  8264	    if header.get("root_decision_id") != from_id.strip():
+  8265	        raise ValueError(f"--from 指的決策不屬本 cascade(這本帳的起點是 {header.get('root_decision_id')}),一本帳只追同一條翻案鏈")
+  8266	    state = "confirmed" if verb == "confirm" else "pruned"
+  8267	    _ledger_append(p, {"event": "transition", "ts": _utc_ts(), "neighbor": nrel,
+  8268	                       "edge_type": edge, "from_decision_id": from_id.strip(),
+  8269	                       "state": state, "by": by})
+  8270	    print(f"✓ rel-cascade {verb} {nrel} --edge {edge} ({cascade_id}, by={by})")
+  8271	    # [decision_refs 自動養成 T1] confirm = 地面真相「鄰居依賴這條決策」→ 回寫 decision_ref。
+  8272	    #   provenance 雙欄不對稱信任:by ai → decision_refs_ai(E3 firing 生效、E2 抑制碰不到);
+  8273	    #   by human → decision_refs(可抑制 E2)。prune 不回寫(判無關=不記依賴)。
+  8274	    #   回寫失敗=軟警告不回滾(帳本才是地面真相,decision_refs 是衍生、可從帳本重建)。
+  8275	    if verb == "confirm":
+  8276	        # [code-loop r1 C-medium] fail-**safe**:只有明確 by==human 才落可信正欄;非 ai/human
+  8277	        #   (None/打錯/未來新值)一律落不可信 ai 欄——安全守門不靠上游 argparse 撐(誤落正欄=可抑制 E2)
+  8278	        field = "decision_refs" if by == "human" else "decision_refs_ai"
+  8279	        try:
+  8280	            if _append_decision_ref(env, nrel, field, from_id.strip()):
+  8281	                print(f"  ↳ decision_refs 養成: {nrel}.{field} += {from_id.strip()}")
+  8282	        except Exception as _e:
+  8283	            # [code-loop r1 CX2] 不過度承諾:reconcile 命令尚未實作(列 future),此處僅記帳本已提交
+  8284	            print(f"  ⚠ decision_ref 回寫失敗(帳本已記為地面真相;節點欄位本次未同步): {_e}", file=sys.stderr)
+  8285	    return 0
+  8286	
+  8287	
+  8288	def cmd_rel_cascade_list(env, stale_days=None):
+  8289	    """[M3] 以活動齡列 cascade(--stale N=最後事件 ts 早於 N 天;不判開放/完成精確分類——
+  8290	    活動齡才是可算的 crash/失敗偵測器)。stdout、查無 rc=0 空輸出。"""
+  8291	    import datetime
+  8292	    d = _rel_cascade_dir(env)
+  8293	    if not d.exists():
+  8294	        return 0
+  8295	    now = datetime.datetime.now(datetime.timezone.utc)
+  8296	    for p in sorted(d.glob("*.jsonl")):
+  8297	        header, trans = _ledger_read(p)
+  8298	        cid = p.stem
+  8299	        root = header.get("root_decision_id") if header else "(header 損毀,root 不可恢復)"
+  8300	        all_ts = [o.get("ts", "") for o in ([header] if header else []) + trans if o.get("ts")]
+  8301	        last = max(all_ts) if all_ts else ""
+  8302	        if stale_days is not None and last:
+  8303	            try:
+  8304	                age = (now - datetime.datetime.fromisoformat(last)).days
+  8305	            except ValueError:
+  8306	                age = None
+  8307	            if age is not None and age < stale_days:
+  8308	                continue
+  8309	        folded = _ledger_fold(trans)
+  8310	        n_c = sum(1 for t in folded.values() if t.get("state") == "confirmed")
+  8311	        n_p = sum(1 for t in folded.values() if t.get("state") == "pruned")
+  8312	        print(f"{cid}  root={root}  last={last or '?'}  confirmed={n_c} pruned={n_p}")
+  8313	    return 0
+  8314	
+  8315	
+  8316	def _typed_hop1(env, node_rel, idx=None):
+  8317	    """[M4/S2] typed hop-1 原語:在 [P0] typed 索引上列「誰以方向語意明確的邊指向 node」單層鄰居。
+  8318	    多跳/visited 交 [S4] 編排(resume/判斷閘)。回 (neighbors=[(src,etype,invariant數)], ambigs=[(字面,候選數)])。"""
+  8319	    if idx is None:
+  8320	        idx = build_typed_index(env)
+  8321	    neighbors, ambigs = [], []
+  8322	    for (src, etype) in idx["rev"].get(node_rel, []):
+  8323	        if etype not in REL_CASCADE_EDGES:
+  8324	            continue
+  8325	        inv_n = len(extract_contracts(env.notes[src])[0]) if src in env.notes else 0
+  8326	        neighbors.append((src, etype, inv_n))
+  8327	    for (asrc, lit, aetype, cands) in idx["ambiguous"]:
+  8328	        if node_rel in cands and aetype in REL_CASCADE_EDGES:
+  8329	            ambigs.append((lit, len(cands)))
+  8330	    return neighbors, ambigs
+  8331	
+  8332	
+  8333	def cascade_surface(env, node_rel, root_decision_id, stream=None):
+  8334	    """[M4/S1] surfacing 印行器:對 ledger 唯讀、不叫 AI(判斷閘=外部 agent 步驟)。
+  8335	    NEIGHBOR 行由本函式印(dispatcher 印 CASCADE 行——它持有 mint 的 id 與 root id,T2 職責切分)。
+  8336	    行式 schema=交接通道(編排者從此組 confirm/prune 參數)。回攤出的鄰居數。"""
+  8337	    out = stream if stream is not None else sys.stderr
+  8338	    neighbors, ambigs = _typed_hop1(env, node_rel)
+  8339	    for (src, etype, inv_n) in neighbors:
+  8340	        tag = f" INVARIANT_COUNT {inv_n}" if inv_n else ""
+  8341	        print(f"NEIGHBOR {src} EDGE {etype}{tag}", file=out)
+  8342	    for (lit, n) in ambigs:
+  8343	        print(f"NEIGHBOR-AMBIG {lit} CANDIDATES {n}", file=out)
+  8344	    return len(neighbors) + len(ambigs)
+  8345	
+  8346	
+  8347	def cmd_impact_node(node_arg, repo=None, as_json=False):
+  8348	    """[M4/S2] impact 第三模式 CLI 皮(供人手動查;自動迴圈走進程內原語不 shell-out):
+  8349	    typed hop-1 列「誰依賴我」。與 --file/--diff 互斥、與 --depth 互斥(單層列舉無深度語意)。"""
+  8350	    import json
+  8351	    start = Path(repo).resolve() if repo else Path.cwd()
+  8352	    vault = find_vault(start)
+  8353	    if vault is None:
+  8354	        print("擋下:目前目錄底下找不到知識圖譜(docs/*-knowledge)", file=sys.stderr)
+  8355	        return 2
+  8356	    env = Env(vault)
+  8357	    rel = env.find(node_arg)
+  8358	    if rel is None:
+  8359	        print(f"擋下:圖譜裡找不到叫 {node_arg} 的筆記,先確認名稱或路徑", file=sys.stderr)
+  8360	        return 2
+  8361	    neighbors, ambigs = _typed_hop1(env, rel)
+  8362	    if as_json:
+  8363	        print(json.dumps({"node": rel,
+  8364	                          "neighbors": [{"rel": s, "edge": e, "invariant_count": n}
+  8365	                                        for (s, e, n) in neighbors],
+  8366	                          "ambiguous": [{"literal": l, "candidates": n} for (l, n) in ambigs]},
+  8367	                         ensure_ascii=False))
+  8368	        return 0
+  8369	    print(f"NODE {rel}  typed-hop1 連入(verified_by/plan_refs;related 弱恆不展):")
+  8370	    for (src, etype, inv_n) in neighbors:
+  8371	        tag = f" INVARIANT_COUNT {inv_n}" if inv_n else ""
+  8372	        print(f"  NEIGHBOR {src} EDGE {etype}{tag}")
+  8373	    for (lit, n) in ambigs:
+  8374	        print(f"  NEIGHBOR-AMBIG {lit} CANDIDATES {n}")
+  8375	    if not neighbors and not ambigs:
+  8376	        print("  (無 typed 連入鄰居)")
+  8377	    return 0
+  8378	
+  8379	
+  8380	def cmd_rel_cascade_resume(env, cascade_id):
+  8381	    """[M3] 「續」的交付項(D16):重放折疊→取 header root→重展 root+最終態 confirmed 鄰居
+  8382	    (先 confirm 後 prune 不重展)→對粒度鍵差集→列剩餘待判。decision_id=root 全鏈攜帶(R3)。
+  8383	    輸出:首行 CASCADE 行(編排者跨 session 拿 --from 不需讀檔)+NEIGHBOR 行 schema。
+  8384	    中斷接續/escalate 待人項/誤 prune 翻案補跑下游 三場景共用。torn header → rc=1。"""
+  8385	    _validate_cascade_id(cascade_id)
+  8386	    p = _rel_cascade_dir(env) / (cascade_id + ".jsonl")
+  8387	    if not p.exists():
+  8388	        raise ValueError(f"找不到 cascade 帳本: {cascade_id}")
+  8389	    header, trans = _ledger_read(p)
+  8390	    if header is None:
+  8391	        print(f"✗ {cascade_id}: header 損毀,root 不可恢復——本 cascade 放棄,交補網 E2 兜底", file=sys.stderr)
+  8392	        return 1
+  8393	    root_gid = header.get("root_decision_id", "")
+  8394	    node = header.get("node", "")
+  8395	    state = _ledger_fold(trans)
+  8396	    confirmed = sorted({k[0] for k, t in state.items() if t.get("state") == "confirmed"})
+  8397	    seeds = [node] + [c for c in confirmed if c != node]
+  8398	    idx = build_typed_index(env)
+  8399	    print(f"CASCADE {cascade_id} ROOT {root_gid}")
+  8400	    pending = []
+  8401	    seen = set()
+  8402	    expanded = set()
+  8403	    for s in seeds:   # visited=root∪最終態 confirmed;粒度鍵冪等,重複展開無害只多列
+  8404	        if s in expanded:   # 菱形:同節點經兩路抵達 → 不再展,stderr 留痕(反靜默紀律)
+  8405	            print(f"CASCADE-SKIP 已展過不重展: {s}", file=sys.stderr)
+  8406	            continue
+  8407	        expanded.add(s)
+  8408	        neighbors, ambigs = _typed_hop1(env, s, idx=idx)
+  8409	        for (src, etype, inv_n) in neighbors:
+  8410	            k = (src, etype, root_gid)
+  8411	            if k in state or k in seen:
+  8412	                continue
+  8413	            seen.add(k)
+  8414	            tag = f" INVARIANT_COUNT {inv_n}" if inv_n else ""
+  8415	            pending.append(f"NEIGHBOR {src} EDGE {etype}{tag}")
+  8416	        for (lit, n) in ambigs:
+  8417	            if (s, lit) not in seen:
+  8418	                seen.add((s, lit))
+  8419	                pending.append(f"NEIGHBOR-AMBIG {lit} CANDIDATES {n}")
+  8420	    for line in pending:
+
+codex
+初步對照顯示函式與近似行號大致存在，但「E2 兜底」是否真能在 doctor 自動抓到壞 header，以及「最老天數」能否安全沿用現有時間欄位，仍需查實際 E2 檢查與測試形狀；這兩點最可能導致實作者照 spec 寫錯。
+exec
+/bin/zsh -lc "python3 scripts/lumos search \"連鎖 佇列 提醒 E2\" --repo . 2>/dev/null || true
+rg -n \"E2|rel-cascade|ledger_read|warn_soft|run_doctor|doctor.*cascade|cascade.*doctor\" scripts/lumos tests docs/lumos-toolchain-knowledge/Systems docs/lumos-toolchain-knowledge/Projects docs/lumos-toolchain-knowledge/Verification | head -n 260
+find governance/rel-cascade -maxdepth 1 -type f -name '*.jsonl' -print -exec nl -ba {} \\; 2>/dev/null
+nl -ba scripts/lumos | sed -n '459,780p;8420,8475p'
+rg -n \"def t_doctor|doctor.*rc|warn_soft|rel_cascade_list|ledger_read\" tests scripts | head -n 240" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 204ms:
+rg: tests: No such file or directory (os error 2)
+docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_計劃.md:49:    context: r1 opus 席(F3):code-loop S1 要求 diff 命中綁 [test:] 的星標節點時 pass 前必跑該測試且須綠、『解析不了所以沒跑』不構成放行,pre-push 對 tier=high 硬擋;把 maestro flow 綁上去=每次動合約都要當場有裝置才能 push。而 test-layers軟提醒_計劃(done)明文裁過『E2E 慢+flaky,本機硬擋逼出 --no-verify 文化反噬其他硬閘;真硬閘留 CI 合併點』。天花板的『取不到裝置→明記未驗』接不上 S1(其退路階梯是為指令解析失敗設計)
+docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_計劃.md:54:    why_chosen: 既有裁定已針對同一風險做過權衡且理由更強(反噬其他硬閘=系統性代價);綁定的價值是追溯性,不是把 E2E 變成本機閘——兩者可分離
+docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_計劃.md:72:      接受:這正是既有紀律對 E2E 的既定態度,不為 UI 破例
+docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_計劃.md:176:> ★但接上去會撞到既有裁定（r1-F3，opus 席抓到）★：code-loop S1 是「diff 命中綁 `[test:]` 的星標合約節點時，**pass 前只跑該綁定測試且須綠**，『解析不了所以沒跑』不構成放行理由」，而 pre-push 對 tier=high 無留痕硬擋。把 maestro flow 綁進 ★INVARIANT★，等於**每次動到那個合約就必須當場有一台備妥的裝置才能 push**——這正是 [[test-layers軟提醒_計劃]]（status done）明文裁掉的路：「E2E 慢＋flaky，**本機硬擋逼出 `--no-verify` 文化、反噬其他硬閘**；真硬閘留 CI 合併點」。
+docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_計劃.md:184:> ⚠ 誠實記著代價：沒裝置的終審對 UI 合約只留「skip＋理由」，**不是綠燈**；要真綠仍得有人有裝置跑一次。這正是既有紀律對 E2E 的既定態度，不為 UI 破例。
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E1失效背書.md:9:  - "lumos doctor 現有 section/warn_soft/status_of/link_target/env.resolve 介面不變"
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E1失效背書.md:13:  - "doctor 檢查框架重構(section/warn_soft 介面改)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E1失效背書.md:15:  - "E1 擴充成 E2-E4(關係層其餘檢查)時一併回歸"
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E1失效背書.md:29:- `scripts/lumos` cmd_doctor：新增 `Check E1`（放 Check S 之後、Check H 之前）。掃每節點 `verified_by:[[V]]` → `env.resolve` 解到 V → `status_of` 讀 V.status；`stale`/`fail`/`superseded`（後者 2026-07-26 真遺忘第二刀併入——同刀四位一致：Check3 skip／sync-verified-by 過濾／orphan 豁免）→ warn_soft「死背書」。ghost 目標跳過（交既有 ghost 檢查，不重疊）。軟提醒、不擋、不計 issues、gov 記 `check-e1`。
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E1失效背書.md:44:只查 frontmatter 可判的失效背書（status=stale/fail）；純語意矛盾仍留 AI 交叉審。E1 是關係層守衛四檢（E1-E4）最先、免前置的一條；E2（建在被推翻決策上）需 [P0] typed-edge index + [P1]，後上。
+docs/lumos-toolchain-knowledge/Systems/check-t-sentinel.md:17:  FLOW:doctor 掃節點 Check 段尾(T→R→S→H→K→V)→Check K 對每 note 取 extract_contracts→過濾 inv 含 ★COMBO★→數該 inv 的 [test:] 標記個數(TEST_REF_RE.findall)==1→收進 combo_thin 經 _soft_list warn_soft 提醒補組合+gov_events check-k warned hard:False→無 ★COMBO★ 則 ok 靜默
+docs/lumos-toolchain-knowledge/Systems/check-t-sentinel.md:23:  DEP:scripts/lumos cmd_doctor section("K")｜extract_contracts｜TEST_REF_RE｜_soft_list/warn_soft(沿用 Check S 模板)
+docs/lumos-toolchain-knowledge/Systems/check-t-sentinel.md:42:    why_chosen: Check K 為純新增軟 Check、不得動 Check T;自己重掃才作用域乾淨;照 Check S 模板(warn_soft + _soft_list + gov_events warned/hard:False)複用既有結構
+docs/lumos-toolchain-knowledge/Systems/check-t-sentinel.md:62:- **軟 Check(照 Check S 模板)**:`warn_soft` 印出但不動 issues、不影響 rc;`gov_events.append({"gate":"check-k","kind":"warned","hard":False,"nodes":[n.stem]})`。觸發時 `lumos doctor` 退出碼**不變**。
+docs/lumos-toolchain-knowledge/Systems/check-t-sentinel.md:76:5. **軟規範會被無視**:`warn_soft` 不擋,maker 可不理。設計如此(養成習慣、非強制)。
+docs/lumos-toolchain-knowledge/Projects/CLAUDE注入re-sync與版本標籤_實作計畫.md:93:- [x] **Step 3 實作**:`_expected_claude_body(root,slug)` helper(T2 共用單一源);Check D 加入 run_doctor 在 K 之後 V 之前;guard:無範本→skip/absent→skip/broken→issue/found+不等→issue;broken 不取 .body 避 crash;計入 issues;--ci 非零。
+docs/lumos-toolchain-knowledge/Verification/2026-06-25_doctor-irreversible-hint.md:13:  - "run_doctor 的 ci 旗標分派或 section 插入點變動"
+docs/lumos-toolchain-knowledge/Projects/lumos-show讀取入口_計劃.md:56:  2. `skills/lumos-project-notes/reference.md:85`——**獨立的另一份**頂層命令總表。⚠ **r2 Codex 否決修正（C2）**：「44」本身已是陳舊數字——現行 argparse 實有 **48** 個頂層命令（總表漏列 `decision-reindex`/`rel-cascade`/`test-layers`/`lint-check`），加 show 應改 **49**、讀取/導航 11→12；落地時一併修真（原 spec「44→45」會把錯數字刻進權威文件）；
+docs/lumos-toolchain-knowledge/Projects/lumos-show讀取入口_計劃.md:107:  - **C2 同步算術仍錯＋漏 README（major）**：reference.md「44」本身陳舊——現行實為 48（漏 `decision-reindex`/`rel-cascade`/`test-layers`/`lint-check`），+show=49 非 45；README.md:42 同病。折入：數字全修真＋README 入同步清單。
+scripts/lumos:459:def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False):
+scripts/lumos:486:    def warn_soft(lines, head, advice=None):
+scripts/lumos:819:        warn_soft(rev_soft, f"{len(rev_soft)} 條標成「有存檔點」的動作建議補寫回退方式(不擋):",
+scripts/lumos:858:        warn_soft(lines, head, advice)
+scripts/lumos:930:    # Check E2: 建在被推翻決策上(軟,不擋,不計 issues)——關係層時序法(把 Check 4 的時序 proxy 推到「決策
+scripts/lumos:933:    #   啟發(可能人早手動確認過但沒動 updated),故 warn_soft。內聯 typed 反查(不建 [P0] 可重用 index——doctor
+scripts/lumos:936:    section("E2", "有沒有筆記建立在已經被推翻的決策上、卻沒跟著改")
+scripts/lumos:944:    # [M2] 內聯反查遷移至 build_typed_index 共用(P0);E2 只消費 resolved(ghost/ambiguous
+scripts/lumos:950:    # [M3] ledger 抑制:掃 rel-cascade 帳本折疊出 terminal 事件(判過的粒度鍵)——terminal ts
+scripts/lumos:952:    #   永久假陽性)。E2 定位帳檔=全目錄掃(復用 list 的讀法),不需重建含秒數的檔名。
+scripts/lumos:957:            _h, _trs = _ledger_read(_p)
+scripts/lumos:974:                # [M1] E2 首判精化:鄰居有 decision_refs → 只在指到「那條」翻案決策時才標
+scripts/lumos:977:                #   ——誤 ai-ref 拿來抑制真落後邊=靜默漏傳播=頭號腐爛;ai-ref 抑制不了 E2(結構保證)
+scripts/lumos:1066:            warn_soft(
+scripts/lumos:1151:        warn_soft(vu_stale,
+scripts/lumos:1198:            warn_soft(stale_claims,
+scripts/lumos:1285:            warn_soft(_ghosts,
+scripts/lumos:1344:            warn_soft(_drift + _bad,
+scripts/lumos:1357:    # errs→warn(hard)計 issues/warns→warn_soft/gov_events→僅 --ci 落帳。
+scripts/lumos:1378:            warn_soft(j_soft_lines, f"{len(j_soft_lines)} 條重建筆記的提醒(不擋):")
+scripts/lumos:1386:            warn_soft([_nudge], _nudge, "用這個指令把工具鏈和紀律區塊更新到最新:lumos update")
+scripts/lumos:1974:# Maestro(Android E2E)flow 綁 name: 欄位。行尾 \s*$ 錨:多字 name(含空白)NO MATCH
+scripts/lumos:1979:# Playwright(web E2E):test('id')/test.describe('id')。capture 識別字後需緊接引號,
+scripts/lumos:2085:    # Maestro(Android E2E):測試單位=YAML flow 檔,綁 name: 欄位(識別字安全)。
+scripts/lumos:2095:    # Playwright(web E2E):test('id')/test.describe('id')。識別字 title(含空白 NO MATCH,
+scripts/lumos:2509:    """Check J(regen 重生來源守衛)共用檢查器——cmd_lint 與 run_doctor 同呼叫同一函式(防兩入口
+scripts/lumos:2513:      warns → lint 顯示不計 rc / doctor warn_soft(J-d 提醒與 shallow 降級兩入口皆非阻擋)
+scripts/lumos:7897:    [P1]:ended 缺則自動補今日 + 同步 bump 頂層 updated(單次 atomic,供 E2 時序法)。"""
+scripts/lumos:7945:    # [P1] ended 選填 → 缺則自動補今日(E2 時序法要 ended 才判得了「鄰居晚於翻案沒?」)
+scripts/lumos:8093:# ── [M3/S5b] rel-cascade ledger:連鎖判定的 append-only 帳本 ──
+scripts/lumos:8095:# 每 cascade 一檔 governance/rel-cascade/<cascade-id>.jsonl;行帶 event 判別欄
+scripts/lumos:8104:    """帳本目錄=<repo root>/governance/rel-cascade(可追蹤逐 cascade 檔,非 vault-parent 隱藏帳慣例——
+scripts/lumos:8108:    return root / "governance" / "rel-cascade"
+scripts/lumos:8162:def _ledger_read(path):
+scripts/lumos:8261:    header, _ = _ledger_read(p)
+scripts/lumos:8263:        raise ValueError("cascade 帳本的開頭壞了,不寫;用 resume 會把它標成不可恢復,後續靠健檢的 E2 補抓")
+scripts/lumos:8270:    print(f"✓ rel-cascade {verb} {nrel} --edge {edge} ({cascade_id}, by={by})")
+scripts/lumos:8272:    #   provenance 雙欄不對稱信任:by ai → decision_refs_ai(E3 firing 生效、E2 抑制碰不到);
+scripts/lumos:8273:    #   by human → decision_refs(可抑制 E2)。prune 不回寫(判無關=不記依賴)。
+scripts/lumos:8277:        #   (None/打錯/未來新值)一律落不可信 ai 欄——安全守門不靠上游 argparse 撐(誤落正欄=可抑制 E2)
+scripts/lumos:8297:        header, trans = _ledger_read(p)
+scripts/lumos:8389:    header, trans = _ledger_read(p)
+scripts/lumos:8391:        print(f"✗ {cascade_id}: header 損毀,root 不可恢復——本 cascade 放棄,交補網 E2 兜底", file=sys.stderr)
+scripts/lumos:15332:    "rel-cascade": "翻案後逐篇確認鄰居筆記要不要跟著改:confirm / prune 寫回帳本,list 看活動,resume 接續。",
+scripts/lumos:15699:    p = sub.add_parser("rel-cascade", help="[M3/S5b] 連鎖判定帳本:confirm/prune 寫回、list 活動齡、resume 續展差集")
+scripts/lumos:16024:        return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest, ci=args.ci, verbose=args.verbose)
+scripts/lumos:16211:    if args.cmd == "rel-cascade":
+scripts/lumos:16218:                    print(f"擋下:rel-cascade {args.verb} 少給了參數: {' '.join(missing)}", file=sys.stderr)
+scripts/lumos:16224:                    print("擋下:rel-cascade resume 要給要接續的 cascade 編號", file=sys.stderr)
+scripts/lumos:16259:                #   失敗 fail-open(stderr 記 CASCADE-ERROR、rc 仍 0、補網 E2 兜底)。
+scripts/lumos:16269:                            print("CASCADE-SKIP 決策無 id(節點未 reindex),本次不開 cascade;補網 E2 兜底", file=sys.stderr)
+scripts/lumos:16278:            # 權限/BrokenPipe)本該 rc=2 非裸 traceback——與 --all/rel-cascade dispatcher 一致
+docs/lumos-toolchain-knowledge/Systems/lumos-cli-write.md:29:  KEY:[M4/S1 2026-07-15]supersede 觸發主網 surfacing——rc=0 後 dispatcher 獨立 try 包「rel_cascade_create 建帳+cascade_surface 列鄰居」;stdout 首行逐字保留、cascade 面全走 stderr(CASCADE/NEIGHBOR 行式 schema);無 id→CASCADE-SKIP、失敗→CASCADE-ERROR fail-open(rc 仍 0,補網 E2 兜底)
+docs/lumos-toolchain-knowledge/Systems/lumos-cli-write.md:30:  KEY:[decision_refs 自動養成 P+T1 2026-07-15]decision-reindex --all 批次編號(顯式,前置);rel-cascade confirm 回寫 decision_ref(_append_decision_ref exact-string dedup,非 link_target——它剝 #dN 會誤合同節點不同決策)。不對稱信任雙欄:by ai→decision_refs_ai(E3 firing 讀聯集/E2 抑制碰不到)、by human→decision_refs(可抑制)
+docs/lumos-toolchain-knowledge/Projects/真遺忘召回過濾_計劃.md:18:  KEY:借既有零件(citation 已按 r1 審計修正)=①doctor Check S 有 superseded→skip 機制,但它實際 status in (stale,superseded) 兩者一起 skip(F1)——借「跳過」機制、★別抄它綁定 stale★(正是本案禁止的反例)②cmd_decisions --superseded 是全庫掃描模式、非 per-node 的「藏了再調出」開關(F5),借的是「預設不出、明示才出」的精神,非同一 pattern,_is_forgotten/--include-superseded 為本計劃新增③archive(ARCHIVABLE 含 superseded)只覆蓋 Verification/ 型(F6)、範圍不同,僅引「遺忘保留審計軌」概念④審計半邊=doctor Check E1(失效驗證 dead_endorse)+Check E2(建在被推翻決策 build_on_dead)兩獨立 check(F7),已存在不重造
+docs/lumos-toolchain-knowledge/Projects/真遺忘召回過濾_計劃.md:72:4. doctor **Check E1**（失效驗證 `dead_endorse`）＋ **Check E2**（建在被推翻決策 `build_on_dead`）是**兩個獨立 check**（r2 F7）——但 std Codex 證實它們**只管特定關係邊、並不覆蓋 superseded 節點的稽核**（見已知殘留 F2/F3）。∴ 不宣稱它們是本案的「審計半邊」，只借「有這類關係層 check」的存在事實，不當覆蓋佐證。
+docs/lumos-toolchain-knowledge/Projects/真遺忘召回過濾_計劃.md:82:- **F2 valid:false 決策 doctor 沒真接住**：search 只印命中行、不會連帶顯示該行所屬決策是 `valid:false`；doctor E2 只管有 `ended`＋連入邊＋`updated<ended` 的傳播邊，接不住「搜尋命中剛好落在死決策上」。∴「valid:false 歸 decisions 層已審」是**過度宣稱**，實為殘留。
+docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md:24:  KEY:checkpoint 標記缺回退只 warn_soft(印但不計 issues)→ doctor --ci 仍 rc0;新增 warn_soft 因既有 warn 會 issues+=1 在 --ci 下誤擋[test:t_reversibility_doctor]
+docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md:32:  DEP:scripts/lumos run_doctor(Check R/Check H)｜cmd_lint(單檔 Check R)｜cmd_gov｜extract_reversibility/_rollback_resolved/_guard_resolved｜parse_decisions(吃 rollback/guard sub-key)
+docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md:55:  - content: CHECKPOINT 類 warning 走新增 warn_soft()(印但不計 issues),不走會計 issues 的 warn()
+docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md:57:    context: design-loop R3-MAJOR-3 — run_doctor 既有 warn() 一律 issues += len,任何 warn 在 --ci 下會 rc1,會誤擋只有 checkpoint 缺 rollback 的情況
+docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md:58:    why_chosen: Check R 只對 error 級(irreversible 缺實質回退、標錯型別)呼叫 warn(),對 checkpoint/懸空呼叫 warn_soft();回歸測 t_reversibility_doctor 斷言「只有 checkpoint 缺回退 → rc0」
+docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md:78:- 強制行為見 `scripts/lumos` `run_doctor` 的 Check R 區段（約 L736）與 `cmd_lint` 單檔版（約 L2083）（行號 2026-07-24 L4 審計刷新；隨碼成長會再漂，以函式名 grep 為準）。
+docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md:94:`run_doctor` 另有 Check H（約 L955），僅 `--ci` 掃 `git diff`，正則命中疑似不可逆動作（`prod`/`smtplib`/`DROP TABLE`/`requests.post`/`boto3`… 見 `IRREVERSIBLE_HINT_PATTERNS` 約 L1751）而該節點無 `★IRREVERSIBLE★` 時軟提醒、不擋。這正是原 spec §5 YAGNI 砍掉的「commit-time 軟提醒」之後以 push-time / 純軟提醒形式回歸（掃 diff 而非檔名 stem 配對）。
+docs/lumos-toolchain-knowledge/Systems/reversibility-governance-ledger.md:108:- 實作落點：`scripts/lumos` `run_doctor`(Check R/H)、`cmd_lint`、`cmd_gov`、`extract_reversibility`/`_rollback_resolved`/`_guard_resolved`、`CHECKPOINT_RE`/`IRREVERSIBLE_RE`/`ROLLBACK_REF_RE`/`GUARD_REF_RE`。
+docs/lumos-toolchain-knowledge/Verification/2026-08-07_連結缺失補全落地.md:32:B 群 3 筆+E20 全部出現在候選清單(檢索排序v1[both]/主動影響幅度偵測_計劃[both]/pitfalls事故觸發_計劃[neighbor-family]/convergence-evidence-gate[plain-text])——通用規則召回,非圈題。
+docs/lumos-toolchain-knowledge/Verification/2026-08-19_精簡版update指令落地.md:8:  VERIFY:TDD 33 斷言先紅後綠(17 紅=模板/旗標/文字皆缺)+全量 2842 綠+真遠端 E2E(假 HOME clone GitHub→update rc0:pull+--tool-only 重裝,CLAUDE.md 零觸碰)
+docs/lumos-toolchain-knowledge/Verification/2026-08-19_精簡版update指令落地.md:25:- **真遠端 E2E**:假 HOME+真 GitHub clone 固定落點→`lumos update` rc0——pull、以 --force --tool-only 重裝、CLI+skill 落假 HOME、cwd 無 CLAUDE.md 生成、收尾訊息為新語意。
+docs/lumos-toolchain-knowledge/Verification/2026-08-19_精簡版update指令落地.md:37:14 條 10 折 4 駁(carrier=governance/review-reports/code-精簡版update指令/r1-orchestrator.md)。要點:①`update --help` 原會靜默觸發真更新→攔截加拒參數守衛(update 不吃任何參數)②spec 承諾的「真 install.py --tool-only 翻紅釘」原未落地(E2E 一次性≠長駐)→t_slim_update_tool_only_real 補上③cwd 取值隨 --tool-only 跳過(stale cwd 不再炸)④README「等價做法」修真(重跑一行安裝≠update,會做專案層處理)⑤交付 skill reference.md 三處「update 未交付」修真⑥pull 成功印結果行/失敗不掐頭⑦更新完成訊息分流⑧錨點守衛補測+git fixture 身分。駁回含外家「模板缺 import 必炸」(頂層 import 實證)與「子字串誤觸旗標」(list in=整元素比對)。修後全量 2848/0。誠實帳:diff 2008 行超 1800 軟上限,scope_oversize 入帳,以七席鏡頭分工+對答案席補償;先前審計紀錄自稱「補真 install.py 測試」實未落地,本輪對答案席抓回——**折入宣稱也要被驗**的活例。
+docs/lumos-toolchain-knowledge/Verification/2026-08-21_工具鏈體檢修復批.md:55:- 軟提醒(`warn_soft`)預設每段最多 3 條,其餘收成「另 N 條(--verbose)」;`--verbose` 全列;`--ci` 視同 verbose(CI 日誌完整)。硬檢查(`warn`/`ok`)不動。測試 `t_doctor_soft_sections_truncate_by_default`(4 斷言)先紅後綠。
+docs/lumos-toolchain-knowledge/Verification/2026-08-21_工具鏈體檢修復批.md:58:- 順帶:`t_slim_gen_*` C3 反事實測試把 `run_doctor` 簽名寫死當竄改點,+verbose 後更新 marker(測試意圖不變)。
+docs/lumos-toolchain-knowledge/Verification/2026-08-21_工具鏈體檢修復批.md:73:- 測試斷言同步改錨 16 處(E2/E3/H/N/U/P 段字、decision-add「編號 dN」、Check P 跳過字、loop gate「跳過」、panel「僅供參考/沒有重疊數據/都記了帳」、cluster_hint/tier_hint 字樣、lint「摘要區塊」)。
+docs/lumos-toolchain-knowledge/Verification/2026-08-21_工具鏈體檢修復批.md:80:Enzo 裁「繼續掃,徹底白話」並升格為長期標準(「輸出的字句不能提升認知負擔」,記憶 tool-output-plain-style)。本批:`ERROR:` 開頭訊息 124→0(guard/kill/mutate/teardown/deinit/update/install/impact/rel-cascade/query/stale 等);建檔後教學 NEW_HINT 四型全重寫;透過例外丟出最後印成「擋下:」的 36 條 ValueError/RuntimeError;doctor 建議句殘留的 ★ 術語句 6 條;canary-stats/panel 的「advisory/謂詞/合取」字樣;get.sh、graph-rename.sh 兩句。測試錨同步 11 處。全量 2924/0。
+docs/lumos-toolchain-knowledge/Verification/2026-08-22_評測尺三修.md:40:| 加回去尾 s | **4 個**(E19/E20) | **擋下** |
+docs/lumos-toolchain-knowledge/Verification/2026-08-22_評測尺三修.md:120:實跑 `--append 3`:加了 E21/E22/E23,**三題全落 train**(正好補上 train 偏少),
+docs/lumos-toolchain-knowledge/Verification/2026-08-22_評測尺三修.md:131:但 `--ablation` 那道閘會擋(19 個未標散在 E22/E23),**要補完才能做消融比較**。
+docs/lumos-toolchain-knowledge/Verification/2026-08-22_評測尺三修.md:147:- **新加的 E21-E23 還沒補標**,所以還不參與計分。★這批加題目前的實質效果是 0★——
+docs/lumos-toolchain-knowledge/Verification/2026-07-31_公開精簡版終審修復.md:13:  - "run_doctor 的例外處理方式改動(如加了 try/except 吞掉例外) → 重跑 t_slim_gate_doctor_nameerror_counterfactual 確認 NameError 仍逃不掉這道閘"
+docs/lumos-toolchain-knowledge/Verification/2026-07-31_公開精簡版終審修復.md:24:  KEY:C3(doctor 實跑收假紅)——原斷言 `d.returncode in (0, 1)` 收不住未捕捉例外(Python 例外未捕就是 exit 1,跟正常「發現 issue」撞號);加 `"Traceback" not in d.stderr` 與 stdout 收尾摘要行斷言(`圖譜健康`/`個 issue` 且含 `篇)`);補反事實測試——在精簡版產物副本的 `run_doctor` 開頭注入 `_totally_undefined_helper()`,斷言新版判準邏輯確實翻紅
+docs/lumos-toolchain-knowledge/Verification/2026-07-31_slim-skill與readme落地.md:57:> **子命令全覽（53 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers`）+ 寫入（…）+ 合約守衛（…）+ 對抗審計 loop（…）+ 完整性/影響（…）+ 社群 linter 橋（…）+ CI 回流觀測（…）+ 安裝/生命週期（…）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-31_slim-skill與readme落地.md:60:> **子命令全覽（本精簡版 24 支頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `links` `backlinks` `map` `export` `decisions` `stale` `recent` `stats`）+ 巡檢/治理（`doctor` `lint` `sync-verified-by` `rel-cascade`）+ 寫入（`set` `append` `new` `archive` `decision-add` `decision-supersede` `decision-reindex`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_P前置_T1回寫.md:10:  - "E3 firing 讀兩欄聯集(放寬);E2 首判精化抑制只讀 decision_refs(ai 欄碰不到抑制)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_P前置_T1回寫.md:13:  - "provenance 欄位語意變更、或 E2/E3 讀側改動"
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_P前置_T1回寫.md:27:- **T1：`rel-cascade confirm` 回寫 decision_ref**：confirm 成功＝地面真相「鄰居依賴這條決策」→ 把 `from_decision_id`（`<rel>#dN`）append 到被 confirm 鄰居。**prune 不回寫**（判無關＝不記依賴）。回寫失敗＝軟警告不回滾（帳本才是地面真相）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_P前置_T1回寫.md:29:- **不對稱信任雙欄接線**：by ai → `decision_refs_ai`、by human → `decision_refs`。**E3 firing 讀兩欄聯集**（放寬：ai 填的也提醒，錯了 advisory 級人一刪）；**E2 首判精化抑制只讀 `decision_refs`**（保守：誤 ai-ref 抑制真落後邊＝靜默漏傳播＝頭號腐爛，故 ai 欄結構上碰不到抑制）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_P前置_T1回寫.md:37:| 不對稱信任 | E3 讀 ai 欄觸發、E2 抑制不讀 ai 欄（誤 ai-ref 抑制不了真落後邊） | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_P前置_T1回寫.md:47:- [[Systems/lumos-cli-write]]（decision-reindex/rel-cascade 寫入面）
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網實驗場_LandmarkMember.md:23:## 一、補網真 vault 唯讀（E1/E2/E3 首次真實訊號盤點）
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網實驗場_LandmarkMember.md:25:- E2/E3 乾淨（該 vault 尚無帶 ended 的翻案殘留、decision_refs 未採用——符合預期）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:4:feature: 關係層主網 M3——cascade ledger(append-only JSONL)+rel-cascade CLI(confirm/prune/list/resume)+E2 帳本抑制
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:8:  - "帳本目錄=<repo root>/governance/rel-cascade;repo root:docs/<slug>-knowledge 型=docs 上層、standalone vault=vault 自身(不往共用父層爬)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:12:  - "E2 帳本抑制:terminal ts 日期 >= 決策 ended(日級;同日判定=翻案後立即處理的常態,故取 >= 非嚴格 >——spec「晚於」的日粒度務實解)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:16:  - "LandmarkMember 實驗場實測(真實 vault 規模的 list/resume/E2 抑制行為)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:23:# 驗證：關係層主網 M3——cascade 帳本 + rel-cascade CLI
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:28:- **帳本原語**：`_rel_cascade_dir`（落點規則）、`_utc_ts`、`_ledger_append`（O_APPEND+單次 write+4KB 拒、**無 O_CREAT**）、`rel_cascade_create`（觸發端唯一鑄造者：mint+O_EXCL+header；同秒撞名綴序號 ≤99）、`_ledger_read`（append 序重放、torn 跳過、torn header→None）、`_ledger_fold`（粒度鍵取末筆）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:29:- **CLI `rel-cascade confirm|prune <鄰居> --cascade-id --from --edge --by`**：寫前驗證五連拒（檔不存在／裸 dN／--from≠header root／path `../`／torn header→rc=2，與 resume rc=1 按指令類別分流）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:30:- **CLI `rel-cascade list [--stale N]`**：活動齡列舉+折疊統計（不判開放/完成精確分類）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:31:- **CLI `rel-cascade resume <cascade-id>`**：重放→root→重展 root∪**最終態 confirmed**（先 confirm 後 prune 不重展）→粒度鍵差集→首行 CASCADE 行+NEIGHBOR 行（INVARIANT_COUNT=`extract_contracts` invariant 數）+NEIGHBOR-AMBIG 浮出歧義邊；torn header rc=1。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:32:- **doctor E2 帳本抑制**（M3 交付項）：全目錄掃折疊 terminal 事件；`(鄰居×邊型×root決策)` terminal ts 不早於 ended → 跳過（解永久假陽性、主/補網不重報）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:40:| resume 全鏈 | 初始 hop-1、confirm 展下一跳、pruned 不展（歷史 confirmed 不算）、**誤 prune 翻案重 confirm→下游補跑**（E2E 第二鏈） | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:42:| E2 抑制 | 抑制前標→prune 後不重報（**主/補網不重報** E2E） | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:52:- **同日粒度判定**：E2 抑制用 terminal ts 日期 `>=` ended（spec 措辭「晚於」在日級粒度下的務實解——同日判定是翻案後立即處理的常態路徑）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M3_cascade帳本.md:56:- [[Systems/lumos-cli-read]]（doctor E2 消費面）
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M2_typed-edge索引.md:4:feature: 關係層主網 M2——P0 typed-edge 反向索引(build_typed_index)+ doctor E2 內聯反查遷移共用
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M2_typed-edge索引.md:26:- **doctor Check E2 遷移**：內聯反查改消費共用索引（只吃 resolved、過濾 verified_by/plan_refs；ghost/ambiguous 不做時序判定）。E2 既有測試全綠＝行為不變。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M2_typed-edge索引.md:32:- [[Verification/2026-07-14_relguard_E2建在被推翻決策上]] 的 `revalidate_when`「P0 若落地→E2 改用共用 index」**於本次觸發並通過**（E2 全部既有測試綠、真圖行為不變）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M2_typed-edge索引.md:37:- [[Systems/lumos-cli-read]]（doctor E2 消費面）
+docs/lumos-toolchain-knowledge/Verification/2026-08-22_檢索英文單複數消融.md:61:| 加回去尾 s | **4 個**(散在 E19、E20) | **擋下(rc 3)** |
+docs/lumos-toolchain-knowledge/Verification/2026-06-23_check-t-sentinel.md:11:  - "warn_soft/_soft_list 維持不計 issues、不影響 rc(軟 Check 語義)"
+docs/lumos-toolchain-knowledge/Verification/2026-06-23_check-t-sentinel.md:15:  - "Check 段順序或 section id 變動、warn_soft 改為計 issues/擋"
+docs/lumos-toolchain-knowledge/Verification/2026-06-23_check-t-sentinel.md:36:Check K 走 `_soft_list` → `warn_soft`,不動 issues、不影響 rc;觸發時 `lumos doctor` 退出碼不變(同 Check S)。`gov_events` 記 `{"gate":"check-k","kind":"warned","hard":False}`。
+docs/lumos-toolchain-knowledge/Verification/2026-07-31_公開精簡版交付.md:80:✓ S6-3: rel-cascade verb 有 choices(→機械枚舉)
+docs/lumos-toolchain-knowledge/Verification/2026-07-31_公開精簡版交付.md:90:S6-3 三來源判準(spec 放行時未結清的一條)在此對真 parser 逐一驗過:①來源①(subparsers)= `guard` 7 支子指令(list/scaffold/bind/audit/trace/kill-add/kill)②來源②(positional 帶 choices)= `rel-cascade` 的 `{confirm,prune,list,resume}`③來源③(旗標帶 choices)= `export --format` 的 `{mermaid,dot,html}`;純旗標型(`search`/`archive`)確認整份 `--help` 無任何 `{..}`。四類斷言全綠,settle 原判「不成立」的疑慮已排除。
+docs/lumos-toolchain-knowledge/Verification/2026-07-31_公開精簡版交付.md:166:其餘 4 條(`S1-3` 生命週期整族必砍的反事實、`S1-4` anchor 該砍的安全理由、`S1-6` rel-cascade 保留是產品裁定非程式依賴、`S1-7` 函式層數字不進條款的撰寫慣例)是設計理由/產品裁定/文件慣例類宣稱,Task 5 的機械驗證範圍碰不到,維持 `unverified`,未強行推進。
+docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md:27:  KEY:天花板——Check T 只驗測試識別子存在,不驗跑綠(CI 的事);E2E 要裝置/瀏覽器(無裝置才 skip);跨 repo 只讀不寫
+docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md:40:讓**單一知識圖譜**把 ★INVARIANT★ 的 `[test:]` 綁到**不同平台**的測試（C# xunit / Kotlin JUnit / Maestro E2E / Playwright），解決舊機制「一 repo 一 profile、只掃自己 repo」的三道牆。設計與審計全紀錄見計劃節點 [[Projects/多平台合約測試綁定_計劃]]（design-loop 4 輪收斂）。
+docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md:22:> 讓**單一知識圖譜**能把 ★INVARIANT★ 的 `[test:]` 綁到**不同平台**的測試（後端 C#、Android Kotlin、Android Maestro E2E、網頁 Playwright），而不是現在「一個 repo 只能一個 profile、只掃自己 repo」。
+docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md:75:### D3. 新增內建 profile：`maestro`（Android E2E）
+docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md:104:### D4. 新增內建 profile：`playwright`（網頁 E2E，先內建不接線）
+docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md:109:  - **guard-bound 的 E2E 測試，其 title/`name:` 必須是識別字安全 token（無空白）**——寫進 docs 的可測性慣例。`method_re` 的 capture group `([A-Za-z_]\w*)` 據此設計：只擷取識別字 title。
+docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md:124:2. Maestro/Playwright E2E **要裝置/瀏覽器才跑** = 現有 `SkippableFact`「無 DB 才 skip」的類比（「無裝置才 skip」），「不可靜默跳過」鐵則照樣適用——屬 CI 編排，不在本計劃「綁定」範圍。
+docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md:140:- [x] **T5 scaffold/bind/`_detect_test_dir` 多平台 + `--platform` 旗標**：`cmd_guard_scaffold` 與 `cmd_guard_bind` **新增 `--platform` 旗標**（審計 r2：`IDENT_RE` 拒 `:`，故平台不能塞進 `--method`；`--method` 維持識別字、`--platform` 另帶）→ bind 寫出 `[test:<platform>:<method>]`、scaffold 依該平台 root+profile 選 `scaffold_ext`/`fail_hint`/template 落點。`_detect_test_dir` 依平台 profile 偵測（maestro `.maestro` rglob）。多平台 config 未給 `--platform` 且非單一 → 報錯要求指定。**bind 的去重與 verify closure 必改（審計 r3）**：現行 `cmd_guard_bind` 重複判定 `method in refs`（`:1659`）與 atomic-write verify closure（`:1675`）都用 `invariant_test_refs`（回 `["android:X",...]`）比對——加 `--platform` 後須改比 `f"{platform}:{method}"`，否則 `"X" in ["android:X"]` 為 False → 漏判重複 + verify 報 ERROR（寫入成功卻核查失敗）。**Maestro `--type pure` 需 `--out`（審計 r3）**：Maestro profile `dirs.pure=([],[])` inc 空，`_detect_test_dir` rglob 對空 list 回 None → `pure` 型一律要 `--out`（Maestro E2E 無 pure 單元語意，屬預期；文件註明）。**跨 repo template 路徑（審計 r4）**：`cmd_guard_scaffold`（`scripts/lumos:1592`）現用 `repo_root/.lumos/guard-templates`，`repo_root`=vault repo（Citrus_KDS）；`--platform backend` 時 template 應改從**該平台 root**（Compass_KDS）的 `.lumos/guard-templates` 找。**scaffold「下一步」hint（審計 r4）**：`:1625` 印的 `lumos guard bind ...` 提示須帶 `--platform {platform}`。範例 guard-templates。
+docs/lumos-toolchain-knowledge/Systems/slim-gen-生成器.md:13:  KEY:移除謂詞=「保留指令 dispatch 的 AST 可達性閉包之補集」,不是 `cmd_` 前綴字面比對(lint-watch 實作叫 `_lint_watch_mode`、保留的 doctor 叫 `run_doctor`,前綴法會誤判)
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_codeloop硬化.md:26:- **FIX1（A, major）**：`reindex --all` 內層 loop + dispatcher except 補 `OSError`（寫檔面磁碟滿/權限 → rc=2 非裸 traceback；補齊與 rel-cascade dispatcher 的一致性）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_codeloop硬化.md:27:- **FIX2（C, medium/安全）**：confirm 選欄由 fail-**open** 翻 fail-**safe**——`"decision_refs" if by == "human" else "decision_refs_ai"`：只有明確 human 落可信正欄，非 ai/human（None/打錯/未來值）一律落不可信 ai 欄。安全守門不靠上游 argparse choices 撐（誤落正欄＝可抑制 E2＝破安全設計）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_codeloop硬化.md:34:- **兩套不對稱信任模型（C 深水區觀察）**：① decision_refs 欄位級（ai 欄**絕不**抑制 E2）② M3 帳本級 `_led_terminal`（ai-prune **可**抑制 E2，但走 [S3] auto-prune 保守+留痕+可翻案的獨立安全模型）。兩者威脅模型不同、都成立，**非矛盾**——此處明文記清免日後誤判為 bug。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_decision_refs養成_codeloop硬化.md:37:`t_dref_codeloop_hardening`（FIX1 code 錨/FIX2 未知 by→ai 欄/FIX3 兩欄去重/FIX4 拒斥）；全套 1127 passed/0；mutation 5/5 全滅（含 MUT3「E2 誤讀 ai 欄」被抓＝不對稱安全網有測試守）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-16_fromscratch守衛M1_CheckJ.md:12:revalidate_when: "cmd_lint/run_doctor 檢查架構重構、INV_TAG_RE 家族增減、_refcheck_scan 抽取規則變更時"
+docs/lumos-toolchain-knowledge/Verification/2026-07-16_fromscratch守衛M1_CheckJ.md:16:  KEY:共用 check_regen_provenance(note,repo_root)->(errs,warns,gov_events)——lint 與 doctor 同函式防漂移;映射表:errs→lint rc1/doctor warn(hard),warns→lint 顯示不計 rc/doctor warn_soft,gov_events→僅 doctor --ci 落帳(lint 高頻不落帳)
+docs/lumos-toolchain-knowledge/Verification/2026-07-16_fromscratch守衛M1_CheckJ.md:26:- **t_check_j_regen（21 格）**：set regen 白名單迴歸 rc0、非 regen 節點不受影響、J-a 兩態、J-b 四態、J-c 假頂層目錄/越界/合法（top_dirs 靜默放行迴歸測）、raw 行四組合（推測/佚失 × INVARIANT/IRREVERSIBLE）皆 rc1 專屬訊息、INVARIANT 組合恰一則（消歧 predicate）、非 regen generic 兜底、J-d 提醒不擋、contracts 顯示剝 [src:]、doctor 兩入口（違規 --ci rc1 / 合規 rc0 + warn_soft 不計 issues）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-06_CLAUDE注入re-sync.md:41:- **nudge soft**:`warn_soft` 不計 issue、`--ci` 不受影響;`t_nudge_skip_when_no_source`。
+docs/lumos-toolchain-knowledge/Verification/2026-08-24_about_code讀側四項落地.md:33:| 6 | doctor Check S2:全 type、跳過作廢、比正文雜湊、舊格式另列、受總開關、warn_soft 不擋;訊息先叫人看標籤 | `t_doctor_about_code_expiry`(9) | 比對恆 False → ①翻紅 ✓ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-31_公開精簡版代碼審第二輪minor修復.md:78:`--help` 仍恰好 24 支子命令(`doctor,links,backlinks,context,show,contracts,lint,guard,sync-verified-by,search,map,decisions,stale,recent,stats,export,set,append,new,decision-supersede,decision-reindex,rel-cascade,decision-add,archive`),重新生成 `dist/scripts/lumos` 後核對無退化。
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:4:feature: doctor Check E2 建在被推翻決策上 + P1 supersede 自動補 ended/bump updated(關係層守衛 phase-2,[S7]/[P1])
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:8:  - "E2 只讀 frontmatter 具名邊 verified_by/plan_refs(方向語意明確)+ 決策 valid:false/ended;2026-07-15 起消費 M2 共用 build_typed_index(原內聯反查已遷移,行為不變、測試全綠——revalidate_when 第三條觸發並通過,見 [[Verification/2026-07-15_主網M2_typed-edge索引]])"
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:9:  - "時序法為啟發:來源 updated < 決策 ended 才報、warn_soft 不擋;無 ended 的被推翻決策跳過(P1 起新翻案自動補 ended)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:10:  - "[2026-07-20 tz 修]ledger 抑制比較=UTC ts 轉本地日期後與 ended(本地)同源比;台北凌晨窗口誤報已修,回歸 t_e2_ledger_tz_boundary(見 [[Issues/E2時區跨日誤報]])"
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:14:  - "主網 cascade ledger 落地(E2 跳過規則要接 confirmed/pruned ts、消永久假陽性)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:15:  - "P0 typed-edge index 若落地(E2 可改用共用 index 取代內聯反查)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:22:# 驗證：doctor Check E2 建在被推翻決策上（+ P1）
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:27:- `scripts/lumos` cmd_doctor：新增 `Check E2`（放 Check E1 之後、Check H 之前）。**內聯 typed 反查**（掃全圖節點的 `verified_by`/`plan_refs` 具名欄位建 `target→[(source,edge_type)]`，不建 [P0] 可重用 index——doctor 本就掃全圖，補網不需；主網 proactive 連鎖才需 P0）。每個 `valid:false` 且有 `ended` 的決策 → 其 typed 連入來源 `updated < ended` → warn_soft。無 ended 的被推翻決策跳過。gov 記 `check-e2`。
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:34:| 種 A→verified_by→D，D 決策翻案 ended=06-10、A.updated=06-01（早於） | E2 抓、點名 A→D 落後邊 | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:35:| 種 B→plan_refs→D，B.updated=07-01（晚於 ended，已跟上） | E2 **不**報 | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:36:| 種 C→plan_refs→D2，D2 決策翻案但**無 ended** | E2 **不**報（無從時序比對） | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:38:| 真圖 `lumos doctor` | E2 乾淨「無落後邊」（2 條被推翻決策的來源都已跟上，0 假陽性）；全圖 0 issues | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:45:- **時序法是啟發**：`updated < ended` 只是「可能沒跟上」的代理，非定論（人早手動確認過但沒動 updated 也會誤報）→ 故 warn_soft、非阻擋。
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:46:- **無 cascade ledger（主網 future）**：判過無關卻沒動來源 `updated` 的會每次 doctor 重報（0-issue 麻痺的反面）；量少時手動 bump 來源 updated 消音。ledger 的 `confirmed/pruned ts` 跳過規則屬主網，後上。
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:47:- E2 是關係層守衛四檢的第二條；**E4（V.date < node.updated）實測 51 條背書噴 14 條（27%）良性落後 → 判定噪音產生器，不照原 spec 出**；**E3（意圖鏈斷義）精度天生錯（不分是不是那條決策），緩到 [P2] 決策穩定 ID 才做**。
+docs/lumos-toolchain-knowledge/Verification/2026-07-14_relguard_E2建在被推翻決策上.md:51:- [[Systems/lumos-cli-read]]（doctor 巡檢面新增 E2）
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M4_觸發與連鎖.md:8:  - "觸發只認 decision-supersede 指令路徑(次路手改 Edit v1 不做,補網 E2 兜底)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M4_觸發與連鎖.md:10:  - "②建檔+③列舉同包獨立 try;失敗 fail-open(rc 仍 0、決策不回滾、E2 兜底)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M4_觸發與連鎖.md:31:- **[S1] dispatcher 觸發**：supersede rc=0 → 獨立 try 包「②`rel_cascade_create` 建檔＋③surfacing」→ stderr 印 CASCADE+NEIGHBOR；決策無 id → `CASCADE-SKIP`（不建檔）；失敗 → `CASCADE-ERROR` **fail-open**（rc 仍 0、不回滾、補網 E2 兜底）；無鄰居 → `CASCADE-EMPTY`。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M4_觸發與連鎖.md:37:| 觸發 E2E | supersede→stdout 首行逐字不變＋stderr CASCADE 行(mint id+root)＋NEIGHBOR 當場點名(含 INVARIANT_COUNT)＋帳檔真建 | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M4_觸發與連鎖.md:38:| E2E ① 全鏈 | **觸發真建的帳** → prune → 補網 E2 不重報（主/補網握手非手造帳） | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M1_決策穩定ID.md:4:feature: 關係層主網 M1——P2 決策穩定 ID + E3 精確版 + E2 首判精化(五交付全落地)
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M1_決策穩定ID.md:11:  - "E3 讀 decision_refs(純字串非 wikilink);E2 精化=有 refs 只標指到那條、無 refs 退節點級"
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M1_決策穩定ID.md:15:  - "decision_refs 回填推進後(E3/E2 精化的實際覆蓋率變化)"
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M1_決策穩定ID.md:31:- **doctor Check E3**（新，E2 之後）：`decision_refs` 指向的決策 `valid:false` → 斷義 warn；格式壞/節點不存在/id 未指派 → dangling warn（不靜默，對齊反靜默紀律）。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M1_決策穩定ID.md:32:- **doctor Check E2 精化**：鄰居有 `decision_refs` → 只在指到「那條」翻案決策才標（指別條不冤枉）；無 refs → 退回節點+ended 級。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M1_決策穩定ID.md:43:| E2 精化 | 指到那條→標、指別條→不冤枉、無 refs→相容照標 | ✅ |
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M1_決策穩定ID.md:50:- 舊 Verification 的 `decision_refs` 回填是語意任務（機械不可導）——E3/E2 精化對未回填節點靠優雅降級，覆蓋率隨增量回填成長。
+docs/lumos-toolchain-knowledge/Verification/2026-07-15_主網M1_決策穩定ID.md:56:- [[Systems/lumos-cli-write]]（decision-* 原語面）／[[Systems/lumos-cli-read]]（doctor E2/E3 面）
+docs/lumos-toolchain-knowledge/Verification/2026-06-19_reversibility-governance-ledger.md:13:  - 動到 run_doctor 的 warn_soft / Check R / Check H 或 cmd_gov 四來源 dedup
+docs/lumos-toolchain-knowledge/Verification/2026-06-19_reversibility-governance-ledger.md:24:- **design-loop**：四輪 fresh-agent 對抗審計，第四輪 CONVERGED（三輪修正逐一對著 code 驗證屬實：ci 參數 plumbing、warn_soft 保 rc0、parse_decisions 吃 rollback、env.vault.parent=docs/）。詳見設計稿末。
+docs/lumos-toolchain-knowledge/Verification/2026-06-19_reversibility-governance-ledger.md:28:- `t_reversibility_doctor`：只有 `★CHECKPOINT★` 缺回退 → doctor `--ci` 仍 **rc0**(驗 warn_soft 不誤計 issues)。
+docs/lumos-toolchain-knowledge/Verification/2026-08-21_doctor-run事件落地.md:5:valid_under: "run_doctor 的 --ci 落帳點未重構;cmd_gov 預設畫面與 --stats 共用 ded 的結構未變"
+docs/lumos-toolchain-knowledge/Verification/2026-07-20_棧別效能追問.md:13:  - "[[Issues/E2時區跨日誤報]]"
+docs/lumos-toolchain-knowledge/Verification/2026-07-20_棧別效能追問.md:30:驗證對象:[[Projects/pitfalls棧別效能追問_計劃]] T1-T3 全落地。詳見 summary;同批捡到 [[Issues/E2時區跨日誤報]](時區跨日 bug,無關但同 suite 現形)。
+docs/lumos-toolchain-knowledge/Verification/2026-07-02_multiplatform-test-binding.md:53:Check T 只驗測試識別子存在、不驗跑綠（CI 的事）；E2E 要裝置/瀏覽器（無裝置才 skip）；跨 repo 只讀不寫。T6 圖譜補建 + T7 docs 為落地收尾，尚未 git commit。
+docs/lumos-toolchain-knowledge/Projects/test-layers軟提醒_實作計畫.md:75:        cfg = {"vue": {"layer": "E2E", "cmd": "npx playwright test", "when": "UI 有動"},
+docs/lumos-toolchain-knowledge/Projects/test-layers軟提醒_實作計畫.md:184:            {"vue": {"layer": "E2E", "cmd": "npx playwright test", "when": "UI 有動"}}),
+docs/lumos-toolchain-knowledge/Projects/hook必看召回修復_計劃.md:10:  KEY:★紅燈史(2026-08-18 兩段)★:①標註過期段結案——首批補標後舊語料 hook P@8 0.6944→0.7458 轉綠(假紅=標註債);②語料前進至 9fcb761 後新基線 0.6842=真紅→③query 品質閘落地(2026-08-18 同日)0.7467 轉綠且六閘全 PASS,見 [[Projects/edit面查詢品質閘_計劃]]——原:治全系統唯一紅燈(hook P@8 0.639/must recall 0.6)——2026-08-07 驗屍 11 筆必看 miss 歸因:①直連被動態閾砍 6 筆(direct 基底 0.30+L≈0<動態閾 0.65×max_free;v1.1/v1.2 買精度的明碼代價)②裸檔名 1 筆③連結缺失 4 筆(r1 勘誤 E20 改判)
+docs/lumos-toolchain-knowledge/Projects/hook必看召回修復_計劃.md:12:  KEY:r1 panel(2026-08-07):3 caught/s1 missed(a 型連兩日有席漏);15 條全折 max=blocker(R2 修錯層/E20 分類錯→②1 筆③4 筆/R1 名額矛盾→外掛模型/A-B harness knob+top8 對齊/雙庫偏離明示)
+docs/lumos-toolchain-knowledge/Projects/hook必看召回修復_計劃.md:29:| ③連結缺失 | 4(r1 勘誤:E20 自②改判——`convergence-evidence-gate` 對 `cross_audit.py` 的唯一提及無反引號,非 inline-code,抽取機制天生看不見) | 節點壓根無機械可抓引用;hop 可達但衰減+L=0 | E05/E12 三筆+E20 |
+docs/lumos-toolchain-knowledge/Projects/hook必看召回修復_計劃.md:48:- 治療射程如實:死法②經 E20 重分類後僅 1 筆(E18);R2 的 recall 貢獻上限=+1,主力仍是 R1 的 6 筆。
+docs/lumos-toolchain-knowledge/Projects/hook必看召回修復_計劃.md:66:  - [blocker→major] E20 死法分類錯——引用無反引號=死法③非②(3 席)→ 驗屍表改 ②1 筆/③4 筆;R2 射程如實=+1 上限。
+docs/lumos-toolchain-knowledge/Projects/精簡版update指令_計劃.md:85:TDD 33 斷言先紅後綠+5 個既有測試期望修真、全量 2842/0;真遠端 E2E 過(pull+--tool-only 重裝,CLAUDE.md 零觸碰);發行 repo 推 31533ec,dist↔發行 diff 歸零。意外考古:發行 repo 08-11 曾有「安裝器代複製 hooks」功能被 08-14 工廠同步靜默蓋掉(佚失記錄入 Verification,復活另案)。驗證=[[Verification/2026-08-19_精簡版update指令落地]]。
+docs/lumos-toolchain-knowledge/Projects/全盤外審2026-07_調研.md:17:  KEY:來源=2026-07-21 使用者要求全盤外審:Codex gpt-5.6-sol high reasoning 實讀 repo(153k tokens,9 條 findings 全帶 file:line 證據)+WebSearch 四路(SDD 生態/LLM-judge 偏誤/KG memory/cascade 經濟學);關鍵指控經抽驗才採信(export 只出圖表/docs·design 現存 30 份/warn_soft 實在)
+docs/lumos-toolchain-knowledge/Projects/全盤外審2026-07_調研.md:36:- **抽驗紀律**：關鍵指控先驗再採信——`lumos export --help` 證只出 mermaid/dot/html 非全文讀取；`ls docs/design | wc -l` = 30；`grep warn_soft scripts/lumos` 實在。
+docs/lumos-toolchain-knowledge/Projects/指令索引與情境測試_計劃.md:30:- 覆蓋矩陣(`lumos <cmd>` 字面在 CLAUDE.md 區塊 / 五份 SKILL.md / reference.md 出現次數):零提及者 ci-status、cochange、compose-metrics、decision-reindex、deinit、delguard、drift-history、export、install、link-candidates、rel-cascade、remove、teardown、uninstall、update、anchor、sqlfluff/stylelint-sarif、stats。
+docs/lumos-toolchain-knowledge/Projects/檢核收緊五件_計劃.md:39:① 最小解層級——三件全掛既有骨架(doctor/lint 雙入口、run_doctor 頂端、code-loop pass 前置)。② 世界解——SRE escalation policy(未確認告警升級)對應 S2;actionability 對應 S1;**branch protection required status check**(合併前必須有某個檢查綠燈,不是信任申報)對應 S3 把閘綁在真正的放行點。③ 裁定=borrow-design。
+docs/lumos-toolchain-knowledge/Projects/檢核收緊五件_計劃.md:58:**雙入口**:新函式 `check_risk_admissions(notes) -> list[finding]`(★不沿用 `check_regen_provenance` 簽名,r2 s4-F8★),`cmd_lint` 與 `run_doctor` 各呼叫;lint rc1、`--ci` 計 issues、純 doctor 列不計。
+docs/lumos-toolchain-knowledge/Projects/doctor-run事件_計劃.md:27:3. **既有小修?** 是:`run_doctor` 的 `--ci` 落帳點加一筆固定事件;`_append_governance_log` 不改(有事件就會寫)。新增=一個 gate 字面值 `doctor-run`。
+docs/lumos-toolchain-knowledge/Projects/doctor-run事件_計劃.md:33:- `run_doctor(... ci=True)` 在既有 `_append_governance_log(env.vault, gov_events)` 之前,**無條件**在 `gov_events` 末尾加 `{"gate": "doctor-run", "kind": "ran", "hard": False, "nodes": [], "note": "issues=<n> gates=<本次有事件的 check-* gate 數>"}`(★欄位名 `note`——`cmd_gov` 的 governance mapper 讀 `d.get("note")`,不是 `detail`;light r1 M1★)。乾淨 run 因此恆有一筆可寫。
+docs/lumos-toolchain-knowledge/Projects/idioms自維護迴路_計劃.md:180:| 端到端 dogfood | — | 種真 stale(detekt 已原生)+真框架 rot(Vue 3.5)+真 gap → staged | E2E |
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:11:  KEY:核心安全風險=AI誤指決策 → 不對稱信任:ai-ref 對 E3 firing 生效(加法/advisory/一刪),但對 E2 suppression 不生效(誤ref抑制真落後邊=靜默漏傳播=頭號腐爛;suppression 只認 by:human/cascade-confirmed)
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:40:- **T1 帳本回寫（地面真相，機械）**：`rel-cascade confirm` 成功 → 把 `from_decision_id` append 到被 confirm 鄰居的 `decision_refs`，provenance 沿 `--by`（ai/human）。**`prune` 不回寫**（判無關＝不記依賴）。走 `atomic_write_verify`。往前自我養成。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:46:- **不對稱信任（核心安全）**：AI 誤指決策（V 實作 d3、AI 填 d2）的緩解——`by:ai` 的 ref **對 E3 firing 生效**（加法、advisory warn、錯了人一刪、低 harm），但**對 E2 suppression 不生效**。因為誤 ref 拿去抑制 E2 ＝把真落後邊靜默藏掉 ＝本守衛要防的頭號腐爛（危險方向）。**E2 帳本抑制只認 by:human 或 cascade-confirmed 的 ref**；ai-ref 升級成可抑制需人抽查蓋章。這是把主網「auto-confirm 放寬 / auto-prune 保守」的不對稱，套到 ref 的「firing 放寬 / suppression 保守」。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:47:- **provenance 格式（定案 ③，2026-07-15）**：ai 填的進獨立欄位 **`decision_refs_ai`**、human 確認/cascade-confirmed 的進 **`decision_refs`**。**這個雙欄結構本身就是不對稱信任的機械實現**：E3 firing 讀「兩欄聯集」（放寬）、E2 suppression 只讀 `decision_refs`（保守，ai 欄結構上碰不到抑制）。人抽查蓋章＝把某條從 `decision_refs_ai` 搬進 `decision_refs`（升級成可抑制）。比平行 by 欄（易漂移）與富格式行內 `by:ai`（改動既有解析）都乾淨。E2/E3 讀側各自明確吃哪欄，無隱式合併歧義。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:48:- **回寫的節點範圍**：confirm 可 confirm 任何鄰居（含 Systems）；decision_refs 寫到被 confirm 的節點上（與 E2 首判精化讀任何鄰居 decision_refs 一致，非只 Verification）。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:77:5. `decision-refs prune <節點> <ref> [--by ai|human] [--reject]`：移除 ref。`--by` 指定移該欄、不帶 `--by` **兩欄都移**（消假清除）。**`--reject`（否決記憶，r2 B#4）**：把該 ref 記進 `decision_refs_rejected`——防下一輪 backlog 重列+AI 原樣加回的振盪；`decision-refs list` 顯示 rejected 供翻案（人可 prune rejected 解除）。移正欄＝解除 E2 抑制（顯式）。冪等：移不存在 no-op rc=0。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:78:6. `decision-refs promote <節點> <ref>`（**抽查蓋章**）：ref 從 `_ai` 搬到 `decision_refs`（升級可抑制 E2）。**新雙欄 edit helper（Codex#2/B#1，promote+prune 共用）**：讀一份 fm → remove/add 各欄 → 一次 `atomic_write_verify`，**count-based `expected_check`「正欄恰一份、`_ai` 無」**（Codex r2：`_append_decision_ref` 自驗只查「至少一份」，promote 要另寫計數檢查）。**promote 前重驗存在性**：目標 **dangling → rc=2 拒**（非 warn；防失效 ref 蓋章洗白繞過不對稱信任，r2 A#1）。**冪等**：`_ai` 無但正欄已有 → no-op rc=0；兩欄都無 → rc=2；**兩欄都有（異常態，r2 C#2）→ dedup 後正欄一份、清 `_ai`、rc=0**（fail-safe 收斂）。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:79:   - **註（r2 A#2）**：promote 只驗**存在性非權威性**——指向「已翻案決策」的 ref 允許 promote（那正是 E3 要抓的；且 E2 精化對「指到那條翻案決策」的 ref **不抑制**，故不構成洗白）。id 穩定性靠 M1 保證（`decision-reindex` 只補缺、既有 id 永不重用/位移）——promote 存在性檢查建立其上。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:84:- **不對稱信任（核心，T1 已建、五席行號驗過）**：ai-ref 對 E3 firing 生效、**結構上抑制不了 E2**；唯一升級＝人 `promote`（重驗存在性+dangling rc=2 拒+原子搬移）。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:89:**測試策略（逐條對齊合約）**：backlog 三欄皆空+邊到帶 id 決策節點+補一條就退出+rejected 不再入列、candidates 含已翻案+無 id 跳該條+skipped_no_id 計數+空輸出、add-ai 自驗存在性+拒 rejected+重複冪等、prune 兩欄都移 vs --by 單欄+--reject 記憶+冪等、promote 原子雙欄+**dangling rc=2 拒**+冪等+兩欄都有 dedup 收斂、list 分欄+顯示 rejected；**單元層釘不對稱**（只 `_ai` 有值→E2 不抑制）+**反向**（prune 正欄→E2 停止抑制，r2 C#6）；E2E＝背包跑 suggest→ai-ref 落 `_ai`→E3 對翻案觸發/E2 不受影響→promote 後可抑制→prune --reject 後不復發。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:93:**r1（2026-07-15，panel：3 sonnet 異鏡頭 + Codex 否決席讀 repo）**：canary a✓（candidates 只列 valid vs 測試矛盾）b✓（promote 兩步 vs atomic）c✗（--force，C 席漏抓但挖出更深真 blocker）。Codex 驗證**核心成立**（candidates 用 build_typed_index+parse_decisions 可建、E2/E3 不對稱信任接線行號全對）。約 12 條真 findings 全折 v2：
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:103:- **promote dangling rc=2 拒非 warn**（A#1，canary a 同向——真 spec 本就 rc=2，v2 已對；v3 再強調）、**backlog 鎖有 id 決策**（Codex：消「選了卻空轉」）、**candidates skipped_no_id 計數**（C#5）、**兩欄都有異常態 dedup 收斂**（C#2）、**add-ai 冪等明文**（C#3）、**存在性≠權威性註**（A#2：翻案決策可 promote、E2 精化不抑制、非洗白）、**reindex id 穩定性交叉引用 M1**（A#3）、**反向測試 prune 正欄→E2 停抑制**（C#6）。
+docs/lumos-toolchain-knowledge/Projects/decision_refs自動養成_實作計畫.md:106:本 spec 完成 → 交 **lumos-design-loop**（碰寫入路徑 + AI 派工 + E2 靜默抑制風險，建議 `--need 3`）到 `loop status --gate --panel` 收斂才實作。落地 Verification 以 `plan_refs` 回指本節點。
+docs/lumos-toolchain-knowledge/Projects/固定席扇出降權_計劃.md:96:扇出最高的幾條全是噪音:`slim-install-安裝器`(10)、`lumos-cli-lifecycle`(5,在 E10/E18/E21/E22
+docs/lumos-toolchain-knowledge/Projects/固定席扇出降權_計劃.md:322:降級方式對齊 E1 的 warn_soft 慣例(archf3 minor):doctor 列出、不擋;impact 退路徑、印一行★到 stderr★
+docs/lumos-toolchain-knowledge/Projects/固定席扇出降權_計劃.md:431:| 6 | 過期檢查:**不併入 Check S**(它只掃 type:system,事故類驗不到,s3f11)→ 另開迴圈但同輸出格式;★std-r2:比正文雜湊,不需 git/repo_root;受總開關★(✅ 2026-08-24 done,Check S2) | `run_doctor`,逐行格式對齊 `sa_stale` 段 | 這是 archf4「第三套機制」的回歸,但 r3 證實併入 Check S 會漏——★兩害取輕,留痕★ |
+docs/lumos-toolchain-knowledge/Projects/固定席扇出降權_計劃.md:480:- 過期 → warn_soft(不擋、不計 issues)。訊息照 Check S **實際**逐行寫法(`sa_stale` 那段,錨:grep `self_audit {sa_date} < updated`):
+docs/lumos-toolchain-knowledge/Projects/固定席扇出降權_計劃.md:482:  (★head/advice 分兩個參數★,對齊 Check S 等五處 warn_soft 呼叫慣例,arch r3 minor;訊息不得說「重標」二字當萬靈丹,Codex f1),
+docs/lumos-toolchain-knowledge/Projects/固定席扇出降權_計劃.md:507:原自判:#4「只加一道 stable sort,不動評分」light 可;#6「warn_soft 不擋」light 可。
+docs/lumos-toolchain-knowledge/Projects/連結缺失補全_計劃.md:10:  KEY:hook 紅燈殘餘 6 筆收尾——pre-flight 勘誤:僅 3 筆真斷鏈(B 群,D2 家族訊號全覆蓋)、3 筆=已 direct 被閾砍且保底未觸發(A 群);關鍵推論=光補鏈救不動(補進來照樣被砍),綁定約束=保底觸發過保守 → 兩件並進:S1 候選生成+人裁補鏈(零 LLM,D1 實證標的=train E20)、S2 觸發放寬至「free 內 direct<N 即補至水位」(考卷 A/B 裁決)
+docs/lumos-toolchain-knowledge/Projects/連結缺失補全_計劃.md:31:另 train 卷 E20(Systems/convergence-evidence-gate←`governance/autonomous_loop/cross_audit.py`)=純文字提及無反引號,D1 可抓。
+docs/lumos-toolchain-knowledge/Projects/連結缺失補全_計劃.md:32:→ **關鍵推論(改寫本計劃範圍)**:B 群補鏈後變成「direct 但 L≈0」——照現行閾值照樣被砍,且同題有 direct 存活時保底不觸發 → **光補鏈救不動 held 數字**。綁定約束=保底觸發條件過保守(hook必看召回修復 刻意保守的已知代價,當時如實記錄)。故本計劃兩件並進:S1 補鏈工具(圖譜衛生+D1/E20 型)+S2 觸發條件放寬(考卷 A/B 裁決)。
+docs/lumos-toolchain-knowledge/Projects/連結缺失補全_計劃.md:46:- **D1 純文字提及**:節點可見文字(=`_search_visible_lines(include_code=False)` 既有組合——同時剝 fence 與 inline-code;★勿用 `_strip_fences_text`,它明文保留 inline-code,r1 折入★)含目標檔**完整路徑或完整檔名**;或含**去副檔名詞幹且 stem ≥6 字元且含 `_` 或 `-`**(複合詞天然有辨識度:retrieval_eval/impact-hook ✓,config/system 這類單詞 ✗——r1 折入:原「非常用詞」無母體無停用表、舉例還自相矛盾,整條規則以複合詞判準取代)→ 候選,標 `signal: plain-text`+證據行摘錄(實證標的:train 卷 E20 型)。
+docs/lumos-toolchain-knowledge/Projects/連結缺失補全_計劃.md:60:- **pre-flight(2026-08-07,機械排乾)**:①前置實驗表 3/6 筆歸因錯——原腳本只掃正向訊號沒查「已否 direct」,live impact 反查揭穿(A 群早有反引號引用);連帶推翻「補鏈即救」假設,S2 觸發放寬入範圍 ②驗收「6 筆全出現」與去重規則自相矛盾→改 B 群 3+E20 ③「54+1」底數誤,現為 55 子命令 ④`link-candidates` 與既有 `links` 字面近,消歧:links=節點連出邊,link-candidates=code→節點補鏈候選。
+docs/lumos-toolchain-knowledge/Projects/連結缺失補全_計劃.md:97:- S1 測試:`t_link_candidates`(D1 命中/inline-code 已引不出候選/短詞幹不洪水/D2 家族命中/雙訊號 both/rc 合約);對 B 群 3 筆+E20 跑掃描:4 筆全在候選清單(通用規則召回已證訊號,已 direct 的 A 群依去重規則不出現——與規格一致)。
+docs/lumos-toolchain-knowledge/Projects/design-loop判準重定位.md:21:  KEY:★根因不是門檻太嚴,是閘在量一件已經決定不追求的事★——d4 定位=「抬 spec 質量、非保 spec 正確」(2026-08-04 使用者再確認:下游有 TDD+E2E 接功能性),但閘要求「估計剩餘缺陷<1」=窮盡=保正確。政策說一輪放行,閘說要證明母體枯竭
+docs/lumos-toolchain-knowledge/Projects/design-loop判準重定位.md:40:    context: _loop_status_panel 是 design-loop 與 code-loop 共用的同一段碼。design-loop 定位=抬品質(下游有 TDD+E2E 接),code-loop 定位=保正確(審要進 main 的 diff,下游沒有另一層)。處置判準的放寬絕不可連動到 code-loop
+docs/lumos-toolchain-knowledge/Projects/design-loop判準重定位.md:123:> code-loop ＋測試＋驗證。（2026-08-04 補述：**下游有 TDD 落地與 E2E 測試檢驗功能性**。）
+docs/lumos-toolchain-knowledge/Projects/design-loop判準重定位.md:270:1. **末輪折入的內容沒有下一輪覆蓋。** 這是真逃逸——但既有設計**早已把它列為合法逃逸**（「正確性歸下游 code-loop＋測試」），且使用者已確認下游有 TDD＋E2E。**不是新開的洞，是把已存在的洞講清楚。**
+docs/lumos-toolchain-knowledge/Projects/test-layers軟提醒_計劃.md:15:  KEY:問題=消費專案的測試套件 lumos 明文不越俎(pre-push 測試閘僅源 repo),E2E/Playwright/maestro 等慢測試層該硬在 CI 合併點——但「push 前忘了跑/忘了補」這個最便宜的破口目前零提醒
+docs/lumos-toolchain-knowledge/Projects/test-layers軟提醒_計劃.md:17:  KEY:軟閘定位=關「忘了」不關「刻意不跑」——E2E 慢+flaky,本機硬擋逼出 --no-verify 文化反噬其他硬閘;真硬閘留 CI 合併點;同 code-loop 必用守衛/impact 的誠實天花板譜系
+docs/lumos-toolchain-knowledge/Projects/test-layers軟提醒_計劃.md:19:  DECISION:[2026-07-17]源起=使用者問「E2E 是軟閘嗎」延伸「能否按專案棧提醒對應測試環節」;裁定 v1 純 advisory、opt-in、恆不影響 rc(valid)
+docs/lumos-toolchain-knowledge/Projects/test-layers軟提醒_計劃.md:25:> 源起：2026-07-17 對話——E2E/Playwright 的閘位討論（快慢決定掛哪、承載合約才不可軟）延伸出「lumos 能不能按掛載專案的棧，軟提醒對應測試環節」。
+docs/lumos-toolchain-knowledge/Projects/test-layers軟提醒_計劃.md:35:  "vue":  { "layer": "E2E",     "cmd": "npx playwright test",  "when": "UI 元件/路由有動" },
+docs/lumos-toolchain-knowledge/Projects/test-layers軟提醒_計劃.md:46:      本次 diff 碰到 vue(8 檔) → 專案宣告的 E2E 層:npx playwright test
+docs/lumos-toolchain-knowledge/Projects/from-scratch重生守衛_計劃.md:65:2. **provenance 分級隔離——複用不對稱雙欄信任**。每條 claim 帶證據級：Tier A（現 code 可驗,file:line）/ Tier B（git 史變更事件,sha）/ **Tier C（無直接證據的推論 why→明確標 conjecture、進低信任隔離欄）**。同構複用 `decision_refs` vs `decision_refs_ai`（by:ai 結構上抑制不了 E2）：重生推論 why 進低信任層、**不能背書任何合約直到人 promote**。
+docs/lumos-toolchain-knowledge/Projects/from-scratch重生守衛_計劃.md:100:**接線（r1 Codex 折入;r2 簽名+映射表補正）**：新增**共用檢查器 `check_regen_provenance(note, repo_root) -> (errs, warns, gov_events)`**,cmd_lint 與 run_doctor **同呼叫同一函式**——lint 現行無字母 Check 系統、doctor 才有,兩入口各寫一份必漂移。**兩入口映射表（r2 釘死,實作照抄不猜）**:
+docs/lumos-toolchain-knowledge/Projects/from-scratch重生守衛_計劃.md:105:| `warns`(J-d 計數、shallow 降級標示) | warns **顯示、不計 rc**(J-d「提醒不擋」與 J-c「full clone 才 rc1」兩保證**兩入口皆成立**,嚴禁 lint 側升格) | warn_soft(不擋不計,同 Check S/H/K 慣例) |
+docs/lumos-toolchain-knowledge/Projects/from-scratch重生守衛_計劃.md:144:- **shallow-repo 誤擋(C major→辯方降 minor:doctor --ci 唯一消費者=本機 pre-push,repo 無 CI/shallow 場景)**→殘餘 is-shallow 偵測+warn_soft+顯性留痕。
+docs/lumos-toolchain-knowledge/Projects/from-scratch重生守衛_計劃.md:151:- **兩入口映射表未明訂(major,Codex+B;含 B 席戳破 r1 辯方只考慮 doctor 入口的盲點)**→映射表釘死:errs→rc1/warn(hard),warns→lint 顯示不計 rc/doctor warn_soft,J-d 與 shallow 非阻擋**兩入口皆成立**。
+docs/lumos-toolchain-knowledge/Projects/閘觸發帳統計_計劃.md:41:3. **五道 doctor 檢查零觸發**——★分母不是 516★:516 是全帳 commit 聯集,含 `anchor-approve`/`code-loop` 這些走別的程式路徑寫入的事件;只有 `check-*` 家族由 `doctor --ci` 寫,其 commit 聯集=**420**,那才是 `--ci` 執行次數的下限(r1 s1 席)。★這個數與 `check-s` 單獨的 420 相同不是巧合:`check-e1` 的 181 個 commit 實測為 `check-s` 的子集★。它們確實接了帳(`gov_events.append` 在 `run_doctor` 內,如 `scripts/lumos:785,948,989,1030,1303`),所以零筆=真的沒響過,不是沒接線。
+docs/lumos-toolchain-knowledge/Projects/閘觸發帳統計_計劃.md:108:★前置要件:必須有 gate 全集★——「逐 gate 掃出現過的值」永遠看不到零筆的 gate,而 repo 內**目前沒有任何 gate 註冊表**(實查:無 `_GATES`/`GATE_NAMES` 之類常數)。故本案**必須新增 `_KNOWN_GATES` 常數**明列所有會寫帳的 gate 名,並配一條測試釘死漂移。★**掃描目標不是 `gov_events.append`**★:實查 `scripts/lumos` 內 `"gate": "..."` 字面值共 19 處、18 個不重複(2026-08-22 起含 delguard/doctor-run;同日再加 bound-tests——受波及合約測試真跑閘,另一個 session 交付,Check N 當天就抓到 17→18 漂移) <!--lumos:count=18 re=\"[A-Za-z0-9-]+\"(?=[^)]*\)\n\n# 未出現清單) in=scripts/lumos-->,其中 `gov_events.append` 只出得起 7 個(全是 `check-*`,都在 `run_doctor` 內);另外 8 個(`L2`/`L3`/`signoff`/`kill`/`canary`/`ci` 在 `cmd_gov` 的 mapper lambda 內 `scripts/lumos:2911-2947`、`anchor-approve` 在 `scripts/lumos:10071`、`code-loop` 在 `scripts/lumos:13956`)走完全不同的寫入路徑。故測試須掃**全檔所有 `"gate": "字面值"`**,否則對過半 gate 是啞的。★**且字面值掃描本身有逃逸路徑**(外家席 gemini-3-flash 2026-08-20 首跑抓到,前三輪九席皆未抓):動態閘名(f-string/變數)掃不到、測試照綠——加釘「全檔動態 gate 寫點恰為 1 處(讀側 passthrough)」,新冒出即翻紅★。
+docs/lumos-toolchain-knowledge/Projects/guard殺傷力驗證_計劃.md:13:    context: 零依賴跨語言(C#/Kotlin/E2E/python)工具不內建語言知識;自動生成變異有等價變異不可判定問題(實務 4-39% 誤報)
+docs/lumos-toolchain-knowledge/Projects/guard殺傷力驗證_計劃.md:71:- **E2E（maestro/playwright）**：`{method}` 佔位對 maestro **不成立**（maestro 跑 flow 檔路徑、綁的是 name: 欄位，CLI 無法按 name filter）——E2E 平台 run_cmd 由專案自帶正確形狀（多半整檔跑），無裝置時 run_cmd 非綠 → 走 `abort` 路徑（baseline 前置的副作用，明列）。flaky 紅 ≠ 殺傷：E2E verdict 註記 `flaky_risk`（留痕有欄位），v1 不自動重跑。
+docs/lumos-toolchain-knowledge/Projects/guard殺傷力驗證_計劃.md:98:- **r1（2026-07-10，panel W=5：4 canaried opus（新出題程序首跑：載重錨定+haiku 探針 4/4 probe:pass+事故庫無匹配走輪替）+1 否決位 opus；canary 3/4 caught、s4 missed → near-perfect 判準下輪無效、s4 findings 剔除〔其 ghost 連結 HIGH 經編排者覆核為編造——兩 Systems 檔實際存在〕）**：折入有效來源（s1/s2/s3/s5 + s4 與 s1 重合的 INV_TAG_RE 經覆核）——資料模型重設（配方改 kill_recipes frontmatter、自帶 invariant/test/platform 歸屬——原「對應 decision」無映射可依）、run_cmd legacy 棲身處、worktree 帶入未提交變更+跨 repo 開樹規則+路徑圍欄+finally --force 清理+唯一命名+lockfile、timeout 歸 killed（對齊 PIT）、survived 併 no-coverage 語意+baseline 輸出留痕、stale 更名 drifted、留痕改 docs/.kill-log.jsonl+commit/flaky_risk 欄、INV_TAG_RE 擴 kill+兩函式改動明列、{method} 剝前綴+IDENT_RE 重驗+shlex.quote+killpg、E2E maestro 佔位不成立明列、hermetic 警語+驗收限縮（否決位 M1）、冷 build 天花板（M2）、交付同步清單節新增、先例行號 :4613→:4642+唯讀 vs 副作用限定。
+docs/lumos-toolchain-knowledge/Projects/標註刷新_計劃.md:145:edit train 未標從 **0 → 4 個**(散在 E19/E20);分母 6 題 × k=8 = 48,
+docs/lumos-toolchain-knowledge/Systems/design-loop.md:32:  KEY:[2026-08-04 重設計]★收斂改走處置閘★(--disposal;完整設計=[[Projects/design-loop重設計]],r1 panel 自審收斂+人裁放行)——定位修訂「閘便宜,審不淺」(前提層錯誤明列本層職責:TDD/E2E 對 spec 理解本身無 oracle);★(2026-08-21 程式碼實證)更正:三合一「退場」不準確——只有 capture-recapture 降 advisory;panel 的「輪有效∧存活≤minor」仍是必要合取,且 2026-08-05 起新 loop 加嚴為 K=2(連兩輪各自過);「K-streak」在程式碼專指 legacy 模式(K=2∧G1∧G2),與 panel 合取是兩套;「1/38」全庫查無出處★ capture-recapture 降 advisory(封閉母體前提不成立);canary 降級觀測(d4);錨定紀律=finding 必附逐字引句、quote-check 對凍結快照機械驗。舊 panel 閘保留給 code-loop——★2026-08-08 撤銷:code-loop 亦改走處置閘(Enzo 具名推翻防浮動條款,見[[Projects/驗證層去模型化_計劃]];A 案機制碼保留供舊帳重放)★
+docs/lumos-toolchain-knowledge/Projects/design-loop重設計.md:20:  KEY:★定位(使用者確認;r1 折入修正:閘便宜,審不淺)★——「初篩網」指★放行門檻★(不要求窮盡,一輪處置全清即走),★不是審查深度★:前提層錯誤(需求誤解/架構誤判/跨系統合約假設錯)明列本層職責——TDD 驗實作符不符 spec、E2E 驗跑不跑得通,對「spec 的理解本身錯不錯」★兩者都沒有 oracle★;表層缺陷照抓、抓完放行;終極要能★無人自跑★(從不亮綠燈的閘放進自主 loop=每件事卡死等人,★自動化是假的★)
+docs/lumos-toolchain-knowledge/Projects/design-loop重設計.md:29:  - content: 定位確認:design-loop=便宜初篩網(抓便宜缺陷一輪放行),正確性歸下游 TDD+E2E,終極要能無人自跑
+docs/lumos-toolchain-knowledge/Projects/design-loop重設計.md:31:    context: 全流程體檢發現 gate 從未放行(1/38)、每次靠人裁繞過;追問後使用者確認 d4 定位並補述:下游有 TDD 落地與 E2E 檢驗功能性,且治理大方向是無人看顧的自主 loop——從不亮綠燈的閘在自主 loop 裡=全部卡死等人
+docs/lumos-toolchain-knowledge/Projects/design-loop重設計.md:67:  明列為本層職責**★：TDD 驗「實作符不符合 spec」、E2E 驗「接起來跑不跑得通」，對「spec 對需求的理解
+docs/lumos-toolchain-knowledge/Projects/design-loop重設計.md:70:- **正確性歸下游**：TDD 落地（測試是真 oracle）＋ E2E（真跑是真 oracle）。設計稿是散文，散文沒有真裁判——在這層追求「證明沒問題」是緣木求魚（**[[Systems/design-loop]] 的決策 d4**——非本文件編號，本文件只有 d1–d3；2026-07-18 裁、2026-08-04 再確認）。
+docs/lumos-toolchain-knowledge/Projects/design-loop重設計.md:148:2. **五席全 clean 且同門盲點**——錨定與席間對照都接不住。下游 TDD＋E2E 接表層行為；
+docs/lumos-toolchain-knowledge/Projects/關係層主網_實作計畫.md:9:  KEY:里程碑鏈 M1 P2決策ID+E3精確 → M2 P0 typed-edge索引 → M3 cascade ledger(append-only JSONL,生成式 cascade-id=c-<ts>-<hash8> 消解中文淨化)+rel-cascade CLI(confirm/prune/list --stale/resume,--cascade-id/--from 全域格式/--edge/--by) → M4 觸發+typed hop-1+判斷閘連鎖;依序建測、整包交付;supersede 選擇端 --match 多重命中 rc=2/#dN 定址
+docs/lumos-toolchain-knowledge/Projects/關係層主網_實作計畫.md:27:    why_chosen: 整包=避免 E3 半成品先上又回頭改;單向 decision_refs 省寫入負擔+少一處漂移;次路觸發 diff 偵測脆、E2 已週期兜底，v1 不值得冒過寬/過窄風險
+docs/lumos-toolchain-knowledge/Projects/關係層主網_實作計畫.md:39:主網＝**改節點的當下就當場點出受波及的鄰居**（proactive，趁脈絡最全、最便宜時處理），對照補網（E1/E2 已上、doctor 事後週期掃）。架構經 3 輪 Codex design-loop 收斂，設計全文見 [[關係層傳播守衛_計劃]]；本節點把該計劃 §八 的待釘合約（🔴🟠）**逐條釘死**、切成 4 個獨立可測里程碑。
+governance/rel-cascade/c-20260804063546-eb0fe2fc.jsonl
+     1	{"event": "header", "ts": "2026-08-04T06:35:46+00:00", "root_decision_id": "Projects/design-loop重設計.md#d3", "node": "Projects/design-loop重設計.md"}
+governance/rel-cascade/c-20260811044607-50e3a09c.jsonl
+     1	{"event": "header", "ts": "2026-08-11T04:46:07+00:00", "root_decision_id": "Projects/Android側UI測試綁圖譜工作流_計劃.md#d2", "node": "Projects/Android側UI測試綁圖譜工作流_計劃.md"}
+governance/rel-cascade/c-20260825050258-f856f633.jsonl
+     1	{"event": "header", "ts": "2026-08-25T05:02:58+00:00", "root_decision_id": "Projects/設計審收斂重定義_計劃.md#d1", "node": "Projects/設計審收斂重定義_計劃.md"}
+     2	{"event": "transition", "ts": "2026-08-25T06:28:08+00:00", "neighbor": "Verification/2026-08-25_設計審收斂重定義落地.md", "edge_type": "plan_refs", "from_decision_id": "Projects/設計審收斂重定義_計劃.md#d1", "state": "confirmed", "by": "ai"}
+   459	def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, verbose=False):
+   460	    C = {k: (v if color else "") for k, v in
+   461	         dict(R="\033[31m", Y="\033[33m", G="\033[32m", B="\033[1m", X="\033[0m").items()}
+   462	    notes, by_stem, resolve = env.notes, env.by_stem, env.resolve
+   463	    print(f"{C['B']}lumos doctor{C['X']} — vault: {C['B']}{env.vault}{C['X']} (self-contained, no Obsidian)")
+   464	    print()
+   465	    issues = 0
+   466	    gov_events = []          # 本輪 gate findings → governance-log(--ci 才寫)
+   467	
+   468	    def section(idx, title):
+   469	        print(f"{C['B']}[{idx}]{C['X']} {title}")
+   470	
+   471	    def ok(msg):
+   472	        print(f"  {C['G']}✓{C['X']} {msg}")
+   473	
+   474	    def warn(lines, head, advice=None):
+   475	        nonlocal issues
+   476	        print(f"  {C['Y']}⚠{C['X']} {head}")
+   477	        for l in lines:
+   478	            print(f"      • {l}")
+   479	        if advice:
+   480	            print(f"  {C['B']}建議動作{C['X']}: {advice}")
+   481	        issues += len(lines)
+   482	
+   483	    _verbose = verbose or ci   # --ci 視同 verbose:CI 日誌要完整;互動預設收斂(體檢 #10)
+   484	    _SOFT_CAP = 3
+   485	
+   486	    def warn_soft(lines, head, advice=None):
+   487	        # 軟提醒:印出但不動 issues → 不影響 rc(R3-MAJOR-3)
+   488	        # ★預設每段最多 3 條★(2026-08-21 體檢 #10):軟段([P]19 行/[Y]6 行…)多為歷史/自指噪音,
+   489	        # 每次跑幾十行把硬提醒淹掉、Claude 一整天沒讀過一條;其餘收成一行,--verbose 全列。
+   490	        print(f"  {C['Y']}⚠{C['X']} {head}")
+   491	        shown = list(lines) if _verbose else list(lines)[:_SOFT_CAP]
+   492	        for l in shown:
+   493	            print(f"      • {l}")
+   494	        if len(lines) > len(shown):
+   495	            print(f"      … 另 {len(lines) - len(shown)} 條(lumos doctor --verbose 看全部)")
+   496	        if advice:
+   497	            print(f"  {C['B']}建議{C['X']}: {advice}")
+   498	
+   499	    collisions = {s: rs for s, rs in by_stem.items() if len(rs) > 1}
+   500	
+   501	    incoming = defaultdict(int)
+   502	    unresolved = set()
+   503	    for rel, n in notes.items():
+   504	        for t in n.targets:
+   505	            dest = resolve(t)
+   506	            if dest is None:
+   507	                unresolved.add(t)
+   508	            elif dest != rel:
+   509	                incoming[dest] += 1
+   510	
+   511	    section("1/4", "驗證紀錄有沒有掛到它驗證的功能上(沒掛的驗證紀錄等於沒人找得到)")
+   512	    # [真遺忘第二刀 2026-07-26] superseded 豁免 orphan 檢查——E1 判死背書叫拔、拔了變 orphan
+   513	    # 再被這裡唸=刀子咬尾巴;作廢=該遺忘無事可辦(stale/fail 不豁免:待重驗,orphan 提醒仍有用)。
+   514	    orphans = [rel for rel in notes
+   515	               if rel.startswith("Verification/") and incoming[rel] == 0
+   516	               and status_of(env, rel).strip() != "superseded"]
+   517	    if not orphans:
+   518	        ok("每份驗證紀錄都有被引用")
+   519	    elif suggest:
+   520	        print(f"  {C['Y']}⚠{C['X']} 發現 {len(orphans)} 個 Verification 沒任何 incoming link(附推薦掛載 Systems):")
+   521	        for o in sorted(orphans):
+   522	            print(f"      • {o}")
+   523	            sug = _suggest_systems_for_orphan(env, o, notes[o])
+   524	            if not sug:
+   525	                print("          ↳ (feature/plan_refs/連結皆無線索 → 人工判斷)")
+   526	            for sys_rel, _sc, reason in sug[:3]:
+   527	                print(f"          ↳ 推薦 {sys_rel}  [{reason}]")
+   528	            if len(sug) > 3:
+   529	                print(f"          ↳ (另有 {len(sug) - 3} 個較弱線索略過)")
+   530	        issues += len(orphans)
+   531	        print(f"  {C['B']}建議動作{C['X']}: 確認後 `lumos append <Systems> verified_by \"[[<本篇>]]\"`"
+   532	              ";若推薦理由是「本篇正文連向」(verified_by 漏寫)→ `lumos sync-verified-by` 可批次補。")
+   533	    else:
+   534	        warn(sorted(orphans), f"有 {len(orphans)} 份驗證紀錄沒被任何筆記引用(等於沒人找得到):",
+   535	             "找到它驗證的 Systems 並補進 verified_by(`--suggest` 看推薦掛載目標)")
+   536	    print()
+   537	
+   538	    # ── ★未閉合 frontmatter(2026-08-03 code-loop r4 抓到的既有 major)★ ──
+   539	    # `split_frontmatter` 假設 frontmatter 成對:少一個收尾 `---` 就回 (None, 整份檔),
+   540	    # 於是★整份檔(含 frontmatter)當 body 索引★,後果實測有三:
+   541	    #   ①該節點的 ★INVARIANT★ ★從 contracts 完全消失★(合約登記簿靜默少一條)
+   542	    #   ②block scalar 裡的 [[wikilink]] 變成★真的圖譜邊★(鐵則 2 靜默失效)
+   543	    #   ③doctor 輸出★完全不提這個檔★(連 Check S 都沒有它,因為讀不到 type)
+   544	    # ★寫入端 `load_raw_for_edit` 對同一狀態明確 raise ValueError,讀取端卻默默照收★
+   545	    # ——這道檢查就是把讀取端的沉默補成響亮。放硬 issue(不是軟提醒):它會讓
+   546	    # pre-push 的 `doctor --ci` 擋下來,因為靜默少一條合約正是本工具最不能接受的事。
+   547	    section("1.5/4", "筆記開頭的欄位區塊有沒有正確收尾(沒收尾整篇會被當成正文,合約標記就消失了)")
+   548	    _fm_broken = []
+   549	    for _rel in sorted(env.notes):
+   550	        try:
+   551	            _t = (env.vault / _rel).read_text(encoding="utf-8-sig")
+   552	        except OSError:
+   553	            continue
+   554	        if not _t.startswith("---"):
+   555	            continue          # 沒 frontmatter 是合法的,不管
+   556	        _ls = _t.split("\n")
+   557	        if not any(_ls[_i].strip() == "---" for _i in range(1, len(_ls))):
+   558	            _fm_broken.append(_rel)
+   559	    if not _fm_broken:
+   560	        ok("沒有未閉合的 frontmatter")
+   561	    else:
+   562	        warn(_fm_broken,
+   563	             f"有 {len(_fm_broken)} 篇筆記開頭欄位區塊沒收尾(有起頭的 --- 沒有結尾的 ---),整篇會被當成正文:",
+   564	             "補上收尾的 `---`。沒補之前,這篇的合約查不到,正文裡的 [[連結]] 也會被當成真的連結")
+   565	    print()
+   566	
+   567	    section("2/4", "有沒有連到不存在筆記的連結")
+   568	    if not unresolved:
+   569	        ok("沒有連到不存在筆記的連結")
+   570	    else:
+   571	        warn([f"[[{t}]]" for t in sorted(unresolved)],
+   572	             f"有 {len(unresolved)} 個連結連到不存在的筆記:",
+   573	             "建立目標筆記 / 修正打錯的名字 / 移除過時引用")
+   574	    print()
+   575	
+   576	    section("3/4", "驗證紀錄說它驗了某功能,功能那邊有沒有反向登記")
+   577	    # 以 resolve 到的 rel 比對:path 式 [[Verification/X]] 與 basename [[X]] 等價(同篇),
+   578	    # 但 [[Projects/X]] 與 Verification/X 不同篇(第二輪審計 NEW-B)。存 Verification 的 rel。
+   579	    expected = defaultdict(set)
+   580	    for rel, n in notes.items():
+   581	        if not rel.startswith("Verification/"):
+   582	            continue
+   583	        # [E1↔Check3 矛盾修,LandmarkMember 實驗場實錘 2026-07-15] stale/fail 驗證跳過——
+   584	        # E1 判死背書要拔,Check 3 若仍強索回掛會跟 E1 打架(拔了這邊報漏寫、掛回那邊報死背書)。
+   585	        # 失效驗證的內文連結留作歷史導航,不再構成雙向義務。
+   586	        # [真遺忘第二刀 2026-07-26] superseded 同入 skip 集:search 已預設藏作廢節點,
+   587	        # doctor 這頭不能反向強索「把作廢驗證掛回」——一邊藏一邊撿=方向打架(Codex teardown審 F3)。
+   588	        if status_of(env, rel).strip() in ("stale", "fail", "superseded"):
+   589	            continue
+   590	        for t in n.targets:
+   591	            dest = resolve(t)
+   592	            if dest and dest.startswith("Systems/"):
+   593	                expected[dest].add(rel)
+   594	    missing = []
+   595	    for sys_rel, verif_rels in sorted(expected.items()):
+   596	        actual_rels = {resolve(link_target(a))
+   597	                       for a in as_list(notes[sys_rel].fields.get("verified_by"))}
+   598	        actual_rels.discard(None)
+   599	        missed = sorted(notes[v].stem for v in verif_rels if v not in actual_rels)
+   600	        if missed:
+   601	            missing.append(f"{sys_rel} 漏: {' | '.join(missed)}")
+   602	    if not missing:
+   603	        ok("每份驗證紀錄都掛到了它驗證的功能上")
+   604	    else:
+   605	        warn(missing, f"有 {len(missing)} 篇功能筆記沒反向登記它的驗證紀錄(verified_by 漏寫):",
+   606	             "對每個 Systems 補上漏寫的 verified_by")
+   607	    print()
+   608	
+   609	    section("4/4", "計劃結案之後又有新驗證,計劃本身有沒有跟著更新")
+   610	    chain = []
+   611	    for rel, n in notes.items():
+   612	        if not rel.startswith("Verification/"):
+   613	            continue
+   614	        refs = as_list(n.fields.get("plan_refs"))
+   615	        if not refs:
+   616	            continue
+   617	        m = DATE_PREFIX_RE.match(n.stem)
+   618	        v_date = m.group(1) if m else None
+   619	        for r in refs:
+   620	            name = r.replace("[[", "").replace("]]", "").split("|")[0].strip()
+   621	            dest = resolve(nfc(name))
+   622	            if dest is None:
+   623	                chain.append(f"{n.stem} 的 plan_refs 斷鏈: {name}")
+   624	                continue
+   625	            pf = notes[dest].fields
+   626	            status = str(pf.get("status", ""))
+   627	            u = pf.get("updated", "")
+   628	            u = (u[0] if u else "") if isinstance(u, list) else u  # updated 萬一是 list 取首項(GAP-2)
+   629	            p_updated = str(u)[:10] or None
+   630	            if status in ("done", "superseded") and v_date and p_updated and v_date > p_updated:
+   631	                chain.append(f"{notes[dest].stem} (status:{status}, updated:{p_updated}) "
+   632	                             f"結案後有較新驗證: {n.stem}")
+   633	    if not chain:
+   634	        ok("每個結案計劃都有跟上它後來的驗證,沒有斷掉的引用")
+   635	    else:
+   636	        warn(sorted(chain), f"有 {len(chain)} 個計劃結案後沒跟上新驗證、或引用斷掉:",
+   637	             "結案計劃有較新驗證 → 更新計劃本體; 斷鏈 → 修正 plan_refs 路徑")
+   638	    print()
+   639	
+   640	    section("G", "有沒有兩篇筆記同檔名(連結會分不清要連哪一篇)")
+   641	    if not collisions:
+   642	        ok("沒有同檔名的筆記,連結不會連錯")
+   643	    else:
+   644	        warn([f"{s}: {' , '.join(sorted(rs))}" for s, rs in sorted(collisions.items())],
+   645	             f"有 {len(collisions)} 組筆記同檔名——不帶資料夾的連結會分不清要連哪篇:",
+   646	             "改名其一,或全 vault 引用改用完整路徑形態")
+   647	    print()
+   648	
+   649	    section("L", "筆記開頭欄位的格式有沒有踩到已知會讓工具讀錯的寫法")
+   650	    lint_lines = []
+   651	    for rel, n in sorted(notes.items()):
+   652	        for l in n.lint:
+   653	            lint_lines.append(f"{rel}: {l}")
+   654	    if not lint_lines:
+   655	        ok("筆記開頭欄位沒踩到已知會讀錯的寫法")
+   656	    else:
+   657	        warn(lint_lines, f"有 {len(lint_lines)} 處開頭欄位踩到已知會讀錯的寫法:",
+   658	             "鐵則修法見 lumos-project-notes skill; 污染指紋見 pre-commit Gate 1 指引")
+   659	    print()
+   660	
+   661	    # Check M: 狀態標籤漂移(status 欄位 vs tags 的 status/*;反正規化完整性,
+   662	    # 兜住繞過 set status 同步的寫入路徑;見 Projects/狀態標籤同步守衛_計劃)
+   663	    section("M", "狀態欄位跟狀態標籤有沒有講同一件事")
+   664	    drift_lines = []
+   665	    for rel, n in sorted(notes.items()):
+   666	        st = n.fields.get("status")
+   667	        if not (isinstance(st, str) and st.strip()):
+   668	            continue
+   669	        for tg in as_list(n.fields.get("tags")):
+   670	            if isinstance(tg, str) and tg.startswith("status/") and tg != f"status/{st.strip()}":
+   671	                drift_lines.append(f"{rel}: status={st} vs {tg}")
+   672	    if not drift_lines:
+   673	        ok("狀態欄位跟狀態標籤一致")
+   674	    else:
+   675	        warn(drift_lines, f"有 {len(drift_lines)} 篇的狀態欄位跟狀態標籤不一致(漂移):",
+   676	             "`lumos set <節點> status <值>` 會連標籤一起同步;手改請對齊兩處")
+   677	    print()
+   678	
+   679	    # Check C: core_refs 跨 repo 指針完整性(只在有 core_refs 時跑)
+   680	    import os
+   681	    section("C", "指向跨專案核心知識庫的指針,對方檔案還在不在")
+   682	    repo_root = None
+   683	    for p in env.vault.parents:
+   684	        if p.name == "docs":
+   685	            repo_root = p.parent
+   686	            break
+   687	    core_env = os.environ.get("CORE_KNOWLEDGE_ROOT")
+   688	    core_refs_all = []
+   689	    for rel, n in sorted(notes.items()):
+   690	        for ref in as_list(n.fields.get("core_refs")):
+   691	            r = ref.strip()
+   692	            if r:
+   693	                core_refs_all.append((rel, r))
+   694	    # 核心 repo 根目錄: CORE_KNOWLEDGE_ROOT env 優先,否則 sibling 慣例(<repo>.parent/<repo-dir-name>)
+   695	    core_base = None
+   696	    if core_env:
+   697	        core_base = Path(core_env)
+   698	    elif repo_root is not None and core_refs_all:
+   699	        first_seg = core_refs_all[0][1].split("/", 1)[0]
+   700	        core_base = repo_root.parent / first_seg
+   701	    if not core_refs_all:
+   702	        ok("沒有指向跨專案核心知識庫的指針")
+   703	    elif core_base is None or not core_base.is_dir():
+   704	        # 核心 repo 不在此環境(如 CI 未 checkout 跨 repo)→ 跳過,不誤判懸空
+   705	        print(f"  {C['Y']}—{C['X']} 核心 repo 不在此環境(CI 未 checkout?),跳過跨 repo 檢查"
+   706	              f"(本機設 CORE_KNOWLEDGE_ROOT 或置核心 repo 為 sibling 可驗)")
+   707	    else:
+   708	        dangling = []
+   709	        for rel, ref in core_refs_all:
+   710	            if core_env:
+   711	                parts = ref.split("/", 1)
+   712	                rest = parts[1] if len(parts) == 2 else ref
+   713	                target = core_base / rest
+   714	            else:
+   715	                target = repo_root.parent / ref
+   716	            if not target.exists():
+   717	                dangling.append(f"{rel} → {ref}")
+   718	        if not dangling:
+   719	            ok(f"{len(core_refs_all)} 個跨專案指針都指到存在的檔")
+   720	        else:
+   721	            warn(dangling, f"有 {len(dangling)} 個跨專案指針指向核心知識庫裡不存在的檔:",
+   722	                 "核心 repo 改名/移檔 → 修專案 core_refs 路徑(指針紀律不留快照,懸空=權威失聯)")
+   723	    print()
+   724	
+   725	    # Check T: ★INVARIANT★ 合約測試綁定(載重宣稱必須認領存在的可執行證據)
+   726	    # 「形式 → 真」缺的那一環:doctor 不執行測試,但強制每條 ★INVARIANT★ 指向一個
+   727	    # 真實存在的測試 → 杜絕「裸合約」(宣稱無證據)與「懸空 test_ref」(綁了不存在的測試)。
+   728	    section("T", "標成「不能破壞的合約」的規則,有沒有綁到一條真的會跑的測試")
+   729	    inv_all = []
+   730	    for rel, n in sorted(notes.items()):
+   731	        invs, _ = extract_contracts(n)
+   732	        for inv in invs:
+   733	            inv_all.append((rel, inv))
+   734	    if not inv_all:
+   735	        ok("沒有標成「不能破壞的合約」的規則,不需要綁測試")
+   736	    else:
+   737	        naked, bound, unaudited = [], [], []
+   738	        for rel, inv in inv_all:
+   739	            clean, refs = strip_test_refs(inv)
+   740	            if refs:
+   741	                bound.append((rel, clean, refs))
+   742	                if not invariant_audit_refs(inv):     # 綁了測試但沒經獨立合法性審計
+   743	                    unaudited.append((rel, clean))
+   744	            else:
+   745	                naked.append((rel, clean, refs))
+   746	        dangling, fake, bad_platform = [], [], []
+   747	        if bound:
+   748	            if repo_root is None:
+   749	                print(f"  {C['Y']}—{C['X']} 無法定位 repo root,跳過 test_ref 存在性檢查(裸合約仍檢)")
+   750	            else:
+   751	                # 多平台感知:每 ref 依平台前綴選對 root+profile 的 method set/haystack(跨 repo)。
+   752	                pdata, split, default, methods_for, hay_for = _platform_test_index(repo_root)
+   753	                for rel, clean, refs in bound:
+   754	                    for seg in refs:
+   755	                        if split and ":" in seg:            # 多平台:含冒號 = 平台:名
+   756	                            plat, name = seg.split(":", 1)
+   757	                            plat, name = plat.strip(), name.strip()
+   758	                            if plat not in split:           # 未定義前綴 → 明確報錯(不誤當方法名)
+   759	                                bad_platform.append(
+   760	                                    f"{rel}: [test:{seg}] 平台前綴 '{plat}' 未定義於 platforms"
+   761	                                    f"({', '.join(split)})")
+   762	                                continue
+   763	                        else:                               # legacy 或無前綴段 → default 平台
+   764	                            plat, name = default, seg
+   765	                        if name in methods_for(plat):
+   766	                            continue  # 真實測試方法(依該平台 profile 認 attr)
+   767	                        _attr = pdata["platforms"][plat]["profile"]["attr_hint"]
+   768	                        if name in hay_for(plat):
+   769	                            # 出現在程式碼但不是測試方法 → 偽證據(子字串巧合/被改名/拼錯屬性)
+   770	                            fake.append(f"{rel}: [test:{seg}] 在程式碼出現,但不是 {_attr} 測試方法")
+   771	                        else:
+   772	                            dangling.append(f"{rel}: [test:{seg}] 在程式碼中找不到")
+   773	        if not naked and not dangling and not fake and not unaudited and not bad_platform:
+   774	            ok(f"{len(bound)} 條 ★INVARIANT★ 都綁了真實可執行測試方法且經獨立審計 "
+   775	               "(0 裸合約 / 0 偽證據 / 0 懸空 / 0 未審 / 0 未定義平台)")
+   776	        if bad_platform:
+   777	            warn(bad_platform, f"有 {len(bad_platform)} 條測試綁定寫了未定義的平台前綴(設定檔 platforms 裡沒這個平台):",
+   778	                 "config.json 的 platforms 補該平台,或修正 [test:平台:名] 的平台前綴")
+   779	        if naked:
+   780	            warn([f"{r}: {first_line(c, 70)}" for r, c, _ in naked],
+  8420	    for line in pending:
+  8421	        print(line)
+  8422	    return 0
+  8423	
+  8424	
+  8425	TEMPLATES = {
+  8426	    "system": ("Systems", "type: system\nstatus: doing\ncreated: {today}\nupdated: {today}\n"
+  8427	               "aliases: []\n"
+  8428	               "about_code: []\n"
+  8429	               "tags:\n  - type/system\n  - status/doing\nsummary: |-\n  FLOW:\n  KEY:\n  DEP:\n  TEST:"),
+  8430	    "verification": ("Verification", "type: verification\nstatus: pass\ndate: {today}\n"
+  8431	                     "valid_under:\nrevalidate_when:\ntags:\n  - type/verification\n  - status/pass"),
+  8432	    "issue": ("Issues", "type: issue\nstatus: open\ncreated: {today}\nupdated: {today}\n"
+  8433	              "aliases: []\n"
+  8434	              "about_code: []\n"
+  8435	              "tags:\n  - type/issue\n  - status/open\nsummary: |-\n  FLAG:\n  DECISION:\n  KEY:"),
+  8436	    "project": ("Projects", "type: project\nstatus: doing\ncreated: {today}\nupdated: {today}\n"
+  8437	                "tags:\n  - type/project\n  - status/doing"),
+  8438	}
+  8439	
+  8440	# new 後印出的「寫入當下教學」:符號行怎麼填 + 合約鏈,讓正確格式在執行 CLI 的此刻就在 context。
+  8441	NEW_HINT = {
+  8442	    "system": [
+  8443	        "骨架建好了,摘要那幾行還是空的,要自己填:FLOW:<流程 a→b→c>  KEY:<關鍵概念/欄位>  DEP:[[依賴模組]]  TEST:<測試狀態>",
+  8444	        "要標「動了會壞」的合約,寫在 KEY 行最前面:★INVARIANT★ 是業務合約(改了就是破壞性變更),一定要綁測試 [test:測試名],再讓不知道脈絡的人審過留 [audit:];★DEBT★ 是可以改的技術債",
+  8445	        "  綁測試、留審計別手改檔案,用指令:\n    lumos guard bind <節點> \"<KEY 片段>\" <測試名>\n    lumos guard audit <節點> \"<KEY 片段>\"",
+  8446	        "牽涉做了就回不去的動作(正式環境遷移、上架)要標 ★IRREVERSIBLE★ 並加 [rollback:decisions] 寫怎麼退;改了難救但還救得回的標 ★CHECKPOINT★;退不了的外部動作(信已寄、下游已吃)改用 [guard:decisions] 寫怎麼防重複",
+  8447	        "最重要的合約(牽涉金額、權限、不可逆)在 ★INVARIANT★ 後面再加 ★COMBO★,健檢會提醒你多測幾種組合情境,別只測最順的那條路",
+  8448	        "aliases 寫「別人可能怎麼稱呼這件事」(同義詞、縮寫、跨領域說法),會影響搜尋;只能寫真的出現過的說法,亂湊反而讓搜尋變差,沒有就留 []",
+  8449	        "about_code 寫「這篇主要在講哪幾支程式檔的行為」(repo 相對路徑,0~3 支)——判準:改那支檔的人不看這篇會不會做錯事?會就列;只是順帶提到的不列。純方法論筆記留 []。改這些檔時它會排固定席前排",
+  8450	    ],
+  8451	    "issue": [
+  8452	        "骨架建好了,摘要那幾行還是空的,要自己填:FLAG:<TECHNICAL/DECISION/ORIGIN 三選一>  DECISION:<決策簡述>  KEY:<關鍵發現>",
+  8453	        "aliases 寫「大家實際上怎麼描述這個問題」(症狀語、縮寫、舊名),只寫真的出現過的說法,沒有就留 []",
+  8454	        "about_code 寫「這次事故發生在哪幾支程式檔」(repo 相對路徑)——★事故類優先填★:改那支檔的人不看這篇會再犯。只寫出事的那幾支,不用列所有相關的",
+  8455	    ],
+  8456	    "verification": [
+  8457	        "填 valid_under:<這個驗證在什麼前提下才算數>  revalidate_when:<改到什麼時候該重新驗>",
+  8458	        "讓它驗證的 Systems 筆記用 verified_by 連回這篇(或事後跑 lumos sync-verified-by 補),不然只有單向連結,健檢會抓;摘要可選填 TEST:/VERIFY:",
+  8459	    ],
+  8460	    "project": [
+  8461	        "這個計劃做完後,落地的驗證紀錄要用 plan_refs 連回這篇,不然工具追不到計劃有沒有被驗證過",
+  8462	    ],
+  8463	}
+  8464	
+  8465	
+  8466	def cmd_new(env, ntype, name, today, plan=None, systems=None):
+  8467	    if ntype not in TEMPLATES:
+  8468	        print(f"擋下:這個筆記類型工具不認得,沒建檔。可用的類型:{sorted(TEMPLATES)}", file=sys.stderr)
+  8469	        return 2
+  8470	    if "/" in name or "\\" in name or ".." in name or name.startswith("."):
+  8471	        print(f"擋下:名稱不能有斜線、「..」或以點開頭,不然檔案可能跑到圖譜外面: {name}", file=sys.stderr)
+  8472	        return 2
+  8473	    # 一鍵雙向(2026-08-05 收尾優化):verification 建檔當下填 plan_refs+對面 verified_by——
+  8474	    # 把「事後 sync-verified-by 撿漏」變「寫入時就對」。僅 verification 收這兩旗標。
+  8475	    if (plan or systems) and ntype != "verification":
+rg: tests: No such file or directory (os error 2)
+scripts/lumos:486:    def warn_soft(lines, head, advice=None):
+scripts/lumos:819:        warn_soft(rev_soft, f"{len(rev_soft)} 條標成「有存檔點」的動作建議補寫回退方式(不擋):",
+scripts/lumos:858:        warn_soft(lines, head, advice)
+scripts/lumos:933:    #   啟發(可能人早手動確認過但沒動 updated),故 warn_soft。內聯 typed 反查(不建 [P0] 可重用 index——doctor
+scripts/lumos:957:            _h, _trs = _ledger_read(_p)
+scripts/lumos:1066:            warn_soft(
+scripts/lumos:1151:        warn_soft(vu_stale,
+scripts/lumos:1198:            warn_soft(stale_claims,
+scripts/lumos:1285:            warn_soft(_ghosts,
+scripts/lumos:1344:            warn_soft(_drift + _bad,
+scripts/lumos:1357:    # errs→warn(hard)計 issues/warns→warn_soft/gov_events→僅 --ci 落帳。
+scripts/lumos:1378:            warn_soft(j_soft_lines, f"{len(j_soft_lines)} 條重建筆記的提醒(不擋):")
+scripts/lumos:1386:            warn_soft([_nudge], _nudge, "用這個指令把工具鏈和紀律區塊更新到最新:lumos update")
+scripts/lumos:1676:    contracts/decisions/stale/doctor。取代 obsidian search(2026-06-13)。
+scripts/lumos:2513:      warns → lint 顯示不計 rc / doctor warn_soft(J-d 提醒與 shallow 降級兩入口皆非阻擋)
+scripts/lumos:3080:    doctor 體檢那天(=還在喊、沒人理)。有就列出並回 rc1(給自主迴圈週報當訊號),沒有 rc0。
+scripts/lumos:8162:def _ledger_read(path):
+scripts/lumos:8261:    header, _ = _ledger_read(p)
+scripts/lumos:8288:def cmd_rel_cascade_list(env, stale_days=None):
+scripts/lumos:8297:        header, trans = _ledger_read(p)
+scripts/lumos:8389:    header, trans = _ledger_read(p)
+scripts/lumos:16227:            return cmd_rel_cascade_list(env, stale_days=args.rc_stale)
+scripts/test_lumos.py:777:def t_doctor_about_code_expiry():
+scripts/test_lumos.py:779:    舊格式另列、受總開關;warn_soft 不擋、不計 issues;訊息先叫人看標籤對不對,不把 restamp 當萬靈丹。
+scripts/test_lumos.py:807:    check("不計 issues(doctor rc0)", r.returncode == 0, f"rc={r.returncode}")
+scripts/test_lumos.py:976:    ★守衛★:type/status/created 是筆記骨架,刪了 lint/doctor 全炸——硬擋 rc2。
+scripts/test_lumos.py:1373:def t_doctor_clean():
+scripts/test_lumos.py:1561:    _, trans = lm._ledger_read(p)
+scripts/test_lumos.py:1569:    _, trans2 = lm._ledger_read(p)
+scripts/test_lumos.py:1915:    _, trans = lm._ledger_read(p)
+scripts/test_lumos.py:2320:def t_doctor_superseded_verification_consistency():
+scripts/test_lumos.py:2327:    r = run(v, "doctor", expect_rc=0)
+scripts/test_lumos.py:2339:    r2 = run(v, "doctor", expect_rc=0)
+scripts/test_lumos.py:2349:    r3 = run(v, "doctor", expect_rc=0)
+scripts/test_lumos.py:2815:    check("Check T: 綁測試但未經獨立審計 → doctor 擋(rc1)",
+scripts/test_lumos.py:3279:    """T4 doctor Check T 多平台:跨 repo 綁定 + 審計 → 過(rc0);未定義平台前綴 → 明確報錯。"""
+scripts/test_lumos.py:3323:        check("doctor 多平台: 未定義平台前綴 → 報錯(rc1)",
+scripts/test_lumos.py:3511:def t_doctor_suggest():
+scripts/test_lumos.py:3611:    check("doctor Check R: irreversible 缺回退 → rc1", r.returncode == 1 and "缺實質回退" in r.stdout, r.stdout)
+scripts/test_lumos.py:3616:    check("doctor Check R: 只有 checkpoint 缺回退 → rc0(warn_soft 不計 issues)", r2.returncode == 0, r2.stdout)
+scripts/test_lumos.py:3621:    # IRREVERSIBLE + 非空 guard → 不報 error(doctor --ci rc0)
+scripts/test_lumos.py:3627:    check("doctor: IRREVERSIBLE + 非空 guard → rc0", r.returncode == 0, r.stdout)
+scripts/test_lumos.py:3675:def t_doctor_ci_writes_run_marker():
+scripts/test_lumos.py:3684:        check("run-marker: 乾淨 --ci 恰一筆 doctor-run", len(runs) == 1, f"rc={r.returncode} rows={rows}")
+scripts/test_lumos.py:4435:    # Check K: ★COMBO★ 鐵則只綁 1 個 [test:] → 軟提醒補組合(warn_soft,不擋)
+scripts/test_lumos.py:4482:    HEAD = "疑似碰到做了就回不去的操作"  # warn_soft head 的特徵詞
+scripts/test_lumos.py:4620:def t_doctor_soft_sections_truncate_by_default():
+scripts/test_lumos.py:6102:def t_doctor_check_v():
+scripts/test_lumos.py:6124:def t_doctor_check_p_precision():
+scripts/test_lumos.py:6158:def t_doctor_check_p():
+scripts/test_lumos.py:6184:    check("Check P: rc 不變(warn_soft 軟提醒)", r.returncode == 0, f"rc={r.returncode}")
+scripts/test_lumos.py:6604:    check("Check N: warn_soft 不影響 rc", r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+scripts/test_lumos.py:11708:def t_doctor_reports_drift():
+scripts/test_lumos.py:11735:def t_doctor_skip_no_template():
+scripts/test_lumos.py:11759:def t_doctor_broken_reports():
+scripts/test_lumos.py:13287:def t_doctor_flags_unclosed_frontmatter():
+scripts/test_lumos.py:14603:    # --- doctor 入口:errs 計 issues(--ci rc1);J-d 走 warn_soft 不計 ---
+scripts/test_lumos.py:14605:    check("J doctor: regen 違規 → --ci rc1", r.returncode == 1 and "regen 重生來源守衛" in r.stdout, r.stdout[-800:])
+scripts/test_lumos.py:14609:    check("J doctor: 全合規後 rc0 + J-d warn_soft 不計 issues",
+scripts/test_lumos.py:19608:    # `_totally_undefined_helper()` 進 run_doctor,rc=1 + 完整 traceback 照樣被這條
+scripts/test_lumos.py:19729:    check("★C3 反事實★ 注入 NameError 後,doctor 實跑閘必翻紅(不是被 rc in (0,1) 放行)",
+
+exec
+/bin/zsh -lc "nl -ba scripts/lumos | sed -n '920,1080p;16245,16285p'
+for f in governance/rel-cascade/*.jsonl; do echo \""'$f"; nl -ba "$f"; done
+nl -ba scripts/test_lumos.py | sed -n '"'1500,1600p;1870,1940p'" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+   920	                dead_endorse.append(f"{rel} → [[{vrel}]] (status={vst})")
+   921	                gov_events.append({"gate": "check-e1", "kind": "warned", "hard": False, "nodes": [n.stem]})
+   922	    if not dead_endorse:
+   923	        ok("筆記引用的驗證紀錄都還有效")
+   924	    else:
+   925	        _soft_list(dead_endorse,
+   926	                   f"發現 {len(dead_endorse)} 條失效背書(引用的驗證已經失效或被推翻,還掛著當依據):",
+   927	                   "重跑驗證改回 pass、或改標記/移除該 verified_by;死背書給假安心感,是關係層頭號腐爛之一")
+   928	    print()
+   929	
+   930	    # Check E2: 建在被推翻決策上(軟,不擋,不計 issues)——關係層時序法(把 Check 4 的時序 proxy 推到「決策
+   931	    #   翻案」層):某節點 D 有 valid:false 決策(且有 ended)→ 沿「方向語意明確」的連入邊(verified_by/plan_refs)
+   932	    #   找指向 D 的來源節點 A → A.updated 早於該決策 ended = A 可能還建在 D 已被推翻的決策上、沒跟上。時序法是
+   933	    #   啟發(可能人早手動確認過但沒動 updated),故 warn_soft。內聯 typed 反查(不建 [P0] 可重用 index——doctor
+   934	    #   本就掃全圖,補網不需;主網 proactive 連鎖才需 P0)。設計見 Projects/關係層傳播守衛_計劃 [S7]。
+   935	    #   已知限制:無 cascade ledger(主網 future)→ 判過無關卻沒動 A.updated 的會每次重報;量少時手動 bump 消音。
+   936	    section("E2", "有沒有筆記建立在已經被推翻的決策上、卻沒跟著改")
+   937	
+   938	    import datetime
+   939	    def _ymd(s):
+   940	        try:
+   941	            return datetime.date.fromisoformat(str(s)[:10])
+   942	        except (ValueError, TypeError):
+   943	            return None
+   944	    # [M2] 內聯反查遷移至 build_typed_index 共用(P0);E2 只消費 resolved(ghost/ambiguous
+   945	    #   不拿來做時序判定——ghost 交既有 ghost 檢查、ambiguous 由 M4 消費端浮出)。
+   946	    #   只收方向語意明確的邊(related 弱、排除)。
+   947	    _tidx = build_typed_index(env)
+   948	    typed_in = {t: [(s, e) for (s, e) in pairs if e in ("verified_by", "plan_refs")]
+   949	                for t, pairs in _tidx["rev"].items()}
+   950	    # [M3] ledger 抑制:掃 rel-cascade 帳本折疊出 terminal 事件(判過的粒度鍵)——terminal ts
+   951	    #   不早於決策 ended(日級;同日判定=翻案後立即處理的常態)→ 該邊跳過(解「判過無關卻每輪重報」
+   952	    #   永久假陽性)。E2 定位帳檔=全目錄掃(復用 list 的讀法),不需重建含秒數的檔名。
+   953	    _led_terminal = {}
+   954	    _rcd = _rel_cascade_dir(env)
+   955	    if _rcd.exists():
+   956	        for _p in sorted(_rcd.glob("*.jsonl")):
+   957	            _h, _trs = _ledger_read(_p)
+   958	            for _k, _t in _ledger_fold(_trs).items():
+   959	                _led_terminal[_k] = max(_led_terminal.get(_k, ""), str(_t.get("ts", "")))
+   960	    build_on_dead = []
+   961	    for drel, dn in sorted(notes.items()):
+   962	        for d in parse_decisions(dn.fm_lines):
+   963	            if str(d.get("valid", "true")).lower() != "false":
+   964	                continue
+   965	            ended = _ymd(d.get("ended"))
+   966	            if not ended:                        # 無 ended → 無從時序比對(P1 起新翻案自動補),跳過
+   967	                continue
+   968	            dcontent = first_line(str(d.get("content", "")), 40)
+   969	            did = str(d.get("id", "")).strip()
+   970	            for arel, etype in typed_in.get(drel, []):
+   971	                aupd = _ymd(notes[arel].fields.get("updated"))
+   972	                if not (aupd and aupd < ended):
+   973	                    continue
+   974	                # [M1] E2 首判精化:鄰居有 decision_refs → 只在指到「那條」翻案決策時才標
+   975	                #   (指到別條=已聲明依賴面、與本翻案無關,不冤枉);無 refs → 退回節點+ended 級(相容不退化)
+   976	                # [自動養成 不對稱信任] 抑制向只讀 decision_refs(human/cascade),**不讀 decision_refs_ai**
+   977	                #   ——誤 ai-ref 拿來抑制真落後邊=靜默漏傳播=頭號腐爛;ai-ref 抑制不了 E2(結構保證)
+   978	                refs = [str(x).strip() for x in as_list(notes[arel].fields.get("decision_refs"))]
+   979	                if refs:
+   980	                    def _hits(s):
+   981	                        mm = re.fullmatch(r"(.+?)#(d\d+)", s)
+   982	                        return bool(mm and did and mm.group(2) == did and env.resolve(mm.group(1)) == drel)
+   983	                    if not any(_hits(s) for s in refs):
+   984	                        continue
+   985	                # [M3] ledger 跳過:這筆 (鄰居×邊型×root決策) 已有 terminal 判定且不早於 ended → 判過,不重報
+   986	                if did:
+   987	                    _lts = _led_terminal.get((arel, etype, f"{drel}#{did}"), "")
+   988	                    if _lts:
+   989	                        # [tz 跨日修 2026-07-20] ledger ts=UTC(_utc_ts)、ended=本地日期(date.today)
+   990	                        # ——兩時間源混用:台北 00:00-08:00 窗口 UTC 日期仍昨天,raw [:10] 比較
+   991	                        # 誤判「判定早於翻案」→ 判過照樣重報(t_e2_ledger_tz_boundary 實抓)。
+   992	                        # 修=比較點把 UTC ts 轉本地日期;寫入側維持 UTC 不動(歷史帳相容)。
+   993	                        _lts_day = _lts[:10]
+   994	                        try:
+   995	                            import datetime as _dtz
+   996	                            _lts_day = _dtz.datetime.fromisoformat(_lts).astimezone().date().isoformat()
+   997	                        except ValueError:
+   998	                            pass  # 非 iso 舊格式 → 退回 raw 日級比較(fail-open)
+   999	                        if _lts_day >= str(d.get("ended", ""))[:10]:
+  1000	                            continue
+  1001	                build_on_dead.append(
+  1002	                    f"{arel} --{etype}--> {drel}(決策「{dcontent}」{ended} 翻案,來源自 {aupd} 未更新)")
+  1003	                gov_events.append({"gate": "check-e2", "kind": "warned", "hard": False,
+  1004	                                   "nodes": [notes[arel].stem]})
+  1005	    if not build_on_dead:
+  1006	        ok("沒有筆記建在被推翻的決策上")
+  1007	    else:
+  1008	        _soft_list(build_on_dead,
+  1009	                   f"有 {len(build_on_dead)} 處可能建在被推翻的決策上(用時間順序推的,不是定論):",
+  1010	                   "查該邊是否真受翻案影響:是→更新來源節點跟上新決策;否→已確認無關可 bump 來源 updated 消音;純語意矛盾留 AI 交叉審")
+  1011	    print()
+  1012	
+  1013	    # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
+  1014	    #   <節點rel>#dN,M1/P2 決策穩定 ID)指向的那條決策已 valid:false → 本驗證建在被推翻的意圖上。
+  1015	    #   dangling ref(格式壞/節點不存在/id 未指派)也浮出——不靜默通過,對齊 M2 反靜默紀律。
+  1016	    #   設計見 Projects/關係層主網_實作計畫 M1;取代母計劃 [S8] 的高噪音 advisory。
+  1017	    section("E3", "驗證紀錄引用的決策,是不是已經被翻案了")
+  1018	    e3_broken, e3_dangling = [], []
+  1019	    for rel, n in sorted(notes.items()):
+  1020	        # [自動養成 不對稱信任] firing 向讀「聯集」decision_refs + decision_refs_ai(放寬)
+  1021	        #   ——ai 填的也能觸發提醒;錯了 advisory 級、人一刪,低 harm(對比抑制向的保守)
+  1022	        # [code-loop r1 A/C-minor] (rel,ref) 去重:過渡態同 ref 可能兩欄都有,避免重複通報虛胖計數
+  1023	        seen_e3 = set()
+  1024	        for ref in as_list(n.fields.get("decision_refs")) + as_list(n.fields.get("decision_refs_ai")):
+  1025	            s = str(ref).strip()
+  1026	            if s in seen_e3:
+  1027	                continue
+  1028	            seen_e3.add(s)
+  1029	            m = re.fullmatch(r"(.+?)#(d\d+)", s)
+  1030	            if not m:
+  1031	                e3_dangling.append(f"{rel} → {s} (格式非 <節點rel>#dN)")
+  1032	                continue
+  1033	            trel = env.resolve(m.group(1))
+  1034	            if not trel:
+  1035	                e3_dangling.append(f"{rel} → {s} (節點不存在)")
+  1036	                continue
+  1037	            d = next((x for x in parse_decisions(notes[trel].fm_lines)
+  1038	                      if str(x.get("id", "")).strip() == m.group(2)), None)
+  1039	            if d is None:
+  1040	                e3_dangling.append(f"{rel} → {s} (該節點無此決策 id,或未 reindex)")
+  1041	                continue
+  1042	            if str(d.get("valid", "true")).lower() == "false":
+  1043	                e3_broken.append(f"{rel} → {s} (決策已翻案 ended={d.get('ended', '?')})")
+  1044	                gov_events.append({"gate": "check-e3", "kind": "warned", "hard": False, "nodes": [n.stem]})
+  1045	    if not e3_broken and not e3_dangling:
+  1046	        ok("驗證紀錄引用的決策都還有效")
+  1047	    if e3_broken:
+  1048	        _soft_list(e3_broken,
+  1049	                   f"有 {len(e3_broken)} 份驗證紀錄引用的決策已經被翻案:",
+  1050	                   "本驗證實作的意圖已翻案:重驗並更新、或改指新決策、或標 stale")
+  1051	    if e3_dangling:
+  1052	        _soft_list(e3_dangling,
+  1053	                   f"有 {len(e3_dangling)} 個決策引用指向不存在的決策:",
+  1054	                   "修正 ref 格式/目標;若目標節點決策未編號先跑 lumos decision-reindex <節點>")
+  1055	    print()
+  1056	
+  1057	    # Check H: 漏標可逆性提醒(軟,不擋,不計 issues)——僅 --ci 掃 diff,提示疑似漏標 ★IRREVERSIBLE★
+  1058	    section("H", "這次改動碰到正式環境、外部 API 或寄送,筆記有沒有標「做了就回不去」(提醒,不擋)")
+  1059	    if not ci:
+  1060	        print("  (僅 --ci 模式掃 diff;互動模式略過)")
+  1061	    else:
+  1062	        hint_hits = _scan_diff_for_irreversible_hints(str(env.vault))
+  1063	        if not hint_hits:
+  1064	            ok("這次改動沒碰到疑似做了就回不去的操作")
+  1065	        else:
+  1066	            warn_soft(
+  1067	                hint_hits,
+  1068	                f"這次改動有 {len(hint_hits)} 行疑似碰到做了就回不去的操作(正式環境/外部 API/寄送):",
+  1069	                "去對應的 Systems 筆記確認有沒有標 ★IRREVERSIBLE★ 並寫好回退或防護;確定其實可逆就忽略",
+  1070	            )
+  1071	    print()
+  1072	
+  1073	    # Check K: ★COMBO★ 組合覆蓋提醒(軟,不擋,不計 issues)——標了 ★COMBO★ 的最重 ★INVARIANT★
+  1074	    #   只綁 1 個 [test:] 標記 → 提醒補組合。數 [test:] 標記個數(TEST_REF_RE,非展開名數),免 [test:a,b] 逗號繞過。
+  1075	    section("K", "最重要的合約是不是只綁了一條測試(提醒補組合情境)")
+  1076	    combo_thin, combo_any = [], False
+  1077	    for rel, n in sorted(notes.items()):
+  1078	        invs, _ = extract_contracts(n)
+  1079	        for inv in invs:
+  1080	            if "★COMBO★" not in inv:
+ 16245	        rel = env.find(args.note)
+ 16246	        if rel is None:
+ 16247	            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
+ 16248	            return 2
+ 16249	        try:
+ 16250	            # [M1/P2] 兩函式回 (rc, 全域決策id);dispatcher 解包,CLI 對外仍只回整數 rc
+ 16251	            #   (M4 [S1] 觸發端將在此用 decision_id 呼 cascade_surface——屆時包獨立 try/except)
+ 16252	            if args.cmd == "decision-reindex":
+ 16253	                return cmd_decision_reindex(env, rel)
+ 16254	            if args.cmd == "decision-supersede":
+ 16255	                rc, _decision_id = cmd_decision_supersede(env, rel, args.match, args.by, ended=args.ended)
+ 16256	                # [M4/S1] 觸發:supersede 成功→②建檔+③surfacing。②③同包獨立 try(不放上層
+ 16257	                #   atomic try 內——否則例外被 except 吞成 rc=2 違反 rc=0 合約,R8/T6)。
+ 16258	                #   輸出協議:supersede stdout 首行已印且逐字不變;cascade 面全走 stderr;
+ 16259	                #   失敗 fail-open(stderr 記 CASCADE-ERROR、rc 仍 0、補網 E2 兜底)。
+ 16260	                if rc == 0:
+ 16261	                    try:
+ 16262	                        if _decision_id:
+ 16263	                            _cid = rel_cascade_create(env, _decision_id, rel)
+ 16264	                            print(f"CASCADE {_cid} ROOT {_decision_id}", file=sys.stderr)
+ 16265	                            _n = cascade_surface(env, rel, _decision_id, stream=sys.stderr)
+ 16266	                            if not _n:
+ 16267	                                print("CASCADE-EMPTY 無 typed 連入鄰居(本次翻案無已知依賴面)", file=sys.stderr)
+ 16268	                        else:
+ 16269	                            print("CASCADE-SKIP 決策無 id(節點未 reindex),本次不開 cascade;補網 E2 兜底", file=sys.stderr)
+ 16270	                    except Exception as _e:   # fail-open:決策寫入已 atomic 完成,不回滾
+ 16271	                        print(f"CASCADE-ERROR {_e}", file=sys.stderr)
+ 16272	                return rc
+ 16273	            rc, _decision_id = cmd_decision_add(env, rel, args.content, args.decided,
+ 16274	                                                context=args.context, why=args.why)
+ 16275	            return rc
+ 16276	        except (ValueError, RuntimeError, OSError) as e:   # [code-loop 最終 delta A] 補 OSError:
+ 16277	            # 單節點 decision-supersede/add/reindex 皆走 atomic_write_verify 寫檔,IO 例外(磁碟滿/
+ 16278	            # 權限/BrokenPipe)本該 rc=2 非裸 traceback——與 --all/rel-cascade dispatcher 一致
+ 16279	            print(f"擋下:{e}", file=sys.stderr)
+ 16280	            return 2
+ 16281	    if args.cmd == "archive":
+ 16282	        import datetime
+ 16283	        return cmd_archive(env, args.days, args.apply, datetime.date.today().isoformat())
+ 16284	    return 2
+ 16285	
+governance/rel-cascade/c-20260804063546-eb0fe2fc.jsonl
+     1	{"event": "header", "ts": "2026-08-04T06:35:46+00:00", "root_decision_id": "Projects/design-loop重設計.md#d3", "node": "Projects/design-loop重設計.md"}
+governance/rel-cascade/c-20260811044607-50e3a09c.jsonl
+     1	{"event": "header", "ts": "2026-08-11T04:46:07+00:00", "root_decision_id": "Projects/Android側UI測試綁圖譜工作流_計劃.md#d2", "node": "Projects/Android側UI測試綁圖譜工作流_計劃.md"}
+governance/rel-cascade/c-20260825050258-f856f633.jsonl
+     1	{"event": "header", "ts": "2026-08-25T05:02:58+00:00", "root_decision_id": "Projects/設計審收斂重定義_計劃.md#d1", "node": "Projects/設計審收斂重定義_計劃.md"}
+     2	{"event": "transition", "ts": "2026-08-25T06:28:08+00:00", "neighbor": "Verification/2026-08-25_設計審收斂重定義落地.md", "edge_type": "plan_refs", "from_decision_id": "Projects/設計審收斂重定義_計劃.md#d1", "state": "confirmed", "by": "ai"}
+  1500	    # 未 reindex 節點(決策無 id)以 #dN 查無 → rc=2 提示 reindex
+  1501	    write(v, "Systems/Old.md", "type: system\nstatus: done\ndecisions:\n"
+  1502	          "  - content: 舊決策無id\n    decided: 2026-01-01\n    valid: true")
+  1503	    r = run(v, "decision-supersede", "Old", "#d1", "--by", "Y")
+  1504	    check("M1 無 id 節點 #dN 查無 → rc=2 提示 reindex",
+  1505	          r.returncode == 2 and "decision-reindex" in r.stderr, r.stderr)
+  1506	
+  1507	
+  1508	def t_decision_reindex():
+  1509	    v = mkvault()
+  1510	    # 混合狀態:第一條已有 id: d3(手寫/歷史),第二三條無 id → 必須從 d4 接續、絕不撞 d3/不重排
+  1511	    p = write(v, "Systems/Mix.md",
+  1512	              "type: system\nstatus: done\n"
+  1513	              "decisions:\n"
+  1514	              "  - content: 甲(已有id)\n    id: d3\n    decided: 2026-01-01\n    valid: true\n"
+  1515	              "  - content: 乙(無id)\n    decided: 2026-01-02\n    valid: true\n"
+  1516	              "  - content: 丙(無id)\n    decided: 2026-01-03\n    valid: true")
+  1517	    r = run(v, "decision-reindex", "Mix")
+  1518	    check("reindex rc=0", r.returncode == 0, r.stderr)
+  1519	    txt = read(p)
+  1520	    check("reindex 混合狀態從 max+1 接續(乙=d4 丙=d5,甲 d3 未動)",
+  1521	          "id: d3" in txt and "id: d4" in txt and "id: d5" in txt, txt)
+  1522	    check("reindex 依文件順序(乙先於丙)",
+  1523	          txt.index("id: d4") < txt.index("id: d5") and txt.index("乙") < txt.index("id: d4"), txt)
+  1524	    before = read(p)
+  1525	    r = run(v, "decision-reindex", "Mix")
+  1526	    check("reindex 冪等(二跑無變動)", r.returncode == 0 and read(p) == before and "冪等" in r.stdout, r.stdout)
+  1527	    # 回填後 #dN 定址立即可用
+  1528	    r = run(v, "decision-supersede", "Mix", "#d4", "--by", "改丁")
+  1529	    check("reindex 後 #d4 可定址翻案", r.returncode == 0 and "[Systems/Mix.md#d4]" in r.stdout, r.stdout)
+  1530	    # 無 decisions 節點 → rc=2 明確拒絕
+  1531	    write(v, "Systems/None.md", "type: system\nstatus: done")
+  1532	    r = run(v, "decision-reindex", "None")
+  1533	    check("reindex 無 decisions → rc=2", r.returncode == 2, r.stderr)
+  1534	
+  1535	
+  1536	# ══ M3/S5b rel-cascade ledger ══
+  1537	
+  1538	def _lm():
+  1539	    from importlib.machinery import SourceFileLoader
+  1540	    return SourceFileLoader("lumos_m3", GRAPHCTL).load_module()
+  1541	
+  1542	
+  1543	def t_rel_cascade_create_and_fold():
+  1544	    v = mkvault()
+  1545	    write(v, "Projects/決策源.md", "type: project\nstatus: done")
+  1546	    write(v, "Systems/鄰居甲.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/決策源]]\"")
+  1547	    lm = _lm(); env = lm.Env(v)
+  1548	    gid = "Projects/決策源.md#d1"
+  1549	    cid = lm.rel_cascade_create(env, gid, "Projects/決策源.md")
+  1550	    check("M3 中文 root 生成 cascade-id 合 pattern(D5 生成側)",
+  1551	          bool(__import__("re").fullmatch(r"c-\d{14}-[0-9a-f]{8}", cid)), cid)
+  1552	    p = v / "governance" / "rel-cascade" / (cid + ".jsonl")
+  1553	    check("M3 O_EXCL 建檔+首行 header(root 全域格式存檔內)",
+  1554	          p.exists() and '"event": "header"' in p.read_text().splitlines()[0]
+  1555	          and gid in p.read_text().splitlines()[0], p.read_text())
+  1556	    # confirm → prune 同粒度鍵:折疊取物理序最後一筆
+  1557	    run(v, "rel-cascade", "confirm", "鄰居甲", "--cascade-id", cid, "--from", gid,
+  1558	        "--edge", "verified_by", "--by", "ai", expect_rc=0)
+  1559	    run(v, "rel-cascade", "prune", "鄰居甲", "--cascade-id", cid, "--from", gid,
+  1560	        "--edge", "verified_by", "--by", "human", expect_rc=0)
+  1561	    _, trans = lm._ledger_read(p)
+  1562	    st = lm._ledger_fold(trans)
+  1563	    k = ("Systems/鄰居甲.md", "verified_by", gid)
+  1564	    check("M3 折疊=最後一筆(confirm 後 prune → pruned)",
+  1565	          st.get(k, {}).get("state") == "pruned" and len(trans) == 2, str(st))
+  1566	    # torn 尾行:手動 append 半行 → 重放跳過不炸
+  1567	    with open(p, "a", encoding="utf-8") as f:
+  1568	        f.write('{"event":"transition","ts":"2026-')
+  1569	    _, trans2 = lm._ledger_read(p)
+  1570	    check("M3 torn 尾行跳過不炸(未提交=丟棄)", len(trans2) == 2, str(len(trans2)))
+  1571	    # 4KB 寫前拒
+  1572	    try:
+  1573	        lm._ledger_append(p, {"event": "transition", "pad": "x" * 5000})
+  1574	        check("M3 4KB 寫前拒", False, "未拒")
+  1575	    except ValueError as e:
+  1576	        check("M3 4KB 寫前拒(不截斷)", "4KB" in str(e), str(e))
+  1577	
+  1578	
+  1579	def t_rel_cascade_prewrite_validation():
+  1580	    v = mkvault()
+  1581	    write(v, "Projects/D.md", "type: project\nstatus: done")
+  1582	    write(v, "Systems/A.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/D]]\"")
+  1583	    lm = _lm(); env = lm.Env(v)
+  1584	    gid = "Projects/D.md#d1"
+  1585	    cid = lm.rel_cascade_create(env, gid, "Projects/D.md")
+  1586	    # ①檔不存在
+  1587	    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", "c-19990101000000-deadbeef",
+  1588	            "--from", gid, "--edge", "verified_by", "--by", "ai")
+  1589	    check("M3 檔不存在 rc=2(confirm 永不建檔)", r.returncode == 2 and "不會自己建" in r.stderr, r.stderr)
+  1590	    # ②裸 dN
+  1591	    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid, "--from", "d1",
+  1592	            "--edge", "verified_by", "--by", "ai")
+  1593	    check("M3 裸 dN 拒收 rc=2", r.returncode == 2 and "裸" in r.stderr, r.stderr)
+  1594	    # ③--from 不屬本 cascade
+  1595	    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", cid, "--from", "Projects/D.md#d9",
+  1596	            "--edge", "verified_by", "--by", "ai")
+  1597	    check("M3 --from≠header root rc=2", r.returncode == 2 and "不屬本 cascade" in r.stderr, r.stderr)
+  1598	    # ④path 安全
+  1599	    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", "../evil",
+  1600	            "--from", gid, "--edge", "verified_by", "--by", "ai")
+  1870	    check("FIX2 fail-safe:未知 by=robot → 落不可信 decision_refs_ai(非可抑制正欄)",
+  1871	          "decision_refs_ai:" in ta and "decision_refs:\n" not in ta, ta)
+  1872	    # FIX4: 拒不可序列化字元
+  1873	    try:
+  1874	        lm.cmd_rel_cascade_write(lm.Env(v), "confirm", "Systems/A.md", cid, 'Projects/a"b.md#d1',
+  1875	                                 "verified_by", "human")
+  1876	        # from_id 驗證會先攔(格式),改直接測 helper
+  1877	    except Exception:
+  1878	        pass
+  1879	    for bad, tag in (('Bad"Ref#d1', '雙引號'), ('Bad\\Ref#d1', '反斜線'),
+  1880	                     ('Bad\rRef#d1', '裸CR'), ('Bad\nRef#d1', '換行')):
+  1881	        try:
+  1882	            lm._append_decision_ref(lm.Env(v), "Systems/A.md", "decision_refs", bad)
+  1883	            check(f"FIX4 拒不可序列化字元({tag})", False, "未 raise")
+  1884	        except ValueError as e:
+  1885	            check(f"FIX4 拒不可序列化字元({tag})", "不能用的字元" in str(e), str(e))
+  1886	    # FIX3: E3 同 ref 兩欄不重複計
+  1887	    write(v, "Projects/E.md",
+  1888	          "type: project\nstatus: done\ndecisions:\n"
+  1889	          "  - content: 翻\n    id: d1\n    decided: 2026-05-01\n    valid: false\n    superseded_by: x\n    ended: 2026-06-01", body="# E\n")
+  1890	    write(v, "Verification/Vdup.md",
+  1891	          "type: verification\nstatus: pass\ndate: 2026-05-02\n"
+  1892	          "decision_refs:\n  - \"Projects/E.md#d1\"\ndecision_refs_ai:\n  - \"Projects/E.md#d1\"", body="# Vdup\n")
+  1893	    r = run(v, "doctor")
+  1894	    e3seg = r.stdout.split("[E3]")[1].split("[H]")[0] if "[E3]" in r.stdout else r.stdout
+  1895	    check("FIX3 E3 同 ref 兩欄只計一次(去重)",
+  1896	          e3seg.count("Vdup") == 1, e3seg)
+  1897	
+  1898	
+  1899	def t_rel_cascade_hardening():
+  1900	    """code-loop r1 六修回歸:畸形行 fold 防禦閘(MUT1)/空殼 header(CX2)/尾端換行(A3)/
+  1901	    symlink 拒斥(CX1)/OSError→rc=2(B3);短寫驗證(B1)為 os.write 合約、以 code 檢查存在性錨。"""
+  1902	    v = mkvault()
+  1903	    write(v, "Projects/D.md", "type: project\nstatus: done")
+  1904	    write(v, "Systems/A.md", "type: system\nstatus: done\nverified_by:\n  - \"[[Projects/D]]\"")
+  1905	    lm = _lm(); env = lm.Env(v)
+  1906	    gid = "Projects/D.md#d1"
+  1907	    cid = lm.rel_cascade_create(env, gid, "Projects/D.md")
+  1908	    p = v / "governance" / "rel-cascade" / (cid + ".jsonl")
+  1909	    # MUT1:畸形 transition(缺 edge_type)→ fold 防禦閘 all(k) 必須跳過
+  1910	    import json as _json
+  1911	    with open(p, "a", encoding="utf-8") as f:
+  1912	        f.write(_json.dumps({"event": "transition", "ts": "2026-07-15T00:00:00+00:00",
+  1913	                             "neighbor": "Systems/A.md", "from_decision_id": gid,
+  1914	                             "state": "confirmed", "by": "ai"}) + "\n")  # 無 edge_type
+  1915	    _, trans = lm._ledger_read(p)
+  1916	    st = lm._ledger_fold(trans)
+  1917	    check("硬化 MUT1:畸形行(缺 edge_type)不進折疊", len(st) == 0 and len(trans) == 1, str(st))
+  1918	    # CX2:空殼 header {"event":"header"} → 非法 header:confirm rc=2、resume rc=1
+  1919	    sp = v / "governance" / "rel-cascade" / "c-20260101000000-bbbbbbbb.jsonl"
+  1920	    sp.write_text('{"event": "header", "ts": "2026-01-01T00:00:00+00:00"}\n', encoding="utf-8")
+  1921	    r = run(v, "rel-cascade", "confirm", "A", "--cascade-id", "c-20260101000000-bbbbbbbb",
+  1922	            "--from", gid, "--edge", "verified_by", "--by", "ai")
+  1923	    check("硬化 CX2:空殼 header confirm rc=2(缺 root/node=不合法)", r.returncode == 2, r.stderr)
+  1924	    r = run(v, "rel-cascade", "resume", "c-20260101000000-bbbbbbbb")
+  1925	    check("硬化 CX2:空殼 header resume rc=1(不可恢復,不裝成功)", r.returncode == 1, r.stderr)
+  1926	    # A3:尾端換行 cascade-id → fullmatch 拒 rc=2
+  1927	    r = run(v, "rel-cascade", "resume", cid + "\n")
+  1928	    check("硬化 A3:尾端換行 id 被 fullmatch 拒 rc=2", r.returncode == 2, r.stderr)
+  1929	    # CX1:symlink 終點 → O_NOFOLLOW 拒(OSError→dispatcher rc=2,兼證 B3)
+  1930	    import os as _os
+  1931	    victim = v / "victim.txt"; victim.write_text("勿附加", encoding="utf-8")
+  1932	    link = v / "governance" / "rel-cascade" / "c-20260101000000-cccccccc.jsonl"
+  1933	    _os.symlink(victim, link)
+  1934	    # 給 symlink 檔一個合法 header 內容繞前置驗證?——symlink 指向的 victim 無 header,寫前驗證先拒;
+  1935	    # 直接測 _ledger_append 對 symlink 的 O_NOFOLLOW(底層合約)
+  1936	    try:
+  1937	        lm._ledger_append(link, {"event": "transition", "x": 1})
+  1938	        check("硬化 CX1:symlink 被 O_NOFOLLOW 拒", False, "未拒")
+  1939	    except OSError:
+  1940	        check("硬化 CX1:symlink 被 O_NOFOLLOW 拒(OSError)", True, "")
+
+codex
+1. severity: major  
+blocking: 是  
+判準：E2 只是依賴邊與日期條件成立時的啟發式補網，無法保證接住 header 損毀；不改會讓實作者照規格靜默略過唯一可直接觀測的壞帳本。  
+引句:「header 損毀帳本跳過不報:損毀已有補網 E2 兜底」
+
+實碼依據：`scripts/lumos:930-1004` 的 E2 必須同時具備 `valid:false`、合法 `ended`、特定 typed 連入邊及 `updated < ended`；它既不通報壞帳本，也不保證每條翻案鏈都符合這些條件。`scripts/lumos:8391` 只是 `resume` 失敗時印出「交補網 E2」，不是 doctor 對壞 header 的完整兜底。
+
+2. severity: major  
+blocking: 是  
+判準：最老天數的時區、取整方式與非法或缺失 `header.ts` 均未裁定，不改會讓實作者產生依執行時刻差一天或直接例外的實作。  
+引句:「計 transitions==0 的帳本數與最老天數」
+
+例 1 要求 2026-08-04 到 2026-08-25 固定為 21 天，但實際 header 是帶時刻的 UTC timestamp；若用 `timedelta.days`，在滿 21×24 小時前會得到 20。另 `_ledger_read` 只驗 `event/root_decision_id/node`，合法 JSON 即使缺少或寫壞 `ts` 仍可成為合法 header，現有規格與例 3 都未定義如何處理。應明定以哪個時區的 calendar date 計日，以及缺失/非法 `ts` 是跳過、用檔名日期，或另行提示。
+
+已讀無 finding：
+
+- `warn_soft:486` 的宣稱屬實：確實印出但不增加 `issues`。
+- `_ledger_read:8162` 與 `_rel_cascade_dir:8103` 的位置、主要語意屬實。
+- `cmd_rel_cascade_list:8288` 確實明言不做開放／完成精確分類。
+- 例 2、例 4、例 5 與現有帳本及目錄形狀沒有衝突。
+- 例 3 的「壞 JSON 不 traceback」符合 `_ledger_read` 跳過壞 JSON 的既有語意；問題只在宣稱 E2 足以兜底。
+- `warn_soft` 可承載三段訊息且不改 rc；具體排版仍可用 `head`、`lines`、`advice` 完成。
+
+總結：最嚴重 severity 為 major；blocking 共 2 條。
+tokens used
+45,558
+1. severity: major  
+blocking: 是  
+判準：E2 只是依賴邊與日期條件成立時的啟發式補網，無法保證接住 header 損毀；不改會讓實作者照規格靜默略過唯一可直接觀測的壞帳本。  
+引句:「header 損毀帳本跳過不報:損毀已有補網 E2 兜底」
+
+實碼依據：`scripts/lumos:930-1004` 的 E2 必須同時具備 `valid:false`、合法 `ended`、特定 typed 連入邊及 `updated < ended`；它既不通報壞帳本，也不保證每條翻案鏈都符合這些條件。`scripts/lumos:8391` 只是 `resume` 失敗時印出「交補網 E2」，不是 doctor 對壞 header 的完整兜底。
+
+2. severity: major  
+blocking: 是  
+判準：最老天數的時區、取整方式與非法或缺失 `header.ts` 均未裁定，不改會讓實作者產生依執行時刻差一天或直接例外的實作。  
+引句:「計 transitions==0 的帳本數與最老天數」
+
+例 1 要求 2026-08-04 到 2026-08-25 固定為 21 天，但實際 header 是帶時刻的 UTC timestamp；若用 `timedelta.days`，在滿 21×24 小時前會得到 20。另 `_ledger_read` 只驗 `event/root_decision_id/node`，合法 JSON 即使缺少或寫壞 `ts` 仍可成為合法 header，現有規格與例 3 都未定義如何處理。應明定以哪個時區的 calendar date 計日，以及缺失/非法 `ts` 是跳過、用檔名日期，或另行提示。
+
+已讀無 finding：
+
+- `warn_soft:486` 的宣稱屬實：確實印出但不增加 `issues`。
+- `_ledger_read:8162` 與 `_rel_cascade_dir:8103` 的位置、主要語意屬實。
+- `cmd_rel_cascade_list:8288` 確實明言不做開放／完成精確分類。
+- 例 2、例 4、例 5 與現有帳本及目錄形狀沒有衝突。
+- 例 3 的「壞 JSON 不 traceback」符合 `_ledger_read` 跳過壞 JSON 的既有語意；問題只在宣稱 E2 足以兜底。
+- `warn_soft` 可承載三段訊息且不改 rc；具體排版仍可用 `head`、`lines`、`advice` 完成。
+
+總結：最嚴重 severity 為 major；blocking 共 2 條。
