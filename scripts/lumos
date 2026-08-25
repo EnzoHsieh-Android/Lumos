@@ -951,10 +951,16 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     #   不早於決策 ended(日級;同日判定=翻案後立即處理的常態)→ 該邊跳過(解「判過無關卻每輪重報」
     #   永久假陽性)。E2 定位帳檔=全目錄掃(復用 list 的讀法),不需重建含秒數的檔名。
     _led_terminal = {}
+    _casc_unseen_ts = []   # [T1 連鎖佇列軟提醒] header 合法且零筆判定=開了沒人看過的待辦單
+    _casc_broken = 0       # header 損毀(壞 JSON/空檔)——全庫無主動管道報它(E2 只抽 transitions 不看 header)
     _rcd = _rel_cascade_dir(env)
     if _rcd.exists():
         for _p in sorted(_rcd.glob("*.jsonl")):
             _h, _trs = _ledger_read(_p)
+            if _h is None:
+                _casc_broken += 1
+            elif not _trs:
+                _casc_unseen_ts.append(str(_h.get("ts", "")))
             for _k, _t in _ledger_fold(_trs).items():
                 _led_terminal[_k] = max(_led_terminal.get(_k, ""), str(_t.get("ts", "")))
     build_on_dead = []
@@ -1008,6 +1014,38 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         _soft_list(build_on_dead,
                    f"有 {len(build_on_dead)} 處可能建在被推翻的決策上(用時間順序推的,不是定論):",
                    "查該邊是否真受翻案影響:是→更新來源節點跟上新決策;否→已確認無關可 bump 來源 updated 消音;純語意矛盾留 AI 交叉審")
+
+    # Check E4: 翻案開的連鎖待辦單有沒有人跟([T1] Projects/連鎖佇列軟提醒_計劃,2026-08-25)。
+    #   刻意全靜默設計:乾淨時整段不印(不佔版面);天數=UTC-aware fromisoformat 相減 .days
+    #   (照 cmd_rel_cascade_list 慣例,勿混本地日期——E2 的 tz 跨日雷);未來 ts 記 0 天;
+    #   ts 缺失/非法照計入、天數標不明。
+    if _casc_unseen_ts or _casc_broken:
+        section("E4", "翻案開的連鎖待辦單有沒有人跟")
+        import datetime as _dt4
+        _now4 = _dt4.datetime.now(_dt4.timezone.utc)
+        _daysv, _no_ts = [], 0
+        for _ts4 in _casc_unseen_ts:
+            try:
+                _d04 = _dt4.datetime.fromisoformat(_ts4)
+                if _d04.tzinfo is None:
+                    _d04 = _d04.replace(tzinfo=_dt4.timezone.utc)
+                _daysv.append(max(0, (_now4 - _d04).days))
+            except ValueError:
+                _no_ts += 1
+        _lines4 = []
+        if _casc_unseen_ts:
+            _age4 = f"最老 {max(_daysv)} 天" if _daysv else "建立時間不明"
+            if _daysv and _no_ts:
+                _age4 += f",另 {_no_ts} 張建立時間不明"
+            _head4 = (f"{len(_casc_unseen_ts)} 張連鎖待辦單自建立後零筆判定({_age4})——"
+                      "決策翻案後,引用它的筆記還成不成立沒人回頭判(撤稿研究:沒提醒時 94.6% 的引用不承認撤稿)")
+            if _casc_broken:
+                _lines4.append(f"另有 {_casc_broken} 張帳本開頭損毀(root 不可恢復),需人工檢視")
+        else:
+            _head4 = f"{_casc_broken} 張連鎖帳本開頭損毀,待辦單內容救不回來——多半是翻案當下寫入被打斷,需人工檢視"
+        warn_soft(_lines4, _head4, advice="lumos rel-cascade list")
+        gov_events.append({"gate": "check-cascade", "kind": "warned", "hard": False, "nodes": [],
+                           "note": f"unseen={len(_casc_unseen_ts)} broken={_casc_broken}"})
     print()
 
     # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
@@ -16265,6 +16303,9 @@ def main():
                             _n = cascade_surface(env, rel, _decision_id, stream=sys.stderr)
                             if not _n:
                                 print("CASCADE-EMPTY 無 typed 連入鄰居(本次翻案無已知依賴面)", file=sys.stderr)
+                            # [T1b 連鎖佇列軟提醒] 開單當下就用人話指路(Issue 修法 A;doctor E4 是事後巡檢面)
+                            print(f"已開連鎖待辦單 {_cid}:上面列的每個 NEIGHBOR 都要回頭判——還受這條決策影響就 confirm、無關就 prune;下一步:", file=sys.stderr)
+                            print("    lumos rel-cascade list", file=sys.stderr)
                         else:
                             print("CASCADE-SKIP 決策無 id(節點未 reindex),本次不開 cascade;補網 E2 兜底", file=sys.stderr)
                     except Exception as _e:   # fail-open:決策寫入已 atomic 完成,不回滾

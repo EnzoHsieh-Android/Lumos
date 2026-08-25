@@ -15,6 +15,8 @@ summary: |-
   VERIFY:相容鐵則逐包驗訖——零新參舊呼叫 rc0 無新鍵、舊 panel 閘同帳輸出不變、未定錨 loop 不受收緊影響;d4 落地實證=missed 席在場 disposal 閘照樣 rc0;反循環實證=同一報告對現檔 rc0(假 ok)對凍結快照 rc1;讀側重驗實證=record 完竄改報告→FAIL
   KEY:過程抓到的新假綠變體 2 例:①T1 翻紅釘假紅(斷言重疊:目標檢查被拔後鄰近檢查代打 rc2)②T4 測試被 T6 新規則正確咬到(定錨後每席須留痕)——皆已修並留痕
   KEY:T2 附帶觸發漂移守衛(六份文件「53 個頂層命令」→54);中途 Xcode license 失效使 git 全掛(124 假紅),恢復後全綠——★環境紅與代碼紅的區分靠「紅的形狀」(越跑越多且全在 git 依賴測試)★
+decision_refs_ai:
+  - "Projects/design-loop重設計.md#d3"
 ---
 # design-loop 重設計落地 T1–T7（驗證紀錄）
 

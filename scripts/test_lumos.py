@@ -15269,6 +15269,68 @@ def t_e2_ledger_tz_boundary():
     print("  ✓ t_e2_ledger_tz_boundary")
 
 
+def t_doctor_cascade_reminder():
+    """[T1/T1b/T2] 連鎖佇列軟提醒(Projects/連鎖佇列軟提醒_計劃,2026-08-25):E4 零判定計數/
+    損毀另列不炸/目錄不存在與全判定靜默/--ci 落 check-cascade 帳/rc 不變;supersede 白話指路行。
+    fixture ts 用動態 offset(now-21d),不斷言絕對天數(t_stale_central 慣例)。"""
+    import datetime as _dt
+    import json as _json
+    import subprocess as _sp
+    v = mkvault()
+    _sp.run(["git", "init", "-q"], cwd=str(v.parent))
+    _sp.run(["git", "add", "-A"], cwd=str(v.parent))
+    _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], cwd=str(v.parent))
+    # 例4:目錄不存在 → 整段靜默、無錯誤
+    r0 = run(v, "doctor")
+    check("E4: 目錄不存在→整段靜默", "[E4]" not in r0.stdout and "連鎖待辦單" not in r0.stdout, r0.stdout[-300:])
+    # supersede 開單(T1b 白話指路行走 stderr,stdout 首行凍結協議)
+    write(v, "Projects/D.md", "type: project\nstatus: done")
+    run(v, "decision-add", "D", "舊路線", "--decided", "2026-07-01", expect_rc=0)
+    write(v, "Systems/A.md",
+          "type: system\nstatus: done\nupdated: 2026-07-02\n"
+          "summary: |-\n  KEY:x\nverified_by:\n  - \"[[Projects/D]]\"")
+    rs = run(v, "decision-supersede", "D", "舊路線", "--by", "新路線", expect_rc=0)
+    check("T1b: supersede 白話指路行(stderr,含指令)",
+          "已開連鎖待辦單" in rs.stderr and "lumos rel-cascade list" in rs.stderr, rs.stderr[-400:])
+    rcd = v / "governance" / "rel-cascade"
+    cid1 = sorted(rcd.glob("*.jsonl"))[0]
+    # header ts 改成 21 天前(動態 offset;斷言計數與行存在,不斷言「21 天」字面)
+    old_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=21)).isoformat(timespec="seconds")
+    out = []
+    for ln in cid1.read_text(encoding="utf-8").splitlines():
+        o = _json.loads(ln)
+        if o.get("event") == "header":
+            o["ts"] = old_ts
+        out.append(_json.dumps(o, ensure_ascii=False))
+    cid1.write_text("\n".join(out) + "\n", encoding="utf-8")
+    r1 = run(v, "doctor")
+    check("E4: 零判定帳本→提醒行含計數", "1 張連鎖待辦單自建立後零筆判定" in r1.stdout, r1.stdout[-500:])
+    check("E4: 建議行含指令", "lumos rel-cascade list" in r1.stdout, r1.stdout[-500:])
+    check("E4: 軟提醒不動 rc", r1.returncode == 0, str(r1.returncode))
+    # 損毀帳本 → 另列一行、不炸、不進零判定計數
+    (rcd / "c-broken-test.jsonl").write_text("{oops not json\n", encoding="utf-8")
+    r2 = run(v, "doctor")
+    check("E4: 損毀帳本另列一行(不混進零判定)", "1 張帳本開頭損毀" in r2.stdout
+          and "1 張連鎖待辦單自建立後零筆判定" in r2.stdout, r2.stdout[-500:])
+    check("E4: 損毀不炸 rc0", r2.returncode == 0, str(r2.returncode))
+    # 例6:--ci 落 check-cascade 治理帳
+    gov = v.parent / ".governance-log.jsonl"
+    if gov.exists():
+        gov.unlink()
+    run(v, "doctor", "--ci")
+    check("E4: --ci 落 check-cascade 事件", gov.exists() and "check-cascade" in gov.read_text(encoding="utf-8"),
+          gov.read_text(encoding="utf-8")[-300:] if gov.exists() else "未寫")
+    # 例2+例5:全部判定(prune 掉唯一鄰居)+移除損毀檔 → 整段靜默
+    (rcd / "c-broken-test.jsonl").unlink()
+    gid = "Projects/D.md#d1"
+    run(v, "rel-cascade", "prune", "A", "--cascade-id", cid1.stem, "--from", gid,
+        "--edge", "verified_by", "--by", "human", expect_rc=0)
+    r3 = run(v, "doctor")
+    check("E4: 全部判定→整段靜默(不印 0 張)", "[E4]" not in r3.stdout and "連鎖待辦單" not in r3.stdout,
+          r3.stdout[-300:])
+    print("  ✓ t_doctor_cascade_reminder")
+
+
 import secrets as _sec
 _M1U = _sec.token_hex(3)   # m1 測試 loop id 唯一後綴(canary-log 落共用 tempdir,跨執行累積)
 

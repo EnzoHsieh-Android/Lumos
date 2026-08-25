@@ -22,6 +22,8 @@ summary: |-
   VERIFY:[[Android側UI測試綁圖譜工作流_實作計畫]] A 段 Task 1-4
   KEY:A 段=本 repo 三處落地(慣例節點證據路徑+Android 通道／skill 退場自問第 4 問／reference.md 派工要求)+圖譜收尾;B 段(mOrangePos,需真裝置)未動
   KEY:★本段只證明「本 repo 這三處寫對了」,不證明工作流有效★—工作流是否真的接得上,要 B 段在 mOrangePos 實跑(雙平台 config→bind/audit→flow 檔案形式跑→回歸釘翻紅)才算
+decision_refs_ai:
+  - "Projects/Android側UI測試綁圖譜工作流_計劃.md#d2"
 ---
 # 2026-08-11_AndroidUI工作流A段落地
 

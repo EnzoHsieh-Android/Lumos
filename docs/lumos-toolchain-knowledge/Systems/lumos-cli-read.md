@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
 summary: |-
+  KEY:[2026-08-25]doctor E4 連鎖待辦軟提醒([[Projects/連鎖佇列軟提醒_計劃]])——統計併 E2 帳本掃描迴圈順手收集;零判定帳本數+最老天數+損毀另列;全判定整段靜默;gov check-cascade;supersede 開單當下 stderr 白話指路(修法 A);[test:t_doctor_cascade_reminder]
   KEY:[2026-08-23]`git_last_change_dates(repo_root, vault)`——一次 git log 拿 vault 每檔最後改動日期(行程內快取;git 缺席回 {} fail-open)。是 about_code 過期判準的材料(計劃 [[Projects/固定席扇出降權_計劃]] #5):逐篇 83 次 5.3s vs 批次 0.22s;★必帶 -c core.quotepath=false★,vault 路徑帶中文目錄名,沒旗標整條路徑被八進位跳脫、表是空的且不報錯(翻紅釘實證連英文檔都撈不到)。尚未接進 impact,只是原語
   KEY:[2026-08-05]檢索考卷加 synonym 類(toolchain 4 題/landmark 3 題,查詢用別名期望命中帶 aliases 節點;檢索實跑 ground、單標註者、goldset 註記題集變更)——aliases 欄的貢獻自此每週考卷自動量;出題日 held 基線:toolchain ranked nDCG@5=0.789、landmark=0.840
   KEY:[2026-08-05 標籤收編]context 頭部攤出 type/status 以外全部 tag 家族(priority/scope/flag/risk…,`家族:值` 併入 meta 行)——寫給 AI 的分類資訊原本在進場主讀路徑隱形 [test:t_context_header_extra_tag_families];impact 合約軸 RISK·值分類(軸序 IRREVERSIBLE>INVARIANT>RISK) [test:t_impact_contract_risk_axis];★2026-08-24 pin-denoise-a-v4:RISK 類 indirect 不再保送必看——降入 JSON 頂層 lane 參考道(LUMOS_IMPACT_HARD_PIN ★2026-08-24 考卷轉正預設 1★,0 逃生)[test:t_impact_hard_pin_lane]★
@@ -75,6 +76,7 @@ verified_by:
   - "[[Verification/2026-08-05_標籤結構收編落地]]"
   - "[[Verification/2026-08-16_圖譜結構化查詢query落地]]"
   - "[[Verification/2026-08-22_狀態表過期偵測]]"
+  - "[[Verification/2026-08-25_連鎖佇列軟提醒落地]]"
 about_code:
   - scripts/lumos
 ---
