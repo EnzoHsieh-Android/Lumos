@@ -1,0 +1,78 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 1ff622c..3a856c4 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -436,30 +436,36 @@ def cmd_loop_rewrite(env, loop_id, successor, note):
+     rewrite 事件時補建)。寫 gate=design-loop kind=rewrite 事件到治理帳,note 機械帶血緣
+     (prev=舊編號;successor=新編號)——「連續兩次判重寫→強制攤人,不得三開」靠沿 note 鏈查,
+     本指令寫入前自動查一跳:若本編號自己就是某次 rewrite 的 successor,印強制攤人警告(advisory)。"""
+     if not successor or successor.strip() == loop_id.strip():
+         print("擋下:--successor 要給新開的迴圈編號,而且不能跟舊編號一樣——重寫=換新編號載新版,同號沒有「重寫」可言", file=sys.stderr)
+         return 2
+     # 血緣一跳查詢:這個編號是不是已經是上一次重寫的產物?
+     chain_prev = None
+     try:
+         import json as _j
++        import re as _re
+         gl = env.vault.parent / ".governance-log.jsonl"
++        # 邊界比對:successor=<id> 後面必須是分號或字串結尾——裸子字串會讓前綴編號互撞
++        # (successor=lf-a 誤中 successor=lf-a2;clf r1 主審 F1 實驗重現),偽造連續重寫警告。
++        _pat = _re.compile(r"successor=" + _re.escape(loop_id.strip()) + r"(;|$)")
+         if gl.exists():
+             for line in gl.read_text(encoding="utf-8").splitlines():
+                 try:
+                     o = _j.loads(line)
+                 except ValueError:
+                     continue
++                if not isinstance(o, dict):
++                    continue          # 非物件 JSON 行(壞帳)跳過,不炸整個指令
+                 if o.get("gate") == "design-loop" and o.get("kind") == "rewrite" \
+-                        and f"successor={loop_id.strip()}" in str(o.get("note", "")):
+-                    chain_prev = (o.get("nodes") or [None])[0]
++                        and _pat.search(str(o.get("note", ""))):
++                    chain_prev = (o.get("nodes") or [None])[0]   # 多筆時取最後一筆(帳序=時序,最近的血緣)
+     except OSError:
+         pass
+     lineage = f"prev={loop_id.strip()};successor={successor.strip()};{note or ''}".rstrip(";")
+     _loop_gov_mark(env, loop_id.strip(), "rewrite", lineage)
+     print(f"✓ 迴圈 {loop_id} 以「人裁整份重寫」收尾,入治理帳;新版由 {successor} 接手審。")
+     print("  在意的原因:重寫不重置攤人義務——這筆帳讓「gov --stats」的放行率統計不失真,也讓血緣可查。")
+     if chain_prev:
+         print(f"  ★這已是連續第二次判重寫(上一段血緣:{chain_prev} → {loop_id})——強制攤人,不得三開★")
+     print("  之後查血緣:")
+     print("    lumos gov --stats")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 7fc2277..80063ec 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3798,20 +3798,30 @@ def t_loop_rewrite_mark():
+     r1 = run(v, "loop", "rewrite", "lf-a", "--successor", "lf-b", "--note", "測試判重寫")
+     check("rewrite: rc0+白話收尾訊息", r1.returncode == 0 and "人裁整份重寫」收尾" in r1.stdout, r1.stdout)
+     gl = v.parent / ".governance-log.jsonl"
+     recs = [_json.loads(x) for x in gl.read_text(encoding="utf-8").splitlines() if x.strip()]
+     rw = [o for o in recs if o.get("gate") == "design-loop" and o.get("kind") == "rewrite"]
+     check("rewrite: 事件入帳+血緣 note 帶 prev 與 successor",
+           len(rw) == 1 and "prev=lf-a" in rw[0]["note"] and "successor=lf-b" in rw[0]["note"], str(rw))
+     r2 = run(v, "loop", "rewrite", "lf-b", "--successor", "lf-c", "--note", "又判重寫")
+     check("rewrite: 連續第二次→強制攤人警告", "連續第二次判重寫" in r2.stdout and "不得三開" in r2.stdout, r2.stdout)
+     check("rewrite: 同號 rc2", run(v, "loop", "rewrite", "lf-x", "--successor", "lf-x", expect_rc=2).returncode == 2, "")
++    # 前綴碰撞不得偽造血緣(clf r1 主審 F1:successor=lf-a 不可誤中 successor=lf-a2 的帳)
++    run(v, "loop", "rewrite", "pfx-src", "--successor", "pfx-a2", "--note", "鋪前綴")
++    r3 = run(v, "loop", "rewrite", "pfx-a", "--successor", "pfx-b", "--note", "全新編號")
++    check("rewrite: 前綴編號不誤判連續重寫", "連續第二次判重寫" not in r3.stdout, r3.stdout)
++    # 壞 JSON 行(非物件)不炸血緣查找
++    gl2 = v.parent / ".governance-log.jsonl"
++    with open(gl2, "a", encoding="utf-8") as f:
++        f.write('"just a string"\n[1,2]\n')
++    r4 = run(v, "loop", "rewrite", "pfx-c", "--successor", "pfx-d")
++    check("rewrite: 帳內非物件 JSON 行不炸", r4.returncode == 0, str(r4.returncode))
+     print("  ✓ t_loop_rewrite_mark")
+ 
+ 
+ def t_gov_stats_rewrite_bucket():
+     """d3(設計審收斂重定義 2026-08-25):rewrite 收尾獨立計數——只有 rewrite 的編號
+     不再悄悄掉出 conv/capped 兩桶讓放行率失真。"""
+     import shutil
+     gov = [
+         '{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"design-loop","kind":"converged","hard":false,"nodes":["L1"]}\n',
+         '{"ts":"2026-06-02T09:00:00","commit":"bbb","gate":"design-loop","kind":"rewrite","hard":false,"nodes":["L2"],"note":"prev=L2-v0"}\n',
