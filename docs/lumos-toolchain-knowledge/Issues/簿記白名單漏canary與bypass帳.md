@@ -17,3 +17,6 @@ summary: |-
 # 簿記白名單漏canary與bypass帳
 
 > 白話:審查記帳的檔案不在「簿記豁免」名單裡,於是「記帳」這個動作會讓「審過了」的留痕失效——自己咬自己。CI 上今天真的紅了一次。
+
+## 乾淨繞法(2026-08-26 再撞,實測驗過)
+根治=把 docs/.canary-log.jsonl 加進 `_BOOKKEEPING_FILES`(scripts/lumos:11315)——但那是 code 改動、要自己過 code-loop(死結套死結)。在根治前的正確推送順序:**先把 canary-log 連同 code/卷證一起 commit → 再跑 `code-loop pass`(此時 canary-log 已定稿在 pass 綁的那個 sha)→ 之後只 commit 白名單檔(governance-log/code-loop marker)→ push**。踩坑順序=pass 先、canary-log 後 commit → canary 那筆不在白名單 → pass 自失效。本次 code-batch3 收官即照繞法過關(re-pass 綁 canary-log 已入的 HEAD)。
