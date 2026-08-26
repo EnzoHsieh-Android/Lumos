@@ -31,6 +31,7 @@ summary: |-
   KEY:三道防污染(不可違反)——真代碼永不含(fix 錨真 diff file:line、canary hunk 不在真 diff)｜低耦合植入(canary 座標在真改動集外=pillar-1 機械前提)｜溯源排除(含間接聯想幻影,未顯式引用亦排;偏多排)
   KEY:PITFALL_CLASSES 四類名 ≡ difficulty.RISK_CLASSES、_PITFALL_BLACKLIST ≡ difficulty._BLACKLIST——漂移守衛落 test_autonomous_loop.py(toolchain-only、非 vendored);詞表/pattern 表自帶 scripts/lumos(difficulty.py 不 vendored)
   KEY:diff class 用代碼形態類軸(併發/效能/資源)非四業務類;pattern 去重疊(SELECT→效能 N+1、INSERT/UPDATE/DELETE→併發交易);過濾繼承 Check H 全套(skip .md/.txt/.rst+測試檔+註解行)
+  KEY:[2026-08-27 D2 裁]安全缺陷型鏡頭★刻意排除、非疏漏★——類軸只代碼形態(併發/效能/資源),不加對抗安全席。理由=單人私有 repo 非對抗威脅(IssueTrojanBench 66.5% 不適用);威脅=幻覺 agent 寫錯,歸正確性鏡頭+測試+signoff。★邊界=工具鏈吃不可信外部輸入(日報吸收管線 future 面)上線時重拉安全鏡頭★(decisions 有記)
   KEY:誠實天花板——pattern 提示器非偵測器(單行掃描,跨行語境小行窗啟發為限)｜canary 校準+溯源排除靠自律｜--check 只驗節存在不驗內容｜mutation 冒煙抽樣非覆蓋｜code-loop 少一道 G1(--spec 可選、G1 skip)｜事故語料進圖譜留 v2
   DEP:[[risk-tiered-review]](分級哲學延伸到 diff 層)｜[[convergence-evidence-gate]](gate --spec 改可選)｜[[lumos-refcheck]]｜doctor Check H(diff 掃描骨架)
   TEST:t_pitfalls_spec(9)+t_pitfalls_diff(截至 2026-08-21 為 12;★原記 11(2026-08-21 程式碼實證)★,含行號值+併發寫入)+TestPitfallsDrift(2,類名+黑名單)+t_loop_gate 案14翻契約+t_loop_gate_no_spec;當時 374 passed(★全量數字已漂,以 CI 為準★)
@@ -57,6 +58,12 @@ decisions:
     context: lint接線收口 [S2]:原裁定只存在 hook 註解;設計審 s2-f3 抓到「CI 兜底」誤導面後如實明文化
     why_chosen: 速度(pre-push 已 11 分鐘)+lint 告警屬審查品質面非擋推面;[F] 檢守宣告健康、pitfalls 帶 lint 屬手動加跑
     decided: 2026-08-26
+    valid: true
+  - content: 安全缺陷型審查鏡頭★刻意排除★(Enzo 2026-08-27 D2 裁):類軸只留代碼形態(併發/效能/資源),不加對抗性安全鏡頭。理由=單人私有 repo、非對抗威脅模型(IssueTrojanBench 66.5% 對抗基準不適用);真正的威脅=幻覺 agent 寫錯圖譜/碼,由既有正確性鏡頭+測試+人 signoff 覆蓋,非安全鏡頭。邊界/回頭條件=當工具鏈真的吃不可信外部輸入(日報吸收管線是已標的 future 不可信面)上線時,重新拉進安全鏡頭
+    id: d5
+    context: 調研 D2:兩家 skill 全文零 security、regex 類軸註解明寫排除安全、效能 2026-08-21 降建議級=無席能因安全缺陷判 major
+    why_chosen: 明文宣告排除比空白留著好——空白讓人以為漏了,明文+邊界讓下一個 session 知道是刻意的、何時該重新評估
+    decided: 2026-08-27
     valid: true
 related:
   - "[[Projects/impact-diff橋接_計劃]]"
