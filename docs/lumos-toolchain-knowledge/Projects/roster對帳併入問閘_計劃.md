@@ -5,12 +5,12 @@ summary: |-
   KEY:第 2 批接活⑥(v4,r2 七條再折後大幅瘦身)——[S1] 只掛 --disposal、只在 rid 為真 rN 時對帳;異常集合=明確列舉五種(external_missing/單家族/兼任/unknown/席數短缺),抑制四種常印診斷;hedge 刪「低共識」條件(無資料源);異常觸發寫 loop 目錄輕量留痕檔供兩季覆核;settle 誠實除外(記錄結構恆 round-less 無 rid 可對,明說做不到+Issue 觀察,不假裝覆蓋)
   KEY:★light 誤判實錘★:r1 單席冒 5 條 major,依鐵則升級 roster-merge-std 完整迴圈,乾淨輪不洗回
   DEP:[[Projects/建了沒人跑批次裁定_計劃]]
-status: doing
+status: done
 created: 2026-08-26
 updated: 2026-08-26
 tags:
   - type/project
-  - status/doing
+  - status/done
 ---
 
 # roster對帳併入問閘_計劃

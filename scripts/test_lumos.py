@@ -3822,6 +3822,46 @@ def t_loop_rewrite_mark():
     print("  ✓ t_loop_rewrite_mark")
 
 
+def t_disposal_roster_tail():
+    """roster對帳併入問閘 [S1]:問閘尾端異常才發聲。翻紅釘:拿掉 anomalies_only 抑制 → 第 3 條翻紅;
+    拿掉 __seqN 跳過 → 第 4 條翻紅。"""
+    import json as _j
+    vault = mkvault()
+    ldir = vault.parent / "governance" / "review-reports" / "code-tail"
+    ldir.mkdir(parents=True)
+    log = vault.parent / ".canary-log.jsonl"
+    def _rec(loop, rid=None, **kw):
+        r = {"ts": "2026-08-26T10:00:00+08:00", "kind": "none", "auditor": kw.get("auditor", "s1"),
+             "token": "CANARY-x", "note": "", "loop": loop, "severity": "minor", "findings": 0,
+             "tier": "standard", **({"round": rid} if rid else {})}
+        r.update(kw); return r
+    # 異常 fixture:真 rN、外家缺(code/standard 應派含外家 finder?→用 design/standard:外家 note-if-absent→單家族)
+    rows = [_rec("code-tail", "r1", auditor="s1", findings_set=["a"], folded_set=["a"], accepted_set=[])]
+    log.write_text("\n".join(_j.dumps(r) for r in rows) + "\n")
+    (ldir / "r1-dispatch.json").write_text(_j.dumps({"seats": [{"seat": "s1", "auditor": "sonnet"}]}))
+    spec = vault.parent / "spec.md"; spec.write_text("x")
+    import hashlib
+    sha = hashlib.sha256(spec.read_bytes()).hexdigest()
+    # 帶齊處置帳欄位讓 gate 可跑(report/snapshot 同檔充當)
+    rows = [_rec("code-tail", "r1", auditor="s1", findings_set=["a"], folded_set=["a"], accepted_set=[],
+                 report={"path": str(spec), "sha256": sha}, snapshot={"path": str(spec), "sha256": sha},
+                 result_sha256=sha, reviewed_sha256=sha)]
+    log.write_text("\n".join(_j.dumps(r) for r in rows) + "\n")
+    r = run(vault, "loop", "status", "code-tail", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
+    check("tail: 異常輪印轉述行(外家 finder 缺)", "[roster]" in r.stdout and ("external_missing" in r.stdout or "單家族" in r.stdout), r.stdout[-400:])
+    check("tail: 異常留痕檔多一行", (ldir / "roster-alerts.log").exists(), str(list(ldir.iterdir())))
+    check("tail: 摘要/診斷行被抑制(無「實派」字樣)", "實派" not in r.stdout, r.stdout[-300:])
+    # __seqN(round-less)fixture:零 roster 行
+    log2 = vault.parent / ".canary-log.jsonl"
+    rows2 = [_rec("code-tail2", None, auditor="s1", findings_set=["a"], folded_set=["a"], accepted_set=[],
+                  report={"path": str(spec), "sha256": sha}, snapshot={"path": str(spec), "sha256": sha},
+                  result_sha256=sha, reviewed_sha256=sha)]
+    log2.write_text("\n".join(_j.dumps(r) for r in rows2) + "\n")
+    r2 = run(vault, "loop", "status", "code-tail2", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
+    check("tail: __seqN 合成鍵零 roster 行", "[roster]" not in r2.stdout, r2.stdout[-300:])
+    print("  ✓ t_disposal_roster_tail")
+
+
 def t_doctor_lint_declaration():
     """lint接線收口 [S1]:doctor [F] 檢——宣告在 repo root、vault 在 docs/x-knowledge
     (=Landmark 形狀,釘 r2 d-f2「env.vault 直拼永遠讀不到」);無宣告跳過不擋、
@@ -22508,7 +22548,10 @@ def t_loop_status_roster_check():
     r1 = run(vault, *base, "--roster")
     check("status-roster: rc 與不帶 --roster 完全一致(advisory 釘)", r0.returncode == r1.returncode,
           f"{r0.returncode} vs {r1.returncode}")
-    check("status-roster: 不帶 --roster 輸出零 diff(無 [roster] 行)", "[roster]" not in r0.stdout, r0.stdout[:200])
+    # v4.1 同帶跳過語意(roster對帳併入問閘 [S2]):不帶旗標時 disposal 尾端「異常才發聲」——
+    # 本 fixture 異常(外家缺),尾端可出現 [roster] 行;同帶時全史照印、尾端不重複
+    check("status-roster: 同帶時尾端不重複(單家族/外缺行不因同帶翻倍)",
+          r1.stdout.count("external_missing") <= max(1, r0.stdout.count("external_missing")), r1.stdout[:300])
     check("status-roster: 三形狀共解析 4 席(claude 桶足,含架構對齊)", "實派 4 席" in r1.stdout and "claude 4" in r1.stdout, r1.stdout[:600])
     check("status-roster: note-if-absent 外家缺→單家族措辭且不算 shortfall",
           "單家族" in r1.stdout and "seat_shortfall" not in r1.stdout, r1.stdout[:800])
@@ -22523,7 +22566,7 @@ def t_loop_status_roster_check():
     (repo / "governance" / "review-reports" / C / "r1-dispatch-bad.json").write_text("{broken", encoding="utf-8")
     rc1 = run(vault, "loop", "status", C, "--disposal", "--spec", str(spec), "--repo", str(repo), "--roster")
     check("status-roster: 外家桶空→external_missing(溢編總數夠也喊)", "external_missing" in rc1.stdout, rc1.stdout[:800])
-    check("status-roster: required-fail-closed 措辭(轉述不阻斷)", "fail-closed 紀律未滿足" in rc1.stdout, rc1.stdout[:800])
+    check("status-roster: required-fail-closed 措辭(轉述不裁決)", "僅轉述編制對照,不裁決" in rc1.stdout, rc1.stdout[:800])
     check("status-roster: conditional 席印條件行", "條件" in rc1.stdout, rc1.stdout[:800])
     # 兼任:同名外家佔 2 席
     C2 = "code-dual"

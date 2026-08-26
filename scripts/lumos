@@ -4751,7 +4751,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
         _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
         return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
-                                     bad_linenos=bad_linenos, env=env)
+                                     bad_linenos=bad_linenos, env=env, roster_flag=roster, repo=repo)
     if not panel and n_round > 0:
         print("擋下:這個編號的記錄帶了輪次(多人審格式),但你沒加 --panel;不加的話一輪裡 W 個人的記錄會被當成 W 輪,所以不算",
               file=sys.stderr)
@@ -5043,38 +5043,48 @@ def _roster_dispatch_entries(loop_dir, rid):
     return auditors, skipped
 
 
-def _roster_observe(env, loop_id, rounds, repo):
+def _roster_observe(env, loop_id, rounds, repo, only_rid=None, anomalies_only=False):
     """loop status --roster 觀測段(advisory 恆不影響 rc):應派(_TIER_ROSTER)vs 實派(dispatch 快照)
-    逐輪分桶對帳。落點=cmd_loop_status 入口、各模式分支 early-return 之前(四模式皆吃得到)。"""
+    逐輪分桶對帳。落點=cmd_loop_status 入口、各模式分支 early-return 之前(四模式皆吃得到)。
+    roster對帳併入問閘 [S1]:only_rid=只對這一輪(同時抑制內部 dispatch glob 補漏——問閘尾端用);
+    anomalies_only=只印異常六種(external_missing/單家族/真兼任/命名歧義/unknown 降級/shortfall),
+    抑制摘要與診斷四種;回傳本次印出的異常種類清單(留痕用)。同一實作服務兩種呼叫,禁抄改。"""
+    anomalies = []
+    def _quiet(msg):
+        if not anomalies_only:
+            print(msg)
     kind = _roster_kind(loop_id)
     if kind is None:
-        print(f"[roster] {loop_id}:看不出是設計審還是代碼審(名稱 code 開頭但不是 code- 格式),跳過派工對帳")
-        return
+        _quiet(f"[roster] {loop_id}:看不出是設計審還是代碼審(名稱 code 開頭但不是 code- 格式),跳過派工對帳")
+        return anomalies
     tier = next((r.get("tier") for r in rounds if r.get("tier")), None)
-    print(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'}")
+    _quiet(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'}")
     if tier is None:
-        print("[roster] 這個編號沒指定過分級(舊格式或還沒記錄),沒有編制表可以對")
-        return
+        _quiet("[roster] 這個編號沒指定過分級(舊格式或還沒記錄),沒有編制表可以對")
+        return anomalies
     entry = _TIER_ROSTER.get((kind, tier))
     if entry is None:
-        print(f"[roster] 無編制宣告:{kind}/{tier} 這個組合沒定義該派誰,跳過對帳")
-        return
+        _quiet(f"[roster] 無編制宣告:{kind}/{tier} 這個組合沒定義該派誰,跳過對帳")
+        return anomalies
     root = Path(repo).resolve() if repo else _vault_repo_root(env)
     loop_dir = root / "governance" / "review-reports" / loop_id
-    rids = []
-    for r in rounds:
-        rid = r.get("round")
-        if rid and rid not in rids:
-            rids.append(rid)
-    if loop_dir.is_dir():
-        import re as _re
-        for f in sorted(loop_dir.glob("*-dispatch*.json")):
-            m = _re.match(r"^(r\d+)-dispatch", f.name)
-            if m and m.group(1) not in rids:
-                rids.append(m.group(1))
+    if only_rid is not None:
+        rids = [only_rid]   # 問閘當輪:不掃 log、不 glob 補漏(std-r1 s1-f1)
+    else:
+        rids = []
+        for r in rounds:
+            rid = r.get("round")
+            if rid and rid not in rids:
+                rids.append(rid)
+        if loop_dir.is_dir():
+            import re as _re
+            for f in sorted(loop_dir.glob("*-dispatch*.json")):
+                m = _re.match(r"^(r\d+)-dispatch", f.name)
+                if m and m.group(1) not in rids:
+                    rids.append(m.group(1))
     if not rids:
-        print("[roster] 沒有輪次記錄也沒有派工快照,沒東西可對")
-        return
+        _quiet("[roster] 沒有輪次記錄也沒有派工快照,沒東西可對")
+        return anomalies
     seats = entry["seats"]
     req_c = [s for s in seats if s["requirement"] in ("required", "required-fail-closed") and s["family"] == "claude"]
     req_e = [s for s in seats if s["requirement"] in ("required", "required-fail-closed") and s["family"] == "external"]
@@ -5082,7 +5092,7 @@ def _roster_observe(env, loop_id, rounds, repo):
     for rid in rids:
         auditors, _skipped = _roster_dispatch_entries(loop_dir, rid) if loop_dir.is_dir() else ([], 0)
         if not auditors:
-            print(f"[roster] {rid}:沒有派工快照可對(舊記錄或還沒寫入)")
+            _quiet(f"[roster] {rid}:沒有派工快照可對(舊記錄或還沒寫入)")
             continue
         fams = [(a, *_roster_family(a)) for a in auditors]
         n_c = sum(1 for _, f, _d in fams if f == "claude")
@@ -5090,30 +5100,37 @@ def _roster_observe(env, loop_id, rounds, repo):
         unks = [a for a, f, _d in fams if f == "unknown"]
         duals = [a for a, _f, d in fams if d]
         hedge = f"可能缺(另有 {len(unks)} 席家族無法辨識)" if unks else "缺"
-        print(f"[roster] {rid}: 實派 {len(auditors)} 席(claude {n_c}/external {len(exts)}/unknown {len(unks)})"
-              f";應派 required claude {len(req_c)}+external {len(req_e)}")
+        _quiet(f"[roster] {rid}: 實派 {len(auditors)} 席(claude {n_c}/external {len(exts)}/unknown {len(unks)})"
+               f";應派 required claude {len(req_c)}+external {len(req_e)}")
         if len(exts) < len(req_e):
             fc = any(s["requirement"] == "required-fail-closed" for s in req_e)
             msg = f"[roster] {rid}:external_missing——外部審查員{hedge}不夠(實際 {len(exts)} 席,應有 {len(req_e)} 席)"
             if fc:
-                msg += ";這席規定缺席就不能放行,fail-closed 紀律未滿足(這裡只轉述,不擋)"
-            print(msg)
+                msg += ";此席編制為 fail-closed(本行僅轉述編制對照,不裁決;處置見 code-loop skill)"
+            print(msg); anomalies.append("external_missing")
         if n_c < len(req_c):
             print(f"[roster] {rid}:seat_shortfall——claude 審查員{hedge}不夠(實際 {n_c} 席,應有 {len(req_c)} 席)")
+            anomalies.append("seat_shortfall")
         if len(req_e) >= 2:
             from collections import Counter as _Counter
             for name, cnt in _Counter(exts).items():
                 if cnt >= 2:
-                    print(f"[roster] {rid}:提醒,外部審查員疑似一人兼任多席({cnt} 席都叫 {name})")
+                    print(f"[roster] {rid}:真兼任——外部審查員疑似一人兼任多席({cnt} 席都叫 {name})")
+                    anomalies.append("真兼任")
         if nia and not exts:
-            print(f"[roster] {rid}:單家族(只有同一家模型在審),收斂結論要講保守一點(選配席缺席不算短少)")
+            print(f"[roster] {rid}:單家族(只有同一家模型在審)——外家席本輪未派(編制={nia[0]['requirement']};"
+                  f"辯方是否該派屬編排當場判斷,本行僅轉述編制對照,不裁決),收斂結論要講保守一點")
+            anomalies.append("單家族")
         for s in seats:
             if s["requirement"] == "conditional":
-                print(f"[roster] {rid}:{s['slot']} 是條件席(條件:{s.get('note', '?')}),該不該派由編排者自己對")
+                _quiet(f"[roster] {rid}:{s['slot']} 是條件席(條件:{s.get('note', '?')}),該不該派由編排者自己對")
         for a in unks:
             print(f"[roster] {rid}:看不出 {a} 是哪一家的審查員,列出但不判定")
+            anomalies.append("unknown")
         for a in duals:
-            print(f"[roster] {rid}:提醒,{a} 的名字同時像兩家,先當成外部審查員算")
+            print(f"[roster] {rid}:命名歧義——{a} 的名字同時像兩家,先當成外部審查員算")
+            anomalies.append("命名歧義")
+    return anomalies
 
 
 def _roster_next_payload(loop_id, eff_tier):
@@ -10071,7 +10088,7 @@ def _quote_rows(rtext, stext):
     return rows
 
 
-def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None):
+def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster_flag=False, repo=None):
     """[T4] 處置閘(design-loop重設計 三):四條合取,全部讀側可重算——
     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
@@ -10266,6 +10283,28 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
           + ("——missed 席 findings ★不作廢★(d4),供跨輪累積帳" if mi else ""))
     for i, r in enumerate(latest, 1):
         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
+
+    def _roster_tail():
+        # roster對帳併入問閘 [S1]:問閘當輪異常轉述(異常才發聲;advisory 恆不動 rc)。
+        # 三個提前 return 2 路(G3 spec 讀不到/一輪多處置帳/findings 壞值)刻意不掛——
+        # 帳面異常優先於席位對帳(r3 e-f2)。roster_flag 同帶=全史已印,尾端跳過(r2 d-f1)。
+        if roster_flag or str(rid).startswith("__"):
+            return   # __seqN 合成鍵:round-less 無派工快照可對,沉默勝過錯誤示警(std-r1 s1-f2)
+        try:
+            kinds = _roster_observe(env, loop_id, rounds, repo, only_rid=rid, anomalies_only=True)
+            if kinds:
+                # 留痕([S1c]):收集完、印完才一次性寫;寫入自身再包一層,失敗只損留痕不吞輸出(r3 e-f3)
+                try:
+                    _ldir = (Path(repo).resolve() if repo else _vault_repo_root(env)) / "governance" / "review-reports" / loop_id
+                    _ldir.mkdir(parents=True, exist_ok=True)
+                    import datetime as _dt
+                    with open(_ldir / "roster-alerts.log", "a", encoding="utf-8") as _f:
+                        _f.write(f"{_dt.date.today().isoformat()} {rid} {','.join(kinds)}\n")
+                except OSError as _e:
+                    print(f"[roster] 異常留痕寫入失敗({_e})——轉述已印,只是兩季覆核帳少這筆")
+        except Exception as _e:
+            print(f"[roster] 席位對帳失敗(降級不擋):{_e}")
+    _roster_tail()
     if fails:
         print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
@@ -15474,7 +15513,9 @@ def main():
                     help="M1包 席數下限:判定輪相異 auditor 數<N 即 FAIL(同席重複 append 不計;不帶=行為不變)")
     ls.add_argument("--roster", action="store_true",
                     help="[派工編制資料化] 編制對帳觀測(advisory 恆不影響 rc):應派(_TIER_ROSTER)vs 實派"
-                         "(rN-dispatch*.json)逐輪分桶比;與所有模式相容,建議配 --repo")
+                         "(rN-dispatch*.json)逐輪分桶比;與所有模式相容,建議配 --repo。"
+                         "全史觀測/回放用——問閘 --disposal 偵測到席位異常會自動轉述當輪,"
+                         "同帶本旗標時尾端不重複(詳 Projects/roster對帳併入問閘_計劃)")
     lc = lsub.add_parser("compress", help="[S2] 結構化壓縮:長跑上下文規則式三欄(白名單壓不掉/證據/未結)")
     lc.add_argument("compress_file", metavar="檔")
     lc.add_argument("--json", dest="compress_json", action="store_true")
