@@ -13,6 +13,9 @@ revalidate_when: 改 ANCHOR_FILES 列舉;改 cmd_anchor_* 邏輯;改 pre-push/au
 summary: |-
   TEST:t_anchor 14 checks 全綠(無 baseline rc0 警示/缺 note rc2/approve 建檔 5 錨點+note/verify rc0/gov-log anchor-approve 事件/lumos gov 顯示 note/改檔 rc1 列名/--json 精確/缺檔 rc1/重簽容缺 4 錨點/repo 解析 rc2);308 passed 0 failed 無回歸
   VERIFY:真 repo 實錨自測——初始 approve 5 錨點+verify rc0(baseline 含接線後 pre-push 自身 hash,審查員實算 sha256 對照一致);pre-push 直呼 smoke(乾淨 rc0、篡改 post-commit rc1 擋下、還原乾淨)
+decision_refs_ai:
+  - "Systems/anchor-integrity.md#d1"
+  - "Systems/anchor-integrity.md#d2"
 ---
 # 2026-07-02 anchor-integrity 驗證
 

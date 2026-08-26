@@ -18,6 +18,8 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+decision_refs_ai:
+  - "Projects/多平台合約測試綁定_計劃.md#d1"
 ---
 # 驗證：多平台合約測試綁定
 

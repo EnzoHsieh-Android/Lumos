@@ -13,6 +13,9 @@ revalidate_when: 改 cmd_refcheck 抽取/核對/rc 邏輯;改 Check P 抽取規�
 summary: |-
   TEST:t_refcheck 14 checks 全綠(missing/ok+excerpt 精確比對/line_out_of_range/範圍 2-4 首尾行/同檔多行號 4 claims 不塌/目錄型 dir 註記/url·非頂層·無斜線·glob·fenced 全跳/統計欄位/rc 0·1·2/人讀版);294 passed 0 failed 無回歸(doctor Check P 行為不變)
   VERIFY:真 spec smoke——refcheck docs/design/2026-07-02-spec-refcheck.md 座標核對可跑
+decision_refs_ai:
+  - "Systems/lumos-refcheck.md#d1"
+  - "Systems/lumos-refcheck.md#d2"
 ---
 # 2026-07-02 lumos-refcheck 驗證
 

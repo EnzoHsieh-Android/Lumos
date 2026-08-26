@@ -15,6 +15,8 @@ summary: |-
   TEST:lumos fold-check <path> + design-loop SKILL.md step7 實作完成,528 passed 0 failed(branch feat/fold-check,TDD 5 task + opus 終審)
   VERIFY:folded-drift 機械守衛落地——鏡像段列舉+value-drift(全文域同識別詞不同值)+reverse-omission(高訊號 token 降噪 237→24);掃描域排除審計段/placeholder/FENCE;無 frontmatter 檔不 crash
   KEY:終極 dogfood——fold-check 檢查自己設計節點=2 value-drift(自指範例)+5 reverse-omission(高訊號),可解釋;實作過程 T2-C1(§/min 假陽 pattern)/T4-Critical(跨 fence backtick)/T5 降噪/終審 fm_lines None guard 皆真機修正
+decision_refs_ai:
+  - "Projects/design-loop折入守衛_計劃.md#d1"
 ---
 # 2026-07-05 design-loop 折入守衛 驗證
 
