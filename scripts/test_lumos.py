@@ -23539,6 +23539,8 @@ def t_dref_asymmetric_trust_e2_e3():
     check("promote 後正欄(human)有該 ref", "Target.md#d1" in lr.stdout, lr.stdout)
     lr2 = run(v, "decision-refs", "list", "Verification/V", "--by", "ai")
     check("promote 後 _ai 欄無該 ref", "Target.md#d1" not in lr2.stdout, lr2.stdout)
+    # arch-f5:promote 掉最後一條 _ai → 不留裸 decision_refs_ai: 鍵(YAML null 比沒鍵更糟)
+    check("promote 掉最後一條 _ai 不留裸鍵", "decision_refs_ai:" not in read(src), read(src))
 
 
 def t_dref_promote_coverage_advisory():
@@ -23572,6 +23574,17 @@ def t_dref_crlf_and_error_protocol():
     check("s1-f1:CRLF 目標節點候選不靜默消失", "#d1" in r.stdout, r.stdout[:300])
     r = run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d1")
     check("s1-f1:CRLF 節點合法決策不被誤判 dangling", r.returncode == 0, r.stderr[:200])
+
+
+def t_dref_promote_empty_key_cleanup():
+    """[arch-f5] promote 掉節點唯一一條 _ai 不留裸 decision_refs_ai: 鍵(YAML null 比沒鍵更糟)。
+    翻紅釘:拔 promote _ai 清空鍵邏輯 這條紅。"""
+    v, tgt, src = _mk_dref_vault()
+    run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d1", expect_rc=0)
+    check("前置:add-ai 後有 decision_refs_ai 欄", "decision_refs_ai:" in read(src), read(src))
+    run(v, "decision-refs", "promote", "Verification/V", "Systems/Target.md#d1", expect_rc=0)
+    check("promote 掉唯一 _ai 不留裸鍵", "decision_refs_ai:" not in read(src), read(src))
+    check("promote 後正欄有 d1", "Systems/Target.md#d1" in read(src), read(src))
 
 if __name__ == "__main__":
     sys.exit(main())
