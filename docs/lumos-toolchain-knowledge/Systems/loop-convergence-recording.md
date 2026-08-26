@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-14
-self_audit: sonnet/2026-08-21
+self_audit: sonnet/2026-08-26
 about_code_stamp: batch-2026-08-23/2026-08-23/f2d96de56d23
 tags:
   - type/system
@@ -99,7 +99,7 @@ lumos canary record caught|missed|none --loop <id> --severity clean|minor|major|
 
 ## 已知限制(誠實天花板,兩層)
 1. **完整性**:收斂只證明「連 K 輪醒著的審計員沒找到 blocker/major」,**不證明沒有更深問題**。完整性靠多輪+多視角的 loop 本身,不靠把門檻調嚴。
-2. **整合性**:`severity` 自報、無寫入端驗證 → CONVERGED 是「忠實記錄下、可重算的綠燈」,非防竄改正確性證明。前提是「編排者忠實轉錄審計員判決」——跟 canary 同一個沒閉合的迴歸,較難自欺但**不是 tamper-proof**。
+2. **整合性**:`severity` ★2026-08-26 起有寫側機械驗證(報告宣告行↔帳面,低報拒帳;見摘要 KEY)★——原「自報、無寫入端驗證」已拆一半;殘餘=報告與帳同出編排者之手,擋疏忽不擋共謀,CONVERGED 仍非防竄改正確性證明、**不是 tamper-proof**。
 → 定位:可觀測性+摩擦+一個地板,**不是 oracle**;對無人看顧 loop 夠用,對刻意作弊不設防(非目標)。
 
 ## 相關

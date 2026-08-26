@@ -3,7 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-14
-self_audit: sonnet/2026-08-21
+self_audit: sonnet/2026-08-26
 about_code_stamp: batch-2026-08-23/2026-08-23/8d731184d4dd
 tags:
   - type/system
@@ -120,7 +120,7 @@ about_code:
 - **連 2 次漏抓**(canary-log 最近 2 筆都 missed;中間一筆 caught 即重置)→ 升級:sonnet→opus +(soft、人工)切小 spec 各自開 loop。
 - **max cap = 6 筆 record**:到頂未收斂 → 停、攤給人、記「達 cap 未收斂」,別無限燒。
 - **硬閘是紀律非技術鎖**:lumos 擋不住「不跑就實作」(同 pre-commit `--no-verify` 後門),靠 Claude 記得調用 + 誠實 + cap/留痕事後可查。**trivial 改動**(typo/一行/純機械)可跳,但寫一句為什麼跳。
-- **誠實天花板**(收斂後務必向人提醒):① 完整性 —— 收斂只證「連 2 輪醒著的審計員沒找到 blocker/major」,不證沒更深問題;② 整合性 —— canary-caught／severity／誤判判定皆由植入者自判、無外部檢查,是**沒閉合的迴歸**,loop 是可觀測+摩擦+地板,**不是 oracle**。
+- **誠實天花板**(收斂後務必向人提醒):① 完整性 —— 收斂只證「連 2 輪醒著的審計員沒找到 blocker/major」,不證沒更深問題;② 整合性 —— canary-caught／誤判判定由植入者自判;severity ★2026-08-26 起有寫側機械驗證(低報拒帳,擋疏忽不擋共謀,詳 [[Systems/loop-convergence-recording]])★,其餘仍無外部檢查,是**沒閉合的迴歸**,loop 是可觀測+摩擦+地板,**不是 oracle**。
 
 ## 已知限制(v1 YAGNI)
 - 不做:lumos spawn agent、圖譜自足性審計 loop(v1 只設計/spec)、自動 canary 生成、改 brainstorming/writing-plans skill 本體。
