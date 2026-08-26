@@ -23435,5 +23435,110 @@ def t_loop_replay_freeze_and_golden():
     check("replay:panel 舊制形狀 rc2 指路 --gate --panel", r.returncode == 2 and "--panel" in r.stderr,
           f"rc={r.returncode} {r.stderr[:200]}")
 
+
+def _mk_dref_vault():
+    """T3 dref fixture:一個帶決策的目標節點 + 一個 typed 邊指向它的來源節點。"""
+    v = mkvault()
+    tgt = write(v, "Systems/Target.md", "type: system\nstatus: done")
+    run(v, "decision-add", "Target", "甲決策內容夠長給人讀", "--decided", "2026-07-15", expect_rc=0)
+    run(v, "decision-add", "Target", "乙決策也夠長", "--decided", "2026-07-15", expect_rc=0)
+    # 來源節點 related 指向 Target
+    src = write(v, "Verification/V.md", "type: verification\nstatus: pass\nrelated:\n  - \"[[Systems/Target]]\"")
+    return v, tgt, src
+
+
+def t_dref_backlog_setdiff():
+    """[V1] backlog=候選集−已填≠空;補齊後退出;omitted_all_no_id 計數。"""
+    import json as _j
+    v, tgt, src = _mk_dref_vault()
+    r = run(v, "decision-refs", "backlog", "--json")
+    d = _j.loads(r.stdout)
+    nodes = [x["node"] for x in d["backlog"]]
+    check("V1 backlog 列出有未填候選的來源節點", any("V.md" in n for n in nodes), r.stdout[:300])
+    row = [x for x in d["backlog"] if "V.md" in x["node"]][0]
+    check("V1 未填 2/候選 2", row["unfilled"] == 2 and row["candidates"] == 2, str(row))
+    # 補一條 → 還剩 1,仍列(集合差非空,非「兩欄皆空」才列)
+    run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d1", expect_rc=0)
+    d2 = _j.loads(run(v, "decision-refs", "backlog", "--json").stdout)
+    row2 = [x for x in d2["backlog"] if "V.md" in x["node"]]
+    check("V1 補一條後仍列(未填 1)", row2 and row2[0]["unfilled"] == 1, str(d2))
+    # 補齊兩條 → 退出 backlog
+    run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d2", expect_rc=0)
+    d3 = _j.loads(run(v, "decision-refs", "backlog", "--json").stdout)
+    check("V1 補齊後退出 backlog", not any("V.md" in x["node"] for x in d3["backlog"]), str(d3))
+
+
+def t_dref_add_ai_validation_idempotent():
+    """[V3] 存在性驗證/dangling 拒/冪等/簡寫等價/已在正欄 no-op。"""
+    v, tgt, src = _mk_dref_vault()
+    r = run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d1")
+    check("V3 add-ai rc0", r.returncode == 0, r.stderr)
+    check("V3 落 _ai 欄", "decision_refs_ai" in read(src), read(src))
+    r = run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d1")
+    check("V3 冪等 no-op", r.returncode == 0 and "冪等" in r.stdout, r.stdout)
+    # 簡寫等價(Target=同節點)
+    r = run(v, "decision-refs", "add-ai", "Verification/V", "Target#d1")
+    check("V3 簡寫等價識別為已在", "已在" in r.stdout, r.stdout)
+    r = run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d99")
+    check("V3 dangling 拒 rc2", r.returncode == 2 and "dangling" in r.stderr, r.stderr[:150])
+    r = run(v, "decision-refs", "add-ai", "Verification/V", "壞格式無井號")
+    check("V3 壞格式 rc2", r.returncode == 2, r.stderr[:120])
+
+
+def t_dref_promote_prune_asymmetric():
+    """[V6/V5] promote _ai→正欄+雙欄計數+dangling 拒+冪等;prune 正規化定位+真移除 vs 本來不在。"""
+    v, tgt, src = _mk_dref_vault()
+    run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d1", expect_rc=0)
+    # 兩欄都無 → promote rc2
+    r = run(v, "decision-refs", "promote", "Verification/V", "Systems/Target.md#d2")
+    check("V6 兩欄都無 promote rc2", r.returncode == 2, r.stderr[:120])
+    # promote d1
+    r = run(v, "decision-refs", "promote", "Verification/V", "Systems/Target.md#d1")
+    check("V6 promote rc0", r.returncode == 0, r.stderr)
+    txt = read(src)
+    check("V6 搬正欄:decision_refs 有 d1、_ai 清空該條",
+          "decision_refs:" in txt and txt.count("Target.md#d1") == 1, txt)
+    # 冪等:再 promote → no-op
+    r = run(v, "decision-refs", "promote", "Verification/V", "Systems/Target.md#d1")
+    check("V6 冪等 no-op(已在正欄)", r.returncode == 0 and "冪等" in r.stdout, r.stdout)
+    # ★鑑別 count-check★:_ai 存正規形、用簡寫 promote——移除若用逐字會漏刪 _ai、
+    # count-check(正欄恰一/_ai 零)會 raise rc2;正確(正規化移除)則 rc0 且 _ai 空
+    run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d2", expect_rc=0)
+    r = run(v, "decision-refs", "promote", "Verification/V", "Target#d2")   # 簡寫 promote
+    check("V6 簡寫 promote rc0(正規化移除 _ai)", r.returncode == 0, r.stderr[:150])
+    la = run(v, "decision-refs", "list", "Verification/V", "--by", "ai")
+    check("V6 簡寫 promote 後 _ai 無殘留 d2(count-check 守衛)", "Target.md#d2" not in la.stdout, la.stdout)
+    # dangling promote 拒
+    r = run(v, "decision-refs", "promote", "Verification/V", "Systems/Target.md#d99")
+    check("V6 dangling promote rc2", r.returncode == 2 and "dangling" in r.stderr, r.stderr[:120])
+    # prune 正欄(簡寫定位)
+    r = run(v, "decision-refs", "prune", "Verification/V", "Target#d1")
+    check("V6 prune 簡寫正規化定位真移除", "已移除" in r.stdout, r.stdout)
+    check("V6 prune 後正欄空", "Target.md#d1" not in read(src), read(src))
+    # prune 本來不在(d1 已在上面 prune 掉、d2 已 promote 又還在正欄——換一個真的沒填過的驗)
+    run(v, "decision-refs", "prune", "Verification/V", "Systems/Target.md#d2", expect_rc=0)  # 清掉 d2
+    r = run(v, "decision-refs", "prune", "Verification/V", "Systems/Target.md#d1")
+    check("V6 prune 本來不在=不同訊息", "本來就不在" in r.stdout, r.stdout)
+
+
+def t_dref_asymmetric_trust_e2_e3():
+    """★不對稱信任★:_ai 的 ref 對 E3 firing 生效、抑制不了 E2(結構:E2 只讀正欄)。"""
+    v, tgt, src = _mk_dref_vault()
+    # 翻案 Target#d1 → 讓 V(related→Target,updated 早於 ended)成 E2 落後邊候選
+    run(v, "decision-supersede", "Target", "甲決策內容夠長給人讀", "--by", "改用丙", expect_rc=0)
+    # add-ai 指到 d1(翻案那條)進 _ai
+    run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d1", expect_rc=0)
+    # E2 只讀正欄:_ai 有 ref 不影響 E2(結構保證)——doctor 不因 _ai 而改變 E2 抑制
+    import subprocess as _sp
+    r = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "doctor", "--verbose"],
+                capture_output=True, text=True)
+    check("不對稱:_ai 有 ref 時 doctor 不崩(E2 讀側不碰 _ai)", r.returncode in (0, 1), r.stderr[:200])
+    # promote 後才進正欄(用 list --by human 驗,不靠檔案 split)
+    run(v, "decision-refs", "promote", "Verification/V", "Systems/Target.md#d1", expect_rc=0)
+    lr = run(v, "decision-refs", "list", "Verification/V", "--by", "human")
+    check("promote 後正欄(human)有該 ref", "Target.md#d1" in lr.stdout, lr.stdout)
+    lr2 = run(v, "decision-refs", "list", "Verification/V", "--by", "ai")
+    check("promote 後 _ai 欄無該 ref", "Target.md#d1" not in lr2.stdout, lr2.stdout)
+
 if __name__ == "__main__":
     sys.exit(main())

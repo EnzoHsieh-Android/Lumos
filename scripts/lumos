@@ -8840,6 +8840,343 @@ def _append_decision_ref(env, rel, field, ref):
     return True
 
 
+
+# ═══════════ decision_refs 自動養成 T3(dref-v4;六原語,乾淨雙欄)═══════════
+# 設計:Projects/decision_refs自動養成_實作計畫.md ★v4 現行 spec★(dref-v4 三輪收斂)。
+# 不對稱信任(T1 已建):E2 抑制只讀 decision_refs 正欄、E3 firing 讀聯集;此六原語不動 E2/E3 讀側。
+
+_DREF_E2_FIELDS = ("verified_by", "plan_refs")   # E2 typed_in 實際抑制範圍(排 related,對齊 scripts:1236)
+
+
+def _dref_parse(ref):
+    """ref '<節點>#dN' → (節點字面, did) 或 None(格式不合)。"""
+    m = re.fullmatch(r"(.+?)#(d\d+)", str(ref).strip())
+    return (m.group(1), m.group(2)) if m else None
+
+
+def _dref_norm(env, ref):
+    """正規化 tuple (resolve(節點), did);節點解不到或格式不合→None。"""
+    pr = _dref_parse(ref)
+    if not pr:
+        return None
+    node = env.resolve(pr[0])
+    return (node, pr[1]) if node else None
+
+
+def _dref_same(env, a, b):
+    """兩 ref 是否同一決策:正規化 tuple 相等。★空-did 守衛★(r3 d-f5:did 任一空即不等,
+    照抄 E2 _hits 的 `did and` 防護——否則兩筆無 id 決策 ""=="" 誤併)。"""
+    na, nb = _dref_norm(env, a), _dref_norm(env, b)
+    if not na or not nb:
+        return False
+    return na[1] and nb[1] and na == nb
+
+
+def _node_decisions(env, rel):
+    """回某節點的 decisions list(parse_decisions on its fm)。讀不到→[]。"""
+    try:
+        path = env.vault / rel
+        lines, _s, e_fm = load_raw_for_edit(path)
+        return parse_decisions(lines[1:e_fm])
+    except (OSError, ValueError):
+        return []
+
+
+def _dref_filled(env, rel):
+    """已填集合=decision_refs ∪ decision_refs_ai 的正規化 tuple(略去解不到的)。"""
+    n = env.notes.get(rel)
+    if not n:
+        return set()
+    out = set()
+    for fld in ("decision_refs", "decision_refs_ai"):
+        for r in as_list(n.fields.get(fld)):
+            nn = _dref_norm(env, r)
+            if nn and nn[1]:
+                out.add(nn)
+    return out
+
+
+def _dref_candidates(env, rel, tidx):
+    """★共用候選產生函式★(backlog/candidates 同口徑,r1 ext-f2)。
+    回 (cands, skipped_no_id):cands=[(target_rel, did, content, valid)],三具名邊 fwd 解到的
+    節點的所有決策(含已翻案=E3 要抓),只列有 id;無 id 計數。正規化元素=(target_rel, did)。"""
+    cands, skipped = [], 0
+    fwd = tidx["fwd"].get(rel, {})
+    seen = set()
+    for etype in TYPED_EDGE_FIELDS:
+        for trel in fwd.get(etype, []):
+            for d in _node_decisions(env, trel):
+                did = str(d.get("id", "")).strip()
+                if not did:
+                    skipped += 1
+                    continue
+                key = (trel, did)
+                if key in seen:
+                    continue
+                seen.add(key)
+                cands.append((trel, did, first_line(str(d.get("content", "")), 60),
+                              d.get("valid", True)))
+    return cands, skipped
+
+
+def cmd_dref_backlog(env, as_json=False):
+    """[V1] 列該跑 suggest 的節點:候選集 − 已填 ≠ 空(正規化 tuple 集合差)。"""
+    import json as _j
+    tidx = build_typed_index(env)
+    rows, omitted_all_no_id = [], 0
+    for rel in sorted(env.notes):
+        cands, skipped = _dref_candidates(env, rel, tidx)
+        if not cands:
+            if skipped:
+                omitted_all_no_id += 1
+            continue
+        cand_set = {(c[0], c[1]) for c in cands}
+        filled = _dref_filled(env, rel)
+        unfilled = cand_set - filled
+        if unfilled:
+            rows.append({"node": rel, "unfilled": len(unfilled), "candidates": len(cand_set)})
+    if as_json:
+        print(_j.dumps({"backlog": rows, "omitted_all_no_id": omitted_all_no_id}, ensure_ascii=False))
+    else:
+        if not rows:
+            print("backlog 空:結構可達的候選都已填(或無候選)")
+        for r in rows:
+            print(f"  {r['node']}  未填 {r['unfilled']}/{r['candidates']}")
+        if omitted_all_no_id:
+            print(f"  (另有 {omitted_all_no_id} 個節點候選決策全無 id、悄悄不列——是漏 reindex 還是真沒關聯?先 lumos decision-reindex --all)")
+    return 0
+
+
+def cmd_dref_candidates(env, rel_in, as_json=False):
+    """[V2] 列某節點候選決策(含翻案),讀側去重已填,附 skipped_no_id。"""
+    import json as _j
+    rel = env.find(rel_in)
+    if rel is None:
+        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        return 2
+    tidx = build_typed_index(env)
+    cands, skipped = _dref_candidates(env, rel, tidx)
+    filled = _dref_filled(env, rel)
+    n = env.notes.get(rel)
+    summary = first_line(str((n.fields.get("summary") if n else "") or ""), 80)
+    out_rows = []
+    for trel, did, content, valid in cands:
+        already = (trel, did) in filled
+        out_rows.append({"ref": f"{trel}#{did}", "content": content,
+                         "valid": bool(valid), "already_filled": already})
+    if as_json:
+        print(_j.dumps({"node": rel, "summary": summary, "candidates": out_rows,
+                        "skipped_no_id": skipped}, ensure_ascii=False))
+    else:
+        print(f"節點 {rel}:{summary}")
+        for r in out_rows:
+            flag = " [已填]" if r["already_filled"] else ("" if r["valid"] else " [已翻案]")
+            print(f"  {r['ref']}{flag}  {r['content']}")
+        if skipped:
+            print(f"  (略過 {skipped} 條無 id 決策——先 reindex 才能被 ref)")
+        if not out_rows:
+            print("  (無結構可達候選決策)")
+    return 0
+
+
+def cmd_dref_add_ai(env, rel_in, ref):
+    """[V3] 寫 decision_refs_ai:存在性驗證+正規化冪等(已在正欄→no-op)。"""
+    rel = env.find(rel_in)
+    if rel is None:
+        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        return 2
+    nn = _dref_norm(env, ref)
+    if not nn or not nn[1]:
+        print(f"擋下:ref 要寫成 <節點>#dN 且節點解得到: {ref!r}", file=sys.stderr)
+        return 2
+    tnode, did = nn
+    if not any(str(d.get("id", "")).strip() == did for d in _node_decisions(env, tnode)):
+        print(f"擋下:{tnode} 沒有決策 {did}(dangling ref,拒寫)", file=sys.stderr)
+        return 2
+    n = env.notes.get(rel)
+    # 已在正欄(正規化命中)→ no-op(不重複塞 ai 欄)
+    for r in as_list(n.fields.get("decision_refs")):
+        if _dref_same(env, r, ref):
+            print(f"✓ {ref} 已在 decision_refs 正欄(human 確認過),不重複塞 ai 欄")
+            return 0
+    for r in as_list(n.fields.get("decision_refs_ai")):
+        if _dref_same(env, r, ref):
+            print(f"✓ {ref} 已在 decision_refs_ai(冪等 no-op)")
+            return 0
+    canon = f"{tnode}#{did}"
+    _append_decision_ref(env, rel, "decision_refs_ai", canon)
+    print(f"✓ add-ai {rel}: decision_refs_ai += {canon}(標 by:ai;E3 firing 生效、抑制不了 E2)")
+    return 0
+
+
+def cmd_dref_list(env, rel_in, by=None):
+    """[V4] 分欄列 ref。"""
+    rel = env.find(rel_in)
+    if rel is None:
+        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        return 2
+    n = env.notes.get(rel)
+    fields = [("decision_refs", "human/confirmed")] if by == "human" else \
+             [("decision_refs_ai", "ai")] if by == "ai" else \
+             [("decision_refs", "human/confirmed"), ("decision_refs_ai", "ai")]
+    for fld, label in fields:
+        vals = as_list(n.fields.get(fld))
+        print(f"  [{label}] {fld}:" + (" (空)" if not vals else ""))
+        for v in vals:
+            print(f"    - {v}")
+    return 0
+
+
+def cmd_dref_prune(env, rel_in, ref, by=None):
+    """[V5] 移除 ref(正規化定位)。--by 移該欄、無 --by 兩欄都移。區分真移除/本來不在。"""
+    rel = env.find(rel_in)
+    if rel is None:
+        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        return 2
+    n = env.notes.get(rel)
+    flds = ["decision_refs"] if by == "human" else ["decision_refs_ai"] if by == "ai" \
+           else ["decision_refs", "decision_refs_ai"]
+    removed = []
+    for fld in flds:
+        for v in list(as_list(n.fields.get(fld))):
+            if _dref_same(env, v, ref):
+                if _dref_remove_ref(env, rel, fld, v):
+                    removed.append(f"{fld}:{v}")
+    if removed:
+        print(f"✓ prune {rel}: 已移除 {', '.join(removed)}")
+    else:
+        print(f"✓ prune {rel}: 這條 ref 本來就不在(是不是打錯正規形?用 decision-refs list 對一下)")
+    return 0
+
+
+def _dref_remove_ref(env, rel, field, exact_val):
+    """從 field 移除一筆逐字等於 exact_val 的 list 項(atomic_write_verify)。回 True=移除。"""
+    path = env.vault / rel
+    lines, s_fm, e_fm = load_raw_for_edit(path)
+    fm = lines[1:e_fm]
+    struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+    if field not in struct:
+        return False
+    s, e, kind = struct[field]
+    target_j = None
+    for j in range(s + 1, e + 1):
+        if fm[j].lstrip().startswith("-") and strip_quotes(fm[j].lstrip()[1:].strip()) == exact_val:
+            target_j = j
+            break
+    if target_j is None:
+        return False
+    del fm[target_j]
+    new_lines = lines[:1] + fm + lines[e_fm:]
+    atomic_write_verify(path, new_lines, field,
+                        lambda f: all(str(x).strip() != exact_val for x in as_list(f.get(field))))
+    return True
+
+
+def _dref_coverage_scan(env, rel, tidx):
+    """[promote 覆蓋提醒] E2 對齊掃描:該節點指向的翻案決策中、正欄無 ref 命中的落後邊。
+    回 (suppressed_with_id, no_id_dead):有 id 的用 _dref_same 判正欄命中;無 id 的另列(連補都補不了)。"""
+    n = env.notes.get(rel)
+    正欄 = as_list(n.fields.get("decision_refs")) if n else []
+    suppressed, no_id_dead = [], []
+    fwd = tidx["fwd"].get(rel, {})
+    seen = set()
+    for etype in _DREF_E2_FIELDS:   # 排 related,對齊 E2 typed_in
+        for trel in fwd.get(etype, []):
+            for d in _node_decisions(env, trel):
+                if d.get("valid", True):   # 只看翻案(valid:false)決策
+                    continue
+                did = str(d.get("id", "")).strip()
+                content = first_line(str(d.get("content", "")), 50)
+                if not did:
+                    key = (trel, content)
+                    if key not in seen:
+                        seen.add(key)
+                        no_id_dead.append(f"{trel}(翻案「{content}」,無 id)")
+                    continue
+                ref = f"{trel}#{did}"
+                if (trel, did) in seen:
+                    continue
+                seen.add((trel, did))
+                if not any(_dref_same(env, r, ref) for r in 正欄):
+                    suppressed.append(f"{ref}(翻案「{content}」)")
+    return suppressed, no_id_dead
+
+
+def cmd_dref_promote(env, rel_in, ref):
+    """[V6] _ai→decision_refs 抽查蓋章(升級可抑制 E2)。正規化全操作+dangling 拒+覆蓋提醒+雙欄原子。"""
+    rel = env.find(rel_in)
+    if rel is None:
+        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        return 2
+    nn = _dref_norm(env, ref)
+    if not nn or not nn[1]:
+        print(f"擋下:ref 要寫成 <節點>#dN 且節點解得到: {ref!r}", file=sys.stderr)
+        return 2
+    tnode, did = nn
+    if not any(str(d.get("id", "")).strip() == did for d in _node_decisions(env, tnode)):
+        print(f"擋下:{tnode} 沒有決策 {did}(dangling,拒 promote——防失效 ref 蓋章洗白)", file=sys.stderr)
+        return 2
+    canon = f"{tnode}#{did}"
+    n = env.notes.get(rel)
+    in_main = [v for v in as_list(n.fields.get("decision_refs")) if _dref_same(env, v, ref)]
+    in_ai = [v for v in as_list(n.fields.get("decision_refs_ai")) if _dref_same(env, v, ref)]
+    # 冪等分支
+    if not in_ai and in_main:
+        print(f"✓ {canon} 已在正欄(冪等 no-op)")
+        return 0
+    if not in_ai and not in_main:
+        print(f"擋下:{canon} 兩欄都沒有,promote 沒對象——先 add-ai", file=sys.stderr)
+        return 2
+    # 覆蓋提醒(不擋,人裁;但不得靜默)
+    tidx = build_typed_index(env)
+    suppressed, no_id_dead = _dref_coverage_scan(env, rel, tidx)
+    other = [s for s in suppressed if not _dref_same(env, s.split("(")[0], ref)]
+    if not as_list(n.fields.get("decision_refs")) and (other or no_id_dead):
+        print("  ⚠ 覆蓋提醒:這一蓋讓正欄非空,E2 將只警告被 ref 命中的翻案決策——本節點以下翻案落後邊會被連帶靜默:")
+        for s in other:
+            print(f"      {s}(可補 ref 解)")
+        for s in no_id_dead:
+            print(f"      {s} ★連補都補不了:先 reindex 給 id、或明知會被無條件壓掉仍蓋章★")
+    # 雙欄原子:remove _ai 命中、add 正欄一份、一次寫
+    path = env.vault / rel
+    lines, s_fm, e_fm = load_raw_for_edit(path)
+    fm = lines[1:e_fm]
+    struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+    # 移 _ai 所有命中
+    if "decision_refs_ai" in struct:
+        s, e, _k = struct["decision_refs_ai"]
+        for j in range(e, s, -1):
+            if j < len(fm) and fm[j].lstrip().startswith("-") and _dref_same(env, strip_quotes(fm[j].lstrip()[1:].strip()), ref):
+                del fm[j]
+        struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+    # 加正欄(若正欄尚無命中)
+    if not in_main:
+        quoted = '"' + canon + '"'
+        if "decision_refs" in struct:
+            s, e, _k = struct["decision_refs"]
+            indent = "  "
+            for j in range(s + 1, e + 1):
+                if fm[j].lstrip().startswith("-"):
+                    indent = fm[j][:len(fm[j]) - len(fm[j].lstrip())]
+                    break
+            last = e
+            while last > s and not fm[last].strip():
+                last -= 1
+            fm.insert(last + 1, f"{indent}- {quoted}")
+        else:
+            fm.append("decision_refs:")
+            fm.append(f"  - {quoted}")
+    new_lines = lines[:1] + fm + lines[e_fm:]
+
+    def _check(f):
+        main_hits = sum(1 for v in as_list(f.get("decision_refs")) if _dref_same(env, v, ref))
+        ai_hits = sum(1 for v in as_list(f.get("decision_refs_ai")) if _dref_same(env, v, ref))
+        return main_hits == 1 and ai_hits == 0
+    atomic_write_verify(path, new_lines, "decision_refs", _check)
+    print(f"✓ promote {rel}: {canon} 從 _ai 搬進正欄(升級可抑制 E2)")
+    return 0
+
+
 def cmd_rel_cascade_write(env, verb, neighbor, cascade_id, from_id, edge, by):
     """[M3] confirm|prune:append 一筆 transition。寫前驗證(R4):檔存在(不存在→拒,建檔只屬觸發端)、
     header 合法(torn→拒,與 resume rc=1 救援語意按指令類別分流)、--from==header root(全鏈同源)。"""
@@ -15754,6 +16091,11 @@ HELP_WHEN = {
     "second": "覆核某一筆審查判定,必須換不同的人。",
     "record": "記一輪審查結果:誰審的、嚴重度、幾條發現、各自怎麼處置、審的是哪份文件(指紋)。",
     "severity-check": "懷疑某席帳面嚴重度跟報告對不上(低報)時,對單筆帳列機械對帳;歷史帳 advisory、新帳抓到=寫側 bug 開 Issue。",
+    "decision-refs": "decision_refs 自動養成 T3:AI 回填舊筆記背書哪條決策。backlog 列該補的、candidates 列候選、add-ai 寫 AI 欄、promote 人工蓋章升級。",
+    "backlog": "列該跑 suggest 的節點(結構可達候選還沒填完的)。回填一批的起點。",
+    "candidates": "列某節點的候選決策(它 typed 邊指到的節點的決策),Claude 讀內容判實作哪條。",
+    "add-ai": "把 Claude 判定的 decision_ref 寫進 decision_refs_ai(標 by:ai;E3 生效、抑制不了 E2)。",
+    "promote": "人抽查後把 AI 填的 ref 蓋章升進正欄(升級成可抑制 E2);dangling 拒、印覆蓋提醒。",
     "loop": "審查迴圈的查詢:next 問下一步、status 問過不過、verify-progress 只讀帳本、canary-stats 看歷史抓漏率。",
     "status": "這個審查編號過關了沒。多人審加 --panel,嚴格處置閘加 --disposal,單人 --light,結清模式 --settle。",
     "compress": "長跑的審查上下文太長,規則式壓成三欄。",
@@ -15765,6 +16107,7 @@ HELP_WHEN = {
     "guard": "合約綁測試那一套:list 看狀態、scaffold 產骨架、bind 綁上、audit 留審計、trace 看證據鏈、kill 驗殺傷力。",
     "list": "每條合約綁測試的狀態:真綁 / 懸空 / 偽證據 / 裸 / 未審。",
     "scaffold": "幫某條合約產一個測試骨架(預設紅燈,斷言留 TODO)。",
+    "prune": "剪掉填錯的 decision_ref(正規化定位;--by 移該欄、無 --by 兩欄都移)。",
     "bind": "把寫好的測試綁回合約的 KEY 行([test:])。別手改。",
     "audit": "某條合約被不知道脈絡的人審過了,留 [audit:] 戳記。",
     "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
@@ -16193,6 +16536,21 @@ def main():
     p.add_argument("--decided", required=True, help="決策日期 YYYY-MM-DD")
     p.add_argument("--context", help="背景/痛點")
     p.add_argument("--why", help="why_chosen 為何選這個")
+
+    # decision_refs 自動養成 T3 六原語(dref-v4;巢狀 add_subparsers,arch-f7)
+    dr = sub.add_parser("decision-refs", help="[T3 養成] decision_refs 六原語:backlog/candidates/add-ai/list/prune/promote(雙欄不對稱信任)")
+    drsub = dr.add_subparsers(dest="dref_cmd", required=True)
+    drsub.add_parser("backlog", help="列該跑 suggest 的節點(候選集−已填≠空)").add_argument("--json", action="store_true", dest="dref_json")
+    _c = drsub.add_parser("candidates", help="列某節點候選決策(含翻案,讀側去重已填)")
+    _c.add_argument("dref_node"); _c.add_argument("--json", action="store_true", dest="dref_json")
+    _a = drsub.add_parser("add-ai", help="寫 decision_refs_ai(存在性驗證+正規化冪等)")
+    _a.add_argument("dref_node"); _a.add_argument("dref_ref")
+    _l = drsub.add_parser("list", help="分欄列 ref")
+    _l.add_argument("dref_node"); _l.add_argument("--by", dest="dref_by", choices=("ai", "human"))
+    _pr = drsub.add_parser("prune", help="移除 ref(正規化定位;--by 移該欄,無 --by 兩欄都移)")
+    _pr.add_argument("dref_node"); _pr.add_argument("dref_ref"); _pr.add_argument("--by", dest="dref_by", choices=("ai", "human"))
+    _pm = drsub.add_parser("promote", help="_ai→decision_refs 抽查蓋章(升級可抑制 E2;dangling 拒+覆蓋提醒)")
+    _pm.add_argument("dref_node"); _pm.add_argument("dref_ref")
 
     p = sub.add_parser("install", help="symlink 到 ~/.local/bin → 全域可用")
     p.add_argument("--force", action="store_true", help="覆寫既有")
@@ -16718,6 +17076,21 @@ def main():
             print(f"擋下:{e}", file=sys.stderr)
             return 2
 
+    if args.cmd == "decision-refs":
+        dc = args.dref_cmd
+        if dc == "backlog":
+            return cmd_dref_backlog(env, as_json=getattr(args, "dref_json", False))
+        if dc == "candidates":
+            return cmd_dref_candidates(env, args.dref_node, as_json=getattr(args, "dref_json", False))
+        if dc == "add-ai":
+            return cmd_dref_add_ai(env, args.dref_node, args.dref_ref)
+        if dc == "list":
+            return cmd_dref_list(env, args.dref_node, by=getattr(args, "dref_by", None))
+        if dc == "prune":
+            return cmd_dref_prune(env, args.dref_node, args.dref_ref, by=getattr(args, "dref_by", None))
+        if dc == "promote":
+            return cmd_dref_promote(env, args.dref_node, args.dref_ref)
+        return 2
     if args.cmd == "decision-reindex" and getattr(args, "reindex_all", False):
         try:
             return cmd_decision_reindex(env, all_mode=True)
