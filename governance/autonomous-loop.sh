@@ -24,9 +24,11 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
   # 「pid 沒寫」與「pid 寫過但行程死了」不能走同一條接管路。只有鎖齡超過 60 分鐘
   # (真跑最長也早該寫完 pid)才視為殘鎖;年輕的空 pid 鎖一律讓行。
   if [ -z "$OLDPID" ]; then
-    LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$LOCKDIR" 2>/dev/null || echo 0) ))
-    if [ "$LOCK_AGE" -lt 3600 ]; then
-      echo "[$(date '+%F %T')] 另一份 autonomous-loop 疑似剛起步(鎖存在 ${LOCK_AGE}s、pid 未寫),本次退出讓行"; exit 0
+    # 鎖齡用 python 算(stat -f 是 BSD 專屬,Linux 上整句壞掉;r3 e-f1)。
+    # ★量不出=讓行★:兜底方向必須保守——量不出鎖齡時寧可少跑一天,不搶對方剛拿到的鎖。
+    LOCK_AGE="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo '')"
+    if [ -z "$LOCK_AGE" ] || [ "$LOCK_AGE" -lt 3600 ]; then
+      echo "[$(date '+%F %T')] 另一份 autonomous-loop 疑似剛起步(鎖存在 ${LOCK_AGE:-量不出}s、pid 未寫),本次退出讓行"; exit 0
     fi
   fi
   echo "[$(date '+%F %T')] 發現殘鎖(pid ${OLDPID:-?} 已不在或鎖齡過老),接管"

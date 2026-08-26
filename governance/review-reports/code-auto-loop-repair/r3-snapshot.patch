@@ -1,0 +1,361 @@
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index 597fa35..645a2fa 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -13,21 +13,30 @@ if [ "$MODE" != "--dry-run" ]; then
+   exit 2
+ fi
+ # ── 整跑鎖(code-r1 s2-f1/f2):launchd+人工同時跑會互蓋 backlog/archive——mkdir 原子搶鎖,
+ # 鎖裡放 PID;持鎖行程已死(kill -0 不到)視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。
+ LOCKDIR="$SCRIPT_DIR/.autonomous-loop.lock"
+ if ! mkdir "$LOCKDIR" 2>/dev/null; then
+   OLDPID="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+   if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+     echo "[$(date '+%F %T')] 另一份 autonomous-loop 正在跑(pid $OLDPID),本次退出——不搶寫 backlog"; exit 0
+   fi
+-  echo "[$(date '+%F %T')] 發現殘鎖(pid ${OLDPID:-?} 已不在),接管"
++  # ★空 pid ≠ 殘鎖★(r2 d-f2 TOCTOU):對方可能剛 mkdir 成功、還沒來得及寫 pid——
++  # 「pid 沒寫」與「pid 寫過但行程死了」不能走同一條接管路。只有鎖齡超過 60 分鐘
++  # (真跑最長也早該寫完 pid)才視為殘鎖;年輕的空 pid 鎖一律讓行。
++  if [ -z "$OLDPID" ]; then
++    LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$LOCKDIR" 2>/dev/null || echo 0) ))
++    if [ "$LOCK_AGE" -lt 3600 ]; then
++      echo "[$(date '+%F %T')] 另一份 autonomous-loop 疑似剛起步(鎖存在 ${LOCK_AGE}s、pid 未寫),本次退出讓行"; exit 0
++    fi
++  fi
++  echo "[$(date '+%F %T')] 發現殘鎖(pid ${OLDPID:-?} 已不在或鎖齡過老),接管"
+   rm -rf "$LOCKDIR"; mkdir "$LOCKDIR"
+ fi
+ echo $$ > "$LOCKDIR/pid"
+ 
+ TODAY="$(date +%F)"
+ REPORT="$SCRIPT_DIR/reports/governance-$TODAY.json"
+ PENDING="$SCRIPT_DIR/pending";  mkdir -p "$PENDING"
+ LOGDIR="$SCRIPT_DIR/logs";      mkdir -p "$LOGDIR"
+ SCRATCH="$(mktemp -d "/tmp/auto-loop-$TODAY.XXXXXX")"; mkdir -p "$SCRATCH/kg" "$SCRATCH/spec"   # mktemp:防可預測路徑搶佔(外審 minor)
+ log(){ echo "[$(date '+%F %T')] $*"; }
+@@ -62,21 +71,25 @@ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
+     fi
+   fi
+   if [ -z "$ROUND_RECORDED" ]; then   # skip 迭代已當場落帳的輪不重複記(code-r1 s1-f1/s3-f1)
+     # shellcheck disable=SC2086  # COST_ARGS 故意不引號:要拆成多參數
+     if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY"           --auditor orchestrator --outcome "${OUTCOME:-pipeline_fail:parse_fail}" $COST_ARGS           --note "自主迴圈結局帳(trap 收尾統一落;成本欄=claude -p 實際回傳,非估算)")           >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
+       log "結局帳:record 失敗——帳上沒有這輪(詳情 $LOGDIR/cost-$TODAY.log)"
+     fi
+   fi
+-  rm -f "$INFLIGHT" 2>/dev/null || true   # gap 已處置(放回或消化),斷電保險解除
++  if [ -n "$GAP_DISPOSED" ] || [ "${RQ:-}" = "requeued" ] || [ "${RQ:-}" = "covered" ]; then
++    rm -f "$INFLIGHT" 2>/dev/null || true   # gap 真有去向才解除斷電保險(r2 d-f3)
++  else
++    log "⚠ gap 放回未確認(${RQ:-無}),in-flight 標記保留給下次開場回收"
++  fi
+   LEDGER_OUT="$(cd "$REPO" && python3 -c "
+ import sys; sys.path.insert(0,'governance')
+ from autonomous_loop import run_ledger
+ lg='docs/.canary-log.jsonl'
+ print(run_ledger.format_week_line(run_ledger.summarize_week(lg,'$TODAY')))
+ print('CONSEC_FAIL' if run_ledger.consecutive_fail_days(lg,'$TODAY') else 'OK')
+ " 2>>"$LOGDIR/finalize-$TODAY.err" || echo '')"
+   if [ -n "$LEDGER_OUT" ]; then
+     log "$(echo "$LEDGER_OUT" | head -1)"
+     if echo "$LEDGER_OUT" | grep -q CONSEC_FAIL; then
+@@ -95,22 +108,26 @@ print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if
+ trap finalize EXIT
+ 
+ # ── in-flight 殘留回收(code-r1 s2-f3):上次被 SIGKILL/斷電砍在半路的 gap 放回 ──
+ if [ -f "$INFLIGHT" ]; then
+   RQ0="$(python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(open('$INFLIGHT'))
+ print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
+-  log "上次執行被硬砍(SIGKILL/斷電),殘留的選中 gap 已放回($RQ0)"
+-  rm -f "$INFLIGHT"
++  case "$RQ0" in
++    requeued|covered)
++      log "上次執行被硬砍(SIGKILL/斷電),殘留的選中 gap 已放回($RQ0)"; rm -f "$INFLIGHT";;
++    *)
++      log "⚠ 上次被硬砍的 gap 放回失敗($RQ0)——標記保留,下次開場再試;唯一證據不自我銷毀(詳 $LOGDIR/finalize-$TODAY.err)";;
++  esac
+ fi
+ 
+ if [ ! -f "$REPORT" ]; then
+   if [ "$MODE" = "--dry-run" ]; then
+     REPORT="$(ls -t "$SCRIPT_DIR/reports/"governance-2*.json 2>/dev/null | head -1 || true)"
+     [ -n "$REPORT" ] && log "今日無日報,dry-run fallback:$REPORT" || { log "無任何日報,結束"; exit 0; }
+   else log "今日無日報($TODAY),跳過"; exit 0; fi
+ fi
+ 
+ # ── 週期考卷(2026-08-05 掛載):雙庫檢索考卷 ≥7 天未跑就補跑——把「hook 調參靠記得」
+@@ -375,21 +392,36 @@ if [ "$SKIPPED" = "True" ]; then
+   # covered 寫入成功才算有去向;失敗就留給 trap 放回(code-r1 ext-f1:不准寫失敗還標已處置)
+   if echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ w=json.load(sys.stdin).get('weakness','')
+ if w: gap_select.mark_covered('$SCRIPT_DIR/covered.jsonl', w)
+ " 2>>"$LOGDIR/finalize-$TODAY.err"; then
+     GAP_DISPOSED=1
+     rm -f "$INFLIGHT" 2>/dev/null || true
+   else
+-    log "⚠ covered 寫入失敗——gap 改由收尾放回 backlog,不冒充已處置"
++    # continue 會把 $GAP_JSON 蓋掉,trap 的安全網接不到這筆(r2 d-f1 實跑重現:gap+已燒成本
++    # 三檔皆無)——所以當場放回,放回也失敗就 exit 保住變數讓 trap/in-flight 接手
++    RQF="$(echo "$GAP_JSON" | python3 -c "
++import sys, json; sys.path.insert(0,'$REPO/governance')
++from autonomous_loop import gap_select
++g=json.load(sys.stdin)
++print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
++" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
++    case "$RQF" in
++      requeued|covered)
++        GAP_DISPOSED=1; rm -f "$INFLIGHT" 2>/dev/null || true
++        log "⚠ covered 寫入失敗——gap 已當場放回 backlog($RQF),不冒充已處置";;
++      *)
++        log "⚠ covered 寫入失敗且當場放回也失敗($RQF)——中止本輪,收尾與 in-flight 標記接手"
++        exit 1;;
++    esac
+   fi
+   log "gap 已被既有 spec 覆蓋,skip(reason: $(get reason));已記入 covered、永久不再選。循環選下一個($skip_n/$SKIP_CAP)。"
+   [ "$skip_n" -ge "$SKIP_CAP" ] && { log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
+   continue
+ fi
+ break
+ done
+ 
+ RESIDUAL='["跨家族複核已加(qwen3-max 放行前複核 opus 設計、補同門盲點);但 degrade 時退回單一 opus、qwen 也是 AI、verdict 判定仍在 orchestrator(prompt 層自律)","severity 由 judge 評(已斷 orchestrator 自填)但 judge 也是 AI、且同輪判 canary+severity=集中化","type d canary 沒測(限 a/b/c)","自動 brainstorm 無人回澄清;AI 自選 gap=自己決定改自己方向(自我強化偏誤)","唯一外部錨點是你 review 這個 PR"]'
+ if [ "$CONVERGED" != "True" ]; then
+diff --git a/governance/autonomous_loop/backlog.py b/governance/autonomous_loop/backlog.py
+index 8b132ec..3d95abe 100644
+--- a/governance/autonomous_loop/backlog.py
++++ b/governance/autonomous_loop/backlog.py
+@@ -1,39 +1,49 @@
+ import json, os
+ from pathlib import Path
+ 
+ INIT_SCORE = 0.5
+ 
++def _stash_bad(src_path, bad_lines):
++    """壞行進 .bad 側檔保留,且**已在側檔的行不重覆疊**(r2 d-f4:covered 永遠 append-only
++    無整檔重寫,同一壞行每次 load 都會再撈一次,無界增長)。回傳描述字串供 log。"""
++    p = Path(src_path)
++    bad_file = p.with_name(p.name + ".bad")
++    try:
++        seen = set(bad_file.read_text(encoding="utf-8").splitlines()) if bad_file.exists() else set()
++        fresh = [l for l in bad_lines if l not in seen]
++        if fresh:
++            with open(bad_file, "a", encoding="utf-8") as f:
++                for l in fresh:
++                    f.write(l + "\n")
++        return f"已撈到 {p.name}.bad 保留(新 {len(fresh)} 行/已在檔 {len(bad_lines)-len(fresh)} 行)"
++    except OSError as e:
++        return f"連 .bad 側檔都寫不進({e})——壞行只剩這行 log 有記錄"
++
++
+ def load_backlog(path):
+     """逐行讀 backlog;壞行跳過並在 stderr 記一句(一行壞資料不該讓整條迴圈當機——
+     set -euo pipefail 下未捕捉例外=從此天天早退,auto-loop-repair-v2 s2-f5)。"""
+     p = Path(path)
+     if not p.exists(): return []
+     rows, bad = [], []
+     for l in p.read_text(encoding="utf-8").splitlines():
+         if not l.strip(): continue
+         try:
+             rows.append(json.loads(l))
+         except ValueError:
+             bad.append(l)
+     if bad:
+         import sys
+         # 壞行不能只是跳過——之後任何正常 _save 都會整檔覆寫,等於把它無聲永久刪除
+-        # (code-r1 ext-f3)。撈到 .bad 側檔保留,人可回收。
+-        try:
+-            with open(p.with_name(p.name + ".bad"), "a", encoding="utf-8") as f:
+-                for l in bad:
+-                    f.write(l + "\n")
+-            where = f"已撈到 {p.name}.bad 保留"
+-        except OSError as e:
+-            where = f"連 .bad 側檔都寫不進({e})——壞行只剩這行 log 有記錄"
+-        print(f"backlog:跳過 {len(bad)} 行壞資料({path}),{where};檔案疑似寫到一半被中斷,值得看一眼", file=sys.stderr)
++        # (code-r1 ext-f3)。撈到 .bad 側檔保留(去重),人可回收。
++        print(f"backlog:跳過 {len(bad)} 行壞資料({path}),{_stash_bad(p, bad)};檔案疑似寫到一半被中斷,值得看一眼", file=sys.stderr)
+     return rows
+ 
+ def _save(path, rows):
+     """原子寫:先寫暫存檔再整檔替換——寫到一半被中斷(launchd 逾時/睡眠)不會留半個檔。"""
+     p = Path(path)
+     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")   # 帶 PID:並行不共用暫存檔(主防線是整跑鎖)
+     tmp.write_text(
+         "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + ("\n" if rows else ""),
+         encoding="utf-8")
+     os.replace(tmp, p)
+diff --git a/governance/autonomous_loop/gap_select.py b/governance/autonomous_loop/gap_select.py
+index 3072355..2df644e 100644
+--- a/governance/autonomous_loop/gap_select.py
++++ b/governance/autonomous_loop/gap_select.py
+@@ -36,28 +36,21 @@ def load_covered(covered_path):
+         if not l.strip():
+             continue
+         try:
+             w = json.loads(l).get("weakness")
+         except ValueError:
+             bad.append(l); continue
+         if w:
+             got.add(w)
+     if bad:
+         import sys
+-        try:
+-            with open(p.with_name(p.name + ".bad"), "a", encoding="utf-8") as f:
+-                for l in bad:
+-                    f.write(l + "\n")
+-            where = f"已撈到 {p.name}.bad 保留"
+-        except OSError as e:
+-            where = f".bad 側檔也寫不進({e})"
+-        print(f"covered:跳過 {len(bad)} 行壞資料({p}),{where}", file=sys.stderr)
++        print(f"covered:跳過 {len(bad)} 行壞資料({p}),{backlog._stash_bad(p, bad)}", file=sys.stderr)
+     return got
+ 
+ 
+ def mark_covered(covered_path, weakness):
+     """orchestrator 判某 gap 已被既有 spec 覆蓋 → 記下,以後 add_gaps/select 都跳過它。"""
+     with open(covered_path, "a", encoding="utf-8") as f:
+         f.write(json.dumps({"weakness": weakness}, ensure_ascii=False) + "\n")
+ 
+ 
+ def requeue_unconverged(backlog_path, gap, covered_path, decay=0.7, max_unconv=3):
+@@ -79,22 +72,28 @@ def requeue_unconverged(backlog_path, gap, covered_path, decay=0.7, max_unconv=3
+ 
+ 
+ def requeue_pipeline_fail(backlog_path, gap, covered_path, max_fail=3):
+     """管線失敗(NO_JSON/PARSE_FAIL/anchor 早退)的 gap:原列原分放回(不是它的錯,
+     不降分、不走 add_gaps 免被重置 0.5)+ 累計 pipeline_failures;
+     滿 max_fail → covered(放棄自動、留人)——鏡射 requeue_unconverged 的熔斷語意,
+     不讓穩定觸發管線死的題無限反覆燒錢。回 'requeued' 或 'covered'。"""
+     n = gap.get("pipeline_failures", 0) + 1
+     w = gap.get("weakness", "")
+     if n >= max_fail:
+-        mark_covered(covered_path, w)
+-        return "covered"
++        try:
++            mark_covered(covered_path, w)
++            return "covered"
++        except OSError as e:
++            # covered 本身寫不進(唯讀/磁碟滿)時,熔斷不能變成「拋例外丟件」——
++            # 退而求其次留在 backlog(分數不動、計數照累),下輪再試熔斷(r2 d-f1 連環案)
++            import sys
++            print(f"pipeline 熔斷寫 covered 失敗({e}),gap 退回 backlog 續留", file=sys.stderr)
+     g = dict(gap)
+     g["pipeline_failures"] = n
+     rows = [r for r in backlog.load_backlog(backlog_path) if r.get("weakness") != w]
+     rows.append(g)
+     backlog._save(backlog_path, rows)
+     return "requeued"
+ 
+ 
+ def select(report_path, backlog_path, pending_dir, mode, today, covered_path=None):
+     covered = load_covered(covered_path)
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index f497750..edbc2b1 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -741,27 +741,30 @@ class TestCodeLoopR1Folds(unittest.TestCase):
+         self.state = self.d / "decay-state.json"
+         self.cov = self.d / "covered.jsonl"
+ 
+     def test_bad_lines_stashed_not_deleted(self):
+         # ext-f3:壞行不能在下一次正常寫入時被無聲永久刪除——讀取時撈到 .bad 側檔保留
+         self.p.write_text('{"weakness":"a","value_score":0.5}\n{{{半行壞資料\n')
+         backlog.load_backlog(self.p)
+         backlog._save(self.p, backlog.load_backlog(self.p))   # 正常寫入會覆寫掉壞行
+         bad = self.p.with_name(self.p.name + ".bad")
+         self.assertTrue(bad.exists(), "壞行要進 .bad 側檔保留,不准人間蒸發")
+-        self.assertIn("半行壞資料", bad.read_text())
++        self.assertEqual(bad.read_text().count("半行壞資料"), 1, "重覆 load 不准疊加同一壞行(r2 d-f4)")
+ 
+     def test_load_covered_tolerates_bad_lines(self):
+         # s3-f3/conf-f1:covered 讀取要有對稱容錯
+         self.cov.write_text('{"weakness":"w1"}\n{{{壞\n{"no_weakness_key":1}\n{"weakness":"w2"}\n')
+         got = gap_select.load_covered(self.cov)
+         self.assertEqual(got, {"w1", "w2"})
++        gap_select.load_covered(self.cov); gap_select.load_covered(self.cov)   # covered 永遠 append-only 無重寫
++        bad = self.cov.with_name(self.cov.name + ".bad")
++        self.assertEqual(bad.read_text().count("{{{壞"), 1, "重覆 load 不准疊加(r2 d-f4)")
+ 
+     def test_archive_readback_ignores_historical_bad_line(self):
+         # s3-f2:歷史壞行不能讓衰減永久卡死——自驗只看自己剛寫的尾段
+         self.arch.write_text('{{{歷史壞行\n')
+         backlog._save(self.p, [{"weakness": "dying", "value_score": 0.2,
+                                 "last_seen": "2026-08-20", "source_date": "2026-08-20"}])
+         out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
+         self.assertEqual(out["status"], "ok", out)
+         self.assertEqual(out["pruned"], 1)
+ 
+@@ -1047,12 +1050,66 @@ class TestLoopShellTrapR1Folds(unittest.TestCase):
+                       "last_seen": "2026-08-20", "source_date": "2026-08-20"})
+         r = self._run(root, home, bindir)
+         self.assertIn("被硬砍", r.stdout)
+         rows = backlog.load_backlog(gov / "backlog.jsonl")
+         mine = [x for x in rows if x["weakness"] == "被硬砍的gap"]
+         self.assertEqual(len(mine), 1, rows)
+         self.assertAlmostEqual(mine[0]["value_score"], 0.42 * 0.95, places=4)  # 原分放回,再吃當天正常衰減一次
+         self.assertFalse((gov / ".inflight-gap.json").exists())  # 標記消化掉
+ 
+ 
++class TestLoopShellTrapR2Folds(unittest.TestCase):
++    """r2 delta 折修釘(d-f1/d-f2/d-f3;紅證=delta 席實跑重現)。"""
++    _sandbox = TestLoopShellTrapR1Folds._sandbox
++    _run = TestLoopShellTrap._run
++    _calls = TestLoopShellTrap._calls
++    _env = TestLoopShellTrapR1Folds._env
++
++    def test_covered_write_fail_gap_requeued_not_lost(self):
++        # d-f1:covered 寫失敗→gap 當場放回,不因 continue 蒸發
++        import os, stat
++        root, gov, scripts, home, bindir = self._sandbox(
++            envelopes=[self._env({"skipped": True, "reason": "r", "converged": False,
++                                  "topic": "t", "spec_path": ""})])
++        (gov / "covered.jsonl").write_text("")
++        (gov / "covered.jsonl").chmod(0o444)     # 讀得到、append 必炸(delta 席同款重現法)
++        r = self._run(root, home, bindir)
++        rows = backlog.load_backlog(gov / "backlog.jsonl")
++        mine = [x for x in rows if x["weakness"] == "沙箱測試gap"]
++        self.assertEqual(len(mine), 1, r.stdout + r.stderr)      # 放回了,沒蒸發
++        self.assertGreaterEqual(mine[0]["pipeline_failures"], 1)  # 同輪可能反覆 skip 疊計數
++        self.assertEqual(mine[0]["value_score"], 0.5)             # 分數不動
++        self.assertIn("當場放回", r.stdout)
++
++    def test_young_lock_without_pid_yields(self):
++        # d-f2:空 pid+年輕鎖=對方剛起步,讓行不接管
++        root, gov, scripts, home, bindir = self._sandbox()
++        (gov / ".autonomous-loop.lock").mkdir()  # 剛建立、沒 pid
++        r = self._run(root, home, bindir)
++        self.assertEqual(r.returncode, 0)
++        self.assertIn("讓行", r.stdout)
++        self.assertEqual(self._calls(scripts), [])
++
++    def test_old_lock_without_pid_taken_over(self):
++        # d-f2:空 pid 但鎖齡過老→接管
++        import os, time
++        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
++        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
++        old = time.time() - 7200
++        os.utime(lock, (old, old))
++        r = self._run(root, home, bindir)
++        self.assertIn("接管", r.stdout)
++
++    def test_inflight_recovery_failure_keeps_marker(self):
++        # d-f3:放回失敗→標記保留,不自我銷毀
++        root, gov, scripts, home, bindir = self._sandbox(
++            anchor_ok=False, report_gaps=[],
++            inflight={"weakness": "救不回的gap", "suggestion": "x", "value_score": 0.4,
++                      "last_seen": "2026-08-20", "source_date": "2026-08-20"})
++        (gov / "backlog.jsonl").mkdir()          # requeue 寫 backlog 必炸
++        r = self._run(root, home, bindir)
++        self.assertIn("放回失敗", r.stdout)
++        self.assertTrue((gov / ".inflight-gap.json").exists(), "標記=唯一證據,失敗不准刪")
++
++
+ if __name__ == "__main__":
+     unittest.main()

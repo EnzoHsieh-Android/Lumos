@@ -1064,6 +1064,7 @@ class TestLoopShellTrapR2Folds(unittest.TestCase):
     _calls = TestLoopShellTrap._calls
     _env = TestLoopShellTrapR1Folds._env
 
+    @unittest.skipIf(__import__("os").geteuid() == 0, "root 繞過權限位,chmod 444 重現法不成立(r3 觀察)")
     def test_covered_write_fail_gap_requeued_not_lost(self):
         # d-f1:covered 寫失敗→gap 當場放回,不因 continue 蒸發
         import os, stat
