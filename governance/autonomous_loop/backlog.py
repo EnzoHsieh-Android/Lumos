@@ -3,6 +3,23 @@ from pathlib import Path
 
 INIT_SCORE = 0.5
 
+def _stash_bad(src_path, bad_lines):
+    """壞行進 .bad 側檔保留,且**已在側檔的行不重覆疊**(r2 d-f4:covered 永遠 append-only
+    無整檔重寫,同一壞行每次 load 都會再撈一次,無界增長)。回傳描述字串供 log。"""
+    p = Path(src_path)
+    bad_file = p.with_name(p.name + ".bad")
+    try:
+        seen = set(bad_file.read_text(encoding="utf-8").splitlines()) if bad_file.exists() else set()
+        fresh = [l for l in bad_lines if l not in seen]
+        if fresh:
+            with open(bad_file, "a", encoding="utf-8") as f:
+                for l in fresh:
+                    f.write(l + "\n")
+        return f"已撈到 {p.name}.bad 保留(新 {len(fresh)} 行/已在檔 {len(bad_lines)-len(fresh)} 行)"
+    except OSError as e:
+        return f"連 .bad 側檔都寫不進({e})——壞行只剩這行 log 有記錄"
+
+
 def load_backlog(path):
     """逐行讀 backlog;壞行跳過並在 stderr 記一句(一行壞資料不該讓整條迴圈當機——
     set -euo pipefail 下未捕捉例外=從此天天早退,auto-loop-repair-v2 s2-f5)。"""
@@ -18,15 +35,8 @@ def load_backlog(path):
     if bad:
         import sys
         # 壞行不能只是跳過——之後任何正常 _save 都會整檔覆寫,等於把它無聲永久刪除
-        # (code-r1 ext-f3)。撈到 .bad 側檔保留,人可回收。
-        try:
-            with open(p.with_name(p.name + ".bad"), "a", encoding="utf-8") as f:
-                for l in bad:
-                    f.write(l + "\n")
-            where = f"已撈到 {p.name}.bad 保留"
-        except OSError as e:
-            where = f"連 .bad 側檔都寫不進({e})——壞行只剩這行 log 有記錄"
-        print(f"backlog:跳過 {len(bad)} 行壞資料({path}),{where};檔案疑似寫到一半被中斷,值得看一眼", file=sys.stderr)
+        # (code-r1 ext-f3)。撈到 .bad 側檔保留(去重),人可回收。
+        print(f"backlog:跳過 {len(bad)} 行壞資料({path}),{_stash_bad(p, bad)};檔案疑似寫到一半被中斷,值得看一眼", file=sys.stderr)
     return rows
 
 def _save(path, rows):

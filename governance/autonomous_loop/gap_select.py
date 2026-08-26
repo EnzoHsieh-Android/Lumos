@@ -43,14 +43,7 @@ def load_covered(covered_path):
             got.add(w)
     if bad:
         import sys
-        try:
-            with open(p.with_name(p.name + ".bad"), "a", encoding="utf-8") as f:
-                for l in bad:
-                    f.write(l + "\n")
-            where = f"已撈到 {p.name}.bad 保留"
-        except OSError as e:
-            where = f".bad 側檔也寫不進({e})"
-        print(f"covered:跳過 {len(bad)} 行壞資料({p}),{where}", file=sys.stderr)
+        print(f"covered:跳過 {len(bad)} 行壞資料({p}),{backlog._stash_bad(p, bad)}", file=sys.stderr)
     return got
 
 
@@ -86,8 +79,14 @@ def requeue_pipeline_fail(backlog_path, gap, covered_path, max_fail=3):
     n = gap.get("pipeline_failures", 0) + 1
     w = gap.get("weakness", "")
     if n >= max_fail:
-        mark_covered(covered_path, w)
-        return "covered"
+        try:
+            mark_covered(covered_path, w)
+            return "covered"
+        except OSError as e:
+            # covered 本身寫不進(唯讀/磁碟滿)時,熔斷不能變成「拋例外丟件」——
+            # 退而求其次留在 backlog(分數不動、計數照累),下輪再試熔斷(r2 d-f1 連環案)
+            import sys
+            print(f"pipeline 熔斷寫 covered 失敗({e}),gap 退回 backlog 續留", file=sys.stderr)
     g = dict(gap)
     g["pipeline_failures"] = n
     rows = [r for r in backlog.load_backlog(backlog_path) if r.get("weakness") != w]

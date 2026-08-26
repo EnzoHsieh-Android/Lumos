@@ -748,13 +748,16 @@ class TestCodeLoopR1Folds(unittest.TestCase):
         backlog._save(self.p, backlog.load_backlog(self.p))   # 正常寫入會覆寫掉壞行
         bad = self.p.with_name(self.p.name + ".bad")
         self.assertTrue(bad.exists(), "壞行要進 .bad 側檔保留,不准人間蒸發")
-        self.assertIn("半行壞資料", bad.read_text())
+        self.assertEqual(bad.read_text().count("半行壞資料"), 1, "重覆 load 不准疊加同一壞行(r2 d-f4)")
 
     def test_load_covered_tolerates_bad_lines(self):
         # s3-f3/conf-f1:covered 讀取要有對稱容錯
         self.cov.write_text('{"weakness":"w1"}\n{{{壞\n{"no_weakness_key":1}\n{"weakness":"w2"}\n')
         got = gap_select.load_covered(self.cov)
         self.assertEqual(got, {"w1", "w2"})
+        gap_select.load_covered(self.cov); gap_select.load_covered(self.cov)   # covered 永遠 append-only 無重寫
+        bad = self.cov.with_name(self.cov.name + ".bad")
+        self.assertEqual(bad.read_text().count("{{{壞"), 1, "重覆 load 不准疊加(r2 d-f4)")
 
     def test_archive_readback_ignores_historical_bad_line(self):
         # s3-f2:歷史壞行不能讓衰減永久卡死——自驗只看自己剛寫的尾段
@@ -1052,6 +1055,60 @@ class TestLoopShellTrapR1Folds(unittest.TestCase):
         self.assertEqual(len(mine), 1, rows)
         self.assertAlmostEqual(mine[0]["value_score"], 0.42 * 0.95, places=4)  # 原分放回,再吃當天正常衰減一次
         self.assertFalse((gov / ".inflight-gap.json").exists())  # 標記消化掉
+
+
+class TestLoopShellTrapR2Folds(unittest.TestCase):
+    """r2 delta 折修釘(d-f1/d-f2/d-f3;紅證=delta 席實跑重現)。"""
+    _sandbox = TestLoopShellTrapR1Folds._sandbox
+    _run = TestLoopShellTrap._run
+    _calls = TestLoopShellTrap._calls
+    _env = TestLoopShellTrapR1Folds._env
+
+    def test_covered_write_fail_gap_requeued_not_lost(self):
+        # d-f1:covered 寫失敗→gap 當場放回,不因 continue 蒸發
+        import os, stat
+        root, gov, scripts, home, bindir = self._sandbox(
+            envelopes=[self._env({"skipped": True, "reason": "r", "converged": False,
+                                  "topic": "t", "spec_path": ""})])
+        (gov / "covered.jsonl").write_text("")
+        (gov / "covered.jsonl").chmod(0o444)     # 讀得到、append 必炸(delta 席同款重現法)
+        r = self._run(root, home, bindir)
+        rows = backlog.load_backlog(gov / "backlog.jsonl")
+        mine = [x for x in rows if x["weakness"] == "沙箱測試gap"]
+        self.assertEqual(len(mine), 1, r.stdout + r.stderr)      # 放回了,沒蒸發
+        self.assertGreaterEqual(mine[0]["pipeline_failures"], 1)  # 同輪可能反覆 skip 疊計數
+        self.assertEqual(mine[0]["value_score"], 0.5)             # 分數不動
+        self.assertIn("當場放回", r.stdout)
+
+    def test_young_lock_without_pid_yields(self):
+        # d-f2:空 pid+年輕鎖=對方剛起步,讓行不接管
+        root, gov, scripts, home, bindir = self._sandbox()
+        (gov / ".autonomous-loop.lock").mkdir()  # 剛建立、沒 pid
+        r = self._run(root, home, bindir)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("讓行", r.stdout)
+        self.assertEqual(self._calls(scripts), [])
+
+    def test_old_lock_without_pid_taken_over(self):
+        # d-f2:空 pid 但鎖齡過老→接管
+        import os, time
+        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
+        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+        old = time.time() - 7200
+        os.utime(lock, (old, old))
+        r = self._run(root, home, bindir)
+        self.assertIn("接管", r.stdout)
+
+    def test_inflight_recovery_failure_keeps_marker(self):
+        # d-f3:放回失敗→標記保留,不自我銷毀
+        root, gov, scripts, home, bindir = self._sandbox(
+            anchor_ok=False, report_gaps=[],
+            inflight={"weakness": "救不回的gap", "suggestion": "x", "value_score": 0.4,
+                      "last_seen": "2026-08-20", "source_date": "2026-08-20"})
+        (gov / "backlog.jsonl").mkdir()          # requeue 寫 backlog 必炸
+        r = self._run(root, home, bindir)
+        self.assertIn("放回失敗", r.stdout)
+        self.assertTrue((gov / ".inflight-gap.json").exists(), "標記=唯一證據,失敗不准刪")
 
 
 if __name__ == "__main__":

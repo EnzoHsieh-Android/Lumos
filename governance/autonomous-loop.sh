@@ -20,7 +20,16 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
   if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
     echo "[$(date '+%F %T')] 另一份 autonomous-loop 正在跑(pid $OLDPID),本次退出——不搶寫 backlog"; exit 0
   fi
-  echo "[$(date '+%F %T')] 發現殘鎖(pid ${OLDPID:-?} 已不在),接管"
+  # ★空 pid ≠ 殘鎖★(r2 d-f2 TOCTOU):對方可能剛 mkdir 成功、還沒來得及寫 pid——
+  # 「pid 沒寫」與「pid 寫過但行程死了」不能走同一條接管路。只有鎖齡超過 60 分鐘
+  # (真跑最長也早該寫完 pid)才視為殘鎖;年輕的空 pid 鎖一律讓行。
+  if [ -z "$OLDPID" ]; then
+    LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$LOCKDIR" 2>/dev/null || echo 0) ))
+    if [ "$LOCK_AGE" -lt 3600 ]; then
+      echo "[$(date '+%F %T')] 另一份 autonomous-loop 疑似剛起步(鎖存在 ${LOCK_AGE}s、pid 未寫),本次退出讓行"; exit 0
+    fi
+  fi
+  echo "[$(date '+%F %T')] 發現殘鎖(pid ${OLDPID:-?} 已不在或鎖齡過老),接管"
   rm -rf "$LOCKDIR"; mkdir "$LOCKDIR"
 fi
 echo $$ > "$LOCKDIR/pid"
@@ -69,7 +78,11 @@ print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if
       log "結局帳:record 失敗——帳上沒有這輪(詳情 $LOGDIR/cost-$TODAY.log)"
     fi
   fi
-  rm -f "$INFLIGHT" 2>/dev/null || true   # gap 已處置(放回或消化),斷電保險解除
+  if [ -n "$GAP_DISPOSED" ] || [ "${RQ:-}" = "requeued" ] || [ "${RQ:-}" = "covered" ]; then
+    rm -f "$INFLIGHT" 2>/dev/null || true   # gap 真有去向才解除斷電保險(r2 d-f3)
+  else
+    log "⚠ gap 放回未確認(${RQ:-無}),in-flight 標記保留給下次開場回收"
+  fi
   LEDGER_OUT="$(cd "$REPO" && python3 -c "
 import sys; sys.path.insert(0,'governance')
 from autonomous_loop import run_ledger
@@ -102,8 +115,12 @@ from autonomous_loop import gap_select
 g=json.load(open('$INFLIGHT'))
 print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
 " 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
-  log "上次執行被硬砍(SIGKILL/斷電),殘留的選中 gap 已放回($RQ0)"
-  rm -f "$INFLIGHT"
+  case "$RQ0" in
+    requeued|covered)
+      log "上次執行被硬砍(SIGKILL/斷電),殘留的選中 gap 已放回($RQ0)"; rm -f "$INFLIGHT";;
+    *)
+      log "⚠ 上次被硬砍的 gap 放回失敗($RQ0)——標記保留,下次開場再試;唯一證據不自我銷毀(詳 $LOGDIR/finalize-$TODAY.err)";;
+  esac
 fi
 
 if [ ! -f "$REPORT" ]; then
@@ -382,7 +399,22 @@ if w: gap_select.mark_covered('$SCRIPT_DIR/covered.jsonl', w)
     GAP_DISPOSED=1
     rm -f "$INFLIGHT" 2>/dev/null || true
   else
-    log "⚠ covered 寫入失敗——gap 改由收尾放回 backlog,不冒充已處置"
+    # continue 會把 $GAP_JSON 蓋掉,trap 的安全網接不到這筆(r2 d-f1 實跑重現:gap+已燒成本
+    # 三檔皆無)——所以當場放回,放回也失敗就 exit 保住變數讓 trap/in-flight 接手
+    RQF="$(echo "$GAP_JSON" | python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import gap_select
+g=json.load(sys.stdin)
+print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
+    case "$RQF" in
+      requeued|covered)
+        GAP_DISPOSED=1; rm -f "$INFLIGHT" 2>/dev/null || true
+        log "⚠ covered 寫入失敗——gap 已當場放回 backlog($RQF),不冒充已處置";;
+      *)
+        log "⚠ covered 寫入失敗且當場放回也失敗($RQF)——中止本輪,收尾與 in-flight 標記接手"
+        exit 1;;
+    esac
   fi
   log "gap 已被既有 spec 覆蓋,skip(reason: $(get reason));已記入 covered、永久不再選。循環選下一個($skip_n/$SKIP_CAP)。"
   [ "$skip_n" -ge "$SKIP_CAP" ] && { log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }

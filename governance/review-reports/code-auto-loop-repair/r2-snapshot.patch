@@ -1,0 +1,828 @@
+diff --git a/governance/.gitignore b/governance/.gitignore
+index 660372b..01a4f14 100644
+--- a/governance/.gitignore
++++ b/governance/.gitignore
+@@ -2,10 +2,17 @@
+ reports/
+ logs/
+ 
+ backlog.jsonl
+ pending/
+ covered.jsonl
+ 
+ # code-loop 收斂台帳:綁 HEAD sha 的 per-machine runtime 狀態(committer 一提交 HEAD 就移動→自作廢);本機守衛用,不版控、不跨機當權威
+ code-loop/
+ governance/nags-last-week.txt
++
++# 自主迴圈的 per-machine 執行期狀態(code-r1 arch-f1:提交=帶著舊日期散播,一提交就自作廢)
++autonomous_loop/decay-state.json
++.autonomous-loop.lock/
++.inflight-gap.json
++# 壞行側檔(本機回收用,不是總帳)
++*.jsonl.bad
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index a5703f6..597fa35 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -5,80 +5,114 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+ MODE="${1:---dry-run}"
+ MAXR="${2:-6}"
+ # 非 dry-run 停用(2026-07-29 使用者裁定,Codex 外審採納):子 agent 權限隔離
+ # (Systems/nested-agent-permission-scope,planned)落地前,confused-deputy 已知漏洞
+ # 不留可執行入口——--pr 直接拒跑。解禁條件:read-only child isolation 落地+過 code-loop。
+ if [ "$MODE" != "--dry-run" ]; then
+   echo "autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常" >&2
+   exit 2
+ fi
++# ── 整跑鎖(code-r1 s2-f1/f2):launchd+人工同時跑會互蓋 backlog/archive——mkdir 原子搶鎖,
++# 鎖裡放 PID;持鎖行程已死(kill -0 不到)視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。
++LOCKDIR="$SCRIPT_DIR/.autonomous-loop.lock"
++if ! mkdir "$LOCKDIR" 2>/dev/null; then
++  OLDPID="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
++  if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
++    echo "[$(date '+%F %T')] 另一份 autonomous-loop 正在跑(pid $OLDPID),本次退出——不搶寫 backlog"; exit 0
++  fi
++  echo "[$(date '+%F %T')] 發現殘鎖(pid ${OLDPID:-?} 已不在),接管"
++  rm -rf "$LOCKDIR"; mkdir "$LOCKDIR"
++fi
++echo $$ > "$LOCKDIR/pid"
++
+ TODAY="$(date +%F)"
+ REPORT="$SCRIPT_DIR/reports/governance-$TODAY.json"
+ PENDING="$SCRIPT_DIR/pending";  mkdir -p "$PENDING"
+ LOGDIR="$SCRIPT_DIR/logs";      mkdir -p "$LOGDIR"
+ SCRATCH="$(mktemp -d "/tmp/auto-loop-$TODAY.XXXXXX")"; mkdir -p "$SCRATCH/kg" "$SCRATCH/spec"   # mktemp:防可預測路徑搶佔(外審 minor)
+ log(){ echo "[$(date '+%F %T')] $*"; }
+ 
+ # ── 收尾器(auto-loop-repair-v2 [S1]+[S3]+[S4]):trap EXIT 統一做四件事——
+ # ①未處置 gap 原分放回(失敗不丟件,涵蓋全部早退點;滿 3 次熔斷 covered+喊人)
+ # ②結局落帳(結構化欄 --outcome/--usd;與成本抽取解耦,PARSE_FAIL 也有帳)
+ # ③連兩個有跑日全失敗 → LINE 喊人(素訊息,不套「備好待放行」模板)
+ # ④七天產出一行(失敗日也印——放 trap 就是為了這個)
+ # 內部所有指令都要 fail-open(|| true / if 判),trap 裡一個炸掉會吞掉後面全部。
+-GAP_JSON=""; GAP_DISPOSED=""; OUTCOME=""; COST_ARGS=""; FINAL_DONE=""
++# ★誠實邊界(code-r1 s2-f3)★:trap EXIT 接得住 bash 攔得到的退出,接不住 SIGKILL/斷電;
++# 那個窗口由 in-flight 標記檔補——選中 gap 先落標記,下次開場發現殘留標記就放回。
++GAP_JSON=""; GAP_DISPOSED=""; OUTCOME=""; COST_ARGS=""; FINAL_DONE=""; ROUND_RECORDED=""
++INFLIGHT="$SCRIPT_DIR/.inflight-gap.json"
+ finalize(){
+   [ -n "$FINAL_DONE" ] && return 0; FINAL_DONE=1
+-  [ -z "$GAP_JSON" ] && return 0   # 還沒選中 gap 的早退(無日報/無 gap):無輪無帳
++  rm -f "${PROMPT_FILE:-}" 2>/dev/null || true
++  [ -n "${SCRATCH:-}" ] && rm -rf "$SCRATCH" 2>/dev/null || true   # code-r1 s2-f5:暫存不累積
++  if [ -z "$GAP_JSON" ]; then rm -rf "$LOCKDIR" 2>/dev/null || true; return 0; fi   # 還沒選中 gap 的早退(無日報/無 gap):無輪無帳
+   if [ -z "$GAP_DISPOSED" ]; then
+     RQ="$(echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(sys.stdin)
+ print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
+     log "失敗不丟件:gap 已放回 backlog($RQ;分數不動,pipeline_failures 累計,滿 3 次轉 covered 留人)"
+     if [ "$RQ" = "covered" ]; then
+       MSG="⚠ 自主迴圈:某 gap 連 3 次管線失敗,已轉 covered 留人手動(weakness 見 governance/covered.jsonl 末行)"       LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
+     fi
+   fi
+-  # shellcheck disable=SC2086  # COST_ARGS 故意不引號:要拆成多參數
+-  if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY"           --auditor orchestrator --outcome "${OUTCOME:-pipeline_fail:parse_fail}" $COST_ARGS           --note "自主迴圈結局帳(trap 收尾統一落;成本欄=claude -p 實際回傳,非估算)")           >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
+-    log "結局帳:record 失敗——帳上沒有這輪(詳情 $LOGDIR/cost-$TODAY.log)"
++  if [ -z "$ROUND_RECORDED" ]; then   # skip 迭代已當場落帳的輪不重複記(code-r1 s1-f1/s3-f1)
++    # shellcheck disable=SC2086  # COST_ARGS 故意不引號:要拆成多參數
++    if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY"           --auditor orchestrator --outcome "${OUTCOME:-pipeline_fail:parse_fail}" $COST_ARGS           --note "自主迴圈結局帳(trap 收尾統一落;成本欄=claude -p 實際回傳,非估算)")           >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
++      log "結局帳:record 失敗——帳上沒有這輪(詳情 $LOGDIR/cost-$TODAY.log)"
++    fi
+   fi
++  rm -f "$INFLIGHT" 2>/dev/null || true   # gap 已處置(放回或消化),斷電保險解除
+   LEDGER_OUT="$(cd "$REPO" && python3 -c "
+ import sys; sys.path.insert(0,'governance')
+ from autonomous_loop import run_ledger
+ lg='docs/.canary-log.jsonl'
+ print(run_ledger.format_week_line(run_ledger.summarize_week(lg,'$TODAY')))
+ print('CONSEC_FAIL' if run_ledger.consecutive_fail_days(lg,'$TODAY') else 'OK')
+ " 2>>"$LOGDIR/finalize-$TODAY.err" || echo '')"
+   if [ -n "$LEDGER_OUT" ]; then
+     log "$(echo "$LEDGER_OUT" | head -1)"
+     if echo "$LEDGER_OUT" | grep -q CONSEC_FAIL; then
+       log "⚠ 連兩個有跑日全是管線失敗——不是天氣,喊人"
+       MSG="⚠ 自主迴圈連兩個有跑日管線全失敗($(echo "$LEDGER_OUT" | head -1));死因分類看 canary 帳 outcome 欄,log $LOGDIR/"       LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
+     fi
+   else
+     log "七天彙總:算不出來(詳 $LOGDIR/finalize-$TODAY.err)——不擋收尾,但這行沒了要查"
+   fi
++  rm -rf "$LOCKDIR" 2>/dev/null || true
+ }
+ trap finalize EXIT
+ 
++# ── in-flight 殘留回收(code-r1 s2-f3):上次被 SIGKILL/斷電砍在半路的 gap 放回 ──
++if [ -f "$INFLIGHT" ]; then
++  RQ0="$(python3 -c "
++import sys, json; sys.path.insert(0,'$REPO/governance')
++from autonomous_loop import gap_select
++g=json.load(open('$INFLIGHT'))
++print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
++" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
++  log "上次執行被硬砍(SIGKILL/斷電),殘留的選中 gap 已放回($RQ0)"
++  rm -f "$INFLIGHT"
++fi
++
+ if [ ! -f "$REPORT" ]; then
+   if [ "$MODE" = "--dry-run" ]; then
+     REPORT="$(ls -t "$SCRIPT_DIR/reports/"governance-2*.json 2>/dev/null | head -1 || true)"
+     [ -n "$REPORT" ] && log "今日無日報,dry-run fallback:$REPORT" || { log "無任何日報,結束"; exit 0; }
+   else log "今日無日報($TODAY),跳過"; exit 0; fi
+ fi
+ 
+ # ── 週期考卷(2026-08-05 掛載):雙庫檢索考卷 ≥7 天未跑就補跑——把「hook 調參靠記得」
+ # 變「定期發生」;fail-open,考卷失敗只記 log 不阻斷 gap 流程。判定/漂移細節在
+ # retrieval_eval.py 自己的 gate 輸出與 history jsonl,此處只管排程。
+@@ -221,21 +255,22 @@ if [ -z "$GAP_JSON" ]; then
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('autonomous-loop', os.environ['MSG'], None), t) if t else 'no-token')" || true
+   else
+     log "無可展開 gap(backlog 空或 N=1 閘),結束"
+   fi
+   exit 0
+ fi
+ log "選中 gap:$GAP_JSON"
+-GAP_DISPOSED=""
++GAP_DISPOSED=""; OUTCOME=""; COST_ARGS=""; ROUND_RECORDED=""   # code-r1 s1-f1:換 gap 全重置,成本不跨 gap 殘留
++printf '%s\n' "$GAP_JSON" > "$INFLIGHT.tmp" && mv "$INFLIGHT.tmp" "$INFLIGHT"   # 斷電保險
+ 
+ # 錨點完整性:驗證器被污染時跑出的「收斂/綠」全是假訊號,寧停。
+ # loop 入口比 pre-push 嚴:missing baseline 亦硬擋(無人看顧場景無人眼兜底)。
+ if [ ! -f "$REPO/governance/anchor-baseline.json" ] || ! (cd "$REPO" && python3 scripts/lumos anchor verify); then
+   log "錨點完整性失敗(anchor verify 不過或 baseline 缺失),loop 拒跑;gap 由收尾放回 backlog"
+   OUTCOME="pipeline_fail:anchor_fail"
+   MSG="⚠ 錨點完整性失敗,自主 loop 拒跑(anchor verify)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+@@ -318,29 +353,46 @@ print(orchestrator_result.classify_death(sys.stdin.read()))" 2>/dev/null || echo
+   exit 1;; esac
+ 
+ get(){ echo "$PARSED" | python3 -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
+ SKIPPED="$(get skipped)"; CONVERGED="$(get converged)"; TOPIC="$(get topic)"; SPEC="$(get spec_path)"
+ CROSS_VERDICT="$(get cross_verdict)"; CROSS_WORST="$(get cross_worst)"; CROSS_SUMMARY="$(get cross_summary)"
+ TIER_RESULT="$(get tier)"
+ CROSS_SUMMARY="${CROSS_SUMMARY//$'\n'/ }"   # F3 防破版:換行→空格
+ 
+ if [ "$SKIPPED" = "True" ]; then
+   skip_n=$((skip_n+1))
+-  echo "$GAP_JSON" | python3 -c "
++  # skip 迭代自己真跑過 orchestrator、真花了錢——當場落自己的帳,不等 trap
++  # (code-r1 s1-f1/s3-f1:trap 只落最後一筆,早期迭代的花費會張冠李戴或直接蒸發)
++  OUTCOME="skipped"
++  # shellcheck disable=SC2086
++  if (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY" \
++        --auditor orchestrator --outcome skipped $COST_ARGS \
++        --note "自主迴圈結局帳(skip 迭代當場落;成本欄=claude -p 實際回傳,非估算)") \
++        >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
++    ROUND_RECORDED=1
++  else
++    log "結局帳:skip 迭代 record 失敗——這筆花費帳上會缺(詳 $LOGDIR/cost-$TODAY.log)"
++  fi
++  # covered 寫入成功才算有去向;失敗就留給 trap 放回(code-r1 ext-f1:不准寫失敗還標已處置)
++  if echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ w=json.load(sys.stdin).get('weakness','')
+ if w: gap_select.mark_covered('$SCRIPT_DIR/covered.jsonl', w)
+-" 2>/dev/null || true
+-  GAP_DISPOSED=1   # 已記 covered=有去向,trap 不再放回
++" 2>>"$LOGDIR/finalize-$TODAY.err"; then
++    GAP_DISPOSED=1
++    rm -f "$INFLIGHT" 2>/dev/null || true
++  else
++    log "⚠ covered 寫入失敗——gap 改由收尾放回 backlog,不冒充已處置"
++  fi
+   log "gap 已被既有 spec 覆蓋,skip(reason: $(get reason));已記入 covered、永久不再選。循環選下一個($skip_n/$SKIP_CAP)。"
+-  [ "$skip_n" -ge "$SKIP_CAP" ] && { OUTCOME="skipped"; log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
++  [ "$skip_n" -ge "$SKIP_CAP" ] && { log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
+   continue
+ fi
+ break
+ done
+ 
+ RESIDUAL='["跨家族複核已加(qwen3-max 放行前複核 opus 設計、補同門盲點);但 degrade 時退回單一 opus、qwen 也是 AI、verdict 判定仍在 orchestrator(prompt 層自律)","severity 由 judge 評(已斷 orchestrator 自填)但 judge 也是 AI、且同輪判 canary+severity=集中化","type d canary 沒測(限 a/b/c)","自動 brainstorm 無人回澄清;AI 自選 gap=自己決定改自己方向(自我強化偏誤)","唯一外部錨點是你 review 這個 PR"]'
+ if [ "$CONVERGED" != "True" ]; then
+   if [ "$CROSS_VERDICT" = "disputed" ]; then
+     OUTCOME="unconverged:disputed"
+     MSG="⚠ 跨家族否決(qwen 持續異議):$CROSS_SUMMARY"; log "未收斂(跨家族否決 disputed),不放行:$CROSS_SUMMARY"
+@@ -356,21 +408,21 @@ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+   # 副作用 A:未收斂 gap 回 backlog 降分 + 累計 unconverged;達 3 次 → covered(放棄自動、留人),不立即消失
+   RQ="$(echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(sys.stdin)
+ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>/dev/null || echo '?')"
+-  GAP_DISPOSED=1
++  case "$RQ" in requeued|covered) GAP_DISPOSED=1;; *) log "⚠ requeue 回報異常($RQ)——gap 改由收尾放回,不冒充已處置";; esac
+   log "未收斂 gap 處置:$RQ(回 backlog 降分重試 / 累計達 3 次 covered)"
+   exit 0
+ fi
+ 
+ [ -n "$CROSS_VERDICT" ] && log "跨家族複核:$CROSS_VERDICT($CROSS_WORST)— $CROSS_SUMMARY"
+ 
+ # ── tier 收檔守衛:不信自報 converged——wrapper 自算 tier、以其 need 重驗 gate ──
+ if [ -z "$SPEC" ] || [ ! -f "$SPEC" ]; then
+   OUTCOME="tier-blocked:spec"
+   log "tier 守衛擋下:converged=True 但 spec_path 空或不存在($SPEC)"
+@@ -378,21 +430,21 @@ if [ -z "$SPEC" ] || [ ! -f "$SPEC" ]; then
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+   RQ="$(echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(sys.stdin)
+ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>/dev/null || echo '?')"
+-  GAP_DISPOSED=1
++  case "$RQ" in requeued|covered) GAP_DISPOSED=1;; *) log "⚠ requeue 回報異常($RQ)——gap 改由收尾放回";; esac
+   log "未收斂 gap 處置:$RQ(tier 守衛/spec_path)"
+   exit 0
+ fi
+ REPORT_MD="$(cd "$REPO" && python3 -c "
+ import sys, json; sys.path.insert(0,'governance')
+ from autonomous_loop import confidence_report, difficulty
+ a=difficulty.assess_spec(open('$SPEC').read())
+ print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json.loads('''$RESIDUAL'''),
+       tier=a['tier'], hits=a['hits'], reported_tier='$TIER_RESULT'))
+ ")"
+@@ -409,52 +461,52 @@ if ! (cd "$REPO" && python3 scripts/lumos --vault "$SCRATCH/kg" loop status "$TO
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+   RQ="$(echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(sys.stdin)
+ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>/dev/null || echo '?')"
+-  GAP_DISPOSED=1
++  case "$RQ" in requeued|covered) GAP_DISPOSED=1;; *) log "⚠ requeue 回報異常($RQ)——gap 改由收尾放回";; esac
+   log "未收斂 gap 處置:$RQ(tier 守衛)"
+   exit 0
+ fi
+ if [ "$TIER_FINAL" = "high" ] && [ "$CROSS_VERDICT" != "endorsed" ]; then
+   OUTCOME="tier-blocked:cross"
+   log "tier 守衛擋下:high 級 cross_verdict=$CROSS_VERDICT 非乾淨 endorsed,不放行"
+   MSG="⚠ tier 守衛擋下:high 級複核非乾淨 endorsed(=$CROSS_VERDICT)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+   RQ="$(echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(sys.stdin)
+ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>/dev/null || echo '?')"
+-  GAP_DISPOSED=1
++  case "$RQ" in requeued|covered) GAP_DISPOSED=1;; *) log "⚠ requeue 回報異常($RQ)——gap 改由收尾放回";; esac
+   log "未收斂 gap 處置:$RQ(tier 守衛/cross)"
+   exit 0
+ fi
+ 
+ if [ "$MODE" = "--dry-run" ]; then
+   if cp "$SPEC" "$PENDING/" 2>/dev/null; then
+     OUTCOME="converged"   # 「備好待放行」=converged 且 pending 寫入成功([S4] Z 的定義)
++    GAP_DISPOSED=1        # spec 真的備好了,gap 才算消化(code-r1 ext-f2:寫失敗不冒充已處置)
+   else
+     OUTCOME="pipeline_fail:pending_write"
+-    log "⚠ 收斂但 pending 寫入失敗($SPEC → $PENDING/)——spec 沒備好,這不是好日子"
++    log "⚠ 收斂但 pending 寫入失敗($SPEC → $PENDING/)——spec 沒備好;gap 由收尾放回 backlog"
+   fi
+-  printf '%s\n' "$REPORT_MD" > "$PENDING/$(basename "$SPEC" .md)-confidence.md"
+-  GAP_DISPOSED=1   # 收斂=有去向(gap 已消化成 spec),trap 不放回
++  printf '%s\n' "$REPORT_MD" > "$PENDING/$(basename "$SPEC" .md)-confidence.md" 2>/dev/null || true
+   log "dry-run:收斂!spec + 可信度報告寫入 $PENDING/(repo 未動)"
+   LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC','(dry-run)收斂[跨家族:$CROSS_VERDICT]、待你看 pending/',None),t) if t else 'no-token')" || true
+ else
+   cd "$REPO"; BR="auto/spec-$TOPIC-$TODAY"
+   cp "$SPEC" "docs/design/$(basename "$SPEC")"
+   git checkout -b "$BR"; git add "docs/design/$(basename "$SPEC")"
+diff --git a/governance/autonomous_loop/backlog.py b/governance/autonomous_loop/backlog.py
+index 6ef12a4..8b132ec 100644
+--- a/governance/autonomous_loop/backlog.py
++++ b/governance/autonomous_loop/backlog.py
+@@ -1,36 +1,45 @@
+ import json, os
+ from pathlib import Path
+ 
+ INIT_SCORE = 0.5
+ 
+ def load_backlog(path):
+     """逐行讀 backlog;壞行跳過並在 stderr 記一句(一行壞資料不該讓整條迴圈當機——
+     set -euo pipefail 下未捕捉例外=從此天天早退,auto-loop-repair-v2 s2-f5)。"""
+     p = Path(path)
+     if not p.exists(): return []
+-    rows, bad = [], 0
++    rows, bad = [], []
+     for l in p.read_text(encoding="utf-8").splitlines():
+         if not l.strip(): continue
+         try:
+             rows.append(json.loads(l))
+         except ValueError:
+-            bad += 1
++            bad.append(l)
+     if bad:
+         import sys
+-        print(f"backlog:跳過 {bad} 行壞資料({path})——檔案疑似寫到一半被中斷,值得看一眼", file=sys.stderr)
++        # 壞行不能只是跳過——之後任何正常 _save 都會整檔覆寫,等於把它無聲永久刪除
++        # (code-r1 ext-f3)。撈到 .bad 側檔保留,人可回收。
++        try:
++            with open(p.with_name(p.name + ".bad"), "a", encoding="utf-8") as f:
++                for l in bad:
++                    f.write(l + "\n")
++            where = f"已撈到 {p.name}.bad 保留"
++        except OSError as e:
++            where = f"連 .bad 側檔都寫不進({e})——壞行只剩這行 log 有記錄"
++        print(f"backlog:跳過 {len(bad)} 行壞資料({path}),{where};檔案疑似寫到一半被中斷,值得看一眼", file=sys.stderr)
+     return rows
+ 
+ def _save(path, rows):
+     """原子寫:先寫暫存檔再整檔替換——寫到一半被中斷(launchd 逾時/睡眠)不會留半個檔。"""
+     p = Path(path)
+-    tmp = p.with_name(p.name + ".tmp")
++    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")   # 帶 PID:並行不共用暫存檔(主防線是整跑鎖)
+     tmp.write_text(
+         "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + ("\n" if rows else ""),
+         encoding="utf-8")
+     os.replace(tmp, p)
+ 
+ def add_gaps(path, gaps, today):
+     rows = load_backlog(path)
+     seen = {r["weakness"]: r for r in rows}
+     for g in gaps:
+         if g["weakness"] in seen:
+@@ -89,24 +98,38 @@ def daily_decay(path, archive_path, state_path, today, rate=0.95, floor=0.2):
+             return {"status": "noop", "days": 0, "pruned": 0}
+     rows = load_backlog(path)
+     kept, pruned = [], []
+     for r in rows:
+         r = dict(r)
+         r["value_score"] = r.get("value_score", INIT_SCORE) * (rate ** days)
+         (kept if r["value_score"] >= floor else pruned).append(r)
+     if pruned:
+         arch = Path(archive_path)
+         try:
++            # 前次中斷可能留下沒換行的半行:先補一個換行,新列不黏在壞行後面(code-r1 s3-f2 附帶)
++            prefix = ""
++            if arch.exists():
++                old = arch.read_text(encoding="utf-8")
++                if old and not old.endswith("\n"):
++                    prefix = "\n"
+             with open(arch, "a", encoding="utf-8") as f:
++                f.write(prefix)
+                 for r in pruned:
+                     rec = dict(r); rec["archived"] = today; rec["reason"] = "decay-floor"
+                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+-            # 讀回自驗:最後 len(pruned) 行要能解析且 weakness 對得上
+-            tail = [json.loads(l) for l in arch.read_text(encoding="utf-8").splitlines() if l.strip()][-len(pruned):]
++            # 讀回自驗:只 parse「自己剛寫的尾段」——歷史壞行不關這批的事,掃全檔會讓
++            # 一行陳年壞資料把衰減永久卡死且不自癒(code-r1 s3-f2 blocker)
++            tail_lines = [l for l in arch.read_text(encoding="utf-8").splitlines() if l.strip()][-len(pruned):]
++            tail = [json.loads(l) for l in tail_lines]
+             if [t.get("weakness") for t in tail] != [r.get("weakness") for r in pruned]:
+                 raise OSError("讀回內容對不上")
+         except (OSError, ValueError) as e:
+             print(f"backlog 歸檔失敗({e}):live 不動、狀態不前進,明天重試——絕不無痕淘汰", file=sys.stderr)
+             return {"status": "archive-fail", "days": days, "pruned": 0}
++    # state 先落、live 後縮(都原子)。中斷在兩者之間=今天標了已衰但 live 沒縮=少衰一天,
++    # 方向安全;反過來(先縮後標)中斷=明天對已衰過的列再衰一次,分數靜默多掉
++    # (code-r1 ext-f4/s2-f4——原實作就是錯的那個方向)。
++    state_tmp = state.with_name(state.name + ".tmp")
++    state_tmp.write_text(json.dumps({"last_decayed": today}) + "\n", encoding="utf-8")
++    os.replace(state_tmp, state)
+     _save(path, kept)
+-    state.write_text(json.dumps({"last_decayed": today}) + "\n", encoding="utf-8")
+     return {"status": "ok", "days": days, "pruned": len(pruned)}
+diff --git a/governance/autonomous_loop/decay-state.json b/governance/autonomous_loop/decay-state.json
+deleted file mode 100644
+index c35ba5d..0000000
+--- a/governance/autonomous_loop/decay-state.json
++++ /dev/null
+@@ -1 +0,0 @@
+-{"last_decayed": "2026-08-26"}
+diff --git a/governance/autonomous_loop/gap_select.py b/governance/autonomous_loop/gap_select.py
+index 2b4f251..3072355 100644
+--- a/governance/autonomous_loop/gap_select.py
++++ b/governance/autonomous_loop/gap_select.py
+@@ -22,21 +22,43 @@ def pending_exists(mode, pending_dir):
+     return out.returncode == 0 and out.stdout.strip() not in ("", "[]")
+ 
+ 
+ def load_covered(covered_path):
+     """已被既有 spec 覆蓋(orchestrator 判過 skip)的 gap weakness 集合——永久排除,不再選/不重加。"""
+     if not covered_path:
+         return set()
+     p = Path(covered_path)
+     if not p.exists():
+         return set()
+-    return {json.loads(l)["weakness"] for l in p.read_text(encoding="utf-8").splitlines() if l.strip()}
++    # 逐行容錯(code-r1 s3-f3/conf-f1):covered 跟 backlog 同款 append-only jsonl,
++    # 一行壞資料不該讓整條迴圈死在選題之前;壞行進 .bad 側檔保留。
++    got, bad = set(), []
++    for l in p.read_text(encoding="utf-8").splitlines():
++        if not l.strip():
++            continue
++        try:
++            w = json.loads(l).get("weakness")
++        except ValueError:
++            bad.append(l); continue
++        if w:
++            got.add(w)
++    if bad:
++        import sys
++        try:
++            with open(p.with_name(p.name + ".bad"), "a", encoding="utf-8") as f:
++                for l in bad:
++                    f.write(l + "\n")
++            where = f"已撈到 {p.name}.bad 保留"
++        except OSError as e:
++            where = f".bad 側檔也寫不進({e})"
++        print(f"covered:跳過 {len(bad)} 行壞資料({p}),{where}", file=sys.stderr)
++    return got
+ 
+ 
+ def mark_covered(covered_path, weakness):
+     """orchestrator 判某 gap 已被既有 spec 覆蓋 → 記下,以後 add_gaps/select 都跳過它。"""
+     with open(covered_path, "a", encoding="utf-8") as f:
+         f.write(json.dumps({"weakness": weakness}, ensure_ascii=False) + "\n")
+ 
+ 
+ def requeue_unconverged(backlog_path, gap, covered_path, decay=0.7, max_unconv=3):
+     """未收斂(撞 cap / cross-family disputed)的 gap:降分 + 累計 unconverged 回 backlog,
+diff --git a/scripts/lumos b/scripts/lumos
+index 36d0dc8..4790dc4 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -3530,25 +3530,31 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+     if scope_lines is not None and scope_lines > _CANARY_SCOPE_SOFT_CAP_LINES:
+         rec["scope_oversize"] = True
+         print(f"提醒:這輪要審的東西有 {scope_lines} 行,超過建議的軟上限 {_CANARY_SCOPE_SOFT_CAP_LINES} 行"
+               f"(外部研究認為材料太多審查員容易看不完、漏審)。", file=sys.stderr)
+         print("  不擋你記錄,但帳上已標成 scope_oversize,這一輪抓到的結果算弱證據——"
+               "審查員可能是「看不完」而不是「沒問題」;收斂結論講保守一點,下一輪拆開審。", file=sys.stderr)
+     # ── 自主迴圈結局帳(2026-08-26 auto-loop-repair-v2):outcome/usd 結構化欄 ──
+     # 為什麼開新欄——[S4] 七天彙總要機器回讀「這輪怎麼收+花多少」;塞 note 散文是
+     # 專案明文放棄的舊路(note 在讀側一律丟棄防散文注入)。不給不寫鍵,舊列=舊格式桶。
+     if outcome is not None:
+-        _main = str(outcome).split(":", 1)[0]
+-        if _main not in ("converged", "unconverged", "tier-blocked", "skipped", "pipeline_fail") \
+-                or not re.fullmatch(r"[a-z_-]+(:[a-z0-9_-]+)?", str(outcome)):
+-            print(f"擋下:--outcome 要用「主類」或「主類:細類」——主類只能是 converged/unconverged/"
+-                  f"tier-blocked/skipped/pipeline_fail,細類用小寫字母數字連字號;你給的是 {outcome!r}",
++        # 封閉列舉(code-r1 s4-f1:細類值域也要鎖——只驗主類會讓未宣告的分類靜默進帳,
++        # 讀側的彙總桶就對不上);新增細類=先改這裡+spec 分類節,逼兩邊同步。
++        _OUTCOMES = ("converged", "skipped",
++                     "unconverged:cap", "unconverged:disputed", "unconverged:degraded-high",
++                     "tier-blocked:spec", "tier-blocked:gate", "tier-blocked:cross",
++                     "pipeline_fail:api_error", "pipeline_fail:truncated",
++                     "pipeline_fail:parse_fail", "pipeline_fail:anchor_fail",
++                     "pipeline_fail:pending_write")
++        if str(outcome) not in _OUTCOMES:
++            print(f"擋下:--outcome 只收這 {len(_OUTCOMES)} 個值(結局分類是封閉列舉,新分類要先改"
++                  f" spec 與這份白名單):{' / '.join(_OUTCOMES)};你給的是 {outcome!r}",
+                   file=sys.stderr)
+             return 2
+         rec["outcome"] = str(outcome)
+     if usd is not None:
+         if usd < 0:
+             print(f"擋下:--usd 只能填 0 或正數(這一輪實際花的美元),你給的是 {usd}", file=sys.stderr)
+             return 2
+         rec["usd"] = round(float(usd), 4)
+     # ── M1包 #1 tier 定錨欄(選配;loop next/gate 讀首個帶 tier 記錄定錨) ──
+     if tier is not None:
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index beaae45..f497750 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -725,20 +725,95 @@ class TestRunLedgerS4(unittest.TestCase):
+ 
+ 
+ class TestLineAlertNoFakeHeader(unittest.TestCase):
+     """[S3]⑤ 警示不套「備好待放行」模板。"""
+     def test_build_alert_plain(self):
+         m = line_notify.build_alert("⚠ 自主迴圈連兩個有跑日管線死")
+         self.assertNotIn("備好", json.dumps(m, ensure_ascii=False))
+         self.assertEqual(m["messages"][0]["text"], "⚠ 自主迴圈連兩個有跑日管線死")
+ 
+ 
++class TestCodeLoopR1Folds(unittest.TestCase):
++    """code-auto-loop-repair r1 折修的釘子(先紅後綠)。"""
++    def setUp(self):
++        self.d = Path(tempfile.mkdtemp())
++        self.p = self.d / "backlog.jsonl"
++        self.arch = self.d / "backlog-archive.jsonl"
++        self.state = self.d / "decay-state.json"
++        self.cov = self.d / "covered.jsonl"
++
++    def test_bad_lines_stashed_not_deleted(self):
++        # ext-f3:壞行不能在下一次正常寫入時被無聲永久刪除——讀取時撈到 .bad 側檔保留
++        self.p.write_text('{"weakness":"a","value_score":0.5}\n{{{半行壞資料\n')
++        backlog.load_backlog(self.p)
++        backlog._save(self.p, backlog.load_backlog(self.p))   # 正常寫入會覆寫掉壞行
++        bad = self.p.with_name(self.p.name + ".bad")
++        self.assertTrue(bad.exists(), "壞行要進 .bad 側檔保留,不准人間蒸發")
++        self.assertIn("半行壞資料", bad.read_text())
++
++    def test_load_covered_tolerates_bad_lines(self):
++        # s3-f3/conf-f1:covered 讀取要有對稱容錯
++        self.cov.write_text('{"weakness":"w1"}\n{{{壞\n{"no_weakness_key":1}\n{"weakness":"w2"}\n')
++        got = gap_select.load_covered(self.cov)
++        self.assertEqual(got, {"w1", "w2"})
++
++    def test_archive_readback_ignores_historical_bad_line(self):
++        # s3-f2:歷史壞行不能讓衰減永久卡死——自驗只看自己剛寫的尾段
++        self.arch.write_text('{{{歷史壞行\n')
++        backlog._save(self.p, [{"weakness": "dying", "value_score": 0.2,
++                                "last_seen": "2026-08-20", "source_date": "2026-08-20"}])
++        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
++        self.assertEqual(out["status"], "ok", out)
++        self.assertEqual(out["pruned"], 1)
++
++    def test_archive_append_after_half_line_gets_own_line(self):
++        # s3-f2 附帶:前次中斷留下沒換行的半行,新寫入不得黏在它後面
++        self.arch.write_text('{"weakness":"prev"')   # 無結尾換行
++        backlog._save(self.p, [{"weakness": "dying", "value_score": 0.2,
++                                "last_seen": "2026-08-20", "source_date": "2026-08-20"}])
++        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
++        self.assertEqual(out["status"], "ok", out)
++        lines = self.arch.read_text().splitlines()
++        self.assertEqual(json.loads(lines[-1])["weakness"], "dying")
++
++    def test_state_written_before_live_shrink(self):
++        # ext-f4/s2-f4:state 先於縮 live 落盤(中斷=少衰一天,絕不重複衰)——以寫入順序釘
++        order = []
++        real_save = backlog._save
++        def spy_save(path, rows):
++            order.append(("save", Path(path).name)); real_save(path, rows)
++        real_write = Path.write_text
++        def spy_write(self_, content, *a, **k):
++            if self_.name.endswith("decay-state.json.tmp") or self_.name == "decay-state.json":
++                order.append(("state", self_.name))
++            return real_write(self_, content, *a, **k)
++        backlog._save = spy_save
++        Path.write_text = spy_write
++        try:
++            backlog._save(self.p, [{"weakness": "w", "value_score": 0.5,
++                                    "last_seen": "2026-08-20", "source_date": "2026-08-20"}])
++            order.clear()
++            backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
++        finally:
++            backlog._save = real_save
++            Path.write_text = real_write
++        state_i = next(i for i, o in enumerate(order) if o[0] == "state")
++        save_i = next(i for i, o in enumerate(order) if o[0] == "save" and o[1] == "backlog.jsonl")
++        self.assertLess(state_i, save_i, order)
++
++    def test_save_tmp_has_pid_suffix(self):
++        # s2-f1 補強:tmp 檔名帶 PID,並行不共用同一暫存檔(整跑鎖是主防線,這是第二道)
++        import inspect
++        src = inspect.getsource(backlog._save)
++        self.assertIn("getpid", src)
++
++
+ class TestLoopShellTrap(unittest.TestCase):
+     """[S1]+[S3]+[S4] 端到端(沙箱假 repo):早退點的放回+結局落帳+彙總照印。
+     沙箱換 HOME(不摸真 LINE token)、scripts/lumos 換成記 argv 的 stub、claude 換成吐固定信封的 stub。"""
+ 
+     def _sandbox(self, anchor_ok):
+         import shutil, datetime
+         root = Path(tempfile.mkdtemp())
+         gov = root / "governance"; gov.mkdir()
+         real_gov = Path(__file__).resolve().parent.parent / "governance"
+         shutil.copy(real_gov / "autonomous-loop.sh", gov / "autonomous-loop.sh")
+@@ -802,12 +877,182 @@ class TestLoopShellTrap(unittest.TestCase):
+         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+         rows = backlog.load_backlog(gov / "backlog.jsonl")
+         self.assertEqual(rows[0]["pipeline_failures"], 1)                  # NO_JSON 也放回
+         recs = [c for c in self._calls(scripts) if "record" in c]
+         hit = [c for c in recs if "pipeline_fail:truncated" in c]
+         self.assertTrue(hit, recs)                                         # 死因=截斷(is_error=False)
+         self.assertIn("--usd", hit[0])                                     # 成本欄同筆帶上
+         self.assertIn("12.5", " ".join(hit[0]))
+ 
+ 
++class TestLoopShellTrapR1Folds(unittest.TestCase):
++    """code-r1 折修的 shell 端到端釘(沙箱同 TestLoopShellTrap;紅證=s1 席自建重現+修前無覆蓋)。"""
++
++    def _sandbox(self, anchor_ok=True, envelopes=None, backlog_rows=None, report_gaps=None,
++                 preseed_ledger=None, inflight=None):
++        import shutil, datetime
++        root = Path(tempfile.mkdtemp())
++        gov = root / "governance"; gov.mkdir()
++        real_gov = Path(__file__).resolve().parent.parent / "governance"
++        shutil.copy(real_gov / "autonomous-loop.sh", gov / "autonomous-loop.sh")
++        shutil.copytree(real_gov / "autonomous_loop", gov / "autonomous_loop",
++                        ignore=shutil.ignore_patterns("__pycache__", "*.log", "DRYRUN-OBSERVE.md",
++                                                      "decay-state.json"))
++        (gov / "reports").mkdir()
++        today = datetime.date.today().isoformat()
++        (gov / "reports" / ("governance-%s.json" % today)).write_text(
++            json.dumps({"gaps": report_gaps if report_gaps is not None else
++                        [{"weakness": "沙箱測試gap", "suggestion": "x"}]}, ensure_ascii=False))
++        if backlog_rows:
++            (gov / "backlog.jsonl").write_text(
++                "\n".join(json.dumps(r, ensure_ascii=False) for r in backlog_rows) + "\n")
++        docs = root / "docs"; docs.mkdir()
++        if preseed_ledger:
++            (docs / ".canary-log.jsonl").write_text(
++                "\n".join(json.dumps(r, ensure_ascii=False) for r in preseed_ledger) + "\n")
++        if inflight:
++            (gov / ".inflight-gap.json").write_text(json.dumps(inflight, ensure_ascii=False))
++        scripts = root / "scripts"; scripts.mkdir()
++        stub = "\n".join([
++            "#!/usr/bin/env python3",
++            "import sys, json, pathlib",
++            "calls = pathlib.Path(__file__).parent / 'lumos-calls.jsonl'",
++            "with calls.open('a') as f:",
++            "    f.write(json.dumps(sys.argv[1:], ensure_ascii=False) + chr(10))",
++            "if 'anchor' in sys.argv:",
++            "    sys.exit(0 if %s else 1)" % ("True" if anchor_ok else "False"),
++            "sys.exit(0)", ""])
++        (scripts / "lumos").write_text(stub); (scripts / "lumos").chmod(0o755)
++        home = root / "home"; (home / ".config" / "ai-daily").mkdir(parents=True)
++        bindir = root / "bin"; bindir.mkdir()
++        envs = envelopes if envelopes is not None else ["中途講到一半沒有 JSON。"]
++        for i, e in enumerate(envs):
++            body = e if isinstance(e, str) else json.dumps(e, ensure_ascii=False)
++            (root / ("envelope-%d.json" % i)).write_text(body)
++        claude_stub = "\n".join([
++            "#!/usr/bin/env python3",
++            "import pathlib",
++            "root = pathlib.Path(%r)" % str(root),
++            "cnt = root / 'claude-call-count'",
++            "n = int(cnt.read_text()) if cnt.exists() else 0",
++            "cnt.write_text(str(n + 1))",
++            "src = root / ('envelope-%d.json' % min(n, " + str(len(envs) - 1) + "))",
++            "print(src.read_text())", ""])
++        (bindir / "claude").write_text(claude_stub); (bindir / "claude").chmod(0o755)
++        if anchor_ok:
++            (gov / "anchor-baseline.json").write_text("{}")
++        return root, gov, scripts, home, bindir
++
++    _run = TestLoopShellTrap._run
++    _calls = TestLoopShellTrap._calls
++
++    def _env(self, result, cost=True, **extra):
++        e = {"result": json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else result,
++             "is_error": False, "num_turns": 3, "duration_ms": 60000}
++        if cost:
++            e.update({"total_cost_usd": 42.0,
++                      "usage": {"input_tokens": 10, "output_tokens": 10, "cache_read_input_tokens": 0}})
++        e.update(extra)
++        return e
++
++    def test_parse_fail_envelope_recorded_without_usd(self):
++        # conf-f5a:信封層整包壞 JSON → outcome=parse_fail 且該筆無 --usd
++        root, gov, scripts, home, bindir = self._sandbox(envelopes=["這整包根本不是 JSON"])
++        r = self._run(root, home, bindir)
++        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
++        recs = [c for c in self._calls(scripts) if "record" in c]
++        hit = [c for c in recs if "pipeline_fail:parse_fail" in c]
++        self.assertTrue(hit, recs)
++        self.assertNotIn("--usd", hit[0])
++
++    def test_skip_then_empty_backlog_still_records_skip_row(self):
++        # s3-f1(blocker):skip 一次→backlog 見底→exit,skip 那筆要有自己的帳(含成本)
++        root, gov, scripts, home, bindir = self._sandbox(
++            envelopes=[self._env({"skipped": True, "reason": "已被覆蓋", "converged": False,
++                                  "topic": "t", "spec_path": ""})])
++        r = self._run(root, home, bindir)
++        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
++        recs = [c for c in self._calls(scripts) if "record" in c and "skipped" in c]
++        self.assertEqual(len(recs), 1, self._calls(scripts))     # 有帳且不重複
++        self.assertIn("--usd", recs[0])                          # 成本跟著這筆
++        self.assertIn("沙箱測試gap", gap_select.load_covered(gov / "covered.jsonl"))
++
++    def test_multi_gap_cost_not_leaked_across_iterations(self):
++        # s1-f1:gap A(skip,$42)→gap B(信封壞,無成本)——B 的帳不得夾帶 A 的 42
++        root, gov, scripts, home, bindir = self._sandbox(
++            report_gaps=[{"weakness": "gapA", "suggestion": "x"},
++                         {"weakness": "gapB", "suggestion": "x"}],
++            envelopes=[self._env({"skipped": True, "reason": "r", "converged": False,
++                                  "topic": "t", "spec_path": ""}),
++                       "第二包整個不是 JSON"])
++        r = self._run(root, home, bindir)
++        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
++        recs = [c for c in self._calls(scripts) if "record" in c]
++        skip_rows = [c for c in recs if "skipped" in c]
++        fail_rows = [c for c in recs if "pipeline_fail:parse_fail" in c]
++        self.assertEqual((len(skip_rows), len(fail_rows)), (1, 2 - 1), recs)
++        self.assertIn("42.0", " ".join(skip_rows[0]))            # A 的成本在 A 的帳
++        self.assertNotIn("42.0", " ".join(fail_rows[0]))         # 不漏到 B
++
++    def test_three_strikes_covered_and_alert_path(self):
++        # conf-f3:滿 3 次熔斷→covered+喊人線路真的走到(無 token → no-token)
++        root, gov, scripts, home, bindir = self._sandbox(
++            anchor_ok=False,
++            backlog_rows=[{"weakness": "頑固gap", "suggestion": "x", "value_score": 0.5,
++                           "last_seen": "2099-01-01", "source_date": "2099-01-01",
++                           "pipeline_failures": 2}],
++            report_gaps=[])
++        r = self._run(root, home, bindir)
++        self.assertIn("轉 covered 留人", r.stdout)
++        self.assertIn("no-token", r.stdout)                      # LINE 線路走到了(打樁無 token)
++        self.assertIn("頑固gap", gap_select.load_covered(gov / "covered.jsonl"))
++
++    def test_consecutive_fail_days_alert_fires(self):
++        # conf-f6:預埋兩個失敗有跑日→收尾判 CONSEC_FAIL→喊人線路走到
++        import datetime
++        d1 = (datetime.date.today() - datetime.timedelta(days=2)).isoformat()
++        d2 = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
++        root, gov, scripts, home, bindir = self._sandbox(
++            anchor_ok=False,
++            preseed_ledger=[
++                {"ts": d1 + "T10:00:00+08:00", "loop": "auto-" + d1, "outcome": "pipeline_fail:api_error"},
++                {"ts": d2 + "T10:00:00+08:00", "loop": "auto-" + d2, "outcome": "pipeline_fail:truncated"}])
++        r = self._run(root, home, bindir)
++        self.assertIn("連兩個有跑日", r.stdout)
++
++    def test_lock_blocks_concurrent_run(self):
++        # s2-f1:鎖被活行程持有→本次直接退出不搶寫
++        import os
++        root, gov, scripts, home, bindir = self._sandbox()
++        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
++        (lock / "pid").write_text(str(os.getpid()))              # 本測試行程=活的
++        r = self._run(root, home, bindir)
++        self.assertEqual(r.returncode, 0)
++        self.assertIn("另一份", r.stdout)
++        self.assertEqual(self._calls(scripts), [])               # 什麼都沒做
++
++    def test_stale_lock_taken_over(self):
++        # s2-f1:持鎖行程已死→接管照跑
++        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
++        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
++        (lock / "pid").write_text("99999999")
++        r = self._run(root, home, bindir)
++        self.assertIn("接管", r.stdout)
++        self.assertEqual(r.returncode, 1)                        # 照常跑到 anchor 失敗
++
++    def test_inflight_marker_recovered_on_next_run(self):
++        # s2-f3:上次被 SIGKILL 砍在半路的 gap,下次開場放回
++        root, gov, scripts, home, bindir = self._sandbox(
++            anchor_ok=False, report_gaps=[],
++            inflight={"weakness": "被硬砍的gap", "suggestion": "x", "value_score": 0.42,
++                      "last_seen": "2026-08-20", "source_date": "2026-08-20"})
++        r = self._run(root, home, bindir)
++        self.assertIn("被硬砍", r.stdout)
++        rows = backlog.load_backlog(gov / "backlog.jsonl")
++        mine = [x for x in rows if x["weakness"] == "被硬砍的gap"]
++        self.assertEqual(len(mine), 1, rows)
++        self.assertAlmostEqual(mine[0]["value_score"], 0.42 * 0.95, places=4)  # 原分放回,再吃當天正常衰減一次
++        self.assertFalse((gov / ".inflight-gap.json").exists())  # 標記消化掉
++
++
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index d931e3a..01a2168 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3833,20 +3833,22 @@ def t_canary_record_outcome_usd():
+         "--outcome", "converged", expect_rc=0)
+     run(vault, "canary", "record", "none", "--loop", "auto-2026-08-28", "--auditor", "orch", expect_rc=0)
+     lines = [_j.loads(l) for l in (vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()]
+     check("outcome+usd 落欄", lines[0].get("outcome") == "pipeline_fail:api_error" and lines[0].get("usd") == 33.9, str(lines[0]))
+     check("outcome 單主類合法", lines[1].get("outcome") == "converged" and "usd" not in lines[1], str(lines[1]))
+     check("不給不寫鍵", "outcome" not in lines[2] and "usd" not in lines[2], str(lines[2]))
+     r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "exploded")
+     check("主類白名單外 rc2", r.returncode == 2 and "主類" in r.stderr, f"rc={r.returncode}")
+     r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "converged:大寫壞字元")
+     check("細類壞字元 rc2", r.returncode == 2, f"rc={r.returncode}")
++    r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "pipeline_fail:zzz")
++    check("字元合法但未宣告的細類 rc2(封閉列舉)", r.returncode == 2 and "封閉列舉" in r.stderr, f"rc={r.returncode}")
+     r = run(vault, "canary", "record", "none", "--loop", "x", "--usd", "-3")
+     check("負 usd rc2", r.returncode == 2 and "美元" in r.stderr, f"rc={r.returncode}")
+     print("  ✓ t_canary_record_outcome_usd")
+ 
+ 
+ def t_panel_probe_retired():
+     """probe輪退場 d1/d2(Enzo 甲裁 2026-08-25)行為級三釘:(a)新迴圈問 panel 被拒+指路
+     (b)code-* major 席+非空 accepted → disposal FAIL;同構散文案 PASS (c)舊迴圈 panel 印行
+     為觀測語意(不含義務句)。"""
+     import subprocess as _sp
