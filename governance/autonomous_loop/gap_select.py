@@ -56,6 +56,24 @@ def requeue_unconverged(backlog_path, gap, covered_path, decay=0.7, max_unconv=3
     return "requeued"
 
 
+def requeue_pipeline_fail(backlog_path, gap, covered_path, max_fail=3):
+    """管線失敗(NO_JSON/PARSE_FAIL/anchor 早退)的 gap:原列原分放回(不是它的錯,
+    不降分、不走 add_gaps 免被重置 0.5)+ 累計 pipeline_failures;
+    滿 max_fail → covered(放棄自動、留人)——鏡射 requeue_unconverged 的熔斷語意,
+    不讓穩定觸發管線死的題無限反覆燒錢。回 'requeued' 或 'covered'。"""
+    n = gap.get("pipeline_failures", 0) + 1
+    w = gap.get("weakness", "")
+    if n >= max_fail:
+        mark_covered(covered_path, w)
+        return "covered"
+    g = dict(gap)
+    g["pipeline_failures"] = n
+    rows = [r for r in backlog.load_backlog(backlog_path) if r.get("weakness") != w]
+    rows.append(g)
+    backlog._save(backlog_path, rows)
+    return "requeued"
+
+
 def select(report_path, backlog_path, pending_dir, mode, today, covered_path=None):
     covered = load_covered(covered_path)
     gaps = [g for g in read_report_gaps(report_path) if g.get("weakness") not in covered]

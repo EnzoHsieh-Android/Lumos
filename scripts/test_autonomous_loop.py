@@ -2,7 +2,7 @@ import json, tempfile, unittest, sys, io, urllib.error
 from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "governance"))
-from autonomous_loop import backlog, gap_select, confidence_report, line_notify
+from autonomous_loop import backlog, gap_select, confidence_report, line_notify, run_ledger
 
 
 class TestBacklog(unittest.TestCase):
@@ -190,9 +190,10 @@ class TestExtractCost(unittest.TestCase):
         self.assertEqual(
             orchestrator_result.cost_cli_args({"usd": 1.0, "wallclock_min": 3,
                                                "tokens": 500, "turns": 2, "cache_read": 0}),
-            ["--tokens", "500", "--wallclock-min", "3"])
+            ["--tokens", "500", "--wallclock-min", "3", "--usd", "1.0"])
+        # usd 自 2026-08-26 起是結構化欄(auto-loop-repair-v2):有值就送
         self.assertEqual(
-            orchestrator_result.cost_cli_args({"usd": 1.0, "wallclock_min": None,
+            orchestrator_result.cost_cli_args({"usd": None, "wallclock_min": None,
                                                "tokens": None, "turns": 2, "cache_read": 0}),
             [])
 
@@ -537,6 +538,275 @@ class TestLintWatchDedup(unittest.TestCase):
         self.assertNotIn("detekt", names, "detekt は valid seen line で除外されるべき")
         # ruff matches malformed line's key only if parsed — since malformed is skipped, ruff is new
         self.assertIn("ruff", names, "ruff は malformed line に一致せず新候補のはず")
+
+
+# ═══ 自主迴圈修理(auto-loop-repair-v2,2026-08-26)——[S1]-[S4] 行為斷言 ═══
+
+class TestBacklogRepairS2(unittest.TestCase):
+    """[S2] 選題修理:壞行容錯/原子寫/回血/三鍵排序/冪等衰減+歸檔。"""
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.p = self.d / "backlog.jsonl"
+        self.arch = self.d / "backlog-archive.jsonl"
+        self.state = self.d / "decay-state.json"
+
+    def test_load_skips_bad_lines(self):
+        self.p.write_text('{"weakness":"a","value_score":0.5}\n{{{壞行\n{"weakness":"b","value_score":0.4}\n')
+        rows = backlog.load_backlog(self.p)
+        self.assertEqual([r["weakness"] for r in rows], ["a", "b"])
+
+    def test_save_atomic_no_tmp_left(self):
+        backlog._save(self.p, [{"weakness": "a"}])
+        leftovers = [f for f in self.d.iterdir() if f.name != "backlog.jsonl"]
+        self.assertEqual(leftovers, [])
+        self.assertEqual(backlog.load_backlog(self.p)[0]["weakness"], "a")
+
+    def test_reseen_restores_score_to_init_not_above(self):
+        backlog._save(self.p, [{"weakness": "w", "suggestion": "s", "source_date": "2026-08-01",
+                                "value_score": 0.3, "last_seen": "2026-08-01"}])
+        backlog.add_gaps(self.p, [{"weakness": "w", "suggestion": "s"}], "2026-08-26")
+        r = backlog.load_backlog(self.p)[0]
+        self.assertEqual(r["value_score"], 0.5)   # 補回初始
+        self.assertEqual(r["last_seen"], "2026-08-26")
+        backlog.add_gaps(self.p, [{"weakness": "w", "suggestion": "s"}], "2026-08-27")
+        self.assertEqual(backlog.load_backlog(self.p)[0]["value_score"], 0.5)  # 不疊加不超過
+
+    def test_pop_top_source_date_breaks_tie(self):
+        # 同分同 last_seen:source_date 新者贏,且與插入順序無關(舊題先插)
+        backlog._save(self.p, [
+            {"weakness": "old", "value_score": 0.5, "last_seen": "2026-08-26", "source_date": "2026-06-01"},
+            {"weakness": "new", "value_score": 0.5, "last_seen": "2026-08-26", "source_date": "2026-08-26"},
+        ])
+        self.assertEqual(backlog.pop_top(self.p)["weakness"], "new")
+
+    def test_pop_top_last_seen_before_source(self):
+        backlog._save(self.p, [
+            {"weakness": "stale", "value_score": 0.5, "last_seen": "2026-08-01", "source_date": "2026-08-26"},
+            {"weakness": "fresh", "value_score": 0.5, "last_seen": "2026-08-26", "source_date": "2026-06-01"},
+        ])
+        self.assertEqual(backlog.pop_top(self.p)["weakness"], "fresh")
+
+    def test_pop_top_score_still_dominates(self):
+        backlog._save(self.p, [
+            {"weakness": "hi", "value_score": 0.6, "last_seen": "2026-01-01", "source_date": "2026-01-01"},
+            {"weakness": "lo", "value_score": 0.5, "last_seen": "2026-08-26", "source_date": "2026-08-26"},
+        ])
+        self.assertEqual(backlog.pop_top(self.p)["weakness"], "hi")
+
+    def _row(self, w, score):
+        return {"weakness": w, "value_score": score, "last_seen": "2026-08-20", "source_date": "2026-08-20"}
+
+    def test_daily_decay_first_run_single_day(self):
+        backlog._save(self.p, [self._row("w", 0.5)])
+        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
+        self.assertEqual(out["days"], 1)
+        self.assertAlmostEqual(backlog.load_backlog(self.p)[0]["value_score"], 0.475, places=4)
+
+    def test_daily_decay_same_day_noop(self):
+        backlog._save(self.p, [self._row("w", 0.5)])
+        backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
+        out2 = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
+        self.assertEqual(out2["status"], "noop")
+        self.assertAlmostEqual(backlog.load_backlog(self.p)[0]["value_score"], 0.475, places=4)
+
+    def test_daily_decay_days_exponent(self):
+        backlog._save(self.p, [self._row("w", 0.5)])
+        self.state.write_text('{"last_decayed": "2026-08-23"}')
+        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
+        self.assertEqual(out["days"], 3)
+        self.assertAlmostEqual(backlog.load_backlog(self.p)[0]["value_score"], 0.5 * 0.95 ** 3, places=4)
+
+    def test_daily_decay_prunes_to_archive_not_vanish(self):
+        backlog._save(self.p, [self._row("dying", 0.2), self._row("living", 0.5)])
+        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
+        self.assertEqual(out["pruned"], 1)
+        live = [r["weakness"] for r in backlog.load_backlog(self.p)]
+        self.assertEqual(live, ["living"])
+        arch = [json.loads(l) for l in self.arch.read_text().splitlines() if l.strip()]
+        self.assertEqual(arch[0]["weakness"], "dying")
+        self.assertEqual(arch[0]["archived"], "2026-08-26")
+
+    def test_daily_decay_archive_fail_keeps_live(self):
+        backlog._save(self.p, [self._row("dying", 0.2)])
+        bad_arch = self.d / "not-writable-dir"
+        bad_arch.mkdir()   # 目錄不可當檔寫 → append 失敗
+        out = backlog.daily_decay(self.p, bad_arch, self.state, "2026-08-26")
+        self.assertEqual(out["status"], "archive-fail")
+        self.assertEqual(backlog.load_backlog(self.p)[0]["weakness"], "dying")  # live 不動
+        self.assertFalse(self.state.exists())  # 狀態不前進,明天重試
+
+
+class TestPipelineRequeueS1(unittest.TestCase):
+    """[S1] 失敗不丟件:原分放回+pipeline_failures 累計+滿 3 熔斷 covered。"""
+    def setUp(self):
+        d = Path(tempfile.mkdtemp())
+        self.p = d / "backlog.jsonl"
+        self.cov = d / "covered.jsonl"
+
+    def test_requeue_keeps_score_and_counts(self):
+        gap = {"weakness": "w", "suggestion": "s", "value_score": 0.31,
+               "last_seen": "2026-08-20", "source_date": "2026-08-01"}
+        out = gap_select.requeue_pipeline_fail(self.p, gap, self.cov)
+        self.assertEqual(out, "requeued")
+        r = backlog.load_backlog(self.p)[0]
+        self.assertEqual(r["value_score"], 0.31)          # 不降分
+        self.assertEqual(r["pipeline_failures"], 1)
+
+    def test_third_failure_goes_covered(self):
+        gap = {"weakness": "w", "suggestion": "s", "value_score": 0.5, "pipeline_failures": 2}
+        out = gap_select.requeue_pipeline_fail(self.p, gap, self.cov)
+        self.assertEqual(out, "covered")
+        self.assertEqual(backlog.load_backlog(self.p), [])   # 不回 backlog
+        self.assertIn("w", gap_select.load_covered(self.cov))
+
+
+class TestDeathClassify(unittest.TestCase):
+    """[S3] 死因分類:shell 層 $PARSED 前綴 → 分類 token(不依賴成本區塊 json.load)。"""
+    def test_classify(self):
+        from autonomous_loop import orchestrator_result as orr
+        self.assertEqual(orr.classify_death("PARSE_FAIL:Expecting value"), "parse_fail")
+        self.assertEqual(orr.classify_death(""), "parse_fail")
+        self.assertEqual(orr.classify_death("NO_JSON:is_error=True | API Error: 529 Overloaded."), "api_error")
+        self.assertEqual(orr.classify_death("NO_JSON:is_error=False | G2 三條也降 minor。剩最後一組。"), "truncated")
+
+
+class TestRunLedgerS4(unittest.TestCase):
+    """[S3]⑤+[S4]:七天彙總逐筆遍歷、舊格式桶、連續失敗按有跑日。"""
+    def setUp(self):
+        self.log = Path(tempfile.mkdtemp()) / "canary.jsonl"
+
+    def _w(self, rows):
+        self.log.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
+
+    def test_week_summary_mixed_and_same_day(self):
+        self._w([
+            {"ts": "2026-08-23T15:16:49+08:00", "loop": "auto-2026-08-23", "tokens": 1},              # 舊格式
+            {"ts": "2026-08-25T09:38:00+08:00", "loop": "auto-2026-08-25", "outcome": "skipped"},
+            {"ts": "2026-08-25T11:58:00+08:00", "loop": "auto-2026-08-25",
+             "outcome": "pipeline_fail:truncated", "usd": 53.33},                                     # 同日兩筆都要算
+            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "converged", "usd": 12.5},
+            {"ts": "2026-08-10T10:00:00+08:00", "loop": "auto-2026-08-10", "outcome": "converged"},   # 窗外
+            {"ts": "2026-08-26T10:00:00+08:00", "loop": "probe-x", "outcome": "converged"},           # 非 auto-*
+            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-smoke", "outcome": "converged", "usd": 9.9},   # 同字首非日期形狀:排除
+            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-loop-repair-v2", "outcome": "converged"},      # 設計審 loop id:排除
+        ])
+        s = run_ledger.summarize_week(self.log, "2026-08-26")
+        self.assertEqual(s["runs"], 4)
+        self.assertEqual(s["legacy"], 1)
+        self.assertEqual(s["converged"], 1)
+        self.assertEqual(s["pipeline_fail"], 1)
+        self.assertAlmostEqual(s["usd"], 65.83, places=2)
+        line = run_ledger.format_week_line(s)
+        self.assertIn("跑 4 次", line)
+        self.assertIn("舊格式", line)
+
+    def test_consecutive_fail_two_run_days(self):
+        self._w([
+            {"ts": "2026-08-24T10:00:00+08:00", "loop": "auto-2026-08-24", "outcome": "pipeline_fail:api_error"},
+            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "pipeline_fail:truncated"},
+        ])   # 8/25 沒跑:不算斷
+        self.assertTrue(run_ledger.consecutive_fail_days(self.log, "2026-08-26"))
+
+    def test_not_consecutive_when_day_has_success(self):
+        self._w([
+            {"ts": "2026-08-25T09:00:00+08:00", "loop": "auto-2026-08-25", "outcome": "pipeline_fail:api_error"},
+            {"ts": "2026-08-26T09:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "pipeline_fail:parse_fail"},
+            {"ts": "2026-08-26T11:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "converged"},
+        ])   # 26 日有成功筆 → 非失敗日
+        self.assertFalse(run_ledger.consecutive_fail_days(self.log, "2026-08-26"))
+
+    def test_legacy_only_day_not_a_run_day(self):
+        self._w([
+            {"ts": "2026-08-24T10:00:00+08:00", "loop": "auto-2026-08-24", "outcome": "pipeline_fail:api_error"},
+            {"ts": "2026-08-25T10:00:00+08:00", "loop": "auto-2026-08-25", "tokens": 5},              # 舊格式日不算有跑日
+            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "pipeline_fail:truncated"},
+        ])
+        self.assertTrue(run_ledger.consecutive_fail_days(self.log, "2026-08-26"))
+
+
+class TestLineAlertNoFakeHeader(unittest.TestCase):
+    """[S3]⑤ 警示不套「備好待放行」模板。"""
+    def test_build_alert_plain(self):
+        m = line_notify.build_alert("⚠ 自主迴圈連兩個有跑日管線死")
+        self.assertNotIn("備好", json.dumps(m, ensure_ascii=False))
+        self.assertEqual(m["messages"][0]["text"], "⚠ 自主迴圈連兩個有跑日管線死")
+
+
+class TestLoopShellTrap(unittest.TestCase):
+    """[S1]+[S3]+[S4] 端到端(沙箱假 repo):早退點的放回+結局落帳+彙總照印。
+    沙箱換 HOME(不摸真 LINE token)、scripts/lumos 換成記 argv 的 stub、claude 換成吐固定信封的 stub。"""
+
+    def _sandbox(self, anchor_ok):
+        import shutil, datetime
+        root = Path(tempfile.mkdtemp())
+        gov = root / "governance"; gov.mkdir()
+        real_gov = Path(__file__).resolve().parent.parent / "governance"
+        shutil.copy(real_gov / "autonomous-loop.sh", gov / "autonomous-loop.sh")
+        shutil.copytree(real_gov / "autonomous_loop", gov / "autonomous_loop",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.log", "DRYRUN-OBSERVE.md"))
+        (gov / "reports").mkdir()
+        today = datetime.date.today().isoformat()
+        (gov / "reports" / ("governance-%s.json" % today)).write_text(
+            json.dumps({"gaps": [{"weakness": "沙箱測試gap", "suggestion": "x"}]}, ensure_ascii=False))
+        scripts = root / "scripts"; scripts.mkdir()
+        stub = "\n".join([
+            "#!/usr/bin/env python3",
+            "import sys, json, pathlib",
+            "calls = pathlib.Path(__file__).parent / 'lumos-calls.jsonl'",
+            "with calls.open('a') as f:",
+            "    f.write(json.dumps(sys.argv[1:], ensure_ascii=False) + chr(10))",
+            "if 'anchor' in sys.argv:",
+            "    sys.exit(0 if %s else 1)" % ("True" if anchor_ok else "False"),
+            "sys.exit(0)", ""])
+        (scripts / "lumos").write_text(stub)
+        (scripts / "lumos").chmod(0o755)
+        home = root / "home"; (home / ".config" / "ai-daily").mkdir(parents=True)  # 無 token 檔=不發 LINE
+        bindir = root / "bin"; bindir.mkdir()
+        env_file = root / "envelope.json"
+        env_file.write_text(json.dumps({
+            "result": "中途講到一半沒有 JSON。", "is_error": False,
+            "total_cost_usd": 12.5, "duration_ms": 120000, "num_turns": 3,
+            "usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 0}}))
+        (bindir / "claude").write_text("#!/usr/bin/env bash\ncat '%s'\n" % env_file)
+        (bindir / "claude").chmod(0o755)
+        if anchor_ok:
+            (gov / "anchor-baseline.json").write_text("{}")
+        return root, gov, scripts, home, bindir
+
+    def _run(self, root, home, bindir):
+        import subprocess, os
+        env = dict(os.environ, HOME=str(home), PATH="%s:%s" % (bindir, os.environ["PATH"]))
+        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        return subprocess.run(["bash", str(root / "governance" / "autonomous-loop.sh"), "--dry-run", "1"],
+                              capture_output=True, text=True, env=env, timeout=120)
+
+    def _calls(self, scripts):
+        f = scripts / "lumos-calls.jsonl"
+        return [json.loads(l) for l in f.read_text().splitlines() if l.strip()] if f.exists() else []
+
+    def test_anchor_fail_early_exit_requeues_and_records(self):
+        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
+        r = self._run(root, home, bindir)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        rows = backlog.load_backlog(gov / "backlog.jsonl")
+        self.assertEqual([x["weakness"] for x in rows], ["沙箱測試gap"])   # 放回了
+        self.assertEqual(rows[0]["pipeline_failures"], 1)
+        self.assertEqual(rows[0]["value_score"], 0.5)                      # 原分不動
+        recs = [c for c in self._calls(scripts) if "record" in c]
+        self.assertTrue(any("pipeline_fail:anchor_fail" in c for c in recs), recs)  # 結局落帳
+        self.assertIn("過去 7 天", r.stdout)                               # 失敗日照印彙總
+
+    def test_no_json_classified_requeued_with_cost(self):
+        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=True)
+        r = self._run(root, home, bindir)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        rows = backlog.load_backlog(gov / "backlog.jsonl")
+        self.assertEqual(rows[0]["pipeline_failures"], 1)                  # NO_JSON 也放回
+        recs = [c for c in self._calls(scripts) if "record" in c]
+        hit = [c for c in recs if "pipeline_fail:truncated" in c]
+        self.assertTrue(hit, recs)                                         # 死因=截斷(is_error=False)
+        self.assertIn("--usd", hit[0])                                     # 成本欄同筆帶上
+        self.assertIn("12.5", " ".join(hit[0]))
 
 
 if __name__ == "__main__":

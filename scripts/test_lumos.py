@@ -3822,6 +3822,29 @@ def t_loop_rewrite_mark():
     print("  ✓ t_loop_rewrite_mark")
 
 
+def t_canary_record_outcome_usd():
+    """自主迴圈結局帳(auto-loop-repair-v2 [S3]):record 的 --outcome/--usd 結構化欄。
+    要點:合法值落欄、主類白名單外 rc2、細類壞字元 rc2、負 usd rc2、不給不寫鍵(舊格式桶前提)。"""
+    import json as _j
+    vault = mkvault()
+    run(vault, "canary", "record", "none", "--loop", "auto-2026-08-26", "--auditor", "orch",
+        "--outcome", "pipeline_fail:api_error", "--usd", "33.9", expect_rc=0)
+    run(vault, "canary", "record", "none", "--loop", "auto-2026-08-27", "--auditor", "orch",
+        "--outcome", "converged", expect_rc=0)
+    run(vault, "canary", "record", "none", "--loop", "auto-2026-08-28", "--auditor", "orch", expect_rc=0)
+    lines = [_j.loads(l) for l in (vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()]
+    check("outcome+usd 落欄", lines[0].get("outcome") == "pipeline_fail:api_error" and lines[0].get("usd") == 33.9, str(lines[0]))
+    check("outcome 單主類合法", lines[1].get("outcome") == "converged" and "usd" not in lines[1], str(lines[1]))
+    check("不給不寫鍵", "outcome" not in lines[2] and "usd" not in lines[2], str(lines[2]))
+    r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "exploded")
+    check("主類白名單外 rc2", r.returncode == 2 and "主類" in r.stderr, f"rc={r.returncode}")
+    r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "converged:大寫壞字元")
+    check("細類壞字元 rc2", r.returncode == 2, f"rc={r.returncode}")
+    r = run(vault, "canary", "record", "none", "--loop", "x", "--usd", "-3")
+    check("負 usd rc2", r.returncode == 2 and "美元" in r.stderr, f"rc={r.returncode}")
+    print("  ✓ t_canary_record_outcome_usd")
+
+
 def t_panel_probe_retired():
     """probe輪退場 d1/d2(Enzo 甲裁 2026-08-25)行為級三釘:(a)新迴圈問 panel 被拒+指路
     (b)code-* major 席+非空 accepted → disposal FAIL;同構散文案 PASS (c)舊迴圈 panel 印行

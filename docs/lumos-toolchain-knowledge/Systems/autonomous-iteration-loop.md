@@ -4,7 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-08-21
 self_audit: sonnet/2026-08-21
-about_code_stamp: batch-2026-08-23/2026-08-23/f7f67a11ba94
+about_code_stamp: claude/2026-08-26/27cf1d9f3f36
 tags:
   - type/system
   - status/done
@@ -13,8 +13,10 @@ verified_by:
   - "[[Verification/2026-06-20_autonomous-iteration-loop]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
+  - "[[Verification/2026-08-26_自主迴圈三症修理落地]]"
 summary: |-
-  FLOW:cron 10:10 → autonomous-loop.sh:驗當日日報存在(真模式無報即跳;dry-run fallback 最近一份)→ gap_select(日報 gaps + backlog 去重排序選 top-1;N=1 gate:有 pending/open PR 則只進 backlog)→ claude -p orchestrator(真執行:brainstorm spec → design-loop ≤6 輪[opus auditor + canary a/b/c + judge 判 caught 並回報 severity + 強制地面事實查證]→ loop status --need 2 收斂 → §2.5 qwen3-max 跨家族複核)→ 收斂+endorsed/degraded → 放行閘(dry-run 寫 governance/pending/;真模式 branch+PR+LINE)→ 停等人放行
+  FLOW:cron 10:10 → autonomous-loop.sh:驗當日日報存在(真模式無報即跳;dry-run fallback 最近一份)→ backlog 每日衰減(冪等按日差;淘汰先歸檔 backlog-archive.jsonl 讀回自驗才刪)→ gap_select(日報 gaps + backlog 去重排序選 top-1,三鍵排序=分數/last_seen/source_date 新者先;N=1 gate:有 pending/open PR 則只進 backlog)→ claude -p orchestrator(真執行:brainstorm spec → design-loop ≤6 輪[opus auditor + canary a/b/c + judge 判 caught 並回報 severity + 強制地面事實查證]→ loop status --need 2 收斂 → §2.5 qwen3-max 跨家族複核)→ 收斂+endorsed/degraded → 放行閘(dry-run 寫 governance/pending/;真模式 branch+PR+LINE)→ 停等人放行
+  KEY:★2026-08-26 修理(auto-loop-repair-v2)★:①失敗不丟件——trap EXIT 涵蓋全部早退點,未處置 gap 原分放回+pipeline_failures 滿 3 熔斷 covered+LINE(先前 NO_JSON/anchor 早退真丟件,08-24/25 兩筆實丟)②結局帳結構化——canary 帳新欄 outcome(五主類+細類)/usd,trap 統一落帳與成本抽取解耦③七天產出一行(run_ledger.py,失敗日照印,loop id 過濾=auto-日期形狀)④連兩個有跑日全管線死→LINE 素訊息(不套「備好待放行」模板)
   KEY:★事故(2026-08-21 體檢 #2)★ N=1 閘被 pending/ 兩個 07-14 舊檔卡死 **38 天**,每日 launchd 準時跑、rc=0、「無可展開 gap」——排程有跑/什麼都沒做/回報成功;處置=舊檔歸檔 pending/archive/+pending >3 天即發 LINE 喊人(見 [[Verification/2026-08-21_工具鏈體檢修復批]])
   KEY:定調=自動備料+自審+停在放行閘等人,不是無人迭代;放行(merge PR)永遠人手動,人從「每天發起鏈」變「每天 review 1 個 PR」
   KEY:N=1 同時只 1 個待放行 spec——上一個未清(pending 條目/open auto/spec- PR)前,新 gap 只進 backlog 不展開,PR 永不堆
@@ -89,7 +91,8 @@ about_code:
 - `autonomous_loop/backlog.py` — backlog 讀寫 / value_score 衰減 / 淘汰 / 排序。(★covered.jsonl 的讀寫**不在此檔**,全在 `gap_select.py`(2026-08-21 程式碼實證)★)
 - `autonomous_loop/cross_audit.py` — qwen3-max(DashScope 國際 endpoint)跨家族複核;回 `{status, worst_severity, ...}`,`status==degraded` 為 fail-open(no_key / http / timeout)。
 - `autonomous_loop/orchestrator-prompt.md` — `claude -p` orchestrator 的 prompt 模板(brainstorm + design-loop + §2.5 跨家族 + 輸出單一 JSON)。
-- `confidence_report.py` / `line_notify.py` / `orchestrator_result.py` — 可信度報告 body、LINE 傳輸層復用 + 待放行訊息 body、從 orchestrator result 文字提取最後一個合法 JSON(容錯敘述夾雜 `{clean,minor}` 干擾)。
+- `autonomous_loop/run_ledger.py` — 結局帳讀側(七天彙總+連續失敗日判定;逐筆遍歷不以 loop id 當鍵,舊格式列歸桶明示)。
+- `confidence_report.py` / `line_notify.py`(含 `build_alert` 素警示,不套好消息模板)/ `orchestrator_result.py`(含 `classify_death` 死因分類、`cost_cli_args` 含 --usd) — 可信度報告 body、LINE 傳輸層復用 + 待放行訊息 body、從 orchestrator result 文字提取最後一個合法 JSON(容錯敘述夾雜 `{clean,minor}` 干擾)。
 
 ## 收斂與放行門檻
 - **CONVERGED** = `lumos loop status <topic> --need 2` exit 0 = **連 2 輪 canary caught 且 severity ∈ {clean,minor}**(漏抓那輪不採信收斂的一半)。失控保護:design-loop max cap = 6 輪、N=1、撞 cap → 停 + LINE 告警(★(2026-08-21 程式碼實證)是**單次**撞 cap 即發 LINE 並 exit 0,無「連續」計次邏輯;原文「連續撞 cap」不準★)。
@@ -119,5 +122,7 @@ about_code:
 - 真機觀察日誌:`governance/autonomous_loop/DRYRUN-OBSERVE.md`、spike 結果 `SPIKE-RESULT.md`。
 
 ## 近期修正
+
+- 2026-08-26 **三症修理(auto-loop-repair-v2,設計審 24 條全折後實作)**:①丟件根治——`pop_top` 消費後任何早退(anchor 失敗/PARSE_FAIL/NO_JSON)由 trap EXIT 原列原分放回、`pipeline_failures` 滿 3 轉 covered+LINE;log「下輪自然重抽」假話同步修正。②選題退化根治——`decay_and_prune` 寫了兩個月無人呼叫(153/160 筆凍 0.5 分=FIFO),接上每日冪等衰減(sidecar `decay-state.json` 記日差)+再現回血到初始+三鍵排序;淘汰先歸檔 `governance/backlog-archive.jsonl` 讀回自驗才刪。③結局帳——canary 帳 `outcome`/`usd` 結構化欄,trap 統一落帳(先前 record 在收斂判定前執行+被成本抽取分支包住,PARSE_FAIL 連帳都沒有);autonomous.log 每輪印七天產出一行。順手修一個潛伏生產 bug:run_probe 的 grep|tail 無命中時 pipefail+set -e 殺整支腳本於選題之前(沙箱測試觸發抓到)。
 
 - 2026-08-18 token 傳遞硬化(code-loop code-標註刷新 r1 另案收尾):六處 LINE 通知的 token(★原記七處,commit 9fcb761 實為六處(2026-08-21 程式碼實證)★) 由 shell 內插(`t='$(cat …)'`,token 含引號會炸 python 且被 || true 吞)改為 `LINE_TOKEN` 環境變數傳遞+`os.environ.get`,行為不變、注入面拆除。

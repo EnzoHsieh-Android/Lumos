@@ -19,6 +19,59 @@ LOGDIR="$SCRIPT_DIR/logs";      mkdir -p "$LOGDIR"
 SCRATCH="$(mktemp -d "/tmp/auto-loop-$TODAY.XXXXXX")"; mkdir -p "$SCRATCH/kg" "$SCRATCH/spec"   # mktemp:防可預測路徑搶佔(外審 minor)
 log(){ echo "[$(date '+%F %T')] $*"; }
 
+# ── 收尾器(auto-loop-repair-v2 [S1]+[S3]+[S4]):trap EXIT 統一做四件事——
+# ①未處置 gap 原分放回(失敗不丟件,涵蓋全部早退點;滿 3 次熔斷 covered+喊人)
+# ②結局落帳(結構化欄 --outcome/--usd;與成本抽取解耦,PARSE_FAIL 也有帳)
+# ③連兩個有跑日全失敗 → LINE 喊人(素訊息,不套「備好待放行」模板)
+# ④七天產出一行(失敗日也印——放 trap 就是為了這個)
+# 內部所有指令都要 fail-open(|| true / if 判),trap 裡一個炸掉會吞掉後面全部。
+GAP_JSON=""; GAP_DISPOSED=""; OUTCOME=""; COST_ARGS=""; FINAL_DONE=""
+finalize(){
+  [ -n "$FINAL_DONE" ] && return 0; FINAL_DONE=1
+  [ -z "$GAP_JSON" ] && return 0   # 還沒選中 gap 的早退(無日報/無 gap):無輪無帳
+  if [ -z "$GAP_DISPOSED" ]; then
+    RQ="$(echo "$GAP_JSON" | python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import gap_select
+g=json.load(sys.stdin)
+print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
+    log "失敗不丟件:gap 已放回 backlog($RQ;分數不動,pipeline_failures 累計,滿 3 次轉 covered 留人)"
+    if [ "$RQ" = "covered" ]; then
+      MSG="⚠ 自主迴圈:某 gap 連 3 次管線失敗,已轉 covered 留人手動(weakness 見 governance/covered.jsonl 末行)"       LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t=os.environ.get('LINE_TOKEN','')
+print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
+    fi
+  fi
+  # shellcheck disable=SC2086  # COST_ARGS 故意不引號:要拆成多參數
+  if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY"           --auditor orchestrator --outcome "${OUTCOME:-pipeline_fail:parse_fail}" $COST_ARGS           --note "自主迴圈結局帳(trap 收尾統一落;成本欄=claude -p 實際回傳,非估算)")           >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
+    log "結局帳:record 失敗——帳上沒有這輪(詳情 $LOGDIR/cost-$TODAY.log)"
+  fi
+  LEDGER_OUT="$(cd "$REPO" && python3 -c "
+import sys; sys.path.insert(0,'governance')
+from autonomous_loop import run_ledger
+lg='docs/.canary-log.jsonl'
+print(run_ledger.format_week_line(run_ledger.summarize_week(lg,'$TODAY')))
+print('CONSEC_FAIL' if run_ledger.consecutive_fail_days(lg,'$TODAY') else 'OK')
+" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '')"
+  if [ -n "$LEDGER_OUT" ]; then
+    log "$(echo "$LEDGER_OUT" | head -1)"
+    if echo "$LEDGER_OUT" | grep -q CONSEC_FAIL; then
+      log "⚠ 連兩個有跑日全是管線失敗——不是天氣,喊人"
+      MSG="⚠ 自主迴圈連兩個有跑日管線全失敗($(echo "$LEDGER_OUT" | head -1));死因分類看 canary 帳 outcome 欄,log $LOGDIR/"       LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t=os.environ.get('LINE_TOKEN','')
+print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
+    fi
+  else
+    log "七天彙總:算不出來(詳 $LOGDIR/finalize-$TODAY.err)——不擋收尾,但這行沒了要查"
+  fi
+}
+trap finalize EXIT
+
 if [ ! -f "$REPORT" ]; then
   if [ "$MODE" = "--dry-run" ]; then
     REPORT="$(ls -t "$SCRIPT_DIR/reports/"governance-2*.json 2>/dev/null | head -1 || true)"
@@ -99,7 +152,9 @@ run_probe(){
       --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl,governance/scenarios/discipline.jsonl,governance/scenarios/absence.jsonl \
       --sample 8 --seed "$week" --timeout 600 --max-turns 18 --ts "$TODAY" --history "$hist" \
       --out "$REPO/governance/scenarios/run-$TODAY-weekly.json") > "$LOGDIR/probe-$TODAY.log" 2>&1 || true
-  local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1)"
+  # ★|| true 必要★:probe 沒產出結果行時 grep rc1+pipefail+set -e=整支腳本死在這、
+  # 連 gap 都還沒選(潛伏生產 bug,2026-08-26 沙箱測試觸發抓到)
+  local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1 || true)"
   log "情境探針結果:${line:-無結果(看 $LOGDIR/probe-$TODAY.log)}"
   local pp tt; pp="${line%%/*}"; tt="$(echo "$line" | sed -E 's#^[0-9]+/([0-9]+) .*#\1#')"
   if [ -n "$line" ] && [ "$pp" != "$tt" ]; then
@@ -136,6 +191,15 @@ run_probe
 run_nags "$REPO" toolchain
 [ -d "$HOME/backend/LandmarkMember/docs" ] && run_nags "$HOME/backend/LandmarkMember" landmark
 
+# ── backlog 每日衰減([S2]:冪等按日差;先歸檔後刪+讀回自驗,archive 失敗 live 不動) ──
+DECAY_OUT="$(cd "$REPO" && python3 -c "
+import sys, json; sys.path.insert(0,'governance')
+from autonomous_loop import backlog
+r=backlog.daily_decay('$SCRIPT_DIR/backlog.jsonl','$SCRIPT_DIR/backlog-archive.jsonl',
+                      '$SCRIPT_DIR/autonomous_loop/decay-state.json','$TODAY')
+print(json.dumps(r))" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '{\"status\":\"error\"}')"
+log "backlog 衰減:$DECAY_OUT(ok=衰減完成/noop=今天已衰過/archive-fail=歸檔失敗 live 未動明天重試)"
+
 SKIP_CAP=3; skip_n=0
 while : ; do
 GAP_JSON="$(cd "$REPO" && python3 -c "
@@ -164,11 +228,13 @@ print('LINE', line_notify.send(line_notify.build_message('autonomous-loop', os.e
   exit 0
 fi
 log "選中 gap:$GAP_JSON"
+GAP_DISPOSED=""
 
 # 錨點完整性:驗證器被污染時跑出的「收斂/綠」全是假訊號,寧停。
 # loop 入口比 pre-push 嚴:missing baseline 亦硬擋(無人看顧場景無人眼兜底)。
 if [ ! -f "$REPO/governance/anchor-baseline.json" ] || ! (cd "$REPO" && python3 scripts/lumos anchor verify); then
-  log "錨點完整性失敗(anchor verify 不過或 baseline 缺失),loop 拒跑"
+  log "錨點完整性失敗(anchor verify 不過或 baseline 缺失),loop 拒跑;gap 由收尾放回 backlog"
+  OUTCOME="pipeline_fail:anchor_fail"
   MSG="⚠ 錨點完整性失敗,自主 loop 拒跑(anchor verify)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
@@ -237,21 +303,19 @@ print(' '.join(orr.cost_cli_args(c)))
 if [ -n "$COST_OUT" ]; then
   log "本輪成本:$(echo "$COST_OUT" | head -1)"
   COST_ARGS="$(echo "$COST_OUT" | tail -1)"
-  # ★fail-open 但不靜默★:記帳失敗不擋 loop,但一定要喊出來。
-  # 依據 Issues/canary-record未落盤事件(2026-07-28 三筆回報成功卻沒落盤,靠外審清點才發現):
-  # 那次的教訓是「回報成功 ≠ 已落盤」,record 已加寫後讀回自驗、驗不到回 rc2。
-  # 這裡若把 rc 吞掉,等於重新製造同一個靜默窗口——所以判 rc、失敗 log 一行。
-  # shellcheck disable=SC2086  # 故意不加引號:要拆成多個參數
-  if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY" \
-          --auditor orchestrator --note "自主迴圈整輪成本(claude -p 實際回傳,非估算)" \
-          $COST_ARGS) >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
-    log "本輪成本:算出來了但★沒落帳★——record 失敗,帳上會是空的(詳情 $LOGDIR/cost-$TODAY.log)"
-  fi
+  # record 移到 trap 收尾統一落帳([S3]:成本抽取與結局是獨立失敗維度,不在這裡綁死;
+  # 「回報成功≠已落盤」的 rc 判斷也一併在 trap 裡做)
 else
   log "本輪成本:沒抽到——orchestrator 輸出裡沒有成本欄,或形狀變了(看 $ORCH_OUT)"
 fi
 
-case "$PARSED" in PARSE_FAIL*|NO_JSON*|"") log "orchestrator 輸出無法解析,中止——死因看上一行(常見:API 過載=天氣,gap 留在 backlog 下輪自然重抽;log $ORCH_OUT)"; exit 1;; esac
+case "$PARSED" in PARSE_FAIL*|NO_JSON*|"")
+  OUTCOME="pipeline_fail:$(echo "$PARSED" | python3 -c "
+import sys; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import orchestrator_result
+print(orchestrator_result.classify_death(sys.stdin.read()))" 2>/dev/null || echo parse_fail)"
+  log "orchestrator 輸出無法解析,中止——死因=$OUTCOME(收尾會把 gap 放回 backlog 並落結局帳;log $ORCH_OUT)"
+  exit 1;; esac
 
 get(){ echo "$PARSED" | python3 -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
 SKIPPED="$(get skipped)"; CONVERGED="$(get converged)"; TOPIC="$(get topic)"; SPEC="$(get spec_path)"
@@ -267,8 +331,9 @@ from autonomous_loop import gap_select
 w=json.load(sys.stdin).get('weakness','')
 if w: gap_select.mark_covered('$SCRIPT_DIR/covered.jsonl', w)
 " 2>/dev/null || true
+  GAP_DISPOSED=1   # 已記 covered=有去向,trap 不再放回
   log "gap 已被既有 spec 覆蓋,skip(reason: $(get reason));已記入 covered、永久不再選。循環選下一個($skip_n/$SKIP_CAP)。"
-  [ "$skip_n" -ge "$SKIP_CAP" ] && { log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
+  [ "$skip_n" -ge "$SKIP_CAP" ] && { OUTCOME="skipped"; log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
   continue
 fi
 break
@@ -277,10 +342,13 @@ done
 RESIDUAL='["跨家族複核已加(qwen3-max 放行前複核 opus 設計、補同門盲點);但 degrade 時退回單一 opus、qwen 也是 AI、verdict 判定仍在 orchestrator(prompt 層自律)","severity 由 judge 評(已斷 orchestrator 自填)但 judge 也是 AI、且同輪判 canary+severity=集中化","type d canary 沒測(限 a/b/c)","自動 brainstorm 無人回澄清;AI 自選 gap=自己決定改自己方向(自我強化偏誤)","唯一外部錨點是你 review 這個 PR"]'
 if [ "$CONVERGED" != "True" ]; then
   if [ "$CROSS_VERDICT" = "disputed" ]; then
+    OUTCOME="unconverged:disputed"
     MSG="⚠ 跨家族否決(qwen 持續異議):$CROSS_SUMMARY"; log "未收斂(跨家族否決 disputed),不放行:$CROSS_SUMMARY"
   elif [ "$CROSS_VERDICT" = "degraded" ] && [ "$TIER" = "high" ]; then
+    OUTCOME="unconverged:degraded-high"
     MSG="⚠ 高風險級複核缺席(degraded)、fail-closed 擋下:$CROSS_SUMMARY"; log "未收斂(高風險級複核 degraded fail-closed),不放行:$CROSS_SUMMARY"
   else
+    OUTCOME="unconverged:cap"
     MSG="⚠ 今日 spec 未收斂、未放行(撞 cap)"; log "未收斂(converged=$CONVERGED),不放行,scratch 不入庫。"
   fi
   MSG="$MSG" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
@@ -295,6 +363,7 @@ from autonomous_loop import gap_select
 g=json.load(sys.stdin)
 print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
 " 2>/dev/null || echo '?')"
+  GAP_DISPOSED=1
   log "未收斂 gap 處置:$RQ(回 backlog 降分重試 / 累計達 3 次 covered)"
   exit 0
 fi
@@ -303,6 +372,7 @@ fi
 
 # ── tier 收檔守衛:不信自報 converged——wrapper 自算 tier、以其 need 重驗 gate ──
 if [ -z "$SPEC" ] || [ ! -f "$SPEC" ]; then
+  OUTCOME="tier-blocked:spec"
   log "tier 守衛擋下:converged=True 但 spec_path 空或不存在($SPEC)"
   MSG="⚠ tier 守衛擋下:自報收斂但 spec_path 無效" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
@@ -315,6 +385,7 @@ from autonomous_loop import gap_select
 g=json.load(sys.stdin)
 print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
 " 2>/dev/null || echo '?')"
+  GAP_DISPOSED=1
   log "未收斂 gap 處置:$RQ(tier 守衛/spec_path)"
   exit 0
 fi
@@ -332,6 +403,7 @@ print(difficulty.assess_spec(open('$SPEC').read())['tier'])")"
 NEED_FINAL="$NEED"
 if [ "$TIER_FINAL" = "high" ] && [ "$NEED_FINAL" -lt 3 ]; then NEED_FINAL=3; fi
 if ! (cd "$REPO" && python3 scripts/lumos --vault "$SCRATCH/kg" loop status "$TOPIC" --need "$NEED_FINAL" --gate --spec "$SPEC" --repo "$REPO"); then
+  OUTCOME="tier-blocked:gate"
   log "tier 守衛擋下:自報收斂但 gate 重驗不過(自算 tier=$TIER_FINAL, need=$NEED_FINAL)"
   MSG="⚠ tier 守衛擋下:自報收斂但 gate 重驗不過(tier=$TIER_FINAL)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
@@ -344,10 +416,12 @@ from autonomous_loop import gap_select
 g=json.load(sys.stdin)
 print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
 " 2>/dev/null || echo '?')"
+  GAP_DISPOSED=1
   log "未收斂 gap 處置:$RQ(tier 守衛)"
   exit 0
 fi
 if [ "$TIER_FINAL" = "high" ] && [ "$CROSS_VERDICT" != "endorsed" ]; then
+  OUTCOME="tier-blocked:cross"
   log "tier 守衛擋下:high 級 cross_verdict=$CROSS_VERDICT 非乾淨 endorsed,不放行"
   MSG="⚠ tier 守衛擋下:high 級複核非乾淨 endorsed(=$CROSS_VERDICT)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
@@ -360,13 +434,20 @@ from autonomous_loop import gap_select
 g=json.load(sys.stdin)
 print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
 " 2>/dev/null || echo '?')"
+  GAP_DISPOSED=1
   log "未收斂 gap 處置:$RQ(tier 守衛/cross)"
   exit 0
 fi
 
 if [ "$MODE" = "--dry-run" ]; then
-  cp "$SPEC" "$PENDING/" 2>/dev/null || true
+  if cp "$SPEC" "$PENDING/" 2>/dev/null; then
+    OUTCOME="converged"   # 「備好待放行」=converged 且 pending 寫入成功([S4] Z 的定義)
+  else
+    OUTCOME="pipeline_fail:pending_write"
+    log "⚠ 收斂但 pending 寫入失敗($SPEC → $PENDING/)——spec 沒備好,這不是好日子"
+  fi
   printf '%s\n' "$REPORT_MD" > "$PENDING/$(basename "$SPEC" .md)-confidence.md"
+  GAP_DISPOSED=1   # 收斂=有去向(gap 已消化成 spec),trap 不放回
   log "dry-run:收斂!spec + 可信度報告寫入 $PENDING/(repo 未動)"
   LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys; sys.path.insert(0,'$REPO/governance')
@@ -379,6 +460,7 @@ else
   git checkout -b "$BR"; git add "docs/design/$(basename "$SPEC")"
   git commit -m "auto-spec: $TOPIC（自主迭代 loop 收斂產出，待人放行）"
   echo "$REPORT_MD" | gh pr create --title "auto-spec: $TOPIC" --body-file - || true
+  OUTCOME="converged"; GAP_DISPOSED=1
   log "已開 PR(branch $BR)"
 fi
 log "完成。"

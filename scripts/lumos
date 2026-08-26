@@ -3449,7 +3449,7 @@ def _vault_repo_root(env):
     return env.vault.parent.resolve()
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, outcome=None, usd=None):
     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
@@ -3533,6 +3533,23 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
               f"(外部研究認為材料太多審查員容易看不完、漏審)。", file=sys.stderr)
         print("  不擋你記錄,但帳上已標成 scope_oversize,這一輪抓到的結果算弱證據——"
               "審查員可能是「看不完」而不是「沒問題」;收斂結論講保守一點,下一輪拆開審。", file=sys.stderr)
+    # ── 自主迴圈結局帳(2026-08-26 auto-loop-repair-v2):outcome/usd 結構化欄 ──
+    # 為什麼開新欄——[S4] 七天彙總要機器回讀「這輪怎麼收+花多少」;塞 note 散文是
+    # 專案明文放棄的舊路(note 在讀側一律丟棄防散文注入)。不給不寫鍵,舊列=舊格式桶。
+    if outcome is not None:
+        _main = str(outcome).split(":", 1)[0]
+        if _main not in ("converged", "unconverged", "tier-blocked", "skipped", "pipeline_fail") \
+                or not re.fullmatch(r"[a-z_-]+(:[a-z0-9_-]+)?", str(outcome)):
+            print(f"擋下:--outcome 要用「主類」或「主類:細類」——主類只能是 converged/unconverged/"
+                  f"tier-blocked/skipped/pipeline_fail,細類用小寫字母數字連字號;你給的是 {outcome!r}",
+                  file=sys.stderr)
+            return 2
+        rec["outcome"] = str(outcome)
+    if usd is not None:
+        if usd < 0:
+            print(f"擋下:--usd 只能填 0 或正數(這一輪實際花的美元),你給的是 {usd}", file=sys.stderr)
+            return 2
+        rec["usd"] = round(float(usd), 4)
     # ── M1包 #1 tier 定錨欄(選配;loop next/gate 讀首個帶 tier 記錄定錨) ──
     if tier is not None:
         if tier not in LOOP_TIERS:
@@ -15587,6 +15604,12 @@ def main():
                     help="這輪被審材料的行數(diff/spec;非負整數,選配)。★不進任何 gate★——"
                          "純telemetry,供日後分析『caught 率是不是隨規模掉』(外部實測:規模是主導混淆變數)")
     cr.add_argument("--wallclock-min", type=int, dest="wallclock_min", help="M1包 成本欄:該輪 wall-clock 分鐘(非負整數,選配)")
+    cr.add_argument("--outcome", dest="rec_outcome",
+                    help="[自主迴圈結局帳] 這一輪最後怎麼收:converged / unconverged:<細類> / "
+                         "tier-blocked:<細類> / skipped / pipeline_fail:<死因>。"
+                         "機器要回讀的資料開結構化欄,不塞 note 散文(auto-loop-repair-v2)")
+    cr.add_argument("--usd", dest="rec_usd", type=float,
+                    help="[自主迴圈結局帳] 這一輪實際花的美元(claude -p 回傳,非估算;非負,選配)")
     cr.add_argument("--tier", dest="rec_tier", choices=("light", "standard", "high"),
                     help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
     cr.add_argument("--report", help="[T1 處置帳] 審查員報告檔路徑(存 path+sha256;檔案須存在且非空)")
@@ -16219,6 +16242,7 @@ def main():
                           capture_counts=args.capture_counts, clusters=args.clusters,
                           spec=args.rec_spec, reviewed=args.reviewed,
                           tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,
+                          outcome=args.rec_outcome, usd=args.rec_usd,
                           scope_lines=args.scope_lines, report=args.report, snapshot=args.snapshot,
                           findings_set=args.findings_set, folded_set=args.folded_set,
                           accepted_set=args.accepted_set, accept_reasons=args.accept_reasons,

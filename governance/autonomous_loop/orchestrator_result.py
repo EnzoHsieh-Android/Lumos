@@ -54,8 +54,10 @@ def extract_cost(o):
 def cost_cli_args(cost):
     """把成本轉成 `lumos canary record` 的既有欄參數。
 
-    ★只用既有的兩個欄(--tokens / --wallclock-min),不發明新欄★。沒量到的不送 0
-    冒充量過——少一個參數,帳上就是空的,一眼看得出沒量。
+    tokens/--wallclock-min 是既有欄;--usd 是 2026-08-26 起的結構化欄
+    (auto-loop-repair-v2 裁:要被機器回讀的資料開欄,不塞 note 散文——原「只用既有
+    兩欄」的邊界因 [S4] 七天彙總要算美元而翻案,理由在該計劃節點)。
+    沒量到的不送 0 冒充量過——少一個參數,帳上就是空的,一眼看得出沒量。
     """
     if not isinstance(cost, dict):
         return []
@@ -64,4 +66,17 @@ def cost_cli_args(cost):
         args += ["--tokens", str(int(cost["tokens"]))]
     if cost.get("wallclock_min") is not None:
         args += ["--wallclock-min", str(int(cost["wallclock_min"]))]
+    if cost.get("usd") is not None:
+        args += ["--usd", str(round(float(cost["usd"]), 4))]
     return args
+
+
+def classify_death(parsed):
+    """把 shell 層的 $PARSED 前綴分類成死因 token([S3]③)。
+    不依賴成本區塊的 json.load——那條路在信封壞掉時自己就死了(s1-f4)。"""
+    s = str(parsed or "")
+    if s.startswith("NO_JSON"):
+        if "is_error=True" in s and ("529" in s or "Overloaded" in s or "overloaded" in s):
+            return "api_error"
+        return "truncated"
+    return "parse_fail"   # PARSE_FAIL* 或空字串(python 區塊整個沒跑出來)

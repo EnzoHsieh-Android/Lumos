@@ -5,6 +5,11 @@ def build_message(title, confidence_summary, pr_link):
     txt += f"\nPR：{pr_link}" if pr_link else "\n(dry-run，未開 PR)"
     return {"messages": [{"type": "text", "text": txt}]}
 
+def build_alert(text):
+    """警示用素訊息:不套 build_message 的「備好 1 個待放行 spec」好消息標頭——
+    連兩天管線死這種警示套上它,比沒通知更容易被當好消息忽略(s1-f6)。"""
+    return {"messages": [{"type": "text", "text": text}]}
+
 def send(message, token):
     out = subprocess.run(
         ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST",
