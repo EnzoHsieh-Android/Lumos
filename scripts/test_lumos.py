@@ -21196,8 +21196,9 @@ def t_eval_ablation_gate():
     2026-08-22 真的踩過:一個檢索改動讓 edit train 未標從 4→9,多出的 5 個全計 0,
     分母才 48 → -5.4%,當時被讀成「改動有害」並據此撤回;實際是尺對「改善」有系統性
     偏見(改善→浮出新節點→沒標過→計 0→被罰)。
-    ★不改尺★——改尺方案在 Projects/標註刷新_計劃 已明文拒(既有門檻與 history 全失效),
-    這裡補的是「消融前先確認可解讀」這道流程閘。
+    ★本閘維持零容忍★——「不改尺」裁定 2026-08-26 已被翻(condensed 主尺上路,詳
+    Projects/評測尺翻案_計劃),但本閘是 08-22 事故的根源修補,[S3c(反轉原裁)] 明裁
+    不退場:condensed 不改變「消融結論要池完整才可下」。
     翻紅釘:把 ablation_blocked 改成恆回 False → 第 1、2 條翻紅。"""
     _need_src("governance/eval")
     root, gs = _mk_eval_fixture()
@@ -21216,6 +21217,75 @@ def t_eval_ablation_gate():
             gs["labels"][cid][nd] = {"final": 0}
     blocked2, n2, _ = m.ablation_blocked(gs, "held")
     check("★補標後放行(閘會收斂,不是恆擋)★", blocked2 is False and n2 == 0, f"blocked={blocked2} n={n2}")
+
+
+def t_eval_condensed_core():
+    """評測尺翻案 [S1]/[S2]/[S3b]:condensed 於已判子列表計分、題級門檻、三方未標集合同源、
+    pin_noise 三態語意不變。翻紅釘:把 _condense 的剔除改回「未標=0」→ 第 2 條翻紅。"""
+    _need_src("governance/eval")
+    root, gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    # search:窗內 [未標,未標,判2,判1](spec 驗證計劃修正後的例)
+    gs["search"] = [{"id": "S01", "query": "zzz", "cat": "zh_short", "split": "held"}]
+    gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}, "Systems/C.md": {"final": 1}}
+    order = ["Systems/U1.md", "Systems/U2.md", "Systems/B.md", "Systems/C.md"]
+    m._search_arms = lambda q: (list(order), list(order))
+    rows = m.eval_search(gs, "held", k=2)
+    r = rows[0]
+    check("舊尺 nDCG@2:前兩名全未標→0.0(行為不變)", r["ranked_ndcg"] == 0.0, str(r))
+    check("condensed nDCG@2=1.0(已判子列表 判2判1 完美序)", r["c_ranked_ndcg"] == 1.0, str(r))
+    check("condensed MRR@10=1.0(第一個已判即相關)", r["c_ranked_mrr"] == 1.0, str(r))
+    check("題級覆蓋率=2/4", r["ranked_cov"] == 0.5, str(r))
+    # 三方集合同源([S1]①):condensed 剔除的=collect_unjudged 該題回報的
+    unj = m.collect_unjudged(gs, "held")
+    lab = m._labels_of(gs, "S01")
+    dropped = {n for n in order if n not in lab}
+    check("condensed 剔除集==collect_unjudged 未標集(同源斷言)",
+          dropped == set(unj["per_case"].get("S01", [])), f"{dropped} vs {unj['per_case']}")
+    # 題級門檻([S2]①):8 節點窗只判 1 個 < ceil(8/2)=4 → None 不進 macro(外家 1/8 抬分反例)
+    gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}}
+    big = [f"Systems/X{i}.md" for i in range(7)] + ["Systems/B.md"]
+    m._search_arms = lambda q: (list(big), list(big))
+    rows2 = m.eval_search(gs, "held", k=2)
+    check("低覆蓋題(1/8)condensed 記 None", rows2[0]["c_ranked_ndcg"] is None, str(rows2[0]))
+    check("低覆蓋題不進 macro(_macro 濾 None)", m._macro(rows2, "c_ranked_ndcg") is None, "")
+    check("低覆蓋題舊尺照算(雙報期 gate 仍有值)", rows2[0]["ranked_ndcg"] is not None, str(rows2[0]))
+    # _labels_of 已判-only + 未標 pins 的 pin_noise([S1]④/[S3b]:fixture 強制含未標 pin)
+    lab2 = m._labels_of(gs, "S01")
+    check("_labels_of 不含未標鍵(已判-only)", "Systems/X0.md" not in lab2 and "Systems/B.md" in lab2, str(lab2))
+    fake_pins = [{"node": "Systems/B.md"}, {"node": "Systems/未標席.md"}, {"node": "Systems/判零.md"}]
+    lab3 = {"Systems/B.md": 2, "Systems/判零.md": 0}
+    noise = sum(1 for x in fake_pins if x["node"] not in lab3 or lab3[x["node"]] == 0)
+    check("pin_noise 三態:未標席+判0 席=2 條噪音(語意不隨 condensed 動)", noise == 2, str(noise))
+    print("  ✓ t_eval_condensed_core")
+
+
+def t_eval_condensed_switch():
+    """評測尺翻案 [S3]:sticky metric_rev/恆等斷言/棘輪雙鍵+切換輪繼承。
+    翻紅釘:_ratchet_base 拿掉 inherit 分支 → 第 4 條翻紅。"""
+    _need_src("governance/eval")
+    root, _gs = _mk_eval_fixture()
+    m = _load_retrieval_eval(root)
+    check("sticky:無 metric_rev 列→None", m._history_metric_rev([{"pass": True}]) is None, "")
+    check("sticky:任一列帶→condensed-v1",
+          m._history_metric_rev([{"metric_rev": "condensed-v1"}, {"pass": True}]) == "condensed-v1", "")
+    hist = [{"pass": True, "goldset_rev": "aaa", "verdicts": {"all": {"must_in_out_count": 5, "pin_noise": 2}}}]
+    ok, msg = m.must_ratchet(hist, "aaa", "all", 4, metric_rev="condensed-v1", inherit=True)
+    check("切換輪繼承舊尺基線:5→4 被擋", ok is False and "繼承" in msg, f"{ok} {msg[:80]}")
+    ok2, _ = m.must_ratchet(hist, "aaa", "all", 4, metric_rev="condensed-v1", inherit=False)
+    check("非切換輪不繼承:無同鍵基線→放行建基線", ok2 is True, "")
+    ok3, _ = m.pin_noise_ratchet(hist, "aaa", "all", 3, metric_rev="condensed-v1", inherit=True)
+    check("噪音棘輪繼承:2→3 被擋", ok3 is False, "")
+    # 恆等斷言:同值過/異值列差
+    v = {"_rn_raw": 0.8, "_ln_raw": 0.4, "hook_p": 0.75, "_bp_raw": 0.5, "_gp_raw": 0.25,
+         "condensed_search": {"ndcg": 0.8, "ndcg_legacy": 0.4},
+         "condensed_edit": {"p": 0.75, "bm25_p": 0.5, "graph_p": 0.25}}
+    eq, diffs = m._switch_equal(v)
+    check("恆等斷言:全尺同值→過", eq is True and diffs == [], str(diffs))
+    v["condensed_edit"]["p"] = 0.9
+    eq2, diffs2 = m._switch_equal(v)
+    check("恆等斷言:有差→列名不過(切換中止)", eq2 is False and any("fusion" in d for d in diffs2), str(diffs2))
+    print("  ✓ t_eval_condensed_switch")
 
 
 def t_refresh_delta():
@@ -21306,6 +21376,10 @@ def t_eval_history_record_fields():
     check("mode 預設 goldset", rec["mode"] == "goldset", str(rec))
     check("goldset_snapshot 欄=實際釘定 sha", rec["goldset_snapshot"] == "285d429", str(rec))
     check("unjudged 兩欄在", rec["unjudged_count"] == 3 and rec["unjudged_rate"] == 0.1, str(rec))
+    check("condensed_preview 巢狀欄在(一輪一筆;評測尺翻案 [S3]②)",
+          "condensed_preview" in rec and isinstance(rec["condensed_preview"], dict), str(list(rec.keys())))
+    check("verdicts 不重複塞 condensed(留 preview 單一出口)",
+          all(not k.startswith("condensed_") for v in rec["verdicts"].values() for k in (v or {})), "")
     check("既有欄位仍在(ts/gates/pass/verdicts)",
           all(k in rec for k in ("ts", "gates", "pass", "verdicts")), str(rec))
     args2 = types.SimpleNamespace(k=8, snapshot="ab91051")

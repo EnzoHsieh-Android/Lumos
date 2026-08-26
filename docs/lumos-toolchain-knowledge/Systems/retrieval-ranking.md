@@ -8,6 +8,7 @@ tags:
   - type/system
   - status/done
 summary: |-
+  KEY:★2026-08-26 評測尺翻案(condensed,plan:[[Projects/評測尺翻案_計劃]])★——「未標=0」翻案:全品質尺加 condensed 版(觸及集窗內已判子列表計分,MRR→MRR@10),題級門檻 ceil(k/2) 低覆蓋記 None 不進 macro、面別覆蓋率分算;雙報期 gate 恆以舊尺拍板、新尺走 history 巢狀欄 condensed_preview(一輪一筆不破);切換點=repin(母體未標=0 時兩尺恆等,恆等斷言過才切、棘輪基線跨 metric_rev 繼承僅限該輪);pin_noise 維持未標=噪音(顯式三態);消融 rc3 零容忍不動
   KEY:[2026-08-24 固定席降噪A層落地,plan:[[Projects/固定席降噪A層_計劃]]]硬合約保送——LUMOS_IMPACT_HARD_PIN=1 時 indirect hop≤1 保送只認 INVARIANT/IRREVERSIBLE;RISK·* 類降入★JSON 獨立頂層鍵 lane 參考道★(產生端 cap LUMOS_IMPACT_LANE_N=3、R 公式分數、不進 results/free/P@8、視同 pins 進未標檢查;沒學過 lane 的讀者結構性不受影響=決策 d2)。預設 0 待 train/held 網格轉正 [test:t_impact_hard_pin_lane]
   FLOW:tokenize(CJK bigram+ASCII拆分)→BM25F(欄位tf加權於飽和前,平滑IDF)→search --ranked只重排既有候選｜_reco(BFS-decay 2/2^k 即 2^(1-k),k=1 時 B=1.0(★原記 1/2^k,(2026-08-21 程式碼實證)scripts/lumos:5992 為 `min(1.0, 2.0/(2**k))`★)+共引同行×2飽和+Jaccard;G=0.6/0.25/0.15)×BM25F融合(R=0.6L+0.4G)→context --recommend｜impact --ranked(固定席=事故+合約,不占top_k;動態閾;stdin單包JSON prospective)→hook降噪(v1.1待接)
   KEY:★2026-08-03 一次性重新凍結(認領本節點原本掛著的「尚無人認領」待辦)★——eval_head=`8680ac1`、語料釘 snapshot=`285d429`、knobs=frozen-defaults,已入 `governance/eval/retrieval-eval-history.jsonl`:**search nDCG@5 整體 legacy 0.5411→ranked 0.8556(+58.1%,n=30)｜train +46.0%(n=21)｜held +99.6%(n=9,MRR 1.0)｜edit P@8 fusion 0.7298｜必看視野 19/30｜gate 7/7 PASS**。★與 2026-07-20 那次重跑逐項相同 → 尺是穩定可重現的,當初對不上的只有「+106.8%」與「24/30」這兩個★被沿用進句子、卻不對應任何一次實跑★的數★(歷程與三處出處對照見本節點〈數字已統一〉段)
@@ -34,6 +35,7 @@ verified_by:
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-24_about_code讀側四項落地]]"
   - "[[Verification/2026-08-24_固定席降噪A層落地]]"
+  - "[[Verification/2026-08-26_評測尺翻案落地]]"
 aliases:
   - 檢索排序與關聯推薦
 ---
