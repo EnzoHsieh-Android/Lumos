@@ -244,7 +244,14 @@ run_replay(){
   local stamp="$REPO/governance/replay/.weekly-stamp"; local week; week="$(date +%G-W%V)"
   [ "$(cat "$stamp" 2>/dev/null)" = "$week" ] && { log "回放週跑:本週已跑"; return 0; }
   mkdir -p "$REPO/governance/replay"
+  # LINE 文字在 python 端組好單行、shell 只抽前綴——與 run_exam/run_nags 的 bash 組裝不同,
+  # 是刻意的新慣例:通知文字進得了單元測試網(TestReplayWeekly 蓋 build_msg);後續新週期任務照此。(cb3 arch-f1)
   local out; out="$(cd "$REPO" && python3 governance/autonomous_loop/replay_weekly.py "$REPO" 2>>"$LOGDIR/replay-$TODAY.err" || true)"
+  if ! echo "$out" | grep -q "^{"; then
+    # cb3 finder-f4:模組炸掉(import/語法/未捕捉例外)時不蓋週戳——蓋了=整週靜默停擺;明天重試
+    log "回放週跑:模組失敗無輸出,本週不蓋章明天重試(錯誤在 replay-$TODAY.err)"
+    return 0
+  fi
   echo "$week" > "$stamp"
   log "回放週跑:$(echo "$out" | head -1 | cut -c1-160)"
   local msg; msg="$(echo "$out" | sed -n 's/^MSG://p' | head -1)"

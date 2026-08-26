@@ -486,6 +486,9 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
     def _sha(s):
         return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
+    if any(ch in str(loop_id) for ch in ("/", "\\", "..")):
+        print(f"擋下:loop 編號含路徑字元({loop_id!r})——golden 目錄以編號命名,不受理(目錄安全+週跑掃描只看一層)", file=sys.stderr)
+        return 2
     if freeze:
         if not spec:
             print("擋下:凍結模式要帶 --spec(帳裡沒有 spec 路徑欄,凍結當下由操作者給)", file=sys.stderr)
@@ -507,6 +510,10 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
                   "舊制語意重算用 lumos loop status <id> --gate --panel;golden 回放只涵蓋 d5", file=sys.stderr)
             return 2
         rid = out.get("rid")
+        if str(rid).startswith("__"):
+            print("擋下:這個 loop 是無輪次(round-less)舊制形狀,不入 golden——"
+                  "回放只涵蓋帶輪次的 d5 處置迴圈(light/settle 舊帳照舊用各自閘語意)", file=sys.stderr)
+            return 2
         spec_sha_frozen = next((r.get("result_sha256") for r in parsed
                                 if r.get("round") == rid and r.get("result_sha256")), None)
         out = {}
@@ -525,6 +532,10 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
                 rp = r.get(k + "_path")
                 if not rp or rp in files:
                     continue
+                if Path(rp).is_absolute():
+                    print(f"擋下:卷證在 repo 外(帳面存絕對路徑 {rp})——無法版控錨定,不入 golden;"
+                          "git 的 HEAD:<path> 不吃絕對路徑,這不是「沒 commit」的問題(cb3 s2-f5)", file=sys.stderr)
+                    return 2
                 blob, err = _replay_git_blob(root, rp)
                 if err:
                     print(f"擋下:凍結前置檢查沒過——{err};先把卷證 commit 進版控再凍", file=sys.stderr)
@@ -548,6 +559,15 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
         vdir = root / "governance" / "replay" / loop_id
         vdir.mkdir(parents=True, exist_ok=True)
         target = vdir / "verdict.json"
+        # 順序(cb3 s2-f3):①新內容先落暫存檔(最會失敗的一步最先做)②舊檔歸檔③replace 上位
+        # ④最後才寫治理帳留痕——寫入失敗時不會留下「帳說成功、檔卻不在」的假紀錄。
+        _tmp = vdir / ".verdict.tmp"
+        try:
+            _tmp.write_text(json.dumps(verdict, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError as e:
+            print(f"擋下:verdict 寫不進去({e}): {target}", file=sys.stderr)
+            return 2
+        _refroze = None
         if target.exists():
             # 重凍=制度演進後的合法基準更新,比照 anchor approve:理由必填+留痕+歸檔不覆寫
             if not note or not note.strip():
@@ -558,14 +578,17 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
             if arch.exists():
                 print(f"擋下:歸檔目的檔已存在({arch.name}),不覆寫歷史——等一秒再重凍", file=sys.stderr)
                 return 2
-            target.rename(arch)
+            try:
+                target.rename(arch)
+            except OSError as e:
+                print(f"擋下:歸檔失敗({e})——多半是同秒有另一個重凍在跑,等一下再試", file=sys.stderr)
+                return 2
+            _refroze = arch.name
+        import os as _os_rp
+        _os_rp.replace(_tmp, target)
+        if _refroze:
             _loop_gov_mark(env, loop_id, "replay-refreeze", note.strip())
-            print(f"  舊 golden 已歸檔 {arch.name};重凍理由已寫治理帳")
-        try:
-            target.write_text(json.dumps(verdict, ensure_ascii=False, indent=1), encoding="utf-8")
-        except OSError as e:
-            print(f"擋下:verdict 寫不進去({e}): {target}", file=sys.stderr)
-            return 2
+            print(f"  舊 golden 已歸檔 {_refroze};重凍理由已寫治理帳")
         print(f"✓ 已凍結 {loop_id} 的判定閉包(輪 {rid},{len(raw)} 列帳,{len(files)} 份卷證檔)"
               f"\n    {target}")
         return 0
@@ -576,12 +599,21 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
     except (OSError, ValueError) as e:
         print(f"擋下:golden 檔讀不了({e}): {golden}", file=sys.stderr)
         return 2
-    if g.get("engine_rev") != _REPLAY_ENGINE_REV:
-        print(f"golden 過期(制度已演進:{g.get('engine_rev')} → {_REPLAY_ENGINE_REV})——"
-              f"這不是漂移;確認新制對這個 loop 的判定合理後重凍:"
-              f"lumos loop replay {loop_id} --freeze --spec {g.get('spec_path','<計劃>')} --note <理由>")
-        return 0
     red = []
+    # ── ⓪ golden 本體先驗(cb3 finder-f3/ext-f2:回放不能拿 golden 驗 golden 自己——
+    # 對 HEAD blob 比對,竄改/未提交的修改先現形;不在 HEAD=剛凍結未 commit,提醒不紅)──
+    try:
+        _grel = str(Path(golden).resolve().relative_to(Path(root)))
+        _gblob, _gerr = _replay_git_blob(root, _grel)
+        if _gerr and "還沒 commit" not in _gerr:
+            red.append(f"golden 本體與版控不符({_gerr})——凍結檔的竄改偵測以版控為錨,先查 git diff -- {_grel}")
+        elif _gerr:
+            print(f"  (提醒:golden 尚未 commit——入版控後才受本體竄改偵測保護)")
+    except ValueError:
+        print("  (提醒:golden 在 repo 外,無法版控錨定本體)")
+    # engine_rev 不同=過期,但只跳過「重算」;帳被動/檔被動的完整性檢查照跑
+    # (cb3 s2-f2:原提早 return 讓「改個版本欄位」就繞過全部竄改偵測)
+    _engine_stale = g.get("engine_rev") != _REPLAY_ENGINE_REV
     # ① live 帳集合分類(基準=凍結當下全列 sha 集;只凍判定輪會讓多輪 loop 恆報長大,r2 delta d-f2)
     raw, _parsed_live = _load_rows()
     if raw is None:
@@ -607,8 +639,12 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
             file_bad.append(f"{rp}(內容被動;git blob {str(meta.get('git_blob'))[:10]} 可從版控史回復)")
     if file_bad:
         red.append("凍結檔被動/佚失:" + ";".join(file_bad))
-    # ③ 對凍結閉包重算(卷證檔壞了就不硬算)
-    if not file_bad:
+    if _engine_stale:
+        print(f"  golden 過期(制度已演進:{g.get('engine_rev')} → {_REPLAY_ENGINE_REV})——"
+              f"重算跳過;完整性檢查照上;確認新制合理後重凍:"
+              f"lumos loop replay {loop_id} --freeze --spec {g.get('spec_path','<計劃>')} --note <理由>")
+    # ③ 對凍結閉包重算(卷證檔壞了就不硬算;制度過期不硬算)
+    if not file_bad and not _engine_stale:
         rows = []
         for line in g.get("rows", []):
             try:
@@ -3743,7 +3779,7 @@ def cmd_severity_check(loop_id, round_id, auditor, repo="."):
             d = json.loads(line)
         except ValueError:
             continue
-        if d.get("loop") == loop_id and d.get("round") == round_id and d.get("auditor") == auditor:
+        if d.get("loop") == loop_id and d.get("round") == round_id and d.get("auditor") == auditor:   # round_id=None 時比對無 round 鍵的列(d.get 回 None)
             hit = d   # append 序,後者勝(同座標重記時看最新)
     if hit is None:
         print(f"擋下:帳本裡找不到 loop={loop_id} round={round_id} auditor={auditor} 的帳列", file=sys.stderr)
@@ -3974,7 +4010,17 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
     # 一律必附 --report,且帳面 severity 不得低於報告宣告最高。實帳 681 筆審查席列有 286 筆
     # 無報告的舊形狀自此被拒,不設過渡:不附報告的審查帳事後無從重驗(disposal ③ 也 FAIL)。
     # 低報=拒(major 逃必折之路);高報=放行+提醒(保守方向,下游全閘「越高越嚴」r1-s1)。
-    if loop and round_id and auditor:
+    # cb3 r1 折入:原「三者齊備才觸發」= 漏打 --round 即整層繞過,而讀側照樣把 round-less
+    # 列組成 __seqN 判定輪、severity 尾巴又跳過 __ 合成鍵——三層同時失靈(ext-f1+s1-f1 實測 PASS 到 converged)。
+    # 關法:①處置帳(findings_set)必綁輪次與審查席 ②審查席(loop+auditor,結局帳除外)必帶輪次。
+    if loop and findings_set is not None and not (round_id and auditor):
+        print("擋下:處置帳(--findings-set)必須綁 --round 和 --auditor——無輪次的處置帳讀側已不受理,"
+              "沒有席位的處置帳無從對帳", file=sys.stderr)
+        return 2
+    if loop and auditor and outcome is None:
+        # 觸發=審查席帳列(loop+auditor;結局帳 --outcome 除外)。★不要求 round★——light/循序
+        # 舊制形狀本來就無輪次且合法;繞道由「處置帳必綁輪次」+讀側 round-less 處置帳拒判關死。
+        # (cb3 ext-f1/s1-f1:原「三者齊備」觸發=漏打 --round 即整層蒸發;spec S1 觸發條件據此放寬,已折回計劃)
         if not report:
             print("擋下:審查席記帳(帶 --loop/--round/--auditor)一定要附 --report 審查報告檔——"
                   "不附報告的審查帳事後無從重驗;報告還沒落檔就先存檔再記(2026-08-26 起的新規矩)", file=sys.stderr)
@@ -5614,8 +5660,9 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             _tier_flag = f" --tier {eff_tier}" if eff_tier in LOOP_TIERS else ""
             out["record_cmd"] = (f"lumos canary record caught|missed --loop {loop_id}{rmode}"
                                  f" --auditor <席> --severity <s> --findings <M>"
+                                 f" --report <席報告.md>"
                                  f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}"
-                                 f" --scope-lines <這輪審了幾行>")
+                                 f" --scope-lines <這輪審了幾行>")   # cb3 s3-f1:寫側 2026-08-26 起審查席必附報告,模板同步
             # [T5 design-loop重設計] 處置閘模板(選用;record_cmd 原樣保留給 code-loop/舊流程)
             if not light and eff_tier != "legacy":
                 out["disposal_cmd"] = (
@@ -10502,6 +10549,11 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         return pp if pp.is_absolute() or root is None else Path(root) / pp
     fails = []
     # ── ① G3 hash 鏈(fail-closed:unbound 也擋——disposal 是新閘,無舊帳包袱) ──
+    if str(rid).startswith("__") and any("findings_set" in r for r in latest):
+        print("擋下:這一輪是無輪次(round-less)帳列卻帶了處置結果——處置帳必須綁輪次"
+              "(2026-08-26 關繞道:無輪次處置帳可讓低報逃過寫側守衛;真帳歷史零筆此形狀,fail-closed 不誤傷)",
+              file=sys.stderr)
+        return 2
     try:
         err, info = _hash_chain_check([latest], spec, cur_sha_override=spec_sha_override)
     except OSError as e:
@@ -16257,7 +16309,7 @@ def main():
 
     p = sub.add_parser("severity-check", help="[第四道收貨] 席報告 severity 宣告↔帳面對帳(vault-free;advisory 恆 rc0/帳列不存在或 sha 不符 rc2)")
     p.add_argument("--loop", dest="sv_loop", required=True, metavar="loop編號")
-    p.add_argument("--round", dest="sv_round", required=True, metavar="rN")
+    p.add_argument("--round", dest="sv_round", default=None, metavar="rN", help="省略=比對無輪次的歷史帳列")
     p.add_argument("--auditor", dest="sv_auditor", required=True, metavar="席")
     p.add_argument("--repo", dest="sv_repo", default=".", help="repo root(預設 .)")
 

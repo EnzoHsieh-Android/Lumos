@@ -37,16 +37,21 @@ def _converged_loops_with_specpath(repo):
             d = json.loads(line)
         except ValueError:
             continue
-        if d.get("phase") == "converged" and d.get("loop") and d["loop"] not in seen:
-            seen.add(d["loop"])
-            conv.append(d["loop"])
+        # cb3 折入(finder-f1+s4-f1):治理帳 schema=kind+nodes(原讀 phase/loop=永遠選不中,
+        # 補凍上線即死,自家測試還捏同一套錯 schema 陪葬);行可為合法 JSON 非物件(null)→isinstance 擋。
+        if not isinstance(d, dict):
+            continue
+        _nodes = d.get("nodes") or []
+        if d.get("kind") == "converged" and _nodes and _nodes[0] not in seen:
+            seen.add(_nodes[0])
+            conv.append(_nodes[0])
     spec_of = {}
     for line in _read_lines(Path(repo) / "docs" / ".canary-log.jsonl"):
         try:
             d = json.loads(line)
         except ValueError:
             continue
-        if d.get("loop") in seen and d.get("spec_path"):
+        if isinstance(d, dict) and d.get("loop") in seen and d.get("spec_path"):
             spec_of[d["loop"]] = d["spec_path"]
     return [(lid, spec_of.get(lid)) for lid in conv]
 
@@ -138,12 +143,16 @@ def run_weekly(repo, lumos="scripts/lumos"):
             sample = sample + rest   # 全跑視同整圈抽完(游標推進涵蓋)
 
     # ── ④ 游標推進(輪完一圈清空重來) ──
-    cur["seen"] = sorted(set(cur.get("seen", [])) | set(new) | set(sample))
+    # cb3 ext-f3/s4-f3:seen 只記「真的回放過的」新包——預算見底被 skip 的新包保留必跑資格。
+    cur["seen"] = sorted(set(cur.get("seen", [])) | {l for l in new if l in set(out["replayed"])} | set(sample))
     cur["done"] = sorted(set(cur.get("done", [])) | set(s for s in sample if s in out["replayed"]))
     if set(cur["done"]) >= set(allv):
         cur = {"cycle_started": "", "done": [], "seen": cur["seen"]}
     try:
-        cur_p.write_text(json.dumps(cur, ensure_ascii=False, indent=1), encoding="utf-8")
+        import os as _os
+        _tmp = cur_p.with_suffix(".tmp")
+        _tmp.write_text(json.dumps(cur, ensure_ascii=False, indent=1), encoding="utf-8")
+        _os.replace(_tmp, cur_p)   # cb3 s4-f4:比照 backlog.py 暫存+原子換檔,半寫殘檔不歸零進度
     except OSError:
         out["errors"].append("cursor:write-fail")
     return out
@@ -165,7 +174,8 @@ def build_msg(out):
     if not parts:
         return None
     head = f"[改制回測週跑] 跑了 {len(out['replayed'])} 包/略過 {len(out['skipped'])} 包/新凍 {len(out['frozen'])} 包"
-    return head + "\n" + "\n".join(parts)
+    # cb3 s4-f2:bash 逐行抽 MSG: 前綴——多行只剩第一行,紅燈清單整段蒸發只發太平句。單行分號串接。
+    return head + ";" + ";".join(parts)
 
 
 if __name__ == "__main__":

@@ -1200,9 +1200,13 @@ class TestReplayWeekly(unittest.TestCase):
 
     def test_freeze_catchup_only_with_specpath(self):
         gov = self.repo / "docs" / ".governance-log.jsonl"
+        # cb3 finder-f1 教訓:fixture 必須用 _loop_gov_mark 真實寫出的 schema(kind+nodes),
+        # 不准自己捏——上一版捏了 phase/loop,模組讀錯欄位測試照綠。開頭塞一行合法 JSON 非物件
+        # (null)釘 s4-f1:一行 null 不得炸掉整支模組。
         gov.write_text(
-            json.dumps({"phase": "converged", "loop": "has-spec"}) + "\n"
-            + json.dumps({"phase": "converged", "loop": "no-spec"}) + "\n", encoding="utf-8")
+            "null\n"
+            + json.dumps({"gate": "design-loop", "kind": "converged", "hard": False, "nodes": ["has-spec"]}) + "\n"
+            + json.dumps({"gate": "design-loop", "kind": "converged", "hard": False, "nodes": ["no-spec"]}) + "\n", encoding="utf-8")
         (self.repo / "docs" / ".canary-log.jsonl").write_text(
             json.dumps({"loop": "has-spec", "spec_path": "docs/x.md"}) + "\n", encoding="utf-8")
         def fake(cmd, **kw):
@@ -1232,6 +1236,43 @@ class TestReplayWeekly(unittest.TestCase):
              mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.01)):
             out2 = self.m.run_weekly(self.repo)
         self.assertEqual(sorted(out2["replayed"]), list("abcdefg"), "便宜存量要升級全跑")
+
+    def test_skipped_new_keeps_must_run_status(self):
+        """cb3 ext-f3/s4-f3:預算見底被 skip 的新包不得標 seen——下週仍是「新凍必跑」。"""
+        for lid in ("a", "b"):
+            self._verdict(lid)
+        # 假鐘:第一包跑完即預算見底 → b 被 skip
+        state = {"t": 1000.0, "n": 0}
+        def clock():
+            state["n"] += 1
+            state["t"] += 0 if state["n"] < 4 else 10_000
+            return state["t"]
+        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+             mock.patch.object(self.m.time, "time", side_effect=clock):
+            out = self.m.run_weekly(self.repo)
+        skipped_new = set(out["skipped"]) & {"a", "b"}
+        self.assertTrue(skipped_new, "前置:確實有新包被 skip")
+        cur = self._cursor()
+        for lid in skipped_new:
+            self.assertNotIn(lid, cur["seen"], f"{lid} 被 skip 卻標 seen=必跑資格被劃掉")
+
+    def test_msg_single_line(self):
+        """cb3 s4-f2:bash 逐行抽 MSG: 前綴——訊息必須單行,紅燈清單不得因換行蒸發。"""
+        out = {"replayed": ["x"], "skipped": [], "frozen": [], "red": ["x"], "stale": ["y"],
+               "errors": ["e"], "unfreezable": ["u"]}
+        m = self.m.build_msg(out)
+        self.assertNotIn("\n", m, "多行訊息會被 sed 砍到只剩第一行")
+        self.assertIn("🔴", m); self.assertIn("重凍", m)
+
+    def test_red_marker_with_rc0_not_red(self):
+        """cb3 s3-f6:輸出含紅字樣但 rc=0 → 不判紅(and rc!=0 條件的負案例;
+        現行 cmd_loop_replay 紅必 rc1,此釘防未來輸出邏輯挪動讓字樣脫離 rc)。"""
+        self._verdict("z")
+        r = mock.Mock(); r.returncode = 0; r.stderr = ""
+        r.stdout = "說明文字提到 邏輯漂移 這個詞但本輪其實一致"
+        with mock.patch.object(self.m.subprocess, "run", return_value=r):
+            out = self.m.run_weekly(self.repo)
+        self.assertEqual(out["red"], [], "rc0 時紅字樣不得判紅")
 
     def test_quiet_week_no_message(self):
         self._verdict("a")
