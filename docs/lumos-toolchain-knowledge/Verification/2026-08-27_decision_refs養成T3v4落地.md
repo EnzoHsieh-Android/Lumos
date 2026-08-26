@@ -29,3 +29,12 @@ Enzo 2026-08-27 裁「AI 輔助回填一批」,解 decision_refs 雞生蛋(機�
 - ★覆蓋窄★:backlog 164 節點/985 未填槽,但大多是 related 邊的結構巧合(某筆記剛好連到有決策節點,非真背書)。真回填要逐節點讀內容判,判錯=往圖譜塞假連結。本批只做 8 條高信心的(verified_by/plan_refs 邊、驗證背書其實作決策),全量 985 槽的回填=後續語意工程,不硬湊數字。這正是 2026-07-15 凍結時判的「T3 窄覆蓋小加分」,實測證實。
 - 單編排者單次單趟純靠協議紀律,無機械擋;禁併發(見 spec)。
 - AI GIGO:填哪條靠判斷,誤 ai-ref 只誤觸發 E3 advisory(人 prune),不對稱信任兜住(ai-ref 抑制不了 E2)。
+
+## 代碼審(code-dref standard,r1 三席)
+
+實作後過完整代碼審,三席(s1 正確性/arch 對齊/外家否決)一起接住實作真 bug——2 blocker+3 major+2 minor 全折:
+- ★blocker(外家+arch 獨立撞)★:覆蓋掃描 `if d.get("valid", True)` 判翻案,但 parse_decisions 存的 valid 是字串 "false"、非空恆真→跳過所有翻案決策→覆蓋提醒永遠不觸發→promote 靜默壓掉 E2 告警(正是設計三輪防的 s3-f1 blocker 被實作 truthy 誤用重開)。同 bug 在 candidates 的 [已翻案] 標記也發作。修=照 E2/cmd_decisions 慣例 `str(d.get("valid","true")).lower() != "false"`。
+- ★blocker(arch+s1)★:_node_decisions 用寫入前置原語 load_raw_for_edit 重讀檔(拒 CRLF/BOM),CRLF 節點候選靜默消失+合法決策誤判 dangling 拒寫。修=讀記憶體 env.notes[rel].fm_lines(照 E2)。
+- major:promote 重複 _append_decision_ref 插入邏輯→抽共用 `_fm_list_insert`;_dref_remove_ref 沒清空欄位刪 key 行→補(照 edit_fm_remove);candidates valid 標記。minor:dispatch 沒包 try/except→補(rc2 白話非裸 traceback);_dref_same 空-did 死碼註解修正。
+
+新增迴歸釘:t_dref_promote_coverage_advisory(覆蓋提醒真觸發,突變驗抓 valid blocker)、t_dref_crlf_and_error_protocol(CRLF 候選不消失,突變驗抓讀檔 blocker)。★這兩個 blocker 我實作時測試都沒觸發到相應現場(覆蓋提醒從沒有「其他翻案落後邊」的 fixture、候選測試沒 CRLF 節點)——是代碼審的鑑別力接住的,補釘後才有現場。★

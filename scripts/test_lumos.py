@@ -23540,5 +23540,38 @@ def t_dref_asymmetric_trust_e2_e3():
     lr2 = run(v, "decision-refs", "list", "Verification/V", "--by", "ai")
     check("promote 後 _ai 欄無該 ref", "Target.md#d1" not in lr2.stdout, lr2.stdout)
 
+
+def t_dref_promote_coverage_advisory():
+    """★覆蓋提醒★(code-dref ext-f1 blocker 迴歸):節點指向多條翻案決策、promote 第一條進正欄→
+    E2 從節點級翻精化,其他翻案落後邊要被列出提醒(含無 id)——不得靜默。翻紅釘:_dref_coverage_scan
+    的 valid 判斷若退回 truthy(誤跳全部翻案)→ 提醒空 → 這條紅。"""
+    v = mkvault()
+    write(v, "Systems/Tgt.md", "type: system\nstatus: done")
+    run(v, "decision-add", "Tgt", "甲決策內容足夠長讓人讀懂", "--decided", "2026-07-01", expect_rc=0)
+    run(v, "decision-add", "Tgt", "乙決策內容也足夠長", "--decided", "2026-07-01", expect_rc=0)
+    # 翻案兩條決策
+    run(v, "decision-supersede", "Tgt", "甲決策內容足夠長讓人讀懂", "--by", "改用丙", expect_rc=0)
+    run(v, "decision-supersede", "Tgt", "乙決策內容也足夠長", "--by", "改用丁", expect_rc=0)
+    # 來源 V 用 verified_by 指向 Tgt(E2 抑制範圍=verified_by/plan_refs),updated 早於 ended
+    write(v, "Verification/V.md",
+          "type: verification\nstatus: pass\nupdated: 2026-06-01\nverified_by:\n  - \"[[Systems/Tgt]]\"")
+    # add-ai + promote 第一條(d1)→ 正欄非空,d2(另一翻案落後邊)該被覆蓋提醒列出
+    run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Tgt.md#d1", expect_rc=0)
+    r = run(v, "decision-refs", "promote", "Verification/V", "Systems/Tgt.md#d1")
+    check("覆蓋提醒:promote rc0", r.returncode == 0, r.stderr[:200])
+    check("★覆蓋提醒列出其他翻案落後邊 d2(ext-f1 迴歸:valid 字串判斷對)★",
+          "覆蓋提醒" in r.stdout and "#d2" in r.stdout, r.stdout[-500:])
+
+
+def t_dref_crlf_and_error_protocol():
+    """code-dref s1-f1 迴歸:CRLF 目標節點候選不消失(讀記憶體 fm_lines,不用嚴格 edit-path 讀檔)。"""
+    v, tgt, src = _mk_dref_vault()
+    txt = read(tgt)
+    tgt.write_bytes(txt.replace("\n", "\r\n").encode("utf-8"))
+    r = run(v, "decision-refs", "candidates", "Verification/V")
+    check("s1-f1:CRLF 目標節點候選不靜默消失", "#d1" in r.stdout, r.stdout[:300])
+    r = run(v, "decision-refs", "add-ai", "Verification/V", "Systems/Target.md#d1")
+    check("s1-f1:CRLF 節點合法決策不被誤判 dangling", r.returncode == 0, r.stderr[:200])
+
 if __name__ == "__main__":
     sys.exit(main())

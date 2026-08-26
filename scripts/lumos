@@ -8799,6 +8799,27 @@ def _validate_from_gid(from_id):
         raise ValueError(f"--from 格式要是 <筆記路徑>#d<編號>,你給的是: {from_id}")
 
 
+def _fm_list_insert(fm, field, quoted):
+    """往 frontmatter 的 list 欄位插一個已引號化的項(欄位不存在則建)。
+    ★單一實作★:_append_decision_ref(T1)與 dref promote 共用(code-dref arch-f4:原兩處複製)。
+    fm 就地改;呼叫端負責去重檢查(此函式只管插入)。"""
+    struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
+    if field in struct:
+        s, e, _kind = struct[field]
+        indent = "  "
+        for j in range(s + 1, e + 1):
+            if fm[j].lstrip().startswith("-"):
+                indent = fm[j][:len(fm[j]) - len(fm[j].lstrip())]
+                break
+        last = e
+        while last > s and not fm[last].strip():
+            last -= 1
+        fm.insert(last + 1, f"{indent}- {quoted}")
+    else:
+        fm.append(field + ":")
+        fm.append(f"  - {quoted}")
+
+
 def _append_decision_ref(env, rel, field, ref):
     """[decision_refs 自動養成 T1] 把精確 decision_ref(<rel>#dN)append 到 field
     (decision_refs=human/cascade-confirmed | decision_refs_ai=AI 填)。**exact-string dedup**
@@ -8822,18 +8843,7 @@ def _append_decision_ref(env, rel, field, ref):
         for j in range(s + 1, e + 1):
             if fm[j].lstrip().startswith("-") and strip_quotes(fm[j].lstrip()[1:].strip()) == ref:
                 return False   # exact 已存在
-        indent = "  "
-        for j in range(s + 1, e + 1):
-            if fm[j].lstrip().startswith("-"):
-                indent = fm[j][:len(fm[j]) - len(fm[j].lstrip())]
-                break
-        last = e
-        while last > s and not fm[last].strip():
-            last -= 1
-        fm.insert(last + 1, f"{indent}- {quoted}")
-    else:
-        fm.append(field + ":")
-        fm.append(f"  - {quoted}")
+    _fm_list_insert(fm, field, quoted)   # 共用插入(code-dref arch-f4)
     new_lines = lines[:1] + fm + lines[e_fm:]
     atomic_write_verify(path, new_lines, field,
                         lambda f: any(str(x).strip() == ref for x in as_list(f.get(field))))
@@ -8864,22 +8874,21 @@ def _dref_norm(env, ref):
 
 
 def _dref_same(env, a, b):
-    """兩 ref 是否同一決策:正規化 tuple 相等。★空-did 守衛★(r3 d-f5:did 任一空即不等,
-    照抄 E2 _hits 的 `did and` 防護——否則兩筆無 id 決策 ""=="" 誤併)。"""
+    """兩 ref 是否同一決策:正規化 tuple 相等。只吃「ref」(a/b 皆 <節點>#dN),故 did 恆有值
+    ——無 id 決策不會變成 ref、由 _dref_coverage_scan 的 no_id_dead 分支另處理(不經此函式,
+    s1-f3:此處 na[1]/nb[1] 恆真、是防禦性冗餘非活守衛)。"""
     na, nb = _dref_norm(env, a), _dref_norm(env, b)
     if not na or not nb:
         return False
-    return na[1] and nb[1] and na == nb
+    return na == nb
 
 
 def _node_decisions(env, rel):
-    """回某節點的 decisions list(parse_decisions on its fm)。讀不到→[]。"""
-    try:
-        path = env.vault / rel
-        lines, _s, e_fm = load_raw_for_edit(path)
-        return parse_decisions(lines[1:e_fm])
-    except (OSError, ValueError):
-        return []
+    """回某節點的 decisions list(parse_decisions on 記憶體 fm_lines,照 E2 慣例 scripts:1256;
+    arch-f1:不用 load_raw_for_edit 重讀檔——那是寫入前置原語、拒 BOM/CRLF,會把 load_vault
+    讀得動但格式稍偏的節點候選悄悄吞成空)。"""
+    n = env.notes.get(rel)
+    return parse_decisions(n.fm_lines) if n else []
 
 
 def _dref_filled(env, rel):
@@ -8915,7 +8924,7 @@ def _dref_candidates(env, rel, tidx):
                     continue
                 seen.add(key)
                 cands.append((trel, did, first_line(str(d.get("content", "")), 60),
-                              d.get("valid", True)))
+                              str(d.get("valid", "true")).lower() != "false"))
     return cands, skipped
 
 
@@ -8952,7 +8961,7 @@ def cmd_dref_candidates(env, rel_in, as_json=False):
     import json as _j
     rel = env.find(rel_in)
     if rel is None:
-        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {rel_in} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     tidx = build_typed_index(env)
     cands, skipped = _dref_candidates(env, rel, tidx)
@@ -8963,7 +8972,7 @@ def cmd_dref_candidates(env, rel_in, as_json=False):
     for trel, did, content, valid in cands:
         already = (trel, did) in filled
         out_rows.append({"ref": f"{trel}#{did}", "content": content,
-                         "valid": bool(valid), "already_filled": already})
+                         "valid": bool(valid), "already_filled": already})   # valid 已是 bool(_dref_candidates 轉好,arch-f3)
     if as_json:
         print(_j.dumps({"node": rel, "summary": summary, "candidates": out_rows,
                         "skipped_no_id": skipped}, ensure_ascii=False))
@@ -8983,7 +8992,7 @@ def cmd_dref_add_ai(env, rel_in, ref):
     """[V3] 寫 decision_refs_ai:存在性驗證+正規化冪等(已在正欄→no-op)。"""
     rel = env.find(rel_in)
     if rel is None:
-        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {rel_in} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     nn = _dref_norm(env, ref)
     if not nn or not nn[1]:
@@ -9013,7 +9022,7 @@ def cmd_dref_list(env, rel_in, by=None):
     """[V4] 分欄列 ref。"""
     rel = env.find(rel_in)
     if rel is None:
-        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {rel_in} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     n = env.notes.get(rel)
     fields = [("decision_refs", "human/confirmed")] if by == "human" else \
@@ -9031,7 +9040,7 @@ def cmd_dref_prune(env, rel_in, ref, by=None):
     """[V5] 移除 ref(正規化定位)。--by 移該欄、無 --by 兩欄都移。區分真移除/本來不在。"""
     rel = env.find(rel_in)
     if rel is None:
-        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {rel_in} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     n = env.notes.get(rel)
     flds = ["decision_refs"] if by == "human" else ["decision_refs_ai"] if by == "ai" \
@@ -9066,6 +9075,12 @@ def _dref_remove_ref(env, rel, field, exact_val):
     if target_j is None:
         return False
     del fm[target_j]
+    # 清完若 list 空→連 key 行移除(裸鍵被 YAML 解 null,doctor/lint 判讀比沒鍵更糟;照 edit_fm_remove,arch-f5)
+    struct2 = {k: (a, b, c) for k, a, b, c in fm_structure(fm)}
+    if field in struct2:
+        s2, e2, _ = struct2[field]
+        if not any(fm[j].strip().startswith("-") for j in range(s2 + 1, e2 + 1)):
+            del fm[s2:e2 + 1]
     new_lines = lines[:1] + fm + lines[e_fm:]
     atomic_write_verify(path, new_lines, field,
                         lambda f: all(str(x).strip() != exact_val for x in as_list(f.get(field))))
@@ -9083,7 +9098,7 @@ def _dref_coverage_scan(env, rel, tidx):
     for etype in _DREF_E2_FIELDS:   # 排 related,對齊 E2 typed_in
         for trel in fwd.get(etype, []):
             for d in _node_decisions(env, trel):
-                if d.get("valid", True):   # 只看翻案(valid:false)決策
+                if str(d.get("valid", "true")).lower() != "false":   # 只看翻案(valid:false)——parse_decisions 存字串,照 E2/cmd_decisions 慣例判(code-dref ext-f1 blocker:原 truthy 誤跳全部翻案)
                     continue
                 did = str(d.get("id", "")).strip()
                 content = first_line(str(d.get("content", "")), 50)
@@ -9106,7 +9121,7 @@ def cmd_dref_promote(env, rel_in, ref):
     """[V6] _ai→decision_refs 抽查蓋章(升級可抑制 E2)。正規化全操作+dangling 拒+覆蓋提醒+雙欄原子。"""
     rel = env.find(rel_in)
     if rel is None:
-        print(f"擋下:圖譜裡找不到節點 {rel_in}", file=sys.stderr)
+        print(f"擋下:圖譜裡找不到叫 {rel_in} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
         return 2
     nn = _dref_norm(env, ref)
     if not nn or not nn[1]:
@@ -9149,23 +9164,13 @@ def cmd_dref_promote(env, rel_in, ref):
             if j < len(fm) and fm[j].lstrip().startswith("-") and _dref_same(env, strip_quotes(fm[j].lstrip()[1:].strip()), ref):
                 del fm[j]
         struct = {k: (s, e, kind) for k, s, e, kind in fm_structure(fm)}
-    # 加正欄(若正欄尚無命中)
+    # 加正欄(若正欄尚無命中)——共用插入(code-dref arch-f4)
     if not in_main:
-        quoted = '"' + canon + '"'
-        if "decision_refs" in struct:
-            s, e, _k = struct["decision_refs"]
-            indent = "  "
-            for j in range(s + 1, e + 1):
-                if fm[j].lstrip().startswith("-"):
-                    indent = fm[j][:len(fm[j]) - len(fm[j].lstrip())]
-                    break
-            last = e
-            while last > s and not fm[last].strip():
-                last -= 1
-            fm.insert(last + 1, f"{indent}- {quoted}")
-        else:
-            fm.append("decision_refs:")
-            fm.append(f"  - {quoted}")
+        _st = {k: kind for k, _s, _e, kind in fm_structure(fm)}
+        if _st.get("decision_refs") not in (None, "list"):   # s1-f4:非清單型清楚擋
+            print("擋下:decision_refs 欄位不是清單型,沒辦法 promote 進去(先修正 frontmatter)", file=sys.stderr)
+            return 2
+        _fm_list_insert(fm, "decision_refs", '"' + canon + '"')
     new_lines = lines[:1] + fm + lines[e_fm:]
 
     def _check(f):
@@ -17078,19 +17083,25 @@ def main():
 
     if args.cmd == "decision-refs":
         dc = args.dref_cmd
-        if dc == "backlog":
-            return cmd_dref_backlog(env, as_json=getattr(args, "dref_json", False))
-        if dc == "candidates":
-            return cmd_dref_candidates(env, args.dref_node, as_json=getattr(args, "dref_json", False))
-        if dc == "add-ai":
-            return cmd_dref_add_ai(env, args.dref_node, args.dref_ref)
-        if dc == "list":
-            return cmd_dref_list(env, args.dref_node, by=getattr(args, "dref_by", None))
-        if dc == "prune":
-            return cmd_dref_prune(env, args.dref_node, args.dref_ref, by=getattr(args, "dref_by", None))
-        if dc == "promote":
-            return cmd_dref_promote(env, args.dref_node, args.dref_ref)
-        return 2
+        # code-dref s1-f2:包 try/except 照姊妹寫入指令(atomic_write_verify/權限/型別衝突→
+        # rc2 白話「擋下」,不裸 traceback+rc1,守全專案 rc 協議)
+        try:
+            if dc == "backlog":
+                return cmd_dref_backlog(env, as_json=getattr(args, "dref_json", False))
+            if dc == "candidates":
+                return cmd_dref_candidates(env, args.dref_node, as_json=getattr(args, "dref_json", False))
+            if dc == "add-ai":
+                return cmd_dref_add_ai(env, args.dref_node, args.dref_ref)
+            if dc == "list":
+                return cmd_dref_list(env, args.dref_node, by=getattr(args, "dref_by", None))
+            if dc == "prune":
+                return cmd_dref_prune(env, args.dref_node, args.dref_ref, by=getattr(args, "dref_by", None))
+            if dc == "promote":
+                return cmd_dref_promote(env, args.dref_node, args.dref_ref)
+            return 2
+        except (ValueError, RuntimeError, OSError) as e:
+            print(f"擋下:{e}", file=sys.stderr)
+            return 2
     if args.cmd == "decision-reindex" and getattr(args, "reindex_all", False):
         try:
             return cmd_decision_reindex(env, all_mode=True)
