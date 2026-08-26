@@ -3837,7 +3837,7 @@ def t_canary_record_outcome_usd():
     check("outcome 單主類合法", lines[1].get("outcome") == "converged" and "usd" not in lines[1], str(lines[1]))
     check("不給不寫鍵", "outcome" not in lines[2] and "usd" not in lines[2], str(lines[2]))
     r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "exploded")
-    check("主類白名單外 rc2", r.returncode == 2 and "主類" in r.stderr, f"rc={r.returncode}")
+    check("主類白名單外 rc2", r.returncode == 2 and "封閉列舉" in r.stderr, f"rc={r.returncode}")
     r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "converged:大寫壞字元")
     check("細類壞字元 rc2", r.returncode == 2, f"rc={r.returncode}")
     r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "pipeline_fail:zzz")
