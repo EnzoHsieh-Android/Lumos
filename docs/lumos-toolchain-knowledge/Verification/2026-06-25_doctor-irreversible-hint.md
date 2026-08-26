@@ -28,3 +28,5 @@ revalidate_when:
 
 ## design-loop 收斂證據
 設計稿 `docs/design/2026-06-25-doctor-irreversible-hint.md` 尾段:5 輪 canary 對抗審計每輪 caught + cross-audit 1 輪(qwen,2 FALSE POSITIVE 自 grep 駁回、1 TRUE 折修)。關鍵真 blocker:r1-F1(module-level helper 缺 `import subprocess` → NameError)。
+
+> 覆核(2026-08-26,code-batch2 s2-f1 巡單):本日 doctor 於尾端(所有既有檢之後、if ci: 前)新增 [F] 檢——未動本篇守的分支/插入點語意;Check H 測試照綠、[F] 位置有專屬斷言(t_doctor_lint_declaration)。判定:無需重驗。

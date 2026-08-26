@@ -32,3 +32,5 @@ about_code:
 
 ## 結論
 PASS——機制按分支真值表行為,事前/事後兩軌與 CHECKPOINT 隔離均有測試覆蓋,知識同步有漂移守衛。
+
+> 覆核(2026-08-26,code-batch2 s2-f1 巡單):本日 doctor 於尾端(所有既有檢之後、if ci: 前)新增 [F] 檢——未動本篇守的分支/插入點語意;Check H 測試照綠、[F] 位置有專屬斷言(t_doctor_lint_declaration)。判定:無需重驗。

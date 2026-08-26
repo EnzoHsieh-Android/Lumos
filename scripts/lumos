@@ -1476,7 +1476,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     # 回退恆非 None。也不得用 env.vault 直拼——消費 repo 宣告在 repo root,直拼永遠
     # 讀不到=靜默假綠,設計審 r2 d-f2;實作首版就踩了前者,測試抓紅後修★)。
     if True:
-        _lf = _lint_load_and_validate(_repo_root_from_env(env))
+        _lf = _lint_load_and_validate(_vault_repo_root(env))   # git 感知解析(ext-f1:_repo_root_from_env 對 standalone 回 parent,與 .git 在 vault 內的既有定義互斥)
         section("F", "linter 宣告檔還健康嗎(.lumos/lint.json;沒宣告就跳過)")
         if not _lf["declared"]:
             ok("這個 repo 沒有宣告 linter 橋(.lumos/lint.json 不存在),未宣告跳過")
@@ -4751,7 +4751,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
         _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
         return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
-                                     bad_linenos=bad_linenos, env=env, roster_flag=roster, repo=repo)
+                                     bad_linenos=bad_linenos, env=env, roster=roster, repo=repo)
     if not panel and n_round > 0:
         print("擋下:這個編號的記錄帶了輪次(多人審格式),但你沒加 --panel;不加的話一輪裡 W 個人的記錄會被當成 W 輪,所以不算",
               file=sys.stderr)
@@ -5057,7 +5057,11 @@ def _roster_observe(env, loop_id, rounds, repo, only_rid=None, anomalies_only=Fa
     if kind is None:
         _quiet(f"[roster] {loop_id}:看不出是設計審還是代碼審(名稱 code 開頭但不是 code- 格式),跳過派工對帳")
         return anomalies
-    tier = next((r.get("tier") for r in rounds if r.get("tier")), None)
+    # only_rid(問閘單輪)時 tier 取「該輪自己」的紀錄——跨輪 tier 不同時拿第一筆會查錯編制表,
+    # high 輪的 fail-closed 警訊被降級成 standard 的軟提醒(code-batch2 s1-f1,席位純 CLI 重現)
+    _tier_pool = [r for r in rounds if r.get("round") == only_rid] if only_rid else rounds
+    tier = next((r.get("tier") for r in _tier_pool if r.get("tier")), None) \
+        or next((r.get("tier") for r in rounds if r.get("tier")), None)
     _quiet(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'}")
     if tier is None:
         _quiet("[roster] 這個編號沒指定過分級(舊格式或還沒記錄),沒有編制表可以對")
@@ -10088,7 +10092,7 @@ def _quote_rows(rtext, stext):
     return rows
 
 
-def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster_flag=False, repo=None):
+def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None):
     """[T4] 處置閘(design-loop重設計 三):四條合取,全部讀側可重算——
     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
@@ -10287,8 +10291,8 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     def _roster_tail():
         # roster對帳併入問閘 [S1]:問閘當輪異常轉述(異常才發聲;advisory 恆不動 rc)。
         # 三個提前 return 2 路(G3 spec 讀不到/一輪多處置帳/findings 壞值)刻意不掛——
-        # 帳面異常優先於席位對帳(r3 e-f2)。roster_flag 同帶=全史已印,尾端跳過(r2 d-f1)。
-        if roster_flag or str(rid).startswith("__"):
+        # 帳面異常優先於席位對帳(r3 e-f2)。roster 同帶=全史已印,尾端跳過(r2 d-f1)。
+        if roster or str(rid).startswith("__"):
             return   # __seqN 合成鍵:round-less 無派工快照可對,沉默勝過錯誤示警(std-r1 s1-f2)
         try:
             kinds = _roster_observe(env, loop_id, rounds, repo, only_rid=rid, anomalies_only=True)
@@ -10531,7 +10535,7 @@ def cmd_link_candidates(code_file=None, goldset=None, repo=None, as_json=False):
 
 
 
-# ⛔ mutate 家族已退場(2026-08-26 建了沒人跑批次裁定:消費者 2026-08-08 已裁死、治理帳 0 次;復活=有真消費者立案從 git 史撿回)
+# ⛔ mutate 家族已退場(2026-08-26,詳 Projects/建了沒人跑批次裁定_計劃:消費者 2026-08-08 已裁死、治理帳 0 次;復活=有真消費者立案從 git 史撿回)
 
 
 def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
@@ -10983,7 +10987,7 @@ def _lint_load_and_validate(repo_root):
     try:
         with open(p, encoding="utf-8") as f:
             config = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:   # 編碼損壞也走受控紅,不 traceback(ext-f2)
         out["parse_error"] = str(e)
         return out
     out["problems"] = _lintcheck_validate(config)
