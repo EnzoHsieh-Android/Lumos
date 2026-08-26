@@ -431,6 +431,211 @@ def _loop_gov_mark(env, loop_id, kind, note=""):
         pass
 
 
+def _replay_git_blob(root, relpath):
+    """--freeze 前置:檔案已 commit 且與 HEAD 一致才記 blob id(r3 delta d-f2:hash-object 不落
+    物件、-w 落懸空 blob 兩週可被 GC——取 HEAD 的 blob 保證被 tree 引用)。回 (blob_id, err)。"""
+    import subprocess as _sp
+    head = _sp.run(["git", "-C", str(root), "rev-parse", f"HEAD:{relpath}"],
+                   capture_output=True, text=True)
+    if head.returncode != 0:
+        return None, f"{relpath} 還沒 commit 進版控"
+    work = _sp.run(["git", "-C", str(root), "hash-object", str(Path(root) / relpath)],
+                   capture_output=True, text=True)
+    if work.returncode != 0:
+        return None, f"{relpath} 讀不到({work.stderr.strip()[:80]})"
+    if head.stdout.strip() != work.stdout.strip():
+        return None, f"{relpath} 工作樹內容與 HEAD 不一致(先 commit 卷證再凍)"
+    return head.stdout.strip(), None
+
+
+def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=None, repo=None):
+    """改制回測 [S1/S2](2026-08-26):gate 判定回放。
+    凍結模式(--freeze --spec):對 loop 現帳跑唯讀判定,產 governance/replay/<id>/verdict.json
+    =完整輸入閉包(全列原文+逐行 sha 集+spec sha+檔案 sha/blob+engine_rev)。
+    回放模式(--golden):對閉包重算,差異四分類——邏輯漂移/帳被動=紅 rc1;
+    帳本長大/golden 過期=列出不紅。唯讀:治理帳零寫入、不跑觀測尾巴。
+    範圍=d5 處置帳形狀;panel 舊制 rc2 指路 loop status --gate --panel(語意重算既有,不入 golden)。
+    rc:0=無異狀 / 1=紅(漂移或資料完整性) / 2=用法或帳形狀錯。"""
+    import json
+    import hashlib
+    import datetime
+    if freeze == bool(golden):
+        print("擋下:--freeze(凍結)和 --golden(回放)要挑一個模式", file=sys.stderr)
+        return 2
+    root = Path(repo).resolve() if repo else _vault_repo_root(env)
+    ledger = env.vault.parent / ".canary-log.jsonl"
+
+    def _load_rows():
+        raw, parsed = [], []
+        try:
+            for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if d.get("loop") == loop_id:
+                    raw.append(line)
+                    parsed.append(d)
+        except OSError as e:
+            print(f"擋下:帳本讀不到({e}): {ledger}", file=sys.stderr)
+            return None, None
+        return raw, parsed
+
+    def _sha(s):
+        return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+    if freeze:
+        if not spec:
+            print("擋下:凍結模式要帶 --spec(帳裡沒有 spec 路徑欄,凍結當下由操作者給)", file=sys.stderr)
+            return 2
+        raw, parsed = _load_rows()
+        if raw is None:
+            return 2
+        if not raw:
+            print(f"擋下:帳本裡沒有 loop={loop_id} 的任何記錄,沒東西可凍", file=sys.stderr)
+            return 2
+        # 兩趟同一份實作:第一趟取判定輪 rid(G3 對活檔可能已 FAIL,不影響分組);
+        # 第二趟用窗末 sha 重算=凍結的 verdict——spec 檔收斂後常繼續被編輯(常態),
+        # 凍結若對活檔算 G3,回放(對凍結 sha 算)就恆報假邏輯漂移(凍結/回放兩側輸入必須同構)。
+        out = {}
+        rc = _loop_status_disposal(parsed, loop_id, spec, 0, root, env=env, repo=repo,
+                                   readonly=True, result_out=out)
+        if rc == 2:
+            print("擋下:這個 loop 的帳形狀進不了 d5 處置判定(多半是 panel 舊制多席各自帳)——"
+                  "舊制語意重算用 lumos loop status <id> --gate --panel;golden 回放只涵蓋 d5", file=sys.stderr)
+            return 2
+        rid = out.get("rid")
+        spec_sha_frozen = next((r.get("result_sha256") for r in parsed
+                                if r.get("round") == rid and r.get("result_sha256")), None)
+        out = {}
+        rc = _loop_status_disposal(parsed, loop_id, None, 0, root, env=env, repo=repo,
+                                   readonly=True, spec_sha_override=spec_sha_frozen, result_out=out)
+        try:
+            if spec_sha_frozen and _sha256_file(spec) != spec_sha_frozen:
+                print("  (提示:spec 檔已在收斂後被編輯——常態;閉包凍的是窗末指紋,回放不受影響)")
+        except OSError:
+            pass
+        files = {}
+        for r in parsed:
+            if r.get("round") != rid:
+                continue
+            for k in ("report", "snapshot"):
+                rp = r.get(k + "_path")
+                if not rp or rp in files:
+                    continue
+                blob, err = _replay_git_blob(root, rp)
+                if err:
+                    print(f"擋下:凍結前置檢查沒過——{err};先把卷證 commit 進版控再凍", file=sys.stderr)
+                    return 2
+                files[rp] = {"sha256": r.get(k + "_sha256"), "git_blob": blob}
+        spec_sha = spec_sha_frozen
+        _spr = Path(spec).resolve()
+        try:
+            spec_rel = str(_spr.relative_to(root))
+        except ValueError:
+            spec_rel = str(_spr)
+        verdict = {
+            "loop": loop_id, "round": rid, "engine_rev": _REPLAY_ENGINE_REV,
+            "frozen_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "spec_path": spec_rel, "spec_sha": spec_sha,
+            "rows": raw,
+            "all_row_shas": sorted(_sha(l) for l in raw),
+            "files": files,
+            "verdict": {"rc": rc, "fails": out.get("fails", [])},
+        }
+        vdir = root / "governance" / "replay" / loop_id
+        vdir.mkdir(parents=True, exist_ok=True)
+        target = vdir / "verdict.json"
+        if target.exists():
+            # 重凍=制度演進後的合法基準更新,比照 anchor approve:理由必填+留痕+歸檔不覆寫
+            if not note or not note.strip():
+                print("擋下:這個 loop 已有 golden 判定檔——重凍要帶 --note 說為什麼(比照 anchor approve,寫治理帳留痕)", file=sys.stderr)
+                return 2
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+            arch = vdir / f"verdict-{stamp}.json"
+            if arch.exists():
+                print(f"擋下:歸檔目的檔已存在({arch.name}),不覆寫歷史——等一秒再重凍", file=sys.stderr)
+                return 2
+            target.rename(arch)
+            _loop_gov_mark(env, loop_id, "replay-refreeze", note.strip())
+            print(f"  舊 golden 已歸檔 {arch.name};重凍理由已寫治理帳")
+        try:
+            target.write_text(json.dumps(verdict, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError as e:
+            print(f"擋下:verdict 寫不進去({e}): {target}", file=sys.stderr)
+            return 2
+        print(f"✓ 已凍結 {loop_id} 的判定閉包(輪 {rid},{len(raw)} 列帳,{len(files)} 份卷證檔)"
+              f"\n    {target}")
+        return 0
+
+    # ── 回放模式 ──
+    try:
+        g = json.loads(Path(golden).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"擋下:golden 檔讀不了({e}): {golden}", file=sys.stderr)
+        return 2
+    if g.get("engine_rev") != _REPLAY_ENGINE_REV:
+        print(f"golden 過期(制度已演進:{g.get('engine_rev')} → {_REPLAY_ENGINE_REV})——"
+              f"這不是漂移;確認新制對這個 loop 的判定合理後重凍:"
+              f"lumos loop replay {loop_id} --freeze --spec {g.get('spec_path','<計劃>')} --note <理由>")
+        return 0
+    red = []
+    # ① live 帳集合分類(基準=凍結當下全列 sha 集;只凍判定輪會讓多輪 loop 恆報長大,r2 delta d-f2)
+    raw, _parsed_live = _load_rows()
+    if raw is None:
+        return 2
+    live = {_sha(l) for l in raw}
+    frozen = set(g.get("all_row_shas", []))
+    missing = frozen - live
+    extra = live - frozen
+    if missing:
+        red.append(f"帳被動:凍結時的 {len(missing)} 列帳在現帳裡消失或被改(append-only 帳不該少東西)")
+    if extra:
+        print(f"  帳本長大:凍結後同 loop 合法多了 {len(extra)} 列(常態,不紅)")
+    # ② 凍結卷證檔完整性(sha 先驗;壞了不硬算,不誤報成邏輯漂移——r2 ext-f4)
+    file_bad = []
+    for rp, meta in (g.get("files") or {}).items():
+        fp = Path(root) / rp
+        try:
+            cur = _sha256_file(fp)
+        except OSError:
+            file_bad.append(f"{rp}(佚失)")
+            continue
+        if cur != meta.get("sha256"):
+            file_bad.append(f"{rp}(內容被動;git blob {str(meta.get('git_blob'))[:10]} 可從版控史回復)")
+    if file_bad:
+        red.append("凍結檔被動/佚失:" + ";".join(file_bad))
+    # ③ 對凍結閉包重算(卷證檔壞了就不硬算)
+    if not file_bad:
+        rows = []
+        for line in g.get("rows", []):
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                red.append("golden 檔內帳列解析失敗(golden 自身損壞)")
+                rows = None
+                break
+        if rows is not None:
+            out = {}
+            rc = _loop_status_disposal(rows, loop_id, None, 0, root, env=env, repo=repo,
+                                       readonly=True, spec_sha_override=g.get("spec_sha"),
+                                       result_out=out)
+            want = g.get("verdict") or {}
+            if rc == 2:
+                red.append("邏輯漂移:凍結輸入現在連判定都進不了(當時判得了)——讀側行為變了")
+            elif rc != want.get("rc") or sorted(out.get("fails", [])) != sorted(want.get("fails", [])):
+                red.append(f"邏輯漂移:同一份凍結輸入重算判定不同——當時 rc={want.get('rc')}"
+                           f" fails={want.get('fails')},現在 rc={rc} fails={out.get('fails')}")
+    if red:
+        for r in red:
+            print(f"⛔ {r}")
+        return 1
+    print(f"✓ 回放一致:{loop_id} 輪 {g.get('round')} 同輸入同判定,凍結帳與卷證完好")
+    return 0
+
+
 def cmd_loop_rewrite(env, loop_id, successor, note):
     """人裁「整份重寫」的收尾記帳(設計審收斂重定義 d3 帳面件的寫入端;2026-08-25 第一次真實
     rewrite 事件時補建)。寫 gate=design-loop kind=rewrite 事件到治理帳,note 機械帶血緣
@@ -3458,6 +3663,110 @@ def _parse_clusters(raw):
 
 LOOP_TIERS = ("light", "standard", "high")
 
+# 嚴重度綁定機械掃 [S1](2026-08-26):severity 值序單一常數——原三處字面複製
+# (panel 合取/cluster 閘/CLI choices)回填;寫側與掃描器共用,禁第四份(同 _quote_rows 單一實作鐵則)。
+_SEV_ORDER = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+# 生效日:只給讀側([S2] 歷史掃分新舊帳)消費;寫側每筆 ts 天生=now 恆為「新」,
+# 不刻 ts 分支,更嚴禁為了豁免而加 --ts/backdate 覆寫(=時戳造假後門)。(r2 delta d-f5)
+# 設隔日不設當日:合入日(08-26)白天經舊碼寫入的帳列若被標「寫側 bug」是誤告——
+# 日粒度切不開同日先後,保守往後推一天;當晚合入後的新列反正被寫側硬擋,只是掃描器標籤軟一階。
+_SEV_WRITESIDE_CUTOFF = "2026-08-27"
+# 改制回測 [S2]:判定制度版本常數——d5 判定語意改版就 bump;golden 閉包記它,
+# replay 比對前先對版本:不同=「golden 過期」(指路重凍,不紅)——制度合法演進≠漂移(r1 s3-f3/ext-f2)。
+_REPLAY_ENGINE_REV = "d5-2026-08-25"
+
+
+def _report_severities(text):
+    """[嚴重度綁定機械掃 S1] 報告檔 severity 宣告的★單一 parse 實作★(寫側+severity-check 共用)。
+    逐行 fullmatch、空白只認水平空白(反斜線s 會吞換行讓標籤與值跨行黏上,r2 ext);
+    行首錨定天生排掉引句行(以標籤起頭)與 blockquote(以 > 起頭)兩型逃逸(r1 s1/s2);
+    大小寫、全形冒號、行首雜字一律不認(fixture 釘)。回 list[str](出現序)。"""
+    out = []
+    for line in text.splitlines():
+        m = re.fullmatch(r"severity:[ \t]*(clean|minor|major|blocker)[ \t]*", line)
+        if m:
+            out.append(m.group(1))
+    return out
+
+
+def _severity_check_row(rec, root, trust_sha=False):
+    """[嚴重度綁定機械掃 S2] 單帳列 severity 對帳核心(CLI 與 disposal 尾端共用,單一實作)。
+    回 (status, 白話訊息):ok/over(高報,保守)/under(低報)/noparse(報告無宣告行)/
+    nofile(報告檔佚失)/shafail(報告與帳面指紋不符)。trust_sha=True 時跳過重算
+    (disposal ③ 已對判定輪全席逐檔驗過,不對同一檔重算兩遍雜湊;r1 arch-f4)。"""
+    rp = rec.get("report_path")
+    if not rp:
+        return "nofile", "帳列沒有報告檔路徑(舊形狀,寫側 2026-08-26 起已拒)"
+    fp = Path(rp)
+    if not fp.is_absolute():
+        fp = Path(root) / rp
+    try:
+        text = fp.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return "nofile", f"報告檔讀不到({e}): {rp}"
+    if not trust_sha:
+        want = rec.get("report_sha256")
+        if want and _sha256_file(fp) != want:
+            return "shafail", f"報告檔與帳面指紋不符(檔案被動過?)——先跑 lumos quote-check 查: {rp}"
+    decl = _report_severities(text)
+    led = rec.get("severity")
+    if not decl:
+        return "noparse", "報告裡沒有任何「severity: <值>」獨立宣告行(格式無法機械驗)"
+    rmax = max(decl, key=lambda v: _SEV_ORDER[v])
+    if led is None:
+        return "under", f"帳面沒記 severity,報告宣告最高是 {rmax}"
+    if _SEV_ORDER.get(led, -1) < _SEV_ORDER[rmax]:
+        return "under", f"低報——報告宣告最高 {rmax},帳面只記 {led}(major 逃必折就是走這條路)"
+    if _SEV_ORDER.get(led, 99) > _SEV_ORDER[rmax]:
+        return "over", f"高報——帳面 {led} 高於報告最高 {rmax}(保守方向,下游只會更嚴)"
+    return "ok", f"帳面 {led} == 報告最高 {rmax}"
+
+
+def cmd_severity_check(loop_id, round_id, auditor, repo="."):
+    """[嚴重度綁定機械掃 S2] 第四道收貨:席報告 severity 宣告↔帳面 --severity 對帳(vault-free)。
+    介面吃帳列座標(--loop/--round/--auditor)不吃檔案路徑——對帳對象是帳列不是檔案,
+    resolver 與 loop status 同一套 loop/round 篩選(r1 arch-f1 的第二種做法在此交代)。
+    定位=第二層縱深:生效日(2026-08-26)前的歷史帳=advisory;生效日後抓到低報=寫側 [S1]
+    有 bug(本應拒帳),紅字+指路開 Issue,converged 不自動撤。advisory 恆 rc0;
+    找不到帳列/帳檔=rc2;報告 sha 與帳面不符=rc2 拒掃指路 quote-check。"""
+    import json
+    root = Path(repo).resolve()
+    ledger = root / "docs" / ".canary-log.jsonl"
+    if not ledger.exists():
+        print(f"擋下:找不到帳本 {ledger}(--repo 要指 repo 根)", file=sys.stderr)
+        return 2
+    hit = None
+    for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get("loop") == loop_id and d.get("round") == round_id and d.get("auditor") == auditor:
+            hit = d   # append 序,後者勝(同座標重記時看最新)
+    if hit is None:
+        print(f"擋下:帳本裡找不到 loop={loop_id} round={round_id} auditor={auditor} 的帳列", file=sys.stderr)
+        return 2
+    st, msg = _severity_check_row(hit, root, trust_sha=False)
+    era_new = str(hit.get("ts", "")) >= _SEV_WRITESIDE_CUTOFF
+    if st == "shafail":
+        print(f"擋下:{msg}", file=sys.stderr)
+        return 2
+    if st == "under":
+        tag = "這筆是生效日後的新帳——寫側本應拒帳,代表 [S1] 有 bug,開 Issue 攤人" if era_new else "歷史帳(生效日前),寫側不溯及"
+        print(f"⛔ 低報:{msg}" + "\n" + f"  {tag}(本指令 advisory,不動任何閘)")
+    elif st == "noparse":
+        tag = "生效日後的新帳不該掃不出宣告行(寫側本應拒帳)——查 [S1]" if era_new else "歷史帳相容:格式無法機械驗,僅提醒"
+        print(f"提醒:{msg}——{tag}")
+    elif st == "nofile":
+        print(f"提醒:{msg}")
+    elif st == "over":
+        print(f"提醒:{msg}")
+    else:
+        print(f"✓ {msg}")
+    return 0
+
 
 def _sha256_file(path):
     """檔案 sha256(M1包 #3);OSError 交呼叫端兜(目錄/無權限/不存在統一 rc2,沿 G1 慣例)。"""
@@ -3537,6 +3846,14 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             print(f"擋下:--reviewed 要填 64 碼的 sha256 指紋,你給的格式不對: {reviewed!r}", file=sys.stderr)
             return 2
         rec["reviewed_sha256"] = reviewed
+        # 改制回測 [S2]①(2026-08-26):spec 路徑一併入帳——replay --freeze 補漏靠它反查
+        # 該 loop 的被審文件(r2 delta d-f1:帳裡只存內容 sha 從沒存路徑,自動凍第一步就跑不動)。
+        # 同 report/snapshot 落帳正規化:repo root 底下存相對路徑、之外存絕對。舊帳無此欄不溯及。
+        _spr = Path(spec).resolve()
+        try:
+            rec["spec_path"] = str(_spr.relative_to(_vault_repo_root(env)))
+        except ValueError:
+            rec["spec_path"] = str(_spr)
     # ── M1包 #4 成本選配欄:非負整數,不給不寫鍵(同 --findings 慣例) ──
     # ★scope_lines(2026-08-02)★:這輪「被審材料有多少行」。
     # 為什麼要記——canary 抓到只證審查員醒著,但★東西越多越抓不到★是外部實測裡
@@ -3652,6 +3969,37 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
                 print(f"擋下:--finding-kind 要每條發現各標一個(發現有 {sorted(F)},標了 {sorted(kinds)})", file=sys.stderr)
                 return 2
             rec["finding_kinds"] = kinds
+    # ── 嚴重度綁定機械掃 [S1] 寫側強制(2026-08-26)★行為改變★:審查席帳列
+    # (--loop/--round/--auditor 齊備,kind 不限——退役 caught/missed 也擋,換 kind 即繞過)
+    # 一律必附 --report,且帳面 severity 不得低於報告宣告最高。實帳 681 筆審查席列有 286 筆
+    # 無報告的舊形狀自此被拒,不設過渡:不附報告的審查帳事後無從重驗(disposal ③ 也 FAIL)。
+    # 低報=拒(major 逃必折之路);高報=放行+提醒(保守方向,下游全閘「越高越嚴」r1-s1)。
+    if loop and round_id and auditor:
+        if not report:
+            print("擋下:審查席記帳(帶 --loop/--round/--auditor)一定要附 --report 審查報告檔——"
+                  "不附報告的審查帳事後無從重驗;報告還沒落檔就先存檔再記(2026-08-26 起的新規矩)", file=sys.stderr)
+            return 2
+        try:
+            _rtext = Path(report).read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            print(f"擋下:--report 指的檔案讀不到: {e}", file=sys.stderr)
+            return 2
+        _decl = _report_severities(_rtext)
+        if not _decl:
+            print("擋下:報告裡找不到任何一行「severity: <clean|minor|major|blocker>」獨立宣告——"
+                  "這行是機械對帳的宣告本體,乾淨輪也要寫一行 severity: clean;"
+                  "表頭型(### id / 等級 / 標題)要先在收貨時正規化成獨立行再記", file=sys.stderr)
+            return 2
+        _rmax = max(_decl, key=lambda v: _SEV_ORDER[v])
+        if severity is None:
+            print(f"擋下:審查席記帳要帶 --severity(報告裡宣告的最高是 {_rmax}),忠實轉錄才有帳可對", file=sys.stderr)
+            return 2
+        if _SEV_ORDER[severity] < _SEV_ORDER[_rmax]:
+            print(f"擋下:低報——報告宣告的最高嚴重度是 {_rmax},帳面卻只記 {severity};"
+                  "帳面不能低於報告(major 靠低報逃過必折走的就是這條路),對正再記", file=sys.stderr)
+            return 2
+        if _SEV_ORDER[severity] > _SEV_ORDER[_rmax]:
+            print(f"提醒:高報——帳面記 {severity} 高於報告宣告最高 {_rmax}(保守方向,放行;下游判定只會更嚴)", file=sys.stderr)
     for _flag, _p in (("--report", report), ("--snapshot", snapshot)):
         if _p is None:
             continue
@@ -3908,7 +4256,7 @@ def _panel_round_conjuncts(recs, quiet=False):
     """單輪兩條合取(輪有效∧存活≤minor;capture-recapture 殘餘=advisory 觀測,2026-08-14 降級)——A案 K=2 抽出共用,
     ★單一實作★:判定輪(quiet=False,輸出逐字同改動前)與 K=2 前一輪(quiet=True)同函式。
     回 fails list。"""
-    order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+    order = _SEV_ORDER   # 值序單一常數(嚴重度綁定機械掃 arch-f2 回填)
     fails = []
     caught_recs = [r for r in recs if r.get("kind") == "caught"]
     # 2026-08-14 canary 協議停用(Systems/canary-audit d5):kind=none=無植入輪的純處置帳載體。
@@ -4097,7 +4445,7 @@ def _loop_status_panel_clusters(groups, valid_of, loop_id, min_seats=None, spec=
     """M2 cluster 帳 gate:兩條合取(判定輪有效 ∧ fold 後無 disputed-major)。
     fold 只採有效輪(last-wins,同名跨輪最後狀態勝);無效輪 clusters 警告區列帳不蒸發;
     新生 cluster 與 capture-recapture 皆 advisory 不進合取。"""
-    order = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+    order = _SEV_ORDER   # 值序單一常數(嚴重度綁定機械掃 arch-f2 回填)
     rid, latest = next(reversed(groups.items()))
     fails = []
     # 條 1:判定輪(latest)有效——同一謂詞
@@ -4245,7 +4593,7 @@ def cmd_loop_capture_counts(env, finders, from_pitfalls=None, repo=None):
     return 0
 
 
-def _hash_chain_check(rounds_list, spec_path):
+def _hash_chain_check(rounds_list, spec_path, cur_sha_override=None):
     """M1包 #3 雙 hash 鏈收斂窗驗證(loop機械脊椎M1包_計劃)。
     rounds_list=[[rec,...],...] 窗內按序的「輪」列表(legacy=每筆一輪;panel=判定輪一組)。
     回 (fail_msg or None, info):fail=None 且 info='unbound' 表窗內全無 hash(呼叫端裁 FAIL/advisory)。
@@ -4274,7 +4622,10 @@ def _hash_chain_check(rounds_list, spec_path):
         if per_round[k + 1][0] != per_round[k][1]:
             return (f"鏈續性斷裂——第 {k + 2} 輪 reviewed ≠ 第 {k + 1} 輪 result"
                     "(折入版本與下輪受審版本不接)", "")
-    cur = _sha256_file(spec_path)   # OSError 上拋——呼叫端統一 rc2(code-loop r2:panel/light 原轉字串成 rc1,與 G1 不對稱)
+    if cur_sha_override is not None:
+        cur = cur_sha_override   # replay 凍結模式:G3 對閉包裡的凍結 sha,spec 檔之後合法演化不影響回放(改制回測 r1 s1-f1)
+    else:
+        cur = _sha256_file(spec_path)   # OSError 上拋——呼叫端統一 rc2(code-loop r2:panel/light 原轉字串成 rc1,與 G1 不對稱)
     if per_round[-1][1] != cur:
         return "spec 於審計後被改動(窗末 result ≠ 當前檔),需再過一輪", ""
     return None, f"{len(per_round)} 輪鏈驗訖"
@@ -10098,7 +10449,7 @@ def _quote_rows(rtext, stext):
     return rows
 
 
-def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None):
+def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None, readonly=False, spec_sha_override=None, result_out=None):
     """[T4] 處置閘(design-loop重設計 三):四條合取,全部讀側可重算——
     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
@@ -10152,7 +10503,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     fails = []
     # ── ① G3 hash 鏈(fail-closed:unbound 也擋——disposal 是新閘,無舊帳包袱) ──
     try:
-        err, info = _hash_chain_check([latest], spec)
+        err, info = _hash_chain_check([latest], spec, cur_sha_override=spec_sha_override)
     except OSError as e:
         print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
         return 2
@@ -10303,6 +10654,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         try:
             kinds = _roster_observe(env, loop_id, rounds, repo, only_rid=rid, anomalies_only=True)
             if kinds:
+                print("[roster] ↑ 席位對帳為觀測,不進合取")   # 免責字樣(severity-scan r1 s3-f4 順手補)
                 # 留痕([S1c]):收集完、印完才一次性寫;寫入自身再包一層,失敗只損留痕不吞輸出(r3 e-f3)
                 try:
                     _ldir = (Path(repo).resolve() if repo else _vault_repo_root(env)) / "governance" / "review-reports" / loop_id
@@ -10314,7 +10666,43 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
                     print(f"[roster] 異常留痕寫入失敗({_e})——轉述已印,只是兩季覆核帳少這筆")
         except Exception as _e:
             print(f"[roster] 席位對帳失敗(降級不擋):{_e}")
-    _roster_tail()
+
+    def _severity_tail():
+        # 嚴重度綁定機械掃 [S3](2026-08-26):問閘收尾對判定輪逐席跑第二層 severity 對帳。
+        # 異常才發聲;advisory 恆不動 rc;③已對判定輪全席報告逐檔重算過 sha→trust_sha 不重算
+        # (r1 arch-f4);__seqN 合成鍵跳過(無派工上下文);例外降級不擋(比照 roster 尾端)。
+        # 生效日後的帳列抓到低報=寫側 [S1] 有 bug(本應拒帳)——轉述+指路開 Issue,converged 不自動撤。
+        if str(rid).startswith("__"):
+            return
+        try:
+            _root = Path(repo).resolve() if repo else _vault_repo_root(env)
+            _hits = []
+            for _r in latest:
+                _st, _msg = _severity_check_row(_r, _root, trust_sha=True)
+                _new_era = str(_r.get("ts", "")) >= _SEV_WRITESIDE_CUTOFF
+                if _st == "under" or (_st == "noparse" and _new_era):
+                    _tag = "寫側有 bug,開 Issue 攤人;" if _new_era else "歷史帳,"
+                    print(f"[severity] {_r.get('auditor','?')}: {_msg}({_tag}觀測,不進合取)")
+                    _hits.append(f"severity_underreport:{_r.get('auditor','?')}")
+            if _hits:
+                try:
+                    _ldir = (Path(repo).resolve() if repo else _vault_repo_root(env)) / "governance" / "review-reports" / loop_id
+                    _ldir.mkdir(parents=True, exist_ok=True)
+                    import datetime as _dt2
+                    with open(_ldir / "roster-alerts.log", "a", encoding="utf-8") as _f2:
+                        _f2.write(f"{_dt2.date.today().isoformat()} {rid} {','.join(_hits)}\n")
+                except OSError as _e2:
+                    print(f"[severity] 異常留痕寫入失敗({_e2})——轉述已印,只是覆核帳少這筆")
+        except Exception as _e2:
+            print(f"[severity] 嚴重度對帳失敗(降級不擋):{_e2}")
+    if not readonly:
+        # replay 唯讀:觀測尾巴不跑——roster 尾端會寫 roster-alerts.log(r2 delta d-f3 抓的第三個寫入點),
+        # severity 尾端同理;純判定核心=四合取本體。
+        _roster_tail()
+        _severity_tail()
+    if result_out is not None:
+        result_out["rid"] = rid
+        result_out["fails"] = list(fails)
     if fails:
         print(f"⛔ DISPOSAL GATE FAIL ({loop_id} 輪 {rid}: {'/'.join(fails)})")
         return 1
@@ -10322,7 +10710,8 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 0 發現空輪 ∧ 留痕可重算;引句無可驗不宣稱)")
     else:
         print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 處置全清 ∧ 留痕可重算 ∧ 引句全錨定)")
-    _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
+    if not readonly:
+        _loop_gov_mark(env, loop_id, "converged", "disposal gate PASS")
     return 0
 
 
@@ -15297,12 +15686,14 @@ HELP_WHEN = {
     "canary": "審查迴圈的記帳:record 記一輪結果,second 找人覆核某一筆。",
     "second": "覆核某一筆審查判定,必須換不同的人。",
     "record": "記一輪審查結果:誰審的、嚴重度、幾條發現、各自怎麼處置、審的是哪份文件(指紋)。",
+    "severity-check": "懷疑某席帳面嚴重度跟報告對不上(低報)時,對單筆帳列機械對帳;歷史帳 advisory、新帳抓到=寫側 bug 開 Issue。",
     "loop": "審查迴圈的查詢:next 問下一步、status 問過不過、verify-progress 只讀帳本、canary-stats 看歷史抓漏率。",
     "status": "這個審查編號過關了沒。多人審加 --panel,嚴格處置閘加 --disposal,單人 --light,結清模式 --settle。",
     "compress": "長跑的審查上下文太長,規則式壓成三欄。",
     "verify-progress": "不看散文,只從帳本結構欄位看審到哪了(防被報告措辭帶風向)。",
     "next": "每輪開頭問:第幾輪、要幾人、派誰、怎麼記帳。第一次一定帶 --tier。",
     "canary-stats": "各審查員歷史抓到/漏掉比率。觀測用,不影響過不過。",
+    "replay": "收斂後把判定凍成標準答案(--freeze),或懷疑判定邏輯/帳被動過時對閉包重算比對(--golden)。週跑自動抽查也走它。",
     "capture-counts": "多個找錯工具的結果合併估漏網,吐給 record --capture-counts。",
     "guard": "合約綁測試那一套:list 看狀態、scaffold 產骨架、bind 綁上、audit 留審計、trace 看證據鏈、kill 驗殺傷力。",
     "list": "每條合約綁測試的狀態:真綁 / 懸空 / 偽證據 / 裸 / 未審。",
@@ -15460,7 +15851,7 @@ def main():
     cr.add_argument("--token", help="canary token(不給則自動鑄 CANARY-<隨機>)")
     cr.add_argument("--note", help="備註")
     cr.add_argument("--loop", help="把這輪歸進某設計 loop(供 lumos loop status 算收斂)")
-    cr.add_argument("--severity", choices=("clean", "minor", "major", "blocker"),
+    cr.add_argument("--severity", choices=tuple(_SEV_ORDER),   # 值序單一常數(arch-f2 回填)
                     help="這輪審計員找到的最嚴重 finding(忠實轉錄)")
     cr.add_argument("--findings", type=int,
                     help="該輪辯方裁決後存活折入的真 findings 數(canary 不計;供 loop status --gate 枯竭錨)")
@@ -15557,6 +15948,13 @@ def main():
     lcc.add_argument("--from-pitfalls", dest="cc_pitfalls",
                      help="自動收割 pitfalls --diff <range> 命中成確定性 finder(按 source 分組,免手貼)")
     lcc.add_argument("--repo", dest="cc_repo", help="repo root(--from-pitfalls 用;預設 cwd 向上找 .git)")
+    lrp = lsub.add_parser("replay", help="改制回測:判定回放(--golden 對凍結閉包重算比對;--freeze 產 golden 判定檔;唯讀不落帳)")
+    lrp.add_argument("rp_loop_id", metavar="loop_id")
+    lrp.add_argument("--golden", dest="rp_golden", default=None, metavar="verdict.json", help="回放模式:與這份標準答案比對")
+    lrp.add_argument("--freeze", dest="rp_freeze", action="store_true", help="凍結模式:產 governance/replay/<id>/verdict.json")
+    lrp.add_argument("--spec", dest="rp_spec", default=None, help="凍結模式必帶:被審計劃檔(帳裡沒路徑欄,操作者給)")
+    lrp.add_argument("--note", dest="rp_note", default=None, help="重凍理由(目的檔已存在時必填,留痕治理帳)")
+    lrp.add_argument("--repo", dest="rp_repo", default=None, help="repo root(預設向上找 .git)")
 
     g = sub.add_parser("guard", help="合約守衛 scaffold(對談驅動):列出未綁 / 套範本產 stub / 綁定")
     gsub = g.add_subparsers(dest="gcmd", required=True)
@@ -15857,6 +16255,12 @@ def main():
     p.add_argument("--repo", dest="lc_repo", default=".", help="repo root(預設 .)")
     p.add_argument("--json", action="store_true", dest="lc_json")
 
+    p = sub.add_parser("severity-check", help="[第四道收貨] 席報告 severity 宣告↔帳面對帳(vault-free;advisory 恆 rc0/帳列不存在或 sha 不符 rc2)")
+    p.add_argument("--loop", dest="sv_loop", required=True, metavar="loop編號")
+    p.add_argument("--round", dest="sv_round", required=True, metavar="rN")
+    p.add_argument("--auditor", dest="sv_auditor", required=True, metavar="席")
+    p.add_argument("--repo", dest="sv_repo", default=".", help="repo root(預設 .)")
+
     p = sub.add_parser("seat-check", help="[S1 有講沒做對帳] 席報告對 dispatch manifest:unreported/out_of_scope(vault-free;觀測恆 rc0/輸入壞損 rc2)")
     p.add_argument("sc_report", metavar="席報告.md")
     p.add_argument("--dispatch", dest="sc_dispatch", required=True, metavar="rN-dispatch.json")
@@ -15989,6 +16393,8 @@ def main():
         return cmd_quote_check(args.qc_report, args.qc_spec, as_json=args.qc_json)
     if args.cmd == "seat-check":
         return cmd_seat_check(args.sc_report, args.sc_dispatch, ledger=args.sc_ledger, as_json=args.sc_json)
+    if args.cmd == "severity-check":
+        return cmd_severity_check(args.sv_loop, args.sv_round, args.sv_auditor, repo=args.sv_repo)
     if args.cmd == "link-candidates":
         return cmd_link_candidates(code_file=args.lc_file, goldset=args.lc_goldset,
                                    repo=args.lc_repo, as_json=args.lc_json)
@@ -16132,6 +16538,9 @@ def main():
         if args.lcmd == "verify-progress":
             return cmd_loop_verify_progress(env, args.vp_loop_id, settle=args.vp_settle,
                                             as_json=args.vp_json)
+        if args.lcmd == "replay":
+            return cmd_loop_replay(env, args.rp_loop_id, golden=args.rp_golden, freeze=args.rp_freeze,
+                                   spec=args.rp_spec, note=args.rp_note, repo=args.rp_repo)
         if args.lcmd == "rewrite":
             return cmd_loop_rewrite(env, args.rw_loop_id, args.rw_successor, args.rw_note)
         if args.lcmd == "next":

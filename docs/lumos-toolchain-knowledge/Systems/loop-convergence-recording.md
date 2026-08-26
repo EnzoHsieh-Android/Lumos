@@ -20,6 +20,8 @@ verified_by:
   - "[[Verification/2026-08-14_殘餘估計降級與重疊報表落地]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-26_roster對帳併入問閘落地]]"
+  - "[[Verification/2026-08-26_改制回測落地]]"
+  - "[[Verification/2026-08-26_嚴重度綁定寫側硬擋落地]]"
 summary: |-
   KEY:[2026-08-05]`loop canary-stats [<id>]`——d4 跨輪累積帳的★讀取面★(席位×caught/missed×尾端連續 missed;streak≥2 印「升 opus」提示=該升級規則的機械眼);唯讀恆 rc0、壞行跳過註記、不進任何 gate [test:t_loop_canary_stats]。★[2026-08-14 停用制適配]★協議停用(canary-audit d5)後升級訊號改看 quote-check,本報表轉歷史帳回放;對純 none 的停用制 loop 印停用提示而非「無記錄」(終審 F1:原樣會誤讀成什麼都沒發生),none 輪計數顯示但不入 caught/missed 統計 [test:t_loop_panel_none_kind]
   KEY:[2026-07-28]第四模式 settle(opt-in,`--settle 清單檔`)落地——收斂=清單全結清∧G1∧G3(末筆 result=現檔;K-streak/G2 由逐條存在證明取代,G2 印 advisory);caught 輪收緊=kind∈{caught,none}∧auditor 非空(★(2026-08-21 程式碼實證)實作 `is_caught_round` 收 none;程式碼內舊 docstring 4218 行仍寫 caught-only,屬程式碼註解漂移★);貶值=gate 讀時判不回寫;fail-closed 族(壞行 rc2 全檔/零條目/懸空輪);與 panel/light/need/min-seats 互斥 rc2;設計=[[Projects/結清式收斂_計劃]](五輪 design-loop+實質收斂人裁) [test:t_settle_gate];同計劃 [S2] loop compress(規則式白名單壓縮,[PIN] 口頭約定壓不掉)+[S3] loop verify-progress(結構帳覆核原語,note/clusters 散文免疫) 2026-07-28 落地 [test:t_loop_compress,t_loop_verify_progress]
@@ -30,7 +32,8 @@ summary: |-
   KEY:CONVERGED ⟺ tail-K 滑動窗(append 序最後 K 筆)全為 caught+clean/minor;前面髒輪不影響、只看最後 K 筆[test:t_loop_status]
   KEY:missed 輪 ×tail-K 自然重置——一個 missed 落在窗內就擋收斂,直到隨新輪滑出;無需特例(dogfood R6 逼出)
   KEY:缺 severity 視同未收斂(逼明確宣告、不得當 clean);exit 0=CONVERGED｜1=未收斂(含無記錄=還沒開始)｜2=真錯誤(argparse/IO)
-  KEY:誠實天花板——severity 自報無寫入端驗證,CONVERGED 是「忠實記錄、可重算的綠燈」非防竄改正確性證明;是可觀測性+摩擦+地板,非 oracle
+  KEY:★(2026-08-26 嚴重度綁定案落地,舊「severity 自報無寫入端驗證」天花板已拆一半)★寫側硬擋:審查席帳列(loop+round+auditor)必附 --report,報告要有獨立「severity: <值>」行(逐行 fullmatch,引句/blockquote/跨行天生排除),帳面低於報告最高=拒帳 rc2、高報=放行+提醒;record 並落 spec_path 欄。殘餘天花板(誠實):報告與帳同出編排者之手,擋疏忽不擋共謀,對抗歸 [audit:];severity-check 第四道收貨+問閘尾巴(觀測不進合取,留痕併 roster-alerts.log)當縱深第二層
+  KEY:★判定回放(2026-08-26 改制回測案)★:`loop replay --freeze/--golden`——收斂即凍完整輸入閉包(全列帳原文+逐行 sha 集+spec 窗末 sha+卷證 HEAD blob+engine_rev)入 governance/replay/;回放唯讀(治理帳零寫入、無觀測尾巴),差異四分類:邏輯漂移/帳被動/凍結檔被動=紅,帳本長大/golden 過期(engine_rev 分流)=列出不紅;重凍比照 anchor approve 留痕+歸檔不覆寫;週跑 run_replay 補漏+輪替抽查(便宜自動升全跑);CONVERGED 仍非防竄改正確性證明,但「同輸入同判定」自此可每週機械重問
   DEP:scripts/lumos cmd_canary(+loop/+severity)｜cmd_loop_status｜cmd_gov canary mapper(detail 附 loop/sev 放最前)｜.canary-log.jsonl(複用,不新增 log)
   TEST:t_loop_status + t_canary_loop_fields;258 passed
   VERIFY:[[Verification/2026-06-19_loop-convergence-recording]]

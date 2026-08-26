@@ -238,10 +238,30 @@ print('LINE', line_notify.send(line_notify.build_message('gov-nags', os.environ[
   fi
 }
 
+# ── 改制回測 [S4] 週跑(2026-08-26):補漏凍結+新凍必跑+存量輪替抽 5 包,預算 300s;
+# 紅(邏輯漂移/帳被動/凍結檔被動)與 golden 過期分開喊;fail-open 不擋主流程。
+run_replay(){
+  local stamp="$REPO/governance/replay/.weekly-stamp"; local week; week="$(date +%G-W%V)"
+  [ "$(cat "$stamp" 2>/dev/null)" = "$week" ] && { log "回放週跑:本週已跑"; return 0; }
+  mkdir -p "$REPO/governance/replay"
+  local out; out="$(cd "$REPO" && python3 governance/autonomous_loop/replay_weekly.py "$REPO" 2>>"$LOGDIR/replay-$TODAY.err" || true)"
+  echo "$week" > "$stamp"
+  log "回放週跑:$(echo "$out" | head -1 | cut -c1-160)"
+  local msg; msg="$(echo "$out" | sed -n 's/^MSG://p' | head -1)"
+  if [ -n "$msg" ]; then
+    MSG="$msg" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+import sys, os; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import line_notify
+t=os.environ.get('LINE_TOKEN','')
+print('LINE', line_notify.send(line_notify.build_message('regime-replay', os.environ['MSG'], None), t) if t else 'no-token')" || true
+  fi
+}
+
 run_exam "$REPO" toolchain
 [ -d "$HOME/backend/LandmarkMember/governance/eval" ] && run_exam "$HOME/backend/LandmarkMember" landmark
 run_probe
 run_nags "$REPO" toolchain
+run_replay
 [ -d "$HOME/backend/LandmarkMember/docs" ] && run_nags "$HOME/backend/LandmarkMember" landmark
 
 # ── backlog 每日衰減([S2]:冪等按日差;先歸檔後刪+讀回自驗,archive 失敗 live 不動) ──

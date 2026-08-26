@@ -24,6 +24,7 @@ verified_by:
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-25_設計審收斂重定義落地]]"
   - "[[Verification/2026-08-25_迴圈摩擦兩修落地]]"
+  - "[[Verification/2026-08-26_新舊制同料對照_v0]]"
 summary: |-
   KEY:[2026-08-26]世界對照(governance/review-reports/world-benchmark-2026-08-26.md)——最終形態核心判準與業界主流合流:處置閘≈「all threads resolved 才准 merge」政策、blocking 宣告≈Conventional Comments 但進閘、code嚴/散文寬≈must-fix/nit 分層、K=2 退役=向世界收斂;領先半步=機械重驗審查誠實度(quote-check/留痕 sha/intake);唯一結構差=事後抽查層(世界受監管實務保留,我們由 L4+週巡檢代位,「抽已收斂迴圈冷復審」列觀察不立案
   KEY:★[2026-08-25 甲裁落地]多席 code-loop 統一處置閘([[Projects/probe輪退場_計劃]])★——panel 閘新迴圈 cutoff 拒判(僅舊帳回放)+probe 抽查義務退場(判定降觀測)+code 迴圈輪級加嚴(major 席→accepted 必空,d2;散文維持 d5 制);「20 筆抽查帳」翻案通道具名作廢;[test:t_panel_probe_retired] 三釘
@@ -51,6 +52,7 @@ summary: |-
   KEY:硬閘是紀律非技術鎖——loop status未CONVERGED不得進實作,但lumos擋不住「不跑就實作」;靠Claude記得調用+誠實+cap/留痕兜底
   KEY:收斂判準K=2——連2輪 caught 且 severity∈{clean,minor};max cap=6筆record,到頂未收斂則停、攤給人
   KEY:實質收斂 early-exit(2026-07-07 Landmark 實戰調參)——連K輪 caught 無 blocker/major 且新 findings 全為文件精度級 minor → 編排者可提前攤牌請人裁「實質收斂」不跑滿 cap(「你一定找得到」framing 使 G2 數字枯竭壓不到底的誠實出口;僅手動 loop,自主 loop 走 unconverged requeue)
+  KEY:★08-25 改制的遲到對照證據(2026-08-26 補齊,[[Verification/2026-08-26_新舊制同料對照_v0]])★:45 個舊制迴圈——26 可比中零「舊擋新放」、1 個「舊放新擋」(歷史已收斂但 d5 處置集合會擋),d5 嚴格度≥舊制實證;收斂後新增凍結步驟(loop replay --freeze,判定入 governance/replay/ 供週跑回放)
   KEY:派工模板權威=skills/lumos-design-loop/templates.md(6角色 dispatch prompt+編排者判讀規則,Landmark 實戰抽取;SKILL 內嵌 framing 是摘要,漂移以模板為準)
   KEY:平行 panel 模式(2026-07-09,≤3輪壓縮,見 [[loop三輪壓縮_計劃]])——買獨立廣度非相關深度:一輪平行 W 個多樣審計員(tier→panel_width);收斂判準改結構信號(無-cluster 兩條合取:輪有效∧存活max≤minor;★(2026-08-21 程式碼實證)2026-08-05 起 cutoff 後的新 loop 為 K=2——最後**兩輪**各自過此合取(`_panel_k2_active`,scripts/lumos:3557-3563、3705-3708);今日所有新 panel loop 皆走 K=2★;capture-recapture 殘餘★2026-08-14 降 advisory 不進合取(鑑別力≈0:殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25;f1≤1 公式退化;見[[Projects/收斂閘殘餘估計降級_計劃]])★;M2 cluster 帳=兩條合取,詳[[Systems/loop-convergence-recording]])取代 K-streak∧G2 序列;`loop status --gate --panel`;混用守衛防 None phantom 輪;legacy(無--panel)完全不變
   DEP:lumos canary record --loop/--severity｜lumos loop status --need(Component A 原語)｜skills/lumos-design-loop/SKILL.md

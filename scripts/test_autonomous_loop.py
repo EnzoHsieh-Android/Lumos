@@ -1112,5 +1112,132 @@ class TestLoopShellTrapR2Folds(unittest.TestCase):
         self.assertTrue((gov / ".inflight-gap.json").exists(), "標記=唯一證據,失敗不准刪")
 
 
+
+class TestReplayWeekly(unittest.TestCase):
+    """改制回測 [S4] 週跑模組:輪替游標/新凍必跑/預算截斷/紅與過期分流/補漏凍結。"""
+
+    def setUp(self):
+        from autonomous_loop import replay_weekly
+        self.m = replay_weekly
+        self.repo = Path(tempfile.mkdtemp())
+        (self.repo / "docs").mkdir()
+        (self.repo / "governance" / "replay").mkdir(parents=True)
+
+    def _verdict(self, lid):
+        d = self.repo / "governance" / "replay" / lid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "verdict.json").write_text("{}", encoding="utf-8")
+
+    def _cursor(self):
+        p = self.repo / "governance" / "replay" / ".rotation-cursor"
+        return json.loads(p.read_text(encoding="utf-8"))
+
+    def _run_ok(self, out_lines=""):
+        r = mock.Mock(); r.returncode = 0; r.stdout = out_lines; r.stderr = ""
+        return r
+
+    def _slow_clock(self, per_call=20.0):
+        """每次 time.time() 前進 per_call 秒的假鐘——讓實測 avg×存量 >60s,不觸發升級全量。"""
+        state = {"t": 1000.0}
+        def fake():
+            state["t"] += per_call
+            return state["t"]
+        return fake
+
+    def test_new_always_run_and_rotation_cursor_advances(self):
+        for lid in ("a", "b", "c", "d", "e", "f", "g"):
+            self._verdict(lid)
+        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")) as sp, \
+             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+            out = self.m.run_weekly(self.repo)
+        # 首週:全部是「新凍結」→ 全跑
+        self.assertEqual(sorted(out["replayed"]), list("abcdefg"))
+        cur = self._cursor()
+        self.assertEqual(sorted(cur["seen"]), list("abcdefg"))
+        # 第二週:無新→輪替抽 5(sorted 前 5)
+        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+            out2 = self.m.run_weekly(self.repo)
+        self.assertEqual(sorted(out2["replayed"]), list("abcde"))
+        # 第三週:剩 f g → 抽完即輪畢清空 done
+        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+            out3 = self.m.run_weekly(self.repo)
+        self.assertEqual(sorted(out3["replayed"]), list("fg"))
+        self.assertEqual(self._cursor()["done"], [])   # 輪完一圈重來——機械兌現
+
+    def test_red_vs_stale_classified(self):
+        self._verdict("x"); self._verdict("y")
+        def fake(cmd, **kw):
+            r = mock.Mock(); r.stderr = ""
+            lid = cmd[cmd.index("replay") + 1]   # 精準比 loop id(子字串會被 tmp 路徑誤傷)
+            if lid == "x":
+                r.returncode = 1; r.stdout = "⛔ 邏輯漂移:判定不同"
+            else:
+                r.returncode = 0; r.stdout = "golden 過期(制度已演進)"
+            return r
+        with mock.patch.object(self.m.subprocess, "run", side_effect=fake):
+            out = self.m.run_weekly(self.repo)
+        self.assertEqual(out["red"], ["x"])
+        self.assertEqual(out["stale"], ["y"])
+        msg = self.m.build_msg(out)
+        self.assertIn("🔴", msg); self.assertIn("重凍", msg)
+
+    def test_budget_truncation_lists_skipped(self):
+        for lid in ("a", "b", "c"):
+            self._verdict(lid)
+        t = {"n": 0}
+        real_time = self.m.time.time
+        def fake_time():
+            t["n"] += 1
+            return real_time() + (0 if t["n"] < 4 else 10_000)   # 第一包跑完後預算歸零
+        with mock.patch.object(self.m.time, "time", side_effect=fake_time), \
+             mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")):
+            out = self.m.run_weekly(self.repo)
+        self.assertTrue(out["skipped"], "超預算要列 skipped 不能靜默")
+        msg_out = dict(out); msg_out["red"] = ["z"]   # 讓 build_msg 非 None
+        self.assertIn("略過", self.m.build_msg(msg_out))
+
+    def test_freeze_catchup_only_with_specpath(self):
+        gov = self.repo / "docs" / ".governance-log.jsonl"
+        gov.write_text(
+            json.dumps({"phase": "converged", "loop": "has-spec"}) + "\n"
+            + json.dumps({"phase": "converged", "loop": "no-spec"}) + "\n", encoding="utf-8")
+        (self.repo / "docs" / ".canary-log.jsonl").write_text(
+            json.dumps({"loop": "has-spec", "spec_path": "docs/x.md"}) + "\n", encoding="utf-8")
+        def fake(cmd, **kw):
+            # freeze 成功即產 verdict(模擬 CLI 行為)
+            if "--freeze" in cmd:
+                lid = cmd[cmd.index("replay") + 1]
+                d = self.repo / "governance" / "replay" / lid
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "verdict.json").write_text("{}", encoding="utf-8")
+            return self._run_ok("✓")
+        with mock.patch.object(self.m.subprocess, "run", side_effect=fake):
+            out = self.m.run_weekly(self.repo)
+        self.assertEqual(out["frozen"], ["has-spec"])
+        self.assertEqual(out["unfreezable"], ["no-spec"], "無 spec_path 只列名單不硬猜")
+        self.assertIsNotNone(self.m.build_msg(out))
+
+    def test_cheap_stock_upgrades_to_full_replay(self):
+        """spec 機械條件:實測單包×存量 ≤60s → 當週直接全跑(不留人肉決定)。"""
+        for lid in ("a", "b", "c", "d", "e", "f", "g"):
+            self._verdict(lid)
+        # 先跑一週建 seen(快鐘,0.01s/包→升級觸發,首週本來就全跑)
+        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.01)):
+            self.m.run_weekly(self.repo)
+        # 第二週:基本盤只抽 5,但便宜→升級全跑 7 包
+        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")), \
+             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.01)):
+            out2 = self.m.run_weekly(self.repo)
+        self.assertEqual(sorted(out2["replayed"]), list("abcdefg"), "便宜存量要升級全跑")
+
+    def test_quiet_week_no_message(self):
+        self._verdict("a")
+        with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")):
+            out = self.m.run_weekly(self.repo)
+        self.assertIsNone(self.m.build_msg(out), "無事不發訊(異常才發聲)")
+
 if __name__ == "__main__":
     unittest.main()
