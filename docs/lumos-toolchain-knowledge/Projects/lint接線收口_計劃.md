@@ -4,12 +4,12 @@ summary: |-
   FLAG:TECHNICAL
   KEY:第 2 批接活⑦(v2,r1 五席 18 條全折後重寫)——[S1] doctor 加 [F] 檢(L2 撞 hook 分層詞彙,r2 改名)=共用 helper 複用 _lintcheck_validate 四種格式 problem(無 PATH 無必填鍵無新鮮度;服務面=活通路+有 vault 的消費 repo,KDS 凍結通路明文除外)[S2] --no-lint 事實修正:寫死於共用判定函式、pre-push 與 CI 兩側同跳,裁定入 pitfalls-code-loop decisions+回頭條件掛本地觸發詞於 Verification [S3] smoke 責任歸屬明文化(分家後 KDS 自負;Landmark 未宣告=現無義務,宣告日接其 daily-governance)
   DEP:[[Projects/建了沒人跑批次裁定_計劃]]｜[[Systems/pitfalls-code-loop]]
-status: doing
+status: done
 created: 2026-08-26
 updated: 2026-08-26
 tags:
   - type/project
-  - status/doing
+  - status/done
 ---
 
 # lint接線收口_計劃

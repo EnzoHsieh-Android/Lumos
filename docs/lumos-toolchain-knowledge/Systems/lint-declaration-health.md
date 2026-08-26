@@ -28,6 +28,8 @@ aliases:
   - lint 宣告健康檢查
 about_code:
   - scripts/lumos
+verified_by:
+  - "[[Verification/2026-08-26_lint接線收口落地]]"
 ---
 # lint-declaration-health——lint 宣告健康檢查(收「宣告了跑不動的東西」破口)
 

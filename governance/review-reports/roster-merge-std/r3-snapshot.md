@@ -19,10 +19,10 @@ tags:
 
 ## 條款(v4)
 
-- **[S1] 範圍=--disposal 且 rid 為真 rN**:`cmd_loop_status` 把 `roster` 布林傳進 `_loop_status_disposal`(加參數,r2 d-f1 管線補明);disposal 判定完成後(★出口清單以實作當下逐一點名為準,r3 e-f2:rid 綁定後除 PASS/FAIL 終點外還有三個 return 2 提前中止路(G3 spec 讀不到/一輪多處置帳/findings 壞值)——這三路=帳面異常優先於席位對帳,刻意不掛對帳、註解寫明;共用收尾只掛 PASS/FAIL 兩終點前★,包 try/except——炸=一行降級警告,rc 不變),以 disposal 自己的 rid 為唯一輸入呼叫 `_roster_observe(only_rid=rid, anomalies_only=True)`(參數化單一實作,only_rid 同時抑制內部 dispatch glob 補漏);rid 為 `__seqN` 合成鍵→跳過(round-less 無派工快照可對);使用者同帶 `--roster`→尾端跳過(全史已印)。
-- **[S1b] anomalies_only 涵蓋對照表(r2 d-f5 補)**:★印★六種(r3 e-f1 拆名):external_missing、單家族、真兼任(同名 ≥2 必要外家席)、命名歧義(名字撞兩家關鍵字表——與真兼任分開命名,log 種類欄各自標)、unknown 降級、席數短缺 shortfall;★抑制★=逐輪摘要行、kind/tier/entry 診斷行、conditional 席提示、無快照提示四種。外家未派措辭(hedge 簡化,刪無資料源的「低共識」條件,r2 d-f6):「外家席本輪未派(編制=<requirement 值>;辯方是否該派屬編排當場判斷,本行僅轉述編制對照,不裁決)」。
-- **[S1c] 異常留痕(r2 d-f7;r3 e-f3 顆粒度)**:先收集全部異常種類、印完全部異常行,**最後一次性** append 單行到 `governance/review-reports/<loop>/roster-alerts.log`(ts+rid+種類清單)——log 寫入失敗只損失留痕不吞異常輸出(寫入自身再包一層 try,失敗印一行「留痕失敗」);兩季覆核有檔可查。
-- **[S2] 旗標全保留**:--roster 現行為(全史、四模式)與 argparse help 更新同 v3;測試帳(r3 e-f4 行號更正):t_loop_status_roster_check 16 條中 14 條零改動,**22508-22514** 的 rc 對照與零 diff 兩條依「同帶跳過」語意重寫(22475-22480 屬 t_loop_next_roster,不動)。
+- **[S1] 範圍=--disposal 且 rid 為真 rN**:`cmd_loop_status` 把 `roster` 布林傳進 `_loop_status_disposal`(加參數,r2 d-f1 管線補明);disposal 判定完成後(PASS/FAIL 兩出口前的共用收尾,包 try/except——炸=一行降級警告,rc 不變),以 disposal 自己的 rid 為唯一輸入呼叫 `_roster_observe(only_rid=rid, anomalies_only=True)`(參數化單一實作,only_rid 同時抑制內部 dispatch glob 補漏);rid 為 `__seqN` 合成鍵→跳過(round-less 無派工快照可對);使用者同帶 `--roster`→尾端跳過(全史已印)。
+- **[S1b] anomalies_only 涵蓋對照表(r2 d-f5 補)**:★印★=external_missing、單家族(r2 d-f4 併入異常集合)、兼任 duals、unknown 降級、席數短缺 shortfall 五種;★抑制★=逐輪摘要行、kind/tier/entry 診斷行、conditional 席提示、無快照提示四種。外家未派措辭(hedge 簡化,刪無資料源的「低共識」條件,r2 d-f6):「外家席本輪未派(編制=<requirement 值>;辯方是否該派屬編排當場判斷,本行僅轉述編制對照,不裁決)」。
+- **[S1c] 異常留痕(r2 d-f7)**:異常行真的印出時,append 一行到 `governance/review-reports/<loop>/roster-alerts.log`(ts+rid+種類)——兩季覆核「有沒有真出現過」有檔可查,不靠記憶。
+- **[S2] 旗標全保留**:--roster 現行為(全史、四模式)與 argparse help 更新同 v3;測試帳:16 條中 14 條零改動、22475-22480 兩條依「同帶跳過」語意重寫。
 - **[S3] skill 三處精確句子**:同 v3,但 settle 相關句改為誠實形:「settle 結清模式的席位對帳需手動 loop status <id> --roster(其記錄結構無輪次欄,自動對帳做不到——詳 [[Issues/settle路徑席位對帳無輪次可對]])」。
 - **[S4] settle 誠實除外(r2 d-f2/d-f3 取代 v3 的假補掛)**:settle 記錄結構恆 round-less(帶 round 會在入口被 rc2 擋),無 rid 與派工快照可機械對——**明說做不到**,立 Issue 列觀察(若日後 settle 記錄格式演進出輪次概念再回頭);高風險 spec 走 settle 時的席位核對=skill 指路手動 --roster。
 - 邊界:編制表/lens 值域/--panel/--light 不動;PASS/FAIL 布林零改動。
@@ -41,4 +41,3 @@ tags:
 
 **r1(light 誤判升級)/std-r1(19 條)**:見 v2/v3 紀錄。
 **std-r2(delta 席 7 條全折)**:d-f1 參數管線補明;d-f2/d-f3 settle 假補掛撤除→[S4] 誠實除外+Issue(blocker:自己的跳過規則吃掉自己的補掛=比漏接更隱蔽);d-f4 單家族併入異常集合;d-f5 印/抑制對照表明列;d-f6 hedge 刪無資料源條件;d-f7 異常留痕檔。
-**std-r3(delta 席 4 條全折,cap 輪)**:e-f1 兼任一名兩義拆開;e-f2 出口清單寫全(三個 return 2 路刻意不掛+註解);e-f3 log 一次性寫入+雙層 try 顆粒度;e-f4 測試行號更正(22508-22514 非 22475-22480)。四條皆文書精度級無設計反轉——cap 內收斂,實作代碼審接手。
