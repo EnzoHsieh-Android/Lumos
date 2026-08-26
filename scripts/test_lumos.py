@@ -21246,7 +21246,7 @@ def t_eval_condensed_core():
     dropped = {n for n in order if n not in lab}
     check("condensed 剔除集==collect_unjudged 未標集(同源斷言)",
           dropped == set(unj["per_case"].get("S01", [])), f"{dropped} vs {unj['per_case']}")
-    # 題級門檻([S2]①):8 節點窗只判 1 個 < ceil(8/2)=4 → None 不進 macro(外家 1/8 抬分反例)
+    # 題級門檻([S2]①):8 節點窗只判 1 個 < ceil(SEARCH_TOUCH/2)=5 → None 不進 macro(外家 1/8 抬分反例;門檻吃配置 k=10,r2 觀察修註)
     gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}}
     big = [f"Systems/X{i}.md" for i in range(7)] + ["Systems/B.md"]
     m._search_arms = lambda q: (list(big), list(big))

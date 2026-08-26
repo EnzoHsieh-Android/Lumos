@@ -1,0 +1,248 @@
+diff --git a/governance/eval/retrieval_eval.py b/governance/eval/retrieval_eval.py
+index a8f8b47..c18ef1a 100755
+--- a/governance/eval/retrieval_eval.py
++++ b/governance/eval/retrieval_eval.py
+@@ -366,34 +366,56 @@ def eval_search(gs, split=None, k=5):
+             if _valid:
+                 row[f"c_{name}_ndcg"] = round(ndcg_at_k(_judged, k, all_rels=all_rels), 4)
+                 row[f"c_{name}_mrr"] = round(mrr(_judged), 4)
+                 row[f"c_{name}_r10"] = recall_at_k(_judged, n_rel, 10)
+             else:
+                 row[f"c_{name}_ndcg"] = row[f"c_{name}_mrr"] = row[f"c_{name}_r10"] = None
+         rows.append(row)
+     return rows
+ 
+ 
++def beats(a_p, a_n, b_p, b_n):
++    """a 勝 b:P 至少一主指標贏、另一指標不倒退超過 0.02。模組層唯一實作
++    (code-r1 s1-f1:原巢狀在 report_goldset 內,main() 的切換覆寫塊呼叫=NameError;
++    s1-f2:任一輸入 None(弱證據/無資料)=判 False 不轉綠,不拋例外)。"""
++    if any(x is None for x in (a_p, a_n, b_p, b_n)):
++        return False
++    return (a_p > b_p and a_n >= b_n - 0.02) or (a_n > b_n and a_p >= b_p - 0.02)
++
++
++def _search_gate_ok(lift_pct, legacy_ndcg, weak=False):
++    """search 主閘門檻唯一實作(arch-f1:main 覆寫塊原重打 15.0 一份)。"""
++    return (not weak and lift_pct is not None
++            and (legacy_ndcg or 0) > 0 and lift_pct >= 15.0)
++
++
++def _hook_gate_ok(p, weak=False):
++    """hook P@k 門檻唯一實作(arch-f1 同上,0.70)。"""
++    return not weak and p is not None and p >= 0.70
++
++
+ # ── condensed 引擎(評測尺翻案 [S1]/[S2]):在「計分觸及集內的已判子列表」上算分 ──
+ # 未標剔除域=觸及集窗(search 各臂前 10 / edit free 前 k)——與 collect_unjudged 的母體
+ # 同界,repin(母體 unjudged==0)時 condensed 與舊尺數值恆等(切換零重錨的數學前提)。
+ CONDENSED_REV = "condensed-v1"
+ 
+ def _condense(window_nodes, lab, k, thr=None):
+     """window_nodes=觸及集窗內的節點序;回 (judged_labels, cov, valid)。
+-    題級門檻([S2]①):窗內已判數 < ceil(窗長/2)(thr 可覆寫)→ valid=False,
+-    該題分數記 None 不進 macro——單題低覆蓋不能抬也不能砸總分。"""
++    題級門檻([S2]①):窗內已判數 < ceil(k/2)——★k=配置窗寬(search 10/edit 8),
++    不是窗實際長度★(code-r1 s1-f3:候選天生偏少時用窗長會把門檻偷偷放鬆,
++    2 篇全判被當有效;spec 語意=分數要站得住至少要半個配置窗的已判量)。
++    cov=已判/窗實際長度(曝險口徑,顯示與面聚合用);thr 可覆寫(測試隔離引擎用)。"""
+     import math
+     judged = [lab[n] for n in window_nodes if n in lab]
+     denom = len(window_nodes)
+     cov = round(len(judged) / denom, 4) if denom else None
+-    need = thr if thr is not None else math.ceil(denom / 2) if denom else 1
++    need = thr if thr is not None else math.ceil(k / 2) if k else 1
+     return judged, cov, (denom > 0 and len(judged) >= need)
+ 
+ 
+ def _graph_score(r):
+     if r.get("kind") == "direct":
+         return 1.0
+     return 0.60 * min(1.0, 2.0 / (2 ** r.get("hop", 2)))
+ 
+ 
+ def eval_edit(gs, split=None, k=8):
+@@ -474,21 +496,21 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
+     verdict = {}
+     if srows:
+         ln, rn = _macro(srows, "legacy_ndcg"), _macro(srows, "ranked_ndcg")
+         lm, rm = _macro(srows, "legacy_mrr"), _macro(srows, "ranked_mrr")
+         lr, rr = _macro(srows, "legacy_r10"), _macro(srows, "ranked_r10")
+         lift = (rn - ln) / ln * 100 if ln else 0.0   # ln=0 → fail-closed(不給 inf 免費過 gate)
+         print(f"搜尋(打一句話找筆記,{len(srows)} 題有答案):")
+         print(f"  前 {k_search} 名的品質 {rn}(舊排序 {ln}),{'好了' if lift >= 0 else '★退了★'} {abs(lift):.1f}%    ← 這是主要的尺(nDCG@{k_search})")
+         print(f"  第一個對的答案多靠前:{rm}(舊 {lm};1.0=都在第一名)  |  前 10 名撈到該撈的比例:{rr}(舊 {lr})")
+         verdict["search_lift_pct"] = round(lift, 1)
+-        verdict["search_gate"] = ln > 0 and lift >= 15.0
++        verdict["search_gate"] = _search_gate_ok(lift, ln)
+         verdict["_rn_raw"], verdict["_ln_raw"] = rn, ln   # 恆等斷言配對用([S3]①)
+         # ── 新尺預覽(condensed;[S3]② gate 恆以舊尺拍板,這裡只算只印)──
+         c_ln, c_rn = _macro(srows, "c_legacy_ndcg"), _macro(srows, "c_ranked_ndcg")
+         c_valid = sum(1 for r in srows if r.get("c_ranked_ndcg") is not None)
+         s_cov = _macro(srows, "ranked_cov")
+         if c_ln is not None and c_rn is not None and c_ln > 0:
+             c_lift = round((c_rn - c_ln) / c_ln * 100, 1)
+         else:
+             c_lift = None   # [S2]③ 無資料判定,不拋例外
+         verdict["condensed_search"] = {
+@@ -524,39 +546,36 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
+         must_t = sum(r["must_total"] for r in erows)
+         must_hit = sum(r["must_in_out"] for r in erows)
+         must_pin = sum(r["must_pinned"] for r in erows)
+         pin_noise = sum(r["pin_noise"] for r in erows)
+         print(f"  推薦量:每題通常推 {med} 篇、最多的題推 {p95} 篇(關卡用全部題目算:一般題 ≤{k_edit}、最多的題 ≤{k_edit + 2})")
+         print(f"  必看的筆記:{must_t} 篇裡 {must_hit} 篇有推出來;其中 {must_pin} 篇是靠合約/事故硬保的固定席,其餘靠排序、沒有保底")
+         print(f"  固定席裡不相干的筆記:{pin_noise} 條    ← 噪音,越少越好(目前只印不閘)")
+         verdict["hook_p"] = fp
+         verdict["free_median"] = med
+         verdict["free_p95"] = p95
+-        verdict["hook_p_gate"] = fp is not None and fp >= 0.70
++        verdict["hook_p_gate"] = _hook_gate_ok(fp)
+         verdict["hook_p"] = fp
+         # ── 新尺預覽(edit 面)──
+         c_fp, c_fn = _macro(erows, "c_fusion_p"), _macro(erows, "c_fusion_ndcg")
+         c_bp, c_gp = _macro(erows, "c_bm25_p"), _macro(erows, "c_graph_p")
+         e_valid = sum(1 for r in erows if r.get("c_fusion_p") is not None)
+         e_cov = _macro(erows, "fusion_cov")
+         verdict["condensed_edit"] = {
+             "p": c_fp, "ndcg": c_fn, "bm25_p": c_bp, "graph_p": c_gp,
+             "bm25_ndcg": _macro(erows, "c_bm25_ndcg"), "graph_ndcg": _macro(erows, "c_graph_ndcg"),
+             "cov": e_cov, "valid_n": e_valid, "total_n": len(erows),
+             "weak": e_valid < (len(erows) + 1) // 2}
+         print(f"  新尺預覽(已判子集內前 {k_edit}):對的比例 {_pct(c_fp)}(只比文字 {_pct(c_bp)}、只比圖 {_pct(c_gp)})"
+               f"|edit 面覆蓋率 {e_cov}、有效 {e_valid}/{len(erows)} 題"
+               + ("  ⚠ 有效題數不足半數=弱證據" if verdict["condensed_edit"]["weak"] else ""))
+-        # fusion 各勝至少一主指標,另一指標不倒退超過 0.02
+-        def beats(a_p, a_n, b_p, b_n):
+-            return ((a_p > b_p and a_n >= b_n - 0.02) or
+-                    (a_n > b_n and a_p >= b_p - 0.02))
++        # fusion 各勝至少一主指標,另一指標不倒退超過 0.02——beats 已升模組層(code-r1 s1-f1)
+         verdict["_bp_raw"], verdict["_gp_raw"] = bp, gp   # 恆等斷言配對用
+         verdict["fusion_vs_bm25"] = beats(fp, fn, bp, bn)
+         verdict["fusion_vs_graph"] = beats(fp, fn, gp, gn)
+         verdict["free_median_le_topk"] = med is not None and med <= k_edit
+         verdict["free_p95_le_topk2"] = p95 is not None and p95 <= k_edit + 2
+         verdict["must_in_out_recall"] = round(must_hit / must_t, 4) if must_t else None
+         verdict["must_pinned_count"] = must_pin   # 唯一機保=固定席;in_out 含自由席無保底,勿混讀
+         verdict["must_in_out_count"] = must_hit   # ★棘輪比的是個數不是比率★——
+         verdict["must_total"] = must_t            #   比率會被「總數變了」稀釋,個數不會
+         verdict["out_top3_must"] = pt3            # #10 乙案(2026-08-24):只觀測不閘;舊 key pin_top3_must 語意不同不沿用
+@@ -760,25 +779,24 @@ def main():
+                           + ",門檻原樣沿用、棘輪基線自舊尺繼承(詳 Projects/評測尺翻案_計劃 [S3])")
+                 else:
+                     print("⚠ 未標=0 但恆等斷言不過,切換中止(這不該發生——查 condensed 實作):" + "; ".join(_diffs))
+         if _cur_mrev:
+             # 已切換(前輪起):gate 驅動值改用 condensed;面弱([S2]③)=該面 gate 不轉綠
+             for _r in reports:
+                 _v = _r["verdict"]
+                 _cs, _ce = _v.get("condensed_search"), _v.get("condensed_edit")
+                 if _cs:
+                     _v["search_lift_pct"] = _cs["lift_pct"]
+-                    _v["search_gate"] = (_cs["lift_pct"] is not None and (_cs["ndcg_legacy"] or 0) > 0
+-                                         and _cs["lift_pct"] >= 15.0 and not _cs["weak"])
++                    _v["search_gate"] = _search_gate_ok(_cs["lift_pct"], _cs["ndcg_legacy"], weak=_cs["weak"])
+                 if _ce:
+                     _v["hook_p"] = _ce["p"]
+-                    _v["hook_p_gate"] = _ce["p"] is not None and _ce["p"] >= 0.70 and not _ce["weak"]
++                    _v["hook_p_gate"] = _hook_gate_ok(_ce["p"], weak=_ce["weak"])
+                     _v["fusion_vs_bm25"] = beats(_ce["p"], _ce["ndcg"], _ce["bm25_p"], _ce["bm25_ndcg"])
+                     _v["fusion_vs_graph"] = beats(_ce["p"], _ce["ndcg"], _ce["graph_p"], _ce["graph_ndcg"])
+         gates = {"search nDCG@5 提升≥15%": v_all.get("search_gate"),
+                  "hook P@top_k ≥0.70": v_all.get("hook_p_gate"),
+                  "fusion 勝 BM25-only": v_all.get("fusion_vs_bm25"),
+                  "fusion 勝 graph-only": v_all.get("fusion_vs_graph"),
+                  "非固定中位 ≤ top_k": v_all.get("free_median_le_topk"),
+                  "非固定 p95 ≤ top_k+2": v_all.get("free_p95_le_topk2")}
+         if not args.split:
+             v_held = next(r["verdict"] for r in reports if r["split"] == "held")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a509ffd..b7ba267 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -21220,43 +21220,54 @@ def t_eval_ablation_gate():
+ 
+ 
+ def t_eval_condensed_core():
+     """評測尺翻案 [S1]/[S2]/[S3b]:condensed 於已判子列表計分、題級門檻、三方未標集合同源、
+     pin_noise 三態語意不變。翻紅釘:把 _condense 的剔除改回「未標=0」→ 第 2 條翻紅。"""
+     _need_src("governance/eval")
+     root, gs = _mk_eval_fixture()
+     m = _load_retrieval_eval(root)
+     # search:窗內 [未標,未標,判2,判1](spec 驗證計劃修正後的例)
+     gs["search"] = [{"id": "S01", "query": "zzz", "cat": "zh_short", "split": "held"}]
+-    gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}, "Systems/C.md": {"final": 1}}
+-    order = ["Systems/U1.md", "Systems/U2.md", "Systems/B.md", "Systems/C.md"]
++    # 10 節點窗、6 判(≥ceil(10/2)=5 過題級門檻):前兩名未標——spec 例的門檻合規版
++    gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}, "Systems/C.md": {"final": 1},
++                           "Systems/D.md": {"final": 1}, "Systems/E.md": {"final": 0},
++                           "Systems/F.md": {"final": 0}, "Systems/G.md": {"final": 0}}
++    order = ["Systems/U1.md", "Systems/U2.md", "Systems/B.md", "Systems/C.md", "Systems/D.md",
++             "Systems/E.md", "Systems/F.md", "Systems/G.md", "Systems/U3.md", "Systems/U4.md"]
+     m._search_arms = lambda q: (list(order), list(order))
+     rows = m.eval_search(gs, "held", k=2)
+     r = rows[0]
+     check("舊尺 nDCG@2:前兩名全未標→0.0(行為不變)", r["ranked_ndcg"] == 0.0, str(r))
+-    check("condensed nDCG@2=1.0(已判子列表 判2判1 完美序)", r["c_ranked_ndcg"] == 1.0, str(r))
++    check("condensed nDCG@2=1.0(已判子列表 判2判1 領頭)", r["c_ranked_ndcg"] == 1.0, str(r))
+     check("condensed MRR@10=1.0(第一個已判即相關)", r["c_ranked_mrr"] == 1.0, str(r))
+-    check("題級覆蓋率=2/4", r["ranked_cov"] == 0.5, str(r))
++    check("題級覆蓋率=6/10", r["ranked_cov"] == 0.6, str(r))
+     # 三方集合同源([S1]①):condensed 剔除的=collect_unjudged 該題回報的
+     unj = m.collect_unjudged(gs, "held")
+     lab = m._labels_of(gs, "S01")
+     dropped = {n for n in order if n not in lab}
+     check("condensed 剔除集==collect_unjudged 未標集(同源斷言)",
+           dropped == set(unj["per_case"].get("S01", [])), f"{dropped} vs {unj['per_case']}")
+     # 題級門檻([S2]①):8 節點窗只判 1 個 < ceil(8/2)=4 → None 不進 macro(外家 1/8 抬分反例)
+     gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}}
+     big = [f"Systems/X{i}.md" for i in range(7)] + ["Systems/B.md"]
+     m._search_arms = lambda q: (list(big), list(big))
+     rows2 = m.eval_search(gs, "held", k=2)
+     check("低覆蓋題(1/8)condensed 記 None", rows2[0]["c_ranked_ndcg"] is None, str(rows2[0]))
+     check("低覆蓋題不進 macro(_macro 濾 None)", m._macro(rows2, "c_ranked_ndcg") is None, "")
+     check("低覆蓋題舊尺照算(雙報期 gate 仍有值)", rows2[0]["ranked_ndcg"] is not None, str(rows2[0]))
++    # s1-f3 釘:門檻用「配置窗寬 k」不是「窗實際長度」——候選只回 2 篇全已判,
++    # 照 spec ceil(10/2)=5 仍不足 → None(len(window) 算法會誤判有效)
++    gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}, "Systems/C.md": {"final": 1}}
++    m._search_arms = lambda q: (["Systems/B.md", "Systems/C.md"], ["Systems/B.md", "Systems/C.md"])
++    rows3 = m.eval_search(gs, "held", k=2)
++    check("短候選(2 篇全判<ceil(10/2))仍記 None(門檻吃配置 k 不吃窗長)",
++          rows3[0]["c_ranked_ndcg"] is None, str(rows3[0]))
+     # _labels_of 已判-only + 未標 pins 的 pin_noise([S1]④/[S3b]:fixture 強制含未標 pin)
+     lab2 = m._labels_of(gs, "S01")
+     check("_labels_of 不含未標鍵(已判-only)", "Systems/X0.md" not in lab2 and "Systems/B.md" in lab2, str(lab2))
+     fake_pins = [{"node": "Systems/B.md"}, {"node": "Systems/未標席.md"}, {"node": "Systems/判零.md"}]
+     lab3 = {"Systems/B.md": 2, "Systems/判零.md": 0}
+     noise = sum(1 for x in fake_pins if x["node"] not in lab3 or lab3[x["node"]] == 0)
+     check("pin_noise 三態:未標席+判0 席=2 條噪音(語意不隨 condensed 動)", noise == 2, str(noise))
+     print("  ✓ t_eval_condensed_core")
+ 
+ 
+@@ -21278,20 +21289,27 @@ def t_eval_condensed_switch():
+     check("噪音棘輪繼承:2→3 被擋", ok3 is False, "")
+     # 恆等斷言:同值過/異值列差
+     v = {"_rn_raw": 0.8, "_ln_raw": 0.4, "hook_p": 0.75, "_bp_raw": 0.5, "_gp_raw": 0.25,
+          "condensed_search": {"ndcg": 0.8, "ndcg_legacy": 0.4},
+          "condensed_edit": {"p": 0.75, "bm25_p": 0.5, "graph_p": 0.25}}
+     eq, diffs = m._switch_equal(v)
+     check("恆等斷言:全尺同值→過", eq is True and diffs == [], str(diffs))
+     v["condensed_edit"]["p"] = 0.9
+     eq2, diffs2 = m._switch_equal(v)
+     check("恆等斷言:有差→列名不過(切換中止)", eq2 is False and any("fusion" in d for d in diffs2), str(diffs2))
++    # code-r1 折修釘:beats 模組層可呼且 None 安全(s1-f1/f2);gate 門檻唯一實作+weak 語意(arch-f1)
++    check("beats 模組層+None 安全(弱證據=判 False 不炸)",
++          m.beats(None, 1, 1, 1) is False and m.beats(0.8, 0.8, 0.5, 0.5) is True, "")
++    check("search gate helper:weak=不轉綠", m._search_gate_ok(20.0, 0.5, weak=True) is False
++          and m._search_gate_ok(20.0, 0.5) is True, "")
++    check("hook gate helper:None/weak=不轉綠", m._hook_gate_ok(None) is False
++          and m._hook_gate_ok(0.75, weak=True) is False and m._hook_gate_ok(0.75) is True, "")
+     print("  ✓ t_eval_condensed_switch")
+ 
+ 
+ def t_refresh_delta():
+     """T3:refresh_labels delta——已判不重出/未標全出/orphan 列出/file-gone skip/卷頭註記/rc 合約。"""
+     _need_src("governance/eval")
+     import json as _json
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     root, gs = _mk_eval_fixture()
+     gs["labels"]["S01"]["Projects/Old.md"] = {"final": 1}   # orphan:標過但語料無此檔
