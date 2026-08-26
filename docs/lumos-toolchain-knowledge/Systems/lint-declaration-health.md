@@ -15,6 +15,7 @@ related:
   - "[[Systems/linter精選目錄]]"
   - "[[Issues/lint-watch空轉假綠]]"
 summary: |-
+  KEY:★2026-08-26 接線收口(plan:[[Projects/lint接線收口_計劃]])★:①靜態層併入 doctor 兌現——[F] 檢共用 _lint_load_and_validate helper(cmd_lint_check 同源單一實作),有宣告才驗、無宣告一行跳過、壞=紅擋 CI;路徑解析=_repo_root_from_env(standalone 回退;env.vault 直拼與 doctor 區域 repo_root 兩個陷阱都踩過被測試抓紅,教訓入案)②smoke 維持手動+責任歸屬:分家(2026-08-20)後 KDS 自負;Landmark 條件待辦=[[Issues/Landmark宣告lint時接smoke排程]]③擋推鏈 --no-lint 兩側同跳已結構化入 [[Systems/pitfalls-code-loop]] decisions
   KEY:lint-check 收「宣告了跑不動的東西」破口——同 lint-watch 空轉([[Issues/lint-watch空轉假綠]])同病根:宣告與現實脫鉤、無機制對帳。lumos lint-check <repo> 兩層:靜態格式校驗(恆跑)+ --smoke 真跑冒煙
   FLOW:讀 .lumos/lint.json → _lintcheck_validate 靜態校驗(非dict/value非list/命令空/缺{LINT_SARIF_OUT}佔位符)→ [--smoke:格式過才對每條命令 _lint_run_and_parse、無可解析SARIF產出=跑不動]→ rc 0健康(含無宣告)/1有問題/2非JSON
   KEY:兩層各抓一類——靜態層抓「格式錯」(便宜、純靜態);smoke層抓「格式對但跑不動」(工具/task/檔案缺;唯一能抓 gradle task 或外部 jar 存不存在的方法,靜態永遠抓不到)

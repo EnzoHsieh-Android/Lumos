@@ -3822,6 +3822,37 @@ def t_loop_rewrite_mark():
     print("  ✓ t_loop_rewrite_mark")
 
 
+def t_doctor_lint_declaration():
+    """lint接線收口 [S1]:doctor [F] 檢——宣告在 repo root、vault 在 docs/x-knowledge
+    (=Landmark 形狀,釘 r2 d-f2「env.vault 直拼永遠讀不到」);無宣告跳過不擋、
+    壞 JSON/壞 schema 紅、合法綠。翻紅釘:把 [F] 的路徑解析改 env.vault 直拼 → 第 3、4 條翻紅。"""
+    import json as _j, shutil as _sh
+    # Landmark 形狀 fixture:repo/docs/proj-knowledge 佈局(宣告在 repo root)
+    src = mkvault()
+    repo_root = Path(tempfile.mkdtemp(prefix="gctl-lintdecl-")) / "repo"
+    vault = repo_root / "docs" / "proj-knowledge"
+    vault.parent.mkdir(parents=True)
+    _sh.copytree(src, vault)
+    # 無宣告
+    r = run(vault, "doctor", "--ci")
+    check("[F] 無宣告:輸出含未宣告跳過", "未宣告跳過" in r.stdout, r.stdout[-400:])
+    # 壞 JSON
+    (repo_root / ".lumos").mkdir(exist_ok=True)
+    (repo_root / ".lumos" / "lint.json").write_text("{{{壞")
+    r = run(vault, "doctor", "--ci")
+    check("[F] 壞 JSON:rc1 且訊息白話", r.returncode == 1 and "不是合法 JSON" in r.stdout, f"rc={r.returncode}")
+    # 壞 schema(value 非 list)
+    (repo_root / ".lumos" / "lint.json").write_text(_j.dumps({"kt": "not-a-list"}))
+    r = run(vault, "doctor", "--ci")
+    check("[F] 壞 schema:rc1 且列出問題", r.returncode == 1 and "宣告問題" in r.stdout, f"rc={r.returncode}")
+    # 合法宣告(Landmark 形狀:宣告在 repo root、vault 在 docs/ 下——直拼 vault 讀不到這份)
+    (repo_root / ".lumos" / "lint.json").write_text(_j.dumps({"kt": ["detekt {LINT_SARIF_OUT}"]}))
+    r = run(vault, "doctor", "--ci")
+    check("[F] 合法宣告(Landmark 形狀):rc0 且格式健康", r.returncode == 0 and "格式健康" in r.stdout, f"rc={r.returncode} {r.stdout[-300:]}")
+    check("[F] 健康訊息講明 smoke 留手動", "留手動" in r.stdout, "")
+    print("  ✓ t_doctor_lint_declaration")
+
+
 def t_canary_record_outcome_usd():
     """自主迴圈結局帳(auto-loop-repair-v2 [S3]):record 的 --outcome/--usd 結構化欄。
     要點:合法值落欄、主類白名單外 rc2、細類壞字元 rc2、負 usd rc2、不給不寫鍵(舊格式桶前提)。"""

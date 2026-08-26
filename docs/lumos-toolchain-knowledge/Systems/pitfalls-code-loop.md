@@ -52,6 +52,12 @@ decisions:
     id: d3
     decided: 2026-08-22
     valid: true
+  - content: code-loop 擋推鏈(pre-push 與 CI 的 code-loop gate)恆以 --no-lint 跑 pitfalls——lint SARIF 發現在整條擋推鏈結構上不可見,兩側同跳(--no-lint 寫死在共用判定函式 _codeloop_guard_verdict,不是 pre-push 單邊省時間、CI 兜底——那個敘事對 lint 不成立)
+    id: d4
+    context: lint接線收口 [S2]:原裁定只存在 hook 註解;設計審 s2-f3 抓到「CI 兜底」誤導面後如實明文化
+    why_chosen: 速度(pre-push 已 11 分鐘)+lint 告警屬審查品質面非擋推面;[F] 檢守宣告健康、pitfalls 帶 lint 屬手動加跑
+    decided: 2026-08-26
+    valid: true
 related:
   - "[[Projects/impact-diff橋接_計劃]]"
 about_code:

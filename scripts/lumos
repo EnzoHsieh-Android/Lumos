@@ -1469,6 +1469,33 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             warn_soft([_nudge], _nudge, "用這個指令把工具鏈和紀律區塊更新到最新:lumos update")
             print()
 
+    # Check F: linter 宣告檔健康(lint接線收口 [S1]:SARIF 橋最後一哩——宣告了跑不動的
+    # 東西,審查就漏那些告警;有宣告才驗,無宣告一行跳過不擋。路徑解析走本函式既有的
+    # _repo_root_from_env(★不是本函式那個只認 docs 佈局的區域 repo_root——它對
+    # standalone vault 是 None,[F] 會整段靜默消失;_repo_root_from_env 有 standalone
+    # 回退恆非 None。也不得用 env.vault 直拼——消費 repo 宣告在 repo root,直拼永遠
+    # 讀不到=靜默假綠,設計審 r2 d-f2;實作首版就踩了前者,測試抓紅後修★)。
+    if True:
+        _lf = _lint_load_and_validate(_repo_root_from_env(env))
+        section("F", "linter 宣告檔還健康嗎(.lumos/lint.json;沒宣告就跳過)")
+        if not _lf["declared"]:
+            ok("這個 repo 沒有宣告 linter 橋(.lumos/lint.json 不存在),未宣告跳過")
+        elif _lf["parse_error"]:
+            warn([f".lumos/lint.json:{_lf['parse_error']}"],
+                 ".lumos/lint.json 不是合法 JSON——宣告壞掉=橋整條斷,審查吃不到 lint 告警:",
+                 "修好 JSON;格式規範與真跑驗證:lumos lint-check --smoke")
+            gov_events.append({"gate": "check-lint-decl", "kind": "warned", "hard": False,
+                               "nodes": [], "note": "lint.json parse error"})
+        elif _lf["problems"]:
+            _fl = [f"[{pr['stack']}] {pr['issue']}" for pr in _lf["problems"]]
+            warn(_fl, f".lumos/lint.json 有 {len(_fl)} 個宣告問題(宣告了跑不動的東西,審查會漏這些告警):",
+                 "逐條修宣告;工具是否真的跑得動用 lumos lint-check --smoke 驗")
+            gov_events.append({"gate": "check-lint-decl", "kind": "warned", "hard": False,
+                               "nodes": [], "note": f"problems={len(_fl)}"})
+        else:
+            ok("linter 宣告檔格式健康(工具真的跑不跑得動要 lint-check --smoke 驗,那步刻意留手動)")
+        print()
+
     if ci:
         # ★run 標記(2026-08-21,doctor-run事件_計劃)★:乾淨 run 也要留痕——帳本只記警告時,
         # 分不出「修好了」與「還在」(「已清」=該 run 有標記但無該節點的 check-* 事件)。
@@ -3063,7 +3090,7 @@ def cmd_signoff(env, node, note, by=None):
 # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
 # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
 # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
-_KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-e1", "delguard", "check-e2", "check-e3", "doctor-run",
+_KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-e1", "delguard", "check-e2", "check-e3", "check-lint-decl", "doctor-run",
                 "check-j", "check-k", "check-r", "check-s", "check-s2", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
@@ -10902,6 +10929,29 @@ def _lintcheck_validate(config):
     return problems
 
 
+def _lint_load_and_validate(repo_root):
+    """讀 <repo_root>/.lumos/lint.json 並跑靜態格式驗證——cmd_lint_check 與 doctor [F] 檢
+    共用的單一實作(lint接線收口 [S1]②:I/O+parse+驗證不留兩份會漂移的複本)。
+    回 {"declared": bool, "parse_error": str|None, "problems": list}。"""
+    import json
+    out = {"declared": False, "parse_error": None, "problems": []}
+    if repo_root is None:
+        return out
+    p = Path(repo_root) / ".lumos" / "lint.json"
+    if not p.exists():
+        return out
+    out["declared"] = True
+    try:
+        with open(p, encoding="utf-8") as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        out["parse_error"] = str(e)
+        return out
+    out["problems"] = _lintcheck_validate(config)
+    out["config"] = config
+    return out
+
+
 def cmd_lint_check(repo=None, smoke=False, as_json=False):
     """檢查 .lumos/lint.json 宣告健康度(收「宣告了跑不動的東西」破口)。
     靜態層(恆跑):格式校驗(見 _lintcheck_validate)。--smoke:真跑每條命令、驗有無產出可解析
@@ -10912,18 +10962,16 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
     if repo_root is None:
         print("lint-check: 找不到 repo root", file=sys.stderr)
         return 0
-    p = Path(repo_root) / ".lumos" / "lint.json"
-    if not p.exists():
+    lf = _lint_load_and_validate(repo_root)
+    if not lf["declared"]:
         if as_json:
             print(json.dumps({"problems": [], "declared": False}, ensure_ascii=False))
         return 0
-    try:
-        with open(p, encoding="utf-8") as f:
-            config = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        print(f"✗ lint-check: .lumos/lint.json 不是合法 JSON: {e}", file=sys.stderr)
+    if lf["parse_error"]:
+        print(f"✗ lint-check: .lumos/lint.json 不是合法 JSON: {lf['parse_error']}", file=sys.stderr)
         return 2
-    problems = _lintcheck_validate(config)
+    config = lf.get("config")
+    problems = lf["problems"]
     # --smoke:靜態層無格式問題才冒煙(格式壞的命令沒必要跑)
     if smoke and not problems and isinstance(config, dict):
         for stack, cmds in config.items():
