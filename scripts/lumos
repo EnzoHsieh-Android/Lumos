@@ -585,7 +585,13 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
                 return 2
             _refroze = arch.name
         import os as _os_rp
-        _os_rp.replace(_tmp, target)
+        try:
+            _os_rp.replace(_tmp, target)
+        except OSError as e:
+            print(f"擋下:新 verdict 換上位失敗({e})——舊檔"
+                  + (f"已歸檔 {_refroze},此刻這個 loop 沒有現行 verdict,修好磁碟後重跑 --freeze" if _refroze else "未動")
+                  , file=sys.stderr)
+            return 2
         if _refroze:
             _loop_gov_mark(env, loop_id, "replay-refreeze", note.strip())
             print(f"  舊 golden 已歸檔 {_refroze};重凍理由已寫治理帳")
@@ -4013,6 +4019,15 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
     # cb3 r1 折入:原「三者齊備才觸發」= 漏打 --round 即整層繞過,而讀側照樣把 round-less
     # 列組成 __seqN 判定輪、severity 尾巴又跳過 __ 合成鍵——三層同時失靈(ext-f1+s1-f1 實測 PASS 到 converged)。
     # 關法:①處置帳(findings_set)必綁輪次與審查席 ②審查席(loop+auditor,結局帳除外)必帶輪次。
+    # cb3 r2 extv:--outcome 豁免可被假冒(掛在處置帳上整層跳過)——結局帳與審查席欄位互斥:
+    # 真實結局帳只帶 loop+auditor+outcome(+usd/note),帶任何審查欄位=不是結局帳,拒。
+    if outcome is not None and kind != "none":
+        print("擋下:--outcome 結局帳只能用 kind=none——kind=caught/missed 掛結局欄可湊 legacy 閘輪次(cb3 r2 delta 活體重現)", file=sys.stderr)
+        return 2
+    if outcome is not None and any(x is not None for x in (round_id, findings_set, severity, report, snapshot, findings)):
+        print("擋下:--outcome 是自主迴圈結局帳專用,不能跟審查席欄位(--round/--severity/--report/"
+              "--snapshot/--findings*)混用——掛結局欄假冒豁免正是要關的繞道", file=sys.stderr)
+        return 2
     if loop and findings_set is not None and not (round_id and auditor):
         print("擋下:處置帳(--findings-set)必須綁 --round 和 --auditor——無輪次的處置帳讀側已不受理,"
               "沒有席位的處置帳無從對帳", file=sys.stderr)

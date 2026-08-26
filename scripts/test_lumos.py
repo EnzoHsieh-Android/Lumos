@@ -23174,13 +23174,20 @@ def t_canary_severity_writeside():
     # 不再看 round——漏打 --round 曾是整層繞道(ext-f1/s1-f1);結局帳 --outcome 豁免)
     r = run(v, "canary", "record", "none", "--loop", "svw-other", "--severity", "minor")
     check("寫側:無 auditor 的非審查列照舊 rc0", r.returncode == 0, r.stderr[:200])
-    r = run(v, "canary", "record", "none", "--round", "r1", "--loop", "svw-auto", "--auditor", "orch", "--outcome", "converged")
+    r = run(v, "canary", "record", "none", "--loop", "svw-auto", "--auditor", "orch", "--outcome", "converged")
     check("寫側:結局帳(--outcome)豁免 rc0", r.returncode == 0, r.stderr[:200])
     r = run(v, "canary", "record", "none", "--loop", "svw-rl", "--auditor", "s1", "--severity", "minor")
     check("寫側:有席無輪(round-less)照樣強制 rc2(繞道關死)", r.returncode == 2 and "--report" in r.stderr, r.stderr[:200])
     r = run(v, "canary", "record", "none", "--loop", "svw-rl", "--auditor", "s1", "--severity", "minor",
             "--findings-set", "f1", "--folded-set", "f1")
     check("寫側:處置帳不綁輪次 rc2", r.returncode == 2 and "綁 --round" in r.stderr, r.stderr[:200])
+    # cb3 r2 extv-f1:--outcome 掛在審查欄位上假冒豁免 → 互斥 rc2
+    r = run(v, "canary", "record", "none", "--loop", "svw-fake", "--auditor", "s1", "--severity", "minor",
+            "--outcome", "converged", "--round", "r1")
+    check("寫側:--outcome 假冒豁免(混審查欄位)rc2 繞道關死", r.returncode == 2 and "混用" in r.stderr, r.stderr[:200])
+    # cb3 r2 delta d-f1 活體:kind=caught+--outcome 湊 legacy 閘輪次 → rc2
+    r = run(v, "canary", "record", "caught", "--loop", "svw-fake2", "--auditor", "s1", "--outcome", "converged")
+    check("寫側:kind=caught 掛 --outcome rc2(legacy 閘角度關死)", r.returncode == 2 and "kind=none" in r.stderr, r.stderr[:200])
     # ⑨ spec_path 落帳(相對 repo root 之外=絕對)
     spec = d / "svw-spec.md"
     spec.write_text("# s\n", encoding="utf-8")
@@ -23416,6 +23423,9 @@ def t_loop_replay_freeze_and_golden():
     check("replay:重凍歸檔存在(不覆寫歷史)", len(arch_files) == 1, str(arch_files))
     gtxt = gov.read_text(encoding="utf-8") if gov.exists() else ""
     check("replay:重凍留痕進治理帳", '"replay-refreeze"' in gtxt and "制度演進重凍測試" in gtxt, gtxt[-200:])
+    # ⑪b cb3 r2 d-f19:loop id 含路徑字元 → 拒凍(守衛此前無釘)
+    r = run(v, "loop", "replay", "a/b", "--freeze", "--spec", str(spec), "--repo", str(repo))
+    check("replay:loop id 含斜線拒凍 rc2", r.returncode == 2 and "路徑字元" in r.stderr, r.stderr[:150])
     # ⑫ panel 形狀(同輪多席各自處置帳)→ rc2 指路
     row_p1 = dict(row); row_p1["loop"] = "rp-panel"; row_p1["token"] = "RPP1"
     row_p2 = dict(row); row_p2["loop"] = "rp-panel"; row_p2["auditor"] = "s2"; row_p2["token"] = "RPP2"
