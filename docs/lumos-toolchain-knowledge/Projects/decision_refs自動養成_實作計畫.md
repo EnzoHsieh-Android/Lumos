@@ -116,7 +116,7 @@ decisions:
 T3 回填=**批次分兩相**,★誠實標:單次單趟沒有機械擋,純靠 Claude 編排協議紀律不重查(r2 d-f1)——backlog 是無狀態查詢、無批次 id/快照鎖★。259 節點回填大機率跨 session,故不能只靠「同一 session 不重查」:
 
 - **相一:add-ai 掃描(可跨 session 安全恢復)**——`backlog` 取名單→逐節點 `candidates`→Claude 判→`add-ai`。★重跑 backlog 對正確性安全(冪等):已填的節點正規化去重後掉出名單、不會重複加★;唯一成本=AI-判不像跳過的候選會被重新端出重判(成本非資料損壞)。中途換 session 就再敲 backlog 續掃,安全。
-- **相二:抽查+prune(收尾單次,全掃描完成後才做)**——`list --by ai` 抽查→`prune` 剪錯→`promote` 蓋章。★prune 放最末相(所有 add-ai 相完成後才做),它就不會被後續 backlog 重列 AI 加回★(關人剪振盪:不是靠「同 session」,是靠「相序」——prune 之後不再有 add-ai 相)。
+- **相二:抽查+prune(收尾單次,全掃描完成後才做)**——`list --by ai` 抽查→`prune` 剪錯→`promote` 蓋章。★prune 放最末相(所有 add-ai 相完成後才做),它就不會被後續 backlog 重列 AI 加回★(關人剪振盪:不是靠「同 session」,是靠「相序」——prune 之後不再有 add-ai 相)。★誠實標(r3 d-f4):「相一已完成」沒有機械信號★——backlog 不會回傳空(AI 判不像的候選永留候選集,s2-f2),所以「掃完整份名單」是★單一編排者★循序控制流的判斷(它對 backlog 快照逐節點跑過一遍),不是分散式訊號,同 d-f1 靠協議紀律。★因此:T3 回填由單一編排者循序跑(相一全做完再進相二),明文禁止兩個 session 併發對同 vault 跑同一批★——併發下一個誤判相一完成開始 prune、另一個還在 add-ai,人剪的會被加回(相序失效)。單編排者循序=相序的落地前提。
 
 **「相二完成後又週期性重跑整個流程」明列為 future**:那時「人剪的」才需要持久記憶(v3 否決記憶想解、但引入無解除/繞道的洞更貴,future 若做要重新設計+重跑 panel)。T1(confirm 回寫)是長期自我養成、與此無關;T3 只回填存量、兩相一次。
 
@@ -135,7 +135,7 @@ T3 回填=**批次分兩相**,★誠實標:單次單趟沒有機械擋,純靠 Cl
 ### 釘死的合約
 - ★不對稱信任(核心,T1 已建)★:ai-ref 對 E3 firing 生效、結構上抑制不了 E2(雙欄:E3 讀聯集、E2 只讀 decision_refs);唯一升級=人 promote(重驗存在性+dangling rc=2 拒+原子搬移)。V1-V6 不動 E2/E3 讀側,只加寫側+audit 原語。
 - backlog/candidates 同集合口徑(三具名邊+帶 id 決策),★共用同一候選產生函式、正規化 tuple 比對★(ext-f2/s2-f3)。
-- ★所有原語的 ref 比對(backlog 集合差/candidates 去重/add-ai 冪等/prune 定位/promote locate·remove·dedup·count·覆蓋掃描)一律走同一支 `_dref_same` 正規化 helper(r2 ext-f6/d-f2:正規化契約要貫徹到每一條路,漏一條就是簡寫/正規逐字打架的洞);落盤字串保留一份正規形★。
+- ★所有原語的 ref-對-ref 比對(backlog 集合差/candidates 去重/add-ai 冪等/prune 定位/promote locate·remove·dedup·count)一律走同一支 `_dref_same` 正規化 helper(r2 ext-f6/d-f2);落盤字串保留一份正規形★。★`_dref_same` 定義必含空-did 守衛:`did_a and did_b and (env.resolve(節點a),did_a)==(env.resolve(節點b),did_b)`——did 任一為空即不相等(照抄 E2 `_hits` 的 `did and ...` 既有防護,scripts/lumos:1272;否則兩筆不同的無 id 決策會因 `""==""` 恆真被誤併,r3 d-f5)★。★覆蓋掃描的「無 id 翻案決策」不是 ref-對-ref 比對★——它們沒有 ref 可比,靠「掃該節點決策、id 為空」直接識別(r3 d-f5:別套 _dref_same 去重,那會把多筆無 id 決策併成一筆、警訊比實際少);有 id 的落後邊才用 `_dref_same` 判「正欄有沒有命中」。
 - CLI 掛法=巢狀 `add_subparsers()`(arch-f7:六原語參數形狀差異大[backlog 不吃節點/candidates·list 吃節點/add-ai·prune·promote 吃節點+ref/部分才有 --by·--json],照 about-code/guard 家族各自宣告參數,不用 rel-cascade 的單 verb+choices、免長第三種掛法)。
 - promote 的 count-based expected_check=★promote 全部操作(locate/remove/dedup/寫後 expected_check)一律用正規化 tuple 比對,不用逐字★(r2 ext-f6:只套 V1-V3 沒套 promote=_ai 存正規、傳等價簡寫時新增簡寫到正欄卻沒移除 _ai 正規、exact-string 計數還錯誤通過)。expected_check=對原子寫回後重解析的兩份 list 各自計數:正欄「正規化命中該 ref」恰一份、_ai「正規化命中該 ref」零份(ext-f3:不沿用 `_append_decision_ref` 的「至少一份」自驗;_ai 欄其他未審 ref 保留不清);落盤只留一份正規形字串。
 - AI GIGO 天花板:填哪條靠 Claude;誤 ai-ref 只誤觸發 E3 advisory(人 prune),不對稱信任兜住,非靠準度。
