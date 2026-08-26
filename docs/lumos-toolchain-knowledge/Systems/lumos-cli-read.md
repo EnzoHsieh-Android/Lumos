@@ -77,6 +77,7 @@ verified_by:
   - "[[Verification/2026-08-16_圖譜結構化查詢query落地]]"
   - "[[Verification/2026-08-22_狀態表過期偵測]]"
   - "[[Verification/2026-08-25_連鎖佇列軟提醒落地]]"
+  - "[[Verification/2026-08-27_關係語意腐爛守衛_G1解鎖即活]]"
 about_code:
   - scripts/lumos
 ---
