@@ -1,0 +1,127 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index f87ec89..5af884d 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -578,21 +578,27 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
+             if arch.exists():
+                 print(f"擋下:歸檔目的檔已存在({arch.name}),不覆寫歷史——等一秒再重凍", file=sys.stderr)
+                 return 2
+             try:
+                 target.rename(arch)
+             except OSError as e:
+                 print(f"擋下:歸檔失敗({e})——多半是同秒有另一個重凍在跑,等一下再試", file=sys.stderr)
+                 return 2
+             _refroze = arch.name
+         import os as _os_rp
+-        _os_rp.replace(_tmp, target)
++        try:
++            _os_rp.replace(_tmp, target)
++        except OSError as e:
++            print(f"擋下:新 verdict 換上位失敗({e})——舊檔"
++                  + (f"已歸檔 {_refroze},此刻這個 loop 沒有現行 verdict,修好磁碟後重跑 --freeze" if _refroze else "未動")
++                  , file=sys.stderr)
++            return 2
+         if _refroze:
+             _loop_gov_mark(env, loop_id, "replay-refreeze", note.strip())
+             print(f"  舊 golden 已歸檔 {_refroze};重凍理由已寫治理帳")
+         print(f"✓ 已凍結 {loop_id} 的判定閉包(輪 {rid},{len(raw)} 列帳,{len(files)} 份卷證檔)"
+               f"\n    {target}")
+         return 0
+ 
+     # ── 回放模式 ──
+     try:
+         g = json.loads(Path(golden).read_text(encoding="utf-8"))
+@@ -4006,20 +4012,29 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+                 return 2
+             rec["finding_kinds"] = kinds
+     # ── 嚴重度綁定機械掃 [S1] 寫側強制(2026-08-26)★行為改變★:審查席帳列
+     # (--loop/--round/--auditor 齊備,kind 不限——退役 caught/missed 也擋,換 kind 即繞過)
+     # 一律必附 --report,且帳面 severity 不得低於報告宣告最高。實帳 681 筆審查席列有 286 筆
+     # 無報告的舊形狀自此被拒,不設過渡:不附報告的審查帳事後無從重驗(disposal ③ 也 FAIL)。
+     # 低報=拒(major 逃必折之路);高報=放行+提醒(保守方向,下游全閘「越高越嚴」r1-s1)。
+     # cb3 r1 折入:原「三者齊備才觸發」= 漏打 --round 即整層繞過,而讀側照樣把 round-less
+     # 列組成 __seqN 判定輪、severity 尾巴又跳過 __ 合成鍵——三層同時失靈(ext-f1+s1-f1 實測 PASS 到 converged)。
+     # 關法:①處置帳(findings_set)必綁輪次與審查席 ②審查席(loop+auditor,結局帳除外)必帶輪次。
++    # cb3 r2 extv:--outcome 豁免可被假冒(掛在處置帳上整層跳過)——結局帳與審查席欄位互斥:
++    # 真實結局帳只帶 loop+auditor+outcome(+usd/note),帶任何審查欄位=不是結局帳,拒。
++    if outcome is not None and kind != "none":
++        print("擋下:--outcome 結局帳只能用 kind=none——kind=caught/missed 掛結局欄可湊 legacy 閘輪次(cb3 r2 delta 活體重現)", file=sys.stderr)
++        return 2
++    if outcome is not None and any(x is not None for x in (round_id, findings_set, severity, report, snapshot, findings)):
++        print("擋下:--outcome 是自主迴圈結局帳專用,不能跟審查席欄位(--round/--severity/--report/"
++              "--snapshot/--findings*)混用——掛結局欄假冒豁免正是要關的繞道", file=sys.stderr)
++        return 2
+     if loop and findings_set is not None and not (round_id and auditor):
+         print("擋下:處置帳(--findings-set)必須綁 --round 和 --auditor——無輪次的處置帳讀側已不受理,"
+               "沒有席位的處置帳無從對帳", file=sys.stderr)
+         return 2
+     if loop and auditor and outcome is None:
+         # 觸發=審查席帳列(loop+auditor;結局帳 --outcome 除外)。★不要求 round★——light/循序
+         # 舊制形狀本來就無輪次且合法;繞道由「處置帳必綁輪次」+讀側 round-less 處置帳拒判關死。
+         # (cb3 ext-f1/s1-f1:原「三者齊備」觸發=漏打 --round 即整層蒸發;spec S1 觸發條件據此放寬,已折回計劃)
+         if not report:
+             print("擋下:審查席記帳(帶 --loop/--round/--auditor)一定要附 --report 審查報告檔——"
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index faabe7c..99c5970 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -23167,27 +23167,34 @@ def t_canary_severity_writeside():
+     r = run(v, "canary", "record", "none", "--loop", "svw", "--round", "r4", "--auditor", "s1",
+             "--severity", "major", "--report", str(rep))
+     check("寫側:高報放行 rc0 且 stderr 有提醒", r.returncode == 0 and "高報" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+     # ⑦ 缺 --severity → rc2
+     r = run(v, "canary", "record", "none", "--loop", "svw", "--round", "r5", "--auditor", "s1", "--report", str(rep))
+     check("寫側:審查席缺 --severity rc2", r.returncode == 2 and "--severity" in r.stderr, r.stderr[:200])
+     # ⑧ 非審查列不受影響=無 auditor 或帶 --outcome(cb3 折入:有 loop+auditor 就強制,
+     # 不再看 round——漏打 --round 曾是整層繞道(ext-f1/s1-f1);結局帳 --outcome 豁免)
+     r = run(v, "canary", "record", "none", "--loop", "svw-other", "--severity", "minor")
+     check("寫側:無 auditor 的非審查列照舊 rc0", r.returncode == 0, r.stderr[:200])
+-    r = run(v, "canary", "record", "none", "--round", "r1", "--loop", "svw-auto", "--auditor", "orch", "--outcome", "converged")
++    r = run(v, "canary", "record", "none", "--loop", "svw-auto", "--auditor", "orch", "--outcome", "converged")
+     check("寫側:結局帳(--outcome)豁免 rc0", r.returncode == 0, r.stderr[:200])
+     r = run(v, "canary", "record", "none", "--loop", "svw-rl", "--auditor", "s1", "--severity", "minor")
+     check("寫側:有席無輪(round-less)照樣強制 rc2(繞道關死)", r.returncode == 2 and "--report" in r.stderr, r.stderr[:200])
+     r = run(v, "canary", "record", "none", "--loop", "svw-rl", "--auditor", "s1", "--severity", "minor",
+             "--findings-set", "f1", "--folded-set", "f1")
+     check("寫側:處置帳不綁輪次 rc2", r.returncode == 2 and "綁 --round" in r.stderr, r.stderr[:200])
++    # cb3 r2 extv-f1:--outcome 掛在審查欄位上假冒豁免 → 互斥 rc2
++    r = run(v, "canary", "record", "none", "--loop", "svw-fake", "--auditor", "s1", "--severity", "minor",
++            "--outcome", "converged", "--round", "r1")
++    check("寫側:--outcome 假冒豁免(混審查欄位)rc2 繞道關死", r.returncode == 2 and "混用" in r.stderr, r.stderr[:200])
++    # cb3 r2 delta d-f1 活體:kind=caught+--outcome 湊 legacy 閘輪次 → rc2
++    r = run(v, "canary", "record", "caught", "--loop", "svw-fake2", "--auditor", "s1", "--outcome", "converged")
++    check("寫側:kind=caught 掛 --outcome rc2(legacy 閘角度關死)", r.returncode == 2 and "kind=none" in r.stderr, r.stderr[:200])
+     # ⑨ spec_path 落帳(相對 repo root 之外=絕對)
+     spec = d / "svw-spec.md"
+     spec.write_text("# s\n", encoding="utf-8")
+     hsp = _h.sha256(spec.read_bytes()).hexdigest()
+     rep.write_text("severity: clean\n", encoding="utf-8")
+     r = run(v, "canary", "record", "none", "--loop", "svw", "--round", "r6", "--auditor", "s1",
+             "--severity", "clean", "--report", str(rep), "--spec", str(spec), "--reviewed", hsp, expect_rc=0)
+     last = [_j.loads(l) for l in (d / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][-1]
+     check("寫側:spec_path 落帳(改制回測 S2①)", str(spec.resolve()) == last.get("spec_path") or last.get("spec_path", "").endswith("svw-spec.md"), str(last.get("spec_path")))
+ 
+@@ -23409,20 +23416,23 @@ def t_loop_replay_freeze_and_golden():
+     r = run(v, "loop", "replay", "rp", "--freeze", "--spec", str(spec), "--repo", str(repo))
+     check("replay:重凍缺 --note rc2", r.returncode == 2 and "--note" in r.stderr, r.stderr[:150])
+     _sp.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+     _sp.run(["git", "-C", str(repo), "commit", "-qm", "spec-evolved"], capture_output=True)
+     r = run(v, "loop", "replay", "rp", "--freeze", "--spec", str(spec), "--repo", str(repo),
+             "--note", "制度演進重凍測試", expect_rc=0)
+     arch_files = list((repo / "governance" / "replay" / "rp").glob("verdict-*.json"))
+     check("replay:重凍歸檔存在(不覆寫歷史)", len(arch_files) == 1, str(arch_files))
+     gtxt = gov.read_text(encoding="utf-8") if gov.exists() else ""
+     check("replay:重凍留痕進治理帳", '"replay-refreeze"' in gtxt and "制度演進重凍測試" in gtxt, gtxt[-200:])
++    # ⑪b cb3 r2 d-f19:loop id 含路徑字元 → 拒凍(守衛此前無釘)
++    r = run(v, "loop", "replay", "a/b", "--freeze", "--spec", str(spec), "--repo", str(repo))
++    check("replay:loop id 含斜線拒凍 rc2", r.returncode == 2 and "路徑字元" in r.stderr, r.stderr[:150])
+     # ⑫ panel 形狀(同輪多席各自處置帳)→ rc2 指路
+     row_p1 = dict(row); row_p1["loop"] = "rp-panel"; row_p1["token"] = "RPP1"
+     row_p2 = dict(row); row_p2["loop"] = "rp-panel"; row_p2["auditor"] = "s2"; row_p2["token"] = "RPP2"
+     with open(ledger, "a", encoding="utf-8") as f:
+         f.write(_j.dumps(row_p1) + "\n" + _j.dumps(row_p2) + "\n")
+     r = run(v, "loop", "replay", "rp-panel", "--freeze", "--spec", str(spec), "--repo", str(repo))
+     check("replay:panel 舊制形狀 rc2 指路 --gate --panel", r.returncode == 2 and "--panel" in r.stderr,
+           f"rc={r.returncode} {r.stderr[:200]}")
+ 
+ if __name__ == "__main__":
