@@ -21227,15 +21227,19 @@ def t_eval_condensed_core():
     m = _load_retrieval_eval(root)
     # search:窗內 [未標,未標,判2,判1](spec 驗證計劃修正後的例)
     gs["search"] = [{"id": "S01", "query": "zzz", "cat": "zh_short", "split": "held"}]
-    gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}, "Systems/C.md": {"final": 1}}
-    order = ["Systems/U1.md", "Systems/U2.md", "Systems/B.md", "Systems/C.md"]
+    # 10 節點窗、6 判(≥ceil(10/2)=5 過題級門檻):前兩名未標——spec 例的門檻合規版
+    gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}, "Systems/C.md": {"final": 1},
+                           "Systems/D.md": {"final": 1}, "Systems/E.md": {"final": 0},
+                           "Systems/F.md": {"final": 0}, "Systems/G.md": {"final": 0}}
+    order = ["Systems/U1.md", "Systems/U2.md", "Systems/B.md", "Systems/C.md", "Systems/D.md",
+             "Systems/E.md", "Systems/F.md", "Systems/G.md", "Systems/U3.md", "Systems/U4.md"]
     m._search_arms = lambda q: (list(order), list(order))
     rows = m.eval_search(gs, "held", k=2)
     r = rows[0]
     check("舊尺 nDCG@2:前兩名全未標→0.0(行為不變)", r["ranked_ndcg"] == 0.0, str(r))
-    check("condensed nDCG@2=1.0(已判子列表 判2判1 完美序)", r["c_ranked_ndcg"] == 1.0, str(r))
+    check("condensed nDCG@2=1.0(已判子列表 判2判1 領頭)", r["c_ranked_ndcg"] == 1.0, str(r))
     check("condensed MRR@10=1.0(第一個已判即相關)", r["c_ranked_mrr"] == 1.0, str(r))
-    check("題級覆蓋率=2/4", r["ranked_cov"] == 0.5, str(r))
+    check("題級覆蓋率=6/10", r["ranked_cov"] == 0.6, str(r))
     # 三方集合同源([S1]①):condensed 剔除的=collect_unjudged 該題回報的
     unj = m.collect_unjudged(gs, "held")
     lab = m._labels_of(gs, "S01")
@@ -21250,6 +21254,13 @@ def t_eval_condensed_core():
     check("低覆蓋題(1/8)condensed 記 None", rows2[0]["c_ranked_ndcg"] is None, str(rows2[0]))
     check("低覆蓋題不進 macro(_macro 濾 None)", m._macro(rows2, "c_ranked_ndcg") is None, "")
     check("低覆蓋題舊尺照算(雙報期 gate 仍有值)", rows2[0]["ranked_ndcg"] is not None, str(rows2[0]))
+    # s1-f3 釘:門檻用「配置窗寬 k」不是「窗實際長度」——候選只回 2 篇全已判,
+    # 照 spec ceil(10/2)=5 仍不足 → None(len(window) 算法會誤判有效)
+    gs["labels"]["S01"] = {"Systems/B.md": {"final": 2}, "Systems/C.md": {"final": 1}}
+    m._search_arms = lambda q: (["Systems/B.md", "Systems/C.md"], ["Systems/B.md", "Systems/C.md"])
+    rows3 = m.eval_search(gs, "held", k=2)
+    check("短候選(2 篇全判<ceil(10/2))仍記 None(門檻吃配置 k 不吃窗長)",
+          rows3[0]["c_ranked_ndcg"] is None, str(rows3[0]))
     # _labels_of 已判-only + 未標 pins 的 pin_noise([S1]④/[S3b]:fixture 強制含未標 pin)
     lab2 = m._labels_of(gs, "S01")
     check("_labels_of 不含未標鍵(已判-only)", "Systems/X0.md" not in lab2 and "Systems/B.md" in lab2, str(lab2))
@@ -21285,6 +21296,13 @@ def t_eval_condensed_switch():
     v["condensed_edit"]["p"] = 0.9
     eq2, diffs2 = m._switch_equal(v)
     check("恆等斷言:有差→列名不過(切換中止)", eq2 is False and any("fusion" in d for d in diffs2), str(diffs2))
+    # code-r1 折修釘:beats 模組層可呼且 None 安全(s1-f1/f2);gate 門檻唯一實作+weak 語意(arch-f1)
+    check("beats 模組層+None 安全(弱證據=判 False 不炸)",
+          m.beats(None, 1, 1, 1) is False and m.beats(0.8, 0.8, 0.5, 0.5) is True, "")
+    check("search gate helper:weak=不轉綠", m._search_gate_ok(20.0, 0.5, weak=True) is False
+          and m._search_gate_ok(20.0, 0.5) is True, "")
+    check("hook gate helper:None/weak=不轉綠", m._hook_gate_ok(None) is False
+          and m._hook_gate_ok(0.75, weak=True) is False and m._hook_gate_ok(0.75) is True, "")
     print("  ✓ t_eval_condensed_switch")
 
 

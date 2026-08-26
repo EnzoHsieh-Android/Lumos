@@ -373,6 +373,26 @@ def eval_search(gs, split=None, k=5):
     return rows
 
 
+def beats(a_p, a_n, b_p, b_n):
+    """a 勝 b:P 至少一主指標贏、另一指標不倒退超過 0.02。模組層唯一實作
+    (code-r1 s1-f1:原巢狀在 report_goldset 內,main() 的切換覆寫塊呼叫=NameError;
+    s1-f2:任一輸入 None(弱證據/無資料)=判 False 不轉綠,不拋例外)。"""
+    if any(x is None for x in (a_p, a_n, b_p, b_n)):
+        return False
+    return (a_p > b_p and a_n >= b_n - 0.02) or (a_n > b_n and a_p >= b_p - 0.02)
+
+
+def _search_gate_ok(lift_pct, legacy_ndcg, weak=False):
+    """search 主閘門檻唯一實作(arch-f1:main 覆寫塊原重打 15.0 一份)。"""
+    return (not weak and lift_pct is not None
+            and (legacy_ndcg or 0) > 0 and lift_pct >= 15.0)
+
+
+def _hook_gate_ok(p, weak=False):
+    """hook P@k 門檻唯一實作(arch-f1 同上,0.70)。"""
+    return not weak and p is not None and p >= 0.70
+
+
 # ── condensed 引擎(評測尺翻案 [S1]/[S2]):在「計分觸及集內的已判子列表」上算分 ──
 # 未標剔除域=觸及集窗(search 各臂前 10 / edit free 前 k)——與 collect_unjudged 的母體
 # 同界,repin(母體 unjudged==0)時 condensed 與舊尺數值恆等(切換零重錨的數學前提)。
@@ -380,13 +400,15 @@ CONDENSED_REV = "condensed-v1"
 
 def _condense(window_nodes, lab, k, thr=None):
     """window_nodes=觸及集窗內的節點序;回 (judged_labels, cov, valid)。
-    題級門檻([S2]①):窗內已判數 < ceil(窗長/2)(thr 可覆寫)→ valid=False,
-    該題分數記 None 不進 macro——單題低覆蓋不能抬也不能砸總分。"""
+    題級門檻([S2]①):窗內已判數 < ceil(k/2)——★k=配置窗寬(search 10/edit 8),
+    不是窗實際長度★(code-r1 s1-f3:候選天生偏少時用窗長會把門檻偷偷放鬆,
+    2 篇全判被當有效;spec 語意=分數要站得住至少要半個配置窗的已判量)。
+    cov=已判/窗實際長度(曝險口徑,顯示與面聚合用);thr 可覆寫(測試隔離引擎用)。"""
     import math
     judged = [lab[n] for n in window_nodes if n in lab]
     denom = len(window_nodes)
     cov = round(len(judged) / denom, 4) if denom else None
-    need = thr if thr is not None else math.ceil(denom / 2) if denom else 1
+    need = thr if thr is not None else math.ceil(k / 2) if k else 1
     return judged, cov, (denom > 0 and len(judged) >= need)
 
 
@@ -481,7 +503,7 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         print(f"  前 {k_search} 名的品質 {rn}(舊排序 {ln}),{'好了' if lift >= 0 else '★退了★'} {abs(lift):.1f}%    ← 這是主要的尺(nDCG@{k_search})")
         print(f"  第一個對的答案多靠前:{rm}(舊 {lm};1.0=都在第一名)  |  前 10 名撈到該撈的比例:{rr}(舊 {lr})")
         verdict["search_lift_pct"] = round(lift, 1)
-        verdict["search_gate"] = ln > 0 and lift >= 15.0
+        verdict["search_gate"] = _search_gate_ok(lift, ln)
         verdict["_rn_raw"], verdict["_ln_raw"] = rn, ln   # 恆等斷言配對用([S3]①)
         # ── 新尺預覽(condensed;[S3]② gate 恆以舊尺拍板,這裡只算只印)──
         c_ln, c_rn = _macro(srows, "c_legacy_ndcg"), _macro(srows, "c_ranked_ndcg")
@@ -531,7 +553,7 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         verdict["hook_p"] = fp
         verdict["free_median"] = med
         verdict["free_p95"] = p95
-        verdict["hook_p_gate"] = fp is not None and fp >= 0.70
+        verdict["hook_p_gate"] = _hook_gate_ok(fp)
         verdict["hook_p"] = fp
         # ── 新尺預覽(edit 面)──
         c_fp, c_fn = _macro(erows, "c_fusion_p"), _macro(erows, "c_fusion_ndcg")
@@ -546,10 +568,7 @@ def report_goldset(gs, split=None, k_search=5, k_edit=8):
         print(f"  新尺預覽(已判子集內前 {k_edit}):對的比例 {_pct(c_fp)}(只比文字 {_pct(c_bp)}、只比圖 {_pct(c_gp)})"
               f"|edit 面覆蓋率 {e_cov}、有效 {e_valid}/{len(erows)} 題"
               + ("  ⚠ 有效題數不足半數=弱證據" if verdict["condensed_edit"]["weak"] else ""))
-        # fusion 各勝至少一主指標,另一指標不倒退超過 0.02
-        def beats(a_p, a_n, b_p, b_n):
-            return ((a_p > b_p and a_n >= b_n - 0.02) or
-                    (a_n > b_n and a_p >= b_p - 0.02))
+        # fusion 各勝至少一主指標,另一指標不倒退超過 0.02——beats 已升模組層(code-r1 s1-f1)
         verdict["_bp_raw"], verdict["_gp_raw"] = bp, gp   # 恆等斷言配對用
         verdict["fusion_vs_bm25"] = beats(fp, fn, bp, bn)
         verdict["fusion_vs_graph"] = beats(fp, fn, gp, gn)
@@ -767,11 +786,10 @@ def main():
                 _cs, _ce = _v.get("condensed_search"), _v.get("condensed_edit")
                 if _cs:
                     _v["search_lift_pct"] = _cs["lift_pct"]
-                    _v["search_gate"] = (_cs["lift_pct"] is not None and (_cs["ndcg_legacy"] or 0) > 0
-                                         and _cs["lift_pct"] >= 15.0 and not _cs["weak"])
+                    _v["search_gate"] = _search_gate_ok(_cs["lift_pct"], _cs["ndcg_legacy"], weak=_cs["weak"])
                 if _ce:
                     _v["hook_p"] = _ce["p"]
-                    _v["hook_p_gate"] = _ce["p"] is not None and _ce["p"] >= 0.70 and not _ce["weak"]
+                    _v["hook_p_gate"] = _hook_gate_ok(_ce["p"], weak=_ce["weak"])
                     _v["fusion_vs_bm25"] = beats(_ce["p"], _ce["ndcg"], _ce["bm25_p"], _ce["bm25_ndcg"])
                     _v["fusion_vs_graph"] = beats(_ce["p"], _ce["ndcg"], _ce["graph_p"], _ce["graph_ndcg"])
         gates = {"search nDCG@5 提升≥15%": v_all.get("search_gate"),
