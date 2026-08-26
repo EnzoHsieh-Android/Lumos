@@ -123,7 +123,7 @@ Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大�
 ①`lumos quote-check <席報告> --spec <該席工作副本>`(carrier 報告供 disposal gate 錨定條;其餘席 advisory)
 ②`lumos refcheck <席報告> --repo <root>`(finding 引的 file:line 機械驗存在/範圍——引了不實指涉當場現形)
 ③`lumos seat-check <席報告> --dispatch <rN-dispatch.json> --ledger <out-of-scope.jsonl>`(有講沒做對帳,觀測恆 rc0)
-> ⚠ `lumos mutate`(變異測試,驗測試網破洞)是**手動唯讀工具,刻意不自動化**(2026-08-08 Enzo 裁,見 [[Projects/mutate接消費者_計劃]] 結案)——收貨時**可選**手動跑照洞,★勿接進自動流程/勿進閘★(避免過度測試+大檔爆炸;要接須先解 testmap 逐檔粒度)。
+> ⛔ `lumos mutate` 已退場(2026-08-26 建了沒人跑批次裁定:2026-08-08 裁死消費者後治理帳 0 次使用;指令與測試已拆,復活=有真消費者立案從 git 史撿回,詳 [[Projects/建了沒人跑批次裁定_計劃]])。
 
 ### 步驟 4 — 判讀 + 辯方
 

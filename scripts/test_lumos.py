@@ -15710,27 +15710,8 @@ def t_quote_check_normalization_and_verdict():
     check("★單一實作:全檔 `def _quote_norm` 恰一處★", src.count("def _quote_norm") == 1, "")
 
 
-def t_calibration_smoke():
-    """[T7](plan:design-loop重設計_實作計畫 T7)離線校準腳本冒煙:判定沿 lumos 的 _quote_norm
-    (單一實作,import 不複製);寬判(mentioned≠caught 分開列);不寫累積帳(--no-log)。"""
-    _need_src("governance/eval/canary_calibration.py")   # 缺=拋 _SrcOnly 由 runner 記 skip
-    import json as _j
-    import tempfile as _tf
-    d = Path(_tf.mkdtemp(prefix="calib-"))
-    (d / "plants.json").write_text(_j.dumps([
-        {"id": "P1", "file": "f.md", "type": "b", "token": "--ghost-flag", "nature": "未定義旗標"}]),
-        encoding="utf-8")
-    rdir = d / "r"; rdir.mkdir()
-    (rdir / "sA.md").write_text("[major] `--ghost-flag` 未定義,文中沒有定義它" + chr(10), encoding="utf-8")
-    (rdir / "sB.md").write_text("整份看起來不錯" + chr(10), encoding="utf-8")
-    src = Path(__file__).resolve().parent.parent / "governance" / "eval" / "canary_calibration.py"
-    r = subprocess.run([sys.executable, str(src), "--plants", str(d / "plants.json"),
-                        "--reports", str(rdir), "--config", "smoke-test", "--no-log"],
-                       capture_output=True, text=True)
-    check("★校準冒煙:rc0 且 caught 判定正確(sA ✓/sB ✗)★",
-          r.returncode == 0 and "caught 1/1" in r.stdout and "caught 0/1" in r.stdout,
-          f"rc={r.returncode} " + r.stdout[:300] + r.stderr[:200])
-    check("不進 gate 的誠實聲明在輸出上", "不進任何 gate" in r.stdout, "")
+
+# ⛔ t_calibration_smoke 已隨機制退場(2026-08-26 建了沒人跑批次裁定)
 
 
 def t_loop_next_disposal_cmd_actually_runs():
@@ -16163,40 +16144,8 @@ def t_disposal_gate_r3_panel_hardening():
           r3.returncode == 1, f"rc={r3.returncode}\n{r3.stdout[:200]}{r3.stderr[:150]}")
 
 
-def t_calibration_readback_hardening():
-    """[T8 終審 r2 findings 修復](loop code-dloop-redesign r2;s5/否決席/s3/s4 四路收斂)
 
-    校準帳寫後讀回自驗的三個洞:①末行黏連——舊帳以半行(無換行)結尾時 append 直接
-    黏成一行,自驗炸 JSONDecodeError traceback ②末行定位——併發下末行可能是別程序的
-    ③秒級 ts 撞同秒誤判。修=每筆帶唯一 run_id、append 前補換行、全檔容錯掃描找自己的行。
-    r3 補(s4 席):測試改走 --log 隔離帳,生產帳一字不碰(原版直接改寫生產
-    calibration-log.jsonl,與並行寫入者互踩)。
-    翻紅釘:還原「append 前補換行」→ 半行案例翻紅。"""
-    _need_src("governance/eval/canary_calibration.py")
-    import json as _j
-    import tempfile as _tf
-    d = Path(_tf.mkdtemp(prefix="calib2-"))
-    (d / "plants.json").write_text(_j.dumps([
-        {"id": "P1", "file": "f.md", "type": "b", "token": "--ghost-flag", "nature": "未定義旗標"}]),
-        encoding="utf-8")
-    rdir = d / "r"; rdir.mkdir()
-    (rdir / "sA.md").write_text("[major] `--ghost-flag` 未定義" + chr(10), encoding="utf-8")
-    src = Path(__file__).resolve().parent.parent / "governance" / "eval" / "canary_calibration.py"
-    log = d / "isolated-log.jsonl"
-    # 現場:帳尾塞半行(無換行)——舊版 append 會黏行、自驗炸 traceback
-    log.write_text('{"half":', encoding="utf-8")
-    r = subprocess.run([sys.executable, str(src), "--plants", str(d / "plants.json"),
-                        "--reports", str(rdir), "--config", "readback-hardening-test",
-                        "--log", str(log)],
-                       capture_output=True, text=True)
-    check("★前置★ 現場成立:帳尾確為半行時仍寫入成功", r.returncode == 0,
-          f"rc={r.returncode} {r.stdout[-200:]}{r.stderr[:300]}")
-    check("★半行黏連防護:自驗 ✓ 且無 traceback★",
-          "讀回自驗 ✓" in r.stdout and "Traceback" not in r.stderr, r.stdout[-200:] + r.stderr[:200])
-    tail_lines = log.read_text(encoding="utf-8").splitlines()
-    last = _j.loads(tail_lines[-1])
-    check("寫入的末行可解析且帶唯一 run_id(全檔掃描定位,非末行定位)",
-          bool(last.get("run_id")), str(last)[:150])
+# ⛔ t_calibration_readback_hardening 已隨機制退場(2026-08-26 建了沒人跑批次裁定)
 
 
 def t_quote_check_field_test_gaps():
@@ -21916,6 +21865,8 @@ def t_vendored_consumer_srconly_skip_regression():
     - t_s2_snr_synthetic 守衛掛在 `governance/eval`(目錄),但 Landmark **自己有**
       governance/eval(檢索考卷),只是沒有 canary_snr.py → 守衛放行後炸兩條
       (「snr 腳本 rc0」+ json 解析 EXCEPTION)。判準粒度必須到「真正要用的檔」。
+      (歷史敘述;snr 測試 2026-08-26 已隨機制退場,樣本換 t_difficulty_panel_width
+      ——同款精確檔守衛 governance/autonomous_loop/difficulty.py,陷阱形狀與牙齒不變)
 
     ★驗行為不是驗寫法★:真的搭一個消費端模擬環境(scripts/ 有、docs/ 無、
     governance/eval 目錄在但腳本不在——復刻 Landmark 的陷阱形狀),spawn 子進程
@@ -21928,11 +21879,14 @@ def t_vendored_consumer_srconly_skip_regression():
         _sh.copy(src_scripts / f, root / "scripts" / f)
     if (src_scripts / "hooks").is_dir():
         _sh.copytree(src_scripts / "hooks", root / "scripts" / "hooks")
-    # 陷阱形狀:governance/eval 目錄存在(消費端有自己的考卷)但 canary_snr.py 不存在
+    # 陷阱形狀:governance/eval 與 autonomous_loop 目錄存在(消費端有自己的考卷/腳本)
+    # 但精確檔不存在(原樣本 canary_snr.py 已隨機制退場,2026-08-26 換 difficulty.py——
+    # 同款「精確檔守衛」,釘的牙齒不變:守衛改回目錄粒度這條就紅)
     (root / "governance" / "eval").mkdir(parents=True)
+    (root / "governance" / "autonomous_loop").mkdir(parents=True)
     # docs/ 整個不存在(消費端 vault 是自己專案的,不叫 lumos-toolchain-knowledge)
     for kw, tname in (("precommit_whitelist_drift_guard", "t_precommit_whitelist_drift_guard"),
-                      ("s2_snr_synthetic", "t_s2_snr_synthetic")):
+                      ("difficulty_panel_width", "t_difficulty_panel_width")):
         r = subprocess.run([sys.executable, str(root / "scripts" / "test_lumos.py"), "-k", kw],
                            capture_output=True, text=True)
         check(f"★消費端模擬:{tname} rc0(不紅)★", r.returncode == 0,
@@ -22174,51 +22128,22 @@ def t_s1_seat_check():
     check("dispatch 缺檔=rc2", r.returncode == 2, str(r.returncode))
 
 
-def t_s2_snr_synthetic():
-    """[S2 前瞻層驗收②]合成樣本單測:低 SNR 題被標出(swap-candidate)、
-    高 SNR 題 keep、樣本不足(同席重跑<3)與分母=0 判 no-verdict 非高訊號。
-    翻紅釘:把分母=0 判成 keep/高訊號 → 斷言翻紅。"""
-    print("t_s2_snr_synthetic")
-    import json as _j, subprocess as _sp
-    repo = Path(GRAPHCTL).resolve().parent.parent
-    snr = repo / "governance" / "eval" / "canary_snr.py"
-    # ★判準粒度必須到「真正要用的檔」★:消費端(Landmark)自己有 governance/eval
-    # (檢索考卷),目錄粒度守衛會放行、然後 canary_snr.py 不存在炸兩條
-    # ([[Issues/vendored自測3紅_來源repo專用測試漏標skip]] 2026-08-17 實錘)
-    _need_src("governance/eval/canary_snr.py")
-    rows = []
-    # P-low:跨席分不開(全席各半 caught)且席內重跑亂跳 → 低 SNR → swap-candidate
-    for seat in ("s1", "s2", "s3"):
-        for i in range(4):
-            rows.append({"plant": "P-low", "seat": seat, "run_id": f"r{i}", "caught": i % 2 == 0})
-    # P-high:席間分得開(s1 7/8 中、s2 1/8 中)且席內雜訊相對小 → SNR≥1 → keep
-    # (注意不能用「全中 vs 全漏」:席內變異=0 會正確落入分母=0 不裁決——那是 P-zero 的戲份)
-    for i in range(8):
-        rows.append({"plant": "P-high", "seat": "s1", "run_id": f"r{i}", "caught": i != 0})
-        rows.append({"plant": "P-high", "seat": "s2", "run_id": f"r{i}", "caught": i == 0})
-    # P-thin:每席只跑 1 次 → 樣本不足 → no-verdict
-    rows.append({"plant": "P-thin", "seat": "s1", "run_id": "r0", "caught": True})
-    rows.append({"plant": "P-thin", "seat": "s2", "run_id": "r0", "caught": False})
-    # P-zero:席內重跑全同(分母=0)→ no-verdict(非高訊號)
-    for i in range(3):
-        rows.append({"plant": "P-zero", "seat": "s1", "run_id": f"r{i}", "caught": True})
-        rows.append({"plant": "P-zero", "seat": "s2", "run_id": f"r{i}", "caught": False})
-    import tempfile as _tf
-    with _tf.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
-        _j.dump(rows, f)
-        pth = f.name
-    r = _sp.run([sys.executable, str(snr), "--matrix", pth, "--json"], capture_output=True, text=True)
-    check("snr 腳本 rc0", r.returncode == 0, r.stderr[:300])
-    out = {row["plant"]: row for row in _j.loads(r.stdout)}
-    check("★低 SNR 題標 swap-candidate★", out["P-low"]["verdict"] == "swap-candidate", str(out.get("P-low")))
-    check("★高 SNR 題 keep★", out["P-high"]["verdict"] == "keep", str(out.get("P-high")))
-    check("★重跑<3=no-verdict★", out["P-thin"]["verdict"] == "no-verdict", str(out.get("P-thin")))
-    check("★分母=0=no-verdict 非高訊號★", out["P-zero"]["verdict"] == "no-verdict", str(out.get("P-zero")))
+
+# ⛔ t_s2_snr_synthetic 已隨機制退場(2026-08-26 建了沒人跑批次裁定;共用 fixture 保留)
+
+def _hk_impact(repo, file, query, extra_env=None, top="8"):
+    import subprocess, json as _j, os
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
+    r = subprocess.run([sys.executable, GRAPHCTL, "impact", "--file", file,
+                        "--repo", str(repo), "--ranked", "--top", top,
+                        "--stdin-payload", "--json"],
+                       capture_output=True, text=True, env=env,
+                       input=_j.dumps({"query": query, "prospective": {}}))
+    return _j.loads(r.stdout.strip().splitlines()[-1])
 
 
-
-
-# ═══ hook必看召回修復 R1/R2(2026-08-07,plan:Projects/hook必看召回修復_計劃)═══
 
 def _hk_fixture(tmp_prefix="gctl-hk-"):
     """fixture repo:vault+code 檔;A 節點引 scripts/tool_x.sh(direct),B 節點 wikilink A(hop1)
@@ -22245,18 +22170,6 @@ def _hk_fixture(tmp_prefix="gctl-hk-"):
         encoding="utf-8")
     return repo, vault
 
-
-def _hk_impact(repo, file, query, extra_env=None, top="8"):
-    import subprocess, json as _j, os
-    env = dict(os.environ)
-    if extra_env:
-        env.update(extra_env)
-    r = subprocess.run([sys.executable, GRAPHCTL, "impact", "--file", file,
-                        "--repo", str(repo), "--ranked", "--top", top,
-                        "--stdin-payload", "--json"],
-                       capture_output=True, text=True, env=env,
-                       input=_j.dumps({"query": query, "prospective": {}}))
-    return _j.loads(r.stdout.strip().splitlines()[-1])
 
 
 def t_impact_direct_rescue():
@@ -22441,85 +22354,9 @@ def t_link_candidates():
 
 
 
-def t_mutate_diff():
-    """[驗證層去模型化 S4]diff 變異測試 v1:①ast 算子生成+殺/活判定 ②baseline 紅=rc2
-    ③cap 決定性(同 range 兩跑同結果) ④no-test-selected 分桶 ⑤--json schema ⑥互斥 rc 合約。
-    翻紅釘:拔 baseline 前置 → ②翻紅;拔 sha256 排序 → ③翻紅。"""
-    print("t_mutate_diff")
-    import subprocess, json as _j, os
-    repo = Path(tempfile.mkdtemp(prefix="gctl-mut-"))
-    def git(*a):
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a],
-                       cwd=str(repo), capture_output=True)
-    git("init", "-q")
-    src = repo / "src_mod.py"
-    tst = repo / "test_src_mod.py"
-    # src:兩個可變異點——check_limit 的 >=(測試蓋到,變異必死)、silent_flag 的 ==(測試沒蓋,變異活)
-    SRC = ("def check_limit(x):\n"
-           "    return x >= 10\n"
-           "\n"
-           "def silent_flag(y):\n"
-           "    return y == 3\n")
-    TST = ("import sys\nimport src_mod\n"
-           "assert src_mod.check_limit(10) is True\n"
-           "assert src_mod.check_limit(9) is False\n"
-           "print('ok')\n")
-    # 3 個共改 commit 餵 testmap 挖掘(support>=3)
-    for i in range(3):
-        src.write_text(SRC + f"# rev{i}\n", encoding="utf-8")
-        tst.write_text(TST + f"# rev{i}\n", encoding="utf-8")
-        git("add", "-A"); git("commit", "-qm", f"c{i}")
-    # 最後一筆:改 src 的兩行(diff 目標)
-    src.write_text(SRC.replace("x >= 10", "x >= 10  # touched").replace("y == 3", "y == 3  # touched"),
-                   encoding="utf-8")
-    tst.write_text(TST, encoding="utf-8")
-    git("add", "-A"); git("commit", "-qm", "change")
-    r = subprocess.run([sys.executable, GRAPHCTL, "testmap", "build", "--repo", str(repo)],
-                       capture_output=True, text=True)
-    def mut(*args):
-        return subprocess.run([sys.executable, GRAPHCTL, "mutate", "--repo", str(repo), *args],
-                              capture_output=True, text=True)
-    r1 = mut("--diff", "HEAD~1..HEAD", "--json")
-    check("mutate rc0(觀測有效)", r1.returncode == 0, r1.stderr[:300])
-    d = _j.loads(r1.stdout.strip().splitlines()[-1])
-    check("★schema:mutants/buckets/kill_rate 鍵齊★",
-          all(k in d for k in ("mutants", "buckets", "kill_rate")), str(d)[:200])
-    kinds = {m["bucket"] for m in d["mutants"]}
-    check("★蓋到的變異被殺(killed 桶非空)★", "killed" in kinds, str(d["mutants"])[:400])
-    check("★沒蓋到的變異存活(survived 桶非空=測試網的洞)★", "survived" in kinds,
-          str(d["mutants"])[:400])
-    surv = [m for m in d["mutants"] if m["bucket"] == "survived"]
-    check("活口帶 file:line+變異描述", surv and all(m.get("line") and m.get("op") for m in surv),
-          str(surv)[:200])
-    # ③ cap 決定性:兩跑結果一致
-    r2 = mut("--diff", "HEAD~1..HEAD", "--json")
-    d2 = _j.loads(r2.stdout.strip().splitlines()[-1])
-    check("★決定性:同 range 兩跑 mutants 序列一致★",
-          [(m["line"], m["op"], m["bucket"]) for m in d["mutants"]] ==
-          [(m["line"], m["op"], m["bucket"]) for m in d2["mutants"]], "兩跑不一致")
-    # ② baseline 紅 → rc2 fail loud
-    tst.write_text(TST + "assert False  # 故意紅\n", encoding="utf-8")
-    git("add", "-A"); git("commit", "-qm", "red")
-    r3 = mut("--diff", "HEAD~2..HEAD~1", "--json")
-    check("★baseline 非綠=rc2 fail loud(殺率不可被紅測試灌水)★", r3.returncode == 2,
-          f"rc={r3.returncode} {r3.stderr[:200]}")
-    git("revert", "-n", "HEAD"); git("commit", "-qm", "unred")
-    # ④ no-test-selected:動一個沒有 testmap 邊的新檔
-    orphan = repo / "orphan_mod.py"
-    orphan.write_text("def lonely(z):\n    return z > 5\n", encoding="utf-8")
-    git("add", "-A"); git("commit", "-qm", "orphan")
-    r4 = mut("--diff", "HEAD~1..HEAD", "--json")
-    d4 = _j.loads(r4.stdout.strip().splitlines()[-1])
-    check("★無測試邊的檔=no-test-selected 桶(不混報測試洞)★",
-          any(m["bucket"] == "no-test-selected" for m in d4["mutants"]), str(d4)[:300])
-    # ⑥ 互斥 rc 合約
-    r5 = mut()
-    check("無 --diff=rc2", r5.returncode == 2, str(r5.returncode))
 
+# ⛔ t_mutate_diff 已隨機制退場(2026-08-26 建了沒人跑批次裁定;共用 fixture 保留)
 
-
-
-# ── 派工編制資料化(Projects/派工編制資料化_計劃):_TIER_ROSTER+loop next roster+status --roster ──
 def _mk_roster_fixture():
     """vault+repo+design standard panel 帳(r1 兩席)+dispatch 目錄。"""
     import json as _j
@@ -22537,6 +22374,7 @@ def _mk_roster_fixture():
         d.mkdir(parents=True, exist_ok=True)
         (d / name).write_text(_j.dumps(obj, ensure_ascii=False), encoding="utf-8")
     return vault, repo, spec, rec, disp
+
 
 
 def t_tier_roster_table():

@@ -106,7 +106,7 @@ summary: |-
 
 ### T7（包⑥）離線校準腳本
 
-**Create**: `governance/eval/canary_calibration.py`（stdlib）；**Test**: 冒煙進 test_lumos（`t_calibration_smoke`，`_need_src` 守門）
+**Create**: `governance/eval/canary_calibration.py(2026-08-26 已退場,詳建了沒人跑批次裁定)`（stdlib）；**Test**: 冒煙進 test_lumos（`t_calibration_smoke`，`_need_src` 守門）
 
 - 輸入：凍結語料目錄＋植入清單（JSON：檔、位置、型別、token）＋各配置的審查報告目錄。
 - 輸出：配置 × 型別的 caught 矩陣＋JSONL 累積帳（`governance/eval/calibration-log.jsonl`）。

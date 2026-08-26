@@ -10,7 +10,7 @@ tags:
 summary: |-
   FLAG:TECHNICAL
   KEY:2026-08-17 Landmark 跑 lumos update 後自測 2139綠/76skip/★3紅★,三紅全是引用來源 repo 資產的測試漏掛「來源 repo 專用」skip 守衛
-  KEY:①t_precommit_whitelist_drift_guard 讀 docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md ②「snr 腳本 rc0」③t_s2_snr_synthetic 跑 governance/eval/canary_snr.py——兩檔皆僅存在 toolchain 本體,vendored 專案必炸 Errno 2
+  KEY:①t_precommit_whitelist_drift_guard 讀 docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md ②「snr 腳本 rc0」③t_s2_snr_synthetic 跑 governance/eval/canary_snr.py(2026-08-26 已隨機制退場;本篇為歷史事故敘述,回歸釘樣本已換 difficulty.py)——兩檔皆僅存在 toolchain 本體,vendored 專案必炸 Errno 2
   KEY:修法=比照既有 76 支的 skip 判準(偵測 vendored 環境)把這 3 支納入;工具本身無回歸(doctor/query 冒煙皆過)
 related:
   - "[[Issues/vendored測試套件在消費端假紅]]"

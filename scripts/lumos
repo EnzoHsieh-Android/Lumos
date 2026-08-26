@@ -10461,236 +10461,11 @@ def cmd_link_candidates(code_file=None, goldset=None, repo=None, as_json=False):
 
 # ═══ diff 變異測試(S4,plan:驗證層去模型化;「植針考測試」取代「植針考人」)═══
 
-_MUTATE_CAP_DEFAULT = 100
 
 
-def _mutate_gen(src_text, target_lines):
-    """對 python 源碼生成變異(ast NodeTransformer;字串/註解天然免疫)。
-    target_lines: set[int]——只變異這些行(diff 的 + 行)所在的節點。
-    回 [(lineno, op_desc, mutated_src)];等價變異由人裁剔除,v1 不判。"""
-    import ast
-    import copy
-    try:
-        tree = ast.parse(src_text)
-    except SyntaxError:
-        return []
-    muts = []
-    _CMP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.GtE, ast.GtE: ast.Lt,
-            ast.Gt: ast.LtE, ast.LtE: ast.Gt}
-
-    # 收集候選:(node, 描述, 產生 mutated tree 的函式)
-    cands = []
-    for node in ast.walk(tree):
-        ln = getattr(node, "lineno", None)
-        if ln is None or ln not in target_lines:
-            continue
-        if isinstance(node, ast.Compare):
-            for i, op in enumerate(node.ops):
-                rep = _CMP.get(type(op))
-                if rep:
-                    cands.append((ln, f"cmp:{type(op).__name__}->{rep.__name__}", ("cmp", node, i, rep)))
-                # 僅 Compare 運算元的 int 常數 ±1(排除無關數字)
-            for operand in [node.left, *node.comparators]:
-                if isinstance(operand, ast.Constant) and isinstance(operand.value, int) \
-                        and not isinstance(operand.value, bool):
-                    cands.append((getattr(operand, "lineno", ln), f"const:{operand.value}+1",
-                                  ("const", operand, 1)))
-                    cands.append((getattr(operand, "lineno", ln), f"const:{operand.value}-1",
-                                  ("const", operand, -1)))
-        elif isinstance(node, ast.BoolOp):
-            new_op = ast.Or() if isinstance(node.op, ast.And) else ast.And()
-            cands.append((ln, f"bool:{type(node.op).__name__}->{type(new_op).__name__}",
-                          ("bool", node, new_op)))
-
-    import ast as _ast
-    for ln, desc, spec in cands:
-        tree2 = copy.deepcopy(tree)
-        # 以 (lineno,col) 定位對應節點再改(deepcopy 後 node 身分變了)
-        kind = spec[0]
-        target_ln = getattr(spec[1], "lineno", ln)
-        target_col = getattr(spec[1], "col_offset", None)
-        applied = False
-        for n2 in _ast.walk(tree2):
-            if getattr(n2, "lineno", None) != target_ln or getattr(n2, "col_offset", None) != target_col:
-                continue
-            if kind == "cmp" and isinstance(n2, _ast.Compare):
-                n2.ops[spec[2]] = spec[3]()
-                applied = True; break
-            if kind == "const" and isinstance(n2, _ast.Constant):
-                n2.value = n2.value + spec[2]
-                applied = True; break
-            if kind == "bool" and isinstance(n2, _ast.BoolOp):
-                n2.op = spec[2]
-                applied = True; break
-        if applied:
-            try:
-                muts.append((ln, desc, _ast.unparse(tree2)))
-            except Exception:
-                pass
-    return muts
 
 
-def _mutate_diff_targets(root, diff_range):
-    """回 {rel_py_path: set(新增/修改行號)}——只取 unified diff 的 + 行。"""
-    import subprocess
-    r = subprocess.run(["git", "-C", str(root), "diff", "--unified=0", "--no-color", diff_range],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return None
-    targets = {}
-    cur = None
-    new_ln = 0
-    for line in r.stdout.splitlines():
-        if line.startswith("+++ b/"):
-            cur = line[6:]
-            if not cur.endswith(".py"):
-                cur = None
-        elif line.startswith("@@") and cur:
-            import re as _re
-            m = _re.search(r"\+(\d+)", line)
-            new_ln = int(m.group(1)) if m else 0
-        elif cur and line.startswith("+") and not line.startswith("+++"):
-            targets.setdefault(cur, set()).add(new_ln)
-            new_ln += 1
-        elif cur and not line.startswith("-"):
-            new_ln += 1
-    return targets
-
-
-def cmd_mutate(diff_range=None, repo=None, as_json=False, budget=None):
-    """[S4] diff 變異測試 v1。對 diff + 行生成 ast 變異→worktree 套用→testmap 選測跑→殺/活。
-    rc0=觀測有效;基礎設施失敗(worktree/baseline 全紅/git)=rc2 fail loud;--diff 缺=rc2。
-    ★恆觀測不進閘★;cap 決定性(sha256 排序);baseline 非綠 abort(殺率不被紅測試灌水)。"""
-    import json
-    import subprocess
-    import tempfile
-    import shutil
-    import hashlib
-    if not diff_range:
-        print("擋下:mutate 要用 --diff <起點..終點> 指定要變異哪段改動", file=sys.stderr)
-        return 2
-    root = _anchor_repo_root(repo)
-    if root is None:
-        print("擋下:找不到 git 專案根目錄", file=sys.stderr)
-        return 2
-    cap = int(budget) if budget else _MUTATE_CAP_DEFAULT
-    targets = _mutate_diff_targets(root, diff_range)
-    if targets is None:
-        print(f"擋下:git 算不出這段差異,確認起點終點存不存在: {diff_range}", file=sys.stderr)
-        return 2
-    # 選測:對原始 diff range 跑 testmap affected 取聯集
-    tm = subprocess.run([sys.executable, str(Path(__file__).resolve()), "testmap", "affected",
-                         "--diff", diff_range, "--repo", str(root), "--json"],
-                        capture_output=True, text=True)
-    tests_for = set()
-    map_stale = False
-    try:
-        tmd = json.loads(tm.stdout.strip().splitlines()[-1])
-        tests_for = {s["test"] for s in tmd.get("suggests", [])}
-        map_stale = bool(tmd.get("stale"))
-    except (ValueError, IndexError, KeyError):
-        tests_for = set()
-    # 生成全部變異(決定性 sha256 排序後套 cap)
-    all_muts = []
-    for rel, lines in sorted(targets.items()):
-        try:
-            src_text = (root / rel).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        for ln, desc, msrc in _mutate_gen(src_text, lines):
-            key = hashlib.sha256(f"{diff_range}|{rel}:{ln}|{desc}".encode()).hexdigest()
-            all_muts.append({"file": rel, "line": ln, "op": desc, "_src": msrc, "_key": key})
-    all_muts.sort(key=lambda m: m["_key"])
-    truncated = max(0, len(all_muts) - cap)
-    run_muts = all_muts[:cap]
-
-    # baseline 前置只跑一次(乾淨樹選測集全綠才續;非綠 abort——殺率不可信)
-    # ——★baseline 提到迴圈外★:原每變異重跑 baseline=N× 浪費(自審抓回);選測集乾淨結果與變異無關。
-    has_work = bool(run_muts) and bool(tests_for)
-    if has_work:
-        wt0 = Path(tempfile.mkdtemp(prefix="lumos-mut-base-"))
-        try:
-            r0 = subprocess.run(["git", "-C", str(root), "worktree", "add", "--detach", "-q",
-                                 str(wt0), "HEAD"], capture_output=True, text=True)
-            if r0.returncode != 0:
-                print(f"擋下:建不出臨時工作副本(git worktree): {r0.stderr[:200]}", file=sys.stderr)
-                return 2
-            for tst in sorted(tests_for):
-                tp = wt0 / tst
-                if not tp.exists():
-                    continue
-                try:
-                    br = subprocess.run([sys.executable, str(tp)], cwd=str(wt0),
-                                        capture_output=True, text=True, timeout=300)
-                except subprocess.TimeoutExpired:
-                    print("擋下:還沒開始變異,光跑一次基準測試就超時了——選到的測試太重,用 --mutation-budget 縮小範圍,或改成逐檔測試",
-                          file=sys.stderr)
-                    return 2
-                if br.returncode != 0:
-                    print("擋下:還沒變異,基準測試在乾淨的程式碼上就已經紅了(或不穩定),這樣算出來的殺率不能信,先停",
-                          file=sys.stderr)
-                    return 2
-        finally:
-            subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(wt0)],
-                           capture_output=True)
-            shutil.rmtree(wt0, ignore_errors=True)
-
-    results = []
-    for m in run_muts:
-        if not tests_for:
-            m2 = {k: v for k, v in m.items() if not k.startswith("_")}
-            m2["bucket"] = "no-test-selected"
-            results.append(m2)
-            continue
-        wt = Path(tempfile.mkdtemp(prefix="lumos-mut-"))
-        try:
-            r = subprocess.run(["git", "-C", str(root), "worktree", "add", "--detach", "-q",
-                                str(wt), "HEAD"], capture_output=True, text=True)
-            if r.returncode != 0:
-                print(f"擋下:建不出臨時工作副本(git worktree): {r.stderr[:200]}", file=sys.stderr)
-                return 2
-            # 套變異(baseline 已在迴圈外驗過)
-            (wt / m["file"]).write_text(m["_src"], encoding="utf-8")
-            killed = False
-            for tst in sorted(tests_for):
-                tp = wt / tst
-                if not tp.exists():
-                    continue
-                try:
-                    tr = subprocess.run([sys.executable, str(tp)], cwd=str(wt),
-                                        capture_output=True, text=True, timeout=120)
-                except subprocess.TimeoutExpired:
-                    killed = True   # timeout 算殺(變異致無窮迴圈)
-                    break
-                if tr.returncode != 0:
-                    killed = True
-                    break
-            m2 = {k: v for k, v in m.items() if not k.startswith("_")}
-            m2["bucket"] = "killed" if killed else "survived"
-            results.append(m2)
-        finally:
-            subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(wt)],
-                           capture_output=True)
-            shutil.rmtree(wt, ignore_errors=True)
-
-    buckets = {}
-    for m in results:
-        buckets[m["bucket"]] = buckets.get(m["bucket"], 0) + 1
-    scored = buckets.get("killed", 0) + buckets.get("survived", 0)
-    kill_rate = round(buckets.get("killed", 0) / scored, 4) if scored else None
-    out = {"diff": diff_range, "mutants": results, "buckets": buckets,
-           "kill_rate": kill_rate, "truncated": truncated, "map_stale": map_stale}
-    if as_json:
-        print(json.dumps(out, ensure_ascii=False))
-    else:
-        print(f"mutate {diff_range}: {len(results)} 變異 | 殺率 {kill_rate} | 桶 {buckets}"
-              + (f" | 截斷 {truncated}" if truncated else "")
-              + (" | ⚠map_stale" if map_stale else ""))
-        for m in results:
-            if m["bucket"] == "survived":
-                print(f"  ⛑活口 {m['file']}:{m['line']} {m['op']}(無測試殺得死=測試網的洞)")
-        print("  ★觀測非閘:殺得死機械變異≠殺得死真缺陷;等價變異誤列活口需人裁剔除★")
-    return 0
+# ⛔ mutate 家族已退場(2026-08-26 建了沒人跑批次裁定:消費者 2026-08-08 已裁死、治理帳 0 次;復活=有真消費者立案從 git 史撿回)
 
 
 def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
@@ -15489,7 +15264,6 @@ HELP_WHEN = {
     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
     "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
     "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
-    "mutate": "對這段 diff 做變異測試,看測試網密不密。",
     "link-candidates": "哪些 code 沒有任何筆記連到它,列候選;要不要補由人裁。",
     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
@@ -15977,12 +15751,6 @@ def main():
     p.add_argument("--spec", dest="qc_spec", required=True, metavar="凍結快照.md")
     p.add_argument("--json", action="store_true", dest="qc_json")
 
-    p = sub.add_parser("mutate", help="[S4 diff 變異測試] 對 diff+行生成 ast 變異驗測試網(觀測 rc0;基建失敗 rc2)")
-    p.add_argument("--diff", dest="mut_diff", default=None, metavar="range", help="git diff range(必填)")
-    p.add_argument("--repo", dest="mut_repo", default=".")
-    p.add_argument("--mutation-budget", dest="mut_budget", type=int, default=None, help=f"變異上限 cap(預設 {_MUTATE_CAP_DEFAULT},超限 sha256 排序取前 N)")
-    p.add_argument("--json", action="store_true", dest="mut_json")
-
     p = sub.add_parser("link-candidates", help="[補鏈候選] code→節點連結缺失候選生成(唯讀恆 rc0/不寫檔;人裁後補引用;輸入壞損 rc2)")
     p.add_argument("lc_file", nargs="?", default=None, metavar="code檔", help="單檔模式(與 --all-goldset 互斥)")
     p.add_argument("--all-goldset", dest="lc_goldset", default=None, metavar="goldset.json", help="對 goldset edit 卷全部 file 掃彙總(路徑為參數,不寫死)")
@@ -16121,9 +15889,6 @@ def main():
         return cmd_quote_check(args.qc_report, args.qc_spec, as_json=args.qc_json)
     if args.cmd == "seat-check":
         return cmd_seat_check(args.sc_report, args.sc_dispatch, ledger=args.sc_ledger, as_json=args.sc_json)
-    if args.cmd == "mutate":
-        return cmd_mutate(diff_range=args.mut_diff, repo=args.mut_repo,
-                          as_json=args.mut_json, budget=args.mut_budget)
     if args.cmd == "link-candidates":
         return cmd_link_candidates(code_file=args.lc_file, goldset=args.lc_goldset,
                                    repo=args.lc_repo, as_json=args.lc_json)
