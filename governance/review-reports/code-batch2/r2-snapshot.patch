@@ -1,0 +1,419 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 1148579..75560a0 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1469,21 +1469,21 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+             warn_soft([_nudge], _nudge, "用這個指令把工具鏈和紀律區塊更新到最新:lumos update")
+             print()
+ 
+     # Check F: linter 宣告檔健康(lint接線收口 [S1]:SARIF 橋最後一哩——宣告了跑不動的
+     # 東西,審查就漏那些告警;有宣告才驗,無宣告一行跳過不擋。路徑解析走本函式既有的
+     # _repo_root_from_env(★不是本函式那個只認 docs 佈局的區域 repo_root——它對
+     # standalone vault 是 None,[F] 會整段靜默消失;_repo_root_from_env 有 standalone
+     # 回退恆非 None。也不得用 env.vault 直拼——消費 repo 宣告在 repo root,直拼永遠
+     # 讀不到=靜默假綠,設計審 r2 d-f2;實作首版就踩了前者,測試抓紅後修★)。
+     if True:
+-        _lf = _lint_load_and_validate(_repo_root_from_env(env))
++        _lf = _lint_load_and_validate(_vault_repo_root(env))   # git 感知解析(ext-f1:_repo_root_from_env 對 standalone 回 parent,與 .git 在 vault 內的既有定義互斥)
+         section("F", "linter 宣告檔還健康嗎(.lumos/lint.json;沒宣告就跳過)")
+         if not _lf["declared"]:
+             ok("這個 repo 沒有宣告 linter 橋(.lumos/lint.json 不存在),未宣告跳過")
+         elif _lf["parse_error"]:
+             warn([f".lumos/lint.json:{_lf['parse_error']}"],
+                  ".lumos/lint.json 不是合法 JSON——宣告壞掉=橋整條斷,審查吃不到 lint 告警:",
+                  "修好 JSON;格式規範與真跑驗證:lumos lint-check --smoke")
+             gov_events.append({"gate": "check-lint-decl", "kind": "warned", "hard": False,
+                                "nodes": [], "note": "lint.json parse error"})
+         elif _lf["problems"]:
+@@ -4744,21 +4744,21 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
+     n_round = sum(1 for r in rounds if "round" in r)
+     if panel and rounds and n_round != len(rounds):
+         print("擋下:--panel 模式要求這個編號的每筆記錄都帶輪次,現在有記錄沒帶(混用或舊格式),不讀——不然會多算出一個不存在的 phantom 輪",
+               file=sys.stderr)
+         return 2
+     if disposal:
+         # 留痕解析根:預設=寫側同源的 _vault_repo_root(對稱);顯式 --repo 覆蓋
+         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
+         _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
+         return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
+-                                     bad_linenos=bad_linenos, env=env, roster_flag=roster, repo=repo)
++                                     bad_linenos=bad_linenos, env=env, roster=roster, repo=repo)
+     if not panel and n_round > 0:
+         print("擋下:這個編號的記錄帶了輪次(多人審格式),但你沒加 --panel;不加的話一輪裡 W 個人的記錄會被當成 W 輪,所以不算",
+               file=sys.stderr)
+         return 2
+     if settle is not None:
+         return _loop_status_settle(rounds, n_badlines, loop_id, settle, spec, repo, env=env)
+     if panel:
+         try:
+             return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec, env=env)
+         except OSError as e:   # G3 --spec 不可讀:與 legacy G1 對稱 rc2(code-loop r2 折入)
+@@ -5050,21 +5050,25 @@ def _roster_observe(env, loop_id, rounds, repo, only_rid=None, anomalies_only=Fa
+     anomalies_only=只印異常六種(external_missing/單家族/真兼任/命名歧義/unknown 降級/shortfall),
+     抑制摘要與診斷四種;回傳本次印出的異常種類清單(留痕用)。同一實作服務兩種呼叫,禁抄改。"""
+     anomalies = []
+     def _quiet(msg):
+         if not anomalies_only:
+             print(msg)
+     kind = _roster_kind(loop_id)
+     if kind is None:
+         _quiet(f"[roster] {loop_id}:看不出是設計審還是代碼審(名稱 code 開頭但不是 code- 格式),跳過派工對帳")
+         return anomalies
+-    tier = next((r.get("tier") for r in rounds if r.get("tier")), None)
++    # only_rid(問閘單輪)時 tier 取「該輪自己」的紀錄——跨輪 tier 不同時拿第一筆會查錯編制表,
++    # high 輪的 fail-closed 警訊被降級成 standard 的軟提醒(code-batch2 s1-f1,席位純 CLI 重現)
++    _tier_pool = [r for r in rounds if r.get("round") == only_rid] if only_rid else rounds
++    tier = next((r.get("tier") for r in _tier_pool if r.get("tier")), None) \
++        or next((r.get("tier") for r in rounds if r.get("tier")), None)
+     _quiet(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'}")
+     if tier is None:
+         _quiet("[roster] 這個編號沒指定過分級(舊格式或還沒記錄),沒有編制表可以對")
+         return anomalies
+     entry = _TIER_ROSTER.get((kind, tier))
+     if entry is None:
+         _quiet(f"[roster] 無編制宣告:{kind}/{tier} 這個組合沒定義該派誰,跳過對帳")
+         return anomalies
+     root = Path(repo).resolve() if repo else _vault_repo_root(env)
+     loop_dir = root / "governance" / "review-reports" / loop_id
+@@ -10081,21 +10085,21 @@ def _quote_rows(rtext, stext):
+         # 連續引句子字串必 miss——空白全剝再比一次(存在性檢查,黏合誤中風險可忽略:
+         # 引句有 10 字下限,跨句黏合要恰好湊出同字序)
+         anchored = nq in hay or nq.replace(" ", "") in hay_ns
+         rows.append({"quote": q, "ok": (not too_short) and anchored,
+                      **({"too_short": True} if too_short else {})})
+     for _ in range(n_markers - len(quotes)):
+         rows.append({"quote": "(引號未閉合/開閉型態不符,無法抽取)", "ok": False, "malformed": True})
+     return rows
+ 
+ 
+-def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster_flag=False, repo=None):
++def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None):
+     """[T4] 處置閘(design-loop重設計 三):四條合取,全部讀側可重算——
+     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
+     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
+     ④quote-check 對 carrier 的帳面 snapshot 全 ok。
+     ★canary caught/missed 不進合取(d4:觀測非閘;missed 不作廢 findings)★。
+     壞行 fail-closed(r1 四席重疊:原壞行靜默跳過→latest 判錯輪可偽 PASS);
+     round-id 非連續重現 rc2(reuse panel 守衛;原 OrderedDict 首現序拿錯輪)。
+     留痕路徑:非絕對路徑以 repo root(root)解析(與寫側落帳慣例對稱)。
+     exit 0=收斂 / 1=未過 / 2=帳面損壞或參數錯。"""
+     from collections import OrderedDict
+@@ -10280,22 +10284,22 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+     nn = sum(1 for r in latest if r.get("kind") == "none")
+     print(f"[disposal] canary(觀測,不進合取): caught {ca} / missed {mi}"
+           + (f" / none {nn}(協議停用,d5)" if nn else "")
+           + ("——missed 席 findings ★不作廢★(d4),供跨輪累積帳" if mi else ""))
+     for i, r in enumerate(latest, 1):
+         print(f"  {rid}.{i}\t{r.get('kind','?')}\t{r.get('severity','-')}\t{r.get('auditor','')}")
+ 
+     def _roster_tail():
+         # roster對帳併入問閘 [S1]:問閘當輪異常轉述(異常才發聲;advisory 恆不動 rc)。
+         # 三個提前 return 2 路(G3 spec 讀不到/一輪多處置帳/findings 壞值)刻意不掛——
+-        # 帳面異常優先於席位對帳(r3 e-f2)。roster_flag 同帶=全史已印,尾端跳過(r2 d-f1)。
+-        if roster_flag or str(rid).startswith("__"):
++        # 帳面異常優先於席位對帳(r3 e-f2)。roster 同帶=全史已印,尾端跳過(r2 d-f1)。
++        if roster or str(rid).startswith("__"):
+             return   # __seqN 合成鍵:round-less 無派工快照可對,沉默勝過錯誤示警(std-r1 s1-f2)
+         try:
+             kinds = _roster_observe(env, loop_id, rounds, repo, only_rid=rid, anomalies_only=True)
+             if kinds:
+                 # 留痕([S1c]):收集完、印完才一次性寫;寫入自身再包一層,失敗只損留痕不吞輸出(r3 e-f3)
+                 try:
+                     _ldir = (Path(repo).resolve() if repo else _vault_repo_root(env)) / "governance" / "review-reports" / loop_id
+                     _ldir.mkdir(parents=True, exist_ok=True)
+                     import datetime as _dt
+                     with open(_ldir / "roster-alerts.log", "a", encoding="utf-8") as _f:
+@@ -10524,21 +10528,21 @@ def cmd_link_candidates(code_file=None, goldset=None, repo=None, as_json=False):
+ 
+ 
+ 
+ 
+ # ═══ diff 變異測試(S4,plan:驗證層去模型化;「植針考測試」取代「植針考人」)═══
+ 
+ 
+ 
+ 
+ 
+-# ⛔ mutate 家族已退場(2026-08-26 建了沒人跑批次裁定:消費者 2026-08-08 已裁死、治理帳 0 次;復活=有真消費者立案從 git 史撿回)
++# ⛔ mutate 家族已退場(2026-08-26,詳 Projects/建了沒人跑批次裁定_計劃:消費者 2026-08-08 已裁死、治理帳 0 次;復活=有真消費者立案從 git 史撿回)
+ 
+ 
+ def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
+     """[S1 有講沒做對帳,2026-08-06](plan:Projects/驗證層自證三件_計劃;borrow evidra
+     protocol_violation)。收貨第三道(前兩道=quote-check/refcheck 既有直用):
+     - unreported = dispatch 宣告的 materials 在報告零觸及(路徑/檔名字串機械比對;
+       `lens` 為觀測欄位★不進判定★——抽象詞無機械 oracle,plan r2 折入)
+     - out_of_scope = 報告引句(「引句：「…」」抽取,同 quote-check 單一實作)錨不進
+       ★任何一份★ material(scope 三集合:materials=必查;repo 查證引用恆合法——本檢查
+       只驗引句錨定,不碰 file:line 證據;引句出界才記越界)
+@@ -10976,21 +10980,21 @@ def _lint_load_and_validate(repo_root):
+     out = {"declared": False, "parse_error": None, "problems": []}
+     if repo_root is None:
+         return out
+     p = Path(repo_root) / ".lumos" / "lint.json"
+     if not p.exists():
+         return out
+     out["declared"] = True
+     try:
+         with open(p, encoding="utf-8") as f:
+             config = json.load(f)
+-    except (OSError, json.JSONDecodeError) as e:
++    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:   # 編碼損壞也走受控紅,不 traceback(ext-f2)
+         out["parse_error"] = str(e)
+         return out
+     out["problems"] = _lintcheck_validate(config)
+     out["config"] = config
+     return out
+ 
+ 
+ def cmd_lint_check(repo=None, smoke=False, as_json=False):
+     """檢查 .lumos/lint.json 宣告健康度(收「宣告了跑不動的東西」破口)。
+     靜態層(恆跑):格式校驗(見 _lintcheck_validate)。--smoke:真跑每條命令、驗有無產出可解析
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index dd4f811..267b0e0 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3844,59 +3844,123 @@ def t_disposal_roster_tail():
+     sha = hashlib.sha256(spec.read_bytes()).hexdigest()
+     # 帶齊處置帳欄位讓 gate 可跑(report/snapshot 同檔充當)
+     rows = [_rec("code-tail", "r1", auditor="s1", findings_set=["a"], folded_set=["a"], accepted_set=[],
+                  report={"path": str(spec), "sha256": sha}, snapshot={"path": str(spec), "sha256": sha},
+                  result_sha256=sha, reviewed_sha256=sha)]
+     log.write_text("\n".join(_j.dumps(r) for r in rows) + "\n")
+     r = run(vault, "loop", "status", "code-tail", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
+     check("tail: 異常輪印轉述行(外家 finder 缺)", "[roster]" in r.stdout and ("external_missing" in r.stdout or "單家族" in r.stdout), r.stdout[-400:])
+     check("tail: 異常留痕檔多一行", (ldir / "roster-alerts.log").exists(), str(list(ldir.iterdir())))
+     check("tail: 摘要/診斷行被抑制(無「實派」字樣)", "實派" not in r.stdout, r.stdout[-300:])
+-    # __seqN(round-less)fixture:零 roster 行
++    # __seqN(round-less)fixture:零 roster 行——★loop 目錄+快照必須存在★,
++    # 否則拔掉 __seqN 跳過也會被「無快照」抑制吞掉=假釘(code-batch2 s3-f2 突變實測抓到)
++    ldir2 = vault.parent / "governance" / "review-reports" / "code-tail2"
++    ldir2.mkdir(parents=True)
++    (ldir2 / "r1-dispatch.json").write_text(_j.dumps({"seats": [{"seat": "s1", "auditor": "sonnet"}]}))
+     log2 = vault.parent / ".canary-log.jsonl"
+     rows2 = [_rec("code-tail2", None, auditor="s1", findings_set=["a"], folded_set=["a"], accepted_set=[],
+                   report={"path": str(spec), "sha256": sha}, snapshot={"path": str(spec), "sha256": sha},
+                   result_sha256=sha, reviewed_sha256=sha)]
+     log2.write_text("\n".join(_j.dumps(r) for r in rows2) + "\n")
+     r2 = run(vault, "loop", "status", "code-tail2", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
+-    check("tail: __seqN 合成鍵零 roster 行", "[roster]" not in r2.stdout, r2.stdout[-300:])
++    check("tail: __seqN 合成鍵零 roster 行(快照在場,突變驗證:拔跳過→印出翻紅)", "[roster]" not in r2.stdout, r2.stdout[-300:])
++    # s2-f2 釘:健康輪零輸出且 log 無新行——編制滿員 fixture(design/standard 3 claude+arch 也 claude 家)
++    ldir3 = vault.parent / "governance" / "review-reports" / "ok-loop"
++    ldir3.mkdir(parents=True)
++    (ldir3 / "r1-dispatch.json").write_text(_j.dumps({"seats": [
++        {"seat": "s1", "auditor": "sonnet"}, {"seat": "s2", "auditor": "sonnet"},
++        {"seat": "s3", "auditor": "sonnet"}, {"seat": "arch", "auditor": "sonnet"},
++        {"seat": "ext", "auditor": "codex"}]}))
++    rows3 = [_rec("ok-loop", "r1", auditor="s1", tier="standard", findings_set=["a"], folded_set=["a"],
++                  accepted_set=[], report={"path": str(spec), "sha256": sha},
++                  snapshot={"path": str(spec), "sha256": sha}, result_sha256=sha, reviewed_sha256=sha)]
++    log2.write_text("\n".join(_j.dumps(r) for r in rows3) + "\n")
++    r3 = run(vault, "loop", "status", "ok-loop", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
++    check("tail: 健康輪(席滿+外家在)零 roster 行", "[roster]" not in r3.stdout, r3.stdout[-400:])
++    check("tail: 健康輪 log 無新檔", not (ldir3 / "roster-alerts.log").exists(), "")
++    # s1-f1 釘:跨輪 tier 不同——r1 standard、r2 high(判定輪),對帳要用 high 編制(fail-closed 措辭)
++    ldir4 = vault.parent / "governance" / "review-reports" / "code-xtier"
++    ldir4.mkdir(parents=True)
++    (ldir4 / "r2-dispatch.json").write_text(_j.dumps({"seats": [{"seat": "s1", "auditor": "sonnet"}]}))
++    rows4 = [_rec("code-xtier", "r1", auditor="s1", tier="standard", findings_set=["a"], folded_set=["a"],
++                  accepted_set=[], report={"path": str(spec), "sha256": sha},
++                  snapshot={"path": str(spec), "sha256": sha}, result_sha256=sha, reviewed_sha256=sha),
++             _rec("code-xtier", "r2", auditor="s1", tier="high", findings_set=["b"], folded_set=["b"],
++                  accepted_set=[], report={"path": str(spec), "sha256": sha},
++                  snapshot={"path": str(spec), "sha256": sha}, result_sha256=sha, reviewed_sha256=sha)]
++    log2.write_text("\n".join(_j.dumps(r) for r in rows4) + "\n")
++    r4 = run(vault, "loop", "status", "code-xtier", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
++    check("tail: 跨輪 tier 用判定輪的 high 編制(fail-closed 轉述出現;s1-f1 純 CLI 重現修)",
++          "fail-closed" in r4.stdout and "external_missing" in r4.stdout, r4.stdout[-500:])
++    # s2-f2 釘:對帳段炸例外→rc 不變+降級一行(以壞 dispatch 逼不動,改 monkeypatch 層級:
++    # 用環境開關?——採實體打樁:把 loop 目錄換成無法列目錄的檔案,逼 _roster_observe 內部炸)
++    ldir5 = vault.parent / "governance" / "review-reports" / "code-boom"
++    ldir5.mkdir(parents=True)
++    (ldir5 / "r1-dispatch.json").write_text("{{{半包壞 JSON")   # dispatch 壞=內部自行跳過,不炸——
++    rows5 = [_rec("code-boom", "r1", auditor="s1", tier="standard", findings_set=["a"], folded_set=["a"],
++                  accepted_set=[], report={"path": str(spec), "sha256": sha},
++                  snapshot={"path": str(spec), "sha256": sha}, result_sha256=sha, reviewed_sha256=sha)]
++    log2.write_text("\n".join(_j.dumps(r) for r in rows5) + "\n")
++    r5 = run(vault, "loop", "status", "code-boom", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
++    r5b = run(vault, "loop", "status", "code-boom", "--disposal", "--roster", "--spec", str(spec), "--repo", str(vault.parent))
++    check("tail: 壞 dispatch 快照不炸且 rc 與同帶一致(降級路徑)", r5.returncode == r5b.returncode, f"{r5.returncode} vs {r5b.returncode}")
+     print("  ✓ t_disposal_roster_tail")
+ 
+ 
+ def t_doctor_lint_declaration():
+     """lint接線收口 [S1]:doctor [F] 檢——宣告在 repo root、vault 在 docs/x-knowledge
+     (=Landmark 形狀,釘 r2 d-f2「env.vault 直拼永遠讀不到」);無宣告跳過不擋、
+-    壞 JSON/壞 schema 紅、合法綠。翻紅釘:把 [F] 的路徑解析改 env.vault 直拼 → 第 3、4 條翻紅。"""
++    壞 JSON/壞 schema 紅、合法綠。翻紅釘:把 [F] 的路徑解析改 env.vault 直拼 → 第 2-5 條翻紅
++    (壞宣告全被吞成「無宣告」假綠;code-batch2 s3-f3 突變實測校正原「第 3、4 條」低估)。"""
+     import json as _j, shutil as _sh
+     # Landmark 形狀 fixture:repo/docs/proj-knowledge 佈局(宣告在 repo root)
+     src = mkvault()
+     repo_root = Path(tempfile.mkdtemp(prefix="gctl-lintdecl-")) / "repo"
+     vault = repo_root / "docs" / "proj-knowledge"
+     vault.parent.mkdir(parents=True)
+     _sh.copytree(src, vault)
++    (repo_root / ".git").mkdir()   # git 感知解析(_vault_repo_root)的錨——真實 repo 必有
+     # 無宣告
+     r = run(vault, "doctor", "--ci")
+     check("[F] 無宣告:輸出含未宣告跳過", "未宣告跳過" in r.stdout, r.stdout[-400:])
+     # 壞 JSON
+     (repo_root / ".lumos").mkdir(exist_ok=True)
+     (repo_root / ".lumos" / "lint.json").write_text("{{{壞")
+     r = run(vault, "doctor", "--ci")
+     check("[F] 壞 JSON:rc1 且訊息白話", r.returncode == 1 and "不是合法 JSON" in r.stdout, f"rc={r.returncode}")
+     # 壞 schema(value 非 list)
+     (repo_root / ".lumos" / "lint.json").write_text(_j.dumps({"kt": "not-a-list"}))
+     r = run(vault, "doctor", "--ci")
+     check("[F] 壞 schema:rc1 且列出問題", r.returncode == 1 and "宣告問題" in r.stdout, f"rc={r.returncode}")
+     # 合法宣告(Landmark 形狀:宣告在 repo root、vault 在 docs/ 下——直拼 vault 讀不到這份)
+     (repo_root / ".lumos" / "lint.json").write_text(_j.dumps({"kt": ["detekt {LINT_SARIF_OUT}"]}))
+     r = run(vault, "doctor", "--ci")
+     check("[F] 合法宣告(Landmark 形狀):rc0 且格式健康", r.returncode == 0 and "格式健康" in r.stdout, f"rc={r.returncode} {r.stdout[-300:]}")
+     check("[F] 健康訊息講明 smoke 留手動", "留手動" in r.stdout, "")
++    # ext-f2 釘:編碼損壞=受控紅不 traceback
++    (repo_root / ".lumos" / "lint.json").write_bytes(b"\xff\xfe\x00 broken bytes")
++    rb = run(vault, "doctor", "--ci")
++    check("[F] 編碼損壞:受控紅(訊息白話,無 traceback)", rb.returncode == 1
++          and "不是合法 JSON" in rb.stdout and "Traceback" not in rb.stderr, f"rc={rb.returncode} {rb.stderr[-150:]}")
++    (repo_root / ".lumos" / "lint.json").write_text(_j.dumps({"kt": ["detekt {LINT_SARIF_OUT}"]}))
++    # ext-f1 釘:standalone 形狀(.git 在 vault 內)→ root=vault 自身,宣告在 vault/.lumos
++    sv = mkvault()
++    (sv / ".git").mkdir()
++    (sv / ".lumos").mkdir()
++    (sv / ".lumos" / "lint.json").write_text(_j.dumps({"kt": "bad"}))
++    rs = run(sv, "doctor", "--ci")
++    check("[F] standalone(.git 在 vault 內):宣告讀得到且壞 schema 紅", rs.returncode == 1 and "宣告問題" in rs.stdout, f"rc={rs.returncode}")
++    # s3-f3:位置斷言——[F] 在最後(摘要線前、所有其他段之後;案 A 切窗類)
++    _pos_f = r.stdout.rfind("[F]")
++    _pos_sum = r.stdout.rfind("─────")
++    check("[F] 位置=其他檢之後、摘要線之前", 0 < _pos_f < _pos_sum
++          and max(r.stdout.rfind(f"[{c}]") for c in ("N", "P", "Y")) < _pos_f, f"F@{_pos_f} sum@{_pos_sum}")
+     print("  ✓ t_doctor_lint_declaration")
+ 
+ 
+ def t_canary_record_outcome_usd():
+     """自主迴圈結局帳(auto-loop-repair-v2 [S3]):record 的 --outcome/--usd 結構化欄。
+     要點:合法值落欄、主類白名單外 rc2、細類壞字元 rc2、負 usd rc2、不給不寫鍵(舊格式桶前提)。"""
+     import json as _j
+     vault = mkvault()
+     run(vault, "canary", "record", "none", "--loop", "auto-2026-08-26", "--auditor", "orch",
+         "--outcome", "pipeline_fail:api_error", "--usd", "33.9", expect_rc=0)
+@@ -15775,21 +15839,21 @@ def t_quote_check_normalization_and_verdict():
+     empty.write_text("這份報告沒有任何引句樣式\n", encoding="utf-8")
+     check("★零引句 rc2(驗不了≠通過)★", run(v, "quote-check", str(empty), "--spec", str(snap)).returncode == 2, "")
+     check("快照不存在 rc2", run(v, "quote-check", str(rpt), "--spec", str(v / "no.md")).returncode == 2, "")
+ 
+     # 單一實作鐵則(機械代理)
+     src = (Path(__file__).resolve().parent / "lumos").read_text(encoding="utf-8")
+     check("★單一實作:全檔 `def _quote_norm` 恰一處★", src.count("def _quote_norm") == 1, "")
+ 
+ 
+ 
+-# ⛔ t_calibration_smoke 已隨機制退場(2026-08-26 建了沒人跑批次裁定)
++# ⛔ t_calibration_smoke 已隨機制退場(2026-08-26 詳 Projects/建了沒人跑批次裁定_計劃)
+ 
+ 
+ def t_loop_next_disposal_cmd_actually_runs():
+     """[T5](plan:design-loop重設計_實作計畫 T5)loop next 的 disposal_cmd 模板★真跑 oracle★
+     (沿 t_loop_next_legacy 教訓:工具吐的指令必須跑得動,字串斷言只證長得對)。
+     record_cmd 原樣保留(code-loop 不受影響)。"""
+     import json as _j
+     v = mkvault()
+     spec = v / "Projects" / "t5spec.md"
+     spec.write_text("t5 spec\n規則甲。\n", encoding="utf-8")
+@@ -16209,21 +16273,21 @@ def t_disposal_gate_r3_panel_hardening():
+ 
+     # ── ③ 開閉引號型態不符→格式 miss(不得靜默消失) ──
+     bad = d / "r3bad.md"
+     bad.write_text("引句：「規則丁:保留字首不得外用,引號要成對。』\n", encoding="utf-8")
+     r3 = run(v, "quote-check", str(bad), "--spec", str(snap))
+     check("★不成對引句(「…』)以格式 miss 入列 rc1(原:整條靜默消失→零引句 rc2 或漏驗)★",
+           r3.returncode == 1, f"rc={r3.returncode}\n{r3.stdout[:200]}{r3.stderr[:150]}")
+ 
+ 
+ 
+-# ⛔ t_calibration_readback_hardening 已隨機制退場(2026-08-26 建了沒人跑批次裁定)
++# ⛔ t_calibration_readback_hardening 已隨機制退場(2026-08-26 詳 Projects/建了沒人跑批次裁定_計劃)
+ 
+ 
+ def t_quote_check_field_test_gaps():
+     """[Landmark 真場實測 2026-08-04 抓到的三個抽取/比對缺口](loop POS櫃位驗證接受RSNO_實作 r3)
+ 
+     ①標籤帶 markdown 強調/註記:席位自然寫成 `**引句**：「…」`/`**引句（Task 1，已確認）**：「…」`
+       ——原 regex 只認裸 `引句：`,三席報告全數抽零條(rc2 假「未遵守格式」)。
+     ②CJK 折行空格:快照在句中折行,norm 摺疊出「，␣Size」;報告引句連續無空格→子字串必 miss
+       (r3 實況兩條真引句被誤判編造)。修=空白全剝的 fallback 比對。
+     ③blockquote 折行:快照 `> …\\n> …` 的續行 `>` 記號進 hay→引句永遠比不中。修=norm 剝行首 >。
+@@ -22193,21 +22257,21 @@ def t_s1_seat_check():
+                                     "auditor": "sonnet"}), encoding="utf-8")
+     r = run(v, "seat-check", str(rep_oos), "--dispatch", str(disp_empty))
+     check("★空 materials=vacuous 豁免(不判 unreported/out_of_scope)★", r.returncode == 0
+           and "vacuous" in r.stdout, r.stdout[:400])
+     # e) dispatch 讀不到=rc2(壞輸入 fail loud,非觀測靜默)
+     r = run(v, "seat-check", str(rep_ok), "--dispatch", str(d / "不存在.json"))
+     check("dispatch 缺檔=rc2", r.returncode == 2, str(r.returncode))
+ 
+ 
+ 
+-# ⛔ t_s2_snr_synthetic 已隨機制退場(2026-08-26 建了沒人跑批次裁定;共用 fixture 保留)
++# ⛔ t_s2_snr_synthetic 已隨機制退場(2026-08-26 詳 Projects/建了沒人跑批次裁定_計劃;共用 fixture 保留)
+ 
+ def _hk_impact(repo, file, query, extra_env=None, top="8"):
+     import subprocess, json as _j, os
+     env = dict(os.environ)
+     if extra_env:
+         env.update(extra_env)
+     r = subprocess.run([sys.executable, GRAPHCTL, "impact", "--file", file,
+                         "--repo", str(repo), "--ranked", "--top", top,
+                         "--stdin-payload", "--json"],
+                        capture_output=True, text=True, env=env,
+@@ -22419,21 +22483,21 @@ def t_link_candidates():
+     check("★已 direct 去重(A直連/工具X掃描_實作計畫 不在)★",
+           not any("A直連" in n or "實作計畫" in n for n in cand), str(cand)[:300])
+     # CLI 互斥
+     r2 = run_lc()
+     check("無參數=rc2", r2.returncode == 2, str(r2.returncode))
+ 
+ 
+ 
+ 
+ 
+-# ⛔ t_mutate_diff 已隨機制退場(2026-08-26 建了沒人跑批次裁定;共用 fixture 保留)
++# ⛔ t_mutate_diff 已隨機制退場(2026-08-26 詳 Projects/建了沒人跑批次裁定_計劃;共用 fixture 保留)
+ 
+ def _mk_roster_fixture():
+     """vault+repo+design standard panel 帳(r1 兩席)+dispatch 目錄。"""
+     import json as _j
+     vault = mkvault()
+     repo = Path(tempfile.mkdtemp(prefix="gctl-roster-repo-"))
+     spec = repo / "spec.md"
+     spec.write_text("# s\n", encoding="utf-8")
+     def rec(loop, rid, auditor, tier="standard", sev="minor"):
+         row = {"ts": "2026-08-18T10:00:00+08:00", "kind": "none", "loop": loop,
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 0de6790..e055f5e 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -24,19 +24,19 @@
+ 
+ ## 二、九類子檔(按情境分)
+ 
+ | 你正在… | 開這個子檔 | 裡面有 |
+ |---|---|---|
+ | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export |
+ | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
+ | 改完東西,要寫回圖譜 | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop next / loop status / canary record / canary second / quote-check / seat-check / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
+-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / guard list·scaffold·bind·audit·trace·kill-add·kill / mutate / ci-wait / ci-status |
++| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / guard list·scaffold·bind·audit·trace·kill-add·kill / ci-wait / ci-status |
+ | 裝機、更新、拆機(人工操作,Claude 幾乎不用) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude hooks 各自呼叫了什麼 |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ 
+ ## 三、三條不變的規矩
+ 1. 任何任務的第一個工具呼叫是 `lumos`(search 或 context),不是 grep / Read / Explore。查完再 grep 印證。**使用者說「直接改、不用解釋」也一樣**——不解釋可以,不查不行;改 code 前至少 `lumos impact --file <檔>` 一行。
+ 2. 改了會影響行為、決策、驗證的 code,同一次工作內寫回圖譜(pre-commit 會擋「改 code 沒動圖譜」)。
+ 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。

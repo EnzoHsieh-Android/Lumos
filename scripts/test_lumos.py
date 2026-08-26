@@ -3855,14 +3855,16 @@ def t_disposal_roster_tail():
     # 否則拔掉 __seqN 跳過也會被「無快照」抑制吞掉=假釘(code-batch2 s3-f2 突變實測抓到)
     ldir2 = vault.parent / "governance" / "review-reports" / "code-tail2"
     ldir2.mkdir(parents=True)
-    (ldir2 / "r1-dispatch.json").write_text(_j.dumps({"seats": [{"seat": "s1", "auditor": "sonnet"}]}))
+    # ★快照檔名必須是 __seq0-dispatch.json★:round-less 的合成 rid=__seq0,glob 找的是這個名字;
+    # 用 r1-dispatch.json 永不匹配=拔 guard 也不紅的假釘(r2 d-f4 突變實測抓到,第二次)
+    (ldir2 / "__seq0-dispatch.json").write_text(_j.dumps({"seats": [{"seat": "s1", "auditor": "sonnet"}]}))
     log2 = vault.parent / ".canary-log.jsonl"
     rows2 = [_rec("code-tail2", None, auditor="s1", findings_set=["a"], folded_set=["a"], accepted_set=[],
                   report={"path": str(spec), "sha256": sha}, snapshot={"path": str(spec), "sha256": sha},
                   result_sha256=sha, reviewed_sha256=sha)]
     log2.write_text("\n".join(_j.dumps(r) for r in rows2) + "\n")
     r2 = run(vault, "loop", "status", "code-tail2", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
-    check("tail: __seqN 合成鍵零 roster 行(快照在場,突變驗證:拔跳過→印出翻紅)", "[roster]" not in r2.stdout, r2.stdout[-300:])
+    check("tail: __seqN 合成鍵零 roster 行(縱深雙防:tier 只認判定輪+startswith guard,兩道齊拔才會響——單拔 guard 由 d-f1 規則接住)", "[roster]" not in r2.stdout, r2.stdout[-300:])
     # s2-f2 釘:健康輪零輸出且 log 無新行——編制滿員 fixture(design/standard 3 claude+arch 也 claude 家)
     ldir3 = vault.parent / "governance" / "review-reports" / "ok-loop"
     ldir3.mkdir(parents=True)
@@ -3891,6 +3893,20 @@ def t_disposal_roster_tail():
     r4 = run(vault, "loop", "status", "code-xtier", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
     check("tail: 跨輪 tier 用判定輪的 high 編制(fail-closed 轉述出現;s1-f1 純 CLI 重現修)",
           "fail-closed" in r4.stdout and "external_missing" in r4.stdout, r4.stdout[-500:])
+    # d-f1 釘:判定輪自己沒記 tier → 不借別輪的,零 roster 行(沒編制可對照實安靜)
+    ldir6 = vault.parent / "governance" / "review-reports" / "code-notier"
+    ldir6.mkdir(parents=True)
+    (ldir6 / "r2-dispatch.json").write_text(_j.dumps({"seats": [{"seat": "s1", "auditor": "sonnet"}]}))
+    rows6 = [_rec("code-notier", "r1", auditor="s1", tier="standard", findings_set=["a"], folded_set=["a"],
+                  accepted_set=[], report={"path": str(spec), "sha256": sha},
+                  snapshot={"path": str(spec), "sha256": sha}, result_sha256=sha, reviewed_sha256=sha),
+             dict(_rec("code-notier", "r2", auditor="s1", findings_set=["b"], folded_set=["b"],
+                  accepted_set=[], report={"path": str(spec), "sha256": sha},
+                  snapshot={"path": str(spec), "sha256": sha}, result_sha256=sha, reviewed_sha256=sha))]
+    rows6[1].pop("tier", None)
+    log2.write_text("\n".join(_j.dumps(r) for r in rows6) + "\n")
+    r6 = run(vault, "loop", "status", "code-notier", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
+    check("tail: 判定輪無 tier→不借別輪編制、零 roster 行(r2 d-f1)", "[roster]" not in r6.stdout, r6.stdout[-300:])
     # s2-f2 釘:對帳段炸例外→rc 不變+降級一行(以壞 dispatch 逼不動,改 monkeypatch 層級:
     # 用環境開關?——採實體打樁:把 loop 目錄換成無法列目錄的檔案,逼 _roster_observe 內部炸)
     ldir5 = vault.parent / "governance" / "review-reports" / "code-boom"
@@ -3902,7 +3918,29 @@ def t_disposal_roster_tail():
     log2.write_text("\n".join(_j.dumps(r) for r in rows5) + "\n")
     r5 = run(vault, "loop", "status", "code-boom", "--disposal", "--spec", str(spec), "--repo", str(vault.parent))
     r5b = run(vault, "loop", "status", "code-boom", "--disposal", "--roster", "--spec", str(spec), "--repo", str(vault.parent))
-    check("tail: 壞 dispatch 快照不炸且 rc 與同帶一致(降級路徑)", r5.returncode == r5b.returncode, f"{r5.returncode} vs {r5b.returncode}")
+    check("tail: 壞 dispatch 快照不炸(內部容錯)", r5.returncode == r5b.returncode, f"{r5.returncode} vs {r5b.returncode}")
+    # d-f3 真 raise 釘:in-process monkeypatch 讓 _roster_observe 真的炸,驗外層 except 降級+rc 不變
+    import importlib.util as _ilu
+    from importlib.machinery import SourceFileLoader as _SFL
+    _spec2 = _ilu.spec_from_loader("lumos_inproc", _SFL("lumos_inproc", str(GRAPHCTL)))
+    _lm = _ilu.module_from_spec(_spec2)
+    import sys as _sys
+    _argv0 = _sys.argv; _sys.argv = ["lumos"]
+    try:
+        try: _spec2.loader.exec_module(_lm)
+        except SystemExit: pass
+    finally:
+        _sys.argv = _argv0
+    _env2 = _lm.Env(vault)
+    _rows5 = [dict(r) for r in rows5]
+    import io, contextlib
+    def _boom(*a, **k): raise RuntimeError("釘:對帳炸了")
+    _lm._roster_observe = _boom
+    _buf = io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        _rc_boom = _lm._loop_status_disposal(_rows5, "code-boom", str(spec), 0, str(vault.parent), env=_env2, repo=str(vault.parent))
+    check("tail: 對帳段真炸→rc 與正常輪一致(外層 except 接住)", _rc_boom == r5.returncode, f"{_rc_boom} vs {r5.returncode}")
+    check("tail: 真炸時印降級一行", "席位對帳失敗(降級不擋)" in _buf.getvalue(), _buf.getvalue()[-300:])
     print("  ✓ t_disposal_roster_tail")
 
 

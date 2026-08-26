@@ -1471,10 +1471,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
 
     # Check F: linter 宣告檔健康(lint接線收口 [S1]:SARIF 橋最後一哩——宣告了跑不動的
     # 東西,審查就漏那些告警;有宣告才驗,無宣告一行跳過不擋。路徑解析走本函式既有的
-    # _repo_root_from_env(★不是本函式那個只認 docs 佈局的區域 repo_root——它對
-    # standalone vault 是 None,[F] 會整段靜默消失;_repo_root_from_env 有 standalone
-    # 回退恆非 None。也不得用 env.vault 直拼——消費 repo 宣告在 repo root,直拼永遠
-    # 讀不到=靜默假綠,設計審 r2 d-f2;實作首版就踩了前者,測試抓紅後修★)。
+    # _vault_repo_root(git 感知;沿革:env.vault 直拼→假綠、doctor 區域 repo_root→standalone
+    # 消失、_repo_root_from_env→standalone 回 parent 與既有定義互斥——三坑都踩過,本行是
+    # 三次修正的終點。與 cmd_lint_check 的 _anchor_repo_root(cwd 錨)是兩入口語境刻意分工;
+    # lint-check 找不到 root 已改 rc2 響亮(code-batch2 r2 d-f2)。
     if True:
         _lf = _lint_load_and_validate(_vault_repo_root(env))   # git 感知解析(ext-f1:_repo_root_from_env 對 standalone 回 parent,與 .git 在 vault 內的既有定義互斥)
         section("F", "linter 宣告檔還健康嗎(.lumos/lint.json;沒宣告就跳過)")
@@ -5059,9 +5059,15 @@ def _roster_observe(env, loop_id, rounds, repo, only_rid=None, anomalies_only=Fa
         return anomalies
     # only_rid(問閘單輪)時 tier 取「該輪自己」的紀錄——跨輪 tier 不同時拿第一筆會查錯編制表,
     # high 輪的 fail-closed 警訊被降級成 standard 的軟提醒(code-batch2 s1-f1,席位純 CLI 重現)
-    _tier_pool = [r for r in rounds if r.get("round") == only_rid] if only_rid else rounds
-    tier = next((r.get("tier") for r in _tier_pool if r.get("tier")), None) \
-        or next((r.get("tier") for r in rounds if r.get("tier")), None)
+    # only_rid(問閘單輪):tier 只認判定輪自己的紀錄,★不 fallback 借別輪的★——
+    # 借用=同型病換觸發條件(r2 d-f1);判定輪沒記 tier → 走「沒有編制表可以對」照實講。
+    # 副作用即縱深:__seqN 合成鍵永遠對不到 round 欄 → tier=None → 天然安靜,
+    # 下方 startswith("__") guard 成為第二道防禦(單釘無法只殺 guard,兩道要一起拔才會響)。
+    if only_rid:
+        tier = next((r.get("tier") for r in rounds
+                     if r.get("round") == only_rid and r.get("tier")), None)
+    else:
+        tier = next((r.get("tier") for r in rounds if r.get("tier")), None)
     _quiet(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'}")
     if tier is None:
         _quiet("[roster] 這個編號沒指定過分級(舊格式或還沒記錄),沒有編制表可以對")
@@ -11003,8 +11009,9 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
     import json
     repo_root = _anchor_repo_root(repo)
     if repo_root is None:
-        print("lint-check: 找不到 repo root", file=sys.stderr)
-        return 0
+        # rc2 響亮(r2 d-f2:原 rc0=「有真問題偽裝乾淨」——CI 腳本吃 exit code 會放行)
+        print("✗ lint-check: 從目前目錄往上找不到 git repo——帶 --repo <根> 指定,或到 repo 內執行", file=sys.stderr)
+        return 2
     lf = _lint_load_and_validate(repo_root)
     if not lf["declared"]:
         if as_json:
