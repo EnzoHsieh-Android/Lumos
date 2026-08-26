@@ -109,23 +109,29 @@ decisions:
 
 ## ★v4 現行 spec(2026-08-27 Enzo 裁「AI 輔助回填一批」重啟;地基盤點第 4 批)★
 
-> 凍結解除:v4 方向(砍第三欄回雙欄+集合差 backlog+count 精確)照計劃「撿 v4 直接實作、實作前重跑一輪 panel 確認無新洞」執行。T1 的雙欄不對稱信任(E2 只讀 decision_refs / E3 讀聯集)已建、硬化過,v4 只加 5 個讀多寫少的 suggest 原語,不動 E2/E3 讀側。
+> 凍結解除:v4 方向(砍第三欄回雙欄+集合差 backlog+count 精確)照計劃「撿 v4 直接實作、實作前重跑一輪 panel 確認無新洞」執行。T1 的雙欄不對稱信任(E2 只讀 decision_refs / E3 讀聯集)已建、硬化過,v4 只加 6 個讀多寫少的 suggest 原語,不動 E2/E3 讀側。
 
-### 條款(五原語,乾淨雙欄:decision_refs / decision_refs_ai;★無 rejected 第三欄★)
+### ★批次邊界:單次單趟(r1 折入,關兩種振盪源)★
 
-- **[V1] backlog**:`lumos decision-refs backlog [--json]`——列「該跑 suggest 的節點」。★判準=集合差★(v4 B 席:候選集 − 已填 ≠ 空;不是「兩欄皆空」——後者漏「補一條但還有候選」的節點)。已填=decision_refs ∪ decision_refs_ai。候選=三具名邊 fwd 解到「帶≥1 有 id 決策的節點」的決策 id 集。走 build_typed_index。空差=不列。
-- **[V2] candidates**:`lumos decision-refs candidates <節點> [--json]`——列候選決策(三具名邊 fwd 解析到的節點的所有決策,含已翻案的=E3 要抓的);只列有 id,無 id 跳該條、`--json` 附 skipped_no_id 計數。★讀側去重★:已在 decision_refs ∪ decision_refs_ai 的候選標記/濾掉(v4:去重在讀側,不靠 add-ai 晚拒)。輸出=節點 summary+body 前 N 字+每候選 `<rel>#dN`+content。空候選 rc=0。
-- **[V3] add-ai**:`lumos decision-refs add-ai <節點> <ref>`——寫 decision_refs_ai。自帶存在性驗證(ref 格式 `<rel>#dN`、目標節點存在、決策 id 真存在→否則 rc=2);冪等 exact-dedup;★補「已在正欄 decision_refs → no-op rc=0」★(v4 count 精確:已 human 確認的不重複塞 ai 欄)。
+T3 回填=**對 backlog 快照的一次性單趟**:`backlog` 取一次名單→逐節點各處理一次→完。★不重查迴圈★。這樣兩種振盪在批次內都不成立:①人剪掉 ai-ref(ext-f1/s1-f1)——批次內 prune 發生在單趟末尾抽查,不會回頭重列;②Claude 判「候選都不像→跳過」(s2-f2)——單趟裡每節點只看一次,跳過就過、不重列。**「重跑 backlog」明列為 future**:真要週期性重跑,那時「人剪的/AI 判不像的」才需要持久記憶(v3 的否決記憶想解這個,但引入無解除/繞道的洞更貴——future 若做要重新設計,非本批)。T1(confirm 回寫)是長期自我養成、與此無關;T3 只回填存量、單次。
+
+### 條款(六原語,乾淨雙欄:decision_refs / decision_refs_ai;★無 rejected 第三欄★)
+
+- **[V1] backlog**:`lumos decision-refs backlog [--json]`——列「該跑 suggest 的節點」。★判準=集合差★(v4 B 席:候選集 − 已填 ≠ 空;不是「兩欄皆空」——後者漏「補一條但還有候選」的節點)。★集合元素=正規化 tuple `(env.resolve(節點), did)`★(r1 s1-f2/s2-f3:已填欄存的是完整 `<rel>#dN`、但簡寫 `POS-API#d3` 與正規 `Systems/POS-API.md#d3` 逐字不等——比對前雙邊都過 env.resolve 解節點再配 did,對齊 E2/E3 的 resolve 比對,免同決策當「沒填」重列/兩欄各存一條)。已填=decision_refs ∪ decision_refs_ai(各元素正規化)。候選=三具名邊 fwd 解到「帶≥1 有 id 決策的節點」的決策(正規化 tuple)集。走 build_typed_index。★backlog 與 candidates 共用同一支候選產生函式(ext-f2:不各自重寫篩選)★。空差=不列。--json 附 `omitted_all_no_id` 計數(s2-f1:節點候選全無 id=悄悄不列,計數給人查「是漏 reindex 還是真沒關聯」)。
+- **[V2] candidates**:`lumos decision-refs candidates <節點> [--json]`——列候選決策(三具名邊 fwd 解析到的節點的所有決策,含已翻案的=E3 要抓的);只列有 id,無 id 跳該條、`--json` 附 skipped_no_id 計數。★讀側去重(正規化 tuple 比對,同 V1)★:已在 decision_refs ∪ decision_refs_ai 的候選標記/濾掉(v4:去重在讀側,不靠 add-ai 晚拒)。輸出=節點 summary+body 前 N 字+每候選 `<rel>#dN`+content。空候選 rc=0。
+- **[V3] add-ai**:`lumos decision-refs add-ai <節點> <ref>`——寫 decision_refs_ai。自帶存在性驗證(ref 格式 `<rel>#dN`、目標節點存在、決策 id 真存在→否則 rc=2);冪等——★入帳的落盤 dedup 沿用 T1 `_append_decision_ref` 的 exact-string(刻意:不誤併 d1≠d2);但「已在正欄/_ai」的冪等判斷用正規化 tuple 比對★(s2-f3:簡寫與正規同決策視為已在);★補「已在正欄 decision_refs(正規化命中)→ no-op rc=0」★(不重複塞 ai 欄)。
 - **[V4] list**:`lumos decision-refs list <節點> [--by ai|human]`——分欄列 ref(顯式子命令避裸節點名撞子命令)。
 - **[V5] prune**:`lumos decision-refs prune <節點> <ref> [--by ai|human]`——移除。`--by` 移該欄、無 `--by` 兩欄都移(消假清除)。冪等 no-op rc=0。★無 --reject★(v4 砍否決記憶:design-loop 顯示它引入的洞[無解除/繞道]比擋的振盪更貴;人剪錯 AI 可能重加=接受的窄覆蓋成本,靠 candidates 讀側去重把「已填的」擋掉,只有「人主動剪掉的」可能重列)。
-- **[V6] promote**:`lumos decision-refs promote <節點> <ref>`(抽查蓋章)——_ai→decision_refs(升級可抑制 E2)。雙欄 edit helper(讀一份 fm→remove _ai/add 正欄→一次 atomic_write_verify,★count-based expected_check:此 ref 正欄恰一份、不在 _ai★,v4 r3-c 精確化——語意是「此 ref 不在 _ai」非「整欄空」)。promote 前重驗存在性,★dangling→rc=2 拒★(防失效 ref 蓋章洗白繞過不對稱信任)。只驗存在性非權威性(翻案決策允許 promote:E2 對「指到那條翻案決策」的 ref 不抑制,不構成洗白)。冪等:_ai 無但正欄已有→no-op rc=0;兩欄都無→rc=2;兩欄都有(異常態)→dedup 正欄一份、清 _ai、rc=0。
+- **[V6] promote**:`lumos decision-refs promote <節點> <ref>`(抽查蓋章)——_ai→decision_refs(升級可抑制 E2)。雙欄 edit helper(讀一份 fm→remove _ai/add 正欄→一次 atomic_write_verify,★count-based expected_check:此 ref 正欄恰一份、不在 _ai★,v4 r3-c 精確化——語意是「此 ref 不在 _ai」非「整欄空」)。promote 前重驗存在性,★dangling→rc=2 拒★(防失效 ref 蓋章洗白繞過不對稱信任)。只驗存在性非權威性(翻案決策允許 promote:E2 對「指到那條翻案決策」的 ref 不抑制,不構成洗白)。★覆蓋提醒(r1 s3-f1 blocker 折入)★:promote 把第一條 ref 搬進正欄=E2 從「粗網警告本節點所有翻案落後邊」翻成「只警告被 ref 命中的那條」(M1 首判精化語意,本批不動)——所以 promote 落盤前先掃該節點:列出「正欄非空後、E2 將不再警告的其他翻案落後邊」(該節點指向的翻案決策中、無正欄 ref 命中的),印給蓋章的人看,讓他知道這一蓋會關掉哪些告警、要不要一併補 ref。advisory 不擋 promote(人裁),但不得靜默——靜默蓋章=頭號腐爛(真落後邊被連帶壓掉,人卻沒看到)。冪等:_ai 無但正欄已有→no-op rc=0;兩欄都無→rc=2;兩欄都有(異常態)→dedup 正欄一份、清 _ai、rc=0。
 
 ### Claude 編排協議(=suggest 流程,lumos 不派 AI)
 ① backlog 列節點 → ② 逐節點 candidates → ③ Claude 讀摘要+候選 content 判「實作哪條」(放寬;一個都不像→跳過不 add)→ ④ add-ai。人抽查 `list --by ai`、`prune` 剪錯、`promote` 蓋章升級可抑制。
 
 ### 釘死的合約
 - ★不對稱信任(核心,T1 已建)★:ai-ref 對 E3 firing 生效、結構上抑制不了 E2(雙欄:E3 讀聯集、E2 只讀 decision_refs);唯一升級=人 promote(重驗存在性+dangling rc=2 拒+原子搬移)。V1-V6 不動 E2/E3 讀側,只加寫側+audit 原語。
-- backlog/candidates 同集合口徑(三具名邊+帶 id 決策)。
+- backlog/candidates 同集合口徑(三具名邊+帶 id 決策),★共用同一候選產生函式、正規化 tuple 比對★(ext-f2/s2-f3)。
+- CLI 掛法=巢狀 `add_subparsers()`(arch-f7:六原語參數形狀差異大[backlog 不吃節點/candidates·list 吃節點/add-ai·prune·promote 吃節點+ref/部分才有 --by·--json],照 about-code/guard 家族各自宣告參數,不用 rel-cascade 的單 verb+choices、免長第三種掛法)。
+- promote 的 count-based expected_check=★對原子寫回後重解析的兩份 list 各自計數:正欄該 ref 恰一份、_ai 該 ref 零份★(ext-f3:不沿用 `_append_decision_ref` 的「至少一份」自驗;_ai 欄其他未審 ref 保留不清)。
 - AI GIGO 天花板:填哪條靠 Claude;誤 ai-ref 只誤觸發 E3 advisory(人 prune),不對稱信任兜住,非靠準度。
 - ★覆蓋是結構可達子集(誠實邊界)★:candidates/backlog 只做 1-hop typed 邊解析——無結構邊的語意連結 T3 摸不到,那批留人工/future。T3=窄覆蓋小加分(真圖 308 方向邊只 9 條指向有決策節點),不是「補大宗」。
 
@@ -133,4 +139,4 @@ decisions:
 backlog 集合差(補一條後若還有候選仍列、全填後不列);candidates 含翻案決策+無 id 跳+skipped_no_id 計數+已填去重;add-ai 存在性 rc=2+冪等+已在正欄 no-op;prune 兩欄/單欄+冪等;promote 原子雙欄+dangling rc=2+count 精確+兩欄都有 dedup 收斂;不對稱單元釘(只 _ai 有值→E2 不抑制、反向 prune 正欄→E2 停抑制)。
 
 ### 回頭條件
-回填一批後量實際覆蓋數(結構可達子集有多少真長出 ref);若 <10 條=T3 ROI 確實如凍結所判的小,收尾據實講、不假裝補了大宗。
+回填一批後量實際覆蓋數(結構可達子集有多少真長出 ref);若 <10 條=T3 ROI 確實如凍結所判的小,收尾據實講、不假裝補了大宗。★若日後決定週期性重跑 backlog(非本批):必先解「人剪的/AI 判不像的」持久記憶問題(s2-f2/s3-f2)——那是 v3 否決記憶想解、但引入更貴的洞而被砍的同一題,重啟前重新設計、重跑 panel★。
