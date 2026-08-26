@@ -1,0 +1,1516 @@
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index e2690e0..4bd443f 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,12 +1,12 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "c0e3b386ec0469b4f7c988fb181e7539e75116b7e2c8a6f4c84c60ab3ea7fc2a",
+-    "scripts/test_autonomous_loop.py": "4f1e35509908a32f9b916bf838915855fd504ef069a8d3cf7c5ad34cbc022926",
++    "scripts/test_lumos.py": "557ed37042393caba1aea901482c0379647a66798e425adac1ea249b3985b30d",
++    "scripts/test_autonomous_loop.py": "a3e72975e0dc9927d65a2481e25046cb8b634198569025e12b73191c592f4cc1",
+     "scripts/hooks/pre-commit": "73e1d4d265a092cb0a3a3aae2fa90a1fd16581dd3e5b720847b40056451d2b9a",
+     "scripts/hooks/pre-push": "26206be5b6c4a764c2c77dd6181e10c2bb80eecb84244f57a1cd828d4b25ea51",
+     "scripts/hooks/post-commit": "155872422bc6aae03f99fbcba5e45e7a8b2992270cf8ab8c34184f4ef6bca8c5"
+   },
+-  "approved_at": "2026-08-25T20:20:51+08:00",
+-  "note": "cpr r1 折入:三釘斷言拔裝飾半條+第四釘(退役多 carrier 分流)"
++  "approved_at": "2026-08-26T09:38:33+08:00",
++  "note": "auto-loop-repair-v2 [S3]:test_lumos.py 加 t_canary_record_outcome_usd(record 新欄 outcome/usd 六斷言);test_autonomous_loop.py 加 22 測(S1-S4 行為斷言+兩個沙箱端到端)"
+ }
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index 93d005f..a5703f6 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -12,20 +12,73 @@ if [ "$MODE" != "--dry-run" ]; then
+   echo "autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常" >&2
+   exit 2
+ fi
+ TODAY="$(date +%F)"
+ REPORT="$SCRIPT_DIR/reports/governance-$TODAY.json"
+ PENDING="$SCRIPT_DIR/pending";  mkdir -p "$PENDING"
+ LOGDIR="$SCRIPT_DIR/logs";      mkdir -p "$LOGDIR"
+ SCRATCH="$(mktemp -d "/tmp/auto-loop-$TODAY.XXXXXX")"; mkdir -p "$SCRATCH/kg" "$SCRATCH/spec"   # mktemp:防可預測路徑搶佔(外審 minor)
+ log(){ echo "[$(date '+%F %T')] $*"; }
+ 
++# ── 收尾器(auto-loop-repair-v2 [S1]+[S3]+[S4]):trap EXIT 統一做四件事——
++# ①未處置 gap 原分放回(失敗不丟件,涵蓋全部早退點;滿 3 次熔斷 covered+喊人)
++# ②結局落帳(結構化欄 --outcome/--usd;與成本抽取解耦,PARSE_FAIL 也有帳)
++# ③連兩個有跑日全失敗 → LINE 喊人(素訊息,不套「備好待放行」模板)
++# ④七天產出一行(失敗日也印——放 trap 就是為了這個)
++# 內部所有指令都要 fail-open(|| true / if 判),trap 裡一個炸掉會吞掉後面全部。
++GAP_JSON=""; GAP_DISPOSED=""; OUTCOME=""; COST_ARGS=""; FINAL_DONE=""
++finalize(){
++  [ -n "$FINAL_DONE" ] && return 0; FINAL_DONE=1
++  [ -z "$GAP_JSON" ] && return 0   # 還沒選中 gap 的早退(無日報/無 gap):無輪無帳
++  if [ -z "$GAP_DISPOSED" ]; then
++    RQ="$(echo "$GAP_JSON" | python3 -c "
++import sys, json; sys.path.insert(0,'$REPO/governance')
++from autonomous_loop import gap_select
++g=json.load(sys.stdin)
++print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
++" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
++    log "失敗不丟件:gap 已放回 backlog($RQ;分數不動,pipeline_failures 累計,滿 3 次轉 covered 留人)"
++    if [ "$RQ" = "covered" ]; then
++      MSG="⚠ 自主迴圈:某 gap 連 3 次管線失敗,已轉 covered 留人手動(weakness 見 governance/covered.jsonl 末行)"       LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
++import sys, os; sys.path.insert(0,'$REPO/governance')
++from autonomous_loop import line_notify
++t=os.environ.get('LINE_TOKEN','')
++print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
++    fi
++  fi
++  # shellcheck disable=SC2086  # COST_ARGS 故意不引號:要拆成多參數
++  if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY"           --auditor orchestrator --outcome "${OUTCOME:-pipeline_fail:parse_fail}" $COST_ARGS           --note "自主迴圈結局帳(trap 收尾統一落;成本欄=claude -p 實際回傳,非估算)")           >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
++    log "結局帳:record 失敗——帳上沒有這輪(詳情 $LOGDIR/cost-$TODAY.log)"
++  fi
++  LEDGER_OUT="$(cd "$REPO" && python3 -c "
++import sys; sys.path.insert(0,'governance')
++from autonomous_loop import run_ledger
++lg='docs/.canary-log.jsonl'
++print(run_ledger.format_week_line(run_ledger.summarize_week(lg,'$TODAY')))
++print('CONSEC_FAIL' if run_ledger.consecutive_fail_days(lg,'$TODAY') else 'OK')
++" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '')"
++  if [ -n "$LEDGER_OUT" ]; then
++    log "$(echo "$LEDGER_OUT" | head -1)"
++    if echo "$LEDGER_OUT" | grep -q CONSEC_FAIL; then
++      log "⚠ 連兩個有跑日全是管線失敗——不是天氣,喊人"
++      MSG="⚠ 自主迴圈連兩個有跑日管線全失敗($(echo "$LEDGER_OUT" | head -1));死因分類看 canary 帳 outcome 欄,log $LOGDIR/"       LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
++import sys, os; sys.path.insert(0,'$REPO/governance')
++from autonomous_loop import line_notify
++t=os.environ.get('LINE_TOKEN','')
++print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
++    fi
++  else
++    log "七天彙總:算不出來(詳 $LOGDIR/finalize-$TODAY.err)——不擋收尾,但這行沒了要查"
++  fi
++}
++trap finalize EXIT
++
+ if [ ! -f "$REPORT" ]; then
+   if [ "$MODE" = "--dry-run" ]; then
+     REPORT="$(ls -t "$SCRIPT_DIR/reports/"governance-2*.json 2>/dev/null | head -1 || true)"
+     [ -n "$REPORT" ] && log "今日無日報,dry-run fallback:$REPORT" || { log "無任何日報,結束"; exit 0; }
+   else log "今日無日報($TODAY),跳過"; exit 0; fi
+ fi
+ 
+ # ── 週期考卷(2026-08-05 掛載):雙庫檢索考卷 ≥7 天未跑就補跑——把「hook 調參靠記得」
+ # 變「定期發生」;fail-open,考卷失敗只記 log 不阻斷 gap 流程。判定/漂移細節在
+ # retrieval_eval.py 自己的 gate 輸出與 history jsonl,此處只管排程。
+@@ -92,21 +145,23 @@ run_probe(){
+   local week; week="$(date +%G-W%V)"
+   if grep -q "\"seed\": \"$week\"" "$hist" 2>/dev/null; then
+     log "情境探針:本週($week)已抽過,跳過"; return 0
+   fi
+   command -v claude >/dev/null 2>&1 || { log "情境探針:沒有 claude CLI,跳過"; return 0; }
+   log "情境探針:本週($week)抽 8 題開跑"
+   (cd "$REPO" && python3 scripts/scenario_probe.py \
+       --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl,governance/scenarios/discipline.jsonl,governance/scenarios/absence.jsonl \
+       --sample 8 --seed "$week" --timeout 600 --max-turns 18 --ts "$TODAY" --history "$hist" \
+       --out "$REPO/governance/scenarios/run-$TODAY-weekly.json") > "$LOGDIR/probe-$TODAY.log" 2>&1 || true
+-  local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1)"
++  # ★|| true 必要★:probe 沒產出結果行時 grep rc1+pipefail+set -e=整支腳本死在這、
++  # 連 gap 都還沒選(潛伏生產 bug,2026-08-26 沙箱測試觸發抓到)
++  local line; line="$(grep -E '個情境 Claude 自己敲對了' "$LOGDIR/probe-$TODAY.log" | tail -1 || true)"
+   log "情境探針結果:${line:-無結果(看 $LOGDIR/probe-$TODAY.log)}"
+   local pp tt; pp="${line%%/*}"; tt="$(echo "$line" | sed -E 's#^[0-9]+/([0-9]+) .*#\1#')"
+   if [ -n "$line" ] && [ "$pp" != "$tt" ]; then
+     MSG="情境探針本週有題沒過:$line(沒過的題在 governance/scenarios/history.jsonl;改規則後用 scripts/scenario_probe.py --only <id> 重跑)" \
+     LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('scenario-probe', os.environ['MSG'], None), t) if t else 'no-token')" || true
+   fi
+@@ -129,20 +184,29 @@ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('gov-nags', os.environ['MSG'], None), t) if t else 'no-token')" || true
+   fi
+ }
+ 
+ run_exam "$REPO" toolchain
+ [ -d "$HOME/backend/LandmarkMember/governance/eval" ] && run_exam "$HOME/backend/LandmarkMember" landmark
+ run_probe
+ run_nags "$REPO" toolchain
+ [ -d "$HOME/backend/LandmarkMember/docs" ] && run_nags "$HOME/backend/LandmarkMember" landmark
+ 
++# ── backlog 每日衰減([S2]:冪等按日差;先歸檔後刪+讀回自驗,archive 失敗 live 不動) ──
++DECAY_OUT="$(cd "$REPO" && python3 -c "
++import sys, json; sys.path.insert(0,'governance')
++from autonomous_loop import backlog
++r=backlog.daily_decay('$SCRIPT_DIR/backlog.jsonl','$SCRIPT_DIR/backlog-archive.jsonl',
++                      '$SCRIPT_DIR/autonomous_loop/decay-state.json','$TODAY')
++print(json.dumps(r))" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '{\"status\":\"error\"}')"
++log "backlog 衰減:$DECAY_OUT(ok=衰減完成/noop=今天已衰過/archive-fail=歸檔失敗 live 未動明天重試)"
++
+ SKIP_CAP=3; skip_n=0
+ while : ; do
+ GAP_JSON="$(cd "$REPO" && python3 -c "
+ import sys, json; sys.path.insert(0,'governance')
+ from autonomous_loop import gap_select
+ mode='pr' if '$MODE'=='--pr' else 'dryrun'
+ g=gap_select.select('$REPORT','$SCRIPT_DIR/backlog.jsonl','$PENDING',mode,'$TODAY','$SCRIPT_DIR/covered.jsonl')
+ print(json.dumps(g, ensure_ascii=False) if g else '')
+ ")"
+ if [ -z "$GAP_JSON" ]; then
+@@ -157,25 +221,27 @@ if [ -z "$GAP_JSON" ]; then
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('autonomous-loop', os.environ['MSG'], None), t) if t else 'no-token')" || true
+   else
+     log "無可展開 gap(backlog 空或 N=1 閘),結束"
+   fi
+   exit 0
+ fi
+ log "選中 gap:$GAP_JSON"
++GAP_DISPOSED=""
+ 
+ # 錨點完整性:驗證器被污染時跑出的「收斂/綠」全是假訊號,寧停。
+ # loop 入口比 pre-push 嚴:missing baseline 亦硬擋(無人看顧場景無人眼兜底)。
+ if [ ! -f "$REPO/governance/anchor-baseline.json" ] || ! (cd "$REPO" && python3 scripts/lumos anchor verify); then
+-  log "錨點完整性失敗(anchor verify 不過或 baseline 缺失),loop 拒跑"
++  log "錨點完整性失敗(anchor verify 不過或 baseline 缺失),loop 拒跑;gap 由收尾放回 backlog"
++  OUTCOME="pipeline_fail:anchor_fail"
+   MSG="⚠ 錨點完整性失敗,自主 loop 拒跑(anchor verify)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('anchor-integrity', os.environ['MSG'], None), t) if t else 'no-token')" || true
+   exit 1
+ fi
+ 
+ # ── tier 分級(risk-tiered-review):gap 文本 assess → 注入 NEED/TIER/MAXR_EFF ──
+ read -r TIER NEED < <(echo "$GAP_JSON" | python3 -c "
+@@ -230,155 +296,171 @@ except Exception:
+ c = orr.extract_cost(o)
+ if not c:
+     sys.exit(0)
+ print('US\$%s | %s 分鐘 | %s 輪 | %s tokens(另快取讀 %s)' % (
+     c['usd'], c['wallclock_min'], c['turns'], c['tokens'], c['cache_read']))
+ print(' '.join(orr.cost_cli_args(c)))
+ " 2>/dev/null)" || COST_OUT=""
+ if [ -n "$COST_OUT" ]; then
+   log "本輪成本:$(echo "$COST_OUT" | head -1)"
+   COST_ARGS="$(echo "$COST_OUT" | tail -1)"
+-  # ★fail-open 但不靜默★:記帳失敗不擋 loop,但一定要喊出來。
+-  # 依據 Issues/canary-record未落盤事件(2026-07-28 三筆回報成功卻沒落盤,靠外審清點才發現):
+-  # 那次的教訓是「回報成功 ≠ 已落盤」,record 已加寫後讀回自驗、驗不到回 rc2。
+-  # 這裡若把 rc 吞掉,等於重新製造同一個靜默窗口——所以判 rc、失敗 log 一行。
+-  # shellcheck disable=SC2086  # 故意不加引號:要拆成多個參數
+-  if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY" \
+-          --auditor orchestrator --note "自主迴圈整輪成本(claude -p 實際回傳,非估算)" \
+-          $COST_ARGS) >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
+-    log "本輪成本:算出來了但★沒落帳★——record 失敗,帳上會是空的(詳情 $LOGDIR/cost-$TODAY.log)"
+-  fi
++  # record 移到 trap 收尾統一落帳([S3]:成本抽取與結局是獨立失敗維度,不在這裡綁死;
++  # 「回報成功≠已落盤」的 rc 判斷也一併在 trap 裡做)
+ else
+   log "本輪成本:沒抽到——orchestrator 輸出裡沒有成本欄,或形狀變了(看 $ORCH_OUT)"
+ fi
+ 
+-case "$PARSED" in PARSE_FAIL*|NO_JSON*|"") log "orchestrator 輸出無法解析,中止——死因看上一行(常見:API 過載=天氣,gap 留在 backlog 下輪自然重抽;log $ORCH_OUT)"; exit 1;; esac
++case "$PARSED" in PARSE_FAIL*|NO_JSON*|"")
++  OUTCOME="pipeline_fail:$(echo "$PARSED" | python3 -c "
++import sys; sys.path.insert(0,'$REPO/governance')
++from autonomous_loop import orchestrator_result
++print(orchestrator_result.classify_death(sys.stdin.read()))" 2>/dev/null || echo parse_fail)"
++  log "orchestrator 輸出無法解析,中止——死因=$OUTCOME(收尾會把 gap 放回 backlog 並落結局帳;log $ORCH_OUT)"
++  exit 1;; esac
+ 
+ get(){ echo "$PARSED" | python3 -c "import json,sys;print(json.load(sys.stdin).get('$1',''))"; }
+ SKIPPED="$(get skipped)"; CONVERGED="$(get converged)"; TOPIC="$(get topic)"; SPEC="$(get spec_path)"
+ CROSS_VERDICT="$(get cross_verdict)"; CROSS_WORST="$(get cross_worst)"; CROSS_SUMMARY="$(get cross_summary)"
+ TIER_RESULT="$(get tier)"
+ CROSS_SUMMARY="${CROSS_SUMMARY//$'\n'/ }"   # F3 防破版:換行→空格
+ 
+ if [ "$SKIPPED" = "True" ]; then
+   skip_n=$((skip_n+1))
+   echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ w=json.load(sys.stdin).get('weakness','')
+ if w: gap_select.mark_covered('$SCRIPT_DIR/covered.jsonl', w)
+ " 2>/dev/null || true
++  GAP_DISPOSED=1   # 已記 covered=有去向,trap 不再放回
+   log "gap 已被既有 spec 覆蓋,skip(reason: $(get reason));已記入 covered、永久不再選。循環選下一個($skip_n/$SKIP_CAP)。"
+-  [ "$skip_n" -ge "$SKIP_CAP" ] && { log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
++  [ "$skip_n" -ge "$SKIP_CAP" ] && { OUTCOME="skipped"; log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
+   continue
+ fi
+ break
+ done
+ 
+ RESIDUAL='["跨家族複核已加(qwen3-max 放行前複核 opus 設計、補同門盲點);但 degrade 時退回單一 opus、qwen 也是 AI、verdict 判定仍在 orchestrator(prompt 層自律)","severity 由 judge 評(已斷 orchestrator 自填)但 judge 也是 AI、且同輪判 canary+severity=集中化","type d canary 沒測(限 a/b/c)","自動 brainstorm 無人回澄清;AI 自選 gap=自己決定改自己方向(自我強化偏誤)","唯一外部錨點是你 review 這個 PR"]'
+ if [ "$CONVERGED" != "True" ]; then
+   if [ "$CROSS_VERDICT" = "disputed" ]; then
++    OUTCOME="unconverged:disputed"
+     MSG="⚠ 跨家族否決(qwen 持續異議):$CROSS_SUMMARY"; log "未收斂(跨家族否決 disputed),不放行:$CROSS_SUMMARY"
+   elif [ "$CROSS_VERDICT" = "degraded" ] && [ "$TIER" = "high" ]; then
++    OUTCOME="unconverged:degraded-high"
+     MSG="⚠ 高風險級複核缺席(degraded)、fail-closed 擋下:$CROSS_SUMMARY"; log "未收斂(高風險級複核 degraded fail-closed),不放行:$CROSS_SUMMARY"
+   else
++    OUTCOME="unconverged:cap"
+     MSG="⚠ 今日 spec 未收斂、未放行(撞 cap)"; log "未收斂(converged=$CONVERGED),不放行,scratch 不入庫。"
+   fi
+   MSG="$MSG" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+   # 副作用 A:未收斂 gap 回 backlog 降分 + 累計 unconverged;達 3 次 → covered(放棄自動、留人),不立即消失
+   RQ="$(echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(sys.stdin)
+ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>/dev/null || echo '?')"
++  GAP_DISPOSED=1
+   log "未收斂 gap 處置:$RQ(回 backlog 降分重試 / 累計達 3 次 covered)"
+   exit 0
+ fi
+ 
+ [ -n "$CROSS_VERDICT" ] && log "跨家族複核:$CROSS_VERDICT($CROSS_WORST)— $CROSS_SUMMARY"
+ 
+ # ── tier 收檔守衛:不信自報 converged——wrapper 自算 tier、以其 need 重驗 gate ──
+ if [ -z "$SPEC" ] || [ ! -f "$SPEC" ]; then
++  OUTCOME="tier-blocked:spec"
+   log "tier 守衛擋下:converged=True 但 spec_path 空或不存在($SPEC)"
+   MSG="⚠ tier 守衛擋下:自報收斂但 spec_path 無效" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+   RQ="$(echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(sys.stdin)
+ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>/dev/null || echo '?')"
++  GAP_DISPOSED=1
+   log "未收斂 gap 處置:$RQ(tier 守衛/spec_path)"
+   exit 0
+ fi
+ REPORT_MD="$(cd "$REPO" && python3 -c "
+ import sys, json; sys.path.insert(0,'governance')
+ from autonomous_loop import confidence_report, difficulty
+ a=difficulty.assess_spec(open('$SPEC').read())
+ print(confidence_report.build_report('$SCRATCH/.canary-log.jsonl','$TOPIC', json.loads('''$RESIDUAL'''),
+       tier=a['tier'], hits=a['hits'], reported_tier='$TIER_RESULT'))
+ ")"
+ TIER_FINAL="$(cd "$REPO" && python3 -c "
+ import sys; sys.path.insert(0,'governance')
+ from autonomous_loop import difficulty
+ print(difficulty.assess_spec(open('$SPEC').read())['tier'])")"
+ NEED_FINAL="$NEED"
+ if [ "$TIER_FINAL" = "high" ] && [ "$NEED_FINAL" -lt 3 ]; then NEED_FINAL=3; fi
+ if ! (cd "$REPO" && python3 scripts/lumos --vault "$SCRATCH/kg" loop status "$TOPIC" --need "$NEED_FINAL" --gate --spec "$SPEC" --repo "$REPO"); then
++  OUTCOME="tier-blocked:gate"
+   log "tier 守衛擋下:自報收斂但 gate 重驗不過(自算 tier=$TIER_FINAL, need=$NEED_FINAL)"
+   MSG="⚠ tier 守衛擋下:自報收斂但 gate 重驗不過(tier=$TIER_FINAL)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+   RQ="$(echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(sys.stdin)
+ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>/dev/null || echo '?')"
++  GAP_DISPOSED=1
+   log "未收斂 gap 處置:$RQ(tier 守衛)"
+   exit 0
+ fi
+ if [ "$TIER_FINAL" = "high" ] && [ "$CROSS_VERDICT" != "endorsed" ]; then
++  OUTCOME="tier-blocked:cross"
+   log "tier 守衛擋下:high 級 cross_verdict=$CROSS_VERDICT 非乾淨 endorsed,不放行"
+   MSG="⚠ tier 守衛擋下:high 級複核非乾淨 endorsed(=$CROSS_VERDICT)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys, os; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC',os.environ['MSG'],None),t) if t else 'no-token')" || true
+   RQ="$(echo "$GAP_JSON" | python3 -c "
+ import sys, json; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import gap_select
+ g=json.load(sys.stdin)
+ print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+ " 2>/dev/null || echo '?')"
++  GAP_DISPOSED=1
+   log "未收斂 gap 處置:$RQ(tier 守衛/cross)"
+   exit 0
+ fi
+ 
+ if [ "$MODE" = "--dry-run" ]; then
+-  cp "$SPEC" "$PENDING/" 2>/dev/null || true
++  if cp "$SPEC" "$PENDING/" 2>/dev/null; then
++    OUTCOME="converged"   # 「備好待放行」=converged 且 pending 寫入成功([S4] Z 的定義)
++  else
++    OUTCOME="pipeline_fail:pending_write"
++    log "⚠ 收斂但 pending 寫入失敗($SPEC → $PENDING/)——spec 沒備好,這不是好日子"
++  fi
+   printf '%s\n' "$REPORT_MD" > "$PENDING/$(basename "$SPEC" .md)-confidence.md"
++  GAP_DISPOSED=1   # 收斂=有去向(gap 已消化成 spec),trap 不放回
+   log "dry-run:收斂!spec + 可信度報告寫入 $PENDING/(repo 未動)"
+   LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+ import sys; sys.path.insert(0,'$REPO/governance')
+ from autonomous_loop import line_notify
+ t=os.environ.get('LINE_TOKEN','')
+ print('LINE', line_notify.send(line_notify.build_message('$TOPIC','(dry-run)收斂[跨家族:$CROSS_VERDICT]、待你看 pending/',None),t) if t else 'no-token')" || true
+ else
+   cd "$REPO"; BR="auto/spec-$TOPIC-$TODAY"
+   cp "$SPEC" "docs/design/$(basename "$SPEC")"
+   git checkout -b "$BR"; git add "docs/design/$(basename "$SPEC")"
+   git commit -m "auto-spec: $TOPIC（自主迭代 loop 收斂產出，待人放行）"
+   echo "$REPORT_MD" | gh pr create --title "auto-spec: $TOPIC" --body-file - || true
++  OUTCOME="converged"; GAP_DISPOSED=1
+   log "已開 PR(branch $BR)"
+ fi
+ log "完成。"
+diff --git a/governance/autonomous_loop/backlog.py b/governance/autonomous_loop/backlog.py
+index f84767f..6ef12a4 100644
+--- a/governance/autonomous_loop/backlog.py
++++ b/governance/autonomous_loop/backlog.py
+@@ -1,40 +1,112 @@
+-import json
++import json, os
+ from pathlib import Path
+ 
+ INIT_SCORE = 0.5
+ 
+ def load_backlog(path):
++    """逐行讀 backlog;壞行跳過並在 stderr 記一句(一行壞資料不該讓整條迴圈當機——
++    set -euo pipefail 下未捕捉例外=從此天天早退,auto-loop-repair-v2 s2-f5)。"""
+     p = Path(path)
+     if not p.exists(): return []
+-    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
++    rows, bad = [], 0
++    for l in p.read_text(encoding="utf-8").splitlines():
++        if not l.strip(): continue
++        try:
++            rows.append(json.loads(l))
++        except ValueError:
++            bad += 1
++    if bad:
++        import sys
++        print(f"backlog:跳過 {bad} 行壞資料({path})——檔案疑似寫到一半被中斷,值得看一眼", file=sys.stderr)
++    return rows
+ 
+ def _save(path, rows):
+-    Path(path).write_text(
++    """原子寫:先寫暫存檔再整檔替換——寫到一半被中斷(launchd 逾時/睡眠)不會留半個檔。"""
++    p = Path(path)
++    tmp = p.with_name(p.name + ".tmp")
++    tmp.write_text(
+         "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + ("\n" if rows else ""),
+         encoding="utf-8")
++    os.replace(tmp, p)
+ 
+ def add_gaps(path, gaps, today):
+     rows = load_backlog(path)
+     seen = {r["weakness"]: r for r in rows}
+     for g in gaps:
+         if g["weakness"] in seen:
+-            seen[g["weakness"]]["last_seen"] = today
++            r = seen[g["weakness"]]
++            r["last_seen"] = today
++            # 再現=世界重複投票:分數補回初始(不超過、不疊加)。連日被點名維持 0.5 是
++            # 接受的行為——真做不動的由 pipeline_failures / unconverged 熔斷接住。
++            r["value_score"] = max(r.get("value_score", INIT_SCORE), INIT_SCORE)
+         else:
+             row = {"weakness": g["weakness"], "suggestion": g.get("suggestion", ""),
+                    "source_date": today, "value_score": INIT_SCORE, "last_seen": today}
+             rows.append(row); seen[g["weakness"]] = row
+     _save(path, rows)
+ 
+-def decay_and_prune(path, today, rate=0.95, floor=0.2):
++def pop_top(path):
++    """三鍵排序:分數 → last_seen 新者 → source_date 新者。同分同日時新題贏,
++    不再依賴 stable sort 的插入位置(153 筆凍分變 FIFO 的病根之一)。"""
++    rows = load_backlog(path)
++    if not rows: return None
++    rows.sort(key=lambda r: (r.get("value_score", 0),
++                             r.get("last_seen", ""),
++                             r.get("source_date", "")), reverse=True)
++    top = rows.pop(0); _save(path, rows); return top
++
++def decay_and_prune(path, today, rate=0.95, floor=0.2, days=1):
++    """衰減 days 個日份(rate**days),低於 floor 的淘汰。回傳被淘汰的列——
++    呼叫端負責先歸檔後刪(見 daily_decay);直接呼叫本函式會就地存檔(相容舊測試)。"""
+     rows = load_backlog(path)
+-    kept = []
++    kept, pruned = [], []
+     for r in rows:
+-        r["value_score"] = r.get("value_score", INIT_SCORE) * rate
+-        if r["value_score"] >= floor: kept.append(r)
++        r["value_score"] = r.get("value_score", INIT_SCORE) * (rate ** days)
++        (kept if r["value_score"] >= floor else pruned).append(r)
+     _save(path, kept)
++    return pruned
+ 
+-def pop_top(path):
++def daily_decay(path, archive_path, state_path, today, rate=0.95, floor=0.2):
++    """冪等的每日衰減:sidecar 狀態檔記上次衰減日,同日重跑不動(skip-continue 會讓
++    select() 一天被叫多次,衰減不能掛那裡);先把淘汰列寫進 archive、讀回自驗
++    (回報成功≠已落盤),自驗過才縮 live——中斷最壞重複、不會遺失。
++    回傳 {"status": ok|noop|archive-fail, "days": n, "pruned": n}。"""
++    import datetime, sys
++    state = Path(state_path)
++    last = None
++    if state.exists():
++        try:
++            last = json.loads(state.read_text(encoding="utf-8")).get("last_decayed")
++        except ValueError:
++            last = None   # 狀態檔壞了:當第一次跑(衰減 1 日份),不當機
++    days = 1
++    if last:
++        try:
++            days = (datetime.date.fromisoformat(today) - datetime.date.fromisoformat(last)).days
++        except ValueError:
++            days = 1
++        if days <= 0:
++            return {"status": "noop", "days": 0, "pruned": 0}
+     rows = load_backlog(path)
+-    if not rows: return None
+-    rows.sort(key=lambda r: r.get("value_score", 0), reverse=True)
+-    top = rows.pop(0); _save(path, rows); return top
++    kept, pruned = [], []
++    for r in rows:
++        r = dict(r)
++        r["value_score"] = r.get("value_score", INIT_SCORE) * (rate ** days)
++        (kept if r["value_score"] >= floor else pruned).append(r)
++    if pruned:
++        arch = Path(archive_path)
++        try:
++            with open(arch, "a", encoding="utf-8") as f:
++                for r in pruned:
++                    rec = dict(r); rec["archived"] = today; rec["reason"] = "decay-floor"
++                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
++            # 讀回自驗:最後 len(pruned) 行要能解析且 weakness 對得上
++            tail = [json.loads(l) for l in arch.read_text(encoding="utf-8").splitlines() if l.strip()][-len(pruned):]
++            if [t.get("weakness") for t in tail] != [r.get("weakness") for r in pruned]:
++                raise OSError("讀回內容對不上")
++        except (OSError, ValueError) as e:
++            print(f"backlog 歸檔失敗({e}):live 不動、狀態不前進,明天重試——絕不無痕淘汰", file=sys.stderr)
++            return {"status": "archive-fail", "days": days, "pruned": 0}
++    _save(path, kept)
++    state.write_text(json.dumps({"last_decayed": today}) + "\n", encoding="utf-8")
++    return {"status": "ok", "days": days, "pruned": len(pruned)}
+diff --git a/governance/autonomous_loop/decay-state.json b/governance/autonomous_loop/decay-state.json
+new file mode 100644
+index 0000000..c35ba5d
+--- /dev/null
++++ b/governance/autonomous_loop/decay-state.json
+@@ -0,0 +1 @@
++{"last_decayed": "2026-08-26"}
+diff --git a/governance/autonomous_loop/gap_select.py b/governance/autonomous_loop/gap_select.py
+index 412e0b5..2b4f251 100644
+--- a/governance/autonomous_loop/gap_select.py
++++ b/governance/autonomous_loop/gap_select.py
+@@ -49,20 +49,38 @@ def requeue_unconverged(backlog_path, gap, covered_path, decay=0.7, max_unconv=3
+         return "covered"
+     g = dict(gap)
+     g["unconverged"] = n
+     g["value_score"] = round(g.get("value_score", backlog.INIT_SCORE) * decay, 4)
+     rows = [r for r in backlog.load_backlog(backlog_path) if r.get("weakness") != w]
+     rows.append(g)
+     backlog._save(backlog_path, rows)
+     return "requeued"
+ 
+ 
++def requeue_pipeline_fail(backlog_path, gap, covered_path, max_fail=3):
++    """管線失敗(NO_JSON/PARSE_FAIL/anchor 早退)的 gap:原列原分放回(不是它的錯,
++    不降分、不走 add_gaps 免被重置 0.5)+ 累計 pipeline_failures;
++    滿 max_fail → covered(放棄自動、留人)——鏡射 requeue_unconverged 的熔斷語意,
++    不讓穩定觸發管線死的題無限反覆燒錢。回 'requeued' 或 'covered'。"""
++    n = gap.get("pipeline_failures", 0) + 1
++    w = gap.get("weakness", "")
++    if n >= max_fail:
++        mark_covered(covered_path, w)
++        return "covered"
++    g = dict(gap)
++    g["pipeline_failures"] = n
++    rows = [r for r in backlog.load_backlog(backlog_path) if r.get("weakness") != w]
++    rows.append(g)
++    backlog._save(backlog_path, rows)
++    return "requeued"
++
++
+ def select(report_path, backlog_path, pending_dir, mode, today, covered_path=None):
+     covered = load_covered(covered_path)
+     gaps = [g for g in read_report_gaps(report_path) if g.get("weakness") not in covered]
+     backlog.add_gaps(backlog_path, gaps, today)          # covered 的不再加回(堵重加洞)
+     if pending_exists(mode, pending_dir):
+         return None
+     while True:                                           # pop top,丟棄殘留的 covered
+         top = backlog.pop_top(backlog_path)
+         if top is None:
+             return None
+diff --git a/governance/autonomous_loop/line_notify.py b/governance/autonomous_loop/line_notify.py
+index ddd0d42..255c5ff 100644
+--- a/governance/autonomous_loop/line_notify.py
++++ b/governance/autonomous_loop/line_notify.py
+@@ -1,16 +1,21 @@
+ import json, subprocess
+ 
+ def build_message(title, confidence_summary, pr_link):
+     txt = f"\U0001F504 自主迭代 loop：今天備好 1 個待放行 spec\n\n《{title}》\n可信度：{confidence_summary}"
+     txt += f"\nPR：{pr_link}" if pr_link else "\n(dry-run，未開 PR)"
+     return {"messages": [{"type": "text", "text": txt}]}
+ 
++def build_alert(text):
++    """警示用素訊息:不套 build_message 的「備好 1 個待放行 spec」好消息標頭——
++    連兩天管線死這種警示套上它,比沒通知更容易被當好消息忽略(s1-f6)。"""
++    return {"messages": [{"type": "text", "text": text}]}
++
+ def send(message, token):
+     out = subprocess.run(
+         ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST",
+          "https://api.line.me/v2/bot/message/broadcast",
+          "-H", f"Authorization: Bearer {token}",
+          "-H", "Content-Type: application/json", "-d", json.dumps(message, ensure_ascii=False)],
+         capture_output=True, text=True)
+     try: return int(out.stdout.strip())
+     except ValueError: return -1
+diff --git a/governance/autonomous_loop/orchestrator_result.py b/governance/autonomous_loop/orchestrator_result.py
+index f57ace8..d7fdc96 100644
+--- a/governance/autonomous_loop/orchestrator_result.py
++++ b/governance/autonomous_loop/orchestrator_result.py
+@@ -47,21 +47,36 @@ def extract_cost(o):
+     wallclock_min = round(ms / 60000) if ms is not None else None
+     if usd is None and wallclock_min is None and tokens is None and turns is None:
+         return None
+     return {"usd": usd, "wallclock_min": wallclock_min,
+             "tokens": tokens, "turns": turns, "cache_read": cache_read}
+ 
+ 
+ def cost_cli_args(cost):
+     """把成本轉成 `lumos canary record` 的既有欄參數。
+ 
+-    ★只用既有的兩個欄(--tokens / --wallclock-min),不發明新欄★。沒量到的不送 0
+-    冒充量過——少一個參數,帳上就是空的,一眼看得出沒量。
++    tokens/--wallclock-min 是既有欄;--usd 是 2026-08-26 起的結構化欄
++    (auto-loop-repair-v2 裁:要被機器回讀的資料開欄,不塞 note 散文——原「只用既有
++    兩欄」的邊界因 [S4] 七天彙總要算美元而翻案,理由在該計劃節點)。
++    沒量到的不送 0 冒充量過——少一個參數,帳上就是空的,一眼看得出沒量。
+     """
+     if not isinstance(cost, dict):
+         return []
+     args = []
+     if cost.get("tokens") is not None:
+         args += ["--tokens", str(int(cost["tokens"]))]
+     if cost.get("wallclock_min") is not None:
+         args += ["--wallclock-min", str(int(cost["wallclock_min"]))]
++    if cost.get("usd") is not None:
++        args += ["--usd", str(round(float(cost["usd"]), 4))]
+     return args
++
++
++def classify_death(parsed):
++    """把 shell 層的 $PARSED 前綴分類成死因 token([S3]③)。
++    不依賴成本區塊的 json.load——那條路在信封壞掉時自己就死了(s1-f4)。"""
++    s = str(parsed or "")
++    if s.startswith("NO_JSON"):
++        if "is_error=True" in s and ("529" in s or "Overloaded" in s or "overloaded" in s):
++            return "api_error"
++        return "truncated"
++    return "parse_fail"   # PARSE_FAIL* 或空字串(python 區塊整個沒跑出來)
+diff --git a/governance/autonomous_loop/run_ledger.py b/governance/autonomous_loop/run_ledger.py
+new file mode 100644
+index 0000000..c01e601
+--- /dev/null
++++ b/governance/autonomous_loop/run_ledger.py
+@@ -0,0 +1,85 @@
++"""自主迴圈的結局帳讀側(auto-loop-repair-v2 [S3]⑤/[S4])。
++
++資料源=既有 canary 帳(docs/.canary-log.jssonl 之類)裡 loop 名 auto-* 的列;
++逐筆遍歷、絕不以 loop id 當鍵——同日多筆已是現場事實(08-25 兩筆同 id 不同結局),
++以 id 當鍵會讓後寫的蓋掉先寫的。舊格式列(無 outcome 欄)只計跑次與成本、結局歸
++「舊格式」桶明示,不冒充算過。
++"""
++import json
++import re
++import datetime
++from pathlib import Path
++
++
++def _auto_rows(canary_log, today, days=7):
++    """過去 days 個日曆天(含今天)內 loop 名 auto-* 的列;壞行/壞 ts 跳過。"""
++    p = Path(canary_log)
++    if not p.exists():
++        return []
++    try:
++        cutoff = datetime.date.fromisoformat(today) - datetime.timedelta(days=days - 1)
++    except ValueError:
++        return []
++    rows = []
++    for l in p.read_text(encoding="utf-8").splitlines():
++        if not l.strip():
++            continue
++        try:
++            r = json.loads(l)
++        except ValueError:
++            continue
++        # 只收 auto-<日期> 形狀——auto-smoke / auto-loop-repair-v2(設計審 loop id)這類
++        # 同字首但非每日結局帳的列要排除,否則彙總被假數字灌水(實作當天煙測就撞到)
++        if not re.fullmatch(r"auto-\d{4}-\d{2}-\d{2}", str(r.get("loop", ""))):
++            continue
++        try:
++            d = datetime.date.fromisoformat(str(r.get("ts", ""))[:10])
++        except ValueError:
++            continue
++        if cutoff <= d <= datetime.date.fromisoformat(today):
++            rows.append(r)
++    return rows
++
++
++def summarize_week(canary_log, today):
++    rows = _auto_rows(canary_log, today)
++    s = {"runs": len(rows), "usd": 0.0, "converged": 0, "pending_ready": 0,
++         "pipeline_fail": 0, "legacy": 0}
++    for r in rows:
++        if r.get("usd") is not None:
++            try:
++                s["usd"] += float(r["usd"])
++            except (TypeError, ValueError):
++                pass
++        o = r.get("outcome")
++        if o is None:
++            s["legacy"] += 1
++        elif o == "converged":
++            s["converged"] += 1
++            s["pending_ready"] += 1   # converged 只在 pending 寫入成功後才記(寫側保證)
++        elif str(o).startswith("pipeline_fail"):
++            s["pipeline_fail"] += 1
++    s["usd"] = round(s["usd"], 2)
++    return s
++
++
++def format_week_line(s):
++    return ("過去 7 天:跑 %d 次、燒 $%.2f、收斂 %d、備好待放行 %d、管線死 %d"
++            "(另 %d 筆舊格式帳,只計跑次與成本不計結局)" % (
++                s["runs"], s["usd"], s["converged"], s["pending_ready"],
++                s["pipeline_fail"], s["legacy"]))
++
++
++def consecutive_fail_days(canary_log, today, need=2):
++    """最近 need 個「有跑日」是否全是失敗日。有跑日=當日有帶 outcome 的列(舊格式日不算);
++    失敗日=當日帶 outcome 的列全部 pipeline_fail。中間沒跑的日子不算斷。"""
++    by_day = {}
++    for r in _auto_rows(canary_log, today, days=30):
++        o = r.get("outcome")
++        if o is None:
++            continue
++        by_day.setdefault(str(r.get("ts", ""))[:10], []).append(str(o))
++    run_days = sorted(by_day)[-need:]
++    if len(run_days) < need:
++        return False
++    return all(all(o.startswith("pipeline_fail") for o in by_day[d]) for d in run_days)
+diff --git a/governance/review-reports/auto-loop-repair/r1-arch.md b/governance/review-reports/auto-loop-repair/r1-arch.md
+new file mode 100644
+index 0000000..aaf9f4a
+--- /dev/null
++++ b/governance/review-reports/auto-loop-repair/r1-arch.md
+@@ -0,0 +1,18 @@
++### arch-f1 S3 把 outcome/usd 塞進 canary record 的 --note 自由文字,重踩專案已淘汰的「散文塞結構化資料」舊路
++severity: major
++引句:「美元走 note 自由文字,不動欄位」
++佐證:file: `scripts/lumos:15573`
++說明:--canary-type/--probe 既有欄的 help 明講「結構化取代散文 note」,3469 行「D 前置」註解寫「原散文 note 不可重算」,4437 行獨立進度驗證器把 note 整段丟棄以隔離「散文注入」——專案已吃過虧、明文放棄的做法。S3 反向把要被 [S4] 逐筆回讀的結構化資料塞回 note,是把被取代的舊路重走一遍。
++
++### arch-f2 S1 另開 pipeline_failures 計數,和 gap_select 既有的 unconverged 重試計數兩套並行、規則不同調
++severity: minor
++引句:「(不是它的錯,不降分),另在該筆累計」
++佐證:file: `governance/autonomous_loop/gap_select.py:41`
++說明:「gap 失敗放回/計次/何時放棄」requeue_unconverged 已是既有做法(降分+累計+滿 3 次轉 covered)。S1 另開一個不衰減、無上限收尾的 pipeline_failures,兩套計數並存規則各異,屬與既有分工略有出入。
++
++## 對齊良好的面
++- PRIOR-ART 段落點都在既有兩模組內,無另起檔案繞過。
++- 死因擷取沿用 :213 既有殘文;S4 吃既有 canary 帳,兩次寫死「不建新帳本」。
++- LINE 全走既有 line_notify,寫法與既有三處一致。
++- 相容性 .get() 防呆與 backlog.py 現行寫法一致。
++- 「不做」清單紅線清楚,沒藉機重設計收斂/放行架構。
+diff --git a/governance/review-reports/auto-loop-repair/r1-dispatch.json b/governance/review-reports/auto-loop-repair/r1-dispatch.json
+new file mode 100644
+index 0000000..8274841
+--- /dev/null
++++ b/governance/review-reports/auto-loop-repair/r1-dispatch.json
+@@ -0,0 +1,13 @@
++{
++  "round": "r1",
++  "loop": "auto-loop-repair",
++  "snapshot": "governance/review-reports/auto-loop-repair/r1-snapshot.md",
++  "snapshot_sha256": "e200ed71fb2413e2bb1014a818693c8f4a3c6c6c54a441f8660c0eb904db8812",
++  "seats": [
++    {"seat": "s1", "lens": "通才:照字面實作會不會做出錯的行為", "materials": ["r1-snapshot.md"], "auditor": "sonnet"},
++    {"seat": "s2", "lens": "邊界與輸入:backlog/archive 資料層邊界、衰減與回血交互", "materials": ["r1-snapshot.md"], "auditor": "sonnet"},
++    {"seat": "s3", "lens": "流程與帳一致:note 解析、outcome 完備性、七天窗、與既有帳裁定一致", "materials": ["r1-snapshot.md"], "auditor": "sonnet"},
++    {"seat": "arch", "lens": "架構對齊(§7.6,不佔人數):既有模組邊界與慣例、第二種做法", "materials": ["r1-snapshot.md"], "auditor": "sonnet"},
++    {"seat": "ext", "lens": "外家否決(note-if-absent):反駁必要性與方案", "materials": ["r1-snapshot.md"], "auditor": "codex"}
++  ]
++}
+diff --git a/governance/review-reports/auto-loop-repair/r1-ext.md b/governance/review-reports/auto-loop-repair/r1-ext.md
+new file mode 100644
+index 0000000..dcaf047
+--- /dev/null
++++ b/governance/review-reports/auto-loop-repair/r1-ext.md
+@@ -0,0 +1,49 @@
++### ext-f1 解析前的錨點失敗仍會永久吃掉 gap，S1 並未真正建立「失敗不丟件」保證
++
++severity: blocker
++
++引句:「orchestrator 輸出解析失敗(PARSE_FAIL/NO_JSON/空)時,中止前把選中的 gap 原分數放回 backlog」
++
++佐證:file: `governance/autonomous-loop.sh:170`
++
++說明：gap 在第 145 行已由 `select()` pop，之後才執行 anchor verify；若 anchor 缺失或驗證失敗，第 177 行直接退出，完全不 requeue。故修完指定三種解析錯誤後，仍存在可確定重現的丟件路徑；回填必須涵蓋 pop 後所有提前退出，或改成成功提交後才 ack。
++
++### ext-f2 無成本信封的 PARSE_FAIL 不會產生帳目，因此「連續兩天管線死喊人」沒有可靠資料源
++
++severity: blocker
++
++引句:「連續 2 天 pipeline_fail → 復用既有 line_notify 喊人」
++
++佐證:file: `governance/autonomous-loop.sh:228`
++
++說明：成本解析遇到無法載入的 JSON 會直接退出、不寫 canary 帳；但這正是 `PARSE_FAIL` 的典型形狀。S3 又把 outcome 綁在「成本落帳那筆」，因此連續兩天都收到損壞或空信封時，帳上反而是零筆 pipeline failure，通知條件永遠無法成立。失敗事件必須獨立於成本是否可抽取而必寫。
++
++### ext-f3 outcome 在成本帳寫入之後才判定，單一 note 無法如實記錄完整結局
++
++severity: major
++
++引句:「成本落帳那筆的 --note 帶上結局分類與美元」
++
++佐證:file: `governance/autonomous-loop.sh:245`
++
++說明：現行成本記錄發生在解析結果分支、收斂判定及 tier 守衛之前；真正的 `CONVERGED` 直到第 257 行才取出，後續守衛還可能否決自報收斂。依此控制流，寫帳當下尚不知道最終 outcome；spec 未裁定延後落帳、補記事件或如何避免重複，S3/S4 的統計基礎因此不成立。
++
++### ext-f4 七天彙總要求的「放行 Z」無法從指定的 canary 帳推導
++
++severity: major
++
++引句:「資料源=canary 帳的 auto-* 迴圈」
++
++佐證:file: `governance/autonomous-loop.sh:367`
++
++說明：自主迴圈收斂後只把 spec 放進 `pending/`，等待人類另行放行；目前寫入 `auto-*` canary 行的則只是 orchestrator 成本。兩者沒有共同識別鍵或後續放行回寫，所以 canary 帳最多能算「產生待審 spec」，不能算實際放行件數；S4 所稱逐筆加總一致無法成立。
++
++### ext-f5 每次進場都乘 0.95 並不等於每日衰減，重跑會在同一天任意加速淘汰
++
++severity: major
++
++引句:「每日進場呼叫既有 decay_and_prune」
++
++佐證:file: `governance/autonomous_loop/backlog.py:32`
++
++說明：既有函式沒有記錄或檢查上次衰減日期，每呼叫一次就再次乘上 rate。排程重跑、人工驗收或異常重啟均可讓同一天衰減多次，甚至提早歸檔大量 backlog；spec 必須定義以日期差計算，或保存 last-decayed date 並保證同日冪等。
+diff --git a/governance/review-reports/auto-loop-repair/r1-intake.md b/governance/review-reports/auto-loop-repair/r1-intake.md
+new file mode 100644
+index 0000000..0ac6f1a
+--- /dev/null
++++ b/governance/review-reports/auto-loop-repair/r1-intake.md
+@@ -0,0 +1,15 @@
++# r1-intake — 首輪排乾(2026-08-26)
++
++排乾員(便宜 agent)固定清單掃描結果與處置。命中 4 條,全屬排乾類直接修真檔,不算 findings;佐證均經排乾員實際開檔重現(HIT)。
++
++1. 未定義詞(存在類):「信封」「尾文」全庫無他篇使用 → 當場在正文加一句定義。HIT:圖譜 grep 0 篇。
++2. 範圍自相矛盾(語意類):[S4] 要印「燒 $X」但資料源 canary 帳無美元欄(cost_cli_args 刻意只送 --tokens/--wallclock-min;file: `governance/autonomous_loop/orchestrator_result.py:54`)。
++   修正前:「資料源=canary 帳的 auto-* 迴圈(成本)+ note 裡的結局分類」
++   修正後:[S3] note 增帶 `usd=<金額>`(note 自由文字,不發明新欄),[S4] 美元與結局分類都從 note 解析。HIT:`docs/.canary-log.jsonl` 四筆 auto-* 皆無 usd 欄。
++3. 機械宣稱(存在類):成本落帳起算日寫 08-24,實為 08-23 15:16 第一筆 → 改 08-23。HIT:canary-log ts。
++4. 機械宣稱(語意類):「既有讀者全用 .get() 容錯」字面假(add_gaps 對 weakness 直索引;file: `governance/autonomous_loop/backlog.py:19`)。
++   修正前:「既有讀者全用 .get() 容錯」
++   修正後:「會讀分數類欄位的路徑都用 .get() 容錯(weakness 是必有鍵、直索引,不受新欄影響)」。相容性結論不變。
++   兩條語意類修正皆未觸及核心裁定,依前掃分流直接修真檔。
++
++其餘特驗子項(decay 無呼叫點/160 筆 153 筆 0.5 分/exit 1 無 requeue/兩筆 gap 實丟/line_notify 可復用)逐條屬實,收據見排乾員報告(session 留痕)。
+diff --git a/governance/review-reports/auto-loop-repair/r1-s1.md b/governance/review-reports/auto-loop-repair/r1-s1.md
+new file mode 100644
+index 0000000..737d652
+--- /dev/null
++++ b/governance/review-reports/auto-loop-repair/r1-s1.md
+@@ -0,0 +1,50 @@
++### s1-f1 S1「原分數放回」如果借用既有 add_gaps 會被重置成 0.5,不是保留原分數
++severity: major
++引句:「原分數放回 backlog**(不是它的錯,不降分)」
++佐證:file: `governance/autonomous_loop/backlog.py:16-26`
++說明:唯一現成插入函式 add_gaps 對不在集合的 weakness 寫死 value_score=INIT_SCORE;pop_top 已整筆刪掉,必不在集合。借用它做放回,分數被重置 0.5——對已衰減舊題是往上跳,失敗 gap 排名反而更高。
++
++### s1-f2 S2① decay 若放進 gap_select.select(),同一天可能觸發 2-3 次,衰減率被偷偷乘高
++severity: major
++引句:「選題修理**:①每日進場呼叫既有」
++佐證:file: `governance/autonomous-loop.sh:272`
++說明:skip-continue 迴圈讓 select() 同日最多被呼叫 SKIP_CAP=3 次;掛在 select() 進場處,連 skip 3 次的一天實際衰減 0.95³≈0.857,與條款自己寫的「×0.95/日」矛盾。
++
++### s1-f3 S2④「歸檔」跟①「呼叫既有 decay_and_prune、參數不動」互斥——現有函式不吐出被淘汰的列
++severity: major
++引句:「原設計參數不動:×0.95/日、<0.2 淘汰」
++佐證:file: `governance/autonomous_loop/backlog.py:28-34`
++說明:decay_and_prune 只存留下的列,淘汰列函式內就地丟棄、無回傳值,呼叫端拿不到淘汰名單。不改函式本體,archive 會一直是空的;spec 沒提差集或改簽名。
++
++### s1-f4 S3 死因分類掛在成本落帳 note 上,但 PARSE_FAIL(信封層 JSON 壞)那筆結構性不會走到 canary record
++severity: blocker
++引句:「死因取信封 is_error 與 NO_JSON 標記帶出的 result 殘文(autonomous-loop.sh:213 那段)分類」
++佐證:file: `governance/autonomous-loop.sh:226-236`
++說明:成本區塊自己 try json.load 失敗就 sys.exit(0),COST_OUT 空,record 不被呼叫。三個死因分類裡 parse_fail 結構上永遠掛不上帳——剛好是最嚴重、最該留痕的那種。
++
++### s1-f5 S4「每輪收尾印一行」照現有腳本結構的「尾」放,幾乎不會在真正需要看的失敗日印出來
++severity: blocker
++引句:「每輪收尾在 autonomous.log 印一行七天彙總」
++佐證:file: `governance/autonomous-loop.sh:384`
++說明:唯一天然收尾(:384「完成。」)之前至少 8 個 exit(164/177/254/271/299/319/348/364);最近 3 天每天都從早退點結束,沒有一天跑到 384。彙總行字面加在收尾,失敗日一次都不印——S4 要解的「產出沒帳」在失敗日繼續無帳。spec 沒交代每個 exit 前印或 trap EXIT。
++
++### s1-f6 S3「復用既有 line_notify」會讓「連兩天管線死」警示套上「今天備好 1 個待放行 spec」的假標頭
++severity: major
++引句:「喊人(管線連死兩天不是天氣,是要人看)」
++佐證:file: `governance/autonomous_loop/line_notify.py:3-6`
++說明:build_message 模板寫死「🔄 自主迭代 loop:今天備好 1 個待放行 spec…」;既有錨點失敗警示已在錯用此模板。連死警示套上好消息標頭,比沒通知更易被忽略。
++
++### s1-f7 S3/S4 把死因/金額塞進 --note 再解析,跟 codebase 既有「note 不可信」原則方向相反
++severity: minor
++引句:「迴圈(tokens/分鐘走既有欄;美元與結局分類走 [S3] 落在 note 的」
++佐證:file: `scripts/lumos:4437`
++說明:獨立驗證器明寫 note 一律丟棄(散文注入面);雖 type=([a-d]) 有先例,此處又加一組同款。純觀測非閘,風險較低,但別讓它日後被拿去做真判斷依據。
++
++## 掃過但乾淨的面
++- 「下輪自然重抽」確為假話;:213/:254 行號內容相符。
++- $GAP_JSON 在 :254 同進程 scope,拿得到原始分數。
++- 回血與 covered 過濾互動乾淨(covered 已在 select 濾掉)。
++- last_seen 排序無缺欄風險(add_gaps 必寫)。
++- 相容性宣稱對照 backlog.py 屬實。
++- pending 卡 3 天喊人機制與本案無衝突。
++- requeue_unconverged 與 S1 新路徑職責分離清楚。
+diff --git a/governance/review-reports/auto-loop-repair/r1-s2.md b/governance/review-reports/auto-loop-repair/r1-s2.md
+new file mode 100644
+index 0000000..05e000c
+--- /dev/null
++++ b/governance/review-reports/auto-loop-repair/r1-s2.md
+@@ -0,0 +1,43 @@
++### s2-f1 decay 掛進 select() 的話,同一次執行內 skip-continue 會讓它多打一輪
++severity: major
++引句:「(原設計參數不動:×0.95/日、<0.2 淘汰)」
++佐證:file: `governance/autonomous_loop/gap_select.py:62`
++佐證:file: `governance/autonomous-loop.sh:272`
++說明:「每日進場呼叫」沒講掛哪一層。唯一既有先例 add_gaps 掛在 select() 內部——照同款掛法,一次執行撞上 skip(SKIP_CAP=3)就把同一天 backlog 衰減兩次以上。非假設:autonomous.log 08-25 先 skip 一筆 covered 再選第二筆,同一天 select() 已被呼叫兩次。行為斷言沒測「skip 後才選中」路徑。
++
++### s2-f2 回血在同分同 last_seen 情境下退回舊題優先,且天天被點名的題可長期免疫衰減
++severity: major
++引句:「②日報再次點名已在 backlog 的 gap 時分數回血到初始 0.5(再現=世界重複投票)」
++佐證:file: `governance/autonomous_loop/backlog.py:39`
++說明:(a) 回血舊列在原位置、新列 append 尾端,同分同 last_seen 時 stable sort 讓舊題結構性繼續贏。(b) 治理報告常連日點名同一結構債——回血=天天重置 0.5、天天抵銷 ×0.95,該題永不衰減、長期霸佔 pop_top,跟「153 筆凍分」同病灶換新原因。
++
++### s2-f3 pipeline_failures 沒有累計上限或熔斷路徑,對比既有 unconverged 已有 cap
++severity: major
++引句:「(不是它的錯,不降分),另在該筆累計」
++佐證:file: `governance/autonomous_loop/gap_select.py:41-56`
++說明:未收斂路徑早有「累計 3 次轉 covered 留人」熔斷;S1 的 pipeline_failures 只累計不處置。若某 gap 穩定觸發 NO_JSON,分數不降、無限反覆選中反覆燒錢——正是本案要修的「燒 $156 落地 0」換成無限循環版。行為斷言只驗一輪,沒驗連續多輪。
++
++### s2-f4 archive 追加失敗沒有處理路徑,現有慣例是靜默吞錯
++severity: major
++引句:「而不是靜默刪(現況 153 筆會在接上衰減後 ~17 天內大批淘汰」
++佐證:file: `governance/autonomous_loop/backlog.py:11-14`
++佐證:file: `governance/autonomous-loop.sh:264-269`
++說明:_save 非原子寫入;腳本既有 python 呼叫慣例是 2>/dev/null || true 吞錯。archive 若照同款接,會「已從 live 移除、沒真寫進 archive」——換一個看似留痕實則沒有的假象。全腳本唯一 rc 檢查+落盤自驗的只有成本落帳段(:237-249,註解明講「回報成功≠已落盤」舊教訓),新寫入路徑沒比照。
++
++### s2-f5 backlog/covered 的 jsonl 讀取沒有壞行容錯,而本案讓寫入頻率變高
++severity: major
++引句:「舊列無此欄照舊;covered.jsonl 格式不動」
++佐證:file: `governance/autonomous_loop/backlog.py:9`
++佐證:file: `governance/autonomous_loop/gap_select.py:32`
++說明:load_backlog/load_covered 對壞行直接丟例外,set -euo pipefail 下整支腳本當場退出。本案讓 backlog 寫入頻率變高(每天多一次全檔重寫)且 _save 非原子——寫到一半被中斷(launchd 逾時/睡眠/SIGKILL),隔天起整條迴圈天天當機到人手動修檔,正是要根治的「排程有跑、其實沒用」同型失敗。
++
++### s2-f6 七天彙總沒講舊格式(無 outcome=/usd=)記錄怎麼算,而現有帳上就已經有
++severity: major
++引句:「每輪收尾在 autonomous.log 印一行七天彙總」
++佐證:file: `docs/.canary-log.jsonl:509`
++說明:現有 4 筆 auto-* 記錄全是舊格式 note,S3/S4 上線後第一個七天窗必然混入。略過不計則「跑 N 次」少算、與「逐筆加總一致」斷言矛盾;天真字串切分則抓不到值或直接炸。fixture 行為斷言不會覆蓋這個上線第一週保證撞到的情境。
++
++## 掃過但乾淨的面
++- 空 backlog:pop_top/select 回 None,:148-165 已有收尾分支;decay 對空列 0 次迴圈,無邊界例外。
++- floor 邊界:>= floor,0.2 整數邊界保留,無差一號。
++- NO_JSON 放回哪一筆:$GAP_JSON 每次迴圈頂重新賦值,吃現值即正確指到真正失敗那筆;唯與 s2-f1 共用路徑,實作易一起錯。
+diff --git a/governance/review-reports/auto-loop-repair/r1-s3.md b/governance/review-reports/auto-loop-repair/r1-s3.md
+new file mode 100644
+index 0000000..7b4247d
+--- /dev/null
++++ b/governance/review-reports/auto-loop-repair/r1-s3.md
+@@ -0,0 +1,29 @@
++### s3-f1 outcome 完全依附在成本抽取成功與否,兩者不是同一件事卻被綁死
++severity: blocker
++引句:「outcome=converged|unconverged|skipped|pipeline_fail:<死因> usd=<金額>」
++佐證:file: `governance/autonomous-loop.sh:222-252`
++說明:整份 spec 只有一個 canary record 呼叫點,而它被包在 extract_cost 有回傳值才進的分支裡(extract_cost 抽不到就 sys.exit(0),COST_OUT 變空字串,整段 record 連同其 else 分支都不執行,見 :250-252 只 log 一句「沒抽到」)。一旦某輪同時「NO_JSON/API 錯誤」又「成本欄形狀異常抽不到」——正是 08-25 那輪的近親情境——S3 想塞進 note 的 outcome=pipeline_fail:<死因> 根本不會被寫出來:不是「沒有成本」,是連死因本身都跟著蒸發。成本可測性變成了結局可觀測性的必要條件,但兩者是獨立的失敗維度。
++
++### s3-f2 record 呼叫點在 outcome 算出來之前就已經執行完畢,note 能帶到的只有 pipeline_fail 一種
++severity: blocker
++引句:「outcome=converged|unconverged|skipped|pipeline_fail:<死因> usd=<金額>」
++佐證:file: `governance/autonomous-loop.sh:206-260`
++佐證:file: `docs/.canary-log.jsonl:509`
++說明:執行順序是「解析 PARSED(206-214)→ 成本落帳 canary record(217-252)→ 才判 PARSE_FAIL/NO_JSON 要不要 exit(254)→ 再往下才抽 SKIPPED/CONVERGED/CROSS_VERDICT(256-260)、tier 守衛(305-365)」。record 當下只有 pipeline_fail 是已知的;converged/unconverged/skipped 在那行執行時還不存在於任何變數。實測可核:08-23 canary 記錄 ts 15:16:49,「未收斂(converged=False)」log 在兩秒後 15:16:51 才印。照字面在原呼叫點改 --note,三種結局永遠寫不對。
++
++### s3-f3 outcome 分類不完備:至少六條不同下場的程式路徑全部只能塞進同一個 unconverged
++severity: major
++引句:「[S3] 死因分類落帳+連兩天管線死喊人」
++佐證:file: `governance/autonomous-loop.sh:279-365`
++說明:實際碼裡「未收斂」細分為 cross_verdict=disputed(:279-280)、degraded 且 high tier(:281-282)、撞 cap(:283-284),外加三種 tier 收檔守衛退回(spec_path 無效 :305-320、gate 重驗不過 :321-349、cross 非乾淨 endorsed :350-365)——六條語意不同的路徑。四值列舉沒有一格能區分,S4 彙總會把「AI 覆核持續投反對票」和「單純沒收斂重試」混成同一個數字。
++
++### s3-f4 loop id 用曆日不是用「這次調用」當鍵,同日多筆結局已在現場真實碰撞
++severity: major
++引句:「管線連死兩天不是天氣,是要人看」
++佐證:file: `docs/.canary-log.jsonl:626-627`
++說明::626-627 是 2026-08-25 當天兩筆真實記錄,loop 欄同為 auto-2026-08-25,一筆 09:38 skip、一筆 11:58 NO_JSON——同一 loop id 混著不同結局。spec 沒定義「連續 2 天」與七天彙總在同日多筆時怎麼算;若實作用 loop id 當鍵查「當天狀態」,後寫的蓋掉先寫的,先發生的失敗被同天稍後的成功悄悄蓋掉,連續失敗計數與跑次數兩邊都算錯。
++
++## 掃過但乾淨的面
++- 成本抽取本身(orchestrator_result.py:26-67)只填兩個既有欄、tokens 刻意排除 cache_read——與「填既有欄不建新機制」一致。
++- record rc 非 0 的處置(autonomous-loop.sh:243-249)沿用「fail-open 但不靜默」,S3 沒動它,乾淨。
++- LINE 沿用既有 line_notify 傳輸層,無新對外通道。
+diff --git a/governance/review-reports/auto-loop-repair/r1-snapshot.md b/governance/review-reports/auto-loop-repair/r1-snapshot.md
+new file mode 100644
+index 0000000..a32b7a9
+--- /dev/null
++++ b/governance/review-reports/auto-loop-repair/r1-snapshot.md
+@@ -0,0 +1,52 @@
++---
++type: project
++summary: |-
++  FLAG:TECHNICAL
++  KEY:地基盤點第 1 批案 A——自主迴圈三症修理:①NO_JSON 中止真的丟 gap(log 說「自然重抽」是假話,08-24/25 兩筆實丟)②選題退化 FIFO(decay_and_prune 寫了沒人呼叫,153/160 筆凍在 0.5 分,靠穩定排序挑兩個月前舊題)③近三天燒 $156 落地 0 件,帳有成本欄但無產出行
++  KEY:[S1] 失敗不丟件 [S2] 選題接上衰減+再現回血+同分新者先+淘汰歸檔 [S3] 死因分類落帳+連兩天管線死喊人 [S4] 七天產出一行(跑幾次/燒多少/落地幾件)
++  DEP:[[Systems/autonomous-iteration-loop]]
++status: doing
++created: 2026-08-26
++updated: 2026-08-26
++tags:
++  - type/project
++  - status/doing
++---
++
++# 自主迴圈修理_計劃
++
++> 白話:每天早上自動選一個治理缺口、寫成 spec、自審到收斂、停在放行閘等人的那條迴圈,最近三天燒了 156 美金、一件都沒落地。查下來是三個具體的洞,不是「整條迴圈爛了」——修這三個洞,不動放行閘等既有裁定。
++
++PRIOR-ART: 全部借用,零依賴自寫幾行——「失敗的件不丟、進死信重排」是訊息佇列教科書做法(SQS/RabbitMQ 的 DLQ);「排隊太久的題目分數要動、防餓死/防殭屍」是 OS 排程器 aging;「被重複點名=價值信號、回血」是 LFU 快取;「每週一行花費對產出」是 SRE 成本儀表。沒有一樣需要新輪子。
++
++## 現況事實(2026-08-26 實查,含收據)
++
++1. **NO_JSON 丟件**:`gap_select.select()` 會把選中的 gap 從 backlog **拿走**(`backlog.py` `pop_top` 是 pop+存檔);orchestrator 輸出解析失敗時 `autonomous-loop.sh:254` 直接 `exit 1`,沒有任何 requeue,而且 log 訊息寫「gap 留在 backlog 下輪自然重抽」——**假話**。實查:08-24(API 529 過載)、08-25(輸出被截斷)兩天選中的 gap 都已不在 backlog,也不在 covered,就是消失了。
++2. **選題退化 FIFO**:`backlog.py:28` 的 `decay_and_prune`(每天九五折、低於 0.2 淘汰)**全 repo 沒有任何生產呼叫點**(只有測試);live backlog 160 筆裡 153 筆凍在初始 0.5 分,`pop_top` 用穩定排序取最高分→同分時永遠是最早插入的贏→ 08-23 選中的是 2026-06-29 的舊題。日報重複點名一個 gap 只更新 `last_seen`,分數不動,`last_seen` 是死資料沒人讀。
++3. **成本已記、產出沒帳**:08-23 起每輪成本已落 canary 帳(第一筆 08-23 15:16)(`auto-<日期>` 迴圈、--tokens/--wallclock-min 既有欄),這塊是好的。缺的是**結局**:帳上看不出這輪是收斂、未收斂、還是管線死掉;也沒有任何地方把「七天燒多少、落地幾件」放在一行給人看。近三輪:08-23 $68.7 跑滿 6 輪未收斂(正常路徑,有 requeue)、08-24 $33.9 NO_JSON(529)、08-25 $53.3 NO_JSON(輸出截斷;信封=「claude -p --output-format json」回傳的頂層 JSON(含 total_cost_usd/num_turns/duration_ms 等)——這輪信封異常:1 turn/0.1 分鐘卻報 $53,原因未查明,先當「死因待分類」記帳不建理論)。
++
++## 條款
++
++- **[S1] 失敗不丟件**:orchestrator 輸出解析失敗(PARSE_FAIL/NO_JSON/空)時,中止前把選中的 gap **原分數放回 backlog**(不是它的錯,不降分),另在該筆累計 `pipeline_failures` 欄;log 訊息改成真話(「gap 已放回 backlog」)。行為斷言:模擬 NO_JSON 一輪後,該 gap 仍在 backlog 且分數不變、`pipeline_failures` +1。
++- **[S2] 選題修理**:①每日進場呼叫既有 `decay_and_prune`(原設計參數不動:×0.95/日、<0.2 淘汰);②日報再次點名已在 backlog 的 gap 時分數回血到初始 0.5(再現=世界重複投票),不只碰 `last_seen`;③ `pop_top` 同分時改「`last_seen` 新者優先」;④被淘汰的列**歸檔到 `governance/backlog-archive.jsonl`(新檔,本案新增;跟 live 的 `governance/backlog.jsonl` 同目錄)** 而不是靜默刪(現況 153 筆會在接上衰減後 ~17 天內大批淘汰,屬原設計意圖,但要留痕可回收)。行為斷言:兩筆同分 gap,`last_seen` 較新者先被選;跑衰減後低於 0.2 的筆出現在 archive 檔而非人間蒸發。
++- **[S3] 死因分類落帳+連續失敗喊人**:成本落帳那筆的 `--note` 帶上結局分類與美元(`outcome=converged|unconverged|skipped|pipeline_fail:<死因> usd=<金額>`;canary 帳的成本欄當初刻意只收 tokens/分鐘兩欄不發明新欄,美元走 note 自由文字,不動欄位)(死因取信封 is_error 與 NO_JSON 標記帶出的 result 殘文(autonomous-loop.sh:213 那段)分類:api_error/truncated/parse_fail);連續 2 天 `pipeline_fail` → 復用既有 `line_notify` 喊人(管線連死兩天不是天氣,是要人看)。行為斷言:NO_JSON 輪的 canary 帳 note 含 `pipeline_fail:api_error` 字樣;連兩天注入失敗 fixture 觸發 LINE 呼叫(測試打樁驗參數,不真發)。
++- **[S4] 七天產出一行**:每輪收尾在 autonomous.log 印一行七天彙總:「過去 7 天:跑 N 次、燒 $X、收斂 Y、放行 Z、管線死 W」,資料源=canary 帳的 `auto-*` 迴圈(tokens/分鐘走既有欄;美元與結局分類走 [S3] 落在 note 的 `usd=`/`outcome=`),不建新帳本、不發明新欄。行為斷言:給定 fixture 帳,彙總行數字與逐筆加總一致。
++
++## 不做(邊界)
++
++- 不加自動 retry(529 重試一次=最壞情況成本翻倍,無人看顧下不敢);止血靠 [S3] 喊人。
++- 不動放行閘、N=1 閘、tier 收檔守衛、dry-run 紀律等既有裁定。
++- 不查 08-25 信封異常的根因(單一樣本,先靠 [S3] 分類累積證據;連續出現再立案)。
++- 不給 orchestrator 加 turn/成本上限:08-23 $69 那輪是**正常跑滿 6 輪**,上限會腰斬合法長跑;等 [S4] 產出帳累積數據再判要不要管。
++
++## 實務隱患
++
++- **金流/對外送出**:LINE 通知是對外送出,但復用既有 `line_notify` 傳輸層(token 環境變數傳遞,08-18 已硬化),不新增通道;測試一律打樁不真發。已排除:不碰金流。
++- **正式環境不可逆**:backlog 淘汰改「歸檔」正是為了可逆;archive 檔 append-only。已排除:無不可逆操作。
++- **守衛面**:本案改的就是守衛面(自主迴圈是治理守衛的一環),故走完整設計審(standard),不走 light。
++- **併發/資源**:backlog.jsonl 單寫者(每天一次 launchd 串行),無併發;archive append 同。已排除。
++- **相容性**:backlog 列新增 `pipeline_failures` 欄——會讀分數類欄位的路徑都用 `.get()` 容錯(`weakness` 是必有鍵、直索引,不受新欄影響),舊列無此欄照舊;covered.jsonl 格式不動。
++
++## 驗證計劃
++
++test_autonomous_loop.py 加測(先紅後綠):S1 失敗不丟件、S2 同分新者先+淘汰進 archive+再現回血、S3 note 分類+連兩天喊人(打樁)、S4 彙總一致。真機驗收:修完後下一次 launchd 真跑的 log 要看得到七天產出行。
+diff --git a/scripts/lumos b/scripts/lumos
+index 1156cd9..36d0dc8 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -3442,21 +3442,21 @@ def _vault_repo_root(env):
+     """disposal 留痕路徑的落帳/解析根(r2 終審修,寫讀兩側★必須同用這一份★):
+     從 vault 向上找 .git(docs/<slug>-knowledge 布局下 vault.parent=docs/ 非 repo root);
+     找不到退 vault.parent(測試假 vault 行為不變)。"""
+     p = env.vault.resolve()
+     for cand in (p, *p.parents):
+         if (cand / ".git").exists():
+             return cand
+     return env.vault.parent.resolve()
+ 
+ 
+-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None):
++def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, outcome=None, usd=None):
+     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
+     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
+     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
+     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
+     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
+     --clusters(M2):該輪 risk-cluster 三態帳(每輪至多一筆帶;讀側 loop status --panel 消費)。
+     天花板:這只證明「審計員有沒有醒著讀」,不證明它抓到所有真問題(見設計 doc)。"""
+     import json
+     import datetime
+     import secrets
+@@ -3526,20 +3526,37 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+             if _val < 0:
+                 print(f"擋下:--{_name.replace('_', '-')} 只能填 0 或正整數,你給的是 {_val}", file=sys.stderr)
+                 return 2
+             rec[_name] = _val
+     if scope_lines is not None and scope_lines > _CANARY_SCOPE_SOFT_CAP_LINES:
+         rec["scope_oversize"] = True
+         print(f"提醒:這輪要審的東西有 {scope_lines} 行,超過建議的軟上限 {_CANARY_SCOPE_SOFT_CAP_LINES} 行"
+               f"(外部研究認為材料太多審查員容易看不完、漏審)。", file=sys.stderr)
+         print("  不擋你記錄,但帳上已標成 scope_oversize,這一輪抓到的結果算弱證據——"
+               "審查員可能是「看不完」而不是「沒問題」;收斂結論講保守一點,下一輪拆開審。", file=sys.stderr)
++    # ── 自主迴圈結局帳(2026-08-26 auto-loop-repair-v2):outcome/usd 結構化欄 ──
++    # 為什麼開新欄——[S4] 七天彙總要機器回讀「這輪怎麼收+花多少」;塞 note 散文是
++    # 專案明文放棄的舊路(note 在讀側一律丟棄防散文注入)。不給不寫鍵,舊列=舊格式桶。
++    if outcome is not None:
++        _main = str(outcome).split(":", 1)[0]
++        if _main not in ("converged", "unconverged", "tier-blocked", "skipped", "pipeline_fail") \
++                or not re.fullmatch(r"[a-z_-]+(:[a-z0-9_-]+)?", str(outcome)):
++            print(f"擋下:--outcome 要用「主類」或「主類:細類」——主類只能是 converged/unconverged/"
++                  f"tier-blocked/skipped/pipeline_fail,細類用小寫字母數字連字號;你給的是 {outcome!r}",
++                  file=sys.stderr)
++            return 2
++        rec["outcome"] = str(outcome)
++    if usd is not None:
++        if usd < 0:
++            print(f"擋下:--usd 只能填 0 或正數(這一輪實際花的美元),你給的是 {usd}", file=sys.stderr)
++            return 2
++        rec["usd"] = round(float(usd), 4)
+     # ── M1包 #1 tier 定錨欄(選配;loop next/gate 讀首個帶 tier 記錄定錨) ──
+     if tier is not None:
+         if tier not in LOOP_TIERS:
+             print(f"擋下:--tier 分級只能是 {'/'.join(LOOP_TIERS)} 之一,你給的是 {tier!r}", file=sys.stderr)
+             return 2
+         rec["tier"] = tier
+     # ── T1 相容雙讀(design-loop重設計 實作計畫):處置帳六選配欄——★全部不給=行為與今日相同★ ──
+     # 集合核對而非總數核對(r1 Codex:只核總數可被重複計數/虛構項配平);
+     # 「不給不寫鍵」同 --findings 慣例;違反一律 rc2(寫側就擋,不留到 gate)。
+     def _ids(raw):   # None=未給;""=明示空集合(兩者語意不同)
+@@ -15580,20 +15597,26 @@ def main():
+     cr.add_argument("--clusters",
+                     help="M2 risk-cluster 三態帳:'名=狀態,...'(resolved/accepted-minor:理由/disputed-major);每輪至多一筆帶,loop status --panel 消費")
+     cr.add_argument("--spec", dest="rec_spec",
+                     help="M1包 雙 hash:計算當下真檔 sha256 存 result_sha256(record 於 fold 後執行=post-fold);須與 --reviewed 同現")
+     cr.add_argument("--reviewed", help="M1包 雙 hash:派工當下真檔 sha256 hex(dispatch 快照);須與 --spec 同現")
+     cr.add_argument("--tokens", type=int, help="M1包 成本欄:該輪 subagent tokens(非負整數,選配)")
+     cr.add_argument("--scope-lines", type=int, dest="scope_lines",
+                     help="這輪被審材料的行數(diff/spec;非負整數,選配)。★不進任何 gate★——"
+                          "純telemetry,供日後分析『caught 率是不是隨規模掉』(外部實測:規模是主導混淆變數)")
+     cr.add_argument("--wallclock-min", type=int, dest="wallclock_min", help="M1包 成本欄:該輪 wall-clock 分鐘(非負整數,選配)")
++    cr.add_argument("--outcome", dest="rec_outcome",
++                    help="[自主迴圈結局帳] 這一輪最後怎麼收:converged / unconverged:<細類> / "
++                         "tier-blocked:<細類> / skipped / pipeline_fail:<死因>。"
++                         "機器要回讀的資料開結構化欄,不塞 note 散文(auto-loop-repair-v2)")
++    cr.add_argument("--usd", dest="rec_usd", type=float,
++                    help="[自主迴圈結局帳] 這一輪實際花的美元(claude -p 回傳,非估算;非負,選配)")
+     cr.add_argument("--tier", dest="rec_tier", choices=("light", "standard", "high"),
+                     help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
+     cr.add_argument("--report", help="[T1 處置帳] 審查員報告檔路徑(存 path+sha256;檔案須存在且非空)")
+     cr.add_argument("--snapshot", help="[T1 處置帳] 派工凍結快照檔路徑(quote-check 的比對對象;存 path+sha256)")
+     cr.add_argument("--findings-set", dest="findings_set",
+                     help="[T1 處置帳] 逐條 finding id 逗號串(集合核對的全集;與 folded/accepted 配套)")
+     cr.add_argument("--folded-set", dest="folded_set", help="[T1 處置帳] 折入計劃節點的 id 子集")
+     cr.add_argument("--accepted-set", dest="accepted_set",
+                     help="[T1 處置帳] 附理由放行的 id 子集(與 folded 互斥;聯集須=全集;blocker 輪必空)")
+     cr.add_argument("--accept-reason", dest="accept_reasons", action="append",
+@@ -16212,20 +16235,21 @@ def main():
+     if args.cmd == "canary":
+         if args.ccmd == "second":
+             return cmd_canary_second(env, ref_id=args.sec_ref, verdict=args.sec_verdict,
+                                      auditor=args.sec_auditor, note=args.sec_note)
+         return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
+                           args.severity, findings=args.findings, round_id=args.round_id,
+                           canary_type=args.canary_type, probe=args.probe,
+                           capture_counts=args.capture_counts, clusters=args.clusters,
+                           spec=args.rec_spec, reviewed=args.reviewed,
+                           tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,
++                          outcome=args.rec_outcome, usd=args.rec_usd,
+                           scope_lines=args.scope_lines, report=args.report, snapshot=args.snapshot,
+                           findings_set=args.findings_set, folded_set=args.folded_set,
+                           accepted_set=args.accepted_set, accept_reasons=args.accept_reasons,
+                           finding_kinds=getattr(args, 'finding_kinds', None))
+ 
+     if args.cmd == "loop":
+         if args.lcmd == "canary-stats":
+             return cmd_loop_canary_stats(env, args.loop_id)
+         if args.lcmd == "status":
+             return cmd_loop_status(env, args.loop_id, args.need,
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index d2a108f..beaae45 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -1,15 +1,15 @@
+ import json, tempfile, unittest, sys, io, urllib.error
+ from pathlib import Path
+ from unittest import mock
+ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "governance"))
+-from autonomous_loop import backlog, gap_select, confidence_report, line_notify
++from autonomous_loop import backlog, gap_select, confidence_report, line_notify, run_ledger
+ 
+ 
+ class TestBacklog(unittest.TestCase):
+     def setUp(self):
+         self.p = Path(tempfile.mkdtemp()) / "backlog.jsonl"
+ 
+     def test_load_missing_returns_empty(self):
+         self.assertEqual(backlog.load_backlog(self.p), [])
+ 
+     def test_add_sets_initial_fields(self):
+@@ -183,23 +183,24 @@ class TestExtractCost(unittest.TestCase):
+         c = orchestrator_result.extract_cost({"total_cost_usd": "貴", "duration_ms": None,
+                                               "num_turns": [], "usage": "壞"})
+         self.assertIsNone(c)
+ 
+     def test_cli_line_omits_missing_fields(self):
+         """組出來的記帳參數只帶真的有值的欄——沒有的不要送 0 冒充量過。"""
+         from autonomous_loop import orchestrator_result
+         self.assertEqual(
+             orchestrator_result.cost_cli_args({"usd": 1.0, "wallclock_min": 3,
+                                                "tokens": 500, "turns": 2, "cache_read": 0}),
+-            ["--tokens", "500", "--wallclock-min", "3"])
++            ["--tokens", "500", "--wallclock-min", "3", "--usd", "1.0"])
++        # usd 自 2026-08-26 起是結構化欄(auto-loop-repair-v2):有值就送
+         self.assertEqual(
+-            orchestrator_result.cost_cli_args({"usd": 1.0, "wallclock_min": None,
++            orchestrator_result.cost_cli_args({"usd": None, "wallclock_min": None,
+                                                "tokens": None, "turns": 2, "cache_read": 0}),
+             [])
+ 
+ 
+ class TestCrossAudit(unittest.TestCase):
+     def setUp(self):
+         from autonomous_loop import cross_audit
+         self.ca = cross_audit
+         self.d = Path(tempfile.mkdtemp())
+         self.canary = self.d / ".canary-log.jsonl"
+@@ -532,12 +533,281 @@ class TestLintWatchDedup(unittest.TestCase):
+             '{"name":"detekt","latest":"1.24.0","seen":"2026-07-04"}\n',
+             encoding="utf-8")
+         result = self.m.new_candidates(cands, str(self.seen))
+         # must not crash, detekt is seen (valid line) → filtered out
+         names = [c["name"] for c in result]
+         self.assertNotIn("detekt", names, "detekt は valid seen line で除外されるべき")
+         # ruff matches malformed line's key only if parsed — since malformed is skipped, ruff is new
+         self.assertIn("ruff", names, "ruff は malformed line に一致せず新候補のはず")
+ 
+ 
++# ═══ 自主迴圈修理(auto-loop-repair-v2,2026-08-26)——[S1]-[S4] 行為斷言 ═══
++
++class TestBacklogRepairS2(unittest.TestCase):
++    """[S2] 選題修理:壞行容錯/原子寫/回血/三鍵排序/冪等衰減+歸檔。"""
++    def setUp(self):
++        self.d = Path(tempfile.mkdtemp())
++        self.p = self.d / "backlog.jsonl"
++        self.arch = self.d / "backlog-archive.jsonl"
++        self.state = self.d / "decay-state.json"
++
++    def test_load_skips_bad_lines(self):
++        self.p.write_text('{"weakness":"a","value_score":0.5}\n{{{壞行\n{"weakness":"b","value_score":0.4}\n')
++        rows = backlog.load_backlog(self.p)
++        self.assertEqual([r["weakness"] for r in rows], ["a", "b"])
++
++    def test_save_atomic_no_tmp_left(self):
++        backlog._save(self.p, [{"weakness": "a"}])
++        leftovers = [f for f in self.d.iterdir() if f.name != "backlog.jsonl"]
++        self.assertEqual(leftovers, [])
++        self.assertEqual(backlog.load_backlog(self.p)[0]["weakness"], "a")
++
++    def test_reseen_restores_score_to_init_not_above(self):
++        backlog._save(self.p, [{"weakness": "w", "suggestion": "s", "source_date": "2026-08-01",
++                                "value_score": 0.3, "last_seen": "2026-08-01"}])
++        backlog.add_gaps(self.p, [{"weakness": "w", "suggestion": "s"}], "2026-08-26")
++        r = backlog.load_backlog(self.p)[0]
++        self.assertEqual(r["value_score"], 0.5)   # 補回初始
++        self.assertEqual(r["last_seen"], "2026-08-26")
++        backlog.add_gaps(self.p, [{"weakness": "w", "suggestion": "s"}], "2026-08-27")
++        self.assertEqual(backlog.load_backlog(self.p)[0]["value_score"], 0.5)  # 不疊加不超過
++
++    def test_pop_top_source_date_breaks_tie(self):
++        # 同分同 last_seen:source_date 新者贏,且與插入順序無關(舊題先插)
++        backlog._save(self.p, [
++            {"weakness": "old", "value_score": 0.5, "last_seen": "2026-08-26", "source_date": "2026-06-01"},
++            {"weakness": "new", "value_score": 0.5, "last_seen": "2026-08-26", "source_date": "2026-08-26"},
++        ])
++        self.assertEqual(backlog.pop_top(self.p)["weakness"], "new")
++
++    def test_pop_top_last_seen_before_source(self):
++        backlog._save(self.p, [
++            {"weakness": "stale", "value_score": 0.5, "last_seen": "2026-08-01", "source_date": "2026-08-26"},
++            {"weakness": "fresh", "value_score": 0.5, "last_seen": "2026-08-26", "source_date": "2026-06-01"},
++        ])
++        self.assertEqual(backlog.pop_top(self.p)["weakness"], "fresh")
++
++    def test_pop_top_score_still_dominates(self):
++        backlog._save(self.p, [
++            {"weakness": "hi", "value_score": 0.6, "last_seen": "2026-01-01", "source_date": "2026-01-01"},
++            {"weakness": "lo", "value_score": 0.5, "last_seen": "2026-08-26", "source_date": "2026-08-26"},
++        ])
++        self.assertEqual(backlog.pop_top(self.p)["weakness"], "hi")
++
++    def _row(self, w, score):
++        return {"weakness": w, "value_score": score, "last_seen": "2026-08-20", "source_date": "2026-08-20"}
++
++    def test_daily_decay_first_run_single_day(self):
++        backlog._save(self.p, [self._row("w", 0.5)])
++        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
++        self.assertEqual(out["days"], 1)
++        self.assertAlmostEqual(backlog.load_backlog(self.p)[0]["value_score"], 0.475, places=4)
++
++    def test_daily_decay_same_day_noop(self):
++        backlog._save(self.p, [self._row("w", 0.5)])
++        backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
++        out2 = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
++        self.assertEqual(out2["status"], "noop")
++        self.assertAlmostEqual(backlog.load_backlog(self.p)[0]["value_score"], 0.475, places=4)
++
++    def test_daily_decay_days_exponent(self):
++        backlog._save(self.p, [self._row("w", 0.5)])
++        self.state.write_text('{"last_decayed": "2026-08-23"}')
++        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
++        self.assertEqual(out["days"], 3)
++        self.assertAlmostEqual(backlog.load_backlog(self.p)[0]["value_score"], 0.5 * 0.95 ** 3, places=4)
++
++    def test_daily_decay_prunes_to_archive_not_vanish(self):
++        backlog._save(self.p, [self._row("dying", 0.2), self._row("living", 0.5)])
++        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
++        self.assertEqual(out["pruned"], 1)
++        live = [r["weakness"] for r in backlog.load_backlog(self.p)]
++        self.assertEqual(live, ["living"])
++        arch = [json.loads(l) for l in self.arch.read_text().splitlines() if l.strip()]
++        self.assertEqual(arch[0]["weakness"], "dying")
++        self.assertEqual(arch[0]["archived"], "2026-08-26")
++
++    def test_daily_decay_archive_fail_keeps_live(self):
++        backlog._save(self.p, [self._row("dying", 0.2)])
++        bad_arch = self.d / "not-writable-dir"
++        bad_arch.mkdir()   # 目錄不可當檔寫 → append 失敗
++        out = backlog.daily_decay(self.p, bad_arch, self.state, "2026-08-26")
++        self.assertEqual(out["status"], "archive-fail")
++        self.assertEqual(backlog.load_backlog(self.p)[0]["weakness"], "dying")  # live 不動
++        self.assertFalse(self.state.exists())  # 狀態不前進,明天重試
++
++
++class TestPipelineRequeueS1(unittest.TestCase):
++    """[S1] 失敗不丟件:原分放回+pipeline_failures 累計+滿 3 熔斷 covered。"""
++    def setUp(self):
++        d = Path(tempfile.mkdtemp())
++        self.p = d / "backlog.jsonl"
++        self.cov = d / "covered.jsonl"
++
++    def test_requeue_keeps_score_and_counts(self):
++        gap = {"weakness": "w", "suggestion": "s", "value_score": 0.31,
++               "last_seen": "2026-08-20", "source_date": "2026-08-01"}
++        out = gap_select.requeue_pipeline_fail(self.p, gap, self.cov)
++        self.assertEqual(out, "requeued")
++        r = backlog.load_backlog(self.p)[0]
++        self.assertEqual(r["value_score"], 0.31)          # 不降分
++        self.assertEqual(r["pipeline_failures"], 1)
++
++    def test_third_failure_goes_covered(self):
++        gap = {"weakness": "w", "suggestion": "s", "value_score": 0.5, "pipeline_failures": 2}
++        out = gap_select.requeue_pipeline_fail(self.p, gap, self.cov)
++        self.assertEqual(out, "covered")
++        self.assertEqual(backlog.load_backlog(self.p), [])   # 不回 backlog
++        self.assertIn("w", gap_select.load_covered(self.cov))
++
++
++class TestDeathClassify(unittest.TestCase):
++    """[S3] 死因分類:shell 層 $PARSED 前綴 → 分類 token(不依賴成本區塊 json.load)。"""
++    def test_classify(self):
++        from autonomous_loop import orchestrator_result as orr
++        self.assertEqual(orr.classify_death("PARSE_FAIL:Expecting value"), "parse_fail")
++        self.assertEqual(orr.classify_death(""), "parse_fail")
++        self.assertEqual(orr.classify_death("NO_JSON:is_error=True | API Error: 529 Overloaded."), "api_error")
++        self.assertEqual(orr.classify_death("NO_JSON:is_error=False | G2 三條也降 minor。剩最後一組。"), "truncated")
++
++
++class TestRunLedgerS4(unittest.TestCase):
++    """[S3]⑤+[S4]:七天彙總逐筆遍歷、舊格式桶、連續失敗按有跑日。"""
++    def setUp(self):
++        self.log = Path(tempfile.mkdtemp()) / "canary.jsonl"
++
++    def _w(self, rows):
++        self.log.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
++
++    def test_week_summary_mixed_and_same_day(self):
++        self._w([
++            {"ts": "2026-08-23T15:16:49+08:00", "loop": "auto-2026-08-23", "tokens": 1},              # 舊格式
++            {"ts": "2026-08-25T09:38:00+08:00", "loop": "auto-2026-08-25", "outcome": "skipped"},
++            {"ts": "2026-08-25T11:58:00+08:00", "loop": "auto-2026-08-25",
++             "outcome": "pipeline_fail:truncated", "usd": 53.33},                                     # 同日兩筆都要算
++            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "converged", "usd": 12.5},
++            {"ts": "2026-08-10T10:00:00+08:00", "loop": "auto-2026-08-10", "outcome": "converged"},   # 窗外
++            {"ts": "2026-08-26T10:00:00+08:00", "loop": "probe-x", "outcome": "converged"},           # 非 auto-*
++            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-smoke", "outcome": "converged", "usd": 9.9},   # 同字首非日期形狀:排除
++            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-loop-repair-v2", "outcome": "converged"},      # 設計審 loop id:排除
++        ])
++        s = run_ledger.summarize_week(self.log, "2026-08-26")
++        self.assertEqual(s["runs"], 4)
++        self.assertEqual(s["legacy"], 1)
++        self.assertEqual(s["converged"], 1)
++        self.assertEqual(s["pipeline_fail"], 1)
++        self.assertAlmostEqual(s["usd"], 65.83, places=2)
++        line = run_ledger.format_week_line(s)
++        self.assertIn("跑 4 次", line)
++        self.assertIn("舊格式", line)
++
++    def test_consecutive_fail_two_run_days(self):
++        self._w([
++            {"ts": "2026-08-24T10:00:00+08:00", "loop": "auto-2026-08-24", "outcome": "pipeline_fail:api_error"},
++            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "pipeline_fail:truncated"},
++        ])   # 8/25 沒跑:不算斷
++        self.assertTrue(run_ledger.consecutive_fail_days(self.log, "2026-08-26"))
++
++    def test_not_consecutive_when_day_has_success(self):
++        self._w([
++            {"ts": "2026-08-25T09:00:00+08:00", "loop": "auto-2026-08-25", "outcome": "pipeline_fail:api_error"},
++            {"ts": "2026-08-26T09:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "pipeline_fail:parse_fail"},
++            {"ts": "2026-08-26T11:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "converged"},
++        ])   # 26 日有成功筆 → 非失敗日
++        self.assertFalse(run_ledger.consecutive_fail_days(self.log, "2026-08-26"))
++
++    def test_legacy_only_day_not_a_run_day(self):
++        self._w([
++            {"ts": "2026-08-24T10:00:00+08:00", "loop": "auto-2026-08-24", "outcome": "pipeline_fail:api_error"},
++            {"ts": "2026-08-25T10:00:00+08:00", "loop": "auto-2026-08-25", "tokens": 5},              # 舊格式日不算有跑日
++            {"ts": "2026-08-26T10:00:00+08:00", "loop": "auto-2026-08-26", "outcome": "pipeline_fail:truncated"},
++        ])
++        self.assertTrue(run_ledger.consecutive_fail_days(self.log, "2026-08-26"))
++
++
++class TestLineAlertNoFakeHeader(unittest.TestCase):
++    """[S3]⑤ 警示不套「備好待放行」模板。"""
++    def test_build_alert_plain(self):
++        m = line_notify.build_alert("⚠ 自主迴圈連兩個有跑日管線死")
++        self.assertNotIn("備好", json.dumps(m, ensure_ascii=False))
++        self.assertEqual(m["messages"][0]["text"], "⚠ 自主迴圈連兩個有跑日管線死")
++
++
++class TestLoopShellTrap(unittest.TestCase):
++    """[S1]+[S3]+[S4] 端到端(沙箱假 repo):早退點的放回+結局落帳+彙總照印。
++    沙箱換 HOME(不摸真 LINE token)、scripts/lumos 換成記 argv 的 stub、claude 換成吐固定信封的 stub。"""
++
++    def _sandbox(self, anchor_ok):
++        import shutil, datetime
++        root = Path(tempfile.mkdtemp())
++        gov = root / "governance"; gov.mkdir()
++        real_gov = Path(__file__).resolve().parent.parent / "governance"
++        shutil.copy(real_gov / "autonomous-loop.sh", gov / "autonomous-loop.sh")
++        shutil.copytree(real_gov / "autonomous_loop", gov / "autonomous_loop",
++                        ignore=shutil.ignore_patterns("__pycache__", "*.log", "DRYRUN-OBSERVE.md"))
++        (gov / "reports").mkdir()
++        today = datetime.date.today().isoformat()
++        (gov / "reports" / ("governance-%s.json" % today)).write_text(
++            json.dumps({"gaps": [{"weakness": "沙箱測試gap", "suggestion": "x"}]}, ensure_ascii=False))
++        scripts = root / "scripts"; scripts.mkdir()
++        stub = "\n".join([
++            "#!/usr/bin/env python3",
++            "import sys, json, pathlib",
++            "calls = pathlib.Path(__file__).parent / 'lumos-calls.jsonl'",
++            "with calls.open('a') as f:",
++            "    f.write(json.dumps(sys.argv[1:], ensure_ascii=False) + chr(10))",
++            "if 'anchor' in sys.argv:",
++            "    sys.exit(0 if %s else 1)" % ("True" if anchor_ok else "False"),
++            "sys.exit(0)", ""])
++        (scripts / "lumos").write_text(stub)
++        (scripts / "lumos").chmod(0o755)
++        home = root / "home"; (home / ".config" / "ai-daily").mkdir(parents=True)  # 無 token 檔=不發 LINE
++        bindir = root / "bin"; bindir.mkdir()
++        env_file = root / "envelope.json"
++        env_file.write_text(json.dumps({
++            "result": "中途講到一半沒有 JSON。", "is_error": False,
++            "total_cost_usd": 12.5, "duration_ms": 120000, "num_turns": 3,
++            "usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 0}}))
++        (bindir / "claude").write_text("#!/usr/bin/env bash\ncat '%s'\n" % env_file)
++        (bindir / "claude").chmod(0o755)
++        if anchor_ok:
++            (gov / "anchor-baseline.json").write_text("{}")
++        return root, gov, scripts, home, bindir
++
++    def _run(self, root, home, bindir):
++        import subprocess, os
++        env = dict(os.environ, HOME=str(home), PATH="%s:%s" % (bindir, os.environ["PATH"]))
++        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
++        return subprocess.run(["bash", str(root / "governance" / "autonomous-loop.sh"), "--dry-run", "1"],
++                              capture_output=True, text=True, env=env, timeout=120)
++
++    def _calls(self, scripts):
++        f = scripts / "lumos-calls.jsonl"
++        return [json.loads(l) for l in f.read_text().splitlines() if l.strip()] if f.exists() else []
++
++    def test_anchor_fail_early_exit_requeues_and_records(self):
++        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
++        r = self._run(root, home, bindir)
++        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
++        rows = backlog.load_backlog(gov / "backlog.jsonl")
++        self.assertEqual([x["weakness"] for x in rows], ["沙箱測試gap"])   # 放回了
++        self.assertEqual(rows[0]["pipeline_failures"], 1)
++        self.assertEqual(rows[0]["value_score"], 0.5)                      # 原分不動
++        recs = [c for c in self._calls(scripts) if "record" in c]
++        self.assertTrue(any("pipeline_fail:anchor_fail" in c for c in recs), recs)  # 結局落帳
++        self.assertIn("過去 7 天", r.stdout)                               # 失敗日照印彙總
++
++    def test_no_json_classified_requeued_with_cost(self):
++        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=True)
++        r = self._run(root, home, bindir)
++        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
++        rows = backlog.load_backlog(gov / "backlog.jsonl")
++        self.assertEqual(rows[0]["pipeline_failures"], 1)                  # NO_JSON 也放回
++        recs = [c for c in self._calls(scripts) if "record" in c]
++        hit = [c for c in recs if "pipeline_fail:truncated" in c]
++        self.assertTrue(hit, recs)                                         # 死因=截斷(is_error=False)
++        self.assertIn("--usd", hit[0])                                     # 成本欄同筆帶上
++        self.assertIn("12.5", " ".join(hit[0]))
++
++
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 379bb47..d931e3a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3815,20 +3815,43 @@ def t_loop_rewrite_mark():
+     check("rewrite: 前綴編號不誤判連續重寫", "連續第二次判重寫" not in r3.stdout, r3.stdout)
+     # 壞 JSON 行(非物件)不炸血緣查找
+     gl2 = v.parent / ".governance-log.jsonl"
+     with open(gl2, "a", encoding="utf-8") as f:
+         f.write('"just a string"\n[1,2]\n')
+     r4 = run(v, "loop", "rewrite", "pfx-c", "--successor", "pfx-d")
+     check("rewrite: 帳內非物件 JSON 行不炸", r4.returncode == 0, str(r4.returncode))
+     print("  ✓ t_loop_rewrite_mark")
+ 
+ 
++def t_canary_record_outcome_usd():
++    """自主迴圈結局帳(auto-loop-repair-v2 [S3]):record 的 --outcome/--usd 結構化欄。
++    要點:合法值落欄、主類白名單外 rc2、細類壞字元 rc2、負 usd rc2、不給不寫鍵(舊格式桶前提)。"""
++    import json as _j
++    vault = mkvault()
++    run(vault, "canary", "record", "none", "--loop", "auto-2026-08-26", "--auditor", "orch",
++        "--outcome", "pipeline_fail:api_error", "--usd", "33.9", expect_rc=0)
++    run(vault, "canary", "record", "none", "--loop", "auto-2026-08-27", "--auditor", "orch",
++        "--outcome", "converged", expect_rc=0)
++    run(vault, "canary", "record", "none", "--loop", "auto-2026-08-28", "--auditor", "orch", expect_rc=0)
++    lines = [_j.loads(l) for l in (vault.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()]
++    check("outcome+usd 落欄", lines[0].get("outcome") == "pipeline_fail:api_error" and lines[0].get("usd") == 33.9, str(lines[0]))
++    check("outcome 單主類合法", lines[1].get("outcome") == "converged" and "usd" not in lines[1], str(lines[1]))
++    check("不給不寫鍵", "outcome" not in lines[2] and "usd" not in lines[2], str(lines[2]))
++    r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "exploded")
++    check("主類白名單外 rc2", r.returncode == 2 and "主類" in r.stderr, f"rc={r.returncode}")
++    r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "converged:大寫壞字元")
++    check("細類壞字元 rc2", r.returncode == 2, f"rc={r.returncode}")
++    r = run(vault, "canary", "record", "none", "--loop", "x", "--usd", "-3")
++    check("負 usd rc2", r.returncode == 2 and "美元" in r.stderr, f"rc={r.returncode}")
++    print("  ✓ t_canary_record_outcome_usd")
++
++
+ def t_panel_probe_retired():
+     """probe輪退場 d1/d2(Enzo 甲裁 2026-08-25)行為級三釘:(a)新迴圈問 panel 被拒+指路
+     (b)code-* major 席+非空 accepted → disposal FAIL;同構散文案 PASS (c)舊迴圈 panel 印行
+     為觀測語意(不含義務句)。"""
+     import subprocess as _sp
+     import os as _os
+     v = mkvault()
+     env2 = dict(_os.environ)
+     env2["LUMOS_PANEL_RETIRE_CUTOFF"] = "2000-01-01"   # 一切迴圈都算「新」→驗拒判
+     # (a) 新迴圈問 panel 被拒

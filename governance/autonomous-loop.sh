@@ -12,6 +12,19 @@ if [ "$MODE" != "--dry-run" ]; then
   echo "autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常" >&2
   exit 2
 fi
+# ── 整跑鎖(code-r1 s2-f1/f2):launchd+人工同時跑會互蓋 backlog/archive——mkdir 原子搶鎖,
+# 鎖裡放 PID;持鎖行程已死(kill -0 不到)視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。
+LOCKDIR="$SCRIPT_DIR/.autonomous-loop.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  OLDPID="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+  if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+    echo "[$(date '+%F %T')] 另一份 autonomous-loop 正在跑(pid $OLDPID),本次退出——不搶寫 backlog"; exit 0
+  fi
+  echo "[$(date '+%F %T')] 發現殘鎖(pid ${OLDPID:-?} 已不在),接管"
+  rm -rf "$LOCKDIR"; mkdir "$LOCKDIR"
+fi
+echo $$ > "$LOCKDIR/pid"
+
 TODAY="$(date +%F)"
 REPORT="$SCRIPT_DIR/reports/governance-$TODAY.json"
 PENDING="$SCRIPT_DIR/pending";  mkdir -p "$PENDING"
@@ -25,10 +38,15 @@ log(){ echo "[$(date '+%F %T')] $*"; }
 # ③連兩個有跑日全失敗 → LINE 喊人(素訊息,不套「備好待放行」模板)
 # ④七天產出一行(失敗日也印——放 trap 就是為了這個)
 # 內部所有指令都要 fail-open(|| true / if 判),trap 裡一個炸掉會吞掉後面全部。
-GAP_JSON=""; GAP_DISPOSED=""; OUTCOME=""; COST_ARGS=""; FINAL_DONE=""
+# ★誠實邊界(code-r1 s2-f3)★:trap EXIT 接得住 bash 攔得到的退出,接不住 SIGKILL/斷電;
+# 那個窗口由 in-flight 標記檔補——選中 gap 先落標記,下次開場發現殘留標記就放回。
+GAP_JSON=""; GAP_DISPOSED=""; OUTCOME=""; COST_ARGS=""; FINAL_DONE=""; ROUND_RECORDED=""
+INFLIGHT="$SCRIPT_DIR/.inflight-gap.json"
 finalize(){
   [ -n "$FINAL_DONE" ] && return 0; FINAL_DONE=1
-  [ -z "$GAP_JSON" ] && return 0   # 還沒選中 gap 的早退(無日報/無 gap):無輪無帳
+  rm -f "${PROMPT_FILE:-}" 2>/dev/null || true
+  [ -n "${SCRATCH:-}" ] && rm -rf "$SCRATCH" 2>/dev/null || true   # code-r1 s2-f5:暫存不累積
+  if [ -z "$GAP_JSON" ]; then rm -rf "$LOCKDIR" 2>/dev/null || true; return 0; fi   # 還沒選中 gap 的早退(無日報/無 gap):無輪無帳
   if [ -z "$GAP_DISPOSED" ]; then
     RQ="$(echo "$GAP_JSON" | python3 -c "
 import sys, json; sys.path.insert(0,'$REPO/governance')
@@ -45,10 +63,13 @@ t=os.environ.get('LINE_TOKEN','')
 print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
     fi
   fi
-  # shellcheck disable=SC2086  # COST_ARGS 故意不引號:要拆成多參數
-  if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY"           --auditor orchestrator --outcome "${OUTCOME:-pipeline_fail:parse_fail}" $COST_ARGS           --note "自主迴圈結局帳(trap 收尾統一落;成本欄=claude -p 實際回傳,非估算)")           >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
-    log "結局帳:record 失敗——帳上沒有這輪(詳情 $LOGDIR/cost-$TODAY.log)"
+  if [ -z "$ROUND_RECORDED" ]; then   # skip 迭代已當場落帳的輪不重複記(code-r1 s1-f1/s3-f1)
+    # shellcheck disable=SC2086  # COST_ARGS 故意不引號:要拆成多參數
+    if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY"           --auditor orchestrator --outcome "${OUTCOME:-pipeline_fail:parse_fail}" $COST_ARGS           --note "自主迴圈結局帳(trap 收尾統一落;成本欄=claude -p 實際回傳,非估算)")           >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
+      log "結局帳:record 失敗——帳上沒有這輪(詳情 $LOGDIR/cost-$TODAY.log)"
+    fi
   fi
+  rm -f "$INFLIGHT" 2>/dev/null || true   # gap 已處置(放回或消化),斷電保險解除
   LEDGER_OUT="$(cd "$REPO" && python3 -c "
 import sys; sys.path.insert(0,'governance')
 from autonomous_loop import run_ledger
@@ -69,8 +90,21 @@ print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if
   else
     log "七天彙總:算不出來(詳 $LOGDIR/finalize-$TODAY.err)——不擋收尾,但這行沒了要查"
   fi
+  rm -rf "$LOCKDIR" 2>/dev/null || true
 }
 trap finalize EXIT
+
+# ── in-flight 殘留回收(code-r1 s2-f3):上次被 SIGKILL/斷電砍在半路的 gap 放回 ──
+if [ -f "$INFLIGHT" ]; then
+  RQ0="$(python3 -c "
+import sys, json; sys.path.insert(0,'$REPO/governance')
+from autonomous_loop import gap_select
+g=json.load(open('$INFLIGHT'))
+print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
+  log "上次執行被硬砍(SIGKILL/斷電),殘留的選中 gap 已放回($RQ0)"
+  rm -f "$INFLIGHT"
+fi
 
 if [ ! -f "$REPORT" ]; then
   if [ "$MODE" = "--dry-run" ]; then
@@ -228,7 +262,8 @@ print('LINE', line_notify.send(line_notify.build_message('autonomous-loop', os.e
   exit 0
 fi
 log "選中 gap:$GAP_JSON"
-GAP_DISPOSED=""
+GAP_DISPOSED=""; OUTCOME=""; COST_ARGS=""; ROUND_RECORDED=""   # code-r1 s1-f1:換 gap 全重置,成本不跨 gap 殘留
+printf '%s\n' "$GAP_JSON" > "$INFLIGHT.tmp" && mv "$INFLIGHT.tmp" "$INFLIGHT"   # 斷電保險
 
 # 錨點完整性:驗證器被污染時跑出的「收斂/綠」全是假訊號,寧停。
 # loop 入口比 pre-push 嚴:missing baseline 亦硬擋(無人看顧場景無人眼兜底)。
@@ -325,15 +360,32 @@ CROSS_SUMMARY="${CROSS_SUMMARY//$'\n'/ }"   # F3 防破版:換行→空格
 
 if [ "$SKIPPED" = "True" ]; then
   skip_n=$((skip_n+1))
-  echo "$GAP_JSON" | python3 -c "
+  # skip 迭代自己真跑過 orchestrator、真花了錢——當場落自己的帳,不等 trap
+  # (code-r1 s1-f1/s3-f1:trap 只落最後一筆,早期迭代的花費會張冠李戴或直接蒸發)
+  OUTCOME="skipped"
+  # shellcheck disable=SC2086
+  if (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY" \
+        --auditor orchestrator --outcome skipped $COST_ARGS \
+        --note "自主迴圈結局帳(skip 迭代當場落;成本欄=claude -p 實際回傳,非估算)") \
+        >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
+    ROUND_RECORDED=1
+  else
+    log "結局帳:skip 迭代 record 失敗——這筆花費帳上會缺(詳 $LOGDIR/cost-$TODAY.log)"
+  fi
+  # covered 寫入成功才算有去向;失敗就留給 trap 放回(code-r1 ext-f1:不准寫失敗還標已處置)
+  if echo "$GAP_JSON" | python3 -c "
 import sys, json; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import gap_select
 w=json.load(sys.stdin).get('weakness','')
 if w: gap_select.mark_covered('$SCRIPT_DIR/covered.jsonl', w)
-" 2>/dev/null || true
-  GAP_DISPOSED=1   # 已記 covered=有去向,trap 不再放回
+" 2>>"$LOGDIR/finalize-$TODAY.err"; then
+    GAP_DISPOSED=1
+    rm -f "$INFLIGHT" 2>/dev/null || true
+  else
+    log "⚠ covered 寫入失敗——gap 改由收尾放回 backlog,不冒充已處置"
+  fi
   log "gap 已被既有 spec 覆蓋,skip(reason: $(get reason));已記入 covered、永久不再選。循環選下一個($skip_n/$SKIP_CAP)。"
-  [ "$skip_n" -ge "$SKIP_CAP" ] && { OUTCOME="skipped"; log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
+  [ "$skip_n" -ge "$SKIP_CAP" ] && { log "連 skip $SKIP_CAP 個已覆蓋 gap,今天結束(剩餘留 backlog 明天再選)。"; exit 0; }
   continue
 fi
 break
@@ -363,7 +415,7 @@ from autonomous_loop import gap_select
 g=json.load(sys.stdin)
 print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
 " 2>/dev/null || echo '?')"
-  GAP_DISPOSED=1
+  case "$RQ" in requeued|covered) GAP_DISPOSED=1;; *) log "⚠ requeue 回報異常($RQ)——gap 改由收尾放回,不冒充已處置";; esac
   log "未收斂 gap 處置:$RQ(回 backlog 降分重試 / 累計達 3 次 covered)"
   exit 0
 fi
@@ -385,7 +437,7 @@ from autonomous_loop import gap_select
 g=json.load(sys.stdin)
 print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
 " 2>/dev/null || echo '?')"
-  GAP_DISPOSED=1
+  case "$RQ" in requeued|covered) GAP_DISPOSED=1;; *) log "⚠ requeue 回報異常($RQ)——gap 改由收尾放回";; esac
   log "未收斂 gap 處置:$RQ(tier 守衛/spec_path)"
   exit 0
 fi
@@ -416,7 +468,7 @@ from autonomous_loop import gap_select
 g=json.load(sys.stdin)
 print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
 " 2>/dev/null || echo '?')"
-  GAP_DISPOSED=1
+  case "$RQ" in requeued|covered) GAP_DISPOSED=1;; *) log "⚠ requeue 回報異常($RQ)——gap 改由收尾放回";; esac
   log "未收斂 gap 處置:$RQ(tier 守衛)"
   exit 0
 fi
@@ -434,7 +486,7 @@ from autonomous_loop import gap_select
 g=json.load(sys.stdin)
 print(gap_select.requeue_unconverged('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
 " 2>/dev/null || echo '?')"
-  GAP_DISPOSED=1
+  case "$RQ" in requeued|covered) GAP_DISPOSED=1;; *) log "⚠ requeue 回報異常($RQ)——gap 改由收尾放回";; esac
   log "未收斂 gap 處置:$RQ(tier 守衛/cross)"
   exit 0
 fi
@@ -442,12 +494,12 @@ fi
 if [ "$MODE" = "--dry-run" ]; then
   if cp "$SPEC" "$PENDING/" 2>/dev/null; then
     OUTCOME="converged"   # 「備好待放行」=converged 且 pending 寫入成功([S4] Z 的定義)
+    GAP_DISPOSED=1        # spec 真的備好了,gap 才算消化(code-r1 ext-f2:寫失敗不冒充已處置)
   else
     OUTCOME="pipeline_fail:pending_write"
-    log "⚠ 收斂但 pending 寫入失敗($SPEC → $PENDING/)——spec 沒備好,這不是好日子"
+    log "⚠ 收斂但 pending 寫入失敗($SPEC → $PENDING/)——spec 沒備好;gap 由收尾放回 backlog"
   fi
-  printf '%s\n' "$REPORT_MD" > "$PENDING/$(basename "$SPEC" .md)-confidence.md"
-  GAP_DISPOSED=1   # 收斂=有去向(gap 已消化成 spec),trap 不放回
+  printf '%s\n' "$REPORT_MD" > "$PENDING/$(basename "$SPEC" .md)-confidence.md" 2>/dev/null || true
   log "dry-run:收斂!spec + 可信度報告寫入 $PENDING/(repo 未動)"
   LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys; sys.path.insert(0,'$REPO/governance')

@@ -29,7 +29,29 @@ def load_covered(covered_path):
     p = Path(covered_path)
     if not p.exists():
         return set()
-    return {json.loads(l)["weakness"] for l in p.read_text(encoding="utf-8").splitlines() if l.strip()}
+    # 逐行容錯(code-r1 s3-f3/conf-f1):covered 跟 backlog 同款 append-only jsonl,
+    # 一行壞資料不該讓整條迴圈死在選題之前;壞行進 .bad 側檔保留。
+    got, bad = set(), []
+    for l in p.read_text(encoding="utf-8").splitlines():
+        if not l.strip():
+            continue
+        try:
+            w = json.loads(l).get("weakness")
+        except ValueError:
+            bad.append(l); continue
+        if w:
+            got.add(w)
+    if bad:
+        import sys
+        try:
+            with open(p.with_name(p.name + ".bad"), "a", encoding="utf-8") as f:
+                for l in bad:
+                    f.write(l + "\n")
+            where = f"已撈到 {p.name}.bad 保留"
+        except OSError as e:
+            where = f".bad 側檔也寫不進({e})"
+        print(f"covered:跳過 {len(bad)} 行壞資料({p}),{where}", file=sys.stderr)
+    return got
 
 
 def mark_covered(covered_path, weakness):

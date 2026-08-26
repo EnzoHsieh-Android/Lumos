@@ -3840,6 +3840,8 @@ def t_canary_record_outcome_usd():
     check("主類白名單外 rc2", r.returncode == 2 and "主類" in r.stderr, f"rc={r.returncode}")
     r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "converged:大寫壞字元")
     check("細類壞字元 rc2", r.returncode == 2, f"rc={r.returncode}")
+    r = run(vault, "canary", "record", "none", "--loop", "x", "--outcome", "pipeline_fail:zzz")
+    check("字元合法但未宣告的細類 rc2(封閉列舉)", r.returncode == 2 and "封閉列舉" in r.stderr, f"rc={r.returncode}")
     r = run(vault, "canary", "record", "none", "--loop", "x", "--usd", "-3")
     check("負 usd rc2", r.returncode == 2 and "美元" in r.stderr, f"rc={r.returncode}")
     print("  ✓ t_canary_record_outcome_usd")

@@ -732,6 +732,81 @@ class TestLineAlertNoFakeHeader(unittest.TestCase):
         self.assertEqual(m["messages"][0]["text"], "⚠ 自主迴圈連兩個有跑日管線死")
 
 
+class TestCodeLoopR1Folds(unittest.TestCase):
+    """code-auto-loop-repair r1 折修的釘子(先紅後綠)。"""
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.p = self.d / "backlog.jsonl"
+        self.arch = self.d / "backlog-archive.jsonl"
+        self.state = self.d / "decay-state.json"
+        self.cov = self.d / "covered.jsonl"
+
+    def test_bad_lines_stashed_not_deleted(self):
+        # ext-f3:壞行不能在下一次正常寫入時被無聲永久刪除——讀取時撈到 .bad 側檔保留
+        self.p.write_text('{"weakness":"a","value_score":0.5}\n{{{半行壞資料\n')
+        backlog.load_backlog(self.p)
+        backlog._save(self.p, backlog.load_backlog(self.p))   # 正常寫入會覆寫掉壞行
+        bad = self.p.with_name(self.p.name + ".bad")
+        self.assertTrue(bad.exists(), "壞行要進 .bad 側檔保留,不准人間蒸發")
+        self.assertIn("半行壞資料", bad.read_text())
+
+    def test_load_covered_tolerates_bad_lines(self):
+        # s3-f3/conf-f1:covered 讀取要有對稱容錯
+        self.cov.write_text('{"weakness":"w1"}\n{{{壞\n{"no_weakness_key":1}\n{"weakness":"w2"}\n')
+        got = gap_select.load_covered(self.cov)
+        self.assertEqual(got, {"w1", "w2"})
+
+    def test_archive_readback_ignores_historical_bad_line(self):
+        # s3-f2:歷史壞行不能讓衰減永久卡死——自驗只看自己剛寫的尾段
+        self.arch.write_text('{{{歷史壞行\n')
+        backlog._save(self.p, [{"weakness": "dying", "value_score": 0.2,
+                                "last_seen": "2026-08-20", "source_date": "2026-08-20"}])
+        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
+        self.assertEqual(out["status"], "ok", out)
+        self.assertEqual(out["pruned"], 1)
+
+    def test_archive_append_after_half_line_gets_own_line(self):
+        # s3-f2 附帶:前次中斷留下沒換行的半行,新寫入不得黏在它後面
+        self.arch.write_text('{"weakness":"prev"')   # 無結尾換行
+        backlog._save(self.p, [{"weakness": "dying", "value_score": 0.2,
+                                "last_seen": "2026-08-20", "source_date": "2026-08-20"}])
+        out = backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
+        self.assertEqual(out["status"], "ok", out)
+        lines = self.arch.read_text().splitlines()
+        self.assertEqual(json.loads(lines[-1])["weakness"], "dying")
+
+    def test_state_written_before_live_shrink(self):
+        # ext-f4/s2-f4:state 先於縮 live 落盤(中斷=少衰一天,絕不重複衰)——以寫入順序釘
+        order = []
+        real_save = backlog._save
+        def spy_save(path, rows):
+            order.append(("save", Path(path).name)); real_save(path, rows)
+        real_write = Path.write_text
+        def spy_write(self_, content, *a, **k):
+            if self_.name.endswith("decay-state.json.tmp") or self_.name == "decay-state.json":
+                order.append(("state", self_.name))
+            return real_write(self_, content, *a, **k)
+        backlog._save = spy_save
+        Path.write_text = spy_write
+        try:
+            backlog._save(self.p, [{"weakness": "w", "value_score": 0.5,
+                                    "last_seen": "2026-08-20", "source_date": "2026-08-20"}])
+            order.clear()
+            backlog.daily_decay(self.p, self.arch, self.state, "2026-08-26")
+        finally:
+            backlog._save = real_save
+            Path.write_text = real_write
+        state_i = next(i for i, o in enumerate(order) if o[0] == "state")
+        save_i = next(i for i, o in enumerate(order) if o[0] == "save" and o[1] == "backlog.jsonl")
+        self.assertLess(state_i, save_i, order)
+
+    def test_save_tmp_has_pid_suffix(self):
+        # s2-f1 補強:tmp 檔名帶 PID,並行不共用同一暫存檔(整跑鎖是主防線,這是第二道)
+        import inspect
+        src = inspect.getsource(backlog._save)
+        self.assertIn("getpid", src)
+
+
 class TestLoopShellTrap(unittest.TestCase):
     """[S1]+[S3]+[S4] 端到端(沙箱假 repo):早退點的放回+結局落帳+彙總照印。
     沙箱換 HOME(不摸真 LINE token)、scripts/lumos 換成記 argv 的 stub、claude 換成吐固定信封的 stub。"""
@@ -807,6 +882,176 @@ class TestLoopShellTrap(unittest.TestCase):
         self.assertTrue(hit, recs)                                         # 死因=截斷(is_error=False)
         self.assertIn("--usd", hit[0])                                     # 成本欄同筆帶上
         self.assertIn("12.5", " ".join(hit[0]))
+
+
+class TestLoopShellTrapR1Folds(unittest.TestCase):
+    """code-r1 折修的 shell 端到端釘(沙箱同 TestLoopShellTrap;紅證=s1 席自建重現+修前無覆蓋)。"""
+
+    def _sandbox(self, anchor_ok=True, envelopes=None, backlog_rows=None, report_gaps=None,
+                 preseed_ledger=None, inflight=None):
+        import shutil, datetime
+        root = Path(tempfile.mkdtemp())
+        gov = root / "governance"; gov.mkdir()
+        real_gov = Path(__file__).resolve().parent.parent / "governance"
+        shutil.copy(real_gov / "autonomous-loop.sh", gov / "autonomous-loop.sh")
+        shutil.copytree(real_gov / "autonomous_loop", gov / "autonomous_loop",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.log", "DRYRUN-OBSERVE.md",
+                                                      "decay-state.json"))
+        (gov / "reports").mkdir()
+        today = datetime.date.today().isoformat()
+        (gov / "reports" / ("governance-%s.json" % today)).write_text(
+            json.dumps({"gaps": report_gaps if report_gaps is not None else
+                        [{"weakness": "沙箱測試gap", "suggestion": "x"}]}, ensure_ascii=False))
+        if backlog_rows:
+            (gov / "backlog.jsonl").write_text(
+                "\n".join(json.dumps(r, ensure_ascii=False) for r in backlog_rows) + "\n")
+        docs = root / "docs"; docs.mkdir()
+        if preseed_ledger:
+            (docs / ".canary-log.jsonl").write_text(
+                "\n".join(json.dumps(r, ensure_ascii=False) for r in preseed_ledger) + "\n")
+        if inflight:
+            (gov / ".inflight-gap.json").write_text(json.dumps(inflight, ensure_ascii=False))
+        scripts = root / "scripts"; scripts.mkdir()
+        stub = "\n".join([
+            "#!/usr/bin/env python3",
+            "import sys, json, pathlib",
+            "calls = pathlib.Path(__file__).parent / 'lumos-calls.jsonl'",
+            "with calls.open('a') as f:",
+            "    f.write(json.dumps(sys.argv[1:], ensure_ascii=False) + chr(10))",
+            "if 'anchor' in sys.argv:",
+            "    sys.exit(0 if %s else 1)" % ("True" if anchor_ok else "False"),
+            "sys.exit(0)", ""])
+        (scripts / "lumos").write_text(stub); (scripts / "lumos").chmod(0o755)
+        home = root / "home"; (home / ".config" / "ai-daily").mkdir(parents=True)
+        bindir = root / "bin"; bindir.mkdir()
+        envs = envelopes if envelopes is not None else ["中途講到一半沒有 JSON。"]
+        for i, e in enumerate(envs):
+            body = e if isinstance(e, str) else json.dumps(e, ensure_ascii=False)
+            (root / ("envelope-%d.json" % i)).write_text(body)
+        claude_stub = "\n".join([
+            "#!/usr/bin/env python3",
+            "import pathlib",
+            "root = pathlib.Path(%r)" % str(root),
+            "cnt = root / 'claude-call-count'",
+            "n = int(cnt.read_text()) if cnt.exists() else 0",
+            "cnt.write_text(str(n + 1))",
+            "src = root / ('envelope-%d.json' % min(n, " + str(len(envs) - 1) + "))",
+            "print(src.read_text())", ""])
+        (bindir / "claude").write_text(claude_stub); (bindir / "claude").chmod(0o755)
+        if anchor_ok:
+            (gov / "anchor-baseline.json").write_text("{}")
+        return root, gov, scripts, home, bindir
+
+    _run = TestLoopShellTrap._run
+    _calls = TestLoopShellTrap._calls
+
+    def _env(self, result, cost=True, **extra):
+        e = {"result": json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else result,
+             "is_error": False, "num_turns": 3, "duration_ms": 60000}
+        if cost:
+            e.update({"total_cost_usd": 42.0,
+                      "usage": {"input_tokens": 10, "output_tokens": 10, "cache_read_input_tokens": 0}})
+        e.update(extra)
+        return e
+
+    def test_parse_fail_envelope_recorded_without_usd(self):
+        # conf-f5a:信封層整包壞 JSON → outcome=parse_fail 且該筆無 --usd
+        root, gov, scripts, home, bindir = self._sandbox(envelopes=["這整包根本不是 JSON"])
+        r = self._run(root, home, bindir)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        recs = [c for c in self._calls(scripts) if "record" in c]
+        hit = [c for c in recs if "pipeline_fail:parse_fail" in c]
+        self.assertTrue(hit, recs)
+        self.assertNotIn("--usd", hit[0])
+
+    def test_skip_then_empty_backlog_still_records_skip_row(self):
+        # s3-f1(blocker):skip 一次→backlog 見底→exit,skip 那筆要有自己的帳(含成本)
+        root, gov, scripts, home, bindir = self._sandbox(
+            envelopes=[self._env({"skipped": True, "reason": "已被覆蓋", "converged": False,
+                                  "topic": "t", "spec_path": ""})])
+        r = self._run(root, home, bindir)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        recs = [c for c in self._calls(scripts) if "record" in c and "skipped" in c]
+        self.assertEqual(len(recs), 1, self._calls(scripts))     # 有帳且不重複
+        self.assertIn("--usd", recs[0])                          # 成本跟著這筆
+        self.assertIn("沙箱測試gap", gap_select.load_covered(gov / "covered.jsonl"))
+
+    def test_multi_gap_cost_not_leaked_across_iterations(self):
+        # s1-f1:gap A(skip,$42)→gap B(信封壞,無成本)——B 的帳不得夾帶 A 的 42
+        root, gov, scripts, home, bindir = self._sandbox(
+            report_gaps=[{"weakness": "gapA", "suggestion": "x"},
+                         {"weakness": "gapB", "suggestion": "x"}],
+            envelopes=[self._env({"skipped": True, "reason": "r", "converged": False,
+                                  "topic": "t", "spec_path": ""}),
+                       "第二包整個不是 JSON"])
+        r = self._run(root, home, bindir)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        recs = [c for c in self._calls(scripts) if "record" in c]
+        skip_rows = [c for c in recs if "skipped" in c]
+        fail_rows = [c for c in recs if "pipeline_fail:parse_fail" in c]
+        self.assertEqual((len(skip_rows), len(fail_rows)), (1, 2 - 1), recs)
+        self.assertIn("42.0", " ".join(skip_rows[0]))            # A 的成本在 A 的帳
+        self.assertNotIn("42.0", " ".join(fail_rows[0]))         # 不漏到 B
+
+    def test_three_strikes_covered_and_alert_path(self):
+        # conf-f3:滿 3 次熔斷→covered+喊人線路真的走到(無 token → no-token)
+        root, gov, scripts, home, bindir = self._sandbox(
+            anchor_ok=False,
+            backlog_rows=[{"weakness": "頑固gap", "suggestion": "x", "value_score": 0.5,
+                           "last_seen": "2099-01-01", "source_date": "2099-01-01",
+                           "pipeline_failures": 2}],
+            report_gaps=[])
+        r = self._run(root, home, bindir)
+        self.assertIn("轉 covered 留人", r.stdout)
+        self.assertIn("no-token", r.stdout)                      # LINE 線路走到了(打樁無 token)
+        self.assertIn("頑固gap", gap_select.load_covered(gov / "covered.jsonl"))
+
+    def test_consecutive_fail_days_alert_fires(self):
+        # conf-f6:預埋兩個失敗有跑日→收尾判 CONSEC_FAIL→喊人線路走到
+        import datetime
+        d1 = (datetime.date.today() - datetime.timedelta(days=2)).isoformat()
+        d2 = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        root, gov, scripts, home, bindir = self._sandbox(
+            anchor_ok=False,
+            preseed_ledger=[
+                {"ts": d1 + "T10:00:00+08:00", "loop": "auto-" + d1, "outcome": "pipeline_fail:api_error"},
+                {"ts": d2 + "T10:00:00+08:00", "loop": "auto-" + d2, "outcome": "pipeline_fail:truncated"}])
+        r = self._run(root, home, bindir)
+        self.assertIn("連兩個有跑日", r.stdout)
+
+    def test_lock_blocks_concurrent_run(self):
+        # s2-f1:鎖被活行程持有→本次直接退出不搶寫
+        import os
+        root, gov, scripts, home, bindir = self._sandbox()
+        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+        (lock / "pid").write_text(str(os.getpid()))              # 本測試行程=活的
+        r = self._run(root, home, bindir)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("另一份", r.stdout)
+        self.assertEqual(self._calls(scripts), [])               # 什麼都沒做
+
+    def test_stale_lock_taken_over(self):
+        # s2-f1:持鎖行程已死→接管照跑
+        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
+        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+        (lock / "pid").write_text("99999999")
+        r = self._run(root, home, bindir)
+        self.assertIn("接管", r.stdout)
+        self.assertEqual(r.returncode, 1)                        # 照常跑到 anchor 失敗
+
+    def test_inflight_marker_recovered_on_next_run(self):
+        # s2-f3:上次被 SIGKILL 砍在半路的 gap,下次開場放回
+        root, gov, scripts, home, bindir = self._sandbox(
+            anchor_ok=False, report_gaps=[],
+            inflight={"weakness": "被硬砍的gap", "suggestion": "x", "value_score": 0.42,
+                      "last_seen": "2026-08-20", "source_date": "2026-08-20"})
+        r = self._run(root, home, bindir)
+        self.assertIn("被硬砍", r.stdout)
+        rows = backlog.load_backlog(gov / "backlog.jsonl")
+        mine = [x for x in rows if x["weakness"] == "被硬砍的gap"]
+        self.assertEqual(len(mine), 1, rows)
+        self.assertAlmostEqual(mine[0]["value_score"], 0.42 * 0.95, places=4)  # 原分放回,再吃當天正常衰減一次
+        self.assertFalse((gov / ".inflight-gap.json").exists())  # 標記消化掉
 
 
 if __name__ == "__main__":

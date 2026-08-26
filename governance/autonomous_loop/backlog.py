@@ -8,22 +8,31 @@ def load_backlog(path):
     set -euo pipefail 下未捕捉例外=從此天天早退,auto-loop-repair-v2 s2-f5)。"""
     p = Path(path)
     if not p.exists(): return []
-    rows, bad = [], 0
+    rows, bad = [], []
     for l in p.read_text(encoding="utf-8").splitlines():
         if not l.strip(): continue
         try:
             rows.append(json.loads(l))
         except ValueError:
-            bad += 1
+            bad.append(l)
     if bad:
         import sys
-        print(f"backlog:跳過 {bad} 行壞資料({path})——檔案疑似寫到一半被中斷,值得看一眼", file=sys.stderr)
+        # 壞行不能只是跳過——之後任何正常 _save 都會整檔覆寫,等於把它無聲永久刪除
+        # (code-r1 ext-f3)。撈到 .bad 側檔保留,人可回收。
+        try:
+            with open(p.with_name(p.name + ".bad"), "a", encoding="utf-8") as f:
+                for l in bad:
+                    f.write(l + "\n")
+            where = f"已撈到 {p.name}.bad 保留"
+        except OSError as e:
+            where = f"連 .bad 側檔都寫不進({e})——壞行只剩這行 log 有記錄"
+        print(f"backlog:跳過 {len(bad)} 行壞資料({path}),{where};檔案疑似寫到一半被中斷,值得看一眼", file=sys.stderr)
     return rows
 
 def _save(path, rows):
     """原子寫:先寫暫存檔再整檔替換——寫到一半被中斷(launchd 逾時/睡眠)不會留半個檔。"""
     p = Path(path)
-    tmp = p.with_name(p.name + ".tmp")
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")   # 帶 PID:並行不共用暫存檔(主防線是整跑鎖)
     tmp.write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + ("\n" if rows else ""),
         encoding="utf-8")
@@ -96,17 +105,31 @@ def daily_decay(path, archive_path, state_path, today, rate=0.95, floor=0.2):
     if pruned:
         arch = Path(archive_path)
         try:
+            # 前次中斷可能留下沒換行的半行:先補一個換行,新列不黏在壞行後面(code-r1 s3-f2 附帶)
+            prefix = ""
+            if arch.exists():
+                old = arch.read_text(encoding="utf-8")
+                if old and not old.endswith("\n"):
+                    prefix = "\n"
             with open(arch, "a", encoding="utf-8") as f:
+                f.write(prefix)
                 for r in pruned:
                     rec = dict(r); rec["archived"] = today; rec["reason"] = "decay-floor"
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            # 讀回自驗:最後 len(pruned) 行要能解析且 weakness 對得上
-            tail = [json.loads(l) for l in arch.read_text(encoding="utf-8").splitlines() if l.strip()][-len(pruned):]
+            # 讀回自驗:只 parse「自己剛寫的尾段」——歷史壞行不關這批的事,掃全檔會讓
+            # 一行陳年壞資料把衰減永久卡死且不自癒(code-r1 s3-f2 blocker)
+            tail_lines = [l for l in arch.read_text(encoding="utf-8").splitlines() if l.strip()][-len(pruned):]
+            tail = [json.loads(l) for l in tail_lines]
             if [t.get("weakness") for t in tail] != [r.get("weakness") for r in pruned]:
                 raise OSError("讀回內容對不上")
         except (OSError, ValueError) as e:
             print(f"backlog 歸檔失敗({e}):live 不動、狀態不前進,明天重試——絕不無痕淘汰", file=sys.stderr)
             return {"status": "archive-fail", "days": days, "pruned": 0}
+    # state 先落、live 後縮(都原子)。中斷在兩者之間=今天標了已衰但 live 沒縮=少衰一天,
+    # 方向安全;反過來(先縮後標)中斷=明天對已衰過的列再衰一次,分數靜默多掉
+    # (code-r1 ext-f4/s2-f4——原實作就是錯的那個方向)。
+    state_tmp = state.with_name(state.name + ".tmp")
+    state_tmp.write_text(json.dumps({"last_decayed": today}) + "\n", encoding="utf-8")
+    os.replace(state_tmp, state)
     _save(path, kept)
-    state.write_text(json.dumps({"last_decayed": today}) + "\n", encoding="utf-8")
     return {"status": "ok", "days": days, "pruned": len(pruned)}
