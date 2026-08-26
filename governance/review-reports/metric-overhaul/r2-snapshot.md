@@ -3,7 +3,7 @@ type: project
 summary: |-
   FLAG:DECISION
   KEY:地基盤點第 1 批案 B——檢索評測「未標=0」的尺翻案:Enzo 2026-08-26 裁推翻 08-17「不改尺靠補標」裁定,改 condensed 主尺(計分前剔除未標,於已判子列表算 P@8/nDCG;Sakai 2007)+覆蓋率誠實線;補標管線不拆(condensed 解懲罰、補標解池不完整,TREC 實務並用)
-  KEY:[S1] condensed 主尺(未標判定唯一委派 collect_unjudged;已判字典無 None;全尺以計分觸及集為界,MRR→MRR@10)[S2] coverage 三層(題級 ceil(k/2) 門檻→None 不進 macro/面別分算/同源 per-case)[S3] 切換點=repin 兩尺恆等零重錨;雙報期 gate 恆以舊尺拍板+新尺僅預覽同筆 nested;棘輪比較鍵擴 (goldset_rev,metric_rev)[S3b] pin_noise 維持未標=噪音[S3c 反轉] 消融 rc3 零容忍不退場 [S4] 補標管線不動 [S5] 標註刷新筆記結構化翻案(回溯 decisions+supersede)
+  KEY:[S1] condensed 主尺(未標判定唯一委派 collect_unjudged;已判字典無 None)[S2] coverage 三層(題級 ceil(k/2) 門檻→None 不進 macro/面別分算/同源 per-case)[S3] 切換點=repin 兩尺恆等零重錨;雙報期 gate 恆以舊尺拍板+新尺僅預覽同筆 nested;棘輪比較鍵擴 (goldset_rev,metric_rev)[S3b] pin_noise 維持未標=噪音[S3c 反轉] 消融 rc3 零容忍不退場 [S4] 補標管線不動 [S5] 標註刷新筆記補被翻紀錄
   DEP:[[Projects/標註刷新_計劃]]｜[[Projects/地基盤點2026-08-26_調研]]｜[[Systems/graph-sync-coverage]]
 status: doing
 created: 2026-08-26
@@ -33,7 +33,7 @@ PRIOR-ART: borrow——IR 界對「判定不完整」的成熟解:①condensed-l
 
 ## 條款(r1 五席 17 條全折後 v2)
 
-- **[S1] condensed 主尺**:全部品質尺改在「已判子列表」上計,且**一律以計分觸及集為計算邊界**(search 兩臂各前 10、edit free 前 k+固定席):MRR 改為 MRR@10(現行掃全量列表、超出觸及集——r2 抓到它是「repin 恆等」唯一例外,截到觸及集內恆等才對全尺成立);其餘 nDCG@5/Recall@10/P@8/nDCG@8(=hook P@top_k 同數字)/held-out lift 視窗本就在界內。
+- **[S1] condensed 主尺**:全部品質尺(search nDCG@5/MRR/Recall@10、edit P@8/nDCG@8=hook P@top_k 同數字、held-out lift)改在「已判子列表」上計。
   ①未標判定**唯一委派** `collect_unjudged` 的既有判準(node not in lab or final is None)——不在 `_labels_of` 另寫第三套(該函式 docstring 與 refresh_labels 頭部紀律明文禁止另寫);
   ②介面形狀:`_labels_of` 改回傳**只含已判節點的字典**(未標節點缺席,不是標 None)——:337 的 IDCG sorted 自然無 None 不炸、語意=已判集內理想序;
   ③排名剔除在呼叫端(:339/:382)以「node 在已判字典內」過濾後截 k;
@@ -45,12 +45,12 @@ PRIOR-ART: borrow——IR 界對「判定不完整」的成熟解:①condensed-l
 - **[S3] 版本化與切換(重設計:零重錨)**:
   ①切換點=**下次 repin**:repin 合約=評測母體 unjudged==0,此時 condensed 與舊尺**數值恆等**——門檻(≥15%/0.70)原樣沿用,無縫銜接,不需要任何「重錨方法」(08-17「history 失效」疑慮在數學上正面解掉);
   ②切換前雙報期:gate 判定**以舊尺為準**(「gate 總判定」一輪仍只印一次);新尺整組以「新尺預覽」字樣同印(不含「gate 總判定」字串),並塞進**同一筆** history 的 nested 欄 `condensed_preview`——一輪一筆的資料模型不破,autonomous-loop 的 tail -1 與兩個棘輪的 reversed(history) 讀者全不受影響;
-  ③切換那輪起 history 列寫 `metric_rev=condensed-v1`,舊列缺欄=舊尺;**棘輪同尺比較鍵擴為 (goldset_rev, metric_rev)**,並加**切換輪基線繼承**:切換輪必須先過「unjudged==0 且全尺新舊恆等」的機械斷言(不等=切換中止),過了才允許棘輪跨 metric_rev 繼承前一輪舊尺基線(僅此一輪)——沒有這條,新 metric_rev 第一筆必然落『無基線→這次當基線』分支,等於把驗證連續性的唯一時刻自動放行(r2 抓到的隱性重錨);
+  ③切換那輪起 history 列寫 `metric_rev=condensed-v1`,舊列缺欄=舊尺;**棘輪同尺比較鍵擴為 (goldset_rev, metric_rev)**——公式版本與標註資料版本是兩條軸,棘輪兩處(:300/:528)同步收;
   ④文案跟語意走:condensed 各尺輸出文案改為「已判子集內前 k」;「人實際看到的輸出準不準」的真實曝光語意由 out_top3_must/must-see 棘輪續任(它們不吃 label 排名、不受 condensed 影響),P@8 文案不再宣稱「人打開 hook 先看到的」。
 - **[S3b] 固定席噪音閘維持「未標=噪音」**(策展訊號非排序尺);由 [S1]④ 顯式判準實作,fixture 必須在 pins 桶放未標項驗證語意沒被順手翻。
 - **[S3c(反轉原裁)] 消融 rc3 零容忍不退場**:r1 席指出 rc3 正是 08-22 誤讀事故的根源修補,「整卷 0.5 軟標」承接不了零容忍防護——維持「觸及集內未標>0 → 消融硬擋」,condensed 不改變它;未標由補標管線清零後自然無擋。既有翻紅釘 t_eval_ablation_gate 保留,僅 docstring 引註更新(帳記在此)。
 - **[S4] 補標管線不動**:delta 補標照跑(condensed 解懲罰、補標解池不完整,TREC 實務並用);標註刷新計劃的週考卷未標訊號(該計劃編號 S4,撞名巧合)照發。
-- **[S5] 圖譜收尾(被翻紀錄,結構化)**:實作輪必須回頭改 [[Projects/標註刷新_計劃]]——①先回溯補一條 decisions 條目代表 2026-08-17 原裁定(四欄照既有慣例),再用 decision-supersede 標 valid:false+superseded_by 指向本計劃 d1(讓 lumos decisions --superseded 標準查法查得到,不能只改正文——r2 抓到假陰性);②「刻意不做」段與 08-22 複查句同步補被翻註記;兩篇筆記不得對同一件事給相反權威說法。
+- **[S5] 圖譜收尾(被翻紀錄)**:實作輪必須回頭改 [[Projects/標註刷新_計劃]]——「刻意不做:改指標語意…拒」段補被翻註記(2026-08-26 Enzo 裁,詳本計劃 d1),08-22 複查句同步更新;兩篇筆記不得對同一件事給相反權威說法。
 
 ## 不做(邊界)
 
@@ -72,19 +72,14 @@ PRIOR-ART: borrow——IR 界對「判定不完整」的成熟解:①condensed-l
 - fixture 算術修正(折 s1-f1):換 [未標,未標,判2,判1] 例。
 - 被翻紀錄安排(折 arch-f3)→ 新增 [S5]。
 
-**r2(2026-08-26,delta 席全新;3 條全折)**:
-- d-f1:全尺以觸及集為界、MRR→MRR@10(恆等例外消滅)。
-- d-f2:切換輪「恆等斷言過了才繼承基線」——隱性重錨補上機械驗證。
-- d-f3:[S5] 改結構化翻案(回溯 decisions+supersede),不只改正文。
-
 ## 驗證計劃(行為斷言,r1 修正版)
 
 - [S1]:fixture 換能示範差異的例——排名 [未標,未標,判2,判1] 取 @2:舊尺 [0,0]→P@2=0.0,condensed [判2,判1]→P@2=1.0(r1 抓到原例算術錯:舊例舊尺實為 0.5 且示範不出差異);三處未標集合(condensed 剔除集/coverage 分母/collect_unjudged 清單)在同一 fixture 上**相等**(集合等式斷言,不只驗分數);IDCG 路徑與 pin_noise 在含未標 pins 的 fixture 下不炸且語意正確。
 - [S2]:單題 1/8 已判 → 該題 None 不進 macro(外家反例翻綠);search 低覆蓋+edit 高覆蓋 → search 面獨立標弱;全題 None → lift/search_gate 輸出「無資料」不拋例外。
-- [S3]:雙報期輸出恰一行「gate 總判定」(舊尺)+含「新尺預覽」字樣;history 每輪恰一筆且含 condensed_preview nested;棘輪在 (goldset_rev,metric_rev) 不同時不跨比(fixture 逼);repin 後切換輪:unjudged==0 下全尺(含 MRR@10)新舊數值相等(恆等斷言,不等=切換中止);切換輪棘輪基線=繼承前輪舊尺值(fixture 逼:繼承生效且未通過恆等時不繼承)。
+- [S3]:雙報期輸出恰一行「gate 總判定」(舊尺)+含「新尺預覽」字樣;history 每輪恰一筆且含 condensed_preview nested;棘輪在 (goldset_rev,metric_rev) 不同時不跨比(fixture 逼);repin 後切換輪:unjudged==0 下新舊尺數值相等(恆等斷言)。
 - [S3b]:pins 含未標項的 fixture 下 pin_noise 計數含未標席。
 - [S3c]:t_eval_ablation_gate 綠燈保持(僅 docstring 更新)。
-- [S5]:lumos decisions Projects/標註刷新_計劃 --superseded 查得到被翻條目且 superseded_by 指向本計劃;正文註記字樣 grep 得到。
+- [S5]:標註刷新筆記 grep 得到被翻註記字樣。
 - 真機驗收:下一次週考卷 log 出現新尺預覽行;08-22 消融案例在 condensed 預覽下方向斷言(未標增加不再壓低預覽分)。
 
 ## 實務隱患
