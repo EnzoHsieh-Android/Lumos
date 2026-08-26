@@ -32,7 +32,7 @@ summary: |-
   KEY:CONVERGED ⟺ tail-K 滑動窗(append 序最後 K 筆)全為 caught+clean/minor;前面髒輪不影響、只看最後 K 筆[test:t_loop_status]
   KEY:missed 輪 ×tail-K 自然重置——一個 missed 落在窗內就擋收斂,直到隨新輪滑出;無需特例(dogfood R6 逼出)
   KEY:缺 severity 視同未收斂(逼明確宣告、不得當 clean);exit 0=CONVERGED｜1=未收斂(含無記錄=還沒開始)｜2=真錯誤(argparse/IO)
-  KEY:★(2026-08-26 嚴重度綁定案落地,舊「severity 自報無寫入端驗證」天花板已拆一半)★寫側硬擋:審查席帳列(loop+round+auditor)必附 --report,報告要有獨立「severity: <值>」行(逐行 fullmatch,引句/blockquote/跨行天生排除),帳面低於報告最高=拒帳 rc2、高報=放行+提醒;record 並落 spec_path 欄。殘餘天花板(誠實):報告與帳同出編排者之手,擋疏忽不擋共謀,對抗歸 [audit:];severity-check 第四道收貨+問閘尾巴(觀測不進合取,留痕併 roster-alerts.log)當縱深第二層
+  KEY:★(2026-08-26 嚴重度綁定案落地,舊「severity 自報無寫入端驗證」天花板已拆一半)★寫側硬擋:審查席帳列(loop+auditor;結局帳 --outcome 豁免——★cb3 折入:原 loop+round+auditor 三者齊備觸發=漏打 round 即繞道,已放寬;處置帳另必綁輪次+讀側 round-less 處置帳拒判★)必附 --report,報告要有獨立「severity: <值>」行(逐行 fullmatch,引句/blockquote/跨行天生排除),帳面低於報告最高=拒帳 rc2、高報=放行+提醒;record 並落 spec_path 欄。殘餘天花板(誠實):報告與帳同出編排者之手,擋疏忽不擋共謀,對抗歸 [audit:];severity-check 第四道收貨+問閘尾巴(觀測不進合取,留痕併 roster-alerts.log)當縱深第二層
   KEY:★判定回放(2026-08-26 改制回測案)★:`loop replay --freeze/--golden`——收斂即凍完整輸入閉包(全列帳原文+逐行 sha 集+spec 窗末 sha+卷證 HEAD blob+engine_rev)入 governance/replay/;回放唯讀(治理帳零寫入、無觀測尾巴),差異四分類:邏輯漂移/帳被動/凍結檔被動=紅,帳本長大/golden 過期(engine_rev 分流)=列出不紅;重凍比照 anchor approve 留痕+歸檔不覆寫;週跑 run_replay 補漏+輪替抽查(便宜自動升全跑);CONVERGED 仍非防竄改正確性證明,但「同輸入同判定」自此可每週機械重問
   DEP:scripts/lumos cmd_canary(+loop/+severity)｜cmd_loop_status｜cmd_gov canary mapper(detail 附 loop/sev 放最前)｜.canary-log.jsonl(複用,不新增 log)
   TEST:t_loop_status + t_canary_loop_fields;258 passed
