@@ -8,3 +8,9 @@
 5. Landmark 連紅次數:帳上重算=4 次(08-05/12/19/26),文件補次數;我對使用者口頭說過「五次」是錯的,已更正。
 6. DEP 補地基盤點連結。
 其餘機械宣稱(6 項)逐條屬實:_labels_of 位置/08-22 消融出處/刻意不做原句/三件基礎設施/history 欄形/metric_rev 不存在。
+
+## r1 收貨補記(外家席)
+ext 兩條 finding 引句 quote-check 全數錨定失敗(改寫非逐字)。依「可疑席不准直接丟、先機械重現」紀律,編排者重現:
+- ext-f1:_macro 等權平均(retrieval_eval.py:314/:436)HIT;單題 1/8 覆蓋反例算術 1/6=0.167 > 門檻緊繃度 0.033 HIT → 撈回,severity blocker 維持。
+- ext-f2:repin 合約 unjudged==0(refresh_labels.py help :6)HIT;「repin 時兩尺重合→雙報期學不到門檻映射」邏輯成立 → 撈回,severity major 維持。
+重現指令與輸出見 session 留痕;撈回≠豁免,兩條照折。
