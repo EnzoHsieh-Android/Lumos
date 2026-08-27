@@ -17,8 +17,8 @@ related:
   - "[[Systems/cochange-guard]]"
 summary: |-
   FLOW:pre-commit Gate DG(Gate CC 旁)→`lumos delguard --staged`→S1 staged diff `-` 行抽被刪識別字(per-file 回收表/stopword/排除域路徑段+lockfile/.md 不抽)→單次 git grep --cached 判兩檔信心(全域消失=high/呼叫點殘存=low)→三件套 regex 掃 vault 指名「還在講它」的節點+原句(型別只排序不壓低,Systems 排前)→S2 純連結編輯(LINK_KEYS 子集)∧S1 命中=假同步嫌疑→S3 退場三問(stdout)
-  KEY:[2026-08-21 體檢 #9]降級(超時/內部錯誤)一律寫治理帳 gate=delguard kind=degraded(note 標 reason)——原本只印一行放行、無處可數;TimeoutExpired 歸類超時不再印「內部錯誤」;預算 2.0→5.0s
-  KEY:advisory 恆 rc0——crash(`|| true`+except Exception)/timeout(python 內建 deadline,env LUMOS_DELGUARD_DEADLINE,預設 2.0s)/git diff rc≠0 皆降級放行,降級訊息走 stdout;--json 含 tokens/hits/fake_sync/degraded
+  KEY:[2026-08-21 體檢 #9]降級(超時/內部錯誤)一律寫治理帳 gate=delguard kind=degraded(note 標 reason)——原本只印一行放行、無處可數;TimeoutExpired 歸類超時不再印「內部錯誤」;預算 2.0→5.0→★15.0s(2026-08-27:5.0 在本 vault 377 篇+大 diff 仍常超,一 session 降級多次;Enzo 指示優化)★
+  KEY:advisory 恆 rc0——crash(`|| true`+except Exception)/timeout(python 內建 deadline,env LUMOS_DELGUARD_DEADLINE,預設 ★15.0s★)/git diff rc≠0 皆降級放行,降級訊息走 stdout;--json 含 tokens/hits/fake_sync/degraded
   KEY:快照契約=staged index(git grep --cached;diff 帶 -M 與 -c core.quotePath=off -c diff.noprefix=false -c diff.mnemonicPrefix=false);vault-only repo(graph_root=".")靜默 return 0
   KEY:先驗值 cap=40(DELGUARD_TOKEN_CAP)/top-10(DELGUARD_TOP_N),超 cap 保留高信心逐條+統計行不清零;replay 校準後以數據取代
   KEY:天花板=只抓「符號消失」型;死碼盲區(符號在、機制停用=存在性比對放行)/行為反轉/純語意矛盾不響——見 [[code側刪除傳播守衛_計劃]] 天花板節能力邊界表;v2 候選=呼叫點判定

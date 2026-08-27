@@ -9916,14 +9916,18 @@ def t_codeloop_pass_survives_bookkeeping_commits():
         pass_sha = (_codeloop_read(d, branch) or {}).get("head_sha", "")
         g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
         # 簿記 commit:pass 剛 append 的治理帳行(+留痕 json,同屬白名單)
+        # ★canary-log/bypass-log 也算簿記(2026-08-27 死結根治):審計記帳在 loop 中發生,
+        #   pass 後提交它們原本會失效擋推——補進白名單後不失效(Issues/簿記白名單漏canary與bypass帳)
+        (Path(d) / "docs" / ".canary-log.jsonl").write_text('{"kind":"none","loop":"x"}\n', encoding="utf-8")
+        (Path(d) / "docs" / ".bypass-log.jsonl").write_text('{"ts":"t"}\n', encoding="utf-8")
         g("add", "-A")
         g("commit", "-qm", "gov bookkeeping")
         check("★前置★ 現場成立:pass 後 HEAD 真的前進了(≠留痕 sha)",
               bool(pass_sha) and _git_head(d) != pass_sha, f"pass_sha={pass_sha[:8]}")
         chg = g("diff", "--name-only", pass_sha, "HEAD").stdout.splitlines()
-        check("★前置★ 現場成立:該 commit 只動簿記檔",
-              chg and all(f.startswith(("docs/.governance", "docs/.usage", "governance/code-loop/"))
-                          for f in chg), str(chg))
+        check("★前置★ 現場成立:該 commit 只動簿記檔(含 canary/bypass)",
+              chg and all(f.startswith(("docs/.governance", "docs/.usage", "docs/.canary",
+                                        "docs/.bypass", "governance/code-loop/")) for f in chg), str(chg))
         r = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
                     capture_output=True, text=True)
         check("★pass 後純簿記 commit → 留痕仍有效 rc0(原:sha 過時追尾)★", r.returncode == 0,

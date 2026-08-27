@@ -11663,7 +11663,11 @@ def _strip_string_literals(code):
 # 描述「命中 open(...)」,被當代碼掃就再次命中 → 再 skip → 再寫一行理由……自我餵食,
 # 實測誤觸發 9 次。這些檔是紀錄不是要合入的碼。
 _BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
-                      "docs/.ci-log.jsonl", "governance/anchor-baseline.json")
+                      "docs/.ci-log.jsonl", "docs/.canary-log.jsonl",
+                      "docs/.bypass-log.jsonl", "governance/anchor-baseline.json")
+# ↑ canary-log/bypass-log 2026-08-27 補（[[Issues/簿記白名單漏canary與bypass帳]] 死結根治）:
+# 審計記帳(canary record)在 loop 中發生,pass 後提交它們原本會讓留痕失效→擋推;
+# 兩者都是紀錄非碼,補進白名單=pitfalls 不掃 + code-loop 留痕不因它們失效。
 _BOOKKEEPING_DIR = "governance/code-loop/"
 _PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
 LINT_CMD_TIMEOUT = 180
@@ -12965,7 +12969,7 @@ def cmd_delguard_check(repo=None, as_json=False):
     import json, os, subprocess, time
     t0 = time.monotonic()
     try:  # 亂設的 env 不該讓 pre-commit 印 traceback(fail-open 契約覆蓋設定錯誤)
-        deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "5.0"))  # 2.0 在本 repo 幾乎必超(2026-08-21 一天降級 5+ 次)
+        deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "15.0"))  # 5.0 在本 repo(377 篇+大 diff)仍常超,2026-08-27 一 session 降級多次→15;advisory fail-open,pre-commit 多等幾秒換掃完整
     except (ValueError, TypeError):
         deadline = 2.0
     def _over():
@@ -14067,7 +14071,7 @@ def _ci_write(env, rec):
     return _jsonl_append_verified(path, rec, "dedup_key", key)
 
 
-def cmd_ci_wait(env, timeout=600.0, repo_dir=None, sha=None, branch=None,
+def cmd_ci_wait(env, timeout=1800.0, repo_dir=None, sha=None, branch=None,
                 grace=30.0, as_json=False):
     """[S1] push 後同輪等 CI 結論。綠 rc0/紅 rc1/未定·逾時·no-run·工具缺席 rc0/帳寫失敗·參數錯 rc2。"""
     import json
@@ -16639,7 +16643,7 @@ def main():
     p.add_argument("--no-lint", dest="pf_no_lint", action="store_true", help="--diff 只跑 regex 層、不跑專案 lint 指令(快,給 pre-push advisory)")
 
     cw = sub.add_parser("ci-wait", help="[CI回流閉環] push 後同輪等 GitHub Actions 結論(綠 rc0/紅 rc1;需 .lumos/config.json 宣告 ci 區塊才啟用)")
-    cw.add_argument("--timeout", dest="cw_timeout", type=float, default=600.0)
+    cw.add_argument("--timeout", dest="cw_timeout", type=float, default=1800.0)   # 600 撐不過 ~15min CI(2026-08-27),→1800 並順帶治 ci-status 過期(ci-wait 跑完才寫 ci-log)
     cw.add_argument("--grace", dest="cw_grace", type=float, default=30.0, help="判綠/判無 run 前的重查窗(秒)")
     cw.add_argument("--repo-dir", dest="cw_repo", default=None)
     cw.add_argument("--sha", dest="cw_sha", default=None)
