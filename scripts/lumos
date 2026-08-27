@@ -3969,8 +3969,8 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
     def _ids(raw):   # None=未給;""=明示空集合(兩者語意不同)
         return None if raw is None else [x.strip() for x in raw.split(",") if x.strip()]
     f_set, fo_set, ac_set = _ids(findings_set), _ids(folded_set), _ids(accepted_set)
-    if any(x is not None for x in (fo_set, ac_set, accept_reasons, refute_verdicts)) and f_set is None:
-        print("擋下:--folded-set/--accepted-set/--accept-reason/--refute-verdict 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
+    if any(x is not None for x in (fo_set, ac_set, accept_reasons, refute_verdicts, finding_kinds)) and f_set is None:
+        print("擋下:--folded-set/--accepted-set/--accept-reason/--refute-verdict/--finding-kind 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
         return 2
     if f_set is not None:
         if not f_set:
@@ -4046,6 +4046,16 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             if not set(rv) <= F:
                 print(f"擋下:--refute-verdict 的 id 要在發現清單裡(發現有 {sorted(F)},標了不存在的 {sorted(set(rv) - F)})", file=sys.stderr)
                 return 2
+            # 表態與去向的記帳一致性(寫側,如 accept-reason 鍵須==accepted-set;不碰 disposal 判閘/收斂):
+            # evidence=辯方拿反證降級→該 id 的去向必是放行(accepted);agree/concern=辯方維持→必是折入(folded)。
+            # 標了 evidence 卻沒放行 = 帳自打架,日後「抽驗降級樣本」會抽到沒降的,挖空本欄用途。
+            for _k, _v in rv.items():
+                if _v == "evidence" and _k not in AC:
+                    print(f"擋下:{_k} 標 evidence(辯方拿反證降級)但不在放行清單(--accepted-set)——降級的發現去向是放行,帳對不上", file=sys.stderr)
+                    return 2
+                if _v in ("agree", "concern") and _k not in FO:
+                    print(f"擋下:{_k} 標 {_v}(辯方維持)但不在折入清單(--folded-set)——維持的發現去向是折入,帳對不上", file=sys.stderr)
+                    return 2
             rec["refute_verdicts"] = rv
     # ── 嚴重度綁定機械掃 [S1] 寫側強制(2026-08-26)★行為改變★:審查席帳列
     # (--loop/--round/--auditor 齊備,kind 不限——退役 caught/missed 也擋,換 kind 即繞過)

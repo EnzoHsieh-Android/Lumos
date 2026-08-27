@@ -1,0 +1,363 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 1649edf..bfa3846 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -3406,20 +3406,34 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
+     for r in rows:
+         if r.get("gate") == "canary" and isinstance(r.get("finding_kinds"), dict):
+             fk_rounds += 1
+             for v in r["finding_kinds"].values():
+                 if v in fk: fk[v] += 1
+     tot = sum(fk.values())
+     if tot:
+         print(f"  發現在修什麼(只算有標 --finding-kind 的 {fk_rounds} 輪,共 {tot} 條):程式缺陷 {fk['code']}({fk['code']/tot:.0%})、被審文件缺陷 {fk['spec']}({fk['spec']/tot:.0%})、流程自己要求的文件/留痕 {fk['process']}({fk['process']/tot:.0%})")
+         print("  (process 佔比就是「流程自產工作量」;2026-08-22 起才有標,之前的輪沒資料)")
+         print()
++    # 辯方明確表態分布(2026-08-27,Systems/finding-refute):agree/evidence/concern 三態計數。
++    # evidence(辯方降級的)是 2026-08-22「辯方三分類先不做」裁定重啟條件的候選池——
++    # 抽驗這批有沒有「降錯、後來證明 finding 是真的」,有實例才用證據翻案。
++    rv = {"agree": 0, "evidence": 0, "concern": 0}; rv_rounds = 0
++    for r in rows:
++        if r.get("gate") == "canary" and isinstance(r.get("refute_verdicts"), dict):
++            rv_rounds += 1
++            for v in r["refute_verdicts"].values():
++                if v in rv: rv[v] += 1
++    rvt = sum(rv.values())
++    if rvt:
++        print(f"  辯方怎麼表態(只算有標 --refute-verdict 的 {rv_rounds} 輪,共 {rvt} 條):同意是真的 {rv['agree']}、拿反證降級 {rv['evidence']}、只存疑無反證 {rv['concern']}")
++        print("  (降級那批 evidence 是重啟條件的候選:回頭抽驗有沒有『降錯、後來證明是真的』;2026-08-27 起才有標)")
++        print()
+     # 設計迴圈結案方式(工具鏈補強十件 #6):達上限卻從沒過關的審查編號 = 人裁放行。
+     # 只看 gate=design-loop 的事件(2026-08-22 起才記;之前的迴圈沒帳,算不出來,這裡如實講)。
+     dl = [r for r in ded if r.get("gate") == "design-loop"]
+     if dl:
+         by = {}
+         for r in dl:
+             for nd_ in (r.get("nodes") or []):
+                 by.setdefault(nd_, set()).add(r.get("kind"))
+         conv = sum(1 for k in by.values() if "converged" in k)
+         capped = sum(1 for k in by.values() if "cap-reached" in k and "converged" not in k and "rewrite" not in k)
+@@ -3521,20 +3535,21 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
+          "gate": "kill", "kind": d.get("verdict", "?"), "hard": False,
+          "token": d.get("invariant", "") + d.get("ts", ""),   # 同節點多合約/多次不互吞(dedup 第5鑑別子)
+          "nodes": [stem(d.get("node", ""))],
+          "detail": f"{d.get('invariant','')[:28]} [{d.get('test','')}] {d.get('note','')}".strip()})
+     # 第 4 源:canary 審計留痕(審計員可靠度史)。只此 mapper 輸出 token 鍵(供 dedup 鑑別)。
+     load(".canary-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": "",
+          "gate": "canary", "kind": d.get("kind", "?"), "hard": False, "nodes": [],
+          "token": d.get("token", ""), "auditor": d.get("auditor") or "?",
+          "findings": d.get("findings"), "severity": d.get("severity", ""),
+          "finding_kinds": d.get("finding_kinds"),
++         "refute_verdicts": d.get("refute_verdicts"),
+          # [S2] second 行的 verdict/ref 併進 detail(否則分歧訊號在治理帳全程隱形)
+          "detail": ((f"verdict={d.get('verdict','?')} ref={d.get('ref','')} · "
+                      if d.get("kind") == "second" else "")
+                     + (f"loop={d['loop']} sev={d.get('severity', '?')} · " if d.get("loop") else "")
+                     + (d.get("auditor", "") + " " + d.get("note", "")).strip())})
+ 
+     # 第 7 源:CI 回流帳(總開關——未宣告 ci 區塊即完全不 load,否則移除宣告後歷史事件仍顯示)
+     _ci_root = _anchor_repo_root(None)
+     if _ci_root and _ci_config(_ci_root)[0]:
+         load(CI_LOG_NAME, lambda d: {"ts": d.get("ts", ""), "commit": d.get("sha", ""),
+@@ -3820,21 +3835,21 @@ def _vault_repo_root(env):
+     """disposal 留痕路徑的落帳/解析根(r2 終審修,寫讀兩側★必須同用這一份★):
+     從 vault 向上找 .git(docs/<slug>-knowledge 布局下 vault.parent=docs/ 非 repo root);
+     找不到退 vault.parent(測試假 vault 行為不變)。"""
+     p = env.vault.resolve()
+     for cand in (p, *p.parents):
+         if (cand / ".git").exists():
+             return cand
+     return env.vault.parent.resolve()
+ 
+ 
+-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, outcome=None, usd=None):
++def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None):
+     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
+     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
+     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
+     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
+     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
+     --clusters(M2):該輪 risk-cluster 三態帳(每輪至多一筆帶;讀側 loop status --panel 消費)。
+     天花板:這只證明「審計員有沒有醒著讀」,不證明它抓到所有真問題(見設計 doc)。"""
+     import json
+     import datetime
+     import secrets
+@@ -3947,22 +3962,22 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+         if tier not in LOOP_TIERS:
+             print(f"擋下:--tier 分級只能是 {'/'.join(LOOP_TIERS)} 之一,你給的是 {tier!r}", file=sys.stderr)
+             return 2
+         rec["tier"] = tier
+     # ── T1 相容雙讀(design-loop重設計 實作計畫):處置帳六選配欄——★全部不給=行為與今日相同★ ──
+     # 集合核對而非總數核對(r1 Codex:只核總數可被重複計數/虛構項配平);
+     # 「不給不寫鍵」同 --findings 慣例;違反一律 rc2(寫側就擋,不留到 gate)。
+     def _ids(raw):   # None=未給;""=明示空集合(兩者語意不同)
+         return None if raw is None else [x.strip() for x in raw.split(",") if x.strip()]
+     f_set, fo_set, ac_set = _ids(findings_set), _ids(folded_set), _ids(accepted_set)
+-    if any(x is not None for x in (fo_set, ac_set, accept_reasons)) and f_set is None:
+-        print("擋下:--folded-set/--accepted-set/--accept-reason 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
++    if any(x is not None for x in (fo_set, ac_set, accept_reasons, refute_verdicts)) and f_set is None:
++        print("擋下:--folded-set/--accepted-set/--accept-reason/--refute-verdict 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
+         return 2
+     if f_set is not None:
+         if not f_set:
+             print("擋下:--findings-set 不能是空的;這輪沒有任何發現的話,處置那幾個選項就別帶", file=sys.stderr)
+             return 2
+         if len(set(f_set)) != len(f_set):
+             print(f"擋下:--findings-set 裡有重複 id: {f_set}", file=sys.stderr)
+             return 2
+         fo, ac = fo_set or [], ac_set or []
+         F, FO, AC = set(f_set), set(fo), set(ac)
+@@ -4004,20 +4019,41 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+                     return 2
+                 k, _, v = item.partition("="); k, v = k.strip(), v.strip()
+                 if v not in ("code", "spec", "process"):
+                     print(f"擋下:--finding-kind 的值只能是 code / spec / process,{k} 給的是 {v!r}", file=sys.stderr)
+                     return 2
+                 kinds[k] = v
+             if set(kinds) != F:
+                 print(f"擋下:--finding-kind 要每條發現各標一個(發現有 {sorted(F)},標了 {sorted(kinds)})", file=sys.stderr)
+                 return 2
+             rec["finding_kinds"] = kinds
++        # 辯方明確表態(2026-08-27,Systems/finding-refute):辯方對它判過的每條發現表態三選一——
++        # agree(同意是真的→維持折入)/ evidence(拿反證降級,須附 file:line→放行)/ concern(只存疑無反證→維持折入)。
++        # ★純記帳,不改降級規則★:降級去向仍由 folded/accepted 決定,本欄只記辯方怎麼表態、不回頭改判閘。
++        # 鍵是「辯方判過的」子集(⊆全集;辯方只開庭審低共識≥major,不是每條發現都判)。
++        # 用途=補上 2026-08-22「辯方三分類先不做」裁定自己點名的缺口(帳裡無逐席對錯,故永遠偵測不到
++        # 重啟條件);開始記,日後才能算「辯方標 evidence 降級的、後來證明是真的」有幾筆,用證據決定要不要翻案。
++        if refute_verdicts:
++            rv = {}
++            for item in refute_verdicts:
++                if "=" not in item:
++                    print(f"擋下:--refute-verdict 要寫成 id=agree|evidence|concern,你給的是 {item!r}", file=sys.stderr)
++                    return 2
++                k, _, v = item.partition("="); k, v = k.strip(), v.strip()
++                if v not in ("agree", "evidence", "concern"):
++                    print(f"擋下:--refute-verdict 的值只能是 agree / evidence / concern,{k} 給的是 {v!r}", file=sys.stderr)
++                    return 2
++                rv[k] = v
++            if not set(rv) <= F:
++                print(f"擋下:--refute-verdict 的 id 要在發現清單裡(發現有 {sorted(F)},標了不存在的 {sorted(set(rv) - F)})", file=sys.stderr)
++                return 2
++            rec["refute_verdicts"] = rv
+     # ── 嚴重度綁定機械掃 [S1] 寫側強制(2026-08-26)★行為改變★:審查席帳列
+     # (--loop/--round/--auditor 齊備,kind 不限——退役 caught/missed 也擋,換 kind 即繞過)
+     # 一律必附 --report,且帳面 severity 不得低於報告宣告最高。實帳 681 筆審查席列有 286 筆
+     # 無報告的舊形狀自此被拒,不設過渡:不附報告的審查帳事後無從重驗(disposal ③ 也 FAIL)。
+     # 低報=拒(major 逃必折之路);高報=放行+提醒(保守方向,下游全閘「越高越嚴」r1-s1)。
+     # cb3 r1 折入:原「三者齊備才觸發」= 漏打 --round 即整層繞過,而讀側照樣把 round-less
+     # 列組成 __seqN 判定輪、severity 尾巴又跳過 __ 合成鍵——三層同時失靈(ext-f1+s1-f1 實測 PASS 到 converged)。
+     # 關法:①處置帳(findings_set)必綁輪次與審查席 ②審查席(loop+auditor,結局帳除外)必帶輪次。
+     # cb3 r2 extv:--outcome 豁免可被假冒(掛在處置帳上整層跳過)——結局帳與審查席欄位互斥:
+     # 真實結局帳只帶 loop+auditor+outcome(+usd/note),帶任何審查欄位=不是結局帳,拒。
+@@ -16313,20 +16349,22 @@ def main():
+     cr.add_argument("--snapshot", help="[T1 處置帳] 派工凍結快照檔路徑(quote-check 的比對對象;存 path+sha256)")
+     cr.add_argument("--findings-set", dest="findings_set",
+                     help="[T1 處置帳] 逐條 finding id 逗號串(集合核對的全集;與 folded/accepted 配套)")
+     cr.add_argument("--folded-set", dest="folded_set", help="[T1 處置帳] 折入計劃節點的 id 子集")
+     cr.add_argument("--accepted-set", dest="accepted_set",
+                     help="[T1 處置帳] 附理由放行的 id 子集(與 folded 互斥;聯集須=全集;blocker 輪必空)")
+     cr.add_argument("--accept-reason", dest="accept_reasons", action="append",
+                     help="[T1 處置帳] id=理由(可重複;鍵集合須=accepted-set,理由非空)")
+     cr.add_argument("--finding-kind", dest="finding_kinds", action="append",
+                     help="每條發現在修什麼:id=code(程式缺陷)|spec(被審文件缺陷)|process(流程要求的文件/留痕/範本);選填,給了要全集對得上——量「流程自產工作量」用")
++    cr.add_argument("--refute-verdict", dest="refute_verdicts", action="append",
++                    help="辯方對某條發現的明確表態:id=agree(同意是真的,維持)|evidence(拿反證降級,須附 file:line)|concern(只存疑無反證,維持);選填,鍵是辯方判過的子集(⊆全集,辯方只判低共識≥major)——純記帳不改判閘,供日後偵測『辯方降級的後來證明是真的』(2026-08-22 三分類裁定的重啟條件)")
+ 
+     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
+     lsub = lp.add_subparsers(dest="lcmd", required=True)
+     ls = lsub.add_parser("status", help="算某 loop 收斂:連 K 輪 caught 且無 blocker/major")
+     ls.add_argument("loop_id")
+     ls.add_argument("--need", type=int, default=None, help="連續乾淨輪數 K(預設 2;--settle 下禁用)")
+     ls.add_argument("--disposal", action="store_true",
+                     help="[T4] 處置閘(獨立路徑,與 --panel/--light/--settle/--need/--min-seats 互斥;需 --spec)")
+     ls.add_argument("--gate", action="store_true",
+                     help="證據閘:K-streak(必要)∧ G1 refcheck 引用座標 ∧ G2 發現枯竭,全過才 rc 0")
+@@ -16959,21 +16997,22 @@ def main():
+         return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
+                           args.severity, findings=args.findings, round_id=args.round_id,
+                           canary_type=args.canary_type, probe=args.probe,
+                           capture_counts=args.capture_counts, clusters=args.clusters,
+                           spec=args.rec_spec, reviewed=args.reviewed,
+                           tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,
+                           outcome=args.rec_outcome, usd=args.rec_usd,
+                           scope_lines=args.scope_lines, report=args.report, snapshot=args.snapshot,
+                           findings_set=args.findings_set, folded_set=args.folded_set,
+                           accepted_set=args.accepted_set, accept_reasons=args.accept_reasons,
+-                          finding_kinds=getattr(args, 'finding_kinds', None))
++                          finding_kinds=getattr(args, 'finding_kinds', None),
++                          refute_verdicts=getattr(args, 'refute_verdicts', None))
+ 
+     if args.cmd == "loop":
+         if args.lcmd == "canary-stats":
+             return cmd_loop_canary_stats(env, args.loop_id)
+         if args.lcmd == "status":
+             return cmd_loop_status(env, args.loop_id, args.need,
+                                    gate=args.gate, spec=args.gate_spec, repo=args.gate_repo,
+                                    panel=args.panel, light=args.light, min_seats=args.min_seats,
+                                    settle=args.settle, disposal=args.disposal, roster=args.roster)
+         if args.lcmd == "compress":
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index da77a58..e23171b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -5112,20 +5112,64 @@ def t_finding_kind_ledger_and_stats():
+     check("沒標齊 → rc2", r.returncode == 2 and "每條發現各標一個" in r.stderr, r.stderr)
+     r = run(v, *base, "--finding-kind", "f1=code", "--finding-kind", "f2=process", "--finding-kind", "f3=process")
+     check("標齊 → 記錄成功", r.returncode == 0, r.stderr)
+     last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+     check("帳上有 finding_kinds", last.get("finding_kinds") == {"f1": "code", "f2": "process", "f3": "process"}, str(last)[:300])
+     r = run(v, "gov", "--stats", "--since", "9999")
+     check("★gov --stats 算出 process 佔比 67%★", "流程自己要求的文件/留痕 2(67%)" in r.stdout, r.stdout)
+     print("  ✓ t_finding_kind_ledger_and_stats")
+ 
+ 
++def t_refute_verdict_ledger_and_stats():
++    """辯方明確表態(Systems/finding-refute,2026-08-27):record 可為辯方判過的發現標
++    agree/evidence/concern,鍵是子集(⊆全集,辯方只開庭審低共識≥major);★純記帳不改判閘★
++    ——folded/accepted 去向不受表態欄影響;gov --stats 出三態分布。補 2026-08-22
++    「辯方三分類先不做」裁定自己點名的缺口(帳無逐席對錯 → 永遠偵測不到重啟條件)。"""
++    import json as _j
++    v = mkvault(); spec = v / "Projects" / "rv.md"; spec.write_text("s\n", encoding="utf-8"); h = _sha256_of(spec)
++    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「s」\nseverity: major\n", encoding="utf-8")
++    snap = v.parent / "r1-snapshot.md"; snap.write_text("s\n", encoding="utf-8")
++    base = ["canary", "record", "none", "--loop", "rv-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
++            "--findings", "2", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f3", "--accepted-set", "f2",
++            "--accept-reason", "f2=辯方反證:a.py:10", "--report", str(rep), "--snapshot", str(snap),
++            "--spec", str(spec), "--reviewed", h, "--tier", "standard"]
++    r = run(v, *base, "--refute-verdict", "f1=maybe")
++    check("值域外 → rc2", r.returncode == 2 and "agree / evidence / concern" in r.stderr, r.stderr)
++    r = run(v, *base, "--refute-verdict", "f9=agree")
++    check("id 不在全集 → rc2", r.returncode == 2 and "不存在" in r.stderr, r.stderr)
++    r = run(v, "canary", "record", "none", "--loop", "rv-x", "--round", "r1", "--auditor", "a",
++            "--severity", "major", "--findings", "1", "--report", str(rep), "--snapshot", str(snap),
++            "--spec", str(spec), "--reviewed", h, "--tier", "standard", "--refute-verdict", "f1=agree")
++    check("沒 findings-set 卻給 verdict → rc2(防靜默丟失)", r.returncode == 2 and "findings-set" in r.stderr, r.stderr)
++    r = run(v, *base, "--refute-verdict", "f2=evidence")
++    check("子集(只判 f2)→ 記錄成功", r.returncode == 0, r.stderr)
++    last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
++    check("帳上 refute_verdicts 是子集", last.get("refute_verdicts") == {"f2": "evidence"}, str(last)[:300])
++    # 三態齊 + 統計用全新 vault,計數才乾淨(不被上面子集那筆疊加)
++    v2 = mkvault(); spec2 = v2 / "Projects" / "rv2.md"; spec2.write_text("s\n", encoding="utf-8"); h2 = _sha256_of(spec2)
++    rep2 = v2.parent / "r1-s1.md"; rep2.write_text("引句：「s」\nseverity: major\n", encoding="utf-8")
++    snap2 = v2.parent / "r1-snapshot.md"; snap2.write_text("s\n", encoding="utf-8")
++    base2 = ["canary", "record", "none", "--loop", "rv2-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
++             "--findings", "2", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f3", "--accepted-set", "f2",
++             "--accept-reason", "f2=辯方反證:a.py:10", "--report", str(rep2), "--snapshot", str(snap2),
++             "--spec", str(spec2), "--reviewed", h2, "--tier", "standard"]
++    r = run(v2, *base2, "--refute-verdict", "f1=agree", "--refute-verdict", "f2=evidence", "--refute-verdict", "f3=concern")
++    check("三態齊 → 記錄成功", r.returncode == 0, r.stderr)
++    last = _j.loads((v2.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
++    check("帳上三態", last.get("refute_verdicts") == {"f1": "agree", "f2": "evidence", "f3": "concern"}, str(last)[:300])
++    check("★降級規則不動:agree/concern 仍 folded、evidence 仍 accepted,表態欄不改判閘★",
++          last.get("folded_set") == ["f1", "f3"] and last.get("accepted_set") == ["f2"], str(last)[:300])
++    r = run(v2, "gov", "--stats", "--since", "9999")
++    check("★gov --stats 出辯方三態分布★", "同意是真的 1、拿反證降級 1、只存疑無反證 1" in r.stdout, r.stdout)
++    print("  ✓ t_refute_verdict_ledger_and_stats")
++
++
+ def t_search_cjk_nospace_hint():
+     """中文黏成一串 0 筆 → 提示加空白(Landmark CLAUDE.md 2026-08-11 的手寫規則,2026-08-22 收進工具與注入範本)。"""
+     v = mkvault()
+     write(v, "Systems/Pay.md", "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:作廢訂單時收回點數\n---\n# Pay\n作廢 訂單 要 收回 點數。\n")
+     r = run(v, "search", "作廢訂單點數怎麼收回")
+     check("★黏成一串 0 筆 → 提示加空白★", "加空白" in r.stderr and "作廢 收回 點數" in r.stderr, r.stderr)
+     r2 = run(v, "search", "作廢 收回 點數")
+     check("加空白後命中,不提示", "Pay" in r2.stdout and "加空白" not in r2.stderr, r2.stdout + r2.stderr)
+     r3 = run(v, "search", "nothinghere")
+     check("英文 0 筆不提示(不是斷詞問題)", "加空白" not in r3.stderr, r3.stderr)
+diff --git a/skills/lumos-code-loop/reference.md b/skills/lumos-code-loop/reference.md
+index cd384ee..560ff10 100644
+--- a/skills/lumos-code-loop/reference.md
++++ b/skills/lumos-code-loop/reference.md
+@@ -129,21 +129,21 @@ Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大
+ 
+ 
+ **① canary 判讀**
+ caught = reviewer 清楚且正確點出那個植入 bug 的「性質」(如「邊界 off-by-one」「鎖未釋放」);光 token 出現、或泛泛說「這段有問題」不算。
+ 
+ **② 真 finding 取 max severity**
+ 排掉 canary 及其溯源影子後,剩餘 findings 的 max severity(`clean` / `minor` / `major` / `blocker`)。
+ 剝「審計員誤判」要克制:只有能指出該 finding 客觀錯在哪(被真 diff 的 file:line 反證)才剝;判不準就保留(寧可高估),剝除理由記入審計紀錄。
+ 
+ **③ 辯方 refute(對 ② 標為 ≥major 的每條 finding)**
+-派 1 個獨立 opus 辯方(乾淨脈絡、不傳 reviewer 報告結論),framing:「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 真代碼),光說『沒問題』不算;拿不出反證則維持原 severity。」辯方回「真(維持)」或「假(降到 minor/clean)+file:line」。被駁倒(假)→ 降級、不折、審計紀錄標「辯方反證:<file:line>」。
++派 1 個獨立 opus 辯方(乾淨脈絡、不傳 reviewer 報告結論),framing:「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 真代碼),光說『沒問題』不算;拿不出反證則維持原 severity。」辯方**明確三選一**(2026-08-27,[[Systems/finding-refute]]):**agree**(同意是真的→維持)/ **evidence**(拿反證降到 minor/clean+file:line)/ **concern**(拿不出反證只存疑→維持)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺 finding。★被駁倒(evidence)→ 降級、不折、審計紀錄標「辯方反證:<file:line>」。三態填進 `canary record --refute-verdict <id>=agree|evidence|concern`——**純記帳不改判閘**(去向仍由 folded/accepted 定),供日後偵測 2026-08-22「三分類先不做」的重啟條件。
+ - **辯方工具加 `git log`/`git show`**——commit 考古常是決定性反證(發版狀態、先例、時序)。完整派工模板見 `../lumos-design-loop/templates.md` §3-4(2026-07-07 Landmark 實戰)。
+ - **辯方順產 fix(實戰調參)**:辯方降級時若附「最小修法建議」,直接轉入 fix 佇列(nice-to-have 轉修,不折 finding、不佔 severity)——別浪費辯方查證時看到的低垂果實。
+ 
+ **④ 該輪 severity = 辯方裁決後存活 findings 的最高**
+ 
+ 
+ 
+ ### 4 · 判讀 + 辯方
+ - ~~canary 判定~~ **⛔ 已停用(見頁頂)**——「reviewer 有沒有真的讀」由收貨三道的 quote-check 引句錨定把關。
+ - **max severity**:存活 max。剝「誤判」要克制——只有能用真 diff file:line 反證才剝,判不準保留。
+diff --git a/skills/lumos-design-loop/reference.md b/skills/lumos-design-loop/reference.md
+index cfa43ca..368bdef 100644
+--- a/skills/lumos-design-loop/reference.md
++++ b/skills/lumos-design-loop/reference.md
+@@ -135,21 +135,21 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏
+      - **severity 錨(防 refute framing 通膨;派工模板同句)**:major ＝ 照 spec 字面實作會做出**錯的行為**或漏掉合約;文件精度／測試枚舉完整性／措辭 ＝ minor,除非漏的是合約級。
+      - **難判搖擺場換問法重問一次**(「這條 finding 若實作照做,具體錯在哪個行為?」),兩問等級不一致 ＝ **取高並記 unstable**。
+    - ③ **辯方 refute(路由制)**:存活 ≥major 先分流——
+      - (i) **機械證實免辯方**:有可執行證據且編排者已自核 file:line 為真(regex 實跑／行號實查)→ 直接折入
+      - (ii) **多席一致 ＋ 各自獨立證據** → 直接折入
+      - (iii) 只有**低共識**(單席獨有／席間 severity 分歧／證據座標缺失)才派辯方
+ 
+      用**可觀測訊號**路由,不用模型口頭 confidence。
+      對 (iii) 派 1 個獨立**辯方,預設 Codex**(`codex exec --sandbox read-only`,乾淨脈絡、**不傳 auditor 報告結論**;判決單點最怕同門盲點,外家反證價值最高。Codex 不可用退 opus 並於 note 註記偏離)。
+      framing:「預設這條 finding 假／嚴重度高估,構造反駁證據。**必須附 file:line**(grep／Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持。」
+-     辯方回「真(維持原 severity)」或「假(降到 minor/clean)＋file:line」。被駁倒 → 該 finding 降級、**不折**、在審計紀錄標「辯方反證:<file:line>」。
++     辯方**明確三選一**(2026-08-27,[[Systems/finding-refute]]):**agree**(同意是真的→維持原 severity)／**evidence**(拿反證降到 minor/clean＋file:line)／**concern**(拿不出反證、只剩疑慮→維持)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺掉 finding。★被駁倒(evidence)→ 該 finding 降級、**不折**、在審計紀錄標「辯方反證:<file:line>」。三態填進 `canary record --refute-verdict <id>=agree|evidence|concern`——**純記帳、不掛判閘**(折入/放行去向仍由 folded/accepted 決定),供日後偵測 2026-08-22「辯方三分類先不做」裁定的重啟條件(帳裡有 evidence 降級的樣本才抽驗得了「降錯、後來證明是真的」)。
+    - ④ **該輪 severity ＝ 辯方裁決後存活 findings 的最高**(編排者機械取 max,取代 ② 自剝)。**辯方只買 code 層假陽性,業務層留人。**
+ 
+ 4.5. ~~canary 判定抽樣分權~~ **⛔ 已停用**(隨協議停用一併停;`canary second` 指令封存)。
+ 
+ 5. **記錄**(kind 一律 `none`——停用制的純處置帳載體):
+    ```
+    lumos canary record none --loop <id> --severity <worst> --findings <M> \
+      --auditor sonnet --spec <計劃節點.md> --reviewed <sha256> [--tier <t>] --scope-lines <這輪被審 spec 幾行> \
+      --tokens <該席回報的 tokens> --wallclock-min <該席跑幾分鐘> --note "r<N> ..."
+    ```
+diff --git a/skills/lumos-design-loop/templates.md b/skills/lumos-design-loop/templates.md
+index dcfc736..cbc5cd4 100644
+--- a/skills/lumos-design-loop/templates.md
++++ b/skills/lumos-design-loop/templates.md
+@@ -57,24 +57,35 @@ inline-code,漏了連存在性都驗不到）,不得用引句格式主張審材
+ 光說「沒問題」不算。拿不出反證就維持原判。
+ 
+ 背景：{一兩句 spec 脈絡，只給該 finding 所需的最小背景}
+ 
+ Finding（{原評 severity}）：「{finding 全文，含審計員引的座標}」
+ 
+ 反駁方向舉例：{3-4 條具體的可能反駁路線——上游有等效檢查/實務不可達/
+ 既有慣例涵蓋/自然實驗反證/severity 因果鏈斷點……依 finding 內容客製}。
+ 實際查證後裁決。
+ 
+-輸出：裁決「真（維持 {severity}）」或「降級（minor/clean）」+ 反證 file:line +
+-兩三句理由。{若適用：若 finding 屬實但對本 spec 影響有限，也可裁「真但降級」並說明。}
++輸出：**明確三選一裁決（必選一個、不得含糊）**——
++  · **agree**：查證後同意這條是真的（維持 {severity}）。
++  · **evidence**：拿反證降級（minor/clean）+ 反證 file:line + 兩三句理由。
++    ★只有這態會降級，且照舊必附 file:line；拿不出實證就不能選這態。★
++  · **concern**：查了但拿不出反證、只剩疑慮（維持 {severity}）。★存疑不能單獨殺掉 finding。★
++{若適用：finding 屬實但對本 spec 影響有限 → 選 agree 並在理由裡註明影響範圍。}
+ ```
+ 
++> **表態進帳（2026-08-27,不改降級規則）**：編排者把辯方選的那態填進記帳——
++> `canary record ... --refute-verdict <finding_id>=agree|evidence|concern`。
++> **純記帳、不掛判閘**：折入/放行去向仍由 folded/accepted 決定（evidence→放行、agree/concern→折入），
++> 這欄只記辯方怎麼表態。用途=補 2026-08-22「辯方三分類先不做」裁定點名的缺口(帳無逐席對錯),
++> 開始記,日後才能抽驗「標 evidence 降級的、後來證明是真的」有沒有——那就是那條裁定的重啟條件。
++> 出處 [[Systems/finding-refute]]。
++
+ ## 3. Code-loop reviewer（sonnet；連 2 missed 升 opus;★2026-08-08 翻紅釘:blocker/major finding 須附可執行重現(翻紅測試或重現指令+輸出)——派工詞加一句「你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令),附不出請如實標『未能重現』並降權」★）
+ 
+ ```
+ 你是外部第三方 code reviewer。這份 diff 是別人投稿的變更，不是你或本系統寫的。
+ 逐 hunk 讀完整份 diff、主動找洞。
+ {r2+ 加：這是第 N 輪審查（上一輪的 findings 已修進代碼，diff 尾端含 fix commit），
+ 修訂輪常見新洞是「fix 自己引入的問題」與「上輪沒人看的角落」。}
+ 
+ Diff 檔（git diff -U10，完整讀）：{工作副本路徑 /tmp/code-<topic>-rN.patch}
+ 變更主題：{一段話——這條分支做什麼、動了哪幾層}

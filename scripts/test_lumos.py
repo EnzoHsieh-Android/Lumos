@@ -5116,6 +5116,12 @@ def t_finding_kind_ledger_and_stats():
     check("帳上有 finding_kinds", last.get("finding_kinds") == {"f1": "code", "f2": "process", "f3": "process"}, str(last)[:300])
     r = run(v, "gov", "--stats", "--since", "9999")
     check("★gov --stats 算出 process 佔比 67%★", "流程自己要求的文件/留痕 2(67%)" in r.stdout, r.stdout)
+    # finding-kind 缺 findings-set → rc2(2026-08-27 code-refute-verdict r1 arch-align 折入:原本靜默丟失,
+    # 跟新的 --refute-verdict 對齊成「缺 findings-set 就擋」,兩姊妹欄同一 edge case 同一行為)
+    r = run(v, "canary", "record", "none", "--loop", "fk-x", "--round", "r1", "--auditor", "a",
+            "--severity", "minor", "--findings", "1", "--report", str(rep), "--snapshot", str(snap),
+            "--spec", str(spec), "--reviewed", h, "--tier", "standard", "--finding-kind", "f1=code")
+    check("finding-kind 缺 findings-set → rc2(不再靜默丟失)", r.returncode == 2 and "findings-set" in r.stderr, r.stderr)
     print("  ✓ t_finding_kind_ledger_and_stats")
 
 
@@ -5146,8 +5152,9 @@ def t_refute_verdict_ledger_and_stats():
     check("帳上 refute_verdicts 是子集", last.get("refute_verdicts") == {"f2": "evidence"}, str(last)[:300])
     # 三態齊 + 統計用全新 vault,計數才乾淨(不被上面子集那筆疊加)
     v2 = mkvault(); spec2 = v2 / "Projects" / "rv2.md"; spec2.write_text("s\n", encoding="utf-8"); h2 = _sha256_of(spec2)
-    rep2 = v2.parent / "r1-s1.md"; rep2.write_text("引句：「s」\nseverity: major\n", encoding="utf-8")
-    snap2 = v2.parent / "r1-snapshot.md"; snap2.write_text("s\n", encoding="utf-8")
+    # 快照放一段 ≥10 字的內容、報告引它,才過得了 disposal 的 quote-check(否則兩邊都因錨不到 FAIL,F3 會空過)
+    rep2 = v2.parent / "r1-s1.md"; rep2.write_text("引句：「這是一段足夠長的快照內容」\nseverity: major\n", encoding="utf-8")
+    snap2 = v2.parent / "r1-snapshot.md"; snap2.write_text("這是一段足夠長的快照內容用來讓引句錨定過\n", encoding="utf-8")
     base2 = ["canary", "record", "none", "--loop", "rv2-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
              "--findings", "2", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f3", "--accepted-set", "f2",
              "--accept-reason", "f2=辯方反證:a.py:10", "--report", str(rep2), "--snapshot", str(snap2),
@@ -5156,10 +5163,26 @@ def t_refute_verdict_ledger_and_stats():
     check("三態齊 → 記錄成功", r.returncode == 0, r.stderr)
     last = _j.loads((v2.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
     check("帳上三態", last.get("refute_verdicts") == {"f1": "agree", "f2": "evidence", "f3": "concern"}, str(last)[:300])
-    check("★降級規則不動:agree/concern 仍 folded、evidence 仍 accepted,表態欄不改判閘★",
+    check("★表態欄不覆寫去向:agree/concern 仍 folded、evidence 仍 accepted(存回欄位不變)★",
           last.get("folded_set") == ["f1", "f3"] and last.get("accepted_set") == ["f2"], str(last)[:300])
+    # F2(code-refute-verdict r1 correctness 折入):表態與去向的記帳一致性——base 的 f1,f3 folded、f2 accepted
+    r = run(v, *base, "--refute-verdict", "f1=evidence")   # f1 在折入卻標降級
+    check("evidence 但該 id 沒放行 → rc2(帳對不上)", r.returncode == 2 and "放行清單" in r.stderr, r.stderr)
+    r = run(v, *base, "--refute-verdict", "f2=agree")       # f2 在放行卻標維持
+    check("agree 但該 id 沒折入 → rc2(帳對不上)", r.returncode == 2 and "折入清單" in r.stderr, r.stderr)
     r = run(v2, "gov", "--stats", "--since", "9999")
     check("★gov --stats 出辯方三態分布★", "同意是真的 1、拿反證降級 1、只存疑無反證 1" in r.stdout, r.stdout)
+    # F3(code-refute-verdict r1 correctness 折入):真跑 disposal 判閘,證明「帶不帶 --refute-verdict 判閘結果一致」
+    # ——不是只比對存回欄位(舊斷言名實不符)。同料記到無表態欄的 loop,兩邊真跑處置閘 rc/PASS 必一致。
+    g_with = run(v2, "loop", "status", "rv2-loop", "--disposal", "--spec", str(spec2), "--repo", str(v2.parent))
+    base3 = [("rv3-loop" if x == "rv2-loop" else x) for x in base2]  # 同料、同去向、無 --refute-verdict
+    r = run(v2, *base3)
+    check("同料無表態欄記錄成功", r.returncode == 0, r.stderr)
+    g_without = run(v2, "loop", "status", "rv3-loop", "--disposal", "--spec", str(spec2), "--repo", str(v2.parent))
+    check("★帶 --refute-verdict 真跑處置閘 PASS(非空過),且帶不帶結果一致——坐實判閘不讀表態欄★",
+          "PASS" in g_with.stdout and g_with.returncode == 0
+          and g_with.returncode == g_without.returncode and ("PASS" in g_with.stdout) == ("PASS" in g_without.stdout),
+          f"with rc={g_with.returncode} PASS={'PASS' in g_with.stdout} / without rc={g_without.returncode} PASS={'PASS' in g_without.stdout}\n{g_with.stdout[-260:]}")
     print("  ✓ t_refute_verdict_ledger_and_stats")
 
 
