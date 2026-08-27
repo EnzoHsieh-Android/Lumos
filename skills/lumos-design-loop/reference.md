@@ -142,7 +142,7 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏�
      用**可觀測訊號**路由,不用模型口頭 confidence。
      對 (iii) 派 1 個獨立**辯方,預設 Codex**(`codex exec --sandbox read-only`,乾淨脈絡、**不傳 auditor 報告結論**;判決單點最怕同門盲點,外家反證價值最高。Codex 不可用退 opus 並於 note 註記偏離)。
      framing:「預設這條 finding 假／嚴重度高估,構造反駁證據。**必須附 file:line**(grep／Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持。」
-     辯方回「真(維持原 severity)」或「假(降到 minor/clean)＋file:line」。被駁倒 → 該 finding 降級、**不折**、在審計紀錄標「辯方反證:<file:line>」。
+     辯方**明確三選一**(2026-08-27,[[Systems/finding-refute]]):**agree**(同意是真的→維持原 severity)／**evidence**(拿反證降到 minor/clean＋file:line)／**concern**(拿不出反證、只剩疑慮→維持)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺掉 finding。★被駁倒(evidence)→ 該 finding 降級、**不折**、在審計紀錄標「辯方反證:<file:line>」。三態填進 `canary record --refute-verdict <id>=agree|evidence|concern`——**純記帳、不掛判閘**(折入/放行去向仍由 folded/accepted 決定),供日後偵測 2026-08-22「辯方三分類先不做」裁定的重啟條件(帳裡有 evidence 降級的樣本才抽驗得了「降錯、後來證明是真的」)。
    - ④ **該輪 severity ＝ 辯方裁決後存活 findings 的最高**(編排者機械取 max,取代 ② 自剝)。**辯方只買 code 層假陽性,業務層留人。**
 
 4.5. ~~canary 判定抽樣分權~~ **⛔ 已停用**(隨協議停用一併停;`canary second` 指令封存)。

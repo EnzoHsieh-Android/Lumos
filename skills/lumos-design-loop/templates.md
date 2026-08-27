@@ -64,9 +64,20 @@ Finding（{原評 severity}）：「{finding 全文，含審計員引的座標}�
 既有慣例涵蓋/自然實驗反證/severity 因果鏈斷點……依 finding 內容客製}。
 實際查證後裁決。
 
-輸出：裁決「真（維持 {severity}）」或「降級（minor/clean）」+ 反證 file:line +
-兩三句理由。{若適用：若 finding 屬實但對本 spec 影響有限，也可裁「真但降級」並說明。}
+輸出：**明確三選一裁決（必選一個、不得含糊）**——
+  · **agree**：查證後同意這條是真的（維持 {severity}）。
+  · **evidence**：拿反證降級（minor/clean）+ 反證 file:line + 兩三句理由。
+    ★只有這態會降級，且照舊必附 file:line；拿不出實證就不能選這態。★
+  · **concern**：查了但拿不出反證、只剩疑慮（維持 {severity}）。★存疑不能單獨殺掉 finding。★
+{若適用：finding 屬實但對本 spec 影響有限 → 選 agree 並在理由裡註明影響範圍。}
 ```
+
+> **表態進帳（2026-08-27,不改降級規則）**：編排者把辯方選的那態填進記帳——
+> `canary record ... --refute-verdict <finding_id>=agree|evidence|concern`。
+> **純記帳、不掛判閘**：折入/放行去向仍由 folded/accepted 決定（evidence→放行、agree/concern→折入），
+> 這欄只記辯方怎麼表態。用途=補 2026-08-22「辯方三分類先不做」裁定點名的缺口(帳無逐席對錯),
+> 開始記,日後才能抽驗「標 evidence 降級的、後來證明是真的」有沒有——那就是那條裁定的重啟條件。
+> 出處 [[Systems/finding-refute]]。
 
 ## 3. Code-loop reviewer（sonnet；連 2 missed 升 opus;★2026-08-08 翻紅釘:blocker/major finding 須附可執行重現(翻紅測試或重現指令+輸出)——派工詞加一句「你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令),附不出請如實標『未能重現』並降權」★）
 

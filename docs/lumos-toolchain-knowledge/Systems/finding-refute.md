@@ -11,6 +11,7 @@ tags:
   - risk/守衛面
 verified_by:
   - "[[Verification/2026-06-24_finding-refute]]"
+  - "[[Verification/2026-08-27_辯方表態記帳]]"
 summary: |-
   FLOW:auditor→findings→judge(caught/missed+severity,排掉canary後最嚴重真finding)→【辯方refute(新,step4.5)】對每條 judge 評 severity≥major 的 finding 各派 1 個獨立 opus 辯方(乾淨脈絡、不傳 auditor/judge 結論)→辯方回真(維持)/假(降級+file:line反證)→該輪 severity=存活 findings 機械取 max→record(用重算 severity)→只折存活真 finding(被駁倒的不折、標「辯方反證:<file:line>」)
   KEY:防的失敗模式=auditor「認真讀了但判錯」的假陽性(誤抓);與 canary 防「沒讀/放水」的假陰性(漏抓)方向相反、對稱補位
@@ -39,6 +40,12 @@ decisions:
     context: 質疑「缺脈絡時辯方憑什麼比 auditor 對」;auditor 提 major 時其實也 grep 過(強制查證)
     why_chosen: auditor 找洞(看到可疑就提、無動力深挖反證),辯方被逼構造推翻證據(專查 auditor 跳過的反方向);同樣 grep、目標命題相反→挖的角落不同。多派 auditor 只生更多起訴、同找洞方向
     decided: 2026-06-24
+    valid: true
+  - content: 辯方裁決升明確三選一(agree/evidence/concern)並記進帳(--refute-verdict);★純記帳、不改降級規則★——只有 evidence 態會降且照舊須 file:line,agree/concern 皆維持,去向仍由 folded/accepted 定
+    id: d4
+    context: 2026-08-22 [[Projects/收斂機制優化調研2026-08-14]] 裁「辯方三分類先不做」,理由:我們起點已有引句錨定+行號機驗+外家反證三層,論文(F1 0.457→0.533)的增益吃不吃得到估不出來;重啟條件=出現一次辯方被弱反駁說服、事後證明真的。但該裁定〈誠實界線〉自承帳裡無逐席對錯標註→重啟條件根本偵測不到。2026-08-27 治理日報又把同篇論文當新發現端上(未對決策帳),Enzo 裁走中間路
+    why_chosen: 只補偵測儀器、不翻舊裁定:降級行為零改動(不碰散文層收斂差的部分),風險最低;開始記 evidence 降級樣本,日後抽驗『降錯、後來證明是真的』才有候選池,把 2026-08-22 那條原本看不見的重啟條件變成可用證據觸發。相對選項:①照做全套三分類(翻案,但增益仍估不出、且改判閘)②完全不動(維持看不見的重啟條件)——都比中間路差
+    decided: 2026-08-27
     valid: true
 aliases:
   - 辯方
@@ -69,6 +76,18 @@ design-loop 審計 loop 的**辯方 refute 階段**(step 4.5)—— 檢察官(au
 - **辯方也是 AI**:逼 file:line 降低瞎判,但可能查錯/引錯行;證據可複驗(下輪 auditor+人看得到)→ 降低、不消滅。
 - **辯方太強會駁倒真 finding**(假陽性換假陰性):強制 file:line+只碰 major+ 限制;一個會偽造證據的辯方仍可能殺真 finding——摩擦地板非 oracle。
 - **無單元測**:prompt 紀律(同 cross-family/judge-severity-gate 的 prompt 改),無代碼可單元測;驗證靠 design-loop 實戰觀察「假 major 有沒有被辯方當輪降級」。
+
+## 辯方明確表態進帳(2026-08-27)
+辯方裁決從二元(真/假)升成**明確三選一**,並把表態記進帳:
+- **agree**:查證後同意這條 finding 是真的 → 維持、折入。
+- **evidence**:拿反證降級(minor/clean)+ file:line → 放行、標「辯方反證」。
+- **concern**:查了拿不出反證、只剩疑慮 → 維持、折入。**存疑不能單獨殺掉 finding。**
+
+★**降級規則一字未動**★:三態裡只有 evidence 會降,而且照舊必附 file:line;agree 與 concern 都是維持,對應舊制的「真(維持)」——差別只在帳上把「我查證同意」和「我拿不出反證但存疑」分得開。折入/放行去向仍由處置帳的 folded/accepted 決定,**表態欄不掛任何判閘**。記帳:`canary record ... --refute-verdict <id>=agree|evidence|concern`(選填,鍵是辯方判過的子集;`gov --stats` 出三態分布)。
+
+**為什麼加**:[[Projects/收斂機制優化調研2026-08-14]] 2026-08-22 裁「辯方三分類先不做」——它分析的正是這篇論文(F1 0.457→0.533),裁定不抄,理由是我們起點已有三層(引句錨定+行號機驗+外家反證),同樣增益吃不吃得到估不出來,且要改散文層。重啟條件寫的是「出現一次辯方被弱反駁說服、事後證明 finding 是真的」。但那條裁定自己在〈誠實界線〉點名:**帳裡只有 caught/severity/處置,沒有逐席對錯標註**——所以那個重啟條件根本偵測不到。這次**只補這個偵測儀器**:開始記辯方表態,evidence(降級)那批就是重啟條件的候選池,日後抽驗有沒有「降錯、後來證明是真的」。**不翻那條裁定(降級行為沒動),只讓它的重啟條件從此看得見。**
+
+**回頭看的條件(承認風險配套)**:表態有記帳 ≠ 已偵測到重啟條件——still 要人事後標「這條 evidence 降級後來證明是真的」,這步是手動的、目前一筆都還沒做。重驗時機:帳裡 evidence 樣本累積到 ≥10 筆、或每季治理巡檢時,回頭抽驗降級樣本;抽出一例即滿足 2026-08-22 的重啟條件,屆時才走正式翻案上三分類判閘。在那之前,本欄是純觀測。
 
 ## 相關
 - 設計稿:`docs/design/2026-06-24-finding-refute.md`(design-loop 3 輪自動收斂、canary 3/3 全中)。

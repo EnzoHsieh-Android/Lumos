@@ -5119,6 +5119,50 @@ def t_finding_kind_ledger_and_stats():
     print("  ✓ t_finding_kind_ledger_and_stats")
 
 
+def t_refute_verdict_ledger_and_stats():
+    """辯方明確表態(Systems/finding-refute,2026-08-27):record 可為辯方判過的發現標
+    agree/evidence/concern,鍵是子集(⊆全集,辯方只開庭審低共識≥major);★純記帳不改判閘★
+    ——folded/accepted 去向不受表態欄影響;gov --stats 出三態分布。補 2026-08-22
+    「辯方三分類先不做」裁定自己點名的缺口(帳無逐席對錯 → 永遠偵測不到重啟條件)。"""
+    import json as _j
+    v = mkvault(); spec = v / "Projects" / "rv.md"; spec.write_text("s\n", encoding="utf-8"); h = _sha256_of(spec)
+    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「s」\nseverity: major\n", encoding="utf-8")
+    snap = v.parent / "r1-snapshot.md"; snap.write_text("s\n", encoding="utf-8")
+    base = ["canary", "record", "none", "--loop", "rv-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
+            "--findings", "2", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f3", "--accepted-set", "f2",
+            "--accept-reason", "f2=辯方反證:a.py:10", "--report", str(rep), "--snapshot", str(snap),
+            "--spec", str(spec), "--reviewed", h, "--tier", "standard"]
+    r = run(v, *base, "--refute-verdict", "f1=maybe")
+    check("值域外 → rc2", r.returncode == 2 and "agree / evidence / concern" in r.stderr, r.stderr)
+    r = run(v, *base, "--refute-verdict", "f9=agree")
+    check("id 不在全集 → rc2", r.returncode == 2 and "不存在" in r.stderr, r.stderr)
+    r = run(v, "canary", "record", "none", "--loop", "rv-x", "--round", "r1", "--auditor", "a",
+            "--severity", "major", "--findings", "1", "--report", str(rep), "--snapshot", str(snap),
+            "--spec", str(spec), "--reviewed", h, "--tier", "standard", "--refute-verdict", "f1=agree")
+    check("沒 findings-set 卻給 verdict → rc2(防靜默丟失)", r.returncode == 2 and "findings-set" in r.stderr, r.stderr)
+    r = run(v, *base, "--refute-verdict", "f2=evidence")
+    check("子集(只判 f2)→ 記錄成功", r.returncode == 0, r.stderr)
+    last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+    check("帳上 refute_verdicts 是子集", last.get("refute_verdicts") == {"f2": "evidence"}, str(last)[:300])
+    # 三態齊 + 統計用全新 vault,計數才乾淨(不被上面子集那筆疊加)
+    v2 = mkvault(); spec2 = v2 / "Projects" / "rv2.md"; spec2.write_text("s\n", encoding="utf-8"); h2 = _sha256_of(spec2)
+    rep2 = v2.parent / "r1-s1.md"; rep2.write_text("引句：「s」\nseverity: major\n", encoding="utf-8")
+    snap2 = v2.parent / "r1-snapshot.md"; snap2.write_text("s\n", encoding="utf-8")
+    base2 = ["canary", "record", "none", "--loop", "rv2-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
+             "--findings", "2", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f3", "--accepted-set", "f2",
+             "--accept-reason", "f2=辯方反證:a.py:10", "--report", str(rep2), "--snapshot", str(snap2),
+             "--spec", str(spec2), "--reviewed", h2, "--tier", "standard"]
+    r = run(v2, *base2, "--refute-verdict", "f1=agree", "--refute-verdict", "f2=evidence", "--refute-verdict", "f3=concern")
+    check("三態齊 → 記錄成功", r.returncode == 0, r.stderr)
+    last = _j.loads((v2.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+    check("帳上三態", last.get("refute_verdicts") == {"f1": "agree", "f2": "evidence", "f3": "concern"}, str(last)[:300])
+    check("★降級規則不動:agree/concern 仍 folded、evidence 仍 accepted,表態欄不改判閘★",
+          last.get("folded_set") == ["f1", "f3"] and last.get("accepted_set") == ["f2"], str(last)[:300])
+    r = run(v2, "gov", "--stats", "--since", "9999")
+    check("★gov --stats 出辯方三態分布★", "同意是真的 1、拿反證降級 1、只存疑無反證 1" in r.stdout, r.stdout)
+    print("  ✓ t_refute_verdict_ledger_and_stats")
+
+
 def t_search_cjk_nospace_hint():
     """中文黏成一串 0 筆 → 提示加空白(Landmark CLAUDE.md 2026-08-11 的手寫規則,2026-08-22 收進工具與注入範本)。"""
     v = mkvault()
