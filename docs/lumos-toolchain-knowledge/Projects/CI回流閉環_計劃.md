@@ -38,7 +38,7 @@ verified_by:
 
 ## 條款
 
-### [S1] `lumos ci-wait [--timeout 600] [--repo-dir D] [--sha S] [--branch B] [--json]`——push 後同輪等結論（主路徑）
+### [S1] `lumos ci-wait [--timeout 1800] [--repo-dir D] [--sha S] [--branch B] [--json]`——push 後同輪等結論（主路徑）
 
 **旗標更名（r1 四方同報）**：原 `--repo` 與 `gh` 原生 `-R/--repo`（吃 `OWNER/REPO` 字串）語意相反、直傳會被 gh 拒收 → 改名 `--repo-dir`（本機目錄，沿 lumos 家族語意）；**owner/repo 由本案自行從 `git -C D remote get-url origin` 解析後餵 `gh -R`，不轉發使用者輸入**。
 
