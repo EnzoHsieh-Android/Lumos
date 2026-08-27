@@ -324,9 +324,11 @@ class TestPromptPlaceholders(unittest.TestCase):
     def test_need_tier_placeholders(self):
         p = Path(__file__).resolve().parent.parent / "governance/autonomous_loop/orchestrator-prompt.md"
         t = p.read_text(encoding="utf-8")
-        self.assertIn("__NEED__", t)
         self.assertIn("__TIER__", t)
+        # 2026-08-27 遷處置閘(d7):__NEED__/--gate/K-streak 退役,收斂改 --disposal
+        self.assertNotIn("__NEED__", t)          # 佔位符已退役,不得殘留(prompt 內仍可提及「不要帶 --need」故不禁 --need 字樣)
         self.assertNotIn("--need 2 --gate", t)   # 防硬編回歸
+        self.assertIn("--disposal", t)           # 收斂改處置閘
         self.assertIn("tier_escalated", t)        # 輸出契約含 escalate 欄
 
 

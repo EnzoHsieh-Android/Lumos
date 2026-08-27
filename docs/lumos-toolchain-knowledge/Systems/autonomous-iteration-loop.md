@@ -2,9 +2,9 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-21
+updated: 2026-08-27
 self_audit: sonnet/2026-08-21
-about_code_stamp: claude/2026-08-26/27cf1d9f3f36
+about_code_stamp: claude/2026-08-27/708345168652
 tags:
   - type/system
   - status/done
@@ -14,8 +14,9 @@ verified_by:
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
   - "[[Verification/2026-08-26_自主迴圈三症修理落地]]"
+  - "[[Verification/2026-08-27_自主loop遷處置閘]]"
 summary: |-
-  FLOW:cron 10:10 → autonomous-loop.sh:驗當日日報存在(真模式無報即跳;dry-run fallback 最近一份)→ backlog 每日衰減(冪等按日差;淘汰先歸檔 backlog-archive.jsonl 讀回自驗才刪)→ gap_select(日報 gaps + backlog 去重排序選 top-1,三鍵排序=分數/last_seen/source_date 新者先;N=1 gate:有 pending/open PR 則只進 backlog)→ claude -p orchestrator(真執行:brainstorm spec → design-loop ≤6 輪[opus auditor + canary a/b/c + judge 判 caught 並回報 severity + 強制地面事實查證]→ loop status --need 2 收斂 → §2.5 qwen3-max 跨家族複核)→ 收斂+endorsed/degraded → 放行閘(dry-run 寫 governance/pending/;真模式 branch+PR+LINE)→ 停等人放行
+  FLOW:cron 10:10 → autonomous-loop.sh:驗當日日報存在(真模式無報即跳;dry-run fallback 最近一份)→ backlog 每日衰減(冪等按日差;淘汰先歸檔 backlog-archive.jsonl 讀回自驗才刪)→ gap_select(日報 gaps + backlog 去重排序選 top-1,三鍵排序=分數/last_seen/source_date 新者先;N=1 gate:有 pending/open PR 則只進 backlog)→ claude -p orchestrator(真執行:brainstorm spec → design-loop ≤6 輪[opus auditor + canary a/b/c + judge 判 caught 並回報 severity + 強制地面事實查證]→ loop status --disposal 收斂(★2026-08-27 遷處置閘 d7,舊 --need 2/--gate K-streak 退役★)→ §2.5 qwen3-max 跨家族複核)→ 收斂+endorsed/degraded → 放行閘(dry-run 寫 governance/pending/;真模式 branch+PR+LINE)→ 停等人放行
   KEY:★2026-08-26 修理(auto-loop-repair-v2)★:①失敗不丟件——trap EXIT 涵蓋全部早退點,未處置 gap 原分放回+pipeline_failures 滿 3 熔斷 covered+LINE(先前 NO_JSON/anchor 早退真丟件,08-24/25 兩筆實丟)②結局帳結構化——canary 帳新欄 outcome(五主類+細類)/usd,trap 統一落帳與成本抽取解耦③七天產出一行(run_ledger.py,失敗日照印,loop id 過濾=auto-日期形狀)④連兩個有跑日全管線死→LINE 素訊息(不套「備好待放行」模板)
   KEY:★事故(2026-08-21 體檢 #2)★ N=1 閘被 pending/ 兩個 07-14 舊檔卡死 **38 天**,每日 launchd 準時跑、rc=0、「無可展開 gap」——排程有跑/什麼都沒做/回報成功;處置=舊檔歸檔 pending/archive/+pending >3 天即發 LINE 喊人(見 [[Verification/2026-08-21_工具鏈體檢修復批]])
   KEY:定調=自動備料+自審+停在放行閘等人,不是無人迭代;放行(merge PR)永遠人手動,人從「每天發起鏈」變「每天 review 1 個 PR」
@@ -23,7 +24,7 @@ summary: |-
   KEY:全自動判收斂仍是沒閉合的迴歸——judge/cross-family 只把自評推遠一層未消滅,末端人 review PR 是最後也唯一真兜底(誠實天花板)
   KEY:dry-run≠模擬——orchestrator 必須真執行所有工具(canary record/cross_audit),收尾前自查 scratch spec+canary-log 必須存在,否則本輪無效重做(06-23 真機抓到「全程腦內模擬」幻覺後硬化)
   KEY:claude -p 走 $0 OAuth token(CLAUDE_CODE_OAUTH_TOKEN,非 API key);避開 OAuth 被禁 model
-  KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross_verdict=endorsed 後,wrapper(autonomous-loop.sh L130-190)仍①驗 spec_path 存在②用自算 difficulty.assess_spec() 的 tier 重跑 loop status --gate 機械重驗③tier=high 要求 cross_verdict 必須乾淨 endorsed——任一不過→requeue 不放行+LINE;機制本體見 [[Systems/risk-tiered-review]]
+  KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross_verdict=endorsed 後,wrapper(autonomous-loop.sh L130-190)仍①驗 spec_path 存在②用自算 difficulty.assess_spec() 的 tier 重跑 loop status --disposal 機械重驗(★2026-08-27 遷,原 --gate★)③tier=high 要求 cross_verdict 必須乾淨 endorsed——任一不過→requeue 不放行+LINE;機制本體見 [[Systems/risk-tiered-review]]
   KEY:週期任務第四支 run_replay(2026-08-26 改制回測 S4):每週補漏凍結+新凍必跑+存量輪替抽 5(游標檔)+預算 300s+便宜(單包×存量≤60s,首測 0.24s/包)自動升全跑;紅(邏輯漂移/帳被動/凍結檔被動)與 golden 過期分開喊,build_message('regime-replay') 帶重查指令(★訊息在 python 端組單行——與 run_exam 家族 bash 組裝不同,刻意新慣例:通知文字進得了單元測試網;後續新週期任務照此;cb3 arch-f1★);模組炸掉不蓋週戳(明日重試);fail-open
   KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.00269,2026-07-24 裁定:語意合約唯一真獨立寫入閘=真跑測試或人,LLM judge=換皮提案者)②PoE 型防竄改帳+逐筆授權+可重播(arXiv 2607.05397,2026-07-25 裁定:價值不靠敵人成立——無人 loop 自己的遙測可不可信;現成便宜前例 2.7ms;07-26 再添 PROJECTMEM arXiv 2606.12329:本機零依賴 append-only 指紋鏈+寫入前驗內容實證可行,「要裝東西太重」藉口拿掉)③日報吸收管線升格為不可信輸入面(調研員每天真讀外部網頁,今天靠人眼把關,無人化後=夾帶指令/假結論的真通道)。框架修正(使用者 2026-07-25):「內部系統無敵意下毒」對——敵意攻擊框架(IssueTrojanBench 66.5%)不適用單人私有 repo;但無人化後「幻覺 agent 寫錯圖譜+改自己成績單」效果同下毒,主角不需是敵人。同日拒:審計加對抗步(design-loop d4 前置加重一律拒,可審≠審得出=07-23 已記天花板換新引用)/spec 夾帶掃描(spec 作者=自己人,威脅不成立)
   KEY:紀律抗壓縮(Governance Decay arXiv 2606.22528,2026-07-26 對帳)=長跑對話的摘要壓縮會悄悄刪安全規矩(違規率 0→65-95%)——lumos 架構已結構性counter:規矩不住對話記憶(CLAUDE.md 每輪重注入/圖譜在硬碟/impact hook 每次動手前重推合約/orchestrator 每日 fresh spawn),「每輪從硬碟重讀紀律」該篇藥方=本設計既有形狀。殘餘面(誠實):對話中途的口頭約定(未落圖譜者)確實隨壓縮衰減——正是「退場必寫」存在的理由,重要裁定必須離開對話住進硬碟
@@ -69,6 +70,12 @@ decisions:
     why_chosen: 人放行閘=最高槓桿不動;恢復後首輪吃到全部新紀律
     decided: 2026-07-11
     valid: true
+  - content: 自主 loop 記帳+收斂閘遷處置閘、對齊手動 loop(Enzo 2026-08-27 裁):step-6 canary caught/missed → record none+處置帳(--findings-set/folded/accepted/accept-reason/--refute-verdict + --report/snapshot/spec/reviewed);step-8 與 runner(autonomous-loop.sh)的 --need/--gate → --disposal;辯方降級改走「放行清單+辯方反證+refute-verdict evidence」不壓低 --severity;canary 植入退為 auditor 醒著訊號、不再閘折入
+    id: d7
+    context: loop 2026-08-27 自報三卡點:①step-6 記帳指令照字面跑不動(2026-08-26 [S1] 起審查席帳列必附 --report)②step-6 記「辯方後 max」撞 [S1] 硬擋(帳不得低於報告宣告最高)→ r3 辯方降級進不了帳、只能記 blocker → --gate 永遠收斂不了(隱形燒錢)③網搜無人看顧被權限擋。根因=記帳+收斂閘整段停在 2026-08 前的舊協議(caught/missed+--gate/K-streak+severity 當收斂訊號),沒跟上手動 loop 2026-08-04/08-25 改的處置閘 d5
+    why_chosen: 遷處置閘一次根治①②:severity 忠實記報告最高([S1] 滿意),辯方降級用處置帳(accepted-set+辯方反證+refute-verdict evidence)表達,收斂看『每個發現折或放行』不看 severity 高低——[S1] 與辯方降級不再對撞、辯方降級的輪能收斂。且處置閘單輪比 K-streak 省輪(降本)。對齊既有已測協議、非自建。相對選項:只補 --report 不解②(治標燒錢照舊)、或立待議不動(維持看不見的卡死)——都比遷移差。實跑一個 round 全序列(record+disposal gate PASS)驗過。③網搜是 harness 限制,prompt 標明用日報二手 fallback(loop 已自為)
+    decided: 2026-08-27
+    valid: true
 about_code:
   - governance/autonomous-loop.sh
   - governance/autonomous_loop/cross_audit.py
@@ -96,7 +103,7 @@ about_code:
 - `confidence_report.py` / `line_notify.py`(含 `build_alert` 素警示,不套好消息模板)/ `orchestrator_result.py`(含 `classify_death` 死因分類、`cost_cli_args` 含 --usd) — 可信度報告 body、LINE 傳輸層復用 + 待放行訊息 body、從 orchestrator result 文字提取最後一個合法 JSON(容錯敘述夾雜 `{clean,minor}` 干擾)。
 
 ## 收斂與放行門檻
-- **CONVERGED** = `lumos loop status <topic> --need 2` exit 0 = **連 2 輪 canary caught 且 severity ∈ {clean,minor}**(漏抓那輪不採信收斂的一半)。失控保護:design-loop max cap = 6 輪、N=1、撞 cap → 停 + LINE 告警(★(2026-08-21 程式碼實證)是**單次**撞 cap 即發 LINE 並 exit 0,無「連續」計次邏輯;原文「連續撞 cap」不準★)。
+- **CONVERGED**(★2026-08-27 遷處置閘,見 d7★)= `lumos loop status <topic> --disposal --spec <spec> --repo <REPO>` exit 0 = **這一輪每個發現都折入或附理由放行**(G3 雜湊鏈 ∧ 處置全清 ∧ 留痕 sha 可重算 ∧ 引句全錨定;單輪,不再 K-streak)。**收斂看處置、不看 severity 高低**:辯方降級記在放行清單(accepted-set+辯方反證+refute-verdict evidence),severity 忠實記報告宣告最高——這樣才不撞 [S1] 寫側硬擋(帳不得低於報告),而舊制記「辯方後 max」會被 [S1] 逼記高、讓辯方降級的輪永遠收斂不了。舊制(`--need 2 --gate`=連 2 輪 caught+severity∈{clean,minor})2026-08-27 退役。失控保護:max cap = 6 輪、N=1、撞 cap → 停 + LINE 告警(★2026-08-21 程式碼實證:**單次**撞 cap 即發 LINE 並 exit 0,無「連續」計次邏輯★)。
 - 收斂後走 **§2.5 跨家族複核**:`endorsed`/`degraded` → 放行;`disputed`(major+ 異議)→ 退回 opus 續審,`cross_reject_count` 達 2 → 停、不放行、`cross_verdict=disputed`(必伴 `converged:false`)。
 - 放行閘:dry-run 寫 `governance/pending/<date>-<topic>.md`(+ confidence);真模式(`--pr`)commit 到 `auto/spec-<topic>-<date>` branch、`gh pr create`(★(2026-08-21 程式碼實證)--pr 分支**不發 LINE**,LINE 只在 dry-run 分支;autonomous-loop.sh:268-275★)。**⚠ 真 PR 模式(--pr)的 branch+PR+LINE 路徑尚未真機驗證**——Verification 節點的 pass 範圍僅涵蓋 dry-run;切換至 --pr 前須重驗放行閘全路徑(見 [[Verification/2026-06-20_autonomous-iteration-loop]] `revalidate_when`)。
 
@@ -123,6 +130,8 @@ about_code:
 - 真機觀察日誌:`governance/autonomous_loop/DRYRUN-OBSERVE.md`、spike 結果 `SPIKE-RESULT.md`。
 
 ## 近期修正
+
+- 2026-08-27 **記帳+收斂閘遷處置閘(d7,對齊手動 loop)**:loop 自報三卡點——step-6 記帳指令照字面跑不動([S1] 起審查席帳列必附 --report)、記「辯方後 max」撞 [S1] 硬擋致辯方降級的輪永遠收斂不了(隱形燒錢)、網搜被權限擋。根因=記帳/收斂整段停在 2026-08 前舊協議(caught/missed + --gate/K-streak + severity 當收斂訊號)。修:`orchestrator-prompt.md` step-6 改 `record none`+處置帳(findings-set/folded/accepted/accept-reason/**--refute-verdict** + report/snapshot/spec/reviewed)、step-8 與 `autonomous-loop.sh` 的 --need/--gate → **--disposal**、step-4.5 辯方三選一且降級走放行清單不壓 severity、step-7 折入看存活不看 caught/missed、canary 植入退為 auditor 醒著訊號。**實跑一個 round 全序列(record + disposal gate PASS)驗過**;網搜是 harness 限制,prompt 標明用日報二手 fallback(loop 已自為)。★未移除 canary 逐輪植入(2026-08-14 協議停用的殘留)——本次只解耦其閘折入功能,全移除留追蹤★。詳 [[Verification/2026-08-27_自主loop遷處置閘]]。
 
 - 2026-08-26 **三症修理(auto-loop-repair-v2,設計審 24 條全折後實作)**:①丟件根治——`pop_top` 消費後任何早退(anchor 失敗/PARSE_FAIL/NO_JSON)由 trap EXIT 原列原分放回、`pipeline_failures` 滿 3 轉 covered+LINE;log「下輪自然重抽」假話同步修正。②選題退化根治——`decay_and_prune` 寫了兩個月無人呼叫(153/160 筆凍 0.5 分=FIFO),接上每日冪等衰減(sidecar `decay-state.json` 記日差)+再現回血到初始+三鍵排序;淘汰先歸檔 `governance/backlog-archive.jsonl` 讀回自驗才刪。③結局帳——canary 帳 `outcome`/`usd` 結構化欄,trap 統一落帳(先前 record 在收斂判定前執行+被成本抽取分支包住,PARSE_FAIL 連帳都沒有);autonomous.log 每輪印七天產出一行。順手修一個潛伏生產 bug:run_probe 的 grep|tail 無命中時 pipefail+set -e 殺整支腳本於選題之前(沙箱測試觸發抓到)。
 

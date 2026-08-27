@@ -37,7 +37,7 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
 > **spec 層 ratchet(risk-tiered-review)**:草稿寫完後、以及**每輪折入後(步驟 7 尾)**重跑:`python3 -c "import sys;sys.path.insert(0,'<REPO>/governance');from autonomous_loop import difficulty;print(difficulty.assess_spec(open('__SCRATCH__/spec/__DATE__-<topic>.md').read())['tier'])"`(<REPO>=實際 repo 絕對路徑)。回 high 而本輪注入 tier=standard → **就地升級**:其後輪次收斂 K=3、§2.5c 走 high 條文;cap 維持已注入值(升級不可投遞 cap,誠實收窄——損失=escalate 輪少 2 輪預算,收檔守衛仍以 wrapper 自算 tier 重驗)。**只升不降**(注入 high、文本 assess 出 standard → 維持 high)。result JSON 記 `"tier":"high","tier_escalated":true`。
 
 ### 2. Design-loop(最多 __MAXR__ 輪,canary 限 a/b/c、禁 d)
-本輪風險級:__TIER__(§1 尾 ratchet 可就地升級、只升不降;high 級:收斂 K 用注入的 __NEED__、§2.5c 走 high 條文)。
+本輪風險級:__TIER__(§1 尾 ratchet 可就地升級、只升不降;**收斂走處置閘、不用 K-streak**(2026-08-27 遷);high 級:§2.5c 走 high 條文)。
 每輪 N(從 1 起):
 1. cp __SCRATCH__/spec/__DATE__-<topic>.md __SCRATCH__/<topic>-rN.md
 2. 在**工作副本**(只工作副本)植 1 個 canary,類型=[a,b,c][(N-1)%3]:a=壞§ref(引用不存在章節);b=未定義旗標(--xxx 它處無定義);c=未定義常數(ALL_CAPS 無值)。行尾加唯一 token <!-- CANARY-AUTO-N -->。
@@ -45,11 +45,24 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
     **pitfalls 核對**:`python3 <REPO>/scripts/lumos pitfalls __SCRATCH__/spec/__DATE__-<topic>.md --repo <REPO> --check`;若 rc 1(缺「## 實務隱患」節)→ 在原稿 spec 補「## 實務隱患」節再繼續。`pitfalls`(不帶 --check)的提問清單附給步驟 3 的 auditor 當鏡頭之一。
 3. **用 Agent 工具 spawn 一個 opus auditor**:**framing — 把工作副本當外部第三方的投稿來審,不是你/本系統寫的;你的職責是挑出投稿者沒看到的洞。** 要它 REFUTE 工作副本、逐節找洞、**強制地面事實查證**(spec 每個現況假設——欄位/函數/檔案/常數——實際 grep/Read 驗 scripts/lumos 等真實 code,報告列查證指令與結果),逐條標 severity。**附上步驟 2.8 的 refcheck manifest**:manifest 內宣稱的存在性/行號已機械驗訖,不必花查證力氣在「在不在」;地面查證聚焦**語意**——spec 對這些位置的描述、欄位/函數行為的宣稱對不對。**manifest 非宣稱全集**:散文裡(沒 backtick)的現況假設仍要自己 grep/Read 查。
 4. **用 Agent 工具 spawn 一個 opus judge**(獨立,**明文傳入 auditor 完整報告 + canary token**):回傳 ① caught/missed(auditor 有沒有正確點出 canary 性質);② **severity**(clean/minor/major/blocker,排掉 canary 後最嚴重真 finding)+ 一句 rationale。judge **據實評 severity、不加保守偏置**;唯有「對最嚴重 finding 無任一 grep/Read 查證行」才至少 major(客觀二值,不評足不足;**同附 refcheck manifest+rc:存在性由機械 refcheck 保證,「查證行」閘只計語意查證行**)。【judge-severity-gate:severity 改由獨立 judge 評、斷開 orchestrator 自填收斂閘】
-4.5. **辯方 refute(對 judge 評為 severity≥major 的每條 finding;防假陽性)**:用 Agent 工具派 1 個獨立 opus 辯方(乾淨脈絡、**不傳 auditor/judge 結論**),framing=「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(judge 因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持」。辯方回「真(維持)」或「假(降到 minor/clean)+file:line」。被駁倒→該 finding 降級、不折、審計紀錄標「辯方反證:<file:line>」。**該輪 severity = 辯方裁決後存活 findings 的最高**(你機械取 max,非自評——同 judge-severity-gate)。辯方只買 code 層假陽性,業務層留人。
+4.5. **辯方 refute(對 judge 評為 severity≥major 的每條 finding;防假陽性)**:用 Agent 工具派 1 個獨立 opus 辯方(乾淨脈絡、**不傳 auditor/judge 結論**),framing=「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(judge 因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持」。辯方**明確三選一**(2026-08-27,見 Systems/finding-refute):**agree**(同意是真的→維持、折入)/ **evidence**(拿反證降到 minor/clean+file:line→降級、放行)/ **concern**(拿不出反證只存疑→維持、折入)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺 finding。★被駁倒(evidence)→ 該 finding **不折、進放行清單、標「辯方反證:<file:line>」**。辯方只買 code 層假陽性,業務層留人。
+   ★**收斂不看 severity 高低,看處置**(2026-08-27 遷處置閘):辯方降級**不要靠壓低記帳 severity**(會撞 [S1] 寫側硬擋——帳不得低於報告宣告最高,r3 就這樣卡死);severity 忠實記**報告/judge 宣告的最高**,辯方降級改走步驟 6 的「放行清單 + 辯方反證 + refute-verdict evidence」。存活折入的真 finding 條數另記 --findings。★
 5. 你**讀 judge 回報的 severity(不再自評)**,並讀 auditor 報告;**辯方裁決後存活的真 finding 一律折入(不挑、不過濾;這是你寫的 spec 也照折),被辯方駁倒的不折**——折入動作與細節見步驟 7。
-6. python3 scripts/lumos --vault __SCRATCH__/kg canary record <caught|missed> --loop <topic> --severity <步驟 4.5 辯方重算後的存活 max,非自評> --findings <本輪辯方裁決後存活折入的真 finding 條數;canary 不計;missed 輪不折記 0> --auditor opus --token CANARY-AUTO-N --note "rN <摘要>"
-7. caught → **只折辯方存活的真 finding** 進 **__SCRATCH__/spec/__DATE__-<topic>.md**(被辯方駁倒的不折、已標反證)+ 把該輪寫進審計修正紀錄;**折完務必 grep -c CANARY-AUTO-N __SCRATCH__/spec/__DATE__-<topic>.md == 0**。missed → 不折、直接下一輪。
-8. **gate 前自查**:`grep -c 'NEEDS CLARIFICATION' __SCRATCH__/spec/__DATE__-<topic>.md` 必須 0——spec 內任何未解 `[NEEDS CLARIFICATION: 問題]` 標記=視同 blocker 不得收斂(含糊寫成標記而非含糊帶過;borrow:spec-kit)。然後 python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --need __NEED__ --gate --spec __SCRATCH__/spec/__DATE__-<topic>.md --repo <REPO> → exit 0 表示證據閘全過(K-streak ∧ G1 引用座標 ∧ G2 發現枯竭,逐錨明細見輸出;G2 吃步驟 6 的 --findings)(**但先別停,轉 §2.5 跨家族複核**);撞 __MAXR__ 輪未收斂 → 停(此時跳過 §2.5)。
+6. **記帳(處置帳,對齊手動 loop;canary caught/missed 協議 2026-08-14 已停用,改 record none)**。先把 auditor 報告存檔 `__SCRATCH__/reports/rN-auditor.md`,報告內須有**一行獨立** `severity: <clean|minor|major|blocker>`(=auditor/judge 對本輪最嚴重真 finding 的宣告,乾淨輪也要寫 `severity: clean`)。派工當下已凍結 `__SCRATCH__/reports/rN-snapshot.md`(spec 快照)與 `REVIEWED=$(sha256sum spec)`。折完後記:
+   ```
+   python3 scripts/lumos --vault __SCRATCH__/kg canary record none --loop <topic> --round rN --auditor opus \
+     --severity <報告宣告最高,忠實轉錄——非辯方後;[S1] 不准帳低於報告> \
+     --findings <辯方裁決後存活折入的真 finding 條數> \
+     --findings-set <本輪全部 finding 的 id 逗號串> \
+     --folded-set <辯方後存活、已折入的 id> --accepted-set <辯方 evidence 降級放行的 id> \
+     --accept-reason "<id=辯方反證:file:line>"(每個放行 id 一條,理由非空;blocker 不得放行) \
+     --refute-verdict "<id=agree|evidence|concern>"(辯方判過的每條;evidence 必在放行、agree/concern 必在折入) \
+     --report __SCRATCH__/reports/rN-auditor.md --snapshot __SCRATCH__/reports/rN-snapshot.md \
+     --spec __SCRATCH__/spec/__DATE__-<topic>.md --reviewed <REVIEWED> --scope-lines <這輪審了幾行>
+   ```
+   ★辯方降級走「放行清單+辯方反證+refute-verdict evidence」,**不壓低 --severity**(撞 [S1]);severity 忠實記報告最高。收斂由步驟 8 處置閘判(每個發現折或放行即過),不看 severity 高低。乾淨輪(無真 finding):**不帶**任何處置選項(不給 --findings-set/--folded-set/…),只 `--findings 0 --severity clean`(報告也寫 `severity: clean`),處置閘視零發現為 vacuous 直接過。★
+7. **折入**:把**辯方存活的真 finding**(agree/concern 那些)折進 **__SCRATCH__/spec/__DATE__-<topic>.md**(被辯方 evidence 駁倒的不折、已在步驟 6 標反證進放行清單)+ 把該輪寫進審計修正紀錄;**折完務必 grep -c CANARY-AUTO-N __SCRATCH__/spec/__DATE__-<topic>.md == 0**(canary token 不得殘留進 spec)。乾淨輪(judge severity=clean、無存活真 finding)→ 不折、直接進步驟 8 判收斂/下一輪。(2026-08-27 遷處置閘:折入看「辯方後存活」,不再看 caught/missed——canary 只是步驟 4 的 auditor 醒著訊號,不再閘折入。)
+8. **gate 前自查**:`grep -c 'NEEDS CLARIFICATION' __SCRATCH__/spec/__DATE__-<topic>.md` 必須 0——spec 內任何未解 `[NEEDS CLARIFICATION: 問題]` 標記=視同 blocker 不得收斂(含糊寫成標記而非含糊帶過;borrow:spec-kit)。然後 python3 scripts/lumos --vault __SCRATCH__/kg loop status <topic> --disposal --spec __SCRATCH__/spec/__DATE__-<topic>.md --repo <REPO> → exit 0 表示**處置閘全過**(2026-08-27 遷處置閘,對齊手動 loop:G3 雜湊鏈 ∧ 處置全清「每個發現折或放行」∧ 留痕 sha 可重算 ∧ 引句全錨定;逐關明細見輸出)。★注意:`--disposal` 與 `--need`/`--gate` 互斥,不要再帶 --need。收斂看處置、不看 severity 高低——辯方降級記在放行清單就好,severity 忠實記報告最高不影響過閘。★(**過閘先別停,轉 §2.5 跨家族複核**);撞 __MAXR__ 輪未收斂 → 停(此時跳過 §2.5)。
    **收斂即凍結(§2.5 過後)**:把最終 spec 快照 + 各輪辯方裁決後存活 findings 清單凍進 `<REPO>/governance/golden/<topic>/`(spec.md + findings.md;零判斷純搬運)——golden 語料供日後 auditor replay 校準(borrow:Giskard)。
 
 ### 2.5 跨家族複核(放行前,只在步驟 8 判定收斂時做一次;覆寫步驟 8 的「則停」)

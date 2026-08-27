@@ -338,8 +338,9 @@ log "tier 分級:$TIER(need=$NEED, maxr=$MAXR_EFF)"
 
 PROMPT_FILE="$(mktemp)"
 sed -e "s#__SCRATCH__#$SCRATCH#g" -e "s#__DATE__#$TODAY#g" -e "s#__MAXR__#$MAXR_EFF#g" \
-    -e "s#__NEED__#$NEED#g" -e "s#__TIER__#$TIER#g" \
+    -e "s#__TIER__#$TIER#g" \
     "$SCRIPT_DIR/autonomous_loop/orchestrator-prompt.md" > "$PROMPT_FILE"
+    # 2026-08-27 遷處置閘:__NEED__ 佔位符退役(K-streak 不用),prompt 與此不再注入
 printf '\n\n## 要處理的 gap\n%s\n模式:%s\n' "$GAP_JSON" "$MODE" >> "$PROMPT_FILE"
 export ANTHROPIC_API_KEY=""
 export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.config/ai-daily/claude_oauth_token" 2>/dev/null)"
@@ -513,11 +514,10 @@ TIER_FINAL="$(cd "$REPO" && python3 -c "
 import sys; sys.path.insert(0,'governance')
 from autonomous_loop import difficulty
 print(difficulty.assess_spec(open('$SPEC').read())['tier'])")"
-NEED_FINAL="$NEED"
-if [ "$TIER_FINAL" = "high" ] && [ "$NEED_FINAL" -lt 3 ]; then NEED_FINAL=3; fi
-if ! (cd "$REPO" && python3 scripts/lumos --vault "$SCRATCH/kg" loop status "$TOPIC" --need "$NEED_FINAL" --gate --spec "$SPEC" --repo "$REPO"); then
+# 2026-08-27 遷處置閘:--disposal 是單輪收斂(每個發現折或放行),不用 K-streak,故不再算 NEED_FINAL
+if ! (cd "$REPO" && python3 scripts/lumos --vault "$SCRATCH/kg" loop status "$TOPIC" --disposal --spec "$SPEC" --repo "$REPO"); then
   OUTCOME="tier-blocked:gate"
-  log "tier 守衛擋下:自報收斂但 gate 重驗不過(自算 tier=$TIER_FINAL, need=$NEED_FINAL)"
+  log "tier 守衛擋下:自報收斂但處置閘重驗不過(自算 tier=$TIER_FINAL;2026-08-27 遷處置閘,--disposal 與 --need 互斥故不帶 need)"
   MSG="⚠ tier 守衛擋下:自報收斂但 gate 重驗不過(tier=$TIER_FINAL)" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
 import sys, os; sys.path.insert(0,'$REPO/governance')
 from autonomous_loop import line_notify
