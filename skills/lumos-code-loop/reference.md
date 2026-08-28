@@ -83,7 +83,7 @@ Agent tool、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 cana
 > ⛔ 「連 2 次 missed」升級觸發已隨 canary 停用作廢;現行觸發=引句大面積錨不到或泛泛而談,見搬入版護欄
 
 **framing(refute framing)**:
-「你是外部第三方,這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀、主動找洞:bug、邊界、資源、例外、冪等、併發——逐條標 severity(clean/minor/major/blocker)。附 pitfalls `--diff` manifest 當鏡頭:命中位置逐條判真隱患/誤報,真隱患必答對應提問。」
+「你是外部第三方,這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀、主動找洞——正確性(★2026-08-28 升級:每個可疑處挑一個具體輸入把執行走一遍、別用名字猜;邊界 空/單一/溢位、資源 錯誤路徑釋放了嗎、例外/None 接了嗎、冪等併發 重跑或同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)——逐條標 severity(clean/minor/major/blocker)。附 pitfalls `--diff` manifest 當鏡頭:命中位置逐條判真隱患/誤報,真隱患必答對應提問。風格與架構一致性歸架構對齊席。」(完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準)
 
 **抑噪紀律(borrow:PR-Agent 原始碼實證,兩句逐字進 reviewer prompt)**:
 - 「低嚴重度疑慮,**給不出具體失敗場景就不要標**。」
@@ -103,7 +103,7 @@ Agent tool、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 cana
 ### 3 · 派乾淨 reviewer
 Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus)、指向工作副本。
 
-**refute framing**:「你是外部第三方審別人投稿的 diff。逐 hunk 找洞:bug/邊界/資源/例外/冪等/併發,逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。」
+**refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席。」
 
 **抑噪紀律(逐字進 prompt)**:
 - 「低嚴重度疑慮,給不出具體失敗場景就不要標。」

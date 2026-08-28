@@ -2,9 +2,9 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-14
+updated: 2026-08-28
 self_audit: sonnet/2026-08-26
-about_code_stamp: batch-2026-08-23/2026-08-23/8d731184d4dd
+about_code_stamp: claude/2026-08-28/cfda4eb48ae7
 tags:
   - type/system
   - status/done
@@ -89,6 +89,12 @@ decisions:
     why_chosen: 三自家實證支撐(6輪漏抓/replay首輪廣度/codestage blocker 型態分佈);與 d4 抬質量定位、北極星(正常改動變快)、逃逸帳架構完全同線;分層定價讓每塊錢花在該類缺陷最便宜的抓取層
     decided: 2026-07-20
     valid: true
+  - content: code-loop 正確性鏡頭派工措辭升級(2026-08-28):名詞清單(bug/邊界/資源/例外/冪等/併發)改成帶例子的問句+明講排除(風格與架構歸架構對齊席)+借 Meta 半形式推理免費半截『每個可疑處挑一個具體輸入把執行走一遍、別用變數名字猜』。改 templates.md §3 + code-loop reference 兩處摘要;設計審 reviewer 的實務隱患鏡頭本已 Socratic 不動
+    id: d6
+    context: 先問世界(WebSearch 2026-08):業界最佳實踐兩獨立來源(awesome-reviewers『規則+為什麼+例子』、Cloudflare/DEV『告訴它忽略什麼最值錢』)逐字對上我們自己的架構對齊席(§7.6,2026-08-22 Enzo 下令寫)——它就是範本;最弱的正確性鏡頭反而是名詞清單=業界公認 anti-pattern(『review 這段』→表面觀察)。Meta 半形式推理(前提→追執行路徑→只用可查證證據)真實 patch 用 Opus-4.5 達 93%(vs 86% 無結構)
+    why_chosen: 只抄便宜半截(改措辭、零額外 token):把架構席的『規則+例子+排除』形狀套到正確性鏡頭,加 Meta 的『追一個具體案例別用名字猜』(這句本身不加成本)。★Meta 完整技法多燒 2.8× token,撞本專案『審計前置加重一律拒』教義(見 [[Systems/autonomous-iteration-loop]]),故刻意不鋪到每一初審席;貴的『逐 finding 追執行路徑正式憑證』留給 blocker 級或辯方階段(辯方本就深查證)當日後選項,不在本次★。我們的『file:line+grep/Read 真代碼才算數』已是 Meta『只用可查證證據』的一半
+    decided: 2026-08-28
+    valid: true
 about_code:
   - scripts/lumos
 ---
@@ -121,6 +127,8 @@ about_code:
 - **max cap = 6 筆 record**:到頂未收斂 → 停、攤給人、記「達 cap 未收斂」,別無限燒。
 - **硬閘是紀律非技術鎖**:lumos 擋不住「不跑就實作」(同 pre-commit `--no-verify` 後門),靠 Claude 記得調用 + 誠實 + cap/留痕事後可查。**trivial 改動**(typo/一行/純機械)可跳,但寫一句為什麼跳。
 - **誠實天花板**(收斂後務必向人提醒):① 完整性 —— 收斂只證「連 2 輪醒著的審計員沒找到 blocker/major」,不證沒更深問題;② 整合性 —— canary-caught／誤判判定由植入者自判;severity ★2026-08-26 起有寫側機械驗證(低報拒帳,擋疏忽不擋共謀,詳 [[Systems/loop-convergence-recording]])★,其餘仍無外部檢查,是**沒閉合的迴歸**,loop 是可觀測+摩擦+地板,**不是 oracle**。
+
+- **鏡頭措辭升級未量測**(2026-08-28,d6):正確性鏡頭改帶例子的問句+「挑具體輸入走一遍」後,實際有沒有讓審查挖得更深**沒做 A/B**——措辭改動天生難單元測。回頭看條件:下次有兩個以上真 loop 跑過新鏡頭後,人抽看 findings 有沒有比舊名詞清單版更具體(附得出「哪個輸入走到哪行」);若無感、或反而變囉嗦,退回或再調。Meta 完整技法(逐 finding 追執行路徑)的 2.8× 成本效益也只有論文數,本專案未實測。
 
 ## 已知限制(v1 YAGNI)
 - 不做:lumos spawn agent、圖譜自足性審計 loop(v1 只設計/spec)、自動 canary 生成、改 brainstorming/writing-plans skill 本體。
