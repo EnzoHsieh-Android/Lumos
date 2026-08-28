@@ -321,15 +321,29 @@ class TestRequeueUnconverged(unittest.TestCase):
 
 
 class TestPromptPlaceholders(unittest.TestCase):
-    def test_need_tier_placeholders(self):
-        p = Path(__file__).resolve().parent.parent / "governance/autonomous_loop/orchestrator-prompt.md"
-        t = p.read_text(encoding="utf-8")
-        self.assertIn("__TIER__", t)
-        # 2026-08-27 遷處置閘(d7):__NEED__/--gate/K-streak 退役,收斂改 --disposal
-        self.assertNotIn("__NEED__", t)          # 佔位符已退役,不得殘留(prompt 內仍可提及「不要帶 --need」故不禁 --need 字樣)
-        self.assertNotIn("--need 2 --gate", t)   # 防硬編回歸
-        self.assertIn("--disposal", t)           # 收斂改處置閘
-        self.assertIn("tier_escalated", t)        # 輸出契約含 escalate 欄
+    def test_prompt_placeholders_match_runner_substitutions(self):
+        """佔位符契約:prompt 模板的每個 __FOO__ 都要有 runner 的 sed 替換,反之亦然。
+
+        少一邊的後果是真的:prompt 有、runner 沒有 → 字面 `__FOO__` 原封不動漏進送給
+        agent 的指令;runner 有、prompt 沒有 → 死掉的 sed(2026-08-27 遷處置閘後
+        __NEED__ 就是這樣變成死碼)。兩造都是真缺陷,不是文字差異。
+
+        ★寫法刻意不釘任何散文字句★(2026-08-28,借 OmO `.omo/rules/test-discipline.md`
+        「測行為不測文字」:對 prompt 寫「必須包含某句/不准包含舊寫法」的斷言守的是 diff
+        不是行為——文字一改就紅,下一個人只會把斷言改成新文字,等於沒守)。這裡改成拿
+        兩個真檔案對帳:改寫措辭不會誤紅,漏接佔位符才紅。
+        """
+        import re as _re
+        root = Path(__file__).resolve().parent.parent
+        prompt = (root / "governance/autonomous_loop/orchestrator-prompt.md").read_text(encoding="utf-8")
+        runner = (root / "governance/autonomous-loop.sh").read_text(encoding="utf-8")
+        in_prompt = set(_re.findall(r"__[A-Z][A-Z0-9_]*__", prompt))
+        substituted = set(_re.findall(r"s#(__[A-Z][A-Z0-9_]*__)#", runner))
+        self.assertTrue(in_prompt, "prompt 一個佔位符都沒有,對帳失去意義——檢查正則或檔案路徑")
+        self.assertEqual(
+            in_prompt, substituted,
+            f"佔位符對不上:prompt 有但 runner 不替換(會原樣漏給 agent)={sorted(in_prompt - substituted)};"
+            f" runner 替換但 prompt 沒有(死 sed)={sorted(substituted - in_prompt)}")
 
 
 class TestDifficulty(unittest.TestCase):
