@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-28
+updated: 2026-08-29
 self_audit: sonnet/2026-08-26
 about_code_stamp: claude/2026-08-28/cfda4eb48ae7
 tags:
@@ -99,6 +99,12 @@ decisions:
     id: d7
     context: 承 d6(鏡頭措辭升級)再前一步;單源=[[Projects/席位人格化_計劃]] d1(Enzo 裁 A+C)。世界背書:對抗式審查生效三條件 (a)席位夠不一樣 (b)批評扣事實 (c)裁判獎勵可查證——(b)(c) 早有,(a) 原本只做到換鏡頭文字
     why_chosen: 零額外 token、與禁互辯/抑噪/前置加重一律拒全相容;只取差異化不取互相攻擊到共識(諂媚從眾 85.5%、oracle gap 32.3pp、第三輪 23.9% 一致錯誤)。實作用單一新節 §7.7 + 三處指標,不改動每個模板(改動面最小、漂移面最小)
+    decided: 2026-08-29
+    valid: true
+  - content: 圖譜鏡頭擴到每一席(2026-08-29):code-loop 派工時,impact 的固定席(帶硬合約或出過事故的節點)★逐條貼進每一席派工詞★、固定席必答;不再只給架構對齊席,也不採「給 manifest 路徑讓審查員自己讀」。派工詞附兩個填寫雷:①來源是 governance/review-reports/** 凍結快照 patch 的節點要剔掉(審計證物、故意埋 bug,impact 沒排除會頂到滿分)②「還有 N 篇」會少報(非固定席上游已截成 8,真數在 meta.free_total)
+    id: d8
+    context: "[[Projects/impact鏡頭機械化_計劃]] 兩輪設計審停案後留下的正途:工具層沒有機械強制點(派工在 agent 呼叫裡,無 hook 攔得到),但派工模板層可行——架構對齊席 §7.6 早有一格內插固定席,是今天唯一真在消費圖譜節點的派工路徑;其餘席沒有。實帳:code 迴圈派工單提到 impact 的僅個位數"
+    why_chosen: 紀律點從「多跑一道指令」移到「我正在寫的那份派工詞」——後者難跳過得多(填不出那格就交不出派工單)。貼內容而非給路徑:①r2 實測收貨檢查只比檔名字串,給路徑無法驗也易假綠②架構對齊席既有形態就是內插,對齊既有唯一可運作路徑。兩個填寫雷是 r2 邊界席實跑審出的 impact 既有缺陷,不修但要讓填的人知道
     decided: 2026-08-29
     valid: true
 about_code:

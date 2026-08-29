@@ -91,7 +91,7 @@ Agent tool、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 cana
 - ⚠ 刻意**不借** PR-Agent 的 findings 硬上限(num_max_findings=3)——上限會把真 findings 藏到下一輪,污染 G2 發現枯竭的收斂信號;抑噪靠上面兩句紀律,不靠砍量。
 
 **受影響功能面鏡頭(2026-07-11 橋接,檢索排序轉正後啟用)**:派 reviewer 前跑
-`lumos impact --diff <merge-base>..HEAD --json` ——聚合整段 diff 各檔的 ranked impact(query=各檔 hunk 文字)成一份 manifest(★守衛面參考道 lane 不進 manifest——軟標記樞紐非代碼審波及口徑,2026-08-24★):固定席(★INVARIANT★ 合約+pitfall_when 事故)全保、非固定取跨檔最高分 top-8。附給 reviewer 當第二鏡頭:「逐條判此 diff 會不會破壞該節點宣稱的行為/合約;固定席(合約/事故)必答」。**定位=advisory 人判**(機械保證只涵蓋合約/事故類固定席,其餘經排序無保底——保底與噪音都靠 reviewer 兜,故當鏡頭不當自動閘)。註:單檔版 ranked 已於 2026-07-11 過 §6 轉正接上 PreToolUse hook;--diff 聚合版仍維持審計鏡頭定位。
+`lumos impact --diff <merge-base>..HEAD --json` ——聚合整段 diff 各檔的 ranked impact(query=各檔 hunk 文字)成一份 manifest(★守衛面參考道 lane 不進 manifest——軟標記樞紐非代碼審波及口徑,2026-08-24★):固定席(★INVARIANT★ 合約+pitfall_when 事故)全保、非固定取跨檔最高分 top-8。★2026-08-29 改:固定席**逐條貼進每一席的派工詞**(不是給 manifest 路徑讓它自己讀——給路徑那條經兩輪設計審否決,見 [[Projects/impact鏡頭機械化_計劃]])★,要它「逐條判此 diff 會不會破壞該節點宣稱的行為/合約;固定席必答」。**定位=advisory 人判**(機械保證只涵蓋合約/事故類固定席,其餘經排序無保底——保底與噪音都靠 reviewer 兜,故當鏡頭不當自動閘)。註:單檔版 ranked 已於 2026-07-11 過 §6 轉正接上 PreToolUse hook;--diff 聚合版仍維持審計鏡頭定位。
 
 > manifest 現含兩種來源的 claim(`source` 欄區分):regex claim(`source:"pitfalls-builtin"`,讀 `question` 對應提問)與 lint claim(`source:"lint:<driver>"`,來自專案 `.lumos/lint.json` 宣告的社群 linter SARIF,讀 `message`——linter 已是具體診斷、無 question 欄)。reviewer 鏡頭對 lint claim 讀 `message`、對 regex claim 仍讀 `question`。
 
@@ -112,7 +112,7 @@ Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大�
 
 **席位立場+輸出格式(2026-08-29 A+C,`../lumos-design-loop/templates.md` §7.7)**:多席 panel 每席在鏡頭外加「立場+預設姿態」(措辭自己改寫別逐字貼);敘述每條 ≤3 句、不准模稜兩可(結構欄位不計);★預設姿態不放寬證據要求,抑噪紀律照舊★;單席通才不套立場。
 
-**impact 鏡頭**:派前跑 `lumos impact --diff <range> --json` → 附 manifest 當第二鏡頭:「逐條判此 diff 破不破壞節點合約;固定席(合約/事故)必答」(advisory 人判)。
+**圖譜鏡頭(★2026-08-29 改:每席都附、貼內容不給路徑★)**:派前跑 `lumos impact --diff <range>`,把**固定席**(帶硬合約或出過事故的節點)**逐條貼進每一席的派工詞**——不是給 manifest 路徑讓它自己讀(給路徑那條 2026-08-29 兩輪設計審否掉了,見 [[Projects/impact鏡頭機械化_計劃]])。派工詞寫「逐條判此 diff 破不破壞節點合約;固定席必答」(advisory 人判)。完整格式見 `../lumos-design-loop/templates.md` §3 鏡頭 3,含兩個填寫雷:①來源是 `governance/review-reports/**` 凍結快照 patch 的節點要剔掉(審計證物,裡面故意埋 bug)②「還有 N 篇」的 N 會少報。
 
 **test-layers 鏡頭(有宣告才附)**:派前跑 `lumos test-layers --diff <range> --json`,`hits` 非空 → 附給 reviewer:「diff 碰到 <棧> 且專案宣告 <層> 測試(<cmd>)——判斷此改動需不需要補/跑該層;需要而缺 → 列 finding(severity 依風險自判)」。無宣告檔則略過此鏡頭。
 
