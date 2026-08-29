@@ -3968,7 +3968,11 @@ def t_doctor_lint_declaration():
     (repo_root / ".git").mkdir()   # git 感知解析(_vault_repo_root)的錨——真實 repo 必有
     # 無宣告
     r = run(vault, "doctor", "--ci")
-    check("[F] 無宣告:輸出含未宣告跳過", "未宣告跳過" in r.stdout, r.stdout[-400:])
+    # ★2026-08-29 改:原本釘「未宣告跳過」這句散文(改一次文字就紅,守的是 diff 不是行為;
+    # 見 Systems/測試假綠形態 ③ 的散文文字釘子型)。改成測真行為:無宣告時要「出聲提醒但不擋」——
+    # 空轉不說話正是這次要修的病(別的 repo 才會發現自己沒接 linter、去裝)。
+    check("[F] 無宣告:出聲提醒(不是靜默綠勾)", "⚠" in r.stdout, r.stdout[-400:])
+    check("[F] 無宣告:提醒但不擋(rc 不因此變紅)", r.returncode == 0, f"rc={r.returncode}")
     # 壞 JSON
     (repo_root / ".lumos").mkdir(exist_ok=True)
     (repo_root / ".lumos" / "lint.json").write_text("{{{壞")
@@ -3982,7 +3986,11 @@ def t_doctor_lint_declaration():
     (repo_root / ".lumos" / "lint.json").write_text(_j.dumps({"kt": ["detekt {LINT_SARIF_OUT}"]}))
     r = run(vault, "doctor", "--ci")
     check("[F] 合法宣告(Landmark 形狀):rc0 且格式健康", r.returncode == 0 and "格式健康" in r.stdout, f"rc={r.returncode} {r.stdout[-300:]}")
-    check("[F] 健康訊息講明 smoke 留手動", "留手動" in r.stdout, "")
+    # ★2026-08-29 改:原釘「留手動」三個字(散文文字釘,改措辭即紅)。真正該守的行為是
+    # 「格式健康 ≠ linter 真的在跑」這個界線有講出來——用 smoke 指令名(機器也用的穩定 token)
+    # 當錨,而不是釘某一句話怎麼寫。
+    check("[F] 健康訊息要指路到真跑驗證(不得讓人以為格式健康=linter 有在跑)",
+          "lint-check --smoke" in r.stdout, r.stdout[-300:])
     # ext-f2 釘:編碼損壞=受控紅不 traceback
     (repo_root / ".lumos" / "lint.json").write_bytes(b"\xff\xfe\x00 broken bytes")
     rb = run(vault, "doctor", "--ci")
@@ -5170,6 +5178,21 @@ def t_refute_verdict_ledger_and_stats():
     check("evidence 但該 id 沒放行 → rc2(帳對不上)", r.returncode == 2 and "放行清單" in r.stderr, r.stderr)
     r = run(v, *base, "--refute-verdict", "f2=agree")       # f2 在放行卻標維持
     check("agree 但該 id 沒折入 → rc2(帳對不上)", r.returncode == 2 and "折入清單" in r.stderr, r.stderr)
+    # blocker 輪讓步(2026-08-29 修回歸):blocker 輪舊規則強制放行清單為空,而反證發現照規矩不折入
+    # → 兩條一夾使記帳整筆被擋(自主迴圈當日四次撞上)。本欄讓步:blocker 輪允許 evidence 落折入。
+    repb = v.parent / "r1-blocker.md"; repb.write_text("引句：「這是一段足夠長的快照內容」\nseverity: blocker\n", encoding="utf-8")
+    baseb = ["canary", "record", "none", "--loop", "rv-blk", "--round", "r1", "--auditor", "a",
+             "--severity", "blocker", "--findings", "2", "--findings-set", "b1,b2",
+             "--folded-set", "b1,b2", "--report", str(repb), "--snapshot", str(snap),
+             "--spec", str(spec), "--reviewed", h, "--tier", "standard"]
+    r = run(v, *baseb, "--refute-verdict", "b2=evidence")
+    check("★blocker 輪:evidence 落折入 → 放行並提醒(不再死結)★",
+          r.returncode == 0 and "這輪是 blocker 輪" in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
+    lastb = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+    check("blocker 輪的辯方表態有進帳(不再被迫留空)", lastb.get("refute_verdicts") == {"b2": "evidence"}, str(lastb)[:200])
+    r = run(v, *baseb, "--refute-verdict", "b2=agree", "--refute-verdict", "b1=evidence")
+    check("非 blocker 情境的原檢查仍在(b1 標 evidence 但不在放行 → 提醒非擋,因仍是 blocker 輪)",
+          r.returncode == 0, r.stderr[-200:])
     r = run(v2, "gov", "--stats", "--since", "9999")
     check("★gov --stats 出辯方三態分布★", "同意是真的 1、拿反證降級 1、只存疑無反證 1" in r.stdout, r.stdout)
     # F3(code-refute-verdict r1 correctness 折入):真跑 disposal 判閘,證明「帶不帶 --refute-verdict 判閘結果一致」

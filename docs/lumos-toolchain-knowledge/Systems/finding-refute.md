@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-06-26
+updated: 2026-08-29
 self_audit: sonnet/2026-06-26
 about_code_stamp: batch-2026-08-23/2026-08-23/c16129e0515e
 tags:
@@ -47,6 +47,12 @@ decisions:
     why_chosen: 只補偵測儀器、不翻舊裁定:降級行為零改動(不碰散文層收斂差的部分),風險最低;開始記 evidence 降級樣本,日後抽驗『降錯、後來證明是真的』才有候選池,把 2026-08-22 那條原本看不見的重啟條件變成可用證據觸發。相對選項:①照做全套三分類(翻案,但增益仍估不出、且改判閘)②完全不動(維持看不見的重啟條件)——都比中間路差
     decided: 2026-08-27
     valid: true
+  - content: 辯方表態的記帳一致性檢查在 blocker 輪讓步(2026-08-29 修回歸):同輪 severity=blocker 時,舊規則強制放行清單為空、而反證推翻的發現照規矩不折入——兩條一夾使 refuted 發現無處可去、整筆記帳被擋。處置=讓步的是本欄(它自稱純記帳),blocker 輪允許 evidence 落折入並提醒,反證 file:line 寫進 note;判閘一字未動
+    id: d5
+    context: 自主迴圈 2026-08-29 那輪四次撞上,只能把辯方判決留空、反證寫進 note,結構帳因此少了四輪的辯方資料(它自己的 notes 點名這條)。追查發現死結比 2026-08-27 的表態欄更早:舊規則『blocker 輪 accepted 必空』與『被駁倒的不折入』本來就互斥,表態欄只是讓它每次都撞、從偶發變必然
+    why_chosen: 本欄 2026-08-27 立案時自己寫的定位就是『純記帳、不掛判閘』,那麼衝突時該讓的是本欄不是判閘;讓步範圍最小(只在 blocker 輪、且該 id 確實在折入清單才放行),非 blocker 輪的原檢查一字未動並有測試守住。★根因(blocker 輪該不該讓反證發現放行)是判閘語意問題,要動得走設計審,本次刻意不碰★——這條寫進註解,避免下次有人順手改判閘
+    decided: 2026-08-29
+    valid: true
 aliases:
   - 辯方
 ---
@@ -85,7 +91,8 @@ design-loop 審計 loop 的**辯方 refute 階段**(step 4.5)—— 檢察官(au
 
 ★**降級規則一字未動**★:三態裡只有 evidence 會降,而且照舊必附 file:line;agree 與 concern 都是維持,對應舊制的「真(維持)」——差別只在帳上把「我查證同意」和「我拿不出反證但存疑」分得開。折入/放行去向仍由處置帳的 folded/accepted 決定,**表態欄不掛任何判閘**。記帳:`canary record ... --refute-verdict <id>=agree|evidence|concern`(選填,鍵是辯方判過的子集;`gov --stats` 出三態分布)。
 
-**記帳一致性契約**(2026-08-27 code-loop r1 折入):寫側核對表態與去向對得上——`evidence`(拿反證降級)的 id 必在放行(`accepted-set`)、`agree`/`concern`(維持)必在折入(`folded-set`),對不上 rc2。這是**記帳一致性**(同 accept-reason 鍵須==accepted-set),**不是判閘**,不碰 disposal/收斂——目的是別讓「抽驗降級樣本」抽到根本沒降的,不然這欄的用途會被亂標挖空。連帶:`--refute-verdict` 與 `--finding-kind` 都納入「缺 `--findings-set` 就 rc2」的守衛(防選配標註靜默丟失,兩姊妹欄同一 edge case 同一行為)。判閘不讀本欄這條不變式由 `t_refute_verdict_ledger_and_stats` 真跑 `loop status --disposal` 帶/不帶對照守住。
+**記帳一致性契約**(2026-08-27 code-loop r1 折入):寫側核對表態與去向對得上——`evidence`(拿反證降級)的 id 必在放行(`accepted-set`)、`agree`/`concern`(維持)必在折入(`folded-set`),對不上 rc2。這是**記帳一致性**(同 accept-reason 鍵須==accepted-set),**不是判閘**,不碰 disposal/收斂——目的是別讓「抽驗降級樣本」抽到根本沒降的,不然這欄的用途會被亂標挖空。
+★blocker 輪讓步(2026-08-29,d5)★:同輪 severity=blocker 時,舊規則強制放行清單必須是空的,而反證推翻的發現照規矩「不折入」——兩條一夾使 refuted 發現無處可去、整筆記帳被擋(自主迴圈 2026-08-29 那輪四次撞上,只能把辯方判決留空)。既然本欄自稱純記帳,讓步的就是本欄:**blocker 輪允許 evidence 落在折入,並印一句提醒,反證 file:line 寫進 `--note`**;非 blocker 輪的原檢查一字未動。**判閘沒動**——「blocker 輪該不該讓反證發現放行」是判閘語意問題,要改得走設計審。連帶:`--refute-verdict` 與 `--finding-kind` 都納入「缺 `--findings-set` 就 rc2」的守衛(防選配標註靜默丟失,兩姊妹欄同一 edge case 同一行為)。判閘不讀本欄這條不變式由 `t_refute_verdict_ledger_and_stats` 真跑 `loop status --disposal` 帶/不帶對照守住。
 
 **為什麼加**:[[Projects/收斂機制優化調研2026-08-14]] 2026-08-22 裁「辯方三分類先不做」——它分析的正是這篇論文(F1 0.457→0.533),裁定不抄,理由是我們起點已有三層(引句錨定+行號機驗+外家反證),同樣增益吃不吃得到估不出來,且要改散文層。重啟條件寫的是「出現一次辯方被弱反駁說服、事後證明 finding 是真的」。但那條裁定自己在〈誠實界線〉點名:**帳裡只有 caught/severity/處置,沒有逐席對錯標註**——所以那個重啟條件根本偵測不到。這次**只補這個偵測儀器**:開始記辯方表態,evidence(降級)那批就是重啟條件的候選池,日後抽驗有沒有「降錯、後來證明是真的」。**不翻那條裁定(降級行為沒動),只讓它的重啟條件從此看得見。**
 

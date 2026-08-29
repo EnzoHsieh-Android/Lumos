@@ -1726,7 +1726,15 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         _lf = _lint_load_and_validate(_vault_repo_root(env))   # git 感知解析(ext-f1:_repo_root_from_env 對 standalone 回 parent,與 .git 在 vault 內的既有定義互斥)
         section("F", "linter 宣告檔還健康嗎(.lumos/lint.json;沒宣告就跳過)")
         if not _lf["declared"]:
-            ok("這個 repo 沒有宣告 linter 橋(.lumos/lint.json 不存在),未宣告跳過")
+            # ★2026-08-29 誠實化★:原本這裡印綠勾「未宣告跳過」——等於恭喜你沒接 linter。
+            # 沒接的後果是實的:代碼審完全看不到任何 linter 告警,那些本來最便宜就能抓到的
+            # 問題只能靠審查員肉眼。空轉要說出來,而且要說得出下一步,別的 repo 才知道去裝。
+            warn([], "這個 repo 沒有接 linter(.lumos/lint.json 不存在)——代碼審看不到任何 linter 告警,"
+                     "那類最便宜就能抓的問題目前全靠審查員肉眼:",
+                 "要接的話三步:①先在這個專案裝一個 linter(如 eslint / detekt / ruff / stylelint,"
+                 "看技術棧)②建 .lumos/lint.json 宣告它怎麼跑、輸出 SARIF 到哪 "
+                 "③跑 lumos lint-check --smoke 驗它真的跑得動;接好之後 pitfalls 就會把它的告警"
+                 "帶進審查鏡頭。不打算接也可以,但這是選擇不是預設健康")
         elif _lf["parse_error"]:
             warn([f".lumos/lint.json:{_lf['parse_error']}"],
                  ".lumos/lint.json 不是合法 JSON——宣告壞掉=橋整條斷,審查吃不到 lint 告警:",
@@ -1740,7 +1748,13 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             gov_events.append({"gate": "check-lint-decl", "kind": "warned", "hard": False,
                                "nodes": [], "note": f"problems={len(_fl)}"})
         else:
-            ok("linter 宣告檔格式健康(工具真的跑不跑得動要 lint-check --smoke 驗,那步刻意留手動)")
+            # ★2026-08-29 誠實化★:原訊息只說「格式健康」,讀起來像 linter 有在保護這個
+            # 專案——實際上所有自動路徑(pre-push 三處、tier 判定)都帶 --no-lint,CI 也不跑
+            # pitfalls,真正會執行 linter 的 _lint_run_and_parse 只有兩個手動呼叫者。也就是
+            # 「宣告的形狀」天天有人驗,「宣告的東西跑不跑得動」從來沒有自動驗過一次。
+            ok("linter 宣告檔格式健康——★但這只證明宣告寫得對,不證明 linter 真的在跑★:"
+               "自動路徑(推送前檢查、分級判定、CI)一律不執行 linter,要驗跑不跑得動只能手動 "
+               "lumos lint-check --smoke")
         print()
 
     if ci:
@@ -4049,8 +4063,21 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             # 表態與去向的記帳一致性(寫側,如 accept-reason 鍵須==accepted-set;不碰 disposal 判閘/收斂):
             # evidence=辯方拿反證降級→該 id 的去向必是放行(accepted);agree/concern=辯方維持→必是折入(folded)。
             # 標了 evidence 卻沒放行 = 帳自打架,日後「抽驗降級樣本」會抽到沒降的,挖空本欄用途。
+            # ★blocker 輪讓步(2026-08-29 修回歸)★:同輪 severity=blocker 時,上面那條舊規則
+            # 強制放行清單必須是空的,而辯方反證推翻的發現照規矩「不折入」——兩條一夾,refuted
+            # 發現無處可去,記帳整筆被擋。實害:自主迴圈 2026-08-29 那輪四次撞上,只能把辯方
+            # 判決留空、反證寫進 note,結構帳因此少了四輪的辯方資料。
+            # 本欄自稱「純記帳、不掛判閘」,所以讓步的是本欄不是判閘:blocker 輪允許 evidence
+            # 落在折入,並提醒一句。★根因(blocker 輪該不該讓反證發現放行)是判閘語意問題,
+            # 要動得走設計審,本次不碰★。
+            _blocker_round = (severity == "blocker")
             for _k, _v in rv.items():
                 if _v == "evidence" and _k not in AC:
+                    if _blocker_round and _k in FO:
+                        print(f"提醒:{_k} 標 evidence(辯方拿反證降級)但落在折入——這輪是 blocker 輪,"
+                              "舊規則不准有放行,反證發現只能折;帳照記,反證 file:line 請寫進 --note",
+                              file=sys.stderr)
+                        continue
                     print(f"擋下:{_k} 標 evidence(辯方拿反證降級)但不在放行清單(--accepted-set)——降級的發現去向是放行,帳對不上", file=sys.stderr)
                     return 2
                 if _v in ("agree", "concern") and _k not in FO:

@@ -37,9 +37,16 @@ for REPO in "${REPOS[@]}"; do
   PENDING="$DIR/pending-$NAME-$TODAY.json"
   RAW="$(python3 "$TOOLCHAIN/scripts/lumos" lint-watch --repo "$REPO" --json 2>/dev/null)" || true
   # ③ 心跳:每 repo 一行計數,log 不再 0 bytes
+  # ★2026-08-29 誠實化★:原本盯 0 條與「盯了都最新」都印 checked=0,兩者長得一樣——
+  # LandmarkMember 的宣告清單被刻意清空後(從未安裝過該 linter),這裡連續 41 天印出
+  # 看起來很健康的 checked=0,沒有任何人看得出它其實什麼都沒盯。宣告 0 條要大聲說。
   SUMMARY="$(printf '%s' "$RAW" | python3 -c "import sys,json
 d=json.load(sys.stdin)
-print('candidates=%d checked=%s failed=%d' % (len(d.get('candidates',[])), d.get('checked',0), len(d.get('failed',[]))))" 2>/dev/null || echo '輸出不可解析')"
+n=d.get('checked',0) or 0
+if not n:
+    print('★宣告 0 條:這個 repo 沒有任何 linter 在被盯,每天這一趟是空轉★ 下一步:先確認專案真的裝了 linter(沒裝就先裝,審查才吃得到告警);裝了就把它加進 .lumos/lint-watch.json 才盯得到新版;確定不打算接,就把每日排程對本 repo 關掉')
+else:
+    print('candidates=%d checked=%s failed=%d' % (len(d.get('candidates',[])), n, len(d.get('failed',[]))))" 2>/dev/null || echo '輸出不可解析')"
   echo "[$(ts)] $NAME: $SUMMARY"
   MSG="$(printf '%s' "$RAW" | python3 "$DEDUP" "$SEEN" "$PENDING" "$TODAY")" || true
   if [ -n "$MSG" ] && [ -f "$TOKEN_FILE" ]; then
