@@ -2,7 +2,7 @@
 type: project
 status: done
 created: 2026-08-02
-updated: 2026-08-02
+updated: 2026-08-29
 about_code_stamp: batch-2026-08-23/2026-08-23/e34a0cab048b
 related:
   - "[[Systems/retrieval-ranking]]"
@@ -22,6 +22,12 @@ about_code:
   - scripts/lumos
 ---
 # 送審前 impact 鏡頭機械化（計劃）
+
+> **★2026-08-29 補:本案的裁定(採 A 案、不加閘)已被獨立重驗兩次,仍成立。★**
+> 有人(同一個 AI,沒查圖譜)在 2026-08-29 重開了同一題,兩輪設計審、十席次,**七個 blocker**,結論回到這裡:**派工那一刻沒有機械強制點,是結構性的**,換落點解決不了。
+> 完整證據與兩輪各自的死因見 [[Projects/impact鏡頭機械化_計劃]](已結案,status: superseded)。
+> ★該案另審出兩個 **impact 的既有真缺陷**(審計證物 patch 被當程式碼來源頂到滿分;非固定席數量少報),本節點不負責,見該篇〈副產物〉。★
+> ★下方「已排除的做法」裡「掛進 pitfalls 會慢 26 倍」的理由,**已於 2026-08-22 落成核對上線時作廢**(pre-push 每次推送本來就無條件跑一次 impact);排除結論仍成立,但要換理由:pitfalls 是明文 vault-free,掛 impact 會破約。★
 
 ## 問題（有實例，不是假想）
 
