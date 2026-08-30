@@ -4,7 +4,7 @@ status: pass
 feature: "[[Systems/check-r-guard]]"
 commit: eb73b22
 date: 2026-06-24
-about_code_stamp: batch-2026-08-23/2026-08-23/993ea0c833dc
+about_code_stamp: claude/2026-08-30/17f09137e350
 valid_under:
   - "doctor/lint Check R 對 ★IRREVERSIBLE★ 兩軌(rollback/guard)任一合規放行、兩軌皆無報 error"
   - "★CHECKPOINT★ 行為不變(有 guard 靜默忽略、無 rollback 仍軟提醒)"

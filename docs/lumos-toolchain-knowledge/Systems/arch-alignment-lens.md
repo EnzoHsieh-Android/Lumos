@@ -3,6 +3,7 @@ type: system
 status: doing
 created: 2026-08-22
 updated: 2026-08-22
+self_audit: sonnet/2026-08-30
 aliases:
   - 架構對齊席
   - 架構鏡頭

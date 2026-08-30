@@ -106,7 +106,7 @@ summary: |-
 
 ### T7（包⑥）離線校準腳本
 
-**Create**: `governance/eval/canary_calibration.py(2026-08-26 已退場,詳建了沒人跑批次裁定)`（stdlib）；**Test**: 冒煙進 test_lumos（`t_calibration_smoke`，`_need_src` 守門）
+**Create**: governance/eval/canary_calibration.py(2026-08-26 已退場,詳建了沒人跑批次裁定)（stdlib）；**Test**: 冒煙進 test_lumos（`t_calibration_smoke`，`_need_src` 守門）
 
 - 輸入：凍結語料目錄＋植入清單（JSON：檔、位置、型別、token）＋各配置的審查報告目錄。
 - 輸出：配置 × 型別的 caught 矩陣＋JSONL 累積帳（`governance/eval/calibration-log.jsonl`）。
@@ -145,7 +145,7 @@ summary: |-
 - ✅ **T6（2026-08-04）**：定錨收緊——loop 首筆帶 findings_set 後，後續 record 必帶
   --report/--snapshot（rc2）；未定錨 loop 不受影響；翻紅釘實測。★T6 生效後正確地咬到 T4
   測試場景（missed 席也要留痕＝d4 判定留痕），測試已跟上。★
-- ✅ **T7（2026-08-04）**：`governance/eval/canary_calibration.py`——判定 import lumos 的
+- ✅ **T7（2026-08-04）**：governance/eval/canary_calibration.py(2026-08-26 已退場)——判定 import lumos 的
   `_quote_norm`（單一實作）；caught/mentioned/missed 三態寬判＋誠實聲明「不進任何 gate」；
   累積帳 calibration-log.jsonl；冒煙測試（`_need_src` 守門）。
 - ⚠️ **T8（2026-08-04）**：收尾四項全執行，終審★達 cap 未收斂→攤人裁★——

@@ -115,10 +115,10 @@ bash 從 stdin 讀腳本 → python 繼承同一條管線 → 直接 `input()` �
   - **F8**（委派後吞錯：step2 沒看 returncode 照印成功）→ 各步查 rc、尾端彙報、最終 rc 非 0。
   - **F5**（_vault_in 只看名稱、假陽性上疊自動動作）→ 分流表補「中間態：有 vault 無 vendored → 不動＋提示」。
   - **F11/F12**（第 2 階成功路徑沒測／get.sh 只 grep 驗不到 argv）→ 測試案 1 擴 5 子案（含斷言 stdin 未被讀）、案 6 改真跑 bash＋argv shim。
-  - **既有病記殘留（本刀不修，另見殘留節）**：F4 半成品 vault 無自癒、F9 `docs/knowledge`/standalone 佈局 slug 反推錯、F10 Windows get.ps1 仍兩步。
+  - **既有病記殘留（本刀不修，另見殘留節）**：F4 半成品 vault 無自癒、F9 docs/knowledge(舊名;現 docs/lumos-toolchain-knowledge)/standalone 佈局 slug 反推錯、F10 Windows get.ps1 仍兩步。
   - 處置：折畢進 TDD（d4：一輪 panel 抓完便宜的就走，正確性歸測試）。
 
 ## 已知殘留（std 照出的既有病，本刀不修）
 - **F4**：`cmd_init` 對「vault 建到一半」（如 KeyboardInterrupt 後）無自癒——有 vault 就 early-return 輕路徑，不補缺的子目錄/gitignore。既有行為，修要動 init 本體（範圍刀外）。
-- **F9**：`docs/knowledge`／standalone vault 佈局下 `cmd_init` 反推不出 slug、reinject 會把 `{{KG}}` 寫成 `docs/<repo>-knowledge/`（錯路徑）。既有行為；bootstrap 分流靠 `_vault_in` 不受此影響，但 init 輕路徑在這類佈局有此病。
+- **F9**：docs/knowledge(舊名;現 docs/lumos-toolchain-knowledge)／standalone vault 佈局下 `cmd_init` 反推不出 slug、reinject 會把 `{{KG}}` 寫成 `docs/<repo>-knowledge/`（錯路徑）。既有行為；bootstrap 分流靠 `_vault_in` 不受此影響，但 init 輕路徑在這類佈局有此病。
 - **F10**：Windows 官方入口 `get.ps1` 只做機器層＋手動 init——本案範圍明縮 **POSIX（get.sh）**，Windows 一鍵化另立。

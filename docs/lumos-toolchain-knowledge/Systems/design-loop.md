@@ -3,8 +3,8 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-29
-self_audit: sonnet/2026-08-26
-about_code_stamp: claude/2026-08-28/cfda4eb48ae7
+self_audit: sonnet/2026-08-30
+about_code_stamp: claude/2026-08-30/f40aed14a01c
 tags:
   - type/system
   - status/done
@@ -121,6 +121,8 @@ about_code:
 ## 定位:Component A / B 分工
 - **Component A**(`docs/design/2026-06-19-convergence-recording.md`(唯讀歷史)):lumos 出**原語** —— `lumos canary record --loop/--severity`(寫 `.canary-log.jsonl`)+ `lumos loop status --need`(讀 log 算收斂)。有 `test_lumos.py` 覆蓋。
 - **Component B**(本節點 = 本 skill):Claude 的**編排層** —— 用 Agent tool 派審計員、判讀、修 spec。**lumos 不 spawn agent**;Claude 照 SKILL.md 跑程序。
+
+> **⛔ 下面三節(程序/收斂演算法/護欄)是 2026-08-14 前的舊制歷史**(植 canary、record caught|missed、K-streak)——**現行做法看上方 KEY**:08-14 canary 停用改 `record none`、08-25 起散文審一律處置閘 `--disposal`(d5)、08-27 摩擦兩修。自足審計 2026-08-30 抓到本篇「KEY 新、正文舊」同篇打架,保留舊文當歷史、以此告示斷開。
 
 ## 每一輪的程序(SKILL.md §「每一輪」)
 1. 複製 `docs/design/<id>.md` → `/tmp/<id>-rN.md`;**N = `lumos loop status <id>` 已有輪數 + 1**(不靠記憶)。

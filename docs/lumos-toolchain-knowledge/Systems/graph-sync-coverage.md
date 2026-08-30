@@ -3,6 +3,7 @@ type: system
 status: doing
 created: 2026-08-22
 updated: 2026-08-22
+self_audit: sonnet/2026-08-30
 aliases:
   - 圖譜同步點名
   - sync nudge
@@ -26,8 +27,8 @@ summary: |-
 ## 三個時機
 | 時機 | 在哪 | 印什麼 |
 |---|---|---|
-| Claude 改完 code、這輪結束 | `scripts/hooks/claude/check-graph-sync.py`(Stop hook) | 即使這輪動過圖譜,仍點名「直接相關且帶合約/事故、這輪沒動」的篇(每檔 impact --file,最多 4 檔、8 篇) |
-| `git commit` | `scripts/hooks/pre-commit` Gate 3 | `impact --diff staged --sync-check`,固定席未動的前 8 篇 |
+| Claude 改完 code、這輪結束 | `scripts/hooks/claude/check-graph-sync.py`(Stop hook) | 即使這輪動過圖譜,仍點名「直接相關且帶合約/事故、這輪沒動」的篇(★2026-08-30 自足審計訂正:現況=單次 `impact --diff HEAD --sync-check --json`(工作樹 vs HEAD)取固定席前 8 篇——原「每檔 impact --file、最多 4 檔」是重構前舊貌,src_files 參數已是殘跡★) |
+| `git commit` | `scripts/hooks/pre-commit` Gate 3 | `impact --diff staged --sync-check`,固定席優先、自由席補滿到 8 篇(pre-commit/pre-push 實際帶的旗標是 `--sync-only`,蘊含 sync-check 且只印點名) |
 | `git push` | `scripts/hooks/pre-push` | 同上對整批 range——分開幾個 commit 各自過關、整批漏掉的在這裡浮出 |
 
 ## 為什麼不硬擋

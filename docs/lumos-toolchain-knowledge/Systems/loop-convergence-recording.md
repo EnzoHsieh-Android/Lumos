@@ -4,7 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-08-14
 self_audit: sonnet/2026-08-26
-about_code_stamp: batch-2026-08-23/2026-08-23/f2d96de56d23
+about_code_stamp: claude/2026-08-30/be0e9557e400
 tags:
   - type/system
   - status/done

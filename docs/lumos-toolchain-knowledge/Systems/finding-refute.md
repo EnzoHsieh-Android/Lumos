@@ -3,8 +3,7 @@ type: system
 status: done
 created: 2026-06-26
 updated: 2026-08-29
-self_audit: sonnet/2026-06-26
-about_code_stamp: batch-2026-08-23/2026-08-23/c16129e0515e
+self_audit: sonnet/2026-08-30
 tags:
   - type/system
   - status/done
@@ -13,14 +12,14 @@ verified_by:
   - "[[Verification/2026-06-24_finding-refute]]"
   - "[[Verification/2026-08-27_辯方表態記帳]]"
 summary: |-
-  FLOW:auditor→findings→judge(caught/missed+severity,排掉canary後最嚴重真finding)→【辯方refute(新,step4.5)】對每條 judge 評 severity≥major 的 finding 各派 1 個獨立 opus 辯方(乾淨脈絡、不傳 auditor/judge 結論)→辯方回真(維持)/假(降級+file:line反證)→該輪 severity=存活 findings 機械取 max→record(用重算 severity)→只折存活真 finding(被駁倒的不折、標「辯方反證:<file:line>」)
+  FLOW:auditor→findings→judge(caught/missed+severity,排掉canary後最嚴重真finding)→【辯方refute(新,step4.5)】對每條 judge 評 severity≥major 的 finding 各派 1 個獨立 opus 辯方(乾淨脈絡、不傳 auditor/judge 結論)→辯方回真(維持)/假(降級+file:line反證)→該輪 severity=存活 findings 機械取 max(判讀用)→record(★2026-08-26 [S1] 起帳面 severity 忠實記報告宣告最高、不得記辯方後較低值——照舊句記會 rc2;降級走 accepted-set+refute-verdict evidence★)→只折存活真 finding(被駁倒的不折、標「辯方反證:<file:line>」)
   KEY:防的失敗模式=auditor「認真讀了但判錯」的假陽性(誤抓);與 canary 防「沒讀/放水」的假陰性(漏抓)方向相反、對稱補位
-  KEY:純 prompt 紀律疊加階段,無代碼、無單元測;只動 SKILL.md(手動版)+orchestrator-prompt.md(自動版),不碰 canary/judge/cross-family/lumos 原語/record
+  KEY:辯方派工本體=純 prompt 紀律;★2026-08-27 起表態記帳(--refute-verdict)已有 CLI 代碼與單元測(t_refute_verdict_ledger_and_stats),「無代碼」僅指派工本體★;只動 SKILL.md(手動版)+orchestrator-prompt.md(自動版),不碰 canary/judge/cross-family/lumos 原語/record
   KEY:辯方效力來源是「任務方向相反」(被逼構造推翻證據、查 auditor 跳過的反方向),非「更會看 code」;故 1 個辯方+強制 file:line 即可,不 N 個多數決
   KEY:只買 code 層假陽性——脈絡在 code 外(業務現實)或辯方自己也沒挖到那塊 code 時,拿不出反證則維持 finding(無功但無害);業務層留人(誠實天花板)
   KEY:辯方降級也須拿反證 file:line,拿不出則維持;對齊 judge「無查證行鎖 major」底線,空口『沒問題』不算
   DEP:skills/lumos-design-loop/SKILL.md 步驟4.5｜governance/autonomous_loop/orchestrator-prompt.md §2 步驟4.5｜judge-severity-gate(辯方接 judge 後)｜canary(對稱補位)
-  TEST:無單元測(prompt 紀律);spec 品質以 design-loop 自走驗:3 輪自動收斂、canary 3/3 全中;辯方降級效力(假 major 當輪被駁)本輪未觸發——首個出現假陽性的真實 loop 才可實測
+  TEST:派工本體無單元測(prompt 紀律);表態記帳有(t_refute_verdict_ledger_and_stats,含 blocker 輪讓步翻紅釘);spec 品質以 design-loop 自走驗:3 輪自動收斂、canary 3/3 全中;辯方降級效力(假 major 當輪被駁)本輪未觸發——首個出現假陽性的真實 loop 才可實測
   VERIFY:[[Verification/2026-06-24_finding-refute]]
 decisions:
   - content: 辯方階段插在 judge 後、record 前——對 judge 評 severity≥major 的每條 finding 各派 1 個獨立 opus 辯方,預設 finding 假、強制附 file:line 反證才能降,該輪 severity 由編排者機械取存活 findings 的 max
@@ -81,7 +80,7 @@ design-loop 審計 loop 的**辯方 refute 階段**(step 4.5)—— 檢察官(au
 - **只買 code 層假陽性**:① 缺的脈絡在 code 外(業務現實/設計意圖)→ 辯方一樣 grep 不到、判錯,留人。② 辯方自己也沒挖到那塊 code → 拿不出反證 → 按規矩**維持** finding(假陽性沒殺,但「逼證據」讓它不空口誤殺真的——無功但無害)。故辯方只提高「脈絡在 code 裡、auditor 找洞時跳過」那類的糾正機率,**非保證**。
 - **辯方也是 AI**:逼 file:line 降低瞎判,但可能查錯/引錯行;證據可複驗(下輪 auditor+人看得到)→ 降低、不消滅。
 - **辯方太強會駁倒真 finding**(假陽性換假陰性):強制 file:line+只碰 major+ 限制;一個會偽造證據的辯方仍可能殺真 finding——摩擦地板非 oracle。
-- **無單元測**:prompt 紀律(同 cross-family/judge-severity-gate 的 prompt 改),無代碼可單元測;驗證靠 design-loop 實戰觀察「假 major 有沒有被辯方當輪降級」。
+- **派工本體無單元測**(prompt 紀律);表態記帳層 2026-08-27 起有代碼有測試;驗證靠 design-loop 實戰觀察「假 major 有沒有被辯方當輪降級」。
 
 ## 辯方明確表態進帳(2026-08-27)
 辯方裁決從二元(真/假)升成**明確三選一**,並把表態記進帳:

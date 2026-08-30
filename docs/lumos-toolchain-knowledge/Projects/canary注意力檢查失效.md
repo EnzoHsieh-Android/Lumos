@@ -3,7 +3,7 @@ type: project
 status: done
 created: 2026-08-04
 updated: 2026-08-04
-about_code_stamp: batch-2026-08-23/2026-08-23/912856db341c
+about_code_stamp: claude/2026-08-30/77c823ecfe8a
 related:
   - "[[Systems/canary-audit]]"
   - "[[Systems/design-loop]]"
@@ -292,7 +292,7 @@ p≈0.47，且有一席在完全不受該紀律影響的情況下照樣 miss。
 ### 未解、且優先於實作的兩件事
 
 1. ★**先查歷史 81.5% 是不是判寬了**★（第十三節第 2 條）。
-   做法：從 `governance/canary-samples/(2026-08-26 已退場刪除)` 抽既有樣本，用本實驗的嚴格判準重判，比對。
+   做法：從 governance/canary-samples/(2026-08-26 已退場刪除) 抽既有樣本，用本實驗的嚴格判準重判，比對。
    **若歷史數字是灌水的，本節點與 [[Projects/design-loop判準重定位]] 的前提都要重寫。**
 2. **本實驗沒做載重錨定**，所以它量到的是「隨手植入的埋伏有多容易被抓」，
    ★不是「skill 規定的植入法有多容易被抓」★。要驗 skill 的真實效力，得照載重錨定重跑。
@@ -323,7 +323,7 @@ canary-log 欄位              → 無任何一欄存審計員原始報告
 ### 防這件事的機制早就蓋好了、用了 0 次
 
 `canary second`（S2 抽樣分權，2026-07-29 落地）就是為此設計：抽中輪報告全文存
-`governance/canary-samples/`、README 明寫「它就是稽核證據，遮掩即失義」、
+governance/canary-samples/(已退場刪除)、README 明寫「它就是稽核證據，遮掩即失義」、
 有 ★INVARIANT★ 合約蓋章（[test:t_canary_second]）。**skill 規定每 5 個 caught 抽 1 輪。**
 
 **落地至今 0 次執行。** 與同日發現的 tier fallback、cluster 帳 35 選 1、impact 鏡頭

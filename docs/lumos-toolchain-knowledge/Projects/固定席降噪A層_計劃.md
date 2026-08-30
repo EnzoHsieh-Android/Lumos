@@ -152,7 +152,7 @@ E08 `design-loop`(管自主迴圈測試,about 沒標 test_autonomous_loop)——
 | 4b | pin_noise 棘輪(v4 s3f2:協定四項寫全)——★per-split;基線=knob 轉正那輪 PASS 實測值;gate 只在轉正後啟用;方向「不准變多」★;進 verdict(r3 Codex f3) | `must_ratchet` 旁 |
 | 5 | per-split must 棘輪(呼叫端 `main()` 改,函式已支援) | `must_ratchet` |
 | 6 | 測試:①knob=0 逐 byte(★含 JSON 無 `lane` 鍵——條件鍵兩態,照 query_gated 測試慣例★)②P@8 母體不含 lane ③被降者在 JSON `lane` 鍵且 cap 內 ④RISK indirect 不保送(行為測試;★#7 主綁這顆★——v4-r2 s1f2:文件那句講的新行為正是「不保送」,③當去向佐證)+事故/INVARIANT indirect 不受影響 ⑤翻紅釘:fixture 造「有 lane 候選」場景,斷言 lane 空時 must_in_out 掉(常設回歸寫法,v4 s3f5 定稿)⑥人讀分支不 KeyError ⑦hook 不重複顯示 ⑧lane_truncated>0 警告行 ⑨cap 內 lane 計入 must_in_out 即使不計 P@8 ⑩`cmd_impact_diff`/sync-check 不含 lane ⑪★rescued 仍在 P@8 母體(誠實計噪護欄的回歸,v4 撤回排除後改向)★ ⑫★hook lane-only 有注入、knob=0 不炸★ ⑬`edit_pool` 含 lane 候選 ⑭lane 集 ⊆ 改前 pinned 集(不生新候選)⑮`output_top3_must` 母體不含 lane | test_lumos |
-| 7 | 文件同步:`Systems/lumos-cli-read.md:14` 句改寫、★改綁 #6④(RISK indirect 不保送的行為測試,v4-r2 s1f2 裁定;③當去向佐證。v4-r1 s2f2 原則不變:綁定必須測「改了什麼」)★,舊綁定解除、舊測試 docstring 同步(s1f5);`skills/lumos-code-loop/reference.md:94/113`;`Systems/retrieval-ranking.md`:★除修 `:11`/`:47` 兩句外,加一則帶日期的 KEY 落地紀錄(該節點對 rescued 的既有寫法,v4 s3f4)★ | — |
+| 7 | 文件同步:`Systems/lumos-cli-read.md:14` 句改寫、★改綁 #6④(RISK indirect 不保送的行為測試,v4-r2 s1f2 裁定;③當去向佐證。v4-r1 s2f2 原則不變:綁定必須測「改了什麼」)★,舊綁定解除、舊測試 docstring 同步(s1f5);skills/lumos-code-loop/reference.md(原 :94/:113,行號已漂——以現檔「受影響功能面鏡頭」段為準);`Systems/retrieval-ranking.md`:★除修 `:11`/`:47` 兩句外,加一則帶日期的 KEY 落地紀錄(該節點對 rescued 的既有寫法,v4 s3f4)★ | — |
 | 8 | 前案回寫:四處「扇出=A 層降噪主角」標「已由 pin-denoise-a 取代(硬合約+參考道);★扇出**二元砍除**已試已殺,分級降權未試★(s3f4:別把沒試過的設計空間一起封死)」 | 前案 summary/258/393/399-404(s1 r3 核過行號現況準確) |
 | 9 | impacts_code 證據轉交(s3f3):E06/E08/E12+s1f2 的 12 處「必看但 about 不含」整批記進前案 impacts_code 後案節 | 前案「下一步:影響欄位」 |
 

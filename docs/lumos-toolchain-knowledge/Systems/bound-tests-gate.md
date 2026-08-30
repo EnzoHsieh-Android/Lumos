@@ -4,6 +4,7 @@ status: doing
 created: 2026-08-22
 updated: 2026-08-22
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
+self_audit: sonnet/2026-08-30
 aliases:
   - 受波及合約測試真跑閘
   - bound tests
@@ -18,7 +19,7 @@ summary: |-
   KEY:逃生門 --skip-bound-tests --note(留痕 kind=skipped);CI 設 LUMOS_SKIP_BOUND_TESTS=1(CI 已跑全套)
   DEP:[[Systems/pitfalls-code-loop]]
   DEP:[[Systems/guard-kill]]
-  TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config 十斷言);本 repo 實跑 42 支 29s
+  TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config/壞設定檔/新分支首推 12 斷言(2026-08-30 機械重數訂正,原記十));本 repo 實跑 42 支 29s
 verified_by:
   - "[[Verification/2026-08-22_受波及合約測試真跑閘落地]]"
 about_code:

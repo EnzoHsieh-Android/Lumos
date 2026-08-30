@@ -3,7 +3,7 @@ type: project
 status: done
 created: 2026-08-02
 updated: 2026-08-29
-about_code_stamp: batch-2026-08-23/2026-08-23/e34a0cab048b
+about_code_stamp: claude/2026-08-30/b25aea3e4f80
 related:
   - "[[Systems/retrieval-ranking]]"
   - "[[Systems/cochange-guard]]"

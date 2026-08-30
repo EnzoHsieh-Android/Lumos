@@ -4,7 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-08-23
 self_audit: claude-fable/2026-08-24
-about_code_stamp: batch-2026-08-23/2026-08-23/ada797d1476a
+about_code_stamp: claude/2026-08-30/d8883b1b5f71
 tags:
   - type/system
   - status/done
