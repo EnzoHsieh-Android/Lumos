@@ -1196,6 +1196,69 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     #   邊還對不對):某節點 verified_by 指向的 Verification 已 stale/fail = 死背書(掛著給人假安心感、
     #   驗證其實已失效)。ghost 目標交既有 ghost 檢查,這裡跳過(不重疊職責)。
     #   設計見 Projects/關係層傳播守衛_計劃 [S6](phase-1 MVP,免前置、純 frontmatter)。
+    section("I", "審查迴圈的首輪前掃有沒有留痕(滾動窗觀測;提醒,不擋)")
+    # intake守衛 T4(2026-08-30 d1):升級迴路的機械閉環——外家 r2 裁「計數靠散文=到第六案
+    # 也不會發生」(repo 有提醒被無視 546 次的帳)。數數和喊人的是機器,決定升不升的是人。
+    # 滾動窗(r3-F4:累積制觸發後恆真、每天印同句=546 形態;窗內達標自然靜默)。
+    try:
+        import subprocess as _sp
+        _repo_root = _vault_repo_root(env)
+        # 窗的 cutoff=宣告行慣例誕生日(2026-08-30),非 intake 慣例誕生日(08-25)——
+        # 數誕生前的迴圈=首日必觸發且永不能合規(r3-F5「同向偏誤」的實現,落地冒煙當場撞到)
+        _r = _sp.run(["git", "-c", "core.quotepath=false", "log", "--diff-filter=A",
+                      "--since=2026-08-30T00:00:00", "--name-only", "--pretty=format:",
+                      "--", "governance/review-reports/"],
+                     capture_output=True, text=True, cwd=str(_repo_root), timeout=15)
+        if _r.returncode != 0:
+            raise RuntimeError("git log 失敗")
+        _seen = []
+        for _ln in reversed(_r.stdout.splitlines()):   # 反轉=舊到新,首見序=迴圈開場序
+            _ln = _ln.strip().strip('"')
+            _parts = _ln.split("/")
+            if len(_parts) < 3 or _parts[0] != "governance" or _parts[1] != "review-reports":
+                continue
+            _d = _parts[2]
+            if _d.startswith("code"):
+                continue   # r3-F2:code-loop 零前掃步驟,計數它=逼偽宣告
+            _dp = _repo_root / "governance" / "review-reports" / _d
+            if not _dp.is_dir():
+                continue   # r3-F1:review-reports/ 下有散檔,排除非目錄項
+            if _d not in _seen:
+                _seen.append(_d)
+        _win = _seen[-6:]   # 滾動窗=最近 6 個非 code 迴圈
+        _decl = [_d for _d in _win if _intake_dir_status(_repo_root, _d) == "ok"]
+        if not _win:
+            ok("宣告行慣例誕生(2026-08-30)後還沒有非 code 審查迴圈,無可觀測")
+        elif len(_win) < 6:
+            ok(f"滾動窗未滿(現 {len(_win)}/6 個迴圈,{len(_decl)} 個有前掃宣告行)——滿 6 個才判")
+        elif len(_decl) >= 5:
+            ok(f"最近 6 個審查迴圈有 {len(_decl)} 個帶前掃宣告行(≥5/6)——慣例活著")
+        else:
+            _absent = [_d for _d in _win if _d not in _decl]
+            # 條件(c):缺席迴圈帳面有 blocker 輪(嚴重度是帳面欄位,機械可讀——取代不可判的分類)
+            _blk = []
+            try:
+                _clog = _repo_root / "docs" / ".canary-log.jsonl"
+                import json as _j
+                _rows = [_j.loads(_l) for _l in _clog.read_text(encoding="utf-8").splitlines() if _l.strip()]
+                for _d in _absent:
+                    if any(_row.get("loop") == _d and _row.get("severity") == "blocker" for _row in _rows):
+                        _blk.append(_d)
+            except OSError:
+                pass
+            if _blk:
+                warn([f"缺席且帳面有 blocker 輪:{', '.join(_blk)}"],
+                     f"最近 6 個審查迴圈只有 {len(_decl)} 個帶前掃宣告行(<5/6),且缺席迴圈出過 blocker——"
+                     "★轉硬擋條件已達,去裁:Projects/intake守衛_計劃(T4 預先登記的裁決請求)★:",
+                     "裁「升 --intake 為必附」或「維持 advisory 並記理由」;窗內補齊宣告行後本段自然靜默")
+            else:
+                warn([f"缺席:{', '.join(_absent)}"],
+                     f"最近 6 個審查迴圈只有 {len(_decl)} 個帶前掃宣告行(<5/6),但缺席者無 blocker 輪(未達裁決門檻):",
+                     "首輪前掃(design-loop 步驟 2 第四類)跑完把宣告行 preflight-4: ran 寫進 rN-intake.md")
+    except Exception as _e:
+        ok(f"前掃留痕觀測跳過(fail-open:{_e})")
+    print()
+
     section("E1", "筆記引用的驗證紀錄,是不是已經失效或被推翻了(拿失效的驗證當依據)")
     dead_endorse = []
     for rel, n in sorted(notes.items()):
@@ -3747,6 +3810,38 @@ _SEV_WRITESIDE_CUTOFF = "2026-08-27"
 _REPLAY_ENGINE_REV = "d5-2026-08-25"
 
 
+def _intake_declared(text):
+    """intake守衛 T1(2026-08-30 d1):intake 檔的前掃宣告行判定。
+    規則(r2/r3 折入):①先剝 fenced 圍欄(```…```)再掃——同款行首 fullmatch 對圍欄內
+    頂格示例照計,模板照抄即偽造(r2 b-F6 實測)②行首錨定 fullmatch `preflight-4: ran`,
+    值域封閉單值 ③同檔多條宣告行=格式壞,視同無(fail-closed;後果只是 T2 的 ⚠,不擋)。
+    回傳 True=有且僅有一條合法宣告行。"""
+    import re as _re
+    body = _re.sub(r"```.*?```", "", text, flags=_re.S)   # 未閉合圍欄:剝到文末=保守方向(視同無)
+    body = _re.sub(r"```.*\Z", "", body, flags=_re.S)
+    hits = [ln for ln in body.splitlines() if ln.startswith("preflight-4:")]
+    if len(hits) != 1:
+        return False
+    return _re.fullmatch(r"preflight-4:[ \t]*ran[ \t]*", hits[0]) is not None
+
+
+def _intake_dir_status(repo_root, loop_id):
+    """intake守衛 T2 判準:迴圈目錄的前掃留痕狀態。
+    回傳 "no-dir"(目錄不存在=scratch 迴圈,跳過不印——r2 b-F1:自主迴圈 /tmp 工作區,
+    不跳會每天印進沒人讀的 log)/"ok"(至少一份 *intake*.md 含合法宣告行——綁迴圈不綁輪,
+    r2 b-F4/c-F5:實帳 11 份有 10 份在 r1、判定輪多為 r2+,綁輪必長噪)/"missing"。"""
+    d = Path(repo_root) / "governance" / "review-reports" / str(loop_id)
+    if not d.is_dir():
+        return "no-dir"
+    for f in sorted(d.glob("*intake*.md")):
+        try:
+            if _intake_declared(f.read_text(encoding="utf-8", errors="replace")):
+                return "ok"
+        except OSError:
+            continue
+    return "missing"
+
+
 def _report_severities(text):
     """[嚴重度綁定機械掃 S1] 報告檔 severity 宣告的★單一 parse 實作★(寫側+severity-check 共用)。
     逐行 fullmatch、空白只認水平空白(反斜線s 會吞換行讓標籤與值跨行黏上,r2 ext);
@@ -3856,7 +3951,7 @@ def _vault_repo_root(env):
     return env.vault.parent.resolve()
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None):
     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
@@ -4099,9 +4194,9 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
     if outcome is not None and kind != "none":
         print("擋下:--outcome 結局帳只能用 kind=none——kind=caught/missed 掛結局欄可湊 legacy 閘輪次(cb3 r2 delta 活體重現)", file=sys.stderr)
         return 2
-    if outcome is not None and any(x is not None for x in (round_id, findings_set, severity, report, snapshot, findings)):
+    if outcome is not None and any(x is not None for x in (round_id, findings_set, severity, report, snapshot, intake, findings)):
         print("擋下:--outcome 是自主迴圈結局帳專用,不能跟審查席欄位(--round/--severity/--report/"
-              "--snapshot/--findings*)混用——掛結局欄假冒豁免正是要關的繞道", file=sys.stderr)
+              "--snapshot/--intake/--findings*)混用——掛結局欄假冒豁免正是要關的繞道", file=sys.stderr)
         return 2
     if loop and findings_set is not None and not (round_id and auditor):
         print("擋下:處置帳(--findings-set)必須綁 --round 和 --auditor——無輪次的處置帳讀側已不受理,"
@@ -4136,7 +4231,9 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             return 2
         if _SEV_ORDER[severity] > _SEV_ORDER[_rmax]:
             print(f"提醒:高報——帳面記 {severity} 高於報告宣告最高 {_rmax}(保守方向,放行;下游判定只會更嚴)", file=sys.stderr)
-    for _flag, _p in (("--report", report), ("--snapshot", snapshot)):
+    # --intake 選配(intake守衛 T3,2026-08-30 d1):給了就走同款四行為,不給不擋。
+    # 讀側重驗在處置閘③(★全輪掃——intake_path 掛 r1 帳列而判定輪多為 r2+,只掃判定輪=常態空轉,r3-F3★)。
+    for _flag, _p in (("--report", report), ("--snapshot", snapshot), ("--intake", intake)):
         if _p is None:
             continue
         try:
@@ -4148,7 +4245,7 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         if _os.path.getsize(_p) == 0:
             print(f"擋下:{_flag} 指的是空檔,留痕最少要有內容({_p})", file=sys.stderr)
             return 2
-        _k = "report" if _flag == "--report" else "snapshot"
+        _k = _flag.lstrip("-")
         # [r1 終審修+r2 修] 落帳路徑正規化:repo root 底下存相對路徑、之外存絕對——
         # 原樣存呼叫者字串=相對 cwd,換目錄跑 gate 留痕假失蹤(合法 loop 永久 FAIL)。
         # root 判定=_vault_repo_root(向上找 .git;r2 否決席:vault.parent 在 docs/ 兩層
@@ -11101,8 +11198,31 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
                         print(f"[disposal] 留痕: ✗ — {rid}.{i} {label} sha256 與帳面不符(事後被改)")
                         fails.append("留痕")
                         ok = False
+            # intake守衛 T3 讀側(2026-08-30 d1):★全輪掃★——intake_path 掛 r1 帳列而判定輪
+            # 多為 r2+,照 report/snapshot 只掃判定輪=常態空轉(r3-F3);任一輪帳列有 intake_path
+            # 就重驗,沒有就跳過(選配欄,不強制)。竄改 intake 與竄改 report 同罪(sha 不符=FAIL)。
+            _ik_n = 0
+            for _rid_g, _rows_g in groups.items():
+                for _r_g in _rows_g:
+                    _ip = _r_g.get("intake_path")
+                    if not _ip:
+                        continue
+                    _ik_n += 1
+                    _want = _r_g.get("intake_sha256")
+                    try:
+                        _got = _sha256_file(_prov_path(_ip))
+                    except OSError:
+                        print(f"[disposal] 留痕: ✗ — {_rid_g} intake 讀不到({_ip})——record 完刪檔照樣擋")
+                        fails.append("留痕")
+                        ok = False
+                        continue
+                    if _got != _want:
+                        print(f"[disposal] 留痕: ✗ — {_rid_g} intake sha256 與帳面不符(事後被改)")
+                        fails.append("留痕")
+                        ok = False
             if ok:
-                print(f"[disposal] 留痕: ✓ — 判定輪全席 {n_files} 份留痕存在且 sha256 與帳面一致")
+                _ik_note = f"(含全輪 intake {_ik_n} 份)" if _ik_n else ""
+                print(f"[disposal] 留痕: ✓ — 判定輪全席 {n_files} 份留痕存在且 sha256 與帳面一致{_ik_note}")
             if ok and vacuous and carrier is None:
                 print("[disposal] quote-check: —(零發現報告無引句可驗,略過;橫幅不宣稱錨定)")
             elif ok:
@@ -11192,6 +11312,16 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         # severity 尾端同理;純判定核心=四合取本體。
         _roster_tail()
         _severity_tail()
+    # intake守衛 T2(2026-08-30 d1;advisory 不進合取不改 rc):非 code 迴圈才看
+    # (r3-F2:code-loop 零前掃步驟,code 的 intake 是撈回紀錄非前掃紀錄——計數它=逼偽宣告)。
+    if not readonly and not str(loop_id).startswith("code"):
+        _ik_st = _intake_dir_status(root if root is not None else Path.cwd(), loop_id)
+        if _ik_st == "ok":
+            print("[disposal] intake(觀測,不進合取): ✓ — 迴圈目錄有帶 preflight-4 宣告行的前掃留痕")
+        elif _ik_st == "missing":
+            print("[disposal] intake(觀測,不進合取): ⚠ 迴圈目錄無帶 preflight-4 宣告行的 intake——"
+                  "首輪前掃第四類可能沒跑(慣例=skills/lumos-design-loop/SKILL.md 步驟 2;不擋,記著補)")
+        # no-dir(scratch 迴圈,如自主迴圈 /tmp 工作區)= 跳過不印
     if result_out is not None:
         result_out["rid"] = rid
         result_out["fails"] = list(fails)
@@ -16386,6 +16516,7 @@ def main():
                     help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
     cr.add_argument("--report", help="[T1 處置帳] 審查員報告檔路徑(存 path+sha256;檔案須存在且非空)")
     cr.add_argument("--snapshot", help="[T1 處置帳] 派工凍結快照檔路徑(quote-check 的比對對象;存 path+sha256)")
+    cr.add_argument("--intake", help="首輪前掃留痕檔(rN-intake.md;選配——給了就存 path+sha256 且處置閘會全輪重驗,不給不擋。intake守衛案 2026-08-30)")
     cr.add_argument("--findings-set", dest="findings_set",
                     help="[T1 處置帳] 逐條 finding id 逗號串(集合核對的全集;與 folded/accepted 配套)")
     cr.add_argument("--folded-set", dest="folded_set", help="[T1 處置帳] 折入計劃節點的 id 子集")
@@ -17040,7 +17171,7 @@ def main():
                           spec=args.rec_spec, reviewed=args.reviewed,
                           tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,
                           outcome=args.rec_outcome, usd=args.rec_usd,
-                          scope_lines=args.scope_lines, report=args.report, snapshot=args.snapshot,
+                          scope_lines=args.scope_lines, report=args.report, snapshot=args.snapshot, intake=args.intake,
                           findings_set=args.findings_set, folded_set=args.folded_set,
                           accepted_set=args.accepted_set, accept_reasons=args.accept_reasons,
                           finding_kinds=getattr(args, 'finding_kinds', None),

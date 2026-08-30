@@ -194,7 +194,7 @@ binding constraints，3-6 條}
   position 反而極小；一條寫得漂亮的 minor 仍是 minor，一條寫得潦草的 major 仍是 major。
 - **blocking↔severity 綁定（2026-08-25 [S3],[[Projects/設計審收斂重定義_計劃]]）**：blocking:否 ↔ minor;blocking:是 ↔ major/blocker——席報告兩欄矛盾=整份退回該席重判(編排者人工核,無機械擋;矛盾率在實測輪抽驗)。**兩層不互改**：blocking 是審查員層宣告,accepted 是編排者處置層裁量——被放行的 major 仍標 blocking:是+附 accept-reason,不回頭改席報告;cluster 三態帳無 accepted-major 態,散文處置不用 cluster 帳。
 - **carrier 選席 SOP（2026-08-25 d1）**：記帳前對候選席報告跑 quote-check,選全錨席當 carrier——carrier=記帳載體、非證據總集（機制兜底=d5 記帳型態:各席一筆帶 report+sha,僅 carrier 帶三個 set）。
-- **rN-intake.md 收貨紀錄（2026-08-25 d1;新增於收貨三道之外,非取代）**：編排者對佐證通道與錨不到引句的機械重現留痕檔,落 `governance/review-reports/<迴圈>/rN-intake.md`。每條格式=重現命令+輸出摘錄+**HIT/MISS 結論**;判準=命令必須能重現該席宣稱的那個結果,只證存在的查詢不算;**MISS=該條佐證不採信,其支撐的 finding 退回該席補證或降級**。此步為編排者人工判讀+機械留痕,非全機械。前掃語意類修正也逐條記這裡,**必含「修改前原句→修改後」對照**,派工詞告知席位可覆核推翻。
+- **rN-intake.md 收貨紀錄（2026-08-25 d1;新增於收貨三道之外,非取代）**：編排者對佐證通道與錨不到引句的機械重現留痕檔,落 `governance/review-reports/<迴圈>/rN-intake.md`。每條格式=重現命令+輸出摘錄+**HIT/MISS 結論**;判準=命令必須能重現該席宣稱的那個結果,只證存在的查詢不算;**MISS=該條佐證不採信,其支撐的 finding 退回該席補證或降級**。此步為編排者人工判讀+機械留痕,非全機械。前掃語意類修正也逐條記這裡,**必含「修改前原句→修改後」對照**,派工詞告知席位可覆核推翻。★宣告行(2026-08-30 intake守衛 d1)★:首輪前掃第四類跑完,intake 檔**頂格獨立一行** `preflight-4: ran`(值域只有 ran;零命中也寫——跑了沒挖到東西仍是跑了;同檔多行=格式壞視同無;別把示例留在檔裡——parse 會剝 fenced 圍欄,但圍欄外的照抄殘留=偽宣告)。處置閘會印 intake 觀測行(advisory 不擋),doctor [I] 段滾動窗計出現率;記帳可帶選配 `--intake <rN-intake.md>`(存 sha,處置閘全輪重驗,竄改同罪)。
 - **輪 severity = 辯方裁決後存活 findings 的 max**；findings 數 = 存活折入條數。
 - ~~canary 型別輪替/低耦合植入/溯源排除~~ **⛔ 已停用(2026-08-14 d5,無植入)**。
 

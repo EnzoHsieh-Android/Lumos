@@ -5133,6 +5133,92 @@ def t_finding_kind_ledger_and_stats():
     print("  ✓ t_finding_kind_ledger_and_stats")
 
 
+def t_intake_guard_t1_t3():
+    """intake守衛(2026-08-30 d1)T1 宣告行判定 + T3 選配欄:
+    宣告行=剝圍欄後行首 fullmatch `preflight-4: ran`,多行/箭頭/圍欄內=無;
+    --intake 選配(不給不擋、給壞檔 rc2、給好檔落 path+sha)、結局帳互斥。"""
+    import json as _j, hashlib as _h, tempfile as _tf
+    v = mkvault(); spec = v / "Projects" / "ig.md"; spec.write_text("s\n", encoding="utf-8")
+    sha = _h.sha256(spec.read_bytes()).hexdigest()
+    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    snap = v.parent / "r1-snap.md"; snap.write_text("這是一段足夠長的快照內容用來讓引句錨定過\n", encoding="utf-8")
+    ik = v.parent / "r1-intake.md"; ik.write_text("# intake\n\npreflight-4: ran\n內文\n", encoding="utf-8")
+    base = ["canary", "record", "none", "--loop", "ig-loop", "--round", "r1", "--auditor", "a",
+            "--severity", "clean", "--findings", "0", "--report", str(rep), "--snapshot", str(snap),
+            "--spec", str(spec), "--reviewed", sha, "--tier", "standard"]
+    r = run(v, *base)
+    check("不給 --intake → 照常 rc0(選配不擋)", r.returncode == 0, r.stderr[-200:])
+    r = run(v, *base, "--intake", str(v.parent / "nonexist.md"))
+    check("--intake 指不存在檔 → rc2", r.returncode == 2 and "讀不到" in r.stderr, r.stderr[-200:])
+    emp = v.parent / "empty.md"; emp.write_text("", encoding="utf-8")
+    r = run(v, *base, "--intake", str(emp))
+    check("--intake 空檔 → rc2", r.returncode == 2 and "空檔" in r.stderr, r.stderr[-200:])
+    r = run(v, *base, "--intake", str(ik))
+    check("--intake 好檔 → rc0", r.returncode == 0, r.stderr[-200:])
+    last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+    check("帳面落 intake_path+intake_sha256", bool(last.get("intake_path")) and bool(last.get("intake_sha256")), str(last)[:250])
+    r = run(v, "canary", "record", "none", "--loop", "ig-loop", "--auditor", "a",
+            "--outcome", "unconverged:cap", "--intake", str(ik))
+    check("結局帳混 --intake → rc2(互斥)", r.returncode == 2 and "--intake" in r.stderr, r.stderr[-250:])
+    print("  ✓ t_intake_guard_t1_t3")
+
+
+def t_intake_guard_gate_and_reverify():
+    """intake守衛 T2(處置閘 advisory 不進合取)+T3 讀側(★全輪掃★——intake_path 掛 r1
+    而判定輪多為 r2+,只掃判定輪=常態空轉 r3-F3;竄改 intake=sha 不符=FAIL,與 report 同罪)。"""
+    import hashlib as _h
+    v = mkvault(); repo = v.parent
+    spec = v / "Projects" / "ig2.md"; spec.write_text("s\n", encoding="utf-8")
+    sha = _h.sha256(spec.read_bytes()).hexdigest()
+    rep = repo / "r-s1.md"; rep.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    snap = repo / "r-snap.md"; snap.write_text("這是一段足夠長的快照內容用來讓引句錨定過\n", encoding="utf-8")
+    lp = repo / "governance" / "review-reports" / "gate-loop"; lp.mkdir(parents=True)
+    ik = lp / "r1-intake.md"; ik.write_text("# intake\n\npreflight-4: ran\n", encoding="utf-8")
+    def _rec(rnd, intake=None):
+        a = ["canary", "record", "none", "--loop", "gate-loop", "--round", rnd, "--auditor", "a",
+             "--severity", "clean", "--findings", "0", "--report", str(rep), "--snapshot", str(snap),
+             "--spec", str(spec), "--reviewed", sha, "--tier", "standard"]
+        if intake: a += ["--intake", str(intake)]
+        return run(v, *a)
+    check("r1 記帳(帶 intake)rc0", _rec("r1", ik).returncode == 0, "")
+    check("r2 記帳(不帶)rc0", _rec("r2").returncode == 0, "")
+    g = run(v, "loop", "status", "gate-loop", "--disposal", "--spec", str(spec), "--repo", str(repo))
+    check("★判定輪=r2 但 intake 掛 r1:全輪掃到、閘 PASS★", g.returncode == 0 and "PASS" in g.stdout,
+          g.stdout[-300:])
+    check("T2 advisory:✓ 行有印且標明不進合取", "intake(觀測,不進合取): ✓" in g.stdout, g.stdout[-400:])
+    # 翻紅釘①:竄改 r1 的 intake → 全輪掃必抓(只掃判定輪就抓不到——這正是 r3-F3 的洞)
+    ik.write_text("# intake\n\npreflight-4: ran\n被改了\n", encoding="utf-8")
+    g2 = run(v, "loop", "status", "gate-loop", "--disposal", "--spec", str(spec), "--repo", str(repo))
+    check("★竄改 r1 intake → 閘 FAIL(sha 不符;證全輪掃真的在掃)★",
+          g2.returncode != 0 and "intake sha256 與帳面不符" in g2.stdout, g2.stdout[-300:])
+    ik.write_text("# intake\n\npreflight-4: ran\n", encoding="utf-8")   # 還原
+    # 翻紅釘②:宣告行拿掉 → advisory 轉 ⚠(rc 不變)
+    ik2 = lp / "r9-intake.md"   # 不入帳的檔,只影響 T2 目錄掃
+    g3 = run(v, "loop", "status", "gate-loop", "--disposal", "--spec", str(spec), "--repo", str(repo))
+    check("還原後回 PASS", g3.returncode == 0, g3.stdout[-200:])
+    ik.write_text("# intake 無宣告行\n", encoding="utf-8")
+    # 帳上 sha 對不上了→會 FAIL;此處只驗 advisory 分支,故用沒入帳的新 loop
+    lp2 = repo / "governance" / "review-reports" / "gate-loop2"; lp2.mkdir(parents=True)
+    (lp2 / "r1-intake.md").write_text("# 沒有宣告行\n", encoding="utf-8")
+    rep2 = repo / "r2-s1.md"; rep2.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    a2 = ["canary", "record", "none", "--loop", "gate-loop2", "--round", "r1", "--auditor", "a",
+          "--severity", "clean", "--findings", "0", "--report", str(rep2), "--snapshot", str(snap),
+          "--spec", str(spec), "--reviewed", sha, "--tier", "standard"]
+    check("loop2 記帳 rc0", run(v, *a2).returncode == 0, "")
+    g4 = run(v, "loop", "status", "gate-loop2", "--disposal", "--spec", str(spec), "--repo", str(repo))
+    check("★有檔無宣告行 → advisory ⚠ 且 rc 不受影響(PASS 照舊)★",
+          g4.returncode == 0 and "⚠ 迴圈目錄無帶 preflight-4 宣告行" in g4.stdout, g4.stdout[-400:])
+    # code 迴圈豁免(r3-F2)
+    lp3 = repo / "governance" / "review-reports" / "code-x"; lp3.mkdir(parents=True)
+    a3 = ["canary", "record", "none", "--loop", "code-x", "--round", "r1", "--auditor", "a",
+          "--severity", "clean", "--findings", "0", "--report", str(rep2), "--snapshot", str(snap),
+          "--spec", str(spec), "--reviewed", sha, "--tier", "standard"]
+    check("code 迴圈記帳 rc0", run(v, *a3).returncode == 0, "")
+    g5 = run(v, "loop", "status", "code-x", "--disposal", "--spec", str(spec), "--repo", str(repo))
+    check("★code 迴圈不印 intake 觀測行(豁免)★", "intake(觀測" not in g5.stdout, g5.stdout[-300:])
+    print("  ✓ t_intake_guard_gate_and_reverify")
+
+
 def t_refute_verdict_ledger_and_stats():
     """辯方明確表態(Systems/finding-refute,2026-08-27):record 可為辯方判過的發現標
     agree/evidence/concern,鍵是子集(⊆全集,辯方只開庭審低共識≥major);★純記帳不改判閘★

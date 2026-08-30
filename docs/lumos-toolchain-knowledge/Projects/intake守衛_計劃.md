@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-08-29
-updated: 2026-08-29
+updated: 2026-08-30
 tags:
   - type/project
-  - status/doing
+  - status/done
 decisions:
   - content: Enzo 2026-08-30 裁:三輪達上限攤牌後人裁放行進實作,前提=折入 r3 四件——①T4 接 daily-governance.sh(外家:補這線 r2 否決理由即消失)②T2/T4 範圍恢復非 code 迴圈(code 的 intake 是撈回紀錄非前掃紀錄,兩種被 v3 誤當一種)③處置閘③對 intake 全輪掃(intake_path 掛 r1 帳列,只掃判定輪永遠碰不到)④T4 改滾動窗(最近 6 個非 code 迴圈,窗內達標自然靜默,防 546 形態恆真)。不開第四輪設計審(超上限邊際效益低,實作完有代碼審把關)
     id: d1
@@ -24,7 +24,7 @@ PRIOR-ART: **借用既有樣板,不建新機制、不加依賴**——①宣告�
 ## 立案基礎(數法寫死,r2 b-F14/c-F2 折入)
 
 **數法**(可重跑;CJK 目錄名須經 `core.quotepath=false` + python 切段,shell for 迴圈會炸):
-`git -c core.quotepath=false log --diff-filter=A --since=2026-08-25 --name-only --pretty=format: -- governance/review-reports/` → 取路徑第三段、**排除非目錄項**(r3-F1:review-reports/ 下有散檔,不排會多數一個)→ 逐目錄查有無 `*intake*.md` 檔(★glob 統一 .md,r3-F5★)。
+`git -c core.quotepath=false log --diff-filter=A --since=2026-08-25T00:00:00 --name-only --pretty=format: -- governance/review-reports/`(★裸日期陷阱:git 把 `--since=<日期>` 的時刻預設成**當下時間**不是午夜——落地冒煙撞到,`--since=2026-08-30` 在 08-30 當天恆空;必帶 T00:00:00★) → 取路徑第三段、**排除非目錄項**(r3-F1:review-reports/ 下有散檔,不排會多數一個)→ 逐目錄查有無 `*intake*.md` 檔(★glob 統一 .md,r3-F5★)。
 **結果(2026-08-30 實跑)**:27 個目錄、**16 個無 intake**(code 類 11 目錄 9 無;非 code 16 目錄 7 無)。任一切法皆遠超三修計劃:50 登記的「連兩案缺席→再議」門檻;**本設計審即該再議**。
 ★v1 引錯門檻(挑寬的)、v2 的 11/18 四種切法無一重現——同案數字三犯,故本節連數法一起釘死★。
 
@@ -58,7 +58,7 @@ preflight-4: ran
 
 ### T4 · doctor 觀測段(★升級迴路的機械閉環,外家 r2 的裁定★)
 
-doctor 新增一段 advisory(提醒不擋,照 [S]/[S2] 的形態):數「★最近 6 個非 code 迴圈目錄★(滾動窗,r3-F4 折入:累積制觸發後恆真、每天印同句=546 形態;滾動窗內達標自然靜默)vs 其中含宣告行的」,印比率。★排程線(r3 外家折入)★:`daily-governance.sh` 補一步 `lumos doctor`(它現只跑日報/自主迴圈/lint-watch——v3 寫「doctor 每天跑」不實,是編排者同案第四個未查證數字);在補線落地前,誠實口徑=「每次 push 與 CI 會跑」。**觸發句**:滾動窗滿 6 個(非 code)後,若窗內含宣告行比率 <5/6,且窗內任一缺席迴圈的帳面有 blocker 輪(★嚴重度是帳面欄位,機械可讀——取代 v2 不可判定的「B 桶型」,r2 c-F6/b-F12★)→ 印「轉硬擋條件已達,去裁:Projects/intake守衛_計劃」。
+doctor 新增一段 advisory(提醒不擋,照 [S]/[S2] 的形態):數「★最近 6 個非 code 迴圈目錄★(cutoff=宣告行誕生日 2026-08-30 非 08-25——數誕生前的迴圈=首日必觸發且永不能合規,落地冒煙實撞;滾動窗,r3-F4 折入:累積制觸發後恆真、每天印同句=546 形態;滾動窗內達標自然靜默)vs 其中含宣告行的」,印比率。★排程線(r3 外家折入)★:`daily-governance.sh` 補一步 `lumos doctor`(它現只跑日報/自主迴圈/lint-watch——v3 寫「doctor 每天跑」不實,是編排者同案第四個未查證數字);在補線落地前,誠實口徑=「每次 push 與 CI 會跑」。**觸發句**:滾動窗滿 6 個(非 code)後,若窗內含宣告行比率 <5/6,且窗內任一缺席迴圈的帳面有 blocker 輪(★嚴重度是帳面欄位,機械可讀——取代 v2 不可判定的「B 桶型」,r2 c-F6/b-F12★)→ 印「轉硬擋條件已達,去裁:Projects/intake守衛_計劃」。
 - **數數和喊人的是機器(doctor 每天跑),決定升不升的仍是人**——這就是外家要的「自動計數、觸發、排程」,用 repo 現成通道,不建新排程。
 - 落地時 Verification 節點的 `revalidate_when` 同步寫此條件(r2 b-F13:計數事件沒有關鍵字會命中 stale 掃描,doctor 段就是替代的回頭機制)。
 
