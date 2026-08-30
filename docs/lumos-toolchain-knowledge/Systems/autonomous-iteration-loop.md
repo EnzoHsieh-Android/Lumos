@@ -2,9 +2,9 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-08-27
+updated: 2026-08-30
 self_audit: sonnet/2026-08-21
-about_code_stamp: claude/2026-08-27/708345168652
+about_code_stamp: claude/2026-08-30/e6a5c359d397
 tags:
   - type/system
   - status/done
@@ -76,6 +76,12 @@ decisions:
     why_chosen: 遷處置閘一次根治①②:severity 忠實記報告最高([S1] 滿意),辯方降級用處置帳(accepted-set+辯方反證+refute-verdict evidence)表達,收斂看『每個發現折或放行』不看 severity 高低——[S1] 與辯方降級不再對撞、辯方降級的輪能收斂。且處置閘單輪比 K-streak 省輪(降本)。對齊既有已測協議、非自建。相對選項:只補 --report 不解②(治標燒錢照舊)、或立待議不動(維持看不見的卡死)——都比遷移差。實跑一個 round 全序列(record+disposal gate PASS)驗過。③網搜是 harness 限制,prompt 標明用日報二手 fallback(loop 已自為)
     decided: 2026-08-27
     valid: true
+  - content: orchestrator-prompt 三修(2026-08-30):①claude -p 活性紀律——派 Agent 後必須同一回合等到結果,散文收尾=本輪死亡(2026-08-30 實錄:編排者派 r1 審計員後交進度報告就 end_turn,$9.59/28 分鐘白燒,帳記 pipeline_fail;頂層 JSON=end_turn/completed/success,非錯誤而是互動模式習慣帶進 headless)②審計員派工補錨定引句紀律(每條 finding 附逐字引句 ≥10 字單獨一行)——處置閘「引句全錨定」關驗的就是它,沒有=收斂結構性過不了(2026-08-29 r6 實錄)③PRIOR-ART 第二問第一站改翻自家治理日報 JSON 的 articles 欄(headless 下 WebSearch 被權限擋實測兩次;要查的論文摘要就在日報裡沒人翻,r5 實證)
+    id: d8
+    context: d7 遷處置閘後首輪真跑(2026-08-30 10:16)以新死法陣亡:NO_JSON/pipeline_fail。診斷=d7 修好記帳對撞(昨輪三卡點之一已消)但沒遷完整:閘換了、沒教它產閘要的材料(引句),也沒補 headless 特有的活性紀律。七天帳 8 跑/$207.70/收斂 0
+    why_chosen: 三個死因全出自迴圈自己的遺言與頂層紀錄(非猜測):活性=死因實錄逐欄可查;引句=r6 notes 逐字點名;日報=r5 自己發現的。修法全在 prompt 紀律層,不動閘不動 code;明晨排程即免費驗收。G3 時序經查 d7 已修對(昨輪跑的是舊 prompt),不重複動
+    decided: 2026-08-30
+    valid: true
 about_code:
   - governance/autonomous-loop.sh
   - governance/autonomous_loop/cross_audit.py
@@ -130,6 +136,8 @@ about_code:
 - 真機觀察日誌:`governance/autonomous_loop/DRYRUN-OBSERVE.md`、spike 結果 `SPIKE-RESULT.md`。
 
 ## 近期修正
+
+- 2026-08-30 **prompt 三修(d8,d7 首輪真跑陣亡後的續修)**:①★claude -p 活性紀律★——派 Agent 必須同一回合等到結果,散文收尾=本輪死亡(實錄:d7 後首輪派了審計員就交進度報告 end_turn,$9.59 白燒;頂層 JSON=end_turn/completed/success——不是錯誤,是互動模式的「等通知」習慣帶進 headless)②審計員派工補錨定引句紀律——處置閘「引句全錨定」關沒有引句=收斂結構性過不了(r6 實錄)③PRIOR-ART 第一站=自家治理日報 articles 欄(headless 網搜被擋;論文摘要就在日報裡沒人翻)。G3 時序經查 d7 已修對不重複動。驗收=下一次每日排程真跑。
 
 - 2026-08-27 **記帳+收斂閘遷處置閘(d7,對齊手動 loop)**:loop 自報三卡點——step-6 記帳指令照字面跑不動([S1] 起審查席帳列必附 --report)、記「辯方後 max」撞 [S1] 硬擋致辯方降級的輪永遠收斂不了(隱形燒錢)、網搜被權限擋。根因=記帳/收斂整段停在 2026-08 前舊協議(caught/missed + --gate/K-streak + severity 當收斂訊號)。修:`orchestrator-prompt.md` step-6 改 `record none`+處置帳(findings-set/folded/accepted/accept-reason/**--refute-verdict** + report/snapshot/spec/reviewed)、step-8 與 `autonomous-loop.sh` 的 --need/--gate → **--disposal**、step-4.5 辯方三選一且降級走放行清單不壓 severity、step-7 折入看存活不看 caught/missed、canary 植入退為 auditor 醒著訊號。**實跑一個 round 全序列(record + disposal gate PASS)驗過**;網搜是 harness 限制,prompt 標明用日報二手 fallback(loop 已自為)。★未移除 canary 逐輪植入(2026-08-14 協議停用的殘留)——本次只解耦其閘折入功能,全移除留追蹤★。詳 [[Verification/2026-08-27_自主loop遷處置閘]]。
 

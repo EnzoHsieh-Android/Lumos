@@ -17,6 +17,8 @@
 
 **嚴禁「intellectual simulation / 脑内模擬 / Simulated …」**——你腦補的 caught / severity / cross_verdict 一律無效、視同未收斂。
 
+**★你在 claude -p 裡,沒有「下一回合」(2026-08-30 死因實錄)★**:派出 Agent 之後**必須在同一回合等到它的結果再繼續**;嚴禁「先回報進度、等通知再接手」——那是互動模式的習慣,這裡你一結束回合整場就結束了。2026-08-30 實測:編排者派了 r1 審計員後交了一段進度報告就 end_turn,$9.59、28 分鐘白燒,帳記 pipeline_fail。**你的最終輸出只能是 §3 的結果 JSON,任何以散文收尾的回合=本輪死亡。**
+
 dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不開 PR;--pr 才 cp 進 docs/design 開 PR。**過程(spawn / canary record / cross_audit)兩者完全相同、都要真做。**
 
 **可驗證證據(收尾前自查)**:`__SCRATCH__/spec/__DATE__-<topic>.md` 必須存在、`__SCRATCH__/.canary-log.jsonl` 必須有逐輪記錄。否則你是在模擬,本輪無效——重做。
@@ -30,7 +32,7 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
 未覆蓋才做。掃 docs/design/ 一兩份近期 spec 學格式與誠實風格。
 > **先問世界(PRIOR-ART 三問,權衡方案前必答,答案寫進 spec 開頭一行 `PRIOR-ART:`)**:
 > ① **最小解在哪一層?** 這 gap 能否用既有閘/一行 config/既有機制小修解掉?能 → spec 就寫那個小修,不造新機制(前車:exec-anchor-gate 以 5 組件解「pre-push 補跑測試一段」能解的事,人裁 overcheck 不做;見 Issues/自主loop加法偏食)。
-> ② **世界解過沒?** 真搜(WebSearch,非憑印象)GitHub/文獻有無成熟方案;有 → 讀其設計語意與踩坑教訓。
+> ② **世界解過沒?** ★第一站=翻自家當日治理日報 JSON(`governance/reports/governance-<日期>.json` 的 articles/inspirations 欄)——調研員每天已真讀外部網頁,一手論文摘要常就在裡面;2026-08-29 實錄:WebSearch/WebFetch 在 headless 下被權限擋(兩次),r5 才發現要查的論文摘要就躺在日報裡沒人翻★。日報沒有才試 WebSearch;被擋就如實標「網搜被擋,僅日報二手」,不硬編。
 > ③ **裁定 = borrow-design(預設)/ build(真沒輪子)/ adopt(例外須理由)**。家規零依賴可 vendor → adopt 幾乎恆排除;但「借精神不借 code」是義務——既有輪子的設計教訓免費,跳過才是損失。
 權衡 2-3 個解法、**自己選最滿足 gap 的**(把為什麼選、否決什麼寫進 spec)。topic 取簡短英文 kebab。寫 spec 到 **__SCRATCH__/spec/__DATE__-<topic>.md**(**不是** docs/design/),含:目標(一句話)/邊界(YAGNI 非目標)/組件/誠實天花板/測試策略/**知識同步影響**/**實務隱患**/審計修正紀錄(留標題待填)。loop_id = topic。
 > **知識同步影響(必填,防實作 drift)**:spec 須含一節,列「此改動若實作,影響哪些方法論論述(`docs/methodology/圖譜即合約.md` + `圖譜即合約-對外論述.md`)/ skills(`lumos-*`)?各該怎麼同步(改哪節、補什麼)?」——沒有影響就明寫『無』。理由:loop 每天改實作,若不宣告碰了哪些知識,論述/skills 會越落越後;這節讓人放行 PR 時一併更新知識,把 drift 堵在放行那一刻(圖譜即合約精神套在 loop 自己身上)。
@@ -43,7 +45,7 @@ dry-run 與 --pr 的**唯一差別在收尾**:dry-run 把 spec 留 scratch、不
 2. 在**工作副本**(只工作副本)植 1 個 canary,類型=[a,b,c][(N-1)%3]:a=壞§ref(引用不存在章節);b=未定義旗標(--xxx 它處無定義);c=未定義常數(ALL_CAPS 無值)。行尾加唯一 token <!-- CANARY-AUTO-N -->。
 2.8. **機械核對(refcheck,對工作副本)**:`python3 <REPO>/scripts/lumos refcheck __SCRATCH__/<topic>-rN.md --repo <REPO> --json`。missing/line_out_of_range 宣稱=**機械 finding**:直接修正**原稿 spec**(修正記入審計修正紀錄、標「機械 refcheck」留痕;修正會被後續輪 auditor 重審,收斂輪的修正由 §2.5 cross_audit 讀最終原稿覆蓋)。manifest(ok 宣稱+excerpts)留存,步驟 3/4 附進 prompt。refcheck 只驗 spec→repo 指涉、**不驗 spec 內部一致性**(§ref/旗標/常數)——那是 canary 保留地、審計員責任田。
     **pitfalls 核對**:`python3 <REPO>/scripts/lumos pitfalls __SCRATCH__/spec/__DATE__-<topic>.md --repo <REPO> --check`;若 rc 1(缺「## 實務隱患」節)→ 在原稿 spec 補「## 實務隱患」節再繼續。`pitfalls`(不帶 --check)的提問清單附給步驟 3 的 auditor 當鏡頭之一。
-3. **用 Agent 工具 spawn 一個 opus auditor**:**framing — 把工作副本當外部第三方的投稿來審,不是你/本系統寫的;你的職責是挑出投稿者沒看到的洞。** 要它 REFUTE 工作副本、逐節找洞、**強制地面事實查證**(spec 每個現況假設——欄位/函數/檔案/常數——實際 grep/Read 驗 scripts/lumos 等真實 code,報告列查證指令與結果),逐條標 severity。**附上步驟 2.8 的 refcheck manifest**:manifest 內宣稱的存在性/行號已機械驗訖,不必花查證力氣在「在不在」;地面查證聚焦**語意**——spec 對這些位置的描述、欄位/函數行為的宣稱對不對。**manifest 非宣稱全集**:散文裡(沒 backtick)的現況假設仍要自己 grep/Read 查。
+3. **用 Agent 工具 spawn 一個 opus auditor**:**framing — 把工作副本當外部第三方的投稿來審,不是你/本系統寫的;你的職責是挑出投稿者沒看到的洞。** 要它 REFUTE 工作副本、逐節找洞、**強制地面事實查證**(spec 每個現況假設——欄位/函數/檔案/常數——實際 grep/Read 驗 scripts/lumos 等真實 code,報告列查證指令與結果),逐條標 severity。**附上步驟 2.8 的 refcheck manifest**:manifest 內宣稱的存在性/行號已機械驗訖,不必花查證力氣在「在不在」;地面查證聚焦**語意**——spec 對這些位置的描述、欄位/函數行為的宣稱對不對。**manifest 非宣稱全集**:散文裡(沒 backtick)的現況假設仍要自己 grep/Read 查。★錨定紀律(2026-08-30 補——處置閘「引句全錨定」那關驗的就是這個,報告沒有引句=收斂結構性過不了(2026-08-29 r6 實錄)★:派工詞明句「每條 finding 必附一段**從工作副本逐字複製的原文引句(≥10 字)**,寫成『引句:「…」』單獨一行;編不出引句的疑慮不要交」——收貨端 quote-check 對凍結快照逐條驗,錨不到=該條不採信。
 4. **用 Agent 工具 spawn 一個 opus judge**(獨立,**明文傳入 auditor 完整報告 + canary token**):回傳 ① caught/missed(auditor 有沒有正確點出 canary 性質);② **severity**(clean/minor/major/blocker,排掉 canary 後最嚴重真 finding)+ 一句 rationale。judge **據實評 severity、不加保守偏置**;唯有「對最嚴重 finding 無任一 grep/Read 查證行」才至少 major(客觀二值,不評足不足;**同附 refcheck manifest+rc:存在性由機械 refcheck 保證,「查證行」閘只計語意查證行**)。【judge-severity-gate:severity 改由獨立 judge 評、斷開 orchestrator 自填收斂閘】
 4.5. **辯方 refute(對 judge 評為 severity≥major 的每條 finding;防假陽性)**:用 Agent 工具派 1 個獨立 opus 辯方(乾淨脈絡、**不傳 auditor/judge 結論**),framing=「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 實際代碼),光說『沒問題』不算;若該 finding 真無任何查證行(judge 因此鎖 major),你也得拿反證 file:line 才能降,拿不出則維持」。辯方**明確三選一**(2026-08-27,見 Systems/finding-refute):**agree**(同意是真的→維持、折入)/ **evidence**(拿反證降到 minor/clean+file:line→降級、放行)/ **concern**(拿不出反證只存疑→維持、折入)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺 finding。★被駁倒(evidence)→ 該 finding **不折、進放行清單、標「辯方反證:<file:line>」**。辯方只買 code 層假陽性,業務層留人。
    ★**收斂不看 severity 高低,看處置**(2026-08-27 遷處置閘):辯方降級**不要靠壓低記帳 severity**(會撞 [S1] 寫側硬擋——帳不得低於報告宣告最高,r3 就這樣卡死);severity 忠實記**報告/judge 宣告的最高**,辯方降級改走步驟 6 的「放行清單 + 辯方反證 + refute-verdict evidence」。存活折入的真 finding 條數另記 --findings。★
