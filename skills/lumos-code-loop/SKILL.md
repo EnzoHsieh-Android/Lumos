@@ -11,7 +11,7 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
 ## 什麼時候用
 - `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一個審查員走循序(`--tier standard`,上限 3 輪);`light`/瑣碎改動可跳(commit 註明)。
 - pre-push 和 CI 都會重算 tier;high 沒有 `lumos code-loop pass|skip --note` 留痕就推不上去。留痕綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑。
-- loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」。
+- loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
 - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
 
 ## 一輪怎麼跑
