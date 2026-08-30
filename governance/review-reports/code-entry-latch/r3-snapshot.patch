@@ -1,0 +1,168 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 1371aaf..6f68a1b 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -5819,28 +5819,36 @@ def _el_related_nodes(env, source, top=5):
+         return {"query": str(source), "queried": False, "nodes": []}
+     query = " ".join(tokens)
+     cands = []
+     for rel in sorted(env.notes):
+         try:
+             text = (env.vault / rel).read_text(encoding="utf-8-sig")
+         except Exception:
+             continue
+         low = nfc("\n".join(pr for _no, _raw, pr
+                              in _search_visible_lines(text.split("\n"), False))).lower()
+-        if any(t in low for t in tokens):
+-            cands.append(rel)
++        # 資格判定在收集端(code-r2 D2-1):ASCII token 要求詞邊界(「flow」不再吃「workflow」=r1 外家 F1 的假陽性),
++        # CJK 照子字串。可見行含 frontmatter/decisions——「已裁不做」常只寫在 decisions 內容,
++        # 而記分欄位不含 decisions;若用「分數>0」當資格會把這種真陽性整篇殺掉(EL-10 迴歸實錘)。
++        # 分數(_rank_score_candidates)只管排序,不管資格;0 分=排最後,不=不相關。
++        for t in tokens:
++            if t.isascii():
++                if re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", low):
++                    cands.append(rel)
++                    break
++            elif t in low:
++                cands.append(rel)
++                break
+     if not cands:
+         return {"query": query, "queried": True, "nodes": []}
+     src_norm = str(source)   # 呼叫端已是 stem;再 .stem 會把 v1.1轉正 截成 v1(r1 正確性席 C-2)
+-    scored = [x for x in _rank_score_candidates(env, query, cands) if x[1] > 0][:top]
+-    if not scored:
+-        return {"query": query, "queried": True, "nodes": []}   # r1 外家 F1:子字串召回、token 記分——0 分=無任何 query token 命中,不冒充相關
++    scored = _rank_score_candidates(env, query, cands)[:top]
+     nodes = []
+     for rel, _score, _hits in scored:
+         st, dec = _el_node_meta(env, rel)
+         stem = Path(rel).stem
+         nodes.append({"name": stem, "status": st, "decisions": dec,
+                       "near_name": _el_near_name(stem, src_norm)})
+     return {"query": query, "queried": True, "nodes": nodes}
+ 
+ 
+ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None):
+@@ -5995,24 +6003,24 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+                 "記錄時加 --clusters '群名=resolved|accepted-minor:理由|disputed-major' 逐群追蹤,"
+                 "收斂改看「沒有爭議且嚴重的群」——不然不同性質的問題被壓成一個最高等級,一邊會蓋掉另一邊。"
+                 "單一主題、發現性質相同的用預設(不分組)就好。")
+         # 圖譜入口栓 A(spec v3 EL-1):只在首輪+plant-canary、只掛正常 emit 出口;
+         # --spec 有給→計劃檔名優先當查詢源,否則退編號(EL-3);fail-open:例外不得改 rc/既有輸出(EL-5)
+         if phase == "plant-canary" and n_next == 1:
+             try:
+                 # ★fail-open 鐵則:本 try 內禁止 sys.exit/SystemExit(except Exception 攔不到)★
+                 _rn0 = _el_related_nodes(env, Path(spec).stem) if spec else None
+                 if _rn0 is None or not _rn0["queried"]:
+-                    # r1 合約席 G-1:code loop 的 --spec 慣用值=凍結 patch(stem 如 r1-snapshot→無訊號),
+-                    # 檔名查無訊號就退回編號,兩者皆無才誠實未查
+-                    _rn1 = _el_related_nodes(env, loop_id)
+-                    _rn0 = _rn1 if (_rn0 is None or _rn1["queried"]) else _rn0
++                    # r1 合約席 G-1+r2 delta D2-2:code loop 的 --spec 慣用值=凍結 patch(stem 如
++                    # r1-snapshot→無訊號);spec 版查無訊號就一律改用編號版——spec 檔名是工具慣例名
++                    # 非主題,其殘渣(snapshot)不得流進「要查自己跑」建議行
++                    _rn0 = _el_related_nodes(env, loop_id)
+                 out["related_nodes"] = _rn0
+             except Exception:
+                 pass
+         if extra:
+             out.update(extra)
+         if as_json:
+             print(_json.dumps(out, ensure_ascii=False))
+         else:
+             print(f"[next] {loop_id}:現在狀態 {phase},分級 {eff_tier},接下來第 {n_next} 輪,"
+                   f"這輪要 {width} 人審,最多跑 {cap} 輪")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ade9933..fb58565 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -23821,20 +23821,25 @@ def t_entry_latch_advisories():
+     check("A 文字模式:專屬多行段+指路行(EL-1 不塞五鍵白名單)",
+           "圖譜既有節點" in rt.stdout and "先讀再開" in rt.stdout, rt.stdout[-400:])
+     # ★紅釘 EL-15/EL-3:auto-日期形=無主題訊號,誠實不查
+     r2 = run(v, "loop", "next", "auto-2099-01-31", "--tier", "standard", "--json", expect_rc=1)
+     rn2 = _j.loads(r2.stdout).get("related_nodes")
+     check("★紅釘 EL-15:auto-日期形 queried=false nodes=[](母 token 濾網)★",
+           rn2 is not None and rn2["queried"] is False and rn2["nodes"] == [], str(rn2))
+     rt2 = run(v, "loop", "next", "auto-2099-02-28", "--tier", "standard", expect_rc=1)
+     check("EL-3+C-1:剩單一有意義 token 時印可行動行(不靜默丟失,給出 lumos search)",
+           "主題訊號不足" in rt2.stdout and 'lumos search "auto"' in rt2.stdout, rt2.stdout[-300:])
++    _snap = v / "Projects" / "r9-snapshot.md"; _snap.write_text("s\n", encoding="utf-8")
++    rt2c = run(v, "loop", "next", "auto-2099-03-31", "--tier", "standard", "--spec", str(_snap), "--repo", str(v.parent), expect_rc=1)
++    check("★code-r2 D2-2:spec 殘渣(snapshot)不得變建議指令——spec 無訊號一律用編號版★",
++          "snapshot" not in rt2c.stdout and ("主題訊號不足" in rt2c.stdout or "無主題訊號" in rt2c.stdout),
++          rt2c.stdout[-300:])
+     rt2b = run(v, "loop", "next", "123-456", "--tier", "standard", expect_rc=1)
+     check("EL-3:完全無 token 時印「無主題訊號,未查」誠實行", "編號無主題訊號,未查圖譜" in rt2b.stdout, rt2b.stdout[-300:])
+     # EL-1:首輪 only——記一輪後(n_next=2)不得再算/再印
+     spec = v / "Projects" / "elspec.md"; spec.write_text("s\n", encoding="utf-8")
+     run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
+         "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec), "--spec", str(spec),
+         "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
+     r3 = run(v, "loop", "next", lid, "--tier", "standard", "--json", "--spec", str(spec), "--repo", str(v.parent))
+     d3 = _j.loads(r3.stdout)
+     check("★前置★ 現場成立:第 2 輪且仍是 plant-canary(r1 合約席 G-4:原測試只打到 gate-pending,首輪守衛其實沒被釘)",
+@@ -23843,20 +23848,28 @@ def t_entry_latch_advisories():
+           "related_nodes" not in d3, r3.stdout[:200])
+     # ── B:近名建檔後即告(不擋照建) ──
+     rb = run(v, "new", "project", "impact鏡頭機械化v2_計劃", expect_rc=0)
+     check("B 命中:★近名 advisory 印出且帶 status(top=superseded 那篇)",
+           "★近名節點已存在" in rb.stdout and "superseded" in rb.stdout, rb.stdout[-400:])
+     check("B advisory 不擋:檔案照建", (v / "Projects" / "impact鏡頭機械化v2_計劃.md").exists(), "")
+     write(v, "Systems/登入_計劃.md", "type: system\ntags:\n  - type/system", "# 登入_計劃\n")
+     rbx = run(v, "new", "system", "支付_計劃", expect_rc=0)
+     check("★紅釘 ext-F2:無關短名共同後綴不誤鳴(支付_計劃 vs 登入_計劃 原恰 0.6;拔後綴剝除翻紅)★",
+           "★近名" not in rbx.stdout, rbx.stdout[-200:])
++    write(v, "Systems/裁決專用節點.md",
++          "type: system\nstatus: superseded\ntags:\n  - type/system\n  - status/superseded\n"
++          "decisions:\n  - content: 齒輪傳動方案已裁不做\n    id: d1\n    decided: 2026-08-01",
++          "# 裁決專用節點\n正文完全不含那個詞。\n")
++    _md = _load_lumos_inproc()
++    _d21 = _md._el_related_nodes(_md.Env(v), "齒輪-傳動")
++    check("★紅釘 code-r2 D2-1:詞只在 decisions 內容也必須上榜(已裁不做=最值錢命中;改回分數>0 資格濾翻紅)★",
++          any(n["name"] == "裁決專用節點" for n in _d21["nodes"]), str(_d21)[:300])
+     write(v, "Systems/網格引擎.md", "type: system\ntags:\n  - type/system", "# 網格引擎\nthe meshwork fabric\n")
+     _mf = _load_lumos_inproc()
+     _f1 = _mf._el_related_nodes(_mf.Env(v), "zzqx-mesh")   # mesh 子字串命中 meshwork,但 token 級 0 命中→分數 0
+     check("★紅釘 ext-F1:0 分候選不冒充相關★(子字串召回但無 token 級命中→誠實零行)",
+           _f1["queried"] is True and _f1["nodes"] == [], str(_f1))
+     rb2 = run(v, "new", "system", "完全無關主題引擎", expect_rc=0)
+     check("B 低相似:靜默照建(不加噪音)", "★近名" not in rb2.stdout, rb2.stdout[-200:])
+     rb3 = run(v, "new", "verification", "2026-08-30_impact鏡頭機械化驗證", expect_rc=0)
+     check("★EL-7:verification 型別不比(81% 誤鳴實測裁排除)★", "★近名" not in rb3.stdout, rb3.stdout[-200:])
+     # ★紅釘 EL-13:空資料夾首檔不得自比鳴警
+@@ -23891,20 +23904,33 @@ def t_entry_latch_advisories():
+         with _ctx.redirect_stdout(buf_bad), _ctx.redirect_stderr(_io.StringIO()):
+             rc_bad = m.cmd_loop_next(env3, "elfault-注錯a", tier="standard", as_json=True)
+     finally:
+         m._el_related_nodes = _keep
+     d_ok, d_bad = _j.loads(buf_ok.getvalue()), _j.loads(buf_bad.getvalue())
+     d_ok.pop("related_nodes", None)
+     d_ok.pop("canary_type", None); d_bad.pop("canary_type", None)   # 設計上每呼叫隨機抽,非注錯差異
+     check("★注錯 A★ advisory 炸掉:rc 不變、JSON 其餘鍵逐鍵相同、無 related_nodes(fail-open 鐵則)",
+           rc_ok == rc_bad and "related_nodes" not in d_bad and d_ok == d_bad,
+           f"rc {rc_ok}/{rc_bad} keys {sorted(d_bad)}")
++    buf_okt = _io.StringIO()
++    with _ctx.redirect_stdout(buf_okt), _ctx.redirect_stderr(_io.StringIO()):
++        rc_okt = m.cmd_loop_next(env3, "elfault-注錯t", tier="standard", as_json=False)
++    m._el_related_nodes = _boom
++    try:
++        buf_badt = _io.StringIO()
++        with _ctx.redirect_stdout(buf_badt), _ctx.redirect_stderr(_io.StringIO()):
++            rc_badt = m.cmd_loop_next(env3, "elfault-注錯t", tier="standard", as_json=False)
++    finally:
++        m._el_related_nodes = _keep
++    check("★注錯 A 文字模式★(外家 r2 minor):rc 不變、無圖譜段、無 traceback",
++          rc_okt == rc_badt and "圖譜" not in buf_badt.getvalue() and "Traceback" not in buf_badt.getvalue(),
++          f"rc {rc_okt}/{rc_badt}")
+     _keep_r = m._el_near_ratio
+     m._el_near_ratio = _boom
+     try:
+         buf_b = _io.StringIO()
+         with _ctx.redirect_stdout(buf_b), _ctx.redirect_stderr(_io.StringIO()):
+             rc_b = m.cmd_new(m.Env(v2), "project", "注錯B案_計劃", today="2026-08-30")
+     finally:
+         m._el_near_ratio = _keep_r
+     check("★注錯 B★ 近名比對炸掉:rc0、檔照建、✓ 訊息照印(fail-open 鐵則)",
+           rc_b == 0 and (v2 / "Projects" / "注錯B案_計劃.md").exists() and "✓ new" in buf_b.getvalue(),
