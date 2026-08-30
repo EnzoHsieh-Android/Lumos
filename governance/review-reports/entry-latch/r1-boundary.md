@@ -29,3 +29,5 @@ lumos 代碼庫 0 命中、無 stemmer,B 第二判準無法實作無法驗收。
 查證後無發現(抑噪):① --json 消費者 21 處全逐鍵取值,加 related_nodes 不破壞;② lumos new 無 headless 呼叫端,stderr-當-失敗風險今天不存在(但 spec 未指明 B 印哪個 stream);③ 引用數字抽驗全對(五道檢查/掛點/385 篇/0.59s(重測 0.66s)/546 前例);④ search 零命中 rc=0、vault 缺失在 dispatch 前就 rc2(:17081-17084),F1 暴險面在「vault 在但 advisory 代碼自己炸」。
 
 最嚴重 severity:major;blocking 共 3 條(F1、F2、F3)。
+
+severity: major
