@@ -23828,6 +23828,11 @@ def t_entry_latch_advisories():
     rt2 = run(v, "loop", "next", "auto-2099-02-28", "--tier", "standard", expect_rc=1)
     check("EL-3+C-1:剩單一有意義 token 時印可行動行(不靜默丟失,給出 lumos search)",
           "主題訊號不足" in rt2.stdout and 'lumos search "auto"' in rt2.stdout, rt2.stdout[-300:])
+    _snap = v / "Projects" / "r9-snapshot.md"; _snap.write_text("s\n", encoding="utf-8")
+    rt2c = run(v, "loop", "next", "auto-2099-03-31", "--tier", "standard", "--spec", str(_snap), "--repo", str(v.parent), expect_rc=1)
+    check("★code-r2 D2-2:spec 殘渣(snapshot)不得變建議指令——spec 無訊號一律用編號版★",
+          "snapshot" not in rt2c.stdout and ("主題訊號不足" in rt2c.stdout or "無主題訊號" in rt2c.stdout),
+          rt2c.stdout[-300:])
     rt2b = run(v, "loop", "next", "123-456", "--tier", "standard", expect_rc=1)
     check("EL-3:完全無 token 時印「無主題訊號,未查」誠實行", "編號無主題訊號,未查圖譜" in rt2b.stdout, rt2b.stdout[-300:])
     # EL-1:首輪 only——記一輪後(n_next=2)不得再算/再印
@@ -23850,6 +23855,14 @@ def t_entry_latch_advisories():
     rbx = run(v, "new", "system", "支付_計劃", expect_rc=0)
     check("★紅釘 ext-F2:無關短名共同後綴不誤鳴(支付_計劃 vs 登入_計劃 原恰 0.6;拔後綴剝除翻紅)★",
           "★近名" not in rbx.stdout, rbx.stdout[-200:])
+    write(v, "Systems/裁決專用節點.md",
+          "type: system\nstatus: superseded\ntags:\n  - type/system\n  - status/superseded\n"
+          "decisions:\n  - content: 齒輪傳動方案已裁不做\n    id: d1\n    decided: 2026-08-01",
+          "# 裁決專用節點\n正文完全不含那個詞。\n")
+    _md = _load_lumos_inproc()
+    _d21 = _md._el_related_nodes(_md.Env(v), "齒輪-傳動")
+    check("★紅釘 code-r2 D2-1:詞只在 decisions 內容也必須上榜(已裁不做=最值錢命中;改回分數>0 資格濾翻紅)★",
+          any(n["name"] == "裁決專用節點" for n in _d21["nodes"]), str(_d21)[:300])
     write(v, "Systems/網格引擎.md", "type: system\ntags:\n  - type/system", "# 網格引擎\nthe meshwork fabric\n")
     _mf = _load_lumos_inproc()
     _f1 = _mf._el_related_nodes(_mf.Env(v), "zzqx-mesh")   # mesh 子字串命中 meshwork,但 token 級 0 命中→分數 0
@@ -23898,6 +23911,19 @@ def t_entry_latch_advisories():
     check("★注錯 A★ advisory 炸掉:rc 不變、JSON 其餘鍵逐鍵相同、無 related_nodes(fail-open 鐵則)",
           rc_ok == rc_bad and "related_nodes" not in d_bad and d_ok == d_bad,
           f"rc {rc_ok}/{rc_bad} keys {sorted(d_bad)}")
+    buf_okt = _io.StringIO()
+    with _ctx.redirect_stdout(buf_okt), _ctx.redirect_stderr(_io.StringIO()):
+        rc_okt = m.cmd_loop_next(env3, "elfault-注錯t", tier="standard", as_json=False)
+    m._el_related_nodes = _boom
+    try:
+        buf_badt = _io.StringIO()
+        with _ctx.redirect_stdout(buf_badt), _ctx.redirect_stderr(_io.StringIO()):
+            rc_badt = m.cmd_loop_next(env3, "elfault-注錯t", tier="standard", as_json=False)
+    finally:
+        m._el_related_nodes = _keep
+    check("★注錯 A 文字模式★(外家 r2 minor):rc 不變、無圖譜段、無 traceback",
+          rc_okt == rc_badt and "圖譜" not in buf_badt.getvalue() and "Traceback" not in buf_badt.getvalue(),
+          f"rc {rc_okt}/{rc_badt}")
     _keep_r = m._el_near_ratio
     m._el_near_ratio = _boom
     try:

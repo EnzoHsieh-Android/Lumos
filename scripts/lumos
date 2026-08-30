@@ -5826,14 +5826,22 @@ def _el_related_nodes(env, source, top=5):
             continue
         low = nfc("\n".join(pr for _no, _raw, pr
                              in _search_visible_lines(text.split("\n"), False))).lower()
-        if any(t in low for t in tokens):
-            cands.append(rel)
+        # 資格判定在收集端(code-r2 D2-1):ASCII token 要求詞邊界(「flow」不再吃「workflow」=r1 外家 F1 的假陽性),
+        # CJK 照子字串。可見行含 frontmatter/decisions——「已裁不做」常只寫在 decisions 內容,
+        # 而記分欄位不含 decisions;若用「分數>0」當資格會把這種真陽性整篇殺掉(EL-10 迴歸實錘)。
+        # 分數(_rank_score_candidates)只管排序,不管資格;0 分=排最後,不=不相關。
+        for t in tokens:
+            if t.isascii():
+                if re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", low):
+                    cands.append(rel)
+                    break
+            elif t in low:
+                cands.append(rel)
+                break
     if not cands:
         return {"query": query, "queried": True, "nodes": []}
     src_norm = str(source)   # 呼叫端已是 stem;再 .stem 會把 v1.1轉正 截成 v1(r1 正確性席 C-2)
-    scored = [x for x in _rank_score_candidates(env, query, cands) if x[1] > 0][:top]
-    if not scored:
-        return {"query": query, "queried": True, "nodes": []}   # r1 外家 F1:子字串召回、token 記分——0 分=無任何 query token 命中,不冒充相關
+    scored = _rank_score_candidates(env, query, cands)[:top]
     nodes = []
     for rel, _score, _hits in scored:
         st, dec = _el_node_meta(env, rel)
@@ -6002,10 +6010,10 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 # ★fail-open 鐵則:本 try 內禁止 sys.exit/SystemExit(except Exception 攔不到)★
                 _rn0 = _el_related_nodes(env, Path(spec).stem) if spec else None
                 if _rn0 is None or not _rn0["queried"]:
-                    # r1 合約席 G-1:code loop 的 --spec 慣用值=凍結 patch(stem 如 r1-snapshot→無訊號),
-                    # 檔名查無訊號就退回編號,兩者皆無才誠實未查
-                    _rn1 = _el_related_nodes(env, loop_id)
-                    _rn0 = _rn1 if (_rn0 is None or _rn1["queried"]) else _rn0
+                    # r1 合約席 G-1+r2 delta D2-2:code loop 的 --spec 慣用值=凍結 patch(stem 如
+                    # r1-snapshot→無訊號);spec 版查無訊號就一律改用編號版——spec 檔名是工具慣例名
+                    # 非主題,其殘渣(snapshot)不得流進「要查自己跑」建議行
+                    _rn0 = _el_related_nodes(env, loop_id)
                 out["related_nodes"] = _rn0
             except Exception:
                 pass
