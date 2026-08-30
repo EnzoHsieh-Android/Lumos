@@ -5742,6 +5742,94 @@ def _roster_next_payload(loop_id, eff_tier):
 
 
 
+# ═══ 圖譜進迴圈入口栓(Projects/圖譜進迴圈入口栓_計劃 2026-08-30,兩輪五席審後落地) ═══
+_EL_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_")
+_EL_NEAR_THRESHOLD = 0.6      # B 的檔名 difflib 單判準;A 的 ★近名 沿用(spec EL-16)
+
+
+def _el_is_cjk(ch):
+    return "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff" or "\uac00" <= ch <= "\ud7af"
+
+
+def _el_query_tokens(source):
+    """A 的切詞清洗(spec v3 三步):重用 _rank_tokenize(禁第二份切詞實作)後——
+    ①丟可拆分母 token(含 -/_ 的複合 token;不丟則 auto-2026-08-23 整顆存活、誠實分支永不觸發,r2 D-5 實測)
+    ②濾純數字(「2026」命中 381/385=全庫召回)與長度 1 的 ASCII token ③去重保序。回 (tokens, has_cjk)。"""
+    out, seen, has_cjk = [], set(), False
+    for t in _rank_tokenize(nfc(str(source)).lower()):
+        if "-" in t or "_" in t:
+            continue
+        if t.isdigit():
+            continue
+        if len(t) == 1 and t.isascii():
+            continue
+        if any(_el_is_cjk(ch) for ch in t):
+            has_cjk = True
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out, has_cjk
+
+
+def _el_near_ratio(a, b):
+    import difflib
+    a2 = _EL_DATE_PREFIX_RE.sub("", nfc(a).lower())
+    b2 = _EL_DATE_PREFIX_RE.sub("", nfc(b).lower())
+    return difflib.SequenceMatcher(None, a2, b2).ratio()
+
+
+def _el_near_name(a, b):
+    """近名判準(spec EL-8/EL-16/EL-17):剝 YYYY-MM-DD_ 前綴後 difflib ≥0.6 單判準(repo 無 stemmer,「詞幹」已裁刪)。"""
+    return _el_near_ratio(a, b) >= _EL_NEAR_THRESHOLD
+
+
+def _el_node_meta(env, rel):
+    """(status, 決策數)——status 取 frontmatter 欄位;決策數 len(parse_decisions)(機械數)。"""
+    n = env.notes.get(rel)
+    if n is None or not isinstance(n.fields, dict):
+        return None, 0
+    st = str(n.fields.get("status") or "").strip() or None
+    try:
+        dec = len(parse_decisions(n.fm_lines))
+    except Exception:
+        dec = 0
+    return st, dec
+
+
+def _el_related_nodes(env, source, top=5):
+    """入口栓 A 的召回+排序(spec v3):OR 候選+_rank_score_candidates,★不走 cmd_search 頂層★
+    (片語階段單命中即 break 會把 0.90 近名整篇藏掉——r1 邊界席拿事故本尊實測,EL-4/EL-11)。
+    候選收集與 cmd_search 主迴圈同用 _search_visible_lines/nfc 原語,不另寫剝碼/切詞第二份。
+    ★superseded 必納入★:「已裁不做」正是最值錢的命中(EL-10),輸出標 status 由讀者自判。
+    回輸出合約 dict(EL-16):{"query","queried","nodes":[{"name","status","decisions","near_name"}]};
+    分支①未查:queried=false ②查了零候選:nodes=[](誠實零行只掛零候選這個機械事件,分數門檻已裁刪 EL-14)。
+    任何內部例外由呼叫端 fail-open(EL-5)。"""
+    tokens, has_cjk = _el_query_tokens(source)
+    if len(tokens) <= 1 and not has_cjk:
+        return {"query": str(source), "queried": False, "nodes": []}
+    query = " ".join(tokens)
+    cands = []
+    for rel in sorted(env.notes):
+        try:
+            text = (env.vault / rel).read_text(encoding="utf-8-sig")
+        except Exception:
+            continue
+        low = nfc("\n".join(pr for _no, _raw, pr
+                             in _search_visible_lines(text.split("\n"), False))).lower()
+        if any(t in low for t in tokens):
+            cands.append(rel)
+    if not cands:
+        return {"query": query, "queried": True, "nodes": []}
+    src_stem = Path(str(source)).stem
+    nodes = []
+    for rel, _score, _hits in _rank_score_candidates(env, query, cands)[:top]:
+        st, dec = _el_node_meta(env, rel)
+        stem = Path(rel).stem
+        nodes.append({"name": stem, "status": st, "decisions": dec,
+                      "near_name": _el_near_name(stem, src_stem)})
+    return {"query": query, "queried": True, "nodes": nodes}
+
+
 def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None):
     """M1包 #1(loop機械脊椎M1包_計劃):帳本吐唯一下一動作。唯讀指針——lumos 不 spawn agent,
     編排仍是 Claude(Systems/design-loop 分工)。phase 五值:escalate/gate-pending/converged/
@@ -5894,6 +5982,13 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 "記錄時加 --clusters '群名=resolved|accepted-minor:理由|disputed-major' 逐群追蹤,"
                 "收斂改看「沒有爭議且嚴重的群」——不然不同性質的問題被壓成一個最高等級,一邊會蓋掉另一邊。"
                 "單一主題、發現性質相同的用預設(不分組)就好。")
+        # 圖譜入口栓 A(spec v3 EL-1):只在首輪+plant-canary、只掛正常 emit 出口;
+        # --spec 有給→計劃檔名優先當查詢源,否則退編號(EL-3);fail-open:例外不得改 rc/既有輸出(EL-5)
+        if phase == "plant-canary" and n_next == 1:
+            try:
+                out["related_nodes"] = _el_related_nodes(env, Path(spec).stem if spec else loop_id)
+            except Exception:
+                pass
         if extra:
             out.update(extra)
         if as_json:
@@ -5911,6 +6006,22 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             for k in ("canary_type", "record_cmd", "scope_cap", "cluster_hint", "note"):
                 if k in out:
                     print(f"  {k}: {out[k]}")
+            # 圖譜入口栓 A 文字段(spec EL-1/EL-16:專屬多行段,不塞五鍵白名單;三分支唯一化)
+            try:
+                if "related_nodes" in out:
+                    _rn = out["related_nodes"]
+                    if not _rn["queried"]:
+                        print("  圖譜:編號無主題訊號,未查圖譜(帶 --spec <計劃筆記> 可用計劃檔名查)")
+                    elif not _rn["nodes"]:
+                        print(f"  圖譜:查過「{_rn['query']}」,圖譜這主題無既有節點")
+                    else:
+                        print(f"  圖譜既有節點(查:{_rn['query']}):")
+                        for _nd in _rn["nodes"]:
+                            print(f"    - {_nd['name']} [{_nd['status'] or '?'}] 決策 {_nd['decisions']} 條"
+                                  + (" ★近名" if _nd["near_name"] else ""))
+                        print("    先讀再開;近名者尤其要讀它的 decisions")
+            except Exception:
+                pass
         return 0 if phase == "converged" else 1
 
     # ⓪ escalate:light ratchet 永久態最先短路
@@ -9604,6 +9715,22 @@ def cmd_new(env, ntype, name, today, plan=None, systems=None):
     if path.exists():
         print(f"擋下:這個名字的筆記已經有了,沒重複建: {path}", file=sys.stderr)
         return 2
+    # 圖譜入口栓 B(spec v3):比對集★寫檔前★收集——env.notes 載於啟動、天生不含新檔,
+    # 防「建檔後重掃自比 1.0=100% 誤鳴」(EL-13);限 project/system/issue 三型
+    # (Verification 實測 81% 檔名有 ≥0.6 鄰居=天天誤鳴,EL-7);只在同型別資料夾內比(EL-17);
+    # 訊息建檔後印;fail-open:例外不得改 rc、不得影響建檔(EL-5)
+    _el_near_sibs = []
+    if ntype != "verification":
+        try:
+            _pfx = folder + "/"
+            for _rel in env.notes:
+                if _rel.startswith(_pfx) and _rel.endswith(".md") and _rel.count("/") == 1:
+                    _stem = Path(_rel).stem
+                    _r = _el_near_ratio(_stem, name)
+                    if _r >= _EL_NEAR_THRESHOLD:
+                        _el_near_sibs.append((_r, _stem, _rel))
+        except Exception:
+            _el_near_sibs = []
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = tmpl.format(today=today)
     _write_lf(path, f"---\n{fm}\n---\n# {name}\n")
@@ -9627,6 +9754,13 @@ def cmd_new(env, ntype, name, today, plan=None, systems=None):
         print("提醒:筆記建好了,但自動補的反向連結有一部分沒成功,健檢會抓到。補救先跑:\n    lumos sync-verified-by --apply\n  再手動補上沒連到的 plan_refs", file=sys.stderr)
         return 2
     print(f"✓ new {ntype}: 骨架建好了 {path.relative_to(env.vault)}")
+    # 圖譜入口栓 B 告知段(建檔完成後印——事故裡貴的不是建檔,是之後燒掉的審查輪;spec EL-7/EL-12)
+    try:
+        for _r, _stem, _rel in sorted(_el_near_sibs, reverse=True)[:3]:
+            print(f"  ★近名節點已存在:{_stem}({_el_node_meta(env, _rel)[0] or '?'}/決策 {_el_node_meta(env, _rel)[1]} 條)"
+                  "——若同主題,先讀它再繼續;重複開案的成本在後頭★")
+    except Exception:
+        pass
     for line in NEW_HINT.get(ntype, []):
         print(f"  {line}")
     print(f"  內容填完先檢查這一篇,再跑全圖健檢:\n    lumos lint {name}\n    lumos doctor\n  (寫法規範在 lumos-project-notes skill)")

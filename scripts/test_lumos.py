@@ -23766,5 +23766,73 @@ def t_dref_promote_empty_key_cleanup():
     check("promote 掉唯一 _ai 不留裸鍵", "decision_refs_ai:" not in read(src), read(src))
     check("promote 後正欄有 d1", "Systems/Target.md#d1" in read(src), read(src))
 
+
+def t_entry_latch_advisories():
+    """[圖譜進迴圈入口栓](spec:Projects/圖譜進迴圈入口栓_計劃 v3,兩輪五席審 2026-08-30)
+    A=loop next 首輪「主題既有節點」advisory;B=lumos new 近名建檔後即告(全 advisory 不擋)。
+    紅釘三支:①EL-4 片語抑制——帶空白變體命中片語時,無空白近名不得被藏(改回走 cmd_search 頂層翻紅)
+    ②EL-13 自比坑——空資料夾首檔不得對自己鳴警(改成建檔後重掃翻紅)
+    ③EL-15 母 token 濾網——auto-YYYY-MM-DD 必走「無主題訊號」(拔母 token 濾規翻紅)。"""
+    import json as _j
+    v = mkvault()
+    # 佈景=事故本尊形:帶空白變體(片語可命中)+無空白近名(片語搜尋會藏的那篇,superseded+2 決策)
+    write(v, "Projects/送審前impact鏡頭機械化_計劃.md",
+          "type: project\nstatus: done\ntags:\n  - type/project\n  - status/done",
+          "# 送審前impact鏡頭機械化_計劃\n本文含帶空白的 impact 鏡頭機械化 片語。\n")
+    write(v, "Projects/impact鏡頭機械化_計劃.md",
+          "type: project\nstatus: superseded\ntags:\n  - type/project\n  - status/superseded\n"
+          "decisions:\n  - content: 裁 A 案拒加閘\n    id: d1\n    decided: 2026-08-02\n"
+          "  - content: 停案二裁\n    id: d2\n    decided: 2026-08-03",
+          "# impact鏡頭機械化_計劃\n無空白串 impact鏡頭機械化 的內文。\n")
+    lid = f"impact-鏡頭機械化{_M1U}"
+    r = run(v, "loop", "next", lid, "--tier", "standard", "--json", expect_rc=1)
+    d = _j.loads(r.stdout)
+    check("★前置★ 現場成立:首輪 plant-canary(rc=1 載重語意未被 advisory 改動)",
+          d["phase"] == "plant-canary" and d["round"] == 1, r.stdout[:200])
+    rn = d.get("related_nodes")
+    check("A --json:related_nodes 形狀=EL-16 合約(queried/nodes 四鍵)",
+          isinstance(rn, dict) and rn.get("queried") is True and rn.get("nodes")
+          and all(set(n) == {"name", "status", "decisions", "near_name"} for n in rn["nodes"]), str(rn)[:300])
+    names = [n["name"] for n in (rn or {}).get("nodes", [])]
+    check("★紅釘 EL-4:片語單命中不得藏無空白近名★(帶空白變體在場,superseded 近名照樣上榜)",
+          "impact鏡頭機械化_計劃" in names, str(names))
+    hidden = next((n for n in (rn or {}).get("nodes", []) if n["name"] == "impact鏡頭機械化_計劃"), {})
+    check("★EL-10:superseded 納入且標 status;決策數機械數=2★",
+          hidden.get("status") == "superseded" and hidden.get("decisions") == 2, str(hidden))
+    check("EL-16:★近名 判準沿用 B(difflib ≥0.6)", hidden.get("near_name") is True, str(hidden))
+    rt = run(v, "loop", "next", lid, "--tier", "standard", expect_rc=1)
+    check("A 文字模式:專屬多行段+指路行(EL-1 不塞五鍵白名單)",
+          "圖譜既有節點" in rt.stdout and "先讀再開" in rt.stdout, rt.stdout[-400:])
+    # ★紅釘 EL-15/EL-3:auto-日期形=無主題訊號,誠實不查
+    r2 = run(v, "loop", "next", f"auto-2099-01-{_M1U[:2]}", "--tier", "standard", "--json", expect_rc=1)
+    rn2 = _j.loads(r2.stdout).get("related_nodes")
+    check("★紅釘 EL-15:auto-日期形 queried=false nodes=[](母 token 濾網)★",
+          rn2 is not None and rn2["queried"] is False and rn2["nodes"] == [], str(rn2))
+    rt2 = run(v, "loop", "next", f"auto-2099-02-{_M1U[:2]}", "--tier", "standard", expect_rc=1)
+    check("EL-3:無主題訊號文字行誠實印「未查」", "編號無主題訊號,未查圖譜" in rt2.stdout, rt2.stdout[-300:])
+    # EL-1:首輪 only——記一輪後(n_next=2)不得再算/再印
+    spec = v / "Projects" / "elspec.md"; spec.write_text("s\n", encoding="utf-8")
+    run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
+        "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec), "--spec", str(spec),
+        "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
+    r3 = run(v, "loop", "next", lid, "--tier", "standard", "--json")
+    check("★EL-1:非首輪不印(cluster_hint 同款 N=1 抑噪)★",
+          "related_nodes" not in _j.loads(r3.stdout), r3.stdout[:200])
+    # ── B:近名建檔後即告(不擋照建) ──
+    rb = run(v, "new", "project", "impact鏡頭機械化v2_計劃", expect_rc=0)
+    check("B 命中:★近名 advisory 印出且帶 status(top=superseded 那篇)",
+          "★近名節點已存在" in rb.stdout and "superseded" in rb.stdout, rb.stdout[-400:])
+    check("B advisory 不擋:檔案照建", (v / "Projects" / "impact鏡頭機械化v2_計劃.md").exists(), "")
+    rb2 = run(v, "new", "system", "完全無關主題引擎", expect_rc=0)
+    check("B 低相似:靜默照建(不加噪音)", "★近名" not in rb2.stdout, rb2.stdout[-200:])
+    rb3 = run(v, "new", "verification", "2026-08-30_impact鏡頭機械化驗證", expect_rc=0)
+    check("★EL-7:verification 型別不比(81% 誤鳴實測裁排除)★", "★近名" not in rb3.stdout, rb3.stdout[-200:])
+    # ★紅釘 EL-13:空資料夾首檔不得自比鳴警
+    v2 = mkvault()
+    rb4 = run(v2, "new", "project", "首檔自比紅釘_計劃", expect_rc=0)
+    check("★紅釘 EL-13:首檔不對自己鳴警(建檔後重掃自比 1.0 這型實作翻紅)★",
+          "★近名" not in rb4.stdout, rb4.stdout[-200:])
+
+
 if __name__ == "__main__":
     sys.exit(main())
