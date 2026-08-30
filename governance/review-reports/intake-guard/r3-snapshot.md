@@ -6,17 +6,10 @@ updated: 2026-08-29
 tags:
   - type/project
   - status/doing
-decisions:
-  - content: Enzo 2026-08-30 裁:三輪達上限攤牌後人裁放行進實作,前提=折入 r3 四件——①T4 接 daily-governance.sh(外家:補這線 r2 否決理由即消失)②T2/T4 範圍恢復非 code 迴圈(code 的 intake 是撈回紀錄非前掃紀錄,兩種被 v3 誤當一種)③處置閘③對 intake 全輪掃(intake_path 掛 r1 帳列,只掃判定輪永遠碰不到)④T4 改滾動窗(最近 6 個非 code 迴圈,窗內達標自然靜默,防 546 形態恆真)。不開第四輪設計審(超上限邊際效益低,實作完有代碼審把關)
-    id: d1
-    context: 三輪軌跡良性收斂:r1=10 blocker(方案性)→r2=1 blocker(編排者數字)→r3=內部 0 blocker+外家單一補件且明示值得進實作。與 impact-鏡頭機械化(每輪不同結構性死因、發散)相反形。編排者同案數字四犯(門檻引寬/11-18 不可重現/87 不可重現/doctor 每天跑不實)皆被席位抓出,已如實入帳
-    why_chosen: 達上限攤牌的正常出口就是人裁;四件各為一句話級且方向由席位指定,折入不需再輪;外家已把放行條件講死。相對選項:第四輪設計審(超上限、邊際低)、不做(前掃缺席 16/27 繼續靜默,且外家明說值得做)
-    decided: 2026-08-30
-    valid: true
 ---
 # intake守衛_計劃
 
-> **★已裁放行(Enzo 2026-08-30,d1):三輪達上限攤牌,折入 r3 四件後進實作。★** 軌跡:r1=10 blocker→r2=1→r3 內部 0+外家單一補件(「補這線 r2 否決理由即消失」)。各輪快照與彙總在 `governance/review-reports/intake-guard/`。
+> **★v3(2026-08-30)。r2 三席 24 條全折(1 blocker=編排者數字三犯;外家承認 r1 四條真解、但裁「升級迴路不機械接上就不做」)。★** v1/v2 快照與逐輪彙總在 `governance/review-reports/intake-guard/`。
 
 PRIOR-ART: **借用既有樣板,不建新機制、不加依賴**——①宣告行照報告 `severity:` 行的行首錨定 fullmatch 型(`scripts/lumos:3750` `_report_severities`),並補「先剝 fenced 圍欄再掃」的前處理(r2 實測同款 parse 對圍欄內頂格行照計,模板照抄即偽造)②讀側驗證落處置閘(它本來就逐檔重驗留痕 sha)③**升級計數器落 doctor**(每天真的在跑、印給人看的既有通道——外家 r2 的裁定:計數靠散文=到第六案也不會發生,repo 有提醒被無視 546 次的帳)。
 ★引用訂正(r2 正確性 F1)★:v2 曾引嚴重度綁定案當「先 advisory 後硬擋」前例——**引反了**,該案實為外家否決 advisory 優先、反轉首日硬擋。v3 誠實承認:兩段式在本 repo 沒有完整前例;採它的理由是 r1 的實測(首日硬擋殺自主迴圈+大量測試),不是前例背書。**已排除**:自動化宣稱抽取工具(2026-08-25 明文,不翻);v1 首日硬擋與「$ 或反引號」判準;v2 的 claims 計數行(r2 b-F8:無任何讀者的死資料,砍)。
@@ -24,7 +17,7 @@ PRIOR-ART: **借用既有樣板,不建新機制、不加依賴**——①宣告�
 ## 立案基礎(數法寫死,r2 b-F14/c-F2 折入)
 
 **數法**(可重跑;CJK 目錄名須經 `core.quotepath=false` + python 切段,shell for 迴圈會炸):
-`git -c core.quotepath=false log --diff-filter=A --since=2026-08-25 --name-only --pretty=format: -- governance/review-reports/` → 取路徑第三段、**排除非目錄項**(r3-F1:review-reports/ 下有散檔,不排會多數一個)→ 逐目錄查有無 `*intake*.md` 檔(★glob 統一 .md,r3-F5★)。
+`git -c core.quotepath=false log --diff-filter=A --since=2026-08-25 --name-only --pretty=format: -- governance/review-reports/` → 取路徑第三段為迴圈目錄 → 逐目錄查有無 `*intake*` 檔。
 **結果(2026-08-30 實跑)**:27 個目錄、**16 個無 intake**(code 類 11 目錄 9 無;非 code 16 目錄 7 無)。任一切法皆遠超三修計劃:50 登記的「連兩案缺席→再議」門檻;**本設計審即該再議**。
 ★v1 引錯門檻(挑寬的)、v2 的 11/18 四種切法無一重現——同案數字三犯,故本節連數法一起釘死★。
 
@@ -41,7 +34,7 @@ preflight-4: ran
 - **值域封閉**:只有 `ran` 一值。前掃跑了(含「跑了但零命中」)都寫 `ran`;沒跑就沒有這行。claims 計數行**砍除**(r2 b-F8:無讀者的死資料)。
 - **同檔多行=格式壞**,視同無宣告行(fail-closed,但後果只是 T2 的 ⚠,不擋)。
 - **intake 綁迴圈不綁輪**(r2 b-F4/c-F5:實帳 11 份有 10 份在 r1、判定輪幾乎都是 r2+,綁輪必長噪):前掃是首輪一次,r2+ **不需**再產;規則=「迴圈目錄裡**至少一份** `*intake*.md` 含合法宣告行」即滿足。
-- 落點:`skills/lumos-design-loop/templates.md` intake 慣例正本 + SKILL.md 步驟 2。**範圍=非 code 迴圈**(★r3-F2 折入:v3 曾撤範圍刀,依據「code-batch2/3 實有 intake」——內部席讀了那些檔,是**收貨撈回紀錄**不是前掃紀錄,兩種 intake 被誤當一種;code-loop skill 零前掃步驟,計數它=逼偽宣告或恆常拉低比率★)。T2/T4 以目錄名 `code` 前綴排除(既有 `_roster_kind` 慣例)。
+- 落點:`skills/lumos-design-loop/templates.md` intake 慣例正本 + SKILL.md 步驟 2。**範圍刀撤除**(r2 b-F3/c-F2:code-batch2/3 實有 intake,「code-loop 無 intake 概念」與實帳相反)——慣例對所有審查迴圈開放,模板的 `[--intake]` 選配提示不分流。
 
 ### T2 · 處置閘 advisory 一行(讀側,不進合取不改 rc)
 
@@ -54,11 +47,11 @@ preflight-4: ran
 
 ### T3 · 帳面選配欄 `--intake`(寫側,選配不必附)
 
-同 v2,兩處修正:①**砍 errors="replace" 條款**(掛錯邊,見 T2)②**處置閘③的逐檔 sha 重驗補 intake 一項——★對 intake 全輪掃★**(r3-F3 折入:③ 現行只掃判定輪,而 intake_path 掛 r1 帳列、判定輪幾乎都是 r2+,照 report/snapshot 同範圍=常態空轉):該迴圈**任一輪**帳列有 `intake_path` 就重驗,沒有就跳過;否則 `intake_sha256` 成為帳裡第一個讀側沒人驗的欄位,正是 v2 引來反對的形狀(r2 c-F3/b-F9)。互斥 tuple 照 v2 加(理由句訂正:不是「唯一」——`--scope-lines` 等本就不在 tuple——是「不加就再添一個」,r2 c-M3)。
+同 v2,兩處修正:①**砍 errors="replace" 條款**(掛錯邊,見 T2)②**處置閘③的逐檔 sha 重驗補 intake 一項**——帳列有 `intake_path` 就重驗(照 report/snapshot 同迴圈),沒有就跳過;否則 `intake_sha256` 成為帳裡第一個讀側沒人驗的欄位,正是 v2 引來反對的形狀(r2 c-F3/b-F9)。互斥 tuple 照 v2 加(理由句訂正:不是「唯一」——`--scope-lines` 等本就不在 tuple——是「不加就再添一個」,r2 c-M3)。
 
 ### T4 · doctor 觀測段(★升級迴路的機械閉環,外家 r2 的裁定★)
 
-doctor 新增一段 advisory(提醒不擋,照 [S]/[S2] 的形態):數「★最近 6 個非 code 迴圈目錄★(滾動窗,r3-F4 折入:累積制觸發後恆真、每天印同句=546 形態;滾動窗內達標自然靜默)vs 其中含宣告行的」,印比率。★排程線(r3 外家折入)★:`daily-governance.sh` 補一步 `lumos doctor`(它現只跑日報/自主迴圈/lint-watch——v3 寫「doctor 每天跑」不實,是編排者同案第四個未查證數字);在補線落地前,誠實口徑=「每次 push 與 CI 會跑」。**觸發句**:滾動窗滿 6 個(非 code)後,若窗內含宣告行比率 <5/6,且窗內任一缺席迴圈的帳面有 blocker 輪(★嚴重度是帳面欄位,機械可讀——取代 v2 不可判定的「B 桶型」,r2 c-F6/b-F12★)→ 印「轉硬擋條件已達,去裁:Projects/intake守衛_計劃」。
+doctor 新增一段 advisory(提醒不擋,照 [S]/[S2] 的形態):用〈立案基礎〉寫死的數法,數「慣例落地後迴圈目錄 vs 含宣告行的目錄」,印比率。**觸發句**:累積 ≥6 個新目錄後,若含宣告行比率 <5/6,且其中任一缺席迴圈的帳面有 blocker 輪(★嚴重度是帳面欄位,機械可讀——取代 v2 不可判定的「B 桶型」,r2 c-F6/b-F12★)→ 印「轉硬擋條件已達,去裁:Projects/intake守衛_計劃」。
 - **數數和喊人的是機器(doctor 每天跑),決定升不升的仍是人**——這就是外家要的「自動計數、觸發、排程」,用 repo 現成通道,不建新排程。
 - 落地時 Verification 節點的 `revalidate_when` 同步寫此條件(r2 b-F13:計數事件沒有關鍵字會命中 stale 掃描,doctor 段就是替代的回頭機制)。
 
