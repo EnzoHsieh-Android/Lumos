@@ -5247,6 +5247,75 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo, en
     return 0
 
 
+def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
+                    defect_ref=None, list_mode=False):
+    """逃逸帳原語(Projects/loop數據收集_計劃 M1②,2026-07-16 設計、2026-08-31 落地;
+    該計劃明文:M1 皆 append 級、單 reviewer 即可)。
+    語意:某個審查迴圈收斂放行了,下游(實作/CI/prod/人)發現可歸因的缺陷→記一筆。
+    這是整套審查系統的 ground truth 側(收斂對不對由下游裁決,不由迴圈自己的殘餘估計);
+    與攔截帳(★圖譜攔截★記號,同計劃)互為兩面。append-only、不進任何閘;
+    歸因是人工判斷(GIGO 同 cluster 歸併,計劃天花板明載)。"""
+    log = env.vault.parent / ".escape-log.jsonl"
+    if list_mode:
+        if not log.exists():
+            print("逃逸帳是空的:還沒有任何一筆「迴圈放行後下游抓到可歸因缺陷」的紀錄。空≠零逃逸——也可能是沒人記;要記:\n    lumos loop escape <迴圈編號> --stage <發現階段> --severity <minor|major|blocker> --desc <一句描述>")
+            return 0
+        import json as _je
+        rows = []
+        for ln in log.read_text(encoding="utf-8").splitlines():
+            if not ln.strip():
+                continue
+            try:
+                rows.append(_je.loads(ln))
+            except ValueError:
+                print(f"提醒:逃逸帳有一行壞損(非法 JSON),跳過不計;帳檔:{log}", file=sys.stderr)
+        by_loop = {}
+        for r in rows:
+            by_loop.setdefault(r.get("loop", "?"), []).append(r)
+        print(f"逃逸帳:{len(rows)} 筆(迴圈收斂放行後、下游抓到的可歸因缺陷;歸因為人工判斷)")
+        for lp, rs in sorted(by_loop.items()):
+            worst = max((r.get("severity", "minor") for r in rs),
+                        key=lambda v: {"minor": 0, "major": 1, "blocker": 2}.get(v, 0))
+            print(f"  {lp}:{len(rs)} 筆(最重 {worst})")
+            for r in rs:
+                print(f"    {r.get('ts','?')[:10]} [{r.get('severity','?')}@{r.get('stage','?')}] {r.get('desc','')}"
+                      + (f"(佐證:{r['defect_ref']})" if r.get("defect_ref") else ""))
+        return 0
+    # ── 記帳模式 ──
+    if not loop_id:
+        print("擋下:要記逃逸就得說是哪個迴圈編號放行的(或用 --list 看帳)", file=sys.stderr)
+        return 2
+    if not (desc or "").strip():
+        print("擋下:--desc 不能空——沒有描述的逃逸帳讀側無從歸因,等於沒記", file=sys.stderr)
+        return 2
+    ledger = env.vault.parent / ".canary-log.jsonl"
+    known = set()
+    if ledger.exists():
+        import json as _je2
+        for ln in ledger.read_text(encoding="utf-8").splitlines():
+            if not ln.strip():
+                continue
+            try:
+                known.add(_je2.loads(ln).get("loop"))
+            except ValueError:
+                continue
+    if loop_id not in known:
+        print(f"擋下:審查帳裡沒有叫「{loop_id}」的迴圈——逃逸要歸因到真實存在的迴圈,先確認編號:\n    lumos gov --stats", file=sys.stderr)
+        return 2
+    import json as _je3
+    import datetime as _dt_esc
+    rec = {"ts": _dt_esc.datetime.now().astimezone().isoformat(timespec="seconds"), "loop": loop_id, "stage": stage or "unknown",
+           "severity": severity, "desc": desc.strip()}
+    if defect_ref:
+        rec["defect_ref"] = defect_ref
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(_je3.dumps(rec, ensure_ascii=False) + "\n")
+    print(f"✓ 逃逸入帳:迴圈 {loop_id} 放行的東西在「{rec['stage']}」被抓到 {severity} 級缺陷。")
+    print("  這筆是審查系統的漏網紀錄——量的是「閘沒接住的」,與攔截帳(★圖譜攔截★)互為兩面;看全帳:")
+    print("    lumos loop escape --list")
+    return 0
+
+
 def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None, disposal=False, roster=False):
     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
@@ -16745,6 +16814,13 @@ def main():
     ln.add_argument("--need", type=int, default=2, help="legacy 收斂窗 K(委派 gate 用,預設 2)")
     ln.add_argument("--spec", dest="gate_spec", help="gate 委派用 spec 檔;缺=判 converged 資訊不足→gate-pending")
     ln.add_argument("--repo", dest="gate_repo", help="repo root(gate 委派用)")
+    le = lsub.add_parser("escape", help="逃逸帳:迴圈收斂放行後下游抓到可歸因缺陷→記一筆(append-only 不進閘;M1② ground truth 側)")
+    le.add_argument("esc_loop_id", nargs="?", default=None, metavar="loop_id", help="放行該缺陷的迴圈編號(必須存在於審查帳)")
+    le.add_argument("--stage", dest="esc_stage", help="在哪一站發現:實作/code-loop/CI/prod/使用者回報…(自由字串)")
+    le.add_argument("--severity", dest="esc_severity", choices=("minor", "major", "blocker"), help="缺陷嚴重度(同審查帳值域)")
+    le.add_argument("--desc", dest="esc_desc", help="一句描述:什麼缺陷、為何可歸因到該迴圈")
+    le.add_argument("--defect-ref", dest="esc_ref", help="佐證指標(commit/Issue/報告路徑,選配)")
+    le.add_argument("--list", dest="esc_list", action="store_true", help="列全帳(按迴圈分組)")
     lcs = lsub.add_parser("canary-stats",
                           help="[d4 讀取面] 跨輪 canary 累積帳:席位×caught/missed×尾端連續 missed;唯讀恆 rc0")
     lcs.add_argument("loop_id", nargs="?", default=None, help="省略=全 loop 摘要")
@@ -17367,6 +17443,13 @@ def main():
                                    spec=args.rp_spec, note=args.rp_note, repo=args.rp_repo)
         if args.lcmd == "rewrite":
             return cmd_loop_rewrite(env, args.rw_loop_id, args.rw_successor, args.rw_note)
+        if args.lcmd == "escape":
+            if not args.esc_list and not (args.esc_severity and args.esc_desc):
+                print("擋下:記逃逸要同時給 --severity 與 --desc(或用 --list 看帳)", file=sys.stderr)
+                return 2
+            return cmd_loop_escape(env, loop_id=args.esc_loop_id, stage=args.esc_stage,
+                                   severity=args.esc_severity, desc=args.esc_desc,
+                                   defect_ref=args.esc_ref, list_mode=args.esc_list)
         if args.lcmd == "next":
             return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json,
                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)

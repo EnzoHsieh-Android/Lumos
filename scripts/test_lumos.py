@@ -23939,5 +23939,35 @@ def t_entry_latch_advisories():
           f"rc {rc_b} out {buf_b.getvalue()[:150]}")
 
 
+
+def t_loop_escape_ledger():
+    """[逃逸帳原語](spec:Projects/loop數據收集_計劃 M1②;該計劃明文 M1 皆 append 級單 reviewer)
+    紅釘:①未知迴圈擋(拔歸因守衛翻紅)②空 desc 擋 ③記帳後 --list 讀得回。"""
+    import json as _j
+    v = mkvault()
+    spec = v / "Projects" / "esc.md"; spec.write_text("s\n", encoding="utf-8")
+    lid = f"esc-{_M1U}"
+    r = run(v, "loop", "escape", lid, "--stage", "prod", "--severity", "major", "--desc", "x")
+    check("★紅釘:未知迴圈編號擋下(逃逸必須歸因到真實迴圈)★", r.returncode == 2 and "沒有叫" in r.stderr, r.stderr[:200])
+    check("擋下時不落帳", not (v.parent / ".escape-log.jsonl").exists(), "")
+    run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
+        "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec), "--spec", str(spec),
+        "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
+    r2 = run(v, "loop", "escape", lid, "--stage", "prod", "--severity", "major", "--desc", "  ")
+    check("空 desc 擋(沒描述=讀側無從歸因)", r2.returncode == 2, r2.stderr[:200])
+    r3 = run(v, "loop", "escape", lid, "--severity", "blocker", "--desc", "上線後資料損壞", "--stage", "prod",
+             "--defect-ref", "Issues/x", expect_rc=0)
+    check("記帳成功訊息講了記什麼+指路", "逃逸入帳" in r3.stdout and "escape --list" in r3.stdout, r3.stdout[:300])
+    rows = [_j.loads(l) for l in (v.parent / ".escape-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("帳列欄位齊(ts/loop/stage/severity/desc/defect_ref)",
+          len(rows) == 1 and rows[0]["loop"] == lid and rows[0]["severity"] == "blocker"
+          and rows[0]["stage"] == "prod" and rows[0]["desc"] == "上線後資料損壞"
+          and rows[0]["defect_ref"] == "Issues/x" and rows[0]["ts"][:2] == "20", str(rows))
+    rl = run(v, "loop", "escape", "--list", expect_rc=0)
+    check("--list 讀得回(按迴圈分組+最重等級)", lid in rl.stdout and "blocker" in rl.stdout and "1 筆" in rl.stdout, rl.stdout[:300])
+    r4 = run(v, "loop", "escape", lid, "--desc", "少了 severity")
+    check("缺 --severity 擋(記帳必要欄)", r4.returncode == 2, r4.stderr[:200])
+
+
 if __name__ == "__main__":
     sys.exit(main())
