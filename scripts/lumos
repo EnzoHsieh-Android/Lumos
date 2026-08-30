@@ -5743,12 +5743,14 @@ def _roster_next_payload(loop_id, eff_tier):
 
 
 # ═══ 圖譜進迴圈入口栓(Projects/圖譜進迴圈入口栓_計劃 2026-08-30,兩輪五席審後落地) ═══
-_EL_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_")
+# 日期前綴剝除復用既有 _NODE_DATEPFX_RE(scripts/lumos cmd_impact D2 近名判定同源;r1 架構席 A-1:禁第 N 份同型正則)
 _EL_NEAR_THRESHOLD = 0.6      # B 的檔名 difflib 單判準;A 的 ★近名 沿用(spec EL-16)
 
 
 def _el_is_cjk(ch):
-    return "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff" or "\uac00" <= ch <= "\ud7af"
+    """與 _rank_tokenize 的 _RANK_CJK_RE 同源(單一真相;r1 三席同抓:原自寫範圍漏擴充A、多認切詞器
+    根本不產出的假名/諺文=死碼)。"""
+    return bool(_RANK_CJK_RE.match(ch))
 
 
 def _el_query_tokens(source):
@@ -5761,8 +5763,10 @@ def _el_query_tokens(source):
             continue
         if t.isdigit():
             continue
-        if len(t) == 1 and t.isascii():
-            continue
+        if len(t) <= 2 and t.isascii():
+            continue          # r1 邊界席 B-1:2 字母尾碼(auto-…-ab)漏網率 14%、間歇打紅;真實編號詞皆 ≥4
+        if len(t) == 1:
+            continue          # r1 邊界席 B-2:單一常見漢字(「的」)=2026 型全庫召回,同病同濾
         if any(_el_is_cjk(ch) for ch in t):
             has_cjk = True
         if t not in seen:
@@ -5771,11 +5775,17 @@ def _el_query_tokens(source):
     return out, has_cjk
 
 
+def _el_near_norm(s):
+    s = _NODE_DATEPFX_RE.sub("", nfc(s).lower())
+    for suf in ("_實作計畫", "_計劃"):   # r1 外家 F2:無關短名靠共同後綴恰達 0.6;剝後無關對歸 0、真近名對 0.917
+        if s.endswith(suf):
+            return s[: -len(suf)]
+    return s
+
+
 def _el_near_ratio(a, b):
     import difflib
-    a2 = _EL_DATE_PREFIX_RE.sub("", nfc(a).lower())
-    b2 = _EL_DATE_PREFIX_RE.sub("", nfc(b).lower())
-    return difflib.SequenceMatcher(None, a2, b2).ratio()
+    return difflib.SequenceMatcher(None, _el_near_norm(a), _el_near_norm(b)).ratio()
 
 
 def _el_near_name(a, b):
@@ -5820,13 +5830,16 @@ def _el_related_nodes(env, source, top=5):
             cands.append(rel)
     if not cands:
         return {"query": query, "queried": True, "nodes": []}
-    src_stem = Path(str(source)).stem
+    src_norm = str(source)   # 呼叫端已是 stem;再 .stem 會把 v1.1轉正 截成 v1(r1 正確性席 C-2)
+    scored = [x for x in _rank_score_candidates(env, query, cands) if x[1] > 0][:top]
+    if not scored:
+        return {"query": query, "queried": True, "nodes": []}   # r1 外家 F1:子字串召回、token 記分——0 分=無任何 query token 命中,不冒充相關
     nodes = []
-    for rel, _score, _hits in _rank_score_candidates(env, query, cands)[:top]:
+    for rel, _score, _hits in scored:
         st, dec = _el_node_meta(env, rel)
         stem = Path(rel).stem
         nodes.append({"name": stem, "status": st, "decisions": dec,
-                      "near_name": _el_near_name(stem, src_stem)})
+                      "near_name": _el_near_name(stem, src_norm)})
     return {"query": query, "queried": True, "nodes": nodes}
 
 
@@ -5986,7 +5999,14 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         # --spec 有給→計劃檔名優先當查詢源,否則退編號(EL-3);fail-open:例外不得改 rc/既有輸出(EL-5)
         if phase == "plant-canary" and n_next == 1:
             try:
-                out["related_nodes"] = _el_related_nodes(env, Path(spec).stem if spec else loop_id)
+                # ★fail-open 鐵則:本 try 內禁止 sys.exit/SystemExit(except Exception 攔不到)★
+                _rn0 = _el_related_nodes(env, Path(spec).stem) if spec else None
+                if _rn0 is None or not _rn0["queried"]:
+                    # r1 合約席 G-1:code loop 的 --spec 慣用值=凍結 patch(stem 如 r1-snapshot→無訊號),
+                    # 檔名查無訊號就退回編號,兩者皆無才誠實未查
+                    _rn1 = _el_related_nodes(env, loop_id)
+                    _rn0 = _rn1 if (_rn0 is None or _rn1["queried"]) else _rn0
+                out["related_nodes"] = _rn0
             except Exception:
                 pass
         if extra:
@@ -6011,7 +6031,12 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 if "related_nodes" in out:
                     _rn = out["related_nodes"]
                     if not _rn["queried"]:
-                        print("  圖譜:編號無主題訊號,未查圖譜(帶 --spec <計劃筆記> 可用計劃檔名查)")
+                        _lt, _ = _el_query_tokens(_rn["query"])
+                        if _lt:   # r1 正確性席 C-1:dref-v4 型「單字+版號」可查卻被閘掉——給出手動查詢的一行,不靜默丟失
+                            print(f"  圖譜:編號主題訊號不足(清洗後只剩 {' '.join(_lt)}),沒自動查;要查自己跑:")
+                            print(f"      lumos search \"{' '.join(_lt)}\"")
+                        else:
+                            print("  圖譜:編號無主題訊號,未查圖譜(帶 --spec <計劃筆記> 可用計劃檔名查)")
                     elif not _rn["nodes"]:
                         print(f"  圖譜:查過「{_rn['query']}」,圖譜這主題無既有節點")
                     else:
@@ -9721,7 +9746,7 @@ def cmd_new(env, ntype, name, today, plan=None, systems=None):
     # 訊息建檔後印;fail-open:例外不得改 rc、不得影響建檔(EL-5)
     _el_near_sibs = []
     if ntype != "verification":
-        try:
+        try:   # ★fail-open:本 try 內禁止 sys.exit/SystemExit(except Exception 攔不到)★
             _pfx = folder + "/"
             for _rel in env.notes:
                 if _rel.startswith(_pfx) and _rel.endswith(".md") and _rel.count("/") == 1:

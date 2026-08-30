@@ -98,6 +98,23 @@ def _sevrep(dirp, sev="clean"):
     return str(p)
 
 
+_LUMOS_INPROC = None
+
+
+def _load_lumos_inproc():
+    """把 scripts/lumos 當模組載入(fail-open 注錯與切詞單元釘用;subprocess 注不進例外,
+    產品碼也不塞測試鉤)。main 有 __main__ 守衛,載入無副作用;快取單例。"""
+    global _LUMOS_INPROC
+    if _LUMOS_INPROC is None:
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader("_lumos_inproc", GRAPHCTL)
+        spec = importlib.util.spec_from_loader("_lumos_inproc", loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        _LUMOS_INPROC = mod
+    return _LUMOS_INPROC
+
+
 def write(vault, rel, fm, body="# x\n"):
     p = vault / rel
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -23804,25 +23821,40 @@ def t_entry_latch_advisories():
     check("A 文字模式:專屬多行段+指路行(EL-1 不塞五鍵白名單)",
           "圖譜既有節點" in rt.stdout and "先讀再開" in rt.stdout, rt.stdout[-400:])
     # ★紅釘 EL-15/EL-3:auto-日期形=無主題訊號,誠實不查
-    r2 = run(v, "loop", "next", f"auto-2099-01-{_M1U[:2]}", "--tier", "standard", "--json", expect_rc=1)
+    r2 = run(v, "loop", "next", "auto-2099-01-31", "--tier", "standard", "--json", expect_rc=1)
     rn2 = _j.loads(r2.stdout).get("related_nodes")
     check("★紅釘 EL-15:auto-日期形 queried=false nodes=[](母 token 濾網)★",
           rn2 is not None and rn2["queried"] is False and rn2["nodes"] == [], str(rn2))
-    rt2 = run(v, "loop", "next", f"auto-2099-02-{_M1U[:2]}", "--tier", "standard", expect_rc=1)
-    check("EL-3:無主題訊號文字行誠實印「未查」", "編號無主題訊號,未查圖譜" in rt2.stdout, rt2.stdout[-300:])
+    rt2 = run(v, "loop", "next", "auto-2099-02-28", "--tier", "standard", expect_rc=1)
+    check("EL-3+C-1:剩單一有意義 token 時印可行動行(不靜默丟失,給出 lumos search)",
+          "主題訊號不足" in rt2.stdout and 'lumos search "auto"' in rt2.stdout, rt2.stdout[-300:])
+    rt2b = run(v, "loop", "next", "123-456", "--tier", "standard", expect_rc=1)
+    check("EL-3:完全無 token 時印「無主題訊號,未查」誠實行", "編號無主題訊號,未查圖譜" in rt2b.stdout, rt2b.stdout[-300:])
     # EL-1:首輪 only——記一輪後(n_next=2)不得再算/再印
     spec = v / "Projects" / "elspec.md"; spec.write_text("s\n", encoding="utf-8")
     run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
         "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec), "--spec", str(spec),
         "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
-    r3 = run(v, "loop", "next", lid, "--tier", "standard", "--json")
+    r3 = run(v, "loop", "next", lid, "--tier", "standard", "--json", "--spec", str(spec), "--repo", str(v.parent))
+    d3 = _j.loads(r3.stdout)
+    check("★前置★ 現場成立:第 2 輪且仍是 plant-canary(r1 合約席 G-4:原測試只打到 gate-pending,首輪守衛其實沒被釘)",
+          d3["phase"] == "plant-canary" and d3["round"] == 2, r3.stdout[:200])
     check("★EL-1:非首輪不印(cluster_hint 同款 N=1 抑噪)★",
-          "related_nodes" not in _j.loads(r3.stdout), r3.stdout[:200])
+          "related_nodes" not in d3, r3.stdout[:200])
     # ── B:近名建檔後即告(不擋照建) ──
     rb = run(v, "new", "project", "impact鏡頭機械化v2_計劃", expect_rc=0)
     check("B 命中:★近名 advisory 印出且帶 status(top=superseded 那篇)",
           "★近名節點已存在" in rb.stdout and "superseded" in rb.stdout, rb.stdout[-400:])
     check("B advisory 不擋:檔案照建", (v / "Projects" / "impact鏡頭機械化v2_計劃.md").exists(), "")
+    write(v, "Systems/登入_計劃.md", "type: system\ntags:\n  - type/system", "# 登入_計劃\n")
+    rbx = run(v, "new", "system", "支付_計劃", expect_rc=0)
+    check("★紅釘 ext-F2:無關短名共同後綴不誤鳴(支付_計劃 vs 登入_計劃 原恰 0.6;拔後綴剝除翻紅)★",
+          "★近名" not in rbx.stdout, rbx.stdout[-200:])
+    write(v, "Systems/網格引擎.md", "type: system\ntags:\n  - type/system", "# 網格引擎\nthe meshwork fabric\n")
+    _mf = _load_lumos_inproc()
+    _f1 = _mf._el_related_nodes(_mf.Env(v), "zzqx-mesh")   # mesh 子字串命中 meshwork,但 token 級 0 命中→分數 0
+    check("★紅釘 ext-F1:0 分候選不冒充相關★(子字串召回但無 token 級命中→誠實零行)",
+          _f1["queried"] is True and _f1["nodes"] == [], str(_f1))
     rb2 = run(v, "new", "system", "完全無關主題引擎", expect_rc=0)
     check("B 低相似:靜默照建(不加噪音)", "★近名" not in rb2.stdout, rb2.stdout[-200:])
     rb3 = run(v, "new", "verification", "2026-08-30_impact鏡頭機械化驗證", expect_rc=0)
@@ -23832,6 +23864,51 @@ def t_entry_latch_advisories():
     rb4 = run(v2, "new", "project", "首檔自比紅釘_計劃", expect_rc=0)
     check("★紅釘 EL-13:首檔不對自己鳴警(建檔後重掃自比 1.0 這型實作翻紅)★",
           "★近名" not in rb4.stdout, rb4.stdout[-200:])
+    # ── spec 測試例三枚=單元紅釘(r1 合約席 G-6:具名精確集合原本沒進 suite)──
+    m = _load_lumos_inproc()
+    check("★G-6 例一★ intake-guard→{intake, guard}", m._el_query_tokens("intake-guard") == (["intake", "guard"], False),
+          str(m._el_query_tokens("intake-guard")))
+    _tk, _cj = m._el_query_tokens("圖譜進迴圈入口栓")
+    check("★G-6 例二★ CJK bigram 串+has_cjk", _cj is True and _tk == ["圖譜", "譜進", "進迴", "迴圈", "圈入", "入口", "口栓"], str(_tk))
+    check("★G-6 例三★ auto-2026-08-23→{auto}(母 token+數字全濾)", m._el_query_tokens("auto-2026-08-23") == (["auto"], False),
+          str(m._el_query_tokens("auto-2026-08-23")))
+    check("★B-1 產品釘★ 字母尾碼 auto-2099-01-ab 也無訊號(2 字母 ASCII 濾)", m._el_query_tokens("auto-2099-01-ab") == (["auto"], False),
+          str(m._el_query_tokens("auto-2099-01-ab")))
+    check("★B-2 產品釘★ 單一漢字「的」無訊號(同 2026 型全庫召回病)", m._el_query_tokens("的") == ([], False),
+          str(m._el_query_tokens("的")))
+    # ── fail-open 注錯(r1 外家否決席:spec 鐵則沒有測試鎖——注例外證 rc/輸出/建檔不變)──
+    import io as _io, contextlib as _ctx
+    env3 = m.Env(v2)
+    def _boom(*a, **k):
+        raise RuntimeError("注錯:advisory 內部炸")
+    _keep = m._el_related_nodes
+    buf_ok = _io.StringIO()
+    with _ctx.redirect_stdout(buf_ok), _ctx.redirect_stderr(_io.StringIO()):
+        rc_ok = m.cmd_loop_next(env3, "elfault-注錯a", tier="standard", as_json=True)
+    m._el_related_nodes = _boom
+    try:
+        buf_bad = _io.StringIO()
+        with _ctx.redirect_stdout(buf_bad), _ctx.redirect_stderr(_io.StringIO()):
+            rc_bad = m.cmd_loop_next(env3, "elfault-注錯a", tier="standard", as_json=True)
+    finally:
+        m._el_related_nodes = _keep
+    d_ok, d_bad = _j.loads(buf_ok.getvalue()), _j.loads(buf_bad.getvalue())
+    d_ok.pop("related_nodes", None)
+    d_ok.pop("canary_type", None); d_bad.pop("canary_type", None)   # 設計上每呼叫隨機抽,非注錯差異
+    check("★注錯 A★ advisory 炸掉:rc 不變、JSON 其餘鍵逐鍵相同、無 related_nodes(fail-open 鐵則)",
+          rc_ok == rc_bad and "related_nodes" not in d_bad and d_ok == d_bad,
+          f"rc {rc_ok}/{rc_bad} keys {sorted(d_bad)}")
+    _keep_r = m._el_near_ratio
+    m._el_near_ratio = _boom
+    try:
+        buf_b = _io.StringIO()
+        with _ctx.redirect_stdout(buf_b), _ctx.redirect_stderr(_io.StringIO()):
+            rc_b = m.cmd_new(m.Env(v2), "project", "注錯B案_計劃", today="2026-08-30")
+    finally:
+        m._el_near_ratio = _keep_r
+    check("★注錯 B★ 近名比對炸掉:rc0、檔照建、✓ 訊息照印(fail-open 鐵則)",
+          rc_b == 0 and (v2 / "Projects" / "注錯B案_計劃.md").exists() and "✓ new" in buf_b.getvalue(),
+          f"rc {rc_b} out {buf_b.getvalue()[:150]}")
 
 
 if __name__ == "__main__":
