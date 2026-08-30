@@ -7486,6 +7486,8 @@ def t_pitfalls_diff_prints_impact_lens_hint_human_only():
           "lumos impact --diff" in r.stdout, r.stdout)
     check("★提示必須帶真實 range,不能是寫死的佔位符(否則無法直接複製)★",
           f"lumos impact --diff {rng}" in r.stdout, r.stdout)
+    check("★提示要接上最後一里(2026-08-30 爆炸半徑供糧案唯一交付):跑完要貼進派工詞★",
+          "貼進每一席的派工詞" in r.stdout and "貼內容不貼路徑" in r.stdout, r.stdout)
 
     rj = run(root, "pitfalls", "--diff", rng, "--repo", str(root), "--json")
     check("★前置★ 現場成立:--json 這一跑確實產出了 JSON",
