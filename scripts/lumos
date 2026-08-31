@@ -5247,69 +5247,115 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo, en
     return 0
 
 
+def _esc_clean(v, limit=200):
+    """逃逸帳顯示消毒(code-escape r1 B-1/B-2):控制字元(含換行/ESC)換空格——
+    --list 的「一行一筆」是攔截/逃逸週報 grep 的載重合約,使用者可控的 desc 不得打穿;
+    ANSI 逃逸碼進終端=帳本可信度風險。截斷防超長刷版。"""
+    out = "".join(ch if ch >= " " and ch != "\x7f" else " " for ch in str(v))
+    return out if len(out) <= limit else out[:limit] + "…"
+
+
 def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
                     defect_ref=None, list_mode=False):
-    """逃逸帳原語(Projects/loop數據收集_計劃 M1②,2026-07-16 設計、2026-08-31 落地;
-    該計劃明文:M1 皆 append 級、單 reviewer 即可)。
+    """逃逸帳原語(Projects/loop數據收集_計劃 M1②,2026-07-16 設計、2026-08-31 落地)。
     語意:某個審查迴圈收斂放行了,下游(實作/CI/prod/人)發現可歸因的缺陷→記一筆。
-    這是整套審查系統的 ground truth 側(收斂對不對由下游裁決,不由迴圈自己的殘餘估計);
-    與攔截帳(★圖譜攔截★記號,同計劃)互為兩面。append-only、不進任何閘;
-    歸因是人工判斷(GIGO 同 cluster 歸併,計劃天花板明載)。"""
+    整套審查系統的 ground truth 側;與攔截帳(★圖譜攔截★記號)互為兩面。
+    append-only、不進任何閘;歸因是人工判斷(GIGO 同 cluster 歸併,計劃天花板明載)。
+    ★歸因守衛的職責範圍(r1 外家 ESC-01 裁明)★:只防「編號打錯」(實存性),不驗迴圈
+    收斂/放行狀態——那是語意判斷,歸人;守衛驗語意=偷渡閘,計劃明文不做。"""
     log = env.vault.parent / ".escape-log.jsonl"
+    _SEV_W = {"minor": 0, "major": 1, "blocker": 2}
     if list_mode:
+        if loop_id or stage or severity or desc or defect_ref:
+            print("擋下:--list 是唯讀,不能跟記帳參數混用——照原樣執行你會以為記了其實一筆都沒寫(r1 兩席實測的靜默吞資料)。要記帳就拿掉 --list 重跑", file=sys.stderr)
+            return 2
         if not log.exists():
-            print("逃逸帳是空的:還沒有任何一筆「迴圈放行後下游抓到可歸因缺陷」的紀錄。空≠零逃逸——也可能是沒人記;要記:\n    lumos loop escape <迴圈編號> --stage <發現階段> --severity <minor|major|blocker> --desc <一句描述>")
+            print("逃逸帳是空的:還沒有任何一筆「迴圈放行後下游抓到可歸因缺陷」的紀錄。空≠零逃逸——也可能是沒人記;要記:")
+            print("    lumos loop escape <迴圈編號> --stage <發現階段> --severity <minor|major|blocker> --desc <一句描述>")
             return 0
         import json as _je
-        rows = []
-        for ln in log.read_text(encoding="utf-8").splitlines():
+        rows, bad = [], []
+        for no, ln in enumerate(log.read_text(encoding="utf-8").splitlines(), 1):
             if not ln.strip():
                 continue
             try:
-                rows.append(_je.loads(ln))
+                d = _je.loads(ln)
             except ValueError:
-                print(f"提醒:逃逸帳有一行壞損(非法 JSON),跳過不計;帳檔:{log}", file=sys.stderr)
+                bad.append(no)
+                continue
+            if not isinstance(d, dict):
+                bad.append(no)      # 合法 JSON 但非物件(null/陣列)——r1 外家 ESC-03:一筆就能弄壞整個 --list
+                continue
+            rows.append(d)
+        if bad:
+            print(f"提醒:逃逸帳有 {len(bad)} 行壞損被跳過(行 {', '.join(map(str, bad[:5]))}"
+                  + ("…" if len(bad) > 5 else "") + f");帳檔:{log}", file=sys.stderr)
         by_loop = {}
         for r in rows:
-            by_loop.setdefault(r.get("loop", "?"), []).append(r)
+            by_loop.setdefault(str(r.get("loop", "?")), []).append(r)
         print(f"逃逸帳:{len(rows)} 筆(迴圈收斂放行後、下游抓到的可歸因缺陷;歸因為人工判斷)")
         for lp, rs in sorted(by_loop.items()):
-            worst = max((r.get("severity", "minor") for r in rs),
-                        key=lambda v: {"minor": 0, "major": 1, "blocker": 2}.get(v, 0))
-            print(f"  {lp}:{len(rs)} 筆(最重 {worst})")
+            worst_row = max(rs, key=lambda r: _SEV_W.get(r.get("severity"), -1))
+            wsev = worst_row.get("severity")
+            wlabel = wsev if wsev in _SEV_W else f"非標準值 {_esc_clean(wsev, 20)}(手改帳?)"
+            print(f"  {_esc_clean(lp, 60)}:{len(rs)} 筆(最重 {wlabel})")
             for r in rs:
-                print(f"    {r.get('ts','?')[:10]} [{r.get('severity','?')}@{r.get('stage','?')}] {r.get('desc','')}"
-                      + (f"(佐證:{r['defect_ref']})" if r.get("defect_ref") else ""))
+                sev = r.get("severity")
+                sev_disp = sev if sev in _SEV_W else f"?{_esc_clean(sev, 12)}"
+                print(f"    {str(r.get('ts') or '?')[:10]} [{sev_disp}@{_esc_clean(r.get('stage', '?'), 30)}] {_esc_clean(r.get('desc', ''))}"
+                      + (f"(佐證:{_esc_clean(r['defect_ref'], 80)})" if r.get("defect_ref") else ""))
         return 0
-    # ── 記帳模式 ──
+    # ── 記帳模式:全部驗證在此(r1 架構席 R-2:dispatch 只路由,驗證不拆層) ──
     if not loop_id:
-        print("擋下:要記逃逸就得說是哪個迴圈編號放行的(或用 --list 看帳)", file=sys.stderr)
+        print("擋下:要記逃逸就得說是哪個迴圈編號放行的。看帳:\n    lumos loop escape --list", file=sys.stderr)
+        return 2
+    if severity not in _SEV_W:
+        print("擋下:--severity 必填且只能是 minor|major|blocker(同審查帳值域)", file=sys.stderr)
+        return 2
+    if not (stage or "").strip():
+        print("擋下:--stage 必填(在哪一站發現:實作/code-loop/CI/prod/使用者回報…)——缺階段的逃逸帳做不了季度分層(r1 外家裁 spec 必備欄)", file=sys.stderr)
         return 2
     if not (desc or "").strip():
         print("擋下:--desc 不能空——沒有描述的逃逸帳讀側無從歸因,等於沒記", file=sys.stderr)
         return 2
     ledger = env.vault.parent / ".canary-log.jsonl"
-    known = set()
+    known, led_bad = set(), 0
     if ledger.exists():
         import json as _je2
         for ln in ledger.read_text(encoding="utf-8").splitlines():
             if not ln.strip():
                 continue
             try:
-                known.add(_je2.loads(ln).get("loop"))
+                v = _je2.loads(ln).get("loop")
             except ValueError:
+                led_bad += 1
                 continue
-    if loop_id not in known:
-        print(f"擋下:審查帳裡沒有叫「{loop_id}」的迴圈——逃逸要歸因到真實存在的迴圈,先確認編號:\n    lumos gov --stats", file=sys.stderr)
+            if isinstance(v, str):
+                known.add(nfc(v))     # r1 邊界席 B-3:NFC 正規化,NFD 貼上形不再肉眼無解
+    if nfc(loop_id) not in known:
+        msg = f"擋下:審查帳裡沒有叫「{loop_id}」的迴圈——逃逸要歸因到真實存在的迴圈,先確認編號:\n    lumos gov --stats"
+        if led_bad:
+            msg += f"\n  (審查帳另有 {led_bad} 行壞損被跳過——查不到也可能是編號在那幾行裡)"
+        print(msg, file=sys.stderr)
         return 2
-    import json as _je3
     import datetime as _dt_esc
-    rec = {"ts": _dt_esc.datetime.now().astimezone().isoformat(timespec="seconds"), "loop": loop_id, "stage": stage or "unknown",
-           "severity": severity, "desc": desc.strip()}
+    import secrets as _sec_esc
+    rec = {"ts": _dt_esc.datetime.now().astimezone().isoformat(timespec="seconds"),
+           "token": "ESC-" + _sec_esc.token_hex(4),       # 落盤自驗唯一鍵(canary auto-mint 慣例)
+           "loop": loop_id, "stage": stage.strip(), "severity": severity, "desc": desc.strip()}
     if defect_ref:
         rec["defect_ref"] = defect_ref
-    with open(log, "a", encoding="utf-8") as f:
-        f.write(_je3.dumps(rec, ensure_ascii=False) + "\n")
+    if not log.exists():
+        try:
+            os.close(os.open(str(log), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644))
+        except FileExistsError:
+            pass
+        except OSError as e:
+            print(f"擋下:建不了逃逸帳檔({e}):\n    {log}", file=sys.stderr)
+            return 2
+    rc_w = _jsonl_append_verified(log, rec, "token", rec["token"])   # r1 兩席同抓:裸 open('a') 是劣化第二輪;此原語=OSError 擋下+讀回自驗(canary 家族同款)
+    if rc_w:
+        return rc_w
     print(f"✓ 逃逸入帳:迴圈 {loop_id} 放行的東西在「{rec['stage']}」被抓到 {severity} 級缺陷。")
     print("  這筆是審查系統的漏網紀錄——量的是「閘沒接住的」,與攔截帳(★圖譜攔截★)互為兩面;看全帳:")
     print("    lumos loop escape --list")
@@ -12105,7 +12151,8 @@ def _strip_string_literals(code):
 # 實測誤觸發 9 次。這些檔是紀錄不是要合入的碼。
 _BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
                       "docs/.ci-log.jsonl", "docs/.canary-log.jsonl",
-                      "docs/.bypass-log.jsonl", "governance/anchor-baseline.json")
+                      "docs/.bypass-log.jsonl", "docs/.escape-log.jsonl",
+                      "governance/anchor-baseline.json")
 # ↑ canary-log/bypass-log 2026-08-27 補（[[Issues/簿記白名單漏canary與bypass帳]] 死結根治）:
 # 審計記帳(canary record)在 loop 中發生,pass 後提交它們原本會讓留痕失效→擋推。
 # ★真效果只在 code-loop 留痕豁免這第二消費者★:pitfalls 那端 canary-log 早被
@@ -17444,9 +17491,6 @@ def main():
         if args.lcmd == "rewrite":
             return cmd_loop_rewrite(env, args.rw_loop_id, args.rw_successor, args.rw_note)
         if args.lcmd == "escape":
-            if not args.esc_list and not (args.esc_severity and args.esc_desc):
-                print("擋下:記逃逸要同時給 --severity 與 --desc(或用 --list 看帳)", file=sys.stderr)
-                return 2
             return cmd_loop_escape(env, loop_id=args.esc_loop_id, stage=args.esc_stage,
                                    severity=args.esc_severity, desc=args.esc_desc,
                                    defect_ref=args.esc_ref, list_mode=args.esc_list)

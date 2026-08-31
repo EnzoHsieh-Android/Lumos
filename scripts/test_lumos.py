@@ -23941,32 +23941,59 @@ def t_entry_latch_advisories():
 
 
 def t_loop_escape_ledger():
-    """[逃逸帳原語](spec:Projects/loop數據收集_計劃 M1②;該計劃明文 M1 皆 append 級單 reviewer)
-    紅釘:①未知迴圈擋(拔歸因守衛翻紅)②空 desc 擋 ③記帳後 --list 讀得回。"""
+    """[逃逸帳原語](spec:Projects/loop數據收集_計劃 M1②)r1 六席折入後合約:
+    紅釘:①未知迴圈擋(歸因守衛)②--list 與記帳參數互斥(靜默吞資料 C-1/ESC-04)
+    ③stage 必填(外家:季度分層必備欄)④最重等級對混合 severity 真算(B-7 突變缺口)
+    ⑤desc 換行消毒(一行一筆合約 B-1)⑥NFC 正規化(B-3)⑦壞行聚合警告不炸(ESC-03)。"""
     import json as _j
+    import unicodedata as _ud
     v = mkvault()
     spec = v / "Projects" / "esc.md"; spec.write_text("s\n", encoding="utf-8")
     lid = f"esc-{_M1U}"
     r = run(v, "loop", "escape", lid, "--stage", "prod", "--severity", "major", "--desc", "x")
-    check("★紅釘:未知迴圈編號擋下(逃逸必須歸因到真實迴圈)★", r.returncode == 2 and "沒有叫" in r.stderr, r.stderr[:200])
+    check("★紅釘:未知迴圈編號擋下★", r.returncode == 2 and "沒有叫" in r.stderr, r.stderr[:200])
     check("擋下時不落帳", not (v.parent / ".escape-log.jsonl").exists(), "")
     run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
         "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec), "--spec", str(spec),
         "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
-    r2 = run(v, "loop", "escape", lid, "--stage", "prod", "--severity", "major", "--desc", "  ")
-    check("空 desc 擋(沒描述=讀側無從歸因)", r2.returncode == 2, r2.stderr[:200])
+    check("空 desc 擋(真空字串,在函式層訊息)",
+          run(v, "loop", "escape", lid, "--stage", "prod", "--severity", "major", "--desc", "").returncode == 2, "")
+    r_st = run(v, "loop", "escape", lid, "--severity", "major", "--desc", "缺階段")
+    check("★紅釘:--stage 必填(季度分層必備欄)★", r_st.returncode == 2 and "--stage 必填" in r_st.stderr, r_st.stderr[:200])
+    check("缺 --severity 擋(驗證收在函式內)",
+          run(v, "loop", "escape", lid, "--stage", "prod", "--desc", "缺等級").returncode == 2, "")
     r3 = run(v, "loop", "escape", lid, "--severity", "blocker", "--desc", "上線後資料損壞", "--stage", "prod",
              "--defect-ref", "Issues/x", expect_rc=0)
     check("記帳成功訊息講了記什麼+指路", "逃逸入帳" in r3.stdout and "escape --list" in r3.stdout, r3.stdout[:300])
+    run(v, "loop", "escape", lid, "--severity", "minor", "--desc", "第一行\n第二行", "--stage", "CI", expect_rc=0)
     rows = [_j.loads(l) for l in (v.parent / ".escape-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
-    check("帳列欄位齊(ts/loop/stage/severity/desc/defect_ref)",
-          len(rows) == 1 and rows[0]["loop"] == lid and rows[0]["severity"] == "blocker"
-          and rows[0]["stage"] == "prod" and rows[0]["desc"] == "上線後資料損壞"
-          and rows[0]["defect_ref"] == "Issues/x" and rows[0]["ts"][:2] == "20", str(rows))
+    check("多筆 append 後帳完整、欄位齊(含落盤自驗 token)",
+          len(rows) == 2 and rows[0]["loop"] == lid and rows[0]["severity"] == "blocker"
+          and rows[0]["defect_ref"] == "Issues/x" and rows[0]["token"].startswith("ESC-")
+          and rows[0]["ts"][:2] == "20", str(rows)[:300])
+    rmix = run(v, "loop", "escape", lid, "--stage", "prod", "--severity", "major", "--desc", "x", "--list")
+    check("★紅釘 C-1/ESC-04:--list 與記帳參數互斥擋下(不再靜默吞)★",
+          rmix.returncode == 2 and "唯讀" in rmix.stderr, rmix.stderr[:200])
+    check("互斥擋下沒偷寫", len((v.parent / ".escape-log.jsonl").read_text(encoding="utf-8").strip().splitlines()) == 2, "")
     rl = run(v, "loop", "escape", "--list", expect_rc=0)
-    check("--list 讀得回(按迴圈分組+最重等級)", lid in rl.stdout and "blocker" in rl.stdout and "1 筆" in rl.stdout, rl.stdout[:300])
-    r4 = run(v, "loop", "escape", lid, "--desc", "少了 severity")
-    check("缺 --severity 擋(記帳必要欄)", r4.returncode == 2, r4.stderr[:200])
+    check("★紅釘 B-7:混合 severity 的「最重」真算(blocker+minor→blocker;改壞權重表翻紅)★",
+          f"{lid}:2 筆(最重 blocker)" in rl.stdout, rl.stdout[:400])
+    check("★紅釘 B-1:desc 換行被消毒成一行(一行一筆=週報 grep 載重合約)★",
+          "第一行 第二行" in rl.stdout and "\n第二行" not in rl.stdout, rl.stdout[:400])
+    # NFC 正規化:canary 帳是 NFC,拿 NFD 形來歸因也要中
+    lid_cjk = f"café-{_M1U}"
+    run(v, "canary", "record", "caught", "--loop", lid_cjk, "--round", "r1", "--severity", "clean",
+        "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec), "--spec", str(spec),
+        "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
+    lid_nfd = _ud.normalize("NFD", lid_cjk)
+    check("★紅釘 B-3:NFD 貼上形照樣歸因得到(NFC 正規化)★",
+          run(v, "loop", "escape", lid_nfd, "--stage", "prod", "--severity", "minor", "--desc", "n").returncode == 0, "")
+    # 壞行容錯:合法 JSON 但非物件(ESC-03 的 null/陣列)+非法 JSON,聚合警告一次、不炸、有效筆數對
+    with open(v.parent / ".escape-log.jsonl", "a", encoding="utf-8") as f:
+        f.write("null\n[1,2]\n{壞}\n")
+    rl2 = run(v, "loop", "escape", "--list", expect_rc=0)
+    check("★紅釘 ESC-03:null/陣列/非法行全跳過不炸,聚合警告帶行號★",
+          "3 行壞損" in rl2.stderr and "3 筆" in rl2.stdout, (rl2.stderr + rl2.stdout)[:300])
 
 
 if __name__ == "__main__":
