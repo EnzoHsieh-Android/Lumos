@@ -19,6 +19,8 @@ summary: |-
 ---
 # 2026-07-16 replay 校準 baseline v0
 
+- REVISIT:2026-09-07 查模型換代是否已發生(地基盤點判疑已觸發)——是則重跑校準
+
 [[Projects/loop數據收集_計劃]] 的獨立實驗首跑。受試:fromscratch-m1 與 dloop-m2-cluster 兩份 spec 的前折 v1(git 史 5db767b/36540f5)+ 對應釘住 worktree;golden findings 當標籤。
 
 ## 接住率表(嚴格逐標籤)

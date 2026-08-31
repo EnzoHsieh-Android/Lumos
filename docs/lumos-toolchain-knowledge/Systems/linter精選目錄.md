@@ -111,5 +111,6 @@ AST 級結構比對（比 regex 誤報少、表達力強），多語言單一引
 
 ## 誠實邊界
 - 這是 2026-07 快照,linter 生態變動快(oxlint/Biome 仍在成熟弧上;Swashbuckle 這類已被 .NET 內建 OpenAPI/Scalar 挑戰)——`valid_under` 記為「2026-07 社群現況」,半年後宜重搜。
+- REVISIT:2027-01-31 重搜 linter 生態(半年快照到期;上行條款)
 - 「該裝哪些」是團隊決定,此菜單只列社群共識選項,不強制;裝了才進 lint.json/lint-watch.json。
 - registry 座標須與 [[Systems/lint-version-watch]] 支援的 type 對齊(nuget/npm/pypi/github/maven/google-maven);detekt/ktlint 走 github release(maven artifact 亦可)。

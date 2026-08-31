@@ -33,7 +33,7 @@ echo "[$(ts)] lint-watch 段結束 rc=$rc"
 # 4) doctor 每日跑(fail-open;log → doctor-daily.log)
 # intake守衛 T4 排程線(2026-08-30 d1,外家 r3 唯一補件):T4 的滾動窗計數器住在 doctor 的
 # [I] 段;此前 doctor 只在 push/CI 跑——「doctor 每天跑」曾是未查證的假宣稱,這行讓它成真。
-( cd "$DIR/.." && python3 scripts/lumos doctor ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc=$?
+( cd "$DIR/.." && python3 scripts/lumos doctor --ci ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc=$?  # --ci=治理事件入帳(回訪掃描 v3 接電條款:無此則 nags 14 天升級鏈斷路)
 echo "[$(ts)] doctor 段結束 rc=$rc"
 
 echo "[$(ts)] daily-governance wrapper 完成"

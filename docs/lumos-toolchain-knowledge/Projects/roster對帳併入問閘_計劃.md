@@ -35,6 +35,7 @@ tags:
 
 - 守衛面:動輸出不動判定;try/except+打樁斷言鎖 rc。已排除:金流/對外/不可逆。
 - 必要性(ext-f1 挑戰入檔):異常才發聲+留痕檔;回頭條件=2026-11-26 查 roster-alerts.log,零出現→連旗標一併重審退場(掛本案 Verification revalidate_when,判準有檔可查)。
+- REVISIT:2026-11-26 查 roster-alerts 真實出現數(零→--roster 重審退場;上行條款)
 - settle 除外=已知缺口誠實化:高風險 spec 的席位核對仍靠人記得(skill 指路);Issue 掛觀察。
 
 ## 審計修正紀錄

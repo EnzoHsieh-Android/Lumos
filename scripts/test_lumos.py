@@ -24056,5 +24056,62 @@ def t_metric_criteria_drift_guard():
           hits <= ALLOWED, f"清單外新引用:{sorted(hits - ALLOWED)}——讀側/文件就加進本測試的允許清單;是拿數字值當閘條件就立事故(spec C 節禁令)")
 
 
+
+def t_doctor_revisit_reminder():
+    """[回訪掃描](spec:Projects/回訪掃描_計劃 v3,r1 五席+r2 折入)
+    E5 段:REVISIT 行到期掃描。紅釘:①到期會唸+最老優先+advice ②壞日期=損毀計數不靜默(fail-closed)
+    ③列表前綴吃得到(原句棲地)④code/表格不算 ⑤全靜默 ⑥--ci 落 gov event nodes=stem
+    ⑦★接電鏈:check-revisit warned 連喊 ≥14 天→gov --nags 14 升級清單(外家複判條件)★。"""
+    import json as _j
+    import datetime as _dt
+    import subprocess as _sp
+    v = mkvault()
+    # 治理帳寫入器在非 git/無 HEAD 時靜默跳過(_append_governance_log 明文)——鏈測試需要真 git
+    _sp.run(["git", "init", "-q"], cwd=v.parent, check=True)
+    _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"],
+            cwd=v.parent, check=True)
+    y1 = (_dt.date.today() - _dt.timedelta(days=9)).isoformat()
+    fut = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
+    write(v, "Projects/回訪甲_計劃.md", "type: project\ntags:\n  - type/project",
+          f"# 回訪甲_計劃\n- 承諾句在此。\n- REVISIT:{y1} 回頭看甲\nREVISIT:{fut} 未來的事\nREVISIT:2026-9-1 缺零壞日期\n")
+    write(v, "Systems/回訪乙.md", "type: system\ntags:\n  - type/system",
+          "# 回訪乙\n```\nREVISIT:2020-01-01 code區不算\n```\n| REVISIT:2020-01-01 表格不算 |\n")
+    r = run(v, "doctor")
+    check("★E5 到期會唸:件數+逾天數+打卡指路★",
+          "1 件回訪到期" in r.stdout and "逾 9 天" in r.stdout and "回頭看甲" in r.stdout
+          and "日期改下一次或刪行" in r.stdout, r.stdout[-800:])
+    check("★紅釘②:壞日期=損毀計數印出(不靜默;parse 不過永不到期)★",
+          "1 行 REVISIT 日期格式壞損" in r.stdout, r.stdout[-800:])
+    _e5 = r.stdout.split("[E5]")[1].split("\n[")[0] if "[E5]" in r.stdout else ""
+    check("★紅釘③④:列表前綴吃到(到期那行是 bullet);code/表格行不算(乙不在 E5 段)★",
+          "回訪甲_計劃" in _e5 and "回訪乙" not in _e5, _e5[:400])
+    check("advice 指令獨立行(不帶 --code:預設排碼恰排掉討論字)",
+          'lumos search "REVISIT:"' in r.stdout, r.stdout[-400:])
+    r2 = run(v, "doctor", "--ci")
+    gl = (v.parent / ".governance-log.jsonl")
+    evs = [_j.loads(l) for l in gl.read_text(encoding="utf-8").splitlines() if l.strip()]
+    rv = [e for e in evs if e.get("gate") == "check-revisit"]
+    check("★紅釘⑥:--ci 落 gov event,nodes=到期筆記 stem(nags 牙的鍵)★",
+          rv and rv[-1]["kind"] == "warned" and rv[-1]["nodes"] == ["回訪甲_計劃"], str(rv[-1:]))
+    # ⑤ 全靜默:清掉到期與壞行 → 無 E5 段
+    (v / "Projects" / "回訪甲_計劃.md").write_text(
+        (v / "Projects" / "回訪甲_計劃.md").read_text(encoding="utf-8")
+        .replace(f"REVISIT:{y1} 回頭看甲", f"REVISIT:{fut} 回頭看甲")
+        .replace("REVISIT:2026-9-1 缺零壞日期", ""), encoding="utf-8")
+    r3 = run(v, "doctor")
+    check("★紅釘⑤:0 到期 0 壞行=整段不印(全靜默慣例)★", "[E5]" not in r3.stdout and "回訪到期" not in r3.stdout,
+          r3.stdout[-400:])
+    # ⑦ 接電鏈:偽造 15 天前的首喊+剛才的 --ci 喊(同 gate 同 node),nags 14 應列出
+    first = (_dt.datetime.now().astimezone() - _dt.timedelta(days=15)).isoformat(timespec="seconds")
+    rows = gl.read_text(encoding="utf-8").splitlines()
+    with open(gl, "w", encoding="utf-8") as f:
+        f.write(_j.dumps({"ts": first, "commit": "x", "gate": "check-revisit", "kind": "warned",
+                          "hard": False, "nodes": ["回訪甲_計劃"], "note": "seed"}, ensure_ascii=False) + "\n")
+        f.write("\n".join(rows) + "\n")
+    rn = run(v, "gov", "--nags", "14")
+    check("★紅釘⑦(外家複判條件):連喊 ≥14 天→nags 升級清單列出該篇(牙有電)★",
+          rn.returncode == 1 and "check-revisit" in rn.stdout and "回訪甲_計劃" in rn.stdout, rn.stdout[:500])
+
+
 if __name__ == "__main__":
     sys.exit(main())
