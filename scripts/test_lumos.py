@@ -24024,12 +24024,13 @@ def t_metric_criteria_drift_guard():
     plan = root / "docs" / "lumos-toolchain-knowledge" / "Projects" / "loop數據收集_計劃.md"
     text = plan.read_text(encoding="utf-8")
     m = _re.search(r"<!-- METRIC-CRITERIA:START -->\n(.*?)<!-- METRIC-CRITERIA:END -->", text, _re.S)
-    check("★前置★ 判準句標記對存在且唯一", m is not None and text.count("METRIC-CRITERIA:START") == 1,
-          "標記缺失或不唯一——雜湊邊界失效")
+    check("★前置★ 判準句標記對存在且唯一", m is not None and text.count("METRIC-CRITERIA:START") == 1
+          and text.count("METRIC-CRITERIA:END") == 1,
+          "標記缺失或不唯一(含 END)——內文提早出現 END 字面會靜默截斷雜湊")
     calc = _hl.sha256(_ud.normalize("NFC", m.group(1)).encode("utf-8")).hexdigest()[:8]
-    logm = _re.findall(r"^\| \d{4}-\d{2}-\d{2} \| (\S+) \|", text, _re.M)
+    logm = _re.findall(r"^\| (\d{4}-\d{2}-\d{2}) \| (\S+) \|", text, _re.M)
     check("★前置★ 變更日誌表至少一列", bool(logm), text[-500:])
-    latest = logm[-1] if logm else ""
+    latest = sorted(logm, key=lambda r: r[0])[-1][1] if logm else ""   # 最新=日期最大(同日取後出現;不賭加列方向,插上方實錘 code-r1 H-1)
     if not _re.fullmatch(r"[0-9a-f]{8}", latest):
         check("★判準凍結:日誌 rev 未回填(bootstrap)——把下列現算值謄入日誌最新列★",
               False, f"現算 rev={calc};謄入 Projects/loop數據收集_計劃.md 變更日誌表後重跑")
@@ -24039,9 +24040,10 @@ def t_metric_criteria_drift_guard():
     # ② 引用點漂移(執行面掃描;governance/review-reports 與 docs/*-knowledge 屬允許引用不在掃描面)
     ALLOWED = {"scripts/lumos", "scripts/test_lumos.py"}
     hits = set()
-    scan = [q for q in (root / "scripts").iterdir() if q.is_file()]
+    scan = [q for q in (root / "scripts").rglob("*")
+            if q.is_file() and "__pycache__" not in q.parts and q.suffix != ".pyc"]   # 遞迴含 hooks/templates(code-r1 H-3);排編譯副本
     al = root / "governance" / "autonomous_loop"
-    scan += [q for q in al.iterdir() if q.is_file() and q.suffix in (".md", ".sh", ".py")] if al.exists() else []
+    scan += [q for q in al.rglob("*") if q.is_file()] if al.exists() else []
     for q in scan:
         try:
             body = q.read_text(encoding="utf-8", errors="ignore")
@@ -24050,7 +24052,7 @@ def t_metric_criteria_drift_guard():
         if ".escape-log.jsonl" in body or "★圖譜攔截★" in body:
             hits.add(str(q.relative_to(root)))
     check("★引用點漂移:三帳記號在執行面的引用檔全數在允許清單內(新引用=先人判再放行)★",
-          hits <= ALLOWED, f"清單外新引用:{sorted(hits - ALLOWED)}——讀側/文件就加進 ALLOWED,數字值進閘就立事故(spec C 節)")
+          hits <= ALLOWED, f"清單外新引用:{sorted(hits - ALLOWED)}——讀側/文件就加進本測試的允許清單;是拿數字值當閘條件就立事故(spec C 節禁令)")
 
 
 if __name__ == "__main__":
