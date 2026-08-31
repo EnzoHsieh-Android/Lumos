@@ -17,6 +17,7 @@ verified_by:
   - "[[Verification/2026-08-27_自主loop遷處置閘]]"
 summary: |-
   FLOW:daily-governance.sh(launchd 09:30 單次喚醒,★原獨立 cron 10:10 已棄——自足審計 2026-08-30 抓到 FLOW 殘留舊述★)→ autonomous-loop.sh:驗當日日報存在(真模式無報即跳;dry-run fallback 最近一份)→ backlog 每日衰減(冪等按日差;淘汰先歸檔 backlog-archive.jsonl 讀回自驗才刪)→ gap_select(日報 gaps + backlog 去重排序選 top-1,三鍵排序=分數/last_seen/source_date 新者先;N=1 gate:有 pending/open PR 則只進 backlog)→ claude -p orchestrator(真執行:brainstorm spec → design-loop ≤6 輪[opus auditor + canary a/b/c + judge 判 caught 並回報 severity + 強制地面事實查證]→ loop status --disposal 收斂(★2026-08-27 遷處置閘 d7,舊 --need 2/--gate K-streak 退役★)→ §2.5 qwen3-max 跨家族複核)→ 收斂+endorsed/degraded → 放行閘(dry-run 寫 governance/pending/;真模式 branch+PR+LINE)→ 停等人放行
+  KEY:[2026-08-31]daily-governance.sh 第 4 步=lumos doctor --ci(2026-08-30 intake 案加線;08-31 回訪案補 --ci——治理事件每日入帳,gov --nags 14 天空轉升級鏈才有電;裸 doctor 不寫帳=鏈斷路)
   KEY:★2026-08-26 修理(auto-loop-repair-v2)★:①失敗不丟件——trap EXIT 涵蓋全部早退點,未處置 gap 原分放回+pipeline_failures 滿 3 熔斷 covered+LINE(先前 NO_JSON/anchor 早退真丟件,08-24/25 兩筆實丟)②結局帳結構化——canary 帳新欄 outcome(五主類+細類)/usd,trap 統一落帳與成本抽取解耦③七天產出一行(run_ledger.py,失敗日照印,loop id 過濾=auto-日期形狀)④連兩個有跑日全管線死→LINE 素訊息(不套「備好待放行」模板)
   KEY:★事故(2026-08-21 體檢 #2)★ N=1 閘被 pending/ 兩個 07-14 舊檔卡死 **38 天**,每日 launchd 準時跑、rc=0、「無可展開 gap」——排程有跑/什麼都沒做/回報成功;處置=舊檔歸檔 pending/archive/+pending >3 天即發 LINE 喊人(見 [[Verification/2026-08-21_工具鏈體檢修復批]])
   KEY:定調=自動備料+自審+停在放行閘等人,不是無人迭代;放行(merge PR)永遠人手動,人從「每天發起鏈」變「每天 review 1 個 PR」
