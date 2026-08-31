@@ -1,0 +1,190 @@
+diff --git a/governance/daily-governance.sh b/governance/daily-governance.sh
+index b34e385..96831cb 100755
+--- a/governance/daily-governance.sh
++++ b/governance/daily-governance.sh
+@@ -26,14 +26,14 @@ echo "[$(ts)] 治理日報 段結束 rc=$?"
+ "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
+ echo "[$(ts)] 自主 loop 段結束 rc=$?"
+ 
+ # 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)
+ "$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc=$?
+ echo "[$(ts)] lint-watch 段結束 rc=$rc"
+ 
+ # 4) doctor 每日跑(fail-open;log → doctor-daily.log)
+ # intake守衛 T4 排程線(2026-08-30 d1,外家 r3 唯一補件):T4 的滾動窗計數器住在 doctor 的
+ # [I] 段;此前 doctor 只在 push/CI 跑——「doctor 每天跑」曾是未查證的假宣稱,這行讓它成真。
+-( cd "$DIR/.." && python3 scripts/lumos doctor ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc=$?
++( cd "$DIR/.." && python3 scripts/lumos doctor --ci ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc=$?  # --ci=治理事件入帳(回訪掃描 v3 接電條款:無此則 nags 14 天升級鏈斷路)
+ echo "[$(ts)] doctor 段結束 rc=$rc"
+ 
+ echo "[$(ts)] daily-governance wrapper 完成"
+diff --git a/scripts/lumos b/scripts/lumos
+index a26c069..126ed86 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1396,20 +1396,68 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+         else:
+             _head4 = f"{_casc_broken} 張連鎖帳本開頭損毀,待辦單內容救不回來——多半是翻案當下寫入被打斷,需人工檢視"
+         warn_soft(_lines4, _head4, advice="lumos rel-cascade list")
+         # nodes=[] 是刻意偏離「每違規節點各一筆」慣例:cascade 帳本不是圖譜節點、無 stem 可填,
+         # 聚合計數走 note 欄(全庫唯一同形狀的是 doctor-run 彙總事件)。
+         gov_events.append({"gate": "check-cascade", "kind": "warned", "hard": False, "nodes": [],
+                            "note": f"unseen={len(_casc_unseen_ts)} broken={_casc_broken}"})
+         print()
+     print()
+ 
++    # Check E5: 回訪到期(REVISIT 行;Projects/回訪掃描_計劃 v3,2026-08-31)。
++    #   段名取新增序非畫面序(E4 慣例);擺位=E4 後 E3 前(勿移進 [E3]..[H] 測試切片窗)。
++    #   行判準:strip 行首空白與 - / * 列表前綴後以 REVISIT: 開頭;表格行(| 開頭)與 code 區不算
++    #   (走 _search_visible_lines 剝碼)。日期先 fromisoformat parse——失敗=壞行入計數不進比較
++    #   (fail-closed,E4 損毀慣例);過了才與今天比,≤今天=到期。全靜默:0 到期 0 壞行整段不印。
++    #   gov event nodes=到期筆記 stem(刻意不學 check-cascade 的 nodes=[]:nags 週報按 gate+node
++    #   連唸天數升級 LINE,填 stem 牙才咬得到——接電條款另半=daily-governance.sh 跑 doctor --ci)。
++    _rv_due, _rv_bad = [], 0
++    import datetime as _dt5
++    _today5 = _dt5.date.today()
++    for _rel5, _n5 in env.notes.items():
++        try:
++            _txt5 = (env.vault / _rel5).read_text(encoding="utf-8-sig")
++        except OSError:
++            continue
++        for _no5, _raw5, _pr5 in _search_visible_lines(_txt5.split("\n"), False):
++            _l5 = _pr5.strip()
++            if _l5.startswith(("- ", "* ")):
++                _l5 = _l5[2:].lstrip()
++            if not _l5.startswith("REVISIT:") or _pr5.lstrip().startswith("|"):
++                continue
++            _restv = _l5[len("REVISIT:"):]
++            _datev, _, _sumv = _restv.partition(" ")
++            try:
++                _dv = _dt5.date.fromisoformat(_datev)
++            except ValueError:
++                _rv_bad += 1
++                continue
++            if _dv <= _today5:
++                _rv_due.append(((_today5 - _dv).days, _datev, _sumv.strip(), _n5.stem))
++    if _rv_due or _rv_bad:
++        section("E5", "回訪到期(當初承認風險時許的「回頭看」)")
++        _rv_due.sort(reverse=True)   # 最老優先
++        _lines5 = [f"{d} {sm}(逾 {ag} 天)← {st}" for ag, d, sm, st in _rv_due]
++        _head5 = (f"{len(_rv_due)} 件回訪到期(最老逾 {_rv_due[0][0]} 天)——到日子了,處理完把該行日期改下一次或刪行"
++                  if _rv_due else "")
++        if _rv_bad:
++            _bad_line5 = f"另有 {_rv_bad} 行 REVISIT 日期格式壞損(parse 不過=永遠不會到期),先修格式"
++            if _head5:
++                _lines5.append(_bad_line5)
++            else:
++                _head5 = _bad_line5
++        warn_soft(_lines5, _head5, advice='lumos search "REVISIT:"')
++        gov_events.append({"gate": "check-revisit", "kind": "warned", "hard": False,
++                           "nodes": sorted({st for _, _, _, st in _rv_due}),
++                           "note": f"due={len(_rv_due)} bad={_rv_bad}"})
++        print()
++
+     # Check E3: 意圖鏈斷義(軟,不擋,不計 issues)——[M1/S8] 精確版:decision_refs(全域格式
+     #   <節點rel>#dN,M1/P2 決策穩定 ID)指向的那條決策已 valid:false → 本驗證建在被推翻的意圖上。
+     #   dangling ref(格式壞/節點不存在/id 未指派)也浮出——不靜默通過,對齊 M2 反靜默紀律。
+     #   設計見 Projects/關係層主網_實作計畫 M1;取代母計劃 [S8] 的高噪音 advisory。
+     section("E3", "驗證紀錄引用的決策,是不是已經被翻案了")
+     e3_broken, e3_dangling = [], []
+     for rel, n in sorted(notes.items()):
+         # [自動養成 不對稱信任] firing 向讀「聯集」decision_refs + decision_refs_ai(放寬)
+         #   ——ai 填的也能觸發提醒;錯了 advisory 級、人一刪,低 harm(對比抑制向的保守)
+         # [code-loop r1 A/C-minor] (rel,ref) 去重:過渡態同 ref 可能兩欄都有,避免重複通報虛胖計數
+@@ -3407,21 +3455,21 @@ def cmd_signoff(env, node, note, by=None):
+         print("⚠ ledger 已記但 frontmatter 戳記失敗(見上)", file=sys.stderr)
+         return rc
+     print(f"✓ signoff {rel} — {today}{('(' + by + ')') if by else ''}: {note[:60]}")
+     return 0
+ 
+ 
+ # ★gov --stats 的 gate 全集★(2026-08-20,計劃:Projects/閘觸發帳統計_計劃)
+ # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
+ # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
+ # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
+-_KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-e1", "delguard", "check-e2", "check-e3", "check-lint-decl", "doctor-run",
++_KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisit", "check-e1", "delguard", "check-e2", "check-e3", "check-lint-decl", "doctor-run",
+                 "check-j", "check-k", "check-r", "check-s", "check-s2", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+ # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+ _STATS_ABSENT_DISCLAIMER = (
+     "  未出現 ≠ 無用。本帳看不到硬擋事件(anchor verify 擋下 push 時不寫任何帳),也分不出四種\n"
+     "  「沒出現」:跑了沒事／接了帳但沒被觸發／守的功能從沒被用過／本次執行根本沒載入該來源\n"
+     "  (ci 帳是條件載入)。要拿這份清單談退場,先確認該閘在本帳的 gate 名單之內、且來源本次有載入。"
+ )
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 3c6bff8..8005383 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -24049,12 +24049,69 @@ def t_metric_criteria_drift_guard():
+         try:
+             body = q.read_text(encoding="utf-8", errors="ignore")
+         except OSError:
+             continue
+         if ".escape-log.jsonl" in body or "★圖譜攔截★" in body:
+             hits.add(str(q.relative_to(root)))
+     check("★引用點漂移:三帳記號在執行面的引用檔全數在允許清單內(新引用=先人判再放行)★",
+           hits <= ALLOWED, f"清單外新引用:{sorted(hits - ALLOWED)}——讀側/文件就加進本測試的允許清單;是拿數字值當閘條件就立事故(spec C 節禁令)")
+ 
+ 
++
++def t_doctor_revisit_reminder():
++    """[回訪掃描](spec:Projects/回訪掃描_計劃 v3,r1 五席+r2 折入)
++    E5 段:REVISIT 行到期掃描。紅釘:①到期會唸+最老優先+advice ②壞日期=損毀計數不靜默(fail-closed)
++    ③列表前綴吃得到(原句棲地)④code/表格不算 ⑤全靜默 ⑥--ci 落 gov event nodes=stem
++    ⑦★接電鏈:check-revisit warned 連喊 ≥14 天→gov --nags 14 升級清單(外家複判條件)★。"""
++    import json as _j
++    import datetime as _dt
++    import subprocess as _sp
++    v = mkvault()
++    # 治理帳寫入器在非 git/無 HEAD 時靜默跳過(_append_governance_log 明文)——鏈測試需要真 git
++    _sp.run(["git", "init", "-q"], cwd=v.parent, check=True)
++    _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"],
++            cwd=v.parent, check=True)
++    y1 = (_dt.date.today() - _dt.timedelta(days=9)).isoformat()
++    fut = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
++    write(v, "Projects/回訪甲_計劃.md", "type: project\ntags:\n  - type/project",
++          f"# 回訪甲_計劃\n- 承諾句在此。\n- REVISIT:{y1} 回頭看甲\nREVISIT:{fut} 未來的事\nREVISIT:2026-9-1 缺零壞日期\n")
++    write(v, "Systems/回訪乙.md", "type: system\ntags:\n  - type/system",
++          "# 回訪乙\n```\nREVISIT:2020-01-01 code區不算\n```\n| REVISIT:2020-01-01 表格不算 |\n")
++    r = run(v, "doctor")
++    check("★E5 到期會唸:件數+逾天數+打卡指路★",
++          "1 件回訪到期" in r.stdout and "逾 9 天" in r.stdout and "回頭看甲" in r.stdout
++          and "日期改下一次或刪行" in r.stdout, r.stdout[-800:])
++    check("★紅釘②:壞日期=損毀計數印出(不靜默;parse 不過永不到期)★",
++          "1 行 REVISIT 日期格式壞損" in r.stdout, r.stdout[-800:])
++    _e5 = r.stdout.split("[E5]")[1].split("\n[")[0] if "[E5]" in r.stdout else ""
++    check("★紅釘③④:列表前綴吃到(到期那行是 bullet);code/表格行不算(乙不在 E5 段)★",
++          "回訪甲_計劃" in _e5 and "回訪乙" not in _e5, _e5[:400])
++    check("advice 指令獨立行(不帶 --code:預設排碼恰排掉討論字)",
++          'lumos search "REVISIT:"' in r.stdout, r.stdout[-400:])
++    r2 = run(v, "doctor", "--ci")
++    gl = (v.parent / ".governance-log.jsonl")
++    evs = [_j.loads(l) for l in gl.read_text(encoding="utf-8").splitlines() if l.strip()]
++    rv = [e for e in evs if e.get("gate") == "check-revisit"]
++    check("★紅釘⑥:--ci 落 gov event,nodes=到期筆記 stem(nags 牙的鍵)★",
++          rv and rv[-1]["kind"] == "warned" and rv[-1]["nodes"] == ["回訪甲_計劃"], str(rv[-1:]))
++    # ⑤ 全靜默:清掉到期與壞行 → 無 E5 段
++    (v / "Projects" / "回訪甲_計劃.md").write_text(
++        (v / "Projects" / "回訪甲_計劃.md").read_text(encoding="utf-8")
++        .replace(f"REVISIT:{y1} 回頭看甲", f"REVISIT:{fut} 回頭看甲")
++        .replace("REVISIT:2026-9-1 缺零壞日期", ""), encoding="utf-8")
++    r3 = run(v, "doctor")
++    check("★紅釘⑤:0 到期 0 壞行=整段不印(全靜默慣例)★", "[E5]" not in r3.stdout and "回訪到期" not in r3.stdout,
++          r3.stdout[-400:])
++    # ⑦ 接電鏈:偽造 15 天前的首喊+剛才的 --ci 喊(同 gate 同 node),nags 14 應列出
++    first = (_dt.datetime.now().astimezone() - _dt.timedelta(days=15)).isoformat(timespec="seconds")
++    rows = gl.read_text(encoding="utf-8").splitlines()
++    with open(gl, "w", encoding="utf-8") as f:
++        f.write(_j.dumps({"ts": first, "commit": "x", "gate": "check-revisit", "kind": "warned",
++                          "hard": False, "nodes": ["回訪甲_計劃"], "note": "seed"}, ensure_ascii=False) + "\n")
++        f.write("\n".join(rows) + "\n")
++    rn = run(v, "gov", "--nags", "14")
++    check("★紅釘⑦(外家複判條件):連喊 ≥14 天→nags 升級清單列出該篇(牙有電)★",
++          rn.returncode == 1 and "check-revisit" in rn.stdout and "回訪甲_計劃" in rn.stdout, rn.stdout[:500])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

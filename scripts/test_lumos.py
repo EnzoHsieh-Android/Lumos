@@ -24080,11 +24080,21 @@ def t_doctor_revisit_reminder():
     check("★E5 到期會唸:件數+逾天數+打卡指路★",
           "1 件回訪到期" in r.stdout and "逾 9 天" in r.stdout and "回頭看甲" in r.stdout
           and "日期改下一次或刪行" in r.stdout, r.stdout[-800:])
-    check("★紅釘②:壞日期=損毀計數印出(不靜默;parse 不過永不到期)★",
-          "1 行 REVISIT 日期格式壞損" in r.stdout, r.stdout[-800:])
+    check("★紅釘②:壞日期=損毀計數印在 head(cap3 吞不掉;parse 不過永不到期)★",
+          "1 行 REVISIT 日期格式壞損" in r.stdout
+          and "壞損" in r.stdout.split("[E5]")[1].split("\n")[1], r.stdout[-800:])
     _e5 = r.stdout.split("[E5]")[1].split("\n[")[0] if "[E5]" in r.stdout else ""
     check("★紅釘③④:列表前綴吃到(到期那行是 bullet);code/表格行不算(乙不在 E5 段)★",
           "回訪甲_計劃" in _e5 and "回訪乙" not in _e5, _e5[:400])
+    # ★紅釘 H-1(code-revisit):摘要控制碼消毒——ESC 位元組不得穿透到輸出★
+    write(v, "Projects/回訪注入.md", "type: project\ntags:\n  - type/project",
+          f"# 回訪注入\n- REVISIT:{y1} 摘要帶\x1b[31m控制碼\x07測試\n")
+    r_inj = run(v, "doctor")
+    check("★紅釘 H-1:ESC/BEL 位元組被消毒(兩天前逃逸帳同洞,勿三挖)★",
+          "\x1b" not in r_inj.stdout.split("[E5]")[1].split("\n[")[0]
+          and "\x07" not in r_inj.stdout.split("[E5]")[1].split("\n[")[0]
+          and "控制碼" in r_inj.stdout, r_inj.stdout[-400:])
+    (v / "Projects" / "回訪注入.md").unlink()
     check("advice 指令獨立行(不帶 --code:預設排碼恰排掉討論字)",
           'lumos search "REVISIT:"' in r.stdout, r.stdout[-400:])
     r2 = run(v, "doctor", "--ci")
