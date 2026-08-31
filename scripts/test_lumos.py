@@ -23988,6 +23988,19 @@ def t_loop_escape_ledger():
     lid_nfd = _ud.normalize("NFD", lid_cjk)
     check("★紅釘 B-3:NFD 貼上形照樣歸因得到(NFC 正規化)★",
           run(v, "loop", "escape", lid_nfd, "--stage", "prod", "--severity", "minor", "--desc", "n").returncode == 0, "")
+    # ★紅釘 F2-1:帳檔是 symlink → 擋下不寫(既存連結會繞過建檔保護、寫進外部檔——r2 實測重現後補)★
+    v3 = mkvault()
+    spec3 = v3 / "Projects" / "e3.md"; spec3.write_text("s\n", encoding="utf-8")
+    lid3 = f"esc3-{_M1U}"
+    run(v3, "canary", "record", "caught", "--loop", lid3, "--round", "r1", "--severity", "clean",
+        "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec3), "--spec", str(spec3),
+        "--tier", "standard", "--report", _sevrep(v3.parent), expect_rc=0)
+    _target = v3.parent / "outside-target.jsonl"; _target.write_text("", encoding="utf-8")
+    (v3.parent / ".escape-log.jsonl").symlink_to(_target)
+    rsl = run(v3, "loop", "escape", lid3, "--stage", "prod", "--severity", "minor", "--desc", "x")
+    check("★紅釘 F2-1:symlink 帳檔擋下、外部目標零寫入★",
+          rsl.returncode == 2 and "符號連結" in rsl.stderr and _target.read_text(encoding="utf-8") == "",
+          rsl.stderr[:200])
     # 壞行容錯:合法 JSON 但非物件(ESC-03 的 null/陣列)+非法 JSON,聚合警告一次、不炸、有效筆數對
     with open(v.parent / ".escape-log.jsonl", "a", encoding="utf-8") as f:
         f.write("null\n[1,2]\n{壞}\n")

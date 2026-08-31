@@ -1,0 +1,251 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index d837baf..90dee4a 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -5240,20 +5240,89 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo, en
+     for i, r in enumerate(rounds, 1):
+         print(f"{i}\t{r.get('kind', '?')}\t{r.get('severity', '-')}\t{r.get('ts', '')}\t{r.get('note', '')}")
+     if fails:
+         print(f"⛔ SETTLE GATE FAIL({loop_id} 沒通過,卡在:{'/'.join(fails)})")
+         return 1
+     print(f"✅ SETTLE GATE PASS({loop_id} 通過:清單全收尾、引用對得上、文件沒被事後改過)")
+     _loop_gov_mark(env, loop_id, "converged", "gate PASS")
+     return 0
+ 
+ 
++def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
++                    defect_ref=None, list_mode=False):
++    """逃逸帳原語(Projects/loop數據收集_計劃 M1②,2026-07-16 設計、2026-08-31 落地;
++    該計劃明文:M1 皆 append 級、單 reviewer 即可)。
++    語意:某個審查迴圈收斂放行了,下游(實作/CI/prod/人)發現可歸因的缺陷→記一筆。
++    這是整套審查系統的 ground truth 側(收斂對不對由下游裁決,不由迴圈自己的殘餘估計);
++    與攔截帳(★圖譜攔截★記號,同計劃)互為兩面。append-only、不進任何閘;
++    歸因是人工判斷(GIGO 同 cluster 歸併,計劃天花板明載)。"""
++    log = env.vault.parent / ".escape-log.jsonl"
++    if list_mode:
++        if not log.exists():
++            print("逃逸帳是空的:還沒有任何一筆「迴圈放行後下游抓到可歸因缺陷」的紀錄。空≠零逃逸——也可能是沒人記;要記:\n    lumos loop escape <迴圈編號> --stage <發現階段> --severity <minor|major|blocker> --desc <一句描述>")
++            return 0
++        import json as _je
++        rows = []
++        for ln in log.read_text(encoding="utf-8").splitlines():
++            if not ln.strip():
++                continue
++            try:
++                rows.append(_je.loads(ln))
++            except ValueError:
++                print(f"提醒:逃逸帳有一行壞損(非法 JSON),跳過不計;帳檔:{log}", file=sys.stderr)
++        by_loop = {}
++        for r in rows:
++            by_loop.setdefault(r.get("loop", "?"), []).append(r)
++        print(f"逃逸帳:{len(rows)} 筆(迴圈收斂放行後、下游抓到的可歸因缺陷;歸因為人工判斷)")
++        for lp, rs in sorted(by_loop.items()):
++            worst = max((r.get("severity", "minor") for r in rs),
++                        key=lambda v: {"minor": 0, "major": 1, "blocker": 2}.get(v, 0))
++            print(f"  {lp}:{len(rs)} 筆(最重 {worst})")
++            for r in rs:
++                print(f"    {r.get('ts','?')[:10]} [{r.get('severity','?')}@{r.get('stage','?')}] {r.get('desc','')}"
++                      + (f"(佐證:{r['defect_ref']})" if r.get("defect_ref") else ""))
++        return 0
++    # ── 記帳模式 ──
++    if not loop_id:
++        print("擋下:要記逃逸就得說是哪個迴圈編號放行的(或用 --list 看帳)", file=sys.stderr)
++        return 2
++    if not (desc or "").strip():
++        print("擋下:--desc 不能空——沒有描述的逃逸帳讀側無從歸因,等於沒記", file=sys.stderr)
++        return 2
++    ledger = env.vault.parent / ".canary-log.jsonl"
++    known = set()
++    if ledger.exists():
++        import json as _je2
++        for ln in ledger.read_text(encoding="utf-8").splitlines():
++            if not ln.strip():
++                continue
++            try:
++                known.add(_je2.loads(ln).get("loop"))
++            except ValueError:
++                continue
++    if loop_id not in known:
++        print(f"擋下:審查帳裡沒有叫「{loop_id}」的迴圈——逃逸要歸因到真實存在的迴圈,先確認編號:\n    lumos gov --stats", file=sys.stderr)
++        return 2
++    import json as _je3
++    import datetime as _dt_esc
++    rec = {"ts": _dt_esc.datetime.now().astimezone().isoformat(timespec="seconds"), "loop": loop_id, "stage": stage or "unknown",
++           "severity": severity, "desc": desc.strip()}
++    if defect_ref:
++        rec["defect_ref"] = defect_ref
++    with open(log, "a", encoding="utf-8") as f:
++        f.write(_je3.dumps(rec, ensure_ascii=False) + "\n")
++    print(f"✓ 逃逸入帳:迴圈 {loop_id} 放行的東西在「{rec['stage']}」被抓到 {severity} 級缺陷。")
++    print("  這筆是審查系統的漏網紀錄——量的是「閘沒接住的」,與攔截帳(★圖譜攔截★)互為兩面;看全帳:")
++    print("    lumos loop escape --list")
++    return 0
++
++
+ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None, disposal=False, roster=False):
+     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
+     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
+     findings 數的源頭仍是 LLM 裁決——gate 機械化的是算術,不是數字的正確性(見設計 doc)。
+     讀 .canary-log.jsonl 的 **append 序**(不 ts-sort:ts 只到秒、同秒會並列),篩 loop==id。
+     tail-K 滑動窗:前面髒輪不影響、只看最後 K 筆;missed/缺 severity 視同未收斂。
+     exit 0=CONVERGED / 1=未收斂(含無記錄=還沒開始)/ 2=真錯誤。
+     天花板:收斂=連 K 輪醒著的審計員沒找到 blocker/major,非完整正確;severity 自報(見設計 doc)。"""
+     import json
+     if light and panel:
+@@ -16738,20 +16807,27 @@ def main():
+     lr.add_argument("--successor", dest="rw_successor", required=True, help="接手的新迴圈編號")
+     lr.add_argument("--note", dest="rw_note", default="", help="一句為什麼判重寫(人裁依據)")
+     ln = lsub.add_parser("next", help="M1包 機械脊椎:帳本吐唯一下一動作(phase/輪數/canary 型別/席數/記帳模板);唯讀指針,不 spawn agent")
+     ln.add_argument("loop_id")
+     ln.add_argument("--tier", dest="next_tier", choices=("light", "standard", "high"),
+                     help="編排者宣告 tier(有帳面定錨時須一致否則 rc2;零記錄必填)")
+     ln.add_argument("--json", action="store_true", dest="next_json", help="機讀輸出")
+     ln.add_argument("--need", type=int, default=2, help="legacy 收斂窗 K(委派 gate 用,預設 2)")
+     ln.add_argument("--spec", dest="gate_spec", help="gate 委派用 spec 檔;缺=判 converged 資訊不足→gate-pending")
+     ln.add_argument("--repo", dest="gate_repo", help="repo root(gate 委派用)")
++    le = lsub.add_parser("escape", help="逃逸帳:迴圈收斂放行後下游抓到可歸因缺陷→記一筆(append-only 不進閘;M1② ground truth 側)")
++    le.add_argument("esc_loop_id", nargs="?", default=None, metavar="loop_id", help="放行該缺陷的迴圈編號(必須存在於審查帳)")
++    le.add_argument("--stage", dest="esc_stage", help="在哪一站發現:實作/code-loop/CI/prod/使用者回報…(自由字串)")
++    le.add_argument("--severity", dest="esc_severity", choices=("minor", "major", "blocker"), help="缺陷嚴重度(同審查帳值域)")
++    le.add_argument("--desc", dest="esc_desc", help="一句描述:什麼缺陷、為何可歸因到該迴圈")
++    le.add_argument("--defect-ref", dest="esc_ref", help="佐證指標(commit/Issue/報告路徑,選配)")
++    le.add_argument("--list", dest="esc_list", action="store_true", help="列全帳(按迴圈分組)")
+     lcs = lsub.add_parser("canary-stats",
+                           help="[d4 讀取面] 跨輪 canary 累積帳:席位×caught/missed×尾端連續 missed;唯讀恆 rc0")
+     lcs.add_argument("loop_id", nargs="?", default=None, help="省略=全 loop 摘要")
+ 
+     lcc = lsub.add_parser("capture-counts",
+                           help="異質 finder 接線:多 --finder 的 finding-key → capture_counts + 殘餘估計(餵 canary record --capture-counts)")
+     lcc.add_argument("--finder", dest="finders", action="append", default=[],
+                      help="一個 finder 找到的 finding-key 逗號串(LLM reviewer / SARIF linter / 測試失敗 / mutation 存活各給一個)")
+     lcc.add_argument("--from-pitfalls", dest="cc_pitfalls",
+                      help="自動收割 pitfalls --diff <range> 命中成確定性 finder(按 source 分組,免手貼)")
+@@ -17360,20 +17436,27 @@ def main():
+         if args.lcmd == "compress":
+             return cmd_loop_compress(args.compress_file, as_json=args.compress_json)
+         if args.lcmd == "verify-progress":
+             return cmd_loop_verify_progress(env, args.vp_loop_id, settle=args.vp_settle,
+                                             as_json=args.vp_json)
+         if args.lcmd == "replay":
+             return cmd_loop_replay(env, args.rp_loop_id, golden=args.rp_golden, freeze=args.rp_freeze,
+                                    spec=args.rp_spec, note=args.rp_note, repo=args.rp_repo)
+         if args.lcmd == "rewrite":
+             return cmd_loop_rewrite(env, args.rw_loop_id, args.rw_successor, args.rw_note)
++        if args.lcmd == "escape":
++            if not args.esc_list and not (args.esc_severity and args.esc_desc):
++                print("擋下:記逃逸要同時給 --severity 與 --desc(或用 --list 看帳)", file=sys.stderr)
++                return 2
++            return cmd_loop_escape(env, loop_id=args.esc_loop_id, stage=args.esc_stage,
++                                   severity=args.esc_severity, desc=args.esc_desc,
++                                   defect_ref=args.esc_ref, list_mode=args.esc_list)
+         if args.lcmd == "next":
+             return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json,
+                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)
+         # capture-counts 已在 vault-free 段提前處理(見上)
+ 
+     if args.cmd == "guard":
+         if args.gcmd == "list":
+             return cmd_guard_list(env, unbound_only=args.unbound)
+         if args.gcmd == "scaffold":
+             return cmd_guard_scaffold(env, args.node, args.invariant, args.method,
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 507f212..601d263 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -23932,12 +23932,42 @@ def t_entry_latch_advisories():
+         buf_b = _io.StringIO()
+         with _ctx.redirect_stdout(buf_b), _ctx.redirect_stderr(_io.StringIO()):
+             rc_b = m.cmd_new(m.Env(v2), "project", "注錯B案_計劃", today="2026-08-30")
+     finally:
+         m._el_near_ratio = _keep_r
+     check("★注錯 B★ 近名比對炸掉:rc0、檔照建、✓ 訊息照印(fail-open 鐵則)",
+           rc_b == 0 and (v2 / "Projects" / "注錯B案_計劃.md").exists() and "✓ new" in buf_b.getvalue(),
+           f"rc {rc_b} out {buf_b.getvalue()[:150]}")
+ 
+ 
++
++def t_loop_escape_ledger():
++    """[逃逸帳原語](spec:Projects/loop數據收集_計劃 M1②;該計劃明文 M1 皆 append 級單 reviewer)
++    紅釘:①未知迴圈擋(拔歸因守衛翻紅)②空 desc 擋 ③記帳後 --list 讀得回。"""
++    import json as _j
++    v = mkvault()
++    spec = v / "Projects" / "esc.md"; spec.write_text("s\n", encoding="utf-8")
++    lid = f"esc-{_M1U}"
++    r = run(v, "loop", "escape", lid, "--stage", "prod", "--severity", "major", "--desc", "x")
++    check("★紅釘:未知迴圈編號擋下(逃逸必須歸因到真實迴圈)★", r.returncode == 2 and "沒有叫" in r.stderr, r.stderr[:200])
++    check("擋下時不落帳", not (v.parent / ".escape-log.jsonl").exists(), "")
++    run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
++        "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec), "--spec", str(spec),
++        "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
++    r2 = run(v, "loop", "escape", lid, "--stage", "prod", "--severity", "major", "--desc", "  ")
++    check("空 desc 擋(沒描述=讀側無從歸因)", r2.returncode == 2, r2.stderr[:200])
++    r3 = run(v, "loop", "escape", lid, "--severity", "blocker", "--desc", "上線後資料損壞", "--stage", "prod",
++             "--defect-ref", "Issues/x", expect_rc=0)
++    check("記帳成功訊息講了記什麼+指路", "逃逸入帳" in r3.stdout and "escape --list" in r3.stdout, r3.stdout[:300])
++    rows = [_j.loads(l) for l in (v.parent / ".escape-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
++    check("帳列欄位齊(ts/loop/stage/severity/desc/defect_ref)",
++          len(rows) == 1 and rows[0]["loop"] == lid and rows[0]["severity"] == "blocker"
++          and rows[0]["stage"] == "prod" and rows[0]["desc"] == "上線後資料損壞"
++          and rows[0]["defect_ref"] == "Issues/x" and rows[0]["ts"][:2] == "20", str(rows))
++    rl = run(v, "loop", "escape", "--list", expect_rc=0)
++    check("--list 讀得回(按迴圈分組+最重等級)", lid in rl.stdout and "blocker" in rl.stdout and "1 筆" in rl.stdout, rl.stdout[:300])
++    r4 = run(v, "loop", "escape", lid, "--desc", "少了 severity")
++    check("缺 --severity 擋(記帳必要欄)", r4.returncode == 2, r4.stderr[:200])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index 5b9c479..355fec1 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -17,20 +17,22 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`;超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。
+ 2. **派審查員**:Agent、sonnet。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。★圖譜鏡頭(2026-08-29 起**每席都附、貼內容不給路徑**)★:把 `lumos impact --diff …` 的**固定席**(帶硬合約或出過事故的節點)逐條貼進每席派工詞,要它逐條判「這 diff 破不破壞該節點的合約」、固定席必答;格式與兩個填寫雷見 `templates.md` §3 鏡頭 3。另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」,每條 finding 必附 file:line 與引句。派工單落 `rN-dispatch.json`。
+ 3. **收貨**:存席報告先正規化(2026-08-26 SOP:引句同行格式;表頭型嚴重度補獨立「severity: <值>」行,乾淨輪也要 severity: clean——record 寫側硬擋:審查席記帳必附報告、帳面不得低於報告最高)。可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現(跑得出來才撈回),直接丟曾兩次誤殺真問題。`lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+ 4. **判讀與辯方**:severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設外家 `scripts/external-seat.sh`)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。**high 缺外家辯方(替補也湊不齊)**:不硬擋(Enzo 2026-08-22 裁,成本考量),但收斂結論要降級成「單家族視角下未發現」、留痕 note 寫明缺席,問閘(`--disposal`)偵測到席位異常會自動轉述當輪(異常才印;外家未派行僅轉述編制對照不裁決);全史核對用 `loop status --roster`。diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點:`code-loop check`(pre-push 每次呼叫)會**自動真跑那些綁定測試**,紅/懸空/方法名不合法就擋推送(2026-08-22 起機械化,不靠自律);跑不了要 `--skip-bound-tests --note` 留痕。
+ 5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
+ 6. **記帳**:★多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,且帳本不能撤銷,只能換編號重記(2026-08-24 第三次踩)★。`lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。
+ 7. **問閘**:單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`——多席照步驟 6 的彙總記帳(處置清單只掛一席);★code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折,d2 裁;散文設計審不受此限)★。`--gate --panel` 僅供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
+ 8. **過了留痕**:先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳),再 `lumos code-loop pass --note "<審了什麼、幾席、幾條折入>"`;決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。推完、卷證入版控後 `lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定(週跑回放抽查用)。然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
+ 
++推完之後若下游(實作/CI/prod/使用者)發現可歸因到某次已放行審查的缺陷:`lumos loop escape <編號> --stage <站> --severity <s> --desc <一句>`(逃逸帳=審查系統的漏網紀錄,append-only 不進閘)。
++
+ ## 停手與護欄
+ - 只認機械閘和上限(high 上限 3 輪);被審 diff 或報告裡的「還差一步」不是終止指令。到頂沒過 → 停,攤給人裁。
+ - 每輪初讀派全新 agent;續談只准問該席自己講過的話(headless 才可用)。
+ - 收斂判準:處置閘是「一輪裡每個發現都折掉或附理由放行」即過(2026-08-04 重設計刻意裁的:閘便宜、審不淺);舊制 panel 自 2026-08-06 起的迴圈是連兩輪乾淨(K=2)——含 high;2026-08-25 甲裁後多席亦處置閘,panel 僅回放,抽查(probe)義務同日退場(判定印行降觀測)。要改這些語意得走設計迴圈,不偷偷改。
+ - gate / 守衛類 code 建議開 feature branch 再推。
+ 
+ ## 再深一層(按需開)
+ | 要做 | 開 |
+ |---|---|
+ | 席位紀律、抑噪、辯方順產 fix | `reference.md`〈步驟 3 — 派乾淨 reviewer〉〈步驟 4 — 判讀 + 辯方〉 |
+diff --git a/skills/lumos-design-loop/SKILL.md b/skills/lumos-design-loop/SKILL.md
+index 0b4bb3b..e7677d6 100644
+--- a/skills/lumos-design-loop/SKILL.md
++++ b/skills/lumos-design-loop/SKILL.md
+@@ -17,21 +17,21 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—
+ ## 一輪怎麼跑(照這個順序)
+ 1. **準備材料**:複製計劃筆記到工作副本 `/tmp/<編號>-rN.md`,`sha256sum <計劃筆記>` 留下這輪的指紋。`wc -l` 超過 1800 行就拆開審(外部研究:材料太多審查員看不完;本專案自己量不到這效應,但照做)。
+ 2. **先機械排乾**(每輪):`lumos refcheck <副本> --repo <根> --json`——引的檔案/行號不存在直接修真檔;`lumos prose-lint <計劃.md>`——中文模糊措辭掃描(只提醒不擋,rc 恆 0);掃出的類別歸編排者排乾,派工詞明寫「此掃描可及類別,席位不得報」;`lumos pitfalls <計劃.md> --check`——沒有「實務隱患」節先補;它反問的每個風險類都要逐類答進去,判「不碰」也要寫「已排除:理由」,不准靜默略過(排除理由也是審查對象)。**首輪再多一步**:派一個便宜 agent 拿固定清單掃①未定義的詞②壞引用③範圍自相矛盾④**機械宣稱驗語意**(spec 每句「某函式/機制會做 X」,開檔讀該段碼驗語意,**不只驗存在**——存在性抓到壞行號、語意誤宣稱要靠這條)。分流:①②③與存在類命中=直接修真檔不算 findings;**語意類命中=修真檔+逐條(含修改前→後對照)寫進 rN-intake.md 留痕;動到「核心裁定」節的=升級為正式 finding 交席位審,前掃不得自行改裁定**。★跑完把 `preflight-4: ran` 頂格寫進 rN-intake.md(宣告行,2026-08-30 intake守衛 d1;處置閘與 doctor [I] 段機械讀它——沒有那行=機器判定沒跑;記帳可帶選配 `--intake`)★
+ 3. **派審查員**:Agent、`model: sonnet`、指向工作副本。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。派工當下把 `{round, seat, lens, materials, auditor}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`,凍結快照存 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
+ 4. **收貨三道(全機械,錨不到的不採信)**。存席報告先做兩個正規化(2026-08-26 起,收貨 SOP——不是 code 裡的既有步驟,漏做的機械後果=記帳時 rc2 擋):引句轉成「引句:「…」」同行格式;表頭型嚴重度(### id / 等級 / 標題)補一行獨立「severity: <值>」,乾淨輪也要一行 severity: clean(record 寫側 2026-08-26 起硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高)。然後:
+    - `lumos quote-check <席報告> --spec <凍結快照>`:引句對不回快照的條目丟掉(比對對象是派工當下的快照,不是現檔)。
+    - `lumos refcheck <席報告> --repo <根>`:報告引的 file:line 要存在。
+    - `lumos seat-check <席報告> --dispatch <rN-dispatch.json>`:派工要查的材料有沒有都碰到。
+    - 三道之外(非取代):編排者對「佐證通道」與錨不到引句做**機械重現**,留痕 `rN-intake.md`(命令+輸出+HIT/MISS;判準與 MISS 處置見 templates.md〈編排者判讀規則〉——此步是人工判讀+機械留痕,不是全機械)。
+ 5. **判讀**:severity 以「照 spec 字面實作會做出錯的行為或漏掉合約」為 major;措辭、文件精度是 minor。席報告帶 blocking 宣告時與 severity 綁定:blocking:否 ↔ minor、blocking:是 ↔ major/blocker,兩欄矛盾=報告退回該席重判(編排者人工核,無機械擋)。**兩層不互改**:blocking 是審查員層宣告,accepted 是編排者處置層裁量——被放行的 major 仍標 blocking:是+附 accept-reason,不回頭改席報告。剝掉審查員誤判要能指出客觀錯在哪,判不準就保留。存活 ≥major 的:有可執行證據且你自己查過 → 直接折;多席獨立一致 → 直接折;只有低共識的才派一個辯方(★預設外家 Codex:`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住;它能開檔查證。`scripts/external-seat.sh` 是 Gemini、看不到 vault,只當 Codex 不可用時的備援,其 ≥major 不算否決票——2026-08-23 實測五條 major 四條沒查證就判★;不給它審查員的結論)去反駁,必須附 file:line 才能降級。
+-6. **折入**:只折存活的真問題進計劃筆記,寫進「審計修正紀錄」。折完 `lumos fold-check <計劃.md>` 看前後矛盾;每折一條「訂正既有規則」的,拿關鍵詞全文 grep 找散落的同句變體一起改;再派一個便宜 agent 只看本輪 diff 核對鏡像段有沒有跟上——**鏡像核對的材料必須含 `governance/review-reports/<編號>/` 席報告目錄,只看計劃筆記查不到外移的細節**。審計修正紀錄寫法(2026-08-25 d4 瘦身,新案適用、舊案不回溯):每輪固定兩行——「rN(日期,席數):N 條/blocking N/一句結論」+指標到席報告目錄;兩行裡的 blocking 數帳上無對應欄位(canary-log 只有席級 severity),來源=席報告總結句;行為斷言必配具體例(輸入→預期),寫不出例=該斷言即 blocking。`git commit`。
++6. **折入**:只折存活的真問題進計劃筆記,寫進「審計修正紀錄」。若這輪是「被圖譜舊裁定擋下/縮案/停案」,裁定文字裡寫 `★圖譜攔截★站:開案前|首輪|第N輪;源:<節點名>`(飛輪攔截帳,週報 grep 用)。折完 `lumos fold-check <計劃.md>` 看前後矛盾;每折一條「訂正既有規則」的,拿關鍵詞全文 grep 找散落的同句變體一起改;再派一個便宜 agent 只看本輪 diff 核對鏡像段有沒有跟上——**鏡像核對的材料必須含 `governance/review-reports/<編號>/` 席報告目錄,只看計劃筆記查不到外移的細節**。審計修正紀錄寫法(2026-08-25 d4 瘦身,新案適用、舊案不回溯):每輪固定兩行——「rN(日期,席數):N 條/blocking N/一句結論」+指標到席報告目錄;兩行裡的 blocking 數帳上無對應欄位(canary-log 只有席級 severity),來源=席報告總結句;行為斷言必配具體例(輸入→預期),寫不出例=該斷言即 blocking。`git commit`。
+ 7. **記帳**(折完才記,指紋要是折入後的版本。★carrier 選席 SOP:記帳前對候選席報告跑 quote-check,選全錨席當 carrier(carrier=記帳載體非證據總集,全輪證據=各席報告 sha 留痕+rN-intake.md)★★記帳型態(2026-08-25 d5):散文設計審=處置帳——**各席一筆留痕**(severity/findings/report/snapshot/spec/reviewed,**不帶三個 set**)+同輪**僅一筆彙總 carrier** 帶 --findings-set/--folded-set/--accepted-set;兩筆都帶處置清單就擋、帳不能撤只能換編號重記(實撞過);「每席各帶一筆 severity 帳」的 panel 型態僅舊迴圈帳面重放存在,新迴圈一律處置帳★):
+    ```
+    lumos canary record none --loop <編號> --round rN --auditor <席> --severity <存活最高> --findings <存活條數> \
+      # ★light 分級不帶 --round(單人不分輪;帶了 `loop status --light` 會拒讀,2026-08-23 踩過)★ \
+      --findings-set <id串> --folded-set <id串> --accepted-set <id串> --accept-reason <id=理由> \
+      --report <rN-席.md> --snapshot <rN-snapshot.md> --spec <計劃.md> --reviewed <sha256> --scope-lines <行數>
+    ```
+    每個發現都要有去向(折掉或放行,放行要理由);blocker 只能折不能放行。順手每條標它在修什麼 `--finding-kind <id>=code|spec|process`(程式缺陷 / 被審文件缺陷 / 流程自己要求的文件)——這是「流程自產工作量」唯一的量法。**折了忘記記帳**(帳上沒這輪、但計劃筆記的審計修正紀錄有)→ 人工補記一筆再繼續,不然這輪等於沒發生。
+ 8. **問閘**:散文設計審(本 skill 的對象)新迴圈一律 `lumos loop status <編號> --disposal --spec <計劃.md> --repo <根>`——單輪全處置即收斂;**輪級規則:同輪任一席 severity=blocker,整輪 accepted 必須為空**(blocker 只能折)。panel 問法(`--gate --panel --min-seats 3`,K=2 連續兩輪乾淨)僅已定錨 panel 帳的舊迴圈用(code-loop 現制亦 --disposal);兩閘互斥,問錯會被擋下並指路。✅ 過 → 出迴圈;⛔ 沒過 → 訊息會講卡在哪一關,回第 1 步。spec 裡還有 `[NEEDS CLARIFICATION]` 視同 blocker。settle 結清模式的迴圈不要用 `loop next`(它認不得 settle 會誤報),直接問 `loop status --settle`。
+ 9. **凍結判定(2026-08-26 起,收工新步驟)**:gate PASS、卷證 commit 後當場 `lumos loop replay <編號> --freeze --spec <計劃.md> --repo <根>` 把判定凍成標準答案(governance/replay/<編號>/verdict.json;週跑會回放抽查,漏凍的它會補+喊)。

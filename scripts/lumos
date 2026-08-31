@@ -5267,7 +5267,7 @@ def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
     _SEV_W = {"minor": 0, "major": 1, "blocker": 2}
     if list_mode:
         if loop_id or stage or severity or desc or defect_ref:
-            print("擋下:--list 是唯讀,不能跟記帳參數混用——照原樣執行你會以為記了其實一筆都沒寫(r1 兩席實測的靜默吞資料)。要記帳就拿掉 --list 重跑", file=sys.stderr)
+            print("擋下:--list 是唯讀,不能跟記帳參數混用——照原樣執行你會以為記了、其實一筆都沒寫。要記帳就拿掉 --list 重跑", file=sys.stderr)
             return 2
         if not log.exists():
             print("逃逸帳是空的:還沒有任何一筆「迴圈放行後下游抓到可歸因缺陷」的紀錄。空≠零逃逸——也可能是沒人記;要記:")
@@ -5313,7 +5313,7 @@ def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
         print("擋下:--severity 必填且只能是 minor|major|blocker(同審查帳值域)", file=sys.stderr)
         return 2
     if not (stage or "").strip():
-        print("擋下:--stage 必填(在哪一站發現:實作/code-loop/CI/prod/使用者回報…)——缺階段的逃逸帳做不了季度分層(r1 外家裁 spec 必備欄)", file=sys.stderr)
+        print("擋下:--stage 必填(在哪一站發現:實作/code-loop/CI/prod/使用者回報…)——缺階段的逃逸帳之後做不了「在哪一站漏的」分層統計", file=sys.stderr)
         return 2
     if not (desc or "").strip():
         print("擋下:--desc 不能空——沒有描述的逃逸帳讀側無從歸因,等於沒記", file=sys.stderr)
@@ -5345,6 +5345,11 @@ def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
            "loop": loop_id, "stage": stage.strip(), "severity": severity, "desc": desc.strip()}
     if defect_ref:
         rec["defect_ref"] = defect_ref
+    if log.is_symlink():
+        # r2 終態席實測:既存 symlink 會繞過建檔保護、共用寫入原語 open('a') 跟隨連結寫進外部檔——
+        # 每次寫前先擋本體(殘餘=判斷與開檔間競態,best-effort 同 _ledger_append 家族誠實降級)
+        print(f"擋下:逃逸帳檔是一個符號連結,不往裡寫(帳本必須是普通檔案):\n    {log}", file=sys.stderr)
+        return 2
     if not log.exists():
         try:
             os.close(os.open(str(log), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644))
@@ -5353,7 +5358,7 @@ def cmd_loop_escape(env, loop_id=None, stage=None, severity=None, desc=None,
         except OSError as e:
             print(f"擋下:建不了逃逸帳檔({e}):\n    {log}", file=sys.stderr)
             return 2
-    rc_w = _jsonl_append_verified(log, rec, "token", rec["token"])   # r1 兩席同抓:裸 open('a') 是劣化第二輪;此原語=OSError 擋下+讀回自驗(canary 家族同款)
+    rc_w = _jsonl_append_verified(log, rec, "token", rec["token"])   # 共用硬化原語(OSError 擋下+讀回自驗);已知天花板=撞鍵時讀回比對可能對到舊筆(canary 全家族同款,hex4 空間機率極低)
     if rc_w:
         return rc_w
     print(f"✓ 逃逸入帳:迴圈 {loop_id} 放行的東西在「{rec['stage']}」被抓到 {severity} 級缺陷。")
