@@ -24040,10 +24040,11 @@ def t_metric_criteria_drift_guard():
     # ② 引用點漂移(執行面掃描;governance/review-reports 與 docs/*-knowledge 屬允許引用不在掃描面)
     ALLOWED = {"scripts/lumos", "scripts/test_lumos.py"}
     hits = set()
-    scan = [q for q in (root / "scripts").rglob("*")
-            if q.is_file() and "__pycache__" not in q.parts and q.suffix != ".pyc"]   # 遞迴含 hooks/templates(code-r1 H-3);排編譯副本
+    def _scannable(q):
+        return q.is_file() and "__pycache__" not in q.parts and q.suffix != ".pyc"   # 兩掃描面共用(code-r2:漏掛=同支測試兩套邏輯)
+    scan = [q for q in (root / "scripts").rglob("*") if _scannable(q)]   # 遞迴含 hooks/templates(code-r1 H-3)
     al = root / "governance" / "autonomous_loop"
-    scan += [q for q in al.rglob("*") if q.is_file()] if al.exists() else []
+    scan += [q for q in al.rglob("*") if _scannable(q)] if al.exists() else []
     for q in scan:
         try:
             body = q.read_text(encoding="utf-8", errors="ignore")
