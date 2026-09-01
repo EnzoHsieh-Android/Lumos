@@ -5976,6 +5976,64 @@ def _el_node_meta(env, rel):
     return st, dec
 
 
+_GIST_LABEL_RE = re.compile(r"^(FLOW|KEY|FLAG|DEP|TEST|DECISION):\s*")
+_GIST_BARE_RE = re.compile(r"^(FLOW|KEY|FLAG|DEP|TEST|DECISION):\s*[A-Z/\u2027\u3001 ,]*$")
+_GIST_SENT_RE = re.compile(r"^.{0,79}?[\u3002!?;\uff1b]")
+
+
+def _gist_cut(s):
+    """L0 截斷(Projects/一句話層供糧_計劃 T1,r1 M-5/E-2 折入):≤80 直取;
+    >80 先取首句(句末符 。!?;;為界,首句 ≤80 才用);仍超 → 硬截 80+…。
+    先 _esc_clean 消毒(控制碼換空格,同逃逸帳載重合約),大 limit=只消毒不在這層截。"""
+    s = _esc_clean(nfc(str(s)).strip(), 100000)
+    if len(s) <= 80:
+        return s
+    m = _GIST_SENT_RE.match(s)
+    if m:
+        return m.group(0)
+    return s[:80] + "…"
+
+
+def _gist(env, rel):
+    """一句話層 L0(Projects/一句話層供糧_計劃 T1,2026-09-01,設計審 一句話層供糧-v2 r1):
+    ①正文(=split_frontmatter 之後,r1 M-2 行為級定義:兩獨立席讀成「檔案前20行」
+      會讓命中 84/390→43、Systems 歸零,故起算點寫死)前 20 行首個「> 白話:」行;
+    ②無 → summary 第一個內容行——跳過裸分類標籤行(FLAG:DECISION 這型,全庫 40% 的
+      summary 首行,r1 C-1)、剝 FLOW:/KEY: 等標籤前綴;
+    ③都無 → 空字串(誠實缺席,絕不造假摘要——合約候選)。恆回 str;任何例外回空(fail-open)。"""
+    try:
+        n = env.notes.get(rel)
+        if n is None:
+            return ""
+        try:
+            text = (env.vault / rel).read_text(encoding="utf-8-sig")
+        except Exception:
+            text = ""
+        if text:
+            _fm, body = split_frontmatter(text)
+            for raw in body.split("\n")[:20]:
+                s = raw.strip()
+                if s.startswith("> 白話:"):
+                    got = s[len("> 白話:"):].strip()
+                    if got:
+                        return _gist_cut(got)
+                    break
+        summ = n.fields.get("summary") if isinstance(n.fields, dict) else None
+        if isinstance(summ, str):
+            for raw in summ.split("\n"):
+                s = raw.strip()
+                if s[:2] in ("- ", "* "):
+                    s = s[2:].strip()
+                if not s or _GIST_BARE_RE.match(s):
+                    continue
+                s = _GIST_LABEL_RE.sub("", s, count=1).strip()
+                if s:
+                    return _gist_cut(s)
+        return ""
+    except Exception:
+        return ""
+
+
 def _el_related_nodes(env, source, top=5):
     """入口栓 A 的召回+排序(spec v3):OR 候選+_rank_score_candidates,★不走 cmd_search 頂層★
     (片語階段單命中即 break 會把 0.90 近名整篇藏掉——r1 邊界席拿事故本尊實測,EL-4/EL-11)。
@@ -6017,7 +6075,8 @@ def _el_related_nodes(env, source, top=5):
         st, dec = _el_node_meta(env, rel)
         stem = Path(rel).stem
         nodes.append({"name": stem, "status": st, "decisions": dec,
-                      "near_name": _el_near_name(stem, src_norm)})
+                      "near_name": _el_near_name(stem, src_norm),
+                      "gist": _gist(env, rel)})
     return {"query": query, "queried": True, "nodes": nodes}
 
 
@@ -6221,7 +6280,8 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                         print(f"  圖譜既有節點(查:{_rn['query']}):")
                         for _nd in _rn["nodes"]:
                             print(f"    - {_nd['name']} [{_nd['status'] or '?'}] 決策 {_nd['decisions']} 條"
-                                  + (" ★近名" if _nd["near_name"] else ""))
+                                  + (" ★近名" if _nd["near_name"] else "")
+                                  + (f" — {_nd['gist']}" if _nd.get("gist") else ""))
                         print("    先讀再開;近名者尤其要讀它的 decisions")
             except Exception:
                 pass

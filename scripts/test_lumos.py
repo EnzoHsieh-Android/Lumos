@@ -23811,7 +23811,7 @@ def t_entry_latch_advisories():
     rn = d.get("related_nodes")
     check("A --json:related_nodes 形狀=EL-16 合約(queried/nodes 四鍵)",
           isinstance(rn, dict) and rn.get("queried") is True and rn.get("nodes")
-          and all(set(n) == {"name", "status", "decisions", "near_name"} for n in rn["nodes"]), str(rn)[:300])
+          and all(set(n) == {"name", "status", "decisions", "near_name", "gist"} for n in rn["nodes"]), str(rn)[:300])
     names = [n["name"] for n in (rn or {}).get("nodes", [])]
     check("★紅釘 EL-4:片語單命中不得藏無空白近名★(帶空白變體在場,superseded 近名照樣上榜)",
           "impact鏡頭機械化_計劃" in names, str(names))
@@ -24122,6 +24122,73 @@ def t_doctor_revisit_reminder():
     check("★紅釘⑦(外家複判條件):連喊 ≥14 天→nags 升級清單列出該篇(牙有電)★",
           rn.returncode == 1 and "check-revisit" in rn.stdout and "回訪甲_計劃" in rn.stdout, rn.stdout[:500])
 
+
+
+
+def t_gist_layer():
+    """[一句話層供糧](spec:Projects/一句話層供糧_計劃 T1/T2,設計審 一句話層供糧-v2 r1 GATE PASS 2026-09-01)
+    L0 取層:①正文前20行白話行 ②summary 內容行(跳裸標籤/剝前綴) ③誠實空。
+    紅釘:①M-2 起算點=frontmatter 之後(改成檔案頭起算→長 frontmatter fixture 翻紅)
+    ②C-1 裸 FLAG 標籤必跳(拔過濾→拿到 FLAG:DECISION 翻紅)③M-5 首句優先截斷。"""
+    import json as _j
+    v = mkvault()
+    m = _load_lumos_inproc()
+    # 佈景:長 frontmatter(summary 塞 22 行)+白話行在正文第 3 行——檔案頭算前 20 行絕對掃不到
+    pad = "\n".join(f"  行{i} 填充敘述佔位" for i in range(22))
+    write(v, "Systems/齒輪箱.md",
+          "type: system\ntags:\n  - type/system\nsummary: |\n" + pad,
+          "# 齒輪箱\n\n> 白話: 齒輪箱把轉速降下來換扭力,壞了整台車不會動。\n")
+    env = m.Env(v)
+    g = m._gist(env, "Systems/齒輪箱.md")
+    check("★紅釘 M-2:正文起算——frontmatter 22 行照樣命中正文第 3 行白話行★(改檔案頭起算翻紅)",
+          g == "齒輪箱把轉速降下來換扭力,壞了整台車不會動。", repr(g))
+    # 白話行超出正文 20 行窗→不取,退 summary
+    write(v, "Systems/深埋白話.md",
+          "type: system\ntags:\n  - type/system\nsummary: |\n  KEY:備援句在摘要",
+          "# 深埋白話\n" + "\n".join(f"填充第 {i} 行" for i in range(24)) + "\n> 白話: 掃不到我。\n")
+    g2 = m._gist(m.Env(v), "Systems/深埋白話.md")
+    check("窗外白話行不取→回退 summary(20 行窗寫死)", g2 == "備援句在摘要", repr(g2))
+    # ★紅釘 C-1:裸 FLAG 標籤行必跳,取下一內容行且剝前綴
+    write(v, "Issues/標籤殼.md",
+          "type: issue\ntags:\n  - type/issue\nsummary: |\n  FLAG:DECISION\n  KEY:真正的內容句在第二行",
+          "# 標籤殼\n無白話行。\n")
+    g3 = m._gist(m.Env(v), "Issues/標籤殼.md")
+    check("★紅釘 C-1:裸 FLAG:DECISION 跳過、KEY: 前綴剝掉★(拔過濾翻紅)",
+          g3 == "真正的內容句在第二行", repr(g3))
+    # ★紅釘 M-5:首句優先——>80 且含句號→取首句;無句末符→硬截 80+…
+    long_sent = "這是首句剛好講完一件事所以在這裡收尾。" + "後面還拖了一大串不該進 L0 的細節" * 6
+    write(v, "Systems/長句首.md", "type: system\ntags:\n  - type/system",
+          f"# 長句首\n> 白話: {long_sent}\n")
+    g4 = m._gist(m.Env(v), "Systems/長句首.md")
+    check("★紅釘 M-5:>80 先取首句(句號收尾、不硬截)★",
+          g4 == "這是首句剛好講完一件事所以在這裡收尾。", repr(g4))
+    no_sent = "無句末符一路到底" * 15
+    write(v, "Systems/無句界.md", "type: system\ntags:\n  - type/system",
+          f"# 無句界\n> 白話: {no_sent}\n")
+    g5 = m._gist(m.Env(v), "Systems/無句界.md")
+    check("M-5:無句末符→硬截 80+…", g5 == no_sent[:80] + "…" and len(g5) == 81, repr(g5[:30]))
+    # 控制碼消毒(E5/escape 同一課:輸出級不得帶 ESC)
+    write(v, "Systems/髒白話.md", "type: system\ntags:\n  - type/system",
+          "# 髒白話\n> 白話: 前段\x1b[31m後段\n")
+    g6 = m._gist(m.Env(v), "Systems/髒白話.md")
+    check("控制碼換空格(_esc_clean 復用)", "\x1b" not in g6 and "前段" in g6 and "後段" in g6, repr(g6))
+    # 誠實缺席:無白話無 summary→空字串(恆 str 非 None)
+    write(v, "Systems/兩頭空.md", "type: system\ntags:\n  - type/system", "# 兩頭空\n就一行敘述。\n")
+    g7 = m._gist(m.Env(v), "Systems/兩頭空.md")
+    check("誠實缺席:恆回空字串(絕不 None/不造假)", g7 == "" and isinstance(g7, str), repr(g7))
+    # T2 出口:JSON gist 鍵恆 str;文字行「— <L0>」恆最後、空不加
+    write(v, "Projects/齒輪傳動_計劃.md",
+          "type: project\nstatus: doing\ntags:\n  - type/project\n  - status/doing",
+          "# 齒輪傳動_計劃\n> 白話: 傳動計劃一句話。\n齒輪 傳動 內文。\n")
+    r = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", "--json", expect_rc=1)
+    rn = _j.loads(r.stdout).get("related_nodes") or {}
+    hits = {n["name"]: n for n in rn.get("nodes", [])}
+    check("T2 JSON:gist 鍵恆 str(EL-16 合約補欄)",
+          hits and all(isinstance(n.get("gist"), str) for n in hits.values()), str(hits)[:300])
+    check("T2 JSON:有白話者 gist=白話行", hits.get("齒輪傳動_計劃", {}).get("gist") == "傳動計劃一句話。", str(hits)[:300])
+    rt = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", expect_rc=1)
+    check("T2 文字:「 — <L0>」上行且空 gist 不加(A-1 gist 恆最後)",
+          " — 傳動計劃一句話。" in rt.stdout, rt.stdout[-500:])
 
 if __name__ == "__main__":
     sys.exit(main())
