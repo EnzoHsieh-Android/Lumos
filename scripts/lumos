@@ -5976,9 +5976,10 @@ def _el_node_meta(env, rel):
     return st, dec
 
 
+_GIST_BAI_RE = re.compile(r"^>\s*白話[:\uff1a]\s*(.*)$")   # code-r1 B-1:全形冒號 2 篇實存
 _GIST_LABEL_RE = re.compile(r"^(FLOW|KEY|FLAG|DEP|TEST|DECISION):\s*")
 _GIST_BARE_RE = re.compile(r"^(FLOW|KEY|FLAG|DEP|TEST|DECISION):\s*[A-Z/\u2027\u3001 ,]*$")
-_GIST_SENT_RE = re.compile(r"^.{0,79}?[\u3002!?;\uff1b]")
+_GIST_SENT_RE = re.compile(r"^.{0,79}?[\u3002!?;\uff1b\uff01\uff1f]")
 
 
 def _gist_cut(s):
@@ -6011,10 +6012,17 @@ def _gist(env, rel):
             text = ""
         if text:
             _fm, body = split_frontmatter(text)
+            in_fence = False
             for raw in body.split("\n")[:20]:
                 s = raw.strip()
-                if s.startswith("> 白話:"):
-                    got = s[len("> 白話:"):].strip()
+                if s.startswith("```"):
+                    in_fence = not in_fence   # code-r1 B-3:圍欄內字面示例不是真標記
+                    continue
+                if in_fence:
+                    continue
+                mbai = _GIST_BAI_RE.match(s)
+                if mbai:
+                    got = mbai.group(1).strip()
                     if got:
                         return _gist_cut(got)
                     break
@@ -6022,7 +6030,7 @@ def _gist(env, rel):
         if isinstance(summ, str):
             for raw in summ.split("\n"):
                 s = raw.strip()
-                if s[:2] in ("- ", "* "):
+                if s[:1] in ("-", "*") and s[1:2] in (" ", "\t"):   # code-r1 B-5:tab 項目符號也剝
                     s = s[2:].strip()
                 if not s or _GIST_BARE_RE.match(s):
                     continue
@@ -6039,7 +6047,7 @@ def _el_related_nodes(env, source, top=5):
     (片語階段單命中即 break 會把 0.90 近名整篇藏掉——r1 邊界席拿事故本尊實測,EL-4/EL-11)。
     候選收集與 cmd_search 主迴圈同用 _search_visible_lines/nfc 原語,不另寫剝碼/切詞第二份。
     ★superseded 必納入★:「已裁不做」正是最值錢的命中(EL-10),輸出標 status 由讀者自判。
-    回輸出合約 dict(EL-16):{"query","queried","nodes":[{"name","status","decisions","near_name"}]};
+    回輸出合約 dict(EL-16):{"query","queried","nodes":[{"name","status","decisions","near_name","gist"}]};
     分支①未查:queried=false ②查了零候選:nodes=[](誠實零行只掛零候選這個機械事件,分數門檻已裁刪 EL-14)。
     任何內部例外由呼叫端 fail-open(EL-5)。"""
     tokens, has_cjk = _el_query_tokens(source)

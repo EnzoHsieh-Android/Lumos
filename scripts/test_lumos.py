@@ -24189,6 +24189,25 @@ def t_gist_layer():
     rt = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", expect_rc=1)
     check("T2 文字:「 — <L0>」上行且空 gist 不加(A-1 gist 恆最後)",
           " — 傳動計劃一句話。" in rt.stdout, rt.stdout[-500:])
+    # ★code-r1 修正四釘(B-1/B-2/B-3/B-5,先紅後綠)★
+    write(v, "Systems/全形冒號.md", "type: system\ntags:\n  - type/system",
+          "# 全形冒號\n> 白話\uff1a全形冒號版也是真白話行。\n")
+    checkg = lambda rel: m._gist(m.Env(v), rel)
+    check("★B-1:全形冒號「> 白話:」也命中(2 篇實存)★",
+          checkg("Systems/全形冒號.md") == "全形冒號版也是真白話行。", repr(checkg("Systems/全形冒號.md")))
+    fw = "首句以全形驚嘆號收尾算句界\uff01" + "尾巴不該進來" * 15   # 總長>80 才走截斷分支
+    write(v, "Systems/全形句界.md", "type: system\ntags:\n  - type/system", f"# 全形句界\n> 白話: {fw}\n")
+    check("★B-2:全形!?也是句末符(>80 取首句不硬截)★",
+          checkg("Systems/全形句界.md") == "首句以全形驚嘆號收尾算句界\uff01", repr(checkg("Systems/全形句界.md")))
+    write(v, "Systems/圍欄假話.md", "type: system\ntags:\n  - type/system",
+          "# 圍欄假話\n```\n> 白話: 這是程式碼示例不是真標記。\n```\n> 白話: 圍欄外這句才是真的。\n")
+    check("★B-3:fenced 圍欄內的字面白話行不吃,取圍欄外真行★",
+          checkg("Systems/圍欄假話.md") == "圍欄外這句才是真的。", repr(checkg("Systems/圍欄假話.md")))
+    write(v, "Issues/tab項目.md",
+          "type: issue\ntags:\n  - type/issue\nsummary: |\n  FLAG:DECISION\n  -\tKEY:tab 分隔的內容行",
+          "# tab項目\n無白話。\n")
+    check("★B-5:dash+tab 項目符號也剝掉★",
+          checkg("Issues/tab項目.md") == "tab 分隔的內容行", repr(checkg("Issues/tab項目.md")))
 
 if __name__ == "__main__":
     sys.exit(main())

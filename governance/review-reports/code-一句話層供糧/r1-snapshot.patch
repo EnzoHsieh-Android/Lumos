@@ -1,0 +1,265 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 90359de..0a3f259 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -5969,20 +5969,78 @@ def _el_node_meta(env, rel):
+     if n is None or not isinstance(n.fields, dict):
+         return None, 0
+     st = str(n.fields.get("status") or "").strip() or None
+     try:
+         dec = len(parse_decisions(n.fm_lines))
+     except Exception:
+         dec = 0
+     return st, dec
+ 
+ 
++_GIST_LABEL_RE = re.compile(r"^(FLOW|KEY|FLAG|DEP|TEST|DECISION):\s*")
++_GIST_BARE_RE = re.compile(r"^(FLOW|KEY|FLAG|DEP|TEST|DECISION):\s*[A-Z/\u2027\u3001 ,]*$")
++_GIST_SENT_RE = re.compile(r"^.{0,79}?[\u3002!?;\uff1b]")
++
++
++def _gist_cut(s):
++    """L0 截斷(Projects/一句話層供糧_計劃 T1,r1 M-5/E-2 折入):≤80 直取;
++    >80 先取首句(句末符 。!?;;為界,首句 ≤80 才用);仍超 → 硬截 80+…。
++    先 _esc_clean 消毒(控制碼換空格,同逃逸帳載重合約),大 limit=只消毒不在這層截。"""
++    s = _esc_clean(nfc(str(s)).strip(), 100000)
++    if len(s) <= 80:
++        return s
++    m = _GIST_SENT_RE.match(s)
++    if m:
++        return m.group(0)
++    return s[:80] + "…"
++
++
++def _gist(env, rel):
++    """一句話層 L0(Projects/一句話層供糧_計劃 T1,2026-09-01,設計審 一句話層供糧-v2 r1):
++    ①正文(=split_frontmatter 之後,r1 M-2 行為級定義:兩獨立席讀成「檔案前20行」
++      會讓命中 84/390→43、Systems 歸零,故起算點寫死)前 20 行首個「> 白話:」行;
++    ②無 → summary 第一個內容行——跳過裸分類標籤行(FLAG:DECISION 這型,全庫 40% 的
++      summary 首行,r1 C-1)、剝 FLOW:/KEY: 等標籤前綴;
++    ③都無 → 空字串(誠實缺席,絕不造假摘要——合約候選)。恆回 str;任何例外回空(fail-open)。"""
++    try:
++        n = env.notes.get(rel)
++        if n is None:
++            return ""
++        try:
++            text = (env.vault / rel).read_text(encoding="utf-8-sig")
++        except Exception:
++            text = ""
++        if text:
++            _fm, body = split_frontmatter(text)
++            for raw in body.split("\n")[:20]:
++                s = raw.strip()
++                if s.startswith("> 白話:"):
++                    got = s[len("> 白話:"):].strip()
++                    if got:
++                        return _gist_cut(got)
++                    break
++        summ = n.fields.get("summary") if isinstance(n.fields, dict) else None
++        if isinstance(summ, str):
++            for raw in summ.split("\n"):
++                s = raw.strip()
++                if s[:2] in ("- ", "* "):
++                    s = s[2:].strip()
++                if not s or _GIST_BARE_RE.match(s):
++                    continue
++                s = _GIST_LABEL_RE.sub("", s, count=1).strip()
++                if s:
++                    return _gist_cut(s)
++        return ""
++    except Exception:
++        return ""
++
++
+ def _el_related_nodes(env, source, top=5):
+     """入口栓 A 的召回+排序(spec v3):OR 候選+_rank_score_candidates,★不走 cmd_search 頂層★
+     (片語階段單命中即 break 會把 0.90 近名整篇藏掉——r1 邊界席拿事故本尊實測,EL-4/EL-11)。
+     候選收集與 cmd_search 主迴圈同用 _search_visible_lines/nfc 原語,不另寫剝碼/切詞第二份。
+     ★superseded 必納入★:「已裁不做」正是最值錢的命中(EL-10),輸出標 status 由讀者自判。
+     回輸出合約 dict(EL-16):{"query","queried","nodes":[{"name","status","decisions","near_name"}]};
+     分支①未查:queried=false ②查了零候選:nodes=[](誠實零行只掛零候選這個機械事件,分數門檻已裁刪 EL-14)。
+     任何內部例外由呼叫端 fail-open(EL-5)。"""
+     tokens, has_cjk = _el_query_tokens(source)
+     if len(tokens) <= 1 and not has_cjk:
+@@ -6010,21 +6068,22 @@ def _el_related_nodes(env, source, top=5):
+                 break
+     if not cands:
+         return {"query": query, "queried": True, "nodes": []}
+     src_norm = str(source)   # 呼叫端已是 stem;再 .stem 會把 v1.1轉正 截成 v1(r1 正確性席 C-2)
+     scored = _rank_score_candidates(env, query, cands)[:top]
+     nodes = []
+     for rel, _score, _hits in scored:
+         st, dec = _el_node_meta(env, rel)
+         stem = Path(rel).stem
+         nodes.append({"name": stem, "status": st, "decisions": dec,
+-                      "near_name": _el_near_name(stem, src_norm)})
++                      "near_name": _el_near_name(stem, src_norm),
++                      "gist": _gist(env, rel)})
+     return {"query": query, "queried": True, "nodes": nodes}
+ 
+ 
+ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None):
+     """M1包 #1(loop機械脊椎M1包_計劃):帳本吐唯一下一動作。唯讀指針——lumos 不 spawn agent,
+     編排仍是 Claude(Systems/design-loop 分工)。phase 五值:escalate/gate-pending/converged/
+     cap-reached/plant-canary;判定優先序=escalate→gate-pending(資訊不足,先於 cap)→converged
+     (僅 full-basis)→cap-reached→plant-canary。converged=rc0/其餘 phase=rc1/錯誤=rc2。
+     tier 定錨優先:帳面首個帶 tier 記錄定錨;僅無定錨舊帳按格式推導;零記錄 rc2 要 --tier。"""
+     import json as _json
+@@ -6214,21 +6273,22 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+                             print(f"  圖譜:編號主題訊號不足(清洗後只剩 {' '.join(_lt)}),沒自動查;要查自己跑:")
+                             print(f"      lumos search \"{' '.join(_lt)}\"")
+                         else:
+                             print("  圖譜:編號無主題訊號,未查圖譜(帶 --spec <計劃筆記> 可用計劃檔名查)")
+                     elif not _rn["nodes"]:
+                         print(f"  圖譜:查過「{_rn['query']}」,圖譜這主題無既有節點")
+                     else:
+                         print(f"  圖譜既有節點(查:{_rn['query']}):")
+                         for _nd in _rn["nodes"]:
+                             print(f"    - {_nd['name']} [{_nd['status'] or '?'}] 決策 {_nd['decisions']} 條"
+-                                  + (" ★近名" if _nd["near_name"] else ""))
++                                  + (" ★近名" if _nd["near_name"] else "")
++                                  + (f" — {_nd['gist']}" if _nd.get("gist") else ""))
+                         print("    先讀再開;近名者尤其要讀它的 decisions")
+             except Exception:
+                 pass
+         return 0 if phase == "converged" else 1
+ 
+     # ⓪ escalate:light ratchet 永久態最先短路
+     if light and any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker")
+                      for r in rounds):
+         return emit("escalate", {"note": "這個編號曾抓到 major 以上的問題,light 最寬鬆的規則從此失效——停掉這個編號,開新的(原編號加 -std)換嚴格規則接著審"})
+     if not rounds:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 54a6e1d..0fe8610 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -23804,21 +23804,21 @@ def t_entry_latch_advisories():
+           "  - content: 停案二裁\n    id: d2\n    decided: 2026-08-03",
+           "# impact鏡頭機械化_計劃\n無空白串 impact鏡頭機械化 的內文。\n")
+     lid = f"impact-鏡頭機械化{_M1U}"
+     r = run(v, "loop", "next", lid, "--tier", "standard", "--json", expect_rc=1)
+     d = _j.loads(r.stdout)
+     check("★前置★ 現場成立:首輪 plant-canary(rc=1 載重語意未被 advisory 改動)",
+           d["phase"] == "plant-canary" and d["round"] == 1, r.stdout[:200])
+     rn = d.get("related_nodes")
+     check("A --json:related_nodes 形狀=EL-16 合約(queried/nodes 四鍵)",
+           isinstance(rn, dict) and rn.get("queried") is True and rn.get("nodes")
+-          and all(set(n) == {"name", "status", "decisions", "near_name"} for n in rn["nodes"]), str(rn)[:300])
++          and all(set(n) == {"name", "status", "decisions", "near_name", "gist"} for n in rn["nodes"]), str(rn)[:300])
+     names = [n["name"] for n in (rn or {}).get("nodes", [])]
+     check("★紅釘 EL-4:片語單命中不得藏無空白近名★(帶空白變體在場,superseded 近名照樣上榜)",
+           "impact鏡頭機械化_計劃" in names, str(names))
+     hidden = next((n for n in (rn or {}).get("nodes", []) if n["name"] == "impact鏡頭機械化_計劃"), {})
+     check("★EL-10:superseded 納入且標 status;決策數機械數=2★",
+           hidden.get("status") == "superseded" and hidden.get("decisions") == 2, str(hidden))
+     check("EL-16:★近名 判準沿用 B(difflib ≥0.6)", hidden.get("near_name") is True, str(hidden))
+     rt = run(v, "loop", "next", lid, "--tier", "standard", expect_rc=1)
+     check("A 文字模式:專屬多行段+指路行(EL-1 不塞五鍵白名單)",
+           "圖譜既有節點" in rt.stdout and "先讀再開" in rt.stdout, rt.stdout[-400:])
+@@ -24116,12 +24116,79 @@ def t_doctor_revisit_reminder():
+     rows = gl.read_text(encoding="utf-8").splitlines()
+     with open(gl, "w", encoding="utf-8") as f:
+         f.write(_j.dumps({"ts": first, "commit": "x", "gate": "check-revisit", "kind": "warned",
+                           "hard": False, "nodes": ["回訪甲_計劃"], "note": "seed"}, ensure_ascii=False) + "\n")
+         f.write("\n".join(rows) + "\n")
+     rn = run(v, "gov", "--nags", "14")
+     check("★紅釘⑦(外家複判條件):連喊 ≥14 天→nags 升級清單列出該篇(牙有電)★",
+           rn.returncode == 1 and "check-revisit" in rn.stdout and "回訪甲_計劃" in rn.stdout, rn.stdout[:500])
+ 
+ 
++
++
++def t_gist_layer():
++    """[一句話層供糧](spec:Projects/一句話層供糧_計劃 T1/T2,設計審 一句話層供糧-v2 r1 GATE PASS 2026-09-01)
++    L0 取層:①正文前20行白話行 ②summary 內容行(跳裸標籤/剝前綴) ③誠實空。
++    紅釘:①M-2 起算點=frontmatter 之後(改成檔案頭起算→長 frontmatter fixture 翻紅)
++    ②C-1 裸 FLAG 標籤必跳(拔過濾→拿到 FLAG:DECISION 翻紅)③M-5 首句優先截斷。"""
++    import json as _j
++    v = mkvault()
++    m = _load_lumos_inproc()
++    # 佈景:長 frontmatter(summary 塞 22 行)+白話行在正文第 3 行——檔案頭算前 20 行絕對掃不到
++    pad = "\n".join(f"  行{i} 填充敘述佔位" for i in range(22))
++    write(v, "Systems/齒輪箱.md",
++          "type: system\ntags:\n  - type/system\nsummary: |\n" + pad,
++          "# 齒輪箱\n\n> 白話: 齒輪箱把轉速降下來換扭力,壞了整台車不會動。\n")
++    env = m.Env(v)
++    g = m._gist(env, "Systems/齒輪箱.md")
++    check("★紅釘 M-2:正文起算——frontmatter 22 行照樣命中正文第 3 行白話行★(改檔案頭起算翻紅)",
++          g == "齒輪箱把轉速降下來換扭力,壞了整台車不會動。", repr(g))
++    # 白話行超出正文 20 行窗→不取,退 summary
++    write(v, "Systems/深埋白話.md",
++          "type: system\ntags:\n  - type/system\nsummary: |\n  KEY:備援句在摘要",
++          "# 深埋白話\n" + "\n".join(f"填充第 {i} 行" for i in range(24)) + "\n> 白話: 掃不到我。\n")
++    g2 = m._gist(m.Env(v), "Systems/深埋白話.md")
++    check("窗外白話行不取→回退 summary(20 行窗寫死)", g2 == "備援句在摘要", repr(g2))
++    # ★紅釘 C-1:裸 FLAG 標籤行必跳,取下一內容行且剝前綴
++    write(v, "Issues/標籤殼.md",
++          "type: issue\ntags:\n  - type/issue\nsummary: |\n  FLAG:DECISION\n  KEY:真正的內容句在第二行",
++          "# 標籤殼\n無白話行。\n")
++    g3 = m._gist(m.Env(v), "Issues/標籤殼.md")
++    check("★紅釘 C-1:裸 FLAG:DECISION 跳過、KEY: 前綴剝掉★(拔過濾翻紅)",
++          g3 == "真正的內容句在第二行", repr(g3))
++    # ★紅釘 M-5:首句優先——>80 且含句號→取首句;無句末符→硬截 80+…
++    long_sent = "這是首句剛好講完一件事所以在這裡收尾。" + "後面還拖了一大串不該進 L0 的細節" * 6
++    write(v, "Systems/長句首.md", "type: system\ntags:\n  - type/system",
++          f"# 長句首\n> 白話: {long_sent}\n")
++    g4 = m._gist(m.Env(v), "Systems/長句首.md")
++    check("★紅釘 M-5:>80 先取首句(句號收尾、不硬截)★",
++          g4 == "這是首句剛好講完一件事所以在這裡收尾。", repr(g4))
++    no_sent = "無句末符一路到底" * 15
++    write(v, "Systems/無句界.md", "type: system\ntags:\n  - type/system",
++          f"# 無句界\n> 白話: {no_sent}\n")
++    g5 = m._gist(m.Env(v), "Systems/無句界.md")
++    check("M-5:無句末符→硬截 80+…", g5 == no_sent[:80] + "…" and len(g5) == 81, repr(g5[:30]))
++    # 控制碼消毒(E5/escape 同一課:輸出級不得帶 ESC)
++    write(v, "Systems/髒白話.md", "type: system\ntags:\n  - type/system",
++          "# 髒白話\n> 白話: 前段\x1b[31m後段\n")
++    g6 = m._gist(m.Env(v), "Systems/髒白話.md")
++    check("控制碼換空格(_esc_clean 復用)", "\x1b" not in g6 and "前段" in g6 and "後段" in g6, repr(g6))
++    # 誠實缺席:無白話無 summary→空字串(恆 str 非 None)
++    write(v, "Systems/兩頭空.md", "type: system\ntags:\n  - type/system", "# 兩頭空\n就一行敘述。\n")
++    g7 = m._gist(m.Env(v), "Systems/兩頭空.md")
++    check("誠實缺席:恆回空字串(絕不 None/不造假)", g7 == "" and isinstance(g7, str), repr(g7))
++    # T2 出口:JSON gist 鍵恆 str;文字行「— <L0>」恆最後、空不加
++    write(v, "Projects/齒輪傳動_計劃.md",
++          "type: project\nstatus: doing\ntags:\n  - type/project\n  - status/doing",
++          "# 齒輪傳動_計劃\n> 白話: 傳動計劃一句話。\n齒輪 傳動 內文。\n")
++    r = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", "--json", expect_rc=1)
++    rn = _j.loads(r.stdout).get("related_nodes") or {}
++    hits = {n["name"]: n for n in rn.get("nodes", [])}
++    check("T2 JSON:gist 鍵恆 str(EL-16 合約補欄)",
++          hits and all(isinstance(n.get("gist"), str) for n in hits.values()), str(hits)[:300])
++    check("T2 JSON:有白話者 gist=白話行", hits.get("齒輪傳動_計劃", {}).get("gist") == "傳動計劃一句話。", str(hits)[:300])
++    rt = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", expect_rc=1)
++    check("T2 文字:「 — <L0>」上行且空 gist 不加(A-1 gist 恆最後)",
++          " — 傳動計劃一句話。" in rt.stdout, rt.stdout[-500:])
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index 5231430..03e1610 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -9,21 +9,21 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
+ 指令速查:`lumos-project-notes` 的 `commands/06-代碼審與推送.md`。派工 prompt 與席位紀律見 `reference.md`。
+ 
+ ## 什麼時候用
+ - `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一個審查員走循序(`--tier standard`,上限 3 輪);`light`/瑣碎改動可跳(commit 註明)。
+ - pre-push 和 CI 都會重算 tier;high 沒有 `lumos code-loop pass|skip --note` 留痕就推不上去。留痕綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑。
+ - loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
+ - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+ 
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`;超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。
+-2. **派審查員**:Agent、sonnet。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。★圖譜鏡頭(2026-08-29 起**每席都附、貼內容不給路徑**;2026-09-01 Enzo 委任裁量詞:code 迴圈固定席實測可達 31 篇、照字面貼不動=規則零執行的結構因)★:把 `lumos impact --diff …` 的固定席**以落成核對的節錄呈現為準——上限內的貼內容進每席派工詞、逐條必答;超出上限的列名即可,不必答**;格式與兩個填寫雷見 `templates.md` §3 鏡頭 3。另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」,每條 finding 必附 file:line 與引句。派工單落 `rN-dispatch.json`。
++2. **派審查員**:Agent、sonnet。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。★圖譜鏡頭(2026-08-29 起**每席都附、貼內容不給路徑**;2026-09-01 Enzo 委任裁量詞:code 迴圈固定席實測可達 31 篇、照字面貼不動=規則零執行的結構因)★:把 `lumos impact --diff …` 的固定席**以落成核對的節錄呈現為準——上限內的貼內容進每席派工詞、逐條必答;超出上限的前 10 篇列名+一句話層(L0)、之後純列名,仍不必答**;格式與兩個填寫雷見 `templates.md` §3 鏡頭 3。另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」,每條 finding 必附 file:line 與引句。派工單落 `rN-dispatch.json`。
+ 3. **收貨**:存席報告先正規化(2026-08-26 SOP:引句同行格式;表頭型嚴重度補獨立「severity: <值>」行,乾淨輪也要 severity: clean——record 寫側硬擋:審查席記帳必附報告、帳面不得低於報告最高)。可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現(跑得出來才撈回),直接丟曾兩次誤殺真問題。`lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+ 4. **判讀與辯方**:severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設外家 `scripts/external-seat.sh`)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。**high 缺外家辯方(替補也湊不齊)**:不硬擋(Enzo 2026-08-22 裁,成本考量),但收斂結論要降級成「單家族視角下未發現」、留痕 note 寫明缺席,問閘(`--disposal`)偵測到席位異常會自動轉述當輪(異常才印;外家未派行僅轉述編制對照不裁決);全史核對用 `loop status --roster`。diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點:`code-loop check`(pre-push 每次呼叫)會**自動真跑那些綁定測試**,紅/懸空/方法名不合法就擋推送(2026-08-22 起機械化,不靠自律);跑不了要 `--skip-bound-tests --note` 留痕。
+ 5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
+ 6. **記帳**:★多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,且帳本不能撤銷,只能換編號重記(2026-08-24 第三次踩)★。`lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。
+ 7. **問閘**:單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`——多席照步驟 6 的彙總記帳(處置清單只掛一席);★code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折,d2 裁;散文設計審不受此限)★。`--gate --panel` 僅供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
+ 8. **過了留痕**:先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳),再 `lumos code-loop pass --note "<審了什麼、幾席、幾條折入>"`;決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。推完、卷證入版控後 `lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定(週跑回放抽查用)。然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
+ 
+ 推完之後若下游(實作/CI/prod/使用者)發現可歸因到某次已放行審查的缺陷:`lumos loop escape <編號> --stage <站> --severity <s> --desc <一句>`(逃逸帳=審查系統的漏網紀錄,append-only 不進閘)。
+ 
+ ## 停手與護欄
