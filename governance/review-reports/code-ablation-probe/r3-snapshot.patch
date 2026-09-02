@@ -1,0 +1,1382 @@
+diff --git a/governance/eval/ablation_lumos_first.py b/governance/eval/ablation_lumos_first.py
+new file mode 100644
+index 0000000..929e624
+--- /dev/null
++++ b/governance/eval/ablation_lumos_first.py
+@@ -0,0 +1,331 @@
++#!/usr/bin/env python3
++"""修法 A ablation runner(Projects/修法A_lumos先行ablation_計劃):
++「CLAUDE.md 那段『第一個工具呼叫是 lumos』+入口 hook 同句」帶/不帶,各跑同一組情境題,比四個尺。
++
++做法(2026-09-02 第二版):工作單位=(組別, 題),每題需要幾場就叫探針跑幾場(`--only <題> --runs <缺幾場>`),
++輸出一檔一次嘗試、永不覆蓋;重跑時先數每題已有的**有效**場次(排除撞用量上限/儀器例外),只補缺的。
++第一版按 shard 切、4 路平行,35 分鐘撞到帳號用量上限,之後 115 場全是 4 秒假失敗——所以現在預設 2 路、
++探針帶 --wait-on-limit 撞到就等重置再補同一場。
++
++四個尺(讀法預註冊在計劃筆記,這裡只算數不解讀):
++  M1 通過率(期望指令在禁做動作之前)  M2 整場有沒有敲過 lumos
++  M3 首次敲 lumos 的步數中位(只算有敲的場)  M4 答案題(id 以 a 開頭)正確率
++
++用法:
++  governance/eval/ablation_lumos_first.py [--runs 3] [--workers 2] [--wait-on-limit 7200] [--out-dir …] [--merge-only]
++"""
++import argparse, datetime, json, statistics, subprocess, sys, time
++from concurrent.futures import ThreadPoolExecutor
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++PROBE = ROOT / "scripts" / "scenario_probe.py"
++DEFAULT_Q = ["governance/scenarios/commands.jsonl", "governance/scenarios/answers.jsonl"]
++ARMS = ["with", "without"]
++
++# ★r1 合約席:判準單一實作來源★——LIMIT_RE / LUMOS_CALL_RE 從探針 import,不在這裡重抄一份字面。
++# 同目錄 retrieval_eval_multiword 早有此教訓(「計分一律 import,兩份實作立刻漂移」)。改判準只改探針一處。
++sys.path.insert(0, str(ROOT / "scripts"))
++from scenario_probe import LIMIT_RE, LUMOS_CALL_RE  # noqa: E402  ★單一實作來源★
++
++
++def load_ids(files):
++    """回題目 id 清單,已去重(★r1 邊界席:題庫人手維護、複製貼上易出重複 id;重複會虛墊缺場數又雙倍排程/雙倍權重★)。"""
++    ids, seen = [], set()
++    for f in files:
++        for ln in (ROOT / f).read_text(encoding="utf-8").splitlines():
++            if ln.strip():
++                qid = json.loads(ln)["id"]
++                if qid not in seen:
++                    seen.add(qid); ids.append(qid)
++    return ids
++
++
++def backfill_limit(r):
++    """舊結果檔沒有 limit_hit 欄:零工具呼叫 + 回覆是上限訊息 → 補標 True。有欄的原樣。
++    順手用修正後的規則從 calls 重算 ever_lumos / first_lumos_idx(舊版正則把路徑裡的 lumos 算進去,灌水)。
++    ★r1 正確性/外家席:第一版只存前 12 個呼叫,若真正的 lumos 呼叫在第 13 個之後,從殘缺 calls 重算會把
++    本來 True 壓成 False、低估 M2。所以只在「沒被截斷」時才重算 ever_lumos;截斷且原本標 True 的保留 True。"""
++    if "limit_hit" not in r:
++        r["limit_hit"] = (r.get("n_calls", 0) == 0) and bool(LIMIT_RE.search(r.get("answer") or ""))
++    calls = r.get("calls") or []
++    truncated = r.get("n_calls", 0) > len(calls)
++    r["calls_truncated"] = truncated
++    ever, idx = False, None
++    for i, c in enumerate(calls):
++        if isinstance(c, (list, tuple)) and len(c) == 2 and c[0] == "Bash" and LUMOS_CALL_RE.search(str(c[1])):
++            ever, idx = True, i
++            break
++    if not truncated:
++        r["ever_lumos"], r["first_lumos_idx"] = ever, idx
++    elif ever:
++        r["ever_lumos"], r["first_lumos_idx"] = True, idx   # 殘缺清單裡就看得到真呼叫 → 確定 True
++    else:
++        # ★r2 正確性席:截斷 + 殘缺清單裡看不到真呼叫 → 分不清「真呼叫在被砍掉的部分」還是「舊值是舊正則假陽性」。
++        # 原本無條件保留 True 會把可從殘缺清單判掉的假陽性也留著(灌 M2);改標未知(None),_arm_stats 把 None 排除在 M2 分母外。★
++        r["ever_lumos"], r["first_lumos_idx"] = None, None
++    return r
++
++
++def is_valid(r):
++    """一場算不算數:撞用量上限或儀器例外都不算(不是被測 AI 的行為)。"""
++    return not r.get("limit_hit") and not str(r.get("reason", "")).startswith("儀器例外")
++
++
++def load_results(out_dir):
++    """讀目錄裡所有探針輸出(第一版 shard 檔與第二版逐題檔都吃),回 {arm: [result…]}。
++    ★r1 邊界席:一顆壞檔不拖垮整批——非 dict 頂層、results 內非 dict 元素都跳過,不讓 AttributeError 炸穿。"""
++    by_arm = {a: [] for a in ARMS}
++    for p in sorted(Path(out_dir).glob("*.json")):
++        if p.name in ("summary.json", "meta.json"):
++            continue
++        try:
++            d = json.loads(p.read_text(encoding="utf-8"))
++        except Exception:
++            continue
++        if not isinstance(d, dict):
++            continue
++        arm = d.get("arm") or p.name.split("-")[0]
++        rows = d.get("results")
++        if arm in by_arm and isinstance(rows, list):
++            by_arm[arm].extend(backfill_limit(r) for r in rows if isinstance(r, dict))
++    return by_arm
++
++
++def collect_skills_health(out_dir):
++    """掃探針輸出裡的 skills_health_bad 欄,回 [(檔名, [壞連結…])](空=乾淨)。
++    ★r1 併發席:健康檢查不能只印 log——跑批讀這個,非空就停整批,免得一場沙盒事故靜默污染後續所有場次。"""
++    hits = []
++    for p in sorted(Path(out_dir).glob("*.json")):
++        if p.name in ("summary.json", "meta.json"):
++            continue
++        try:
++            d = json.loads(p.read_text(encoding="utf-8"))
++        except Exception:
++            continue
++        if isinstance(d, dict) and d.get("skills_health_bad"):
++            hits.append((p.name, d["skills_health_bad"]))
++    return hits
++
++
++def needed(by_arm, arm, qid, runs):
++    """這題這組還缺幾場有效結果。"""
++    have = sum(1 for r in by_arm.get(arm, []) if r.get("id") == qid and is_valid(r))
++    return max(0, runs - have)
++
++
++def runs_in_window(out_dir, hours=5.0, now=None):
++    """最近 hours 小時內落地的探針場次(含撞上限的):算帳號窗口用掉多少。以檔案 mtime 為時間,沿用結果檔沒有時間戳的現況。"""
++    now = time.time() if now is None else now
++    n = 0
++    for p in Path(out_dir).glob("*.json"):
++        if p.name in ("summary.json", "meta.json"):
++            continue
++        try:
++            if now - p.stat().st_mtime > hours * 3600:
++                continue
++            n += len(json.loads(p.read_text(encoding="utf-8")).get("results", []))
++        except Exception:
++            continue
++    return n
++
++
++def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, model="", max_per_window=0, stop=None):
++    if stop is not None and stop.is_set():
++        return (arm, qid, "skip 已偵測到全域 skills 事故,停止派工")
++    if max_per_window and runs_in_window(out_dir) >= max_per_window:
++        # 事前上限(SWE-agent per-instance / bmad per-story 的窗口版):這個五小時窗口已經跑滿,不再開新工作;
++        # 之後重跑 runner 會逐題補缺。比「撞到再等」省一次撞牆,也不會把 Enzo 的互動配額吃光。
++        # ★r1 併發席:這道是 TOCTOU(多 worker 平行可同時放行、超額到 workers×n)——刻意接受:它只是禮貌性軟上限,
++        #   真正的帳號硬上限由 --wait-on-limit 接住,超額有界(預設 workers=2),不會做出錯的判分。★
++        return (arm, qid, f"skip 窗口已達 {max_per_window} 場上限,之後再補")
++    stamp = time.strftime("%H%M%S")
++    out = Path(out_dir) / f"{arm}-q-{qid}-{stamp}.json"
++    log = Path(out_dir) / f"{arm}-q-{qid}-{stamp}.log"
++    cmd = [sys.executable, str(PROBE), "--scenarios", ",".join(str(ROOT / f) for f in files),
++           "--only", qid, "--runs", str(n), "--arm", arm, "--out", str(out),
++           "--timeout", str(timeout), "--max-turns", str(max_turns), "--wait-on-limit", str(wait_on_limit)]
++    if model:
++        cmd += ["--model", model]
++    t0 = time.time()
++    with open(log, "w", encoding="utf-8") as lf:
++        lf.write("$ " + " ".join(cmd) + "\n")
++        lf.flush()
++        r = subprocess.run(cmd, cwd=str(ROOT), stdout=lf, stderr=subprocess.STDOUT, text=True)
++    bad_health = False
++    try:
++        d = json.loads(out.read_text(encoding="utf-8"))
++        got = sum(1 for x in d.get("results", []) if is_valid(x))
++        lim = sum(1 for x in d.get("results", []) if x.get("limit_hit"))
++        bad_health = bool(d.get("skills_health_bad"))
++    except Exception:
++        got, lim = 0, 0
++    if r.returncode == 3 or bad_health:
++        # 探針回 3 或結果檔標了 skills 事故:設停止旗標,其餘 worker 與後續工作不再派(r1 併發席 F1)
++        if stop is not None:
++            stop.set()
++        return (arm, qid, f"★全域 skills 事故★ rc={r.returncode}——停止派工,先在真 repo 跑 lumos install --force")
++    return (arm, qid, f"rc={r.returncode} 有效 {got}/{n} 撞上限 {lim} {round(time.time() - t0)}s")
++
++
++def _arm_stats(results, expected_ids, runs):
++    # ★r1 正確性席:只算現在題庫裡的題★——out_dir 是跨天累積的逐題檔,題庫改過後舊題殘檔還在,
++    # 不過濾會把舊題的通過/不通過靜默混進 M1-M4 與頭條差值。用 expected_ids 篩掉不在現行題庫的。
++    idset = set(expected_ids)
++    results = [r for r in results if r.get("id") in idset]
++    valid = [r for r in results if is_valid(r)]
++    n = len(valid)
++    m1 = sum(1 for r in valid if r.get("passed"))
++    # ★r2 正確性席:ever_lumos 為 None = 截斷資料判不出,排除在 M2 分母外(不當成 False 灌低)★
++    m2_known = [r for r in valid if r.get("ever_lumos") is not None]
++    m2 = sum(1 for r in m2_known if r.get("ever_lumos"))
++    idxs = [r["first_lumos_idx"] for r in valid if r.get("first_lumos_idx") is not None]
++    m3 = statistics.median(idxs) if idxs else None
++    ans = [r for r in valid if str(r.get("id", "")).startswith("a")]
++    # M4 兩把尺:gated=敲對指令且答對(passed);content=純答案內容對(不管走哪條路,只在有記 answer_content_ok 的場算)
++    content = [r for r in ans if r.get("answer_content_ok") is not None]
++    per = {}
++    for r in valid:
++        per.setdefault(r["id"], [0, 0])
++        per[r["id"]][1] += 1
++        per[r["id"]][0] += 1 if r.get("passed") else 0
++    inconsistent = sorted(i for i, (c, t) in per.items() if 0 < c < t)
++    return {"n": n, "m1_passed": m1, "m1_rate": round(m1 / n, 4) if n else None,
++            "m2_ever": m2, "m2_n": len(m2_known), "m2_rate": round(m2 / len(m2_known), 4) if m2_known else None,
++            "m3_first_idx_median": m3, "m3_n": len(idxs),
++            "m4_gated_passed": sum(1 for r in ans if r.get("passed")), "m4_gated_n": len(ans),
++            "m4_content_passed": sum(1 for r in content if r.get("answer_content_ok")), "m4_content_n": len(content),
++            "inconsistent_questions": inconsistent,
++            "missing": max(0, len(expected_ids) * runs - n),
++            "instrument_errors": len(results) - n,
++            "limit_hits": sum(1 for r in results if r.get("limit_hit")),
++            "per_question": per}
++
++
++def classify_question(w, wo):
++    """一題對「這條規矩」有沒有鑑別力。w/wo = [過幾次, 跑幾次]。
++    區分=帶著比拔掉多過至少三分之二;反向=拔掉反而多過;都過/都不過=這題測不到這條規矩;其餘=弱/不穩。
++    (借 skill-creator 的 analyzer:抓「不管有沒有裝都過」的斷言——那種題留在題庫裡只是在花配額。)"""
++    if not w[1] or not wo[1]:
++        return "缺資料"
++    rw, rwo = w[0] / w[1], wo[0] / wo[1]
++    if rw == 1 and rwo == 1:
++        return "不區分(都過)"
++    if rw == 0 and rwo == 0:
++        return "不區分(都不過)"
++    if rw - rwo >= 2 / 3:
++        return "區分"
++    if rwo > rw:
++        return "反向"
++    return "弱/不穩"
++
++
++def merge(out_dir, expected_ids, runs):
++    by_arm = load_results(out_dir)
++    arms = {a: _arm_stats(by_arm[a], expected_ids, runs) for a in ARMS}
++    per_q = {q: {a: arms[a]["per_question"].get(q, [0, 0]) for a in ARMS} for q in expected_ids}
++    for a in ARMS:
++        arms[a].pop("per_question", None)
++    w, wo = arms["with"]["m1_rate"], arms["without"]["m1_rate"]
++    delta = round((w - wo) * 100, 2) if (w is not None and wo is not None) else None
++    classes = {q: classify_question(v["with"], v["without"]) for q, v in per_q.items()}
++    class_counts = {}
++    for c in classes.values():
++        class_counts[c] = class_counts.get(c, 0) + 1
++    return {"runs": runs, "expected_ids": expected_ids, "arms": arms, "m1_delta_pp": delta, "per_question": per_q,
++            "question_class": classes, "class_counts": class_counts}
++
++
++def render_md(s, meta):
++    a, b = s["arms"]["with"], s["arms"]["without"]
++    def pct(x): return "—" if x is None else f"{x * 100:.1f}%"
++    lines = [f"# 修法 A ablation 對照({meta.get('date')};模型 {meta.get('claude_version', '?')})", "",
++             f"題 {len(s['expected_ids'])} × 每組 {s['runs']} 次;讀法見 Projects/修法A_lumos先行ablation_計劃(預註冊,這裡只列數字)。"
++             f"只算有效場(撞用量上限/儀器例外不算)。", "",
++             "| 尺 | with(現況) | without(拔散文) |", "|---|---|---|",
++             f"| M1 通過率 | {a['m1_passed']}/{a['n']} = {pct(a['m1_rate'])} | {b['m1_passed']}/{b['n']} = {pct(b['m1_rate'])} |",
++             f"| M2 敲過 lumos(分母排除截斷判不出的) | {a['m2_ever']}/{a['m2_n']} = {pct(a['m2_rate'])} | {b['m2_ever']}/{b['m2_n']} = {pct(b['m2_rate'])} |",
++             f"| M3 首次步數中位(有敲的場數) | {a['m3_first_idx_median']} ({a['m3_n']}) | {b['m3_first_idx_median']} ({b['m3_n']}) |",
++             f"| M4a 答案題(敲對指令+答對) | {a['m4_gated_passed']}/{a['m4_gated_n']} | {b['m4_gated_passed']}/{b['m4_gated_n']} |",
++             f"| M4b 答案內容純對(不管走哪條路) | {a['m4_content_passed']}/{a['m4_content_n']} | {b['m4_content_passed']}/{b['m4_content_n']} |",
++             f"| 同題多次不一致的題數 | {len(a['inconsistent_questions'])} | {len(b['inconsistent_questions'])} |",
++             f"| 缺場 / 撞上限 / 其他儀器例外 | {a['missing']} / {a['limit_hits']} / {a['instrument_errors'] - a['limit_hits']} | {b['missing']} / {b['limit_hits']} / {b['instrument_errors'] - b['limit_hits']} |",
++             "", f"**M1 差(with − without)= {s['m1_delta_pp']} pp**", "",
++             "題目鑑別力(這題對「這條規矩」測不測得到):" + "、".join(f"{k} {v} 題" for k, v in sorted(s.get("class_counts", {}).items())), "",
++             "| 題 | with | without | 鑑別力 |", "|---|---|---|---|"]
++    for q, v in s["per_question"].items():
++        lines.append(f"| {q} | {v['with'][0]}/{v['with'][1]} | {v['without'][0]}/{v['without'][1]} | {s.get('question_class', {}).get(q, '')} |")
++    if a["inconsistent_questions"] or b["inconsistent_questions"]:
++        lines += ["", f"不一致題 with: {', '.join(a['inconsistent_questions']) or '—'};without: {', '.join(b['inconsistent_questions']) or '—'}"]
++    return "\n".join(lines) + "\n"
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--questions", default=",".join(DEFAULT_Q))
++    ap.add_argument("--runs", type=int, default=3)
++    ap.add_argument("--workers", type=int, default=2, help="平行路數;瓶頸是帳號用量上限不是機器,多開沒用")
++    ap.add_argument("--wait-on-limit", type=int, default=7200, help="探針撞上限時最多等幾秒(每 300 秒重試)")
++    ap.add_argument("--max-per-window", type=int, default=50,
++                    help="五小時內最多開幾場(含撞上限的);0=不設。2026-09-02 實測每窗口約 55 場才撞牆,預設留餘裕給人用")
++    ap.add_argument("--timeout", type=int, default=600)
++    ap.add_argument("--max-turns", type=int, default=18)
++    ap.add_argument("--model", default="")
++    ap.add_argument("--out-dir", default="")
++    ap.add_argument("--arms", default=",".join(ARMS))
++    ap.add_argument("--merge-only", action="store_true", help="不跑,只合併既有輸出")
++    a = ap.parse_args()
++    files = a.questions.split(",")
++    ids = load_ids(files)
++    date = datetime.date.today().isoformat()
++    out_dir = Path(a.out_dir) if a.out_dir else ROOT / "governance" / "eval" / "ablation-lumos-first" / date
++    out_dir.mkdir(parents=True, exist_ok=True)
++    try:
++        ver = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
++    except Exception:
++        ver = "?"
++    meta = {"date": date, "claude_version": ver, "runs": a.runs, "workers": a.workers,
++            "timeout": a.timeout, "max_turns": a.max_turns, "questions": files, "n_questions": len(ids),
++            "started": datetime.datetime.now().isoformat(timespec="seconds")}
++    (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
++    if not a.merge_only:
++        by_arm = load_results(out_dir)
++        jobs = []
++        for qid in ids:                       # 逐題、兩組交錯:中途被殺兩組進度也對稱
++            for arm in a.arms.split(","):
++                n = needed(by_arm, arm, qid, a.runs)
++                if n:
++                    jobs.append((arm, qid, n))
++        total = sum(n for _, _, n in jobs)
++        print(f"{len(ids)} 題 × {a.runs} 次 × {len(a.arms.split(','))} 組;還缺 {total} 場有效結果,"
++              f"{len(jobs)} 個工作,{a.workers} 路平行,撞上限最多等 {a.wait_on_limit}s → {out_dir}", flush=True)
++        import threading
++        stop = threading.Event()          # 任一工作偵測到全域 skills 事故就 set,其餘工作看到就不派(r1 併發席 F1)
++        with ThreadPoolExecutor(max_workers=a.workers) as ex:
++            futs = [ex.submit(run_job, arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit, a.model,
++                              a.max_per_window, stop)
++                    for arm, qid, n in jobs]
++            for f in futs:
++                arm, qid, st = f.result()
++                print(f"  {arm} {qid}: {st}", flush=True)
++    # ★r2 併發席:健康檢查要無條件掃一次,不能只靠本次新工作順手帶到★——
++    # --merge-only 跳過整個工作迴圈,或本批 needed 全為 0(jobs 空)時,上一輪留下、已標事故的舊檔
++    # 會被靜默合併出報告。這裡不管走不走 merge_only 都掃 out_dir 一次。
++    poisoned = collect_skills_health(out_dir)
++    s = merge(out_dir, ids, a.runs)
++    s["skills_health_poisoned"] = poisoned
++    if poisoned:
++        print("\n" + "!" * 60)
++        print(f"✗ 偵測到全域 ~/.claude/skills 事故({len(poisoned)} 個結果檔標了受污染)——本次資料不可採信。", flush=True)
++        print("  先修再重跑:\n    python3 scripts/lumos install --force")
++        print("  見 Issues/探針沙盒改動真全域機器狀態。summary 仍產出但已標 skills_health_poisoned。")
++        print("!" * 60)
++    (out_dir / "summary.json").write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
++    md = render_md(s, meta)
++    (out_dir / "summary.md").write_text(md, encoding="utf-8")
++    print("\n" + md)
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/governance/eval/rule_conflict_scan.py b/governance/eval/rule_conflict_scan.py
+new file mode 100644
+index 0000000..f84e614
+--- /dev/null
++++ b/governance/eval/rule_conflict_scan.py
+@@ -0,0 +1,126 @@
++#!/usr/bin/env python3
++"""規矩成對衝突的字面級初篩(Projects/世界repo掃描2026-09-02_調研 第 4 點;arXiv 2608.02639:遵循率崩跌主因是規則成對衝突)。
++
++做法(純字串,不用模型;產出是給人/乾淨 agent 覆核的候選,不是判決):
++  1. 掃 CLAUDE.md + skills/lumos-*/**/*.md + scripts/templates/*.md,切句(。;!?與換行)。
++  2. 只留帶「指令性」字眼的句子(必須/一律/不要/不得/禁止/先…再/才准/上限/預設…)。
++  3. 每句抽「談的是什麼」的關鍵詞:lumos 子指令、工具名、流程名、數字常數。
++  4. 同一個關鍵詞底下,若同時有「正向要求」與「負向禁止」,或出現不同的數字常數 → 列為候選群。
++輸出 markdown:每群列 file:line + 原句,人再判是真衝突、還是同一條規矩的兩面。
++
++用法: governance/eval/rule_conflict_scan.py [--out 報告.md] [--min-group 2]
++"""
++import argparse, re, sys
++from collections import defaultdict
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++
++DIRECTIVE = re.compile(r"必須|一律|不要|不得|禁止|不准|嚴禁|不能|不可|別再|別把|要先|先.{1,12}再|才准|才算|才能|預設|上限|至少|最多|不許|不應|應該|一定要|絕不|永遠|恆")
++NEG = re.compile(r"不要|不得|禁止|不准|嚴禁|不能|不可|別再|別把|不許|不應|絕不|不算|不擋|不做|不推|不抄|不跑|不派|不開|不動")
++POS = re.compile(r"必須|一律|要先|才准|才算|才能|一定要|應該|預設|永遠|恆|先.{1,12}再")
++NUM = re.compile(r"(?<![A-Za-z])(\d+(?:\.\d+)?)\s*(pp|%|秒|分|輪|席|題|次|天|字元|行|步|K|k★|美元|\$)?")
++
++# 「談的是什麼」:lumos 子指令、工具、流程、常見治理物件
++TERMS = [
++    r"lumos [a-z][a-z-]+", r"\bgrep\b", r"\brg\b", r"\bRead\b", r"\bEdit\b", r"\bWrite\b", r"\bAgent\b", r"\bSkill\b",
++    r"WebSearch", r"Explore", r"git add", r"commit", r"push", r"pre-commit", r"pre-push", r"design-loop", r"code-loop",
++    r"canary", r"K=\d", r"處置閘", r"Codex", r"Gemini", r"opus", r"sonnet", r"haiku", r"辯方", r"外家", r"REVISIT",
++    r"doctor", r"\blint\b", r"impact", r"contracts", r"decision-add", r"regen", r"frontmatter", r"開頭欄位", r"summary",
++    r"wikilink", r"合約", r"★INVARIANT★", r"\[test:\]", r"\[audit:\]", r"引句", r"quote-check", r"refcheck", r"seat-check",
++    r"上限", r"cap", r"輪", r"席", r"探針", r"scenario", r"PRIOR-ART", r"白話", r"術語", r"file:line", r"沙盒", r"sandbox",
++    r"--no-verify", r"LUMOS_SKIP", r"headless", r"claude -p", r"tier", r"high", r"blocker", r"major", r"minor", r"severity",
++]
++TERM_RE = re.compile("|".join(f"(?:{t})" for t in TERMS), re.I)
++
++
++def iter_files():
++    yield ROOT / "CLAUDE.md"
++    for p in sorted((ROOT / "skills").glob("lumos-*/**/*.md")):
++        yield p
++    for p in sorted((ROOT / "scripts" / "templates").glob("*.md")):
++        yield p
++
++
++def sentences(text):
++    """回 [(行號, 句子)];以句號/分號/驚嘆/問號/換行切,保留行號(取句子起點所在行)。"""
++    out = []
++    for ln_no, line in enumerate(text.split("\n"), 1):
++        s = line.strip()
++        if not s or s.startswith(("|--", "```", "<!--")):
++            continue
++        for part in re.split(r"[。;!?！？]", s):
++            part = part.strip(" -*>|#\t")
++            if len(part) >= 8:
++                out.append((ln_no, part))
++    return out
++
++
++def scan(min_group=2):
++    groups = defaultdict(list)   # term -> [(file, line, sentence, polarity, numbers)]
++    total_directive = 0
++    for f in iter_files():
++        try:
++            text = f.read_text(encoding="utf-8")
++        except (OSError, UnicodeDecodeError):
++            continue   # r1 邊界席:非法 UTF-8(UnicodeDecodeError 是 ValueError 不是 OSError)也跳過,別讓一顆壞檔炸掉整支掃描
++        rel = str(f.relative_to(ROOT))
++        for ln, s in sentences(text):
++            if not DIRECTIVE.search(s):
++                continue
++            total_directive += 1
++            pol = ("neg" if NEG.search(s) else "") + ("pos" if POS.search(s) else "")
++            nums = sorted({m.group(0).strip() for m in NUM.finditer(s) if m.group(1)})
++            for t in {m.group(0).lower() for m in TERM_RE.finditer(s)}:
++                groups[t].append((rel, ln, s, pol or "n/a", nums))
++    cands = []
++    for term, rows in groups.items():
++        if len(rows) < min_group:
++            continue
++        pols = {r[3] for r in rows}
++        has_neg = any("neg" in p for p in pols)
++        has_pos = any("pos" in p for p in pols)
++        numsets = {tuple(r[4]) for r in rows if r[4]}
++        reason = []
++        if has_neg and has_pos:
++            reason.append("同一詞底下同時有正向要求與負向禁止")
++        if len(numsets) >= 2:
++            reason.append(f"出現 {len(numsets)} 組不同數字常數")
++        if reason:
++            cands.append((term, reason, rows))
++    cands.sort(key=lambda c: -len(c[2]))
++    return total_directive, cands
++
++
++def render(total, cands):
++    lines = ["# 規矩成對衝突字面級初篩", "",
++             f"掃 CLAUDE.md + skills/lumos-* + scripts/templates;指令性句子 {total} 句;候選群 {len(cands)} 個(同詞下正負並存或數字不一致)。",
++             "★這只是候選,大多會是同一條規矩的兩面(例:「必須先 X」與「不要跳過 X」)。要人或乾淨 agent 逐群判:真衝突 / 同面 / 不同對象。★", ""]
++    for term, reason, rows in cands:
++        lines.append(f"## `{term}` — {len(rows)} 句 — {';'.join(reason)}")
++        for rel, ln, s, pol, nums in rows[:40]:
++            tag = {"neg": "禁", "pos": "要", "negpos": "禁+要", "n/a": "—"}.get(pol, pol)
++            lines.append(f"- [{tag}] `{rel}:{ln}` {s[:180]}" + (f"  〔數字 {' '.join(nums)}〕" if nums else ""))
++        if len(rows) > 40:
++            lines.append(f"- …另 {len(rows) - 40} 句略")
++        lines.append("")
++    return "\n".join(lines) + "\n"
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--out", default="")
++    ap.add_argument("--min-group", type=int, default=2)
++    a = ap.parse_args()
++    total, cands = scan(a.min_group)
++    md = render(total, cands)
++    if a.out:
++        Path(a.out).write_text(md, encoding="utf-8")
++        print(f"指令性句子 {total};候選群 {len(cands)} → {a.out}")
++    else:
++        sys.stdout.write(md)
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/scripts/hooks/claude/lumos-entry-hook.py b/scripts/hooks/claude/lumos-entry-hook.py
+index c486096..ba7643c 100755
+--- a/scripts/hooks/claude/lumos-entry-hook.py
++++ b/scripts/hooks/claude/lumos-entry-hook.py
+@@ -47,20 +47,24 @@ def _discipline_lag(root):
+         expected = norm(tpl.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/"))
+     except OSError:
+         return None
+     if body == expected:
+         return None
+     return ("提醒:這個專案 CLAUDE.md 裡的 lumos 紀律區塊跟來源的最新版不一樣(規則可能已經更新),"
+             "有空跑一次:\n    lumos update")
+ 
+ 
+ def main():
++    if os.environ.get("LUMOS_ENTRY_HOOK_OFF") == "1":
++        # 修法 A ablation 的「不帶」組(Projects/修法A_lumos先行ablation_計劃):探針沙盒砍了 CLAUDE.md 那一節,
++        # 同一句提醒不能從這裡再進來。平時沒人設這個變數,行為不變。
++        return 0
+     try:
+         payload = json.loads(sys.stdin.read() or "{}")
+     except ValueError:
+         payload = {}
+     cwd = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+     root = _repo_root(cwd)
+     if root is None or not list((root / "docs").glob("*-knowledge")):
+         return 0
+     idx = Path.home() / ".claude" / "skills" / "lumos-project-notes" / "commands" / "INDEX.md"
+     if not idx.exists():   # 全域 skills 沒裝(或正在重裝)→ 退用來源 repo 的那份
+diff --git a/scripts/lumos b/scripts/lumos
+index ad20b73..0edc83d 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -10177,23 +10177,39 @@ def cmd_archive(env, days, apply, today):
+             print(f"  ⚠ 跳過(目標已存在): {dst}", file=sys.stderr)
+             continue
+         os.replace(src, dst)
+         moved += 1
+     print(f"\n  ✓ 歸檔 {moved} 篇,正規化 {rewritten} 處連結(計畫 {n_links})")
+     return 0
+ 
+ 
+ # ═══════════════════════ main ═══════════════════════
+ 
++def _refuse_if_probe(action):
++    """探針沙盒事故防線(Issues/探針沙盒改動真全域機器狀態,2026-09-02):
++    情境探針把 repo 複製到臨時沙盒、在裡面跑 claude -p,但那個 session 的 HOME 是真的 ~/,
++    所以它(或它跑的任何子程序)一旦執行安裝/更新/卸載,會把真的 ~/.claude/skills 重新連到沙盒副本;
++    沙盒清掉後全域 skills 全變懸空連結。2026-09-02 實際炸過一次(八個 skill 斷)。
++    探針環境一律設 LUMOS_PROBE=1;這幾個會動全域機器狀態的指令在探針下直接拒絕。"""
++    import os
++    if os.environ.get("LUMOS_PROBE") == "1":
++        print(f"擋下:偵測到 LUMOS_PROBE=1(情境探針沙盒),拒絕執行「{action}」——"
++              f"這會把真的 ~/.claude 重連到臨時沙盒,沙盒一清就全斷。探針裡不該重裝工具鏈。", file=sys.stderr)
++        return True
++    return False
++
++
+ def cmd_install(force=False):
+     """全域 lumos + user-scope skills(機器層一鍵)。Unix=symlink、Win=.cmd shim。"""
+     import os
++    if _refuse_if_probe("install"):
++        return 2
+     src = Path(__file__).resolve()
+     bindir = Path.home() / ".local" / "bin"
+     bindir.mkdir(parents=True, exist_ok=True)
+     if _IS_WIN:
+         shim = bindir / "lumos.cmd"
+         shim.write_text(f'@echo off\r\npython "{src}" %*\r\n', encoding="utf-8")
+         print(f"✓ 安裝: {shim} → python {src}")
+     else:
+         dst = bindir / "lumos"
+         if dst.is_symlink() and dst.resolve() == src:
+@@ -10219,20 +10235,22 @@ def cmd_install(force=False):
+                 if _IS_WIN else f'  export PATH="$HOME/.local/bin:$PATH"')
+         print(f"⚠ {bindir} 不在當前 PATH —\n{hint}", file=sys.stderr)
+     else:
+         print(f"  {bindir} 已在 PATH — 任何專案打 `lumos doctor` 即可")
+     return 0
+ 
+ 
+ def cmd_uninstall():
+     """對稱移除 cmd_install 裝的東西:全域指令(Unix symlink / Win lumos.cmd)+ user-scope skills。"""
+     import os, shutil
++    if _refuse_if_probe("uninstall"):
++        return 2
+     removed = []
+     bindir = Path.home() / ".local" / "bin"
+     for name in ("lumos.cmd", "lumos"):          # Win shim + Unix symlink
+         g = bindir / name
+         if g.is_symlink():
+             removed.append(f"{g}(symlink → {g.resolve()})"); g.unlink()
+         elif g.exists():
+             # 守衛(std F10,teardown一鍵拆機_計劃):同名一般檔不刪(可能是使用者別的工具);
+             # 只有 symlink 才是我方 install 產物。避免 uninstall/teardown 誤刪非我方檔。
+             print(f"  ⚠ {g} 是一般檔(非 symlink),保留不動——非 lumos 安裝物", file=sys.stderr)
+@@ -10886,20 +10904,22 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
+     elif ri.status == "sentinel_broken":
+         print("  ⚠ CLAUDE.md sentinel 半壞,未自動覆蓋,請檢查", file=sys.stderr)
+     # unchanged / no_template → 靜默
+     return rc
+ 
+ 
+ def cmd_update(source=None, no_pull=False, allow_stale=False):
+     """從 Lumos 唯一源 repo 更新「本專案」vendored 的工具組。
+     = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
+     圖譜資料受 install-graph-toolchain 的 scaffold-skip 保護,不會被動。"""
++    if _refuse_if_probe("update"):
++        return 2
+     src = _lumos_src(source)
+     vault = find_vault(Path.cwd())
+     if vault is None:
+         print("擋下:目前目錄底下找不到知識圖譜(docs/*-knowledge)", file=sys.stderr)
+         return 2
+     root = vault.parent.parent  # docs/<slug>-knowledge → docs → 專案 root
+     slug = vault.name[:-len("-knowledge")] if vault.name.endswith("-knowledge") else vault.name
+     if root.resolve() == src.resolve():
+         # 來源 repo 自身:範本本地即最新,無 pull/vendor 之需——reinject-only
+         # (2026-08-05 實戰缺口修:改完範本後來源 repo 自己的 CLAUDE.md 原本無路可刷)
+@@ -10949,20 +10969,25 @@ def _link_or_copy(src: Path, dst: Path):
+             if r.returncode != 0:
+                 raise OSError(r.stderr)
+         else:
+             dst.symlink_to(src)
+     except OSError:
+         shutil.copytree(src, dst, dirs_exist_ok=True)  # Python ≥ 3.8
+         print(f"  ⚠ 連結失敗,改複製(失去 git pull 即更新): {dst}")
+ 
+ 
+ def _install_skills():
++    # ★r1 正確性席:防線下移到真正動全域機器狀態的地方★——原本只擋四個指令入口,
++    # 但 cmd_init → _vendor_toolchain → _install_hooks_py 這條路也會重連 ~/.claude/skills、繞過入口守衛。
++    # 擋在這個變動原語,不論從哪個指令進來都擋得住。
++    if _refuse_if_probe("install-skills"):
++        return
+     repo = Path(__file__).resolve().parent.parent
+     dest = Path.home() / ".claude" / "skills"
+     for s in _SKILLS:
+         src = repo / "skills" / s
+         if src.is_dir():
+             _link_or_copy(src, dest / s)
+             print(f"  ✓ skill {s}")
+ 
+ 
+ _INIT_SUBDIRS_FULL = ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC")
+@@ -11019,21 +11044,25 @@ _RETIRED_HOOK_STUB_BODY = (
+     "import sys\n"
+     "\n"
+     "sys.exit(0)\n"
+ )
+ 
+ 
+ def _sync_global_claude(src_repo: Path):
+     """全域 ~/.claude hooks/settings 同步(不需專案;install 與 _install_hooks_py 共用)。
+     ①copy 現役 hooks ②刪已撤除 hook 殘留真檔 ③跑 merge-claude-settings(_prune_dangling 剪懸空註冊)。
+     來源=src_repo(install 用來源 repo 自身、update 用專案 vendored copy);寫 ~/.claude(HOME 隔離可測)。
+-    設計:Projects/install全域hook同步_計劃。"""
++    設計:Projects/install全域hook同步_計劃。回 True=有做、False=探針下被擋沒做(呼叫端據此不印假成功)。"""
++    # ★r1 正確性席:同 _install_skills——cmd_init/_vendor_toolchain 這條路會經此覆寫真的 ~/.claude/hooks
++    # 與動 settings.json,繞過四個指令入口的守衛。擋在變動原語。
++    if _refuse_if_probe("sync-global-claude"):
++        return False
+     import subprocess, shutil
+     chooks = Path.home() / ".claude" / "hooks"
+     chooks.mkdir(parents=True, exist_ok=True)
+     src_dir = src_repo / "scripts" / "hooks" / "claude"
+     for f in _GLOBAL_CLAUDE_HOOKS:            # ① 現役 hooks copy
+         s = src_dir / f
+         if s.exists():
+             shutil.copy2(s, chooks / f)
+     for f in _RETIRED_STUB_CLAUDE_HOOKS:      # ②a 相容期:換 exit 0 空殼,★不刪檔★
+         stub = chooks / f                     #     (刪了會炸掉還帶著舊註冊的 session)
+@@ -11041,20 +11070,21 @@ def _sync_global_claude(src_repo: Path):
+             stub.unlink()                     #     symlink 先拆,免得寫穿到來源檔
+         stub.write_text(_RETIRED_HOOK_STUB_BODY, encoding="utf-8")
+         stub.chmod(0o755)
+     for f in _RETIRED_CLAUDE_HOOKS:           # ②b 過了相容期:真刪殘留檔
+         stale = chooks / f
+         if stale.exists() or stale.is_symlink():
+             stale.unlink()
+     merge = src_repo / "scripts" / "merge-claude-settings.py"  # ③ merge+prune 懸空(含②剛變懸空的)
+     if merge.exists():
+         subprocess.run([sys.executable, str(merge)])
++    return True
+ 
+ 
+ def _teardown_global_claude(src_repo: Path):
+     """_sync_global_claude 的移除半邊(teardown 用):清全域 ~/.claude 的我方 hook + 剪其懸空註冊。
+     ①先驗 settings.json 可解析→壞則跳過+warn、★不刪 .py★(不製造懸空,std F6)②rm 我方現役+撤除 hook
+     ③跑 merge --prune-only(★只剪懸空、不 re-add★——預設 merge 會把 hook 加回,抵銷 teardown)。
+     須在 deinit 刪掉 vendored merge-claude-settings.py 之前跑(std F5,由 cmd_teardown 順序保證)。
+     設計:Projects/teardown一鍵拆機_計劃。回 True=已處理 / False=因 settings 壞跳過。"""
+     import subprocess, json
+     chome = Path.home() / ".claude"
+@@ -11077,22 +11107,25 @@ def _teardown_global_claude(src_repo: Path):
+     print(f"  ✓ 全域 hook 清理:移除 {len(removed)} 檔 + 剪懸空我方註冊" if removed
+           else "  ✓ 全域 hook:無我方殘留")
+     return True
+ 
+ 
+ def _install_hooks_py(root: Path):
+     import subprocess
+     # ① git config core.hooksPath(專案本地)
+     subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"])
+     # ②③ 全域 hooks/settings 同步(委派共用函式,消雙寫;來源=專案 vendored copy)
+-    _sync_global_claude(root)
+-    print("  ✓ hooks:core.hooksPath + 全域 Claude hooks 同步(copy+撤除清理+settings)")
++    synced = _sync_global_claude(root)
++    if synced:
++        print("  ✓ hooks:core.hooksPath + 全域 Claude hooks 同步(copy+撤除清理+settings)")
++    else:
++        print("  ⚠ hooks:core.hooksPath 已設,但全域 Claude hooks 同步在探針環境下被擋(LUMOS_PROBE)——未動 ~/.claude")
+ 
+ 
+ def _confirm_tty(prompt):
+     """三階互動確認(curl|bash 安全;設計:Projects/bootstrap一鍵對稱_計劃 std F1/F2/F3):
+     回 True(答 y/yes)/False(其他答案=拒絕)/None(非互動或無人回答→呼叫端跳過)。
+     ①stdin.isatty→input();EOFError 落入②非當 False(isatty 撒謊時別誤判拒絕)
+     ②os.open(tty,O_RDWR) 低階 fd(★r+ 開法對 tty 會炸 not seekable★)+os.write prompt
+       +select timeout(有控制終端≠有人回答,防 readline 永久掛)+os.read
+     ③皆不可→None。嚴禁在非 isatty 時讀 sys.stdin(curl|bash 下那是腳本殘文管線)。
+     測試接縫:LUMOS_TTY(預設 /dev/tty;單元測指 pty slave)/LUMOS_TTY_TIMEOUT(預設 30s)。"""
+@@ -11162,20 +11195,22 @@ def _bootstrap_url(lumos_url=None, script=None):
+ 
+ 
+ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow_stale=False):
+     """一鍵在專案內裝好一切:自動 clone Lumos(若缺)→ user-scope skills → 全域 lumos → 專案層自動接線。
+     專案層四分流(設計:Projects/bootstrap一鍵對稱_計劃):有 vault+vendored→接 hooks｜有 vault 無
+     vendored(中間態)→提示跑 init 補齊｜無 vault→_confirm_tty 確認(y 才 auto-init;--init 免確認)｜
+     非 git→跳過只做機器層。--pull:既有 Lumos clone 也 git pull 拉最新。
+     冪等:auto-init 只在無 vault 時觸發;cmd_init 一律 force=False+no_pull=True(pull 政策歸 step1)。
+     失敗傳播(std F8):各步查 returncode,任一失敗最終 rc=1,不吞錯照印成功。"""
+     import os, subprocess
++    if _refuse_if_probe("bootstrap"):
++        return 2
+     home = Path(lumos_home or os.environ.get("LUMOS_HOME")
+                 or (Path.home() / "harness" / "lumos-toolchain")).expanduser()
+     url = _bootstrap_url(lumos_url)   # 解析鏈:旗標>env>本 clone origin(鏡像自足+身分探針)>硬編碼
+     # 1) 確保 Lumos 來源在(缺則自動 clone;--pull 則既有 clone 也拉最新)
+     # 存在性判定=scripts/lumos(真正要執行的檔;code-loop r1 F3:與 get.sh 同判準,免部分 clone 下兩端不一致)
+     if (home / "scripts" / "lumos").exists():
+         if pull:
+             print(f"[1/3] Lumos 來源已在,git pull 更新: {home}")
+             # 與 _vendor_toolchain 共用政策:有 remote 卻拉不到就中止,不拿可能過期的
+             # 來源往下走(step3 的 auto-init 會把它 vendor 進專案 → 同一個降版坑)。
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 3f80416..43f2e49 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -36,21 +36,23 @@ def tool_calls_from_stream(lines):
+         except Exception:
+             continue
+         msg = ev.get("message") if isinstance(ev, dict) else None
+         content = (msg or {}).get("content") if isinstance(msg, dict) else None
+         if ev.get("type") == "assistant" and isinstance(content, list):
+             for blk in content:
+                 if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                     name = blk.get("name", "?")
+                     inp = blk.get("input") or {}
+                     if name == "Bash":
+-                        summ = str(inp.get("command", ""))[:200]
++                        # ★不截斷 Bash 指令★(code-ablation-probe r1 邊界席):判「有沒有敲 lumos」的正則比對這個字串,
++                        # 截到 200 字會把落在後面的 `lumos <子指令>` 漏掉,系統性低估 M1/M2/M3。存全文,只有純顯示的其他工具截。
++                        summ = str(inp.get("command", ""))
+                     elif name in ("Read", "Edit", "Write", "Glob", "Grep"):
+                         summ = " ".join(str(inp.get(k, "")) for k in ("file_path", "pattern", "path") if inp.get(k))[:200]
+                     elif name == "Skill":
+                         summ = str(inp.get("skill", ""))
+                     else:
+                         summ = json.dumps(inp, ensure_ascii=False)[:200]
+                     calls.append((name, summ))
+     return calls
+ 
+ 
+@@ -70,22 +72,92 @@ def judge(calls, expect, forbid_before):
+     first = min(exp_idx.values())
+     for i, (name, summ) in enumerate(calls[:first]):
+         if name in ("Read", "Grep", "Glob") and "/.claude/skills/" in summ:
+             continue   # 讀索引/skill 手冊是期望行為,不算「先做了別的」
+         for f in forbid_before:
+             if re.search(f, name) or (name == "Bash" and re.search(f, summ)):
+                 return False, f"在敲 lumos 之前先做了 {name}: {summ[:80]!r}", first
+     return True, "ok", first
+ 
+ 
+-def make_sandbox(src):
++# ── 修法 A ablation(Projects/修法A_lumos先行ablation_計劃)──────────────────────────
++# 「不帶」組要拔的是 CLAUDE.md 裡「第一個工具呼叫是 lumos」那一小節(到「三條鐵則」之前),
++# 其餘(## 標題、兩行前提、三條鐵則、白話、skill 表)原樣。邊界字串跟 scripts/templates/graph-discipline.md 同源;
++# 範本改標題這裡會找不到 → make_sandbox 直接炸,寧可實驗跑不起來,不要靜默跑一個沒拔乾淨的「不帶」組。
++RULE_HEAD = "### 第一個工具呼叫是 `lumos`"
++RULE_END = "### 三條鐵則"
++
++
++def strip_lumos_first_rule(text):
++    """回 (新文字, 有沒有砍到)。找不到兩個邊界、順序反了、或標記不只出現一次 → 原文、False。
++    ★r1 邊界席:兩個標記若各出現多次,find 只取第一個、可能砍錯段且無聲。要求各恰好一次,否則安全回退★。"""
++    if text.count(RULE_HEAD) != 1 or text.count(RULE_END) != 1:
++        return text, False
++    s = text.find(RULE_HEAD)
++    e = text.find(RULE_END)
++    if s < 0 or e < 0 or e <= s:
++        return text, False
++    return text[:s] + text[e:], True
++
++
++# 2026-09-02 實跑教訓:帳號用量上限(「You've hit your session limit · resets 12:10pm」)一到,claude -p 4 秒就回、
++# 零工具呼叫,探針把它記成「沒敲到期望指令」——168 場裡 115 場是這種假失敗。這類場次要標出來、不算分。
++LIMIT_RE = re.compile(r"hit your (session|usage) limit|usage limit|rate limit|too many requests|overloaded", re.I)
++
++
++def is_limit_hit(calls, final_text, result_event):
++    """零工具呼叫 + 回覆/結果事件寫著用量或速率上限 → 這場是儀器被擋,不是被測 AI 的行為。"""
++    if calls:
++        return False
++    if LIMIT_RE.search(final_text or ""):
++        return True
++    ev = result_event or {}
++    return bool(ev.get("is_error")) and bool(LIMIT_RE.search(json.dumps(ev, ensure_ascii=False)))
++
++
++# 「敲 lumos」=Bash 裡跑了 lumos 的某個子指令:`scripts/lumos search`、`python3 scripts/lumos show`、`lumos doctor`。
++# ★2026-09-02 第一版用 \blumos\b 字界比對,把 `grep … docs/lumos-toolchain-knowledge/` 這種路徑也算成敲了 lumos,
++# 拔散文那組的「敲過率」被灌到 98.8%——路徑裡的 lumos 後面接的是 -,子指令後面接的是空白+字母。★
++# ★r1 code-ablation-probe 再修★:原前置字元類含引號 ' 與 ",害 rg 'lumos search'、echo "lumos doctor"
++# 這種只是搜尋/印出規則文字的被算成敲了 lumos(灌 M2/M3)。移除引號、留路徑分隔 / 與指令分隔符。
++LUMOS_CALL_RE = re.compile(r"(?:^|[\s;&|(`/])lumos\s+[a-z]")
++
++
++def lumos_stats(calls):
++    """回 (整場有沒有敲過 lumos 子指令, 第一次敲的是第幾個工具呼叫)。只認 Bash 指令字串;Skill 調用不算;路徑裡的 lumos 不算。"""
++    for i, (name, summ) in enumerate(calls):
++        if name == "Bash" and LUMOS_CALL_RE.search(str(summ)):   # str() 防禦:與 backfill_limit 一致(r1 邊界席)
++            return True, i
++    return False, None
++
++
++def global_skills_health():
++    """回「壞掉的」全域 skill symlink 清單 [(名字, 指向)](空=健康)。
++    壞掉=懸空(目標不存在)或指進臨時沙盒(路徑含 lumos-probe-)。偵測探針把 ~/.claude/skills 重連到沙盒的事故;
++    LUMOS_PROBE 擋不到的未知路徑靠這道事後抓。"""
++    skills = Path.home() / ".claude" / "skills"
++    bad = []
++    if not skills.exists():
++        return bad
++    for d in sorted(skills.iterdir()):
++        if not d.is_symlink():
++            continue
++        tgt = os.readlink(str(d))
++        if not d.exists() or "lumos-probe-" in tgt:   # d.exists() 對 symlink 是「跟隨後存不存在」
++            bad.append((d.name, tgt))
++    return bad
++
++
++def make_sandbox(src, arm="with"):
+     """複製工作樹到臨時目錄,並★切斷所有能把東西推出去的路★。回副本路徑。
++    arm="without":commit 前先砍 CLAUDE.md 的「第一個工具呼叫」小節(見 strip_lumos_first_rule),
++    這樣情境之間的 git checkout -- . 不會把它復原。
+ 
+     2026-08-23 事故:守衛題 a05 的情境是「沒有我就開工做」,被測 AI 真的改了計劃檔並 push——
+     臨時副本是 rsync 來的,.git/config 裡的 remote 跟著複製,push 就直接推到真遠端,
+     主幹多了一筆 author=probe@local 的「probe snapshot」(已覆蓋)。
+     隔離不只是「動到的只是副本」,還要「副本推不出去」。三道:
+       ① 拔掉所有 remote(沒有目標就沒得推)
+       ② pre-push hook 寫死 exit 1(就算被測 AI 自己加回 remote 也擋;hooksPath 指向副本內的專用目錄)
+       ③ 假身分 probe@local 維持——即使前兩道都失效,GitHub 上也認得出這不是人
+     """
+     tmp = Path(tempfile.mkdtemp(prefix="lumos-probe-"))
+@@ -96,75 +168,118 @@ def make_sandbox(src):
+     # ① 拔 remote
+     r = subprocess.run(["git", "remote"], cwd=str(work), capture_output=True, text=True)
+     for name in r.stdout.split():
+         subprocess.run(["git", "remote", "remove", name], cwd=str(work))
+     # ② 副本專用 hooks 目錄:pre-push 硬擋;其餘 hook 不存在=不跑(取代原本指向 /dev/null 的做法)
+     hooks = tmp / "hooks"
+     hooks.mkdir()
+     (hooks / "pre-push").write_text("#!/bin/sh\necho '探針沙盒:禁止 push' >&2\nexit 1\n", encoding="utf-8")
+     (hooks / "pre-push").chmod(0o755)
+     subprocess.run(["git", "config", "core.hooksPath", str(hooks)], cwd=str(work))
++    if arm == "without":
++        cm = work / "CLAUDE.md"
++        new, ok = strip_lumos_first_rule(cm.read_text(encoding="utf-8"))
++        if not ok:
++            raise RuntimeError("without 組:CLAUDE.md 找不到「第一個工具呼叫」小節的邊界,拔不乾淨,實驗無效,停手")
++        cm.write_text(new, encoding="utf-8")
+     # commit 成乾淨狀態(含未 commit 的改動——索引/筆記常是剛寫還沒 commit)
+     subprocess.run(["git", "add", "-A"], cwd=str(work))
+     subprocess.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local",
+                     "commit", "-qm", "probe snapshot", "--no-verify"], cwd=str(work))
+     return work
+ 
+ 
+-def run_one(sc, workdir, max_turns, timeout, model):
++def _validate_scenario(sc):
++    """題目缺必要欄位就回一句錯誤字串(否則 None)。★r1 邊界席:缺 expect 的畸形題原本會先燒一次真實
++    claude -p 才在索引時炸,白花稀缺配額;改成派工前先擋。"""
++    if not sc.get("id"):
++        return "題目缺 id"
++    if not sc.get("prompt"):
++        return f"題目 {sc.get('id')} 缺 prompt"
++    if not sc.get("expect"):
++        return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
++    return None
++
++
++def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
++    bad = _validate_scenario(sc)
++    if bad:
++        return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
++                "reason": f"儀器例外: {bad}", "first_tool": None, "n_calls": 0, "calls": [],
++                "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
++                "limit_hit": False, "result_subtype": None}
+     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
+     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
+     # 題目標 allow_agent:true 才放行,其餘照舊禁。
+     allow_agent = bool(sc.get("allow_agent"))
+     tools = ["Bash", "Read", "Grep", "Glob", "Edit", "Write", "Skill"]
+     if allow_agent:
+         tools.append("Agent")
+     cmd = ["claude", "-p", sc["prompt"], "--output-format", "stream-json", "--verbose",
+            "--max-turns", str(max_turns), "--no-session-persistence",
+            "--permission-mode", "acceptEdits",
+            "--allowedTools", *tools]
+     if not allow_agent:
+         cmd += ["--disallowedTools", "Agent"]
+     if model:
+         cmd += ["--model", model]
+     env = dict(os.environ)
+     env.pop("CLAUDECODE", None); env.pop("CLAUDE_CODE_ENTRYPOINT", None)
++    # ★探針沙盒事故防線(2026-09-02,見 make_sandbox 註)★:被測 session 的 HOME 是真的 ~/,
++    # 一旦它跑 lumos install/update/bootstrap 就會把真的 ~/.claude/skills 重連到沙盒、沙盒清掉後全斷。
++    # LUMOS_PROBE=1 讓那幾個指令在探針下直接拒絕(scripts/lumos:_refuse_if_probe)。
++    env["LUMOS_PROBE"] = "1"
++    if arm == "without":
++        env["LUMOS_ENTRY_HOOK_OFF"] = "1"   # SessionStart 入口 hook 看到就靜默,同一句提醒不能從第二個口進來
+     t0 = time.time()
+     try:
+         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env)
+         out = r.stdout
+         err = r.stderr[-400:]
+     except subprocess.TimeoutExpired as e:
+         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+         err = "timeout"
+     calls = tool_calls_from_stream(out.splitlines())
+     ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
+     # ⑩ 答案對不對(工具鏈補強十件):情境可帶 answer_expect=[regex…],最後回覆文字要全部命中
+     final = ""
++    result_ev = {}
+     for ln in out.splitlines():
+         ln = ln.strip()
+         if not ln.startswith("{"):
+             continue
+         try:
+             ev = json.loads(ln)
+         except Exception:
+             continue
+         if isinstance(ev, dict) and ev.get("type") == "result":
+             final = ev.get("result") or ""
+-    if ok and sc.get("answer_expect"):
++            result_ev = ev
++    # ★r1 外家/正確性席:答案內容對不對 與 通過閘(敲對指令+答對)分開記★——
++    # M4 若只看 passed,會把「答案對但先 grep」記成失敗,混淆「答案對不對」與「走對路徑沒有」。
++    answer_content_ok = None
++    if sc.get("answer_expect"):
+         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
+-        if miss_a:
++        answer_content_ok = not miss_a
++        if ok and not answer_content_ok:
+             ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
++    limit_hit = is_limit_hit(calls, final, result_ev)
++    if limit_hit:
++        ok, why = False, "儀器例外: 帳號用量/速率上限,claude -p 沒真的跑,這場不算分"
++    ever, first_idx = lumos_stats(calls)
+     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
+             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
+-            "calls": calls[:12], "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+-            "answer": (final or "")[:1500]}
++            "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
++            "answer": (final or "")[:1500],
++            "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
++            "answer_content_ok": answer_content_ok,
++            "limit_hit": limit_hit, "result_subtype": result_ev.get("subtype")}
+ 
+ 
+ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--repo", default=str(ROOT),
+                     help="要被探的專案根目錄(預設=本 repo)。★探別的專案必須給★——"
+                          "沒給的話不論在哪個目錄執行,複製的都是 lumos-toolchain 自己,"
+                          "題目再怎麼寫都是在探錯的 repo(2026-08-22 實際踩過)")
+     ap.add_argument("--scenarios", default=str(ROOT / "governance" / "scenarios" / "commands.jsonl"))
+     ap.add_argument("--only", default="")
+@@ -176,21 +291,31 @@ def main():
+     ap.add_argument("--max-turns", type=int, default=18)
+     ap.add_argument("--timeout", type=int, default=240)
+     ap.add_argument("--model", default="")
+     ap.add_argument("--out", default="")
+     ap.add_argument("--keep", action="store_true", help="保留臨時副本")
+     ap.add_argument("--sample", type=int, default=0, help="只抽 N 題(決定性:依 --seed 輪轉,給自主迴圈每週抽查用)")
+     ap.add_argument("--seed", default="", help="抽樣種子(例:週數);同種子同題")
+     ap.add_argument("--history", default="", help="把本次摘要 append 到這個 jsonl(ts/passed/total/failed)")
+     ap.add_argument("--ts", default="", help="寫進 history 的時間戳(排程端給)")
+     ap.add_argument("--dry-list", action="store_true", help="只印抽到的題目 id,不跑(測抽樣用)")
++    # ── 修法 A ablation 兩個旗標(預設值=改前行為)──
++    ap.add_argument("--runs", type=int, default=1,
++                    help="每題重跑幾次(預設 1)。同一題這次過下次不過是常態,不重跑就分不出規矩效果與運氣")
++    ap.add_argument("--arm", choices=["with", "without"], default="with",
++                    help="with=現況;without=沙盒 CLAUDE.md 砍「第一個工具呼叫」小節+入口 hook 靜默(見 Projects/修法A_lumos先行ablation_計劃)")
++    ap.add_argument("--wait-on-limit", type=int, default=0,
++                    help="撞到帳號用量上限時最多等幾秒(每 300 秒重試同一場;預設 0=不等,照記成儀器例外)。"
++                         "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
+     a = ap.parse_args()
++    if a.runs < 1:
++        print("✗ --runs 至少 1", file=sys.stderr); return 2
+     scs = []
+     for f in a.scenarios.split(","):
+         scs += [json.loads(l) for l in Path(f).read_text(encoding="utf-8").splitlines() if l.strip()]
+     if a.only:
+         keep = set(a.only.split(","))
+         scs = [s for s in scs if s["id"] in keep or s["id"].split("-")[0] in keep]
+     if a.sample and a.sample < len(scs):
+         # 決定性輪轉:同一種子永遠抽同一組;種子換(每週)就換一組,幾週下來全部輪過
+         import hashlib
+         h = int(hashlib.sha256(a.seed.encode("utf-8")).hexdigest(), 16)
+@@ -200,48 +325,85 @@ def main():
+         for s_ in scs:
+             if s_["id"] not in seen:
+                 seen.add(s_["id"]); uniq.append(s_)
+         scs = uniq
+     if a.dry_list:
+         print(",".join(s_["id"] for s_ in scs)); return 0
+     src = Path(a.repo).resolve()
+     if not (src / ".git").exists():
+         print(f"✗ --repo {src} 不是 git repo(找不到 .git),停手", file=sys.stderr)
+         return 2
+-    work = make_sandbox(src)
++    work = make_sandbox(src, a.arm)
+     # skills 走 ~/.claude(symlink 回本 repo),不用複製
+-    print(f"探的是: {src}\n臨時副本: {work}", file=sys.stderr)
++    print(f"探的是: {src}\n臨時副本: {work}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),
++          file=sys.stderr)
+     results = []
++    waited = 0
+     try:
+         for sc in scs:
+-            try:
+-                res = run_one(sc, work, a.max_turns, a.timeout, a.model)
+-            except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
+-                res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+-                       "reason": f"儀器例外: {type(e).__name__}: {e}", "first_tool": None,
+-                       "n_calls": 0, "calls": [], "secs": 0, "stderr": ""}
+-            results.append(res)
+-            mark = "✓" if res["passed"] else "✗"
+-            ft = f"{res['first_tool'][0]}: {res['first_tool'][1][:70]}" if res["first_tool"] else "(沒有任何工具呼叫)"
+-            print(f"  {mark} {res['id']:22s} {res['secs']:6.1f}s  第一動作→ {ft}", flush=True)
+-            if not res["passed"]:
+-                print(f"      {res['reason']}", flush=True)
+-            subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work))
+-            subprocess.run(["git", "clean", "-qfdx"], cwd=str(work))   # -x:連 gitignore 的產出也清,情境之間不互染
++            for k in range(1, a.runs + 1):
++                while True:
++                    try:
++                        res = run_one(sc, work, a.max_turns, a.timeout, a.model, a.arm)
++                    except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
++                        res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
++                               "reason": f"儀器例外: {type(e).__name__}: {e}", "first_tool": None,
++                               "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
++                               "arm": a.arm, "ever_lumos": False, "first_lumos_idx": None,
++                               "limit_hit": False, "result_subtype": None}
++                    if res.get("limit_hit") and waited < a.wait_on_limit:
++                        print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
++                        time.sleep(300); waited += 300
++                        continue
++                    break
++                res["run"] = k
++                results.append(res)
++                mark = "✓" if res["passed"] else "✗"
++                ft = f"{res['first_tool'][0]}: {res['first_tool'][1][:70]}" if res["first_tool"] else "(沒有任何工具呼叫)"
++                tag = f" #{k}" if a.runs > 1 else ""
++                print(f"  {mark} {res['id']:22s}{tag} {res['secs']:6.1f}s  第一動作→ {ft}", flush=True)
++                if not res["passed"]:
++                    print(f"      {res['reason']}", flush=True)
++                subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work))
++                subprocess.run(["git", "clean", "-qfdx"], cwd=str(work))   # -x:連 gitignore 的產出也清,情境之間不互染
+     finally:
++        bad = global_skills_health()
++        if bad:
++            print("\n" + "!" * 60, file=sys.stderr)
++            print(f"✗ 事故:全域 ~/.claude/skills 有 {len(bad)} 個連結被動到(懸空或指進沙盒):", file=sys.stderr)
++            for name, tgt in bad:
++                print(f"    {name} → {tgt}", file=sys.stderr)
++            print("  修:在真 repo 跑一次\n    python3 scripts/lumos install --force\n"
++                  "  這代表某條路徑繞過了 LUMOS_PROBE 防線,見 Issues/探針沙盒改動真全域機器狀態", file=sys.stderr)
++            print("!" * 60, file=sys.stderr)
+         n = len(results); p = sum(1 for r in results if r["passed"])
+-        print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令")
++        lim = sum(1 for r in results if r.get("limit_hit"))
++        print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令" + (f"(組別 {a.arm})" if a.arm != "with" else "")
++              + (f";其中 {lim} 場撞帳號用量上限沒真的跑,不算分" if lim else ""))
++        if a.runs > 1:
++            per = {}
++            for r in results:
++                per.setdefault(r["id"], [0, 0]); per[r["id"]][1] += 1; per[r["id"]][0] += 1 if r["passed"] else 0
++            print("每題通過次數: " + "  ".join(f"{i} {c}/{t}" for i, (c, t) in per.items()))
+         if a.out:
+-            Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n}, ensure_ascii=False, indent=1), encoding="utf-8")
++            # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
++            # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
++            Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
++                                               "arm": a.arm, "runs": a.runs,
++                                               "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
+         if a.history:
+             with open(a.history, "a", encoding="utf-8") as hf:
+                 hf.write(json.dumps({"ts": a.ts, "seed": a.seed, "passed": p, "total": n,
+-                                     "failed": [r["id"] for r in results if not r["passed"]]}, ensure_ascii=False) + "\n")
++                                     "failed": [r["id"] for r in results if not r["passed"]],
++                                     **({"arm": a.arm, "runs": a.runs} if (a.arm != "with" or a.runs > 1) else {})},
++                                    ensure_ascii=False) + "\n")
+         if not a.keep:
+             # r3 s2 實測抓到:原寫 rmtree(tmp) 但 tmp 是 make_sandbox 的區域變數,這裡 NameError、
+             # 被 finally 吞掉——每週漏一個沙盒目錄,/tmp 已積 40 個。work=<tmp>/repo,清父目錄。
+             shutil.rmtree(work.parent, ignore_errors=True)
++    if bad:
++        return 3   # ★全域 skills 事故:與「有題沒過(1)」分開,跑批看到 3 立刻停整批(r1 併發席)
+     return 0 if p == n else 1
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index 929a890..c17c09e 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -1289,12 +1289,279 @@ class TestReplayWeekly(unittest.TestCase):
+         with mock.patch.object(self.m.subprocess, "run", return_value=r):
+             out = self.m.run_weekly(self.repo)
+         self.assertEqual(out["red"], [], "rc0 時紅字樣不得判紅")
+ 
+     def test_quiet_week_no_message(self):
+         self._verdict("a")
+         with mock.patch.object(self.m.subprocess, "run", return_value=self._run_ok("✓")):
+             out = self.m.run_weekly(self.repo)
+         self.assertIsNone(self.m.build_msg(out), "無事不發訊(異常才發聲)")
+ 
++class TestScenarioProbeAblation(unittest.TestCase):
++    """修法 A ablation 儀器(Projects/修法A_lumos先行ablation_計劃):探針的 --arm without 靠這兩個純函式,
++    runner 靠 shard/merge。預設路徑(--arm with --runs 1)行為不得變——由 test_strip_missing 與 lumos_stats 空輸入釘。"""
++
++    @classmethod
++    def setUpClass(cls):
++        import importlib.util
++        root = Path(__file__).resolve().parent.parent
++        spec = importlib.util.spec_from_file_location("scenario_probe", root / "scripts" / "scenario_probe.py")
++        cls.sp = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.sp)
++        spec2 = importlib.util.spec_from_file_location("ablation_lumos_first",
++                                                       root / "governance" / "eval" / "ablation_lumos_first.py")
++        cls.rn = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(cls.rn)
++        cls.root = root
++
++    def test_strip_removes_only_rule_section(self):
++        txt = ("## 知識圖譜先行\n前提兩行\n\n" + self.sp.RULE_HEAD + "\n| 表 |\n★第四條★\n\n"
++               + self.sp.RULE_END + "\n1. 寫回\n")
++        out, ok = self.sp.strip_lumos_first_rule(txt)
++        self.assertTrue(ok)
++        self.assertIn("## 知識圖譜先行\n前提兩行", out, "標題與前提要留")
++        self.assertIn(self.sp.RULE_END + "\n1. 寫回", out, "三條鐵則要留")
++        self.assertNotIn("★第四條★", out, "小節正文要砍")
++        self.assertNotIn(self.sp.RULE_HEAD, out)
++
++    def test_strip_missing_marker_returns_unchanged(self):
++        txt = "沒有那一節的檔"
++        out, ok = self.sp.strip_lumos_first_rule(txt)
++        self.assertFalse(ok); self.assertEqual(out, txt)
++
++    def test_strip_real_claude_md_has_markers(self):
++        """釘住實驗前提:本 repo 的 CLAUDE.md 真的有那一節、砍完三條鐵則還在。範本改名這裡先紅。"""
++        cm = (self.root / "CLAUDE.md").read_text(encoding="utf-8")
++        out, ok = self.sp.strip_lumos_first_rule(cm)
++        self.assertTrue(ok, "CLAUDE.md 找不到「第一個工具呼叫」小節邊界,without 組做不出來")
++        self.assertIn("### 三條鐵則", out)
++        self.assertIn("## 知識圖譜先行", out)
++        self.assertLess(len(out), len(cm) - 500, "砍掉的量太小,可能只砍到標題")
++
++    def test_lumos_stats(self):
++        calls = [("Read", "x"), ("Bash", "scripts/lumos search foo"), ("Bash", "grep y")]
++        self.assertEqual(self.sp.lumos_stats(calls), (True, 1))
++        self.assertEqual(self.sp.lumos_stats([]), (False, None))
++        self.assertEqual(self.sp.lumos_stats([("Bash", "ls lumosity")]), (False, None), "字界:lumosity 不算")
++        self.assertEqual(self.sp.lumos_stats([("Skill", "lumos-project-notes")]), (False, None), "Skill 不算敲到")
++        # 2026-09-02 灌水修正:grep 知識庫目錄路徑不是敲 lumos;帶 python3 前綴、帶管線的子指令要算
++        self.assertEqual(self.sp.lumos_stats([("Bash", 'grep -rn "canary" docs/lumos-toolchain-knowledge/Systems/')]), (False, None))
++        self.assertEqual(self.sp.lumos_stats([("Bash", "ls && python3 scripts/lumos show X | head")]), (True, 0))
++        self.assertEqual(self.sp.lumos_stats([("Bash", "cd repo; lumos doctor")]), (True, 0))
++
++    def test_backfill_recomputes_lumos_from_calls(self):
++        r = {"id": "x", "passed": False, "n_calls": 3, "answer": "ok", "ever_lumos": True, "first_lumos_idx": 0,
++             "calls": [["Bash", "grep -rn canary docs/lumos-toolchain-knowledge/"], ["Read", "f"], ["Bash", "scripts/lumos search c"]]}
++        out = self.rn.backfill_limit(dict(r))
++        self.assertEqual((out["ever_lumos"], out["first_lumos_idx"], out["calls_truncated"]), (True, 2, False), "路徑那筆不算,第 2 筆才是")
++        r2 = {"id": "y", "n_calls": 14, "answer": "ok", "calls": [["Bash", "grep x docs/lumos-toolchain-knowledge/"]] * 12}
++        out2 = self.rn.backfill_limit(r2)
++        # r2 語意:截斷 + 可見清單無真呼叫 → 未知 None(真呼叫可能在被砍的第 13-14 筆),不是 False
++        self.assertEqual((out2["ever_lumos"], out2["calls_truncated"]), (None, True), "截斷判不出 → 未知")
++
++    def test_is_limit_hit(self):
++        """2026-09-02 實跑:撞帳號上限時 claude -p 零工具呼叫、result 文字是上限訊息;有工具呼叫的場永遠不算撞上限。"""
++        f = self.sp.is_limit_hit
++        self.assertTrue(f([], "You've hit your session limit · resets 12:10pm (Asia/Taipei)", {}))
++        self.assertTrue(f([], "", {"is_error": True, "result": "Rate limit exceeded"}))
++        self.assertFalse(f([("Bash", "scripts/lumos search x")], "You've hit your session limit", {}), "有工具呼叫就不是被擋")
++        self.assertFalse(f([], "圖譜沒說", {}), "零呼叫但回覆正常=真的沒敲,不是儀器")
++
++    def test_needed_counts_only_valid(self):
++        d = Path(tempfile.mkdtemp())
++        rows = [{"id": "s01", "passed": True, "n_calls": 2, "answer": "ok", "run": 1},
++                {"id": "s01", "passed": False, "n_calls": 0, "answer": "You've hit your session limit · resets 1pm", "run": 2},
++                {"id": "s01", "passed": False, "reason": "儀器例外: Boom", "n_calls": 0, "answer": "", "run": 3}]
++        (d / "with-shard0.json").write_text(json.dumps({"arm": "with", "runs": 3, "results": rows}), encoding="utf-8")
++        by = self.rn.load_results(d)
++        self.assertTrue(by["with"][1]["limit_hit"], "舊檔沒 limit_hit 欄要補標")
++        self.assertEqual(self.rn.needed(by, "with", "s01", 3), 2, "有效只有 1 場,還缺 2")
++        self.assertEqual(self.rn.needed(by, "without", "s01", 3), 3)
++        s = self.rn.merge(d, expected_ids=["s01"], runs=3)
++        w = s["arms"]["with"]
++        self.assertEqual((w["n"], w["m1_passed"], w["limit_hits"], w["instrument_errors"], w["missing"]), (1, 1, 1, 2, 2))
++
++    def test_merge_computes_four_metrics(self):
++        d = Path(tempfile.mkdtemp())
++        def res(i, passed, calls, run):
++            ev, idx = self.sp.lumos_stats(calls)
++            return {"id": i, "passed": passed, "calls": calls, "run": run,
++                    "ever_lumos": ev, "first_lumos_idx": idx, "reason": "ok" if passed else "x", "stderr": ""}
++        L = [("Bash", "scripts/lumos search a")]; G = [("Grep", "p"), ("Bash", "scripts/lumos context b")]; N = [("Read", "f")]
++        (d / "with-shard0.json").write_text(json.dumps({"arm": "with", "runs": 2, "results": [
++            res("s01", True, L, 1), res("s01", True, L, 2), res("a01", True, L, 1), res("a01", False, G, 2)]}), encoding="utf-8")
++        (d / "without-shard0.json").write_text(json.dumps({"arm": "without", "runs": 2, "results": [
++            res("s01", False, G, 1), res("s01", True, L, 2), res("a01", False, N, 1), res("a01", False, N, 2)]}), encoding="utf-8")
++        s = self.rn.merge(d, expected_ids=["s01", "a01"], runs=2)
++        w, wo = s["arms"]["with"], s["arms"]["without"]
++        self.assertEqual((w["n"], w["m1_passed"]), (4, 3))
++        self.assertEqual((wo["n"], wo["m1_passed"]), (4, 1))
++        self.assertEqual(w["m2_ever"], 4); self.assertEqual(wo["m2_ever"], 2)
++        # with 四場首次步數 [0,0,0,1] → 中位 0;without 只有兩場敲到 [1,0] → 中位 0.5
++        self.assertEqual(w["m3_first_idx_median"], 0); self.assertEqual(wo["m3_first_idx_median"], 0.5)
++        self.assertEqual((w["m3_n"], wo["m3_n"]), (4, 2))
++        self.assertEqual((w["m4_gated_passed"], w["m4_gated_n"]), (1, 2))
++        self.assertEqual(w["inconsistent_questions"], ["a01"]); self.assertEqual(wo["inconsistent_questions"], ["s01"])
++        self.assertEqual(w["missing"], 0)
++        self.assertAlmostEqual(s["m1_delta_pp"], (3 / 4 - 1 / 4) * 100)
++        self.assertEqual(s["per_question"]["s01"], {"with": [2, 2], "without": [1, 2]})
++
++    def test_classify_question(self):
++        c = self.rn.classify_question
++        self.assertEqual(c([3, 3], [3, 3]), "不區分(都過)")
++        self.assertEqual(c([0, 3], [0, 3]), "不區分(都不過)")
++        self.assertEqual(c([3, 3], [1, 3]), "區分")
++        self.assertEqual(c([3, 3], [0, 3]), "區分")
++        self.assertEqual(c([1, 3], [2, 3]), "反向")
++        self.assertEqual(c([3, 3], [2, 3]), "弱/不穩")
++        self.assertEqual(c([3, 3], [0, 0]), "缺資料")
++
++    def test_runs_in_window_counts_recent_only(self):
++        import os, time as _t
++        d = Path(tempfile.mkdtemp())
++        (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [{}, {}, {}]}), encoding="utf-8")
++        old = d / "with-q-b-1.json"
++        old.write_text(json.dumps({"arm": "with", "results": [{}]}), encoding="utf-8")
++        os.utime(old, (_t.time() - 6 * 3600, _t.time() - 6 * 3600))
++        (d / "summary.json").write_text("{}", encoding="utf-8")
++        self.assertEqual(self.rn.runs_in_window(d, hours=5), 3, "六小時前的檔不算、summary 不算")
++        self.assertEqual(self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)[2][:4], "skip")
++
++    def test_lumos_stats_rejects_quoted_and_echo(self):
++        # r1 code-ablation-probe:引號內/echo 出來的規則文字不算敲 lumos;真呼叫算
++        f = self.sp.lumos_stats
++        self.assertEqual(f([("Bash", "rg 'lumos search' CLAUDE.md")]), (False, None))
++        self.assertEqual(f([("Bash", 'echo "lumos doctor"')]), (False, None))
++        self.assertEqual(f([("Bash", "grep lumos-toolchain docs/")]), (False, None))
++        self.assertEqual(f([("Bash", "cd x && lumos search foo")]), (True, 0))
++        self.assertEqual(f([("Bash", "python3 scripts/lumos show X")]), (True, 0))
++
++    def test_strip_rejects_duplicate_markers(self):
++        t = "a\n" + self.sp.RULE_HEAD + "\nx\n" + self.sp.RULE_END + "\nb\n" + self.sp.RULE_HEAD + "\n"
++        out, ok = self.sp.strip_lumos_first_rule(t)
++        self.assertFalse(ok, "標記出現兩次要安全回退,不砍錯段")
++        self.assertEqual(out, t)
++
++    def test_validate_scenario(self):
++        v = self.sp._validate_scenario
++        self.assertIsNone(v({"id": "s", "prompt": "p", "expect": ["x"]}))
++        self.assertIn("expect", v({"id": "s", "prompt": "p"}))
++        self.assertIn("prompt", v({"id": "s", "expect": ["x"]}))
++
++    def test_arm_stats_filters_expected_ids(self):
++        # 舊題殘檔(id=stale)不進 M1；只算現行題庫的
++        rows = [{"id": "s01", "passed": True, "ever_lumos": True, "first_lumos_idx": 0},
++                {"id": "stale", "passed": False, "ever_lumos": False, "first_lumos_idx": None}]
++        st = self.rn._arm_stats(rows, expected_ids=["s01"], runs=1)
++        self.assertEqual((st["n"], st["m1_passed"]), (1, 1), "stale 題不算進 M1")
++
++    def test_backfill_truncated_ambiguous_is_unknown(self):
++        # r2 正確性席:截斷 + 殘缺清單看不到真呼叫 → 分不清真呼叫在被砍部分還是舊值假陽性 → 標未知 None
++        r = {"id": "x", "n_calls": 14, "ever_lumos": True, "answer": "ok",
++             "calls": [["Read", "f"]] * 12}   # 12<14 truncated,可見 calls 無 lumos
++        out = self.rn.backfill_limit(dict(r))
++        self.assertIsNone(out["ever_lumos"], "截斷且看不到真呼叫 → 未知,不保留可能是假陽性的 True")
++        self.assertTrue(out["calls_truncated"])
++
++    def test_backfill_truncated_visible_false_positive_downgraded(self):
++        # r2 正確性席核心:舊值 True 其實是舊正則假陽性、且假陽性就在可見 calls 裡 → 新正則判 False → 不該保留 True
++        r = {"id": "x", "n_calls": 14, "ever_lumos": True, "answer": "ok",
++             "calls": [["Bash", "rg 'lumos search' CLAUDE.md"]] * 12}   # 可見全是假陽性字串
++        out = self.rn.backfill_limit(dict(r))
++        self.assertIsNone(out["ever_lumos"], "可見清單無真呼叫 → 不保留假陽性 True(改標未知)")
++
++    def test_backfill_truncated_visible_real_call_kept(self):
++        r = {"id": "x", "n_calls": 14, "ever_lumos": True, "answer": "ok",
++             "calls": [["Read", "f"], ["Bash", "scripts/lumos search x"]] + [["Read", "z"]] * 10}
++        out = self.rn.backfill_limit(dict(r))
++        self.assertTrue(out["ever_lumos"], "可見清單有真呼叫 → 確定 True")
++        self.assertEqual(out["first_lumos_idx"], 1)
++
++    def test_arm_stats_m2_excludes_unknown(self):
++        # ever_lumos=None 的場不進 M2 分母
++        rows = [{"id": "s01", "passed": True, "ever_lumos": True, "first_lumos_idx": 0},
++                {"id": "s02", "passed": False, "ever_lumos": None, "first_lumos_idx": None}]
++        st = self.rn._arm_stats(rows, expected_ids=["s01", "s02"], runs=1)
++        self.assertEqual((st["m2_ever"], st["m2_n"]), (1, 1), "未知場排除在 M2 分母外")
++
++    def test_m4_content_vs_gated(self):
++        d = Path(tempfile.mkdtemp())
++        # a01:敲對+答對(passed=True, content=True);a02:答對但先 grep(passed=False, content=True)
++        rows = [{"id": "a01", "passed": True, "ever_lumos": True, "first_lumos_idx": 0, "answer_content_ok": True},
++                {"id": "a02", "passed": False, "ever_lumos": True, "first_lumos_idx": 1, "answer_content_ok": True}]
++        st = self.rn._arm_stats(rows, expected_ids=["a01", "a02"], runs=1)
++        self.assertEqual((st["m4_gated_passed"], st["m4_gated_n"]), (1, 2), "gated 只算 passed")
++        self.assertEqual((st["m4_content_passed"], st["m4_content_n"]), (2, 2), "content 兩題答案都對")
++
++    def test_load_ids_dedup(self):
++        d = Path(tempfile.mkdtemp())
++        f = d / "q.jsonl"
++        f.write_text('{"id":"s01","expect":["x"]}\n{"id":"s01","expect":["x"]}\n{"id":"s02","expect":["y"]}\n', encoding="utf-8")
++        # load_ids 讀 ROOT/f;這裡用絕對路徑塞進去測去重邏輯——改用相對 ROOT 不便,直接測 set 去重行為
++        import json as _j
++        seen, ids = set(), []
++        for ln in f.read_text().splitlines():
++            q = _j.loads(ln)["id"]
++            if q not in seen:
++                seen.add(q); ids.append(q)
++        self.assertEqual(ids, ["s01", "s02"])
++
++    def test_collect_skills_health(self):
++        d = Path(tempfile.mkdtemp())
++        (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [], "skills_health_bad": [["x", "/tmp/lumos-probe-z/skills/x"]]}), encoding="utf-8")
++        (d / "with-q-b-1.json").write_text(json.dumps({"arm": "with", "results": [], "skills_health_bad": []}), encoding="utf-8")
++        hits = self.rn.collect_skills_health(d)
++        self.assertEqual(len(hits), 1)
++
++    def test_load_results_skips_bad_json(self):
++        d = Path(tempfile.mkdtemp())
++        (d / "with-q-a-1.json").write_text("[]", encoding="utf-8")   # 合法 JSON 但非 dict
++        (d / "with-q-b-1.json").write_text(json.dumps({"arm": "with", "results": [{"id": "s01", "passed": True}, "壞元素"]}), encoding="utf-8")
++        by = self.rn.load_results(d)   # 不該炸
++        self.assertEqual(len(by["with"]), 1, "非 dict 檔與非 dict 元素都跳過")
++
++    def test_merge_counts_missing(self):
++        d = Path(tempfile.mkdtemp())
++        (d / "with-shard0.json").write_text(json.dumps({"arm": "with", "runs": 3, "results": [
++            {"id": "s01", "passed": True, "calls": [], "run": 1, "ever_lumos": False, "first_lumos_idx": None, "reason": "ok", "stderr": ""}]}), encoding="utf-8")
++        s = self.rn.merge(d, expected_ids=["s01", "s02"], runs=3)
++        self.assertEqual(s["arms"]["with"]["missing"], 5)
++        self.assertEqual(s["arms"]["without"]["missing"], 6)
++        self.assertIsNone(s["arms"]["with"]["m3_first_idx_median"])
++
++
++class TestProbeSandboxGuard(unittest.TestCase):
++    """探針沙盒全域防護(Issues/探針沙盒改動真全域機器狀態)。"""
++
++    @classmethod
++    def setUpClass(cls):
++        import importlib.util
++        root = Path(__file__).resolve().parent.parent
++        spec = importlib.util.spec_from_file_location("scenario_probe", root / "scripts" / "scenario_probe.py")
++        cls.sp = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.sp)
++
++    def test_global_skills_health(self):
++        import os
++        home = Path(tempfile.mkdtemp())
++        skills = home / ".claude" / "skills"; skills.mkdir(parents=True)
++        real = home / "repo" / "skills" / "good"; real.mkdir(parents=True)
++        (skills / "good").symlink_to(real)                                  # 健康
++        (skills / "dangling").symlink_to(home / "gone" / "x")               # 懸空
++        probe = home / "T" / "lumos-probe-abc" / "repo" / "skills" / "s"; probe.mkdir(parents=True)
++        (skills / "in-sandbox").symlink_to(probe)                           # 指進沙盒(即使暫時存在也算壞)
++        with mock.patch.object(self.sp.Path, "home", staticmethod(lambda: home)):
++            bad = dict(self.sp.global_skills_health())
++        self.assertIn("dangling", bad)
++        self.assertIn("in-sandbox", bad)
++        self.assertNotIn("good", bad)
++
++    def test_refuse_if_probe(self):
++        # 只驗「有 LUMOS_PROBE → 退 2 且不動機器」;不跑無旗標分支(那會真的重裝、動 ~/.claude)
++        import os, subprocess
++        for sub in ("install", "update", "uninstall", "bootstrap"):
++            with mock.patch.dict(os.environ, {"LUMOS_PROBE": "1"}):
++                r = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "lumos"), sub],
++                                   capture_output=True, text=True)
++            self.assertEqual(r.returncode, 2, f"{sub} 在 LUMOS_PROBE 下應退 2")
++            self.assertIn("LUMOS_PROBE", r.stderr, f"{sub} 應印守衛訊息")
++
++
+ if __name__ == "__main__":
+     unittest.main()
