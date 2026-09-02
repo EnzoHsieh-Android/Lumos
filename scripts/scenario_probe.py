@@ -123,6 +123,23 @@ def lumos_stats(calls):
     return False, None
 
 
+def global_skills_health():
+    """回「壞掉的」全域 skill symlink 清單 [(名字, 指向)](空=健康)。
+    壞掉=懸空(目標不存在)或指進臨時沙盒(路徑含 lumos-probe-)。偵測探針把 ~/.claude/skills 重連到沙盒的事故;
+    LUMOS_PROBE 擋不到的未知路徑靠這道事後抓。"""
+    skills = Path.home() / ".claude" / "skills"
+    bad = []
+    if not skills.exists():
+        return bad
+    for d in sorted(skills.iterdir()):
+        if not d.is_symlink():
+            continue
+        tgt = os.readlink(str(d))
+        if not d.exists() or "lumos-probe-" in tgt:   # d.exists() 對 symlink 是「跟隨後存不存在」
+            bad.append((d.name, tgt))
+    return bad
+
+
 def make_sandbox(src, arm="with"):
     """複製工作樹到臨時目錄,並★切斷所有能把東西推出去的路★。回副本路徑。
     arm="without":commit 前先砍 CLAUDE.md 的「第一個工具呼叫」小節(見 strip_lumos_first_rule),
@@ -182,6 +199,10 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
         cmd += ["--model", model]
     env = dict(os.environ)
     env.pop("CLAUDECODE", None); env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    # ★探針沙盒事故防線(2026-09-02,見 make_sandbox 註)★:被測 session 的 HOME 是真的 ~/,
+    # 一旦它跑 lumos install/update/bootstrap 就會把真的 ~/.claude/skills 重連到沙盒、沙盒清掉後全斷。
+    # LUMOS_PROBE=1 讓那幾個指令在探針下直接拒絕(scripts/lumos:_refuse_if_probe)。
+    env["LUMOS_PROBE"] = "1"
     if arm == "without":
         env["LUMOS_ENTRY_HOOK_OFF"] = "1"   # SessionStart 入口 hook 看到就靜默,同一句提醒不能從第二個口進來
     t0 = time.time()
@@ -315,6 +336,15 @@ def main():
                 subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work))
                 subprocess.run(["git", "clean", "-qfdx"], cwd=str(work))   # -x:連 gitignore 的產出也清,情境之間不互染
     finally:
+        bad = global_skills_health()
+        if bad:
+            print("\n" + "!" * 60, file=sys.stderr)
+            print(f"✗ 事故:全域 ~/.claude/skills 有 {len(bad)} 個連結被動到(懸空或指進沙盒):", file=sys.stderr)
+            for name, tgt in bad:
+                print(f"    {name} → {tgt}", file=sys.stderr)
+            print("  修:在真 repo 跑一次\n    python3 scripts/lumos install --force\n"
+                  "  這代表某條路徑繞過了 LUMOS_PROBE 防線,見 Issues/探針沙盒改動真全域機器狀態", file=sys.stderr)
+            print("!" * 60, file=sys.stderr)
         n = len(results); p = sum(1 for r in results if r["passed"])
         lim = sum(1 for r in results if r.get("limit_hit"))
         print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令" + (f"(組別 {a.arm})" if a.arm != "with" else "")

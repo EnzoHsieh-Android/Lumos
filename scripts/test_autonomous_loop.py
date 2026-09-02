@@ -1433,5 +1433,41 @@ class TestScenarioProbeAblation(unittest.TestCase):
         self.assertIsNone(s["arms"]["with"]["m3_first_idx_median"])
 
 
+class TestProbeSandboxGuard(unittest.TestCase):
+    """探針沙盒全域防護(Issues/探針沙盒改動真全域機器狀態)。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        root = Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location("scenario_probe", root / "scripts" / "scenario_probe.py")
+        cls.sp = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.sp)
+
+    def test_global_skills_health(self):
+        import os
+        home = Path(tempfile.mkdtemp())
+        skills = home / ".claude" / "skills"; skills.mkdir(parents=True)
+        real = home / "repo" / "skills" / "good"; real.mkdir(parents=True)
+        (skills / "good").symlink_to(real)                                  # 健康
+        (skills / "dangling").symlink_to(home / "gone" / "x")               # 懸空
+        probe = home / "T" / "lumos-probe-abc" / "repo" / "skills" / "s"; probe.mkdir(parents=True)
+        (skills / "in-sandbox").symlink_to(probe)                           # 指進沙盒(即使暫時存在也算壞)
+        with mock.patch.object(self.sp.Path, "home", staticmethod(lambda: home)):
+            bad = dict(self.sp.global_skills_health())
+        self.assertIn("dangling", bad)
+        self.assertIn("in-sandbox", bad)
+        self.assertNotIn("good", bad)
+
+    def test_refuse_if_probe(self):
+        # 只驗「有 LUMOS_PROBE → 退 2 且不動機器」;不跑無旗標分支(那會真的重裝、動 ~/.claude)
+        import os, subprocess
+        for sub in ("install", "update", "uninstall", "bootstrap"):
+            with mock.patch.dict(os.environ, {"LUMOS_PROBE": "1"}):
+                r = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "lumos"), sub],
+                                   capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2, f"{sub} 在 LUMOS_PROBE 下應退 2")
+            self.assertIn("LUMOS_PROBE", r.stderr, f"{sub} 應印守衛訊息")
+
+
 if __name__ == "__main__":
     unittest.main()

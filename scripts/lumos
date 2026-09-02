@@ -10184,9 +10184,25 @@ def cmd_archive(env, days, apply, today):
 
 # ═══════════════════════ main ═══════════════════════
 
+def _refuse_if_probe(action):
+    """探針沙盒事故防線(Issues/探針沙盒改動真全域機器狀態,2026-09-02):
+    情境探針把 repo 複製到臨時沙盒、在裡面跑 claude -p,但那個 session 的 HOME 是真的 ~/,
+    所以它(或它跑的任何子程序)一旦執行安裝/更新/卸載,會把真的 ~/.claude/skills 重新連到沙盒副本;
+    沙盒清掉後全域 skills 全變懸空連結。2026-09-02 實際炸過一次(八個 skill 斷)。
+    探針環境一律設 LUMOS_PROBE=1;這幾個會動全域機器狀態的指令在探針下直接拒絕。"""
+    import os
+    if os.environ.get("LUMOS_PROBE") == "1":
+        print(f"✗ 偵測到 LUMOS_PROBE=1(情境探針沙盒),拒絕執行「{action}」——"
+              f"這會把真的 ~/.claude 重連到臨時沙盒,沙盒一清就全斷。探針裡不該重裝工具鏈。", file=sys.stderr)
+        return True
+    return False
+
+
 def cmd_install(force=False):
     """全域 lumos + user-scope skills(機器層一鍵)。Unix=symlink、Win=.cmd shim。"""
     import os
+    if _refuse_if_probe("install"):
+        return 2
     src = Path(__file__).resolve()
     bindir = Path.home() / ".local" / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
@@ -10226,6 +10242,8 @@ def cmd_install(force=False):
 def cmd_uninstall():
     """對稱移除 cmd_install 裝的東西:全域指令(Unix symlink / Win lumos.cmd)+ user-scope skills。"""
     import os, shutil
+    if _refuse_if_probe("uninstall"):
+        return 2
     removed = []
     bindir = Path.home() / ".local" / "bin"
     for name in ("lumos.cmd", "lumos"):          # Win shim + Unix symlink
@@ -10893,6 +10911,8 @@ def cmd_update(source=None, no_pull=False, allow_stale=False):
     """從 Lumos 唯一源 repo 更新「本專案」vendored 的工具組。
     = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
     圖譜資料受 install-graph-toolchain 的 scaffold-skip 保護,不會被動。"""
+    if _refuse_if_probe("update"):
+        return 2
     src = _lumos_src(source)
     vault = find_vault(Path.cwd())
     if vault is None:
@@ -11169,6 +11189,8 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
     冪等:auto-init 只在無 vault 時觸發;cmd_init 一律 force=False+no_pull=True(pull 政策歸 step1)。
     失敗傳播(std F8):各步查 returncode,任一失敗最終 rc=1,不吞錯照印成功。"""
     import os, subprocess
+    if _refuse_if_probe("bootstrap"):
+        return 2
     home = Path(lumos_home or os.environ.get("LUMOS_HOME")
                 or (Path.home() / "harness" / "lumos-toolchain")).expanduser()
     url = _bootstrap_url(lumos_url)   # 解析鏈:旗標>env>本 clone origin(鏡像自足+身分探針)>硬編碼
