@@ -138,7 +138,7 @@ caught = reviewer 清楚且正確點出那個植入 bug 的「性質」(如「�
 剝「審計員誤判」要克制:只有能指出該 finding 客觀錯在哪(被真 diff 的 file:line 反證)才剝;判不準就保留(寧可高估),剝除理由記入審計紀錄。
 
 **③ 辯方 refute(對 ② 標為 ≥major 的每條 finding)**
-派 1 個獨立 opus 辯方(乾淨脈絡、不傳 reviewer 報告結論),framing:「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 真代碼),光說『沒問題』不算;拿不出反證則維持原 severity。」辯方**明確三選一**(2026-08-27,[[Systems/finding-refute]]):**agree**(同意是真的→維持)/ **evidence**(拿反證降到 minor/clean+file:line)/ **concern**(拿不出反證只存疑→維持)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺 finding。★被駁倒(evidence)→ 降級、不折、審計紀錄標「辯方反證:<file:line>」。三態填進 `canary record --refute-verdict <id>=agree|evidence|concern`——**純記帳不改判閘**(去向仍由 folded/accepted 定),供日後偵測 2026-08-22「三分類先不做」的重啟條件。
+派 1 個獨立 Codex 辯方(`codex exec --sandbox read-only`,乾淨脈絡、不傳 reviewer 報告結論;2026-07-18 S5,不可用退 opus 註記偏離。詳見下方「辯方(對每條 ≥major)」),framing:「預設這條 finding 假/嚴重度高估,構造反駁證據。必須附 file:line(grep/Read 真代碼),光說『沒問題』不算;拿不出反證則維持原 severity。」辯方**明確三選一**(2026-08-27,[[Systems/finding-refute]]):**agree**(同意是真的→維持)/ **evidence**(拿反證降到 minor/clean+file:line)/ **concern**(拿不出反證只存疑→維持)。★只有 evidence 會降,照舊必附 file:line;concern 不能單獨殺 finding。★被駁倒(evidence)→ 降級、不折、審計紀錄標「辯方反證:<file:line>」。三態填進 `canary record --refute-verdict <id>=agree|evidence|concern`——**純記帳不改判閘**(去向仍由 folded/accepted 定),供日後偵測 2026-08-22「三分類先不做」的重啟條件。
 - **辯方工具加 `git log`/`git show`**——commit 考古常是決定性反證(發版狀態、先例、時序)。完整派工模板見 `../lumos-design-loop/templates.md` §3-4(2026-07-07 Landmark 實戰)。
 - **辯方順產 fix(實戰調參)**:辯方降級時若附「最小修法建議」,直接轉入 fix 佇列(nice-to-have 轉修,不折 finding、不佔 severity)——別浪費辯方查證時看到的低垂果實。
 

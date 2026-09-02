@@ -48,8 +48,8 @@ repo 內的 `scripts/lumos`（python3 標準庫，零 Obsidian 依賴）是**日
 
 > **全域安裝**：`python3 scripts/lumos install` 後 `lumos` 上 `~/.local/bin`，任何專案子目錄直接打 `lumos <cmd>`（find_vault 從 cwd 往上找 docs/*-knowledge，或 standalone vault root 如核心 repo）。下表指令前綴 `python3 scripts/lumos` 與全域 `lumos` 等價。
 
-**禁止用 Grep/Glob/Read/Edit/Write 直接操作 `docs/{vault-name}/` 下的 .md 檔案。**
-lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合約測試綁定），是單純讀寫檔案做不到的；直接編輯也繞過寫後自驗與鐵則防護。
+**開頭欄位(frontmatter)用 lumos 指令改(`set`/`append`/`decision-add`);節點的建立/改名/刪除/歸檔也一律走 lumos——這些不要用 Edit/Write 直接動。正文段落可以用 Edit(改完 `lumos lint <節點>`)。查圖譜先 `lumos search`/`context`,別拿 Grep/Glob 當替代。**
+lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合約測試綁定），是單純讀寫檔案做不到的;手改開頭欄位或結構會繞過寫後自驗與鐵則防護(所以走指令),正文散文不受此限。
 
 **讀取 / 巡檢**：
 
