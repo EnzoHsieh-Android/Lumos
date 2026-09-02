@@ -1296,5 +1296,121 @@ class TestReplayWeekly(unittest.TestCase):
             out = self.m.run_weekly(self.repo)
         self.assertIsNone(self.m.build_msg(out), "無事不發訊(異常才發聲)")
 
+class TestScenarioProbeAblation(unittest.TestCase):
+    """修法 A ablation 儀器(Projects/修法A_lumos先行ablation_計劃):探針的 --arm without 靠這兩個純函式,
+    runner 靠 shard/merge。預設路徑(--arm with --runs 1)行為不得變——由 test_strip_missing 與 lumos_stats 空輸入釘。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        root = Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location("scenario_probe", root / "scripts" / "scenario_probe.py")
+        cls.sp = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.sp)
+        spec2 = importlib.util.spec_from_file_location("ablation_lumos_first",
+                                                       root / "governance" / "eval" / "ablation_lumos_first.py")
+        cls.rn = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(cls.rn)
+        cls.root = root
+
+    def test_strip_removes_only_rule_section(self):
+        txt = ("## 知識圖譜先行\n前提兩行\n\n" + self.sp.RULE_HEAD + "\n| 表 |\n★第四條★\n\n"
+               + self.sp.RULE_END + "\n1. 寫回\n")
+        out, ok = self.sp.strip_lumos_first_rule(txt)
+        self.assertTrue(ok)
+        self.assertIn("## 知識圖譜先行\n前提兩行", out, "標題與前提要留")
+        self.assertIn(self.sp.RULE_END + "\n1. 寫回", out, "三條鐵則要留")
+        self.assertNotIn("★第四條★", out, "小節正文要砍")
+        self.assertNotIn(self.sp.RULE_HEAD, out)
+
+    def test_strip_missing_marker_returns_unchanged(self):
+        txt = "沒有那一節的檔"
+        out, ok = self.sp.strip_lumos_first_rule(txt)
+        self.assertFalse(ok); self.assertEqual(out, txt)
+
+    def test_strip_real_claude_md_has_markers(self):
+        """釘住實驗前提:本 repo 的 CLAUDE.md 真的有那一節、砍完三條鐵則還在。範本改名這裡先紅。"""
+        cm = (self.root / "CLAUDE.md").read_text(encoding="utf-8")
+        out, ok = self.sp.strip_lumos_first_rule(cm)
+        self.assertTrue(ok, "CLAUDE.md 找不到「第一個工具呼叫」小節邊界,without 組做不出來")
+        self.assertIn("### 三條鐵則", out)
+        self.assertIn("## 知識圖譜先行", out)
+        self.assertLess(len(out), len(cm) - 500, "砍掉的量太小,可能只砍到標題")
+
+    def test_lumos_stats(self):
+        calls = [("Read", "x"), ("Bash", "scripts/lumos search foo"), ("Bash", "grep y")]
+        self.assertEqual(self.sp.lumos_stats(calls), (True, 1))
+        self.assertEqual(self.sp.lumos_stats([]), (False, None))
+        self.assertEqual(self.sp.lumos_stats([("Bash", "ls lumosity")]), (False, None), "字界:lumosity 不算")
+        self.assertEqual(self.sp.lumos_stats([("Skill", "lumos-project-notes")]), (False, None), "Skill 不算敲到")
+        # 2026-09-02 灌水修正:grep 知識庫目錄路徑不是敲 lumos;帶 python3 前綴、帶管線的子指令要算
+        self.assertEqual(self.sp.lumos_stats([("Bash", 'grep -rn "canary" docs/lumos-toolchain-knowledge/Systems/')]), (False, None))
+        self.assertEqual(self.sp.lumos_stats([("Bash", "ls && python3 scripts/lumos show X | head")]), (True, 0))
+        self.assertEqual(self.sp.lumos_stats([("Bash", "cd repo; lumos doctor")]), (True, 0))
+
+    def test_backfill_recomputes_lumos_from_calls(self):
+        r = {"id": "x", "passed": False, "n_calls": 3, "answer": "ok", "ever_lumos": True, "first_lumos_idx": 0,
+             "calls": [["Bash", "grep -rn canary docs/lumos-toolchain-knowledge/"], ["Read", "f"], ["Bash", "scripts/lumos search c"]]}
+        out = self.rn.backfill_limit(dict(r))
+        self.assertEqual((out["ever_lumos"], out["first_lumos_idx"], out["calls_truncated"]), (True, 2, False), "路徑那筆不算,第 2 筆才是")
+        r2 = {"id": "y", "n_calls": 14, "answer": "ok", "calls": [["Bash", "grep x docs/lumos-toolchain-knowledge/"]] * 12}
+        out2 = self.rn.backfill_limit(r2)
+        self.assertEqual((out2["ever_lumos"], out2["calls_truncated"]), (False, True), "只存 12 筆、實際 14 筆 → 標截斷")
+
+    def test_is_limit_hit(self):
+        """2026-09-02 實跑:撞帳號上限時 claude -p 零工具呼叫、result 文字是上限訊息;有工具呼叫的場永遠不算撞上限。"""
+        f = self.sp.is_limit_hit
+        self.assertTrue(f([], "You've hit your session limit · resets 12:10pm (Asia/Taipei)", {}))
+        self.assertTrue(f([], "", {"is_error": True, "result": "Rate limit exceeded"}))
+        self.assertFalse(f([("Bash", "scripts/lumos search x")], "You've hit your session limit", {}), "有工具呼叫就不是被擋")
+        self.assertFalse(f([], "圖譜沒說", {}), "零呼叫但回覆正常=真的沒敲,不是儀器")
+
+    def test_needed_counts_only_valid(self):
+        d = Path(tempfile.mkdtemp())
+        rows = [{"id": "s01", "passed": True, "n_calls": 2, "answer": "ok", "run": 1},
+                {"id": "s01", "passed": False, "n_calls": 0, "answer": "You've hit your session limit · resets 1pm", "run": 2},
+                {"id": "s01", "passed": False, "reason": "儀器例外: Boom", "n_calls": 0, "answer": "", "run": 3}]
+        (d / "with-shard0.json").write_text(json.dumps({"arm": "with", "runs": 3, "results": rows}), encoding="utf-8")
+        by = self.rn.load_results(d)
+        self.assertTrue(by["with"][1]["limit_hit"], "舊檔沒 limit_hit 欄要補標")
+        self.assertEqual(self.rn.needed(by, "with", "s01", 3), 2, "有效只有 1 場,還缺 2")
+        self.assertEqual(self.rn.needed(by, "without", "s01", 3), 3)
+        s = self.rn.merge(d, expected_ids=["s01"], runs=3)
+        w = s["arms"]["with"]
+        self.assertEqual((w["n"], w["m1_passed"], w["limit_hits"], w["instrument_errors"], w["missing"]), (1, 1, 1, 2, 2))
+
+    def test_merge_computes_four_metrics(self):
+        d = Path(tempfile.mkdtemp())
+        def res(i, passed, calls, run):
+            ev, idx = self.sp.lumos_stats(calls)
+            return {"id": i, "passed": passed, "calls": calls, "run": run,
+                    "ever_lumos": ev, "first_lumos_idx": idx, "reason": "ok" if passed else "x", "stderr": ""}
+        L = [("Bash", "scripts/lumos search a")]; G = [("Grep", "p"), ("Bash", "scripts/lumos context b")]; N = [("Read", "f")]
+        (d / "with-shard0.json").write_text(json.dumps({"arm": "with", "runs": 2, "results": [
+            res("s01", True, L, 1), res("s01", True, L, 2), res("a01", True, L, 1), res("a01", False, G, 2)]}), encoding="utf-8")
+        (d / "without-shard0.json").write_text(json.dumps({"arm": "without", "runs": 2, "results": [
+            res("s01", False, G, 1), res("s01", True, L, 2), res("a01", False, N, 1), res("a01", False, N, 2)]}), encoding="utf-8")
+        s = self.rn.merge(d, expected_ids=["s01", "a01"], runs=2)
+        w, wo = s["arms"]["with"], s["arms"]["without"]
+        self.assertEqual((w["n"], w["m1_passed"]), (4, 3))
+        self.assertEqual((wo["n"], wo["m1_passed"]), (4, 1))
+        self.assertEqual(w["m2_ever"], 4); self.assertEqual(wo["m2_ever"], 2)
+        # with 四場首次步數 [0,0,0,1] → 中位 0;without 只有兩場敲到 [1,0] → 中位 0.5
+        self.assertEqual(w["m3_first_idx_median"], 0); self.assertEqual(wo["m3_first_idx_median"], 0.5)
+        self.assertEqual((w["m3_n"], wo["m3_n"]), (4, 2))
+        self.assertEqual((w["m4_answers_passed"], w["m4_answers_n"]), (1, 2))
+        self.assertEqual(w["inconsistent_questions"], ["a01"]); self.assertEqual(wo["inconsistent_questions"], ["s01"])
+        self.assertEqual(w["missing"], 0)
+        self.assertAlmostEqual(s["m1_delta_pp"], (3 / 4 - 1 / 4) * 100)
+        self.assertEqual(s["per_question"]["s01"], {"with": [2, 2], "without": [1, 2]})
+
+    def test_merge_counts_missing(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "with-shard0.json").write_text(json.dumps({"arm": "with", "runs": 3, "results": [
+            {"id": "s01", "passed": True, "calls": [], "run": 1, "ever_lumos": False, "first_lumos_idx": None, "reason": "ok", "stderr": ""}]}), encoding="utf-8")
+        s = self.rn.merge(d, expected_ids=["s01", "s02"], runs=3)
+        self.assertEqual(s["arms"]["with"]["missing"], 5)
+        self.assertEqual(s["arms"]["without"]["missing"], 6)
+        self.assertIsNone(s["arms"]["with"]["m3_first_idx_median"])
+
+
 if __name__ == "__main__":
     unittest.main()

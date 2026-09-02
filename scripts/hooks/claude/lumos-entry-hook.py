@@ -54,6 +54,10 @@ def _discipline_lag(root):
 
 
 def main():
+    if os.environ.get("LUMOS_ENTRY_HOOK_OFF") == "1":
+        # 修法 A ablation 的「不帶」組(Projects/修法A_lumos先行ablation_計劃):探針沙盒砍了 CLAUDE.md 那一節,
+        # 同一句提醒不能從這裡再進來。平時沒人設這個變數,行為不變。
+        return 0
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:

@@ -77,8 +77,56 @@ def judge(calls, expect, forbid_before):
     return True, "ok", first
 
 
-def make_sandbox(src):
+# ── 修法 A ablation(Projects/修法A_lumos先行ablation_計劃)──────────────────────────
+# 「不帶」組要拔的是 CLAUDE.md 裡「第一個工具呼叫是 lumos」那一小節(到「三條鐵則」之前),
+# 其餘(## 標題、兩行前提、三條鐵則、白話、skill 表)原樣。邊界字串跟 scripts/templates/graph-discipline.md 同源;
+# 範本改標題這裡會找不到 → make_sandbox 直接炸,寧可實驗跑不起來,不要靜默跑一個沒拔乾淨的「不帶」組。
+RULE_HEAD = "### 第一個工具呼叫是 `lumos`"
+RULE_END = "### 三條鐵則"
+
+
+def strip_lumos_first_rule(text):
+    """回 (新文字, 有沒有砍到)。找不到兩個邊界或順序反了 → 原文、False。"""
+    s = text.find(RULE_HEAD)
+    e = text.find(RULE_END)
+    if s < 0 or e < 0 or e <= s:
+        return text, False
+    return text[:s] + text[e:], True
+
+
+# 2026-09-02 實跑教訓:帳號用量上限(「You've hit your session limit · resets 12:10pm」)一到,claude -p 4 秒就回、
+# 零工具呼叫,探針把它記成「沒敲到期望指令」——168 場裡 115 場是這種假失敗。這類場次要標出來、不算分。
+LIMIT_RE = re.compile(r"hit your (session|usage) limit|usage limit|rate limit|too many requests|overloaded", re.I)
+
+
+def is_limit_hit(calls, final_text, result_event):
+    """零工具呼叫 + 回覆/結果事件寫著用量或速率上限 → 這場是儀器被擋,不是被測 AI 的行為。"""
+    if calls:
+        return False
+    if LIMIT_RE.search(final_text or ""):
+        return True
+    ev = result_event or {}
+    return bool(ev.get("is_error")) and bool(LIMIT_RE.search(json.dumps(ev, ensure_ascii=False)))
+
+
+# 「敲 lumos」=Bash 裡跑了 lumos 的某個子指令:`scripts/lumos search`、`python3 scripts/lumos show`、`lumos doctor`。
+# ★2026-09-02 第一版用 \blumos\b 字界比對,把 `grep … docs/lumos-toolchain-knowledge/` 這種路徑也算成敲了 lumos,
+# 拔散文那組的「敲過率」被灌到 98.8%——路徑裡的 lumos 後面接的是 -,子指令後面接的是空白+字母。★
+LUMOS_CALL_RE = re.compile(r"(?:^|[\s;&|(`'\"/])lumos\s+[a-z]")
+
+
+def lumos_stats(calls):
+    """回 (整場有沒有敲過 lumos 子指令, 第一次敲的是第幾個工具呼叫)。只認 Bash 指令字串;Skill 調用不算;路徑裡的 lumos 不算。"""
+    for i, (name, summ) in enumerate(calls):
+        if name == "Bash" and LUMOS_CALL_RE.search(summ):
+            return True, i
+    return False, None
+
+
+def make_sandbox(src, arm="with"):
     """複製工作樹到臨時目錄,並★切斷所有能把東西推出去的路★。回副本路徑。
+    arm="without":commit 前先砍 CLAUDE.md 的「第一個工具呼叫」小節(見 strip_lumos_first_rule),
+    這樣情境之間的 git checkout -- . 不會把它復原。
 
     2026-08-23 事故:守衛題 a05 的情境是「沒有我就開工做」,被測 AI 真的改了計劃檔並 push——
     臨時副本是 rsync 來的,.git/config 裡的 remote 跟著複製,push 就直接推到真遠端,
@@ -103,6 +151,12 @@ def make_sandbox(src):
     (hooks / "pre-push").write_text("#!/bin/sh\necho '探針沙盒:禁止 push' >&2\nexit 1\n", encoding="utf-8")
     (hooks / "pre-push").chmod(0o755)
     subprocess.run(["git", "config", "core.hooksPath", str(hooks)], cwd=str(work))
+    if arm == "without":
+        cm = work / "CLAUDE.md"
+        new, ok = strip_lumos_first_rule(cm.read_text(encoding="utf-8"))
+        if not ok:
+            raise RuntimeError("without 組:CLAUDE.md 找不到「第一個工具呼叫」小節的邊界,拔不乾淨,實驗無效,停手")
+        cm.write_text(new, encoding="utf-8")
     # commit 成乾淨狀態(含未 commit 的改動——索引/筆記常是剛寫還沒 commit)
     subprocess.run(["git", "add", "-A"], cwd=str(work))
     subprocess.run(["git", "-c", "user.name=probe", "-c", "user.email=probe@local",
@@ -110,7 +164,7 @@ def make_sandbox(src):
     return work
 
 
-def run_one(sc, workdir, max_turns, timeout, model):
+def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
     # 題目標 allow_agent:true 才放行,其餘照舊禁。
@@ -128,6 +182,8 @@ def run_one(sc, workdir, max_turns, timeout, model):
         cmd += ["--model", model]
     env = dict(os.environ)
     env.pop("CLAUDECODE", None); env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    if arm == "without":
+        env["LUMOS_ENTRY_HOOK_OFF"] = "1"   # SessionStart 入口 hook 看到就靜默,同一句提醒不能從第二個口進來
     t0 = time.time()
     try:
         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env)
@@ -140,6 +196,7 @@ def run_one(sc, workdir, max_turns, timeout, model):
     ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
     # ⑩ 答案對不對(工具鏈補強十件):情境可帶 answer_expect=[regex…],最後回覆文字要全部命中
     final = ""
+    result_ev = {}
     for ln in out.splitlines():
         ln = ln.strip()
         if not ln.startswith("{"):
@@ -150,14 +207,21 @@ def run_one(sc, workdir, max_turns, timeout, model):
             continue
         if isinstance(ev, dict) and ev.get("type") == "result":
             final = ev.get("result") or ""
+            result_ev = ev
     if ok and sc.get("answer_expect"):
         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
         if miss_a:
             ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
+    limit_hit = is_limit_hit(calls, final, result_ev)
+    if limit_hit:
+        ok, why = False, "儀器例外: 帳號用量/速率上限,claude -p 沒真的跑,這場不算分"
+    ever, first_idx = lumos_stats(calls)
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
-            "calls": calls[:12], "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
-            "answer": (final or "")[:1500]}
+            "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+            "answer": (final or "")[:1500],
+            "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+            "limit_hit": limit_hit, "result_subtype": result_ev.get("subtype")}
 
 
 def main():
@@ -183,7 +247,17 @@ def main():
     ap.add_argument("--history", default="", help="把本次摘要 append 到這個 jsonl(ts/passed/total/failed)")
     ap.add_argument("--ts", default="", help="寫進 history 的時間戳(排程端給)")
     ap.add_argument("--dry-list", action="store_true", help="只印抽到的題目 id,不跑(測抽樣用)")
+    # ── 修法 A ablation 兩個旗標(預設值=改前行為)──
+    ap.add_argument("--runs", type=int, default=1,
+                    help="每題重跑幾次(預設 1)。同一題這次過下次不過是常態,不重跑就分不出規矩效果與運氣")
+    ap.add_argument("--arm", choices=["with", "without"], default="with",
+                    help="with=現況;without=沙盒 CLAUDE.md 砍「第一個工具呼叫」小節+入口 hook 靜默(見 Projects/修法A_lumos先行ablation_計劃)")
+    ap.add_argument("--wait-on-limit", type=int, default=0,
+                    help="撞到帳號用量上限時最多等幾秒(每 300 秒重試同一場;預設 0=不等,照記成儀器例外)。"
+                         "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
     a = ap.parse_args()
+    if a.runs < 1:
+        print("✗ --runs 至少 1", file=sys.stderr); return 2
     scs = []
     for f in a.scenarios.split(","):
         scs += [json.loads(l) for l in Path(f).read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -207,35 +281,58 @@ def main():
     if not (src / ".git").exists():
         print(f"✗ --repo {src} 不是 git repo(找不到 .git),停手", file=sys.stderr)
         return 2
-    work = make_sandbox(src)
+    work = make_sandbox(src, a.arm)
     # skills 走 ~/.claude(symlink 回本 repo),不用複製
-    print(f"探的是: {src}\n臨時副本: {work}", file=sys.stderr)
+    print(f"探的是: {src}\n臨時副本: {work}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),
+          file=sys.stderr)
     results = []
+    waited = 0
     try:
         for sc in scs:
-            try:
-                res = run_one(sc, work, a.max_turns, a.timeout, a.model)
-            except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
-                res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
-                       "reason": f"儀器例外: {type(e).__name__}: {e}", "first_tool": None,
-                       "n_calls": 0, "calls": [], "secs": 0, "stderr": ""}
-            results.append(res)
-            mark = "✓" if res["passed"] else "✗"
-            ft = f"{res['first_tool'][0]}: {res['first_tool'][1][:70]}" if res["first_tool"] else "(沒有任何工具呼叫)"
-            print(f"  {mark} {res['id']:22s} {res['secs']:6.1f}s  第一動作→ {ft}", flush=True)
-            if not res["passed"]:
-                print(f"      {res['reason']}", flush=True)
-            subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work))
-            subprocess.run(["git", "clean", "-qfdx"], cwd=str(work))   # -x:連 gitignore 的產出也清,情境之間不互染
+            for k in range(1, a.runs + 1):
+                while True:
+                    try:
+                        res = run_one(sc, work, a.max_turns, a.timeout, a.model, a.arm)
+                    except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
+                        res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                               "reason": f"儀器例外: {type(e).__name__}: {e}", "first_tool": None,
+                               "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
+                               "arm": a.arm, "ever_lumos": False, "first_lumos_idx": None,
+                               "limit_hit": False, "result_subtype": None}
+                    if res.get("limit_hit") and waited < a.wait_on_limit:
+                        print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
+                        time.sleep(300); waited += 300
+                        continue
+                    break
+                res["run"] = k
+                results.append(res)
+                mark = "✓" if res["passed"] else "✗"
+                ft = f"{res['first_tool'][0]}: {res['first_tool'][1][:70]}" if res["first_tool"] else "(沒有任何工具呼叫)"
+                tag = f" #{k}" if a.runs > 1 else ""
+                print(f"  {mark} {res['id']:22s}{tag} {res['secs']:6.1f}s  第一動作→ {ft}", flush=True)
+                if not res["passed"]:
+                    print(f"      {res['reason']}", flush=True)
+                subprocess.run(["git", "checkout", "-q", "--", "."], cwd=str(work))
+                subprocess.run(["git", "clean", "-qfdx"], cwd=str(work))   # -x:連 gitignore 的產出也清,情境之間不互染
     finally:
         n = len(results); p = sum(1 for r in results if r["passed"])
-        print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令")
+        lim = sum(1 for r in results if r.get("limit_hit"))
+        print(f"\n{p}/{n} 個情境 Claude 自己敲對了 lumos 指令" + (f"(組別 {a.arm})" if a.arm != "with" else "")
+              + (f";其中 {lim} 場撞帳號用量上限沒真的跑,不算分" if lim else ""))
+        if a.runs > 1:
+            per = {}
+            for r in results:
+                per.setdefault(r["id"], [0, 0]); per[r["id"]][1] += 1; per[r["id"]][0] += 1 if r["passed"] else 0
+            print("每題通過次數: " + "  ".join(f"{i} {c}/{t}" for i, (c, t) in per.items()))
         if a.out:
-            Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n}, ensure_ascii=False, indent=1), encoding="utf-8")
+            Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
+                                               "arm": a.arm, "runs": a.runs}, ensure_ascii=False, indent=1), encoding="utf-8")
         if a.history:
             with open(a.history, "a", encoding="utf-8") as hf:
                 hf.write(json.dumps({"ts": a.ts, "seed": a.seed, "passed": p, "total": n,
-                                     "failed": [r["id"] for r in results if not r["passed"]]}, ensure_ascii=False) + "\n")
+                                     "failed": [r["id"] for r in results if not r["passed"]],
+                                     **({"arm": a.arm, "runs": a.runs} if (a.arm != "with" or a.runs > 1) else {})},
+                                    ensure_ascii=False) + "\n")
         if not a.keep:
             # r3 s2 實測抓到:原寫 rmtree(tmp) 但 tmp 是 make_sandbox 的區域變數,這裡 NameError、
             # 被 finally 吞掉——每週漏一個沙盒目錄,/tmp 已積 40 個。work=<tmp>/repo,清父目錄。
