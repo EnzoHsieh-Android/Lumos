@@ -64,3 +64,11 @@ PRIOR-ART: ①最小解層級——新唯讀子命令,偵測邏輯多半複用�
 - README 與 README.en「強制力從軟到硬」表下各補一段(fail-open 副作用 + 這指令補的盲區)。
 - ★實跑自驗:本 repo 跑 `lumos enforcement` = 8/9 active、1 unknown(遠端檢查)、anchor 那層當下 degraded 因 test_lumos.py 加了測試未重簽——正是它該抓的訊號,推送前 anchor approve 解除。★
 - design-loop 跳過(唯讀匯總、零判定/寫入/合約);走測試先行。
+
+## 代碼審(2026-09-02,standard 兩輪)
+
+standard tier(pre-push 不擋,仍照紀律審)。loop=code-enforcement,卷證 governance/review-reports/code-enforcement/。
+- **r1**(一席):抓 3 major——①hook 只查註冊沒查目標 .py 檔在不在(懸空註冊假綠)②漏檢第四支 hook ci-status ③`_version_nudge` 回 None 有四種情境全當 active(沒裝 lumos 的專案假綠)+ 4 minor。全折。
+- **r2**(新席複核):#1#2 修好;#3 只修一半——「來源 clone 不可達」與「真的最新」都回 None、仍假綠(乾淨機器/CI 沒 clone 時顯示綠燈)。已補:偵測來源可達性,不可達→unknown;兩分支各加測試。
+- 三態最終:active/inactive/degraded(懸空 hook、anchor sha 不符)/unknown(無 CLAUDE.md、無版本戳、來源不可達、遠端設定)。degraded 計入分母不計 active(懸空 hook 不會真執行防護=沒生效)。
+- 測試:8 案(含懸空 hook→degraded、無 CLAUDE.md→unknown、來源不可達→unknown、版本相等→active、anchor 不符→degraded、缺目錄 11 列不炸)。

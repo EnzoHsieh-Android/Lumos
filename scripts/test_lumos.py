@@ -22384,13 +22384,19 @@ def _enforcement_fixture(all_active=True):
         subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"], capture_output=True)
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / ".github" / "workflows" / "ci.yml").write_text("name: CI\n")
-        # 全域 settings 三 hook 註冊
-        chd = home / ".claude"; chd.mkdir()
-        (chd / "settings.json").write_text(_j.dumps({"hooks": {
-            "SessionStart": [{"hooks": [{"command": "python3 " + str(chd / "hooks" / "lumos-entry-hook.py")}]}],
-            "PreToolUse": [{"matcher": "Edit|Write", "hooks": [{"command": "python3 " + str(chd / "hooks" / "impact-hook.py")}]}],
-            "Stop": [{"hooks": [{"command": "python3 " + str(chd / "hooks" / "check-graph-sync.py")}]}],
-        }}), encoding="utf-8")
+        # 全域 settings 四 hook 註冊 + ★真的建出目標 .py 檔★(r1 審:註冊≠檔在,active 要兩者都成立)
+        chd = home / ".claude"; (chd / "hooks").mkdir(parents=True)
+        hooks = {"SessionStart": ["lumos-entry-hook.py", "ci-status-hook.py"],
+                 "PreToolUse": ["impact-hook.py"], "Stop": ["check-graph-sync.py"]}
+        cfg = {}
+        for ev, files in hooks.items():
+            grp = {"hooks": [{"command": "python3 " + str(chd / "hooks" / f)} for f in files]}
+            if ev == "PreToolUse":
+                grp["matcher"] = "Edit|Write"
+            cfg[ev] = [grp]
+            for f in files:
+                (chd / "hooks" / f).write_text("# stub\n")   # 目標檔真的存在
+        (chd / "settings.json").write_text(_j.dumps({"hooks": cfg}), encoding="utf-8")
     return root, home
 
 
@@ -22402,11 +22408,94 @@ def t_enforcement_all_active():
     check("enforcement: 入口 hook active", by.get("session-entry-hook") == "active", str(by))
     check("enforcement: impact hook active", by.get("pretooluse-impact-hook") == "active", str(by))
     check("enforcement: 圖譜同步 hook active", by.get("stop-graph-sync-hook") == "active", str(by))
+    check("enforcement: ci-status hook active(r1:第 4 支不漏檢)", by.get("sessionstart-ci-status-hook") == "active", str(by))
     check("enforcement: pre-commit active", by.get("git-pre-commit") == "active", str(by))
     check("enforcement: pre-push active", by.get("git-pre-push") == "active", str(by))
     check("enforcement: python active", by.get("python") == "active", str(by))
     check("enforcement: CI workflow active", by.get("ci-workflow") == "active", str(by))
     check("enforcement: 遠端檢查恆 unknown", by.get("required-status-check") == "unknown", str(by))
+
+
+def t_enforcement_dangling_hook_degraded():
+    # r1 審核心:hook 有註冊但目標 .py 檔不在 → degraded,不是 active(懸空註冊假綠)
+    import json as _j
+    m = _load_lumos_inproc()
+    root = Path(tempfile.mkdtemp(prefix="gctl-enf-dh-"))
+    home = Path(tempfile.mkdtemp(prefix="gctl-enf-dh-home-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+    chd = home / ".claude"; chd.mkdir()
+    # 註冊了 entry hook,但故意不建目標檔
+    (chd / "settings.json").write_text(_j.dumps({"hooks": {"SessionStart": [
+        {"hooks": [{"command": "python3 " + str(chd / "hooks" / "lumos-entry-hook.py")}]}]}}), encoding="utf-8")
+    by = {r["layer"]: r["status"] for r in m.enforcement_status(root=root, home=home)}
+    check("enforcement: 懸空 hook 註冊 → degraded 不是 active", by.get("session-entry-hook") == "degraded", str(by))
+
+
+def t_enforcement_vendored_no_claudemd_unknown():
+    # r1 審核心:沒 CLAUDE.md(非 lumos 專案)vendored-cli 該 unknown,不是假綠 active
+    m = _load_lumos_inproc()
+    root = Path(tempfile.mkdtemp(prefix="gctl-enf-nv-"))
+    home = Path(tempfile.mkdtemp(prefix="gctl-enf-nv-home-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+    by = {r["layer"]: r["status"] for r in m.enforcement_status(root=root, home=home)}
+    check("enforcement: 無 CLAUDE.md → vendored unknown", by.get("vendored-cli") == "unknown", str(by))
+
+
+def t_enforcement_vendored_source_unreachable_unknown():
+    # r2 審核心:有 CLAUDE.md+版本戳,但來源 clone 不可達 → unknown,不是假綠 active
+    import os
+    m = _load_lumos_inproc()
+    root = Path(tempfile.mkdtemp(prefix="gctl-enf-vsu-"))
+    home = Path(tempfile.mkdtemp(prefix="gctl-enf-vsu-home-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+    (root / "CLAUDE.md").write_text("<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 -->\nx\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
+    nowhere = Path(tempfile.mkdtemp(prefix="gctl-enf-nosrc-")) / "nope"
+    old = os.environ.get("LUMOS_HOME")
+    os.environ["LUMOS_HOME"] = str(nowhere)
+    try:
+        by = {r["layer"]: r["status"] for r in m.enforcement_status(root=root, home=home)}
+    finally:
+        if old is None:
+            os.environ.pop("LUMOS_HOME", None)
+        else:
+            os.environ["LUMOS_HOME"] = old
+    check("enforcement: 版本戳在但來源不可達 → unknown 不假綠", by.get("vendored-cli") == "unknown", str(by))
+
+
+def t_enforcement_vendored_uptodate_active():
+    # r2 審:版本戳與來源相等且來源可達 → active(來源用本 repo 自己,版本戳抄本 repo 現行常數)
+    import os, re as _re
+    m = _load_lumos_inproc()
+    src = Path(os.environ.get("LUMOS_HOME") or (Path.home() / "harness" / "lumos-toolchain"))
+    srclumos = src / "scripts" / "lumos"
+    if not srclumos.exists():
+        check("enforcement: 來源不可達,跳過 uptodate 測(非失敗)", True); return
+    mm = _re.search(r'^LUMOS_VERSION\s*=\s*"(v\d+\.\d+)"', srclumos.read_text(encoding="utf-8", errors="replace"), _re.M)
+    if not mm:
+        check("enforcement: 來源無版本常數,跳過(非失敗)", True); return
+    ver = mm.group(1)
+    root = Path(tempfile.mkdtemp(prefix="gctl-enf-vut-"))
+    home = Path(tempfile.mkdtemp(prefix="gctl-enf-vut-home-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+    (root / "CLAUDE.md").write_text(f"<!-- LUMOS:GRAPH-DISCIPLINE:START {ver} -->\nx\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
+    by = {r["layer"]: r["status"] for r in m.enforcement_status(root=root, home=home)}
+    check("enforcement: 版本戳=來源且可達 → active", by.get("vendored-cli") == "active", str(by))
+
+
+def t_enforcement_anchor_degraded():
+    # 補分支覆蓋:anchor baseline 存在但某錨點 sha 不符 → degraded
+    import json as _j, hashlib
+    m = _load_lumos_inproc()
+    root = Path(tempfile.mkdtemp(prefix="gctl-enf-anc-"))
+    home = Path(tempfile.mkdtemp(prefix="gctl-enf-anc-home-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True)
+    (root / "scripts").mkdir()
+    f = root / "scripts" / "x.py"; f.write_text("real\n")
+    (root / "governance").mkdir()
+    (root / "governance" / "anchor-baseline.json").write_text(
+        _j.dumps({"anchors": {"scripts/x.py": hashlib.sha256(b"DIFFERENT\n").hexdigest()}}), encoding="utf-8")
+    by = {r["layer"]: r["status"] for r in m.enforcement_status(root=root, home=home)}
+    check("enforcement: anchor sha 不符 → degraded", by.get("anchor-baseline") == "degraded", str(by))
 
 
 def t_enforcement_all_inactive():
@@ -22424,9 +22513,15 @@ def t_enforcement_summary_excludes_unknown():
     root, home = _enforcement_fixture(all_active=True)
     rows = m.enforcement_status(root=root, home=home)
     n_active, n_total, n_unknown = m.enforcement_summary(rows)
-    check("enforcement: 分母排除 unknown", n_total + n_unknown == len(rows), f"active={n_active} total={n_total} unknown={n_unknown} rows={len(rows)}")
-    check("enforcement: 至少一項 unknown(遠端檢查)", n_unknown >= 1, str(rows))
-    check("enforcement: active 不超過 total", 0 <= n_active <= n_total, "")
+    # r1 審:別寫成 summary 公式的套套邏輯——用具體數字釘。全裝好的 fixture:8 active(4 hook+2 hook檔+... 實際數)、
+    # required-status 恆 unknown。這裡釘「至少 8 active、恰 1 unknown(只有遠端那列)」。
+    # hermetic fixture 沒建 CLAUDE.md/anchor-baseline,所以 vendored-cli 誠實 unknown(無版本可判)、anchor inactive。
+    # 恰兩列 unknown:vendored-cli(無 CLAUDE.md)+ required-status-check(遠端測不到)。別寫成 summary 公式的套套邏輯。
+    unknown_layers = sorted(r["layer"] for r in rows if r["status"] == "unknown")
+    check("enforcement: unknown 恰=vendored+遠端兩列", unknown_layers == ["required-status-check", "vendored-cli"], str(unknown_layers))
+    check("enforcement: n_unknown 恰 2", n_unknown == 2, f"{n_unknown}")
+    check("enforcement: 四 hook+pre-commit+pre-push+python+ci 共 8 active", n_active == 8, f"active={n_active} rows={[(r['layer'],r['status']) for r in rows]}")
+    check("enforcement: total = 非unknown列數", n_total == len(rows) - n_unknown, f"total={n_total} rows={len(rows)}")
 
 
 def t_enforcement_never_raises_on_missing():
@@ -22434,7 +22529,8 @@ def t_enforcement_never_raises_on_missing():
     # 完全不存在的 root/home 也不該炸(fail-open 自身可觀測)
     bad = Path(tempfile.mkdtemp(prefix="gctl-enf-bad-")) / "nope"
     rows = m.enforcement_status(root=bad, home=bad)
-    check("enforcement: 缺目錄不炸、回清單", isinstance(rows, list) and len(rows) >= 8, str(rows)[:200])
+    # r1 審:別留 >=8 的鬆口,釘死列數(4 hook+pre-commit+pre-push+python+vendored+ci+anchor+required = 11)
+    check("enforcement: 缺目錄不炸、回恰 11 列", isinstance(rows, list) and len(rows) == 11, f"{len(rows)}: {[r['layer'] for r in rows]}")
 
 
 def main():

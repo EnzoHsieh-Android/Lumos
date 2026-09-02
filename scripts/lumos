@@ -12103,14 +12103,24 @@ def enforcement_status(root=None, home=None):
                         reg[str(hk.get("command", ""))] = True
     except Exception as e:
         reg = None  # 讀不到 settings → 三 hook 皆 unknown
+    # ★r1 審:註冊了不等於生效★——還要目標 .py 真的在 ~/.claude/hooks/(懸空註冊是 _prune_dangling 存在的原因,
+    # 2026-07-07 事故)。★r1 審:_GLOBAL_CLAUDE_HOOKS 有 4 支,原本漏檢 ci-status(CI 紅燈後備網)★。
+    hookdir = home / ".claude" / "hooks"
     for layer, needle in (("session-entry-hook", "lumos-entry-hook.py"),
                           ("pretooluse-impact-hook", "impact-hook.py"),
-                          ("stop-graph-sync-hook", "check-graph-sync.py")):
+                          ("stop-graph-sync-hook", "check-graph-sync.py"),
+                          ("sessionstart-ci-status-hook", "ci-status-hook.py")):
         if reg is None:
             add(layer, "unknown", "~/.claude/settings.json 讀不到")
+            continue
+        registered = any(needle in cmd for cmd in reg)
+        file_ok = (hookdir / needle).exists()
+        if registered and file_ok:
+            add(layer, "active", needle)
+        elif registered and not file_ok:
+            add(layer, "degraded", f"{needle} 已註冊但檔案不在 ~/.claude/hooks/(懸空)")
         else:
-            hit = any(needle in cmd for cmd in reg)
-            add(layer, "active" if hit else "inactive", needle)
+            add(layer, "inactive", needle)
 
     # ④⑤ git pre-commit / pre-push:core.hooksPath 指向 scripts/hooks 且檔存在可執行
     try:
@@ -12128,12 +12138,33 @@ def enforcement_status(root=None, home=None):
             add(layer, "unknown", str(e))
 
     # ⑥ python
-    add("python", "active", sys.version.split()[0])
-
-    # ⑦ vendored 版本(_version_nudge:None=最新/不可達、str=落後)
     try:
-        lag = _version_nudge(root)
-        add("vendored-cli", "degraded" if lag else "active", lag or "最新或來源不可達")
+        add("python", "active", sys.version.split()[0])
+    except Exception as e:
+        add("python", "unknown", str(e))
+
+    # ⑦ vendored 版本——★r1 審:_version_nudge 回 None 有四種(無 CLAUDE.md/無版本戳/來源不可達/真最新),
+    # 原本全當 active 會讓「沒裝 lumos 的專案」假綠。改成先自查前提,分不清就 unknown,不假綠。★
+    try:
+        cm = root / "CLAUDE.md"
+        if not cm.exists():
+            add("vendored-cli", "unknown", "無 CLAUDE.md,無法判版本(非 lumos 專案?)")
+        else:
+            txt = cm.read_bytes()
+            if txt.startswith(b"\xef\xbb\xbf"):
+                txt = txt[3:]
+            ver = _parse_sentinel_version(txt.decode("utf-8", "replace").replace("\r\n", "\n"))
+            if ver is None:
+                add("vendored-cli", "unknown", "CLAUDE.md 無版本戳(未接圖譜紀律區塊?)")
+            else:
+                # ★r2 審:_version_nudge 回 None 有兩種——「來源 clone 不可達」與「真的最新」,不能都當 active★。
+                # 先自查來源可達性(同 _version_nudge 內部條件):不可達 → unknown(乾淨機器/CI 沒 clone 時別假綠)。
+                src_lumos = _lumos_src() / "scripts" / "lumos"
+                if not src_lumos.exists():
+                    add("vendored-cli", "unknown", f"版本戳 {ver},但來源 clone 不可達,無法比對是否落後")
+                else:
+                    lag = _version_nudge(root)
+                    add("vendored-cli", "degraded" if lag else "active", lag or f"版本戳 {ver},與來源比對未落後")
     except Exception as e:
         add("vendored-cli", "unknown", str(e))
 
@@ -12180,6 +12211,9 @@ def enforcement_summary(rows):
 def cmd_enforcement(repo=None, as_json=False):
     """印各層防護現在有沒有生效。純唯讀。rc0 恆(唯讀查詢不判成敗;要判用各層自己的閘)。"""
     import json as _json
+    if repo is not None and not Path(repo).is_dir():   # r1 審:typo'd --repo 別靜默印全 inactive
+        print(f"擋下:--repo 指的不是目錄: {repo}", file=sys.stderr)
+        return 2
     rows = enforcement_status(root=repo)
     if as_json:
         active, total, unknown = enforcement_summary(rows)
