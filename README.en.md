@@ -167,6 +167,8 @@ Enforcement, soft to hard:
 | `code-loop` | High-risk change without code review | Hard-blocks at push |
 | pre-push | Health + integrity + review receipts, three-in-one | Hard block |
 
+Lumos leans heavily on fail-open (proceed when the environment is incomplete, with CI as backstop): a broken governance tool never blocks the whole team, but the side effect is **you can't tell how many layers are actually guarding you right now**. `lumos enforcement` checks each layer above and prints a one-line "N of M active" — remote settings it can't probe locally (GitHub required checks) are honestly listed as unknown, not faked as present.
+
 ---
 
 ## 6. Inheriting an old project (Brownfield restoration)

@@ -167,6 +167,8 @@ KEY:★CHECKPOINT★   <改了難救:例如部署到測試機>
 | `code-loop` | 高風險改動沒過代碼審 | push 時硬擋 |
 | pre-push | 健檢+完整性驗證+代碼審留痕,三合一 | 硬擋 |
 
+這套大量用 fail-open(環境不全就先放行、CI 當後盾),好處是治理工具一壞不會全公司卡住;副作用是**你看不出現在到底有幾層真的在守**。`lumos enforcement` 把上面各層現況查一遍、印一行「幾層生效」——本機測不到的遠端設定(GitHub required check)誠實列 unknown,不假裝有。
+
 ---
 
 ## 6. 接手舊專案(Brownfield 還原)

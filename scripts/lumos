@@ -12071,6 +12071,131 @@ def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
     return 0
 
 
+def enforcement_status(root=None, home=None):
+    """回各層防護「現在有沒有生效」的清單 [{layer, status, detail}](Projects/enforcement儀表板_計劃)。
+    純唯讀、每層各自 try 包住(一層測不出來不拖垮整份;fail-open 本身要能被觀測)。
+    status: active | inactive | degraded | unknown。root=repo 根、home=~/(測試可注入)。"""
+    import json as _json
+    if root:
+        root = Path(root)
+    else:
+        for cand in (Path.cwd(), *Path.cwd().parents):   # cwd 逐層向上找 .git(同 _anchor_repo_root 慣例)
+            if (cand / ".git").exists():
+                root = cand
+                break
+        else:
+            root = Path.cwd()
+    home = Path(home) if home else Path.home()
+    rows = []
+
+    def add(layer, status, detail=""):
+        rows.append({"layer": layer, "status": status, "detail": detail})
+
+    # ①②③ 全域 Claude hooks 註冊(讀 ~/.claude/settings.json)
+    reg = {}
+    try:
+        sp = home / ".claude" / "settings.json"
+        if sp.exists():
+            d = _json.loads(sp.read_text(encoding="utf-8"))
+            for ev, arr in (d.get("hooks") or {}).items():
+                for grp in arr:
+                    for hk in (grp.get("hooks") or []):
+                        reg[str(hk.get("command", ""))] = True
+    except Exception as e:
+        reg = None  # 讀不到 settings → 三 hook 皆 unknown
+    for layer, needle in (("session-entry-hook", "lumos-entry-hook.py"),
+                          ("pretooluse-impact-hook", "impact-hook.py"),
+                          ("stop-graph-sync-hook", "check-graph-sync.py")):
+        if reg is None:
+            add(layer, "unknown", "~/.claude/settings.json 讀不到")
+        else:
+            hit = any(needle in cmd for cmd in reg)
+            add(layer, "active" if hit else "inactive", needle)
+
+    # ④⑤ git pre-commit / pre-push:core.hooksPath 指向 scripts/hooks 且檔存在可執行
+    try:
+        hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
+                            capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        hp = ""
+    for layer, fn in (("git-pre-commit", "pre-commit"), ("git-pre-push", "pre-push")):
+        try:
+            f = root / "scripts" / "hooks" / fn
+            ok = hp == "scripts/hooks" and f.is_file() and os.access(str(f), os.X_OK)
+            add(layer, "active" if ok else "inactive",
+                f"core.hooksPath={hp or '(未設)'};{fn} {'在' if f.is_file() else '缺'}")
+        except Exception as e:
+            add(layer, "unknown", str(e))
+
+    # ⑥ python
+    add("python", "active", sys.version.split()[0])
+
+    # ⑦ vendored 版本(_version_nudge:None=最新/不可達、str=落後)
+    try:
+        lag = _version_nudge(root)
+        add("vendored-cli", "degraded" if lag else "active", lag or "最新或來源不可達")
+    except Exception as e:
+        add("vendored-cli", "unknown", str(e))
+
+    # ⑧ CI workflow
+    try:
+        ci = list((root / ".github" / "workflows").glob("*.yml")) if (root / ".github" / "workflows").exists() else []
+        add("ci-workflow", "active" if ci else "inactive",
+            ", ".join(p.name for p in ci) or "無 .github/workflows/*.yml")
+    except Exception as e:
+        add("ci-workflow", "unknown", str(e))
+
+    # ⑨ anchor baseline(有 baseline 且全符=active;有 baseline 但 mismatch=degraded;無 baseline=inactive)
+    try:
+        bp = root / _ANCHOR_BASELINE_REL
+        if not bp.exists():
+            add("anchor-baseline", "inactive", "無 baseline(裁判防竄改未啟用)")
+        else:
+            import hashlib as _hl
+            data = _json.loads(bp.read_text(encoding="utf-8"))
+            bad = 0
+            for rel, expected in (data.get("anchors") or {}).items():
+                f = root / rel
+                if not f.is_file() or _hl.sha256(f.read_bytes()).hexdigest() != expected:
+                    bad += 1
+            add("anchor-baseline", "active" if bad == 0 else "degraded",
+                f"{len(data.get('anchors', {}))} 個錨點" + (f",{bad} 個不符" if bad else "全符"))
+    except Exception as e:
+        add("anchor-baseline", "unknown", str(e))
+
+    # ⑩ 遠端 GitHub 設定:本機測不到,誠實留 unknown(要真查需接 gh API,零依賴+離線優先故不做)
+    add("required-status-check", "unknown", "GitHub required check / branch protection 本機測不到")
+
+    return rows
+
+
+def enforcement_summary(rows):
+    """回 (active 數, 非 unknown 總數, unknown 數)。分母排除 unknown。"""
+    unknown = sum(1 for r in rows if r["status"] == "unknown")
+    total = len(rows) - unknown
+    active = sum(1 for r in rows if r["status"] == "active")
+    return active, total, unknown
+
+
+def cmd_enforcement(repo=None, as_json=False):
+    """印各層防護現在有沒有生效。純唯讀。rc0 恆(唯讀查詢不判成敗;要判用各層自己的閘)。"""
+    import json as _json
+    rows = enforcement_status(root=repo)
+    if as_json:
+        active, total, unknown = enforcement_summary(rows)
+        print(_json.dumps({"rows": rows, "active": active, "total": total, "unknown": unknown}, ensure_ascii=False))
+        return 0
+    mark = {"active": "✅", "inactive": "❌", "degraded": "⚠️", "unknown": "❔"}
+    print("Lumos 防護生效狀態(這查的是「有沒有裝上/接上」,不是「判得對不對」)\n")
+    for r in rows:
+        print(f"  {mark.get(r['status'], '?')} {r['layer']:26s} {r['status']:9s} {r['detail']}")
+    active, total, unknown = enforcement_summary(rows)
+    print(f"\n有效防護:{active}/{total} 層生效" + (f"(另 {unknown} 層本機測不到,列 unknown)" if unknown else ""))
+    if active < total:
+        print("有沒生效的層 → 在專案根跑一次\n    lumos install --force\n  (仍 inactive 的看 detail;遠端檢查那項要去 GitHub 設 branch protection)")
+    return 0
+
+
 def cmd_anchor_verify(repo=None, as_json=False):
     """錨點完整性核對:baseline 內每個錨點檔算 sha256 比對。
     全符 rc=0;mismatch/缺檔 rc=1;baseline 不存在 rc=0+警示(漸進採用);參數錯 rc=2。
@@ -16831,6 +16956,7 @@ HELP_WHEN = {
     "sqlfluff-sarif": "把 sqlfluff 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
     "stylelint-sarif": "把 stylelint 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
     "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
+    "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
     "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
     "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
@@ -17352,6 +17478,10 @@ def main():
     aa.add_argument("--repo", dest="anchor_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     aa.add_argument("--note", required=True, help="一句話理由(必填,進留痕)")
 
+    p = sub.add_parser("enforcement", help="各層防護現在有沒有生效(唯讀匯總:hooks/pre-commit/pre-push/CI/anchor/版本)")
+    p.add_argument("--repo", dest="enf_repo", help="repo root(預設 cwd 逐層向上找 .git)")
+    p.add_argument("--json", dest="enf_json", action="store_true", help="輸出 JSON")
+
     p = sub.add_parser("quote-check", help="[T2 錨定檢查] 報告引句逐條對回凍結快照(vault-free;rc0 全 ok/rc1 有 miss/rc2 IO或零引句)")
     p.add_argument("qc_report", metavar="報告.md")
     p.add_argument("--spec", dest="qc_spec", required=True, metavar="凍結快照.md")
@@ -17510,6 +17640,8 @@ def main():
         if args.anchor_cmd == "verify":
             return cmd_anchor_verify(repo=args.anchor_repo, as_json=args.as_json)
         return cmd_anchor_approve(repo=args.anchor_repo, note=args.note, vault=args.vault)
+    if args.cmd == "enforcement":
+        return cmd_enforcement(repo=args.enf_repo, as_json=args.enf_json)
     if args.cmd == "lint-watch":
         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
     if args.cmd == "compose-metrics":

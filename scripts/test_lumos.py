@@ -22369,6 +22369,74 @@ def run_with_timeout(fn, seconds):
         signal.signal(signal.SIGALRM, old)
 
 
+def _enforcement_fixture(all_active=True):
+    """建一個臨時 repo+home,可選全裝好或全缺,回 (root, home)。"""
+    import json as _j
+    root = Path(tempfile.mkdtemp(prefix="gctl-enf-repo-"))
+    home = Path(tempfile.mkdtemp(prefix="gctl-enf-home-"))
+    subprocess.run(["git", "-C", str(root), "init"], capture_output=True, text=True)
+    if all_active:
+        # hooks 目錄 + core.hooksPath
+        (root / "scripts" / "hooks").mkdir(parents=True)
+        for h in ("pre-commit", "pre-push"):
+            p = root / "scripts" / "hooks" / h
+            p.write_text("#!/bin/sh\nexit 0\n"); p.chmod(0o755)
+        subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"], capture_output=True)
+        (root / ".github" / "workflows").mkdir(parents=True)
+        (root / ".github" / "workflows" / "ci.yml").write_text("name: CI\n")
+        # 全域 settings 三 hook 註冊
+        chd = home / ".claude"; chd.mkdir()
+        (chd / "settings.json").write_text(_j.dumps({"hooks": {
+            "SessionStart": [{"hooks": [{"command": "python3 " + str(chd / "hooks" / "lumos-entry-hook.py")}]}],
+            "PreToolUse": [{"matcher": "Edit|Write", "hooks": [{"command": "python3 " + str(chd / "hooks" / "impact-hook.py")}]}],
+            "Stop": [{"hooks": [{"command": "python3 " + str(chd / "hooks" / "check-graph-sync.py")}]}],
+        }}), encoding="utf-8")
+    return root, home
+
+
+def t_enforcement_all_active():
+    m = _load_lumos_inproc()
+    root, home = _enforcement_fixture(all_active=True)
+    rows = m.enforcement_status(root=root, home=home)
+    by = {r["layer"]: r["status"] for r in rows}
+    check("enforcement: 入口 hook active", by.get("session-entry-hook") == "active", str(by))
+    check("enforcement: impact hook active", by.get("pretooluse-impact-hook") == "active", str(by))
+    check("enforcement: 圖譜同步 hook active", by.get("stop-graph-sync-hook") == "active", str(by))
+    check("enforcement: pre-commit active", by.get("git-pre-commit") == "active", str(by))
+    check("enforcement: pre-push active", by.get("git-pre-push") == "active", str(by))
+    check("enforcement: python active", by.get("python") == "active", str(by))
+    check("enforcement: CI workflow active", by.get("ci-workflow") == "active", str(by))
+    check("enforcement: 遠端檢查恆 unknown", by.get("required-status-check") == "unknown", str(by))
+
+
+def t_enforcement_all_inactive():
+    m = _load_lumos_inproc()
+    root, home = _enforcement_fixture(all_active=False)
+    rows = m.enforcement_status(root=root, home=home)
+    by = {r["layer"]: r["status"] for r in rows}
+    check("enforcement: 缺 hook 註冊 inactive", by.get("session-entry-hook") == "inactive", str(by))
+    check("enforcement: 缺 pre-commit inactive", by.get("git-pre-commit") == "inactive", str(by))
+    check("enforcement: 缺 CI inactive", by.get("ci-workflow") == "inactive", str(by))
+
+
+def t_enforcement_summary_excludes_unknown():
+    m = _load_lumos_inproc()
+    root, home = _enforcement_fixture(all_active=True)
+    rows = m.enforcement_status(root=root, home=home)
+    n_active, n_total, n_unknown = m.enforcement_summary(rows)
+    check("enforcement: 分母排除 unknown", n_total + n_unknown == len(rows), f"active={n_active} total={n_total} unknown={n_unknown} rows={len(rows)}")
+    check("enforcement: 至少一項 unknown(遠端檢查)", n_unknown >= 1, str(rows))
+    check("enforcement: active 不超過 total", 0 <= n_active <= n_total, "")
+
+
+def t_enforcement_never_raises_on_missing():
+    m = _load_lumos_inproc()
+    # 完全不存在的 root/home 也不該炸(fail-open 自身可觀測)
+    bad = Path(tempfile.mkdtemp(prefix="gctl-enf-bad-")) / "nope"
+    rows = m.enforcement_status(root=bad, home=bad)
+    check("enforcement: 缺目錄不炸、回清單", isinstance(rows, list) and len(rows) >= 8, str(rows)[:200])
+
+
 def main():
     # ★把 git 的環境變數從進程 env 清掉(2026-08-01,pre-push 假紅實錘)★
     #
