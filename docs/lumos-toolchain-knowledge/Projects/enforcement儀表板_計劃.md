@@ -72,3 +72,4 @@ standard tier(pre-push 不擋,仍照紀律審)。loop=code-enforcement,卷證 go
 - **r2**(新席複核):#1#2 修好;#3 只修一半——「來源 clone 不可達」與「真的最新」都回 None、仍假綠(乾淨機器/CI 沒 clone 時顯示綠燈)。已補:偵測來源可達性,不可達→unknown;兩分支各加測試。
 - 三態最終:active/inactive/degraded(懸空 hook、anchor sha 不符)/unknown(無 CLAUDE.md、無版本戳、來源不可達、遠端設定)。degraded 計入分母不計 active(懸空 hook 不會真執行防護=沒生效)。
 - 測試:8 案(含懸空 hook→degraded、無 CLAUDE.md→unknown、來源不可達→unknown、版本相等→active、anchor 不符→degraded、缺目錄 11 列不炸)。
+- ★上線後一致性守衛(2026-09-02)★:新指令觸發 8 條同步守衛翻紅——指令索引(commands/04)補 enforcement 行、五份文件命令數 64→65、slim 掃描白名單加「enforcement」散文假陽性(英文詞撞指令名,同 playwright install 先例)。全補齊。這正是「加一個頂層指令」的散落列舉稅(體檢 #7 那型),被守衛如實抓到。

@@ -20114,6 +20114,10 @@ def t_slim_skill_reference_scan_assertions():
         # ★已審查的假陽性★:這行講的是 `npx playwright install` 裝瀏覽器,跟
         # 「lumos install」無關——prose 形態的已知代價(裸 token 無法分辨語境)。
         ("reference.md", 343, "install", "prose"),
+        # ★已審查的假陽性★(2026-09-02):「enforcement 只管『鏈的存在與一致』」這句的
+        # enforcement 是英文常用詞(強制力),不是指令引用;2026-09-02 新增 lumos enforcement
+        # 指令後才與指令名撞號。prose 形態、語境無關,同 playwright 那條。
+        ("reference.md", 484, "enforcement", "prose"),
     }
     unexpected = [c for c in cands
                   if (_P(c["file"]).name, c["line"], c["token"], c["form"]) not in reviewed]
