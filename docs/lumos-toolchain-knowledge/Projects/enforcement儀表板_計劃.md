@@ -73,3 +73,11 @@ standard tier(pre-push 不擋,仍照紀律審)。loop=code-enforcement,卷證 go
 - 三態最終:active/inactive/degraded(懸空 hook、anchor sha 不符)/unknown(無 CLAUDE.md、無版本戳、來源不可達、遠端設定)。degraded 計入分母不計 active(懸空 hook 不會真執行防護=沒生效)。
 - 測試:8 案(含懸空 hook→degraded、無 CLAUDE.md→unknown、來源不可達→unknown、版本相等→active、anchor 不符→degraded、缺目錄 11 列不炸)。
 - ★上線後一致性守衛(2026-09-02)★:新指令觸發 8 條同步守衛翻紅——指令索引(commands/04)補 enforcement 行、五份文件命令數 64→65、slim 掃描白名單加「enforcement」散文假陽性(英文詞撞指令名,同 playwright install 先例)。全補齊。這正是「加一個頂層指令」的散落列舉稅(體檢 #7 那型),被守衛如實抓到。
+## 自動觸發(2026-09-02,補「記得才有用」的洞)
+
+> Enzo 一句「這個指令,也是記得才會有用」——唯讀指令本身犯了它想抓的病(不被機械觸發=裝飾)。
+
+把 enforcement 搭進 SessionStart 入口 hook(`scripts/hooks/claude/lumos-entry-hook.py`):每個 session 開頭自動跑 vendored `lumos enforcement --json`,**只在有 inactive/degraded 時追一行、全綠或只剩 unknown 靜默**(unknown 本機修不動,如遠端 GitHub 設定,不 nag)。抽純函式 `_enforcement_alert(rows)` 走測試先行。
+
+★繞不過的極限(誠實)★:若連 SessionStart hook 自己都沒裝,這條自動線也不會觸發——抓不到「自己完全不存在」(雞生蛋)。能抓的是**部分漂移**(hook 裝了但 pre-push 掉/anchor 過期/CI 被刪),那是實務最常見的。整台全沒裝靠人發現 hook 從不響或 bootstrap。★CI 不是觸發點★:CI 沒有本機 ~/.claude,看不到本機裝設,enforcement 本質是本機/每人一份的事。
+- 自動觸發代碼審(code-enf-autohook,standard 一席)抓 2 major:①內部 subprocess timeout 20s 大於外層 hook 10s 天花板→卡住會被 SIGKILL 吃掉核心提醒(降 3s);②fail-open 分支零測試(補 exit1/非JSON/真逾時三分支)。均修訖,逾時測試真跑滿 3s 驗優雅降級。報告 governance/review-reports/code-enf-autohook/。

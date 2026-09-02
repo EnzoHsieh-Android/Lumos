@@ -53,6 +53,38 @@ def _discipline_lag(root):
             "有空跑一次:\n    lumos update")
 
 
+def _enforcement_alert(rows):
+    """回一行「防護有幾層沒生效」提醒,或 None(全 active、或只剩 unknown)。
+    ★讓 lumos enforcement 不靠人記得敲——每 session 開頭自動查,只在有層掉了才吭聲★。
+    unknown 不 nag(本機修不動,如遠端 GitHub 設定);只點名 inactive/degraded。"""
+    down = [r for r in rows if r.get("status") in ("inactive", "degraded")]
+    if not down:
+        return None
+    names = ", ".join(f"{r['layer']}({r['status']})" for r in down)
+    return (f"⚠ 防護有 {len(down)} 層沒生效:{names}\n"
+            f"    細節與修法:lumos enforcement(多半是在專案根跑 lumos install --force)")
+
+
+def _enforcement_line(root):
+    """跑 vendored 的 lumos enforcement --json,回提醒行或 None。任何異常靜默(fail-open)。"""
+    try:
+        cli = root / "scripts" / "lumos"
+        if not cli.exists():
+            return None                            # 沒 vendored CLI → 跳過,不猜
+        # ★timeout 必須遠小於外層 hook 天花板★:這支 SessionStart hook 被 Claude Code 掛 10s
+        # (merge-claude-settings.py 寫死);內部若 ≥10s、enforcement 一卡住,外層會 SIGKILL 整支 hook,
+        # 連核心「先查圖譜」提醒都被吃掉(SIGKILL 繞過 try/except)。設 3s:正常 0.2s 的 15 倍餘裕,
+        # 卡住就快速放棄回 None、核心訊息照印(code-enf-autohook r1 審)。
+        r = subprocess.run([sys.executable, str(cli), "enforcement", "--json"],
+                           capture_output=True, text=True, timeout=3, cwd=str(root))
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        rows = json.loads(r.stdout).get("rows", [])
+        return _enforcement_alert(rows)
+    except Exception:
+        return None
+
+
 def main():
     if os.environ.get("LUMOS_ENTRY_HOOK_OFF") == "1":
         # 修法 A ablation 的「不帶」組(Projects/修法A_lumos先行ablation_計劃):探針沙盒砍了 CLAUDE.md 那一節,
@@ -78,6 +110,9 @@ def main():
            f"不確定該敲哪個指令 → 讀索引(4k 字元,按情境分九類,只開需要的子檔):\n    {idx}")
     if lag:
         msg += "\n" + lag
+    enf = _enforcement_line(root)      # 自動查各層防護,有掉才追一行(全綠靜默)
+    if enf:
+        msg += "\n" + enf
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
                                              "additionalContext": msg}}, ensure_ascii=False))
     return 0

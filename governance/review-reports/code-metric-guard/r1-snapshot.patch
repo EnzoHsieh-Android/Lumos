@@ -1,0 +1,61 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 6101c54..a98b685 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -24002,12 +24002,56 @@ def t_loop_escape_ledger():
+           rsl.returncode == 2 and "符號連結" in rsl.stderr and _target.read_text(encoding="utf-8") == "",
+           rsl.stderr[:200])
+     # 壞行容錯:合法 JSON 但非物件(ESC-03 的 null/陣列)+非法 JSON,聚合警告一次、不炸、有效筆數對
+     with open(v.parent / ".escape-log.jsonl", "a", encoding="utf-8") as f:
+         f.write("null\n[1,2]\n{壞}\n")
+     rl2 = run(v, "loop", "escape", "--list", expect_rc=0)
+     check("★紅釘 ESC-03:null/陣列/非法行全跳過不炸,聚合警告帶行號★",
+           "3 行壞損" in rl2.stderr and "3 筆" in rl2.stdout, (rl2.stderr + rl2.stdout)[:300])
+ 
+ 
++
++def t_metric_criteria_drift_guard():
++    """[換尺可比切片](spec:Projects/loop數據收集_計劃「換尺可比與自動回饋隔離」節,r1 五席縮案+r2 收斂)
++    三數字治理帳的兩道機械守衛:
++    ①判準句凍結:標記間原文 NFC sha256 前8碼 vs 變更日誌最新 rev——判準改了沒記日誌=紅;
++      日誌欄非 8 碼 hex(bootstrap 首列佔位)=紅並印現算值供人工謄入(測試永不寫檔)。
++    ②引用點漂移:三帳記號在執行面(scripts/+autonomous_loop)的引用檔必須在允許清單內——
++      新引用出現=紅,人判「讀側/文件」入清單或「數字值進閘」立事故(spec C 節禁令)。"""
++    import hashlib as _hl
++    import re as _re
++    import unicodedata as _ud
++    root = Path(__file__).resolve().parent.parent
++    plan = root / "docs" / "lumos-toolchain-knowledge" / "Projects" / "loop數據收集_計劃.md"
++    text = plan.read_text(encoding="utf-8")
++    m = _re.search(r"<!-- METRIC-CRITERIA:START -->\n(.*?)<!-- METRIC-CRITERIA:END -->", text, _re.S)
++    check("★前置★ 判準句標記對存在且唯一", m is not None and text.count("METRIC-CRITERIA:START") == 1,
++          "標記缺失或不唯一——雜湊邊界失效")
++    calc = _hl.sha256(_ud.normalize("NFC", m.group(1)).encode("utf-8")).hexdigest()[:8]
++    logm = _re.findall(r"^\| \d{4}-\d{2}-\d{2} \| (\S+) \|", text, _re.M)
++    check("★前置★ 變更日誌表至少一列", bool(logm), text[-500:])
++    latest = logm[-1] if logm else ""
++    if not _re.fullmatch(r"[0-9a-f]{8}", latest):
++        check("★判準凍結:日誌 rev 未回填(bootstrap)——把下列現算值謄入日誌最新列★",
++              False, f"現算 rev={calc};謄入 Projects/loop數據收集_計劃.md 變更日誌表後重跑")
++    else:
++        check("★判準凍結:標記間現算 sha == 日誌最新 rev(改判準沒記日誌=紅)★",
++              latest == calc, f"日誌={latest} 現算={calc}——判準句被改但變更日誌沒跟,記一列再說")
++    # ② 引用點漂移(執行面掃描;governance/review-reports 與 docs/*-knowledge 屬允許引用不在掃描面)
++    ALLOWED = {"scripts/lumos", "scripts/test_lumos.py"}
++    hits = set()
++    scan = [q for q in (root / "scripts").iterdir() if q.is_file()]
++    al = root / "governance" / "autonomous_loop"
++    scan += [q for q in al.iterdir() if q.is_file() and q.suffix in (".md", ".sh", ".py")] if al.exists() else []
++    for q in scan:
++        try:
++            body = q.read_text(encoding="utf-8", errors="ignore")
++        except OSError:
++            continue
++        if ".escape-log.jsonl" in body or "★圖譜攔截★" in body:
++            hits.add(str(q.relative_to(root)))
++    check("★引用點漂移:三帳記號在執行面的引用檔全數在允許清單內(新引用=先人判再放行)★",
++          hits <= ALLOWED, f"清單外新引用:{sorted(hits - ALLOWED)}——讀側/文件就加進 ALLOWED,數字值進閘就立事故(spec C 節)")
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

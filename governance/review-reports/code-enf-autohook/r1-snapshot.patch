@@ -1,0 +1,127 @@
+diff --git a/scripts/hooks/claude/lumos-entry-hook.py b/scripts/hooks/claude/lumos-entry-hook.py
+index ba7643c..c96dfcf 100755
+--- a/scripts/hooks/claude/lumos-entry-hook.py
++++ b/scripts/hooks/claude/lumos-entry-hook.py
+@@ -46,20 +46,48 @@ def _discipline_lag(root):
+     try:
+         expected = norm(tpl.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/"))
+     except OSError:
+         return None
+     if body == expected:
+         return None
+     return ("提醒:這個專案 CLAUDE.md 裡的 lumos 紀律區塊跟來源的最新版不一樣(規則可能已經更新),"
+             "有空跑一次:\n    lumos update")
+ 
+ 
++def _enforcement_alert(rows):
++    """回一行「防護有幾層沒生效」提醒,或 None(全 active、或只剩 unknown)。
++    ★讓 lumos enforcement 不靠人記得敲——每 session 開頭自動查,只在有層掉了才吭聲★。
++    unknown 不 nag(本機修不動,如遠端 GitHub 設定);只點名 inactive/degraded。"""
++    down = [r for r in rows if r.get("status") in ("inactive", "degraded")]
++    if not down:
++        return None
++    names = ", ".join(f"{r['layer']}({r['status']})" for r in down)
++    return (f"⚠ 防護有 {len(down)} 層沒生效:{names}\n"
++            f"    細節與修法:lumos enforcement(多半是在專案根跑 lumos install --force)")
++
++
++def _enforcement_line(root):
++    """跑 vendored 的 lumos enforcement --json,回提醒行或 None。任何異常靜默(fail-open)。"""
++    try:
++        cli = root / "scripts" / "lumos"
++        if not cli.exists():
++            return None                            # 沒 vendored CLI → 跳過,不猜
++        r = subprocess.run([sys.executable, str(cli), "enforcement", "--json"],
++                           capture_output=True, text=True, timeout=20, cwd=str(root))
++        if r.returncode != 0 or not r.stdout.strip():
++            return None
++        rows = json.loads(r.stdout).get("rows", [])
++        return _enforcement_alert(rows)
++    except Exception:
++        return None
++
++
+ def main():
+     if os.environ.get("LUMOS_ENTRY_HOOK_OFF") == "1":
+         # 修法 A ablation 的「不帶」組(Projects/修法A_lumos先行ablation_計劃):探針沙盒砍了 CLAUDE.md 那一節,
+         # 同一句提醒不能從這裡再進來。平時沒人設這個變數,行為不變。
+         return 0
+     try:
+         payload = json.loads(sys.stdin.read() or "{}")
+     except ValueError:
+         payload = {}
+     cwd = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+@@ -71,20 +99,23 @@ def main():
+         src = Path(os.environ.get("LUMOS_HOME") or (Path.home() / "harness" / "lumos-toolchain"))
+         idx = src / "skills" / "lumos-project-notes" / "commands" / "INDEX.md"
+         if not idx.exists():
+             return 0
+     lag = _discipline_lag(root)
+     msg = ("本專案用 lumos 知識圖譜。動既有系統的第一個工具呼叫是 lumos search / context,不是 grep / Read;"
+            "被催「直接改」也一樣,改 code 前至少 lumos impact --file <檔> 一行。\n"
+            f"不確定該敲哪個指令 → 讀索引(4k 字元,按情境分九類,只開需要的子檔):\n    {idx}")
+     if lag:
+         msg += "\n" + lag
++    enf = _enforcement_line(root)      # 自動查各層防護,有掉才追一行(全綠靜默)
++    if enf:
++        msg += "\n" + enf
+     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                              "additionalContext": msg}}, ensure_ascii=False))
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+     try:
+         sys.exit(main())
+     except Exception:
+         sys.exit(0)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1aaf6ae..a7dbc61 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -5060,20 +5060,45 @@ def t_skill_reference_pointers_resolve():
+             if heads is None:
+                 bad.append(f"{sk.parent.name}: 指到不存在的 {fname}"); continue
+             for x in _re.findall(r"〈([^〉]+)〉", chain):
+                 key = x.replace("`", "")
+                 if not any(key in h.replace("`", "") for h in heads):
+                     bad.append(f"{sk.parent.name}/{fname}: 找不到標題含「{x}」")
+     check("★頭版指到的 reference/templates 段落都存在★", not bad, "\n".join(bad))
+     print("  ✓ t_skill_reference_pointers_resolve")
+ 
+ 
++def t_entry_hook_enforcement_alert():
++    """入口 hook 的 _enforcement_alert:有 inactive/degraded 才回一行,全 active+unknown 靜默。
++    (讓 lumos enforcement 不靠人記得敲——每個 session 開頭自動查,只在有層掉了才吭聲)"""
++    import importlib.util
++    from importlib.machinery import SourceFileLoader
++    root = Path(__file__).resolve().parent.parent
++    hookpath = root / "scripts" / "hooks" / "claude" / "lumos-entry-hook.py"
++    loader = SourceFileLoader("_entryhook", str(hookpath))
++    spec = importlib.util.spec_from_loader("_entryhook", loader)
++    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
++    # 全 active + 遠端 unknown → 靜默(unknown 不 nag,本機修不動)
++    allgood = [{"layer": "git-pre-push", "status": "active", "detail": ""},
++               {"layer": "required-status-check", "status": "unknown", "detail": ""}]
++    check("全綠(unknown 不算) → 無提醒", m._enforcement_alert(allgood) is None, str(m._enforcement_alert(allgood)))
++    # 有 degraded → 回一行、點名該層、指路 lumos enforcement
++    degraded = [{"layer": "git-pre-push", "status": "active", "detail": ""},
++                {"layer": "session-entry-hook", "status": "degraded", "detail": "懸空"},
++                {"layer": "git-pre-commit", "status": "inactive", "detail": ""}]
++    line = m._enforcement_alert(degraded)
++    check("有層沒生效 → 回提醒行", line is not None, "None")
++    check("提醒點名掉的層", line and "session-entry-hook" in line and "git-pre-commit" in line, str(line))
++    check("提醒指路 lumos enforcement", line and "lumos enforcement" in line, str(line))
++    check("提醒不列 active 的層", line and "git-pre-push" not in line, str(line))
++
++
+ def t_entry_hook_index_and_lag():
+     """工具鏈補強十件 #8:session 入口 hook——有圖譜的專案印索引路徑;紀律區塊跟來源範本不同就多一行提醒;
+     沒圖譜的專案靜默。"""
+     import json as _j, os as _os, subprocess as _sp
+     root = Path(__file__).resolve().parent.parent
+     hook = root / "scripts" / "hooks" / "claude" / "lumos-entry-hook.py"
+     def run_hook(cwd, env_extra=None):
+         env = dict(_os.environ); env.update(env_extra or {})
+         r = _sp.run([sys.executable, str(hook)], input=_j.dumps({"cwd": str(cwd)}), capture_output=True, text=True, env=env)
+         return r.stdout.strip()

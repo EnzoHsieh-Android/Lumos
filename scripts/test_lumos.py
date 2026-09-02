@@ -5067,6 +5067,63 @@ def t_skill_reference_pointers_resolve():
     print("  ✓ t_skill_reference_pointers_resolve")
 
 
+def t_entry_hook_enforcement_alert():
+    """入口 hook 的 _enforcement_alert:有 inactive/degraded 才回一行,全 active+unknown 靜默。
+    (讓 lumos enforcement 不靠人記得敲——每個 session 開頭自動查,只在有層掉了才吭聲)"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    root = Path(__file__).resolve().parent.parent
+    hookpath = root / "scripts" / "hooks" / "claude" / "lumos-entry-hook.py"
+    loader = SourceFileLoader("_entryhook", str(hookpath))
+    spec = importlib.util.spec_from_loader("_entryhook", loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    # 全 active + 遠端 unknown → 靜默(unknown 不 nag,本機修不動)
+    allgood = [{"layer": "git-pre-push", "status": "active", "detail": ""},
+               {"layer": "required-status-check", "status": "unknown", "detail": ""}]
+    check("全綠(unknown 不算) → 無提醒", m._enforcement_alert(allgood) is None, str(m._enforcement_alert(allgood)))
+    # 有 degraded → 回一行、點名該層、指路 lumos enforcement
+    degraded = [{"layer": "git-pre-push", "status": "active", "detail": ""},
+                {"layer": "session-entry-hook", "status": "degraded", "detail": "懸空"},
+                {"layer": "git-pre-commit", "status": "inactive", "detail": ""}]
+    line = m._enforcement_alert(degraded)
+    check("有層沒生效 → 回提醒行", line is not None, "None")
+    check("提醒點名掉的層", line and "session-entry-hook" in line and "git-pre-commit" in line, str(line))
+    check("提醒指路 lumos enforcement", line and "lumos enforcement" in line, str(line))
+    check("提醒不列 active 的層", line and "git-pre-push" not in line, str(line))
+
+
+def t_entry_hook_enforcement_failopen():
+    """★命脈★:enforcement 子程序壞掉(非 0/非 JSON/逾時/CLI 不存在)時,hook 仍印出核心訊息、rc=0——
+    絕不能因為加料的防護檢查而吃掉「先查圖譜」核心提醒(code-enf-autohook r1 審 major#2)。"""
+    import json as _j, os as _os, subprocess as _sp
+    root = Path(__file__).resolve().parent.parent
+    hook = root / "scripts" / "hooks" / "claude" / "lumos-entry-hook.py"
+    tpl = (root / "scripts" / "templates" / "graph-discipline.md").read_text(encoding="utf-8")
+    def run_in(cli_body):
+        d = Path(tempfile.mkdtemp(prefix="gctl-failopen-"))
+        _sp.run(["git", "init", "-q", str(d)])
+        (d / "docs" / "x-knowledge").mkdir(parents=True)
+        body = tpl.replace("{{KG}}", "docs/x-knowledge/").strip("\n")
+        (d / "CLAUDE.md").write_text("# x\n<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 -->\n" + body + "\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
+        (d / "scripts").mkdir()
+        cli = d / "scripts" / "lumos"; cli.write_text(cli_body); cli.chmod(0o755)
+        env = dict(_os.environ); env["LUMOS_HOME"] = str(root)
+        r = _sp.run([sys.executable, str(hook)], input=_j.dumps({"cwd": str(d)}),
+                    capture_output=True, text=True, env=env, timeout=30)
+        return r
+    # ★hook 用 `python3 <cli>` 跑 vendored lumos,所以 stub 也要是 python 才走到真路徑★:
+    # 逾時那條必須真的 hang(time.sleep),才會觸發 subprocess timeout=3、驗證外層 10s 天花板內優雅降級。
+    for label, body in (
+        ("exit1", "import sys; sys.exit(1)\n"),
+        ("非JSON", "print('not json at all')\n"),
+        ("逾時", "import time; time.sleep(999)\n"),
+    ):
+        r = run_in(body)
+        ok = r.returncode == 0 and "lumos search" in r.stdout and "commands/INDEX.md" in r.stdout
+        check(f"enforcement {label} → 核心訊息照印、rc0", ok, f"rc={r.returncode} out={r.stdout[:120]!r} err={r.stderr[:120]!r}")
+        check(f"enforcement {label} → 不追防護提醒行", "防護有" not in r.stdout, r.stdout[:150])
+
+
 def t_entry_hook_index_and_lag():
     """工具鏈補強十件 #8:session 入口 hook——有圖譜的專案印索引路徑;紀律區塊跟來源範本不同就多一行提醒;
     沒圖譜的專案靜默。"""
