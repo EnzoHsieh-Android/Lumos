@@ -83,7 +83,10 @@ PRIOR-ART: ① 最小解層級——既有情境探針(scripts/scenario_probe.py
 
 1. `scripts/scenario_probe.py`:`--runs N`(預設 1,每題重跑並記 run 序)、`--arm with|without`(預設 with;without 在 make_sandbox commit 前砍 CLAUDE.md 小節、run_one 帶 `LUMOS_ENTRY_HOOK_OFF=1`)、結果多兩欄 `first_lumos_idx`/`ever_lumos`;`strip_lumos_first_rule()` 抽純函式可測;找不到小節邊界→炸(實驗無效比靜默跑完好)。
 2. `scripts/hooks/claude/lumos-entry-hook.py`:main 開頭 `LUMOS_ENTRY_HOOK_OFF=1` → return 0;同步 cp 到 `~/.claude/hooks/`(安裝的是複本,已 diff 確認相同)。
-3. `governance/eval/ablation_lumos_first.py`:切 shard、平行呼叫探針、合併四個尺出對照表(json+md);可 resume(已有輸出的 shard 跳過)。
+3. `governance/eval/ablation_lumos_first.py`:切 shard、平行呼叫探針、合併四個尺出對照表(json+md);可 resume(已有輸出的 shard 跳過)。★同日第二版改逐題補缺(見〈第一輪實跑〉)★。
+4. (09-02 傍晚,Enzo「照你建議」)runner 加**題目鑑別力分類**(`classify_question`:區分/不區分都過/不區分都不過/反向/弱;借 skill-creator analyzer 抓「不管有沒有都過」的斷言)——本案 28 題:區分 10、都過 13、都不過 1、反向 1、弱 3;13 題「都過」對這條規矩不具鑑別力,是之後「每條規矩綁自己的題」的起點。
+5. runner 加 `--max-per-window`(預設 50):五小時內開滿就不再開新工作,之後重跑補缺——事前上限,對應 SWE-agent per-instance / bmad per-story 的窗口版;配合 `--wait-on-limit` 兩道。
+6. `governance/eval/rule_conflict_scan.py`:規矩成對衝突**字面級初篩**(切句→留指令性句→按關鍵詞分群→同詞下正負並存或數字不一致列候選)。首跑:433 句指令性句、45 個候選群;候選交乾淨 agent 回原檔逐群判真衝突/同面/過期並存,結論記 [[Issues/散文紀律沒有退場機制]]。
 
 ## 誠實界線
 

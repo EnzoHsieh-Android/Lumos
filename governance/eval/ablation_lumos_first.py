@@ -86,7 +86,27 @@ def needed(by_arm, arm, qid, runs):
     return max(0, runs - have)
 
 
-def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, model=""):
+def runs_in_window(out_dir, hours=5.0, now=None):
+    """最近 hours 小時內落地的探針場次(含撞上限的):算帳號窗口用掉多少。以檔案 mtime 為時間,沿用結果檔沒有時間戳的現況。"""
+    now = time.time() if now is None else now
+    n = 0
+    for p in Path(out_dir).glob("*.json"):
+        if p.name in ("summary.json", "meta.json"):
+            continue
+        try:
+            if now - p.stat().st_mtime > hours * 3600:
+                continue
+            n += len(json.loads(p.read_text(encoding="utf-8")).get("results", []))
+        except Exception:
+            continue
+    return n
+
+
+def run_job(arm, qid, n, files, timeout, max_turns, out_dir, wait_on_limit, model="", max_per_window=0):
+    if max_per_window and runs_in_window(out_dir) >= max_per_window:
+        # 事前上限(SWE-agent per-instance / bmad per-story 的窗口版):這個五小時窗口已經跑滿,不再開新工作;
+        # 之後重跑 runner 會逐題補缺。比「撞到再等」省一次撞牆,也不會把 Enzo 的互動配額吃光。
+        return (arm, qid, f"skip 窗口已達 {max_per_window} 場上限,之後再補")
     stamp = time.strftime("%H%M%S")
     out = Path(out_dir) / f"{arm}-q-{qid}-{stamp}.json"
     log = Path(out_dir) / f"{arm}-q-{qid}-{stamp}.log"
@@ -134,6 +154,24 @@ def _arm_stats(results, expected_ids, runs):
             "per_question": per}
 
 
+def classify_question(w, wo):
+    """一題對「這條規矩」有沒有鑑別力。w/wo = [過幾次, 跑幾次]。
+    區分=帶著比拔掉多過至少三分之二;反向=拔掉反而多過;都過/都不過=這題測不到這條規矩;其餘=弱/不穩。
+    (借 skill-creator 的 analyzer:抓「不管有沒有裝都過」的斷言——那種題留在題庫裡只是在花配額。)"""
+    if not w[1] or not wo[1]:
+        return "缺資料"
+    rw, rwo = w[0] / w[1], wo[0] / wo[1]
+    if rw == 1 and rwo == 1:
+        return "不區分(都過)"
+    if rw == 0 and rwo == 0:
+        return "不區分(都不過)"
+    if rw - rwo >= 2 / 3:
+        return "區分"
+    if rwo > rw:
+        return "反向"
+    return "弱/不穩"
+
+
 def merge(out_dir, expected_ids, runs):
     by_arm = load_results(out_dir)
     arms = {a: _arm_stats(by_arm[a], expected_ids, runs) for a in ARMS}
@@ -142,7 +180,12 @@ def merge(out_dir, expected_ids, runs):
         arms[a].pop("per_question", None)
     w, wo = arms["with"]["m1_rate"], arms["without"]["m1_rate"]
     delta = round((w - wo) * 100, 2) if (w is not None and wo is not None) else None
-    return {"runs": runs, "expected_ids": expected_ids, "arms": arms, "m1_delta_pp": delta, "per_question": per_q}
+    classes = {q: classify_question(v["with"], v["without"]) for q, v in per_q.items()}
+    class_counts = {}
+    for c in classes.values():
+        class_counts[c] = class_counts.get(c, 0) + 1
+    return {"runs": runs, "expected_ids": expected_ids, "arms": arms, "m1_delta_pp": delta, "per_question": per_q,
+            "question_class": classes, "class_counts": class_counts}
 
 
 def render_md(s, meta):
@@ -159,9 +202,10 @@ def render_md(s, meta):
              f"| 同題多次不一致的題數 | {len(a['inconsistent_questions'])} | {len(b['inconsistent_questions'])} |",
              f"| 缺場 / 撞上限 / 其他儀器例外 | {a['missing']} / {a['limit_hits']} / {a['instrument_errors'] - a['limit_hits']} | {b['missing']} / {b['limit_hits']} / {b['instrument_errors'] - b['limit_hits']} |",
              "", f"**M1 差(with − without)= {s['m1_delta_pp']} pp**", "",
-             "| 題 | with | without |", "|---|---|---|"]
+             "題目鑑別力(這題對「這條規矩」測不測得到):" + "、".join(f"{k} {v} 題" for k, v in sorted(s.get("class_counts", {}).items())), "",
+             "| 題 | with | without | 鑑別力 |", "|---|---|---|---|"]
     for q, v in s["per_question"].items():
-        lines.append(f"| {q} | {v['with'][0]}/{v['with'][1]} | {v['without'][0]}/{v['without'][1]} |")
+        lines.append(f"| {q} | {v['with'][0]}/{v['with'][1]} | {v['without'][0]}/{v['without'][1]} | {s.get('question_class', {}).get(q, '')} |")
     if a["inconsistent_questions"] or b["inconsistent_questions"]:
         lines += ["", f"不一致題 with: {', '.join(a['inconsistent_questions']) or '—'};without: {', '.join(b['inconsistent_questions']) or '—'}"]
     return "\n".join(lines) + "\n"
@@ -173,6 +217,8 @@ def main():
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--workers", type=int, default=2, help="平行路數;瓶頸是帳號用量上限不是機器,多開沒用")
     ap.add_argument("--wait-on-limit", type=int, default=7200, help="探針撞上限時最多等幾秒(每 300 秒重試)")
+    ap.add_argument("--max-per-window", type=int, default=50,
+                    help="五小時內最多開幾場(含撞上限的);0=不設。2026-09-02 實測每窗口約 55 場才撞牆,預設留餘裕給人用")
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--max-turns", type=int, default=18)
     ap.add_argument("--model", default="")
@@ -205,7 +251,8 @@ def main():
         print(f"{len(ids)} 題 × {a.runs} 次 × {len(a.arms.split(','))} 組;還缺 {total} 場有效結果,"
               f"{len(jobs)} 個工作,{a.workers} 路平行,撞上限最多等 {a.wait_on_limit}s → {out_dir}", flush=True)
         with ThreadPoolExecutor(max_workers=a.workers) as ex:
-            futs = [ex.submit(run_job, arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit, a.model)
+            futs = [ex.submit(run_job, arm, qid, n, files, a.timeout, a.max_turns, out_dir, a.wait_on_limit, a.model,
+                              a.max_per_window)
                     for arm, qid, n in jobs]
             for f in futs:
                 arm, qid, st = f.result()

@@ -1402,6 +1402,27 @@ class TestScenarioProbeAblation(unittest.TestCase):
         self.assertAlmostEqual(s["m1_delta_pp"], (3 / 4 - 1 / 4) * 100)
         self.assertEqual(s["per_question"]["s01"], {"with": [2, 2], "without": [1, 2]})
 
+    def test_classify_question(self):
+        c = self.rn.classify_question
+        self.assertEqual(c([3, 3], [3, 3]), "不區分(都過)")
+        self.assertEqual(c([0, 3], [0, 3]), "不區分(都不過)")
+        self.assertEqual(c([3, 3], [1, 3]), "區分")
+        self.assertEqual(c([3, 3], [0, 3]), "區分")
+        self.assertEqual(c([1, 3], [2, 3]), "反向")
+        self.assertEqual(c([3, 3], [2, 3]), "弱/不穩")
+        self.assertEqual(c([3, 3], [0, 0]), "缺資料")
+
+    def test_runs_in_window_counts_recent_only(self):
+        import os, time as _t
+        d = Path(tempfile.mkdtemp())
+        (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [{}, {}, {}]}), encoding="utf-8")
+        old = d / "with-q-b-1.json"
+        old.write_text(json.dumps({"arm": "with", "results": [{}]}), encoding="utf-8")
+        os.utime(old, (_t.time() - 6 * 3600, _t.time() - 6 * 3600))
+        (d / "summary.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(self.rn.runs_in_window(d, hours=5), 3, "六小時前的檔不算、summary 不算")
+        self.assertEqual(self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)[2][:4], "skip")
+
     def test_merge_counts_missing(self):
         d = Path(tempfile.mkdtemp())
         (d / "with-shard0.json").write_text(json.dumps({"arm": "with", "runs": 3, "results": [
