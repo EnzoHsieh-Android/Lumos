@@ -10192,7 +10192,7 @@ def _refuse_if_probe(action):
     探針環境一律設 LUMOS_PROBE=1;這幾個會動全域機器狀態的指令在探針下直接拒絕。"""
     import os
     if os.environ.get("LUMOS_PROBE") == "1":
-        print(f"✗ 偵測到 LUMOS_PROBE=1(情境探針沙盒),拒絕執行「{action}」——"
+        print(f"擋下:偵測到 LUMOS_PROBE=1(情境探針沙盒),拒絕執行「{action}」——"
               f"這會把真的 ~/.claude 重連到臨時沙盒,沙盒一清就全斷。探針裡不該重裝工具鏈。", file=sys.stderr)
         return True
     return False
@@ -10227,8 +10227,10 @@ def cmd_install(force=False):
     _install_skills()
     # 全域 ~/.claude hooks/settings 同步(install全域hook同步_計劃:全域機器自癒——
     # copy 現役 hooks + 刪已撤除 hook 殘留 + prune 懸空註冊;來源=來源 repo 自身)
-    _sync_global_claude(Path(__file__).resolve().parent.parent)
-    print("  ✓ 全域 Claude hooks/settings 已同步(含清撤除的舊 Stop 註冊)")
+    if _sync_global_claude(Path(__file__).resolve().parent.parent):   # r3:接上 bool 契約,別無條件印成功(cmd_install 已在入口擋 probe,此為契約一致性)
+        print("  ✓ 全域 Claude hooks/settings 已同步(含清撤除的舊 Stop 註冊)")
+    else:
+        print("  ⚠ 全域 Claude hooks/settings 同步被擋(LUMOS_PROBE)——未動 ~/.claude")
     # PATH 檢查(r1-F7:用 os.pathsep,Windows 是 ;)
     if str(bindir) not in os.environ.get("PATH", "").split(os.pathsep):
         hint = (f'  Windows:把 {bindir} 加進使用者 PATH(系統環境變數)'
@@ -10976,6 +10978,11 @@ def _link_or_copy(src: Path, dst: Path):
 
 
 def _install_skills():
+    # ★r1 正確性席:防線下移到真正動全域機器狀態的地方★——原本只擋四個指令入口,
+    # 但 cmd_init → _vendor_toolchain → _install_hooks_py 這條路也會重連 ~/.claude/skills、繞過入口守衛。
+    # 擋在這個變動原語,不論從哪個指令進來都擋得住。
+    if _refuse_if_probe("install-skills"):
+        return
     repo = Path(__file__).resolve().parent.parent
     dest = Path.home() / ".claude" / "skills"
     for s in _SKILLS:
@@ -11046,7 +11053,11 @@ def _sync_global_claude(src_repo: Path):
     """全域 ~/.claude hooks/settings 同步(不需專案;install 與 _install_hooks_py 共用)。
     ①copy 現役 hooks ②刪已撤除 hook 殘留真檔 ③跑 merge-claude-settings(_prune_dangling 剪懸空註冊)。
     來源=src_repo(install 用來源 repo 自身、update 用專案 vendored copy);寫 ~/.claude(HOME 隔離可測)。
-    設計:Projects/install全域hook同步_計劃。"""
+    設計:Projects/install全域hook同步_計劃。回 True=有做、False=探針下被擋沒做(呼叫端據此不印假成功)。"""
+    # ★r1 正確性席:同 _install_skills——cmd_init/_vendor_toolchain 這條路會經此覆寫真的 ~/.claude/hooks
+    # 與動 settings.json,繞過四個指令入口的守衛。擋在變動原語。
+    if _refuse_if_probe("sync-global-claude"):
+        return False
     import subprocess, shutil
     chooks = Path.home() / ".claude" / "hooks"
     chooks.mkdir(parents=True, exist_ok=True)
@@ -11068,6 +11079,7 @@ def _sync_global_claude(src_repo: Path):
     merge = src_repo / "scripts" / "merge-claude-settings.py"  # ③ merge+prune 懸空(含②剛變懸空的)
     if merge.exists():
         subprocess.run([sys.executable, str(merge)])
+    return True
 
 
 def _teardown_global_claude(src_repo: Path):
@@ -11104,8 +11116,11 @@ def _install_hooks_py(root: Path):
     # ① git config core.hooksPath(專案本地)
     subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"])
     # ②③ 全域 hooks/settings 同步(委派共用函式,消雙寫;來源=專案 vendored copy)
-    _sync_global_claude(root)
-    print("  ✓ hooks:core.hooksPath + 全域 Claude hooks 同步(copy+撤除清理+settings)")
+    synced = _sync_global_claude(root)
+    if synced:
+        print("  ✓ hooks:core.hooksPath + 全域 Claude hooks 同步(copy+撤除清理+settings)")
+    else:
+        print("  ⚠ hooks:core.hooksPath 已設,但全域 Claude hooks 同步在探針環境下被擋(LUMOS_PROBE)——未動 ~/.claude")
 
 
 def _confirm_tty(prompt):

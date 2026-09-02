@@ -62,8 +62,8 @@ def scan(min_group=2):
     for f in iter_files():
         try:
             text = f.read_text(encoding="utf-8")
-        except OSError:
-            continue
+        except (OSError, UnicodeDecodeError):
+            continue   # r1 邊界席:非法 UTF-8(UnicodeDecodeError 是 ValueError 不是 OSError)也跳過,別讓一顆壞檔炸掉整支掃描
         rel = str(f.relative_to(ROOT))
         for ln, s in sentences(text):
             if not DIRECTIVE.search(s):

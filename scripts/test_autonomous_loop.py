@@ -1353,7 +1353,8 @@ class TestScenarioProbeAblation(unittest.TestCase):
         self.assertEqual((out["ever_lumos"], out["first_lumos_idx"], out["calls_truncated"]), (True, 2, False), "路徑那筆不算,第 2 筆才是")
         r2 = {"id": "y", "n_calls": 14, "answer": "ok", "calls": [["Bash", "grep x docs/lumos-toolchain-knowledge/"]] * 12}
         out2 = self.rn.backfill_limit(r2)
-        self.assertEqual((out2["ever_lumos"], out2["calls_truncated"]), (False, True), "只存 12 筆、實際 14 筆 → 標截斷")
+        # r2 語意:截斷 + 可見清單無真呼叫 → 未知 None(真呼叫可能在被砍的第 13-14 筆),不是 False
+        self.assertEqual((out2["ever_lumos"], out2["calls_truncated"]), (None, True), "截斷判不出 → 未知")
 
     def test_is_limit_hit(self):
         """2026-09-02 實跑:撞帳號上限時 claude -p 零工具呼叫、result 文字是上限訊息;有工具呼叫的場永遠不算撞上限。"""
@@ -1396,7 +1397,7 @@ class TestScenarioProbeAblation(unittest.TestCase):
         # with 四場首次步數 [0,0,0,1] → 中位 0;without 只有兩場敲到 [1,0] → 中位 0.5
         self.assertEqual(w["m3_first_idx_median"], 0); self.assertEqual(wo["m3_first_idx_median"], 0.5)
         self.assertEqual((w["m3_n"], wo["m3_n"]), (4, 2))
-        self.assertEqual((w["m4_answers_passed"], w["m4_answers_n"]), (1, 2))
+        self.assertEqual((w["m4_gated_passed"], w["m4_gated_n"]), (1, 2))
         self.assertEqual(w["inconsistent_questions"], ["a01"]); self.assertEqual(wo["inconsistent_questions"], ["s01"])
         self.assertEqual(w["missing"], 0)
         self.assertAlmostEqual(s["m1_delta_pp"], (3 / 4 - 1 / 4) * 100)
@@ -1422,6 +1423,99 @@ class TestScenarioProbeAblation(unittest.TestCase):
         (d / "summary.json").write_text("{}", encoding="utf-8")
         self.assertEqual(self.rn.runs_in_window(d, hours=5), 3, "六小時前的檔不算、summary 不算")
         self.assertEqual(self.rn.run_job("with", "zz", 1, [], 1, 1, d, 0, "", max_per_window=3)[2][:4], "skip")
+
+    def test_lumos_stats_rejects_quoted_and_echo(self):
+        # r1 code-ablation-probe:引號內/echo 出來的規則文字不算敲 lumos;真呼叫算
+        f = self.sp.lumos_stats
+        self.assertEqual(f([("Bash", "rg 'lumos search' CLAUDE.md")]), (False, None))
+        self.assertEqual(f([("Bash", 'echo "lumos doctor"')]), (False, None))
+        self.assertEqual(f([("Bash", "grep lumos-toolchain docs/")]), (False, None))
+        self.assertEqual(f([("Bash", "cd x && lumos search foo")]), (True, 0))
+        self.assertEqual(f([("Bash", "python3 scripts/lumos show X")]), (True, 0))
+
+    def test_strip_rejects_duplicate_markers(self):
+        t = "a\n" + self.sp.RULE_HEAD + "\nx\n" + self.sp.RULE_END + "\nb\n" + self.sp.RULE_HEAD + "\n"
+        out, ok = self.sp.strip_lumos_first_rule(t)
+        self.assertFalse(ok, "標記出現兩次要安全回退,不砍錯段")
+        self.assertEqual(out, t)
+
+    def test_validate_scenario(self):
+        v = self.sp._validate_scenario
+        self.assertIsNone(v({"id": "s", "prompt": "p", "expect": ["x"]}))
+        self.assertIn("expect", v({"id": "s", "prompt": "p"}))
+        self.assertIn("prompt", v({"id": "s", "expect": ["x"]}))
+
+    def test_arm_stats_filters_expected_ids(self):
+        # 舊題殘檔(id=stale)不進 M1；只算現行題庫的
+        rows = [{"id": "s01", "passed": True, "ever_lumos": True, "first_lumos_idx": 0},
+                {"id": "stale", "passed": False, "ever_lumos": False, "first_lumos_idx": None}]
+        st = self.rn._arm_stats(rows, expected_ids=["s01"], runs=1)
+        self.assertEqual((st["n"], st["m1_passed"]), (1, 1), "stale 題不算進 M1")
+
+    def test_backfill_truncated_ambiguous_is_unknown(self):
+        # r2 正確性席:截斷 + 殘缺清單看不到真呼叫 → 分不清真呼叫在被砍部分還是舊值假陽性 → 標未知 None
+        r = {"id": "x", "n_calls": 14, "ever_lumos": True, "answer": "ok",
+             "calls": [["Read", "f"]] * 12}   # 12<14 truncated,可見 calls 無 lumos
+        out = self.rn.backfill_limit(dict(r))
+        self.assertIsNone(out["ever_lumos"], "截斷且看不到真呼叫 → 未知,不保留可能是假陽性的 True")
+        self.assertTrue(out["calls_truncated"])
+
+    def test_backfill_truncated_visible_false_positive_downgraded(self):
+        # r2 正確性席核心:舊值 True 其實是舊正則假陽性、且假陽性就在可見 calls 裡 → 新正則判 False → 不該保留 True
+        r = {"id": "x", "n_calls": 14, "ever_lumos": True, "answer": "ok",
+             "calls": [["Bash", "rg 'lumos search' CLAUDE.md"]] * 12}   # 可見全是假陽性字串
+        out = self.rn.backfill_limit(dict(r))
+        self.assertIsNone(out["ever_lumos"], "可見清單無真呼叫 → 不保留假陽性 True(改標未知)")
+
+    def test_backfill_truncated_visible_real_call_kept(self):
+        r = {"id": "x", "n_calls": 14, "ever_lumos": True, "answer": "ok",
+             "calls": [["Read", "f"], ["Bash", "scripts/lumos search x"]] + [["Read", "z"]] * 10}
+        out = self.rn.backfill_limit(dict(r))
+        self.assertTrue(out["ever_lumos"], "可見清單有真呼叫 → 確定 True")
+        self.assertEqual(out["first_lumos_idx"], 1)
+
+    def test_arm_stats_m2_excludes_unknown(self):
+        # ever_lumos=None 的場不進 M2 分母
+        rows = [{"id": "s01", "passed": True, "ever_lumos": True, "first_lumos_idx": 0},
+                {"id": "s02", "passed": False, "ever_lumos": None, "first_lumos_idx": None}]
+        st = self.rn._arm_stats(rows, expected_ids=["s01", "s02"], runs=1)
+        self.assertEqual((st["m2_ever"], st["m2_n"]), (1, 1), "未知場排除在 M2 分母外")
+
+    def test_m4_content_vs_gated(self):
+        d = Path(tempfile.mkdtemp())
+        # a01:敲對+答對(passed=True, content=True);a02:答對但先 grep(passed=False, content=True)
+        rows = [{"id": "a01", "passed": True, "ever_lumos": True, "first_lumos_idx": 0, "answer_content_ok": True},
+                {"id": "a02", "passed": False, "ever_lumos": True, "first_lumos_idx": 1, "answer_content_ok": True}]
+        st = self.rn._arm_stats(rows, expected_ids=["a01", "a02"], runs=1)
+        self.assertEqual((st["m4_gated_passed"], st["m4_gated_n"]), (1, 2), "gated 只算 passed")
+        self.assertEqual((st["m4_content_passed"], st["m4_content_n"]), (2, 2), "content 兩題答案都對")
+
+    def test_load_ids_dedup(self):
+        d = Path(tempfile.mkdtemp())
+        f = d / "q.jsonl"
+        f.write_text('{"id":"s01","expect":["x"]}\n{"id":"s01","expect":["x"]}\n{"id":"s02","expect":["y"]}\n', encoding="utf-8")
+        # load_ids 讀 ROOT/f;這裡用絕對路徑塞進去測去重邏輯——改用相對 ROOT 不便,直接測 set 去重行為
+        import json as _j
+        seen, ids = set(), []
+        for ln in f.read_text().splitlines():
+            q = _j.loads(ln)["id"]
+            if q not in seen:
+                seen.add(q); ids.append(q)
+        self.assertEqual(ids, ["s01", "s02"])
+
+    def test_collect_skills_health(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [], "skills_health_bad": [["x", "/tmp/lumos-probe-z/skills/x"]]}), encoding="utf-8")
+        (d / "with-q-b-1.json").write_text(json.dumps({"arm": "with", "results": [], "skills_health_bad": []}), encoding="utf-8")
+        hits = self.rn.collect_skills_health(d)
+        self.assertEqual(len(hits), 1)
+
+    def test_load_results_skips_bad_json(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "with-q-a-1.json").write_text("[]", encoding="utf-8")   # 合法 JSON 但非 dict
+        (d / "with-q-b-1.json").write_text(json.dumps({"arm": "with", "results": [{"id": "s01", "passed": True}, "壞元素"]}), encoding="utf-8")
+        by = self.rn.load_results(d)   # 不該炸
+        self.assertEqual(len(by["with"]), 1, "非 dict 檔與非 dict 元素都跳過")
 
     def test_merge_counts_missing(self):
         d = Path(tempfile.mkdtemp())

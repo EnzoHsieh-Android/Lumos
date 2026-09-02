@@ -106,3 +106,14 @@ PRIOR-ART: ① 最小解層級——既有情境探針(scripts/scenario_probe.py
 ## 結果(2026-09-02)
 
 跑完、門檻對完,數字與解讀全在 [[Verification/2026-09-02_修法A_lumos先行ablation結果]]。一句話:差 35.7pp,那一節有效、留;它改的是「先查圖譜還是先 grep」的路徑,不是答案對不對。後續兩件掛在 [[Issues/散文紀律沒有退場機制]] 的 09-20 REVISIT:①要不要拆「表留、勸告句拿掉」再量第三組;②修法 B 窄門怎麼寫。
+
+## 代碼審(2026-09-02,推送前 tier=high 三輪)
+
+儀器這批(探針 + 跑批 + 衝突掃描 + 防線,約 760 行)推送前走 code-loop,loop id 定稿記於 `code-ablation-probe-2`(過程 r1-r3 記於 `code-ablation-probe`,因記帳後改報告誤生同輪雙處置,照 skill 換編號重記)。
+
+- **r1**:5 席(4 claude 鏡頭 + Codex 外家)找 18 條——修 15 折入、3 條低影響 minor 附理由接受。主要 major:判「有沒有敲 lumos」的正則把 `rg 'lumos search'`/`echo` 誤算、判準正則複製兩份沒 import、M4 混淆答案對與走對路、統計沒按題庫過濾、防線漏 `cmd_init` 繞過路徑、Bash 指令截 200 字、健康檢查只印不接。
+- **r2**:新席審 r1 修正,抓 2 條 major——①健康檢查函式 `collect_skills_health` 寫了但 main 沒呼叫(死碼);②backfill「截斷保留 True」連舊正則假陽性也留著(半修)。均修訖,M2 改三態(True/False/未知 None)。
+- **r3**:新席複核 r2 修正全對,僅 2 條 minor(docstring 過期、cmd_install 沒接 bool 契約),當輪折入。處置閘 PASS。
+- 外家 Codex 在 r2/r3 因 stdin 卡住不可用 → 單家族視角、降級留痕(Enzo 2026-08-22 裁 high 缺外家不硬擋)。
+- 全程 131 單元測試綠、主測試套件 exit 0;合約不變量未動(防線只在 `LUMOS_PROBE=1` 早退)。報告存 `governance/review-reports/code-ablation-probe/`。
+- 附帶事故與防護見 [[Issues/探針沙盒改動真全域機器狀態]] 與 [[Verification/2026-09-02_探針沙盒全域防護]]。

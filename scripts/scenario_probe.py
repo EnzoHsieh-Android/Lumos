@@ -43,7 +43,9 @@ def tool_calls_from_stream(lines):
                     name = blk.get("name", "?")
                     inp = blk.get("input") or {}
                     if name == "Bash":
-                        summ = str(inp.get("command", ""))[:200]
+                        # ★不截斷 Bash 指令★(code-ablation-probe r1 邊界席):判「有沒有敲 lumos」的正則比對這個字串,
+                        # 截到 200 字會把落在後面的 `lumos <子指令>` 漏掉,系統性低估 M1/M2/M3。存全文,只有純顯示的其他工具截。
+                        summ = str(inp.get("command", ""))
                     elif name in ("Read", "Edit", "Write", "Glob", "Grep"):
                         summ = " ".join(str(inp.get(k, "")) for k in ("file_path", "pattern", "path") if inp.get(k))[:200]
                     elif name == "Skill":
@@ -86,7 +88,10 @@ RULE_END = "### 三條鐵則"
 
 
 def strip_lumos_first_rule(text):
-    """回 (新文字, 有沒有砍到)。找不到兩個邊界或順序反了 → 原文、False。"""
+    """回 (新文字, 有沒有砍到)。找不到兩個邊界、順序反了、或標記不只出現一次 → 原文、False。
+    ★r1 邊界席:兩個標記若各出現多次,find 只取第一個、可能砍錯段且無聲。要求各恰好一次,否則安全回退★。"""
+    if text.count(RULE_HEAD) != 1 or text.count(RULE_END) != 1:
+        return text, False
     s = text.find(RULE_HEAD)
     e = text.find(RULE_END)
     if s < 0 or e < 0 or e <= s:
@@ -112,13 +117,15 @@ def is_limit_hit(calls, final_text, result_event):
 # 「敲 lumos」=Bash 裡跑了 lumos 的某個子指令:`scripts/lumos search`、`python3 scripts/lumos show`、`lumos doctor`。
 # ★2026-09-02 第一版用 \blumos\b 字界比對,把 `grep … docs/lumos-toolchain-knowledge/` 這種路徑也算成敲了 lumos,
 # 拔散文那組的「敲過率」被灌到 98.8%——路徑裡的 lumos 後面接的是 -,子指令後面接的是空白+字母。★
-LUMOS_CALL_RE = re.compile(r"(?:^|[\s;&|(`'\"/])lumos\s+[a-z]")
+# ★r1 code-ablation-probe 再修★:原前置字元類含引號 ' 與 ",害 rg 'lumos search'、echo "lumos doctor"
+# 這種只是搜尋/印出規則文字的被算成敲了 lumos(灌 M2/M3)。移除引號、留路徑分隔 / 與指令分隔符。
+LUMOS_CALL_RE = re.compile(r"(?:^|[\s;&|(`/])lumos\s+[a-z]")
 
 
 def lumos_stats(calls):
     """回 (整場有沒有敲過 lumos 子指令, 第一次敲的是第幾個工具呼叫)。只認 Bash 指令字串;Skill 調用不算;路徑裡的 lumos 不算。"""
     for i, (name, summ) in enumerate(calls):
-        if name == "Bash" and LUMOS_CALL_RE.search(summ):
+        if name == "Bash" and LUMOS_CALL_RE.search(str(summ)):   # str() 防禦:與 backfill_limit 一致(r1 邊界席)
             return True, i
     return False, None
 
@@ -181,7 +188,25 @@ def make_sandbox(src, arm="with"):
     return work
 
 
+def _validate_scenario(sc):
+    """題目缺必要欄位就回一句錯誤字串(否則 None)。★r1 邊界席:缺 expect 的畸形題原本會先燒一次真實
+    claude -p 才在索引時炸,白花稀缺配額;改成派工前先擋。"""
+    if not sc.get("id"):
+        return "題目缺 id"
+    if not sc.get("prompt"):
+        return f"題目 {sc.get('id')} 缺 prompt"
+    if not sc.get("expect"):
+        return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
+    return None
+
+
 def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
+    bad = _validate_scenario(sc)
+    if bad:
+        return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                "reason": f"儀器例外: {bad}", "first_tool": None, "n_calls": 0, "calls": [],
+                "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                "limit_hit": False, "result_subtype": None}
     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
     # 題目標 allow_agent:true 才放行,其餘照舊禁。
@@ -229,9 +254,13 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
         if isinstance(ev, dict) and ev.get("type") == "result":
             final = ev.get("result") or ""
             result_ev = ev
-    if ok and sc.get("answer_expect"):
+    # ★r1 外家/正確性席:答案內容對不對 與 通過閘(敲對指令+答對)分開記★——
+    # M4 若只看 passed,會把「答案對但先 grep」記成失敗,混淆「答案對不對」與「走對路徑沒有」。
+    answer_content_ok = None
+    if sc.get("answer_expect"):
         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
-        if miss_a:
+        answer_content_ok = not miss_a
+        if ok and not answer_content_ok:
             ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
     limit_hit = is_limit_hit(calls, final, result_ev)
     if limit_hit:
@@ -242,6 +271,7 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
             "answer": (final or "")[:1500],
             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+            "answer_content_ok": answer_content_ok,
             "limit_hit": limit_hit, "result_subtype": result_ev.get("subtype")}
 
 
@@ -355,8 +385,11 @@ def main():
                 per.setdefault(r["id"], [0, 0]); per[r["id"]][1] += 1; per[r["id"]][0] += 1 if r["passed"] else 0
             print("每題通過次數: " + "  ".join(f"{i} {c}/{t}" for i, (c, t) in per.items()))
         if a.out:
+            # ★r1 併發席:健康檢查結果要進 JSON,不能只印 stderr——跑批只讀這個檔,
+            # 印在 log 沒人看,平行時一場事故會靜默污染整批★。skills_health 非空 = 這批之後受污染。
             Path(a.out).write_text(json.dumps({"results": results, "passed": p, "total": n,
-                                               "arm": a.arm, "runs": a.runs}, ensure_ascii=False, indent=1), encoding="utf-8")
+                                               "arm": a.arm, "runs": a.runs,
+                                               "skills_health_bad": bad}, ensure_ascii=False, indent=1), encoding="utf-8")
         if a.history:
             with open(a.history, "a", encoding="utf-8") as hf:
                 hf.write(json.dumps({"ts": a.ts, "seed": a.seed, "passed": p, "total": n,
@@ -367,6 +400,8 @@ def main():
             # r3 s2 實測抓到:原寫 rmtree(tmp) 但 tmp 是 make_sandbox 的區域變數,這裡 NameError、
             # 被 finally 吞掉——每週漏一個沙盒目錄,/tmp 已積 40 個。work=<tmp>/repo,清父目錄。
             shutil.rmtree(work.parent, ignore_errors=True)
+    if bad:
+        return 3   # ★全域 skills 事故:與「有題沒過(1)」分開,跑批看到 3 立刻停整批(r1 併發席)
     return 0 if p == n else 1
 
 
