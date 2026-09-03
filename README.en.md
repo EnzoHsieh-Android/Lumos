@@ -187,7 +187,7 @@ Full procedure: `reference.md` in `skills/lumos-project-notes`, section "Node re
 
 ## 7. Command reference
 
-One zero-dependency python CLI, **65 top-level commands**; the **authoritative list is `lumos --help`** — below are the everyday ones.
+One zero-dependency python CLI, **66 top-level commands**; the **authoritative list is `lumos --help`** — below are the everyday ones.
 
 **Reading the graph**
 ```bash
