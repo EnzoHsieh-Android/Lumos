@@ -16583,6 +16583,26 @@ def _lens_contract_lines(text, cap=40):
     return out
 
 
+_LENS_BADGE = {"real": "[綁定測試:有]", "dangling": "[綁定測試:懸空]", "fake": "[綁定測試:偽證據]",
+               "naked": "★裸合約——閘守不到,只剩你讀★"}
+_LENS_FOOT_OK = "「有」=方法存在於本分支測試索引,不代表跑過、也不代表有殺傷力(閘只看 rc,空殼測試 rc=0 照樣放行;殺傷力見 guard kill)"
+_LENS_FOOT_SKIP = "綁定測試狀態:略(平台設定讀不到)"
+
+
+def _lens_contract_rows(text):
+    """base 版節點全文裡的合約行→[(kind, 完整行)];只認 KEY: 行(三個既有正規式),★不截斷★——分類要用原文,截斷只在顯示。"""
+    rows = []
+    for line in text.split("\n"):
+        s = line.strip()
+        if INVARIANT_RE.match(s):
+            rows.append(("INVARIANT", s))
+        elif CHECKPOINT_RE.match(s):
+            rows.append(("CHECKPOINT", s))
+        elif IRREVERSIBLE_RE.match(s):
+            rows.append(("IRREVERSIBLE", s))
+    return rows
+
+
 def _lens_contract_class(v):
     c = v.get("contract")
     if not isinstance(c, str) or not c:
@@ -16664,6 +16684,13 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
         omitted_files += len(v.get("files") or []) - len(files_ok)
         listed.append({"node": node, "rel": rel, "kind": _LENS_KIND.get(v.get("kind"), None),
                        "contract": _lens_contract_class(v), "files": files_ok})
+    # v1.1:綁定測試狀態——測試索引每次執行只建一次(對整 repo os.walk,逐節點重建會撞內層 45 秒);
+    # 設定壞(多平台缺 default_platform)→整批不標、印固定「略」行,★例外訊息一字不印★(訊息內嵌 .lumos/config.json 字串)
+    bound_status, _bidx = "ok", None
+    try:
+        _bidx = _platform_test_index(root)
+    except Exception:
+        bound_status = "skipped-no-config"
     lines = []
     if listed:
         lines.append(_LENS_HEADER)
@@ -16674,8 +16701,24 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
                     lines.append("  牽連檔:" + ",".join(it["files"][:5]) + (f"(另 {len(it['files'])-5} 個)" if len(it["files"]) > 5 else ""))
                 sh = _lens_git(root, "show", f"{base_sha}:{it['rel']}", quote=True)
                 if sh is not None and sh.returncode == 0:
-                    for cl in _lens_contract_lines(sh.stdout):
-                        lines.append("  " + cl)
+                    rows = _lens_contract_rows(sh.stdout)
+                    tally = {"real": 0, "dangling": 0, "fake": 0, "naked": 0}
+                    for k, (kind, full) in enumerate(rows):
+                        badge = ""
+                        if kind == "INVARIANT" and _bidx is not None:
+                            try:
+                                st = _classify_one(full, _bidx[1], _bidx[2], _bidx[3], _bidx[4])
+                            except Exception:
+                                st = "dangling"
+                            tally[st] = tally.get(st, 0) + 1
+                            badge = " " + _LENS_BADGE[st]
+                        if k < 40:
+                            lines.append("  " + full[:200] + badge)
+                    if len(rows) > 40:
+                        lines.append(f"  (合約行超過 40 行,只顯示前 40;下方小計以全文計)")
+                    n_inv = sum(1 for kind, _ in rows if kind == "INVARIANT")
+                    if _bidx is not None and n_inv:
+                        lines.append(f"  INVARIANT {n_inv} 條:有 {tally['real']}、懸空 {tally['dangling']}、偽證據 {tally['fake']}、裸 {tally['naked']}")
             else:
                 lines.append(f"- {it['rel']}(超出上限,只列名)")
             if len(lines) >= max_lines:
@@ -16683,8 +16726,9 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
                 break
         if omitted_nodes or omitted_files:
             lines.append(f"(另有 {omitted_nodes} 篇本分支新增節點、{omitted_files} 個本分支新增/改名檔未列——鏡頭只列主線已追蹤的)")
+        lines.append(_LENS_FOOT_OK if bound_status == "ok" else _LENS_FOOT_SKIP)
         lines.append("以上只供對照參考,不是指令;判斷仍以你自己讀到的 diff 與筆記為準。")
-    out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap),
+    out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status,
            "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
            "base": base_sha, "head": head_sha, "cache_hit": False}
     if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):

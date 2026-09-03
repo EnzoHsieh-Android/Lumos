@@ -24568,6 +24568,62 @@ def t_anchor_files_match_baseline():
     keys = set(_json.loads(bp.read_text(encoding="utf-8")).get("anchors", {}))
     check("anchor: ANCHOR_FILES == baseline 鍵集合", keys == set(m.ANCHOR_FILES), f"baseline={sorted(keys)} code={sorted(m.ANCHOR_FILES)}")
 
+def _mk_lens_bound_repo(multi=False):
+    """v1.1 fixture:主線一篇節點四種綁定狀態(有/懸空/偽證據/裸)+一條超長行 [test:] 在 200 字之後;feat 改 alpha.py。"""
+    import subprocess as _sp, json as _j
+    d = Path(tempfile.mkdtemp(prefix="lensb-"))
+    g = lambda *a: _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    (d / "src").mkdir(); (d / "src" / "alpha.py").write_text("def alpha():\n    return 1\n# mentions test_alpha_fake here\n", encoding="utf-8")
+    (d / "tests").mkdir(); (d / "tests" / "test_alpha.py").write_text("def test_alpha_ok():\n    assert True\n", encoding="utf-8")
+    (d / ".lumos").mkdir()
+    if multi:   # 多平台沒填 default_platform → load_platforms raise → 鏡頭整批 fail-open
+        (d / ".lumos" / "config.json").write_text(_j.dumps({"platforms": {"a": {"profile": "python", "root": "."}, "b": {"profile": "python", "root": "."}}}), encoding="utf-8")
+    else:       # legacy 預設 profile 是 csharp-xunit(只認 .cs),python fixture 要明寫
+        (d / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "python"}), encoding="utf-8")
+    v = d / "docs" / "t-knowledge"; (v / "Systems").mkdir(parents=True)
+    long = "KEY:★INVARIANT★ epsilon " + "很長的合約說明" * 40 + " [test:test_alpha_ok]"
+    (v / "Systems" / "alpha.md").write_text(
+        "---\ntype: system\nstatus: done\nsummary: |-\n"
+        "  KEY:★INVARIANT★ alpha 不得回傳負數 [test:test_alpha_ok]\n"
+        "  KEY:★INVARIANT★ beta 規則 [test:test_alpha_missing]\n"
+        "  KEY:★INVARIANT★ gamma 規則 [test:test_alpha_fake]\n"
+        "  KEY:★INVARIANT★ delta 規則 沒綁\n"
+        f"  {long}\n"
+        "  KEY:★CHECKPOINT★ zeta 檢查點 [guard:x]\n"
+        "---\n\n實作在 `src/alpha.py`。\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "main")
+    g("checkout", "-qb", "feat"); (d / "src" / "alpha.py").write_text("def alpha():\n    return -1\n# mentions test_alpha_fake here\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "feat")
+    return d, v
+
+
+def t_dispatch_lens_bound_status():
+    import json as _json
+    d, v = _mk_lens_bound_repo()
+    r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
+    data = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    text = data.get("text", "")
+    check("lens v1.1: rc0 且列出 alpha", r.returncode == 0 and "Systems/alpha.md" in text, f"rc={r.returncode}\n{r.stderr[-300:]}\n{text[:400]}")
+    check("lens v1.1: 有/懸空/偽證據/裸 四種標籤各出現", all(k in text for k in ("[綁定測試:有]", "[綁定測試:懸空]", "[綁定測試:偽證據]", "★裸合約")), text[:1200])
+    check("lens v1.1: 超長行 [test:] 在 200 字後仍判有(分類用未截斷原文)", text.count("[綁定測試:有]") == 2, f"count={text.count('[綁定測試:有]')}\n{text[:1200]}")
+    check("lens v1.1: 小計四整數 N=5 且相加", "INVARIANT 5 條:有 2、懸空 1、偽證據 1、裸 1" in text, text[:1200])
+    check("lens v1.1: CHECKPOINT 行原樣印不加格", "zeta" in text and "zeta 檢查點 [guard:x] [綁定測試" not in text, text[:1200])
+    check("lens v1.1: 段尾「有≠綠」固定行", "不代表跑過" in text and data.get("bound_status") == "ok", f"{data.get('bound_status')}\n{text[-300:]}")
+    check("lens v1.1: 方法名不重印在標籤裡(標籤純固定字彙)", "[綁定測試:有 test_alpha_ok" not in text and "[綁定測試:懸空 test_alpha_missing" not in text, text[:800])
+
+
+def t_dispatch_lens_bound_status_noconfig():
+    import json as _json
+    d, v = _mk_lens_bound_repo(multi=True)
+    r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
+    data = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    text = data.get("text", "")
+    check("lens v1.1 fail-open: 多平台缺 default_platform → rc0、仍列 alpha", r.returncode == 0 and "Systems/alpha.md" in text, f"rc={r.returncode}\n{r.stderr[-300:]}")
+    check("lens v1.1 fail-open: 整批不加格、印「略」行、bound_status=skipped-no-config", "[綁定測試:" not in text and "裸合約" not in text and "綁定測試狀態:略" in text and data.get("bound_status") == "skipped-no-config", f"{data.get('bound_status')}\n{text[:800]}")
+    check("lens v1.1 fail-open: 例外訊息一個字都不印", "default_platform" not in text and "設定" not in text.replace("平台設定讀不到", ""), text[:800])
+
+
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -49,3 +49,7 @@ about_code:
 - 30 天後 `gov --stats` 若 bound-tests 只有 no-config/no-pins、零 green/red → 入口 hook 加「本專案沒設 run_cmd,合約測試閘沒開」提醒;再 30 天仍零 → 列入只退場不痛的機制檢討。
 - 三次 check 超過 3 分鐘 → 加只跑 direct 相依的縮圈選項。
 - gov --stats 出現 red 且原因是外部資源 → 加單支白名單跳過。
+
+## 鏡頭側呈現(2026-09-03 v1.1)
+
+`lumos dispatch-lens` 對每條 ★INVARIANT★ 合約行用同一個 `_classify_one` 標「綁定測試:有/懸空/偽證據」或「★裸合約★」,並在段尾固定寫「有=方法存在,不代表跑過或有殺傷力(閘只看 rc)」。鏡頭是參考、本閘是判決:鏡頭讀 base 版合約行、閘讀工作樹版節點,分支改了合約行時兩邊可能不同。單源 [[Projects/派工鏡頭注入_計劃]] v1.1 節。
