@@ -150,20 +150,21 @@ r3 架構席抓到:第 2/3 版新加的四個判斷——主線分支怎麼取�
 - **安全**:改寫派工詞=與提示注入同構;緩解=錨點(repo 份)、內容從 base 讀、檔名白名單、不用命令式措辭。沒有機械防篡改家目錄副本(界線)。
 - ★沒有機械守衛的部分★:編排者自己寫派工詞不照模板,標記就不在——鏡頭的本性,回頭條件見 REVISIT。
 
-## v1.1:每篇固定席標「綁定測試狀態」(2026-09-03 深夜,Enzo 裁;light 誤判升 -std,r1 五席 23 條全折)
+## v1.1:每篇固定席標「綁定測試狀態」(2026-09-03 深夜,Enzo 裁)
 
-- **為什麼**:Enzo 問「代碼審能不能拿清單節點綁的測試跑一遍確認沒回歸」。查 [[Systems/bound-tests-gate]]:★已經在跑而且是硬閘★——pre-push 的 `code-loop check` 對 impact 固定席每條 ★INVARIANT★ 的 `[test:]` 逐支真跑,紅/懸空/假就擋。缺的不是跑,是★審查員看不到★:鏡頭裡的合約行只有文字,審查員分不出「這條有測試守著」與「這條是裸合約、只剩人讀」。
-- **做什麼**(只改 `lumos dispatch-lens` 的輸出,不碰 hook、不碰閘):★只對 ★INVARIANT★ 合約行★補一格固定字彙;★CHECKPOINT★/★IRREVERSIBLE★ 走 `[rollback:]`/`[guard:]` 另一套,原樣印、不標、不進小計。
-  - **分類=既有 `_classify_one(x, split, default, methods_for, hay_for)`**(-std 架構席:它正是「每條 ★INVARIANT★ 行一個狀態、多支 `[test:]` 取最壞、未定義平台前綴→dangling」的既有共用 helper;不再錨 `_bound_tests_for_diff`,那支是 per node/plat/method 粒度)。★餵它的是 base 版節點文字裡★未截斷的★整行★(-std 通才/外家實跑驗收範例:三條合約行 1400 字以上、`[test:` 在第 1100 字之後,用已截 200 字的顯示行分類會全判裸合約);200 字截斷只用於顯示。
-  - 字彙沿既有詞(-std 架構席):real→`[綁定測試:有]`;dangling→`[綁定測試:懸空]`;fake→`[綁定測試:偽證據]`;naked→`★裸合約——閘守不到,只剩你讀★`。
-  - 節點小計一行:「INVARIANT N 條:有 a、懸空 b、偽證據 c、裸 d」——N 只數該節點 base 全文的 ★INVARIANT★ 行(未截斷),a+b+c+d=N;★四個整數★(首版寫三個是算錯)。
-  - 段尾固定一行:「「有」=方法存在於本分支測試索引,不代表跑過、也不代表有殺傷力(閘只看 rc,空殼測試 rc=0 照樣放行;殺傷力見 guard kill)」——(-std 外家/載荷席:首版寫「閘會真跑所以假的擋得住」是★錯的★)。
-  - **測試索引每次執行只建一次**(節點迴圈外;-std 接手席:`_platform_test_index` 對整個 repo os.walk,逐節點重建會撞內層 45 秒)。**fail-open**:`load_platforms` 拋例外(多平台沒填 `default_platform`)→★整批不加任何格、不印小計★,段尾改印一行固定字串「綁定測試狀態:略(平台設定讀不到)」留痕;★例外訊息一個字都不印★(-std 載荷席:訊息內嵌 .lumos/config.json 的字串,攻擊者可控)。
-- **資料源**:合約行=base 版節點全文(`git show`,已在拿);`_classify_one`+`_platform_test_index`;測試索引讀★工作樹★(問的是「這條分支上這支測試在不在」)。
-- **界線**:①鏡頭讀 base 版合約行、閘讀工作樹版節點(`Env(vault)`)——分支若改了那篇筆記的合約行,鏡頭標的狀態與閘實際跑的可能不同;鏡頭是參考,閘是判決。②分支新增同名空殼測試會把「裸合約」變「有」,而閘 rc=0 就放行——★這不是鏡頭能擋的★,是 [[Systems/bound-tests-gate]] 與 `guard kill` 的分工;段尾那行固定字串就是為了不讓審查員誤讀「有」。③方法名本來就印在合約行裡(base 文字),標籤不重印它只是不必要,不是消毒(-std 接手席糾正理由)。
-- **同步**:`templates.md` §3 鏡頭 3 與 `lumos-code-loop/SKILL.md` 步驟 2 的欄位清單加「綁定測試狀態」;[[Systems/bound-tests-gate]] 加一句「鏡頭側呈現」;本案 Verification 補 v1.1;`test_lumos.py` 錨點 approve。dispatch-lens-hook.py 不動(錨點不變)。
-- **驗收**:fixture 四種節點(有/懸空/偽證據/裸)各出對應字串、小計四數相加=N;多平台缺 `default_platform` 的 fixture(借 `t_*` 既有閘 fail-open 測試形態)→無格、印「略」行、無例外文字;`[test:a,b]` 一有一懸空→懸空(取最壞);合約行 >200 字且 `[test:` 在截斷點後→仍判「有」;既有 `t_dispatch_lens_*` 全綠;真跑 `c3b4f3f~1..c3b4f3f` 小計合理、總行數仍在 400 內。
-- **審級**:原判單人輕量審;★light r1 出 3 條 major=審級誤判,依 skill 規則升級 `派工鏡頭注入-v11-std`★;-std r1(2026-09-03 深夜,3 席 sonnet+架構 sonnet+外家 Codex)23 條(6+4+7+3+3)/blocking 15(4+3+4+1+3)/1 blocker(截斷後分類)全折。
+- **為什麼**:Enzo 問「代碼審能不能拿清單節點綁的測試跑一遍確認沒回歸」。查 [[Systems/bound-tests-gate]]:★已經在跑而且是硬閘★——pre-push 的 `code-loop check` 對 impact 固定席每條 ★INVARIANT★ 的 `[test:]` 逐支真跑,紅/懸空/假就擋。缺的不是跑,是★審查員看不到★:鏡頭裡的合約行只有文字,審查員分不出「這條機器守住了」與「這條沒綁測試、只剩人讀」。
+- **做什麼**(只改 `lumos dispatch-lens` 的輸出,不碰 hook、不碰閘):★只對 ★INVARIANT★ 合約行★補一格固定字彙(輕量審 f1:閘 `_bound_tests_for_diff` 只靠 `extract_contracts` 取 ★INVARIANT★ 行;★CHECKPOINT★/★IRREVERSIBLE★ 走 `[rollback:]`/`[guard:]` 另一套機制,不歸 `[test:]` 管,不標、不進小計)——
+  - ★INVARIANT★ 行含 `[test:…]` 且解得出、方法在測試索引裡 → `[綁定測試:有]`
+  - 解得出但方法不存在/只出現在文字裡/名字不合法 → `[綁定測試:懸空]`(dangling/fake/bad-name 三種都印懸空,不印方法名——方法名是自由文字)
+  - ★INVARIANT★ 行沒有 `[test:]` → `★無綁定測試——閘守不到,只剩你讀★`
+  - ★CHECKPOINT★/★IRREVERSIBLE★ 行照原樣印,不加格。
+  - 節點層小計一行:「INVARIANT N 條:有測試 a、懸空 b、無 c」——★N 只數 ★INVARIANT★ 行★(輕量審 f2),a+b+c=N。
+  - **fail-open**:多平台專案沒填 `default_platform` 時 `_platform_test_index` 會拋例外(輕量審 f3;既有閘用 try/except 包成 no-config)——本案同樣包住,拋了就★整個節點不加任何格★、小計不印,不放行整段鏡頭。
+- **資料源全是既有的**:合約行=base 版節點文字(已在印;`resolve_test_refs` 吃字串,可直接餵);`resolve_test_refs`+`_platform_test_index` 的 real/fake/dangling/bad-name 分類=`_bound_tests_for_diff` 用的同一套;測試索引讀工作樹(問的是「這條分支上這支測試在不在」;分支上新增同名假測試會讓「懸空」變「有」——這是既有閘的同一個限制,閘會真跑那支測試所以假的擋得住,鏡頭沿用不另設防,輕量審 f4)。★不跑測試★——跑是 pre-push 閘的事,鏡頭只標存在性,措辭不得寫「綠」。
+- **消毒**:新增輸出只有四個固定字串與三個整數;方法名、平台名不印。
+- **不做**:「設計審判不影響的節點帶進代碼審當先驗」——要在計劃筆記加固定欄位並讓代碼審讀得到,是新連結,另開小案。
+- **審級**:原判單人輕量審;★輕量審 r1 出 3 條 major(合約型別混印/小計口徑/多平台例外)=審級誤判,依 skill 規則升級完整迴圈 `派工鏡頭注入-v11-std`★(2026-09-03 深夜)。
+- **驗收**:單元——三種狀態各一篇 fixture 節點(有/懸空/無)輸出對應字串與小計;既有 `t_dispatch_lens_*` 全綠;真跑 `c3b4f3f~1..c3b4f3f` 看小計合理。
 
 ## 實作紀錄(2026-09-03 晚,r3 過閘後同日動工)
 
