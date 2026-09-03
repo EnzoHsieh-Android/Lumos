@@ -9,13 +9,12 @@ tags:
   - scope/governance
 summary: |-
   FLAG:DECISION
-  KEY:主 session 動手前被 impact-hook 推到眼前的固定席節點,★有沒有被碰★今天零數字。本案第一段★只量不加義務、不設門檻、零新元件★:一支唯讀腳本讀逐字稿,只出分佈+分層抽樣兩評判;歷史推送現在就能跑(本專案主 session 44 筆=16 舊標頭+28 新;子代理全機重數 0,r2 的 42/70 撤回)
+  KEY:主 session 動手前被 impact-hook 推到眼前的固定席節點,★有沒有被碰★今天零數字。本案第一段★只量不加義務、不設門檻、零新元件★:一支唯讀腳本讀逐字稿,只出分佈+分層抽樣兩評判;歷史推送現在就能跑(效度席全機 70;編排者本專案重數主 44/子 0,子代理數待釐清)
   KEY:r1(62 條/11 blocker,4 席 opus+Codex)拆掉第一版:時間窗與注入時機互斥、比率量到圖譜密度、跳過是合規、門檻無刻度、extract_bash_file_paths 不認 cat/sed、使用帳無 session/時區。r2(57 條/8 blocker)再拆第二版的儀器:量測效度席乾跑歷史逐字稿發現★推送本來就在逐字稿裡★(hook_additional_context 附件帶 toolUseID+全文)→帳/hook/子命令/gov 源/SubagentStop 全砍(d3)
   KEY:定義 v3=推送=逐字稿附件(去重 toolUseID;pinned 從注入全文解析;pinned 空不進分母;scratch/repo 外目標檔不進分母);碰觸=同逐字稿、那次 Edit 之後的 Read/Bash 含圖譜路徑/lumos context|show|contracts|search 逐詞對節點名(路徑正規化);寫回(git add/heredoc)不算讀;any 只能分 |pinned| 型讀(基準率差 5 倍)
   KEY:前置修正(鄰居 impact-hook 兩個既有缺陷,否則樣本偏)=hook_decide 認 python/bash shebang 無副檔名檔(scripts/lumos 27 篇、pre-push 7 篇現況永不入樣)、TTL 標記改注入後才寫(零注入也開冷卻窗);各配測試,test_lumos.py 錨點要 approve
   KEY:REVISIT:2026-09-17 先跑歷史:主 session 非空固定席非 scratch 的推送 <20→改題「Bash 改檔路徑沒有動手前鏡頭」(本 session 372 Bash/0 Edit);夠→Enzo 讀分佈+抽樣裁第二段(必答落 commit-msg hook,先提醒只數遵守率)
   KEY:姐妹題=[[Projects/派工鏡頭注入_計劃]](子代理側,裁不量成效);本案量的是行為不是成效
-  KEY:r3(27 條/blocking 18/11 blocker,上限到)定:推送=附件且 hookName∈Edit|Write|MultiEdit(否則吃進 SessionStart/Agent 注入)、標頭新舊雙版都認、掃全部 projects 目錄以 cwd 篩含 worktree、heredoc 三分法(腳本內讀該路徑=讀)、抽樣不足 10 全抽/每 session≤5、前置修正①簽名重排+安全讀首行 ②拆 TTL 判定/寫並改 t_impact_hook_ttl
 related:
   - "[[Projects/派工鏡頭注入_計劃]]"
   - "[[Projects/主動影響幅度偵測_計劃]]"
@@ -58,9 +57,9 @@ PRIOR-ART: ① 最小解層級——推送方 `impact-hook.py`(PreToolUse Edit|W
 
 ## 「利用到」的定義 v2
 
-- **推送事件** P:逐字稿裡 `attachment.type == hook_additional_context` ★且 `hookName ∈ {PreToolUse:Edit, PreToolUse:Write, PreToolUse:MultiEdit}`★ 的附件(r3 三席:不篩 hookName 會吃進 SessionStart 注入——它的 toolUseID 字面就是 "SessionStart",本機 36 筆——與姐妹案 dispatch-lens 的 Agent 注入);`content` 可能是 list,逐元素轉字串接起來。pinned 清單從注入全文解析,★要同時認兩種標頭★:2026-08-22 前 `必看(合約/事故固定席 N):`、之後 `必看——這 N 篇帶著不能破壞的合約或出過事故:`(本機 44 筆=16 舊+28 新;只認一種漏三成),節點名取標頭下方帶 ★TAG★ 的行;標頭寫「還有 N 篇」省略的,pinned 記為「不全」另計。pinned 空的不進分母。
+- **推送事件** P:逐字稿裡那行 `hook_additional_context` 附件(r2:不需要 hook 另記);pinned 清單從注入全文解析;pinned 空的不進分母。
 - **碰觸事件**(★全部從逐字稿取★,有序、UTC;不用使用帳——它沒 session_id、時間無時區;`contracts`/`search` 本來就不寫使用帳,但它們是 Bash 指令、逐字稿裡有,所以第③種證據不需要任何帳):①Read 工具的 file_path 在圖譜根下 ②Bash 指令任一 token 是圖譜根下的路徑(cat/sed/grep/head 都算)③Bash 指令是 `lumos context|show|contracts|search <詞>` 且 <詞> 對上 pinned 節點名或其檔名主幹。
-- **命中**:同一逐字稿、碰觸發生在 toolUseID 對應的那次 Edit/Write/MultiEdit tool_use 之後(行序,不用時鐘;對不到 tool_use 的附件另計「無錨點」不進分母——resume 切檔會有)、正規化後的路徑/節點 ∈ pinned。每次推送記 {touched, any, pre_touched};同一篇推送前後都碰→算 touched 也列 pre_touched(兩欄獨立,不互斥)。★不算比率、不設門檻★;二值 any 在不同 |pinned| 下基準率差 5 倍(乾跑:4 篇型 1.2% vs 20 篇型 5.8%),所以只能分型讀,不能合併。
+- **命中**:同一逐字稿、碰觸發生在 toolUseID 對應的那次 Edit 之後(行序,不用時鐘)、正規化後的路徑/節點 ∈ pinned。每次推送記 {touched, any, pre_touched};同一篇推送前後都碰→算 touched 也列 pre_touched(兩欄獨立,不互斥)。★不算比率、不設門檻★;二值 any 在不同 |pinned| 下基準率差 5 倍(乾跑:4 篇型 1.2% vs 20 篇型 5.8%),所以只能分型讀,不能合併。
 - 量的是「碰沒碰」,不是「懂沒懂」;推送前已碰過的另記,不算命中也不算沒碰。
 
 ## 現況(2026-09-03 開檔核過,r1 修正後)
@@ -77,13 +76,13 @@ r2 量測效度席把 r1 版的演算法拿歷史逐字稿乾跑,發現★推送
 
 ### 儀器=一支唯讀腳本(將建,住 governance/eval/lens-utilization/,同席間覆蓋率那支 recount.py 慣例)
 
-1. **輸入**:`~/.claude/projects/*/` ★全部專案目錄★的 `*.jsonl`(主)與 `*/subagents/agent-*.jsonl`(子代理),★用逐字稿行裡的 `cwd` 篩「在本 repo 或它的 `git worktree list` 路徑之下」★(r3 極端席:projects 目錄依 cwd 切,worktree session 在另一個頂層目錄);主子靠檔案位置與 `isSidechain` 分。★r3 效度席全機重數:子代理逐字稿 1404 份、任何 hookName 的注入附件都是 0★——r2 的「子代理 42/全機 70/60%」撤回,r2-intake 補更正;歷史樣本=本專案主 session 44 筆。
-2. **推送事件**:定義見上(hookName 篩、雙標頭、list content);★去重鍵=toolUseID★;pinned 為空(只有自由席或守衛面參考)→★不進分母★,另計「空固定席注入」數。
-3. **碰觸事件**(同一份逐字稿;★錨點=toolUseID 對到的那次 Edit/Write/MultiEdit tool_use 的行序★,碰觸必須在它之後——不是在附件那行之後,附件落地比 Edit 晚中位 2.4 秒):①Read 的 file_path ②Bash 指令★動詞是讀★(cat/sed -n/head/tail/less/grep/rg)且任一 token 是圖譜路徑 ③Bash 的 `lumos context|show|contracts <詞>`:<詞> 對節點名主幹★精確相等★,或★把連續 token 串起來★再比(口語會打成「主 session 鏡頭利用率」,stem 無空白;r3 極端席);stem 撞名(doctor 有「同檔名」檢查)→記「歧義」不算命中;`lumos search <詞>` 另計一欄「search 碰」——逐詞對 stem 子字串,弱證據,不併進 any。★heredoc 三分法★(r3 效度席:1293 次含筆記路徑的 `python3 - <<`,44% 先 read_text 再 write_text):腳本內對該路徑有 `read_text`/`open(...)` 讀→算★讀★;`cat > 筆記 <<`/`> 筆記`/只 `write_text`→寫回(wrote_back);`cat <<EOF` 只是拼字串裡提到路徑(如 commit message)→兩者都不算。★路徑正規化★:絕對→圖譜相對、去掉 `docs/<slug>-knowledge/` 前綴、比對 `.md` 檔名。背景 Bash(`run_in_background`)的內容何時真的可見量不到,列界線(本專案 287 次背景 Bash,含圖譜路徑讀動詞的至少 1 次)。
-4. **每筆推送記**:{session_id, is_subagent(檔案在 `subagents/` 且 isSidechain:true), hook_name, header_version(old/new), file, |pinned|, pinned_complete, touched, any, pre_touched(資訊欄,不進裁定), wrote_back, search_touched, ambiguous, 檔型(test/code)};★scratchpad 與 repo 外的目標檔不進分母也不進抽樣池★(另計一個數;r3 效度席:分母外還列進分層是自相矛盾)。壞行/缺欄位跳過並計數(同 recount.py 慣例)。
-5. **輸出**(★不出單一命中率、不設門檻★):印到 stdout(同 recount.py 慣例;`--out` 可另存檔):推送數(主/子、標頭版、pinned 空/非空/不全、檔型)、|pinned| 分佈、每型 any 的計數、pre_touched/wrote_back/ambiguous 另列、session 叢聚度。★歷史資料現在就能跑★(本專案主 session 44 筆:16 舊標頭+28 新),不必等兩週;之後每兩週重跑。
-6. **人工抽樣**:★母體不足 10 筆(有 pinned 且非 scratch)就全抽★;夠則每 session 至多 5 筆、抽到 10(r3 效度席:歷史只有 2 個 session 有 pinned,「每 session 至多 3」在算術上抽不到 10)。兩個評判者(Enzo+一個乾淨 agent,判準=「這篇 pinned 節點的合約,對這次 diff 改的行為有沒有牽連」,agent 派工詞不帶本案結論)各判「跳過對不對」,不一致的列出來,不做一致性係數。
-7. **★前置修正(鄰居 hook 的兩個缺陷,量測前修,否則樣本偏)★**:①`hook_decide` 認無副檔名檔:★main 改成先算 repo(CLAUDE_PROJECT_DIR→cwd)、把絕對路徑傳給 hook_decide★(簽名加參數,既有呼叫點與 `t_impact_hook_*` 測試同步);repo 算不出→只看副檔名;檔存在且首行 `#!` 含 python 或 bash 才算 code,★首行讀取包 try/except、只讀前 128 bytes、二進位/讀不到→不算★(r3 極端席:無副檔名二進位檔會讓現役 fail-open hook 炸);Write 新檔(不存在)→只看副檔名。②TTL 標記改在★真的注入之後★才寫:`_ttl_should_inject` 現在是「判定+寫」一體,拆成判定與 `_ttl_mark`,★既有 `t_impact_hook_ttl`(test_lumos.py 約 9256)要跟著改★,不是靜默出貨。這兩個是 [[Projects/主動影響幅度偵測_計劃]] 的缺陷,各配一條測試;不改注入文字。★TTL 界線★:修了②之後冷卻窗仍存在(同檔 20 分鐘內只推事故),分母偏向「第一次碰這支檔」;REVISIT:2026-09-17 第一次報表要把 incidents-only 期間的 Edit 次數另列,若佔多數則裁是否把冷卻窗縮短或關掉。
+1. **輸入**:`~/.claude/projects/<專案>/*.jsonl`(主)與 `<session>/subagents/agent-*.jsonl`(子代理;每行 `isSidechain: true`、帶 `agentId`、`sessionId` 是主 session 的——主子靠檔案位置與 isSidechain 分,不靠任何 hook 事件)。
+2. **推送事件**:逐字稿裡的 `hook_additional_context` 附件;★去重鍵=toolUseID★;pinned 清單★從注入全文解析★(「必看」段的節點名),不是 hook 算的名單——量「碰沒碰」要對模型看到的那份。pinned 為空(只有自由席或守衛面參考;歷史 28 次有 5 次)→★不進分母★,另計「空固定席注入」數。
+3. **碰觸事件**(同一份逐字稿;★錨點=toolUseID 對到的那次 Edit tool_use 的行序★,碰觸必須在它之後——不是在附件那行之後,附件落地比 Edit 晚中位 2.4 秒、期間已送出的工具呼叫在檔案裡排在附件前面):①Read 的 file_path ②Bash 指令★動詞是讀★(cat/sed -n/head/tail/less/grep/rg)且任一 token 是圖譜路徑 ③Bash 的 `lumos context|show|contracts <詞>` 對節點名主幹;`lumos search <詞>` 另計一欄「search 碰」——逐詞(空白切)對節點名主幹子字串,弱證據,不併進 any(家規要中文多詞加空白,整串永遠對不上,r2 兩席一致)。★不算碰★:`git add <筆記>`、`> 筆記`/`cat > 筆記 <<`/`python3 - <<` 內含筆記路徑的改寫——那是「寫回」,是 Stop 點名逼出來的動作;算進另一欄 wrote_back。★路徑正規化★:絕對→圖譜相對、去掉 `docs/<slug>-knowledge/` 前綴、比對 `.md` 檔名。
+4. **每筆推送記**:{session, is_subagent(★判法=檔案在 `<session>/subagents/agent-*.jsonl` 且行有 isSidechain:true★), file, |pinned|, touched, any, pre_touched(那次 Edit 之前就碰過的,資訊欄、乾跑只 4%,不進任何裁定), wrote_back, search_touched, 檔型(test/scratch/code)};★scratchpad 與 repo 外的目標檔另計不進分母★(歷史 28 次有 3 次)。
+5. **輸出**(★不出單一命中率、不設門檻★):推送數(主/子、pinned 空/非空、檔型)、|pinned| 分佈、每型 any 的計數、pre_touched 另列、session 叢聚度(哪幾個 session 佔幾成)。★歷史資料現在就能跑★(本專案主 session 至少 44 次),不必等兩週;之後每兩週重跑。
+6. **人工抽樣**:分層抽(每 session 至多 3 筆、每檔型至少 2 筆),10 筆;兩個評判者(Enzo+一個乾淨 agent)各判「跳過對不對」,不一致的列出來,不做一致性係數(樣本太小)。
+7. **★前置修正(鄰居 hook 的兩個缺陷,量測前修,否則樣本偏)★**:①`hook_decide` 認無副檔名檔:★先用 repo 根把路徑解成絕對★(現況 main 先 hook_decide 再拼絕對路徑,相對路徑會相對 hook 進程 cwd 解錯),檔存在且首行 `#!` 解析為 python 或 bash 皆算 code;Write 新檔(檔不存在)→維持只看副檔名,fail-open 不讀(`scripts/lumos` 27 篇固定席、`pre-push` 7 篇,現況永不入樣);②TTL 標記改在★真的注入之後★才寫(現況呼叫 lumos 之前就寫,一次零注入的 Edit 也開 20 分鐘冷卻窗)。這兩個是 [[Projects/主動影響幅度偵測_計劃]] 的缺陷,各配一條測試;不改注入文字。★TTL 界線★:修了②之後冷卻窗仍存在(同檔 20 分鐘內只推事故),分母偏向「第一次碰這支檔」;REVISIT:2026-09-17 第一次報表要把 incidents-only 期間的 Edit 次數另列,若佔多數則裁是否把冷卻窗縮短或關掉。
 8. **Hawthorne**:腳本輸出只落檔案(governance/eval/…/ 下的報表),不進 `lumos gov`、不印進任何 hook,模型跑 `lumos gov` 看不到。
 
 ### 裁定規則(REVISIT:2026-09-17)
@@ -98,7 +97,7 @@ r2 量測效度席把 r1 版的演算法拿歷史逐字稿乾跑,發現★推送
 
 ## 同步清單(r2 縮減後)
 
-- 圖譜:[[Projects/主動影響幅度偵測_計劃]](兩個前置修正:shebang 入樣、TTL 標記改注入後寫;`t_impact_hook_ttl` 改)、本案 Verification(本專案主 session 44 筆的第一次報表——不是 70)。
+- 圖譜:[[Projects/主動影響幅度偵測_計劃]](兩個前置修正:shebang 入樣、TTL 標記改注入後寫)、本案 Verification(歷史 70 次的第一次報表)。
 - 文件:不加命令、不加 hook,命令數與登記點★全部不動★;該目錄的 README(將建)寫重跑步驟。
 - 測試:`test_lumos.py`(錨點檔,approve)——`hook_decide` shebang 兩型、TTL 標記時機;腳本本身照席間覆蓋率那支慣例不進測試(唯讀、可重跑)。
 
@@ -109,21 +108,20 @@ r2 量測效度席把 r1 版的演算法拿歷史逐字稿乾跑,發現★推送
 - ★只量 impact-hook 這一個鏡頭★:Stop hook 的「該動卻沒動」點名與 pre-commit 的同步提醒也是推到眼前的鏡頭,本案不量(s1-f17);要量另開。
 - TTL 窗內只推事故子集(mode 記著,分開報);冷卻窗跨回合,第 2 回合起同檔多半 N=0。
 - 只讀本機逐字稿;多機不合併(量測用,不是治理紀錄)。逐字稿會被 Claude Code 依 cleanupPeriodDays 清掉(預設 30 天),歷史窗有限。
-- 子代理推送與主 session 分開報;本機全機重數子代理注入為 0(r2 的 42/60% 撤回);主子靠檔案位置分。
+- 子代理推送與主 session 分開報(60% 推送在子代理);主子靠檔案位置分。
 - 「碰觸」與「收工寫回」的界線靠指令形態判(git add/heredoc=寫回),會有誤判;抽樣時人看。
 - 只量 impact-hook 這一個鏡頭(Stop 點名、pre-commit 提醒不量)。
 
 ## 實務隱患
 
-- **self-governance**:改治理觀測層。緩解=零義務、不印給模型、唯讀不寫任何帳、前置修正 fail-open。
+- **self-governance**:改治理觀測層。緩解=零義務、不印給模型、獨立帳、fail-open。
 - **併發**:無(唯讀腳本,不寫任何被 hook 共用的東西)。
 - **效能**:離線腳本掃全機逐字稿(786 份子代理+主),一次幾秒到一分鐘;不在任何 hook 路徑上。
 - **回滾**:唯讀腳本刪掉即可;★impact-hook 本體保留(它是現役鏡頭,不屬本案)★,只 revert 前置修正那兩段+對應測試;錨點:test_lumos.py 動了要 approve。
-- **安全**:報表只含節點名與檔名(repo 內部路徑),不含 diff 內容;不改任何注入文字;腳本唯讀。
+- **安全**:帳裡記節點名與檔名(repo 內部路徑),不記 diff 內容;不改任何注入文字。
 - ★沒有機械守衛的部分★:推送發生率若本來就低,兩週後只會得到「樣本不存在」——這本身就是答案,REVISIT 那條會改題。
 
 ## 審計修正紀錄(lumos-design-loop)
 
-- r3(2026-09-03 深夜,上限輪,3 席 sonnet+架構 sonnet+外家 Codex):27 條(3+6+11+5+2)/blocking 18(3+5+7+2+1)/11 blocker;2 條引句錨不到不採信(s2-f5 背景 Bash、s3-f9 前置修正①簽名——內容照折)。折入=推送按 hookName 篩(Edit/Write/MultiEdit)、雙標頭解析(16 舊+28 新)、掃全部 projects 目錄用 cwd 篩含 worktree、r2 子代理 42/70/60% 撤回(全機重數 0)、抽樣改「不足 10 全抽/每 session ≤5」、heredoc 三分法、stem 精確+串接+歧義、scratch 出抽樣池、前置修正①簽名重排+安全讀首行、②拆判定/寫並改既有測試、殘留「獨立帳」字句清掉、輸出 stdout 同 recount 慣例。★上限已到;r3 折入無第四輪,攤 Enzo★。
 - r1(2026-09-03,通才/量測效度/接手的人 三席 opus+架構對齊 opus+外家 Codex;★sonnet 連續 500/529 過載,四席改 opus,記於 r1-dispatch.json★):62 條(21+13+14+8+6)/blocking 43(13+11+10+3+6)/11 blocker;全折——量測核心重寫(時間窗、去比率去門檻、證據全從逐字稿、獨立帳經子命令、對帳不印給模型、放閘之前、SubagentStop、無副檔名檔入樣、先量推送發生率)。★密度遠超「建議整份重寫」門檻;核心「只量不加義務」未被推翻,編排者在同編號折入,重寫與否留 Enzo★。
 - 席報告與收貨:`governance/review-reports/主session鏡頭利用率/`。

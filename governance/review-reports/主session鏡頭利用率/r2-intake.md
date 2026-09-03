@@ -33,3 +33,5 @@
 本專案目錄 `~/.claude/projects/-Users-enzo-harness-lumos-toolchain/` 主逐字稿+`*/subagents/agent-*.jsonl`,過濾 `attachment.type==hook_additional_context` 且 hookName 含 PreToolUse:Edit|Write:★主 44、子 0★;attachment keys=[content, hookEvent, hookName, toolUseID, type];content 首段「必看(合約/事故固定席 25)…」。s2 的 70(28+42)是全機掃、過濾不同;子代理 42 在本專案重現不了→計劃改寫為「腳本第一件要釐清」。核心宣稱(附件存在、帶 toolUseID 與全文)HIT。
 
 ## 鏡像核對(haiku):57 條全有去向(元件移除 33、折入 15、折入但不到位 9)→ 9 條補折:讀/寫回動詞分、search 另欄不併 any、錨點=Edit 行序非附件行序、主子判法明寫、pre_touched 定位為資訊欄、hook_decide 先解絕對路徑+Write 新檔 fail-open、TTL 界線加 REVISIT、回滾明寫 impact-hook 保留。
+
+## ★更正(r3 效度席全機重數)★:r2-s2 的「子代理 42 次/全機 70/60%」在 1404 份子代理逐字稿裡任何 hookName 的注入附件都是 0;逐字稿裡出現「必看」字樣處全是筆記內文被 Read 出來。編排者本專案重數 44(16 舊標頭+28 新)為現行唯一可信歷史數。
