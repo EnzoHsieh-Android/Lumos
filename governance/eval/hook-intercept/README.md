@@ -51,3 +51,15 @@
 1. 注入內容寫成「暗號是 XXXX」這種形狀時,子代理**拒答並指認為提示注入測試**;
    換成長得像真實清單的內容才成功。**注入內容必須看起來是正當的系統附加。**
 2. 這個機制與提示注入技術上同一件事,差別只在善意——該 hook 本身**必須進錨點保護清單**。
+
+## 追測二:additionalContext 到不到得了子代理(2026-09-03 晚,同版本)
+
+hook 在派工詞含哨兵時回 `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"## [lumos 自動附加] 本次改動的固定席節點\n1. …\n2. …"}}`;
+派一個子代理,問它「收到的指示裡有沒有標題含『固定席節點』的清單」(派工詞本身不含任何節點名)。
+
+**結果**:
+- ★派工者(主 session)畫面上出現「PreToolUse:Agent hook additional context: …」——注給的是呼叫者★。
+- ★子代理回「沒有清單」——沒收到★。
+
+結論:`additionalContext` 只到派工者;要把內容送進子代理,`updatedInput` 是唯一路徑(本日稍早已實測有效)。
+原始 hook 觸發紀錄:`2026-09-03-additionalcontext-test.log`。
