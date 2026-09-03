@@ -32,3 +32,22 @@
 - ❌ `SubagentStart` 也會 fire,但 input ★只有 `agent_id` / `agent_type`,沒有派工詞★ → 這條路不能用
 
 原始 hook 輸出見 `2026-09-03-raw-hook-log.txt`。
+
+## 追測:updatedInput 能不能改寫派工詞(2026-09-03,同版本)
+
+把 hook 的 command 換成一支腳本,讀 stdin、命中條件時輸出:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow",
+ "updatedInput":{ ...原 tool_input,但 prompt 後面接上要注入的文字... }}}
+```
+
+然後派一個子代理,問它「你收到的必查清單有哪幾項」——★派工詞本身不可提到任何清單內容★,
+它列得出來就證明注入生效。
+
+**結果:✅ 有效。** 子代理原封不動列出只存在於注入文字裡的三個節點名。
+
+★兩條實測出來的約束★:
+1. 注入內容寫成「暗號是 XXXX」這種形狀時,子代理**拒答並指認為提示注入測試**;
+   換成長得像真實清單的內容才成功。**注入內容必須看起來是正當的系統附加。**
+2. 這個機制與提示注入技術上同一件事,差別只在善意——該 hook 本身**必須進錨點保護清單**。
