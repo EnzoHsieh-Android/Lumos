@@ -4,7 +4,7 @@ status: done
 created: 2026-06-26
 updated: 2026-08-29
 self_audit: sonnet/2026-08-30
-about_code_stamp: claude/2026-08-30/f40aed14a01c
+about_code_stamp: claude/2026-09-03/4cd5c56bb0bd
 tags:
   - type/system
   - status/done
@@ -27,6 +27,7 @@ verified_by:
   - "[[Verification/2026-08-26_新舊制同料對照_v0]]"
   - "[[Verification/2026-08-30_intake守衛T1-T4落地]]"
   - "[[Verification/2026-09-03_席間覆蓋率離線量測]]"
+  - "[[Verification/2026-09-03_派工攔截點實測]]"
 summary: |-
   KEY:[2026-08-26]世界對照(governance/review-reports/world-benchmark-2026-08-26.md)——最終形態核心判準與業界主流合流:處置閘≈「all threads resolved 才准 merge」政策、blocking 宣告≈Conventional Comments 但進閘、code嚴/散文寬≈must-fix/nit 分層、K=2 退役=向世界收斂;領先半步=機械重驗審查誠實度(quote-check/留痕 sha/intake);唯一結構差=事後抽查層(世界受監管實務保留,我們由 L4+週巡檢代位,「抽已收斂迴圈冷復審」列觀察不立案
   KEY:★[2026-08-25 甲裁落地]多席 code-loop 統一處置閘([[Projects/probe輪退場_計劃]])★——panel 閘新迴圈 cutoff 拒判(僅舊帳回放)+probe 抽查義務退場(判定降觀測)+code 迴圈輪級加嚴(major 席→accepted 必空,d2;散文維持 d5 制);「20 筆抽查帳」翻案通道具名作廢;[test:t_panel_probe_retired] 三釘
