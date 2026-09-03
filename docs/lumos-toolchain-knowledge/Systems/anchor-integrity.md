@@ -12,8 +12,9 @@ tags:
 verified_by:
   - "[[Verification/2026-07-02_anchor-integrity]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+  - "[[Verification/2026-09-03_派工鏡頭注入驗收]]"
 summary: |-
-  FLOW:anchor approve --note→5錨點(runner×2+hooks×3) sha256→anchor-baseline.json(checked-in)+治理帳 anchor-approve 事件｜anchor verify→逐錨點比對→mismatch/缺檔 rc1(pre-push 擋、自主 loop 每輪入口硬擋含 missing baseline)
+  FLOW:anchor approve --note→6錨點(runner×2+git hooks×3+claude hook×1:dispatch-lens-hook.py,2026-09-03 新類別「會改寫子代理輸入的 hook」) sha256→anchor-baseline.json(checked-in)+治理帳 anchor-approve 事件｜anchor verify→逐錨點比對→mismatch/缺檔 rc1(pre-push 擋、自主 loop 每輪入口硬擋含 missing baseline)
   KEY:守「驗證器本身被悄悄改成一律通過」——測試綠/hook 放行的前提(批改程式沒被動過)從盲信變成可機械核對宣稱;外部實證=八大評測被 conftest 鉤子破
   KEY:刻意不守 scripts/lumos 本體(天天迭代→盲簽疲勞);分層=baseline 守驗證器、測試守被驗物
   KEY:loop 入口比 pre-push 嚴——missing baseline 視同失敗(無人看顧無人眼兜底);pre-push 維持 rc0+警示(漸進採用)
@@ -39,6 +40,8 @@ about_code:
   - governance/autonomous-loop.sh
   - scripts/hooks/pre-push
   - scripts/lumos
+related:
+  - "[[Projects/派工鏡頭注入_計劃]]"
 ---
 # anchor-integrity
 
@@ -55,3 +58,7 @@ about_code:
 ## 相關
 - 設計稿:`docs/design/2026-07-02-anchor-integrity.md`(design-loop 3 輪、R1 missed 作廢、R2+R3 收斂;qwen endorsed;辯方 4 次全駁倒假 major)。
 - 實作計畫:`docs/superpowers/plans/2026-07-02-anchor-integrity.md`。
+
+## 第六個錨點(2026-09-03,新類別)
+
+`scripts/hooks/claude/dispatch-lens-hook.py` 是第一支被錨的 Claude Code hook。理由:它用 `updatedInput` 改寫子代理的派工詞,與提示注入技術同構、差別只在善意——[[Verification/2026-09-03_派工攔截點實測]] 定為硬約束。其餘四支 claude hook 只注入上下文、改不了輸入,維持不錨。★錨點只罩 repo 裡那份★,`lumos install` 複製到 `~/.claude/hooks/` 的副本在機制外(能改家目錄的人本來就能做任何事)。`ANCHOR_FILES` 與 baseline 鍵集合由 `t_anchor_files_match_baseline` 交叉互證(之前兩者從無測試互證)。

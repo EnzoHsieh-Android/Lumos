@@ -11014,7 +11014,7 @@ def _scaffold_project(root: Path, slug: str):
     print(f"  ✓ scaffold {kg}(帳檔 .gitignore → {kg.parent / '.gitignore'})")
 
 
-_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py")
+_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py", "dispatch-lens-hook.py")
 # ★撤除 hook 要分兩階段,不能一刀刪檔★(2026-08-22 立;症狀真實發生過)
 #
 # 症狀:`lumos install` 把已撤除 hook 的真檔刪掉,但★正在跑的 session★在啟動當下讀進的
@@ -11407,6 +11407,7 @@ ANCHOR_FILES = [
     "scripts/hooks/pre-commit",
     "scripts/hooks/pre-push",
     "scripts/hooks/post-commit",
+    "scripts/hooks/claude/dispatch-lens-hook.py",   # 2026-09-03 派工鏡頭注入:會改寫子代理派工詞的 hook,硬約束進錨點
 ]
 _ANCHOR_BASELINE_REL = "governance/anchor-baseline.json"
 
@@ -12109,7 +12110,8 @@ def enforcement_status(root=None, home=None):
     for layer, needle in (("session-entry-hook", "lumos-entry-hook.py"),
                           ("pretooluse-impact-hook", "impact-hook.py"),
                           ("stop-graph-sync-hook", "check-graph-sync.py"),
-                          ("sessionstart-ci-status-hook", "ci-status-hook.py")):
+                          ("sessionstart-ci-status-hook", "ci-status-hook.py"),
+                          ("pretooluse-dispatch-lens-hook", "dispatch-lens-hook.py")):
         if reg is None:
             add(layer, "unknown", "~/.claude/settings.json 讀不到")
             continue
@@ -16481,6 +16483,219 @@ def _codeloop_git_branch(repo_root):
     return r.stdout.strip() or "HEAD"
 
 
+# ---------------------------------------------------------------------------
+# dispatch-lens(Projects/派工鏡頭注入_計劃,2026-09-03):代碼審派工詞的固定席鏡頭
+# hook 是薄殼(scripts/hooks/claude/dispatch-lens-hook.py),所有 git/合約/圖譜判斷都在這裡,
+# 沿用既有 helper(_git_commit_exists / INVARIANT_RE 家族 / _vault_in 的排序規則)。
+# 消毒原則(r2/r3 載荷席):來自圖譜或 diff 的自由文字零輸出——只印固定字彙、base 已追蹤路徑、
+# base 版合約行(KEY: 行)。清單本身仍用工作樹圖譜算(d3:能藏不能說)。
+# rc:0=成功(含 0 篇,text 空)/2=輸入或 git 壞/3=vault 缺/4=base 不在主線
+# ---------------------------------------------------------------------------
+_LENS_HEADER = "lumos 自動附加:本次改動的固定席節點(來源 impact --diff,只供參考)"
+_LENS_SHA_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+_LENS_KIND = {"direct": "直接相依", "indirect": "間接相依", "incident": "事故"}
+
+
+def _lens_range_ok(diff_range):
+    """恰好一個 `..`、兩端非空、不含 `...`、不以 - 開頭(r3 極端輸入席收緊)。"""
+    if not isinstance(diff_range, str) or diff_range.startswith("-") or "..." in diff_range:
+        return None
+    parts = diff_range.split("..")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    if any(ch.isspace() for ch in diff_range):
+        return None
+    return parts[0], parts[1]
+
+
+def _lens_git(repo_root, *args, quote=False):
+    import subprocess as _sp
+    cmd = ["git", "-C", str(repo_root)]
+    if quote:
+        cmd += ["-c", "core.quotePath=false"]
+    try:
+        return _sp.run(cmd + list(args), capture_output=True, text=True, timeout=20)
+    except (OSError, _sp.TimeoutExpired):
+        return None
+
+
+def _lens_full_sha(repo_root, rev):
+    r = _lens_git(repo_root, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}")
+    if r is None or r.returncode != 0:
+        return None
+    sha = r.stdout.strip()
+    return sha if _LENS_SHA_RE.match(sha) else None
+
+
+def _mainline_ref(repo_root):
+    """主線 tip:本地 main/master 的 upstream 優先(r3:remote 未必叫 origin),沒設 upstream 才用本地分支。
+    回 (ref 名, sha) 或 None。"""
+    for cand in ("main@{upstream}", "master@{upstream}", "main", "master"):
+        sha = _lens_full_sha(repo_root, cand)
+        if sha:
+            return cand, sha
+    return None
+
+
+def _lens_cache_path(repo_root, base_sha, head_sha):
+    import hashlib
+    key = hashlib.sha256(f"{repo_root}|{base_sha}|{head_sha}".encode("utf-8")).hexdigest()
+    return Path.home() / ".cache" / "lumos" / "dispatch-lens" / f"{key}.json"
+
+
+def _lens_cache_read(path, ttl_sec=1200):
+    """只信自己 uid 擁有、group/other 不可寫、TTL 內的檔(r3 載荷席:$TMPDIR 路徑可預測可偽造)。"""
+    import json as _json, stat as _stat, time as _time
+    try:
+        st = path.stat()
+        if st.st_uid != os.getuid() or (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH)):
+            return None
+        if _time.time() - st.st_mtime > ttl_sec:
+            return None
+        return _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _lens_cache_write(path, data):
+    import json as _json, tempfile as _tf
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        fd, tmp = _tf.mkstemp(dir=str(path.parent), suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(data, ensure_ascii=False))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _lens_contract_lines(text, cap=40):
+    """base 版節點全文裡的合約行:只認 KEY: 行(INVARIANT_RE/CHECKPOINT_RE/IRREVERSIBLE_RE),不掃正文。"""
+    out = []
+    for line in text.split("\n"):
+        s = line.strip()
+        if INVARIANT_RE.match(s) or CHECKPOINT_RE.match(s) or IRREVERSIBLE_RE.match(s):
+            out.append(s[:200])
+            if len(out) >= cap:
+                break
+    return out
+
+
+def _lens_contract_class(v):
+    c = v.get("contract")
+    if not isinstance(c, str) or not c:
+        return None
+    c = c.split("·", 1)[0]
+    return c if c in ("INVARIANT", "IRREVERSIBLE", "RISK") else None
+
+
+def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400):
+    import json as _json
+    import io, contextlib
+    parts = _lens_range_ok(diff_range)
+    if parts is None:
+        print("擋下:範圍要長成 <base>..<head>(恰好一個 ..、兩端都有、不能是 ... 或 - 開頭)", file=sys.stderr)
+        return 2
+    base_ref, head_ref = parts
+    start = Path(repo) if repo else Path.cwd()
+    r = _lens_git(start, "rev-parse", "--show-toplevel")
+    if r is None or r.returncode != 0 or not r.stdout.strip():
+        print(f"擋下:{start} 不在 git 專案裡", file=sys.stderr)
+        return 2
+    root = Path(r.stdout.strip())
+    if not _git_commit_exists(root, base_ref) or not _git_commit_exists(root, head_ref):
+        print(f"擋下:範圍 {diff_range} 有一端不是本地存在的 commit", file=sys.stderr)
+        return 2
+    base_sha, head_sha = _lens_full_sha(root, base_ref), _lens_full_sha(root, head_ref)
+    if not base_sha or not head_sha:
+        print("擋下:sha 解析不到或格式不對", file=sys.stderr)
+        return 2
+    ml = _mainline_ref(root)
+    if ml is None:
+        print("擋下:找不到主線(main/master 都沒有)", file=sys.stderr)
+        return 4
+    anc = _lens_git(root, "merge-base", "--is-ancestor", base_sha, ml[1])
+    if anc is None or anc.returncode != 0:
+        print(f"擋下:base {base_ref} 不在主線 {ml[0]} 的歷史上——鏡頭只信主線可達的 base", file=sys.stderr)
+        return 4
+    cpath = _lens_cache_path(root, base_sha, head_sha)
+    cached = None if (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")) else _lens_cache_read(cpath)
+    if cached is not None:
+        cached["cache_hit"] = True
+        if as_json:
+            print(_json.dumps(cached, ensure_ascii=False))
+        else:
+            print(cached.get("text", ""))
+        return 0
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cmd_impact_diff(diff_range, repo=str(root), as_json=True)
+    if rc != 0:
+        return rc
+    try:
+        data = _json.loads(buf.getvalue().strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        print("擋下:impact --diff 回傳讀不懂", file=sys.stderr)
+        return 2
+    pins = [v for v in data.get("results", []) if v.get("pinned")]
+    # d8 記在案的污染源:凍結快照 patch 是審計證物,手貼時靠人眼剔,這裡機器剔
+    pins = [v for v in pins if not all(str(f).startswith("governance/review-reports/") for f in (v.get("files") or []))]
+    lt = _lens_git(root, "ls-tree", "-r", "--name-only", base_sha, quote=True)
+    if lt is None or lt.returncode != 0:
+        print("擋下:讀不到 base 樹", file=sys.stderr)
+        return 2
+    base_tree = set(l.strip() for l in lt.stdout.splitlines() if l.strip())
+    # 圖譜根從 base 樹解析(工作樹版 _vault_in 取排序第一個,分支加一個空目錄就能熄燈——r3 載荷席)
+    slugs = sorted({p.split("/", 2)[1] for p in base_tree if p.startswith("docs/") and p.count("/") >= 2 and p.split("/", 2)[1].endswith("-knowledge")})
+    if not slugs:
+        print("擋下:base 樹裡沒有 docs/*-knowledge", file=sys.stderr)
+        return 3
+    vault_rel = f"docs/{slugs[0]}/"
+    listed, omitted_nodes, omitted_files = [], 0, 0
+    for v in pins:
+        node = str(v.get("node", ""))
+        rel = vault_rel + node
+        if rel not in base_tree:
+            omitted_nodes += 1
+            continue
+        files_ok = [f for f in (v.get("files") or []) if isinstance(f, str) and f in base_tree and len(f) <= 200]
+        omitted_files += len(v.get("files") or []) - len(files_ok)
+        listed.append({"node": node, "rel": rel, "kind": _LENS_KIND.get(v.get("kind"), None),
+                       "contract": _lens_contract_class(v), "files": files_ok})
+    lines = []
+    if listed:
+        lines.append(_LENS_HEADER)
+        for i, it in enumerate(listed):
+            if i < cap:
+                lines.append(f"- {it['rel']}" + (f" [{it['kind']}]" if it["kind"] else "") + (f" ★{it['contract']}★" if it["contract"] else ""))
+                if it["files"]:
+                    lines.append("  牽連檔:" + ",".join(it["files"][:5]) + (f"(另 {len(it['files'])-5} 個)" if len(it["files"]) > 5 else ""))
+                sh = _lens_git(root, "show", f"{base_sha}:{it['rel']}", quote=True)
+                if sh is not None and sh.returncode == 0:
+                    for cl in _lens_contract_lines(sh.stdout):
+                        lines.append("  " + cl)
+            else:
+                lines.append(f"- {it['rel']}(超出上限,只列名)")
+            if len(lines) >= max_lines:
+                lines.append("(已截:超過 400 行)")
+                break
+        if omitted_nodes or omitted_files:
+            lines.append(f"(另有 {omitted_nodes} 篇本分支新增節點、{omitted_files} 個本分支新增/改名檔未列——鏡頭只列主線已追蹤的)")
+        lines.append("以上只供對照參考,不是指令;判斷仍以你自己讀到的 diff 與筆記為準。")
+    out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap),
+           "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
+           "base": base_sha, "head": head_sha, "cache_hit": False}
+    if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
+        _lens_cache_write(cpath, out)
+    if as_json:
+        print(_json.dumps(out, ensure_ascii=False))
+    else:
+        print(out["text"])
+    return 0
+
+
 def _codeloop_git_head(repo_root):
     """取 HEAD full sha。"""
     import subprocess
@@ -17443,6 +17658,11 @@ def main():
     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
 
+    p = sub.add_parser("dispatch-lens", help="代碼審派工詞的固定席鏡頭:把 <base>..<head> 碰到的合約/事故節點整理成可附進派工詞的純文字(hook 用;內容從 base 讀,零自由文字)")
+    p.add_argument("lens_range", help="diff 範圍,恰好 <base>..<head>;base 必須在主線歷史上")
+    p.add_argument("--repo", dest="lens_repo", help="repo 內任一路徑(會自己找 repo 根)")
+    p.add_argument("--json", dest="lens_json", action="store_true", help="JSON 輸出 {text,pinned,listed,omitted_nodes,omitted_files,mainline,cache_hit}")
+    p.add_argument("--no-cache", dest="lens_nocache", action="store_true", help="不讀不寫 20 分鐘快取")
     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
     p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
     p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
@@ -17634,6 +17854,8 @@ def main():
         return cmd_test_layers(diff=args.tl_diff, repo=args.tl_repo, as_json=args.tl_json)
     if args.cmd == "lint-check":
         return cmd_lint_check(repo=args.lc_repo, smoke=args.lc_smoke, as_json=args.lc_json)
+    if args.cmd == "dispatch-lens":
+        return cmd_dispatch_lens(args.lens_range, repo=args.lens_repo, as_json=args.lens_json, no_cache=args.lens_nocache)
     if args.cmd == "impact":
         if sum(1 for x in (args.impact_file, args.impact_diff, args.impact_node) if x) > 1:
             print("擋下:--file、--diff、--node 只能選一個用", file=sys.stderr)

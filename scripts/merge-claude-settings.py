@@ -73,7 +73,22 @@ HOOK_ENTRIES = {
                     "timeout": 30,
                 }
             ],
-        }
+        },
+        {
+            # 派工鏡頭注入(Projects/派工鏡頭注入_計劃 2026-09-03):派子代理前,派工詞含
+            # `LUMOS-IMPACT: <base>..<head>` 就把固定席節點附進派工詞(updatedInput)。
+            # 不帶標記=一次字串比對就放行;任何失敗放行;永不 deny。
+            # 本 hook 在 scripts/lumos 的 ANCHOR_FILES 內(會改寫子代理輸入,硬約束)。
+            # 外層 60 > 內層 45(dispatch-lens-hook.py INNER_TIMEOUT)。
+            "matcher": "Agent",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": _hook_cmd("dispatch-lens-hook.py"),
+                    "timeout": 60,
+                }
+            ],
+        },
     ],
     # NOTE(2026-08-21 體檢 #8):verification-rot-check(PostToolUse/Bash,每次 Bash 都觸發、
     # 逐候選 claude -p 25s)撤除——docs/.rot-check-cache.json 與 .rot-queue.jsonl 從未被建立,
