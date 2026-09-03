@@ -1,11 +1,11 @@
 ---
 type: project
-status: superseded
+status: doing
 created: 2026-09-03
 updated: 2026-09-03
 tags:
   - type/project
-  - status/superseded
+  - status/doing
   - scope/governance
 related:
   - "[[Systems/heterogeneous-finder-ensemble]]"
@@ -28,21 +28,8 @@ decisions:
     why_chosen: 昨天案死在自造指紋;本案指紋就是人已經給的 id,機器只記映射。與 --from-pitfalls 同形狀,最小、不破任何既有合約。代價=仍靠人寫 fold.json,回頭條件寫死
     decided: 2026-09-03
     valid: true
-  - content: ★停案(Enzo 2026-09-03 裁,r1 攤牌後),改開第六份「映射掛記帳」★:獨立 fold.json 的四個結構問題(無寫入入口→驗證只在有人選擇跑時執行;carrier_findings_set 是自報拷貝→自己驗自己;逐席快照無欄位指定對哪份;不在 replay 凍結閉包)全部指向同一件事——★映射不該是獨立檔,該掛在每席 canary record 那一筆上★:記帳本來就強制、本來就帶各席 report/snapshot、本來就進凍結閉包、本來就 fail-closed。存活元件:--from-fold 機械可行(三處改動、vault-free 成立);quote-check --json 每輪每席必跑可當骨架、人只填 id;引句同型巢狀會靜默截斷須用『』外層或直接比對。已知未解帶去第六份:席記帳早於 carrier,全集當時不存在
-    id: d2
-    context: r1 五席 30 條、兩席 blocker。另抓到:「記已在做的判斷」不成立(規矩只折存活的,逐句對應是新工作,成本像 refute_verdicts 0% 不像 finding_kinds 78.5%);「同席同 quote 不得重複」擋掉真實合法資料(同句支撐兩個獨立發現);「六份/五份席報告」把快照算進份數;18 vs 15 全集分岔已在引用的迴圈真實發生;id 正規化帳側 strip-only 與 capture 側 casefold 並存未選邊
-    why_chosen: 每輪致命傷不同=沒在收斂;四個主問題共同根因是「檔獨立於記帳之外」,換落點比折入省。Enzo 裁直接開第六份
-    decided: 2026-09-03
-    valid: true
 ---
 # 折入去重留痕_計劃
-
-> **★停案:r1 攤牌後 Enzo 裁改開第六份(2026-09-03,見 d2)。本篇是「為什麼獨立檔不對」的紀錄。★**
-> 四個結構問題全指向「檔獨立於記帳之外」:①無寫入入口,驗證只在有人選擇跑 --from-fold 時執行 ②carrier_findings_set 是自報拷貝,寫入當下帳上全集尚不存在,等於自己驗自己(且 18 vs 15 分岔已在引用迴圈真實發生) ③逐席快照(r2+ 常態)無欄位指定對哪份,驗證跑不起來 ④不在 replay 凍結閉包,寫了被動沒人知道。
-> 另:「記已在做的判斷」不成立(規矩只折存活的);「同席同 quote 不得重複」擋掉真實合法資料;引句包一行遇同型巢狀靜默截斷仍判過;份數又數錯(快照算進去)。
-> **存活**:--from-fold 機械可行、vault-free 成立;quote-check --json 每輪每席必跑=現成骨架,人只填 id。
-> **接手**:映射掛在每席 canary record 那一筆上(強制、帶 report/snapshot、進凍結閉包、fail-closed)。已知未解=席記帳早於 carrier。
-
 
 > 白話:審查迴圈每輪收到好幾席的報告,編排者會把「三席講的其實是同一個洞」合併成一份發現清單再折進設計——★這個合併判斷今天已經在做,只是沒有被記下來★。所以事後永遠答不出「哪一席抓到哪個洞」「這個洞被幾席抓到」。本案只做一件事:**把那個已經在做的判斷寫進一個檔**,讓「被幾席抓到」從人手數變成機器數,順便讓「每個發現對應到報告裡哪句話」變成可回溯。不加新判斷、不動帳 schema、不碰圖譜。
 
