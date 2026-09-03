@@ -153,17 +153,15 @@ r3 架構席抓到:第 2/3 版新加的四個判斷——主線分支怎麼取�
 ## v1.1:每篇固定席標「綁定測試狀態」(2026-09-03 深夜,Enzo 裁)
 
 - **為什麼**:Enzo 問「代碼審能不能拿清單節點綁的測試跑一遍確認沒回歸」。查 [[Systems/bound-tests-gate]]:★已經在跑而且是硬閘★——pre-push 的 `code-loop check` 對 impact 固定席每條 ★INVARIANT★ 的 `[test:]` 逐支真跑,紅/懸空/假就擋。缺的不是跑,是★審查員看不到★:鏡頭裡的合約行只有文字,審查員分不出「這條機器守住了」與「這條沒綁測試、只剩人讀」。
-- **做什麼**(只改 `lumos dispatch-lens` 的輸出,不碰 hook、不碰閘):★只對 ★INVARIANT★ 合約行★補一格固定字彙(輕量審 f1:閘 `_bound_tests_for_diff` 只靠 `extract_contracts` 取 ★INVARIANT★ 行;★CHECKPOINT★/★IRREVERSIBLE★ 走 `[rollback:]`/`[guard:]` 另一套機制,不歸 `[test:]` 管,不標、不進小計)——
-  - ★INVARIANT★ 行含 `[test:…]` 且解得出、方法在測試索引裡 → `[綁定測試:有]`
+- **做什麼**(只改 `lumos dispatch-lens` 的輸出,不碰 hook、不碰閘):每篇固定席貼內容時,合約行後面補一格固定字彙——
+  - 合約行含 `[test:…]` 且解得出、方法存在 → `[綁定測試:有]`
   - 解得出但方法不存在/只出現在文字裡/名字不合法 → `[綁定測試:懸空]`(dangling/fake/bad-name 三種都印懸空,不印方法名——方法名是自由文字)
-  - ★INVARIANT★ 行沒有 `[test:]` → `★無綁定測試——閘守不到,只剩你讀★`
-  - ★CHECKPOINT★/★IRREVERSIBLE★ 行照原樣印,不加格。
-  - 節點層小計一行:「INVARIANT N 條:有測試 a、懸空 b、無 c」——★N 只數 ★INVARIANT★ 行★(輕量審 f2),a+b+c=N。
-  - **fail-open**:多平台專案沒填 `default_platform` 時 `_platform_test_index` 會拋例外(輕量審 f3;既有閘用 try/except 包成 no-config)——本案同樣包住,拋了就★整個節點不加任何格★、小計不印,不放行整段鏡頭。
-- **資料源全是既有的**:合約行=base 版節點文字(已在印;`resolve_test_refs` 吃字串,可直接餵);`resolve_test_refs`+`_platform_test_index` 的 real/fake/dangling/bad-name 分類=`_bound_tests_for_diff` 用的同一套;測試索引讀工作樹(問的是「這條分支上這支測試在不在」;分支上新增同名假測試會讓「懸空」變「有」——這是既有閘的同一個限制,閘會真跑那支測試所以假的擋得住,鏡頭沿用不另設防,輕量審 f4)。★不跑測試★——跑是 pre-push 閘的事,鏡頭只標存在性,措辭不得寫「綠」。
+  - 合約行沒有 `[test:]` → `★無綁定測試——閘守不到,只剩你讀★`
+  - 節點層再加一行小計:「合約 N 條:有測試 a、懸空 b、無 c」。
+- **資料源全是既有的**:合約行=base 版節點文字(已在印);`resolve_test_refs`+`_platform_test_index` 的 real/fake/dangling/bad-name 分類=`_bound_tests_for_diff` 用的同一套;測試索引讀工作樹(問的是「這條分支上這支測試在不在」)。★不跑測試★——跑是 pre-push 閘的事,鏡頭只標存在性,措辭不得寫「綠」。
 - **消毒**:新增輸出只有四個固定字串與三個整數;方法名、平台名不印。
 - **不做**:「設計審判不影響的節點帶進代碼審當先驗」——要在計劃筆記加固定欄位並讓代碼審讀得到,是新連結,另開小案。
-- **審級**:原判單人輕量審;★輕量審 r1 出 3 條 major(合約型別混印/小計口徑/多平台例外)=審級誤判,依 skill 規則升級完整迴圈 `派工鏡頭注入-v11-std`★(2026-09-03 深夜)。
+- **審級**:單人輕量審(預估 ≲50 行、只動一個函式的輸出;不碰 ★INVARIANT★、不碰守衛面——鏡頭不是閘);light 冒出 ≥major 即升級完整迴圈(skill 規則)。
 - **驗收**:單元——三種狀態各一篇 fixture 節點(有/懸空/無)輸出對應字串與小計;既有 `t_dispatch_lens_*` 全綠;真跑 `c3b4f3f~1..c3b4f3f` 看小計合理。
 
 ## 實作紀錄(2026-09-03 晚,r3 過閘後同日動工)
