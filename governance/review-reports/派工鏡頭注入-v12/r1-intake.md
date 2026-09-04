@@ -21,3 +21,4 @@ preflight-4: ran
 - s3-f6「pins vs listed 分岔」:cmd_dispatch_lens 判空點 → HIT。
 ## 處置
 25 條全折(blocker 輪 accepted 必空);v1.2 節整段重寫。
+## 鏡像核對:20 折入/3 找不到(s1-f7 testmap stale→地圖已拿掉隨之消失,補一句;s2-f3/f4 CJK 邊界→補 ASCII 識別字邊界規則)/2 不符(s1-f1 與 arch-f3 對「grep vs 製程內正規式」意見相反,採架構席既有慣例,兩席都算折入:一條採納一條以理由駁回並留痕)。
