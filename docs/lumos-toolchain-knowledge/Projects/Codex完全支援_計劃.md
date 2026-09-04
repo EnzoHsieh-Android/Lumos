@@ -233,6 +233,7 @@ REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/pro
 - `_install_codex_agent`/`_remove_codex_agent`:Codex 同步時寫 `CODEX_HOME/agents/lumos_reviewer.toml`(字串範本,帶 `# lumos-managed` 標記;name/description/developer_instructions=審查席框架;sandbox_mode 只當提示),重跑 unchanged、外方同名檔不覆蓋、teardown 只收帶標記的、無 Codex 家目錄不建;測試 `t_codex_d6_agent_toml`。skill 三處改「派工詞點名 lumos_reviewer;唯讀靠父代理沙盒」。
 - 驗收:隔離 CODEX_HOME 跑 `lumos install` 寫出 TOML,用暫存的 0.153.2 派 `lumos_reviewer` → SubagentStart `agent_type=lumos_reviewer`(見 S2 驗證筆記補驗段)。0.144.1 全域版忽略此檔(無害)。
 - 誠實界線補:TOML 的 sandbox_mode 實測不擋寫檔,唯讀規則不變;新版 codex 是否已修在別的版本沒逐版驗(只驗 0.144.1 與 0.153.2 兩點)。
+- **代碼審 r1(code-codex-d6,standard:單reviewer+架構+外家 Codex,2026-09-05)**:15 條(3+6+6,1 條重疊)全折——agents 路徑是檔案不炸(`skipped-not-dir`)、測試 tomllib 精確比、「0.153+」全改「0.153.2 實測、0.144.1 忽略」、enforcement 加 `codex-agent` 列(每樣裝的東西都有一列)、skill 三處統一「框架單源=TOML 的 developer_instructions,派工詞給審材與鏡頭」並引 d6、三態改 created/unchanged/skipped-*、docstring/步驟註解補④⑤、第三種標記機制加註解、merge-failed 時不寫 TOML 為刻意(補註解)、測試刪 PATH 誤導行。卷證 `governance/review-reports/code-codex-d6/`。
 
 REVISIT:2026-09-25 互動 Codex 信任冒煙時一併看 SubagentStart 領席在互動模式下是否照常(本輪只驗 exec)。
 

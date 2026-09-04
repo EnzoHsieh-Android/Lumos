@@ -22581,10 +22581,10 @@ def t_enforcement_summary_excludes_unknown():
     unknown_layers = sorted(r["layer"] for r in rows if r["status"] == "unknown")
     # 2026-09-04 Codex完全支援 S0:fixture 的 home 沒有 ~/.codex → Codex 八列(5 hook+cli+skills+agents-md)
     # 一律 unknown(不適用,不是壞;入口 hook 才不會對沒裝 Codex 的機器每 session 唸)
-    codex_layers = ["agents-md", "codex-cli", "codex-sessionstart-ci-status-hook", "codex-subagentstart-dispatch-lens-hook", "codex-session-entry-hook",
+    codex_layers = ["agents-md", "codex-agent", "codex-cli", "codex-sessionstart-ci-status-hook", "codex-subagentstart-dispatch-lens-hook", "codex-session-entry-hook",
                     "codex-stop-graph-sync-hook", "codex-pretooluse-impact-hook", "codex-skills"]
     check("enforcement: unknown 恰=vendored+遠端+Codex 不適用八列", unknown_layers == sorted(["required-status-check", "vendored-cli"] + codex_layers), str(unknown_layers))
-    check("enforcement: n_unknown 恰 10", n_unknown == 10, f"{n_unknown}")
+    check("enforcement: n_unknown 恰 11", n_unknown == 11, f"{n_unknown}")
     check("enforcement: 四 hook+pre-commit+pre-push+python+ci 共 8 active", n_active == 8, f"active={n_active} rows={[(r['layer'],r['status']) for r in rows]}")
     check("enforcement: total = 非unknown列數", n_total == len(rows) - n_unknown, f"total={n_total} rows={len(rows)}")
 
@@ -22596,7 +22596,7 @@ def t_enforcement_never_raises_on_missing():
     rows = m.enforcement_status(root=bad, home=bad)
     # r1 審:別留 >=8 的鬆口,釘死列數(5 hook+pre-commit+pre-push+python+vendored+ci+anchor+required = 12;2026-09-03 加 dispatch-lens;
     # 2026-09-04 Codex完全支援 S0 加 9 列:codex-hook×5+codex-cli+claude-skills+codex-skills+agents-md = 21)
-    check("enforcement: 缺目錄不炸、回恰 21 列", isinstance(rows, list) and len(rows) == 21, f"{len(rows)}: {[r['layer'] for r in rows]}")
+    check("enforcement: 缺目錄不炸、回恰 22 列(d6 加 codex-agent)", isinstance(rows, list) and len(rows) == 22, f"{len(rows)}: {[r['layer'] for r in rows]}")
 
 
 def main():
@@ -25536,19 +25536,32 @@ def t_codex_d6_agent_toml():
     home = Path(tempfile.mkdtemp(prefix="gctl-d6-")); (home / ".codex").mkdir()
     r = _codex_run(home, "print(m._sync_global_hooks(repo,'codex'))")
     f = home / ".codex" / "agents" / "lumos_reviewer.toml"
-    check("d6: codex 同步後 agents/lumos_reviewer.toml 在且含三個必填欄與標記", f.exists() and all(k in f.read_text() for k in ('name = "lumos_reviewer"', "description =", "developer_instructions =", "lumos-managed")), r.stdout[-100:] + r.stderr[-200:])
+    import tomllib as _toml
+    parsed = _toml.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    check("d6: codex 同步後 agents/lumos_reviewer.toml 在、tomllib 解得開、三個必填欄精確、帶標記", f.exists() and parsed.get("name") == "lumos_reviewer" and isinstance(parsed.get("description"), str) and "LUMOS" not in parsed.get("description", "x") and isinstance(parsed.get("developer_instructions"), str) and parsed.get("sandbox_mode") == "read-only" and "lumos-managed" in f.read_text(), r.stdout[-100:] + r.stderr[-200:])
+    # 外家 r1 #1:agents 路徑是檔案 → 不炸、回可讀狀態
+    (home / ".codex" / "agents2").write_text("x")
+    r = _codex_run(home, "import os;from pathlib import Path;os.environ['CODEX_HOME']=str(Path.home()/'.codex');print(m._install_codex_agent())")
+    home_f = Path(tempfile.mkdtemp(prefix="gctl-d6f-")); (home_f / ".codex").mkdir(); (home_f / ".codex" / "agents").write_text("foreign file")
+    r = _codex_run(home_f, "print(m._install_codex_agent())")
+    check("d6: agents 是檔案不是目錄 → 回 skipped-not-dir 且不炸", "Traceback" not in r.stderr and r.stdout.strip().endswith("skipped-not-dir"), r.stdout[-80:] + r.stderr[-200:])
     r = _codex_run(home, "print(m._install_codex_agent())")
     check("d6: 重跑 → unchanged", r.stdout.strip().endswith("unchanged"), r.stdout[-80:])
+    m2 = _load_lumos_inproc(); root2, _ = _enforcement_fixture(all_active=True)
+    by = {x["layer"]: x for x in m2.enforcement_status(root=root2, home=home)}
+    check("d6: enforcement 有 codex-agent 列且 active(帶標記檔在)", by.get("codex-agent", {}).get("status") == "active", str(by.get("codex-agent")))
     f.write_text('name = "lumos_reviewer"\ndescription = "mine"\ndeveloper_instructions = "x"\n', encoding="utf-8")
     r = _codex_run(home, "print(m._install_codex_agent())")
     check("d6: 外方同名檔 → skipped-foreign 且不覆蓋", r.stdout.strip().endswith("skipped-foreign") and "mine" in f.read_text(), r.stdout[-80:] + r.stderr[-150:])
+    by = {x["layer"]: x for x in m2.enforcement_status(root=root2, home=home)}
+    check("d6: enforcement 對外方檔 → degraded", by.get("codex-agent", {}).get("status") == "degraded", str(by.get("codex-agent")))
     r = _codex_run(home, "print(m._remove_codex_agent())")
     check("d6: teardown 對外方檔回 False 不刪", r.stdout.strip().endswith("False") and f.exists(), r.stdout[-80:])
     f.unlink(); _codex_run(home, "m._install_codex_agent()")
     r = _codex_run(home, "print(m._teardown_global_hooks(repo,'codex'))")
     check("d6: teardown 收掉自家 TOML", not f.exists(), r.stdout[-150:])
     home2 = Path(tempfile.mkdtemp(prefix="gctl-d6b-"))
-    _codex_run(home2, "import os;os.environ['PATH']='/nonexistent';m._sync_global_hooks(repo,'codex')")
+    _codex_run(home2, "m._sync_global_hooks(repo,'codex')")   # 判準只看家目錄(不看 PATH),不用改 PATH(code-codex-d6 r1 單reviewer F2)
     check("d6: 無 ~/.codex → 不建 agents", not (home2 / ".codex").exists(), "")
 
 

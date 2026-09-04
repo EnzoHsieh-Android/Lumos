@@ -11293,7 +11293,7 @@ def _sync_global_claude(src_repo: Path):
 def _sync_global_hooks(src_repo: Path, harness: str) -> str:
     """全域 hooks/註冊同步(不需專案;install 與 _install_hooks_py 共用)。harness=claude|codex:
     claude → ~/.claude/hooks + settings.json;codex → ~/.codex/hooks + hooks.json(合併器 --target codex)。
-    ①copy 現役 hooks ②刪已撤除 hook 殘留真檔 ③跑 merge-claude-settings(_prune_dangling 剪懸空註冊)。
+    ①copy 現役 hooks ②刪已撤除 hook 殘留真檔 ③跑 merge-claude-settings(_prune_dangling 剪懸空註冊)④codex 專用:寫自訂審查席 TOML(d6)。
     來源=src_repo(install 用來源 repo 自身、update 用專案 vendored copy);HOME 隔離可測。
     回三態字串:ok / probe(探針擋下,沒動) / merge-failed(hooks 設定檔壞或合併器非 0,hook 檔已 copy 但註冊沒更新)
     / absent(codex 專用:本機無 codex,跳過)。★不共用一顆布林★——False 曾被呼叫端寫死解讀成 LUMOS_PROBE,
@@ -11333,14 +11333,16 @@ def _sync_global_hooks(src_repo: Path, harness: str) -> str:
         r = subprocess.run(args)
         if r.returncode != 0:              # 合併器只在設定檔 JSON 壞時回 1:別當成功
             return "merge-failed"
-    if harness == "codex":                 # ④ 自訂審查席 TOML(d6)
+    if harness == "codex":                 # ④ 自訂審查席 TOML(d6)——刻意放在合併器之後:設定檔壞掉(merge-failed)就整個 Codex 側不算裝好,
+                                           #    TOML 不寫、下次 install --force 再補;hook 檔 copy 在前面已做(自癒無害)(code-codex-d6 r1 單reviewer F3)
         st = _install_codex_agent()
-        if st == "written":
-            print(f"  ✓ Codex 自訂審查席 {_CODEX_AGENT_NAME}.toml 已寫(0.153+ 派工詞點名選得中;唯讀仍靠父代理 --sandbox read-only)")
+        if st == "created":
+            print(f"  ✓ Codex 自訂審查席 {_CODEX_AGENT_NAME}.toml 已寫(0.153.2 實測派工詞點名選得中、0.144.1 忽略;唯讀仍靠父代理 --sandbox read-only)")
     return "ok"
 
 
 _CODEX_AGENT_NAME = "lumos_reviewer"   # 底線:模型 spawn 時會把連字號正規化成底線(2026-09-04 實看)
+# 第三種「我方」標記(sentinel HTML 註解給 markdown、.lumos-managed 檔給目錄):TOML 檔只能用行註解當標記,不是另立做法
 _CODEX_AGENT_MARK = "# lumos-managed: 由 lumos install 寫入,teardown 收走;改範本請改 scripts/lumos"
 _CODEX_AGENT_TOML = _CODEX_AGENT_MARK + '''
 name = "lumos_reviewer"
@@ -11353,10 +11355,17 @@ sandbox_mode = "read-only"
 
 
 def _install_codex_agent(home=None) -> str:
-    """Codex 自訂審查席(d6,2026-09-05):寫 CODEX_HOME/agents/lumos_reviewer.toml。0.153+ 派工詞點名選得中;舊版忽略(無害)。
-    ★sandbox_mode 只當提示,實測不擋寫檔——唯讀靠父代理 --sandbox read-only★。回 written|unchanged|skipped-foreign。"""
+    """Codex 自訂審查席(d6,2026-09-05):寫 CODEX_HOME/agents/lumos_reviewer.toml。0.153.2 實測派工詞點名選得中;0.144.1 忽略(無害)。
+    ★sandbox_mode 只當提示,實測不擋寫檔——唯讀靠父代理 --sandbox read-only★。回 created|unchanged|skipped-foreign|skipped-not-dir(對齊 _reinject_claude_block 的 created/unchanged 詞彙)。"""
     d = _codex_home(home) / "agents"
-    d.mkdir(parents=True, exist_ok=True)
+    if d.exists() and not d.is_dir():      # agents 是檔案不是目錄 → 講清楚、不炸穿整次同步(code-codex-d6 r1 外家 #1)
+        print(f"  ⚠ {d} 不是目錄,略過自訂審查席 TOML(搬走那個檔再跑 lumos install --force)", file=sys.stderr)
+        return "skipped-not-dir"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"  ⚠ 建不了 {d}({e}),略過自訂審查席 TOML", file=sys.stderr)
+        return "skipped-not-dir"
     f = d / f"{_CODEX_AGENT_NAME}.toml"
     if f.exists():
         cur = f.read_text(encoding="utf-8", errors="replace")
@@ -11366,7 +11375,7 @@ def _install_codex_agent(home=None) -> str:
         if cur == _CODEX_AGENT_TOML:
             return "unchanged"
     f.write_text(_CODEX_AGENT_TOML, encoding="utf-8")
-    return "written"
+    return "created"
 
 
 def _remove_codex_agent(home=None) -> bool:
@@ -11406,7 +11415,7 @@ def _teardown_global_claude(src_repo: Path):
 def _teardown_global_hooks(src_repo: Path, harness: str):
     """_sync_global_hooks 的移除半邊(teardown 用):清全域 ~/.claude(或 ~/.codex)的我方 hook + 剪其懸空註冊。
     ①先驗 settings.json 可解析→壞則跳過+warn、★不刪 .py★(不製造懸空,std F6)②rm 我方現役+撤除 hook
-    ③跑 merge --prune-only(★只剪懸空、不 re-add★——預設 merge 會把 hook 加回,抵銷 teardown)。
+    ③跑 merge --prune-only(★只剪懸空、不 re-add★——預設 merge 會把 hook 加回,抵銷 teardown)④收自家自訂審查席 TOML(codex)⑤收 .bak。
     須在 deinit 刪掉 vendored merge-claude-settings.py 之前跑(std F5,由 cmd_teardown 順序保證)。
     設計:Projects/teardown一鍵拆機_計劃。回 True=已處理 / False=因 settings 壞跳過。"""
     import subprocess, json
@@ -11432,9 +11441,9 @@ def _teardown_global_hooks(src_repo: Path, harness: str):
     merge = src_repo / "scripts" / "merge-claude-settings.py"   # ③ prune-only 剪懸空我方註冊
     if merge.exists() and settings.exists():
         subprocess.run([sys.executable, str(merge), "--prune-only"] + (["--target", "codex"] if harness == "codex" else []))
-    if harness == "codex" and _remove_codex_agent():
+    if harness == "codex" and _remove_codex_agent():   # ④ 自家自訂審查席 TOML(d6)
         removed.append(f"agents/{_CODEX_AGENT_NAME}.toml")
-    bak = settings.with_suffix(".json.bak")   # ④ 合併器每次改檔留的備份也收掉(r1 單reviewer F7:拆機要對稱)
+    bak = settings.with_suffix(".json.bak")   # ⑤ 合併器每次改檔留的備份也收掉(r1 單reviewer F7:拆機要對稱)
     if bak.exists():
         try:
             bak.unlink(); removed.append(bak.name)
@@ -12498,6 +12507,21 @@ def enforcement_status(root=None, home=None):
             (ver + ";本案地基事實在 codex-cli 0.144.1 上實測,版本不同要重驗 hook 行為") if ver else "本機無 codex,不適用")
     except Exception as e:
         add("codex-cli", "unknown", str(e))
+
+    # ③b' Codex 自訂審查席 TOML(d6;每樣裝的東西都有一列——code-codex-d6 r1 架構席)
+    try:
+        if not codex_ok:
+            add("codex-agent", "unknown", "本機無 codex,不適用")
+        else:
+            af = _ch / "agents" / f"{_CODEX_AGENT_NAME}.toml"
+            if not af.exists():
+                add("codex-agent", "inactive", f"無 agents/{_CODEX_AGENT_NAME}.toml(lumos install --force 會寫)")
+            elif _CODEX_AGENT_MARK in af.read_text(encoding="utf-8", errors="replace"):
+                add("codex-agent", "active", f"agents/{_CODEX_AGENT_NAME}.toml 在(0.153.2 實測選得中、0.144.1 忽略;唯讀仍靠父代理沙盒)")
+            else:
+                add("codex-agent", "degraded", f"agents/{_CODEX_AGENT_NAME}.toml 是別人的檔(無 lumos 標記),lumos 不覆蓋")
+    except Exception as e:
+        add("codex-agent", "unknown", str(e))
 
     # ③c skills 兩層(對稱;r1 整合 F6):使用者層目錄裡有沒有 lumos-* 連結/目錄
     for layer, sk in (("claude-skills", home / ".claude" / "skills"), ("codex-skills", home / ".agents" / "skills")):
