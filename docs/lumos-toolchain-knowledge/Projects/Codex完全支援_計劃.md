@@ -151,7 +151,7 @@ S1 驗收(隔離 HOME+CODEX_HOME 真跑 `codex exec` 帶旗標,hook 命令列包
 
 ## 誠實界線
 
-- **hook 信任是使用者的一次手動動作**,lumos 不替按、不寫信任存放處(沒查出來在哪);enforcement 永遠只能說「已註冊」。
+- **hook 信任是使用者的一次手動動作**,lumos 不替按、不寫信任存放處(沒查出來在哪);enforcement 永遠只能說「已註冊」。★2026-09-05 已按★(Enzo 授權,用 pty 開互動 codex 0.153.2:畫面「Hooks need review / 5 hooks are new or changed」三選項,選「2. Trust all and continue」;重開不再問;之後 `codex exec` 不帶旗標,入口 hook 的提醒被模型原文抄回、逐字稿 6 處)——驗收第 5 條的「信任冒煙」完成;★互動模式裡 hook 本身的行為(在 TUI 對話中改檔/派子代理)仍沒驗★,REVISIT 2026-09-25 只剩這一項與 SubagentStart 領席。
 - **綁版本**:matcher 別名 `Agent` 不匹配、spawn message 密文、`collaborationspawn_agent` 工具名、hook 信任閘行為,都是 0.144.1 觀測;`lumos enforcement` 印 codex 版本並跟圖譜記的驗證版本比,不同就唸一句。
 - **Codex 側鏡頭的位置與收件人都比 Claude 側弱**:附在子代理開場上下文而非派工詞;同 repo 同窗口的其他子代理也可能收到;首行印 range 只讓錯席可見,不消滅。鏡頭不量成效(見 [[Projects/派工鏡頭注入_計劃]])。
 - **AGENTS 鏈 32 KiB 截斷靜默**,本案只降機率(插檔首+估總量)。
@@ -183,7 +183,7 @@ S1 驗收(隔離 HOME+CODEX_HOME 真跑 `codex exec` 帶旗標,hook 命令列包
 - 「install/teardown 對稱」:Codex 三處在 teardown 後必為空;既有非我方目錄與使用者自寫 hooks 項目必原樣保留。
 - 「bypass 旗標只在隔離測試」:repo 內任何非測試碼不得出現 `--dangerously-bypass-hook-trust`。
 
-REVISIT:2026-09-25 互動模式 Codex 信任冒煙(驗收第 5 條)。
+REVISIT:2026-09-25 互動模式(TUI 對話中)改檔/派子代理看 hook 行為;信任冒煙 09-05 已做。
 REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/probe 有無真實使用(0 筆=沒人用 Codex 開 lumos 專案,S2/S3 降優先);同日抽看 armed token 有沒有被無關子代理搶走(通才 r2 F1 界線)。
 
 ## 實作紀錄 S0(2026-09-04,r2 過閘、四條裁定記入後同日動工)
