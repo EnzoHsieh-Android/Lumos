@@ -54,6 +54,18 @@ summary: |-
 5. **專案層 hook 走不通**:要給 Codex 側裝 lumos hook,只能走使用者層(`~/.codex/hooks.json` 或 config.toml)——跟 Claude 側 `lumos install` 寫 `~/.claude/settings.json` 同形態,合併器要多一個目標。
 6. **席名統一**:9 種寫法是自家帳的病,跟 Codex 無關;`loop status` 的家族辨識靠席名,順手修。
 
+## CLAUDE.md / skills 在 Codex 的對應物(2026-09-04 補,官方文件+本機查)
+
+| Claude Code 這邊 | Codex 那邊 | 差在哪 |
+|---|---|---|
+| `CLAUDE.md`(專案規矩,每 session 自動進 prompt) | `AGENTS.md`:全域 `~/.codex/AGENTS.md`(有 `AGENTS.override.md` 就只讀它),再從 git 根往 cwd 一層層找 `AGENTS.override.md` → `AGENTS.md` → `project_doc_fallback_filenames` 列的備名;全部**串接**(不是覆蓋),總量上限 `project_doc_max_bytes`(文件寫預設 32 KiB,超過就停止再加檔) | 本 repo 根目錄已有一份 `AGENTS.md`(8 行指路檔,叫 Codex 去讀 CLAUDE.md 與 MOC)。**Codex 不會自動讀 CLAUDE.md**——要它直讀得把 `CLAUDE.md` 加進 `project_doc_fallback_filenames`,但這只在「AGENTS.md 不存在」時才生效,所以現制(AGENTS.md 指路)是對的 |
+| skills(`~/.claude/skills/<名>/SKILL.md`,描述觸發或 `/名` 顯式叫) | Codex skills:repo 層 `.agents/skills/` 或 `.codex/skills/`、使用者層 `~/.agents/skills/`、管理層 `/etc/codex/skills`;每個 `<名>/SKILL.md` 必填 `name`/`description`,選配 `scripts/`、`references/`、`assets/`、`agents/openai.yaml`(`policy.allow_implicit_invocation` 預設 true);顯式叫法 `$名`,隱式靠 description 比對;目錄清單佔 prompt 上限=context 的 2% 或 8k 字(`skills.max_context_tokens` 可調,硬上限 10000 tokens);`skills.config[].path/enabled` 可逐支開關 | **同一個開放標準(agentskills.io)**,SKILL.md 格式互通——理論上 `lumos-*` 四支 skill 直接 symlink 進 `~/.agents/skills/` 就能被 Codex 看到。★沒實測★:本機 `~/.codex/skills/` 只有 `cache` 子目錄、`~/.agents/skills/` 不存在、本 repo 沒有 `.agents/` `.codex/`,也就是**現在 Codex 席一支 lumos skill 都看不到**,它審設計時對 lumos 指令、合約標記、記帳規矩的認識全靠 prompt 裡塞的那段 |
+| 子代理定義 `.claude/agents/*.md` | `~/.codex/agents/*.toml`(`developer_instructions`+model/sandbox/skills.config) | 見上節 |
+| plugins(bundle skills+hooks) | `codex plugin add/list/marketplace/remove`;`features list` 顯示 `plugins` stable、`plugin_hooks` **已移除**(hooks 不能靠 plugin 帶,只能 config/hooks.json) | 沒細查 marketplace 內容 |
+| 全局系統提示替換 | `model_instructions_file`(整份取代內建指令,不是加在 AGENTS.md 上)、`developer_instructions`(額外注入一段) | 沒測 |
+
+候選 7(接上節,未裁):**把 `lumos-*` skills 安裝進 `~/.agents/skills/`**(install.sh 多一個 symlink 目標),讓 Codex 席審 lumos 相關設計時有同一本手冊;前提是先實測 Codex 真的載入、且 `$lumos-design-loop` 這種名字的隱式觸發不會亂咬。REVISIT 併入 2026-09-18 那條。
+
 ## 沒查/沒測的
 
 - `codex review` 的輸出與 exit code;`--output-schema` 實際約束力;`mcp-server` 的工具面。
@@ -64,5 +76,7 @@ summary: |-
 ## 實驗留痕
 
 暫存目錄 codexhook.*(hook.py 記 stdin 到 hook.log;三次 `codex exec --json` 的 out*.jsonl);未進版控,結論以上表為準。實驗 1 的失敗(0 筆)先被誤判成「hook 不會 fire」,換使用者層設定才對——★專案層信任這一刀是文件寫了、我沒先讀★。
+
+**實驗 4/5(2026-09-04,scratchpad codexfull/;接本篇「沒查/沒測」第二條)**:未信任 repo 裡 `codex exec --sandbox workspace-write -c hooks.*` ——①AGENTS.md 哨兵字與 repo 層 `.agents/skills/` 哨兵字都回到最終回覆(兩者未信任也載入,skill 且被隱式選用)②PreToolUse 攔到 `apply_patch`,`tool_input={"command":"*** Begin Patch\n*** Add File: beta.txt…"}`,沒有 file_path ③攔到 `collaborationspawn_agent`,`tool_input={"task_name","fork_turns":"all","message":"gAAAA…"}`——message 是加密字串,回 updatedInput 改它子代理沒收到(哨兵沒出現)④`matcher="Agent"` 的 PreToolUse 沒攔到 spawn(0 筆)⑤SubagentStart 回 `additionalContext` 的哨兵字被子代理原文回報→這是 Codex 側餵子代理脈絡的可用通道。後續設計見 [[Projects/Codex完全支援_計劃]]。
 
 REVISIT:2026-09-18 若要動候選 1–3 任一項,先補「沒查/沒測」四條裡對應那條,不憑本篇下手。

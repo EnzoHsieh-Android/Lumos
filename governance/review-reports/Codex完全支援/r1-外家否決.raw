@@ -1,0 +1,161 @@
+## Frontmatter / 摘要
+
+1. `spawn_agent` 的派工內容並非不可攔截的「加密字串」：目前官方契約明載其他 local function tools 會把 JSON arguments 交給 hook，且 `spawn_agent` 也匹配 `Agent`；因此以此為地基改走 armed 檔，已被現行契約直接推翻。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#tool-coverage)
+
+severity: blocker ;blocking: 是
+
+引句:「spawn_agent 的 message 在 hook 眼裡是加密字串」
+
+## 一句話
+
+已讀，無 finding。
+
+## 完全支援的定義
+
+2. 「hooks.json 跟 Claude 同形」只在外層事件結構成立，不能推出事件語意、輸出欄位與限制相同；例如 Codex 的 `PreToolUse updatedInput` 必須同時回傳 `permissionDecision:"allow"`，而現行 Claude 派工 hook 只輸出 `updatedInput`。file: `scripts/hooks/claude/dispatch-lens-hook.py:87`
+
+severity: major ;blocking: 是
+
+引句:「hooks.json 的 JSON 結構跟 ~/.claude/settings.json 的 hooks 段一模一樣」
+
+3. skills 表把 `.codex/skills/` 列為 repo 接頭，但官方目前只把 `.agents/skills/` 列為 repo skill discovery 路徑；spec 後文也沒有安裝或驗收 `.codex/skills/`，形成未定義且無測試的相容宣稱。[Codex customization](https://learn.chatgpt.com/docs/customization/overview#skills)
+
+severity: minor ;blocking: 否
+
+引句:「repo 層 .agents/skills/ 或 .codex/skills/」
+
+4. Codex 對 `apply_patch` 已提供 `Edit`、`Write` matcher aliases，並仍回報 canonical `tool_name:"apply_patch"`；因此表中的「Edit/Write 工具若真有」把 matcher alias 誤當獨立工具，也讓後續 payload 分支需求定義錯位。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#pretooluse)
+
+severity: major ;blocking: 是
+
+引句:「Edit/Write 工具若 Codex 真有形狀未見」
+
+5. 「同一批 hook 腳本」現況不能直接成立：`dispatch-lens-hook.py` 硬性要求 `tool_name == "Agent"`、讀 `tool_input.prompt`，若直接改掛 `SubagentStart` 會立即靜默返回。file: `scripts/hooks/claude/dispatch-lens-hook.py:50`
+
+severity: major ;blocking: 是
+
+引句:「五支 hook 各自認 Codex 的 payload 形狀」
+
+## 範圍與明確不做
+
+6. 本節明訂「不寫 TOML」，S2 卻要求安裝 `~/.codex/agents/lumos-reviewer.toml`，屬直接內部矛盾；若真正意思只是「不改 config.toml」，應明寫，否則範圍與交付物無法同時驗收。
+
+severity: blocker ;blocking: 是
+
+引句:「不寫 TOML不動 ~/.codex/config.toml」
+
+## S0 安裝層
+
+7. AGENTS.md 注入沿用的函式會正規化整份檔案的 BOM、CRLF 與尾端空白，所以「sentinel 外文字不動」並不成立；把相同機制擴到 AGENTS.md 會再增加一個可能製造無關 diff 的檔案。file: `scripts/lumos:10583`
+
+severity: major ;blocking: 是
+
+引句:「sentinel 外文字不動既有機制本來就這樣」
+
+8. teardown 的既有編排忽略全域 hook 清理、deinit 與 uninstall 的失敗，最後固定回傳 0；因此新增 Codex 清理後，僅測 happy path 無法支撐「一次全部乾淨」的驗收契約。file: `scripts/lumos:10362`
+
+severity: major ;blocking: 是
+
+引句:「lumos teardown 一次全部乾淨」
+
+9. `lumos-reviewer.toml` 的具體設計只列 `sandbox_mode` 與 `developer_instructions`，漏掉官方要求的必填 `name`、`description`；照 spec 直接產檔會是無效 custom agent。[Codex Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents#custom-agent-file-schema)
+
+severity: major ;blocking: 是
+
+引句:「sandbox_mode=read-only、developer_instructions=templates.md 審查員框架」
+
+## S1 hook 適配
+
+10. 多檔 `apply_patch` 只對第一個非排除檔執行 impact，其餘僅列名，會漏掉其他檔案自己的直接合約、事故與間接關聯；這不符合逐層同套防護的目標，應聚合全部 patch headers 後一次計算或逐檔計算。
+
+severity: major ;blocking: 是
+
+引句:「可能多檔取第一個非排除檔其餘列名」
+
+11. armed 檔只以 repo hash 定址，沒有 `session_id`、`turn_id`、agent id 或一次性 consume；同 repo 任何 session 在 30 分鐘內啟動的所有子代理都可能收到錯誤鏡頭，並非僅限 spec 已承認的「後寫者勝」。
+
+severity: major ;blocking: 是
+
+引句:「armed repo-hash.json含 range、產生時間、TTL 30 分、repo 根」
+
+12. armed workaround 沒有必要性且引入競態：現行 Codex 官方契約明載 `spawn_agent` 匹配 `Agent`，local function arguments 可檢查與 rewrite，應先用真正 canonical tool name 重驗原本的 PreToolUse 路線。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#tool-coverage)
+
+severity: major ;blocking: 是
+
+引句:「matcher Agent 沒攔到 spawn」
+
+13. Codex 官方明示 transcript 格式不是 hooks 的穩定介面；僅以第一行 `session_meta` 判型、沒有 schema/version fixture 與失配偵測，會讓 Stop hook 在升版後靜默漏掉整輪行為。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#common-input-fields)
+
+severity: major ;blocking: 是
+
+引句:「reader 認兩種格式以第一行 session_meta 判 Codex」
+
+## S2 迴圈從 Codex 編排
+
+14. `spawn_agent,agent=lumos-reviewer` 不是本 session 暴露的 `spawn_agent` 介面；目前介面只有 `task_name`、`message`、`fork_turns`，spec 沒交代 custom-agent 名稱如何實際傳入或由模型選中，因此 S2 的核心派工步驟不可機械執行。
+
+severity: major ;blocking: 是
+
+引句:「Codex:spawn_agent,agent=lumos-reviewer」
+
+## S3 量測
+
+15. S3 在尚未確認 `additionalContext` 是否進 transcript 時，就把 recount reader 列為交付與總驗收的一部分；若不存在，spec 自己承認核心分母不可觀測，卻沒有替代事件源、降級後的驗收定義或停止條件。
+
+severity: major ;blocking: 是
+
+引句:「沒有的話利用率在 Codex 側量不到推到眼前那一半」
+
+## 擬裁定理由
+
+16. `project_doc_fallback_filenames` 的確只在同層找不到 `AGENTS.override.md`/`AGENTS.md` 時才使用，但 spec 沒處理 32 KiB 是整條 chain 的合併上限，而非單一 repo 檔預算；直接複製 6.6k 區塊可能截掉更靠近 cwd、優先級更高的 nested 指示。[Codex AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md#how-codex-discovers-guidance)
+
+severity: major ;blocking: 是
+
+引句:「代價每個專案多一個 6.6k 的檔佔 Codex 32 KiB 預算兩成」
+
+## 驗收
+
+17. 驗收只要求 `~/.codex/hooks.json` 有五支註冊且檔案存在，無法證明事件、matcher、輸入與輸出格式真的可用；S0 至少需要逐事件的真 Codex hook smoke，否則錯掛 `SubagentStart` 的腳本也會全綠。
+
+severity: major ;blocking: 是
+
+引句:「~/.codex/hooks.json 五支註冊且檔在」
+
+## 誠實界線
+
+18. 用 `permission_mode` 加 `model` 判斷 Codex 雖符合 Codex payload，但沒有證明 Claude payload 永遠缺這兩欄，因而不是可靠的 harness discriminator；應用明確來源參數、安裝時生成不同薄殼，或記錄 Codex 專有 `turn_id` 並做衝突測試。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#common-input-fields)
+
+severity: major ;blocking: 是
+
+引句:「由 payload 有無 permission_mode+model 欄位判」
+
+## 未解
+
+19. 三個會決定核心可行性的問題被標成「動工前要答」卻又宣稱「不需審查席」，而總驗收依賴其中兩項；它們應升為 S0 entry gate，未通過不得開始實作，而非留在計畫尾端。
+
+severity: major ;blocking: 是
+
+引句:「未解動工前要答不需審查席」
+
+## 實務隱患
+
+20. 並行段把不同 range 導致錯席降格成「不擋任何事」，但派工鏡頭的目的正是讓審查席取得正確影響面；錯誤 context 可能造成漏審，已違反「同一套防護」的驗收定義，不能只因 hook fail-open 就接受。
+
+severity: major ;blocking: 是
+
+引句:「不一致只是鏡頭錯席不擋任何事」
+
+## 合約候選
+
+已讀，無 finding。
+
+## REVISIT
+
+已讀，無 finding。
+
+## 審計修正紀錄
+
+已讀，無 finding。
+
+最嚴重 severity: blocker；blocking: 是共 19 條，blocking: 否共 1 條。
