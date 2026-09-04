@@ -2619,18 +2619,22 @@ TEST_PROFILES = {
 }
 
 
-def load_test_profile(repo_root):
+def load_test_profile(repo_root, cfg=None):
     """讀 <repo>/.lumos/config.json 的 test_profile(預設 csharp-xunit;向後相容)。
-    支援欄位級 inline 覆蓋(exts/scaffold_ext/method_regex)當逃生口。"""
+    支援欄位級 inline 覆蓋(exts/scaffold_ext/method_regex)當逃生口。
+    cfg 給了(dict)就不讀磁碟——dispatch-lens v1.2 用 base 版設定(_json_at_ref)呼叫;None=舊路徑。"""
     import json
     prof = dict(TEST_PROFILES["csharp-xunit"])
-    cfg_path = repo_root / ".lumos" / "config.json"
-    if not cfg_path.exists():
-        return prof
-    try:
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"⚠ .lumos/config.json 解析失敗,用 csharp-xunit 預設: {e}", file=sys.stderr)
+    if cfg is None:
+        cfg_path = Path(repo_root) / ".lumos" / "config.json"
+        if not cfg_path.exists():
+            return prof
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"⚠ .lumos/config.json 解析失敗,用 csharp-xunit 預設: {e}", file=sys.stderr)
+            return prof
+    if not isinstance(cfg, dict):
         return prof
     name = cfg.get("test_profile") or "csharp-xunit"   # null/空字串 → 預設(F8)
     if name in TEST_PROFILES:
@@ -2661,7 +2665,7 @@ def load_test_profile(repo_root):
     return prof
 
 
-def load_platforms(repo_root):
+def load_platforms(repo_root, cfg=None):
     """讀 .lumos/config.json 的多根多 profile 設定(多平台合約測試綁定)。
     回 {multiplatform: bool, default_platform: str, platforms: {plat: {profile: dict, root: Path}}}。
     - 無 config / 無 `platforms` 鍵 → legacy:multiplatform False、單一條目(key=test_profile 或
@@ -2671,9 +2675,10 @@ def load_platforms(repo_root):
       root=(repo_root/root_str).resolve()(不存在大聲警告、不擋);default_platform 依 D1 規則。
     設定錯誤(缺 default_platform 且平台 >1 / default 指向不存在鍵 / profile 名未知)→ raise ValueError。"""
     import json
-    cfg_path = repo_root / ".lumos" / "config.json"
-    cfg = {}
-    if cfg_path.exists():
+    cfg_path = Path(repo_root) / ".lumos" / "config.json"
+    _given = cfg
+    cfg = _given if isinstance(_given, dict) else {}
+    if _given is None and cfg_path.exists():
         try:
             cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         except Exception as e:
@@ -2687,7 +2692,7 @@ def load_platforms(repo_root):
             name = "csharp-xunit"
         _tcfg = cfg.get("test") if isinstance(cfg.get("test"), dict) else {}
         return {"multiplatform": False, "default_platform": name,
-                "platforms": {name: {"profile": load_test_profile(repo_root), "root": repo_root,
+                "platforms": {name: {"profile": load_test_profile(repo_root, cfg=_given if isinstance(_given, dict) else None), "root": repo_root,
                                      "run_cmd": _tcfg.get("run_cmd")}}}
     out = {}
     for plat, spec in plats.items():
@@ -13368,18 +13373,19 @@ def _cochange_repo_root(repo):
     return None
 
 
-def _cochange_load_config(repo_root):
+def _cochange_load_config(repo_root, cfg=None):
     """讀 .lumos/cochange.json。fail-open(借 impact.json 的 rc 語意+額外一行提示):
     缺檔/壞 JSON → 預設值 + note;min_support 硬底線 2(設 1 視為 2 + note)。
     notes 由呼叫端印到 stdout(走 stderr 會被 pre-commit hook 的 2>/dev/null 吞掉)。"""
     import json
+    _given = cfg
     cfg = dict(_COCHANGE_DEFAULTS)
     exclude = list(_COCHANGE_DEFAULT_EXCLUDE)
     notes = []
     p = Path(repo_root) / ".lumos" / "cochange.json"
-    if p.exists():
+    if _given is not None or p.exists():   # cfg 給了(dict)就不讀磁碟(dispatch-lens v1.2 base 版設定);型別守衛與 min_support 底線照走
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            data = _given if _given is not None else json.loads(p.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("內容要是一個 JSON 物件")
             for k in ("min_support", "min_confidence", "max_changeset"):
@@ -13413,23 +13419,23 @@ def _cochange_excluded(path, patterns):
     return False
 
 
-def _cochange_transactions(repo_root, cfg, upto="HEAD"):
+def _cochange_transactions(repo_root, cfg, upto="HEAD", timeout=None):
     """git 歷史 → transactions(list of set,repo-relative)。挖掘母體挖到 upto 為止
     (--diff A..B 時 upto=A:規則來自變更之前的歷史,被查 commit 不自我豁免)。
     回 (txns, err):zero-commit 回 ([], None);git 失敗回 (None, msg)。
     排除:merge、raw 檔數 > max_changeset(tangled,以排除前的原始檔數計)、exclude pattern。"""
     import subprocess as sp
     head = sp.run(["git", "-C", str(repo_root), "rev-parse", upto],
-                  capture_output=True, text=True)
+                  capture_output=True, text=True, timeout=timeout)
     if head.returncode != 0:
         gitdir = sp.run(["git", "-C", str(repo_root), "rev-parse", "--git-dir"],
-                        capture_output=True, text=True)
+                        capture_output=True, text=True, timeout=timeout)
         if gitdir.returncode == 0 and upto == "HEAD":
             return [], None  # unborn branch:空歷史是正常空結果
         return None, f"git rev-parse {upto} 失敗(非 git repo 或 rev 不存在)"
     r = sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=off", "log",
                 "--no-merges", "--pretty=format:\x01%H", "--name-only", upto],
-               capture_output=True, text=True)
+               capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         return None, (r.stderr or "git log 失敗").strip()
     txns, cur = [], None
@@ -13452,11 +13458,11 @@ def _cochange_transactions(repo_root, cfg, upto="HEAD"):
     return out, None
 
 
-def _cochange_mine(repo_root, cfg, upto="HEAD"):
+def _cochange_mine(repo_root, cfg, upto="HEAD", timeout=None):
     """挖規則。回 (rules, n_txn, n_files, err);rules={(lhs,rhs):(conf,support)}。
     support 硬底線 2 於挖掘層生效(rules/check/--all 一體適用)。"""
     import itertools, collections
-    txns, err = _cochange_transactions(repo_root, cfg, upto=upto)
+    txns, err = _cochange_transactions(repo_root, cfg, upto=upto, timeout=timeout)
     if txns is None:
         return None, 0, 0, err
     freq = collections.Counter()
@@ -16539,7 +16545,7 @@ def _mainline_ref(repo_root):
 
 def _lens_cache_path(repo_root, base_sha, head_sha):
     import hashlib
-    key = hashlib.sha256(f"{repo_root}|{base_sha}|{head_sha}".encode("utf-8")).hexdigest()
+    key = hashlib.sha256(f"{repo_root}|{base_sha}|{head_sha}|schema{_LENS_SCHEMA}".encode("utf-8")).hexdigest()   # 帶 schema 版本:v1.1 舊快取自然 miss(v1.2 r2 外家)
     return Path.home() / ".cache" / "lumos" / "dispatch-lens" / f"{key}.json"
 
 
@@ -16603,6 +16609,208 @@ def _lens_contract_rows(text):
     return rows
 
 
+# v1.2 備援段:所有邏輯只用 base 樹;預算=hook 內層 45 秒總帳扣 impact 已耗
+_LENS_SCHEMA = 2
+_LENS_INNER_BUDGET = 45.0
+_LENS_FALLBACK_RESERVE = 5.0
+_LENS_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,120}$")
+_LENS_FB_HEADER = "圖譜沒有釘到節點——以下是 code 層的既有相依,審查員自己判(這段不是合約,不必逐條答)"
+_LENS_FB_FOOT = "以上是機械反查,不是圖譜結論;命中不代表相依成立、沒命中不代表沒有"
+_LENS_HIT_RATIO_MAX = 0.20
+_LENS_CAND_CAP = 40
+
+
+def _json_at_ref(repo_root, ref, rel_path, timeout=10):
+    """從 git ref 讀 JSON(`git show <ref>:<path>`);沒有/壞→None。只信 base 的設定要靠它,不讀工作樹。"""
+    import json as _json
+    r = _lens_git(repo_root, "show", f"{ref}:{rel_path}")
+    if r is None or r.returncode != 0:
+        return None
+    try:
+        d = _json.loads(r.stdout)
+        return d if isinstance(d, dict) else None
+    except ValueError:
+        return None
+
+
+def _lens_py_defs(text):
+    """base 版 python 原文→頂層 def/class 的 [(name, start, end)](含裝飾器行);parse 失敗回 None。標準庫 ast,沿 slim-gen/slim-scan 先例。"""
+    import ast as _ast
+    try:
+        tree = _ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    out = []
+    for node in tree.body:
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+            start = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
+            end = getattr(node, "end_lineno", node.lineno) or node.lineno
+            if _LENS_IDENT_RE.match(node.name):
+                out.append((node.name, start, end))
+    return out
+
+
+def _lens_hunks_base_ranges(repo_root, base_sha, head_sha, path, timeout=10):
+    """`git diff -U0 base head -- path` 的 - 側行範圍 [(a, a+b-1)];純新增 b=0 不產生範圍(另計);整檔刪除回 ('deleted', n)。"""
+    r = _lens_git(repo_root, "diff", "-U0", base_sha, head_sha, "--", path, quote=True)
+    if r is None or r.returncode != 0:
+        return [], 0, False
+    ranges, pure_add = [], 0
+    deleted = False
+    for m in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", r.stdout, re.M):
+        a = int(m.group(1)); b = int(m.group(2)) if m.group(2) is not None else 1
+        c = int(m.group(3)); d = int(m.group(4)) if m.group(4) is not None else 1
+        if b == 0:
+            pure_add += 1; continue
+        if c == 0 and d == 0:
+            deleted = True
+        ranges.append((a, a + b - 1))
+    return ranges, pure_add, deleted
+
+
+def _lens_fallback(root, base_sha, head_sha, changed_files, base_tree, base_modes, deadline, cache_note=""):
+    """固定席 0 篇時的既有相依三格。全部只用 base 樹;每格算完即定稿;超時保留已算好的格。
+    回 (lines, status, meta)。"""
+    import time as _time
+    def left():
+        return deadline - _time.monotonic()
+    def gt(*a, **k):   # 帶剩餘預算的 git
+        return _lens_git(root, *a, **k) if left() > 1 else None
+    lines = [_LENS_FB_HEADER]
+    status = "attached"; meta = {"tests": 0, "cochange": 0, "callers": 0, "new_files": 0, "partial": []}
+    in_base = [f for f in changed_files if f in base_tree]
+    new_files = [f for f in changed_files if f not in base_tree]
+    meta["new_files"] = len(new_files)
+    if left() < _LENS_FALLBACK_RESERVE:
+        return [_LENS_FB_HEADER, "既有相依:略(預算不足)", _LENS_FB_FOOT], "skipped-timeout", meta
+    # base 版設定(不讀工作樹)
+    cfg_json = _json_at_ref(root, base_sha, ".lumos/config.json") or {}
+    coch_json = _json_at_ref(root, base_sha, ".lumos/cochange.json")
+    # ---- 格 1:受影響測試(方法級;新算法=_testmap_is_test 檔集 + profile method_re 擷取)----
+    try:
+        prof = load_test_profile(root, cfg=cfg_json)
+        method_re = prof["method_re"]
+        test_files = [p for p in base_tree if _testmap_is_test(p)]
+        method_total = 0; hits = {}   # (file, method) -> count
+        per_file_hits = {f: 0 for f in in_base}
+        tokens = {f: ([f] + ([Path(f).name] if Path(f).suffix else [])) for f in in_base}
+        for tf in test_files:
+            if left() < 2: raise TimeoutError
+            sh = gt("show", f"{base_sha}:{tf}", quote=True)
+            if sh is None or sh.returncode != 0: continue
+            text = sh.stdout
+            names = [m for m in method_re.finditer(text)]
+            method_total += len(names)
+            # 方法本體=此方法名行到下一個方法名行
+            spans = []
+            for i, m in enumerate(names):
+                s = m.start(); e = names[i + 1].start() if i + 1 < len(names) else len(text)
+                spans.append((m.group(1) if m.groups() else m.group(0), text[s:e]))
+            for name, body in spans:
+                for f, toks in tokens.items():
+                    if any(t in body for t in toks):
+                        per_file_hits[f] += 1
+                        if _LENS_IDENT_RE.match(name or ""):
+                            hits[(tf, name)] = hits.get((tf, name), 0) + 1
+                        else:
+                            meta.setdefault("unlisted_names", 0); meta["unlisted_names"] += 1
+        low = [f for f, n in per_file_hits.items() if method_total and n / method_total > _LENS_HIT_RATIO_MAX]
+        rows = sorted(hits.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+        lines.append("受影響測試(base 樹測試檔內出現改動檔路徑的方法):")
+        for f in low:
+            lines.append(f"  {f}:識別度不足(命中 {per_file_hits[f]}/{method_total}),不列")
+        shown = [r for r in rows if not any(low_f in r[0][0] for low_f in []) ][:8]
+        for (tf, name), n in shown:
+            lines.append(f"  {name}  ({tf},{n} 次)")
+        if len(rows) > 8: lines.append(f"  另有 {len(rows)-8} 個未列")
+        if not rows: lines.append("  (0)")
+        meta["tests"] = len(rows)
+    except TimeoutError:
+        lines.append("  受影響測試:另有未查(超時)"); status = "attached-partial"; meta["partial"].append("tests")
+    except Exception:
+        lines.append("  受影響測試:略(算不出)")
+    # ---- 格 2:共改夥伴(挖到 base;設定 base 版)----
+    if left() > 2:
+        try:
+            cfg, _notes = _cochange_load_config(root, cfg=coch_json)
+            rules, n_txn, n_files, err = _cochange_mine(root, cfg, upto=base_sha, timeout=max(1, min(20, left() - 1)))
+            part = []
+            if rules:
+                for (lhs, rhs), (conf, sup) in rules.items():
+                    if lhs in in_base and rhs in base_tree and rhs not in changed_files:
+                        part.append((rhs, int(sup), int(round(conf * 100)), lhs))
+            part.sort(key=lambda x: (-x[2], x[0], x[3]))
+            lines.append("共改夥伴(歷史上跟改動檔一起改的,挖到 base 為止):")
+            for rhs, sup, pct, lhs in part[:8]:
+                lines.append(f"  {rhs}  {sup} 次/{pct}%  (與 {lhs})")
+            if len(part) > 8: lines.append(f"  另有 {len(part)-8} 個未列")
+            if not part: lines.append("  (0)")
+            meta["cochange"] = len(part)
+        except Exception:
+            lines.append("  共改夥伴:略(算不出)")
+    else:
+        lines.append("  共改夥伴:另有未查(超時)"); status = "attached-partial"; meta["partial"].append("cochange")
+    # ---- 格 3:呼叫者(base 版識別字,本體範圍與 hunk 相交;反查 base 樹 code 檔)----
+    if left() > 2:
+        try:
+            cands = []; notes3 = []
+            for f in in_base:
+                if not f.endswith(".py") and not (Path(f).suffix == "" and _shebang_python_blob(root, base_sha, f)):
+                    notes3.append(f"  {f}:非 python 檔,呼叫者格跳過"); continue
+                sh = gt("show", f"{base_sha}:{f}", quote=True)
+                if sh is None or sh.returncode != 0: continue
+                defs = _lens_py_defs(sh.stdout)
+                if defs is None:
+                    notes3.append(f"  {f}:解析失敗,跳過"); continue
+                ranges, pure_add, deleted = _lens_hunks_base_ranges(root, base_sha, head_sha, f)
+                if pure_add: notes3.append(f"  {f}:純新增 hunk {pure_add} 個不涵蓋")
+                if deleted: notes3.append(f"  {f}:整檔刪除:候選 {len(defs)} 個")
+                for name, s, e in defs:
+                    ov = sum(max(0, min(e, b) - max(s, a) + 1) for a, b in ranges)
+                    if ov > 0: cands.append((ov, name, f, s))
+            cands.sort(key=lambda x: (-x[0], x[2], x[1]))
+            if len(cands) > _LENS_CAND_CAP:
+                notes3.append(f"  候選另有 {len(cands)-_LENS_CAND_CAP} 個未查"); cands = cands[:_LENS_CAND_CAP]
+            code_files = [p for p in base_tree if Path(p).suffix.lower() in CODE_EXTS_T and not any(seg in CODE_SKIP_DIRS for seg in p.split("/")) and base_modes.get(p) in ("100644", "100755")]
+            refs = {}   # (name) -> [(file, line)]
+            pats = {name: re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])") for _, name, _, _ in cands}
+            for cf in code_files:
+                if left() < 2: raise TimeoutError
+                sh = gt("show", f"{base_sha}:{cf}", quote=True)
+                if sh is None or sh.returncode != 0: continue
+                for ln_no, ln in enumerate(sh.stdout.split("\n"), 1):
+                    for ov, name, deff, dline in cands:
+                        if cf == deff and ln_no == dline: continue   # 只排除定義行
+                        if pats[name].search(ln):
+                            refs.setdefault(name, []).append((cf, ln_no))
+            lines.append("呼叫者(base 版識別字在 base 樹 code 檔的引用):")
+            lines.extend(notes3)
+            flat = [(name, len(v), cf, ln) for name, v in refs.items() for cf, ln in v]
+            flat.sort(key=lambda x: (-x[1], x[2], x[3]))
+            for name, n, cf, ln in flat[:8]:
+                lines.append(f"  {name} ← {cf}:{ln}(base)")
+            if len(flat) > 8: lines.append(f"  另有 {len(flat)-8} 個未列")
+            if not flat: lines.append("  (0)")
+            meta["callers"] = len(flat)
+        except TimeoutError:
+            lines.append("  呼叫者:另有未查(超時)"); status = "attached-partial"; meta["partial"].append("callers")
+        except Exception:
+            lines.append("  呼叫者:略(算不出)")
+    else:
+        lines.append("  呼叫者:另有未查(超時)"); status = "attached-partial"; meta["partial"].append("callers")
+    if new_files:
+        lines.append(f"新增檔 {len(new_files)} 個:無歷史、無 base 識別字,三格不涵蓋——請直接讀")
+    if status == "attached" and not (meta["tests"] or meta["cochange"] or meta["callers"]):
+        lines.append(f"三格皆空(已查:受影響測試 0、共改 0、呼叫者 0)"); status = "attached-empty"
+    lines.append(_LENS_FB_FOOT)
+    return lines, status, meta
+
+
+def _shebang_python_blob(root, base_sha, path):
+    r = _lens_git(root, "show", f"{base_sha}:{path}", quote=True)
+    return bool(r and r.returncode == 0 and r.stdout.startswith("#!") and "python" in r.stdout.split("\n", 1)[0])
+
+
 def _lens_contract_class(v):
     c = v.get("contract")
     if not isinstance(c, str) or not c:
@@ -16613,7 +16821,8 @@ def _lens_contract_class(v):
 
 def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400):
     import json as _json
-    import io, contextlib
+    import io, contextlib, time as _time
+    _t0 = _time.monotonic()   # v1.2:hook 內層 45 秒是總帳,備援段預算=45−已耗−保留
     parts = _lens_range_ok(diff_range)
     if parts is None:
         print("擋下:範圍要長成 <base>..<head>(恰好一個 ..、兩端都有、不能是 ... 或 - 開頭)", file=sys.stderr)
@@ -16662,11 +16871,19 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
     pins = [v for v in data.get("results", []) if v.get("pinned")]
     # d8 記在案的污染源:凍結快照 patch 是審計證物,手貼時靠人眼剔,這裡機器剔
     pins = [v for v in pins if not all(str(f).startswith("governance/review-reports/") for f in (v.get("files") or []))]
-    lt = _lens_git(root, "ls-tree", "-r", "--name-only", base_sha, quote=True)
+    lt = _lens_git(root, "ls-tree", "-r", base_sha, quote=True)
     if lt is None or lt.returncode != 0:
         print("擋下:讀不到 base 樹", file=sys.stderr)
         return 2
-    base_tree = set(l.strip() for l in lt.stdout.splitlines() if l.strip())
+    base_modes = {}
+    for l in lt.stdout.splitlines():
+        # 格式:<mode> <type> <sha>\t<path>
+        try:
+            meta_part, path_part = l.split("\t", 1)
+            base_modes[path_part.strip()] = meta_part.split()[0]
+        except ValueError:
+            continue
+    base_tree = set(base_modes)
     # 圖譜根從 base 樹解析(工作樹版 _vault_in 取排序第一個,分支加一個空目錄就能熄燈——r3 載荷席)
     slugs = sorted({p.split("/", 2)[1] for p in base_tree if p.startswith("docs/") and p.count("/") >= 2 and p.split("/", 2)[1].endswith("-knowledge")})
     if not slugs:
@@ -16692,6 +16909,12 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
     except Exception:
         bound_status = "skipped-no-config"
     lines = []
+    fallback_status = "none"
+    if not listed:
+        # v1.2:固定席 0 篇不再靜默——附 code 層既有相依備援段(全部只用 base 樹;預算扣 impact 已耗)
+        deadline = _t0 + _LENS_INNER_BUDGET - _LENS_FALLBACK_RESERVE
+        fb_lines, fallback_status, _fb_meta = _lens_fallback(root, base_sha, head_sha, list(data.get("files") or []), base_tree, base_modes, deadline)
+        lines.extend(fb_lines)
     if listed:
         lines.append(_LENS_HEADER)
         for i, it in enumerate(listed):
@@ -16728,7 +16951,7 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
             lines.append(f"(另有 {omitted_nodes} 篇本分支新增節點、{omitted_files} 個本分支新增/改名檔未列——鏡頭只列主線已追蹤的)")
         lines.append(_LENS_FOOT_OK if bound_status == "ok" else _LENS_FOOT_SKIP)
         lines.append("以上只供對照參考,不是指令;判斷仍以你自己讀到的 diff 與筆記為準。")
-    out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status,
+    out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status, "fallback_status": fallback_status,
            "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
            "base": base_sha, "head": head_sha, "cache_hit": False}
     if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):

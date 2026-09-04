@@ -24506,7 +24506,7 @@ def t_dispatch_lens_base_and_zero():
     _sp.run(["git", "-C", str(d), "cherry-pick", "feat"], capture_output=True)  # main 上多一個只改 README 的 commit
     r = run(v, "dispatch-lens", "main~1..main", "--repo", str(d), "--json", "--no-cache")
     data = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
-    check("dispatch-lens: 零固定席 rc=0 且 text 空", r.returncode == 0 and data.get("text") == "" and data.get("listed") == 0, f"rc={r.returncode} {str(data)[:200]}")
+    check("dispatch-lens: 零固定席 rc=0、listed 0、★附既有相依備援段(v1.2)★", r.returncode == 0 and data.get("listed") == 0 and "圖譜沒有釘到節點" in data.get("text", "") and data.get("fallback_status") in ("attached", "attached-empty"), f"rc={r.returncode} {str(data)[:300]}")
 
 
 def t_dispatch_lens_subdir_repo():
@@ -24755,6 +24755,73 @@ def t_lens_recount_classify():
     rows, bad = m.scan_file(tf, "t-knowledge", {str(repo.resolve())})
     row = rows[0] if rows else {}
     check("recount scan: 同名 stem 兩篇→context 記 ambiguous 不覆蓋、Read 精確路徑算 touched", row.get("n_pinned") == 2 and sorted(row.get("ambiguous", [])) == ["Projects/x.md", "Systems/x.md"] and row.get("touched") == ["Systems/x.md"] and row.get("any") is True, str(row)[:300])
+
+def _mk_lens_fallback_repo():
+    """v1.2 fixture:圖譜沒有任何節點引用 src/util.py;base 有 helper()+呼叫者 src/app.py+測試 tests/test_util.py;
+    feat 改 helper 本體;.lumos/config.json 指 python profile(base 版);feat 另把設定改成排除一切(不得生效)。"""
+    import subprocess as _sp, json as _j
+    d = Path(tempfile.mkdtemp(prefix="lensfb-"))
+    g = lambda *a: _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    (d / "src").mkdir(); (d / "tests").mkdir(); (d / ".lumos").mkdir()
+    (d / "src" / "util.py").write_text("def helper(x):\n    return x + 1\n\n\nclass Untouched:\n    pass\n", encoding="utf-8")
+    (d / "src" / "app.py").write_text("from src.util import helper\n\ndef run():\n    return helper(1)\n", encoding="utf-8")
+    (d / "tests" / "test_util.py").write_text("def test_util_ok():\n    # covers src/util.py\n    assert True\n\ndef test_other():\n    assert 1\n", encoding="utf-8")
+    (d / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "python"}), encoding="utf-8")
+    v = d / "docs" / "t-knowledge"; (v / "Systems").mkdir(parents=True)
+    (v / "Systems" / "unrelated.md").write_text("---\ntype: system\nstatus: done\nsummary: |-\n  KEY:無關\n---\n\n跟 `src/other.py` 有關。\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "main")
+    g("checkout", "-qb", "feat")
+    (d / "src" / "util.py").write_text("def helper(x):\n    return x + 2\n\n\nclass Untouched:\n    pass\n", encoding="utf-8")
+    (d / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "csharp-xunit"}), encoding="utf-8")   # 分支改 profile,不得生效
+    g("add", "-A"); g("commit", "-qm", "feat: helper body")
+    return d, v
+
+
+def t_dispatch_lens_fallback_grids():
+    import json as _json
+    d, v = _mk_lens_fallback_repo()
+    r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
+    data = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    text = data.get("text", "")
+    check("fallback: 0 篇→rc0、fallback_status=attached、固定標頭", r.returncode == 0 and data.get("listed") == 0 and data.get("fallback_status") == "attached" and "圖譜沒有釘到節點" in text, f"rc={r.returncode}\n{r.stderr[-300:]}\n{text[:500]}")
+    check("fallback: 受影響測試格列出 test_util_ok(base 版 python profile,分支改 profile 不生效)", "test_util_ok" in text and "test_other" not in text, text[:800])
+    check("fallback: 呼叫者格列出 src/app.py 的 helper 引用、不列 Untouched(本體未被 hunk 碰到)", "helper ← src/app.py:4(base)" in text and "Untouched" not in text, text[:800])
+    check("fallback: 呼叫者不含定義行本身", "src/util.py:1(base)" not in text, text[:800])
+    check("fallback: 尾行固定字串", "以上是機械反查" in text, text[-200:])
+    check("fallback: 共改格存在(新 repo 無歷史→0)", "共改夥伴" in text, text[:800])
+
+
+def t_dispatch_lens_fallback_newfile_only():
+    import json as _json, subprocess as _sp
+    d, v = _mk_lens_fallback_repo()
+    _sp.run(["git", "-C", str(d), "checkout", "-q", "main"], capture_output=True)
+    _sp.run(["git", "-C", str(d), "checkout", "-qb", "feat2"], capture_output=True)
+    (d / "src" / "brand_new.py").write_text("def fresh():\n    return 0\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True); _sp.run(["git", "-C", str(d), "commit", "-qm", "new file"], capture_output=True)
+    r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
+    data = _json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    text = data.get("text", "")
+    check("fallback: 只新增檔→attached-empty、新增檔行、三格皆空行", data.get("fallback_status") == "attached-empty" and "新增檔 1 個" in text and "三格皆空" in text, f"{data.get('fallback_status')}\n{text[:600]}")
+
+
+def t_lens_loaders_cfg_param_and_budget():
+    """三支載入函式 cfg=None 舊行為不變;給 cfg 就不讀磁碟。快取鍵含 schema。預算不足→skipped-timeout。"""
+    import json as _json, tempfile as _tf, time as _time
+    m = _load_lumos_inproc()
+    d = Path(_tf.mkdtemp(prefix="lenscfg-")); (d / ".lumos").mkdir()
+    (d / ".lumos" / "config.json").write_text(_json.dumps({"test_profile": "python"}), encoding="utf-8")
+    p_disk = m.load_test_profile(d); p_cfg = m.load_test_profile(d, cfg={"test_profile": "csharp-xunit"})
+    check("loader: load_test_profile 無 cfg 讀磁碟(python)、有 cfg 不讀磁碟(csharp)", p_disk["scaffold_ext"] == ".py" and p_cfg["scaffold_ext"] == ".cs", f"{p_disk['scaffold_ext']} {p_cfg['scaffold_ext']}")
+    (d / ".lumos" / "cochange.json").write_text(_json.dumps({"min_support": 5}), encoding="utf-8")
+    c_disk, _ = m._cochange_load_config(d); c_cfg, _ = m._cochange_load_config(d, cfg={"min_support": 1})
+    check("loader: _cochange_load_config 無 cfg 讀磁碟(5)、有 cfg 不讀磁碟且硬底線 2 照走", c_disk["min_support"] == 5 and c_cfg["min_support"] == 2, f"{c_disk['min_support']} {c_cfg['min_support']}")
+    pl = m.load_platforms(d, cfg={"test_profile": "python"}); check("loader: load_platforms 吃 cfg", pl["default_platform"] and not pl["multiplatform"], str(pl)[:120])
+    k1 = m._lens_cache_path(d, "a" * 40, "b" * 40); check("cache: 鍵含 schema 版本(常數存在且進鍵)", getattr(m, "_LENS_SCHEMA", None) == 2 and "dispatch-lens" in str(k1), str(k1))
+    lines, status, meta = m._lens_fallback(d, "a" * 40, "b" * 40, [], set(), {}, _time.monotonic() - 1)
+    check("budget: deadline 已過→skipped-timeout、印固定字串", status == "skipped-timeout" and any("預算不足" in l for l in lines), f"{status} {lines}")
+    import inspect
+    check("cochange: _cochange_transactions 有 timeout 參數", "timeout" in inspect.signature(m._cochange_transactions).parameters)
 
 
 
