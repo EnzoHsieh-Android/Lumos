@@ -11,8 +11,20 @@ import shutil
 import sys
 from pathlib import Path
 
-SETTINGS = Path.home() / ".claude" / "settings.json"
-HOOKS_DIR = Path.home() / ".claude" / "hooks"
+# ── 兩家目標(Projects/Codex完全支援_計劃 d2,2026-09-04)──
+# Claude Code:~/.claude/settings.json 的 hooks 段;Codex CLI:~/.codex/hooks.json 頂層 hooks 段。
+# 兩者外層 JSON 同形(事件→[{matcher?,hooks:[{type,command,timeout}]}]),內層語意不同:
+# matcher 名、payload 形狀、輸出欄位各自查(r1 外家 F2)。★不碰 ~/.codex/config.toml★(stdlib 無 TOML 寫入器)。
+TARGET = "codex" if "--target=codex" in sys.argv or ("--target" in sys.argv and
+         sys.argv[sys.argv.index("--target") + 1:][:1] == ["codex"]) else "claude"
+if TARGET == "codex":
+    SETTINGS = Path.home() / ".codex" / "hooks.json"
+    HOOKS_DIR = Path.home() / ".codex" / "hooks"
+    _HOOKS_SUBDIR = ".codex/hooks/"
+else:
+    SETTINGS = Path.home() / ".claude" / "settings.json"
+    HOOKS_DIR = Path.home() / ".claude" / "hooks"
+    _HOOKS_SUBDIR = ".claude/hooks/"
 
 _PY = shutil.which("python3") or shutil.which("python") or "python3"
 # W3:${HOME} 只有 POSIX shell 展開;native Windows(Claude Code 經 cmd/PowerShell 跑 hook)
@@ -24,10 +36,13 @@ def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
     # W6:Claude Code 在 Windows 用 Git Bash 跑 hook command → 反斜線會被 shell 吃掉
     # (C:\Users → C:Users → python 找不到 → hook 靜默失敗)。故 Windows 下 python 路徑與
     # home 都用正斜線 + 引號。Unix 保留 ${HOME}(可攜、Mac 已驗)。
+    # Codex 目標:命令列帶明確 --harness codex(d2:hook 靠旗標分支,不由 payload 欄位猜家族;
+    # 現役五支 hook 都不讀 argv,多帶旗標無害,S1 再各自認旗標)。
+    suffix = " --harness codex" if TARGET == "codex" else ""
     if sys.platform == "win32":
         py = _PY.replace("\\", "/")
-        return f'"{py}" "{_HOME}/.claude/hooks/{rel_path}"'
-    return f'{_PY} "${{HOME}}/.claude/hooks/{rel_path}"'
+        return f'"{py}" "{_HOME}/{_HOOKS_SUBDIR}{rel_path}"{suffix}'
+    return f'{_PY} "${{HOME}}/{_HOOKS_SUBDIR}{rel_path}"{suffix}'
 
 
 HOOK_ENTRIES = {
@@ -111,6 +126,32 @@ HOOK_ENTRIES = {
 }
 
 
+def _codex_entries(entries: dict) -> dict:
+    """Claude 註冊表 → Codex 註冊表(Projects/Codex完全支援_計劃 S0-2 對照表,2026-09-04 實測 0.144.1):
+    · SessionStart / Stop:同名同形。
+    · PreToolUse `Edit|Write|MultiEdit` → matcher `apply_patch`(Codex 改檔工具;Edit/Write 只是它的別名,
+      tool_name 仍回 apply_patch;tool_input 是 patch 全文沒有 file_path——S1 適配 impact-hook)。
+    · PreToolUse `Agent`(派工鏡頭)→ 改掛 `SubagentStart`(無 matcher):spawn_agent 的 message 對 hook
+      是密文改不了(實驗 A),子代理開場的 additionalContext 才到得了子代理(實驗 5)。
+    其餘事件原樣。"""
+    out = {}
+    for event, arr in entries.items():
+        for e in arr:
+            ne = dict(e)
+            ev = event
+            if event == "PreToolUse" and e.get("matcher") == "Edit|Write|MultiEdit":
+                ne["matcher"] = "apply_patch"
+            elif event == "PreToolUse" and e.get("matcher") == "Agent":
+                ev = "SubagentStart"
+                ne.pop("matcher", None)
+            out.setdefault(ev, []).append(ne)
+    return out
+
+
+if TARGET == "codex":
+    HOOK_ENTRIES = _codex_entries(HOOK_ENTRIES)
+
+
 def _prune_dangling(settings: dict) -> list:
     """剪掉指向 ~/.claude/hooks/ 下「不存在檔案」的 hook 註冊(懸空只會每回合報錯)。
     起因 2026-07-07 現場事故:code-loop-guard.py 被工具鏈更新刪除、settings 註冊沒清 →
@@ -123,7 +164,7 @@ def _prune_dangling(settings: dict) -> list:
             kept_hooks = []
             for h in entry.get("hooks", []):
                 cmd = h.get("command", "")
-                if ".claude/hooks/" in cmd.replace("\\", "/"):
+                if _HOOKS_SUBDIR in cmd.replace("\\", "/"):
                     script = _hook_script(cmd)
                     if script.endswith(".py") and not (HOOKS_DIR / script).exists():
                         pruned.append((event, script))
@@ -160,7 +201,7 @@ def main() -> int:
         try:
             settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
-            print(f"ERROR: {SETTINGS} JSON 損毀: {e}", file=sys.stderr)
+            print(f"ERROR: {SETTINGS} JSON 損毀: {e}(hooks 設定檔壞掉,本次不動它;修好 JSON 再跑一次 lumos install)", file=sys.stderr)
             return 1
     else:
         settings = {}
@@ -207,7 +248,7 @@ def main() -> int:
         settings["hooks"][event] = kept
 
     if not changed:
-        print("settings.json 已經是最新狀態,無需修改")
+        print(f"{SETTINGS.name} 已經是最新狀態,無需修改")
         return 0
 
     # Backup before write

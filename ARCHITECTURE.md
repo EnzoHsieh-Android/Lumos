@@ -20,8 +20,8 @@ flowchart TB
 
     subgraph USER["① user-scope (每台機器一份)"]
         direction TB
-        USKILL["~/.claude/skills/lumos-*<br/>(symlink → Lumos repo)"]
-        UCHOOK["~/.claude/hooks/ + settings.json<br/>(給 AI 的提示 hooks + 註冊)"]
+        USKILL["~/.claude/skills/* 與 ~/.agents/skills/*<br/>(symlink → Lumos repo;後者給 Codex 讀)"]
+        UCHOOK["~/.claude/hooks/ + settings.json<br/>~/.codex/hooks/ + hooks.json<br/>(同一批 hook 腳本,兩家各一份註冊)"]
         UBIN["~/.local/bin/lumos<br/>(全域指令 symlink)"]
     end
 

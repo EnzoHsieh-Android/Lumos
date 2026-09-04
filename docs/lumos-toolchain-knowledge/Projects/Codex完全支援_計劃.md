@@ -77,7 +77,9 @@ lumos 的六層防護(指示 / skills / hooks / 迴圈編排 / 量測 / 安裝�
 - **做**:上表六層在 Codex CLI(本機 0.144.1)下接上;主驗場=隔離 HOME+CODEX_HOME 下的 `codex exec`(★只在這個隔離環境、且 hooks.json 只含 lumos 五支時才帶 `--dangerously-bypass-hook-trust`★);互動模式做一次人工信任冒煙(見驗收)。
 - **不做**:①不把 Codex 當 MCP server、不用 `codex review`(調研候選 ②;候選 ① `--output-schema` 另開小案)②★不解析、不改寫既有 `~/.codex/config.toml`★(S2 的 agent TOML 是新建檔,用字串範本寫出、不需 TOML 寫入器)③不支援 Codex 專案層 hook(文件明寫專案層 `.codex/` 要信任才載入;實驗 1 測的是 `.codex/config.toml` 的 `[hooks]`,`.codex/hooks.json` 這個檔沒單獨測,兩檔並存規則見 S0 進場 2)④不做 Windows 的 Codex 路徑(只保證不炸)⑤不替使用者按信任、不寫信任存放處(那是 Codex 的安全控制)。
 
-## S0 進場條件(r1 折入:未解四題先答,答不出不開工)
+## S0 進場條件(r1 折入:未解四題先答,答不出不開工)——★2026-09-04 四題全答(隔離 HOME 實驗,scratchpad entry/)★
+
+答案:1 `~/.agents/skills/` 使用者層★會載入★(HOME 指隔離目錄,哨兵 skill 被列出並帶識別碼)→ 不需 repo 層備援,install 直接連。2 `config.toml [hooks]` 與 `hooks.json` ★兩邊都跑★(各記到一筆,合併不覆蓋)→ 寫 hooks.json 不會蓋掉使用者自己在 toml 裡的 hook。3 matcher ★只有完整名 `collaborationspawn_agent` 命中★(`spawn_agent`、`Agent` 各 0 筆,三次分開跑)。4 逐字稿 shell 呼叫★明文★:型別 `custom_tool_call`、name `exec`、input 是一段 JS `tools.exec_command({"cmd":"cat alpha.py",…})`——可正規式抽 cmd,但不是 Claude 那種 `input.command` 結構。
 
 1. `~/.agents/skills/` 使用者層 Codex 會不會載入(隔離 HOME 跑一次列 skills)。不載入→備援=`lumos init` 在 repo 層放 `.agents/skills/` symlink(已證載入),兩條都寫進 install。
 2. `config.toml [hooks]` 與 `hooks.json` 並存時的規則(合併/覆蓋)。
@@ -158,6 +160,15 @@ S1 驗收(隔離 HOME+CODEX_HOME 真跑 `codex exec` 帶旗標,hook 命令列包
 
 REVISIT:2026-09-25 互動模式 Codex 信任冒煙(驗收第 5 條)。
 REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/probe 有無真實使用(0 筆=沒人用 Codex 開 lumos 專案,S2/S3 降優先);同日抽看 armed token 有沒有被無關子代理搶走(通才 r2 F1 界線)。
+
+## 實作紀錄 S0(2026-09-04,r2 過閘、四條裁定記入後同日動工)
+
+- **合併器**(`scripts/merge-claude-settings.py`):`--target codex` → 寫 `~/.codex/hooks.json`、hook 目錄 `~/.codex/hooks/`;對照表 `_codex_entries`(Edit|Write|MultiEdit→apply_patch;PreToolUse Agent→SubagentStart 無 matcher;其餘同名);命令列尾帶 `--harness codex`;懸空剪除只認自家子目錄;壞 JSON 回 1 且訊息講「設定檔壞、修好再跑」。
+- **lumos 本體**:`_GLOBAL_HOOKS` 別名、`_SKILL_MARKER`、`_HARNESS_HOME`;`_sync_global_hooks(src, harness)` 三態 ok/probe/merge-failed/absent(`_sync_global_claude` 留包裝回 bool)、`_sync_msg` 三態各印各的(Codex ok 附「開互動 codex 審一次,hook 檔更新要再審」);`_teardown_global_hooks` 兩家;`_install_skills` 多連 `~/.agents/skills`(`_link_or_copy_shared`:非我方真目錄跳過+warn;fallback 複製寫 `.lumos-managed`);`cmd_uninstall` 只清 symlink/帶標記目錄;`_agents_target`/`_reinject_targets`/`_reinject_all`,`_reinject_claude_block(..., target=)` 檔頭依目標名、AGENTS 檔插第一個標題後(無標題→檔首)、既有 AGENTS 檔首次注入印前 8 行;`_deinit_strip_claude` 兩檔;doctor Check D 目標清單化+預算估算(該層生效檔/32768,>75% warn);enforcement 加 9 列(見 [[Projects/enforcement儀表板_計劃]] KEY),`registered-trust-unknown` 不進 summary 分母,沒 `~/.codex` 的機器 Codex 列全 unknown(★偏離 spec 原文「inactive」:inactive 會讓入口 hook 對沒裝 Codex 的機器每 session 唸;偵測只看 `~/.codex` 目錄不看 PATH,結果才跟 HOME 隔離測試一致★)。
+- **本 repo AGENTS.md** 第 4 條改角色條件句(r2 整合 F12);`install.sh`/`ARCHITECTURE.md` 同步字句。
+- **測試**(+6,-0,改 2):`t_codex_merge_target`/`t_codex_sync_global_tristate`/`t_codex_teardown_global`/`t_codex_skills_shared_dir`/`t_codex_reinject_agents_targets`/`t_codex_enforcement_rows`;enforcement 列數 12→21、unknown 2→10 兩測改釘值。
+- **驗收**:[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]——隔離 HOME+CODEX_HOME 真跑 `codex exec`(帶旗標)五支 hook 各 fire 一次;init 後 AGENTS/CLAUDE 各一區塊、agents-md active、Check D 兩檔綠;teardown 後三處全空、AGENTS 自有內容留。
+- **沒做(留 S1)**:五支 hook 對 `--harness codex` 目前只是「不讀 argv 所以無害」,行為分支(apply_patch 取檔、SubagentStart 讀 armed 檔、Codex 逐字稿 reader)全在 S1;S1 進場前先答「`Edit`/`Write` 在 Codex 是不是獨立工具」——文件說是別名,沒實測。
 
 ## 審計修正紀錄(lumos-design-loop)
 

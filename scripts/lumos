@@ -1540,7 +1540,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     # 範本 scripts/templates/graph-discipline.md ↔ CLAUDE.md sentinel block body。
     # guard: 範本不存在 → skip(不算 issue);CLAUDE.md absent → skip(未注入過的 repo 不罰)。
     # broken → 報漂移(算 issue,但不取 .body 避免 crash)。
-    section("D", "專案 CLAUDE.md 裡的工具鏈紀律區塊,跟範本有沒有對上")
+    section("D", "專案 CLAUDE.md 與 Codex 指示檔(AGENTS.md)裡的工具鏈紀律區塊,跟範本有沒有對上")
     if repo_root is None:
         print("  (無 docs/ 佈局,略過 Check D)")
     else:
@@ -1552,30 +1552,42 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         if expected_body is None:
             print("  (無 scripts/templates/graph-discipline.md 範本,略過 Check D)")
         else:
-            # 讀 CLAUDE.md
-            _d_cm = repo_root / "CLAUDE.md"
-            if not _d_cm.exists():
-                print("  (無 CLAUDE.md,略過 Check D — 尚未注入無需比對)")
-            else:
+            # 目標清單=CLAUDE.md + Codex 指示檔(d1;三端共用同一份清單)
+            for _d_name in _reinject_targets(repo_root):
+                _d_cm = repo_root / _d_name
+                if not _d_cm.exists():
+                    print(f"  (無 {_d_name},略過 — 尚未注入無需比對)")
+                    continue
                 _d_text = _d_cm.read_bytes()
                 if _d_text.startswith(b"\xef\xbb\xbf"):
                     _d_text = _d_text[3:]
                 _d_text = _d_text.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
                 _d_state, _d_span = _extract_claude_block_span(_d_text)
                 if _d_state == "absent":
-                    print("  (CLAUDE.md 無 sentinel 區塊,略過 Check D — 尚未注入)")
+                    print(f"  ({_d_name} 無 sentinel 區塊,略過 — 尚未注入)")
                 elif _d_state == "broken":
-                    warn(["CLAUDE.md 紀律區塊的起訖標記 sentinel 損壞(只剩頭或只剩尾)——用 lumos update(或 lumos init)修復"],
-                         "CLAUDE.md sentinel 損壞(broken)— 無法比對,視為漂移:",
+                    warn([f"{_d_name} 紀律區塊的起訖標記 sentinel 損壞(只剩頭或只剩尾)——用 lumos update(或 lumos init)修復"],
+                         f"{_d_name} sentinel 損壞(broken)— 無法比對,視為漂移:",
                          "lumos init --force 或 lumos update 修復 sentinel 再重驗")
                 else:
                     # found: 比對 body
                     if _d_span.body == expected_body:
-                        ok("CLAUDE.md 的工具鏈紀律區塊跟範本一致")
+                        ok(f"{_d_name} 的工具鏈紀律區塊跟範本一致")
                     else:
-                        warn(["CLAUDE.md 紀律區塊跟範本不同步——用 lumos update(或 lumos init)刷新"],
-                             "CLAUDE.md 紀律區塊漂移(與範本不一致):",
-                             "lumos update 或 lumos init --force 刷新 CLAUDE.md 紀律區塊")
+                        warn([f"{_d_name} 紀律區塊跟範本不同步——用 lumos update(或 lumos init)刷新"],
+                             f"{_d_name} 紀律區塊漂移(與範本不一致):",
+                             f"lumos update 或 lumos init --force 刷新 {_d_name} 紀律區塊")
+            # Codex 把 git 根到 cwd 每層生效的那一個 AGENTS 檔串起來,合計上限 32 KiB、超過靜默截斷
+            # (官方文件;r1 邊界 F6b)。這裡只估本 repo 根這一層(有 override 只算 override),>75% 提醒。
+            _d_eff = repo_root / _agents_target(repo_root)
+            if _d_eff.exists():
+                _d_bytes = _d_eff.stat().st_size
+                if _d_bytes > 32768 * 0.75:
+                    warn([f"{_d_eff.name} 有 {_d_bytes} bytes,Codex 整鏈 AGENTS 檔上限 32768、超過會靜默截掉後面——把非必要內容搬走或縮短"],
+                         f"{_d_eff.name} 佔 Codex 指示預算 {_d_bytes * 100 // 32768}%(>75%):",
+                         "縮短該檔或把長內容移到圖譜筆記")
+                else:
+                    print(f"  {_d_eff.name} {_d_bytes} bytes,佔 Codex 指示預算 {_d_bytes * 100 // 32768}%(上限 32768,超過靜默截斷)")
     print()
 
     section("V", "寫了「這個結論在什麼前提下成立」的筆記,有多少超過 90 天沒回頭看(提醒,不擋)")
@@ -10232,10 +10244,9 @@ def cmd_install(force=False):
     _install_skills()
     # 全域 ~/.claude hooks/settings 同步(install全域hook同步_計劃:全域機器自癒——
     # copy 現役 hooks + 刪已撤除 hook 殘留 + prune 懸空註冊;來源=來源 repo 自身)
-    if _sync_global_claude(Path(__file__).resolve().parent.parent):   # r3:接上 bool 契約,別無條件印成功(cmd_install 已在入口擋 probe,此為契約一致性)
-        print("  ✓ 全域 Claude hooks/settings 已同步(含清撤除的舊 Stop 註冊)")
-    else:
-        print("  ⚠ 全域 Claude hooks/settings 同步被擋(LUMOS_PROBE)——未動 ~/.claude")
+    _src_repo = Path(__file__).resolve().parent.parent
+    for _h in ("claude", "codex"):            # r3:接上契約,別無條件印成功;三態各印各的(r2 邊界 N2)
+        print(_sync_msg(_h, _sync_global_hooks(_src_repo, _h)))
     # PATH 檢查(r1-F7:用 os.pathsep,Windows 是 ;)
     if str(bindir) not in os.environ.get("PATH", "").split(os.pathsep):
         hint = (f'  Windows:把 {bindir} 加進使用者 PATH(系統環境變數)'
@@ -10272,6 +10283,19 @@ def cmd_uninstall():
             except OSError:
                 shutil.rmtree(d, ignore_errors=True)
             removed.append(str(d))
+    shared = Path.home() / ".agents" / "skills"   # Codex 側(開放共用目錄):只收 symlink 與帶標記的複製物
+    for s in _SKILLS:
+        d = shared / s
+        if d.is_symlink():
+            d.unlink(); removed.append(str(d))
+        elif d.is_dir():
+            if (d / _SKILL_MARKER).exists():
+                shutil.rmtree(d, ignore_errors=True); removed.append(str(d))
+            else:
+                try:
+                    os.rmdir(d); removed.append(str(d))     # 空夾/junction
+                except OSError:
+                    print(f"  ⚠ {d} 不是 lumos 裝的(無標記檔),保留不動", file=sys.stderr)
     if removed:
         print("✓ 移除:\n  " + "\n  ".join(removed))
     else:
@@ -10360,7 +10384,8 @@ def cmd_teardown(yes=False, source=None):
             return 0
     # 三步(全域先)
     print("① 全域 hook 清理…")
-    _teardown_global_claude(Path(__file__).resolve().parent.parent)
+    _teardown_global_hooks(Path(__file__).resolve().parent.parent, "claude")
+    _teardown_global_hooks(Path(__file__).resolve().parent.parent, "codex")
     print("② 拆專案層(deinit,保留圖譜)…")
     rc_deinit = cmd_deinit(keep_graph=True, yes=True, source=source)
     print("③ 拆機器 CLI/skills(uninstall)…")
@@ -10575,8 +10600,47 @@ def _expected_claude_body(root: Path, slug: str) -> "str | None":
 
 
 
-def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
-    """讀 vendored 範本 → {{KG}} 替換 → 組 sentinel block → 依三態更新 CLAUDE.md。
+def _agents_target(root: Path) -> str:
+    """Codex 讀的指示檔名:該層有 AGENTS.override.md 就只讀它(官方規則),否則 AGENTS.md(d1)。"""
+    return "AGENTS.override.md" if (root / "AGENTS.override.md").exists() else "AGENTS.md"
+
+
+def _reinject_targets(root: Path):
+    """紀律區塊的目標清單:CLAUDE.md(Claude Code)+ Codex 的指示檔;注入/剝除/Check D 三端共用(r1 整合 F1/F2)。"""
+    return ("CLAUDE.md", _agents_target(root))
+
+
+def _reinject_all(root: Path, slug: str, quiet=False):
+    """對所有目標各跑一次 _reinject_claude_block,印人話,回 {target: ReInjectResult}。
+    既有 AGENTS 檔第一次被注入(appended)時印它前 8 行——語意衝突機器判不了(r2 整合 F12)。"""
+    out = {}
+    for t in _reinject_targets(root):
+        ri = _reinject_claude_block(root, slug, target=t)
+        out[t] = ri
+        if quiet:
+            continue
+        if ri.status == "updated":
+            print(f"  {t} 紀律區塊已更新")
+            if ri.diff and t == "CLAUDE.md":
+                for line in ri.diff.splitlines()[:20]:  # 最多印 20 行 diff 摘要
+                    print(f"    {line}")
+        elif ri.status in ("created", "appended"):
+            print(f"  {t} 紀律區塊已注入({ri.status})")
+            if ri.status == "appended" and t != "CLAUDE.md":
+                head = (root / t).read_text(encoding="utf-8", errors="replace").splitlines()
+                own = [l for l in head if "LUMOS:GRAPH-DISCIPLINE" not in l][:8]
+                print(f"  ★{t} 原本就有內容,看一眼它跟紀律區塊有沒有互相打架(機器判不了語意):")
+                for l in own:
+                    print(f"    | {l[:100]}")
+        elif ri.status == "sentinel_broken":
+            print(f"  ⚠ {t} sentinel 半壞,未自動覆蓋,請檢查", file=sys.stderr)
+        # unchanged / no_template → 靜默
+    return out
+
+
+def _reinject_claude_block(root: Path, slug: str, target: str = "CLAUDE.md") -> "ReInjectResult":
+    """讀 vendored 範本 → {{KG}} 替換 → 組 sentinel block → 依三態更新 target(預設 CLAUDE.md;
+    Codex 的 AGENTS.md / AGENTS.override.md 走同一段,d1)。
 
     status ∈ created|updated|unchanged|appended|sentinel_broken|no_template。
     diff:僅 updated 帶 difflib.unified_diff 字串,其餘 None。
@@ -10593,8 +10657,8 @@ def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
     start_line = _START_TEMPLATE.format(version=LUMOS_VERSION)
     block = start_line + "\n" + body + "\n" + _CLAUDE_END
 
-    # 4. 讀 CLAUDE.md(去 BOM + CRLF 正規化)
-    cm = root / "CLAUDE.md"
+    # 4. 讀目標檔(去 BOM + CRLF 正規化;★整檔都會被正規化,不只區塊★)
+    cm = root / target
     if cm.exists():
         raw = cm.read_bytes()
         # 去 UTF-8 BOM
@@ -10606,8 +10670,8 @@ def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
 
     # 5. 三態分派
     if claude_text is None:
-        # CLAUDE.md 不存在 → created
-        _write_lf(cm, "# CLAUDE.md\n\n" + block + "\n")
+        # 目標不存在 → created(檔頭依目標名;r2 整合 F11:曾寫死 "# CLAUDE.md")
+        _write_lf(cm, f"# {target}\n\n" + block + "\n")
         return ReInjectResult("created", None)
 
     state, span = _extract_claude_block_span(claude_text)
@@ -10616,8 +10680,19 @@ def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
         return ReInjectResult("sentinel_broken", None)
 
     if state == "absent":
-        # 有 CLAUDE.md 但無 sentinel → appended
-        new_text = claude_text.rstrip() + "\n\n" + block + "\n"
+        # 有檔但無 sentinel → appended。CLAUDE.md 沿舊行為接檔尾;
+        # AGENTS 檔插檔首(第一個 # 標題行之後;沒有標題行→檔案最前)——Codex 把整鏈 AGENTS 檔串起來
+        # 只吃 32 KiB、超過靜默截斷,靠前一點少被砍(d1;r2 邊界 N5 定 fallback)。
+        if target == "CLAUDE.md":
+            new_text = claude_text.rstrip() + "\n\n" + block + "\n"
+        else:
+            lines = claude_text.split("\n")
+            idx = next((i for i, l in enumerate(lines) if l.startswith("#")), None)
+            if idx is None:
+                new_text = block + "\n\n" + claude_text.lstrip("\n")
+            else:
+                new_text = "\n".join(lines[:idx + 1]) + "\n\n" + block + "\n\n" + "\n".join(lines[idx + 1:]).lstrip("\n")
+            new_text = new_text.rstrip() + "\n"
         _write_lf(cm, new_text)
         return ReInjectResult("appended", None)
 
@@ -10651,22 +10726,25 @@ def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
 
 
 def _deinit_strip_claude(root: Path) -> bool:
-    """剝 CLAUDE.md 的 LUMOS:GRAPH-DISCIPLINE 區塊;其餘內容/整個檔都留。
-    無檔或無 START 標記 → no-op 回 False(對稱注入端 scripts/lumos:3175 的存在性 gating)。"""
-    cm = root / "CLAUDE.md"
-    if not cm.exists():
-        return False
-    text = cm.read_text(encoding="utf-8")
-    start_marker = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
-    end_marker = "LUMOS:GRAPH-DISCIPLINE:END -->"
-    si = text.find(start_marker)
-    ei = text.find(end_marker)
-    if si == -1 or ei == -1 or ei < si:
-        return False
-    ei += len(end_marker)
-    new = (text[:si].rstrip() + "\n" + text[ei:].lstrip()).strip()
-    _write_lf(cm, (new + "\n") if new else "")
-    return True
+    """剝 CLAUDE.md 與 Codex 指示檔(AGENTS.md / AGENTS.override.md)的 LUMOS:GRAPH-DISCIPLINE 區塊;
+    其餘內容/整個檔都留。目標清單與注入端同一份(r1 整合 F1)。任一檔有剝到 → True;都無 → False。"""
+    hit = False
+    for t in _reinject_targets(root):
+        cm = root / t
+        if not cm.exists():
+            continue
+        text = cm.read_text(encoding="utf-8")
+        start_marker = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
+        end_marker = "LUMOS:GRAPH-DISCIPLINE:END -->"
+        si = text.find(start_marker)
+        ei = text.find(end_marker)
+        if si == -1 or ei == -1 or ei < si:
+            continue
+        ei += len(end_marker)
+        new = (text[:si].rstrip() + "\n" + text[ei:].lstrip()).strip()
+        _write_lf(cm, (new + "\n") if new else "")
+        hit = True
+    return hit
 
 
 def _deinit_remove_vendored(root: Path, src=None) -> list:
@@ -10899,18 +10977,8 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
         print(f"  結尾自癒:補齊 installer 漏的 {len(healed)} 檔 → {', '.join(healed)}")
     else:
         print("  ✓ 結尾自癒檢查:工具組完全對齊(無漏)")
-    # 範本已是最新(copy2 迴圈完成) → reinject CLAUDE.md 紀律區塊
-    ri = _reinject_claude_block(root, slug)
-    if ri.status == "updated":
-        print("  CLAUDE.md 紀律區塊已更新")
-        if ri.diff:
-            for line in ri.diff.splitlines()[:20]:  # 最多印 20 行 diff 摘要
-                print(f"    {line}")
-    elif ri.status in ("created", "appended"):
-        print(f"  CLAUDE.md 紀律區塊已注入({ri.status})")
-    elif ri.status == "sentinel_broken":
-        print("  ⚠ CLAUDE.md sentinel 半壞,未自動覆蓋,請檢查", file=sys.stderr)
-    # unchanged / no_template → 靜默
+    # 範本已是最新(copy2 迴圈完成) → reinject 紀律區塊(CLAUDE.md + Codex 指示檔,d1)
+    _reinject_all(root, slug)
     return rc
 
 
@@ -10930,9 +10998,10 @@ def cmd_update(source=None, no_pull=False, allow_stale=False):
     if root.resolve() == src.resolve():
         # 來源 repo 自身:範本本地即最新,無 pull/vendor 之需——reinject-only
         # (2026-08-05 實戰缺口修:改完範本後來源 repo 自己的 CLAUDE.md 原本無路可刷)
-        ri = _reinject_claude_block(root, slug)
-        print(f"lumos update — 來源 repo 自身:只刷新 CLAUDE.md 紀律區塊({ri.status})")
-        return 0 if ri.status in ("updated", "unchanged", "created", "appended") else 2
+        res = _reinject_all(root, slug, quiet=True)
+        ri = res["CLAUDE.md"]
+        print(f"lumos update — 來源 repo 自身:只刷新紀律區塊({', '.join(f'{k}:{v.status}' for k, v in res.items())})")
+        return 0 if all(v.status in ("updated", "unchanged", "created", "appended") for v in res.values()) else 2
     print(f"lumos update — 來源 {src} → 本專案 {root}（slug={slug}）")
     rc = _vendor_toolchain(src, root, slug, no_pull=no_pull, allow_stale=allow_stale)
     return 2 if rc is None else rc
@@ -10979,6 +11048,10 @@ def _link_or_copy(src: Path, dst: Path):
             dst.symlink_to(src)
     except OSError:
         shutil.copytree(src, dst, dirs_exist_ok=True)  # Python ≥ 3.8
+        try:
+            (dst / _SKILL_MARKER).write_text("lumos fallback copy;安裝器可整夾重建\n", encoding="utf-8")
+        except OSError:
+            pass
         print(f"  ⚠ 連結失敗,改複製(失去 git pull 即更新): {dst}")
 
 
@@ -10995,6 +11068,30 @@ def _install_skills():
         if src.is_dir():
             _link_or_copy(src, dest / s)
             print(f"  ✓ skill {s}")
+    # Codex 也讀同一個開放標準(agentskills.io):使用者層 ~/.agents/skills/(2026-09-04 隔離 HOME 實測會載入)。
+    # ★開放共用目錄★:既有真目錄只有帶我方標記檔才重建,否則跳過+warn(別人的 skill 不能刪)。
+    shared = Path.home() / ".agents" / "skills"
+    for s in _SKILLS:
+        src = repo / "skills" / s
+        if src.is_dir():
+            if _link_or_copy_shared(src, shared / s):
+                print(f"  ✓ skill(codex) {s}")
+
+
+def _link_or_copy_shared(src: Path, dst: Path) -> bool:
+    """開放共用目錄版 _link_or_copy:dst 是「非我方」真目錄(不是 symlink/junction、沒有標記檔)→
+    跳過+印一行,回 False;其餘交給 _link_or_copy(它會把 symlink/空夾/帶標記的複製物重建)。"""
+    import os
+    if dst.is_dir() and not dst.is_symlink():
+        try:
+            empty = not any(os.scandir(dst))
+        except OSError:
+            empty = False
+        if not empty and not (dst / _SKILL_MARKER).exists():
+            print(f"  ⚠ 跳過 {dst}:已有不是 lumos 裝的同名目錄,不覆蓋(要換成 lumos 版請先自己搬走它)", file=sys.stderr)
+            return False
+    _link_or_copy(src, dst)
+    return True
 
 
 _INIT_SUBDIRS_FULL = ("Systems", "Verification", "Projects", "Issues", "Sessions", "MOC")
@@ -11020,6 +11117,9 @@ def _scaffold_project(root: Path, slug: str):
 
 
 _GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py", "dispatch-lens-hook.py")
+_GLOBAL_HOOKS = _GLOBAL_CLAUDE_HOOKS   # 兩家共用同一批檔(Claude→~/.claude/hooks、Codex→~/.codex/hooks;Projects/Codex完全支援_計劃 d2);舊名留給既有呼叫/測試
+_SKILL_MARKER = ".lumos-managed"       # fallback 複製出的 skill 目錄帶此標記檔;開放共用目錄只重建帶標記的(r2 邊界 N1)
+_HARNESS_HOME = {"claude": (".claude", "settings.json"), "codex": (".codex", "hooks.json")}
 # ★撤除 hook 要分兩階段,不能一刀刪檔★(2026-08-22 立;症狀真實發生過)
 #
 # 症狀:`lumos install` 把已撤除 hook 的真檔刪掉,但★正在跑的 session★在啟動當下讀進的
@@ -11054,17 +11154,35 @@ _RETIRED_HOOK_STUB_BODY = (
 )
 
 
+def _codex_present(home=None) -> bool:
+    """本機有沒有 Codex 可裝:~/.codex 目錄在、或 codex 可執行檔在 PATH(測試用隔離 HOME 建 ~/.codex 即視為在)。"""
+    import shutil
+    home = Path(home) if home else Path.home()
+    return (home / ".codex").is_dir() or bool(shutil.which("codex"))
+
+
 def _sync_global_claude(src_repo: Path):
-    """全域 ~/.claude hooks/settings 同步(不需專案;install 與 _install_hooks_py 共用)。
+    """相容包裝:Claude 側同步,回 True=ok(既有呼叫/測試用)。三態版見 _sync_global_hooks。"""
+    return _sync_global_hooks(src_repo, "claude") == "ok"
+
+
+def _sync_global_hooks(src_repo: Path, harness: str) -> str:
+    """全域 hooks/註冊同步(不需專案;install 與 _install_hooks_py 共用)。harness=claude|codex:
+    claude → ~/.claude/hooks + settings.json;codex → ~/.codex/hooks + hooks.json(合併器 --target codex)。
     ①copy 現役 hooks ②刪已撤除 hook 殘留真檔 ③跑 merge-claude-settings(_prune_dangling 剪懸空註冊)。
-    來源=src_repo(install 用來源 repo 自身、update 用專案 vendored copy);寫 ~/.claude(HOME 隔離可測)。
-    設計:Projects/install全域hook同步_計劃。回 True=有做、False=探針下被擋沒做(呼叫端據此不印假成功)。"""
+    來源=src_repo(install 用來源 repo 自身、update 用專案 vendored copy);HOME 隔離可測。
+    回三態字串:ok / probe(探針擋下,沒動) / merge-failed(hooks 設定檔壞或合併器非 0,hook 檔已 copy 但註冊沒更新)
+    / absent(codex 專用:本機無 codex,跳過)。★不共用一顆布林★——False 曾被呼叫端寫死解讀成 LUMOS_PROBE,
+    設定檔壞掉會印出誤導訊息(Projects/Codex完全支援_計劃 r2 邊界 N2)。"""
     # ★r1 正確性席:同 _install_skills——cmd_init/_vendor_toolchain 這條路會經此覆寫真的 ~/.claude/hooks
     # 與動 settings.json,繞過四個指令入口的守衛。擋在變動原語。
-    if _refuse_if_probe("sync-global-claude"):
-        return False
+    if _refuse_if_probe(f"sync-global-{harness}"):
+        return "probe"
+    if harness == "codex" and not _codex_present():
+        return "absent"
     import subprocess, shutil
-    chooks = Path.home() / ".claude" / "hooks"
+    hdir, _ = _HARNESS_HOME[harness]
+    chooks = Path.home() / hdir / "hooks"
     chooks.mkdir(parents=True, exist_ok=True)
     src_dir = src_repo / "scripts" / "hooks" / "claude"
     for f in _GLOBAL_CLAUDE_HOOKS:            # ① 現役 hooks copy
@@ -11083,24 +11201,51 @@ def _sync_global_claude(src_repo: Path):
             stale.unlink()
     merge = src_repo / "scripts" / "merge-claude-settings.py"  # ③ merge+prune 懸空(含②剛變懸空的)
     if merge.exists():
-        subprocess.run([sys.executable, str(merge)])
-    return True
+        args = [sys.executable, str(merge)] + (["--target", "codex"] if harness == "codex" else [])
+        r = subprocess.run(args)
+        if r.returncode != 0:              # 合併器只在設定檔 JSON 壞時回 1:別當成功
+            return "merge-failed"
+    return "ok"
+
+
+def _sync_msg(harness: str, state: str) -> str:
+    """三態→給人看的一行(成功講改了什麼;失敗講原因與下一步)。"""
+    hdir, sfile = _HARNESS_HOME[harness]
+    name = "Claude" if harness == "claude" else "Codex"
+    if state == "ok":
+        tail = ";★Codex 的 hook 要你開一次互動 codex 審過(Hooks need review 畫面或 /hooks)才會跑,hook 檔更新後要再審;exec 不會問★" if harness == "codex" else "(含清撤除的舊註冊)"
+        return f"  ✓ 全域 {name} hooks/{sfile} 已同步{tail}"
+    if state == "probe":
+        return f"  ⚠ 全域 {name} hooks 同步被擋(LUMOS_PROBE)——未動 ~/{hdir}"
+    if state == "merge-failed":
+        return f"  ⚠ 全域 {name} hooks:檔已 copy 但 ~/{hdir}/{sfile} 損毀、註冊沒更新——修好 JSON 再跑 lumos install --force"
+    if state == "absent":
+        return "  (本機無 codex:略過 Codex hooks;裝了之後再跑一次 lumos install --force)"
+    return f"  ? 全域 {name} hooks 同步狀態 {state}"
 
 
 def _teardown_global_claude(src_repo: Path):
-    """_sync_global_claude 的移除半邊(teardown 用):清全域 ~/.claude 的我方 hook + 剪其懸空註冊。
+    """相容包裝:Claude 側拆除(既有呼叫/測試用)。"""
+    return _teardown_global_hooks(src_repo, "claude")
+
+
+def _teardown_global_hooks(src_repo: Path, harness: str):
+    """_sync_global_hooks 的移除半邊(teardown 用):清全域 ~/.claude(或 ~/.codex)的我方 hook + 剪其懸空註冊。
     ①先驗 settings.json 可解析→壞則跳過+warn、★不刪 .py★(不製造懸空,std F6)②rm 我方現役+撤除 hook
     ③跑 merge --prune-only(★只剪懸空、不 re-add★——預設 merge 會把 hook 加回,抵銷 teardown)。
     須在 deinit 刪掉 vendored merge-claude-settings.py 之前跑(std F5,由 cmd_teardown 順序保證)。
     設計:Projects/teardown一鍵拆機_計劃。回 True=已處理 / False=因 settings 壞跳過。"""
     import subprocess, json
-    chome = Path.home() / ".claude"
-    chooks, settings = chome / "hooks", chome / "settings.json"
+    hdir, sfile = _HARNESS_HOME[harness]
+    chome = Path.home() / hdir
+    if harness == "codex" and not chome.is_dir():
+        return True                           # 沒裝過 Codex 側:無事可拆
+    chooks, settings = chome / "hooks", chome / sfile
     if settings.exists():                     # ① 先驗可解析(壞 → 不半做)
         try:
             json.loads(settings.read_text(encoding="utf-8"))
         except Exception as e:
-            print(f"  ⚠ ~/.claude/settings.json 無法解析({e}),跳過全域 hook 清理"
+            print(f"  ⚠ ~/{hdir}/{sfile} 無法解析({e}),跳過全域 hook 清理"
                   "(避免刪了檔卻剪不掉註冊、留懸空)", file=sys.stderr)
             return False
     removed = []                              # ② rm 我方 hook 真檔
@@ -11110,9 +11255,10 @@ def _teardown_global_claude(src_repo: Path):
             p.unlink(); removed.append(f)
     merge = src_repo / "scripts" / "merge-claude-settings.py"   # ③ prune-only 剪懸空我方註冊
     if merge.exists() and settings.exists():
-        subprocess.run([sys.executable, str(merge), "--prune-only"])
-    print(f"  ✓ 全域 hook 清理:移除 {len(removed)} 檔 + 剪懸空我方註冊" if removed
-          else "  ✓ 全域 hook:無我方殘留")
+        subprocess.run([sys.executable, str(merge), "--prune-only"] + (["--target", "codex"] if harness == "codex" else []))
+    name = "Claude" if harness == "claude" else "Codex"
+    print(f"  ✓ 全域 {name} hook 清理:移除 {len(removed)} 檔 + 剪懸空我方註冊" if removed
+          else f"  ✓ 全域 {name} hook:無我方殘留")
     return True
 
 
@@ -11121,11 +11267,9 @@ def _install_hooks_py(root: Path):
     # ① git config core.hooksPath(專案本地)
     subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"])
     # ②③ 全域 hooks/settings 同步(委派共用函式,消雙寫;來源=專案 vendored copy)
-    synced = _sync_global_claude(root)
-    if synced:
-        print("  ✓ hooks:core.hooksPath + 全域 Claude hooks 同步(copy+撤除清理+settings)")
-    else:
-        print("  ⚠ hooks:core.hooksPath 已設,但全域 Claude hooks 同步在探針環境下被擋(LUMOS_PROBE)——未動 ~/.claude")
+    print("  ✓ hooks:core.hooksPath 已設")
+    for _h in ("claude", "codex"):
+        print(_sync_msg(_h, _sync_global_hooks(root, _h)))
 
 
 def _confirm_tty(prompt):
@@ -11328,14 +11472,7 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False, allow_stale
     # 新 vault 或 --force:完整 _vendor_toolchain(pull + copy2 + hooks + reinject)。
     # no_hooks 路徑:一律只 reinject(讀本機已 vendor 範本,無則靜默)。
     def _do_reinject():
-        ri = _reinject_claude_block(root, slug)
-        if ri.status == "updated":
-            print("  CLAUDE.md 紀律區塊已更新")
-        elif ri.status in ("created", "appended"):
-            print(f"  CLAUDE.md 紀律區塊已注入({ri.status})")
-        elif ri.status == "sentinel_broken":
-            print("  ⚠ CLAUDE.md sentinel 半壞,未自動覆蓋,請檢查", file=sys.stderr)
-        # unchanged / no_template → 靜默
+        _reinject_all(root, slug)     # CLAUDE.md + Codex 指示檔(d1),印人話
 
     if with_hooks:
         src = _lumos_src()
@@ -12129,6 +12266,89 @@ def enforcement_status(root=None, home=None):
         else:
             add(layer, "inactive", needle)
 
+    # ③b Codex 側(Projects/Codex完全支援_計劃 S0-4):每支 hook 一列,值域
+    # registered-trust-unknown | degraded | inactive | unknown——★不出 active★:Codex 的 hook 要人在互動畫面
+    # 審過才跑,信任狀態本機讀不到(信任存放處沒查出來),所以最多只能說「已註冊、檔在」。
+    # 只看 ~/.codex 目錄在不在(不看 PATH):enforcement 是純唯讀儀表板,結果要跟 HOME 隔離的測試一致;
+    # codex 第一次跑就會建 ~/.codex,「有 binary 沒目錄」的機器等於還沒用過。
+    codex_ok = (home / ".codex").is_dir()
+    creg = {}
+    try:
+        cp = home / ".codex" / "hooks.json"
+        if cp.exists():
+            d = _json.loads(cp.read_text(encoding="utf-8"))
+            for ev, arr in (d.get("hooks") or {}).items():
+                for grp in arr:
+                    for hk in (grp.get("hooks") or []):
+                        creg[str(hk.get("command", ""))] = True
+    except Exception:
+        creg = None
+    chookdir = home / ".codex" / "hooks"
+    for layer, needle in (("codex-hook:entry", "lumos-entry-hook.py"),
+                          ("codex-hook:impact", "impact-hook.py"),
+                          ("codex-hook:graph-sync", "check-graph-sync.py"),
+                          ("codex-hook:ci-status", "ci-status-hook.py"),
+                          ("codex-hook:dispatch-lens", "dispatch-lens-hook.py")):
+        if not codex_ok:
+            # 不適用而非壞掉:標 unknown 才不會讓每 session 的入口 hook 對沒裝 Codex 的機器一直唸
+            add(layer, "unknown", "本機無 codex,不適用(裝了再跑 lumos install --force)")
+            continue
+        if creg is None:
+            add(layer, "unknown", "~/.codex/hooks.json 讀不到")
+            continue
+        registered = any(needle in cmd for cmd in creg)
+        file_ok = (chookdir / needle).exists()
+        if registered and file_ok:
+            add(layer, "registered-trust-unknown", f"{needle} 已註冊、檔在;要不要跑由你在互動 codex 審過 hook 才算數,本機讀不到")
+        elif registered and not file_ok:
+            add(layer, "degraded", f"{needle} 已註冊但檔案不在 ~/.codex/hooks/(懸空)")
+        else:
+            add(layer, "inactive", needle)
+    try:
+        ver = ""
+        if codex_ok:
+            r = subprocess.run(["codex", "--version"], capture_output=True, text=True, timeout=10)
+            ver = (r.stdout or r.stderr).strip().split("\n")[0]
+        add("codex-cli", "active" if ver else "unknown",
+            (ver + ";本案地基事實在 codex-cli 0.144.1 上實測,版本不同要重驗 hook 行為") if ver else "本機無 codex,不適用")
+    except Exception as e:
+        add("codex-cli", "unknown", str(e))
+
+    # ③c skills 兩層(對稱;r1 整合 F6):使用者層目錄裡有沒有 lumos-* 連結/目錄
+    for layer, sk in (("claude-skills", home / ".claude" / "skills"), ("codex-skills", home / ".agents" / "skills")):
+        try:
+            if layer == "codex-skills" and not codex_ok:
+                add(layer, "unknown", "本機無 codex,不適用")
+                continue
+            have = [p.name for p in sk.iterdir() if p.name.startswith("lumos-")] if sk.is_dir() else []
+            add(layer, "active" if have else "inactive", f"{len(have)} 支 lumos-* 在 {sk}" if have else f"{sk} 無 lumos-* skill")
+        except Exception as e:
+            add(layer, "unknown", str(e))
+
+    # ③d Codex 指示檔(AGENTS.md / AGENTS.override.md):區塊在、版本戳與 CLAUDE.md 一致
+    try:
+        aname = _agents_target(root)
+        ap = root / aname
+        cmp_ = root / "CLAUDE.md"
+        if not ap.exists():
+            add("agents-md", "unknown" if not codex_ok else "inactive", f"無 {aname}(lumos init/update 會注入)" + ("" if codex_ok else ";本機無 codex,不適用"))
+        else:
+            def _ver_of(path):
+                b = path.read_bytes()
+                if b.startswith(b"\xef\xbb\xbf"):
+                    b = b[3:]
+                return _parse_sentinel_version(b.decode("utf-8", "replace").replace("\r\n", "\n"))
+            av = _ver_of(ap)
+            cv = _ver_of(cmp_) if cmp_.exists() else None
+            if av is None:
+                add("agents-md", "inactive", f"{aname} 無紀律區塊(lumos update 注入)")
+            elif cv is not None and av != cv:
+                add("agents-md", "degraded", f"{aname} 版本戳 {av} ≠ CLAUDE.md {cv}(lumos update 刷新)")
+            else:
+                add("agents-md", "active", f"{aname} 版本戳 {av}" + ("(override 檔:同層 AGENTS.md 會被 Codex 忽略)" if aname.endswith("override.md") else ""))
+    except Exception as e:
+        add("agents-md", "unknown", str(e))
+
     # ④⑤ git pre-commit / pre-push:core.hooksPath 指向 scripts/hooks 且檔存在可執行
     try:
         hp = subprocess.run(["git", "-C", str(root), "config", "core.hooksPath"],
@@ -12208,8 +12428,10 @@ def enforcement_status(root=None, home=None):
 
 
 def enforcement_summary(rows):
-    """回 (active 數, 非 unknown 總數, unknown 數)。分母排除 unknown。"""
-    unknown = sum(1 for r in rows if r["status"] == "unknown")
+    """回 (active 數, 非 unknown 總數, unknown 數)。分母排除 unknown;
+    ★也排除 registered-trust-unknown★(Codex hook 已註冊但要人審過才跑、本機讀不到——既不算生效也不算壞,
+    算進分母會讓摘要永遠紅;它在列表裡用 🔒 單獨可見)。"""
+    unknown = sum(1 for r in rows if r["status"] in ("unknown", "registered-trust-unknown"))
     total = len(rows) - unknown
     active = sum(1 for r in rows if r["status"] == "active")
     return active, total, unknown
@@ -12226,12 +12448,14 @@ def cmd_enforcement(repo=None, as_json=False):
         active, total, unknown = enforcement_summary(rows)
         print(_json.dumps({"rows": rows, "active": active, "total": total, "unknown": unknown}, ensure_ascii=False))
         return 0
-    mark = {"active": "✅", "inactive": "❌", "degraded": "⚠️", "unknown": "❔"}
+    mark = {"active": "✅", "inactive": "❌", "degraded": "⚠️", "unknown": "❔", "registered-trust-unknown": "🔒"}
     print("Lumos 防護生效狀態(這查的是「有沒有裝上/接上」,不是「判得對不對」)\n")
     for r in rows:
-        print(f"  {mark.get(r['status'], '?')} {r['layer']:26s} {r['status']:9s} {r['detail']}")
+        print(f"  {mark.get(r['status'], '?')} {r['layer']:26s} {r['status']:24s} {r['detail']}")
     active, total, unknown = enforcement_summary(rows)
-    print(f"\n有效防護:{active}/{total} 層生效" + (f"(另 {unknown} 層本機測不到,列 unknown)" if unknown else ""))
+    trust = sum(1 for r in rows if r["status"] == "registered-trust-unknown")
+    print(f"\n有效防護:{active}/{total} 層生效" + (f"(另 {unknown - trust} 層本機測不到或不適用,列 unknown)" if unknown - trust else "")
+          + (f"(另 {trust} 層 Codex hook 已註冊,等你在互動 codex 審過才會跑)" if trust else ""))
     if active < total:
         print("有沒生效的層 → 在專案根跑一次\n    lumos install --force\n  (仍 inactive 的看 detail;遠端檢查那項要去 GitHub 設 branch protection)")
     return 0

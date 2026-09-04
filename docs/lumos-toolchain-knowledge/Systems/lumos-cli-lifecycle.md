@@ -31,6 +31,7 @@ summary: |-
   KEY:cmd_init slug 決定順序=①--name ②既有 vault 資料夾名(去 -knowledge)③repo basename;②先於③是硬要求——否則既有 vault 上 --force 用 basename 建錯空 vault + 寫錯 CLAUDE.md {{KG}} 路徑(見 [[init-force-slug誤用basename]]) [test:t_init_force_uses_existing_vault_slug]
   DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit/cmd_teardown｜_vendor_toolchain/_install_skills/_install_hooks_py/_sync_global_claude/_teardown_global_claude/_link_or_copy/_scaffold_project｜merge-claude-settings.py(--prune-only)｜_VENDORED_TOOLKIT/_SKILLS 常數｜_lumos_src/_vault_in
   TEST:258 passed(t_install_skills/t_install_includes_skills/t_install_hooks_py/t_scaffold_project/t_link_or_copy_idempotent/t_hooks_python_fallback + t_deinit_*)
+  KEY:★2026-09-04 Codex 完全支援 S0★:install/uninstall/teardown 多一家——skills 也連到 ~/.agents/skills(開放共用目錄:既有非我方真目錄跳過不刪,只重建帶 .lumos-managed 標記的複製物)、hook 同一批檔 copy 到 ~/.codex/hooks + 合併器 --target codex 寫 ~/.codex/hooks.json(matcher 對照 apply_patch/SubagentStart,命令列帶 --harness codex);_sync_global_hooks 回三態 ok/probe/merge-failed/absent(壞 JSON 不再印假成功);紀律區塊注入/剝除/Check D 三端共用目標清單 CLAUDE.md+AGENTS.md(有 AGENTS.override.md 寫它;插檔首);Codex 的 hook 要人在互動 codex 審過才跑,install 印提示。設計 [[Projects/Codex完全支援_計劃]]
 decisions:
   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
     id: d1
@@ -82,6 +83,7 @@ verified_by:
   - "[[Verification/2026-08-21_doctor-run事件落地]]"
   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
   - "[[Verification/2026-08-22_指令索引與情境探針]]"
+  - "[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]"
 about_code:
   - get.sh
   - scripts/lumos
