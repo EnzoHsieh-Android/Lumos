@@ -22581,8 +22581,8 @@ def t_enforcement_summary_excludes_unknown():
     unknown_layers = sorted(r["layer"] for r in rows if r["status"] == "unknown")
     # 2026-09-04 Codex完全支援 S0:fixture 的 home 沒有 ~/.codex → Codex 八列(5 hook+cli+skills+agents-md)
     # 一律 unknown(不適用,不是壞;入口 hook 才不會對沒裝 Codex 的機器每 session 唸)
-    codex_layers = ["agents-md", "codex-cli", "codex-hook:ci-status", "codex-hook:dispatch-lens", "codex-hook:entry",
-                    "codex-hook:graph-sync", "codex-hook:impact", "codex-skills"]
+    codex_layers = ["agents-md", "codex-cli", "codex-sessionstart-ci-status-hook", "codex-subagentstart-dispatch-lens-hook", "codex-session-entry-hook",
+                    "codex-stop-graph-sync-hook", "codex-pretooluse-impact-hook", "codex-skills"]
     check("enforcement: unknown 恰=vendored+遠端+Codex 不適用八列", unknown_layers == sorted(["required-status-check", "vendored-cli"] + codex_layers), str(unknown_layers))
     check("enforcement: n_unknown 恰 10", n_unknown == 10, f"{n_unknown}")
     check("enforcement: 四 hook+pre-commit+pre-push+python+ci 共 8 active", n_active == 8, f"active={n_active} rows={[(r['layer'],r['status']) for r in rows]}")
@@ -24992,18 +24992,28 @@ def t_codex_enforcement_rows():
     (home / ".agents" / "skills" / "lumos-project-notes").mkdir(parents=True)
     rows = m.enforcement_status(root=root, home=home)
     by = {r["layer"]: r["status"] for r in rows}
-    check("codex-enf: 註冊+檔在 → registered-trust-unknown(不是 active)", by.get("codex-hook:entry") == "registered-trust-unknown", str(by))
-    check("codex-enf: 註冊但檔不在 → degraded", by.get("codex-hook:impact") == "degraded", str(by))
-    check("codex-enf: 沒註冊 → inactive", by.get("codex-hook:graph-sync") == "inactive", str(by))
+    check("codex-enf: 註冊+檔在 → registered-trust-unknown(不是 active)", by.get("codex-session-entry-hook") == "registered-trust-unknown", str(by))
+    check("codex-enf: 註冊但檔不在 → degraded", by.get("codex-pretooluse-impact-hook") == "degraded", str(by))
+    check("codex-enf: 沒註冊 → inactive", by.get("codex-stop-graph-sync-hook") == "inactive", str(by))
     check("codex-enf: codex-skills active(有 lumos-*)", by.get("codex-skills") == "active", str(by))
     check("codex-enf: agents-md 沒檔 → inactive", by.get("agents-md") == "inactive", str(by))
     a, t, u = m.enforcement_summary(rows)
-    check("codex-enf: summary 分母排除 registered-trust-unknown", t == len(rows) - u and not any(r["status"] == "registered-trust-unknown" and False for r in rows) and u >= 1 + 1, f"a={a} t={t} u={u}")
-    check("codex-enf: 值域沒有 active 的 Codex hook 列", not any(r["layer"].startswith("codex-hook:") and r["status"] == "active" for r in rows), str(by))
+    # 釘具體數字(r1 單reviewer F4:原本 `and False` 永真 + 用被測函式公式驗自己):本 fixture 恰 1 列 trust-unknown、
+    # unknown 列=required-status-check+vendored-cli+codex-cli(無 codex 可執行檔... 有 ~/.codex 但 codex --version 可能在)→用差值釘
+    n_trust = sum(1 for r in rows if r["status"] == "registered-trust-unknown")
+    n_unk = sum(1 for r in rows if r["status"] == "unknown")
+    check("codex-enf: summary 把 trust-unknown 算進 unknown 桶、分母扣掉它", n_trust == 1 and u == n_unk + n_trust and t == len(rows) - n_unk - n_trust, f"a={a} t={t} u={u} trust={n_trust} unk={n_unk}")
+    rows_mut = [dict(r) for r in rows]
+    for r in rows_mut:
+        if r["status"] == "registered-trust-unknown":
+            r["status"] = "inactive"
+    a2, t2, u2 = m.enforcement_summary(rows_mut)
+    check("codex-enf: 把 trust-unknown 改成 inactive 分母就多 1(斷言有鑑別力)", t2 == t + 1 and u2 == u - 1, f"t={t}->{t2} u={u}->{u2}")
+    check("codex-enf: 值域沒有 active 的 Codex hook 列", not any(r["layer"].startswith("codex-") and r["layer"].endswith("-hook") and r["status"] == "active" for r in rows), str(by))
     # 沒 ~/.codex → 八列 unknown(不適用),入口 hook 才不會唸
     root2, home2 = _enforcement_fixture(all_active=True)
     by2 = {r["layer"]: r["status"] for r in m.enforcement_status(root=root2, home=home2)}
-    check("codex-enf: 沒 ~/.codex → Codex 各列 unknown 不是 inactive", all(by2.get(k) == "unknown" for k in ("codex-hook:entry", "codex-cli", "codex-skills", "agents-md")), str(by2))
+    check("codex-enf: 沒 ~/.codex → Codex 各列 unknown 不是 inactive", all(by2.get(k) == "unknown" for k in ("codex-session-entry-hook", "codex-cli", "codex-skills", "agents-md")), str(by2))
     # agents-md:版本戳一致 → active;不一致 → degraded
     (root / "CLAUDE.md").write_text("<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — x -->\nb\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
     (root / "AGENTS.md").write_text("# A\n<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — x -->\nb\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
@@ -25012,6 +25022,96 @@ def t_codex_enforcement_rows():
     (root / "AGENTS.md").write_text("# A\n<!-- LUMOS:GRAPH-DISCIPLINE:START v0.9 — x -->\nb\n<!-- LUMOS:GRAPH-DISCIPLINE:END -->\n", encoding="utf-8")
     by4 = {r["layer"]: r["status"] for r in m.enforcement_status(root=root, home=home)}
     check("codex-enf: agents-md 版本戳不同 → degraded", by4.get("agents-md") == "degraded", str(by4.get("agents-md")))
+
+
+def t_codex_r1_fixes():
+    """code-codex-s0 r1 外家四條 major+兩 minor(先紅後綠):①CODEX_HOME 環境變數要被合併器/同步/enforcement 尊重
+    ②~/.agents/skills 裡使用者自己的同名 symlink(指向非 lumos)不得被換掉 ③先注入 AGENTS.md 後加 override,teardown 要兩檔都剝
+    ④合併失敗 cmd_install 回非 0 ⑤doctor 預算訊息講明只算這一層 ⑥--target 值錯就擋。"""
+    import json as _j, os, subprocess as _sp
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    merge = repo / "scripts" / "merge-claude-settings.py"
+    # ① CODEX_HOME
+    home = Path(tempfile.mkdtemp(prefix="gctl-cdx-ch-")); ch = Path(tempfile.mkdtemp(prefix="gctl-cdx-chome-"))
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), CODEX_HOME=str(ch))
+    r = _sp.run([sys.executable, str(merge), "--target", "codex"], env=env, capture_output=True, text=True)
+    check("codex-r1①: 合併器尊重 CODEX_HOME(hooks.json 寫在那裡、不寫 ~/.codex)", (ch / "hooks.json").exists() and not (home / ".codex").exists(), r.stderr[-200:])
+    cmds = [h["command"] for arr in _j.loads((ch / "hooks.json").read_text()).get("hooks", {}).values() for e in arr for h in e["hooks"]] if (ch / "hooks.json").exists() else []
+    check("codex-r1①: 命令列指向 CODEX_HOME 下的 hooks/", bool(cmds) and all(str(ch) in c or "${CODEX_HOME}" in c for c in cmds), str(cmds)[:200])
+    code = "print(m._sync_global_hooks(repo,'codex')); print(sorted(p.name for p in m._codex_home().joinpath('hooks').iterdir()))"
+    pre = ("import sys,json;from pathlib import Path;import importlib.util;from importlib.machinery import SourceFileLoader;"
+           "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
+           "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);repo=Path(sys.argv[2]);")
+    r = _sp.run([sys.executable, "-c", pre + code, GRAPHCTL, str(repo)], env=env, capture_output=True, text=True)
+    check("codex-r1①: 同步把 hook 檔 copy 到 CODEX_HOME/hooks", "ok" in r.stdout and (ch / "hooks" / "impact-hook.py").exists(), r.stdout[-200:] + r.stderr[-200:])
+    m = _load_lumos_inproc()
+    root, _ = _enforcement_fixture(all_active=True)
+    os.environ["CODEX_HOME"] = str(ch)
+    try:
+        by = {x["layer"]: x["status"] for x in m.enforcement_status(root=root, home=home)}
+    finally:
+        os.environ.pop("CODEX_HOME", None)
+    check("codex-r1①: enforcement 用 CODEX_HOME 讀註冊(五支 registered-trust-unknown)", all(by.get(k) == "registered-trust-unknown" for k in ("codex-session-entry-hook", "codex-pretooluse-impact-hook", "codex-stop-graph-sync-hook", "codex-sessionstart-ci-status-hook", "codex-subagentstart-dispatch-lens-hook")), str(by))
+    # ② 使用者自己的同名 symlink
+    home2 = Path(tempfile.mkdtemp(prefix="gctl-cdx-sl-")); mine = home2 / "mine-skill"; mine.mkdir(); (mine / "SKILL.md").write_text("---\nname: mine\n---\n")
+    sk = home2 / ".agents" / "skills"; sk.mkdir(parents=True); (sk / "lumos-code-loop").symlink_to(mine)
+    r = _codex_run(home2, "m._install_skills()")
+    check("codex-r1②: 使用者自有 symlink 不被換掉(仍指向自己的目錄)並警告", (sk / "lumos-code-loop").resolve() == mine.resolve() and "跳過" in r.stderr, r.stderr[-300:] + str((sk / "lumos-code-loop").resolve()))
+    # ③ 先注入 AGENTS.md,後加 override → strip 兩檔都剝
+    with tempfile.TemporaryDirectory() as td:
+        root2, mod = _make_reinject_root(td, tpl_content="kg:{{KG}}", claude_content="# C\n")
+        mod._reinject_claude_block(root2, "p", target="AGENTS.md")
+        (root2 / "AGENTS.override.md").write_text("# O\n", encoding="utf-8")
+        mod._reinject_claude_block(root2, "p", target="AGENTS.override.md")
+        mod._deinit_strip_claude(root2)
+        a = (root2 / "AGENTS.md").read_text(encoding="utf-8"); o = (root2 / "AGENTS.override.md").read_text(encoding="utf-8")
+        check("codex-r1③: 後加 override 再 strip → AGENTS.md 與 override 都沒區塊", "GRAPH-DISCIPLINE" not in a and "GRAPH-DISCIPLINE" not in o, a[:80] + o[:80])
+    # ④ 合併失敗 → cmd_install 回非 0
+    home3 = Path(tempfile.mkdtemp(prefix="gctl-cdx-rc-")); (home3 / ".codex").mkdir(); (home3 / ".codex" / "hooks.json").write_text("{ broken", encoding="utf-8")
+    r = _sp.run([sys.executable, GRAPHCTL, "install", "--force"], env=dict(os.environ, HOME=str(home3), USERPROFILE=str(home3)), capture_output=True, text=True)
+    check("codex-r1④: hooks.json 壞 → lumos install 回非 0 且訊息講損毀", r.returncode != 0 and "損毀" in (r.stdout + r.stderr), f"rc={r.returncode} {r.stdout[-200:]}")
+    # ⑥ --target 值錯 → 擋
+    st3 = home3 / ".claude" / "settings.json"; before = st3.read_text(encoding="utf-8") if st3.exists() else None
+    r = _sp.run([sys.executable, str(merge), "--target", "codx"], env=dict(os.environ, HOME=str(home3), USERPROFILE=str(home3)), capture_output=True, text=True)
+    after = st3.read_text(encoding="utf-8") if st3.exists() else None
+    check("codex-r1⑥: --target 拼錯 → rc 2 且 ~/.claude/settings.json 原樣", r.returncode == 2 and after == before, f"rc={r.returncode} {r.stderr[-150:]}")
+
+
+def t_codex_r1_reviewer_fixes():
+    """code-codex-s0 r1 單reviewer:F1 ~/.codex 是檔案不炸;F3 hooks.json 語法對但 schema 錯(hooks: null)不炸、teardown 仍剪懸空;
+    F5 我方連結(realpath 指向 lumos skills/)重跑不被誤判外方;F7 teardown 清 .bak。"""
+    import json as _j, os, subprocess as _sp
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    merge = repo / "scripts" / "merge-claude-settings.py"
+    # F1
+    home = Path(tempfile.mkdtemp(prefix="gctl-cdx-f1-")); (home / ".codex").write_text("not a directory", encoding="utf-8")
+    r = _sp.run([sys.executable, GRAPHCTL, "install", "--force"], env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)), capture_output=True, text=True)
+    check("codex-F1: ~/.codex 是檔案 → install 不炸(無 Traceback)且講清楚", "Traceback" not in r.stderr and "不是目錄" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-300:])
+    r = _codex_run(home, "print(m._teardown_global_hooks(repo,'codex'))")
+    check("codex-F1: ~/.codex 是檔案 → teardown 不炸", "Traceback" not in r.stderr, r.stderr[-300:])
+    # F3
+    home2 = Path(tempfile.mkdtemp(prefix="gctl-cdx-f3-")); (home2 / ".codex").mkdir()
+    env2 = dict(os.environ, HOME=str(home2), USERPROFILE=str(home2))
+    for bad in ('{"hooks": null}', '{"hooks": [1,2]}', '{"hooks": {"Stop": null}}', '{"hooks": {"Stop": [{"hooks": null}]}}'):
+        (home2 / ".codex" / "hooks.json").write_text(bad, encoding="utf-8")
+        r = _sp.run([sys.executable, str(merge), "--target", "codex"], env=env2, capture_output=True, text=True)
+        check(f"codex-F3: schema 錯 {bad} → 合併器不炸(rc 0/1,無 Traceback)", "Traceback" not in r.stderr and r.returncode in (0, 1), r.stderr[-200:])
+    # F3 teardown:schema 錯仍能剪懸空(或明說跳過),不印假成功
+    (home2 / ".codex" / "hooks.json").write_text('{"hooks": null}', encoding="utf-8")
+    r = _codex_run(home2, "print(m._teardown_global_hooks(repo,'codex'))")
+    check("codex-F3: hooks: null 下 teardown 不炸", "Traceback" not in r.stderr, r.stderr[-300:])
+    # F5:我方連結(指向 repo skills/)重跑 → 不被當外方、不印跳過
+    home3 = Path(tempfile.mkdtemp(prefix="gctl-cdx-f5-"))
+    _codex_run(home3, "m._install_skills()")
+    r = _codex_run(home3, "m._install_skills()")
+    check("codex-F5: 重跑 install skills 不把自己裝的當外方(無跳過警告)", "跳過" not in r.stderr and (home3 / ".agents" / "skills" / "lumos-code-loop").is_symlink(), r.stderr[-300:])
+    # F7:.bak 清掉
+    home4 = Path(tempfile.mkdtemp(prefix="gctl-cdx-f7-")); (home4 / ".codex").mkdir()
+    _codex_run(home4, "m._sync_global_hooks(repo,'codex'); m._sync_global_hooks(repo,'claude')")
+    _codex_run(home4, "m._sync_global_hooks(repo,'codex'); m._sync_global_hooks(repo,'claude')")   # 第二次會產 .bak
+    had_bak = (home4 / ".codex" / "hooks.json.bak").exists() or (home4 / ".claude" / "settings.json.bak").exists()
+    _codex_run(home4, "m._teardown_global_hooks(repo,'codex'); m._teardown_global_hooks(repo,'claude')")
+    check("codex-F7: teardown 後 hooks.json.bak / settings.json.bak 都不在", not (home4 / ".codex" / "hooks.json.bak").exists() and not (home4 / ".claude" / "settings.json.bak").exists(), f"had_bak={had_bak}")
 
 
 if __name__ == "__main__":

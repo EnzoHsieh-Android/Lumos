@@ -1584,10 +1584,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 _d_bytes = _d_eff.stat().st_size
                 if _d_bytes > 32768 * 0.75:
                     warn([f"{_d_eff.name} 有 {_d_bytes} bytes,Codex 整鏈 AGENTS 檔上限 32768、超過會靜默截掉後面——把非必要內容搬走或縮短"],
-                         f"{_d_eff.name} 佔 Codex 指示預算 {_d_bytes * 100 // 32768}%(>75%):",
+                         f"{_d_eff.name} 單這一層就佔整鏈上限 {_d_bytes * 100 // 32768}%(>75%;全域與子目錄另計):",
                          "縮短該檔或把長內容移到圖譜筆記")
                 else:
-                    print(f"  {_d_eff.name} {_d_bytes} bytes,佔 Codex 指示預算 {_d_bytes * 100 // 32768}%(上限 32768,超過靜默截斷)")
+                    print(f"  {_d_eff.name} {_d_bytes} bytes=整鏈上限 32768 的 {_d_bytes * 100 // 32768}%(只算 repo 根這一層;全域 ~/.codex/AGENTS.md 與子目錄另計,超過靜默截斷)")
     print()
 
     section("V", "寫了「這個結論在什麼前提下成立」的筆記,有多少超過 90 天沒回頭看(提醒,不擋)")
@@ -10245,8 +10245,10 @@ def cmd_install(force=False):
     # 全域 ~/.claude hooks/settings 同步(install全域hook同步_計劃:全域機器自癒——
     # copy 現役 hooks + 刪已撤除 hook 殘留 + prune 懸空註冊;來源=來源 repo 自身)
     _src_repo = Path(__file__).resolve().parent.parent
+    _states = {}
     for _h in ("claude", "codex"):            # r3:接上契約,別無條件印成功;三態各印各的(r2 邊界 N2)
-        print(_sync_msg(_h, _sync_global_hooks(_src_repo, _h)))
+        _states[_h] = _sync_global_hooks(_src_repo, _h)
+        print(_sync_msg(_h, _states[_h]))
     # PATH 檢查(r1-F7:用 os.pathsep,Windows 是 ;)
     if str(bindir) not in os.environ.get("PATH", "").split(os.pathsep):
         hint = (f'  Windows:把 {bindir} 加進使用者 PATH(系統環境變數)'
@@ -10254,6 +10256,9 @@ def cmd_install(force=False):
         print(f"⚠ {bindir} 不在當前 PATH —\n{hint}", file=sys.stderr)
     else:
         print(f"  {bindir} 已在 PATH — 任何專案打 `lumos doctor` 即可")
+    if any(v == "merge-failed" for v in _states.values()):   # hook 註冊沒寫進去,自動化不能當成功(r1 外家 #4)
+        print("✗ install 未完成:hook 註冊寫不進去(見上面的 ⚠),修好設定檔再跑一次", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -10729,7 +10734,8 @@ def _deinit_strip_claude(root: Path) -> bool:
     """剝 CLAUDE.md 與 Codex 指示檔(AGENTS.md / AGENTS.override.md)的 LUMOS:GRAPH-DISCIPLINE 區塊;
     其餘內容/整個檔都留。目標清單與注入端同一份(r1 整合 F1)。任一檔有剝到 → True;都無 → False。"""
     hit = False
-    for t in _reinject_targets(root):
+    # ★掃三個候選檔,不只當前目標★:先注入 AGENTS.md、後來才加 override,目標會變,舊檔區塊要一起剝(r1 外家 #3)
+    for t in ("CLAUDE.md", "AGENTS.md", "AGENTS.override.md"):
         cm = root / t
         if not cm.exists():
             continue
@@ -11082,7 +11088,23 @@ def _link_or_copy_shared(src: Path, dst: Path) -> bool:
     """開放共用目錄版 _link_or_copy:dst 是「非我方」真目錄(不是 symlink/junction、沒有標記檔)→
     跳過+印一行,回 False;其餘交給 _link_or_copy(它會把 symlink/空夾/帶標記的複製物重建)。"""
     import os
-    if dst.is_dir() and not dst.is_symlink():
+    try:   # 我方裝的(symlink 或 Windows junction,realpath 都會解到 repo 的 skills/<名>)→ 直接重建,別當外方(r1 單reviewer F5)
+        if dst.exists() and Path(os.path.realpath(dst)) == src.resolve():
+            _link_or_copy(src, dst)
+            return True
+    except OSError:
+        pass
+    if dst.is_symlink():
+        # 使用者自己的同名 symlink(指到 lumos skills/ 以外)也不能換掉(r1 外家 #2);指到我方或懸空的才重建
+        try:
+            tgt = dst.resolve(strict=True)
+        except (OSError, RuntimeError):
+            tgt = None
+        mine = src.resolve().parent
+        if tgt is not None and tgt != src.resolve() and mine not in tgt.parents and tgt != mine:
+            print(f"  ⚠ 跳過 {dst}:已有不是 lumos 裝的同名連結(→ {tgt}),不覆蓋(要換成 lumos 版請先自己移走它)", file=sys.stderr)
+            return False
+    elif dst.is_dir():
         try:
             empty = not any(os.scandir(dst))
         except OSError:
@@ -11154,11 +11176,20 @@ _RETIRED_HOOK_STUB_BODY = (
 )
 
 
+def _codex_home(home=None) -> Path:
+    """Codex 的家目錄:$CODEX_HOME 優先(Codex 自己就這樣找 config/hooks;r1 外家 #1),否則 ~/.codex。"""
+    import os
+    env = os.environ.get("CODEX_HOME")
+    if env:
+        return Path(env).expanduser()
+    return (Path(home) if home else Path.home()) / ".codex"
+
+
 def _codex_present(home=None) -> bool:
-    """本機有沒有 Codex 可裝:~/.codex 目錄在、或 codex 可執行檔在 PATH(測試用隔離 HOME 建 ~/.codex 即視為在)。"""
-    import shutil
-    home = Path(home) if home else Path.home()
-    return (home / ".codex").is_dir() or bool(shutil.which("codex"))
+    """本機有沒有 Codex:★單一判準=Codex 家目錄(~/.codex 或 $CODEX_HOME)在不在★,不看 PATH——
+    install/teardown/enforcement 三處共用同一個答案(code-codex-s0 r1 架構席:曾兩套判準分岔);
+    codex 第一次跑就會建家目錄,「有 binary 沒目錄」=還沒用過,等用過再 lumos install --force 即可。"""
+    return _codex_home(home).is_dir()
 
 
 def _sync_global_claude(src_repo: Path):
@@ -11178,14 +11209,18 @@ def _sync_global_hooks(src_repo: Path, harness: str) -> str:
     # 與動 settings.json,繞過四個指令入口的守衛。擋在變動原語。
     if _refuse_if_probe(f"sync-global-{harness}"):
         return "probe"
-    if harness == "codex" and not _codex_present():
-        return "absent"
+    if harness == "codex":
+        _ch = _codex_home()
+        if _ch.exists() and not _ch.is_dir():   # r1 單reviewer F1:~/.codex 是檔案,mkdir 會炸穿整支 install
+            return "home-not-dir"
+        if not _codex_present():
+            return "absent"
     import subprocess, shutil
     hdir, _ = _HARNESS_HOME[harness]
-    chooks = Path.home() / hdir / "hooks"
+    chooks = (_codex_home() if harness == "codex" else Path.home() / hdir) / "hooks"
     chooks.mkdir(parents=True, exist_ok=True)
     src_dir = src_repo / "scripts" / "hooks" / "claude"
-    for f in _GLOBAL_CLAUDE_HOOKS:            # ① 現役 hooks copy
+    for f in _GLOBAL_HOOKS:                   # ① 現役 hooks copy(兩家同一批檔)
         s = src_dir / f
         if s.exists():
             shutil.copy2(s, chooks / f)
@@ -11220,7 +11255,9 @@ def _sync_msg(harness: str, state: str) -> str:
     if state == "merge-failed":
         return f"  ⚠ 全域 {name} hooks:檔已 copy 但 ~/{hdir}/{sfile} 損毀、註冊沒更新——修好 JSON 再跑 lumos install --force"
     if state == "absent":
-        return "  (本機無 codex:略過 Codex hooks;裝了之後再跑一次 lumos install --force)"
+        return "  (本機沒有 Codex 家目錄(~/.codex 或 $CODEX_HOME)=還沒用過 codex:略過 Codex hooks;用過之後再跑一次 lumos install --force)"
+    if state == "home-not-dir":
+        return f"  ⚠ Codex 家目錄 {_codex_home()} 不是目錄(是個檔案):略過 Codex hooks——搬走那個檔再跑 lumos install --force"
     return f"  ? 全域 {name} hooks 同步狀態 {state}"
 
 
@@ -11237,9 +11274,11 @@ def _teardown_global_hooks(src_repo: Path, harness: str):
     設計:Projects/teardown一鍵拆機_計劃。回 True=已處理 / False=因 settings 壞跳過。"""
     import subprocess, json
     hdir, sfile = _HARNESS_HOME[harness]
-    chome = Path.home() / hdir
+    chome = _codex_home() if harness == "codex" else Path.home() / hdir
     if harness == "codex" and not chome.is_dir():
-        return True                           # 沒裝過 Codex 側:無事可拆
+        if chome.exists():
+            print(f"  ⚠ Codex 家目錄 {chome} 不是目錄,略過 Codex 側清理", file=sys.stderr)
+        return True                           # 沒裝過 Codex 側(或家目錄是檔案):無事可拆
     chooks, settings = chome / "hooks", chome / sfile
     if settings.exists():                     # ① 先驗可解析(壞 → 不半做)
         try:
@@ -11249,13 +11288,19 @@ def _teardown_global_hooks(src_repo: Path, harness: str):
                   "(避免刪了檔卻剪不掉註冊、留懸空)", file=sys.stderr)
             return False
     removed = []                              # ② rm 我方 hook 真檔
-    for f in _GLOBAL_CLAUDE_HOOKS + _RETIRED_CLAUDE_HOOKS + _RETIRED_STUB_CLAUDE_HOOKS:
+    for f in _GLOBAL_HOOKS + _RETIRED_CLAUDE_HOOKS + _RETIRED_STUB_CLAUDE_HOOKS:
         p = chooks / f            # ★含相容期空殼★:拆機後機器上不該留我方任何檔
         if p.exists() or p.is_symlink():
             p.unlink(); removed.append(f)
     merge = src_repo / "scripts" / "merge-claude-settings.py"   # ③ prune-only 剪懸空我方註冊
     if merge.exists() and settings.exists():
         subprocess.run([sys.executable, str(merge), "--prune-only"] + (["--target", "codex"] if harness == "codex" else []))
+    bak = settings.with_suffix(".json.bak")   # ④ 合併器每次改檔留的備份也收掉(r1 單reviewer F7:拆機要對稱)
+    if bak.exists():
+        try:
+            bak.unlink(); removed.append(bak.name)
+        except OSError:
+            pass
     name = "Claude" if harness == "claude" else "Codex"
     print(f"  ✓ 全域 {name} hook 清理:移除 {len(removed)} 檔 + 剪懸空我方註冊" if removed
           else f"  ✓ 全域 {name} hook:無我方殘留")
@@ -12217,7 +12262,8 @@ def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
 def enforcement_status(root=None, home=None):
     """回各層防護「現在有沒有生效」的清單 [{layer, status, detail}](Projects/enforcement儀表板_計劃)。
     純唯讀、每層各自 try 包住(一層測不出來不拖垮整份;fail-open 本身要能被觀測)。
-    status: active | inactive | degraded | unknown。root=repo 根、home=~/(測試可注入)。"""
+    status: active | inactive | degraded | unknown | registered-trust-unknown(只有 Codex hook 列會出:
+    已註冊、檔在,但要人在互動 codex 審過才跑、本機讀不到——不進 summary 分母)。root=repo 根、home=~/(測試可注入)。"""
     import json as _json
     if root:
         root = Path(root)
@@ -12269,12 +12315,12 @@ def enforcement_status(root=None, home=None):
     # ③b Codex 側(Projects/Codex完全支援_計劃 S0-4):每支 hook 一列,值域
     # registered-trust-unknown | degraded | inactive | unknown——★不出 active★:Codex 的 hook 要人在互動畫面
     # 審過才跑,信任狀態本機讀不到(信任存放處沒查出來),所以最多只能說「已註冊、檔在」。
-    # 只看 ~/.codex 目錄在不在(不看 PATH):enforcement 是純唯讀儀表板,結果要跟 HOME 隔離的測試一致;
-    # codex 第一次跑就會建 ~/.codex,「有 binary 沒目錄」的機器等於還沒用過。
-    codex_ok = (home / ".codex").is_dir()
+    # 判準單源=_codex_present(只看家目錄,不看 PATH):結果跟 HOME 隔離的測試一致。
+    _ch = _codex_home(home)
+    codex_ok = _codex_present(home)          # 與 install/teardown 同一判準
     creg = {}
     try:
-        cp = home / ".codex" / "hooks.json"
+        cp = _ch / "hooks.json"
         if cp.exists():
             d = _json.loads(cp.read_text(encoding="utf-8"))
             for ev, arr in (d.get("hooks") or {}).items():
@@ -12283,25 +12329,25 @@ def enforcement_status(root=None, home=None):
                         creg[str(hk.get("command", ""))] = True
     except Exception:
         creg = None
-    chookdir = home / ".codex" / "hooks"
-    for layer, needle in (("codex-hook:entry", "lumos-entry-hook.py"),
-                          ("codex-hook:impact", "impact-hook.py"),
-                          ("codex-hook:graph-sync", "check-graph-sync.py"),
-                          ("codex-hook:ci-status", "ci-status-hook.py"),
-                          ("codex-hook:dispatch-lens", "dispatch-lens-hook.py")):
+    chookdir = _ch / "hooks"
+    for layer, needle in (("codex-session-entry-hook", "lumos-entry-hook.py"),
+                          ("codex-pretooluse-impact-hook", "impact-hook.py"),
+                          ("codex-stop-graph-sync-hook", "check-graph-sync.py"),
+                          ("codex-sessionstart-ci-status-hook", "ci-status-hook.py"),
+                          ("codex-subagentstart-dispatch-lens-hook", "dispatch-lens-hook.py")):
         if not codex_ok:
             # 不適用而非壞掉:標 unknown 才不會讓每 session 的入口 hook 對沒裝 Codex 的機器一直唸
             add(layer, "unknown", "本機無 codex,不適用(裝了再跑 lumos install --force)")
             continue
         if creg is None:
-            add(layer, "unknown", "~/.codex/hooks.json 讀不到")
+            add(layer, "unknown", f"{_ch / 'hooks.json'} 讀不到")
             continue
         registered = any(needle in cmd for cmd in creg)
         file_ok = (chookdir / needle).exists()
         if registered and file_ok:
             add(layer, "registered-trust-unknown", f"{needle} 已註冊、檔在;要不要跑由你在互動 codex 審過 hook 才算數,本機讀不到")
         elif registered and not file_ok:
-            add(layer, "degraded", f"{needle} 已註冊但檔案不在 ~/.codex/hooks/(懸空)")
+            add(layer, "degraded", f"{needle} 已註冊但檔案不在 {chookdir}/(懸空)")
         else:
             add(layer, "inactive", needle)
     try:

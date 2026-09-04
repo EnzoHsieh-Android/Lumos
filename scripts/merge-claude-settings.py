@@ -15,12 +15,30 @@ from pathlib import Path
 # Claude Code:~/.claude/settings.json 的 hooks 段;Codex CLI:~/.codex/hooks.json 頂層 hooks 段。
 # 兩者外層 JSON 同形(事件→[{matcher?,hooks:[{type,command,timeout}]}]),內層語意不同:
 # matcher 名、payload 形狀、輸出欄位各自查(r1 外家 F2)。★不碰 ~/.codex/config.toml★(stdlib 無 TOML 寫入器)。
-TARGET = "codex" if "--target=codex" in sys.argv or ("--target" in sys.argv and
-         sys.argv[sys.argv.index("--target") + 1:][:1] == ["codex"]) else "claude"
+def _parse_target(argv):
+    """--target claude|codex(預設 claude);值拼錯或缺值 → 擋下(r1 外家 #6:靜默退回 claude 會改錯檔)。"""
+    import os
+    val = None
+    for i, a in enumerate(argv):
+        if a.startswith("--target="):
+            val = a.split("=", 1)[1]
+        elif a == "--target":
+            val = argv[i + 1] if i + 1 < len(argv) else ""
+    if val is None:
+        return "claude"
+    if val not in ("claude", "codex"):
+        print(f"擋下:--target 只能是 claude 或 codex,給的是 {val!r};沒動任何檔", file=sys.stderr)
+        sys.exit(2)
+    return val
+
+
+TARGET = _parse_target(sys.argv[1:])
+# Codex 的家目錄尊重 CODEX_HOME(Codex 自己就是這樣找 config/hooks 的;r1 外家 #1)
+_CODEX_HOME = Path(__import__("os").environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser()
 if TARGET == "codex":
-    SETTINGS = Path.home() / ".codex" / "hooks.json"
-    HOOKS_DIR = Path.home() / ".codex" / "hooks"
-    _HOOKS_SUBDIR = ".codex/hooks/"
+    SETTINGS = _CODEX_HOME / "hooks.json"
+    HOOKS_DIR = _CODEX_HOME / "hooks"
+    _HOOKS_SUBDIR = str(HOOKS_DIR).replace("\\", "/") + "/"
 else:
     SETTINGS = Path.home() / ".claude" / "settings.json"
     HOOKS_DIR = Path.home() / ".claude" / "hooks"
@@ -38,11 +56,15 @@ def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
     # home 都用正斜線 + 引號。Unix 保留 ${HOME}(可攜、Mac 已驗)。
     # Codex 目標:命令列帶明確 --harness codex(d2:hook 靠旗標分支,不由 payload 欄位猜家族;
     # 現役五支 hook 都不讀 argv,多帶旗標無害,S1 再各自認旗標)。
-    suffix = " --harness codex" if TARGET == "codex" else ""
+    if TARGET == "codex":
+        # 絕對路徑(不是 ${HOME}/.codex):CODEX_HOME 可以不在 HOME 底下
+        hooks_dir = str(HOOKS_DIR).replace("\\", "/")
+        py = _PY.replace("\\", "/") if sys.platform == "win32" else _PY
+        return f'{py} "{hooks_dir}/{rel_path}" --harness codex' if sys.platform != "win32" else f'"{py}" "{hooks_dir}/{rel_path}" --harness codex'
     if sys.platform == "win32":
         py = _PY.replace("\\", "/")
-        return f'"{py}" "{_HOME}/{_HOOKS_SUBDIR}{rel_path}"{suffix}'
-    return f'{_PY} "${{HOME}}/{_HOOKS_SUBDIR}{rel_path}"{suffix}'
+        return f'"{py}" "{_HOME}/.claude/hooks/{rel_path}"'
+    return f'{_PY} "${{HOME}}/.claude/hooks/{rel_path}"'
 
 
 HOOK_ENTRIES = {
@@ -159,10 +181,17 @@ def _prune_dangling(settings: dict) -> list:
     (指向他處)的 command 一律不碰。回傳被剪的 (event, script) 列表。"""
     pruned = []
     for event, entries in list(settings.get("hooks", {}).items()):
+        if not isinstance(entries, list):      # schema 錯(值不是陣列)→ 當空,別炸(code-codex-s0 r1 F3)
+            settings["hooks"][event] = []
+            continue
         kept_entries = []
         for entry in entries:
+            if not isinstance(entry, dict):
+                continue
             kept_hooks = []
-            for h in entry.get("hooks", []):
+            for h in (entry.get("hooks") or []):
+                if not isinstance(h, dict):
+                    continue
                 cmd = h.get("command", "")
                 if _HOOKS_SUBDIR in cmd.replace("\\", "/"):
                     script = _hook_script(cmd)
@@ -191,8 +220,8 @@ def _equivalent(a: dict, b: dict) -> bool:
     (認出舊裸路徑 == 新 `python …/xxx.py` 為同一 hook)。"""
     if a.get("matcher") != b.get("matcher"):
         return False
-    a_s = sorted(_hook_script(h.get("command", "")) for h in a.get("hooks", []))
-    b_s = sorted(_hook_script(h.get("command", "")) for h in b.get("hooks", []))
+    a_s = sorted(_hook_script(h.get("command", "")) for h in (a.get("hooks") or []) if isinstance(h, dict))
+    b_s = sorted(_hook_script(h.get("command", "")) for h in (b.get("hooks") or []) if isinstance(h, dict))
     return a_s == b_s
 
 
@@ -206,7 +235,12 @@ def main() -> int:
     else:
         settings = {}
 
-    settings.setdefault("hooks", {})
+    # schema 防護:語法合法但 hooks 不是物件(null / 陣列)→ 視為空物件重建,不炸(r1 單reviewer F3:
+    # 之前 hooks: null 會在 _prune_dangling 炸 AttributeError,teardown 因此漏剪懸空還印成功)
+    if not isinstance(settings.get("hooks"), dict):
+        if "hooks" in settings:
+            print(f"  ⚠ {SETTINGS} 的 hooks 欄位不是物件({type(settings.get('hooks')).__name__}),當空物件重建", file=sys.stderr)
+        settings["hooks"] = {}
     changed = False
 
     # 先清懸空(腳本已被刪、註冊還在 → 每回合報錯),再 merge
@@ -239,7 +273,9 @@ def main() -> int:
     # 合併後再掃一次,等價項只留第一份;與 --prune-only 一樣是修復動作,每次執行都跑。
     for event, entries in settings["hooks"].items():
         kept = []
-        for e in entries:
+        for e in (entries if isinstance(entries, list) else []):
+            if not isinstance(e, dict):
+                continue
             if any(_equivalent(e, k) for k in kept):
                 print(f"  [dedupe] {event} hook 重複註冊,移除一份")
                 changed = True

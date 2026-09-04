@@ -17,7 +17,7 @@ summary: |-
   KEY:偵測九層(各自 try 包住,一層壞不拖垮整份;fail-open 本身要能被觀測)——①SessionStart 入口 hook ②PreToolUse impact hook ③Stop 圖譜同步 hook(三者查 ~/.claude/settings.json 註冊)④pre-commit ⑤pre-push(查 core.hooksPath→scripts/hooks + 檔存在可執行)⑥python ⑦vendored 版本(_version_nudge:None=最新/不可達、str=落後)⑧CI workflow(.github/workflows/ci.yml)⑨anchor baseline(cmd_anchor_verify)
   KEY:三態誠實——active/inactive/unknown;GitHub required status check、branch protection 本機測不到=unknown(不假裝 green 也不算 red);"Effective protection: N/M active(K unknown)" 分母排除 unknown
   KEY:design-loop 跳過(小改動,此處註明)——純唯讀狀態匯總、不動任何判定/寫入/合約;核心 enforcement_status(root,home) 抽純函式走測試先行(9 層各構造 active/inactive/unknown 案例);零合約邊界
-  KEY:2026-09-04 Codex完全支援 S0 加 9 列:codex-hook:×5(值域 registered-trust-unknown|degraded|inactive|unknown,★永不 active——信任狀態本機讀不到★,summary 分母排除)、codex-cli(印版本,地基實測在 0.144.1)、claude-skills/codex-skills、agents-md(區塊在且版本戳=CLAUDE.md);★沒 ~/.codex 的機器全列 unknown(不適用)★,入口 hook 才不會每 session 唸;偵測只看 ~/.codex 目錄不看 PATH(跟 HOME 隔離測試一致)
+  KEY:2026-09-04 Codex完全支援 S0 加 9 列:codex-<Claude 側同名列>×5(如 codex-session-entry-hook;值域 registered-trust-unknown|degraded|inactive|unknown,★永不 active——信任狀態本機讀不到★,summary 分母排除)、codex-cli(印版本,地基實測在 0.144.1)、claude-skills/codex-skills、agents-md(區塊在且版本戳=CLAUDE.md);★沒 ~/.codex 的機器全列 unknown(不適用)★,入口 hook 才不會每 session 唸;偵測=_codex_present 單一判準(只看 Codex 家目錄 ~/.codex 或 $CODEX_HOME,不看 PATH;install/teardown/enforcement 同一答案)
 decisions:
   - content: 六條 GPT 外審建議對決策帳後,只採 lumos enforcement 這條現在做;其餘緩辦/已有/minor
     id: d1
