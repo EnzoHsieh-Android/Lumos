@@ -1,0 +1,46 @@
+1. Codex CLI 0.144.1 的主代理使用 `response_item/message/role=user` 作為輪次邊界，不是程式唯一辨識的 `event_msg/user_message`；因此會把前幾輪的改檔與本輪混合，可能因舊輪曾改圖譜而漏掉本輪同步警告。最小重現：`rg '"type":"response_item".*"role":"user"' ~/.codex/sessions/2026/09/04/*.jsonl | head`，再將該真實逐字稿交給 `collect_turn_actions`，可見掃描未停在最近 user message。
+severity: major
+blocking: 是
+引句:「if obj.get("type") == "event_msg" and p.get("type") == "user_message":」
+file: `scripts/hooks/claude/check-graph-sync.py:153`
+
+2. 真實 0.144.1 `custom_tool_call name=exec` 的 JS 常為 `{cmd:"…"}`，但正規式只接受 JSON 式的 `{"cmd":"…"}`，所以 shell 寫檔命令完全不會進同步檢查；新增測試自行捏造了與真逐字稿不同的 quoted-key fixture。最小重現：`rg -m1 '"type":"custom_tool_call".*"name":"exec".*"input":.*{cmd:' ~/.codex/sessions/2026/09/04 -g '*.jsonl'`，該行餵 `_CODEX_EXEC_CMD_RE.findall()` 得 `[]`。
+severity: major
+blocking: 是
+引句:「_CODEX_EXEC_CMD_RE = re.compile(r'"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"')」
+file: `scripts/hooks/claude/check-graph-sync.py:110`
+
+3. 多個 claim 可各自成功 rename 後才同時計算 remaining，此時都會得到相同席號；註解宣稱「不會重複標號」及測試期待 1、2、3 並不由原子 rename 保證。未能穩定重現；最小競態排程是三程序依序完成各自 `os.rename`、以 barrier 暫停，之後同時執行第 17119–17121 行。
+severity: major
+blocking: 是
+引句:「(同時多個子代理不會重複扣/重複標號),認領不到不回;歸零即刪。」
+file: `scripts/lumos:17096`
+
+4. S1 驗收把人工 fixture 的 `event_msg/user_message` 與 quoted `{"cmd":...}` 描述成已讀懂 0.144.1 真逐字稿，但本機同版主代理 rollout 實際使用 `response_item/message/role=user` 和 `{cmd:...}`；「真 payload+真逐字稿」只能證明當時那一個形狀。這是實測宣稱過度外推，不是官方穩定格式保證。
+severity: major
+blocking: 是
+引句:「★這條是「真 payload+真逐字稿+修正後 hook」的機械重現,不是再跑一次 codex exec★。」
+file: `docs/lumos-toolchain-knowledge/Verification/2026-09-04_Codex完全支援S1hook適配驗收.md:30`
+
+5. `--claim`、`--disarm`、`--status`、`--arm` 可同時給，dispatch 靜默按固定優先序執行，會讓操作員以為已 arm、實際卻 claim 或 disarm。這是 CLI 邊界輸入未拒絕，建議互斥群組。
+severity: minor
+blocking: 否
+引句:「if args.lens_claim: return cmd_dispatch_lens_claim(repo=args.lens_repo, as_json=args.lens_json)」
+file: `scripts/lumos:18567`
+
+6. 已讀，無 finding：`docs/.canary-log.jsonl`。
+7. 已讀，無 finding：`docs/.governance-log.jsonl`。
+8. 已讀，無 finding：`docs/lumos-toolchain-knowledge/Projects/Codex完全支援_計劃.md`。
+9. 已讀，無 finding：`docs/lumos-toolchain-knowledge/Projects/派工鏡頭注入_計劃.md`。
+10. 已讀，無 finding：`docs/lumos-toolchain-knowledge/Systems/anchor-integrity.md`。
+11. 已讀，無 finding：`docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md`。
+12. 已讀，無 finding：`governance/anchor-baseline.json`。
+13. 已讀，無 finding：`governance/replay/code-codex-s0/verdict.json`。
+14. 已讀，無 finding：`scripts/hooks/claude/dispatch-lens-hook.py`。
+15. 已讀，無 finding：`scripts/hooks/claude/impact-hook.py`。
+16. 已讀，無 finding：`scripts/test_lumos.py`。
+17. 已讀，無 finding：`skills/lumos-code-loop/SKILL.md`。
+18. 已讀，無 finding：`skills/lumos-design-loop/templates.md`。
+19. 已讀，無 finding：`skills/lumos-project-notes/commands/06-代碼審與推送.md`。
+
+總結:最嚴重 severity=major；blocking=4 條。

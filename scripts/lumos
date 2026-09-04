@@ -16815,7 +16815,8 @@ def _mainline_ref(repo_root):
 
 def _lens_cache_path(repo_root, base_sha, head_sha):
     import hashlib
-    key = hashlib.sha256(f"{repo_root}|{base_sha}|{head_sha}|schema{_LENS_SCHEMA}".encode("utf-8")).hexdigest()   # 帶 schema 版本:v1.1 舊快取自然 miss(v1.2 r2 外家)
+    # repo 部分用 realpath(跟 armed 檔的 _lens_repo_key 同一種算法;code-codex-s1 r1 架構席:兩套 key 並存)
+    key = hashlib.sha256(f"{os.path.realpath(str(repo_root))}|{base_sha}|{head_sha}|schema{_LENS_SCHEMA}".encode("utf-8")).hexdigest()   # 帶 schema 版本:v1.1 舊快取自然 miss(v1.2 r2 外家)
     return Path.home() / ".cache" / "lumos" / "dispatch-lens" / f"{key}.json"
 
 
@@ -17117,15 +17118,19 @@ def _lens_repo_root(repo):
 
 
 def _lens_arm_dir_ok(d):
-    """armed 目錄安全檢查:是目錄、owner 是自己(posix)。"""
+    """armed 目錄安全檢查(與 _lens_cache_read 同一套威脅模型):是目錄、owner 是自己、group/other 不可寫(posix)。"""
+    import stat as _stat
     try:
         st = d.stat()
     except OSError:
         return False
     if not d.is_dir():
         return False
-    if hasattr(os, "getuid") and st.st_uid != os.getuid():
-        return False
+    if hasattr(os, "getuid"):
+        if st.st_uid != os.getuid():
+            return False
+        if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
+            return False
     return True
 
 
@@ -17218,7 +17223,10 @@ def cmd_dispatch_lens_claim(repo=None, as_json=False):
         return _emit(out)
     remaining = len([p for p in d.glob("tok-*") if p.suffix != ".claimed"])
     seats = int(meta.get("seats") or 0)
-    seat = seats - remaining
+    try:
+        seat = int(claimed.name.split("-", 1)[1])   # ★席號=token 自己的編號★(兩個 claim 各自 rename 成功後同時數 remaining 會撞號;code-codex-s1 r1 外家 #3)
+    except ValueError:
+        seat = seats - remaining
     head = f"LUMOS-LENS range={meta.get('range')} 第 {seat}/{seats} 席(lumos 自動附加:派工前武裝的圖譜鏡頭;領錯席時以這行對照)"
     out.update({"text": head + "\n" + (meta.get("text") or ""), "reason": "ok", "seat": seat})
     if remaining == 0:
@@ -18571,6 +18579,10 @@ def main():
     if args.cmd == "lint-check":
         return cmd_lint_check(repo=args.lc_repo, smoke=args.lc_smoke, as_json=args.lc_json)
     if args.cmd == "dispatch-lens":
+        _modes = [n for n, v in (("--arm", args.lens_arm), ("--claim", args.lens_claim), ("--disarm", args.lens_disarm), ("--status", args.lens_status)) if v]
+        if len(_modes) > 1:
+            print(f"擋下:{'、'.join(_modes)} 一次只能給一個(給多個會靜默照固定順序做,操作者以為 arm 了其實是別的)", file=sys.stderr)
+            return 2
         if args.lens_claim:
             return cmd_dispatch_lens_claim(repo=args.lens_repo, as_json=args.lens_json)
         if args.lens_disarm:

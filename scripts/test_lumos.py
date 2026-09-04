@@ -25260,5 +25260,62 @@ def t_codex_s1_graph_sync_codex_transcript():
     check("s1-cgs: Claude 逐字稿照舊", fps == ["z.py"], str(fps))
 
 
+def t_codex_s1_r1_fixes():
+    """code-codex-s1 r1 外家:①exec_command 有一半寫 {cmd:"…"} 沒引號(今日逐字稿 30/61)②輪次邊界也可能只有
+    response_item/message role=user(沒有 event_msg/user_message)③席號要來自 token 自己的編號(兩個 claim 同時 rename 後同時數
+    remaining 會撞號)⑤--arm/--claim/--disarm/--status 互斥。"""
+    import json as _j, io as _io, os, subprocess as _sp, tempfile as _tf
+    m = _load_hook_mod("cgs_s1r1", "check-graph-sync.py")
+    def line(t, payload): return _j.dumps({"timestamp": "t", "type": t, "payload": payload}, ensure_ascii=False)
+    # ① 無引號 key(含換行縮排形)
+    lines = [line("session_meta", {"cli_version": "0.144.1", "cwd": "/x"}),
+             line("event_msg", {"type": "user_message", "message": "go"}),
+             line("response_item", {"type": "custom_tool_call", "name": "exec", "input": 'const r = await tools.exec_command({cmd:"echo A", workdir:"/x"}); text(r);'}),
+             line("response_item", {"type": "custom_tool_call", "name": "exec", "input": 'const r = await tools.exec_command({\n  cmd: "echo B",\n  yield_time_ms: 5\n}); text(r);'})]
+    d = Path(_tf.mkdtemp(prefix="cgs-r1-")); tp = d / "r.jsonl"; tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    fps, cmds = m.collect_turn_actions(tp)
+    check("s1-r1①: {cmd:…} 無引號與換行縮排形都抽到", cmds == ["echo A", "echo B"], str(cmds))
+    # ② 只有 response_item/message role=user 當邊界(沒有 event_msg/user_message)
+    lines = [line("session_meta", {"cli_version": "0.144.1", "cwd": "/x"}),
+             line("response_item", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "第一輪"}]}),
+             line("response_item", {"type": "custom_tool_call", "name": "exec", "input": 'tools.exec_command({cmd:"echo OLD"})'}),
+             line("response_item", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "第二輪"}]}),
+             line("response_item", {"type": "custom_tool_call", "name": "exec", "input": 'tools.exec_command({cmd:"echo NEW"})'})]
+    tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    fps, cmds = m.collect_turn_actions(tp)
+    check("s1-r1②: 沒有 event_msg/user_message 時以 response_item/message role=user 切輪", cmds == ["echo NEW"], str(cmds))
+    # ③ 席號=token 編號:手動把 tok-01、tok-03 認領掉,下一個 claim 應拿 2(不是 remaining 算的 3)
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    home = Path(_tf.mkdtemp(prefix="gctl-s1r1-")); env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), LUMOS_DISPATCH_LENS_NO_CACHE="1")
+    ml = _sp.run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "main@{upstream}"], capture_output=True, text=True).stdout.strip() or "main"
+    def lens(*a): return _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", *a, "--repo", str(repo)], env=env, capture_output=True, text=True)
+    lens("--arm", f"{ml}..HEAD", "--seats", "3")
+    import hashlib
+    key = hashlib.sha256(str(Path(os.path.realpath(str(repo)))).encode()).hexdigest()[:32]
+    dd = home / ".cache" / "lumos" / "dispatch-lens" / "armed" / key
+    os.rename(dd / "tok-01", dd / "tok-01.claimed"); os.rename(dd / "tok-03", dd / "tok-03.claimed")
+    c = _j.loads(lens("--claim", "--json").stdout.strip().splitlines()[-1])
+    check("s1-r1③: 席號來自 token 編號(tok-02 → 第 2 席),不是用剩餘數推算", c["reason"] == "ok" and c["seat"] == 2 and "第 2/3 席" in c["text"], str((c["reason"], c["seat"])))
+    # ④(單reviewer F1)Claude 單檔路徑的 subprocess timeout 必須維持 30(多檔預算不得縮它)
+    mi = _load_hook_mod("impact_hook_s1r1", "impact-hook.py")
+    seen = {}
+    class R:
+        def __init__(self): self.returncode, self.stdout, self.stderr = 0, _j.dumps({"results": [], "stack_questions": [], "lane": []}), ""
+    def runner(cmd, *a, **k):
+        seen["timeout"] = k.get("timeout"); return R()
+    from unittest.mock import patch
+    dd = Path(_tf.mkdtemp(prefix="s1r1-")); (dd / "a.py").write_text("x=1\n")
+    pl = {"tool_name": "Edit", "tool_input": {"file_path": "a.py"}, "cwd": str(dd), "session_id": "r1-" + os.urandom(3).hex()}
+    with patch.object(mi.sys, "stdin", _io.StringIO(_j.dumps(pl))), patch.object(mi.subprocess, "run", runner), \
+         patch.object(mi, "_find_lumos_script", lambda: "/bin/true"), patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(dd)}), \
+         patch.object(mi.sys, "stdout", _io.StringIO()):
+        mi.main()
+    check("s1-r1④: Claude 單檔路徑 subprocess timeout 仍是 30(逐字等價)", seen.get("timeout") == 30, str(seen))
+    # ⑤ 互斥
+    r = lens("--arm", f"{ml}..HEAD", "--claim")
+    check("s1-r1⑤: --arm 與 --claim 同給 → rc 2 擋下", r.returncode == 2 and "擋下" in r.stderr + r.stdout, f"rc={r.returncode} {r.stderr[-120:]}")
+    lens("--disarm")
+
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -49,20 +49,25 @@ def _claim_codex_seat(payload: dict) -> int:
     沒武裝/過期/領完 → 什麼都不回(lumos 端判,這裡只轉送)。"""
     repo = payload.get("cwd", "") or os.environ.get("CLAUDE_PROJECT_DIR", "")
     if not repo:
+        _debug("Codex SubagentStart 沒有 cwd,放行")
         return 0
     lumos = _find_lumos_script()
     if lumos is None:
+        _debug("找不到 lumos,放行")
         return 0
     try:
         r = subprocess.run([sys.executable, lumos, "dispatch-lens", "--claim", "--repo", repo, "--json"],
                            capture_output=True, text=True, timeout=INNER_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as e:
+        _debug(f"lumos dispatch-lens --claim 失敗或超時({type(e).__name__}),放行")
         return 0
     if r.returncode != 0:
+        _debug(f"lumos dispatch-lens --claim rc={r.returncode}:{r.stderr.strip()[:200]},放行")
         return 0
     try:
         data = json.loads(r.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
+        _debug("--claim 回傳讀不懂,放行")
         return 0
     text = data.get("text") if isinstance(data, dict) else None
     if not text:

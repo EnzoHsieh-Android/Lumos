@@ -107,7 +107,8 @@ def _is_real_user_input(obj: dict) -> bool:
 # ── Codex 逐字稿(Projects/Codex完全支援_計劃 S1)──────────────────────────────────────────
 # 官方明說逐字稿格式不是 hooks 的穩定介面;只認 fixture 過的版本,認不得就印一行、本 session 略過判定(r1 外家 F13)。
 CODEX_TRANSCRIPT_VERSIONS = {"0.144.1"}
-_CODEX_EXEC_CMD_RE = re.compile(r'"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"')
+# key 有引號 {"cmd":"…"} 與沒引號 {cmd:"…"}(含換行縮排)兩種都出現(2026-09-04 當日逐字稿 31:30;code-codex-s1 r1 外家 #2)
+_CODEX_EXEC_CMD_RE = re.compile(r'(?<![\w$])["\']?cmd["\']?\s*:\s*"((?:[^"\\]|\\.)*)"')
 # patch 可能直接傳字串 tools.apply_patch("…"),也可能先存變數 const patch = "…" 再呼叫(S1 驗收實看):
 # 一律掃所有含 *** Begin Patch 的 JS 字串字面值
 _CODEX_APPLY_PATCH_RE = re.compile(r'"((?:[^"\\]|\\.)*\*\*\* Begin Patch(?:[^"\\]|\\.)*)"')
@@ -150,7 +151,11 @@ def collect_codex_turn_actions(lines: list[str]):
     turn = []
     for obj in reversed(objs):
         p = obj.get("payload") or {}
+        # 輪次邊界兩種型別都認(r1 外家 #1):event_msg/user_message(exec 模式會有)與 response_item/message role=user
+        # (真使用者輸入也會以這型出現,且系統注入的 <recommended_plugins> 也是這型——所以只認最後一個,不管內容)
         if obj.get("type") == "event_msg" and p.get("type") == "user_message":
+            break
+        if obj.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user":
             break
         turn.append(obj)
     turn.reverse()

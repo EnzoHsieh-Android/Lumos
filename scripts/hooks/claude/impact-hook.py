@@ -538,7 +538,10 @@ def main() -> int:
         if i > 0 and left < 3:
             skipped.extend(paths[i:])
             break
-        ctx = _impact_for_file(payload, repo, fp, session_id, lumos, timeout=min(30.0, max(3.0, left)))
+        # 單檔(Claude Edit/Write 或只碰一檔的 patch)維持舊的固定 30 秒(逐字等價;code-codex-s1 r1 單reviewer F1);
+        # 多檔才用總預算切每檔的 timeout
+        tmo = 30.0 if len(paths) == 1 else min(30.0, max(3.0, left))
+        ctx = _impact_for_file(payload, repo, fp, session_id, lumos, timeout=tmo)
         if ctx:
             chunks.append(ctx)
     if skipped:

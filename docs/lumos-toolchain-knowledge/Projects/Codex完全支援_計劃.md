@@ -181,6 +181,7 @@ REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/pro
 - **skill 文件**:templates.md §3 鏡頭 3 加第 ④ 條(Codex 編排:派前一刻 arm、派完 disarm)、code-loop SKILL 步驟 2 一句、commands/06 加一列。
 - **測試** +3(`t_codex_s1_impact_apply_patch`/`t_codex_s1_lens_arm_claim`/`t_codex_s1_graph_sync_codex_transcript`)。
 - **驗收**:[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]——隔離 clone+CODEX_HOME 真跑 codex exec:①apply_patch 改帶合約的檔 → hook 注入 1030 字「必看——這 9 篇帶著不能破壞的合約或出過事故」;②arm 1 席後派子代理 → 子代理原文回報 `LUMOS-LENS range=Lumos/main..HEAD 第 1/1 席`;③Stop → 用當場抓下的真 payload+逐字稿餵修正後 hook 印出「改了 1 個程式碼檔但筆記沒動」(第一次真跑沒印:安裝副本是修正前的,抓 payload 重餵才對上;變數型 patch 是那次抓到的)。
+- **代碼審 r1(code-codex-s1,standard:單reviewer+架構+外家 Codex,2026-09-04)**:14 條(5+3+6,4 條兩席重疊)全折——Codex 逐字稿 shell 呼叫一半是 `{cmd:` 無引號(同日 61 份逐字稿 31:30)、輪次邊界兩型都認(`event_msg/user_message` 與 `response_item/message role=user`)、席號改用 token 編號(remaining 推算會撞號)、四個模式旗標互斥、Claude 單檔路徑 timeout 維持 30、hook 失敗分支補 _debug、`_lens_cache_path` 改 realpath 與 armed key 同法、armed 目錄補 group/other 不可寫檢查;驗證筆記改寫「只證當時那一份逐字稿的形狀」。鏡頭這輪沒附固定席:base 是未推 commit 不在主線,hook 照設計放行。卷證 `governance/review-reports/code-codex-s1/`。
 - **沒做(留 S2/S3)**:五支 skill 的 Claude 字眼(reference/templates 全掃)、agent TOML、`--orchestrator`、席名;recount/probe。
 
 REVISIT:2026-09-25 互動 Codex 信任冒煙時一併看 SubagentStart 領席在互動模式下是否照常(本輪只驗 exec)。
