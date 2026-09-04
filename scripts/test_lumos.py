@@ -25469,5 +25469,65 @@ def t_codex_s3_probe_codex_parser():
     check("s3-probe: 雙引號外殼也剝", calls2 == [("Bash", "sed -n '1,3p' a.md")], str(calls2))
 
 
+def t_codex_s3_r1_fixes():
+    """code-codex-s3 r1 外家:①錨=最近距離的 apply_patch(前一行的贏過後面較遠的)②同輪無 apply_patch → anchored False
+    ③codex runner 超時/非零退出 → 不判通過(儀器例外)④python 前綴要 basename 恰為 lumos(notlumos 不算)。"""
+    import importlib.util, json as _j, subprocess as _sp, tempfile as _tf
+    from importlib.machinery import SourceFileLoader
+    path = str(Path(__file__).resolve().parent.parent / "governance" / "eval" / "lens-utilization" / "recount.py")
+    loader = SourceFileLoader("lens_recount_r1", path); spec = importlib.util.spec_from_loader("lens_recount_r1", loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    repo = Path(_tf.mkdtemp(prefix="cx-r1-")); (repo / "docs" / "t-knowledge" / "Systems").mkdir(parents=True); (repo / "docs" / "t-knowledge" / "Systems" / "a.md").write_text("# a\n")
+    _sp.run(["git", "-C", str(repo), "init", "-q"], capture_output=True)
+    slug = "t-knowledge"; repo_set = m.repo_paths(repo)
+    def line(t, payload): return _j.dumps({"timestamp": "t", "type": t, "payload": payload}, ensure_ascii=False)
+    def call(js): return line("response_item", {"type": "custom_tool_call", "name": "exec", "input": js})
+    def patch(f): return call('const patch = "*** Begin Patch\\n*** Update File: ' + f + '\\n@@\\n-1\\n+2\\n*** End Patch";\nconst r = await tools.apply_patch(patch);')
+    dev = line("response_item", {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "必看——這 1 篇帶著不能破壞的合約或出過事故:\n  直接 ★INVARIANT★ Systems/a.md"}]})
+    meta = line("session_meta", {"cli_version": "0.144.1", "cwd": str(repo), "source": "exec", "thread_source": "user", "session_id": "S"})
+    d = Path(_tf.mkdtemp(prefix="cx-r1s-")); f = d / "rollout-x.jsonl"
+    # ① before.py 在注入前一行,after.py 在注入後隔兩行 → 取 before.py
+    f.write_text("\n".join([meta, line("event_msg", {"type": "user_message", "message": "go"}), patch("before.py"), dev, call('tools.exec_command({cmd:"ls"})'), call('tools.exec_command({cmd:"pwd"})'), patch("after.py")]) + "\n", encoding="utf-8")
+    rows, _ = m.scan_codex_file(f, slug, repo_set)
+    check("s3-r1①: 錨取最近距離的 apply_patch(before.py 距 1 < after.py 距 3)", rows and rows[0]["file"] == "before.py", str(rows)[:200])
+    # ② 同輪沒有 apply_patch → anchored False、不入 denominator
+    f.write_text("\n".join([meta, line("event_msg", {"type": "user_message", "message": "go"}), call('tools.exec_command({cmd:"pwd"})'), dev]) + "\n", encoding="utf-8")
+    rows, _ = m.scan_codex_file(f, slug, repo_set)
+    check("s3-r1②: 同輪無 apply_patch → anchored False、file 空", rows and rows[0]["anchored"] is False and rows[0]["file"] == "", str(rows)[:200])
+    # 單reviewer F1:同輪兩次注入、只有一個 apply_patch → 第二次不共用錨(anchored False)
+    f.write_text("\n".join([meta, line("event_msg", {"type": "user_message", "message": "go"}), dev, patch("only.py"), dev]) + "\n", encoding="utf-8")
+    rows, _ = m.scan_codex_file(f, slug, repo_set)
+    check("s3-r1-F1: 兩次注入一個 patch → 第一筆錨 only.py、第二筆不共用錨", len(rows) == 2 and rows[0]["file"] == "only.py" and rows[0]["anchored"] and rows[1]["anchored"] is False, str([(r["file"], r["anchored"]) for r in rows]))
+    # 單reviewer F2:同名不同目錄不算讀到釘住的 Systems/a.md
+    f.write_text("\n".join([meta, line("event_msg", {"type": "user_message", "message": "go"}), patch("x.py"), dev,
+                             call('tools.exec_command({cmd:"python3 scripts/lumos show Other/a.md"})')]) + "\n", encoding="utf-8")
+    rows, _ = m.scan_codex_file(f, slug, repo_set)
+    check("s3-r1-F2: lumos show Other/a.md 不算讀到 Systems/a.md", rows and rows[0]["touched"] == [], str(rows[0]["touched"] if rows else rows))
+    f.write_text("\n".join([meta, line("event_msg", {"type": "user_message", "message": "go"}), patch("x.py"), dev,
+                             call('tools.exec_command({cmd:"python3 scripts/lumos show Systems/a.md"})')]) + "\n", encoding="utf-8")
+    rows, _ = m.scan_codex_file(f, slug, repo_set)
+    check("s3-r1-F2: lumos show Systems/a.md(帶路徑正確)算讀到", rows and rows[0]["touched"] == ["Systems/a.md"], str(rows[0]["touched"] if rows else rows))
+    # ④ notlumos 不算
+    r = m.classify_bash("python3 scripts/notlumos show a", slug)
+    r2 = m.classify_bash("python3 scripts/lumos show a", slug)
+    check("s3-r1④: python3 scripts/notlumos 不算 lumos;scripts/lumos 算", r[3] == set() and "a" in r2[3], f"{r[3]} {r2[3]}")
+    # ③ probe runner:超時 → 不通過
+    ppath = str(Path(__file__).resolve().parent / "scenario_probe.py")
+    pl = SourceFileLoader("probe_r1", ppath); ps = importlib.util.spec_from_loader("probe_r1", pl); pm = importlib.util.module_from_spec(ps); pl.exec_module(pm)
+    from unittest.mock import patch as _patch
+    good = _j.dumps({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "python3 scripts/lumos query --tag x"}}) + "\n"
+    def boom(*a, **k):
+        raise _sp.TimeoutExpired(cmd="codex", timeout=1, output=good.encode("utf-8"))
+    sc = {"id": "x", "prompt": "p", "expect": ["lumos (query|search)"], "forbid_before": []}
+    with _patch.object(pm.subprocess, "run", boom):
+        res = pm.run_one_codex(sc, Path(_tf.mkdtemp(prefix="pw-")), 5, "", "with")
+    check("s3-r1③: 超時即使已印期望指令也不判通過(儀器例外)", res["passed"] is False and "儀器例外" in res["reason"], str(res)[:200])
+    class R:
+        returncode, stdout, stderr = 2, good, "boom"
+    with _patch.object(pm.subprocess, "run", lambda *a, **k: R()):
+        res = pm.run_one_codex(sc, Path(_tf.mkdtemp(prefix="pw2-")), 5, "", "with")
+    check("s3-r1③: 非零退出碼不判通過", res["passed"] is False and "儀器例外" in res["reason"], str(res)[:200])
+
+
 if __name__ == "__main__":
     sys.exit(main())

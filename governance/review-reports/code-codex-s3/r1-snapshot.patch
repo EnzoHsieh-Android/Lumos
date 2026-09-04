@@ -1,0 +1,536 @@
+diff --git a/governance/eval/lens-utilization/README.md b/governance/eval/lens-utilization/README.md
+index 493636a..58a03b8 100644
+--- a/governance/eval/lens-utilization/README.md
++++ b/governance/eval/lens-utilization/README.md
+@@ -4,10 +4,19 @@
+ 
+ 重跑:
+ ```
+ python3 governance/eval/lens-utilization/recount.py --repo . [--json] [--out 報表.json]
+ ```
+ 讀 `~/.claude/projects/*/` 下所有逐字稿(主+`subagents/`),用逐字稿行的 `cwd` 篩「在本 repo 或其 worktree 之下」;
+ 只認 `attachment.type == hook_additional_context` 且 `hookName ∈ PreToolUse:Edit|Write|MultiEdit` 的注入;
+ 固定席從注入全文解析(新舊兩種「必看」標頭;事故行沒有 ★TAG★);錨點=toolUseID 對到的那次 tool_use 行序。
+ ★只印分佈,不出單一命中率、不設門檻;不寫任何帳;結果不進 hook、不進 lumos gov★。
+ 逐字稿依 Claude Code 的 cleanupPeriodDays(預設 30 天)會被清,歷史窗有限。
++
++## Codex 逐字稿(2026-09-04,Projects/Codex完全支援_計劃 S3)
++
++- 多讀 `--codex-sessions`(預設 `$CODEX_HOME/sessions` 或 `~/.codex/sessions`,遞迴找 `rollout-*.jsonl`);第一行 `session_meta` 的 `cwd` 篩本 repo,`cli_version` 不在 `CODEX_TRANSCRIPT_VERSIONS`(目前 `0.144.1`)就整份跳過、不猜。
++- hook 注入在 Codex 稿裡是 `response_item/message role=developer`:主代理稿的「必看——這 N 篇」列成 `PreToolUse:apply_patch` 行;子代理稿(`thread_source=subagent`)的「LUMOS-LENS range=…」列成 `SubagentStart:dispatch-lens` 行(只計筆數,沒有釘住清單可比)。
++- 錨定是啟發式:Codex 沒有 toolUseID,取同一輪內離注入最近的 apply_patch 呼叫(先往後找再往前找;實看兩種順序都有),目標檔=其 patch 標頭第一個路徑。
++- 「有沒有讀」的判法跟 Claude 行同一支 `classify_bash`(exec 的 `cmd` 字串,有引號/無引號 key 都抽);rows 帶 `harness` 欄,summary 多 `by_harness`/`codex_lens_rows`/`codex_files`。
++- 天花板同 Claude 行:只證「注入後有沒有動作碰到釘住的節點」,不證有沒有讀懂。
++
+diff --git a/governance/eval/lens-utilization/recount.py b/governance/eval/lens-utilization/recount.py
+index fcd90e4..21f1a8f 100644
+--- a/governance/eval/lens-utilization/recount.py
++++ b/governance/eval/lens-utilization/recount.py
+@@ -7,20 +7,44 @@
+ 統計錨點之後同一份逐字稿裡有沒有碰到 pinned 節點(Read / 讀動詞 Bash 含圖譜路徑 /
+ lumos context|show|contracts <stem>;heredoc 三分法;search 另計)。
+ ★只出分佈,不出單一命中率、不設門檻;印到 stdout;不寫任何帳★。
+ 用法: python3 recount.py --repo <repo 根> [--projects ~/.claude/projects] [--json] [--out 檔]
+ """
+ from __future__ import annotations
+ import argparse, collections, glob, json, os, re, subprocess, sys
+ from pathlib import Path
+ 
+ HOOKS = {"PreToolUse:Edit", "PreToolUse:Write", "PreToolUse:MultiEdit"}
++# ── Codex 逐字稿(Projects/Codex完全支援_計劃 S3,2026-09-04)──
++# ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl;第一行 session_meta(cwd、cli_version、source=exec|{"subagent":…});
++# hook 的 additionalContext 記成 response_item/message role=developer(impact-hook 的「必看——」在主代理稿;
++# SubagentStart 的「LUMOS-LENS range=」在子代理稿);沒有 toolUseID 可對,錨=同一輪內下一個 custom_tool_call
++# (input 含 tools.apply_patch)——是啟發式,rows 標 harness=codex 讓讀表的人分得開。
++CODEX_TRANSCRIPT_VERSIONS = {"0.144.1"}
++_CX_CMD_RE = re.compile(r'(?<![\w$])["\']?cmd["\']?\s*:\s*"((?:[^"\\]|\\.)*)"')
++_CX_PATCH_RE = re.compile(r'"((?:[^"\\]|\\.)*\*\*\* Begin Patch(?:[^"\\]|\\.)*)"')
++_CX_HDR_RE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$")
++LENS_HDR = re.compile(r"^LUMOS-LENS range=(\S+) 第 (\d+)/(\d+) 席")
++
++
++def _cx_unescape(x: str) -> str:
++    try:
++        return json.loads('"' + x + '"')
++    except ValueError:
++        return x.replace("\\n", "\n").replace('\\"', '"')
++
++
++def _cx_text(p: dict) -> str:
++    c = p.get("content")
++    if isinstance(c, list):
++        return "\n".join(str(it.get("text", "")) for it in c if isinstance(it, dict))
++    return str(c or p.get("message") or "")
+ 
+ 
+ def _load_hook_helpers():
+     """沿用現役 Stop hook 的 Bash 切段/切詞與圖譜根定位(不自造第二套;code-loop r1 架構席)。hook 檔名帶連字號,用 SourceFileLoader 載。"""
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+     here = Path(__file__).resolve()
+     hook = here.parents[3] / "scripts" / "hooks" / "claude" / "check-graph-sync.py"
+     loader = SourceFileLoader("lens_cgs", str(hook)); spec = importlib.util.spec_from_loader("lens_cgs", loader)
+     m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+@@ -166,43 +190,166 @@ def classify_bash(cmd: str, slug: str) -> tuple[set[str], set[str], set[str], se
+                 if n2: wrote.add(n2)
+             st = _safe_tokens(seg)
+             if not st:
+                 continue
+             j = 0
+             while j < len(st) and ("=" in st[j] and not st[j].startswith("-")):
+                 j += 1
+             if j >= len(st):
+                 continue
+             verb = os.path.basename(st[j]); args = st[j + 1:]
++            if verb in ("python", "python3") and args and os.path.basename(args[0]).endswith("lumos"):   # `python3 scripts/lumos …`(Codex 稿常見;S3)
++                j += 1; verb = os.path.basename(st[j]); args = st[j + 1:]
+             target = strict if (idx == 0 and not complex_cmd) else loose   # 子殼內/複合指令的讀=啟發式
+             if verb == "sed" and any(a == "-i" or a.startswith("-i") for a in args):
+                 for a in args:
+                     n = norm_note(a, slug)
+                     if n: wrote.add(n)
+             elif verb in READ_VERBS:
+                 for a in args:
+                     n = norm_note(a, slug)
+                     if n: target.add(n)
+             elif verb.endswith("lumos") and args:
+                 sub = args[0]
+                 try:
+                     raw = shlex.split(seg)
+                 except ValueError:
+                     raw = st
+                 terms = [a for a in raw[raw.index(sub) + 1:] if not a.startswith("-")] if sub in raw else [a for a in args[1:] if not a.startswith("-")]
+                 if sub in LUMOS_CMDS:
+                     lumos_terms.update(terms); lumos_terms.add("".join(terms))
++                    for t2 in terms:   # 帶路徑的節點名(Systems/a.md、Systems/a)也對到 stem(S3;Claude 稿多用裸名,Codex 稿實看帶路徑)
++                        base = t2.rsplit("/", 1)[-1]
++                        lumos_terms.add(base[:-3] if base.endswith(".md") else base)
+                 elif sub == "search":
+                     search_terms.update(terms); search_terms.update(w for t2 in terms for w in t2.split())
+     return strict, loose, wrote, lumos_terms, search_terms
+ 
+ 
++def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
++    """Codex rollout → rows(同 scan_file 的欄位,多 harness=codex)。版本不在 fixture 表 → 跳過並回 (rows, bad, skipped=True)。"""
++    rows = []
++    try:
++        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
++    except OSError:
++        return rows, 0
++    objs, bad = [], 0
++    for ln in lines:
++        if not ln.strip():
++            continue
++        try:
++            objs.append(json.loads(ln))
++        except Exception:
++            bad += 1
++    if not objs or objs[0].get("type") != "session_meta":
++        return rows, bad
++    meta = objs[0].get("payload") or {}
++    if str(meta.get("cli_version") or "") not in CODEX_TRANSCRIPT_VERSIONS:
++        return rows, bad
++    cwd = str(Path(str(meta.get("cwd") or "")).resolve()) if meta.get("cwd") else ""
++    if not cwd or not any(cwd == r or cwd.startswith(r + "/") for r in repo_set):
++        return rows, bad
++    is_sub = meta.get("thread_source") == "subagent" or isinstance(meta.get("source"), dict)
++    sid = meta.get("session_id") or meta.get("id")
++    for idx, o in enumerate(objs):
++        p = o.get("payload") or {}
++        if o.get("type") != "response_item" or p.get("type") != "message" or p.get("role") != "developer":
++            continue
++        txt = _cx_text(p)
++        first = txt.split("\n", 1)[0].strip()
++        lens = LENS_HDR.match(first)
++        if lens:
++            rows.append({"session_id": sid, "is_subagent": is_sub, "harness": "codex", "hook_name": "SubagentStart:dispatch-lens",
++                         "header_version": "lens", "file": "", "n_pinned": 0, "pinned_complete": True, "anchored": True, "ftype": "repo",
++                         "lens_range": lens.group(1), "lens_seat": f"{lens.group(2)}/{lens.group(3)}",
++                         "touched": [], "touched_loose": [], "pre_touched": [], "wrote_back": [], "search_touched": [], "any": False, "any_loose": False})
++            continue
++        if not (HDR_OLD.match(first) or HDR_NEW.match(first)):
++            continue
++        ver, pins, complete = parse_pins(txt)
++        # 錨=同輪內離注入最近的 apply_patch 呼叫(先往後找,沒有再往前找——0.144.1 實看兩種順序都有);
++        # 目標檔=其 patch 標頭第一個路徑;同輪內找不到 apply_patch → 退而取最近的任一 custom_tool_call(anchored 仍 True 但 file 空)
++        def _is_boundary(o2):
++            q2 = o2.get("payload") or {}
++            return (o2.get("type") == "event_msg" and q2.get("type") == "user_message") or \
++                   (o2.get("type") == "response_item" and q2.get("type") == "message" and q2.get("role") == "user")
++        def _patch_target(q2):
++            inp2 = q2.get("input") if isinstance(q2.get("input"), str) else ""
++            for m in _CX_PATCH_RE.finditer(inp2):
++                for ln2 in _cx_unescape(m.group(1)).split("\n"):
++                    h = _CX_HDR_RE.match(ln2.strip())
++                    if h:
++                        return h.group(1).strip()
++            return ""
++        anchor, target, fallback = None, "", None
++        for direction in (1, -1):
++            j = idx + direction
++            while 0 <= j < len(objs) and not _is_boundary(objs[j]):
++                q = objs[j].get("payload") or {}
++                if objs[j].get("type") == "response_item" and q.get("type") == "custom_tool_call":
++                    t = _patch_target(q)
++                    if t:
++                        anchor, target = j, t
++                        break
++                    if fallback is None:
++                        fallback = j
++                j += direction
++            if anchor is not None:
++                break
++        if anchor is None and fallback is not None:
++            anchor = fallback
++        ftype = "scratch" if ("/scratchpad/" in target or "/tmp/" in target) else ("repo" if target else "unknown")
++        row = {"session_id": sid, "is_subagent": is_sub, "harness": "codex", "hook_name": "PreToolUse:apply_patch",
++               "header_version": ver, "file": target, "n_pinned": len(pins), "pinned_complete": complete,
++               "anchored": anchor is not None, "ftype": ftype, "touched": [], "touched_loose": [], "pre_touched": [], "wrote_back": [], "search_touched": []}
++        if anchor is not None and pins:
++            pinset = set(pins); stems = {}
++            for pth in pins:
++                stems.setdefault(pth.rsplit("/", 1)[-1][:-3], []).append(pth)
++            row["ambiguous"] = []
++            for j, o2 in enumerate(objs):
++                q = o2.get("payload") or {}
++                if o2.get("type") != "response_item" or q.get("type") != "custom_tool_call":
++                    continue
++                inp = q.get("input") if isinstance(q.get("input"), str) else ""
++                for m in _CX_CMD_RE.finditer(inp):
++                    cmd = _cx_unescape(m.group(1))
++                    hit_read, hit_loose, hit_write, terms, sterms = classify_bash(cmd, slug)
++                    for t in terms:   # lumos show/context/contracts <詞> → 對到釘住節點(同 scan_file:單一 stem 才算命中)
++                        if t in stems:
++                            if len(stems[t]) == 1:
++                                hit_read.add(stems[t][0])
++                            else:
++                                for pth in stems[t]:
++                                    if pth not in row["ambiguous"]:
++                                        row["ambiguous"].append(pth)
++                    bucket = row["touched"] if j > anchor else row["pre_touched"]
++                    for n in sorted(hit_read & pinset):
++                        if n not in bucket:
++                            bucket.append(n)
++                    if j > anchor:
++                        for n in sorted(hit_loose & pinset):
++                            if n not in row["touched_loose"]:
++                                row["touched_loose"].append(n)
++                        for n in sorted(hit_write & pinset):
++                            if n not in row["wrote_back"]:
++                                row["wrote_back"].append(n)
++                        for t in sterms:
++                            for st, plist in stems.items():
++                                for pth in plist:
++                                    if t and t in st and pth not in row["search_touched"]:
++                                        row["search_touched"].append(pth)
++        row["any"] = bool(row["touched"]); row["any_loose"] = bool(row["touched"] or row["touched_loose"])
++        rows.append(row)
++    return rows, bad
++
++
+ def scan_file(path: Path, slug: str, repo_set: set[str]):
+     rows = []
+     try:
+         lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+     except OSError:
+         return rows, 0
+     objs, bad = [], 0
+     for ln in lines:
+         try:
+             objs.append(json.loads(ln))
+@@ -275,37 +422,51 @@ def scan_file(path: Path, slug: str, repo_set: set[str]):
+         row["any"] = bool(row["touched"])                          # 高信心:Read 工具/單純讀動詞/lumos 指令
+         row["any_loose"] = bool(row["touched"] or row["touched_loose"])   # 加啟發式(heredoc/腳本/子殼),低信心
+         rows.append(row)
+     return rows, bad
+ 
+ 
+ def main() -> int:
+     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+     ap.add_argument("--repo", required=True); ap.add_argument("--projects", default=os.path.expanduser("~/.claude/projects"))
+     ap.add_argument("--json", action="store_true"); ap.add_argument("--out")
++    ap.add_argument("--codex-sessions", default=os.path.join(os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"), "sessions"),
++                    help="Codex rollout 逐字稿根目錄(預設 $CODEX_HOME/sessions 或 ~/.codex/sessions;不存在就只讀 Claude)")
+     a = ap.parse_args()
+     repo = Path(a.repo).resolve(); slug = vault_slug(repo)
+     if not slug:
+         print("擋下:repo 下找不到 docs/*-knowledge", file=sys.stderr); return 2
+     repo_set = repo_paths(repo)
+     files = glob.glob(os.path.join(a.projects, "*", "*.jsonl")) + glob.glob(os.path.join(a.projects, "*", "*", "subagents", "agent-*.jsonl"))
+     rows, bad, broken = [], 0, 0
+     for f in files:
+         try:
+             r, b = scan_file(Path(f), slug, repo_set); rows.extend(r); bad += b
+         except Exception as e:   # 一份壞逐字稿不能讓整份報表死掉(同 recount.py 慣例:壞資料跳過並計數)
+             broken += 1; print(f"跳過 {f}: {type(e).__name__}", file=sys.stderr)
++    for r in rows:
++        r.setdefault("harness", "claude")
++    cx_files = glob.glob(os.path.join(a.codex_sessions, "**", "rollout-*.jsonl"), recursive=True) if os.path.isdir(a.codex_sessions) else []
++    for f in cx_files:
++        try:
++            r, b = scan_codex_file(Path(f), slug, repo_set); rows.extend(r); bad += b
++        except Exception as e:
++            broken += 1; print(f"跳過 {f}: {type(e).__name__}", file=sys.stderr)
++    files = files + cx_files
+     C = collections.Counter
+     denom = [r for r in rows if r["n_pinned"] > 0 and r["ftype"] != "scratch" and r["anchored"]]
+     rep = {
+         "files_scanned": len(files), "bad_lines": bad, "broken_files": broken, "pushes_total": len(rows),
+         "by_role": dict(C("sub" if r["is_subagent"] else "main" for r in rows)),
++        "by_harness": dict(C(r.get("harness", "claude") for r in rows)),
++        "codex_lens_rows": sum(1 for r in rows if r.get("hook_name") == "SubagentStart:dispatch-lens"),
++        "codex_files": len(cx_files),
+         "by_header": dict(C(r["header_version"] for r in rows)),
+         "empty_pinned": sum(1 for r in rows if r["n_pinned"] == 0), "unanchored": sum(1 for r in rows if not r["anchored"]),
+         "scratch_or_outside": sum(1 for r in rows if r["ftype"] == "scratch"), "pinned_incomplete": sum(1 for r in rows if not r["pinned_complete"]),
+         "denominator": len(denom),
+         "n_pinned_dist": dict(sorted(C(r["n_pinned"] for r in denom).items())),
+         "any_by_ftype": {k: {"n": v, "any": sum(1 for r in denom if r["ftype"] == k and r["any"]), "any_loose": sum(1 for r in denom if r["ftype"] == k and r["any_loose"])} for k, v in C(r["ftype"] for r in denom).items()},
+         "any_by_pinned_bucket": {k: {"n": v, "any": sum(1 for r in denom if _bucket(r["n_pinned"]) == k and r["any"]), "any_loose": sum(1 for r in denom if _bucket(r["n_pinned"]) == k and r["any_loose"])} for k, v in C(_bucket(r["n_pinned"]) for r in denom).items()},
+         "pre_touched_rows": sum(1 for r in denom if r["pre_touched"]), "wrote_back_rows": sum(1 for r in denom if r["wrote_back"]),
+         "search_touched_rows": sum(1 for r in denom if r["search_touched"]),
+         "sessions": dict(C(r["session_id"] for r in denom).most_common()),
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 43f2e49..775dc27 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -17,20 +17,48 @@
+ 用法:
+   scripts/scenario_probe.py [--scenarios governance/scenarios/commands.jsonl] [--only s01,s02]
+                             [--max-turns 6] [--timeout 240] [--model ...] [--out 報告.json]
+ """
+ import argparse, json, os, re, shutil, subprocess, sys, tempfile, time
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parent.parent
+ 
+ 
++def tool_calls_from_codex_json(lines):
++    """codex exec --json → [(tool_name, 摘要字串)] 依時間序(Projects/Codex完全支援_計劃 S3)。
++    只認 item.completed:command_execution→("Bash", 指令全文,剝掉 /bin/zsh -lc '…' 外殼);file_change→("Edit", 路徑串);
++    回 (calls, final_text)。事件形狀在 0.144.1 實看,改版要重驗。"""
++    calls, final = [], ""
++    for ln in lines:
++        ln = ln.strip()
++        if not ln.startswith("{"):
++            continue
++        try:
++            ev = json.loads(ln)
++        except Exception:
++            continue
++        if ev.get("type") != "item.completed":
++            continue
++        it = ev.get("item") or {}
++        t = it.get("type")
++        if t == "command_execution":
++            cmd = str(it.get("command", ""))
++            m = re.match(r"^\S*(?:zsh|bash|sh) -lc (['\"])(.*)\1$", cmd, re.S)   # 0.144.1 實看單、雙引號外殼都有
++            calls.append(("Bash", (m.group(2).replace("'\\''", "'") if m.group(1) == "'" else m.group(2).replace('\\"', '"')) if m else cmd))
++        elif t == "file_change":
++            calls.append(("Edit", " ".join(str(c.get("path", "")) for c in (it.get("changes") or []) if isinstance(c, dict))[:200]))
++        elif t == "agent_message":
++            final = str(it.get("text") or "")
++    return calls, final
++
++
+ def tool_calls_from_stream(lines):
+     """stream-json → [(tool_name, 摘要字串)] 依時間序。"""
+     calls = []
+     for ln in lines:
+         ln = ln.strip()
+         if not ln.startswith("{"):
+             continue
+         try:
+             ev = json.loads(ln)
+         except Exception:
+@@ -193,20 +221,58 @@ def _validate_scenario(sc):
+     claude -p 才在索引時炸,白花稀缺配額;改成派工前先擋。"""
+     if not sc.get("id"):
+         return "題目缺 id"
+     if not sc.get("prompt"):
+         return f"題目 {sc.get('id')} 缺 prompt"
+     if not sc.get("expect"):
+         return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
+     return None
+ 
+ 
++def run_one_codex(sc, workdir, timeout, model, arm="with"):
++    """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
++    不帶 --dangerously-bypass-hook-trust(探針測的是「會不會自己敲 lumos」,不靠 hook;要測 hook 另開)。
++    模型由 codex 設定決定(-m 可覆寫);用量上限偵測 Codex 側沒對應訊號,limit_hit 恆 False 並在 result_subtype 標 codex。"""
++    bad = _validate_scenario(sc)
++    if bad:
++        return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False, "reason": f"儀器例外: {bad}", "first_tool": None,
++                "n_calls": 0, "calls": [], "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
++                "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
++    cmd = ["codex", "exec", "--json", "--sandbox", "workspace-write", "-C", str(workdir)]
++    if model:
++        cmd += ["-m", model]
++    cmd.append(sc["prompt"])
++    env = dict(os.environ); env["LUMOS_PROBE"] = "1"
++    if arm == "without":
++        env["LUMOS_ENTRY_HOOK_OFF"] = "1"
++    t0 = time.time()
++    try:
++        r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
++        out, err = r.stdout, r.stderr[-400:]
++    except subprocess.TimeoutExpired as e:
++        out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
++        err = "timeout"
++    calls, final = tool_calls_from_codex_json(out.splitlines())
++    ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
++    answer_content_ok = None
++    if sc.get("answer_expect"):
++        miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
++        answer_content_ok = not miss_a
++        if ok and not answer_content_ok:
++            ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
++    ever, first_idx = lumos_stats(calls)
++    return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
++            "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
++            "answer": (final or "")[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
++            "answer_content_ok": answer_content_ok, "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
++
++
+ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
+     bad = _validate_scenario(sc)
+     if bad:
+         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                 "reason": f"儀器例外: {bad}", "first_tool": None, "n_calls": 0, "calls": [],
+                 "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                 "limit_hit": False, "result_subtype": None}
+     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
+     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
+     # 題目標 allow_agent:true 才放行,其餘照舊禁。
+@@ -294,20 +360,22 @@ def main():
+     ap.add_argument("--out", default="")
+     ap.add_argument("--keep", action="store_true", help="保留臨時副本")
+     ap.add_argument("--sample", type=int, default=0, help="只抽 N 題(決定性:依 --seed 輪轉,給自主迴圈每週抽查用)")
+     ap.add_argument("--seed", default="", help="抽樣種子(例:週數);同種子同題")
+     ap.add_argument("--history", default="", help="把本次摘要 append 到這個 jsonl(ts/passed/total/failed)")
+     ap.add_argument("--ts", default="", help="寫進 history 的時間戳(排程端給)")
+     ap.add_argument("--dry-list", action="store_true", help="只印抽到的題目 id,不跑(測抽樣用)")
+     # ── 修法 A ablation 兩個旗標(預設值=改前行為)──
+     ap.add_argument("--runs", type=int, default=1,
+                     help="每題重跑幾次(預設 1)。同一題這次過下次不過是常態,不重跑就分不出規矩效果與運氣")
++    ap.add_argument("--runner", choices=["claude", "codex"], default="claude",
++                    help="被測的 harness:claude=claude -p(預設);codex=codex exec --json(S3;模型由 codex 設定決定,-m 可覆寫)")
+     ap.add_argument("--arm", choices=["with", "without"], default="with",
+                     help="with=現況;without=沙盒 CLAUDE.md 砍「第一個工具呼叫」小節+入口 hook 靜默(見 Projects/修法A_lumos先行ablation_計劃)")
+     ap.add_argument("--wait-on-limit", type=int, default=0,
+                     help="撞到帳號用量上限時最多等幾秒(每 300 秒重試同一場;預設 0=不等,照記成儀器例外)。"
+                          "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
+     a = ap.parse_args()
+     if a.runs < 1:
+         print("✗ --runs 至少 1", file=sys.stderr); return 2
+     scs = []
+     for f in a.scenarios.split(","):
+@@ -336,21 +404,22 @@ def main():
+     # skills 走 ~/.claude(symlink 回本 repo),不用複製
+     print(f"探的是: {src}\n臨時副本: {work}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),
+           file=sys.stderr)
+     results = []
+     waited = 0
+     try:
+         for sc in scs:
+             for k in range(1, a.runs + 1):
+                 while True:
+                     try:
+-                        res = run_one(sc, work, a.max_turns, a.timeout, a.model, a.arm)
++                        res = (run_one_codex(sc, work, a.timeout, a.model, a.arm) if a.runner == "codex"
++                               else run_one(sc, work, a.max_turns, a.timeout, a.model, a.arm))
+                     except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
+                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                                "reason": f"儀器例外: {type(e).__name__}: {e}", "first_tool": None,
+                                "n_calls": 0, "calls": [], "secs": 0, "stderr": "",
+                                "arm": a.arm, "ever_lumos": False, "first_lumos_idx": None,
+                                "limit_hit": False, "result_subtype": None}
+                     if res.get("limit_hit") and waited < a.wait_on_limit:
+                         print(f"  ⏸ {sc['id']} 撞到帳號用量上限,等 300 秒再試同一場(已等 {waited}s / 上限 {a.wait_on_limit}s)", flush=True)
+                         time.sleep(300); waited += 300
+                         continue
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 438cbe2..453571a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -25394,12 +25394,80 @@ def t_codex_s2_r1_fixes():
+     ld = v.parent / "governance" / "review-reports" / old; ld.mkdir(parents=True, exist_ok=True)   # old 有記錄(有 tier)才有編制表可對
+     for rr in ("r1", "r2", "r3"):
+         (ld / f"{rr}-dispatch.json").write_text(_j.dumps({"round": rr, "seats": [{"seat": "鏡頭1", "auditor": "sonnet-a"}, {"seat": "外家否決", "auditor": "codex"}]}), encoding="utf-8")
+     r = run(v, "loop", "status", old, "--roster", "--repo", str(v.parent))
+     check("s2-r1-F6: 三輪同一個沒尾碼席名只提示一次", r.stdout.count("席名 codex 沒帶模型尾碼") == 1, r.stdout[:500])
+     # ④ 沒 --loop
+     r = run(v, "canary", "record", "none", "--auditor", "x-sonnet", "--severity", "clean", "--findings", "0", "--orchestrator", "codex", "--report", str(rep))
+     check("s2-r1④: --orchestrator 沒 --loop → rc2", r.returncode == 2 and "--loop" in r.stderr, r.stderr[-200:])
+ 
+ 
++# ── Codex完全支援 S3(2026-09-04):量測讀 Codex ────────────────────────────────────────
++def t_codex_s3_recount_codex():
++    """recount.py 讀 Codex rollout:session_meta cwd 篩 repo、版本不在表跳過、developer 訊息「必看——」列成 PreToolUse:apply_patch 行、
++    錨=同輪最近的 apply_patch 呼叫(前後都找)且抓目標檔、注入後 exec 的 lumos show <釘住節點> 算 touched、注入前的算 pre_touched、
++    子代理稿的 LUMOS-LENS 列成 SubagentStart:dispatch-lens 行;Claude 行 harness 預設 claude。"""
++    import importlib.util, json as _j, os, subprocess as _sp, tempfile as _tf
++    from importlib.machinery import SourceFileLoader
++    path = str(Path(__file__).resolve().parent.parent / "governance" / "eval" / "lens-utilization" / "recount.py")
++    loader = SourceFileLoader("lens_recount_cx", path); spec = importlib.util.spec_from_loader("lens_recount_cx", loader)
++    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
++    repo = Path(_tf.mkdtemp(prefix="cx-recount-")); (repo / "docs" / "t-knowledge" / "Systems").mkdir(parents=True)
++    (repo / "docs" / "t-knowledge" / "Systems" / "a.md").write_text("# a\n"); (repo / "docs" / "t-knowledge" / "Systems" / "b.md").write_text("# b\n")
++    _sp.run(["git", "-C", str(repo), "init", "-q"], capture_output=True)
++    slug = "t-knowledge"; repo_set = m.repo_paths(repo)
++    def line(t, payload): return _j.dumps({"timestamp": "t", "type": t, "payload": payload}, ensure_ascii=False)
++    def call(js): return line("response_item", {"type": "custom_tool_call", "name": "exec", "input": js})
++    hdr = "必看——這 2 篇帶著不能破壞的合約或出過事故:\n  直接 ★INVARIANT★ Systems/a.md\n  hop1 ★INVARIANT★ Systems/b.md"
++    dev = line("response_item", {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": hdr}]})
++    lines = [line("session_meta", {"cli_version": "0.144.1", "cwd": str(repo), "source": "exec", "thread_source": "user", "session_id": "S1"}),
++             line("event_msg", {"type": "user_message", "message": "go"}),
++             call('const r = await tools.exec_command({cmd:"python3 scripts/lumos show Systems/b.md"});'),   # 注入前 → pre_touched
++             call('const patch = "*** Begin Patch\\n*** Update File: src/x.py\\n@@\\n-1\\n+2\\n*** End Patch";\nconst r = await tools.apply_patch(patch);'),
++             dev,   # 注入記在呼叫之後(實看兩種順序都有)
++             call('const r = await tools.exec_command({"cmd":"python3 scripts/lumos show Systems/a.md"});')]   # 注入後 → touched
++    d = Path(_tf.mkdtemp(prefix="cx-sess-")); f = d / "rollout-x.jsonl"; f.write_text("\n".join(lines) + "\n", encoding="utf-8")
++    rows, bad = m.scan_codex_file(f, slug, repo_set)
++    check("s3-recount: 一列 apply_patch 行、harness=codex、pins 2", len(rows) == 1 and rows[0]["harness"] == "codex" and rows[0]["n_pinned"] == 2 and rows[0]["hook_name"] == "PreToolUse:apply_patch", str(rows)[:300])
++    r0 = rows[0] if rows else {}
++    check("s3-recount: 錨到注入前的 apply_patch 呼叫且抓到目標檔 src/x.py", r0.get("anchored") is True and r0.get("file") == "src/x.py", str(r0)[:300])
++    check("s3-recount: 注入後 lumos show a.md → touched;注入前 show b.md → pre_touched", r0.get("touched") == ["Systems/a.md"] and r0.get("pre_touched") == ["Systems/b.md"] and r0.get("any") is True, str(r0)[:300])
++    # 版本不在表 → 空
++    f.write_text("\n".join([line("session_meta", {"cli_version": "0.1.0", "cwd": str(repo)})] + lines[1:]) + "\n", encoding="utf-8")
++    check("s3-recount: 版本不在 fixture 表 → 0 列", m.scan_codex_file(f, slug, repo_set)[0] == [], "")
++    # cwd 不在 repo → 空
++    f.write_text("\n".join([line("session_meta", {"cli_version": "0.144.1", "cwd": "/nowhere"})] + lines[1:]) + "\n", encoding="utf-8")
++    check("s3-recount: cwd 不在 repo → 0 列", m.scan_codex_file(f, slug, repo_set)[0] == [], "")
++    # 子代理稿 LUMOS-LENS
++    sub = [line("session_meta", {"cli_version": "0.144.1", "cwd": str(repo), "source": {"subagent": {"thread_spawn": {}}}, "thread_source": "subagent", "session_id": "S2"}),
++           line("response_item", {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "LUMOS-LENS range=main..HEAD 第 1/2 席(…)\nlumos 自動附加:…"}]})]
++    f.write_text("\n".join(sub) + "\n", encoding="utf-8")
++    rows, _ = m.scan_codex_file(f, slug, repo_set)
++    check("s3-recount: 子代理稿 LUMOS-LENS → SubagentStart:dispatch-lens 行,is_subagent、席次 1/2", len(rows) == 1 and rows[0]["hook_name"] == "SubagentStart:dispatch-lens" and rows[0]["is_subagent"] and rows[0]["lens_seat"] == "1/2", str(rows)[:200])
++
++
++def t_codex_s3_probe_codex_parser():
++    """scenario_probe 的 codex exec --json 解析:command_execution 剝 zsh -lc 外殼、file_change → Edit、agent_message 當最終答案;
++    lumos_stats 對剝殼後的指令認得「敲 lumos」;runner 名 codex 走 run_one_codex(不帶 bypass 旗標)。"""
++    import importlib.util, json as _j, inspect
++    from importlib.machinery import SourceFileLoader
++    path = str(Path(__file__).resolve().parent / "scenario_probe.py")
++    loader = SourceFileLoader("probe_cx", path); spec = importlib.util.spec_from_loader("probe_cx", loader)
++    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
++    ev = [_j.dumps({"type": "item.started", "item": {"id": "i1", "type": "command_execution", "command": "/bin/zsh -lc 'python3 scripts/lumos search \"foo\"'"}}),
++          _j.dumps({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "/bin/zsh -lc 'python3 scripts/lumos search \"foo\"'", "exit_code": 0}}),
++          _j.dumps({"type": "item.completed", "item": {"id": "i2", "type": "file_change", "changes": [{"path": "/x/a.py", "kind": "update"}]}}),
++          _j.dumps({"type": "item.completed", "item": {"id": "i3", "type": "agent_message", "text": "done 42"}}),
++          "not json"]
++    calls, final = m.tool_calls_from_codex_json(ev)
++    check("s3-probe: 解析 command_execution(剝殼)/file_change/agent_message", calls == [("Bash", 'python3 scripts/lumos search "foo"'), ("Edit", "/x/a.py")] and final == "done 42", str(calls) + final)
++    check("s3-probe: 只認 item.completed(started 不重複)", len(calls) == 2, str(calls))
++    ever, idx = m.lumos_stats(calls)
++    check("s3-probe: 剝殼後 lumos_stats 認得敲 lumos(第 0 個)", ever and idx == 0, f"{ever} {idx}")
++    src = inspect.getsource(m.run_one_codex)
++    check("s3-probe: codex runner 的命令列不帶 --dangerously-bypass-hook-trust、環境帶 LUMOS_PROBE", '"--dangerously-bypass-hook-trust"' not in src and 'LUMOS_PROBE' in src, "")
++    calls2, _ = m.tool_calls_from_codex_json([_j.dumps({"type": "item.completed", "item": {"id": "i9", "type": "command_execution", "command": "/bin/zsh -lc \"sed -n '1,3p' a.md\""}})])
++    check("s3-probe: 雙引號外殼也剝", calls2 == [("Bash", "sed -n '1,3p' a.md")], str(calls2))
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

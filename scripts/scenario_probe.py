@@ -237,6 +237,7 @@ def run_one_codex(sc, workdir, timeout, model, arm="with"):
         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False, "reason": f"儀器例外: {bad}", "first_tool": None,
                 "n_calls": 0, "calls": [], "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
                 "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
+    # stdin 必重導向 DEVNULL:codex exec 沒有 tty 時會等 stdin(2026-08-23 外家席實測「stdin 要重導否則掛住」)
     cmd = ["codex", "exec", "--json", "--sandbox", "workspace-write", "-C", str(workdir)]
     if model:
         cmd += ["-m", model]
@@ -245,14 +246,19 @@ def run_one_codex(sc, workdir, timeout, model, arm="with"):
     if arm == "without":
         env["LUMOS_ENTRY_HOOK_OFF"] = "1"
     t0 = time.time()
+    instrument_fail = None   # 超時 / 非零退出 = 儀器例外,這場不算分(code-codex-s3 r1 外家 #3:半途已印期望指令也不能判過)
     try:
         r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
         out, err = r.stdout, r.stderr[-400:]
+        if r.returncode != 0:
+            instrument_fail = f"codex exec 退出碼 {r.returncode}"
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = "timeout"
+        err = "timeout"; instrument_fail = f"codex exec 超時 {timeout}s"
     calls, final = tool_calls_from_codex_json(out.splitlines())
     ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
+    if instrument_fail:
+        ok, why = False, f"儀器例外: {instrument_fail}(這場不算分)"
     answer_content_ok = None
     if sc.get("answer_expect"):
         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
@@ -338,7 +344,7 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
             "answer": (final or "")[:1500],
             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
             "answer_content_ok": answer_content_ok,
-            "limit_hit": limit_hit, "result_subtype": result_ev.get("subtype")}
+            "limit_hit": limit_hit, "result_subtype": result_ev.get("subtype"), "harness": "claude"}
 
 
 def main():

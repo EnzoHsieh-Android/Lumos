@@ -19,21 +19,12 @@ HOOKS = {"PreToolUse:Edit", "PreToolUse:Write", "PreToolUse:MultiEdit"}
 # hook 的 additionalContext 記成 response_item/message role=developer(impact-hook 的「必看——」在主代理稿;
 # SubagentStart 的「LUMOS-LENS range=」在子代理稿);沒有 toolUseID 可對,錨=同一輪內下一個 custom_tool_call
 # (input 含 tools.apply_patch)——是啟發式,rows 標 harness=codex 讓讀表的人分得開。
-CODEX_TRANSCRIPT_VERSIONS = {"0.144.1"}
-_CX_CMD_RE = re.compile(r'(?<![\w$])["\']?cmd["\']?\s*:\s*"((?:[^"\\]|\\.)*)"')
-_CX_PATCH_RE = re.compile(r'"((?:[^"\\]|\\.)*\*\*\* Begin Patch(?:[^"\\]|\\.)*)"')
-_CX_HDR_RE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$")
+# ★Codex 解析核心(版本表/兩個正規式/反跳脫)不在這裡自造,向 check-graph-sync.py 借(同 _load_hook_helpers 的借法;
+# code-codex-s3 r1 架構席:兩份版本表會各自漂)★——見下方 _load_hook_helpers 回傳。
 LENS_HDR = re.compile(r"^LUMOS-LENS range=(\S+) 第 (\d+)/(\d+) 席")
 
 
-def _cx_unescape(x: str) -> str:
-    try:
-        return json.loads('"' + x + '"')
-    except ValueError:
-        return x.replace("\\n", "\n").replace('\\"', '"')
-
-
-def _cx_text(p: dict) -> str:
+def _codex_text(p: dict) -> str:
     c = p.get("content")
     if isinstance(c, list):
         return "\n".join(str(it.get("text", "")) for it in c if isinstance(it, dict))
@@ -48,10 +39,16 @@ def _load_hook_helpers():
     hook = here.parents[3] / "scripts" / "hooks" / "claude" / "check-graph-sync.py"
     loader = SourceFileLoader("lens_cgs", str(hook)); spec = importlib.util.spec_from_loader("lens_cgs", loader)
     m = importlib.util.module_from_spec(spec); loader.exec_module(m)
-    return m._segment_command, m._tokens_of, m.find_graph_root
+    return m
 
 
-_segment_command, _tokens_of, _find_graph_root = _load_hook_helpers()
+_cgs = _load_hook_helpers()
+CODEX_TRANSCRIPT_VERSIONS = _cgs.CODEX_TRANSCRIPT_VERSIONS       # 單源:改版只補 hook 那一張表
+_CODEX_EXEC_CMD_RE, _CODEX_APPLY_PATCH_RE, _CODEX_PATCH_HDR_RE = _cgs._CODEX_EXEC_CMD_RE, _cgs._CODEX_APPLY_PATCH_RE, _cgs._CODEX_PATCH_HDR_RE
+_js_unescape = _cgs._js_unescape
+
+
+_segment_command, _tokens_of, _find_graph_root = _cgs._segment_command, _cgs._tokens_of, _cgs.find_graph_root
 REDIRECT_RE = re.compile(r"(?<![<>])(?:\d?>>?|&>|>\|)\s*([^\s>&|;]+)")   # 認 > >> 1> &> >|;不吃 2>&1(目標以 & 開頭被排除)、不吃 <<
 HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)-?\s*['\"]?\w+")           # 排除 <<<(here-string)
 QUOTED_RE = re.compile(r"\"(?:\\.|[^\"\\])*\"|'[^']*'")
@@ -197,7 +194,7 @@ def classify_bash(cmd: str, slug: str) -> tuple[set[str], set[str], set[str], se
             if j >= len(st):
                 continue
             verb = os.path.basename(st[j]); args = st[j + 1:]
-            if verb in ("python", "python3") and args and os.path.basename(args[0]).endswith("lumos"):   # `python3 scripts/lumos …`(Codex 稿常見;S3)
+            if verb in ("python", "python3") and args and os.path.basename(args[0]) == "lumos":   # `python3 scripts/lumos …`(Codex 稿常見;S3;basename 恰為 lumos,notlumos 不算——r1 外家 #4)
                 j += 1; verb = os.path.basename(st[j]); args = st[j + 1:]
             target = strict if (idx == 0 and not complex_cmd) else loose   # 子殼內/複合指令的讀=啟發式
             if verb == "sed" and any(a == "-i" or a.startswith("-i") for a in args):
@@ -217,16 +214,17 @@ def classify_bash(cmd: str, slug: str) -> tuple[set[str], set[str], set[str], se
                 terms = [a for a in raw[raw.index(sub) + 1:] if not a.startswith("-")] if sub in raw else [a for a in args[1:] if not a.startswith("-")]
                 if sub in LUMOS_CMDS:
                     lumos_terms.update(terms); lumos_terms.add("".join(terms))
-                    for t2 in terms:   # 帶路徑的節點名(Systems/a.md、Systems/a)也對到 stem(S3;Claude 稿多用裸名,Codex 稿實看帶路徑)
-                        base = t2.rsplit("/", 1)[-1]
-                        lumos_terms.add(base[:-3] if base.endswith(".md") else base)
+                    for t2 in terms:   # 帶路徑的節點名(Systems/a.md、Systems/a)→ 完整相對路徑精確比對釘住清單,★不降成裸 stem★
+                        if "/" in t2:  # (裸 stem 會把 Other/a.md 撞成 Systems/a.md;code-codex-s3 r1 單reviewer F2)
+                            lumos_terms.add(t2 if t2.endswith(".md") else t2 + ".md")
                 elif sub == "search":
                     search_terms.update(terms); search_terms.update(w for t2 in terms for w in t2.split())
     return strict, loose, wrote, lumos_terms, search_terms
 
 
 def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
-    """Codex rollout → rows(同 scan_file 的欄位,多 harness=codex)。版本不在 fixture 表 → 跳過並回 (rows, bad, skipped=True)。"""
+    """Codex rollout → rows(同 scan_file 的欄位,多 harness=codex)。版本不在 fixture 表 → stderr 一行、回 ([], bad)(同 check-graph-sync 的處置)。
+    壞行計數同 scan_file(空行也算壞行,兩邊一致)。"""
     rows = []
     try:
         lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
@@ -234,8 +232,6 @@ def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
         return rows, 0
     objs, bad = [], 0
     for ln in lines:
-        if not ln.strip():
-            continue
         try:
             objs.append(json.loads(ln))
         except Exception:
@@ -244,17 +240,19 @@ def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
         return rows, bad
     meta = objs[0].get("payload") or {}
     if str(meta.get("cli_version") or "") not in CODEX_TRANSCRIPT_VERSIONS:
+        print(f"跳過 {path.name}: Codex 逐字稿版本 {meta.get('cli_version') or '?'} 不在認得的表 {sorted(CODEX_TRANSCRIPT_VERSIONS)}(不猜格式)", file=sys.stderr)
         return rows, bad
     cwd = str(Path(str(meta.get("cwd") or "")).resolve()) if meta.get("cwd") else ""
     if not cwd or not any(cwd == r or cwd.startswith(r + "/") for r in repo_set):
         return rows, bad
     is_sub = meta.get("thread_source") == "subagent" or isinstance(meta.get("source"), dict)
     sid = meta.get("session_id") or meta.get("id")
+    used_anchors = set()   # 一個 apply_patch 只能當一次錨(同輪兩次注入共用會張冠李戴;code-codex-s3 r1 單reviewer F1)
     for idx, o in enumerate(objs):
         p = o.get("payload") or {}
         if o.get("type") != "response_item" or p.get("type") != "message" or p.get("role") != "developer":
             continue
-        txt = _cx_text(p)
+        txt = _codex_text(p)
         first = txt.split("\n", 1)[0].strip()
         lens = LENS_HDR.match(first)
         if lens:
@@ -274,29 +272,29 @@ def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
                    (o2.get("type") == "response_item" and q2.get("type") == "message" and q2.get("role") == "user")
         def _patch_target(q2):
             inp2 = q2.get("input") if isinstance(q2.get("input"), str) else ""
-            for m in _CX_PATCH_RE.finditer(inp2):
-                for ln2 in _cx_unescape(m.group(1)).split("\n"):
-                    h = _CX_HDR_RE.match(ln2.strip())
+            for m in _CODEX_APPLY_PATCH_RE.finditer(inp2):
+                for ln2 in _js_unescape(m.group(1)).split("\n"):
+                    h = _CODEX_PATCH_HDR_RE.match(ln2.strip())
                     if h:
                         return h.group(1).strip()
             return ""
-        anchor, target, fallback = None, "", None
+        # 兩個方向各找同輪內最近的一個 apply_patch,取距離小的(code-codex-s3 r1 外家 #1:先往後找會讓前一行的輸給後面較遠的);
+        # 同輪內完全沒有 apply_patch → anchored False(外家 #2:不拿任意 exec 當錨,免得沒工具關聯的注入進 denominator)
+        anchor, target = None, ""
+        cands = []
         for direction in (1, -1):
             j = idx + direction
             while 0 <= j < len(objs) and not _is_boundary(objs[j]):
                 q = objs[j].get("payload") or {}
-                if objs[j].get("type") == "response_item" and q.get("type") == "custom_tool_call":
+                if objs[j].get("type") == "response_item" and q.get("type") == "custom_tool_call" and j not in used_anchors:
                     t = _patch_target(q)
                     if t:
-                        anchor, target = j, t
+                        cands.append((abs(j - idx), j, t))
                         break
-                    if fallback is None:
-                        fallback = j
                 j += direction
-            if anchor is not None:
-                break
-        if anchor is None and fallback is not None:
-            anchor = fallback
+        if cands:
+            _, anchor, target = min(cands)
+            used_anchors.add(anchor)
         ftype = "scratch" if ("/scratchpad/" in target or "/tmp/" in target) else ("repo" if target else "unknown")
         row = {"session_id": sid, "is_subagent": is_sub, "harness": "codex", "hook_name": "PreToolUse:apply_patch",
                "header_version": ver, "file": target, "n_pinned": len(pins), "pinned_complete": complete,
@@ -311,10 +309,14 @@ def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
                 if o2.get("type") != "response_item" or q.get("type") != "custom_tool_call":
                     continue
                 inp = q.get("input") if isinstance(q.get("input"), str) else ""
-                for m in _CX_CMD_RE.finditer(inp):
-                    cmd = _cx_unescape(m.group(1))
+                for m in _CODEX_EXEC_CMD_RE.finditer(inp):
+                    cmd = _js_unescape(m.group(1))
                     hit_read, hit_loose, hit_write, terms, sterms = classify_bash(cmd, slug)
-                    for t in terms:   # lumos show/context/contracts <詞> → 對到釘住節點(同 scan_file:單一 stem 才算命中)
+                    for t in terms:   # lumos show/context/contracts <詞> → 對到釘住節點(同 scan_file:單一 stem 才算命中;帶路徑精確對)
+                        if "/" in t:
+                            if t in pinset:
+                                hit_read.add(t)
+                            continue
                         if t in stems:
                             if len(stems[t]) == 1:
                                 hit_read.add(stems[t][0])
@@ -401,6 +403,9 @@ def scan_file(path: Path, slug: str, repo_set: set[str]):
                     elif it.get("name") == "Bash":
                         hit_read, hit_loose, hit_write, terms, sterms = classify_bash(str((it.get("input") or {}).get("command", "")), slug)
                     for t in terms:
+                        if "/" in t:                       # 完整相對路徑:精確對釘住清單
+                            if t in pinset: hit_read.add(t)
+                            continue
                         if t in stems:
                             if len(stems[t]) == 1: hit_read.add(stems[t][0])
                             else:
