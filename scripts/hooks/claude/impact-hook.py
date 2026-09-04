@@ -151,14 +151,15 @@ def _ttl_lazy_cleanup() -> None:
 def _ttl_unmark(session_id: str, file_abs: str, token: str | None = None) -> None:
     """撤冷卻標記:判定當下已先寫(窗口不變寬,code-loop r1),最後沒注入就撤——零注入的 Edit 不開冷卻窗(前置修正②)。
     ★只撤自己寫的★:標記內容為「<ts> <token>」,token 不符就不動(code-loop r2 併發席:無條件 unlink 會抹掉另一次判定剛建立的合法冷卻窗)。"""
+    if token is None:
+        return   # 自己沒寫成標記(mark 失敗)就沒有東西可撤;不得退回無條件刪(r3 併發席)
     marker = _ttl_marker_path(session_id, file_abs)
     try:
-        if token is not None:
-            parts = marker.read_text(encoding="utf-8").split()
-            if len(parts) < 2 or parts[1] != token:
-                return
+        parts = marker.read_text(encoding="utf-8").split()
+        if len(parts) < 2 or parts[1] != token:
+            return
         marker.unlink()
-    except OSError:
+    except (OSError, IndexError):
         pass
 
 
@@ -207,7 +208,7 @@ def _ttl_should_inject(session_id: str, file_abs: str, ttl_sec: float, mark: boo
             last_ts = float(content.split()[0])   # 內容「<ts> <token>」(r2 併發席);舊格式只有 ts 也相容
             if now - last_ts < ttl_sec:
                 return False  # 冷卻窗內,壓掉
-        except (ValueError, OSError):
+        except (ValueError, OSError, IndexError):   # 空檔/半途寫壞 → 視為過期(r3 邊界/通才席:IndexError 沒接會讓現役 hook 當掉,違反 fail-open)
             pass  # 壞標記 → 視為過期,重新注入
 
     # 首次或窗外。mark=True 維持舊語意(判定+寫一體,既有測試);main 走 mark=False,真的注入後才 _ttl_mark。

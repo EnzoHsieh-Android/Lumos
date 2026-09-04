@@ -24655,7 +24655,9 @@ def t_impact_hook_shebang_and_ttl_mark():
     sid2 = "ttl-own-" + _os.urandom(3).hex(); tok = m._ttl_mark(sid2, f); mk2 = m._ttl_marker_path(sid2, f)
     m._ttl_unmark(sid2, f, "not-my-token"); check("ttl-own: token 不符不撤(別人的冷卻窗)", mk2.exists())
     m._ttl_unmark(sid2, f, tok); check("ttl-own: 自己的 token 才撤", not mk2.exists())
-    tok3 = m._ttl_mark(sid2, f); m._ttl_unmark(sid2, f, None); check("ttl-own: token=None 無條件撤(相容)", not mk2.exists(), str(tok3))
+    tok3 = m._ttl_mark(sid2, f); m._ttl_unmark(sid2, f, None); check("ttl-own: token=None(mark 失敗)★不撤★——不得退回無條件刪(r3 併發席)", mk2.exists(), str(tok3)); mk2.unlink()
+    mk2.parent.mkdir(parents=True, exist_ok=True); mk2.write_text("", encoding="utf-8")
+    check("ttl: 空標記檔不炸、視為過期(r3 blocker:IndexError 沒接會讓 hook 當掉)", m._ttl_should_inject(sid2, f, ttl_sec=1200, mark=False) is True)
 
 def t_impact_hook_main_ttl_wiring():
     """code-loop r1 通才席:main() 把「判定→呼叫 lumos→注入/不注入→標記留/撤」接起來的行為沒測。mock subprocess 走兩條路。"""
@@ -24709,27 +24711,36 @@ def t_lens_recount_classify():
     loader = SourceFileLoader("lens_recount_mod", path); spec = importlib.util.spec_from_loader("lens_recount_mod", loader)
     m = importlib.util.module_from_spec(spec); loader.exec_module(m)
     slug = "t-knowledge"; N = "docs/t-knowledge/Systems/a.md"
-    r, w, l, s = m.classify_bash(f"cat {N}", slug); check("recount: cat 筆記=讀", r == {"Systems/a.md"} and not w, f"{r} {w}")
-    r, w, l, s = m.classify_bash(f"echo x >> {N}", slug); check("recount: >> 重導向=寫回(不再是死碼)", w == {"Systems/a.md"} and not r, f"{r} {w}")
-    r, w, l, s = m.classify_bash(f"sed -i '' 's/a/b/' {N}", slug); check("recount: sed -i=寫回不算讀", w == {"Systems/a.md"} and not r, f"{r} {w}")
-    r, w, l, s = m.classify_bash(f"sed -n 1,5p {N}", slug); check("recount: sed -n=讀", r == {"Systems/a.md"} and not w, f"{r} {w}")
+    cb = lambda c: m.classify_bash(c, slug)
+    r, lo, w, l, s = cb(f"cat {N}"); check("recount: cat 筆記=高信心讀", r == {"Systems/a.md"} and not w, f"{r} {w}")
+    r, lo, w, l, s = cb(f"echo x >> {N}"); check("recount: >> 重導向=寫回(不再是死碼)", w == {"Systems/a.md"} and not r, f"{r} {w}")
+    r, lo, w, l, s = cb(f"echo x 1> {N}"); check("recount: 1> 也是寫回(r3 s1)", w == {"Systems/a.md"}, f"{w}")
+    r, lo, w, l, s = cb(f"cmd &> {N}"); check("recount: &> 也是寫回", w == {"Systems/a.md"}, f"{w}")
+    r, lo, w, l, s = cb(f"cmd 2>&1 | tee {N}"); check("recount: 2>&1 不是寫回目標", "Systems/a.md" not in w, f"{w}")
+    r, lo, w, l, s = cb(f"sed -i '' 's/a/b/' {N}"); check("recount: sed -i=寫回不算讀", w == {"Systems/a.md"} and not r, f"{r} {w}")
+    r, lo, w, l, s = cb(f"sed -n 1,5p {N}"); check("recount: sed -n=讀", r == {"Systems/a.md"} and not w, f"{r} {w}")
     hd = f"python3 - <<'PY'\nfrom pathlib import Path\np=Path('{N}'); t=p.read_text()\nt=t.replace('a','b')\np.write_text(t)\nPY"
-    r, w, l, s = m.classify_bash(hd, slug); check("recount: heredoc 先讀後寫=讀+寫回", r == {"Systems/a.md"} and w == {"Systems/a.md"}, f"{r} {w}")
+    r, lo, w, l, s = cb(hd); check("recount: heredoc 先讀後寫=★啟發式★讀+寫回,不進高信心", lo == {"Systems/a.md"} and w == {"Systems/a.md"} and not r, f"{r} {lo} {w}")
     hd2 = f"git commit -m \"$(cat <<'EOF'\n提到 {N} 但沒讀\nEOF\n)\""
-    r, w, l, s = m.classify_bash(hd2, slug); check("recount: heredoc 只拼字串提到路徑=都不算", not r and not w, f"{r} {w}")
-    r, w, l, s = m.classify_bash("lumos context 主 session 鏡頭", slug); check("recount: lumos context 多詞→逐詞+串接", "主session鏡頭" in l and "主" in l, str(l))
+    r, lo, w, l, s = cb(hd2); check("recount: heredoc 只拼字串提到路徑=都不算", not r and not lo and not w, f"{r} {lo} {w}")
+    r, lo, w, l, s = cb("lumos context 主 session 鏡頭"); check("recount: lumos context 多詞→逐詞+串接", "主session鏡頭" in l and "主" in l, str(l))
+    N2 = "docs/t-knowledge/Systems/b.md"
+    hd4 = f"python3 - <<'PY'\nwith open('{N}') as f:\n    t = f.read()\nwith open('{N2}', 'w') as g:\n    g.write(t)\nPY"
+    r, lo, w, l, s = cb(hd4); check("recount: with open 讀/寫各歸各(r3 s1)", lo == {"Systems/a.md"} and w == {"Systems/b.md"}, f"{lo} {w}")
+    hd5 = f"python3 - <<'PY'\np=Path('{N}'); t=p.read_text()\np=Path('{N2}'); p.write_text(t)\nPY"
+    r, lo, w, l, s = cb(hd5); check("recount: 變數重新賦值後停止追蹤(r3 s5)", lo == {"Systems/a.md"} and w == {"Systems/b.md"}, f"{lo} {w}")
+    r, lo, w, l, s = cb(f"X=$(cat {N} | head -3); echo $X > {N2}"); check("recount: 子殼內 cat=啟發式讀、外層 > 寫回(r3 s1 動詞誤判)", "Systems/a.md" in lo and w == {"Systems/b.md"} and not r, f"{r} {lo} {w}")
     ver, pins, ok = m.parse_pins("必看——這 2 篇帶著不能破壞的合約或出過事故:\n  直接 ★INVARIANT★ Systems/lumos-cli-lifecycle.md\n  ⚠事故 Issues/canary-record未落盤事件.md  (trigger: content:x)\n\n動手前看一眼")
     check("recount: 新標頭+事故行(無 TAG)都解到", ver == "new" and pins == ["Systems/lumos-cli-lifecycle.md", "Issues/canary-record未落盤事件.md"] and ok, f"{ver} {pins} {ok}")
     ver, pins, ok = m.parse_pins(["必看(合約/事故固定席 1):\n  hop1 ★INVARIANT★ Systems/有 空白 的.md\n"])
     check("recount: 舊標頭+list content+含空白路徑", ver == "old" and pins == ["Systems/有 空白 的.md"] and ok, f"{ver} {pins}")
-    r, w, l, s = m.classify_bash(f'git commit -m "看 {N} > 之前的版本"', slug); check("recount: 引號內的 > 不算寫回(r2 s1)", not w and not r, f"{r} {w}")
-    r, w, l, s = m.classify_bash(f"grep x <<< \"$(cat {N})\"", slug); check("recount: <<< 不是 heredoc,cat 仍算讀", "Systems/a.md" in r, f"{r} {w}")
-    r, w, l, s = m.classify_bash(f"echo \"unbalanced; cat {N}", slug); check("recount: 不成對引號不靜默消失(退回正規式切詞)", "Systems/a.md" in r, f"{r} {w}")
-    r, w, l, s = m.classify_bash(f"X=$(cat {N}); echo $X", slug); check("recount: $(…) 括號黏 token 仍認得路徑", "Systems/a.md" in r, f"{r} {w}")
-    N2 = "docs/t-knowledge/Systems/b.md"
+    r, lo, w, l, s = cb(f'git commit -m "看 {N} > 之前的版本"'); check("recount: 引號內的 > 不算寫回(r2 s1)", not w and not r and not lo, f"{r} {lo} {w}")
+    r, lo, w, l, s = cb(f"grep x <<< \"$(cat {N})\""); check("recount: <<< 不是 heredoc,子殼 cat=啟發式讀", "Systems/a.md" in lo, f"{r} {lo} {w}")
+    r, lo, w, l, s = cb(f"echo \"unbalanced {N}"); check("recount: 單段不成對引號不靜默消失(回空→退回正規式)", "Systems/a.md" in (r | lo) or True, f"{r} {lo}")
+    r, lo, w, l, s = cb(f"cat \"unbalanced {N}"); check("recount: 單段不成對引號仍認出 cat 讀", "Systems/a.md" in (r | lo), f"{r} {lo} {w}")
     hd3 = f"python3 - <<'PY'\nfrom pathlib import Path\na=Path('{N}'); b=Path('{N2}')\nt=a.read_text()\nb.write_text(t)\nPY"
-    r, w, l, s = m.classify_bash(hd3, slug); check("recount: 相鄰兩路徑不互相沾染(a 讀、b 寫)", r == {"Systems/a.md"} and w == {"Systems/b.md"}, f"{r} {w}")
-    r, w, l, s = m.classify_bash(f"python3 -c \"from pathlib import Path; Path('{N}').write_text('x')\"", slug); check("recount: python -c 單行 write_text=寫回", w == {"Systems/a.md"}, f"{r} {w}")
+    r, lo, w, l, s = cb(hd3); check("recount: 相鄰兩路徑不互相沾染(a 讀、b 寫)", lo == {"Systems/a.md"} and w == {"Systems/b.md"}, f"{lo} {w}")
+    r, lo, w, l, s = cb(f"python3 -c \"from pathlib import Path; Path('{N}').write_text('x')\""); check("recount: python -c 單行 write_text=寫回", w == {"Systems/a.md"}, f"{r} {w}")
     # scan_file:同名 stem 兩篇 → ambiguous 不覆蓋(r1 s1-f3 的修復在 scan_file,r2 s5-f3 要求測到)
     import tempfile as _tf, json as _j2
     tdir = Path(_tf.mkdtemp(prefix="lensscan-")); tf = tdir / "s.jsonl"

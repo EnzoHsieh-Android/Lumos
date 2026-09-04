@@ -28,7 +28,7 @@ def _load_hook_helpers():
 
 
 _segment_command, _tokens_of, _find_graph_root = _load_hook_helpers()
-REDIRECT_RE = re.compile(r"(?<![<>&\d])>>?\s*([^\s>&|;]+)")   # 不吃 2>&1、>/dev/null 另擋、不吃 <<
+REDIRECT_RE = re.compile(r"(?<![<>])(?:\d?>>?|&>|>\|)\s*([^\s>&|;]+)")   # 認 > >> 1> &> >|;不吃 2>&1(目標以 & 開頭被排除)、不吃 <<
 HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)-?\s*['\"]?\w+")           # 排除 <<<(here-string)
 QUOTED_RE = re.compile(r"\"(?:\\.|[^\"\\])*\"|'[^']*'")
 SCRIPT_HINTS = ("read_text", "write_text", "open(")
@@ -39,19 +39,30 @@ def _strip_quoted(s: str) -> str:
     return QUOTED_RE.sub(lambda m: " " * len(m.group(0)), s)
 
 
+SUBSHELL_RE = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+COMPLEX_RE = re.compile(r"<<|\$\(|`|\bpython3?\b[^\n]*\s-c\s")
+
+
 def _safe_tokens(seg: str) -> list:
-    """沿用 check-graph-sync 的切詞;shlex 對不成對引號會拋 ValueError→退回正規式切詞,★不得整段靜默消失★(r2 s3);去掉黏住的 () $。"""
-    seg = seg.replace("$(", " ").replace("`", " ").replace(")", " ")   # 子殼/指令替換的括號先拆開,免得黏進 token(r2 s3)
-    try:
-        toks = _tokens_of(seg)
-    except ValueError:
+    """沿用 check-graph-sync 的切詞;它對不成對引號會★自己吞掉例外回空★(r3 架構/通才席:try/except 到不了),
+    所以「回空但輸入非空」才是退回正規式的條件,★不得整段靜默消失★。"""
+    toks = _tokens_of(seg)
+    if not toks and seg.strip():
         toks = TOKEN_RE.findall(seg)
-    return [w.strip("()$") for x in toks for w in x.split() if w.strip("()$")]   # 引號內的子指令再按空白拆(路徑才找得到)
+    return [w.strip("$") for x in toks for w in x.split() if w.strip("$")]
+
+
+def _split_subshells(cmd: str) -> list[str]:
+    """把 $(…)/`…` 的內容拆成獨立段(各自有自己的動詞),外層保留佔位——不再把括號拍平成同一段(r3 正確性席:cat 變外層動詞)。"""
+    inner = [m.group(1) or m.group(2) or "" for m in SUBSHELL_RE.finditer(cmd)]
+    outer = SUBSHELL_RE.sub(" SUBSHELL ", cmd)
+    return [outer] + [x for x in inner if x.strip()]
 
 
 def _script_marks(text: str, slug: str) -> tuple[set[str], set[str]]:
-    """腳本文字(heredoc 或 python -c)裡每個筆記路徑:同一行或它被賦給的變數後續 .read_text/.write_text/open(var) 決定讀/寫。
-    不用固定行數視窗(r2 s5:相鄰兩路徑互相沾染)。"""
+    """腳本文字(heredoc 或 python -c)裡每個筆記路徑:同一行或它被賦給的變數(含 `with open(p) as f`)後續的
+    read_text/write_text/open 決定讀/寫;變數被重新賦值就停止追蹤(r3 通才席)。★啟發式,低信心層★——
+    只寫入 loose 欄,不進 strict any。"""
     read, wrote = set(), set()
     lines = text.split("\n")
     for k, ln in enumerate(lines):
@@ -59,19 +70,24 @@ def _script_marks(text: str, slug: str) -> tuple[set[str], set[str]]:
             n = norm_note(tok, slug)
             if not n:
                 continue
+            esc = re.escape(tok.strip("'\"`,;:"))
             scopes = [ln]
-            m = re.search(r"(\w+)\s*=\s*(?:Path|pathlib\.Path|open)?\(?['\"]?[^'\"]*" + re.escape(tok.strip("'\"`,;:")), ln)
+            m = re.search(r"(\w+)\s*=\s*[^=\n]*" + esc, ln) or re.search(r"open\([^)]*" + esc + r"[^)]*\)\s*as\s+(\w+)", ln)
             var = m.group(1) if m else None
             if var:
                 for ln2 in lines[k + 1:]:
-                    if re.search(r"\b" + re.escape(var) + r"\.(read_text|write_text|open)\b|open\(\s*" + re.escape(var) + r"\b", ln2):
+                    if re.match(r"\s*" + re.escape(var) + r"\s*=[^=]", ln2):
+                        break   # 重新賦值→停止追蹤
+                    if re.search(r"\b" + re.escape(var) + r"\.(read_text|write_text|read|write)\b|open\(\s*" + re.escape(var) + r"\b", ln2):
                         scopes.append(ln2)
             joined = "\n".join(scopes)
-            if "read_text" in joined or re.search(r"open\([^)]*['\"]r['\"]", joined) or (re.search(r"open\(", joined) and ".read" in joined):
+            if re.search(r"read_text|\.read\(\)|open\([^)]*['\"]r['\"]", joined):
                 read.add(n)
-            if "write_text" in joined or re.search(r"open\([^)]*['\"][wa]['\"]", joined):
+            if re.search(r"write_text|\.write\(|open\([^)]*['\"][wa]['\"]", joined):
                 wrote.add(n)
     return read, wrote
+
+
 HDR_OLD = re.compile(r"^必看\(合約/事故固定席 (\d+)\):")
 HDR_NEW = re.compile(r"^必看——這 (\d+) 篇")
 PIN_LINE = re.compile(r"^\s+\S+(?:\s+★[^★]+★)?\s+(.+?\.md)(?:\s|$)")   # 事故行沒有 ★TAG★;節點路徑可含空白(非貪婪到 .md)
@@ -129,52 +145,55 @@ def parse_pins(content) -> tuple[str, list[str], bool]:
     return ver, pins, complete
 
 
-def classify_bash(cmd: str, slug: str) -> tuple[set[str], set[str], set[str], set[str]]:
-    """回 (讀到的節點, 寫回的節點, lumos context/show/contracts 的詞, search 的詞)。
-    寫回=重導向到筆記(引號外) / sed -i / 腳本裡該路徑(或其變數)有 write_text|open 'w';讀=讀動詞帶筆記路徑 / 腳本裡有 read_text|open 'r'。
-    純拼字串提到路徑(commit message 之類)兩者都不算。切段/切詞沿用 check-graph-sync,shlex 失敗退回正規式。"""
+def classify_bash(cmd: str, slug: str) -> tuple[set[str], set[str], set[str], set[str], set[str]]:
+    """回 (高信心讀, 啟發式讀, 寫回, lumos context/show/contracts 的詞, search 的詞)。
+    高信心讀=單純段落(無 heredoc/子殼/python -c)裡讀動詞帶筆記路徑;啟發式讀=腳本/heredoc/子殼內判出來的(低信心,報表分開印)。
+    寫回=引號外重導向(> >> 1> &> >|)到筆記 / sed -i / 腳本內就近 write。純拼字串提到路徑兩者都不算。"""
     import shlex
-    read, wrote, lumos_terms, search_terms = set(), set(), set(), set()
-    if HEREDOC_RE.search(cmd) or (re.search(r"\bpython3?\b.*\s-c\s", cmd) and any(h in cmd for h in SCRIPT_HINTS)):
-        r2, w2 = _script_marks(cmd, slug); read |= r2; wrote |= w2
-        for m in REDIRECT_RE.finditer(_strip_quoted(cmd.split("\n")[0])):   # heredoc 第一行的殼層重導向
+    strict, loose, wrote, lumos_terms, search_terms = set(), set(), set(), set(), set()
+    complex_cmd = bool(COMPLEX_RE.search(cmd))
+    if HEREDOC_RE.search(cmd) or re.search(r"\bpython3?\b[^\n]*\s-c\s", cmd):
+        r2, w2 = _script_marks(cmd, slug); loose |= r2; wrote |= w2
+        for m in REDIRECT_RE.finditer(_strip_quoted(cmd.split("\n")[0])):
             n2 = norm_note(m.group(1), slug)
             if n2: wrote.add(n2)
-        return read, wrote, lumos_terms, search_terms
-    for seg in _segment_command(cmd):
-        bare = _strip_quoted(seg)
-        for m in REDIRECT_RE.finditer(bare):
-            n2 = norm_note(m.group(1), slug)
-            if n2: wrote.add(n2)
-        st = _safe_tokens(seg)
-        if not st:
-            continue
-        j = 0
-        while j < len(st) and ("=" in st[j] and not st[j].startswith("-")):
-            j += 1
-        if j >= len(st):
-            continue
-        verb = os.path.basename(st[j]); args = st[j + 1:]
-        if verb == "sed" and any(a == "-i" or a.startswith("-i") for a in args):
-            for a in args:
-                n = norm_note(a, slug)
-                if n: wrote.add(n)
-        elif verb in READ_VERBS:
-            for a in args:
-                n = norm_note(a, slug)
-                if n: read.add(n)
-        elif verb.endswith("lumos") and args:
-            sub = args[0]
-            try:
-                raw = shlex.split(seg)
-            except ValueError:
-                raw = st
-            terms = [a for a in raw[raw.index(sub) + 1:] if not a.startswith("-")] if sub in raw else [a for a in args[1:] if not a.startswith("-")]
-            if sub in LUMOS_CMDS:
-                lumos_terms.update(terms); lumos_terms.add("".join(terms))
-            elif sub == "search":
-                search_terms.update(terms); search_terms.update(w for t2 in terms for w in t2.split())
-    return read, wrote, lumos_terms, search_terms
+        return strict, loose, wrote, lumos_terms, search_terms
+    for idx, piece in enumerate(_split_subshells(cmd)):     # 先拆子殼再切段:否則 ; | 會把 $(…) 切成不成對的半截
+        for seg in _segment_command(piece):
+            bare = _strip_quoted(seg)
+            for m in REDIRECT_RE.finditer(bare):
+                n2 = norm_note(m.group(1), slug)
+                if n2: wrote.add(n2)
+            st = _safe_tokens(seg)
+            if not st:
+                continue
+            j = 0
+            while j < len(st) and ("=" in st[j] and not st[j].startswith("-")):
+                j += 1
+            if j >= len(st):
+                continue
+            verb = os.path.basename(st[j]); args = st[j + 1:]
+            target = strict if (idx == 0 and not complex_cmd) else loose   # 子殼內/複合指令的讀=啟發式
+            if verb == "sed" and any(a == "-i" or a.startswith("-i") for a in args):
+                for a in args:
+                    n = norm_note(a, slug)
+                    if n: wrote.add(n)
+            elif verb in READ_VERBS:
+                for a in args:
+                    n = norm_note(a, slug)
+                    if n: target.add(n)
+            elif verb.endswith("lumos") and args:
+                sub = args[0]
+                try:
+                    raw = shlex.split(seg)
+                except ValueError:
+                    raw = st
+                terms = [a for a in raw[raw.index(sub) + 1:] if not a.startswith("-")] if sub in raw else [a for a in args[1:] if not a.startswith("-")]
+                if sub in LUMOS_CMDS:
+                    lumos_terms.update(terms); lumos_terms.add("".join(terms))
+                elif sub == "search":
+                    search_terms.update(terms); search_terms.update(w for t2 in terms for w in t2.split())
+    return strict, loose, wrote, lumos_terms, search_terms
 
 
 def scan_file(path: Path, slug: str, repo_set: set[str]):
@@ -217,7 +236,7 @@ def scan_file(path: Path, slug: str, repo_set: set[str]):
         ftype = "scratch" if ("/scratchpad/" in target or "/tmp/" in target or (target and not any(target.startswith(r) for r in repo_set) and target.startswith("/"))) else ("test" if "test" in os.path.basename(target).lower() else "code")
         row = {"session_id": o.get("sessionId") or o.get("session_id"), "is_subagent": is_sub, "hook_name": att.get("hookName"),
                "header_version": ver, "file": target, "n_pinned": len(pins), "pinned_complete": complete,
-               "anchored": anchor is not None, "ftype": ftype, "touched": [], "pre_touched": [], "wrote_back": [], "search_touched": [], "ambiguous": []}
+               "anchored": anchor is not None, "ftype": ftype, "touched": [], "touched_loose": [], "pre_touched": [], "wrote_back": [], "search_touched": [], "ambiguous": []}
         if anchor and pins:
             pinset = set(pins); stems = {}
             for pth in pins:
@@ -228,12 +247,12 @@ def scan_file(path: Path, slug: str, repo_set: set[str]):
                 for it in (o2.get("message", {}).get("content") or []):
                     if not (isinstance(it, dict) and it.get("type") == "tool_use"):
                         continue
-                    hit_read, hit_write, terms, sterms = set(), set(), set(), set()
+                    hit_read, hit_loose, hit_write, terms, sterms = set(), set(), set(), set(), set()
                     if it.get("name") == "Read":
                         n = norm_note(str((it.get("input") or {}).get("file_path", "")), slug)
                         if n: hit_read.add(n)
                     elif it.get("name") == "Bash":
-                        hit_read, hit_write, terms, sterms = classify_bash(str((it.get("input") or {}).get("command", "")), slug)
+                        hit_read, hit_loose, hit_write, terms, sterms = classify_bash(str((it.get("input") or {}).get("command", "")), slug)
                     for t in terms:
                         if t in stems:
                             if len(stems[t]) == 1: hit_read.add(stems[t][0])
@@ -243,6 +262,9 @@ def scan_file(path: Path, slug: str, repo_set: set[str]):
                     bucket = row["touched"] if j > anchor[0] else row["pre_touched"]
                     for n in hit_read & pinset:
                         if n not in bucket: bucket.append(n)
+                    if j > anchor[0]:
+                        for n in hit_loose & pinset:
+                            if n not in row["touched_loose"]: row["touched_loose"].append(n)
                     for n in hit_write & pinset:
                         if j > anchor[0] and n not in row["wrote_back"]: row["wrote_back"].append(n)
                     for t in sterms:
@@ -250,7 +272,8 @@ def scan_file(path: Path, slug: str, repo_set: set[str]):
                             for p in plist:
                                 if t and t in s and p not in row["search_touched"] and j > anchor[0]:
                                     row["search_touched"].append(p)
-        row["any"] = bool(row["touched"])
+        row["any"] = bool(row["touched"])                          # 高信心:Read 工具/單純讀動詞/lumos 指令
+        row["any_loose"] = bool(row["touched"] or row["touched_loose"])   # 加啟發式(heredoc/腳本/子殼),低信心
         rows.append(row)
     return rows, bad
 
@@ -281,8 +304,8 @@ def main() -> int:
         "scratch_or_outside": sum(1 for r in rows if r["ftype"] == "scratch"), "pinned_incomplete": sum(1 for r in rows if not r["pinned_complete"]),
         "denominator": len(denom),
         "n_pinned_dist": dict(sorted(C(r["n_pinned"] for r in denom).items())),
-        "any_by_ftype": {k: {"n": v, "any": sum(1 for r in denom if r["ftype"] == k and r["any"])} for k, v in C(r["ftype"] for r in denom).items()},
-        "any_by_pinned_bucket": {k: {"n": v, "any": sum(1 for r in denom if _bucket(r["n_pinned"]) == k and r["any"])} for k, v in C(_bucket(r["n_pinned"]) for r in denom).items()},
+        "any_by_ftype": {k: {"n": v, "any": sum(1 for r in denom if r["ftype"] == k and r["any"]), "any_loose": sum(1 for r in denom if r["ftype"] == k and r["any_loose"])} for k, v in C(r["ftype"] for r in denom).items()},
+        "any_by_pinned_bucket": {k: {"n": v, "any": sum(1 for r in denom if _bucket(r["n_pinned"]) == k and r["any"]), "any_loose": sum(1 for r in denom if _bucket(r["n_pinned"]) == k and r["any_loose"])} for k, v in C(_bucket(r["n_pinned"]) for r in denom).items()},
         "pre_touched_rows": sum(1 for r in denom if r["pre_touched"]), "wrote_back_rows": sum(1 for r in denom if r["wrote_back"]),
         "search_touched_rows": sum(1 for r in denom if r["search_touched"]),
         "sessions": dict(C(r["session_id"] for r in denom).most_common()),
@@ -303,11 +326,11 @@ def _render(rep):
          f"掃了 {rep['files_scanned']} 份逐字稿(壞行 {rep['bad_lines']}、跳過壞檔 {rep['broken_files']});impact 注入 {rep['pushes_total']} 次:主/子 {rep['by_role']},標頭版 {rep['by_header']}",
          f"不進分母:固定席空 {rep['empty_pinned']}、對不到錨點 {rep['unanchored']}、scratch/repo 外 {rep['scratch_or_outside']};固定席清單不全 {rep['pinned_incomplete']}",
          f"分母(有固定席、非 scratch、有錨點)={rep['denominator']};|pinned| 分佈 {rep['n_pinned_dist']}",
-         "推送後有碰到任一篇 pinned(any)——★分型讀,不合併★:"]
+         "推送後有碰到任一篇 pinned——★分型讀,不合併★;any=高信心證據(Read 工具/單純讀動詞/lumos 指令),any_loose=加上啟發式(heredoc/腳本/子殼,低信心):"]
     for k, v in rep["any_by_pinned_bucket"].items():
-        L.append(f"  |pinned| {k}:{v['n']} 次,any {v['any']}")
+        L.append(f"  |pinned| {k}:{v['n']} 次,any {v['any']}(loose {v['any_loose']})")
     for k, v in rep["any_by_ftype"].items():
-        L.append(f"  檔型 {k}:{v['n']} 次,any {v['any']}")
+        L.append(f"  檔型 {k}:{v['n']} 次,any {v['any']}(loose {v['any_loose']})")
     L.append(f"另列:推送前已碰 {rep['pre_touched_rows']}、只寫回未讀 {rep['wrote_back_rows']}、search 碰(弱證據) {rep['search_touched_rows']}")
     L.append(f"session 叢聚:{rep['sessions']}")
     return "\n".join(L)
