@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-09-04
 updated: 2026-09-04
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/governance
 related:
   - "[[Projects/Codex工作流整合_調研]]"
