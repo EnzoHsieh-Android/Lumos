@@ -1,0 +1,218 @@
+---
+type: project
+status: doing
+created: 2026-09-03
+updated: 2026-09-03
+tags:
+  - type/project
+  - status/doing
+  - scope/governance
+related:
+  - "[[Verification/2026-09-03_派工攔截點實測]]"
+  - "[[Projects/impact鏡頭機械化_計劃]]"
+  - "[[Projects/派工時自動補清單_計劃]]"
+  - "[[Projects/code席爆炸半徑供糧_計劃]]"
+  - "[[Projects/主動影響幅度偵測_計劃]]"
+  - "[[Projects/impact-diff橋接_計劃]]"
+  - "[[Systems/design-loop]]"
+  - "[[Systems/retrieval-ranking]]"
+summary: |-
+  FLAG:DECISION
+  KEY:★鏡頭不是閘★——★只限代碼迴圈★:派工詞含 `LUMOS-IMPACT: <base>..HEAD` 時,PreToolUse(matcher Agent)hook 把 impact --diff --json 的固定席附進派工詞(前 8 篇貼內容、其餘列名;0 篇不注入);不帶就逐位元原樣放行。不擋、不驗、不記帳、不量成效
+  KEY:Enzo 裁(2026-09-03):散文審查的清單本質是鏡頭;可執行層(合約綁測試)已存在且只有它該是閘;★不要求鏡頭證明有用★
+  KEY:r1(2026-09-03,3 席+架構+外家)38 條/blocking 26/2 條引句錨不到不採信/36 條全折(updatedInput 第二種做法折成 d2 有意識偏離,blocker 輪不放行)——三個 blocker 全折:①hook 進 ANCHOR_FILES(自己早上寫的硬約束,第二次差點撤掉)②待審分支檔名不得逐字注入(只列 base 已追蹤且字元白名單的檔,其餘只報數)③節點內容從 base ref 讀(git show <base>:<path>),分支新增的只列名
+  KEY:憑什麼做得到=[[Verification/2026-09-03_派工攔截點實測]]:攔得到 Agent、updatedInput 改得了、子代理照單全收;追測二:additionalContext 只到派工者→updatedInput 是唯一通道(有意識偏離四支鄰居 hook,記 d2)
+  KEY:★清單早就算得出來★(impact --diff --json 固定席四欄位);採用機制=代碼審模板 §3 第 3 格由「手貼固定席」改成固定一行標記,hook 補內容;★這仍是假設★不是證據(同格位 08-29 上線後 0 執行);REVISIT:2026-10-03 grep 派工單看標記出現率(查有沒有被用,不是有沒有用)
+  KEY:r2(21 條/blocking 16/4 blocker,全折)立下★消毒原則=來自圖譜或 diff 的自由文字零輸出★:只印固定字彙(合約類別/kind)、base 已追蹤路徑(ls-tree 帶 quotePath=false)、base 版合約行;`contract` 後綴/`matched_by`/一句話層全不印;分支新增節點連名字都不列;base 必須主線可達(merge-base --is-ancestor)否則放行;清單本身仍用工作樹算=能藏不能說(界線)
+  KEY:r3(21 條/blocking 14/4 blocker,全折;上限到)裁★hook 薄殼、邏輯進 lumos 新子命令 dispatch-lens★沿用既有 helper(主線判定補 upstream 優先/三個合約正規式只認 KEY: 行/_git_commit_exists);圖譜根與檔名白名單皆從 base 樹解析;快取進 ~/.cache 0700 驗 owner;d3=清單仍用工作樹算(能藏不能說),要當閘前必修;本 repo hooksPath 在樹內=checkout 即執行分支碼,另立 Issue
+  KEY:三個登記點=_GLOBAL_CLAUDE_HOOKS/HOOK_ENTRIES/enforcement 寫死的四元組+ANCHOR_FILES(加交叉測試、同步 anchor-integrity「5 錨點」);檔名 dispatch-lens-hook.py;repo=CLAUDE_PROJECT_DIR→cwd;標記正規式 ^LUMOS-IMPACT:\s*(\S+)\s*$;外層 60s 內層 45s;快取鍵 sha 必過 ^[0-9a-f]{40}$ TTL 20 分鐘
+  KEY:誠實界線=永遠不知道有沒有用/錨點只罩 repo 那份不罩家目錄那份/大 diff 超時就靜默放行(LUMOS_HOOK_DEBUG 才印)/綁 2.1.259/本機所有專案每次派工都 fire
+decisions:
+  - content: 開案:鏡頭版——標記觸發、固定席、d9 截斷、既有合併器安裝、fail-open;不擋不驗不記不量。動工前唯一實測=additionalContext 到不到得了子代理
+    id: d1
+    context: 2026-09-03 五份計劃全死於設計審(收斂閘漏項敏感度 v1/v2、派工時自動補清單、審查帳節點映射、折入去重留痕),四份死在想證明清單有用(量覆蓋率/記映射/對照組/指紋)。Enzo 裁:散文級要化成測試不切實際,清單當單純鏡頭讓 subagent 考慮相關節點面向就好
+    why_chosen: 存活事實三件(攔得到/清單算得出/沒人貼)剛好拼成鏡頭版;砍掉量測支線後,五份計劃二十幾條 blocker 只剩三條仍適用(措辭中性/用既有合併器/誠實揭露無防篡改)。代價=永遠不知道有沒有用,Enzo 接受
+    decided: 2026-09-03
+    valid: true
+  - content: r1 折入兩條有意識偏離:①本 hook 進 ANCHOR_FILES——scripts/hooks/claude/ 第一支被錨的檔,新類別;②用 updatedInput 改寫派工詞——四支鄰居 hook 只用 additionalContext,本案偏離
+    id: d2
+    context: r1 四席一致 blocker:自己早上在 2026-09-03_派工攔截點實測 寫的「改寫派工詞的 hook 必須進錨點,硬約束」被首版當鄰居慣例撤掉(同日前案死因⑥重演);架構對齊席判 updatedInput 為專案第二種做法(major)
+    why_chosen: 錨點:硬約束成立的原因(改得了派工詞)只在本案成立、對只注入上下文的鄰居不成立,對照組選錯;錨點只罩 repo 份不罩家目錄份,寫成界線不再帶過。updatedInput:追測二實測 additionalContext 只到派工者、子代理收不到,改寫輸入是唯一通道;放行條件=永不 deny+進錨點
+    decided: 2026-09-03
+    valid: true
+  - content: 固定席清單仍用工作樹圖譜算,不改(分支作者能「藏」節點,不能「說」);事件型回頭:要拿本 hook 當閘之前必須先修
+    id: d3
+    context: r2/r3 外家 Codex 兩輪判「寫成界線不算修」;修法=impact 加 --vault 旗標+每次 git archive base 版圖譜到快取
+    why_chosen: 藏的結果=今天沒 hook 的狀態,不比現狀差;鏡頭不是閘,漏一篇不改變任何擋不擋;修要動 scripts/lumos 且每次派工多一次 archive,成本翻倍。回頭條件綁事件:本 hook 若被拿去當閘(擋推送/擋派工),藏就變成繞閘,必須先修
+    decided: 2026-09-03
+    valid: true
+  - content: v1.1:固定席合約行標綁定測試狀態(有/懸空/★無綁定測試★+節點小計);只改 dispatch-lens 輸出、不跑測試、不碰 hook 與閘;走單人輕量審
+    id: d4
+    context: Enzo 問代碼審能否拿相關節點綁的測試跑回歸;查 bound-tests-gate:pre-push 已逐支真跑且硬擋。缺的是審查員看不到哪些合約沒被機器守住
+    why_chosen: 該剔的是人要讀的量不是機器要跑的量;標存在性用既有 real/fake/dangling/bad-name 分類,零新自由文字;「綠」由閘保證,鏡頭不得越界宣稱
+    decided: 2026-09-03
+    valid: true
+  - content: v1.2:固定席 0 篇不再靜默,附 code 層既有相依備援段(受影響測試 testmap/共改夥伴 cochange/呼叫者=base 版識別字反查),各上限 8、零 diff 文字;固定席非空不變;主 session 側不做
+    id: d5
+    context: Enzo:昨天只想到 happy path,沒有節點可參考時也要分析既有相依功能;主 session 歷史 18% 注入固定席空
+    why_chosen: 沒節點≠沒相依;三種相依兩種已有工具(testmap/cochange),呼叫者用識別字反查不寫解析器(三輪代碼審教訓);消毒沿 v1.0 原則只印 base 已有的名字
+    decided: 2026-09-04
+    valid: true
+verified_by:
+  - "[[Verification/2026-09-03_派工鏡頭注入驗收]]"
+---
+> 白話:代碼審派審查員的時候,規矩要求把「這批改動碰到哪些帶合約或出過事故的筆記」貼進派工詞——實帳沒人做到。本案在派子代理那一刻,由 hook 把機器算好的那份清單**附**進派工詞。★它是鏡頭,不是閘★:不擋、不驗、不記帳、不量成效。成不成功只看一件事——派工詞裡真的多了那段。★只限代碼迴圈★(設計迴圈審的是計劃筆記,沒有 diff 範圍,d9 也明寫維持原樣)。
+
+PRIOR-ART: ① 最小解層級——攔截點、清單算法、截斷規則、安裝器全是既有的:`PreToolUse` hook(本 repo 已有一支同事件、不同 matcher 的 `impact-hook.py`:它掛 Edit|Write,本案掛 Agent)、`lumos impact --diff --json` 的固定席、[[Systems/design-loop]] d9 的「截錄」規則(cap 值沿 `_print_sync_nudge` 的預設 8)、`scripts/merge-claude-settings.py`、鄰居的 TTL 冷卻窗形態。本案自己寫的只有一支 hook 腳本、一段注入措辭、兩處模板改字。② 世界解過沒——「先把該查的列出來、再讓判官逐條看」是 [arXiv 2608.31016](https://arxiv.org/abs/2608.31016) 量到唯一有效的補救(找漏 25%→37%;數字轉引自 [[Projects/收斂閘漏項敏感度v2_計劃]] 與 2026-09-03 治理日報,本案未重讀論文),其餘(換措辭/多席/提示詞優化)全部無效;而★它只是輔助,清單在眼前判官仍漏六成★——所以本案定位為鏡頭。③ 裁定=borrow-design,零依賴。
+
+## 一句話
+
+★代碼審派工詞帶標記時,hook 把固定席節點附上去;不帶就逐位元原樣放行。★
+
+## 為什麼是鏡頭,不是閘(今天五份計劃的結論)
+
+2026-09-03 五份計劃全死在設計審,四份死在「想證明它有用」——量覆蓋率、記映射、做對照組、定指紋。存活的事實只有三件:
+- ★攔得到★:[[Verification/2026-09-03_派工攔截點實測]]——`PreToolUse` 匹配派子代理(`tool_name`=`Agent`)、拿得到派工詞全文、`updatedInput` 改得了、子代理照單全收;追測二:`additionalContext` 只到派工者,子代理收不到。
+- ★清單早就算得出來★:`lumos impact --diff --json` 的固定席(`pinned: true`;帶硬合約或出過事故的節點),每篇有 `kind`(直接相依/其他)、`contract`(合約種類)、`files`(被哪個檔牽連)三個結構欄位——hook 讀 JSON,不 parse 文字版。
+- ★沒人貼★:規則 2026-08-29 上線後唯一一個迴圈、編排者=規則作者本人、次日,零執行([[Projects/code席爆炸半徑供糧_計劃]])。
+
+Enzo 裁(2026-09-03):散文審查的清單本質是鏡頭;可執行那層(合約綁測試、推送前真跑)已經存在且只有它該是閘;★不要求鏡頭證明自己有用★。
+
+## 範圍:只有代碼迴圈(r1 折入)
+
+- d9(2026-09-01)逐字:「code 迴圈固定席以落成核對 capped 節錄為準……design 迴圈維持原樣(pinned 集小)」。截斷規則只給代碼迴圈;本案套用 d9 就只能在代碼迴圈。
+- 設計迴圈審的是計劃筆記工作副本,沒有既定 git diff 範圍;r1 兩席實跑 `HEAD..HEAD` 回空。硬塞標記=標記在、鏡頭永遠不注入。
+- 所以:標記只進代碼審模板(§3);設計審模板(§1)★不動★。§7.6 架構對齊席是兩種迴圈★共用一格★(r2 三席抓到「代碼改標記、設計不動」照字面做不到)→那格改成兩支明寫:「代碼迴圈:一行 `LUMOS-IMPACT: <base>..HEAD`;設計迴圈:維持手貼固定席」。
+
+## 對現行裁定的處置(四條,全部不繞過)
+
+1. **`impact --diff` 聚合版「不接 hook」**(`Systems/retrieval-ranking:51`、[[Projects/impact-diff橋接_計劃]]):理由=非固定席那層無機械保證、靠審查員兜。★本案只附固定席★,落在它明說有保證的那層;且本案不是閘,不承擔「兜」的角色——審查員仍在場。
+2. **[[Systems/design-loop]] d9**(2026-09-01):「上限內貼內容必答、超出列名不必答」;d9 只訂「截錄」,上限值 8 是 `_print_sync_nudge` 的預設,本案沿用同一個數。★只在代碼迴圈採用★(見〈範圍〉)。
+3. **錨點:★本 hook 進 `ANCHOR_FILES`★**(r1 四席一致 blocker)。理由是自己早上寫的:[[Verification/2026-09-03_派工攔截點實測]]——「這個機制與提示注入在技術上是同一件事,差別只在善意……該 hook 本身必須進錨點保護清單,這一條是硬約束,不是提醒」。首版寫「比照鄰居不進 anchor」是選錯對照組:鄰居 `impact-hook.py` 只注入上下文、改不了派工詞,硬約束對它不成立、對本案成立。這是 `scripts/hooks/claude/` 第一支被錨的檔(既有五錨=兩支測試 runner+三支 git hook),屬新類別,記 d2。★錨點只罩 repo 裡那份★:裝進 `~/.claude/hooks/` 的副本在機制外,能改家目錄的人本來就能做任何事——這條不再用「鄰居也沒進」帶過,直接寫成界線。
+4. **[[Projects/主動影響幅度偵測_計劃]]:同位置 hook「永不 block」**:★比照★,本案永不回 deny。差別=本案用 `updatedInput` 改寫派工詞,四支現役 hook 只用 `additionalContext`——架構對齊席判「第二種做法」(major),★折成有意識偏離★:追測二實測 `additionalContext` 到不了子代理,改寫輸入是唯一通道;這是有意識偏離,記 d2,不是沒看到。
+
+## 為什麼不是「不寫 hook」(r1 簡化席問的)
+
+- 候選 A「只改模板、由編排者手貼」:就是 d8 現制,08-29 上線、次日 0 執行。死因不是內容算不出,是「跑指令→讀→貼」三步落在編排者(一個 LLM session)身上,任何一步省略清單就沒了。
+- 候選 B「`lumos loop next` 直接印好可貼區塊」:少了「跑指令」一步,仍剩「貼」——同一個失敗類。
+- 本案:編排者只要模板裡那一行標記還在(照模板派工=標記自然在),內容由機器補。★這仍是假設★:「一行固定文字比三步好留」沒有證據,只有結構差異;所以驗收不驗有用,回頭條件驗「有沒有被用」(見〈誠實界線〉REVISIT)。
+- 代價:一支對本機所有專案每次派子代理都 fire 的 hook(不帶標記時只做一次字串比對就放行)、一個新的錨點類別。
+
+## 分層:hook 是薄殼,邏輯進 lumos(r3 架構席四條 major 的共同解)
+
+r3 架構席抓到:第 2/3 版新加的四個判斷——主線分支怎麼取、合約行怎麼認、圖譜根怎麼找、base 存不存在——`scripts/lumos` 早就各有一個函式(主線判定約 16748 行、`INVARIANT_RE`/`CHECKPOINT_RE`/`IRREVERSIBLE_RE` 約 2405/2776 行、`find_vault` 約 11391 行、`_git_commit_exists` 約 2971 行),而 spec 在 hook 裡各自重寫一套,其中合約行那套還會重踩 lumos 刻意用 `KEY:` 前綴避開的「正文提到標記就誤判」。★裁:hook 只做三件事——逐行比對標記正規式、subprocess 呼叫 `lumos dispatch-lens <範圍> --repo <r> --json`、把回傳文字接進 `updatedInput`;★其餘全部住 lumos 新子命令 `dispatch-lens`★,沿用既有函式:主線判定沿既有函式並在那裡補 `origin/main` 優先(改一處、不新造);合約行用既有三個正規式(只認 `KEY:` 行,不掃正文);base 存在用 `_git_commit_exists`;圖譜根★從 base 樹解析★(見設計 3)。這跟鄰居 `impact-hook.py`「薄殼 subprocess 叫 lumos」形態一致。下面〈設計〉各條凡寫「hook 做 X」的判斷邏輯,一律讀成「`lumos dispatch-lens` 做 X,hook 只轉送」。
+
+## 設計
+
+1. **觸發**:`PreToolUse`,matcher `Agent`(早上實測用 `Agent|Task|Subagent`,2.1.259 實際 `tool_name` 是 `Agent`;另兩個是保險,本案只留實測到的那個)。派工詞含一行 `LUMOS-IMPACT: <base>..HEAD` 才動作;沒有就逐位元原樣放行(`{}` 或不輸出)。★標記文法定死★(r2:文法沒定,差一個空白就靜默不注入):逐行比對正規式 `^LUMOS-IMPACT:\s*(\S+)\s*$`,取第一個命中;範圍必須★恰好一個 `..`、兩端非空、不含 `...`、不以 `-` 開頭★(r3:`a..b..c`/`..HEAD`/`main...HEAD` 都含 `..`,首版判準太寬),否則放行。REVISIT 那條 grep 用同一個正規式。★範圍由標記明寫,不從散文猜;`--repo` 比照四支鄰居:先 `CLAUDE_PROJECT_DIR` 環境變數、再 hook payload 的 `cwd`;★`dispatch-lens` 拿到後先 `git rev-parse --show-toplevel` 取 repo 根,之後所有 git 指令一律 `git -C <根>` 從根跑★(r3 極端輸入席實測:`--repo` 指到子目錄時 `ls-tree`/`git show` 回相對子目錄的路徑,白名單全對不上)★(省略 `--repo` 時 `impact --diff` 只從 hook 行程 cwd 往上找,cwd≠目標專案就查錯 repo)。
+2. **清單**:`lumos impact --diff <範圍> --repo <cwd> --json`,取 `pinned: true`;★剔除 `files` 全落在 `governance/review-reports/` 的節點★(d8 記在案的已知污染源:凍結快照 patch 是審計證物,impact 沒排除、會頂到滿分;手貼時靠人眼剔,本案機器剔)。剔完後 `listed` 為 0→★附「既有相依」備援段★(v1.2;第一版是不注入,見 v1.2 節)。★base 必須是主線可達的 commit★(r2 外家:標記左側填分支上任一 commit,主線讀取就形同虛設):base 存在用既有 `_git_commit_exists`,再 `git rev-parse` 取全長 sha 且必須通過 `^[0-9a-f]{40}$` 或 `^[0-9a-f]{64}$`(SHA-256 倉庫;否則放行);再 `git merge-base --is-ancestor <base> <主線 tip>` 不成立→放行。★威脅模型明寫★(r3 外家:本 repo 的 `refs/remotes/origin/HEAD` 根本沒設,會退到本地 main,而本地 main 可移動):攻擊者控制的是「送審分支的內容」;審查者本機的 ref、remote 設定、家目錄與本 hook 安裝副本屬同一信任等級,不在防線內。主線 tip 沿既有主線判定函式(約 16748 行,現只試本地 main/master),★在那個函式補「本地 main/master 的 upstream(`main@{upstream}`)優先、沒設 upstream 才用本地分支」★(r3 通才:本 repo 的 remote 叫 `Lumos` 不叫 `origin`,寫死 origin 在自家就解析不到),不在 hook 另寫;都沒有→放行;取到哪一個寫進 debug 行。★威脅模型再加一條★(r3 載荷席實測:分支若能在 checkout 時執行任意碼——例如 git hooks 路徑指向樹內——就能改本地任何 ref):那是「checkout 這條分支的人已被拿下」,是 repo 整體姿態,不在本 hook 防線內。★本 repo 現況 `core.hooksPath=scripts/hooks`,就是樹內★——這條攻擊在自家是真的,不是理論;本案不解,另立 [[Issues/git-hooks路徑指向樹內_checkout即執行分支碼]] 追。★固定席「清單」本身仍用工作樹圖譜算★(impact 載入工作樹 vault):分支作者能改關係讓某節點不被釘=「藏」,藏的結果等於今天沒 hook 的狀態;能「說」的通道全部封在下面 3–5 條。r2/r3 外家兩輪都判「寫成界線不算修」——編排者裁為正式決策 d3:不修,理由=藏 ≤ 現狀、修法要 impact 加 `--vault` 旗標並每次 `git archive` base 版圖譜到快取(改 scripts/lumos,成本翻倍);★事件型回頭條件:任何人要拿本 hook 當閘(擋推送/擋派工)之前,必須先修這條,入口=本計劃 d3 與 [[Systems/design-loop]]★。
+3. **內容來源=base ref,不是工作樹**(r1 blocker):前 8 篇貼內容,內容用 `git show <base>:<repo 相對路徑>` 讀★base 那版★(base=標記左側)。★`--json` 的 `node` 是圖譜相對路徑★(r2 三席實跑:直接代入 `git show` 全部失敗、每篇都會被誤判「分支新增」)→repo 相對路徑=`docs/<slug>-knowledge/` + node,圖譜根★從 base 樹解析★:`git ls-tree --name-only <base> docs/` 裡 `*-knowledge` 的目錄,多個取排序第一個(跟 `find_vault` 一致)——r3 載荷席實測:工作樹版 `find_vault` 取排序第一個,分支加一個空的、名字排序在前的 knowledge 目錄就讓整批固定席悄悄熄燈;base 樹攻擊者加不進去。節點在 base 不存在(本分支新增)→★連名字都不列★,只報「另有 N 篇本分支新增節點未列」(名字本身就是注入管道)。理由:工作樹的圖譜筆記是待審分支的一部分(鐵則 1 逼改 code 必改筆記),分支作者可控;base 是主線,不可控。
+4. **消毒原則:★來自圖譜或 diff 的自由文字零輸出★**(r1 blocker 只擋了 `files`;r2 載荷席實跑抓到 `contract` 欄位會把 `risk/<任意文字>` 標籤逐字印成 ★RISK·任意文字★、事故節點的 `matched_by` 是觸發字串原文且永遠排最前)。hook 輸出只允許三種東西:①固定字彙表——`contract` 欄實際值域只有 INVARIANT/IRREVERSIBLE/RISK·<後綴>/空(`_impact_contract`,約 15601 行;CHECKPOINT 不在這欄),只印前綴類別、RISK 後綴丟;`kind` 印 direct/indirect/incident(事故靠 `kind: incident`,不是 contract);`matched_by`、摘要、一句話層★完全不印★;②★base 已追蹤的路徑★——`files` 與節點路徑只列出現在 `git -c core.quotePath=false ls-tree -r --name-only <base>` 裡的(r2:沒帶 quotePath 中文檔名全被轉義、白名單永遠不過——impact 自己修過同一坑),長度 ≤200;base 是主線,所以主線有的名字就是可信的,不再另設字元白名單(r2:字元白名單會把含空白的合法檔名靜默剔掉);其餘只報「另有 N 個本分支新增/改名檔未列」;③base 那版節點的合約行:`git show` 出來的全文裡用既有 `INVARIANT_RE`/`CHECKPOINT_RE`/`IRREVERSIBLE_RE` 認出的行(它們只認 frontmatter 的 `KEY:` 行——r3 外家:圖譜裡合約多半長成 `  KEY:★INVARIANT★…`;r3 架構席:既有正規式刻意不掃正文,避免正文提到標記就誤判),每行截 200 字。★定序★:對每個 pinned 節點先問「repo 相對路徑在 base 樹裡嗎」——在:列名、貼內容(前 8 篇)、列 base 已追蹤的 files;不在:只進「未列」計數,後面的檢查都不跑。
+5. **截斷**:前 8 篇貼內容(節點名+`kind`+`contract` 類別+base 已追蹤 `files`+該節點 base 版的合約行),其餘只列名。單篇內容上限 40 行(合約行優先),整段上限 400 行,超出截斷並標「已截」。★code-loop SKILL 第 19 行現制是三層(貼內容/前 10 篇「列名+一句話」/純列名),本案有意砍掉中間的一句話層★——一句話=節點摘要=自由文字=注入管道;同步 SKILL.md 時明寫這是砍層不是漏寫。
+6. **措辭**:純文字條列(比照四支鄰居的注入格式,不用 Markdown 標題+方括號代號),固定第一行 `lumos 自動附加:本次改動的固定席節點(來源 impact --diff,只供參考)`。★不用命令式、不用「暗號」型措辭★(實測會被子代理指認為提示注入而拒答)。★這個標頭配 `updatedInput` 的組合尚未實測★(追測二測的是 `additionalContext`)——列入驗收第一條。
+7. **時間預算與快取**:外層 `HOOK_ENTRIES` 宣告 60 秒、內層 subprocess 45 秒(必須外>內:本 repo 栽過內 20>外 10,見 [[Projects/enforcement儀表板_計劃]])。實測本 repo 單 commit 12 秒、41 檔 17.7 秒、更大 35 秒;同輪多席會對同一範圍重算——★快取★:鍵=(repo 根, base sha, HEAD sha),兩個 sha 都必須通過 `^[0-9a-f]{40}$|^[0-9a-f]{64}$` 才能當檔名(r2:rev-parse 失敗時會把輸入原樣吐到 stdout,含斜線點號,直接拿去拼檔名=路徑注入),檔名=三者串起來的 sha256;存使用者私有目錄 `~/.cache/lumos/dispatch-lens/<sha256>.json`(目錄 0700;r3 載荷席:$TMPDIR 路徑可預測、可被搶先偽造),讀取時檔案 owner≠當前 uid 或 group/other 可寫→視為無快取;寫暫存再 rename;TTL 20 分鐘(沿鄰居 `_ttl_should_inject` 形態),同輪只有第一席付錢。★大 diff 超時=靜默放行★,這是接受的界線(見〈誠實界線〉)。
+8. **失敗一律放行、預設靜默**:算不出、超時、不是 git repo、base 解析不到、lumos 不在——原樣放行;比照鄰居「技術性失敗純靜默」,只有 `LUMOS_HOOK_DEBUG=1` 才在 stderr 印一行(白話三段式)。
+9. **安裝三個登記點+錨點**:檔名 dispatch-lens-hook.py、住 scripts/hooks/claude/ 目錄(沿 -hook.py 慣例——四支現役有三支如此,check-graph-sync.py 例外;將建,現在還不存在);①`_GLOBAL_CLAUDE_HOOKS` ②`merge-claude-settings.py` 的 `HOOK_ENTRIES` ③★`lumos enforcement` 寫死的四元組★(`scripts/lumos` 約 12109 行;它不讀 ①,漏了就是「根本沒查」而非「查了沒事」;連帶 `t_enforcement_never_raises_on_missing` 釘死的列數要改)④`ANCHOR_FILES` 加一行並 `lumos anchor approve`;★加一條測試交叉核對 `ANCHOR_FILES` 與 `governance/anchor-baseline.json` 的鍵集合相等★(r2:兩者現在沒有任何測試互證,錨點修復可以落地卻沒真保護);⑤同步 [[Systems/anchor-integrity]](它寫死「5 錨點=runner×2+hooks×3」,本案是第 6 個、新類別)。不自造流程、不引入外部二進位、不用 jq。
+10. **不做**:不 deny、不驗證審查員有沒有讀、不記治理帳、不量成效、不碰設計迴圈。
+
+## 跟既有手貼格的關係(r1 兩席問的:取代,不是疊加)
+
+- 代碼審模板 §3 第 3 格「圖譜鏡頭」(d8 手貼固定席、含兩條填寫雷)→★改成只放一行 `LUMOS-IMPACT: <base>..HEAD`★,填寫雷①(審計證物污染)由 hook 機器剔、雷②留字。
+- 架構對齊席 §7.6「圖譜裡相關功能筆記」那格是兩種迴圈共用→改成兩支(見〈範圍〉):代碼迴圈填標記那一行、設計迴圈維持手貼。
+- `lumos-code-loop/SKILL.md` 第 19 行對同機制的摘要句→同步改字(templates 改了摘要沒跟=本 repo 記過的「知識同步散落會漏」形態)。
+- 設計審模板 §1★不動★;§7.6 只加設計那一支的字,行為不變。
+- 一份派工詞只會有一份固定席清單:標記在、hook 補;編排者不再手貼。
+
+## 驗收(三條,全機械)
+
+1. **正向**:挑一個★已知有固定席的範圍★(例 `c3b4f3f~1..c3b4f3f`,實測 12 釘),派工詞含標記→子代理收到的 prompt 含固定第一行與 ≥1 篇固定席,且子代理沒有拒答(哨兵實測法,同早上)。這一條同時驗〈設計〉6 的標頭組合。
+2. **零篇**:挑一個沒有固定席的範圍→prompt 附備援段(v1.2 前:逐位元不變)。
+3. **反向**:不含標記的派工→prompt 逐位元不變。
+★不驗收「有沒有用」★——那是另一條線,今天已裁不走。
+
+## 誠實界線
+
+- ★本案永遠不會知道自己有沒有用★。Enzo 裁:先給鏡頭,要量等迴圈自然累積資料再說。
+- 「模板一行標記會被留著」是假設,不是證據(同格位手貼 0 執行)。
+  REVISIT:2026-10-03 對 `governance/review-reports/*/r*-dispatch.json` 與派工詞留痕 grep `LUMOS-IMPACT:`,出現率為 0 就承認標記也留不住,停案;這是查「有沒有被用」,不是查「有沒有用」。
+- 注入內容=固定字彙+base 已追蹤路徑+base 版合約行,零自由文字;信任等級=主線可寫的人。
+- ★固定席「清單」用工作樹圖譜算★:待審分支能「藏」節點(改關係讓它不被釘),不能「說」;藏=退回今天沒 hook 的狀態。要連藏都擋要用 base 版圖譜算清單,本案不做(要另開 worktree,成本翻倍),寫成界線。
+- 錨點只罩 repo 裡的 hook 檔,不罩 `~/.claude/hooks/` 的安裝副本。
+- 大 diff 可能超時→靜默放行,最需要鏡頭的那批反而最容易掉;快取只救同輪重算,不救單次太慢。接受,因為替代是阻塞派工。
+- 本地 main 沒設 upstream 且落後遠端時,合法 base 會被「主線可達」判不成立→靜默放行(r3 實測重現);這是假陰性不是假陽性,接受,debug 行會印取到的主線 tip。
+- 綁 Claude Code 2.1.259;動工前重跑攔截實測。
+- 裝上後對本機所有專案的每次派工都 fire(不帶標記只做一次字串比對)。
+
+## 未解(動工前要答,不需審查席)
+
+1. `git show <base>:<path>` 的 base 在 shallow clone / base 不在本地時解析不到→放行;要不要退回工作樹版並標「未消毒」?★預設不退,寧可沒有★。
+
+## 實務隱患(逐類答)
+
+- **self-governance**:改的是治理流程。緩解=不動閘、不記帳、fail-open;新增=一支 hook、兩處模板改字、一個錨點。
+- **併發**:同輪多席同時派→多個 hook 行程同時算同一範圍;快取檔用「寫暫存再 rename」原子換,重算只浪費不出錯。
+- **效能**:單次 12–35 秒實測;快取後同輪一次;不帶標記時 O(字串比對)。
+- **回滾**:無持久狀態(快取在 TMPDIR,可整目錄刪)。拆=從三個登記點移除+`ANCHOR_FILES` 移除並 approve+模板那一行改回手貼;沿既有 hook 退役慣例兩階段:先進 `_RETIRED_STUB_CLAUDE_HOOKS`(留空殼),下一版才進 `_RETIRED_CLAUDE_HOOKS`(刪檔)——是兩個不同常數(r2 架構席:首版寫成一個,照字面會加錯)。
+- **安全**:改寫派工詞=與提示注入同構;緩解=錨點(repo 份)、內容從 base 讀、檔名白名單、不用命令式措辭。沒有機械防篡改家目錄副本(界線)。
+- ★沒有機械守衛的部分★:編排者自己寫派工詞不照模板,標記就不在——鏡頭的本性,回頭條件見 REVISIT。
+
+## v1.1:每篇固定席標「綁定測試狀態」(2026-09-03 深夜,Enzo 裁;light 誤判升 -std,r1 五席 23 條全折)
+
+- **為什麼**:Enzo 問「代碼審能不能拿清單節點綁的測試跑一遍確認沒回歸」。查 [[Systems/bound-tests-gate]]:★已經在跑而且是硬閘★——pre-push 的 `code-loop check` 對 impact 固定席每條 ★INVARIANT★ 的 `[test:]` 逐支真跑,紅/懸空/假就擋。缺的不是跑,是★審查員看不到★:鏡頭裡的合約行只有文字,審查員分不出「這條有測試守著」與「這條是裸合約、只剩人讀」。
+- **做什麼**(只改 `lumos dispatch-lens` 的輸出,不碰 hook、不碰閘):★只對 ★INVARIANT★ 合約行★補一格固定字彙;★CHECKPOINT★/★IRREVERSIBLE★ 走 `[rollback:]`/`[guard:]` 另一套,原樣印、不標、不進小計。
+  - **分類=既有 `_classify_one(x, split, default, methods_for, hay_for)`**(-std 架構席:它正是「每條 ★INVARIANT★ 行一個狀態、多支 `[test:]` 取最壞、未定義平台前綴→dangling」的既有共用 helper;不再錨 `_bound_tests_for_diff`,那支是 per node/plat/method 粒度)。★餵它的是 base 版節點文字裡★未截斷的★整行★(-std 通才/外家實跑驗收範例:三條合約行 1400 字以上、`[test:` 在第 1100 字之後,用已截 200 字的顯示行分類會全判裸合約);200 字截斷只用於顯示。
+  - 字彙沿既有詞(-std 架構席):real→`[綁定測試:有]`;dangling→`[綁定測試:懸空]`;fake→`[綁定測試:偽證據]`;naked→`★裸合約——閘守不到,只剩你讀★`。
+  - 節點小計一行:「INVARIANT N 條:有 a、懸空 b、偽證據 c、裸 d」——N 只數該節點 base 全文的 ★INVARIANT★ 行(未截斷),a+b+c+d=N;★四個整數★(首版寫三個是算錯)。
+  - 段尾固定一行:「「有」=方法存在於本分支測試索引,不代表跑過、也不代表有殺傷力(閘只看 rc,空殼測試 rc=0 照樣放行;殺傷力見 guard kill)」——(-std 外家/載荷席:首版寫「閘會真跑所以假的擋得住」是★錯的★)。
+  - **測試索引每次執行只建一次**(節點迴圈外;-std 接手席:`_platform_test_index` 對整個 repo os.walk,逐節點重建會撞內層 45 秒)。**fail-open**:`load_platforms` 拋例外(多平台沒填 `default_platform`)→★整批不加任何格、不印小計★,段尾改印一行固定字串「綁定測試狀態:略(平台設定讀不到)」留痕;★例外訊息一個字都不印★;`--json` 多一個欄位 `bound_status: ok|skipped-no-config`,讓日後統計「略」發生頻次(-std 載荷席 f2 要留痕可數)(-std 載荷席:訊息內嵌 .lumos/config.json 的字串,攻擊者可控)。
+- **資料源**:合約行=base 版節點全文(`git show`,已在拿);`_classify_one`+`_platform_test_index`;測試索引讀★工作樹★(問的是「這條分支上這支測試在不在」)。
+- **界線**:①鏡頭讀 base 版合約行、閘讀工作樹版節點(`Env(vault)`)——分支若改了那篇筆記的合約行,鏡頭標的狀態與閘實際跑的可能不同;鏡頭是參考,閘是判決。②分支新增同名空殼測試會把「裸合約」變「有」,而閘 rc=0 就放行——★這不是鏡頭能擋的★,是 [[Systems/bound-tests-gate]] 與 `guard kill` 的分工;段尾那行固定字串就是為了不讓審查員誤讀「有」。③方法名本來就印在合約行裡(base 文字),標籤不重印它只是不必要,不是消毒(-std 接手席糾正理由)。
+- **同步**:`templates.md` §3 鏡頭 3 與 `lumos-code-loop/SKILL.md` 步驟 2 的欄位清單加「綁定測試狀態」;[[Systems/bound-tests-gate]] 加一句「鏡頭側呈現」;本案 Verification 補 v1.1;`test_lumos.py` 錨點 approve。dispatch-lens-hook.py 不動(錨點不變)。
+- **驗收**:fixture 四種節點(有/懸空/偽證據/裸)各出對應字串、小計四數相加=N;多平台缺 `default_platform` 的 fixture(借 `t_*` 既有閘 fail-open 測試形態)→無格、印「略」行、無例外文字;`[test:a,b]` 一有一懸空→懸空(取最壞);合約行 >200 字且 `[test:` 在截斷點後→仍判「有」;既有 `t_dispatch_lens_*` 全綠;真跑 `c3b4f3f~1..c3b4f3f` 小計合理、總行數仍在 400 內。
+- **審級**:原判單人輕量審;★light r1 出 3 條 major=審級誤判,依 skill 規則升級 `派工鏡頭注入-v11-std`★;-std r1(2026-09-03 深夜,3 席 sonnet+架構 sonnet+外家 Codex)23 條(6+4+7+3+3)/blocking 15(4+3+4+1+3)/1 blocker(截斷後分類)全折。
+
+## 實作紀錄(2026-09-03 晚,r3 過閘後同日動工)
+
+- **TDD**:先寫 7 支測試(`t_dispatch_lens_*` 六支+`t_anchor_files_match_baseline`)全紅,再實作到全綠;enforcement 列數測試 11→12。
+- **lumos 端**:`cmd_dispatch_lens`(rc 0/2/3/4)+`_mainline_ref`(upstream 優先)+`_lens_*` helper;沿用 `_git_commit_exists`、`INVARIANT_RE`/`CHECKPOINT_RE`/`IRREVERSIBLE_RE`、`cmd_impact_diff`(redirect_stdout 取 JSON,不改它)。★偏離 spec 一處★:主線判定沒有改進既有 `_codeloop_guard_verdict` 那段迴圈(它決定 pre-push 的 diff 範圍與風險分級,改 upstream 會動到閘的行為),而是新 helper 只給 dispatch-lens 用;架構席若判第二種做法,代價=推送閘行為不變,編排者接受。
+- **hook 端**:`scripts/hooks/claude/dispatch-lens-hook.py` 薄殼(正規式→subprocess→updatedInput;INNER_TIMEOUT 45<外層 60)。
+- **登記**:`_GLOBAL_CLAUDE_HOOKS`/`HOOK_ENTRIES`(matcher Agent)/enforcement 五元組/`ANCHOR_FILES`+`anchor approve`;[[Systems/anchor-integrity]] 同步為 6 錨點。
+- **模板**:`templates.md` §3 鏡頭 3 改成一行標記+三件事、§7.6 分兩支;`lumos-code-loop/SKILL.md` 步驟 2 同步。
+- **安裝副本實測**:`lumos install` 後對 `c3b4f3f~1..c3b4f3f` 跑家目錄那份 hook:固定席 12、貼 8、主線 `main@{upstream}`、輸出 47 行;`lumos enforcement` 認出第五層 active。
+- **驗收 1(真派工哨兵)**:見 [[Verification/2026-09-03_派工鏡頭注入驗收]]。
+
+## v1.2:固定席 0 篇時的「既有相依」備援段(2026-09-04,Enzo 裁;r1 五席 25 條/7 blocker 全折後重寫)
+
+- **為什麼**:昨天只做了 happy path——固定席 0 篇→hook 什麼都不附、逐位元放行,審查員連「這裡沒節點」都不知道。主 session 歷史 44 次注入有 8 次(18%)固定席空。「沒節點」≠「沒相依」。Enzo:沒有節點可參考時,也要分析既有相依功能。
+- **r1 拆掉的第一版**:三格資料來源全讀工作樹——`.lumos/testmap.json`(gitignored、可改、實測 stale 於 2026-08-08)、cochange 設定檔與挖礦範圍到分支 HEAD、呼叫者掃工作樹——★全部違反 v1.0「只信 base」原則★,五席 7 個 blocker 同源。重寫版:★三格全部從 base 樹算,不用 testmap 地圖★。
+- **觸發**:★`listed`(pinned 經 base 樹過濾後)為 0★,不是 `pins` 為 0(兩者會分岔:pinned 全是分支新增節點時 pins>0 但 listed=0)。
+- **做什麼**(只改 `lumos dispatch-lens` 的輸出;hook 檔不動——它的 `if not text` 邏輯不變,只是 0 篇時 text 不再為空):附固定標頭「圖譜沒有釘到節點——以下是 code 層的既有相依,審查員自己判(這段不是合約,不必逐條答)」,三格各上限 8、★全部只用 base 樹★:
+  1. **受影響測試**:對 diff 裡每支★base 已追蹤★的改動檔,在 base 樹的測試檔(依既有 profile 的 `file_name_match`/`dirs`)裡找內容提到該檔 stem 或模組名的測試方法(既有 `PYTHON_TEST_RE` 等 method_re;檔內容用 `git show <base>:<路徑>`);印測試方法名。★不用 `.lumos/testmap.json`★(工作樹、gitignored、stale 無機械保證)。排序:提到次數多者先。
+  2. **共改夥伴**:沿 `cmd_cochange_check` 那條路(`_cochange_mine(repo_root, cfg, upto=<base>)`,★挖到 base 為止★,不是預設 HEAD——分支灌 commit 灌不進);設定 `.lumos/cochange.json` ★讀 base 版★(base 沒有→用既有預設);夥伴只列 base 已追蹤;印「夥伴檔名 N 次/M%」(N=support 整數,M=confidence 四捨五入到整數)。排序:confidence 高者先。
+  3. **呼叫者**:識別字=★base 版★改動檔裡 `def`/`class` 的頂層名(python;其他語言印固定字串「非 python 檔,呼叫者格跳過」),且★定義行落在 diff hunk 觸及的 base 行範圍內★(`git diff -U0` 的 `-` 側行號;不是整檔 386 個 def);在 base 樹的 code 檔(`git ls-tree -r <base>` 依 CODE_EXTS_T/CODE_SKIP_DIRS 過濾,內容 `git show`,★製程內 `\b名\b` 正規式,不開 grep 子行程★——沿 `build_code_haystack` 的 os.walk 慣例但讀 base blob)找引用,排除定義檔自身;印「檔:行(base)」,排序:被引次數多的識別字先,上限 8。
+  - **新增檔**:diff 裡 base 沒有的檔另列一行「新增檔 N 個:無歷史、無 base 識別字,三格不涵蓋——請直接讀」(載荷席:全新檔 PR 三格結構性皆空,不能偽裝成「已確認無相依」)。
+  - 三格皆空(且無新增檔)→印「三格皆空(已查:受影響測試 0、共改 0、呼叫者 0)」——查過沒有跟沒查要分得出來。
+  - 段尾固定一行:「以上是機械反查,不是圖譜結論;命中不代表相依成立、沒命中不代表沒有」。
+- **消毒**:輸出只有 base 已追蹤檔名、base 版測試方法名與識別字、整數、固定字串;無任何 diff/工作樹文字。
+- **成本**:每次讀 base blob(測試檔+code 檔)——同一 base sha 內容不變,★沿 v1.0 快取★(鍵含 base sha),同輪只有第一席付;base 樹 code 檔數上千時單次可能數秒,仍在 45 秒內層預算內(v1.0 實測 impact 本身 12–35 秒;本格若超時整段備援跳過、印固定字串「既有相依:略(超時)」)。
+- **不做**:①固定席非空時附呼叫者(稀釋 50 行合約段;先量備援觸發率再裁)②主 session impact-hook 同款備援(利用率還量不準)③解析器(識別字反查到此為止)④testmap 地圖(見上)。
+- **可觀測**:`--json` 欄位 `fallback_status: none|attached|attached-empty|skipped-timeout`(命名沿 `bound_status`);0 篇時 `bound_status` 照印(值 ok,無合約行可標)。
+- **驗收**:①fixture diff 碰無節點引用的檔→固定標頭+三格內容+尾行,`fallback_status=attached`;②只新增檔的 diff→標頭+「新增檔 N 個」行+「三格皆空」行,`attached-empty`;③固定席非空 fixture 輸出★不變★(既有 `t_dispatch_lens_*` 綠,★`t_dispatch_lens_base_and_zero` 的「零篇 text 空」斷言改成「零篇=備援段」★);④呼叫者格不含 diff 新增的識別字、不含定義檔自身;⑤共改設定讀 base 版(fixture 在分支改 `.lumos/cochange.json` 排除夥伴→不生效);⑥非 python 改動檔→呼叫者格固定字串。
+- **同步清單**(接手席:第一版缺):`templates.md` §3 鏡頭 3 三件事①「固定席 0 篇→靜默放行」改「→附既有相依備援段」;`lumos-code-loop/SKILL.md` 步驟 2 同句;`commands/06-代碼審與推送.md` dispatch-lens 那行;本計劃〈設計〉2「剔完 0 篇→不注入」與〈驗收〉「零篇→逐位元不變」改寫;Verification 補 v1.2;`test_lumos.py` 錨點 approve。
+- **審級**:完整迴圈 `派工鏡頭注入-v12`。r1(2026-09-04,3 席 sonnet+架構 sonnet+外家 Codex):25 條(8+5+6+3+3)/blocking 17/7 blocker,全折——三格改 base 樹、去 testmap、觸發改 listed、挖礦到 base、新增檔另列、製程內正規式、fallback_status 命名、驗收與同步清單補齊。
+- **界線**:呼叫者反查同名不同物會誤中(用檔:行讓人看);cochange 是歷史規則,新檔沒夥伴(已另列);測試格靠 stem 命中,測試檔用別名 import 會漏;三格是「code 層有什麼」,不是「該不該改」。
+
+## 實作紀錄 v1.1(2026-09-03 深夜,-std r1 過閘後動工)
+
+- TDD:`t_dispatch_lens_bound_status`(四種狀態+超長行+小計四整數+尾行+方法名不重印)、`t_dispatch_lens_bound_status_noconfig`(多平台缺 default_platform→整批不標、印「略」、無例外文字、`bound_status=skipped-no-config`)先紅後綠;既有 8 支 lens 測試綠。
+- 實作:`_lens_contract_rows`(不截斷、回 kind)+`_LENS_BADGE`/兩條固定尾行;`_platform_test_index` 在節點迴圈外建一次、例外→`skipped-no-config`;`_classify_one` 對未截斷原文分類;顯示仍截 200 字/40 行,小計以全文計;`--json` 多 `bound_status`。
+- 夾具教訓:沒有 `.lumos/config.json` 時 legacy 預設 profile 是 csharp-xunit(只認 .cs),python fixture 要明寫 `test_profile`。
+- 真跑 `c3b4f3f~1..c3b4f3f`:8 篇全「有」(本 repo 合約全綁;含 1400+ 字的長行),53 行,尾行在。
+- 同步:templates §3 鏡頭 3、code-loop SKILL 步驟 2、[[Systems/bound-tests-gate]] 鏡頭側呈現一節;錨點 approve(test_lumos.py)。
+
+## 審計修正紀錄(lumos-design-loop)
+
+- r1(2026-09-03,3 席+架構對齊+外家 Codex):38 條(9+9+10+4+6)/blocking 26(5+7+7+1+6)/三個 blocker(錨點硬約束、檔名逐字注入、筆記內容來自待審分支)全折,引句錨不到的 2 條不採信(s2-f3、s3 一條,內容與他席重複);其餘 36 條全折(架構席「updatedInput 第二種做法」折成 d2 有意識偏離;blocker 輪 accepted 必空,不走放行);範圍縮到代碼迴圈、三個登記點、快取與時間預算、手貼格改標記。★blocking 密度超過 skill「建議整份重寫」門檻,編排者判核心未被推翻、在同編號折入,重寫與否留 Enzo 裁★。
+- r3(2026-09-03,上限輪,只掃 r2 新段落):21 條(2+4+6+4+5)/blocking 14(1+3+2+4+4)/4 blocker(合約行判定×2 同題、主線 ref 可被樹內 hook 改、快取可偽造)+架構席 4 major(四個判斷重寫既有 helper);全折,1 條引句錨不到不採信(外家 f3「藏」,內容升格 d3)。折入=★hook 薄殼、邏輯進 lumos 新子命令 `dispatch-lens` 沿用既有函式★、圖譜根與白名單皆從 base 樹解析、主線=upstream 優先、快取進使用者私有目錄、範圍文法收緊、SHA-256 倉庫、`--show-toplevel`;另立 [[Issues/git-hooks路徑指向樹內_checkout即執行分支碼]]。★上限已到,r3 折入的新段落沒有第四輪審,攤給 Enzo★。
+- r2(2026-09-03,3 席+架構對齊+外家 Codex,火力只掃 r1 新段落):21 條(5+4+5+2+5)/blocking 16(2+3+5+1+5)/4 blocker(圖譜路徑要接 docs/<slug>-knowledge 前綴、`contract` 與 `matched_by` 是自由文字注入管道×2、§7.6 共用格改一半);全折,1 條引句錨不到不採信(外家 f4「base 未驗證」,內容照折)。折入=自由文字零輸出原則、base 必須主線可達、標記文法定死、quotePath、錨點交叉測試、砍一句話層。
+- 席報告與收貨:`governance/review-reports/派工鏡頭注入/`(r1-*/r2-* 席報告、rN-intake、rN-dispatch.json、rN-snapshot、r2-delta.diff)。
