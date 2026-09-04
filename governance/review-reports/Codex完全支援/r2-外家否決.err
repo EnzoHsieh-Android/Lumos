@@ -1,0 +1,2513 @@
+Reading additional input from stdin...
+2026-09-04T07:21:24.436713Z ERROR codex_models_manager::cache: failed to load models cache: missing field `base_instructions` at line 95 column 5
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/enzo/harness/lumos-toolchain
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 01a06b4b-30e7-7a42-86d1-c65c5d035f22
+--------
+user
+你是外部審稿人(不是本團隊的人)。審一份設計 spec 的第 2 版修訂稿:/private/tmp/claude-501/-Users-enzo-harness-lumos-toolchain/26a6b57a-9efc-4073-b845-c27e42a2fbb1/scratchpad/Codex完全支援-r2.md (第 1 輪你這一席的 20 條報告在 governance/review-reports/Codex完全支援/r1-外家否決.md,編排者的收貨判讀在同目錄 r1-intake.md——其中你第 1 條「spawn_agent message 可 rewrite」被實驗 A 反證:回 updatedInput 換明文後 Codex 報 Encrypted function output content could not be decrypted;第 12 條部分成立)。對照 repo 在目前工作目錄。本輪是驗收輪:①逐條看你上輪 20 條有沒有真的修進去、修得對不對;②新增段落(S0 進場條件、hook 信任閘、AGENTS.override.md、檔首插入、armed 檔 seats 計數、--harness 旗標、--orchestrator 參數)對 Codex 行為的宣稱對不對——你對 Codex CLI 的 hooks/skills/AGENTS.md/子代理/信任機制最熟,錯的指出來,並區分「文件寫的」與「0.144.1 實測的」。輸出:逐條 finding,編號條列,每條 ≤3 句,並且每條各自獨立成行寫:severity: blocker|major|minor ;blocking: 是|否 (否對應 minor,是對應 major/blocker);引句:「逐字出自 spec 的一段,至少 10 字,不要改寫、不要省略標點、引句內不要再有「」」;引程式碼寫 file: `路徑:行號`。上輪已修且驗收通過的逐條寫「r1-n 已修,驗收通過」。沒問題的節寫「已讀,無 finding」。最後一行總結:最嚴重 severity 與 blocking 條數。
+codex
+我會先按 repo 指引讀 `CLAUDE.md` 與知識圖譜索引，再逐條對照 r1 報告、intake、r2 spec 和 Codex 0.144.1 的本機實作／可重現行為；全程只讀，不改檔。
+exec
+/bin/zsh -lc "sed -n '1,240p' CLAUDE.md && sed -n '1,240p' docs/lumos-toolchain-knowledge/MOC/index.md && sed -n '1,260p' governance/review-reports/Codex完全支援/r1-外家否決.md && sed -n '1,300p' governance/review-reports/Codex完全支援/r1-intake.md && sed -n '1,360p' '/private/tmp/claude-501/-Users-enzo-harness-lumos-toolchain/26a6b57a-9efc-4073-b845-c27e42a2fbb1/scratchpad/Codex完全支援-r2.md'" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+# CLAUDE.md
+<!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+## 知識圖譜先行（必讀，優先級最高）
+
+**`docs/lumos-toolchain-knowledge/` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 它主要的讀者是下一個 session 的 AI（偶爾是人），所以寫的時候以「沒有脈絡的人讀得懂」為準。 行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
+
+### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
+
+| 你心裡想的是… | 先敲這個 |
+|---|---|
+| 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（Landmark 實測 8 句 3 句 0 筆） |
+| 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+| 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+| 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+| 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
+| 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+| 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+| 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+| 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+| 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+
+查得到才算先行（Landmark 2026-08-11 實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
+
+★第四條（2026-08-22 Enzo 裁，成本理由：判斷錯本來就要重查一次，這兩分鐘是提前付）★：**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講，就失去意義）。同日實測：一天內六次判斷失準，**全部是「只信一個來源、沒去對第二個」**——搜錯詞、自己腳本有 bug、讀錯欄位名、用錯工具、看了張過期的表；其中四次是另一個 session 拿它自己的數字打臉才發現。**只有這個場合要派，其他查詢照常**（實測「帶否定斷言」的回覆一天 31 次太多，加上「會決定動不動手」這一刀才降到個位數）。
+
+兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
+
+Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆記」給你——但它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
+
+**接手圖譜還是空的專案 → 先走節點還原 SOP**（`lumos-project-notes` 的 `commands/09-節點還原.md`：七步把脈絡還原成節點；需要才產、有就照慣例用）。
+**不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（4k，按你正在做的事分九類，只開需要的子檔）。
+
+### 三條鐵則
+
+1. **同一次工作內寫回**：改了會影響行為 / 決策 / 驗證的 code，當次就把脈絡寫回圖譜（pre-commit 擋「改 code 沒動圖譜」）。設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記。
+2. **開頭欄位用指令改**（`lumos set` / `append` / `decision-add`），別手改；多個連結一行一項；不確定是不是合約就不要標。重建筆記（regen）與決策四欄的寫法在 skill。
+3. **寫完一篇 `lumos lint <節點>`，收工 `lumos doctor`**；push 前 pre-push 會再擋一次。
+4. **承認風險要附回頭看的條件**：寫「沒機械守衛 / 只提醒不擋 / 單次量測」這種話，旁邊必須有什麼時候重驗；寫不出來就是該處理不該承認。回頭條件要接電：帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`（緊鄰原句；doctor 到期會唸）；綁事件的明寫事件入口在哪——純散文的回頭條件＝沒人會回頭（2026-08-31 全圖盤點 52 件實證）。
+
+### 給人看的回報用白話
+先一句人話或比喻，再往下講；術語和 file:line 能不用就不用，非用不可就當場一句解釋。設計動筆前先問世界（最小解在哪一層、世界解過沒、裁定＝借用既有設計為預設 / 真沒輪子才自建 / 採用新依賴在零依賴家規下幾乎不選），一行 `PRIOR-ART:` 記進計劃筆記。能寫成規則的走測試先行；探索性的先做最小實驗——講不出一道會對症狀翻紅的指令之前，不准開始建理論（見 `[[Systems/診斷迴圈先行]]`）。
+
+### 遇到這些情境就調用對應 skill
+
+| 你正在做的事 | 調用 |
+|---|---|
+| 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
+| 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
+| 設計 spec 寫完、要進實作前的審查迴圈 | **`lumos-design-loop`** |
+| 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
+
+> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill 見文末〈架構參考 Skills〉。
+<!-- LUMOS:GRAPH-DISCIPLINE:END -->
+---
+type: moc
+status: doing
+about_code_stamp: batch-2026-08-23/2026-08-23/70a11d6e2e82
+---
+# lumos-toolchain 知識圖譜總索引
+
+Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識圖譜。節點現況以 code 為準,完整設計史/收斂史指回 `docs/design/`。狀態標記:無標=已實作;`[planned]`=設計收斂未落地;`[deferred]`=擱置;`[rejected]`=評估後不做(輕方案落地)。
+
+> **慣例**:節點內嵌的 `scripts/lumos:行號`(或 `@行號`、`:行號`)是**近似導航參考**,code 重構後可能漂移——以 code 現況與函式名為準,行號僅供快速定位。
+
+## 設計審計 loop(進實作前的把關)
+- [[Systems/design-loop]] — canary-護的設計審計 loop;Claude 編排、lumos 出原語,連 2 輪 caught 才放行實作。
+- [[Systems/canary-audit]] — test-the-tester:每輪偷植已知假錯驗審計員有沒有認真抓(防假陰性/放水)。
+- [[Systems/loop-convergence-recording]] — `canary record --loop/--severity` + `loop status --need` 算收斂、可機械終止多輪。
+- [[Systems/finding-refute]] — 辯方 refute:對 ≥major finding 派獨立 opus 強制 file:line 反證才降(防假陽性,對稱 canary)。
+- [[Systems/judge-severity-gate]] — 讓 judge 覆蓋 severity 維度,堵「收斂門檻沒覆蓋處偷工」。
+- [[Systems/cross-family-audit]] — 換模型家族複核(qwen3-max),解 opus 審 opus 的自我偏好偏心。
+- [[Systems/judge-perturbation-stability]] `[rejected]` — 評審擾動穩定性;評估後改走輕量 confidence_report.py。
+
+## doctor 合約 / 可逆性檢查
+- [[Systems/check-t-sentinel]] — Check T:★INVARIANT★ 合約綁可執行測試 `[test:]`(+ stub 紅燈哨兵)。
+- [[Systems/check-r-guard]] — Check R:不可逆動作(★IRREVERSIBLE★)動手前要有實質 `[rollback:]`/`[guard:]`。
+- [[Systems/reversibility-governance-ledger]] — 可逆性綁定 + gov 治理事件帳(某節點被哪幾道閘攔過)。
+- [[Systems/doctor-irreversible-hint]] — `[H]` 軟提醒:掃 diff 碰 prod/外部 API → 是否漏標 ★IRREVERSIBLE★。
+- [[Systems/check-j-regen-guard]] — Check J:from-scratch 重建節點 provenance 分級(regen 蓋章+[src:]/[git:]/推測:/佚失: 標身分;拒發明無證據合約、假指針機械擋)。
+- [[Systems/core-invariant-baseline]] `[deferred]` — 核心節點已知良好快照 + 可回退(pivot 為 content-baseline,擱置)。
+
+## 自主治理 / loop engineering
+- [[Systems/autonomous-iteration-loop]] — 日報 gap→brainstorm→design-loop→收斂備 pending 的無人看顧自主迭代。
+- [[Systems/verification-rot-eval]] `[planned]` — 從圖譜史抽衝突測試集定期回測 L3 腐化偵測(設計收斂未落地)。
+
+## 安全與權限
+- [[Systems/nested-agent-permission-scope]] — 子 agent 權限收窄(maker≠checker 的審計員不繼承主對話權限)。
+
+## 平台支援
+- [[Systems/native-windows-support]] — 原生 Windows(get.ps1 / mklink / junction / hook 路徑正斜線化)。
+- [[Systems/lumos-deinit]] — 專案層反安裝指令(對稱 `lumos init`);四重閘保護不可逆的 vault rmtree。
+
+## 完整性 / 影響 / 漂移守衛
+- [[Systems/guard-kill]] — 殺傷力驗證:宣告壞法→worktree 隔離→綁定測試必翻紅;survived=稻草人證據(合約鏈最後一哩)。
+- [[Systems/cochange-guard]] — co-change 漏改守衛:git 歷史挖共改規則(ROSE 非對稱 confidence),pre-commit Gate CC 警告漏改夥伴(advisory)。
+
+## 檢索與推薦
+- [[Systems/retrieval-ranking]] — BM25F 排序+圖分融合推薦+impact 降噪(search 與 hook 面均已轉正——§6 七盞全綠;recommend 面 dormant)。
+
+## CLI 核心原語
+- [[Systems/lumos-cli-read]] — 讀/巡檢:doctor/context/contracts/search/links/backlinks/map/export/decisions/stale/recent/stats。
+- [[Systems/lumos-cli-write]] — 寫:set/append/new/archive/decision-add/decision-supersede/self-audit;T1 寫後自驗 atomic。
+- [[Systems/lumos-cli-lifecycle]] — install/uninstall/update/bootstrap/init/deinit;機器層 vs 專案層分工。
+
+## 外部對照 / PRIOR-ART
+- [[Systems/外部對照-code衍生wiki]] — langchain-ai/openwiki(11.6k★ code 衍生 wiki)反例世界解:站在 lumos 導覽層、賭注相反(code 衍生+可丟 vs 圖譜手寫+機械守);核心論點=重生保新鮮≠正確、無輸出 oracle(maker-only),反證 lumos「圖譜即真相/合約驗證層」的必要。
+
+## 外部設計 / 計畫文件(圖譜外,但屬本工具鏈)
+- `docs/design/` — 各功能設計稿(含 design-loop 收斂紀錄,18 份)。
+- `docs/superpowers/plans/` — 實作計畫(TDD 任務分解)。
+- `docs/methodology/` — 「圖譜即合約」方法論。
+- `governance/reports/` — AI 治理日報(研究 → gap → 觸發上述功能的 provenance,各 Verification/Systems 節點內有溯源)。
+## Frontmatter / 摘要
+
+1. `spawn_agent` 的派工內容並非不可攔截的「加密字串」：目前官方契約明載其他 local function tools 會把 JSON arguments 交給 hook，且 `spawn_agent` 也匹配 `Agent`；因此以此為地基改走 armed 檔，已被現行契約直接推翻。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#tool-coverage)
+
+severity: blocker
+blocking: 是
+引句:「spawn_agent 的 message 在 hook 眼裡是加密字串」
+
+## 一句話
+
+已讀，無 finding。
+
+## 完全支援的定義
+
+2. 「hooks.json 跟 Claude 同形」只在外層事件結構成立，不能推出事件語意、輸出欄位與限制相同；例如 Codex 的 `PreToolUse updatedInput` 必須同時回傳 `permissionDecision:"allow"`，而現行 Claude 派工 hook 只輸出 `updatedInput`。file: `scripts/hooks/claude/dispatch-lens-hook.py:87`
+
+severity: major
+blocking: 是
+引句:「hooks.json 的 JSON 結構跟 ~/.claude/settings.json 的 hooks 段一模一樣」
+
+3. skills 表把 `.codex/skills/` 列為 repo 接頭，但官方目前只把 `.agents/skills/` 列為 repo skill discovery 路徑；spec 後文也沒有安裝或驗收 `.codex/skills/`，形成未定義且無測試的相容宣稱。[Codex customization](https://learn.chatgpt.com/docs/customization/overview#skills)
+
+severity: minor
+blocking: 否
+引句:「repo 層 .agents/skills/ 或 .codex/skills/」
+
+4. Codex 對 `apply_patch` 已提供 `Edit`、`Write` matcher aliases，並仍回報 canonical `tool_name:"apply_patch"`；因此表中的「Edit/Write 工具若真有」把 matcher alias 誤當獨立工具，也讓後續 payload 分支需求定義錯位。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#pretooluse)
+
+severity: major
+blocking: 是
+引句:「Edit/Write 工具若 Codex 真有形狀未見」
+
+5. 「同一批 hook 腳本」現況不能直接成立：`dispatch-lens-hook.py` 硬性要求 `tool_name == "Agent"`、讀 `tool_input.prompt`，若直接改掛 `SubagentStart` 會立即靜默返回。file: `scripts/hooks/claude/dispatch-lens-hook.py:50`
+
+severity: major
+blocking: 是
+引句:「五支 hook 各自認 Codex 的 payload 形狀」
+
+## 範圍與明確不做
+
+6. 本節明訂「不寫 TOML」，S2 卻要求安裝 `~/.codex/agents/lumos-reviewer.toml`，屬直接內部矛盾；若真正意思只是「不改 config.toml」，應明寫，否則範圍與交付物無法同時驗收。
+
+severity: blocker
+blocking: 是
+引句:「不寫 TOML不動 ~/.codex/config.toml」
+
+## S0 安裝層
+
+7. AGENTS.md 注入沿用的函式會正規化整份檔案的 BOM、CRLF 與尾端空白，所以「sentinel 外文字不動」並不成立；把相同機制擴到 AGENTS.md 會再增加一個可能製造無關 diff 的檔案。file: `scripts/lumos:10583`
+
+severity: major
+blocking: 是
+引句:「sentinel 外文字不動既有機制本來就這樣」
+
+8. teardown 的既有編排忽略全域 hook 清理、deinit 與 uninstall 的失敗，最後固定回傳 0；因此新增 Codex 清理後，僅測 happy path 無法支撐「一次全部乾淨」的驗收契約。file: `scripts/lumos:10362`
+
+severity: major
+blocking: 是
+引句:「lumos teardown 一次全部乾淨」
+
+9. `lumos-reviewer.toml` 的具體設計只列 `sandbox_mode` 與 `developer_instructions`，漏掉官方要求的必填 `name`、`description`；照 spec 直接產檔會是無效 custom agent。[Codex Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents#custom-agent-file-schema)
+
+severity: major
+blocking: 是
+引句:「sandbox_mode=read-only、developer_instructions=templates.md 審查員框架」
+
+## S1 hook 適配
+
+10. 多檔 `apply_patch` 只對第一個非排除檔執行 impact，其餘僅列名，會漏掉其他檔案自己的直接合約、事故與間接關聯；這不符合逐層同套防護的目標，應聚合全部 patch headers 後一次計算或逐檔計算。
+
+severity: major
+blocking: 是
+引句:「可能多檔取第一個非排除檔其餘列名」
+
+11. armed 檔只以 repo hash 定址，沒有 `session_id`、`turn_id`、agent id 或一次性 consume；同 repo 任何 session 在 30 分鐘內啟動的所有子代理都可能收到錯誤鏡頭，並非僅限 spec 已承認的「後寫者勝」。
+
+severity: major
+blocking: 是
+引句:「armed repo-hash.json含 range、產生時間、TTL 30 分、repo 根」
+
+12. armed workaround 沒有必要性且引入競態：現行 Codex 官方契約明載 `spawn_agent` 匹配 `Agent`，local function arguments 可檢查與 rewrite，應先用真正 canonical tool name 重驗原本的 PreToolUse 路線。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#tool-coverage)
+
+severity: major
+blocking: 是
+引句:「matcher Agent 沒攔到 spawn」
+
+13. Codex 官方明示 transcript 格式不是 hooks 的穩定介面；僅以第一行 `session_meta` 判型、沒有 schema/version fixture 與失配偵測，會讓 Stop hook 在升版後靜默漏掉整輪行為。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#common-input-fields)
+
+severity: major
+blocking: 是
+引句:「reader 認兩種格式以第一行 session_meta 判 Codex」
+
+## S2 迴圈從 Codex 編排
+
+14. `spawn_agent,agent=lumos-reviewer` 不是本 session 暴露的 `spawn_agent` 介面；目前介面只有 `task_name`、`message`、`fork_turns`，spec 沒交代 custom-agent 名稱如何實際傳入或由模型選中，因此 S2 的核心派工步驟不可機械執行。
+
+severity: major
+blocking: 是
+引句:「Codex:spawn_agent,agent=lumos-reviewer」
+
+## S3 量測
+
+15. S3 在尚未確認 `additionalContext` 是否進 transcript 時，就把 recount reader 列為交付與總驗收的一部分；若不存在，spec 自己承認核心分母不可觀測，卻沒有替代事件源、降級後的驗收定義或停止條件。
+
+severity: major
+blocking: 是
+引句:「沒有的話利用率在 Codex 側量不到推到眼前那一半」
+
+## 擬裁定理由
+
+16. `project_doc_fallback_filenames` 的確只在同層找不到 `AGENTS.override.md`/`AGENTS.md` 時才使用，但 spec 沒處理 32 KiB 是整條 chain 的合併上限，而非單一 repo 檔預算；直接複製 6.6k 區塊可能截掉更靠近 cwd、優先級更高的 nested 指示。[Codex AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md#how-codex-discovers-guidance)
+
+severity: major
+blocking: 是
+引句:「代價每個專案多一個 6.6k 的檔佔 Codex 32 KiB 預算兩成」
+
+## 驗收
+
+17. 驗收只要求 `~/.codex/hooks.json` 有五支註冊且檔案存在，無法證明事件、matcher、輸入與輸出格式真的可用；S0 至少需要逐事件的真 Codex hook smoke，否則錯掛 `SubagentStart` 的腳本也會全綠。
+
+severity: major
+blocking: 是
+引句:「~/.codex/hooks.json 五支註冊且檔在」
+
+## 誠實界線
+
+18. 用 `permission_mode` 加 `model` 判斷 Codex 雖符合 Codex payload，但沒有證明 Claude payload 永遠缺這兩欄，因而不是可靠的 harness discriminator；應用明確來源參數、安裝時生成不同薄殼，或記錄 Codex 專有 `turn_id` 並做衝突測試。[Codex Hooks](https://learn.chatgpt.com/docs/hooks#common-input-fields)
+
+severity: major
+blocking: 是
+引句:「由 payload 有無 permission_mode+model 欄位判」
+
+## 未解
+
+19. 三個會決定核心可行性的問題被標成「動工前要答」卻又宣稱「不需審查席」，而總驗收依賴其中兩項；它們應升為 S0 entry gate，未通過不得開始實作，而非留在計畫尾端。
+
+severity: major
+blocking: 是
+引句:「未解動工前要答不需審查席」
+
+## 實務隱患
+
+20. 並行段把不同 range 導致錯席降格成「不擋任何事」，但派工鏡頭的目的正是讓審查席取得正確影響面；錯誤 context 可能造成漏審，已違反「同一套防護」的驗收定義，不能只因 hook fail-open 就接受。
+
+severity: major
+blocking: 是
+引句:「不一致只是鏡頭錯席不擋任何事」
+
+## 合約候選
+
+已讀，無 finding。
+
+## REVISIT
+
+已讀，無 finding。
+
+## 審計修正紀錄
+
+已讀，無 finding。
+
+最嚴重 severity: blocker；blocking: 是共 19 條，blocking: 否共 1 條。
+preflight-4: ran
+
+# r1 收貨紀錄(Codex完全支援)
+
+## 前掃(2026-09-04,sonnet 單 agent,四類固定清單)
+- ①未定義詞:無命中(既有識別字全部 grep 到;`--arm` 為明寫新增不算)。
+- ②壞引用 1 條:「跨家族原則」指向 heterogeneous-finder-ensemble(該篇談工具異質,無「外家」字)。修:改指 canary-audit + design-loop。
+  修改前→後:「[[Systems/heterogeneous-finder-ensemble]] 的跨家族原則不變」→「[[Systems/canary-audit]] 與 [[Systems/design-loop]] 的跨家族席原則(外家 blocker 不得僅被同門多數推翻)不變」
+- ③範圍矛盾:無命中(六層/四階段/TTL/預算算術皆一致)。
+- ④語意 2 條(存在性類以外,非核心裁定,直接修真檔):
+  - check-graph-sync 欄位名混用:修改前「`tool_input.command`/`file_path`」→修改後「逐字稿 tool_use 區塊的 `input.command`/`input.file_path`(PreToolUse payload 才叫 tool_input)」;佐證 file: `scripts/hooks/claude/check-graph-sync.py:137-143`。
+  - 子代理事件欄位歸屬:修改前「Start/Stop 帶 agent_id 與 agent_transcript_path」→修改後「SubagentStart 帶 agent_id+agent_type,子代理 PreToolUse 帶 agent_id,SubagentStop 才帶 agent_transcript_path」。編排者註:前掃依調研筆記判 SubagentStart 不帶 agent_id;實驗 5 hook.log 實看 SubagentStart keys 含 agent_id,以實測為準寫入。
+
+## 外家否決(Codex)報告收貨(20 條;quote-check 12 句錨不到→那 12 條不入 set,內容仍逐條判)
+- 正規化:`severity: X ;blocking: Y` 同行 → 拆兩行(regex,內容未改);原檔存 r1-外家否決.raw。
+- **F1「message 不是加密、依文件可 rewrite」→ MISS(不採信)**。重現(實驗 A,scratchpad codexfull/hookA.log、outA.jsonl):PreToolUse 無 matcher,對 collaborationspawn_agent 回 `{"permissionDecision":"allow","updatedInput":{...,"message":"<明文>"}}` → 父代理最終回覆「Agent errored: stream disconnected before completion: Encrypted function output content could not be decrypted or decoded.」;hook 看到的 message 仍為 `gAAAAABq…` 密文。結論:0.144.1 下 message 為不透明密文,rewrite 會弄壞派工;文件(tool-coverage 節)與實測不符,以實測為準。
+- **F12「matcher Agent 沒攔到→應用 canonical 名重驗」→ 部分 HIT**。重現(實驗 B,hookB.log):`hooks.PreToolUse=[{matcher="spawn_agent"},{matcher="collaborationspawn_agent"}]` 兩條並列 → 只記到 1 筆 PreToolUse(tool_name collaborationspawn_agent),即兩個 matcher 恰一個命中(未分開跑,推測為完整名 collaborationspawn_agent;S0 實作時分開驗一次)。但攔到也改不了 message(見 F1),armed 檔路線的必要性不受影響;「攔得到 spawn」這個事實寫進 spec 當備用觸發點。
+- F5 HIT:file: `scripts/hooks/claude/dispatch-lens-hook.py:50` 確為 `payload.get("tool_name") != "Agent"` 即靜默返回;「同一批腳本零改」對 dispatch-lens 不成立,spec 已在 S1 表寫要改,但「五支各自認形狀」一句對這支要明寫成「新增 SubagentStart 分支」。
+- F7 HIT(部分):file: `scripts/lumos:10583` docstring 明寫讀入去 BOM/CRLF→LF、寫入強制 LF;sentinel 外「文字」不動但換行/BOM 會被正規化——spec 「既有機制本來就這樣」要補這句。
+- F8 HIT:file: `scripts/lumos:10362-10372` teardown 三步不看 rc、固定 `return 0`;spec 驗收「一次全部乾淨」須改成用 enforcement/檔案存在性機械驗,不能靠 teardown rc。
+- F9 HIT:官方 subagents 文件 custom agent 必填 name/description/developer_instructions;spec 漏兩欄。
+- F14 HIT:spawn_agent 介面(實驗 3/4/A 均見)只有 task_name/message/fork_turns,無 agent 參數;自訂 agent 由派工詞點名或 description 匹配選中——spec「agent=lumos-reviewer」不可機械執行,改寫成「派工詞點名」。
+- F6 HIT(措辭矛盾):「不寫 TOML」與 S2 產 agent TOML 衝突;改寫為「不解析/不改寫既有 config.toml;agent TOML 為新建檔,以字串範本寫出」。
+- F3 HIT:官方 skills 文件 repo 層只列 `.agents/skills/`(本篇 2026-09-04 補表時抄成兩個);刪 `.codex/skills/`。
+- F2/F4/F10/F11/F13/F15/F16/F17/F18/F19/F20:設計層意見,無需重現,逐條折入或附理由放行見審計修正紀錄。
+
+## 整合知識同步席收貨(8 條,quote-check 全錨、refcheck 18/18)
+- F3(blocker)HIT:file: `scripts/lumos:5711-5712` 家族用靜態關鍵字表(`_ROSTER_EXTERNAL_KEYS`/`_ROSTER_CLAUDE_KEYS`),`_roster_family(auditor)` 無編排者參數;`_TIER_ROSTER` code-high 兩席 external 為 required-fail-closed。Codex 編排時只改散文,同門互審會被判成「外家到齊」。→ 折入:家族判定加「編排者家族」維度。
+- F4(major)HIT:file: `scripts/lumos:7387-7396` `_usage_log` 只被 show/context 呼叫,schema `{ts,node,cmd}`;check-graph-sync.py 無任何檔案寫入(grep open/write 僅讀 queue)。spec「hook 自己記的 usage-log」「Stop 後 usage-log 多一筆」無對應路徑 → 折入:S1 驗收改用實測時的 hook 記錄包裝,不發明新帳。
+- F1/F2/F5/F6/F7/F8:引句錨定、行號機驗通過;內容為設計層對照(剝除端雙檔、四個呼叫點與 Check D、漏列 skill、enforcement 對稱、錨點覆蓋範圍、_skills_list 掃全部 8 支),逐條折入。
+
+## 邊界可執行席收貨(8 條全錨、refcheck 4/4)+ 通才席(7 條全錨、refcheck 28/28)
+- 邊界 F1(blocker)HIT:實驗 C(`-c` 內嵌 hook、不帶 --dangerously-bypass-hook-trust)hook 0 筆;實驗 D(隔離 CODEX_HOME 放 hooks.json、不帶旗標)hook 0 筆;同一 hook 帶旗標時(實驗 2/4/5)有 fire。`codex --help` 無任何 hooks 信任管理子命令;sqlite 表與 toml/json 均無 hook 信任紀錄可辨(★信任存放位置沒查出來★)。結論:使用者層 hook 也要先在互動 TUI 按一次「Trust」才會跑;exec 只能靪旗標。
+- 邊界 F2(blocker)HIT:file: `scripts/lumos:10960-10982` `_link_or_copy` 對非空真目錄走 `shutil.rmtree(ignore_errors=True)` 後再連結,無提示。
+- 邊界 F5 HIT:file: `scripts/lumos:11084-11087` `subprocess.run(merge)` 不看 returncode、無條件 `return True`。
+- 邊界 F6a HIT:AGENTS.override.md 為官方文件所載機制(本篇稍早已 fetch:全域與各層皆「有 override 就只讀它」);spec 漏。F6b HIT:32 KiB 為整條 chain 合併上限(文件),截斷靜默。F7 HIT:apply_patch 語法含 `*** Move to:`(文件+二進位字串)。
+- 通才 F5「permission_mode/model 欄位查無證據」→ **部分 MISS**:codexfull/hook.log 六筆 PreToolUse 皆含 `"permission_mode":"bypassPermissions"` 與 `"model":"gpt-5.6-sol"`(Codex 側欄位確實存在);但 Claude Code hook 輸入亦有 permission_mode 欄位(官方 hooks 文件),故「以欄位有無判家族」不可靠——結論與外家 F18 相同:改用註冊命令列明確旗標。該條以「判別法不可靠」折入,不以「欄位不存在」折入。
+- 通才 F1/F2a/F2b/F6、整合 F1/F2/F5/F6/F7/F8、邊界 F3/F4/F7/F9:引句+行號機驗通過,逐條折入(blocker 輪,accepted 空)。
+- 架構席 ⚠(armed 檔/SubagentStart 非同步交接無先例):編排者裁=平台限制逼出的有意識偏離,寫進裁定(c)並標 PRIOR-ART 缺口。
+---
+type: project
+status: doing
+created: 2026-09-04
+updated: 2026-09-04
+tags:
+  - type/project
+  - status/doing
+  - scope/governance
+related:
+  - "[[Projects/Codex工作流整合_調研]]"
+  - "[[Projects/派工鏡頭注入_計劃]]"
+  - "[[Projects/主動影響幅度偵測_計劃]]"
+  - "[[Projects/install全域hook同步_計劃]]"
+  - "[[Projects/teardown一鍵拆機_計劃]]"
+  - "[[Systems/lumos-cli-lifecycle]]"
+  - "[[Systems/design-loop]]"
+  - "[[Systems/anchor-integrity]]"
+  - "[[Systems/heterogeneous-finder-ensemble]]"
+  - "[[Systems/canary-audit]]"
+summary: |-
+  FLAG:DECISION
+  KEY:目標=在 Codex CLI 下開一個 lumos 專案,得到跟 Claude Code 下★同一套★六層防護:指示(AGENTS.md)/skills/hooks(進場、影響幅度、派工鏡頭、收工同步)/迴圈編排/量測/安裝-拆機對稱;不做第二套邏輯,每層都是「同一支 lumos、多一個接頭」
+  KEY:★2026-09-04 實驗 4/5 定下四個地基事實★:①未信任 repo 的 AGENTS.md 與 .agents/skills/ 都會載入 ②PreToolUse 攔得到 apply_patch(tool_input.command=patch 全文,沒有 file_path)③spawn_agent 的 message 在 hook 眼裡是加密字串→updatedInput 改派工詞這條路在 Codex 不通;matcher "Agent" 也沒攔到(工具名 collaborationspawn_agent)④SubagentStart 的 additionalContext 會到子代理手上→Codex 側派工鏡頭走這條
+  KEY:r1(2026-09-04,3 席+架構+外家 Codex)47 條/blocker 6(3 席各 1–3)/全折、accepted 空;外家 F1「message 可 rewrite」被實驗 A 反證不採信;★新地基事實(實驗 C/D)★:使用者層 hook 不按一次互動 TUI 的 Trust 就不跑,exec 只能靪 --dangerously-bypass-hook-trust,信任存放處沒查出來
+  KEY:四個擬裁定(r1 折入後):(a)AGENTS.md(有 AGENTS.override.md 則寫它)放同一塊 sentinel 區塊、插在檔首、reinject/剝除/Check D 三端雙檔、doctor 估 chain 總量 (b)hook 註冊寫 ~/.codex/hooks.json 不寫 config.toml(stdlib 沒 TOML 寫入器,零依賴) (c)鏡頭範圍改由 `lumos dispatch-lens <range> --arm --seats N` 落 armed 檔(repo key=realpath 的 sha256,TTL 10 分,消耗 N 次即刪,鏡頭文字首行印 range);SubagentStart hook 讀它;Claude 側標記行照舊;架構席判無先例=平台逼出的有意識偏離 (d)外家席=「不是當下編排者那一家」:記帳/問閘加 --orchestrator claude|codex(預設 claude),_roster_family 相對化;席名沿既有 <鏡頭>-<模型> 慣例
+  KEY:分四階段,每階段各自驗收:S0 安裝層(skills symlink→~/.agents/skills、hooks.json 合併器、AGENTS.md 區塊、enforcement 三層、teardown 對稱)→S1 hook 適配(apply_patch 取檔、SubagentStart 鏡頭、check-graph-sync 讀 Codex 逐字稿)→S2 迴圈從 Codex 編排(自訂 agent TOML、模板去 Claude 字眼、外家互換、席名統一)→S3 量測(recount/scenario_probe 多一個 runner)
+---
+# Codex完全支援_計劃
+
+> 白話:現在 lumos 的「防護」全掛在 Claude Code 上——進 session 時有人提醒你去查圖譜、改檔前有人把相關合約推到眼前、派審查員時有人把清單附進派工詞、收工時有人查你有沒有寫回圖譜。這些全靠 Claude Code 的四種接頭(CLAUDE.md、skills、hooks、子代理)。Codex CLI 0.144.1 四種接頭都有、形狀相近。本案要做的是:**同一支 lumos、同一批 hook 腳本,多接一組 Codex 的接頭**,讓人用 Codex 開 lumos 專案時拿到同一套防護。★不寫第二套邏輯★——Codex 專屬的只有「接頭」那一薄層。r1 審查(47 條)把「形狀一樣」修正成「外層一樣、內層三處不同」:派工訊息對 hook 不透明、hook 要人按一次信任才跑、AGENTS.md 有 override 檔與 32 KiB 全鏈預算。
+
+PRIOR-ART: ① 最小解層級——四種接頭 Codex 都原生提供:hooks.json 的**外層** JSON 結構跟 `~/.claude/settings.json` 的 `hooks` 段同形(事件名、matcher、`{type,command,timeout}`;★內層語意不同:matcher 名、payload 形狀、輸出欄位要求各自查★);skills 是同一個開放標準(agentskills.io,SKILL.md 同格式)所以 symlink 就能用、不用轉檔;AGENTS.md 跟 CLAUDE.md 一樣是「開 session 自動進 prompt 的 markdown」,既有 sentinel 注入機制(`_reinject_claude_block`)多寫一個檔;子代理開場的 additionalContext 是 Codex 自己設計給「餵子代理脈絡」的通道。② 世界解過沒——「一套 agent 工具鏈同時支援 Claude Code 與 Codex」在 2026 已是常態(superpowers skill 自帶 `references/codex-tools.md` 就是這種雙接頭寫法),做法一律是「共用內容+每家一個薄 adapter」。③ 裁定=borrow-design(Codex 官方通道)+ 零新依賴(避開寫 TOML 就不需要任何套件)。★PRIOR-ART 缺口(架構席 r1 ⚠)★:「armed 檔+SubagentStart 非同步交接」在本 repo 沒有先例(最近的 `_lens_cache_*` 是記憶化、impact-hook TTL 標記是冷卻窗,用途都不同);它是 Codex 派工訊息不透明逼出來的,列為有意識偏離,不當慣例。
+
+## 一句話
+
+lumos 的六層防護(指示 / skills / hooks / 迴圈編排 / 量測 / 安裝拆機)在 Codex CLI 下逐層接上,驗收標準是「乾淨機器、隔離 HOME 與 CODEX_HOME,`lumos install` 一次,Codex 開 lumos 專案時六層機械可證都生效;`lumos teardown` 一次全部乾淨(用檔案存在性與 enforcement 機械驗,不靠 teardown 的回傳碼——它三步不看 rc 固定回 0,file: `scripts/lumos:10362-10372`)」。
+
+## 「完全支援」的定義(六層對照;沒對到的就不算完全)
+
+| 層 | Claude Code 現況(都已上線) | Codex 對應接頭 | 本案要做的 | 地基驗證狀態 |
+|---|---|---|---|---|
+| 1 指示 | `CLAUDE.md` 裡的 sentinel 紀律區塊(`scripts/templates/graph-discipline.md`,6.6k;`lumos init/update` 刷、doctor Check D 比對) | `AGENTS.md`;★同層若有 `AGENTS.override.md` 則只讀它★;全域 `~/.codex/AGENTS.md` + 從 git 根往 cwd 逐層串接;★32 KiB 是整條鏈的合併上限,超過靜默截斷★ | reinject/剝除/Check D 三端都改成「目標清單」:CLAUDE.md + (該層有 override 就 override,否則 AGENTS.md);區塊插在檔首(第一個標題之後)而不是尾端,降低被截斷機率;doctor 多估一行「本 repo 各層 AGENTS 檔總量/32 KiB」 | ✅實驗 4:未信任 repo 的 AGENTS.md 會載入 |
+| 2 skills | `~/.claude/skills/<全部 8 支>` symlink(`_install_skills` 用 `_skills_list()` 掃 `skills/` 下所有含 SKILL.md 的目錄——含 3 支語言慣例 skill,不只 lumos-*) | 使用者層 `~/.agents/skills/`(文件);repo 層 `.agents/skills/`(★官方只列這一個,`.codex/skills/` 不存在,r1 外家 F3★) | `_install_skills` 多一個目標;uninstall/teardown 對稱清;★新目標是開放共用目錄:遇到既有「非我方 symlink 的真目錄」一律跳過+warn,不得沿用 `_link_or_copy` 的 rmtree(邊界 F2)★;五支 lumos skill 的 Claude 專屬字眼全部處理(不只三支,整合 F5) | ✅實驗 4:repo 層 `.agents/skills/` 未信任也載入且被隱式選用;★使用者層 `~/.agents/skills/` 未測★ |
+| 3 hooks | 5 支 `.py` copy 到 `~/.claude/hooks/`,`merge-claude-settings.py` 合併進 settings.json;事件=SessionStart×2/PreToolUse Edit\|Write\|MultiEdit/PreToolUse Agent/Stop | `~/.codex/hooks.json`(外層同形);matcher 名:`Bash`、`apply_patch`(`Edit`/`Write` 只是它的別名,tool_name 仍回 apply_patch);子代理=`SubagentStart`/`SubagentStop`;★hook 要在互動 TUI 按一次「Trust」才會跑,exec 下只能帶 `--dangerously-bypass-hook-trust`;沒有 CLI 能標信任,信任存放處沒查出來(實驗 C/D)★ | 合併器抽成「目標可指定+對照表」;註冊命令列帶明確 `--harness codex`(不嗅 payload 欄位);install 結尾印「開一次互動 codex 按 Trust」;enforcement 的 codex hook 層最多到「已註冊、信任狀態本機讀不到」,不單獨綠 | ✅實驗 2/4/5:帶旗標時 PreToolUse fire、apply_patch 攔得到、SubagentStart additionalContext 到子代理;❌matcher "Agent" 沒攔到 spawn(完整名 collaborationspawn_agent 攔得到,實驗 B);❌spawn message 為密文,rewrite 直接弄壞派工(實驗 A);❌不帶旗標 hook 0 筆(實驗 C/D) |
+| 4 迴圈編排 | design-loop / code-loop skill 叫主對話「派 Agent、model sonnet」;外家席=Codex;★家族判定是靜態關鍵字表(`_ROSTER_EXTERNAL_KEYS`/`_ROSTER_CLAUDE_KEYS`,file: `scripts/lumos:5711-5712`),`_roster_family(auditor)` 沒有「編排者」參數★ | `spawn_agent`(介面只有 task_name/message/fork_turns,★沒有 agent 參數★;自訂 agent 靠派工詞點名或 description 匹配);自訂 `~/.codex/agents/*.toml`(必填 name/description/developer_instructions) | 模板去 Claude 專屬字眼、每處給兩家寫法;裝一支 `lumos-reviewer.toml`;★記帳/問閘加 `--orchestrator claude\|codex`(預設 claude),家族判定相對化(整合 F3 blocker)★;席名沿既有 `<鏡頭>-<模型>` 慣例(架構 #2) | ✅實驗 3/5:exec 下能派子代理;SubagentStart 帶 agent_id+agent_type、子代理 PreToolUse 帶 agent_id、SubagentStop 帶 agent_transcript_path;★自訂 TOML 未試★ |
+| 5 量測 | `governance/eval/lens-utilization/recount.py` 讀 `~/.claude/projects/**.jsonl`;`scripts/scenario_probe.py` 跑 `claude -p`;★`.usage-log.jsonl` 唯一寫入者是 `lumos show/context` 的 `_usage_log`(schema `{ts,node,cmd}`),hook 不寫任何檔★ | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`(user_message 明文;spawn 的 message 密文;★官方明示逐字稿格式不是穩定介面★) | recount 多一個 reader(帶版本 fixture,認不得就跳過並記一行);probe 多一個 runner | ✅逐字稿位置與型別看過一份;★shell 呼叫參數是否明文、hook 注入有沒有落逐字稿★未查 |
+| 6 安裝/拆機/體檢 | `lumos install/uninstall/teardown/enforcement/doctor`;★`_sync_global_claude` 不看合併器 returncode、無條件 return True(file: `scripts/lumos:11084-11087`)★ | 同一組指令 | install 多寫 Codex 三處並檢查合併器 rc;teardown 對稱清(含剝除端 `_deinit_strip_claude` 雙檔,file: `scripts/lumos:10653`);enforcement 多層(見 S0);doctor Check D 目標清單化 | 純自家碼,r1 抓到兩個既有吞錯點,見左欄 |
+
+## 範圍與明確不做
+
+- **做**:上表六層在 Codex CLI(本機 0.144.1)下接上;主驗場=隔離 HOME+CODEX_HOME 下的 `codex exec`(★只在這個隔離環境、且 hooks.json 只含 lumos 五支時才帶 `--dangerously-bypass-hook-trust`★);互動模式做一次人工信任冒煙(見驗收)。
+- **不做**:①不把 Codex 當 MCP server、不用 `codex review`(調研候選 ②;候選 ① `--output-schema` 另開小案)②★不解析、不改寫既有 `~/.codex/config.toml`★(S2 的 agent TOML 是新建檔,用字串範本寫出、不需 TOML 寫入器)③不支援 Codex 專案層 `.codex/hooks.json`(未信任不載入,文件明寫)④不做 Windows 的 Codex 路徑(只保證不炸)⑤不替使用者按信任、不寫信任存放處(那是 Codex 的安全控制)。
+
+## S0 進場條件(r1 折入:未解四題先答,答不出不開工)
+
+1. `~/.agents/skills/` 使用者層 Codex 會不會載入(隔離 HOME 跑一次列 skills)。不載入→備援=`lumos init` 在 repo 層放 `.agents/skills/` symlink(已證載入),兩條都寫進 install。
+2. `config.toml [hooks]` 與 `hooks.json` 並存時的規則(合併/覆蓋)。
+3. 分開驗 matcher `spawn_agent` 與 `collaborationspawn_agent` 哪個命中(實驗 B 兩條並列只記到一筆,未分開)。
+4. Codex 逐字稿裡 shell 參數是否明文(決定 check-graph-sync 的 Codex reader 可不可做;不可做→該層只做「認不得就跳過」)。
+
+## 分階段(每階段各自過驗收才進下一階段)
+
+### S0 安裝層(純自家碼;預估 ≲300 行含測試)
+
+1. **skills**:`_install_skills` 目標從單一 `~/.claude/skills` 變成清單 `(~/.claude/skills, ~/.agents/skills)`;★對新目標:dst 若是既有真目錄(非 symlink/junction、非我方複製物)→跳過+印一行 warn,不刪★(`_link_or_copy` 的 rmtree 只保留給 `~/.claude/skills` 既有行為);`cmd_uninstall`/`_teardown_*` 對稱清兩處,且只清 symlink。明列會被連過去的是全部 8 支(5 支 lumos-*+3 支語言慣例),3 支語言慣例無 Claude 專屬工具引用、照連。
+2. **hooks 註冊**:`merge-claude-settings.py` 抽出「目標檔+對照表」參數。Codex 對照表:`Edit|Write|MultiEdit`→`apply_patch`;PreToolUse `Agent`→改掛 `SubagentStart`(無 matcher);`Stop`→`Stop`;SessionStart→SessionStart。註冊命令列一律 `python3 ~/.codex/hooks/<hook>.py --harness codex`(Claude 側維持無旗標=claude)。hook 檔 copy 到 `~/.codex/hooks/`。★`_sync_global_*` 檢查合併器 returncode:非 0→印 warn+return False,呼叫端不印成功(邊界 F5)★。懸空剪除、兩階段撤除(STUB→DELETE)兩邊同規則;常數改名 `_GLOBAL_HOOKS`(保留 `_GLOBAL_CLAUDE_HOOKS` 別名給測試,架構 #1)。install 結尾印:「Codex 的 hook 要你開一次互動 `codex`,在 Hooks need review 畫面按 Trust all;exec 不會問」。
+3. **AGENTS.md 區塊**:`_reinject_claude_block(root, slug, targets)`——目標清單=`[CLAUDE.md, AGENTS.override.md 若存在否則 AGENTS.md]`;四個呼叫點(`_vendor_toolchain`、`cmd_update` 來源分支、`cmd_init` 的 `_do_reinject`、Check D)訊息與比對全部目標清單化(整合 F2);剝除端 `_deinit_strip_claude` 同一清單(整合 F1)。AGENTS 檔的 absent 路徑把區塊插在第一個標題行之後(不是尾端);注意既有機制對整檔正規化 BOM/CRLF→LF(file: `scripts/lumos:10583`),AGENTS.md 也會被同樣正規化,寫進 init 訊息。doctor Check D 對每個目標各比一次;另加一行估算「git 根到本層各 AGENTS*.md 總 bytes/32768」,>75% warn。
+4. **enforcement 層**:每支 Codex hook 一列(與 Claude 側 `session-entry-hook` 等同粒度,架構 #3):`codex-hook:<名>` 狀態值域 `registered-trust-unknown|inactive|unknown`(★不出 active——信任狀態本機讀不到★);`codex-skills`、`claude-skills`(對稱補,整合 F6);`agents-md`(區塊在、版本戳與 CLAUDE.md 一致、有 override 時標明寫在 override)。`shutil.which("codex")` 為 None→Codex 各層 inactive 帶「本機無 codex」。
+5. **測試**:HOME+CODEX_HOME 隔離(沿用 `t_install_skills_unix`/`_sync_global_claude` 測試的 HOME 隔離寫法)驗 install→三處都在、teardown→三處都空;既有真目錄不被刪;合併器 rc 非 0 時不印成功;對照表逐條;Check D 三目標各測漂移;override 存在時寫 override。
+
+### S1 hook 適配(一支腳本、認形狀、由 `--harness` 旗標分支,不嗅 payload)
+
+| hook | Claude 下吃什麼 | Codex 下差在哪 | 適配 |
+|---|---|---|---|
+| lumos-entry-hook(SessionStart) | `cwd` | 同欄位 | `--harness` 只影響輸出裡的 enforcement 摘要 |
+| ci-status-hook(SessionStart) | `cwd` | 同欄位 | 零改 |
+| impact-hook(PreToolUse) | `tool_input.file_path` | apply_patch 的 `tool_input.command` 是 patch 全文,★沒有 file_path★ | `extract_paths` 回清單:command 以 `*** Begin Patch` 開頭→解 `*** Add File:`/`*** Update File:`/`*** Delete File:`/★`*** Move to:`★(邊界 F7)取全部路徑;★逐檔跑 impact 合併輸出(外家 F10),上限沿 cap★;TTL 冷卻、shebang、fail-open 沿用 |
+| dispatch-lens-hook(Claude: PreToolUse Agent + updatedInput 改派工詞) | 派工詞裡 `LUMOS-IMPACT: <range>` | ★派工訊息對 hook 是密文,讀不到也改不了(實驗 A)★;現碼 `tool_name != "Agent"` 即返回(file: `scripts/hooks/claude/dispatch-lens-hook.py:50`) | 新增 SubagentStart 分支(`--harness codex` 時走):讀 armed 檔→`additionalContext`。armed 檔由 `lumos dispatch-lens <range> --arm --seats N` 寫:路徑 `~/.cache/lumos/dispatch-lens/armed/<key>.json`,★key=`git rev-parse --show-toplevel` 的 realpath 取 sha256,寫讀兩端共用同一支 `_lens_repo_key`(邊界 F4)★,內容=range/產生時間/repo 根/剩餘席數;TTL 10 分;每次注入 seats−1,歸零即刪;`--disarm` 立即刪。★鏡頭文字首行印「LUMOS-LENS range=<base>..<head> 第 k/N 席」讓錯席可見(外家 F11/F20、邊界 F3);承認界線:同 repo 同窗口內非審查用的子代理也會收到,靠 seats 計數與短 TTL 縮小,量不到就不宣稱消滅★。PreToolUse 攔 `collaborationspawn_agent` 攔得到但無用處,不掛 |
+| check-graph-sync(Stop) | `transcript_path` 讀 Claude 逐字稿 tool_use 區塊 `input.command`/`input.file_path` | Codex 逐字稿型別不同且官方說非穩定介面 | reader 以第一行 `session_meta` 判 Codex 並讀 `cli_version`;★帶一份 0.144.1 的 fixture 逐字稿,型別對不上或版本未在 fixture 表→跳過本 session 判定並印一行「Codex 逐字稿格式未知,收工同步略過」(外家 F13)★;shell 參數非明文(S0 進場 4)→此層只做跳過 |
+
+S1 驗收(隔離 HOME+CODEX_HOME 真跑 `codex exec` 帶旗標,hook 命令列包一層把 stdout/stderr 落到測試暫存檔——★不發明新帳,usage-log 不是 hook 寫的(整合 F4)★):①apply_patch 改一個有合約的檔→hook stdout 含該檔合約行 ②`dispatch-lens --arm --seats 1` 後派子代理→子代理回報含「LUMOS-LENS range=」首行 ③Stop 後 check-graph-sync 對 Codex 逐字稿印出「已判/略過」其一,不炸。
+
+### S2 迴圈從 Codex 編排
+
+- 五支 lumos skill(design-loop、code-loop、project-notes、★core-knowledge、pitfalls-gapfill★)凡寫「Agent tool / model sonnet / `/skill`」處改成一行兩家:「派乾淨審查員(Claude:Agent 工具 sonnet;Codex:`spawn_agent`,派工詞點名 lumos-reviewer)」;`pitfalls-gapfill/SKILL.md` 第 27 行「用 Agent tool 派乾淨 refuter」是已知一處(整合 F5)。`$lumos-<skill>` 顯式叫法補進 INDEX。
+- `~/.codex/agents/lumos-reviewer.toml`:`name`、`description`(何時用它)、`developer_instructions`(templates.md 審查員框架固定段)、`sandbox_mode="read-only"`;install 用字串範本寫出、teardown 收。
+- **外家席相對化(整合 F3/通才 F3 blocker)**:`canary record`/`loop next`/`loop status` 加 `--orchestrator claude|codex`(預設 claude,舊帳不變);`_roster_family(auditor, orchestrator)` 回「同門/外家」而不是「claude/external」;`_TIER_ROSTER` 的 `external` 改讀成「非編排者家族」。Codex 編排時外家=`claude -p`。[[Systems/canary-audit]] 與 [[Systems/design-loop]] 的「外家 blocker 不得僅被同門多數推翻」不變。
+- 席名沿既有 `<鏡頭>-<模型>` 慣例(file: `docs/lumos-toolchain-knowledge/Projects/收斂閘殘餘估計降級_計劃.md:65`),不另立 `ext-<家族>`;調研候選 ⑥「9 種寫法」改為在 `loop status` 印正規化建議,不改帳。
+
+### S3 量測(進場條件:S1 進場 4 答「明文」且 additionalContext 有落逐字稿;否則本階段只做 probe runner,recount 不做並在誠實界線記一行)
+
+- recount 多一個 Codex reader(路徑 `~/.codex/sessions/**`,以 `cwd` 過濾 repo,fixture 版本守衛同 S1);probe 多一個 runner(`codex exec --json`,配額另量)。
+
+## 擬裁定(a)–(d)的理由
+
+- **(a) AGENTS 檔放同一塊、不放指路;有 override 就寫 override;插檔首**:指路要模型多做一步、沒機械保證;`project_doc_fallback_filenames` 只在該層無 AGENTS*.md 時生效。重複的漂移由 reinject+Check D 兜(三端同一清單);★32 KiB 是全鏈上限、截斷靜默,Check D 管不到截斷★——所以插檔首+doctor 估總量,只降機率不消滅,誠實界線記。代價:每專案多 6.6k。
+- **(b) hooks.json 不寫 config.toml**:stdlib 只有 `tomllib`(唯讀);hooks.json 官方支援、外層同形。並存規則=S0 進場 2。★但「同形」只到外層:Codex `PreToolUse` 的 `updatedInput` 文件要求同時回 `permissionDecision:"allow"`(外家 F2,未驗;本案 Codex 側不用 updatedInput,列為 S1 實作備註)★。
+- **(c) armed 檔而不是改派工詞**:實驗 A 硬事實(rewrite 即「Encrypted function output content could not be decrypted」)。備選「標記寫進 AGENTS.md 讓 fork_turns=all 的子代理繼承」不可控,不取。無先例=有意識偏離(見 PRIOR-ART 缺口)。TTL 10 分+seats 計數為暫用值,沒量。
+- **(d) 外家相對化到機械層**:只改散文,`_roster_family` 仍把 Codex 席判 external,Codex 編排時同門互審會被判「外家到齊」而放行——這是 code-high `required-fail-closed` 閘失效,必須動機械層。
+
+## 驗收(全機械;S0–S3 各自跑;總驗收=四條都綠)
+
+1. 隔離 HOME+CODEX_HOME 下 `lumos install` 後:`~/.agents/skills/` 8 支連結在(或 repo 層備援)、`~/.codex/hooks.json` 五支註冊且檔在且命令列含 `--harness codex`、專案 AGENTS 目標檔有區塊且版本戳等於 CLAUDE.md;`lumos enforcement --json`:codex hook 五列 `registered-trust-unknown`、skills 兩層 active、agents-md active;★另跑一次真 `codex exec`(帶旗標)冒煙,五支 hook 至少各 fire 一次(外家 F17)★。
+2. 同環境 `lumos teardown` 後三處全空(檔案存在性驗,不看 rc)、enforcement 各層 inactive、`doctor` 綠;預放的既有真目錄與使用者自寫的 hooks.json 項目原樣保留。
+3. S1 三條在真 `codex exec` 下各跑一次,結果留 `Verification/` 一篇。
+4. 測試套件全綠、`lumos anchor verify` 綠(★錨點只罩 `dispatch-lens-hook.py` 一支,其餘四支 hook 不在 `ANCHOR_FILES`,file: `scripts/lumos:11409-11416`;本案不擴錨點清單,改動由測試罩★)、`lumos pitfalls --diff` 分級照走代碼審。
+5. **互動信任冒煙(人工一次)**:真機開互動 `codex` 於 lumos 專案,按 Trust,改一檔,看 hook 輸出。REVISIT:2026-09-25 做這條;沒做完 S1 不算驗收。
+
+## 誠實界線
+
+- **hook 信任是使用者的一次手動動作**,lumos 不替按、不寫信任存放處(沒查出來在哪);enforcement 永遠只能說「已註冊」。
+- **綁版本**:matcher 別名 `Agent` 不匹配、spawn message 密文、`collaborationspawn_agent` 工具名、hook 信任閘行為,都是 0.144.1 觀測;`lumos enforcement` 印 codex 版本並跟圖譜記的驗證版本比,不同就唸一句。
+- **Codex 側鏡頭的位置與收件人都比 Claude 側弱**:附在子代理開場上下文而非派工詞;同 repo 同窗口的其他子代理也可能收到;首行印 range 只讓錯席可見,不消滅。鏡頭不量成效(見 [[Projects/派工鏡頭注入_計劃]])。
+- **AGENTS 鏈 32 KiB 截斷靜默**,本案只降機率(插檔首+估總量)。
+- **不證明 Codex 下的 lumos 比較好用**,只證六層接上了。
+
+## 實務隱患(逐類答)
+
+- **資料/狀態**:armed 檔是跨 process 共享狀態→`~/.cache/lumos/dispatch-lens/`(0700、驗 owner 沿用),TTL 10 分+seats 計數,過期即忽略;AGENTS 目標檔與 CLAUDE.md 重複→三端同一清單+Check D;`~/.agents/skills/` 是開放共用目錄→既有真目錄不刪。
+- **時序/並行**:同 repo 多 session 同時 arm→後寫者勝,且非審查子代理也可能收到鏡頭——★答案:靠首行 range 可見+seats 歸零即刪+短 TTL 縮小,不宣稱消滅★(邊界 F3 指出原答「不擋任何事」不成立:錯鏡頭會誤導審查席,已改)。
+- **失敗與回復**:hook 全 fail-open;hooks.json 壞→合併器 return 1,★呼叫端檢查 rc、不印成功★;Codex 未安裝→跳過並印一行;`_link_or_copy` 不對新目錄 rmtree。
+- **權限/安全**:hooks.json 在使用者家目錄(同 settings.json 等級);★`--dangerously-bypass-hook-trust` 只在隔離 CODEX_HOME、hooks.json 只含 lumos 五支的測試裡用;install、日常、任何自動 loop 一律不帶(它會連使用者自己的 hook 一起免審跑,邊界 F9)★;additionalContext 沿零自由文字消毒原則。
+- **相容/升級**:Codex 改版→enforcement 版本比對唸一句;逐字稿 reader 帶 fixture 版本表,認不得就跳過;兩階段撤除兩邊同套。
+- **可觀測**:enforcement 每 hook 一列;harness 由 `--harness` 旗標決定,★不由 payload 欄位判(Codex 與 Claude 的 hook 輸入都有 permission_mode)★;S1 驗收用測試端包裝落檔,不新增帳。
+- **已排除**:金流/對外寄送/正式環境不可逆——本案全部本機工具鏈。
+
+## 合約候選(過閘後蓋章走 guard scaffold→bind→audit,候選≠已標)
+
+- 「消毒原則對兩條通道一致」:Codex SubagentStart 通道輸出必須是 `dispatch-lens` 同一支函式的產物,不得另拼字串。
+- 「install/teardown 對稱」:Codex 三處在 teardown 後必為空;既有非我方目錄與使用者自寫 hooks 項目必原樣保留。
+- 「bypass 旗標只在隔離測試」:repo 內任何非測試碼不得出現 `--dangerously-bypass-hook-trust`。
+
+REVISIT:2026-09-25 互動模式 Codex 信任冒煙(驗收第 5 條)。
+REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/probe 有無真實使用;0 筆=沒人用 Codex 開 lumos 專案,S2/S3 降優先。
+
+## 審計修正紀錄(lumos-design-loop)
+
+- r1(2026-09-04,3 席+架構+外家 Codex):47 條(20+8+7+9+3)/blocking 36(19+5+3+9+0)/全折、accepted 空(blocker 輪)。外家 20 條(12 句引句錨不到,內容仍判、不入 set;F1「message 可 rewrite」實驗 A 反證不採信;F12 部分成立),整合 8(blocker=家族判定寫死),通才 7,邊界 9(blocker=hook 信任閘、`_link_or_copy` rmtree、AGENTS.override.md),架構 3 minor+1 ⚠。席報告與重現紀錄:`governance/review-reports/Codex完全支援/r1-*.md`、`r1-intake.md`。
+
+codex
+初讀已看到 r2 對多數 r1 缺口有明確折入，但驗收重點會落在幾個新宣稱：信任閘是否真是 0.144.1 行為、`AGENTS.override.md` 的取代範圍、custom agent 能否靠派工詞選中，以及 `--orchestrator` 是否覆蓋所有狀態鍵。接下來我會把 spec 以行號展開，並把文件契約與本機 binary 實測分開取證。
+exec
+/bin/zsh -lc "python3 scripts/lumos search 'Codex hooks AGENTS 子代理 信任' && python3 scripts/lumos context Systems/nested-agent-permission-scope --brief; nl -ba governance/review-reports/Codex完全支援/r1-intake.md | sed -n '1,340p'; nl -ba '/private/tmp/claude-501/-Users-enzo-harness-lumos-toolchain/26a6b57a-9efc-4073-b845-c27e42a2fbb1/scratchpad/Codex完全支援-r2.md' | sed -n '1,420p'; command -v codex; codex --version; codex --help; codex exec --help" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 1069ms:
+(多詞回退:你查的整串詞在未作廢的節點的可見文字裡找不到完全一致的,改成每個詞分開查、有出現就算;逐詞覆蓋 codex:104  hooks:72  agents:15  子代理:20  信任:27)
+(已隱藏 3 筆作廢結果;要看的話加 --include-superseded)
+提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。下結論前先讀全文:lumos show <節點>
+ 33.056  Projects/Codex工作流整合_調研.md  [子代,代理,信任,codex,hooks]
+    17 [KEY]: KEY:Lumos 目前只把 Codex 當外家審查員/辯方(codex exec 一問一答);帳上 codex 席名 9 種寫法共 62 筆,家族辨識因此失準
+    18 [KEY]: KEY:★本機 Codex CLI 0.144.1 三個實驗證實★:hook 在 codex exec 下 fire(使用者層 -c 設定;PreToolUse additiona…
+    20 [KEY]: KEY:候選(未裁):①--output-schema 鎖外家席報告格式(今天收貨正規化踩三次) ②codex review 當第二種外家形態(輸出未測) ③Codex 側 dis…
+    22 [body]: # Codex工作流整合_調研
+    24 [body]: > 白話:Lumos 現在只把 Codex 當「另一家的審查員」用——每輪設計審一席外家否決、代碼審低共識條目派它當辯方,一律 `codex exec --sandbox read…
+    26 [body]: ## Lumos 現在怎麼用 Codex(圖譜+腳本+帳面盤點)
+    28 [body]: - **設計審迴圈**:每輪一席「外家否決」(`lumos-design-loop/SKILL.md` 步驗 5、`templates.md` 辯方段;`codex exec --…
+    29 [body]: - **代碼審迴圈**:低共識 ≥major 條目派 Codex 辯方(`lumos-code-loop/SKILL.md` 步驟 4、`reference.md:141/152`…
+    … 還有 25 處
+ 32.739  Projects/Codex完全支援_計劃.md  [子代,代理,信任,codex,hooks]
+    11 [fm]: - "[[Projects/Codex工作流整合_調研]]"
+    23 [KEY]: KEY:目標=在 Codex CLI 下開一個 lumos 專案,得到跟 Claude Code 下★同一套★六層防護:指示(AGENTS.md)/skills/hooks(進場、…
+    24 [KEY]: KEY:★2026-09-04 實驗 4/5 定下四個地基事實★:①未信任 repo 的 AGENTS.md 與 .agents/skills/ 都會載入 ②PreToolUse …
+    25 [KEY]: KEY:r1(2026-09-04,3 席+架構+外家 Codex)47 條/blocker 6(3 席各 1–3)/全折、accepted 空;外家 F1「message 可 r…
+    26 [KEY]: KEY:四個擬裁定(r1 折入後):(a)AGENTS.md(有 AGENTS.override.md 則寫它)放同一塊 sentinel 區塊、插在檔首、reinject/剝除/…
+    27 [KEY]: KEY:分四階段,每階段各自驗收:S0 安裝層(skills symlink→~/.agents/skills、hooks.json 合併器、AGENTS.md 區塊、enforc…
+    29 [body]: # Codex完全支援_計劃
+    31 [body]: > 白話:現在 lumos 的「防護」全掛在 Claude Code 上——進 session 時有人提醒你去查圖譜、改檔前有人把相關合約推到眼前、派審查員時有人把清單附進派工詞、…
+    … 還有 47 處
+ 17.810  Projects/派工鏡頭注入_計劃.md  [子代,代理,信任,codex,hooks]
+    24 [KEY]: KEY:憑什麼做得到=[[Verification/2026-09-03_派工攔截點實測]]:攔得到 Agent、updatedInput 改得了、子代理照單全收;追測二:addi…
+    27 [KEY]: KEY:r3(21 條/blocking 14/4 blocker,全折;上限到)裁★hook 薄殼、邏輯進 lumos 新子命令 dispatch-lens★沿用既有 helpe…
+    28 [KEY]: KEY:三個登記點=_GLOBAL_CLAUDE_HOOKS/HOOK_ENTRIES/enforcement 寫死的四元組+ANCHOR_FILES(加交叉測試、同步 ancho…
+    31 [fm]: - content: 開案:鏡頭版——標記觸發、固定席、d9 截斷、既有合併器安裝、fail-open;不擋不驗不記不量。動工前唯一實測=additionalContext 到不到…
+    37 [fm]: - content: r1 折入兩條有意識偏離:①本 hook 進 ANCHOR_FILES——scripts/hooks/claude/ 第一支被錨的檔,新類別;②用 updat…
+    40 [fm:why_chosen]: why_chosen: 錨點:硬約束成立的原因(改得了派工詞)只在本案成立、對只注入上下文的鄰居不成立,對照組選錯;錨點只罩 repo 份不罩家目錄份,寫成界線不再帶過。updat…
+    45 [fm:context]: context: r2/r3 外家 Codex 兩輪判「寫成界線不算修」;修法=impact 加 --vault 旗標+每次 git archive base 版圖譜到快取
+    64 [body]: > 白話:代碼審派審查員的時候,規矩要求把「這批改動碰到哪些帶合約或出過事故的筆記」貼進派工詞——實帳沒人做到。本案在派子代理那一刻,由 hook 把機器算好的那份清單**附**進…
+    … 還有 13 處
+ 15.290  Systems/開發工作流總覽.md  [子代,代理,hooks]
+    20 [KEY]: KEY:自足性審計的位置=④收工儀式內(乾淨子代理只讀圖譜還原比對,self-audit 蓋章);⑥doctor Check S 軟提醒過期未審當兜底。★已知坑:在「從 Claud…
+    21 [DEP]: DEP:[[Systems/design-loop]]｜[[Systems/pitfalls-code-loop]]｜[[Systems/lumos-cli-read]]｜skil…
+    81 [body]: 「不允許子代理,跳過自審」的根因不是設定被關,而是該 session 在**子會談環境**跑:從 Claude 內開出的終端會繼承 `CLAUDE_CODE_CHILD_SESSI…
+ 15.206  Systems/anchor-integrity.md  [子代,代理,hooks]
+    17 [FLOW]: FLOW:anchor approve --note→6錨點(runner×2+git hooks×3+claude hook×1:dispatch-lens-hook.py,20…
+    22 [KEY]: KEY:誠實天花板——同 repo 守衛悖論:決意繞過者可連守衛一起改;買到的是無痕篡改被封死(必留 baseline diff/缺 approve 事件/bypass 軌跡其一)…
+    36 [fm:why_chosen]: why_chosen: 分層——baseline 守驗證器(runner+hooks),測試守被驗物(lumos 行為);改壞 lumos 由 test_lumos.py 抓,前提…
+    41 [fm]: - scripts/hooks/pre-push
+    48 [body]: `lumos anchor verify/approve`——**錨點完整性守衛**(vault-free):測試 runner 與把關 hooks 的 sha256 baseli…
+    64 [body]: `scripts/hooks/claude/dispatch-lens-hook.py` 是第一支被錨的 Claude Code hook。理由:它用 `updatedInput`…
+ 14.950  Verification/2026-09-03_派工攔截點實測.md  [子代,代理,hooks]
+    6 [fm:revalidate_when]: revalidate_when: ①Claude Code 大版本更新 ②要據此動手設計派工閘之前(結論綁版本,動工前重跑一次 governance/eval/hook-inter…
+    13 [VERIFY]: VERIFY:★派工那一刻的機械強制點找到了(2026-09-03 實測,Claude Code 2.1.259)★——PreToolUse 的 matcher 匹配得到派子代理(…
+    15 [KEY]: KEY:★追測(同日):hook 不只能擋,還能改寫派工詞★——hookSpecificOutput.updatedInput 對派子代理有效,實測子代理原封不動列出只存在於注入文…
+    16 [KEY]: KEY:★注入的兩條硬約束(第一次測失敗換來的)★——①內容寫成「暗號是 XXXX」時子代理拒答並指認為提示注入,換成長得像真實清單才成功:注入內容必須看起來是正當系統附加 ②此機…
+    17 [KEY]: KEY:SubagentStart 這條路不能用——它會 fire,但 input 只有 agent_id/agent_type、★沒有派工詞★,攔得到卻看不到內容,判不了該不該擋
+    21 [KEY]: KEY:★查證來源在關鍵那句上是錯的★——派去查官方文件的來源結論為「派子代理不經 tool-use 層,matcher 匹配不到」;不採信的理由=眼前直接證據(本來就在用工具派子…
+    36 [body]: 在 `~/.claude/settings.json` 的 `hooks.PreToolUse` **追加**一條 matcher 為 `Agent|Task|Subagent` …
+    48 [body]: | `PreToolUse` 匹配得到派子代理嗎 | ✅ 得到 | hook 收到的 JSON 中 `"tool_name":"Agent"` |
+    … 還有 12 處
+ 14.510  Projects/主session鏡頭利用率_計劃.md  [子代,代理,codex]
+    12 [KEY]: KEY:主 session 動手前被 impact-hook 推到眼前的固定席節點,★有沒有被碰★今天零數字。本案第一段★只量不加義務、不設門檻、零新元件★:一支唯讀腳本讀逐字稿,…
+    13 [KEY]: KEY:r1(62 條/11 blocker,4 席 opus+Codex)拆掉第一版:時間窗與注入時機互斥、比率量到圖譜密度、跳過是合規、門檻無刻度、extract_bash_f…
+    17 [KEY]: KEY:姐妹題=[[Projects/派工鏡頭注入_計劃]](子代理側,裁不量成效);本案量的是行為不是成效
+    28 [fm:context]: context: Enzo 提「推到眼前不等於利用到」;同日派工鏡頭注入案裁子代理側不量成效;主 session 側今天零數字
+    47 [body]: > 白話:主 session 動手改 code 前,hook 會把「這個檔牽連到哪些帶合約的筆記」推到眼前——推了之後有沒有被看、被用,今天沒有任何數字,只有反例(2026-09-…
+    71 [body]: - `check-graph-sync.py`(Stop):`collect_turn_actions` 回兩個扁平 list(Edit 路徑、Bash 指令),無順序、不收 Re…
+    72 [body]: - 逐字稿:每行 `timestamp` 為 UTC 帶 Z;tool_use 有序;★hook 注入本身就是一行 `hook_additional_context` 附件(too…
+    78 [body]: r2 量測效度席把 r1 版的演算法拿歷史逐字稿乾跑,發現★推送本來就寫在逐字稿裡★:每次 impact-hook 注入,逐字稿多一行 `attachment.type == ho…
+    … 還有 5 處
+ 12.931  Projects/世界repo掃描2026-09-02_調研.md  [代理,hooks,agents]
+    28 [KEY]: KEY:誠實界線=四路皆 README/docs/摘要層,讀到程式碼僅 ralph stop-hook、SWE-agent agents.py、OpenHands stuck_de…
+    40 [body]: 用三十幾個候選 repo 名字對圖譜掃一輪:DeepWiki、aider、Kiro、Ralph、autoresearch、skill-doctor、rulesync、langfus…
+    66 [body]: 出處:Claude Code 官方 hooks 有 `InstructionsLoaded` 事件——「When a CLAUDE.md or `.claude/rules/*.m…
+    81 [body]: - **D1 並行改動**。Enzo 09-01 已裁「誤報量測不辦,三型再犯時回看」——本條只留世界座標:MCP Agent Mail(2.1k★)glob 路徑 advisor…
+    96 [body]: - **worktree 管理器** vibe-kanban(28k★,已 sunset)/Claude Squad/Conductor/Cursor cloud agents:全…
+    109 [body]: - `claude plugin eval` 公開文件零筆,只讀到 CLI `--help`,早期存取跑不了。`InstructionsLoaded` 我對官方 hooks 頁驗過…
+ 12.912  Verification/2026-08-14_子代理續談headless實測.md  [子代,代理]
+    5 [fm:valid_under]: valid_under: Claude Code 2.1.232、macOS、headless（claude -p / -p --resume）、同一 session id、子代理…
+    8 [fm]: - "[[Projects/子代理續談調研]]"
+    13 [VERIFY]: VERIFY:headless 三步實測全過——①`claude -p` 派子代理記暗號(回 ready.,transcript jsonl 24KB 落地,本機本專案首見)②`-…
+    14 [TEST]: TEST:成功判準=追問到前輪具體內容且確認記憶還在——達成;[[Projects/子代理續談調研]] DECISION 的重啟條件同日解鎖
+    15 [KEY]: KEY:意外收穫=被續談的子代理對跨 agent 訊息有注入警覺(拒絕對暗號做任何部分揭露,含 yes/no 側信道)——對治理場景是加分行為
+    17 [body]: # 2026-08-14_子代理續談headless實測
+    19 [body]: 驗證 [[Projects/子代理續談調研]] 裁定中的重啟條件：「任一本機環境實測續談成功一次（含追問到前輪報告具體內容、確認記憶還在）」。
+    23 [body]: 1. **派工**：`claude -p`（headless，scratchpad cwd）令主 agent 派 general-purpose 子代理記暗號 `PINEAPPLE…
+    … 還有 2 處
+ 12.838  Projects/子代理續談調研.md  [子代,代理]
+    17 [KEY]: KEY:調研對象=Claude Code 子代理續談(SendMessage 帶 agent ID 續問已完成的子代理,保留其脈絡;限同 session)
+    19 [KEY]: KEY:★禁令★各輪審計「初讀」必須維持乾淨脈絡,續談只准用於「對子代理自己講過的話追問」——跨輪續談會使 canary 探針失效(看過上輪植入樣式)且脈絡只增不減撞 30K to…
+    20 [KEY]: KEY:2026-08-14 實測=本機「互動式」terminal session 續談失敗「No transcript found」——互動 session 主對話與子代理正文 …
+    23 [KEY]: KEY:[2026-08-14 同日更新]重啟條件已達成——headless 三步實測全過(transcript 落地/SendMessage 恢復/跨兩次 resume 記憶完整…
+    24 [KEY]: KEY:★範圍界定(2026-08-14 補)★本篇「互動 session 不可用」只涵蓋「續問已結束的子代理」(吃磁碟 transcript,互動不落地故必敗);「對還活著的 p…
+    26 [fm]: - "[[Verification/2026-08-14_子代理續談headless實測]]"
+    28 [body]: # 子代理續談調研
+    32 [body]: Claude Code 新增「子代理續談」：派出去的子代理完成後，其對話脈絡（讀過的檔案、推理過程）保留在本機紀錄檔，同一 session 內可用 SendMessage（帶 ag…
+    … 還有 4 處
+ 12.537  Projects/Codex外審吸收_計劃.md  [信任,codex,agents]
+    15 [KEY]: KEY:2026-07-29 Codex(gpt-5.6 high)全項目外審(總分 5.2/10;全文存 session scratchpad):三大風險=假確信(形式合規≠語意…
+    16 [KEY]: KEY:★P0 已落地★——①GitHub Actions CI 信任根(.github/workflows/ci.yml:compileall+SyntaxWarning 閘+全…
+    24 [body]: # Codex 外審吸收（2026-07-29）
+    32 [body]: | 無 CI 信任根＋hook 謊稱「CI 仍會抓」 | **採，P0 已落地** | 實錘：repo 無 workflows；謊言句 3 處已改真話 |
+    35 [body]: | anchor 非信任根應稱改動偵測 | **採，定性已改** | 同 repo 自簽悖論圖譜本有記載 |
+    46 [body]: - CI 首跑實錄：run#1 **紅**——當場抓到 `t_impact_incidents_smoke` 硬編 `/Users/enzo/...` 絕對路徑（外審 hermet…
+    74 [body]: ## backlog 追加（2026-07-30 治理日報引入，非 Codex 外審項）
+ 12.505  Verification/2026-08-14_跨session傳訊互動視窗實測.md  [子代,代理]
+    5 [fm:valid_under]: valid_under: Claude Code 2.1.232、macOS、同一台機器上兩個互動式 session、雙方皆存活且 ListAgents 互看得到、單向送出＋對方主…
+    6 [fm:revalidate_when]: revalidate_when: Claude Code 改動 SendMessage/ListAgents 尋址或投遞機制、要驗跨機器/雲端 session、或要驗「送給已結束 …
+    15 [VERIFY]: VERIFY:互動式 session 之間傳訊實測通過——ListAgents 列出同機兩個互動 peer(idle 19h / 1d);SendMessage 送給閒置 1 天的…
+    17 [KEY]: KEY:★關鍵區辨★本測推翻不了也不牴觸[[Verification/2026-08-14_子代理續談headless實測]]的互動限制——兩者是不同機制:「續問已結束的子代理」靠…
+    24 [body]: 先前 [[Projects/子代理續談調研]] 的結論是「互動 session 不可用」。那個結論成立，但**範圍只到「續問一個已經結束的子代理」**——那條路需要磁碟上的子代理逐…
+    28 [body]: 1. **列 peer**：`ListAgents` 於互動式主對話中列出同機兩個互動 session（分別閒置 19 小時、1 天），非本 session 派出的子代理。→ 尋址…
+    35 [body]: - 這與子代理續談是兩套機制，先前的「互動不可用」不可外推到本場景。
+ 12.488  Projects/跨session傳訊用途調研.md  [子代,代理]
+    14 [fm]: - "[[Projects/子代理續談調研]]"
+    17 [KEY]: KEY:調研對象=Claude Code 跨 session 傳訊(ListAgents 列出同機/雲端其他 claude session,SendMessage 直接投遞;與「續…
+    18 [KEY]: KEY:★實測已通★互動式視窗雙向可用且能喚醒閒置 peer(見[[Verification/2026-08-14_跨session傳訊互動視窗實測]])——先前[[Project…
+    22 [KEY]: KEY:已排除=拿 peer session 當審計獨立席次(脈絡髒於全新子代理且更貴)、拿傳訊當「問規則的捷徑」(繞過圖譜唯一真相,該擋)
+    46 [body]: 這跟 [[Projects/子代理續談調研]] 講的**不是同一件事**。那邊是「續問一個已經結束的子代理」，靠磁碟上的逐字稿還原脈絡，互動視窗不寫逐字稿所以必敗。這邊是「對一個還…
+    66 [body]: - **當審計的獨立席次**——peer 是「別人正在做別的事」，脈絡比全新子代理更髒，成本也更高。純負面。
+    86 [body]: 反向的面（本 session 面對外來訊息有沒有同等戒心）本輪沒驗。子代理續談那輪有觀察到子代理對跨代理訊息會起戒心，但那不能直接外推到主對話。
+ 11.775  Verification/2026-08-23_about_code存量雙評審落地.md  [子代,代理,codex]
+    22 [body]: | A | Codex CLI(昨日) | 自讀 vault | 0:8 / 1:38 / 2:16 / 3:16 / 4+:5 |
+    23 [body]: | B | **Opus 子代理**(乾淨脈絡) | 自讀 vault 全文 | 0:12 / 1:46 / 2:12 / 3:10 / 4:3 |
+    26 [body]: 分歧形態 35:5(A 列 B 沒列為主)——不是一面倒到可疑,是「Codex 偏寬」。
+    36 [body]: (另存 `-extra.json`),還抓到我 3 個路徑錯誤——**Codex 對同樣的錯路徑沒報,很可能猜的**。
+    42 [body]: 它們是給人或 AI 讀的文字,改它們有注入一致性守衛。全是 Codex 列、Opus 不列。
+    49 [body]: | 正文 0 次,Codex 猜的 | 公開精簡版_計劃 ← slim/get.sh | 0 |
+    52 [body]: | 對具體函式的缺陷要求 | Codex外審吸收 ← `cmd_ci_wait.emit()` 不印證據 | 1 |
+    55 [body]: 22 條真分歧:Codex 對 5、Opus 對 11、6 條 Codex 列了正文 0 次的(猜)。
+    … 還有 1 處
+ 11.332  Verification/2026-09-03_派工鏡頭注入驗收.md  [子代,代理]
+    15 [body]: > 白話:裝好 hook 之後,真的派一個子代理、派工詞帶一行標記,看它有沒有收到「固定席節點」那段、會不會把它當成攻擊拒答。結果:收到了、沒拒。
+    21 [★INVARIANT★]: | 1 正向 | `lumos install` 後,派 haiku 子代理,派工詞含 `LUMOS-IMPACT: c3b4f3f~1..c3b4f3f`(已知 12 篇固定席)…
+    33 [body]: - 只驗了一個範圍、一個子代理(haiku);sonnet/opus 對同段措辭會不會拒答沒測。
+ 10.015  Projects/版本發布流程_計劃.md  [信任,codex,hooks]
+    12 [fm]: - "[[Projects/Codex外審吸收_計劃]]"
+    20 [KEY]: KEY:四條消費路徑(r1 補第四條)——①維護者活 clone ②陌生人首裝 ③vendored 副本 ④**全域 Claude hooks**(_install_hooks_p…
+    23 [KEY]: KEY:可逆性=發布動作實務上收不回(有人裝了);但 ★tag 可刪可 force-move 是事實★——「只前滾不改寫」是**政策不是性質**,無機械強制(Codex 指出,誠實…
+    42 [body]: **branch protection 的定位隨之改變**：從「本案的正解」降為「可選的縱深」——壞 main 已經傳不出去，required check 只再多保護 main 自…
+    102 [body]: - 指紋來源＝當下實際下載到的檔案；**明記這是 TOFU（首次使用即信任），不是上游官方公布值**。
+    116 [body]: - **一台機器可能同時有三個版本**（r1 補，Codex 指出＋自核）：全域 CLI（symlink→活 clone）、各專案 vendored 副本、**全域 Claude …
+    120 [body]: - **checksum 的信任根是 TOFU**：若首次下載時上游已被替換，指紋會把錯的東西鎖成「正確」。
+    144 [body]: | 2 | slot4／Codex 否決席／slot3（自核屬實） | **blocker** | [S5] 翻轉預設：不釘為預設，釘版本改 opt-in；並修 `--pull` …
+    … 還有 4 處
+  9.988  Verification/2026-09-04_主session鏡頭利用率第一份報表.md  [子代,代理]
+    19 [body]: `governance/eval/lens-utilization/recount.py --repo .`(唯讀;報表存同目錄 `2026-09-04-first-report.…
+    25 [body]: | impact 注入(主 session) | 44(舊標頭 13、新 23、無固定席段 8);子代理 0 |
+  9.945  Projects/impact鏡頭機械化_計劃.md  [子代,代理,hooks]
+    24 [fm:superseded_by]: superseded_by: ★2026-09-03 實測推翻死因,重開條件已滿足(見 [[Verification/2026-09-03_派工攔截點實測]])★:d2 的核心死因…
+    33 [body]: > ★那個強制點找到了★:Claude Code 的 `PreToolUse` hook 匹配得到派子代理(`tool_name` = `Agent`)、
+  9.862  Verification/2026-07-29_CI回流閉環v1落地.md  [codex,hooks,agents]
+    18 [TEST]: TEST:t_ci_wait/t_ci_status_and_gov/t_ci_hooks 共 28 檢查全綠;全套 1662 passed 0 failed;doctor 0 i…
+    23 [KEY]: KEY:hook 生命週期對稱——新 hook 同時進 HOOK_ENTRIES(SessionStart)與 _GLOBAL_CLAUDE_HOOKS 白名單(缺後者=註冊指向不…
+    67 [body]: ## 外審 round3 補正（2026-07-29 晚，第二輪 Codex 實查後）
+  9.838  Systems/canary-audit.md  [代理,信任,codex]
+    38 [KEY]: KEY:[2026-08-14 prior-art 掃描]同題 repo LoopX(huangruiteng/loopx,4.7k星,loop-engineering 狀態核心)…
+    78 [fm:context]: context: Enzo 論證:抓到不代表認真、沒抓到不代表不認真(d4 已承認非平穩性),此訊號翻譯不出任何結論、無下游消費=空轉;僅存的煙霧偵測角色(審計員沒讀/管線斷線)已…
+    104 [body]: 源起:日報 2026-06-18 Gap 1「內迴圈派 Sonnet 當審計員,卻從沒檢查它這一輪到底有沒有在認真抓」+ Codex `/goal` 共識「你判斷『做完沒』的那套檢…
+    124 [body]: 抓到 canary 只證明審計員**醒到足以抓那一個、那一類、那一段**的植入瑕疵,**不證明抓到所有真實瑕疵**。canary 抓得到的失敗模式 = 「審計員根本沒讀 / 只吐通…
+  9.716  Verification/2026-08-22_指令索引與情境探針.md  [子代,代理,hooks]
+    45 [body]: 六條:採納三(主流程無 try/finally 會丟結果+殘留臨時目錄 → 加;允許 Agent 讓子代理動作隱形 → 改 --disallowedTools Agent;情境間 …
+  9.373  Projects/全盤外審2026-07_調研.md  [codex,agents]
+    17 [KEY]: KEY:來源=2026-07-21 使用者要求全盤外審:Codex gpt-5.6-sol high reasoning 實讀 repo(153k tokens,9 條 findi…
+    24 [KEY]: KEY:Codex 總評=「理念成熟且誠實,但多份 spec/多代 gate/人工狀態編排已開始反噬唯一真相與 d5;先收斂真相入口和工作流,再用逃逸與成本資料調價,比再加任何審計…
+    26 [fm:PRIOR-ART]: PRIOR-ART:①最小解=多為既有機制小修(show 薄介面/skill 改行/加帳欄位),無新治理層 ②世界解=本調研本體(Codex 實讀+四路真搜:Spec Kit sp…
+    30 [body]: > **狀態**：外審完成、裁量已定（逐條進行），本節點=findings 全記錄與 disposition 帳。緣起：使用者「再全面審視一次本工具，問問世界」+指定 Codex …
+    34 [body]: - **Codex 席**：`gpt-5.6-sol` + `model_reasoning_effort=high`、read-only sandbox、實讀 repo（CLAU…
+    60 [body]: - Codex 單席單 run——findings 未經多數決；採信靠逐條抽驗（3/9 直驗、其餘證據為 skill/圖譜自認文字）。
+    62 [body]: - finding 7 的「價值已超維護成本」是 Codex 判斷,無成本數據支撐——正因如此 disposition=等數據,不直接採。
+  9.235  Projects/關係層傳播守衛_計劃.md  [代理,codex,hooks]
+    12 [KEY]: KEY:治病=lumos驗證火力全在「節點層」(合約綁測試/乾淨審),關係層(邊)只查存在/斷不斷(Check3/4/P)、不查「還對不對」;頭號腐爛(交叉審計實測)=決策別篇推翻…
+    14 [KEY]: KEY:PRIOR-ART(2輪Codex讀repo證偽兩次)=r1誤指_reco_scores、r2更深:_impact_bfs/_impact_via也不行(圖譜建圖層Env.…
+    30 [fm:context]: context: lumos驗證全在節點層,關係層邊只查存在/斷不斷、不查還對不對;交叉審計實測頭號腐爛=決策別篇推翻本篇沒跟上,hooks抓不到只 AI掃得出;pre-commi…
+    31 [fm:why_chosen]: why_chosen: "proactive主網趁脈絡最全當場處理最準最便宜、reactive Check E當補網;連鎖必判斷閘防2-3跳點名半張圖;只掃frontmatter可…
+    34 [fm]: - content: round-1 Codex(讀repo)修正折入:引擎改_impact_bfs+_impact_via(非_reco_scores)、觸發接decision-…
+    36 [fm:context]: context: round-1 panel跨家族Codex以scripts/lumos行號釘出PRIOR-ART事實錯誤:_reco_scores是推薦排序器非傳播引擎、deci…
+    40 [fm]: - content: round-2 Codex(讀repo)修正折入(v3):裁定翻成build——圖譜建圖層無型別(_impact_bfs/_impact_via不能typed…
+    42 [fm:context]: context: round-2 panel跨家族Codex以行號證:Env.edges以target去重丟邊型、_impact_via事後單值猜型related遮verified…
+    … 還有 17 處
+  8.780  Issues/散文紀律沒有退場機制.md  [codex,agents]
+    22 [KEY]: KEY:★外部把「無效」升級成「有害」★—①TDAD(arXiv 2603.17973):AI 改壞既有測試的比率,什麼都不加 6.08%、★只加一段「請照測試先行做」的程序散文惡…
+    107 [body]: **② AGENTS.md 實測（arXiv 2602.11988，ETH Zurich，Gloaguen 等，438 題含 SWE-bench Lite 與自建 AGENTben…
+    118 [body]: - **② 世界解過沒（真搜）**：解過，而且工具成熟——**prompt ablation** 是標準做法：逐條移除指示、跑同一組評測、比對指標差異，用來判斷每一段到底有沒有貢獻…
+    163 [body]: 1. **code-loop 辯方預設是誰**:`lumos-code-loop/SKILL.md:21`「預設外家 `scripts/external-seat.sh`」(該腳本…
+    166 [body]: **兩條真衝突的修法(2026-09-02 已交付)**:①code-loop `SKILL.md` 辯方預設改成 Codex(external-seat.sh/Gemini 降為…
+    169 [body]: - ~~design-loop 的 Codex 不可用退 Gemini vs 退 opus~~:agent 引的 `design-loop/SKILL.md:26` 其實是 sev…
+  8.734  Projects/decision_refs自動養成_實作計畫.md  [信任,codex]
+    11 [KEY]: KEY:核心安全風險=AI誤指決策 → 不對稱信任:ai-ref 對 E3 firing 生效(加法/advisory/一刪),但對 E2 suppression 不生效(誤ref…
+    46 [body]: - **不對稱信任（核心安全）**：AI 誤指決策（V 實作 d3、AI 填 d2）的緩解——`by:ai` 的 ref **對 E3 firing 生效**（加法、advisor…
+    47 [body]: - **provenance 格式（定案 ③，2026-07-15）**：ai 填的進獨立欄位 **`decision_refs_ai`**、human 確認/cascade-co…
+    53 [body]: - **T3 是 AI GIGO**：AI 判實作哪條決策，判錯 = 填錯 ref。緩解靠不對稱信任（firing 可容錯、suppression 不容錯）+ by:ai 可抽查，…
+    62 [body]: 3. **T3 AI suggest**（含不對稱信任、provenance、audit）——覆蓋背包；design-loop 重點審這塊。
+    64 [body]: ## T3 詳細規格（design-loop v3；r1+r2 四席+Codex 折入）🧊 凍結待實作
+    68 [body]: **分工（lumos 家規「Claude 編排、lumos 出原語」）**：lumos 出**機械原語**，語意判斷是 **Claude 編排步驟**，lumos 不派 AI、不讀…
+    72 [body]: **lumos 機械原語（六個；Codex r2 驗過讀側/解析/writer 足夠，唯 promote/prune 需新雙欄 edit helper）**
+    … 還有 18 處
+  8.509  Projects/from-scratch重生守衛_計劃.md  [信任,codex]
+    20 [KEY]: KEY:裁定=解法不在「生成更好 prose」(那就是 openwiki);只能走三路——找回 provenance / 標出不確定 / 給重建套 oracle。且大半=組合現有機…
+    50 [body]: `PRIOR-ART:` ① 最小解在**組合既有閘層**（不對稱雙欄信任、refcheck 指涉驗證、cochange git 挖掘、design-loop 對抗審、signof…
+    65 [body]: 2. **provenance 分級隔離——複用不對稱雙欄信任**。每條 claim 帶證據級：Tier A（現 code 可驗,file:line）/ Tier B（git 史變…
+    73 [body]: - **M1（MVP,最硬核）**：`provenance 分級隔離` + `拒絕發明無證據合約`。＝解法 2 + 5。純機械 + 紀律,複用既有雙欄信任,無新派工。**這兩條不做…
+    89 [body]: - **節點級標記**：from-scratch 重生的節點,寫入者以 `lumos set <節點> regen from-scratch/<日期>` 標 frontmatter…
+    96 [★INVARIANT★]: - **不對稱信任接線**：`推測:` 行**不得**承載 ★INVARIANT★/★IRREVERSIBLE★（合約不能建在推測上）;推測升級唯一路徑＝補 [src:]/[git…
+    100 [body]: **接線（r1 Codex 折入;r2 簽名+映射表補正）**：新增**共用檢查器 `check_regen_provenance(note, repo_root) -> (err…
+    112 [body]: - **J-c（硬擋 rc1,substring gate——borrow repowise）**：所有 `[src:路徑(:行號)]` 指針機械驗:路徑存在、行號在檔案範圍內。*…
+    … 還有 14 處
+  8.430  Issues/git-hooks路徑指向樹內_checkout即執行分支碼.md  [信任,hooks]
+    19 [body]: # git-hooks路徑指向樹內_checkout即執行分支碼
+    21 [body]: > 白話:本 repo 把 git hooks 裝在版本控制的樹裡(`core.hooksPath=scripts/hooks`),好處是 pre-commit/pre-push …
+    34 [body]: 任何會 checkout 他人分支的流程:本機代碼審、`lumos-code-loop` 的 worktree 驗證席、CI。信任模型實際上是「能 push 分支的人=能在審查者機…
+    38 [body]: 1. hooksPath 改指向樹外(`~/.lumos/hooks/`),由 install.sh 複製並由錨點比對來源;代價=每台機器多一步、hook 更新要重跑安裝。
+  8.309  Verification/2026-07-15_decision_refs養成_codeloop硬化.md  [信任,codex]
+    23 [body]: P+T1（[[Verification/2026-07-15_decision_refs養成_P前置_T1回寫]]）push 前的 tier=high 對抗代碼審。異質 panel…
+    29 [body]: - **FIX4（B/Codex）**：`_append_decision_ref` 顯式拒含 `"`/`\`/換行/tab（strip_quotes 不反跳脫、合法 `<rel>…
+    30 [body]: - **CX2（Codex）**：回寫 soft-fail 訊息軟化——不再宣稱「可 reconcile」（該命令未實作、列 future），改述「帳本已記為地面真相、節點欄位本次…
+    33 [body]: - **CX1 併發 lost-update（Codex, 降級）**：`_append_decision_ref` read-modify-replace 無鎖＝**全 CLI …
+    34 [body]: - **兩套不對稱信任模型（C 深水區觀察）**：① decision_refs 欄位級（ai 欄**絕不**抑制 E2）② M3 帳本級 `_led_terminal`（ai-p…
+  7.914  Projects/公開精簡版_實作計畫.md  [子代,代理,hooks]
+    27 [KEY]: KEY:★2026-08-01 補追加 Task 11——注入目標守衛,真實事故驅動(咬過兩次,由使用者直接指派)★:兩位不同的子代理驗證時忘記先 `cd` 進交付包 clone,…
+    29 [KEY]: KEY:★★交付端反向漂移——來源端不知道交付端做了什麼(2026-08-12 推 delguard 時碰巧比對才發現,無任何機械守衛)★★—`Citrus_Lumos` 已經★往…
+    1096 [body]: - [ ] ★**把交付端的 hooks 功能回流進 `slim/` 範本**（2026-08-12 開）★——不做的話，任何人重新生成 `dist/` 再整檔覆蓋都會炸掉交付端的…
+  7.913  Systems/slim-install-安裝器.md  [子代,代理]
+    16 [KEY]: KEY:★只動 $HOME 與專案 CLAUDE.md 這一份檔案,不碰專案其餘任何東西★(★2026-07-31 使用者裁定推翻原「不注入/更新任何 CLAUDE.md」的裁定,…
+    22 [★INVARIANT★]: KEY:★INVARIANT★(2026-08-01 Task 11 新增)CLAUDE.md 注入動手前必須先過三層目標守衛,拒絕時 rc=2 且 CLAUDE.md 不得被動—…
+    74 [★INVARIANT★]: 公開精簡版交付前的機器層安裝器。隨交付包一起走(`$(dirname "$0")` 定位自身,不吃路徑參數),做三件事:①裝全域 `lumos` 指令,★2026-07-31 Ta…
+  7.823  Verification/2026-08-01_slim-install注入目標守衛.md  [子代,代理]
+    20 [body]: `slim/install.sh` 會對 `$(pwd)/CLAUDE.md` 動手,但原本完全沒檢查那個目錄是不是合理的注入目標。★真實事故已咬過兩次★:兩位不同的子代理驗證時忘…
+  7.619  Projects/固定席扇出降權_計劃.md  [信任,codex,hooks]
+    16 [fm:context]: context: Enzo 裁:字串比對有結構性天花板,要有質的提升就得信任模型的語意理解。原計劃 A→B→C 把合約綁檔列另案大動作
+    17 [fm:why_chosen]: why_chosen: 不是『字串 vs 模型』是『線上 vs 模型』:模型進計分破壞可重算,但離線預標存成欄位是決定論資料。語意判斷挪到寫入側,讀側只多查欄位與比日期、仍可重算。…
+    41 [KEY]: KEY:主案=語意「關於」欄位 about_code(模型離線預標、雙評審寫入、讀側查欄位可重算);扇出降權/提到的位置降為★過渡方案★。Enzo 裁:字串比對有結構性天花板,要質…
+    43 [KEY]: KEY:★r1 六洞全折★——「與考卷必看同一把尺」宣稱作廢(「關於」比「必看」嚴,是精確度子集非等價物);讀側打錯靶(固定席三軸:direct/indirect/incident…
+    44 [KEY]: KEY:離線驗證(Codex 預標 83 篇)——train 18 噪音零誤放、必看 7/9;held 撞巨檔失效(改 scripts/lumos 那題 22 誤放,排除後 0/6…
+    207 [body]: ★這不是退讓,這是把信任放對位置。★(r2:原句「讀側不變」已改——r1 自稱已刪卻漏了此處與 decisions)
+    269 [body]: | **存量**(83 篇) | ★r1 改寫(archf5 major)★:**走 `refresh_labels.py` 同款雙評審**。★r2(s2f6):既有 Codex …
+    270 [body]: | **增量**(新寫的) | ★r2(s3f6):`lumos new` 四種範本與 NEW_HINT 都要加 `about_code:` 空欄與一句提示★,否則「填」無從發生;…
+    … 還有 21 處
+  7.177  Projects/code階段強化_計劃.md  [信任,codex]
+    20 [KEY]: KEY:[S5]跨家族比重提升(使用者指示,r2 大修)——①辯方預設 Codex(兩 loop,成本中性替換=d4 合規)②雙 Codex 角色**僅 code-loop tie…
+    27 [body]: > **緣起**:design-loop d4 裁定「正確性歸下游」後,使用者要求鏡頭轉向 code 階段:搜業界更全面提升正確性/品質/消除 bad performance 的做…
+    36 [★INVARIANT★]: 1. `skills/lumos-code-loop/SKILL.md` 收斂節加規則:**「觸碰合約」的判定依據=`lumos impact --diff` 命中綁 `[test…
+    51 [body]: **為什麼是斷言不是監控**:把性能翻譯成**確定性測試**=信任階梯最高階;免基準環境、免統計、CI 直接跑。
+    57 [body]: **現況與舊帳**:07-15 圖譜判「自動生成 property 測試 oracle 不可靠」(agent 自己發明錯誤期望→誤報)。Anthropic 2026-07 配方:推…
+    62 [★INVARIANT★]: - **產出(r1 撤免辯方)**:反例的**可重現性**免爭(那是機械事實);性質的**合法性必過辯方**——辯方(依 S5 預設 Codex)專問:「這條性質真是該函式的業務合…
+    73 [body]: **動機**:r1/r2 實證——Codex 席連兩輪貢獻真 major(同權票落點/紙上硬閘/免辯方/[test:]解析/否決語意…),外家視角價值已證。但**兩個 Codex …
+    75 [body]: **d4 合規聲明(r2 blocker 折入)**:帶餌 finder 席**只加在 code-loop**(tier=high)——design-loop(spec 階段)**…
+    … 還有 21 處
+  7.116  Projects/公開精簡版_計劃.md  [子代,代理,codex,hooks]
+    17 [KEY]: KEY:目的(2026-07-31 定錨)=**離職交接**——讓既有專案(Landmark 等)留下的圖譜在維護者離開後仍**讀得懂**。情境:新人 clone 專案時機器上完全…
+    19 [KEY]: KEY:★不動 Landmark(相容性已驗證 2026-07-31)★——Landmark 的 git hooks 呼叫 `$REPO_ROOT/scripts/lumos`(v…
+    20 [KEY]: KEY:★安裝器只做機器層,絕不碰專案層★——專案層的 init/update 會**重新注入 CLAUDE.md 紀律區塊**(用精簡範本),會覆蓋掉既有專案含 design-l…
+    22 [KEY]: KEY:★r1 發現(已折入;①②=blocker,③④=major,分級以〈審計修正紀錄〉正表為準)★——①[S1] 正面表列留下「沉默地帶」,而 [S2] 規則是「白名單**外…
+    35 [body]: `PRIOR-ART:` ① **最小解在既有層**——不造新機制；CLI 從既有單檔生成子集。②（r2 更正）**skill 不是「直接複製」、hooks 完全不給**：skil…
+    52 [body]: | Landmark 已 vendored 完整版 `scripts/lumos`（checked in） | 新人 clone 就有；但他**機器上**沒有全域指令、沒有 ski…
+    54 [body]: | git hooks 呼叫 `$REPO_ROOT/scripts/lumos`（vendored），非全域指令 | **精簡版與既有工作流並存不衝突**，不需要動 Landma…
+    81 [body]: - ★`anchor`★（r1 辯方實測發現，描述經 fold 核對更正）：`ANCHOR_FILES` 硬編碼成 lumos-toolchain **自己的**測試檔與 hook…
+    … 還有 24 處
+  7.023  Projects/design-loop重設計.md  [信任,codex]
+    26 [fm:PRIOR-ART]: PRIOR-ART:①最小解在既有機制層——錨定檢查=把 G1 refcheck 的機械比對用到審查員產出上(自家信任階梯「機械查>LLM判官」);處置帳=★逐 finding 帶…
+    91 [body]: | 6 派工 panel | 多席多鏡頭＋抑噪 | 找洞能力是真的；抑噪×canary 衝突假說未證實（p≈0.47）；派工卡死無監控（跨家族 Codex CLI 席曾 61 分鐘…
+    109 [body]: | **閘**（過不了就不放行） | G3 hash 鏈；**處置帳集合核對**（逐條 finding 帶穩定 ID，folded／accepted 兩集合**互斥且聯集＝find…
+    124 [body]: ★這是把自家信任階梯（真跑＞機械查＞LLM 判官＞自報）用到審查員產出上——與 G1 refcheck（spec→repo 引用的機械核對）同型。★
+    125 [body]: **規格三條（r1 折入，堵 Codex／s2 指出的洞）**：
+    182 [body]: 2. 實作拆包順序（r1 修正・Codex 指出原①先行會打壞現行 record）：
+    201 [body]: **編制**：s1 通才／s2 對抗面／s3 證據面／s4 整合面（查真碼 18 次）＝sonnet；s5＝Codex 跨家族（查真碼＋帳本）。
+  6.960  Verification/2026-07-25_bootstrap一鍵對稱.md  [codex,hooks]
+    6 [fm]: - "bootstrap step3 四分流(有vault+vendored→hooks/中間態→提示/無vault→確認後init/非git→跳過);cmd_init 一律 fo…
+    17 [TEST]: TEST:t_confirm_tty_unit 6(三階全蓋含★第2階 pty 成功路徑★+stdin 全程未被讀斷言+timeout→None)/t_bootstrap_auto…
+    19 [KEY]: KEY:_confirm_tty 實作要點=os.open(O_RDWR) 低階 fd(std Codex 真機實驗:open r+ 對 tty 炸 not seekable)+o…
+    20 [KEY]: KEY:失敗傳播(std F8)=install/hooks/init 各步查 rc,任一失敗尾端彙報+最終 rc1(修掉現碼 step2 吞 returncode 的既有病);L…
+    21 [VERIFY]: VERIFY:design-loop r1 light(canary caught,2b+3M+1m 折)→ratchet std 單席 Codex(12 條,F1 附真機 PTY…
+    29 [body]: - `bootstrap` 專案層四分流：已是專案→接 hooks；中間態（有 vault 無工具）→提示不動；**無 vault→`_confirm_tty` 確認（印完整路徑、…
+    38 [body]: 20 檢查（confirm 6／bootstrap 整合 9／get.sh 真跑 bash 5）＋全套 1392 綠。單元層用真 pty 蓋掉「curl|bash 唯一互動路徑」（…
+  6.934  Verification/2026-07-24_teardown一鍵拆機.md  [codex,hooks]
+    8 [fm]: - "core.hooksPath 只在指向本 repo scripts/hooks 時 unset;uninstall 只移 symlink 不刪一般檔"
+    17 [TEST]: TEST:t_teardown_global_claude(4:清我方hook+剪懸空+保留使用者hook+壞JSON跳過不刪)/t_merge_prune_only(2:prun…
+    18 [KEY]: KEY:lumos teardown 落地——一鍵拆當前 repo 專案層+機器全域(CLI/skills/hooks),★永遠保留圖譜文件★;範圍非全機所有 repo(deini…
+    20 [KEY]: KEY:關鍵設計修正(讀碼查出,Codex 未點)=merge 預設模式 prune 完會 re-add 我方 hook、抵銷 teardown→新增 merge --prune-…
+    21 [KEY]: KEY:兩便宜守衛改共用函式(deinit/uninstall 直呼也變安全)=core.hooksPath 只在指向本 repo scripts/hooks 才 unset(st…
+    22 [VERIFY]: VERIFY:設計 std 單席 Codex 跨家族審(blocker+多 major:順序F5/失敗F6/守衛F8F10/範圍F11/繼承殘留F4F9F12)+使用者「照建議」裁…
+    32 [body]: ## Codex 跨家族審＋讀碼查出的關鍵修正
+    34 [body]: - **merge re-add（讀碼查出，Codex 未點）**：merge 預設 prune 完會把 hook **加回去**、抵銷 teardown → 新增 `merge …
+    … 還有 1 處
+  6.931  Projects/teardown一鍵拆機_計劃.md  [codex,hooks]
+    16 [KEY]: KEY:問題=拆一台裝了 lumos 的機器要跑 2~3 個指令(deinit 拆專案層+uninstall 拆機器層),且全域 ~/.claude/settings.json h…
+    17 [KEY]: KEY:範圍(std Codex F11 校準)=teardown 拆「當前 repo 的專案層 + 機器全域(CLI/skills/hooks)」,非整台機器所有 repo(de…
+    19 [KEY]: KEY:_teardown_global_claude()=_sync_global_claude 的移除半邊,失敗語意修正(std F6):先驗 ~/.claude/settin…
+    20 [KEY]: KEY:便宜守衛(std,走 B 方案 b)=①core.hooksPath 只在它指向本 repo 的 scripts/hooks 時才 unset(std F8:否則誤殺使用者…
+    21 [KEY]: KEY:繼承的激進行為記為已知殘留(std,不在本刀修,另開 deinit 票):F4 剝 CLAUDE.md 會正規化 sentinel 外空白/CRLF(byte-equal …
+    23 [KEY]: KEY:風險面=machine-global settings.json 寫入(2026-07-07 事故前例)——緩解=只 rm 我方 hook+跑既有 _prune_dangl…
+    25 [DEP]: DEP:scripts/lumos cmd_deinit/cmd_uninstall/_deinit_unbar_gate/_sync_global_claude/merge-cl…
+    32 [body]: > **狀態**：設計中（std Codex 跨家族審已折入），待 TDD。緣起：使用者要「一個指令拆機器層＋專案層但不刪圖譜」＋補全域 hook 殘留坑（[[Issues/hoo…
+    … 還有 4 處
+  6.657  Issues/deinit整夾刪使用者檔.md  [codex,hooks]
+    16 [KEY]: KEY:bug=_deinit_remove_vendored(scripts/lumos:6293-6306)對 scripts/hooks、scripts/templates …
+    18 [KEY]: KEY:影響面=只在使用者往 scripts/hooks|scripts/templates 塞自有檔時咬人;標準 lumos 專案這兩夾純 lumos → 無感。deinit 與…
+    51 [body]: 來源＝Codex 跨家族審 teardown 設計時揪出（見 [[Projects/teardown一鍵拆機_計劃]] 審計修正紀錄 F9）。**同批 F4/F12 仍未修**（影…
+  6.597  Projects/prepush主幹範圍修法_計劃.md  [codex,hooks]
+    16 [KEY]: KEY:方案裁定=①機械修(本計劃):pre-push hook 改讀 **stdin 推送範圍**(githooks(5) 標準合約:每行 `<local_ref> <local…
+    19 [KEY]: KEY:落地同步義務(r1 折入)——①anchor:scripts/hooks/pre-push 是錨點檔,改後落地 push 先卡自身 anchor verify→序含 `lu…
+    22 [DEP]: DEP:scripts/hooks/pre-push｜scripts/lumos code-loop check(:9451-9479)｜[[Systems/pitfalls-co…
+    23 [fm:PRIOR-ART]: PRIOR-ART:①最小解=hook 讀 stdin 是 git 原生合約,零新機制;code-loop check 加一選配旗標 ②世界解=githooks(5) 官方文件明定…
+    29 [body]: > **狀態**：**實質收斂人裁放行（2026-07-21，使用者）**——cap 3 輪滿＋r3 首個輪有效（opus 2/2）＋設計本體 Codex 確認解除＋殘留全文件歷史…
+    37 [body]: ### #1 hook 改讀 stdin 推送範圍（githooks(5) 標準合約）
+    42 [body]: - **★無基準＝保守掃全部，不 fail-open（r2 Codex 三席否決折入——樞紐反轉）★**：對守衛而言「算不出基準→跳過」是把盲區改成正式繞法（首推 main／`ma…
+    44 [body]: - `git cat-file -e <remote_sha>` 失敗（shallow／force-push 分岔舊 tip 未 fetch，r1 s3＋r2 Codex#1）。
+    … 還有 21 處
+  6.438  Projects/graph-engineering掃描2026-08-19_調研.md  [信任,agents]
+    131 [body]: - 相依管理(零依賴家規擋掉)、災難復原(圖譜在 git)、資安(信任邊界=自己的 git remote,
+    160 [body]: - wavect「Graph Engineering for AI Agents: When the Graph Earns Its Cost」(kill rule、provena…
+  6.426  Systems/外部對照-code衍生wiki.md  [agents]
+    18 [KEY]: KEY:PRIOR-ART 對照——langchain-ai/openwiki(2026-06 建、11.6k★、MIT、TS):「CLI 掃 repo→LLM 生成 openwi…
+    72 [body]: 5. **分發生態**：npm/11k★/三家 CI 範本/多 provider（OpenAI/Anthropic/Gemini/Bedrock…）/同時寫 CLAUDE.md+A…
+  6.272  Projects/bootstrap一鍵對稱_計劃.md  [codex,hooks]
+    15 [KEY]: KEY:方案=bootstrap step3 升級成「專案層自動接線」四分流:①有 vault+有 vendored(已是專案)→照舊 _install_hooks_py(hook…
+    18 [KEY]: KEY:冪等=①clone:已在則沿用(--pull 才拉)②install --force 本冪等③auto-init 只在無 vault 時觸發,已有 vault 走接 hoo…
+    23 [DEP]: DEP:scripts/lumos cmd_bootstrap/cmd_init/_install_hooks_py/_vault_in｜get.sh
+    30 [body]: > **狀態**：done（r1 light＋std Codex 兩審折入 → TDD 落地，見 [[Verification/2026-07-25_bootstrap一鍵對稱]]…
+    42 [body]: | 有 vault ＋ 有 vendored 工具（已是 lumos 專案） | 照舊接 hooks（`core.hooksPath` 是 git config＝每台機器要重接） …
+    44 [body]: | 無 vault（git repo） | **問一句「要把 <完整路徑> 建成 lumos 專案嗎？[y/N]」→ y 才跑 `cmd_init`**（建圖譜＋vendor＋ho…
+    51 [body]: **失敗傳播**（std F8）：bootstrap 各步 subprocess/函式回傳碼**必須檢查**——install 失敗、hooks 失敗 → 印 warn、**最終 …
+    59 [body]: 確認函式 `_confirm_tty(prompt) -> True/False/None` **三階判定 v2**（std Codex F1/F2/F3 折入）：
+    … 還有 6 處
+  6.196  Systems/lumos-cli-lifecycle.md  [codex,hooks]
+    13 [KEY]: KEY:[2026-08-05]來源 repo 自身的 reinject 路徑補齊——update 在來源 repo 改走 reinject-only(原:ERROR 拒跑);in…
+    14 [FLOW]: FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install…
+    15 [KEY]: KEY:兩層分工——機器層(install/uninstall)只動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Clau…
+    16 [KEY]: KEY:bootstrap 一鍵對稱(2026-07-25)=step3 升級專案層四分流:有vault+vendored→接hooks｜中間態(有vault無vendored,_…
+    17 [KEY]: KEY:_confirm_tty(curl|bash 安全確認)三階=①stdin.isatty→input(),EOFError 落②非當 False ②os.open('/de…
+    20 [KEY]: KEY:安全守衛(2026-07-24,改共用函式故 deinit/uninstall 直呼也受惠)——_deinit_unbar_gate 只在 core.hooksPath 指…
+    25 [KEY]: KEY:_VENDORED_TOOLKIT 白名單=5檔(scripts/lumos、test_lumos.py、merge-claude-settings.py、graph-re…
+    32 [DEP]: DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit/c…
+    … 還有 8 處
+  5.936  Projects/CI回流閉環_計劃.md  [codex,hooks]
+    10 [fm]: - "[[Projects/Codex外審吸收_計劃]]"
+    17 [KEY]: KEY:★不採雲端 autofix(明文裁定)★——世界主流(Copilot cloud agent 一鍵修/Codex workflow_run autofix/GH Agent…
+    26 [body]: ① 最小層：`gh run list --json` 已能查狀態、`lumos gov` 已是多帳彙整器、Claude hook 註冊機制（`merge-claude-settin…
+    46 [body]: - 行為：先解析當前 HEAD sha → 輪詢 `gh run list --branch <分支> --json databaseId,headSha,status,concl…
+    57 [body]: - **紅燈證據取得（r1+Codex：`--log-failed` 是純文字 log 非結構化 step API，多 job 平行時輸出交錯，且可能只標 UNKNOWN STEP…
+    78 [body]: - **權限不足（403）或任一查詢失敗＝「無法證明前提成立」→ 一律拒用 `--auto`**（fail-safe，r3 席2+Codex：開 PR 的權限不等於讀保護設定的權限…
+    92 [body]: - **合併後複查（r3 席2+Codex 修：原文沒定義 sha 從哪來，本機仍停在 feature 分支、也沒 fetch 到 merge commit，照字面會複查到錯的 s…
+    116 [body]: - **提醒精準度（r1+Codex）**：帳檔加 `branch` 欄；觸發條件＝最後一筆為紅 ∧ 其 sha 是當前 HEAD 祖先 ∧ 其 branch＝當前分支——防「從紅…
+    … 還有 4 處
+  5.912  Issues/code-loop守衛main-direct盲區.md  [codex,hooks]
+    14 [fm]: - "glob:scripts/hooks/pre-push"
+    22 [KEY]: KEY:排程[2026-07-21 使用者裁「排」]——①✅M1包 事後 code-loop 終審**已完成**(三輪+Codex NO-VETO+pass 留痕,補審抓 15 洞…
+    24 [fm]: - scripts/hooks/pre-push
+    29 [body]: pre-push 守衛（scripts/hooks/pre-push:64-88）：`pitfalls --diff` 判 tier=high 時跑 `lumos code-loo…
+  5.712  Projects/design-loop重設計_實作計畫.md  [代理,codex]
+    17 [KEY]: KEY:本檔=[[Projects/design-loop重設計]](r1 已收斂、人裁放行)的 TDD 實作計畫。六包嚴格順序:★①相容雙讀→②quote-check+凍結快照→…
+    84 [body]: 3. **留痕讀側重驗**：`report_path`／`snapshot_path` 檔案存在且 sha256 與帳面一致（r1 Codex：record 完刪檔要擋）
+    141 [body]: （堵 r1 Codex 的寫側盲區）★；翻紅釘實測（拔 sha 重驗→竄改照樣放行,精準翻紅）。
+    154 [body]: ③`pitfalls --diff` tier=high → code-loop panel 三輪（W=5＋Codex 雙席＋spec 席）：
+  5.641  Verification/2026-07-15_decision_refs養成_P前置_T1回寫.md  [信任]
+    4 [fm:feature]: feature: decision_refs 自動養成 P前置(reindex --all)+ T1(confirm 回寫 + 不對稱信任雙欄)
+    8 [fm]: - "provenance 雙欄 decision_refs(human/cascade)/decision_refs_ai(AI 填)機械實現不對稱信任"
+    29 [body]: - **不對稱信任雙欄接線**：by ai → `decision_refs_ai`、by human → `decision_refs`。**E3 firing 讀兩欄聯集**（…
+    37 [body]: | 不對稱信任 | E3 讀 ai 欄觸發、E2 抑制不讀 ai 欄（誤 ai-ref 抑制不了真落後邊） | ✅ |
+    41 [body]: - 這兩塊是機械地面真相：只涵蓋「翻案 confirm 掃過的」往前長。背包大宗（52 篇有 plan_refs 的驗證）靠 **T3 AI suggest**——那塊碰 AI 派…
+  5.531  Verification/2026-08-16_圖譜結構化查詢query落地.md  [agents]
+    37 [body]: 3. **交付面同步**(漂移守衛逼出,非自發記得):AGENTS/ARCHITECTURE/README/README.en/skill reference 指令數 60→61;…
+  5.450  Projects/受波及合約測試真跑閘_計劃.md  [信任]
+    11 [KEY]: KEY:只跑合約行綁的測試;可逆性/risk 軸進固定席但抽不到測試自然落「沒綁」;hermetic 放行理由=同 CI 信任邊界(見風險段)
+    45 [body]: - hermetic:run_cmd 有副作用的測試每次 push 都會跑。★放行理由★:run_cmd 是專案自己宣告的測試指令,跟 CI 跑全套同等副作用、同一信任邊界(同 k…
+  5.420  Verification/2026-08-27_decision_refs養成T3v4落地.md  [信任]
+    5 [fm:valid_under]: valid_under: "六原語(backlog/candidates/add-ai/list/prune/promote)+雙欄不對稱信任(E2 只讀 decision_ref…
+    19 [body]: - **實作六原語**(scripts/lumos):backlog 集合差、candidates 讀側去重、add-ai 存在性+正規化冪等、list 分欄、prune 正規化定…
+    24 [body]: - 釘測試 t_dref_* 6 支(backlog 集合差補一條仍列/補齊退出、add-ai 存在性+dangling+簡寫等價冪等、promote 雙欄+dangling+簡寫…
+    31 [body]: - AI GIGO:填哪條靠判斷,誤 ai-ref 只誤觸發 E3 advisory(人 prune),不對稱信任兜住(ai-ref 抑制不了 E2)。
+  5.381  Projects/真遺忘召回過濾_計劃.md  [信任,codex]
+    22 [KEY]: KEY:std Codex 跨家族照出「作廢概念全系統半套」已知殘留(不做本刀,記著):context 基本鄰居也漏(F1)/valid:false doctor 沒真接住(F2)…
+    72 [body]: 4. doctor **Check E1**（失效驗證 `dead_endorse`）＋ **Check E2**（建在被推翻決策 `build_on_dead`）是**兩個獨立 …
+    79 [body]: ## 已知殘留（std Codex 照出：「作廢」在全系統只實作一半，餵未來「要不要做全系統真遺忘」的決定）
+    80 [body]: 本刀只補 search；下列是 Codex 跨家族審計照出的**其他半套處**，**本刀不做、但記下**免得被當「已解決」：
+    101 [body]: - **r1（light，2026-07-24，canary MISSED）**：審計員漏抓植入的假章節引用（對文件內部一致性有盲區），故該輪不採信、不按其權威折入；但其 8 條 …
+    114 [body]: - **std（2026-07-24，精簡 standard＝單席 Codex 跨家族否決席，使用者授權省 3 席同族並行）**：Codex 乾淨脈絡、不告知前輪 findings…
+  5.201  Verification/2026-08-24_固定席降噪A層落地.md  [codex,hooks]
+    60 [body]: - 舊 hook 配新 CLI:lane-only 題不注入(退化不炸);hooks 靠 install 同步,本批 commit hook 與 CLI 同批。
+    62 [body]: ## 代碼審(code-pin-denoise r1:單席+架構席+Codex,standard)
+    66 [body]: Codex 1 major(棘輪漏 train=互抵鏡像)——三 split 全上,13 關全過。合約六條(逐 byte/free 不動/子集/事故/diff/rescued)單席…
+  5.088  Verification/2026-08-11_T1_remove_list項移除.md  [agents]
+    58 [body]: > 過程中「文件命令數 vs argparse」守衛翻紅 5 條（文件寫 58、實際 59），改完 4 份 README/AGENTS/ARCHITECTURE + skill r…
+  5.074  Projects/連結缺失補全_計劃.md  [codex,hooks]
+    63 [body]: - **r1(2026-08-07,panel:3 sonnet(通才/謂詞邊界/整合)+Codex 外家;canary 3 caught / **s1 missed**(d 型裸…
+    72 [body]: - [major] 補鏈後評測語料座標未定(快照釘定 vs live)(Codex)→ 重釘 snapshot_commit 協定。
+    73 [body]: - [major] 緣起句殘留「6 筆全屬死法③」與勘誤矛盾(Codex)→ 修。
+    74 [body]: - [major] 測試謂詞未限定 free direct(pinned 混入可讓錯謂詞過測)(Codex)→ 三類 direct 分開覆蓋。
+  4.889  Projects/自足性審計閉環_計劃.md  [codex,hooks]
+    63 [body]: remote/hooks 都在,帶 Bash agent 進去=沙盒事故前狀態;且審計沙盒 rsync 現況、修復 worktree 從 HEAD=兩邊看不同版,
+    64 [body]: Codex r3 抓到的版本歪斜由統一容器消解)。★make_sandbox 的清理 bug(未定義變數,週週 NameError 被吞、/tmp 漏 41 個沙盒)
+    70 [body]: ★接線三刀(v5-r1 arch f3/s2f7/s3f2/Codex 提示)★:①「至少一個篩選條件」守衛的判準要把新旗標算進去
+    75 [body]: ★審計脈絡隔離改在 rsync 階段排除,不是建好後才刪(v5-r2 三席 blocker:s1f1/s3f1/Codex#1 附可跑重現——
+    84 [body]: 審計/複審 agent `--allowedTools "Read,Grep,Glob,Bash"`——★誠實邊界(v5-r1 Codex f1)★:沙盒保證的是
+    98 [body]: - ★回寫柵欄=鐵則:任何主樹寫入前必過★(v5-r1 s1f2/Codex f2:原版只掛 FAIL 鏈,PASS 蓋章一樣會給
+    110 [body]: (★v5-r3 s2f1 blocker:此句原寫「落 pending(第五結局 audit-stale)」,上輪只改了後半段——同款半改殘句第三犯★),不靜默覆蓋——殘窗見下方 …
+    118 [body]: ★run=本次進場的 uuid,started 與其終局同 run(v5-r3 s1f2/Codex#2 blocker 附重現+s3f4:沒有 run 配對,
+    … 還有 33 處
+  4.868  Projects/圖譜結構化查詢_計劃.md  [agents]
+    68 [body]: - [x] 教學面補齊(2026-08-16 Enzo 指示「指令規則也要教 claude」)——八處:紀律範本+CLAUDE.md 哨兵區塊(Check D 同步驗過)、主/sl…
+  4.593  Systems/lumos-cli-write.md  [信任]
+    30 [KEY]: KEY:[decision_refs 自動養成 P+T1 2026-07-15]decision-reindex --all 批次編號(顯式,前置);rel-cascade con…
+  4.538  Projects/修法A_lumos先行ablation_計劃.md  [codex,hooks]
+    114 [body]: - **r1**:5 席(4 claude 鏡頭 + Codex 外家)找 18 條——修 15 折入、3 條低影響 minor 附理由接受。主要 major:判「有沒有敲 lum…
+    117 [body]: - 外家 Codex 在 r2/r3 因 stdin 卡住不可用 → 單家族視角、降級留痕(Enzo 2026-08-22 裁 high 缺外家不硬擋)。
+  4.479  Projects/固定席降噪A層_計劃.md  [codex,hooks]
+    11 [KEY]: KEY:尺=固定席噪音數(主目標;★不押絕對值,以 knob=1 臂考卷實測為準★)+ P@8 逐 byte 不變(結構保證)+ must_in_out cap 內不退(結構保證;…
+    97 [body]: (v4 Codex f2:lane-only 的題會整個不注入)
+    107 [body]: ⑦★`output_top3_must` 口徑講死(v4-r2 Codex)★:母體=results 前 3(★不含 lane★——lane 在 hook 是掛明確「參考」標籤的獨…
+    109 [body]: ⑧★混版相容協定(v4 Codex f4)★:新 hook 全 `.get` 讀舊 CLI=安全退化;舊 hook 配新 CLI 在 lane-only 情境=不注入(退化不炸,可…
+    110 [body]: hooks 由 install 同步機制保底,落地 commit 註明「hook 與 CLI 同批更新」。
+    120 [body]: 43/96 是無 query 口徑的近似,驗收不押絕對值★,以落地後考卷實測+pin_noise 棘輪為準(Codex r2 f3;82-43=39 的減法也不成立,s1f5)。
+    124 [body]: 5. **goldset 標籤本案凍結**(Codex f4):不補標、不改答案——改了 rev 就換、棘輪重立基線,守衛蒸發。
+    125 [body]: E06/E08/E12 那 3 條(加 s1f2 抓的另外 12 處)的「必看但 about 不含」證據★不是 about 漏標★(Codex f1:
+    … 還有 26 處
+  4.465  Projects/hook必看召回修復_計劃.md  [codex,hooks]
+    47 [body]: - **provenance 穿透**(r1 折入,Codex):`_impact_reverse_lookup` 回傳型別由節點清單改為 `(node, hit)` 對,`cmd…
+    64 [body]: - **r1(2026-08-07,panel:3 sonnet(通才/正確性/整合)+Codex 外家;canary 3 caught / **s1 missed**(a 型假小…
+    68 [body]: - [major] rescued「沿 origin 欄」=幽靈欄位+hit 在 ranked 路徑丟失(Codex)→ schema 穿透明文。
+    70 [body]: - [major] PPR 慣例第二處偏離(雙庫)未明示(s3+Codex)→ 補明示+單庫理由+措辭降級。
+    71 [body]: - [major] A/B 無 harness/knob、eval top50 與 hook top8 不同構(s3+Codex)→ env knob 兩枚+--top 8 對齊。
+    72 [body]: - [major] 「+1 筆」與 history rounded 比例不相容(Codex)→ 整數逐題 rows 對帳。
+    73 [body]: - [major] v1.1/v1.2 兩刀誤記一刀(s1)→ 歸因拆開。 [major] E14 閾值 pre-flight 勘誤仍錯(s2 實測 0.468)→ 再勘誤。 [m…
+  4.210  Systems/bound-tests-gate.md  [信任]
+    27 [fm]: - scripts/hooks/pre-push
+    46 [body]: `bound-tests-gate-c` r1 四席(通才/正確性邊界/可執行性成本/架構對齊)20 條:19 折 1 放行(hermetic:run_cmd 是專案自宣告指令,與…
+  4.139  Projects/嚴重度綁定機械掃_計劃.md  [代理,codex]
+    23 [body]: - 帳列有 severity(寫側白名單擋值域)、report{path,sha256}。席報告格式★不★一致:2026-08-26 普查 59 份,41 份用「severity:…
+  3.992  Projects/install全域hook同步_計劃.md  [hooks]
+    14 [KEY]: KEY:問題=只有全域裝 lumos(無 lumos 專案)的機器,沒有任何一條指令能自我清全域 settings/hooks——`install --force`(全域,不需專案…
+    15 [KEY]: KEY:根因=分工沒接好——全域成品(~/.claude/settings.json 是 merge 產物、hooks/*.py 是 copy)pull 不碰,要跑安裝器;而全域安…
+    16 [KEY]: KEY:修法=cmd_install 尾端加「全域 hooks/settings 同步」——抽 `_sync_global_claude(src_repo)`:①copy src/…
+    18 [KEY]: KEY:懸空 vs 真檔——舊機 ~/.claude/hooks/code-loop-guard.py 若真檔還在,_prune_dangling 不剪(非懸空);install …
+    19 [DECISION]: DECISION:分工=install 擁全域(hooks copy+settings merge+撤除檔清理)、update 擁專案 vendor+委派同一全域同步函式;不重疊
+    20 [TEST]: TEST:t_install_syncs_global_hooks(copy 三 hook+跑 merge)/t_install_prunes_stale_stop(植假 code…
+    21 [DEP]: DEP:scripts/lumos cmd_install/_install_hooks_py/merge-claude-settings.py
+    40 [body]: - `cmd_install`（`install.sh`，全域、不需專案）：只 symlink CLI＋`_install_skills`——**不碰全域 settings/hoo…
+    … 還有 4 處
+  3.987  Systems/native-windows-support.md  [hooks]
+    14 [FLOW]: FLOW:get.ps1(薄遠端入口)→clone repo→python lumos install --force→cmd_install[全域 lumos.cmd shim …
+    15 [KEY]: KEY:單一真相源=三支 bash 安裝器(install.sh/install-graph-toolchain.sh/install-hooks.sh)邏輯收進 python C…
+    17 [KEY]: KEY:git hooks 維持 bash(Git for Windows 自帶 bash 跑),只補 python3→python fallback;不重寫成 python(YA…
+    18 [KEY]: KEY:Claude hooks(L1/L3)不過 bash—由 Claude Code 直呼,Windows 用 Git Bash 跑;merge-claude-settings…
+    20 [DEP]: DEP:scripts/lumos cmd_install/_install_skills/_scaffold_project/_install_hooks_py/_link_or…
+    21 [TEST]: TEST:單元 200 全綠(macOS,含 t_scaffold_project/t_install_hooks_py/t_install_includes_skills/t_h…
+    30 [fm]: - content: skills 用 Windows junction(mklink /J)、全域 lumos 用 lumos.cmd shim、任一失敗 fallback 複製…
+    36 [fm]: - content: "Claude hooks 註冊改寫解析後直呼且 python 路徑/home 全正斜線化:command = \"<resolved-python>\" \…
+    … 還有 9 處
+  3.979  Projects/Android側UI測試綁圖譜工作流_計劃.md  [信任]
+    23 [KEY]: KEY:★實戰要求二:「寫了 flow」≠「flow 會跑」★—inline 跑通不代表寫成檔案跑得通(runFlow 相對路徑、optional 步驟、共用子流程都可能出錯)。★…
+    64 [fm:context]: context: r2 opus 席(F6)實查推翻 d2 的前提:S1 條文自身標明「紀律層規則非機械閘」(skills/lumos-code-loop/SKILL.md:227…
+    67 [fm]: ②另立「上次實跑留痕」格式讓終審驗(新增產物,且落到信任階梯最底層的自報)
+    174 [body]: 這不是新紀律，是既有「**真跑 > 機械查 > LLM 判官 > 自報**」信任階梯在 UI 層的實例。
+    287 [★INVARIANT★]: - **r2（2026-08-11，delta 輪 2 席：sonnet 新宣稱正確性／opus 折入一致性與整合；canary 1 caught 1 missed）**：★這輪抓…
+  3.928  Verification/2026-07-22_install全域hook同步.md  [hooks]
+    6 [fm]: - "cmd_install 尾端呼叫 _sync_global_claude(來源 repo 自身);_install_hooks_py ②③委派同函式"
+    7 [fm]: - "_prune_dangling 只剪懸空、_RETIRED_CLAUDE_HOOKS 主動刪撤除 hook 殘留真檔"
+    9 [fm]: - "動 _sync_global_claude/_install_hooks_py/cmd_install 或 _GLOBAL_CLAUDE_HOOKS/_RETIRED_CLA…
+    16 [TEST]: TEST:t_install_global_hook_sync 9 checks(copy 三 hook/settings 註冊/撤除 code-loop-guard 真檔刪+註冊…
+    17 [KEY]: KEY:全域機器自癒缺口補上——cmd_install 尾端加 _sync_global_claude(不需專案 vault),別台只全域裝 lumos 的機器 `./instal…
+    18 [KEY]: KEY:撤除 hook 主動刪(_RETIRED_CLAUDE_HOOKS 常數)——補[[Issues/hook卸載殘留註冊]]殘尾:_prune_dangling 只清懸空,真…
+    27 [body]: - 修法：抽 `_sync_global_claude(src_repo)`（copy 現役 hooks＋刪撤除 hook 殘留＋跑 merge prune 懸空）；`cmd_in…
+  3.901  Projects/design-loop判準重定位.md  [代理,codex]
+    388 [body]: | 5 | 跨家族（Codex） | 未定義旗標 | ❌ missed | blocker |
+    445 [body]: - **survivor bias**：三席獨立指出（含 Codex）。已由編排者驗證為真（見上表 #4）。
+    456 [body]: ★**Codex 席第一次派工空跑 61 分鐘**★：`codex exec` 的 prompt 要走 stdin，
+  3.864  Issues/hook卸載殘留註冊.md  [hooks]
+    12 [fm]: - "content:_install_hooks_py"
+    21 [DECISION]: DECISION:[2026-07-07] 修=merge-claude-settings 加 _prune_dangling:merge 前剪掉「command 含 .claud…
+    23 [KEY]: KEY:[2026-07-22 殘尾補收,見[[Projects/install全域hook同步_計劃]]]——_prune_dangling 只清「檔已刪的懸空註冊」,但**別台…
+  3.861  Issues/測試未隔離HOME刪掉真機Claude-hooks.md  [hooks]
+    20 [DECISION]: DECISION:[2026-08-01]復原=重跑 `lumos install`(重建全域指令+skills+`_sync_global_claude` 補回 hooks 與註…
+    24 [body]: # 測試未隔離 HOME，刪掉真機的 Claude hooks
+    49 [body]: 重跑 `python3 scripts/lumos install`——它會 `_sync_global_claude`，把 hooks 複製回去並重新 merge 註冊，同時重建…
+  3.833  Projects/精簡版update指令_計劃.md  [hooks]
+    18 [KEY]: KEY:hooks=隨包 opt-in 檔案(install.py 永不裝,非目標不變);回填來源釘 GitHub main 6e249eb;複製清單補 hooks 與 WINDO…
+    22 [body]: > 白話:精簡版目前是「凍結快照」——沒有 update 指令,想更新只能重跑一行安裝(它本來就冪等:已裝過→git pull→重裝)。使用者裁示(2026-08-18):把這條路…
+    27 [body]: - **工廠漂移(本案順帶修)**:①Citrus_Lumos 的 `hooks/` 目錄(pre-commit/post-commit)只存在發行 repo,`slim/` 無、…
+    41 [body]: ### S2 slim-gen 複製清單補齊+hooks 回填工廠
+    43 [body]: - `slim/` 新增 `hooks/`——★決策脈絡明文(std-r1 兩席質疑「與『不裝 hook』裁定衝突」,以遠端現況反證後補述)★:hooks=**隨包交付的 opt-…
+    44 [body]: - README 真相源=slim/README.md:以 Citrus_Lumos 現行版(含 hooks 章)為底回填,再加本案改動(見 S3)。
+    54 [body]: slim-gen 重生成 → dist/ → 內容同步進 Citrus_Lumos clone(**路徑釘=`~/Citrus_Lumos`;同步與任何 diff 查證前必先 `g…
+    58 [body]: - **不動 install.py 的「不裝任何 hook/不設 core.hooksPath」非目標**(hooks 僅隨包,啟用恆為使用者 opt-in);不動完整版 `cmd…
+    … 還有 5 處
+  3.789  Projects/guard殺傷力驗證_計劃.md  [信任]
+    14 [fm:why_chosen]: why_chosen: 人宣告的壞法保證語意有變(繞開等價變異,pytest-mutagen/ISO 26262 先例);run_cmd 沿 .lumos/lint.json 既有…
+    51 [body]: 2. **跑測試靠 config 宣告指令**：多平台 → `platforms.<名>.run_cmd`；**legacy 單平台 → `test.run_cmd`**（r2 折…
+  3.779  Projects/code側刪除傳播守衛_計劃.md  [codex,hooks]
+    30 [DECISION]: DECISION:[2026-08-10]落點裁定=pre-commit Gate CC 旁,不放 impact --sync-check(輸入不等價:S1 契約=staged i…
+    49 [fm:context]: context: r1 Codex 席指出兩候選入口輸入不等價:Gate CC 直接讀 staged index;impact --sync-check 是 branch-rang…
+    263 [body]: - **r1（2026-08-10，panel 3 席：sonnet 通才／sonnet 正確性／Codex 邊界整合；三席 canary 全 caught；報告與快照存 `gov…
+    264 [body]: - **r2（2026-08-10，delta 輪 3 席：sonnet 新證據正確性／sonnet 折入一致性／opus 邊界整合〔Codex auth 401 缺席退位，偏離記…
+    350 [body]: - [x] ~~決定放哪一層~~ → **已裁定：`pre-commit` 的 Gate CC 旁**（advisory，與 cochange 同級；ADR 見 decisions…
+  3.766  Verification/2026-08-19_精簡版update指令落地.md  [hooks]
+    10 [KEY]: KEY:工廠漂移雙向互咬實錘——08-11 發行 repo 曾自帶「install.py 代複製 hooks」功能,08-14 工廠同步靜默蓋掉(佚失,要復活另案);本案後 hoo…
+    30 [body]: - `slim/update_cmd.py`(生成期模板,不隨包)+`scripts/slim-gen.py` 拼接(main() 前置攔截+函式;先於 ast.parse;錨點唯…
+    32 [body]: - `slim/README.md`:以發行 repo 6e249eb 為底回填(含 hooks 選配章)+〈更新方式〉章取代凍結聲明+殘留句/懸空引用/支數修真;五關鍵詞文字釘測…
+    53 [body]: 發行 repo 08-11 曾有「install.py 代複製 hooks 進專案 scripts/hooks + .gitignore 區塊」功能(commit 5ae613a …
+  3.744  Verification/2026-07-05_主動影響幅度偵測.md  [hooks]
+    17 [KEY]: KEY:opus 終審 live 重現 2 blocker 真機修:C1 hook _find_lumos_script 安裝後複製到 ~/.claude/hooks 走 repo…
+  3.700  Verification/2026-06-26_native-windows-support_真機.md  [hooks]
+    8 [fm]: - "scripts/lumos 安裝四函式(_install_skills/_scaffold_project/_install_hooks_py/_link_or_copy)+…
+    14 [fm]: - "安裝邏輯改動(skills 連結方式、scaffold 夾數/結構、hooksPath/Claude hooks 複製、settings 註冊格式)"
+    27 [body]: - Task 0-6 實作完:**單元測 200 全綠**,涵蓋 `t_scaffold_project`(6 夾含 Sessions + MOC/index.md + .giti…
+    30 [body]: - r1(sonnet,major):canary 抓到,**4 個 major 辯方查證全坐實**(install-hooks 漏複製 Claude hooks、junction…
+    41 [body]: - **W5(假議題,已否證)**:「remote-control 不觸發 hooks」是把 remote-control + W6 反斜線兩變數混在一起的誤判;單變數隔離後 re…
+    42 [body]: - **七步閘結果**:scaffold/hooksPath/settings 遷移/pre-commit 擋 全過;**marker 探針坐實 `PostToolUse`(L3)…
+  3.588  Verification/2026-07-06_CLAUDE注入re-sync.md  [hooks]
+    18 [VERIFY]: VERIFY:_extract_claude_block_span 三態(found/absent/broken,text[start:end]==body 不變量)+ _rein…
+    34 [body]: 2. 解耦注入 from `_scaffold_project`(其 skip-if-exists 只保護圖譜資料);接 `_vendor_toolchain`(copy2 ven…
+    42 [body]: - **接線副作用**:`t_init_existing_no_pull`(既有 vault 非 force init → `_vendor_toolchain` 未被呼叫、無 p…
+  3.584  Projects/canary注意力檢查失效.md  [代理,codex]
+    74 [body]: - 其餘四席（含跨家族 Codex）**照做了**，於是全部 missed。
+  3.569  Verification/2026-08-24_節點還原SOP落地.md  [hooks]
+    10 [KEY]: KEY:[S7] 實跑=CMS_Landmark(真 brownfield:三年 C# 商業系統、零圖譜、自有 repo):init --no-hooks→骨架 MOC→兩節點(限…
+    27 [body]: - Landmark 的改動(vault 5 篇+CLAUDE.md 注入區塊):✅ Enzo 裁**擱置**(2026-08-26)——維持未提交、不收版控、不裝 hooks;該…
+  3.526  Projects/enforcement儀表板_計劃.md  [hooks]
+    16 [KEY]: KEY:為什麼採這條(六條 GPT 建議對完決策帳後)——①真新(圖譜零筆、指令不存在)②低成本(純唯讀匯總,偵測邏輯多半現成:_version_nudge/cmd_anchor_…
+    17 [KEY]: KEY:偵測九層(各自 try 包住,一層壞不拖垮整份;fail-open 本身要能被觀測)——①SessionStart 入口 hook ②PreToolUse impact h…
+    30 [body]: > 白話:這套大量用 fail-open——找不到 python、CLI、環境不全就靜默放行,先讓人能工作、CI 當後盾。好處是治理工具一壞不會全公司不能 commit;副作用是*…
+    41 [body]: | 4 | pre-commit | core.hooksPath→scripts/hooks 且 scripts/hooks/pre-commit 存在可執行 | active/…
+    62 [body]: - `lumos enforcement` [--repo --json] 已實作:`enforcement_status(root,home)` 純函式回九層+遠端 unknow…
+  3.500  Projects/CLAUDE注入re-sync與版本標籤_實作計畫.md  [hooks]
+    20 [TEST]: TEST:T1 DONE — 16 checks green(t_extract_span_found/absent/broken);全量 752 passed(基線 736)|T…
+    78 [body]: - [x] **Step 3 實作**:`_scaffold_project` 移除注入段;`_vendor_toolchain` 在 copy2 迴圈**後**呼叫 `_rein…
+    81 [body]: - [x] **T3 review fix** I-1:既有 vault 非 force → 只 `_reinject_claude_block`(不 pull、不重裝 hooks…
+  3.490  Projects/先問世界_存量掃描裁定.md  [hooks]
+    15 [KEY]: KEY:「先問世界」存量掃描(2026-07-07,三路深度研究:①追溯/ADR=Doorstop/StrictDoc/Sphinx-needs/adr-tools ②hooks/…
+    44 [body]: | rebase state 偵測(`.git/rebase-merge` 存在)→ pre-commit 放行 | pre-commit framework | scripts/…
+    45 [body]: | `LUMOS_SKIP=<gate-id>` 細粒度跳閘 + stderr/bypass-log 留痕 | pre-commit SKIP 語意 | hooks | 比 --n…
+    46 [body]: | `.lumos/hook-local.sh` 消費端 override(gitignore + source-in) | lefthook local config | hoo…
+  3.464  Verification/2026-07-05_code-loop必用守衛.md  [hooks]
+    18 [KEY]: KEY:判定式單源(三處都經 code-loop check,pre-push 不自算 tier)opus 終審實證;綁 HEAD full-sha vs full-sha 無 o…
+  3.462  Projects/主動影響幅度偵測_實作計畫.md  [hooks]
+    17 [KEY]: KEY:「主動影響幅度偵測」的 TDD 實作計畫(設計經 9 輪 design-loop 收斂,見 [[主動影響幅度偵測_計劃]]);兩塊=lumos impact 原語(scri…
+    24 [fm]: - scripts/hooks/claude/impact-hook.py
+    36 [body]: **Tech Stack:** python3 標準庫(零依賴,同 scripts/lumos);Claude Code hooks(PreToolUse、hookSpecific…
+  3.404  Projects/code-loop必用守衛_實作計畫.md  [hooks]
+    85 [body]: > ⚠ **已撤除(2026-07-06 ADR)**:此 Stop nag 每回合太擾民,改由 pre-push 單點把關;腳本 scripts/hooks/claude/cod…
+    87 [body]: **Files:** Create scripts/hooks/claude/code-loop-guard.py(已撤除);Modify `scripts/merge-claud…
+  3.395  Issues/探針沙盒改動真全域機器狀態.md  [hooks]
+    24 [KEY]: KEY:殘餘風險(誠實)——LUMOS_PROBE 只擋 lumos 自己那四個指令;被測 AI 若直接 os.symlink 或手動 ln -s 改 ~/.claude,①擋不到…
+    28 [fm:context]: context: HOME 隔離會讓被測 session 吃不到真 ~/.claude/skills 與 hooks,而那正是探針要量的對象;隔離=改變被測環境
+    62 [body]: - 乾淨解=給 `claude -p` 拋棄式 `HOME` / `CLAUDE_CONFIG_DIR`,但那樣被測 session 就吃不到真的 skills+hooks——**…
+  3.370  Systems/delguard.md  [hooks]
+    26 [DEP]: DEP:[[Systems/cochange-guard]](同型 advisory 前例,Gate CC 鄰位)｜scripts/hooks/pre-commit Gate DG…
+    33 [fm]: - scripts/hooks/pre-commit
+  3.354  Systems/verification-rot-eval.md  [hooks]
+    17 [DEP]: DEP:scripts/hooks/claude/verification-rot-check.py(L3,被量的對象,不改)｜build_prompt/call_claude_s…
+  3.348  Systems/診斷迴圈先行.md  [hooks]
+    10 [fm]: - "[[Issues/測試未隔離HOME刪掉真機Claude-hooks]]"
+    18 [KEY]: KEY:★為了驗證「X 會造成傷害」,不得在真環境造成 X★——一律拋棄式環境(假 HOME／臨時 clone／worktree)。2026-08-01 同日兩犯:①為驗 GIT_…
+    92 [body]: - 為了驗 `teardown` 該擋 Windows 自刪，測試沒隔離 `HOME`、又用了一個**我以為存在其實不存在的環境變數** → `teardown -y` **真的執…
+  3.344  Systems/slim-scan-掃描器.md  [hooks]
+    17 [KEY]: KEY:2026-07-31 Task 5 修正形態⑤ prose 的假陽性——原邊界只排反引號/字母/連字號(`(?<![`\w\-])cmd(?![\w\-])`),沒排路徑分…
+  3.312  Systems/finding-refute.md  [信任]
+    65 [body]: - **canary 防假陰性、不防假陽性**:canary 驗審計員有沒有認真讀(漏抓=放水),抓不到「認真讀了但判錯」(誤抓)。qwen 引了行號、講得頭頭是道卻誤判,cana…
+  3.305  Issues/推新分支時風險分級拿空樹當起點.md  [hooks]
+    15 [KEY]: KEY:★這是刻意的 fallback 不是 bug★——scripts/hooks/pre-push 範圍推導三分支,註解明寫「新 ref(含首推 main:遠端無此 ref)→…
+  3.284  Projects/主動影響幅度偵測_計劃.md  [hooks]
+    64 [fm]: - scripts/hooks/claude/impact-hook.py
+    195 [body]: - r5-F2(辯方查證):此格式是 **Claude Code 官方有文件的能力**(官方 hooks docs 明列 PreToolUse 支援 `additionalCont…
+    213 [body]: - **anchor**:⚠(r1-F9 + r4-F8)`ANCHOR_FILES`(`scripts/lumos:3818-3824`)是**硬碼 list**,目前**只含 …
+    256 [body]: - **F8 minor**:現有 claude/ hooks 均未 anchor,「須 anchor」前提不符現況。→ 比照現況預設不 anchor。
+    270 [body]: - **F4 minor**:§5「5 個核心 git hooks」誤述(實 3 hook + 2 test runner)。→ 更正。
+    369 [body]: - `hook_decide` 多一個 `repo` 參數:無副檔名檔靠首行 shebang(python/bash)入樣(`scripts/lumos`、git hooks 原本…
+  3.244  Verification/2026-08-21_工具鏈體檢修復批.md  [hooks]
+    6 [fm:revalidate_when]: revalidate_when: "2026-08-22 09:30 首次真跑後;任何人重裝 hooks;pending/ 機制改動"
+    17 [body]: ## #1 Claude hooks 雙重註冊 ✅
+    48 [body]: - s1 hooks:major 1——Gate L 把 repo 相對路徑丟給 lint,落到 stem 查找,同檔名不同夾會 lint 錯節點放行壞的 → 改傳 vault 相…
+    66 [body]: ## 白話化第一批:hooks + 四支 CLI ✅(2026-08-22)
+  3.237  Projects/test-layers軟提醒_實作計畫.md  [hooks]
+    28 [body]: **Tech Stack:** python3 stdlib(scripts/lumos 單檔)、bash(scripts/hooks/pre-push)、markdown(SKI…
+  3.215  Projects/送審前impact鏡頭機械化_計劃.md  [hooks]
+    18 [KEY]: KEY:★已排除的做法★把 impact 掛進 `pitfalls --diff`——實測 pitfalls 0.18s、impact 4.7s,而 pitfalls ★在 pre…
+  3.201  Projects/閘觸發帳統計_計劃.md  [codex,hooks]
+    199 [body]: - ★三輪全為單一家族(claude)★:外家否決席三輪皆派不出來(Gemini pro 免費額度 0、flash 逾時、Codex 帳號不支援可用模型)。即使收斂,宣稱也只到「同…
+    234 [body]: - **r1 panel(2026-08-19,三席:通才/正確性/邊界整合;★單一家族——外家席派不出來:Gemini pro 免費額度為 0、flash 逾時、Codex 帳號…
+  3.196  Issues/vendored測試套件在消費端假紅.md  [hooks]
+    22 [DEP]: DEP:scripts/test_lumos.py(`_SrcOnly`/`_need_src`/runner 前綴規則/元守衛)｜scripts/lumos `_VENDORED…
+  3.189  Projects/design-loop提效_計劃.md  [codex]
+    16 [KEY]: KEY:問題=design-loop 常態跑滿 3 輪 cap 靠人裁,收斂慢。真因兩個結構病:①非定態目標——每輪折入改寫 spec,下輪審的是新文件,新 findings 一半…
+    23 [fm]: - content: M2 design-loop 達 3 輪 cap,人裁實質收斂進實作(2026-07-16):形式 gate 三輪 FAIL(每輪恰一席漏 canary——同…
+    25 [fm:context]: context: r1 6條(gate 三收二)→r2 9條(統一單位裁定誕生,Codex 否決)→r3 7條(裁定殘餘像素級,Codex 覆核收窄後 v4 解除)。canary …
+    34 [body]: > **狀態**：三路調研（web 文獻 ×3 + Codex 跨家族研究席）收斂的提效方案，尚未實作。緣起：使用者觀察「跑滿久才能收斂」（2026-07-16）。
+    41 [body]: 1. **非定態目標**（Codex 診斷，比「折入品質」更根本）：折入這個動作本身持續改寫受審對象——下輪的「新發現」可能只是新文字引入的；capture-recapture 的…
+    44 [body]: ## PRIOR-ART（2026-07-16 真搜：web×3 + Codex 席）
+    50 [body]: - **統計停止規則裁決**（Codex）：SPRT 不可用（資料生成分布每輪變）；group sequential 形式可做收益極小；Bayesian 最適配但小樣本下 post…
+    55 [body]: 1. **R2/R3 嚴格 delta-scoped + 全局哨兵**（Codex「若只能改一件」）：物理上只餵「折入 diff + 被改 claim 的上下游合約 + 前輪爭議」…
+    … 還有 20 處
+  3.162  Projects/檔案測試依賴地圖_計劃.md  [codex]
+    162 [body]: - **r1 panel**（2026-07-28，3 席 sonnet＋Codex 否決席；席2 caught、席1/席3 missed 剔除；存活 findings 全機械可證…
+    163 [body]: - [major×9 折入] ① 測試檔判定 `.spec.`/`.test.` 經 `Path.stem` 永不命中（死 pattern）→ 改完整檔名判定＋stem 剝綴詞單次…
+    165 [body]: - [編排者自主修正，不計收斂帳]（落選席觀察，逐條機械查證屬實後採納）：build 失敗 rc1→**rc2** 對齊家族慣例（席1/席3 同報）；`.lumos/` mkdir…
+    166 [body]: - **r2 panel**（2026-07-28，delta-scoped 3 席＋全局哨兵＋Codex 否決席；席1 caught、席2/席3 missed 剔除；存活全機械證…
+    167 [body]: - [major 折入] ① 測試檔判定無副檔名限制→範圍溢出（md/yaml 判成測試檔）→ 白名單前置（席1）；② 壞 map 粒度文法歧義 → 兩級粒度明定＋[S3]#11（…
+    171 [body]: - **r3 panel（終輪，2026-07-28，3 席 opus＋Codex 否決席＋哨兵；三席全 caught、輪首次有效；存活 major 折入後 cap=3 到頂）**…
+    172 [body]: - [major 折入] ① `_cochange_mine` 四元組＋rules 值為 (conf,support) 二元組未解包（r2 只補了 load_config 的姊妹坑…
+    176 [body]: - **續審 loop r1（2026-07-28，3 席 opus＋Codex＋哨兵；三席全 caught、輪有效；存活 major 折入採減法解）**：
+    … 還有 5 處
+  3.159  Projects/lumos-show讀取入口_計劃.md  [codex]
+    20 [KEY]: KEY:圖譜同步義務(r1 折入 F8;r2 擴列散落面)——同一 commit 須帶:[[Systems/lumos-cli-read]]「12」至少 5 處+「23」算式全改+…
+    48 [body]: - 唯讀（r2 Codex 否決折入，措辭修正）：**不改任何圖譜節點檔**；寫一筆 best-effort usage-log 事件帳（`_usage_log(env, rel,…
+    56 [body]: 2. `skills/lumos-project-notes/reference.md:85`——**獨立的另一份**頂層命令總表。⚠ **r2 Codex 否決修正（C2）**：…
+    57 [body]: 3. `README.md:42`——「44 個頂層命令」同為陳舊硬編碼（Codex C2 補列），一併 →49；
+    58 [body]: 4. `Systems/lumos-cli-read` **全節點零副作用宣稱一併改寫（r3 Codex 復核擴列；r4 opus 輪補全）**：**六處**——:11 FLOW「…
+    83 [body]: - **usage_log 副作用**：show 寫用量記帳（append `docs/.usage-log.jsonl`，git tracked——正常執行會弄髒 worktre…
+    98 [body]: **r2（2026-07-21，standard panel r1，loop id `lumos-show讀取入口-std` 承接 ratchet；W=3：sonnet 通才＋so…
+    105 [body]: - **Codex 否決席判決（gpt-5.6-sol high，讀 live v3，133k tokens）：VETO，2 major，全數證實折入 v4**：
+    … 還有 4 處
+  3.137  Projects/loop機械脊椎M1包_計劃.md  [codex]
+    21 [KEY]: KEY:#3 spec hash——**雙 hash 鏈(r4 Codex 終駁轉正,撤單 hash 範圍刀:單 post-fold hash 證不了 reviewed input…
+    26 [KEY]: KEY:✅補審完成[2026-07-21]——事後 code-loop 對抗終審三輪收官(loop id code-m1spine):r1 附加式 canary 2/5 輪無效(六…
+    29 [fm:PRIOR-ART]: PRIOR-ART:①最小解=#2-#4 為既有 record/status 兩指令的欄位旗標擴充;#1 為 loop 子指令組**新增第三個 subparser**(status…
+    35 [body]: > **狀態**：**實質收斂人裁放行（2026-07-21，使用者）**——cap 3 輪滿＋canary 全綠＋全 findings 折入＋Codex 否決鏈五迭代終 NO-V…
+    49 [body]: - **gate 參數委派（r2 C1；r3 basis 欄；r4 Codex 再駁——basis 標註擋不住機讀端只看 phase 放行）**：next 接受完整 gate 旗標…
+    51 [body]: - **無 `--tier` 的身分推導（r3 折入；r7 Codex 終確認統一——原兩處「預設 standard」殘句與 tier 定錨規則分叉，high 可被合法降 stan…
+    55 [body]: - **判定優先序（r1 cap；r3 escalate；r5 gate-pending；r6 Codex 終判折入——gate-pending 必須先於 cap：資訊不足時連「未…
+    63 [body]: - **席數下限（r4 新 major；r5 legacy 值；r6 Codex 終判雙補——①數記錄筆數可被同席重複 append 灌滿 ②tier 不持久化，下次省略 --ti…
+    … 還有 17 處
+  3.131  Issues/外家席長期缺席仍照跑loop.md  [codex]
+    14 [KEY]: KEY:maker≠checker 是整套驗證的地基,而跨家族審查席已連續缺席數週:Codex 帳號不支援可用模型、Gemini pro 免費額度 limit=0、flash 逾時
+    39 [body]: | Codex CLI | 帳號不支援任何可用模型(400 invalid_request:`gpt-5.6-sol`/`gpt-5.2-codex` 皆退回) |
+    55 [body]: - memory `retrieval-v1-and-codex` 早已記載「Codex 到期,外家現役=Gemini API」——★該記載已過時,Gemini 也不可用★。
+  3.114  Projects/panel收斂判準改革_計劃.md  [codex]
+    18 [KEY]: KEY:★立案動機(r1 措辭校正)★——panel 是風險最高路徑(tier=high 專用)卻配最鬆判準(一個乾淨輪即收斂 K=1);convergence-evidence-…
+    20 [KEY]: KEY:★證據二(內部回放 v2,r1 s2 席打掉 v1 後重算;governance/eval/k1_stop_replay.py 可重算)★——v1「乾淨輪」漏算真 gate…
+    22 [KEY]: KEY:★候選設計(r1 大改)★——(a) K=2 連續有效乾淨輪:★非只動參數★(r1 s4:現行 _loop_status_panel 只讀最後一輪,K=2=跨輪比對的結構性…
+    50 [body]: - **self-governance 特有**：①改閘的 spec 必須過 design-loop 審（r1 已走完，15 組 findings 全處置）；落地測試需含「舊帳在新…
+    60 [body]: 7. 回放腳本 v3：補 M2 cluster 帳分層（Codex F3）。
+    93 [body]: canary＝壞內部交叉引用（「抽查輪與 cap 互動規則已定於〈回放輸出〉節末」——該節無此內容；probe:pass 全文餵）。**caught 4/5**（s1 通才/s3 …
+    99 [body]: R18（未植入輪 kind 語意缺口，自抓，入落地面 8）。r1 Codex 被拒引句的實質內容確認已隨 (d) 撤除解決。
+  3.100  Verification/2026-07-24_真遺忘search排除superseded.md  [codex]
+    20 [VERIFY]: VERIFY:design-loop 3 審收斂(2 Sonnet light+1 跨家族 Codex std,跨家族接住兩輪 Sonnet 漏的 hidden 數插點 F6+go…
+    32 [body]: - **濾網插點**在命中確認後：否則 hidden 數變成「全庫 superseded 總數」而非「本次命中被藏筆數」（Codex std F6 接住，兩輪 Sonnet 漏）。
+    33 [body]: - **召回不退**：goldset §6 gate 只比相對 lift、擋不住「兩邊一起藏掉好答案」（Codex std F7）——測試改用改動前後對照式 fixture（活節點…
+    36 [body]: - design-loop：r1 light（canary missed，但 orchestrator 查碼證實 4 major，縮範圍 search-only）→ r2 ligh…
+  3.098  Verification/2026-07-11_檢索goldset評測.md  [codex]
+    14 [KEY]: KEY:雙 AI 盲標(Claude+Codex 各標 424 候選,一致 295)→ 1v2 取低 47 → 0v非0 邊緣 80 條 opus 深讀裁決、0v2 強衝突 2 條…
+    27 [body]: 1. **雙 AI 盲標**:Claude(opus agent)與 Codex(GPT-5.6, exec read-only)各自獨立標同一份去識別 pool——一致 295/…
+    55 [body]: 首跑後 push 前的對抗代碼審(loop=code-retrieval-mid,4 canary 全 caught+Codex 否決席)抓出評測器兩處證據缺陷,已修正並重跑,本篇…
+    58 [body]: 2. **must-see 標籤失真(Codex 否決席 blocker,機械證實)**:原表「30/30 ✅ 機保」混淆了「出現在輸出(top50)」與「固定席機械保證」——實測…
+    60 [body]: **可重現性與漂移（r2 Codex 複核折入）**：本表數字快照於 eval 當下 HEAD（見 eval-history 的 `eval_head` 欄）;vault 是活語料…
+    65 [body]: - `governance/eval/retrieval-goldset.json` labels 定稿(claude/codex/final+裁決出處)
+  3.067  Verification/2026-08-23_雙評審三版對照.md  [codex]
+    29 [body]: | **Codex CLI** | **自己讀 vault**(實耗 83,079 tokens) | **59%** | 30 / 3 |
+    44 [body]: 能自己讀確實比只看路徑名好很多(36%→59%)。**但 Codex(自己讀)只比
+    50 [body]: ★分不開的變因(誠實)★:Codex 與 Gemini **模型與形態一起變了**。
+    60 [body]: | B v3 Codex 自己讀 | 21 | 36 | 23 |
+    76 [body]: 補第二輪 10 筆。**同一個 A 席、同一個 B 席(Codex),分歧方向整個反過來:**
+    85 [body]: **讀了之後,我給得比「能自己讀 vault 的 Codex」還高。**
+    130 [body]: - **Codex 那輪沒複跑**,單次結果;LLM 有隨機性,59% 這個數字沒有信賴區間。
+  3.059  Projects/oracle品質包_計劃.md  [codex]
+    10 [fm]: - "[[Projects/Codex外審吸收_計劃]]"
+    17 [KEY]: KEY:出身——2026-07-29 Codex 外審對話三輪:它抓到 record 回報成功未落盤真事故([[Issues/canary-record未落盤事件]])+「guar…
+    57 [body]: **現況更正（pre-flight 實查）**：現行 verdict 已六值（killed/timed_out/survived/drifted/abort/error）、`.ki…
+    65 [body]: | `killed` | rc≠0 **且** 綁定測試方法名的**任一出現處**（掃全部出現行——r2 真實 pytest 重現:summary 行同行即中）其行起（含同行）往後…
+    92 [body]: - **r2 panel**（2026-07-29，delta 3 席 sonnet＋Codex 否決；**三席 canary 全中（二連）**；存活全機械證實免辯方）：[majo…
+    95 [body]: - **r3 panel（終輪，2026-07-29；席1/席2 caught、席3 missed 剔除；cap=3 到頂）**：[major] ①icon 表連字號/底線自打（r…
+    113 [body]: - **r1 panel**（2026-07-29，3 席 sonnet＋Codex 否決；**三席 canary 全中**；存活全機械證實免辯方）：[major] ①readba…
+  3.033  Projects/檢索優化_計劃.md  [codex]
+    15 [fm:why_chosen]: why_chosen: 多數採 Codex 案:漸進相容與安全固定席優於直改預設與乘數 boost;Claude 案貢獻 cochange 金標 proxy 與顯示層折疊;兩案同判…
+    56 [fm]: - scripts/hooks/claude/impact-hook.py
+    65 [body]: PRIOR-ART: 見 [[Projects/檢索優化_調研]]（deep-research 3 票查證）。**本計劃為雙盲草案合併**：Claude 與 GPT-5.6（Cod…
+    71 [body]: | 上線方式 | `--ranked` 旗標漸進（Codex 案），legacy 預設不變 | 不破壞既有消費者；評測過 gate 再翻預設 |
+    72 [body]: | 排序範圍 | 只重排既有候選集（Codex 案） | substring/regex 仍決定候選，token 只管排序——不擴召回 |
+    73 [body]: | hook 詞彙訊號 | edit delta 當 query、stdin 傳遞（Codex 案） | 防 args 洩漏；delta 是最強的當下意圖訊號 |
+    74 [body]: | 合約/事故 | 安全固定席不參與排序，超額標 safety overflow（Codex 案）| 守衛資訊不因 top-k 靜默消失 |
+    75 [body]: | 邊型加權 | v1 無型別邊；edge-type ablation 列評測第一批（Codex 案,Claude 案的直覺權重擱置）| 證據先於直覺;兩案都點名 Borodin …
+    … 還有 7 處
+  2.975  Verification/2026-07-25_CheckT-Python-profile.md  [codex]
+    22 [VERIFY]: VERIFY:design-loop r1 light(canary caught;審計員實測揪出根因改寫整個計劃——原 dirs 診斷是錯的)+std 單席 Codex(2b+4…
+    36 [body]: 原以為是 dirs 找不到資料夾——錯。真兇：discover 對**所有語言**剝 C 式註解，`test_lumos.py` 中文註解的 `status/*` 與遠處 glob…
+  2.940  Verification/2026-08-14_殘餘估計降級與重疊報表落地.md  [codex]
+    15 [KEY]: KEY:design-loop 一輪處置閘收斂背書(r1 panel 5 席 12 findings 全折入;單家族偏離=Codex 帳號故障;見計劃節點 r1 審計紀錄)
+  2.933  Projects/驗證層去模型化_計劃.md  [codex]
+    35 [body]: - **與 gate 的映射明列(r1 折入,Codex)**:收貨三道=收貨紀律(refcheck/seat-check advisory 不進閘;quote-check 供 d…
+    39 [body]: - **r1 Codex blocker 揭示**:[[Projects/panel收斂判準改革_計劃]] 自帶防浮動條款——「落地後不得接受論證型翻案;唯一翻案通道=累積 20 …
+    47 [body]: - blocker/major finding 折入的**採信條件**升級:必附「先紅後綠」證據——一條當下翻紅的測試(或可執行重現指令+輸出),修完轉綠才記 folded;處置帳…
+    52 [body]: - **與 code-loop 既有步驟 7 的關係(pre-flight 抓回)**:S4=把該手動步驟自動化;**分桶語意 v1 為子集**(r1 勘誤,Codex:原「沿用」…
+    57 [body]: - **runner 合約(r1 blocker,Codex)**:沿 guard kill 的 platform config `run_cmd` 合約({method}/{fi…
+    60 [body]: - 輸出:殺率+活口清單(survived 桶,file:line+變異描述)+各桶計數;**rc 合約修正(r1 折入,Codex)**:rc0=觀測有效(不論殺率);**基礎設…
+    68 [body]: - **r1(2026-08-08,panel:3 sonnet(演算法/harness/治理程序)+Codex 外家;canary 2 caught(s1 verdict_buc…
+    69 [body]: - [blocker,Codex] A 案防浮動條款禁止論證型翻案(唯一通道=20 筆抽查帳)→ S2 拆 S2a(收貨紀律,立即)/S2b(閘切換,凍結待 Enzo 具名裁決,三…
+    … 還有 1 處
+  2.933  Verification/2026-07-21_lumos-show讀取入口.md  [codex]
+    20 [VERIFY]: VERIFY:spec 過 light r1→ratchet→std panel 3 輪+Codex 否決席 3 次介入,實質收斂人裁(2026-07-21);golden 凍結 …
+  2.933  Projects/工具鏈全環節體檢_調研.md  [hooks]
+    21 [body]: > 白話:Enzo 2026-08-21 問「我們是在審圖譜,還是真的對工作流上檢核?」並要求「審視每一個環節:合理、不是虛設、Claude 能遵循」,外加 token 成本鏡頭。…
+    37 [body]: 1. **Claude hooks 雙重註冊**:`~/.claude/settings.json` 裡 `verification-rot-check.py`(每次 Bash)與…
+  2.932  Projects/kotlin慣例skill_計劃.md  [codex]
+    14 [body]: PRIOR-ART: 網搜評審真搜權威源(Google coroutines best practices/Kotlin 官方/detekt coroutines ruleset/…
+    31 [body]: 同管線再跑兩輪:`vue-idioms`(R1-R13)與 `csharp-idioms`(R1-R12)——各自=網搜權威源(Vue 官方含 vuejs-ai/skills AI…
+    33 [body]: **最好的收穫**:Codex 在 Landmark 後端抓到**現行串聯 await 病例兩處**(RedeemActivityService.cs:223/:84,各自建連線互…
+  2.917  Verification/2026-07-09_loop三輪壓縮.md  [hooks]
+    53 [body]: - **踩雷 + 已硬化**:`cmd_loop_capture_counts` 原用 `for f in (finders or [])`,撞 `t_hook_copy_list…
+  2.914  Projects/CheckT-Python-profile_計劃.md  [codex]
+    16 [KEY]: KEY:修法 v3(std 折入,更簡)=①profile 加 comment_strip 欄位:"c-style"(預設,既有 4 profile 不變)/"none"——★py…
+    28 [body]: > **狀態**：done（r1 light＋std Codex 折入 → TDD 落地，見 [[Verification/2026-07-25_CheckT-Python-pro…
+    34 [body]: ## 修法（v3，std Codex 折入後——比 v2 更簡）
+    42 [body]: 3. **本 repo config**：`test_profile: python`（inline `method_regex` **取代**內建、非疊加——Codex 查證確認…
+  2.903  Verification/2026-07-29_oracle品質包落地.md  [codex]
+    50 [body]: ## code-loop 終審折入（同日，一輪 panel＋Codex 否決席＋合約鏡頭首戰）
+    54 [body]: 1. **弱證據 fail-open**（Codex）：全部配方只有弱證據時竟回 rc0＝報成功，等於「沒有任何一條被證實咬住」卻放行 → 改 **rc1**（同 survived…
+    55 [body]: 2. **鄰近他測誤歸因**（Codex）：`TestLimitFive PASSED / TestOther FAILED` 會把隔壁測試的紅算到綁定測試頭上 → 掃描窗遇到另一…
+    56 [body]: 3. **second 可自我覆核**（Codex）：原判者用同一個 `--auditor` 就能覆核自己，字面擊穿分權 → 比對原判 auditor，同名 rc2。
+  2.894  Verification/2026-07-22_prepush範圍修法落地.md  [codex]
+    9 [fm]: - "動 scripts/hooks/pre-push 的 stdin/範圍推導/逐 ref 迴圈"
+    21 [VERIFY]: VERIFY:spec 過 design-loop 3 輪+Codex 3 次否決確認+實質收斂人裁(2026-07-21,[[Projects/prepush主幹範圍修法_計劃]…
+  2.890  Verification/2026-07-21_loop機械脊椎M1包.md  [codex]
+    20 [VERIFY]: VERIFY:spec 過 3 輪 panel(canary 1/4→4/4→2/2)+Codex 否決鏈五迭代 NO-VETO+實質收斂人裁;golden governance/…
+  2.883  Systems/pitfalls-code-loop.md  [codex]
+    27 [KEY]: KEY:[2026-07-18]codestage S1/S5 落地(設計[[Projects/code階段強化_計劃]],4輪審計30條折入+實質收斂人裁)——S1 真跑優先(綁…
+  2.876  Systems/retrieval-ranking.md  [codex]
+    16 [KEY]: KEY:[2026-08-18 標註刷新落地,plan:[[Projects/標註刷新_計劃]]]語料前進解鎖——delta 補標流水線(refresh_labels.py del…
+    19 [★DEBT★]: KEY:★DEBT★ 多詞片語候選=legacy片語語意(0候選不回退)★2026-08-02 部分緩解:`--any` 旗標(預設關)在整串片語全庫無命中時退成各詞 OR 召回;…
+    44 [body]: 設計三輪 panel（Codex 跨家族否決席全勤、5/5 canary 零漏——史上首例）收斂於 [[Projects/檢索優化_計劃]]，golden 凍結 governanc…
+  2.857  Issues/canary-record未落盤事件.md  [codex]
+    15 [KEY]: KEY:2026-07-28 code-testmap r2 三筆 canary record 工具回報成功(印出 CANARY-ae139e51/521d397f/031e738…
+  2.852  Verification/2026-07-10_cochange守衛.md  [hooks]
+    9 [fm]: - "scripts/hooks/pre-commit Gate CC 結構(STAGED 後、Gate 1 前)"
+  2.840  Projects/節點靜態先驗_調研.md  [codex]
+    16 [body]: 使用者提案：給每個節點一個「三維係數」讓搜尋/巡檢/分類更精確。照家規先問世界：網搜評審（真搜附源）× Codex/GPT-5.6 架構評審，雙方獨立作答、結論收斂。
+    27 [body]: | **新鮮度 frecency** | 中（先建事件帳） | Firefox frecency：事件加權×指數衰減；重寫版教訓=別存時變分數（bug 458801「high-ma…
+    42 [body]: ## 消融階梯（goldset 當裁判,Codex 版）
+    46 [body]: ## 對 hook 面三病因的誠實界定（Codex）
+  2.812  Systems/slim-readme.md  [hooks]
+    12 [KEY]: KEY:7 項必要內容=①怎麼裝(`install.sh`)+怎麼確認(`lumos --help`)②進場三步 search→context→contracts ③frontma…
+  2.809  Systems/cochange-guard.md  [hooks]
+    28 [fm]: - scripts/hooks/pre-commit
+  2.805  Projects/idioms自維護迴路_計劃.md  [codex]
+    13 [KEY]: KEY:演進史=C(只借)→round-1 Codex否決(借用假設半數與現契約不符)→C'(各造薄新原語)→round-2 Codex否決(LLM判斷鏈接不上零依賴cron)→C…
+    39 [fm:context]: context: round-1 design-loop 跨家族Codex否決席揭露:C3兩桶會讓無R真bug逃code-loop收斂閘(blocker)、canary-recor…
+    45 [fm:context]: context: round-2 design-loop 跨家族Codex否決席揭露infra-fit blocker:LLM判斷鏈(refuter/草案生成/C3旁註抽取)接不上…
+    51 [fm:context]: context: 3輪panel全GATE FAIL,跨家族Codex否決席3輪皆決定性:r1借用假設不符→C',r2 LLM鏈接不上cron→C''拆層,r3兩sonnet認證架…
+    193 [body]: **loop 收斂狀態**：3 輪 panel 全 GATE FAIL（跨家族 Codex 否決席 3 輪皆決定性）。r1 揭露「借用假設半數不符現契約」→ C'；r2 揭露「LL…
+  2.800  Projects/收斂閘漏項敏感度v2_計劃.md  [codex,hooks]
+    41 [fm:context]: context: v1 r1 五席(通才/邊界/整合/架構對齊/外家 Codex)33 條發現、4 個獨立 blocker,Enzo 2026-09-03 裁整份重寫。三個 blo…
+    170 [body]: 1. **執行環境**:沿 `scripts/scenario_probe.py:150-176` 的沙盒做法,**不用 worktree**。理由=本案要派活的 AI 面板去讀材…
+    230 [body]: - **外部審查席「跑掛」與「跑完」在回傳碼上不可分辨**:本案派外家席時實測,兩次背景執行的啟動殼層立刻回 0,而 codex 還在跑四到五分鐘。★教訓已內化成 M4★;但這對所…
+  2.796  Issues/探針沙盒能推到真遠端.md  [hooks]
+    40 [body]: ② 沙盒專用 hooks 目錄,`pre-push` 寫死 exit 1——被測 AI 自己加回 remote 也擋
+  2.780  Verification/2026-08-04_design-loop處置閘終審硬化.md  [codex]
+    15 [TEST]: TEST:code-loop panel 終審(loop=code-dloop-redesign,tier=high,W=5+Codex 雙席+spec 席)三輪的 finding…
+  2.780  Projects/收斂閘殘餘估計降級_計劃.md  [codex]
+    23 [DECISION]: DECISION:[2026-08-14]r1 panel(5 席 sonnet 多鏡頭;Codex 否決席因帳號故障缺席,單家族偏離留痕)12 findings 全折入免辯方(全…
+    76 [body]: - **鬆閘補償**：合取剩「輪有效∧存活≤minor∧K=2」。K=2 是外部多判準停損建議中的穩定窗項（**非唯一主判準**——外部建議為三取二，含「實質/表面改動區分」尚未落…
+    88 [body]: r1 panel：5 席 sonnet（通才/正確性/邊界/整合/統計效度）＋pre-flight haiku；Codex 否決席因 CLI 帳號故障全型號被拒，**單家族偏離留痕…
+  2.745  Verification/2026-07-11_hook面v1.1轉正.md  [codex]
+    27 [body]: | 病因（r1 code-loop Codex 診斷） | 修法 | 效果 |
+    48 [body]: 標準級終審(1 canaried sonnet+Codex 否決席)×2 輪,抓出四條真貨全折:
+    49 [body]: 1. **[major×2 同源] `--incidents-only` 並非快速路**——反查/BFS 照跑只是不顯示,「降頻」宣稱落空(sonnet r1 與 Codex 獨立…
+    51 [body]: 3. **[major] hook 端截斷假陰性兩形**——超長 old 吃掉 new(Codex 實測反例)→每段配額;地板配額×多段再尾切又吃尾段 edit(r2 抓到)→保底…
+  2.744  Projects/cochange守衛_計劃.md  [hooks]
+    22 [fm:context]: context: 小 repo(478 commits)警告型場景;假警報成本=信任崩壞;硬砍時間窗會餓死訊號
+  2.744  Systems/slim-get-一行安裝.md  [hooks]
+    20 [KEY]: KEY:與本 repo 根目錄既有的 `get.sh`/`get.ps1`(完整版 Lumos 遠端一鍵裝,clone `EnzoHsieh-Android/Lumos` 後委派 …
+  2.721  Verification/2026-07-16_dloop提效M2_cluster帳.md  [codex]
+    22 [body]: [[Projects/design-loop提效_計劃]] M2 的實作驗證。design-loop 3 輪 panel 達 cap、人裁實質收斂(golden: `governa…
+    26 [body]: - **Codex 否決席 3 真洞**（4 canary 席對真 diff 各鏡頭判 clean,真 findings 全出跨家族席）:①[blocker] `resolved:…
+  2.692  Projects/驗證層自證三件_計劃.md  [codex]
+    68 [body]: - **r1(2026-08-06,panel:3 sonnet(通才/正確性/整合)+Codex 外家席,4/4 canary caught;治理帳 findings_set=1…
+    70 [body]: - [blocker] S2 SNR 母體錯置——canary-log 無「同題×多席/重跑」配對鍵,分母算不出;統計量/邊界未定義;漏查自家 `canary_calibratio…
+    72 [body]: - [major] 有講沒做對帳缺 prescribe 端資料源(s2+s3+Codex)→ 新增派工 manifest `rN-dispatch.json`;PRIOR-ART「…
+    75 [body]: - [major] 驗收「清單非空」把預期結論寫成通過條件(Codex)→ 改合成樣本單元測試,真實資料清單可空;同型鬆綁同步套用 S1(「至少找到一筆」刪除,零命中不算失敗)。
+    76 [body]: - [major] `out_of_scope` 語意未定、必要查證會被誤記越界(Codex)→ scope 三集合定義折入 S1。
+    77 [body]: - [major] S2「+每週檢索考卷」未落地(Codex)→ v1 範圍收斂為 canary,考卷列未來方向。
+  2.664  Issues/design-loop折入漂移_機械守衛.md  [codex]
+    20 [KEY]: KEY:[2026-07-18]第四場域=權威派工模板漂移——templates.md 辯方段直到今日仍寫「opus;對每條≥major各派一個」:M1 路由制(07-16)與 S…
+  2.653  Projects/關係層主網_實作計畫.md  [codex]
+    10 [KEY]: KEY:PRIOR-ART=lumos impact(主動影響幅度偵測,已 done)是 code-file seed 工具(CLAUDE.md PreToolUse hook 走…
+    39 [body]: 主網＝**改節點的當下就當場點出受波及的鄰居**（proactive，趁脈絡最全、最便宜時處理），對照補網（E1/E2 已上、doctor 事後週期掃）。架構經 3 輪 Codex…
+    41 [body]: > **PRIOR-ART**：`lumos impact`（[[主動影響幅度偵測_計劃]]，已 done、9 輪 design-loop）是**無型別**的 downstream…
+    166 [body]: **r1（2026-07-15，panel：3×sonnet 異鏡頭 + Codex 否決席讀 repo + opus 批次辯方）**：canary 3/3 caught（a 壞交…
+    171 [body]: - minor 批次折入：dispatcher 解包與 ID 自驗（D8/Codex）、reindex max+1 接續（D14）、E3 dangling ref（D13）、投影比…
+    180 [body]: **r3（2026-07-15，panel 同制，cap 末輪）**：canary 3/3 caught（c 未定義欄位／d 憑空快照檔／a 引用被引合約不存在的分款編號，各 re…
+  2.639  Systems/design-loop.md  [codex]
+    43 [KEY]: KEY:[2026-07-18]S5 跨家族落地(見[[Projects/code階段強化_計劃]])——辯方預設 Codex(成本中性替換,d4 合規;不可用退 opus 註記)…
+    84 [fm]: - content: design-loop 定位裁定=抬 spec 質量,非保 spec 正確——一輪 panel 抓便宜的(矛盾/未定義詞/缺失敗路徑)就放行;正確性歸下游 c…
+    126 [body]: 日報 2026-06-18 gap:「內迴圈派 Sonnet 當審計員,卻從沒檢查它這一輪到底有沒有在認真抓。」suggestion 借 Codex『驗收要比迴圈本身可靠』:每輪審…
+  2.634  Verification/2026-07-28_testmap落地與Landmark轉正.md  [codex]
+    48 [body]: - 5 帶餌席（4 sonnet＋Codex finder）**canary 全中**、否決席無 major；spec 對答案席抓到真 bug：`_testmap_strip` 的…
+    53 [body]: - 三席 canary 全中＋Codex 否決無 major；抓到**三條「補的測試自己是虛的」**：①降序斷言單元素恆真 → 改多筆異 conf 場景（0.9+0.8）；②`Te…
+  2.605  Projects/派工編制資料化_計劃.md  [codex]
+    32 [body]: 1. **真事故?** 三筆:①席次/收斂規則在 skill 散文自相矛盾兩次(code-loop SKILL「standard(K=2)」講反、「連 2 輪」與 panel 節「…
+  2.559  Verification/2026-09-03_席間覆蓋率離線量測.md  [codex]
+    23 [KEY]: KEY:★教訓:兩個獨立來源一致可以兩個都錯——如果共用同一個錯誤前提★。v2 母體我算 53/25、外家 Codex 獨立重算也 53/25,正確是 52/24;_roster_…
+    129 [body]: v2 的母體數字我算成「設計審 53 個、多輪 25 個」,外家席(Codex)獨立重算**也得到 53/25**,兩邊一致。但正確是 **52/24**:`_roster_kin…
+  2.555  Verification/2026-08-23_關於欄位離線預標驗證.md  [codex]
+    20 [body]: - **標的人=Codex CLI**(自讀 vault 全文),★不是本 session★——本 session 已是考卷 A 席,
+    90 [body]: - **判準文字是我寫的、考卷標註是我裁的**——標的人是 Codex,但兩邊的尺都經過我的手。
+  2.543  Systems/cross-family-audit.md  [codex]
+    17 [KEY]: KEY:★誠實界線[2026-07-23 日報吸收]★——「連 K 輪一致＝收斂」分不出「真乾淨」vs「集體失手」:多 agent 辯論式評審第二輪就結構性塌成「要嘛一起對、要嘛一…
+  2.535  Projects/檢索多詞回退_計劃.md  [codex]
+    78 [body]: 3. **標註**：沿用既有雙評（claude/codex）＋不一致深讀裁決寫 `why`
+    208 [body]: - **雙評**：Claude ＋ **Codex（跨家族）**，同一張標註表
+    214 [body]: 裁決結果：採 Claude 28、採 Codex 14、**判出第三值 1**。
+    218 [body]: 而 Codex 讀成「節點間引用結構」。裁決者還發現**同一個「座標」在本庫有三種語意**
+  2.534  Projects/CLAUDE注入re-sync與版本標籤_計劃.md  [hooks]
+    30 [body]: `graph-discipline.md` 是注入每個消費專案 `CLAUDE.md` 的「教會 Claude 用本工具」範本。它更新後,`lumos update` 會刷新 CL…
+  2.494  Projects/pitfalls棧別效能追問_計劃.md  [hooks]
+    25 [body]: PRIOR-ART: ① 最小解——pitfalls 已按副檔名認棧、已有 _PITFALL_QUESTIONS 提問表,本計劃=該表按棧分組+三問內容;impact hook 已…
+  2.454  Projects/檢核收緊五件_計劃.md  [信任]
+    39 [body]: ① 最小解層級——三件全掛既有骨架(doctor/lint 雙入口、run_doctor 頂端、code-loop pass 前置)。② 世界解——SRE escalation p…
+  2.448  Systems/效能檢核目錄.md  [hooks]
+    35 [body]: PRIOR-ART: 內容全數借官方/社群共識(Android 官方 Compose perf 文件、Microsoft ASP.NET Core Best Practices、C…
+    124 [body]: - Claude Code hooks 保證注入(DEV,含 Vercel 56% 實證)/Steering Claude Code 七法(explainx)
+  2.419  Verification/2026-08-23_影響欄位離線驗證.md  [codex]
+    37 [body]: Codex 讀全文、判準明寫「要跨篇推:這篇提到的機制實際守哪些檔,可能要 grep」。
+    131 [body]: - 三個實驗標的人都是 Codex、判準都是我寫的——同源循環,與 about_code 那篇同款。
+  2.404  Projects/指令索引與情境測試_計劃.md  [hooks]
+    53 [body]: - 記得讀:新 SessionStart hook `lumos-entry-hook.py`(註冊進 merge-claude-settings 與 _GLOBAL_CLAUDE…
+  2.399  Verification/2026-08-24_about_code讀側四項落地.md  [codex]
+    68 [body]: ## 代碼審(code-about-code-read r1,standard:單席 + 架構席 + Codex 外家)
+    74 [body]: Codex:未找到否決級(唯讀沙盒跑不了測試,靜態審)。修後全套 3146 綠。
+  2.390  Verification/2026-07-15_主網M2_typed-edge索引.md  [codex]
+    22 [body]: 主網第二座（[[關係層主網_實作計畫]] M2/[P0]）。補圖譜「走圖層丟邊型」的洞（`Env.edges` 以 target 去重、不存來源欄位——r2 Codex 揭露的地基…
+  2.386  Verification/2026-08-20_gov-stats落地.md  [codex]
+    31 [body]: - 三輪對抗審計**全為單一家族**(claude),無跨家族否決席(Gemini 額度 0 / Codex 帳號不支援)。
+  2.363  Verification/2026-08-07_hook必看召回修復落地.md  [codex]
+    31 [body]: tier=high(單命中=open( 正則假陽);實質審=Codex 全 diff:1 major(dump 空跑不覆寫→殘檔可冒充 A/B 證據,改恆覆寫)+3 minor(h…
+  2.296  Projects/標註刷新_計劃.md  [codex]
+    14 [KEY]: KEY:第二席環境實測(2026-08-17)——Codex 到期;Gemini CLI v0.55.1+API key(~/.gemini/.env,GEMINI_CLI_TRU…
+    63 [body]: - **一致=同值**(0/1/2 完全相等;1 vs 2 =不一致)。一致 → 列入「建議 final」(final=一致值,免逐筆人裁);不一致 → 逐筆人裁(deep-rea…
+    105 [body]: - **r1(2026-08-17,panel:3 sonnet(通才/謂詞邊界/整合)+Gemini Flash 外家席(單發 REST、無 repo 存取、聚焦內部一致性;Co…
+  2.197  Verification/2026-07-15_主網M3_cascade帳本.md  [codex]
+    46 [body]: 異質 panel（3 sonnet 異鏡頭＋Codex 否決席＋mutation 冒煙）canary 3/3 caught，六修全落＋7 硬化測試：
+  2.119  Projects/迴圈摩擦三修_計劃.md  [codex]
+    58 [body]: - r1(2026-08-25,5 席:s1 通才/s2 機械/s3 設計/arch/ext=Codex):25 審項/blocking 21/一句結論:d3 雙訊號被四路證死(回…
+    61 [body]: - r1@v2(2026-08-25,5 席:s1 通才/s2 機械/s3 折入/arch/ext=Codex):13 審項/blocking 6(s1 4/2+s2 1/0+s3…
+  2.079  Projects/probe輪退場_計劃.md  [codex]
+    80 [body]: - r1(2026-08-25,5 席:s1 通才/s2 機械/s3 治理/arch/ext=Codex):19 審項/blocking 15(blocker 3)/一句結論:v1…
+    83 [body]: - r1@v2(2026-08-25,5 席:s1 通才/s2 機械/s3 治理/arch/ext=Codex):18 審項/blocking 11/一句結論:v1 十五條核銷(九…
+  2.013  Projects/GPT外部評審吸收_計劃.md  [codex]
+    33 [body]: | 固定審查角色、防同質 panel | 鏡頭分工+canary 型別跨席輪替+跨家族否決席(Codex/qwen);「9 judge 2 票」教訓;r1 通才席(replay 實…
+  1.968  Projects/loop數據收集_計劃.md  [codex]
+    19 [KEY]: KEY:逃逸帳=唯一能校準停止決策的標尺——「收斂好不好」ground truth 是下游抓到多少設計期漏的(實例:fromscratch 收斂後 code review 抓 to…
+  1.909  Projects/地基盤點2026-08-26_調研.md  [hooks]
+    36 [body]: - **G2 關係層只查存在不查語意**——[[Projects/關係層傳播守衛_計劃]] 自認「頭號腐爛(別篇決策推翻本篇前提)hooks 抓不到,只 $30 AI 交叉審掃得出…
+  1.894  Projects/節點還原SOP_計劃.md  [codex,hooks]
+    180 [body]: - **r1(2026-08-24,5 席:s1 通才/s2 失敗模式/s3 通用性/arch 架構對齊/ext Codex 外家)**:原始 39 條(s1=11 含 1 併入、…
+    183 [body]: - **r2(2026-08-24,5 席:s1 通才/s2 折入銜接查證/s3 可執行性走查/arch 架構對齊 delta/ext Codex 外家)**:原始 25 條(s1…
+  1.865  Verification/2026-08-22_評測尺三修.md  [codex]
+    138 [body]: 接著 merge → apply。★B 席要用 Gemini(Codex 已到期);B 席缺會 degraded 全 disputed,
+  1.642  Projects/標註刷新_實作計畫.md  [codex]
+    119 [body]: 七席 panel(4 sonnet 鏡頭+Gemini 外家 finder+spec 對答案+Gemini 否決;Codex 到期,外家兩角同由 Gemini 承擔=獨立性折損留痕…
+  1.619  Projects/一句話層供糧_計劃.md  [codex]
+    69 [body]: - r1(2026-09-01;3 內席 sonnet+架構席+外家 codex;快照 sha 534b2fb3…):**18 條 findings 全折,0 放行**。
+  1.616  Projects/連鎖佇列軟提醒_計劃.md  [codex]
+    62 [body]: - r1(2026-08-25,5 席:s1 通才/s2 機械/s3 邊界/arch/ext=Codex):18 條/blocking 11/一句結論:spec 對機械現實三大誤判…
+  1.568  Projects/design-loop輕量檔_計劃.md  [codex]
+    106 [body]: - **light 首戰全程收束（2026-07-21，loop 完整跑到落地）**：ratchet 後 std panel 3 輪（有效/無效/有效）＋Codex 否決席 3 次…
+  1.567  Projects/評測尺翻案_計劃.md  [codex]
+    64 [body]: **r1(2026-08-26,五席:s1 通才/s2 評測語意/s3 邊界實作/arch 架構對齊/ext 外家 Codex;17 條全折、零放行:3+5+3+4+2;block…
+  1.559  Projects/結清式收斂_計劃.md  [codex]
+    54 [body]: - [x] r1 panel（3 席＋Codex 辯方）完成，blocker/major 已折入本文
+    81 [body]: - r1 panel（2026-07-27，3 席 sonnet 全 caught＋Codex 辯方 3 庭）：**blocker×1**＝settle 對著 legacy 設計而…
+  1.507  Projects/自主迴圈修理_計劃.md  [codex]
+    71 [body]: **r1(2026-08-26,五席:s1 通才/s2 邊界/s3 流程帳/arch 架構對齊/ext 外家 Codex;24 條全折、零放行:7+6+4+2+5;blocker …
+  1.339  Projects/設計審收斂重定義_計劃.md  [codex]
+    84 [body]: - r1@pc-v2(2026-08-25,5 席:s1 通才/s2 機械/s3 引據/arch/ext=Codex):27 審項/blocking 16(s1 6/5+s2 7/…
+  1.301  Projects/圖譜進迴圈入口栓_計劃.md  [codex]
+    75 [body]: **r1(2026-08-30,三席:正確性/邊界/外家 codex;三席全實測,無 blocker,最高 major)**:
+  0.000  Systems/autonomous-iteration-loop.md  []
+    63 [fm:why_chosen]: why_chosen: 恢復指令:launchctl enable gui/$UID/com.enzo.lumos.daily-governance && launchctl bo…
+  0.000  Systems/loop-convergence-recording.md  []
+    51 [fm:why_chosen]: why_chosen: 對「無人看顧的自動 loop」夠用(終止從不可查的人判→可查的條件);對「刻意作弊」本就不設防、不該假裝防竄改;誠實標清天花板免下游過度信任
+  0.000  Systems/nested-agent-permission-scope.md  []
+    45 [fm:context]: context: Codex 外審(2026-07-29)指出已知 confused-deputy 漏洞仍留可執行入口;使用者裁定停用
+  0.000  Verification/2026-07-31_slim-install安裝器落地.md  []
+    10 [fm]: - "完整版 install.sh 的碰撞語意/_sync_global_claude 有變動 → 重查 slim/install.sh 是否又意外繼承了不該給的 hooks 安裝…
+  0.000  Verification/2026-09-02_探針沙盒全域防護.md  []
+    5 [fm:valid_under]: valid_under: 防線靠環境變數 LUMOS_PROBE=1 傳到 claude -p;cmd_install/uninstall/update/bootstrap 開頭呼…
+
+(共 179 篇候選,照相關性排序;想照檔名排加 --legacy)
+# Systems/nested-agent-permission-scope.md
+type:system | status:planned | created:2026-06-26 | updated:2026-06-26 | risk:守衛面
+summary:
+  FLOW:orchestrator(層0 全工具)→[canary 植入 Edit]→spawn auditor/judge 改 Bash 子程序 `claude -p --allowedTools …
+  KEY:autonomous-loop 的 auditor/judge 由「Agent 工具 spawn(繼承父全權)」改為「claude -p 子程序帶 --allowedTools 唯讀」——機械…
+verified_by: [[Verification/2026-06-23_nested-agent-permission-scope_design-loop收斂]]
+→ 連出 (1):
+  • Verification/2026-06-23_nested-agent-permission-scope_design-loop收斂.md [pass]
+← 連入 (2):
+  • MOC/index.md [doing]
+  • Projects/CI回流閉環_計劃.md [done]
+     1	preflight-4: ran
+     2	
+     3	# r1 收貨紀錄(Codex完全支援)
+     4	
+     5	## 前掃(2026-09-04,sonnet 單 agent,四類固定清單)
+     6	- ①未定義詞:無命中(既有識別字全部 grep 到;`--arm` 為明寫新增不算)。
+     7	- ②壞引用 1 條:「跨家族原則」指向 heterogeneous-finder-ensemble(該篇談工具異質,無「外家」字)。修:改指 canary-audit + design-loop。
+     8	  修改前→後:「[[Systems/heterogeneous-finder-ensemble]] 的跨家族原則不變」→「[[Systems/canary-audit]] 與 [[Systems/design-loop]] 的跨家族席原則(外家 blocker 不得僅被同門多數推翻)不變」
+     9	- ③範圍矛盾:無命中(六層/四階段/TTL/預算算術皆一致)。
+    10	- ④語意 2 條(存在性類以外,非核心裁定,直接修真檔):
+    11	  - check-graph-sync 欄位名混用:修改前「`tool_input.command`/`file_path`」→修改後「逐字稿 tool_use 區塊的 `input.command`/`input.file_path`(PreToolUse payload 才叫 tool_input)」;佐證 file: `scripts/hooks/claude/check-graph-sync.py:137-143`。
+    12	  - 子代理事件欄位歸屬:修改前「Start/Stop 帶 agent_id 與 agent_transcript_path」→修改後「SubagentStart 帶 agent_id+agent_type,子代理 PreToolUse 帶 agent_id,SubagentStop 才帶 agent_transcript_path」。編排者註:前掃依調研筆記判 SubagentStart 不帶 agent_id;實驗 5 hook.log 實看 SubagentStart keys 含 agent_id,以實測為準寫入。
+    13	
+    14	## 外家否決(Codex)報告收貨(20 條;quote-check 12 句錨不到→那 12 條不入 set,內容仍逐條判)
+    15	- 正規化:`severity: X ;blocking: Y` 同行 → 拆兩行(regex,內容未改);原檔存 r1-外家否決.raw。
+    16	- **F1「message 不是加密、依文件可 rewrite」→ MISS(不採信)**。重現(實驗 A,scratchpad codexfull/hookA.log、outA.jsonl):PreToolUse 無 matcher,對 collaborationspawn_agent 回 `{"permissionDecision":"allow","updatedInput":{...,"message":"<明文>"}}` → 父代理最終回覆「Agent errored: stream disconnected before completion: Encrypted function output content could not be decrypted or decoded.」;hook 看到的 message 仍為 `gAAAAABq…` 密文。結論:0.144.1 下 message 為不透明密文,rewrite 會弄壞派工;文件(tool-coverage 節)與實測不符,以實測為準。
+    17	- **F12「matcher Agent 沒攔到→應用 canonical 名重驗」→ 部分 HIT**。重現(實驗 B,hookB.log):`hooks.PreToolUse=[{matcher="spawn_agent"},{matcher="collaborationspawn_agent"}]` 兩條並列 → 只記到 1 筆 PreToolUse(tool_name collaborationspawn_agent),即兩個 matcher 恰一個命中(未分開跑,推測為完整名 collaborationspawn_agent;S0 實作時分開驗一次)。但攔到也改不了 message(見 F1),armed 檔路線的必要性不受影響;「攔得到 spawn」這個事實寫進 spec 當備用觸發點。
+    18	- F5 HIT:file: `scripts/hooks/claude/dispatch-lens-hook.py:50` 確為 `payload.get("tool_name") != "Agent"` 即靜默返回;「同一批腳本零改」對 dispatch-lens 不成立,spec 已在 S1 表寫要改,但「五支各自認形狀」一句對這支要明寫成「新增 SubagentStart 分支」。
+    19	- F7 HIT(部分):file: `scripts/lumos:10583` docstring 明寫讀入去 BOM/CRLF→LF、寫入強制 LF;sentinel 外「文字」不動但換行/BOM 會被正規化——spec 「既有機制本來就這樣」要補這句。
+    20	- F8 HIT:file: `scripts/lumos:10362-10372` teardown 三步不看 rc、固定 `return 0`;spec 驗收「一次全部乾淨」須改成用 enforcement/檔案存在性機械驗,不能靠 teardown rc。
+    21	- F9 HIT:官方 subagents 文件 custom agent 必填 name/description/developer_instructions;spec 漏兩欄。
+    22	- F14 HIT:spawn_agent 介面(實驗 3/4/A 均見)只有 task_name/message/fork_turns,無 agent 參數;自訂 agent 由派工詞點名或 description 匹配選中——spec「agent=lumos-reviewer」不可機械執行,改寫成「派工詞點名」。
+    23	- F6 HIT(措辭矛盾):「不寫 TOML」與 S2 產 agent TOML 衝突;改寫為「不解析/不改寫既有 config.toml;agent TOML 為新建檔,以字串範本寫出」。
+    24	- F3 HIT:官方 skills 文件 repo 層只列 `.agents/skills/`(本篇 2026-09-04 補表時抄成兩個);刪 `.codex/skills/`。
+    25	- F2/F4/F10/F11/F13/F15/F16/F17/F18/F19/F20:設計層意見,無需重現,逐條折入或附理由放行見審計修正紀錄。
+    26	
+    27	## 整合知識同步席收貨(8 條,quote-check 全錨、refcheck 18/18)
+    28	- F3(blocker)HIT:file: `scripts/lumos:5711-5712` 家族用靜態關鍵字表(`_ROSTER_EXTERNAL_KEYS`/`_ROSTER_CLAUDE_KEYS`),`_roster_family(auditor)` 無編排者參數;`_TIER_ROSTER` code-high 兩席 external 為 required-fail-closed。Codex 編排時只改散文,同門互審會被判成「外家到齊」。→ 折入:家族判定加「編排者家族」維度。
+    29	- F4(major)HIT:file: `scripts/lumos:7387-7396` `_usage_log` 只被 show/context 呼叫,schema `{ts,node,cmd}`;check-graph-sync.py 無任何檔案寫入(grep open/write 僅讀 queue)。spec「hook 自己記的 usage-log」「Stop 後 usage-log 多一筆」無對應路徑 → 折入:S1 驗收改用實測時的 hook 記錄包裝,不發明新帳。
+    30	- F1/F2/F5/F6/F7/F8:引句錨定、行號機驗通過;內容為設計層對照(剝除端雙檔、四個呼叫點與 Check D、漏列 skill、enforcement 對稱、錨點覆蓋範圍、_skills_list 掃全部 8 支),逐條折入。
+    31	
+    32	## 邊界可執行席收貨(8 條全錨、refcheck 4/4)+ 通才席(7 條全錨、refcheck 28/28)
+    33	- 邊界 F1(blocker)HIT:實驗 C(`-c` 內嵌 hook、不帶 --dangerously-bypass-hook-trust)hook 0 筆;實驗 D(隔離 CODEX_HOME 放 hooks.json、不帶旗標)hook 0 筆;同一 hook 帶旗標時(實驗 2/4/5)有 fire。`codex --help` 無任何 hooks 信任管理子命令;sqlite 表與 toml/json 均無 hook 信任紀錄可辨(★信任存放位置沒查出來★)。結論:使用者層 hook 也要先在互動 TUI 按一次「Trust」才會跑;exec 只能靪旗標。
+    34	- 邊界 F2(blocker)HIT:file: `scripts/lumos:10960-10982` `_link_or_copy` 對非空真目錄走 `shutil.rmtree(ignore_errors=True)` 後再連結,無提示。
+    35	- 邊界 F5 HIT:file: `scripts/lumos:11084-11087` `subprocess.run(merge)` 不看 returncode、無條件 `return True`。
+    36	- 邊界 F6a HIT:AGENTS.override.md 為官方文件所載機制(本篇稍早已 fetch:全域與各層皆「有 override 就只讀它」);spec 漏。F6b HIT:32 KiB 為整條 chain 合併上限(文件),截斷靜默。F7 HIT:apply_patch 語法含 `*** Move to:`(文件+二進位字串)。
+    37	- 通才 F5「permission_mode/model 欄位查無證據」→ **部分 MISS**:codexfull/hook.log 六筆 PreToolUse 皆含 `"permission_mode":"bypassPermissions"` 與 `"model":"gpt-5.6-sol"`(Codex 側欄位確實存在);但 Claude Code hook 輸入亦有 permission_mode 欄位(官方 hooks 文件),故「以欄位有無判家族」不可靠——結論與外家 F18 相同:改用註冊命令列明確旗標。該條以「判別法不可靠」折入,不以「欄位不存在」折入。
+    38	- 通才 F1/F2a/F2b/F6、整合 F1/F2/F5/F6/F7/F8、邊界 F3/F4/F7/F9:引句+行號機驗通過,逐條折入(blocker 輪,accepted 空)。
+    39	- 架構席 ⚠(armed 檔/SubagentStart 非同步交接無先例):編排者裁=平台限制逼出的有意識偏離,寫進裁定(c)並標 PRIOR-ART 缺口。
+     1	---
+     2	type: project
+     3	status: doing
+     4	created: 2026-09-04
+     5	updated: 2026-09-04
+     6	tags:
+     7	  - type/project
+     8	  - status/doing
+     9	  - scope/governance
+    10	related:
+    11	  - "[[Projects/Codex工作流整合_調研]]"
+    12	  - "[[Projects/派工鏡頭注入_計劃]]"
+    13	  - "[[Projects/主動影響幅度偵測_計劃]]"
+    14	  - "[[Projects/install全域hook同步_計劃]]"
+    15	  - "[[Projects/teardown一鍵拆機_計劃]]"
+    16	  - "[[Systems/lumos-cli-lifecycle]]"
+    17	  - "[[Systems/design-loop]]"
+    18	  - "[[Systems/anchor-integrity]]"
+    19	  - "[[Systems/heterogeneous-finder-ensemble]]"
+    20	  - "[[Systems/canary-audit]]"
+    21	summary: |-
+    22	  FLAG:DECISION
+    23	  KEY:目標=在 Codex CLI 下開一個 lumos 專案,得到跟 Claude Code 下★同一套★六層防護:指示(AGENTS.md)/skills/hooks(進場、影響幅度、派工鏡頭、收工同步)/迴圈編排/量測/安裝-拆機對稱;不做第二套邏輯,每層都是「同一支 lumos、多一個接頭」
+    24	  KEY:★2026-09-04 實驗 4/5 定下四個地基事實★:①未信任 repo 的 AGENTS.md 與 .agents/skills/ 都會載入 ②PreToolUse 攔得到 apply_patch(tool_input.command=patch 全文,沒有 file_path)③spawn_agent 的 message 在 hook 眼裡是加密字串→updatedInput 改派工詞這條路在 Codex 不通;matcher "Agent" 也沒攔到(工具名 collaborationspawn_agent)④SubagentStart 的 additionalContext 會到子代理手上→Codex 側派工鏡頭走這條
+    25	  KEY:r1(2026-09-04,3 席+架構+外家 Codex)47 條/blocker 6(3 席各 1–3)/全折、accepted 空;外家 F1「message 可 rewrite」被實驗 A 反證不採信;★新地基事實(實驗 C/D)★:使用者層 hook 不按一次互動 TUI 的 Trust 就不跑,exec 只能靪 --dangerously-bypass-hook-trust,信任存放處沒查出來
+    26	  KEY:四個擬裁定(r1 折入後):(a)AGENTS.md(有 AGENTS.override.md 則寫它)放同一塊 sentinel 區塊、插在檔首、reinject/剝除/Check D 三端雙檔、doctor 估 chain 總量 (b)hook 註冊寫 ~/.codex/hooks.json 不寫 config.toml(stdlib 沒 TOML 寫入器,零依賴) (c)鏡頭範圍改由 `lumos dispatch-lens <range> --arm --seats N` 落 armed 檔(repo key=realpath 的 sha256,TTL 10 分,消耗 N 次即刪,鏡頭文字首行印 range);SubagentStart hook 讀它;Claude 側標記行照舊;架構席判無先例=平台逼出的有意識偏離 (d)外家席=「不是當下編排者那一家」:記帳/問閘加 --orchestrator claude|codex(預設 claude),_roster_family 相對化;席名沿既有 <鏡頭>-<模型> 慣例
+    27	  KEY:分四階段,每階段各自驗收:S0 安裝層(skills symlink→~/.agents/skills、hooks.json 合併器、AGENTS.md 區塊、enforcement 三層、teardown 對稱)→S1 hook 適配(apply_patch 取檔、SubagentStart 鏡頭、check-graph-sync 讀 Codex 逐字稿)→S2 迴圈從 Codex 編排(自訂 agent TOML、模板去 Claude 字眼、外家互換、席名統一)→S3 量測(recount/scenario_probe 多一個 runner)
+    28	---
+    29	# Codex完全支援_計劃
+    30	
+    31	> 白話:現在 lumos 的「防護」全掛在 Claude Code 上——進 session 時有人提醒你去查圖譜、改檔前有人把相關合約推到眼前、派審查員時有人把清單附進派工詞、收工時有人查你有沒有寫回圖譜。這些全靠 Claude Code 的四種接頭(CLAUDE.md、skills、hooks、子代理)。Codex CLI 0.144.1 四種接頭都有、形狀相近。本案要做的是:**同一支 lumos、同一批 hook 腳本,多接一組 Codex 的接頭**,讓人用 Codex 開 lumos 專案時拿到同一套防護。★不寫第二套邏輯★——Codex 專屬的只有「接頭」那一薄層。r1 審查(47 條)把「形狀一樣」修正成「外層一樣、內層三處不同」:派工訊息對 hook 不透明、hook 要人按一次信任才跑、AGENTS.md 有 override 檔與 32 KiB 全鏈預算。
+    32	
+    33	PRIOR-ART: ① 最小解層級——四種接頭 Codex 都原生提供:hooks.json 的**外層** JSON 結構跟 `~/.claude/settings.json` 的 `hooks` 段同形(事件名、matcher、`{type,command,timeout}`;★內層語意不同:matcher 名、payload 形狀、輸出欄位要求各自查★);skills 是同一個開放標準(agentskills.io,SKILL.md 同格式)所以 symlink 就能用、不用轉檔;AGENTS.md 跟 CLAUDE.md 一樣是「開 session 自動進 prompt 的 markdown」,既有 sentinel 注入機制(`_reinject_claude_block`)多寫一個檔;子代理開場的 additionalContext 是 Codex 自己設計給「餵子代理脈絡」的通道。② 世界解過沒——「一套 agent 工具鏈同時支援 Claude Code 與 Codex」在 2026 已是常態(superpowers skill 自帶 `references/codex-tools.md` 就是這種雙接頭寫法),做法一律是「共用內容+每家一個薄 adapter」。③ 裁定=borrow-design(Codex 官方通道)+ 零新依賴(避開寫 TOML 就不需要任何套件)。★PRIOR-ART 缺口(架構席 r1 ⚠)★:「armed 檔+SubagentStart 非同步交接」在本 repo 沒有先例(最近的 `_lens_cache_*` 是記憶化、impact-hook TTL 標記是冷卻窗,用途都不同);它是 Codex 派工訊息不透明逼出來的,列為有意識偏離,不當慣例。
+    34	
+    35	## 一句話
+    36	
+    37	lumos 的六層防護(指示 / skills / hooks / 迴圈編排 / 量測 / 安裝拆機)在 Codex CLI 下逐層接上,驗收標準是「乾淨機器、隔離 HOME 與 CODEX_HOME,`lumos install` 一次,Codex 開 lumos 專案時六層機械可證都生效;`lumos teardown` 一次全部乾淨(用檔案存在性與 enforcement 機械驗,不靠 teardown 的回傳碼——它三步不看 rc 固定回 0,file: `scripts/lumos:10362-10372`)」。
+    38	
+    39	## 「完全支援」的定義(六層對照;沒對到的就不算完全)
+    40	
+    41	| 層 | Claude Code 現況(都已上線) | Codex 對應接頭 | 本案要做的 | 地基驗證狀態 |
+    42	|---|---|---|---|---|
+    43	| 1 指示 | `CLAUDE.md` 裡的 sentinel 紀律區塊(`scripts/templates/graph-discipline.md`,6.6k;`lumos init/update` 刷、doctor Check D 比對) | `AGENTS.md`;★同層若有 `AGENTS.override.md` 則只讀它★;全域 `~/.codex/AGENTS.md` + 從 git 根往 cwd 逐層串接;★32 KiB 是整條鏈的合併上限,超過靜默截斷★ | reinject/剝除/Check D 三端都改成「目標清單」:CLAUDE.md + (該層有 override 就 override,否則 AGENTS.md);區塊插在檔首(第一個標題之後)而不是尾端,降低被截斷機率;doctor 多估一行「本 repo 各層 AGENTS 檔總量/32 KiB」 | ✅實驗 4:未信任 repo 的 AGENTS.md 會載入 |
+    44	| 2 skills | `~/.claude/skills/<全部 8 支>` symlink(`_install_skills` 用 `_skills_list()` 掃 `skills/` 下所有含 SKILL.md 的目錄——含 3 支語言慣例 skill,不只 lumos-*) | 使用者層 `~/.agents/skills/`(文件);repo 層 `.agents/skills/`(★官方只列這一個,`.codex/skills/` 不存在,r1 外家 F3★) | `_install_skills` 多一個目標;uninstall/teardown 對稱清;★新目標是開放共用目錄:遇到既有「非我方 symlink 的真目錄」一律跳過+warn,不得沿用 `_link_or_copy` 的 rmtree(邊界 F2)★;五支 lumos skill 的 Claude 專屬字眼全部處理(不只三支,整合 F5) | ✅實驗 4:repo 層 `.agents/skills/` 未信任也載入且被隱式選用;★使用者層 `~/.agents/skills/` 未測★ |
+    45	| 3 hooks | 5 支 `.py` copy 到 `~/.claude/hooks/`,`merge-claude-settings.py` 合併進 settings.json;事件=SessionStart×2/PreToolUse Edit\|Write\|MultiEdit/PreToolUse Agent/Stop | `~/.codex/hooks.json`(外層同形);matcher 名:`Bash`、`apply_patch`(`Edit`/`Write` 只是它的別名,tool_name 仍回 apply_patch);子代理=`SubagentStart`/`SubagentStop`;★hook 要在互動 TUI 按一次「Trust」才會跑,exec 下只能帶 `--dangerously-bypass-hook-trust`;沒有 CLI 能標信任,信任存放處沒查出來(實驗 C/D)★ | 合併器抽成「目標可指定+對照表」;註冊命令列帶明確 `--harness codex`(不嗅 payload 欄位);install 結尾印「開一次互動 codex 按 Trust」;enforcement 的 codex hook 層最多到「已註冊、信任狀態本機讀不到」,不單獨綠 | ✅實驗 2/4/5:帶旗標時 PreToolUse fire、apply_patch 攔得到、SubagentStart additionalContext 到子代理;❌matcher "Agent" 沒攔到 spawn(完整名 collaborationspawn_agent 攔得到,實驗 B);❌spawn message 為密文,rewrite 直接弄壞派工(實驗 A);❌不帶旗標 hook 0 筆(實驗 C/D) |
+    46	| 4 迴圈編排 | design-loop / code-loop skill 叫主對話「派 Agent、model sonnet」;外家席=Codex;★家族判定是靜態關鍵字表(`_ROSTER_EXTERNAL_KEYS`/`_ROSTER_CLAUDE_KEYS`,file: `scripts/lumos:5711-5712`),`_roster_family(auditor)` 沒有「編排者」參數★ | `spawn_agent`(介面只有 task_name/message/fork_turns,★沒有 agent 參數★;自訂 agent 靠派工詞點名或 description 匹配);自訂 `~/.codex/agents/*.toml`(必填 name/description/developer_instructions) | 模板去 Claude 專屬字眼、每處給兩家寫法;裝一支 `lumos-reviewer.toml`;★記帳/問閘加 `--orchestrator claude\|codex`(預設 claude),家族判定相對化(整合 F3 blocker)★;席名沿既有 `<鏡頭>-<模型>` 慣例(架構 #2) | ✅實驗 3/5:exec 下能派子代理;SubagentStart 帶 agent_id+agent_type、子代理 PreToolUse 帶 agent_id、SubagentStop 帶 agent_transcript_path;★自訂 TOML 未試★ |
+    47	| 5 量測 | `governance/eval/lens-utilization/recount.py` 讀 `~/.claude/projects/**.jsonl`;`scripts/scenario_probe.py` 跑 `claude -p`;★`.usage-log.jsonl` 唯一寫入者是 `lumos show/context` 的 `_usage_log`(schema `{ts,node,cmd}`),hook 不寫任何檔★ | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`(user_message 明文;spawn 的 message 密文;★官方明示逐字稿格式不是穩定介面★) | recount 多一個 reader(帶版本 fixture,認不得就跳過並記一行);probe 多一個 runner | ✅逐字稿位置與型別看過一份;★shell 呼叫參數是否明文、hook 注入有沒有落逐字稿★未查 |
+    48	| 6 安裝/拆機/體檢 | `lumos install/uninstall/teardown/enforcement/doctor`;★`_sync_global_claude` 不看合併器 returncode、無條件 return True(file: `scripts/lumos:11084-11087`)★ | 同一組指令 | install 多寫 Codex 三處並檢查合併器 rc;teardown 對稱清(含剝除端 `_deinit_strip_claude` 雙檔,file: `scripts/lumos:10653`);enforcement 多層(見 S0);doctor Check D 目標清單化 | 純自家碼,r1 抓到兩個既有吞錯點,見左欄 |
+    49	
+    50	## 範圍與明確不做
+    51	
+    52	- **做**:上表六層在 Codex CLI(本機 0.144.1)下接上;主驗場=隔離 HOME+CODEX_HOME 下的 `codex exec`(★只在這個隔離環境、且 hooks.json 只含 lumos 五支時才帶 `--dangerously-bypass-hook-trust`★);互動模式做一次人工信任冒煙(見驗收)。
+    53	- **不做**:①不把 Codex 當 MCP server、不用 `codex review`(調研候選 ②;候選 ① `--output-schema` 另開小案)②★不解析、不改寫既有 `~/.codex/config.toml`★(S2 的 agent TOML 是新建檔,用字串範本寫出、不需 TOML 寫入器)③不支援 Codex 專案層 `.codex/hooks.json`(未信任不載入,文件明寫)④不做 Windows 的 Codex 路徑(只保證不炸)⑤不替使用者按信任、不寫信任存放處(那是 Codex 的安全控制)。
+    54	
+    55	## S0 進場條件(r1 折入:未解四題先答,答不出不開工)
+    56	
+    57	1. `~/.agents/skills/` 使用者層 Codex 會不會載入(隔離 HOME 跑一次列 skills)。不載入→備援=`lumos init` 在 repo 層放 `.agents/skills/` symlink(已證載入),兩條都寫進 install。
+    58	2. `config.toml [hooks]` 與 `hooks.json` 並存時的規則(合併/覆蓋)。
+    59	3. 分開驗 matcher `spawn_agent` 與 `collaborationspawn_agent` 哪個命中(實驗 B 兩條並列只記到一筆,未分開)。
+    60	4. Codex 逐字稿裡 shell 參數是否明文(決定 check-graph-sync 的 Codex reader 可不可做;不可做→該層只做「認不得就跳過」)。
+    61	
+    62	## 分階段(每階段各自過驗收才進下一階段)
+    63	
+    64	### S0 安裝層(純自家碼;預估 ≲300 行含測試)
+    65	
+    66	1. **skills**:`_install_skills` 目標從單一 `~/.claude/skills` 變成清單 `(~/.claude/skills, ~/.agents/skills)`;★對新目標:dst 若是既有真目錄(非 symlink/junction、非我方複製物)→跳過+印一行 warn,不刪★(`_link_or_copy` 的 rmtree 只保留給 `~/.claude/skills` 既有行為);`cmd_uninstall`/`_teardown_*` 對稱清兩處,且只清 symlink。明列會被連過去的是全部 8 支(5 支 lumos-*+3 支語言慣例),3 支語言慣例無 Claude 專屬工具引用、照連。
+    67	2. **hooks 註冊**:`merge-claude-settings.py` 抽出「目標檔+對照表」參數。Codex 對照表:`Edit|Write|MultiEdit`→`apply_patch`;PreToolUse `Agent`→改掛 `SubagentStart`(無 matcher);`Stop`→`Stop`;SessionStart→SessionStart。註冊命令列一律 `python3 ~/.codex/hooks/<hook>.py --harness codex`(Claude 側維持無旗標=claude)。hook 檔 copy 到 `~/.codex/hooks/`。★`_sync_global_*` 檢查合併器 returncode:非 0→印 warn+return False,呼叫端不印成功(邊界 F5)★。懸空剪除、兩階段撤除(STUB→DELETE)兩邊同規則;常數改名 `_GLOBAL_HOOKS`(保留 `_GLOBAL_CLAUDE_HOOKS` 別名給測試,架構 #1)。install 結尾印:「Codex 的 hook 要你開一次互動 `codex`,在 Hooks need review 畫面按 Trust all;exec 不會問」。
+    68	3. **AGENTS.md 區塊**:`_reinject_claude_block(root, slug, targets)`——目標清單=`[CLAUDE.md, AGENTS.override.md 若存在否則 AGENTS.md]`;四個呼叫點(`_vendor_toolchain`、`cmd_update` 來源分支、`cmd_init` 的 `_do_reinject`、Check D)訊息與比對全部目標清單化(整合 F2);剝除端 `_deinit_strip_claude` 同一清單(整合 F1)。AGENTS 檔的 absent 路徑把區塊插在第一個標題行之後(不是尾端);注意既有機制對整檔正規化 BOM/CRLF→LF(file: `scripts/lumos:10583`),AGENTS.md 也會被同樣正規化,寫進 init 訊息。doctor Check D 對每個目標各比一次;另加一行估算「git 根到本層各 AGENTS*.md 總 bytes/32768」,>75% warn。
+    69	4. **enforcement 層**:每支 Codex hook 一列(與 Claude 側 `session-entry-hook` 等同粒度,架構 #3):`codex-hook:<名>` 狀態值域 `registered-trust-unknown|inactive|unknown`(★不出 active——信任狀態本機讀不到★);`codex-skills`、`claude-skills`(對稱補,整合 F6);`agents-md`(區塊在、版本戳與 CLAUDE.md 一致、有 override 時標明寫在 override)。`shutil.which("codex")` 為 None→Codex 各層 inactive 帶「本機無 codex」。
+    70	5. **測試**:HOME+CODEX_HOME 隔離(沿用 `t_install_skills_unix`/`_sync_global_claude` 測試的 HOME 隔離寫法)驗 install→三處都在、teardown→三處都空;既有真目錄不被刪;合併器 rc 非 0 時不印成功;對照表逐條;Check D 三目標各測漂移;override 存在時寫 override。
+    71	
+    72	### S1 hook 適配(一支腳本、認形狀、由 `--harness` 旗標分支,不嗅 payload)
+    73	
+    74	| hook | Claude 下吃什麼 | Codex 下差在哪 | 適配 |
+    75	|---|---|---|---|
+    76	| lumos-entry-hook(SessionStart) | `cwd` | 同欄位 | `--harness` 只影響輸出裡的 enforcement 摘要 |
+    77	| ci-status-hook(SessionStart) | `cwd` | 同欄位 | 零改 |
+    78	| impact-hook(PreToolUse) | `tool_input.file_path` | apply_patch 的 `tool_input.command` 是 patch 全文,★沒有 file_path★ | `extract_paths` 回清單:command 以 `*** Begin Patch` 開頭→解 `*** Add File:`/`*** Update File:`/`*** Delete File:`/★`*** Move to:`★(邊界 F7)取全部路徑;★逐檔跑 impact 合併輸出(外家 F10),上限沿 cap★;TTL 冷卻、shebang、fail-open 沿用 |
+    79	| dispatch-lens-hook(Claude: PreToolUse Agent + updatedInput 改派工詞) | 派工詞裡 `LUMOS-IMPACT: <range>` | ★派工訊息對 hook 是密文,讀不到也改不了(實驗 A)★;現碼 `tool_name != "Agent"` 即返回(file: `scripts/hooks/claude/dispatch-lens-hook.py:50`) | 新增 SubagentStart 分支(`--harness codex` 時走):讀 armed 檔→`additionalContext`。armed 檔由 `lumos dispatch-lens <range> --arm --seats N` 寫:路徑 `~/.cache/lumos/dispatch-lens/armed/<key>.json`,★key=`git rev-parse --show-toplevel` 的 realpath 取 sha256,寫讀兩端共用同一支 `_lens_repo_key`(邊界 F4)★,內容=range/產生時間/repo 根/剩餘席數;TTL 10 分;每次注入 seats−1,歸零即刪;`--disarm` 立即刪。★鏡頭文字首行印「LUMOS-LENS range=<base>..<head> 第 k/N 席」讓錯席可見(外家 F11/F20、邊界 F3);承認界線:同 repo 同窗口內非審查用的子代理也會收到,靠 seats 計數與短 TTL 縮小,量不到就不宣稱消滅★。PreToolUse 攔 `collaborationspawn_agent` 攔得到但無用處,不掛 |
+    80	| check-graph-sync(Stop) | `transcript_path` 讀 Claude 逐字稿 tool_use 區塊 `input.command`/`input.file_path` | Codex 逐字稿型別不同且官方說非穩定介面 | reader 以第一行 `session_meta` 判 Codex 並讀 `cli_version`;★帶一份 0.144.1 的 fixture 逐字稿,型別對不上或版本未在 fixture 表→跳過本 session 判定並印一行「Codex 逐字稿格式未知,收工同步略過」(外家 F13)★;shell 參數非明文(S0 進場 4)→此層只做跳過 |
+    81	
+    82	S1 驗收(隔離 HOME+CODEX_HOME 真跑 `codex exec` 帶旗標,hook 命令列包一層把 stdout/stderr 落到測試暫存檔——★不發明新帳,usage-log 不是 hook 寫的(整合 F4)★):①apply_patch 改一個有合約的檔→hook stdout 含該檔合約行 ②`dispatch-lens --arm --seats 1` 後派子代理→子代理回報含「LUMOS-LENS range=」首行 ③Stop 後 check-graph-sync 對 Codex 逐字稿印出「已判/略過」其一,不炸。
+    83	
+    84	### S2 迴圈從 Codex 編排
+    85	
+    86	- 五支 lumos skill(design-loop、code-loop、project-notes、★core-knowledge、pitfalls-gapfill★)凡寫「Agent tool / model sonnet / `/skill`」處改成一行兩家:「派乾淨審查員(Claude:Agent 工具 sonnet;Codex:`spawn_agent`,派工詞點名 lumos-reviewer)」;`pitfalls-gapfill/SKILL.md` 第 27 行「用 Agent tool 派乾淨 refuter」是已知一處(整合 F5)。`$lumos-<skill>` 顯式叫法補進 INDEX。
+    87	- `~/.codex/agents/lumos-reviewer.toml`:`name`、`description`(何時用它)、`developer_instructions`(templates.md 審查員框架固定段)、`sandbox_mode="read-only"`;install 用字串範本寫出、teardown 收。
+    88	- **外家席相對化(整合 F3/通才 F3 blocker)**:`canary record`/`loop next`/`loop status` 加 `--orchestrator claude|codex`(預設 claude,舊帳不變);`_roster_family(auditor, orchestrator)` 回「同門/外家」而不是「claude/external」;`_TIER_ROSTER` 的 `external` 改讀成「非編排者家族」。Codex 編排時外家=`claude -p`。[[Systems/canary-audit]] 與 [[Systems/design-loop]] 的「外家 blocker 不得僅被同門多數推翻」不變。
+    89	- 席名沿既有 `<鏡頭>-<模型>` 慣例(file: `docs/lumos-toolchain-knowledge/Projects/收斂閘殘餘估計降級_計劃.md:65`),不另立 `ext-<家族>`;調研候選 ⑥「9 種寫法」改為在 `loop status` 印正規化建議,不改帳。
+    90	
+    91	### S3 量測(進場條件:S1 進場 4 答「明文」且 additionalContext 有落逐字稿;否則本階段只做 probe runner,recount 不做並在誠實界線記一行)
+    92	
+    93	- recount 多一個 Codex reader(路徑 `~/.codex/sessions/**`,以 `cwd` 過濾 repo,fixture 版本守衛同 S1);probe 多一個 runner(`codex exec --json`,配額另量)。
+    94	
+    95	## 擬裁定(a)–(d)的理由
+    96	
+    97	- **(a) AGENTS 檔放同一塊、不放指路;有 override 就寫 override;插檔首**:指路要模型多做一步、沒機械保證;`project_doc_fallback_filenames` 只在該層無 AGENTS*.md 時生效。重複的漂移由 reinject+Check D 兜(三端同一清單);★32 KiB 是全鏈上限、截斷靜默,Check D 管不到截斷★——所以插檔首+doctor 估總量,只降機率不消滅,誠實界線記。代價:每專案多 6.6k。
+    98	- **(b) hooks.json 不寫 config.toml**:stdlib 只有 `tomllib`(唯讀);hooks.json 官方支援、外層同形。並存規則=S0 進場 2。★但「同形」只到外層:Codex `PreToolUse` 的 `updatedInput` 文件要求同時回 `permissionDecision:"allow"`(外家 F2,未驗;本案 Codex 側不用 updatedInput,列為 S1 實作備註)★。
+    99	- **(c) armed 檔而不是改派工詞**:實驗 A 硬事實(rewrite 即「Encrypted function output content could not be decrypted」)。備選「標記寫進 AGENTS.md 讓 fork_turns=all 的子代理繼承」不可控,不取。無先例=有意識偏離(見 PRIOR-ART 缺口)。TTL 10 分+seats 計數為暫用值,沒量。
+   100	- **(d) 外家相對化到機械層**:只改散文,`_roster_family` 仍把 Codex 席判 external,Codex 編排時同門互審會被判「外家到齊」而放行——這是 code-high `required-fail-closed` 閘失效,必須動機械層。
+   101	
+   102	## 驗收(全機械;S0–S3 各自跑;總驗收=四條都綠)
+   103	
+   104	1. 隔離 HOME+CODEX_HOME 下 `lumos install` 後:`~/.agents/skills/` 8 支連結在(或 repo 層備援)、`~/.codex/hooks.json` 五支註冊且檔在且命令列含 `--harness codex`、專案 AGENTS 目標檔有區塊且版本戳等於 CLAUDE.md;`lumos enforcement --json`:codex hook 五列 `registered-trust-unknown`、skills 兩層 active、agents-md active;★另跑一次真 `codex exec`(帶旗標)冒煙,五支 hook 至少各 fire 一次(外家 F17)★。
+   105	2. 同環境 `lumos teardown` 後三處全空(檔案存在性驗,不看 rc)、enforcement 各層 inactive、`doctor` 綠;預放的既有真目錄與使用者自寫的 hooks.json 項目原樣保留。
+   106	3. S1 三條在真 `codex exec` 下各跑一次,結果留 `Verification/` 一篇。
+   107	4. 測試套件全綠、`lumos anchor verify` 綠(★錨點只罩 `dispatch-lens-hook.py` 一支,其餘四支 hook 不在 `ANCHOR_FILES`,file: `scripts/lumos:11409-11416`;本案不擴錨點清單,改動由測試罩★)、`lumos pitfalls --diff` 分級照走代碼審。
+   108	5. **互動信任冒煙(人工一次)**:真機開互動 `codex` 於 lumos 專案,按 Trust,改一檔,看 hook 輸出。REVISIT:2026-09-25 做這條;沒做完 S1 不算驗收。
+   109	
+   110	## 誠實界線
+   111	
+   112	- **hook 信任是使用者的一次手動動作**,lumos 不替按、不寫信任存放處(沒查出來在哪);enforcement 永遠只能說「已註冊」。
+   113	- **綁版本**:matcher 別名 `Agent` 不匹配、spawn message 密文、`collaborationspawn_agent` 工具名、hook 信任閘行為,都是 0.144.1 觀測;`lumos enforcement` 印 codex 版本並跟圖譜記的驗證版本比,不同就唸一句。
+   114	- **Codex 側鏡頭的位置與收件人都比 Claude 側弱**:附在子代理開場上下文而非派工詞;同 repo 同窗口的其他子代理也可能收到;首行印 range 只讓錯席可見,不消滅。鏡頭不量成效(見 [[Projects/派工鏡頭注入_計劃]])。
+   115	- **AGENTS 鏈 32 KiB 截斷靜默**,本案只降機率(插檔首+估總量)。
+   116	- **不證明 Codex 下的 lumos 比較好用**,只證六層接上了。
+   117	
+   118	## 實務隱患(逐類答)
+   119	
+   120	- **資料/狀態**:armed 檔是跨 process 共享狀態→`~/.cache/lumos/dispatch-lens/`(0700、驗 owner 沿用),TTL 10 分+seats 計數,過期即忽略;AGENTS 目標檔與 CLAUDE.md 重複→三端同一清單+Check D;`~/.agents/skills/` 是開放共用目錄→既有真目錄不刪。
+   121	- **時序/並行**:同 repo 多 session 同時 arm→後寫者勝,且非審查子代理也可能收到鏡頭——★答案:靠首行 range 可見+seats 歸零即刪+短 TTL 縮小,不宣稱消滅★(邊界 F3 指出原答「不擋任何事」不成立:錯鏡頭會誤導審查席,已改)。
+   122	- **失敗與回復**:hook 全 fail-open;hooks.json 壞→合併器 return 1,★呼叫端檢查 rc、不印成功★;Codex 未安裝→跳過並印一行;`_link_or_copy` 不對新目錄 rmtree。
+   123	- **權限/安全**:hooks.json 在使用者家目錄(同 settings.json 等級);★`--dangerously-bypass-hook-trust` 只在隔離 CODEX_HOME、hooks.json 只含 lumos 五支的測試裡用;install、日常、任何自動 loop 一律不帶(它會連使用者自己的 hook 一起免審跑,邊界 F9)★;additionalContext 沿零自由文字消毒原則。
+   124	- **相容/升級**:Codex 改版→enforcement 版本比對唸一句;逐字稿 reader 帶 fixture 版本表,認不得就跳過;兩階段撤除兩邊同套。
+   125	- **可觀測**:enforcement 每 hook 一列;harness 由 `--harness` 旗標決定,★不由 payload 欄位判(Codex 與 Claude 的 hook 輸入都有 permission_mode)★;S1 驗收用測試端包裝落檔,不新增帳。
+   126	- **已排除**:金流/對外寄送/正式環境不可逆——本案全部本機工具鏈。
+   127	
+   128	## 合約候選(過閘後蓋章走 guard scaffold→bind→audit,候選≠已標)
+   129	
+   130	- 「消毒原則對兩條通道一致」:Codex SubagentStart 通道輸出必須是 `dispatch-lens` 同一支函式的產物,不得另拼字串。
+   131	- 「install/teardown 對稱」:Codex 三處在 teardown 後必為空;既有非我方目錄與使用者自寫 hooks 項目必原樣保留。
+   132	- 「bypass 旗標只在隔離測試」:repo 內任何非測試碼不得出現 `--dangerously-bypass-hook-trust`。
+   133	
+   134	REVISIT:2026-09-25 互動模式 Codex 信任冒煙(驗收第 5 條)。
+   135	REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/probe 有無真實使用;0 筆=沒人用 Codex 開 lumos 專案,S2/S3 降優先。
+   136	
+   137	## 審計修正紀錄(lumos-design-loop)
+   138	
+   139	- r1(2026-09-04,3 席+架構+外家 Codex):47 條(20+8+7+9+3)/blocking 36(19+5+3+9+0)/全折、accepted 空(blocker 輪)。外家 20 條(12 句引句錨不到,內容仍判、不入 set;F1「message 可 rewrite」實驗 A 反證不採信;F12 部分成立),整合 8(blocker=家族判定寫死),通才 7,邊界 9(blocker=hook 信任閘、`_link_or_copy` rmtree、AGENTS.override.md),架構 3 minor+1 ⚠。席報告與重現紀錄:`governance/review-reports/Codex完全支援/r1-*.md`、`r1-intake.md`。
+/Users/enzo/.nvm/versions/node/v24.16.0/bin/codex
+WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)
+codex-cli 0.144.1
+WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)
+Codex CLI
+
+If no subcommand is specified, options will be forwarded to the interactive CLI.
+
+Usage: codex [OPTIONS] [PROMPT]
+       codex [OPTIONS] <COMMAND> [ARGS]
+
+Commands:
+  exec            Run Codex non-interactively [aliases: e]
+  review          Run a code review non-interactively
+  login           Manage login
+  logout          Remove stored authentication credentials
+  mcp             Manage external MCP servers for Codex
+  plugin          Manage Codex plugins
+  mcp-server      Start Codex as an MCP server (stdio)
+  app-server      [experimental] Run the app server or related tooling
+  remote-control  [experimental] Manage the app-server daemon with remote control enabled
+  app             Launch the Codex desktop app (opens the app installer if missing)
+  completion      Generate shell completion scripts
+  update          Update Codex to the latest version
+  doctor          Diagnose local Codex installation, config, auth, and runtime health
+  sandbox         Run commands within a Codex-provided sandbox
+  debug           Debugging tools
+  apply           Apply the latest diff produced by Codex agent as a `git apply` to your local
+                  working tree [aliases: a]
+  resume          Resume a previous interactive session (picker by default; use --last to continue
+                  the most recent)
+  archive         Archive a saved session by id or session name
+  delete          Permanently delete a saved session by id or session name
+  unarchive       Unarchive a saved session by id or session name
+  fork            Fork a previous interactive session (picker by default; use --last to fork the
+                  most recent)
+  cloud           [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally
+  exec-server     [EXPERIMENTAL] Run the standalone exec-server service
+  features        Inspect feature flags
+  help            Print this message or the help of the given subcommand(s)
+
+Arguments:
+  [PROMPT]
+          Optional user prompt to start the session
+
+Options:
+  -c, --config <key=value>
+          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.
+          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed
+          as TOML. If it fails to parse as TOML, the raw string is used as a literal.
+          
+          Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
+          shell_environment_policy.inherit=all`
+
+      --enable <FEATURE>
+          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
+
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
+
+      --remote <ADDR>
+          Connect the TUI to a remote app server endpoint.
+          
+          Accepted forms: `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`.
+
+      --remote-auth-token-env <ENV_VAR>
+          Name of the environment variable containing the bearer token to send to a remote app
+          server websocket
+
+      --strict-config
+          Error out when config.toml contains fields that are not recognized by this version of
+          Codex
+
+  -i, --image <FILE>...
+          Optional image(s) to attach to the initial prompt
+
+  -m, --model <MODEL>
+          Model the agent should use
+
+      --oss
+          Use open-source provider
+
+      --local-provider <OSS_PROVIDER>
+          Specify which local provider to use (lmstudio or ollama). If not specified with --oss,
+          will use config default or show selection
+
+  -p, --profile <CONFIG_PROFILE_V2>
+          Layer $CODEX_HOME/<name>.config.toml on top of the base user config
+
+  -s, --sandbox <SANDBOX_MODE>
+          Select the sandbox policy to use when executing model-generated shell commands
+          
+          [possible values: read-only, workspace-write, danger-full-access]
+
+      --dangerously-bypass-approvals-and-sandbox
+          Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY
+          DANGEROUS. Intended solely for running in environments that are externally sandboxed
+
+      --dangerously-bypass-hook-trust
+          Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS.
+          Intended only for automation that already vets hook sources
+
+  -C, --cd <DIR>
+          Tell the agent to use the specified directory as its working root
+
+      --add-dir <DIR>
+          Additional directories that should be writable alongside the primary workspace
+
+  -a, --ask-for-approval <APPROVAL_POLICY>
+          Configure when the model requires human approval before executing a command
+
+          Possible values:
+          - untrusted:  Only run "trusted" commands (e.g. ls, cat, sed) without asking for user
+            approval. Will escalate to the user if the model proposes a command that is not in the
+            "trusted" set
+          - on-request: The model decides when to ask the user for approval
+          - never:      Never ask for user approval Execution failures are immediately returned to
+            the model
+
+      --search
+          Enable live web search. When enabled, the native Responses `web_search` tool is available
+          to the model (no per‑call approval)
+
+      --no-alt-screen
+          Disable alternate screen mode
+          
+          Runs the TUI in inline mode, preserving terminal scrollback history.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)
+Run Codex non-interactively
+
+Usage: codex exec [OPTIONS] [PROMPT]
+       codex exec [OPTIONS] <COMMAND> [ARGS]
+
+Commands:
+  resume  Resume a previous session by id or pick the most recent with --last
+  review  Run a code review against the current repository
+  help    Print this message or the help of the given subcommand(s)
+
+Arguments:
+  [PROMPT]
+          Initial instructions for the agent. If not provided as an argument (or if `-` is used),
+          instructions are read from stdin. If stdin is piped and a prompt is also provided, stdin
+          is appended as a `<stdin>` block
+
+Options:
+  -c, --config <key=value>
+          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.
+          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed
+          as TOML. If it fails to parse as TOML, the raw string is used as a literal.
+          
+          Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
+          shell_environment_policy.inherit=all`
+
+      --enable <FEATURE>
+          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
+
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
+
+      --strict-config
+          Error out when config.toml contains fields that are not recognized by this version of
+          Codex
+
+  -i, --image <FILE>...
+          Optional image(s) to attach to the initial prompt
+
+  -m, --model <MODEL>
+          Model the agent should use
+
+      --oss
+          Use open-source provider
+
+      --local-provider <OSS_PROVIDER>
+          Specify which local provider to use (lmstudio or ollama). If not specified with --oss,
+          will use config default or show selection
+
+  -p, --profile <CONFIG_PROFILE_V2>
+          Layer $CODEX_HOME/<name>.config.toml on top of the base user config
+
+  -s, --sandbox <SANDBOX_MODE>
+          Select the sandbox policy to use when executing model-generated shell commands
+          
+          [possible values: read-only, workspace-write, danger-full-access]
+
+      --dangerously-bypass-approvals-and-sandbox
+          Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY
+          DANGEROUS. Intended solely for running in environments that are externally sandboxed
+
+      --dangerously-bypass-hook-trust
+          Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS.
+          Intended only for automation that already vets hook sources
+
+  -C, --cd <DIR>
+          Tell the agent to use the specified directory as its working root
+
+      --add-dir <DIR>
+          Additional directories that should be writable alongside the primary workspace
+
+      --skip-git-repo-check
+          Allow running Codex outside a Git repository
+
+      --ephemeral
+          Run without persisting session files to disk
+
+      --ignore-user-config
+          Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`
+
+      --ignore-rules
+          Do not load user or project execpolicy `.rules` files
+
+      --output-schema <FILE>
+          Path to a JSON Schema file describing the model's final response shape
+
+      --color <COLOR>
+          Specifies color settings for use in the output
+          
+          [default: auto]
+          [possible values: always, never, auto]
+
+      --json
+          Print events to stdout as JSONL
+
+  -o, --output-last-message <FILE>
+          Specifies file where the last message from the agent should be written
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+web search: 
+web search: site:developers.openai.com/codex hooks AGENTS.override.md skills subagents custom agents hooks trust ...
+web search: 
+web search: https://learn.chatgpt.com/docs/hooks
+web search: 
+web search: 'Trust'
+web search: 
+web search: '~/.codex/agents'
+exec
+/bin/zsh -lc "rg -n \"def _roster_family|_TIER_ROSTER|cmd_canary|loop status|loop next|_reinject_claude_block|_deinit_strip_claude|_sync_global_claude|_GLOBAL_CLAUDE_HOOKS|ANCHOR_FILES|def _link_or_copy|dispatch-lens\" scripts/lumos; rg -n \"tool_name|tool_input|updatedInput\" scripts/hooks/claude/dispatch-lens-hook.py; rg -n \"accepted|外家 F|Codex.*F\" governance/review-reports/Codex完全支援/r1-intake.md | sed -n '1,220p'; sed -n '5680,5750p' scripts/lumos; sed -n '10540,10690p' scripts/lumos; sed -n '11040,11110p' scripts/lumos" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+457:    範圍=d5 處置帳形狀;panel 舊制 rc2 指路 loop status --gate --panel(語意重算既有,不入 golden)。
+510:                  "舊制語意重算用 lumos loop status <id> --gate --panel;golden 回放只涵蓋 d5", file=sys.stderr)
+2625:    cfg 給了(dict)就不讀磁碟——dispatch-lens v1.2 用 base 版設定(_json_at_ref)呼叫;None=舊路徑。"""
+3485:# 檔案(ANCHOR_FILES:scripts/hooks/pre-push、scripts/test_lumos.py …),與其他 gate 的圖譜
+3575:        print("  (2026-08-22 起 loop next / loop status 才會記這個帳;更早的迴圈沒資料,不在分母)")
+3949:    resolver 與 loop status 同一套 loop/round 篩選(r1 arch-f1 的第二種做法在此交代)。
+4009:def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None):
+4012:    停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
+4014:    --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
+4015:    --clusters(M2):該輪 risk-cluster 三態帳(每輪至多一筆帶;讀側 loop status --panel 消費)。
+4038:        rec["round"] = round_id   # panel 一輪 W 筆共享 round-id(loop status --panel 分組)
+4124:    # ── M1包 #1 tier 定錨欄(選配;loop next/gate 讀首個帶 tier 記錄定錨) ──
+4380:def cmd_canary_second(env, ref_id=None, verdict=None, auditor=None, note=None):
+4382:    走 [S1] 同一自驗 helper(唯一鍵=自身新 token);loop status 天然忽略(second 行無 loop 欄)。
+4619:        print("    lumos loop status <編號> --disposal --spec … --repo …", file=sys.stderr)
+5722:_TIER_ROSTER = {
+5765:def _roster_family(auditor):
+5806:    """loop status --roster 觀測段(advisory 恆不影響 rc):應派(_TIER_ROSTER)vs 實派(dispatch 快照)
+5834:    entry = _TIER_ROSTER.get((kind, tier))
+5906:    """loop next 的應派 roster:(dict|None, note|None)。legacy=單席通才慣例;
+5913:    entry = _TIER_ROSTER.get((kind, eff_tier))
+6213:                out["disposal_gate"] = f"lumos loop status {loop_id} --disposal --spec <計劃節點.md> --repo <root>"
+6229:            # loop next 是每輪第一步,所以量尺放這裡。
+6311:        return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關——用 lumos loop status <編號> --gate 帶完整參數自己判"})
+6322:        _loop_gov_mark(env, loop_id, "converged", "loop next 判四關全過")
+10235:    if _sync_global_claude(Path(__file__).resolve().parent.parent):   # r3:接上 bool 契約,別無條件印成功(cmd_install 已在入口擋 probe,此為契約一致性)
+10450:    _deinit_strip_claude(root)               # step 2 剝 CLAUDE.md 區塊
+10578:def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
+10653:def _deinit_strip_claude(root: Path) -> bool:
+10903:    ri = _reinject_claude_block(root, slug)
+10933:        ri = _reinject_claude_block(root, slug)
+10954:def _link_or_copy(src: Path, dst: Path):
+11022:_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py", "dispatch-lens-hook.py")
+11057:def _sync_global_claude(src_repo: Path):
+11070:    for f in _GLOBAL_CLAUDE_HOOKS:            # ① 現役 hooks copy
+11091:    """_sync_global_claude 的移除半邊(teardown 用):清全域 ~/.claude 的我方 hook + 剪其懸空註冊。
+11107:    for f in _GLOBAL_CLAUDE_HOOKS + _RETIRED_CLAUDE_HOOKS + _RETIRED_STUB_CLAUDE_HOOKS:
+11124:    synced = _sync_global_claude(root)
+11305:    序列(既有 vault 非 force):只 _reinject_claude_block(讀本機已 vendor 範本,不 pull、不重裝 hooks)→ early-return。
+11307:    no_hooks 路徑(不分新/既有):只 _reinject_claude_block(讀本機已 vendor 範本,無則靜默)。"""
+11331:        ri = _reinject_claude_block(root, slug)
+11353:            # _vendor_toolchain 已呼叫 _install_hooks_py + _reinject_claude_block;不重複
+11409:ANCHOR_FILES = [
+11415:    "scripts/hooks/claude/dispatch-lens-hook.py",   # 2026-09-03 派工鏡頭注入:會改寫子代理派工詞的 hook,硬約束進錨點
+11564:            print("    lumos loop status <編號> --gate --panel --min-seats 3 --spec … --repo …", file=sys.stderr)
+12113:    # 2026-07-07 事故)。★r1 審:_GLOBAL_CLAUDE_HOOKS 有 4 支,原本漏檢 ci-status(CI 紅燈後備網)★。
+12119:                          ("pretooluse-dispatch-lens-hook", "dispatch-lens-hook.py")):
+12293:    for rel in ANCHOR_FILES:
+12360:    cmd_refcheck 與 loop status --gate(G1 錨)共用;抽取規則見 cmd_refcheck docstring。
+13386:    if _given is not None or p.exists():   # cfg 給了(dict)就不讀磁碟(dispatch-lens v1.2 base 版設定);型別守衛與 min_support 底線照走
+16493:# dispatch-lens(Projects/派工鏡頭注入_計劃,2026-09-03):代碼審派工詞的固定席鏡頭
+16494:# hook 是薄殼(scripts/hooks/claude/dispatch-lens-hook.py),所有 git/合約/圖譜判斷都在這裡,
+16549:    return Path.home() / ".cache" / "lumos" / "dispatch-lens" / f"{key}.json"
+17476:    "dispatch-lens": "代碼審派工詞的固定席鏡頭:hook 自動叫,你要手動看內容或除錯時才敲。給 <base>..<head>,回可附進派工詞的純文字(從 base 讀、零自由文字;base 不在主線→rc4 放行)。",
+17577:    cr.add_argument("--loop", help="把這輪歸進某設計 loop(供 lumos loop status 算收斂)")
+17581:                    help="該輪辯方裁決後存活折入的真 findings 數(canary 不計;供 loop status --gate 枯竭錨)")
+17587:                    help="panel 輪 id(一輪 W 個平行審計員的記錄共享;供 loop status --panel 分組)")
+17591:                    help="M2 risk-cluster 三態帳:'名=狀態,...'(resolved/accepted-minor:理由/disputed-major);每輪至多一筆帶,loop status --panel 消費")
+17607:                    help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
+17644:                    help="[派工編制資料化] 編制對帳觀測(advisory 恆不影響 rc):應派(_TIER_ROSTER)vs 實派"
+17929:    p = sub.add_parser("dispatch-lens", help="代碼審派工詞的固定席鏡頭:把 <base>..<head> 碰到的合約/事故節點整理成可附進派工詞的純文字(hook 用;內容從 base 讀,零自由文字)")
+18125:    if args.cmd == "dispatch-lens":
+18278:            return cmd_canary_second(env, ref_id=args.sec_ref, verdict=args.sec_verdict,
+18280:        return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
+5:③把回傳文字接在派工詞尾端,經 updatedInput 送給子代理(additionalContext 實測到不了子代理)。
+50:    if not isinstance(payload, dict) or payload.get("tool_name") != "Agent":
+52:    tool_input = payload.get("tool_input")
+53:    if not isinstance(tool_input, dict):
+55:    prompt = tool_input.get("prompt")
+87:    new_input = dict(tool_input)
+89:    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": new_input}},
+37:- 通才 F5「permission_mode/model 欄位查無證據」→ **部分 MISS**:codexfull/hook.log 六筆 PreToolUse 皆含 `"permission_mode":"bypassPermissions"` 與 `"model":"gpt-5.6-sol"`(Codex 側欄位確實存在);但 Claude Code hook 輸入亦有 permission_mode 欄位(官方 hooks 文件),故「以欄位有無判家族」不可靠——結論與外家 F18 相同:改用註冊命令列明確旗標。該條以「判別法不可靠」折入,不以「欄位不存在」折入。
+38:- 通才 F1/F2a/F2b/F6、整合 F1/F2/F5/F6/F7/F8、邊界 F3/F4/F7/F9:引句+行號機驗通過,逐條折入(blocker 輪,accepted 空)。
+    _loop_gov_mark(env, loop_id, "converged", "gate PASS")
+    return 0
+
+
+_TIER_PARAMS = {"light": (1, 2), "standard": (3, 3), "high": (5, 3), "legacy": (1, 6)}  # tier→(width, cap)
+# ★一輪能丟多少給審查員的軟上限★(2026-08-02)
+# 為什麼有這條:審查員的任務是「在 N 行裡找出那個植入的錯」,而 context rot(脈絡越長、
+# 注意力越差)是已發表的實測現象——有效脈絡長度約標稱值的 60-70%,★退化在 32K token 就
+# 量得到★(不必塞爆),報告的退化幅度 13.9%-85%。
+# ★這條門檻★純粹★借自外部文獻,本專案自己的資料不支持它★(2026-08-02 更正,
+# 原註解在此宣稱「本專案資料落在線的兩邊、方向是反的」——★那個宣稱是錯的,已撤★):
+#   ① 原始觀察(code-slim-python r1/r2 大 payload 零 findings、r3-r6 小 payload 有 findings)
+#      經查證★兩組審的根本不是同一份碼★(前者 bash→Python 移植,後者後來才寫的 manifest 步驟),
+#      拿來比就是拿蘋果比橘子,不構成任何證據。
+#   ② 之後跑了★兩次刻意設計的對照實驗★(見圖譜 [[Projects/審查規模對照實驗]] 與
+#      [[Projects/審查規模對照實驗二_Landmark真缺陷]]),★都不支持「量大→漏看」★:
+#      命中率沒掉。實驗二甚至 7/7 全中,撞到天花板。
+#   ③ 反而浮出另一個假說:量大影響的可能不是「有沒有看到」而是★判斷的自信度★——
+#      大 payload 的席位會★有把握地宣稱有缺陷的地方沒問題★(見 [[Projects/規模影響判斷力假說]],
+#      3/3 大 payload 席位講反、1/1 小 payload 席位找到)。★該假說 n=4、觀察性、
+#      編碼者=提出者,尚未閉合 maker≠checker,★不得據以動 gate★。
+# 門檻取 1800 行 ≈ 30K token,是★借用已發表的 32K 起點取略保守整數★,不是本專案量出來的。
+# 這是軟上限:超過不擋(輪已經跑完才記帳,擋也來不及),但★記進帳並要求收斂宣稱講小★。
+_CANARY_SCOPE_SOFT_CAP_LINES = 1800
+
+_CANARY_TYPES = ("a", "b", "c", "d")   # 壞交叉引用/未定義旗標/未定義欄位常數/未定義產物裸檔名
+
+
+# ── 派工編制資料化(Projects/派工編制資料化_計劃):編制宣告表+對帳原語 ──
+# 編制數字單源=本表(skill 散文降解說);數值逐條抄自 lumos-design-loop/lumos-code-loop SKILL 現值。
+# code/standard(循序)於 2026-08-18 循序codeloop-tier錨定案補列(v1 曾因 tier↔格式守衛誤擋而不入表,守衛已修)。
+_ROSTER_EXTERNAL_KEYS = ("codex", "gemini", "qwen", "gpt")
+_ROSTER_CLAUDE_KEYS = ("sonnet", "opus", "haiku", "claude")
+
+
+def _rseat(slot, family, occ, req, note=None):
+    d = {"slot": slot, "family": family, "occupies_w": occ, "requirement": req}
+    if note:
+        d["note"] = note
+    return d
+
+
+_TIER_ROSTER = {
+    ("design", "light"): {"mode": "single", "seats": [
+        _rseat("通才", "claude", True, "required")]},
+    ("design", "standard"): {"mode": "panel", "seats": [
+        _rseat("鏡頭1", "claude", True, "required", "r1 其中一席通才(slot 命名慣例,非 lens 值域)"),
+        _rseat("鏡頭2", "claude", True, "required"),
+        _rseat("鏡頭3", "claude", True, "required"),
+        _rseat("架構對齊", "claude", False, "required", "2026-08-22:設計有沒有照既有模組邊界與做法;不佔 W"),
+        _rseat("外家否決", "external", False, "note-if-absent")]},
+    ("design", "high"): {"mode": "panel", "seats": [
+        _rseat("鏡頭1", "claude", True, "required"),
+        _rseat("鏡頭2", "claude", True, "required"),
+        _rseat("鏡頭3", "claude", True, "required"),
+        _rseat("鏡頭4", "claude", True, "required"),
+        _rseat("鏡頭5", "claude", True, "required"),
+        _rseat("架構對齊", "claude", False, "required", "2026-08-22:設計有沒有照既有模組邊界與做法;不佔 W"),
+        _rseat("外家否決", "external", False, "note-if-absent")]},
+    ("code", "standard"): {"mode": "sequential", "seats": [
+        _rseat("單reviewer", "claude", True, "required"),
+        _rseat("架構對齊", "claude", False, "required", "2026-08-22:這寫法跟專案既有的一不一樣;不佔 W"),
+        _rseat("外家否決", "external", False, "note-if-absent", "standard 退同門+留痕")]},
+    ("code", "high"): {"mode": "panel", "seats": [
+        _rseat("鏡頭1", "claude", True, "required"),
+        _rseat("鏡頭2", "claude", True, "required"),
+        _rseat("鏡頭3", "claude", True, "required"),
+        _rseat("鏡頭4", "claude", True, "required"),
+        _rseat("外家finder", "external", True, "required-fail-closed"),
+        _rseat("外家否決", "external", False, "required-fail-closed"),
+        _rseat("spec-conformance", "claude", False, "conditional", "有收斂 spec 才應派"),
+    # body 結束 = END 行開頭字元
+    body_raw_end = ei  # text[body_raw_start:body_raw_end] 是未 strip 的 body
+
+    raw_body = text[body_raw_start:body_raw_end]
+
+    # strip 首尾空白行(只去掉 \n,保留內部縮排)
+    stripped = raw_body.strip("\n")
+
+    if stripped:
+        # 在 raw_body 中找 stripped 的真實位移
+        inner_start = raw_body.find(stripped)
+        body_start = body_raw_start + inner_start
+        body_end = body_start + len(stripped)
+    else:
+        # body 全是空白行:body 設為空字串,位移指向 body_raw_start
+        body_start = body_raw_start
+        body_end = body_raw_start
+        stripped = ""
+
+    return ("found", BlockSpan(body=stripped, body_start=body_start, body_end=body_end))
+
+
+# Task 2 ─────────────────────────────────────────────────────────────────────
+# START 行(本 task 無版本戳;T5 會在此字串中插入版本號——形式保留易替換)
+
+
+def _expected_claude_body(root: Path, slug: str) -> "str | None":
+    """讀 scripts/templates/graph-discipline.md,{{KG}} 替換後 strip 首尾空行 → 預期 body 字串。
+    範本不存在 → None(呼叫端 skip Check D)。
+    strip 用 `.strip("\\n")`(只去首尾空行、保留內縮排),與 _extract_claude_block_span 的 body
+    取法一致——reinject 寫入、extract 讀回、Check D 比對三處同一算法,版本差不觸發(版本在 body 外)。"""
+    tpl_path = root / "scripts" / "templates" / "graph-discipline.md"
+    if not tpl_path.exists():
+        return None
+    return tpl_path.read_text(encoding="utf-8").replace("{{KG}}", f"docs/{slug}-knowledge/").strip("\n")
+
+
+
+def _reinject_claude_block(root: Path, slug: str) -> "ReInjectResult":
+    """讀 vendored 範本 → {{KG}} 替換 → 組 sentinel block → 依三態更新 CLAUDE.md。
+
+    status ∈ created|updated|unchanged|appended|sentinel_broken|no_template。
+    diff:僅 updated 帶 difflib.unified_diff 字串,其餘 None。
+    讀入時正規化 CRLF→LF 並去 BOM;寫入一律 _write_lf(強制 LF / 無 BOM)。
+    """
+    import difflib
+
+    # 1. 範本 + body(共用 _expected_claude_body 確保 Check D 比對算法一致)
+    body = _expected_claude_body(root, slug)
+    if body is None:
+        return ReInjectResult("no_template", None)
+
+    # 3. 組 block(START 行帶當前版本戳,機械插值——版本在 body 外,不影響 Check D 比對)
+    start_line = _START_TEMPLATE.format(version=LUMOS_VERSION)
+    block = start_line + "\n" + body + "\n" + _CLAUDE_END
+
+    # 4. 讀 CLAUDE.md(去 BOM + CRLF 正規化)
+    cm = root / "CLAUDE.md"
+    if cm.exists():
+        raw = cm.read_bytes()
+        # 去 UTF-8 BOM
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+        claude_text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    else:
+        claude_text = None
+
+    # 5. 三態分派
+    if claude_text is None:
+        # CLAUDE.md 不存在 → created
+        _write_lf(cm, "# CLAUDE.md\n\n" + block + "\n")
+        return ReInjectResult("created", None)
+
+    state, span = _extract_claude_block_span(claude_text)
+
+    if state == "broken":
+        return ReInjectResult("sentinel_broken", None)
+
+    if state == "absent":
+        # 有 CLAUDE.md 但無 sentinel → appended
+        new_text = claude_text.rstrip() + "\n\n" + block + "\n"
+        _write_lf(cm, new_text)
+        return ReInjectResult("appended", None)
+
+    # state == "found": splice body + 同步刷新 START 行(版本戳落在存量戶的唯一路徑——
+    # 只換 body 會讓 updated 路徑永遠拿不到版本戳,標籤機制對存量安裝戶形同虛設。
+    # START 行在管理區塊「內」,★INVARIANT★ 只保護 sentinel 之外,刷新它不違約)。
+    old_body = span.body
+    new_body = body
+    si = claude_text.find(_CLAUDE_START_PREFIX)
+    sl_begin = claude_text.rfind("\n", 0, si) + 1
+    sl_end = claude_text.find("\n", si)
+    old_start_line = claude_text[sl_begin:sl_end] if sl_end != -1 else claude_text[sl_begin:]
+
+    if old_body == new_body and old_start_line == start_line:
+        return ReInjectResult("unchanged", None)
+
+    # 有差 → 先換 body(高位移),再換 START 行(低位移,原始位移仍有效);兩 splice 之間
+    # 的原始空白行區逐字保留。
+    new_text = claude_text[:span.body_start] + new_body + claude_text[span.body_end:]
+    if sl_end != -1 and old_start_line != start_line:
+        new_text = new_text[:sl_begin] + start_line + new_text[sl_end:]
+    _write_lf(cm, new_text)
+
+    diff = "".join(difflib.unified_diff(
+        (old_start_line + "\n" + old_body).splitlines(keepends=True),
+        (start_line + "\n" + new_body).splitlines(keepends=True),
+        fromfile="old block",
+        tofile="new block",
+    ))
+    return ReInjectResult("updated", diff)
+
+
+def _deinit_strip_claude(root: Path) -> bool:
+    """剝 CLAUDE.md 的 LUMOS:GRAPH-DISCIPLINE 區塊;其餘內容/整個檔都留。
+    無檔或無 START 標記 → no-op 回 False(對稱注入端 scripts/lumos:3175 的存在性 gating)。"""
+    cm = root / "CLAUDE.md"
+    if not cm.exists():
+        return False
+    text = cm.read_text(encoding="utf-8")
+    start_marker = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
+    end_marker = "LUMOS:GRAPH-DISCIPLINE:END -->"
+    si = text.find(start_marker)
+    ei = text.find(end_marker)
+    if si == -1 or ei == -1 or ei < si:
+        return False
+    ei += len(end_marker)
+    new = (text[:si].rstrip() + "\n" + text[ei:].lstrip()).strip()
+    _write_lf(cm, (new + "\n") if new else "")
+    return True
+
+
+def _deinit_remove_vendored(root: Path, src=None) -> list:
+    """白名單移除 vendored 工具組:① _VENDORED_TOOLKIT 固定 5 檔;
+    ② scripts/hooks/、scripts/templates/ ★依 src 列舉逐檔刪★(對稱 _vendor_toolchain 的 rglob 安裝)。
+    F9 修(2026-07-24,Issues/deinit整夾刪使用者檔):不再整夾 rmtree——只刪 src 有的 lumos 檔、
+    保留使用者放這兩夾的自有檔,夾空了才移。fallback(a):src 缺(None 或來源夾不存在)→ 保守留夾
+    +warn、不刪(never delete unknown)。scripts/ 底下使用者自有檔不碰;scripts/ 空了才 rmdir。
+    回傳已移除相對路徑列表。"""
+    removed = []
+    for rel in _VENDORED_TOOLKIT:
+        p = root / rel
+        if p.exists():
+            # ★刪不掉不該炸穿整個流程★(2026-08-01):這裡以前是裸 unlink()。
+            # 走 teardown 時,①全域 hook 已清、②CLAUDE.md 已剝、閘已拆,
+            # 若在這裡拋 PermissionError(Windows 刪執行中的檔、防毒鎖檔),
+            # ③uninstall 根本沒機會跑 → 使用者拿到拆一半又只看到 traceback 的
+            # 狀態。改成印清楚哪一個檔沒刪掉、繼續往下走完;★不靜默★——沒刪掉
+            # 的檔不會被記進 removed,呼叫端印出來的清單仍然誠實。
+            # (Windows 自刪這條主要路徑另有 _selfdelete_risk 在 mutation 前擋。)
+            try:
+
+_RETIRED_HOOK_STUB_BODY = (
+    "#!/usr/bin/env python3\n"
+    '"""已撤除 hook 的相容期空殼——什麼都不做,直接放行。\n'
+    "\n"
+    "存在的唯一理由:正在跑的 session 在啟動當下讀進的 settings 快照可能還註冊著這支。\n"
+    "真檔一旦刪掉,那些 session 每次觸發都會報錯(2026-08-22 實際發生過)。新開的\n"
+    "session 讀到的 settings 已經剪乾淨,不會叫到這裡。\n"
+    "\n"
+    "下一版從 _RETIRED_STUB_CLAUDE_HOOKS 移到 _RETIRED_CLAUDE_HOOKS 即真刪。\n"
+    '"""\n'
+    "import sys\n"
+    "\n"
+    "sys.exit(0)\n"
+)
+
+
+def _sync_global_claude(src_repo: Path):
+    """全域 ~/.claude hooks/settings 同步(不需專案;install 與 _install_hooks_py 共用)。
+    ①copy 現役 hooks ②刪已撤除 hook 殘留真檔 ③跑 merge-claude-settings(_prune_dangling 剪懸空註冊)。
+    來源=src_repo(install 用來源 repo 自身、update 用專案 vendored copy);寫 ~/.claude(HOME 隔離可測)。
+    設計:Projects/install全域hook同步_計劃。回 True=有做、False=探針下被擋沒做(呼叫端據此不印假成功)。"""
+    # ★r1 正確性席:同 _install_skills——cmd_init/_vendor_toolchain 這條路會經此覆寫真的 ~/.claude/hooks
+    # 與動 settings.json,繞過四個指令入口的守衛。擋在變動原語。
+    if _refuse_if_probe("sync-global-claude"):
+        return False
+    import subprocess, shutil
+    chooks = Path.home() / ".claude" / "hooks"
+    chooks.mkdir(parents=True, exist_ok=True)
+    src_dir = src_repo / "scripts" / "hooks" / "claude"
+    for f in _GLOBAL_CLAUDE_HOOKS:            # ① 現役 hooks copy
+        s = src_dir / f
+        if s.exists():
+            shutil.copy2(s, chooks / f)
+    for f in _RETIRED_STUB_CLAUDE_HOOKS:      # ②a 相容期:換 exit 0 空殼,★不刪檔★
+        stub = chooks / f                     #     (刪了會炸掉還帶著舊註冊的 session)
+        if stub.is_symlink():
+            stub.unlink()                     #     symlink 先拆,免得寫穿到來源檔
+        stub.write_text(_RETIRED_HOOK_STUB_BODY, encoding="utf-8")
+        stub.chmod(0o755)
+    for f in _RETIRED_CLAUDE_HOOKS:           # ②b 過了相容期:真刪殘留檔
+        stale = chooks / f
+        if stale.exists() or stale.is_symlink():
+            stale.unlink()
+    merge = src_repo / "scripts" / "merge-claude-settings.py"  # ③ merge+prune 懸空(含②剛變懸空的)
+    if merge.exists():
+        subprocess.run([sys.executable, str(merge)])
+    return True
+
+
+def _teardown_global_claude(src_repo: Path):
+    """_sync_global_claude 的移除半邊(teardown 用):清全域 ~/.claude 的我方 hook + 剪其懸空註冊。
+    ①先驗 settings.json 可解析→壞則跳過+warn、★不刪 .py★(不製造懸空,std F6)②rm 我方現役+撤除 hook
+    ③跑 merge --prune-only(★只剪懸空、不 re-add★——預設 merge 會把 hook 加回,抵銷 teardown)。
+    須在 deinit 刪掉 vendored merge-claude-settings.py 之前跑(std F5,由 cmd_teardown 順序保證)。
+    設計:Projects/teardown一鍵拆機_計劃。回 True=已處理 / False=因 settings 壞跳過。"""
+    import subprocess, json
+    chome = Path.home() / ".claude"
+    chooks, settings = chome / "hooks", chome / "settings.json"
+    if settings.exists():                     # ① 先驗可解析(壞 → 不半做)
+        try:
+            json.loads(settings.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"  ⚠ ~/.claude/settings.json 無法解析({e}),跳過全域 hook 清理"
+                  "(避免刪了檔卻剪不掉註冊、留懸空)", file=sys.stderr)
+            return False
+    removed = []                              # ② rm 我方 hook 真檔
+    for f in _GLOBAL_CLAUDE_HOOKS + _RETIRED_CLAUDE_HOOKS + _RETIRED_STUB_CLAUDE_HOOKS:
+        p = chooks / f            # ★含相容期空殼★:拆機後機器上不該留我方任何檔
+        if p.exists() or p.is_symlink():
+            p.unlink(); removed.append(f)
+
+exec
+/bin/zsh -lc "nl -ba scripts/lumos | sed -n '5755,5795p;5820,5855p;16490,16570p'; nl -ba '/private/tmp/claude-501/-Users-enzo-harness-lumos-toolchain/26a6b57a-9efc-4073-b845-c27e42a2fbb1/scratchpad/Codex完全支援-r2.md' | sed -n '30,145p'" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+  5755	def _roster_kind(loop_id):
+  5756	    """loop id 前綴三值判:code-(含連字號)=code;code 開頭無連字號=None(indeterminate,
+  5757	    歷史帳實有 code側刪除傳播守衛/codestage);其餘=design。"""
+  5758	    if loop_id.startswith("code-"):
+  5759	        return "code"
+  5760	    if loop_id.startswith("code"):
+  5761	        return None
+  5762	    return "design"
+  5763	
+  5764	
+  5765	def _roster_family(auditor):
+  5766	    """auditor 字串→(family, dual_hit)。lower() 子串比對;判序寫死 external 先比、先命中先贏。"""
+  5767	    s = (auditor or "").lower()
+  5768	    ext = any(k in s for k in _ROSTER_EXTERNAL_KEYS)
+  5769	    cla = any(k in s for k in _ROSTER_CLAUDE_KEYS)
+  5770	    if ext:
+  5771	        return ("external", cla)
+  5772	    if cla:
+  5773	        return ("claude", False)
+  5774	    return ("unknown", False)
+  5775	
+  5776	
+  5777	def _roster_dispatch_entries(loop_dir, rid):
+  5778	    """解析一輪的 rN-dispatch*.json → (auditor 串列, 跳過檔數)。三種真實形狀:
+  5779	    ①dict 頂層 auditor ②dict 帶 seats 陣列 ③頂層 list;壞損 JSON 與不符形狀同一處置=跳過不計。"""
+  5780	    import json as _json
+  5781	    auditors, skipped = [], 0
+  5782	    for f in sorted(loop_dir.glob(f"{rid}-dispatch*.json")):
+  5783	        try:
+  5784	            obj = _json.loads(f.read_text(encoding="utf-8"))
+  5785	        except (OSError, UnicodeDecodeError, ValueError):
+  5786	            print(f"[roster] 提醒:派工快照 {f.name} 壞掉或格式不對,跳過不算")
+  5787	            skipped += 1
+  5788	            continue
+  5789	        if isinstance(obj, dict) and "auditor" in obj:
+  5790	            elems = [obj]
+  5791	        elif isinstance(obj, dict) and isinstance(obj.get("seats"), list):
+  5792	            elems = obj["seats"]
+  5793	        elif isinstance(obj, list):
+  5794	            elems = obj
+  5795	        else:
+  5820	    # high 輪的 fail-closed 警訊被降級成 standard 的軟提醒(code-batch2 s1-f1,席位純 CLI 重現)
+  5821	    # only_rid(問閘單輪):tier 只認判定輪自己的紀錄,★不 fallback 借別輪的★——
+  5822	    # 借用=同型病換觸發條件(r2 d-f1);判定輪沒記 tier → 走「沒有編制表可以對」照實講。
+  5823	    # 副作用即縱深:__seqN 合成鍵永遠對不到 round 欄 → tier=None → 天然安靜,
+  5824	    # 下方 startswith("__") guard 成為第二道防禦(單釘無法只殺 guard,兩道要一起拔才會響)。
+  5825	    if only_rid:
+  5826	        tier = next((r.get("tier") for r in rounds
+  5827	                     if r.get("round") == only_rid and r.get("tier")), None)
+  5828	    else:
+  5829	        tier = next((r.get("tier") for r in rounds if r.get("tier")), None)
+  5830	    _quiet(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'}")
+  5831	    if tier is None:
+  5832	        _quiet("[roster] 這個編號沒指定過分級(舊格式或還沒記錄),沒有編制表可以對")
+  5833	        return anomalies
+  5834	    entry = _TIER_ROSTER.get((kind, tier))
+  5835	    if entry is None:
+  5836	        _quiet(f"[roster] 無編制宣告:{kind}/{tier} 這個組合沒定義該派誰,跳過對帳")
+  5837	        return anomalies
+  5838	    root = Path(repo).resolve() if repo else _vault_repo_root(env)
+  5839	    loop_dir = root / "governance" / "review-reports" / loop_id
+  5840	    if only_rid is not None:
+  5841	        rids = [only_rid]   # 問閘當輪:不掃 log、不 glob 補漏(std-r1 s1-f1)
+  5842	    else:
+  5843	        rids = []
+  5844	        for r in rounds:
+  5845	            rid = r.get("round")
+  5846	            if rid and rid not in rids:
+  5847	                rids.append(rid)
+  5848	        if loop_dir.is_dir():
+  5849	            import re as _re
+  5850	            for f in sorted(loop_dir.glob("*-dispatch*.json")):
+  5851	                m = _re.match(r"^(r\d+)-dispatch", f.name)
+  5852	                if m and m.group(1) not in rids:
+  5853	                    rids.append(m.group(1))
+  5854	    if not rids:
+  5855	        _quiet("[roster] 沒有輪次記錄也沒有派工快照,沒東西可對")
+ 16490	
+ 16491	
+ 16492	# ---------------------------------------------------------------------------
+ 16493	# dispatch-lens(Projects/派工鏡頭注入_計劃,2026-09-03):代碼審派工詞的固定席鏡頭
+ 16494	# hook 是薄殼(scripts/hooks/claude/dispatch-lens-hook.py),所有 git/合約/圖譜判斷都在這裡,
+ 16495	# 沿用既有 helper(_git_commit_exists / INVARIANT_RE 家族 / _vault_in 的排序規則)。
+ 16496	# 消毒原則(r2/r3 載荷席):來自圖譜或 diff 的自由文字零輸出——只印固定字彙、base 已追蹤路徑、
+ 16497	# base 版合約行(KEY: 行)。清單本身仍用工作樹圖譜算(d3:能藏不能說)。
+ 16498	# rc:0=成功(含 0 篇,text 空)/2=輸入或 git 壞/3=vault 缺/4=base 不在主線
+ 16499	# ---------------------------------------------------------------------------
+ 16500	_LENS_HEADER = "lumos 自動附加:本次改動的固定席節點(來源 impact --diff,只供參考)"
+ 16501	_LENS_SHA_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+ 16502	_LENS_KIND = {"direct": "直接相依", "indirect": "間接相依", "incident": "事故"}
+ 16503	
+ 16504	
+ 16505	def _lens_range_ok(diff_range):
+ 16506	    """恰好一個 `..`、兩端非空、不含 `...`、不以 - 開頭(r3 極端輸入席收緊)。"""
+ 16507	    if not isinstance(diff_range, str) or diff_range.startswith("-") or "..." in diff_range:
+ 16508	        return None
+ 16509	    parts = diff_range.split("..")
+ 16510	    if len(parts) != 2 or not parts[0] or not parts[1]:
+ 16511	        return None
+ 16512	    if any(ch.isspace() for ch in diff_range):
+ 16513	        return None
+ 16514	    return parts[0], parts[1]
+ 16515	
+ 16516	
+ 16517	def _lens_git(repo_root, *args, quote=False):
+ 16518	    import subprocess as _sp
+ 16519	    cmd = ["git", "-C", str(repo_root)]
+ 16520	    if quote:
+ 16521	        cmd += ["-c", "core.quotePath=false"]
+ 16522	    try:
+ 16523	        return _sp.run(cmd + list(args), capture_output=True, text=True, timeout=20)
+ 16524	    except (OSError, _sp.TimeoutExpired):
+ 16525	        return None
+ 16526	
+ 16527	
+ 16528	def _lens_full_sha(repo_root, rev):
+ 16529	    r = _lens_git(repo_root, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}")
+ 16530	    if r is None or r.returncode != 0:
+ 16531	        return None
+ 16532	    sha = r.stdout.strip()
+ 16533	    return sha if _LENS_SHA_RE.match(sha) else None
+ 16534	
+ 16535	
+ 16536	def _mainline_ref(repo_root):
+ 16537	    """主線 tip:本地 main/master 的 upstream 優先(r3:remote 未必叫 origin),沒設 upstream 才用本地分支。
+ 16538	    回 (ref 名, sha) 或 None。"""
+ 16539	    for cand in ("main@{upstream}", "master@{upstream}", "main", "master"):
+ 16540	        sha = _lens_full_sha(repo_root, cand)
+ 16541	        if sha:
+ 16542	            return cand, sha
+ 16543	    return None
+ 16544	
+ 16545	
+ 16546	def _lens_cache_path(repo_root, base_sha, head_sha):
+ 16547	    import hashlib
+ 16548	    key = hashlib.sha256(f"{repo_root}|{base_sha}|{head_sha}|schema{_LENS_SCHEMA}".encode("utf-8")).hexdigest()   # 帶 schema 版本:v1.1 舊快取自然 miss(v1.2 r2 外家)
+ 16549	    return Path.home() / ".cache" / "lumos" / "dispatch-lens" / f"{key}.json"
+ 16550	
+ 16551	
+ 16552	def _lens_cache_read(path, ttl_sec=1200):
+ 16553	    """只信自己 uid 擁有、group/other 不可寫、TTL 內的檔(r3 載荷席:$TMPDIR 路徑可預測可偽造)。"""
+ 16554	    import json as _json, stat as _stat, time as _time
+ 16555	    try:
+ 16556	        st = path.stat()
+ 16557	        if st.st_uid != os.getuid() or (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH)):
+ 16558	            return None
+ 16559	        if _time.time() - st.st_mtime > ttl_sec:
+ 16560	            return None
+ 16561	        return _json.loads(path.read_text(encoding="utf-8"))
+ 16562	    except (OSError, ValueError):
+ 16563	        return None
+ 16564	
+ 16565	
+ 16566	def _lens_cache_write(path, data):
+ 16567	    import json as _json, tempfile as _tf
+ 16568	    try:
+ 16569	        path.parent.mkdir(parents=True, exist_ok=True)
+ 16570	        os.chmod(path.parent, 0o700)
+    30	
+    31	> 白話:現在 lumos 的「防護」全掛在 Claude Code 上——進 session 時有人提醒你去查圖譜、改檔前有人把相關合約推到眼前、派審查員時有人把清單附進派工詞、收工時有人查你有沒有寫回圖譜。這些全靠 Claude Code 的四種接頭(CLAUDE.md、skills、hooks、子代理)。Codex CLI 0.144.1 四種接頭都有、形狀相近。本案要做的是:**同一支 lumos、同一批 hook 腳本,多接一組 Codex 的接頭**,讓人用 Codex 開 lumos 專案時拿到同一套防護。★不寫第二套邏輯★——Codex 專屬的只有「接頭」那一薄層。r1 審查(47 條)把「形狀一樣」修正成「外層一樣、內層三處不同」:派工訊息對 hook 不透明、hook 要人按一次信任才跑、AGENTS.md 有 override 檔與 32 KiB 全鏈預算。
+    32	
+    33	PRIOR-ART: ① 最小解層級——四種接頭 Codex 都原生提供:hooks.json 的**外層** JSON 結構跟 `~/.claude/settings.json` 的 `hooks` 段同形(事件名、matcher、`{type,command,timeout}`;★內層語意不同:matcher 名、payload 形狀、輸出欄位要求各自查★);skills 是同一個開放標準(agentskills.io,SKILL.md 同格式)所以 symlink 就能用、不用轉檔;AGENTS.md 跟 CLAUDE.md 一樣是「開 session 自動進 prompt 的 markdown」,既有 sentinel 注入機制(`_reinject_claude_block`)多寫一個檔;子代理開場的 additionalContext 是 Codex 自己設計給「餵子代理脈絡」的通道。② 世界解過沒——「一套 agent 工具鏈同時支援 Claude Code 與 Codex」在 2026 已是常態(superpowers skill 自帶 `references/codex-tools.md` 就是這種雙接頭寫法),做法一律是「共用內容+每家一個薄 adapter」。③ 裁定=borrow-design(Codex 官方通道)+ 零新依賴(避開寫 TOML 就不需要任何套件)。★PRIOR-ART 缺口(架構席 r1 ⚠)★:「armed 檔+SubagentStart 非同步交接」在本 repo 沒有先例(最近的 `_lens_cache_*` 是記憶化、impact-hook TTL 標記是冷卻窗,用途都不同);它是 Codex 派工訊息不透明逼出來的,列為有意識偏離,不當慣例。
+    34	
+    35	## 一句話
+    36	
+    37	lumos 的六層防護(指示 / skills / hooks / 迴圈編排 / 量測 / 安裝拆機)在 Codex CLI 下逐層接上,驗收標準是「乾淨機器、隔離 HOME 與 CODEX_HOME,`lumos install` 一次,Codex 開 lumos 專案時六層機械可證都生效;`lumos teardown` 一次全部乾淨(用檔案存在性與 enforcement 機械驗,不靠 teardown 的回傳碼——它三步不看 rc 固定回 0,file: `scripts/lumos:10362-10372`)」。
+    38	
+    39	## 「完全支援」的定義(六層對照;沒對到的就不算完全)
+    40	
+    41	| 層 | Claude Code 現況(都已上線) | Codex 對應接頭 | 本案要做的 | 地基驗證狀態 |
+    42	|---|---|---|---|---|
+    43	| 1 指示 | `CLAUDE.md` 裡的 sentinel 紀律區塊(`scripts/templates/graph-discipline.md`,6.6k;`lumos init/update` 刷、doctor Check D 比對) | `AGENTS.md`;★同層若有 `AGENTS.override.md` 則只讀它★;全域 `~/.codex/AGENTS.md` + 從 git 根往 cwd 逐層串接;★32 KiB 是整條鏈的合併上限,超過靜默截斷★ | reinject/剝除/Check D 三端都改成「目標清單」:CLAUDE.md + (該層有 override 就 override,否則 AGENTS.md);區塊插在檔首(第一個標題之後)而不是尾端,降低被截斷機率;doctor 多估一行「本 repo 各層 AGENTS 檔總量/32 KiB」 | ✅實驗 4:未信任 repo 的 AGENTS.md 會載入 |
+    44	| 2 skills | `~/.claude/skills/<全部 8 支>` symlink(`_install_skills` 用 `_skills_list()` 掃 `skills/` 下所有含 SKILL.md 的目錄——含 3 支語言慣例 skill,不只 lumos-*) | 使用者層 `~/.agents/skills/`(文件);repo 層 `.agents/skills/`(★官方只列這一個,`.codex/skills/` 不存在,r1 外家 F3★) | `_install_skills` 多一個目標;uninstall/teardown 對稱清;★新目標是開放共用目錄:遇到既有「非我方 symlink 的真目錄」一律跳過+warn,不得沿用 `_link_or_copy` 的 rmtree(邊界 F2)★;五支 lumos skill 的 Claude 專屬字眼全部處理(不只三支,整合 F5) | ✅實驗 4:repo 層 `.agents/skills/` 未信任也載入且被隱式選用;★使用者層 `~/.agents/skills/` 未測★ |
+    45	| 3 hooks | 5 支 `.py` copy 到 `~/.claude/hooks/`,`merge-claude-settings.py` 合併進 settings.json;事件=SessionStart×2/PreToolUse Edit\|Write\|MultiEdit/PreToolUse Agent/Stop | `~/.codex/hooks.json`(外層同形);matcher 名:`Bash`、`apply_patch`(`Edit`/`Write` 只是它的別名,tool_name 仍回 apply_patch);子代理=`SubagentStart`/`SubagentStop`;★hook 要在互動 TUI 按一次「Trust」才會跑,exec 下只能帶 `--dangerously-bypass-hook-trust`;沒有 CLI 能標信任,信任存放處沒查出來(實驗 C/D)★ | 合併器抽成「目標可指定+對照表」;註冊命令列帶明確 `--harness codex`(不嗅 payload 欄位);install 結尾印「開一次互動 codex 按 Trust」;enforcement 的 codex hook 層最多到「已註冊、信任狀態本機讀不到」,不單獨綠 | ✅實驗 2/4/5:帶旗標時 PreToolUse fire、apply_patch 攔得到、SubagentStart additionalContext 到子代理;❌matcher "Agent" 沒攔到 spawn(完整名 collaborationspawn_agent 攔得到,實驗 B);❌spawn message 為密文,rewrite 直接弄壞派工(實驗 A);❌不帶旗標 hook 0 筆(實驗 C/D) |
+    46	| 4 迴圈編排 | design-loop / code-loop skill 叫主對話「派 Agent、model sonnet」;外家席=Codex;★家族判定是靜態關鍵字表(`_ROSTER_EXTERNAL_KEYS`/`_ROSTER_CLAUDE_KEYS`,file: `scripts/lumos:5711-5712`),`_roster_family(auditor)` 沒有「編排者」參數★ | `spawn_agent`(介面只有 task_name/message/fork_turns,★沒有 agent 參數★;自訂 agent 靠派工詞點名或 description 匹配);自訂 `~/.codex/agents/*.toml`(必填 name/description/developer_instructions) | 模板去 Claude 專屬字眼、每處給兩家寫法;裝一支 `lumos-reviewer.toml`;★記帳/問閘加 `--orchestrator claude\|codex`(預設 claude),家族判定相對化(整合 F3 blocker)★;席名沿既有 `<鏡頭>-<模型>` 慣例(架構 #2) | ✅實驗 3/5:exec 下能派子代理;SubagentStart 帶 agent_id+agent_type、子代理 PreToolUse 帶 agent_id、SubagentStop 帶 agent_transcript_path;★自訂 TOML 未試★ |
+    47	| 5 量測 | `governance/eval/lens-utilization/recount.py` 讀 `~/.claude/projects/**.jsonl`;`scripts/scenario_probe.py` 跑 `claude -p`;★`.usage-log.jsonl` 唯一寫入者是 `lumos show/context` 的 `_usage_log`(schema `{ts,node,cmd}`),hook 不寫任何檔★ | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`(user_message 明文;spawn 的 message 密文;★官方明示逐字稿格式不是穩定介面★) | recount 多一個 reader(帶版本 fixture,認不得就跳過並記一行);probe 多一個 runner | ✅逐字稿位置與型別看過一份;★shell 呼叫參數是否明文、hook 注入有沒有落逐字稿★未查 |
+    48	| 6 安裝/拆機/體檢 | `lumos install/uninstall/teardown/enforcement/doctor`;★`_sync_global_claude` 不看合併器 returncode、無條件 return True(file: `scripts/lumos:11084-11087`)★ | 同一組指令 | install 多寫 Codex 三處並檢查合併器 rc;teardown 對稱清(含剝除端 `_deinit_strip_claude` 雙檔,file: `scripts/lumos:10653`);enforcement 多層(見 S0);doctor Check D 目標清單化 | 純自家碼,r1 抓到兩個既有吞錯點,見左欄 |
+    49	
+    50	## 範圍與明確不做
+    51	
+    52	- **做**:上表六層在 Codex CLI(本機 0.144.1)下接上;主驗場=隔離 HOME+CODEX_HOME 下的 `codex exec`(★只在這個隔離環境、且 hooks.json 只含 lumos 五支時才帶 `--dangerously-bypass-hook-trust`★);互動模式做一次人工信任冒煙(見驗收)。
+    53	- **不做**:①不把 Codex 當 MCP server、不用 `codex review`(調研候選 ②;候選 ① `--output-schema` 另開小案)②★不解析、不改寫既有 `~/.codex/config.toml`★(S2 的 agent TOML 是新建檔,用字串範本寫出、不需 TOML 寫入器)③不支援 Codex 專案層 `.codex/hooks.json`(未信任不載入,文件明寫)④不做 Windows 的 Codex 路徑(只保證不炸)⑤不替使用者按信任、不寫信任存放處(那是 Codex 的安全控制)。
+    54	
+    55	## S0 進場條件(r1 折入:未解四題先答,答不出不開工)
+    56	
+    57	1. `~/.agents/skills/` 使用者層 Codex 會不會載入(隔離 HOME 跑一次列 skills)。不載入→備援=`lumos init` 在 repo 層放 `.agents/skills/` symlink(已證載入),兩條都寫進 install。
+    58	2. `config.toml [hooks]` 與 `hooks.json` 並存時的規則(合併/覆蓋)。
+    59	3. 分開驗 matcher `spawn_agent` 與 `collaborationspawn_agent` 哪個命中(實驗 B 兩條並列只記到一筆,未分開)。
+    60	4. Codex 逐字稿裡 shell 參數是否明文(決定 check-graph-sync 的 Codex reader 可不可做;不可做→該層只做「認不得就跳過」)。
+    61	
+    62	## 分階段(每階段各自過驗收才進下一階段)
+    63	
+    64	### S0 安裝層(純自家碼;預估 ≲300 行含測試)
+    65	
+    66	1. **skills**:`_install_skills` 目標從單一 `~/.claude/skills` 變成清單 `(~/.claude/skills, ~/.agents/skills)`;★對新目標:dst 若是既有真目錄(非 symlink/junction、非我方複製物)→跳過+印一行 warn,不刪★(`_link_or_copy` 的 rmtree 只保留給 `~/.claude/skills` 既有行為);`cmd_uninstall`/`_teardown_*` 對稱清兩處,且只清 symlink。明列會被連過去的是全部 8 支(5 支 lumos-*+3 支語言慣例),3 支語言慣例無 Claude 專屬工具引用、照連。
+    67	2. **hooks 註冊**:`merge-claude-settings.py` 抽出「目標檔+對照表」參數。Codex 對照表:`Edit|Write|MultiEdit`→`apply_patch`;PreToolUse `Agent`→改掛 `SubagentStart`(無 matcher);`Stop`→`Stop`;SessionStart→SessionStart。註冊命令列一律 `python3 ~/.codex/hooks/<hook>.py --harness codex`(Claude 側維持無旗標=claude)。hook 檔 copy 到 `~/.codex/hooks/`。★`_sync_global_*` 檢查合併器 returncode:非 0→印 warn+return False,呼叫端不印成功(邊界 F5)★。懸空剪除、兩階段撤除(STUB→DELETE)兩邊同規則;常數改名 `_GLOBAL_HOOKS`(保留 `_GLOBAL_CLAUDE_HOOKS` 別名給測試,架構 #1)。install 結尾印:「Codex 的 hook 要你開一次互動 `codex`,在 Hooks need review 畫面按 Trust all;exec 不會問」。
+    68	3. **AGENTS.md 區塊**:`_reinject_claude_block(root, slug, targets)`——目標清單=`[CLAUDE.md, AGENTS.override.md 若存在否則 AGENTS.md]`;四個呼叫點(`_vendor_toolchain`、`cmd_update` 來源分支、`cmd_init` 的 `_do_reinject`、Check D)訊息與比對全部目標清單化(整合 F2);剝除端 `_deinit_strip_claude` 同一清單(整合 F1)。AGENTS 檔的 absent 路徑把區塊插在第一個標題行之後(不是尾端);注意既有機制對整檔正規化 BOM/CRLF→LF(file: `scripts/lumos:10583`),AGENTS.md 也會被同樣正規化,寫進 init 訊息。doctor Check D 對每個目標各比一次;另加一行估算「git 根到本層各 AGENTS*.md 總 bytes/32768」,>75% warn。
+    69	4. **enforcement 層**:每支 Codex hook 一列(與 Claude 側 `session-entry-hook` 等同粒度,架構 #3):`codex-hook:<名>` 狀態值域 `registered-trust-unknown|inactive|unknown`(★不出 active——信任狀態本機讀不到★);`codex-skills`、`claude-skills`(對稱補,整合 F6);`agents-md`(區塊在、版本戳與 CLAUDE.md 一致、有 override 時標明寫在 override)。`shutil.which("codex")` 為 None→Codex 各層 inactive 帶「本機無 codex」。
+    70	5. **測試**:HOME+CODEX_HOME 隔離(沿用 `t_install_skills_unix`/`_sync_global_claude` 測試的 HOME 隔離寫法)驗 install→三處都在、teardown→三處都空;既有真目錄不被刪;合併器 rc 非 0 時不印成功;對照表逐條;Check D 三目標各測漂移;override 存在時寫 override。
+    71	
+    72	### S1 hook 適配(一支腳本、認形狀、由 `--harness` 旗標分支,不嗅 payload)
+    73	
+    74	| hook | Claude 下吃什麼 | Codex 下差在哪 | 適配 |
+    75	|---|---|---|---|
+    76	| lumos-entry-hook(SessionStart) | `cwd` | 同欄位 | `--harness` 只影響輸出裡的 enforcement 摘要 |
+    77	| ci-status-hook(SessionStart) | `cwd` | 同欄位 | 零改 |
+    78	| impact-hook(PreToolUse) | `tool_input.file_path` | apply_patch 的 `tool_input.command` 是 patch 全文,★沒有 file_path★ | `extract_paths` 回清單:command 以 `*** Begin Patch` 開頭→解 `*** Add File:`/`*** Update File:`/`*** Delete File:`/★`*** Move to:`★(邊界 F7)取全部路徑;★逐檔跑 impact 合併輸出(外家 F10),上限沿 cap★;TTL 冷卻、shebang、fail-open 沿用 |
+    79	| dispatch-lens-hook(Claude: PreToolUse Agent + updatedInput 改派工詞) | 派工詞裡 `LUMOS-IMPACT: <range>` | ★派工訊息對 hook 是密文,讀不到也改不了(實驗 A)★;現碼 `tool_name != "Agent"` 即返回(file: `scripts/hooks/claude/dispatch-lens-hook.py:50`) | 新增 SubagentStart 分支(`--harness codex` 時走):讀 armed 檔→`additionalContext`。armed 檔由 `lumos dispatch-lens <range> --arm --seats N` 寫:路徑 `~/.cache/lumos/dispatch-lens/armed/<key>.json`,★key=`git rev-parse --show-toplevel` 的 realpath 取 sha256,寫讀兩端共用同一支 `_lens_repo_key`(邊界 F4)★,內容=range/產生時間/repo 根/剩餘席數;TTL 10 分;每次注入 seats−1,歸零即刪;`--disarm` 立即刪。★鏡頭文字首行印「LUMOS-LENS range=<base>..<head> 第 k/N 席」讓錯席可見(外家 F11/F20、邊界 F3);承認界線:同 repo 同窗口內非審查用的子代理也會收到,靠 seats 計數與短 TTL 縮小,量不到就不宣稱消滅★。PreToolUse 攔 `collaborationspawn_agent` 攔得到但無用處,不掛 |
+    80	| check-graph-sync(Stop) | `transcript_path` 讀 Claude 逐字稿 tool_use 區塊 `input.command`/`input.file_path` | Codex 逐字稿型別不同且官方說非穩定介面 | reader 以第一行 `session_meta` 判 Codex 並讀 `cli_version`;★帶一份 0.144.1 的 fixture 逐字稿,型別對不上或版本未在 fixture 表→跳過本 session 判定並印一行「Codex 逐字稿格式未知,收工同步略過」(外家 F13)★;shell 參數非明文(S0 進場 4)→此層只做跳過 |
+    81	
+    82	S1 驗收(隔離 HOME+CODEX_HOME 真跑 `codex exec` 帶旗標,hook 命令列包一層把 stdout/stderr 落到測試暫存檔——★不發明新帳,usage-log 不是 hook 寫的(整合 F4)★):①apply_patch 改一個有合約的檔→hook stdout 含該檔合約行 ②`dispatch-lens --arm --seats 1` 後派子代理→子代理回報含「LUMOS-LENS range=」首行 ③Stop 後 check-graph-sync 對 Codex 逐字稿印出「已判/略過」其一,不炸。
+    83	
+    84	### S2 迴圈從 Codex 編排
+    85	
+    86	- 五支 lumos skill(design-loop、code-loop、project-notes、★core-knowledge、pitfalls-gapfill★)凡寫「Agent tool / model sonnet / `/skill`」處改成一行兩家:「派乾淨審查員(Claude:Agent 工具 sonnet;Codex:`spawn_agent`,派工詞點名 lumos-reviewer)」;`pitfalls-gapfill/SKILL.md` 第 27 行「用 Agent tool 派乾淨 refuter」是已知一處(整合 F5)。`$lumos-<skill>` 顯式叫法補進 INDEX。
+    87	- `~/.codex/agents/lumos-reviewer.toml`:`name`、`description`(何時用它)、`developer_instructions`(templates.md 審查員框架固定段)、`sandbox_mode="read-only"`;install 用字串範本寫出、teardown 收。
+    88	- **外家席相對化(整合 F3/通才 F3 blocker)**:`canary record`/`loop next`/`loop status` 加 `--orchestrator claude|codex`(預設 claude,舊帳不變);`_roster_family(auditor, orchestrator)` 回「同門/外家」而不是「claude/external」;`_TIER_ROSTER` 的 `external` 改讀成「非編排者家族」。Codex 編排時外家=`claude -p`。[[Systems/canary-audit]] 與 [[Systems/design-loop]] 的「外家 blocker 不得僅被同門多數推翻」不變。
+    89	- 席名沿既有 `<鏡頭>-<模型>` 慣例(file: `docs/lumos-toolchain-knowledge/Projects/收斂閘殘餘估計降級_計劃.md:65`),不另立 `ext-<家族>`;調研候選 ⑥「9 種寫法」改為在 `loop status` 印正規化建議,不改帳。
+    90	
+    91	### S3 量測(進場條件:S1 進場 4 答「明文」且 additionalContext 有落逐字稿;否則本階段只做 probe runner,recount 不做並在誠實界線記一行)
+    92	
+    93	- recount 多一個 Codex reader(路徑 `~/.codex/sessions/**`,以 `cwd` 過濾 repo,fixture 版本守衛同 S1);probe 多一個 runner(`codex exec --json`,配額另量)。
+    94	
+    95	## 擬裁定(a)–(d)的理由
+    96	
+    97	- **(a) AGENTS 檔放同一塊、不放指路;有 override 就寫 override;插檔首**:指路要模型多做一步、沒機械保證;`project_doc_fallback_filenames` 只在該層無 AGENTS*.md 時生效。重複的漂移由 reinject+Check D 兜(三端同一清單);★32 KiB 是全鏈上限、截斷靜默,Check D 管不到截斷★——所以插檔首+doctor 估總量,只降機率不消滅,誠實界線記。代價:每專案多 6.6k。
+    98	- **(b) hooks.json 不寫 config.toml**:stdlib 只有 `tomllib`(唯讀);hooks.json 官方支援、外層同形。並存規則=S0 進場 2。★但「同形」只到外層:Codex `PreToolUse` 的 `updatedInput` 文件要求同時回 `permissionDecision:"allow"`(外家 F2,未驗;本案 Codex 側不用 updatedInput,列為 S1 實作備註)★。
+    99	- **(c) armed 檔而不是改派工詞**:實驗 A 硬事實(rewrite 即「Encrypted function output content could not be decrypted」)。備選「標記寫進 AGENTS.md 讓 fork_turns=all 的子代理繼承」不可控,不取。無先例=有意識偏離(見 PRIOR-ART 缺口)。TTL 10 分+seats 計數為暫用值,沒量。
+   100	- **(d) 外家相對化到機械層**:只改散文,`_roster_family` 仍把 Codex 席判 external,Codex 編排時同門互審會被判「外家到齊」而放行——這是 code-high `required-fail-closed` 閘失效,必須動機械層。
+   101	
+   102	## 驗收(全機械;S0–S3 各自跑;總驗收=四條都綠)
+   103	
+   104	1. 隔離 HOME+CODEX_HOME 下 `lumos install` 後:`~/.agents/skills/` 8 支連結在(或 repo 層備援)、`~/.codex/hooks.json` 五支註冊且檔在且命令列含 `--harness codex`、專案 AGENTS 目標檔有區塊且版本戳等於 CLAUDE.md;`lumos enforcement --json`:codex hook 五列 `registered-trust-unknown`、skills 兩層 active、agents-md active;★另跑一次真 `codex exec`(帶旗標)冒煙,五支 hook 至少各 fire 一次(外家 F17)★。
+   105	2. 同環境 `lumos teardown` 後三處全空(檔案存在性驗,不看 rc)、enforcement 各層 inactive、`doctor` 綠;預放的既有真目錄與使用者自寫的 hooks.json 項目原樣保留。
+   106	3. S1 三條在真 `codex exec` 下各跑一次,結果留 `Verification/` 一篇。
+   107	4. 測試套件全綠、`lumos anchor verify` 綠(★錨點只罩 `dispatch-lens-hook.py` 一支,其餘四支 hook 不在 `ANCHOR_FILES`,file: `scripts/lumos:11409-11416`;本案不擴錨點清單,改動由測試罩★)、`lumos pitfalls --diff` 分級照走代碼審。
+   108	5. **互動信任冒煙(人工一次)**:真機開互動 `codex` 於 lumos 專案,按 Trust,改一檔,看 hook 輸出。REVISIT:2026-09-25 做這條;沒做完 S1 不算驗收。
+   109	
+   110	## 誠實界線
+   111	
+   112	- **hook 信任是使用者的一次手動動作**,lumos 不替按、不寫信任存放處(沒查出來在哪);enforcement 永遠只能說「已註冊」。
+   113	- **綁版本**:matcher 別名 `Agent` 不匹配、spawn message 密文、`collaborationspawn_agent` 工具名、hook 信任閘行為,都是 0.144.1 觀測;`lumos enforcement` 印 codex 版本並跟圖譜記的驗證版本比,不同就唸一句。
+   114	- **Codex 側鏡頭的位置與收件人都比 Claude 側弱**:附在子代理開場上下文而非派工詞;同 repo 同窗口的其他子代理也可能收到;首行印 range 只讓錯席可見,不消滅。鏡頭不量成效(見 [[Projects/派工鏡頭注入_計劃]])。
+   115	- **AGENTS 鏈 32 KiB 截斷靜默**,本案只降機率(插檔首+估總量)。
+   116	- **不證明 Codex 下的 lumos 比較好用**,只證六層接上了。
+   117	
+   118	## 實務隱患(逐類答)
+   119	
+   120	- **資料/狀態**:armed 檔是跨 process 共享狀態→`~/.cache/lumos/dispatch-lens/`(0700、驗 owner 沿用),TTL 10 分+seats 計數,過期即忽略;AGENTS 目標檔與 CLAUDE.md 重複→三端同一清單+Check D;`~/.agents/skills/` 是開放共用目錄→既有真目錄不刪。
+   121	- **時序/並行**:同 repo 多 session 同時 arm→後寫者勝,且非審查子代理也可能收到鏡頭——★答案:靠首行 range 可見+seats 歸零即刪+短 TTL 縮小,不宣稱消滅★(邊界 F3 指出原答「不擋任何事」不成立:錯鏡頭會誤導審查席,已改)。
+   122	- **失敗與回復**:hook 全 fail-open;hooks.json 壞→合併器 return 1,★呼叫端檢查 rc、不印成功★;Codex 未安裝→跳過並印一行;`_link_or_copy` 不對新目錄 rmtree。
+   123	- **權限/安全**:hooks.json 在使用者家目錄(同 settings.json 等級);★`--dangerously-bypass-hook-trust` 只在隔離 CODEX_HOME、hooks.json 只含 lumos 五支的測試裡用;install、日常、任何自動 loop 一律不帶(它會連使用者自己的 hook 一起免審跑,邊界 F9)★;additionalContext 沿零自由文字消毒原則。
+   124	- **相容/升級**:Codex 改版→enforcement 版本比對唸一句;逐字稿 reader 帶 fixture 版本表,認不得就跳過;兩階段撤除兩邊同套。
+   125	- **可觀測**:enforcement 每 hook 一列;harness 由 `--harness` 旗標決定,★不由 payload 欄位判(Codex 與 Claude 的 hook 輸入都有 permission_mode)★;S1 驗收用測試端包裝落檔,不新增帳。
+   126	- **已排除**:金流/對外寄送/正式環境不可逆——本案全部本機工具鏈。
+   127	
+   128	## 合約候選(過閘後蓋章走 guard scaffold→bind→audit,候選≠已標)
+   129	
+   130	- 「消毒原則對兩條通道一致」:Codex SubagentStart 通道輸出必須是 `dispatch-lens` 同一支函式的產物,不得另拼字串。
+   131	- 「install/teardown 對稱」:Codex 三處在 teardown 後必為空;既有非我方目錄與使用者自寫 hooks 項目必原樣保留。
+   132	- 「bypass 旗標只在隔離測試」:repo 內任何非測試碼不得出現 `--dangerously-bypass-hook-trust`。
+   133	
+   134	REVISIT:2026-09-25 互動模式 Codex 信任冒煙(驗收第 5 條)。
+   135	REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/probe 有無真實使用;0 筆=沒人用 Codex 開 lumos 專案,S2/S3 降優先。
+   136	
+   137	## 審計修正紀錄(lumos-design-loop)
+   138	
+   139	- r1(2026-09-04,3 席+架構+外家 Codex):47 條(20+8+7+9+3)/blocking 36(19+5+3+9+0)/全折、accepted 空(blocker 輪)。外家 20 條(12 句引句錨不到,內容仍判、不入 set;F1「message 可 rewrite」實驗 A 反證不採信;F12 部分成立),整合 8(blocker=家族判定寫死),通才 7,邊界 9(blocker=hook 信任閘、`_link_or_copy` rmtree、AGENTS.override.md),架構 3 minor+1 ⚠。席報告與重現紀錄:`governance/review-reports/Codex完全支援/r1-*.md`、`r1-intake.md`。
+
+codex
+1. r1-1 已由實驗 A 反證，不採信；r2 已正確改記為 0.144.1 實測限制。
+
+2. r1-2 已修，驗收通過。
+
+3. r1-3 已修，驗收通過。
+
+4. r1-4 已修，驗收通過。
+
+5. r1-5 已修，驗收通過。
+
+6. r1-6 已修，驗收通過。
+
+7. r1-7 已修，驗收通過。
+
+8. r1-8 已修，驗收通過。
+
+9. r1-9 已修，驗收通過。
+
+10. r1-10 已修，驗收通過。
+
+11. r1-11 已修，驗收通過。
+
+12. r1-12 部分成立部分已修：r2 正確保留文件與 0.144.1 實測衝突，並依實驗 A 放棄 rewrite。
+
+13. r1-13 已修，驗收通過。
+
+14. r1-14 已修，驗收通過。
+
+15. r1-15 已修，驗收通過。
+
+16. r1-16 已修，驗收通過。
+
+17. r1-17 已修，驗收通過。
+
+18. r1-18 已修，驗收通過。
+
+19. r1-19 已修，驗收通過。
+
+20. r1-20 已修，驗收通過。
+
+21. 文件要求在 CLI 以 `/hooks` 檢視及信任，而不是保證啟動時出現可直接按「Trust all」的畫面；且信任綁目前 hook hash，新建或變更的定義會重新待審，不能概稱一次性動作。[Codex Hooks 文件](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)  
+severity: major  
+blocking: 是  
+引句:「install 結尾印:「Codex 的 hook 要你開一次互動 `codex`,在 Hooks need review 畫面按 Trust all;exec 不會問」。」  
+file: `scripts/lumos:11057`
+
+22. `seats−1` 是跨 process 的讀－改－寫，但 spec 沒要求鎖、compare-and-swap 或原子 consume；兩個 SubagentStart 並發時可以同讀相同席數、重複注入或遺失遞減，故 seats 不能成立為可靠限額。  
+severity: major  
+blocking: 是  
+引句:「TTL 10 分;每次注入 seats−1,歸零即刪;`--disarm` 立即刪。」  
+file: `scripts/lumos:16552`
+
+23. 文件只證明 custom agent 可由名稱與描述供模型選擇，沒有保證派工詞點名一定選中；r2 又把「自訂 TOML 未試」留在地基狀態，總驗收卻未驗 `agent_type`、developer instructions 或 read-only sandbox，S2 的核心接頭仍未被驗收。[Codex Subagents 文件](https://learn.chatgpt.com/docs/agent-configuration/subagents#custom-agents)  
+severity: major  
+blocking: 是  
+引句:「自訂 agent 靠派工詞點名或 description 匹配」  
+file: `scripts/lumos:5765`
+
+24. `--orchestrator` 預設 `claude` 會讓 Codex 編排者只要漏旗標便靜默套用錯誤家族，正是本案要修的 fail-closed 缺口；舊帳相容應由帳面缺欄時補預設，不應讓新的 `record/next/status` 呼叫也默認 Claude。  
+severity: major  
+blocking: 是  
+引句:「`canary record`/`loop next`/`loop status` 加 `--orchestrator claude|codex`(預設 claude,舊帳不變)」  
+file: `scripts/lumos:5765`
+
+25. S3 的進場條件引用不存在的「S1 進場 4」，實際應為 S0 進場條件第 4 項，會讓階段閘的機械追蹤失去唯一指向。  
+severity: minor  
+blocking: 否  
+引句:「S3 量測(進場條件:S1 進場 4 答「明文」且 additionalContext 有落逐字稿」  
+file: `governance/eval/lens-utilization/recount.py:1`
+
+26. 驗收標題同時宣稱「全機械」及「四條都綠」，正文卻有五條且第 5 條明訂人工操作；終止條件應明確寫成四條機械驗收加一條人工必過閘。  
+severity: minor  
+blocking: 否  
+引句:「驗收(全機械;S0–S3 各自跑;總驗收=四條都綠)」  
+file: `scripts/lumos:10362`
+
+27. S0 進場條件：除上述 custom-agent 漏列外，已讀，無 finding。
+
+28. AGENTS.override.md、同層只取一檔及 32 KiB 全鏈限制：與文件一致；已讀，無 finding。
+
+29. AGENTS 檔首插入：定位為降低截斷機率而非消滅，已讀，無 finding。
+
+30. `--harness` 明確旗標：修正 payload 嗅探問題，已讀，無 finding。
+
+31. hooks、skills 與逐字稿其餘文件／0.144.1 區分：已讀，無 finding。
+
+最嚴重 severity: major；blocking: 是共 4 條，blocking: 否共 2 條。
+tokens used
+94,587
