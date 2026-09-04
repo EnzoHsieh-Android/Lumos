@@ -17089,6 +17089,179 @@ def _lens_contract_class(v):
     return c if c in ("INVARIANT", "IRREVERSIBLE", "RISK") else None
 
 
+# ── armed 檔(Codex 側派工鏡頭;Projects/Codex完全支援_計劃 d3,2026-09-04)──────────────────────
+# Codex 的 spawn_agent 訊息對 hook 是密文、改不了;子代理開場(SubagentStart)的 additionalContext 才到得了。
+# 所以範圍由編排者「派工前一刻」武裝:算好鏡頭文字落 ~/.cache/lumos/dispatch-lens/armed/<key>/,
+# N 個 token 檔=N 席;SubagentStart hook 叫 --claim:先驗 TTL(過期整夾刪、不回),再 os.rename 原子認領一個 token
+# (同時多個子代理不會重複扣/重複標號),認領不到不回;歸零即刪。
+# 承認界線:token 不分收件人,同 repo 同窗口的無關子代理會搶走席位——首行印 range/席次讓錯席可見,不宣稱消滅。
+_LENS_ARM_TTL_SEC = 600
+
+
+def _lens_armed_root():
+    return Path.home() / ".cache" / "lumos" / "dispatch-lens" / "armed"
+
+
+def _lens_repo_key(root):
+    """寫讀兩端同一支:repo 根 realpath 的 sha256(r1 邊界 F4:symlink/尾斜線表示法不同會對不上)。"""
+    import hashlib
+    return hashlib.sha256(str(Path(os.path.realpath(str(root)))).encode("utf-8")).hexdigest()[:32]
+
+
+def _lens_repo_root(repo):
+    start = Path(repo) if repo else Path.cwd()
+    r = _lens_git(start, "rev-parse", "--show-toplevel")
+    if r is None or r.returncode != 0 or not r.stdout.strip():
+        return None
+    return Path(r.stdout.strip())
+
+
+def _lens_arm_dir_ok(d):
+    """armed 目錄安全檢查:是目錄、owner 是自己(posix)。"""
+    try:
+        st = d.stat()
+    except OSError:
+        return False
+    if not d.is_dir():
+        return False
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+        return False
+    return True
+
+
+def cmd_dispatch_lens_arm(diff_range, repo=None, seats=1, no_cache=False):
+    """算好鏡頭文字,武裝 N 席。"""
+    import json as _json, io, contextlib, shutil, time as _time
+    root = _lens_repo_root(repo)
+    if root is None:
+        print(f"擋下:{repo or Path.cwd()} 不在 git 專案裡", file=sys.stderr)
+        return 2
+    try:
+        seats = int(seats)
+    except (TypeError, ValueError):
+        seats = 0
+    if seats < 1 or seats > 50:
+        print("擋下:--seats 要 1–50(一次代碼審派幾席就給幾;多給的當緩衝)", file=sys.stderr)
+        return 2
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cmd_dispatch_lens(diff_range, repo=str(root), as_json=True, no_cache=no_cache)
+    if rc != 0:
+        return rc
+    try:
+        data = _json.loads(buf.getvalue().strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        print("擋下:鏡頭回傳讀不懂", file=sys.stderr)
+        return 2
+    text = data.get("text") or ""
+    d = _lens_armed_root() / _lens_repo_key(root)
+    if d.exists():
+        shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    meta = {"range": diff_range, "base": data.get("base"), "head": data.get("head"), "repo": str(root),
+            "ts": _time.time(), "seats": seats, "text": text, "pinned": data.get("pinned"), "listed": data.get("listed"),
+            "fallback_status": data.get("fallback_status")}
+    (d / "meta.json").write_text(_json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    for i in range(1, seats + 1):
+        (d / f"tok-{i:02d}").write_text("", encoding="utf-8")
+    print(f"✓ 已武裝派工鏡頭:{diff_range} 共 {seats} 席,{_LENS_ARM_TTL_SEC // 60} 分內 Codex 子代理開場各領一席"
+          f"(固定席 {data.get('pinned')} 篇、列出 {data.get('listed')} 篇;0 篇時附既有相依備援段)")
+    print("  派完(或不派了)收掉:\n    lumos dispatch-lens --disarm")
+    return 0
+
+
+def cmd_dispatch_lens_claim(repo=None, as_json=False):
+    """SubagentStart hook 叫:先驗 TTL,再原子認領一席。回 JSON {text|null, reason, seat, seats, range}。"""
+    import json as _json, shutil, time as _time
+    root = _lens_repo_root(repo)
+    out = {"text": None, "reason": "not-armed", "seat": None, "seats": None, "range": None}
+    def _emit(o):
+        if as_json:
+            print(_json.dumps(o, ensure_ascii=False))
+        elif o.get("text"):
+            print(o["text"])
+        else:
+            print(f"(沒領到席:{o.get('reason')})")
+        return 0
+    if root is None:
+        out["reason"] = "not-a-repo"
+        return _emit(out)
+    d = _lens_armed_root() / _lens_repo_key(root)
+    if not _lens_arm_dir_ok(d):
+        return _emit(out)
+    try:
+        meta = _json.loads((d / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        shutil.rmtree(d, ignore_errors=True)
+        out["reason"] = "broken"
+        return _emit(out)
+    out["range"], out["seats"] = meta.get("range"), meta.get("seats")
+    if _time.time() - float(meta.get("ts") or 0) > _LENS_ARM_TTL_SEC:   # ★TTL 先於認領★(r2 邊界 N7)
+        shutil.rmtree(d, ignore_errors=True)
+        out["reason"] = "expired"
+        return _emit(out)
+    toks = sorted(p for p in d.glob("tok-*") if p.suffix != ".claimed")
+    claimed = None
+    for t in toks:
+        try:
+            os.rename(t, t.with_suffix(".claimed"))   # 原子:兩個 hook 同時來只有一個成功(r2 外家 #22/邊界 N3)
+            claimed = t
+            break
+        except OSError:
+            continue
+    if claimed is None:
+        out["reason"] = "exhausted"
+        return _emit(out)
+    remaining = len([p for p in d.glob("tok-*") if p.suffix != ".claimed"])
+    seats = int(meta.get("seats") or 0)
+    seat = seats - remaining
+    head = f"LUMOS-LENS range={meta.get('range')} 第 {seat}/{seats} 席(lumos 自動附加:派工前武裝的圖譜鏡頭;領錯席時以這行對照)"
+    out.update({"text": head + "\n" + (meta.get("text") or ""), "reason": "ok", "seat": seat})
+    if remaining == 0:
+        shutil.rmtree(d, ignore_errors=True)      # 歸零即刪
+    return _emit(out)
+
+
+def cmd_dispatch_lens_disarm(repo=None):
+    import shutil
+    root = _lens_repo_root(repo)
+    if root is None:
+        print("擋下:不在 git 專案裡", file=sys.stderr)
+        return 2
+    d = _lens_armed_root() / _lens_repo_key(root)
+    if d.is_dir():
+        shutil.rmtree(d, ignore_errors=True)
+        print("✓ 已收掉本 repo 的派工鏡頭武裝")
+    else:
+        print("(本 repo 沒有武裝中的派工鏡頭)")
+    return 0
+
+
+def cmd_dispatch_lens_status(repo=None):
+    import json as _json, time as _time
+    root = _lens_repo_root(repo)
+    if root is None:
+        print("擋下:不在 git 專案裡", file=sys.stderr)
+        return 2
+    d = _lens_armed_root() / _lens_repo_key(root)
+    if not _lens_arm_dir_ok(d):
+        print("(本 repo 沒有武裝中的派工鏡頭)")
+        return 0
+    try:
+        meta = _json.loads((d / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        print("(武裝檔壞了;lumos dispatch-lens --disarm 收掉)")
+        return 0
+    remaining = len([p for p in d.glob("tok-*") if p.suffix != ".claimed"])
+    age = int(_time.time() - float(meta.get("ts") or 0))
+    print(f"武裝中:{meta.get('range')} 剩 {remaining}/{meta.get('seats')} 席,已過 {age} 秒(TTL {_LENS_ARM_TTL_SEC} 秒,過期自動失效)")
+    return 0
+
+
 def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400):
     import json as _json
     import io, contextlib, time as _time
@@ -17743,7 +17916,7 @@ HELP_WHEN = {
     "stylelint-sarif": "把 stylelint 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
     "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
     "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
-    "dispatch-lens": "代碼審派工詞的固定席鏡頭:hook 自動叫,你要手動看內容或除錯時才敲。給 <base>..<head>,回可附進派工詞的純文字(從 base 讀、零自由文字;base 不在主線→rc4 放行)。",
+    "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀、零自由文字;base 不在主線→rc4 放行)。",
     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
     "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
     "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
@@ -18197,7 +18370,12 @@ def main():
     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
 
     p = sub.add_parser("dispatch-lens", help="代碼審派工詞的固定席鏡頭:把 <base>..<head> 碰到的合約/事故節點整理成可附進派工詞的純文字(hook 用;內容從 base 讀,零自由文字)")
-    p.add_argument("lens_range", help="diff 範圍,恰好 <base>..<head>;base 必須在主線歷史上")
+    p.add_argument("lens_range", nargs="?", help="diff 範圍,恰好 <base>..<head>;base 必須在主線歷史上(--claim/--disarm/--status 不用給)")
+    p.add_argument("--arm", dest="lens_arm", action="store_true", help="Codex 編排用:派工前一刻算好鏡頭、武裝 --seats 席(10 分內子代理開場各領一席)")
+    p.add_argument("--seats", dest="lens_seats", type=int, default=1, help="配 --arm:這次要派幾席(多給的當緩衝)")
+    p.add_argument("--claim", dest="lens_claim", action="store_true", help="SubagentStart hook 用:原子認領一席,回鏡頭文字")
+    p.add_argument("--disarm", dest="lens_disarm", action="store_true", help="收掉本 repo 的武裝")
+    p.add_argument("--status", dest="lens_status", action="store_true", help="看本 repo 武裝剩幾席")
     p.add_argument("--repo", dest="lens_repo", help="repo 內任一路徑(會自己找 repo 根)")
     p.add_argument("--json", dest="lens_json", action="store_true", help="JSON 輸出 {text,pinned,listed,omitted_nodes,omitted_files,mainline,cache_hit}")
     p.add_argument("--no-cache", dest="lens_nocache", action="store_true", help="不讀不寫 20 分鐘快取")
@@ -18393,6 +18571,17 @@ def main():
     if args.cmd == "lint-check":
         return cmd_lint_check(repo=args.lc_repo, smoke=args.lc_smoke, as_json=args.lc_json)
     if args.cmd == "dispatch-lens":
+        if args.lens_claim:
+            return cmd_dispatch_lens_claim(repo=args.lens_repo, as_json=args.lens_json)
+        if args.lens_disarm:
+            return cmd_dispatch_lens_disarm(repo=args.lens_repo)
+        if args.lens_status:
+            return cmd_dispatch_lens_status(repo=args.lens_repo)
+        if not args.lens_range:
+            print("擋下:要給 <base>..<head>(或用 --claim/--disarm/--status)", file=sys.stderr)
+            return 2
+        if args.lens_arm:
+            return cmd_dispatch_lens_arm(args.lens_range, repo=args.lens_repo, seats=args.lens_seats, no_cache=args.lens_nocache)
         return cmd_dispatch_lens(args.lens_range, repo=args.lens_repo, as_json=args.lens_json, no_cache=args.lens_nocache)
     if args.cmd == "impact":
         if sum(1 for x in (args.impact_file, args.impact_diff, args.impact_node) if x) > 1:

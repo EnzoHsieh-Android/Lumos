@@ -120,6 +120,10 @@ LUMOS-IMPACT: {base}..HEAD
       「lumos 自動附加」或「圖譜沒有釘到節點」段就知道有沒有接上。
    ② 「還有 N 篇」那個 N 會少報(非固定席上游已截成 8,真數在 `meta.free_total`)。
    ③ 審計證物(`governance/review-reports/**` 的凍結快照)已由機器剔掉,不必再手剔。
+   ④ ★Codex 當編排者時(Projects/Codex完全支援_計劃 d3,2026-09-04)★:spawn_agent 的派工訊息對 hook 是密文、改不了,
+      標記行沒用;改成派工前一刻敲 `lumos dispatch-lens --arm <base>..HEAD --seats N`(N=這輪要派幾席),
+      子代理開場(SubagentStart)由 hook 原子領一席、經 additionalContext 附上(首行 `LUMOS-LENS range=… 第 k/N 席`
+      讓錯席可見);10 分過期、領完即刪,派完 `lumos dispatch-lens --disarm`。同 repo 同窗口的無關子代理會搶席——派前一刻才 arm。
 4. {本案特定鏡頭：如 migration SQL 正確性、測試種子清理完整性、controller 錯誤映射}
 
 錨定紀律（硬性；2026-08-04 重設計）：

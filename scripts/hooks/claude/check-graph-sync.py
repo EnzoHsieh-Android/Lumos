@@ -104,14 +104,97 @@ def _is_real_user_input(obj: dict) -> bool:
     return False
 
 
+# ── Codex 逐字稿(Projects/Codex完全支援_計劃 S1)──────────────────────────────────────────
+# 官方明說逐字稿格式不是 hooks 的穩定介面;只認 fixture 過的版本,認不得就印一行、本 session 略過判定(r1 外家 F13)。
+CODEX_TRANSCRIPT_VERSIONS = {"0.144.1"}
+_CODEX_EXEC_CMD_RE = re.compile(r'"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"')
+# patch 可能直接傳字串 tools.apply_patch("…"),也可能先存變數 const patch = "…" 再呼叫(S1 驗收實看):
+# 一律掃所有含 *** Begin Patch 的 JS 字串字面值
+_CODEX_APPLY_PATCH_RE = re.compile(r'"((?:[^"\\]|\\.)*\*\*\* Begin Patch(?:[^"\\]|\\.)*)"')
+_CODEX_PATCH_HDR_RE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$")
+
+
+def _js_unescape(s: str) -> str:
+    try:
+        return json.loads('"' + s + '"')
+    except ValueError:
+        return s.replace("\\n", "\n").replace('\\"', '"')
+
+
+def _is_codex_transcript(first_obj: dict) -> bool:
+    return isinstance(first_obj, dict) and first_obj.get("type") == "session_meta"
+
+
+def collect_codex_turn_actions(lines: list[str]):
+    """Codex rollout jsonl → (file_paths, bash_commands)。型別:第一行 session_meta(讀 cli_version);
+    真實 user 輸入=event_msg/user_message;工具呼叫=response_item/custom_tool_call name=exec,input 是一段 JS:
+    `tools.exec_command({"cmd":"…"})` 取 cmd、`tools.apply_patch("…patch…")` 解 patch 標頭取檔。
+    版本不在 CODEX_TRANSCRIPT_VERSIONS → stderr 一行、回 ([], [])(略過,不猜)。"""
+    objs = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            objs.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    if not objs:
+        return [], []
+    ver = str(((objs[0].get("payload") or {}).get("cli_version")) or "")
+    # patch 標頭的路徑是相對 session cwd 的;is_code_file 要「在 project_root 之下」的絕對路徑(Claude 逐字稿本來就是絕對路徑)
+    sess_cwd = str(((objs[0].get("payload") or {}).get("cwd")) or "")
+    if ver not in CODEX_TRANSCRIPT_VERSIONS:
+        print(f"[check-graph-sync] Codex 逐字稿格式未知(cli_version={ver or '?'};認得的:{','.join(sorted(CODEX_TRANSCRIPT_VERSIONS))}),"
+              "收工同步這一輪略過——不猜格式;要接新版先補 fixture", file=sys.stderr)
+        return [], []
+    turn = []
+    for obj in reversed(objs):
+        p = obj.get("payload") or {}
+        if obj.get("type") == "event_msg" and p.get("type") == "user_message":
+            break
+        turn.append(obj)
+    turn.reverse()
+    file_paths: list[str] = []
+    bash_commands: list[str] = []
+    for obj in turn:
+        p = obj.get("payload") or {}
+        if obj.get("type") != "response_item" or p.get("type") != "custom_tool_call":
+            continue
+        inp = p.get("input")
+        if not isinstance(inp, str):
+            continue
+        for m in _CODEX_EXEC_CMD_RE.finditer(inp):
+            cmd = _js_unescape(m.group(1))
+            if cmd:
+                bash_commands.append(cmd)
+        for m in _CODEX_APPLY_PATCH_RE.finditer(inp):
+            patch = _js_unescape(m.group(1))
+            for ln in patch.split("\n"):
+                h = _CODEX_PATCH_HDR_RE.match(ln.strip())
+                if h:
+                    fp = h.group(1).strip()
+                    if sess_cwd and not Path(fp).is_absolute():
+                        fp = str(Path(sess_cwd) / fp)
+                    if fp not in file_paths:
+                        file_paths.append(fp)
+    return file_paths, bash_commands
+
+
 def collect_turn_actions(transcript_path: Path):
     """從 transcript 尾部反向掃,到最近一個「真實 user 輸入」為止
     (排除 tool_result 之類也被標 type=user 的雜訊)。
-    回傳 (file_paths, bash_commands)。
+    回傳 (file_paths, bash_commands)。Codex 逐字稿(第一行 session_meta)走 collect_codex_turn_actions。
     """
     if not transcript_path.is_file():
         return [], []
     lines = transcript_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    first = next((l for l in lines if l.strip()), "")
+    try:
+        first_obj = json.loads(first) if first else None
+    except json.JSONDecodeError:
+        first_obj = None
+    if _is_codex_transcript(first_obj):
+        return collect_codex_turn_actions(lines)
     turn_lines = []
     for line in reversed(lines):
         if not line.strip():

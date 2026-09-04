@@ -25114,5 +25114,151 @@ def t_codex_r1_reviewer_fixes():
     check("codex-F7: teardown 後 hooks.json.bak / settings.json.bak 都不在", not (home4 / ".codex" / "hooks.json.bak").exists() and not (home4 / ".claude" / "settings.json.bak").exists(), f"had_bak={had_bak}")
 
 
+# ── Codex完全支援 S1(2026-09-04,d3):hook 適配 ─────────────────────────────────────────
+def _load_hook_mod(name, fname):
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / fname)
+    loader = SourceFileLoader(name, hook_path)
+    spec = importlib.util.spec_from_loader(name, loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    return m
+
+
+def t_codex_s1_impact_apply_patch():
+    """impact-hook 吃 Codex apply_patch:tool_input.command 是 patch 全文、沒 file_path——解 Add/Update/Delete/Move to 標頭;
+    多檔最多 5 檔其餘列名;Claude 單檔路徑不變;main 多檔合併成一個 additionalContext。"""
+    import io as _io, json as _j, os as _os, tempfile as _tf
+    from unittest.mock import patch
+    m = _load_hook_mod("impact_hook_s1", "impact-hook.py")
+    patch_txt = "*** Begin Patch\n*** Add File: a.py\n+x\n*** Update File: src/b.py\n*** Move to: src/c.py\n@@\n-1\n+2\n*** Delete File: d.py\n*** Update File: docs/n.md\n*** End Patch"
+    ps = m.extract_patch_paths(patch_txt)
+    check("s1-impact: patch 標頭四種都抽到、保序去重", ps == ["a.py", "src/b.py", "src/c.py", "d.py", "docs/n.md"], str(ps))
+    check("s1-impact: 不是 patch 文字 → []", m.extract_patch_paths("echo hi") == [] and m.extract_patch_paths(None) == [], "")
+    pl = {"tool_name": "apply_patch", "tool_input": {"command": patch_txt}, "cwd": "/tmp"}
+    check("s1-impact: extract_paths 走 apply_patch 分支;extract_path 回第一個", m.extract_paths(pl) == ps and m.extract_path(pl) == "a.py", str(m.extract_paths(pl)))
+    kept, over = m.hook_decide_paths(pl)
+    check("s1-impact: hook_decide_paths 濾掉 docs/ 與非 code、其餘保留", kept == ["a.py", "src/b.py", "src/c.py", "d.py"] and over == [], f"{kept} {over}")
+    many = "*** Begin Patch\n" + "".join(f"*** Update File: f{i}.py\n@@\n-1\n+2\n" for i in range(8)) + "*** End Patch"
+    kept, over = m.hook_decide_paths({"tool_name": "apply_patch", "tool_input": {"command": many}})
+    check("s1-impact: 8 檔 → 前 5 算、後 3 列名", len(kept) == 5 and over == ["f5.py", "f6.py", "f7.py"], f"{kept} {over}")
+    check("s1-impact: Claude Edit 單檔路徑不變", m.extract_paths({"tool_name": "Edit", "tool_input": {"file_path": "x.py"}}) == ["x.py"], "")
+    # main:兩檔 patch → 兩次 subprocess、一個合併輸出;超出上限的列名附在尾
+    d = Path(_tf.mkdtemp(prefix="s1imp-")); (d / "a.py").write_text("x=1\n"); (d / "b.py").write_text("y=1\n")
+    calls = []
+    class R:
+        def __init__(self, out): self.returncode, self.stdout, self.stderr = 0, out, ""
+    def runner(cmd, *a, **k):
+        calls.append(cmd)
+        f = cmd[cmd.index("--file") + 1]
+        return R(_j.dumps({"file": f, "results": [{"node": f"Systems/{Path(f).stem}.md", "kind": "direct", "pinned": True, "score": 1.0, "contract": "INVARIANT"}], "meta": {}}))
+    two = "*** Begin Patch\n*** Update File: a.py\n@@\n-1\n+2\n*** Update File: b.py\n@@\n-1\n+2\n*** End Patch"
+    payload = {"tool_name": "apply_patch", "tool_input": {"command": two}, "cwd": str(d), "session_id": "s1-" + _os.urandom(3).hex()}
+    with patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.subprocess, "run", runner), \
+         patch.object(m, "_find_lumos_script", lambda: "/bin/true"), patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(d)}):
+        buf = _io.StringIO()
+        with patch.object(m.sys, "stdout", buf):
+            rc = m.main()
+    out = buf.getvalue()
+    check("s1-impact: main 兩檔各叫一次 impact、只印一個 hookSpecificOutput", rc == 0 and len(calls) == 2 and out.count("hookSpecificOutput") == 1, f"calls={len(calls)} out={out[:120]!r}")
+    ctx = _j.loads(out)["hookSpecificOutput"]["additionalContext"] if out.strip() else ""
+    check("s1-impact: 合併內容含兩檔的節點", "Systems/a.md" in ctx and "Systems/b.md" in ctx, ctx[:200])
+    # 8 檔 → 只叫 5 次,尾端列名
+    calls.clear()
+    eight = "*** Begin Patch\n" + "".join(f"*** Update File: g{i}.py\n@@\n-1\n+2\n" for i in range(8)) + "*** End Patch"
+    for i in range(8): (d / f"g{i}.py").write_text("z=1\n")
+    payload = {"tool_name": "apply_patch", "tool_input": {"command": eight}, "cwd": str(d), "session_id": "s1b-" + _os.urandom(3).hex()}
+    with patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.subprocess, "run", runner), \
+         patch.object(m, "_find_lumos_script", lambda: "/bin/true"), patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(d)}):
+        buf = _io.StringIO()
+        with patch.object(m.sys, "stdout", buf):
+            m.main()
+    ctx = _j.loads(buf.getvalue())["hookSpecificOutput"]["additionalContext"]
+    check("s1-impact: 8 檔只算前 5、尾端列名其餘", len(calls) == 5 and "只算了前 5 檔" in ctx and "g7.py" in ctx, ctx[-200:])
+
+
+def t_codex_s1_lens_arm_claim():
+    """dispatch-lens --arm/--claim/--disarm/--status:N 席 token 原子認領、TTL 先驗過期整夾刪、歸零即刪、
+    key=realpath;hook SubagentStart 分支經 --claim 回 additionalContext,沒武裝不回。HOME 隔離。"""
+    import json as _j, os, subprocess as _sp, hashlib
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    home = Path(tempfile.mkdtemp(prefix="gctl-s1-arm-"))
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), LUMOS_DISPATCH_LENS_NO_CACHE="1")
+    ml = _sp.run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "main@{upstream}"], capture_output=True, text=True).stdout.strip() or "main"
+    def lens(*args):
+        return _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", *args, "--repo", str(repo)], env=env, capture_output=True, text=True)
+    r = lens("--claim", "--json")
+    check("s1-arm: 沒武裝 → claim 回 not-armed、rc0", r.returncode == 0 and _j.loads(r.stdout.strip().splitlines()[-1])["reason"] == "not-armed", r.stdout[-100:] + r.stderr[-100:])
+    r = lens("--arm", f"{ml}..HEAD", "--seats", "2")
+    check("s1-arm: arm 2 席 rc0 且印席數", r.returncode == 0 and "共 2 席" in r.stdout, r.stdout[-200:] + r.stderr[-200:])
+    key = hashlib.sha256(str(Path(os.path.realpath(str(repo)))).encode()).hexdigest()[:32]
+    d = home / ".cache" / "lumos" / "dispatch-lens" / "armed" / key
+    check("s1-arm: armed 目錄=realpath key、2 個 token、meta.json", d.is_dir() and len(list(d.glob("tok-*"))) == 2 and (d / "meta.json").exists(), str(list(d.glob("*")) if d.is_dir() else "no dir"))
+    c1 = _j.loads(lens("--claim", "--json").stdout.strip().splitlines()[-1]); c2 = _j.loads(lens("--claim", "--json").stdout.strip().splitlines()[-1]); c3 = _j.loads(lens("--claim", "--json").stdout.strip().splitlines()[-1])
+    check("s1-arm: 兩次認領席次 1、2,文字首行帶 LUMOS-LENS range", c1["seat"] == 1 and c2["seat"] == 2 and c1["text"].startswith(f"LUMOS-LENS range={ml}..HEAD 第 1/2 席"), str((c1["seat"], c2["seat"], (c1["text"] or "")[:60])))
+    check("s1-arm: 第三次 → 歸零已刪,not-armed", c3["reason"] == "not-armed" and not d.exists(), str(c3))
+    # TTL 先驗:回溯 ts → expired 且整夾刪
+    lens("--arm", f"{ml}..HEAD", "--seats", "1")
+    meta = _j.loads((d / "meta.json").read_text()); meta["ts"] -= 700; (d / "meta.json").write_text(_j.dumps(meta))
+    c = _j.loads(lens("--claim", "--json").stdout.strip().splitlines()[-1])
+    check("s1-arm: 過期 → expired、整夾刪(seats 未歸零也不回)", c["reason"] == "expired" and c["text"] is None and not d.exists(), str(c))
+    # disarm / status
+    lens("--arm", f"{ml}..HEAD", "--seats", "3")
+    r = lens("--status"); check("s1-arm: status 印剩席", "剩 3/3 席" in r.stdout, r.stdout)
+    r = lens("--disarm"); check("s1-arm: disarm 刪夾", r.returncode == 0 and not d.exists(), r.stdout)
+    # 並發:5 個 claim 同時,3 席 → 恰 3 ok、席次 1..3 不重複
+    lens("--arm", f"{ml}..HEAD", "--seats", "3")
+    procs = [_sp.Popen([sys.executable, GRAPHCTL, "dispatch-lens", "--claim", "--json", "--repo", str(repo)], env=env, stdout=_sp.PIPE, text=True) for _ in range(5)]
+    outs = [_j.loads(p.communicate()[0].strip().splitlines()[-1]) for p in procs]
+    seats = sorted(o["seat"] for o in outs if o["reason"] == "ok")
+    check("s1-arm: 5 個並發認領 3 席 → 恰 3 ok 且席次 1,2,3 不重複", seats == [1, 2, 3] and sum(1 for o in outs if o["reason"] != "ok") == 2, str(outs))
+    # hook SubagentStart 分支
+    lens("--arm", f"{ml}..HEAD", "--seats", "1")
+    hook = str(repo / "scripts" / "hooks" / "claude" / "dispatch-lens-hook.py")
+    pl = _j.dumps({"hook_event_name": "SubagentStart", "session_id": "x", "cwd": str(repo), "agent_id": "a", "agent_type": "explorer"})
+    r = _sp.run([sys.executable, hook, "--harness", "codex"], input=pl, env=env, capture_output=True, text=True)
+    o = _j.loads(r.stdout.strip()) if r.stdout.strip() else {}
+    check("s1-arm: hook SubagentStart → additionalContext 帶 LUMOS-LENS 首行", o.get("hookSpecificOutput", {}).get("hookEventName") == "SubagentStart" and "LUMOS-LENS range=" in o.get("hookSpecificOutput", {}).get("additionalContext", ""), r.stdout[:200] + r.stderr[-200:])
+    r = _sp.run([sys.executable, hook, "--harness", "codex"], input=pl, env=env, capture_output=True, text=True)
+    check("s1-arm: 領完後 hook 不回任何東西", r.returncode == 0 and r.stdout.strip() == "", r.stdout[:100])
+    pl2 = _j.dumps({"hook_event_name": "PreToolUse", "tool_name": "collaborationspawn_agent", "tool_input": {"message": "gAAA"}, "cwd": str(repo)})
+    r = _sp.run([sys.executable, hook], input=pl2, env=env, capture_output=True, text=True)
+    check("s1-arm: Codex 的 PreToolUse spawn payload → 原樣放行(不回)", r.returncode == 0 and r.stdout.strip() == "", r.stdout[:100])
+
+
+def t_codex_s1_graph_sync_codex_transcript():
+    """check-graph-sync 認 Codex 逐字稿:第一行 session_meta(cli_version 在 fixture 表)→ 從最後一個 user_message 起,
+    exec 的 cmd 當 bash、apply_patch 的 patch 標頭當改檔;版本不認得 → stderr 一行、回空(略過不猜)。"""
+    import json as _j, io as _io, tempfile as _tf
+    from unittest.mock import patch
+    m = _load_hook_mod("cgs_s1", "check-graph-sync.py")
+    def line(t, payload): return _j.dumps({"timestamp": "2026-09-04T00:00:00Z", "type": t, "payload": payload}, ensure_ascii=False)
+    js_exec = 'const r = await tools.exec_command({"cmd":"python3 scripts/lumos search \\"foo\\" && sed -n \'1,3p\' a.py","workdir":"/x"}); text(r.output);\n'
+    js_patch = 'const r = await tools.apply_patch("*** Begin Patch\\n*** Update File: src/app.py\\n*** Move to: src/main.py\\n@@\\n-1\\n+2\\n*** End Patch");\ntext(r);\n'
+    lines = [line("session_meta", {"cli_version": "0.144.1", "cwd": "/x"}),
+             line("event_msg", {"type": "user_message", "message": "第一輪"}),
+             line("response_item", {"type": "custom_tool_call", "name": "exec", "input": 'const r = await tools.exec_command({"cmd":"echo old"}); text(r);'}),
+             line("event_msg", {"type": "user_message", "message": "第二輪"}),
+             line("response_item", {"type": "custom_tool_call", "name": "exec", "input": js_exec}),
+             line("response_item", {"type": "custom_tool_call", "name": "exec", "input": js_patch}),
+             line("event_msg", {"type": "agent_message", "message": "done"})]
+    d = Path(_tf.mkdtemp(prefix="cgs-cdx-")); tp = d / "rollout.jsonl"; tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    fps, cmds = m.collect_turn_actions(tp)
+    check("s1-cgs: 只取最後一輪的 exec cmd(JS 字串已反跳脫)", cmds == ['python3 scripts/lumos search "foo" && sed -n \'1,3p\' a.py'], str(cmds))
+    check("s1-cgs: apply_patch 標頭 → 改檔清單(含 Move to 新路徑;相對路徑接上 session cwd)", fps == ["/x/src/app.py", "/x/src/main.py"], str(fps))
+    check("s1-cgs: cmd 進 extract_bash_file_paths 不炸", isinstance(m.extract_bash_file_paths(cmds, Path("/x")), list), "")
+    # 版本不認得 → 略過+一行
+    lines[0] = line("session_meta", {"cli_version": "0.199.0", "cwd": "/x"}); tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    err = _io.StringIO()
+    with patch.object(m.sys, "stderr", err):
+        fps, cmds = m.collect_turn_actions(tp)
+    check("s1-cgs: 版本未在 fixture → 回空且 stderr 講略過", fps == [] and cmds == [] and "略過" in err.getvalue() and "0.199.0" in err.getvalue(), err.getvalue()[:200])
+    # Claude 逐字稿不受影響
+    cl = [_j.dumps({"type": "user", "message": {"content": "hi"}}), _j.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "z.py"}}]}})]
+    tp.write_text("\n".join(cl) + "\n", encoding="utf-8")
+    fps, cmds = m.collect_turn_actions(tp)
+    check("s1-cgs: Claude 逐字稿照舊", fps == ["z.py"], str(fps))
+
+
 if __name__ == "__main__":
     sys.exit(main())

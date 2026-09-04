@@ -84,6 +84,7 @@ verified_by:
   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
   - "[[Verification/2026-08-22_指令索引與情境探針]]"
   - "[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]"
+  - "[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]"
 about_code:
   - get.sh
   - scripts/lumos

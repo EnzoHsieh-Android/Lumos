@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -52,16 +53,47 @@ EXCLUDE_FILENAMES = {
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
 }
 
-EDIT_TOOLS = {"Edit", "Write", "MultiEdit"}
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "apply_patch"}   # apply_patch=Codex 改檔工具(Edit/Write 只是它的 matcher 別名)
+# Codex 多檔 patch:最多算前 N 檔、總時間預算(hook 外層 30 秒);既有碼沒有「處理檔數」上限(cap_* 限的是查詢字串長度)
+# ——Projects/Codex完全支援_計劃 S1(r2 通才 F2)
+APPLY_PATCH_MAX_FILES = 5
+APPLY_PATCH_BUDGET_SEC = 20.0
+_PATCH_HDR_RE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$")
+
+
+def extract_patch_paths(command: str) -> list[str]:
+    """從 Codex apply_patch 的 patch 全文抽檔案路徑:`*** Add File:` / `*** Update File:` / `*** Delete File:` /
+    `*** Move to:`(改名的新路徑,r1 邊界 F7)。去重、保序。不是 patch 文字 → []。"""
+    if not isinstance(command, str) or "*** Begin Patch" not in command:
+        return []
+    out: list[str] = []
+    for line in command.split("\n"):
+        m = _PATCH_HDR_RE.match(line.strip())
+        if m:
+            fp = m.group(1).strip()
+            if fp and fp not in out:
+                out.append(fp)
+    return out
+
+
+def extract_paths(payload: dict) -> list[str]:
+    """payload → 這次改動碰到的檔案清單。Claude(Edit/Write/MultiEdit):tool_input.file_path 一個;
+    Codex(apply_patch):tool_input.command 是 patch 全文、沒有 file_path,解標頭(可多檔)。"""
+    ti = payload.get("tool_input") or {}
+    if payload.get("tool_name") == "apply_patch":
+        return extract_patch_paths(ti.get("command", ""))
+    fp = ti.get("file_path")
+    return [fp] if fp else []
 
 
 def extract_path(payload: dict) -> str | None:
-    """從 hook payload 的 tool_input.file_path 巢狀 dict 取路徑。
+    """從 hook payload 取「第一個」路徑(相容既有呼叫/測試;多檔用 extract_paths)。
 
     r8-F9 / r9-F8 說明:file_path 在 tool_input 巢狀 dict 內,非頂層。
     MultiEdit 亦同。
     """
-    return (payload.get("tool_input") or {}).get("file_path")
+    ps = extract_paths(payload)
+    return ps[0] if ps else None
 
 
 def _is_excluded_path(file_path: str) -> bool:
@@ -111,6 +143,11 @@ def hook_decide(payload: dict, repo: str | None = None) -> str | None:
     repo 給了才做無副檔名 shebang 判定(相對路徑相對 repo 解;沒 repo 維持只看副檔名)。
     """
     file_path = extract_path(payload)
+    return _decide_one(file_path, repo)
+
+
+def _decide_one(file_path: str | None, repo: str | None = None) -> str | None:
+    """單一路徑的過濾(hook_decide 的本體;多檔逐一套用)。"""
     if not file_path:
         return None
     p = Path(file_path)
@@ -123,6 +160,12 @@ def hook_decide(payload: dict, repo: str | None = None) -> str | None:
     if _is_excluded_path(file_path):
         return None
     return file_path
+
+
+def hook_decide_paths(payload: dict, repo: str | None = None) -> tuple[list[str], list[str]]:
+    """多檔版:回 (要跑 impact 的路徑[最多 APPLY_PATCH_MAX_FILES], 超出只列名的路徑)。"""
+    kept = [fp for fp in extract_paths(payload) if _decide_one(fp, repo)]
+    return kept[:APPLY_PATCH_MAX_FILES], kept[APPLY_PATCH_MAX_FILES:]
 
 
 def _ttl_marker_path(session_id: str, file_abs: str) -> Path:
@@ -477,11 +520,40 @@ def main() -> int:
     # repo root: 優先 $CLAUDE_PROJECT_DIR,fallback payload cwd(同 check-graph-sync.py:348-355)
     # ★先算 repo 再 hook_decide★:無副檔名檔的 shebang 判定要用 repo 解相對路徑(前置修正①)
     repo = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd", "")
-    file_path = hook_decide(payload, repo=repo or None)
-    if file_path is None:
+    paths, overflow = hook_decide_paths(payload, repo=repo or None)
+    if not paths:
         return 0  # 放行:非 code 或排除路徑
     if not repo:
         return 0  # fail-open
+    lumos = _find_lumos_script()
+    if lumos is None:
+        return 0  # lumos 不在 PATH/repo → fail-open
+    # 多檔(Codex apply_patch):逐檔算、合併輸出;總預算 APPLY_PATCH_BUDGET_SEC,超預算後面的只列名
+    session_id = payload.get("session_id", "")
+    t0 = time.monotonic()
+    chunks: list[str] = []
+    skipped: list[str] = list(overflow)
+    for i, fp in enumerate(paths):
+        left = APPLY_PATCH_BUDGET_SEC - (time.monotonic() - t0)
+        if i > 0 and left < 3:
+            skipped.extend(paths[i:])
+            break
+        ctx = _impact_for_file(payload, repo, fp, session_id, lumos, timeout=min(30.0, max(3.0, left)))
+        if ctx:
+            chunks.append(ctx)
+    if skipped:
+        chunks.append("(多檔 patch 只算了前 " + str(len(paths) - len([s for s in skipped if s in paths])) + " 檔,其餘只列名:" + ",".join(skipped[:10]) + ")")
+    if not chunks or all(c.startswith("(多檔") for c in chunks):
+        return 0
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": "\n\n".join(chunks),
+    }}, ensure_ascii=False))
+    return 0
+
+
+def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, lumos: str, timeout: float = 30.0) -> str | None:
+    """單檔:TTL 冷卻窗 → 叫 lumos impact → 回可注入的文字(None=不注入)。內容與舊 main 逐字等價,只是不直接 print。"""
 
     # 絕對路徑:若 file_path 是相對路徑,補上 repo
     if not Path(file_path).is_absolute():
@@ -490,7 +562,6 @@ def main() -> int:
         file_path_abs = file_path
 
     # TTL 冷卻窗:讀 .lumos/impact.json 的 ttl_min(預設 20min)
-    session_id = payload.get("session_id", "")
     if session_id:
         ttl_min = 20  # 預設
         try:
@@ -509,12 +580,6 @@ def main() -> int:
         in_cooldown = False
         ttl_token = None
 
-    lumos = _find_lumos_script()
-    if lumos is None:
-        if session_id and not in_cooldown:
-            _ttl_unmark(session_id, file_path_abs, ttl_token)
-        return 0  # lumos 不在 PATH/repo → fail-open
-
     # v1.1(2026-07-11,goldset §6 全過後轉正):
     # 窗外 → ranked 降噪版(固定席+top-8,delta 當查詢詞);
     # 窗內 → --incidents-only 快速路(只跑事故比對——安全面每次都看,重型 BFS 降頻)。
@@ -530,12 +595,12 @@ def main() -> int:
             input=stdin_payload,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         if session_id and not in_cooldown:
             _ttl_unmark(session_id, file_path_abs, ttl_token)
-        return 0  # fail-open
+        return None  # fail-open
 
     rc = result.returncode
 
@@ -547,11 +612,11 @@ def main() -> int:
             f"[impact-hook] vault 未找到 (rc=3)。非圖譜專案或 --repo={repo} 路徑下無 docs/*-knowledge/。",
             file=sys.stderr,
         )
-        return 0
+        return None
 
     if rc != 0:
         # 其他非 0 → fail-open 純靜默
-        return 0
+        return None
 
     # rc == 0: ranked schema {file, results, meta}
     try:
@@ -561,11 +626,15 @@ def main() -> int:
     if not impact_data:
         if session_id and not in_cooldown:
             _ttl_unmark(session_id, file_path_abs, ttl_token)
-        return 0
-    injected = inject_ranked_context(impact_data)
-    if not injected and session_id and not in_cooldown:
-        _ttl_unmark(session_id, file_path_abs, ttl_token)   # 零注入不開冷卻窗(前置修正②);標記在判定當下已寫,這裡只撤
-    return 0
+        return None
+    # 判空與 inject_ranked_context 同一條:results/stack_questions/lane 皆空 → 不注入(lane-only 也注入)
+    has = impact_data.get("results") or impact_data.get("stack_questions") or impact_data.get("lane")
+    ctx = build_ranked_context(impact_data) if has else ""
+    if not ctx.strip():
+        if session_id and not in_cooldown:
+            _ttl_unmark(session_id, file_path_abs, ttl_token)   # 零注入不開冷卻窗(前置修正②);標記在判定當下已寫,這裡只撤
+        return None
+    return ctx
 
 
 if __name__ == "__main__":

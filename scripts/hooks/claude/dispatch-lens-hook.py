@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""dispatch-lens-hook — Claude Code PreToolUse(matcher Agent)薄殼(Projects/派工鏡頭注入_計劃,2026-09-03)。
+"""dispatch-lens-hook — Claude Code PreToolUse(matcher Agent)薄殼(Projects/派工鏡頭注入_計劃,2026-09-03);
+Codex 側掛 SubagentStart(Projects/Codex完全支援_計劃 d3,2026-09-04):叫 `lumos dispatch-lens --claim` 領一席 → additionalContext。
 
-只做三件事:①派工詞裡逐行找 `LUMOS-IMPACT: <base>..<head>` ②subprocess 叫 `lumos dispatch-lens`
+Claude 路徑只做三件事:①派工詞裡逐行找 `LUMOS-IMPACT: <base>..<head>` ②subprocess 叫 `lumos dispatch-lens`
 ③把回傳文字接在派工詞尾端,經 updatedInput 送給子代理(additionalContext 實測到不了子代理)。
 其餘判斷(範圍文法、base 主線可達、消毒、快取)全在 lumos 端。
 永不 deny、永不改 permissionDecision;任何失敗都原樣放行、預設靜默(LUMOS_HOOK_DEBUG=1 才印 stderr)。
@@ -42,12 +43,46 @@ def _find_lumos_script() -> str | None:
     return str(cand) if cand.is_file() else None
 
 
+def _claim_codex_seat(payload: dict) -> int:
+    """Codex 側(SubagentStart):派工訊息對 hook 是密文、改不了(實驗 A),改由 `lumos dispatch-lens --claim`
+    從派工前武裝的 armed 檔原子領一席,經 additionalContext 給子代理(實驗 5 證到得了)。
+    沒武裝/過期/領完 → 什麼都不回(lumos 端判,這裡只轉送)。"""
+    repo = payload.get("cwd", "") or os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if not repo:
+        return 0
+    lumos = _find_lumos_script()
+    if lumos is None:
+        return 0
+    try:
+        r = subprocess.run([sys.executable, lumos, "dispatch-lens", "--claim", "--repo", repo, "--json"],
+                           capture_output=True, text=True, timeout=INNER_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    if r.returncode != 0:
+        return 0
+    try:
+        data = json.loads(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return 0
+    text = data.get("text") if isinstance(data, dict) else None
+    if not text:
+        _debug(f"Codex 沒領到席({data.get('reason') if isinstance(data, dict) else '?'})")
+        return 0
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}},
+                     ensure_ascii=False))
+    return 0
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, ValueError):
         return 0
-    if not isinstance(payload, dict) or payload.get("tool_name") != "Agent":
+    if not isinstance(payload, dict):
+        return 0
+    if payload.get("hook_event_name") == "SubagentStart":
+        return _claim_codex_seat(payload)
+    if payload.get("tool_name") != "Agent":
         return 0
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):

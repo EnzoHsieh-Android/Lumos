@@ -169,7 +169,21 @@ REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/pro
 - **測試**(+6,-0,改 2):`t_codex_merge_target`/`t_codex_sync_global_tristate`/`t_codex_teardown_global`/`t_codex_skills_shared_dir`/`t_codex_reinject_agents_targets`/`t_codex_enforcement_rows`;enforcement 列數 12→21、unknown 2→10 兩測改釘值。
 - **驗收**:[[Verification/2026-09-04_Codex完全支援S0安裝層驗收]]——隔離 HOME+CODEX_HOME 真跑 `codex exec`(帶旗標)五支 hook 各 fire 一次;init 後 AGENTS/CLAUDE 各一區塊、agents-md active、Check D 兩檔綠;teardown 後三處全空、AGENTS 自有內容留。
 - **代碼審 r1(code-codex-s0,standard:單reviewer+架構+外家 Codex,2026-09-04)**:17 條(6+4+7,含 1 blocker)全折——CODEX_HOME 環境變數(`_codex_home()` 單源,合併器命令列改絕對路徑)、使用者同名 symlink 不換、strip 掃三個候選檔、merge-failed 時 install 回 2、`--target` 值域檢查、Codex 存在判準單一化(只看家目錄)、`~/.codex` 是檔案不炸(`home-not-dir` 態)、hooks.json schema 錯不炸、junction 以 realpath 認我方、teardown 收 .bak、Codex 列名改 `codex-<Claude 同名列>`、測試永真斷言改釘值+突變。卷證 `governance/review-reports/code-codex-s0/`。
-- **沒做(留 S1)**:五支 hook 對 `--harness codex` 目前只是「不讀 argv 所以無害」,行為分支(apply_patch 取檔、SubagentStart 讀 armed 檔、Codex 逐字稿 reader)全在 S1;S1 進場前先答「`Edit`/`Write` 在 Codex 是不是獨立工具」——文件說是別名,沒實測。
+- ~~沒做(留 S1)~~ → 見下節實作紀錄 S1。
+
+## 實作紀錄 S1(2026-09-04,S0 代碼審過閘後同日動工)
+
+- **進場實驗**:matcher `Edit`/`Write`/`apply_patch` 三個各自都攔到同一個 apply_patch 呼叫(tool_name 仍回 apply_patch)→ 確認是別名,合併器對照表只掛 `apply_patch` 一條不會少也不會重;改名 patch 形狀 `*** Update File: a\n*** Move to: b`。
+- **impact-hook**:`EDIT_TOOLS` 加 apply_patch;`extract_patch_paths`(Add/Update/Delete/Move to 四種標頭,去重保序)、`extract_paths`、`_decide_one`、`hook_decide_paths`(最多 `APPLY_PATCH_MAX_FILES=5`,其餘只列名);main 改多檔迴圈、總預算 `APPLY_PATCH_BUDGET_SEC=20`(hook 外層 30),逐檔 `_impact_for_file` 回文字、一次印合併的 additionalContext;Claude 單檔路徑逐字等價(既有 81 測全綠)。
+- **dispatch-lens(lumos 端,d3)**:`--arm <range> --seats N`(算好鏡頭文字落 `~/.cache/lumos/dispatch-lens/armed/<key>/meta.json`+N 個 token 檔,key=repo realpath 的 sha256 前 32 位,目錄 0700 驗 owner)、`--claim --json`(★先驗 TTL 600 秒,過期整夾刪、不回★;`os.rename` 原子認領一個 token;認領不到不回;歸零即刪;文字首行 `LUMOS-LENS range=… 第 k/N 席`)、`--disarm`、`--status`;`lens_range` 改選配。5 個並發認領 3 席實測恰 3 ok、席次不重複。
+- **dispatch-lens-hook(錨點檔,已重核可)**:payload `hook_event_name == SubagentStart` → `_claim_codex_seat`:叫 `lumos dispatch-lens --claim --repo <cwd> --json`,有文字就回 SubagentStart additionalContext;Claude 的 PreToolUse 路徑一字不動;Codex 的 PreToolUse spawn payload(tool_name 非 Agent)原樣放行。
+- **check-graph-sync**:第一行 `session_meta` 即 Codex 逐字稿 → `collect_codex_turn_actions`:`cli_version` 不在 `CODEX_TRANSCRIPT_VERSIONS={"0.144.1"}` → stderr 一行「格式未知,略過」回空(不猜);從最後一個 `event_msg/user_message` 起,`custom_tool_call name=exec` 的 input(一段 JS)抽 `"cmd":"…"` 當 bash、抽任何含 `*** Begin Patch` 的 JS 字串字面值解標頭當改檔(★實看 Codex 會先 `const patch = "…"` 再呼叫,不是直接傳字串★),相對路徑接 session_meta 的 cwd(is_code_file 要「在 repo 之下」的絕對路徑)。
+- **skill 文件**:templates.md §3 鏡頭 3 加第 ④ 條(Codex 編排:派前一刻 arm、派完 disarm)、code-loop SKILL 步驟 2 一句、commands/06 加一列。
+- **測試** +3(`t_codex_s1_impact_apply_patch`/`t_codex_s1_lens_arm_claim`/`t_codex_s1_graph_sync_codex_transcript`)。
+- **驗收**:[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]——隔離 clone+CODEX_HOME 真跑 codex exec:①apply_patch 改帶合約的檔 → hook 注入 1030 字「必看——這 9 篇帶著不能破壞的合約或出過事故」;②arm 1 席後派子代理 → 子代理原文回報 `LUMOS-LENS range=Lumos/main..HEAD 第 1/1 席`;③Stop → 用當場抓下的真 payload+逐字稿餵修正後 hook 印出「改了 1 個程式碼檔但筆記沒動」(第一次真跑沒印:安裝副本是修正前的,抓 payload 重餵才對上;變數型 patch 是那次抓到的)。
+- **沒做(留 S2/S3)**:五支 skill 的 Claude 字眼(reference/templates 全掃)、agent TOML、`--orchestrator`、席名;recount/probe。
+
+REVISIT:2026-09-25 互動 Codex 信任冒煙時一併看 SubagentStart 領席在互動模式下是否照常(本輪只驗 exec)。
 
 ## 審計修正紀錄(lumos-design-loop)
 
