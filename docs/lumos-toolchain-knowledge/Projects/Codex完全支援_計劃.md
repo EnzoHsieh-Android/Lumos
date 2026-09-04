@@ -23,7 +23,7 @@ summary: |-
   KEY:★2026-09-04 實驗 4/5 定下四個地基事實★:①未信任 repo 的 AGENTS.md 與 .agents/skills/ 都會載入 ②PreToolUse 攔得到 apply_patch(tool_input.command=patch 全文,沒有 file_path)③spawn_agent 的 message 在 hook 眼裡是加密字串→updatedInput 改派工詞這條路在 Codex 不通;matcher "Agent" 也沒攔到(工具名 collaborationspawn_agent)④SubagentStart 的 additionalContext 會到子代理手上→Codex 側派工鏡頭走這條
   KEY:r1(2026-09-04,3 席+架構+外家 Codex)47 條/blocker 6(3 席各 1–3)/全折、accepted 空;外家 F1「message 可 rewrite」被實驗 A 反證不採信;★新地基事實(實驗 C/D)★:使用者層 hook 不按一次互動 TUI 的 Trust 就不跑,exec 只能靪 --dangerously-bypass-hook-trust,信任存放處沒查出來
   KEY:r2 驗收輪 26 條全折:armed 改 token 原子認領+TTL 先驗;--orchestrator 首輪必帶無預設;reinject 檔頭/無標題/語意衝突三個邊界;skill 掃描含 reference/templates;多檔 impact 上限 5 檔 20 秒
-  KEY:S0/S1/S2 已實作(2026-09-04):S0 安裝層+S1 hook 適配+S2 編排者旗標/家族相對化/skill 兩家字句;★自訂 agent 在 exec 選不中→d5 退路=父代理唯讀+框架進派工詞★
+  KEY:S0–S3 全部實作(2026-09-04;S3=recount 讀 Codex 稿+probe --runner codex):S0 安裝層+S1 hook 適配+S2 編排者旗標/家族相對化/skill 兩家字句;★自訂 agent 在 exec 選不中→d5 退路=父代理唯讀+框架進派工詞★
   KEY:四個擬裁定(r1/r2 折入後):(a)AGENTS.md(有 AGENTS.override.md 則寫它)放同一塊 sentinel 區塊、插在檔首、reinject/剝除/Check D 三端雙檔、doctor 估 chain 總量 (b)hook 註冊寫 ~/.codex/hooks.json 不寫 config.toml(stdlib 沒 TOML 寫入器,零依賴) (c)鏡頭範圍改由 `lumos dispatch-lens <range> --arm --seats N` 落 armed 檔(repo key=realpath 的 sha256,TTL 10 分,消耗 N 次即刪,鏡頭文字首行印 range);SubagentStart hook 讀它;Claude 側標記行照舊;架構席判無先例=平台逼出的有意識偏離 (d)外家席=「不是當下編排者那一家」:記帳/問閘加 --orchestrator claude|codex(預設 claude),_roster_family 相對化;席名沿既有 <鏡頭>-<模型> 慣例
   KEY:分四階段,每階段各自驗收:S0 安裝層(skills symlink→~/.agents/skills、hooks.json 合併器、AGENTS.md 區塊、enforcement 三層、teardown 對稱)→S1 hook 適配(apply_patch 取檔、SubagentStart 鏡頭、check-graph-sync 讀 Codex 逐字稿)→S2 迴圈從 Codex 編排(自訂 agent TOML、模板去 Claude 字眼、外家互換、席名統一)→S3 量測(recount/scenario_probe 多一個 runner)
 decisions:
@@ -199,7 +199,16 @@ REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/pro
 - **測試** +1(`t_codex_s2_orchestrator`:首輪必帶/定錨一致/相對家族/舊帳相容/席名提示),舊 roster 測試字樣更新;★首輪必帶是破壞性規則★——既有 27 個 CLI 形呼叫與入口栓測試 4 個行程內呼叫都要補 `orchestrator=claude`(第一次全套 1 紅沒看清就 commit,補 commit 修;教訓:全套結果要看 failed 數不是只看 exit code)。
 - **代碼審 r1(code-codex-s2,standard:單reviewer+架構+外家 Codex,2026-09-04)**:23 條(6+7+10,4 條重疊)全折——disposal_cmd 也帶旗標、舊帳(沒欄)在 loop next 與 record 兩端都擋非 claude(不回溯改分家)、帳面兩筆不同編排者 loop next 擋/roster 報矛盾、`--orchestrator` 沒 `--loop` 擋、`loop next` 改用 `_loop_records(strict=True)`(讀帳單源)、`LOOP_ORCHESTRATORS` 命名對齊、JSON roster 加 `relative_family`/`orchestrator`、席名提示每名一次、skill 四處改「不能逐席指定模型」、reference.md 凍結段還原、SKILL 級註記指向 templates.md §3 ④ 單源、計劃 d4 文字改成實作語意。卷證 `governance/review-reports/code-codex-s2/`。
 - **驗收**:[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]。
-- **沒做(留 S3)**:recount 多 Codex reader、probe runner。
+- ~~沒做(留 S3)~~ → 見下節。
+
+## 實作紀錄 S3(2026-09-04,S2 代碼審過閘、8 個 commit 推上遠端後動工)
+
+- **進場條件**:S0 進場 4 答「shell 參數明文」;本輪再驗「hook 的 additionalContext 有沒有落逐字稿」→ 有:記成 `response_item/message role=developer`(主代理稿「必看——」、子代理稿「LUMOS-LENS」),S1 驗收那四份稿 grep 到 9 處。
+- **recount.py**:`scan_codex_file`——`session_meta.cwd` 篩 repo、`cli_version` fixture 守衛、developer 訊息辨識、錨=同輪最近 apply_patch 呼叫(前後都找)+目標檔、`classify_bash` 同一支判讀(含 lumos show/context 的詞對 stem)、子代理稿 LUMOS-LENS 行;`--codex-sessions` 旗標;rows 加 `harness`,summary 加 `by_harness`/`codex_lens_rows`/`codex_files`。真跑:本機 `~/.codex/sessions` 346 份稿、本 repo 0 筆 Codex 行(今天真機的 Codex session 都是唯讀審查,沒 apply_patch);隔離驗收目錄 4 筆(3 筆 apply_patch 全錨到、目標檔皆 `scripts/merge-claude-settings.py`、9 篇釘住、注入後都沒讀=0/3;1 筆子代理鏡頭)。
+- **scenario_probe.py**:`--runner codex` → `run_one_codex`(`codex exec --json --sandbox workspace-write -C <沙盒>`,LUMOS_PROBE=1,★不帶 bypass 旗標★——探針測的是「會不會自己敲 lumos」不靠 hook);`tool_calls_from_codex_json` 解 `item.completed` 的 command_execution(剝 zsh -lc 單/雙引號外殼)/file_change/agent_message;結果多 `harness`,`limit_hit` 恆 False(Codex 側沒對應訊號)。真跑 `--only s03-query-status`:通過,34 秒,第一動作是讀 skill 檔、第二動作就敲 `lumos query --tag status/doing`。
+- **測試** +2(`t_codex_s3_recount_codex`、`t_codex_s3_probe_codex_parser`)。
+- **驗收**:[[Verification/2026-09-04_Codex完全支援S3量測驗收]]。
+- **沒做**:Codex 側的 probe 用量/速率上限偵測(沒對應訊號,遇到再補);子代理鏡頭「有沒有讀」(子代理稿沒有釘住清單可對,只計筆數)。
 
 REVISIT:2026-09-25 互動 Codex 信任冒煙時一併看 SubagentStart 領席在互動模式下是否照常(本輪只驗 exec)。
 

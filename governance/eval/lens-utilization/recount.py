@@ -14,6 +14,30 @@ import argparse, collections, glob, json, os, re, subprocess, sys
 from pathlib import Path
 
 HOOKS = {"PreToolUse:Edit", "PreToolUse:Write", "PreToolUse:MultiEdit"}
+# ── Codex 逐字稿(Projects/Codex完全支援_計劃 S3,2026-09-04)──
+# ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl;第一行 session_meta(cwd、cli_version、source=exec|{"subagent":…});
+# hook 的 additionalContext 記成 response_item/message role=developer(impact-hook 的「必看——」在主代理稿;
+# SubagentStart 的「LUMOS-LENS range=」在子代理稿);沒有 toolUseID 可對,錨=同一輪內下一個 custom_tool_call
+# (input 含 tools.apply_patch)——是啟發式,rows 標 harness=codex 讓讀表的人分得開。
+CODEX_TRANSCRIPT_VERSIONS = {"0.144.1"}
+_CX_CMD_RE = re.compile(r'(?<![\w$])["\']?cmd["\']?\s*:\s*"((?:[^"\\]|\\.)*)"')
+_CX_PATCH_RE = re.compile(r'"((?:[^"\\]|\\.)*\*\*\* Begin Patch(?:[^"\\]|\\.)*)"')
+_CX_HDR_RE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$")
+LENS_HDR = re.compile(r"^LUMOS-LENS range=(\S+) 第 (\d+)/(\d+) 席")
+
+
+def _cx_unescape(x: str) -> str:
+    try:
+        return json.loads('"' + x + '"')
+    except ValueError:
+        return x.replace("\\n", "\n").replace('\\"', '"')
+
+
+def _cx_text(p: dict) -> str:
+    c = p.get("content")
+    if isinstance(c, list):
+        return "\n".join(str(it.get("text", "")) for it in c if isinstance(it, dict))
+    return str(c or p.get("message") or "")
 
 
 def _load_hook_helpers():
@@ -173,6 +197,8 @@ def classify_bash(cmd: str, slug: str) -> tuple[set[str], set[str], set[str], se
             if j >= len(st):
                 continue
             verb = os.path.basename(st[j]); args = st[j + 1:]
+            if verb in ("python", "python3") and args and os.path.basename(args[0]).endswith("lumos"):   # `python3 scripts/lumos …`(Codex 稿常見;S3)
+                j += 1; verb = os.path.basename(st[j]); args = st[j + 1:]
             target = strict if (idx == 0 and not complex_cmd) else loose   # 子殼內/複合指令的讀=啟發式
             if verb == "sed" and any(a == "-i" or a.startswith("-i") for a in args):
                 for a in args:
@@ -191,9 +217,130 @@ def classify_bash(cmd: str, slug: str) -> tuple[set[str], set[str], set[str], se
                 terms = [a for a in raw[raw.index(sub) + 1:] if not a.startswith("-")] if sub in raw else [a for a in args[1:] if not a.startswith("-")]
                 if sub in LUMOS_CMDS:
                     lumos_terms.update(terms); lumos_terms.add("".join(terms))
+                    for t2 in terms:   # 帶路徑的節點名(Systems/a.md、Systems/a)也對到 stem(S3;Claude 稿多用裸名,Codex 稿實看帶路徑)
+                        base = t2.rsplit("/", 1)[-1]
+                        lumos_terms.add(base[:-3] if base.endswith(".md") else base)
                 elif sub == "search":
                     search_terms.update(terms); search_terms.update(w for t2 in terms for w in t2.split())
     return strict, loose, wrote, lumos_terms, search_terms
+
+
+def scan_codex_file(path: Path, slug: str, repo_set: set[str]):
+    """Codex rollout → rows(同 scan_file 的欄位,多 harness=codex)。版本不在 fixture 表 → 跳過並回 (rows, bad, skipped=True)。"""
+    rows = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return rows, 0
+    objs, bad = [], 0
+    for ln in lines:
+        if not ln.strip():
+            continue
+        try:
+            objs.append(json.loads(ln))
+        except Exception:
+            bad += 1
+    if not objs or objs[0].get("type") != "session_meta":
+        return rows, bad
+    meta = objs[0].get("payload") or {}
+    if str(meta.get("cli_version") or "") not in CODEX_TRANSCRIPT_VERSIONS:
+        return rows, bad
+    cwd = str(Path(str(meta.get("cwd") or "")).resolve()) if meta.get("cwd") else ""
+    if not cwd or not any(cwd == r or cwd.startswith(r + "/") for r in repo_set):
+        return rows, bad
+    is_sub = meta.get("thread_source") == "subagent" or isinstance(meta.get("source"), dict)
+    sid = meta.get("session_id") or meta.get("id")
+    for idx, o in enumerate(objs):
+        p = o.get("payload") or {}
+        if o.get("type") != "response_item" or p.get("type") != "message" or p.get("role") != "developer":
+            continue
+        txt = _cx_text(p)
+        first = txt.split("\n", 1)[0].strip()
+        lens = LENS_HDR.match(first)
+        if lens:
+            rows.append({"session_id": sid, "is_subagent": is_sub, "harness": "codex", "hook_name": "SubagentStart:dispatch-lens",
+                         "header_version": "lens", "file": "", "n_pinned": 0, "pinned_complete": True, "anchored": True, "ftype": "repo",
+                         "lens_range": lens.group(1), "lens_seat": f"{lens.group(2)}/{lens.group(3)}",
+                         "touched": [], "touched_loose": [], "pre_touched": [], "wrote_back": [], "search_touched": [], "any": False, "any_loose": False})
+            continue
+        if not (HDR_OLD.match(first) or HDR_NEW.match(first)):
+            continue
+        ver, pins, complete = parse_pins(txt)
+        # 錨=同輪內離注入最近的 apply_patch 呼叫(先往後找,沒有再往前找——0.144.1 實看兩種順序都有);
+        # 目標檔=其 patch 標頭第一個路徑;同輪內找不到 apply_patch → 退而取最近的任一 custom_tool_call(anchored 仍 True 但 file 空)
+        def _is_boundary(o2):
+            q2 = o2.get("payload") or {}
+            return (o2.get("type") == "event_msg" and q2.get("type") == "user_message") or \
+                   (o2.get("type") == "response_item" and q2.get("type") == "message" and q2.get("role") == "user")
+        def _patch_target(q2):
+            inp2 = q2.get("input") if isinstance(q2.get("input"), str) else ""
+            for m in _CX_PATCH_RE.finditer(inp2):
+                for ln2 in _cx_unescape(m.group(1)).split("\n"):
+                    h = _CX_HDR_RE.match(ln2.strip())
+                    if h:
+                        return h.group(1).strip()
+            return ""
+        anchor, target, fallback = None, "", None
+        for direction in (1, -1):
+            j = idx + direction
+            while 0 <= j < len(objs) and not _is_boundary(objs[j]):
+                q = objs[j].get("payload") or {}
+                if objs[j].get("type") == "response_item" and q.get("type") == "custom_tool_call":
+                    t = _patch_target(q)
+                    if t:
+                        anchor, target = j, t
+                        break
+                    if fallback is None:
+                        fallback = j
+                j += direction
+            if anchor is not None:
+                break
+        if anchor is None and fallback is not None:
+            anchor = fallback
+        ftype = "scratch" if ("/scratchpad/" in target or "/tmp/" in target) else ("repo" if target else "unknown")
+        row = {"session_id": sid, "is_subagent": is_sub, "harness": "codex", "hook_name": "PreToolUse:apply_patch",
+               "header_version": ver, "file": target, "n_pinned": len(pins), "pinned_complete": complete,
+               "anchored": anchor is not None, "ftype": ftype, "touched": [], "touched_loose": [], "pre_touched": [], "wrote_back": [], "search_touched": []}
+        if anchor is not None and pins:
+            pinset = set(pins); stems = {}
+            for pth in pins:
+                stems.setdefault(pth.rsplit("/", 1)[-1][:-3], []).append(pth)
+            row["ambiguous"] = []
+            for j, o2 in enumerate(objs):
+                q = o2.get("payload") or {}
+                if o2.get("type") != "response_item" or q.get("type") != "custom_tool_call":
+                    continue
+                inp = q.get("input") if isinstance(q.get("input"), str) else ""
+                for m in _CX_CMD_RE.finditer(inp):
+                    cmd = _cx_unescape(m.group(1))
+                    hit_read, hit_loose, hit_write, terms, sterms = classify_bash(cmd, slug)
+                    for t in terms:   # lumos show/context/contracts <詞> → 對到釘住節點(同 scan_file:單一 stem 才算命中)
+                        if t in stems:
+                            if len(stems[t]) == 1:
+                                hit_read.add(stems[t][0])
+                            else:
+                                for pth in stems[t]:
+                                    if pth not in row["ambiguous"]:
+                                        row["ambiguous"].append(pth)
+                    bucket = row["touched"] if j > anchor else row["pre_touched"]
+                    for n in sorted(hit_read & pinset):
+                        if n not in bucket:
+                            bucket.append(n)
+                    if j > anchor:
+                        for n in sorted(hit_loose & pinset):
+                            if n not in row["touched_loose"]:
+                                row["touched_loose"].append(n)
+                        for n in sorted(hit_write & pinset):
+                            if n not in row["wrote_back"]:
+                                row["wrote_back"].append(n)
+                        for t in sterms:
+                            for st, plist in stems.items():
+                                for pth in plist:
+                                    if t and t in st and pth not in row["search_touched"]:
+                                        row["search_touched"].append(pth)
+        row["any"] = bool(row["touched"]); row["any_loose"] = bool(row["touched"] or row["touched_loose"])
+        rows.append(row)
+    return rows, bad
 
 
 def scan_file(path: Path, slug: str, repo_set: set[str]):
@@ -282,6 +429,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--repo", required=True); ap.add_argument("--projects", default=os.path.expanduser("~/.claude/projects"))
     ap.add_argument("--json", action="store_true"); ap.add_argument("--out")
+    ap.add_argument("--codex-sessions", default=os.path.join(os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"), "sessions"),
+                    help="Codex rollout 逐字稿根目錄(預設 $CODEX_HOME/sessions 或 ~/.codex/sessions;不存在就只讀 Claude)")
     a = ap.parse_args()
     repo = Path(a.repo).resolve(); slug = vault_slug(repo)
     if not slug:
@@ -294,11 +443,23 @@ def main() -> int:
             r, b = scan_file(Path(f), slug, repo_set); rows.extend(r); bad += b
         except Exception as e:   # 一份壞逐字稿不能讓整份報表死掉(同 recount.py 慣例:壞資料跳過並計數)
             broken += 1; print(f"跳過 {f}: {type(e).__name__}", file=sys.stderr)
+    for r in rows:
+        r.setdefault("harness", "claude")
+    cx_files = glob.glob(os.path.join(a.codex_sessions, "**", "rollout-*.jsonl"), recursive=True) if os.path.isdir(a.codex_sessions) else []
+    for f in cx_files:
+        try:
+            r, b = scan_codex_file(Path(f), slug, repo_set); rows.extend(r); bad += b
+        except Exception as e:
+            broken += 1; print(f"跳過 {f}: {type(e).__name__}", file=sys.stderr)
+    files = files + cx_files
     C = collections.Counter
     denom = [r for r in rows if r["n_pinned"] > 0 and r["ftype"] != "scratch" and r["anchored"]]
     rep = {
         "files_scanned": len(files), "bad_lines": bad, "broken_files": broken, "pushes_total": len(rows),
         "by_role": dict(C("sub" if r["is_subagent"] else "main" for r in rows)),
+        "by_harness": dict(C(r.get("harness", "claude") for r in rows)),
+        "codex_lens_rows": sum(1 for r in rows if r.get("hook_name") == "SubagentStart:dispatch-lens"),
+        "codex_files": len(cx_files),
         "by_header": dict(C(r["header_version"] for r in rows)),
         "empty_pinned": sum(1 for r in rows if r["n_pinned"] == 0), "unanchored": sum(1 for r in rows if not r["anchored"]),
         "scratch_or_outside": sum(1 for r in rows if r["ftype"] == "scratch"), "pinned_incomplete": sum(1 for r in rows if not r["pinned_complete"]),

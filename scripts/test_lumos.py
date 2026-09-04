@@ -25401,5 +25401,73 @@ def t_codex_s2_r1_fixes():
     check("s2-r1④: --orchestrator 沒 --loop → rc2", r.returncode == 2 and "--loop" in r.stderr, r.stderr[-200:])
 
 
+# ── Codex完全支援 S3(2026-09-04):量測讀 Codex ────────────────────────────────────────
+def t_codex_s3_recount_codex():
+    """recount.py 讀 Codex rollout:session_meta cwd 篩 repo、版本不在表跳過、developer 訊息「必看——」列成 PreToolUse:apply_patch 行、
+    錨=同輪最近的 apply_patch 呼叫(前後都找)且抓目標檔、注入後 exec 的 lumos show <釘住節點> 算 touched、注入前的算 pre_touched、
+    子代理稿的 LUMOS-LENS 列成 SubagentStart:dispatch-lens 行;Claude 行 harness 預設 claude。"""
+    import importlib.util, json as _j, os, subprocess as _sp, tempfile as _tf
+    from importlib.machinery import SourceFileLoader
+    path = str(Path(__file__).resolve().parent.parent / "governance" / "eval" / "lens-utilization" / "recount.py")
+    loader = SourceFileLoader("lens_recount_cx", path); spec = importlib.util.spec_from_loader("lens_recount_cx", loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    repo = Path(_tf.mkdtemp(prefix="cx-recount-")); (repo / "docs" / "t-knowledge" / "Systems").mkdir(parents=True)
+    (repo / "docs" / "t-knowledge" / "Systems" / "a.md").write_text("# a\n"); (repo / "docs" / "t-knowledge" / "Systems" / "b.md").write_text("# b\n")
+    _sp.run(["git", "-C", str(repo), "init", "-q"], capture_output=True)
+    slug = "t-knowledge"; repo_set = m.repo_paths(repo)
+    def line(t, payload): return _j.dumps({"timestamp": "t", "type": t, "payload": payload}, ensure_ascii=False)
+    def call(js): return line("response_item", {"type": "custom_tool_call", "name": "exec", "input": js})
+    hdr = "必看——這 2 篇帶著不能破壞的合約或出過事故:\n  直接 ★INVARIANT★ Systems/a.md\n  hop1 ★INVARIANT★ Systems/b.md"
+    dev = line("response_item", {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": hdr}]})
+    lines = [line("session_meta", {"cli_version": "0.144.1", "cwd": str(repo), "source": "exec", "thread_source": "user", "session_id": "S1"}),
+             line("event_msg", {"type": "user_message", "message": "go"}),
+             call('const r = await tools.exec_command({cmd:"python3 scripts/lumos show Systems/b.md"});'),   # 注入前 → pre_touched
+             call('const patch = "*** Begin Patch\\n*** Update File: src/x.py\\n@@\\n-1\\n+2\\n*** End Patch";\nconst r = await tools.apply_patch(patch);'),
+             dev,   # 注入記在呼叫之後(實看兩種順序都有)
+             call('const r = await tools.exec_command({"cmd":"python3 scripts/lumos show Systems/a.md"});')]   # 注入後 → touched
+    d = Path(_tf.mkdtemp(prefix="cx-sess-")); f = d / "rollout-x.jsonl"; f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    rows, bad = m.scan_codex_file(f, slug, repo_set)
+    check("s3-recount: 一列 apply_patch 行、harness=codex、pins 2", len(rows) == 1 and rows[0]["harness"] == "codex" and rows[0]["n_pinned"] == 2 and rows[0]["hook_name"] == "PreToolUse:apply_patch", str(rows)[:300])
+    r0 = rows[0] if rows else {}
+    check("s3-recount: 錨到注入前的 apply_patch 呼叫且抓到目標檔 src/x.py", r0.get("anchored") is True and r0.get("file") == "src/x.py", str(r0)[:300])
+    check("s3-recount: 注入後 lumos show a.md → touched;注入前 show b.md → pre_touched", r0.get("touched") == ["Systems/a.md"] and r0.get("pre_touched") == ["Systems/b.md"] and r0.get("any") is True, str(r0)[:300])
+    # 版本不在表 → 空
+    f.write_text("\n".join([line("session_meta", {"cli_version": "0.1.0", "cwd": str(repo)})] + lines[1:]) + "\n", encoding="utf-8")
+    check("s3-recount: 版本不在 fixture 表 → 0 列", m.scan_codex_file(f, slug, repo_set)[0] == [], "")
+    # cwd 不在 repo → 空
+    f.write_text("\n".join([line("session_meta", {"cli_version": "0.144.1", "cwd": "/nowhere"})] + lines[1:]) + "\n", encoding="utf-8")
+    check("s3-recount: cwd 不在 repo → 0 列", m.scan_codex_file(f, slug, repo_set)[0] == [], "")
+    # 子代理稿 LUMOS-LENS
+    sub = [line("session_meta", {"cli_version": "0.144.1", "cwd": str(repo), "source": {"subagent": {"thread_spawn": {}}}, "thread_source": "subagent", "session_id": "S2"}),
+           line("response_item", {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "LUMOS-LENS range=main..HEAD 第 1/2 席(…)\nlumos 自動附加:…"}]})]
+    f.write_text("\n".join(sub) + "\n", encoding="utf-8")
+    rows, _ = m.scan_codex_file(f, slug, repo_set)
+    check("s3-recount: 子代理稿 LUMOS-LENS → SubagentStart:dispatch-lens 行,is_subagent、席次 1/2", len(rows) == 1 and rows[0]["hook_name"] == "SubagentStart:dispatch-lens" and rows[0]["is_subagent"] and rows[0]["lens_seat"] == "1/2", str(rows)[:200])
+
+
+def t_codex_s3_probe_codex_parser():
+    """scenario_probe 的 codex exec --json 解析:command_execution 剝 zsh -lc 外殼、file_change → Edit、agent_message 當最終答案;
+    lumos_stats 對剝殼後的指令認得「敲 lumos」;runner 名 codex 走 run_one_codex(不帶 bypass 旗標)。"""
+    import importlib.util, json as _j, inspect
+    from importlib.machinery import SourceFileLoader
+    path = str(Path(__file__).resolve().parent / "scenario_probe.py")
+    loader = SourceFileLoader("probe_cx", path); spec = importlib.util.spec_from_loader("probe_cx", loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    ev = [_j.dumps({"type": "item.started", "item": {"id": "i1", "type": "command_execution", "command": "/bin/zsh -lc 'python3 scripts/lumos search \"foo\"'"}}),
+          _j.dumps({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "/bin/zsh -lc 'python3 scripts/lumos search \"foo\"'", "exit_code": 0}}),
+          _j.dumps({"type": "item.completed", "item": {"id": "i2", "type": "file_change", "changes": [{"path": "/x/a.py", "kind": "update"}]}}),
+          _j.dumps({"type": "item.completed", "item": {"id": "i3", "type": "agent_message", "text": "done 42"}}),
+          "not json"]
+    calls, final = m.tool_calls_from_codex_json(ev)
+    check("s3-probe: 解析 command_execution(剝殼)/file_change/agent_message", calls == [("Bash", 'python3 scripts/lumos search "foo"'), ("Edit", "/x/a.py")] and final == "done 42", str(calls) + final)
+    check("s3-probe: 只認 item.completed(started 不重複)", len(calls) == 2, str(calls))
+    ever, idx = m.lumos_stats(calls)
+    check("s3-probe: 剝殼後 lumos_stats 認得敲 lumos(第 0 個)", ever and idx == 0, f"{ever} {idx}")
+    src = inspect.getsource(m.run_one_codex)
+    check("s3-probe: codex runner 的命令列不帶 --dangerously-bypass-hook-trust、環境帶 LUMOS_PROBE", '"--dangerously-bypass-hook-trust"' not in src and 'LUMOS_PROBE' in src, "")
+    calls2, _ = m.tool_calls_from_codex_json([_j.dumps({"type": "item.completed", "item": {"id": "i9", "type": "command_execution", "command": "/bin/zsh -lc \"sed -n '1,3p' a.md\""}})])
+    check("s3-probe: 雙引號外殼也剝", calls2 == [("Bash", "sed -n '1,3p' a.md")], str(calls2))
+
+
 if __name__ == "__main__":
     sys.exit(main())

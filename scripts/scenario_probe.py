@@ -24,6 +24,34 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def tool_calls_from_codex_json(lines):
+    """codex exec --json → [(tool_name, 摘要字串)] 依時間序(Projects/Codex完全支援_計劃 S3)。
+    只認 item.completed:command_execution→("Bash", 指令全文,剝掉 /bin/zsh -lc '…' 外殼);file_change→("Edit", 路徑串);
+    回 (calls, final_text)。事件形狀在 0.144.1 實看,改版要重驗。"""
+    calls, final = [], ""
+    for ln in lines:
+        ln = ln.strip()
+        if not ln.startswith("{"):
+            continue
+        try:
+            ev = json.loads(ln)
+        except Exception:
+            continue
+        if ev.get("type") != "item.completed":
+            continue
+        it = ev.get("item") or {}
+        t = it.get("type")
+        if t == "command_execution":
+            cmd = str(it.get("command", ""))
+            m = re.match(r"^\S*(?:zsh|bash|sh) -lc (['\"])(.*)\1$", cmd, re.S)   # 0.144.1 實看單、雙引號外殼都有
+            calls.append(("Bash", (m.group(2).replace("'\\''", "'") if m.group(1) == "'" else m.group(2).replace('\\"', '"')) if m else cmd))
+        elif t == "file_change":
+            calls.append(("Edit", " ".join(str(c.get("path", "")) for c in (it.get("changes") or []) if isinstance(c, dict))[:200]))
+        elif t == "agent_message":
+            final = str(it.get("text") or "")
+    return calls, final
+
+
 def tool_calls_from_stream(lines):
     """stream-json → [(tool_name, 摘要字串)] 依時間序。"""
     calls = []
@@ -200,6 +228,44 @@ def _validate_scenario(sc):
     return None
 
 
+def run_one_codex(sc, workdir, timeout, model, arm="with"):
+    """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
+    不帶 --dangerously-bypass-hook-trust(探針測的是「會不會自己敲 lumos」,不靠 hook;要測 hook 另開)。
+    模型由 codex 設定決定(-m 可覆寫);用量上限偵測 Codex 側沒對應訊號,limit_hit 恆 False 並在 result_subtype 標 codex。"""
+    bad = _validate_scenario(sc)
+    if bad:
+        return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False, "reason": f"儀器例外: {bad}", "first_tool": None,
+                "n_calls": 0, "calls": [], "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
+    cmd = ["codex", "exec", "--json", "--sandbox", "workspace-write", "-C", str(workdir)]
+    if model:
+        cmd += ["-m", model]
+    cmd.append(sc["prompt"])
+    env = dict(os.environ); env["LUMOS_PROBE"] = "1"
+    if arm == "without":
+        env["LUMOS_ENTRY_HOOK_OFF"] = "1"
+    t0 = time.time()
+    try:
+        r = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
+        out, err = r.stdout, r.stderr[-400:]
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        err = "timeout"
+    calls, final = tool_calls_from_codex_json(out.splitlines())
+    ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
+    answer_content_ok = None
+    if sc.get("answer_expect"):
+        miss_a = [e for e in sc["answer_expect"] if not re.search(e, final or "", re.I)]
+        answer_content_ok = not miss_a
+        if ok and not answer_content_ok:
+            ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
+    ever, first_idx = lumos_stats(calls)
+    return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
+            "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+            "answer": (final or "")[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+            "answer_content_ok": answer_content_ok, "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
+
+
 def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
     bad = _validate_scenario(sc)
     if bad:
@@ -301,6 +367,8 @@ def main():
     # ── 修法 A ablation 兩個旗標(預設值=改前行為)──
     ap.add_argument("--runs", type=int, default=1,
                     help="每題重跑幾次(預設 1)。同一題這次過下次不過是常態,不重跑就分不出規矩效果與運氣")
+    ap.add_argument("--runner", choices=["claude", "codex"], default="claude",
+                    help="被測的 harness:claude=claude -p(預設);codex=codex exec --json(S3;模型由 codex 設定決定,-m 可覆寫)")
     ap.add_argument("--arm", choices=["with", "without"], default="with",
                     help="with=現況;without=沙盒 CLAUDE.md 砍「第一個工具呼叫」小節+入口 hook 靜默(見 Projects/修法A_lumos先行ablation_計劃)")
     ap.add_argument("--wait-on-limit", type=int, default=0,
@@ -343,7 +411,8 @@ def main():
             for k in range(1, a.runs + 1):
                 while True:
                     try:
-                        res = run_one(sc, work, a.max_turns, a.timeout, a.model, a.arm)
+                        res = (run_one_codex(sc, work, a.timeout, a.model, a.arm) if a.runner == "codex"
+                               else run_one(sc, work, a.max_turns, a.timeout, a.model, a.arm))
                     except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
                                "reason": f"儀器例外: {type(e).__name__}: {e}", "first_tool": None,
