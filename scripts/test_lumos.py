@@ -24652,6 +24652,10 @@ def t_impact_hook_shebang_and_ttl_mark():
     m._ttl_mark(sid, f)
     check("ttl-split: _ttl_mark 後進冷卻窗", marker.exists() and m._ttl_should_inject(sid, f, ttl_sec=1200, mark=False) is False)
     check("ttl-split: 預設 mark=True 舊行為保留(判定+寫一體)", m._ttl_should_inject("ttl-old-" + sid, f, ttl_sec=1200) is True and m._ttl_marker_path("ttl-old-" + sid, f).exists())
+    sid2 = "ttl-own-" + _os.urandom(3).hex(); tok = m._ttl_mark(sid2, f); mk2 = m._ttl_marker_path(sid2, f)
+    m._ttl_unmark(sid2, f, "not-my-token"); check("ttl-own: token 不符不撤(別人的冷卻窗)", mk2.exists())
+    m._ttl_unmark(sid2, f, tok); check("ttl-own: 自己的 token 才撤", not mk2.exists())
+    tok3 = m._ttl_mark(sid2, f); m._ttl_unmark(sid2, f, None); check("ttl-own: token=None 無條件撤(相容)", not mk2.exists(), str(tok3))
 
 def t_impact_hook_main_ttl_wiring():
     """code-loop r1 通才席:main() 把「判定→呼叫 lumos→注入/不注入→標記留/撤」接起來的行為沒測。mock subprocess 走兩條路。"""
@@ -24677,6 +24681,24 @@ def t_impact_hook_main_ttl_wiring():
     check("main 接線: 零注入 → rc0、無輸出、★不留冷卻標記★", rc == 0 and out.strip() == "" and not marked, f"rc={rc} out={out[:80]!r} marked={marked}")
     rc, out, marked = run_main("wire-hit-" + _os.urandom(3).hex(), _j.dumps({"results": [{"node": "Systems/x.md", "kind": "direct", "pinned": True, "score": 0.9, "contract": "INVARIANT"}], "stack_questions": [], "lane": []}))
     check("main 接線: 有注入 → 印 hookSpecificOutput 且★留冷卻標記★", rc == 0 and "hookSpecificOutput" in out and marked, f"rc={rc} out={out[:80]!r} marked={marked}")
+    class R3(R):
+        def __init__(self, rc, out=""): self.returncode, self.stdout, self.stderr = rc, out, ""
+    def run_main2(sid, runner):
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": "a.py"}, "cwd": str(d), "session_id": sid}
+        with patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.subprocess, "run", runner), \
+             patch.object(m, "_find_lumos_script", lambda: "/bin/true"), patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(d)}):
+            with patch.object(m.sys, "stdout", _io.StringIO()), patch.object(m.sys, "stderr", _io.StringIO()):
+                rc = m.main()
+        return rc, m._ttl_marker_path(sid, str(d / "a.py")).exists()
+    def boom(*a, **k): raise m.subprocess.TimeoutExpired("lumos", 30)
+    for name, runner in (("rc3 vault 缺", lambda *a, **k: R3(3)), ("rc1 其他失敗", lambda *a, **k: R3(1)), ("stdout 讀不懂", lambda *a, **k: R3(0, "not json")), ("subprocess 超時", boom)):
+        rc, marked = run_main2("wire-exit-" + _os.urandom(3).hex(), runner)
+        check(f"main 接線 出口[{name}]: rc0 且★不留冷卻標記★", rc == 0 and not marked, f"rc={rc} marked={marked}")
+    sid = "wire-nolumos-" + _os.urandom(3).hex()
+    payload = {"tool_name": "Edit", "tool_input": {"file_path": "a.py"}, "cwd": str(d), "session_id": sid}
+    with patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m, "_find_lumos_script", lambda: None), patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(d)}):
+        rc = m.main()
+    check("main 接線 出口[lumos 不在]: rc0 且不留冷卻標記", rc == 0 and not m._ttl_marker_path(sid, str(d / "a.py")).exists())
 
 
 def t_lens_recount_classify():
@@ -24700,6 +24722,28 @@ def t_lens_recount_classify():
     check("recount: 新標頭+事故行(無 TAG)都解到", ver == "new" and pins == ["Systems/lumos-cli-lifecycle.md", "Issues/canary-record未落盤事件.md"] and ok, f"{ver} {pins} {ok}")
     ver, pins, ok = m.parse_pins(["必看(合約/事故固定席 1):\n  hop1 ★INVARIANT★ Systems/有 空白 的.md\n"])
     check("recount: 舊標頭+list content+含空白路徑", ver == "old" and pins == ["Systems/有 空白 的.md"] and ok, f"{ver} {pins}")
+    r, w, l, s = m.classify_bash(f'git commit -m "看 {N} > 之前的版本"', slug); check("recount: 引號內的 > 不算寫回(r2 s1)", not w and not r, f"{r} {w}")
+    r, w, l, s = m.classify_bash(f"grep x <<< \"$(cat {N})\"", slug); check("recount: <<< 不是 heredoc,cat 仍算讀", "Systems/a.md" in r, f"{r} {w}")
+    r, w, l, s = m.classify_bash(f"echo \"unbalanced; cat {N}", slug); check("recount: 不成對引號不靜默消失(退回正規式切詞)", "Systems/a.md" in r, f"{r} {w}")
+    r, w, l, s = m.classify_bash(f"X=$(cat {N}); echo $X", slug); check("recount: $(…) 括號黏 token 仍認得路徑", "Systems/a.md" in r, f"{r} {w}")
+    N2 = "docs/t-knowledge/Systems/b.md"
+    hd3 = f"python3 - <<'PY'\nfrom pathlib import Path\na=Path('{N}'); b=Path('{N2}')\nt=a.read_text()\nb.write_text(t)\nPY"
+    r, w, l, s = m.classify_bash(hd3, slug); check("recount: 相鄰兩路徑不互相沾染(a 讀、b 寫)", r == {"Systems/a.md"} and w == {"Systems/b.md"}, f"{r} {w}")
+    r, w, l, s = m.classify_bash(f"python3 -c \"from pathlib import Path; Path('{N}').write_text('x')\"", slug); check("recount: python -c 單行 write_text=寫回", w == {"Systems/a.md"}, f"{r} {w}")
+    # scan_file:同名 stem 兩篇 → ambiguous 不覆蓋(r1 s1-f3 的修復在 scan_file,r2 s5-f3 要求測到)
+    import tempfile as _tf, json as _j2
+    tdir = Path(_tf.mkdtemp(prefix="lensscan-")); tf = tdir / "s.jsonl"
+    repo = Path(_tf.mkdtemp(prefix="lensrepo-")); (repo / "docs" / "t-knowledge" / "Systems").mkdir(parents=True); (repo / "docs" / "t-knowledge" / "Projects").mkdir()
+    lines = [
+        {"type": "assistant", "cwd": str(repo), "sessionId": "S", "message": {"content": [{"type": "tool_use", "id": "tu1", "name": "Edit", "input": {"file_path": str(repo / "a.py")}}]}},
+        {"type": "user", "cwd": str(repo), "sessionId": "S", "attachment": {"type": "hook_additional_context", "hookName": "PreToolUse:Edit", "toolUseID": "tu1", "content": ["必看——這 2 篇帶著不能破壞的合約或出過事故:\n  直接 ★INVARIANT★ Systems/x.md\n  hop1 ★INVARIANT★ Projects/x.md\n"]}},
+        {"type": "assistant", "cwd": str(repo), "sessionId": "S", "message": {"content": [{"type": "tool_use", "id": "tu2", "name": "Bash", "input": {"command": "lumos context x"}}]}},
+        {"type": "assistant", "cwd": str(repo), "sessionId": "S", "message": {"content": [{"type": "tool_use", "id": "tu3", "name": "Read", "input": {"file_path": str(repo / "docs/t-knowledge/Systems/x.md")}}]}},
+    ]
+    tf.write_text("\n".join(_j2.dumps(x, ensure_ascii=False) for x in lines) + "\n", encoding="utf-8")
+    rows, bad = m.scan_file(tf, "t-knowledge", {str(repo.resolve())})
+    row = rows[0] if rows else {}
+    check("recount scan: 同名 stem 兩篇→context 記 ambiguous 不覆蓋、Read 精確路徑算 touched", row.get("n_pinned") == 2 and sorted(row.get("ambiguous", [])) == ["Projects/x.md", "Systems/x.md"] and row.get("touched") == ["Systems/x.md"] and row.get("any") is True, str(row)[:300])
 
 
 

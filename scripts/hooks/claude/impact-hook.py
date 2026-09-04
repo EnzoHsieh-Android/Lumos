@@ -148,32 +148,42 @@ def _ttl_lazy_cleanup() -> None:
         pass
 
 
-def _ttl_unmark(session_id: str, file_abs: str) -> None:
-    """撤冷卻標記:判定當下已先寫標記(窗口不變寬,code-loop r1 併發/正確性席),最後沒注入就撤——零注入的 Edit 不開冷卻窗(前置修正②)。"""
+def _ttl_unmark(session_id: str, file_abs: str, token: str | None = None) -> None:
+    """撤冷卻標記:判定當下已先寫(窗口不變寬,code-loop r1),最後沒注入就撤——零注入的 Edit 不開冷卻窗(前置修正②)。
+    ★只撤自己寫的★:標記內容為「<ts> <token>」,token 不符就不動(code-loop r2 併發席:無條件 unlink 會抹掉另一次判定剛建立的合法冷卻窗)。"""
+    marker = _ttl_marker_path(session_id, file_abs)
     try:
-        _ttl_marker_path(session_id, file_abs).unlink()
+        if token is not None:
+            parts = marker.read_text(encoding="utf-8").split()
+            if len(parts) < 2 or parts[1] != token:
+                return
+        marker.unlink()
     except OSError:
         pass
 
 
-def _ttl_mark(session_id: str, file_abs: str) -> None:
-    """寫冷卻標記(★只在真的注入之後叫★——前置修正②:原本呼叫 lumos 之前就寫,一次零注入的 Edit 也開 20 分鐘冷卻窗)。"""
+def _ttl_mark(session_id: str, file_abs: str) -> str | None:
+    """寫冷卻標記,回擁有權 token(pid+隨機);內容「<ts> <token>」,舊讀取端只取第一欄。失敗回 None(best-effort)。"""
+    import os as _os
     _ttl_lazy_cleanup()
     marker = _ttl_marker_path(session_id, file_abs)
+    token = f"{_os.getpid()}-{_os.urandom(3).hex()}"
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(str(time.time()), encoding="utf-8")
+        marker.write_text(f"{time.time()} {token}", encoding="utf-8")
+        return token
     except OSError:
-        pass  # best-effort
+        return None
 
 
 def _ttl_should_inject(session_id: str, file_abs: str, ttl_sec: float, mark: bool = True) -> bool:
     """判定是否在 TTL 冷卻窗內。
 
-    首次或距上次注入 >= ttl_sec → True(應注入),並更新標記檔。
+    首次或距上次注入 >= ttl_sec → True(應注入);mark=True 時順手寫標記(舊語意),
+    main 走 mark=False 再自己 _ttl_mark 取 token、沒注入用 token 撤(2026-09-04)。
     距上次注入 < ttl_sec → False(冷卻中,壓掉)。
 
-    標記檔內容 = time.time() Unix float (單一數字)。
+    標記檔內容 = 「<time.time()> <token>」(舊格式只有數字,讀取端相容)。
     不用 mtime(避免 touch/rsync 誤動)。
 
     Args:
@@ -194,7 +204,7 @@ def _ttl_should_inject(session_id: str, file_abs: str, ttl_sec: float, mark: boo
     if marker.exists():
         try:
             content = marker.read_text(encoding="utf-8").strip()
-            last_ts = float(content)
+            last_ts = float(content.split()[0])   # 內容「<ts> <token>」(r2 併發席);舊格式只有 ts 也相容
             if now - last_ts < ttl_sec:
                 return False  # 冷卻窗內,壓掉
         except (ValueError, OSError):
@@ -492,14 +502,16 @@ def main() -> int:
         except (OSError, json.JSONDecodeError, ValueError):
             pass
 
-        in_cooldown = not _ttl_should_inject(session_id, file_path_abs, ttl_sec=ttl_min * 60)   # 判定即寫標記(窗口不變寬);沒注入再撤
+        in_cooldown = not _ttl_should_inject(session_id, file_path_abs, ttl_sec=ttl_min * 60, mark=False)
+        ttl_token = _ttl_mark(session_id, file_path_abs) if not in_cooldown else None   # 判定後立刻寫(窗口同舊版);沒注入再用 token 撤
     else:
         in_cooldown = False
+        ttl_token = None
 
     lumos = _find_lumos_script()
     if lumos is None:
         if session_id and not in_cooldown:
-            _ttl_unmark(session_id, file_path_abs)
+            _ttl_unmark(session_id, file_path_abs, ttl_token)
         return 0  # lumos 不在 PATH/repo → fail-open
 
     # v1.1(2026-07-11,goldset §6 全過後轉正):
@@ -521,13 +533,13 @@ def main() -> int:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         if session_id and not in_cooldown:
-            _ttl_unmark(session_id, file_path_abs)
+            _ttl_unmark(session_id, file_path_abs, ttl_token)
         return 0  # fail-open
 
     rc = result.returncode
 
     if rc != 0 and session_id and not in_cooldown:
-        _ttl_unmark(session_id, file_path_abs)   # 沒注入不開冷卻窗
+        _ttl_unmark(session_id, file_path_abs, ttl_token)   # 沒注入不開冷卻窗
     if rc == 3:
         # vault 找不到 → 印一行 debug,不注入,放行
         print(
@@ -547,11 +559,11 @@ def main() -> int:
         impact_data = None
     if not impact_data:
         if session_id and not in_cooldown:
-            _ttl_unmark(session_id, file_path_abs)
+            _ttl_unmark(session_id, file_path_abs, ttl_token)
         return 0
     injected = inject_ranked_context(impact_data)
     if not injected and session_id and not in_cooldown:
-        _ttl_unmark(session_id, file_path_abs)   # 零注入不開冷卻窗(前置修正②);標記在判定當下已寫,這裡只撤
+        _ttl_unmark(session_id, file_path_abs, ttl_token)   # 零注入不開冷卻窗(前置修正②);標記在判定當下已寫,這裡只撤
     return 0
 
 

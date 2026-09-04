@@ -28,8 +28,50 @@ def _load_hook_helpers():
 
 
 _segment_command, _tokens_of, _find_graph_root = _load_hook_helpers()
-REDIRECT_RE = re.compile(r">>?\s*(\S+)")
-HEREDOC_RE = re.compile(r"<<-?\s*['\"]?\w+")
+REDIRECT_RE = re.compile(r"(?<![<>&\d])>>?\s*([^\s>&|;]+)")   # 不吃 2>&1、>/dev/null 另擋、不吃 <<
+HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)-?\s*['\"]?\w+")           # 排除 <<<(here-string)
+QUOTED_RE = re.compile(r"\"(?:\\.|[^\"\\])*\"|'[^']*'")
+SCRIPT_HINTS = ("read_text", "write_text", "open(")
+
+
+def _strip_quoted(s: str) -> str:
+    """把引號內字串挖掉(留空白佔位),重導向/切段只看殼層語法,不看字串內容(code-loop r2 s1:commit message 提到路徑旁有 > 被誤判)。"""
+    return QUOTED_RE.sub(lambda m: " " * len(m.group(0)), s)
+
+
+def _safe_tokens(seg: str) -> list:
+    """沿用 check-graph-sync 的切詞;shlex 對不成對引號會拋 ValueError→退回正規式切詞,★不得整段靜默消失★(r2 s3);去掉黏住的 () $。"""
+    seg = seg.replace("$(", " ").replace("`", " ").replace(")", " ")   # 子殼/指令替換的括號先拆開,免得黏進 token(r2 s3)
+    try:
+        toks = _tokens_of(seg)
+    except ValueError:
+        toks = TOKEN_RE.findall(seg)
+    return [x.strip("()$") for x in toks if x.strip("()$")]
+
+
+def _script_marks(text: str, slug: str) -> tuple[set[str], set[str]]:
+    """腳本文字(heredoc 或 python -c)裡每個筆記路徑:同一行或它被賦給的變數後續 .read_text/.write_text/open(var) 決定讀/寫。
+    不用固定行數視窗(r2 s5:相鄰兩路徑互相沾染)。"""
+    read, wrote = set(), set()
+    lines = text.split("\n")
+    for k, ln in enumerate(lines):
+        for tok in TOKEN_RE.findall(ln):
+            n = norm_note(tok, slug)
+            if not n:
+                continue
+            scopes = [ln]
+            m = re.search(r"(\w+)\s*=\s*(?:Path|pathlib\.Path|open)?\(?['\"]?[^'\"]*" + re.escape(tok.strip("'\"`,;:")), ln)
+            var = m.group(1) if m else None
+            if var:
+                for ln2 in lines[k + 1:]:
+                    if re.search(r"\b" + re.escape(var) + r"\.(read_text|write_text|open)\b|open\(\s*" + re.escape(var) + r"\b", ln2):
+                        scopes.append(ln2)
+            joined = "\n".join(scopes)
+            if "read_text" in joined or re.search(r"open\([^)]*['\"]r['\"]", joined) or (re.search(r"open\(", joined) and ".read" in joined):
+                read.add(n)
+            if "write_text" in joined or re.search(r"open\([^)]*['\"][wa]['\"]", joined):
+                wrote.add(n)
+    return read, wrote
 HDR_OLD = re.compile(r"^必看\(合約/事故固定席 (\d+)\):")
 HDR_NEW = re.compile(r"^必看——這 (\d+) 篇")
 PIN_LINE = re.compile(r"^\s+\S+(?:\s+★[^★]+★)?\s+(.+?\.md)(?:\s|$)")   # 事故行沒有 ★TAG★;節點路徑可含空白(非貪婪到 .md)
@@ -89,33 +131,22 @@ def parse_pins(content) -> tuple[str, list[str], bool]:
 
 def classify_bash(cmd: str, slug: str) -> tuple[set[str], set[str], set[str], set[str]]:
     """回 (讀到的節點, 寫回的節點, lumos context/show/contracts 的詞, search 的詞)。
-    寫回=重導向到筆記 / sed -i / heredoc 腳本裡該路徑附近有 write_text;讀=讀動詞帶筆記路徑 / 腳本裡該路徑附近有 read_text|open。
-    純拼字串提到路徑(commit message 之類)兩者都不算。切段/切詞沿用 check-graph-sync。"""
+    寫回=重導向到筆記(引號外) / sed -i / 腳本裡該路徑(或其變數)有 write_text|open 'w';讀=讀動詞帶筆記路徑 / 腳本裡有 read_text|open 'r'。
+    純拼字串提到路徑(commit message 之類)兩者都不算。切段/切詞沿用 check-graph-sync,shlex 失敗退回正規式。"""
     import shlex
     read, wrote, lumos_terms, search_terms = set(), set(), set(), set()
-    if HEREDOC_RE.search(cmd):
-        lines = cmd.split("\n")
-        for k, ln in enumerate(lines):
-            for tok in TOKEN_RE.findall(ln):
-                n = norm_note(tok, slug)
-                if not n:
-                    continue
-                window = "\n".join(lines[k:k + 4])
-                if "read_text" in window or "open(" in window and (".read" in window or "'r'" in window or '"r"' in window):
-                    read.add(n)
-                if "write_text" in window or "open(" in window and ("'w'" in window or '"w"' in window or "'a'" in window or '"a"' in window):
-                    wrote.add(n)
-                for m in REDIRECT_RE.finditer(ln):
-                    n2 = norm_note(m.group(1), slug)
-                    if n2:
-                        wrote.add(n2)
+    if HEREDOC_RE.search(cmd) or (re.search(r"\bpython3?\b.*\s-c\s", cmd) and any(h in cmd for h in SCRIPT_HINTS)):
+        r2, w2 = _script_marks(cmd, slug); read |= r2; wrote |= w2
+        for m in REDIRECT_RE.finditer(_strip_quoted(cmd.split("\n")[0])):   # heredoc 第一行的殼層重導向
+            n2 = norm_note(m.group(1), slug)
+            if n2: wrote.add(n2)
         return read, wrote, lumos_terms, search_terms
     for seg in _segment_command(cmd):
-        for m in REDIRECT_RE.finditer(seg):
+        bare = _strip_quoted(seg)
+        for m in REDIRECT_RE.finditer(bare):
             n2 = norm_note(m.group(1), slug)
-            if n2:
-                wrote.add(n2)
-        st = _tokens_of(seg)
+            if n2: wrote.add(n2)
+        st = _safe_tokens(seg)
         if not st:
             continue
         j = 0
