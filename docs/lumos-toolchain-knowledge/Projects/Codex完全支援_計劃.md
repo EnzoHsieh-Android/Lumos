@@ -25,6 +25,31 @@ summary: |-
   KEY:r2 驗收輪 26 條全折:armed 改 token 原子認領+TTL 先驗;--orchestrator 首輪必帶無預設;reinject 檔頭/無標題/語意衝突三個邊界;skill 掃描含 reference/templates;多檔 impact 上限 5 檔 20 秒
   KEY:四個擬裁定(r1/r2 折入後):(a)AGENTS.md(有 AGENTS.override.md 則寫它)放同一塊 sentinel 區塊、插在檔首、reinject/剝除/Check D 三端雙檔、doctor 估 chain 總量 (b)hook 註冊寫 ~/.codex/hooks.json 不寫 config.toml(stdlib 沒 TOML 寫入器,零依賴) (c)鏡頭範圍改由 `lumos dispatch-lens <range> --arm --seats N` 落 armed 檔(repo key=realpath 的 sha256,TTL 10 分,消耗 N 次即刪,鏡頭文字首行印 range);SubagentStart hook 讀它;Claude 側標記行照舊;架構席判無先例=平台逼出的有意識偏離 (d)外家席=「不是當下編排者那一家」:記帳/問閘加 --orchestrator claude|codex(預設 claude),_roster_family 相對化;席名沿既有 <鏡頭>-<模型> 慣例
   KEY:分四階段,每階段各自驗收:S0 安裝層(skills symlink→~/.agents/skills、hooks.json 合併器、AGENTS.md 區塊、enforcement 三層、teardown 對稱)→S1 hook 適配(apply_patch 取檔、SubagentStart 鏡頭、check-graph-sync 讀 Codex 逐字稿)→S2 迴圈從 Codex 編排(自訂 agent TOML、模板去 Claude 字眼、外家互換、席名統一)→S3 量測(recount/scenario_probe 多一個 runner)
+decisions:
+  - content: AGENTS 檔放同一塊 sentinel 紀律區塊(該層有 AGENTS.override.md 就寫 override,否則 AGENTS.md),插在檔首;reinject/剝除/Check D 三端共用同一份目標清單;doctor 估每層生效檔總量/32KiB >75% warn。不用指路、不用 project_doc_fallback_filenames
+    id: d1
+    context: Codex 不讀 CLAUDE.md;指路要模型多做一步沒機械保證;fallback 檔名只在該層無 AGENTS*.md 時生效;32KiB 為整鏈上限且截斷靜默
+    why_chosen: 重複兩檔的漂移由既有 reinject+Check D 機械兜住;截斷只能降機率不消滅,誠實界線記
+    decided: 2026-09-04
+    valid: true
+  - content: Codex hook 註冊寫 ~/.codex/hooks.json、不解析不改寫 config.toml;hook 命令列帶 --harness codex 明確旗標,不由 payload 欄位判家族;合併器抽目標參數,失敗回三態 merge-failed
+    id: d2
+    context: stdlib 只有 tomllib 唯讀;hooks.json 外層與 Claude settings 同形;Codex 與 Claude 的 hook 輸入都有 permission_mode 欄位,靠欄位判不可靠;現碼呼叫端把 False 寫死成探針訊息
+    why_chosen: 零新依賴;明確旗標不會因兩家 payload 趨同而失準;三態避免壞 JSON 印假成功
+    decided: 2026-09-04
+    valid: true
+  - content: Codex 側派工鏡頭走 SubagentStart additionalContext;範圍由 lumos dispatch-lens <range> --arm --seats N 落 armed 目錄(key=repo realpath 的 sha256,TTL 10 分,N 個 token 檔原子認領,先驗 TTL 再認領,任一不成立即不回);Claude 側 PreToolUse+標記行照舊。列為有意識偏離(無先例)
+    id: d3
+    context: 實驗 A:spawn_agent 的 message 在 hook 眼裡是密文,回 updatedInput 換明文即 Encrypted function output content could not be decrypted;matcher Agent 不匹配;實驗 5:SubagentStart additionalContext 到子代理
+    why_chosen: 平台限制逼出的唯一可用通道;token 原子認領解重複扣減、TTL 先驗解過期誤注入;餓死與錯席承認為界線,REVISIT 2026-10-04
+    decided: 2026-09-04
+    valid: true
+  - content: 外家席相對化到機械層:loop next 首輪必帶 --orchestrator claude|codex(比照 --tier,持久化到帳,不給新呼叫預設;舊帳缺欄視為 claude),record/status 讀帳缺=擋;_roster_family 改回同門/外家;席名沿 <鏡頭>-<模型> 慣例。Codex 編排時外家=claude -p
+    id: d4
+    context: _ROSTER_EXTERNAL_KEYS/_ROSTER_CLAUDE_KEYS 靜態關鍵字表無編排者參數;席位對帳是 advisory 觀測、不進合取,失準會讓人放行同門互審
+    why_chosen: 跨家族席原則(canary-audit/design-loop)不變,只把 Codex 從常數變變數;預設 claude 會讓 Codex 編排漏旗標時靜默套錯家族
+    decided: 2026-09-04
+    valid: true
 ---
 # Codex完全支援_計劃
 
