@@ -24623,6 +24623,36 @@ def t_dispatch_lens_bound_status_noconfig():
     check("lens v1.1 fail-open: 整批不加格、印「略」行、bound_status=skipped-no-config", "[綁定測試:" not in text and "裸合約" not in text and "綁定測試狀態:略" in text and data.get("bound_status") == "skipped-no-config", f"{data.get('bound_status')}\n{text[:800]}")
     check("lens v1.1 fail-open: 例外訊息一個字都不印", "default_platform" not in text and "設定" not in text.replace("平台設定讀不到", ""), text[:800])
 
+def t_impact_hook_shebang_and_ttl_mark():
+    """主session鏡頭利用率_計劃 前置修正:①無副檔名檔靠 shebang 入樣(先解絕對路徑、安全讀首行、二進位/不存在不算)
+    ②TTL 判定與寫標記拆開(mark=False 不寫;_ttl_mark 才寫)。"""
+    import importlib.util, tempfile as _tf, os as _os
+    from importlib.machinery import SourceFileLoader
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_shebang", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_shebang", loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    d = Path(_tf.mkdtemp(prefix="hookshe-"))
+    (d / "scripts").mkdir(); (d / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nprint(1)\n", encoding="utf-8")
+    (d / "scripts" / "pre-push").write_text("#!/usr/bin/env bash\necho\n", encoding="utf-8")
+    (d / "scripts" / "blob").write_bytes(b"\x00\x01\x02binary")
+    (d / "scripts" / "notes").write_text("just text\n", encoding="utf-8")
+    hd = m.hook_decide
+    check("shebang: 無 repo 參數 → 舊行為(無副檔名不算 code)", hd({"tool_input": {"file_path": "scripts/lumos"}}) is None)
+    check("shebang: python shebang 相對路徑+repo → 算 code", hd({"tool_input": {"file_path": "scripts/lumos"}}, repo=str(d)) == "scripts/lumos")
+    check("shebang: bash shebang → 算 code", hd({"tool_input": {"file_path": "scripts/pre-push"}}, repo=str(d)) is not None)
+    check("shebang: 二進位無副檔名 → 不算、不炸", hd({"tool_input": {"file_path": "scripts/blob"}}, repo=str(d)) is None)
+    check("shebang: 純文字無 shebang → 不算", hd({"tool_input": {"file_path": "scripts/notes"}}, repo=str(d)) is None)
+    check("shebang: 不存在檔(Write 新檔) → 不算、不炸", hd({"tool_input": {"file_path": "scripts/newfile"}}, repo=str(d)) is None)
+    check("shebang: 副檔名 .py 照舊", hd({"tool_input": {"file_path": "a.py"}}, repo=str(d)) == "a.py")
+    sid = "ttl-split-" + _os.urandom(3).hex(); f = str(d / "x.py")
+    marker = m._ttl_marker_path(sid, f)
+    check("ttl-split: mark=False 判定為應注入且不留標記", m._ttl_should_inject(sid, f, ttl_sec=1200, mark=False) is True and not marker.exists(), str(marker))
+    check("ttl-split: 再判一次仍應注入(沒被自己壓掉)", m._ttl_should_inject(sid, f, ttl_sec=1200, mark=False) is True)
+    m._ttl_mark(sid, f)
+    check("ttl-split: _ttl_mark 後進冷卻窗", marker.exists() and m._ttl_should_inject(sid, f, ttl_sec=1200, mark=False) is False)
+    check("ttl-split: 預設 mark=True 舊行為保留(判定+寫一體)", m._ttl_should_inject("ttl-old-" + sid, f, ttl_sec=1200) is True and m._ttl_marker_path("ttl-old-" + sid, f).exists())
+
 
 
 if __name__ == "__main__":

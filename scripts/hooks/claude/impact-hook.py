@@ -81,7 +81,26 @@ def _is_excluded_path(file_path: str) -> bool:
     return False
 
 
-def hook_decide(payload: dict) -> str | None:
+_SHEBANG_HINTS = (b"python", b"bash", b"/sh", b"env sh", b"zsh")
+
+
+def _shebang_is_code(abs_path: Path) -> bool:
+    """無副檔名檔靠首行 shebang 入樣(主session鏡頭利用率_計劃 前置修正①:scripts/lumos、git hooks 原本永不入樣)。
+    只讀前 128 bytes、包 try/except:二進位/不存在/讀不到 → False,現役 fail-open hook 不得因此炸。"""
+    try:
+        if not abs_path.is_file():
+            return False
+        with open(abs_path, "rb") as fh:
+            head = fh.read(128)
+    except OSError:
+        return False
+    if not head.startswith(b"#!"):
+        return False
+    first = head.split(b"\n", 1)[0]
+    return any(h in first for h in _SHEBANG_HINTS)
+
+
+def hook_decide(payload: dict, repo: str | None = None) -> str | None:
     """過濾邏輯:決定是否對此 payload 觸發 lumos impact。
 
     回傳:
@@ -89,13 +108,18 @@ def hook_decide(payload: dict) -> str | None:
       str    → 要送給 lumos impact 的 file_path(非空字串)
 
     此函式設計為可獨立 import 測試(不依賴 stdin/subprocess)。
+    repo 給了才做無副檔名 shebang 判定(相對路徑相對 repo 解;沒 repo 維持只看副檔名)。
     """
     file_path = extract_path(payload)
     if not file_path:
         return None
     p = Path(file_path)
     if p.suffix.lower() not in CODE_EXTS:
-        return None
+        if not (p.suffix == "" and repo):
+            return None
+        abs_path = p if p.is_absolute() else Path(repo) / p
+        if not _shebang_is_code(abs_path):
+            return None
     if _is_excluded_path(file_path):
         return None
     return file_path
@@ -124,7 +148,18 @@ def _ttl_lazy_cleanup() -> None:
         pass
 
 
-def _ttl_should_inject(session_id: str, file_abs: str, ttl_sec: float) -> bool:
+def _ttl_mark(session_id: str, file_abs: str) -> None:
+    """寫冷卻標記(★只在真的注入之後叫★——前置修正②:原本呼叫 lumos 之前就寫,一次零注入的 Edit 也開 20 分鐘冷卻窗)。"""
+    _ttl_lazy_cleanup()
+    marker = _ttl_marker_path(session_id, file_abs)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        pass  # best-effort
+
+
+def _ttl_should_inject(session_id: str, file_abs: str, ttl_sec: float, mark: bool = True) -> bool:
     """判定是否在 TTL 冷卻窗內。
 
     首次或距上次注入 >= ttl_sec → True(應注入),並更新標記檔。
@@ -157,17 +192,9 @@ def _ttl_should_inject(session_id: str, file_abs: str, ttl_sec: float) -> bool:
         except (ValueError, OSError):
             pass  # 壞標記 → 視為過期,重新注入
 
-    # 首次或窗外:即將寫標記前先惰性清理 >24h session 目錄
-    # (I-2: 清理移至注入路徑,讓窗內快速路徑跳過全 tmpdir 掃描)
-    _ttl_lazy_cleanup()
-
-    # 更新標記
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(str(now), encoding="utf-8")
-    except OSError:
-        pass  # 寫失敗 → best-effort,仍放行
-
+    # 首次或窗外。mark=True 維持舊語意(判定+寫一體,既有測試);main 走 mark=False,真的注入後才 _ttl_mark。
+    if mark:
+        _ttl_mark(session_id, file_abs)
     return True
 
 
@@ -381,14 +408,15 @@ def build_ranked_context(data: dict) -> str:
     return "\n".join(lines)
 
 
-def inject_ranked_context(data: dict) -> None:
+def inject_ranked_context(data: dict) -> bool:
     """ranked 版注入:results/stack_questions/lane 皆空 → 不輸出(lane-only 的題也要注入,v4 Codex f2)。"""
     if not data.get("results") and not data.get("stack_questions") and not data.get("lane"):
-        return
+        return False
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "additionalContext": build_ranked_context(data),
     }}, ensure_ascii=False))
+    return True
 
 
 def inject_additional_context(impact_data: dict) -> None:
@@ -427,13 +455,12 @@ def main() -> int:
     if tool_name not in EDIT_TOOLS:
         return 0
 
-    file_path = hook_decide(payload)
+    # repo root: 優先 $CLAUDE_PROJECT_DIR,fallback payload cwd(同 check-graph-sync.py:348-355)
+    # ★先算 repo 再 hook_decide★:無副檔名檔的 shebang 判定要用 repo 解相對路徑(前置修正①)
+    repo = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd", "")
+    file_path = hook_decide(payload, repo=repo or None)
     if file_path is None:
         return 0  # 放行:非 code 或排除路徑
-
-    # repo root: 優先 $CLAUDE_PROJECT_DIR,fallback payload cwd
-    # (同 check-graph-sync.py:348-355)
-    repo = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd", "")
     if not repo:
         return 0  # fail-open
 
@@ -457,7 +484,7 @@ def main() -> int:
         except (OSError, json.JSONDecodeError, ValueError):
             pass
 
-        in_cooldown = not _ttl_should_inject(session_id, file_path_abs, ttl_sec=ttl_min * 60)
+        in_cooldown = not _ttl_should_inject(session_id, file_path_abs, ttl_sec=ttl_min * 60, mark=False)
     else:
         in_cooldown = False
 
@@ -506,7 +533,8 @@ def main() -> int:
         return 0
     if not impact_data:
         return 0
-    inject_ranked_context(impact_data)
+    if inject_ranked_context(impact_data) and session_id and not in_cooldown:
+        _ttl_mark(session_id, file_path_abs)   # 真的注入了才開冷卻窗(前置修正②)
     return 0
 
 
