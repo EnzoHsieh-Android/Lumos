@@ -1,0 +1,56 @@
+依 Codex CLI 0.153.2、官方文件與目前 repo 程式碼審查。官方文件確認：`decision:block` 會在同一 turn 建立新的 continuation prompt；`stop_hook_active` 只表示該 turn 已被 Stop 續做；`Stop` 不會代替獨立的 `SubagentStop`。[OpenAI Hooks 文件](https://developers.openai.com/codex/hooks)
+
+基線：已讀，無 finding。
+
+1. 現有解析器只接受 0.144.1，0.153.2 會直接回空動作，因此照 spec 實作時 f02 根本到不了 block 分支；必須把 0.153.x fixture、版本白名單與格式驗收列入改動。file: `scripts/hooks/claude/check-graph-sync.py:109`；file: `scripts/hooks/claude/check-graph-sync.py:147`
+severity: blocker
+blocking: 是
+引句:「新增★argv 解析(現況五支 hook 零解析,`--harness codex` 只是註冊命令列附的旗標)與 `harness==codex` 分支」
+
+2. 官方語意是同一 `turn_id` 內續做後才把 `stop_hook_active` 設為真，不是被續做過的 session 永久為真；spec 括號中的「這輪」尚可，但 session 標記是額外且更強的產品政策，應明寫兩者不等價。[OpenAI Hooks 文件](https://developers.openai.com/codex/hooks)
+severity: major
+blocking: 是
+引句:「若 `stop_hook_active` 為真(這輪已被 Stop 續做過)→ 照舊只印 stderr,不再 block(官方欄位=第一道護欄)。」
+
+3. 標記在輸出 block 前就寫入；若 JSON 無效、hook 輸出失敗，或另一個 Stop hook 用 `continue:false` 取得優先權，本 session 的唯一名額仍被耗掉。現有安裝器刻意保留使用者自訂 Stop hook，所以多 hook 不是可忽略情境；應以原子建立並定義失敗／被覆蓋後如何重試。file: `scripts/test_lumos.py:395`
+severity: major
+blocking: 是
+引句:「否則寫標記檔、stdout 印 `{"decision":"block","reason":"<既有提醒全文>+『現在補筆記(Systems/Verification/decisions),或一句話說明為什麼不用(改錯字/排版/半成品)後再結束』"}`。」
+
+4. 「同一 session 最多擋一次」與「lazy 清超過一天」互相衝突：超過一天仍存活的 session 會再次 block。TTL 應綁 session 結束，或把承諾改成每 24 小時最多一次。
+severity: major
+blocking: 是
+引句:「時序/並行:同 session 多輪→標記檔擋第二次;兩個 session 各自標記;標記檔以 session_id 命名放 0700 目錄,lazy 清超過一天的。」
+
+5. blanket `try/except` 會改變 Claude 路徑原本只吞 JSON 解析錯誤的行為，與「Claude 側完全不變」直接矛盾。應只包 Codex 新分支或逐個新操作 fail-open。file: `scripts/hooks/claude/check-graph-sync.py:455`
+severity: major
+blocking: 是
+引句:「本案★新包一層★ blanket try/except 讓 main 任何例外都 rc0(同 lumos-entry-hook 的寫法)」
+
+6. 「官方沒有迴圈上限」不是官方文件明說的保證；文件只提供 `stop_hook_active`，0.153.x 原始碼可推斷同 turn 以 `continue` 重進且未見固定次數上限。應標成「文件未記載；0.153.2 原始碼檢視未見上限」，避免把 absence 當官方契約。[Codex turn.rs](https://github.com/openai/codex/blob/main/codex-rs/core/src/session/turn.rs)
+severity: minor
+blocking: 否
+引句:「為什麼不做「擋到寫回為止」:官方沒有迴圈上限,只有 `stop_hook_active`;擋一次已把「忘了」變成「有意識略過」」
+
+改動 B：已讀，無 finding。
+
+7. continuation prompt 是同一 turn 裡新增一次模型請求，不是新的外部 turn；token usage 會繼續累積，但 spec 的實驗只量提示次數與總時間，無法回答續做成本或 turn 計數。應記錄同一 `turn_id`、每次 `token_count.last_token_usage` 與最終累積 usage。
+severity: major
+blocking: 是
+引句:「判準不是探針的 pass(它會敲 lumos 嗎不是重點),而是:①有沒有動到 `docs/*-knowledge/`(或 decision-add/new)②Codex 逐字稿裡 Stop 續做提示出現幾次③總時間。」
+
+8. `reason` 的官方硬條件只有字串且非空；沒有文件化字元上限，但 continuation prompt 約 2,500 tokens 後會 spill／截成首尾預覽。spec 使用完整既有提醒且檔案清單無 cap，應限制 reason 長度並測試大改動時關鍵指令仍在可見預覽內。[OpenAI Hooks 文件](https://developers.openai.com/codex/hooks)
+severity: major
+blocking: 是
+引句:「block 的 reason 必須非空(文件),空就退回 stderr。」
+
+誠實界線：已讀，無 finding。
+
+9. 單元驗收以合成 payload 為主，沒有釘住真實 0.153.2 `codex exec` 是否續做、第二次 Stop 是否保持同一 `turn_id`、`stop_hook_active` 是否翻真，以及 Stop 不會對子代理誤 fire。f02 可作端到端測試，但目前沒有要求保存上述事件序列與 usage 證據，失敗時無法定位。
+severity: major
+blocking: 是
+引句:「單元:Codex Stop payload 改碼沒寫回→stdout JSON block 且 reason 含檔名;`stop_hook_active:true`→不 block;同 session 第二次→不 block」
+
+審計修正紀錄：已讀，無 finding。
+
+總結:最嚴重 severity=blocker；blocking 8 條。
