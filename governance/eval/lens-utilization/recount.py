@@ -46,7 +46,7 @@ def _safe_tokens(seg: str) -> list:
         toks = _tokens_of(seg)
     except ValueError:
         toks = TOKEN_RE.findall(seg)
-    return [x.strip("()$") for x in toks if x.strip("()$")]
+    return [w.strip("()$") for x in toks for w in x.split() if w.strip("()$")]   # 引號內的子指令再按空白拆(路徑才找得到)
 
 
 def _script_marks(text: str, slug: str) -> tuple[set[str], set[str]]:
@@ -99,7 +99,7 @@ def vault_slug(repo: Path) -> str | None:
 
 def norm_note(tok: str, slug: str) -> str | None:
     """絕對/相對路徑 → 圖譜相對路徑(Systems/x.md);不是圖譜路徑回 None。"""
-    t = os.path.normpath(tok.replace("\\", "/").strip("'\"`,;:"))
+    t = os.path.normpath(tok.replace("\\", "/").strip().strip("'\"`,;:").strip())
     key = f"docs/{slug}/"
     i = t.find(key)
     if i < 0:
