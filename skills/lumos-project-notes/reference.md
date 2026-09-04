@@ -1003,7 +1003,7 @@ python3 scripts/lumos doctor
 
 **時機**：每次對圖譜的**實質內容更新**完成後（新增/修改 Systems、Issues、Verification、decisions、summary）。純格式修正（typo、缺欄位補登、連結修復）可豁免，但修完建議至少跑一次健康巡檢。
 
-**做法**：用 Agent tool 派出 subagent，`model: sonnet`，prompt 模板：
+**做法**：用 Agent tool(Codex 下用 spawn_agent)派出 subagent，`model: sonnet`，prompt 模板：
 
 ```
 你是知識圖譜審計員。只允許讀 docs/{vault-name}/ 下的筆記（唯讀；優先用 obsidian CLI，

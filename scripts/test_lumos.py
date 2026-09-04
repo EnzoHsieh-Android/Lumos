@@ -16087,7 +16087,7 @@ def t_loop_next_cluster_hint_only_when_choice_is_open():
     h = _sha256_of(spec)
     lid = f"ch-{_M1U}"
 
-    r = run(v, "loop", "next", lid, "--tier", "standard", "--json")
+    r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json")
     d = _j.loads(r.stdout)
     check("★前置★ 現場成立:第一輪且為 panel 模式",
           d["phase"] == "plant-canary" and d["round"] == 1 and d["tier"] == "standard", r.stdout[:200])
@@ -16096,7 +16096,7 @@ def t_loop_next_cluster_hint_only_when_choice_is_open():
           "第一輪" in d.get("cluster_hint", "") and "開新編號" in d.get("cluster_hint", ""),
           d.get("cluster_hint", "")[:200])
     check("★文字模式也要印出來★(不能只有 --json 看得到)",
-          "cluster_hint" in run(v, "loop", "next", lid, "--tier", "standard").stdout, "")
+          "cluster_hint" in run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude").stdout, "")
 
     # 記一輪之後,模式已定錨 → 選擇關了 → 不得再提
     run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
@@ -16107,7 +16107,7 @@ def t_loop_next_cluster_hint_only_when_choice_is_open():
     check("★已開始記錄後不得再提★(選擇已關,提了是誤導)", "cluster_hint" not in d2, r2.stdout[:300])
 
     # legacy 與 light 用不到 cluster 帳 → 不得提(反誤傷)
-    dl = _j.loads(run(v, "loop", "next", f"chl-{_M1U}", "--tier", "light", "--json").stdout)
+    dl = _j.loads(run(v, "loop", "next", f"chl-{_M1U}", "--tier", "light", "--orchestrator", "claude", "--json").stdout)
     check("★light 不得提(用不到 cluster 帳)★", "cluster_hint" not in dl, "")
 
 
@@ -16176,7 +16176,7 @@ def t_loop_next_disposal_cmd_actually_runs():
     rpt = v / "Projects" / "t5rpt.md"
     rpt.write_text("引句：「規則甲。」\nseverity: minor\n", encoding="utf-8")
     lid = f"t5-{_M1U}"
-    d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--json").stdout)
+    d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json").stdout)
     check("★前置★ 現場成立:panel tier 吐 disposal_cmd+disposal_gate",
           "disposal_cmd" in d and "disposal_gate" in d and "record_cmd" in d, str(d)[:200])
     filled = (d["disposal_cmd"].replace("caught|missed", "caught").replace("<席>", "s1")
@@ -16868,10 +16868,10 @@ def t_loop_next_legacy_emits_a_command_that_actually_runs():
           d.get("tier_hint", "")[:200])
 
     # 反誤傷:可宣告的三檔仍須照舊帶 --tier
-    ds = _j.loads(run(v, "loop", "next", f"lgs-{_M1U}", "--tier", "standard", "--json").stdout)
+    ds = _j.loads(run(v, "loop", "next", f"lgs-{_M1U}", "--tier", "standard", "--orchestrator", "claude", "--json").stdout)
     check("★standard 仍要帶 --tier★(修法不得誤傷可宣告檔)",
           "--tier standard" in ds["record_cmd"] and "tier_hint" not in ds, ds["record_cmd"])
-    dli = _j.loads(run(v, "loop", "next", f"lgl-{_M1U}", "--tier", "light", "--json").stdout)
+    dli = _j.loads(run(v, "loop", "next", f"lgl-{_M1U}", "--tier", "light", "--orchestrator", "claude", "--json").stdout)
     check("★light 仍要帶 --tier★", "--tier light" in dli["record_cmd"], dli["record_cmd"])
 
 
@@ -16983,12 +16983,12 @@ def t_canary_scope_lines_records_review_size():
     check("★沒超標不得喊(反噪音)★", "軟上限" not in rs.stderr, rs.stderr[-150:])
 
     # ★預防端★:警告要在派工之前出現,不是記帳之後才喊
-    nx0 = run(v, "loop", "next", f"sc6-{_M1U}", "--tier", "standard")
+    nx0 = run(v, "loop", "next", f"sc6-{_M1U}", "--tier", "standard", "--orchestrator", "claude")
     check("★loop next 必須在派工前就給量尺★(記帳時才喊已經來不及,輪跑完了)",
           "scope_cap" in nx0.stdout and "wc -l" in nx0.stdout, nx0.stdout[-300:])
 
     # loop next 的模板要提到它(否則沒人知道有這欄——cluster 帳 316:1 的教訓)
-    nx = run(v, "loop", "next", f"sc3-{_M1U}", "--tier", "standard")
+    nx = run(v, "loop", "next", f"sc3-{_M1U}", "--tier", "standard", "--orchestrator", "claude")
     check("★loop next 的記帳模板必須帶上它(不然沒人會用)★",
           "--scope-lines" in nx.stdout, nx.stdout[-300:])
 
@@ -17008,7 +17008,7 @@ def t_m1_loop_next():
     r = run(v, "loop", "next", f"nx-{_M1U}")
     check("零記錄無 tier rc2", r.returncode == 2)
     # 零記錄+tier light → plant-canary N=1
-    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "light", "--json")
+    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "light", "--orchestrator", "claude", "--json")
     d = _j.loads(r.stdout)
     check("零記錄 plant-canary N=1", d["phase"] == "plant-canary" and d["round"] == 1 and r.returncode == 1)
     check("light width/cap 映射", d["width"] == 1 and d["cap"] == 2)
@@ -17020,7 +17020,7 @@ def t_m1_loop_next():
     check("tier 定錨讀取", d["tier"] == "light")
     check("light 收斂 → converged rc0", d["phase"] == "converged" and r.returncode == 0)
     # 定錨衝突 rc2
-    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "standard")
+    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "standard", "--orchestrator", "claude")
     check("tier 衝突 rc2", r.returncode == 2)
     # 資訊不足 → gate-pending(先於 cap)
     r = run(v, "loop", "next", f"nx-{_M1U}", "--json")
@@ -22696,7 +22696,7 @@ def t_s2_loop_next_random_type_draw():
     lid = f"rndtype-{_M1U}"
     seen_slot1 = set()
     for _ in range(12):
-        r = run(v, "loop", "next", lid, "--tier", "standard")
+        r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude")
         line = next((l for l in r.stdout.splitlines() if "canary_type:" in l), "")
         d = ast.literal_eval(line.split("canary_type:", 1)[1].strip())
         vals = list(d.values())
@@ -22708,7 +22708,7 @@ def t_s2_loop_next_random_type_draw():
     check("★同輪 slot 間不重複(width≤4)★", True, "")
     check("★隨機抽:12 次呼叫 slot1 非恆同值★", len(seen_slot1) >= 2, str(seen_slot1))
     # light 單席路徑:單值且在值域
-    r = run(v, "loop", "next", f"rndlight-{_M1U}", "--tier", "light")
+    r = run(v, "loop", "next", f"rndlight-{_M1U}", "--tier", "light", "--orchestrator", "claude")
     line = next((l for l in r.stdout.splitlines() if "canary_type:" in l), "")
     val = line.split("canary_type:", 1)[1].strip()
     check("light 單席隨機抽仍在值域", val in ("a", "b", "c", "d"), line)
@@ -23081,28 +23081,28 @@ def t_loop_next_roster():
     import json as _j
     vault, repo, spec, rec, disp = _mk_roster_fixture()
     # design/standard 零記錄
-    r = run(vault, "loop", "next", "dz-roster", "--tier", "standard", "--json")
+    r = run(vault, "loop", "next", "dz-roster", "--tier", "standard", "--orchestrator", "claude", "--json")
     d = _j.loads(r.stdout.strip())
     check("next-roster: design/standard roster 欄存在", isinstance(d.get("roster"), dict), r.stdout[:300])
     seats = d["roster"]["seats"]
     check("next-roster: design/standard 3佔W+1否決", sum(1 for s in seats if s["occupies_w"]) == 3
           and any(s["family"] == "external" and not s["occupies_w"] for s in seats), str(seats)[:300])
-    rh = run(vault, "loop", "next", "dz-roster", "--tier", "standard")
+    rh = run(vault, "loop", "next", "dz-roster", "--tier", "standard", "--orchestrator", "claude")
     check("next-roster: 人讀輸出含「應派」行", "應派" in rh.stdout, rh.stdout[:400])
     # code/high
-    r2 = run(vault, "loop", "next", "code-rz", "--tier", "high", "--json")
+    r2 = run(vault, "loop", "next", "code-rz", "--tier", "high", "--orchestrator", "claude", "--json")
     d2 = _j.loads(r2.stdout.strip())
     s2 = d2["roster"]["seats"]
     check("next-roster: code/high 席組成(5佔W 含外家 finder+3不佔W 含架構對齊)",
           sum(1 for s in s2 if s["occupies_w"]) == 5 and sum(1 for s in s2 if not s["occupies_w"]) == 3,
           str(s2)[:300])
     # 查表 miss:code+light
-    r3 = run(vault, "loop", "next", "code-rz2", "--tier", "light", "--json")
+    r3 = run(vault, "loop", "next", "code-rz2", "--tier", "light", "--orchestrator", "claude", "--json")
     d3 = _j.loads(r3.stdout.strip())
     check("next-roster: code/light 查表 miss→roster null+無編制宣告",
           d3.get("roster") is None and "無編制宣告" in r3.stdout, r3.stdout[:300])
     # indeterminate id(codestage 型)
-    r4 = run(vault, "loop", "next", "codestage9", "--tier", "standard", "--json")
+    r4 = run(vault, "loop", "next", "codestage9", "--tier", "standard", "--orchestrator", "claude", "--json")
     d4 = _j.loads(r4.stdout.strip())
     check("next-roster: indeterminate→roster null+kind 無法判定",
           d4.get("roster") is None and "kind 無法判定" in r4.stdout, r4.stdout[:300])
@@ -23138,7 +23138,7 @@ def t_loop_status_roster_check():
     # 本 fixture 異常(外家缺),尾端可出現 [roster] 行;同帶時全史照印、尾端不重複
     check("status-roster: 同帶時尾端不重複(單家族/外缺行不因同帶翻倍)",
           r1.stdout.count("external_missing") <= max(1, r0.stdout.count("external_missing")), r1.stdout[:300])
-    check("status-roster: 三形狀共解析 4 席(claude 桶足,含架構對齊)", "實派 4 席" in r1.stdout and "claude 4" in r1.stdout, r1.stdout[:600])
+    check("status-roster: 三形狀共解析 4 席(同門桶足,含架構對齊;d4 起印「同門[編排者]」)", "實派 4 席" in r1.stdout and "同門[claude] 4" in r1.stdout, r1.stdout[:600])
     check("status-roster: note-if-absent 外家缺→單家族措辭且不算 shortfall",
           "單家族" in r1.stdout and "seat_shortfall" not in r1.stdout, r1.stdout[:800])
     # code/high:外家 required-fail-closed 缺(溢編頂替:總數 6 席但外家 0)+unknown+壞損+不符形狀
@@ -23291,7 +23291,7 @@ def t_seq_cap_and_roster():
     r = run(vault, "loop", "next", "code-seqcap", "--spec", str(sp), "--json")
     d = _j.loads(r.stdout.strip())
     check("seq-cap: 3 筆後 cap-reached(買到第 3 輪攤人)", d.get("phase") == "cap-reached", str(d.get("phase")))
-    r2 = run(vault, "loop", "next", "code-seqr", "--tier", "standard", "--json")
+    r2 = run(vault, "loop", "next", "code-seqr", "--tier", "standard", "--orchestrator", "claude", "--json")
     d2 = _j.loads(r2.stdout.strip())
     seats = (d2.get("roster") or {}).get("seats", [])
     check("seq-roster: code/standard 吐單 reviewer(佔W)+外家否決(不佔W)",
@@ -24034,7 +24034,7 @@ def t_entry_latch_advisories():
           "  - content: 停案二裁\n    id: d2\n    decided: 2026-08-03",
           "# impact鏡頭機械化_計劃\n無空白串 impact鏡頭機械化 的內文。\n")
     lid = f"impact-鏡頭機械化{_M1U}"
-    r = run(v, "loop", "next", lid, "--tier", "standard", "--json", expect_rc=1)
+    r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json", expect_rc=1)
     d = _j.loads(r.stdout)
     check("★前置★ 現場成立:首輪 plant-canary(rc=1 載重語意未被 advisory 改動)",
           d["phase"] == "plant-canary" and d["round"] == 1, r.stdout[:200])
@@ -24049,30 +24049,30 @@ def t_entry_latch_advisories():
     check("★EL-10:superseded 納入且標 status;決策數機械數=2★",
           hidden.get("status") == "superseded" and hidden.get("decisions") == 2, str(hidden))
     check("EL-16:★近名 判準沿用 B(difflib ≥0.6)", hidden.get("near_name") is True, str(hidden))
-    rt = run(v, "loop", "next", lid, "--tier", "standard", expect_rc=1)
+    rt = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
     check("A 文字模式:專屬多行段+指路行(EL-1 不塞五鍵白名單)",
           "圖譜既有節點" in rt.stdout and "先讀再開" in rt.stdout, rt.stdout[-400:])
     # ★紅釘 EL-15/EL-3:auto-日期形=無主題訊號,誠實不查
-    r2 = run(v, "loop", "next", "auto-2099-01-31", "--tier", "standard", "--json", expect_rc=1)
+    r2 = run(v, "loop", "next", "auto-2099-01-31", "--tier", "standard", "--orchestrator", "claude", "--json", expect_rc=1)
     rn2 = _j.loads(r2.stdout).get("related_nodes")
     check("★紅釘 EL-15:auto-日期形 queried=false nodes=[](母 token 濾網)★",
           rn2 is not None and rn2["queried"] is False and rn2["nodes"] == [], str(rn2))
-    rt2 = run(v, "loop", "next", "auto-2099-02-28", "--tier", "standard", expect_rc=1)
+    rt2 = run(v, "loop", "next", "auto-2099-02-28", "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
     check("EL-3+C-1:剩單一有意義 token 時印可行動行(不靜默丟失,給出 lumos search)",
           "主題訊號不足" in rt2.stdout and 'lumos search "auto"' in rt2.stdout, rt2.stdout[-300:])
     _snap = v / "Projects" / "r9-snapshot.md"; _snap.write_text("s\n", encoding="utf-8")
-    rt2c = run(v, "loop", "next", "auto-2099-03-31", "--tier", "standard", "--spec", str(_snap), "--repo", str(v.parent), expect_rc=1)
+    rt2c = run(v, "loop", "next", "auto-2099-03-31", "--tier", "standard", "--orchestrator", "claude", "--spec", str(_snap), "--repo", str(v.parent), expect_rc=1)
     check("★code-r2 D2-2:spec 殘渣(snapshot)不得變建議指令——spec 無訊號一律用編號版★",
           "snapshot" not in rt2c.stdout and ("主題訊號不足" in rt2c.stdout or "無主題訊號" in rt2c.stdout),
           rt2c.stdout[-300:])
-    rt2b = run(v, "loop", "next", "123-456", "--tier", "standard", expect_rc=1)
+    rt2b = run(v, "loop", "next", "123-456", "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
     check("EL-3:完全無 token 時印「無主題訊號,未查」誠實行", "編號無主題訊號,未查圖譜" in rt2b.stdout, rt2b.stdout[-300:])
     # EL-1:首輪 only——記一輪後(n_next=2)不得再算/再印
     spec = v / "Projects" / "elspec.md"; spec.write_text("s\n", encoding="utf-8")
     run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
         "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec), "--spec", str(spec),
         "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
-    r3 = run(v, "loop", "next", lid, "--tier", "standard", "--json", "--spec", str(spec), "--repo", str(v.parent))
+    r3 = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json", "--spec", str(spec), "--repo", str(v.parent))
     d3 = _j.loads(r3.stdout)
     check("★前置★ 現場成立:第 2 輪且仍是 plant-canary(r1 合約席 G-4:原測試只打到 gate-pending,首輪守衛其實沒被釘)",
           d3["phase"] == "plant-canary" and d3["round"] == 2, r3.stdout[:200])
@@ -24410,13 +24410,13 @@ def t_gist_layer():
     write(v, "Projects/齒輪傳動_計劃.md",
           "type: project\nstatus: doing\ntags:\n  - type/project\n  - status/doing",
           "# 齒輪傳動_計劃\n> 白話: 傳動計劃一句話。\n齒輪 傳動 內文。\n")
-    r = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", "--json", expect_rc=1)
+    r = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", "--orchestrator", "claude", "--json", expect_rc=1)
     rn = _j.loads(r.stdout).get("related_nodes") or {}
     hits = {n["name"]: n for n in rn.get("nodes", [])}
     check("T2 JSON:gist 鍵恆 str(EL-16 合約補欄)",
           hits and all(isinstance(n.get("gist"), str) for n in hits.values()), str(hits)[:300])
     check("T2 JSON:有白話者 gist=白話行", hits.get("齒輪傳動_計劃", {}).get("gist") == "傳動計劃一句話。", str(hits)[:300])
-    rt = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", expect_rc=1)
+    rt = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
     check("T2 文字:「 — <L0>」上行且空 gist 不加(A-1 gist 恆最後)",
           " — 傳動計劃一句話。" in rt.stdout, rt.stdout[-500:])
     # ★code-r1 修正四釘(B-1/B-2/B-3/B-5,先紅後綠)★
@@ -25315,6 +25315,43 @@ def t_codex_s1_r1_fixes():
     r = lens("--arm", f"{ml}..HEAD", "--claim")
     check("s1-r1⑤: --arm 與 --claim 同給 → rc 2 擋下", r.returncode == 2 and "擋下" in r.stderr + r.stdout, f"rc={r.returncode} {r.stderr[-120:]}")
     lens("--disarm")
+
+
+# ── Codex完全支援 S2(2026-09-04,d4):編排者定錨、家族相對化 ───────────────────────────
+def t_codex_s2_orchestrator():
+    """loop next 首輪必帶 --orchestrator(不預設);record 存欄、帳面定錨後中途換家擋;roster 家族相對編排者:
+    codex 編排時 codex 席=同門、sonnet 席=外家;舊帳沒欄視為 claude 並印一句;外家席名沒模型尾碼印提示。"""
+    import json as _j, os, subprocess as _sp
+    v = mkvault(); lid = "s2orch-" + os.urandom(3).hex()
+    spec = v / "Projects" / "x_計劃.md"; spec.parent.mkdir(parents=True, exist_ok=True); spec.write_text("---\ntype: project\n---\n# x\n", encoding="utf-8")
+    r = run(v, "loop", "next", lid, "--tier", "standard")
+    check("s2-orch: 全新編號沒帶 --orchestrator → rc2 且訊息講外家=不是編排者那一家", r.returncode == 2 and "--orchestrator" in r.stderr and "不是編排者" in r.stderr, r.stderr[-200:])
+    r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "codex", "--json")
+    d = _j.loads(r.stdout)
+    check("s2-orch: 帶 codex → 回 orchestrator=codex 且 record_cmd 帶 --orchestrator codex", d.get("orchestrator") == "codex" and "--orchestrator codex" in d.get("record_cmd", ""), r.stdout[:300])
+    r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "codex")
+    check("s2-orch: 人讀輸出印「外家(不是 codex 那一家)」", "不是 codex 那一家" in r.stdout and "同門[codex]" in r.stdout, r.stdout[:400])
+    rep = v.parent / "r1-seat.md"; rep.write_text("# r\nseverity: clean\n", encoding="utf-8")
+    r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "外家否決-sonnet", "--severity", "clean", "--findings", "0", "--tier", "standard", "--orchestrator", "codex", "--report", str(rep))
+    check("s2-orch: record --orchestrator codex 寫入", r.returncode == 0 and any(_j.loads(l).get("orchestrator") == "codex" for l in (v.parent / ".canary-log.jsonl").read_text().splitlines() if l.strip() and _j.loads(l).get("loop") == lid), r.stderr[-200:])
+    r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r2", "--auditor", "x-sonnet", "--severity", "clean", "--findings", "0", "--orchestrator", "claude", "--report", str(rep))
+    check("s2-orch: 帳面定錨 codex 後 record 說 claude → rc2", r.returncode == 2 and "中途換" in r.stderr, r.stderr[-200:])
+    r = run(v, "loop", "next", lid, "--orchestrator", "claude")
+    check("s2-orch: 帳面定錨後 loop next 說另一家 → rc2", r.returncode == 2, r.stderr[-200:])
+    r = run(v, "loop", "next", lid)
+    check("s2-orch: 帳面定錨後 loop next 不帶旗標 → 讀帳 codex(rc 由 gate-pending 決定,不釘)", "同門[codex]" in r.stdout and "不是 codex 那一家" in r.stdout, r.stdout[:400] + r.stderr[-200:])
+    # roster 相對化:派工快照裡 codex 席與 sonnet 席
+    root = v.parent; ld = root / "governance" / "review-reports" / lid; ld.mkdir(parents=True)
+    (ld / "r1-dispatch.json").write_text(_j.dumps({"round": "r1", "seats": [{"seat": "鏡頭1", "auditor": "gpt-5"}, {"seat": "鏡頭2", "auditor": "codex-b"}, {"seat": "鏡頭3", "auditor": "codex-c"}, {"seat": "架構對齊", "auditor": "codex-d"}, {"seat": "外家否決", "auditor": "claude"}]}), encoding="utf-8")
+    r = run(v, "loop", "status", lid, "--roster", "--repo", str(root))
+    check("s2-orch: codex 編排下 codex/gpt 席算同門、claude 席算外家", "同門[codex] 4" in r.stdout and "外家 1" in r.stdout and "external_missing" not in r.stdout, r.stdout[:600])
+    check("s2-orch: 外家席名沒帶模型尾碼 → 印席名建議", "席名 claude 沒帶模型尾碼" in r.stdout, r.stdout[:600])
+    # 舊帳(無欄)→視為 claude 並印一句
+    m = _load_lumos_inproc()
+    check("s2-orch: _roster_family 相對:claude 編排下 codex=外家;codex 編排下 sonnet=外家、gpt=同門",
+          m._roster_family("外家否決-codex")[0] == "external" and m._roster_family("外家否決-codex", "codex")[0] == "claude"
+          and m._roster_family("鏡頭1-sonnet", "codex")[0] == "external" and m._roster_family("gpt-5", "codex")[0] == "claude", "")
+    check("s2-orch: 舊帳沒欄 → _loop_orchestrator None", m._loop_orchestrator([{"tier": "standard"}]) is None and m._loop_orchestrator([{"orchestrator": "codex"}]) == "codex", "")
 
 
 if __name__ == "__main__":

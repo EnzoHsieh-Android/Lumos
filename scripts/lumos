@@ -4018,7 +4018,7 @@ def _vault_repo_root(env):
     return env.vault.parent.resolve()
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None):
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None, orchestrator=None):
     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
@@ -4139,6 +4139,17 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
             print(f"擋下:--tier 分級只能是 {'/'.join(LOOP_TIERS)} 之一,你給的是 {tier!r}", file=sys.stderr)
             return 2
         rec["tier"] = tier
+    # ── d4 編排者定錨欄(選配;首個帶 orchestrator 的記錄定錨;帳面已定錨就不能中途換) ──
+    if orchestrator is not None:
+        if orchestrator not in _ORCHESTRATORS:
+            print(f"擋下:--orchestrator 只能是 {'/'.join(_ORCHESTRATORS)},你給的是 {orchestrator!r}", file=sys.stderr)
+            return 2
+        if loop:
+            _prev = _loop_orchestrator(_loop_records(env, loop))
+            if _prev and _prev != orchestrator:
+                print(f"擋下:這個審查編號第一筆就定成 {_prev} 編排,中途換成 {orchestrator} 帳就對不上——要換請開新編號", file=sys.stderr)
+                return 2
+        rec["orchestrator"] = orchestrator
     # ── T1 相容雙讀(design-loop重設計 實作計畫):處置帳六選配欄——★全部不給=行為與今日相同★ ──
     # 集合核對而非總數核對(r1 Codex:只核總數可被重複計數/虛構項配平);
     # 「不給不寫鍵」同 --findings 慣例;違反一律 rc2(寫側就擋,不留到 gate)。
@@ -5774,14 +5785,52 @@ def _roster_kind(loop_id):
     return "design"
 
 
-def _roster_family(auditor):
-    """auditor 字串→(family, dual_hit)。lower() 子串比對;判序寫死 external 先比、先命中先贏。"""
+_ORCHESTRATORS = ("claude", "codex")
+_ROSTER_CODEX_KEYS = ("codex", "gpt")     # 編排者是 Codex 時,這幾個字眼=同門
+
+
+def _loop_records(env, loop_id):
+    """canary-log 裡某編號的全部記錄(唯讀;壞行跳過)。"""
+    import json as _json
+    path = env.vault.parent / ".canary-log.jsonl"
+    out = []
+    try:
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = _json.loads(line)
+                except ValueError:
+                    continue
+                if d.get("loop") == loop_id:
+                    out.append(d)
+    except OSError:
+        return out
+    return out
+
+
+def _loop_orchestrator(rounds):
+    """帳面編排者定錨:首個帶 orchestrator 的記錄;舊帳沒有 → None(讀側視為 claude 並印一句,不給新呼叫預設——
+    Projects/Codex完全支援_計劃 d4:預設 claude 會讓 Codex 編排漏旗標時靜默套錯家族)。"""
+    return next((r.get("orchestrator") for r in rounds if r.get("orchestrator") in _ORCHESTRATORS), None)
+
+
+def _roster_family(auditor, orchestrator="claude"):
+    """auditor 字串→(family, dual_hit)。family 是★相對編排者★的:"claude"=同門(編排者那一家)、"external"=外家
+    (保留舊字串,_TIER_ROSTER 的 family 欄同義:claude 席=同門席、external 席=外家席;d4 相對化 2026-09-04)。
+    lower() 子串比對;判序寫死外家先比、先命中先贏。orchestrator=codex 時 codex/gpt 是同門、sonnet/opus/claude 是外家。"""
     s = (auditor or "").lower()
-    ext = any(k in s for k in _ROSTER_EXTERNAL_KEYS)
-    cla = any(k in s for k in _ROSTER_CLAUDE_KEYS)
-    if ext:
-        return ("external", cla)
-    if cla:
+    if orchestrator == "codex":
+        own = any(k in s for k in _ROSTER_CODEX_KEYS)
+        other = any(k in s for k in _ROSTER_CLAUDE_KEYS) or any(k in s for k in _ROSTER_EXTERNAL_KEYS if k not in _ROSTER_CODEX_KEYS)
+    else:
+        own = any(k in s for k in _ROSTER_CLAUDE_KEYS)
+        other = any(k in s for k in _ROSTER_EXTERNAL_KEYS)
+    if other:
+        return ("external", own)
+    if own:
         return ("claude", False)
     return ("unknown", False)
 
@@ -5839,7 +5888,10 @@ def _roster_observe(env, loop_id, rounds, repo, only_rid=None, anomalies_only=Fa
                      if r.get("round") == only_rid and r.get("tier")), None)
     else:
         tier = next((r.get("tier") for r in rounds if r.get("tier")), None)
-    _quiet(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'}")
+    orch = _loop_orchestrator(rounds)
+    _quiet(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'},編排者 {orch or '帳面沒記,視為 claude'}"
+           + ("" if orch else "(舊帳相容;新迴圈 loop next 首輪要帶 --orchestrator)"))
+    orch = orch or "claude"
     if tier is None:
         _quiet("[roster] 這個編號沒指定過分級(舊格式或還沒記錄),沒有編制表可以對")
         return anomalies
@@ -5875,14 +5927,17 @@ def _roster_observe(env, loop_id, rounds, repo, only_rid=None, anomalies_only=Fa
         if not auditors:
             _quiet(f"[roster] {rid}:沒有派工快照可對(舊記錄或還沒寫入)")
             continue
-        fams = [(a, *_roster_family(a)) for a in auditors]
+        fams = [(a, *_roster_family(a, orch)) for a in auditors]
+        for a in auditors:   # 席名慣例 <鏡頭>-<模型>(收斂閘殘餘估計降級_計劃):沒帶模型尾碼的外家席只提示不改帳(調研候選 ⑥)
+            if _roster_family(a, orch)[0] == "external" and "-" not in a:
+                _quiet(f"[roster] {rid}:席名 {a} 沒帶模型尾碼,建議照慣例寫成 <鏡頭>-<模型>(如 外家否決-codex),家族辨識才穩")
         n_c = sum(1 for _, f, _d in fams if f == "claude")
         exts = [a for a, f, _d in fams if f == "external"]
         unks = [a for a, f, _d in fams if f == "unknown"]
         duals = [a for a, _f, d in fams if d]
         hedge = f"可能缺(另有 {len(unks)} 席家族無法辨識)" if unks else "缺"
-        _quiet(f"[roster] {rid}: 實派 {len(auditors)} 席(claude {n_c}/external {len(exts)}/unknown {len(unks)})"
-               f";應派 required claude {len(req_c)}+external {len(req_e)}")
+        _quiet(f"[roster] {rid}: 實派 {len(auditors)} 席(同門[{orch}] {n_c}/外家 {len(exts)}/unknown {len(unks)})"
+               f";應派 required 同門 {len(req_c)}+外家 {len(req_e)}")
         if len(exts) < len(req_e):
             fc = any(s["requirement"] == "required-fail-closed" for s in req_e)
             msg = f"[roster] {rid}:external_missing——外部審查員{hedge}不夠(實際 {len(exts)} 席,應有 {len(req_e)} 席)"
@@ -5890,7 +5945,7 @@ def _roster_observe(env, loop_id, rounds, repo, only_rid=None, anomalies_only=Fa
                 msg += ";此席編制為 fail-closed(本行僅轉述編制對照,不裁決;處置見 code-loop skill)"
             print(msg); anomalies.append("external_missing")
         if n_c < len(req_c):
-            print(f"[roster] {rid}:seat_shortfall——claude 審查員{hedge}不夠(實際 {n_c} 席,應有 {len(req_c)} 席)")
+            print(f"[roster] {rid}:seat_shortfall——同門({orch})審查員{hedge}不夠(實際 {n_c} 席,應有 {len(req_c)} 席)")
             anomalies.append("seat_shortfall")
         if len(req_e) >= 2:
             from collections import Counter as _Counter
@@ -6105,7 +6160,7 @@ def _el_related_nodes(env, source, top=5):
     return {"query": query, "queried": True, "nodes": nodes}
 
 
-def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None):
+def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None, orchestrator=None):
     """M1包 #1(loop機械脊椎M1包_計劃):帳本吐唯一下一動作。唯讀指針——lumos 不 spawn agent,
     編排仍是 Claude(Systems/design-loop 分工)。phase 五值:escalate/gate-pending/converged/
     cap-reached/plant-canary;判定優先序=escalate→gate-pending(資訊不足,先於 cap)→converged
@@ -6153,6 +6208,19 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         print(f"擋下:你這次指定的分級是 {tier},但這個審查編號第一筆記錄就定成 {anchor} 了。分級第一筆定下就不能中途換——要換請開新的審查編號", file=sys.stderr)
         return 2
     eff_tier = anchor or tier
+    # ── d4 編排者:首輪必帶(比照 --tier),不給預設;帳面定錨後要一致 ──
+    orch_anchor = _loop_orchestrator(rounds)
+    if orchestrator is not None and orchestrator not in _ORCHESTRATORS:
+        print(f"擋下:--orchestrator 只能是 {'/'.join(_ORCHESTRATORS)},你給的是 {orchestrator!r}", file=sys.stderr)
+        return 2
+    if orchestrator and orch_anchor and orchestrator != orch_anchor:
+        print(f"擋下:這個審查編號帳面定的編排者是 {orch_anchor},你這次說 {orchestrator}——中途換家帳就對不上,要換請開新編號", file=sys.stderr)
+        return 2
+    if not rounds and orchestrator is None:
+        print("擋下:這是全新的審查編號,第一次呼叫要帶 --orchestrator claude|codex 說清楚是誰在編排(外家席=不是編排者那一家;"
+              "工具不預設 claude——Codex 編排時漏了會靜默套錯家族)。之後記帳 `canary record … --orchestrator <同值>` 定錨", file=sys.stderr)
+        return 2
+    eff_orch = orch_anchor or orchestrator or "claude"
     if eff_tier is None:
         if not rounds:
             print("擋下:這是全新的審查編號,還沒有任何記錄,工具不會幫你猜分級(猜錯之後格式兜不起來反而卡住)。第一次呼叫請加 --tier 指定分級", file=sys.stderr)
@@ -6180,7 +6248,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
     n_next = rounds_count + 1
 
     def emit(phase, extra=None):
-        out = {"phase": phase, "tier": eff_tier, "round": n_next, "width": width,
+        out = {"phase": phase, "tier": eff_tier, "orchestrator": eff_orch, "round": n_next, "width": width,
                "min_seats": width, "cap": cap, "advisory": "分級由編排者第一筆記錄時宣告、之後定死;工具只照分級查表,不自己判斷"}
         _roster, _rnote = _roster_next_payload(loop_id, eff_tier)
         out["roster"] = _roster
@@ -6208,10 +6276,12 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
             # code-teardown-windows / code-slim-handoff)全數 tier=None,即此循環的產物;
             # 其中 code-slim-python 吃到 legacy 的 cap 6(standard 是 3)才被逼停。
             _tier_flag = f" --tier {eff_tier}" if eff_tier in LOOP_TIERS else ""
+            out["orchestrator"] = eff_orch
+            _orch_flag = f" --orchestrator {eff_orch}"
             out["record_cmd"] = (f"lumos canary record caught|missed --loop {loop_id}{rmode}"
                                  f" --auditor <席> --severity <s> --findings <M>"
                                  f" --report <席報告.md>"
-                                 f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}"
+                                 f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}{_orch_flag}"
                                  f" --scope-lines <這輪審了幾行>")   # cb3 s3-f1:寫側 2026-08-26 起審查席必附報告,模板同步
             # [T5 design-loop重設計] 處置閘模板(選用;record_cmd 原樣保留給 code-loop/舊流程)
             if not light and eff_tier != "legacy":
@@ -6280,7 +6350,8 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                   f"這輪要 {width} 人審,最多跑 {cap} 輪")
             if out.get("roster"):
                 for s in out["roster"]["seats"]:
-                    print(f"  應派: {s['slot']}(家族 {s['family']},"
+                    _fam = ("同門[" + out.get("orchestrator", "claude") + "]") if s['family'] == "claude" else ("外家(不是 " + out.get("orchestrator", "claude") + " 那一家)" if s['family'] == "external" else s['family'])
+                    print(f"  應派: {s['slot']}(家族 {_fam},"
                           f"{'算' if s['occupies_w'] else '不算'}進人數,派工要求:{s['requirement']})"
                           + (f" 備註:{s['note']}" if s.get("note") else ""))
             elif out.get("roster_note"):
@@ -18056,6 +18127,8 @@ def main():
                     help="[自主迴圈結局帳] 這一輪實際花的美元(claude -p 回傳,非估算;非負,選配)")
     cr.add_argument("--tier", dest="rec_tier", choices=("light", "standard", "high"),
                     help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
+    cr.add_argument("--orchestrator", dest="rec_orch", choices=("claude", "codex"),
+                    help="d4 編排者定錨欄:誰在編排這個迴圈(外家席=不是編排者那一家);首筆定錨,之後要一致")
     cr.add_argument("--report", help="[T1 處置帳] 審查員報告檔路徑(存 path+sha256;檔案須存在且非空)")
     cr.add_argument("--snapshot", help="[T1 處置帳] 派工凍結快照檔路徑(quote-check 的比對對象;存 path+sha256)")
     cr.add_argument("--intake", help="首輪前掃留痕檔(rN-intake.md;選配——給了就存 path+sha256 且處置閘會全輪重驗,不給不擋。intake守衛案 2026-08-30)")
@@ -18111,6 +18184,8 @@ def main():
     ln.add_argument("loop_id")
     ln.add_argument("--tier", dest="next_tier", choices=("light", "standard", "high"),
                     help="編排者宣告 tier(有帳面定錨時須一致否則 rc2;零記錄必填)")
+    ln.add_argument("--orchestrator", dest="next_orch", choices=("claude", "codex"),
+                    help="誰在編排(claude|codex;零記錄必填、不預設;有帳面定錨須一致)——外家席=不是編排者那一家(d4)")
     ln.add_argument("--json", action="store_true", dest="next_json", help="機讀輸出")
     ln.add_argument("--need", type=int, default=2, help="legacy 收斂窗 K(委派 gate 用,預設 2)")
     ln.add_argument("--spec", dest="gate_spec", help="gate 委派用 spec 檔;缺=判 converged 資訊不足→gate-pending")
@@ -18754,7 +18829,7 @@ def main():
                           capture_counts=args.capture_counts, clusters=args.clusters,
                           spec=args.rec_spec, reviewed=args.reviewed,
                           tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,
-                          outcome=args.rec_outcome, usd=args.rec_usd,
+                          outcome=args.rec_outcome, usd=args.rec_usd, orchestrator=args.rec_orch,
                           scope_lines=args.scope_lines, report=args.report, snapshot=args.snapshot, intake=args.intake,
                           findings_set=args.findings_set, folded_set=args.folded_set,
                           accepted_set=args.accepted_set, accept_reasons=args.accept_reasons,
@@ -18784,7 +18859,7 @@ def main():
                                    severity=args.esc_severity, desc=args.esc_desc,
                                    defect_ref=args.esc_ref, list_mode=args.esc_list)
         if args.lcmd == "next":
-            return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json,
+            return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json, orchestrator=args.next_orch,
                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)
         # capture-counts 已在 vault-free 段提前處理(見上)
 

@@ -23,6 +23,7 @@ summary: |-
   KEY:★2026-09-04 實驗 4/5 定下四個地基事實★:①未信任 repo 的 AGENTS.md 與 .agents/skills/ 都會載入 ②PreToolUse 攔得到 apply_patch(tool_input.command=patch 全文,沒有 file_path)③spawn_agent 的 message 在 hook 眼裡是加密字串→updatedInput 改派工詞這條路在 Codex 不通;matcher "Agent" 也沒攔到(工具名 collaborationspawn_agent)④SubagentStart 的 additionalContext 會到子代理手上→Codex 側派工鏡頭走這條
   KEY:r1(2026-09-04,3 席+架構+外家 Codex)47 條/blocker 6(3 席各 1–3)/全折、accepted 空;外家 F1「message 可 rewrite」被實驗 A 反證不採信;★新地基事實(實驗 C/D)★:使用者層 hook 不按一次互動 TUI 的 Trust 就不跑,exec 只能靪 --dangerously-bypass-hook-trust,信任存放處沒查出來
   KEY:r2 驗收輪 26 條全折:armed 改 token 原子認領+TTL 先驗;--orchestrator 首輪必帶無預設;reinject 檔頭/無標題/語意衝突三個邊界;skill 掃描含 reference/templates;多檔 impact 上限 5 檔 20 秒
+  KEY:S0/S1/S2 已實作(2026-09-04):S0 安裝層+S1 hook 適配+S2 編排者旗標/家族相對化/skill 兩家字句;★自訂 agent 在 exec 選不中→d5 退路=父代理唯讀+框架進派工詞★
   KEY:四個擬裁定(r1/r2 折入後):(a)AGENTS.md(有 AGENTS.override.md 則寫它)放同一塊 sentinel 區塊、插在檔首、reinject/剝除/Check D 三端雙檔、doctor 估 chain 總量 (b)hook 註冊寫 ~/.codex/hooks.json 不寫 config.toml(stdlib 沒 TOML 寫入器,零依賴) (c)鏡頭範圍改由 `lumos dispatch-lens <range> --arm --seats N` 落 armed 檔(repo key=realpath 的 sha256,TTL 10 分,消耗 N 次即刪,鏡頭文字首行印 range);SubagentStart hook 讀它;Claude 側標記行照舊;架構席判無先例=平台逼出的有意識偏離 (d)外家席=「不是當下編排者那一家」:記帳/問閘加 --orchestrator claude|codex(預設 claude),_roster_family 相對化;席名沿既有 <鏡頭>-<模型> 慣例
   KEY:分四階段,每階段各自驗收:S0 安裝層(skills symlink→~/.agents/skills、hooks.json 合併器、AGENTS.md 區塊、enforcement 三層、teardown 對稱)→S1 hook 適配(apply_patch 取檔、SubagentStart 鏡頭、check-graph-sync 讀 Codex 逐字稿)→S2 迴圈從 Codex 編排(自訂 agent TOML、模板去 Claude 字眼、外家互換、席名統一)→S3 量測(recount/scenario_probe 多一個 runner)
 decisions:
@@ -48,6 +49,12 @@ decisions:
     id: d4
     context: _ROSTER_EXTERNAL_KEYS/_ROSTER_CLAUDE_KEYS 靜態關鍵字表無編排者參數;席位對帳是 advisory 觀測、不進合取,失準會讓人放行同門互審
     why_chosen: 跨家族席原則(canary-audit/design-loop)不變,只把 Codex 從常數變變數;預設 claude 會讓 Codex 編排漏旗標時靜默套錯家族
+    decided: 2026-09-04
+    valid: true
+  - content: S2 不裝自訂 agent TOML:Codex 編排時審查席用 spawn_agent,審查員框架寫進派工詞,父代理以 codex exec --sandbox read-only 開讓子代理繼承唯讀;外家席換 claude -p
+    id: d5
+    context: "進場實驗兩次(檔名 lumos-reviewer 與 lumos_reviewer,放 CODEX_HOME/agents/)派工詞點名後 SubagentStart agent_type 仍是 default、子代理可寫檔;父代理 --sandbox read-only 時子代理 apply_patch 被擋(patch rejected: writing is blocked by read-only sandbox)"
+    why_chosen: 0.144.1 的 codex exec 下自訂 agent 選不中,沒證實的接頭不裝;唯讀由父代理沙盒繼承同樣可證;框架進派工詞與 Claude 側同形。REVISIT:2026-09-25 互動模式再試一次自訂 agent
     decided: 2026-09-04
     valid: true
 ---
@@ -182,7 +189,16 @@ REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/pro
 - **測試** +3(`t_codex_s1_impact_apply_patch`/`t_codex_s1_lens_arm_claim`/`t_codex_s1_graph_sync_codex_transcript`)。
 - **驗收**:[[Verification/2026-09-04_Codex完全支援S1hook適配驗收]]——隔離 clone+CODEX_HOME 真跑 codex exec:①apply_patch 改帶合約的檔 → hook 注入 1030 字「必看——這 9 篇帶著不能破壞的合約或出過事故」;②arm 1 席後派子代理 → 子代理原文回報 `LUMOS-LENS range=Lumos/main..HEAD 第 1/1 席`;③Stop → 用當場抓下的真 payload+逐字稿餵修正後 hook 印出「改了 1 個程式碼檔但筆記沒動」(第一次真跑沒印:安裝副本是修正前的,抓 payload 重餵才對上;變數型 patch 是那次抓到的)。
 - **代碼審 r1(code-codex-s1,standard:單reviewer+架構+外家 Codex,2026-09-04)**:14 條(5+3+6,4 條兩席重疊)全折——Codex 逐字稿 shell 呼叫一半是 `{cmd:` 無引號(同日 61 份逐字稿 31:30)、輪次邊界兩型都認(`event_msg/user_message` 與 `response_item/message role=user`)、席號改用 token 編號(remaining 推算會撞號)、四個模式旗標互斥、Claude 單檔路徑 timeout 維持 30、hook 失敗分支補 _debug、`_lens_cache_path` 改 realpath 與 armed key 同法、armed 目錄補 group/other 不可寫檢查;驗證筆記改寫「只證當時那一份逐字稿的形狀」。鏡頭這輪沒附固定席:base 是未推 commit 不在主線,hook 照設計放行。卷證 `governance/review-reports/code-codex-s1/`。
-- **沒做(留 S2/S3)**:五支 skill 的 Claude 字眼(reference/templates 全掃)、agent TOML、`--orchestrator`、席名;recount/probe。
+- ~~沒做(留 S2/S3)~~ → S2 見下節;S3 未做。
+
+## 實作紀錄 S2(2026-09-04,S1 代碼審過閘後同日動工)
+
+- **進場實驗(自訂 agent)**:`CODEX_HOME/agents/` 放 `lumos-reviewer.toml`(name/description/developer_instructions/sandbox_mode=read-only),派工詞點名 → SubagentStart `agent_type=default`、子代理 apply_patch 成功寫檔;改成底線名 `lumos_reviewer`(模型 spawn 時 task_name 用的形)再試一次,同樣 default、可寫。★0.144.1 的 codex exec 下自訂 agent 選不中★(文件說靠名字選,沒說 exec 限制;互動模式沒試,REVISIT 2026-09-25)。退路實測:父代理 `--sandbox read-only` 時子代理寫檔被擋(「patch rejected: writing is blocked by read-only sandbox」)→ **d5:不裝 agent TOML,審查員框架寫進派工詞、父代理唯讀讓子代理繼承**。
+- **`--orchestrator`(d4)**:`canary record --orchestrator claude|codex` 存欄(帳面定錨後中途換家 rc2);`loop next` 零記錄時必帶(不預設,訊息講「外家=不是編排者那一家」),定錨後讀帳、說另一家 rc2;輸出多 `orchestrator` 欄、`record_cmd` 帶旗標、應派席印「同門[誰]/外家(不是誰那一家)」。`_roster_family(auditor, orchestrator)` 相對化(codex 編排:codex/gpt=同門,sonnet/opus/claude/gemini/qwen=外家;字串仍回 "claude"/"external" 讓 `_TIER_ROSTER` 的 family 欄同義=同門席/外家席);`_roster_observe` 讀帳面編排者,舊帳沒欄→視為 claude 並印一句「舊帳相容」;外家席名沒模型尾碼印「建議 <鏡頭>-<模型>」提示(調研候選 ⑥,只提示不改帳)。既有 27 個測試呼叫補 `--orchestrator claude`。
+- **skill 文字**:五支 skill 11 處 Agent tool/`model: sonnet` 全加 Codex 對照(spawn_agent、父代理唯讀、外家換 `claude -p`、首輪 `--orchestrator codex`);design-loop/code-loop SKILL 進場行與 commands/05 加旗標。
+- **測試** +1(`t_codex_s2_orchestrator`:首輪必帶/定錨一致/相對家族/舊帳相容/席名提示),舊 roster 測試字樣更新。
+- **驗收**:[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]。
+- **沒做(留 S3)**:recount 多 Codex reader、probe runner。
 
 REVISIT:2026-09-25 互動 Codex 信任冒煙時一併看 SubagentStart 領席在互動模式下是否照常(本輪只驗 exec)。
 

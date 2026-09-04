@@ -87,7 +87,7 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏�
 
 ## 二、每一輪的步驟(現行)
 
-**Claude 編排,lumos 出原語。** 你(主對話)用 Agent tool 派審計員、判讀、修 spec;lumos 出 `canary record none`(輪處置帳載體)／`loop status` 記錄與算收斂。**lumos 不 spawn agent。**
+**編排者(Claude 或 Codex)編排,lumos 出原語。** 你(主對話)用 Agent tool(Codex:spawn_agent)派審計員、判讀、修 spec;lumos 出 `canary record none`(輪處置帳載體)／`loop status` 記錄與算收斂。**lumos 不 spawn agent。**
 
 > ### ★收斂改走處置閘(2026-08-04 重設計;取代 K-streak/capture-recapture 硬閘)★
 > **一輪流程**:pre-flight 排乾 → 派 panel(派工含★錨定紀律★:每條 finding 必附逐字原文引句 ≥10 字;派工當下順手落 dispatch manifest,見留痕慣例) → **收貨三道**(2026-08-06 S1,plan:[[Projects/驗證層自證三件_計劃]]):①逐席 `lumos quote-check <席報告> --spec <凍結快照>`(錨不到的條目不採信;★比對對象=派工當下凍結快照,勿用現檔——折入後引句會自我成真★)②`lumos refcheck <席報告> --repo <root>`(finding 引的 file:line 機械驗存在/行號範圍——報告引了不實指涉當場現形)③`lumos seat-check <席報告> --dispatch <rN-dispatch.json> --ledger <out-of-scope.jsonl>`(有講沒做對帳:unreported/out_of_scope;觀測恆 rc0 不擋收貨,越界另記一本不進收斂帳) → 辯方(≥major) → 處置帳 record(`lumos loop next` 的 `disposal_cmd` 模板;★blocker 只能折不能放行★) → `lumos loop status <id> --disposal --spec <計劃節點> --repo <root>`(四條合取全讀側可重算:G3∧處置全清∧留痕 sha 重驗∧引句全錨定) → rc0 即收斂;cap=2,第二輪只給 delta。
@@ -123,7 +123,7 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏�
 2.7. **pre-flight 排乾(首輪前跑一次,r2+ 不重跑)**:派 1 個便宜 agent 拿固定 checklist 掃**真檔 spec**——未定義旗標／欄位／檔名、章節交叉引用、**範圍刀自違**(「明確不做」被其他段偷偷違反)、CLI touchpoint(白名單／Check 字母撞名／函式簽名)、測試策略與本文條目一一對應。命中直接修真檔(記入審計修正紀錄標「pre-flight」,**不算 loop findings**)。
    理由:實測 r1 大宗是清單型缺陷(某案 r1 九條裡五條此型),先機械排乾讓 panel 從高起點審,一輪收斂(K=1)才從理論變可能(cascade:便宜先掃、貴的審剩下)。
 
-3. **派乾淨審計員**:Agent tool、`model: sonnet`(升級條件見護欄)、指向工作副本。
+3. **派乾淨審計員**:Agent tool、`model: sonnet`(升級條件見護欄)、指向工作副本(Codex 編排:spawn_agent,父代理唯讀沙盒,框架寫進派工詞)。
    - **refute framing**:把工作副本當**外部第三方的投稿**審,不是你／本系統寫的——挑出投稿者沒看到的洞。逐節讀、主動找洞(未定義詞／壞引用／不一致／矛盾／可執行性 gap),逐條標 severity。
    - **附步驟 2.5 的 refcheck manifest**:manifest 內宣稱的存在性／行號已機械驗訖,查證力氣聚焦語意;**manifest 非宣稱全集**,散文裡的現況假設仍要自己查。
    - **加碼 framing**(席報告疑似通用回應/引句錨定大面積失敗的下一輪用):「逐節讀,你一定找得到至少一個未定義的詞／壞引用／不一致;沒找到就是你沒讀仔細」。

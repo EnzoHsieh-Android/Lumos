@@ -12,12 +12,12 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—�
 - **用**:spec / 設計 / 計劃筆記寫完、要進實作前。被審的唯一真檔 = 圖譜計劃筆記 `Projects/<主題>_計劃.md`;loop 編號 = 檔名去 `_計劃` 轉 kebab。
 - **跳**:改錯字、一行、純機械(改名、補欄位)——可跳,但在 commit 或計劃筆記寫一句為什麼跳。
 - **light(單人、最多兩輪)**:小而不瑣碎的 spec 才准(先驗暫用值:預估實作改動 ≲50 行且孤立);碰金流 / 對外寄送 / 正式環境不可逆 / 守衛面、動到 ★INVARIANT★、演算法密集、改動偏大——任一命中就走完整迴圈。忘了判就走完整(寧多不少)。這道判斷目前靠你自己誠實,沒有機械擋。**light 輪只要冒出存活 ≥major → 算 light 誤判,立刻升級**:開新編號(原編號加 `-std`)走完整迴圈,乾淨輪不洗回來。
-- 進場前一行 `lumos loop next <編號> --tier standard|high|light --spec <計劃.md>`,第一次一定帶 `--tier`,之後它會吐「第幾輪、幾個人、派誰、記帳範本」。首輪還會印「主題既有節點」(圖譜入口栓:近名或已翻案的先讀它的 decisions 再開案,重複開案的成本在後頭)。
+- 進場前一行 `lumos loop next <編號> --tier standard|high|light --orchestrator claude|codex --spec <計劃.md>`,第一次一定帶 `--tier` 與 `--orchestrator`(誰在編排;外家席=不是編排者那一家,d4),之後它會吐「第幾輪、幾個人、派誰、記帳範本」。首輪還會印「主題既有節點」(圖譜入口栓:近名或已翻案的先讀它的 decisions 再開案,重複開案的成本在後頭)。
 
 ## 一輪怎麼跑(照這個順序)
 1. **準備材料**:複製計劃筆記到工作副本 `/tmp/<編號>-rN.md`,`sha256sum <計劃筆記>` 留下這輪的指紋。`wc -l` 超過 1800 行就拆開審(外部研究:材料太多審查員看不完;本專案自己量不到這效應,但照做)。
 2. **先機械排乾**(每輪):`lumos refcheck <副本> --repo <根> --json`——引的檔案/行號不存在直接修真檔;`lumos prose-lint <計劃.md>`——中文模糊措辭掃描(只提醒不擋,rc 恆 0);掃出的類別歸編排者排乾,派工詞明寫「此掃描可及類別,席位不得報」;`lumos pitfalls <計劃.md> --check`——沒有「實務隱患」節先補;它反問的每個風險類都要逐類答進去,判「不碰」也要寫「已排除:理由」,不准靜默略過(排除理由也是審查對象)。**首輪再多一步**:派一個便宜 agent 拿固定清單掃①未定義的詞②壞引用③範圍自相矛盾④**機械宣稱驗語意**(spec 每句「某函式/機制會做 X」,開檔讀該段碼驗語意,**不只驗存在**——存在性抓到壞行號、語意誤宣稱要靠這條)。分流:①②③與存在類命中=直接修真檔不算 findings;**語意類命中=修真檔+逐條(含修改前→後對照)寫進 rN-intake.md 留痕;動到「核心裁定」節的=升級為正式 finding 交席位審,前掃不得自行改裁定**。★跑完把 `preflight-4: ran` 頂格寫進 rN-intake.md(宣告行,2026-08-30 intake守衛 d1;處置閘與 doctor [I] 段機械讀它——沒有那行=機器判定沒跑;記帳可帶選配 `--intake`)★
-3. **派審查員**:Agent、`model: sonnet`、指向工作副本。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。派工當下把 `{round, seat, lens, materials, auditor}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`,凍結快照存 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
+3. **派審查員**:Agent、`model: sonnet`、指向工作副本(★Codex 編排時:spawn_agent、派工詞自帶框架、父代理唯讀沙盒;外家席換 `claude -p`;首輪 `loop next … --orchestrator codex`——[[Projects/Codex完全支援_計劃]] d4/d5★)。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。派工當下把 `{round, seat, lens, materials, auditor}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`,凍結快照存 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
 4. **收貨三道(全機械,錨不到的不採信)**。存席報告先做兩個正規化(2026-08-26 起,收貨 SOP——不是 code 裡的既有步驟,漏做的機械後果=記帳時 rc2 擋):引句轉成「引句:「…」」同行格式;表頭型嚴重度(### id / 等級 / 標題)補一行獨立「severity: <值>」,乾淨輪也要一行 severity: clean(record 寫側 2026-08-26 起硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高)。然後:
    - `lumos quote-check <席報告> --spec <凍結快照>`:引句對不回快照的條目丟掉(比對對象是派工當下的快照,不是現檔)。
    - `lumos refcheck <席報告> --repo <根>`:報告引的 file:line 要存在。

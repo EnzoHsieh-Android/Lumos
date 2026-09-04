@@ -24,7 +24,7 @@ lumos context linter-gap實務隱患        # 無 → lumos new issue "linter-ga
 
 1. **確認已覆蓋範圍**:讀該專案 `.lumos/lint.json` 宣告的 linter(得知哪些坑已被 lint-adapter 蓋)。網搜目標 = **linter 沒蓋的**。
 2. **WebSearch**:搜「<stack> <版本> gotcha / pitfall / footgun / common mistake linter doesn't catch」等。收成候選坑清單(每條:一句描述 + 來源 URL + 觸發條件)。**濾掉**:① linter 已蓋的 ② 已在節點兩段的 ③ 專案沒用到的 API/情境。
-3. **反證預篩**(借鏡 `lumos-design-loop` 的辯方 / [[finding-refute]]):對**每條**候選,用 Agent tool 派**乾淨 refuter**(獨立脈絡),framing:
+3. **反證預篩**(借鏡 `lumos-design-loop` 的辯方 / [[finding-refute]]):對**每條**候選,用 Agent tool(Codex:spawn_agent)派**乾淨 refuter**(獨立脈絡),framing:
    > 「預設這條坑是**假的 / 不適用本專案**。構造反駁證據:它是否過時(框架已修)、是否 linter 其實有規則、是否本專案根本不會踩(用 grep/Read 實際代碼查)。**必須附來源或 `file:line`,光說『沒問題』不算**;拿不出反證才算駁不倒。」
    - refuter 回「駁倒(附證據)」→ **丟掉**(可選記進〈已評估駁回〉附反證,避免下次重找)。
    - refuter 回「駁不倒」→ 進候選。
