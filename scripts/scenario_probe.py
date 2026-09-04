@@ -108,11 +108,11 @@ def judge(calls, expect, forbid_before):
 
 
 # ── 修法 A ablation(Projects/修法A_lumos先行ablation_計劃)──────────────────────────
-# 「不帶」組要拔的是 CLAUDE.md 裡「第一個工具呼叫是 lumos」那一小節(到「三條鐵則」之前),
+# 「不帶」組要拔的是 CLAUDE.md 裡「第一個工具呼叫是 lumos」那一小節(到「鐵則」之前),
 # 其餘(## 標題、兩行前提、三條鐵則、白話、skill 表)原樣。邊界字串跟 scripts/templates/graph-discipline.md 同源;
 # 範本改標題這裡會找不到 → make_sandbox 直接炸,寧可實驗跑不起來,不要靜默跑一個沒拔乾淨的「不帶」組。
 RULE_HEAD = "### 第一個工具呼叫是 `lumos`"
-RULE_END = "### 三條鐵則"
+RULE_END = "### 鐵則"   # 2026-09-05 範本標題去數字(Codex行為精修 F9);同源=scripts/templates/graph-discipline.md
 
 
 def strip_lumos_first_rule(text):
@@ -228,21 +228,46 @@ def _validate_scenario(sc):
     return None
 
 
+def _codex_home_dir():
+    """Codex 家目錄一律問 scripts/lumos 的 _codex_home()(單源;code-codex-refine r1 架構 #2:別再第二套算 CODEX_HOME)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    path = str(ROOT / "scripts" / "lumos")
+    spec = importlib.util.spec_from_file_location("_lumos_for_probe", path, loader=SourceFileLoader("_lumos_for_probe", path))
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod._codex_home()
+
+
+# lumos 各 hook 注入 Codex 時的首行標頭(入口 hook / impact 鏡頭 / 派工鏡頭 / 收工擋停);Stop 的續做提示另帶 hook_run_id=
+_LUMOS_HOOK_HEADS = ("本專案用 lumos 知識圖譜", "必看——", "LUMOS-LENS", "LUMOS-STOP")
+
+
 def _codex_hook_trace(thread_id):
-    """從 Codex 逐字稿數 hook 注入(developer 訊息含 lumos 標頭)與擋停續做(LUMOS-STOP 標頭)。
+    """從 Codex 逐字稿數「lumos 的 hook 有沒有真的注入」與「收工擋停有沒有發生」。
+    逐行當 JSON 讀(架構 #4:不拿子字串當結構),只認 lumos 自家 hook 的首行標頭:developer 訊息以 _LUMOS_HOOK_HEADS 之一開頭=注入一次;
+    user 訊息帶 <hook_prompt hook_run_id=…>=Stop 續做提示一次(外家 #3:Codex 自己的 skills 清單也含 "lumos",字串出現不算)。
     hook 要不要 fire 取決於這台機器審過信任沒(Projects/Codex完全支援_計劃 誠實界線)——沒 fire 的場要看得出來,不能默默算「Codex 沒理 lumos」。"""
     if not thread_id:
         return None
-    home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
-    hits = list(home.glob(f"sessions/*/*/*/rollout-*-{thread_id}.jsonl"))
+    hits = sorted(_codex_home_dir().glob(f"sessions/*/*/*/rollout-*-{thread_id}.jsonl"), key=lambda q: q.stat().st_mtime)
     if not hits:
         return None
+    hits = hits[-1:]   # 同 thread 多份 rollout 取最新(邊界 F3:glob 無序)
     fired = stop_seen = 0
     for line in hits[0].read_text(encoding="utf-8", errors="replace").splitlines():
-        if "LUMOS-STOP" in line:
-            stop_seen += 1
-        if '"role":"developer"' in line and "lumos" in line.lower():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue   # 半行(Codex 還在寫)略過
+        pl = ev.get("payload") if isinstance(ev, dict) else None
+        if not isinstance(pl, dict) or pl.get("type") != "message":
+            continue
+        texts = [c.get("text", "") for c in (pl.get("content") or []) if isinstance(c, dict)]
+        text = "\n".join(t for t in texts if isinstance(t, str))
+        if pl.get("role") == "developer" and text.lstrip().startswith(_LUMOS_HOOK_HEADS):
             fired += 1
+        if pl.get("role") == "user" and "hook_run_id=" in text and "LUMOS-STOP" in text:
+            stop_seen += 1
     return {"hooks_fired": fired, "stop_block_seen": stop_seen}
 
 

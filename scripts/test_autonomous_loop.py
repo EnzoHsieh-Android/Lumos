@@ -1331,7 +1331,7 @@ class TestScenarioProbeAblation(unittest.TestCase):
         cm = (self.root / "CLAUDE.md").read_text(encoding="utf-8")
         out, ok = self.sp.strip_lumos_first_rule(cm)
         self.assertTrue(ok, "CLAUDE.md 找不到「第一個工具呼叫」小節邊界,without 組做不出來")
-        self.assertIn("### 三條鐵則", out)
+        self.assertIn("### 鐵則", out)
         self.assertIn("## 知識圖譜先行", out)
         self.assertLess(len(out), len(cm) - 500, "砍掉的量太小,可能只砍到標題")
 

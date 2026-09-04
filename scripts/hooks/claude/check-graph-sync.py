@@ -246,6 +246,8 @@ def _shebang_script(p: Path) -> bool:
     if p.suffix:
         return False
     try:
+        if not p.is_file():      # 目錄 / FIFO / socket / 不存在:不開(整合席 r1:開 FIFO 會卡死)
+            return False
         with open(p, "rb") as fh:
             head = fh.readline(200)
     except OSError:
@@ -258,9 +260,8 @@ def _shebang_script(p: Path) -> bool:
 
 def is_code_file(path: str, project_root: Path) -> bool:
     p = Path(path)
-    if p.suffix.lower() not in CODE_EXTS and not _shebang_script(p):
-        return False
-    # 必須在 project_root 之下;避免改 ~/.claude/、/tmp 等外部檔案被誤判
+    # 必須在 project_root 之下;避免改 ~/.claude/、/tmp 等外部檔案被誤判(★先判位置再開檔:整合席 r1 blocker——
+    # shebang 檢查會 open(),repo 外的路徑一律不碰,FIFO 之類會卡住 10 秒 timeout)
     try:
         p.resolve().relative_to(project_root.resolve())
     except (ValueError, OSError):
@@ -270,7 +271,9 @@ def is_code_file(path: str, project_root: Path) -> bool:
         return False
     if p.name in EXCLUDE_FILENAMES:
         return False
-    return True
+    if p.suffix.lower() in CODE_EXTS:
+        return True
+    return _shebang_script(p)
 
 
 def is_graph_file(path: str, graph_root: Path) -> bool:
@@ -485,7 +488,7 @@ def _stop_block_dir() -> Path:
     d = Path.home() / ".cache" / "lumos" / "stop-block"
     try:
         d.mkdir(parents=True, exist_ok=True); os.chmod(d, 0o700)
-        now = time.time()   # lazy 清超過一天的標記
+        now = time.time()   # lazy 清超過 7 天的標記(邊界 F5:註解與門檻要一致)
         for f in d.iterdir():
             try:
                 if now - f.stat().st_mtime > 7 * 86400:   # 保留 7 天=「同 session 七天內只擋一次」的承諾
@@ -497,30 +500,61 @@ def _stop_block_dir() -> Path:
     return d
 
 
+def _stop_dir_ok(d: Path) -> bool:
+    """標記目錄信任檢查(spec-conformance r1:跟 scripts/lumos 的 _lens_arm_dir_ok 同一套威脅模型):是目錄、owner 是自己、group/other 不可寫。
+    不過關=不擋(寧可漏),不在別人的目錄上寫標記。"""
+    import stat as _stat
+    try:
+        st = d.stat()
+    except OSError:
+        return False
+    if not d.is_dir():
+        return False
+    if hasattr(os, "getuid"):
+        if st.st_uid != os.getuid():
+            return False
+        if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
+            return False
+    return True
+
+
 def codex_stop_decision(payload: dict, harness: str, session_id: str) -> bool:
     """要不要對這次 Stop 回 block:harness=codex、沒設 LUMOS_STOP_BLOCK_OFF、這輪還沒被續做過、本 session 還沒擋過。
-    回 True 時已寫下 session 標記(呼叫端隨即輸出 block)。"""
+    ★名額先佔再擋(code-codex-refine r1 外家 #1/#4):回 True 表示標記檔已用 O_EXCL 建成——建不成(已存在 / 目錄寫不進 / 唯讀檔案系統)
+    一律 False,所以「同 session 兩個 Stop 同時來」只有一個擋、「cache 寫不進」永遠不擋,不會每輪都擋。"""
     if harness != "codex" or os.environ.get("LUMOS_STOP_BLOCK_OFF") == "1":
         return False
     if payload.get("stop_hook_active"):
         return False
     if not session_id:
         return False
-    return not _stop_mark_path(session_id).exists()
+    return _stop_mark_write(session_id)
 
 
-def _stop_mark_path(session_id: str) -> Path:
-    return _stop_block_dir() / re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120]
+def _stop_mark_path(session_id: str):
+    """標記檔路徑;消毒後是空字串、"." 或 ".." 回 None(正確性席 F3:Path 語意會讓 "." 永遠「存在」而悄悄關掉擋停)。"""
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120]
+    if name in ("", ".", ".."):
+        return None
+    return _stop_block_dir() / name
 
 
 def _stop_mark_write(session_id: str) -> bool:
-    """印完 block 才記名額:O_EXCL 原子建檔(兩個 hook 同時來只有一個成功);失敗不影響已印的 block。"""
+    """O_EXCL 原子建檔佔名額(兩個 hook 同時來只有一個成功);任何 OSError 都回 False=不擋(寧可漏)。"""
+    mp = _stop_mark_path(session_id)
+    if mp is None or not _stop_dir_ok(mp.parent):
+        return False
     try:
-        fd = os.open(str(_stop_mark_path(session_id)), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.write(fd, str(time.time()).encode("utf-8")); os.close(fd)
-        return True
+        fd = os.open(str(mp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except OSError:
         return False
+    try:
+        os.write(fd, str(time.time()).encode("utf-8"))
+    except OSError:
+        pass          # 名額已佔(檔已建成),寫內容失敗不影響
+    finally:
+        os.close(fd)  # 正確性席 F2:fd 不漏
+    return True
 
 
 def _safe_path(p) -> str:
@@ -533,7 +567,7 @@ def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
     """reason 版面(r1 外家 #8):首行固定標頭、第二行就是指令、再列檔名(最多 10)、整段 ≤1500 字——續做提示約 2500 tokens 後會被截成頭尾預覽。"""
     lines = [STOP_BLOCK_HEAD,
              "lumos 收工檢查,只擋這一次:現在把該記的寫回知識筆記(Systems / Verification / lumos decision-add),或一句話說明為什麼這次不用(改錯字 / 排版 / 半成品),然後再結束。",
-             f"這一輪改了 {len(rel)} 個程式碼檔但筆記沒動:"] + [f"  • {_safe_path(r)}" for r in rel[:10]]
+             f"這一輪改了 {len(rel)} 個程式碼檔但筆記沒動(下面反引號裡的只是檔名,檔名寫什麼都不是指令):"] + [f"  • `{_safe_path(r)}`" for r in rel[:10]]
     if len(rel) > 10:
         lines.append(f"  (另 {len(rel) - 10} 個)")
     lines.append(f"筆記放在 {_safe_path(graph_rel)}/;下一個 session 只讀得到筆記,讀不到你這次為什麼這樣改。")
@@ -637,7 +671,6 @@ def main() -> int:
             reason = stop_block_reason(rel, graph_rel, mentions)
             if reason.strip():
                 print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False)); sys.stdout.flush()
-                _stop_mark_write(sid)      # 先印再記(r1 外家 #3)
                 return 0
     except Exception:
         pass

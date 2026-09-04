@@ -176,7 +176,7 @@ index 3b863b2..5b81918 100644
  |------|-----|
  | 檔 | `scripts/hooks/pre-commit`(隨 repo 版控) |
 diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
-index 81402aa..bf5e297 100755
+index 81402aa..3ea2330 100755
 --- a/scripts/hooks/claude/check-graph-sync.py
 +++ b/scripts/hooks/claude/check-graph-sync.py
 @@ -1,27 +1,30 @@
@@ -234,7 +234,51 @@ index 81402aa..bf5e297 100755
  
  def _js_unescape(s: str) -> str:
      try:
-@@ -445,21 +448,91 @@ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
+@@ -227,23 +230,42 @@ def collect_turn_actions(transcript_path: Path):
+                 fp = inp.get("file_path", "")
+                 if fp:
+                     file_paths.append(fp)
+             elif name == "Bash":
+                 cmd = inp.get("command", "")
+                 if cmd:
+                     bash_commands.append(cmd)
+     return file_paths, bash_commands
+ 
+ 
++_SHEBANG_INTERPS = ("python", "bash", "sh", "zsh", "node", "ruby", "perl")
++
++
++def _shebang_script(p: Path) -> bool:
++    """沒有副檔名的檔,首行 #! 是已知直譯器就當程式碼(2026-09-05 f02 後測實證:本 repo 主程式 `scripts/lumos`
++    無副檔名,兩家改它都過不了閘門 2,Stop 提醒/擋停從沒對它生效過)。讀不到、不是 #!、二進位 → False。"""
++    if p.suffix:
++        return False
++    try:
++        with open(p, "rb") as fh:
++            head = fh.readline(200)
++    except OSError:
++        return False
++    if not head.startswith(b"#!"):
++        return False
++    line = head.decode("utf-8", "replace").lower()
++    return any(x in line for x in _SHEBANG_INTERPS)
++
++
+ def is_code_file(path: str, project_root: Path) -> bool:
+     p = Path(path)
+-    if p.suffix.lower() not in CODE_EXTS:
++    if p.suffix.lower() not in CODE_EXTS and not _shebang_script(p):
+         return False
+     # 必須在 project_root 之下;避免改 ~/.claude/、/tmp 等外部檔案被誤判
+     try:
+         p.resolve().relative_to(project_root.resolve())
+     except (ValueError, OSError):
+         return False
+     norm = str(p).replace("\\", "/")
+     if any(seg in norm for seg in EXCLUDE_PATH_CONTAINS):
+         return False
+     if p.name in EXCLUDE_FILENAMES:
+@@ -445,21 +467,91 @@ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
                             capture_output=True, text=True, timeout=25)
          if r.returncode != 0 or not r.stdout.strip():
              return []
@@ -326,7 +370,7 @@ index 81402aa..bf5e297 100755
          return 0
      project_root = Path(project_root_str)
  
-@@ -532,16 +605,26 @@ def main() -> int:
+@@ -532,16 +624,26 @@ def main() -> int:
          msg += ["", "這幾篇筆記有提到你改的檔案或名稱,最可能需要更新:"]
          for stem, notes in mentions.items():
              msg.append(f"   • {stem} → {', '.join(notes)}")
@@ -537,7 +581,7 @@ index 26433a8..548cea3 100644
  |---|---|
  | 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
 diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
-index 3b6c700..f181e21 100644
+index 3b6c700..ce99419 100644
 --- a/scripts/test_lumos.py
 +++ b/scripts/test_lumos.py
 @@ -25457,21 +25457,21 @@ def t_codex_s3_probe_codex_parser():
@@ -563,7 +607,7 @@ index 3b6c700..f181e21 100644
      import importlib.util, json as _j, subprocess as _sp, tempfile as _tf
      from importlib.machinery import SourceFileLoader
      path = str(Path(__file__).resolve().parent.parent / "governance" / "eval" / "lens-utilization" / "recount.py")
-@@ -25558,12 +25558,72 @@ def t_codex_d6_agent_toml():
+@@ -25558,12 +25558,83 @@ def t_codex_d6_agent_toml():
      r = _codex_run(home, "print(m._remove_codex_agent())")
      check("d6: teardown 對外方檔回 False 不刪", r.stdout.strip().endswith("False") and f.exists(), r.stdout[-80:])
      f.unlink(); _codex_run(home, "m._install_codex_agent()")
@@ -619,6 +663,17 @@ index 3b6c700..f181e21 100644
 +    check("stop-block⑦: session_id 缺 → 不擋(寧可漏)", "decision" not in r6.stdout, r6.stdout[:100])
 +    marks = list((home / ".cache" / "lumos" / "stop-block").iterdir())
 +    check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記", len(marks) == 1 and marks[0].name == "sess-1" and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
++    # 無副檔名 shebang 腳本算程式碼(f02 後測 0/2 擋停的根因:本 repo 主程式 scripts/lumos 無副檔名)
++    (repo / "scripts").mkdir(exist_ok=True); (repo / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nx=1\n", encoding="utf-8")
++    (repo / "scripts" / "notes").write_text("just text\n", encoding="utf-8"); (repo / "scripts" / "bin.dat").write_bytes(b"\x00\x01")
++    check("stop-block⑭: 無副檔名+python shebang 算程式碼;純文字/二進位/不存在的不算",
++          m.is_code_file(str(repo / "scripts" / "lumos"), repo) and not m.is_code_file(str(repo / "scripts" / "notes"), repo)
++          and not m.is_code_file(str(repo / "scripts" / "bin.dat"), repo) and not m.is_code_file(str(repo / "scripts" / "ghost"), repo), "")
++    lines2 = lines[:2] + [line("response_item", {"type": "custom_tool_call", "name": "exec", "input": 'tools.apply_patch("*** Begin Patch\\n*** Update File: scripts/lumos\\n@@\\n-x=1\\n+x=2\\n*** End Patch")'})]
++    tp.write_text("\n".join(lines2) + "\n", encoding="utf-8")
++    r7 = run(sid="sess-5")
++    check("stop-block⑮: 改的是無副檔名主程式 scripts/lumos 也會擋(f02 後測翻紅→綠)", '"block"' in r7.stdout and "scripts/lumos" in r7.stdout, r7.stdout[:200])
++    tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
 +    # 版面:超過 10 檔只列 10 個+「另 N 個」;超長截到 1500
 +    rs = m.stop_block_reason([f"src/f{i}.py" for i in range(14)], "docs/x-knowledge", {})
 +    check("stop-block⑨: >10 檔只列 10 個並寫「另 4 個」", rs.count("• ") == 10 and "另 4 個" in rs, rs[-120:])

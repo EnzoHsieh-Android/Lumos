@@ -25608,6 +25608,14 @@ def t_codex_stop_block_once():
     check("stop-block⑥: 沒帶 --harness codex(Claude 路徑)一行不動:stdout 空、stderr 提醒", r5.stdout.strip() == "" and r5.returncode == 0, (r5.stdout[:100], r5.stderr[:100]))
     r6 = run(sid="", harness=True)
     check("stop-block⑦: session_id 缺 → 不擋(寧可漏)", "decision" not in r6.stdout, r6.stdout[:100])
+    r9 = run(sid="..", harness=True)
+    check("stop-block⑱: session_id 消毒後是 .. → 不擋(不會把 Path('..') 當標記)", "decision" not in r9.stdout and not (home / ".cache" / "lumos").is_file(), r9.stdout[:100])
+    # 外家 #1/#4:cache 寫不進 → 不擋(不是每輪都擋);名額先佔:標記存在就不擋
+    ro = d / "ro-home"; ro.mkdir(); (ro / ".cache").write_text("i am a file, not a dir", encoding="utf-8")
+    r8 = _sp.run([sys.executable, hook, "--harness", "codex"], input=_j.dumps({"session_id": "sess-ro", "transcript_path": str(tp), "cwd": str(repo), "hook_event_name": "Stop", "stop_hook_active": False}),
+                 capture_output=True, text=True, env=dict(os.environ, HOME=str(ro)), timeout=60)
+    check("stop-block⑯: 標記目錄建不成(~/.cache 是檔)→ 不擋、退回 stderr 提醒(不會每輪都擋)", "decision" not in r8.stdout and r8.returncode == 0, r8.stdout[:120])
+    check("stop-block⑰: reason 的檔名包在反引號裡並標明「只是檔名」", "`src/app.py`" in reason and "只是檔名" in reason, reason[:200])
     marks = list((home / ".cache" / "lumos" / "stop-block").iterdir())
     check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記", len(marks) == 1 and marks[0].name == "sess-1" and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
     # 無副檔名 shebang 腳本算程式碼(f02 後測 0/2 擋停的根因:本 repo 主程式 scripts/lumos 無副檔名)

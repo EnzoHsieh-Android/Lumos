@@ -17,6 +17,8 @@ summary: |-
   KEY:刻意不硬擋:單體大檔(scripts/lumos)一次牽 30+ 篇,硬擋會把人訓練成反射 --no-verify
   DEP:[[Systems/lumos-cli-read]]
   TEST:t_precommit_sync_nudge_names_missing_pinned_nodes(動錯篇點名/動對篇不點名)
+verified_by:
+  - "[[Verification/2026-09-05_Codex行為精修f02後測]]"
 ---
 # graph-sync-coverage
 

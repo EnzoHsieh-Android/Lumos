@@ -52,3 +52,13 @@ Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆�
 
 > lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill 見文末〈架構參考 Skills〉。
 <!-- LUMOS:GRAPH-DISCIPLINE:END -->
+
+## 本 repo 的測試子集怎麼跑(紀律區塊鐵則三說的「看專案自己的說明」就是這裡)
+
+改完程式先跑跟改動相關的子集,全套(約 8 分鐘、3700+ 案例)留給推送前的閘:
+
+```
+python3 scripts/test_lumos.py -k <關鍵字>
+```
+
+關鍵字比對測試函式名(例:`-k stop_block`、`-k codex`);對照組 Codex 曾因在對話裡跑全套而超時([[Projects/Codex行為精修_計劃]] 基線)。
