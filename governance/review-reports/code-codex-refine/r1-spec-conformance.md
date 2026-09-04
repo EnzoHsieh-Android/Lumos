@@ -55,3 +55,14 @@ diff:`governance/review-reports/code-codex-refine/r1-snapshot.patch`(9 檔)
 
 縮水+未實作共 4 條(其中 2 條標 ⚠ 待編排者裁)
 max severity: minor
+
+## 收貨正規化(編排者)
+縮水 1 條(標記目錄信任檢查)+未實作 2 條(CLAUDE.md 子集指令;實驗/Verification 寫回)+⚠ 1 條:
+severity: minor
+blocking: 否
+severity: minor
+blocking: 否
+severity: minor
+blocking: 否
+severity: minor
+blocking: 否

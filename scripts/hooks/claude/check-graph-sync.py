@@ -485,9 +485,15 @@ STOP_BLOCK_HEAD = "LUMOS-STOP:改了程式碼但知識筆記沒跟著動"
 
 
 def _stop_block_dir() -> Path:
+    """標記目錄:mkdir(0700)後★先過 _stop_dir_ok 再做任何 chmod/清理★(code-codex-refine r2 外家:目錄若被換成指向別處的 symlink,
+    之前會跟著 chmod 並刪掉目標裡超過 7 天的檔——現在 symlink/不是自己的/別人可寫 一律不碰,交給後面的 _stop_dir_ok 判不擋)。"""
     d = Path.home() / ".cache" / "lumos" / "stop-block"
     try:
-        d.mkdir(parents=True, exist_ok=True); os.chmod(d, 0o700)
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not _stop_dir_ok(d):
+            print(f"lumos 收工擋停停用:標記目錄 {d} 不是自己的 0700 目錄(symlink / 別人可寫 / chmod 失敗)——修好權限才會再擋", file=sys.stderr)   # r2 delta #3:靜默停用要有訊號(給 log,Codex 模型看不到)
+            return d
+        os.chmod(d, 0o700)
         now = time.time()   # lazy 清超過 7 天的標記(邊界 F5:註解與門檻要一致)
         for f in d.iterdir():
             try:
@@ -505,6 +511,8 @@ def _stop_dir_ok(d: Path) -> bool:
     不過關=不擋(寧可漏),不在別人的目錄上寫標記。"""
     import stat as _stat
     try:
+        if d.is_symlink():      # r2 外家:symlink 指到別處=別人的目錄,不信
+            return False
         st = d.stat()
     except OSError:
         return False
@@ -560,7 +568,7 @@ def _stop_mark_write(session_id: str) -> bool:
 def _safe_path(p) -> str:
     """reason 會變成 Codex 的下一個 user prompt(r1 通才 F3):檔名來自工作樹,不信任 repo 的檔名不能夾帶換行/控制字元進提示。"""
     s = "".join(ch for ch in str(p) if ch.isprintable() and ch not in "\r\n")
-    return s[:160]
+    return s.replace("`", "'")[:160]   # r2 delta #2:反引號會跳出 code span,換成單引號
 
 
 def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
@@ -572,7 +580,7 @@ def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
         lines.append(f"  (另 {len(rel) - 10} 個)")
     lines.append(f"筆記放在 {_safe_path(graph_rel)}/;下一個 session 只讀得到筆記,讀不到你這次為什麼這樣改。")
     if mentions:
-        lines.append("提到你改的檔的筆記:" + ";".join(f"{_safe_path(k)}→{','.join(_safe_path(x) for x in v[:3])}" for k, v in list(mentions.items())[:5]))
+        lines.append("提到你改的檔的筆記(同樣只是檔名):" + ";".join(f"`{_safe_path(k)}`→{','.join('`' + _safe_path(x) + '`' for x in v[:3])}" for k, v in list(mentions.items())[:5]))
     out = "\n".join(lines)
     return out if len(out) <= 1500 else out[:1490] + "…"
 
@@ -670,7 +678,17 @@ def main() -> int:
         if codex_stop_decision(payload, harness, sid):
             reason = stop_block_reason(rel, graph_rel, mentions)
             if reason.strip():
-                print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False)); sys.stdout.flush()
+                # r2 delta #1:名額已佔,輸出一定要送到——用 bytes 寫 stdout(不受 locale/ASCII 影響);真寫不出去就把名額退回,下一次 Stop 再試
+                try:
+                    sys.stdout.buffer.write((json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False) + "\n").encode("utf-8")); sys.stdout.buffer.flush()
+                except Exception:
+                    mp = _stop_mark_path(sid)
+                    if mp is not None:
+                        try:
+                            mp.unlink()
+                        except OSError:
+                            pass
+                    raise
                 return 0
     except Exception:
         pass

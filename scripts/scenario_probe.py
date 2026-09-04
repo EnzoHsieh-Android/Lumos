@@ -233,9 +233,14 @@ def _codex_home_dir():
     import importlib.util
     from importlib.machinery import SourceFileLoader
     path = str(ROOT / "scripts" / "lumos")
-    spec = importlib.util.spec_from_file_location("_lumos_for_probe", path, loader=SourceFileLoader("_lumos_for_probe", path))
-    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-    return mod._codex_home()
+    try:
+        spec = importlib.util.spec_from_file_location("_lumos_for_probe", path, loader=SourceFileLoader("_lumos_for_probe", path))
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        return mod._codex_home()
+    except Exception as e:   # r2 delta #4:載不進(改到一半的語法錯)不能把整場判成儀器例外,退回同語意的預設
+        print(f"  (hook_trace:載入 scripts/lumos 失敗,CODEX_HOME 退用預設:{type(e).__name__})", file=sys.stderr)
+        env = os.environ.get("CODEX_HOME")
+        return Path(env).expanduser() if env else Path.home() / ".codex"
 
 
 # lumos 各 hook 注入 Codex 時的首行標頭(入口 hook / impact 鏡頭 / 派工鏡頭 / 收工擋停);Stop 的續做提示另帶 hook_run_id=

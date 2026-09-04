@@ -1,0 +1,373 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 23716a2..602393c 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -45,10 +45,20 @@ Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆
+ 
+ | 你正在做的事 | 調用 |
+ |---|---|
+ | 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
+ | 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
+ | 設計 spec 寫完、要進實作前的審查迴圈 | **`lumos-design-loop`** |
+ | 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
+ 
+ > lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill 見文末〈架構參考 Skills〉。
+ <!-- LUMOS:GRAPH-DISCIPLINE:END -->
++
++## 本 repo 的測試子集怎麼跑(紀律區塊鐵則三說的「看專案自己的說明」就是這裡)
++
++改完程式先跑跟改動相關的子集,全套(約 8 分鐘、3700+ 案例)留給推送前的閘:
++
++```
++python3 scripts/test_lumos.py -k <關鍵字>
++```
++
++關鍵字比對測試函式名(例:`-k stop_block`、`-k codex`);對照組 Codex 曾因在對話裡跑全套而超時([[Projects/Codex行為精修_計劃]] 基線)。
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index 3ea2330..c314b0e 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -239,45 +239,48 @@ def collect_turn_actions(transcript_path: Path):
+ 
+ _SHEBANG_INTERPS = ("python", "bash", "sh", "zsh", "node", "ruby", "perl")
+ 
+ 
+ def _shebang_script(p: Path) -> bool:
+     """沒有副檔名的檔,首行 #! 是已知直譯器就當程式碼(2026-09-05 f02 後測實證:本 repo 主程式 `scripts/lumos`
+     無副檔名,兩家改它都過不了閘門 2,Stop 提醒/擋停從沒對它生效過)。讀不到、不是 #!、二進位 → False。"""
+     if p.suffix:
+         return False
+     try:
++        if not p.is_file():      # 目錄 / FIFO / socket / 不存在:不開(整合席 r1:開 FIFO 會卡死)
++            return False
+         with open(p, "rb") as fh:
+             head = fh.readline(200)
+     except OSError:
+         return False
+     if not head.startswith(b"#!"):
+         return False
+     line = head.decode("utf-8", "replace").lower()
+     return any(x in line for x in _SHEBANG_INTERPS)
+ 
+ 
+ def is_code_file(path: str, project_root: Path) -> bool:
+     p = Path(path)
+-    if p.suffix.lower() not in CODE_EXTS and not _shebang_script(p):
+-        return False
+-    # 必須在 project_root 之下;避免改 ~/.claude/、/tmp 等外部檔案被誤判
++    # 必須在 project_root 之下;避免改 ~/.claude/、/tmp 等外部檔案被誤判(★先判位置再開檔:整合席 r1 blocker——
++    # shebang 檢查會 open(),repo 外的路徑一律不碰,FIFO 之類會卡住 10 秒 timeout)
+     try:
+         p.resolve().relative_to(project_root.resolve())
+     except (ValueError, OSError):
+         return False
+     norm = str(p).replace("\\", "/")
+     if any(seg in norm for seg in EXCLUDE_PATH_CONTAINS):
+         return False
+     if p.name in EXCLUDE_FILENAMES:
+         return False
+-    return True
++    if p.suffix.lower() in CODE_EXTS:
++        return True
++    return _shebang_script(p)
+ 
+ 
+ def is_graph_file(path: str, graph_root: Path) -> bool:
+     """檔案是否在圖譜資料夾底下 (任何 .md)。"""
+     p = Path(path)
+     if p.suffix.lower() != ".md":
+         return False
+     try:
+         p.resolve().relative_to(graph_root.resolve())
+         return True
+@@ -478,69 +481,100 @@ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
+ # Codex 的 Stop hook 回 {"decision":"block","reason":…} 會讓模型以 reason 當下一個提示繼續做(官方通道);
+ # 本 hook 只在「改了程式碼、筆記沒動」且 --harness codex 時擋★一次★:兩道護欄=payload 的 stop_hook_active(這輪已續做過)
+ # 與 session 標記檔(同 session 只擋一次)。Claude 側完全不變(stderr 提醒;2026-07-06 撤 Stop nag 的教訓不重開)。
+ STOP_BLOCK_HEAD = "LUMOS-STOP:改了程式碼但知識筆記沒跟著動"
+ 
+ 
+ def _stop_block_dir() -> Path:
+     d = Path.home() / ".cache" / "lumos" / "stop-block"
+     try:
+         d.mkdir(parents=True, exist_ok=True); os.chmod(d, 0o700)
+-        now = time.time()   # lazy 清超過一天的標記
++        now = time.time()   # lazy 清超過 7 天的標記(邊界 F5:註解與門檻要一致)
+         for f in d.iterdir():
+             try:
+                 if now - f.stat().st_mtime > 7 * 86400:   # 保留 7 天=「同 session 七天內只擋一次」的承諾
+                     f.unlink()
+             except OSError:
+                 pass
+     except OSError:
+         pass
+     return d
+ 
+ 
++def _stop_dir_ok(d: Path) -> bool:
++    """標記目錄信任檢查(spec-conformance r1:跟 scripts/lumos 的 _lens_arm_dir_ok 同一套威脅模型):是目錄、owner 是自己、group/other 不可寫。
++    不過關=不擋(寧可漏),不在別人的目錄上寫標記。"""
++    import stat as _stat
++    try:
++        st = d.stat()
++    except OSError:
++        return False
++    if not d.is_dir():
++        return False
++    if hasattr(os, "getuid"):
++        if st.st_uid != os.getuid():
++            return False
++        if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
++            return False
++    return True
++
++
+ def codex_stop_decision(payload: dict, harness: str, session_id: str) -> bool:
+     """要不要對這次 Stop 回 block:harness=codex、沒設 LUMOS_STOP_BLOCK_OFF、這輪還沒被續做過、本 session 還沒擋過。
+-    回 True 時已寫下 session 標記(呼叫端隨即輸出 block)。"""
++    ★名額先佔再擋(code-codex-refine r1 外家 #1/#4):回 True 表示標記檔已用 O_EXCL 建成——建不成(已存在 / 目錄寫不進 / 唯讀檔案系統)
++    一律 False,所以「同 session 兩個 Stop 同時來」只有一個擋、「cache 寫不進」永遠不擋,不會每輪都擋。"""
+     if harness != "codex" or os.environ.get("LUMOS_STOP_BLOCK_OFF") == "1":
+         return False
+     if payload.get("stop_hook_active"):
+         return False
+     if not session_id:
+         return False
+-    return not _stop_mark_path(session_id).exists()
++    return _stop_mark_write(session_id)
+ 
+ 
+-def _stop_mark_path(session_id: str) -> Path:
+-    return _stop_block_dir() / re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120]
++def _stop_mark_path(session_id: str):
++    """標記檔路徑;消毒後是空字串、"." 或 ".." 回 None(正確性席 F3:Path 語意會讓 "." 永遠「存在」而悄悄關掉擋停)。"""
++    name = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120]
++    if name in ("", ".", ".."):
++        return None
++    return _stop_block_dir() / name
+ 
+ 
+ def _stop_mark_write(session_id: str) -> bool:
+-    """印完 block 才記名額:O_EXCL 原子建檔(兩個 hook 同時來只有一個成功);失敗不影響已印的 block。"""
++    """O_EXCL 原子建檔佔名額(兩個 hook 同時來只有一個成功);任何 OSError 都回 False=不擋(寧可漏)。"""
++    mp = _stop_mark_path(session_id)
++    if mp is None or not _stop_dir_ok(mp.parent):
++        return False
+     try:
+-        fd = os.open(str(_stop_mark_path(session_id)), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+-        os.write(fd, str(time.time()).encode("utf-8")); os.close(fd)
+-        return True
++        fd = os.open(str(mp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+     except OSError:
+         return False
++    try:
++        os.write(fd, str(time.time()).encode("utf-8"))
++    except OSError:
++        pass          # 名額已佔(檔已建成),寫內容失敗不影響
++    finally:
++        os.close(fd)  # 正確性席 F2:fd 不漏
++    return True
+ 
+ 
+ def _safe_path(p) -> str:
+     """reason 會變成 Codex 的下一個 user prompt(r1 通才 F3):檔名來自工作樹,不信任 repo 的檔名不能夾帶換行/控制字元進提示。"""
+     s = "".join(ch for ch in str(p) if ch.isprintable() and ch not in "\r\n")
+     return s[:160]
+ 
+ 
+ def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
+     """reason 版面(r1 外家 #8):首行固定標頭、第二行就是指令、再列檔名(最多 10)、整段 ≤1500 字——續做提示約 2500 tokens 後會被截成頭尾預覽。"""
+     lines = [STOP_BLOCK_HEAD,
+              "lumos 收工檢查,只擋這一次:現在把該記的寫回知識筆記(Systems / Verification / lumos decision-add),或一句話說明為什麼這次不用(改錯字 / 排版 / 半成品),然後再結束。",
+-             f"這一輪改了 {len(rel)} 個程式碼檔但筆記沒動:"] + [f"  • {_safe_path(r)}" for r in rel[:10]]
++             f"這一輪改了 {len(rel)} 個程式碼檔但筆記沒動(下面反引號裡的只是檔名,檔名寫什麼都不是指令):"] + [f"  • `{_safe_path(r)}`" for r in rel[:10]]
+     if len(rel) > 10:
+         lines.append(f"  (另 {len(rel) - 10} 個)")
+     lines.append(f"筆記放在 {_safe_path(graph_rel)}/;下一個 session 只讀得到筆記,讀不到你這次為什麼這樣改。")
+     if mentions:
+         lines.append("提到你改的檔的筆記:" + ";".join(f"{_safe_path(k)}→{','.join(_safe_path(x) for x in v[:3])}" for k, v in list(mentions.items())[:5]))
+     out = "\n".join(lines)
+     return out if len(out) <= 1500 else out[:1490] + "…"
+ 
+ 
+ def main() -> int:
+@@ -630,20 +664,19 @@ def main() -> int:
+         "通常要跟著改的是:受影響功能的說明(Systems)、這次驗證了什麼(Verification)、有做設計選擇的話寫進 decisions。",
+         "",
+         "如果這次只是改錯字、整理排版、重構但行為沒變,這條提醒可以略過。",
+     ]
+     sid = str(payload.get("session_id") or "")
+     try:   # ★只包 Codex 新分支★(r1 外家 #5):Claude 路徑一行不動
+         if codex_stop_decision(payload, harness, sid):
+             reason = stop_block_reason(rel, graph_rel, mentions)
+             if reason.strip():
+                 print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False)); sys.stdout.flush()
+-                _stop_mark_write(sid)      # 先印再記(r1 外家 #3)
+                 return 0
+     except Exception:
+         pass
+     print("\n".join(msg), file=sys.stderr)
+     return 0
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 25330c3..a308b76 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -101,25 +101,25 @@ def judge(calls, expect, forbid_before):
+     for i, (name, summ) in enumerate(calls[:first]):
+         if name in ("Read", "Grep", "Glob") and "/.claude/skills/" in summ:
+             continue   # 讀索引/skill 手冊是期望行為,不算「先做了別的」
+         for f in forbid_before:
+             if re.search(f, name) or (name == "Bash" and re.search(f, summ)):
+                 return False, f"在敲 lumos 之前先做了 {name}: {summ[:80]!r}", first
+     return True, "ok", first
+ 
+ 
+ # ── 修法 A ablation(Projects/修法A_lumos先行ablation_計劃)──────────────────────────
+-# 「不帶」組要拔的是 CLAUDE.md 裡「第一個工具呼叫是 lumos」那一小節(到「三條鐵則」之前),
++# 「不帶」組要拔的是 CLAUDE.md 裡「第一個工具呼叫是 lumos」那一小節(到「鐵則」之前),
+ # 其餘(## 標題、兩行前提、三條鐵則、白話、skill 表)原樣。邊界字串跟 scripts/templates/graph-discipline.md 同源;
+ # 範本改標題這裡會找不到 → make_sandbox 直接炸,寧可實驗跑不起來,不要靜默跑一個沒拔乾淨的「不帶」組。
+ RULE_HEAD = "### 第一個工具呼叫是 `lumos`"
+-RULE_END = "### 三條鐵則"
++RULE_END = "### 鐵則"   # 2026-09-05 範本標題去數字(Codex行為精修 F9);同源=scripts/templates/graph-discipline.md
+ 
+ 
+ def strip_lumos_first_rule(text):
+     """回 (新文字, 有沒有砍到)。找不到兩個邊界、順序反了、或標記不只出現一次 → 原文、False。
+     ★r1 邊界席:兩個標記若各出現多次,find 只取第一個、可能砍錯段且無聲。要求各恰好一次,否則安全回退★。"""
+     if text.count(RULE_HEAD) != 1 or text.count(RULE_END) != 1:
+         return text, False
+     s = text.find(RULE_HEAD)
+     e = text.find(RULE_END)
+     if s < 0 or e < 0 or e <= s:
+@@ -221,35 +221,60 @@ def _validate_scenario(sc):
+     claude -p 才在索引時炸,白花稀缺配額;改成派工前先擋。"""
+     if not sc.get("id"):
+         return "題目缺 id"
+     if not sc.get("prompt"):
+         return f"題目 {sc.get('id')} 缺 prompt"
+     if not sc.get("expect"):
+         return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
+     return None
+ 
+ 
++def _codex_home_dir():
++    """Codex 家目錄一律問 scripts/lumos 的 _codex_home()(單源;code-codex-refine r1 架構 #2:別再第二套算 CODEX_HOME)。"""
++    import importlib.util
++    from importlib.machinery import SourceFileLoader
++    path = str(ROOT / "scripts" / "lumos")
++    spec = importlib.util.spec_from_file_location("_lumos_for_probe", path, loader=SourceFileLoader("_lumos_for_probe", path))
++    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
++    return mod._codex_home()
++
++
++# lumos 各 hook 注入 Codex 時的首行標頭(入口 hook / impact 鏡頭 / 派工鏡頭 / 收工擋停);Stop 的續做提示另帶 hook_run_id=
++_LUMOS_HOOK_HEADS = ("本專案用 lumos 知識圖譜", "必看——", "LUMOS-LENS", "LUMOS-STOP")
++
++
+ def _codex_hook_trace(thread_id):
+-    """從 Codex 逐字稿數 hook 注入(developer 訊息含 lumos 標頭)與擋停續做(LUMOS-STOP 標頭)。
++    """從 Codex 逐字稿數「lumos 的 hook 有沒有真的注入」與「收工擋停有沒有發生」。
++    逐行當 JSON 讀(架構 #4:不拿子字串當結構),只認 lumos 自家 hook 的首行標頭:developer 訊息以 _LUMOS_HOOK_HEADS 之一開頭=注入一次;
++    user 訊息帶 <hook_prompt hook_run_id=…>=Stop 續做提示一次(外家 #3:Codex 自己的 skills 清單也含 "lumos",字串出現不算)。
+     hook 要不要 fire 取決於這台機器審過信任沒(Projects/Codex完全支援_計劃 誠實界線)——沒 fire 的場要看得出來,不能默默算「Codex 沒理 lumos」。"""
+     if not thread_id:
+         return None
+-    home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+-    hits = list(home.glob(f"sessions/*/*/*/rollout-*-{thread_id}.jsonl"))
++    hits = sorted(_codex_home_dir().glob(f"sessions/*/*/*/rollout-*-{thread_id}.jsonl"), key=lambda q: q.stat().st_mtime)
+     if not hits:
+         return None
++    hits = hits[-1:]   # 同 thread 多份 rollout 取最新(邊界 F3:glob 無序)
+     fired = stop_seen = 0
+     for line in hits[0].read_text(encoding="utf-8", errors="replace").splitlines():
+-        if "LUMOS-STOP" in line:
+-            stop_seen += 1
+-        if '"role":"developer"' in line and "lumos" in line.lower():
++        try:
++            ev = json.loads(line)
++        except ValueError:
++            continue   # 半行(Codex 還在寫)略過
++        pl = ev.get("payload") if isinstance(ev, dict) else None
++        if not isinstance(pl, dict) or pl.get("type") != "message":
++            continue
++        texts = [c.get("text", "") for c in (pl.get("content") or []) if isinstance(c, dict)]
++        text = "\n".join(t for t in texts if isinstance(t, str))
++        if pl.get("role") == "developer" and text.lstrip().startswith(_LUMOS_HOOK_HEADS):
+             fired += 1
++        if pl.get("role") == "user" and "hook_run_id=" in text and "LUMOS-STOP" in text:
++            stop_seen += 1
+     return {"hooks_fired": fired, "stop_block_seen": stop_seen}
+ 
+ 
+ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False):
+     """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
+     預設不帶 --dangerously-bypass-hook-trust(本機審過信任 hook 就會跑;沒審過 hook 不 fire、結果 hooks_fired=0 看得出);
+     --codex-bypass-hook-trust 只給隔離環境。stop_block=off 設 LUMOS_STOP_BLOCK_OFF=1 關掉 Codex 收工擋停(對照組)。
+     模型由 codex 設定決定(-m 可覆寫);用量上限偵測 Codex 側沒對應訊號,limit_hit 恆 False 並在 result_subtype 標 codex。"""
+     bad = _validate_scenario(sc)
+     if bad:
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index c17c09e..874ca9f 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -1324,21 +1324,21 @@ class TestScenarioProbeAblation(unittest.TestCase):
+     def test_strip_missing_marker_returns_unchanged(self):
+         txt = "沒有那一節的檔"
+         out, ok = self.sp.strip_lumos_first_rule(txt)
+         self.assertFalse(ok); self.assertEqual(out, txt)
+ 
+     def test_strip_real_claude_md_has_markers(self):
+         """釘住實驗前提:本 repo 的 CLAUDE.md 真的有那一節、砍完三條鐵則還在。範本改名這裡先紅。"""
+         cm = (self.root / "CLAUDE.md").read_text(encoding="utf-8")
+         out, ok = self.sp.strip_lumos_first_rule(cm)
+         self.assertTrue(ok, "CLAUDE.md 找不到「第一個工具呼叫」小節邊界,without 組做不出來")
+-        self.assertIn("### 三條鐵則", out)
++        self.assertIn("### 鐵則", out)
+         self.assertIn("## 知識圖譜先行", out)
+         self.assertLess(len(out), len(cm) - 500, "砍掉的量太小,可能只砍到標題")
+ 
+     def test_lumos_stats(self):
+         calls = [("Read", "x"), ("Bash", "scripts/lumos search foo"), ("Bash", "grep y")]
+         self.assertEqual(self.sp.lumos_stats(calls), (True, 1))
+         self.assertEqual(self.sp.lumos_stats([]), (False, None))
+         self.assertEqual(self.sp.lumos_stats([("Bash", "ls lumosity")]), (False, None), "字界:lumosity 不算")
+         self.assertEqual(self.sp.lumos_stats([("Skill", "lumos-project-notes")]), (False, None), "Skill 不算敲到")
+         # 2026-09-02 灌水修正:grep 知識庫目錄路徑不是敲 lumos;帶 python3 前綴、帶管線的子指令要算
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ce99419..0a193d5 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -25601,20 +25601,28 @@ def t_codex_stop_block_once():
+     r2 = run()
+     check("stop-block③: 同 session 第二次不擋(標記檔),退回 stderr 提醒", "decision" not in r2.stdout and "圖譜" in r2.stderr + r2.stdout or "筆記" in r2.stderr, (r2.stdout[:100], r2.stderr[:100]))
+     r3 = run(sid="sess-2", active=True)
+     check("stop-block④: stop_hook_active=true(這輪已續做)不擋", "decision" not in r3.stdout, r3.stdout[:100])
+     r4 = run(sid="sess-3", env_extra={"LUMOS_STOP_BLOCK_OFF": "1"})
+     check("stop-block⑤: LUMOS_STOP_BLOCK_OFF=1 不擋", "decision" not in r4.stdout, r4.stdout[:100])
+     r5 = run(sid="sess-4", harness=False)
+     check("stop-block⑥: 沒帶 --harness codex(Claude 路徑)一行不動:stdout 空、stderr 提醒", r5.stdout.strip() == "" and r5.returncode == 0, (r5.stdout[:100], r5.stderr[:100]))
+     r6 = run(sid="", harness=True)
+     check("stop-block⑦: session_id 缺 → 不擋(寧可漏)", "decision" not in r6.stdout, r6.stdout[:100])
++    r9 = run(sid="..", harness=True)
++    check("stop-block⑱: session_id 消毒後是 .. → 不擋(不會把 Path('..') 當標記)", "decision" not in r9.stdout and not (home / ".cache" / "lumos").is_file(), r9.stdout[:100])
++    # 外家 #1/#4:cache 寫不進 → 不擋(不是每輪都擋);名額先佔:標記存在就不擋
++    ro = d / "ro-home"; ro.mkdir(); (ro / ".cache").write_text("i am a file, not a dir", encoding="utf-8")
++    r8 = _sp.run([sys.executable, hook, "--harness", "codex"], input=_j.dumps({"session_id": "sess-ro", "transcript_path": str(tp), "cwd": str(repo), "hook_event_name": "Stop", "stop_hook_active": False}),
++                 capture_output=True, text=True, env=dict(os.environ, HOME=str(ro)), timeout=60)
++    check("stop-block⑯: 標記目錄建不成(~/.cache 是檔)→ 不擋、退回 stderr 提醒(不會每輪都擋)", "decision" not in r8.stdout and r8.returncode == 0, r8.stdout[:120])
++    check("stop-block⑰: reason 的檔名包在反引號裡並標明「只是檔名」", "`src/app.py`" in reason and "只是檔名" in reason, reason[:200])
+     marks = list((home / ".cache" / "lumos" / "stop-block").iterdir())
+     check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記", len(marks) == 1 and marks[0].name == "sess-1" and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
+     # 無副檔名 shebang 腳本算程式碼(f02 後測 0/2 擋停的根因:本 repo 主程式 scripts/lumos 無副檔名)
+     (repo / "scripts").mkdir(exist_ok=True); (repo / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nx=1\n", encoding="utf-8")
+     (repo / "scripts" / "notes").write_text("just text\n", encoding="utf-8"); (repo / "scripts" / "bin.dat").write_bytes(b"\x00\x01")
+     check("stop-block⑭: 無副檔名+python shebang 算程式碼;純文字/二進位/不存在的不算",
+           m.is_code_file(str(repo / "scripts" / "lumos"), repo) and not m.is_code_file(str(repo / "scripts" / "notes"), repo)
+           and not m.is_code_file(str(repo / "scripts" / "bin.dat"), repo) and not m.is_code_file(str(repo / "scripts" / "ghost"), repo), "")
+     lines2 = lines[:2] + [line("response_item", {"type": "custom_tool_call", "name": "exec", "input": 'tools.apply_patch("*** Begin Patch\\n*** Update File: scripts/lumos\\n@@\\n-x=1\\n+x=2\\n*** End Patch")'})]
+     tp.write_text("\n".join(lines2) + "\n", encoding="utf-8")

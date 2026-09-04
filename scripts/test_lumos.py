@@ -25616,6 +25616,18 @@ def t_codex_stop_block_once():
                  capture_output=True, text=True, env=dict(os.environ, HOME=str(ro)), timeout=60)
     check("stop-block⑯: 標記目錄建不成(~/.cache 是檔)→ 不擋、退回 stderr 提醒(不會每輪都擋)", "decision" not in r8.stdout and r8.returncode == 0, r8.stdout[:120])
     check("stop-block⑰: reason 的檔名包在反引號裡並標明「只是檔名」", "`src/app.py`" in reason and "只是檔名" in reason, reason[:200])
+    rs4 = m.stop_block_reason(["a`b.py"], "docs/x-knowledge", {"n`x": ["y`z"]})
+    check("stop-block⑳: 檔名/筆記名裡的反引號換成單引號,跳不出 code span", "`" not in rs4.replace("`a'b.py`", "").replace("`n'x`", "").replace("`y'z`", ""), rs4[-200:])
+    r11 = _sp.run([sys.executable, hook, "--harness", "codex"], input=_j.dumps({"session_id": "sess-ascii", "transcript_path": str(tp), "cwd": str(repo), "hook_event_name": "Stop", "stop_hook_active": False}).encode("utf-8"),
+                  capture_output=True, env=dict(os.environ, HOME=str(home), LANG="C", LC_ALL="C", PYTHONUTF8="0", PYTHONIOENCODING="ascii"), timeout=60)
+    check("stop-block㉑: stdout 是 ASCII locale 也照樣送出 block(bytes 寫),名額不白燒", b'"block"' in r11.stdout and r11.returncode == 0, (r11.stdout[:80], r11.stderr[-200:]))
+    # r2 外家:標記目錄是 symlink 指到別處 → 不 chmod、不清理目標、不擋
+    sl = d / "sl-home"; (sl / ".cache" / "lumos").mkdir(parents=True); victim = d / "victim"; victim.mkdir()
+    old = victim / "precious"; old.write_text("keep", encoding="utf-8"); os.utime(old, (1, 1))
+    os.symlink(victim, sl / ".cache" / "lumos" / "stop-block")
+    r10 = _sp.run([sys.executable, hook, "--harness", "codex"], input=_j.dumps({"session_id": "sess-sl", "transcript_path": str(tp), "cwd": str(repo), "hook_event_name": "Stop", "stop_hook_active": False}),
+                  capture_output=True, text=True, env=dict(os.environ, HOME=str(sl)), timeout=60)
+    check("stop-block⑲: 標記目錄是 symlink → 不擋、目標裡的舊檔不被清", "decision" not in r10.stdout and old.exists() and not (victim / "sess-sl").exists(), (r10.stdout[:80], old.exists()))
     marks = list((home / ".cache" / "lumos" / "stop-block").iterdir())
     check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記", len(marks) == 1 and marks[0].name == "sess-1" and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
     # 無副檔名 shebang 腳本算程式碼(f02 後測 0/2 擋停的根因:本 repo 主程式 scripts/lumos 無副檔名)
