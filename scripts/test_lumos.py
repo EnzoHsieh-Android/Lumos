@@ -25628,6 +25628,13 @@ def t_codex_stop_block_once():
     r10 = _sp.run([sys.executable, hook, "--harness", "codex"], input=_j.dumps({"session_id": "sess-sl", "transcript_path": str(tp), "cwd": str(repo), "hook_event_name": "Stop", "stop_hook_active": False}),
                   capture_output=True, text=True, env=dict(os.environ, HOME=str(sl)), timeout=60)
     check("stop-block⑲: 標記目錄是 symlink → 不擋、目標裡的舊檔不被清", "decision" not in r10.stdout and old.exists() and not (victim / "sess-sl").exists(), (r10.stdout[:80], old.exists()))
+    # r3 delta:父層 ~/.cache/lumos 是 symlink 指到別處 → 同樣不擋、目標不動
+    sl2 = d / "sl2-home"; (sl2 / ".cache").mkdir(parents=True); victim2 = d / "victim2"; (victim2 / "stop-block").mkdir(parents=True)
+    old2 = victim2 / "stop-block" / "precious"; old2.write_text("keep", encoding="utf-8"); os.utime(old2, (1, 1))
+    os.symlink(victim2, sl2 / ".cache" / "lumos")
+    r12 = _sp.run([sys.executable, hook, "--harness", "codex"], input=_j.dumps({"session_id": "sess-sl2", "transcript_path": str(tp), "cwd": str(repo), "hook_event_name": "Stop", "stop_hook_active": False}),
+                  capture_output=True, text=True, env=dict(os.environ, HOME=str(sl2)), timeout=60)
+    check("stop-block㉒: 父層 ~/.cache/lumos 是 symlink → 不擋、目標裡的舊檔不被清、不寫標記", "decision" not in r12.stdout and old2.exists() and not (victim2 / "stop-block" / "sess-sl2").exists(), (r12.stdout[:80], old2.exists()))
     marks = list((home / ".cache" / "lumos" / "stop-block").iterdir())
     check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記(sess-1 與 ㉑ 的 sess-ascii)", sorted(x.name for x in marks) == ["sess-1", "sess-ascii"] and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
     # 無副檔名 shebang 腳本算程式碼(f02 後測 0/2 擋停的根因:本 repo 主程式 scripts/lumos 無副檔名)

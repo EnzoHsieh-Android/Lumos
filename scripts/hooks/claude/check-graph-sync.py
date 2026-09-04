@@ -513,6 +513,10 @@ def _stop_dir_ok(d: Path) -> bool:
     try:
         if d.is_symlink():      # r2 外家:symlink 指到別處=別人的目錄,不信
             return False
+        # r3 delta:父層(~/.cache 或 ~/.cache/lumos)是 symlink 也一樣——家目錄以下整條路徑不得經過 symlink
+        # (家目錄本身可以是 symlink,macOS /var→/private/var 那種),所以拿「家目錄解析後 + 固定相對路徑」對照
+        if d.resolve() != (Path.home().resolve() / ".cache" / "lumos" / "stop-block"):
+            return False
         st = d.stat()
     except OSError:
         return False
