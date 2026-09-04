@@ -84,6 +84,8 @@ cd <你的專案>; lumos init
 
 <details><summary>顆粒安裝/離線(進階)</summary>
 
+**Claude Code 與 Codex CLI 都支援**:同一次 `lumos install` 會把 skills、hook 註冊、紀律區塊接到兩家(Claude:`~/.claude`+`CLAUDE.md`;Codex:`~/.codex/hooks.json`、`~/.agents/skills`、`AGENTS.md`、自訂審查席 `lumos_reviewer`);Codex 的 hook 要你開一次互動 codex 審過信任才會跑,`lumos enforcement` 看得到各層狀態。
+
 只建專案層:`lumos init`(圖譜資料夾名稱預設取專案名,`--name` 自訂;既有圖譜**絕不覆寫**;`--no-hooks` 只建圖譜不裝檢查)。只裝機器層:`lumos install`。手動離線:
 
 ```bash

@@ -84,6 +84,8 @@ cd <your-project>; lumos init
 
 <details><summary>Granular install / offline (advanced)</summary>
 
+**Works with both Claude Code and Codex CLI**: one `lumos install` wires skills, hook registrations and the discipline block into both (Claude: `~/.claude` + `CLAUDE.md`; Codex: `~/.codex/hooks.json`, `~/.agents/skills`, `AGENTS.md`, custom reviewer seat `lumos_reviewer`). Codex hooks only run after you review-trust them once in an interactive session; `lumos enforcement` shows every layer's state.
+
 Project layer only: `lumos init` (graph folder name defaults to the project name, `--name` to customize; an existing graph is **never overwritten**; `--no-hooks` builds the graph without installing checks). Machine layer only: `lumos install`. Manual offline:
 
 ```bash
