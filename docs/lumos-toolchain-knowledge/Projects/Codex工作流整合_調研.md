@@ -25,7 +25,7 @@ summary: |-
 
 ## Lumos 現在怎麼用 Codex(圖譜+腳本+帳面盤點)
 
-- **設計審迴圈**:每輪一席「外家否決」(`lumos-design-loop/SKILL.md` 步驗 5、`templates.md` 辯方段;`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住——[[retrieval-v1-and-codex]] 08-23 裁外家一律 Codex,Gemini 只備援不算否決)。
+- **設計審迴圈**:每輪一席「外家否決」(`lumos-design-loop/SKILL.md` 步驗 5、`templates.md` 辯方段;`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住——session memory「檢索v1+外家席編制」08-23 裁外家一律 Codex,Gemini 只備援不算否決)。
 - **代碼審迴圈**:低共識 ≥major 條目派 Codex 辯方(`lumos-code-loop/SKILL.md` 步驟 4、`reference.md:141/152`;2026-07-18 S5:雙 Codex 角色僅 code-loop)。
 - **性質測試席**(code階段強化_計劃 S3/S5):性質合法性必過 Codex 辯方。
 - **帳面**:canary-log 裡 codex 席名有 9 種寫法、共 62 筆(外家否決-codex 16、ext-codex 26、codex 8、codex-s5-finder 3、panel(...veto-codex) 3、其餘各 1–2)——席名沒統一,`loop status` 的家族辨識因此常印「看不出是哪一家」。
