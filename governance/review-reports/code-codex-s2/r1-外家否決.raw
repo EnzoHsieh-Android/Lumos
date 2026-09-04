@@ -1,0 +1,69 @@
+1. `disposal_cmd` 漏掉 `_orch_flag`；Codex 編排者照設計審流程執行模板後，首筆帳不會定錨，下一次不帶旗標會靜默退成 Claude。最小重現：全新 loop 以 `loop next … --orchestrator codex --json` 取得並執行 `disposal_cmd`，再執行 `loop next <id> --json`，輸出為 `orchestrator=claude`。
+severity: major
+blocking: 是
+引句:「f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}")」
+file: `scripts/lumos:6294`
+
+2. 舊帳被宣稱固定視為 Claude，但 `loop next` 對已有記錄且無定錨的帳接受 `--orchestrator codex`，當次直接改按 Codex 分家，與 roster 讀側相容規則矛盾。最小重現：帳本寫一筆只有 `loop/tier` 的舊記錄，再跑 `lumos loop next <id> --orchestrator codex --json`，會得到 `"orchestrator":"codex"` 而非拒絕或 Claude。
+severity: major
+blocking: 是
+引句:「eff_orch = orch_anchor or orchestrator or "claude"」
+file: `scripts/lumos:6223`
+
+3. 帳面若已有兩筆不同 orchestrator，讀側只拿第一筆，完全不報帳本矛盾；這會讓 roster 以任一方分類並產生可信外觀。最小重現：在 `.canary-log.jsonl` 為同一 loop 依序放入 `{"orchestrator":"codex"}`、`{"orchestrator":"claude"}`，`loop status --roster` 仍正常按 Codex 對帳。
+severity: major
+blocking: 是
+引句:「return next((r.get("orchestrator") for r in rounds if r.get("orchestrator") in _ORCHESTRATORS), None)」
+file: `scripts/lumos:5817`
+
+4. `canary record --orchestrator codex` 不要求 `--loop`，因此可成功產生一筆無法定錨任何迴圈的孤兒欄位，與參數說明的「誰在編排這個迴圈」不符。
+severity: minor
+blocking: 否
+引句:「if loop: _prev = _loop_orchestrator(_loop_records(env, loop))」
+file: `scripts/lumos:4144`
+
+5. 原本「零記錄無 tier」測試現在同時沒給 orchestrator，實際只會先撞新增的 orchestrator 守衛；只檢查 rc2 使 tier 守衛刪掉仍可全綠。
+severity: minor
+blocking: 否
+引句:「r = run(v, "loop", "next", f"nx-{_M1U}")」
+file: `scripts/test_lumos.py:17001`
+
+6. 新測試只驗 `record_cmd` 帶 orchestrator，沒有驗實際設計審採用的 `disposal_cmd`，因此第 1 條缺陷未翻紅；同時也未釘 light 的 `record_cmd`。 
+severity: minor
+blocking: 否
+引句:「d.get("orchestrator") == "codex" and "--orchestrator codex" in d.get("record_cmd", "")」
+file: `scripts/test_lumos.py:25331`
+
+7. 新測試宣稱覆蓋舊帳「視為 claude 並印一句」，實際只直接測 helper 回傳 `None`，沒有建立舊帳呼叫 roster 或檢查提示，屬於未兌現的測試敘述。
+severity: minor
+blocking: 否
+引句:「# 舊帳(無欄)→視為 claude 並印一句」
+file: `scripts/test_lumos.py:25349`
+
+8. Codex 0.144.1 的 `spawn_agent` 參數只有 `task_name`、`message`、`fork_turns`，不能指定 `model: sonnet`；文件把兩者放在同一句會讓 Codex 編排者誤以為能照做模型選擇。最小重現：呼叫 `spawn_agent` 加 `model:"sonnet"`，參數 schema 拒絕未知欄位。
+severity: major
+blocking: 是
+引句:「Agent tool(Codex:spawn_agent)、`model: sonnet`(連 2 次 missed 後升 opus)」
+file: `skills/lumos-code-loop/reference.md:82`
+
+9. 同一個不可執行的 Codex 模型選擇宣稱也出現在設計審主流程；`spawn_agent` 無 `model` 參數，不能保證 Sonnet 席或按條件升 Opus。最小重現：呼叫 `spawn_agent` 加 `model:"sonnet"`，參數 schema 拒絕未知欄位。
+severity: major
+blocking: 是
+引句:「Agent、`model: sonnet`、指向工作副本(★Codex 編排時:spawn_agent」
+file: `skills/lumos-design-loop/SKILL.md:20`
+
+10. 圖譜自足性審計同樣把 Codex `spawn_agent` 與 `model: sonnet` 綁在同一做法，0.144.1 無法依文件選定該模型。最小重現：呼叫 `spawn_agent` 加 `model:"sonnet"`，參數 schema 拒絕未知欄位。
+severity: major
+blocking: 是
+引句:「用 Agent tool(Codex 下用 spawn_agent)派出 subagent，`model: sonnet`」
+file: `skills/lumos-project-notes/reference.md:1006`
+
+`skills/lumos-code-loop/SKILL.md`：已讀；父代理以 `codex exec --sandbox read-only` 啟動時，子代理繼承唯讀的宣稱與 0.144.1 行為相符；exec 無可選自訂 agent 的參數亦相符，無 finding。
+
+`skills/lumos-design-loop/reference.md`：已讀，無新增 finding。
+
+`skills/lumos-pitfalls-gapfill/SKILL.md`：已讀，無 finding。
+
+`skills/lumos-project-notes/commands/05-設計審查迴圈.md`：已讀，無新增 finding。
+
+總結:最嚴重 severity=major；blocking=是 6 條。

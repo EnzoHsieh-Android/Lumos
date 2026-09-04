@@ -17005,7 +17005,7 @@ def t_m1_loop_next():
     spec.write_text("next spec\n", encoding="utf-8")
     h = _sha256_of(spec)
     # 零記錄無 --tier rc2
-    r = run(v, "loop", "next", f"nx-{_M1U}")
+    r = run(v, "loop", "next", f"nx-{_M1U}", "--orchestrator", "claude")   # S2:orchestrator 守衛先擋,補旗標才測得到 tier 守衛(code-codex-s2 r1 外家 #5)
     check("零記錄無 tier rc2", r.returncode == 2)
     # 零記錄+tier light → plant-canary N=1
     r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "light", "--orchestrator", "claude", "--json")
@@ -25352,6 +25352,53 @@ def t_codex_s2_orchestrator():
           m._roster_family("外家否決-codex")[0] == "external" and m._roster_family("外家否決-codex", "codex")[0] == "claude"
           and m._roster_family("鏡頭1-sonnet", "codex")[0] == "external" and m._roster_family("gpt-5", "codex")[0] == "claude", "")
     check("s2-orch: 舊帳沒欄 → _loop_orchestrator None", m._loop_orchestrator([{"tier": "standard"}]) is None and m._loop_orchestrator([{"orchestrator": "codex"}]) == "codex", "")
+
+
+def t_codex_s2_r1_fixes():
+    """code-codex-s2 r1 外家:①disposal_cmd 也帶 --orchestrator ②舊帳(無欄)+ loop next --orchestrator codex → 擋(舊帳視為 claude,要用 codex 開新編號)
+    ③帳面兩筆不同 orchestrator → loop next 擋、roster 報矛盾 ④record --orchestrator 沒 --loop → 擋 ⑥light record_cmd 帶旗標 ⑦舊帳 roster 印「視為 claude」。"""
+    import json as _j, os
+    v = mkvault(); lid = "s2r1-" + os.urandom(3).hex()
+    d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "codex", "--json").stdout)
+    check("s2-r1①: disposal_cmd 也帶 --orchestrator codex", "--orchestrator codex" in (d.get("disposal_cmd") or ""), str(d.get("disposal_cmd"))[:200])
+    dl = _j.loads(run(v, "loop", "next", "s2r1l-" + os.urandom(2).hex(), "--tier", "light", "--orchestrator", "codex", "--json").stdout)
+    check("s2-r1⑥: light 的 record_cmd 也帶旗標", "--orchestrator codex" in dl.get("record_cmd", ""), dl.get("record_cmd", "")[:200])
+    # ② 舊帳:手寫一筆只有 loop/tier
+    log = v.parent / ".canary-log.jsonl"; old = "s2r1old-" + os.urandom(2).hex()
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(_j.dumps({"loop": old, "round": "r1", "tier": "standard", "auditor": "x-sonnet", "severity": "clean", "kind": "none", "ts": "2026-09-01T00:00:00"}) + "\n")
+    r = run(v, "loop", "next", old, "--orchestrator", "codex")
+    check("s2-r1②: 舊帳沒欄 + 說 codex → rc2 且訊息講舊帳視為 claude/開新編號", r.returncode == 2 and "claude" in r.stderr and "新編號" in r.stderr, r.stderr[-200:])
+    r = run(v, "loop", "next", old, "--orchestrator", "claude", "--json")
+    check("s2-r1②: 舊帳 + 說 claude → 過", r.returncode in (0, 1) and _j.loads(r.stdout).get("orchestrator") == "claude", r.stdout[:200] + r.stderr[-100:])
+    r = run(v, "loop", "status", old, "--roster", "--repo", str(v.parent))
+    check("s2-r1⑦: 舊帳 roster 印「帳面沒記,視為 claude」", "視為 claude" in r.stdout, r.stdout[:300])
+    # ③ 兩筆不同 orchestrator
+    con = "s2r1con-" + os.urandom(2).hex()
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(_j.dumps({"loop": con, "round": "r1", "tier": "standard", "orchestrator": "codex", "auditor": "a-sonnet", "severity": "clean", "kind": "none"}) + "\n")
+        f.write(_j.dumps({"loop": con, "round": "r2", "tier": "standard", "orchestrator": "claude", "auditor": "b-sonnet", "severity": "clean", "kind": "none"}) + "\n")
+    r = run(v, "loop", "next", con)
+    check("s2-r1③: 帳面兩筆不同 orchestrator → loop next rc2 講矛盾", r.returncode == 2 and "不一致" in r.stderr, r.stderr[-200:])
+    r = run(v, "loop", "status", con, "--roster", "--repo", str(v.parent))
+    check("s2-r1③: roster 報帳面編排者矛盾", "編排者" in r.stdout and "不一致" in r.stdout, r.stdout[:300])
+    # 單reviewer F1:舊帳(沒欄)record 帶 codex → 擋(不回溯改分家)
+    rep = v.parent / "r.md"; rep.write_text("severity: clean\n", encoding="utf-8")
+    r = run(v, "canary", "record", "none", "--loop", old, "--round", "r2", "--auditor", "y-sonnet", "--severity", "clean", "--findings", "0", "--orchestrator", "codex", "--report", str(rep))
+    check("s2-r1-F1: 舊帳 record --orchestrator codex → rc2 講回溯改分家", r.returncode == 2 and "舊記錄" in r.stderr and "新編號" in r.stderr, r.stderr[-200:])
+    # 單reviewer F2:JSON roster 帶相對家族
+    dj = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "codex", "--json").stdout)   # lid 尚無記錄,零記錄兩旗標都要帶
+    seats = (dj.get("roster") or {}).get("seats") or []
+    check("s2-r1-F2: JSON roster 每席有 relative_family(同門/外家)且 roster.orchestrator=codex", bool(seats) and all(s.get("relative_family") in ("同門", "外家") for s in seats) and dj["roster"].get("orchestrator") == "codex" and any(s.get("family") == "external" and s.get("relative_family") == "外家" for s in seats), str(seats)[:300])
+    # 單reviewer F6:席名提示多輪只印一次
+    ld = v.parent / "governance" / "review-reports" / old; ld.mkdir(parents=True, exist_ok=True)   # old 有記錄(有 tier)才有編制表可對
+    for rr in ("r1", "r2", "r3"):
+        (ld / f"{rr}-dispatch.json").write_text(_j.dumps({"round": rr, "seats": [{"seat": "鏡頭1", "auditor": "sonnet-a"}, {"seat": "外家否決", "auditor": "codex"}]}), encoding="utf-8")
+    r = run(v, "loop", "status", old, "--roster", "--repo", str(v.parent))
+    check("s2-r1-F6: 三輪同一個沒尾碼席名只提示一次", r.stdout.count("席名 codex 沒帶模型尾碼") == 1, r.stdout[:500])
+    # ④ 沒 --loop
+    r = run(v, "canary", "record", "none", "--auditor", "x-sonnet", "--severity", "clean", "--findings", "0", "--orchestrator", "codex", "--report", str(rep))
+    check("s2-r1④: --orchestrator 沒 --loop → rc2", r.returncode == 2 and "--loop" in r.stderr, r.stderr[-200:])
 
 
 if __name__ == "__main__":
