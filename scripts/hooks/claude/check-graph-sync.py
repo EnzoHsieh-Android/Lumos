@@ -2,7 +2,9 @@
 """全域 Stop hook: 提醒「程式碼改了但圖譜沒同步」。
 
 只在當前專案有 docs/*-knowledge/ 或 docs/knowledge/ 時作用,否則完全闭嘴。
-軟提醒 (stderr surface 給 Claude),不 block turn 結束。
+Claude 側:軟提醒(stderr surface 給 Claude),不 block turn 結束。
+Codex 側(--harness codex,2026-09-05 Projects/Codex行為精修_計劃):同條件回 decision:block ★一次★讓模型續做補筆記;
+  stop_hook_active / session 標記檔雙護欄,LUMOS_STOP_BLOCK_OFF=1 關閉。stderr 對 Codex 模型是零訊號,所以只有 block 這條路。
 
 四層閘門:
   0  圖譜不存在               → exit 0
@@ -15,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import shlex
 import subprocess
 import sys
@@ -106,7 +109,7 @@ def _is_real_user_input(obj: dict) -> bool:
 
 # ── Codex 逐字稿(Projects/Codex完全支援_計劃 S1)──────────────────────────────────────────
 # 官方明說逐字稿格式不是 hooks 的穩定介面;只認 fixture 過的版本,認不得就印一行、本 session 略過判定(r1 外家 F13)。
-CODEX_TRANSCRIPT_VERSIONS = {"0.144.1"}
+CODEX_TRANSCRIPT_VERSIONS = {"0.144.1", "0.153.2"}   # 0.153.2:2026-09-05 真實稿驗過同形(多 event_msg/item_completed、token_usage_record 兩型,reader 不讀)
 # key 有引號 {"cmd":"…"} 與沒引號 {cmd:"…"}(含換行縮排)兩種都出現(2026-09-04 當日逐字稿 31:30;code-codex-s1 r1 外家 #2)
 _CODEX_EXEC_CMD_RE = re.compile(r'(?<![\w$])["\']?cmd["\']?\s*:\s*"((?:[^"\\]|\\.)*)"')
 # patch 可能直接傳字串 tools.apply_patch("…"),也可能先存變數 const patch = "…" 再呼叫(S1 驗收實看):
@@ -452,7 +455,77 @@ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
     miss.sort(key=lambda m: -m.get("score", 0))
     return [m["node"] for m in miss[:cap]]
 
+# ── Codex 收工擋停一次(Projects/Codex行為精修_計劃 d1,2026-09-05)──
+# Codex 的 Stop hook 回 {"decision":"block","reason":…} 會讓模型以 reason 當下一個提示繼續做(官方通道);
+# 本 hook 只在「改了程式碼、筆記沒動」且 --harness codex 時擋★一次★:兩道護欄=payload 的 stop_hook_active(這輪已續做過)
+# 與 session 標記檔(同 session 只擋一次)。Claude 側完全不變(stderr 提醒;2026-07-06 撤 Stop nag 的教訓不重開)。
+STOP_BLOCK_HEAD = "LUMOS-STOP:改了程式碼但知識筆記沒跟著動"
+
+
+def _stop_block_dir() -> Path:
+    d = Path.home() / ".cache" / "lumos" / "stop-block"
+    try:
+        d.mkdir(parents=True, exist_ok=True); os.chmod(d, 0o700)
+        now = time.time()   # lazy 清超過一天的標記
+        for f in d.iterdir():
+            try:
+                if now - f.stat().st_mtime > 7 * 86400:   # 保留 7 天=「同 session 七天內只擋一次」的承諾
+                    f.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return d
+
+
+def codex_stop_decision(payload: dict, harness: str, session_id: str) -> bool:
+    """要不要對這次 Stop 回 block:harness=codex、沒設 LUMOS_STOP_BLOCK_OFF、這輪還沒被續做過、本 session 還沒擋過。
+    回 True 時已寫下 session 標記(呼叫端隨即輸出 block)。"""
+    if harness != "codex" or os.environ.get("LUMOS_STOP_BLOCK_OFF") == "1":
+        return False
+    if payload.get("stop_hook_active"):
+        return False
+    if not session_id:
+        return False
+    return not _stop_mark_path(session_id).exists()
+
+
+def _stop_mark_path(session_id: str) -> Path:
+    return _stop_block_dir() / re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120]
+
+
+def _stop_mark_write(session_id: str) -> bool:
+    """印完 block 才記名額:O_EXCL 原子建檔(兩個 hook 同時來只有一個成功);失敗不影響已印的 block。"""
+    try:
+        fd = os.open(str(_stop_mark_path(session_id)), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.write(fd, str(time.time()).encode("utf-8")); os.close(fd)
+        return True
+    except OSError:
+        return False
+
+
+def _safe_path(p) -> str:
+    """reason 會變成 Codex 的下一個 user prompt(r1 通才 F3):檔名來自工作樹,不信任 repo 的檔名不能夾帶換行/控制字元進提示。"""
+    s = "".join(ch for ch in str(p) if ch.isprintable() and ch not in "\r\n")
+    return s[:160]
+
+
+def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
+    """reason 版面(r1 外家 #8):首行固定標頭、第二行就是指令、再列檔名(最多 10)、整段 ≤1500 字——續做提示約 2500 tokens 後會被截成頭尾預覽。"""
+    lines = [STOP_BLOCK_HEAD,
+             "lumos 收工檢查,只擋這一次:現在把該記的寫回知識筆記(Systems / Verification / lumos decision-add),或一句話說明為什麼這次不用(改錯字 / 排版 / 半成品),然後再結束。",
+             f"這一輪改了 {len(rel)} 個程式碼檔但筆記沒動:"] + [f"  • {_safe_path(r)}" for r in rel[:10]]
+    if len(rel) > 10:
+        lines.append(f"  (另 {len(rel) - 10} 個)")
+    lines.append(f"筆記放在 {_safe_path(graph_rel)}/;下一個 session 只讀得到筆記,讀不到你這次為什麼這樣改。")
+    if mentions:
+        lines.append("提到你改的檔的筆記:" + ";".join(f"{_safe_path(k)}→{','.join(_safe_path(x) for x in v[:3])}" for k, v in list(mentions.items())[:5]))
+    out = "\n".join(lines)
+    return out if len(out) <= 1500 else out[:1490] + "…"
+
+
 def main() -> int:
+    harness = "codex" if "--harness" in sys.argv and sys.argv[sys.argv.index("--harness") + 1:][:1] == ["codex"] else "claude"
     try:
         payload = json.loads(sys.stdin.read())
     except json.JSONDecodeError:
@@ -539,6 +612,16 @@ def main() -> int:
         "",
         "如果這次只是改錯字、整理排版、重構但行為沒變,這條提醒可以略過。",
     ]
+    sid = str(payload.get("session_id") or "")
+    try:   # ★只包 Codex 新分支★(r1 外家 #5):Claude 路徑一行不動
+        if codex_stop_decision(payload, harness, sid):
+            reason = stop_block_reason(rel, graph_rel, mentions)
+            if reason.strip():
+                print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False)); sys.stdout.flush()
+                _stop_mark_write(sid)      # 先印再記(r1 外家 #3)
+                return 0
+    except Exception:
+        pass
     print("\n".join(msg), file=sys.stderr)
     return 0
 

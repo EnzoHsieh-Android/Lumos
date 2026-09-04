@@ -228,9 +228,28 @@ def _validate_scenario(sc):
     return None
 
 
-def run_one_codex(sc, workdir, timeout, model, arm="with"):
+def _codex_hook_trace(thread_id):
+    """從 Codex 逐字稿數 hook 注入(developer 訊息含 lumos 標頭)與擋停續做(LUMOS-STOP 標頭)。
+    hook 要不要 fire 取決於這台機器審過信任沒(Projects/Codex完全支援_計劃 誠實界線)——沒 fire 的場要看得出來,不能默默算「Codex 沒理 lumos」。"""
+    if not thread_id:
+        return None
+    home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+    hits = list(home.glob(f"sessions/*/*/*/rollout-*-{thread_id}.jsonl"))
+    if not hits:
+        return None
+    fired = stop_seen = 0
+    for line in hits[0].read_text(encoding="utf-8", errors="replace").splitlines():
+        if "LUMOS-STOP" in line:
+            stop_seen += 1
+        if '"role":"developer"' in line and "lumos" in line.lower():
+            fired += 1
+    return {"hooks_fired": fired, "stop_block_seen": stop_seen}
+
+
+def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False):
     """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
-    不帶 --dangerously-bypass-hook-trust(探針測的是「會不會自己敲 lumos」,不靠 hook;要測 hook 另開)。
+    預設不帶 --dangerously-bypass-hook-trust(本機審過信任 hook 就會跑;沒審過 hook 不 fire、結果 hooks_fired=0 看得出);
+    --codex-bypass-hook-trust 只給隔離環境。stop_block=off 設 LUMOS_STOP_BLOCK_OFF=1 關掉 Codex 收工擋停(對照組)。
     模型由 codex 設定決定(-m 可覆寫);用量上限偵測 Codex 側沒對應訊號,limit_hit 恆 False 並在 result_subtype 標 codex。"""
     bad = _validate_scenario(sc)
     if bad:
@@ -239,12 +258,16 @@ def run_one_codex(sc, workdir, timeout, model, arm="with"):
                 "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
     # stdin 必重導向 DEVNULL:codex exec 沒有 tty 時會等 stdin(2026-08-23 外家席實測「stdin 要重導否則掛住」)
     cmd = ["codex", "exec", "--json", "--sandbox", "workspace-write", "-C", str(workdir)]
+    if bypass_trust:
+        cmd.append("--dangerously-bypass-hook-trust")
     if model:
         cmd += ["-m", model]
     cmd.append(sc["prompt"])
     env = dict(os.environ); env["LUMOS_PROBE"] = "1"
     if arm == "without":
         env["LUMOS_ENTRY_HOOK_OFF"] = "1"
+    if stop_block == "off":
+        env["LUMOS_STOP_BLOCK_OFF"] = "1"
     t0 = time.time()
     instrument_fail = None   # 超時 / 非零退出 = 儀器例外,這場不算分(code-codex-s3 r1 外家 #3:半途已印期望指令也不能判過)
     try:
@@ -256,6 +279,15 @@ def run_one_codex(sc, workdir, timeout, model, arm="with"):
         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
         err = "timeout"; instrument_fail = f"codex exec 超時 {timeout}s"
     calls, final = tool_calls_from_codex_json(out.splitlines())
+    thread_id = None
+    for ln in out.splitlines():
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "thread.started":
+            thread_id = ev.get("thread_id"); break
+    trace = _codex_hook_trace(thread_id)
     ok, why, first = judge(calls, sc["expect"], sc.get("forbid_before", []))
     if instrument_fail:
         ok, why = False, f"儀器例外: {instrument_fail}(這場不算分)"
@@ -269,7 +301,8 @@ def run_one_codex(sc, workdir, timeout, model, arm="with"):
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
             "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
             "answer": (final or "")[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
-            "answer_content_ok": answer_content_ok, "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
+            "answer_content_ok": answer_content_ok, "limit_hit": False, "result_subtype": "codex", "harness": "codex",
+            "stop_block": stop_block, "thread_id": thread_id, "hook_trace": trace}
 
 
 def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
@@ -375,6 +408,10 @@ def main():
                     help="每題重跑幾次(預設 1)。同一題這次過下次不過是常態,不重跑就分不出規矩效果與運氣")
     ap.add_argument("--runner", choices=["claude", "codex"], default="claude",
                     help="被測的 harness:claude=claude -p(預設);codex=codex exec --json(S3;模型由 codex 設定決定,-m 可覆寫)")
+    ap.add_argument("--stop-block", choices=["on", "off"], default="on",
+                    help="codex runner:off=設 LUMOS_STOP_BLOCK_OFF=1 關掉收工擋停(對照組;Projects/Codex行為精修_計劃)")
+    ap.add_argument("--codex-bypass-hook-trust", action="store_true",
+                    help="codex runner 帶 --dangerously-bypass-hook-trust(★只准隔離環境★;本機審過信任不需要)")
     ap.add_argument("--arm", choices=["with", "without"], default="with",
                     help="with=現況;without=沙盒 CLAUDE.md 砍「第一個工具呼叫」小節+入口 hook 靜默(見 Projects/修法A_lumos先行ablation_計劃)")
     ap.add_argument("--wait-on-limit", type=int, default=0,
@@ -417,7 +454,7 @@ def main():
             for k in range(1, a.runs + 1):
                 while True:
                     try:
-                        res = (run_one_codex(sc, work, a.timeout, a.model, a.arm) if a.runner == "codex"
+                        res = (run_one_codex(sc, work, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust) if a.runner == "codex"
                                else run_one(sc, work, a.max_turns, a.timeout, a.model, a.arm))
                     except Exception as e:   # 一題炸掉不拖累整批:記成失敗,繼續
                         res = {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,

@@ -229,6 +229,10 @@ REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/pro
 - **驗收**:[[Verification/2026-09-04_Codex完全支援S3量測驗收]]。
 - **沒做**:Codex 側的 probe 用量/速率上限偵測(沒對應訊號,遇到再補);子代理鏡頭「有沒有讀」(子代理稿沒有釘住清單可對,只計筆數)。
 
+## 後續:行為精修(2026-09-05)
+
+f01/f02 兩個功能實驗跑完後的精修另開 [[Projects/Codex行為精修_計劃]]:Codex 收工 Stop hook 在「改了碼、筆記沒動」時擋一次讓模型續做補筆記(Claude 側不變),與紀律範本一句「先跑相關子集」。
+
 ## 實作紀錄 d6(2026-09-05,直接驗後翻 d5 一半)
 
 - `_install_codex_agent`/`_remove_codex_agent`:Codex 同步時寫 `CODEX_HOME/agents/lumos_reviewer.toml`(字串範本,帶 `# lumos-managed` 標記;name/description/developer_instructions=審查席框架;sandbox_mode 只當提示),重跑 unchanged、外方同名檔不覆蓋、teardown 只收帶標記的、無 Codex 家目錄不建;測試 `t_codex_d6_agent_toml`。skill 三處改「派工詞點名 lumos_reviewer;唯讀靠父代理沙盒」。

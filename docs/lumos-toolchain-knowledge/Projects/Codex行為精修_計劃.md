@@ -100,6 +100,15 @@ PRIOR-ART: ① 最小解層級——Stop hook 的 `decision:block` 是 Codex 官
 
 REVISIT:2026-09-19 探針週跑累積 f02 型樣本,看擋一次的補寫率;若 <50% 再考慮 UserPromptSubmit。
 
+## 實作紀錄(2026-09-05,r1 處置閘 PASS 後同日動工)
+
+- **改動 (A) 落在 `scripts/hooks/claude/check-graph-sync.py`**:新增 `STOP_BLOCK_HEAD`(固定首行)、`codex_stop_decision`(四道不擋條件:非 codex / `LUMOS_STOP_BLOCK_OFF=1` / `stop_hook_active` / 本 session 已擋過)、`_stop_block_dir`(0700,每次進到寫標記路徑順手清 7 天前)、`_stop_mark_write`(O_EXCL,先印 block 再記名額)、`_safe_path`(去控制字元與換行、單路徑截 160 字)、`stop_block_reason`(首行標頭、第二行指令、≤10 檔、≤1500 字);try/except 只包 Codex 分支,Claude 路徑一行不動;`CODEX_TRANSCRIPT_VERSIONS` 加 0.153.2;docstring 改成兩家各一句。
+- **改動 (B)**:`scripts/templates/graph-discipline.md` 鐵則三尾加通用句(不寫本 repo 指令),標題「三條鐵則」改「鐵則」;`lumos update` 刷 CLAUDE.md/AGENTS.md。
+- **四處文件同步**:[[Systems/graph-sync-coverage]]、`docs/methodology/圖譜即合約.md`(KEY 行、四道表、Layer 1 表)、skill `commands/08-自動跑的.md`。
+- **探針**:`--stop-block on|off`(off=設 `LUMOS_STOP_BLOCK_OFF=1`)、`--codex-bypass-hook-trust`(預設關)、結果多 `hook_trace{hooks_fired, stop_block_seen}`(從 Codex 逐字稿數 developer 注入與 `LUMOS-STOP` 標頭)與 `thread_id`;既有斷言改為「預設不帶 bypass,旗標才加」。
+- **測試**:`t_codex_stop_block_once` 14 條斷言(驗收 1 全部+路徑消毒+範本通用句+探針旗標);anchor baseline 已 approve。
+- **全域成品**:`lumos install --force` 後 `~/.codex/hooks/` 與 `~/.claude/hooks/` 的 check-graph-sync 與 repo 同檔(cmp 相同);Codex 側 hooks.json 命令列不變(帶 `--harness codex`),信任不用重審。
+
 ## 審計修正紀錄(lumos-design-loop)
 
 - r1(2026-09-05,5 席:外家 Codex/架構/整合/邊界/通才):41 條(9+3+8+12+9)/blocking 34/1 條錨不到不採信、其餘 40 條全折(同輪有 blocker,accepted 空)——主折入:版本表 0.153.2 是前提、reason 版面與檔名消毒、探針兩旗標、範本改通用句、四處文件同步、Stop 不傷子代理與 env 傳遞兩項實測。
