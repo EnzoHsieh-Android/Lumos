@@ -237,9 +237,28 @@ def collect_turn_actions(transcript_path: Path):
     return file_paths, bash_commands
 
 
+_SHEBANG_INTERPS = ("python", "bash", "sh", "zsh", "node", "ruby", "perl")
+
+
+def _shebang_script(p: Path) -> bool:
+    """沒有副檔名的檔,首行 #! 是已知直譯器就當程式碼(2026-09-05 f02 後測實證:本 repo 主程式 `scripts/lumos`
+    無副檔名,兩家改它都過不了閘門 2,Stop 提醒/擋停從沒對它生效過)。讀不到、不是 #!、二進位 → False。"""
+    if p.suffix:
+        return False
+    try:
+        with open(p, "rb") as fh:
+            head = fh.readline(200)
+    except OSError:
+        return False
+    if not head.startswith(b"#!"):
+        return False
+    line = head.decode("utf-8", "replace").lower()
+    return any(x in line for x in _SHEBANG_INTERPS)
+
+
 def is_code_file(path: str, project_root: Path) -> bool:
     p = Path(path)
-    if p.suffix.lower() not in CODE_EXTS:
+    if p.suffix.lower() not in CODE_EXTS and not _shebang_script(p):
         return False
     # 必須在 project_root 之下;避免改 ~/.claude/、/tmp 等外部檔案被誤判
     try:

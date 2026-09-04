@@ -25610,6 +25610,17 @@ def t_codex_stop_block_once():
     check("stop-block⑦: session_id 缺 → 不擋(寧可漏)", "decision" not in r6.stdout, r6.stdout[:100])
     marks = list((home / ".cache" / "lumos" / "stop-block").iterdir())
     check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記", len(marks) == 1 and marks[0].name == "sess-1" and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
+    # 無副檔名 shebang 腳本算程式碼(f02 後測 0/2 擋停的根因:本 repo 主程式 scripts/lumos 無副檔名)
+    (repo / "scripts").mkdir(exist_ok=True); (repo / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nx=1\n", encoding="utf-8")
+    (repo / "scripts" / "notes").write_text("just text\n", encoding="utf-8"); (repo / "scripts" / "bin.dat").write_bytes(b"\x00\x01")
+    check("stop-block⑭: 無副檔名+python shebang 算程式碼;純文字/二進位/不存在的不算",
+          m.is_code_file(str(repo / "scripts" / "lumos"), repo) and not m.is_code_file(str(repo / "scripts" / "notes"), repo)
+          and not m.is_code_file(str(repo / "scripts" / "bin.dat"), repo) and not m.is_code_file(str(repo / "scripts" / "ghost"), repo), "")
+    lines2 = lines[:2] + [line("response_item", {"type": "custom_tool_call", "name": "exec", "input": 'tools.apply_patch("*** Begin Patch\\n*** Update File: scripts/lumos\\n@@\\n-x=1\\n+x=2\\n*** End Patch")'})]
+    tp.write_text("\n".join(lines2) + "\n", encoding="utf-8")
+    r7 = run(sid="sess-5")
+    check("stop-block⑮: 改的是無副檔名主程式 scripts/lumos 也會擋(f02 後測翻紅→綠)", '"block"' in r7.stdout and "scripts/lumos" in r7.stdout, r7.stdout[:200])
+    tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     # 版面:超過 10 檔只列 10 個+「另 N 個」;超長截到 1500
     rs = m.stop_block_reason([f"src/f{i}.py" for i in range(14)], "docs/x-knowledge", {})
     check("stop-block⑨: >10 檔只列 10 個並寫「另 4 個」", rs.count("• ") == 10 and "另 4 個" in rs, rs[-120:])
