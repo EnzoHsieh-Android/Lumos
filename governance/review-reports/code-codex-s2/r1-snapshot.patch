@@ -1,0 +1,1186 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 31dc123..ce5c4fa 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4011,21 +4011,21 @@ def _vault_repo_root(env):
+     """disposal 留痕路徑的落帳/解析根(r2 終審修,寫讀兩側★必須同用這一份★):
+     從 vault 向上找 .git(docs/<slug>-knowledge 布局下 vault.parent=docs/ 非 repo root);
+     找不到退 vault.parent(測試假 vault 行為不變)。"""
+     p = env.vault.resolve()
+     for cand in (p, *p.parents):
+         if (cand / ".git").exists():
+             return cand
+     return env.vault.parent.resolve()
+ 
+ 
+-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None):
++def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None, orchestrator=None):
+     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
+     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
+     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
+     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
+     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
+     --clusters(M2):該輪 risk-cluster 三態帳(每輪至多一筆帶;讀側 loop status --panel 消費)。
+     天花板:這只證明「審計員有沒有醒著讀」,不證明它抓到所有真問題(見設計 doc)。"""
+     import json
+     import datetime
+     import secrets
+@@ -4132,20 +4132,31 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+         if usd < 0:
+             print(f"擋下:--usd 只能填 0 或正數(這一輪實際花的美元),你給的是 {usd}", file=sys.stderr)
+             return 2
+         rec["usd"] = round(float(usd), 4)
+     # ── M1包 #1 tier 定錨欄(選配;loop next/gate 讀首個帶 tier 記錄定錨) ──
+     if tier is not None:
+         if tier not in LOOP_TIERS:
+             print(f"擋下:--tier 分級只能是 {'/'.join(LOOP_TIERS)} 之一,你給的是 {tier!r}", file=sys.stderr)
+             return 2
+         rec["tier"] = tier
++    # ── d4 編排者定錨欄(選配;首個帶 orchestrator 的記錄定錨;帳面已定錨就不能中途換) ──
++    if orchestrator is not None:
++        if orchestrator not in _ORCHESTRATORS:
++            print(f"擋下:--orchestrator 只能是 {'/'.join(_ORCHESTRATORS)},你給的是 {orchestrator!r}", file=sys.stderr)
++            return 2
++        if loop:
++            _prev = _loop_orchestrator(_loop_records(env, loop))
++            if _prev and _prev != orchestrator:
++                print(f"擋下:這個審查編號第一筆就定成 {_prev} 編排,中途換成 {orchestrator} 帳就對不上——要換請開新編號", file=sys.stderr)
++                return 2
++        rec["orchestrator"] = orchestrator
+     # ── T1 相容雙讀(design-loop重設計 實作計畫):處置帳六選配欄——★全部不給=行為與今日相同★ ──
+     # 集合核對而非總數核對(r1 Codex:只核總數可被重複計數/虛構項配平);
+     # 「不給不寫鍵」同 --findings 慣例;違反一律 rc2(寫側就擋,不留到 gate)。
+     def _ids(raw):   # None=未給;""=明示空集合(兩者語意不同)
+         return None if raw is None else [x.strip() for x in raw.split(",") if x.strip()]
+     f_set, fo_set, ac_set = _ids(findings_set), _ids(folded_set), _ids(accepted_set)
+     if any(x is not None for x in (fo_set, ac_set, accept_reasons, refute_verdicts, finding_kinds)) and f_set is None:
+         print("擋下:--folded-set/--accepted-set/--accept-reason/--refute-verdict/--finding-kind 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
+         return 2
+     if f_set is not None:
+@@ -5767,28 +5778,66 @@ _TIER_ROSTER = {
+ def _roster_kind(loop_id):
+     """loop id 前綴三值判:code-(含連字號)=code;code 開頭無連字號=None(indeterminate,
+     歷史帳實有 code側刪除傳播守衛/codestage);其餘=design。"""
+     if loop_id.startswith("code-"):
+         return "code"
+     if loop_id.startswith("code"):
+         return None
+     return "design"
+ 
+ 
+-def _roster_family(auditor):
+-    """auditor 字串→(family, dual_hit)。lower() 子串比對;判序寫死 external 先比、先命中先贏。"""
++_ORCHESTRATORS = ("claude", "codex")
++_ROSTER_CODEX_KEYS = ("codex", "gpt")     # 編排者是 Codex 時,這幾個字眼=同門
++
++
++def _loop_records(env, loop_id):
++    """canary-log 裡某編號的全部記錄(唯讀;壞行跳過)。"""
++    import json as _json
++    path = env.vault.parent / ".canary-log.jsonl"
++    out = []
++    try:
++        if path.exists():
++            for line in path.read_text(encoding="utf-8").splitlines():
++                line = line.strip()
++                if not line:
++                    continue
++                try:
++                    d = _json.loads(line)
++                except ValueError:
++                    continue
++                if d.get("loop") == loop_id:
++                    out.append(d)
++    except OSError:
++        return out
++    return out
++
++
++def _loop_orchestrator(rounds):
++    """帳面編排者定錨:首個帶 orchestrator 的記錄;舊帳沒有 → None(讀側視為 claude 並印一句,不給新呼叫預設——
++    Projects/Codex完全支援_計劃 d4:預設 claude 會讓 Codex 編排漏旗標時靜默套錯家族)。"""
++    return next((r.get("orchestrator") for r in rounds if r.get("orchestrator") in _ORCHESTRATORS), None)
++
++
++def _roster_family(auditor, orchestrator="claude"):
++    """auditor 字串→(family, dual_hit)。family 是★相對編排者★的:"claude"=同門(編排者那一家)、"external"=外家
++    (保留舊字串,_TIER_ROSTER 的 family 欄同義:claude 席=同門席、external 席=外家席;d4 相對化 2026-09-04)。
++    lower() 子串比對;判序寫死外家先比、先命中先贏。orchestrator=codex 時 codex/gpt 是同門、sonnet/opus/claude 是外家。"""
+     s = (auditor or "").lower()
+-    ext = any(k in s for k in _ROSTER_EXTERNAL_KEYS)
+-    cla = any(k in s for k in _ROSTER_CLAUDE_KEYS)
+-    if ext:
+-        return ("external", cla)
+-    if cla:
++    if orchestrator == "codex":
++        own = any(k in s for k in _ROSTER_CODEX_KEYS)
++        other = any(k in s for k in _ROSTER_CLAUDE_KEYS) or any(k in s for k in _ROSTER_EXTERNAL_KEYS if k not in _ROSTER_CODEX_KEYS)
++    else:
++        own = any(k in s for k in _ROSTER_CLAUDE_KEYS)
++        other = any(k in s for k in _ROSTER_EXTERNAL_KEYS)
++    if other:
++        return ("external", own)
++    if own:
+         return ("claude", False)
+     return ("unknown", False)
+ 
+ 
+ def _roster_dispatch_entries(loop_dir, rid):
+     """解析一輪的 rN-dispatch*.json → (auditor 串列, 跳過檔數)。三種真實形狀:
+     ①dict 頂層 auditor ②dict 帶 seats 陣列 ③頂層 list;壞損 JSON 與不符形狀同一處置=跳過不計。"""
+     import json as _json
+     auditors, skipped = [], 0
+     for f in sorted(loop_dir.glob(f"{rid}-dispatch*.json")):
+@@ -5832,21 +5881,24 @@ def _roster_observe(env, loop_id, rounds, repo, only_rid=None, anomalies_only=Fa
+     # high 輪的 fail-closed 警訊被降級成 standard 的軟提醒(code-batch2 s1-f1,席位純 CLI 重現)
+     # only_rid(問閘單輪):tier 只認判定輪自己的紀錄,★不 fallback 借別輪的★——
+     # 借用=同型病換觸發條件(r2 d-f1);判定輪沒記 tier → 走「沒有編制表可以對」照實講。
+     # 副作用即縱深:__seqN 合成鍵永遠對不到 round 欄 → tier=None → 天然安靜,
+     # 下方 startswith("__") guard 成為第二道防禦(單釘無法只殺 guard,兩道要一起拔才會響)。
+     if only_rid:
+         tier = next((r.get("tier") for r in rounds
+                      if r.get("round") == only_rid and r.get("tier")), None)
+     else:
+         tier = next((r.get("tier") for r in rounds if r.get("tier")), None)
+-    _quiet(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'}")
++    orch = _loop_orchestrator(rounds)
++    _quiet(f"[roster] {loop_id}:類型 {kind}(從名稱前綴推的),分級 {tier or '沒指定'},編排者 {orch or '帳面沒記,視為 claude'}"
++           + ("" if orch else "(舊帳相容;新迴圈 loop next 首輪要帶 --orchestrator)"))
++    orch = orch or "claude"
+     if tier is None:
+         _quiet("[roster] 這個編號沒指定過分級(舊格式或還沒記錄),沒有編制表可以對")
+         return anomalies
+     entry = _TIER_ROSTER.get((kind, tier))
+     if entry is None:
+         _quiet(f"[roster] 無編制宣告:{kind}/{tier} 這個組合沒定義該派誰,跳過對帳")
+         return anomalies
+     root = Path(repo).resolve() if repo else _vault_repo_root(env)
+     loop_dir = root / "governance" / "review-reports" / loop_id
+     if only_rid is not None:
+@@ -5868,36 +5920,39 @@ def _roster_observe(env, loop_id, rounds, repo, only_rid=None, anomalies_only=Fa
+         return anomalies
+     seats = entry["seats"]
+     req_c = [s for s in seats if s["requirement"] in ("required", "required-fail-closed") and s["family"] == "claude"]
+     req_e = [s for s in seats if s["requirement"] in ("required", "required-fail-closed") and s["family"] == "external"]
+     nia = [s for s in seats if s["requirement"] == "note-if-absent"]
+     for rid in rids:
+         auditors, _skipped = _roster_dispatch_entries(loop_dir, rid) if loop_dir.is_dir() else ([], 0)
+         if not auditors:
+             _quiet(f"[roster] {rid}:沒有派工快照可對(舊記錄或還沒寫入)")
+             continue
+-        fams = [(a, *_roster_family(a)) for a in auditors]
++        fams = [(a, *_roster_family(a, orch)) for a in auditors]
++        for a in auditors:   # 席名慣例 <鏡頭>-<模型>(收斂閘殘餘估計降級_計劃):沒帶模型尾碼的外家席只提示不改帳(調研候選 ⑥)
++            if _roster_family(a, orch)[0] == "external" and "-" not in a:
++                _quiet(f"[roster] {rid}:席名 {a} 沒帶模型尾碼,建議照慣例寫成 <鏡頭>-<模型>(如 外家否決-codex),家族辨識才穩")
+         n_c = sum(1 for _, f, _d in fams if f == "claude")
+         exts = [a for a, f, _d in fams if f == "external"]
+         unks = [a for a, f, _d in fams if f == "unknown"]
+         duals = [a for a, _f, d in fams if d]
+         hedge = f"可能缺(另有 {len(unks)} 席家族無法辨識)" if unks else "缺"
+-        _quiet(f"[roster] {rid}: 實派 {len(auditors)} 席(claude {n_c}/external {len(exts)}/unknown {len(unks)})"
+-               f";應派 required claude {len(req_c)}+external {len(req_e)}")
++        _quiet(f"[roster] {rid}: 實派 {len(auditors)} 席(同門[{orch}] {n_c}/外家 {len(exts)}/unknown {len(unks)})"
++               f";應派 required 同門 {len(req_c)}+外家 {len(req_e)}")
+         if len(exts) < len(req_e):
+             fc = any(s["requirement"] == "required-fail-closed" for s in req_e)
+             msg = f"[roster] {rid}:external_missing——外部審查員{hedge}不夠(實際 {len(exts)} 席,應有 {len(req_e)} 席)"
+             if fc:
+                 msg += ";此席編制為 fail-closed(本行僅轉述編制對照,不裁決;處置見 code-loop skill)"
+             print(msg); anomalies.append("external_missing")
+         if n_c < len(req_c):
+-            print(f"[roster] {rid}:seat_shortfall——claude 審查員{hedge}不夠(實際 {n_c} 席,應有 {len(req_c)} 席)")
++            print(f"[roster] {rid}:seat_shortfall——同門({orch})審查員{hedge}不夠(實際 {n_c} 席,應有 {len(req_c)} 席)")
+             anomalies.append("seat_shortfall")
+         if len(req_e) >= 2:
+             from collections import Counter as _Counter
+             for name, cnt in _Counter(exts).items():
+                 if cnt >= 2:
+                     print(f"[roster] {rid}:真兼任——外部審查員疑似一人兼任多席({cnt} 席都叫 {name})")
+                     anomalies.append("真兼任")
+         if nia and not exts:
+             print(f"[roster] {rid}:單家族(只有同一家模型在審)——外家席本輪未派(編制={nia[0]['requirement']};"
+                   f"辯方是否該派屬編排當場判斷,本行僅轉述編制對照,不裁決),收斂結論要講保守一點")
+@@ -6098,21 +6153,21 @@ def _el_related_nodes(env, source, top=5):
+     nodes = []
+     for rel, _score, _hits in scored:
+         st, dec = _el_node_meta(env, rel)
+         stem = Path(rel).stem
+         nodes.append({"name": stem, "status": st, "decisions": dec,
+                       "near_name": _el_near_name(stem, src_norm),
+                       "gist": _gist(env, rel)})
+     return {"query": query, "queried": True, "nodes": nodes}
+ 
+ 
+-def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None):
++def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None, orchestrator=None):
+     """M1包 #1(loop機械脊椎M1包_計劃):帳本吐唯一下一動作。唯讀指針——lumos 不 spawn agent,
+     編排仍是 Claude(Systems/design-loop 分工)。phase 五值:escalate/gate-pending/converged/
+     cap-reached/plant-canary;判定優先序=escalate→gate-pending(資訊不足,先於 cap)→converged
+     (僅 full-basis)→cap-reached→plant-canary。converged=rc0/其餘 phase=rc1/錯誤=rc2。
+     tier 定錨優先:帳面首個帶 tier 記錄定錨;僅無定錨舊帳按格式推導;零記錄 rc2 要 --tier。"""
+     import json as _json
+     import io
+     import contextlib
+     path = env.vault.parent / ".canary-log.jsonl"
+     rounds = []
+@@ -6146,20 +6201,33 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+                           file=sys.stderr)
+                     return 2
+                 seen.add(rid)
+                 cur_rid = rid
+     # ── tier 解析:定錨優先(v8);僅無定錨舊帳按格式推導;零記錄 rc2 ──
+     anchor = next((r["tier"] for r in rounds if r.get("tier")), None)
+     if tier and anchor and tier != anchor:
+         print(f"擋下:你這次指定的分級是 {tier},但這個審查編號第一筆記錄就定成 {anchor} 了。分級第一筆定下就不能中途換——要換請開新的審查編號", file=sys.stderr)
+         return 2
+     eff_tier = anchor or tier
++    # ── d4 編排者:首輪必帶(比照 --tier),不給預設;帳面定錨後要一致 ──
++    orch_anchor = _loop_orchestrator(rounds)
++    if orchestrator is not None and orchestrator not in _ORCHESTRATORS:
++        print(f"擋下:--orchestrator 只能是 {'/'.join(_ORCHESTRATORS)},你給的是 {orchestrator!r}", file=sys.stderr)
++        return 2
++    if orchestrator and orch_anchor and orchestrator != orch_anchor:
++        print(f"擋下:這個審查編號帳面定的編排者是 {orch_anchor},你這次說 {orchestrator}——中途換家帳就對不上,要換請開新編號", file=sys.stderr)
++        return 2
++    if not rounds and orchestrator is None:
++        print("擋下:這是全新的審查編號,第一次呼叫要帶 --orchestrator claude|codex 說清楚是誰在編排(外家席=不是編排者那一家;"
++              "工具不預設 claude——Codex 編排時漏了會靜默套錯家族)。之後記帳 `canary record … --orchestrator <同值>` 定錨", file=sys.stderr)
++        return 2
++    eff_orch = orch_anchor or orchestrator or "claude"
+     if eff_tier is None:
+         if not rounds:
+             print("擋下:這是全新的審查編號,還沒有任何記錄,工具不會幫你猜分級(猜錯之後格式兜不起來反而卡住)。第一次呼叫請加 --tier 指定分級", file=sys.stderr)
+             return 2
+         eff_tier = "standard" if panel_fmt else "legacy"   # 無定錨舊帳 fallback
+     width, cap = _TIER_PARAMS[eff_tier]
+     light = eff_tier == "light"
+     # seq=循序 code loop(skill 設計行為:code 的 standard 走單 reviewer 循序;
+     # 2026-08-18 循序codeloop-tier錨定案——not panel_fmt 是硬規格,code+standard 的 panel 帳照 panel 樣式走)
+     seq = (eff_tier == "standard" and _roster_kind(loop_id) == "code" and not panel_fmt)
+@@ -6173,21 +6241,21 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+             print(f"擋下:{eff_tier} 這個分級規定每筆記錄都要帶輪次(--round),但這個編號目前的記錄全都沒帶,兩邊對不上。"
+                   "之後記錄請帶 --round;如果一開始分級就選錯,請開新的審查編號", file=sys.stderr)
+             return 2
+         if light and panel_fmt:
+             print("擋下:light 分級只能用單人、不分輪次的記錄,但這個編號的記錄帶了輪次(--round),兩邊對不上。確認分級選對了沒;選錯請開新的審查編號", file=sys.stderr)
+             return 2
+     rounds_count = len({r["round"] for r in rounds}) if panel_fmt else len(rounds)
+     n_next = rounds_count + 1
+ 
+     def emit(phase, extra=None):
+-        out = {"phase": phase, "tier": eff_tier, "round": n_next, "width": width,
++        out = {"phase": phase, "tier": eff_tier, "orchestrator": eff_orch, "round": n_next, "width": width,
+                "min_seats": width, "cap": cap, "advisory": "分級由編排者第一筆記錄時宣告、之後定死;工具只照分級查表,不自己判斷"}
+         _roster, _rnote = _roster_next_payload(loop_id, eff_tier)
+         out["roster"] = _roster
+         if _rnote:
+             out["roster_note"] = _rnote
+         if phase == "plant-canary":
+             # 型別派工當下隨機抽(2026-08-06 S2 同場補,plan:驗證層自證三件):固定輪替
+             # =可猜=答案印在考卷背面(該 plan r1 審計語);同輪 slot 間仍不重複(width≤4 時
+             # 全 distinct;width>4 以重洗批次延續,重複最少化)——冗餘 canary 不算獨立注意力票。
+             import random
+@@ -6201,24 +6269,26 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+             rmode = "" if (light or eff_tier == "legacy" or seq) else f" --round r{n_next}"
+             # ★`legacy` 不是可宣告值,不得吐進 record_cmd★(2026-08-04):`--tier` 的 choices
+             # 只有 light/standard/high(LOOP_TIERS),legacy 純粹是「無定錨舊帳 + legacy 格式」
+             # 的推導結果。原本這裡無條件吐 `--tier {eff_tier}`,legacy 下等於★發一條 argparse
+             # 當場擋掉的指令★;而使用者最自然的修復是「把 --tier 拿掉再跑一次」——拿掉就記不上
+             # 定錨,下一輪 next 又推成 legacy、又吐一條跑不動的指令。
+             # ★這個 bug 自己維持自己★:2026-08 三個走循序的 loop(code-slim-python /
+             # code-teardown-windows / code-slim-handoff)全數 tier=None,即此循環的產物;
+             # 其中 code-slim-python 吃到 legacy 的 cap 6(standard 是 3)才被逼停。
+             _tier_flag = f" --tier {eff_tier}" if eff_tier in LOOP_TIERS else ""
++            out["orchestrator"] = eff_orch
++            _orch_flag = f" --orchestrator {eff_orch}"
+             out["record_cmd"] = (f"lumos canary record caught|missed --loop {loop_id}{rmode}"
+                                  f" --auditor <席> --severity <s> --findings <M>"
+                                  f" --report <席報告.md>"
+-                                 f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}"
++                                 f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}{_orch_flag}"
+                                  f" --scope-lines <這輪審了幾行>")   # cb3 s3-f1:寫側 2026-08-26 起審查席必附報告,模板同步
+             # [T5 design-loop重設計] 處置閘模板(選用;record_cmd 原樣保留給 code-loop/舊流程)
+             if not light and eff_tier != "legacy":
+                 out["disposal_cmd"] = (
+                     f"lumos canary record caught|missed --loop {loop_id}{rmode}"
+                     f" --auditor <席> --severity <s>"
+                     f" --findings-set <id串> --folded-set <id串> --accepted-set <id串>"
+                     f" --accept-reason <id=理由>"
+                     f" --report <席報告.md> --snapshot <凍結快照.md>"
+                     f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}")
+@@ -6273,21 +6343,22 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+                 pass
+         if extra:
+             out.update(extra)
+         if as_json:
+             print(_json.dumps(out, ensure_ascii=False))
+         else:
+             print(f"[next] {loop_id}:現在狀態 {phase},分級 {eff_tier},接下來第 {n_next} 輪,"
+                   f"這輪要 {width} 人審,最多跑 {cap} 輪")
+             if out.get("roster"):
+                 for s in out["roster"]["seats"]:
+-                    print(f"  應派: {s['slot']}(家族 {s['family']},"
++                    _fam = ("同門[" + out.get("orchestrator", "claude") + "]") if s['family'] == "claude" else ("外家(不是 " + out.get("orchestrator", "claude") + " 那一家)" if s['family'] == "external" else s['family'])
++                    print(f"  應派: {s['slot']}(家族 {_fam},"
+                           f"{'算' if s['occupies_w'] else '不算'}進人數,派工要求:{s['requirement']})"
+                           + (f" 備註:{s['note']}" if s.get("note") else ""))
+             elif out.get("roster_note"):
+                 print(f"  應派: 目前算不出該派誰——{out['roster_note']}")
+             for k in ("canary_type", "record_cmd", "scope_cap", "cluster_hint", "note"):
+                 if k in out:
+                     print(f"  {k}: {out[k]}")
+             # 圖譜入口栓 A 文字段(spec EL-1/EL-16:專屬多行段,不塞五鍵白名單;三分支唯一化)
+             try:
+                 if "related_nodes" in out:
+@@ -18049,20 +18120,22 @@ def main():
+                          "純telemetry,供日後分析『caught 率是不是隨規模掉』(外部實測:規模是主導混淆變數)")
+     cr.add_argument("--wallclock-min", type=int, dest="wallclock_min", help="M1包 成本欄:該輪 wall-clock 分鐘(非負整數,選配)")
+     cr.add_argument("--outcome", dest="rec_outcome",
+                     help="[自主迴圈結局帳] 這一輪最後怎麼收:converged / unconverged:<細類> / "
+                          "tier-blocked:<細類> / skipped / pipeline_fail:<死因>。"
+                          "機器要回讀的資料開結構化欄,不塞 note 散文(auto-loop-repair-v2)")
+     cr.add_argument("--usd", dest="rec_usd", type=float,
+                     help="[自主迴圈結局帳] 這一輪實際花的美元(claude -p 回傳,非估算;非負,選配)")
+     cr.add_argument("--tier", dest="rec_tier", choices=("light", "standard", "high"),
+                     help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
++    cr.add_argument("--orchestrator", dest="rec_orch", choices=("claude", "codex"),
++                    help="d4 編排者定錨欄:誰在編排這個迴圈(外家席=不是編排者那一家);首筆定錨,之後要一致")
+     cr.add_argument("--report", help="[T1 處置帳] 審查員報告檔路徑(存 path+sha256;檔案須存在且非空)")
+     cr.add_argument("--snapshot", help="[T1 處置帳] 派工凍結快照檔路徑(quote-check 的比對對象;存 path+sha256)")
+     cr.add_argument("--intake", help="首輪前掃留痕檔(rN-intake.md;選配——給了就存 path+sha256 且處置閘會全輪重驗,不給不擋。intake守衛案 2026-08-30)")
+     cr.add_argument("--findings-set", dest="findings_set",
+                     help="[T1 處置帳] 逐條 finding id 逗號串(集合核對的全集;與 folded/accepted 配套)")
+     cr.add_argument("--folded-set", dest="folded_set", help="[T1 處置帳] 折入計劃節點的 id 子集")
+     cr.add_argument("--accepted-set", dest="accepted_set",
+                     help="[T1 處置帳] 附理由放行的 id 子集(與 folded 互斥;聯集須=全集;blocker 輪必空)")
+     cr.add_argument("--accept-reason", dest="accept_reasons", action="append",
+                     help="[T1 處置帳] id=理由(可重複;鍵集合須=accepted-set,理由非空)")
+@@ -18104,20 +18177,22 @@ def main():
+     lv.add_argument("--settle", dest="vp_settle", metavar="清單檔")
+     lv.add_argument("--json", dest="vp_json", action="store_true")
+     lr = lsub.add_parser("rewrite", help="人裁「整份重寫」收尾:記 rewrite 事件+血緣 note(prev/successor),自動查「連續兩次」")
+     lr.add_argument("rw_loop_id", metavar="loop_id")
+     lr.add_argument("--successor", dest="rw_successor", required=True, help="接手的新迴圈編號")
+     lr.add_argument("--note", dest="rw_note", default="", help="一句為什麼判重寫(人裁依據)")
+     ln = lsub.add_parser("next", help="M1包 機械脊椎:帳本吐唯一下一動作(phase/輪數/canary 型別/席數/記帳模板);唯讀指針,不 spawn agent")
+     ln.add_argument("loop_id")
+     ln.add_argument("--tier", dest="next_tier", choices=("light", "standard", "high"),
+                     help="編排者宣告 tier(有帳面定錨時須一致否則 rc2;零記錄必填)")
++    ln.add_argument("--orchestrator", dest="next_orch", choices=("claude", "codex"),
++                    help="誰在編排(claude|codex;零記錄必填、不預設;有帳面定錨須一致)——外家席=不是編排者那一家(d4)")
+     ln.add_argument("--json", action="store_true", dest="next_json", help="機讀輸出")
+     ln.add_argument("--need", type=int, default=2, help="legacy 收斂窗 K(委派 gate 用,預設 2)")
+     ln.add_argument("--spec", dest="gate_spec", help="gate 委派用 spec 檔;缺=判 converged 資訊不足→gate-pending")
+     ln.add_argument("--repo", dest="gate_repo", help="repo root(gate 委派用)")
+     le = lsub.add_parser("escape",
+                          help="逃逸帳:迴圈放行後下游抓到可歸因缺陷→記一筆(--list 看全帳)",
+                          description="什麼時候用:某個審查迴圈收斂放行了,但下游(實作/CI/prod/人)發現可歸因的缺陷——記一筆逃逸帳。append-only、不進任何閘;歸因是人工判斷,編號必須實存於審查帳。看全帳用 --list(唯讀,不能與記帳參數混用)。")
+     le.add_argument("esc_loop_id", nargs="?", default=None, metavar="loop_id", help="放行該缺陷的迴圈編號(必須存在於審查帳)")
+     le.add_argument("--stage", dest="esc_stage", help="在哪一站發現:實作/code-loop/CI/prod/使用者回報…(自由字串)")
+     le.add_argument("--severity", dest="esc_severity", choices=("minor", "major", "blocker"), help="缺陷嚴重度(同審查帳值域)")
+@@ -18747,21 +18822,21 @@ def main():
+     if args.cmd == "canary":
+         if args.ccmd == "second":
+             return cmd_canary_second(env, ref_id=args.sec_ref, verdict=args.sec_verdict,
+                                      auditor=args.sec_auditor, note=args.sec_note)
+         return cmd_canary(env, args.kind, args.auditor, args.token, args.note, args.loop,
+                           args.severity, findings=args.findings, round_id=args.round_id,
+                           canary_type=args.canary_type, probe=args.probe,
+                           capture_counts=args.capture_counts, clusters=args.clusters,
+                           spec=args.rec_spec, reviewed=args.reviewed,
+                           tokens=args.tokens, wallclock_min=args.wallclock_min, tier=args.rec_tier,
+-                          outcome=args.rec_outcome, usd=args.rec_usd,
++                          outcome=args.rec_outcome, usd=args.rec_usd, orchestrator=args.rec_orch,
+                           scope_lines=args.scope_lines, report=args.report, snapshot=args.snapshot, intake=args.intake,
+                           findings_set=args.findings_set, folded_set=args.folded_set,
+                           accepted_set=args.accepted_set, accept_reasons=args.accept_reasons,
+                           finding_kinds=getattr(args, 'finding_kinds', None),
+                           refute_verdicts=getattr(args, 'refute_verdicts', None))
+ 
+     if args.cmd == "loop":
+         if args.lcmd == "canary-stats":
+             return cmd_loop_canary_stats(env, args.loop_id)
+         if args.lcmd == "status":
+@@ -18777,21 +18852,21 @@ def main():
+         if args.lcmd == "replay":
+             return cmd_loop_replay(env, args.rp_loop_id, golden=args.rp_golden, freeze=args.rp_freeze,
+                                    spec=args.rp_spec, note=args.rp_note, repo=args.rp_repo)
+         if args.lcmd == "rewrite":
+             return cmd_loop_rewrite(env, args.rw_loop_id, args.rw_successor, args.rw_note)
+         if args.lcmd == "escape":
+             return cmd_loop_escape(env, loop_id=args.esc_loop_id, stage=args.esc_stage,
+                                    severity=args.esc_severity, desc=args.esc_desc,
+                                    defect_ref=args.esc_ref, list_mode=args.esc_list)
+         if args.lcmd == "next":
+-            return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json,
++            return cmd_loop_next(env, args.loop_id, tier=args.next_tier, as_json=args.next_json, orchestrator=args.next_orch,
+                                  need=args.need, spec=args.gate_spec, repo=args.gate_repo)
+         # capture-counts 已在 vault-free 段提前處理(見上)
+ 
+     if args.cmd == "guard":
+         if args.gcmd == "list":
+             return cmd_guard_list(env, unbound_only=args.unbound)
+         if args.gcmd == "scaffold":
+             return cmd_guard_scaffold(env, args.node, args.invariant, args.method,
+                                       args.type, args.claim, out_dir=args.out,
+                                       template=args.template, klass=args.klass,
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index cb1f4b2..7102f5a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -16080,41 +16080,41 @@ def t_loop_next_cluster_hint_only_when_choice_is_open():
+ 
+     ★驗行為★:panel 模式(tier=standard/high)零記錄時必須有 hint;有記錄之後
+     (N≥2)必須沒有;legacy 與 light 這兩種用不到 cluster 帳的模式也必須沒有。"""
+     import json as _j
+     v = mkvault()
+     spec = v / "Projects" / "chspec.md"
+     spec.write_text("cluster hint spec\n", encoding="utf-8")
+     h = _sha256_of(spec)
+     lid = f"ch-{_M1U}"
+ 
+-    r = run(v, "loop", "next", lid, "--tier", "standard", "--json")
++    r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json")
+     d = _j.loads(r.stdout)
+     check("★前置★ 現場成立:第一輪且為 panel 模式",
+           d["phase"] == "plant-canary" and d["round"] == 1 and d["tier"] == "standard", r.stdout[:200])
+     check("★N=1(選擇還開著)必須提示 cluster 帳★", "cluster_hint" in d, r.stdout[:300])
+     check("★提示要講清楚『只有現在能選』★(不然看到也不知道有時效)",
+           "第一輪" in d.get("cluster_hint", "") and "開新編號" in d.get("cluster_hint", ""),
+           d.get("cluster_hint", "")[:200])
+     check("★文字模式也要印出來★(不能只有 --json 看得到)",
+-          "cluster_hint" in run(v, "loop", "next", lid, "--tier", "standard").stdout, "")
++          "cluster_hint" in run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude").stdout, "")
+ 
+     # 記一輪之後,模式已定錨 → 選擇關了 → 不得再提
+     run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
+         "--findings", "0", "--auditor", "s1", "--reviewed", h, "--spec", str(spec),
+         "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
+     r2 = run(v, "loop", "next", lid, "--json", "--spec", str(spec), "--repo", str(v.parent))
+     d2 = _j.loads(r2.stdout)
+     check("★已開始記錄後不得再提★(選擇已關,提了是誤導)", "cluster_hint" not in d2, r2.stdout[:300])
+ 
+     # legacy 與 light 用不到 cluster 帳 → 不得提(反誤傷)
+-    dl = _j.loads(run(v, "loop", "next", f"chl-{_M1U}", "--tier", "light", "--json").stdout)
++    dl = _j.loads(run(v, "loop", "next", f"chl-{_M1U}", "--tier", "light", "--orchestrator", "claude", "--json").stdout)
+     check("★light 不得提(用不到 cluster 帳)★", "cluster_hint" not in dl, "")
+ 
+ 
+ def t_quote_check_normalization_and_verdict():
+     """[T2 錨定檢查](spec:Projects/design-loop重設計 三;plan:同名_實作計畫 T2)
+ 
+     `lumos quote-check <報告> --spec <凍結快照>`:報告內每條「引句：「…」」
+     norm 後必須是快照 norm 後的子字串。rc0=全 ok、rc1=有 miss、rc2=IO/零引句。
+ 
+     ★正規化是本命令的全部價值★:r1 實戰就有一條真引句因原文帶粗體記號被誤判
+@@ -16169,21 +16169,21 @@ def t_loop_next_disposal_cmd_actually_runs():
+     (沿 t_loop_next_legacy 教訓:工具吐的指令必須跑得動,字串斷言只證長得對)。
+     record_cmd 原樣保留(code-loop 不受影響)。"""
+     import json as _j
+     v = mkvault()
+     spec = v / "Projects" / "t5spec.md"
+     spec.write_text("t5 spec\n規則甲。\n", encoding="utf-8")
+     h = _sha256_of(spec)
+     rpt = v / "Projects" / "t5rpt.md"
+     rpt.write_text("引句：「規則甲。」\nseverity: minor\n", encoding="utf-8")
+     lid = f"t5-{_M1U}"
+-    d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--json").stdout)
++    d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json").stdout)
+     check("★前置★ 現場成立:panel tier 吐 disposal_cmd+disposal_gate",
+           "disposal_cmd" in d and "disposal_gate" in d and "record_cmd" in d, str(d)[:200])
+     filled = (d["disposal_cmd"].replace("caught|missed", "caught").replace("<席>", "s1")
+               .replace("<s>", "minor").replace("<id串>", "F1", 1)          # findings-set
+               .replace("--folded-set <id串>", "--folded-set F1")
+               .replace(" --accepted-set <id串>", "")     # accepted 缺省=空集合(argv 手切,'' 會變字面引號)
+               .replace(" --accept-reason <id=理由>", "")
+               .replace("<席報告.md>", str(rpt)).replace("<凍結快照.md>", str(spec))
+               .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h))
+     argv = filled.split()
+@@ -16861,24 +16861,24 @@ def t_loop_next_legacy_emits_a_command_that_actually_runs():
+           "<" not in filled and argv[0] == "lumos", filled)
+     rr = run(v, *argv[1:])
+     check("★next 吐的指令必須真的跑得動★(rc0)", rr.returncode == 0,
+           f"rc={rr.returncode} cmd={filled}\n{rr.stderr[:300]}")
+ 
+     check("★要講清楚這個 loop 補標不了、得開新 id★(不然人只會困惑地把旗標拿掉)",
+           "開新的審查編號" in d.get("tier_hint", "") and "最多 6 輪" in d.get("tier_hint", ""),
+           d.get("tier_hint", "")[:200])
+ 
+     # 反誤傷:可宣告的三檔仍須照舊帶 --tier
+-    ds = _j.loads(run(v, "loop", "next", f"lgs-{_M1U}", "--tier", "standard", "--json").stdout)
++    ds = _j.loads(run(v, "loop", "next", f"lgs-{_M1U}", "--tier", "standard", "--orchestrator", "claude", "--json").stdout)
+     check("★standard 仍要帶 --tier★(修法不得誤傷可宣告檔)",
+           "--tier standard" in ds["record_cmd"] and "tier_hint" not in ds, ds["record_cmd"])
+-    dli = _j.loads(run(v, "loop", "next", f"lgl-{_M1U}", "--tier", "light", "--json").stdout)
++    dli = _j.loads(run(v, "loop", "next", f"lgl-{_M1U}", "--tier", "light", "--orchestrator", "claude", "--json").stdout)
+     check("★light 仍要帶 --tier★", "--tier light" in dli["record_cmd"], dli["record_cmd"])
+ 
+ 
+ def t_need_src_guards_cannot_silently_disable_coverage():
+     """★守衛的失敗模式是「放行」,所以它自己壞掉時必須大聲★(2026-08-02)
+ 
+     `_need_src(...)` 讓「來源 repo 專用」的測試在消費端專案乾淨 skip 而非假紅
+     （實測 Landmark:vendored 套件更新後 91 紅,全是來源專用產物缺席；本機制後
+     降為 0 紅 / 61 skip）。但它有一個致命的失敗模式：★如果來源 repo 自己少了
+     某個產物，這些測試會在來源端也靜默 skip，覆蓋率無聲蒸發★——而 skip 不會
+@@ -16976,58 +16976,58 @@ def t_canary_scope_lines_records_review_size():
+     # ★反誤傷★:沒超標不得標記、不得喊
+     lid4 = f"sc5-{_M1U}"
+     rs = run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", lid4, "--severity", "clean", "--findings", "0",
+              "--auditor", "small", "--reviewed", h, "--spec", str(spec), "--scope-lines", "415", expect_rc=0)
+     rows = [_j.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+     small = [r for r in rows if r.get("loop") == lid4][-1]
+     check("★沒超標不得標記(反誤傷)★", "scope_oversize" not in small, str(small)[:200])
+     check("★沒超標不得喊(反噪音)★", "軟上限" not in rs.stderr, rs.stderr[-150:])
+ 
+     # ★預防端★:警告要在派工之前出現,不是記帳之後才喊
+-    nx0 = run(v, "loop", "next", f"sc6-{_M1U}", "--tier", "standard")
++    nx0 = run(v, "loop", "next", f"sc6-{_M1U}", "--tier", "standard", "--orchestrator", "claude")
+     check("★loop next 必須在派工前就給量尺★(記帳時才喊已經來不及,輪跑完了)",
+           "scope_cap" in nx0.stdout and "wc -l" in nx0.stdout, nx0.stdout[-300:])
+ 
+     # loop next 的模板要提到它(否則沒人知道有這欄——cluster 帳 316:1 的教訓)
+-    nx = run(v, "loop", "next", f"sc3-{_M1U}", "--tier", "standard")
++    nx = run(v, "loop", "next", f"sc3-{_M1U}", "--tier", "standard", "--orchestrator", "claude")
+     check("★loop next 的記帳模板必須帶上它(不然沒人會用)★",
+           "--scope-lines" in nx.stdout, nx.stdout[-300:])
+ 
+ 
+ def t_m1_loop_next():
+     """M1包 #1 loop next:零記錄 rc2/plant-canary/tier 定錨+衝突 rc2/escalate/gate-pending/converged/cap/min-seats/json。"""
+     print("t_m1_loop_next")
+     import json as _j, subprocess as _sp
+     v = mkvault()
+     # 治理帳要 git HEAD 才寫(#6 的結案帳用):給 vault 上層一個 commit
+     _sp.run(["git", "init", "-q", str(v.parent)]); _sp.run(["git", "-C", str(v.parent), "add", "-A"])
+     _sp.run(["git", "-C", str(v.parent), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"])
+     spec = v / "Projects" / "nspec.md"
+     spec.write_text("next spec\n", encoding="utf-8")
+     h = _sha256_of(spec)
+     # 零記錄無 --tier rc2
+     r = run(v, "loop", "next", f"nx-{_M1U}")
+     check("零記錄無 tier rc2", r.returncode == 2)
+     # 零記錄+tier light → plant-canary N=1
+-    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "light", "--json")
++    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "light", "--orchestrator", "claude", "--json")
+     d = _j.loads(r.stdout)
+     check("零記錄 plant-canary N=1", d["phase"] == "plant-canary" and d["round"] == 1 and r.returncode == 1)
+     check("light width/cap 映射", d["width"] == 1 and d["cap"] == 2)
+     # tier 定錨:record 帶 --tier light → next 無 --tier 讀定錨(帶 auditor:空席不計已生效)
+     run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", f"nx-{_M1U}", "--severity", "clean", "--findings", "0",
+         "--auditor", "solo", "--reviewed", h, "--spec", str(spec), "--tier", "light", expect_rc=0)
+     r = run(v, "loop", "next", f"nx-{_M1U}", "--json", "--spec", str(spec), "--repo", str(v.parent))
+     d = _j.loads(r.stdout)
+     check("tier 定錨讀取", d["tier"] == "light")
+     check("light 收斂 → converged rc0", d["phase"] == "converged" and r.returncode == 0)
+     # 定錨衝突 rc2
+-    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "standard")
++    r = run(v, "loop", "next", f"nx-{_M1U}", "--tier", "standard", "--orchestrator", "claude")
+     check("tier 衝突 rc2", r.returncode == 2)
+     # 資訊不足 → gate-pending(先於 cap)
+     r = run(v, "loop", "next", f"nx-{_M1U}", "--json")
+     d = _j.loads(r.stdout)
+     check("缺 --spec → gate-pending rc1", d["phase"] == "gate-pending" and r.returncode == 1)
+     # escalate:light ratchet 最先短路
+     run(v, "canary", "record", "caught", "--loop", f"nx2-{_M1U}", "--severity", "major", "--findings", "2",
+         "--reviewed", h, "--spec", str(spec), "--tier", "light", expect_rc=0)
+     r = run(v, "loop", "next", f"nx2-{_M1U}", "--json", "--spec", str(spec), "--repo", str(v.parent))
+     d = _j.loads(r.stdout)
+@@ -22689,33 +22689,33 @@ def t_s2_loop_next_random_type_draw():
+     """[S2 同場補]canary 型別派工當下隨機抽(日報 gap③:固定輪替=可猜=答案印在考卷背面)。
+     ①slot 值域仍限 a-d ②同輪 slot 間不重複(width≤4;冗餘灌水 caught-rate 紀律的機械半)
+     ③跨多次呼叫 slot1 至少出現 2 種值(12 抽全同的機率 (1/4)^11≈0,非 flaky)
+     翻紅釘:改回 (i+n-1)%4 固定輪替 → ③翻紅(恆同值)。"""
+     print("t_s2_loop_next_random_type_draw")
+     import ast
+     v = mkvault()
+     lid = f"rndtype-{_M1U}"
+     seen_slot1 = set()
+     for _ in range(12):
+-        r = run(v, "loop", "next", lid, "--tier", "standard")
++        r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude")
+         line = next((l for l in r.stdout.splitlines() if "canary_type:" in l), "")
+         d = ast.literal_eval(line.split("canary_type:", 1)[1].strip())
+         vals = list(d.values())
+         check("slot 值域限 a-d", all(x in ("a", "b", "c", "d") for x in vals), line) if _ == 0 else None
+         if len(vals) <= 4 and len(set(vals)) != len(vals):
+             check("★同輪 slot 間不重複(width≤4)★", False, line)
+             return
+         seen_slot1.add(d.get("slot1"))
+     check("★同輪 slot 間不重複(width≤4)★", True, "")
+     check("★隨機抽:12 次呼叫 slot1 非恆同值★", len(seen_slot1) >= 2, str(seen_slot1))
+     # light 單席路徑:單值且在值域
+-    r = run(v, "loop", "next", f"rndlight-{_M1U}", "--tier", "light")
++    r = run(v, "loop", "next", f"rndlight-{_M1U}", "--tier", "light", "--orchestrator", "claude")
+     line = next((l for l in r.stdout.splitlines() if "canary_type:" in l), "")
+     val = line.split("canary_type:", 1)[1].strip()
+     check("light 單席隨機抽仍在值域", val in ("a", "b", "c", "d"), line)
+ 
+ 
+ def t_s2_canary_stats_type_coverage():
+     """[S2 回溯層]canary-stats 型別覆蓋率如實分層(plan r2 折入:數字要即時計算):
+     attr(結構化 canary_type)/note(散文 type=X regex fallback)/unknown 三層分開數,
+     印覆蓋率行——不硬猜、unknown 不併入任何型別。
+     翻紅釘:拔 note fallback 或 unknown 計數 → 斷言翻紅。"""
+@@ -23074,42 +23074,42 @@ def t_roster_family_classify():
+     d = fam("sonnet-vs-gemini-arbiter")
+     check("family: 雙家族命中→external+dual 標", d[0] == "external" and d[1] is True, str(d))
+     check("family: 單命中 dual=False", fam("veto-gemini")[1] is False, str(fam("veto-gemini")))
+ 
+ 
+ def t_loop_next_roster():
+     """S2:loop next 吐應派 roster;查表 miss/indeterminate/legacy 各走明訂路徑。"""
+     import json as _j
+     vault, repo, spec, rec, disp = _mk_roster_fixture()
+     # design/standard 零記錄
+-    r = run(vault, "loop", "next", "dz-roster", "--tier", "standard", "--json")
++    r = run(vault, "loop", "next", "dz-roster", "--tier", "standard", "--orchestrator", "claude", "--json")
+     d = _j.loads(r.stdout.strip())
+     check("next-roster: design/standard roster 欄存在", isinstance(d.get("roster"), dict), r.stdout[:300])
+     seats = d["roster"]["seats"]
+     check("next-roster: design/standard 3佔W+1否決", sum(1 for s in seats if s["occupies_w"]) == 3
+           and any(s["family"] == "external" and not s["occupies_w"] for s in seats), str(seats)[:300])
+-    rh = run(vault, "loop", "next", "dz-roster", "--tier", "standard")
++    rh = run(vault, "loop", "next", "dz-roster", "--tier", "standard", "--orchestrator", "claude")
+     check("next-roster: 人讀輸出含「應派」行", "應派" in rh.stdout, rh.stdout[:400])
+     # code/high
+-    r2 = run(vault, "loop", "next", "code-rz", "--tier", "high", "--json")
++    r2 = run(vault, "loop", "next", "code-rz", "--tier", "high", "--orchestrator", "claude", "--json")
+     d2 = _j.loads(r2.stdout.strip())
+     s2 = d2["roster"]["seats"]
+     check("next-roster: code/high 席組成(5佔W 含外家 finder+3不佔W 含架構對齊)",
+           sum(1 for s in s2 if s["occupies_w"]) == 5 and sum(1 for s in s2 if not s["occupies_w"]) == 3,
+           str(s2)[:300])
+     # 查表 miss:code+light
+-    r3 = run(vault, "loop", "next", "code-rz2", "--tier", "light", "--json")
++    r3 = run(vault, "loop", "next", "code-rz2", "--tier", "light", "--orchestrator", "claude", "--json")
+     d3 = _j.loads(r3.stdout.strip())
+     check("next-roster: code/light 查表 miss→roster null+無編制宣告",
+           d3.get("roster") is None and "無編制宣告" in r3.stdout, r3.stdout[:300])
+     # indeterminate id(codestage 型)
+-    r4 = run(vault, "loop", "next", "codestage9", "--tier", "standard", "--json")
++    r4 = run(vault, "loop", "next", "codestage9", "--tier", "standard", "--orchestrator", "claude", "--json")
+     d4 = _j.loads(r4.stdout.strip())
+     check("next-roster: indeterminate→roster null+kind 無法判定",
+           d4.get("roster") is None and "kind 無法判定" in r4.stdout, r4.stdout[:300])
+     # legacy 推導:無 tier 無 round 舊帳→單席通才,不炸
+     import json as _jj
+     with open(vault.parent / ".canary-log.jsonl", "a", encoding="utf-8") as f:
+         f.write(_jj.dumps({"ts": "2026-08-18T09:00:00+08:00", "kind": "caught", "loop": "oldloop",
+                            "severity": "minor", "auditor": "sonnet"}) + "\n")
+     r5 = run(vault, "loop", "next", "oldloop", "--json")
+     check("next-roster: legacy 推導不炸", r5.returncode != 2, r5.stderr[:200])
+@@ -23131,21 +23131,21 @@ def t_loop_status_roster_check():
+     disp(L, "r1-dispatch-s4.json", [{"auditor": "arch-sonnet"}])   # 2026-08-22 架構對齊席(required,不佔 W)
+     base = ["loop", "status", L, "--disposal", "--spec", str(spec), "--repo", str(repo)]
+     r0 = run(vault, *base)
+     r1 = run(vault, *base, "--roster")
+     check("status-roster: rc 與不帶 --roster 完全一致(advisory 釘)", r0.returncode == r1.returncode,
+           f"{r0.returncode} vs {r1.returncode}")
+     # v4.1 同帶跳過語意(roster對帳併入問閘 [S2]):不帶旗標時 disposal 尾端「異常才發聲」——
+     # 本 fixture 異常(外家缺),尾端可出現 [roster] 行;同帶時全史照印、尾端不重複
+     check("status-roster: 同帶時尾端不重複(單家族/外缺行不因同帶翻倍)",
+           r1.stdout.count("external_missing") <= max(1, r0.stdout.count("external_missing")), r1.stdout[:300])
+-    check("status-roster: 三形狀共解析 4 席(claude 桶足,含架構對齊)", "實派 4 席" in r1.stdout and "claude 4" in r1.stdout, r1.stdout[:600])
++    check("status-roster: 三形狀共解析 4 席(同門桶足,含架構對齊;d4 起印「同門[編排者]」)", "實派 4 席" in r1.stdout and "同門[claude] 4" in r1.stdout, r1.stdout[:600])
+     check("status-roster: note-if-absent 外家缺→單家族措辭且不算 shortfall",
+           "單家族" in r1.stdout and "seat_shortfall" not in r1.stdout, r1.stdout[:800])
+     # code/high:外家 required-fail-closed 缺(溢編頂替:總數 6 席但外家 0)+unknown+壞損+不符形狀
+     C = "code-obs"
+     rec(C, "r1", "lens1-sonnet", tier="high")
+     rec(C, "r1", "lens2-sonnet", tier="high")
+     for i in range(1, 6):
+         disp(C, f"r1-dispatch-s{i}.json", {"auditor": f"lens{i}-sonnet"})
+     disp(C, "r1-dispatch-spec.json", {"auditor": "spec-sonnet"})
+     disp(C, "r1-dispatch-junk.json", {"whatever": 1})            # 合法 JSON 不符形狀→跳過
+@@ -23284,21 +23284,21 @@ def t_seq_cap_and_roster():
+     """cap 行為:3 筆循序後 cap-reached;roster 吐單 reviewer+否決席。"""
+     import json as _j
+     vault = mkvault()
+     sp = vault.parent / "seq-spec.md"
+     sp.write_text("# s\n", encoding="utf-8")
+     for _ in range(3):
+         _seq_rec(vault, "code-seqcap", tier="standard")
+     r = run(vault, "loop", "next", "code-seqcap", "--spec", str(sp), "--json")
+     d = _j.loads(r.stdout.strip())
+     check("seq-cap: 3 筆後 cap-reached(買到第 3 輪攤人)", d.get("phase") == "cap-reached", str(d.get("phase")))
+-    r2 = run(vault, "loop", "next", "code-seqr", "--tier", "standard", "--json")
++    r2 = run(vault, "loop", "next", "code-seqr", "--tier", "standard", "--orchestrator", "claude", "--json")
+     d2 = _j.loads(r2.stdout.strip())
+     seats = (d2.get("roster") or {}).get("seats", [])
+     check("seq-roster: code/standard 吐單 reviewer(佔W)+外家否決(不佔W)",
+           sum(1 for s in seats if s["occupies_w"]) == 1
+           and any(s["family"] == "external" and not s["occupies_w"] for s in seats), str(seats)[:300])
+ 
+ 
+ def t_seq_tier_hint_warning():
+     """S3 測試收口:code- legacy loop 的 tier_hint 含整批計入警告;design 措辭不含。"""
+     import json as _j
+@@ -24027,59 +24027,59 @@ def t_entry_latch_advisories():
+     # 佈景=事故本尊形:帶空白變體(片語可命中)+無空白近名(片語搜尋會藏的那篇,superseded+2 決策)
+     write(v, "Projects/送審前impact鏡頭機械化_計劃.md",
+           "type: project\nstatus: done\ntags:\n  - type/project\n  - status/done",
+           "# 送審前impact鏡頭機械化_計劃\n本文含帶空白的 impact 鏡頭機械化 片語。\n")
+     write(v, "Projects/impact鏡頭機械化_計劃.md",
+           "type: project\nstatus: superseded\ntags:\n  - type/project\n  - status/superseded\n"
+           "decisions:\n  - content: 裁 A 案拒加閘\n    id: d1\n    decided: 2026-08-02\n"
+           "  - content: 停案二裁\n    id: d2\n    decided: 2026-08-03",
+           "# impact鏡頭機械化_計劃\n無空白串 impact鏡頭機械化 的內文。\n")
+     lid = f"impact-鏡頭機械化{_M1U}"
+-    r = run(v, "loop", "next", lid, "--tier", "standard", "--json", expect_rc=1)
++    r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json", expect_rc=1)
+     d = _j.loads(r.stdout)
+     check("★前置★ 現場成立:首輪 plant-canary(rc=1 載重語意未被 advisory 改動)",
+           d["phase"] == "plant-canary" and d["round"] == 1, r.stdout[:200])
+     rn = d.get("related_nodes")
+     check("A --json:related_nodes 形狀=EL-16 合約(queried/nodes 四鍵)",
+           isinstance(rn, dict) and rn.get("queried") is True and rn.get("nodes")
+           and all(set(n) == {"name", "status", "decisions", "near_name", "gist"} for n in rn["nodes"]), str(rn)[:300])
+     names = [n["name"] for n in (rn or {}).get("nodes", [])]
+     check("★紅釘 EL-4:片語單命中不得藏無空白近名★(帶空白變體在場,superseded 近名照樣上榜)",
+           "impact鏡頭機械化_計劃" in names, str(names))
+     hidden = next((n for n in (rn or {}).get("nodes", []) if n["name"] == "impact鏡頭機械化_計劃"), {})
+     check("★EL-10:superseded 納入且標 status;決策數機械數=2★",
+           hidden.get("status") == "superseded" and hidden.get("decisions") == 2, str(hidden))
+     check("EL-16:★近名 判準沿用 B(difflib ≥0.6)", hidden.get("near_name") is True, str(hidden))
+-    rt = run(v, "loop", "next", lid, "--tier", "standard", expect_rc=1)
++    rt = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
+     check("A 文字模式:專屬多行段+指路行(EL-1 不塞五鍵白名單)",
+           "圖譜既有節點" in rt.stdout and "先讀再開" in rt.stdout, rt.stdout[-400:])
+     # ★紅釘 EL-15/EL-3:auto-日期形=無主題訊號,誠實不查
+-    r2 = run(v, "loop", "next", "auto-2099-01-31", "--tier", "standard", "--json", expect_rc=1)
++    r2 = run(v, "loop", "next", "auto-2099-01-31", "--tier", "standard", "--orchestrator", "claude", "--json", expect_rc=1)
+     rn2 = _j.loads(r2.stdout).get("related_nodes")
+     check("★紅釘 EL-15:auto-日期形 queried=false nodes=[](母 token 濾網)★",
+           rn2 is not None and rn2["queried"] is False and rn2["nodes"] == [], str(rn2))
+-    rt2 = run(v, "loop", "next", "auto-2099-02-28", "--tier", "standard", expect_rc=1)
++    rt2 = run(v, "loop", "next", "auto-2099-02-28", "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
+     check("EL-3+C-1:剩單一有意義 token 時印可行動行(不靜默丟失,給出 lumos search)",
+           "主題訊號不足" in rt2.stdout and 'lumos search "auto"' in rt2.stdout, rt2.stdout[-300:])
+     _snap = v / "Projects" / "r9-snapshot.md"; _snap.write_text("s\n", encoding="utf-8")
+-    rt2c = run(v, "loop", "next", "auto-2099-03-31", "--tier", "standard", "--spec", str(_snap), "--repo", str(v.parent), expect_rc=1)
++    rt2c = run(v, "loop", "next", "auto-2099-03-31", "--tier", "standard", "--orchestrator", "claude", "--spec", str(_snap), "--repo", str(v.parent), expect_rc=1)
+     check("★code-r2 D2-2:spec 殘渣(snapshot)不得變建議指令——spec 無訊號一律用編號版★",
+           "snapshot" not in rt2c.stdout and ("主題訊號不足" in rt2c.stdout or "無主題訊號" in rt2c.stdout),
+           rt2c.stdout[-300:])
+-    rt2b = run(v, "loop", "next", "123-456", "--tier", "standard", expect_rc=1)
++    rt2b = run(v, "loop", "next", "123-456", "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
+     check("EL-3:完全無 token 時印「無主題訊號,未查」誠實行", "編號無主題訊號,未查圖譜" in rt2b.stdout, rt2b.stdout[-300:])
+     # EL-1:首輪 only——記一輪後(n_next=2)不得再算/再印
+     spec = v / "Projects" / "elspec.md"; spec.write_text("s\n", encoding="utf-8")
+     run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "clean",
+         "--findings", "0", "--auditor", "s1", "--reviewed", _sha256_of(spec), "--spec", str(spec),
+         "--tier", "standard", "--report", _sevrep(v.parent), expect_rc=0)
+-    r3 = run(v, "loop", "next", lid, "--tier", "standard", "--json", "--spec", str(spec), "--repo", str(v.parent))
++    r3 = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json", "--spec", str(spec), "--repo", str(v.parent))
+     d3 = _j.loads(r3.stdout)
+     check("★前置★ 現場成立:第 2 輪且仍是 plant-canary(r1 合約席 G-4:原測試只打到 gate-pending,首輪守衛其實沒被釘)",
+           d3["phase"] == "plant-canary" and d3["round"] == 2, r3.stdout[:200])
+     check("★EL-1:非首輪不印(cluster_hint 同款 N=1 抑噪)★",
+           "related_nodes" not in d3, r3.stdout[:200])
+     # ── B:近名建檔後即告(不擋照建) ──
+     rb = run(v, "new", "project", "impact鏡頭機械化v2_計劃", expect_rc=0)
+     check("B 命中:★近名 advisory 印出且帶 status(top=superseded 那篇)",
+           "★近名節點已存在" in rb.stdout and "superseded" in rb.stdout, rb.stdout[-400:])
+     check("B advisory 不擋:檔案照建", (v / "Projects" / "impact鏡頭機械化v2_計劃.md").exists(), "")
+@@ -24403,27 +24403,27 @@ def t_gist_layer():
+     g6 = m._gist(m.Env(v), "Systems/髒白話.md")
+     check("控制碼換空格(_esc_clean 復用)", "\x1b" not in g6 and "前段" in g6 and "後段" in g6, repr(g6))
+     # 誠實缺席:無白話無 summary→空字串(恆 str 非 None)
+     write(v, "Systems/兩頭空.md", "type: system\ntags:\n  - type/system", "# 兩頭空\n就一行敘述。\n")
+     g7 = m._gist(m.Env(v), "Systems/兩頭空.md")
+     check("誠實缺席:恆回空字串(絕不 None/不造假)", g7 == "" and isinstance(g7, str), repr(g7))
+     # T2 出口:JSON gist 鍵恆 str;文字行「— <L0>」恆最後、空不加
+     write(v, "Projects/齒輪傳動_計劃.md",
+           "type: project\nstatus: doing\ntags:\n  - type/project\n  - status/doing",
+           "# 齒輪傳動_計劃\n> 白話: 傳動計劃一句話。\n齒輪 傳動 內文。\n")
+-    r = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", "--json", expect_rc=1)
++    r = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", "--orchestrator", "claude", "--json", expect_rc=1)
+     rn = _j.loads(r.stdout).get("related_nodes") or {}
+     hits = {n["name"]: n for n in rn.get("nodes", [])}
+     check("T2 JSON:gist 鍵恆 str(EL-16 合約補欄)",
+           hits and all(isinstance(n.get("gist"), str) for n in hits.values()), str(hits)[:300])
+     check("T2 JSON:有白話者 gist=白話行", hits.get("齒輪傳動_計劃", {}).get("gist") == "傳動計劃一句話。", str(hits)[:300])
+-    rt = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", expect_rc=1)
++    rt = run(v, "loop", "next", "齒輪-傳動x", "--tier", "standard", "--orchestrator", "claude", expect_rc=1)
+     check("T2 文字:「 — <L0>」上行且空 gist 不加(A-1 gist 恆最後)",
+           " — 傳動計劃一句話。" in rt.stdout, rt.stdout[-500:])
+     # ★code-r1 修正四釘(B-1/B-2/B-3/B-5,先紅後綠)★
+     write(v, "Systems/全形冒號.md", "type: system\ntags:\n  - type/system",
+           "# 全形冒號\n> 白話\uff1a全形冒號版也是真白話行。\n")
+     checkg = lambda rel: m._gist(m.Env(v), rel)
+     check("★B-1:全形冒號「> 白話:」也命中(2 篇實存)★",
+           checkg("Systems/全形冒號.md") == "全形冒號版也是真白話行。", repr(checkg("Systems/全形冒號.md")))
+     fw = "首句以全形驚嘆號收尾算句界\uff01" + "尾巴不該進來" * 15   # 總長>80 才走截斷分支
+     write(v, "Systems/全形句界.md", "type: system\ntags:\n  - type/system", f"# 全形句界\n> 白話: {fw}\n")
+@@ -25310,12 +25310,49 @@ def t_codex_s1_r1_fixes():
+          patch.object(mi, "_find_lumos_script", lambda: "/bin/true"), patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(dd)}), \
+          patch.object(mi.sys, "stdout", _io.StringIO()):
+         mi.main()
+     check("s1-r1④: Claude 單檔路徑 subprocess timeout 仍是 30(逐字等價)", seen.get("timeout") == 30, str(seen))
+     # ⑤ 互斥
+     r = lens("--arm", f"{ml}..HEAD", "--claim")
+     check("s1-r1⑤: --arm 與 --claim 同給 → rc 2 擋下", r.returncode == 2 and "擋下" in r.stderr + r.stdout, f"rc={r.returncode} {r.stderr[-120:]}")
+     lens("--disarm")
+ 
+ 
++# ── Codex完全支援 S2(2026-09-04,d4):編排者定錨、家族相對化 ───────────────────────────
++def t_codex_s2_orchestrator():
++    """loop next 首輪必帶 --orchestrator(不預設);record 存欄、帳面定錨後中途換家擋;roster 家族相對編排者:
++    codex 編排時 codex 席=同門、sonnet 席=外家;舊帳沒欄視為 claude 並印一句;外家席名沒模型尾碼印提示。"""
++    import json as _j, os, subprocess as _sp
++    v = mkvault(); lid = "s2orch-" + os.urandom(3).hex()
++    spec = v / "Projects" / "x_計劃.md"; spec.parent.mkdir(parents=True, exist_ok=True); spec.write_text("---\ntype: project\n---\n# x\n", encoding="utf-8")
++    r = run(v, "loop", "next", lid, "--tier", "standard")
++    check("s2-orch: 全新編號沒帶 --orchestrator → rc2 且訊息講外家=不是編排者那一家", r.returncode == 2 and "--orchestrator" in r.stderr and "不是編排者" in r.stderr, r.stderr[-200:])
++    r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "codex", "--json")
++    d = _j.loads(r.stdout)
++    check("s2-orch: 帶 codex → 回 orchestrator=codex 且 record_cmd 帶 --orchestrator codex", d.get("orchestrator") == "codex" and "--orchestrator codex" in d.get("record_cmd", ""), r.stdout[:300])
++    r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "codex")
++    check("s2-orch: 人讀輸出印「外家(不是 codex 那一家)」", "不是 codex 那一家" in r.stdout and "同門[codex]" in r.stdout, r.stdout[:400])
++    rep = v.parent / "r1-seat.md"; rep.write_text("# r\nseverity: clean\n", encoding="utf-8")
++    r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "外家否決-sonnet", "--severity", "clean", "--findings", "0", "--tier", "standard", "--orchestrator", "codex", "--report", str(rep))
++    check("s2-orch: record --orchestrator codex 寫入", r.returncode == 0 and any(_j.loads(l).get("orchestrator") == "codex" for l in (v.parent / ".canary-log.jsonl").read_text().splitlines() if l.strip() and _j.loads(l).get("loop") == lid), r.stderr[-200:])
++    r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r2", "--auditor", "x-sonnet", "--severity", "clean", "--findings", "0", "--orchestrator", "claude", "--report", str(rep))
++    check("s2-orch: 帳面定錨 codex 後 record 說 claude → rc2", r.returncode == 2 and "中途換" in r.stderr, r.stderr[-200:])
++    r = run(v, "loop", "next", lid, "--orchestrator", "claude")
++    check("s2-orch: 帳面定錨後 loop next 說另一家 → rc2", r.returncode == 2, r.stderr[-200:])
++    r = run(v, "loop", "next", lid)
++    check("s2-orch: 帳面定錨後 loop next 不帶旗標 → 讀帳 codex(rc 由 gate-pending 決定,不釘)", "同門[codex]" in r.stdout and "不是 codex 那一家" in r.stdout, r.stdout[:400] + r.stderr[-200:])
++    # roster 相對化:派工快照裡 codex 席與 sonnet 席
++    root = v.parent; ld = root / "governance" / "review-reports" / lid; ld.mkdir(parents=True)
++    (ld / "r1-dispatch.json").write_text(_j.dumps({"round": "r1", "seats": [{"seat": "鏡頭1", "auditor": "gpt-5"}, {"seat": "鏡頭2", "auditor": "codex-b"}, {"seat": "鏡頭3", "auditor": "codex-c"}, {"seat": "架構對齊", "auditor": "codex-d"}, {"seat": "外家否決", "auditor": "claude"}]}), encoding="utf-8")
++    r = run(v, "loop", "status", lid, "--roster", "--repo", str(root))
++    check("s2-orch: codex 編排下 codex/gpt 席算同門、claude 席算外家", "同門[codex] 4" in r.stdout and "外家 1" in r.stdout and "external_missing" not in r.stdout, r.stdout[:600])
++    check("s2-orch: 外家席名沒帶模型尾碼 → 印席名建議", "席名 claude 沒帶模型尾碼" in r.stdout, r.stdout[:600])
++    # 舊帳(無欄)→視為 claude 並印一句
++    m = _load_lumos_inproc()
++    check("s2-orch: _roster_family 相對:claude 編排下 codex=外家;codex 編排下 sonnet=外家、gpt=同門",
++          m._roster_family("外家否決-codex")[0] == "external" and m._roster_family("外家否決-codex", "codex")[0] == "claude"
++          and m._roster_family("鏡頭1-sonnet", "codex")[0] == "external" and m._roster_family("gpt-5", "codex")[0] == "claude", "")
++    check("s2-orch: 舊帳沒欄 → _loop_orchestrator None", m._loop_orchestrator([{"tier": "standard"}]) is None and m._loop_orchestrator([{"orchestrator": "codex"}]) == "codex", "")
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index 698bc9d..da3791a 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -4,26 +4,26 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
+ ---
+ # 代碼審查迴圈——一頁手冊
+ 
+ 白話:分支要推之前,先算這批改動風險多高;高風險的就讓幾個不知道脈絡的審查員看 diff 找 bug、辯方殺假陽性、真問題修掉、記帳、問閘,過了留痕才推得上去。**你派人和判讀,lumos 出記帳與判閘的指令。**
+ 
+ 指令速查:`lumos-project-notes` 的 `commands/06-代碼審與推送.md`。派工 prompt 與席位紀律見 `reference.md`。
+ 
+ ## 什麼時候用
+ - `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一個審查員走循序(`--tier standard`,上限 3 輪);`light`/瑣碎改動可跳(commit 註明)。
+ - pre-push 和 CI 都會重算 tier;high 沒有 `lumos code-loop pass|skip --note` 留痕就推不上去。留痕綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑。
+-- loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
++- loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --orchestrator claude|codex --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
+ - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+ 
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`;超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。
+-2. **派審查員**:Agent、sonnet。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。★圖譜鏡頭(2026-08-29 起每席都附;2026-09-01 d9 截錄;★2026-09-03 起改由 hook 機器附★——手貼 0 執行的結構因是「跑指令→讀→貼」落在編排者身上)★:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`,派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——**前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/★裸合約★——裸合約=閘守不到、只剩你讀,優先看)、逐條必答;超出只列名,不必答**;一句話層(L0)已砍(自由文字=注入管道)。標記不在/格式差/base 不在主線/超時→靜默放行;★0 篇(v1.2)→附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約不必逐條答)★;派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。★Codex 編排時標記行無效(派工訊息對 hook 是密文):派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`(templates.md §3 ④;[[Projects/Codex完全支援_計劃]] d3)。★另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」,每條 finding 必附 file:line 與引句。派工單落 `rN-dispatch.json`。
++2. **派審查員**:Agent、sonnet(★Codex 編排時:spawn_agent,派工詞自帶審查員框架;父代理以 `codex exec --sandbox read-only` 開讓子代理繼承唯讀——自訂 agent TOML 在 exec 下 0.144.1 選不中,[[Projects/Codex完全支援_計劃]] d5;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`★)。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。★圖譜鏡頭(2026-08-29 起每席都附;2026-09-01 d9 截錄;★2026-09-03 起改由 hook 機器附★——手貼 0 執行的結構因是「跑指令→讀→貼」落在編排者身上)★:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`,派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——**前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/★裸合約★——裸合約=閘守不到、只剩你讀,優先看)、逐條必答;超出只列名,不必答**;一句話層(L0)已砍(自由文字=注入管道)。標記不在/格式差/base 不在主線/超時→靜默放行;★0 篇(v1.2)→附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約不必逐條答)★;派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。★Codex 編排時標記行無效(派工訊息對 hook 是密文):派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`(templates.md §3 ④;[[Projects/Codex完全支援_計劃]] d3)。★另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」,每條 finding 必附 file:line 與引句。派工單落 `rN-dispatch.json`。
+ 3. **收貨**:存席報告先正規化(2026-08-26 SOP:引句同行格式;表頭型嚴重度補獨立「severity: <值>」行,乾淨輪也要 severity: clean——record 寫側硬擋:審查席記帳必附報告、帳面不得低於報告最高)。可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現(跑得出來才撈回),直接丟曾兩次誤殺真問題。`lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+ 4. **判讀與辯方**:severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設 Codex `codex exec --sandbox read-only`,2026-07-18 S5;不可用退 opus 並於 note 註記偏離。`scripts/external-seat.sh`(Gemini)只當備援、其 ≥major 不算否決票——2026-08-23 裁)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。**high 缺外家辯方(替補也湊不齊)**:不硬擋(Enzo 2026-08-22 裁,成本考量),但收斂結論要降級成「單家族視角下未發現」、留痕 note 寫明缺席,問閘(`--disposal`)偵測到席位異常會自動轉述當輪(異常才印;外家未派行僅轉述編制對照不裁決);全史核對用 `loop status --roster`。diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點:`code-loop check`(pre-push 每次呼叫)會**自動真跑那些綁定測試**,紅/懸空/方法名不合法就擋推送(2026-08-22 起機械化,不靠自律);跑不了要 `--skip-bound-tests --note` 留痕。
+ 5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
+ 6. **記帳**:★多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,且帳本不能撤銷,只能換編號重記(2026-08-24 第三次踩)★。`lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。
+ 7. **問閘**:單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`——多席照步驟 6 的彙總記帳(處置清單只掛一席);★code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折,d2 裁;散文設計審不受此限)★。`--gate --panel` 僅供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
+ 8. **過了留痕**:先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳),再 `lumos code-loop pass --note "<審了什麼、幾席、幾條折入>"`;決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。推完、卷證入版控後 `lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定(週跑回放抽查用)。然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
+ 
+ 推完之後若下游(實作/CI/prod/使用者)發現可歸因到某次已放行審查的缺陷:`lumos loop escape <編號> --stage <站> --severity <s> --desc <一句>`(逃逸帳=審查系統的漏網紀錄,append-only 不進閘)。
+ 
+ ## 停手與護欄
+diff --git a/skills/lumos-code-loop/reference.md b/skills/lumos-code-loop/reference.md
+index b76ee58..9205f2c 100644
+--- a/skills/lumos-code-loop/reference.md
++++ b/skills/lumos-code-loop/reference.md
+@@ -72,21 +72,21 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch
+ ### 步驟 2 — 植 bug canary hunk
+ 
+ → 見〈歷史與停用〉。
+ 
+ ### 2 · ~~植 bug canary~~ ⛔ 已停用(2026-08-14,見頁頂)
+ 本步驟與三道防污染自檢不再執行,直接進步驟 3。舊型別輪替表/生成硬化見 git 史與 design-loop reference §A(歷史帳判讀用)。reviewer 結構紀律 → **單源見 `../lumos-design-loop/SKILL.md`,不在此雙寫**。
+ 
+ ### 步驟 3 — 派乾淨 reviewer
+ 
+ 
+-Agent tool、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 canary**、指向工作副本 `/tmp/code-<topic>-rN.patch`。
++Agent tool(Codex:spawn_agent)、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 canary**、指向工作副本 `/tmp/code-<topic>-rN.patch`。
+ > ⛔ 「連 2 次 missed」升級觸發已隨 canary 停用作廢;現行觸發=引句大面積錨不到或泛泛而談,見搬入版護欄
+ 
+ **framing(refute framing)**:
+ 「你是外部第三方,這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀、主動找洞——正確性(★2026-08-28 升級:每個可疑處挑一個具體輸入把執行走一遍、別用名字猜;邊界 空/單一/溢位、資源 錯誤路徑釋放了嗎、例外/None 接了嗎、冪等併發 重跑或同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)——逐條標 severity(clean/minor/major/blocker)。附 pitfalls `--diff` manifest 當鏡頭:命中位置逐條判真隱患/誤報,真隱患必答對應提問。風格與架構一致性歸架構對齊席。」(完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準)
+ 
+ **抑噪紀律(borrow:PR-Agent 原始碼實證,兩句逐字進 reviewer prompt)**:
+ - 「低嚴重度疑慮,**給不出具體失敗場景就不要標**。」
+ - 「**不能從 diff 指出具體受影響的 file:line 路徑,就不准臆測『可能會壞別處』**。」
+ - ⚠ 刻意**不借** PR-Agent 的 findings 硬上限(num_max_findings=3)——上限會把真 findings 藏到下一輪,污染 G2 發現枯竭的收斂信號;抑噪靠上面兩句紀律,不靠砍量。
+ 
+@@ -94,21 +94,21 @@ Agent tool、`model: sonnet`(連 2 次 missed 後升 opus)、**不告知有 cana
+ `lumos impact --diff <merge-base>..HEAD --json` ——聚合整段 diff 各檔的 ranked impact(query=各檔 hunk 文字)成一份 manifest(★守衛面參考道 lane 不進 manifest——軟標記樞紐非代碼審波及口徑,2026-08-24★):固定席(★INVARIANT★ 合約+pitfall_when 事故)全保、非固定取跨檔最高分 top-8。★2026-08-29 改:固定席**逐條貼進每一席的派工詞**(不是給 manifest 路徑讓它自己讀——給路徑那條經兩輪設計審否決,見 [[Projects/impact鏡頭機械化_計劃]])★,要它「逐條判此 diff 會不會破壞該節點宣稱的行為/合約;固定席必答」。**定位=advisory 人判**(機械保證只涵蓋合約/事故類固定席,其餘經排序無保底——保底與噪音都靠 reviewer 兜,故當鏡頭不當自動閘)。註:單檔版 ranked 已於 2026-07-11 過 §6 轉正接上 PreToolUse hook;--diff 聚合版仍維持審計鏡頭定位。
+ 
+ > manifest 現含兩種來源的 claim(`source` 欄區分):regex claim(`source:"pitfalls-builtin"`,讀 `question` 對應提問)與 lint claim(`source:"lint:<driver>"`,來自專案 `.lumos/lint.json` 宣告的社群 linter SARIF,讀 `message`——linter 已是具體診斷、無 question 欄)。reviewer 鏡頭對 lint claim 讀 `message`、對 regex claim 仍讀 `question`。
+ 
+ 第一次 missed 起加碼 framing:「逐 hunk 讀,你一定找得到至少一個植入的 bug;沒找到就是你沒讀仔細。」
+ 
+ ---
+ 
+ 
+ ### 3 · 派乾淨 reviewer
+-Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus)、指向工作副本。
++Agent tool(Codex:spawn_agent)、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus)、指向工作副本。
+ 
+ **refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席。」
+ 
+ **抑噪紀律(逐字進 prompt)**:
+ - 「低嚴重度疑慮,給不出具體失敗場景就不要標。」
+ - 「不能指出具體受影響 file:line,就不准臆測『可能會壞別處』。」
+ - （不設 findings 硬上限——會藏真 finding、污染 G2 收斂信號。）
+ 
+ **席位立場+輸出格式(2026-08-29 A+C,`../lumos-design-loop/templates.md` §7.7)**:多席 panel 每席在鏡頭外加「立場+預設姿態」(措辭自己改寫別逐字貼);敘述每條 ≤3 句、不准模稜兩可(結構欄位不計);★預設姿態不放寬證據要求,抑噪紀律照舊★;單席通才不套立場。
+ 
+@@ -343,21 +343,21 @@ lumos loop capture-counts \
+ ```
+ - 重疊計數(同洞被幾個 finder 中)是 capture-recapture 核心輸入,**人手數易錯 → 該機械化**。
+ - **linter 免手貼:`--from-pitfalls <range>` 一鍵收割**——`loop capture-counts --finder "<LLM A>" --finder "<LLM B>" --from-pitfalls main..HEAD --repo <root>` 會自己跑 `pitfalls --diff`、按 source 分組(每個 linter driver / pitfalls 內建各一個確定性 finder)、把命中的 `file:line` 併進來一起算重疊。手動 `--finder` 留給 LLM reviewer,確定性 finder 自動來。
+ - 拿到 `--capture-counts` 串 → `canary record caught --loop code-<topic> --round rN --capture-counts <串> …`;`loop status code-<topic> --gate --panel` 把它印成殘餘 advisory 觀測(不進合取);canary-stats 重疊分布段也吃它。
+ 
+ 
+ ### 端到端一輪(照抄改參數)
+ ```bash
+ # 0. 定 topic / tier / diff range
+ TOPIC=code-fix-billing; RANGE=main..HEAD; RID=r1
+-# 1. 平行派 W 個乾淨 LLM reviewer(Agent tool,W=panel_width;各讀 diff 工作副本、含輪替 bug canary)
++# 1. 平行派 W 個乾淨 LLM reviewer(Agent tool;Codex:spawn_agent,W=panel_width;各讀 diff 工作副本、含輪替 bug canary)
+ #    → 收各 reviewer 的 findings,正規化成 file:line
+ # 2. 算重疊(LLM 手動 --finder + linter/regex 自動 --from-pitfalls)
+ lumos loop capture-counts \
+   --finder "billing.py:88,billing.py:120" \  # reviewer A
+   --finder "billing.py:88,tax.py:12" \       # reviewer B(billing.py:88 與 A 重疊)
+   --from-pitfalls "$RANGE" --repo .          # linter/regex 確定性 finder 自動收割
+ #    → 印 capture_counts=… 與可貼的 `--capture-counts <串>`
+ # 3. 記這一輪(W 筆共享同一 --round;此處示意 caught 輪)
+ lumos canary record caught --loop "code-$TOPIC" --round "$RID" \
+   --auditor bug-sonnet --severity minor --capture-counts "2,1,1"
+@@ -434,21 +434,21 @@ lumos loop status "code-$TOPIC" --disposal --spec <凍結patch> --repo .
+ **UI 層驗收(2026-08-05,MCP 接驗證層;Enzo 靈感立慣例、不綁案)**:diff 命中 UI 棧
+ (test-layers 宣告 layer 含「UI 驗收」)時,終審驗收=★agent 真開頁面★——用 Playwright MCP
+ (乾淨瀏覽器)或 claude-in-chrome(需真登入態如 LIFF)逐條執行驗收條款(真點/真填/真看),
+ 證據=截圖+關鍵 console/network 摘要,存 `governance/review-reports/<loop-id>/ui-evidence/`
+ 並由 Verification 節點引用。哲學同 quote-check:證據可重放,不是口頭宣稱「看起來對」。
+ 無法起環境(lab 不在/需登入而無 session)→ 明記「UI 層未驗+原因」,不得靜默跳過。
+ **真跑優先(2026-07-18 S1,紀律層規則非機械閘)**:diff 經 `lumos impact --diff` 命中綁 `[test:]` 的星標合約節點時,pass 前**只跑該綁定測試**(非全套)且須綠,結果記入 pass --note——LLM 判官意見不能替代這一跑(信任階梯:真跑>機械查>LLM 判官>自報)。`[test:]` 存的是測試名非指令,解析順序=①合約節點/專案圖譜記載的完整指令 ②依該棧慣例組指令(`dotnet test --filter`/`python3 scripts/test_lumos.py -k` 等)③歧義/查無 → **不得靜默跳過**:退跑該測試檔/模組級,再不行跑全套,留痕記「解析歧義」——「解析不了所以沒跑」不構成放行理由。機械化留 v2(動 gate code 另立計劃)。
+ 
+ ## code-loop 與 design-loop 的差異
+ 
+-**Claude 編排,lumos 出原語。** 你(主對話)用 Agent tool 派 reviewer、判讀、修代碼;lumos 出 `canary record none`/`loop status` 記錄與算收斂。lumos 不 spawn agent。
++**編排者(Claude 或 Codex)編排,lumos 出原語。** 你(主對話)用 Agent tool(Codex:spawn_agent)派 reviewer、判讀、修代碼;lumos 出 `canary record none`/`loop status` 記錄與算收斂。lumos 不 spawn agent。
+ 
+ design-loop 的對抗紀律(canary 驗醒著 / 辯方殺假陽性 / 證據閘收斂)1:1 搬到代碼終審,差異只在:① canary 是 bug hunk 非散文瑕疵、② G1 對代碼無意義故 skip、③ mutation 冒煙為可選機械錨補充。
+ 
+ 
+ ### ⚠ code-loop 與 design-loop 的關鍵差異(2026-07-09 交叉查文獻;別全盤沿用)
+ 程式碼有散文沒有的東西——**可執行 + 可靜態分析**。文獻(見 [[loop三輪壓縮_計劃]] 的 code-loop 差異節)證 code review 最佳解是**異質 ensemble**,非「多個多樣 LLM」:
+ 1. **panel 應異質,不只多樣 LLM**(borrow:AutoSafeCoder / Multi-Agent Code Verification via Information Theory,arxiv 2511.16708——submodularity 證異質分析器各加獨立資訊)。**確定性驗證器的參與方式=三通道,不佔 canary 席、不進「輪有效」判定**(它們跑真碼樹,看不到文字 diff 副本裡的誘餌,記席必然 missed;canary 票只驗 LLM 席注意力;2026-07-18 codestage 收斂裁定):
+    - (a) 其 findings 憑執行證據依辯方路由「機械證實」直接折入;
+    - (b) 以**異質 finder** 進 capture-recapture 重疊帳(`loop capture-counts --finder/--from-pitfalls`);⚠ 兩套帳差異(2026-08-14 起已無):兩套帳的 capture-recapture 均 **advisory 不進合取**(無-cluster 帳 2026-08-14 降級對齊 cluster 帳);裁決權由通道 (a) 承載(機械證實 findings 進 cluster 三態帳);
+    - (c) 需跑真碼的(測試套件/type checker)沿 mutation 冒煙的**隔離 worktree** 模式。
+@@ -463,21 +463,21 @@ design-loop 的對抗紀律(canary 驗醒著 / 辯方殺假陽性 / 證據閘收
+ ## 參考(需要才讀)
+ 
+ **出處**:抑噪兩句 borrow PR-Agent;mutation 算子 borrow Offutt E-selective / PItest / Kurtz FSE2016;Survived/NoCoverage borrow Stryker;異質 ensemble borrow AutoSafeCoder(arxiv 2511.16708)、Greptile TREX / CodeRabbit。派工模板見 `../lumos-design-loop/templates.md` §3-4/§7.5。設計全文 `docs/design/2026-07-04-pitfalls-code-loop.md`。
+ 
+ **code-loop ≠ design-loop 換名字**(2026-07-09 文獻;設計見 `[[loop三輪壓縮_計劃]]`):代碼可執行+可靜態分析,最佳解是**異質 ensemble** 非「多個多樣 LLM」——
+ - 確定性驗證器(linter SARIF/測試/type checker/mutation)**不佔 reviewer 席、不進輪有效**(2026-07-18 codestage;原因原為「跑真碼樹看不到餌」——植入雖停用,不佔席照舊:它們的產出走機械通道,不是席報告);參與三通道=(a) findings 憑執行證據機械證實折入 (b) 異質 finder 進 capture-recapture 帳(⚠ M2 cluster 帳下 advisory 不進合取,裁決權歸通道 a)(c) 跑真碼沿隔離 worktree 模式。錯誤剖面與 LLM 正交,才買到真獨立訊號、破「9 judge 2 票」。
+ - 辯方用**可執行 falsification**(跑測試/repro/mutation 確認或殺一條 finding)> 論證反證。
+ 
+ ## 歷史與停用(舊頭版全文;只供回放舊帳判讀,不是現行規則)
+ 
+-**Claude 編排,lumos 出原語**:你用 Agent tool 派 reviewer、判讀、修碼;lumos 記錄與算收斂,不 spawn agent。機制與 design-loop 1:1,差異=無 G1、mutation 冒煙為機械錨。
++**編排者編排,lumos 出原語**:你用 Agent tool(Codex:spawn_agent)派 reviewer、判讀、修碼;lumos 記錄與算收斂,不 spawn agent。機制與 design-loop 1:1,差異=無 G1、mutation 冒煙為機械錨。
+ 
+ 
+ 以下整段搬自本檔各處已標「⛔ 已停用/已撤回/某日修正」的純歷史內容,只供回放舊帳判讀,不是現行規則。
+ 
+ > ⛔ **canary 協議已於 2026-08-14 停用**(Enzo 裁;單源=Systems/canary-audit d5 與 SKILL.md 頁頂告示)。本檔 canary 相關段(植入/判定/missed 懲罰)**僅供回放歷史帳判讀**;每輪記帳改 `canary record none`。
+ 
+ # 舊頭版全文(2026-08-22 從 SKILL.md 搬入;含全部歷史註記與修正——頭版只留一頁手冊)
+ 
+ # lumos-code-loop:分支終審前的對抗代碼審 loop
+ 
+diff --git a/skills/lumos-design-loop/SKILL.md b/skills/lumos-design-loop/SKILL.md
+index e7677d6..1f3289a 100644
+--- a/skills/lumos-design-loop/SKILL.md
++++ b/skills/lumos-design-loop/SKILL.md
+@@ -5,26 +5,26 @@ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈—
+ # 設計審查迴圈——一頁手冊
+ 
+ 白話:一份設計寫完、動手實作之前,讓幾個不知道脈絡的審查員輪流挑毛病。每輪派人、收報告、機械驗報告、把真問題折回設計、記帳、問閘過了沒。**散文 spec 的收斂判準=處置閘:一輪裡每個發現都折掉或附理由接受,這輪就算收斂**(Enzo 2026-08-25 裁:K=2「連續兩輪乾淨」是舊 panel 制帳、僅已定錨 panel 帳的舊迴圈在用,對散文審計不適用;code-loop 現制也走處置閘);跑滿上限沒過就攤給人裁。**你(主對話)負責派人和判讀,lumos 只出記帳與判閘的指令,不會自己派 agent。**
+ 
+ 指令速查:`lumos-project-notes` 的 `commands/05-設計審查迴圈.md`。派工的完整 prompt 在同目錄 `templates.md`(派工以它為準)。
+ 
+ ## 什麼時候用、什麼時候跳
+ - **用**:spec / 設計 / 計劃筆記寫完、要進實作前。被審的唯一真檔 = 圖譜計劃筆記 `Projects/<主題>_計劃.md`;loop 編號 = 檔名去 `_計劃` 轉 kebab。
+ - **跳**:改錯字、一行、純機械(改名、補欄位)——可跳,但在 commit 或計劃筆記寫一句為什麼跳。
+ - **light(單人、最多兩輪)**:小而不瑣碎的 spec 才准(先驗暫用值:預估實作改動 ≲50 行且孤立);碰金流 / 對外寄送 / 正式環境不可逆 / 守衛面、動到 ★INVARIANT★、演算法密集、改動偏大——任一命中就走完整迴圈。忘了判就走完整(寧多不少)。這道判斷目前靠你自己誠實,沒有機械擋。**light 輪只要冒出存活 ≥major → 算 light 誤判,立刻升級**:開新編號(原編號加 `-std`)走完整迴圈,乾淨輪不洗回來。
+-- 進場前一行 `lumos loop next <編號> --tier standard|high|light --spec <計劃.md>`,第一次一定帶 `--tier`,之後它會吐「第幾輪、幾個人、派誰、記帳範本」。首輪還會印「主題既有節點」(圖譜入口栓:近名或已翻案的先讀它的 decisions 再開案,重複開案的成本在後頭)。
++- 進場前一行 `lumos loop next <編號> --tier standard|high|light --orchestrator claude|codex --spec <計劃.md>`,第一次一定帶 `--tier` 與 `--orchestrator`(誰在編排;外家席=不是編排者那一家,d4),之後它會吐「第幾輪、幾個人、派誰、記帳範本」。首輪還會印「主題既有節點」(圖譜入口栓:近名或已翻案的先讀它的 decisions 再開案,重複開案的成本在後頭)。
+ 
+ ## 一輪怎麼跑(照這個順序)
+ 1. **準備材料**:複製計劃筆記到工作副本 `/tmp/<編號>-rN.md`,`sha256sum <計劃筆記>` 留下這輪的指紋。`wc -l` 超過 1800 行就拆開審(外部研究:材料太多審查員看不完;本專案自己量不到這效應,但照做)。
+ 2. **先機械排乾**(每輪):`lumos refcheck <副本> --repo <根> --json`——引的檔案/行號不存在直接修真檔;`lumos prose-lint <計劃.md>`——中文模糊措辭掃描(只提醒不擋,rc 恆 0);掃出的類別歸編排者排乾,派工詞明寫「此掃描可及類別,席位不得報」;`lumos pitfalls <計劃.md> --check`——沒有「實務隱患」節先補;它反問的每個風險類都要逐類答進去,判「不碰」也要寫「已排除:理由」,不准靜默略過(排除理由也是審查對象)。**首輪再多一步**:派一個便宜 agent 拿固定清單掃①未定義的詞②壞引用③範圍自相矛盾④**機械宣稱驗語意**(spec 每句「某函式/機制會做 X」,開檔讀該段碼驗語意,**不只驗存在**——存在性抓到壞行號、語意誤宣稱要靠這條)。分流:①②③與存在類命中=直接修真檔不算 findings;**語意類命中=修真檔+逐條(含修改前→後對照)寫進 rN-intake.md 留痕;動到「核心裁定」節的=升級為正式 finding 交席位審,前掃不得自行改裁定**。★跑完把 `preflight-4: ran` 頂格寫進 rN-intake.md(宣告行,2026-08-30 intake守衛 d1;處置閘與 doctor [I] 段機械讀它——沒有那行=機器判定沒跑;記帳可帶選配 `--intake`)★
+-3. **派審查員**:Agent、`model: sonnet`、指向工作副本。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。派工當下把 `{round, seat, lens, materials, auditor}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`,凍結快照存 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
++3. **派審查員**:Agent、`model: sonnet`、指向工作副本(★Codex 編排時:spawn_agent、派工詞自帶框架、父代理唯讀沙盒;外家席換 `claude -p`;首輪 `loop next … --orchestrator codex`——[[Projects/Codex完全支援_計劃]] d4/d5★)。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。派工當下把 `{round, seat, lens, materials, auditor}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`,凍結快照存 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
+ 4. **收貨三道(全機械,錨不到的不採信)**。存席報告先做兩個正規化(2026-08-26 起,收貨 SOP——不是 code 裡的既有步驟,漏做的機械後果=記帳時 rc2 擋):引句轉成「引句:「…」」同行格式;表頭型嚴重度(### id / 等級 / 標題)補一行獨立「severity: <值>」,乾淨輪也要一行 severity: clean(record 寫側 2026-08-26 起硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高)。然後:
+    - `lumos quote-check <席報告> --spec <凍結快照>`:引句對不回快照的條目丟掉(比對對象是派工當下的快照,不是現檔)。
+    - `lumos refcheck <席報告> --repo <根>`:報告引的 file:line 要存在。
+    - `lumos seat-check <席報告> --dispatch <rN-dispatch.json>`:派工要查的材料有沒有都碰到。
+    - 三道之外(非取代):編排者對「佐證通道」與錨不到引句做**機械重現**,留痕 `rN-intake.md`(命令+輸出+HIT/MISS;判準與 MISS 處置見 templates.md〈編排者判讀規則〉——此步是人工判讀+機械留痕,不是全機械)。
+ 5. **判讀**:severity 以「照 spec 字面實作會做出錯的行為或漏掉合約」為 major;措辭、文件精度是 minor。席報告帶 blocking 宣告時與 severity 綁定:blocking:否 ↔ minor、blocking:是 ↔ major/blocker,兩欄矛盾=報告退回該席重判(編排者人工核,無機械擋)。**兩層不互改**:blocking 是審查員層宣告,accepted 是編排者處置層裁量——被放行的 major 仍標 blocking:是+附 accept-reason,不回頭改席報告。剝掉審查員誤判要能指出客觀錯在哪,判不準就保留。存活 ≥major 的:有可執行證據且你自己查過 → 直接折;多席獨立一致 → 直接折;只有低共識的才派一個辯方(★預設外家 Codex:`codex exec --sandbox read-only "<prompt>" < /dev/null`,stdin 必重導否則掛住;它能開檔查證。`scripts/external-seat.sh` 是 Gemini、看不到 vault,只當 Codex 不可用時的備援,其 ≥major 不算否決票——2026-08-23 實測五條 major 四條沒查證就判★;不給它審查員的結論)去反駁,必須附 file:line 才能降級。
+ 6. **折入**:只折存活的真問題進計劃筆記,寫進「審計修正紀錄」。若這輪是「被圖譜舊裁定擋下/縮案/停案」,裁定文字裡寫 `★圖譜攔截★站:開案前|首輪|第N輪;源:<節點名>`(飛輪攔截帳,週報 grep 用)。折完 `lumos fold-check <計劃.md>` 看前後矛盾;每折一條「訂正既有規則」的,拿關鍵詞全文 grep 找散落的同句變體一起改;再派一個便宜 agent 只看本輪 diff 核對鏡像段有沒有跟上——**鏡像核對的材料必須含 `governance/review-reports/<編號>/` 席報告目錄,只看計劃筆記查不到外移的細節**。審計修正紀錄寫法(2026-08-25 d4 瘦身,新案適用、舊案不回溯):每輪固定兩行——「rN(日期,席數):N 條/blocking N/一句結論」+指標到席報告目錄;兩行裡的 blocking 數帳上無對應欄位(canary-log 只有席級 severity),來源=席報告總結句;行為斷言必配具體例(輸入→預期),寫不出例=該斷言即 blocking。`git commit`。
+ 7. **記帳**(折完才記,指紋要是折入後的版本。★carrier 選席 SOP:記帳前對候選席報告跑 quote-check,選全錨席當 carrier(carrier=記帳載體非證據總集,全輪證據=各席報告 sha 留痕+rN-intake.md)★★記帳型態(2026-08-25 d5):散文設計審=處置帳——**各席一筆留痕**(severity/findings/report/snapshot/spec/reviewed,**不帶三個 set**)+同輪**僅一筆彙總 carrier** 帶 --findings-set/--folded-set/--accepted-set;兩筆都帶處置清單就擋、帳不能撤只能換編號重記(實撞過);「每席各帶一筆 severity 帳」的 panel 型態僅舊迴圈帳面重放存在,新迴圈一律處置帳★):
+    ```
+    lumos canary record none --loop <編號> --round rN --auditor <席> --severity <存活最高> --findings <存活條數> \
+diff --git a/skills/lumos-design-loop/reference.md b/skills/lumos-design-loop/reference.md
+index 368bdef..e19b107 100644
+--- a/skills/lumos-design-loop/reference.md
++++ b/skills/lumos-design-loop/reference.md
+@@ -80,21 +80,21 @@ light 用深度換速度是**設計本意**：單通才席漏的細微 bug，靠
+ 
+ M0 的進場硬否決是 **honor-system，不比 maker 誠實更可靠**（M1 才機械化成 filter）。
+ 
+ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏高＝進場訊號要收緊。
+ 
+ 
+ ---
+ 
+ ## 二、每一輪的步驟(現行)
+ 
+-**Claude 編排,lumos 出原語。** 你(主對話)用 Agent tool 派審計員、判讀、修 spec;lumos 出 `canary record none`(輪處置帳載體)／`loop status` 記錄與算收斂。**lumos 不 spawn agent。**
++**編排者(Claude 或 Codex)編排,lumos 出原語。** 你(主對話)用 Agent tool(Codex:spawn_agent)派審計員、判讀、修 spec;lumos 出 `canary record none`(輪處置帳載體)／`loop status` 記錄與算收斂。**lumos 不 spawn agent。**
+ 
+ > ### ★收斂改走處置閘(2026-08-04 重設計;取代 K-streak/capture-recapture 硬閘)★
+ > **一輪流程**:pre-flight 排乾 → 派 panel(派工含★錨定紀律★:每條 finding 必附逐字原文引句 ≥10 字;派工當下順手落 dispatch manifest,見留痕慣例) → **收貨三道**(2026-08-06 S1,plan:[[Projects/驗證層自證三件_計劃]]):①逐席 `lumos quote-check <席報告> --spec <凍結快照>`(錨不到的條目不採信;★比對對象=派工當下凍結快照,勿用現檔——折入後引句會自我成真★)②`lumos refcheck <席報告> --repo <root>`(finding 引的 file:line 機械驗存在/行號範圍——報告引了不實指涉當場現形)③`lumos seat-check <席報告> --dispatch <rN-dispatch.json> --ledger <out-of-scope.jsonl>`(有講沒做對帳:unreported/out_of_scope;觀測恆 rc0 不擋收貨,越界另記一本不進收斂帳) → 辯方(≥major) → 處置帳 record(`lumos loop next` 的 `disposal_cmd` 模板;★blocker 只能折不能放行★) → `lumos loop status <id> --disposal --spec <計劃節點> --repo <root>`(四條合取全讀側可重算:G3∧處置全清∧留痕 sha 重驗∧引句全錨定) → rc0 即收斂;cap=2,第二輪只給 delta。
+ > **留痕慣例**:凍結快照與席報告存 `governance/review-reports/<loop-id>/`,檔名=`<round>-snapshot.md` 與 `<round>-<席>.md`(T3 慣例,補漏 2026-08-04 終審 spec 席);record 的 --report/--snapshot 指向它們(★該 loop 首筆帶 findings-set 後,留痕轉強制★;路徑以 repo root 相對落帳,gate 換 cwd 照樣可重驗)。**派工 manifest(S1)**:派工當下把 `{round, seat, lens, materials:[被審檔], auditor}` 落同目錄 `rN-dispatch.json`(per-seat 快照時可用 `rN-dispatch-s<i>.json`);與席報告同 commit 節奏一次進(不觸發 pass 追尾)。materials 空=seat-check vacuous 豁免;lens 只觀測不判定。
+ > **下文舊 panel/K-streak/capture-recapture 節保留**:code-loop 仍單源引用;design-loop 新 loop 一律走處置閘,舊帳不回溯。
+ 
+ ## 每一輪(照做)
+ 
+ > ### ⚠ 一輪能丟多少:軟上限 1800 行(≈30K token)
+ >
+@@ -116,21 +116,21 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏
+ 
+ 2. ~~植 canary~~ **⛔ 已停用(2026-08-14,見頁頂告示)**——本步驟不執行,直接進 2.5。舊型別清單/生成硬化(reference §A)僅供回放歷史帳時判讀。
+ 
+ 2.5. **機械核對(refcheck,對工作副本)**:`lumos refcheck /tmp/<id>-rN.md --repo <repo根> --json`。missing／line_out_of_range ＝機械 finding,直接修**真檔 spec**(記入審計修正紀錄、標「機械 refcheck」);manifest(ok 宣稱＋excerpts)留存、步驟 3 餵審計員。refcheck **只驗 spec→repo 指涉、不驗 spec 內部一致性**——內部一致性是審計員責任田。
+ 
+ 2.6. **pitfalls 核對**:`lumos pitfalls <計劃節點.md> --check`;rc 1(缺「## 實務隱患」節)→ 先在**真檔 spec** 補該節再繼續。不帶 `--check` 跑一次,提問清單附給步驟 3 的審計員當鏡頭之一。
+ 
+ 2.7. **pre-flight 排乾(首輪前跑一次,r2+ 不重跑)**:派 1 個便宜 agent 拿固定 checklist 掃**真檔 spec**——未定義旗標／欄位／檔名、章節交叉引用、**範圍刀自違**(「明確不做」被其他段偷偷違反)、CLI touchpoint(白名單／Check 字母撞名／函式簽名)、測試策略與本文條目一一對應。命中直接修真檔(記入審計修正紀錄標「pre-flight」,**不算 loop findings**)。
+    理由:實測 r1 大宗是清單型缺陷(某案 r1 九條裡五條此型),先機械排乾讓 panel 從高起點審,一輪收斂(K=1)才從理論變可能(cascade:便宜先掃、貴的審剩下)。
+ 
+-3. **派乾淨審計員**:Agent tool、`model: sonnet`(升級條件見護欄)、指向工作副本。
++3. **派乾淨審計員**:Agent tool、`model: sonnet`(升級條件見護欄)、指向工作副本(Codex 編排:spawn_agent,父代理唯讀沙盒,框架寫進派工詞)。
+    - **refute framing**:把工作副本當**外部第三方的投稿**審,不是你／本系統寫的——挑出投稿者沒看到的洞。逐節讀、主動找洞(未定義詞／壞引用／不一致／矛盾／可執行性 gap),逐條標 severity。
+    - **附步驟 2.5 的 refcheck manifest**:manifest 內宣稱的存在性／行號已機械驗訖,查證力氣聚焦語意;**manifest 非宣稱全集**,散文裡的現況假設仍要自己查。
+    - **加碼 framing**(席報告疑似通用回應/引句錨定大面積失敗的下一輪用):「逐節讀,你一定找得到至少一個未定義的詞／壞引用／不一致;沒找到就是你沒讀仔細」。
+ 
+ 4. **判讀**:
+    - ① ~~canary 判定~~ **⛔ 已停用(見頁頂)**——「審計員有沒有真的讀」改由收貨三道的 quote-check 引句錨定機械把關。
+    - ② **最嚴重真 finding** ＝ 審計員標的 max(`clean`＝無真 finding／`minor`／`major`／`blocker`)。
+      - **剝「審計員誤判」要克制**:只有能**指出該 finding 客觀錯在哪**(被實際 spec/code 反證)才剝;**判不準就保留**(寧可高估),剝除理由記進 note。
+      - **severity 錨(防 refute framing 通膨;派工模板同句)**:major ＝ 照 spec 字面實作會做出**錯的行為**或漏掉合約;文件精度／測試枚舉完整性／措辭 ＝ minor,除非漏的是合約級。
+      - **難判搖擺場換問法重問一次**(「這條 finding 若實作照做,具體錯在哪個行為?」),兩問等級不一致 ＝ **取高並記 unstable**。
+diff --git a/skills/lumos-pitfalls-gapfill/SKILL.md b/skills/lumos-pitfalls-gapfill/SKILL.md
+index e763b01..d062a95 100644
+--- a/skills/lumos-pitfalls-gapfill/SKILL.md
++++ b/skills/lumos-pitfalls-gapfill/SKILL.md
+@@ -17,21 +17,21 @@ description: linter 抓不到的新坑用網搜補——WebSearch 找某技術
+ 每專案一個 `Issues/linter-gap實務隱患.md`(type issue)。**先讀它**(去重基準):
+ ```
+ lumos context linter-gap實務隱患        # 無 → lumos new issue "linter-gap實務隱患"
+ ```
+ 節點兩段:**〈已採納〉**(放行的坑)、**〈已評估駁回〉**(駁回的坑+反證)。step 2 搜到的凡已在這兩段 → 跳過,不重找重駁。
+ 
+ ## workflow(照做)
+ 
+ 1. **確認已覆蓋範圍**:讀該專案 `.lumos/lint.json` 宣告的 linter(得知哪些坑已被 lint-adapter 蓋)。網搜目標 = **linter 沒蓋的**。
+ 2. **WebSearch**:搜「<stack> <版本> gotcha / pitfall / footgun / common mistake linter doesn't catch」等。收成候選坑清單(每條:一句描述 + 來源 URL + 觸發條件)。**濾掉**:① linter 已蓋的 ② 已在節點兩段的 ③ 專案沒用到的 API/情境。
+-3. **反證預篩**(借鏡 `lumos-design-loop` 的辯方 / [[finding-refute]]):對**每條**候選,用 Agent tool 派**乾淨 refuter**(獨立脈絡),framing:
++3. **反證預篩**(借鏡 `lumos-design-loop` 的辯方 / [[finding-refute]]):對**每條**候選,用 Agent tool(Codex:spawn_agent)派**乾淨 refuter**(獨立脈絡),framing:
+    > 「預設這條坑是**假的 / 不適用本專案**。構造反駁證據:它是否過時(框架已修)、是否 linter 其實有規則、是否本專案根本不會踩(用 grep/Read 實際代碼查)。**必須附來源或 `file:line`,光說『沒問題』不算**;拿不出反證才算駁不倒。」
+    - refuter 回「駁倒(附證據)」→ **丟掉**(可選記進〈已評估駁回〉附反證,避免下次重找)。
+    - refuter 回「駁不倒」→ 進候選。
+ 4. **候選 = 非定論**:駁不倒的坑,連**來源 + 反證嘗試結果**,攤給人。
+ 5. **人輕量放行**(oracle 省不掉):人判這坑對本專案業務/技術現實是否真值得記。
+    - 放行 → `Issues/linter-gap實務隱患` 的**〈已採納〉**段:坑描述 + 觸發條件 + 來源 URL(body 表格用 Edit;純量/list 走 lumos)。
+    - 駁回 → **〈已評估駁回〉**段:坑 + 為何駁(下次 step 1 跳過)。
+ 6. **收尾**:節點 `lumos lint` 自驗 → `lumos doctor`。放行的坑之後可被 pitfalls 進場當隱患鏡頭餵(像 refcheck manifest,同 ④ 事故語料)。
+ 
+ ## 誠實天花板(務必向人複述,別讓「駁不倒」被當「真」)
+diff --git "a/skills/lumos-project-notes/commands/05-\350\250\255\350\250\210\345\257\251\346\237\245\350\277\264\345\234\210.md" "b/skills/lumos-project-notes/commands/05-\350\250\255\350\250\210\345\257\251\346\237\245\350\277\264\345\234\210.md"
+index f847e98..8a511d2 100644
+--- "a/skills/lumos-project-notes/commands/05-\350\250\255\350\250\210\345\257\251\346\237\245\350\277\264\345\234\210.md"
++++ "b/skills/lumos-project-notes/commands/05-\350\250\255\350\250\210\345\257\251\346\237\245\350\277\264\345\234\210.md"
+@@ -1,24 +1,24 @@
+ # 05 設計審查迴圈(spec 要進實作前)
+ 
+ 白話:一份設計 spec 在動手實作前,讓幾個不知道脈絡的審查員輪流挑毛病,每輪記帳;散文 spec 走處置閘——一輪裡每個發現折掉或附理由接受就算過(2026-08-25 裁;K=2 連續乾淨只剩已定錨 panel 帳的舊迴圈在用)。完整流程在 `lumos-design-loop` skill;這裡只列「什麼時候敲哪個」。
+ 
+ | 情境 | 指令 | 結果怎麼讀 |
+ |---|---|---|
+-| 「這輪該派誰、第幾輪、怎麼記帳?」(每輪開頭) | `lumos loop next <編號> [--tier standard\|high\|light] [--spec <計劃.md>]`;第一次一定帶 --tier | 印現在狀態、這輪要幾人、應派哪個角色、記帳的指令範本 |
++| 「這輪該派誰、第幾輪、怎麼記帳?」(每輪開頭) | `lumos loop next <編號> [--tier standard\|high\|light] [--orchestrator claude\|codex] [--spec <計劃.md>]`(首輪兩個旗標都必帶;--orchestrator=誰在編排,外家席=不是編排者那一家);第一次一定帶 --tier | 印現在狀態、這輪要幾人、應派哪個角色、記帳的指令範本 |
+ | 「spec 動筆後想先掃模糊措辭」(排乾步驟) | `lumos prose-lint <計劃.md>` | 只提醒不擋,rc 恆 0;掃出的類別歸編排者排乾,派工詞明寫席位不得報 |
+ | 「審查員交報告了,要記這一輪」 | `lumos canary record none --loop <編號> --round rN --auditor <席> --severity <等級> --findings <數> --spec <計劃.md> --reviewed <sha256> [--scope-lines N]`;★散文設計審記帳型態(2026-08-25):各席一筆留痕**不帶三個 set**,同輪僅一筆彙總 carrier 帶 `--findings-set/--folded-set/--accepted-set/--accept-reason`;全席都要 `--report/--snapshot`★;每條發現標 `--finding-kind id=code|spec|process`(在修程式 / 被審文件 / 流程自己要求的東西) | 印憑證;超過 1800 行會提醒拆開審 |
+ | 「這輪/這個編號過關了沒?」 | 散文設計審新迴圈一律 `lumos loop status <編號> --disposal --spec … --repo …`(單輪全處置即收斂;同輪有 blocker 席則 accepted 必空);panel(每席各記一筆)→ `--gate --panel --min-seats 3`(K=2,僅已定錨 panel 帳的舊迴圈用);兩閘互斥,問錯會被指路;單人 `--light`;結清 `--settle <清單.json> --gate` | ✅ GATE PASS / ⛔ GATE FAIL,後面寫卡在哪一關 |
+ | 「審查員的引句是不是真的在 spec 裡?」 | `lumos quote-check <報告.md> --spec <凍結快照.md>` | 錨不到的引句不採信 |
+ | 「這席帳面嚴重度跟報告對得上嗎?(疑低報)」 | `lumos severity-check --loop <編號> --round <rN> --auditor <席> --repo <根>` | 第四道收貨;歷史帳 advisory、新帳抓到=寫側 bug 開 Issue;寫側 record 已硬擋低報,這是縱深第二層 |
+ | 「decision_refs 雞生蛋:回填舊筆記背書哪條決策」 | `lumos decision-refs backlog` → `candidates <節點>` → 讀判 → `add-ai <節點> <ref>` → 人 `promote` | T3 自動養成六原語;雙欄不對稱信任(ai-ref 抑制不了 E2、人 promote 才升級);單次單趟批次 |
+ | 「收斂了,把判定凍成標準答案」 | `lumos loop replay <編號> --freeze --spec <計劃.md> --repo <根>` | 收工流程新步驟(2026-08-26):gate PASS、卷證 commit 後當場凍;產 governance/replay/<編號>/verdict.json;重凍要 --note 留痕 |
+ | 「懷疑判定邏輯被改壞/帳被動了」 | `lumos loop replay <編號> --golden governance/replay/<編號>/verdict.json --repo <根>` | 對凍結閉包重算;邏輯漂移/帳被動/凍結檔被動=紅,帳本長大/golden 過期=列出不紅;唯讀不落帳 |
+ | 「派工單要查的材料,報告有沒有都碰到?」 | `lumos seat-check <報告.md> --dispatch <rN-dispatch.json> [--ledger <出界帳.jsonl>]` | unreported=沒碰;out_of_scope=引到範圍外 |
+ | 「想找人覆核某一筆判定」 | `lumos canary second --id <憑證> --verdict agree\|overturn --auditor <另一人>` | 必須換人 |
+ | 「人裁判整份重寫,要收尾舊編號」 | `lumos loop rewrite <編號> --successor <新編號> --note <一句為什麼>` | 記 rewrite 事件+血緣進治理帳;連續第二次判重寫會印強制攤人警告 |
+ | 「不看散文,只看帳本算到哪了」 | `lumos loop verify-progress <編號>` | 結構欄位,不受報告措辭影響 |
+ | 「長跑的上下文太長了」 | `lumos loop compress <檔>` | 三欄壓縮 |
+ | 「各審查員歷史抓漏率」 | `lumos loop canary-stats` | 觀測用,不影響過不過 |
+ | 「多個找錯工具的結果要合併估漏網」 | `lumos loop capture-counts --finder … --finder …` | 吐 --capture-counts 參數 |
+ 
+-上限依分級:light 2 筆、standard/high 3 筆;第一輪沒帶 `--tier` 會退到最寬鬆的舊制(6 筆),所以第一輪一定帶。跑滿上限還沒過 → 停,攤給人裁;別無限燒。settle 結清模式不要用 `loop next`(它認不得 settle 會誤報),直接問 `loop status --settle`。
++上限依分級:light 2 筆、standard/high 3 筆;第一輪沒帶 `--tier` 會退到最寬鬆的舊制(6 筆),所以第一輪一定帶;沒帶 `--orchestrator` 直接擋(不預設,Codex 編排漏了會靜默套錯家族)。跑滿上限還沒過 → 停,攤給人裁;別無限燒。settle 結清模式不要用 `loop next`(它認不得 settle 會誤報),直接問 `loop status --settle`。
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index 9a30b62..662260a 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -996,21 +996,21 @@ python3 scripts/lumos doctor
+ ---
+ 
+ ## 自足性審計
+ 
+ ### 圖譜更新後：Sonnet agent 自足性審計（必做）
+ 
+ **原理**：圖譜的存在目的是讓「沒有主對話脈絡的下一個 session」能單靠圖譜還原現況。所以驗收方式就是模擬這件事——派一個**乾淨的 Sonnet agent**（沒有主對話上下文）只讀圖譜還原脈絡，主對話比對它的還原結果與自己腦中的現存脈絡：**有出入 = 圖譜當下不健全，需補足缺漏後重審**。
+ 
+ **時機**：每次對圖譜的**實質內容更新**完成後（新增/修改 Systems、Issues、Verification、decisions、summary）。純格式修正（typo、缺欄位補登、連結修復）可豁免，但修完建議至少跑一次健康巡檢。
+ 
+-**做法**：用 Agent tool 派出 subagent，`model: sonnet`，prompt 模板：
++**做法**：用 Agent tool(Codex 下用 spawn_agent)派出 subagent，`model: sonnet`，prompt 模板：
+ 
+ ```
+ 你是知識圖譜審計員。只允許讀 docs/{vault-name}/ 下的筆記（唯讀；優先用 obsidian CLI，
+ 帶 leading vault="{vault-name}"，查詢指令見 search/backlinks/property:read/eval），
+ 禁止讀程式碼、git log、其他文件——模擬「只有圖譜」的新 session。
+ 
+ 請基於圖譜還原以下脈絡，據實回答，圖譜裡找不到的就明說「圖譜未記載」不要腦補：
+ 1. {本次更新涉及的模組} 的現況：核心流程、關鍵欄位、現行有效的決策
+ 2. 最近一次對 {模組} 的變更做了什麼、為什麼做、驗證狀態如何
+ 3. 有哪些進行中(doing)/被阻擋(blocked)的工作與未決問題

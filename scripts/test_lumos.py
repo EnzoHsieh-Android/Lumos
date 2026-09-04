@@ -24129,12 +24129,12 @@ def t_entry_latch_advisories():
     _keep = m._el_related_nodes
     buf_ok = _io.StringIO()
     with _ctx.redirect_stdout(buf_ok), _ctx.redirect_stderr(_io.StringIO()):
-        rc_ok = m.cmd_loop_next(env3, "elfault-注錯a", tier="standard", as_json=True)
+        rc_ok = m.cmd_loop_next(env3, "elfault-注錯a", tier="standard", as_json=True, orchestrator="claude")
     m._el_related_nodes = _boom
     try:
         buf_bad = _io.StringIO()
         with _ctx.redirect_stdout(buf_bad), _ctx.redirect_stderr(_io.StringIO()):
-            rc_bad = m.cmd_loop_next(env3, "elfault-注錯a", tier="standard", as_json=True)
+            rc_bad = m.cmd_loop_next(env3, "elfault-注錯a", tier="standard", as_json=True, orchestrator="claude")
     finally:
         m._el_related_nodes = _keep
     d_ok, d_bad = _j.loads(buf_ok.getvalue()), _j.loads(buf_bad.getvalue())
@@ -24145,12 +24145,12 @@ def t_entry_latch_advisories():
           f"rc {rc_ok}/{rc_bad} keys {sorted(d_bad)}")
     buf_okt = _io.StringIO()
     with _ctx.redirect_stdout(buf_okt), _ctx.redirect_stderr(_io.StringIO()):
-        rc_okt = m.cmd_loop_next(env3, "elfault-注錯t", tier="standard", as_json=False)
+        rc_okt = m.cmd_loop_next(env3, "elfault-注錯t", tier="standard", as_json=False, orchestrator="claude")
     m._el_related_nodes = _boom
     try:
         buf_badt = _io.StringIO()
         with _ctx.redirect_stdout(buf_badt), _ctx.redirect_stderr(_io.StringIO()):
-            rc_badt = m.cmd_loop_next(env3, "elfault-注錯t", tier="standard", as_json=False)
+            rc_badt = m.cmd_loop_next(env3, "elfault-注錯t", tier="standard", as_json=False, orchestrator="claude")
     finally:
         m._el_related_nodes = _keep
     check("★注錯 A 文字模式★(外家 r2 minor):rc 不變、無圖譜段、無 traceback",

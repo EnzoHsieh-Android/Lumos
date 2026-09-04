@@ -196,7 +196,7 @@ REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/pro
 - **進場實驗(自訂 agent)**:`CODEX_HOME/agents/` 放 `lumos-reviewer.toml`(name/description/developer_instructions/sandbox_mode=read-only),派工詞點名 → SubagentStart `agent_type=default`、子代理 apply_patch 成功寫檔;改成底線名 `lumos_reviewer`(模型 spawn 時 task_name 用的形)再試一次,同樣 default、可寫。★0.144.1 的 codex exec 下自訂 agent 選不中★(文件說靠名字選,沒說 exec 限制;互動模式沒試,REVISIT 2026-09-25)。退路實測:父代理 `--sandbox read-only` 時子代理寫檔被擋(「patch rejected: writing is blocked by read-only sandbox」)→ **d5:不裝 agent TOML,審查員框架寫進派工詞、父代理唯讀讓子代理繼承**。
 - **`--orchestrator`(d4)**:`canary record --orchestrator claude|codex` 存欄(帳面定錨後中途換家 rc2);`loop next` 零記錄時必帶(不預設,訊息講「外家=不是編排者那一家」),定錨後讀帳、說另一家 rc2;輸出多 `orchestrator` 欄、`record_cmd` 帶旗標、應派席印「同門[誰]/外家(不是誰那一家)」。`_roster_family(auditor, orchestrator)` 相對化(codex 編排:codex/gpt=同門,sonnet/opus/claude/gemini/qwen=外家;字串仍回 "claude"/"external" 讓 `_TIER_ROSTER` 的 family 欄同義=同門席/外家席);`_roster_observe` 讀帳面編排者,舊帳沒欄→視為 claude 並印一句「舊帳相容」;外家席名沒模型尾碼印「建議 <鏡頭>-<模型>」提示(調研候選 ⑥,只提示不改帳)。既有 27 個測試呼叫補 `--orchestrator claude`。
 - **skill 文字**:五支 skill 11 處 Agent tool/`model: sonnet` 全加 Codex 對照(spawn_agent、父代理唯讀、外家換 `claude -p`、首輪 `--orchestrator codex`);design-loop/code-loop SKILL 進場行與 commands/05 加旗標。
-- **測試** +1(`t_codex_s2_orchestrator`:首輪必帶/定錨一致/相對家族/舊帳相容/席名提示),舊 roster 測試字樣更新。
+- **測試** +1(`t_codex_s2_orchestrator`:首輪必帶/定錨一致/相對家族/舊帳相容/席名提示),舊 roster 測試字樣更新;★首輪必帶是破壞性規則★——既有 27 個 CLI 形呼叫與入口栓測試 4 個行程內呼叫都要補 `orchestrator=claude`(第一次全套 1 紅沒看清就 commit,補 commit 修;教訓:全套結果要看 failed 數不是只看 exit code)。
 - **驗收**:[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]。
 - **沒做(留 S3)**:recount 多 Codex reader、probe runner。
 
