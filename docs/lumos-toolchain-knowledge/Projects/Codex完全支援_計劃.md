@@ -2,7 +2,7 @@
 type: project
 status: done
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-05
 tags:
   - type/project
   - status/done
@@ -56,6 +56,14 @@ decisions:
     context: "進場實驗兩次(檔名 lumos-reviewer 與 lumos_reviewer,放 CODEX_HOME/agents/)派工詞點名後 SubagentStart agent_type 仍是 default、子代理可寫檔;父代理 --sandbox read-only 時子代理 apply_patch 被擋(patch rejected: writing is blocked by read-only sandbox)"
     why_chosen: 0.144.1 的 codex exec 下自訂 agent 選不中,沒證實的接頭不裝;唯讀由父代理沙盒繼承同樣可證;框架進派工詞與 Claude 側同形。REVISIT:2026-09-25 互動模式再試一次自訂 agent
     decided: 2026-09-04
+    valid: false
+    superseded_by: d6
+    ended: 2026-09-05
+  - content: S2 補裝 Codex 自訂 agent TOML:install 對 Codex 寫 CODEX_HOME/agents/lumos_reviewer.toml(底線名;name/description/developer_instructions=審查席框架;sandbox_mode=read-only 只當提示),teardown 收;★唯讀仍靠父代理 --sandbox read-only★(TOML 的沙盒欄實測不擋);舊版 codex 選不中時檔案無害、走 d5 退路
+    id: d6
+    context: 0.153.2 暫存安裝實測:spawn_agent 多 agent_type 參數、SubagentStart agent_type=lumos_reviewer、developer_instructions 到子代理;但 TOML sandbox_mode=read-only 下子代理在父 workspace-write 仍寫成 note.txt;0.144.1 全域版仍選不中
+    why_chosen: 身分與框架由 TOML 給是官方通道且新版可證;沙盒不能信 TOML 所以 d5 的唯讀規則保留;版本差異靠 enforcement 印版本+誠實界線
+    decided: 2026-09-05
     valid: true
 ---
 # Codex完全支援_計劃
@@ -155,6 +163,7 @@ S1 驗收(隔離 HOME+CODEX_HOME 真跑 `codex exec` 帶旗標,hook 命令列包
 - **hook 信任閘**:官方文件寫「hook trust before it will run a registered hook——`--dangerously-bypass-hook-trust` 每次帶、或互動 `/hooks` 標一次」;issue [#24093](https://github.com/openai/codex/issues/24093)(0.131–0.133 旗標在 TUI 被忽略,PR #24317 修)、PR [#26434](https://github.com/openai/codex/pull/26434)(exec 執行緒保留旗標)。★措辭修正★:信任綁的是設定檔裡那一條命令列(zenn「Codex hooks 六坑」:trust の対象は config のエントリ),只換 hook 檔內容不用重審——lumos update 只 copy 檔、命令列不變,所以不會進「再 trust 地獄」;S0 那句「hook 檔更新後要再審」改掉。
 - **派工訊息密文**:issue [#32753](https://github.com/openai/codex/issues/32753)「Multi-agent V2 regression: subagent instructions no longer observable」——PR #26210 起 spawn_agent/send_message/followup_task 的 message 加密、rollout 只存密文,PreToolUse 不覆蓋 collaboration 工具、SubagentStart 只給識別欄不給任務;★closed as not planned★=設計如此,不是 bug;另有 [#36494](https://github.com/openai/codex/issues/36494) 在要「加密參數的可驗證摘要」。d3 的退路成立。
 - **自訂 agent exec 選不中**:issue [#26363](https://github.com/openai/codex/issues/26363)(0.137.0 起 spawn_agent 只剩 fork_context/message,沒有 agent_type,子代理一律 generic 並繼承父模型)★已 closed、連到 PR #26599★——本機 0.144.1 仍選不中,可能修在更新版(知識庫提到 0.148.0 已存在);另兩張 [#14579](https://github.com/openai/codex/issues/14579)、[#15250](https://github.com/openai/codex/issues/15250) 同症。REVISIT:2026-09-25 升級 codex 再試自訂 agent(選得中就把 d5 退路改回裝 TOML)。
+- **★2026-09-05 直接驗(Enzo:「直接驗吧」)★**:①SessionStart additionalContext 在 0.144.1 exec 下★到得了★(哨兵 SESSIONSTART-CANARY 被原文抄回)——zenn 那條沒重現;②`approval_policy="never"` 與 `--full-auto` 下 PreToolUse ★照 fire、注入也到★(第一次問法太窄模型答「沒看到」,換成「列出所有含 CANARY 的字串」就抄出,逐字稿 5 處)——沒重現;③把最新版 0.153.2 裝進暫存目錄(不動全域):★自訂 agent 選得中★(spawn_agent 多了 `agent_type` 參數、SubagentStart agent_type=lumos_reviewer、developer_instructions 到子代理),★但 TOML 的 `sandbox_mode="read-only"` 沒擋住寫檔★(子代理在父 workspace-write 下照樣建了 note.txt)——唯讀仍要靠父代理 `--sandbox read-only`;hook 信任閘(不帶旗標 0 筆/帶 1 筆)與 spawn message 密文在 0.153.2 照舊。→ d6 翻 d5 一半:裝 TOML 給身分與指示(名字用底線 `lumos_reviewer`,模型會把連字號正規化),唯讀規則不變。
 - **新增待驗(zenn 六坑)**:①SessionStart 的 additionalContext 在 Codex 到不了模型(建議寫進 AGENTS.md)——本案 S0 只驗到 lumos-entry-hook「有 fire」,沒驗它印的提醒有沒有進模型;②`approval_policy="never"` 時走審批管線的 hook(PreToolUse/PermissionRequest)不 fire——Codex 以 `--full-auto`/never 跑時影響幅度 hook 會靜默;③payload 的工作目錄欄位位置隨情境變(cwd/workdir/巢狀)。REVISIT:2026-09-25 互動冒煙時一併驗 ①②;enforcement 對 Codex hook 的「不出 active」多了一條理由。
 
 ## 實務隱患(逐類答)
@@ -218,6 +227,12 @@ REVISIT:2026-10-04 若 S0/S1 已上線,查一個月內 Codex 側 enforcement/pro
 - **代碼審 r1(code-codex-s3,standard:單reviewer+架構+外家 Codex,2026-09-04)**:15 條(5+5+5,4 條重疊)全折——錨改「兩方向各取最近一個 apply_patch 比距離」、同輪無 apply_patch 不錨(不進分母)、一個 apply_patch 只當一次錨、帶路徑節點名精確比對不降裸 stem(同名不同目錄不撞)、python 前綴 basename 恰為 lumos、codex runner 超時/非零退出=儀器例外不判過、Codex 解析核心改向 check-graph-sync 借(版本表單源)、命名/空行計數/版本略過訊息對齊、run_one 加 harness 欄、README 改「developer 訊息是實測落點非唯一來源」。Claude 側更正數字在這些修正後不變(2/16、24)。卷證 `governance/review-reports/code-codex-s3/`。
 - **驗收**:[[Verification/2026-09-04_Codex完全支援S3量測驗收]]。
 - **沒做**:Codex 側的 probe 用量/速率上限偵測(沒對應訊號,遇到再補);子代理鏡頭「有沒有讀」(子代理稿沒有釘住清單可對,只計筆數)。
+
+## 實作紀錄 d6(2026-09-05,直接驗後翻 d5 一半)
+
+- `_install_codex_agent`/`_remove_codex_agent`:Codex 同步時寫 `CODEX_HOME/agents/lumos_reviewer.toml`(字串範本,帶 `# lumos-managed` 標記;name/description/developer_instructions=審查席框架;sandbox_mode 只當提示),重跑 unchanged、外方同名檔不覆蓋、teardown 只收帶標記的、無 Codex 家目錄不建;測試 `t_codex_d6_agent_toml`。skill 三處改「派工詞點名 lumos_reviewer;唯讀靠父代理沙盒」。
+- 驗收:隔離 CODEX_HOME 跑 `lumos install` 寫出 TOML,用暫存的 0.153.2 派 `lumos_reviewer` → SubagentStart `agent_type=lumos_reviewer`(見 S2 驗證筆記補驗段)。0.144.1 全域版忽略此檔(無害)。
+- 誠實界線補:TOML 的 sandbox_mode 實測不擋寫檔,唯讀規則不變;新版 codex 是否已修在別的版本沒逐版驗(只驗 0.144.1 與 0.153.2 兩點)。
 
 REVISIT:2026-09-25 互動 Codex 信任冒煙時一併看 SubagentStart 領席在互動模式下是否照常(本輪只驗 exec)。
 

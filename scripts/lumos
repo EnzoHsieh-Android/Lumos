@@ -11333,7 +11333,51 @@ def _sync_global_hooks(src_repo: Path, harness: str) -> str:
         r = subprocess.run(args)
         if r.returncode != 0:              # 合併器只在設定檔 JSON 壞時回 1:別當成功
             return "merge-failed"
+    if harness == "codex":                 # ④ 自訂審查席 TOML(d6)
+        st = _install_codex_agent()
+        if st == "written":
+            print(f"  ✓ Codex 自訂審查席 {_CODEX_AGENT_NAME}.toml 已寫(0.153+ 派工詞點名選得中;唯讀仍靠父代理 --sandbox read-only)")
     return "ok"
+
+
+_CODEX_AGENT_NAME = "lumos_reviewer"   # 底線:模型 spawn 時會把連字號正規化成底線(2026-09-04 實看)
+_CODEX_AGENT_MARK = "# lumos-managed: 由 lumos install 寫入,teardown 收走;改範本請改 scripts/lumos"
+_CODEX_AGENT_TOML = _CODEX_AGENT_MARK + '''
+name = "lumos_reviewer"
+description = "lumos 的乾淨審查席:設計審/代碼審派工詞點名 lumos_reviewer 時使用。只讀不寫,逐條 finding 附 severity 與逐字引句。"
+developer_instructions = """你是 lumos 的外部審查席(乾淨脈絡,不帶編排者的結論)。只讀不寫、不改任何檔。
+每條 finding 一行獨立 severity: clean|minor|major|blocker、一行 blocking: 是|否、一行 引句:「逐字出自審材」、引程式碼寫 file: `路徑:行號`。
+blocker/major 要附能翻紅的最小重現,附不出標「未能重現」。沒問題的節寫「已讀,無 finding」。最後一行總結最嚴重 severity 與 blocking 條數。"""
+sandbox_mode = "read-only"
+'''
+
+
+def _install_codex_agent(home=None) -> str:
+    """Codex 自訂審查席(d6,2026-09-05):寫 CODEX_HOME/agents/lumos_reviewer.toml。0.153+ 派工詞點名選得中;舊版忽略(無害)。
+    ★sandbox_mode 只當提示,實測不擋寫檔——唯讀靠父代理 --sandbox read-only★。回 written|unchanged|skipped-foreign。"""
+    d = _codex_home(home) / "agents"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{_CODEX_AGENT_NAME}.toml"
+    if f.exists():
+        cur = f.read_text(encoding="utf-8", errors="replace")
+        if _CODEX_AGENT_MARK not in cur:
+            print(f"  ⚠ {f} 已存在且不是 lumos 寫的,保留不動(要用 lumos 版請先自己移走)", file=sys.stderr)
+            return "skipped-foreign"
+        if cur == _CODEX_AGENT_TOML:
+            return "unchanged"
+    f.write_text(_CODEX_AGENT_TOML, encoding="utf-8")
+    return "written"
+
+
+def _remove_codex_agent(home=None) -> bool:
+    """teardown 對稱:只刪帶標記的那份。"""
+    f = _codex_home(home) / "agents" / f"{_CODEX_AGENT_NAME}.toml"
+    try:
+        if f.exists() and _CODEX_AGENT_MARK in f.read_text(encoding="utf-8", errors="replace"):
+            f.unlink(); return True
+    except OSError:
+        pass
+    return False
 
 
 def _sync_msg(harness: str, state: str) -> str:
@@ -11388,6 +11432,8 @@ def _teardown_global_hooks(src_repo: Path, harness: str):
     merge = src_repo / "scripts" / "merge-claude-settings.py"   # ③ prune-only 剪懸空我方註冊
     if merge.exists() and settings.exists():
         subprocess.run([sys.executable, str(merge), "--prune-only"] + (["--target", "codex"] if harness == "codex" else []))
+    if harness == "codex" and _remove_codex_agent():
+        removed.append(f"agents/{_CODEX_AGENT_NAME}.toml")
     bak = settings.with_suffix(".json.bak")   # ④ 合併器每次改檔留的備份也收掉(r1 單reviewer F7:拆機要對稱)
     if bak.exists():
         try:

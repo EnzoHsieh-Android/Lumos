@@ -25529,5 +25529,28 @@ def t_codex_s3_r1_fixes():
     check("s3-r1③: 非零退出碼不判通過", res["passed"] is False and "儀器例外" in res["reason"], str(res)[:200])
 
 
+def t_codex_d6_agent_toml():
+    """d6:Codex 同步寫 CODEX_HOME/agents/lumos_reviewer.toml(帶標記;必填 name/description/developer_instructions);
+    重跑 unchanged;外方同名檔不覆蓋;teardown 只收帶標記的;無 ~/.codex 不建。"""
+    import json as _j
+    home = Path(tempfile.mkdtemp(prefix="gctl-d6-")); (home / ".codex").mkdir()
+    r = _codex_run(home, "print(m._sync_global_hooks(repo,'codex'))")
+    f = home / ".codex" / "agents" / "lumos_reviewer.toml"
+    check("d6: codex 同步後 agents/lumos_reviewer.toml 在且含三個必填欄與標記", f.exists() and all(k in f.read_text() for k in ('name = "lumos_reviewer"', "description =", "developer_instructions =", "lumos-managed")), r.stdout[-100:] + r.stderr[-200:])
+    r = _codex_run(home, "print(m._install_codex_agent())")
+    check("d6: 重跑 → unchanged", r.stdout.strip().endswith("unchanged"), r.stdout[-80:])
+    f.write_text('name = "lumos_reviewer"\ndescription = "mine"\ndeveloper_instructions = "x"\n', encoding="utf-8")
+    r = _codex_run(home, "print(m._install_codex_agent())")
+    check("d6: 外方同名檔 → skipped-foreign 且不覆蓋", r.stdout.strip().endswith("skipped-foreign") and "mine" in f.read_text(), r.stdout[-80:] + r.stderr[-150:])
+    r = _codex_run(home, "print(m._remove_codex_agent())")
+    check("d6: teardown 對外方檔回 False 不刪", r.stdout.strip().endswith("False") and f.exists(), r.stdout[-80:])
+    f.unlink(); _codex_run(home, "m._install_codex_agent()")
+    r = _codex_run(home, "print(m._teardown_global_hooks(repo,'codex'))")
+    check("d6: teardown 收掉自家 TOML", not f.exists(), r.stdout[-150:])
+    home2 = Path(tempfile.mkdtemp(prefix="gctl-d6b-"))
+    _codex_run(home2, "import os;os.environ['PATH']='/nonexistent';m._sync_global_hooks(repo,'codex')")
+    check("d6: 無 ~/.codex → 不建 agents", not (home2 / ".codex").exists(), "")
+
+
 if __name__ == "__main__":
     sys.exit(main())
