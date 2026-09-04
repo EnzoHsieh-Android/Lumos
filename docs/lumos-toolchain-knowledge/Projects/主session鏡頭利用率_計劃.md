@@ -85,10 +85,11 @@ r2 量測效度席把 r1 版的演算法拿歷史逐字稿乾跑,發現★推送
 4. **每筆推送記**:{session_id, is_subagent(檔案在 `subagents/` 且 isSidechain:true), hook_name, header_version(old/new), file, |pinned|, pinned_complete, touched, any, pre_touched(資訊欄,不進裁定), wrote_back, search_touched, ambiguous, 檔型(test/code)};★scratchpad 與 repo 外的目標檔不進分母也不進抽樣池★(另計一個數;r3 效度席:分母外還列進分層是自相矛盾)。壞行/缺欄位跳過並計數(同 recount.py 慣例)。
 5. **輸出**(★不出單一命中率、不設門檻★):印到 stdout(同 recount.py 慣例;`--out` 可另存檔):推送數(主/子、標頭版、pinned 空/非空/不全、檔型)、|pinned| 分佈、每型 any 的計數、pre_touched/wrote_back/ambiguous 另列、session 叢聚度。★歷史資料現在就能跑★(本專案主 session 44 筆:16 舊標頭+28 新),不必等兩週;之後每兩週重跑。
 6. **人工抽樣**:★母體不足 10 筆(有 pinned 且非 scratch)就全抽★;夠則每 session 至多 5 筆、抽到 10(r3 效度席:歷史只有 2 個 session 有 pinned,「每 session 至多 3」在算術上抽不到 10)。兩個評判者(Enzo+一個乾淨 agent,判準=「這篇 pinned 節點的合約,對這次 diff 改的行為有沒有牽連」,agent 派工詞不帶本案結論)各判「跳過對不對」,不一致的列出來,不做一致性係數。
-7. **★前置修正(鄰居 hook 的兩個缺陷,量測前修,否則樣本偏)★**:①`hook_decide` 認無副檔名檔:★main 改成先算 repo(CLAUDE_PROJECT_DIR→cwd)、把絕對路徑傳給 hook_decide★(簽名加參數,既有呼叫點與 `t_impact_hook_*` 測試同步);repo 算不出→只看副檔名;檔存在且首行 `#!` 含 python 或 bash 才算 code,★首行讀取包 try/except、只讀前 128 bytes、二進位/讀不到→不算★(r3 極端席:無副檔名二進位檔會讓現役 fail-open hook 炸);Write 新檔(不存在)→只看副檔名。②TTL 標記改在★真的注入之後★才寫:`_ttl_should_inject` 現在是「判定+寫」一體,拆成判定與 `_ttl_mark`,★既有 `t_impact_hook_ttl`(test_lumos.py 約 9256)要跟著改★,不是靜默出貨。這兩個是 [[Projects/主動影響幅度偵測_計劃]] 的缺陷,各配一條測試;不改注入文字。★TTL 界線★:修了②之後冷卻窗仍存在(同檔 20 分鐘內只推事故),分母偏向「第一次碰這支檔」;REVISIT:2026-09-17 第一次報表要把 incidents-only 期間的 Edit 次數另列,若佔多數則裁是否把冷卻窗縮短或關掉。
+7. **★前置修正(鄰居 hook 的兩個缺陷,量測前修,否則樣本偏)★**(★code-loop r1 改:TTL 標記在判定當下先寫、最後沒注入才撤 `_ttl_unmark`——「拆判定/寫」會把並發窗口拉寬到整段 subprocess,兩席一致★):①`hook_decide` 認無副檔名檔:★main 改成先算 repo(CLAUDE_PROJECT_DIR→cwd)、把絕對路徑傳給 hook_decide★(簽名加參數,既有呼叫點與 `t_impact_hook_*` 測試同步);repo 算不出→只看副檔名;檔存在且首行 `#!` 含 python 或 bash 才算 code,★首行讀取包 try/except、只讀前 128 bytes、二進位/讀不到→不算★(r3 極端席:無副檔名二進位檔會讓現役 fail-open hook 炸);Write 新檔(不存在)→只看副檔名。②TTL 標記改在★真的注入之後★才寫:`_ttl_should_inject` 現在是「判定+寫」一體,拆成判定與 `_ttl_mark`,★既有 `t_impact_hook_ttl`(test_lumos.py 約 9256)要跟著改★,不是靜默出貨。這兩個是 [[Projects/主動影響幅度偵測_計劃]] 的缺陷,各配一條測試;不改注入文字。★TTL 界線★:修了②之後冷卻窗仍存在(同檔 20 分鐘內只推事故),分母偏向「第一次碰這支檔」;REVISIT:2026-09-17 第一次報表要把 incidents-only 期間的 Edit 次數另列,若佔多數則裁是否把冷卻窗縮短或關掉。
 8. **Hawthorne**:腳本輸出只落檔案(governance/eval/…/ 下的報表),不進 `lumos gov`、不印進任何 hook,模型跑 `lumos gov` 看不到。
 
-### 裁定規則(REVISIT:2026-09-17)
+### 裁定規則
+REVISIT:2026-09-17 依下列規則裁:先跑歷史,樣本不足改題,足則讀分佈+抽樣
 - 先跑歷史:主 session 非空固定席、非 scratch 的推送若 <20 → 樣本不存在,改題為「Bash 改檔路徑沒有動手前鏡頭」(本 session 372 次 Bash、0 次 Edit),另開計劃。
 - 樣本夠 → 讀分佈+抽樣,由 Enzo 裁第二段;不預設任何數字門檻。
 
@@ -129,7 +130,8 @@ r2 量測效度席把 r1 版的演算法拿歷史逐字稿乾跑,發現★推送
 - 唯讀腳本 `governance/eval/lens-utilization/recount.py`+README;第一份報表存同目錄,數字與解讀在 [[Verification/2026-09-04_主session鏡頭利用率第一份報表]]。
 - 解析教訓:事故節點行沒有 ★TAG★(「⚠事故 Issues/x.md (trigger: …)」),正規式要允許可選 TAG——第一次乾跑因此漏 6 筆。
 - 前置修正兩處落地(shebang 入樣/TTL 注入後才寫),TDD 一支新測試;既有 hook 測試全綠;`lumos install` 同步安裝副本。
-- ★人工抽樣(第 6 步)未做★——留給 Enzo 與一個乾淨 agent;REVISIT:2026-09-17 讀分佈+抽樣裁第二段。
+- ★人工抽樣(第 6 步)未做★——留給 Enzo 與一個乾淨 agent。
+REVISIT:2026-09-17 跑 recount 讀分佈、做 10 筆人工抽樣、裁第二段(或依裁定規則改題)
 
 ## 審計修正紀錄(lumos-design-loop)
 

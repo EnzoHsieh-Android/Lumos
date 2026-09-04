@@ -24653,6 +24653,54 @@ def t_impact_hook_shebang_and_ttl_mark():
     check("ttl-split: _ttl_mark 後進冷卻窗", marker.exists() and m._ttl_should_inject(sid, f, ttl_sec=1200, mark=False) is False)
     check("ttl-split: 預設 mark=True 舊行為保留(判定+寫一體)", m._ttl_should_inject("ttl-old-" + sid, f, ttl_sec=1200) is True and m._ttl_marker_path("ttl-old-" + sid, f).exists())
 
+def t_impact_hook_main_ttl_wiring():
+    """code-loop r1 通才席:main() 把「判定→呼叫 lumos→注入/不注入→標記留/撤」接起來的行為沒測。mock subprocess 走兩條路。"""
+    import importlib.util, io as _io, json as _j, os as _os, tempfile as _tf
+    from importlib.machinery import SourceFileLoader
+    from unittest.mock import patch
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_mod_wiring", hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_mod_wiring", loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    d = Path(_tf.mkdtemp(prefix="hookwire-")); (d / "a.py").write_text("x=1\n", encoding="utf-8")
+    class R:  # 假 subprocess 結果
+        def __init__(self, out): self.returncode, self.stdout, self.stderr = 0, out, ""
+    def run_main(sid, out):
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": "a.py"}, "cwd": str(d), "session_id": sid}
+        with patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.subprocess, "run", lambda *a, **k: R(out)), \
+             patch.object(m, "_find_lumos_script", lambda: "/bin/true"), patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(d)}):
+            buf = _io.StringIO()
+            with patch.object(m.sys, "stdout", buf):
+                rc = m.main()
+        return rc, buf.getvalue(), m._ttl_marker_path(sid, str(d / "a.py")).exists()
+    rc, out, marked = run_main("wire-empty-" + _os.urandom(3).hex(), _j.dumps({"results": [], "stack_questions": [], "lane": []}))
+    check("main 接線: 零注入 → rc0、無輸出、★不留冷卻標記★", rc == 0 and out.strip() == "" and not marked, f"rc={rc} out={out[:80]!r} marked={marked}")
+    rc, out, marked = run_main("wire-hit-" + _os.urandom(3).hex(), _j.dumps({"results": [{"node": "Systems/x.md", "kind": "direct", "pinned": True, "score": 0.9, "contract": "INVARIANT"}], "stack_questions": [], "lane": []}))
+    check("main 接線: 有注入 → 印 hookSpecificOutput 且★留冷卻標記★", rc == 0 and "hookSpecificOutput" in out and marked, f"rc={rc} out={out[:80]!r} marked={marked}")
+
+
+def t_lens_recount_classify():
+    """code-loop r1 正確性/邊界席:recount.py 的 Bash 分類與 pinned 解析要有測試(重導向/sed -i/heredoc 就近/事故行/含空白路徑/同名 stem)。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    path = str(Path(__file__).resolve().parent.parent / "governance" / "eval" / "lens-utilization" / "recount.py")
+    loader = SourceFileLoader("lens_recount_mod", path); spec = importlib.util.spec_from_loader("lens_recount_mod", loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    slug = "t-knowledge"; N = "docs/t-knowledge/Systems/a.md"
+    r, w, l, s = m.classify_bash(f"cat {N}", slug); check("recount: cat 筆記=讀", r == {"Systems/a.md"} and not w, f"{r} {w}")
+    r, w, l, s = m.classify_bash(f"echo x >> {N}", slug); check("recount: >> 重導向=寫回(不再是死碼)", w == {"Systems/a.md"} and not r, f"{r} {w}")
+    r, w, l, s = m.classify_bash(f"sed -i '' 's/a/b/' {N}", slug); check("recount: sed -i=寫回不算讀", w == {"Systems/a.md"} and not r, f"{r} {w}")
+    r, w, l, s = m.classify_bash(f"sed -n 1,5p {N}", slug); check("recount: sed -n=讀", r == {"Systems/a.md"} and not w, f"{r} {w}")
+    hd = f"python3 - <<'PY'\nfrom pathlib import Path\np=Path('{N}'); t=p.read_text()\nt=t.replace('a','b')\np.write_text(t)\nPY"
+    r, w, l, s = m.classify_bash(hd, slug); check("recount: heredoc 先讀後寫=讀+寫回", r == {"Systems/a.md"} and w == {"Systems/a.md"}, f"{r} {w}")
+    hd2 = f"git commit -m \"$(cat <<'EOF'\n提到 {N} 但沒讀\nEOF\n)\""
+    r, w, l, s = m.classify_bash(hd2, slug); check("recount: heredoc 只拼字串提到路徑=都不算", not r and not w, f"{r} {w}")
+    r, w, l, s = m.classify_bash("lumos context 主 session 鏡頭", slug); check("recount: lumos context 多詞→逐詞+串接", "主session鏡頭" in l and "主" in l, str(l))
+    ver, pins, ok = m.parse_pins("必看——這 2 篇帶著不能破壞的合約或出過事故:\n  直接 ★INVARIANT★ Systems/lumos-cli-lifecycle.md\n  ⚠事故 Issues/canary-record未落盤事件.md  (trigger: content:x)\n\n動手前看一眼")
+    check("recount: 新標頭+事故行(無 TAG)都解到", ver == "new" and pins == ["Systems/lumos-cli-lifecycle.md", "Issues/canary-record未落盤事件.md"] and ok, f"{ver} {pins} {ok}")
+    ver, pins, ok = m.parse_pins(["必看(合約/事故固定席 1):\n  hop1 ★INVARIANT★ Systems/有 空白 的.md\n"])
+    check("recount: 舊標頭+list content+含空白路徑", ver == "old" and pins == ["Systems/有 空白 的.md"] and ok, f"{ver} {pins}")
+
 
 
 if __name__ == "__main__":
