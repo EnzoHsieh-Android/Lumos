@@ -25629,7 +25629,7 @@ def t_codex_stop_block_once():
                   capture_output=True, text=True, env=dict(os.environ, HOME=str(sl)), timeout=60)
     check("stop-block⑲: 標記目錄是 symlink → 不擋、目標裡的舊檔不被清", "decision" not in r10.stdout and old.exists() and not (victim / "sess-sl").exists(), (r10.stdout[:80], old.exists()))
     marks = list((home / ".cache" / "lumos" / "stop-block").iterdir())
-    check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記", len(marks) == 1 and marks[0].name == "sess-1" and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
+    check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記(sess-1 與 ㉑ 的 sess-ascii)", sorted(x.name for x in marks) == ["sess-1", "sess-ascii"] and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
     # 無副檔名 shebang 腳本算程式碼(f02 後測 0/2 擋停的根因:本 repo 主程式 scripts/lumos 無副檔名)
     (repo / "scripts").mkdir(exist_ok=True); (repo / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nx=1\n", encoding="utf-8")
     (repo / "scripts" / "notes").write_text("just text\n", encoding="utf-8"); (repo / "scripts" / "bin.dat").write_bytes(b"\x00\x01")

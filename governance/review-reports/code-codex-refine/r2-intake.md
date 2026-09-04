@@ -6,3 +6,5 @@
 - major 檔名裡的反引號跳出 code span HIT:_safe_path 反引號→單引號,mentions 也包反引號;測試⑳。
 - minor chmod 失敗靜默停用 HIT:stderr 一行(給 log;Codex 模型看不到,誠實界線)。minor 載入 scripts/lumos 失敗變儀器例外 HIT:try/except 退回同語意預設+stderr 一行。
 辯方:兩席 findings 皆附翻紅重現,無低共識,未開庭。
+- 收貨正規化:delta #9 引句原跨兩行以「; return」黏合,改成截到同一行(內容不變)。
+- 編排者教訓(2026-09-05):r2 先記帳、後改報告與本檔(正規化引句),留痕 sha 對不上;兩筆帳尚未入版控,刪除後以改好的檔重記——正確順序是「收貨正規化→折入→記帳」,以後不再先記。

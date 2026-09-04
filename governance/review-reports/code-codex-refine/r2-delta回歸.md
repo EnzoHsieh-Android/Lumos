@@ -110,7 +110,7 @@ blocking: 否
 `_codex_home_dir()` 用 `SourceFileLoader` 現場重新載入整支 `scripts/lumos`（~19000 行）取 `_codex_home()`，全程沒有 try/except。`_codex_hook_trace` 的用途是「hook 有沒有 fire」的訊號蒐集，設計上該回 `None`（見同函式 docstring：沒 fire 的場要看得出來），但如果 `scripts/lumos` 當下語法錯（此 repo 開發中確實常同時在改這支檔案）或路徑被移走，`exec_module` 直接拋例外：
 
 引句:「Codex 家目錄一律問 scripts/lumos 的 _codex_home()」
-引句:「spec.loader.exec_module(mod); return mod._codex_home()」
+引句:「mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)」
 
 file: `scripts/scenario_probe.py:231-238`（`_codex_home_dir`，無 try/except）
 file: `scripts/scenario_probe.py:252`（`_codex_hook_trace` 呼叫處，同樣無 try/except）

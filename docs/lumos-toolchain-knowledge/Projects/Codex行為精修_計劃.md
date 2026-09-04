@@ -122,6 +122,14 @@ REVISIT:2026-09-19 探針週跑累積 f02 型樣本,看擋一次的補寫率;若
 - **裁定(架構 ⚠#1/#3、整合 minor)**:標記邏輯留在 hook 內、不委派 lumos 子行程——Stop hook 只有 10 秒預算,impact-hook 有同樣先例;`--harness` 壞值靜默當 claude=hook 家規 fail-open;`lumos enforcement` 只報各層生效沒生效、不描述行為,Codex 擋一次的說明在 commands/08 與本計劃。
 - **CLAUDE.md**:區塊外新增「本 repo 的測試子集怎麼跑」一節(範本通用句指的「專案自己的說明」)。
 
+## 代碼審 r2 折入(2026-09-05,delta 兩席:delta回歸-sonnet / 外家finder-Codex)
+
+- **名額先佔的反面(delta blocker)**:名額佔了、block 卻印不出去(stdout 是 ASCII locale 時 `print` 丟 UnicodeEncodeError 被吞)→ 這個 session 永遠不擋。改成用 bytes 寫 stdout(不受 locale 影響),真寫不出去就把標記檔刪掉退回名額;測試㉑ 用 LANG=C 驗。
+- **標記目錄被換成 symlink(外家 major)**:原本 mkdir 後先 chmod、先清 7 天前的檔,才做信任檢查——symlink 指到別處會動到別人的目錄。改成 mkdir(0700) 後先過 `_stop_dir_ok`(symlink 直接不信),不過關就不 chmod、不清、不擋;測試⑲。
+- **反引號跳出 code span(delta major)**:`_safe_path` 把反引號換成單引號;「提到你改的檔的筆記」那行也包反引號;測試⑳。
+- **兩個 minor**:chmod 失敗導致靜默停用 → stderr 一行(給 log,Codex 模型看不到——誠實界線同前);探針載入 scripts/lumos 失敗 → 退回同語意預設、不把整場判成儀器例外。
+- 編排者踩坑:r2 先記帳再正規化報告,留痕 sha 對不上;兩筆未入版控的帳刪掉重記(見 r2-intake.md)。正確順序=收貨正規化→折入→記帳。
+
 ## 審計修正紀錄(lumos-design-loop)
 
 - r1(2026-09-05,5 席:外家 Codex/架構/整合/邊界/通才):41 條(9+3+8+12+9)/blocking 34/1 條錨不到不採信、其餘 40 條全折(同輪有 blocker,accepted 空)——主折入:版本表 0.153.2 是前提、reason 版面與檔名消毒、探針兩旗標、範本改通用句、四處文件同步、Stop 不傷子代理與 env 傳遞兩項實測。
