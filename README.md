@@ -177,6 +177,47 @@ KEY:★CHECKPOINT★   <改了難救:例如部署到測試機>
 | `code-loop` | 高風險改動沒過代碼審 | push 時硬擋 |
 | pre-push | 健檢+完整性驗證+代碼審留痕,三合一 | 硬擋 |
 
+### 審查為什麼會越審越準:圖譜 ⇄ 審查的良性循環
+
+白話:圖譜裡的每篇節點(不能破壞的規則、出過的事故、做過的決定、驗過的結果)是每一輪審查的籌碼——派審查員時機器把相關節點附進派工單,審查員不用自己翻;審完採納進設計的東西再寫回節點,變成下一輪的籌碼。**節點是下一輪的輸入,不是最後的產出物。** 每條審查意見都要有交代(採納就改稿、不採納要寫理由),一輪全部有交代才過關;過關的判定凍結起來每週回放。Claude Code 與 Codex CLI 走同一條路。
+
+```mermaid
+flowchart TB
+    NODES[("📚 圖譜:一篇篇節點<br/>不能破壞的規則 · 出過的事故 · 做過的決定 · 驗過的結果<br/>審查的籌碼,也是審查的產出")]
+
+    subgraph R1["① 開一輪 → 派工 → 審 → 收貨"]
+        direction LR
+        NEXT["開一輪審查<br/>算風險分級、第幾輪、派幾席<br/>先列出主題已有的節點"] --> LENS["派工時自動附節點<br/>相關的規則與事故附進派工單<br/>Claude 改派工單 · Codex 開場自領"] --> SEATS["審查席<br/>幾個不同角度的同門 AI<br/>+ 架構一致席 + 換一家的 AI"] --> INTAKE["收貨先機器驗<br/>引句對得回?行號在?材料看了?<br/>錨不到的不採信"]
+    end
+
+    subgraph R2["② 每條意見有交代 → 記帳 → 過不過 → 留憑證"]
+        direction LR
+        FOLD["回頭改設計稿<br/>採納的改進稿子,不採納的寫理由<br/>拿不準的先派外家反駁"] --> LEDGER["記帳<br/>每席一筆 + 一筆彙總<br/>發現了什麼、改了哪些、哪些不採納"] --> GATE{"過不過?<br/>每條都有交代 ∧ 留痕能重算 ∧ 引句全對得回<br/>程式碼審:嚴重的一律要改"} -->|過| FREEZE["凍結判定<br/>存成標準答案<br/>每週機器回放"] --> PASS["「審過了」憑證<br/>綁在這個版本上<br/>推送與 CI 都認它"]
+    end
+
+    subgraph R3["③ 外圍:量它、跑它"]
+        direction LR
+        OBS["觀測帳<br/>附的節點有沒被用 · 被舊決定擋幾次<br/>每支迴圈燒多少"] ~~~ AUTO["每天自動跑一輪<br/>挑缺口 → 寫設計 → 走同一條路<br/>停在等人放行"] ~~~ PROBE["情境探針<br/>AI 會不會自己先查圖譜<br/>Claude / Codex 同一批題對照"]
+    end
+
+    NODES ==>|"籌碼:相關節點進派工單"| R1
+    R1 --> R2
+    R2 -.->|"帳"| R3
+    NODES <==>|"寫回:驗證紀錄 · 決定 · 候選規則"| R2
+    R1 <-->|"沒過:再開一輪(最多 3 輪,到頂交給人裁)"| R2
+    R1 <-.->|"數字回頭調席位、調要附什麼;每日自動輪走同一條路"| R3
+    NODES <-.->|"驗規矩有沒有真的被吃進去"| R3
+
+    classDef gnode fill:#1b3a2a,stroke:#3ddc84,stroke-width:2px,color:#e8fff0
+    classDef step fill:#2a2440,stroke:#9a7bd6,color:#f0ecff
+    classDef gate fill:#3a2020,stroke:#dc5b5b,color:#ffe8e8
+    classDef obs fill:#3a2a1b,stroke:#dcab3d,color:#fff5e0
+    class NODES gnode
+    class NEXT,LENS,SEATS,INTAKE,FOLD,LEDGER,FREEZE,PASS step
+    class GATE gate
+    class OBS,AUTO,PROBE obs
+```
+
 這套大量用 fail-open(環境不全就先放行、CI 當後盾),好處是治理工具一壞不會全公司卡住;副作用是**你看不出現在到底有幾層真的在守**。`lumos enforcement` 把上面各層現況查一遍、印一行「幾層生效」——本機測不到的遠端設定(GitHub required check)誠實列 unknown,不假裝有。
 
 ---

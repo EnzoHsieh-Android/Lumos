@@ -177,6 +177,47 @@ Enforcement, soft to hard:
 | `code-loop` | High-risk change without code review | Hard-blocks at push |
 | pre-push | Health + integrity + review receipts, three-in-one | Hard block |
 
+### Why reviews get sharper over time: the graph ⇄ review virtuous cycle
+
+Every node in the graph (rules that must not break, past incidents, decisions, verifications) is the input to the next review: when reviewers are dispatched, the machine attaches the related nodes to their brief, so they don't have to dig; whatever the review folds into the design is written back as nodes, which feed the next round. **Nodes are the next round's input, not a final artifact.** Every finding must be disposed (accepted → the draft changes; declined → a written reason), a round passes only when all are; passed verdicts are frozen and replayed weekly. Claude Code and Codex CLI follow the same path.
+
+```mermaid
+flowchart TB
+    NODES[("📚 The graph: a set of nodes<br/>rules that must not break · past incidents · decisions · verifications<br/>the review's input, and its output")]
+
+    subgraph R1["① open a round → dispatch → review → intake"]
+        direction LR
+        NEXT["Open a round<br/>risk tier, round number, seat count<br/>list the nodes this topic already has"] --> LENS["Nodes attached at dispatch<br/>related rules and incidents go into the brief<br/>Claude: brief rewritten · Codex: seat claimed on start"] --> SEATS["Reviewer seats<br/>several same-family AIs, different lenses<br/>+ an architecture-consistency seat + another vendor's AI"] --> INTAKE["Intake is machine-checked<br/>quotes anchor? line numbers exist? materials read?<br/>unanchored findings are dropped"]
+    end
+
+    subgraph R2["② every finding disposed → ledger → gate → receipt"]
+        direction LR
+        FOLD["Revise the design<br/>accepted findings change the draft, rejected ones get a written reason<br/>uncertain ones go to another vendor's AI to rebut"] --> LEDGER["Ledger<br/>one entry per seat + one summary<br/>what was found, what changed, what was declined"] --> GATE{"Pass?<br/>all disposed ∧ receipts recomputable ∧ all quotes anchored<br/>code review: severe findings must be fixed"} -->|pass| FREEZE["Freeze the verdict<br/>stored as the reference answer<br/>replayed weekly by machine"] --> PASS["‘Reviewed’ receipt<br/>bound to this exact version<br/>honoured by push and CI"]
+    end
+
+    subgraph R3["③ around it: measure it, run it"]
+        direction LR
+        OBS["Observability<br/>were attached nodes used · blocked by old decisions how often<br/>what each loop costs"] ~~~ AUTO["Daily autonomous round<br/>pick a gap → draft a design → same path<br/>stops and waits for a human"] ~~~ PROBE["Scenario probe<br/>does the AI check the graph first on its own?<br/>same questions for Claude and Codex"]
+    end
+
+    NODES ==>|"input: related nodes into the brief"| R1
+    R1 --> R2
+    R2 -.->|"ledger"| R3
+    NODES <==>|"write-back: verifications · decisions · candidate rules"| R2
+    R1 <-->|"not passed: another round (max 3, then a human decides)"| R2
+    R1 <-.->|"numbers feed back into seats and what to attach; the daily round uses the same path"| R3
+    NODES <-.->|"checks the discipline actually took hold"| R3
+
+    classDef gnode fill:#1b3a2a,stroke:#3ddc84,stroke-width:2px,color:#e8fff0
+    classDef step fill:#2a2440,stroke:#9a7bd6,color:#f0ecff
+    classDef gate fill:#3a2020,stroke:#dc5b5b,color:#ffe8e8
+    classDef obs fill:#3a2a1b,stroke:#dcab3d,color:#fff5e0
+    class NODES gnode
+    class NEXT,LENS,SEATS,INTAKE,FOLD,LEDGER,FREEZE,PASS step
+    class GATE gate
+    class OBS,AUTO,PROBE obs
+```
+
 Lumos leans heavily on fail-open (proceed when the environment is incomplete, with CI as backstop): a broken governance tool never blocks the whole team, but the side effect is **you can't tell how many layers are actually guarding you right now**. `lumos enforcement` checks each layer above and prints a one-line "N of M active" — remote settings it can't probe locally (GitHub required checks) are honestly listed as unknown, not faked as present.
 
 ---
