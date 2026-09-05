@@ -113,8 +113,6 @@ def _is_excluded_path(file_path: str) -> bool:
     return False
 
 
-
-
 def _shebang_is_code(abs_path: Path) -> bool:
     """無副檔名檔靠首行 shebang 入樣(主session鏡頭利用率_計劃 前置修正①:scripts/lumos、git hooks 原本永不入樣)。
     只讀前 128 bytes、包 try/except:二進位/不存在/讀不到 → False,現役 fail-open hook 不得因此炸。"""

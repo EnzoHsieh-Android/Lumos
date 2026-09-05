@@ -24,3 +24,8 @@ KEY:設計審跳過:d1 是 bug 修+既有守衛延伸;d2 是把已審過三輪�
 - **三席同題的 major**:「什麼算程式碼」的 shebang 判定寫成直譯器清單,而且 bash 兩支、check-graph-sync、impact-hook 三份清單彼此不同(bash 漏 `#!/bin/dash`,impact-hook 漏 ruby/perl/node);測試又只查函式名字串,漂移照樣綠。改成★首行是 `#!` 就算程式碼★,四處同一條規則、不再有清單;測試真的餵 dash / env -S / fish / 純文字 / 二進位 / 空檔驗語意,pre-commit 實測加 dash、env -S、`.pythonrc`。
 - **minor 三條都折**:dotfile 去掉開頭的點再判副檔名;死別名 `codex_stop_decision` 刪除;暫停開關改成 repo 慣例的 `LUMOS_AUTOLOOP_OFF`(預設 1=暫停,開回設 0),log 寫法對齊其他段。
 - **開放風險(通才 ⚠,未計分)**:Claude Code 在 bypass / dontAsk 權限模式下會不會忽略 Stop 的 block、讓那一次名額白燒——本 session 查不到官方明文。REVISIT:2026-10-05 對照 `~/.cache/lumos/stop-block` 標記數與逐字稿裡 `LUMOS-STOP` 出現數,差太多就是白燒。
+
+## 代碼審 r2 折入(2026-09-05,delta 兩席)
+
+- **major(兩席同題)**:檔名含雙引號或反斜線時 git 會印成 C 式引號,直接拿去 `git show` 找不到,含 shebang 的程式碼就放行、post-commit 也不記。修=`is_shebang_code` 先解引號(`"`、`\`、`\t`);含換行的檔名仍解不到——那是整支 hook 用逐行讀檔名的既有限制,不在本案。測試加含引號檔名。
+- **minor**:`..foo` 只剝一個點 → 剝掉所有開頭的點;impact-hook 刪清單後多出的空行收掉。

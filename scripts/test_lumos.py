@@ -5566,6 +5566,10 @@ def t_precommit_shebang_script_counts_as_code():
     check("precommit shebang: env -S 形式也算 → 擋", r2b.returncode != 0, f"rc={r2b.returncode}")
     r2c = run({".pythonrc": "#!/usr/bin/env python3\nx=1\n"})
     check("precommit shebang: 只有開頭一個點的 dotfile 也看 shebang → 擋(通才 minor)", r2c.returncode != 0, f"rc={r2c.returncode}")
+    r2d = run({'bin/weird"tool': "#!/bin/dash\necho\n"})
+    check("precommit shebang: 檔名含雙引號(git 印成 C 式引號)也讀得到 → 擋(r2 delta major)", r2d.returncode != 0, f"rc={r2d.returncode} {(r2d.stderr+r2d.stdout)[-120:]}")
+    r2e = run({"..foo": "#!/bin/sh\necho\n"})
+    check("precommit shebang: 開頭兩個點的檔名也看 shebang → 擋", r2e.returncode != 0, f"rc={r2e.returncode}")
     r3 = run({"NOTES": "just prose\n", "Makefile": "all:\n\ttrue\n"})
     check("precommit shebang: 無副檔名純文字/Makefile 不算程式碼 → 放行", r3.returncode == 0, f"rc={r3.returncode} {(r3.stderr+r3.stdout)[-160:]}")
 
