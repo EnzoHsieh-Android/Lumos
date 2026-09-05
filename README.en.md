@@ -197,7 +197,7 @@ flowchart TB
 
     subgraph R3["③ around it: measure it, run it"]
         direction LR
-        OBS["Observability<br/>were attached nodes used · blocked by old decisions how often<br/>what each loop costs"] ~~~ AUTO["Daily autonomous round<br/>pick a gap → draft a design → same path<br/>stops and waits for a human"] ~~~ PROBE["Scenario probe<br/>does the AI check the graph first on its own?<br/>same questions for Claude and Codex"]
+        OBS["Observability<br/>were attached nodes used · blocked by old decisions how often<br/>what each loop costs"] ~~~ AUTO["Daily autonomous round (dispatch paused since 2026-09-05)<br/>pick a gap → draft a design → same path → waits for a human<br/>seven weeks with zero output; decision due 10/05"] ~~~ PROBE["Scenario probe<br/>does the AI check the graph first on its own?<br/>same questions for Claude and Codex"]
     end
 
     NODES ==>|"input: related nodes into the brief"| R1
@@ -205,7 +205,7 @@ flowchart TB
     R2 -.->|"ledger"| R3
     NODES <==>|"write-back: verifications · decisions · candidate rules"| R2
     R1 <-->|"not passed: another round (max 3, then a human decides)"| R2
-    R1 <-.->|"numbers feed back into seats and what to attach; the daily round uses the same path"| R3
+    R1 <-.->|"numbers feed back into seats and what to attach; the (paused) daily round uses the same path"| R3
     NODES <-.->|"checks the discipline actually took hold"| R3
 
     classDef gnode fill:#1b3a2a,stroke:#3ddc84,stroke-width:2px,color:#e8fff0

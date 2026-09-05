@@ -5,7 +5,7 @@ Codex 側掛 SubagentStart(Projects/Codex完全支援_計劃 d3,2026-09-04):叫 
 Claude 路徑只做三件事:①派工詞裡逐行找 `LUMOS-IMPACT: <base>..<head>` ②subprocess 叫 `lumos dispatch-lens`
 ③把回傳文字接在派工詞尾端,經 updatedInput 送給子代理(additionalContext 實測到不了子代理)。
 其餘判斷(範圍文法、base 主線可達、消毒、快取)全在 lumos 端。
-永不 deny、永不改 permissionDecision;任何失敗都原樣放行、預設靜默(LUMOS_HOOK_DEBUG=1 才印 stderr)。
+永不 deny、永不改 permissionDecision;失敗一律放行。★2026-09-05 起超時不再靜默★:附一行固定超時句進派工詞(Codex 走 additionalContext);其他失敗仍靜默(LUMOS_HOOK_DEBUG=1 才印 stderr)。
 本檔在 ANCHOR_FILES 內:改它要 `lumos anchor approve --note`。
 """
 from __future__ import annotations
