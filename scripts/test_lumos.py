@@ -25853,5 +25853,17 @@ def t_delguard_logs_ok_too():
     check("gov 折疊 delguard: 帳上兩筆同日 ok 在預設視圖只佔一行(折成一行,不洗版)", n_ok_ledger == 2 and len(ok_rows) == 1, (n_ok_ledger, g.stdout[-240:]))
 
 
+def t_daily_governance_wrapper_is_function_wrapped():
+    """第四輪稽核(2026-09-05):bash 邊讀邊執行,長跑的 wrapper 在跑時被改檔會讀到半行炸掉(當天實發生:自主迴圈 3 小時回來後 syntax error,
+    後段全沒跑)。守衛:整段包在 main() 裡、最後一行才呼叫,且 bash -n 過。"""
+    import subprocess as _sp
+    p = Path(GRAPHCTL).resolve().parent.parent / "governance" / "daily-governance.sh"
+    s = p.read_text(encoding="utf-8")
+    body_start = s.index("main() {"); tail = s.rstrip().splitlines()[-1].strip()
+    check("daily-governance: 主體包在 main() 裡、最後一行 main \"$@\"", "main() {" in s and tail == 'main "$@"' and 'echo "[$(ts)] daily-governance wrapper 完成"' in s[body_start:], tail)
+    r = _sp.run(["bash", "-n", str(p)], capture_output=True, text=True)
+    check("daily-governance: bash -n 語法過", r.returncode == 0, r.stderr[:160])
+
+
 if __name__ == "__main__":
     sys.exit(main())
