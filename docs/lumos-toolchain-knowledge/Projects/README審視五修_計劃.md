@@ -11,10 +11,10 @@ tags:
 
 > 白話:2026-09-05 拿 README 逐條對回程式碼、帳本、量測(我+一位乾淨稽核員各做一份,兩份結論一致),抓到五處「寫的比做到的多」。Enzo 裁「依序優化」。這篇記五件事各自為什麼這樣修、改到哪、還剩什麼沒補。
 
-KEY:稽核來源=`governance/review-reports/readme-audit-2026-09-05.md`(乾淨稽核員)+本 session 實測(pre-commit 對只改 scripts/lumos 放行、對 .py 擋;Claude Code 官方文件 exit 0 的 stderr 模型看不到;自主迴圈週報連續七週收斂 0)。
-KEY:d1 pre-commit/post-commit 補 shebang 判定——沒副檔名但首行是 `#!` 的 staged 檔算程式碼(讀 staged blob 不讀工作樹);四份清單守衛加「都認 shebang」;實證:五月起 26 個只改 scripts/lumos 的 commit 從沒被擋。
+KEY:稽核來源=`governance/review-reports/readme-audit-2026-09-05.md`(乾淨稽核員)+本 session 實測(pre-commit 對只改 scripts/lumos 放行、對 .py 擋;Claude Code 官方文件 exit 0 的 stderr 模型看不到;自主迴圈週報連續近兩週收斂 0)。
+KEY:d1 pre-commit/post-commit 補 shebang 判定——沒副檔名但首行是 `#!` 的 staged 檔算程式碼(讀 staged blob 不讀工作樹);四份清單守衛加「都認 shebang」;實證:repo 建立(6/15)起 26 個只改 scripts/lumos 的 commit 從沒被擋。
 KEY:d2 收工擋一次改為兩家一致——check-graph-sync 的 block 不再看 harness;Claude 側 exit 0 + stderr 官方文件明講模型看不到,「軟提醒」實為零;07-06 撤 nag 的理由(每回合刷屏)被「同 session 只擋一次+只在改了碼沒寫回時」化解,是有意識重開但不是重開 nag;stop_hook_active 兩家語意相同(已續做過=不再擋)。LUMOS_STOP_BLOCK_OFF=1 仍可關。
-KEY:d3 自主迴圈暫停派工——daily-governance 不再每天派 orchestrator(七週週報收斂 0/待放行 0、每週 210–330 美元;dry-run 永遠不會走到開 PR);便宜的日常段(治理日報、lint-watch、doctor --ci、回放週跑、探針週抽)照跑;`LUMOS_AUTOLOOP_OFF=0` 可臨時開回;REVISIT:2026-10-05 決定給它真產出路徑或正式退場。
+KEY:d3 自主迴圈暫停派工——daily-governance 不再每天派 orchestrator(帳上近兩週(8/23–9/5)滾動週報收斂 0/待放行 0、每週 210–330 美元;dry-run 永遠不會走到開 PR);便宜的日常段(治理日報、lint-watch、doctor --ci、回放週跑、探針週抽)照跑;`LUMOS_AUTOLOOP_OFF=0` 可臨時開回;REVISIT:2026-10-05 決定給它真產出路徑或正式退場。
 KEY:d4 README 補「成本與界線」一節(中英)——代碼審 7 天 930 萬 token、自主迴圈成本與零產出、pre-commit 任一篇即過、憑證自發只擋忘記不擋敷衍、附節點利用率低、處置閘驗帳目不驗內容。
 KEY:d5 enforcement 字句——Codex 五層「等你審過」改為「信任狀態本機測不到」;強制力表 Stop 列改兩家一致。
 KEY:設計審跳過:d1 是 bug 修+既有守衛延伸;d2 是把已審過三輪的 Codex 機制套到 Claude(邏輯同一份碼);d3 是關開關;d4/d5 是文件。代碼審依 pitfalls tier 決定。

@@ -121,7 +121,7 @@ flowchart TB
     CI --> C["ci-wait · ci-status<br/>(觀測非強制:擋不了 push/merge)"]
     WRITE --> W["set · append · remove · new · archive<br/>decision-add · decision-supersede · decision-reindex"]
     GUARD --> G["guard {list · scaffold · bind · audit · trace}<br/>(★INVARIANT★→[test:]→[audit:] 綁定鏈)"]
-    LOOP --> LP["pitfalls (--diff tier) · code-loop {pass/skip/check}<br/>canary {record · second} · loop {status·next·replay·verify-progress·…}<br/>dispatch-lens {--arm·--claim·--disarm·--status}(派工鏡頭)<br/>收貨:fold-check · refcheck · quote-check · seat-check · severity-check"]
+    LOOP --> LP["pitfalls (--diff tier) · code-loop {pass/skip/check}<br/>canary {record · second} · loop {status·next·replay·verify-progress·…}<br/>dispatch-lens {<base>..<head> · --spec <計劃.md> · --arm·--claim·--disarm·--status}(派工鏡頭:diff 與設計審兩模式)<br/>收貨:fold-check · refcheck · quote-check · seat-check · severity-check"]
     INTEG --> I["anchor {verify · approve}<br/>impact (影響半徑 + 事故觸發 + --sync-check)<br/>cochange · delguard · testmap {build · affected}"]
     SARIF --> ST["sqlfluff-sarif · stylelint-sarif<br/>compose-metrics · lint-check"]
     LIFE --> L["install · uninstall · update<br/>bootstrap · init · deinit · teardown"]
@@ -205,7 +205,7 @@ flowchart TB
 
     subgraph R3["③ 外圍:量它、跑它"]
         direction LR
-        OBS["觀測帳<br/>附的節點有沒被用 · 被舊決定擋幾次<br/>每支迴圈燒多少"] ~~~ AUTO["每日自動輪(2026-09-05 起暫停派工)<br/>挑缺口 → 寫設計 → 走同一條路 → 停在等人放行<br/>七週零產出,10/05 裁去留"] ~~~ PROBE["情境探針<br/>AI 會不會自己先查圖譜<br/>Claude / Codex 同一批題對照"]
+        OBS["觀測帳<br/>附的節點有沒被用 · 被舊決定擋幾次<br/>每支迴圈燒多少"] ~~~ AUTO["每日自動輪(2026-09-05 起暫停派工)<br/>挑缺口 → 寫設計 → 走同一條路 → 停在等人放行<br/>近兩週帳上零產出,10/05 裁去留"] ~~~ PROBE["情境探針<br/>AI 會不會自己先查圖譜<br/>Claude / Codex 同一批題對照"]
     end
 
     NODES ==>|"籌碼:相關節點進派工單"| R1

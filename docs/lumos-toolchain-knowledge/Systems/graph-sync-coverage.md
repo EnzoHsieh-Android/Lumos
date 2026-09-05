@@ -19,6 +19,7 @@ summary: |-
   TEST:t_precommit_sync_nudge_names_missing_pinned_nodes(動錯篇點名/動對篇不點名)
 verified_by:
   - "[[Verification/2026-09-05_Codex行為精修f02後測]]"
+  - "[[Verification/2026-09-05_README審視量測]]"
 decisions:
   - content: 收工 Stop hook 擋一次兩家一致(Claude 也擋):Claude Code 官方文件明講 exit 0 的 stderr 只進除錯日誌、模型看不到,舊「軟提醒」實為零;07-06 撤的是每回合 nag,同 session 只擋一次且只在改了碼沒寫回時不算重開 nag。單源 Projects/README審視五修_計劃 d2
     id: d1
