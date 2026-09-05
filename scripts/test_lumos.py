@@ -25237,6 +25237,13 @@ def t_codex_s1_lens_arm_claim():
     home = Path(tempfile.mkdtemp(prefix="gctl-s1-arm-"))
     env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), LUMOS_DISPATCH_LENS_NO_CACHE="1")
     ml = _sp.run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "main@{upstream}"], capture_output=True, text=True).stdout.strip() or "main"
+    # ★便宜範圍(2026-09-06 全 repo 審視第一批 pre-push 抓到)★:本測試驗的是「席次 token 的原子認領」,
+    # 不是鏡頭內容。原本四次武裝都用 <upstream>..HEAD,而算一次鏡頭的成本跟「本機比遠端多幾個 commit」
+    # 成正比——那天本機多 5 個 commit、73 個檔,單次 47 秒,四次就撞破 180 秒上限。也就是說:**你要推的
+    # 東西越多,這支測試越容易在 pre-push 當場紅**,而 pre-push 正是它唯一會被跑到的時機。改法:只留
+    # 第一次用真範圍(證明真內容跑得通),其餘三次用 <upstream>..<upstream> 這個空 diff——一樣過 base
+    # 必須在主線的守衛,一樣走完整的武裝/認領/過期/並發路徑,但不必重算鏡頭(實測 1.4 秒)。
+    cheap = f"{ml}..{ml}"
     def lens(*args):
         return _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", *args, "--repo", str(repo)], env=env, capture_output=True, text=True)
     r = lens("--claim", "--json")
@@ -25250,22 +25257,22 @@ def t_codex_s1_lens_arm_claim():
     check("s1-arm: 兩次認領席次 1、2,文字首行帶 LUMOS-LENS range", c1["seat"] == 1 and c2["seat"] == 2 and c1["text"].startswith(f"LUMOS-LENS range={ml}..HEAD 第 1/2 席"), str((c1["seat"], c2["seat"], (c1["text"] or "")[:60])))
     check("s1-arm: 第三次 → 歸零已刪,not-armed", c3["reason"] == "not-armed" and not d.exists(), str(c3))
     # TTL 先驗:回溯 ts → expired 且整夾刪
-    lens("--arm", f"{ml}..HEAD", "--seats", "1")
+    lens("--arm", cheap, "--seats", "1")
     meta = _j.loads((d / "meta.json").read_text()); meta["ts"] -= 700; (d / "meta.json").write_text(_j.dumps(meta))
     c = _j.loads(lens("--claim", "--json").stdout.strip().splitlines()[-1])
     check("s1-arm: 過期 → expired、整夾刪(seats 未歸零也不回)", c["reason"] == "expired" and c["text"] is None and not d.exists(), str(c))
     # disarm / status
-    lens("--arm", f"{ml}..HEAD", "--seats", "3")
+    lens("--arm", cheap, "--seats", "3")
     r = lens("--status"); check("s1-arm: status 印剩席", "剩 3/3 席" in r.stdout, r.stdout)
     r = lens("--disarm"); check("s1-arm: disarm 刪夾", r.returncode == 0 and not d.exists(), r.stdout)
     # 並發:5 個 claim 同時,3 席 → 恰 3 ok、席次 1..3 不重複
-    lens("--arm", f"{ml}..HEAD", "--seats", "3")
+    lens("--arm", cheap, "--seats", "3")
     procs = [_sp.Popen([sys.executable, GRAPHCTL, "dispatch-lens", "--claim", "--json", "--repo", str(repo)], env=env, stdout=_sp.PIPE, text=True) for _ in range(5)]
     outs = [_j.loads(p.communicate()[0].strip().splitlines()[-1]) for p in procs]
     seats = sorted(o["seat"] for o in outs if o["reason"] == "ok")
     check("s1-arm: 5 個並發認領 3 席 → 恰 3 ok 且席次 1,2,3 不重複", seats == [1, 2, 3] and sum(1 for o in outs if o["reason"] != "ok") == 2, str(outs))
     # hook SubagentStart 分支
-    lens("--arm", f"{ml}..HEAD", "--seats", "1")
+    lens("--arm", cheap, "--seats", "1")
     hook = str(repo / "scripts" / "hooks" / "claude" / "dispatch-lens-hook.py")
     pl = _j.dumps({"hook_event_name": "SubagentStart", "session_id": "x", "cwd": str(repo), "agent_id": "a", "agent_type": "explorer"})
     r = _sp.run([sys.executable, hook, "--harness", "codex"], input=pl, env=env, capture_output=True, text=True)
