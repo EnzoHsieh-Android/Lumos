@@ -1,0 +1,123 @@
+diff --git a/scripts/hooks/claude/dispatch-lens-hook.py b/scripts/hooks/claude/dispatch-lens-hook.py
+index 3b95d55..d5648eb 100755
+--- a/scripts/hooks/claude/dispatch-lens-hook.py
++++ b/scripts/hooks/claude/dispatch-lens-hook.py
+@@ -69,21 +69,21 @@ def _claim_codex_seat(payload: dict) -> int:
+         return 0
+     lumos = _find_lumos_script()
+     if lumos is None:
+         _debug("找不到 lumos,放行")
+         return 0
+     try:
+         r = subprocess.run([sys.executable, lumos, "dispatch-lens", "--claim", "--repo", repo, "--json"],
+                            capture_output=True, text=True, timeout=INNER_TIMEOUT)
+     except subprocess.TimeoutExpired:
+         # 架構 r1 C:與 Claude 分支同語意——超時不再靜默,經 additionalContext 給一行固定說明
+-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": TIMEOUT_NOTE.format(what="(Codex 席:--claim)", cmd="--status", n=10)}}, ensure_ascii=False))
++        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": TIMEOUT_NOTE.format(what="(Codex 席:--claim)", cmd="--arm <base>..<head> --seats N 重新武裝(--status 只看剩幾席、不重算)", n=10)}}, ensure_ascii=False))
+         _debug("lumos dispatch-lens --claim 超時,已附超時說明")
+         return 0
+     except OSError as e:
+         _debug(f"lumos dispatch-lens --claim 失敗({type(e).__name__}),放行")
+         return 0
+     if r.returncode != 0:
+         _debug(f"lumos dispatch-lens --claim rc={r.returncode}:{r.stderr.strip()[:200]},放行")
+         return 0
+     try:
+         data = json.loads(r.stdout.strip().splitlines()[-1])
+diff --git a/scripts/lumos b/scripts/lumos
+index ae86500..2559c1b 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -14274,31 +14274,37 @@ def cmd_delguard_check(repo=None, as_json=False):
+             return 0
+         rem = max(0.1, deadline - (time.monotonic() - t0))
+         conf = _delguard_confidence(tokens, root, gr_rel, timeout=rem)
+         if _over():
+             _delguard_log_degraded(gr, "timeout", len(tokens))
+             if as_json:
+                 _degraded_json("timeout", len(tokens))
+             else:
+                 print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
+             return 0
+-        hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=lambda: time.monotonic() - t0 > deadline)
+-        _partial = time.monotonic() - t0 > deadline   # 外家 r1 M2:掃描被 deadline 截斷回部分結果,不能算 ok
++        _trunc = {"hit": False}
++        def _deadline_check():
++            if time.monotonic() - t0 > deadline:
++                _trunc["hit"] = True   # 掃描真的被截斷才算部分結果(delta r2:剛好慢了但掃完不算)
++                return True
++            return False
++        hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=_deadline_check)
++        _partial = _trunc["hit"]   # 外家 r1 M2:掃描被 deadline 截斷回部分結果,不能算 ok
+         _delguard_log_result(gr, "degraded" if _partial else "ok", len(tokens), hits, time.monotonic() - t0, reason=("timeout-partial" if _partial else None))
+         fake = []
+         for path, dl in parsed["vault_diffs"].items():
+             rel = os.path.relpath(os.path.join(root, path), gr).replace(os.sep, "/")
+             if _delguard_purelink(dl) and any(h["node"] == rel for h in hits):
+                 fake.append(rel)
+         if as_json:
+             print(json.dumps({"tokens": len(tokens), "dropped": dropped, "hits": hits,
+-                              "fake_sync": fake, "degraded": False}, ensure_ascii=False))
++                              "fake_sync": fake, "degraded": _partial, **({"reason": "timeout-partial"} if _partial else {})}, ensure_ascii=False))   # 外家 r2:部分結果不能宣稱完整
+             return 0
+         if not hits:
+             if dropped:
+                 print(f"delguard: 無命中;{dropped} 個符號超 cap 未掃(--json 看已掃全量)")
+             return 0
+         hi = sum(1 for h in hits if h["conf"] == "high")
+         n_hit_tokens = len({t for h in hits for t in h["tokens"]})
+         print(f"提醒:這次刪掉的東西,有 {n_hit_tokens} 個被刪符號還在筆記裡被提到(確定沒別處在用的 {hi} 個/不確定的 {len(hits)-hi} 個)。筆記講的東西已經不在了,讀的人會被誤導。")
+         for h in hits[:DELGUARD_TOP_N]:
+             print(f"  [{h['conf']}] {h['node']}:{h['line_no']} 「{h['line']}」 ← {','.join(h['tokens'])}")
+@@ -17686,21 +17692,21 @@ def cmd_dispatch_lens_spec(spec_path, repo=None, as_json=False, cap=8, max_lines
+             if not v.get("node"):
+                 continue
+             node = str(v["node"])[:-3] if str(v["node"]).endswith(".md") else str(v["node"])
+             if node.startswith("Projects/"):   # 別的計劃不是合約也不是事故,不進固定席
+                 continue
+             pinned.setdefault(node, {"kind": _LENS_KIND.get(kind), "contract": _lens_contract_class(v), "files": [f]})
+             if f not in pinned[node]["files"]:
+                 pinned[node]["files"].append(f)
+     def _rank(v):
+         return (0 if v.get("kind") == _LENS_KIND["incident"] else 1 if v.get("contract") else 2 if v.get("kind") == _LENS_KIND["direct"] else 3)
+-    listed = [{"node": n, **({"kind": "計劃連結", "contract": None, "files": []} | pinned.get(n, {}) | {"kind": "計劃連結" + (f"+{pinned[n]['kind']}" if n in pinned and pinned[n].get("kind") else "")})} for n in linked]
++    listed = [{"node": n, **{"kind": "計劃連結", "contract": None, "files": []}, **pinned.get(n, {}), "kind": "計劃連結" + (f"+{pinned[n]['kind']}" if n in pinned and pinned[n].get("kind") else "")} for n in linked]   # 3.8 相容:不用 dict | (delta r2)
+     listed += [{"node": n, **v} for n, v in sorted(pinned.items(), key=lambda kv: _rank(kv[1])) if n not in linked]
+     bound_status, _bidx = "ok", None
+     try:
+         _bidx = _platform_test_index(root)
+     except Exception:
+         bound_status = "skipped-no-config"
+     lines = []
+     if code_files and not listed:
+         lines.append(_LENS_SPEC_HEADER)
+         lines.append(f"計劃提到並找得到的程式檔:{', '.join(code_files)}——沒牽到任何帶合約/事故的節點" + (f";太泛不列:{', '.join(too_generic)}" if too_generic else "") + (f";超預算沒算:{', '.join(skipped_files)}" if skipped_files else ""))
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index fc06397..22f3ef8 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -25814,14 +25814,23 @@ def t_delguard_logs_ok_too():
+     (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+     g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+     g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
+     (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
+     r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)
+     log = vault / ".." / ".governance-log.jsonl"
+     log = (root / "docs" / ".governance-log.jsonl")
+     txt = log.read_text(encoding="utf-8") if log.exists() else ""
+     oks = [l for l in txt.splitlines() if '"gate": "delguard"' in l and '"kind": "ok"' in l]
+     check("delguard ok 帳: 跑完記一筆 kind=ok(帶 tokens/hits/secs)", r.returncode == 0 and len(oks) == 1 and "tokens=" in oks[0] and "hits=" in oks[0], (r.stdout[-160:], txt[-200:]))
++    # 外家 r1 M2 / r2 M:deadline 截斷的部分結果 → 帳記 degraded、--json 的 degraded=true(不能宣稱完整)
++    r2 = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--json"], cwd=str(root), capture_output=True, text=True, timeout=120, env=dict(os.environ, LUMOS_DELGUARD_DEADLINE="0.0001"))
++    txt2 = log.read_text(encoding="utf-8")
++    degr = [l for l in txt2.splitlines() if '"gate": "delguard"' in l and '"kind": "degraded"' in l]
++    try:
++        j2 = _j.loads(r2.stdout.strip().splitlines()[-1])
++    except Exception:
++        j2 = {}
++    check("delguard 部分結果: 超時截斷 → 帳記 degraded 且 --json degraded=true", r2.returncode == 0 and len(degr) >= 1 and j2.get("degraded") is True, (r2.stdout[-160:], txt2[-200:]))
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
