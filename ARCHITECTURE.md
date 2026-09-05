@@ -11,7 +11,7 @@ flowchart TB
         CLI["scripts/lumos<br/>(python3 標準庫單檔 CLI)"]
         TEST["scripts/test_lumos.py"]
         GHOOKS["scripts/hooks/<br/>git: pre-commit / post-commit / pre-push"]
-        CHOOKS["scripts/hooks/claude/<br/>SessionStart (進場提示/CI 狀態) · 改檔前 (波及注入) · 改檔後 (自動複查)"]
+        CHOOKS["scripts/hooks/claude/<br/>SessionStart (進場提示/CI 狀態) · 改檔前 (波及注入) · 改檔後 (自動複查) · 收工 Stop (改了 code 沒動圖譜:Claude 提醒 / Codex 擋一次)<br/>同一批檔兩家共用,Codex 以 --harness codex 註冊"]
         INST["安裝器<br/>get.sh · get.ps1 · install.sh<br/>install-hooks.sh · install-graph-toolchain.sh · merge-claude-settings.py"]
         TPL["scripts/templates/graph-discipline.md<br/>(圖譜先行紀律範本)"]
         RENAME["scripts/graph-rename.sh · fetch-notesmd.sh<br/>(notesmd move 封印)"]
@@ -138,9 +138,10 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph BEFORE["🟣 動手前 (Claude hooks · 推播,不擋)"]
-        PRE["PreToolUse: impact-hook<br/>Edit/Write 前注入<br/>硬合約/事故固定席 + ★關於★語意標記<br/>+ 守衛面參考 lane (軟標記樞紐, cap 3)"]
+    subgraph BEFORE["🟣 動手前後 (Claude/Codex hooks · 推播為主)"]
+        PRE["PreToolUse: impact-hook<br/>Edit/Write(Codex: apply_patch) 前注入<br/>硬合約/事故固定席 + ★關於★語意標記<br/>+ 守衛面參考 lane (軟標記樞紐, cap 3)"]
         POSTT["PostToolUse<br/>自足性 / verification-rot 後驗"]
+        STOPH["Stop: check-graph-sync<br/>改了 code 沒動圖譜 → Claude 印提醒 / Codex 擋一次要補<br/>(LUMOS_STOP_BLOCK_OFF=1 關)"]
     end
 
     EDIT["改 code + 圖譜"] --> PC{"pre-commit (git)"}
@@ -164,7 +165,7 @@ flowchart TB
     class PC,PUSH,BLOCK,PB1,PB2,PB3 gate
     class COMMIT,PASS,CI,EDIT,DONE ok
     class WAIT,FIX gate
-    class BEFORE,PRE,POSTT push
+    class BEFORE,PRE,POSTT,STOPH push
 ```
 
 > **地板不是萬能裁判**:動手前的推播可以被無視、git 關卡可以用 `--no-verify` 繞過(後果自負、會留痕)。這套機制守得住「忘了/隨手漏」,守不住「刻意繞+不誠實」——那一層永遠留給人。

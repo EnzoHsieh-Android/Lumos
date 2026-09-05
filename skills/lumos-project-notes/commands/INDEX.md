@@ -33,7 +33,7 @@
 | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts |
 | 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / code-loop pass·skip·check / guard list·scaffold·bind·audit·trace·kill-add·kill / ci-wait / ci-status |
 | 裝機、更新、拆機(人工操作,Claude 幾乎不用) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif |
-| 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude hooks 各自呼叫了什麼 |
+| 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
 | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
 
 ## 三、三條不變的規矩

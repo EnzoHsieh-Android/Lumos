@@ -84,7 +84,13 @@ cd <your-project>; lumos init
 
 <details><summary>Granular install / offline (advanced)</summary>
 
-**Works with both Claude Code and Codex CLI**: one `lumos install` wires skills, hook registrations and the discipline block into both (Claude: `~/.claude` + `CLAUDE.md`; Codex: `~/.codex/hooks.json`, `~/.agents/skills`, `AGENTS.md`, custom reviewer seat `lumos_reviewer`). Codex hooks only run after you review-trust them once in an interactive session; `lumos enforcement` shows every layer's state.
+**Works with both Claude Code and Codex CLI** (since 2026-09; details and known limits in the graph node `Systems/codex-harness`):
+
+- **One install, both harnesses**: a single `lumos install` wires skills, hook registrations and the discipline block into both (Claude: `~/.claude` + `CLAUDE.md`; Codex: `~/.codex/hooks.json`, `~/.agents/skills`, `AGENTS.md`, custom reviewer seat `lumos_reviewer`). Codex hooks only run after you open an interactive `codex` once and pick "Trust all" (trust binds to the command line, so later hook updates from lumos need no re-approval); `lumos enforcement` shows every layer's state.
+- **Same hooks, two end-of-turn behaviours**: when code changed but no note did, the Claude side only reminds; the Codex side is blocked once and asked to write the note or say in one line why not — once per session. Switch off with `LUMOS_STOP_BLOCK_OFF=1`.
+- **Codex as loop orchestrator**: first round `lumos loop next <id> --orchestrator codex`; right before dispatching reviewers run `lumos dispatch-lens --arm <base>..HEAD --seats N` (Codex hooks cannot read the dispatch message, so each subagent claims a seat on start), then `--disarm`; name the reviewer seat `lumos_reviewer` (selectable from Codex 0.153.2).
+- **Measurable**: the scenario probe `scripts/scenario_probe.py --runner codex` runs the same question set against Codex; `--stop-block off` is the control arm for the end-of-turn block.
+- **An old gap fixed on the way**: the end-of-turn check used to recognise code only by file extension, so extension-less entry points like this repo's `scripts/lumos` were never flagged; files whose first line is a shebang now count as code, on both harnesses.
 
 Project layer only: `lumos init` (graph folder name defaults to the project name, `--name` to customize; an existing graph is **never overwritten**; `--no-hooks` builds the graph without installing checks). Machine layer only: `lumos install`. Manual offline:
 
@@ -153,6 +159,7 @@ The structured fields at the top of a note (status, links, decisions) go through
 Enter  ── lumos search <keyword> → lumos context <node> → lumos contracts <node>   (read the graph before touching)
 Design ── write it as a plan note; before implementation run design-loop (a few uninformed AI reviewers pick it apart)
 Build  ── change code; hooks push "which notes this touches, which incidents fired here" right at you
+Wrap   ── code changed but no note did? the Stop hook reminds (Claude) or blocks once (Codex)
 Write  ── lumos set / append / decision-add to record decisions, verifications, contracts
 Check  ── lumos lint <node> (quick single-note check) → lumos doctor (whole-graph health)
 Review ── lumos pitfalls --diff rates the risk of this change; high risk goes through code-loop (adversarial code review)
@@ -164,6 +171,7 @@ Enforcement, soft to hard:
 | Layer | What it does | Blocking? |
 |---|---|---|
 | impact push | Before you edit, tells you which notes are affected | Advisory only |
+| Stop hook at end of turn | Names the notes when code changed but none of them did | Claude: advisory; Codex: blocks once per session |
 | `lumos lint` | Quick single-note check | Early warning |
 | `lumos doctor` | Whole-graph health (orphans, broken links, naked contracts, missing rollbacks) | Blocks in `--ci` mode |
 | `code-loop` | High-risk change without code review | Hard-blocks at push |

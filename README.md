@@ -84,7 +84,13 @@ cd <你的專案>; lumos init
 
 <details><summary>顆粒安裝/離線(進階)</summary>
 
-**Claude Code 與 Codex CLI 都支援**:同一次 `lumos install` 會把 skills、hook 註冊、紀律區塊接到兩家(Claude:`~/.claude`+`CLAUDE.md`;Codex:`~/.codex/hooks.json`、`~/.agents/skills`、`AGENTS.md`、自訂審查席 `lumos_reviewer`);Codex 的 hook 要你開一次互動 codex 審過信任才會跑,`lumos enforcement` 看得到各層狀態。
+**Claude Code 與 Codex CLI 都支援**(2026-09 起;細節與界線見圖譜 `Systems/codex-harness`):
+
+- **裝一次接兩家**:同一次 `lumos install` 把 skills、hook 註冊、紀律區塊接到兩家(Claude:`~/.claude`+`CLAUDE.md`;Codex:`~/.codex/hooks.json`、`~/.agents/skills`、`AGENTS.md`、自訂審查席 `lumos_reviewer`)。Codex 的 hook 要你開一次互動 `codex` 按「Trust all」才會跑(信任綁的是命令列,之後 lumos 更新 hook 內容不用重按);`lumos enforcement` 看得到各層狀態。
+- **同一批 hook、兩種收工行為**:改了程式碼卻沒動筆記時,Claude 側收工只提醒;Codex 側會被擋一次、要它補筆記或說一句為什麼不用,同一個 session 只擋一次。要關:環境變數 `LUMOS_STOP_BLOCK_OFF=1`。
+- **用 Codex 當編排者跑迴圈**:首輪 `lumos loop next <編號> --orchestrator codex`;派審查員前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`(Codex 的派工訊息 hook 讀不到,改由子代理開場自己領一席),派完 `--disarm`;審查席點名 `lumos_reviewer`(Codex 0.153.2 起選得中)。
+- **量得到**:情境探針 `scripts/scenario_probe.py --runner codex` 對 Codex 跑同一批題;`--stop-block off` 是收工擋停的對照組。
+- **順帶修的一個老洞**:收工檢查以前只認副檔名,像本 repo 的 `scripts/lumos` 這種沒副檔名的主程式從來沒被提醒過;現在首行是 shebang 的檔也算程式碼,兩家都受惠。
 
 只建專案層:`lumos init`(圖譜資料夾名稱預設取專案名,`--name` 自訂;既有圖譜**絕不覆寫**;`--no-hooks` 只建圖譜不裝檢查)。只裝機器層:`lumos install`。手動離線:
 
@@ -153,6 +159,7 @@ KEY:★CHECKPOINT★   <改了難救:例如部署到測試機>
 進場 ── lumos search <關鍵字> → lumos context <節點> → lumos contracts <節點>   (動手前先讀圖譜)
 設計 ── 寫成計劃筆記,進實作前跑 design-loop(派幾個不知情的 AI 審稿挑洞)
 動工 ── 改 code;改到檔案時 hook 自動把「會波及哪些筆記、踩過什麼雷」推到你眼前
+收工 ── 改了 code 沒動筆記,Stop hook 會提醒(Claude)或擋一次要你補(Codex)
 寫回 ── lumos set / append / decision-add 記決策、驗證、合約
 自驗 ── lumos lint <節點>(單篇快檢)→ lumos doctor(全圖健檢)
 終審 ── lumos pitfalls --diff 算這批改動的風險級;高風險走 code-loop(對抗式代碼審)
@@ -164,6 +171,7 @@ KEY:★CHECKPOINT★   <改了難救:例如部署到測試機>
 | 層 | 做什麼 | 擋不擋 |
 |---|---|---|
 | impact 推播 | 改 code 前告訴你會波及哪些筆記 | 只提醒 |
+| 收工 Stop hook | 這一輪改了 code、筆記沒動就點名 | Claude 只提醒;Codex 同 session 擋一次 |
 | `lumos lint` | 單篇筆記快檢 | 提前預警 |
 | `lumos doctor` | 全圖健檢(孤兒、斷連、裸合約、缺回退) | `--ci` 模式會擋 |
 | `code-loop` | 高風險改動沒過代碼審 | push 時硬擋 |

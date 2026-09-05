@@ -14,6 +14,7 @@ related:
   - "[[Systems/lumos-cli-lifecycle]]"
   - "[[Projects/code-loop必用守衛_計劃]]"
   - "[[Projects/派工鏡頭注入_計劃]]"
+  - "[[Systems/codex-harness]]"
 summary: |-
   FLAG:DECISION
   KEY:基線(2026-09-05 探針,同一題小功能各兩次):Claude 2/2 過(333/449 秒,lumos 13–17 次,先測試後改碼,收尾 new+decision-add+lint+doctor);Codex 1/2 過(560 秒,lumos 30 次)、1 次 900 秒超時——它把 3700 條全套跑完;行為沒偏(第一動作 lumos search、contracts、impact 都有),差在效率與過度照章(小功能也開 Projects 計劃)

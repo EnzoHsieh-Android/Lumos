@@ -17,6 +17,7 @@ related:
   - "[[Systems/design-loop]]"
   - "[[Systems/anchor-integrity]]"
   - "[[Systems/canary-audit]]"
+  - "[[Systems/codex-harness]]"
 summary: |-
   FLAG:DECISION
   KEY:目標=在 Codex CLI 下開一個 lumos 專案,得到跟 Claude Code 下★同一套★六層防護:指示(AGENTS.md)/skills/hooks(進場、影響幅度、派工鏡頭、收工同步)/迴圈編排/量測/安裝-拆機對稱;不做第二套邏輯,每層都是「同一支 lumos、多一個接頭」
