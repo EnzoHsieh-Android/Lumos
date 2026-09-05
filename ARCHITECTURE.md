@@ -11,13 +11,13 @@ flowchart TB
         CLI["scripts/lumos<br/>(python3 標準庫單檔 CLI)"]
         TEST["scripts/test_lumos.py"]
         GHOOKS["scripts/hooks/<br/>git: pre-commit / post-commit / pre-push"]
-        CHOOKS["scripts/hooks/claude/<br/>SessionStart (進場提示 + enforcement 掉層才報 + CI 狀態) · 改檔前 (impact 波及注入) · 派工前 (dispatch-lens 鏡頭:合約/事故固定席附進審查席) · 收工 Stop (改了 code 沒動圖譜:Claude 提醒 / Codex 擋一次)<br/>同一批檔兩家共用,Codex 以 --harness codex 註冊;PostToolUse 腐化偵測 2026-08-21 撤除(空殼)"]
+        CHOOKS["scripts/hooks/claude/<br/>四個時點的自動提醒:進場(先查圖譜、哪層防護掉了、上次 CI 結果) · 改檔前(這個檔會波及哪些節點) · 派審查員前(把相關節點附進派工單) · 收工(改了 code 沒動節點:Claude 提醒 / Codex 擋一次)<br/>同一批檔兩家共用;改檔後的腐化偵測 2026-08-21 撤除"]
         INST["安裝器<br/>get.sh · get.ps1 · install.sh<br/>install-hooks.sh · install-graph-toolchain.sh · merge-claude-settings.py"]
         TPL["scripts/templates/graph-discipline.md<br/>(圖譜先行紀律範本)"]
         RENAME["scripts/graph-rename.sh · fetch-notesmd.sh<br/>(notesmd move 封印)"]
         SKILLS["skills/<br/>lumos-project-notes · core-knowledge<br/>design-loop · code-loop · pitfalls-gapfill"]
-        GOV["governance/ + docs/.*-log.jsonl<br/>審計卷證 review-reports (席報告 / 凍結快照 / intake) · replay (判定閉包,週跑回放)<br/>anchor-baseline · eval/lens-utilization (鏡頭利用率重算)<br/>帳:canary-log(處置帳) · governance-log · ci-log · escape-log"]
-        PROBE["scripts/scenario_probe.py<br/>(情境探針:量 Claude / Codex 會不會自己先敲 lumos;--runner codex · --stop-block)"]
+        GOV["governance/ + docs/.*-log.jsonl<br/>審查留下的證據:審查員報告、當時審的快照、凍結的判定(每週回放)<br/>驗證器的指紋基線 · 附給審查員的節點有沒被用到的重算<br/>帳本:每輪審查怎麼處置 · 治理事件 · CI 結果 · 被舊決定擋下的次數"]
+        PROBE["scripts/scenario_probe.py<br/>(情境探針:給 AI 出題,量它會不會自己先查圖譜;Claude / Codex 都能測)"]
     end
 
     subgraph USER["① user-scope (每台機器一份)"]
@@ -25,7 +25,7 @@ flowchart TB
         USKILL["~/.claude/skills/* 與 ~/.agents/skills/*<br/>(symlink → Lumos repo;後者給 Codex 讀)"]
         UCHOOK["~/.claude/hooks/ + settings.json<br/>~/.codex/hooks/ + hooks.json<br/>(同一批 hook 腳本,兩家各一份註冊)"]
         UBIN["~/.local/bin/lumos<br/>(全域指令 symlink)"]
-        UAGENT["$CODEX_HOME/agents/lumos_reviewer.toml<br/>(Codex 自訂審查席,0.153.2 起選得中)"]
+        UAGENT["$CODEX_HOME/agents/lumos_reviewer.toml<br/>(給 Codex 用的「審查員」身分設定)"]
     end
 
     subgraph PROJ["② project-scope (每個專案 vendor 一份)"]
@@ -33,7 +33,7 @@ flowchart TB
         PCLI["scripts/lumos (vendored copy)"]
         PHOOK["scripts/hooks/ + core.hooksPath"]
         PCLAUDE["CLAUDE.md + AGENTS.md<br/>(同一 sentinel 紀律段,Claude / Codex 各一份)"]
-        PCFG[".lumos/config.json · lint.json<br/>(選配:ci 區塊給 ci-wait、linter 宣告給 pitfalls)"]
+        PCFG[".lumos/config.json · lint.json<br/>(選配:告訴工具去哪看 CI 結果、專案用哪個 linter)"]
         PGRAPH["docs/&lt;slug&gt;-knowledge/<br/>(圖譜資料 · 各專案自己的)"]
     end
 
@@ -145,10 +145,10 @@ flowchart TB
 ```mermaid
 flowchart TB
     subgraph BEFORE["🟣 回合內 hooks (Claude / Codex 同一批 · 推播為主)"]
-        ENTRY["SessionStart: lumos-entry-hook + ci-status<br/>進場提醒「第一個工具呼叫是 lumos」<br/>+ enforcement 有層掉才追一行 + 上次 CI 結論"]
-        PRE["PreToolUse: impact-hook<br/>Edit/Write(Codex: apply_patch) 前注入<br/>硬合約/事故固定席 + ★關於★語意標記<br/>+ 守衛面參考 lane (軟標記樞紐, cap 3)"]
-        LENS["派工前: dispatch-lens<br/>Claude PreToolUse Agent 改派工詞 / Codex SubagentStart 領席(--arm)<br/>把 impact 固定席(合約/事故/綁定測試狀態)機器附進每個審查席"]
-        STOPH["Stop: check-graph-sync<br/>改了 code 沒動圖譜 → Claude 印提醒 / Codex 擋一次要補<br/>(LUMOS_STOP_BLOCK_OFF=1 關)"]
+        ENTRY["一進場(SessionStart)<br/>提醒「第一個動作先查圖譜」<br/>+ 哪層防護掉了才多一行 + 上次 CI 結果"]
+        PRE["改檔之前(PreToolUse: impact-hook)<br/>把「這個檔會波及哪些節點、這裡出過什麼事故」推到眼前<br/>(Codex 改檔走 apply_patch,一樣接得到)"]
+        LENS["派審查員之前(dispatch-lens)<br/>把相關節點自動附進派工單,連同「規則綁的測試還在不在」<br/>Claude:改派工單 / Codex:審查員開場自己領一份"]
+        STOPH["收工時(Stop: check-graph-sync)<br/>改了 code 卻沒動節點 → Claude 印提醒 / Codex 擋一次要它補<br/>(環境變數 LUMOS_STOP_BLOCK_OFF=1 可關)"]
     end
 
     EDIT["改 code + 圖譜"] --> PC{"pre-commit (git)"}
@@ -156,9 +156,9 @@ flowchart TB
     PC -->|通過| COMMIT["commit"]
 
     COMMIT --> PUSH{"pre-push (git)"}
-    PUSH -->|"① lumos doctor --ci"| PB1["⛔ 圖譜不健康"]
-    PUSH -->|"② anchor verify"| PB2["⛔ 測試/閘檔動了沒核可"]
-    PUSH -->|"③ code-loop check (tier=high)"| PB3["⛔ 未過 code-loop<br/>(pass/skip/--no-verify 三路;留痕綁 HEAD,簿記檔豁免)"]
+    PUSH -->|"① lumos doctor --ci"| PB1["⛔ 圖譜不健康(斷連結、孤兒、規則沒綁測試…)"]
+    PUSH -->|"② anchor verify"| PB2["⛔ 測試程式或把關腳本被改了,沒人簽名"]
+    PUSH -->|"③ code-loop check (tier=high)"| PB3["⛔ 高風險改動沒審過<br/>(審過留憑證 pass / 說明理由跳過 skip / 硬繞 --no-verify 會留痕;<br/>憑證綁版本,之後再改程式就失效,只改帳本檔不算)"]
     PUSH -->|全過| PASS["push"]
     PASS --> CI["CI (GitHub Actions): 全套測試<br/>+ doctor --ci + anchor verify"]
     CI --> WAIT{"lumos ci-wait<br/>(push 後同輪等結論)"}
@@ -177,34 +177,42 @@ flowchart TB
 
 > **地板不是萬能裁判**:動手前的推播可以被無視、git 關卡可以用 `--no-verify` 繞過(後果自負、會留痕)。這套機制守得住「忘了/隨手漏」,守不住「刻意繞+不誠實」——那一層永遠留給人。
 
-## 5. 審計迴圈基建:圖譜 ⇄ loop 的良性循環
+## 5. 審查怎麼越審越準:圖譜 ⇄ 審查的良性循環
 
-白話:上面四節講「怎麼裝、有哪些指令、哪裡會擋」,這一節講**為什麼審查會越審越準**。圖譜節點(合約、事故、決策、驗證)是每一輪審查的籌碼——派審查員時機器把相關節點附進派工詞,審查員不用自己找;審完折進設計的東西再寫回節點,變成下一輪的籌碼。節點是下一輪的**輸入**,不是產出物(Enzo 2026-08-25 裁定陳述,單源 `docs/lumos-toolchain-knowledge/Systems/開發工作流總覽.md`)。2026-08-26 到 09-05 落地的三塊基建把這句話從口號變成機械路徑:①**派工鏡頭注入**(dispatch-lens v1.0→v1.2:固定席逐條附、合約行帶綁定測試狀態、0 篇時附 code 層備援段;Claude 走 PreToolUse 改派工詞,Codex 走 SubagentStart 領席)②**收貨→處置→凍結**(quote/ref/seat 三道機械收貨、intake 守衛、處置閘、嚴重度綁定寫側硬擋、判定凍結與週跑回放)③**量得到**(鏡頭利用率 recount、逃逸帳、skill-doctor 成本基線、情境探針量紀律命中率)。Claude Code 與 Codex CLI 走同一條路(`Systems/codex-harness`)。
+白話:前四節講「怎麼裝、有哪些指令、哪裡會擋」,這一節講**為什麼審查會越審越準**。圖譜裡的每篇節點(不能破壞的規則、出過的事故、做過的決定、驗過的結果)是每一輪審查的籌碼:派審查員的那一刻,機器把跟這次改動有關的節點附進派工單,審查員不用自己翻、也翻不漏;審完折進設計的東西再寫回節點,變成下一輪的籌碼。**節點是下一輪的輸入,不是最後的產出物**(Enzo 2026-08-25 裁定;單源 `docs/lumos-toolchain-knowledge/Systems/開發工作流總覽.md`)。
+
+2026-08-26 到 09-05 落地的三塊東西,把這句話從口號變成真的有東西在跑:
+
+- **派工時自動附節點**(機制名 dispatch-lens):把跟這次改動直接相關、帶規則或出過事故的節點,連同「這條規則綁的測試現在還在不在」,一起附進每個審查員的派工單。Claude Code 是在派人那一刻改派工單;Codex CLI 讀不到派工單,改成審查員一開場自己領一份。
+- **收貨要驗、每條意見要有去向、判定要凍結**:審查員交回來的每條意見,先機器驗三件事——引的句子對得回原文嗎、講的行號存在嗎、該看的材料看了嗎——錨不到的不採信。每條意見要嘛折進設計、要嘛附理由放行,一輪全處置才算過關。過關的判定凍結成標準答案,每週機器回放,規則改了看舊案會不會翻。
+- **量得到**:附上去的節點有沒有真的被審查員用到(利用率重算)、迴圈中被舊決定擋下幾次(逃逸帳)、每支迴圈燒多少(skill-doctor 成本基線)、AI 會不會自己先查圖譜(情境探針)。
+
+Claude Code 與 Codex CLI 走同一條路(細節與平台限制:`docs/lumos-toolchain-knowledge/Systems/codex-harness.md`)。
 
 ```mermaid
-flowchart LR
-    NODES["📚 圖譜節點<br/>合約 ★INVARIANT★ · 事故 · 決策 · 驗證<br/>(loop 的籌碼,也是 loop 的產出)"]
-    NEXT["lumos loop next<br/>分級 · 輪次 · 席位編制<br/>首輪印「主題既有節點」(入口栓)"]
-    LENS["派工鏡頭 dispatch-lens<br/>impact 固定席機器附進每席派工詞<br/>(合約行帶綁定測試狀態;0 篇→code 層備援段)<br/>Claude:改派工詞 / Codex:--arm 領席"]
-    SEATS["審查席<br/>同門 sonnet ×N(各鏡頭 + 立場)<br/>+ 架構對齊 + 外家 Codex(finder / 否決)<br/>+ spec-conformance"]
-    INTAKE["收貨三道 + intake 守衛<br/>quote-check(引句錨回凍結快照) · refcheck(file:line 存在)<br/>· seat-check(材料都碰了) · preflight-4 宣告行"]
-    FOLD["折入真檔<br/>每條 finding 有去向:折掉 / 附理由放行<br/>fold-check · 鏡像核對 · 辯方 refute(Codex)"]
-    LEDGER["記帳 canary record(處置帳)<br/>各席一筆 + 一筆 carrier 帶 findings/folded/accepted 集<br/>嚴重度綁定寫側硬擋 · --finding-kind 記在修什麼"]
-    GATE{"處置閘 loop status --disposal<br/>全處置 ∧ 留痕可重算 ∧ 引句全錨<br/>(code 迴圈 ≥major 必折;roster 對帳只轉述)"}
-    FREEZE["凍結 loop replay --freeze<br/>判定閉包 verdict.json<br/>週跑回放:規則改了,舊案會不會翻"]
-    PASS["code-loop pass 留痕<br/>綁 HEAD sha(簿記檔豁免);pre-push / CI 認"]
-    OBS["觀測帳<br/>gov 統計 · lens-utilization recount(鏡頭有沒被用)<br/>escape 逃逸帳 · skill-doctor 成本基線"]
-    AUTO["自主迭代 loop(每日)<br/>選 gap → 設計 → 走同一條路 → 停在等人放行"]
-    PROBE["情境探針 scenario_probe<br/>量「AI 會不會自己先敲 lumos」<br/>Claude / Codex 同題對照"]
+flowchart TB
+    NODES["📚 圖譜:一篇篇節點<br/>不能破壞的規則 · 出過的事故 · 做過的決定 · 驗過的結果<br/>(審查的籌碼,也是審查的產出)"]
+    NEXT["開一輪審查(lumos loop next)<br/>算風險分級、第幾輪、要派幾席<br/>第一輪先列出這個主題已有的節點(避免重複開案)"]
+    LENS["派工時自動附節點(dispatch-lens)<br/>跟這次改動直接相關、帶規則或出過事故的節點<br/>連同「規則綁的測試還在不在」附進每席派工單<br/>Claude:改派工單 / Codex:審查員開場自己領"]
+    SEATS["審查席<br/>幾個各看不同角度的同門 AI<br/>+ 一席專看「跟既有寫法一不一致」<br/>+ 換一家公司的 AI(找洞、否決)"]
+    INTAKE["收貨先機器驗三件事<br/>引句對得回原文?行號存在?材料都看了?<br/>錨不到的不採信;第一輪的前掃要留宣告行"]
+    FOLD["折進設計<br/>每條意見要有去向:折掉,或附理由放行<br/>低共識的先派另一家 AI 反駁(要拿代碼證據)"]
+    LEDGER["記帳<br/>每席一筆 + 一筆彙總(發現了什麼 / 折了哪些 / 放行哪些)<br/>帳面嚴重度不得低於報告;每條標「在修程式還是修文件」"]
+    GATE{"過不過?<br/>每條都處置了 ∧ 留痕能重算 ∧ 引句全對得回<br/>(程式碼審:嚴重的一律要折,不得放行)"}
+    FREEZE["凍結判定<br/>存成標準答案,每週機器回放<br/>規則改了,舊案會不會翻看得到"]
+    PASS["留下「審過了」的憑證<br/>綁在這個版本上,之後再改程式就失效<br/>推送與 CI 都認它"]
+    OBS["觀測帳<br/>治理統計 · 附上去的節點有沒被用到<br/>被舊決定擋下幾次 · 每支迴圈燒多少"]
+    AUTO["每天自動跑一輪<br/>挑一個缺口 → 寫設計 → 走同一條路 → 停在等人放行"]
+    PROBE["情境探針<br/>量「AI 會不會自己先查圖譜」<br/>Claude / Codex 同一批題目對照"]
 
     NODES --> NEXT --> LENS --> SEATS --> INTAKE --> FOLD --> LEDGER --> GATE
-    GATE -->|"⛔ 沒過(上限 3 輪,到頂攤人)"| NEXT
-    GATE -->|"✅ 過"| FREEZE --> PASS
-    FOLD ==>|"Verification · decision-add · 合約候選"| NODES
+    GATE -->|"沒過(最多 3 輪,到頂交給人裁)"| NEXT
+    GATE -->|"過"| FREEZE --> PASS
+    FOLD ==>|"寫回:驗證紀錄 · 決定 · 候選規則"| NODES
     LEDGER --> OBS
-    OBS -.->|"數字回頭改編制 / 鏡頭"| NEXT
-    AUTO -.->|"用同一條路"| NEXT
-    PROBE -.->|"驗紀律有沒有被吃進去"| NODES
+    OBS -.->|"數字回頭調整席位和要附什麼"| NEXT
+    AUTO -.->|"走同一條路"| NEXT
+    PROBE -.->|"驗規矩有沒有真的被吃進去"| NODES
 
     classDef gnode fill:#1b3a2a,stroke:#3ddc84,color:#e8fff0
     classDef loop fill:#2a2440,stroke:#9a7bd6,color:#f0ecff
@@ -216,7 +224,7 @@ flowchart LR
     class OBS,PROBE obs
 ```
 
-> **天花板要講清楚**:這條路證的是「這份設計 / 這批改動在審查員眼裡沒有明顯漏洞,而且每個發現都有交代」,不證它正確;行為層正確性歸測試真跑綠、真機驗證與人拍板。鏡頭附上去了不等於被讀了(利用率 recount 就是量這個);Codex 的派工訊息 hook 讀不到、hook 要人按一次信任,是平台限制不是工具缺陷(見 `Systems/codex-harness`)。細節單源:設計審 `skills/lumos-design-loop`、代碼審 `skills/lumos-code-loop`、鏡頭 `Projects/派工鏡頭注入_計劃`、收斂記帳 `Systems/loop-convergence-recording`、處置閘 `Systems/convergence-evidence-gate`。
+> **天花板要講清楚**:這條路證明的是「在審查員眼裡沒有明顯漏洞,而且每條意見都有交代」,不證明設計或程式是對的;對不對要靠測試真的跑綠、真機驗證、最後由人拍板。節點附上去了不等於被讀了(利用率重算就是在量這個)。Codex 的派工單 hook 讀不到、hook 要人按一次信任,是平台的限制不是工具的缺陷。細節單源:設計審 `skills/lumos-design-loop`、程式碼審 `skills/lumos-code-loop`、派工附節點 `docs/lumos-toolchain-knowledge/Projects/派工鏡頭注入_計劃.md`、記帳與過不過 `docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md`、`docs/lumos-toolchain-knowledge/Systems/convergence-evidence-gate.md`。
 
 ---
 
