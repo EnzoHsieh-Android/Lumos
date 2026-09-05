@@ -1,0 +1,120 @@
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index 0bc8745..49987ee 100644
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -106,22 +106,20 @@ def _is_excluded_path(file_path: str) -> bool:
+         norm_check = norm
+     for seg in EXCLUDE_PATH_CONTAINS:
+         if seg in norm_check:
+             return True
+     p = Path(file_path)
+     if p.name in EXCLUDE_FILENAMES:
+         return True
+     return False
+ 
+ 
+-
+-
+ def _shebang_is_code(abs_path: Path) -> bool:
+     """無副檔名檔靠首行 shebang 入樣(主session鏡頭利用率_計劃 前置修正①:scripts/lumos、git hooks 原本永不入樣)。
+     只讀前 128 bytes、包 try/except:二進位/不存在/讀不到 → False,現役 fail-open hook 不得因此炸。"""
+     try:
+         if not abs_path.is_file():
+             return False
+         with open(abs_path, "rb") as fh:
+             head = fh.read(128)
+     except OSError:
+         return False
+diff --git a/scripts/hooks/post-commit b/scripts/hooks/post-commit
+index 9b25aa5..5f8e3c2 100755
+--- a/scripts/hooks/post-commit
++++ b/scripts/hooks/post-commit
+@@ -39,21 +39,26 @@ if [[ "$(git rev-list --parents -n 1 HEAD | wc -w)" -gt 2 ]]; then
+ fi
+ 
+ # 本次 commit 的檔案清單 (quotePath=off 對齊 pre-commit 的中文路徑處理)
+ CHANGED="$(git -c core.quotePath=off diff-tree --no-commit-id --name-only -r HEAD)"
+ [[ -z "$CHANGED" ]] && exit 0
+ 
+ # code 副檔名與排除規則 (對齊 pre-commit / check-graph-sync.py CODE_EXTS)
+ CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);四份清單由 t_code_exts_four_lists_agree 釘
+ 
+ is_shebang_code() {   # 沒副檔名的檔:看 剛 commit 的 內容首行是不是 #!(2026-09-05 README 審視 d1:scripts/lumos 這種主程式五月起 26 次漏過)
+-  local path="$1" base; base="${path##*/}"; [[ "${base#.}" == *.* ]] && return 1   # 去掉開頭的點再看有沒有副檔名(.pythonrc 這種也要看 shebang)
++  local path="$1" base
++  # git 對含 " \ 或控制字元的檔名會印成 C 式引號("a\"b");拿去 git show 會找不到 → 先解引號(r2 delta major)
++  if [[ "$path" == \"*\" ]]; then
++    path="${path:1:${#path}-2}"; path="${path//\\\"/\"}"; path="${path//\\\\/\\}"; path="${path//\\t/$'\t'}"
++  fi
++  base="${path##*/}"; base="${base#"${base%%[!.]*}"}"; [[ "$base" == *.* ]] && return 1   # 去掉所有開頭的點再看有沒有副檔名(.pythonrc、..foo 也要看 shebang)
+   local first; first="$(git show "HEAD:$path" 2>/dev/null | head -c 200 | head -n 1)" || return 1
+   [[ "$first" == "#!"* ]]   # 任何 shebang 都算(不列直譯器清單:r1 外家 #!/bin/dash 漏判;四處同一條規則,由 t_code_exts_four_lists_agree 釘)
+ }
+ should_exclude() {
+   local path="$1"
+   case "$path" in
+     docs/*|*/node_modules/*|*/bin/*|*/obj/*|*/.git/*|*/dist/*|*/build/*|*/__pycache__/*) return 0;;
+     *package-lock.json|*yarn.lock|*pnpm-lock.yaml) return 0;;
+     # vendored 工具白名單+源 repo 守門(與 pre-commit 完全對齊,2026-07-25):例行 lumos update
+     # 的 vendored .py 不該進 bypass 帳(pre-commit 已放行,這裡再記=假 bypass 灌水稀釋真訊號)。
+diff --git a/scripts/hooks/pre-commit b/scripts/hooks/pre-commit
+index 2b01e72..fa141e6 100755
+--- a/scripts/hooks/pre-commit
++++ b/scripts/hooks/pre-commit
+@@ -114,21 +114,26 @@ sync_nudge() {   # $1=diff range(或 staged)
+   local _py; _py="$(command -v python3 || command -v python || true)"
+   [ -n "$_py" ] && [ -f "$REPO_ROOT/scripts/lumos" ] || return 0
+   "$_py" "$REPO_ROOT/scripts/lumos" impact --diff "$1" --sync-only --repo "$REPO_ROOT" 1>&2 2>/dev/null || true
+ }
+ 
+ # Gate 2: code 副檔名 (對齊 check-graph-sync.py CODE_EXTS)
+ CODE_EXTS_RE='\.(cs|vue|js|ts|tsx|jsx|mjs|sql|py|kt|kts|java|swift|go|rs|c|cc|cpp|h|hpp|sh|ps1)$'  # sh/ps1 2026-08-21 補(體檢 #7);四份清單由 t_code_exts_four_lists_agree 釘
+ 
+ # 排除路徑
+ is_shebang_code() {   # 沒副檔名的檔:看 staged 內容首行是不是 #!(2026-09-05 README 審視 d1:scripts/lumos 這種主程式五月起 26 次漏過)
+-  local path="$1" base; base="${path##*/}"; [[ "${base#.}" == *.* ]] && return 1   # 去掉開頭的點再看有沒有副檔名(.pythonrc 這種也要看 shebang)
++  local path="$1" base
++  # git 對含 " \ 或控制字元的檔名會印成 C 式引號("a\"b");拿去 git show 會找不到 → 先解引號(r2 delta major)
++  if [[ "$path" == \"*\" ]]; then
++    path="${path:1:${#path}-2}"; path="${path//\\\"/\"}"; path="${path//\\\\/\\}"; path="${path//\\t/$'\t'}"
++  fi
++  base="${path##*/}"; base="${base#"${base%%[!.]*}"}"; [[ "$base" == *.* ]] && return 1   # 去掉所有開頭的點再看有沒有副檔名(.pythonrc、..foo 也要看 shebang)
+   local first; first="$(git show ":$path" 2>/dev/null | head -c 200 | head -n 1)" || return 1
+   [[ "$first" == "#!"* ]]   # 任何 shebang 都算(不列直譯器清單:r1 外家 #!/bin/dash 漏判;四處同一條規則,由 t_code_exts_four_lists_agree 釘)
+ }
+ should_exclude() {
+   local path="$1"
+   case "$path" in
+     docs/*|*/node_modules/*|*/bin/*|*/obj/*|*/.git/*|*/dist/*|*/build/*|*/__pycache__/*) return 0;;
+     *package-lock.json|*yarn.lock|*pnpm-lock.yaml) return 0;;
+     # vendored 工具白名單(lumos 自有物,例行 lumos update 不該撞圖譜閘;2026-07-25)。
+     # ★精確白名單,非 scripts/* 整夾★——專案自有 scripts/foo.py 仍照擋。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b01d7ca..6b9fc16 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -5559,20 +5559,24 @@ def t_precommit_shebang_script_counts_as_code():
+         subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+         return subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True, env=dict(os.environ, GIT_DIR=str(root / ".git")))
+     r1 = run({"scripts/lumos": "#!/usr/bin/env python3\nprint(1)\n"})
+     check("precommit shebang: 只改無副檔名的 python 主程式、不帶節點 → 擋", r1.returncode != 0 and "擋下" in r1.stderr + r1.stdout, f"rc={r1.returncode} {(r1.stderr+r1.stdout)[-160:]}")
+     r2 = run({"NOTES": "just prose\n", "bin/tool": "#!/bin/dash\necho hi\n"})
+     check("precommit shebang: #!/bin/dash 也算程式碼 → 擋(r1 外家:直譯器清單漏 dash)", r2.returncode != 0, f"rc={r2.returncode}")
+     r2b = run({"bin/tool2": "#!/usr/bin/env -S python3 -u\nprint(1)\n"})
+     check("precommit shebang: env -S 形式也算 → 擋", r2b.returncode != 0, f"rc={r2b.returncode}")
+     r2c = run({".pythonrc": "#!/usr/bin/env python3\nx=1\n"})
+     check("precommit shebang: 只有開頭一個點的 dotfile 也看 shebang → 擋(通才 minor)", r2c.returncode != 0, f"rc={r2c.returncode}")
++    r2d = run({'bin/weird"tool': "#!/bin/dash\necho\n"})
++    check("precommit shebang: 檔名含雙引號(git 印成 C 式引號)也讀得到 → 擋(r2 delta major)", r2d.returncode != 0, f"rc={r2d.returncode} {(r2d.stderr+r2d.stdout)[-120:]}")
++    r2e = run({"..foo": "#!/bin/sh\necho\n"})
++    check("precommit shebang: 開頭兩個點的檔名也看 shebang → 擋", r2e.returncode != 0, f"rc={r2e.returncode}")
+     r3 = run({"NOTES": "just prose\n", "Makefile": "all:\n\ttrue\n"})
+     check("precommit shebang: 無副檔名純文字/Makefile 不算程式碼 → 放行", r3.returncode == 0, f"rc={r3.returncode} {(r3.stderr+r3.stdout)[-160:]}")
+ 
+ 
+ def t_merge_dedupes_preexisting_duplicates():
+     """體檢 #1(2026-08-21):舊版安裝器留下同一 hook 兩份註冊(真機 settings.json 實證:
+     verification-rot-check/check-graph-sync 各兩份,每次事件跑兩遍)。merger 每次執行都要自癒去重。"""
+     import json, os, subprocess, sys
+     fake_home = Path(tempfile.mkdtemp(prefix="gctl-dedupe-"))
+     (fake_home / ".claude" / "hooks").mkdir(parents=True)
