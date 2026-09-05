@@ -178,10 +178,21 @@ def build_msg(out):
     return head + ";" + ";".join(parts)
 
 
+def build_log_lines(out):
+    """給 wrapper 逐行 log 的白話摘要(2026-09-05 第二輪審視 d4;架構 r1 A:文字在 python 端組、shell 只抽 LOG: 前綴——
+    原本 shell 端 cut -c1-160 剛好切掉 red/stale,翻案了也看不見)。第一行永遠有計數;紅燈另起一行點名。"""
+    lines = [f"跑了 {len(out.get('replayed', []))} 包;翻案(紅) {len(out.get('red', []))};過期(制度演進) {len(out.get('stale', []))};錯誤 {len(out.get('errors', []))}"]
+    if out.get("red"):
+        lines.append("🔴 回放紅燈要人看:" + ",".join(out["red"][:5]) + "(逐個 lumos loop replay <id> --golden governance/replay/<id>/verdict.json)")
+    return lines
+
+
 if __name__ == "__main__":
     import sys
     r = run_weekly(sys.argv[1] if len(sys.argv) > 1 else ".")
     print(json.dumps(r, ensure_ascii=False))
+    for _l in build_log_lines(r):
+        print("LOG:" + _l)
     m = build_msg(r)
     if m:
         print("MSG:" + m)

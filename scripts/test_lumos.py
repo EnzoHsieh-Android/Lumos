@@ -25730,18 +25730,37 @@ def t_dispatch_lens_spec_mode():
     check("lens-spec: rc0、mode=spec、抓到計劃提到的 hook 檔", rc == 0 and d["mode"] == "spec" and "scripts/hooks/claude/check-graph-sync.py" in d["code_files"], str(d.get("code_files")))
     check("lens-spec: 太泛的單檔 CLI/總測試檔整檔略過並列在 too_generic", any(x.startswith("scripts/lumos(") for x in d["too_generic"]), str(d["too_generic"]))
     check("lens-spec: 有固定席、文字帶標頭、Projects 不進固定席", d["pinned"] > 0 and d["text"].startswith(m._LENS_SPEC_HEADER) and "Projects/" not in "\n".join(l for l in d["text"].splitlines() if l.startswith("- ") and "計劃連結" not in l), d["text"][:200])
-    check("lens-spec: 計劃直接連結的 Systems 節點排最前", d["linked"] >= 1 and "[計劃連結]" in d["text"].splitlines()[2], d["text"].splitlines()[2][:120])
-    # 沒有線索的計劃
-    tmp = Path(_tf.mkdtemp(prefix="gctl-lspec-")) ; spec = tmp / "empty.md"; spec.write_text("# 空計劃\n只有散文,沒提任何檔也沒連結。\n", encoding="utf-8")
+    first_node = next((l for l in d["text"].splitlines() if l.startswith("- ")), "")
+    check("lens-spec: 計劃直接連結的 Systems 節點排最前(就算也被 impact 命中)", d["linked"] >= 1 and "計劃連結" in first_node, first_node[:120])
+    # 沒有線索的計劃(要在一個 repo 內:計劃路徑必須在 repo 裡)
+    import subprocess as _sp0
+    tmp = Path(_tf.mkdtemp(prefix="gctl-lspec-")); _sp0.run(["git", "-C", str(tmp), "init", "-q"], capture_output=True)
+    (tmp / "docs" / "x-knowledge").mkdir(parents=True); spec = tmp / "empty.md"; spec.write_text("# 空計劃\n只有散文,沒提任何檔也沒連結。\n", encoding="utf-8")
     buf = _io.StringIO()
     with _cl.redirect_stdout(buf):
-        rc2 = m.cmd_dispatch_lens_spec(str(spec), repo=str(repo), as_json=True)
+        rc2 = m.cmd_dispatch_lens_spec(str(spec), repo=str(tmp), as_json=True)
     d2 = _j.loads(buf.getvalue().strip().splitlines()[-1])
     check("lens-spec: 沒線索的計劃 → listed 0、text 空(hook 會判不注入)", rc2 == 0 and d2["listed"] == 0 and d2["text"] == "", str(d2)[:120])
     buf = _io.StringIO()
     with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
-        rc3 = m.cmd_dispatch_lens_spec(str(tmp / "nope.md"), repo=str(repo), as_json=True)
+        rc3 = m.cmd_dispatch_lens_spec(str(tmp / "nope.md"), repo=str(tmp), as_json=True)
     check("lens-spec: 計劃不存在 rc2", rc3 == 2, str(rc3))
+    # 有檔但 0 席:在臨時 repo 放一個沒人引用的程式檔,計劃提到它 → 應有一行「沒牽到」說明而不是空字串
+    (tmp / "scripts").mkdir(); (tmp / "scripts" / "lonely.py").write_text("x = 1\n", encoding="utf-8")
+    spec2 = tmp / "p2.md"; spec2.write_text("# 計劃\n會改 scripts/lonely.py 這支。\n", encoding="utf-8")
+    buf = _io.StringIO()
+    with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
+        rc5 = m.cmd_dispatch_lens_spec(str(spec2), repo=str(tmp), as_json=True)
+    d5 = _j.loads(buf.getvalue().strip().splitlines()[-1])
+    check("lens-spec: 有檔但沒牽到節點 → text 一行說明(編排者知道鏡頭有跑、不是壞掉)", rc5 == 0 and d5["listed"] == 0 and "沒牽到任何帶合約/事故的節點" in d5["text"], str(d5)[:160])
+    buf = _io.StringIO()
+    with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
+        rc4 = m.cmd_dispatch_lens_spec("/etc/hosts", repo=str(repo), as_json=True)
+    check("lens-spec: repo 外的計劃路徑 rc2(外家 r1 M3)", rc4 == 2, str(rc4))
+    import subprocess as _sp2
+    r5 = _sp2.run([sys.executable, GRAPHCTL, "dispatch-lens", "--spec", "x.md", "--status", "--repo", str(repo)], capture_output=True, text=True)
+    check("lens-spec: --spec 與其他模式旗標同時給 → rc2 互斥(架構 r1 B)", r5.returncode == 2 and "一次只能給一個" in r5.stderr, r5.stderr[:120])
+    check("lens: 兩種模式共用同一個渲染 helper(架構 r1 D)", "_lens_render_listed(lines, listed, _read_base" in Path(GRAPHCTL).read_text(encoding="utf-8") and "_lens_render_listed(lines, listed, _read_wt" in Path(GRAPHCTL).read_text(encoding="utf-8"), "")
 
 
 def t_dispatch_lens_hook_timeout_notice_and_spec_marker():
@@ -25766,6 +25785,10 @@ def t_dispatch_lens_hook_timeout_notice_and_spec_marker():
     out = _io.StringIO()
     with patch.object(m.subprocess, "run", fake_run), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
         rc = m.main()
+    out2 = _io.StringIO()
+    with patch.object(m.subprocess, "run", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out2):
+        m.main()
+    check("lens-hook spec 超時: 超時句給的是 --spec 指令而不是把路徑當範圍(通才 r1 #1)", "lumos dispatch-lens --spec docs/lumos-toolchain-knowledge/Projects/X_計劃.md" in out2.getvalue(), out2.getvalue()[:200])
     check("lens-hook spec 標記: 叫的是 dispatch-lens --spec <計劃> 並把回傳附進派工詞", rc == 0 and "--spec" in seen.get("argv", []) and "docs/lumos-toolchain-knowledge/Projects/X_計劃.md" in seen.get("argv", []) and "lumos 自動附加(設計審)" in out.getvalue(), str(seen.get("argv"))[:200])
     check("lens-hook: 沒有任何標記 → 不動", m.find_marker("hi") is None and m.find_spec_marker("hi") is None, "")
 

@@ -1130,6 +1130,15 @@ class TestLoopShellTrapR2Folds(unittest.TestCase):
 
 
 class TestReplayWeekly(unittest.TestCase):
+    def test_build_log_lines_counts_and_red(self):
+        """第二輪審視六修 d4/架構 r1 A:log 文字在 python 端組——第一行永遠有四個計數,紅燈另起一行點名。"""
+        from autonomous_loop import replay_weekly
+        out = {"replayed": ["a", "b"], "red": ["a"], "stale": [], "errors": ["x"], "frozen": [], "skipped": [], "unfreezable": []}
+        lines = replay_weekly.build_log_lines(out)
+        self.assertEqual(lines[0], "跑了 2 包;翻案(紅) 1;過期(制度演進) 0;錯誤 1")
+        self.assertTrue(lines[1].startswith("🔴 回放紅燈要人看:a"))
+        self.assertEqual(len(replay_weekly.build_log_lines({"replayed": []})), 1)
+
     """改制回測 [S4] 週跑模組:輪替游標/新凍必跑/預算截斷/紅與過期分流/補漏凍結。"""
 
     def setUp(self):

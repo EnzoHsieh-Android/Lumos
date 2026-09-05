@@ -336,7 +336,8 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
 
 
 def _scenario_max_turns(sc, default):
-    """每題可自帶 max_turns(2026-09-05 第二輪審視 d6:s15 這種要先查再建的題 18 步不夠,24 步時被砍在建檔前)。壞值退預設。"""
+    """每題可自帶 max_turns(2026-09-05 第二輪審視 d6:s15 這種要先查再建的題 18 步不夠,24 步時被砍在建檔前)。壞值退預設。
+    ★只影響 claude runner:codex exec 沒有 --max-turns 這種旗標,codex runner 忽略此欄(外家 r1 m3,誠實寫在這裡與 --help)。★"""
     try:
         v = int(sc.get("max_turns", default))
         return v if v > 0 else default
@@ -433,7 +434,7 @@ def main():
     # 三題全假紅。假紅的下一步永遠是有人把閘關掉,所以預設本身要夠。
     # ★為什麼不設更大★:步數上限不是「越寬越安全」。給太多步,那些其實在瞎繞的題也可能
     # 繞到答對,反而把問題蓋掉。18 = 最慢那題(12 步)加一半餘裕,不是拍腦袋。
-    ap.add_argument("--max-turns", type=int, default=18)
+    ap.add_argument("--max-turns", type=int, default=18, help="claude runner 的回合上限(每題可用 max_turns 欄覆寫;codex runner 沒有對應旗標、忽略此值)")
     ap.add_argument("--timeout", type=int, default=240)
     ap.add_argument("--model", default="")
     ap.add_argument("--out", default="")
