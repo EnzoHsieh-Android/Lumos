@@ -343,7 +343,7 @@ Added 2026-09-05 after checking every README claim against the code, ledgers and
 
 ## Scope & further reading
 
-Lumos only holds the **generic graph toolchain**. Project-specific things (business graph content, release scripts, tech-stack skills) don't live here.
+Lumos only holds the **generic graph toolchain**: the graph CLI, its gates and hooks, and cross-project tech-stack convention skills (kotlin / vue / csharp-idioms — they belong to no single project, so they live here). Project-specific things stay out: business graph content, release scripts, and framework choices only one project uses.
 
 - Onboarding details: [ONBOARDING.md](ONBOARDING.md)
 - Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md)

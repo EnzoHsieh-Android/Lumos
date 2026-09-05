@@ -57,6 +57,14 @@ python3 scripts/lumos bootstrap     # 一鍵:自動裝好 Lumos 本體、skills�
 
 然後**重啟 Claude Code session**(有些提示是在 session 開頭載入的)。
 
+裝好了嗎:
+
+```bash
+lumos enforcement
+```
+
+它列每一層防護是「有沒有裝上、接上」——不是判得對不對。全綠代表 hook 註冊了、檔案在、版本對;Codex 那幾行會停在「已註冊、要不要跑本機讀不到」,那是天生測不到,不是壞了。
+
 ### 3b. 全新專案要導入(一條指令)
 
 站在你的專案目錄裡跑:
@@ -70,6 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh
 - 問句**預設是 N**:站在不想導入的目錄(例如 dotfiles)按 Enter 就跳過,不會誤裝。
 - 不想盲跑遠端腳本?先 `curl -fsSL <網址> -o get.sh` 下載審閱再執行。
 - CI 等非互動環境:結尾加 `-s -- --init` 免確認直接建。
+- 裝完重啟 session,然後跑一次 `lumos enforcement` 確認每層防護都接上了(說明見 3a)。
 
 <details><summary>Windows(原生 PowerShell)</summary>
 
@@ -343,8 +352,12 @@ lumos gov OrderService   # 這個節點被哪幾道關攔過、硬擋還是提�
 
 ## 邊界與延伸閱讀
 
-Lumos 只放**通用的圖譜工具組**。各專案自己的東西(業務圖譜內容、發版腳本、技術棧 skill)不進這裡。
+Lumos 只放**通用的圖譜工具組**:圖譜 CLI、各種閘與 hook,以及跨專案通用的技術棧慣例 skill(kotlin / vue / csharp-idioms——它們不綁任何一個專案,所以住在這裡)。各專案自己的東西不進來:業務圖譜內容、發版腳本、只有那個專案在用的框架選型。
 
 - 上手細節:[ONBOARDING.md](ONBOARDING.md)
 - 架構全景:[ARCHITECTURE.md](ARCHITECTURE.md)
 - 與 SDD(規格驅動開發)的差異:[SDD-vs-Lumos.md](SDD-vs-Lumos.md)
+- 這套方法為什麼長這樣(白話,含 22 道檢查的全景圖):
+  - [圖譜即合約](docs/methodology/圖譜即合約.md) — 核心主張與它的天花板
+  - [圖譜即合約-全景圖](docs/methodology/圖譜即合約-全景圖.md) — 一張圖看完所有閘與檢查
+  - [圖譜即合約-對外論述](docs/methodology/圖譜即合約-對外論述.md) — 講給沒有脈絡的外部讀者聽的版本
