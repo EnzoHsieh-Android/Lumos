@@ -25847,9 +25847,10 @@ def t_delguard_logs_ok_too():
     check("delguard 部分結果: 掃描被 deadline 截斷 → 帳記 degraded reason=timeout-partial 且 --json degraded=true+reason", rc2 == 0 and len(partial) == 1 and j2.get("degraded") is True and j2.get("reason") == "timeout-partial", (str(j2)[:160], txt2[-200:]))
     # 第三輪稽核:gov 呈現層要把同日多筆 delguard 帳折成 ×N(原條件要 detail 為空,永遠折不到)
     r3 = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)
-    g = _sp.run([sys.executable, GRAPHCTL, "gov", "--since-days", "1"], cwd=str(root), capture_output=True, text=True, timeout=120)
-    dl = [l for l in g.stdout.splitlines() if "delguard" in l]
-    check("gov 折疊 delguard: 同日多筆 ok/degraded 折成一行帶 ×N", len(dl) >= 1 and any("×" in l for l in dl) and len(dl) <= 2, (g.stdout[-300:], g.stderr[-120:]))
+    g = _sp.run([sys.executable, GRAPHCTL, "gov", "--since", "1"], cwd=str(root), capture_output=True, text=True, timeout=120)
+    n_ok_ledger = sum(1 for l in log.read_text(encoding="utf-8").splitlines() if '"gate": "delguard"' in l and '"kind": "ok"' in l)
+    ok_rows = [l for l in g.stdout.splitlines() if "delguard/ok" in l]
+    check("gov 折疊 delguard: 帳上兩筆同日 ok 在預設視圖只佔一行(折成一行,不洗版)", n_ok_ledger == 2 and len(ok_rows) == 1, (n_ok_ledger, g.stdout[-240:]))
 
 
 if __name__ == "__main__":
