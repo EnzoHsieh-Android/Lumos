@@ -11,7 +11,7 @@ flowchart TB
         CLI["scripts/lumos<br/>(python3 標準庫單檔 CLI)"]
         TEST["scripts/test_lumos.py"]
         GHOOKS["scripts/hooks/<br/>git: pre-commit / post-commit / pre-push"]
-        CHOOKS["scripts/hooks/claude/<br/>四個時點的自動提醒:進場(先查圖譜、哪層防護掉了、上次 CI 結果) · 改檔前(這個檔會波及哪些節點) · 派審查員前(把相關節點附進派工單) · 收工(改了 code 沒動節點:Claude 提醒 / Codex 擋一次)<br/>同一批檔兩家共用;改檔後的腐化偵測 2026-08-21 撤除"]
+        CHOOKS["scripts/hooks/claude/<br/>四個時點的自動提醒:進場(先查圖譜、哪層防護掉了、上次 CI 結果) · 改檔前(這個檔會波及哪些節點) · 派審查員前(把相關節點附進派工單) · 收工(改了 code 沒動節點:兩家都擋一次要補)<br/>同一批檔兩家共用;改檔後的腐化偵測 2026-08-21 撤除"]
         INST["安裝器<br/>get.sh · get.ps1 · install.sh<br/>install-hooks.sh · install-graph-toolchain.sh · merge-claude-settings.py"]
         TPL["scripts/templates/graph-discipline.md<br/>(圖譜先行紀律範本)"]
         RENAME["scripts/graph-rename.sh · fetch-notesmd.sh<br/>(notesmd move 封印)"]
@@ -148,7 +148,7 @@ flowchart TB
         ENTRY["一進場(SessionStart)<br/>提醒「第一個動作先查圖譜」<br/>+ 哪層防護掉了才多一行 + 上次 CI 結果"]
         PRE["改檔之前(PreToolUse: impact-hook)<br/>把「這個檔會波及哪些節點、這裡出過什麼事故」推到眼前<br/>(Codex 改檔走 apply_patch,一樣接得到)"]
         LENS["派審查員之前(dispatch-lens)<br/>把相關節點自動附進派工單,連同「規則綁的測試還在不在」<br/>Claude:改派工單 / Codex:審查員開場自己領一份"]
-        STOPH["收工時(Stop: check-graph-sync)<br/>改了 code 卻沒動節點 → Claude 印提醒 / Codex 擋一次要它補<br/>(環境變數 LUMOS_STOP_BLOCK_OFF=1 可關)"]
+        STOPH["收工時(Stop: check-graph-sync)<br/>改了 code 卻沒動節點 → 兩家都擋一次,要它補或說明<br/>(2026-09-05 起;之前 Claude 的『提醒』只進除錯日誌)<br/>(環境變數 LUMOS_STOP_BLOCK_OFF=1 可關)"]
     end
 
     EDIT["改 code + 圖譜"] --> PC{"pre-commit (git)"}

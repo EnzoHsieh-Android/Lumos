@@ -87,7 +87,7 @@ cd <your-project>; lumos init
 **Works with both Claude Code and Codex CLI** (since 2026-09; details and known limits in the graph node `Systems/codex-harness`):
 
 - **One install, both harnesses**: a single `lumos install` wires skills, hook registrations and the discipline block into both (Claude: `~/.claude` + `CLAUDE.md`; Codex: `~/.codex/hooks.json`, `~/.agents/skills`, `AGENTS.md`, custom reviewer seat `lumos_reviewer`). Codex hooks only run after you open an interactive `codex` once and pick "Trust all" (trust binds to the command line, so later hook updates from lumos need no re-approval); `lumos enforcement` shows every layer's state.
-- **Same hooks, two end-of-turn behaviours**: when code changed but no note did, the Claude side only reminds; the Codex side is blocked once and asked to write the note or say in one line why not — once per session. Switch off with `LUMOS_STOP_BLOCK_OFF=1`.
+- **Same hooks, same end-of-turn behaviour**: when code changed but no node did, the turn is blocked once and the model is asked to write the node or say in one line why not — once per session, on both harnesses (before 2026-09-05 the Claude side only wrote to a debug log nobody saw). Switch off with `LUMOS_STOP_BLOCK_OFF=1`.
 - **Codex as loop orchestrator**: first round `lumos loop next <id> --orchestrator codex`; right before dispatching reviewers run `lumos dispatch-lens --arm <base>..HEAD --seats N` (Codex hooks cannot read the dispatch message, so each subagent claims a seat on start), then `--disarm`; name the reviewer seat `lumos_reviewer` (selectable from Codex 0.153.2).
 - **Measurable**: the scenario probe `scripts/scenario_probe.py --runner codex` runs the same question set against Codex; `--stop-block off` is the control arm for the end-of-turn block.
 - **An old gap fixed on the way**: the end-of-turn check used to recognise code only by file extension, so extension-less entry points like this repo's `scripts/lumos` were never flagged; files whose first line is a shebang now count as code, on both harnesses.
@@ -159,7 +159,7 @@ The structured fields at the top of a note (status, links, decisions) go through
 Enter  ── lumos search <keyword> → lumos context <node> → lumos contracts <node>   (read the graph before touching)
 Design ── write it as a plan note; before implementation run design-loop (a few uninformed AI reviewers pick it apart)
 Build  ── change code; hooks push "which notes this touches, which incidents fired here" right at you
-Wrap   ── code changed but no note did? the Stop hook reminds (Claude) or blocks once (Codex)
+Wrap   ── code changed but no node did? the Stop hook blocks once and asks you to write or explain (both harnesses)
 Write  ── lumos set / append / decision-add to record decisions, verifications, contracts
 Check  ── lumos lint <node> (quick single-note check) → lumos doctor (whole-graph health)
 Review ── lumos pitfalls --diff rates the risk of this change; high risk goes through code-loop (adversarial code review)
@@ -171,7 +171,7 @@ Enforcement, soft to hard:
 | Layer | What it does | Blocking? |
 |---|---|---|
 | impact push | Before you edit, tells you which notes are affected | Advisory only |
-| Stop hook at end of turn | Names the notes when code changed but none of them did | Claude: advisory; Codex: blocks once per session |
+| Stop hook at end of turn | Code changed, no node touched → blocked once, asked to write or explain | Both harnesses: once per session (`LUMOS_STOP_BLOCK_OFF=1` disables) |
 | `lumos lint` | Quick single-note check | Early warning |
 | `lumos doctor` | Whole-graph health (orphans, broken links, naked contracts, missing rollbacks) | Blocks in `--ci` mode |
 | `code-loop` | High-risk change without code review | Hard-blocks at push |
@@ -322,6 +322,20 @@ It's for **development visibility** (what keeps ringing = what needs attention),
 - **Don't over-govern**: chain only load-bearing claims; keep soft things soft; no ceremony without matching value.
 - **The honesty ceiling**: the tooling proves form, not business correctness; where it can't speak, it says so.
 - **The maker doesn't referee** (maker ≠ checker): judgments without a ground truth go to an uninformed independent AI, not the author.
+
+---
+
+## 11. Cost and limits (where reality lags the idea)
+
+Added 2026-09-05 after checking every README claim against the code, ledgers and measurements. Each line says what the mechanism can and cannot do, with numbers where we have them.
+
+- **"Blocks code without a node" means "without touching any node at all".** Any note in the commit passes; whether it was the right note is only a one-line nudge (`lumos impact --sync-check`). It decides "is this code" by extension plus a first-line shebang; from May to September, 26 commits touching only the extension-less main CLI `scripts/lumos` slipped through until the shebang check landed on 2026-09-05.
+- **The "reviewed" receipt is self-issued.** `lumos code-loop pass` does not verify that a review happened or that the ledger has that round; `anchor approve` is likewise a signed note. Both catch "forgot", not "went through the motions" — that layer is always a human.
+- **Nodes attached to reviewer briefs are mostly not opened.** Our own first measurement: 0 of 16 single-node attachments were read, 0–1 of 11 code-file cases; only the 11-plus-node attachments were used about half the time. The reviewer-seat variant is not measured yet (2026-10-03).
+- **"Every finding disposed" checks bookkeeping, not content.** Finding ids are typed by the orchestrator; the gate only checks that folded + declined equals the full set, not that the document actually improved.
+- **The end-of-turn block fires once and for one condition.** Code changed, no node touched, once per session; a one-line "no note needed" counts as disposed and is not verified. Before 2026-09-05 the Claude side did not even have that — its "soft reminder" went to a debug log nobody sees.
+- **Money.** One high-risk code review (code-loop) costs about 190k tokens; 9.3M over seven days. One design review about 50k. The daily autonomous design loop burned 210–330 USD per week for seven weeks and produced 0 approvable designs; dispatch is paused since 2026-09-05 (`LUMOS_AUTOLOOP=1` re-enables), decision due 2026-10-05.
+- **`lumos enforcement` saying "active" means registered, file present, version current** — not that the layer has an effect; it cannot see whether the five Codex hooks were ever trusted.
 
 ---
 

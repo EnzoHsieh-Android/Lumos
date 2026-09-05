@@ -87,7 +87,7 @@ cd <你的專案>; lumos init
 **Claude Code 與 Codex CLI 都支援**(2026-09 起;細節與界線見圖譜 `Systems/codex-harness`):
 
 - **裝一次接兩家**:同一次 `lumos install` 把 skills、hook 註冊、紀律區塊接到兩家(Claude:`~/.claude`+`CLAUDE.md`;Codex:`~/.codex/hooks.json`、`~/.agents/skills`、`AGENTS.md`、自訂審查席 `lumos_reviewer`)。Codex 的 hook 要你開一次互動 `codex` 按「Trust all」才會跑(信任綁的是命令列,之後 lumos 更新 hook 內容不用重按);`lumos enforcement` 看得到各層狀態。
-- **同一批 hook、兩種收工行為**:改了程式碼卻沒動筆記時,Claude 側收工只提醒;Codex 側會被擋一次、要它補筆記或說一句為什麼不用,同一個 session 只擋一次。要關:環境變數 `LUMOS_STOP_BLOCK_OFF=1`。
+- **同一批 hook、同一種收工行為**:改了程式碼卻沒動節點時,收工會被擋一次、要它補節點或說一句為什麼不用,同一個 session 只擋一次,兩家一樣(Claude 側原本只印到沒人看得到的除錯日誌,2026-09-05 起改成一樣擋)。要關:環境變數 `LUMOS_STOP_BLOCK_OFF=1`。
 - **用 Codex 當編排者跑迴圈**:首輪 `lumos loop next <編號> --orchestrator codex`;派審查員前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`(Codex 的派工訊息 hook 讀不到,改由子代理開場自己領一席),派完 `--disarm`;審查席點名 `lumos_reviewer`(Codex 0.153.2 起選得中)。
 - **量得到**:情境探針 `scripts/scenario_probe.py --runner codex` 對 Codex 跑同一批題;`--stop-block off` 是收工擋停的對照組。
 - **順帶修的一個老洞**:收工檢查以前只認副檔名,像本 repo 的 `scripts/lumos` 這種沒副檔名的主程式從來沒被提醒過;現在首行是 shebang 的檔也算程式碼,兩家都受惠。
@@ -159,7 +159,7 @@ KEY:★CHECKPOINT★   <改了難救:例如部署到測試機>
 進場 ── lumos search <關鍵字> → lumos context <節點> → lumos contracts <節點>   (動手前先讀圖譜)
 設計 ── 寫成計劃筆記,進實作前跑 design-loop(派幾個不知情的 AI 審稿挑洞)
 動工 ── 改 code;改到檔案時 hook 自動把「會波及哪些筆記、踩過什麼雷」推到你眼前
-收工 ── 改了 code 沒動筆記,Stop hook 會提醒(Claude)或擋一次要你補(Codex)
+收工 ── 改了 code 沒動節點,Stop hook 擋一次要你補或說明(兩家一樣,同 session 只一次)
 寫回 ── lumos set / append / decision-add 記決策、驗證、合約
 自驗 ── lumos lint <節點>(單篇快檢)→ lumos doctor(全圖健檢)
 終審 ── lumos pitfalls --diff 算這批改動的風險級;高風險走 code-loop(對抗式代碼審)
@@ -171,7 +171,7 @@ KEY:★CHECKPOINT★   <改了難救:例如部署到測試機>
 | 層 | 做什麼 | 擋不擋 |
 |---|---|---|
 | impact 推播 | 改 code 前告訴你會波及哪些筆記 | 只提醒 |
-| 收工 Stop hook | 這一輪改了 code、筆記沒動就點名 | Claude 只提醒;Codex 同 session 擋一次 |
+| 收工 Stop hook | 這一輪改了 code、節點沒動就擋一次,要補或說明 | 兩家都擋一次(同 session 只一次;`LUMOS_STOP_BLOCK_OFF=1` 關) |
 | `lumos lint` | 單篇筆記快檢 | 提前預警 |
 | `lumos doctor` | 全圖健檢(孤兒、斷連、裸合約、缺回退) | `--ci` 模式會擋 |
 | `code-loop` | 高風險改動沒過代碼審 | push 時硬擋 |
@@ -322,6 +322,20 @@ lumos gov OrderService   # 這個節點被哪幾道關攔過、硬擋還是提�
 - **別治理過頭**:只給載重的宣稱掛鏈;軟提醒維持軟;不疊沒有對等價值的儀式。
 - **誠實的天花板**:工具證形式,不證業務正確;講不出的就明說講不出。
 - **寫的人不能自己當裁判**(maker ≠ checker):沒有標準答案的判斷,交給不知情的獨立 AI。
+
+---
+
+## 11. 成本與界線(理想跟現實的距離)
+
+2026-09-05 拿 README 逐條對回程式碼、帳本、量測後補的一節。每條寫「能做到什麼、做不到什麼、有數字的給數字」。
+
+- **「改 code 沒帶節點就擋」擋的是「一個字都沒動」。** 隨便帶一篇節點就過,動對篇不對篇只有一行提醒(`lumos impact --sync-check`)。另外它判「什麼算程式碼」看副檔名加首行 shebang;五月到九月有 26 個只改主程式 `scripts/lumos` 的 commit 因為沒副檔名而漏過,2026-09-05 才補上。
+- **「審過了」的憑證是自己開的。** `lumos code-loop pass` 不驗證有沒有真的開過審查、帳本上有沒有那一輪;`anchor approve` 也是簽名留痕而已。這兩道擋的是「忘了」,擋不住「敷衍」——那一層永遠是人。
+- **派工時附的節點,審查員大多沒打開。** 自己量出來的第一份報表:附 1 篇節點的 16 次裡 0 次被讀,程式碼檔相關的 11 次裡 0 到 1 次;只有一次附 11 篇以上的那種才有一半被碰。給審查席那一版還沒量(2026-10-03)。
+- **「每條意見都有交代才過關」驗的是帳目自洽,不是內容。** 意見編號是編排者自己取的,機器只查「折的加不採納的等於全部」,查不了「真的改進文件了沒」。
+- **收工擋停只擋一次,而且只擋一種情況。** 改了程式碼、節點一個字沒動,同一個 session 擋一次;模型回一句「不用寫」就算交代,工具不驗那句對不對。在 2026-09-05 之前 Claude 側連這一次都沒有——舊的「軟提醒」印在只有除錯日誌看得到的地方。
+- **錢。** 高風險程式碼審(code-loop)一次約 19 萬 token,七天量到 930 萬;設計審一次約 5 萬。每天自動跑的設計迴圈連續七週每週燒 210 到 330 美元、產出 0 份可放行的設計,2026-09-05 起暫停派工(`LUMOS_AUTOLOOP=1` 可開回),2026-10-05 決定去留。
+- **`lumos enforcement` 說「生效」= 有註冊、檔案在、版本對**,不代表那層有效果;Codex 那五支 hook 有沒有按過信任它測不到。
 
 ---
 

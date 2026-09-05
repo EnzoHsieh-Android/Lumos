@@ -5522,6 +5522,34 @@ def t_code_exts_four_lists_agree():
         check(f"code-exts: {k} 與 pre-commit 一致", v == ref, f"{k}: +{sorted(v - ref)} -{sorted(ref - v)}")
     for ext in (".sh", ".ps1"):
         check(f"code-exts: 含 {ext}(外家席腳本溜過同步閘的教訓)", ext in ref, str(sorted(ref)))
+    # 2026-09-05 README 審視 d1:副檔名只是第一關,沒副檔名的 shebang 腳本四份都要認(scripts/lumos 五月起 26 次漏過 pre-commit)
+    for k, fn in (("pre-commit", "is_shebang_code"), ("post-commit", "is_shebang_code"), ("check-graph-sync.py", "_shebang_script"), ("impact-hook.py", "_shebang_is_code")):
+        path = root / "hooks" / (k if not k.endswith(".py") else f"claude/{k}")
+        check(f"code-exts: {k} 認 shebang 腳本({fn})", fn in path.read_text(encoding="utf-8"), "")
+
+
+def t_precommit_shebang_script_counts_as_code():
+    """README 審視 d1(2026-09-05):只改沒副檔名的主程式(如 scripts/lumos,首行 #!/usr/bin/env python3)、不帶節點 → 源 repo 內 pre-commit 要擋;
+    沒副檔名的純文字檔(NOTES)不算程式碼 → 放行。實證前:五月起 26 個只改 scripts/lumos 的 commit 全部放行。"""
+    import subprocess, os, tempfile as _tf
+    if not hasattr(os, "setsid"):
+        print("  - skip(非 POSIX)"); return
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit"
+    def run(files):
+        root = Path(_tf.mkdtemp(prefix="gctl-pcsb-"))
+        subprocess.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+        (root / "docs" / "x-knowledge").mkdir(parents=True); (root / "docs" / "x-knowledge" / ".keep").write_text("", encoding="utf-8")
+        (root / "skills" / "lumos-project-notes").mkdir(parents=True)   # 源 repo 模式:vendored 白名單不豁免
+        for rel, content in files.items():
+            p = root / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+        return subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True, env=dict(os.environ, GIT_DIR=str(root / ".git")))
+    r1 = run({"scripts/lumos": "#!/usr/bin/env python3\nprint(1)\n"})
+    check("precommit shebang: 只改無副檔名的 python 主程式、不帶節點 → 擋", r1.returncode != 0 and "擋下" in r1.stderr + r1.stdout, f"rc={r1.returncode} {(r1.stderr+r1.stdout)[-160:]}")
+    r2 = run({"NOTES": "just prose\n", "bin/tool": "#!/bin/sh\necho hi\n"})
+    check("precommit shebang: /bin/sh 腳本也算程式碼 → 擋", r2.returncode != 0, f"rc={r2.returncode}")
+    r3 = run({"NOTES": "just prose\n", "Makefile": "all:\n\ttrue\n"})
+    check("precommit shebang: 無副檔名純文字/Makefile 不算程式碼 → 放行", r3.returncode == 0, f"rc={r3.returncode} {(r3.stderr+r3.stdout)[-160:]}")
 
 
 def t_merge_dedupes_preexisting_duplicates():
@@ -25605,7 +25633,9 @@ def t_codex_stop_block_once():
     r4 = run(sid="sess-3", env_extra={"LUMOS_STOP_BLOCK_OFF": "1"})
     check("stop-block⑤: LUMOS_STOP_BLOCK_OFF=1 不擋", "decision" not in r4.stdout, r4.stdout[:100])
     r5 = run(sid="sess-4", harness=False)
-    check("stop-block⑥: 沒帶 --harness codex(Claude 路徑)一行不動:stdout 空、stderr 提醒", r5.stdout.strip() == "" and r5.returncode == 0, (r5.stdout[:100], r5.stderr[:100]))
+    check("stop-block⑥: 沒帶 --harness codex(Claude 路徑)也擋一次(README 審視 d2:Claude 舊 stderr 提醒官方文件明講模型看不到)", '"block"' in r5.stdout and r5.returncode == 0, (r5.stdout[:100], r5.stderr[:100]))
+    r5b = run(sid="sess-4", harness=False)
+    check("stop-block⑥b: Claude 路徑第二次不擋,退回 stderr 提醒", "decision" not in r5b.stdout and r5b.returncode == 0, (r5b.stdout[:100], r5b.stderr[:100]))
     r6 = run(sid="", harness=True)
     check("stop-block⑦: session_id 缺 → 不擋(寧可漏)", "decision" not in r6.stdout, r6.stdout[:100])
     r9 = run(sid="..", harness=True)
@@ -25636,7 +25666,7 @@ def t_codex_stop_block_once():
                   capture_output=True, text=True, env=dict(os.environ, HOME=str(sl2)), timeout=60)
     check("stop-block㉒: 父層 ~/.cache/lumos 是 symlink → 不擋、目標裡的舊檔不被清、不寫標記", "decision" not in r12.stdout and old2.exists() and not (victim2 / "stop-block" / "sess-sl2").exists(), (r12.stdout[:80], old2.exists()))
     marks = list((home / ".cache" / "lumos" / "stop-block").iterdir())
-    check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記(sess-1 與 ㉑ 的 sess-ascii)", sorted(x.name for x in marks) == ["sess-1", "sess-ascii"] and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
+    check("stop-block⑧: 標記目錄 0700、只有擋過的 session 留標記(sess-1、⑥ 的 sess-4、㉑ 的 sess-ascii)", sorted(x.name for x in marks) == ["sess-1", "sess-4", "sess-ascii"] and (oct((home / ".cache" / "lumos" / "stop-block").stat().st_mode & 0o777) == "0o700"), str([x.name for x in marks]))
     # 無副檔名 shebang 腳本算程式碼(f02 後測 0/2 擋停的根因:本 repo 主程式 scripts/lumos 無副檔名)
     (repo / "scripts").mkdir(exist_ok=True); (repo / "scripts" / "lumos").write_text("#!/usr/bin/env python3\nx=1\n", encoding="utf-8")
     (repo / "scripts" / "notes").write_text("just text\n", encoding="utf-8"); (repo / "scripts" / "bin.dat").write_bytes(b"\x00\x01")

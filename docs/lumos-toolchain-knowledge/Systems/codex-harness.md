@@ -17,7 +17,7 @@ tags:
 summary: |-
   FLOW:lumos install →(Claude)~/.claude/hooks+settings.json+CLAUDE.md 區塊 /(Codex)~/.codex/hooks+hooks.json(--target codex,matcher 對照:Edit|Write→apply_patch、Agent→SubagentStart)+~/.agents/skills+AGENTS.md 同塊區塊+CODEX_HOME/agents/lumos_reviewer.toml → 使用者開一次互動 codex 按 Trust all → 之後 exec/互動兩模式 hook 都跑
   KEY:同一批 hook 腳本兩家共用,差異全在 --harness codex 旗標與註冊表:SessionStart 入口提醒(additionalContext)、PreToolUse impact-hook 取 apply_patch 的檔、SubagentStart dispatch-lens 領席(armed token)、Stop check-graph-sync 讀 Codex 逐字稿(版本表 0.144.1/0.153.2,不在表略過不猜)
-  KEY:★收工行為兩家不同(2026-09-05,[[Projects/Codex行為精修_計劃]])★:改了程式碼、筆記沒動 → Claude 只 stderr 提醒;Codex 回 decision:block 一次讓模型續做補筆記或一句話說明——名額先佔(~/.cache/lumos/stop-block/<session_id> O_EXCL 建成才擋;目錄整條路徑不得經 symlink、owner 自己、0700)+stop_hook_active 雙護欄,LUMOS_STOP_BLOCK_OFF=1 關;reason ≤1500 字、≤10 檔、檔名消毒包反引號並標明只是檔名。f02 後測 3/3 擋到、模型皆回一句說明;天花板=逼表態不是逼寫對
+  KEY:★收工擋一次(2026-09-05,[[Projects/Codex行為精修_計劃]];同日套到 Claude,[[Projects/README審視五修_計劃]] d2)★:改了程式碼、筆記沒動 → 兩家都回 decision:block 一次讓模型續做補筆記或一句話說明——名額先佔(~/.cache/lumos/stop-block/<session_id> O_EXCL 建成才擋;目錄整條路徑不得經 symlink、owner 自己、0700)+stop_hook_active 雙護欄,LUMOS_STOP_BLOCK_OFF=1 關;reason ≤1500 字、≤10 檔、檔名消毒包反引號並標明只是檔名。f02 後測 3/3 擋到、模型皆回一句說明;天花板=逼表態不是逼寫對
   KEY:★Codex 當編排者★:loop next 首輪必帶 --orchestrator codex(家族相對化:外家=非編排者那家);派工訊息對 hook 是密文(multi-agent v2 設計,改不了),鏡頭改走 dispatch-lens --arm <range> --seats N → 子代理 SubagentStart 原子領席(TTL 10 分,首行「LUMOS-LENS range=… 第 k/N 席」)→ --disarm;審查席點名 lumos_reviewer(0.153.2 選得中、0.144.1 忽略;唯讀靠父代理 --sandbox read-only,TOML sandbox_mode 不擋)
   KEY:★天生限制(工具補不了,誠實界線)★:①hook 要人按一次信任(綁 hooks.json 命令列,換檔內容不用重按;enforcement 對 Codex hook 只能報「已註冊」)②派工訊息密文③stderr 對 Codex 模型零訊號(只有 additionalContext/decision 兩通道)④codex exec 沒有 --max-turns,擋一次就是上限⑤同 repo 同窗口的無關子代理會搶 armed 席
   KEY:★順帶修的老洞(2026-09-05)★:is_code_file 只認副檔名,本 repo 主程式 scripts/lumos 無副檔名 → Stop 提醒 2026-05 上線起對它從沒生效(兩家皆然);現在 repo 內、無副檔名、一般檔、首行 #! 為已知直譯器也算程式碼(先判位置再開檔,FIFO 不開)
@@ -39,9 +39,9 @@ summary: |-
 | 審查席身分 | 派工詞自帶框架 | `CODEX_HOME/agents/lumos_reviewer.toml`(developer_instructions 是框架單源) |
 | 逐字稿 | `~/.claude/projects/**/*.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`(首行 session_meta 帶 cli_version) |
 
-## 為什麼收工行為兩家不同
+## 收工擋一次為什麼兩家一致
 
-Claude 側 2026-07-06 撤過 Stop nag——擋停會讓 Claude 進退兩難、成本高於收益,所以只留 stderr 提醒。Codex 側 stderr 對模型完全看不見,唯一能把「你漏了」送到模型面前的通道就是 `decision:block`(它會把 reason 當下一個提示續做)。所以這是對舊裁定的**有意識偏離**,只對 Codex,Claude 路徑一行不動;實驗設計與三輪代碼審抓到的坑(名額白燒、symlink、反引號跳出 code span)都在 [[Projects/Codex行為精修_計劃]]。
+先做 Codex 的理由:Codex 側 stderr 對模型完全看不見,唯一能把「你漏了」送到模型面前的通道就是 `decision:block`(它會把 reason 當下一個提示續做)。同日 README 審視發現 Claude 側也一樣——Claude Code 官方文件明講 exit 0 的 stderr 只進除錯日誌,所謂「軟提醒」從沒有人看到過。2026-07-06 撤的是每回合刷屏的 nag;這裡同 session 只擋一次、只在改了碼沒寫回時,不是重開 nag,所以套成兩家一致([[Projects/README審視五修_計劃]] d2);實驗設計與三輪代碼審抓到的坑(名額白燒、symlink、反引號跳出 code span)都在 [[Projects/Codex行為精修_計劃]]。
 
 ## 單源與卷證
 

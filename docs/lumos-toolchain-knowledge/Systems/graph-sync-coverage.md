@@ -13,12 +13,17 @@ tags:
   - status/doing
 summary: |-
   FLOW:改 code→(Stop hook 當輪點名)→git commit(pre-commit Gate 3 過關前點名)→git push(pre-push 整批點名)
-  KEY:「動過圖譜」不等於「動對篇」——三個位置都用 lumos impact --sync-check 算「跟改到的 code 直接相關(固定席:合約/事故/直接相依)、這次卻沒動」的筆記,點名前 8 篇;Claude 側只提醒不擋、★Codex 側(2026-09-05)改了碼沒寫回時回 block 一次讓模型續做補筆記(stop_hook_active+session 標記雙護欄;見 [[Projects/Codex行為精修_計劃]])★,逃生門仍是 --no-verify(有繞過帳)
+  KEY:「動過圖譜」不等於「動對篇」——三個位置都用 lumos impact --sync-check 算「跟改到的 code 直接相關(固定席:合約/事故/直接相依)、這次卻沒動」的筆記,點名前 8 篇;★2026-09-05 起兩家都在改了碼沒寫回時回 block 一次讓模型續做補筆記(stop_hook_active+session 標記雙護欄;Codex 先做 [[Projects/Codex行為精修_計劃]],Claude 同日套用 [[Projects/README審視五修_計劃]] d2——舊 stderr 提醒官方文件明講模型看不到)★,逃生門仍是 --no-verify(有繞過帳)
   KEY:刻意不硬擋:單體大檔(scripts/lumos)一次牽 30+ 篇,硬擋會把人訓練成反射 --no-verify
   DEP:[[Systems/lumos-cli-read]]
   TEST:t_precommit_sync_nudge_names_missing_pinned_nodes(動錯篇點名/動對篇不點名)
 verified_by:
   - "[[Verification/2026-09-05_Codex行為精修f02後測]]"
+decisions:
+  - content: 收工 Stop hook 擋一次兩家一致(Claude 也擋):Claude Code 官方文件明講 exit 0 的 stderr 只進除錯日誌、模型看不到,舊「軟提醒」實為零;07-06 撤的是每回合 nag,同 session 只擋一次且只在改了碼沒寫回時不算重開 nag。單源 Projects/README審視五修_計劃 d2
+    id: d1
+    decided: 2026-09-05
+    valid: true
 ---
 # graph-sync-coverage
 

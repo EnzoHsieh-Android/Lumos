@@ -136,6 +136,10 @@ REVISIT:2026-09-19 探針週跑累積 f02 型樣本,看擋一次的補寫率;若
 - 外家 Codex:clean。delta 席:(a) symlink (b) ASCII stdout (c) 反引號 三項修復驗收通過、三條測試反向驗證會翻紅;新出 1 major:父層 `~/.cache/lumos` 是 symlink 時同類傷害高一層。修=`_stop_dir_ok` 拿「家目錄解析後+固定相對路徑」對照,整條路徑不得經 symlink(家目錄本身可以是 symlink);測試㉒。
 - **誠實界線**:high 上限 3 輪,r3 仍出 major;這 3 行修法與測試㉒是卷證之後的 delta,沒有席位再審過。REVISIT:2026-09-08 Enzo 裁要不要補一輪 delta 審(或接受「同類修法第三次、測試反向驗證」為足夠)。
 
+## 後記(2026-09-05 同日稍後)
+
+README 審視發現 Claude 側的「stderr 軟提醒」官方文件明講模型看不到(exit 0 的 stderr 只進除錯日誌),所以本計劃「Claude 側不變」等於 Claude 側什麼都沒有。d2 of [[Projects/README審視五修_計劃]] 把這裡做好的擋一次套成兩家一致;`--harness codex` 只剩逐字稿讀法的差別。
+
 ## 審計修正紀錄(lumos-design-loop)
 
 - r1(2026-09-05,5 席:外家 Codex/架構/整合/邊界/通才):41 條(9+3+8+12+9)/blocking 34/1 條錨不到不採信、其餘 40 條全折(同輪有 blocker,accepted 空)——主折入:版本表 0.153.2 是前提、reason 版面與檔名消毒、探針兩旗標、範本改通用句、四處文件同步、Stop 不傷子代理與 env 傳遞兩項實測。

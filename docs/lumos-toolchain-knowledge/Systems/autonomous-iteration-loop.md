@@ -83,6 +83,10 @@ decisions:
     why_chosen: 三個死因全出自迴圈自己的遺言與頂層紀錄(非猜測):活性=死因實錄逐欄可查;引句=r6 notes 逐字點名;日報=r5 自己發現的。修法全在 prompt 紀律層,不動閘不動 code;明晨排程即免費驗收。G3 時序經查 d7 已修對(昨輪跑的是舊 prompt),不重複動
     decided: 2026-08-30
     valid: true
+  - content: 暫停每日派 orchestrator(daily-governance 以 LUMOS_AUTOLOOP=1 才跑):七週週報收斂 0、待放行 0、每週 210–330 美元;dry-run 永遠走不到開 PR。便宜段照跑。REVISIT:2026-10-05 給真產出路徑或正式退場。單源 Projects/README審視五修_計劃 d3
+    id: d9
+    decided: 2026-09-05
+    valid: true
 about_code:
   - governance/autonomous-loop.sh
   - governance/autonomous_loop/cross_audit.py

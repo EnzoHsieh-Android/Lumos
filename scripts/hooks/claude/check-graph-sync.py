@@ -2,9 +2,10 @@
 """全域 Stop hook: 提醒「程式碼改了但圖譜沒同步」。
 
 只在當前專案有 docs/*-knowledge/ 或 docs/knowledge/ 時作用,否則完全闭嘴。
-Claude 側:軟提醒(stderr surface 給 Claude),不 block turn 結束。
-Codex 側(--harness codex,2026-09-05 Projects/Codex行為精修_計劃):同條件回 decision:block ★一次★讓模型續做補筆記;
-  stop_hook_active / session 標記檔雙護欄,LUMOS_STOP_BLOCK_OFF=1 關閉。stderr 對 Codex 模型是零訊號,所以只有 block 這條路。
+兩家一致(2026-09-05):改了程式碼、筆記沒動 → 回 decision:block ★一次★讓模型續做補筆記或一句話說明;
+  stop_hook_active / session 標記檔雙護欄,LUMOS_STOP_BLOCK_OFF=1 關閉。擋過一次之後才退回 stderr 提醒(那條只進除錯日誌——
+  Claude Code 官方文件:exit 0 的 stderr 模型看不到;Codex 亦然)。--harness codex 只影響逐字稿怎麼讀。
+  沿革:Codex 先做(Projects/Codex行為精修_計劃),同日 README 審視發現 Claude 側「軟提醒」其實沒人看得到,套成一致(Projects/README審視五修_計劃 d2)。
 
 四層閘門:
   0  圖譜不存在               → exit 0
@@ -479,8 +480,8 @@ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
 
 # ── Codex 收工擋停一次(Projects/Codex行為精修_計劃 d1,2026-09-05)──
 # Codex 的 Stop hook 回 {"decision":"block","reason":…} 會讓模型以 reason 當下一個提示繼續做(官方通道);
-# 本 hook 只在「改了程式碼、筆記沒動」且 --harness codex 時擋★一次★:兩道護欄=payload 的 stop_hook_active(這輪已續做過)
-# 與 session 標記檔(同 session 只擋一次)。Claude 側完全不變(stderr 提醒;2026-07-06 撤 Stop nag 的教訓不重開)。
+# 本 hook 只在「改了程式碼、筆記沒動」時擋★一次★(兩家一致,2026-09-05 README 審視 d2):兩道護欄=payload 的 stop_hook_active(這輪已續做過)
+# 與 session 標記檔(同 session 只擋一次)。2026-07-06 撤的是「每回合刷屏的 nag」;這裡只擋一次、只在該補沒補時,不是重開 nag。
 STOP_BLOCK_HEAD = "LUMOS-STOP:改了程式碼但知識筆記沒跟著動"
 
 
@@ -530,17 +531,21 @@ def _stop_dir_ok(d: Path) -> bool:
     return True
 
 
-def codex_stop_decision(payload: dict, harness: str, session_id: str) -> bool:
-    """要不要對這次 Stop 回 block:harness=codex、沒設 LUMOS_STOP_BLOCK_OFF、這輪還沒被續做過、本 session 還沒擋過。
+def stop_block_decision(payload: dict, session_id: str) -> bool:
+    """要不要對這次 Stop 回 block(兩家同一份邏輯):沒設 LUMOS_STOP_BLOCK_OFF、這輪還沒被續做過、本 session 還沒擋過。
     ★名額先佔再擋(code-codex-refine r1 外家 #1/#4):回 True 表示標記檔已用 O_EXCL 建成——建不成(已存在 / 目錄寫不進 / 唯讀檔案系統)
     一律 False,所以「同 session 兩個 Stop 同時來」只有一個擋、「cache 寫不進」永遠不擋,不會每輪都擋。"""
-    if harness != "codex" or os.environ.get("LUMOS_STOP_BLOCK_OFF") == "1":
+    if os.environ.get("LUMOS_STOP_BLOCK_OFF") == "1":
         return False
     if payload.get("stop_hook_active"):
         return False
     if not session_id:
         return False
     return _stop_mark_write(session_id)
+
+
+def codex_stop_decision(payload: dict, harness: str, session_id: str) -> bool:   # 舊名相容:harness 已不影響決策
+    return stop_block_decision(payload, session_id)
 
 
 def _stop_mark_path(session_id: str):
@@ -678,8 +683,8 @@ def main() -> int:
         "如果這次只是改錯字、整理排版、重構但行為沒變,這條提醒可以略過。",
     ]
     sid = str(payload.get("session_id") or "")
-    try:   # ★只包 Codex 新分支★(r1 外家 #5):Claude 路徑一行不動
-        if codex_stop_decision(payload, harness, sid):
+    try:   # 只包擋停分支:失敗退回下面的 stderr 提醒(進除錯日誌)
+        if stop_block_decision(payload, sid):
             reason = stop_block_reason(rel, graph_rel, mentions)
             if reason.strip():
                 # r2 delta #1:名額已佔,輸出一定要送到——用 bytes 寫 stdout(不受 locale/ASCII 影響);真寫不出去就把名額退回,下一次 Stop 再試
