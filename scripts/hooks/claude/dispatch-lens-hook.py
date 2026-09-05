@@ -76,7 +76,7 @@ def _claim_codex_seat(payload: dict) -> int:
                            capture_output=True, text=True, timeout=INNER_TIMEOUT)
     except subprocess.TimeoutExpired:
         # 架構 r1 C:與 Claude 分支同語意——超時不再靜默,經 additionalContext 給一行固定說明
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": TIMEOUT_NOTE.format(what="(Codex 席:--claim)", cmd="--status", n=10)}}, ensure_ascii=False))
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": TIMEOUT_NOTE.format(what="(Codex 席:--claim)", cmd="--arm <base>..<head> --seats N 重新武裝(--status 只看剩幾席、不重算)", n=10)}}, ensure_ascii=False))
         _debug("lumos dispatch-lens --claim 超時,已附超時說明")
         return 0
     except OSError as e:

@@ -25821,6 +25821,15 @@ def t_delguard_logs_ok_too():
     txt = log.read_text(encoding="utf-8") if log.exists() else ""
     oks = [l for l in txt.splitlines() if '"gate": "delguard"' in l and '"kind": "ok"' in l]
     check("delguard ok 帳: 跑完記一筆 kind=ok(帶 tokens/hits/secs)", r.returncode == 0 and len(oks) == 1 and "tokens=" in oks[0] and "hits=" in oks[0], (r.stdout[-160:], txt[-200:]))
+    # 外家 r1 M2 / r2 M:deadline 截斷的部分結果 → 帳記 degraded、--json 的 degraded=true(不能宣稱完整)
+    r2 = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--json"], cwd=str(root), capture_output=True, text=True, timeout=120, env=dict(os.environ, LUMOS_DELGUARD_DEADLINE="0.0001"))
+    txt2 = log.read_text(encoding="utf-8")
+    degr = [l for l in txt2.splitlines() if '"gate": "delguard"' in l and '"kind": "degraded"' in l]
+    try:
+        j2 = _j.loads(r2.stdout.strip().splitlines()[-1])
+    except Exception:
+        j2 = {}
+    check("delguard 部分結果: 超時截斷 → 帳記 degraded 且 --json degraded=true", r2.returncode == 0 and len(degr) >= 1 and j2.get("degraded") is True, (r2.stdout[-160:], txt2[-200:]))
 
 
 if __name__ == "__main__":

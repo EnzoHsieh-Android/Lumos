@@ -14281,8 +14281,14 @@ def cmd_delguard_check(repo=None, as_json=False):
             else:
                 print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
             return 0
-        hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=lambda: time.monotonic() - t0 > deadline)
-        _partial = time.monotonic() - t0 > deadline   # 外家 r1 M2:掃描被 deadline 截斷回部分結果,不能算 ok
+        _trunc = {"hit": False}
+        def _deadline_check():
+            if time.monotonic() - t0 > deadline:
+                _trunc["hit"] = True   # 掃描真的被截斷才算部分結果(delta r2:剛好慢了但掃完不算)
+                return True
+            return False
+        hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=_deadline_check)
+        _partial = _trunc["hit"]   # 外家 r1 M2:掃描被 deadline 截斷回部分結果,不能算 ok
         _delguard_log_result(gr, "degraded" if _partial else "ok", len(tokens), hits, time.monotonic() - t0, reason=("timeout-partial" if _partial else None))
         fake = []
         for path, dl in parsed["vault_diffs"].items():
@@ -14291,7 +14297,7 @@ def cmd_delguard_check(repo=None, as_json=False):
                 fake.append(rel)
         if as_json:
             print(json.dumps({"tokens": len(tokens), "dropped": dropped, "hits": hits,
-                              "fake_sync": fake, "degraded": False}, ensure_ascii=False))
+                              "fake_sync": fake, "degraded": _partial, **({"reason": "timeout-partial"} if _partial else {})}, ensure_ascii=False))   # 外家 r2:部分結果不能宣稱完整
             return 0
         if not hits:
             if dropped:
@@ -17693,7 +17699,7 @@ def cmd_dispatch_lens_spec(spec_path, repo=None, as_json=False, cap=8, max_lines
                 pinned[node]["files"].append(f)
     def _rank(v):
         return (0 if v.get("kind") == _LENS_KIND["incident"] else 1 if v.get("contract") else 2 if v.get("kind") == _LENS_KIND["direct"] else 3)
-    listed = [{"node": n, **({"kind": "計劃連結", "contract": None, "files": []} | pinned.get(n, {}) | {"kind": "計劃連結" + (f"+{pinned[n]['kind']}" if n in pinned and pinned[n].get("kind") else "")})} for n in linked]
+    listed = [{"node": n, **{"kind": "計劃連結", "contract": None, "files": []}, **pinned.get(n, {}), "kind": "計劃連結" + (f"+{pinned[n]['kind']}" if n in pinned and pinned[n].get("kind") else "")} for n in linked]   # 3.8 相容:不用 dict | (delta r2)
     listed += [{"node": n, **v} for n, v in sorted(pinned.items(), key=lambda kv: _rank(kv[1])) if n not in linked]
     bound_status, _bidx = "ok", None
     try:
