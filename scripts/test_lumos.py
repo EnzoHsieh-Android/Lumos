@@ -25821,15 +25821,30 @@ def t_delguard_logs_ok_too():
     txt = log.read_text(encoding="utf-8") if log.exists() else ""
     oks = [l for l in txt.splitlines() if '"gate": "delguard"' in l and '"kind": "ok"' in l]
     check("delguard ok 帳: 跑完記一筆 kind=ok(帶 tokens/hits/secs)", r.returncode == 0 and len(oks) == 1 and "tokens=" in oks[0] and "hits=" in oks[0], (r.stdout[-160:], txt[-200:]))
-    # 外家 r1 M2 / r2 M:deadline 截斷的部分結果 → 帳記 degraded、--json 的 degraded=true(不能宣稱完整)
-    r2 = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged", "--json"], cwd=str(root), capture_output=True, text=True, timeout=120, env=dict(os.environ, LUMOS_DELGUARD_DEADLINE="0.0001"))
-    txt2 = log.read_text(encoding="utf-8")
-    degr = [l for l in txt2.splitlines() if '"gate": "delguard"' in l and '"kind": "degraded"' in l]
+    # 外家 r1 M2 / r2 M:「掃描被截斷回部分結果」這條路 → 帳記 degraded(reason=timeout-partial)、--json degraded=true。
+    # 不能用超小 deadline 去逼(那會在 git diff 後的早期檢查點就走舊的 _degraded_json 路,測到的不是這條修法——假綠形態);
+    # 改成行程內 monkeypatch:讓 vault_scan 睡過 deadline 再呼叫 deadline_check(),模擬真的被截斷。
+    import io as _io2, contextlib as _cl2, time as _tm
+    from unittest.mock import patch as _patch
+    m = _load_lumos_module(); cwd0 = os.getcwd()
+    def fake_scan(tokens, conf, gr, deadline_check=None):
+        _tm.sleep(1.2)
+        if deadline_check is not None and deadline_check():
+            return []
+        return []
     try:
-        j2 = _j.loads(r2.stdout.strip().splitlines()[-1])
+        os.chdir(str(root)); buf = _io2.StringIO()
+        with _patch.object(m, "_delguard_vault_scan", fake_scan), _patch.dict(os.environ, {"LUMOS_DELGUARD_DEADLINE": "1.0"}), _cl2.redirect_stdout(buf), _cl2.redirect_stderr(_io2.StringIO()):
+            rc2 = m.cmd_delguard_check(as_json=True)
+    finally:
+        os.chdir(cwd0)
+    try:
+        j2 = _j.loads(buf.getvalue().strip().splitlines()[-1])
     except Exception:
         j2 = {}
-    check("delguard 部分結果: 超時截斷 → 帳記 degraded 且 --json degraded=true", r2.returncode == 0 and len(degr) >= 1 and j2.get("degraded") is True, (r2.stdout[-160:], txt2[-200:]))
+    txt2 = log.read_text(encoding="utf-8")
+    partial = [l for l in txt2.splitlines() if '"gate": "delguard"' in l and "timeout-partial" in l]
+    check("delguard 部分結果: 掃描被 deadline 截斷 → 帳記 degraded reason=timeout-partial 且 --json degraded=true+reason", rc2 == 0 and len(partial) == 1 and j2.get("degraded") is True and j2.get("reason") == "timeout-partial", (str(j2)[:160], txt2[-200:]))
 
 
 if __name__ == "__main__":
