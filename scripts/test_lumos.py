@@ -5568,6 +5568,8 @@ def t_precommit_shebang_script_counts_as_code():
     check("precommit shebang: 只有開頭一個點的 dotfile 也看 shebang → 擋(通才 minor)", r2c.returncode != 0, f"rc={r2c.returncode}")
     r2d = run({'bin/weird"tool': "#!/bin/dash\necho\n"})
     check("precommit shebang: 檔名含雙引號(git 印成 C 式引號)也讀得到 → 擋(r2 delta major)", r2d.returncode != 0, f"rc={r2d.returncode} {(r2d.stderr+r2d.stdout)[-120:]}")
+    r2f = run({"bin/weird\x01tool": "#!/bin/sh\necho\n", "bin/back\\slash": "#!/bin/sh\necho\n", "bin/tab\ttool": "#!/bin/sh\necho\n"})
+    check("precommit shebang: 檔名含控制字元/反斜線/tab(git 印八進位或跳脫)也讀得到 → 擋(r3 外家)", r2f.returncode != 0, f"rc={r2f.returncode} {(r2f.stderr+r2f.stdout)[-160:]}")
     r2e = run({"..foo": "#!/bin/sh\necho\n"})
     check("precommit shebang: 開頭兩個點的檔名也看 shebang → 擋", r2e.returncode != 0, f"rc={r2e.returncode}")
     r3 = run({"NOTES": "just prose\n", "Makefile": "all:\n\ttrue\n"})
