@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 
 MARKER_RE = re.compile(r"^LUMOS-IMPACT:\s*(\S+)\s*$")
+SPEC_RE = re.compile(r"^LUMOS-SPEC:\s*(\S+)\s*$")   # 設計審用:給計劃筆記路徑(2026-09-05 第二輪審視 d2)
+TIMEOUT_NOTE = "LUMOS-LENS:鏡頭超時,這次沒附節點({what});編排者:派工前先跑一次 `lumos dispatch-lens {what}` 暖快取(20 分內有效)再派——{n} 個 commit 以上約 25 秒起,超過 45 秒就會像這次一樣放空。"
 INNER_TIMEOUT = 45   # 外層 HOOK_ENTRIES 宣告 60;內層必須明顯小於外層(enforcement儀表板_計劃 事故)
 
 
@@ -32,6 +34,20 @@ def find_marker(prompt: str) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+def find_spec_marker(prompt: str) -> str | None:
+    for line in prompt.split("\n"):
+        m = SPEC_RE.match(line.strip())
+        if m:
+            return m.group(1)
+    return None
+
+
+def _emit_updated(tool_input: dict, prompt: str, text: str) -> None:
+    new_input = dict(tool_input)
+    new_input["prompt"] = prompt.rstrip("\n") + "\n\n" + text + "\n"
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": new_input}}, ensure_ascii=False))
 
 
 def _find_lumos_script() -> str | None:
@@ -96,7 +112,8 @@ def main() -> int:
     if not isinstance(prompt, str):
         return 0
     rng = find_marker(prompt)
-    if rng is None:
+    spec = find_spec_marker(prompt) if rng is None else None
+    if rng is None and spec is None:
         return 0
     repo = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd", "")
     if not repo:
@@ -106,11 +123,17 @@ def main() -> int:
     if lumos is None:
         _debug("找不到 lumos,放行")
         return 0
+    argv = [sys.executable, lumos, "dispatch-lens"] + ([rng] if rng else ["--spec", spec]) + ["--repo", repo, "--json"]
     try:
-        r = subprocess.run([sys.executable, lumos, "dispatch-lens", rng, "--repo", repo, "--json"],
-                           capture_output=True, text=True, timeout=INNER_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        _debug(f"lumos dispatch-lens 失敗或超時({type(e).__name__}),放行")
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=INNER_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # 2026-09-05 第二輪審視 d1:超時不再靜默——今天 39 次派工 21 次放空,編排者完全不知道。附一行固定句(零自由文字)。
+        what = rng or spec
+        _emit_updated(tool_input, prompt, TIMEOUT_NOTE.format(what=what, n=10))
+        _debug("lumos dispatch-lens 超時,已附超時說明行")
+        return 0
+    except OSError as e:
+        _debug(f"lumos dispatch-lens 失敗({type(e).__name__}),放行")
         return 0
     if r.returncode != 0:
         _debug(f"lumos dispatch-lens rc={r.returncode}:{r.stderr.strip()[:200]},放行")
@@ -124,11 +147,8 @@ def main() -> int:
     if not text:
         _debug(f"固定席 0 篇(pinned={data.get('pinned') if isinstance(data, dict) else '?'}),不注入")
         return 0
-    new_input = dict(tool_input)
-    new_input["prompt"] = prompt.rstrip("\n") + "\n\n" + text + "\n"
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": new_input}},
-                     ensure_ascii=False))
-    _debug(f"已附 {data.get('shown')} 篇(固定席 {data.get('pinned')},主線 {data.get('mainline')})")
+    _emit_updated(tool_input, prompt, text)
+    _debug(f"已附 {data.get('shown')} 篇(固定席 {data.get('pinned')},主線 {data.get('mainline', data.get('mode'))})")
     return 0
 
 

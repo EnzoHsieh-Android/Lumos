@@ -335,7 +335,17 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
             "stop_block": stop_block, "thread_id": thread_id, "hook_trace": trace}
 
 
+def _scenario_max_turns(sc, default):
+    """每題可自帶 max_turns(2026-09-05 第二輪審視 d6:s15 這種要先查再建的題 18 步不夠,24 步時被砍在建檔前)。壞值退預設。"""
+    try:
+        v = int(sc.get("max_turns", default))
+        return v if v > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
 def run_one(sc, workdir, max_turns, timeout, model, arm="with"):
+    max_turns = _scenario_max_turns(sc, max_turns)
     bad = _validate_scenario(sc)
     if bad:
         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,

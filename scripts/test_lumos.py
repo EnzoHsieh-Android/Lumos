@@ -25717,5 +25717,88 @@ def t_codex_stop_block_once():
     check("stop-block⑫: 探針有 --stop-block 與 --codex-bypass-hook-trust 旗標並記 hook_trace", "--stop-block" in pr and "--codex-bypass-hook-trust" in pr and "hook_trace" in pr, "")
 
 
+def t_dispatch_lens_spec_mode():
+    """第二輪審視六修 d2:設計審鏡頭 `dispatch-lens --spec <計劃.md>`——從計劃提到的程式檔跑 impact 取固定席(合約/事故優先、Projects 不進)、
+    計劃直接連結的 Systems/Issues 節點放最前;太泛的檔(牽超過 40 篇)整檔略過並在頭部說明;沒有任何線索的計劃回空文字。"""
+    import io as _io, json as _j, contextlib as _cl, tempfile as _tf
+    m = _load_lumos_module()
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    buf = _io.StringIO()
+    with _cl.redirect_stdout(buf):
+        rc = m.cmd_dispatch_lens_spec("docs/lumos-toolchain-knowledge/Projects/Codex行為精修_計劃.md", repo=str(repo), as_json=True)
+    d = _j.loads(buf.getvalue().strip().splitlines()[-1])
+    check("lens-spec: rc0、mode=spec、抓到計劃提到的 hook 檔", rc == 0 and d["mode"] == "spec" and "scripts/hooks/claude/check-graph-sync.py" in d["code_files"], str(d.get("code_files")))
+    check("lens-spec: 太泛的單檔 CLI/總測試檔整檔略過並列在 too_generic", any(x.startswith("scripts/lumos(") for x in d["too_generic"]), str(d["too_generic"]))
+    check("lens-spec: 有固定席、文字帶標頭、Projects 不進固定席", d["pinned"] > 0 and d["text"].startswith(m._LENS_SPEC_HEADER) and "Projects/" not in "\n".join(l for l in d["text"].splitlines() if l.startswith("- ") and "計劃連結" not in l), d["text"][:200])
+    check("lens-spec: 計劃直接連結的 Systems 節點排最前", d["linked"] >= 1 and "[計劃連結]" in d["text"].splitlines()[2], d["text"].splitlines()[2][:120])
+    # 沒有線索的計劃
+    tmp = Path(_tf.mkdtemp(prefix="gctl-lspec-")) ; spec = tmp / "empty.md"; spec.write_text("# 空計劃\n只有散文,沒提任何檔也沒連結。\n", encoding="utf-8")
+    buf = _io.StringIO()
+    with _cl.redirect_stdout(buf):
+        rc2 = m.cmd_dispatch_lens_spec(str(spec), repo=str(repo), as_json=True)
+    d2 = _j.loads(buf.getvalue().strip().splitlines()[-1])
+    check("lens-spec: 沒線索的計劃 → listed 0、text 空(hook 會判不注入)", rc2 == 0 and d2["listed"] == 0 and d2["text"] == "", str(d2)[:120])
+    buf = _io.StringIO()
+    with _cl.redirect_stdout(buf), _cl.redirect_stderr(_io.StringIO()):
+        rc3 = m.cmd_dispatch_lens_spec(str(tmp / "nope.md"), repo=str(repo), as_json=True)
+    check("lens-spec: 計劃不存在 rc2", rc3 == 2, str(rc3))
+
+
+def t_dispatch_lens_hook_timeout_notice_and_spec_marker():
+    """第二輪審視六修 d1/d2:hook 超時不再靜默——附一行固定超時說明(今天 39 次派工 21 次放空沒人知道);LUMOS-SPEC: 標記走 --spec。"""
+    import json as _j, io as _io, subprocess as _sp
+    from unittest.mock import patch
+    m = _load_hook_mod("dlens_timeout", "dispatch-lens-hook.py")
+    payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": str(Path(GRAPHCTL).resolve().parent.parent),
+               "tool_input": {"prompt": "你是審查員。\nLUMOS-IMPACT: main..HEAD\n", "description": "t"}}
+    def boom(*a, **k): raise _sp.TimeoutExpired(cmd="x", timeout=45)
+    out = _io.StringIO()
+    with patch.object(m.subprocess, "run", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
+        rc = m.main()
+    o = out.getvalue()
+    check("lens-hook 超時: rc0 且派工詞尾端附了固定超時說明(含範圍與暖快取指令)", rc == 0 and "鏡頭超時" in o and "lumos dispatch-lens main..HEAD" in o and "updatedInput" in o, o[:200])
+    seen = {}
+    def fake_run(argv, **k):
+        seen["argv"] = argv
+        class R: returncode = 0; stdout = _j.dumps({"text": "lumos 自動附加(設計審):x\n- docs/k/Systems/a.md", "pinned": 1, "shown": 1, "mode": "spec"}); stderr = ""
+        return R()
+    payload["tool_input"]["prompt"] = "你是審稿人。\nLUMOS-SPEC: docs/lumos-toolchain-knowledge/Projects/X_計劃.md\n"
+    out = _io.StringIO()
+    with patch.object(m.subprocess, "run", fake_run), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
+        rc = m.main()
+    check("lens-hook spec 標記: 叫的是 dispatch-lens --spec <計劃> 並把回傳附進派工詞", rc == 0 and "--spec" in seen.get("argv", []) and "docs/lumos-toolchain-knowledge/Projects/X_計劃.md" in seen.get("argv", []) and "lumos 自動附加(設計審)" in out.getvalue(), str(seen.get("argv"))[:200])
+    check("lens-hook: 沒有任何標記 → 不動", m.find_marker("hi") is None and m.find_spec_marker("hi") is None, "")
+
+
+def t_scenario_probe_per_scenario_max_turns():
+    """第二輪審視六修 d6:每題可自帶 max_turns(s15 要先查再建,18 步不夠);壞值退預設。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    path = str(Path(GRAPHCTL).resolve().parent / "scenario_probe.py")
+    spec = importlib.util.spec_from_file_location("sp_mt", path, loader=SourceFileLoader("sp_mt", path)); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    check("probe max_turns: 題目帶 30 → 30;沒帶 → 預設;壞值/0 → 預設", mod._scenario_max_turns({"max_turns": 30}, 18) == 30 and mod._scenario_max_turns({}, 18) == 18 and mod._scenario_max_turns({"max_turns": "x"}, 18) == 18 and mod._scenario_max_turns({"max_turns": 0}, 18) == 18, "")
+    import json as _j
+    rows = [_j.loads(l) for l in open(Path(GRAPHCTL).resolve().parent.parent / "governance" / "scenarios" / "commands.jsonl", encoding="utf-8") if l.strip()]
+    s15 = [r for r in rows if r["id"] == "s15-new-verification"]
+    check("probe max_turns: s15 題庫帶 max_turns 30", s15 and s15[0].get("max_turns") == 30, str(s15[0].get("max_turns") if s15 else None))
+
+
+def t_delguard_logs_ok_too():
+    """第二輪審視六修 d3:delguard 跑完也記一筆 kind=ok——之前只記 degraded,治理帳 63/63 全是超時,看起來像從沒守到(實測一般 commit 0.4 秒就跑完)。"""
+    import subprocess as _sp, os, tempfile as _tf, json as _j
+    root = Path(_tf.mkdtemp(prefix="gctl-dgok-")); vault = root / "docs" / "x-knowledge"; (vault / "Systems").mkdir(parents=True)
+    (vault / "Systems" / "a.md").write_text("---\nname: a\n---\n# a\n呼叫 old_helper 做事。\n", encoding="utf-8")
+    (root / "src").mkdir(); (root / "src" / "m.py").write_text("def old_helper():\n    return 1\n", encoding="utf-8")
+    g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+    g("init", "-q"); g("add", "-A"); g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i")
+    (root / "src" / "m.py").write_text("def new_helper():\n    return 1\n", encoding="utf-8"); g("add", "-A")
+    r = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)
+    log = vault / ".." / ".governance-log.jsonl"
+    log = (root / "docs" / ".governance-log.jsonl")
+    txt = log.read_text(encoding="utf-8") if log.exists() else ""
+    oks = [l for l in txt.splitlines() if '"gate": "delguard"' in l and '"kind": "ok"' in l]
+    check("delguard ok 帳: 跑完記一筆 kind=ok(帶 tokens/hits/secs)", r.returncode == 0 and len(oks) == 1 and "tokens=" in oks[0] and "hits=" in oks[0], (r.stdout[-160:], txt[-200:]))
+
+
 if __name__ == "__main__":
     sys.exit(main())

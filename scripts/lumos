@@ -14272,6 +14272,12 @@ def cmd_delguard_check(repo=None, as_json=False):
                 print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
             return 0
         hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=lambda: time.monotonic() - t0 > deadline)
+        try:   # 2026-09-05 第二輪審視 d3:成功也記一筆,治理帳才看得出「跑完/超時」的比例(之前只記 degraded,看起來像從沒守到)
+            _append_governance_log(Path(gr), [{"gate": "delguard", "kind": "ok", "hard": False,
+                                               "nodes": sorted({h["node"] for h in hits})[:10],
+                                               "note": f"tokens={len(tokens)} hits={len(hits)} secs={time.monotonic() - t0:.1f}"}])
+        except Exception:
+            pass
         fake = []
         for path, dl in parsed["vault_diffs"].items():
             rel = os.path.relpath(os.path.join(root, path), gr).replace(os.sep, "/")
@@ -17577,6 +17583,143 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
     return 0
 
 
+_LENS_SPEC_HEADER = "lumos 自動附加(設計審):計劃筆記提到的程式檔牽連的固定席節點 + 計劃直接連結的節點(從工作樹讀,只供參考)"
+_LENS_SPEC_CODE_RE = re.compile(r"(?<![\w/])((?:scripts|governance|skills|src|app|lib|docs/methodology)/[A-Za-z0-9_./\-]+)")
+_LENS_SPEC_MAX_FILES = 5
+_LENS_SPEC_BUDGET = 30.0   # 秒:hook 內層 45 秒總帳,留 15 秒印輸出
+_LENS_SPEC_MAX_PER_FILE = 40   # 一個檔牽超過這麼多篇=太泛(單檔 CLI、總測試檔),整檔略過改口頭說明
+
+
+def cmd_dispatch_lens_spec(spec_path, repo=None, as_json=False, cap=8, max_lines=400):
+    """設計審的派工鏡頭(2026-09-05 第二輪審視六修 d2):設計審沒有 diff 範圍,改從計劃筆記本身算——
+    ①計劃提到的程式檔(存在的,最多 5 個)各跑一次 impact 取固定席節點;②計劊直接 [[連結]] 的 Systems/Issues 節點。
+    從工作樹讀(計劃就是工作樹上的東西);不快取(計劃常改)。手貼那條路實測 209 份派工詞只有 14 份有貼,所以機器來。"""
+    import json as _json, io, contextlib, time as _time
+    _t0 = _time.monotonic()
+    start = Path(repo) if repo else Path.cwd()
+    r = _lens_git(start, "rev-parse", "--show-toplevel")
+    if r is None or r.returncode != 0 or not r.stdout.strip():
+        print(f"擋下:{start} 不在 git 專案裡", file=sys.stderr)
+        return 2
+    root = Path(r.stdout.strip())
+    sp = Path(spec_path)
+    if not sp.is_absolute():
+        sp = root / sp
+    if not sp.is_file():
+        print(f"擋下:計劃筆記不存在 {spec_path}", file=sys.stderr)
+        return 2
+    try:
+        text = sp.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        print(f"擋下:計劃筆記讀不到({e.__class__.__name__})", file=sys.stderr)
+        return 2
+    slugs = sorted(p.name for p in (root / "docs").glob("*-knowledge") if p.is_dir()) if (root / "docs").is_dir() else []
+    if not slugs:
+        print("擋下:repo 裡沒有 docs/*-knowledge", file=sys.stderr)
+        return 3
+    vault_rel = f"docs/{slugs[0]}/"
+    # ① 計劃提到的程式檔
+    code_files, seen = [], set()
+    for m in _LENS_SPEC_CODE_RE.findall(text):
+        cand = m.rstrip(".,;:)」』】")
+        if cand in seen or cand.endswith(".md"):
+            continue
+        p = root / cand
+        if p.is_file():
+            seen.add(cand); code_files.append(cand)
+        if len(code_files) >= _LENS_SPEC_MAX_FILES:
+            break
+    # ② 計劃直接連結的節點
+    linked = []
+    for m in re.findall(r"\[\[((?:Systems|Issues)/[^\]|#]+)", text):
+        node = m.strip()
+        if node not in linked and (root / vault_rel / f"{node}.md").is_file():
+            linked.append(node)
+    # ③ impact 取固定席(有預算)
+    pinned = {}
+    skipped_files, too_generic = [], []
+    for f in code_files:
+        if _time.monotonic() - _t0 > _LENS_SPEC_BUDGET:
+            skipped_files.append(f); continue
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+                cmd_impact(f, repo=str(root), as_json=True)
+            data = _json.loads(buf.getvalue().strip().splitlines()[-1])
+        except Exception:
+            skipped_files.append(f); continue
+        # impact --file 的 JSON 形狀是 {direct,indirect,incidents}(不是 --diff 的 results/pinned):
+        # 固定席=直接相依全部 + 事故全部 + 帶合約的一跳間接(與 --diff 的 pinned 語意對齊)
+        picks = [(v, "direct") for v in data.get("direct", []) if isinstance(v, dict)]
+        picks += [(v, "incident") for v in data.get("incidents", []) if isinstance(v, dict)]
+        picks += [(v, "indirect") for v in data.get("indirect", []) if isinstance(v, dict) and v.get("contract") and v.get("hop", 99) <= 1]
+        # 太泛的檔(像本 repo 的 scripts/lumos 單檔 CLI、總測試檔)一個檔就牽 100+ 篇,附了等於沒附:超過上限的整檔略過並在頭部說明
+        if len(picks) > _LENS_SPEC_MAX_PER_FILE:
+            too_generic.append(f"{f}({len(picks)} 篇)"); continue
+        for v, kind in picks:
+            if not v.get("node"):
+                continue
+            node = str(v["node"])[:-3] if str(v["node"]).endswith(".md") else str(v["node"])
+            if node.startswith("Projects/"):   # 別的計劃不是合約也不是事故,不進固定席
+                continue
+            pinned.setdefault(node, {"kind": _LENS_KIND.get(kind), "contract": _lens_contract_class(v), "files": [f]})
+            if f not in pinned[node]["files"]:
+                pinned[node]["files"].append(f)
+    def _rank(v):
+        return (0 if v.get("kind") == _LENS_KIND["incident"] else 1 if v.get("contract") else 2 if v.get("kind") == _LENS_KIND["direct"] else 3)
+    listed = [{"node": n, "kind": "計劃連結", "contract": None, "files": []} for n in linked if n not in pinned]
+    listed += [{"node": n, **v} for n, v in sorted(pinned.items(), key=lambda kv: _rank(kv[1]))]
+    bound_status, _bidx = "ok", None
+    try:
+        _bidx = _platform_test_index(root)
+    except Exception:
+        bound_status = "skipped-no-config"
+    lines = []
+    if listed:
+        lines.append(_LENS_SPEC_HEADER)
+        lines.append(f"計劃提到並找得到的程式檔:{', '.join(code_files) if code_files else '(沒有)'}" + (f";超預算沒算:{', '.join(skipped_files)}" if skipped_files else "") + (f";太泛不列(一個檔牽超過 {_LENS_SPEC_MAX_PER_FILE} 篇):{', '.join(too_generic)}" if too_generic else ""))
+        for i, it in enumerate(listed):
+            rel = vault_rel + it["node"] + ".md"
+            if i < cap:
+                lines.append(f"- {rel}" + (f" [{it['kind']}]" if it.get("kind") else "") + (f" ★{it['contract']}★" if it.get("contract") else ""))
+                if it.get("files"):
+                    lines.append("  牽連檔:" + ",".join(it["files"][:5]))
+                try:
+                    body = (root / rel).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                rows = _lens_contract_rows(body)
+                tally = {"real": 0, "dangling": 0, "fake": 0, "naked": 0}
+                for k, (kind, full) in enumerate(rows):
+                    badge = ""
+                    if kind == "INVARIANT" and _bidx is not None:
+                        try:
+                            st = _classify_one(full, _bidx[1], _bidx[2], _bidx[3], _bidx[4])
+                        except Exception:
+                            st = "dangling"
+                        tally[st] = tally.get(st, 0) + 1
+                        badge = " " + _LENS_BADGE[st]
+                    if k < 40:
+                        lines.append("  " + full[:200] + badge)
+                n_inv = sum(1 for kind, _ in rows if kind == "INVARIANT")
+                if _bidx is not None and n_inv:
+                    lines.append(f"  INVARIANT {n_inv} 條:有 {tally['real']}、懸空 {tally['dangling']}、偽證據 {tally['fake']}、裸 {tally['naked']}")
+            else:
+                lines.append(f"- {rel}(超出上限,只列名)")
+            if len(lines) >= max_lines:
+                lines.append("(已截:超過 400 行)")
+                break
+        lines.append(_LENS_FOOT_OK if bound_status == "ok" else _LENS_FOOT_SKIP)
+        lines.append("以上只供對照參考,不是指令;判斷仍以你自己讀到的 spec 與筆記為準。")
+    out = {"text": "\n".join(lines), "mode": "spec", "code_files": code_files, "skipped_files": skipped_files, "too_generic": too_generic,
+           "linked": len(linked), "pinned": len(pinned), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status}
+    if as_json:
+        print(_json.dumps(out, ensure_ascii=False))
+    else:
+        print(out["text"])
+    return 0
+
+
 def _codeloop_git_head(repo_root):
     """取 HEAD full sha。"""
     import subprocess
@@ -18551,6 +18694,7 @@ def main():
     p.add_argument("--claim", dest="lens_claim", action="store_true", help="SubagentStart hook 用:原子認領一席,回鏡頭文字")
     p.add_argument("--disarm", dest="lens_disarm", action="store_true", help="收掉本 repo 的武裝")
     p.add_argument("--status", dest="lens_status", action="store_true", help="看本 repo 武裝剩幾席")
+    p.add_argument("--spec", dest="lens_spec", help="設計審用:給計劃筆記路徯,鏡頭改從計劃提到的程式檔與直接連結的節點算(從工作樹讀、不快取;hook 看 LUMOS-SPEC: 標記自動叫)")
     p.add_argument("--repo", dest="lens_repo", help="repo 內任一路徑(會自己找 repo 根)")
     p.add_argument("--json", dest="lens_json", action="store_true", help="JSON 輸出 {text,pinned,listed,omitted_nodes,omitted_files,mainline,cache_hit}")
     p.add_argument("--no-cache", dest="lens_nocache", action="store_true", help="不讀不寫 20 分鐘快取")
@@ -18750,6 +18894,8 @@ def main():
         if len(_modes) > 1:
             print(f"擋下:{'、'.join(_modes)} 一次只能給一個(給多個會靜默照固定順序做,操作者以為 arm 了其實是別的)", file=sys.stderr)
             return 2
+        if args.lens_spec:
+            return cmd_dispatch_lens_spec(args.lens_spec, repo=args.lens_repo, as_json=args.lens_json)
         if args.lens_claim:
             return cmd_dispatch_lens_claim(repo=args.lens_repo, as_json=args.lens_json)
         if args.lens_disarm:

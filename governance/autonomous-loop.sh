@@ -253,7 +253,13 @@ run_replay(){
     return 0
   fi
   echo "$week" > "$stamp"
-  log "回放週跑:$(echo "$out" | head -1 | cut -c1-160)"
+  # 2026-09-05 第二輪審視 d4:原本 cut -c1-160 剛好把 red/stale/errors 切掉,翻案了也看不見;改成解析後各印一行
+  local counts; counts="$(echo "$out" | head -1 | python3 -c 'import sys,json
+d=json.loads(sys.stdin.readline()); print(len(d.get("replayed",[])), len(d.get("red",[])), len(d.get("stale",[])), len(d.get("errors",[])), ",".join(d.get("red",[])[:5]))' 2>/dev/null || echo "? ? ? ? ")"
+  set -- $counts
+  log "回放週跑:跑了 ${1:-?} 包;翻案(紅) ${2:-?};過期(制度演進) ${3:-?};錯誤 ${4:-?}"
+  [ "${2:-0}" != "0" ] && [ "${2:-0}" != "?" ] && log "🔴 回放紅燈要人看:${5:-}(逐個 lumos loop replay <id> --golden governance/replay/<id>/verdict.json)"
+  log "回放週跑原始:$(echo "$out" | head -1)"
   local msg; msg="$(echo "$out" | sed -n 's/^MSG://p' | head -1)"
   if [ -n "$msg" ]; then
     MSG="$msg" LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
