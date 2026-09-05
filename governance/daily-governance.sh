@@ -16,9 +16,12 @@ ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
 mkdir -p "$DIR/logs"
 
-# ★整段包進 main() 最後才呼叫(2026-09-05 第四輪稽核):bash 是邊讀邊執行,腳本在跑的時候(自主迴圈那段可跑三小時)
-# 被人改檔,回來會從新檔的同一個 byte 位置接著讀,讀到半行就 syntax error 整支死掉——今天 09:30 那次就這樣,
-# lint-watch/doctor/testmap 全沒跑。包成函式=先整份讀完再執行,改檔只影響下一次。
+# ★主體包進 main()、結尾「main "$@"; exit」(2026-09-05 第四輪稽核+代碼審 r1):bash 是邊讀邊執行,腳本在跑的時候
+# (自主迴圈那段可跑三小時)被人改檔,回來會從新檔的同一個 byte 位置接著讀,讀到半行就 syntax error 整支死掉——
+# 今天 09:30 那次就這樣,lint-watch/doctor/testmap 全沒跑。
+# 函式體要找到配對的 } 才會執行,所以主體是一口氣讀完的;上面 set/DIR/ts/mkdir 四行前奏仍是逐行讀(量過從啟動到進 main
+# 約 36 毫秒,窗口存在但不是三小時那種)。結尾同一行接 exit 是必要的:沒有它,main 跑完 bash 會回頭從舊 byte 位置
+# 續讀,檔案長度變了就讀到垃圾、甚至把整支再跑一遍(scratch 實驗實證:step1/step2 印了兩次)。守衛測試釘這三件。
 main() {
   echo "[$(ts)] daily-governance wrapper 開始"
 
@@ -54,4 +57,4 @@ main() {
   echo "[$(ts)] daily-governance wrapper 完成"
 }
 
-main "$@"
+main "$@"; exit

@@ -1,0 +1,10 @@
+severity: major
+- [major] 守衛只找三個字串，主體移回函式外仍會假綠
+  位置:`scripts/test_lumos.py:25863`
+  引句：「check("daily-governance: 主體包在 main() 裡、最後一行 main \"$@\"", "main() {" in s and tail == 'main "$@"' and 'echo "[$(ts)] daily-governance wrapper 完成"' in s[body_start:], tail)」
+  why: 測試沒有驗證 main() 前不存在可執行主體；只要保留一個含「wrapper 完成」的空殼 main() 和末行呼叫，即使長跑流程全被移回頂層、再次暴露於邊讀邊改，測試仍通過。現版甚至已有 set、DIR 指派與 mkdir 在 main() 外，故「整段包進 main()」並未被此守衛機械保證。
+
+- [minor] main() 前仍有可執行命令，改檔不一定只影響下一次
+  位置:`governance/daily-governance.sh:17`
+  引句：「mkdir -p "$DIR/logs」
+  why: Bash 執行完這行後才開始解析後面的函式定義；若檔案恰在這個窗口被替換，本次行程仍可能讀到新檔或半行內容。它解決了三小時長跑期間的主要事故窗口，但不完全符合 patch 宣稱的「先整份讀完、改檔只影響下一次」。

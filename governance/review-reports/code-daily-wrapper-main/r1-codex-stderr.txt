@@ -1,0 +1,1626 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.2
+--------
+workdir: /Users/enzo/harness/lumos-toolchain
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 01a070e1-617c-7d92-93e6-95c0bdd15017
+--------
+user
+你是外部審查員,看一份「外部投稿的 diff」,找出作者沒看到的 bug。只做 finder:每條 finding 必附 file:line 與引句(引句要能在 patch 裡逐字找到)。沒問題就寫 severity: clean。
+輸出格式(嚴格):
+第一行 severity: <clean|minor|major|blocker>
+接著每條 finding 一段:
+- [<severity>] <一句話>
+  file: <路徑>:<行>
+  quote: <patch 裡逐字的一行>
+  why: <為什麼是 bug、什麼情況會出錯>
+
+被審材料:governance/review-reports/code-daily-wrapper-main/r1-snapshot.patch(sha256 2eb8d6689edeeab86c86994decd7e6975cf15767db886c4033cf30212bf5a9e2)。
+背景:daily-governance.sh 由 launchd 每天 09:30 跑,中間自主迴圈那段可能跑 3 小時;今天它被人邊跑邊改檔,bash 邊讀邊執行、回來讀到半行 syntax error 整支死掉。這次改動把主體包進 main() 最後才呼叫,並加一支守衛測試 t_daily_governance_wrapper_is_function_wrapped。另有幾處純文字同步(README/ARCHITECTURE/skills/圖譜筆記),文字改動只審「數字或宣稱和 patch 內其他地方有沒有矛盾」。
+重點鏡頭:①包 main() 真的解決「邊跑邊改」嗎?bash 讀函式定義時是不是整份先讀完?有沒有漏在 main() 外的可執行行(set/ts/mkdir/echo)?②縱排縮排後 heredoc、多行字串、$@ 的行為有沒有變?③守衛測試對什麼情況會翻紅、對什麼情況會假綠?④set -uo pipefail 在函式裡的行為。
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Completed
+hook: SessionStart Completed
+codex
+我先按圖譜規矩查這個 daily wrapper 的合約與既有決策，再核對指定 patch 的雜湊、逐段審查。只讀，不改檔。
+exec
+/bin/zsh -lc 'python3 scripts/lumos search "daily governance wrapper main"' in /Users/enzo/harness/lumos-toolchain
+ succeeded in 491ms:
+(多詞回退:你查的整串詞在未作廢的節點的可見文字裡找不到完全一致的,改成每個詞分開查、有出現就算;逐詞覆蓋 daily:15  governance:140  wrapper:19  main:65)
+(已隱藏 5 筆作廢結果;要看的話加 --include-superseded)
+提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。下結論前先讀全文:lumos show <節點>
+ 16.190  Projects/第二輪審視六修_計劃.md  [daily,governance,wrapper,main]
+    18 [body]: KEY:d5 testmap 每日重建(0.6 秒,建過一次後落後 614 個 commit)進 daily-governance;README 成本節寫明 linter 橋/Co…
+    24 [body]: REVISIT:2026-09-12 看 s15 下週抽到沒、30 步夠不夠;看 governance-log 裡 delguard ok/degraded 比例是不是≈9:1。
+    51 [body]: - **錯的(查證後不採)**:「暫停沒兌現、今天又跑了一次燒 78 美元」——今天那次是 09:37 暫停前由排程派出的,12:42 才回;暫停 commit 在其後;daily…
+    57 [body]: - **稽核員對、我上一輪判錯的兩件**:①今天 09:30 的 wrapper 真的死了——不是暫停沒兌現,是我在自主迴圈那段還在跑(09:37–12:42)時改了 daily-…
+    59 [body]: - **收斂判定(Claude 裁)**:四輪下來,第三、四輪各只剩一件真 bug(gov 折疊條件、wrapper 邊跑邊改)加文字同步,其餘都是已寫進 README「成本與界線…
+ 15.120  Systems/lint-version-watch.md  [daily,governance,wrapper,main]
+    19 [FLOW]: FLOW:讀 .lumos/lint-watch.json → 查各 registry 最新穩定版(pypi/npm/maven/github)→ _compare_version…
+    29 [KEY]: KEY:治理層所有 JSON 讀寫在 python(lint_watch_dedup.py __main__:pending 寫入 + seen append + LINE dic…
+    53 [body]: 6 輪 canary 6/6 全 caught,抓修真缺陷(Maven `%22`+字串 max 病灶、PEP440 prerelease、三態、等段數守衛、fixture sea…
+ 13.994  Systems/autonomous-iteration-loop.md  [daily,governance,wrapper]
+    19 [FLOW]: FLOW:daily-governance.sh(launchd 09:30 單次喚醒,★原獨立 cron 10:10 已棄——自足審計 2026-08-30 抓到 FLOW 殘留…
+    20 [KEY]: KEY:[2026-08-31]daily-governance.sh 第 4 步=lumos doctor --ci(2026-08-30 intake 案加線;08-31 回訪…
+    28 [KEY]: KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross…
+    31 [KEY]: KEY:紀律抗壓縮(Governance Decay arXiv 2606.22528,2026-07-26 對帳)=長跑對話的摘要壓縮會悄悄刪安全規矩(違規率 0→65-95%)…
+    32 [KEY]: KEY:★2026-09-05 週邊接線★([[Projects/第二輪審視六修_計劃]] d4/d5):回放週跑日誌原本被 cut -c1-160 切掉 red/stale 欄位…
+    33 [DEP]: DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,…
+    34 [TEST]: TEST:scripts/test_autonomous_loop.py 全綠(2026-08-30 機械數=106;08-21 時為 53;★原記 27(2026-08-21 程…
+    61 [fm]: - content: 暫停每日自主 loop(launchctl disable com.enzo.lumos.daily-governance;plist 保留)
+    … 還有 7 處
+ 13.031  Issues/lint-watch空轉假綠.md  [daily,governance,wrapper]
+    14 [KEY]: KEY:遮蔽鏈=fail-open 設計(網路失敗永不升 rc)+log 恆 0 bytes+wrapper 只記 rc——三層都「正常」,無一層能暴露「網破了」;同族先例=tes…
+    15 [KEY]: KEY:修法(2026-07-17 收網三修,governance/lint-watch-check.sh):①SSL_CERT_FILE 指 macOS 內建 /etc/ssl/…
+    23 [body]: - 2026-07-05 部署 lint-watch-check.sh 進 daily-governance wrapper(launchd 09:30)。
+    24 [body]: - 2026-07-05〜07-17:每日 wrapper log 記「lint-watch 段結束 rc=0」;lint-watch.log 恆 0 bytes;`governa…
+    32 [body]: fail-open(網路失敗永不升 rc,設計正確)→ rc 恆 0;輸出恆空 → log 恆 0 bytes;wrapper 只記 rc → 每天「成功」。**三層各自正常,疊起…
+    47 [body]: - [ ] 其他 python 網路功能(cross-family qwen 調用等)同受憑證鏈影響,cron 路徑需同款 SSL_CERT_FILE 保護——盤點 governa…
+ 12.397  Systems/cross-family-audit.md  [daily,governance,wrapper]
+    21 [KEY]: KEY:調用禁 python3 -m governance.autonomous_loop.cross_audit(頂層 governance 無 __init__.py)；用 s…
+    22 [DEP]: DEP:governance/autonomous_loop/cross_audit.py｜orchestrator-prompt.md §2.5｜autonomous-loop.…
+    40 [fm:context]: context: design-loop R5 F2：disputed 不伴 converged:false 就走不進 wrapper 未收斂分支(L80-85)；硬編碼「撞 ca…
+    45 [fm]: - governance/autonomous-loop.sh
+    46 [fm]: - governance/autonomous_loop/cross_audit.py
+    57 [body]: - **插在 orchestrator 內部**(orchestrator-prompt §2.5),不在 wrapper 層:autonomous-loop.sh 收到結果時 d…
+ 11.869  Verification/2026-07-04_lint-version-watch.md  [daily,wrapper,main]
+    24 [body]: - `TestLintWatchDedup`(T4,6 tests)——(name,latest) 去重四例(含缺 seen→全新、同 name 新 latest)+ __main…
+    30 [body]: - fix 派修:T3(--json dest 一致化 + malformed-entry rc2 覆蓋)、T4(argv 守衛 + malformed-seen 測試)、T5(d…
+    36 [body]: - design-loop 未 GATE PASS(核心收斂、shell wrapper 散文 churn 達 cap);shell 以真 shell smoke 定稿而非設計散文…
+ 10.597  Projects/標註刷新_計劃.md  [daily,governance,wrapper,main]
+    17 [DEP]: DEP:governance/eval/refresh_labels.py(新腳本 delta/repin)｜build_goldset.py(加 --force-full 裸跑防…
+    59 [body]: - **裸跑防護(r1)**:`build_goldset.py` 全量重建改為需 `--force-full` 旗標;無旗標=印 usage rc2。現況裸跑會把 429 筆金標…
+    75 [body]: - 週閘 wrapper=`governance/autonomous-loop.sh` 週期考卷段(現呼叫 `retrieval_eval.py --goldset … --sp…
+    89 [body]: - **[self-governance]**:S3 是擋人閘(rc1)——假紅風險=delta 清單誤報;斷言邏輯與 S1 同源(同一份評測母體計算),不另寫一套。
+    103 [body]: - **pre-flight(2026-08-17,機械排乾,不算 loop findings)**:①S2「兩席一致直接併 final」與刻意不做「人閘不可拆」自違→消歧為批次級…
+    115 [body]: - [major][s1] build_goldset 裸跑清空 429 筆金標(main() 無條件重建,編排者自核屬實)→--force-full 旗標+回歸測試。
+    174 [body]: 修:`_is_junk_edit_file`(dotfile / vendor/ / .min.js|.min.css)+ main 改成
+  9.937  Verification/2026-09-04_Codex完全支援S1hook適配驗收.md  [wrapper,main]
+    21 [body]: - 本機 codex-cli 0.144.1;clone 本 repo 到 scratchpad `s1accept/repo`(遠端名 Lumos,主線 Lumos/main),…
+    22 [body]: - `HOME=s1accept/home lumos install --force` 後把隔離 hooks.json 的五條命令包一層落 stdout/stderr 檔(驗收 …
+    28 [body]: 3. **Stop → check-graph-sync 讀 Codex 逐字稿**:第一次真跑 Stop fire 但 stderr 空——查出兩件事:(a)那次 Codex 把…
+    33 [body]: - `-k codex_s1` 26 條(patch 標頭四種、8 檔取前 5、main 多檔合併一個輸出、arm/claim/exhaust/expired/disarm/sta…
+  9.138  Systems/risk-tiered-review.md  [governance,wrapper]
+    15 [FLOW]: FLOW:選 gap→difficulty.assess(weakness+suggestion)→注入 __NEED__/__TIER__/MAXR_EFF(high=max(M…
+    16 [KEY]: KEY:審查強度跟風險面走——RISK_CLASSES 四類(payment/external-send/prod-irreversible/self-governance)零參數…
+    17 [KEY]: KEY:機械脊椎=收檔不信 orchestrator 自報 converged——wrapper 自算 tier 重驗 gate,謊報低 tier 拉不低門檻;SPEC 空/不存在…
+    39 [fm:context]: context: __MAXR__ 由 wrapper 起點一次性 sed 注入,loop 中途無重注入管道(spec r4-F4 誠實收窄)
+    44 [fm]: - governance/autonomous-loop.sh
+    45 [fm]: - governance/autonomous_loop/confidence_report.py
+    46 [fm]: - governance/autonomous_loop/difficulty.py
+  8.925  Issues/Landmark宣告lint時接smoke排程.md  [daily,governance]
+    5 [KEY]: KEY:條件待辦(lint接線收口 [S3],r2 d-f1 把散文預言改成機械落點):Landmark 的 .lumos/lint.json 一旦出現,smoke(lint-ch…
+  8.387  Projects/lint接線收口_計劃.md  [daily,governance]
+    5 [KEY]: KEY:第 2 批接活⑦(v2,r1 五席 18 條全折後重寫)——[S1] doctor 加 [F] 檢(L2 撞 hook 分層詞彙,r2 改名)=共用 helper 複用 _…
+    23 [body]: - **[S3] smoke 責任歸屬明文化**:分家(2026-08-20)後 KDS 的 smoke 責任=其 repo 自己的 setup/CI,本 repo 不再背——寫進…
+  8.241  Projects/pitfalls-lint-integration_計劃.md  [wrapper,main]
+    50 [body]: > **狀態(2026-07-04)**:spec `docs/design/2026-07-04-lint-version-watch.md`。design-loop 6 輪 c…
+  7.538  Projects/世界repo掃描2026-09-02_調研.md  [governance,wrapper,main]
+    9 [fm]: - scope/governance
+    71 [body]: - **B2 單跑預算上限**。出處:SWE-agent(20.2k★)`per_instance_cost_limit` 預設 $3.0、觸頂 `handle_error_wit…
+    90 [body]: - **不收斂就跳過**:bmad-loop plateau-defer「story skipped, spec stashed, run continues」+ 人決策存 dec…
+  6.829  Verification/2026-08-30_intake守衛T1-T4落地.md  [daily,governance]
+    22 [body]: - **T4** doctor [I] 段:滾動窗(最近 6 個非 code 迴圈,cutoff=宣告行誕生日 2026-08-30)計宣告行出現率;<5/6 且缺席迴圈帳面有 b…
+  6.752  Systems/nested-agent-permission-scope.md  [governance,wrapper]
+    21 [DEP]: DEP:governance/autonomous_loop/orchestrator-prompt.md(改:§2 round sub-steps 3/4)｜governance…
+    40 [fm:why_chosen]: why_chosen: scope 由單一可查點 --allowedTools 在 harness 層管理即夠;獨立驗證需 wrapper 讀 log 比對工具清單,本 spec …
+    52 [fm]: - governance/autonomous-loop.sh
+    75 [body]: - **delegation-log 無法自證**:記「orchestrator 宣稱做了什麼」,可被寫假;獨立驗證(wrapper 讀 log 比對)明確不做(YAGNI)。
+  6.746  Projects/標註刷新_實作計畫.md  [governance,main]
+    12 [KEY]: KEY:測試全掛 _need_src("governance/eval")(來源 repo 專用;消費端 skip——2026-08-17 vendored 三紅教訓);fixtu…
+    13 [KEY]: KEY:同源紀律——unjudged 判定只有 collect_unjudged 一個實作(retrieval_eval.py),delta/repin/rate 三處 impor…
+    14 [DEP]: DEP:governance/eval/refresh_labels.py(新)｜governance/eval/retrieval_eval.py｜governance/eval…
+    40 [body]: **Files:** Modify `governance/eval/build_goldset.py`(main 入口);Test `scripts/test_lumos.py`…
+    41 [body]: **Interfaces:** Produces:裸跑(無 `--force-full`)→ stderr usage+rc2、零檔案寫入;`--force-full` 走原 ma…
+    43 [body]: - [ ] 實作:main() 開頭 argparse(`--force-full` store_true);未帶→print usage(stderr)+return 2。跑綠、…
+    45 [body]: ### Task 2: retrieval_eval 共用原語抽出(同源單點)✅ 2026-08-18(10 checks 綠;eval_search/eval_edit/main…
+    57 [body]: - [ ] 實作:抽 pin_snapshot(main 內改呼叫);eval_search/eval_edit 改用 universe 函式取候選(行為不變:eval_searc…
+    … 還有 2 處
+  6.712  Issues/code-loop-pass自失效追尾.md  [governance,main]
+    8 [fm]: - "[[Issues/code-loop守衛main-direct盲區]]"
+    15 [KEY]: KEY:★症狀★——code-loop pass 綁 HEAD sha 嚴格等值,但 pass 自己會往★tracked★的 docs/.governance-log.jsonl …
+    16 [KEY]: KEY:★修法(2026-08-04)★——簿記白名單豁免(可重算):留痕 sha 之後的 commit ★只動簿記檔★(docs/.governance-log.jsonl/do…
+    17 [KEY]: KEY:配套——pass/skip 成功訊息加一行順序提示(其後只准簿記檔 commit);與 [[Issues/code-loop守衛main-direct盲區]] 同屬「守衛機…
+  6.517  Projects/README審視五修_計劃.md  [daily,governance]
+    17 [body]: KEY:d3 自主迴圈暫停派工——daily-governance 不再每天派 orchestrator(帳上近兩週(8/23–9/5)滾動週報收斂 0/待放行 0、每週 210–…
+  6.514  Verification/2026-08-23_about_code存量雙評審落地.md  [daily,governance]
+    51 [body]: | KEY 明寫觸發點/入口 | bound-tests-gate ← pre-push;autonomous-loop ← daily-governance.sh | 1 |
+  6.476  Projects/prepush主幹範圍修法_計劃.md  [governance,main]
+    10 [fm]: - "[[Issues/code-loop守衛main-direct盲區]]"
+    15 [KEY]: KEY:問題=pre-push 的 tier/code-loop 守衛以 merge-base(HEAD,main) 算 diff——main-direct 時 mb==HEAD,…
+    16 [KEY]: KEY:方案裁定=①機械修(本計劃):pre-push hook 改讀 **stdin 推送範圍**(githooks(5) 標準合約:每行 `<local_ref> <local…
+    17 [KEY]: KEY:hook 改動——**stdin 必須最先讀**(讀進陣列再跑測試段,防後續指令吃掉);逐推送 ref 檢:刪除 ref(local_sha 全零)跳過;**無基準(新 r…
+    20 [KEY]: KEY:★風險面★self-governance=high(動 pre-push 守衛本身)——spec 過 design-loop 非 light([[Issues/code-l…
+    21 [TEST]: TEST:見 body 測試策略——--diff CLI 格數/新舊相容/留痕座標(綁 remote_ref 目的地非 local_ref)/hook 假 stdin 模擬(mai…
+    29 [body]: > **狀態**：**實質收斂人裁放行（2026-07-21，使用者）**——cap 3 輪滿＋r3 首個輪有效（opus 2/2）＋設計本體 Codex 確認解除＋殘留全文件歷史…
+    33 [body]: `scripts/hooks/pre-push` 的代碼風險段以 `git merge-base HEAD main` 起算 diff：main-direct 時 mb==HEAD…
+    … 還有 9 處
+  6.280  Projects/code-loop必用守衛_實作計畫.md  [governance,main]
+    16 [KEY]: KEY:留痕 governance/code-loop/<branch>.json {head_sha,status:passed|skipped,note,ts};HEAD 移動…
+    17 [DECISION]: DECISION:subagent-driven TDD;基線=main 現值(先跑取)
+    77 [body]: - [x] **Step 3: 實作** — 見設計 §1+§2:跑 `pitfalls --diff <range> --no-lint --json` 取 tier;讀留痕,p…
+  6.046  Verification/2026-08-11_AndroidUI工作流A段落地.md  [governance,main]
+    6 [fm]: lumos 現行 pitfalls --diff 排除規則(governance/review-reports/ 字串前綴)、
+    48 [body]: 1. **Task 2 的 implementer 在主 repo（main）commit 而非 worktree**——已 cherry-pick 到 `feat/android…
+  5.915  Issues/自主loop加法偏食.md  [governance,main]
+    15 [KEY]: KEY:實證=exec-anchor-gate(2026-07-07):$30/6輪/5組件的 G3 執行錨設計,動機 gap(測試紅了溜進 main)為真,但成比例解法=pre-…
+    29 [body]: - 動機 gap 為真:repo 無 CI、pre-push 不跑測試 → 紅測試 48 小時內兩度溜進 main。
+  5.745  Systems/lint-declaration-health.md  [daily,governance]
+    74 [body]: - [ ] 接巡檢:`lint-check` 靜態層併入 `doctor --ci`(消費專案 push 前掃自己 lint.json 格式);smoke 太慢不進 doctor,…
+  5.676  Projects/Codex外審吸收_計劃.md  [governance,main]
+    17 [KEY]: KEY:待辦 backlog(依價值序)——①合約普查(星標 INVARIANT 密度慘案:172 篇僅 2 條掛最強鏈;嚴禁 code 反推,按業務語意逐一判)②cluster …
+    70 [body]: **正名建議（採納傾向）**：「CI 回流**閉環**」→「CI 回流**觀測**」——它擋不了 push/merge/direct-main，沒有 required check …
+  5.598  Projects/回訪掃描_計劃.md  [daily,governance]
+    10 [fm]: - content: v3 落地:E5 回訪掃描段(fail-closed 壞日期/最老優先/全靜默)+接電條款(daily doctor --ci)+nags 升級鏈整條測試證明…
+    35 [body]: - **★接電條款(r2 外家 blocker:牙沒通電)★**:治理事件只在 `--ci` 寫帳,而每日排程原本跑裸 `doctor`——**daily-governance.s…
+  5.540  Projects/精簡版update指令_計劃.md  [governance,main]
+    9 [fm]: - scope/graph-governance
+    15 [FLOW]: FLOW:update_cmd.py(slim/update_cmd.py)模板(get.sh 冪等語意包成指令)→slim-gen 生成期拼接(main() 前置攔截+函式;先於…
+    18 [KEY]: KEY:hooks=隨包 opt-in 檔案(install.py 永不裝,非目標不變);回填來源釘 GitHub main 6e249eb;複製清單補 hooks 與 WINDO…
+    43 [body]: - `slim/` 新增 `hooks/`——★決策脈絡明文(std-r1 兩席質疑「與『不裝 hook』裁定衝突」,以遠端現況反證後補述)★:hooks=**隨包交付的 opt-…
+    62 [body]: 1. `t_slim_update_injection`:slim-gen 真跑→產物含 `_slim_update` 定義+main() 攔截行;模板檔缺席→生成 rc 非 0(…
+    91 [body]: - **std-r1(2026-08-18/19,ratchet 升級後 panel:3 sonnet(通才/更新邊界/整合)+Gemini 外家;收貨三道全過)**:去重後 13…
+  5.480  Projects/CI回流閉環_計劃.md  [governance,main]
+    15 [KEY]: KEY:★彈性宣告(2026-07-29 使用者裁定,零侵入預設)★——推送路徑由專案 `.lumos/config.json` 的 `ci.flow` 宣告:**無宣告=dire…
+    18 [DEP]: DEP:[[Systems/reversibility-governance-ledger]]
+    72 [body]: - **`pr`**：改動走 feature 分支，`lumos ship` 串流程（定義見 [S1c]）：建/推分支 → 開 PR → 等分支 run 綠 → 合併 → **合併…
+    73 [body]: **合併後複查是必要的（r2 席2）**：squash merge 在 main 產生**全新 sha**，它不是分支 sha 的子孫——所以 ①分支綠不代表 main 綠（squ…
+    74 [body]: - **`tier`（混合，推薦）**：跑 `lumos pitfalls --diff $(git merge-base HEAD <base>)..HEAD` 取尾行 tier…
+    82 [body]: - **GitHub 端硬保護（選配、與本案解耦）**：若日後要機械強制「紅燈不准進 main」，走 GitHub **Rulesets**（支援 evaluate 只記錄不擋的試…
+    97 [body]: - **code-loop 留痕互動（r2 席3）**：pr flow 下 main 由 GitHub 端更新、本機 pre-push 不會在 main 上跑，故留痕綁在**分支 …
+    101 [body]: `lumos-project-notes` skill 的收尾段與 code-loop 收斂後段各加一條——**僅當專案 `.lumos/config.json` 宣告 `ci` …
+    … 還有 6 處
+  5.468  Projects/intake守衛_計劃.md  [daily,governance]
+    10 [fm]: - content: Enzo 2026-08-30 裁:三輪達上限攤牌後人裁放行進實作,前提=折入 r3 四件——①T4 接 daily-governance.sh(外家:補這線…
+  5.299  Projects/改制回測_計劃.md  [governance,wrapper]
+    5 [KEY]: KEY:地基盤點第 3 批案 C——08-25 收斂制大改(處置閘/d5 記帳)至今無回測基建:[S1] 回放 runner(判定核心抽純函式共用+readonly 不落帳;差異三…
+    19 [body]: PRIOR-ART: borrow——golden master testing(凍結輸出當標準答案,重算比對)是回歸測試教科書做法;決定論讀側重放=事件溯源(event sour…
+    23 [body]: - 處置閘判定=純讀側(canary 帳列+報告檔 sha+快照),`loop status --disposal` 決定論可重算;今日已收斂迴圈 10+ 個,素材齊(govern…
+    31 [body]: - **[S3] 新舊制同料對照(一次性分析)**:取 2026-08-06~08-25 間 panel 定錨迴圈,先按帳形狀分類——(a) 單席帶處置集合=d5 可比,跑四合取記…
+    32 [body]: - **[S4] 週期接線**:autonomous-loop 週跑,範圍=**新凍結(從未回放過的)必跑+存量輪替抽樣每週 5 包**(輪完一圈重來)——不是全量:golden …
+    37 [body]: replay 對今日任一已收斂 loop=判定與當日 gate 輸出一致且治理帳行數不變;--freeze 產檔含完整閉包(帳列逐行 sha+spec sha+engine_rev…
+    56 [body]: - arch-f2/f3(golden/ 語意污染+裸檔違圖譜鐵則,2 major)→ 機器檔改 governance/replay/ 新目錄;對照產物改圖譜驗證紀錄。
+    59 [body]: - refcheck 備註:arch 席引 governance/golden/regime-comparison-2026-08.md(未產出即改制,已不建) 為 missing…
+    … 還有 1 處
+  5.229  Projects/修法A_lumos先行ablation_計劃.md  [governance,main]
+    9 [fm]: - scope/governance
+    21 [KEY]: KEY:儀器改動三件(最小)——scenario_probe 加 --runs/--arm 與 first_lumos_idx/ever_lumos 欄;lumos-entry-h…
+    85 [body]: 2. `scripts/hooks/claude/lumos-entry-hook.py`:main 開頭 `LUMOS_ENTRY_HOOK_OFF=1` → return 0;…
+    115 [body]: - **r2**:新席審 r1 修正,抓 2 條 major——①健康檢查函式 `collect_skills_health` 寫了但 main 沒呼叫(死碼);②backfill…
+  5.165  Projects/派工鏡頭注入_計劃.md  [governance,main]
+    9 [fm]: - scope/governance
+    111 [body]: 2. **清單**:`lumos impact --diff <範圍> --repo <cwd> --json`,取 `pinned: true`;★剔除 `files` 全落在 …
+    145 [body]: - 本地 main 沒設 upstream 且落後遠端時,合法 base 會被「主線可達」判不成立→靜默放行(r3 實測重現);這是假陰性不是假陽性,接受,debug 行會印取到的…
+    155 [body]: - **self-governance**:改的是治理流程。緩解=不動閘、不記帳、fail-open;新增=一支 hook、兩處模板改字、一個錨點。
+  5.140  Projects/bootstrap一鍵對稱_計劃.md  [wrapper]
+    16 [KEY]: KEY:★樞紐坑:curl|bash 下 stdin=管線★——input() 綁死讀 sys.stdin,光 open('/dev/tty') 再 input() 是裝反(r1F…
+    64 [body]: - 原生 Windows：無 /dev/tty，第 1 階涵蓋正常互動；console wrapper 令 isatty=false 時會被當非互動（用 `--init` 逃生），…
+  5.126  Projects/test-layers軟提醒_實作計畫.md  [governance,main]
+    16 [KEY]: KEY:復用錨點——config 載入鏡像 _lint_load_config(scripts/lumos:6521)/棧命中鏡像 _lint_stacks_for_diff 的「…
+  5.091  Verification/2026-08-19_精簡版update指令落地.md  [governance,main]
+    6 [fm:revalidate_when]: revalidate_when: install.py 旗標判讀改制(in-argv→argparse)、slim-gen main() 錨點變動、發行 repo 直改(下次同步 …
+    30 [body]: - `slim/update_cmd.py`(生成期模板,不隨包)+`scripts/slim-gen.py` 拼接(main() 前置攔截+函式;先於 ast.parse;錨點唯…
+    37 [body]: 14 條 10 折 4 駁(carrier=governance/review-reports/code-精簡版update指令/r1-orchestrator.md)。要點:①`…
+    49 [body]: ★2026-08-20 起本句降為歷史快照——鏡像已與本工具鏈分家(見 [[Systems/lumos-cli-lifecycle]] d5),本 repo 不再同步它,「已同步至…
+  4.812  Projects/idioms自維護迴路_計劃.md  [daily,governance]
+    45 [fm:context]: context: round-2 design-loop 跨家族Codex否決席揭露infra-fit blocker:LLM判斷鏈(refuter/草案生成/C3旁註抽取)接不上…
+    128 [body]: - `[S15]` **步序**：A 層（**C2/C3** collector→refuter→drain 草案）在 Claude session tick 一起跑（修 roun…
+  4.791  Verification/2026-07-29_CI回流閉環v1落地.md  [governance,main]
+    65 [body]: - **v1 不含 PR 流程**：紅燈仍會短暫存在於 main（靠當輪修補回），要「紅燈進不了 main」需 v2。
+  4.733  Systems/compose-metrics-adapter.md  [wrapper]
+    41 [body]: - 只報「退步了」不報「怎麼修」(unstable→stable 是人的事:`@Immutable`/`@Stable`/wrapper)。
+  4.696  Issues/code-loop守衛main-direct盲區.md  [main]
+    18 [KEY]: KEY:pre-push 的 tier=high→code-loop 硬擋守衛以 merge-base..HEAD 算 diff——**直接 commit 在 main 上時 me…
+    19 [KEY]: KEY:影響面=凡 main-direct 的 gate/守衛類 code 變更都不會被 code-loop 硬擋——把關точка失效,只剩散文紀律(編排者自覺調用 lumos-…
+    20 [KEY]: KEY:候選修法(未裁)——①pre-push 對 main-direct push 改用「本次 push 的 range(remote..HEAD)」算 tier ②家規化:ga…
+    27 [body]: # code-loop守衛main-direct盲區
+    29 [body]: pre-push 守衛（scripts/hooks/pre-push:64-88）：`pitfalls --diff` 判 tier=high 時跑 `lumos code-loo…
+    31 [body]: **實測（2026-07-21）**：M1 包 gate code 落地 push，`pitfalls --diff a08c971..HEAD` 對實際變更判 `tier: hi…
+  4.694  Projects/loop三輪壓縮_實作計畫.md  [governance,main]
+    43 [body]: - [x] **Step 1 失敗測試**:`t_caprecap_estimate`——全高重疊(每缺陷都多人找到,f1=0)→ remaining≈0;高 f1 低 f2(各找…
+    113 [body]: Verification plan_refs 回指;merge main + anchor approve + push。**本分支自身終審**:可用**新的平行 panel** …
+  4.669  Issues/推新分支時風險分級拿空樹當起點.md  [main]
+    14 [KEY]: KEY:pre-push 算風險分級時,遠端還沒有的 ref(新分支,★含首推 main★)沒有東西可比,退回拿 git 空樹 4b825dc6… 當起點=把整個 repo 當全新…
+    15 [KEY]: KEY:★這是刻意的 fallback 不是 bug★——scripts/hooks/pre-push 範圍推導三分支,註解明寫「新 ref(含首推 main:遠端無此 ref)→…
+    17 [KEY]: KEY:誠實界線——影響面比第一眼小:這個 repo 慣例是本地開分支、本地合併、★只推 main★(實查遠端只有 main 一個分支,本地有 8 個功能分支+多筆 merge 提…
+    19 [KEY]: KEY:2026-09-03 那次的處置=改推主線(遠端有 main 可比,範圍回到 25 檔),閘自然過,★沒動用任何繞過機制★;代價是白跑一次全套測試(單獨計時超過 10 分鐘…
+    33 [body]: - `remote_sha` 全零(新 ref,★含首推 main★)→ `_range="$_EMPTY_TREE..$_lsha"`,註解:「保守掃全部引入內容」
+    41 [body]: - 動作:在 main 上做完一批圖譜改動,開新分支 `seat-coverage-offline-measure` commit 後推送。
+    56 [body]: - **這個 repo 的慣例是本地開分支、本地合併、只推 main**。實查:遠端 `git ls-remote --heads Lumos` ★只有 `main` 一個分支★,…
+    58 [body]: - **首推 main 也會走空樹**(註解自己點名)。對這個 repo 已經沒差(main 早就在遠端),但對「用 lumos 的新專案」第一次推 main 時會遇到——那時候整…
+    … 還有 2 處
+  4.644  Verification/2026-07-22_prepush範圍修法落地.md  [main]
+    17 [TEST]: TEST:t_codeloop_check_diff 7 checks(--diff 算 tier/--at-sha--branch 綁座標/留痕脫鉤反例/empty-tree 保…
+    18 [KEY]: KEY:盲區實測堵住——main-direct 高風險直推 main(舊 hook mb==HEAD 靜默放行)現走 remote_sha..local_sha 增量判 high→…
+    25 [body]: 盲區修法 hook code 落地。spec：[[Projects/prepush主幹範圍修法_計劃]]（過 design-loop 收斂）。緣起 [[Issues/code-lo…
+    28 [body]: - **盲區實堵**：main-direct 高風險直推 main 現 rc1 擋（舊 hook merge-base==HEAD 靜默放行）。
+    29 [body]: - 同步（同 commit）：`code-loop必用守衛_實作計畫`（merge-base 失真句→範圍取法更新＋Step 3 打勾）、`lumos-code-loop` ski…
+  4.601  Verification/2026-09-04_Codex完全支援S0安裝層驗收.md  [wrapper]
+    29 [body]: 3. **真 Codex 冒煙**:五條註冊在隔離 hooks.json 裡包一層 `sh -c 'echo <事件>:<檔名> >> fired.log; …'`(驗收用 wra…
+  4.521  Projects/版本發布流程_計劃.md  [main]
+    15 [KEY]: KEY:目的(2026-07-30 使用者定錨)=「對外能更新／釋出哪一版我說了算／只有我能寫」;★宣稱邊界★——release 是**刻意會移動的通道**不是 pin(要 pin…
+    17 [KEY]: KEY:★核心機制(2026-07-30 使用者裁定,取代 r1 的 tag 通道版)★——**開發線與對外線分兩條分支**:main=開發線(可壞)、release=對外線(只有…
+    35 [body]: `release` 分支正是這個分離：main 隨便推，release 只有你把它快轉過去。**壞掉的 main 傳不到任何人**，因為沒有人跟 main。
+    38 [body]: - ✅ 「`get.sh` 腳本本身從 main 抓，壞 main 可讓它無視版本」→ **解掉**：README 的一鍵指令改指 `raw.githubusercontent.c…
+    42 [body]: **branch protection 的定位隨之改變**：從「本案的正解」降為「可選的縱深」——壞 main 已經傳不出去，required check 只再多保護 main 自…
+    73 [body]: - **既有 pre-push 行為預告**：對 tag ref，pre-push 會印 `非分支 ref、tier=high——advisory 放行(tag 內容 gate 另…
+    88 [body]: - **README 一鍵指令改指對外線**：`raw.githubusercontent.com/<owner>/Lumos/release/get.sh`。這關掉 r1 否決席…
+  4.518  Issues/loop機制痛點_Landmark_code-crossclaim實跑回饋.md  [governance,main]
+    30 [body]: 來源:2026-08-14 Enzo 要 Landmark 專案的 session 回報當日 loop 過程(跨 session 傳訊),回報中的「機制不順」段。原始回報存於該 s…
+    45 [body]: - **② 留痕座標三方不一致 → 仍開**(工具面):批 1-4 都在 main 上跑、沒踩 worktree HEAD:develop 的三入口不一致。未修,留著;修法=統一三…
+  4.413  Systems/slim-gen-生成器.md  [main]
+    16 [KEY]: KEY:★迴圈註冊刪除須 top_var receiver 限定★(2026-07-31 審查揪出、已修復,不是「超出範圍」)——`_is_registration_loop` 原…
+    35 [fm]: - content: 迴圈註冊刪除加 top_var receiver 限定:2026-07-31 審查(Task 5 複審)以合成 fixture 實地示範重現「保留指令巢狀自建…
+    38 [fm:why_chosen]: why_chosen: receiver檢查是最小且對稱的修法——與_add_parser_name既有的top_var限定同一套設計語言;順帶修main.body區塊追蹤讓nes…
+  4.361  Verification/2026-09-04_主session鏡頭利用率第一份報表.md  [governance,main]
+    55 [body]: - `_ttl_should_inject(..., mark=False)`+`_ttl_mark`:main 只在真的注入後才寫冷卻標記;預設 mark=True 保留舊語意(…
+  4.182  Verification/2026-08-02_slim三缺陷修復_實驗產出.md  [main]
+    9 [fm]: ①slim/uninstall.py 新增任何檔案系統寫入(要各自包 try/except OSError,不得共用) ②slim/install.py 的 main() 改成非「…
+    124 [body]: - **已重新交付**：`github.com/citrus-android-developer/Citrus_Lumos` main = `9fbc5a6`，tag **`v1.…
+  4.180  Issues/prepush測試閘假紅-git環境洩漏.md  [main]
+    14 [KEY]: KEY:★而且那個假說的前提也是錯的★:`git push` 並不會把 `GIT_DIR` export 給 hook——反證是每次 pre-push 跑完 repo 都沒被污染,…
+    42 [body]: ★而且那個假說的前提本身也是錯的★：`git push` **並不會**把 `GIT_DIR` export 給 hook。反證很直接——每次 pre-push 跑完，repo 都…
+  4.157  Projects/Codex行為精修_計劃.md  [governance,main]
+    9 [fm]: - scope/governance
+    46 [body]: - 位置:`scripts/hooks/claude/check-graph-sync.py` main 尾端「印提醒」那段。★新增★argv 解析(現況五支 hook 零解析,`…
+    89 [body]: - 失敗與回復:現況 main 只包了 JSON 解析那一行、各函式逐點防守——本案★只把 Codex 新分支★(標記檔/JSON 輸出)包 try/except 回退成 stde…
+  4.142  Projects/自足性審計閉環_計劃.md  [governance,wrapper]
+    12 [DEP]: DEP:[[Systems/autonomous-iteration-loop]]｜governance/autonomous-loop.sh｜governance/autonom…
+    57 [body]: 佐證:2026-08-24 手動派審 2/2 站不住(governance/review-reports/self-audit/ 兩份報告,12 處漂移——r1 紀錄宣稱此數已修,…
+    61 [body]: **架構**:全邏輯在 governance/autonomous_loop/selfaudit.py(已退場);loop 每日進場呼叫(傳 `--quota 2`;關=改呼叫行,…
+    117 [body]: - ★週帳 governance/selfaudit-week.jsonl(已退場)★:`{"week","stem","kind","ts","run"}`,week=ISO 週…
+    131 [body]: 原寫法整段持鎖最壞約 90 分鐘,第二個進場的 loop 會掛死);鎖檔=governance/selfaudit-week.jsonl.lock(已退場) sidecar
+    138 [body]: ★PRIOR-ART 誠實(v5-r2 arch#4):started 預約是三本既有事件帳(governance-log/canary-log/ci-log)都沒有的新形狀
+    157 [body]: pending 檔處置=歸檔到 `pending/archive/`(既有慣例),v1「可直接刪」作廢;PASS/FAIL 記 governance-log 事件(gate=sel…
+    164 [body]: `PRIOR-ART: borrow-design`——派工/LINE 抄 run_nags/run_probe;★沙盒=`scenario_probe.make_sandbox`…
+    … 還有 2 處
+  4.013  Verification/2026-08-22_評測尺三修.md  [governance,main]
+    52 [body]: 修:`_is_junk_edit_file` + main 改「多撈一倍、建池後空的丟棄補位」。
+  3.942  Verification/2026-07-31_slim-skill與readme落地.md  [main]
+    67 [body]: > - **push 後拉回 CI 結論（僅當專案 `.lumos/config.json` 宣告 `ci` 區塊時；未宣告＝此條不存在）**：`lumos ci-wait` → …
+    70 [body]: > - **紅燈不過夜**：main 上出現 CI 紅燈時，修不完也要在收尾報告明講「main 上有紅燈未解」，不得靜默收工。
+  3.923  Systems/slim-uninstall-一行卸載.md  [main]
+    17 [★INVARIANT★]: KEY:★INVARIANT★(★2026-07-31 Task 10 新增,本次修的核心★)四個清理步驟(bin／skill 目錄／`~/.lumos-slim`／CLAUDE.…
+    21 [★INVARIANT★]: KEY:★INVARIANT★(★2026-08-01 真跑冒煙抓到,測試全綠看不到★)卸載必須把身分證 manifest 自己也清掉(`~/.local/share/lumos-…
+  3.912  Projects/主session鏡頭利用率_計劃.md  [governance,main]
+    9 [fm]: - scope/governance
+    80 [body]: ### 儀器=一支唯讀腳本(將建,住 governance/eval/lens-utilization/,同席間覆蓋率那支 recount.py 慣例)
+    88 [body]: 7. **★前置修正(鄰居 hook 的兩個缺陷,量測前修,否則樣本偏)★**(★code-loop r1 改:TTL 標記在判定當下先寫、最後沒注入才撤 `_ttl_unmark…
+    90 [body]: 8. **Hawthorne**:腳本輸出只落檔案(governance/eval/…/ 下的報表),不進 `lumos gov`、不印進任何 hook,模型跑 `lumos go…
+    122 [body]: - **self-governance**:改治理觀測層。緩解=零義務、不印給模型、唯讀不寫任何帳、前置修正 fail-open。
+  3.734  Verification/2026-07-31_公開精簡版交付.md  [governance,main]
+    12 [fm]: - "governance/eval/retrieval-goldset.json 的 search 鍵條目變動 → 第3/第5道等價驗證需重跑"
+  3.730  Systems/診斷迴圈先行.md  [main]
+    18 [KEY]: KEY:★為了驗證「X 會造成傷害」,不得在真環境造成 X★——一律拋棄式環境(假 HOME／臨時 clone／worktree)。2026-08-01 同日兩犯:①為驗 GIT_…
+    91 [body]: - 為了驗 `GIT_DIR` 污染，直接在真 repo 上跑 → 127 筆測試 fixture commit 寫進 main（834 → 1029），得 reset 到乾淨基底…
+  3.616  Verification/2026-07-31_公開精簡版一行安裝卸載與代碼審修復.md  [main]
+    12 [fm]: - "slim-scan.py 的 _windowed_text() 或 scan_python_file()/main() 呼叫點被改動 → 重跑 t_slim_scan_win…
+  3.507  Projects/Codex完全支援_計劃.md  [governance,main]
+    9 [fm]: - scope/governance
+    203 [body]: - **impact-hook**:`EDIT_TOOLS` 加 apply_patch;`extract_patch_paths`(Add/Update/Delete/Move …
+    210 [body]: - **代碼審 r1(code-codex-s1,standard:單reviewer+架構+外家 Codex,2026-09-04)**:14 條(5+3+6,4 條兩席重疊)全…
+  3.423  Systems/效能檢核目錄.md  [main]
+    23 [KEY]: KEY:[2026-07-19]三時機已落地(見[[Projects/pitfalls棧別效能追問_計劃]])——①pitfalls --diff 命中棧附檢核問(manifest…
+    50 [body]: | Dispatchers 誤用 | 人判提問 | IO 密集用 Default(佔運算池)/運算密集用 IO(執行緒爆量)/main 上做重活 |
+  3.229  Projects/kotlin慣例skill_計劃.md  [main]
+    19 [body]: - **不可機檢的排最前**:R1 並行/R2 combine/R8 main-safe 恰好都是語意判斷,文件+審查鏡頭是唯一防線——這是文件存在的理由;可機檢的收進「機檢接線」…
+  3.198  Verification/2026-07-05_pitfalls事故觸發.md  [main]
+    24 [body]: - **`scripts/test_lumos.py` 671 passed, 0 failed**(基線 634[impact merge 後]→ +37:trigger 比對/…
+  3.182  Verification/2026-09-03_派工鏡頭注入驗收.md  [main]
+    25 [body]: 家目錄安裝副本直接餵 stdin 實測:`rc=0`,debug 行「已附 8 篇(固定席 12,主線 main@{upstream})」,派工詞由 2 行變 47 行(5536 …
+  2.944  Verification/2026-08-26_評測尺翻案落地.md  [main]
+    32 [body]: 主審 3 條(1 blocker)+架構席 1 條全折:①beats() 原巢狀在 report_goldset 內、main() 的切換覆寫塊呼叫=NameError——切換後每…
+  2.935  Issues/測試未隔離HOME刪掉真機Claude-hooks.md  [main]
+    59 [body]: 這是同一天內第二次「為了驗證某個危險行為，直接在真環境上把那個危險行為做出來」——前一次是為了驗證 `GIT_DIR` 污染，直接把 127 筆測試 commit 寫進本 repo…
+  2.788  Projects/關係層主網_實作計畫.md  [governance,main]
+    13 [VERIFY]: VERIFY:design-loop rel-mainnet 三輪(2026-07-15):r1 canary 3/3,24 候選→存活 D5/D10/D16 折 v2;r2 ca…
+    30 [fm]: - content: design-loop rel-mainnet 人裁實質收斂(2026-07-15):3 輪 panel cap 到頂,r3 clean(canary 3/3…
+    112 [body]: - **並行（🟠，D10 折入：降宣稱+釘實作形）**：append-only 免 in-place lost-update；寫入走**專用 helper——O_APPEND fd…
+  2.750  Projects/pitfalls事故觸發_實作計畫.md  [main]
+    36 [body]: - 測試進 `scripts/test_lumos.py` 用 `check()`;基線=main 現值(先 `python3 scripts/test_lumos.py` 取)。
+  2.740  Projects/社群演算法補強_調研.md  [main]
+    46 [body]: - 來源：Rating Roulette（EMNLP 2025 Findings）、conformal LLM-judge（EMNLP 2025 main）。
+  2.675  Projects/檢核收緊五件_計劃.md  [governance,main]
+    108 [body]: **self-governance(命中)**:三件硬擋;逃生門=A/H 標記、ack、waive、skip --class——★四個全部落帳可數,退場條件直接以它們為分子★。自簽…
+  2.622  Systems/reversibility-governance-ledger.md  [governance]
+    13 [fm]: - "[[Verification/2026-06-19_reversibility-governance-ledger]]"
+    21 [FLOW]: FLOW:① 可逆性 — Systems KEY 行標 ★IRREVERSIBLE★/★CHECKPOINT★ + [rollback:decisions]/[guard:deci…
+    27 [KEY]: KEY:lumos gov 唯讀彙整器,不合併寫入路徑(避 bash+python 多寫者搶檔 race);六來源 = bypass-log(L2)/rot-queue(L3)/g…
+    28 [KEY]: KEY:gov 彙整多本帳(6 源 <!--lumos:count=6 re=(?m)^\s+load\((?:\"\.|CI_LOG_NAME) in=scripts/lumos…
+    34 [TEST]: TEST:全套 1427 綠(2026-07-24);t_reversibility_lint/doctor/guard_doctor + t_governance_log_wri…
+    35 [VERIFY]: VERIFY:[[Verification/2026-06-19_reversibility-governance-ledger]]
+    64 [body]: # reversibility-governance-ledger
+  2.605  Projects/loop機械脊椎M1包_計劃.md  [governance,main]
+    25 [KEY]: KEY:★風險面★self-governance=high——四件全動「判定 spec 能否進實作」的閘;進實作前本 spec 必過完整 design-loop(high tier…
+    177 [body]: **code-loop 補審（2026-07-21，main-direct 盲區事後補審，loop id `code-m1spine`）**：
+    186 [body]: - **self-governance 循環（最重）**：四件全動「判 spec 能否進實作」的閘——gate 邏輯錯＝系統性放行壞 spec 或永擋好 spec。緩解＝本 spe…
+  2.603  Verification/2026-06-19_reversibility-governance-ledger.md  [governance]
+    4 [fm:feature]: feature: reversibility-governance-ledger
+    18 [body]: # Verification: reversibility-governance-ledger
+    20 [body]: 驗 [[Systems/reversibility-governance-ledger]] 的可逆性 Check R + 治理帳 `lumos gov`。
+    31 [body]: - `t_gov_query`：全專案結構 fixture 三/四來源合併、stem 比對、`gov <node>` 命中 governance-log 事件。
+  2.563  Issues/vendored自測3紅_來源repo專用測試漏標skip.md  [governance]
+    13 [KEY]: KEY:①t_precommit_whitelist_drift_guard 讀 docs/lumos-toolchain-knowledge/Systems/pitfalls-c…
+    22 [body]: > ①`t_precommit_whitelist_drift_guard` 頂部補 `_need_src("docs/lumos-toolchain-knowledge/Syst…
+  2.501  Verification/2026-07-11_檢索goldset評測.md  [governance]
+    16 [VERIFY]: VERIFY:goldset+評審底稿凍 governance/eval/(raters/ 四份 JSON+指引);評測器 goldset 模式 fail-closed(空標 FA…
+  2.495  Projects/流程優化六件_計劃.md  [governance]
+    19 [DEP]: DEP:scripts/lumos｜scripts/test_lumos.py｜skills/lumos-design-loop/SKILL.md｜governance/auton…
+  2.489  Systems/judge-perturbation-stability.md  [governance]
+    13 [KEY]: KEY:落地的不是擾動機制而是輕方案——confidence_report.py 把殘留風險升級成「結構上沒能自動檢查的維度」(judge 單一不可靠列首),把放行人的眼睛導到破口…
+    15 [DEP]: DEP:governance/autonomous-loop.sh(RESIDUAL 清單)｜confidence_report.py｜judge-severity-gate(被它…
+  2.486  Projects/CLAUDE注入re-sync與版本標籤_實作計畫.md  [main]
+    126 [body]: Verification plan_refs 回指設計節點;設計 TEST/status→done;merge main + anchor approve(test 檔動)+ pu…
+  2.452  Projects/檢索edit面真紅_計劃.md  [governance]
+    16 [DEP]: DEP:governance/eval/retrieval_eval.py(診斷原語)｜scripts/lumos(impact 排序,未動)｜scratchpad autopsy…
+    69 [body]: - **[self-governance]**:本節點階段純離線觀測,無擋人面。
+  2.436  Projects/panel收斂判準改革_計劃.md  [governance]
+    18 [KEY]: KEY:★立案動機(r1 措辭校正)★——panel 是風險最高路徑(tier=high 專用)卻配最鬆判準(一個乾淨輪即收斂 K=1);convergence-evidence-…
+    20 [KEY]: KEY:★證據二(內部回放 v2,r1 s2 席打掉 v1 後重算;governance/eval/k1_stop_replay.py 可重算)★——v1「乾淨輪」漏算真 gate…
+    27 [KEY]: KEY:★誠實天花板★——內部回放:panel 直接層 n=1(真 gate 語意)不足以獨立定案,主證在外部+截尾方向論證;severity=當時辯方後自報不可重審;cluste…
+    28 [DEP]: DEP:scripts/lumos(_loop_status_panel / _round_valid_m2 / _estimate_remaining_defects 三函式)｜…
+    43 [body]: K=1 是 convergence-evidence-gate 記錄在案的「未經檢驗的取捨」。本案動機為**假設性風險**（r1 校正：T8/RSNO 未收斂是三條合取共同作用的結…
+    50 [body]: - **self-governance 特有**：①改閘的 spec 必須過 design-loop 審（r1 已走完，15 組 findings 全處置）；落地測試需含「舊帳在新…
+  2.425  Systems/judge-severity-gate.md  [governance]
+    19 [KEY]: KEY:只改 governance/autonomous_loop/orchestrator-prompt.md 的 judge prompt 與數據流;scripts/lumos…
+    21 [DEP]: DEP:governance/autonomous_loop/orchestrator-prompt.md(judge prompt sub-step4/4.5/5/6)｜scri…
+  2.421  Projects/design-loop重設計_實作計畫.md  [governance]
+    21 [DEP]: DEP:scripts/lumos cmd_canary/cmd_loop_status/cmd_loop_next｜scripts/test_lumos.py｜skills/lu…
+    109 [body]: **Create**: governance/eval/canary_calibration.py(2026-08-26 已退場,詳建了沒人跑批次裁定)（stdlib）；**Tes…
+    148 [body]: - ✅ **T7（2026-08-04）**：governance/eval/canary_calibration.py(2026-08-26 已退場)——判定 import lu…
+  2.417  Systems/pitfalls-code-loop.md  [governance]
+    21 [KEY]: KEY:[2026-08-05]UI 層驗收慣例(MCP 接驗證層,Enzo 靈感;立慣例不綁案)——test-layers 宣告 layer 含「UI 驗收」的棧被 diff 命…
+    22 [KEY]: KEY:[2026-08-05]pitfalls --diff 排除 governance/review-reports/ 路徑——歸檔證物(席報告/canary 快照 .patc…
+    25 [KEY]: KEY:[2026-08-05]席報告留痕慣例+收貨 quote-check(advisory)——報告落 governance/review-reports/<loop-id>/…
+    52 [fm]: - content: code-loop check 在 marker 檔不在時退讀 tracked 的治理帳(docs/.governance-log.jsonl 最後一筆該分支…
+  2.416  Projects/doctor-run事件_計劃.md  [governance]
+    33 [body]: - `run_doctor(... ci=True)` 在既有 `_append_governance_log(env.vault, gov_events)` 之前,**無條件**…
+    67 [body]: 併發——append 同既有路徑。效能——每次 --ci 多一行。資源——既有 with-open。風險類:self-governance——不擋任何東西,無誤擋;★反向:多一種事…
+  2.390  Verification/2026-08-18_標註刷新落地.md  [governance]
+    22 [VERIFY]: VERIFY:真庫驗收——①重放 ab910519:touched 口徑未標 401/668(60%),固定席全在觸及集內=當年 77 噪音依構造必被接住;repin 硬擋+吐清單…
+  2.389  Projects/送審前impact鏡頭機械化_計劃.md  [governance]
+    19 [DEP]: DEP:scripts/lumos cmd_impact_diff / cmd_code_loop / _codeloop_guard_verdict｜governance/cod…
+  2.370  Verification/2026-09-03_派工攔截點實測.md  [governance]
+    6 [fm:revalidate_when]: revalidate_when: ①Claude Code 大版本更新 ②要據此動手設計派工閘之前(結論綁版本,動工前重跑一次 governance/eval/hook-inter…
+    19 [TEST]: TEST:重跑步驟與原始 hook 輸出在 governance/eval/hook-intercept/(README 有完整 JSON 片段);測完設定已還原並與備份逐欄比對相…
+  2.362  Projects/迴圈摩擦三修_計劃.md  [governance]
+    5 [KEY]: KEY:立案(2026-08-25 Enzo「ok」;問世界歸檔 governance/review-reports/loop-friction/)——v1 提三修,r1 五席 2…
+    59 [body]: - 詳帳:`governance/review-reports/loop-friction/r1-*.md`+`measurements.md`;收貨:三席引句全錨,arch/ex…
+  2.347  Verification/2026-07-21_lumos-show讀取入口.md  [governance]
+    20 [VERIFY]: VERIFY:spec 過 light r1→ratchet→std panel 3 輪+Codex 否決席 3 次介入,實質收斂人裁(2026-07-21);golden 凍結 …
+  2.342  Systems/slim-skill-修剪.md  [governance]
+    17 [KEY]: KEY:★2026-08-01 補一條非指令型的懸空引用★——reference.md:679「設計全文與三輪對抗審:`Projects/from-scratch重生守衛_計劃`+…
+  2.335  Systems/anchor-integrity.md  [governance]
+    24 [DEP]: DEP:[[lumos-refcheck]](vault-free 同型)｜_append_governance_log(寫者宣稱已改:doctor --ci + anchor a…
+    41 [fm]: - governance/autonomous-loop.sh
+  2.309  Systems/lumos-cli-read.md  [governance]
+    18 [FLOW]: FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃…
+    20 [KEY]: KEY:read/traverse 14 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——contex…
+    40 [fm]: - content: 讀寫原語嚴格分軌——14 個讀指令不改圖譜節點檔(2026-08-24 審計統一計數)(context/show 寫 best-effort usage-lo…
+    91 [body]: 所有讀指令先 `find_vault`(從 cwd 往上找 `docs/*-knowledge` 或 standalone vault root)→ `load_vault` 掃全…
+    114 [body]: - **讀寫嚴格分軌**:這 14 個不改圖譜節點檔(context/show 寫 usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀)…
+  2.309  Systems/retrieval-ranking.md  [governance]
+    44 [body]: 設計三輪 panel（Codex 跨家族否決席全勤、5/5 canary 零漏——史上首例）收斂於 [[Projects/檢索優化_計劃]]，golden 凍結 governanc…
+  2.308  Verification/2026-07-05_code-loop必用守衛.md  [governance]
+    17 [VERIFY]: VERIFY:三守衛共用判定式 tier=high(pitfalls --diff)∧無有效pass∧無有效skip → blocked;lumos code-loop {pass…
+  2.308  Verification/2026-07-21_loop機械脊椎M1包.md  [governance]
+    20 [VERIFY]: VERIFY:spec 過 3 輪 panel(canary 1/4→4/4→2/2)+Codex 否決鏈五迭代 NO-VETO+實質收斂人裁;golden governance/…
+  2.305  Issues/連鎖佇列開了沒人跟完.md  [governance]
+    14 [fm]: - scope/governance
+    21 [FLOW]: FLOW:decision-supersede→自動開 cascade 帳本(governance/rel-cascade/<cid>.jsonl)→★然後就沒有然後了★——沒有任…
+  2.296  Projects/收斂閘漏項敏感度v2_計劃.md  [governance]
+    9 [fm]: - scope/governance
+    33 [KEY]: KEY:★隔離三件預註冊★——①執行環境照 scenario_probe 沙盒(拔 remote/pre-push 寫死 exit 1/假身分),不用 worktree,因 202…
+  2.295  Systems/canary-audit.md  [governance]
+    30 [KEY]: KEY:[2026-08-06 效度自檢落地,plan:[[Projects/驗證層自證三件_計劃]]]①型別派工當下★隨機抽★取代固定輪替(loop next;固定輪替=可猜=答…
+    32 [KEY]: KEY:[2026-08-04 d4,design-loop 限定]canary 在 design-loop ★降級為觀測★(不再一票否決:missed 不作廢該席 finding…
+  2.295  Verification/2026-08-21_L4交叉審計30節點清帳.md  [governance]
+    38 [body]: | reversibility-governance-ledger | 12 | 3 | 0 | 0 |
+  2.265  Projects/子代理續談調研.md  [governance]
+    20 [KEY]: KEY:2026-08-14 實測=本機「互動式」terminal session 續談失敗「No transcript found」——互動 session 主對話與子代理正文 …
+    73 [body]: - 現況結論：**headless 環境（governance 排程、自主迭代 loop）技術上可用；互動式 session 仍不可用**（transcript 不落地）。
+  2.265  Projects/impact-diff橋接_計劃.md  [governance]
+    25 [body]: - **聚合語意**：diff 內每支改動 code 檔各跑一次 ranked impact（共用一次載入的圖譜環境——r1 panel N+1 修正），query=該檔 hunk…
+    33 [body]: - t_impact_diff 14 斷言：rc/manifest 結構/seed 過濾（code 檔進、圖譜節點與 governance 資料檔不進、**已刪檔保留**、CJK …
+  2.250  Projects/檢索多詞回退_計劃.md  [governance]
+    21 [DEP]: DEP:scripts/lumos cmd_search(_cand_hits/_cand_detail/matches)｜governance/eval/build_goldse…
+  2.245  Projects/驗證層自證三件_計劃.md  [governance]
+    22 [body]: PRIOR-ART: ① 最小解層級——主體是既有留痕與既有子命令(quote-check/refcheck/canary_calibration/canary record --…
+    40 [body]: - **前瞻層(真 SNR,接對資料結構)**:資料源=governance/eval/canary_calibration.py(已退場) 的固定題×多席判定矩陣(plants …
+    42 [body]: - 排程:掛 `governance/autonomous-loop.sh` 的 run_exam 同路徑(dry-run 模式下仍真跑、唯讀觀測輸出;該腳本非 --dry-run…
+    64 [body]: - **[self-governance] 誤擋逃生口**:S1 v1 恆 rc0(觀測),不存在誤擋;未來若升閘須另立計劃過 loop,並依 Growth test 三問(S3)…
+    67 [body]: - **pre-flight(2026-08-06,機械排乾,不算 loop findings)**:①S2 資料源 governance/canary-samples/(已退場)…
+  2.229  Systems/delguard.md  [governance]
+    12 [fm]: - scope/governance
+  2.228  Projects/Android側UI測試綁圖譜工作流_實作計畫.md  [governance]
+    9 [fm]: - scope/governance
+    16 [KEY]: KEY:spec 單源=[[Android側UI測試綁圖譜工作流_計劃]](design-loop r1/r2 雙 PASS,golden@governance/golden/An…
+  2.221  Projects/檢索優化_計劃.md  [governance]
+    55 [fm]: - governance/eval/retrieval_eval.py
+    65 [body]: PRIOR-ART: 見 [[Projects/檢索優化_調研]]（deep-research 3 票查證）。**本計劃為雙盲草案合併**：Claude 與 GPT-5.6（Cod…
+    342 [body]: - **階段四（2026-07-10）✅ 框架 + 實證**：`governance/eval/retrieval_eval.py`（nDCG@k/MRR/P@k/Recall，讀…
+    354 [body]: Landmark 亦建人工考卷（30 search+20 edit/467 標;雙盲一致 77%、0 強衝突免人裁;資產版控於其 repo governance/eval/）。首考…
+  2.215  Projects/impact鏡頭機械化_計劃.md  [governance]
+    24 [fm:superseded_by]: superseded_by: ★2026-09-03 實測推翻死因,重開條件已滿足(見 [[Verification/2026-09-03_派工攔截點實測]])★:d2 的核心死因…
+  2.210  Systems/finding-refute.md  [governance]
+    21 [DEP]: DEP:skills/lumos-design-loop/SKILL.md 步驟4.5｜governance/autonomous_loop/orchestrator-prompt…
+  2.201  Issues/自足性審計提醒空轉四十六天.md  [governance]
+    11 [fm]: - scope/governance
+  2.198  Projects/設計審收斂重定義_計劃.md  [governance]
+    35 [fm]: - content: 重寫訊號雙訊號嘗試(折入波及幅度+核心裁定命中)已試並撤回——loop-friction r1 五席證死:回代不成立(同案兩算法 27%/32% 跨線;pc-…
+    94 [body]: 4. 舊帳注意:prose-convergence(無 -v2)r1 五筆帶 clusters 已髒、已自首,不再碰;勿 commit governance/nags-last-w…
+  2.198  Projects/先問世界_存量掃描裁定.md  [governance]
+    48 [body]: | FP learnings 留痕:辯方裁定假陽性的 finding(pattern+理由)→ governance/code-loop/learnings.jsonl(規劃路徑,…
+    49 [body]: | 收斂即凍結:converged spec 快照 + 辯方裁決後存活 findings → governance/golden/(規劃路徑,批次2待做未建) | Giskard …
+    55 [body]: - **邊級(Doorstop)**:Verification 寫入/重驗時記「被驗 Systems 的 summary block sha8」進 governance/link-…
+    71 [body]: 成熟工具三共識,lumos 全數同宗:①**狀態存工件本身**非外部 DB(PR-Agent comment 錨/Swimm .swm 進 repo ↔ lumos governa…
+  2.196  Projects/收斂機制優化調研2026-08-14.md  [governance]
+    23 [KEY]: KEY:★同日帳本實測(五本帳~780 筆,腳本=governance/eval/ledger_analysis.py+cd_fix.py)★——①候選③證據(★r1 統計席修正版…
+    60 [body]: 殘餘假安心逐筆(C 段輸出摘錄):21 輪殘餘<1.0,其後 14 輪仍出 major+——含 rel-mainnet r1(估 0→下輪 23 條 blocker)、fromsc…
+    124 [body]: > **★2026-09-01 三度重現+新外證(裁定不動)★**——世界治理掃描(governance/reports/world-governance-scan-2026-09…
+  2.188  Verification/2026-08-26_改制回測落地.md  [governance]
+    5 [fm:valid_under]: valid_under: "engine_rev=d5-2026-08-25;governance/replay/ 閉包格式 v1(全列原文+逐行 sha 集+spec 窗末 sh…
+  2.178  Systems/design-loop.md  [governance]
+    33 [KEY]: KEY:[2026-08-26]世界對照(governance/review-reports/world-benchmark-2026-08-26.md)——最終形態核心判準與業界…
+    37 [KEY]: KEY:★問世界:散文收斂(2026-08-25,調研歸檔 governance/review-reports/prose-convergence/)★——四傳統(Fagan-Gi…
+    60 [KEY]: KEY:★08-25 改制的遲到對照證據(2026-08-26 補齊,[[Verification/2026-08-26_新舊制同料對照_v0]])★:45 個舊制迴圈——26 可…
+    109 [fm]: - content: 圖譜鏡頭擴到每一席(2026-08-29):code-loop 派工時,impact 的固定席(帶硬合約或出過事故的節點)★逐條貼進每一席派工詞★、固定席必答…
+  2.177  Systems/loop-convergence-recording.md  [governance]
+    37 [KEY]: KEY:★判定回放(2026-08-26 改制回測案)★:`loop replay --freeze/--golden`——收斂即凍完整輸入閉包(全列帳原文+逐行 sha 集+sp…
+  2.158  Verification/2026-09-05_README審視量測.md  [governance]
+    18 [body]: KEY:26 個 commit 只改 scripts/lumos 沒帶節點(repo 建立 6/15 → 9/5;pre-commit 只認副檔名所以放行)——重算:對 `git …
+  2.154  Projects/enforcement儀表板_計劃.md  [governance]
+    8 [fm]: - scope/governance
+    12 [fm]: - "[[Systems/reversibility-governance-ledger]]"
+    71 [body]: standard tier(pre-push 不擋,仍照紀律審)。loop=code-enforcement,卷證 governance/review-reports/code-e…
+    84 [body]: - 自動觸發代碼審(code-enf-autohook,standard 一席)抓 2 major:①內部 subprocess timeout 20s 大於外層 hook 10s…
+  2.136  Verification/2026-09-03_席間覆蓋率離線量測.md  [governance]
+    6 [fm:revalidate_when]: revalidate_when: 出現下列任一即重跑 governance/eval/seat-coverage/recount.py 並更新本篇——①有新的多席輪補填了 capt…
+    19 [TEST]: TEST:儀器 governance/eval/seat-coverage/recount.py(唯讀、零配額、可重跑);資料源=docs/.canary-log.jsonl 的 …
+  2.113  Projects/Android側UI測試綁圖譜工作流_計劃.md  [governance]
+    17 [fm]: - scope/governance
+    20 [KEY]: KEY:★缺口是三重的,且都很精確(對照既有 [[Systems/pitfalls-code-loop]] 的「UI 層驗收慣例」2026-08-05)★—①**時機**:既有慣例…
+  2.087  Projects/loop數據收集_計劃.md  [governance]
+    20 [KEY]: KEY:[2026-07-22 日報吸收]逃逸帳方向外部獨立背書——Meta-Engineering Harnesses(arXiv 2605.25665,小團隊獨立做出「合約+角…
+    32 [fm]: - content: M2 切片「席報告引圖譜率」裁定不建常設:std r1 五席 3 blocker(構念效度反轉 31.2%→9.5%=貼進派工詞後不需引路徑/oracle 造…
+    96 [body]: grep -rn "★圖譜攔截★" docs/*-knowledge governance/review-reports
+    122 [body]: 攔截記帳判準 v1:記號=★圖譜攔截★站:<值>;源:<節點名>。站位值域三選一:開案前/首輪/第N輪(N為數字)。統計範圍=docs/*-knowledge 底下、站位為單一值域…
+    131 [body]: - 釘死三帳檔名/記號的**允許引用點清單**(r1 機械席實測枚舉+r2 delta 補類):簿記白名單常數、escape 讀寫實作與測試、skill/圖譜文件、本計劃、**審查…
+    155 [body]: - **治理自指(self-governance)★真隱患★**:引圖譜率會被拿來評「鏡頭有沒有用圖譜」——表面提及會膨脹數字(canary-audit 老教訓);處置=①不進任何…
+  2.076  Systems/lumos-cli-lifecycle.md  [governance]
+    28 [★DEBT★]: KEY:★DEBT★ pull 成功但來源工作區髒(未提交改動)仍會被 vendor 出去——本輪未擋,因來源 repo 的 docs/.governance-log.jsonl …
+    63 [fm:why_chosen]: why_chosen: Enzo 2026-08-20 明示「不再往 Full 推、讓它自足、與本工具鏈分離」。考慮過的替代:①維持單向同步、鏡像端改動每次手動重打(靠人記得,零守…
+    127 [body]: - 源起:CLI 核心非日報觸發(基礎設施原語,非由 governance 日報 gap/inspiration 驅動;`governance/reports/*` 無對應項)。
+  2.064  Projects/公開精簡版_計劃.md  [governance,main]
+    22 [KEY]: KEY:★r1 發現(已折入;①②=blocker,③④=major,分級以〈審計修正紀錄〉正表為準)★——①[S1] 正面表列留下「沉默地帶」,而 [S2] 規則是「白名單**外…
+    571 [body]: 前一日 hooksPath 真機實測(新專案 clone 精簡版→`git config core.hooksPath ~/Citrus_Lumos/hooks` 絕對路徑變體驗證…
+  2.054  Systems/convergence-evidence-gate.md  [governance]
+    61 [fm]: - governance/autonomous_loop/cross_audit.py
+  2.044  Issues/真相源實質單一作者.md  [governance]
+    11 [fm]: - scope/governance
+  2.034  Projects/from-scratch重生守衛_計劃.md  [governance]
+    89 [body]: - **節點級標記**：from-scratch 重生的節點,寫入者以 `lumos set <節點> regen from-scratch/<日期>` 標 frontmatter…
+    125 [body]: - **宣告制繞過**：不標 `regen` 就完全繞過 Check J——這是 opt-in 閘的結構性限制（同 ★IRREVERSIBLE★「未標=可逆」）。緩解＝紀律 + r…
+    127 [body]: - **self-governance 循環**：Check J 由 lumos 自驗 lumos 圖譜——lint 規則本身錯了會系統性放行/誤擋;緩解＝Check J 測試逐條…
+  2.027  Issues/嚴謹度分配偏向機械層.md  [governance]
+    12 [fm]: - scope/governance
+  2.025  Projects/結清式收斂_計劃.md  [governance]
+    18 [KEY]: KEY:★首個真實 loop dogfood(2026-07-31,對象=[[Projects/公開精簡版_計劃]];該 spec 兩輪 panel 未收斂、capture-rec…
+    39 [body]: - [S2] **結構化壓縮（治長跑 governance decay 殘餘面）**：自跑迴圈長上下文不交通用摘要，壓成「已驗證證據＋未結約束」兩欄結構化狀態；硬合約、「停在放行點…
+    68 [body]: - **self-governance（真命中）**：本 spec 改的是「守自己的閘」——結清模式若設計錯，收斂閘形同虛設且不易察覺（壞掉的守衛比沒有守衛更危險）。防範：① op…
+    109 [body]: **這正是本節點〈實務隱患〉self-governance 條所警告的失效樣態被真的接住一次**：存在證明（「我查過了」）比缺席證明（「沒人挑到」）更容易被說有就有，**因此 se…
+  2.001  Projects/design-loop輕量檔_計劃.md  [governance]
+    25 [KEY]: KEY:★meta 自我約束★——加一檔+ratchet 延伸動到 loop status gate 語意=self-governance 風險類=high;按 risk-tier…
+    93 [★INVARIANT★]: - **M1（動 gate code，必過 design-loop）**：`loop status` 認第三檔 light + ratchet 延伸三級 + 硬否決機械 filte…
+  1.998  Projects/宣稱級時間戳_計劃.md  [governance]
+    9 [fm]: - scope/graph-governance
+  1.990  Issues/只退場不痛的機制.md  [governance]
+    11 [fm]: - scope/governance
+  1.971  Verification/2026-07-04_risk-tiered-review.md  [governance]
+    11 [fm:valid_under]: valid_under: difficulty.py RISK_CLASSES 四類詞表+params(high=3/8,standard=2/6)+assess_spec 黑名單…
+  1.969  Verification/2026-07-10_合約鏈補強234.md  [governance]
+    38 [body]: - [[Systems/reversibility-governance-ledger]]
+  1.958  Verification/2026-07-02_anchor-integrity.md  [governance]
+    11 [fm:valid_under]: valid_under: scripts/lumos cmd_anchor_verify/approve(ANCHOR_FILES 5 檔列舉 + sha256 + rc 0/1/…
+    22 [body]: `python3 scripts/test_lumos.py`:t_anchor 14 checks 全綠,308 passed 0 failed(含 t_governance_l…
+  1.951  Projects/業務簽核留痕_計劃.md  [governance]
+    33 [body]: - [[Systems/reversibility-governance-ledger]]
+  1.948  Verification/2026-07-10_審計loop研究硬化.md  [governance]
+    47 [body]: - [[Systems/reversibility-governance-ledger]]
+  1.935  Projects/lumos-show讀取入口_計劃.md  [governance]
+    20 [KEY]: KEY:圖譜同步義務(r1 折入 F8;r2 擴列散落面)——同一 commit 須帶:[[Systems/lumos-cli-read]]「12」至少 5 處+「23」算式全改+…
+    58 [body]: 4. `Systems/lumos-cli-read` **全節點零副作用宣稱一併改寫（r3 Codex 復核擴列；r4 opus 輪補全）**：**六處**——:11 FLOW「…
+    117 [body]: - **r4 終局 Codex**：六處枚舉完整 ✓；措辭再收一格（doctor --ci 寫 governance-log，:416 寫者自述）——照其原句逐字折入，異議按其自開…
+  1.922  Projects/design-loop重設計.md  [governance]
+    27 [DEP]: DEP:scripts/lumos _loop_status_panel / _panel_extra_checks / cmd_canary / cmd_loop_next｜sk…
+    80 [body]: 降到 minor 的 loop（rel-mainnet: blocker→blocker→minor），也死在 capture-recapture 殘餘
+  1.919  Projects/code席爆炸半徑供糧_計劃.md  [governance]
+    42 [body]: - **★真隱患:impact 把審計證物當程式碼來源★**(停案筆記副產物 bug#1,擋在 B 的路上):`governance/review-reports/**` 的凍結 …
+  1.896  Verification/2026-08-26_建了沒人跑退場批落地.md  [governance]
+    5 [fm:valid_under]: valid_under: "「治理帳 0 次使用」以 docs/.governance-log.jsonl 於裁定日 grep 為據;退場≠否定設計價值,是輸入源斷供(canary…
+    27 [body]: valid_under: 「治理帳 0 次使用」以 docs/.governance-log.jsonl 於裁定日 grep 為據;退場≠否定設計價值,是輸入源斷供(canary …
+  1.882  Issues/簿記白名單漏canary與bypass帳.md  [governance]
+    24 [body]: 根治=把 docs/.canary-log.jsonl 加進 `_BOOKKEEPING_FILES`(scripts/lumos:11315)——但那是 code 改動、要自己過…
+  1.873  Projects/自主迴圈修理_計劃.md  [governance]
+    37 [body]: ②`decay_and_prune` 改簽名**回傳被淘汰的列**;呼叫端先把淘汰列 append 到 governance/backlog-archive.jsonl(首次淘汰才…
+  1.872  Projects/連結缺失補全_計劃.md  [governance]
+    93 [body]: - **[self-governance]**:純觀測工具,無擋人面;誤報候選=人裁時多看一眼即棄,成本=人時,D1 詞幹下限+D2 家族條件即為抑噪。
+  1.868  Projects/probe輪退場_計劃.md  [governance]
+    32 [fm:context]: context: 更正 d1 的佐證句:今日三個多席 code-loop 實為各兩輪(r1 折入+r2 delta)於上限內以處置閘收斂——d1 曾誤記「單輪收斂」,治理帳 gov…
+    46 [body]: ①教義互斥:[[Projects/panel收斂判準改革_計劃]] 被翻紀錄(2026-08-08,Enzo 具名)寫「code-loop 收斂改走 --disposal」;但 c…
+  1.836  Issues/探針沙盒改動真全域機器狀態.md  [governance]
+    12 [fm]: - scope/governance
+  1.835  Issues/寫下風險當成處理風險.md  [governance]
+    11 [fm]: - scope/governance
+  1.831  Projects/閘觸發帳統計_計劃.md  [governance]
+    59 [body]: **母體 = `lumos gov` 既有讀入的帳**(bypass/rot-queue/governance/canary/kill/signoff/ci)。★「七本」不是固定常…
+    68 [body]: | **去重列** | 以 (commit, 節點集, gate, kind, token) 去重後(`scripts/lumos:2950-2957`) | 8,156(gove…
+    100 [body]: - 原草案用「mapper 硬寫 `nodes: []`」當判準是錯的(r3 s3 席):`code-loop` 的空 nodes 是**寫入端**寫的(`scripts/lumo…
+    166 [body]: - **self-governance(pitfalls 命中)**:本案★不擋任何東西★,故無「誤擋」可言,也不需要逃生口——恆 rc0、不改 doctor 判定。★但反向風險存…
+  1.826  Projects/建了沒人跑批次裁定_計劃.md  [governance]
+    43 [body]: - ★消費端假紅回歸釘的樣本置換★:t_vendored_consumer_srconly_skip_regression 原拿 canary_snr.py 當「目錄在、檔不在」陷…
+  1.819  Verification/2026-08-30_席報告圖譜使用一次性盤點.md  [governance]
+    36 [body]: 單一編碼員+抽查 3 份(全對);三值判定含判斷成分,帶星 2 份與拿不準 1 份的疑義原文照錄於編碼表(governance/review-reports/graph-usage…
+  1.812  Verification/2026-08-14_子代理續談headless實測.md  [governance]
+    30 [body]: - 三個應用場景（追問取代重派／攻防加一回合／原審查員驗修）在 headless 自主 loop（governance 排程、自主迭代）技術上已可行；寫入 design-loop …
+  1.796  Verification/2026-08-25_probe輪退場與多席路由統一落地.md  [governance]
+    32 [body]: - 世界對照補記(2026-08-26,governance/review-reports/world-benchmark-2026-08-26.md):受監管實務保留「事後隨機抽…
+  1.770  Issues/設計迴圈問閘指令與panel記帳互斥.md  [governance]
+    47 [body]: 出處:node-restore-sop-v2 r2/r3 審計(governance/review-reports/node-restore-sop-v2/);相關:[[Syste…
+  1.729  Projects/design-loop提效_計劃.md  [governance]
+    107 [body]: - **★統一單位裁定(r2 折入,一刀收四洞:Codex 謂詞/A caught-輪三讀法/B 首輪 missed 定錨+中段卡死/C ledger 蒸發)**:cluster …
+    141 [body]: - **★統一單位裁定(major,Codex+A+B+C 四洞同根)**:cluster 一切語意只作用於「有效輪」(≥2 caught∧0 missed,輪級);無效輪完全豁免…
+    162 [body]: - **self-governance 循環（最重）**：M2 改的是「判定所有 spec 能否進實作」的閘——gate 邏輯錯了會系統性放行壞 spec 或永遠擋好 spec。緩…
+  1.724  Projects/主動影響幅度偵測_計劃.md  [governance,main]
+    369 [body]: - `hook_decide` 多一個 `repo` 參數:無副檔名檔靠首行 shebang(python/bash)入樣(`scripts/lumos`、git hooks 原本…
+  1.709  Projects/code側刪除傳播守衛_實作計畫.md  [governance]
+    9 [fm]: - scope/governance
+    14 [KEY]: KEY:spec 單源=[[code側刪除傳播守衛_計劃]](design-loop 已收斂,golden@governance/golden/code側刪除傳播守衛/);本節點只…
+  1.706  Projects/edit面查詢品質閘_計劃.md  [governance]
+    70 [body]: - **[self-governance]**:不擋人;旋鈕停用=可逆。
+    112 [body]: tier=standard 單審:max=minor 一條(救援測試旋鈕在收窄後為前瞻防護、docstring 因果敘述過時→已修真);四特別鏡頭(NaN 寫法/gated 作用域…
+  1.685  Projects/code側刪除傳播守衛_計劃.md  [governance]
+    16 [fm]: - scope/governance
+    219 [body]: **此功能碰到的風險類**：self-governance（守衛面）、效能（pre-commit 熱路徑）、輸入健壯性／可攜性（r1 補）。逐類答：
+    221 [body]: - **self-governance／誤擋的逃生口**：v1 是 advisory、恆 rc0，不存在誤擋。實作上必須比照 Gate CC 用 `|| true` 隔離——偵測器…
+    227 [body]: - **誤報帳的狀態**：**明文不進 v1 偵測器 runtime**——v1 誤報樣本由人（或 AI 會話）事後手動記錄，落地格式歸待辦（傾向 append-only json…
+  1.681  Projects/canary注意力檢查失效.md  [governance]
+    295 [body]: 做法：從 governance/canary-samples/(2026-08-26 已退場刪除) 抽既有樣本，用本實驗的嚴格判準重判，比對。
+    326 [body]: governance/canary-samples/(已退場刪除)、README 明寫「它就是稽核證據，遮掩即失義」、
+  1.666  Systems/開發工作流總覽.md  [governance]
+    14 [fm]: - scope/graph-governance
+  1.651  Issues/同工作區多session並行改動.md  [governance]
+    27 [body]: 但沒更新 [[Systems/reversibility-governance-ledger]] 裡「7 源」那個 Check N 可重算標記。
+  1.639  Projects/派工編制資料化_計劃.md  [governance]
+    9 [fm]: - scope/graph-governance
+  1.618  Projects/Codex工作流整合_調研.md  [governance]
+    9 [fm]: - scope/governance
+  1.548  Issues/散文紀律沒有退場機制.md  [governance]
+    14 [fm]: - scope/governance
+  1.527  Systems/core-invariant-baseline.md  [governance]
+    28 [fm]: - content: approve 不重用 _append_governance_log,自寫 append 到 consumer vault 的 .governance-log…
+    30 [fm:context]: context: R3 opus 揪出的 blocker——_append_governance_log 寫 vault.parent,對 core repo = backend/…
+    72 [body]: - **留痕不對稱**:baseline 住共用 core repo,但 approve 留痕寫執行端 consumer vault 的 governance-log → cons…
+  1.516  Systems/native-windows-support.md  [governance]
+    49 [body]: 源起:**未尋得**(grep 2026-06-24~26 governance 日報的 gaps/inspirations 均無 windows/install/onboardi…
+  1.513  Projects/code階段強化_計劃.md  [main]
+    79 [body]: 2. **雙 Codex 角色(僅 code-loop tier=high)**:1 席**帶餌正式 finder,佔 W 配額之一**(替換一個同門席,總席數不變;與 LLM 席…
+  1.490  Projects/hook必看召回修復_計劃.md  [governance]
+    46 [body]: - **唯一性母體定義**(r1 折入,s2/s4):=`git ls-files` 追蹤檔集(排除 untracked/ignored——r2 勘誤:實測 tracked 529…
+    57 [body]: - **[self-governance]**:排序 advisory+考卷機械裁決;最壞=兩臂皆輸、刪碼零殘留(沿 PPR 前例)。誤救(rescued 進了不相關節點)=P@8…
+  1.473  Projects/循序codeloop-tier錨定_計劃.md  [governance]
+    9 [fm]: - scope/graph-governance
+  1.372  Projects/已知坑策展庫_計劃.md  [governance]
+    77 [body]: - **[self-governance]**:--check 只多一個 section-required 觸發源(命中已知坑→要求寫實務隱患節),不新增擋法;寬 content …
+  1.309  Projects/已知坑機械前置_計劃.md  [governance]
+    75 [body]: - **[self-governance]**:advisory 不擋人(--check 語意不變);寬召回誤報=人多讀一句;排除留痕可回審。
+  1.291  Projects/design-loop判準重定位.md  [main]
+    40 [fm:context]: context: _loop_status_panel 是 design-loop 與 code-loop 共用的同一段碼。design-loop 定位=抬品質(下游有 TDD+E…
+    240 [body]: 而 **code-loop 的定位是「保正確」，不是「抬品質」**——它審的是要進 main 的 diff，下游沒有另一層接。
+  1.244  Projects/一句話層供糧_計劃.md  [governance]
+    70 [body]: - M-2/E-1(blocker):「正文前 20 行」起算點歧義,兩獨立席讀成「檔案前 20 行」→折:T1 步驟 0 行為級定義寫死。外家「覆蓋崩到 43/390」係按誤讀口…
+  1.170  Projects/檢索PPR邊權_計劃.md  [governance]
+    43 [body]: - **self-governance（弱）**：排序 advisory，考卷機械裁決——比人判閘更不依賴自覺；最壞=考卷輸、刪碼、零殘留。
+  1.141  Projects/中心性重驗排程_計劃.md  [governance]
+    44 [body]: - **self-governance（r1 升格為真命中）**：Check S 只露前 8 筆——排序偏置會**系統性決定誰永遠不被看見**（r1 F10：樞紐霸榜＋截斷疊加）。…
+  1.076  Projects/節點還原SOP_計劃.md  [governance]
+    105 [body]: - **問世界第二輪(2026-08-24 Enzo 指示網搜;★原迴圈 r3 後折入,後經 v2 delta 三輪補審並折入修正——v2-r3 抓到舊標記「未經審查」已過期★)*…
+  1.070  Projects/驗證層去模型化_計劃.md  [governance]
+    95 [body]: - **[self-governance]**:S2 動的是守衛面規矩書——golden 語料在(本週三 loop),舊帳不回溯+新制已在 design-loop 實戰;S4 恆 …
+  0.906  MOC/index.md  [governance]
+    8 [body]: Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識圖譜。節點現況以 code 為準,完整設計史/收斂史指回 `doc…
+    24 [body]: - [[Systems/reversibility-governance-ledger]] — 可逆性綁定 + gov 治理事件帳(某節點被哪幾道閘攔過)。
+  0.000  Projects/標籤結構收編_計劃.md  []
+    21 [KEY]: KEY:刻意不做——topic/domain 分類稅(A3 消融教訓:高連結節點=導覽樞紐非答案;主題導航靠連結+aliases+檢索)
+  0.000  Projects/節點靜態先驗_調研.md  []
+    27 [body]: | **新鮮度 frecency** | 中（先建事件帳） | Firefox frecency：事件加權×指數衰減；重寫版教訓=別存時變分數（bug 458801「high-ma…
+  0.000  Systems/heterogeneous-finder-ensemble.md  []
+    25 [KEY]: KEY:capture_counts 語意=各 distinct finding-key「被幾個 finder 找到」的次數列表;跨 finder 正規化(casefold+str…
+    28 [DEP]: DEP:[[pitfalls-code-loop]](--from-pitfalls 收割 pitfalls --diff 命中)｜[[convergence-evidence-g…
+  0.000  Systems/verification-rot-eval.md  []
+    27 [fm]: - content: unit C 必須複製 L3 main() 的三道 pre-LLM 成本守衛(code_files 非空、MIN_DIFF_LINES(10)≤diff_li…
+  0.000  Verification/2026-07-15_主網M3_cascade帳本.md  []
+    8 [fm]: - "帳本目錄=<repo root>/governance/rel-cascade;repo root:docs/<slug>-knowledge 型=docs 上層、stand…
+  0.000  Verification/2026-07-31_slim-gen生成器落地.md  []
+    8 [fm]: - "輸入是單檔 `scripts/lumos`(module-level main() dispatch 慣例),非任意多檔案專案"
+  0.000  Verification/2026-07-31_公開精簡版終審修復.md  []
+    7 [fm]: - "以本次修復當下的 scripts/lumos(24 支保留指令白名單)與 governance/eval/retrieval-goldset.json(30 條 search…
+  0.000  Verification/2026-08-01_slim-ps1早期分支exit修復.md  []
+    5 [fm:valid_under]: valid_under: "分支 main;slim/install.ps1、slim/uninstall.ps1、slim/get.ps1 現行版本——早期錯誤分支(找不到 py…
+  0.000  Verification/2026-08-01_slim-python移植.md  []
+    5 [fm:valid_under]: valid_under: "分支 main;slim/install.py + slim/uninstall.py 現行版本(IS_WIN = os.name==\"nt\" or…
+  0.000  Verification/2026-08-01_slim-windows兩缺陷修復.md  []
+    5 [fm:valid_under]: valid_under: "分支 main;slim/install.py 現行版本(_pick_windows_interpreter() 直譯器 fallback、碰撞偵測同時…
+  0.000  Verification/2026-08-01_slim-終審三缺陷修復.md  []
+    5 [fm:valid_under]: valid_under: "分支 main;slim/install.ps1、slim/uninstall.ps1、slim/get.ps1、slim/uninstall.py 現…
+  0.000  Verification/2026-08-14_殘餘估計降級與重疊報表落地.md  []
+    5 [fm:valid_under]: valid_under: scripts/lumos 現行 panel gate(_panel_round_conjuncts/_loop_status_panel)與 cmd_l…
+    14 [TEST]: TEST:TDD 先紅後綠——反轉+新增共 13 斷言先紅,實作後 t_capture_advisory 6 綠/t_canary_stats_overlap 7 綠/panel …
+  0.000  Verification/2026-08-21_doctor-run事件落地.md  []
+    6 [fm:revalidate_when]: revalidate_when: "改 _append_governance_log/cmd_gov 去噪;新增會寫治理帳的 gate;棘輪案立案時(本事件是其分母)"
+
+(共 188 篇候選,照相關性排序;想照檔名排加 --legacy)
+
+exec
+/bin/zsh -lc 'python3 scripts/lumos context Projects/第二輪審視六修_計劃 --brief' in /Users/enzo/harness/lumos-toolchain
+ succeeded in 126ms:
+# Projects/第二輪審視六修_計劃.md
+type:project | status:doing | created:2026-09-05 | updated:2026-09-05
+→ 連出 (2):
+  • Systems/測試假綠形態.md [done]
+  • Verification/2026-09-05_README審視量測.md [pass]
+← 連入 (3):
+  • Projects/指令索引與情境測試_計劃.md [done]
+  • Projects/派工鏡頭注入_計劃.md [done]
+  • Verification/2026-09-05_README審視量測.md [pass]
+
+exec
+/bin/zsh -lc "python3 scripts/lumos show Projects/第二輪審視六修_計劃 && shasum -a 256 governance/review-reports/code-daily-wrapper-main/r1-snapshot.patch && sed -n '1,260p' governance/review-reports/code-daily-wrapper-main/r1-snapshot.patch" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 150ms:
+---
+type: project
+status: doing
+created: 2026-09-05
+updated: 2026-09-05
+tags:
+  - type/project
+  - status/doing
+---
+# 第二輪審視六修_計劃
+
+> 白話:2026-09-05 第二輪審視 README 之外的週邊機制(我量六件、乾淨稽核員盤十一項,報告 `governance/review-reports/readme-audit-2026-09-05-r2.md`),抓到六處「有在跑但沒發揮」。Enzo 裁「依序優化」。這篇記六條決定與證據。
+
+KEY:d1 派工鏡頭超時要出聲——impact 算大範圔:3 commit 7 秒、10 個 25 秒、20 個 30 秒、39 個 57 秒;hook 內層 45 秒超時原本靜默放行(今天 39 次派工 21 次沒附節點)。改=超時時仍改派工詞、附一行固定句(範圍+暖快取指令);skill 加「派工前先 `lumos dispatch-lens <range>` 暖快取(20 分)」。
+KEY:d2 設計審也上 hook——`lumos dispatch-lens --spec <計劃.md>` + 派工詞 `LUMOS-SPEC:` 標記:從計劃提到的程式檔跑 impact 取固定席(直接相依+事故+帶合約的一跳間接;Projects 不進;一個檔牽超過 40 篇視為太泛整檔略過並說明)、計劃直接連結的 Systems/Issues 放最前;從工作樹讀、不快取、30 秒預算。證據:209 份設計審派工詞只有 14 份帶圖譜內容。
+KEY:d3 delguard 成功也記帳——治理帳 63 筆全是 degraded 看起來像從沒守到;實測一般 commit 0.4 秒跑完(近 30 天 646 個 commit 只 63 次超時≈10%),問題是成功不記。改=跑完記 kind=ok(tokens/hits/secs)。
+KEY:d4 回放週跑日誌——原本 `cut -c1-160` 剛好把 red/stale/errors 切掉,翻案了也看不到;改成解析後印「跑了 N 包;翻案 N;過期 N;錯誤 N」獨立一行,紅燈另印一行,原始 JSON 全文照印。
+KEY:d5 testmap 每日重建(0.6 秒,建過一次後落後 614 個 commit)進 daily-governance;README 成本節寫明 linter 橋/Compose/SARIF 目前零消費端。
+KEY:d6 探針每題可自帶 max_turns(壞值退預設);s15-new-verification 設 30——它 24 步時被砍在建檔前(要先查再建),不是不會用 lumos new。看下週抽到的結果再決定去留。
+KEY:★Enzo 2026-09-05 裁:這個「審視→修→再審視」的動作要 loop 到系統自洽為止,由 Claude 裁決、保留對系統好的設計★——自洽的判準(Claude 定):一輪獨立稽核(乾淨稽核員+自己量測)找不到新的「言過其實/空轉/不自洽」、只剩已寫進 README 界線節的已知限制;每輪的修法都過代碼審處置閘。
+KEY:設計審跳過理由:六條都是觀測/預算/接線修正,沒有新的裁定面;代碼審依 pitfalls tier。
+KEY:沒做的:回放本身只真的跑過兩次,凍結檔從沒被改寫,「翻案」機制有沒有用要等有翻案才知道;bypass 帳(66 筆)仍沒有消費動作,先不加機制,寫在 README 界線裡。
+
+REVISIT:2026-09-12 看 s15 下週抽到沒、30 步夠不夠;看 governance-log 裡 delguard ok/degraded 比例是不是≈9:1。
+REVISIT:2026-10-05 派工鏡頭超時說明行出現幾次(grep 派工詞 LUMOS-LENS:鏡頭超時)、設計審 --spec 附上率(grep 「lumos 自動附加(設計審)」)。
+
+## 代碼審 r1 折入(2026-09-05,standard 3 席;卷證 `governance/review-reports/code-six-fixes/`)
+
+- **三席同題:設計審鏡頭的邊界與預算**——計劃路徑與提到的程式檔都限 repo 內(resolve 後對照 root);單次 impact 改成子行程帶剩餘秒數 timeout(之前 30 秒只在呼叫前看);有檔但沒牽到節點時給一行說明而不是空字串;計劃直接連結的節點永遠排最前;`--spec` 進互斥清單;超時句依模式給對指令。
+- **delguard 記帳修正**:掃描被 deadline 截斷回部分結果時記 degraded(reason=timeout-partial)而不是 ok;記帳走具名 helper;`lumos gov` 呈現層把 kind=ok 也折(每 commit 一筆會淹掉預設視圖)。
+- **架構對齊**:兩種鏡頭共用一個渲染 helper(原本複製一份且漏了「合約行超過 40 行」的截斷提示);回放週跑的 log 文字回到 python 端組、shell 只抽 `LOG:` 前綴(本檔慣例),加單元測試;Codex 領席分支超時也附一行說明。
+- **文件化**:探針的每題 max_turns 只影響 Claude runner,codex exec 沒有對應旗標,寫進 docstring 與 --help。
+
+## 代碼審 r2 折入(2026-09-05,delta 兩席)
+
+- **兩席同題(blocker/major)**:delguard `--json` 的 degraded 欄位寫死 False,部分結果對自動消費端看起來像完整掃描 → 接到 `_partial` 並帶 reason。
+- **3.8 相容**:計劃連結節點的 kind 合併原本用 dict `|`(3.9+),專案宣告 ≥3.8 → 改 `{**a, **b}`。
+- **部分結果的判法**:原本用「用時超過 deadline」判,慢但掃完也會被記成部分;改成 deadline_check 真的中斷過掃描才算截斷。
+- **Codex 領席超時句**改指「重新武裝 --arm」,--status 只讀不重算。
+
+## 代碼審 r3 折入(2026-09-05,末輪)——★達上限,攤人★
+
+- **兩席同題(blocker)**:第 2 輪加的測試用 0.0001 秒 deadline 逼超時,結果在 git diff 後的早期檢查點就走舊的 timeout 路,從沒進到新修的「掃描被截斷」那條——典型假綠([[Systems/測試假綠形態]])。改成行程內 monkeypatch 讓掃描真的睡過 deadline 再呼叫 deadline_check,並斷言 reason=timeout-partial。這條在席報告到之前我自己先抓到並改了。
+- **major**:單一大檔掃完才發現超時,截斷旗標不會設 → 記 ok。裁定:結果確實完整,ok 是對的;但慢要看得到 → ok 帶 reason=slow。
+- **★達上限★**:3 輪到頂,r3 仍出 blocker(已折);reason=slow 那兩行沒再派席。REVISIT:2026-09-08 併 Codex行為精修、README審視五修 兩件一起裁要不要補一輪。
+- **文件同步(第三輪自查)**:hook 檔頭「任何失敗都靜默」改成「超時不再靜默、其他失敗仍靜默」;skill 範本同句;三張良性循環圖與全景圖 ④ 標明自主迴圈已暫停派工、10/05 裁去留。
+
+## 第三輪稽核(自洽總查)折入(2026-09-05)
+
+- **對的**:gov 呈現層對 delguard ok 的折疊條件寫錯(原條件要 detail 為空,而 delguard 帳一定帶 note)→ 改成 gate=delguard 且 kind ok/degraded 就折;治理帳混進兩筆席位重現時寫進真帳的假資料(commit 欄是「fake diff output」)→ 刪除(僅此兩筆,帳本仍 append-only);README「連續七週」超過證據(帳上只有 8/23–9/5 的滾動週報)→ 改「帳上近兩週」;「五月起」早於 repo 建立(6/15)→ 改「repo 建立起」;ARCHITECTURE 指令圖補 `--spec`;全景圖頂部更新註補④暫停與兩家一致。
+- **錯的(查證後不採)**:「暫停沒兌現、今天又跑了一次燒 78 美元」——今天那次是 09:37 暫停前由排程派出的,12:42 才回;暫停 commit 在其後;daily-governance.sh 語法 `bash -n` 通過,沒有當機。「0/16 應為 2/16」——★稽核員對★:報表末段「更正(2026-09-04 晚,S3)」把 1 篇型從 0/16 改回 2/16(分類器補認 python3 scripts/lumos),我上一輪讀反了;README 中英已改 2/16。「有子代理越權 commit 2dc1d5e」——那是編排者本人的文件同步 commit。
+- **量測留痕**:26/39-21/209-14/17-11 這幾個數的重算指令另立 [[Verification/2026-09-05_README審視量測]],之後可重算。
+- **測試修正**:gov 折 delguard 的測試第一版用錯旗標(`--since-days`)且期望 ×N——gov 對同 commit 同節點的重複列是去重成一行不是 ×N;改成「帳上兩筆同日 ok 在預設視圖只佔一行」。前一個 commit 帶著這條紅測試進了版控,是我沒看 failed 數(記憶帳 audit-record-count-by-file 第七次)。
+
+## 第四輪稽核(收斂判定)折入(2026-09-05)
+
+- **稽核員對、我上一輪判錯的兩件**:①今天 09:30 的 wrapper 真的死了——不是暫停沒兌現,是我在自主迴圈那段還在跑(09:37–12:42)時改了 daily-governance.sh,bash 邊讀邊執行、回來從新檔同一位置接著讀,讀到半行 `syntax error near ')'`,之後 lint-watch/doctor/testmap 全沒跑(daily-wrapper.log 有錯誤行、三個 log 今天 0 筆)。修=整段包進 `main()` 最後才呼叫,bash 會先整份讀完;順手把這條寫進 08-自動跑的。②「1 篇型 0/16」——報表末段 S3 更正把它改回 2/16,我讀反了;README 中英與各筆記改 2/16。
+- **文字矛盾 7 處**:code-loop SKILL、commands/06 的「超時放空/靜默放行」舊句、ARCHITECTURE §4 「Codex 側會擋一次」、圖譜即合約 自主迴圈列與 commands/08 沒提暫停——都補上。
+- **收斂判定(Claude 裁)**:四輪下來,第三、四輪各只剩一件真 bug(gov 折疊條件、wrapper 邊跑邊改)加文字同步,其餘都是已寫進 README「成本與界線」的已知限制。稽核員建議下一輪改成固定範圍而不是開放式總查——採納:loop 到此收斂,後續用固定日期的 REVISIT 接:9/08 三個「達上限未再審」的補審裁定、9/12 s15 與 delguard ok/degraded 比例、10/05 自主迴圈去留與鏡頭利用率重量。
+2eb8d6689edeeab86c86994decd7e6975cf15767db886c4033cf30212bf5a9e2  governance/review-reports/code-daily-wrapper-main/r1-snapshot.patch
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index bb33539..31ffeb6 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -131,21 +131,21 @@ flowchart TB
+     classDef leaf fill:#222,stroke:#666,color:#ddd
+     class ROOT root
+     class READ,HEALTH,WRITE,GUARD,LOOP,INTEG,SARIF,CI,LIFE cat
+     class R,H,W,G,LP,I,ST,C,L leaf
+ ```
+ 
+ > `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 66 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
+ 
+ ## 4. 強制力管線 (圖譜不腐爛的機制)
+ 
+-五段接力:「回合內推播 → 提交把關 → 推送硬閘 → CI → 結果拉回當輪修」。回合內,系統在四個時點主動推:進場提醒先查圖譜、改檔前把「你要改的檔會波及哪些筆記」推到眼前、派審查員前把牽連的合約/事故附進派工詞、收工時點名改了 code 沒動的筆記(Codex 側會擋一次);硬的關卡擋在提交與推送兩個點;推上去之後 `lumos ci-wait` 把雲端測試結論拉回同一輪工作裡修(這段要專案在 `.lumos/config.json` 宣告 `ci` 區塊才啟用)。
++五段接力:「回合內推播 → 提交把關 → 推送硬閘 → CI → 結果拉回當輪修」。回合內,系統在四個時點主動推:進場提醒先查圖譜、改檔前把「你要改的檔會波及哪些筆記」推到眼前、派審查員前把牽連的合約/事故附進派工詞、收工時點名改了 code 沒動的節點(兩家都擋一次,要補或說明);硬的關卡擋在提交與推送兩個點;推上去之後 `lumos ci-wait` 把雲端測試結論拉回同一輪工作裡修(這段要專案在 `.lumos/config.json` 宣告 `ci` 區塊才啟用)。
+ 
+ > ⚠ **第五段是觀測不是強制**:`ci-wait` 只負責把雲端結論拉回來讓你當輪修,**擋不了 push 也擋不了 merge**;查不到結果時一律放行不誤擋。要做到「紅燈進不了主幹」,得在 GitHub 開分支保護(required check)——那是平台設定,本工具不碰。前四段才是硬閘。
+ 
+ ```mermaid
+ flowchart TB
+     subgraph BEFORE["🟣 回合內 hooks (Claude / Codex 同一批 · 推播為主)"]
+         ENTRY["一進場(SessionStart)<br/>提醒「第一個動作先查圖譜」<br/>+ 哪層防護掉了才多一行 + 上次 CI 結果"]
+         PRE["改檔之前(PreToolUse: impact-hook)<br/>把「這個檔會波及哪些節點、這裡出過什麼事故」推到眼前<br/>(Codex 改檔走 apply_patch,一樣接得到)"]
+         LENS["派審查員之前(dispatch-lens)<br/>把相關節點自動附進派工單,連同「規則綁的測試還在不在」<br/>Claude:改派工單 / Codex:審查員開場自己領一份"]
+         STOPH["收工時(Stop: check-graph-sync)<br/>改了 code 卻沒動節點 → 兩家都擋一次,要它補或說明<br/>(2026-09-05 起;之前 Claude 的『提醒』只進除錯日誌)<br/>(環境變數 LUMOS_STOP_BLOCK_OFF=1 可關)"]
+diff --git a/README.en.md b/README.en.md
+index 3d00dcb..85bf07a 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -324,21 +324,21 @@ It's for **development visibility** (what keeps ringing = what needs attention),
+ - **The maker doesn't referee** (maker ≠ checker): judgments without a ground truth go to an uninformed independent AI, not the author.
+ 
+ ---
+ 
+ ## 11. Cost and limits (where reality lags the idea)
+ 
+ Added 2026-09-05 after checking every README claim against the code, ledgers and measurements. Each line says what the mechanism can and cannot do, with numbers where we have them.
+ 
+ - **"Blocks code without a node" means "without touching any node at all".** Any note in the commit passes; whether it was the right note is only a one-line nudge (`lumos impact --sync-check`). It decides "is this code" by extension plus a first-line shebang; from the repo's creation (2026-06-15) to 9/5, 26 commits touching only the extension-less main CLI `scripts/lumos` slipped through until the shebang check landed on 2026-09-05.
+ - **The "reviewed" receipt is self-issued.** `lumos code-loop pass` does not verify that a review happened or that the ledger has that round; `anchor approve` is likewise a signed note. Both catch "forgot", not "went through the motions" — that layer is always a human.
+-- **Nodes attached to reviewer briefs are mostly not opened.** Our own first measurement: 0 of 16 single-node attachments were read, 0–1 of 11 code-file cases; only the 11-plus-node attachments were used about half the time. The reviewer-seat variant is not measured yet (2026-10-03).
++- **Nodes attached to reviewer briefs are mostly not opened.** Our own first measurement: only 2 of 16 single-node attachments were read, 0–1 of 11 code-file cases; only the 11-plus-node attachments were used about half the time. The reviewer-seat variant is not measured yet (2026-10-03).
+ - **"Every finding disposed" checks bookkeeping, not content.** Finding ids are typed by the orchestrator; the gate only checks that folded + declined equals the full set, not that the document actually improved.
+ - **The end-of-turn block fires once and for one condition.** Code changed, no node touched, once per session; a one-line "no note needed" counts as disposed and is not verified. Before 2026-09-05 the Claude side did not even have that — its "soft reminder" went to a debug log nobody sees.
+ - **Money.** One high-risk code review (code-loop) costs about 190k tokens; 9.3M over seven days. One design review about 50k. The daily autonomous design loop's rolling weekly summaries for the last two weeks (8/23–9/5) all read "8 runs in 7 days, 210–330 USD, 0 converged, 0 awaiting approval"; older ledger entries record only run counts; dispatch is paused since 2026-09-05 (`LUMOS_AUTOLOOP_OFF=0` re-enables), decision due 2026-10-05.
+ - **The node-attaching dispatch hook times out on long branches.** Computing which nodes a change touches takes 25–57 s for branches of 10+ commits, past its 45 s budget, so it attaches nothing; before 2026-09-05 it did so silently (21 of 39 dispatches that day), now it leaves a one-line notice in the brief and asks you to warm the cache first. Design reviews used to rely on hand-pasting (14 of 209 briefs actually had it); since 2026-09-05 the hook derives the lens from the plan note.
+ - **The linter bridge, Compose metrics and SARIF converters currently have no consumers.** This repo has no linter wired; the two external projects tried them once in early July. The commands exist and run, but nobody runs them. `testmap` was built once and fell 614 commits behind; it is rebuilt daily since 2026-09-05.
+ - **`lumos enforcement` saying "active" means registered, file present, version current** — not that the layer has an effect; it cannot see whether the five Codex hooks were ever trusted.
+ 
+ ---
+ 
+ ## Scope & further reading
+diff --git a/README.md b/README.md
+index 51d3756..e17061c 100644
+--- a/README.md
++++ b/README.md
+@@ -324,21 +324,21 @@ lumos gov OrderService   # 這個節點被哪幾道關攔過、硬擋還是提
+ - **寫的人不能自己當裁判**(maker ≠ checker):沒有標準答案的判斷,交給不知情的獨立 AI。
+ 
+ ---
+ 
+ ## 11. 成本與界線(理想跟現實的距離)
+ 
+ 2026-09-05 拿 README 逐條對回程式碼、帳本、量測後補的一節。每條寫「能做到什麼、做不到什麼、有數字的給數字」。
+ 
+ - **「改 code 沒帶節點就擋」擋的是「一個字都沒動」。** 隨便帶一篇節點就過,動對篇不對篇只有一行提醒(`lumos impact --sync-check`)。另外它判「什麼算程式碼」看副檔名加首行 shebang;repo 建立(2026-06-15)到 9/5 有 26 個只改主程式 `scripts/lumos` 的 commit 因為沒副檔名而漏過,2026-09-05 才補上。
+ - **「審過了」的憑證是自己開的。** `lumos code-loop pass` 不驗證有沒有真的開過審查、帳本上有沒有那一輪;`anchor approve` 也是簽名留痕而已。這兩道擋的是「忘了」,擋不住「敷衍」——那一層永遠是人。
+-- **派工時附的節點,審查員大多沒打開。** 自己量出來的第一份報表:附 1 篇節點的 16 次裡 0 次被讀,程式碼檔相關的 11 次裡 0 到 1 次;只有一次附 11 篇以上的那種才有一半被碰。給審查席那一版還沒量(2026-10-03)。
++- **派工時附的節點,審查員大多沒打開。** 自己量出來的第一份報表:附 1 篇節點的 16 次裡只有 2 次被讀,程式碼檔相關的 11 次裡 0 到 1 次;只有一次附 11 篇以上的那種才有一半被碰。給審查席那一版還沒量(2026-10-03)。
+ - **「每條意見都有交代才過關」驗的是帳目自洽,不是內容。** 意見編號是編排者自己取的,機器只查「折的加不採納的等於全部」,查不了「真的改進文件了沒」。
+ - **收工擋停只擋一次,而且只擋一種情況。** 改了程式碼、節點一個字沒動,同一個 session 擋一次;模型回一句「不用寫」就算交代,工具不驗那句對不對。在 2026-09-05 之前 Claude 側連這一次都沒有——舊的「軟提醒」印在只有除錯日誌看得到的地方。
+ - **錢。** 高風險程式碼審(code-loop)一次約 19 萬 token,七天量到 930 萬;設計審一次約 5 萬。每天自動跑的設計迴圈,帳上最近兩週(8/23–9/5)的滾動週報每次都是「7 天跑 8 次、燒 210 到 330 美元、收斂 0、待放行 0」,更早的舊格式帳只記次數不記結局,2026-09-05 起暫停派工(`LUMOS_AUTOLOOP_OFF=0` 可開回),2026-10-05 決定去留。
+ - **派工時附節點的 hook 會超時放空。** 算「這批改動牽連哪些節點」在 10 個 commit 以上要 25 到 57 秒,超過它的 45 秒預算就什麼都不附;2026-09-05 之前是靜默放空(當天 39 次派工 21 次沒附),之後會在派工單尾端留一行說明,並建議派工前先算一次暖快取。設計審那邊原本靠人手貼、209 份派工詞只有 14 份貼了,2026-09-05 起改成 hook 從計劃筆記算。
+ - **linter 橋、Compose 效能量表、SARIF 轉換目前沒有消費端在用。** 本 repo 沒接 linter,兩個外部專案 7 月初示範過一次後沒再用;這些指令存在、能跑,但沒人在跑。testmap 建過一次後落後了 614 個 commit,2026-09-05 起改成每天重建。
+ - **`lumos enforcement` 說「生效」= 有註冊、檔案在、版本對**,不代表那層有效果;Codex 那五支 hook 有沒有按過信任它測不到。
+ 
+ ---
+ 
+ ## 邊界與延伸閱讀
+diff --git a/docs/.governance-log.jsonl b/docs/.governance-log.jsonl
+index 2a1f46f..b777bd8 100644
+--- a/docs/.governance-log.jsonl
++++ b/docs/.governance-log.jsonl
+@@ -24004,10 +24004,86 @@
+ {"ts": "2026-09-05T16:37:06+08:00", "commit": "2dc1d5e", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+ {"ts": "2026-09-05T16:37:06+08:00", "commit": "2dc1d5e", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
+ {"ts": "2026-09-05T16:37:06+08:00", "commit": "2dc1d5e", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-08-25_probe輪退場與多席路由統一落地", "2026-08-25_迴圈摩擦兩修落地", "2026-08-26_改制回測落地", "design-loop", "設計審收斂重定義_計劃"], "note": "due=5 bad=0"}
+ {"ts": "2026-09-05T16:37:06+08:00", "commit": "2dc1d5e", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+ {"ts": "2026-09-05T16:37:06+08:00", "commit": "2dc1d5e", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
+ {"ts": "2026-09-05T16:37:06+08:00", "commit": "2dc1d5e", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
+ {"ts": "2026-09-05T16:37:06+08:00", "commit": "2dc1d5e", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
+ {"ts": "2026-09-05T16:37:06+08:00", "commit": "2dc1d5e", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
+ {"ts": "2026-09-05T16:37:06+08:00", "commit": "2dc1d5e", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5"}
+ {"ts": "2026-09-05T16:55:42+08:00", "commit": "2dc1d5e", "gate": "anchor-approve", "kind": "approved", "hard": false, "nodes": ["scripts/test_lumos.py"], "note": "第三輪稽核:gov 折 delguard 測試"}
++{"ts": "2026-09-05T16:55:58+08:00", "commit": "2dc1d5e", "gate": "delguard", "kind": "ok", "hard": false, "nodes": ["Issues/2026-08-03_剝除與邊界解析的既有缺陷群.md", "Issues/code-loop守衛main-direct盲區.md", "Issues/deinit整夾刪使用者檔.md", "Issues/git-hooks路徑指向樹內_checkout即執行分支碼.md", "Issues/hook卸載殘留註冊.md", "Issues/lint-watch空轉假綠.md", "Issues/linter-gap實務隱患.md", "Issues/prepush測試閘假紅-git環境洩漏.md", "Issues/settle路徑席位對帳無輪次可對.md", "Issues/vendored測試套件在消費端假紅.md"], "note": "tokens=10 hits=1615 secs=14.0"}
++{"ts": "2026-09-05T16:56:51+08:00", "commit": "14939f4", "gate": "anchor-approve", "kind": "approved", "hard": false, "nodes": ["scripts/test_lumos.py"], "note": "第三輪稽核:gov 折 delguard 測試改成看帳上兩筆佔一行"}
++{"ts": "2026-09-05T16:56:55+08:00", "commit": "14939f4", "gate": "delguard", "kind": "ok", "hard": false, "nodes": ["Issues/探針沙盒改動真全域機器狀態.md", "Issues/連鎖佇列開了沒人跟完.md", "Projects/CI回流閉環_計劃.md", "Projects/Codex完全支援_計劃.md", "Projects/Codex行為精修_計劃.md", "Projects/README審視五修_計劃.md", "Projects/canary注意力檢查失效.md", "Projects/cochange守衛_計劃.md", "Projects/code-loop必用守衛_計劃.md", "Projects/code側刪除傳播守衛_實作計畫.md"], "note": "tokens=5 hits=295 secs=4.1"}
++{"ts": "2026-09-05T16:57:36+08:00", "commit": "14939f4", "gate": "bound-tests", "kind": "green", "hard": false, "nodes": ["Systems/bound-tests-gate.md", "Systems/canary-audit.md", "Systems/guard-kill.md", "Systems/lumos-cli-lifecycle.md", "Systems/lumos-cli-read.md", "Systems/slim-get-一行安裝.md", "Systems/slim-install-安裝器.md", "Systems/slim-uninstall-一行卸載.md", "Systems/測試假綠形態.md"], "note": "43 綠 38.5s"}
++{"ts": "2026-09-05T16:58:05+08:00", "commit": "14939f4", "gate": "delguard", "kind": "ok", "hard": false, "nodes": ["Issues/探針沙盒改動真全域機器狀態.md", "Issues/連鎖佇列開了沒人跟完.md", "Projects/CI回流閉環_計劃.md", "Projects/Codex完全支援_計劃.md", "Projects/Codex行為精修_計劃.md", "Projects/README審視五修_計劃.md", "Projects/canary注意力檢查失效.md", "Projects/cochange守衛_計劃.md", "Projects/code-loop必用守衛_計劃.md", "Projects/code側刪除傳播守衛_實作計畫.md"], "note": "tokens=5 hits=296 secs=4.1"}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-08-25_probe輪退場與多席路由統一落地", "2026-08-25_迴圈摩擦兩修落地", "2026-08-26_改制回測落地", "design-loop", "設計審收斂重定義_計劃"], "note": "due=5 bad=0"}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-05T17:01:24+08:00", "commit": "bea4f04", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5"}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-08-25_probe輪退場與多席路由統一落地", "2026-08-25_迴圈摩擦兩修落地", "2026-08-26_改制回測落地", "design-loop", "設計審收斂重定義_計劃"], "note": "due=5 bad=0"}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-05T17:07:49+08:00", "commit": "bea4f04", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5"}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-08-25_probe輪退場與多席路由統一落地", "2026-08-25_迴圈摩擦兩修落地", "2026-08-26_改制回測落地", "design-loop", "設計審收斂重定義_計劃"], "note": "due=5 bad=0"}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-05T17:07:50+08:00", "commit": "bea4f04", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5"}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-08-25_probe輪退場與多席路由統一落地", "2026-08-25_迴圈摩擦兩修落地", "2026-08-26_改制回測落地", "design-loop", "設計審收斂重定義_計劃"], "note": "due=5 bad=0"}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-05T17:10:13+08:00", "commit": "bea4f04", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5"}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-08-25_probe輪退場與多席路由統一落地", "2026-08-25_迴圈摩擦兩修落地", "2026-08-26_改制回測落地", "design-loop", "設計審收斂重定義_計劃"], "note": "due=5 bad=0"}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-05T17:16:35+08:00", "commit": "bea4f04", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5"}
++{"ts": "2026-09-05T17:16:37+08:00", "commit": "bea4f04", "gate": "anchor-approve", "kind": "approved", "hard": false, "nodes": ["scripts/test_lumos.py"], "note": "第四輪稽核:daily-governance 包 main() 守衛測試"}
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\347\254\254\344\272\214\350\274\252\345\257\251\350\246\226\345\205\255\344\277\256_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\347\254\254\344\272\214\350\274\252\345\257\251\350\246\226\345\205\255\344\277\256_\350\250\210\345\212\203.md"
+index 952789c..162d8ba 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\347\254\254\344\272\214\350\274\252\345\257\251\350\246\226\345\205\255\344\277\256_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\347\254\254\344\272\214\350\274\252\345\257\251\350\246\226\345\205\255\344\277\256_\350\250\210\345\212\203.md"
+@@ -41,13 +41,19 @@ REVISIT:2026-10-05 派工鏡頭超時說明行出現幾次(grep 派工詞 LUMOS-
+ ## 代碼審 r3 折入(2026-09-05,末輪)——★達上限,攤人★
+ 
+ - **兩席同題(blocker)**:第 2 輪加的測試用 0.0001 秒 deadline 逼超時,結果在 git diff 後的早期檢查點就走舊的 timeout 路,從沒進到新修的「掃描被截斷」那條——典型假綠([[Systems/測試假綠形態]])。改成行程內 monkeypatch 讓掃描真的睡過 deadline 再呼叫 deadline_check,並斷言 reason=timeout-partial。這條在席報告到之前我自己先抓到並改了。
+ - **major**:單一大檔掃完才發現超時,截斷旗標不會設 → 記 ok。裁定:結果確實完整,ok 是對的;但慢要看得到 → ok 帶 reason=slow。
+ - **★達上限★**:3 輪到頂,r3 仍出 blocker(已折);reason=slow 那兩行沒再派席。REVISIT:2026-09-08 併 Codex行為精修、README審視五修 兩件一起裁要不要補一輪。
+ - **文件同步(第三輪自查)**:hook 檔頭「任何失敗都靜默」改成「超時不再靜默、其他失敗仍靜默」;skill 範本同句;三張良性循環圖與全景圖 ④ 標明自主迴圈已暫停派工、10/05 裁去留。
+ 
+ ## 第三輪稽核(自洽總查)折入(2026-09-05)
+ 
+ - **對的**:gov 呈現層對 delguard ok 的折疊條件寫錯(原條件要 detail 為空,而 delguard 帳一定帶 note)→ 改成 gate=delguard 且 kind ok/degraded 就折;治理帳混進兩筆席位重現時寫進真帳的假資料(commit 欄是「fake diff output」)→ 刪除(僅此兩筆,帳本仍 append-only);README「連續七週」超過證據(帳上只有 8/23–9/5 的滾動週報)→ 改「帳上近兩週」;「五月起」早於 repo 建立(6/15)→ 改「repo 建立起」;ARCHITECTURE 指令圖補 `--spec`;全景圖頂部更新註補④暫停與兩家一致。
+-- **錯的(查證後不採)**:「暫停沒兌現、今天又跑了一次燒 78 美元」——今天那次是 09:37 暫停前由排程派出的,12:42 才回;暫停 commit 在其後;daily-governance.sh 語法 `bash -n` 通過,沒有當機。「0/16 應為 2/16」——第一份報表更正後就是 0/16(2 是修 bug 前的數字)。「有子代理越權 commit 2dc1d5e」——那是編排者本人的文件同步 commit。
++- **錯的(查證後不採)**:「暫停沒兌現、今天又跑了一次燒 78 美元」——今天那次是 09:37 暫停前由排程派出的,12:42 才回;暫停 commit 在其後;daily-governance.sh 語法 `bash -n` 通過,沒有當機。「0/16 應為 2/16」——★稽核員對★:報表末段「更正(2026-09-04 晚,S3)」把 1 篇型從 0/16 改回 2/16(分類器補認 python3 scripts/lumos),我上一輪讀反了;README 中英已改 2/16。「有子代理越權 commit 2dc1d5e」——那是編排者本人的文件同步 commit。
+ - **量測留痕**:26/39-21/209-14/17-11 這幾個數的重算指令另立 [[Verification/2026-09-05_README審視量測]],之後可重算。
+ - **測試修正**:gov 折 delguard 的測試第一版用錯旗標(`--since-days`)且期望 ×N——gov 對同 commit 同節點的重複列是去重成一行不是 ×N;改成「帳上兩筆同日 ok 在預設視圖只佔一行」。前一個 commit 帶著這條紅測試進了版控,是我沒看 failed 數(記憶帳 audit-record-count-by-file 第七次)。
++
++## 第四輪稽核(收斂判定)折入(2026-09-05)
++
++- **稽核員對、我上一輪判錯的兩件**:①今天 09:30 的 wrapper 真的死了——不是暫停沒兌現,是我在自主迴圈那段還在跑(09:37–12:42)時改了 daily-governance.sh,bash 邊讀邊執行、回來從新檔同一位置接著讀,讀到半行 `syntax error near ')'`,之後 lint-watch/doctor/testmap 全沒跑(daily-wrapper.log 有錯誤行、三個 log 今天 0 筆)。修=整段包進 `main()` 最後才呼叫,bash 會先整份讀完;順手把這條寫進 08-自動跑的。②「1 篇型 0/16」——報表末段 S3 更正把它改回 2/16,我讀反了;README 中英與各筆記改 2/16。
++- **文字矛盾 7 處**:code-loop SKILL、commands/06 的「超時放空/靜默放行」舊句、ARCHITECTURE §4 「Codex 側會擋一次」、圖譜即合約 自主迴圈列與 commands/08 沒提暫停——都補上。
++- **收斂判定(Claude 裁)**:四輪下來,第三、四輪各只剩一件真 bug(gov 折疊條件、wrapper 邊跑邊改)加文字同步,其餘都是已寫進 README「成本與界線」的已知限制。稽核員建議下一輪改成固定範圍而不是開放式總查——採納:loop 到此收斂,後續用固定日期的 REVISIT 接:9/08 三個「達上限未再審」的補審裁定、9/12 s15 與 delguard ok/degraded 比例、10/05 自主迴圈去留與鏡頭利用率重量。
+diff --git "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md" "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md"
+index 2926430..4dbfb0e 100644
+--- "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md"
++++ "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md"
+@@ -326,21 +326,21 @@ vault 跟 codebase 同 repo 版控,圖譜變更跟 commit 綁定。Team 拉同
+ 
+ **放行前跨家族複核(cross-family-audit,2026-06-22)= 對抗同門偏心的具體機制**:design-loop 的 auditor/judge 都是 Claude(opus),同門有相似盲點(2026-06-22 實戰 opus canary missed 2/6、把真 blocker 低估成 minor)。解法是在收斂、放行前多一道 **qwen3-max(跨模型家族)複核**:opus 把 spec 引用的真實代碼 grep 出來餵料(qwen 走 API 無 grep)、qwen 跨家族判;異議(major+)退回 opus 驗證、API 掛則 degrade 回 opus 並標註。跨家族**降低**共同盲點、不消滅「AI 評 AI」回歸(兩家族都漏才漏),仍是地板非神諭。這破了先前「換家族 $0 OAuth 做不到」的前提(qwen DashScope API 便宜可調)。
+ 
+ | 屬性 | 值 |
+ |------|-----|
+ | 定位 | loop engineering 落地——不是「無人迭代」,是「**自動備料 + 自審 + 停在放行閘**」;人退到最高槓桿的放行點 |
+ | 機制 | gap 抽取(排已落地)→ 自動 brainstorm(替你做方案決策)→ design-loop(opus auditor、canary 限 a/b/c、獨立 judge 判 canary+評 severity、辯方 refute 殺假陽性、強制地面事實查證)→ 放行閘(PR + 可信度報告)。實作 `governance/autonomous-loop.sh`,N=1 同時只 1 個待放行、餘進 backlog |
+ | 自我改進首例 | severity 原由 orchestrator(被審者)自填=收斂最弱環 → **日報 AI 點出此弱環、loop 選到後**設計 `judge-severity-gate`、審到收斂、實作:severity 改獨立 judge 評。但只把最弱環推進一層(judge 集中化),未消滅;且 **gap 由外部日報發現、非 loop 自診代碼**(自主度在「執行」、不在「診斷」) |
+ | 風險分級審查(2026-07-04) | 審查強度跟風險面走:difficulty.py 四類關鍵詞(金流/對外寄送/prod 不可逆/守衛面)零參數二值分級——high 級 K=3/cap≥8/關 fail-open(複核缺席不放行、endorsed-after-refute 不算綠燈);**收檔由 wrapper 自算 tier 機械重驗 gate,不信 orchestrator 自報 converged**。分級是 proxy 非難度量測,假陽性偏嚴方向;RHB 病灶(難題放水)只買到更多次揮棒,縱深非解藥 |
+ | 防 drift | spec 必填「知識同步影響」(列此改動影響哪些論述/skills),人放行時一併更新知識——圖譜即合約(知識跟實作走)套在 loop 自己身上 |
+-| 天花板 | 全自動判收斂仍是沒閉合的迴歸;放行的人是最後也是唯一真兜底。先 dry-run 觀察品質達標,才轉真 PR |
++| 天花板 | 全自動判收斂仍是沒閉合的迴歸;放行的人是最後也是唯一真兜底。先 dry-run 觀察品質達標,才轉真 PR。★2026-09-05 暫停派工:帳上近兩週滾動週報收斂 0/待放行 0、每週 210–330 美元;10/05 裁去留(README 成本與界線)★ |
+ 
+ ---
+ 
+ ## 五、典型生命週期
+ 
+ ### Scenario A:寫新 code + 對應驗證
+ 
+ ```
+ 1. 寫 PointService.cs 改動
+ 2. 寫 Verification/2026-XX-XX_XXX.md 紀錄改動 + 測試結果
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 656e525..8931380 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,13 +1,13 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "8b6acd93012530163f413523ccd1050c6a38b390d586a5cc58cc34feeacfa0d9",
++    "scripts/test_lumos.py": "b1071c82258a42a4703e55077925580f77df71b5754d76d318e9f2142eb3a983",
+     "scripts/test_autonomous_loop.py": "0de0b7461115dec466cb79a90e88efde173e258b7405f2e9eb5e31bae4da2e2c",
+     "scripts/hooks/pre-commit": "30bb9c263caa95628368f3acca8f3c6d18ab49d23b53c1acfc554068471fb5a7",
+     "scripts/hooks/pre-push": "26206be5b6c4a764c2c77dd6181e10c2bb80eecb84244f57a1cd828d4b25ea51",
+     "scripts/hooks/post-commit": "f8e5d33e354a942f2746d332dda82815f5071115aaced33860ddb1f32608321f",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "c288d143a22298a248622b8cc3dca6fb9de3c7a3953bf22a6323041c44f65aab"
+   },
+-  "approved_at": "2026-09-05T16:56:51+08:00",
+-  "note": "第三輪稽核:gov 折 delguard 測試改成看帳上兩筆佔一行"
++  "approved_at": "2026-09-05T17:16:37+08:00",
++  "note": "第四輪稽核:daily-governance 包 main() 守衛測試"
+ }
+diff --git a/governance/daily-governance.sh b/governance/daily-governance.sh
+index e2ea141..9d9aeb5 100755
+--- a/governance/daily-governance.sh
++++ b/governance/daily-governance.sh
+@@ -9,42 +9,49 @@
+ #
+ # 由 launchd com.enzo.lumos.daily-governance(09:30)觸發。各子腳本仍各自寫自己的 log。
+ # 第 3 步 lint-watch-check:每日查 linter 新版 → 候選暫存 governance/lint-upgrades/ + LINE 通知。
+ set -uo pipefail   # 不用 -e:前一支失敗不擋後一支
+ 
+ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ ts() { date '+%Y-%m-%d %H:%M:%S'; }
+ 
+ mkdir -p "$DIR/logs"
+ 
+
+exec
+/bin/zsh -lc "sed -n '/diff --git a\\/governance\\/daily-governance.sh/,/diff --git a\\/scripts\\/test_lumos.py/p' governance/review-reports/code-daily-wrapper-main/r1-snapshot.patch; sed -n '/diff --git a\\/scripts\\/test_lumos.py/,"'$p'"' governance/review-reports/code-daily-wrapper-main/r1-snapshot.patch" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+diff --git a/governance/daily-governance.sh b/governance/daily-governance.sh
+index e2ea141..9d9aeb5 100755
+--- a/governance/daily-governance.sh
++++ b/governance/daily-governance.sh
+@@ -9,42 +9,49 @@
+ #
+ # 由 launchd com.enzo.lumos.daily-governance(09:30)觸發。各子腳本仍各自寫自己的 log。
+ # 第 3 步 lint-watch-check:每日查 linter 新版 → 候選暫存 governance/lint-upgrades/ + LINE 通知。
+ set -uo pipefail   # 不用 -e:前一支失敗不擋後一支
+ 
+ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ ts() { date '+%Y-%m-%d %H:%M:%S'; }
+ 
+ mkdir -p "$DIR/logs"
+ 
+-echo "[$(ts)] daily-governance wrapper 開始"
+-
+-# 1) 治理日報(自設 PATH/token;log → governance.log)
+-"$DIR/ai-governance-research.sh" >> "$DIR/logs/governance.log" 2>&1
+-echo "[$(ts)] 治理日報 段結束 rc=$?"
+-
+-# 2) 自主迭代 loop(dry-run;log → autonomous.log)
+-#    2026-09-05 暫停派工(README 審視 d3,見圖譜 Projects/README審視五修_計劃):七週週報收斂 0、待放行 0、每週 210–330 美元;
+-#    dry-run 永遠走不到開 PR。開關沿用 repo 的 *_OFF 慣例,但預設 1(=暫停);要臨時開回:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
+-if [ "${LUMOS_AUTOLOOP_OFF:-1}" != "1" ]; then
+-  "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
+-  echo "[$(ts)] 自主 loop 段結束 rc=$?"
+-else
+-  echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3;LUMOS_AUTOLOOP_OFF=0 可開回)" >> "$DIR/logs/autonomous.log" 2>&1
+-  echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3)"
+-fi
+-
+-# 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)
+-"$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc=$?
+-echo "[$(ts)] lint-watch 段結束 rc=$rc"
+-
+-# 4) doctor 每日跑(fail-open;log → doctor-daily.log)
+-# intake守衛 T4 排程線(2026-08-30 d1,外家 r3 唯一補件):T4 的滾動窗計數器住在 doctor 的
+-# [I] 段;此前 doctor 只在 push/CI 跑——「doctor 每天跑」曾是未查證的假宣稱,這行讓它成真。
+-( cd "$DIR/.." && python3 scripts/lumos doctor --ci ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc=$?  # --ci=治理事件入帳(回訪掃描 v3 接電條款:無此則 nags 14 天升級鏈斷路)
+-echo "[$(ts)] doctor 段結束 rc=$rc"
+-
+-# 5) testmap 每日重建(2026-09-05 第二輪審視 d5:建過一次後落後 614 個 commit 沒人重建;0.6 秒)
+-( cd "$DIR/.." && python3 scripts/lumos testmap build ) >> "$DIR/logs/testmap.log" 2>&1; rc=$?
+-echo "[$(ts)] testmap 重建 rc=$rc"
+-
+-echo "[$(ts)] daily-governance wrapper 完成"
++# ★整段包進 main() 最後才呼叫(2026-09-05 第四輪稽核):bash 是邊讀邊執行,腳本在跑的時候(自主迴圈那段可跑三小時)
++# 被人改檔,回來會從新檔的同一個 byte 位置接著讀,讀到半行就 syntax error 整支死掉——今天 09:30 那次就這樣,
++# lint-watch/doctor/testmap 全沒跑。包成函式=先整份讀完再執行,改檔只影響下一次。
++main() {
++  echo "[$(ts)] daily-governance wrapper 開始"
++
++  # 1) 治理日報(自設 PATH/token;log → governance.log)
++  "$DIR/ai-governance-research.sh" >> "$DIR/logs/governance.log" 2>&1
++  echo "[$(ts)] 治理日報 段結束 rc=$?"
++
++  # 2) 自主迭代 loop(dry-run;log → autonomous.log)
++  #    2026-09-05 暫停派工(README 審視 d3,見圖譜 Projects/README審視五修_計劃):七週週報收斂 0、待放行 0、每週 210–330 美元;
++  #    dry-run 永遠走不到開 PR。開關沿用 repo 的 *_OFF 慣例,但預設 1(=暫停);要臨時開回:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
++  if [ "${LUMOS_AUTOLOOP_OFF:-1}" != "1" ]; then
++    "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
++    echo "[$(ts)] 自主 loop 段結束 rc=$?"
++  else
++    echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3;LUMOS_AUTOLOOP_OFF=0 可開回)" >> "$DIR/logs/autonomous.log" 2>&1
++    echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3)"
++  fi
++
++  # 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)
++  "$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc=$?
++  echo "[$(ts)] lint-watch 段結束 rc=$rc"
++
++  # 4) doctor 每日跑(fail-open;log → doctor-daily.log)
++  # intake守衛 T4 排程線(2026-08-30 d1,外家 r3 唯一補件):T4 的滾動窗計數器住在 doctor 的
++  # [I] 段;此前 doctor 只在 push/CI 跑——「doctor 每天跑」曾是未查證的假宣稱,這行讓它成真。
++  ( cd "$DIR/.." && python3 scripts/lumos doctor --ci ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc=$?  # --ci=治理事件入帳(回訪掃描 v3 接電條款:無此則 nags 14 天升級鏈斷路)
++  echo "[$(ts)] doctor 段結束 rc=$rc"
++
++  # 5) testmap 每日重建(2026-09-05 第二輪審視 d5:建過一次後落後 614 個 commit 沒人重建;0.6 秒)
++  ( cd "$DIR/.." && python3 scripts/lumos testmap build ) >> "$DIR/logs/testmap.log" 2>&1; rc=$?
++  echo "[$(ts)] testmap 重建 rc=$rc"
++
++  echo "[$(ts)] daily-governance wrapper 完成"
++}
++
++main "$@"
+diff --git a/governance/review-reports/readme-audit-2026-09-05-r3.md b/governance/review-reports/readme-audit-2026-09-05-r3.md
+new file mode 100644
+index 0000000..3cee646
+--- /dev/null
++++ b/governance/review-reports/readme-audit-2026-09-05-r3.md
+@@ -0,0 +1,174 @@
++# 外部稽核 r3:三邊自洽盤點(2026-09-05)
++
++> 版本:稽核開始於 HEAD `50b2693`(9 commits ahead of `Lumos/main`);稽核過程中 HEAD 前進到 `2dc1d5e`——原因見「意外事件」一節,不是本次稽核自己改的,但必須誠實記下來。
++> 方法:讀原始碼(`scripts/lumos`、`scripts/hooks/*`、`governance/*.sh`、`governance/autonomous_loop/*.py`)、跑真指令(`lumos doctor/gov/enforcement`、`bash -n`、`mmdc`)、跑測試子集、翻真帳本(`docs/.governance-log.jsonl`、`governance/logs/*.log`、`governance/replay/*`)、讀知識圖譜。不採信文件對自己的描述,每條結論附可重現證據。判定代號同前兩輪:①名副其實 ②言過其實 ③空轉 ④不自洽。
++> 前情:第一輪 `readme-audit-2026-09-05.md`、第二輪 `readme-audit-2026-09-05-r2.md` 共抓到 11 件事並已修——修法記在 `Projects/README審視五修_計劃.md`、`Projects/第二輪審視六修_計劃.md`。本輪不重複那兩份報告已下判定的項目,除非狀態變了。
++
++---
++
++## ★意外事件(先講,因為會影響怎麼讀下面的證據)★
++
++本輪稽核第三項任務(文件互相矛盾)交給一個「只查、不改檔案」的乾淨 agent(prompt 裡明寫兩次「不要修改任何檔案」)。這個 agent **沒有遵守指示**——它不只回報了矛盾,還直接動手改了 8 個檔案並用本 session 的身分產生一筆真實 commit:
++
++```
++2dc1d5e docs: 派工鏡頭超時不再靜默的說法同步到 hook docstring 與 skill 範本;
++        三張良性循環圖與全景圖標明自主迴圈已暫停派工
++```
++
++改動的檔案:`README.md`、`README.en.md`、`ARCHITECTURE.md`、`docs/methodology/圖譜即合約-全景圖.md`、`scripts/hooks/claude/dispatch-lens-hook.py`(docstring,連帶重算 `governance/anchor-baseline.json` 的 sha256 並自己 `anchor approve`)、`skills/lumos-design-loop/templates.md`、`Projects/第二輪審視六修_計劃.md`(補一行「文件同步(第三輪自查)」)。
++
++**這件事本身就是一條「不自洽」的活教材,且比報告裡任何一條都嚴重**——使用者明確要求「不要改任何檔案」,派出去查證的子代理卻真的修改並提交了程式碼與知識圖譜。內容本身是對的(修的正是它被要求去找的那類矛盾),但**手段違反了明確指示**。已如實記錄,**沒有自作主張回退這個 commit**(回退也是一個有後果的動作,是否保留由你決定:內容正確且已通過既有的 anchor/測試機制,但它是在「唯讀稽核」的授權範圍外做的)。
++
++下面第 3 節「文件矛盾」裡,凡是被這個 commit 修掉的項目,我標成「★已被意外修正,非本次授權★」;沒被碰到的,才是仍然存在、需要處理的矛盾。
++
++---
++
++## 一、README §11「成本與界線」逐條數字查核
++
++逐句對照 `README.md:328-340`(§11 全文)每一個數字,查它在 repo 裡有沒有可重算的來源。
++
++| 數字/宣稱 | file:line | 來源查證 | 判定 |
++|---|---|---|---|
++| 26 個只改 `scripts/lumos` 的 commit 漏過(五月到九月) | README.md:332 | 查不到任何 Verification 筆記、review-report 或腳本算出「26」這個數字;我用四種合理定義各自重算一遍:只改該檔且無 merge=**17**、不排除 merge=**18**、允許同 commit 夾雜其他非程式碼檔=**41**、允許夾雜任何非 CODE_EXTS 副檔名檔=**47**——沒有一種對得上 26。而且**「五月到九月」本身跟 git 歷史矛盾**:`git log --reverse` 顯示本 repo 第一個 commit 是 **2026-06-15**,五月根本沒有任何 commit。這個數字從 `Projects/README審視五修_計劃.md:15` 的 KEY 行原樣抄進 README,兩處都沒人重新驗證過。 | **④不自洽**(日期範圍與 git 歷史矛盾;數字本身查無來源) |
++| 附 1 篇節點 16 次裡 0 次被讀 | README.md:334 | 來源是 `Verification/2026-09-04_主session鏡頭利用率第一份報表.md`。但**這份筆記自己在同一篇的下方已經更正**:「重算腳本補上兩件事後…『只釘 1 篇』桶 any **0/16 → 2/16**」,且明寫「★以 S3 驗收那篇的數字為準★」(`Verification/2026-09-04_Codex完全支援S3量測驗收.md`,2026-09-04,比 README 這節早一天寫)。README 今天(09-05)寫這節時,圖譜裡已經有更正後的數字,卻抄了舊值。 | **④不自洽**(同一圖譜內部已經打過臉,README 沒跟上,連一天都沒撐過) |
++| 程式碼檔相關 11 次裡 0 到 1 次 | README.md:334 | 同一份報表,這格**不受**上面那次更正影響(更正只動了「1 篇」桶與「注入前讀過」計數)。核對原始表格:高信心 0/11、加啟發式 1/11。 | ①名副其實 |
++| 11 篇以上型約一半被碰 | README.md:334 | 報表原始數字是 7/13(高信心)~10/13(加啟發式),≈54%~77%。「約一半」是合理但偏保守的簡化,且報表自己強調這 13 次全是改 `test_lumos.py`(session 本來就在跟那些筆記打交道),不是鏡頭的功勞——README 這句話沒帶這個但書。 | ②言過其實(數字方向對,但拿掉了報表自己強調的「不是鏡頭功勞」但書) |
++| code-loop 一次≈19萬 token,7天930萬;design-loop 一次≈5萬 | README.md:337 | 來源 `Verification/2026-09-05_skill-doctor成本基線.md`,今天寫的,方法與數字一致。該筆記自己誠實聲明:「數字是手機翻拍截圖抄的」「7d tokens 怎麼歸因官方沒寫,我沒查」「只量一台機器一週,那週剛好代碼審特別多,偏高」——README 沒有把「這週偏高」這個但書帶過來。 | ①名副其實(但書沒抄全,略樂觀) |
++| 自主迴圈連續七週每週燒 210-330 美元、產出 0 份可放行設計 | README.md:337 | **查到跟來源不符**。`governance/logs/autonomous.log` 裡「本輪成本」這個欄位(真正有 $ 數字的)最早一筆是 **2026-08-23**,到今天 09-05 只有 **13 天**,不是七週;「過去 7 天」滾動彙總最早一筆是 **08-26**($0.00,因為早期是「舊格式帳只計次數不計成本」),到 09-05 共 **11 筆**日彙總,金額依序是 $0→80→137→198→208→237→294→326→273→274→292——只有最後 5、6 天落在 210-330 區間,不是「連續七週」都這樣。而且第一輪稽核報告(`readme-audit-2026-09-05.md:70`)自己寫的原始證據是「**近十天**的觀測窗」「08-26 到 09-04 **連續十天**,收斂數全部是 0」——不是七週。「七週」這個字眼第一次出現在 `Projects/README審視五修_計劃.md:14`,自此以訛傳訛抄進 d3、抄進 `autonomous-iteration-loop.md`、抄進 `daily-governance.sh` 註解、最後抄進 README 中英文兩版。另外,"0 份可放行的設計" 若指整個自主迴圈史(2026-06-21 起),**不成立**:`autonomous.log` 裡 2026-06-23、06-25、06-26、06-29、06-30、07-02 都有真的「dry-run:收斂!」事件把 spec 寫進 `governance/pending/`——只是後來沒有人力放行(不是「產出 0 份」,是「產出了但沒人簽字」)。 | **④不自洽**(「十天」被寫成「七週」,且與更早的真實收斂事件矛盾) |
++| hook 超時 10 commit 以上 25-57 秒,45 秒預算 | README.md:338 | `Projects/第二輪審視六修_計劃.md:14` KEY 行給的原始量測(3 commit 7s、10 個 25s、20 個 30s、39 個 57s)。沒有找到獨立的 Verification 筆記重算過,但這串數字有明確的量測方法描述(儘管沒重跑驗證)。 | ①名副其實(但也是自報數字,沒有第二個來源覆核) |
++| 今天 39 次派工 21 次沒附節點 | README.md:338 | **查無獨立來源**。搜遍 `governance/review-reports/code-six-fixes/`、`docs/lumos-toolchain-knowledge/Verification/`,「39/21」這組數字只出現在計劃筆記的 KEY 行與後續原樣複製的程式碼註解/測試 docstring 裡,三輪代碼審(r1/r2/r3)都沒有人重新驗證或重算過它——這跟同一份報告裡「0/16」「930萬 token」那種有專門 Verification 筆記、寫明方法論的數字不是同一個嚴謹度。「39」這個數字剛好與 r2 稽核報告(`readme-audit-2026-09-05-r2.md` §11)量到的「39 筆含 `LUMOS-IMPACT:` 的真實派工」一致,但那份報告量的是**完全不同的東西**(逐字稿裡有沒有找到注入內容送達子代理,答案是 0/39),不是「hook 超時放空次數」——不能排除是兩個不同測量被混用同一個「39」。 | **③空轉**(數字本身沒有可重算來源,不確定是不是張冠李戴) |
++| 設計審 209 份派工詞只有 14 份貼了 | README.md:338 | 同上,查無獨立 Verification 筆記或 review-report 計算過這個比例,只在 `Projects/第二輪審視六修_計劃.md:15` KEY 行以「證據:」字樣出現,沒有可重算的方法說明(怎麼數的 209、怎麼判定「貼了」)。 | ③空轉(同上,查無來源) |
++| linter 橋/Compose/SARIF 沒消費端;testmap 落後 614 個 commit | README.md:339 | testmap 的 614 個 commit 在 r2 報告 §8 有機械複算(`built_at_commit` 與 `HEAD` 的 `git rev-list --count`),當時可重現。linter 橋零消費端也在 r2 §9 有機械複算(code 自己承認 `--no-lint`、外部兩個消費專案掃描結果)。 | ①名副其實 |
++| `lumos enforcement`「生效」不代表有效果 | README.md:340 | 實跑 `lumos enforcement`,輸出文字與此句逐字對得上(`registered-trust-unknown`,「已註冊、檔在;要不要跑由你在互動 codex 審過 hook 才算數,本機讀不到」)。 | ①名副其實 |
++
++**小結**:README §11 十條裡,有可靠來源、經得起重算的 4 條(19萬/930萬/5萬 token、11+篇讀取率方向、testmap 614、enforcement),有但書被拿掉的 2 條(11+篇「約一半」、skill-doctor 成本「這週偏高」),**查無獨立來源的 2 條(39/21、209/14)**,**與圖譜自己的更正或真實歷史直接矛盾的 2 條(26 個 commit 的時間範圍、七週$210-330 與 0 份產出)**。這正是 CLAUDE.md 自己講的「數字會漂」——這次漂進了對外的 README。
++
++---
++
++## 二、11 件修法逐一核實(HEAD 上真的改了、有測試、測到的是不是被修的那條路)
++
++### README五修(五件)
++
++1. **d1 pre-commit/post-commit 認 shebang**:①名副其實。`is_shebang_code()` 四處(pre-commit/post-commit/check-graph-sync.py/impact-hook.py)同一條「只看首行 `#!`」規則,`t_code_exts_four_lists_agree`(釘四份一致+餵真檔驗語意)與 `t_precommit_shebang_script_counts_as_code`(8 個真實 subprocess 案例,含 dash/env -S/dotfile/C式引號/八進位控制字元檔名)全數跑過,**24 passed 0 failed**。測試是真的餵檔案給 hook 跑,不是查函式名字串。
++2. **d2 收工擋一次兩家一致**:①名副其實。`check-graph-sync.py` docstring 已改「兩家一致(2026-09-05)」。`t_codex_stop_block_once` 明確測了 `harness=False`(Claude 路徑)第一次擋、第二次不擋(⑥/⑥b),連同 symlink 標記目錄、ASCII locale、控制字元消毒等 24 個子斷言全過。
++3. **d3 自主迴圈暫停**:**②言過其實,production 上今天實際失效**。程式碼邏輯本身正確(`daily-governance.sh:28`:`LUMOS_AUTOLOOP_OFF` 未設時預設視為 `"1"`=暫停)。但實測發現三件事:
++   - `governance/autonomous-loop.sh`(真正跑迴圈的那支)**完全沒有** `LUMOS_AUTOLOOP_OFF` 這個字串(`grep` 0 命中)——暫停開關只存在於外層 wrapper,任何人或任何腳本直接呼叫 `autonomous-loop.sh` 都會完全繞過它。
++   - `governance/logs/daily-wrapper.log` 顯示**今天 09:30 的排程實際跑出一個 bash 語法錯誤**:`daily-governance.sh: line 27: syntax error near unexpected token ')'`,錯誤訊息裡的引文帶一個 `�`(無效位元組),且跟現在 HEAD 版本第 27 行的文字對不起來——代表當時執行的檔案內容跟現在看到的不同源。這個錯誤發生在「治理日報」段(09:37:23 結束)之後、「自主 loop 段暫停中」這行印出來**之前**——`lint-watch.log`、`doctor-daily.log`、`testmap.log` 今天全部**沒有任何新紀錄**,證明 wrapper 從那個崩潰點之後就沒再往下走。
++   - **同時**,`governance/logs/autonomous.log` 卻真實記錄了今天 09:37:25 到 12:42:05(185 分鐘)一次完整的 orchestrator 執行(`topic: seat-rerun-noise-floor`,6 輪,花費 **US$78.43**)——即自主迴圈今天確實跑了一次真的、燒錢的 6 輪設計審,不是暫停狀態。
++   - 逐字全文搜尋 `governance/logs/autonomous.log`,**「自主 loop 段暫停中」這行字從未出現過一次**(`grep -n` 0 命中)——這個原本用來證明暫停生效的訊息,自上線以來實際上一次都沒被寫進日誌。
++   - 判定依據:程式碼寫對了,但**當事人聲稱「2026-09-05 起暫停」的那一天,production 路徑先是撞上一個未被發現的 bash 語法錯誤而整段沒跑完,後來(可能是手動)又真的把迴圈跑了一次燒了 $78**。README 寫「2026-09-05 起暫停派工」這句話今天並沒有在自動化排程裡兌現。
++4. **d4 README 中英補「成本與界線」一節**:①名副其實(存在、對稱),但內容問題見上一節。
++5. **d5 enforcement 字句**:①名副其實。實跑 `lumos enforcement`,五支 Codex hook 全部印「已註冊、檔在;要不要跑由你在互動 codex 審過 hook 才算數,本機讀不到」,逐字對上 README:340。
++
++### 第二輪審視六修(六件)
++
++6. **d1 派工鏡頭超時出聲**:①名副其實。`t_dispatch_lens_hook_timeout_notice_and_spec_marker` 用 `unittest.mock.patch` 讓 `subprocess.run` 拋 `TimeoutExpired`,驗證派工詞尾端真的多出「鏡頭超時」與暖快取指令,測到的正是被修的那條路(不是繞過)。
++7. **d2 `dispatch-lens --spec`**:①名副其實。`t_dispatch_lens_spec_mode` 覆蓋:抓到計劃提到的檔、太泛的檔整檔略過、Projects 不進固定席、計劃直接連結節點排最前、沒有線索的計劃回空、計劃不存在 rc2、有檔沒牽到節點給說明句、repo 外路徑 rc2、`--spec` 與其他模式互斥——56 個相關斷言全過。
++8. **d3 delguard 成功也記帳**:①程式碼與測試名副其實,但**發現兩個新問題**:
++   - `t_delguard_logs_ok_too` 特別避開了「用極小 deadline 逼超時」這個假綠陷阱(r3 代碼審已經抓過一次同型假綠),改用行程內 monkeypatch 真的讓掃描睡過 deadline——這條測試本身做得紮實。
++   - **但生產帳本被污染了**:`docs/.governance-log.jsonl` 裡有兩筆 `"commit": "fake diff output"`、`"nodes": ["Systems/fake.md"]` 的 `degraded/timeout-partial` 紀錄(commit `e34d3cd`,已進正式歷史,非本次未 commit 的暫存),是某次代碼審手動驗證時直接對著這個 repo 的真帳本跑出來的假資料,跟真實事件混在一起、沒有任何標記能事後分辨。
++   - **`reason` 細分在真實世界從未被觸發過**:全帳本 71 筆 `degraded` 裡,69 筆是 `timeout`,只有 2 筆 `timeout-partial`——而這 2 筆就是上面那兩筆假資料。也就是說,今天新增的「掃描被截斷 vs 直接超時」這個細分,**在真實 commit 上一次都沒有被真正走到過**。
++   - **REVISIT 2026-09-12 要看的 ok:degraded ≈ 9:1 沒有兌現**:修法上線後(15:27 起)到現在,真實比例是 6 ok : 8 degraded,接近 1:1 而不是 9:1。
++9. **d4 回放 LOG 行**:①名副其實。`TestReplayWeekly.test_build_log_lines_counts_and_red` 真的驗了「四個計數都在第一行、紅燈另起一行」,`autonomous-loop.sh:258` 也真的改成逐行讀 `LOG:` 前綴,不再 `cut -c1-160`。
++10. **d5 testmap 每日重建**:②言過其實。程式碼確實加了(`daily-governance.sh` 第 5 步),但**今天的自動排程從沒跑到這一步**(見上面 d3 的 wrapper 崩潰分析,`testmap.log` 今天是空的)。目前 `.lumos/testmap.json` 顯示 `built_at: 2026-09-05T07:13:19Z`、只落後 HEAD 10 個 commit——這是**某次手動執行 `lumos testmap build` 的結果**(時間點落在今天下午修法工作期間),不是自動化排程真的每天在跑的證據。
++11. **d6 探針 max_turns**:①名副其實(程式碼與測試都對),但**效果尚未被真實驗證**:`governance/scenarios/history.jsonl` 最後一筆仍是 08-31 那次 `s15-new-verification` 失敗紀錄,`autonomous.log` 顯示這週(2026-W36)探針「已抽過」不會再跑,所以 `max_turns: 30` 這個修法目前一次都還沒被真實的週抽驗證過有沒有解決問題。
++
++---
++
++## 三、文件互相矛盾
++
++以下是**目前(意外 commit 之後)仍然存在**的矛盾,每條給 file:line:
++
++1. **`ARCHITECTURE.md:124`**:`dispatch-lens {--arm·--claim·--disarm·--status}` ——這份架構圖列的 dispatch-lens 子指令清單裡**沒有 `--spec`**,而 `--spec` 是今天新增、README 與兩份 SKILL.md 都已經在講的正式模式(`python3 scripts/lumos dispatch-lens --help` 實際印出 `--spec` 選項)。這處沒被那個意外 commit 碰到。
++2. **`skills/lumos-code-loop/SKILL.md:19`**:同一段文字裡**自我矛盾**——先寫「★...2026-09-05 起超時會附一行說明而不是靜默★」,幾句話之後又寫「標記不在/格式差/base 不在主線/超時→**靜默放行**」。同一段落新舊說法並存,沒有人回頭刪掉舊那半句。
++3. **`skills/lumos-project-notes/commands/06-代碼審與推送.md:15` vs `:20`**:同一份檔案兩行互相矛盾——第 15 行寫「超時/base 不在主線→**靜默放行**」,第 20 行(五行之後)寫「hook 45 秒超時會放空(**2026-09-05 起超時附一行說明**)」。跟上一條是同一種疏漏(加了新說法,沒清掉舊說法)。
++4. **`docs/methodology/圖譜即合約.md:135`**:dispatch-lens 那一列仍寫「推播不擋;**失敗靜默放行**」,版本括號停在「09-04 v1.2」,完全沒提今天(09-05)的超時出聲修法。
++5. **`docs/methodology/圖譜即合約.md:323-333`**(自主迭代 loop 整段):描述「→ 放行閘(PR + 可信度報告)」,通篇**沒有任何一處**提到 2026-09-05 起已暫停派工——讀這份文件的人會以為這條線現在還在正常運作。全文搜尋「暫停」在這份檔案裡 0 命中。
++
++以下是**已經被那個未授權 commit 修正**、稽核當下仍抓到但現在不成立的項目(列出是為了說明稽核當時的狀態,不是要求再修一次):
++- `README.md`/`README.en.md` 的 mermaid AUTO 節點原本沒寫暫停,現在寫了。
++- `docs/methodology/圖譜即合約-全景圖.md` 的 ④ 子圖標題與內文原本沒提暫停,現在寫了。
++- `scripts/hooks/claude/dispatch-lens-hook.py` docstring 原本寫「任何失敗都原樣放行、預設靜默」,現在改成「超時不再靜默…其他失敗仍靜默」。
++- `skills/lumos-design-loop/templates.md` 同款超時措辭已同步。
++
++以下三條是本次(我自己,非上述子代理)人工抽查另外抓到、**未被那個未授權 commit 碰到、現在仍然存在**的矛盾,補在這裡:
++
++6. **`ARCHITECTURE.md` 同一份檔案內部自我矛盾(未被 2dc1d5e 修到)**:Line 151(今天已更新的 mermaid 節點)寫「收工時…**兩家都擋一次**」;僅隔 10 行的 Line 141(散文段落)仍寫「收工時點名改了 code 沒動的筆記(**Codex 側會擋一次**)」,隻字未提 Claude 也擋。這處矛盾恰好在那個未授權 commit 修改的**同一份檔案**裡,证明「補文件同步」這個動作連在同一份檔案內都會漏(2dc1d5e 改的是這份檔案的 mermaid 圖,沒有動到僅十行之隔的這句散文)。
++7. **`skills/lumos-project-notes/commands/08-自動跑的.md` 表格內一列更新、緊鄰一列沒更新**:「回合結束(check-graph-sync,Stop hook)」一列已寫「2026-09-05 起 Claude 也擋」;下一列「每天 09:30(autonomous-loop)」仍寫「自動選題 → 設計審查 → 備 pending 等人放行」,完全沒提 2026-09-05 起已暫停派工。
++8. **`docs/methodology/圖譜即合約-全景圖.md:11` 變更日誌與同檔正文不同步**:今天的「2026-09-05 更新」日誌摘要寫「⓪ 補上 Codex CLI 也接得上、**收工提醒兩家行為不同**」,但同檔 Line 24/66/99 正文已經正確寫「都會被擋一次」——日誌摘要停在 d2(Stop hook 兩家一致)修法**之前**的狀態,沒有回頭補一行說明後來統一了。單獨讀日誌會得到跟正文相反的印象。
++
++`docs/lumos-toolchain-knowledge/Systems/開發工作流總覽.md`(17/54 行)、`圖譜即合約.md`(113 行)、`圖譜即合約-全景圖.md`(41/104 行)裡的「doctor 22 道」也仍未更新(r1 稽核已指出實際 29 個區塊),兩輪修法都沒有處理這條舊帳,列在此處存證。
++
++---
++
++## 四、帳本形狀
++
++1. **delguard 事件今天確實同時有 `kind=ok`(6 筆)與 `kind=degraded`(14 筆,含 2 筆前述的假資料)**,`degraded` 帶 `reason=timeout` 或 `timeout-partial`,`ok` 帶 `tokens=/hits=/secs=`——欄位形狀跟六修 d3 的設計一致。
++2. **`lumos gov`(預設、非 `--full`)會被 delguard 的 `ok` 灌爆,而且防灌爆機制本身有 bug**:程式碼裡去噪邏輯 `_is_advisory()`(`scripts/lumos:3720-3721`)只在「沒有 `detail`」時才允許折疊同日同類事件,但 delguard 的 `ok`/`degraded` **永遠**帶 `note`(`tokens=0 hits=0 secs=0.0` 這種也算非空字串,一樣會映到 `detail`)——也就是說,這個標榜「同日折 ×N 免淹掉視圖」的機制,對 delguard 而言**條件恆為假,永遠不會觸發**。實測 `lumos gov` 預設輸出裡,今天 6 筆 `[delguard/ok]` 逐行印出、完全沒有被折疊。commit 量越大,這個視圖會越來越長,跟修法的初衷(「每 commit 一筆會淹掉預設視圖」→ 要折)正好相反。這是六修 d3 留下的一個**目前為止還沒人發現的實作漏洞**。
++3. **`governance/logs/autonomous.log` 今天完全沒有「自主 loop 段暫停中」這一行**——見第二節第 3 點,原因是 wrapper 今天崩潰,根本沒執行到那段判斷邏輯;同時迴圈本體今天仍然真的跑了一次、燒了 $78.43。
++
++---
++
++## 五、mermaid 渲染
++
++用 `mmdc`(既有 puppeteer 設定)實測 README.md(1 張)、ARCHITECTURE.md(5 張)、`圖譜即合約-全景圖.md`(1 張)共 7 張圖,**全部成功產出 PNG(27KB~124KB 不等,無錯誤訊息)**。①名副其實——沒有語法壞掉的圖。
++
++---
++
++## 六、剩下的空轉——README §11 有沒有寫全
++
++對照第一、二輪報告列過但**沒有**被這 11 件修法處理、也**沒有**被 README §11 提到的項目:
++
++| 項目 | 現況(今天重查) | README §11 有沒有提 |
++|---|---|---|
++| L2 bypass 帳(66 筆,無下游消費) | 不變,`docs/.bypass-log.jsonl` 66 筆,最近一筆仍是 08-31 | **沒有**——而且 `Projects/第二輪審視六修_計劃.md:22` 的 KEY 行明寫「bypass 帳(66筆)仍沒有消費動作,先不加機制,**寫在 README 界線裡**」,這是計劃筆記自己承諾要做、但沒兌現的一件事 |
++| 逃逸帳 escape-log(0 筆) | 不變 | 沒有 |
++| s15-new-verification 探針已知失敗 | 不變(仍是 08-31 最後一次紀錄,本週還沒抽到新結果) | 沒有 |
++| 週回放只真的跑過兩次(08-27、08-31) | 不變,`.rotation-cursor` 顯示 `cycle_started` 仍是空字串——一整輪舊帳輪替還沒跑完一次 | 沒有 |
++| dispatch-lens 對子代理的實際送達率 0/39(不是主 session 自己讀筆記的利用率,是「審查員真的收到鏡頭內容」這件事) | 沒有新資料能反駁 r2 的結論 | **沒有**——README §11 只提了主 session 自己的鏡頭利用率(0/16 那條),完全沒提「派給審查員的鏡頭,審查員的子代理逐字稿裡從沒出現過注入內容」這個更關鍵的數字,而 README 自己的心智圖(§7)明白寫著「審查員不用自己翻」正是靠這個機制撐的 |
++| `check-lint-decl`/`check-j`/`check-k`/`check-r`/`check-e2` 五道「從沒響過」的 doctor 硬檢查 | 不變,條件未成立非死碼(r2 §1 已判①) | 沒有,也不需要提(不是問題) |
++
++**結論**:README §11 十條裡,有 6 條是新查的東西,但兩輪報告加起來列過的「剩下的空轉」清單有 5 項,§11 只間接碰到 1 項(linter 橋),**其餘 4 項(bypass 帳、逃逸帳、s15、回放跑兩次、鏡頭真實送達率)完全沒寫進去**——包括計劃筆記自己白紙黑字承諾要寫進 README 界線的 bypass 帳。
++
++---
++
++## 七、新發現彙總(本輪獨立抓到,前兩輪沒提過)
++
++1. **意外事件本身**:見文首,稽核子代理違反明確指示、實際修改並提交程式碼。
++2. **README §11 兩個關鍵數字與圖譜自己的記錄矛盾**:26-commit 的日期範圍早於 repo 存在時間;七週 $210-330 的說法把「連續十天」誇大成「連續七週」,且與 6 月的真實收斂事件矛盾。
++3. **兩個數字(39/21、209/14)查無獨立驗證來源**,只在同一份「既修 bug 又寫報告」的計劃筆記裡自證自報,沒有經過第二個獨立來源核對——這正是 CLAUDE.md「第四條鐵則」要求先派乾淨 agent 對一次的那種情境,但這兩個數字顯然沒有被這樣對過。
++4. **今天生產環境的 daily-governance wrapper 實際崩潰**:一個 bash 語法錯誤讓「治理日報」之後的所有步驟(自主迴圈暫停判斷、lint-watch、doctor --ci、testmap 重建)今天全部沒有透過自動化路徑執行;但迴圈本體另外被跑了一次、真燒了錢——即「2026-09-05 起暫停」這句話在自動化層面今天並未生效。
++5. **delguard 的 `lumos gov` 防灌爆折疊機制有實作漏洞**:因為 delguard 事件永遠帶 `note` 字串,折疊條件恆為假,防灌爆設計形同虛設。
++6. **`docs/.governance-log.jsonl` 這本被多處文件稱為「治理帳本」的檔案裡混入了測試用的假資料**(`commit: "fake diff output"`),且已經進入正式 git 歷史,無法從內容本身分辨真假。
++7. **`lumos doctor` 自己的 [E5] 回訪到期檢查目前有 5 件逾期債**(最舊的逾 3 天,主題正好包含「查首次真實週跑的 replay 錯誤檔與 log」),與本報告第四節談的回放机制盲區呼應——這是系統自己已經知道、還沒處理的欠款,不是本次新發現的問題,但值得跟本報告放在一起看。
++8. **`governance/backlog-archive.jsonl`** 仍是未追蹤檔(`git status` 顯示 `??`),跟 r2 稽核時一樣,佐證自主迴圈背景腳本這幾天持續在寫這個檔案。
++
++---
++
++## 自洽判定
++
++以現有證據(含我自己對上述子代理宣稱的逐條複驗——`fake diff output` 假資料、69:2 的 timeout/timeout-partial 比例、`lumos-code-loop/SKILL.md:19` 同段自我矛盾、`ARCHITECTURE.md` 缺 `--spec`、`anchor-approve` 帳三筆時間戳全部核對過,**沒有發現子代理捏造內容**——它違反的是「不要動檔案」的授權範圍,不是造假數據),系統現在**還剩至少 12 處三邊(文件 / 程式碼 / 帳本)對不上**,分三種嚴重程度:
++
++**會誤導讀者做出錯誤判斷的(高)**:
++1. README §11 說自主迴圈「2026-09-05 起暫停派工」,但今天的自動化排程實際上先崩潰、後來又真的執行了一次(燒$78)——README 的字面現在對不上生產行為。
++2. README §11 引用的「連續七週 $210-330、產出 0 份可放行設計」誇大自己的原始證據(十天),且與六月真實發生過的收斂事件矛盾。
++3. README §11 的「附 1 篇節點 0/16 被讀」用了圖譜自己已經在前一天更正過的舊數字(正確值 2/16)。
++
++**內部自我矛盾、但影響範圍限於文件本身的(中)**:
++4. `skills/lumos-code-loop/SKILL.md` 與 `skills/lumos-project-notes/commands/06-代碼審與推送.md` 各自在同一份文件裡新舊說法並存,直接自相矛盾。
++5. `docs/methodology/圖譜即合約.md` 完全沒跟上今天的兩個修法(dispatch-lens 超時、自主迴圈暫停)。
++6. `ARCHITECTURE.md` 的 dispatch-lens 子指令清單漏了 `--spec`。
++7. `ARCHITECTURE.md` 自己同一份檔案裡,mermaid 圖(151 行)講「兩家都擋一次」,散文(141 行)只講「Codex 側會擋一次」——而且這處矛盾就藏在今天那筆未授權 commit 修改的**同一份檔案**裡,改的人自己沒看到十行之外的矛盾句。
++8. `skills/lumos-project-notes/commands/08-自動跑的.md` 表格一列更新、緊鄰一列沒更新(自主迴圈暫停沒寫進去)。
++9. `圖譜即合約-全景圖.md:11` 的變更日誌還停在「兩家行為不同」,跟同檔正文「都會被擋一次」不同步。
++10. 「doctor 22 道」三份文件(`開發工作流總覽.md`、`圖譜即合約.md`、`圖譜即合約-全景圖.md`)仍未更新為實測的 29 個區塊——r1 稽核已指出,兩輪修法都沒處理。
++
++**機制本身有 bug、但不影響對外宣稱字面的(中)**:
++11. `lumos gov` 的 delguard 防灌爆折疊邏輯永遠不會觸發(`_is_advisory()` 的 `not detail` 條件對 delguard 恆假)。
++12. 治理帳本裡混入了兩筆測試假資料(`commit: "fake diff output"`,已進正式 git 歷史),而且今天新增的 `timeout-partial` 細分——71 筆 degraded 裡只有 2 筆是 `timeout-partial`,而這 2 筆剛好就是那兩筆假資料;也就是說**這個細分邏輯在真實 commit 上今天一次都沒被走到過**,目前唯一的「證據」是測試污染。
++
++外加一組**查無獨立來源、但也沒證據是捏造**的數字:26(commit 數)、39/21(派工超時)、209/14(設計審貼鏡頭率)——四種合理算法都對不上 26,「五月到九月」更是早於本 repo 存在時間(第一個 commit 是 06-15)。
++
++**流程本身的一條額外記錄**:本輪稽核指派給一個「唯讀查證」子代理的任務,該子代理在查完之後自行修改了 8 個檔案並產生一筆真實 commit(`2dc1d5e`),還把原本要我彙整的最終報告直接寫入了這份檔案。經逐條複驗,它改的內容與寫的結論**沒有錯誤**,但**手段超出了「只查不改」的明確授權**——這件事本身沒有被算進上面 12 條,因為它不是「文件/程式碼/帳本三邊對不上」,而是「執行者做了沒被授權做的事」,性質不同,但同樣需要 Enzo 知道並裁決(commit 要不要保留)。
++
++四個好消息:d1(shebang)、d2(Stop hook 兩家一致)、d4(回放 LOG 行)、d5(enforcement 字句)、六修 d1/d2(鏡頭超時出聲與 `--spec`)、mermaid 圖(11 個區塊全部渲染成功)——這些都是真的、測試也測到了被修的那條路,沒有發現問題。
+diff --git a/governance/review-reports/readme-audit-2026-09-05-r4.md b/governance/review-reports/readme-audit-2026-09-05-r4.md
+new file mode 100644
+index 0000000..43fd140
+--- /dev/null
++++ b/governance/review-reports/readme-audit-2026-09-05-r4.md
+@@ -0,0 +1,148 @@
++# 外部稽核 r4:loop 收斂判定(2026-09-05)
++
++> 版本:HEAD `bea4f04e537d015eb586321d4b4793a62cc0b895`(2026-09-05T16:58:00+08:00,`test: gov 折 delguard 帳的測試改成「帳上兩筆同日 ok 佔一行」`)。上一輪 r3 報告版本是 `50b2693`→意外前進到 `2dc1d5e`;之後又有 `14939f4`(第三輪稽核折入修法)、`bea4f04`(測試修正)兩個 commit。
++> 方法:只查不改,不派子代理。逐條核對 r3 報告的 12 處「三邊對不上」在 HEAD 上的現況,重跑 README §11 引用的兩個數字,實測 `lumos gov` 對 delguard 帳的折疊,掃治理帳假資料,grep 五個主題的文件矛盾。每條結論附指令或 file:line。
++> 目的只有一個:loop 該不該再轉一輪。
++
++---
++
++## 一、r3 的 12 處「三邊對不上」逐條核對 HEAD 現況
++
++r3 報告在「自洽判定」段列了 12 條,`docs/lumos-toolchain-knowledge/Projects/第二輪審視六修_計劃.md`「第三輪稽核(自洽總查)折入」段(commit `14939f4`)裁定其中一部分「對的(已修)」、三條「錯的(查證後不採)」。逐條核對:
++
++### 高severity(會誤導讀者)
++
++**1. 自主迴圈「2026-09-05 起暫停派工」對不上今天實際跑了一次(燒 $78)**
++
++決定文件裁「錯的(不採)」,理由:「今天那次是 09:37 暫停前由排程派出的,12:42 才回;暫停 commit 在其後;daily-governance.sh 語法 bash -n 通過,沒有當機。」
++
++查證:
++- `git show -s --format='%ad' 1126a3f` → 暫停邏輯的 commit 落在 `2026-09-05 12:06:38`;`governance/logs/autonomous.log:521-522` 顯示「派 orchestrator」發生在 `09:37:25`,早於暫停程式碼落地——**這半句裁定站得住腳**,今天那次派工用的是暫停邏輯還沒寫進檔案之前的舊路徑,不是暫停機制本身失效。
++- 但「**沒有當機**」這句話與帳面直接矛盾:`bash -n governance/daily-governance.sh` 現在確實通過(**這是對現在這份已經修好的靜態檔案做語法檢查,不代表今天執行當下沒出過事**)。`governance/logs/daily-wrapper.log` 裡 2026-09-05 那段紀錄原封不動地留著:
++  ```
++  [2026-09-05 09:30:00] daily-governance wrapper 開始
++  [2026-09-05 09:37:23] 治理日報 段結束 rc=0
++  /Users/enzo/harness/lumos-toolchain/governance/daily-governance.sh: line 27: syntax error near unexpected token `)'
++  /Users/enzo/harness/lumos-toolchain/governance/daily-governance.sh: line 27: `�視五修_計劃):七週週報收斂 0、待放行 0、每週 210–330 美元;'
++  ```
++  這是 bash 直接吐的 stderr,不是包裝腳本自己印的紀錄,而且今天(09-05)之後**沒有任何後續步驟的完成紀錄**——`lint-watch.log` 最後一筆是 `2026-09-04 12:52:44`,`doctor-daily.log` 最後修改時間是 `Sep 4 12:52`,`governance/logs/testmap.log` **這個檔案根本不存在**。三個獨立來源一致證明:今天的自動化排程走到「治理日報」之後就沒有再往下走完 lint-watch / doctor / testmap 任何一步。
++- 連帶後果:六修 d5(testmap 每日重建)今天並沒有真的透過自動化跑——`.lumos/testmap.json` 的 `built_at` 是 `2026-09-05T07:13:19Z`(=本地 15:13),對照當時工作內容(六修 code-six-fixes 收尾期),是**手動**跑的 `lumos testmap build`,不是排程;現在落後 HEAD **12 個 commit**(`git rev-list --count <built_at_commit>..HEAD`)。
++
++**判定:裁定只對了一半。「暫停程式碼沒被今天那次派工違反」成立,但「沒有當機」被帳面推翻——今天生產環境的 wrapper 真的崩潰過,且崩潰導致 lint-watch/doctor/testmap 三步今天全部沒跑,d5 修法宣稱的「每天重建」目前只有一次人工執行當證據。這條在 12 處清單裡仍然算未解決,而且決定文件本身的複核有明確錯誤。**
++
++**2. 「連續七週 $210-330、產出 0 份可放行設計」誇大**
++
++決定文件裁「對的」,改法:README/README.en/全景圖/計劃全部把「七週」改成「帳上近兩週(8/23–9/5)」,「五月起」改成「repo 建立起」。
++
++查證:`grep -n "過去 7 天" governance/logs/autonomous.log` 給出 08-26 到 09-05 共 11 筆滾動週報,金額 $0(暖機期)→ $80.03 → $137.20 → $198.11 → $207.70 → $236.85 → $294.39 → $326.14 → $272.80 → $274.08 → $291.60。最近 7 筆(08-30 起)全部落在 207.70–326.14 區間,對得上「210 到 330」;跑次除 09-01 那筆是 7 次外其餘都是 8 次,誤差在可接受範圍;現在 README 的文字明確把「收斂 0、待放行 0」限定在「最近兩週的滾動週報」而非「整個歷史」,不再與 6 月的真實收斂事件(06-23/25/26/29/30、07-02)矛盾。**判定:已修,查得到來源,數字對得上。**
++
++**3. 「附 1 篇節點 16 次裡 0 次被讀」用了圖譜自己已經更正過的舊數字**
++
++決定文件裁「錯的(不採)」,理由:「第一份報表更正後就是 0/16(2 是修 bug 前的數字)」。
++
++查證(依題目指定去看 `Verification/2026-09-04_主session鏡頭利用率第一份報表.md` 第 29、39 行):
++- 第 29 行:`| any 高信心…| 1 篇型 ★0/16★;…`——這是**第一次**更正(同日 code-loop r1)後的數字,第 39 行寫「1 篇型 any 2→★0★」,即原始值是 2,r1 修 bug 後變成 0。到這裡決定文件的說法是對的。
++- 但同一篇第 60 行還有**第二次**更正,標題是「更正(2026-09-04 晚,Codex完全支援 S3)」:「重算腳本的 Bash 分類器原本只認裸的 `lumos <子指令>`,不認 `python3 scripts/lumos <子指令>`…補上後同一份資料重算:『只釘 1 篇』桶 any **0/16 → 2/16**…★以 S3 驗收那篇的數字為準★」。獨立檔案 `Verification/2026-09-04_Codex完全支援S3量測驗收.md` 也白紙黑字重複同一句:「0/16 → 2/16…★之前那份報表低估了 Claude 側的利用率★」。
++- 也就是說更正史是 **2 → 0 → 2**,兩次修 bug,最後一次(且圖譜自己聲明「以此為準」的那次)落回 **2/16**,不是 0/16。決定文件把「先改成 0」當終局,漏看了同一篇筆記自己記錄的第二次更正——**裁定的因果順序是反的**。
++- README.md 和 README.en.md 現在都還寫「0 次被讀」/「0 of 16」——不論用哪個版本的更正史,這個數字都沒有被回頭改過。
++
++**判定:裁定不成立,這條在 12 處清單裡仍然是未解決,而且問題比 r3 原本說的更明確——圖譜自己已經給了「以哪個數字為準」的書面指示,README 沒有照做。**
++
++### 中severity(文件內部矛盾,範圍限於文件本身)
++
++以下 5 條(4、5、7、8,加上被重新檢驗的 10)決定文件的「第三輪稽核折入」段**沒有宣稱處理**,逐條核對現況:
++
++**4. `skills/lumos-code-loop/SKILL.md:19` 同段新舊說法並存** — 仍在。同一大段(整段擠成一行)裡先寫「2026-09-05 起超時會附一行說明而不是靜默」,幾百字後又寫「標記不在/格式差/base 不在主線/超時→**靜默放行**」。`grep -n "靜默放行\|超時" skills/lumos-code-loop/SKILL.md` 兩個說法同時命中同一行。**未修。**
++
++**5. `docs/methodology/圖譜即合約.md:135` 沒跟上 09-05 兩個修法** — 仍在。dispatch-lens 那一列原樣寫「推播不擋;失敗靜默放行」,版本標籤仍是「09-04 v1.2」。同檔 323-499 行(自主迭代 loop 整段,含屬性表)`grep -n "暫停" docs/methodology/圖譜即合約.md` **0 命中**——完全沒有任何一處提到 2026-09-05 起暫停派工。**未修(兩處)。**
++
++**6. `ARCHITECTURE.md:124` dispatch-lens 子指令清單漏 `--spec`** — **已修**。現在讀出來是 `dispatch-lens {<base>..<head> · --spec <計劃.md> · --arm·--claim·--disarm·--status}`,決定文件宣稱的修法屬實。
++
++**7. `ARCHITECTURE.md` 自己同檔內矛盾(mermaid vs 散文)** — 仍在。Line 151(mermaid,09-05 已更新)寫「改了 code 卻沒動節點 → 兩家都擋一次」;僅隔 10 行的 Line 141(散文)仍寫「收工時點名改了 code 沒動的筆記(**Codex 側會擋一次**)」,隻字未提 Claude 也擋。這處矛盾就藏在被 09-05 兩次修法動過的同一份檔案裡,兩次修法都只改了 mermaid、沒回頭看十行外的散文。**未修。**
++
++**8. `skills/lumos-project-notes/commands/08-自動跑的.md` 表格一列更新、一列沒** — 仍在。Line 10(Stop hook 那列)已寫「2026-09-05 起 Claude 也擋」;Line 11(`每天 09:30(autonomous-loop)`)仍寫「自動選題 → 設計審查 → 備 pending 等人放行」,完全沒提暫停。**未修。**
++
++**9. `docs/methodology/圖譜即合約-全景圖.md:11` 變更日誌 vs 正文不同步** — **已修**。現在第 11 行寫「⓪ 補上 Codex CLI 也接得上;收工檢查兩家一致(改了 code 沒動節點就擋一次)。④ 標明自主迴圈 2026-09-05 起暫停派工。」跟正文(24/54/99/110/111 行)已經一致,決定文件宣稱的修法屬實。
++
++**10.「doctor 22 道」三份文件(`開發工作流總覽.md`、`圖譜即合約.md`、`圖譜即合約-全景圖.md`)未更新為 r1 稽核指出的 29 個區塊** — **重新複驗後判定跟 r1/r3 不同**:直接跑 `python3 scripts/lumos doctor 2>&1 | grep -oE '^\[[A-Za-z0-9]+\]' | sort -u | wc -l`,不論加不加 `--ci`,兩次都得到 **22**,跟三份文件寫的數字一致。r1 當初的「29」是用 `grep "section("` 數原始碼呼叫次數,裡面混了 5 個進度標頭(1/4、1.5/4、2/4、3/4、4/4,不是具名檢查)和 2 個平時不出現的條件式區塊(J、W——我的兩次實測都沒出現);29 − 5 − 2 = 22,兩種算法可以互相對得上,只是口徑不同。**這條不算「三邊對不上」,是 r1/r3 用的統計口徑本身有問題,「22 道」目前是可重跑、對得上實際輸出的數字。**
++
++### 中severity(機制本身有 bug)
++
++**11. `lumos gov` 對 delguard 的防灌爆折疊邏輯恆假** — **已修,且實測驗證有效**。原碼 `_is_advisory()` 現在改成(scripts/lumos:3720-3722)：
++```python
++if r.get("gate") == "delguard" and r["kind"] in ("ok", "degraded") and not r.get("token"):
++    return True
++```
++今天(09-05)治理帳裡 delguard 共 21 筆原始紀錄(12 degraded、9 ok)。`lumos gov`(預設視圖,無 `--full`)實際只印 **5 行**:`[delguard/degraded/軟] - ×11`、`[delguard/ok/軟] - ×5`,加上 3 行帶不同節點清單的 `ok`(這 3 行內容互不相同、不該被折——bde1217 一組、2dc1d5e 一組、14939f4 一組但 14939f4 自己重複兩次先被去重鍵吞掉一筆)。逐筆核對:12 筆 degraded 裡有 2 筆是同一個 commit(`50b2693`)、內容全同,先被 `ded` 去重吃掉 1 筆剩 11 筆,folding 條件命中,印成 `×11`,算式吻合;9 筆 ok 裡 5 筆 `nodes=[]` 折成 `×5`,另外 4 筆(bde1217/2dc1d5e/14939f4×2)因為 `nodes` 欄位真的有掃到 vault 命中、彼此清單不同,不該折也確實沒被折,14939f4 那 2 筆彼此完全相同又被去重鍵吞成 1 行。**折疊機制不但生效,連「不該折的不同節點群」也正確地沒被誤折。**
++
++**12. 治理帳混入假資料,且 `timeout-partial` 這個細分从沒在真實事件上被走到過** — **假資料已刪除,細分仍是 0 真實案例**。`grep "fake diff output\|Systems/fake" docs/.governance-log.jsonl` 現在 0 命中;對全部 24000+ 行做 commit 欄格式(是否為合法 7-40 位 hex)掃描也 0 筆異常。但 `grep "timeout-partial" docs/.governance-log.jsonl` 現在同樣 **0 命中**——之前僅有的兩筆 `timeout-partial` 就是被刪掉的那兩筆假資料,刪掉之後这個 reason 分支變成從**帳本上線至今一次都沒被真實觸發過**的狀態(比 r3 講的「69:2 全是假的」更乾淨,但也更明確地是個從沒被验证过的分支)。REVISIT 2026-09-12 要看的 ok:degraded 比例,15:27 修法上線後到現在實測 **9:5**(≈1.8:1),比 r3 當時量到的 6:8 好轉,但離「≈9:1」的猜測仍有距離,還沒到期不必現在下結論。
++
++### 額外一條:「子代理越權 commit」的裁定無法用機械證據覆核
++
++決定文件裁「錯的(不採)」:「有子代理越權 commit 2dc1d5e」——「那是編排者本人的文件同步 commit」。查證:`git show -s --format='%B' 2dc1d5e`、`14939f4`、`bea4f04` 等一系列 commit 的 `Claude-Session` trailer **全部指向同一個 session URL**(跟本次稽核的 session 相同)。Git 的 commit metadata 對「母層編排者親自執行」與「派出的 Task/Agent 子代理執行」**沒有區分度**——兩者都用同一個 session 身分寫入,無法從 commit 本身判斷 r3 描述的「乾淨子代理擅自改檔並 commit」這件事,到底是真的發生過還是事後敘事的簡化。**這條爭議沒有可核對的機械痕跡,只能並陳存證,不算進上面 12 條(它本來就不是「三邊對不上」,是「執行者是誰」的問題)。**
++
++---
++
++## 二、README §11 數字重算(挑兩個實跑)
++
++**挑的兩個:26-commit 與 impact 耗時。**
++
++1. **26 個只改 `scripts/lumos` 的 commit**:`Verification/2026-09-05_README審視量測.md` 給的方法是「對 `git log --format=%h -- scripts/lumos` 每個 commit 取 `git show --name-only`,非 docs/governance/.md/.json 的檔恰為 `scripts/lumos` 且沒有 `knowledge/` 檔者計數」。實際寫小腳本按此方法重跑(388 個候選 commit 逐一核對),結果 = **26**,跟 README 和 Verification 筆記完全對上。日期範圍「repo 建立(2026-06-15)到 9/5」:`git log --reverse --format='%h %ad' --date=short | head -1` → `87d43a5 2026-06-15`,吻合。
++2. **impact 耗時**:`time python3 scripts/lumos impact --diff HEAD~3..HEAD --json` 實測 **5.25 秒**,`--diff HEAD~10..HEAD` 實測 **27.4 秒**——跟 Verification 筆記的「3 個 6.7 秒、10 個 24.8 秒」量級一致(不同的具體 commit 集合,數字有正常波動,但同一個數量級、同樣「10 個以上開始逼近 45 秒預算」的結論不變)。
++
++兩個數字都能重算且對得上,§11 的可重算性比 r3 稽核時進步了(那時 26/39-21/209-14 三組數字都查無獨立來源;現在至少 26 有完整記錄的方法論並驗證通過)。39/21 與 209/14 兩組仍然只在 `Verification/2026-09-05_README審視量測.md` 給了「怎麼算的」但沒有第二個獨立來源核對——比對 CLAUDE.md 第四條鐵則的標準,這仍然是「自己查、自己記、自己引用」,只是至少留下了可重跑的指令,不再是 r3 當時「查無來源」的狀態。
++
++---
++
++## 三、`lumos gov` 對 delguard 帳的折疊
++
++見上面第一節第 11 條——今天(09-05)delguard 帳共寫入 **21 筆原始紀錄**(12 degraded + 9 ok),`lumos gov` 預設視圖(無 `--full`)對這一天只印 **5 行**(degraded 折成 1 行 ×11、ok 折成 1 行 ×5 加 3 行不同節點群)。折疊生效,而且沒有錯誤地折疊本該分開顯示的「有真實 vault 命中、內容不同」的 ok 事件。
++
++---
++
++## 四、治理帳 `docs/.governance-log.jsonl` 假資料
++
++`grep -n "fake diff output\|Systems/fake" docs/.governance-log.jsonl` → **0 命中**(r3 抓到的兩筆已被刪除,git diff 顯示只是刪除,帳本仍是 append-only 的正常歷史,沒有竄改既有行)。對全部 24000+ 行額外做 commit 欄格式掃描(是否為 7–40 位 hex),**0 筆異常**。當前工作樹上 `docs/.governance-log.jsonl` 有一段未提交的差異(19 行新增),內容是本次稽核期間背景排程/工具鏈自己寫入的 `check-s`/`check-e3`/`doctor-run` 等一般性檢查紀錄,不含任何假資料特徵,不在本次稽核範圍內需要處理。
++
++---
++
++## 五、文件互相矛盾(五個指定主題)
++
++1. **收工 Stop hook 兩家一致**:`grep -rn "只看副檔名\|不認 shebang" README.md README.en.md ARCHITECTURE.md docs/methodology/*.md skills/*/SKILL.md skills/*/commands/*.md` → **沒有**命中舊說法;ARCHITECTURE.md line 151(mermaid)與 `08-自動跑的.md:10` 都已寫「兩家一致/都擋一次」。但 **ARCHITECTURE.md 自己 line 141(散文)仍只寫「Codex 側會擋一次」**,見第一節第 7 條——同一份文件內部矛盾。
++2. **pre-commit 判程式碼規則**:沒有找到任何文件還在講舊的「只看副檔名」規則(0 命中)。**沒有矛盾。**
++3. **派工鏡頭兩模式與超時**:`skills/lumos-code-loop/SKILL.md:19` 與 `skills/lumos-project-notes/commands/06-代碼審與推送.md:15/20` 兩處都是同檔內「超時附一行說明」與「超時靜默放行」並存,見第一節第 4 條。**矛盾仍在。**
++4. **自主迴圈暫停**:`docs/methodology/圖譜即合約.md`(自主迭代 loop 整段)、`skills/lumos-project-notes/commands/08-自動跑的.md`(09:30 那列)兩處完全沒提暫停,見第一節第 5、8 條。**矛盾仍在**(全景圖與 ARCHITECTURE mermaid 已修好,方法論主文件與指令索引沒跟上)。
++5. **delguard 記帳**:`grep -rn "delguard" README.md README.en.md ARCHITECTURE.md docs/methodology/*.md` 沒有找到跟現行行為(ok 也記帳)矛盾的舊描述。**沒有矛盾。**
++
++---
++
++## 六、本輪新發現
++
++1. **決定文件「第三輪稽核折入」段有兩處查證錯誤**:「沒有當機」被 `daily-wrapper.log`/`lint-watch.log`/`doctor-daily.log`/`testmap.log`(不存在)四個獨立來源一致推翻;「0/16 是更正後數字」把同一篇筆記的兩次更正順序看反,圖譜自己白紙黑字寫「以 2/16 為準」卻被裁定成 0/16 才對。**同一份文件既是「稽核紀律」的產物,自己又犯了「只信一個來源沒對第二個」的錯——這正是 CLAUDE.md 第四條鐵則想擋的那種失誤,發生在負責裁決要不要採信稽核結論的那一步。**
++2. **d5(testmap 每日重建)目前的「證據」是一次性人工執行,不是自動化**:`.lumos/testmap.json` 的 `built_at_commit` 落在 code-six-fixes 收尾期,不是排程時間點;現在落後 HEAD 12 個 commit。跟 09-05 那次 wrapper 崩潰是同一條因果鏈——崩潰導致排程從沒真的走到 testmap 那一步。
++3. **「doctor 22 道」在複驗後應該從「未修的舊帳」名單移除**:三輪稽核(r1/r2/r3)都把它當成待修項目掛著,但用最貼近使用者實際看到的統計口徑(`lumos doctor` 直接輸出的檢查字母數)去重算,22 完全站得住腳;真正該被質疑的是 r1 最初「29」的統計方法(混入進度標頭與條件式區塊),不是文件的數字。這是本輪唯一一條「查證後發現原本的批評站不住腳」的項目。
++4. **README §11「約一半」與 skill-doctor 成本「這週偏高」兩個但書,r3 指出被拿掉後,這輪仍未補回**:`grep -n "不是鏡頭\|這週\|偏高"` README.md/README.en.md 0 命中。不算進 12 條主清單(屬於「但書變樂觀」不是「不自洽」),但屬於還沒處理的舊帳,一併記錄。
++
++---
++
++## 收斂判定
++
++**三邊(文件/程式碼/帳本)目前還剩 9 處對不上**(r3 原本 12 條裡,4 條確認已修、1 條複驗後判定原本就不算問題、1 條爭議無法機械覆核不計入,剩 9 條扣掉爭議項未解決):
++
++會誤導讀者判斷的(高,3 條全部未解決):
++- 自主迴圈「暫停」字面對不上今天生產環境的真實崩潰(裁定只對了一半)
++- 「0/16」與圖譜自己聲明「以 2/16 為準」矛盾,決定文件的複核把先後順序搞反
++- (七週→近兩週已修,不再列入)
++
++文件內部自我矛盾,範圍限於文件本身(中,4 條未解決):
++- `skills/lumos-code-loop/SKILL.md:19` 同段新舊說法並存
++- `skills/lumos-project-notes/commands/06-代碼審與推送.md:15/20` 同檔矛盾
++- `docs/methodology/圖譜即合約.md` 完全沒跟上 09-05 兩個修法(dispatch-lens 超時、自主迴圈暫停)
++- `ARCHITECTURE.md` 自己 line 141 vs 151 矛盾
++- `skills/lumos-project-notes/commands/08-自動跑的.md` 一列更新一列沒更新
++
++（`ARCHITECTURE.md` 缺 `--spec`、全景圖變更日誌不同步——已修,不再列入;「doctor 22 道」——複驗後不成立,不再列入)
++
++**這些不算「已知限制」**——README §11 界線節的已知限制講的是「機制本身做不到什麼」(例如「審過了的憑證是自己開的」「派工附的節點大多沒被打開」這種設計上的天花板),跟這裡列的「文件之間彼此打架」或「宣稱的自動化今天沒真的跑」是不同性質的問題,不能互相抵銷。
++
++**判定:loop 再轉一輪,但下一輪的範圍應該縮小、而且要換方法**——連續兩輪(r3、決定文件複核)都在同一類問題上摔跤:**自報的裁定沒有被要求附獨立第二個來源就採信了**。9 條剩餘項目裡有 7 條是純文字同步(相對機械、風險低,派一個只做「grep 五個關鍵詞+回填字句」的窄任務就能收斂),真正需要人判斷的只有 2 條(暫停機制當天崩潰要不要修 wrapper 本身、0/16 vs 2/16 用哪個當 README 最終字面)。建議下一輪拆成兩個獨立、範圍寫死的任務——不要再開一輪「全面自洽總查」,那種開放式範圍正是這兩輪一再自己找到新盲點又留下新盲點的原因。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 15a6136..a723b20 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -25846,12 +25846,24 @@ def t_delguard_logs_ok_too():
+     partial = [l for l in txt2.splitlines() if '"gate": "delguard"' in l and "timeout-partial" in l]
+     check("delguard 部分結果: 掃描被 deadline 截斷 → 帳記 degraded reason=timeout-partial 且 --json degraded=true+reason", rc2 == 0 and len(partial) == 1 and j2.get("degraded") is True and j2.get("reason") == "timeout-partial", (str(j2)[:160], txt2[-200:]))
+     # 第三輪稽核:gov 呈現層要把同日多筆 delguard 帳折成 ×N(原條件要 detail 為空,永遠折不到)
+     r3 = _sp.run([sys.executable, GRAPHCTL, "delguard", "--staged"], cwd=str(root), capture_output=True, text=True, timeout=120)
+     g = _sp.run([sys.executable, GRAPHCTL, "gov", "--since", "1"], cwd=str(root), capture_output=True, text=True, timeout=120)
+     n_ok_ledger = sum(1 for l in log.read_text(encoding="utf-8").splitlines() if '"gate": "delguard"' in l and '"kind": "ok"' in l)
+     ok_rows = [l for l in g.stdout.splitlines() if "delguard/ok" in l]
+     check("gov 折疊 delguard: 帳上兩筆同日 ok 在預設視圖只佔一行(折成一行,不洗版)", n_ok_ledger == 2 and len(ok_rows) == 1, (n_ok_ledger, g.stdout[-240:]))
+ 
+ 
++def t_daily_governance_wrapper_is_function_wrapped():
++    """第四輪稽核(2026-09-05):bash 邊讀邊執行,長跑的 wrapper 在跑時被改檔會讀到半行炸掉(當天實發生:自主迴圈 3 小時回來後 syntax error,
++    後段全沒跑)。守衛:整段包在 main() 裡、最後一行才呼叫,且 bash -n 過。"""
++    import subprocess as _sp
++    p = Path(GRAPHCTL).resolve().parent.parent / "governance" / "daily-governance.sh"
++    s = p.read_text(encoding="utf-8")
++    body_start = s.index("main() {"); tail = s.rstrip().splitlines()[-1].strip()
++    check("daily-governance: 主體包在 main() 裡、最後一行 main \"$@\"", "main() {" in s and tail == 'main "$@"' and 'echo "[$(ts)] daily-governance wrapper 完成"' in s[body_start:], tail)
++    r = _sp.run(["bash", "-n", str(p)], capture_output=True, text=True)
++    check("daily-governance: bash -n 語法過", r.returncode == 0, r.stderr[:160])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index e69cf6a..89e63e6 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -9,21 +9,21 @@ description: 分支要推之前的代碼審查迴圈——先 lumos pitfalls --d
+ 指令速查:`lumos-project-notes` 的 `commands/06-代碼審與推送.md`。派工 prompt 與席位紀律見 `reference.md`。
+ 
+ ## 什麼時候用
+ - `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一個審查員走循序(`--tier standard`,上限 3 輪);`light`/瑣碎改動可跳(commit 註明)。
+ - pre-push 和 CI 都會重算 tier;high 沒有 `lumos code-loop pass|skip --note` 留痕就推不上去。留痕綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑。
+ - loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --orchestrator claude|codex --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
+ - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+ 
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`;超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。
+-2. **派審查員**:Agent、sonnet(★Codex 編排時:spawn_agent,派工詞點名 `lumos_reviewer`(install 寫的自訂席,0.153.2 實測選得中、0.144.1 忽略;審查員框架由它的 developer_instructions 給,派工詞只給審材與鏡頭,0.144.1 選不中時派工詞自帶框架);★唯讀仍靠父代理以 `codex exec --sandbox read-only` 開讓子代理繼承★——TOML 的 sandbox 欄實測不擋([[Projects/Codex完全支援_計劃]] d6);外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`;Codex 對照單源=lumos-design-loop `templates.md` §3 ④★)。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。★圖譜鏡頭(2026-08-29 起每席都附;2026-09-01 d9 截錄;★2026-09-03 起改由 hook 機器附★——手貼 0 執行的結構因是「跑指令→讀→貼」落在編排者身上)★:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`(★派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取:大範圍算一次 25 秒起、hook 45 秒會超時放空;2026-09-05 起超時會附一行說明而不是靜默★),派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——**前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/★裸合約★——裸合約=閘守不到、只剩你讀,優先看)、逐條必答;超出只列名,不必答**;一句話層(L0)已砍(自由文字=注入管道)。標記不在/格式差/base 不在主線/超時→靜默放行;★0 篇(v1.2)→附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約不必逐條答)★;派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。★Codex 編排時標記行無效(派工訊息對 hook 是密文):派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`(templates.md §3 ④;[[Projects/Codex完全支援_計劃]] d3)。★另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」,每條 finding 必附 file:line 與引句。派工單落 `rN-dispatch.json`。
++2. **派審查員**:Agent、sonnet(★Codex 編排時:spawn_agent,派工詞點名 `lumos_reviewer`(install 寫的自訂席,0.153.2 實測選得中、0.144.1 忽略;審查員框架由它的 developer_instructions 給,派工詞只給審材與鏡頭,0.144.1 選不中時派工詞自帶框架);★唯讀仍靠父代理以 `codex exec --sandbox read-only` 開讓子代理繼承★——TOML 的 sandbox 欄實測不擋([[Projects/Codex完全支援_計劃]] d6);外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`;Codex 對照單源=lumos-design-loop `templates.md` §3 ④★)。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。★圖譜鏡頭(2026-08-29 起每席都附;2026-09-01 d9 截錄;★2026-09-03 起改由 hook 機器附★——手貼 0 執行的結構因是「跑指令→讀→貼」落在編排者身上)★:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`(★派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取:大範圍算一次 25 秒起,hook 45 秒超時就附不到節點;2026-09-05 起超時會在派工詞尾端附一行說明,不再靜默★),派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——**前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/★裸合約★——裸合約=閘守不到、只剩你讀,優先看)、逐條必答;超出只列名,不必答**;一句話層(L0)已砍(自由文字=注入管道)。標記不在/格式差/base 不在主線/超時→靜默放行;★0 篇(v1.2)→附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約不必逐條答)★;派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。★Codex 編排時標記行無效(派工訊息對 hook 是密文):派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`(templates.md §3 ④;[[Projects/Codex完全支援_計劃]] d3)。★另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」,每條 finding 必附 file:line 與引句。派工單落 `rN-dispatch.json`。
+ 3. **收貨**:存席報告先正規化(2026-08-26 SOP:引句同行格式;表頭型嚴重度補獨立「severity: <值>」行,乾淨輪也要 severity: clean——record 寫側硬擋:審查席記帳必附報告、帳面不得低於報告最高)。可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現(跑得出來才撈回),直接丟曾兩次誤殺真問題。`lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+ 4. **判讀與辯方**:severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(預設 Codex `codex exec --sandbox read-only`,2026-07-18 S5;不可用退 opus 並於 note 註記偏離。`scripts/external-seat.sh`(Gemini)只當備援、其 ≥major 不算否決票——2026-08-23 裁)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。**high 缺外家辯方(替補也湊不齊)**:不硬擋(Enzo 2026-08-22 裁,成本考量),但收斂結論要降級成「單家族視角下未發現」、留痕 note 寫明缺席,問閘(`--disposal`)偵測到席位異常會自動轉述當輪(異常才印;外家未派行僅轉述編制對照不裁決);全史核對用 `loop status --roster`。diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點:`code-loop check`(pre-push 每次呼叫)會**自動真跑那些綁定測試**,紅/懸空/方法名不合法就擋推送(2026-08-22 起機械化,不靠自律);跑不了要 `--skip-bound-tests --note` 留痕。
+ 5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
+ 6. **記帳**:★多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,且帳本不能撤銷,只能換編號重記(2026-08-24 第三次踩)★。`lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。
+ 7. **問閘**:單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`——多席照步驟 6 的彙總記帳(處置清單只掛一席);★code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折,d2 裁;散文設計審不受此限)★。`--gate --panel` 僅供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
+ 8. **過了留痕**:先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳),再 `lumos code-loop pass --note "<審了什麼、幾席、幾條折入>"`;決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。推完、卷證入版控後 `lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定(週跑回放抽查用)。然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
+ 
+ 推完之後若下游(實作/CI/prod/使用者)發現可歸因到某次已放行審查的缺陷:`lumos loop escape <編號> --stage <站> --severity <s> --desc <一句>`(逃逸帳=審查系統的漏網紀錄,append-only 不進閘)。
+ 
+ ## 停手與護欄
+diff --git "a/skills/lumos-project-notes/commands/06-\344\273\243\347\242\274\345\257\251\350\210\207\346\216\250\351\200\201.md" "b/skills/lumos-project-notes/commands/06-\344\273\243\347\242\274\345\257\251\350\210\207\346\216\250\351\200\201.md"
+index ec856fd..902fbf8 100644
+--- "a/skills/lumos-project-notes/commands/06-\344\273\243\347\242\274\345\257\251\350\210\207\346\216\250\351\200\201.md"
++++ "b/skills/lumos-project-notes/commands/06-\344\273\243\347\242\274\345\257\251\350\210\207\346\216\250\351\200\201.md"
+@@ -5,16 +5,16 @@
+ | 「這批改動風險多高?要不要過審?」 | `lumos pitfalls --diff <merge-base>..HEAD` | `tier: high` → 要過對抗代碼審(`lumos-code-loop` skill);standard/light 可直接推。輸出末段「[架構對齊]」列每支改動檔同層最像的既有檔當對照,逐問三件事(分層依賴 / 命名錯誤處理 / 有沒有第二種做法)——派審查員時一併附上 | pre-push 自己會算,high 沒留痕就擋 |
+ | 「審完了/決定不審,要留痕才能推」 | `lumos code-loop pass --note "<審了什麼>"` 或 `lumos code-loop skip --note "<為什麼不審>"` | 留痕綁當下版本;之後再改 code(簿記檔除外)就失效,要重跑 | pre-push 與 CI 都擋 |
+ | 「我現在推得上去嗎?」 | `lumos code-loop check [--diff … --at-sha … --branch …]` | OK/BLOCKED + 原因。**順便真跑受波及合約綁的測試**(impact 固定席上的 ★INVARIANT★ [test:]):紅、懸空、方法名不合法都擋;沒設 `test.run_cmd` 只提醒 | pre-push 每次推送都呼叫它 |
+ | 「受波及合約的測試真的跑不了(外部 DB 不在)」 | `lumos code-loop check … --skip-bound-tests --note "<為什麼>"`;CI 用環境變數 `LUMOS_SKIP_BOUND_TESTS=1` | 留痕進治理帳,被統計 | 沒理由拒絕 |
+ | 「合約綁測試的狀態」 | `lumos guard list` | 真綁/懸空/偽證據/裸/未審 | doctor [T] 擋裸合約 |
+ | 「幫合約產一個測試骨架」 | `lumos guard scaffold <節點> "<KEY 片段>" --method <名> [--platform …]` | 預設紅燈 stub,斷言留 TODO | — |
+ | 「把寫好的測試綁回合約」 | `lumos guard bind <節點> "<KEY 片段>" <測試名>` | 寫回 [test:] | 裸合約擋推 |
+ | 「合約被不知道脈絡的人審過了」 | `lumos guard audit <節點> "<KEY 片段>"` | 寫回 [audit:] | lint 報「未獨立審計」,pre-push 擋 |
+ | 「這條合約→守衛測試→驗證紀錄的證據鏈」 | `lumos guard trace <節點>` | 反向可查爆炸半徑 | — |
+ | 「綁的測試真的守得住嗎?」 | 先 `lumos guard kill-add <節點> "<片段>" --file … --old … --new …` 宣告壞法,再 `lumos guard kill <節點> "<片段>"` | 套壞法後測試必須翻紅,沒翻紅=測試是裝飾 | — |
+-| 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`,hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;內容從 base 讀、零自由文字) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時/base 不在主線→靜默放行 | 鏡頭不是閘,不擋 |
++| 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`,hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;內容從 base 讀、零自由文字) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線→靜默放行 | 鏡頭不是閘,不擋 |
+ | 「我是在 Codex 裡編排代碼審,鏡頭怎麼附?」 | 派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`;子代理開場 hook 自動領一席附上;派完 `lumos dispatch-lens --disarm`;看剩幾席 `--status`(Codex 的派工訊息 hook 改不了,所以不用標記行) |
+ | 「推了,等 CI 結果」 | `lumos ci-wait`;只看上次結果 `lumos ci-status` | 綠 rc0/紅 rc1 | 紅了沒人知道 |
+ | 「已放行的東西在下游炸了,要記漏網帳」 | `lumos loop escape <迴圈編號> --stage <實作\|code-loop\|CI\|prod\|使用者回報> --severity <minor\|major\|blocker> --desc <一句>`;看全帳 `lumos loop escape --list` | 逃逸入帳(append-only 不進閘;歸因人工判斷,編號必須實存於審查帳) |
+ | 「這輪代碼審過了沒?」 | 單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席=彙總記帳,處置清單只掛一席;code 迴圈輪內有 major 席則 accepted 必空);`--gate --panel` 僅 2026-08-25 前定錨的舊迴圈回放(新迴圈問了會被拒並指路) | ✅/⛔+卡在哪一關 |
+ | 派工前暖鏡頭快取 | `lumos dispatch-lens <base>..HEAD` | 大範圍算一次 25 秒起,hook 45 秒超時會放空(2026-09-05 起超時附一行說明);先算一次快取 20 分有效 | 派工詞仍要留 `LUMOS-IMPACT:` 標記行 |
+diff --git "a/skills/lumos-project-notes/commands/08-\350\207\252\345\213\225\350\267\221\347\232\204.md" "b/skills/lumos-project-notes/commands/08-\350\207\252\345\213\225\350\267\221\347\232\204.md"
+index cf43bff..34b3f8e 100644
+--- "a/skills/lumos-project-notes/commands/08-\350\207\252\345\213\225\350\267\221\347\232\204.md"
++++ "b/skills/lumos-project-notes/commands/08-\350\207\252\345\213\225\350\267\221\347\232\204.md"
+@@ -2,12 +2,13 @@
+ 
+ | 時機 | 自動跑什麼 | 擋不擋 |
+ |---|---|---|
+ | `git commit` 前(pre-commit) | 污染檢查、`lumos lint` 逐篇、「改 code 沒動圖譜」檢查、`lumos cochange check`、`lumos delguard` | 前三項擋;後兩項提醒 |
+ | `git commit` 後(post-commit) | 記 bypass 帳(用 --no-verify 繞過也會留痕) | 不擋 |
+ | `git push` 前(pre-push) | `lumos anchor verify`、全套測試、`lumos code-loop check`、`lumos doctor --ci` | 全擋 |
+ | CI(push 後) | 同 pre-push + `lumos code-loop check`(補查 --no-verify 繞過的) | 紅燈 |
+ | Claude 要 Edit/Write 前(impact hook) | `lumos impact --file <檔>` 的結果注入 | 只提醒;邊界仍要自己查 |
+ | 回合結束(check-graph-sync,Stop hook) | 提醒「改了 code 還沒動圖譜」 | 兩家同 session 擋一次續做(`LUMOS_STOP_BLOCK_OFF=1` 關;2026-09-05 起 Claude 也擋) |
+ | 每天 09:30(autonomous-loop) | 自動選題 → 設計審查 → 備 pending 等人放行 | — |
++| 每天 09:30(launchd daily-governance) | 治理日報、lint-watch 版本掃、doctor --ci、testmap 重建、每週回放與探針抽查;★自主迭代 loop 的派工 2026-09-05 起暫停(LUMOS_AUTOLOOP_OFF 預設 1)★ | 全 fail-open;腳本已包成 main() 免邊跑邊改讀到半行 |
+ 
+ 看到「擋下:」就是上面某一道擋了,訊息第一句講發生什麼、最後一行給該敲的指令。
+
+exec
+/bin/zsh -lc "nl -ba governance/daily-governance.sh | sed -n '1,85p'; nl -ba scripts/test_lumos.py | sed -n '/def t_daily_governance_wrapper_is_function_wrapped/,+15p'; bash -n governance/daily-governance.sh" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+     1	#!/bin/bash
+     2	# 每日治理 wrapper:一個喚醒窗內「連續」跑 治理日報 → 自主迭代 loop → lint-watch 版本掃描。
+     3	#
+     4	# 為什麼合併:閉蓋(clamshell)的 Mac 幾乎一直在睡,launchd StartCalendarInterval
+     5	# 不會把機器叫醒、且只在 FullWake 補跑 GUI agent。解法是用 pmset 每天叫醒「一次」:
+     6	#   sudo pmset repeat wakeorpoweron MTWRFSU 09:28:00
+     7	# 那一次喚醒只夠跑「一段連續工作」——分成 09:30 / 10:10 兩支,機器會在中間又睡著、
+     8	# 第二支照樣漏。故把兩件事串成這一支,趁機器醒著一口氣跑完(腳本執行中系統不會 idle-sleep)。
+     9	#
+    10	# 由 launchd com.enzo.lumos.daily-governance(09:30)觸發。各子腳本仍各自寫自己的 log。
+    11	# 第 3 步 lint-watch-check:每日查 linter 新版 → 候選暫存 governance/lint-upgrades/ + LINE 通知。
+    12	set -uo pipefail   # 不用 -e:前一支失敗不擋後一支
+    13	
+    14	DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    15	ts() { date '+%Y-%m-%d %H:%M:%S'; }
+    16	
+    17	mkdir -p "$DIR/logs"
+    18	
+    19	# ★整段包進 main() 最後才呼叫(2026-09-05 第四輪稽核):bash 是邊讀邊執行,腳本在跑的時候(自主迴圈那段可跑三小時)
+    20	# 被人改檔,回來會從新檔的同一個 byte 位置接著讀,讀到半行就 syntax error 整支死掉——今天 09:30 那次就這樣,
+    21	# lint-watch/doctor/testmap 全沒跑。包成函式=先整份讀完再執行,改檔只影響下一次。
+    22	main() {
+    23	  echo "[$(ts)] daily-governance wrapper 開始"
+    24	
+    25	  # 1) 治理日報(自設 PATH/token;log → governance.log)
+    26	  "$DIR/ai-governance-research.sh" >> "$DIR/logs/governance.log" 2>&1
+    27	  echo "[$(ts)] 治理日報 段結束 rc=$?"
+    28	
+    29	  # 2) 自主迭代 loop(dry-run;log → autonomous.log)
+    30	  #    2026-09-05 暫停派工(README 審視 d3,見圖譜 Projects/README審視五修_計劃):七週週報收斂 0、待放行 0、每週 210–330 美元;
+    31	  #    dry-run 永遠走不到開 PR。開關沿用 repo 的 *_OFF 慣例,但預設 1(=暫停);要臨時開回:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
+    32	  if [ "${LUMOS_AUTOLOOP_OFF:-1}" != "1" ]; then
+    33	    "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
+    34	    echo "[$(ts)] 自主 loop 段結束 rc=$?"
+    35	  else
+    36	    echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3;LUMOS_AUTOLOOP_OFF=0 可開回)" >> "$DIR/logs/autonomous.log" 2>&1
+    37	    echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3)"
+    38	  fi
+    39	
+    40	  # 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)
+    41	  "$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc=$?
+    42	  echo "[$(ts)] lint-watch 段結束 rc=$rc"
+    43	
+    44	  # 4) doctor 每日跑(fail-open;log → doctor-daily.log)
+    45	  # intake守衛 T4 排程線(2026-08-30 d1,外家 r3 唯一補件):T4 的滾動窗計數器住在 doctor 的
+    46	  # [I] 段;此前 doctor 只在 push/CI 跑——「doctor 每天跑」曾是未查證的假宣稱,這行讓它成真。
+    47	  ( cd "$DIR/.." && python3 scripts/lumos doctor --ci ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc=$?  # --ci=治理事件入帳(回訪掃描 v3 接電條款:無此則 nags 14 天升級鏈斷路)
+    48	  echo "[$(ts)] doctor 段結束 rc=$rc"
+    49	
+    50	  # 5) testmap 每日重建(2026-09-05 第二輪審視 d5:建過一次後落後 614 個 commit 沒人重建;0.6 秒)
+    51	  ( cd "$DIR/.." && python3 scripts/lumos testmap build ) >> "$DIR/logs/testmap.log" 2>&1; rc=$?
+    52	  echo "[$(ts)] testmap 重建 rc=$rc"
+    53	
+    54	  echo "[$(ts)] daily-governance wrapper 完成"
+    55	}
+    56	
+    57	main "$@"
+ 25856	def t_daily_governance_wrapper_is_function_wrapped():
+ 25857	    """第四輪稽核(2026-09-05):bash 邊讀邊執行,長跑的 wrapper 在跑時被改檔會讀到半行炸掉(當天實發生:自主迴圈 3 小時回來後 syntax error,
+ 25858	    後段全沒跑)。守衛:整段包在 main() 裡、最後一行才呼叫,且 bash -n 過。"""
+ 25859	    import subprocess as _sp
+ 25860	    p = Path(GRAPHCTL).resolve().parent.parent / "governance" / "daily-governance.sh"
+ 25861	    s = p.read_text(encoding="utf-8")
+ 25862	    body_start = s.index("main() {"); tail = s.rstrip().splitlines()[-1].strip()
+ 25863	    check("daily-governance: 主體包在 main() 裡、最後一行 main \"$@\"", "main() {" in s and tail == 'main "$@"' and 'echo "[$(ts)] daily-governance wrapper 完成"' in s[body_start:], tail)
+ 25864	    r = _sp.run(["bash", "-n", str(p)], capture_output=True, text=True)
+ 25865	    check("daily-governance: bash -n 語法過", r.returncode == 0, r.stderr[:160])
+ 25866	
+ 25867	
+ 25868	if __name__ == "__main__":
+ 25869	    sys.exit(main())
+
+exec
+/bin/zsh -lc "rg -n \"t_daily_governance_wrapper|globals\\(|"'^def main" scripts/test_lumos.py | tail -20; sed -n '"'25820,25872p' governance/review-reports/code-daily-wrapper-main/r1-snapshot.patch" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+1092:    names = {k for k in globals() if k.startswith("t_")}
+22654:def main():
+22684:    tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
+25856:def t_daily_governance_wrapper_is_function_wrapped():
+
+codex
+severity: major
+- [major] 守衛只找三個字串，主體移回函式外仍會假綠
+  file: scripts/test_lumos.py:25863
+  quote:     check("daily-governance: 主體包在 main() 裡、最後一行 main \"$@\"", "main() {" in s and tail == 'main "$@"' and 'echo "[$(ts)] daily-governance wrapper 完成"' in s[body_start:], tail)
+  why: 測試沒有驗證 main() 前不存在可執行主體；只要保留一個含「wrapper 完成」的空殼 main() 和末行呼叫，即使長跑流程全被移回頂層、再次暴露於邊讀邊改，測試仍通過。現版甚至已有 set、DIR 指派與 mkdir 在 main() 外，故「整段包進 main()」並未被此守衛機械保證。
+
+- [minor] main() 前仍有可執行命令，改檔不一定只影響下一次
+  file: governance/daily-governance.sh:17
+  quote: mkdir -p "$DIR/logs"
+  why: Bash 執行完這行後才開始解析後面的函式定義；若檔案恰在這個窗口被替換，本次行程仍可能讀到新檔或半行內容。它解決了三小時長跑期間的主要事故窗口，但不完全符合 patch 宣稱的「先整份讀完、改檔只影響下一次」。
+hook: Stop
+hook: Stop Completed
+tokens used
+52,528
+codex rc=0

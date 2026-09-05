@@ -25855,12 +25855,33 @@ def t_delguard_logs_ok_too():
 
 def t_daily_governance_wrapper_is_function_wrapped():
     """第四輪稽核(2026-09-05):bash 邊讀邊執行,長跑的 wrapper 在跑時被改檔會讀到半行炸掉(當天實發生:自主迴圈 3 小時回來後 syntax error,
-    後段全沒跑)。守衛:整段包在 main() 裡、最後一行才呼叫,且 bash -n 過。"""
-    import subprocess as _sp
+    後段全沒跑)。守衛三件(代碼審 r1 折入,Codex 外家席抓到首版只比三個字串、把主體搬回頂層也假綠):
+    ①main() 之外只准前奏(shebang/註解/空行/set/DIR=/ts()/mkdir logs),任何呼叫子腳本或 python3 scripts/lumos 的行都必須在 main() 體內;
+    ②最後一行必須是 main "$@"; exit 同一行(沒 exit → main 跑完 bash 回頭從舊 byte 位置續讀,檔長變了會讀垃圾甚至整支重跑,scratch 實驗實證);
+    ③bash -n 過。"""
+    import subprocess as _sp, re as _re
     p = Path(GRAPHCTL).resolve().parent.parent / "governance" / "daily-governance.sh"
-    s = p.read_text(encoding="utf-8")
-    body_start = s.index("main() {"); tail = s.rstrip().splitlines()[-1].strip()
-    check("daily-governance: 主體包在 main() 裡、最後一行 main \"$@\"", "main() {" in s and tail == 'main "$@"' and 'echo "[$(ts)] daily-governance wrapper 完成"' in s[body_start:], tail)
+    lines = p.read_text(encoding="utf-8").splitlines()
+    starts = [i for i, l in enumerate(lines) if l.strip() == "main() {"]
+    check("daily-governance: 恰有一個 main() {", len(starts) == 1, str(starts))
+    if not starts:
+        return
+    ms = starts[0]
+    me = next(i for i in range(ms + 1, len(lines)) if lines[i] == "}")  # 函式體結尾:頂格的 }
+    body = "\n".join(lines[ms + 1:me])
+    prelude_ok = _re.compile(r'^(#.*|\s*|set .*|DIR=.*|ts\(\) \{.*\}|mkdir -p "\$DIR/logs")$')
+    bad_pre = [(i + 1, l) for i, l in enumerate(lines[:ms]) if not prelude_ok.match(l)]
+    check("daily-governance: main() 之前只有前奏(shebang/註解/set/DIR/ts/mkdir),沒有可執行主體", not bad_pre, str(bad_pre[:3]))
+    after = [(i + 1, l) for i, l in enumerate(lines[me + 1:], me + 1) if l.strip() and not l.lstrip().startswith("#") and l.strip() != 'main "$@"; exit']
+    check("daily-governance: } 之後除註解只剩 main \"$@\"; exit 這一行", not after, str(after[:3]))
+    check("daily-governance: 最後一行是 main \"$@\"; exit(exit 同一行,防回頭讀檔)", lines[-1].strip() == 'main "$@"; exit', lines[-1])
+    calls = [l for l in lines if _re.search(r'"\$DIR/[a-z-]+\.sh"|python3 scripts/lumos', l) and not l.lstrip().startswith("#")]
+    check("daily-governance: 所有子腳本/lumos 呼叫都在 main() 體內", calls and all(l in body for l in calls), f"{len(calls)} 個呼叫")
+    # 通才席 r1 第二條:整步被刪也曾假綠。五步名冊釘死——要拿掉一步就得連這裡一起改(守衛的意思就是不能默默掉)。
+    roster = ['"$DIR/ai-governance-research.sh"', '"$DIR/autonomous-loop.sh" --dry-run', '"$DIR/lint-watch-check.sh"', "python3 scripts/lumos doctor --ci", "python3 scripts/lumos testmap build"]
+    missing = [r for r in roster if r not in body]
+    check("daily-governance: 五步名冊(日報/自主迴圈/lint-watch/doctor --ci/testmap build)都在 main() 體內", not missing, str(missing))
+    check("daily-governance: 收尾 echo 在體內", 'echo "[$(ts)] daily-governance wrapper 完成"' in body, "")
     r = _sp.run(["bash", "-n", str(p)], capture_output=True, text=True)
     check("daily-governance: bash -n 語法過", r.returncode == 0, r.stderr[:160])
 

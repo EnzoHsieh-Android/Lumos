@@ -15,6 +15,7 @@ verified_by:
   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
   - "[[Verification/2026-08-26_自主迴圈三症修理落地]]"
   - "[[Verification/2026-08-27_自主loop遷處置閘]]"
+  - "[[Verification/2026-09-05_wrapper邊跑邊改實驗]]"
 summary: |-
   FLOW:daily-governance.sh(launchd 09:30 單次喚醒,★原獨立 cron 10:10 已棄——自足審計 2026-08-30 抓到 FLOW 殘留舊述★)→ autonomous-loop.sh:驗當日日報存在(真模式無報即跳;dry-run fallback 最近一份)→ backlog 每日衰減(冪等按日差;淘汰先歸檔 backlog-archive.jsonl 讀回自驗才刪)→ gap_select(日報 gaps + backlog 去重排序選 top-1,三鍵排序=分數/last_seen/source_date 新者先;N=1 gate:有 pending/open PR 則只進 backlog)→ claude -p orchestrator(真執行:brainstorm spec → design-loop ≤6 輪[opus auditor + canary a/b/c + judge 判 caught 並回報 severity + 強制地面事實查證]→ loop status --disposal 收斂(★2026-08-27 遷處置閘 d7,舊 --need 2/--gate K-streak 退役★)→ §2.5 qwen3-max 跨家族複核)→ 收斂+endorsed/degraded → 放行閘(dry-run 寫 governance/pending/;真模式 branch+PR+LINE)→ 停等人放行
   KEY:[2026-08-31]daily-governance.sh 第 4 步=lumos doctor --ci(2026-08-30 intake 案加線;08-31 回訪案補 --ci——治理事件每日入帳,gov --nags 14 天空轉升級鏈才有電;裸 doctor 不寫帳=鏈斷路)
@@ -30,6 +31,7 @@ summary: |-
   KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.00269,2026-07-24 裁定:語意合約唯一真獨立寫入閘=真跑測試或人,LLM judge=換皮提案者)②PoE 型防竄改帳+逐筆授權+可重播(arXiv 2607.05397,2026-07-25 裁定:價值不靠敵人成立——無人 loop 自己的遙測可不可信;現成便宜前例 2.7ms;07-26 再添 PROJECTMEM arXiv 2606.12329:本機零依賴 append-only 指紋鏈+寫入前驗內容實證可行,「要裝東西太重」藉口拿掉)③日報吸收管線升格為不可信輸入面(調研員每天真讀外部網頁,今天靠人眼把關,無人化後=夾帶指令/假結論的真通道)。框架修正(使用者 2026-07-25):「內部系統無敵意下毒」對——敵意攻擊框架(IssueTrojanBench 66.5%)不適用單人私有 repo;但無人化後「幻覺 agent 寫錯圖譜+改自己成績單」效果同下毒,主角不需是敵人。同日拒:審計加對抗步(design-loop d4 前置加重一律拒,可審≠審得出=07-23 已記天花板換新引用)/spec 夾帶掃描(spec 作者=自己人,威脅不成立)
   KEY:紀律抗壓縮(Governance Decay arXiv 2606.22528,2026-07-26 對帳)=長跑對話的摘要壓縮會悄悄刪安全規矩(違規率 0→65-95%)——lumos 架構已結構性counter:規矩不住對話記憶(CLAUDE.md 每輪重注入/圖譜在硬碟/impact hook 每次動手前重推合約/orchestrator 每日 fresh spawn),「每輪從硬碟重讀紀律」該篇藥方=本設計既有形狀。殘餘面(誠實):對話中途的口頭約定(未落圖譜者)確實隨壓縮衰減——正是「退場必寫」存在的理由,重要裁定必須離開對話住進硬碟
   KEY:★2026-09-05 週邊接線★([[Projects/第二輪審視六修_計劃]] d4/d5):回放週跑日誌原本被 cut -c1-160 切掉 red/stale 欄位(翻案看不見),改印「跑了/翻案/過期/錯誤」獨立一行+紅燈行+原始全文;daily-governance 加 testmap 每日重建(之前落後 614 個 commit)
+  KEY:★2026-09-05 wrapper 慣例★:daily-governance.sh 是 repo 唯一「活著等三小時」的外層腳本,主體包 `main()`、結尾同一行 `main "$@"; exit`——bash 邊讀邊跑,跑到一半改檔會從舊 byte 位置續讀(當天實發生 syntax error 後段全沒跑;沒 exit 更會整支重跑一遍)。守衛 [test:t_daily_governance_wrapper_is_function_wrapped](前奏白名單/五步名冊/結尾 exit/bash -n);之後再有長跑 wrapper 沿用這個寫法,不要各自發明(代碼審 r1 架構對齊席)。實驗 [[Verification/2026-09-05_wrapper邊跑邊改實驗]]
   DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result,run_ledger}.py + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
   TEST:scripts/test_autonomous_loop.py 全綠(2026-08-30 機械數=106;08-21 時為 53;★原記 27(2026-08-21 程式碼實證)★);dry-run 端到端真機跑通 06-20→06-26(入口現=daily-governance 09:30;測試數 2026-08-30 為 106 條)
   VERIFY:[[Verification/2026-06-20_autonomous-iteration-loop]]

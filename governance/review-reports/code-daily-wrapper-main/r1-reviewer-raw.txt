@@ -1,0 +1,20 @@
+severity: major
+
+- [major] 守衛測試的 main() 檢查,被留在函式外的程式碼繞過——正是它要抓的回歸。
+  file: scripts/test_lumos.py:25863
+  quote: check("daily-governance: 主體包在 main() 裡、最後一行 main \"$@\"", "main() {" in s and tail == 'main "$@"' and 'echo "[$(ts)] daily-governance wrapper 完成"' in s[body_start:], tail)
+  why: 做了一個變體:在 main() 的 } 和結尾 main "$@" 之間插一行可執行指令(模擬有人加新步驟忘了放進 main())。三個子條件全部仍成立——"main() {" 仍是子字串、最後一行仍是 main "$@"、「完成」echo 仍在 s[body_start:](那個切片到檔尾,不管 } 和呼叫之間有什麼)。實跑 check 表達式驗證為綠。這正是這次修法宣稱要關掉的失效模式:函式外的可執行行仍暴露在「bash 讀一行、前一步長跑、有人改檔、下一讀落在半個 token」——今天 09:30 真事故同一機制。
+
+- [major] 同一個 check 在 main() 內整個治理步驟被刪掉時也假綠。
+  file: scripts/test_lumos.py:25863
+  quote: 'echo "[$(ts)] daily-governance wrapper 完成"' in s[body_start:]
+  why: 把 lint-watch 整步(註解+指令+rc echo,五步中的第 3 步)從 main() 內刪掉,重跑同一 check 邏輯加 bash -n,兩者仍過——測試只找字面的「完成」echo 和第一個 "main() {",從不驗其他四步(治理日報、自主迴圈、doctor、testmap)還在。未來某次編輯默默掉一步(例如 doctor --ci,它餵 T4 滾動窗 intake 守衛)會在零測試失敗下出貨。
+
+- [minor] skills/lumos-code-loop/SKILL.md:19 被這份 diff 改過,但同一段落對 dispatch-lens 超時行為仍自相矛盾;diff 自己的決策筆記卻宣稱這段已修。
+  file: skills/lumos-code-loop/SKILL.md:19
+  quote: 標記不在/格式差/base 不在主線/超時→靜默放行
+  why: diff 改寫了這句(patch hunk r1-snapshot.patch:695-722,幾乎只是換字),但同段落後面的子句沒動。所以同一段先說「超時會附一行說明,不再靜默」……稍後又說「超時→靜默放行」。同時第二輪審視六修_計劃.md(也在這份 diff)寫「文字矛盾 7 處:code-loop SKILL、commands/06 的『超時放空/靜默放行』舊句…都補上」——宣稱這檔這題已修,其實沒有。(對照 commands/06-代碊審與推送.md:15 有正確改成「超時→附一行說明」,所以 SKILL.md 是掃漏,不是刻意。)
+
+非發現(鏡頭 1/2/4,查過乾淨):包 main() 確實修掉描述的崩潰機制——bash 必須完整解析到 main() 配對的 } 才能註冊函式(快速不中斷的掃描),之後長跑步驟從已解析的函式體執行、不再讀檔——三小時暴露窗縮成毫秒級解析窗。main() 外僅剩 set -uo pipefail、DIR=、ts()、mkdir -p,都在 main() 解析前跑完且快,不重開事故那種競態。兩格縮排沒有 heredoc/續行/引號變義;bash -n 過;"$@" 在 set -u 下空也不報錯。五步的 cmd; rc=$? 捕捉模式不變。Path(GRAPHCTL).resolve().parent.parent 解到 repo 根,同檔 358/456/513 行同款。跨文件四項宣稱:README 中英 2/16 一致;ARCHITECTURE 散文與 mermaid 都是「兩家都擋一次」(嵌入的 r3/r4 稽核報告標「未修」其實被這份 patch 修了);「超時附一行說明」在 README/ARCHITECTURE/commands/06 一致,只剩 SKILL.md。
+
+lumos 自動附加:bound-tests-gate、canary-audit(2)、guard-kill(2)、slim-get(2)、slim-install(7)、slim-uninstall(6):沒碰——test_lumos.py 唯一改動是檔尾純新增一支測試,沒改任何既有測試或閘邏輯。測試假綠形態 ★INVARIANT★(「還原翻紅釘必須配前置斷言證明現場成立…否則對第④型完全無效」):直接相關,而且這支新測試對上面兩個子案例正是這個缺口——完整解包會翻紅,但「函式外多一行」「函式內刪一步」這兩種回歸它保持綠,就是該節點警告的第④型。
