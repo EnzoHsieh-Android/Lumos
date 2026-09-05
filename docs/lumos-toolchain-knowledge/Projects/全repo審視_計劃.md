@@ -17,7 +17,75 @@ tags:
 - **每條兩個反方**:A 打開引用的行核對事實、實跑宣稱的行為;B 去圖譜查這個提案是不是早就明文否決過、違不違反家規。任一方推翻就出局。
 - **卷證**:`governance/review-reports/repo-audit-2026-09-06/findings.json`(全文)與 `findings.md`(人可讀,依活下來/被推翻/未核對分段)。工作流可續跑:runId `wf_6a5f3932-9e1`,腳本在 session 的 workflows/scripts/ 下。
 
-## 目前進度(2026-09-06)
+## 結果(2026-09-06,核對全數完成)
+
+| 項目 | 數 |
+|---|---|
+| 16 席找出的原始發現 | 130 |
+| 兩位反方都核對完 | 130(全數) |
+| 活下來 | 91 |
+| 被反方推翻 | 39 |
+| 合併成幾群(=幾件可獨立交付的事) | 50 |
+
+活下來的價值分佈:high 31 / med 52 / low 8。
+**中斷史**:第一次撞 session 上限、第二次撞 Fable 額度、第三次最後的合成席斷線;工作流可續跑(runId `wf_6a5f3932-9e1`),完成的吃快取。去重席也失敗過——130 條全文超過單次 64k 輸出上限,改成核對後只輸出分群 id。
+
+## 分群清單(依 價值→工量→風險 排,還沒裁要不要做)
+
+| # | 一件事 | 編號 | 價值 | 工/險 |
+|---|---|---|---|---|
+| 1 | doctor 收尾行「0 issues」蓋掉同畫面的軟提醒 | F06、F15、F45、F100、F127 | high | S/low |
+| 2 | 公開 repo 沒有 LICENSE | F62、F66、F104 | high | S/low |
+| 3 | 版本發布線(release 分支/tag/CHANGELOG)裁定後零落地 | F58、F72、F86、F99 | high | S/low |
+| 4 | 頂層 --help 說明段是凍結的舊 docstring、只列 10 支 | F01、F108 | high | S/low |
+| 5 | KEY 行沒有順序慣例而 context --brief 取前兩行 | F11 | high | S/low |
+| 6 | pre-commit delguard 掃描 15 秒超時降級 | F18 | high | S/low |
+| 7 | pre-push 閘序與逃生口(便宜閘排後面、只有 --no-verify) | F19、F25 | high | S/low |
+| 8 | 派工鏡頭超時不留快取與 hook 內外層逾時無單一來源 | F27、F28 | high | S/low |
+| 9 | 派工單無 schema 與處置閘留痕重複灌水 | F35、F37 | high | S/low |
+| 10 | 席報告收貨正規化沒有指令、臨場腳本會誤填 clean | F38、F124 | high | S/low |
+| 11 | 每日 wrapper 沒有死人開關也沒有整跑鎖 | F43、F46 | high | S/low |
+| 12 | 暫停自主迴圈連帶把週期觀測任務全關掉 | F44、F91 | high | S/low |
+| 13 | ONBOARDING 教的入口與旗標不是現況 | F64、F67、F107 | high | S/low |
+| 14 | 全域 SessionStart hook 執行被打開 repo 自己的程式碼 | F85 | high | S/low |
+| 15 | 成本帳:覆蓋率、單位不通、沒有一頁總帳 | F93、F94、F96 | high | S/low |
+| 16 | 全套測試跑太久:沒有分片並行、fail-fast、順序探針 | F52、F53、F56 | high | S/med |
+| 17 | 測試污染真機:暫存目錄殘骸與真 HOME 改寫 | F48、F49 | high | S/med |
+| 18 | 假綠形態:偽裝成通過的 skip 與走不到的被測分支 | F50、F51 | high | S/med |
+| 19 | lumos update / bootstrap 把全域 hook 倒退、帳檔擋更新 | F59、F61 | high | S/med |
+| 20 | 五支 Claude hook 執行沒有落盤帳 | F30 | high | M/low |
+| 21 | 一輪審查的收貨記帳沒有任何指令串起來 | F40、F125 | high | M/low |
+| 22 | 快速上手沒有安裝驗收也沒有教學路徑 | F68 | high | M/low |
+| 23 | Check E4 連鎖提醒 nodes=[] 進不了空轉偵測與升級鏈 | F118 | med | S/low |
+| 24 | CLI 版本身分:沒有 --version、LUMOS_VERSION 從未 bump | F60、F109 | med | S/low |
+| 25 | argparse help 字串仍帶內部代號 | F02、F71 | med | S/low |
+| 26 | 節點找不到時印成「決策沒地方掛」 | F03、F111 | med | S/low |
+| 27 | 找不到圖譜與 argparse 用法錯的進場訊息 | F04、F110 | med | S/low |
+| 28 | 退出碼逐命令各自裁、沒有 CLI 級的表 | F05 | med | S/low |
+| 29 | frontmatter 欄位 schema 沒有機械守衛(打錯鍵、必填空欄) | F13、F14 | med | S/low |
+| 30 | 測試 runner 靜默吞未知旗標改跑全套 | F54、F128 | med | S/low |
+| 31 | git hook 的硬擋與 fail-open 放行零留痕 | F21、F95 | med | S/low |
+| 32 | hooksPath 指向樹內、錨點只錨清單內三支 | F24 | med | S/low |
+| 33 | Stop hook 死分支與已撤 hook 的 423 行殘骸 | F29、F34 | med | S/low |
+| 34 | bypass 模式下 Stop block 落地已有實證可收窄風險 | F33 | med | S/low |
+| 35 | impact-hook 把圖譜自由文字逐字注入主 session | F31 | med | S/low |
+| 36 | 治理資料體積無守衛:Codex stderr 卷證與 jsonl 帳本 | F39、F47 | med | S/low |
+| 37 | Windows 入口 get.ps1 停在 06-26 兩步版 | F63 | med | S/low |
+| 38 | 文件裡的指令與旗標沒有存在性守衛(只驗命令總數) | F84、F105 | med | S/low |
+| 39 | README 邊界句與 repo 內三份技術棧 skill 打架 | F70、F79 | med | S/low |
+| 40 | docs/methodology 三份文件沒有任何入口且自相矛盾 | F69 | med | S/low |
+| 41 | skill 頭版偏 Claude 主語、Codex 對照號稱單源實為多份 | F78、F83 | med | S/low |
+| 42 | skill 文件內容過期與速查表欄位錯位 | F80、F112 | med | S/low |
+| 43 | 同型修法只修一處:symlink 信任檢查與固定 /tmp 路徑 | F87、F88 | med | S/low |
+| 44 | 受波及合約測試閘:圖譜寫的與 hook 實作不符 | F22 | med | S/med |
+| 45 | 12 個讀取類命令沒有 --json | F07 | med | M/low |
+| 46 | 測試單檔的重複 helper 層推高編輯成本 | F55 | med | M/low |
+| 47 | 無空白中文查詢 0 筆不自動退成 bigram | F16 | med | M/med |
+| 48 | repo 根目錄的測試殘留雜檔 lumos-calls.jsonl | F09、F75 | low | S/low |
+| 49 | 紀律範本注入每個消費端卻寫著客戶專案名 | F74 | low | S/low |
+| 50 | usage-log 零程式讀者、退場條件掃不到 | F98 | low | S/low |
+
+## (舊)中途進度快照
 
 | 項目 | 數 |
 |---|---|
