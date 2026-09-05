@@ -5522,10 +5522,24 @@ def t_code_exts_four_lists_agree():
         check(f"code-exts: {k} 與 pre-commit 一致", v == ref, f"{k}: +{sorted(v - ref)} -{sorted(ref - v)}")
     for ext in (".sh", ".ps1"):
         check(f"code-exts: 含 {ext}(外家席腳本溜過同步閘的教訓)", ext in ref, str(sorted(ref)))
-    # 2026-09-05 README 審視 d1:副檔名只是第一關,沒副檔名的 shebang 腳本四份都要認(scripts/lumos 五月起 26 次漏過 pre-commit)
-    for k, fn in (("pre-commit", "is_shebang_code"), ("post-commit", "is_shebang_code"), ("check-graph-sync.py", "_shebang_script"), ("impact-hook.py", "_shebang_is_code")):
-        path = root / "hooks" / (k if not k.endswith(".py") else f"claude/{k}")
-        check(f"code-exts: {k} 認 shebang 腳本({fn})", fn in path.read_text(encoding="utf-8"), "")
+    # 2026-09-05 README 審視 d1 + code-readme-five r1:沒副檔名的檔「首行 #! 即算程式碼」,四處同一條語意——
+    # 不列直譯器清單(外家 #!/bin/dash 漏判;架構席:三份清單彼此不同)。這裡真的餵檔案驗語意,不只查函式名。
+    import tempfile as _tf2
+    d = Path(_tf2.mkdtemp(prefix="gctl-sheb-"))
+    cases = {"dash": ("#!/bin/dash\necho\n", True), "envS": ("#!/usr/bin/env -S python3 -u\n", True), "fish": ("#!/usr/bin/fish\n", True),
+             "prose": ("just prose\n", False), "make": ("all:\n\ttrue\n", False), "bin": (b"\x00\x01binary", False), "empty": ("", False)}
+    for name, (content, _) in cases.items():
+        (d / name).write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+    cgs = _load_hook_mod("cgs_sheb", "check-graph-sync.py"); imp = _load_hook_mod("imp_sheb", "impact-hook.py")
+    for name, (_, want) in cases.items():
+        check(f"code-exts: check-graph-sync 對 {name} 判 {want}", cgs._shebang_script(d / name) is want, "")
+        check(f"code-exts: impact-hook 對 {name} 判 {want}", imp._shebang_is_code(d / name) is want, "")
+    for k in ("pre-commit", "post-commit"):
+        src = (root / "hooks" / k).read_text(encoding="utf-8")
+        check(f"code-exts: {k} 的 shebang 規則是「任何 #!」而不是直譯器清單", 'is_shebang_code()' in src and '"$first" == "#!"*' in src and "python|bash" not in src, "")
+    for k in ("claude/check-graph-sync.py", "claude/impact-hook.py"):
+        src = (root / "hooks" / k).read_text(encoding="utf-8")
+        check(f"code-exts: {k} 沒有殘留直譜器清單常數", "_SHEBANG_INTERPS" not in src and "_SHEBANG_HINTS" not in src, "")
 
 
 def t_precommit_shebang_script_counts_as_code():
@@ -5546,8 +5560,12 @@ def t_precommit_shebang_script_counts_as_code():
         return subprocess.run(["bash", str(hook)], cwd=str(root), capture_output=True, text=True, env=dict(os.environ, GIT_DIR=str(root / ".git")))
     r1 = run({"scripts/lumos": "#!/usr/bin/env python3\nprint(1)\n"})
     check("precommit shebang: 只改無副檔名的 python 主程式、不帶節點 → 擋", r1.returncode != 0 and "擋下" in r1.stderr + r1.stdout, f"rc={r1.returncode} {(r1.stderr+r1.stdout)[-160:]}")
-    r2 = run({"NOTES": "just prose\n", "bin/tool": "#!/bin/sh\necho hi\n"})
-    check("precommit shebang: /bin/sh 腳本也算程式碼 → 擋", r2.returncode != 0, f"rc={r2.returncode}")
+    r2 = run({"NOTES": "just prose\n", "bin/tool": "#!/bin/dash\necho hi\n"})
+    check("precommit shebang: #!/bin/dash 也算程式碼 → 擋(r1 外家:直譯器清單漏 dash)", r2.returncode != 0, f"rc={r2.returncode}")
+    r2b = run({"bin/tool2": "#!/usr/bin/env -S python3 -u\nprint(1)\n"})
+    check("precommit shebang: env -S 形式也算 → 擋", r2b.returncode != 0, f"rc={r2b.returncode}")
+    r2c = run({".pythonrc": "#!/usr/bin/env python3\nx=1\n"})
+    check("precommit shebang: 只有開頭一個點的 dotfile 也看 shebang → 擋(通才 minor)", r2c.returncode != 0, f"rc={r2c.returncode}")
     r3 = run({"NOTES": "just prose\n", "Makefile": "all:\n\ttrue\n"})
     check("precommit shebang: 無副檔名純文字/Makefile 不算程式碼 → 放行", r3.returncode == 0, f"rc={r3.returncode} {(r3.stderr+r3.stdout)[-160:]}")
 

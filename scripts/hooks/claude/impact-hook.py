@@ -113,7 +113,6 @@ def _is_excluded_path(file_path: str) -> bool:
     return False
 
 
-_SHEBANG_HINTS = (b"python", b"bash", b"/sh", b"env sh", b"zsh")
 
 
 def _shebang_is_code(abs_path: Path) -> bool:
@@ -126,10 +125,7 @@ def _shebang_is_code(abs_path: Path) -> bool:
             head = fh.read(128)
     except OSError:
         return False
-    if not head.startswith(b"#!"):
-        return False
-    first = head.split(b"\n", 1)[0]
-    return any(h in first for h in _SHEBANG_HINTS)
+    return head.startswith(b"#!")   # 任何 shebang 都算(2026-09-05 四處同一條規則;之前這裡的清單跟另兩處都不一樣)
 
 
 def hook_decide(payload: dict, repo: str | None = None) -> str | None:

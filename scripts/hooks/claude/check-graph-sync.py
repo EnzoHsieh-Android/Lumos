@@ -238,11 +238,8 @@ def collect_turn_actions(transcript_path: Path):
     return file_paths, bash_commands
 
 
-_SHEBANG_INTERPS = ("python", "bash", "sh", "zsh", "node", "ruby", "perl")
-
-
 def _shebang_script(p: Path) -> bool:
-    """沒有副檔名的檔,首行 #! 是已知直譯器就當程式碼(2026-09-05 f02 後測實證:本 repo 主程式 `scripts/lumos`
+    """沒有副檔名的檔,首行是 #! 就當程式碼(2026-09-05 f02 後測實證:本 repo 主程式 `scripts/lumos`
     無副檔名,兩家改它都過不了閘門 2,Stop 提醒/擋停從沒對它生效過)。讀不到、不是 #!、二進位 → False。"""
     if p.suffix:
         return False
@@ -253,10 +250,7 @@ def _shebang_script(p: Path) -> bool:
             head = fh.readline(200)
     except OSError:
         return False
-    if not head.startswith(b"#!"):
-        return False
-    line = head.decode("utf-8", "replace").lower()
-    return any(x in line for x in _SHEBANG_INTERPS)
+    return head.startswith(b"#!")   # 任何 shebang 都算(r1 外家:列直譯器會漏 dash;四處同一條規則)
 
 
 def is_code_file(path: str, project_root: Path) -> bool:
@@ -542,10 +536,6 @@ def stop_block_decision(payload: dict, session_id: str) -> bool:
     if not session_id:
         return False
     return _stop_mark_write(session_id)
-
-
-def codex_stop_decision(payload: dict, harness: str, session_id: str) -> bool:   # 舊名相容:harness 已不影響決策
-    return stop_block_decision(payload, session_id)
 
 
 def _stop_mark_path(session_id: str):

@@ -24,12 +24,13 @@ echo "[$(ts)] 治理日報 段結束 rc=$?"
 
 # 2) 自主迭代 loop(dry-run;log → autonomous.log)
 #    2026-09-05 暫停派工(README 審視 d3,見圖譜 Projects/README審視五修_計劃):七週週報收斂 0、待放行 0、每週 210–330 美元;
-#    dry-run 永遠走不到開 PR。要臨時開回:LUMOS_AUTOLOOP=1。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
-if [ "${LUMOS_AUTOLOOP:-0}" = "1" ]; then
+#    dry-run 永遠走不到開 PR。開關沿用 repo 的 *_OFF 慣例,但預設 1(=暫停);要臨時開回:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
+if [ "${LUMOS_AUTOLOOP_OFF:-1}" != "1" ]; then
   "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
   echo "[$(ts)] 自主 loop 段結束 rc=$?"
 else
-  echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3;LUMOS_AUTOLOOP=1 可開回)" | tee -a "$DIR/logs/autonomous.log"
+  echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3;LUMOS_AUTOLOOP_OFF=0 可開回)" >> "$DIR/logs/autonomous.log" 2>&1
+  echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3)"
 fi
 
 # 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)

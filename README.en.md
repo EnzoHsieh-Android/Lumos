@@ -334,7 +334,7 @@ Added 2026-09-05 after checking every README claim against the code, ledgers and
 - **Nodes attached to reviewer briefs are mostly not opened.** Our own first measurement: 0 of 16 single-node attachments were read, 0–1 of 11 code-file cases; only the 11-plus-node attachments were used about half the time. The reviewer-seat variant is not measured yet (2026-10-03).
 - **"Every finding disposed" checks bookkeeping, not content.** Finding ids are typed by the orchestrator; the gate only checks that folded + declined equals the full set, not that the document actually improved.
 - **The end-of-turn block fires once and for one condition.** Code changed, no node touched, once per session; a one-line "no note needed" counts as disposed and is not verified. Before 2026-09-05 the Claude side did not even have that — its "soft reminder" went to a debug log nobody sees.
-- **Money.** One high-risk code review (code-loop) costs about 190k tokens; 9.3M over seven days. One design review about 50k. The daily autonomous design loop burned 210–330 USD per week for seven weeks and produced 0 approvable designs; dispatch is paused since 2026-09-05 (`LUMOS_AUTOLOOP=1` re-enables), decision due 2026-10-05.
+- **Money.** One high-risk code review (code-loop) costs about 190k tokens; 9.3M over seven days. One design review about 50k. The daily autonomous design loop burned 210–330 USD per week for seven weeks and produced 0 approvable designs; dispatch is paused since 2026-09-05 (`LUMOS_AUTOLOOP_OFF=0` re-enables), decision due 2026-10-05.
 - **`lumos enforcement` saying "active" means registered, file present, version current** — not that the layer has an effect; it cannot see whether the five Codex hooks were ever trusted.
 
 ---

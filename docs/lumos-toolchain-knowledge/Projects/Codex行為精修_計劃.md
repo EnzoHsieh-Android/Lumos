@@ -110,7 +110,7 @@ REVISIT:2026-09-19 探針週跑累積 f02 型樣本,看擋一次的補寫率;若
 - **測試**:`t_codex_stop_block_once` 14 條斷言(驗收 1 全部+路徑消毒+範本通用句+探針旗標);anchor baseline 已 approve。
 - **全域成品**:`lumos install --force` 後 `~/.codex/hooks/` 與 `~/.claude/hooks/` 的 check-graph-sync 與 repo 同檔(cmp 相同);Codex 側 hooks.json 命令列不變(帶 `--harness codex`),信任不用重審。
 
-- **f02 後測第一趟(2026-09-05 02:47–02:50,Codex ×2,hook 已信任)0/2 擋停——根因不在擋停碼**:重放 hook 對真逐字稿,閘門 2 就退出:`is_code_file` 只認副檔名,本 repo 主程式 `scripts/lumos` 沒有副檔名,所以★從 2026-05-24 Stop hook 上線起,兩家改主程式都從沒收過提醒★(f02 前測 Claude/Codex 三趟「沒寫回」其實是連提醒都沒發)。修法=無副檔名的檔首行 `#!` 是已知直譯器(python/bash/sh/zsh/node/ruby/perl)就算程式碼(`_shebang_script`);測試⑭⑮。第二趟後測見 Verification。
+- **f02 後測第一趟(2026-09-05 02:47–02:50,Codex ×2,hook 已信任)0/2 擋停——根因不在擋停碼**:重放 hook 對真逐字稿,閘門 2 就退出:`is_code_file` 只認副檔名,本 repo 主程式 `scripts/lumos` 沒有副檔名,所以★從 2026-05-24 Stop hook 上線起,兩家改主程式都從沒收過提醒★(f02 前測 Claude/Codex 三趟「沒寫回」其實是連提醒都沒發)。修法=無副檔名的檔首行 `#!` 是已知直譯器就算程式碼(`_shebang_script`);測試⑭⑮。第二趟後測見 Verification。
 
 ## 代碼審 r1 折入(2026-09-05,lumos-code-loop high,7 席:正確性/邊界/資源併發/整合/spec-conformance/架構/外家finder-Codex;卷證 `governance/review-reports/code-codex-refine/`)
 
