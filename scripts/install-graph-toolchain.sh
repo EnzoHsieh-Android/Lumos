@@ -16,5 +16,5 @@ cd "${TARGET:-.}"
 if [[ -n "$SLUG" ]]; then
   exec python3 "$HERE/lumos" init --name "$SLUG" --force
 else
-  exec python3 "$HERE/lumos" init --force
+  exec python3 "$HERE/lumos" init --force "$@"
 fi

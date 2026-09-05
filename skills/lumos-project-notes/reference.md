@@ -1225,6 +1225,7 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
 9. **隨 git 版控**：所有變更被 git 追蹤，commit 時一起提交
 10. **衝突處理**：知識圖譜 vs Memory vs Session 有出入時，向使用者確認
 11. **vault 動態取得**：不要硬寫 vault 名稱，每次用 `obsidian vaults` 確認
+12. **複製輸出**：任何命令加 `--copy` 可複製結果到剪貼簿
 13. **Obsidian 必須執行中**：CLI 需要連接正在運行的 Obsidian App
 14. **Verification 豁免**：Verification 筆記不需要 `summary` 和 `updated` 欄位（有 `feature` + `date` 已足夠），**但 `valid_under` + `revalidate_when` 是必填**
 15. **避免假 Tag**：內文中的 `#` 會被 Obsidian 解析為 tag，顏色值用 backtick 包裹（如 `` `#FFF3E0` ``），編號用 `1~3` 不要用 `#1-3`

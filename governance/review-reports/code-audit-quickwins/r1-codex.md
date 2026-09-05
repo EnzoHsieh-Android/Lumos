@@ -1,0 +1,13 @@
+severity: major
+- [major] Patch 沒有 37 份逐字稿的刪除 hunks，單加 ignore 不會讓已追蹤檔出版控
+  位置:`.gitignore:22`
+  引句：「+governance/review-reports/**/*.err」
+  why: `r1-snapshot.patch` 只刪了 `lumos-calls.jsonl`，完全沒有 `.err/.raw/stderr` 的 deletion diff；套用此 patch 後，既有 tracked 檔仍會被 Git 追蹤，後續修改照樣進 diff，②的主要目標沒有交付。
+- [minor] stderr 規則會忽略任何檔名含 stderr 的結論文件，不只逐字稿
+  位置:`.gitignore:24`
+  引句：「+governance/review-reports/**/*stderr*」
+  why: Git 實測此規則連 `governance/review-reports/stderr-summary.md` 與子目錄的 `stderr-summary.md` 都會命中，與上一行「結論檔(.md)照樣進版控」矛盾；未來以 stderr 為題的摘要或分析報告會被靜默漏追蹤。
+- [minor] 速查表修補後仍留下一列欄位語意錯位
+  位置:`skills/lumos-project-notes/commands/02-動手前算波及.md:10`
+  引句：「| 「about_code 預標標錯一整批,要整批撤」 | `lumos about-code revert --batch <YYYY-MM-DD> --dry-run` 先看,再去掉 --dry-run 真撤 |」
+  why: 這批新增列雖補成四欄，但緊接的「hook 推的必看」列仍把本應屬於 revert 的「只動 batch stamp／誤撤人工修正」塞在結果與後果欄；讀者查 hook 固定席時會得到完全無關的操作語意，宣稱的表格修復並未完成。

@@ -389,7 +389,7 @@ def main(argv=None):
                 except OSError:
                     raise
             try:
-                # Python 3.12 起 onerror 改名 onexc(簽名不同);本包宣告 ≥3.8,兩邊都要能跑
+                # Python 3.12 起 onerror 改名 onexc(簽名不同);本包宣告 ≥3.9(2026-09-06 訂正:產出的精簡版建置含 cmd_new 的 removesuffix,那是 3.9+),兩邊都要能跑
                 if sys.version_info >= (3, 12):
                     shutil.rmtree(pkg, onexc=lambda f, pth, e: _on_rm_error(f, pth, e))
                 else:

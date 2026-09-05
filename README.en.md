@@ -57,6 +57,14 @@ python3 scripts/lumos bootstrap     # one shot: installs Lumos itself, skills, g
 
 Then **restart your Claude Code session** (some prompts load at session start).
 
+Did it install:
+
+```bash
+lumos enforcement
+```
+
+It lists whether each layer is wired up — registered, file present, version current — not whether it judges correctly. Codex rows stop at "registered, can't read trust state locally"; that one is unknowable from here, not broken.
+
 ### 3b. Introducing Lumos to a new project (one command)
 
 Run inside your project directory:
@@ -346,5 +354,9 @@ Added 2026-09-05 after checking every README claim against the code, ledgers and
 Lumos only holds the **generic graph toolchain**: the graph CLI, its gates and hooks, and cross-project tech-stack convention skills (kotlin / vue / csharp-idioms — they belong to no single project, so they live here). Project-specific things stay out: business graph content, release scripts, and framework choices only one project uses.
 
 - Onboarding details: [ONBOARDING.md](ONBOARDING.md)
+- Why the method looks like this (plain language, includes the 22-check panorama; Chinese only):
+  - [圖譜即合約](docs/methodology/圖譜即合約.md) — the core claim and its ceiling
+  - [圖譜即合約-全景圖](docs/methodology/圖譜即合約-全景圖.md) — every gate and check on one diagram
+  - [圖譜即合約-對外論述](docs/methodology/圖譜即合約-對外論述.md) — the version written for outside readers
 - Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md)
 - vs. SDD (spec-driven development): [SDD-vs-Lumos.md](SDD-vs-Lumos.md)

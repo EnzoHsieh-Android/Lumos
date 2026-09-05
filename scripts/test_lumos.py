@@ -5854,11 +5854,11 @@ def t_deinit_vendored_unlink_failure_does_not_abort():
           removed is not None and "scripts/lumos" in removed, f"removed={removed!r}")
 
 
-def t_selfdelete_risk_python38_compatible_and_dryrun_exempt():
+def t_selfdelete_risk_python_floor_compatible_and_dryrun_exempt():
     """★代碼審 r2 抓到的兩條(都在 _selfdelete_risk 這道守衛上)★
 
-    ①**3.8 相容**:第一版用 `Path.is_relative_to()`——那是 Python 3.9+,但本專案
-    白紙黑字宣告 ≥3.8(`scripts/lumos` 的 `_write_lf` docstring 就為了同一個理由
+    ①**版本下限相容**:第一版用 `Path.is_relative_to()`——那是 Python 3.9+,而寫這條時本專案
+    白紙黑字宣告 ≥3.8(2026-09-06 訂正為 ≥3.9,因為主程式自己就用了 removeprefix/removesuffix;這條測試守的是「不要無意識踩過下限」這件事本身,不是 3.8 這個數字)(`scripts/lumos` 的 `_write_lf` docstring 就為了同一個理由
     避開 3.10 才有的 `write_text(newline=)`)。更毒的是第一版把 except 寫成
     `except Exception: return False`,於是 3.8 上的 `AttributeError` ★被自己的
     守衛悄悄吞掉★——守衛靜默地等於不存在,不報錯、不留痕。

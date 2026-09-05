@@ -1,0 +1,523 @@
+diff --git a/.gitignore b/.gitignore
+index 6cd5c79..aebbb39 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -8,10 +8,17 @@ governance/logs/
+ governance/lint-upgrades/
+ .lumos/testmap.json
+ docs/.ci-log.jsonl
+ 
+ # 公開精簡版建置產物(衍生物,不進版控)
+ dist/
+ governance/eval/*.lock
+ 
+ # 修法 A ablation 原始輸出(數字記進 Verification 節點,原始檔不入 git)
+ governance/eval/ablation-lumos-first/
++
++# 外家席逐字稿(2026-09-06 全 repo 審視 quick win):.err/.raw/stderr 是 Codex 的完整逐字稿,
++# 單檔可達 2MB、37 檔共 13MB,佔追蹤卷證四成且沒有任何消費端;結論檔(.md)照樣進版控。
++# 之後收貨改用 codex exec --output-last-message 直接拿結論,不再存全程。
++governance/review-reports/**/*.err
++governance/review-reports/**/*.raw
++governance/review-reports/**/*stderr*
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 31ffeb6..b36bd3b 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -1,14 +1,16 @@
+ # Lumos 架構圖
+ 
+ > 「圖譜即合約」工具組的**唯一源 → 分發 → 消費端**模型:所有東西只在一個 repo 維護(唯一源),裝到兩種地方生效——整台機器共用的(給 AI 的操作手冊),和複製進每個專案的(指令與檢查程式)。一張圖看懂什麼住哪、用哪個指令裝、為什麼非這樣分不可。
+ 
++> 想先讀「為什麼這樣設計」而不是「長什麼樣」:[圖譜即合約](docs/methodology/圖譜即合約.md)(核心主張)、[全景圖](docs/methodology/圖譜即合約-全景圖.md)(一張圖看完 22 道檢查)、[對外論述](docs/methodology/圖譜即合約-對外論述.md)(講給外部讀者的版本)。
++
+ ## 1. 全景:唯一源 → 兩種 scope → 消費端
+ 
+ ```mermaid
+ flowchart TB
+     subgraph SRC["🟢 Lumos repo (唯一源 · 公開 EnzoHsieh-Android/Lumos · ~/harness/lumos-toolchain)"]
+         direction TB
+         CLI["scripts/lumos<br/>(python3 標準庫單檔 CLI)"]
+         TEST["scripts/test_lumos.py"]
+         GHOOKS["scripts/hooks/<br/>git: pre-commit / post-commit / pre-push"]
+         CHOOKS["scripts/hooks/claude/<br/>四個時點的自動提醒:進場(先查圖譜、哪層防護掉了、上次 CI 結果) · 改檔前(這個檔會波及哪些節點) · 派審查員前(把相關節點附進派工單) · 收工(改了 code 沒動節點:兩家都擋一次要補)<br/>同一批檔兩家共用;改檔後的腐化偵測 2026-08-21 撤除"]
+diff --git a/ONBOARDING.md b/ONBOARDING.md
+index 300623b..c1f9d99 100644
+--- a/ONBOARDING.md
++++ b/ONBOARDING.md
+@@ -19,20 +19,22 @@ python3 scripts/lumos bootstrap
+ 之後每 clone 一個新專案,同樣跑一次 `python3 scripts/lumos bootstrap` 即可(機器已設定好的部分會自動跳過)。
+ 
+ > **專案還沒導入過 Lumos**(repo 裡沒有 `scripts/lumos`)?改走:
+ > ```bash
+ > cd <你的專案> && curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
+ > # 會先問一句「要把 <路徑> 建成 lumos 專案嗎?」按 y 才建;細節與 Windows 作法見 README §3
+ > ```
+ 
+ ---
+ 
++驗收:重啟 session 後跑一次 `lumos enforcement`,它列每一層防護有沒有接上(Codex 那幾行會停在「本機讀不到信任狀態」,那是天生測不到)。
++
+ ## 前置需求
+ 
+ | 需要 | 用途 | 沒有會怎樣 |
+ |------|------|-----------|
+ | `git` | 全部 | 無法運作 |
+ | `python3` | lumos 指令與 hooks(純標準庫,不裝任何套件) | 無法運作 |
+ | Claude Code | AI 才會自動載入方法論與提示 | 工具能跑,但 AI 不會自動照規矩走 |
+ | Claude Max 訂閱 | 「提交後派 AI 自動複查」那層才划算 | 該層吃配額/降級,其餘功能正常 |
+ | notesmd-cli(選用) | 只有改筆記檔名/搬檔時用(`graph-rename.sh`) | 平常用不到;需要時 `fetch-notesmd.sh` 可抓 |
+ 
+@@ -44,21 +46,20 @@ python3 scripts/lumos bootstrap
+ 
+ **① 每台機器一次:裝共用 skills**
+ 
+ skills 是寫給 AI 看的操作手冊,整台機器**共用一份**,用捷徑(symlink)連進 Claude Code 的目錄:
+ 
+ ```bash
+ git clone <lumos-toolchain repo URL> ~/harness/lumos-toolchain
+ cd ~/harness/lumos-toolchain && ./install.sh
+ ```
+ - 之後**更新=對這個目錄 `git pull`**,捷徑即時生效,不用重裝。
+-- 不想用捷徑 → `./install.sh --copy`(但更新要重跑)。
+ 
+ **② 每個專案 clone 一次:裝 hooks**
+ 
+ hooks 是提交/推送時自動跑的檢查程式,git 規定一個 repo 一份,所以每次 clone 都要裝:
+ 
+ ```bash
+ cd <你的專案> && scripts/install-hooks.sh --force
+ ```
+ 裝三樣:git hooks(提交關卡)、Claude hooks(給 AI 的提示與提交後自動複查)、Claude 設定註冊。`--force` 是必要的——不加會跳過你機器上的舊版不更新。
+ 
+diff --git a/README.en.md b/README.en.md
+index 85bf07a..483f141 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -336,15 +336,15 @@ Added 2026-09-05 after checking every README claim against the code, ledgers and
+ - **The end-of-turn block fires once and for one condition.** Code changed, no node touched, once per session; a one-line "no note needed" counts as disposed and is not verified. Before 2026-09-05 the Claude side did not even have that — its "soft reminder" went to a debug log nobody sees.
+ - **Money.** One high-risk code review (code-loop) costs about 190k tokens; 9.3M over seven days. One design review about 50k. The daily autonomous design loop's rolling weekly summaries for the last two weeks (8/23–9/5) all read "8 runs in 7 days, 210–330 USD, 0 converged, 0 awaiting approval"; older ledger entries record only run counts; dispatch is paused since 2026-09-05 (`LUMOS_AUTOLOOP_OFF=0` re-enables), decision due 2026-10-05.
+ - **The node-attaching dispatch hook times out on long branches.** Computing which nodes a change touches takes 25–57 s for branches of 10+ commits, past its 45 s budget, so it attaches nothing; before 2026-09-05 it did so silently (21 of 39 dispatches that day), now it leaves a one-line notice in the brief and asks you to warm the cache first. Design reviews used to rely on hand-pasting (14 of 209 briefs actually had it); since 2026-09-05 the hook derives the lens from the plan note.
+ - **The linter bridge, Compose metrics and SARIF converters currently have no consumers.** This repo has no linter wired; the two external projects tried them once in early July. The commands exist and run, but nobody runs them. `testmap` was built once and fell 614 commits behind; it is rebuilt daily since 2026-09-05.
+ - **`lumos enforcement` saying "active" means registered, file present, version current** — not that the layer has an effect; it cannot see whether the five Codex hooks were ever trusted.
+ 
+ ---
+ 
+ ## Scope & further reading
+ 
+-Lumos only holds the **generic graph toolchain**. Project-specific things (business graph content, release scripts, tech-stack skills) don't live here.
++Lumos only holds the **generic graph toolchain**: the graph CLI, its gates and hooks, and cross-project tech-stack convention skills (kotlin / vue / csharp-idioms — they belong to no single project, so they live here). Project-specific things stay out: business graph content, release scripts, and framework choices only one project uses.
+ 
+ - Onboarding details: [ONBOARDING.md](ONBOARDING.md)
+ - Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md)
+ - vs. SDD (spec-driven development): [SDD-vs-Lumos.md](SDD-vs-Lumos.md)
+diff --git a/README.md b/README.md
+index e17061c..113a0a1 100644
+--- a/README.md
++++ b/README.md
+@@ -50,33 +50,42 @@ Code 只告訴你「現在長這樣」。它說不出:
+ 
+ ### 3a. 專案已經在用 Lumos(接手的人)
+ 
+ ```bash
+ git clone <你的專案> && cd <你的專案>
+ python3 scripts/lumos bootstrap     # 一鍵:自動裝好 Lumos 本體、skills、全域指令、hooks
+ ```
+ 
+ 然後**重啟 Claude Code session**(有些提示是在 session 開頭載入的)。
+ 
++裝好了嗎:
++
++```bash
++lumos enforcement
++```
++
++它列每一層防護是「有沒有裝上、接上」——不是判得對不對。全綠代表 hook 註冊了、檔案在、版本對;Codex 那幾行會停在「已註冊、要不要跑本機讀不到」,那是天生測不到,不是壞了。
++
+ ### 3b. 全新專案要導入(一條指令)
+ 
+ 站在你的專案目錄裡跑:
+ 
+ ```bash
+ cd <你的專案>
+ curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
+ # 它會問「要把 <路徑> 建成 lumos 專案嗎? [y/N]」→ 按 y;然後重啟 Claude Code session
+ ```
+ 
+ - 問句**預設是 N**:站在不想導入的目錄(例如 dotfiles)按 Enter 就跳過,不會誤裝。
+ - 不想盲跑遠端腳本?先 `curl -fsSL <網址> -o get.sh` 下載審閱再執行。
+ - CI 等非互動環境:結尾加 `-s -- --init` 免確認直接建。
++- 裝完重啟 session,然後跑一次 `lumos enforcement` 確認每層防護都接上了(說明見 3a)。
+ 
+ <details><summary>Windows(原生 PowerShell)</summary>
+ 
+ 前置:Git for Windows、python 在 PATH、Claude Code。
+ 
+ ```powershell
+ irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex
+ # 重啟 Claude Code session;若找不到 lumos,把 %USERPROFILE%\.local\bin 加進 PATH
+ cd <你的專案>; lumos init
+ ```
+@@ -336,15 +345,19 @@ lumos gov OrderService   # 這個節點被哪幾道關攔過、硬擋還是提
+ - **收工擋停只擋一次,而且只擋一種情況。** 改了程式碼、節點一個字沒動,同一個 session 擋一次;模型回一句「不用寫」就算交代,工具不驗那句對不對。在 2026-09-05 之前 Claude 側連這一次都沒有——舊的「軟提醒」印在只有除錯日誌看得到的地方。
+ - **錢。** 高風險程式碼審(code-loop)一次約 19 萬 token,七天量到 930 萬;設計審一次約 5 萬。每天自動跑的設計迴圈,帳上最近兩週(8/23–9/5)的滾動週報每次都是「7 天跑 8 次、燒 210 到 330 美元、收斂 0、待放行 0」,更早的舊格式帳只記次數不記結局,2026-09-05 起暫停派工(`LUMOS_AUTOLOOP_OFF=0` 可開回),2026-10-05 決定去留。
+ - **派工時附節點的 hook 會超時放空。** 算「這批改動牽連哪些節點」在 10 個 commit 以上要 25 到 57 秒,超過它的 45 秒預算就什麼都不附;2026-09-05 之前是靜默放空(當天 39 次派工 21 次沒附),之後會在派工單尾端留一行說明,並建議派工前先算一次暖快取。設計審那邊原本靠人手貼、209 份派工詞只有 14 份貼了,2026-09-05 起改成 hook 從計劃筆記算。
+ - **linter 橋、Compose 效能量表、SARIF 轉換目前沒有消費端在用。** 本 repo 沒接 linter,兩個外部專案 7 月初示範過一次後沒再用;這些指令存在、能跑,但沒人在跑。testmap 建過一次後落後了 614 個 commit,2026-09-05 起改成每天重建。
+ - **`lumos enforcement` 說「生效」= 有註冊、檔案在、版本對**,不代表那層有效果;Codex 那五支 hook 有沒有按過信任它測不到。
+ 
+ ---
+ 
+ ## 邊界與延伸閱讀
+ 
+-Lumos 只放**通用的圖譜工具組**。各專案自己的東西(業務圖譜內容、發版腳本、技術棧 skill)不進這裡。
++Lumos 只放**通用的圖譜工具組**:圖譜 CLI、各種閘與 hook,以及跨專案通用的技術棧慣例 skill(kotlin / vue / csharp-idioms——它們不綁任何一個專案,所以住在這裡)。各專案自己的東西不進來:業務圖譜內容、發版腳本、只有那個專案在用的框架選型。
+ 
+ - 上手細節:[ONBOARDING.md](ONBOARDING.md)
+ - 架構全景:[ARCHITECTURE.md](ARCHITECTURE.md)
+ - 與 SDD(規格驅動開發)的差異:[SDD-vs-Lumos.md](SDD-vs-Lumos.md)
++- 這套方法為什麼長這樣(白話,含 22 道檢查的全景圖):
++  - [圖譜即合約](docs/methodology/圖譜即合約.md) — 核心主張與它的天花板
++  - [圖譜即合約-全景圖](docs/methodology/圖譜即合約-全景圖.md) — 一張圖看完所有閘與檢查
++  - [圖譜即合約-對外論述](docs/methodology/圖譜即合約-對外論述.md) — 講給沒有脈絡的外部讀者聽的版本
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
+index 7402834..b507106 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
+@@ -403,10 +403,29 @@ tags:
+ - **做什麼**:走完整程序再翻預設:先用 governance/eval 補 10 題無空白查詢當對照組(既有 30 題 goldset 與多詞 10 題不動、題目由另一家族出),再把「0 候選 且 無空白 且 ≥4 漢字」的查詢退成 bigram OR + BM25F,提示行改成「整串找不到,退成字對召回」,--no-any 照樣關得掉;同時處理誠實面——回退後幾乎不可能回 0,「查無訊號」會消失,要設計訊號還回法(例如只對非跨詞邊界的高覆蓋字對標星)。這是對 2026-08-22 d4「0 筆時提示加空白」的翻案,要掛 superseded 或補充,不能靜默取代。
+ - **PRIOR-ART**:最小解在既有回退條件多一支分支;世界解=Lucene CJKAnalyzer / Elasticsearch cjk analyzer 的 overlapping bigram;裁定=borrow-design(tokenizer 已在檔內,不引 jieba 這類分詞依賴)
+ 
+ ### #23 連鎖提醒的升級鏈接電
+ 
+ - **編號**:F118;工量 S
+ - **為什麼**:Check E4 的治理事件 nodes 是空的,而 gov --nags 這個唯一的「機制空轉」偵測器用 (gate, node) 當鍵——所以 E4 從 08-25 喊到現在 237 筆,--nags 卻回「沒有空轉的提醒」,那張 08-29 開的空連鎖單零判定至今,沒有任何機制會把它升級給人看。
+ - **做什麼**:★排在既有 Issue「空連鎖單巡過無法銷帳」的巡過動詞(REVISIT 09-12)之後再做★:E4 的 nodes 填連鎖帳本檔名 stem(8 個檔、天然唯一),nags 立刻咬得到。順序不能反——現在唯一那張未銷帳的空票沒有合法銷帳路徑,先填 nodes 只會把一則已知噪音推上每週 LINE,正是那個 Issue 點名的提醒麻痺。長期可考慮把 E4 收成 REVISIT 一種形狀(開連鎖單時直接在翻案節點寫 REVISIT 行),但那是另一案。
+ - **PRIOR-ART**:最小解在 gov 事件的一個欄位;世界解=Alertmanager 以 label 路由分組(沒 label 的告警落不到任何 receiver);裁定=borrow-design
+ 
++## 第一批動手:12 件 quick win 全做完(2026-09-06)
++
++都是「一小時內、不需審」那一批,逐條先驗證目標存在再改:
++
++1. **刪掉根目錄的測試殘骸**(5 位元組、內容是字面空陣列,開發期被批次 add 進來)。沒加 .gitignore 也沒加「根目錄不得有新檔」的斷言——沙箱隔離已經成立,那是守一條不存在的路徑。
++2. **37 份外家席逐字稿出版控**(13MB,佔追蹤卷證四成,零消費端)。工作區保留、歷史不改寫,加 .gitignore 規則;結論檔照樣進版控。之後收貨改用 `codex exec --output-last-message` 直接拿結論。
++3. **刪掉三處已拆旗標的教學**(`install.sh --copy` 2026-06-26 就拆了,現在會被靜默吞掉):上手指南、skill 參考、精簡版鏡像。
++4. **安裝器透傳旗標**:未知旗標現在會撞上 argparse 吐錯,不再被吃掉。
++5. **用量帳的退場條件接上電**:原本寫在 HTML 註解裡(「90 天內無人立案則退場」),到期掃描只認獨立的 REVISIT 行,等於沒寫;改成 REVISIT:2026-11-19 並寫明判準。
++6. **發布流程計劃補回頭條件** REVISIT:2026-10-05(2026-07-30 裁定至今五週零落地)。順手記下:status 要改只能改 todo,project 型沒有 deferred 這個值,寫下去會變成篩不到的狀態。
++7. **三張速查表的欄位錯位補齊**:動手前算波及那張真的錯位(四列只有兩欄,「結果怎麼讀」掉到別欄);設計審那張是 `--finding-kind id=code|spec|process` 的直槓沒跳脫把一列撐成五欄;代碼審那張三列缺最後一欄。
++8. **README 中英兩版的邊界句改寫**:原句說「技術棧 skill 不進這裡」,但 repo 裡就住著三份;改成「跨專案通用的慣例 skill 是工具鏈的一部分,專案自己的框架選型不進來」。★第一次改動時替換位置插進括號清單裡,句子讀不通,重寫過★。
++9. **快速上手補「裝好了嗎」**:README 兩個入口與上手指南各加一句 `lumos enforcement`,並說明它查的是「有沒有接上」不是「判得對不對」,以及 Codex 那幾行為什麼會停在「本機讀不到」。
++10. **推送前 hook 的耗時註解訂正**:「實測 ~32s」是 2026-07-07、183 支測試時代的數字,現在約 8 分鐘、3700+ 案例。
++11. **方法論三份文件接上入口**:之前從 README / 架構文 / 上手指南一條連結都到不了。★我原本寫的第三份檔名不存在,驗證連結目標時抓到,改成真的那份★。
++12. **Python 版本宣告訂正 ≥3.8 → ≥3.9**:主程式自己就用了四處 3.9 才有的字串方法,而另一處註解還在為了 ≥3.8 刻意迴避 3.9 的 API。純事實訂正;要不要再往上調是另一件事,要人裁。
++
++驗證:相關測試子集全綠(精簡版 9、指令索引 7、安裝 247、推送閘 18),兩篇動到的節點 lint 0 問題。
++
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\347\211\210\346\234\254\347\231\274\345\270\203\346\265\201\347\250\213_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\347\211\210\346\234\254\347\231\274\345\270\203\346\265\201\347\250\213_\350\250\210\345\212\203.md"
+index 214851e..6cc9195 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\347\211\210\346\234\254\347\231\274\345\270\203\346\265\201\347\250\213_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\347\211\210\346\234\254\347\231\274\345\270\203\346\265\201\347\250\213_\350\250\210\345\212\203.md"
+@@ -17,20 +17,22 @@ summary: |-
+   KEY:★核心機制(2026-07-30 使用者裁定,取代 r1 的 tag 通道版)★——**開發線與對外線分兩條分支**:main=開發線(可壞)、release=對外線(只有 owner fast-forward 過去)。發版動作=`git push origin main:release`。消費端 clone 的是 release **分支**,故 git pull / lumos update / bootstrap --pull **全部原封不動照常運作**——這是相對 tag 方案的決定性優勢
+   KEY:★為什麼不是 tag 當通道★(r1 blocker)——`git clone --branch <tag>` 得 detached HEAD,而既有兩處 `git pull --ff-only` 失敗只印 WARN 不改 rc(scripts/lumos:7416/7159),且 ~/.local/bin/lumos 是 symlink 指向該 clone → 整台機器所有專案的 lumos update 會**靜默永久停在裝機那版**(三席獨立指出+編排者自核屬實)。改用分支即整類消失;真要釘死仍可 --ref opt-in
+   KEY:權限模型天然成立——public repo 預設即「全世界唯讀、只有 owner 能寫」,正是需求本身;無須任何 GitHub 設定。★個人帳號 repo 的 collaborator 一律是 write、無唯讀選項★(官方明載,要細分權限只能轉 organization)——故「private+collaborator」路線與「只有我能寫」直接衝突,已排除
+   KEY:四條消費路徑(r1 補第四條)——①維護者活 clone ②陌生人首裝 ③vendored 副本 ④**全域 Claude hooks**(_install_hooks_py→_sync_global_claude 由「最後一個跑安裝的專案」的 vendored 副本覆蓋,scripts/lumos:7353);故「機器上跑哪一版」本來就可能是三個不同答案
+   KEY:單一源=scripts/lumos 的 LUMOS_VERSION;tag/CHANGELOG 與它一致由測試機械驗,且 CHANGELOG 標題格式**釘死**不借 Keep a Changelog 的 Unreleased 慣例(否則常駐 Unreleased 會撞「解析失敗即紅」)
+   KEY:★邊界(不推翻既有決策)★——[[Projects/CLAUDE注入re-sync與版本標籤_計劃]] 已裁「版本號=人可讀標籤、嚴禁當 staleness oracle」,本計劃不改那條;只新增一個獨立角色:release 識別碼
+   KEY:可逆性=發布動作實務上收不回(有人裝了);但 ★tag 可刪可 force-move 是事實★——「只前滾不改寫」是**政策不是性質**,無機械強制(Codex 指出,誠實記)
+ ---
+ # 版本發布流程（計劃）
+ 
++REVISIT:2026-10-05 這份 2026-07-30 裁定的發布線(release 分支 / tag / CHANGELOG)至今零落地,五週沒動;當天裁「做最小切片」還是「明文不做並改 status: todo」——★不要改成 deferred,project 型的合法值沒有它,寫下去會變成 lumos query 篩不到的狀態★。
++
+ `PRIOR-ART:` ① **最小解在既有層**——`LUMOS_VERSION` 常數與 `_version_nudge()` 版本 nudge 已存在（`scripts/lumos:7080`，doctor Check N 呼叫），本案是「給它接上 git tag 與 CHANGELOG」，不是造新機制。② **世界解過**（真搜非印象，2026-07-29）：curl|bash 的釘版本／checksum 是熟坑，主流解法為「安裝腳本支援指定版本、預設抓 GitHub Release、附 checksum」（Sigstore「A Safer curl|bash」、Kusari「Pinning Dependencies」）；發版流程標準形態＝tag → CI 驗 → `gh release create` → CHANGELOG（GitHub Docs「Managing releases」、`gh release create`）。③ **裁定＝borrow-design**：照抄「tag＋Release＋CHANGELOG」形態，**不採**外部工具（release-it／goreleaser／semantic-release——零依賴家規，且它們解的是多語言打包發布，本專案沒有 build artifact）。自建部分只有膠水。
+ 
+ ## 動機（r1 折入後的誠實版）
+ 
+ **使用者的真實需求（2026-07-30 澄清，此為本案定錨）**：「能夠對外版本更新、釋出我想釋出的版本、但只有我可以寫入。」
+ 
+ 拆開就是三件事：對外能更新／放哪一版我說了算／只有我能寫。第三件在 public 個人 repo 上**天然成立**（預設即全世界唯讀、只有 owner 能寫），不需要任何設定。所以真正要解的是前兩件，而它們的本質是——**開發線與對外線要分開**。
+ 
+ `release` 分支正是這個分離：main 隨便推，release 只有你把它快轉過去。**壞掉的 main 傳不到任何人**，因為沒有人跟 main。
+ 
+diff --git "a/docs/lumos-toolchain-knowledge/Verification/2026-08-21_\345\267\245\345\205\267\351\217\210\351\253\224\346\252\242\344\277\256\345\276\251\346\211\271.md" "b/docs/lumos-toolchain-knowledge/Verification/2026-08-21_\345\267\245\345\205\267\351\217\210\351\253\224\346\252\242\344\277\256\345\276\251\346\211\271.md"
+index e176908..9e98bce 100644
+--- "a/docs/lumos-toolchain-knowledge/Verification/2026-08-21_\345\267\245\345\205\267\351\217\210\351\253\224\346\252\242\344\277\256\345\276\251\346\211\271.md"
++++ "b/docs/lumos-toolchain-knowledge/Verification/2026-08-21_\345\267\245\345\205\267\351\217\210\351\253\224\346\252\242\344\277\256\345\276\251\346\211\271.md"
+@@ -26,20 +26,22 @@ plan_refs:
+ - 未做:明天 09:30 才是第一次真實驗證(它會不會真的選 gap 並開 loop);pending 喊人的 LINE 路徑亦待明日實測。
+ 
+ ## #3 `rot-queue-digest.sh` 幽靈引用 ✅
+ 7 處引用(兩支 hook 訊息、methodology 三處、post-commit 兩處)全改指 `lumos gov --since 7`——`cmd_gov` 本就讀 `.rot-queue.jsonl` 當 L3,它才是真正的讀者。
+ 
+ ## #8 verification-rot-check hook 撤除 ✅
+ 核心邏輯從未觸發(`.rot-check-cache.json`/`.rot-queue.jsonl` 從未建立)卻每次 Bash 付啟動成本。merger 的 HOOK_ENTRIES 移除、`_RETIRED_CLAUDE_HOOKS` 加入(install/update 主動刪殘檔)、settings.json 當場移除。★本 session 的 hook 設定是啟動時載入的,刪檔後每次 Bash 噴找不到檔→放一個 `SystemExit(0)` 空殼過渡,install 會清★。要復活先修到核心可觸發。
+ 
+ ## #4 `.usage-log.jsonl` write-only — **不砍,接受** <!--lumos:risk=C why="註解明載是 frecency 的種子語料(節點靜態先驗_調研),有宣告的未來讀者" revisit="該調研立案時;或 90 天內無人立案則退場"-->
+ 
++REVISIT:2026-11-19 這本帳(`docs/.usage-log.jsonl`)還是零程式讀者就退場——2026-08-21 說「90 天內無人立案則退場」,但那句寫在 HTML 註解裡,doctor 的到期掃描只認獨立的 REVISIT 行,等於沒寫;這行是把它接上電。判準:`grep -rn "usage-log" scripts/ governance/` 有沒有出現「讀」的路徑(現在只有寫)。
++
+ ## #9 delguard 逾時靜默放行 ✅
+ - 根因:`subprocess.TimeoutExpired` 從 git/grep 子程序漏進通用 except → 印成「內部錯誤」;預算 2.0s 在本 repo 幾乎必超(當天 ≥5 次)。
+ - 修:逾時歸類為超時(訊息不再誤導);**降級(超時/錯誤)一律寫治理帳 `gate: delguard, kind: degraded`,note 標 reason**——從此 `gov --stats` 看得到降級率;預算 2.0→5.0s;`_KNOWN_GATES` 加 `delguard`。
+ - 測試:t_delguard 加 3 斷言(超時落帳/ note=timeout / 內部錯誤落帳)先紅後綠,88/0。
+ 
+ ## #7 四份 code 副檔名清單 ✅
+ 四份(pre-commit/post-commit bash regex、check-graph-sync.py/impact-hook.py CODE_EXTS)實測一致但皆漏 shell;補 `.sh/.ps1` 四份同步,`t_code_exts_four_lists_agree` 釘四份一致+含 shell(7 斷言)。後果:本 repo 的 `get.sh/install.sh/scripts/*.sh` 與消費端的 shell 腳本自此算 code,改了要同步圖譜。
+ 
+ ## #6 `lumos lint` 接進 pre-commit ✅
+ Gate L:staged 的圖譜 .md 逐檔 lint,rc≠0 硬擋、訊息原樣轉出;刪除檔不 lint;無 python/lumos 跳過。測試 `t_precommit_lints_staged_graph_nodes`(壞節點擋/訊息指名/乾淨放行)先紅後綠——★第一版「乾淨節點」fixture 被 lint 抓到缺 summary,lint 確實有牙★。pre-commit 相關 37/0。
+diff --git a/install.sh b/install.sh
+index d16b86c..bdf4204 100755
+--- a/install.sh
++++ b/install.sh
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env bash
+ # install.sh — 薄殼:安裝邏輯已收進 python 單一源(scripts/lumos)。保留檔名供舊文檔/離線使用(cmd_bootstrap 已改探測 scripts/lumos,2026-07-25 F3)。
+ # 等價於 `lumos install --force`:裝全域 lumos + user-scope skills(symlink → ~/.claude/skills/* 與 Codex 讀的 ~/.agents/skills/*)
+ # + 兩家 hook 註冊(~/.claude/settings.json、~/.codex/hooks.json;Codex 的 hook 要你開一次互動 codex 審過才會跑)。
+-exec python3 "$(cd "$(dirname "$0")" && pwd)/scripts/lumos" install --force
++exec python3 "$(cd "$(dirname "$0")" && pwd)/scripts/lumos" install --force "$@"
+diff --git a/lumos-calls.jsonl b/lumos-calls.jsonl
+deleted file mode 100644
+index 4bb284d..0000000
+--- a/lumos-calls.jsonl
++++ /dev/null
+@@ -1 +0,0 @@
+-[]\\n
+\ No newline at end of file
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 84f29b8..436aaa4 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -54,21 +54,21 @@ if ! "$PY" "$GRAPHCTL" anchor verify; then
+     echo "       git checkout -- <檔案>"
+     echo "  2. 是故意改的 → 簽名登記新版本再推:"
+     echo "       lumos anchor approve --note \"為什麼改\""
+     echo "  3. 真的要先推 → git push --no-verify(CI 之後會發現少了簽名紀錄)"
+     echo ""
+   } >&2
+   exit 1
+ fi
+ 
+ # 測試套件閘(僅 Lumos 源 repo;2026-07-07):紅測試兩度溜進 main(pre-push 原只跑 doctor 不跑測試)。
+-# 事件點修法:push 前全量跑一次(實測 ~32s)。消費專案不跑——skills/ 只存在於源 repo(不 vendor),
++# 事件點修法:push 前全量跑一次(2026-09-06 實測約 8 分鐘、3700+ 案例;「~32s」是 2026-07-07、183 支測試時代的舊數字)。消費專案不跑——skills/ 只存在於源 repo(不 vendor),
+ # 消費端自己的測試歸自己的 CI/hooks 管,lumos 不越俎。逃生:git push --no-verify(自負)。
+ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_lumos.py" ]]; then
+   echo "推送前先跑全部測試(要幾分鐘,CI 等待那組本身就超過兩分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
+   if ! "$PY" "$REPO_ROOT/scripts/test_lumos.py" >/tmp/lumos-prepush-tests.log 2>&1; then
+     {
+       echo ""
+       echo "擋下:test_lumos.py 有紅,有測試沒過。"
+       echo "完整輸出在這裡:"
+       echo "   /tmp/lumos-prepush-tests.log"
+       tail -15 /tmp/lumos-prepush-tests.log | sed 's/^/    /'
+diff --git a/scripts/lumos b/scripts/lumos
+index 8a1d2c5..c8af1ec 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -8764,21 +8764,21 @@ def load_raw_for_edit(path: Path):
+         if lines[i].strip() == "---":
+             fm_end = i
+             break
+     if fm_end is None:
+         raise ValueError("開頭欄位區塊沒收尾(有起頭的 --- 沒有結尾的 ---),先補上")
+     return lines, 1, fm_end
+ 
+ 
+ def _write_lf(path: Path, text: str):
+     """寫 UTF-8 / LF / no-BOM,平台無關(不靠 text mode)。vault 唯一寫入原語。
+-    用 write_bytes:write_text(newline=) 要 Python 3.10,違反本專案 ≥3.8。
++    用 write_bytes:write_text(newline=) 要 Python 3.10,違反本專案 ≥3.9。
+     [2026-08-05 單席快審 F2] tmp→os.replace 原子替換:防半寫毀檔(CLAUDE.md reinject 等
+     整檔覆寫消費者)。read-modify-write 的併發 last-write-wins 窗仍在(單機 CLI,不上鎖,accepted)。"""
+     import os as _os
+     tmp = path.with_name(path.name + ".tmp-wlf")
+     tmp.write_bytes(text.encode("utf-8"))
+     _os.replace(tmp, path)
+ 
+ 
+ def atomic_write_verify(path: Path, new_lines, key, expected_check):
+     """寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename。任一步敗:tmp 丟棄,原檔不動。"""
+@@ -10417,21 +10417,21 @@ def _selfdelete_risk(root: Path) -> bool:
+ 
+     ★只在 Windows 回 True★——POSIX 上這條路是合法且刻意支援的,不能一起擋掉。
+     `LUMOS_SIMULATE_WINDOWS` 只是測試接縫(本機沒有 Windows 可驗)。
+     """
+     if not (_IS_WIN or os.environ.get("LUMOS_SIMULATE_WINDOWS") == "1"):
+         return False
+     try:
+         me, r = Path(__file__).resolve().parts, root.resolve().parts
+     except OSError:
+         return False       # 路徑解不開(權限/壞連結)就不擋(never block on unknown)
+-    # ★不用 `Path.is_relative_to()`★——那是 Python 3.9+,本專案宣告 ≥3.8
++    # ★保留不用 `Path.is_relative_to()` 的寫法★(原因是舊宣告 ≥3.8;2026-09-06 宣告訂正為 ≥3.9 後這行不再是硬約束,但既有寫法可用、不特意改)
+     # (同檔 `_write_lf` 為了同一個理由避開 3.10 才有的 write_text(newline=))。
+     # ★也不要把 except 放寬成 `except Exception`★:這道守衛的失敗模式是「回 False」,
+     # 一旦把自己的程式錯誤(如 AttributeError)也吞掉,守衛就★靜默地等於不存在★
+     # ——2026-08-02 代碼審 r2 抓到的正是這個組合。
+     return len(me) > len(r) and me[:len(r)] == r
+ 
+ 
+ def cmd_teardown(yes=False, source=None):
+     """一鍵拆機:當前 repo 專案層 + 機器全域(CLI/skills/hooks),★永遠保留圖譜文件★。
+     範圍(std F11)=當前 repo + 機器全域,非全機所有 repo(別 repo 的注入/hooks、來源 clone 都留)。
+@@ -11141,21 +11141,21 @@ def _link_or_copy(src: Path, dst: Path):
+         if _IS_WIN:
+             # W2:mklink 輸出走 OEM 碼頁(繁中=cp950),text=True 預設 UTF-8 解碼會在
+             # reader thread 炸 UnicodeDecodeError。errors="replace" 防炸,returncode 仍可靠。
+             r = subprocess.run(["cmd", "/c", "mklink", "/J", str(dst), str(src)],
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
+             if r.returncode != 0:
+                 raise OSError(r.stderr)
+         else:
+             dst.symlink_to(src)
+     except OSError:
+-        shutil.copytree(src, dst, dirs_exist_ok=True)  # Python ≥ 3.8
++        shutil.copytree(src, dst, dirs_exist_ok=True)  # Python ≥ 3.8(專案宣告 ≥3.9)
+         try:
+             (dst / _SKILL_MARKER).write_text("lumos fallback copy;安裝器可整夾重建\n", encoding="utf-8")
+         except OSError:
+             pass
+         print(f"  ⚠ 連結失敗,改複製(失去 git pull 即更新): {dst}")
+ 
+ 
+ def _install_skills():
+     # ★r1 正確性席:防線下移到真正動全域機器狀態的地方★——原本只擋四個指令入口,
+     # 但 cmd_init → _vendor_toolchain → _install_hooks_py 這條路也會重連 ~/.claude/skills、繞過入口守衛。
+diff --git "a/skills/lumos-project-notes/commands/02-\345\213\225\346\211\213\345\211\215\347\256\227\346\263\242\345\217\212.md" "b/skills/lumos-project-notes/commands/02-\345\213\225\346\211\213\345\211\215\347\256\227\346\263\242\345\217\212.md"
+index 014a986..4308743 100644
+--- "a/skills/lumos-project-notes/commands/02-\345\213\225\346\211\213\345\211\215\347\256\227\346\263\242\345\217\212.md"
++++ "b/skills/lumos-project-notes/commands/02-\345\213\225\346\211\213\345\211\215\347\256\227\346\263\242\345\217\212.md"
+@@ -1,16 +1,16 @@
+ # 02 動手前算波及(你準備改 code 的時候)
+ 
+ | 情境 | 指令 | 結果怎麼讀 | 不用它會怎樣 |
+ |---|---|---|---|
+ | 「我要改這個檔/這段 diff,哪些筆記、驗證、決策會受影響?」 | `lumos impact --file <檔>` 或 `lumos impact --diff <起點..終點>`;查某節點一層鄰居 `lumos impact --node <節點>` | 先列「必看」(合約/事故),再列相關 top-8;每條都是該動手前看的 | Edit/Write 時 hook 會自動注入一份,但只推你碰到的檔,邊界要自己查 |
+ | 「這份 spec/這段改動有什麼實務隱患?風險分級多高?」 | `lumos pitfalls <spec.md>` 或 `lumos pitfalls --diff <範圍>` | 印提問清單;`tier: high` 代表推送前要過代碼審(見 06) | 高風險改動沒審就推,pre-push 會擋 |
+ | 「改了這些檔,該跑哪一層測試?」 | `lumos test-layers --diff <範圍>` | 提醒用,不擋 | 漏跑整合/UI 層 |
+ | 「改了這些檔,具體該跑哪幾個測試?」 | `lumos testmap affected --diff <範圍>`(第一次先 `lumos testmap build`) | 建議清單,不擋 | 跑全套浪費時間,或漏跑 |
+ | 「改了 A 檔,歷史上常一起改的 B 檔要不要跟著改?」 | `lumos cochange check [--staged\|--diff …]`;看規則 `lumos cochange rules` | 警告清單,不擋;pre-commit 也會自動跑 | 漏改夥伴檔 |
+-| 「about_code 預標標錯一整批,要整批撤」 | `lumos about-code revert --batch <YYYY-MM-DD> --dry-run` 先看,再去掉 --dry-run 真撤 |
+-| 「doctor 說某篇 about_code 標了之後正文改過」 | 先看那篇的 about_code 對現在正文還對不對:對 → `lumos about-code restamp <節點>`;不對 → set/append/remove 修完再 restamp(沒有批次模式,一口氣洗白=橡皮章) |
+-| 「批次預標的 stamp 還是舊的兩段式,doctor 量不出過期」 | `lumos about-code migrate-stamp --at <標註當時 commit> --repo .`(一次性;用當時正文算雜湊,之後 doctor 自然列出改過的) |
+-| 「改某支檔,推薦裡哪些是真的『關於』它的」 | `lumos impact --file <檔> --ranked`:固定席裡 `about_hit` 者排前(hook 顯示 ★關於★);總開關 `LUMOS_IMPACT_ABOUT=0` 逃生 |
++| 「about_code 預標標錯一整批,要整批撤」 | `lumos about-code revert --batch <YYYY-MM-DD> --dry-run` 先看,再去掉 --dry-run 真撤 | 印會動到哪幾篇;--dry-run 不寫檔 | 錯的預標留著,之後 impact 一直推錯篇 |
++| 「doctor 說某篇 about_code 標了之後正文改過」 | 對 → `lumos about-code restamp <節點>`;不對 → set/append/remove 修完再 restamp | 沒有批次模式是刻意的:一口氣洗白等於蓋橡皮章 | 標籤跟正文脫節,推薦愈推愈偏 |
++| 「批次預標的 stamp 還是舊的兩段式,doctor 量不出過期」 | `lumos about-code migrate-stamp --at <標註當時 commit> --repo .` | 一次性;用當時正文算雜湊,之後 doctor 自然列出改過的 | 過期的標籤永遠不會被 doctor 喊 |
++| 「改某支檔,推薦裡哪些是真的『關於』它的」 | `lumos impact --file <檔> --ranked` | 固定席裡 `about_hit` 者排前(hook 顯示 ★關於★);總開關 `LUMOS_IMPACT_ABOUT=0` 逃生 | 分不出「真的在講這支檔」和「只是連到」 |
+ | 「hook 推的必看裡怎麼沒有那些 CLI 樞紐筆記了」 | 2026-08-24 起固定席只認硬合約(INVARIANT/IRREVERSIBLE)+事故;守衛面軟標記樞紐降到輸出尾端「守衛面參考」小節(最多 3 條);`LUMOS_IMPACT_HARD_PIN=0` 逃生回舊制 | 只動 stamp 第一段 = batch-<日期> 的節點;人工修正過的(claude/…)不動 | 誤撤人工修正 |
+ | 「我刪掉/改名了符號,筆記還在講舊的嗎?」 | `lumos search <舊名> --code` 逐句判;`lumos delguard` 是 pre-commit 自動跑的版本 | 列出還在指名舊符號的筆記 | delguard 逾時會放行,別只靠它 |
+ | 「這段 code 沒有任何筆記連到它,該補嗎?」 | `lumos link-candidates [--diff …]` | 候選清單,唯讀;要不要補由人裁 | 新 code 變圖譜孤兒 |
+diff --git "a/skills/lumos-project-notes/commands/05-\350\250\255\350\250\210\345\257\251\346\237\245\350\277\264\345\234\210.md" "b/skills/lumos-project-notes/commands/05-\350\250\255\350\250\210\345\257\251\346\237\245\350\277\264\345\234\210.md"
+index 9482b16..0ad62cd 100644
+--- "a/skills/lumos-project-notes/commands/05-\350\250\255\350\250\210\345\257\251\346\237\245\350\277\264\345\234\210.md"
++++ "b/skills/lumos-project-notes/commands/05-\350\250\255\350\250\210\345\257\251\346\237\245\350\277\264\345\234\210.md"
+@@ -1,25 +1,25 @@
+ # 05 設計審查迴圈(spec 要進實作前)
+ 
+ 白話:一份設計 spec 在動手實作前,讓幾個不知道脈絡的審查員輪流挑毛病,每輪記帳;散文 spec 走處置閘——一輪裡每個發現折掉或附理由接受就算過(2026-08-25 裁;K=2 連續乾淨只剩已定錨 panel 帳的舊迴圈在用)。完整流程在 `lumos-design-loop` skill;這裡只列「什麼時候敲哪個」。
+ 
+ | 情境 | 指令 | 結果怎麼讀 |
+ |---|---|---|
+ | 「這輪該派誰、第幾輪、怎麼記帳?」(每輪開頭) | `lumos loop next <編號> [--tier standard\|high\|light] [--orchestrator claude\|codex] [--spec <計劃.md>]`(首輪兩個旗標都必帶;--orchestrator=誰在編排,外家席=不是編排者那一家);第一次一定帶 --tier | 印現在狀態、這輪要幾人、應派哪個角色、記帳的指令範本 |
+ | 「spec 動筆後想先掃模糊措辭」(排乾步驟) | `lumos prose-lint <計劃.md>` | 只提醒不擋,rc 恆 0;掃出的類別歸編排者排乾,派工詞明寫席位不得報 |
+-| 「審查員交報告了,要記這一輪」 | `lumos canary record none --loop <編號> --round rN --auditor <席> --severity <等級> --findings <數> --spec <計劃.md> --reviewed <sha256> [--scope-lines N]`;★散文設計審記帳型態(2026-08-25):各席一筆留痕**不帶三個 set**,同輪僅一筆彙總 carrier 帶 `--findings-set/--folded-set/--accepted-set/--accept-reason`;全席都要 `--report/--snapshot`★;每條發現標 `--finding-kind id=code|spec|process`(在修程式 / 被審文件 / 流程自己要求的東西) | 印憑證;超過 1800 行會提醒拆開審 |
++| 「審查員交報告了,要記這一輪」 | `lumos canary record none --loop <編號> --round rN --auditor <席> --severity <等級> --findings <數> --spec <計劃.md> --reviewed <sha256> [--scope-lines N]`;★散文設計審記帳型態(2026-08-25):各席一筆留痕**不帶三個 set**,同輪僅一筆彙總 carrier 帶 `--findings-set/--folded-set/--accepted-set/--accept-reason`;全席都要 `--report/--snapshot`★;每條發現標 `--finding-kind id=code\|spec\|process`(在修程式 / 被審文件 / 流程自己要求的東西) | 印憑證;超過 1800 行會提醒拆開審 |
+ | 「這輪/這個編號過關了沒?」 | 散文設計審新迴圈一律 `lumos loop status <編號> --disposal --spec … --repo …`(單輪全處置即收斂;同輪有 blocker 席則 accepted 必空);panel(每席各記一筆)→ `--gate --panel --min-seats 3`(K=2,僅已定錨 panel 帳的舊迴圈用);兩閘互斥,問錯會被指路;單人 `--light`;結清 `--settle <清單.json> --gate` | ✅ GATE PASS / ⛔ GATE FAIL,後面寫卡在哪一關 |
+ | 「審查員的引句是不是真的在 spec 裡?」 | `lumos quote-check <報告.md> --spec <凍結快照.md>` | 錨不到的引句不採信 |
+ | 「這席帳面嚴重度跟報告對得上嗎?(疑低報)」 | `lumos severity-check --loop <編號> --round <rN> --auditor <席> --repo <根>` | 第四道收貨;歷史帳 advisory、新帳抓到=寫側 bug 開 Issue;寫側 record 已硬擋低報,這是縱深第二層 |
+ | 「decision_refs 雞生蛋:回填舊筆記背書哪條決策」 | `lumos decision-refs backlog` → `candidates <節點>` → 讀判 → `add-ai <節點> <ref>` → 人 `promote` | T3 自動養成六原語;雙欄不對稱信任(ai-ref 抑制不了 E2、人 promote 才升級);單次單趟批次 |
+ | 「收斂了,把判定凍成標準答案」 | `lumos loop replay <編號> --freeze --spec <計劃.md> --repo <根>` | 收工流程新步驟(2026-08-26):gate PASS、卷證 commit 後當場凍;產 governance/replay/<編號>/verdict.json;重凍要 --note 留痕 |
+ | 「懷疑判定邏輯被改壞/帳被動了」 | `lumos loop replay <編號> --golden governance/replay/<編號>/verdict.json --repo <根>` | 對凍結閉包重算;邏輯漂移/帳被動/凍結檔被動=紅,帳本長大/golden 過期=列出不紅;唯讀不落帳 |
+ | 「派工單要查的材料,報告有沒有都碰到?」 | `lumos seat-check <報告.md> --dispatch <rN-dispatch.json> [--ledger <出界帳.jsonl>]` | unreported=沒碰;out_of_scope=引到範圍外 |
+ | 「想找人覆核某一筆判定」 | `lumos canary second --id <憑證> --verdict agree\|overturn --auditor <另一人>` | 必須換人 |
+ | 「人裁判整份重寫,要收尾舊編號」 | `lumos loop rewrite <編號> --successor <新編號> --note <一句為什麼>` | 記 rewrite 事件+血緣進治理帳;連續第二次判重寫會印強制攤人警告 |
+ | 「不看散文,只看帳本算到哪了」 | `lumos loop verify-progress <編號>` | 結構欄位,不受報告措辭影響 |
+ | 「長跑的上下文太長了」 | `lumos loop compress <檔>` | 三欄壓縮 |
+ | 「各審查員歷史抓漏率」 | `lumos loop canary-stats` | 觀測用,不影響過不過 |
+ | 「多個找錯工具的結果要合併估漏網」 | `lumos loop capture-counts --finder … --finder …` | 吐 --capture-counts 參數 |
+-| 派工詞要附圖譜鏡頭 | 派工詞留一行 `LUMOS-SPEC: <計劃.md>`;手動看內容 `lumos dispatch-lens --spec <計劃.md>` | hook 從計劃提到的程式檔與直接連結節點算固定席(合約/事故優先,太泛的檔略過);2026-09-05 起 | 沒標記=沒附,派完看回覆有沒有「lumos 自動附加(設計審)」段 |
++| 派工詞要附圖譜鏡頭 | 派工詞留一行 `LUMOS-SPEC: <計劃.md>`;手動看內容 `lumos dispatch-lens --spec <計劃.md>` | hook 從計劃提到的程式檔與直接連結節點算固定席(合約/事故優先,太泛的檔略過,2026-09-05 起);沒標記=沒附,派完看回覆有沒有「lumos 自動附加(設計審)」段 |
+ 
+ 上限依分級:light 2 筆、standard/high 3 筆;第一輪沒帶 `--tier` 會退到最寬鬆的舊制(6 筆),所以第一輪一定帶;沒帶 `--orchestrator` 直接擋(不預設,Codex 編排漏了會靜默套錯家族)。跑滿上限還沒過 → 停,攤給人裁;別無限燒。settle 結清模式不要用 `loop next`(它認不得 settle 會誤報),直接問 `loop status --settle`。
+diff --git "a/skills/lumos-project-notes/commands/06-\344\273\243\347\242\274\345\257\251\350\210\207\346\216\250\351\200\201.md" "b/skills/lumos-project-notes/commands/06-\344\273\243\347\242\274\345\257\251\350\210\207\346\216\250\351\200\201.md"
+index 902fbf8..89328d4 100644
+--- "a/skills/lumos-project-notes/commands/06-\344\273\243\347\242\274\345\257\251\350\210\207\346\216\250\351\200\201.md"
++++ "b/skills/lumos-project-notes/commands/06-\344\273\243\347\242\274\345\257\251\350\210\207\346\216\250\351\200\201.md"
+@@ -6,15 +6,15 @@
+ | 「審完了/決定不審,要留痕才能推」 | `lumos code-loop pass --note "<審了什麼>"` 或 `lumos code-loop skip --note "<為什麼不審>"` | 留痕綁當下版本;之後再改 code(簿記檔除外)就失效,要重跑 | pre-push 與 CI 都擋 |
+ | 「我現在推得上去嗎?」 | `lumos code-loop check [--diff … --at-sha … --branch …]` | OK/BLOCKED + 原因。**順便真跑受波及合約綁的測試**(impact 固定席上的 ★INVARIANT★ [test:]):紅、懸空、方法名不合法都擋;沒設 `test.run_cmd` 只提醒 | pre-push 每次推送都呼叫它 |
+ | 「受波及合約的測試真的跑不了(外部 DB 不在)」 | `lumos code-loop check … --skip-bound-tests --note "<為什麼>"`;CI 用環境變數 `LUMOS_SKIP_BOUND_TESTS=1` | 留痕進治理帳,被統計 | 沒理由拒絕 |
+ | 「合約綁測試的狀態」 | `lumos guard list` | 真綁/懸空/偽證據/裸/未審 | doctor [T] 擋裸合約 |
+ | 「幫合約產一個測試骨架」 | `lumos guard scaffold <節點> "<KEY 片段>" --method <名> [--platform …]` | 預設紅燈 stub,斷言留 TODO | — |
+ | 「把寫好的測試綁回合約」 | `lumos guard bind <節點> "<KEY 片段>" <測試名>` | 寫回 [test:] | 裸合約擋推 |
+ | 「合約被不知道脈絡的人審過了」 | `lumos guard audit <節點> "<KEY 片段>"` | 寫回 [audit:] | lint 報「未獨立審計」,pre-push 擋 |
+ | 「這條合約→守衛測試→驗證紀錄的證據鏈」 | `lumos guard trace <節點>` | 反向可查爆炸半徑 | — |
+ | 「綁的測試真的守得住嗎?」 | 先 `lumos guard kill-add <節點> "<片段>" --file … --old … --new …` 宣告壞法,再 `lumos guard kill <節點> "<片段>"` | 套壞法後測試必須翻紅,沒翻紅=測試是裝飾 | — |
+ | 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`,hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;內容從 base 讀、零自由文字) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線→靜默放行 | 鏡頭不是閘,不擋 |
+-| 「我是在 Codex 裡編排代碼審,鏡頭怎麼附?」 | 派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`;子代理開場 hook 自動領一席附上;派完 `lumos dispatch-lens --disarm`;看剩幾席 `--status`(Codex 的派工訊息 hook 改不了,所以不用標記行) |
++| 「我是在 Codex 裡編排代碼審,鏡頭怎麼附?」 | 派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`;子代理開場 hook 自動領一席附上;派完 `lumos dispatch-lens --disarm`;看剩幾席 `--status`(Codex 的派工訊息 hook 改不了,所以不用標記行) | 子代理開場自帶「lumos 自動附加」段;`--status` 印剩幾席 | Codex 編排時整輪沒有圖譜鏡頭,審查席判不了爆炸半徑 |
+ | 「推了,等 CI 結果」 | `lumos ci-wait`;只看上次結果 `lumos ci-status` | 綠 rc0/紅 rc1 | 紅了沒人知道 |
+-| 「已放行的東西在下游炸了,要記漏網帳」 | `lumos loop escape <迴圈編號> --stage <實作\|code-loop\|CI\|prod\|使用者回報> --severity <minor\|major\|blocker> --desc <一句>`;看全帳 `lumos loop escape --list` | 逃逸入帳(append-only 不進閘;歸因人工判斷,編號必須實存於審查帳) |
+-| 「這輪代碼審過了沒?」 | 單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席=彙總記帳,處置清單只掛一席;code 迴圈輪內有 major 席則 accepted 必空);`--gate --panel` 僅 2026-08-25 前定錨的舊迴圈回放(新迴圈問了會被拒並指路) | ✅/⛔+卡在哪一關 |
++| 「已放行的東西在下游炸了,要記漏網帳」 | `lumos loop escape <迴圈編號> --stage <實作\|code-loop\|CI\|prod\|使用者回報> --severity <minor\|major\|blocker> --desc <一句>`;看全帳 `lumos loop escape --list` | 逃逸入帳(append-only 不進閘;歸因人工判斷,編號必須實存於審查帳) | 審查系統的漏網率無帳可查,不知道哪一類缺陷一直溜過去 |
++| 「這輪代碼審過了沒?」 | 單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席=彙總記帳,處置清單只掛一席;code 迴圈輪內有 major 席則 accepted 必空);`--gate --panel` 僅 2026-08-25 前定錨的舊迴圈回放(新迴圈問了會被拒並指路) | ✅/⛔+卡在哪一關 | 沒問閘就推,pre-push 與 CI 會擋(tier high 無留痕=紅燈) |
+ | 派工前暖鏡頭快取 | `lumos dispatch-lens <base>..HEAD` | 大範圍算一次 25 秒起,hook 45 秒超時會放空(2026-09-05 起超時附一行說明);先算一次快取 20 分有效 | 派工詞仍要留 `LUMOS-IMPACT:` 標記行 |
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index c4f7858..af661ad 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -1218,21 +1218,20 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
+ 2. **其他命令帶 .md**：`property:set`、`read`、`append`、`backlinks` 等用完整路徑含 `.md`
+ 3. **file= vs path=**：`file=` 用 wikilink 解析（不需完整路徑），`path=` 要完整路徑
+ 4. **內容換行**：用 `\n` 表示換行，`\t` 表示 tab。**Mermaid 區塊內換行用 `<br/>` 不是 `\n`**
+ 5. **Wikilink**：筆記間互連用 `[[筆記名]]` 或 `[[資料夾/筆記名]]`
+ 6. **不要覆寫**：優先用 `append` / Edit，除非明確要重建
+ 7. **更新 updated**：每次修改筆記後，更新 `updated` property
+ 8. **中文檔名**：可直接使用
+ 9. **隨 git 版控**：所有變更被 git 追蹤，commit 時一起提交
+ 10. **衝突處理**：知識圖譜 vs Memory vs Session 有出入時，向使用者確認
+ 11. **vault 動態取得**：不要硬寫 vault 名稱，每次用 `obsidian vaults` 確認
+-12. **複製輸出**：任何命令加 `--copy` 可複製結果到剪貼簿
+ 13. **Obsidian 必須執行中**：CLI 需要連接正在運行的 Obsidian App
+ 14. **Verification 豁免**：Verification 筆記不需要 `summary` 和 `updated` 欄位（有 `feature` + `date` 已足夠），**但 `valid_under` + `revalidate_when` 是必填**
+ 15. **避免假 Tag**：內文中的 `#` 會被 Obsidian 解析為 tag，顏色值用 backtick 包裹（如 `` `#FFF3E0` ``），編號用 `1~3` 不要用 `#1-3`
+ 16. **ADR 不可編造**：`decisions` 的 `context` / `alternatives_considered` / `why_chosen` / `trade_offs` 若無法從對話/code/commit 推得，**問使用者**，不可生成似是而非的內容污染學習資產
+ 17. **Verification 巡檢時機**：開工前、commit 圖譜更新前、重大環境/依賴/schema 變更後，跑健康檢查 eval 指令掃 `status: stale` 和過期 `valid_until`
+ 18. **verified_by 雙向同步**：新增/廢棄 Verification 時，**必須同步**更新對應 Systems 的 `verified_by`；改 Systems 時優先讀 `verified_by` 而非跑 backlinks（backlinks 含 Issues/Sessions 雜訊）
+ 
+ ### 指令怎麼找(別憑記憶,開索引)
+ 
+ **`commands/INDEX.md`**(本 skill 目錄下)是 80 個指令的總目錄:先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一(進場查脈絡 / 動手前算波及 / 寫回圖譜 / 自檢與健康 / 設計審查迴圈 / 代碼審與推送 / 安裝維運 / 自動跑的 / 節點還原)。每個子檔都短,只開需要的那一個。
+diff --git a/slim/skills/lumos-project-notes/reference.md b/slim/skills/lumos-project-notes/reference.md
+index add84dc..5fa7422 100644
+--- a/slim/skills/lumos-project-notes/reference.md
++++ b/slim/skills/lumos-project-notes/reference.md
+@@ -811,17 +811,16 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
+ 2. **其他命令帶 .md**：`property:set`、`read`、`append`、`backlinks` 等用完整路徑含 `.md`
+ 3. **file= vs path=**：`file=` 用 wikilink 解析（不需完整路徑），`path=` 要完整路徑
+ 4. **內容換行**：用 `\n` 表示換行，`\t` 表示 tab。**Mermaid 區塊內換行用 `<br/>` 不是 `\n`**
+ 5. **Wikilink**：筆記間互連用 `[[筆記名]]` 或 `[[資料夾/筆記名]]`
+ 6. **不要覆寫**：優先用 `append` / Edit，除非明確要重建
+ 7. **更新 updated**：每次修改筆記後，更新 `updated` property
+ 8. **中文檔名**：可直接使用
+ 9. **隨 git 版控**：所有變更被 git 追蹤，commit 時一起提交
+ 10. **衝突處理**：知識圖譜 vs Memory vs Session 有出入時，向使用者確認
+ 11. **vault 動態取得**：不要硬寫 vault 名稱，每次用 `obsidian vaults` 確認
+-12. **複製輸出**：任何命令加 `--copy` 可複製結果到剪貼簿
+ 13. **Obsidian 必須執行中**：CLI 需要連接正在運行的 Obsidian App
+ 14. **Verification 豁免**：Verification 筆記不需要 `summary` 和 `updated` 欄位（有 `feature` + `date` 已足夠），**但 `valid_under` + `revalidate_when` 是必填**
+ 15. **避免假 Tag**：內文中的 `#` 會被 Obsidian 解析為 tag，顏色值用 backtick 包裹（如 `` `#FFF3E0` ``），編號用 `1~3` 不要用 `#1-3`
+ 16. **ADR 不可編造**：`decisions` 的 `context` / `alternatives_considered` / `why_chosen` / `trade_offs` 若無法從對話/code/commit 推得，**問使用者**，不可生成似是而非的內容污染學習資產
+ 17. **Verification 巡檢時機**：開工前、commit 圖譜更新前、重大環境/依賴/schema 變更後，跑健康檢查 eval 指令掃 `status: stale` 和過期 `valid_until`
+ 18. **verified_by 雙向同步**：新增/廢棄 Verification 時，**必須同步**更新對應 Systems 的 `verified_by`；改 Systems 時優先讀 `verified_by` 而非跑 backlinks（backlinks 含 Issues/Sessions 雜訊）
+
+### 附錄:審查席引用到、但不在本 diff 內的原檔行(派工允許讀 repo;附此讓引句可錨)
+
+README.en.md:58 | Then **restart your Claude Code session** (some prompts load at session start).
+scripts/install-hooks.sh:6 | exec python3 "$HERE/lumos" init --force
+scripts/install-graph-toolchain.sh:19 |   exec python3 "$HERE/lumos" init --force
+scripts/lumos:17705 |     listed = [{"node": n, **{"kind": "計劃連結", "contract": None, "files": []}, **pinned.get(n, {}), "kind": "計劃連結" + (f"+{pinned[n]['kind']}" if n in pinned and pinned[n].get("kind") else "")} for n in linked]   # 3.8 相容:不用 dict | (delta r2)
