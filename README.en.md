@@ -187,7 +187,7 @@ flowchart TB
 
     subgraph R1["① open a round → dispatch → review → intake"]
         direction LR
-        NEXT["Open a round<br/>risk tier, round number, seat count<br/>list the nodes this topic already has"] --> LENS["Nodes attached at dispatch<br/>related rules and incidents go into the brief<br/>Claude: brief rewritten · Codex: seat claimed on start"] --> SEATS["Reviewer seats<br/>several same-family AIs, different lenses<br/>+ an architecture-consistency seat + another vendor's AI"] --> INTAKE["Intake is machine-checked<br/>quotes anchor? line numbers exist? materials read?<br/>unanchored findings are dropped"]
+        NEXT["Open a round<br/>risk tier, round number, seat count<br/>list the nodes this topic already has"] --> LENS["Nodes attached at dispatch<br/>code review: from the diff · design review: from the plan note<br/>on timeout it leaves a one-line notice instead of silence"] --> SEATS["Reviewer seats<br/>several same-family AIs, different lenses<br/>+ an architecture-consistency seat + another vendor's AI"] --> INTAKE["Intake is machine-checked<br/>quotes anchor? line numbers exist? materials read?<br/>unanchored findings are dropped"]
     end
 
     subgraph R2["② every finding disposed → ledger → gate → receipt"]
