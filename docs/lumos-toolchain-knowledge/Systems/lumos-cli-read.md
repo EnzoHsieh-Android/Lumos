@@ -113,6 +113,10 @@ about_code:
 ## 關鍵設計
 - **讀寫嚴格分軌**:這 14 個不改圖譜節點檔(context/show 寫 usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀);寫入走另 7 個原語(set/append/new/archive/decision-add/decision-supersede/self-audit),經 `atomic_write_verify`(寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename,任一步敗則 tmp 丟棄原檔不動)。詳見寫入原語節點。
 - **doctor vs lint 分工**:doctor 全圖權威(跨節點 + [test:] 存在性);`lint <節點>` 單檔 node-local 快檢,predicts pre-push 會不會擋。寫節點當下 lint,收尾 doctor。
+- **lint 另有一項軟提醒:開頭欄位的鍵打錯會被唸出來**(2026-09-06 全 repo 審視 #16)。出身:鍵打錯(例如把 `valid_under` 打成 `valid_unde`)以前是**所有檢查靜默略過**——那個欄位等於沒寫,而它可能正是承載回頭條件或驗證關聯的欄位。現在會指出哪個鍵不認得,並在只差一個字元時給出近名候選。
+  - ★只算 warning 不升 error★:工具對未知欄位的立場是前向相容(消費專案與跨專案核心庫各有自己的欄位),升成 error 會讓別人的圖譜每次 lint 都被嘮叨。
+  - 認得哪些鍵**是問工具、不是問這個圖譜**:除了一份固定清單,執行期還會併入工具自己的欄位常數(清單欄位與純連結欄位那兩份),所以那兩份之後再加欄位,這裡不必跟著改。★代碼審 r1 才修對★:初版清單是「掃本圖譜出現過的鍵」建的,漏掉兩個工具真的會讀、但本圖譜剛好沒節點寫的欄位,被誤報時提示文字說「不會被任何檢查讀到」——那句話本身是假的。
+  - 別的圖譜有自己的欄位時,可以在專案的 `.lumos/config.json` 用 `extra_frontmatter_keys` 列進去。找設定檔的方式是**從圖譜目錄往上找設定檔本身、走到版控根就停**(不是寫死往上兩層——寫死的話,圖譜巢得更深的佈局會算到錯的地方,擴充口悄悄失效且不報錯)。
 - **專案層 vs 機器層**:讀指令以 cwd `find_vault` 鎖本專案 vault(不受同名影響);install / bootstrap 是機器層(全域 `lumos` + user-scope skills),不在本節點範圍。
 
 ## 已知限制
