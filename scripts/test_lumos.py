@@ -11175,7 +11175,16 @@ def t_prepush_falls_back_when_runner_lacks_shard():
                        capture_output=True, text=True, env=env)
 
     # ① 舊 runner:完全不認得任何旗標,全綠 → 推送閘要放行
-    old_runner = ("import sys\n"
+    # ★假的舊 runner 要重現「真舊行為」★(r1 外家席抓到我第一版沒重現到):
+    # 真正的舊 runner 用的是「不認得的參數就靜默丟掉」,所以餵它 --help 不會印用法、
+    # 也不會報錯——**它會當成什麼都沒帶,直接跑起全套**。第一版的假 runner 立刻結束,
+    # 所以「探測本身會不會浪費八分鐘」這件事根本沒驗到。這裡改成:被餵任何參數都照跑,
+    # 而且留下一個記號檔,讓測試看得出它總共被跑了幾次。
+    old_runner = ("import sys, os\n"
+                  "from pathlib import Path\n"
+                  "c = Path(__file__).with_name('OLD-RUNNER-RUNS')\n"
+                  "n = int(c.read_text()) if c.exists() else 0\n"
+                  "c.write_text(str(n + 1))\n"
                   "print('OLD RUNNER: 3 passed, 0 failed')\n"
                   "sys.exit(0)\n")
     d1 = Path(tempfile.mkdtemp(prefix="gctl-oldrunner-"))
@@ -11185,18 +11194,25 @@ def t_prepush_falls_back_when_runner_lacks_shard():
           r1.returncode == 0, f"rc={r1.returncode}\nstderr={r1.stderr[-400:]}")
     check("相容: 退回串行時訊息說的是「約 8 分鐘」不是「切成幾片」",
           "切成" not in r1.stderr, r1.stderr[-300:])
+    # ★探測不能自己燒掉一次全套★:真舊 runner 會把 --help 當成沒帶參數而跑滿全套,
+    # 探測完再跑一次 = 一次推送兩次全套。所以探測必須不執行 runner。
+    _runs = (d1 / "scripts" / "OLD-RUNNER-RUNS")
+    _n_runs = int(_runs.read_text()) if _runs.exists() else 0
+    check("★相容★: 探測沒有多跑一次 runner(舊 runner 只被跑該跑的次數)",
+          _n_runs <= 2, f"被跑了 {_n_runs} 次(全套 1 次 + 自主迴圈那支 1 次 = 2 次是對的;"
+                        f"3 次表示探測自己又跑了一次八分鐘)")
 
     # ③ ★真的走到分片那條路★:runner 說明裡有 --shard(所以探測會選分片),吃得下旗標、
     #    全綠離開,但★不寫摘要檔★。第一版用「有沒有寫出摘要檔」當通過判準,這種 runner
     #    會被誤判成紅。沒有這個案例的話,上面兩條都走不到分片那條路——測試會是假綠
     #    (今天第三次撞到「現場走不到被測分支」,是逐條做沙盤才發現的)。
+    # 探測改成讀原始碼找旗標字樣(見 pre-push 的註解:跑 --help 會讓舊 runner 燒掉一次全套),
+    # 所以這個假 runner 的原始碼裡要真的出現那個字樣它才會被當成支援分片。
     shardy_runner = (
-        "import sys\n"
-        "if '--help' in sys.argv:\n"
-        "    print('usage: fake [--shard I/N] [--json-summary F]')\n"
-        "    sys.exit(0)\n"
-        "print('SHARDY RUNNER: 3 passed, 0 failed')\n"
-        "sys.exit(0)\n")
+        'import sys\n'
+        'ACCEPTS = ["--shard", "--json-summary"]   # 探測靠這行認得它支援分片\n'
+        'print("SHARDY RUNNER: 3 passed, 0 failed")\n'
+        'sys.exit(0)\n')
     d3 = Path(tempfile.mkdtemp(prefix="gctl-shardy-"))
     mk(d3, shardy_runner)
     r3 = run(d3)
@@ -11461,6 +11477,78 @@ def t_runner_shard_partitions_completely():
     d = _j.loads(out.read_text(encoding="utf-8"))
     check("分片: 機讀摘要有過/紅/跳過三個數字", all(k in d for k in ("passed", "failed", "skipped")), str(d))
     check("分片: 機讀摘要列得出紅的是哪幾支", "failed_names" in d, str(d))
+
+
+
+def t_shard_partition_survives_ff_and_seed():
+    """★分片的聯集必須永遠等於全部,不受 --ff / --seed 影響★(2026-09-06 代碼審 r1)。
+
+    出身:我第一版把「上次紅過的排最前面」做在分片之前。各片是獨立行程,讀到的失敗快取
+    可能不一樣(某片先跑完就把快取覆蓋掉了),於是「第 k 支」對不同片指的不是同一支——
+    **各片聯集不再等於全部:有些測試跑兩次、有些一次都沒跑,而全套照樣印綠**。
+    外家審查席用「兩個執行者各自帶不同快取」的情境推出來的。
+
+    修法:分片先做(在穩定的排序清單上切),重排只影響片內順序。這支就是釘住這件事。"""
+    import subprocess as _sp, os as _os, json as _j
+    runner = str(Path(__file__).resolve())
+    cache_dir = Path(GRAPHCTL).resolve().parent.parent / ".lumos"
+
+    def shard_names(i, n, extra=()):
+        r = _sp.run([sys.executable, runner, "--shard", f"{i}/{n}", "--list", *extra],
+                    capture_output=True, text=True, timeout=120)
+        return [l for l in r.stdout.splitlines() if l.startswith("t_")]
+
+    all_names = sorted(k for k in globals() if k.startswith("t_"))
+    check("★前置★ 現場成立: 數得出全部有幾支", len(all_names) > 100, str(len(all_names)))
+
+    for extra in ((), ("--ff",), ("--seed", "7"), ("--ff", "--seed", "7")):
+        got = []
+        for i in (1, 2, 3):
+            got += shard_names(i, 3, extra)
+        label = " ".join(extra) or "(不帶額外旗標)"
+        check(f"分片聯集: 帶 {label} 時三片加起來剛好等於全部",
+              sorted(got) == all_names,
+              f"聯集 {len(got)} 支 vs 全部 {len(all_names)} 支;"
+              f"重複 {len(got) - len(set(got))} 支;漏 {len(set(all_names) - set(got))} 支")
+
+    # ★真正會發病的前提:各片讀到「不一樣的」失敗快取★
+    # 同一台機器上三片讀同一份快取時,重排是同一個排列,聯集照樣成立——所以上面那組
+    # 抓不到這個病(我第一次沙盤就是在這裡沒翻紅)。真實情況是:各片獨立行程,某片先跑完
+    # 就把快取覆蓋掉,後啟動的片讀到的內容已經不同。這裡直接重現那個前提。
+    import shutil as _sh
+    _bak = None
+    _main_cache = cache_dir / "test-cache.json"
+    try:
+        if _main_cache.exists():
+            _bak = _main_cache.read_text(encoding="utf-8")
+        got2 = []
+        fakes = [all_names[:3], all_names[len(all_names) // 2:len(all_names) // 2 + 3], all_names[-3:]]
+        for i, fake in zip((1, 2, 3), fakes):
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            _main_cache.write_text(_j.dumps({"failed": fake}, ensure_ascii=False), encoding="utf-8")
+            got2 += shard_names(i, 3, ("--ff",))
+        check("★分片聯集(真前提)★: 各片讀到不同快取時,三片加起來仍等於全部",
+              sorted(got2) == all_names,
+              f"聯集 {len(got2)} vs 全部 {len(all_names)};"
+              f"重複 {len(got2) - len(set(got2))};漏 {sorted(set(all_names) - set(got2))[:5]}")
+    finally:
+        try:
+            if _bak is not None:
+                _main_cache.write_text(_bak, encoding="utf-8")
+            elif _main_cache.exists():
+                _main_cache.unlink()
+        except OSError:
+            pass
+
+    # 分片時各片寫各自的快取檔,不會互相蓋掉
+    names = sorted(p.name for p in cache_dir.glob("test-cache*.json")) if cache_dir.is_dir() else []
+    _sp.run([sys.executable, runner, "--shard", "1/2", "-k", "no_zero_assertion"],
+            capture_output=True, text=True, timeout=120)
+    _sp.run([sys.executable, runner, "--shard", "2/2", "-k", "no_zero_assertion"],
+            capture_output=True, text=True, timeout=120)
+    after = sorted(p.name for p in cache_dir.glob("test-cache*.json")) if cache_dir.is_dir() else []
+    check("分片: 各片寫各自的快取檔(檔名帶片號,不會互相蓋掉)",
+          any("shard" in n for n in after), f"之前 {names} → 之後 {after}")
 
 
 def t_runner_k_zero_cases_rc1():
@@ -23337,26 +23425,9 @@ def main():
         return 2
     if _args.keyword_pos:
         _args.keyword = _args.keyword_pos
-    if _args.list:
-        for _n in sorted(k for k in globals() if k.startswith("t_")):
-            print(_n)
-        return 0
     _run_root = _isolate_environment()
     try:
         tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
-        # ★上次紅過的先跑★:配 -x 用,修完重跑幾秒就知道好了沒,不用等八分鐘。
-        # 快取放 .lumos/(這個專案既有的 gitignored 快取慣例),不放 .git/。
-        _cache = Path(GRAPHCTL).resolve().parent.parent / ".lumos" / "test-cache.json"
-        _last_failed = []
-        try:
-            import json as _jc
-            _last_failed = _jc.loads(_cache.read_text(encoding="utf-8")).get("failed", [])
-        except (OSError, ValueError):
-            pass
-        if _args.ff and _last_failed:
-            _lf = set(_last_failed)
-            tests = [t for t in tests if t.__name__ in _lf] + [t for t in tests if t.__name__ not in _lf]
-            print(f"上次紅過的 {len([t for t in tests if t.__name__ in _lf])} 支排到最前面")
         if _args.shard:
             # ★分片★:把測試名排序後平均切成 N 片,只跑第 I 片。
             # 切的依據是「排序後的位置」,不是執行順序——所以同一個 I/N 每次拿到的內容一樣,
@@ -23376,6 +23447,40 @@ def main():
                 print(f"擋下:第 {_i} 片一支測試都沒分到——片數比測試數還多,或切法寫錯了;"
                       f"跑了個寂寞不算通過", file=sys.stderr)
                 return 1
+        if _args.list:
+            # ★r1 折入★:原本 --list 排在關鍵字與分片之前,所以 `--shard 2/4 --list` 會列出全部
+            # ——正好是「想確認某一片分到哪些」時最需要的資訊,卻給了錯的答案。移到篩選之後。
+            for _t in tests:
+                print(_t.__name__)
+            return 0
+
+        # ★上次紅過的先跑★:配 -x 用,修完重跑幾秒就知道好了沒,不用等八分鐘。
+        # ★r1 折入:排序必須在分片之後★——原本先重排再分片,而各片是獨立行程、
+        #   讀到的快取可能不同(某片先跑完就把快取覆蓋掉了),於是「第 k 支」對不同片
+        #   指的不是同一支,**各片聯集不再等於全部:有些跑兩次、有些一次都沒跑**。
+        #   分片先做(在穩定的排序清單上切),重排只影響片內順序,聯集就永遠正確。
+        # ★r1 折入:快取只在來源 repo 寫★——這支測試檔會被複製進消費專案,
+        #   而安裝時只幫 docs/ 底下寫忽略規則,不會忽略 .lumos/,所以在消費端寫這個檔
+        #   等於污染別人的工作樹。
+        _is_src = (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes").is_dir()
+        _cache_dir = Path(GRAPHCTL).resolve().parent.parent / ".lumos"
+        _cache = _cache_dir / (f"test-cache-shard{_args.shard.replace('/', 'of')}.json"
+                               if _args.shard else "test-cache.json")
+        _last_failed = []
+        if _is_src:
+            try:
+                import json as _jc
+                for _f in sorted(_cache_dir.glob("test-cache*.json")):
+                    _last_failed += _jc.loads(_f.read_text(encoding="utf-8")).get("failed", [])
+            except (OSError, ValueError):
+                pass
+        if _args.ff and _last_failed:
+            _lf = set(_last_failed)
+            _n_first = len([t for t in tests if t.__name__ in _lf])
+            tests = [t for t in tests if t.__name__ in _lf] + [t for t in tests if t.__name__ not in _lf]
+            print(f"上次紅過的 {_n_first} 支排到最前面")
+        elif _args.ff:
+            print("(沒有上次紅過的紀錄,照原順序跑)")
         if _args.seed is not None:
             # ★順序相依探針★:預設關,只給每日治理跑;紅了印種子讓人原樣重現。
             import random as _rnd
@@ -23439,13 +23544,21 @@ def main():
                         print(f"  這輪是打亂順序跑的,要原樣重現請帶 --seed {_args.seed}")
                     break
         # 把紅的名字留下來給 --ff 用(全綠就清空,免得舊名字一直排前面)
-        try:
-            import json as _jc2
-            _cache.parent.mkdir(parents=True, exist_ok=True)
-            _cache.write_text(_jc2.dumps({"failed": _failed_names}, ensure_ascii=False),
-                              encoding="utf-8")
-        except OSError:
-            pass
+        # ★r1 折入:原子寫入★——沿用專案既有的 .lumos/*.json 寫法(寫暫存檔再 rename),
+        #   不是直接覆蓋;分片時各片各寫各的檔名,不會互相蓋掉。
+        if _is_src:
+            try:
+                import json as _jc2, os as _osc
+                _cache.parent.mkdir(parents=True, exist_ok=True)
+                _tmpc = _cache.with_suffix(_cache.suffix + ".lumos-tmp")
+                _tmpc.write_text(_jc2.dumps({"failed": _failed_names}, ensure_ascii=False),
+                                 encoding="utf-8")
+                _osc.replace(_tmpc, _cache)
+            except OSError:
+                try:
+                    _tmpc.unlink()
+                except (OSError, NameError):
+                    pass
         if SLOWEST:
             top = sorted(SLOWEST, reverse=True)[:5]
             print(f"\n最慢 5 支(超時上限 {TEST_TIMEOUT_SEC}s;餘裕 = 上限 / 最慢):")

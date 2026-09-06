@@ -1,0 +1,22 @@
+你是外部第三方審查員(外家否決席),審一份投稿的 diff,找出作者沒看到的 bug。只憑 diff 與你自己開檔查證的結果下判斷。唯讀:不要改檔、不要推送、不要跑會寫入家目錄的東西。
+
+工作目錄:/Users/enzo/harness/lumos-toolchain
+被審材料(凍結快照):governance/review-reports/code-audit-batch6/r1-snapshot.patch
+
+作者自述(不要照單全收):改 git pre-push hook 與測試執行器。① 閘序重排,便宜的先跑、8 分鐘的全套排最後;② 執行器參數改嚴格解析並加 --list;③ 加 -x 與 --ff(快取 .lumos/test-cache.json);④ 加 --shard I/N 與 --json-summary,pre-push 預設切四片同時跑;⑤ 加 --seed 隨機序。
+
+請特別查:
+1. 分片切法 `k % _n == _i - 1` 在 --ff / --seed 改過 tests 順序之後還成立嗎?各片內容會不會因為快取內容不同而在不同機器上不一樣,導致某些測試沒被任何一片跑到?
+2. 平行安全:四片是四個行程,各自有暫存根與假家目錄。還有沒有共用可寫狀態?特別查寫死路徑、共用 git 設定、`.lumos/test-cache.json` 會不會四片同時寫。
+3. pre-push 的 `_pids+=($!)` 與 `wait "$_p"` 在這支 hook 的選項下行為正確嗎?有沒有 set -e / pipefail 的交互作用?
+4. 能力探測 `--help | grep -q -- "--shard"`:runner 的 --help 很慢、或不支援 --help 直接跑全套,會怎樣?探測會不會掛住或變成新的浪費?
+5. -x 與分片一起用時,某片提早停,彙總會不會誤判?
+6. `--list` 排在分片與關鍵字篩選之前 return,所以 `--shard 2/4 --list` 會列全部。bug 還是刻意?訊息會不會誤導?
+7. 閘序重排:圖譜健康原本「沒有 vault 就 exit 0」改成只跳過自己那段,有沒有別的地方依賴原本那個提早 exit?
+8. `.lumos/test-cache.json` 在消費端(此測試檔會被 vendor)會寫到哪?會不會污染別人的專案?
+
+輸出格式(嚴格遵守):
+- 開頭一行獨立寫 severity: <clean|minor|major|blocker>
+- 每條發現:`- [major] <結論>`;下一行縮排 `引句:「<逐字取自凍結快照,至少 10 個字>」`;下一行 位置:`檔案:行號`;下一行 `blocking:是|否`;下一行 `why:` 查證過程(輸入/預期/實際)。
+- 引句必須逐字出自那份 patch,否則會被機械檢查丟掉。
+- 沒問題的面向寫 `- [clean] ...` 說明查了什麼。

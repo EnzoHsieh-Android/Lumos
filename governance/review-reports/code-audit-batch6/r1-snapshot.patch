@@ -1,0 +1,819 @@
+diff --git a/.gitignore b/.gitignore
+index 6d0c1b3..4596709 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -18,10 +18,13 @@ governance/eval/ablation-lumos-first/
+ 
+ # 外家席逐字稿(2026-09-06 全 repo 審視 quick win):.err/.raw/stderr 是 Codex 的完整逐字稿,
+ # 單檔可達 2MB、37 檔共 13MB,佔追蹤卷證四成且沒有任何消費端;結論檔(.md)照樣進版控。
+ # ★規則只認副檔名,不認「是不是逐字稿」★:任何 .err / .raw / *-stderr.txt 都會被靜默略過(含直接放在
+ # review-reports 底下的、以及多層子目錄的——gitignore 的 ** 是「零或多層」)。所以結論一律存 .md。
+ # 之後收貨改用 codex exec --output-last-message 直接拿結論,不再存全程。
+ governance/review-reports/**/*.err
+ governance/review-reports/**/*.raw
+ governance/review-reports/**/*-stderr.txt
+ governance/review-reports/**/*.stderr
++
++# 測試 runner 的失敗快取(--ff 用;每輪重寫,不進版控)
++.lumos/test-cache.json
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index b307d3c..5ab81b9 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -75,65 +75,49 @@ if [[ -f "$REPO_ROOT/$_BASELINE" ]] && ! git -C "$REPO_ROOT" diff --quiet -- "$_
+     echo "你剛才簽了名(或它被更新過),但那個改動還留在工作目錄裡沒進版控;"
+     echo "推送前的檢查看的是工作目錄所以是綠的,CI 看的是推上去的內容,對不起來。"
+     echo ""
+     echo "把它一起提交再推:"
+     echo "       git add $_BASELINE && git commit -m \"gov: 錨點簽名\""
+     echo ""
+   } >&2
+   exit 1
+ fi
+ 
+-# 測試套件閘(僅 Lumos 源 repo;2026-07-07):紅測試兩度溜進 main(pre-push 原只跑 doctor 不跑測試)。
+-# 事件點修法:push 前全量跑一次(2026-09-06 實測約 8 分鐘、3700+ 案例;「~32s」是 2026-07-07、183 支測試時代的舊數字)。消費專案不跑——skills/ 只存在於源 repo(不 vendor),
+-# 消費端自己的測試歸自己的 CI/hooks 管,lumos 不越俎。逃生:git push --no-verify(自負)。
+-if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_lumos.py" ]]; then
+-  echo "推送前先跑全部測試(要幾分鐘,CI 等待那組本身就超過兩分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
+-  if ! "$PY" "$REPO_ROOT/scripts/test_lumos.py" >/tmp/lumos-prepush-tests.log 2>&1; then
+-    {
+-      echo ""
+-      echo "擋下:test_lumos.py 有紅,有測試沒過。"
+-      echo "完整輸出在這裡:"
+-      echo "   /tmp/lumos-prepush-tests.log"
+-      tail -15 /tmp/lumos-prepush-tests.log | sed 's/^/    /'
+-      echo ""
+-      echo "兩條路選一條:"
+-      echo "  1. 修到全綠再推(正常做法)。"
+-      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
+-      echo ""
+-    } >&2
+-    exit 1
+-  fi
+-  tail -1 /tmp/lumos-prepush-tests.log >&2
+-fi
++# ══ 閘的順序(2026-09-06 全 repo 審視 #12 重排)══
++# 便宜的先跑、貴的最後。實測:除了全套測試以外,所有閘加起來約 13 秒
++# (anchor 0.22s / 簽名檔 0.04s / doctor 1.1s / pitfalls 0.23s / code-loop 0.61s
++#  / test-layers 0.21s / 自主迴圈那支 10.3s),而全套是 8 分鐘。
++# ★原本全套排在第四位★,所以被那 13 秒裡任何一道擋下時,8 分鐘已經白燒完了。
+ 
+-# ★第二支測試檔也要跑★(2026-09-06 全 repo 審視:CI 因此紅過一次)
+-# 這支只跑 12 秒,但一直以來只有 CI 在跑它——結果是「改了預設行為、跑了關鍵字子集、
+-# 推上去才被 CI 打回來」。紅在別支檔而不是你改的那支,是最難查的那種。
+-if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_autonomous_loop.py" ]]; then
+-  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" >/tmp/lumos-prepush-autoloop.log 2>&1; then
+-    {
+-      echo ""
+-      echo "擋下:test_autonomous_loop.py 有紅(自主迴圈那 132 支)。"
+-      echo "完整輸出在這裡:"
+-      echo "   /tmp/lumos-prepush-autoloop.log"
+-      tail -15 /tmp/lumos-prepush-autoloop.log | sed 's/^/    /'
+-      echo ""
+-      echo "兩條路選一條:"
+-      echo "  1. 修到全綠再推(正常做法)。"
+-      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
+-      echo ""
+-    } >&2
+-    exit 1
+-  fi
+-  echo "  ✓ 自主迴圈那 132 支也綠" >&2
++# 圖譜健康(只在 vault 存在時跑)
++# ★2026-09-06 重排:原本這段在最後面,而且「沒有 vault 就 exit 0」會直接結束整支 hook。
++#   現在它排在全套測試之前,那個 exit 0 會把後面的測試閘一起跳掉——所以改成只跳過這一段。
++have_vault=0
++for d in docs/*-knowledge docs/knowledge; do
++  [[ -d "$d" ]] && have_vault=1 && break
++done
++if [[ $have_vault -eq 1 ]] && ! "$PY" "$GRAPHCTL" doctor --ci; then
++  {
++    echo ""
++    echo "擋下:知識庫健康檢查發現問題(細節在上面)。"
++    echo "有問題的筆記推上去,下一個讀它的人會拿到錯的合約或斷掉的連結。"
++    echo ""
++    echo "三條路選一條:"
++    echo "  1. 照上面的提示把筆記修好再推。"
++    echo "  2. 覺得是檢查工具本身判錯 → 本機重跑一次確認,真的是工具錯就開一張 Issue 記下來。"
++    echo "  3. 真的要先推 → git push --no-verify(CI 還是會跑全套,紅了會看到)"
++    echo ""
++  } >&2
++  exit 1
+ fi
+ 
++
+ # 代碼偏科 + code-loop 必用守衛(tier=high):push 前把 diff 的代碼形態風險攤在眼前。
+ # prepush範圍修法(2026-07-21):改讀 stdin 推送範圍逐 ref 判,取代 merge-base——分支與
+ # main-direct 同軌;無基準(新 ref/缺物件)倒向保守掃 empty-tree..local_sha(非 fail-open,
+ # 否則守衛升格成穩定繞法);留痕綁 remote_ref 目的地(非 checkout);逐 ref 獨立判,某 ref
+ # high 未過即擋。fail-open 僅剩:pitfalls 本身出錯 / empty-tree 都跑不動。
+ _ZERO="0000000000000000000000000000000000000000"
+ _EMPTY_TREE="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
+ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+   read -r _lref _lsha _rref _rsha <<< "$_ppl"
+   # 刪除遠端 ref(local_sha 全零)→ 無代碼推送,跳過
+@@ -193,33 +177,87 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+       echo ""
+       echo "提醒:這次改到的技術棧有幾個效能上該問自己的問題(不擋,advisory),列在下面;審查留痕裡建議帶一句答案。"
+       "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+       echo ""
+     } >&2 || true
+   fi
+   # test-layers 軟提醒(advisory,恆不影響 rc;無 .lumos/test-layers.json 靜默)
+   "$PY" "$GRAPHCTL" test-layers --diff "$_range" --repo "$REPO_ROOT" 2>/dev/null || true
+ done
+ 
+-# 只在 vault 存在時跑
+-have_vault=0
+-for d in docs/*-knowledge docs/knowledge; do
+-  [[ -d "$d" ]] && have_vault=1 && break
+-done
+-[[ $have_vault -eq 0 ]] && exit 0
++# ★第二支測試檔也要跑★(2026-09-06 全 repo 審視:CI 因此紅過一次)
++# 這支只跑 12 秒,但一直以來只有 CI 在跑它——結果是「改了預設行為、跑了關鍵字子集、
++# 推上去才被 CI 打回來」。紅在別支檔而不是你改的那支,是最難查的那種。
++if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_autonomous_loop.py" ]]; then
++  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" >/tmp/lumos-prepush-autoloop.log 2>&1; then
++    {
++      echo ""
++      echo "擋下:test_autonomous_loop.py 有紅(自主迴圈那 132 支)。"
++      echo "完整輸出在這裡:"
++      echo "   /tmp/lumos-prepush-autoloop.log"
++      tail -15 /tmp/lumos-prepush-autoloop.log | sed 's/^/    /'
++      echo ""
++      echo "兩條路選一條:"
++      echo "  1. 修到全綠再推(正常做法)。"
++      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
++      echo ""
++    } >&2
++    exit 1
++  fi
++  echo "  ✓ 自主迴圈那 132 支也綠" >&2
++fi
+ 
+-if "$PY" "$GRAPHCTL" doctor --ci; then
+-  exit 0
++# 測試套件閘(僅 Lumos 源 repo;2026-07-07):紅測試兩度溜進 main(pre-push 原只跑 doctor 不跑測試)。
++# 事件點修法:push 前全量跑一次(2026-09-06 實測約 8 分鐘、3700+ 案例;「~32s」是 2026-07-07、183 支測試時代的舊數字)。消費專案不跑——skills/ 只存在於源 repo(不 vendor),
++# 消費端自己的測試歸自己的 CI/hooks 管,lumos 不越俎。逃生:git push --no-verify(自負)。
++if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_lumos.py" ]]; then
++  # ★分片並行★(2026-09-06 全 repo 審視 #12):全套串行約 8 分鐘,大部分時間在等子進程
++  # 而不是吃 CPU,所以切成幾片同時跑很划算。實測四片牆鐘 271 秒(對照串行 480 秒,省 43%
++  # ——不是四倍,因為瓶頸是 IO 不是 CPU)。片數可用 LUMOS_TEST_SHARDS 調;設 1 就是串行。
++  _shards="${LUMOS_TEST_SHARDS:-4}"
++  # ★先探這支 runner 支不支援分片★:新 hook 配到舊的(或別人自己寫的)runner 時,
++  # 硬塞它不認得的旗標會讓它整個報錯 → 人被莫名其妙擋下。探不到就乖乖退回串行,
++  # 行為跟以前一模一樣。(2026-09-06 實際踩到:假 runner 不認得新旗標,當場被判紅。)
++  if ! "$PY" "$REPO_ROOT/scripts/test_lumos.py" --help 2>/dev/null | grep -q -- "--shard"; then
++    _shards=1
++  fi
++  _sdir="$(mktemp -d "${TMPDIR:-/tmp}/lumos-prepush-shards-XXXXXX")"
++  _rc=0
++  if [[ "$_shards" -le 1 ]]; then
++    echo "推送前先跑全部測試(約 8 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
++    "$PY" "$REPO_ROOT/scripts/test_lumos.py" > "$_sdir/s1.log" 2>&1 || _rc=1
++  else
++    echo "推送前先跑全部測試(切成 $_shards 片同時跑,約 4-5 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
++    _pids=()
++    for _i in $(seq 1 "$_shards"); do
++      "$PY" "$REPO_ROOT/scripts/test_lumos.py" --shard "$_i/$_shards" \
++        --json-summary "$_sdir/s$_i.json" > "$_sdir/s$_i.log" 2>&1 &
++      _pids+=($!)
++    done
++    # ★用每個子行程自己的離開碼判★,不是用有沒有寫出摘要檔判——摘要檔是給人看的加值,
++    # 拿它當判準等於「runner 不支援新旗標就一律紅」。
++    for _p in "${_pids[@]}"; do wait "$_p" || _rc=1; done
++  fi
++  cat "$_sdir"/s*.log > /tmp/lumos-prepush-tests.log 2>/dev/null || true
++  rm -rf "$_sdir"
++  if [[ $_rc -ne 0 ]]; then
++    {
++      echo ""
++      echo "擋下:test_lumos.py 有紅,有測試沒過。"
++      echo "紅的是這幾支:"
++      grep -h "✗ " /tmp/lumos-prepush-tests.log | head -20 | sed 's/^/    /'
++      echo ""
++      echo "完整輸出(所有分片接在一起)在這裡:"
++      echo "   /tmp/lumos-prepush-tests.log"
++      echo ""
++      echo "兩條路選一條:"
++      echo "  1. 修到全綠再推。只重跑紅的那幾支:"
++      echo "       python3 scripts/test_lumos.py --ff -x"
++      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
++      echo ""
++    } >&2
++    exit 1
++  fi
++  grep -h "passed," /tmp/lumos-prepush-tests.log >&2 || true
+ fi
+ 
+-{
+-  echo ""
+-  echo "擋下:知識庫健康檢查發現問題(細節在上面)。"
+-  echo "有問題的筆記推上去,下一個讀它的人會拿到錯的合約或斷掉的連結。"
+-  echo ""
+-  echo "三條路選一條:"
+-  echo "  1. 照上面的提示把筆記修好再推。"
+-  echo "  2. 覺得是檢查工具本身判錯 → 本機重跑一次確認,真的是工具錯就開一張 Issue 記下來。"
+-  echo "  3. 真的要先推 → git push --no-verify(CI 還是會跑全套,紅了會看到)"
+-  echo ""
+-} >&2
+-exit 1
++exit 0
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index d89e3e2..5c7f10b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -11059,20 +11059,170 @@ def t_prepush_range_scan():
+         gr("init", "-q", "-b", "main"); gr("config", "user.email", "t@t.t"); gr("config", "user.name", "t")
+         (Path(d)/"app.py").write_text("import requests\ndef f():\n    requests.post('http://x')\n")
+         gr("add", "."); gr("commit", "-qm", "high")
+         head = g(d, "rev-parse", "HEAD")
+         setup_lumos(d)
+         zero = "0"*40
+         r = run_pp(d, f"refs/tags/v1 {head} refs/tags/v1 {zero}\n")
+         check("prepush tag high → advisory 放行(非硬擋)", r.returncode == 0 and "advisory" in r.stderr, f"rc={r.returncode}\n{r.stderr[-200:]}")
+ 
+ 
++
++def t_prepush_cheap_gates_run_before_expensive_suite():
++    """★便宜的閘擋下時,八分鐘的全套不准已經跑完★(2026-09-06 全 repo 審視 #12)。
++
++    出身:推送前的閘原本把全套測試排在第四位,而它要八分鐘;其餘所有閘加起來只要 13 秒
++    (實測:錨點 0.22s / 簽名檔已提交 0.04s / 圖譜健康 1.1s / 偏科 0.23s / 合約測試 0.61s
++     / 該補哪層測試 0.21s / 自主迴圈那支 10.3s)。所以被那 13 秒裡任何一道擋下時,
++    ★八分鐘已經白燒完了★——而且人還得等它跑完才看得到擋下的原因。
++
++    這支不是比對文字順序(那種寫法把行搬一搬就能騙過),而是**真的跑那支 hook**:
++    讓一道便宜的閘紅,然後看貴的那段有沒有留下「我跑過了」的痕跡。"""
++    import subprocess as _sp, os as _os, json as _j
++    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
++    lumos_real = Path(GRAPHCTL).resolve()
++    if not hook.is_file():
++        raise _SrcOnly("消費端沒有 pre-push(非來源 repo),這段沒驗到")
++
++    def mk(d, break_graph):
++        """搭一個來源 repo:假的全套 runner 跑起來會留下一個記號檔。
++
++        ★挑哪一道閘來擋是有講究的★:必須挑「重排時真的被搬過位置」的那一道。
++        我第一版挑了「簽名檔改過沒提交」,結果反向驗證沒翻紅——因為那道在舊順序裡
++        本來就排在全套前面,分不出差別(這正是假綠清單裡「現場走不到被測分支」那型)。
++        現在挑的是圖譜健康檢查:它原本排在全套**後面**,重排後才搬到前面。"""
++        d = Path(d)
++        _sp.run(["git", "init", "-b", "main", str(d)], capture_output=True)
++        _sp.run(["git", "-C", str(d), "config", "user.email", "t@t"], capture_output=True)
++        _sp.run(["git", "-C", str(d), "config", "user.name", "t"], capture_output=True)
++        (d / "scripts").mkdir()
++        (d / "scripts" / "lumos").symlink_to(lumos_real)
++        (d / "skills" / "lumos-project-notes").mkdir(parents=True)
++        marker = d / "EXPENSIVE-SUITE-RAN"
++        for name in ("test_lumos.py", "test_autonomous_loop.py"):
++            (d / "scripts" / name).write_text(
++                f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\nprint('FAKE ok')\n",
++                encoding="utf-8")
++        kg = d / "docs" / "t-knowledge" / "Systems"
++        kg.mkdir(parents=True)
++        bad_link = '\n  - "[[Systems/根本不存在的節點]]"' if break_graph else ""
++        (kg / "a.md").write_text(
++            f"---\ntype: system\nstatus: done\nrelated:{bad_link or ' []'}\n"
++            "summary: |-\n  KEY:測試用\n---\n# a\n", encoding="utf-8")
++        (d / "x.txt").write_text("x\n", encoding="utf-8")
++        _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
++        _sp.run(["git", "-C", str(d), "commit", "-qm", "init"], capture_output=True)
++        return marker
++
++    def run(d):
++        env = dict(_os.environ, GIT_DIR=str(Path(d) / ".git"))
++        return _sp.run(["bash", str(hook)], cwd=str(d),
++                       input="refs/heads/main dummy refs/heads/main dummy\n",
++                       capture_output=True, text=True, env=env)
++
++    # ① 便宜的閘紅 → 擋下,而且貴的那段一次都沒被跑到
++    d1 = Path(tempfile.mkdtemp(prefix="gctl-order-red-"))
++    m1 = mk(d1, break_graph=True)
++    r1 = run(d1)
++    check("閘序: 便宜的閘(圖譜健康)紅時擋下(rc≠0)", r1.returncode != 0, f"rc={r1.returncode} {r1.stderr[-200:]}")
++    check("★閘序主張★: 便宜的閘擋下時,八分鐘那段完全沒被跑到",
++          not m1.exists(), f"記號檔存在={m1.exists()}(表示貴的那段還是跑了)")
++
++    # ② 反面:便宜的閘全過時,貴的那段確實會跑
++    #    ——沒有這一半,上面那條可能只是「假 runner 根本不會被呼叫」而恆真
++    d2 = Path(tempfile.mkdtemp(prefix="gctl-order-green-"))
++    m2 = mk(d2, break_graph=False)
++    r2 = run(d2)
++    check("★前置★ 現場成立/反面: 便宜的閘都過時,貴的那段真的會跑(不然上面那條是恆真)",
++          m2.exists(), f"rc={r2.returncode} stderr={r2.stderr[-300:]}")
++
++
++
++def t_prepush_falls_back_when_runner_lacks_shard():
++    """★推送閘不能因為 runner 舊就把人擋死★(2026-09-06 全 repo 審視 #12)。
++
++    出身:分片剛接上時,推送閘無條件對 runner 塞 `--shard/--json-summary`,而且用
++    「有沒有寫出摘要檔」當通過判準。結果不認得那些旗標的 runner(舊版、消費端 vendored
++    的、或別人自己寫的)會整個報錯,人被莫名其妙擋下——**而且錯誤訊息會說「測試有紅」,
++    指向完全錯的方向**。是既有的 pre-push 測試翻紅才發現的。
++
++    現在的做法:先問 runner 的說明裡有沒有那個旗標,沒有就退回串行(行為跟以前一樣);
++    通過與否一律看**子行程自己的離開碼**,摘要檔只是給人看的加值。"""
++    import subprocess as _sp, os as _os
++    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
++    lumos_real = Path(GRAPHCTL).resolve()
++    if not hook.is_file():
++        raise _SrcOnly("消費端沒有 pre-push(非來源 repo),這段沒驗到")
++
++    def mk(d, runner_body):
++        d = Path(d)
++        _sp.run(["git", "init", "-b", "main", str(d)], capture_output=True)
++        _sp.run(["git", "-C", str(d), "config", "user.email", "t@t"], capture_output=True)
++        _sp.run(["git", "-C", str(d), "config", "user.name", "t"], capture_output=True)
++        (d / "scripts").mkdir()
++        (d / "scripts" / "lumos").symlink_to(lumos_real)
++        (d / "skills" / "lumos-project-notes").mkdir(parents=True)
++        for name in ("test_lumos.py", "test_autonomous_loop.py"):
++            (d / "scripts" / name).write_text(runner_body, encoding="utf-8")
++        (d / "x.txt").write_text("x\n", encoding="utf-8")
++        _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
++        _sp.run(["git", "-C", str(d), "commit", "-qm", "init"], capture_output=True)
++        return d
++
++    def run(d):
++        env = dict(_os.environ, GIT_DIR=str(Path(d) / ".git"))
++        return _sp.run(["bash", str(hook)], cwd=str(d),
++                       input="refs/heads/main dummy refs/heads/main dummy\n",
++                       capture_output=True, text=True, env=env)
++
++    # ① 舊 runner:完全不認得任何旗標,全綠 → 推送閘要放行
++    old_runner = ("import sys\n"
++                  "print('OLD RUNNER: 3 passed, 0 failed')\n"
++                  "sys.exit(0)\n")
++    d1 = Path(tempfile.mkdtemp(prefix="gctl-oldrunner-"))
++    mk(d1, old_runner)
++    r1 = run(d1)
++    check("★相容★: runner 不支援分片時,推送閘退回串行並放行(不是把人擋死)",
++          r1.returncode == 0, f"rc={r1.returncode}\nstderr={r1.stderr[-400:]}")
++    check("相容: 退回串行時訊息說的是「約 8 分鐘」不是「切成幾片」",
++          "切成" not in r1.stderr, r1.stderr[-300:])
++
++    # ③ ★真的走到分片那條路★:runner 說明裡有 --shard(所以探測會選分片),吃得下旗標、
++    #    全綠離開,但★不寫摘要檔★。第一版用「有沒有寫出摘要檔」當通過判準,這種 runner
++    #    會被誤判成紅。沒有這個案例的話,上面兩條都走不到分片那條路——測試會是假綠
++    #    (今天第三次撞到「現場走不到被測分支」,是逐條做沙盤才發現的)。
++    shardy_runner = (
++        "import sys\n"
++        "if '--help' in sys.argv:\n"
++        "    print('usage: fake [--shard I/N] [--json-summary F]')\n"
++        "    sys.exit(0)\n"
++        "print('SHARDY RUNNER: 3 passed, 0 failed')\n"
++        "sys.exit(0)\n")
++    d3 = Path(tempfile.mkdtemp(prefix="gctl-shardy-"))
++    mk(d3, shardy_runner)
++    r3 = run(d3)
++    check("★前置★ 現場成立: 這個假 runner 讓推送閘真的走分片(訊息說「切成」)",
++          "切成" in r3.stderr, r3.stderr[-300:])
++    check("★判準★: 全綠但沒寫摘要檔的 runner 要放行(判準是離開碼,不是摘要檔在不在)",
++          r3.returncode == 0, f"rc={r3.returncode}\nstderr={r3.stderr[-400:]}")
++
++    # ② 反面:舊 runner 紅了照樣要擋(退回串行不等於放水)
++    old_red = ("import sys\n"
++               "print('OLD RUNNER: 2 passed, 1 failed')\n"
++               "sys.exit(1)\n")
++    d2 = Path(tempfile.mkdtemp(prefix="gctl-oldrunner-red-"))
++    mk(d2, old_red)
++    r2 = run(d2)
++    check("★相容/反面★: 舊 runner 有紅時照樣擋下(退回串行不是放水)",
++          r2.returncode == 1 and "有紅" in r2.stderr, f"rc={r2.returncode} {r2.stderr[-300:]}")
++
++
+ def t_prepush_test_gate():
+     """pre-push 測試套件閘(2026-07-07,僅 Lumos 源 repo):
+     源 repo 判定 = skills/lumos-project-notes 目錄存在(不 vendor,消費端沒有)。
+     情境:
+       A) 消費 repo(無 skills/)→ 不跑測試(不擾民、不遞迴)
+       B) 源 repo + 假 runner 紅(rc1)→ pre-push rc1 擋 + stderr 提示
+       C) 源 repo + 假 runner 綠(rc0)→ 測試閘放行(無 🚫 測試訊息)
+     假 runner 防遞迴:scripts/test_lumos.py 放可控小腳本,不跑真套件。"""
+     import subprocess as _sp
+     import os as _os
+@@ -11126,20 +11276,200 @@ def t_prepush_test_gate():
+ 
+     # C) 源 repo + 假 runner 綠 → 測試閘放行
+     with tempfile.TemporaryDirectory() as d:
+         _mk_repo(d, with_skills=True, fake_runner_rc=0)
+         r = _run(d)
+         check("prepush_test_gate: 源 repo 綠測試 → 放行(無測試🚫)",
+               r.returncode == 0 and "test_lumos.py 有紅" not in r.stderr,
+               f"rc={r.returncode}\nstderr={r.stderr}")
+ 
+ 
++
++def t_runner_parses_args_strictly():
++    """★執行器的參數要嚴格解析,不認得的不准靜默丟掉★(2026-09-06 全 repo 審視 #12)。
++
++    出身:原本用的是「不認得的參數就丟掉」,於是 `--help`、打錯的旗標、甚至直接打測試名
++    (情境錄音裡真的有人這樣敲),全部會被當成「沒帶任何條件」→ **直接跑滿八分鐘的全套**。
++    實測過:敲 `--help` 當場把全套跑起來了。對照組 Codex 也曾因為在對話裡跑全套而超時。
++
++    ★這支的每一條都必須在幾秒內回來★——如果哪一條真的去跑全套,超時上限會把它判紅,
++    這本身就是「沒有誤跑全套」的證據。"""
++    import subprocess as _sp, os as _os
++    runner = str(Path(__file__).resolve())
++
++    def run(*args, timeout=60):
++        return _sp.run([sys.executable, runner, *args], capture_output=True, text=True,
++                       timeout=timeout, env=dict(_os.environ))
++
++    r = run("--help")
++    check("參數: --help 印用法而不是跑全套", r.returncode == 0 and "usage:" in r.stdout, r.stdout[:200])
++    check("參數: --help 講清楚不帶參數會跑多久", "8 分鐘" in r.stdout, r.stdout[:300])
++
++    r = run("--這個旗標不存在")
++    check("參數: 打錯旗標要擋下(不是靜默當成跑全套)",
++          r.returncode != 0 and "unrecognized" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
++
++    r = run("--list")
++    names = [l for l in r.stdout.splitlines() if l.startswith("t_")]
++    check("參數: --list 只列名字不跑測試", r.returncode == 0 and len(names) > 100, f"{len(names)} 個")
++    check("參數: --list 沒有跑任何測試(輸出裡不該有結果行)",
++          "passed," not in r.stdout, r.stdout[-200:])
++
++    # 直接打測試名 = -k 同義(情境錄音就是這樣敲的)。
++    # ★靶要挑「不會再開子進程」的那種★:第一版我拿這支自己當靶,結果它生出自己、
++    # 自己再生出自己,無限遞迴直到超時——是超時把它判紅才發現(這也順帶證明超時那道有用)。
++    r = run("no_zero_assertion_return_paths")
++    check("★前置★ 現場成立: 直接打名字真的只選中一支(不是被丟掉然後跑全套)",
++          "測試(1 案例)" in r.stdout, r.stdout[:150])
++    check("參數: 直接打測試名等同 -k", "passed," in r.stdout and "0 failed" in r.stdout,
++          r.stdout[-150:])
++
++    # 兩邊都給關鍵字要擋
++    r = run("-k", "abc", "def")
++    check("參數: 關鍵字給兩次要擋下", r.returncode == 2 and "給了兩次" in r.stderr,
++          f"rc={r.returncode} {r.stderr[:150]}")
++
++
++
++def t_runner_exitfirst_and_failfirst():
++    """★有紅就停、上次紅的先跑、隨機序探順序相依★(2026-09-06 全 repo 審視 #12)。
++
++    出身:全套要八分鐘,而且是純串行。開發時最常見的情況是「改了東西、某支紅了」,
++    但你得等八分鐘跑完才看得到,修完再等八分鐘確認。這三個旗標針對的就是這段來回:
++    -x 第一支紅就停、--ff 上次紅過的排最前面、--seed 打亂順序探順序相依(預設關)。
++
++    ★這支靠植入一支必紅的假測試來驗★,不是比對原始碼字串——旗標有沒有真的改變執行行為,
++    只能用真的跑一次來證明。"""
++    import subprocess as _sp, os as _os, json as _j, textwrap
++    runner_src = Path(__file__).resolve().read_text(encoding="utf-8")
++    work = Path(tempfile.mkdtemp(prefix="gctl-flags-"))
++    # 造一支只有三支測試的迷你 runner:借真 runner 的 main()/check() 太重,直接搭一個同形狀的
++    mini = work / "mini_runner.py"
++    mini.write_text(textwrap.dedent('''
++        import sys, json, argparse
++        from pathlib import Path
++        PASS = FAIL = 0
++        def check(name, cond, diag=""):
++            global PASS, FAIL
++            if cond: PASS += 1; print(f"  ok {name}")
++            else: FAIL += 1; print(f"  ng {name} {diag}")
++        def t_a(): check("a", True)
++        def t_b(): check("b", False, "刻意紅")
++        def t_c(): check("c", True)
++        def main():
++            global FAIL
++            p = argparse.ArgumentParser()
++            p.add_argument("-x", "--exitfirst", action="store_true")
++            p.add_argument("--ff", action="store_true")
++            p.add_argument("--seed", type=int, default=None)
++            a = p.parse_args()
++            cache = Path(__file__).with_name("cache.json")
++            last = []
++            try: last = json.loads(cache.read_text()).get("failed", [])
++            except Exception: pass
++            tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
++            if a.ff and last:
++                s = set(last)
++                tests = [t for t in tests if t.__name__ in s] + [t for t in tests if t.__name__ not in s]
++            if a.seed is not None:
++                import random; random.Random(a.seed).shuffle(tests)
++            order, failed = [], []
++            for t in tests:
++                before = FAIL
++                order.append(t.__name__)
++                t()
++                if FAIL > before:
++                    failed.append(t.__name__)
++                    if a.exitfirst: break
++            cache.write_text(json.dumps({"failed": failed}))
++            print("ORDER=" + ",".join(order))
++            return 1 if FAIL else 0
++        sys.exit(main())
++    '''), encoding="utf-8")
++
++    def run(*args):
++        return _sp.run([sys.executable, str(mini), *args], capture_output=True, text=True)
++
++    # ① 不帶 -x:三支都跑
++    r = run()
++    check("★前置★ 現場成立: 不帶 -x 時三支都跑到", "ORDER=t_a,t_b,t_c" in r.stdout, r.stdout)
++    # ② 帶 -x:停在紅的那支,後面不跑
++    r = run("-x")
++    check("旗標 -x: 第一支紅就停,後面的不跑", "ORDER=t_a,t_b" in r.stdout, r.stdout)
++    # ③ --ff:上次紅的排最前面
++    r = run("--ff")
++    check("旗標 --ff: 上次紅過的排到最前面", r.stdout.count("ORDER=t_b,") == 1, r.stdout)
++    # ④ --seed:同種子順序一樣、不同種子有機會不一樣
++    o1 = run("--seed", "1").stdout.split("ORDER=")[1].strip()
++    o1b = run("--seed", "1").stdout.split("ORDER=")[1].strip()
++    check("旗標 --seed: 同一個種子順序完全一樣(能重現)", o1 == o1b, f"{o1} vs {o1b}")
++
++    # 真 runner 這邊只確認旗標接上了、而且說明寫得懂
++    r = _sp.run([sys.executable, str(Path(__file__).resolve()), "--help"],
++                capture_output=True, text=True, timeout=60)
++    for flag, word in (("-x", "第一支紅就停"), ("--ff", "上次紅過的先跑"), ("--seed", "順序相依")):
++        check(f"真 runner: {flag} 有掛上而且說明講得出用途", word in r.stdout, r.stdout[:400])
++
++
++
++def t_runner_shard_partitions_completely():
++    """★分片必須不重不漏★(2026-09-06 全 repo 審視 #12)。
++
++    出身:全套串行約 8 分鐘,而大部分時間在等子進程不是吃 CPU,所以切片同時跑很划算。
++    實測四片牆鐘 271 秒(對照串行 480 秒,省 43%——不是四倍,因為瓶頸是 IO)。
++
++    ★分片最危險的失敗是「漏跑而不自知」★:某幾支沒被分到任何一片,全套照樣印綠。
++    所以這支驗的是「各片加起來 = 全部,而且沒有人被分到兩次」,不是「分片跑得動」。"""
++    import subprocess as _sp, os as _os, re as _re
++    runner = str(Path(__file__).resolve())
++
++    def shard_names(i, n):
++        r = _sp.run([sys.executable, runner, "--shard", f"{i}/{n}", "--list"],
++                    capture_output=True, text=True, timeout=60)
++        # --list 走的是分片之前的路徑,所以改用「跑一個選不中的關鍵字」拿分到幾支
++        return r
++
++    def shard_count(i, n):
++        r = _sp.run([sys.executable, runner, "--shard", f"{i}/{n}", "-k", "zzz_絕不存在的名字"],
++                    capture_output=True, text=True, timeout=120)
++        m = _re.search(r"分到 (\d+) 支", r.stdout)
++        return int(m.group(1)) if m else -1
++
++    total = len([k for k in globals() if k.startswith("t_")])
++    check("★前置★ 現場成立: 數得出全部有幾支", total > 100, str(total))
++    for n in (3, 4):
++        counts = [shard_count(i, n) for i in range(1, n + 1)]
++        check(f"分片: 切成 {n} 片時每片都拿得到數字", all(c >= 0 for c in counts), str(counts))
++        check(f"分片: 切成 {n} 片時各片加起來等於全部(不重不漏)",
++              sum(counts) == total, f"各片 {counts} 合計 {sum(counts)} vs 全部 {total}")
++        check(f"分片: 切成 {n} 片時每片差距不超過 1 支(切得平均)",
++              max(counts) - min(counts) <= 1, str(counts))
++
++    # 寫錯格式要擋下,不是靜默跑全套
++    r = _sp.run([sys.executable, runner, "--shard", "亂寫", "-k", "zzz_絕不存在的名字"],
++                capture_output=True, text=True, timeout=60)
++    check("分片: 格式寫錯要擋下(不是靜默當成沒分片)",
++          r.returncode == 2 and "第幾片/共幾片" in r.stderr, f"rc={r.returncode} {r.stderr[:150]}")
++    r = _sp.run([sys.executable, runner, "--shard", "5/3", "-k", "zzz_絕不存在的名字"],
++                capture_output=True, text=True, timeout=60)
++    check("分片: 片號超出範圍要擋下", r.returncode == 2, f"rc={r.returncode} {r.stderr[:150]}")
++
++    # 機讀摘要:彙總的人要讀得到
++    out = Path(tempfile.mkdtemp(prefix="gctl-shardsum-")) / "s.json"
++    _sp.run([sys.executable, runner, "-k", "no_zero_assertion_return_paths",
++             "--json-summary", str(out)], capture_output=True, text=True, timeout=120)
++    import json as _j
++    d = _j.loads(out.read_text(encoding="utf-8"))
++    check("分片: 機讀摘要有過/紅/跳過三個數字", all(k in d for k in ("passed", "failed", "skipped")), str(d))
++    check("分片: 機讀摘要列得出紅的是哪幾支", "failed_names" in d, str(d))
++
++
+ def t_runner_k_zero_cases_rc1():
+     """runner 假綠洞修補(2026-07-07):-k 選中 0 案例 → rc1(跑了個寂寞≠全綠)。"""
+     import subprocess as _sp
+     runner = str(Path(__file__).resolve())
+     r = _sp.run([sys.executable, runner, "-k", "zz_絕不存在的測試名zz"],
+                 capture_output=True, text=True)
+     check("runner_k_zero: -k 0 案例 → rc1",
+           r.returncode == 1, f"rc={r.returncode}\nstderr={r.stderr}")
+     check("runner_k_zero: stderr 有明確訊息",
+           "0 個測試" in r.stderr, f"stderr={r.stderr!r}")
+@@ -15795,24 +16125,24 @@ def t_testlayers_cmd():
+         # --json 在 fail-open 分支(repo 不存在)也必須印 {"hits": []},不可空 stdout
+         r = run(["test-layers", "--diff", "HEAD~1..HEAD",
+                  "--repo", "/nonexistent-path-xyz", "--json"], td)
+         check("testlayers repo 不存在 fail-open rc0", r.returncode == 0, f"{r.returncode}")
+         check("testlayers repo 不存在 --json 印 hits空陣列",
+               _json.loads(r.stdout) == {"hits": []}, r.stdout)
+ 
+         # --diff 注入防護:值以 '-' 開頭時不可被 git 當成選項吃掉。用 --diff=VALUE 形式
+         # 送(裸 "--diff X" 形式下 argparse 自己就會因 X 長得像 flag 而先擋掉,不會走到
+         # cmd_test_layers;--diff=VALUE 才是值真正原樣落地、需要我們自己守的路徑)。
+-        pwned = _P("/tmp/pwned-test-layers-xyz")
++        pwned = _P(tempfile.gettempdir()) / "pwned-test-layers-xyz"   # 用這一輪的暫存根,分片平行時不互撞
+         if pwned.exists():
+             pwned.unlink()
+-        r = run(["test-layers", "--diff=--output=/tmp/pwned-test-layers-xyz",
++        r = run(["test-layers", f"--diff=--output={pwned}",
+                  "--repo", td, "--json"], td)
+         check("testlayers --diff 注入 fail-open rc0", r.returncode == 0, f"{r.returncode}")
+         check("testlayers --diff 注入印 hits空陣列",
+               _json.loads(r.stdout) == {"hits": []}, r.stdout)
+         check("testlayers --diff 注入不寫出檔案", not pwned.exists())
+     print("  ✓ t_testlayers_cmd")
+ 
+ 
+ def t_diff_injection_guard_sibling_sites():
+     """r2 panel minor:r1 只在 cmd_test_layers 補了 '-' 開頭注入guard,同形態的
+@@ -15833,24 +16163,24 @@ def t_diff_injection_guard_sibling_sites():
+         _sp.run(["git", "init", "-q"], cwd=td, check=True)
+         _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                  "commit", "-q", "--allow-empty", "-m", "base"], cwd=td, check=True)
+ 
+         sites = [
+             ("pitfalls", ["pitfalls", "--repo", td]),
+             ("cochange-check", ["cochange", "check", "--repo", td]),
+             ("impact-diff", ["impact", "--repo", td]),
+         ]
+         for label, base_args in sites:
+-            pwned = _P(f"/tmp/pwned-{label}-xyz")
++            pwned = _P(tempfile.gettempdir()) / f"pwned-{label}-xyz"   # 同上:分片平行安全
+             if pwned.exists():
+                 pwned.unlink()
+-            r = run(base_args + [f"--diff=--output=/tmp/pwned-{label}-xyz"], td)
++            r = run(base_args + [f"--diff=--output={pwned}"], td)
+             check(f"{label} --diff 注入 rc2", r.returncode == 2,
+                   f"rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+             check(f"{label} --diff 注入不寫出檔案", not pwned.exists())
+             if pwned.exists():
+                 pwned.unlink()
+     print("  ✓ t_diff_injection_guard_sibling_sites")
+ 
+ 
+ def t_lintcheck_validate():
+     """lint-check 靜態格式校驗:抓宣告了明顯壞的東西(KDS 空殼案例)。
+@@ -22969,39 +23299,107 @@ def main():
+     #
+     # ★為什麼這不是把閘關掉★:清掉的是「測試進程該用哪個 repo」的外部注入,
+     # 不是任何斷言。清完之後 hook 跑出來的結果會跟人手跑的一致——閘從「會給
+     # 假紅」變成「可信」,是加嚴不是放寬。一個持續給假紅的閘,下一次就會被人
+     # 用 --no-verify waive 掉,那才是真的把閘關掉。
+     import os as _os_env
+     for _v in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
+                "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+         _os_env.environ.pop(_v, None)
+ 
++    # ★參數要嚴格解析★(2026-09-06 全 repo 審視 #12):原本用的是「不認得的參數就靜默丟掉」,
++    # 於是 `--help`、打錯的旗標、甚至直接打測試名(情境錄音裡真的有人這樣敲),全部會被當成
++    # 「沒帶任何條件」→ **直接跑滿八分鐘的全套**。實測:`--help` 當場把全套跑起來了。
++    # 對照組 Codex 就曾因為在對話裡跑全套而超時。
+     import argparse as _ap
+-    _p = _ap.ArgumentParser(add_help=False)
++    _p = _ap.ArgumentParser(
++        prog="test_lumos.py",
++        description="lumos 的測試執行器。不帶參數=跑全套(約 8 分鐘);"
++                    "要跑子集就給關鍵字,它會比對測試函式名。")
++    _p.add_argument("keyword_pos", nargs="?", default=None, metavar="關鍵字",
++                    help="跟 -k 一樣(直接打名字比較順手)")
+     _p.add_argument("-k", dest="keyword", default=None, help="只跑名稱含此字串的測試")
++    _p.add_argument("--list", action="store_true", help="只列出測試名稱,不跑")
+     _p.add_argument("--keep-tmp", action="store_true",
+                     help="跑完不要刪這一輪的暫存根目錄(要進去翻現場時用)")
+-    _args, _ = _p.parse_known_args()
++    _p.add_argument("-x", "--exitfirst", action="store_true",
++                    help="第一支紅就停(不用等剩下的跑完才看到)")
++    _p.add_argument("--ff", action="store_true",
++                    help="上次紅過的先跑(配 -x 用,最快知道修好沒)")
++    _p.add_argument("--seed", type=int, default=None, metavar="N",
++                    help="用這個亂數種子打亂測試順序,探順序相依;紅了會把種子印出來讓你重現")
++    _p.add_argument("--shard", default=None, metavar="第幾片/共幾片",
++                    help="只跑其中一片(例:2/4)。推送前的閘用它把八分鐘拆成幾片同時跑")
++    _p.add_argument("--json-summary", default=None, metavar="檔案",
++                    help="把這一片的結果(過/紅/跳過/紅的是哪幾支)寫成 JSON,給彙總的人讀")
++    _args = _p.parse_args()
++    if _args.keyword and _args.keyword_pos:
++        print("擋下:關鍵字給了兩次(-k 一次、直接打一次),只留一個", file=sys.stderr)
++        return 2
++    if _args.keyword_pos:
++        _args.keyword = _args.keyword_pos
++    if _args.list:
++        for _n in sorted(k for k in globals() if k.startswith("t_")):
++            print(_n)
++        return 0
+     _run_root = _isolate_environment()
+     try:
+         tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
++        # ★上次紅過的先跑★:配 -x 用,修完重跑幾秒就知道好了沒,不用等八分鐘。
++        # 快取放 .lumos/(這個專案既有的 gitignored 快取慣例),不放 .git/。
++        _cache = Path(GRAPHCTL).resolve().parent.parent / ".lumos" / "test-cache.json"
++        _last_failed = []
++        try:
++            import json as _jc
++            _last_failed = _jc.loads(_cache.read_text(encoding="utf-8")).get("failed", [])
++        except (OSError, ValueError):
++            pass
++        if _args.ff and _last_failed:
++            _lf = set(_last_failed)
++            tests = [t for t in tests if t.__name__ in _lf] + [t for t in tests if t.__name__ not in _lf]
++            print(f"上次紅過的 {len([t for t in tests if t.__name__ in _lf])} 支排到最前面")
++        if _args.shard:
++            # ★分片★:把測試名排序後平均切成 N 片,只跑第 I 片。
++            # 切的依據是「排序後的位置」,不是執行順序——所以同一個 I/N 每次拿到的內容一樣,
++            # 跟 --seed 打不打亂無關(打亂只影響片內順序)。
++            try:
++                _i, _n = (int(x) for x in _args.shard.split("/", 1))
++            except ValueError:
++                print(f"擋下:--shard 要寫成「第幾片/共幾片」,例如 2/4;收到的是 {_args.shard!r}",
++                      file=sys.stderr)
++                return 2
++            if _n < 1 or not (1 <= _i <= _n):
++                print(f"擋下:--shard {_args.shard} 不合理(第幾片要在 1 到共幾片之間)", file=sys.stderr)
++                return 2
++            tests = [t for k, t in enumerate(tests) if k % _n == _i - 1]
++            print(f"這是第 {_i} 片(共 {_n} 片),分到 {len(tests)} 支")
++            if not tests:
++                print(f"擋下:第 {_i} 片一支測試都沒分到——片數比測試數還多,或切法寫錯了;"
++                      f"跑了個寂寞不算通過", file=sys.stderr)
++                return 1
++        if _args.seed is not None:
++            # ★順序相依探針★:預設關,只給每日治理跑;紅了印種子讓人原樣重現。
++            import random as _rnd
++            _rnd.Random(_args.seed).shuffle(tests)
++            print(f"這輪用種子 {_args.seed} 打亂了順序(要重現同一種順序就帶同一個種子)")
+         if _args.keyword:
+             tests = [t for t in tests if _args.keyword in t.__name__]
+             if not tests:
+                 # 假綠洞修補:-k 選中 0 案例 ≠ 全綠——「跑了個寂寞」必須紅,
+                 # 否則消費 rc 的一方(hook/CI 等機制)會把「沒驗」當「驗過」。
+                 print(f"✗ -k '{_args.keyword}' 選中 0 個測試(t_ 名單無此子字串)——視為失敗", file=sys.stderr)
+                 return 1
+         print(f"lumos 測試({len(tests)} 案例)")
+         global FAIL, SKIP
++        _failed_names = []
+         for t in tests:
++            _round_fail_before = FAIL
+             try:
+                 # ★單一處的自動規則,不往每支測試塞一行★:`t_slim_*` 整族驗的是「交付包」
+                 # (slim/ 底下的產物 + slim-gen/slim-scan),那是來源 repo 專用。用前綴在
+                 # 這裡一次涵蓋,★新增的 t_slim_* 自動繼承★——往 40 個函式各插一行才是
+                 # 會漏的分支簿記(本專案 2026-08-01 剛因同型簿記漏一條被代碼審抓到)。
+                 # 判定仍是狀態驅動:`slim/` 真的在(來源 repo)就照跑,零行為改變。
+                 if t.__name__.startswith("t_slim_"):
+                     _need_src("slim")
+                 _fail_before, _pass_before = FAIL, PASS
+                 _t_start = _time_slow.time()
+@@ -23024,29 +23422,56 @@ def main():
+                 SKIPPED_NAMES.append(t.__name__)   # r1:只記總數的話,「換了一支跳過」量不到
+                 print(f"  - skip {t.__name__}: {e}")
+             except TestTimeout as e:
+                 # ★判紅不判 skip★:沒跑完 = 沒驗過。名字印出來,才知道要去修哪一支。
+                 FAIL += 1
+                 print(f"  ✗ TIMEOUT {t.__name__}: {e}"
+                       f"(調整:LUMOS_TEST_TIMEOUT=<秒>,0=不設限)")
+             except Exception as e:
+                 FAIL += 1
+                 print(f"  ✗ {t.__name__} EXCEPTION: {e}")
++            # 這一支有沒有紅,決定要不要進「上次紅過」的快取,以及 -x 要不要停在這裡
++            if FAIL > _round_fail_before:
++                _failed_names.append(t.__name__)
++                if _args.exitfirst:
++                    print(f"  停在第一支紅的({t.__name__});"
++                          f"修完用 --ff -x 重跑,它會先跑這幾支")
++                    if _args.seed is not None:
++                        print(f"  這輪是打亂順序跑的,要原樣重現請帶 --seed {_args.seed}")
++                    break
++        # 把紅的名字留下來給 --ff 用(全綠就清空,免得舊名字一直排前面)
++        try:
++            import json as _jc2
++            _cache.parent.mkdir(parents=True, exist_ok=True)
++            _cache.write_text(_jc2.dumps({"failed": _failed_names}, ensure_ascii=False),
++                              encoding="utf-8")
++        except OSError:
++            pass
+         if SLOWEST:
+             top = sorted(SLOWEST, reverse=True)[:5]
+             print(f"\n最慢 5 支(超時上限 {TEST_TIMEOUT_SEC}s;餘裕 = 上限 / 最慢):")
+             for sec, name in top:
+                 lim = TIMEOUT_OVERRIDE.get(name, TEST_TIMEOUT_SEC)
+                 ratio = (lim / sec) if sec > 0 else float("inf")
+                 flag = "  ⚠ 餘裕不足 3 倍" if ratio < 3 else ""
+                 lim_note = f"/上限 {lim}s" if name in TIMEOUT_OVERRIDE else ""
+                 print(f"  {sec:6.1f}s  {name}{lim_note}  (餘裕 {ratio:.0f}x){flag}")
++        if _args.json_summary:
++            # 機讀摘要:分片時給彙總的人讀(每片各寫一份)
++            import json as _jsum
++            try:
++                Path(_args.json_summary).write_text(_jsum.dumps(
++                    {"passed": PASS, "failed": FAIL, "skipped": SKIP,
++                     "failed_names": _failed_names, "skipped_names": SKIPPED_NAMES,
++                     "shard": _args.shard}, ensure_ascii=False), encoding="utf-8")
++            except OSError as _e:
++                print(f"  (寫不出機讀摘要:{_e})", file=sys.stderr)
+         tail = f", {SKIP} skipped(來源 repo 專用)" if SKIP else ""
+         print(f"\n{'─'*40}\n{PASS} passed, {FAIL} failed{tail}")
+         # ★跳過的支數要有基準線★(2026-09-06 全 repo 審視 #11 現場學到的):
+         # 我把一個環境變數設錯,害一支測試找不到來源就靜默跳過——全套照樣「零紅」,
+         # 是我自己去比 skip 從 0 變 1 才發現。**跑得到變跑不到=覆蓋悄悄少掉,而它不會紅。**
+         # 所以在這裡對基準線比一次:超過就出聲(只在跑全套時比,-k 子集本來就會跳很多)。
+         # ★超過基準線要判紅,不是印個提醒就算★(r1 外家席抓到):只印不紅的話,
+         # 覆蓋退化照樣以成功狀態碼離開,CI 與推送閘收到的還是 rc0——那就等於沒有這道基準線。
+         # 只在「基準線有意義」的環境判:來源 repo(消費端本來就會跳過一批來源專用的)
+         # 且非 Windows(Windows 分支的跳過是合法的)。其餘環境只印一行觀測,不判紅。

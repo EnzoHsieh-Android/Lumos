@@ -217,7 +217,12 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
   # ★先探這支 runner 支不支援分片★:新 hook 配到舊的(或別人自己寫的)runner 時,
   # 硬塞它不認得的旗標會讓它整個報錯 → 人被莫名其妙擋下。探不到就乖乖退回串行,
   # 行為跟以前一模一樣。(2026-09-06 實際踩到:假 runner 不認得新旗標,當場被判紅。)
-  if ! "$PY" "$REPO_ROOT/scripts/test_lumos.py" --help 2>/dev/null | grep -q -- "--shard"; then
+  #
+  # ★探測不能用「跑 --help 看輸出」★(r1 外家席抓到):舊版 runner 正是「不認得的參數
+  # 就靜默丟掉」,所以餵它 --help 等於什麼都沒帶——**它會直接跑滿八分鐘的全套**,
+  # 探測完再串行跑一次,一次推送變十六分鐘。改成直接讀檔找旗標字樣:不執行、瞬間完成,
+  # 而且對「會把 --help 當成沒帶參數」的舊 runner 一樣有效。
+  if ! grep -q -- '"--shard"' "$REPO_ROOT/scripts/test_lumos.py" 2>/dev/null; then
     _shards=1
   fi
   _sdir="$(mktemp -d "${TMPDIR:-/tmp}/lumos-prepush-shards-XXXXXX")"
@@ -229,8 +234,10 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
     echo "推送前先跑全部測試(切成 $_shards 片同時跑,約 4-5 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
     _pids=()
     for _i in $(seq 1 "$_shards"); do
+      # 這條路不帶 --json-summary:判紅靠子行程離開碼、列紅的靠 log,摘要檔寫了沒人讀
+      # 就是白工(r1 通才席抓到)。那個旗標留著給要機讀的人用,不是給這裡用的。
       "$PY" "$REPO_ROOT/scripts/test_lumos.py" --shard "$_i/$_shards" \
-        --json-summary "$_sdir/s$_i.json" > "$_sdir/s$_i.log" 2>&1 &
+        > "$_sdir/s$_i.log" 2>&1 &
       _pids+=($!)
     done
     # ★用每個子行程自己的離開碼判★,不是用有沒有寫出摘要檔判——摘要檔是給人看的加值,
@@ -257,7 +264,9 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
     } >&2
     exit 1
   fi
-  grep -h "passed," /tmp/lumos-prepush-tests.log >&2 || true
+  # 各片印一行「N passed, M failed」,用 awk 加總成一行(維持薄殼:不在 hook 裡塞 python)
+  grep -h "passed," /tmp/lumos-prepush-tests.log \
+    | awk -F'[ ,]+' '{p+=$1; f+=$3} END{if (NR) printf "  全部 %d 條斷言過、%d 條紅(%d 片加總)\n", p, f, NR}' >&2 || true
 fi
 
 exit 0
