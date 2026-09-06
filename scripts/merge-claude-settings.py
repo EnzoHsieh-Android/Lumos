@@ -54,6 +54,27 @@ _PY = shutil.which("python3") or shutil.which("python") or "python3"
 _HOME = str(Path.home()).replace("\\", "/")
 
 
+# ★逾時預算的單一來源★(2026-09-07 全 repo 審視 #14)
+#
+# 出身:外層天花板寫在這張註冊表、內層逾時寫在各支 hook 裡,兩邊各自演化。量出來的結果:
+# 五支裡三支違反自家「外要明顯大於內」的規則,其中一支內層是外層的 2.5 倍。
+#
+# ★內層 ≥ 外層代表什麼★:內層那條「逾時就 fail-open」的分支**結構上永遠跑不到**——
+# 外面會先把整支 hook 砍掉(SIGKILL,繞過 try/except)。影響鏡頭那支的 fail-open 分支裡
+# 有「把冷卻窗記號清掉」,跑不到就表示:超時之後那個檔被鎖住 20 分鐘完全不注入,沒人知道。
+# **一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了。**
+#
+# 現在天花板只寫在這裡,並且用 --budget 傳給 hook;hook 自己算內層(見各 hook 的 _inner_budget)。
+HOOK_BUDGET = {
+    "lumos-entry-hook.py": 10,
+    "ci-status-hook.py": 15,
+    "impact-hook.py": 30,
+    "dispatch-lens-hook.py": 60,
+    "check-graph-sync.py": 30,   # ★從 10 提到 30★:它內層要跑圖譜同步檢查(實測需 25s),
+                                 # 舊值 10 讓那段每次都被外面砍掉——不是內層寫太大,是外層給太少
+}
+
+
 def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
     # W6:Claude Code 在 Windows 用 Git Bash 跑 hook command → 反斜線會被 shell 吃掉
     # (C:\Users → C:Users → python 找不到 → hook 靜默失敗)。故 Windows 下 python 路徑與
@@ -64,11 +85,18 @@ def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
         # 絕對路徑(不是 ${HOME}/.codex):CODEX_HOME 可以不在 HOME 底下
         hooks_dir = str(HOOKS_DIR).replace("\\", "/")
         py = _PY.replace("\\", "/") if sys.platform == "win32" else _PY
-        return f'{py} "{hooks_dir}/{rel_path}" --harness codex' if sys.platform != "win32" else f'"{py}" "{hooks_dir}/{rel_path}" --harness codex'
+        _b = HOOK_BUDGET.get(rel_path)
+        _bf = f' --budget {_b}' if _b else ''
+        return (f'{py} "{hooks_dir}/{rel_path}" --harness codex{_bf}' if sys.platform != "win32"
+                else f'"{py}" "{hooks_dir}/{rel_path}" --harness codex{_bf}')
     if sys.platform == "win32":
         py = _PY.replace("\\", "/")
-        return f'"{py}" "{_HOME}/.claude/hooks/{rel_path}"'
-    return f'{_PY} "${{HOME}}/.claude/hooks/{rel_path}"'
+        _b = HOOK_BUDGET.get(rel_path)
+        _bf = f' --budget {_b}' if _b else ''
+        return f'"{py}" "{_HOME}/.claude/hooks/{rel_path}"{_bf}'
+    _b = HOOK_BUDGET.get(rel_path)
+    _bf = f' --budget {_b}' if _b else ''
+    return f'{_PY} "${{HOME}}/.claude/hooks/{rel_path}"{_bf}'
 
 
 HOOK_ENTRIES = {
@@ -80,7 +108,7 @@ HOOK_ENTRIES = {
                 {
                     "type": "command",
                     "command": _hook_cmd("lumos-entry-hook.py"),
-                    "timeout": 10,
+                    "timeout": HOOK_BUDGET["lumos-entry-hook.py"],
                 }
             ],
         },
@@ -94,7 +122,7 @@ HOOK_ENTRIES = {
                 {
                     "type": "command",
                     "command": _hook_cmd("ci-status-hook.py"),
-                    "timeout": 15,
+                    "timeout": HOOK_BUDGET["ci-status-hook.py"],
                 }
             ],
         }
@@ -111,7 +139,7 @@ HOOK_ENTRIES = {
                 {
                     "type": "command",
                     "command": _hook_cmd("impact-hook.py"),
-                    "timeout": 30,
+                    "timeout": HOOK_BUDGET["impact-hook.py"],
                 }
             ],
         },
@@ -126,7 +154,7 @@ HOOK_ENTRIES = {
                 {
                     "type": "command",
                     "command": _hook_cmd("dispatch-lens-hook.py"),
-                    "timeout": 60,
+                    "timeout": HOOK_BUDGET["dispatch-lens-hook.py"],
                 }
             ],
         },
@@ -141,7 +169,7 @@ HOOK_ENTRIES = {
                 {
                     "type": "command",
                     "command": _hook_cmd("check-graph-sync.py"),
-                    "timeout": 10,
+                    "timeout": HOOK_BUDGET["check-graph-sync.py"],
                 }
             ]
         },

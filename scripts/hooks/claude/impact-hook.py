@@ -326,6 +326,48 @@ def _trusted_lumos():
     return None
 # ── ★可信來源解析結束★ ────────────────────────────────────────────────
 
+# ── ★內層逾時一律從外層天花板算出來,不寫死★ ──────────────────────────────
+# 單源說明在 Systems/hook逾時預算;這段在幾支 hook 裡是逐字相同的複本,有守衛盯著不准漂
+# (hook 是獨立檔、複製到全域後彼此 import 不到)。
+#
+# 出身(2026-09-07 全 repo 審視 #14 量出來的):外層天花板寫在註冊表、內層逾時寫在各 hook,
+# 兩邊各自演化。五支裡三支違反自家「外要明顯大於內」的規則,其中一支內層是外層的 2.5 倍。
+#
+# ★內層 ≥ 外層代表什麼★:內層那條「逾時就 fail-open」的分支**結構上永遠跑不到**——
+# 外面會先把整支 hook 砍掉(SIGKILL,繞過 try/except)。影響鏡頭那支的 fail-open 分支裡
+# 有「把冷卻窗記號清掉」,跑不到就表示超時之後那個檔被鎖住 20 分鐘完全不注入,而沒人知道。
+# **一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了。**
+#
+# 現在:天花板由註冊表一處生成,用 --budget 傳進來;內層一律取「天花板 × 0.7 減掉已耗」,
+# 留 30% 給 hook 自己的啟動、收尾與寫輸出。拿不到 --budget(舊註冊還沒更新)就用保守預設。
+_BUDGET_RATIO = 0.7
+_BUDGET_FLOOR = 1.0          # 再怎麼扣也留 1 秒,不要算出 0 或負數
+
+
+def _outer_budget(default=10.0):
+    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。"""
+    import sys as _s
+    argv = _s.argv
+    for i, a in enumerate(argv):
+        if a == "--budget" and i + 1 < len(argv):
+            try:
+                return float(argv[i + 1])
+            except ValueError:
+                return default
+        if a.startswith("--budget="):
+            try:
+                return float(a.split("=", 1)[1])
+            except ValueError:
+                return default
+    return default
+
+
+def _inner_budget(elapsed=0.0, default=10.0):
+    """內層某一段能用幾秒:天花板 × 0.7 − 已耗,下限 1 秒。
+    ★永遠小於外層★,所以逾時走的是自己的 fail-open 分支,不是被外面砍掉。"""
+    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - float(elapsed))
+# ── ★逾時預算結束★ ──────────────────────────────────────────────────
+
 def _find_lumos_script() -> str | None:
     """找到 lumos CLI 腳本的絕對路徑。
 
@@ -654,9 +696,17 @@ def main() -> int:
         if i > 0 and left < 3:
             skipped.extend(paths[i:])
             break
-        # 單檔(Claude Edit/Write 或只碰一檔的 patch)維持舊的固定 30 秒(逐字等價;code-codex-s1 r1 單reviewer F1);
-        # 多檔才用總預算切每檔的 timeout
-        tmo = 30.0 if len(paths) == 1 else min(30.0, max(3.0, left))
+        # ★翻掉「單檔固定 30 秒」那條裁定★(2026-09-07 全 repo 審視 #14)
+        #
+        # 舊裁定的理由是「逐字等價」(改寫時不動行為)。翻它的理由不是好看,是**那個數字
+        # 讓下面那條 fail-open 分支結構上永遠跑不到**:外層天花板也是 30 秒,內層一到
+        # 外面就先把整支 hook 砍掉(SIGKILL,繞過 try/except)。而那條分支裡有
+        # 「把冷卻窗記號清掉」——跑不到就表示:超時之後這個檔會被鎖住 20 分鐘完全不注入,
+        # 而且沒有人知道。一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了。
+        #
+        # 現在單檔也走預算:天花板 × 0.7 減已耗,永遠明顯小於外層,逾時走自己的分支。
+        _cap = _inner_budget(elapsed=(time.monotonic() - t0), default=30)
+        tmo = _cap if len(paths) == 1 else min(_cap, max(3.0, left))
         ctx = _impact_for_file(payload, repo, fp, session_id, lumos, timeout=tmo)
         if ctx:
             chunks.append(ctx)
