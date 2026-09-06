@@ -11556,6 +11556,18 @@ def t_node_not_found_gives_candidates_not_write_side_message():
     check("近名/反面: 完全不像時給搜尋指令當退路", "lumos search" in out, out[:200])
     check("近名: 退出碼不是 0(找不到不能算成功)", r.returncode != 0, str(r.returncode))
 
+    # ★r1 折入:寫入側要多一句「確定要新建的話」★
+    # 那個參數第一版根本沒接上——兩處寫入側呼叫都沒傳,所以讀寫兩側輸出逐字相同,
+    # 而函式自己的說明寫著「讀取指令與寫入指令用不同的後半句」,承諾沒兌現。
+    rw = _sp.run([sys.executable, GRAPHCTL, "set", "完全不存在的節點xyz", "status", "done"],
+                 cwd=str(repo), capture_output=True, text=True, timeout=90)
+    ow = rw.stderr or rw.stdout
+    check("★讀寫有別★: 寫入側多給「確定要新建的話」那句", "lumos new" in ow, ow[:250])
+    rr = _sp.run([sys.executable, GRAPHCTL, "contracts", "完全不存在的節點xyz"],
+                 cwd=str(repo), capture_output=True, text=True, timeout=90)
+    check("★讀寫有別★: 讀取側不給新建提示(對讀的人沒用)",
+          "lumos new" not in (rr.stderr or rr.stdout), (rr.stderr or rr.stdout)[:250])
+
     # 原始碼層:那句寫入側的話不准再出現在讀取指令的分支
     src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
     check("★用詞★: 全檔不再有「找不到筆記 + 決策沒地方掛」這種混用",
@@ -11592,6 +11604,35 @@ def t_bad_command_gives_near_name_not_wall_of_text():
     out3 = r3.stderr or r3.stdout
     check("★指對層★: 子命令打錯時指的是那一層的說明(不是頂層那份)",
           "lumos loop --help" in out3, out3[:200])
+
+    # ★r1 折入:打錯的是「參數值」不是「指令名」時,要說對是什麼、比對正確的選項★
+    # 第一版拿「第一個有 choices 的參數」當候選池,於是子命令有兩個以上限定值參數時
+    # 整個判錯:實測 `loop next X --orchestrator cladue` 印成「沒有『cladue』這個指令」
+    # (它不是指令),還拿另一個參數的選項去比,連 cladue → claude 都給不出來。
+    r5 = run("loop", "next", "myloop", "--orchestrator", "cladue")
+    o5 = r5.stderr or r5.stdout
+    check("★參數值★: 說清楚是哪個參數不接受這個值(不是誤報成「沒有這個指令」)",
+          "--orchestrator 不接受" in o5 and "這個指令" not in o5, o5[:200])
+    check("★參數值★: 拿對的選項比,給得出近名建議",
+          "--orchestrator claude" in o5, o5[:200])
+
+    # 完全不像時,把那個參數收的選項列出來(而不是叫人去看指令清單)
+    r6 = run("canary", "record", "zzz")
+    o6 = r6.stderr or r6.stdout
+    check("參數值/反面: 完全不像時列出那個參數收哪幾個",
+          "只收這幾個" in o6 and "caught" in o6, o6[:200])
+
+    # ★r1 折入:其餘錯法也要白話,而且指到對的那層說明★
+    # 外家席驗過「缺必填/型別錯/不認得的參數」沒被吃掉(原句還在),但那些也是第一眼
+    # 會看到的畫面,原句是英文模板。改成白話,同時保留 argparse 準確指出的參數名。
+    for args2, want in ((["context"], "少了必須要給的 note"),
+                        (["map", "foo", "--depth", "nope"], "--depth 要給數字"),
+                        (["stats", "--zzz"], "不認得這幾個參數")):
+        rr2 = run(*args2)
+        oo = rr2.stderr or rr2.stdout
+        check(f"參數錯: {' '.join(args2)} 講白話而且點名是哪個參數", want in oo, oo[:180])
+        check(f"參數錯: {' '.join(args2)} 給得出可以直接貼的用法指令",
+              "--help" in oo and "Traceback" not in oo, oo[:180])
 
     # 反面:正常指令不受影響
     r4 = run("stats")

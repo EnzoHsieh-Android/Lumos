@@ -1,0 +1,678 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 00a3929..9f6f96b 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -24,37 +24,34 @@
+ # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ # AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ # SOFTWARE.
+ #
+ # 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律
+ # 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。
+-"""Lumos — 知識圖譜的控制台(graph-as-contract control plane)
+-
+-每一次全 AI 迭代是一條線,Lumos 把它織進「已理解的布」:巡檢 / 寫入 / 強制 / 視覺化。
+-self-contained,無 Obsidian app / obsidian CLI 依賴,CI 可跑。
+-設計與驗收標準: docs/<project>-knowledge/Projects/lumos_計劃.md
+-
+-子命令:
+-  doctor      圖譜健康巡檢(四檢查 + 同名守衛 + frontmatter lint)
+-  links       某筆記連出去的節點
+-  backlinks   連到某筆記的節點
+-  map         鄰域樹狀展開(--depth)
+-  context     節點 + 鄰居 summary 壓縮索引(MemPalace closet 具象化)
+-  decisions   讀取 ADR 決策(單篇,或 --superseded 全 vault 掃被推翻決策)
+-  stale       status=stale 的驗證;--match 掃 valid_under/revalidate_when 命中條件
+-  recent      最近 N 天修改的筆記
+-  stats       資料夾統計
+-  export      輸出 mermaid / dot 圖
++"""Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。
++
++程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。
++不需要裝 Obsidian,CI 上也跑得動。
++
++第一次用,照這三步走:
++  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)
++  lumos context <節點>      看那一篇在講什麼、跟誰有關
++  lumos contracts <節點>    動它之前有什麼不能碰的
++
++★底下 argparse 會把每個子命令列出來,各附一句「什麼時候用」。★
++這段刻意不再手抄一份清單:2026-09-07 全 repo 審視 #9 量到,手抄那份停在 10 個、
++實際有 66 個,而且同一批指令被印兩遍。清單的單一來源是 HELP_WHEN,由 argparse 自己印。
++(這裡也刻意不寫「共幾個」——寫了就是另一個會過期的數字。)
+ 
+ 解析範圍(對齊 Obsidian 行為與 skill 鐵則):
+   - body 的 [[wikilink]],排除 fenced code block 與 inline code(Obsidian 不索引)
+   - frontmatter: 整個值恰為一個 wikilink 才索引(散文中夾帶的 [[..]] 不算;
+     2026-06-13 並跑首日 parity diff 修正)
+   - block scalar(summary: |- 等)內的 [[..]] 不算連結(鐵則 2)
+   - 連結解析: 路徑優先,fallback basename,大小寫不敏感,NFC 正規化
+ """
+ import argparse
+ import os
+@@ -6201,20 +6198,50 @@ def _el_near_norm(s):
+ def _el_near_ratio(a, b):
+     import difflib
+     return difflib.SequenceMatcher(None, _el_near_norm(a), _el_near_norm(b)).ratio()
+ 
+ 
+ def _el_near_name(a, b):
+     """近名判準(spec EL-8/EL-16/EL-17):剝 YYYY-MM-DD_ 前綴後 difflib ≥0.6 單判準(repo 無 stemmer,「詞幹」已裁刪)。"""
+     return _el_near_ratio(a, b) >= _EL_NEAR_THRESHOLD
+ 
+ 
++
++def _node_not_found(env, name, *, write_side=False):
++    """印「找不到這篇筆記」並給近名候選。★讀取指令與寫入指令用不同的後半句★。
++
++    出身(2026-09-07 全 repo 審視 #9):四支**讀取**指令(健康巡檢、看合約、看漂移史、
++    決策重編)打錯節點名時,印的都是「決策沒地方掛」——那是**寫入側專用**的話,
++    白話化那批複製貼上時漏改。讀的人拿到一句對不上自己在做什麼的訊息,而且不給近名候選,
++    只能自己回去猜名字。
++
++    近名用既有的 _el_near_name(不另外引一支;那支剝日期前綴後用 difflib 比,repo 沒有
++    第二種近名判準)。
++    """
++    print(f"擋下:圖譜裡找不到叫「{name}」的筆記。", file=sys.stderr)
++    try:
++        cands = [rel for rel in env.notes if _el_near_name(name, Path(rel).stem)][:5]
++    except Exception:                      # noqa: BLE001 — 找不到就找不到,不能因為找近名而炸
++        cands = []
++    if cands:
++        print("  是不是想找這幾篇之一:", file=sys.stderr)
++        for c in cands:
++            print(f"      {c}", file=sys.stderr)
++    else:
++        print("  沒有名字接近的。用關鍵字找找看(中文查詢:概念之間加空白):", file=sys.stderr)
++        print(f"      lumos search {name}", file=sys.stderr)
++    if write_side:
++        print("  確定要新建的話:", file=sys.stderr)
++        print("      lumos new <類型> <名稱>", file=sys.stderr)
++    return 2
++
++
+ def _el_node_meta(env, rel):
+     """(status, 決策數)——status 取 frontmatter 欄位;決策數 len(parse_decisions)(機械數)。"""
+     n = env.notes.get(rel)
+     if n is None or not isinstance(n.fields, dict):
+         return None, 0
+     st = str(n.fields.get("status") or "").strip() or None
+     try:
+         dec = len(parse_decisions(n.fm_lines))
+     except Exception:
+         dec = 0
+@@ -10114,22 +10141,28 @@ def cascade_surface(env, node_rel, root_decision_id, stream=None):
+     return len(neighbors) + len(ambigs)
+ 
+ 
+ def cmd_impact_node(node_arg, repo=None, as_json=False):
+     """[M4/S2] impact 第三模式 CLI 皮(供人手動查;自動迴圈走進程內原語不 shell-out):
+     typed hop-1 列「誰依賴我」。與 --file/--diff 互斥、與 --depth 互斥(單層列舉無深度語意)。"""
+     import json
+     start = Path(repo).resolve() if repo else Path.cwd()
+     vault = find_vault(start)
+     if vault is None:
+-        print("擋下:目前目錄底下找不到知識圖譜(docs/*-knowledge)", file=sys.stderr)
+-        return 2
++        # ★三條路同一套說法、同一個退出碼★(2026-09-07 全 repo 審視 #9)
++        print("擋下:這個專案底下找不到知識圖譜(docs/*-knowledge),所以沒有東西可以查。", file=sys.stderr)
++        print("  為什麼在意:這跟「查過了、沒有相關筆記」是兩件事——"
++              "前者是還沒建圖譜,後者才是真的沒關聯。", file=sys.stderr)
++        print("  這個專案要用圖譜的話:", file=sys.stderr)
++        print("      lumos init", file=sys.stderr)
++        print("  只是想指到別的地方的圖譜:加 --repo <含圖譜的目錄>", file=sys.stderr)
++        return 3
+     env = Env(vault)
+     rel = env.find(node_arg)
+     if rel is None:
+         print(f"擋下:圖譜裡找不到叫 {node_arg} 的筆記,先確認名稱或路徑", file=sys.stderr)
+         return 2
+     neighbors, ambigs = _typed_hop1(env, rel)
+     if as_json:
+         print(json.dumps({"node": rel,
+                           "neighbors": [{"rel": s, "edge": e, "invariant_count": n}
+                                         for (s, e, n) in neighbors],
+@@ -11344,22 +11377,28 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
+ 
+ def cmd_update(source=None, no_pull=False, allow_stale=False):
+     """從 Lumos 唯一源 repo 更新「本專案」vendored 的工具組。
+     = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
+     圖譜資料受 install-graph-toolchain 的 scaffold-skip 保護,不會被動。"""
+     if _refuse_if_probe("update"):
+         return 2
+     src = _lumos_src(source)
+     vault = find_vault(Path.cwd())
+     if vault is None:
+-        print("擋下:目前目錄底下找不到知識圖譜(docs/*-knowledge)", file=sys.stderr)
+-        return 2
++        # ★三條路同一套說法、同一個退出碼★(2026-09-07 全 repo 審視 #9)
++        print("擋下:這個專案底下找不到知識圖譜(docs/*-knowledge),所以沒有東西可以查。", file=sys.stderr)
++        print("  為什麼在意:這跟「查過了、沒有相關筆記」是兩件事——"
++              "前者是還沒建圖譜,後者才是真的沒關聯。", file=sys.stderr)
++        print("  這個專案要用圖譜的話:", file=sys.stderr)
++        print("      lumos init", file=sys.stderr)
++        print("  只是想指到別的地方的圖譜:加 --repo <含圖譜的目錄>", file=sys.stderr)
++        return 3
+     root = vault.parent.parent  # docs/<slug>-knowledge → docs → 專案 root
+     slug = vault.name[:-len("-knowledge")] if vault.name.endswith("-knowledge") else vault.name
+     if root.resolve() == src.resolve():
+         # 來源 repo 自身:範本本地即最新,無 pull/vendor 之需——reinject-only
+         # (2026-08-05 實戰缺口修:改完範本後來源 repo 自己的 CLAUDE.md 原本無路可刷)
+         res = _reinject_all(root, slug, quiet=True)
+         ri = res["CLAUDE.md"]
+         print(f"lumos update — 來源 repo 自身:只刷新紀律區塊({', '.join(f'{k}:{v.status}' for k, v in res.items())})")
+         return 0 if all(v.status in ("updated", "unchanged", "created", "appended") for v in res.values()) else 2
+     print(f"lumos update — 來源 {src} → 本專案 {root}（slug={slug}）")
+@@ -16787,21 +16826,28 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+             if (cand / ".git").exists():
+                 repo_root = cand
+                 break
+ 
+     # 2. 找 vault(rc 3 = vault 找不到)
+     if repo_root is not None:
+         vault = _vault_in(repo_root)
+     else:
+         vault = find_vault(Path.cwd())
+     if vault is None:
+-        print("IMPACT-DEBUG: vault 找不到(rc3)——非圖譜專案或 --repo 未指向含 vault 的目錄", file=sys.stderr)
++        # ★三條路同一套說法★(2026-09-07 全 repo 審視 #9):同一件事(找不到圖譜)
++        # 原本三種問法給三種答案——這條印一句除錯訊息、--node 印白話擋下、--diff 回成功印 0 篇。
++        print("擋下:這個專案底下找不到知識圖譜(docs/*-knowledge),所以沒有東西可以查。", file=sys.stderr)
++        print("  為什麼在意:這跟「查過了、沒有相關筆記」是兩件事——"
++              "前者是還沒建圖譜,後者才是真的沒關聯。", file=sys.stderr)
++        print("  這個專案要用圖譜的話:", file=sys.stderr)
++        print("      lumos init", file=sys.stderr)
++        print("  只是想指到別的地方的圖譜:加 --repo <含圖譜的目錄>", file=sys.stderr)
+         return 3
+ 
+     # 3. 解析 depth:CLI(顯式 --depth) > .lumos/impact.json config > 預設 2
+     _cfg_root = repo_root if repo_root is not None else vault.parent.parent
+     _impact_cfg = _impact_load_config(_cfg_root)
+     if depth is None:
+         depth = _impact_cfg["depth"]
+ 
+     # 4. 載入圖譜環境(preloaded=(vault,env) 由 --diff 聚合復用,避免逐檔重建 N+1)
+     if preloaded is not None and preloaded[0] == vault:
+@@ -17201,21 +17247,37 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
+         f = f.strip()
+         if not _impact_diff_seed_ok(f):
+             continue
+         # 已刪檔不跳過:反查靠「節點 body 引用該路徑」而非檔案存在——
+         # 刪除/改名正是合約節點最該被推到審計員眼前的時刻(r1 codex major)
+         files.append(f)
+     merged = {}          # node -> entry(跨檔取最高分;pinned 任一檔 pinned 即 pinned)
+     per_file_meta = []
+     import io, contextlib
+     _vault = _vault_in(repo_root)
+-    _env_shared = Env(_vault) if _vault is not None else None   # 建一次,逐檔復用(r1 N+1)
++    # ★沒有圖譜就直接說,不要印「0 篇」裝作查過了★(2026-09-07 全 repo 審視 #9)
++    #
++    # 出身:這條路原本只在**逐檔迴圈裡**才發現沒圖譜——而「這個範圍 0 個檔」時迴圈根本不跑,
++    # 於是一路走到最後印出「固定席 0 + top 0」並回成功。
++    # ★對新手最危險的就是這個★:同一件事(找不到圖譜),另外兩種問法一個回 rc3、一個回 rc2
++    # 並印白話擋下,只有這條印「0 篇」**看起來像查過了**——而它根本沒有圖譜可查。
++    # 文件本來就寫著這條路會回「圖譜缺」,只是零檔時走不到。
++    if _vault is None:
++        print("擋下:這個專案底下找不到知識圖譜(docs/*-knowledge),所以沒有東西可以查。",
++              file=sys.stderr)
++        print("  為什麼在意:這跟「查過了、沒有相關筆記」是兩件事——"
++              "前者是還沒建圖譜,後者才是真的沒關聯。", file=sys.stderr)
++        print("  這個專案要用圖譜的話:", file=sys.stderr)
++        print("      lumos init", file=sys.stderr)
++        print("  只是想指到別的地方的圖譜:加 --repo <含圖譜的目錄>", file=sys.stderr)
++        return 3
++    _env_shared = Env(_vault)   # 建一次,逐檔復用(r1 N+1)
+     for f in files:
+         d = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
+                      "diff", diff_range, "--", f], capture_output=True, text=True)
+         hunk = " ".join(l[1:].strip() for l in d.stdout.splitlines()
+                         if l[:1] in "+-" and not l.startswith(("+++", "---")))[:4000]
+         buf = io.StringIO()
+         with contextlib.redirect_stdout(buf):
+             rc = cmd_impact(f, repo=str(repo_root), depth=depth, as_json=True,
+                             ranked=True, top=top, min_score=min_score,
+                             payload={"query": hunk, "prospective": {}},
+@@ -18925,21 +18987,67 @@ def _fill_help_when(parser, parent=""):
+     for act in parser._actions:
+         if isinstance(act, argparse._SubParsersAction):
+             for name, sp in act.choices.items():
+                 if not sp.description:
+                     when = HELP_WHEN.get(f"{parent} {name}".strip()) or HELP_WHEN.get(name)
+                     if when:
+                         sp.description = "什麼時候用:" + when
+                 _fill_help_when(sp, name)
+ 
+ def main():
+-    ap = argparse.ArgumentParser(prog="lumos", description=__doc__,
++    class _LumosParser(argparse.ArgumentParser):
++        """打錯指令時給人話 + 近名候選,不要吐一長串英文。
++
++        出身(2026-09-07 全 repo 審視 #9):打錯一個字母(例如 doctorr),argparse 預設會印
++        usage 那行(把 66 個指令名擠成一串)再加一句英文 invalid choice,後面又把 66 個名字
++        用引號逐個列一遍——**畫面上出現三次同一份清單,而使用者要的只是「你是不是想打 doctor」**。
++        """
++
++        def error(self, message):
++            import difflib as _dl
++            m = re.search(r"invalid choice: '([^']+)'", message or "")
++            bad = m.group(1) if m else None
++            names = []
++            for _a in self._actions:
++                if getattr(_a, "choices", None):
++                    names = [str(c) for c in _a.choices]
++                    break
++            if bad:
++                print(f"擋下:沒有「{bad}」這個指令。", file=sys.stderr)
++            elif "required: cmd" in (message or ""):
++                # ★裸打是最常見的第一次接觸★:不要丟一句英文的「缺少必填參數」給人。
++                print("擋下:要給一個指令才知道你想做什麼。", file=sys.stderr)
++                print("  第一次用的話,照這三步走:", file=sys.stderr)
++                print("      lumos search <關鍵字>     先找有沒有人寫過", file=sys.stderr)
++                print("      lumos context <節點>      看那一篇在講什麼", file=sys.stderr)
++                print("      lumos contracts <節點>    動它之前有什麼不能碰的", file=sys.stderr)
++            else:
++                # 其他參數錯(值不合法、缺子命令自己的必填…):argparse 的原句通常已經
++                # 指出是哪個參數,原樣轉述比我重寫一遍準確。
++                print(f"擋下:{message}", file=sys.stderr)
++            if bad and names:
++                near = _dl.get_close_matches(bad, names, n=3, cutoff=0.6)
++                if near:
++                    print("  是不是想打這個:", file=sys.stderr)
++                    for n2 in near:
++                        print(f"      lumos {n2}", file=sys.stderr)
++                else:
++                    print("  沒有名字接近的。看有哪些指令、各自什麼時候用:", file=sys.stderr)
++                    # ★指到自己這一層的說明★:子命令的子命令(例如 loop 底下那些)
++                    #   出錯時,該看的是 `lumos loop --help` 而不是頂層那份。
++                    print(f"      {self.prog} --help", file=sys.stderr)
++            else:
++                print("  看用法:", file=sys.stderr)
++                print(f"      {self.prog} --help", file=sys.stderr)
++            self.exit(2)
++
++    ap = _LumosParser(prog="lumos", description=__doc__,
+                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+     ap.add_argument("--vault", type=Path, default=None,
+                     help="vault 路徑 (預設自動找 docs/*-knowledge)")
+     sub = ap.add_subparsers(dest="cmd", required=True)
+ 
+     d = sub.add_parser("doctor", help="圖譜健康巡檢")
+     d.add_argument("--strict", action="store_true", help="有 finding 即 exit 1 (CI 用)")
+     d.add_argument("--ci", action="store_true", help="CI 模式 = --strict + 無色彩(+軟提醒全列)")
+     d.add_argument("--verbose", action="store_true", help="軟提醒全列(預設每段最多 3 條,硬檢查不受影響)")
+     d.add_argument("--suggest", action="store_true",
+@@ -19656,22 +19764,21 @@ def main():
+     env = Env(vault)
+ 
+     if args.cmd == "doctor":
+         color = sys.stdout.isatty() and not args.ci
+         return run_doctor(env, strict=(args.strict or args.ci), color=color, suggest=args.suggest, ci=args.ci, verbose=args.verbose)
+ 
+     if args.cmd in ("links", "backlinks", "context", "map", "show") or \
+        (args.cmd == "decisions" and not args.superseded):
+         rel = env.find(getattr(args, "note", None) or "")
+         if rel is None:
+-            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
+-            return 2
++            return _node_not_found(env, args.note)
+         if args.cmd == "links":
+             return cmd_links(env, rel)
+         if args.cmd == "backlinks":
+             return cmd_links(env, rel, reverse=True)
+         if args.cmd == "context":
+             # 大節點提示(Landmark 2026-08-11 實測:熱節點 context 43KB、--brief 19KB;2026-08-22 收進工具):
+             # 全量輸出超過 20KB 就在尾端提醒下次用 --brief(合約行照樣在頭部)。--brief/--json 不提示。
+             import io as _io, contextlib as _ctx
+             _buf = _io.StringIO()
+             with _ctx.redirect_stdout(_buf):
+@@ -19697,21 +19804,21 @@ def main():
+                           regex=args.regex, files_only=args.files_only,
+                           include_code=args.code, ranked=_use_ranked, top=args.top,
+                           as_json=args.search_json, include_superseded=args.include_superseded,
+                           any_terms=not args.search_no_any)
+ 
+     if args.cmd == "contracts":
+         rel = None
+         if args.note:
+             rel = env.find(args.note)
+             if rel is None:
+-                print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
++                return _node_not_found(env, args.note)
+                 return 2
+         return cmd_contracts(env, rel)
+ 
+     if args.cmd == "lint":
+         return cmd_lint(env, args.note)
+ 
+     if args.cmd == "spec-trace":
+         return cmd_spec_trace(env, args.node, as_json=args.st_json)
+     if args.cmd == "signoff":
+         return cmd_signoff(env, args.node, note=args.note, by=args.by)
+@@ -19829,22 +19936,21 @@ def main():
+         except (ValueError, RuntimeError) as e:
+             print(f"擋下:{e}", file=sys.stderr)
+             return 2
+ 
+     # T1 寫側
+     if args.cmd == "drift-history":
+         return cmd_drift_history(env, every=args.every, limit=args.limit, as_json=args.dh_json)
+     if args.cmd in ("set", "append", "remove"):
+         rel = env.find(args.note)
+         if rel is None:
+-            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
+-            return 2
++            return _node_not_found(env, args.note)
+         try:
+             if args.cmd == "set":
+                 return cmd_set(env, rel, args.key, args.value)
+             if args.cmd == "remove":
+                 return cmd_remove(env, rel, args.key, args.value)
+             return cmd_append(env, rel, args.key, args.value)
+         except (ValueError, RuntimeError) as e:
+             print(f"擋下:{e}", file=sys.stderr)
+             return 2
+     if args.cmd == "new":
+@@ -19905,22 +20011,21 @@ def main():
+         except (ValueError, RuntimeError, OSError) as e:   # [code-loop r1 A] 寫檔面 IO 例外 → rc=2 非裸 traceback
+             print(f"擋下:{e}", file=sys.stderr)
+             return 2
+ 
+     if args.cmd in ("decision-supersede", "decision-add", "decision-reindex"):
+         if args.cmd == "decision-reindex" and not args.note:
+             print("擋下:decision-reindex 要給一篇筆記,或用 --all 全部重編", file=sys.stderr)
+             return 2
+         rel = env.find(args.note)
+         if rel is None:
+-            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
+-            return 2
++            return _node_not_found(env, args.note)
+         try:
+             # [M1/P2] 兩函式回 (rc, 全域決策id);dispatcher 解包,CLI 對外仍只回整數 rc
+             #   (M4 [S1] 觸發端將在此用 decision_id 呼 cascade_surface——屆時包獨立 try/except)
+             if args.cmd == "decision-reindex":
+                 return cmd_decision_reindex(env, rel)
+             if args.cmd == "decision-supersede":
+                 rc, _decision_id = cmd_decision_supersede(env, rel, args.match, args.by, ended=args.ended)
+                 # [M4/S1] 觸發:supersede 成功→②建檔+③surfacing。②③同包獨立 try(不放上層
+                 #   atomic try 內——否則例外被 except 吞成 rc=2 違反 rc=0 合約,R8/T6)。
+                 #   輸出協議:supersede stdout 首行已印且逐字不變;cascade 面全走 stderr;
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index aeb1180..a2c61b6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -11406,20 +11406,205 @@ def t_lens_timeout_keeps_warming_cache():
+ 
+     # 邏輯必須住在 lumos,不住 hook
+     hook_src = (Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "dispatch-lens-hook.py").read_text(encoding="utf-8")
+     check("★薄殼★: hook 裡不准再有子行程監督(Popen/行程組管理)",
+           "Popen" not in hook_src and "start_new_session" not in hook_src, "hook 又長回邏輯了")
+     lumos_src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
+     check("★薄殼★: 那段住在 lumos,而且輸出丟掉不接管道(接管道會卡死)",
+           "_lens_wait_or_warm" in lumos_src and "DEVNULL" in lumos_src, "")
+ 
+ 
++
++def t_no_vault_same_answer_everywhere():
++    """★找不到圖譜這件事,每條路要給同一個答案,而且不准回成功★(2026-09-07 全 repo 審視 #9)。
++
++    出身:同一件事(這個專案沒有圖譜),三種問法給三種答案——
++      --file  → rc3 + 一句除錯口吻的訊息
++      --node  → rc2 + 白話擋下
++      --diff  → ★rc0 + 印出「0 檔、固定席 0」★
++    最後那條是計劃裡點名「對新手最危險」的:**看起來像查過了、結論是沒有相關筆記**,
++    而實際上它根本沒有圖譜可查。兩件事差很多——一個是還沒建,一個是真的沒關聯。
++
++    ★為什麼零檔時才會漏★:那條路原本只在逐檔迴圈裡才發現沒圖譜,而「這個範圍 0 個檔」
++    時迴圈根本不跑,於是一路走到最後印「0 篇」並回成功。文件本來就寫著它會回「圖譜缺」,
++    只是走不到。"""
++    import subprocess as _sp
++    d = Path(tempfile.mkdtemp(prefix="gctl-novault-"))
++    _sp.run(["git", "init", "-q", str(d)], capture_output=True)
++    (d / "a.py").write_text("x\n", encoding="utf-8")
++    _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
++    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t",
++             "commit", "-qm", "i"], capture_output=True)
++    check("★前置★ 現場成立: 這個假專案真的沒有圖譜",
++          not list((d / "docs").glob("*-knowledge")) if (d / "docs").exists() else True, str(d))
++
++    seen = {}
++    for label, args in (("--file", ["--file", "a.py"]),
++                        ("--node", ["--node", "x"]),
++                        ("--diff", ["--diff", "HEAD~0..HEAD"])):
++        r = _sp.run([sys.executable, GRAPHCTL, "impact", *args], cwd=str(d),
++                    capture_output=True, text=True, timeout=60)
++        seen[label] = (r.returncode, (r.stderr or r.stdout))
++
++    for label, (rc, out) in seen.items():
++        check(f"★沒圖譜★: impact {label} 不准回成功(回成功=看起來像查過了)",
++              rc != 0, f"rc={rc} out={out[:120]}")
++        check(f"沒圖譜: impact {label} 講清楚是「沒有圖譜」不是「查過沒有」",
++              "找不到知識圖譜" in out and "查過了" in out, out[:200])
++        check(f"沒圖譜: impact {label} 給得出下一步指令",
++              "lumos init" in out, out[:200])
++    check("★沒圖譜★: 三條路的退出碼一致(同一件事不該有三種碼)",
++          len({rc for rc, _ in seen.values()}) == 1, str({k: v[0] for k, v in seen.items()}))
++
++    # 反面:真的有圖譜時,--diff 要照常查得出來(不然這道檢查等於把功能關掉)
++    kg = d / "docs" / "t-knowledge" / "Systems"
++    kg.mkdir(parents=True)
++    (kg / "a.md").write_text("---\ntype: system\nstatus: done\naliases: []\n"
++                             "tags:\n  - type/system\nsummary: |-\n  KEY:測試用\n---\n# a\n",
++                             encoding="utf-8")
++    _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
++    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t",
++             "commit", "-qm", "kg"], capture_output=True)
++    r = _sp.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD~1..HEAD"], cwd=str(d),
++                capture_output=True, text=True, timeout=60)
++    check("★沒圖譜/反面★: 真的有圖譜時照常查得出來(這道檢查不能把功能關掉)",
++          r.returncode == 0, f"rc={r.returncode} {(r.stderr or r.stdout)[:150]}")
++
++
++
++def t_toplevel_help_has_no_handwritten_command_list():
++    """★頂層說明段不准再手抄一份子命令清單★(2026-09-07 全 repo 審視 #9)。
++
++    出身:那段是初始版本之後就沒改過的說明——**手抄的清單停在 10 個,實際有 66 個**,
++    而且 argparse 自己還會再列一次,所以同一批指令被印兩遍。指向的檔案路徑也不存在,
++    還夾著外人看不懂的內部詞。
++
++    改法不是「把清單補齊」——補齊的下一天又會過期。**清單的單一來源是 HELP_WHEN,
++    由 argparse 自己印**;說明段只留定位與入口三步。
++
++    這支釘的就是「不准長回來」:說明段裡不得再出現「兩個以上子命令名各自成行」的形狀。"""
++    import subprocess as _sp, re as _re
++    m = _load_lumos()
++    doc = (m.__doc__ or "")
++    check("★前置★ 現場成立: 讀得到頂層說明段", len(doc) > 50, doc[:80])
++
++    names = set(getattr(m, "HELP_WHEN", {}).keys())
++    check("★前置★ 現場成立: HELP_WHEN 真的是那份單一來源", len(names) > 30, str(len(names)))
++
++    # 說明段裡「以子命令名開頭、後面接說明」的行 = 手抄清單的形狀
++    handwritten = []
++    for line in doc.splitlines():
++        mm = _re.match(r"^\s{2,}([a-z][a-z-]{2,})\s{2,}\S", line)
++        if mm and mm.group(1) in names:
++            handwritten.append(line.strip()[:50])
++    check("★不准手抄★: 說明段裡沒有「子命令名 + 說明」的清單行(會過期,而且 argparse 已經印一次)",
++          len(handwritten) < 2, f"{len(handwritten)} 行:{handwritten[:5]}")
++
++    # 入口三步要在(那是新手唯一需要的東西)
++    for step in ("lumos search", "lumos context", "lumos contracts"):
++        check(f"說明段: 留著入口三步的「{step}」", step in doc, doc[:200])
++
++    # 反面:argparse 自己那份要真的有,而且每個都附一句話
++    h = _sp.run([sys.executable, GRAPHCTL, "--help"], capture_output=True, text=True).stdout
++    # ★真相來源是 argparse 自己列的那串,不是 HELP_WHEN 的鍵★:
++    #   HELP_WHEN 除了頂層指令,還收了「loop next」這種帶空格的、以及「bind」「approve」
++    #   這種次級指令的裸名——它們本來就不會出現在頂層。
++    #   第一版拿 HELP_WHEN 全部去比,算出 66/100、66/94 兩次假紅;判準錯不是功能壞。
++    _um = _re.search(r"\{([a-z0-9,\-]+)\}", h)
++    actual = set(_um.group(1).split(",")) if _um else set()
++    check("★前置★ 現場成立: 抓得到 argparse 列的頂層清單", len(actual) > 30, str(len(actual)))
++    _with_when = [n for n in actual if n in names]
++    check("說明段/反面: 頂層每個子命令都有一句「什麼時候用」(清單沒被弄不見)",
++          len(_with_when) >= len(actual) * 0.9, f"有說明的 {len(_with_when)}/{len(actual)}")
++
++
++
++def t_node_not_found_gives_candidates_not_write_side_message():
++    """★打錯節點名要給近名候選,而且讀取指令不准講寫入側的話★(2026-09-07 全 repo 審視 #9)。
++
++    出身:四支**讀取**指令(健康巡檢、看合約、看漂移史、決策重編)打錯名字時,
++    印的都是「決策沒地方掛」——那是**寫入側專用**的話,白話化那批複製貼上時漏改。
++    讀的人拿到一句對不上自己在做什麼的訊息,而且不給近名候選,只能自己回去猜名字。"""
++    import subprocess as _sp
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    vault = repo / "docs" / "lumos-toolchain-knowledge"
++    if not vault.is_dir():
++        raise _SrcOnly("消費端沒有本 repo 的圖譜(非來源 repo),這段沒驗到")
++
++    # 挑一篇真的存在的節點,故意打錯一個字
++    real = None
++    for f in sorted((vault / "Systems").glob("*.md")):
++        if len(f.stem) >= 6:
++            real = f.stem
++            break
++    check("★前置★ 現場成立: 找得到一篇可以拿來打錯的節點", bool(real), str(real))
++    typo = real[:-1] + "介" if real else "x"
++
++    # ★挑真的會吃節點名的指令★:drift-history 不收節點參數(它沿 git 歷史重放整份圖譜),
++    #   拿它來測只會撞到 argparse 的用法錯誤,那條斷言等於沒驗到。
++    for cmd in ("contracts", "decisions"):
++        r = _sp.run([sys.executable, GRAPHCTL, cmd, typo], cwd=str(repo),
++                    capture_output=True, text=True, timeout=90)
++        out = r.stderr or r.stdout
++        check(f"★近名★: {cmd} 打錯字時給得出候選", "是不是想找" in out, out[:200])
++        check(f"★用詞★: {cmd} 不准再講寫入側的「決策沒地方掛」",
++              "決策沒地方掛" not in out, out[:200])
++
++    # 完全不像的名字:要給搜尋指令當退路,而不是只說找不到
++    r = _sp.run([sys.executable, GRAPHCTL, "contracts", "zzz完全不存在zzz"], cwd=str(repo),
++                capture_output=True, text=True, timeout=90)
++    out = r.stderr or r.stdout
++    check("近名/反面: 完全不像時給搜尋指令當退路", "lumos search" in out, out[:200])
++    check("近名: 退出碼不是 0(找不到不能算成功)", r.returncode != 0, str(r.returncode))
++
++    # 原始碼層:那句寫入側的話不准再出現在讀取指令的分支
++    src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
++    check("★用詞★: 全檔不再有「找不到筆記 + 決策沒地方掛」這種混用",
++          "的筆記,決策沒地方掛" not in src, "")
++
++
++
++def t_bad_command_gives_near_name_not_wall_of_text():
++    """★打錯指令要給近名,不要吐一長串英文★(2026-09-07 全 repo 審視 #9)。
++
++    出身:打錯一個字母(例如 doctorr),預設會印 usage 那行(把 66 個指令名擠成一串)、
++    再一句英文 invalid choice、後面又把 66 個名字用引號逐個列一遍——
++    **同一份清單在畫面上出現三次,而使用者要的只是「你是不是想打 doctor」**。"""
++    import subprocess as _sp
++
++    def run(*args):
++        return _sp.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True, timeout=60)
++
++    r = run("doctorr")
++    out = r.stderr or r.stdout
++    check("★近名★: 打錯一個字母時直接指出正確的那個", "lumos doctor" in out, out[:200])
++    check("近名: 訊息是白話,不是英文的 invalid choice",
++          "invalid choice" not in out and "沒有「doctorr」這個指令" in out, out[:200])
++    check("★不要牆★: 不再把整份指令清單倒出來",
++          out.count("backlinks") <= 1 and len(out) < 600, f"{len(out)} 字元")
++    check("近名: 退出碼不是 0", r.returncode != 0, str(r.returncode))
++
++    r2 = run("zzzqqq")
++    out2 = r2.stderr or r2.stdout
++    check("近名/反面: 完全不像時給 --help 當退路", "--help" in out2, out2[:200])
++
++    # 子命令那層要指到自己那層的說明
++    r3 = run("loop", "zzz")
++    out3 = r3.stderr or r3.stdout
++    check("★指對層★: 子命令打錯時指的是那一層的說明(不是頂層那份)",
++          "lumos loop --help" in out3, out3[:200])
++
++    # 反面:正常指令不受影響
++    r4 = run("stats")
++    check("近名/反面: 正常指令照跑(不能為了改訊息把功能弄壞)", r4.returncode == 0, r4.stdout[:100])
++
++
+ def t_hook_copy_list_completeness():
+     """通則防復發:HOOK_ENTRIES 裡每個已註冊的 hook 腳本,都必須在 _install_hooks_py 複製清單內。
+ 
+     根因(C1 同型):registration-only 測試只驗 HOOK_ENTRIES 含某檔名,
+     但不驗 _install_hooks_py 也有複製同一檔 → 靜默 no-op。
+     本測試讀兩邊並比集合,任何「註冊了忘了加複製」都會在此紅。
+     """
+     import importlib.util as _ilu
+     import re as _re
+ 
+@@ -19573,21 +19758,25 @@ decision-supersede decisions delguard doctor export guard links lint map new que
+ rel-cascade search set show stale stats sync-verified-by""".split())
+     check("產物 --help == 保留 26 支", got == keep, f"多={sorted(got-keep)} 少={sorted(keep-got)}")
+ 
+     c = subprocess.run([sys.executable, "-W", "error::SyntaxWarning",
+                         "-m", "py_compile", str(out)], capture_output=True, text=True)
+     check("產物 py_compile 0 SyntaxWarning", c.returncode == 0, c.stderr)
+ 
+     # dangling handler = 0:產物內被呼叫但未定義的 cmd_*/run_* 名稱
+     import ast as _ast
+     tree = _ast.parse(out.read_text(encoding="utf-8"))
+-    defined = {n.name for n in _ast.walk(tree) if isinstance(n, _ast.FunctionDef)}
++    # ★類別也算「定義過」★(2026-09-07 全 repo 審視 #9):這條原本只認 FunctionDef,
++    # 於是新加的 _LumosParser(自訂錯誤訊息用的 ArgumentParser 子類)被誤判成懸空——
++    # 它其實好好地在產物裡。判準漏了一種定義形式,不是產物有問題。
++    defined = {n.name for n in _ast.walk(tree)
++               if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef))}
+     called = {c.func.id for c in _ast.walk(tree)
+               if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)}
+     dangling = {n for n in (called - defined) if n.startswith(("cmd_", "run_", "_"))}
+     check("產物 dangling handler = 0", not dangling, str(sorted(dangling)))
+ 
+     # slim 產物 delguard 功能煙霧(AST 閉包完整性:helper/常數都要被帶進產物)
+     droot, dgr = _mk_delguard_repo()
+     ds = subprocess.run([sys.executable, str(out), "delguard", "--staged"],
+                         capture_output=True, text=True, cwd=str(droot))
+     check("slim delguard rc0", ds.returncode == 0, ds.stderr[:300])
+@@ -24983,28 +25172,34 @@ def t_slim_update_behavior():
+     check("behavior③: 分岔→--ff-only 拒 rc2", r3.returncode == 2, f"rc={r3.returncode} {r3.stderr[:200]}")
+     # ④ PATH 無 git→rc2
+     r4 = upd({"PATH": "/nonexistent"})
+     check("behavior④: PATH 無 git→rc2", r4.returncode == 2, f"rc={r4.returncode} {r4.stderr[:200]}")
+     # ⑦ 裸打→argparse usage,無 traceback;update 帶任何參數→rc2 拒絕(不靜默觸發真更新——終審 s1)
+     r7 = _sp.run([sys.executable, str(out), "update", "--help"], capture_output=True, text=True, env=env)
+     check("behavior⑦b: update --help→rc2 拒絕且未觸發更新", r7.returncode == 2
+           and "不吃任何參數" in r7.stderr and "FAKE-INSTALL" not in r7.stdout,
+           f"rc={r7.returncode} {r7.stderr[:200]}")
+     r7b = _sp.run([sys.executable, str(out)], capture_output=True, text=True, env=env)
+-    check("behavior⑦: 裸打→usage+rc2 無 traceback",
+-          r7b.returncode == 2 and "Traceback" not in r7b.stderr and "usage" in r7b.stderr,
++    # ★2026-09-07 起參數錯誤訊息改成白話(全 repo 審視 #9)★:這兩條守的是
++    # 「不吐 traceback、回 rc2、而且看得出下一步」——那三件事都還在,
++    # 只是原本拿英文字串「usage」「invalid choice」當代理,那個代理過期了。
++    check("behavior⑦: 裸打→擋下+rc2 無 traceback,而且看得出怎麼查用法",
++          r7b.returncode == 2 and "Traceback" not in r7b.stderr
++          and ("擋下" in r7b.stderr or "usage" in r7b.stderr)
++          and "--help" in r7b.stderr,
+           f"rc={r7b.returncode} {r7b.stderr[:200]}")
+     # ⑨ 全域旗標前置→argparse invalid choice,fail loud 非 crash
+     r9 = _sp.run([sys.executable, str(out), "--vault", str(fake_home), "update"],
+                  capture_output=True, text=True, env=env)
+-    check("behavior⑨: --vault 前置→invalid choice rc2 無 traceback",
+-          r9.returncode == 2 and "invalid choice" in r9.stderr and "Traceback" not in r9.stderr,
++    check("behavior⑨: --vault 前置→擋下(沒這個指令)rc2 無 traceback",
++          r9.returncode == 2 and "Traceback" not in r9.stderr
++          and ("這個指令" in r9.stderr or "invalid choice" in r9.stderr),
+           f"rc={r9.returncode} {r9.stderr[:200]}")
+     # Path.home 拋例外→rc2 不拋(模組級)
+     m = None
+     import importlib.util as _ilu
+     from importlib.machinery import SourceFileLoader as _SFL
+     spec = _ilu.spec_from_file_location("slimprod", str(out), loader=_SFL("slimprod", str(out)))
+     m = _ilu.module_from_spec(spec)
+     spec.loader.exec_module(m)
+     orig_home = m.Path.home
+     # ★m.Path is pathlib.Path(from-import 共享全域類)——本 patch 動的是行程級狀態;
