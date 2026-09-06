@@ -69,17 +69,50 @@ def _enforcement_alert(rows):
             f"    細節與修法:lumos enforcement(多半是在專案根跑 lumos install --force)")
 
 
+# ── ★只執行「可信來源」的 lumos,絕不執行被打開那個資料夾裡的碼★ ──────────────
+# 單源說明在 Systems/hook信任邊界;這段在幾支 hook 裡是逐字相同的複本,
+# 有守衛測試盯著不准漂(hook 是獨立檔、複製到 ~/.claude/hooks 後彼此 import 不到,
+# 所以用「複製 + 守衛」而不是抽共用模組)。
+#
+# 出身(2026-09-06 實地重現):這支 hook 原本執行的是 `<被打開的資料夾>/scripts/lumos`,
+# 唯一判準是那個資料夾有 docs/*-knowledge。**clone 一個陌生 repo、開一下 Claude,
+# 對方的 python 就在你機器上跑了**——而且因為是拿 python 去執行它,
+# 那個檔連執行權限都不需要。
+#
+# 解析順序:系統裝好的 → $LUMOS_HOME 指的 → 預設來源位置 → 都沒有就回 None。
+# 回 None 時呼叫端要靜默跳過那段功能(這套本來就是 fail-open:寧可少一層提醒,
+# 不可執行不該信任的碼)。
+def _trusted_lumos():
+    import shutil as _sh, os as _os
+    from pathlib import Path as _P
+    found = _sh.which("lumos")
+    if found:
+        return found
+    for base in (_os.environ.get("LUMOS_HOME"), str(_P.home() / "harness" / "lumos-toolchain")):
+        if not base:
+            continue
+        cand = _P(base) / "scripts" / "lumos"
+        if cand.is_file():
+            return str(cand)
+    return None
+# ── ★可信來源解析結束★ ────────────────────────────────────────────────
+
+
 def _enforcement_line(root):
-    """跑 vendored 的 lumos enforcement --json,回提醒行或 None。任何異常靜默(fail-open)。"""
+    """跑 lumos enforcement --json,回提醒行或 None。任何異常靜默(fail-open)。
+
+    ★2026-09-06 改★:原本執行的是 `root/scripts/lumos`——也就是**被打開那個資料夾自己的碼**。
+    改成只執行可信來源(見上面的 _trusted_lumos);找不到就跳過這段,不猜也不用對方的。
+    仍以 root 當工作目錄跑,因為 enforcement 查的就是「這個專案的防護有沒有生效」。"""
     try:
-        cli = root / "scripts" / "lumos"
-        if not cli.exists():
-            return None                            # 沒 vendored CLI → 跳過,不猜
+        cli = _trusted_lumos()
+        if not cli:
+            return None                            # 找不到可信的 CLI → 跳過,不執行對方的碼
         # ★timeout 必須遠小於外層 hook 天花板★:這支 SessionStart hook 被 Claude Code 掛 10s
         # (merge-claude-settings.py 寫死);內部若 ≥10s、enforcement 一卡住,外層會 SIGKILL 整支 hook,
         # 連核心「先查圖譜」提醒都被吃掉(SIGKILL 繞過 try/except)。設 3s:正常 0.2s 的 15 倍餘裕,
         # 卡住就快速放棄回 None、核心訊息照印(code-enf-autohook r1 審)。
-        r = subprocess.run([sys.executable, str(cli), "enforcement", "--json"],
+        r = subprocess.run([sys.executable, cli, "enforcement", "--json"],
                            capture_output=True, text=True, timeout=3, cwd=str(root))
         if r.returncode != 0 or not r.stdout.strip():
             return None

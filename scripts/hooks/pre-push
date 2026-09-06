@@ -187,14 +187,22 @@ done
 # ★第二支測試檔也要跑★(2026-09-06 全 repo 審視:CI 因此紅過一次)
 # 這支只跑 12 秒,但一直以來只有 CI 在跑它——結果是「改了預設行為、跑了關鍵字子集、
 # 推上去才被 CI 打回來」。紅在別支檔而不是你改的那支,是最難查的那種。
+# ★log 檔改隨機名★(2026-09-06 全 repo 審視 #6):原本寫死 /tmp/lumos-prepush-*.log。
+# 理由不是假想的攻擊,是已經發生過的碰撞——hook 測試平行跑時三次覆寫同一路徑,害過一次誤診
+# (看到的是別人那次的輸出)。加上現在分片會同時起好幾個行程,更該各用各的。
+# ★XXXXXX 必須在結尾★:macOS 的 mktemp 不吃「樣板中間有 XXXXXX」,會直接報
+# 「File exists」——第一版寫成 -XXXXXX.log,四支 pre-push 測試當場翻紅。
+_AUTOLOOP_LOG="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-autoloop-XXXXXX")"
+_TESTS_LOG="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-tests-XXXXXX")"
+
 if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_autonomous_loop.py" ]]; then
-  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" >/tmp/lumos-prepush-autoloop.log 2>&1; then
+  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" >"$_AUTOLOOP_LOG" 2>&1; then
     {
       echo ""
       echo "擋下:test_autonomous_loop.py 有紅(自主迴圈那 132 支)。"
       echo "完整輸出在這裡:"
-      echo "   /tmp/lumos-prepush-autoloop.log"
-      tail -15 /tmp/lumos-prepush-autoloop.log | sed 's/^/    /'
+      echo "   $_AUTOLOOP_LOG"
+      tail -15 "$_AUTOLOOP_LOG" | sed 's/^/    /'
       echo ""
       echo "兩條路選一條:"
       echo "  1. 修到全綠再推(正常做法)。"
@@ -244,17 +252,17 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
     # 拿它當判準等於「runner 不支援新旗標就一律紅」。
     for _p in "${_pids[@]}"; do wait "$_p" || _rc=1; done
   fi
-  cat "$_sdir"/s*.log > /tmp/lumos-prepush-tests.log 2>/dev/null || true
+  cat "$_sdir"/s*.log > "$_TESTS_LOG" 2>/dev/null || true
   rm -rf "$_sdir"
   if [[ $_rc -ne 0 ]]; then
     {
       echo ""
       echo "擋下:test_lumos.py 有紅,有測試沒過。"
       echo "紅的是這幾支:"
-      grep -h "✗ " /tmp/lumos-prepush-tests.log | head -20 | sed 's/^/    /'
+      grep -h "✗ " "$_TESTS_LOG" | head -20 | sed 's/^/    /'
       echo ""
       echo "完整輸出(所有分片接在一起)在這裡:"
-      echo "   /tmp/lumos-prepush-tests.log"
+      echo "   $_TESTS_LOG"
       echo ""
       echo "兩條路選一條:"
       echo "  1. 修到全綠再推。只重跑紅的那幾支:"
@@ -265,7 +273,7 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
     exit 1
   fi
   # 各片印一行「N passed, M failed」,用 awk 加總成一行(維持薄殼:不在 hook 裡塞 python)
-  grep -h "passed," /tmp/lumos-prepush-tests.log \
+  grep -h "passed," "$_TESTS_LOG" \
     | awk -F'[ ,]+' '{p+=$1; f+=$3} END{if (NR) printf "  全部 %d 條斷言過、%d 條紅(%d 片加總)\n", p, f, NR}' >&2 || true
 fi
 

@@ -12030,6 +12030,13 @@ ANCHOR_FILES = [
     "scripts/hooks/pre-push",
     "scripts/hooks/post-commit",
     "scripts/hooks/claude/dispatch-lens-hook.py",   # 2026-09-03 派工鏡頭注入:會改寫子代理派工詞的 hook,硬約束進錨點
+    # ★2026-09-06 全 repo 審視 #6:其餘四支 hook 補進來★
+    # 它們跟上面那支一樣是「你一打開資料夾就自動跑」的程式,以前完全沒有東西盯著:
+    # 內容被改、或偷偷多一支,anchor verify 一句話都不說。
+    "scripts/hooks/claude/lumos-entry-hook.py",     # 進場時注入紀律提醒 + 查各層防護
+    "scripts/hooks/claude/impact-hook.py",          # 改檔前把牽連的合約推到眼前
+    "scripts/hooks/claude/check-graph-sync.py",     # 收工檢查圖譜有沒有跟上
+    "scripts/hooks/claude/ci-status-hook.py",       # 推送後回報 CI 狀態
 ]
 _ANCHOR_BASELINE_REL = "governance/anchor-baseline.json"
 
@@ -12976,6 +12983,34 @@ def cmd_anchor_verify(repo=None, as_json=False):
         print(f"擋下:基準線檔讀不到: {e}", file=sys.stderr)
         return 2
     mismatches = []
+    # ★集合檢查:偷偷多一支 hook 檔,至少要留下一種痕跡★(2026-09-06 全 repo 審視 #6)
+    # 原本只逐條比對「清單裡有的檔」,所以在 scripts/hooks 底下新增一支從來沒人看。
+    # ★誠實講清楚這條買到什麼★:它買到的是「無聲新增」變成有聲——不是防線。
+    # 真正的攻擊者在你 checkout 的那一刻碼就已經跑過了,這條只保證事後對得出帳。
+    _extra_msgs = []
+    try:
+        # ★用檔案系統當真相來源,不是版控★(第一版寫成 git ls-files,結果「hook 存在但沒
+        # git add」時會誤報成「登記過但檔案不在了」——而逐檔比對那半看的是檔案系統,
+        # 兩個來源混用就會互相打架。而且沒進版控的 hook 照樣會自動跑,它才是這條要盯的東西。)
+        _hooks_dir = repo_root / "scripts" / "hooks"
+        _present = set()
+        if _hooks_dir.is_dir():
+            for _f in _hooks_dir.rglob("*"):
+                if not _f.is_file():
+                    continue
+                if "__pycache__" in _f.parts or _f.suffix in (".pyc", ".pyo"):
+                    continue
+                _present.add(str(_f.relative_to(repo_root)))
+        _listed = {k for k in data.get("anchors", {}) if k.startswith("scripts/hooks")}
+        _new = sorted(_present - _listed)
+        _gone = sorted(_listed - _present)
+        if _new:
+            _extra_msgs.append(f"scripts/hooks 底下多了 {len(_new)} 支沒登記的檔:{', '.join(_new)}")
+        if _gone:
+            _extra_msgs.append(f"登記過但檔案不在了:{', '.join(_gone)}")
+    except OSError:
+        pass    # 不在 git 專案裡 / 沒有 git → 這條檢查跳過,不影響逐條比對
+
     for rel, expected in sorted(data.get("anchors", {}).items()):
         f = repo_root / rel
         if not f.is_file():
@@ -12985,8 +13020,19 @@ def cmd_anchor_verify(repo=None, as_json=False):
         if actual != expected:
             mismatches.append({"file": rel, "expected": expected, "actual": actual})
     if as_json:
-        print(json.dumps({"ok": not mismatches, "mismatches": mismatches}, ensure_ascii=False))
-    elif mismatches:
+        print(json.dumps({"ok": not mismatches and not _extra_msgs, "mismatches": mismatches,
+                          "roster": _extra_msgs}, ensure_ascii=False))
+        return 1 if (mismatches or _extra_msgs) else 0
+    if _extra_msgs:
+        print("✗ anchor verify 失敗——會自動執行的 hook 檔,登記的名單跟實際檔案對不上:")
+        for _msg in _extra_msgs:
+            print(f"  {_msg}")
+        print("  這些檔是「你一打開資料夾就自動跑」的程式,所以名單本身也要對得上帳。")
+        print("  確定是你自己加/刪的 → 把它加進 ANCHOR_FILES(scripts/lumos)再重新核可:")
+        print("      lumos anchor approve --note \"為什麼多/少了這支 hook\"")
+        if not mismatches:
+            return 1
+    if mismatches:
         print("✗ anchor verify 失敗——驗證器(測試/檢查腳本)的內容跟上次核可的基準線不一樣:")
         for m in mismatches:
             act = m["actual"] if m["actual"] == "(缺檔)" else m["actual"][:16] + "…"
@@ -17337,9 +17383,14 @@ def _lens_cache_read(path, ttl_sec=1200):
 
 
 def _lens_cache_write(path, data):
+    """★寫入端也要驗目錄★(2026-09-06 全 repo 審視 #6):原本直接 mkdir + chmod(0700),
+    目錄若被換成指向別處的 symlink,就會把**別人的目錄**權限改掉。讀取端一直都有檢查,
+    寫入端沒有——現在兩邊都走同一支 _trusted_private_dir。不過關就靜默不寫(fail-open)。"""
     import json as _json, tempfile as _tf
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        if not _trusted_private_dir(path.parent, path.parent):
+            return
         os.chmod(path.parent, 0o700)
         fd, tmp = _tf.mkstemp(dir=str(path.parent), suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -17619,10 +17670,30 @@ def _lens_repo_root(repo):
     return Path(r.stdout.strip())
 
 
-def _lens_arm_dir_ok(d):
-    """armed 目錄安全檢查(與 _lens_cache_read 同一套威脅模型):是目錄、owner 是自己、group/other 不可寫(posix)。"""
+def _trusted_private_dir(d, expected):
+    """★私有目錄信任檢查(單一來源)★——這套工具在家目錄底下寫的暫存/標記目錄都走這支。
+
+    檢查四件事,少一件都不算過:
+      ① 它自己不是 symlink;
+      ② **整條路徑都沒有經過 symlink**——拿「解析過的預期路徑」對照,所以父層(例如 ~/.cache
+         或 ~/.cache/lumos)被換成指向別處的 symlink 也擋得下來;家目錄本身可以是 symlink
+         (macOS 的 /var → /private/var 就是),所以預期路徑也先解析再比;
+      ③ 是目錄、而且 owner 是自己;
+      ④ group / other 不可寫。
+
+    ★出身(2026-09-06 全 repo 審視 #6)★:收工擋停那道檢查在 r2/r3 各補過一刀(拒 symlink、
+    解析後路徑必須相等),但派工鏡頭那道**沒跟上**。實測同一個「指向別處的 symlink」:
+    收工擋停那道拒絕、鏡頭那道照信——而鏡頭那邊真的會對那個目錄做 rmtree 與 chmod。
+    現在兩邊共用這一支,不會再各自漂。
+
+    不過關一律「不信、不碰」(不擋、不寫、不刪),寧可少一層功能,不在別人的目錄上動手。
+    """
     import stat as _stat
     try:
+        if d.is_symlink():
+            return False
+        if Path(d).resolve() != Path(expected).resolve():
+            return False
         st = d.stat()
     except OSError:
         return False
@@ -17634,6 +17705,14 @@ def _lens_arm_dir_ok(d):
         if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
             return False
     return True
+
+
+def _lens_arm_dir_ok(d):
+    """armed 目錄安全檢查——走共用的 _trusted_private_dir。
+
+    ★預期路徑怎麼算★:armed 目錄底下多一層 repo 指紋,所以預期路徑 = 固定前綴 + 這個 d 的名字。
+    這樣「整條路徑不得經 symlink」對前綴那幾層仍然成立,而指紋那層是我們自己算出來的、不是外來輸入。"""
+    return _trusted_private_dir(d, _lens_armed_root() / Path(d).name)
 
 
 def cmd_dispatch_lens_arm(diff_range, repo=None, seats=1, no_cache=False):
@@ -17662,13 +17741,26 @@ def cmd_dispatch_lens_arm(diff_range, repo=None, seats=1, no_cache=False):
         return 2
     text = data.get("text") or ""
     d = _lens_armed_root() / _lens_repo_key(root)
-    if d.exists():
+    # ★寫入端也要先驗,而且要在 rmtree 之前★(2026-09-06 全 repo 審視 #6):
+    # 原本是「存在就 rmtree、然後 mkdir、然後 chmod」,中間一次檢查都沒有——目錄被換成
+    # 指向別處的 symlink 時,這三步會照著**刪掉別人的東西**再把權限改掉。
+    # 讀取端早就有檢查了,寫入端沒有,這是最危險的那一半。
+    if d.exists() or d.is_symlink():
+        if not _lens_arm_dir_ok(d):
+            print(f"擋下:武裝目錄 {d} 不是自己的、或路徑上有 symlink 指到別處——不碰它。"
+                  f"\n  這是安全檢查:那個位置本來該是這套工具自己建的私有目錄。"
+                  f"\n  真的是你自己的東西壞掉了,手動刪掉它再跑一次:"
+                  f"\n      rm -rf {d}", file=sys.stderr)
+            return 2
         shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(d, 0o700)
     except OSError:
         pass
+    if not _lens_arm_dir_ok(d):   # 建完再驗一次:剛才那一瞬間被換掉也擋得住
+        print(f"擋下:武裝目錄 {d} 建完之後檢查沒過,不寫", file=sys.stderr)
+        return 2
     meta = {"range": diff_range, "base": data.get("base"), "head": data.get("head"), "repo": str(root),
             "ts": _time.time(), "seats": seats, "text": text, "pinned": data.get("pinned"), "listed": data.get("listed"),
             "fallback_status": data.get("fallback_status")}
@@ -17743,7 +17835,15 @@ def cmd_dispatch_lens_disarm(repo=None):
         print("擋下:不在 git 專案裡", file=sys.stderr)
         return 2
     d = _lens_armed_root() / _lens_repo_key(root)
-    if d.is_dir():
+    # ★收掉之前也要驗★(2026-09-06 全 repo 審視 #6):`d.is_dir()` 對「指向別處的 symlink」
+    # 回的是 True(它跟著 symlink 看),所以原本這裡會直接刪掉那個 symlink 指到的東西。
+    if d.exists() or d.is_symlink():
+        if not _lens_arm_dir_ok(d):
+            print(f"擋下:{d} 不是自己的、或路徑上有 symlink 指到別處——不刪它。"
+                  f"\n  這是安全檢查:那個位置本來該是這套工具自己建的私有目錄。"
+                  f"\n  確定是你自己的東西,手動刪:"
+                  f"\n      rm -rf {d}", file=sys.stderr)
+            return 2
         shutil.rmtree(d, ignore_errors=True)
         print("✓ 已收掉本 repo 的派工鏡頭武裝")
     else:

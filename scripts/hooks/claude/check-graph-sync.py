@@ -456,12 +456,42 @@ def emit_queue_patrol(project_root: Path) -> None:
     )
 
 
+# ── ★只執行「可信來源」的 lumos,絕不執行被打開那個資料夾裡的碼★ ──────────────
+# 單源說明在 Systems/hook信任邊界;這段在幾支 hook 裡是逐字相同的複本,
+# 有守衛測試盯著不准漂(hook 是獨立檔、複製到 ~/.claude/hooks 後彼此 import 不到,
+# 所以用「複製 + 守衛」而不是抽共用模組)。
+#
+# 出身(2026-09-06 實地重現):這支 hook 原本執行的是 `<被打開的資料夾>/scripts/lumos`,
+# 唯一判準是那個資料夾有 docs/*-knowledge。**clone 一個陌生 repo、開一下 Claude,
+# 對方的 python 就在你機器上跑了**——而且因為是拿 python 去執行它,
+# 那個檔連執行權限都不需要。
+#
+# 解析順序:系統裝好的 → $LUMOS_HOME 指的 → 預設來源位置 → 都沒有就回 None。
+# 回 None 時呼叫端要靜默跳過那段功能(這套本來就是 fail-open:寧可少一層提醒,
+# 不可執行不該信任的碼)。
+def _trusted_lumos():
+    import shutil as _sh, os as _os
+    from pathlib import Path as _P
+    found = _sh.which("lumos")
+    if found:
+        return found
+    for base in (_os.environ.get("LUMOS_HOME"), str(_P.home() / "harness" / "lumos-toolchain")):
+        if not base:
+            continue
+        cand = _P(base) / "scripts" / "lumos"
+        if cand.is_file():
+            return str(cand)
+    return None
+# ── ★可信來源解析結束★ ────────────────────────────────────────────────
+
 def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
     """跟 pre-commit/pre-push 同一條路:lumos impact --diff HEAD --sync-check --json(工作樹 vs HEAD),
     取「固定席未動」的前 cap 篇。lumos 尋路同 impact-hook._find_lumos_script 的順序(PATH 先、repo 後);
     rc 協定同它:rc≠0 視為沒資料,fail-open 回 []。"""
-    import json as _json, shutil as _shutil
-    lumos = _shutil.which("lumos") or (str(project_root / "scripts" / "lumos") if (project_root / "scripts" / "lumos").exists() else None)
+    import json as _json
+    # ★2026-09-06 改★:原本 which 找不到就退回 `project_root/scripts/lumos`
+    # ——那是**被打開那個資料夾自己的碼**。改成只用可信來源,找不到就跳過。
+    lumos = _trusted_lumos()
     if lumos is None:
         return []
     try:
