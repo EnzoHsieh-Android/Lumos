@@ -82,50 +82,34 @@ if [[ -f "$REPO_ROOT/$_BASELINE" ]] && ! git -C "$REPO_ROOT" diff --quiet -- "$_
   exit 1
 fi
 
-# 測試套件閘(僅 Lumos 源 repo;2026-07-07):紅測試兩度溜進 main(pre-push 原只跑 doctor 不跑測試)。
-# 事件點修法:push 前全量跑一次(2026-09-06 實測約 8 分鐘、3700+ 案例;「~32s」是 2026-07-07、183 支測試時代的舊數字)。消費專案不跑——skills/ 只存在於源 repo(不 vendor),
-# 消費端自己的測試歸自己的 CI/hooks 管,lumos 不越俎。逃生:git push --no-verify(自負)。
-if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_lumos.py" ]]; then
-  echo "推送前先跑全部測試(要幾分鐘,CI 等待那組本身就超過兩分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
-  if ! "$PY" "$REPO_ROOT/scripts/test_lumos.py" >/tmp/lumos-prepush-tests.log 2>&1; then
-    {
-      echo ""
-      echo "擋下:test_lumos.py 有紅,有測試沒過。"
-      echo "完整輸出在這裡:"
-      echo "   /tmp/lumos-prepush-tests.log"
-      tail -15 /tmp/lumos-prepush-tests.log | sed 's/^/    /'
-      echo ""
-      echo "兩條路選一條:"
-      echo "  1. 修到全綠再推(正常做法)。"
-      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
-      echo ""
-    } >&2
-    exit 1
-  fi
-  tail -1 /tmp/lumos-prepush-tests.log >&2
+# ══ 閘的順序(2026-09-06 全 repo 審視 #12 重排)══
+# 便宜的先跑、貴的最後。實測:除了全套測試以外,所有閘加起來約 13 秒
+# (anchor 0.22s / 簽名檔 0.04s / doctor 1.1s / pitfalls 0.23s / code-loop 0.61s
+#  / test-layers 0.21s / 自主迴圈那支 10.3s),而全套是 8 分鐘。
+# ★原本全套排在第四位★,所以被那 13 秒裡任何一道擋下時,8 分鐘已經白燒完了。
+
+# 圖譜健康(只在 vault 存在時跑)
+# ★2026-09-06 重排:原本這段在最後面,而且「沒有 vault 就 exit 0」會直接結束整支 hook。
+#   現在它排在全套測試之前,那個 exit 0 會把後面的測試閘一起跳掉——所以改成只跳過這一段。
+have_vault=0
+for d in docs/*-knowledge docs/knowledge; do
+  [[ -d "$d" ]] && have_vault=1 && break
+done
+if [[ $have_vault -eq 1 ]] && ! "$PY" "$GRAPHCTL" doctor --ci; then
+  {
+    echo ""
+    echo "擋下:知識庫健康檢查發現問題(細節在上面)。"
+    echo "有問題的筆記推上去,下一個讀它的人會拿到錯的合約或斷掉的連結。"
+    echo ""
+    echo "三條路選一條:"
+    echo "  1. 照上面的提示把筆記修好再推。"
+    echo "  2. 覺得是檢查工具本身判錯 → 本機重跑一次確認,真的是工具錯就開一張 Issue 記下來。"
+    echo "  3. 真的要先推 → git push --no-verify(CI 還是會跑全套,紅了會看到)"
+    echo ""
+  } >&2
+  exit 1
 fi
 
-# ★第二支測試檔也要跑★(2026-09-06 全 repo 審視:CI 因此紅過一次)
-# 這支只跑 12 秒,但一直以來只有 CI 在跑它——結果是「改了預設行為、跑了關鍵字子集、
-# 推上去才被 CI 打回來」。紅在別支檔而不是你改的那支,是最難查的那種。
-if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_autonomous_loop.py" ]]; then
-  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" >/tmp/lumos-prepush-autoloop.log 2>&1; then
-    {
-      echo ""
-      echo "擋下:test_autonomous_loop.py 有紅(自主迴圈那 132 支)。"
-      echo "完整輸出在這裡:"
-      echo "   /tmp/lumos-prepush-autoloop.log"
-      tail -15 /tmp/lumos-prepush-autoloop.log | sed 's/^/    /'
-      echo ""
-      echo "兩條路選一條:"
-      echo "  1. 修到全綠再推(正常做法)。"
-      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
-      echo ""
-    } >&2
-    exit 1
-  fi
-  echo "  ✓ 自主迴圈那 132 支也綠" >&2
-fi
 
 # 代碼偏科 + code-loop 必用守衛(tier=high):push 前把 diff 的代碼形態風險攤在眼前。
 # prepush範圍修法(2026-07-21):改讀 stdin 推送範圍逐 ref 判,取代 merge-base——分支與
@@ -200,26 +184,80 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   "$PY" "$GRAPHCTL" test-layers --diff "$_range" --repo "$REPO_ROOT" 2>/dev/null || true
 done
 
-# 只在 vault 存在時跑
-have_vault=0
-for d in docs/*-knowledge docs/knowledge; do
-  [[ -d "$d" ]] && have_vault=1 && break
-done
-[[ $have_vault -eq 0 ]] && exit 0
-
-if "$PY" "$GRAPHCTL" doctor --ci; then
-  exit 0
+# ★第二支測試檔也要跑★(2026-09-06 全 repo 審視:CI 因此紅過一次)
+# 這支只跑 12 秒,但一直以來只有 CI 在跑它——結果是「改了預設行為、跑了關鍵字子集、
+# 推上去才被 CI 打回來」。紅在別支檔而不是你改的那支,是最難查的那種。
+if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_autonomous_loop.py" ]]; then
+  if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" >/tmp/lumos-prepush-autoloop.log 2>&1; then
+    {
+      echo ""
+      echo "擋下:test_autonomous_loop.py 有紅(自主迴圈那 132 支)。"
+      echo "完整輸出在這裡:"
+      echo "   /tmp/lumos-prepush-autoloop.log"
+      tail -15 /tmp/lumos-prepush-autoloop.log | sed 's/^/    /'
+      echo ""
+      echo "兩條路選一條:"
+      echo "  1. 修到全綠再推(正常做法)。"
+      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
+      echo ""
+    } >&2
+    exit 1
+  fi
+  echo "  ✓ 自主迴圈那 132 支也綠" >&2
 fi
 
-{
-  echo ""
-  echo "擋下:知識庫健康檢查發現問題(細節在上面)。"
-  echo "有問題的筆記推上去,下一個讀它的人會拿到錯的合約或斷掉的連結。"
-  echo ""
-  echo "三條路選一條:"
-  echo "  1. 照上面的提示把筆記修好再推。"
-  echo "  2. 覺得是檢查工具本身判錯 → 本機重跑一次確認,真的是工具錯就開一張 Issue 記下來。"
-  echo "  3. 真的要先推 → git push --no-verify(CI 還是會跑全套,紅了會看到)"
-  echo ""
-} >&2
-exit 1
+# 測試套件閘(僅 Lumos 源 repo;2026-07-07):紅測試兩度溜進 main(pre-push 原只跑 doctor 不跑測試)。
+# 事件點修法:push 前全量跑一次(2026-09-06 實測約 8 分鐘、3700+ 案例;「~32s」是 2026-07-07、183 支測試時代的舊數字)。消費專案不跑——skills/ 只存在於源 repo(不 vendor),
+# 消費端自己的測試歸自己的 CI/hooks 管,lumos 不越俎。逃生:git push --no-verify(自負)。
+if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_lumos.py" ]]; then
+  # ★分片並行★(2026-09-06 全 repo 審視 #12):全套串行約 8 分鐘,大部分時間在等子進程
+  # 而不是吃 CPU,所以切成幾片同時跑很划算。實測四片牆鐘 271 秒(對照串行 480 秒,省 43%
+  # ——不是四倍,因為瓶頸是 IO 不是 CPU)。片數可用 LUMOS_TEST_SHARDS 調;設 1 就是串行。
+  _shards="${LUMOS_TEST_SHARDS:-4}"
+  # ★先探這支 runner 支不支援分片★:新 hook 配到舊的(或別人自己寫的)runner 時,
+  # 硬塞它不認得的旗標會讓它整個報錯 → 人被莫名其妙擋下。探不到就乖乖退回串行,
+  # 行為跟以前一模一樣。(2026-09-06 實際踩到:假 runner 不認得新旗標,當場被判紅。)
+  if ! "$PY" "$REPO_ROOT/scripts/test_lumos.py" --help 2>/dev/null | grep -q -- "--shard"; then
+    _shards=1
+  fi
+  _sdir="$(mktemp -d "${TMPDIR:-/tmp}/lumos-prepush-shards-XXXXXX")"
+  _rc=0
+  if [[ "$_shards" -le 1 ]]; then
+    echo "推送前先跑全部測試(約 8 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
+    "$PY" "$REPO_ROOT/scripts/test_lumos.py" > "$_sdir/s1.log" 2>&1 || _rc=1
+  else
+    echo "推送前先跑全部測試(切成 $_shards 片同時跑,約 4-5 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
+    _pids=()
+    for _i in $(seq 1 "$_shards"); do
+      "$PY" "$REPO_ROOT/scripts/test_lumos.py" --shard "$_i/$_shards" \
+        --json-summary "$_sdir/s$_i.json" > "$_sdir/s$_i.log" 2>&1 &
+      _pids+=($!)
+    done
+    # ★用每個子行程自己的離開碼判★,不是用有沒有寫出摘要檔判——摘要檔是給人看的加值,
+    # 拿它當判準等於「runner 不支援新旗標就一律紅」。
+    for _p in "${_pids[@]}"; do wait "$_p" || _rc=1; done
+  fi
+  cat "$_sdir"/s*.log > /tmp/lumos-prepush-tests.log 2>/dev/null || true
+  rm -rf "$_sdir"
+  if [[ $_rc -ne 0 ]]; then
+    {
+      echo ""
+      echo "擋下:test_lumos.py 有紅,有測試沒過。"
+      echo "紅的是這幾支:"
+      grep -h "✗ " /tmp/lumos-prepush-tests.log | head -20 | sed 's/^/    /'
+      echo ""
+      echo "完整輸出(所有分片接在一起)在這裡:"
+      echo "   /tmp/lumos-prepush-tests.log"
+      echo ""
+      echo "兩條路選一條:"
+      echo "  1. 修到全綠再推。只重跑紅的那幾支:"
+      echo "       python3 scripts/test_lumos.py --ff -x"
+      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
+      echo ""
+    } >&2
+    exit 1
+  fi
+  grep -h "passed," /tmp/lumos-prepush-tests.log >&2 || true
+fi
+
+exit 0
