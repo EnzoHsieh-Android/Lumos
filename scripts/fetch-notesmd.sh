@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 # fetch-notesmd.sh — 下載 notesmd-cli 二進位到 scripts/bin/(平台自動偵測)
 #
 # notesmd-cli (原 Yakitrak/obsidian-cli) 只用於 rename/移檔的連結改寫,

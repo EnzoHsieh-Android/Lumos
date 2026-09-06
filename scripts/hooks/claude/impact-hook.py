@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 """PreToolUse hook: 主動影響幅度偵測 (Task 10 — TTL 冷卻窗)
 
 攔截 Edit/Write/MultiEdit → 過濾(只 code 副檔名) → TTL 冷卻窗判定 →

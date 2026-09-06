@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 """uninstall.py — 公開精簡版 卸載器(stdlib only,Windows 可跑)
 
 ★這是唯一的卸載邏輯來源★——`uninstall.sh`／`uninstall.ps1` 都只是薄殼轉發參數,

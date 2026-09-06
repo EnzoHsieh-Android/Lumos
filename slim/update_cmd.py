@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 # update_cmd.py — 精簡版 `lumos update` 生成期拼接模板
 #
 # ★這不是交付檔★:slim-gen 在生成產物 CLI 時把本檔全文拼進去(連同 main() 的

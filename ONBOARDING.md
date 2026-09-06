@@ -28,6 +28,8 @@ python3 scripts/lumos bootstrap
 
 驗收:重啟 session 後跑一次 `lumos enforcement`,它列每一層防護有沒有接上(Codex 那幾行會停在「本機讀不到信任狀態」,那是天生測不到)。
 
+授權:[MIT](LICENSE)。工具鏈自己的檔案適用;工具寫進你專案的東西(設定檔裡的紀律區塊、你寫的圖譜筆記)是你的。
+
 ## 前置需求
 
 | 需要 | 用途 | 沒有會怎樣 |

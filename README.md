@@ -357,6 +357,7 @@ Lumos 只放**通用的圖譜工具組**:圖譜 CLI、各種閘與 hook,以及�
 - 上手細節:[ONBOARDING.md](ONBOARDING.md)
 - 架構全景:[ARCHITECTURE.md](ARCHITECTURE.md)
 - 與 SDD(規格驅動開發)的差異:[SDD-vs-Lumos.md](SDD-vs-Lumos.md)
+- 授權:[MIT](LICENSE)。**工具鏈自己的檔案適用這份條款**,包含被複製進你專案的那幾支(主程式與 hooks,每支檔頭都帶授權標示,主程式帶全文)。**工具寫進你專案的東西是你的**——設定檔裡的紀律區塊、你寫的圖譜筆記,Lumos 不主張任何權利。第三方元件的聲明列在 LICENSE 尾段。
 - 這套方法為什麼長這樣(白話,含 22 道檢查的全景圖):
   - [圖譜即合約](docs/methodology/圖譜即合約.md) — 核心主張與它的天花板
   - [圖譜即合約-全景圖](docs/methodology/圖譜即合約-全景圖.md) — 一張圖看完所有閘與檢查

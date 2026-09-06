@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 """install.py — 公開精簡版 機器層安裝器(stdlib only,Windows 可跑)
 
 ★這是唯一的安裝邏輯來源★——`install.sh`／`install.ps1` 都只是薄殼,把參數原樣轉

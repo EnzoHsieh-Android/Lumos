@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 """test_lumos.py — lumos 行為鎖定測試(stdlib only,零依賴)
 
 跑法: python3 scripts/test_lumos.py
@@ -25891,6 +25895,34 @@ def t_daily_governance_wrapper_is_function_wrapped():
     check("daily-governance: 收尾 echo 在體內", 'echo "[$(ts)] daily-governance wrapper 完成"' in body, "")
     r = _sp.run(["bash", "-n", str(p)], capture_output=True, text=True)
     check("daily-governance: bash -n 語法過", r.returncode == 0, r.stderr[:160])
+
+
+def t_license_headers_travel_with_vendored_files():
+    """授權標示必須跟著「會被複製進別人專案」的檔案走(2026-09-06 定 MIT)。
+
+    為什麼要機械守:根目錄的 LICENSE ★刻意不在 _VENDORED_TOOLKIT 白名單裡★——加進去的話
+    `lumos deinit` 會對白名單每一項無條件 unlink,等於刪掉使用者專案自己的 LICENSE。所以
+    合規完全靠檔頭:主程式帶 MIT 全文(它會單獨飄進別人的 repo),其餘被複製的檔帶 SPDX 兩行。
+    檔頭是靠人手維持的東西,重構或 slim-gen 改寫時最容易被靜默弄丟,所以釘一條。"""
+    import re as _re
+    root = Path(GRAPHCTL).resolve().parent.parent
+    main = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    head = "\n".join(main.splitlines()[:45])
+    check("授權: 主程式檔頭有 SPDX 標示", "SPDX-License-Identifier: MIT" in head and "SPDX-FileCopyrightText" in head, head[:80])
+    check("授權: 主程式檔頭帶 MIT 全文(單獨飄出去也說得清)",
+          "Permission is hereby granted, free of charge" in main[:4000] and "WITHOUT WARRANTY OF ANY KIND" in main[:4000], "")
+    lic = root / "LICENSE"
+    check("授權: 根目錄有 LICENSE 且是 MIT", lic.is_file() and "MIT License" in lic.read_text(encoding="utf-8"), str(lic))
+    # 白名單四支 + hooks 整夾(它們都會被複製到消費專案)
+    targets = ["scripts/test_lumos.py", "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
+               "scripts/fetch-notesmd.sh", "scripts/hooks/pre-commit", "scripts/hooks/post-commit", "scripts/hooks/pre-push"]
+    targets += sorted(str(p.relative_to(root)) for p in (root / "scripts" / "hooks" / "claude").glob("*.py"))
+    missing = [f for f in targets if "SPDX-License-Identifier: MIT" not in "\n".join((root / f).read_text(encoding="utf-8").splitlines()[:45])]
+    check("授權: 每支會被複製進消費專案的檔都帶 SPDX 標示", not missing, str(missing))
+    src = main
+    m = _re.search(r"_VENDORED_TOOLKIT = \((.*?)\)", src, _re.S)
+    check("授權: ★LICENSE 不得進 _VENDORED_TOOLKIT★(deinit 會無條件刪白名單項,會刪掉使用者自己的 LICENSE)",
+          bool(m) and "LICENSE" not in m.group(1), (m.group(1)[:120] if m else "找不到白名單"))
 
 
 if __name__ == "__main__":

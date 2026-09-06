@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 # graph-rename.sh — 圖譜 rename/移檔的封印 wrapper(只放行 notesmd-cli `move`)
 #
 # 為什麼封印: notesmd-cli `move` 經五項補測通過(連結改寫含 frontmatter 字串、

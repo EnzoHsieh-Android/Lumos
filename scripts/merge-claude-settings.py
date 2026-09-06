@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 """Merge graph hook entries into ~/.claude/settings.json — idempotent.
 
 跟 scripts/install-hooks.sh 配合用。已存在的 hook entry 不重複加。

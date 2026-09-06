@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 """SessionStart hook — 開場一行:提醒「第一步敲 lumos」和指令索引在哪(Projects/指令索引與情境測試_計劃)。
 
 為什麼要有它:規則寫在 CLAUDE.md 和 skill 裡,但 Claude 會在任務中途忘記「我該去翻索引」;

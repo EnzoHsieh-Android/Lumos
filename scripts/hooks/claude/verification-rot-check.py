@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 """PostToolUse hook: 偵測 git commit 是否使既有 Verification 結論失效。
 
 Triggered by: PostToolUse on Bash matching `git commit` (any variant).

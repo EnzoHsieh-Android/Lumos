@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+# SPDX-License-Identifier: MIT
+# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+# https://github.com/EnzoHsieh-Android/Lumos
 """SessionStart hook — CI 紅燈後備網（CI回流閉環_計劃 [S2b]）。
 
 主路徑是「push 後同輪跑 lumos ci-wait 當場修」；本 hook 只在**主路徑沒跑完**

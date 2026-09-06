@@ -360,3 +360,4 @@ Lumos only holds the **generic graph toolchain**: the graph CLI, its gates and h
   - [圖譜即合約-對外論述](docs/methodology/圖譜即合約-對外論述.md) — the version written for outside readers
 - Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md)
 - vs. SDD (spec-driven development): [SDD-vs-Lumos.md](SDD-vs-Lumos.md)
+- Licence: [MIT](LICENSE). **The terms cover the toolchain's own files**, including the handful copied into your project (the CLI and its hooks — each carries an SPDX header, and the CLI carries the full text in its header). **What the tool writes into your project is yours** — the discipline block in your config files, the graph notes you author; Lumos claims nothing in them. Third-party notices are at the end of LICENSE.
