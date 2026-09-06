@@ -40,6 +40,15 @@ TIMEOUT_NOTE = ("LUMOS-LENS:鏡頭超時,這次沒附節點({what})。"
 # 上面那句在講「背景會把快取算完」——但認領走的是完全不同的機制:它只是從派工前
 # 就武裝好的檔案裡原子領一席,**全程不寫任何快取**。對這條路講快取是每次都錯,
 # 不是邊界情況。真正該講的是:這次沒領到,要重新武裝。
+# ★設計審那條路也要用不同的說明★(2026-09-07 代碼審 r2 通才席抓到)
+# 上面那句在講「背景會把快取算完」,但設計審模式(LUMOS-SPEC:)★本來就不快取★
+# (計劃常改,快取會給過期答案),所以也沒有背景暖快取這回事——超時就是這次沒有,
+# 下一次還是要重算。對這條路講快取是每次都錯。
+SPEC_TIMEOUT_NOTE = ("LUMOS-LENS:鏡頭超時,這次沒附節點({what})。"
+                     "★設計審這條路不快取★(計劃常改,快取會給過期答案),"
+                     "所以沒有背景暖快取——下一次還是要重算。"
+                     "想自己看算不算得出來:`lumos dispatch-lens --spec {what}`。")
+
 CLAIM_TIMEOUT_NOTE = ("LUMOS-LENS:領席超時,這次沒附節點(Codex 席:--claim)。"
                       "★這條路不會有背景暖快取★——認領是從派工前武裝好的檔案裡領一席,"
                       "沒領到就是沒領到。編排者:重新武裝再派 "
@@ -237,11 +246,9 @@ def _claim_codex_seat(payload: dict) -> int:
     if r is None or r.returncode == 5:
         # 架構 r1 C:與 Claude 分支同語意——超時不再靜默,經 additionalContext 給一行固定說明
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": _frame_injected(CLAIM_TIMEOUT_NOTE)}}, ensure_ascii=False))
-        _debug("lumos dispatch-lens --claim 超時,已附超時說明(那支仍在背景把快取算完)")
+        _debug("lumos dispatch-lens --claim 超時,已附超時說明(這條路沒有背景暖快取)")
         return 0
-    if r is None:
-        _debug("lumos dispatch-lens --claim 起不來,放行")
-        return 0
+
     if r.returncode != 0:
         _debug(f"lumos dispatch-lens --claim rc={r.returncode}:{r.stderr.strip()[:200]},放行")
         return 0
@@ -300,20 +307,29 @@ def main() -> int:
     # ★下限不能訂太小★:光是起一個 python 行程就要 0.4 秒起跳(實測小專案整趟 0.46 秒),
     #   下限 0.5 秒等於「每次都超時」,連一瞬間算得完的小專案都被推去走背景那條路。
     #   訂 3 秒:夠小專案跑完,對大範圍又遠小於天花板、該超時的照樣超時。
-    argv = argv + (["--deadline", f"{max(3.0, _lens_timeout()):.2f}"] if rng else [])
+    # ★deadline 與外層 timeout 都必須留在天花板之內★(2026-09-07 代碼審 r2 兩席都提):
+    #   第一版寫 max(3.0, 內層預算),而外層 subprocess timeout 是「內層預算 + 5」——
+    #   兩個數字都可能超過天花板:①天花板調小時 0.7×天花板+5 會大於天花板
+    #   ②已耗很多時內層剩 1 秒,卻被下限抬成 3 秒。那正是這批要修的「內層 ≥ 外層」。
+    #   現在:兩個都夾在「天花板 × 0.9」之內,下限也不許超過它。
+    _cap = _outer_budget(default=60) * 0.9
+    _dl = min(max(3.0, _lens_timeout()), _cap)
+    _run_tmo = min(_dl + 5, _cap)
+    argv = argv + (["--deadline", f"{_dl:.2f}"] if rng else [])
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=_lens_timeout() + 5)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=_run_tmo)
     except (subprocess.TimeoutExpired, OSError):
         r = None
     if r is None or r.returncode == 5:
         # 2026-09-05 第二輪審視 d1:超時不再靜默——今天 39 次派工 21 次放空,編排者完全不知道。附一行固定句(零自由文字)。
         what = rng or spec
-        _emit_updated(tool_input, prompt, TIMEOUT_NOTE.format(what=what, cmd=(rng if rng else f"--spec {spec}"), n=10))   # 通才 r1 #1:spec 模式要給對指令
+        # 兩條路的機制不同,說明也要不同(r2 通才席:共用那句對設計審是假話)
+        _note = (TIMEOUT_NOTE.format(what=what, cmd=rng, n=10) if rng
+                 else SPEC_TIMEOUT_NOTE.format(what=what))
+        _emit_updated(tool_input, prompt, _note)
         _debug("lumos dispatch-lens 超時,已附超時說明行(那支仍在背景把快取算完)")
         return 0
-    if r is None:
-        _debug("lumos dispatch-lens 起不來,放行")
-        return 0
+
     if r.returncode != 0:
         _debug(f"lumos dispatch-lens rc={r.returncode}:{r.stderr.strip()[:200]},放行")
         return 0

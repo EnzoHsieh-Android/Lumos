@@ -18,6 +18,13 @@ summary: |-
   TEST:t_hook_inner_timeout_always_below_outer,t_lens_timeout_keeps_warming_cache
 plan_refs:
   - "[[Projects/全repo審視_計劃]]"
+decisions:
+  - content: 影響鏡頭單檔逾時不再寫死 30 秒,改成由外層天花板算(天花板×0.7 減已耗);翻掉舊的「單檔維持 30 秒(逐字等價)」
+    id: d1
+    context: 舊值 30 等於外層天花板。內層一到,外面會先把整支 hook 砍掉(SIGKILL、繞過 try/except),於是內層那條「逾時就 fail-open」的分支結構上永遠跑不到——而那條分支裡有「把冷卻窗記號清掉」。跑不到就表示:超時之後那個檔被鎖住 20 分鐘完全不注入,而且沒有人知道。翻的是 Projects/Codex完全支援_計劃 實作紀錄裡那句「單檔維持 30 秒(逐字等價)」。2026-09-07 代碼審 batch8 r1 架構席指出翻案沒走正式決策鏈、r2 再次指出仍未補,故補記。
+    why_chosen: 舊裁定的理由是「改寫時不動行為」,本身沒錯;但那個數字讓一條為了容錯而寫的分支自己被卡死,代價是使用者看不到的靜默失效。只調大外層不解決問題——內層等於外層這個結構還在。改成由天花板算,內層永遠明顯小於外層,逾時走得到自己的分支。
+    decided: 2026-09-07
+    valid: true
 ---
 # hook逾時預算
 

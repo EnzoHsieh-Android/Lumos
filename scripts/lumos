@@ -17988,6 +17988,11 @@ def _lens_render_listed(lines, listed, read_body, cap, max_lines, bidx):
 
 
 _LENS_WARM_ENV = "LUMOS_LENS_WARMING"
+# 鎖多久沒動就當它死了。★這個數字有依據★:實測單 commit 12 秒、41 檔 17.7 秒、
+# 120 個 commit 137 秒;900 秒是最慢實測的 6.5 倍餘裕。
+# 第一版寫 300——而 137 秒的範圍再大一點就會撞到,那時鎖會被誤判成死的(r2 外家席指出)。
+# REVISIT:2026-12-07 若出現實際算超過 900 秒的範圍,這個數字要跟著調,或改成看行程還在不在
+_LENS_LOCK_STALE_SEC = 900
 
 
 def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
@@ -18008,20 +18013,45 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
     # 鎖檔名要跟快取同基底再加後綴——用 with_suffix 會把 .json 換掉,變成另一個名字
     # (第一版就是這樣,結果第一次留下的鎖對不到第二次要找的快取)。
     lock = cpath.with_name(cpath.name + ".warming")
-    already = False
-    try:
-        lock.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
-    except FileExistsError:
-        # 已經有人在算:看它是不是還活著(鎖檔太舊就當它死了,自己接手)
+
+    def _take_lock():
+        """搶到鎖回 True(該由我派工),沒搶到回 False(已經有人在算)。
+
+        ★接手也要原子★(2026-09-07 代碼審 r2 外家席):第一版的過期判斷是
+        「建不成 → 看鎖檔多舊 → 太舊就當它死了」,**但只是把 already 設成 False 就繼續往下派工,
+        沒有真的把鎖換成自己的**。於是鎖一旦過期,同時進來的每一個呼叫者都會各自派一支去算
+        (實測兩個呼叫者都判定要派工)。更糟的是先算完的那支會無條件刪掉鎖檔,
+        可能刪掉另一支正在用的。
+        現在:過期時用「換名字」的方式原子接手——只有真的把舊鎖搬走的那個人才算搶到。
+        """
         try:
-            already = (_t.time() - lock.stat().st_mtime) < 300
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(fd, f"{os.getpid()}\n{_t.time():.0f}".encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            pass
         except OSError:
-            already = False
-    except OSError:
-        already = False
+            return False
+        # 鎖已存在:只有「明顯過期」才嘗試接手,而且接手本身必須是原子的
+        try:
+            if _t.time() - lock.stat().st_mtime < _LENS_LOCK_STALE_SEC:
+                return False                      # 還新,別人在算
+        except OSError:
+            return False
+        stale = lock.with_name(lock.name + f".stale-{os.getpid()}")
+        try:
+            os.rename(str(lock), str(stale))      # ★原子★:同時兩個人只有一個 rename 得到
+        except OSError:
+            return False                          # 別人先接手了
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+        return _take_lock()                        # 舊鎖清掉了,再正常搶一次
+
+    already = not _take_lock()
 
     if not already:
         argv = [sys.executable, os.path.abspath(__file__), "dispatch-lens", diff_range,
@@ -18029,7 +18059,9 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
         kw = {"stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL, "stdin": _sp.DEVNULL}
         if hasattr(os, "setsid"):
             kw["start_new_session"] = True          # 自己一組,不跟著呼叫者被收掉
-        env = dict(os.environ); env[_LENS_WARM_ENV] = "1"
+        env = dict(os.environ)
+        env[_LENS_WARM_ENV] = "1"
+        env["LUMOS_LENS_LOCK_OWNER"] = str(os.getpid())   # 背景那支據此只刪自己這把鎖
         try:
             _sp.Popen(argv, env=env, **kw)
         except OSError:
@@ -18053,8 +18085,16 @@ def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
             return 0
         _t.sleep(0.1)
     # 到時間了:那支還在背景算。印一行機器讀得懂的說明,讓 hook 照它自己的格式轉述。
-    print(_j2.dumps({"timed_out": True, "still_warming": True, "range": diff_range},
-                    ensure_ascii=False) if as_json else "", end="" if as_json else "\n")
+    # ★非 JSON 模式也要講人話★(2026-09-07 代碼審 r2 兩席都提):第一版只印一個空行,
+    #   人手動敲這個指令時完全看不出發生什麼事,違反「發生什麼→為何在意→下一步」的慣例。
+    if as_json:
+        print(_j2.dumps({"timed_out": True, "still_warming": True, "range": diff_range},
+                        ensure_ascii=False))
+    else:
+        print(f"這次沒算完({diff_range}),但沒有白算——有一支在背景把它算完並寫進快取。")
+        print("  為什麼在意:下一次同一個範圍就直接拿得到,不必再等。")
+        print(f"  想拿結果就再敲一次(算完之前會再回這句):")
+        print(f"      lumos dispatch-lens {diff_range}")
     return 5
 
 
@@ -18201,9 +18241,14 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
            "base": base_sha, "head": head_sha, "cache_hit": False}
     if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
         _lens_cache_write(cpath, out)
-        # 算完把「有人在算」的鎖清掉(是背景那支就一定要清,不然下一次會以為還有人在算)
+        # 算完把「有人在算」的鎖清掉。★只刪自己那把★(2026-09-07 代碼審 r2 外家席):
+        # 無條件刪的話,鎖過期被別人接手之後,先算完的那支會刪掉**別人正在用的鎖**。
+        # 鎖裡寫的是派工者的行程編號;背景這支從環境變數拿得到,對得上才刪。
         try:
-            (cpath.with_name(cpath.name + ".warming")).unlink()
+            _lk = cpath.with_name(cpath.name + ".warming")
+            _owner = os.environ.get("LUMOS_LENS_LOCK_OWNER")
+            if _owner and _lk.read_text(encoding="utf-8").split("\n")[0].strip() == _owner:
+                _lk.unlink()
         except OSError:
             pass
     if as_json:

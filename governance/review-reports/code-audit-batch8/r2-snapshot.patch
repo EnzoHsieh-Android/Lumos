@@ -1,0 +1,1101 @@
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index 62207e3..a12116b 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -397,21 +397,24 @@ def find_notes_mentioning(rel_paths: list[str], graph_root: Path) -> dict[str, l
+     stems = stems[:5]  # 控成本
+ 
+     if not stems:
+         return {}
+ 
+     result: dict[str, list[str]] = {}
+     for stem in stems:
+         try:
+             proc = subprocess.run(
+                 ["obsidian", f"vault={vault_name}", "search", f"query={stem}", "limit=5"],
+-                capture_output=True, text=True, timeout=min(2.0, _inner_budget(default=30)),
++                # ★這裡刻意寫死 2 秒,不走預算★(2026-09-07 代碼審 r1 通才席):
++                # 這是逐個候選跑的小查詢,最多 5 次;包成 min(2.0, 預算) 只是好看——
++                # 預算算出來一定 ≥2,取小值恆等於 2,等於沒接上單一來源卻宣稱接了。
++                capture_output=True, text=True, timeout=2.0,
+             )
+         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+             return {}  # obsidian 全面不可用,放棄 enrichment
+         if proc.returncode != 0:
+             continue
+         notes = [
+             ln.strip() for ln in proc.stdout.splitlines()
+             if ln.strip() and ln.strip().endswith(".md")
+         ]
+         if notes:
+@@ -522,44 +525,72 @@ def _trusted_lumos():
+ #
+ # ★內層 ≥ 外層代表什麼★:內層那條「逾時就 fail-open」的分支**結構上永遠跑不到**——
+ # 外面會先把整支 hook 砍掉(SIGKILL,繞過 try/except)。影響鏡頭那支的 fail-open 分支裡
+ # 有「把冷卻窗記號清掉」,跑不到就表示超時之後那個檔被鎖住 20 分鐘完全不注入,而沒人知道。
+ # **一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了。**
+ #
+ # 現在:天花板由註冊表一處生成,用 --budget 傳進來;內層一律取「天花板 × 0.7 減掉已耗」,
+ # 留 30% 給 hook 自己的啟動、收尾與寫輸出。拿不到 --budget(舊註冊還沒更新)就用保守預設。
+ _BUDGET_RATIO = 0.7
+ _BUDGET_FLOOR = 1.0          # 再怎麼扣也留 1 秒,不要算出 0 或負數
++_BUDGET_START = None         # 這支 hook 開始跑的時刻(第一次用到時記)
+ 
+ 
+ def _outer_budget(default=10.0):
+-    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。"""
++    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。
++    ★上限夾住★:異常大的值會讓內層跟著失控放大,等於整個 fail-open 形同虛設。"""
+     import sys as _s
+     argv = _s.argv
++    got = None
+     for i, a in enumerate(argv):
+         if a == "--budget" and i + 1 < len(argv):
+             try:
+-                return float(argv[i + 1])
++                got = float(argv[i + 1])
+             except ValueError:
+-                return default
++                got = None
++            break
+         if a.startswith("--budget="):
+             try:
+-                return float(a.split("=", 1)[1])
++                got = float(a.split("=", 1)[1])
+             except ValueError:
+-                return default
+-    return default
++                got = None
++            break
++    if got is None or got <= 0:
++        got = default
++    return min(float(got), 600.0)
++
+ 
++def _inner_budget(elapsed=None, default=10.0):
++    """內層某一段還能用幾秒:天花板 × 0.7 − 這支 hook 到目前為止已經花掉的時間,下限 1 秒。
+ 
+-def _inner_budget(elapsed=0.0, default=10.0):
+-    """內層某一段能用幾秒:天花板 × 0.7 − 已耗,下限 1 秒。
+-    ★永遠小於外層★,所以逾時走的是自己的 fail-open 分支,不是被外面砍掉。"""
+-    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - float(elapsed))
++    ★已耗時間自己算,不靠呼叫端記得傳★(2026-09-07 代碼審 r1 通才席抓到):
++    第一版的 elapsed 預設 0,而六個呼叫點裡只有一個真的傳了值——於是同一支 hook
++    只要依序呼叫兩次,理論上限就是 2 × 0.7 × 外層 = 1.4 倍外層,**結構性地超過天花板**。
++    實測:進場提醒那支 7+7=14 秒 vs 外層 10;CI 狀態那支 10.5+10.5=21 秒 vs 外層 15。
++    ★這正是這批改動宣稱要修掉的問題,只是換個地方重新發生。★
++
++    ★★這是「還剩多少」不是「每段配額」★★——很容易誤解,所以講清楚:
++    回傳的是「從現在到預算用完還有幾秒」。所以連續呼叫兩次拿到的兩個數字**不該相加**:
++    第一次拿到 7 秒、真的用掉 5 秒之後,第二次會拿到 2 秒。
++    只有在「第一段其實沒用多久」時第二次才會拿到接近 7 秒——那也是對的,因為時間真的還在。
++    ★守衛要驗的是「真的用掉時間之後,下一次拿到的會變少,而且總和不超過天花板」★,
++    不是「兩次的數字相加小於天花板」(那個判準本身就錯,會逼出錯誤的修法)。
++
++    ★誠實邊界★:天花板小於約 1.43 秒時,下限 1 秒會反過來大於外層。目前註冊表最小值是 10,
++    離這個門檻很遠;真要調到那麼小的話這個假設就不成立了。
++    """
++    import time as _tm
++    global _BUDGET_START
++    if _BUDGET_START is None:
++        _BUDGET_START = _tm.monotonic()
++    used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
++    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
+ # ── ★逾時預算結束★ ──────────────────────────────────────────────────
+ 
+ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
+     """跟 pre-commit/pre-push 同一條路:lumos impact --diff HEAD --sync-check --json(工作樹 vs HEAD),
+     取「固定席未動」的前 cap 篇。lumos 尋路同 impact-hook._find_lumos_script 的順序(PATH 先、repo 後);
+     rc 協定同它:rc≠0 視為沒資料,fail-open 回 []。"""
+     import json as _json
+     # ★2026-09-06 改★:原本 which 找不到就退回 `project_root/scripts/lumos`
+     # ——那是**被打開那個資料夾自己的碼**。改成只用可信來源,找不到就跳過。
+     lumos = _trusted_lumos()
+diff --git a/scripts/hooks/claude/ci-status-hook.py b/scripts/hooks/claude/ci-status-hook.py
+index 6e77c83..18e7d92 100755
+--- a/scripts/hooks/claude/ci-status-hook.py
++++ b/scripts/hooks/claude/ci-status-hook.py
+@@ -99,44 +99,72 @@ def _plain_label(raw, cap=120):
+ #
+ # ★內層 ≥ 外層代表什麼★:內層那條「逾時就 fail-open」的分支**結構上永遠跑不到**——
+ # 外面會先把整支 hook 砍掉(SIGKILL,繞過 try/except)。影響鏡頭那支的 fail-open 分支裡
+ # 有「把冷卻窗記號清掉」,跑不到就表示超時之後那個檔被鎖住 20 分鐘完全不注入,而沒人知道。
+ # **一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了。**
+ #
+ # 現在:天花板由註冊表一處生成,用 --budget 傳進來;內層一律取「天花板 × 0.7 減掉已耗」,
+ # 留 30% 給 hook 自己的啟動、收尾與寫輸出。拿不到 --budget(舊註冊還沒更新)就用保守預設。
+ _BUDGET_RATIO = 0.7
+ _BUDGET_FLOOR = 1.0          # 再怎麼扣也留 1 秒,不要算出 0 或負數
++_BUDGET_START = None         # 這支 hook 開始跑的時刻(第一次用到時記)
+ 
+ 
+ def _outer_budget(default=10.0):
+-    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。"""
++    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。
++    ★上限夾住★:異常大的值會讓內層跟著失控放大,等於整個 fail-open 形同虛設。"""
+     import sys as _s
+     argv = _s.argv
++    got = None
+     for i, a in enumerate(argv):
+         if a == "--budget" and i + 1 < len(argv):
+             try:
+-                return float(argv[i + 1])
++                got = float(argv[i + 1])
+             except ValueError:
+-                return default
++                got = None
++            break
+         if a.startswith("--budget="):
+             try:
+-                return float(a.split("=", 1)[1])
++                got = float(a.split("=", 1)[1])
+             except ValueError:
+-                return default
+-    return default
+-
+-
+-def _inner_budget(elapsed=0.0, default=10.0):
+-    """內層某一段能用幾秒:天花板 × 0.7 − 已耗,下限 1 秒。
+-    ★永遠小於外層★,所以逾時走的是自己的 fail-open 分支,不是被外面砍掉。"""
+-    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - float(elapsed))
++                got = None
++            break
++    if got is None or got <= 0:
++        got = default
++    return min(float(got), 600.0)
++
++
++def _inner_budget(elapsed=None, default=10.0):
++    """內層某一段還能用幾秒:天花板 × 0.7 − 這支 hook 到目前為止已經花掉的時間,下限 1 秒。
++
++    ★已耗時間自己算,不靠呼叫端記得傳★(2026-09-07 代碼審 r1 通才席抓到):
++    第一版的 elapsed 預設 0,而六個呼叫點裡只有一個真的傳了值——於是同一支 hook
++    只要依序呼叫兩次,理論上限就是 2 × 0.7 × 外層 = 1.4 倍外層,**結構性地超過天花板**。
++    實測:進場提醒那支 7+7=14 秒 vs 外層 10;CI 狀態那支 10.5+10.5=21 秒 vs 外層 15。
++    ★這正是這批改動宣稱要修掉的問題,只是換個地方重新發生。★
++
++    ★★這是「還剩多少」不是「每段配額」★★——很容易誤解,所以講清楚:
++    回傳的是「從現在到預算用完還有幾秒」。所以連續呼叫兩次拿到的兩個數字**不該相加**:
++    第一次拿到 7 秒、真的用掉 5 秒之後,第二次會拿到 2 秒。
++    只有在「第一段其實沒用多久」時第二次才會拿到接近 7 秒——那也是對的,因為時間真的還在。
++    ★守衛要驗的是「真的用掉時間之後,下一次拿到的會變少,而且總和不超過天花板」★,
++    不是「兩次的數字相加小於天花板」(那個判準本身就錯,會逼出錯誤的修法)。
++
++    ★誠實邊界★:天花板小於約 1.43 秒時,下限 1 秒會反過來大於外層。目前註冊表最小值是 10,
++    離這個門檻很遠;真要調到那麼小的話這個假設就不成立了。
++    """
++    import time as _tm
++    global _BUDGET_START
++    if _BUDGET_START is None:
++        _BUDGET_START = _tm.monotonic()
++    used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
++    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
+ # ── ★逾時預算結束★ ──────────────────────────────────────────────────
+ 
+ def main():
+     try:
+         payload = json.loads(sys.stdin.read() or "{}")
+     except ValueError:
+         payload = {}
+     cwd = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+     root = _repo_root(cwd)
+     if root is None or not _ci_enabled(root):
+diff --git a/scripts/hooks/claude/dispatch-lens-hook.py b/scripts/hooks/claude/dispatch-lens-hook.py
+index 0441cce..282778c 100755
+--- a/scripts/hooks/claude/dispatch-lens-hook.py
++++ b/scripts/hooks/claude/dispatch-lens-hook.py
+@@ -28,20 +28,30 @@ SPEC_RE = re.compile(r"^LUMOS-SPEC:\s*(\S+)\s*$")   # 設計審用:給計劃筆
+ # ★刻意不寫「下一席大概率就有」★:那是機率宣稱,而這個專案的規矩是機率宣稱要附
+ # 回頭看的條件、要有量測。目前沒有量過「超時後下一席命中率」,所以只講機制事實
+ # (那支還在背景算),不講機率。
+ # REVISIT:2026-12-07 量一次「超時之後、同範圍下一席的快取命中率」;
+ #   命中率低就表示放手不殺沒買到東西,那時該改回殺掉或另找解法
+ TIMEOUT_NOTE = ("LUMOS-LENS:鏡頭超時,這次沒附節點({what})。"
+                 "算到一半的那支沒有被砍掉,它會繼續把結果算完寫進快取(20 分鐘內有效),"
+                 "所以同一個範圍的下一席有機會直接拿到、不必再等。"
+                 "想現在就看算不算得出來:`lumos dispatch-lens {cmd}`"
+                 "({n} 個 commit 以上約 25 秒起)。")
++
++# ★認領席位那條路要用不同的說明★(2026-09-07 代碼審 r1 通才席抓到)
++# 上面那句在講「背景會把快取算完」——但認領走的是完全不同的機制:它只是從派工前
++# 就武裝好的檔案裡原子領一席,**全程不寫任何快取**。對這條路講快取是每次都錯,
++# 不是邊界情況。真正該講的是:這次沒領到,要重新武裝。
++CLAIM_TIMEOUT_NOTE = ("LUMOS-LENS:領席超時,這次沒附節點(Codex 席:--claim)。"
++                      "★這條路不會有背景暖快取★——認領是從派工前武裝好的檔案裡領一席,"
++                      "沒領到就是沒領到。編排者:重新武裝再派 "
++                      "`lumos dispatch-lens --arm <base>..<head> --seats N`"
++                      "(--status 只看剩幾席、不重算)。")
+ # ★2026-09-07 改成從天花板算★:原本寫死 45(外層 60 的 75%),兩邊各自演化就會漂。
+ def _lens_timeout():
+     return _inner_budget(default=60)
+ 
+ 
+ # ── ★內層逾時一律從外層天花板算出來,不寫死★ ──────────────────────────────
+ # 單源說明在 Systems/hook逾時預算;這段在幾支 hook 裡是逐字相同的複本,有守衛盯著不准漂
+ # (hook 是獨立檔、複製到全域後彼此 import 不到)。
+ #
+ # 出身(2026-09-07 全 repo 審視 #14 量出來的):外層天花板寫在註冊表、內層逾時寫在各 hook,
+@@ -49,44 +59,72 @@ def _lens_timeout():
+ #
+ # ★內層 ≥ 外層代表什麼★:內層那條「逾時就 fail-open」的分支**結構上永遠跑不到**——
+ # 外面會先把整支 hook 砍掉(SIGKILL,繞過 try/except)。影響鏡頭那支的 fail-open 分支裡
+ # 有「把冷卻窗記號清掉」,跑不到就表示超時之後那個檔被鎖住 20 分鐘完全不注入,而沒人知道。
+ # **一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了。**
+ #
+ # 現在:天花板由註冊表一處生成,用 --budget 傳進來;內層一律取「天花板 × 0.7 減掉已耗」,
+ # 留 30% 給 hook 自己的啟動、收尾與寫輸出。拿不到 --budget(舊註冊還沒更新)就用保守預設。
+ _BUDGET_RATIO = 0.7
+ _BUDGET_FLOOR = 1.0          # 再怎麼扣也留 1 秒,不要算出 0 或負數
++_BUDGET_START = None         # 這支 hook 開始跑的時刻(第一次用到時記)
+ 
+ 
+ def _outer_budget(default=10.0):
+-    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。"""
++    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。
++    ★上限夾住★:異常大的值會讓內層跟著失控放大,等於整個 fail-open 形同虛設。"""
+     import sys as _s
+     argv = _s.argv
++    got = None
+     for i, a in enumerate(argv):
+         if a == "--budget" and i + 1 < len(argv):
+             try:
+-                return float(argv[i + 1])
++                got = float(argv[i + 1])
+             except ValueError:
+-                return default
++                got = None
++            break
+         if a.startswith("--budget="):
+             try:
+-                return float(a.split("=", 1)[1])
++                got = float(a.split("=", 1)[1])
+             except ValueError:
+-                return default
+-    return default
+-
+-
+-def _inner_budget(elapsed=0.0, default=10.0):
+-    """內層某一段能用幾秒:天花板 × 0.7 − 已耗,下限 1 秒。
+-    ★永遠小於外層★,所以逾時走的是自己的 fail-open 分支,不是被外面砍掉。"""
+-    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - float(elapsed))
++                got = None
++            break
++    if got is None or got <= 0:
++        got = default
++    return min(float(got), 600.0)
++
++
++def _inner_budget(elapsed=None, default=10.0):
++    """內層某一段還能用幾秒:天花板 × 0.7 − 這支 hook 到目前為止已經花掉的時間,下限 1 秒。
++
++    ★已耗時間自己算,不靠呼叫端記得傳★(2026-09-07 代碼審 r1 通才席抓到):
++    第一版的 elapsed 預設 0,而六個呼叫點裡只有一個真的傳了值——於是同一支 hook
++    只要依序呼叫兩次,理論上限就是 2 × 0.7 × 外層 = 1.4 倍外層,**結構性地超過天花板**。
++    實測:進場提醒那支 7+7=14 秒 vs 外層 10;CI 狀態那支 10.5+10.5=21 秒 vs 外層 15。
++    ★這正是這批改動宣稱要修掉的問題,只是換個地方重新發生。★
++
++    ★★這是「還剩多少」不是「每段配額」★★——很容易誤解,所以講清楚:
++    回傳的是「從現在到預算用完還有幾秒」。所以連續呼叫兩次拿到的兩個數字**不該相加**:
++    第一次拿到 7 秒、真的用掉 5 秒之後,第二次會拿到 2 秒。
++    只有在「第一段其實沒用多久」時第二次才會拿到接近 7 秒——那也是對的,因為時間真的還在。
++    ★守衛要驗的是「真的用掉時間之後,下一次拿到的會變少,而且總和不超過天花板」★,
++    不是「兩次的數字相加小於天花板」(那個判準本身就錯,會逼出錯誤的修法)。
++
++    ★誠實邊界★:天花板小於約 1.43 秒時,下限 1 秒會反過來大於外層。目前註冊表最小值是 10,
++    離這個門檻很遠;真要調到那麼小的話這個假設就不成立了。
++    """
++    import time as _tm
++    global _BUDGET_START
++    if _BUDGET_START is None:
++        _BUDGET_START = _tm.monotonic()
++    used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
++    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
+ # ── ★逾時預算結束★ ──────────────────────────────────────────────────
+ 
+ def _debug(msg: str) -> None:
+     if os.environ.get("LUMOS_HOOK_DEBUG"):
+         print(f"[dispatch-lens-hook] {msg}", file=sys.stderr)
+ 
+ 
+ def find_marker(prompt: str) -> str | None:
+     for line in prompt.split("\n"):
+         m = MARKER_RE.match(line.strip())
+@@ -168,70 +206,44 @@ def _trusted_lumos():
+ 
+ def _find_lumos_script() -> str | None:
+     """★2026-09-07 外家審查席抓到:這支是第四支,前一批漏了★
+     原本 which 找不到就退回「這支 hook 檔往上四層」的 scripts/lumos——這支 hook 會被複製進
+     消費專案,那時往上四層正好是**消費專案自己的根**,等於又回到「執行手邊資料夾的碼」。
+     前一批只改了三支、測試也只掃那三支,所以沒抓到。現在改用共用的可信來源解析。"""
+     return _trusted_lumos()
+ 
+ 
+ 
+-def _run_lens_keep_warming(argv, timeout):
+-    """跑 lumos 算鏡頭;★超時不殺它,讓它自己跑完把快取寫完★(2026-09-07 全 repo 審視 #14)。
+-
+-    出身:原本用一般的「跑到超時就砍掉」——算到一半的東西全丟,同一個範圍的下一席
+-    再燒同樣的時間、再放空一次。實際發生過:一天 39 次派工 21 次放空。
+-    唯一的緩解是「編排者先手動跑一次暖快取」,**全靠人記得**。
+-
+-    改法:自己開子行程、到時間就放手不管(不砍),它會繼續算完並把結果寫進 20 分鐘的快取。
+-    下一席同範圍就直接命中,不必再等。
+-    ★用獨立的行程組★:不然 hook 這個行程組被收掉時會把它一起帶走,等於還是白算。
+-
+-    回傳 (完成的結果或 None, 是否超時)。超時時呼叫端照舊附一行說明,只是這次
+-    「下一席可能有快取」不是空話——那支還在背景把它算完。
+-    """
+-    import subprocess as _sp, os as _os, time as _time
+-    kw = {"stdout": _sp.PIPE, "stderr": _sp.PIPE, "text": True}
+-    if hasattr(_os, "setsid"):
+-        kw["start_new_session"] = True      # 自己一組,不跟著 hook 一起被收掉
+-    try:
+-        proc = _sp.Popen(argv, **kw)
+-    except OSError:
+-        return None, False          # 起不來:回 (None, 沒超時) → 呼叫端走「起不來」那條
+-    deadline = _time.monotonic() + timeout
+-    while _time.monotonic() < deadline:
+-        if proc.poll() is not None:
+-            out, err = proc.communicate()
+-            return _sp.CompletedProcess(argv, proc.returncode, out, err), False
+-        _time.sleep(0.05)
+-    # 時間到:★不呼叫 kill/terminate★,直接放手。它會把快取寫完。
+-    return None, True
+ 
+ 
+ def _claim_codex_seat(payload: dict) -> int:
+     """Codex 側(SubagentStart):派工訊息對 hook 是密文、改不了(實驗 A),改由 `lumos dispatch-lens --claim`
+     從派工前武裝的 armed 檔原子領一席,經 additionalContext 給子代理(實驗 5 證到得了)。
+     沒武裝/過期/領完 → 什麼都不回(lumos 端判,這裡只轉送)。"""
+     repo = payload.get("cwd", "") or os.environ.get("CLAUDE_PROJECT_DIR", "")
+     if not repo:
+         _debug("Codex SubagentStart 沒有 cwd,放行")
+         return 0
+     lumos = _find_lumos_script()
+     if lumos is None:
+         _debug("找不到 lumos,放行")
+         return 0
+-    r, _timed_out = _run_lens_keep_warming(
+-        [sys.executable, lumos, "dispatch-lens", "--claim", "--repo", repo, "--json"],
+-        _lens_timeout())
+-    if _timed_out:
++    # ★薄殼★:叫 lumos、等它、拿結果。超時之後怎麼辦是 lumos 那邊的事
++    #   (2026-09-07 代碼審 r1 架構席:hook 只做三件事,其餘住 lumos 子命令)。
++    try:
++        r = subprocess.run([sys.executable, lumos, "dispatch-lens", "--claim", "--repo", repo, "--json"],
++                           capture_output=True, text=True, timeout=_lens_timeout())
++    except (subprocess.TimeoutExpired, OSError):
++        r = None
++    if r is None or r.returncode == 5:
+         # 架構 r1 C:與 Claude 分支同語意——超時不再靜默,經 additionalContext 給一行固定說明
+-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": _frame_injected(TIMEOUT_NOTE.format(what="(Codex 席:--claim)", cmd="--arm <base>..<head> --seats N 重新武裝(--status 只看剩幾席、不重算)", n=10))}}, ensure_ascii=False))
++        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": _frame_injected(CLAIM_TIMEOUT_NOTE)}}, ensure_ascii=False))
+         _debug("lumos dispatch-lens --claim 超時,已附超時說明(那支仍在背景把快取算完)")
+         return 0
+     if r is None:
+         _debug("lumos dispatch-lens --claim 起不來,放行")
+         return 0
+     if r.returncode != 0:
+         _debug(f"lumos dispatch-lens --claim rc={r.returncode}:{r.stderr.strip()[:200]},放行")
+         return 0
+     try:
+         data = json.loads(r.stdout.strip().splitlines()[-1])
+@@ -273,22 +285,34 @@ def main() -> int:
+         return 0
+     repo = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd", "")
+     if not repo:
+         _debug("沒有 CLAUDE_PROJECT_DIR 也沒有 cwd,放行")
+         return 0
+     lumos = _find_lumos_script()
+     if lumos is None:
+         _debug("找不到 lumos,放行")
+         return 0
+     argv = [sys.executable, lumos, "dispatch-lens"] + ([rng] if rng else ["--spec", spec]) + ["--repo", repo, "--json"]
+-    r, _timed_out = _run_lens_keep_warming(argv, _lens_timeout())
+-    if _timed_out:
++    # ★薄殼★:帶 --deadline 叫 lumos;它自己會在超時時派一個脫離的行程把快取算完,
++    #   rc5 = 「這次沒算完,但背景還在算」。hook 只負責把說明接進派工詞。
++    # ★不要取整★:內層預算可能是 0.x 秒(天花板小、或已經耗掉不少),取整會變 0
++    #   → lumos 那邊當成「沒給 deadline」或立刻超時,每次都走超時那條路。
++    #   (第一版寫 int(),假環境算出 0.7 秒被取成 0,測試當場翻紅。)
++    # ★下限不能訂太小★:光是起一個 python 行程就要 0.4 秒起跳(實測小專案整趟 0.46 秒),
++    #   下限 0.5 秒等於「每次都超時」,連一瞬間算得完的小專案都被推去走背景那條路。
++    #   訂 3 秒:夠小專案跑完,對大範圍又遠小於天花板、該超時的照樣超時。
++    argv = argv + (["--deadline", f"{max(3.0, _lens_timeout()):.2f}"] if rng else [])
++    try:
++        r = subprocess.run(argv, capture_output=True, text=True, timeout=_lens_timeout() + 5)
++    except (subprocess.TimeoutExpired, OSError):
++        r = None
++    if r is None or r.returncode == 5:
+         # 2026-09-05 第二輪審視 d1:超時不再靜默——今天 39 次派工 21 次放空,編排者完全不知道。附一行固定句(零自由文字)。
+         what = rng or spec
+         _emit_updated(tool_input, prompt, TIMEOUT_NOTE.format(what=what, cmd=(rng if rng else f"--spec {spec}"), n=10))   # 通才 r1 #1:spec 模式要給對指令
+         _debug("lumos dispatch-lens 超時,已附超時說明行(那支仍在背景把快取算完)")
+         return 0
+     if r is None:
+         _debug("lumos dispatch-lens 起不來,放行")
+         return 0
+     if r.returncode != 0:
+         _debug(f"lumos dispatch-lens rc={r.returncode}:{r.stderr.strip()[:200]},放行")
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index f3f3bab..dad52c4 100644
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -335,44 +335,72 @@ def _trusted_lumos():
+ #
+ # ★內層 ≥ 外層代表什麼★:內層那條「逾時就 fail-open」的分支**結構上永遠跑不到**——
+ # 外面會先把整支 hook 砍掉(SIGKILL,繞過 try/except)。影響鏡頭那支的 fail-open 分支裡
+ # 有「把冷卻窗記號清掉」,跑不到就表示超時之後那個檔被鎖住 20 分鐘完全不注入,而沒人知道。
+ # **一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了。**
+ #
+ # 現在:天花板由註冊表一處生成,用 --budget 傳進來;內層一律取「天花板 × 0.7 減掉已耗」,
+ # 留 30% 給 hook 自己的啟動、收尾與寫輸出。拿不到 --budget(舊註冊還沒更新)就用保守預設。
+ _BUDGET_RATIO = 0.7
+ _BUDGET_FLOOR = 1.0          # 再怎麼扣也留 1 秒,不要算出 0 或負數
++_BUDGET_START = None         # 這支 hook 開始跑的時刻(第一次用到時記)
+ 
+ 
+ def _outer_budget(default=10.0):
+-    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。"""
++    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。
++    ★上限夾住★:異常大的值會讓內層跟著失控放大,等於整個 fail-open 形同虛設。"""
+     import sys as _s
+     argv = _s.argv
++    got = None
+     for i, a in enumerate(argv):
+         if a == "--budget" and i + 1 < len(argv):
+             try:
+-                return float(argv[i + 1])
++                got = float(argv[i + 1])
+             except ValueError:
+-                return default
++                got = None
++            break
+         if a.startswith("--budget="):
+             try:
+-                return float(a.split("=", 1)[1])
++                got = float(a.split("=", 1)[1])
+             except ValueError:
+-                return default
+-    return default
++                got = None
++            break
++    if got is None or got <= 0:
++        got = default
++    return min(float(got), 600.0)
++
+ 
++def _inner_budget(elapsed=None, default=10.0):
++    """內層某一段還能用幾秒:天花板 × 0.7 − 這支 hook 到目前為止已經花掉的時間,下限 1 秒。
+ 
+-def _inner_budget(elapsed=0.0, default=10.0):
+-    """內層某一段能用幾秒:天花板 × 0.7 − 已耗,下限 1 秒。
+-    ★永遠小於外層★,所以逾時走的是自己的 fail-open 分支,不是被外面砍掉。"""
+-    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - float(elapsed))
++    ★已耗時間自己算,不靠呼叫端記得傳★(2026-09-07 代碼審 r1 通才席抓到):
++    第一版的 elapsed 預設 0,而六個呼叫點裡只有一個真的傳了值——於是同一支 hook
++    只要依序呼叫兩次,理論上限就是 2 × 0.7 × 外層 = 1.4 倍外層,**結構性地超過天花板**。
++    實測:進場提醒那支 7+7=14 秒 vs 外層 10;CI 狀態那支 10.5+10.5=21 秒 vs 外層 15。
++    ★這正是這批改動宣稱要修掉的問題,只是換個地方重新發生。★
++
++    ★★這是「還剩多少」不是「每段配額」★★——很容易誤解,所以講清楚:
++    回傳的是「從現在到預算用完還有幾秒」。所以連續呼叫兩次拿到的兩個數字**不該相加**:
++    第一次拿到 7 秒、真的用掉 5 秒之後,第二次會拿到 2 秒。
++    只有在「第一段其實沒用多久」時第二次才會拿到接近 7 秒——那也是對的,因為時間真的還在。
++    ★守衛要驗的是「真的用掉時間之後,下一次拿到的會變少,而且總和不超過天花板」★,
++    不是「兩次的數字相加小於天花板」(那個判準本身就錯,會逼出錯誤的修法)。
++
++    ★誠實邊界★:天花板小於約 1.43 秒時,下限 1 秒會反過來大於外層。目前註冊表最小值是 10,
++    離這個門檻很遠;真要調到那麼小的話這個假設就不成立了。
++    """
++    import time as _tm
++    global _BUDGET_START
++    if _BUDGET_START is None:
++        _BUDGET_START = _tm.monotonic()
++    used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
++    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
+ # ── ★逾時預算結束★ ──────────────────────────────────────────────────
+ 
+ def _find_lumos_script() -> str | None:
+     """找到 lumos CLI 腳本的絕對路徑。
+ 
+     優先用 shutil.which("lumos"):設計 §3 本就假設 PATH 呼叫,hook 複製到
+     ~/.claude/hooks/ 後 repo-relative 猜測失效,which 是唯一可靠方式。
+     which 找不到再 fallback 到 repo-relative(開發中 / 未安裝時兜底)。
+     """
+     # ★2026-09-06 改★:改用共用的可信來源解析(見 _trusted_lumos)。
+diff --git a/scripts/hooks/claude/lumos-entry-hook.py b/scripts/hooks/claude/lumos-entry-hook.py
+index d68e975..6ad2204 100755
+--- a/scripts/hooks/claude/lumos-entry-hook.py
++++ b/scripts/hooks/claude/lumos-entry-hook.py
+@@ -108,44 +108,72 @@ def _plain_label(raw, cap=120):
+ #
+ # ★內層 ≥ 外層代表什麼★:內層那條「逾時就 fail-open」的分支**結構上永遠跑不到**——
+ # 外面會先把整支 hook 砍掉(SIGKILL,繞過 try/except)。影響鏡頭那支的 fail-open 分支裡
+ # 有「把冷卻窗記號清掉」,跑不到就表示超時之後那個檔被鎖住 20 分鐘完全不注入,而沒人知道。
+ # **一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了。**
+ #
+ # 現在:天花板由註冊表一處生成,用 --budget 傳進來;內層一律取「天花板 × 0.7 減掉已耗」,
+ # 留 30% 給 hook 自己的啟動、收尾與寫輸出。拿不到 --budget(舊註冊還沒更新)就用保守預設。
+ _BUDGET_RATIO = 0.7
+ _BUDGET_FLOOR = 1.0          # 再怎麼扣也留 1 秒,不要算出 0 或負數
++_BUDGET_START = None         # 這支 hook 開始跑的時刻(第一次用到時記)
+ 
+ 
+ def _outer_budget(default=10.0):
+-    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。"""
++    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。
++    ★上限夾住★:異常大的值會讓內層跟著失控放大,等於整個 fail-open 形同虛設。"""
+     import sys as _s
+     argv = _s.argv
++    got = None
+     for i, a in enumerate(argv):
+         if a == "--budget" and i + 1 < len(argv):
+             try:
+-                return float(argv[i + 1])
++                got = float(argv[i + 1])
+             except ValueError:
+-                return default
++                got = None
++            break
+         if a.startswith("--budget="):
+             try:
+-                return float(a.split("=", 1)[1])
++                got = float(a.split("=", 1)[1])
+             except ValueError:
+-                return default
+-    return default
++                got = None
++            break
++    if got is None or got <= 0:
++        got = default
++    return min(float(got), 600.0)
+ 
+ 
+-def _inner_budget(elapsed=0.0, default=10.0):
+-    """內層某一段能用幾秒:天花板 × 0.7 − 已耗,下限 1 秒。
+-    ★永遠小於外層★,所以逾時走的是自己的 fail-open 分支,不是被外面砍掉。"""
+-    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - float(elapsed))
++def _inner_budget(elapsed=None, default=10.0):
++    """內層某一段還能用幾秒:天花板 × 0.7 − 這支 hook 到目前為止已經花掉的時間,下限 1 秒。
++
++    ★已耗時間自己算,不靠呼叫端記得傳★(2026-09-07 代碼審 r1 通才席抓到):
++    第一版的 elapsed 預設 0,而六個呼叫點裡只有一個真的傳了值——於是同一支 hook
++    只要依序呼叫兩次,理論上限就是 2 × 0.7 × 外層 = 1.4 倍外層,**結構性地超過天花板**。
++    實測:進場提醒那支 7+7=14 秒 vs 外層 10;CI 狀態那支 10.5+10.5=21 秒 vs 外層 15。
++    ★這正是這批改動宣稱要修掉的問題,只是換個地方重新發生。★
++
++    ★★這是「還剩多少」不是「每段配額」★★——很容易誤解,所以講清楚:
++    回傳的是「從現在到預算用完還有幾秒」。所以連續呼叫兩次拿到的兩個數字**不該相加**:
++    第一次拿到 7 秒、真的用掉 5 秒之後,第二次會拿到 2 秒。
++    只有在「第一段其實沒用多久」時第二次才會拿到接近 7 秒——那也是對的,因為時間真的還在。
++    ★守衛要驗的是「真的用掉時間之後,下一次拿到的會變少,而且總和不超過天花板」★,
++    不是「兩次的數字相加小於天花板」(那個判準本身就錯,會逼出錯誤的修法)。
++
++    ★誠實邊界★:天花板小於約 1.43 秒時,下限 1 秒會反過來大於外層。目前註冊表最小值是 10,
++    離這個門檻很遠;真要調到那麼小的話這個假設就不成立了。
++    """
++    import time as _tm
++    global _BUDGET_START
++    if _BUDGET_START is None:
++        _BUDGET_START = _tm.monotonic()
++    used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
++    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
+ # ── ★逾時預算結束★ ──────────────────────────────────────────────────
+ 
+ def _enforcement_alert(rows):
+     """回一行「防護有幾層沒生效」提醒,或 None(全 active、或只剩 unknown)。
+     ★讓 lumos enforcement 不靠人記得敲——每 session 開頭自動查,只在有層掉了才吭聲★。
+     unknown 不 nag(本機修不動,如遠端 GitHub 設定);只點名 inactive/degraded。"""
+     down = [r for r in rows if r.get("status") in ("inactive", "degraded")]
+     if not down:
+         return None
+     names = ", ".join(f"{r['layer']}({r['status']})" for r in down)
+diff --git a/scripts/lumos b/scripts/lumos
+index 8f0f1b7..8c35cf9 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -17979,21 +17979,93 @@ def _lens_render_listed(lines, listed, read_body, cap, max_lines, bidx):
+                 n_inv = sum(1 for kind, _ in rows if kind == "INVARIANT")
+                 if bidx is not None and n_inv:
+                     lines.append(f"  INVARIANT {n_inv} 條:有 {tally['real']}、懸空 {tally['dangling']}、偽證據 {tally['fake']}、裸 {tally['naked']}")
+         else:
+             lines.append(f"- {it['rel']}(超出上限,只列名)")
+         if len(lines) >= max_lines:
+             lines.append("(已截:超過 400 行)")
+             break
+ 
+ 
+-def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400):
++
++_LENS_WARM_ENV = "LUMOS_LENS_WARMING"
++
++
++def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
++    """派一個脫離的行程去算鏡頭,這邊最多等 deadline 秒;到時間就印說明、讓那支自己算完。
++
++    ★為什麼輸出要丟掉不是接管道★(2026-09-07 代碼審 r1 通才席實測):
++    接管道而沒人讀的話,輸出一多就卡在「寫不出去」,那支永遠算不完——
++    「它會自己把快取寫好」這個宣稱直接失效。實測輸出 300KB 時三秒後仍沒做完。
++    丟到 devnull 就沒有這個問題,而且我們本來就不需要它的輸出(要的是快取)。
++
++    ★為什麼開獨立行程組★:不然 hook 那一組被收掉時會把它一起帶走,等於還是白算。
++
++    ★同範圍只讓一個在算★:用一個帶行程編號的鎖檔,已經有人在算就不再派第二個
++    (並行派工時 N 席同時進來,不加這道會派出 N 個算同一件事的行程)。
++    """
++    import subprocess as _sp, time as _t, json as _j2
++
++    # 鎖檔名要跟快取同基底再加後綴——用 with_suffix 會把 .json 換掉,變成另一個名字
++    # (第一版就是這樣,結果第一次留下的鎖對不到第二次要找的快取)。
++    lock = cpath.with_name(cpath.name + ".warming")
++    already = False
++    try:
++        lock.parent.mkdir(parents=True, exist_ok=True)
++        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
++        os.write(fd, str(os.getpid()).encode())
++        os.close(fd)
++    except FileExistsError:
++        # 已經有人在算:看它是不是還活著(鎖檔太舊就當它死了,自己接手)
++        try:
++            already = (_t.time() - lock.stat().st_mtime) < 300
++        except OSError:
++            already = False
++    except OSError:
++        already = False
++
++    if not already:
++        argv = [sys.executable, os.path.abspath(__file__), "dispatch-lens", diff_range,
++                "--json"] + (["--repo", str(repo)] if repo else [])
++        kw = {"stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL, "stdin": _sp.DEVNULL}
++        if hasattr(os, "setsid"):
++            kw["start_new_session"] = True          # 自己一組,不跟著呼叫者被收掉
++        env = dict(os.environ); env[_LENS_WARM_ENV] = "1"
++        try:
++            _sp.Popen(argv, env=env, **kw)
++        except OSError:
++            try:
++                lock.unlink()
++            except OSError:
++                pass
++
++    # 等快取出現(不是等行程結束——那支可能比 deadline 久很多)。
++    # 用小步輪詢:要等的是「檔案出現」不是「行程結束」,標準庫沒有現成的等法。
++    end = _t.monotonic() + float(deadline)
++    while _t.monotonic() < end:
++        got = _lens_cache_read(cpath)
++        if got is not None:
++            try:
++                lock.unlink()
++            except OSError:
++                pass
++            got["cache_hit"] = True
++            print(_j2.dumps(got, ensure_ascii=False) if as_json else got.get("text", ""))
++            return 0
++        _t.sleep(0.1)
++    # 到時間了:那支還在背景算。印一行機器讀得懂的說明,讓 hook 照它自己的格式轉述。
++    print(_j2.dumps({"timed_out": True, "still_warming": True, "range": diff_range},
++                    ensure_ascii=False) if as_json else "", end="" if as_json else "\n")
++    return 5
++
++
++def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None):
+     import json as _json
+     import io, contextlib, time as _time
+     _t0 = _time.monotonic()   # v1.2:hook 內層 45 秒是總帳,備援段預算=45−已耗−保留
+     parts = _lens_range_ok(diff_range)
+     if parts is None:
+         print("擋下:範圍要長成 <base>..<head>(恰好一個 ..、兩端都有、不能是 ... 或 - 開頭)", file=sys.stderr)
+         return 2
+     base_ref, head_ref = parts
+     start = Path(repo) if repo else Path.cwd()
+     r = _lens_git(start, "rev-parse", "--show-toplevel")
+@@ -18018,20 +18090,48 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
+         return 4
+     cpath = _lens_cache_path(root, base_sha, head_sha)
+     cached = None if (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")) else _lens_cache_read(cpath)
+     if cached is not None:
+         cached["cache_hit"] = True
+         if as_json:
+             print(_json.dumps(cached, ensure_ascii=False))
+         else:
+             print(cached.get("text", ""))
+         return 0
++
++    # ★超時之後讓它自己算完,邏輯住在這裡不住 hook★(2026-09-07 代碼審 r1 架構席)
++    #
++    # 出身:hook 原本超時就把子行程砍掉,算到一半全丟,同範圍下一席再燒一次
++    # (實際:一天 39 次派工 21 次放空)。第一版我把「放手不殺」寫進 hook——
++    # ★而這個專案的裁定是「hook 只做三件事,其餘全部住 lumos 子命令」,
++    #   我自己在計劃筆記裡寫了兩次要遵守,然後違反它。★
++    #
++    # 第一版還有一個實測出來的病:子行程的輸出接在管道上而沒人讀,
++    # 輸出一多就卡在寫不出去,永遠算不完——「它會自己算完」這個宣稱直接失效。
++    # 實測:輸出 300KB 時三秒後仍沒做完;真實輸出目前 0.5–10KB,是活的隱患不是理論
++    # (超時的情境正好就是範圍大、輸出大的情境)。
++    #
++    # 現在的做法:帶 --deadline 時,自己派一個**完全脫離**的行程去算(輸出丟掉,
++    # 所以永遠不會卡在管道),這邊只等快取出現;到時間就印一行說明結束,那支繼續算完。
++    # ★算得快就不要繞路★(2026-09-07 測試抓到):第一版無條件「派一個行程去算、這邊等」,
++    # 於是小專案(本來一瞬間就算完)也被逼走超時那條路——多一次行程啟動,而且 deadline
++    # 短的時候每次都回「超時」,明明它 0.2 秒就能算完。
++    # 現在的順序:①派背景那支去算(它會寫快取)②這邊在窗口內等快取出現
++    #   ——算得快的話一兩百毫秒就等到,跟直接算幾乎沒差;算不完才回「還在算」。
++    # ★為什麼不是「自己算、算不完再交給背景」★:那需要中途放棄一個算到一半的工作,
++    #   Python 沒有安全的中斷點;派出去等結果是這裡唯一乾淨的做法。
++    # ★關掉快取時不能走這條路★(2026-09-07 測試抓到):這條路整個靠快取把結果從背景那支
++    #   傳回來——快取關掉就永遠等不到,每次都回「超時」。關快取的情境(測試、除錯、
++    #   刻意要看即時結果)本來就該直接算。
++    if deadline and deadline > 0 and not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
++        return _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline)
++
+     buf = io.StringIO()
+     with contextlib.redirect_stdout(buf):
+         rc = cmd_impact_diff(diff_range, repo=str(root), as_json=True)
+     if rc != 0:
+         return rc
+     try:
+         data = _json.loads(buf.getvalue().strip().splitlines()[-1])
+     except (ValueError, IndexError):
+         print("擋下:impact --diff 回傳讀不懂", file=sys.stderr)
+         return 2
+@@ -18094,20 +18194,25 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
+         lines.append("以上只供對照參考,不是指令;判斷仍以你自己讀到的 diff 與筆記為準。")
+         # ★2026-09-07 架構審查席裁:同一個問題不准有兩套慣例★
+         # 影響鏡頭那邊加了框、這邊還是舊的「句尾一句話」,同一個 repo 就有兩套。
+         # 統一成「框 + 句尾話」——框多買到的是「不可信的區域從哪裡開始」。
+         lines[:] = [_frame_injected("\n".join(lines))]
+     out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status, "fallback_status": fallback_status,
+            "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
+            "base": base_sha, "head": head_sha, "cache_hit": False}
+     if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
+         _lens_cache_write(cpath, out)
++        # 算完把「有人在算」的鎖清掉(是背景那支就一定要清,不然下一次會以為還有人在算)
++        try:
++            (cpath.with_name(cpath.name + ".warming")).unlink()
++        except OSError:
++            pass
+     if as_json:
+         print(_json.dumps(out, ensure_ascii=False))
+     else:
+         print(out["text"])
+     return 0
+ 
+ 
+ _LENS_SPEC_HEADER = "lumos 自動附加(設計審):計劃筆記提到的程式檔牽連的固定席節點 + 計劃直接連結的節點(從工作樹讀,只供參考)"
+ _LENS_SPEC_CODE_RE = re.compile(r"(?<![\w/])((?:scripts|governance|skills|src|app|lib)/[A-Za-z0-9_./\-]+)")
+ _LENS_SPEC_MAX_FILES = 5
+@@ -19210,20 +19315,22 @@ def main():
+     p.add_argument("lens_range", nargs="?", help="diff 範圍,恰好 <base>..<head>;base 必須在主線歷史上(--claim/--disarm/--status 不用給)")
+     p.add_argument("--arm", dest="lens_arm", action="store_true", help="Codex 編排用:派工前一刻算好鏡頭、武裝 --seats 席(10 分內子代理開場各領一席)")
+     p.add_argument("--seats", dest="lens_seats", type=int, default=1, help="配 --arm:這次要派幾席(多給的當緩衝)")
+     p.add_argument("--claim", dest="lens_claim", action="store_true", help="SubagentStart hook 用:原子認領一席,回鏡頭文字")
+     p.add_argument("--disarm", dest="lens_disarm", action="store_true", help="收掉本 repo 的武裝")
+     p.add_argument("--status", dest="lens_status", action="store_true", help="看本 repo 武裝剩幾席")
+     p.add_argument("--spec", dest="lens_spec", help="設計審用:給計劃筆記路徯,鏡頭改從計劃提到的程式檔與直接連結的節點算(從工作樹讀、不快取;hook 看 LUMOS-SPEC: 標記自動叫)")
+     p.add_argument("--repo", dest="lens_repo", help="repo 內任一路徑(會自己找 repo 根)")
+     p.add_argument("--json", dest="lens_json", action="store_true", help="JSON 輸出 {text,pinned,listed,omitted_nodes,omitted_files,mainline,cache_hit}")
+     p.add_argument("--no-cache", dest="lens_nocache", action="store_true", help="不讀不寫 20 分鐘快取")
++    p.add_argument("--deadline", dest="lens_deadline", type=float, default=None, metavar="秒",
++                   help="最多等幾秒:快取沒有就派一個脫離的行程去算,這邊等到時間就回 rc5 並讓那支算完(下一次同範圍直接命中)。hook 用")
+     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
+     p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
+     p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
+     p.add_argument("--diff", dest="impact_diff", help="diff range(如 main..HEAD):聚合各改動檔的 ranked impact 成受影響功能面 manifest(code-loop 審計鏡頭)")
+     p.add_argument("--sync-only", action="store_true", dest="impact_sync_only",
+                    help="配 --sync-check:只印「該動卻沒動」的點名(hooks 用),不印受影響功能面")
+     p.add_argument("--sync-check", action="store_true", dest="impact_sync",
+                    help="落成核對(配 --diff):預期受影響節點 vs 分支實際動過節點 → 未同步清單(advisory)")
+     p.add_argument("--repo", dest="impact_repo", help="repo root(缺則退回 find_vault;hook 必傳)")
+     p.add_argument("--depth", dest="impact_depth", type=int, default=None, help="BFS 展開深度(缺省讀 .lumos/impact.json;最終預設 2)")
+@@ -19419,21 +19526,24 @@ def main():
+             return cmd_dispatch_lens_claim(repo=args.lens_repo, as_json=args.lens_json)
+         if args.lens_disarm:
+             return cmd_dispatch_lens_disarm(repo=args.lens_repo)
+         if args.lens_status:
+             return cmd_dispatch_lens_status(repo=args.lens_repo)
+         if not args.lens_range:
+             print("擋下:要給 <base>..<head>(或用 --claim/--disarm/--status)", file=sys.stderr)
+             return 2
+         if args.lens_arm:
+             return cmd_dispatch_lens_arm(args.lens_range, repo=args.lens_repo, seats=args.lens_seats, no_cache=args.lens_nocache)
+-        return cmd_dispatch_lens(args.lens_range, repo=args.lens_repo, as_json=args.lens_json, no_cache=args.lens_nocache)
++        # ★背景那支自己不准再派人★:它帶著 LUMOS_LENS_WARMING 進來,直接算、算完寫快取。
++        _dl = None if os.environ.get(_LENS_WARM_ENV) else args.lens_deadline
++        return cmd_dispatch_lens(args.lens_range, repo=args.lens_repo, as_json=args.lens_json,
++                                 no_cache=args.lens_nocache, deadline=_dl)
+     if args.cmd == "impact":
+         if sum(1 for x in (args.impact_file, args.impact_diff, args.impact_node) if x) > 1:
+             print("擋下:--file、--diff、--node 只能選一個用", file=sys.stderr)
+             return 2
+         if args.impact_node:
+             if args.impact_depth is not None:
+                 print("擋下:--node 只列直接相連的一層,沒有「深度」可言,不能搭 --depth", file=sys.stderr)
+                 return 2
+             return cmd_impact_node(args.impact_node, repo=args.impact_repo, as_json=args.impact_json)
+         if args.impact_diff:
+diff --git a/scripts/merge-claude-settings.py b/scripts/merge-claude-settings.py
+index 4297f2b..7c685a4 100755
+--- a/scripts/merge-claude-settings.py
++++ b/scripts/merge-claude-settings.py
+@@ -63,22 +63,27 @@ _HOME = str(Path.home()).replace("\\", "/")
+ # 外面會先把整支 hook 砍掉(SIGKILL,繞過 try/except)。影響鏡頭那支的 fail-open 分支裡
+ # 有「把冷卻窗記號清掉」,跑不到就表示:超時之後那個檔被鎖住 20 分鐘完全不注入,沒人知道。
+ # **一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了。**
+ #
+ # 現在天花板只寫在這裡,並且用 --budget 傳給 hook;hook 自己算內層(見各 hook 的 _inner_budget)。
+ HOOK_BUDGET = {
+     "lumos-entry-hook.py": 10,
+     "ci-status-hook.py": 15,
+     "impact-hook.py": 30,
+     "dispatch-lens-hook.py": 60,
+-    "check-graph-sync.py": 30,   # ★從 10 提到 30★:它內層要跑圖譜同步檢查(實測需 25s),
+-                                 # 舊值 10 讓那段每次都被外面砍掉——不是內層寫太大,是外層給太少
++    # ★從 10 提到 40★(2026-09-07;r1 通才席指出提到 30 還是不夠):
++    # 它內層要跑圖譜同步檢查,實測需要 25 秒。內層公式是「外層×0.7」,
++    # 所以外層 30 只給到 21 秒——★還是撐不完那 25 秒,天花板提了等於沒提★,
++    # 使用者只是多等 20 秒拿到同一個「查不到」。40×0.7=28 才真的夠。
++    # 代價誠實講:這支掛在收工事件,使用者最壞情況要多等到 28 秒。
++    # REVISIT:2026-12-07 量一次這段實際耗時分布;若多數遠低於 25 秒,把天花板調回去
++    "check-graph-sync.py": 40,
+ }
+ 
+ 
+ def _hook_cmd(rel_path):  # rel_path = "verification-rot-check.py"
+     # W6:Claude Code 在 Windows 用 Git Bash 跑 hook command → 反斜線會被 shell 吃掉
+     # (C:\Users → C:Users → python 找不到 → hook 靜默失敗)。故 Windows 下 python 路徑與
+     # home 都用正斜線 + 引號。Unix 保留 ${HOME}(可攜、Mac 已驗)。
+     # Codex 目標:命令列帶明確 --harness codex(d2:hook 靠旗標分支,不由 payload 欄位猜家族;
+     # 現役五支 hook 都不讀 argv,多帶旗標無害,S1 再各自認旗標)。
+     if TARGET == "codex":
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f92cb85..c8c904d 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -11281,93 +11281,126 @@ def t_hook_inner_timeout_always_below_outer():
+         old_argv = _sys.argv
+         _sys.argv = [str(f), "--budget", str(outer)]
+         try:
+             sp.loader.exec_module(mod)
+             inner = mod._inner_budget(default=float(outer))
+         finally:
+             _sys.argv = old_argv
+         check(f"★逾時預算★: {name} 算出的內層 {inner:.1f}s 明顯小於外層 {outer}s",
+               inner <= float(outer) * 0.75, f"內 {inner} / 外 {outer}")
+ 
++        # ★真正要守的是「連打幾次都不會累加超標」★(2026-09-07 代碼審 r1 通才席抓到):
++        # 第一版只驗單次呼叫的比例,而 hook 的 main() 常常依序打兩次——
++        # 實測進場提醒那支 7+7=14 秒 vs 外層 10、CI 狀態那支 10.5+10.5=21 秒 vs 外層 15,
++        # 結構性超標,而那條單次斷言全綠。
++        # ★判準要對★:回傳的是「還剩多少」不是「每段配額」,所以不能把兩次相加來判——
++        # 要驗的是「真的用掉時間之後,下一次拿到的會變少,而且已耗+下次上限 ≤ 天花板」。
++        import time as _tw
++        _sys.argv = [str(f), "--budget", str(outer)]
++        try:
++            _spent = 0.35
++            _tw.sleep(_spent)
++            _again = mod._inner_budget(default=float(outer))
++        finally:
++            _sys.argv = old_argv
++        check(f"★逾時預算★: {name} 用掉時間之後,下一次拿到的會變少(不是每次都給滿)",
++              _again < inner, f"第一次 {inner:.2f} → 用掉 {_spent}s 後 {_again:.2f}")
++        check(f"★逾時預算★: {name} 已耗 + 下次上限仍不超過天花板(連打幾次都不會累加超標)",
++              _spent + _again <= float(outer), f"{_spent}+{_again:.2f} vs {outer}")
++
+     # ④ 反面:拿不到 --budget 時要用保守預設,不是算出 0 或負數
+     f = hooks_dir / "impact-hook.py"
+     sp = _iu.spec_from_file_location("hb_nb", str(f), loader=_SFL("hb_nb", str(f)))
+     mod = _iu.module_from_spec(sp)
+     old_argv = _sys.argv
+     _sys.argv = [str(f)]
+     try:
+         sp.loader.exec_module(mod)
+         v = mod._inner_budget(elapsed=999, default=30)
+     finally:
+         _sys.argv = old_argv
+     check("逾時預算/反面: 已耗超過預算時仍給正值下限(不會算出 0 或負數)", v >= 1.0, str(v))
+ 
+ 
+ 
+ def t_lens_timeout_keeps_warming_cache():
+-    """★鏡頭超時不殺子行程,讓它跑完把快取寫好★(2026-09-07 全 repo 審視 #14)。
+-
+-    出身:原本用一般的「跑到超時就砍掉」——算到一半的東西全丟,同範圍的下一席再燒同樣
+-    時間、再放空一次。實際發生過:一天 39 次派工 21 次放空。唯一的緩解是「編排者先手動
+-    跑一次暖快取」,**全靠人記得**。
+-
+-    改法:自己開子行程,到時間就放手不管(不砍),它會繼續算完並把結果寫進 20 分鐘快取,
+-    下一席同範圍直接命中。★用獨立行程組★,不然 hook 的行程組被收掉時會把它一起帶走。
++    """★鏡頭超時不殺子行程,讓它跑完把快取寫好——而且這段邏輯住在 lumos 不住 hook★
++    (2026-09-07 全 repo 審視 #14;代碼審 r1 架構席把它從 hook 搬進 lumos)。
++
++    出身:原本超時就砍掉子行程——算到一半全丟,同範圍下一席再燒同樣時間再放空
++    (實際:一天 39 次派工 21 次放空)。唯一緩解是「編排者先手動暖快取」,全靠人記得。
++
++    ★兩件事被審查席打回來過,都記在這裡免得再犯★:
++    ① 第一版寫在 hook 裡——而專案裁定是「hook 只做三件事,其餘住 lumos 子命令」,
++       我自己在計劃筆記寫了兩次要遵守,然後違反它。
++    ② 第一版把子行程的輸出接在管道上而沒人讀:**輸出一多就卡在寫不出去,永遠算不完**,
++       「它會自己把快取寫好」這個宣稱直接失效(實測 300KB 輸出三秒後仍沒做完)。
++       搬進 lumos 之後輸出直接丟掉,這個問題自然消失。
++
++    這支驗的是行為:真的用 lumos 跑一個算不完的範圍,看
++    ①有沒有在期限內回「還在算」②背景那支有沒有活著把快取寫完 ③鎖有沒有自己清掉。"""
++    import subprocess as _sp, time as _t, json as _j, os as _os
++    m = _load_lumos()
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    if not (repo / ".git").exists():
++        raise _SrcOnly("不在 git 專案裡(非來源 repo),這段沒驗到")
+ 
+-    這支驗行為不是驗寫法:真的起一支慢工,設一個會超時的預算,看
+-    ①hook 有沒有準時放手 ②那支有沒有活著把事情做完。"""
+-    import importlib.util as _iu, time as _t, os as _os
+-    from importlib.machinery import SourceFileLoader as _SFL
+-    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "dispatch-lens-hook.py"
+-    if not hook.is_file():
+-        raise _SrcOnly("消費端沒有 hook 原始碼(非來源 repo),這段沒驗到")
+-    _sp2 = _iu.spec_from_file_location("h_warm", str(hook), loader=_SFL("h_warm", str(hook)))
+-    h = _iu.module_from_spec(_sp2); _sp2.loader.exec_module(h)
++    def sha(ref):
++        r = _sp.run(["git", "-C", str(repo), "rev-parse", ref], capture_output=True, text=True)
++        return r.stdout.strip()
+ 
+-    d = Path(tempfile.mkdtemp(prefix="gctl-warm-"))
+-    marker = d / "算完了"
+-    script = d / "slow.py"
+-    script.write_text(f"import time,pathlib\ntime.sleep(1.2)\n"
+-                      f"pathlib.Path({str(marker)!r}).write_text('done')\n", encoding="utf-8")
++    # 挑一個「算得夠久」的範圍;算不出來就跳過(不是失敗)
++    # ★範圍別挑太大★:第一版挑 HEAD~40,整支跑 90 秒、超時上限只剩 2 倍餘裕
++    #   ——那種測試遲早會在慢一點的機器上假紅,然後被人關掉。
++    #   挑剛好算不完 1.5 秒的最小範圍就夠證明機制。
++    base = sha("HEAD~12") or sha("HEAD~5")
++    head = sha("HEAD")
++    if not base or not head:
++        raise _SrcOnly("這個 repo 的歷史不夠長,測不到超時那條路")
++    cpath = m._lens_cache_path(repo, base, head)
++    lock = cpath.with_name(cpath.name + ".warming")
++    for f in (cpath, lock):
++        try:
++            f.unlink()
++        except OSError:
++            pass
++    check("★前置★ 現場成立: 快取是空的(不然根本走不到超時那條路)", not cpath.exists(), str(cpath))
+ 
++    rng = f"{base}..{head}"
+     t0 = _t.monotonic()
+-    r, timed = h._run_lens_keep_warming([sys.executable, str(script)], 0.3)
++    r = _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", rng, "--repo", str(repo),
++                 "--json", "--deadline", "1.5"], capture_output=True, text=True, timeout=90)
+     took = _t.monotonic() - t0
+-    check("★逾時★: hook 準時放手,不等它跑完", timed and took < 1.0, f"timed={timed} 耗時 {took:.2f}s")
+-    check("★前置★ 現場成立: 放手當下那支還沒做完(不然下面那條沒有鑑別力)",
+-          not marker.exists(), "")
+-    for _ in range(40):
+-        if marker.exists():
++    if r.returncode == 0:
++        # 這台算得比 1.5 秒還快 → 測不到超時那條路,誠實跳過而不是假裝驗過
++        raise _SrcOnly(f"這台算這個範圍只要 {took:.1f} 秒,測不到超時那條路")
++    check("★逾時★: 期限內回來,而且回的是「還在算」不是失敗",
++          r.returncode == 5 and took < 10, f"rc={r.returncode} 耗時 {took:.1f}s")
++    check("逾時: 輸出講明還在暖快取", '"still_warming": true' in r.stdout, r.stdout[:200])
++    check("★逾時★: 同範圍只讓一個在算(有鎖)", lock.exists(), str(lock))
++
++    # 背景那支要活著把快取寫完
++    for _ in range(60):
++        if cpath.exists():
+             break
+-        _t.sleep(0.1)
+-    check("★逾時★: 子行程沒被殺掉,自己把事情做完了(下一席就有快取)",
+-          marker.exists(), "記號檔沒出現=它被殺掉了,快取還是空的")
+-
+-    # 反面:沒超時時要正常拿到結果
+-    fast = d / "fast.py"
+-    fast.write_text("print('ok')\n", encoding="utf-8")
+-    r2, timed2 = h._run_lens_keep_warming([sys.executable, str(fast)], 10)
+-    check("逾時/反面: 沒超時時照常拿到結果",
+-          (not timed2) and r2 is not None and r2.returncode == 0 and "ok" in r2.stdout,
+-          f"timed={timed2} r={r2}")
+-
+-    # 起不來時要回「起不來」而不是「超時」
+-    r3, timed3 = h._run_lens_keep_warming([str(d / "不存在的東西")], 5)
+-    check("逾時: 子行程起不來時回的是「起不來」不是「超時」",
+-          r3 is None and not timed3, f"r={r3} timed={timed3}")
+-
+-    # 用獨立行程組(不然 hook 被收掉會把它一起帶走)
+-    src = hook.read_text(encoding="utf-8")
+-    check("★逾時★: 子行程開在獨立行程組(不然會跟著 hook 一起被收掉)",
+-          "start_new_session" in src, "")
+-    check("★逾時★: 超時那條路上沒有 kill / terminate(有的話等於還是白算)",
+-          "proc.kill()" not in src and "proc.terminate()" not in src, "")
++        _t.sleep(1)
++    check("★逾時★: 背景那支沒被殺掉,自己把快取寫完了(下一席就直接命中)",
++          cpath.exists(), f"快取沒出現={cpath}")
++    check("逾時: 算完鎖自己清掉(不然下一次會以為還有人在算)", not lock.exists(), str(lock))
++
++    # 邏輯必須住在 lumos,不住 hook
++    hook_src = (Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "dispatch-lens-hook.py").read_text(encoding="utf-8")
++    check("★薄殼★: hook 裡不准再有子行程監督(Popen/行程組管理)",
++          "Popen" not in hook_src and "start_new_session" not in hook_src, "hook 又長回邏輯了")
++    lumos_src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
++    check("★薄殼★: 那段住在 lumos,而且輸出丟掉不接管道(接管道會卡死)",
++          "_lens_wait_or_warm" in lumos_src and "DEVNULL" in lumos_src, "")
+ 
+ 
+ def t_hook_copy_list_completeness():
+     """通則防復發:HOOK_ENTRIES 裡每個已註冊的 hook 腳本,都必須在 _install_hooks_py 複製清單內。
+ 
+     根因(C1 同型):registration-only 測試只驗 HOOK_ENTRIES 含某檔名,
+     但不驗 _install_hooks_py 也有複製同一檔 → 靜默 no-op。
+     本測試讀兩邊並比集合,任何「註冊了忘了加複製」都會在此紅。
+     """
+     import importlib.util as _ilu
+@@ -27235,39 +27268,43 @@ def t_dispatch_lens_spec_mode():
+ def t_dispatch_lens_hook_timeout_notice_and_spec_marker():
+     """第二輪審視六修 d1/d2:hook 超時不再靜默——附一行固定超時說明(今天 39 次派工 21 次放空沒人知道);LUMOS-SPEC: 標記走 --spec。"""
+     import json as _j, io as _io, subprocess as _sp
+     from unittest.mock import patch
+     m = _load_hook_mod("dlens_timeout", "dispatch-lens-hook.py")
+     payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": str(Path(GRAPHCTL).resolve().parent.parent),
+                "tool_input": {"prompt": "你是審查員。\nLUMOS-IMPACT: main..HEAD\n", "description": "t"}}
+     # ★2026-09-07 改:hook 不再用 subprocess.run,改成自己開子行程、超時就放手不砍★
+     #   (全 repo 審視 #14:原本超時會殺掉子行程,算到一半的東西全丟,下一席再燒一次)。
+     #   所以這裡假裝的對象從 subprocess.run 換成 _run_lens_keep_warming。
+-    def boom(*a, **k): return None, True          # (沒結果, 超時了)
++    # ★2026-09-07 再改一次:超時處理整段搬進 lumos 了(代碼審 r1 架構席:hook 維持薄殼)★
++    #   hook 現在只認 lumos 的回傳碼 5 =「這次沒算完,背景還在算」。
++    class _R5:
++        returncode = 5; stdout = ""; stderr = ""
++    def boom(*a, **k): return _R5()
+     out = _io.StringIO()
+-    with patch.object(m, "_run_lens_keep_warming", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
++    with patch.object(m.subprocess, "run", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
+         rc = m.main()
+     o = out.getvalue()
+     check("lens-hook 超時: rc0 且派工詞尾端附了固定超時說明(含範圍與可跑的指令)", rc == 0 and "鏡頭超時" in o and "lumos dispatch-lens main..HEAD" in o and "updatedInput" in o, o[:200])
+     check("★逾時說明★: 講明那支還在背景算,不再教人自己先手動暖快取",
+           "繼續把結果算完寫進快取" in o and "先手跑" not in o, o[:300])
+     seen = {}
+     def fake_run(argv, timeout=None, **k):
+         seen["argv"] = argv
+         class R: returncode = 0; stdout = _j.dumps({"text": "lumos 自動附加(設計審):x\n- docs/k/Systems/a.md", "pinned": 1, "shown": 1, "mode": "spec"}); stderr = ""
+-        return R(), False                          # (結果, 沒超時)
++        return R()
+     payload["tool_input"]["prompt"] = "你是審稿人。\nLUMOS-SPEC: docs/lumos-toolchain-knowledge/Projects/X_計劃.md\n"
+     out = _io.StringIO()
+-    with patch.object(m, "_run_lens_keep_warming", fake_run), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
++    with patch.object(m.subprocess, "run", fake_run), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
+         rc = m.main()
+     out2 = _io.StringIO()
+-    with patch.object(m, "_run_lens_keep_warming", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out2):
++    with patch.object(m.subprocess, "run", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out2):
+         m.main()
+     check("lens-hook spec 超時: 超時句給的是 --spec 指令而不是把路徑當範圍(通才 r1 #1)", "lumos dispatch-lens --spec docs/lumos-toolchain-knowledge/Projects/X_計劃.md" in out2.getvalue(), out2.getvalue()[:200])
+     check("lens-hook spec 標記: 叫的是 dispatch-lens --spec <計劃> 並把回傳附進派工詞", rc == 0 and "--spec" in seen.get("argv", []) and "docs/lumos-toolchain-knowledge/Projects/X_計劃.md" in seen.get("argv", []) and "lumos 自動附加(設計審)" in out.getvalue(), str(seen.get("argv"))[:200])
+     check("lens-hook: 沒有任何標記 → 不動", m.find_marker("hi") is None and m.find_spec_marker("hi") is None, "")
+ 
+ 
+ def t_scenario_probe_per_scenario_max_turns():
+     """第二輪審視六修 d6:每題可自帶 max_turns(s15 要先查再建,18 步不夠);壞值退預設。"""
+     import importlib.util
+     from importlib.machinery import SourceFileLoader

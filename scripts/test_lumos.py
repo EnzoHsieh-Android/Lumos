@@ -11320,6 +11320,23 @@ def t_hook_inner_timeout_always_below_outer():
         _sys.argv = old_argv
     check("逾時預算/反面: 已耗超過預算時仍給正值下限(不會算出 0 或負數)", v >= 1.0, str(v))
 
+    # ★這段複本也要有漂移守衛★(2026-09-07 代碼審 r2 架構席抓到):
+    # 程式碼註解自己寫著「這段在幾支 hook 裡是逐字相同的複本,有守衛盯著不准漂」——
+    # ★但那句話當時是假的★:另外兩段複本(可信來源、注入框)各有逐字比對的守衛,
+    # 只有這段沒有,而它是三段裡最厚的一段。寫下一個宣稱卻沒有東西在守它,
+    # 正是這個專案一再踩到的那型。補上,不是把那句話刪掉。
+    import hashlib as _hl2, re as _re2
+    _sigs = {}
+    for _f in sorted(hooks_dir.glob("*.py")):
+        _txt = _f.read_text(encoding="utf-8")
+        _mm = _re2.search(r"_BUDGET_RATIO = .*?\n    return max\(_BUDGET_FLOOR,.*?\n", _txt, _re2.S)
+        if _mm:
+            _sigs.setdefault(_hl2.sha256(_mm.group(0).encode()).hexdigest(), []).append(_f.name)
+    check("★前置★ 現場成立: 至少五支 hook 有那段預算複本",
+          sum(len(v2) for v2 in _sigs.values()) >= 5, str(_sigs))
+    check("★複本不准漂★: 各 hook 的逾時預算那段逐字相同(碼裡宣稱有守衛,這就是那個守衛)",
+          len(_sigs) == 1, f"{len(_sigs)} 種版本:{ {k[:8]: v2 for k, v2 in _sigs.items()} }")
+
 
 
 def t_lens_timeout_keeps_warming_cache():
