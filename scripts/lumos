@@ -15615,7 +15615,7 @@ def cmd_ci_wait(env, timeout=1800.0, repo_dir=None, sha=None, branch=None,
         return emit("unavailable")
 
     deadline = time.time() + float(timeout)
-    graced = False
+    graced = 0                    # 等過幾個 grace 窗(no-run 要連等三個才下結論)
     while True:
         runs, err = _ci_list_runs(root, sha, cfg.get("workflow"))
         if runs is None:
@@ -15635,8 +15635,8 @@ def cmd_ci_wait(env, timeout=1800.0, repo_dir=None, sha=None, branch=None,
             rc_w = _ci_record(env, out, sha, branch)
             return rc_w if rc_w else emit("red", out, rc=1)
         if runs and len(done) == len(runs):
-            if not graced:            # 全綠前再等一個 grace 期(晚註冊 run 緩解,非保證)
-                graced = True
+            if graced < 1:            # 全綠前再等一個 grace 期(晚註冊 run 緩解,非保證)
+                graced += 1
                 time.sleep(min(float(grace), max(0.0, deadline - time.time())))
                 continue
             out = [{"run_id": r.get("databaseId"), "attempt": r.get("attempt", 1),
@@ -15655,16 +15655,25 @@ def cmd_ci_wait(env, timeout=1800.0, repo_dir=None, sha=None, branch=None,
                 return emit("undetermined", out,
                             note=f"非成功但無失敗步驟可歸因({names}):不進修復路徑,請人判")
             return emit("green", out)
-        if not runs:                  # no-run 快速路徑:grace 後仍零 → 立刻收工,不白等
-            if not graced:
-                graced = True
+        if not runs:                  # no-run 快速路徑:等幾個 grace 窗仍零 → 收工,不白等
+            # ★等一個 grace 窗不夠★(2026-09-06 實測):推送後 GitHub 註冊 run 可能要好幾分鐘,
+            # 那次 14:02 推、14:15:46 才出現 run,而 ci-wait 判了 no-run。而家規明說 no-run
+            # 不算過,誤報等於叫人去查一個不存在的觸發條件問題。改成連續等三個窗才下結論。
+            # ★沒有完全診斷清楚★:那次 ci-wait 從 14:02 跑到 14:18 卻仍回 no-run,單靠加窗
+            # 未必解釋得完(可能是 API 查詢的分支/sha 條件或回傳延遲),所以下面訊息改成講
+            # 「等了多久沒看到」而不是斷言「沒有觸發」。REVISIT:2026-10-06 看帳上還有沒有 no-run。
+            if graced < 3:
+                graced += 1
                 time.sleep(min(float(grace), max(0.0, deadline - time.time())))
                 continue
             rc_w = _ci_record(env, [{"run_id": None, "attempt": 0, "workflow": "",
                                      "sha": sha, "conclusion": "no-run", "url": "",
                                      "failed_step": "", "log_tail": ""}], sha, branch)
             return rc_w if rc_w else emit(
-                "no-run", note="此 sha 未觸發任何 workflow(檢查 workflow 的 branch/path 觸發條件)")
+                "no-run", note=f"等了約 {int(float(grace) * 3)} 秒仍查不到這個 sha 的 workflow run"
+                                f"——可能是還沒註冊(推完馬上問常撞到)、也可能是 workflow 的 "
+                                f"branch/path 條件不含這次改動。★no-run 不算過★:過幾分鐘用 "
+                                f"lumos ci-status 再確認一次")
         if time.time() >= deadline:
             rc_w = _ci_record(env, [{"run_id": None, "attempt": 0, "workflow": "",
                                      "sha": sha, "conclusion": "timeout-waiting", "url": "",

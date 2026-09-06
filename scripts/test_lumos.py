@@ -26256,6 +26256,10 @@ def t_update_unions_bookkeeping_instead_of_blocking():
     origin, seed, home = base / "origin", base / "seed", base / "home"
     ident = ["-c", "user.name=t", "-c", "user.email=t@t"]
     origin.mkdir(parents=True); _sp.run(["git", "init", "-q", "--bare", "."], cwd=str(origin))
+    # ★裸倉庫的 HEAD 要指到我們真的會推的分支★(2026-09-06 CI 紅):不同機器的 init.defaultBranch
+    # 不一樣(本機 main、CI 預設 master)。HEAD 指到不存在的分支時,clone 出來是空工作樹、
+    # 只印一行 warning 就過去了,夾具於是靜默壞掉、測試在別的地方丟 FileNotFoundError。
+    _sp.run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=str(origin))
     (seed / "scripts" / "hooks" / "claude").mkdir(parents=True); (seed / "docs").mkdir(parents=True)
     for f in ("lumos", "install-graph-toolchain.sh"):
         shutil.copy2(repo / "scripts" / f, seed / "scripts" / f)
@@ -26268,6 +26272,11 @@ def t_update_unions_bookkeeping_instead_of_blocking():
     _sp.run(["git", "remote", "add", "origin", str(origin)], cwd=str(seed))
     _sp.run(["git", "push", "-q", "-u", "origin", "main"], cwd=str(seed))
     other = base / "other"; _sp.run(["git", "clone", "-q", str(origin), str(other)])
+    # ★夾具沒建起來就大聲說★——別讓它在後面用一個 FileNotFoundError 表現(那看起來像產品壞了)
+    check("update/來源髒帳: 夾具建得起來(clone 拿得到檔案)", (other / hook_rel).is_file(),
+          f"clone 後缺檔:{sorted(q.name for q in other.iterdir()) if other.is_dir() else '目錄不存在'}")
+    if not (other / hook_rel).is_file():
+        return
     with open(other / hook_rel, "a", encoding="utf-8") as fh: fh.write("v2\n")
     with open(other / "docs" / ".usage-log.jsonl", "a", encoding="utf-8") as fh: fh.write('{"ts":"2"}\n')
     _sp.run(["git"] + ident + ["commit", "-qam", "v2"], cwd=str(other))
