@@ -5157,6 +5157,191 @@ def t_command_index_complete():
     print("  ✓ t_command_index_complete")
 
 
+def _lumos_parser_tree():
+    """把 lumos 的整棵 argparse 樹撈出來:{(指令,子指令): 這一層認得的旗標集合}。
+
+    為什麼不用「跑 lumos <指令> --help 再剖字串」:那是 66+30 次子行程、約 18 秒,
+    而且剖的是給人看的排版,排版一改守衛就跟著壞。這裡直接攔 parse_args 拿到
+    parser 物件本身走一遍,0.04 秒、拿到的是真結構。**真值來源是 argparse 自己,
+    不是原始碼正則**——舊教訓是「守衛的尺自己在漂」(2026-09-06 #10 主題材料)。
+    """
+    import argparse as _ap
+    import importlib.machinery as _mach
+    import importlib.util as _iu
+    _loader = _mach.SourceFileLoader("_lumos_for_tree", GRAPHCTL)
+    _spec = _iu.spec_from_loader("_lumos_for_tree", _loader)
+    _mod = _iu.module_from_spec(_spec)
+    _loader.exec_module(_mod)
+
+    class _Grab(Exception):
+        def __init__(self, parser):
+            self.parser = parser
+
+    _orig = _ap.ArgumentParser.parse_args
+
+    def _fake(self, *a, **k):
+        raise _Grab(self)
+
+    _ap.ArgumentParser.parse_args = _fake
+    top = None
+    try:
+        _mod.main()
+    except _Grab as g:
+        top = g.parser
+    finally:
+        _ap.ArgumentParser.parse_args = _orig
+    if top is None:
+        raise AssertionError("攔不到 lumos 的 parser——main() 的結構改了?")
+
+    def _walk(parser, prefix=()):
+        flags = set()
+        for act in parser._actions:
+            for opt in act.option_strings:
+                flags.add(opt)
+            if isinstance(act, _ap._SubParsersAction):
+                for name, sub in act.choices.items():
+                    for item in _walk(sub, prefix + (name,)):
+                        yield item
+        yield prefix, flags
+
+    return dict(_walk(top))
+
+
+# 這幾個名字出現在指令後面時,代表「lumos 那一段已經講完、換別的程式了」。
+# 不切的話,`lumos impact --diff $(git merge-base --fork-point …)` 會把 --fork-point
+# 當成 lumos 的旗標誤報。切窗是為了不製造假紅(#10 材料明寫的踩點)。
+_NOT_LUMOS_PROGRAMS = {
+    "git", "gh", "codex", "claude", "python3", "python", "bash", "sh", "sed", "grep",
+    "awk", "curl", "sha256sum", "shasum", "wc", "cat", "ls", "cd", "xargs", "jq",
+    "echo", "npm", "node", "pytest", "open", "mkdir", "cp", "mv", "rm", "tee",
+}
+# 這幾個字出現在同一行,代表那一行是在講「這東西已經沒了」,不是在教人用。
+_RETIRED_WORDS = ("已退場", "退場", "已撤除", "撤除", "已移除", "不存在", "已拆")
+
+
+def t_skill_mentions_resolve():
+    """★文件教的指令和旗標,真的要存在★(2026-09-07 全 repo 審視 #10)。
+
+    出身:守衛一直只有單向——`t_command_index_complete` 驗「argparse 有的指令,
+    索引裡有沒有寫」。反過來沒人驗:**文件寫了一個早就拆掉的旗標,照著打會被靜默
+    吞掉或直接報錯**,而讀文件的多半是新人和 AI,他們沒有別的參照。實際踩過:
+    上手指南教 `./install.sh --copy`,那個旗標 2026-06-26 就拆了,教了兩個多月。
+
+    首跑抓到一筆真的:速查表教 `lumos decision-supersede <節點> --match "…"`,
+    但要比對的片段是位置參數、根本沒有 --match,照著打會直接報錯。
+
+    誠實講這條守衛的天花板:它只驗「名字存不存在」,**驗不出語意漂移**——
+    一支指令還在、但做的事跟文件寫的不一樣,它照樣是綠的。
+    另一個已知的洞:同一行寫著「已退場 / 已撤除 / 不存在」時整行跳過(不然講歷史
+    的句子會被誤判),所以有人把這幾個字寫進一行教學,那行就檢查不到。
+    """
+    import re as _re
+    _need_src("skills/lumos-project-notes/commands", "README.md")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    tree = _lumos_parser_tree()
+    check("argparse 樹撈得到,而且頂層指令 ≥60 個", len([k for k in tree if len(k) == 1]) >= 60,
+          str(len([k for k in tree if len(k) == 1])))
+    # ★先把 <佔位符> 換掉再切窗★:文件裡的 `lumos search <詞> --code` 帶著角括號,
+    # 而切窗字元原本含 `>`(想擋 shell 導向),於是窗在 `<詞>` 就被切斷、後面的旗標
+    # 永遠掃不到——第一版沙盤故意寫一個不存在的旗標進去,守衛照樣綠。
+    # 這正是「沙盤沒翻紅先查現場走不走得到」那條:守衛沒壞,是現場根本沒走到。
+    placeholder = _re.compile(r"<[^<>]*>")
+    stop = _re.compile(r"[|;&()`]| > |>>|\$\(")
+    bad = []
+
+    def code_lines(text):
+        """只看程式碼(反引號行內碼與圍欄區塊)——散文裡的「lumos 在 scripts/lumos」不是指令。"""
+        for fence in _re.findall(r"```[a-z]*\n(.*?)```", text, _re.S):
+            for line in fence.split("\n"):
+                yield line, line
+        for line in text.split("\n"):
+            for code in _re.findall(r"`([^`\n]+)`", line):
+                yield code, line
+
+    for path in sorted(root.glob("skills/**/*.md")) + [
+            root / "README.md", root / "README.en.md", root / "ONBOARDING.md",
+            root / "ARCHITECTURE.md", root / "CLAUDE.md", root / "AGENTS.md"]:
+        if not path.exists():
+            continue
+        where = str(path.relative_to(root))
+        for code, line in code_lines(path.read_text(encoding="utf-8")):
+            if any(w in line for w in _RETIRED_WORDS):
+                continue
+            for hit in _re.finditer(r"(?<![\w/-])lumos\s+", code):
+                rest = placeholder.sub("ARG", code[hit.end():])
+                cut = stop.search(rest)
+                if cut:
+                    rest = rest[:cut.start()]
+                toks = []
+                for tok in rest.split():
+                    if tok in _NOT_LUMOS_PROGRAMS:
+                        break
+                    toks.append(tok)
+                if not toks:
+                    continue
+                cmd = toks[0]
+                if not _re.fullmatch(r"[a-z][a-z0-9-]*", cmd):
+                    continue
+                if (cmd,) not in tree:
+                    bad.append("%s: 沒有 `lumos %s` 這個指令" % (where, cmd))
+                    continue
+                node, i = (cmd,), 1
+                if i < len(toks) and (cmd, toks[i]) in tree:
+                    node, i = (cmd, toks[i]), i + 1
+                allowed = set(tree[node]) | set(tree[()])
+                if len(node) == 2:
+                    allowed |= set(tree[(node[0],)])
+                for tok in toks[i:]:
+                    if not tok.startswith("--") or tok == "--":
+                        continue
+                    flag = tok.split("=")[0]
+                    if not _re.fullmatch(r"--[a-z0-9][a-z0-9-]*", flag):
+                        continue
+                    if flag not in allowed:
+                        bad.append("%s: `lumos %s` 沒有 %s 這個旗標" % (where, " ".join(node), flag))
+    uniq = sorted(set(bad))
+    check("★文件裡教的每個 lumos 指令與旗標都真的存在★", not uniq,
+          "共 %d 筆:%s" % (len(uniq), uniq[:8]))
+    print("  ✓ t_skill_mentions_resolve")
+
+
+def t_commands_table_shape():
+    """★速查表的欄數要跟表頭對齊★(2026-09-07 全 repo 審視 #10)。
+
+    出身:三張速查表曾經有整列少一格,markdown 渲染出來會把後面的欄位整排錯位,
+    讀的人看到的是「指令欄放著結果說明」。這種錯人眼很難看出來(原始碼裡看起來
+    只是少一根豎線),但對照 markdownlint 的 MD056 是標準檢查項,自己寫二十行就有。
+
+    比對時要先把跳脫過的 `\|`(行內碼裡的「A 或 B」)換掉——不換的話會把它當成
+    分欄符,製造整批假紅。第一版就是這樣,掃出八筆全是假的。
+    """
+    import re as _re
+    _need_src("skills/lumos-project-notes/commands")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    bad = []
+    files = sorted(root.glob("skills/**/*.md")) + sorted(root.glob("slim/skills/**/*.md"))
+    check("速查表檔案掃得到", len(files) >= 10, str(len(files)))
+    for path in files:
+        where = str(path.relative_to(root))
+        header = None
+        for lineno, raw in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+            line = raw.strip().replace("\\|", "\x00")
+            if not line.startswith("|"):
+                header = None
+                continue
+            if _re.fullmatch(r"\|[\s:|-]+\|", line):
+                continue
+            n = line.count("|")
+            if header is None:
+                header = (n, lineno)
+                continue
+            if n != header[0]:
+                bad.append("%s:%d 這列 %d 格,表頭(第 %d 行)%d 格"
+                           % (where, lineno, n - 1, header[1], header[0] - 1))
+    check("★表格每一列的格數都跟表頭一樣★", not bad, "共 %d 筆:%s" % (len(bad), bad[:6]))
+    print("  ✓ t_commands_table_shape")
+
+
 def t_every_subcommand_has_when():
     """工具鏈補強十件 #3:每個子指令(含二層)的 `--help` 第一段要有「什麼時候用:」——
     Claude 在情境測試裡常敲 `lumos X --help` 確認,空的 help 等於逼它猜。"""

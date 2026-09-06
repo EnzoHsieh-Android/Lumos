@@ -18,7 +18,7 @@ related:
 ---
 # git-hooks路徑指向樹內_checkout即執行分支碼
 
-> 白話:本 repo 把 git hooks 裝在版本控制的樹裡(`core.hooksPath=scripts/hooks`),好處是 pre-commit/pre-push 跟著 repo 走、每台機器一致;壞處是★checkout 任何分支,就會執行那條分支裡的 hook 檔★。送審的分支若加一支 `scripts/hooks/post-checkout`(或改既有三支),審查者一 checkout 就跑攻擊者的碼——改本地 ref、改 `~/.claude`、什麼都能做。
+> 白話:本 repo 把 git hooks 裝在版本控制的樹裡(`core.hooksPath=scripts/hooks`),好處是 pre-commit/pre-push 跟著 repo 走、每台機器一致;壞處是★checkout 任何分支,就會執行那條分支裡的 hook 檔★。送審的分支若在 hook 目錄裡加一支 checkout 時會觸發的 hook(git 支援 post-checkout 這個時點,本 repo 目前沒有這支),或改既有三支,審查者一 checkout 就跑攻擊者的碼——改本地 ref、改 `~/.claude`、什麼都能做。
 
 ## 怎麼發現的
 
@@ -26,7 +26,7 @@ related:
 
 ## 為什麼現有防線擋不住
 
-- 錨點([[Systems/anchor-integrity]])只擋「改了錨點檔還想 push」,不擋「checkout 別人已經 push 上來的分支」;而且只錨三支既有 hook,新增一支 `post-checkout` 不在清單。
+- 錨點([[Systems/anchor-integrity]])只擋「改了錨點檔還想 push」,不擋「checkout 別人已經 push 上來的分支」;而且只錨既有那幾支,分支上新增的 checkout 時點 hook 不在清單。
 - CI 跑的是分支內容,同樣會執行。
 
 ## 影響範圍

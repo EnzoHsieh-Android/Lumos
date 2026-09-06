@@ -37,7 +37,8 @@ python3 scripts/lumos bootstrap
 | `git` | 全部 | 無法運作 |
 | `python3` | lumos 指令與 hooks(純標準庫,不裝任何套件) | 無法運作 |
 | Claude Code | AI 才會自動載入方法論與提示 | 工具能跑,但 AI 不會自動照規矩走 |
-| Claude Max 訂閱 | 「提交後派 AI 自動複查」那層才划算 | 該層吃配額/降級,其餘功能正常 |
+| Codex CLI(選用) | 想讓「外家席」用另一家模型審(design-loop / code-loop 的否決席) | 那席換成同一家模型,收斂結論要降級成「單家族視角下未發現」 |
+| 吃得起配額的訂閱方案(選用) | 設計審 / 代碼審一輪會同時派三到四個子代理讀全份材料 | 手動一輪一輪跑仍可用,只是慢;其餘功能不受影響 |
 | notesmd-cli(選用) | 只有改筆記檔名/搬檔時用(`graph-rename.sh`) | 平常用不到;需要時 `fetch-notesmd.sh` 可抓 |
 
 ---
@@ -63,7 +64,7 @@ hooks 是提交/推送時自動跑的檢查程式,git 規定一個 repo 一份,�
 ```bash
 cd <你的專案> && scripts/install-hooks.sh --force
 ```
-裝三樣:git hooks(提交關卡)、Claude hooks(給 AI 的提示與提交後自動複查)、Claude 設定註冊。`--force` 是必要的——不加會跳過你機器上的舊版不更新。
+裝三樣:git hooks(提交/推送的關卡)、Claude hooks(開場提示、改檔前附合約、派工前附相關節點、收工核對圖譜有沒有跟上)、Claude 設定註冊。`--force` 是必要的——不加會跳過你機器上的舊版不更新。
 
 **③ 選用,每台機器一次:全域 `lumos` 指令**
 
@@ -129,5 +130,5 @@ lumos set / append / decision-add   # 改欄位、加連結、記決策(都寫�
   ~/harness/lumos-toolchain/scripts/install-graph-toolchain.sh --target <新 repo 路徑> --slug <知識庫名>
   ```
   重跑=更新工具組,圖譜資料永遠不動。
-- **不放進這個 repo**:各專案的業務圖譜、發版/部署腳本、專案技術棧 skill。
+- **不放進這個 repo**:各專案的業務圖譜、發版/部署腳本、只有單一專案在用的框架選型。跨專案通用的技術棧慣例 skill(kotlin / vue / csharp-idioms)住這裡,因為它們不綁任何一個專案——邊界跟 README〈邊界與延伸閱讀〉同一句,改一邊要一起改。
 - 此 repo 公開:推東西前確認**無公司識別資訊**(專案名/表名/業務規則);skills 與範本只用通用範例。

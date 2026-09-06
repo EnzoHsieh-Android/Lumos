@@ -17,7 +17,7 @@ flowchart TB
         INST["安裝器<br/>get.sh · get.ps1 · install.sh<br/>install-hooks.sh · install-graph-toolchain.sh · merge-claude-settings.py"]
         TPL["scripts/templates/graph-discipline.md<br/>(圖譜先行紀律範本)"]
         RENAME["scripts/graph-rename.sh · fetch-notesmd.sh<br/>(notesmd move 封印)"]
-        SKILLS["skills/<br/>lumos-project-notes · core-knowledge<br/>design-loop · code-loop · pitfalls-gapfill"]
+        SKILLS["skills/(共 8 支,以 ls skills/ 為準)<br/>方法論 5 支:lumos-project-notes · core-knowledge<br/>design-loop · code-loop · pitfalls-gapfill<br/>跨專案技術棧慣例 3 支:kotlin · vue · csharp-idioms"]
         GOV["governance/ + docs/.*-log.jsonl<br/>審查留下的證據:審查員報告、當時審的快照、凍結的判定(每週回放)<br/>驗證器的指紋基線 · 附給審查員的節點有沒被用到的重算<br/>帳本:每輪審查怎麼處置 · 治理事件 · CI 結果 · 被舊決定擋下的次數"]
         PROBE["scripts/scenario_probe.py<br/>(情境探針:給 AI 出題,量它會不會自己先查圖譜;Claude / Codex 都能測)"]
     end

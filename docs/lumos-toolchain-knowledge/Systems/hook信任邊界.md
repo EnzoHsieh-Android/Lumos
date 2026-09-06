@@ -28,7 +28,7 @@ plan_refs:
 
 **所以:clone 一個陌生 repo、開一下 Claude,對方寫在那個路徑的 python 就在你機器上跑了。**
 
-重現方式(自己搭一個假的陌生 repo,不必真的去 clone 誰的東西):建一個資料夾、`git init`、放一個 `docs/x-knowledge/`、在 `scripts/lumos` 放一支會留下記號檔的 python,然後把那個資料夾的路徑餵給進場 hook。記號檔出現了。
+重現方式(自己搭一個假的陌生 repo,不必真的去 clone 誰的東西):建一個資料夾、`git init`、在 docs 底下放一個名字長得像圖譜庫的空資料夾(尾巴是 -knowledge)、在 `scripts/lumos` 放一支會留下記號檔的 python,然後把那個資料夾的路徑餵給進場 hook。記號檔出現了。
 
 ★而且那個檔連執行權限都不需要★——因為是拿 python 去執行它,不是直接執行它。權限位在這裡不是防線。
 
