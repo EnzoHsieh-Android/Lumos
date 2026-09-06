@@ -29,6 +29,11 @@ _os_k2.environ.setdefault("LUMOS_PANEL_K2_CUTOFF", "9999-12-31")
 #   整批變「新 loop」使 K=1 PASS 迴歸測試誤紅;K=2 專屬測試(t_panel_k2_and_probe)顯式覆寫。
 GRAPHCTL = str(Path(__file__).resolve().parent / "lumos")
 PASS, FAIL, SKIP = 0, 0, 0
+# 跑全套時「預期最多跳過幾支」的基準線。跳過不會紅,所以沒有基準線的話,
+# 「本來跑得到、現在跑不到」會完全無聲——2026-09-06 就這樣漏過一次(見 main() 尾段)。
+# 目前值 0:這台是 POSIX 又是來源 repo,所有跳過通道的條件都不成立。
+# 在別的環境(Windows、消費端)跳過本來就會多,那時照訊息說的調整並寫理由。
+_EXPECTED_SKIP_MAX = 0
 
 
 class _SrcOnly(Exception):
@@ -322,24 +327,75 @@ def t_scaffold_project():
     check("scaffold: 帳檔真的被 git 忽略", ci.returncode == 0, f"rc={ci.returncode}")
 
 
+
+def t_runner_isolates_real_home_and_tmp():
+    """★測試跑起來時,家目錄與暫存目錄必須是拋棄式的★(2026-09-06 全 repo 審視 #11)。
+
+    出身:兩支 install 測試直接跑 `lumos install --force` 又沒帶環境隔離,所以每跑一次
+    全套,開發機真正的 ~/.claude 與 ~/.agents 底下的 skill 連結就被刪掉重建一次
+    ——實測連結 inode 從 37184038 變成 37197577,是真的刪了再建,不是碰一下時間戳。
+    同型事故發生過兩次(2026-08-01 刪掉真機 hook、2026-09-02 重連真 skills),
+    兩次之後「假 HOME 是最低門檻」都只寫在事故筆記裡,沒有機制擋住。
+
+    ★這支就是那個機制★:它驗的不是某支測試乖不乖,而是**整個執行器有沒有把現場關起來**。
+    隔離一旦被拆掉,這支立刻紅——不必等到有人的開發機再被洗一次。"""
+    import os
+    real_home = Path(os.path.expanduser("~"))
+    # 隔離生效時,os.environ["HOME"] 已被換掉,所以 expanduser 拿到的就是假的那個
+    check("隔離: 跑測試時的家目錄不是真的家目錄",
+          "gctl-run-" in str(real_home), f"現在的家目錄={real_home}")
+    check("隔離: 假家目錄真的存在(不是指到一個不存在的路徑)", real_home.is_dir(), str(real_home))
+
+    import tempfile as _tf
+    tmp = Path(_tf.mkdtemp(prefix="gctl-selfcheck-"))
+    check("隔離: 新開的暫存目錄落在這一輪的根底下(不是散在系統暫存目錄)",
+          "gctl-run-" in str(tmp), str(tmp))
+
+    # 子進程也要繼承(測試大量用 subprocess,父進程隔離了子進程沒隔離等於沒隔離)
+    import subprocess
+    r = subprocess.run([sys.executable, "-c",
+                        "import os,tempfile;print(os.path.expanduser('~'));print(tempfile.gettempdir())"],
+                       capture_output=True, text=True)
+    child_home, child_tmp = (r.stdout.strip().splitlines() + ["", ""])[:2]
+    check("隔離: 子進程的家目錄也是假的(不然 subprocess 那條路等於沒隔離)",
+          "gctl-run-" in child_home, f"子進程看到的家目錄={child_home}")
+    check("隔離: 子進程的暫存目錄也在這一輪根底下",
+          "gctl-run-" in child_tmp, f"子進程看到的暫存={child_tmp}")
+
+    # CODEX_HOME 若沒清掉,會繞過假家目錄直接打到真的 ~/.codex
+    check("隔離: CODEX_HOME 已清掉(它會繞過假家目錄)",
+          "CODEX_HOME" not in os.environ, str(os.environ.get("CODEX_HOME")))
+
+
 def t_install_skills_unix():
+    """安裝會在家目錄底下建出 skill 連結。
+
+    ★語意在 2026-09-06 變過,要講清楚★:這支以前跑在**真的家目錄**上,所以每跑一次
+    全套就把開發機的 skill 連結刪掉重建一次。現在執行器把整輪關進拋棄式家目錄
+    (見 _isolate_environment),所以它驗的是「安裝會在家目錄下建對的東西」,
+    **不是「這台機器真的裝好了」**——後者本來就不該由測試來保證。"""
     if sys.platform == "win32":
         raise _SrcOnly("Windows 分支留 Task 7 手動驗(這台不是 Windows,沒驗到)")
-    import subprocess
+    import subprocess, os
+    home = Path(os.path.expanduser("~"))
+    check("★前置★ 現場成立:跑在拋棄式家目錄裡(不是真機)", "gctl-run-" in str(home), str(home))
     r = subprocess.run([sys.executable, GRAPHCTL, "install", "--force"], capture_output=True, text=True)
-    dst = Path.home() / ".claude" / "skills" / "lumos-project-notes"
-    check("skills: ~/.claude/skills/lumos-project-notes 連結存在", dst.exists(), r.stderr)
+    dst = home / ".claude" / "skills" / "lumos-project-notes"
+    check("skills: 家目錄底下的 .claude/skills/lumos-project-notes 連結建出來了", dst.exists(), r.stderr)
 
 
 def t_install_includes_skills():
+    """安裝同時給全域指令與 skills(兩家的 skill 目錄都要)。語意同上支:驗行為不驗真機。"""
     if sys.platform == "win32":
         raise _SrcOnly("Windows 分支留 Task 7 手動驗(這台不是 Windows,沒驗到)")
-    import subprocess
+    import subprocess, os
+    home = Path(os.path.expanduser("~"))
+    check("★前置★ 現場成立:跑在拋棄式家目錄裡(不是真機)", "gctl-run-" in str(home), str(home))
     subprocess.run([sys.executable, GRAPHCTL, "install", "--force"], capture_output=True, text=True)
-    g = Path.home() / ".local" / "bin" / "lumos"
-    sk = Path.home() / ".claude" / "skills" / "lumos-design-loop"
-    check("install: 全域 lumos 在", g.exists(), "")
-    check("install: 連帶 skills 也在", sk.exists(), "")
+    check("install: 全域 lumos 指令建出來了", (home / ".local" / "bin" / "lumos").exists(), "")
+    check("install: 連帶 Claude 那邊的 skills 也在", (home / ".claude" / "skills" / "lumos-design-loop").exists(), "")
+    check("install: Codex 那邊的 skills 也在(兩家共用同一份來源)",
+          (home / ".agents" / "skills" / "lumos-design-loop").exists(), "")
 
 
 def t_install_hooks_py():
@@ -22745,6 +22801,74 @@ def t_enforcement_never_raises_on_missing():
     check("enforcement: 缺目錄不炸、回恰 22 列(d6 加 codex-agent)", isinstance(rows, list) and len(rows) == 22, f"{len(rows)}: {[r['layer'] for r in rows]}")
 
 
+def _isolate_environment():
+    """★把整輪測試關進拋棄式的家目錄與暫存目錄★(2026-09-06 全 repo 審視 #11)。
+
+    出身:兩支 install 測試直接跑 `lumos install --force` 而且沒帶任何環境隔離,
+    所以★每跑一次全套,開發機真正的 ~/.claude 與 ~/.agents 底下的 skill 連結就被
+    刪掉重建一次★(實測:連結的 inode 從 37184038 變成 37197577)。同型事故發生過兩次
+    ——2026-08-01 刪掉真機的 hook、2026-09-02 重連真 skills——兩次之後「假 HOME 是
+    最低門檻」都只寫在事故筆記裡,沒有任何機制擋住。
+
+    另一半是暫存殘骸:系統暫存目錄底下累積了 34 萬個 gctl-* 測試殘骸,連 `ls` 都會卡住。
+    測試自己用的是 `tempfile.mkdtemp(prefix="gctl-...")`,沒有人收尾。
+
+    ★為什麼修在唯一進入點★:跟上面清 git 環境變數同一個理由——替代方案是「每支會碰
+    家目錄的測試各自隔離」,那是幾十個呼叫點的分支簿記,天生會漏(這個專案已經漏過兩次)。
+    關在進入點,對現有與未來新增的測試都自動成立。
+
+    回傳這一輪的根目錄(收尾要用)。
+    """
+    import os, tempfile, shutil, time
+    real_tmp = tempfile.gettempdir()
+    root = Path(tempfile.mkdtemp(prefix="gctl-run-", dir=real_tmp))
+
+    # ① 暫存:之後所有 tempfile.mkdtemp() 與子進程的 TMPDIR 都落在這一輪的根底下
+    tempfile.tempdir = str(root)
+    os.environ["TMPDIR"] = str(root)
+
+    # ② 家目錄:換成拋棄式的
+    home = root / "home"
+    (home / ".config").mkdir(parents=True, exist_ok=True)
+    # git 在沒有全域設定的家目錄下會抱怨身分;先給一份,免得測試裡的 git 指令噴錯
+    (home / ".gitconfig").write_text(
+        "[user]\n\tname = lumos-test\n\temail = lumos-test@example.invalid\n"
+        "[init]\n\tdefaultBranch = main\n", encoding="utf-8")
+    os.environ["HOME"] = str(home)
+    os.environ["USERPROFILE"] = str(home)
+    # CODEX_HOME 若在開發機上設過,會繞過假家目錄直接打到真的 ~/.codex
+    os.environ.pop("CODEX_HOME", None)
+    # ★LUMOS_HOME 不是使用者家目錄,是「lumos 來源 repo 在哪」★——一開始我把它也設成假家目錄,
+    #   結果 t_enforcement_vendored_uptodate_active 找不到來源就跳過了(跑得到變跑不到=覆蓋
+    #   悄悄少掉,全套的 skip 數從 0 變 1 才發現)。它的預設值是 ~/harness/lumos-toolchain,
+    #   而家目錄一換成假的那條路就斷了,所以這裡明寫成本 repo 的位置(從執行中的檔案算,不寫死)。
+    os.environ["LUMOS_HOME"] = str(Path(GRAPHCTL).resolve().parent.parent)
+
+    # ③ 修剪舊殘骸:只碰「已標記結束」或「超過一天沒動」的本輪型根目錄。
+    #    ★不按數量硬刪★——hook 會平行起 runner,刪掉別人正在用的根就是製造假紅。
+    try:
+        cutoff = time.time() - 86400
+        pruned = 0
+        with os.scandir(real_tmp) as it:
+            for e in it:
+                if not e.name.startswith("gctl-run-") or not e.is_dir(follow_symlinks=False):
+                    continue
+                p = Path(e.path)
+                done = (p / ".finished").exists()
+                try:
+                    old = e.stat(follow_symlinks=False).st_mtime < cutoff
+                except OSError:
+                    continue
+                if done or old:
+                    shutil.rmtree(p, ignore_errors=True)
+                    pruned += 1
+                    if pruned >= 200:      # 一輪最多清這麼多,不要讓收尾變成掃地大會
+                        break
+    except OSError:
+        pass
+    return root
+
+
 def main():
     # ★把 git 的環境變數從進程 env 清掉(2026-08-01,pre-push 假紅實錘)★
     #
@@ -22774,7 +22898,10 @@ def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(add_help=False)
     _p.add_argument("-k", dest="keyword", default=None, help="只跑名稱含此字串的測試")
+    _p.add_argument("--keep-tmp", action="store_true",
+                    help="跑完不要刪這一輪的暫存根目錄(要進去翻現場時用)")
     _args, _ = _p.parse_known_args()
+    _run_root = _isolate_environment()
     tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
     if _args.keyword:
         tests = [t for t in tests if _args.keyword in t.__name__]
@@ -22832,6 +22959,25 @@ def main():
             print(f"  {sec:6.1f}s  {name}{lim_note}  (餘裕 {ratio:.0f}x){flag}")
     tail = f", {SKIP} skipped(來源 repo 專用)" if SKIP else ""
     print(f"\n{'─'*40}\n{PASS} passed, {FAIL} failed{tail}")
+    # ★跳過的支數要有基準線★(2026-09-06 全 repo 審視 #11 現場學到的):
+    # 我把一個環境變數設錯,害一支測試找不到來源就靜默跳過——全套照樣「零紅」,
+    # 是我自己去比 skip 從 0 變 1 才發現。**跑得到變跑不到=覆蓋悄悄少掉,而它不會紅。**
+    # 所以在這裡對基準線比一次:超過就出聲(只在跑全套時比,-k 子集本來就會跳很多)。
+    if not _args.keyword and SKIP > _EXPECTED_SKIP_MAX:
+        print(f"  ⚠ 這次跳過 {SKIP} 支,比預期上限 {_EXPECTED_SKIP_MAX} 支多。"
+              f"跳過不會紅,但它代表那些測試這輪沒驗到——先確認是環境本來就跑不到(例如非 Windows),"
+              f"還是有人不小心把現場弄壞了。")
+        print(f"  確認過而且合理,就把 _EXPECTED_SKIP_MAX 調成 {SKIP} 並在旁邊寫一句為什麼。")
+    # 收尾:全綠而且沒說要留,就把這一輪的暫存根整個丟掉;有紅或 --keep-tmp 就留著給人翻現場。
+    import shutil as _sh, os as _os2
+    if FAIL or _args.keep_tmp:
+        print(f"  這一輪的暫存現場留著沒刪(有紅或 --keep-tmp):{_run_root}")
+    else:
+        try:
+            (_run_root / ".finished").write_text("", encoding="utf-8")
+            _sh.rmtree(_run_root, ignore_errors=True)
+        except OSError:
+            pass
     return 1 if FAIL else 0
 
 
