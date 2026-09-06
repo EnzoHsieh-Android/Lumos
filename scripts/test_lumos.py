@@ -5133,13 +5133,11 @@ def t_command_index_complete():
     cmd_dir = root / "skills" / "lumos-project-notes" / "commands"
     check("索引目錄存在且有總目錄", (cmd_dir / "INDEX.md").exists(), str(cmd_dir))
     corpus = "\n".join(p.read_text(encoding="utf-8") for p in sorted(cmd_dir.glob("*.md")))
-    lumos_real = str(root / "scripts" / "lumos")
+    # ★指令清單的真值走共用那一份★(2026-09-07 r1 架構席):本檔以前有兩套取法
+    # (子行程剖 --help / 直接讀 parser),兩套會各自漂移。現在都走 _lumos_parser_tree()。
+    tree = _lumos_parser_tree()
     def subs(*prefix):
-        r = _sp.run([sys.executable, lumos_real, *prefix, "--help"], capture_output=True, text=True)
-        out = r.stdout + r.stderr
-        pos = out.find("positional arguments:")
-        m = _re.search(r"\{([a-z0-9,\-]+)\}", out[pos:] if pos >= 0 else out)
-        return m.group(1).split(",") if m else []
+        return _lumos_subcommands(tree, tuple(prefix))
     top = subs()
     check("argparse 頂層子指令可列舉", len(top) >= 60, str(len(top)))
     missing = [c for c in top if f"lumos {c}" not in corpus]
@@ -5157,17 +5155,31 @@ def t_command_index_complete():
     print("  ✓ t_command_index_complete")
 
 
-def _lumos_parser_tree():
-    """把 lumos 的整棵 argparse 樹撈出來:{(指令,子指令): 這一層認得的旗標集合}。
+_LUMOS_PARSER_TREE_CACHE = {}
 
-    為什麼不用「跑 lumos <指令> --help 再剖字串」:那是 66+30 次子行程、約 18 秒,
-    而且剖的是給人看的排版,排版一改守衛就跟著壞。這裡直接攔 parse_args 拿到
-    parser 物件本身走一遍,0.04 秒、拿到的是真結構。**真值來源是 argparse 自己,
-    不是原始碼正則**——舊教訓是「守衛的尺自己在漂」(2026-09-06 #10 主題材料)。
+
+def _lumos_parser_tree():
+    """★這個檔案裡「lumos 有哪些指令、哪些旗標」的唯一真值來源★。
+
+    回傳 {(指令,子指令,…): 那一層的 argparse parser 物件}(空 tuple = 頂層)。
+    旗標用 `_parser_flags()` 取、給人看的說明用 `parser.format_help()` 取,
+    所以「列指令」「列旗標」「讀說明文字」三種需求都走這一份。
+
+    為什麼不各自跑 `lumos <指令> --help` 再剖字串:那是 96 次子行程、約 18 秒,
+    而且剖的是給人看的排版——排版一改,守衛跟著壞。這裡直接拿 parser 物件,
+    0.04 秒、拿到的是真結構。
+
+    ★為什麼是「唯一」而不是「又一種」★(2026-09-07 代碼審 r1 架構席判 blocking):
+    第一版只有新守衛用這條路,舊的兩支測試還在跑子行程剖字串——同一個檔案裡
+    兩套真值來源,以後各自漂移,而漂移正是這批改動自己點名要防的病。
+    折入的做法是把舊那兩支也接過來,不是替新的辯護。
     """
     import argparse as _ap
     import importlib.machinery as _mach
     import importlib.util as _iu
+    from unittest import mock as _mock
+    if "tree" in _LUMOS_PARSER_TREE_CACHE:
+        return _LUMOS_PARSER_TREE_CACHE["tree"]
     _loader = _mach.SourceFileLoader("_lumos_for_tree", GRAPHCTL)
     _spec = _iu.spec_from_loader("_lumos_for_tree", _loader)
     _mod = _iu.module_from_spec(_spec)
@@ -5177,34 +5189,79 @@ def _lumos_parser_tree():
         def __init__(self, parser):
             self.parser = parser
 
-    _orig = _ap.ArgumentParser.parse_args
-
     def _fake(self, *a, **k):
         raise _Grab(self)
 
-    _ap.ArgumentParser.parse_args = _fake
     top = None
-    try:
-        _mod.main()
-    except _Grab as g:
-        top = g.parser
-    finally:
-        _ap.ArgumentParser.parse_args = _orig
+    # patch.object 是本檔通篇的猴子補丁寫法(2026-09-07 r1 架構席 minor);
+    # 直接對 stdlib 類別賦值再手動還原是這個檔案裡唯一的一處異類,已改掉。
+    with _mock.patch.object(_ap.ArgumentParser, "parse_args", _fake):
+        try:
+            _mod.main()
+        except _Grab as g:
+            top = g.parser
     if top is None:
         raise AssertionError("攔不到 lumos 的 parser——main() 的結構改了?")
 
     def _walk(parser, prefix=()):
-        flags = set()
         for act in parser._actions:
-            for opt in act.option_strings:
-                flags.add(opt)
             if isinstance(act, _ap._SubParsersAction):
                 for name, sub in act.choices.items():
                     for item in _walk(sub, prefix + (name,)):
                         yield item
-        yield prefix, flags
+        yield prefix, parser
 
-    return dict(_walk(top))
+    tree = dict(_walk(top))
+    _LUMOS_PARSER_TREE_CACHE["tree"] = tree
+    return tree
+
+
+def _parser_flags(parser):
+    """一個 parser 這一層認得的旗標(含 -h/--help)。"""
+    flags = set()
+    for act in parser._actions:
+        for opt in act.option_strings:
+            flags.add(opt)
+    return flags
+
+
+def _lumos_subcommands(tree, prefix=()):
+    """prefix 底下的直接子指令名(取代「跑 --help 剖 {a,b,c}」那套)。"""
+    n = len(prefix)
+    return sorted(k[n] for k in tree if len(k) == n + 1 and k[:n] == prefix)
+
+
+# 這幾個名字出現在指令後面時,代表「lumos 那一段已經講完、換別的程式了」。
+# 不切的話,`lumos impact --diff $(git merge-base --fork-point …)` 會把 --fork-point
+# 當成 lumos 的旗標誤報。切窗是為了不製造假紅(#10 材料明寫的踩點)。
+_NOT_LUMOS_PROGRAMS = {
+    "git", "gh", "codex", "claude", "python3", "python", "bash", "sh", "sed", "grep",
+    "awk", "curl", "sha256sum", "shasum", "wc", "cat", "ls", "cd", "xargs", "jq",
+    "echo", "npm", "node", "pytest", "open", "mkdir", "cp", "mv", "rm", "tee",
+}
+# 這幾個字出現在同一行,代表那一行是在講「這東西已經沒了」,不是在教人用。
+_RETIRED_WORDS = ("已退場", "退場", "已撤除", "撤除", "已移除", "不存在", "已拆")
+
+
+def _doc_files_for_guards(root):
+    """★兩條文件守衛掃哪些檔——同一份清單★(2026-09-07 r1 通才席判 blocking)。
+
+    第一版兩條守衛各寫各的清單,結果:指令守衛漏掃 docs/methodology(那份剛好是
+    這批親自改的),表格守衛漏掃 repo 根目錄(這批親自改的前置需求表就在那裡)。
+    合成一份之後,以後加一個要顧的目錄只要改這裡。
+
+    **刻意不含圖譜目錄 docs/*-knowledge/**:那裡的筆記本來就在記歷史,
+    「當年有一支叫 X 的指令、後來撤了」是它該寫的東西,拿現況去驗它會整片假紅。
+    圖譜的死引用另有專門的檢查(健檢的 Check P / Check Y)在管。
+    """
+    files = sorted(root.glob("skills/**/*.md"))
+    files += sorted(root.glob("slim/skills/**/*.md"))
+    files += sorted(root.glob("docs/methodology/**/*.md"))
+    for name in ("README.md", "README.en.md", "ONBOARDING.md", "ARCHITECTURE.md",
+                 "CLAUDE.md", "AGENTS.md", "SDD-vs-Lumos.md"):
+        if (root / name).exists():
+            files.append(root / name)
+    return files
 
 
 # 這幾個名字出現在指令後面時,代表「lumos 那一段已經講完、換別的程式了」。
@@ -5230,23 +5287,37 @@ def t_skill_mentions_resolve():
     首跑抓到一筆真的:速查表教 `lumos decision-supersede <節點> --match "…"`,
     但要比對的片段是位置參數、根本沒有 --match,照著打會直接報錯。
 
-    誠實講這條守衛的天花板:它只驗「名字存不存在」,**驗不出語意漂移**——
-    一支指令還在、但做的事跟文件寫的不一樣,它照樣是綠的。
-    另一個已知的洞:同一行寫著「已退場 / 已撤除 / 不存在」時整行跳過(不然講歷史
-    的句子會被誤判),所以有人把這幾個字寫進一行教學,那行就檢查不到。
+    ★三個一開始沒守到、代碼審 r1 抓出來的洞★:
+    ① 觸發正則本來寫成「lumos 前面不能是 / 」,於是全 repo 最大宗的
+       `python3 scripts/lumos <指令>` 寫法整段掃不到——守衛對主力寫法完全不成立(通才席 blocker)。
+    ② 二層指令打錯抓不到:`lumos guard madeup` 照樣綠,因為 madeup 被當成位置參數放過(外家席)。
+    ③ 掃描清單漏了 docs/methodology,而那份就是這批親自改的(通才席)。
+
+    **旗標一律要求寫全名**:argparse 允許不歧義的縮寫(`--cod` 真的會被當成 `--code`),
+    但文件教縮寫等於教一個隨時會因為新增旗標而變歧義的寫法,所以這裡刻意判它是錯的
+    (2026-09-07 外家席指出兩者不一致,裁定是把規則寫明,不是放寬守衛)。
+
+    誠實講天花板:它只驗「名字存不存在」,**驗不出語意漂移**——指令還在、但做的事
+    跟文件寫的不一樣,它照樣是綠的。另一個已知的洞:同一行寫著「已退場 / 已撤除 /
+    不存在」時整行跳過(不然講歷史的句子會被誤判),所以把這幾個字寫進一行教學,
+    那行就檢查不到。
     """
     import re as _re
     _need_src("skills/lumos-project-notes/commands", "README.md")
     root = Path(GRAPHCTL).resolve().parent.parent
     tree = _lumos_parser_tree()
-    check("argparse 樹撈得到,而且頂層指令 ≥60 個", len([k for k in tree if len(k) == 1]) >= 60,
-          str(len([k for k in tree if len(k) == 1])))
+    check("argparse 樹撈得到,而且頂層指令 ≥60 個", len(_lumos_subcommands(tree)) >= 60,
+          str(len(_lumos_subcommands(tree))))
     # ★先把 <佔位符> 換掉再切窗★:文件裡的 `lumos search <詞> --code` 帶著角括號,
     # 而切窗字元原本含 `>`(想擋 shell 導向),於是窗在 `<詞>` 就被切斷、後面的旗標
     # 永遠掃不到——第一版沙盤故意寫一個不存在的旗標進去,守衛照樣綠。
     # 這正是「沙盤沒翻紅先查現場走不走得到」那條:守衛沒壞,是現場根本沒走到。
     placeholder = _re.compile(r"<[^<>]*>")
     stop = _re.compile(r"[|;&()`]| > |>>|\$\(")
+    # ★lumos 前面允許有路徑★:`python3 scripts/lumos doctor` 是文件裡最常見的寫法,
+    # 第一版把 `/` 放進 lookbehind,等於把主力寫法全部排除掉(r1 通才席 blocker)。
+    # 仍然擋 `lumos-project-notes` 這種:因為要求 lumos 後面接空白。
+    trigger = _re.compile(r"(?<![\w-])lumos\s+")
     bad = []
 
     def code_lines(text):
@@ -5258,16 +5329,12 @@ def t_skill_mentions_resolve():
             for code in _re.findall(r"`([^`\n]+)`", line):
                 yield code, line
 
-    for path in sorted(root.glob("skills/**/*.md")) + [
-            root / "README.md", root / "README.en.md", root / "ONBOARDING.md",
-            root / "ARCHITECTURE.md", root / "CLAUDE.md", root / "AGENTS.md"]:
-        if not path.exists():
-            continue
+    for path in _doc_files_for_guards(root):
         where = str(path.relative_to(root))
         for code, line in code_lines(path.read_text(encoding="utf-8")):
             if any(w in line for w in _RETIRED_WORDS):
                 continue
-            for hit in _re.finditer(r"(?<![\w/-])lumos\s+", code):
+            for hit in trigger.finditer(code):
                 rest = placeholder.sub("ARG", code[hit.end():])
                 cut = stop.search(rest)
                 if cut:
@@ -5286,11 +5353,20 @@ def t_skill_mentions_resolve():
                     bad.append("%s: 沒有 `lumos %s` 這個指令" % (where, cmd))
                     continue
                 node, i = (cmd,), 1
-                if i < len(toks) and (cmd, toks[i]) in tree:
-                    node, i = (cmd, toks[i]), i + 1
-                allowed = set(tree[node]) | set(tree[()])
-                if len(node) == 2:
-                    allowed |= set(tree[(node[0],)])
+                children = _lumos_subcommands(tree, node)
+                if children and i < len(toks):
+                    nxt = toks[i]
+                    if (cmd, nxt) in tree:
+                        node, i = (cmd, nxt), i + 1
+                    elif _re.fullmatch(r"[a-z][a-z0-9-]*", nxt):
+                        # ★這一層有子指令,那後面那個小寫詞就該是子指令名★
+                        # (外家席:`lumos guard madeup` 本來整段被當位置參數放過)
+                        bad.append("%s: `lumos %s` 沒有 %s 這個子指令(有的是:%s)"
+                                   % (where, cmd, nxt, "/".join(children)))
+                        continue
+                allowed = set(_parser_flags(tree[node]))
+                for anc in range(len(node)):
+                    allowed |= set(_parser_flags(tree[node[:anc]]))
                 for tok in toks[i:]:
                     if not tok.startswith("--") or tok == "--":
                         continue
@@ -5305,39 +5381,81 @@ def t_skill_mentions_resolve():
     print("  ✓ t_skill_mentions_resolve")
 
 
+def _md_table_rows(text):
+    """把一份 markdown 裡的表格切出來:yield (表頭行號, 表頭格數, 該列行號, 該列格數)。
+
+    ★認表格靠的是分隔列(`---|---`),不是「行首有沒有豎線」★
+    (2026-09-07 外家席:第一版只認 `|` 開頭的列,於是省略外側豎線的標準寫法
+    整張表都不檢查,而那正是它宣稱要攔的東西)。
+
+    數格子也不能用「數豎線」——`| x | y`(合法,沒有尾豎線)會被數成少一格
+    (同席 minor)。正確做法是先去掉最外面那一對豎線,再切。
+    """
+    import re as _re
+
+    def cells(line):
+        t = line.strip().replace("\\|", "\x00")
+        if t.startswith("|"):
+            t = t[1:]
+        if t.endswith("|"):
+            t = t[:-1]
+        return len(t.split("|"))
+
+    lines = text.split("\n")
+    i = 1
+    while i < len(lines):
+        sep = lines[i].strip().replace("\\|", "\x00")
+        head = lines[i - 1].strip()
+        is_sep = bool(sep) and _re.fullmatch(r"\|?[\s:|-]+\|?", sep) and "-" in sep
+        if is_sep and "|" in head and "|" in sep:
+            ncol = cells(lines[i - 1])
+            yield (i, ncol, i, cells(lines[i]))
+            j = i + 1
+            # ★表格不是「看到沒豎線就結束」★:GFM 裡表格下面緊接的非空行仍是資料列,
+            # 一根豎線都沒有就是「只有一格」——那正是 MD056 要抓的錯
+            # (外家席沙盤:`only-one-cell` 那行第一版整個被跳過)。
+            # 但也不能一路吃到空行為止:這個 repo 有「表格縮排在項目符號底下」的寫法,
+            # 表格後面接的下一個項目會被當成資料列(實測一次假紅 20 筆)。
+            # 判準=縮排要跟表頭一樣,而且不是新的項目符號/標題/引言。
+            indent = lines[i - 1][:len(lines[i - 1]) - len(lines[i - 1].lstrip())]
+            while j < len(lines) and lines[j].strip():
+                if not lines[j].startswith(indent):
+                    break
+                if _re.match(r"[-*+>#]|\d+\.", lines[j].strip()):
+                    break
+                yield (i, ncol, j + 1, cells(lines[j]))
+                j += 1
+            i = j + 1
+            continue
+        i += 1
+
+
 def t_commands_table_shape():
-    """★速查表的欄數要跟表頭對齊★(2026-09-07 全 repo 審視 #10)。
+    """★表格的欄數要跟表頭對齊★(2026-09-07 全 repo 審視 #10)。
 
     出身:三張速查表曾經有整列少一格,markdown 渲染出來會把後面的欄位整排錯位,
     讀的人看到的是「指令欄放著結果說明」。這種錯人眼很難看出來(原始碼裡看起來
     只是少一根豎線),但對照 markdownlint 的 MD056 是標準檢查項,自己寫二十行就有。
 
-    比對時要先把跳脫過的 `\|`(行內碼裡的「A 或 B」)換掉——不換的話會把它當成
+    比對時要先把跳脫過的豎線(行內碼裡的「A 或 B」)換掉——不換的話會把它當成
     分欄符,製造整批假紅。第一版就是這樣,掃出八筆全是假的。
+
+    代碼審 r1 抓到的兩個洞都已折入:掃描清單漏了 repo 根目錄(這批親自改的前置
+    需求表就在那裡,通才席 blocking);認表格靠行首豎線,於是省略外側豎線的寫法
+    整張表不檢查、而沒有尾豎線的合法列反而假紅(外家席)。切格與認表的做法見
+    `_md_table_rows()`。
     """
-    import re as _re
     _need_src("skills/lumos-project-notes/commands")
     root = Path(GRAPHCTL).resolve().parent.parent
     bad = []
-    files = sorted(root.glob("skills/**/*.md")) + sorted(root.glob("slim/skills/**/*.md"))
-    check("速查表檔案掃得到", len(files) >= 10, str(len(files)))
+    files = _doc_files_for_guards(root)
+    check("表格檔案掃得到(含 repo 根目錄的活文件)", len(files) >= 20, str(len(files)))
     for path in files:
         where = str(path.relative_to(root))
-        header = None
-        for lineno, raw in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
-            line = raw.strip().replace("\\|", "\x00")
-            if not line.startswith("|"):
-                header = None
-                continue
-            if _re.fullmatch(r"\|[\s:|-]+\|", line):
-                continue
-            n = line.count("|")
-            if header is None:
-                header = (n, lineno)
-                continue
-            if n != header[0]:
+        for hline, ncol, lineno, n in _md_table_rows(path.read_text(encoding="utf-8")):
+            if n != ncol:
                 bad.append("%s:%d 這列 %d 格,表頭(第 %d 行)%d 格"
-                           % (where, lineno, n - 1, header[1], header[0] - 1))
+                           % (where, lineno, n, hline, ncol))
     check("★表格每一列的格數都跟表頭一樣★", not bad, "共 %d 筆:%s" % (len(bad), bad[:6]))
     print("  ✓ t_commands_table_shape")
 
@@ -5345,17 +5463,13 @@ def t_commands_table_shape():
 def t_every_subcommand_has_when():
     """工具鏈補強十件 #3:每個子指令(含二層)的 `--help` 第一段要有「什麼時候用:」——
     Claude 在情境測試裡常敲 `lumos X --help` 確認,空的 help 等於逼它猜。"""
-    import re as _re
-    import subprocess as _sp
-    root = Path(__file__).resolve().parent.parent
-    lumos_real = str(root / "scripts" / "lumos")
+    # 說明文字直接跟 parser 要(format_help() 就是 --help 印出來的那份),
+    # 不再各自起子行程剖字串——同一份真值,見 _lumos_parser_tree() 的說明。
+    tree = _lumos_parser_tree()
     def helptext(*prefix):
-        r = _sp.run([sys.executable, lumos_real, *prefix, "--help"], capture_output=True, text=True)
-        return r.stdout + r.stderr
+        return tree[tuple(prefix)].format_help()
     def subs(*prefix):
-        out = helptext(*prefix); pos = out.find("positional arguments:")
-        m = _re.search(r"\{([a-z0-9,\-]+)\}", out[pos:] if pos >= 0 else out)
-        return m.group(1).split(",") if m else []
+        return _lumos_subcommands(tree, tuple(prefix))
     missing = []
     for c in subs():
         if "什麼時候用:" not in helptext(c):

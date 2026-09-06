@@ -1,0 +1,1154 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index ea1548e..fed8011 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -3,32 +3,32 @@
+ <!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+ ## 知識圖譜先行（必讀，優先級最高）
+ 
+ **`docs/lumos-toolchain-knowledge/` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 它主要的讀者是下一個 session 的 AI（偶爾是人），所以寫的時候以「沒有脈絡的人讀得懂」為準。 行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
+ 
+ ### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
+ 
+ | 你心裡想的是… | 先敲這個 |
+ |---|---|
+ | 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+-| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（Landmark 實測 8 句 3 句 0 筆） |
++| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（某導入專案實測 8 句有 3 句 0 筆） |
+ | 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+ | 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+ | 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
+ | 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+ | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+ | 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+ | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+ | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+ 
+-查得到才算先行（Landmark 2026-08-11 實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
++查得到才算先行（2026-08-11 在一個導入專案上實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
+ 
+ ★第四條（2026-08-22 Enzo 裁，成本理由：判斷錯本來就要重查一次，這兩分鐘是提前付）★：**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講，就失去意義）。同日實測：一天內六次判斷失準，**全部是「只信一個來源、沒去對第二個」**——搜錯詞、自己腳本有 bug、讀錯欄位名、用錯工具、看了張過期的表；其中四次是另一個 session 拿它自己的數字打臉才發現。**只有這個場合要派，其他查詢照常**（實測「帶否定斷言」的回覆一天 31 次太多，加上「會決定動不動手」這一刀才降到個位數）。
+ 
+ 兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
+ 
+ Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆記」給你——但它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
+ 
+ **接手圖譜還是空的專案 → 先走節點還原 SOP**（`lumos-project-notes` 的 `commands/09-節點還原.md`：七步把脈絡還原成節點；需要才產、有就照慣例用）。
+ **不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（4k，按你正在做的事分九類，只開需要的子檔）。
+ 
+@@ -44,19 +44,19 @@ Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆
+ 
+ ### 遇到這些情境就調用對應 skill
+ 
+ | 你正在做的事 | 調用 |
+ |---|---|
+ | 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
+ | 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
+ | 設計 spec 寫完、要進實作前的審查迴圈 | **`lumos-design-loop`** |
+ | 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
+ 
+-> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill 見文末〈架構參考 Skills〉。
++> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。這個專案如果有自己的技術棧 skill，慣例是在本檔末尾開一節〈架構參考 Skills〉列出來；沒有那一節就是還沒有。
+ <!-- LUMOS:GRAPH-DISCIPLINE:END -->
+ 
+ 本 repo 的規矩與現況**單一來源**如下，本檔只指路、不複製內容（防漂移）：
+ 
+ 1. **專案規矩**：讀 `CLAUDE.md`（圖譜先行、零依賴家規、合約鏈、寫入規範）。
+ 2. **系統現況**：讀 `docs/lumos-toolchain-knowledge/MOC/index.md`（知識圖譜索引），再按需讀 `Systems/`（機制）、`Projects/`（計劃與決策）、`Verification/`（驗證紀錄）。圖譜是唯一真相來源，與 code 衝突以圖譜的合約（★INVARIANT★）為準。
+ 3. **CLI**：`python3 scripts/lumos --help`（66 個頂層命令；讀圖譜用 `context`/`search`/`contracts`/`query`）。
+ 4. **看你被派來做什麼**:被派成唯讀審計員/辯方(`codex exec --sandbox read-only`)時,**不要**改 `docs/*-knowledge/` 下的檔,發現問題用報告回覆;被當協作者開在這個 repo 裡時,照 `CLAUDE.md`(與下方紀律區塊)的規矩走——改了會影響行為/決策/驗證的 code,當次就把脈絡寫回圖譜。
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index b36bd3b..a364071 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -10,21 +10,21 @@
+ flowchart TB
+     subgraph SRC["🟢 Lumos repo (唯一源 · 公開 EnzoHsieh-Android/Lumos · ~/harness/lumos-toolchain)"]
+         direction TB
+         CLI["scripts/lumos<br/>(python3 標準庫單檔 CLI)"]
+         TEST["scripts/test_lumos.py"]
+         GHOOKS["scripts/hooks/<br/>git: pre-commit / post-commit / pre-push"]
+         CHOOKS["scripts/hooks/claude/<br/>四個時點的自動提醒:進場(先查圖譜、哪層防護掉了、上次 CI 結果) · 改檔前(這個檔會波及哪些節點) · 派審查員前(把相關節點附進派工單) · 收工(改了 code 沒動節點:兩家都擋一次要補)<br/>同一批檔兩家共用;改檔後的腐化偵測 2026-08-21 撤除"]
+         INST["安裝器<br/>get.sh · get.ps1 · install.sh<br/>install-hooks.sh · install-graph-toolchain.sh · merge-claude-settings.py"]
+         TPL["scripts/templates/graph-discipline.md<br/>(圖譜先行紀律範本)"]
+         RENAME["scripts/graph-rename.sh · fetch-notesmd.sh<br/>(notesmd move 封印)"]
+-        SKILLS["skills/<br/>lumos-project-notes · core-knowledge<br/>design-loop · code-loop · pitfalls-gapfill"]
++        SKILLS["skills/(共 8 支,以 ls skills/ 為準)<br/>方法論 5 支:lumos-project-notes · core-knowledge<br/>design-loop · code-loop · pitfalls-gapfill<br/>跨專案技術棧慣例 3 支:kotlin · vue · csharp-idioms"]
+         GOV["governance/ + docs/.*-log.jsonl<br/>審查留下的證據:審查員報告、當時審的快照、凍結的判定(每週回放)<br/>驗證器的指紋基線 · 附給審查員的節點有沒被用到的重算<br/>帳本:每輪審查怎麼處置 · 治理事件 · CI 結果 · 被舊決定擋下的次數"]
+         PROBE["scripts/scenario_probe.py<br/>(情境探針:給 AI 出題,量它會不會自己先查圖譜;Claude / Codex 都能測)"]
+     end
+ 
+     subgraph USER["① user-scope (每台機器一份)"]
+         direction TB
+         USKILL["~/.claude/skills/* 與 ~/.agents/skills/*<br/>(symlink → Lumos repo;後者給 Codex 讀)"]
+         UCHOOK["~/.claude/hooks/ + settings.json<br/>~/.codex/hooks/ + hooks.json<br/>(同一批 hook 腳本,兩家各一份註冊)"]
+         UBIN["~/.local/bin/lumos<br/>(全域指令 symlink)"]
+         UAGENT["$CODEX_HOME/agents/lumos_reviewer.toml<br/>(給 Codex 用的「審查員」身分設定)"]
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 602393c..b2631f3 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -2,32 +2,32 @@
+ <!-- LUMOS:GRAPH-DISCIPLINE:START v1.0 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+ ## 知識圖譜先行（必讀，優先級最高）
+ 
+ **`docs/lumos-toolchain-knowledge/` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 它主要的讀者是下一個 session 的 AI（偶爾是人），所以寫的時候以「沒有脈絡的人讀得懂」為準。 行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
+ 
+ ### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
+ 
+ | 你心裡想的是… | 先敲這個 |
+ |---|---|
+ | 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+-| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（Landmark 實測 8 句 3 句 0 筆） |
++| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（某導入專案實測 8 句有 3 句 0 筆） |
+ | 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+ | 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+ | 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
+ | 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+ | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+ | 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+ | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+ | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+ 
+-查得到才算先行（Landmark 2026-08-11 實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
++查得到才算先行（2026-08-11 在一個導入專案上實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
+ 
+ ★第四條（2026-08-22 Enzo 裁，成本理由：判斷錯本來就要重查一次，這兩分鐘是提前付）★：**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講，就失去意義）。同日實測：一天內六次判斷失準，**全部是「只信一個來源、沒去對第二個」**——搜錯詞、自己腳本有 bug、讀錯欄位名、用錯工具、看了張過期的表；其中四次是另一個 session 拿它自己的數字打臉才發現。**只有這個場合要派，其他查詢照常**（實測「帶否定斷言」的回覆一天 31 次太多，加上「會決定動不動手」這一刀才降到個位數）。
+ 
+ 兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
+ 
+ Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆記」給你——但它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
+ 
+ **接手圖譜還是空的專案 → 先走節點還原 SOP**（`lumos-project-notes` 的 `commands/09-節點還原.md`：七步把脈絡還原成節點；需要才產、有就照慣例用）。
+ **不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（4k，按你正在做的事分九類，只開需要的子檔）。
+ 
+@@ -43,21 +43,21 @@ Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆
+ 
+ ### 遇到這些情境就調用對應 skill
+ 
+ | 你正在做的事 | 調用 |
+ |---|---|
+ | 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
+ | 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
+ | 設計 spec 寫完、要進實作前的審查迴圈 | **`lumos-design-loop`** |
+ | 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
+ 
+-> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill 見文末〈架構參考 Skills〉。
++> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。這個專案如果有自己的技術棧 skill，慣例是在本檔末尾開一節〈架構參考 Skills〉列出來；沒有那一節就是還沒有。
+ <!-- LUMOS:GRAPH-DISCIPLINE:END -->
+ 
+ ## 本 repo 的測試子集怎麼跑(紀律區塊鐵則三說的「看專案自己的說明」就是這裡)
+ 
+ 改完程式先跑跟改動相關的子集,全套(約 8 分鐘、3700+ 案例)留給推送前的閘:
+ 
+ ```
+ python3 scripts/test_lumos.py -k <關鍵字>
+ ```
+ 
+diff --git a/ONBOARDING.md b/ONBOARDING.md
+index 486bcbf..d407cd9 100644
+--- a/ONBOARDING.md
++++ b/ONBOARDING.md
+@@ -30,21 +30,22 @@ python3 scripts/lumos bootstrap
+ 
+ 授權:[MIT](LICENSE)。工具鏈自己的檔案適用;工具寫進你專案的東西(設定檔裡的紀律區塊、你寫的圖譜筆記)是你的。
+ 
+ ## 前置需求
+ 
+ | 需要 | 用途 | 沒有會怎樣 |
+ |------|------|-----------|
+ | `git` | 全部 | 無法運作 |
+ | `python3` | lumos 指令與 hooks(純標準庫,不裝任何套件) | 無法運作 |
+ | Claude Code | AI 才會自動載入方法論與提示 | 工具能跑,但 AI 不會自動照規矩走 |
+-| Claude Max 訂閱 | 「提交後派 AI 自動複查」那層才划算 | 該層吃配額/降級,其餘功能正常 |
++| Codex CLI(選用) | 想讓「外家席」用另一家模型審(design-loop / code-loop 的否決席) | 那席換成同一家模型,收斂結論要降級成「單家族視角下未發現」 |
++| 吃得起配額的訂閱方案(選用) | 設計審 / 代碼審一輪會同時派三到四個子代理讀全份材料 | 手動一輪一輪跑仍可用,只是慢;其餘功能不受影響 |
+ | notesmd-cli(選用) | 只有改筆記檔名/搬檔時用(`graph-rename.sh`) | 平常用不到;需要時 `fetch-notesmd.sh` 可抓 |
+ 
+ ---
+ 
+ ## bootstrap 底下做了哪三件事(手動版)
+ 
+ 一鍵就是把這三步自動化;知道分層,出問題才知道去哪修:
+ 
+ **① 每台機器一次:裝共用 skills**
+ 
+@@ -56,21 +57,21 @@ cd ~/harness/lumos-toolchain && ./install.sh
+ ```
+ - 之後**更新=對這個目錄 `git pull`**,捷徑即時生效,不用重裝。
+ 
+ **② 每個專案 clone 一次:裝 hooks**
+ 
+ hooks 是提交/推送時自動跑的檢查程式,git 規定一個 repo 一份,所以每次 clone 都要裝:
+ 
+ ```bash
+ cd <你的專案> && scripts/install-hooks.sh --force
+ ```
+-裝三樣:git hooks(提交關卡)、Claude hooks(給 AI 的提示與提交後自動複查)、Claude 設定註冊。`--force` 是必要的——不加會跳過你機器上的舊版不更新。
++裝三樣:git hooks(提交/推送的關卡)、Claude hooks(開場提示、改檔前附合約、派工前附相關節點、收工核對圖譜有沒有跟上)、Claude 設定註冊。`--force` 是必要的——不加會跳過你機器上的舊版不更新。
+ 
+ **③ 選用,每台機器一次:全域 `lumos` 指令**
+ 
+ ```bash
+ python3 scripts/lumos install     # 之後任何目錄直接打 lumos,不用 python3 scripts/lumos
+ ```
+ 
+ ---
+ 
+ ## 日常使用
+@@ -122,12 +123,12 @@ lumos set / append / decision-add   # 改欄位、加連結、記決策(都寫
+ ---
+ 
+ ## 維護者備註(owner)
+ 
+ - **這個 repo 是整套工具組的唯一源**(指令/hooks/安裝器/範本/skills 都住這)。改任何工具組檔案=改這裡→push;skills 改完各機器 `git pull` 即同步,指令/hooks 改完各專案要跑 `lumos update` 才吃到。
+ - 要把 Lumos 裝進一個新專案,站在 Lumos 目錄也可以:
+   ```bash
+   ~/harness/lumos-toolchain/scripts/install-graph-toolchain.sh --target <新 repo 路徑> --slug <知識庫名>
+   ```
+   重跑=更新工具組,圖譜資料永遠不動。
+-- **不放進這個 repo**:各專案的業務圖譜、發版/部署腳本、專案技術棧 skill。
++- **不放進這個 repo**:各專案的業務圖譜、發版/部署腳本、只有單一專案在用的框架選型。跨專案通用的技術棧慣例 skill(kotlin / vue / csharp-idioms)住這裡,因為它們不綁任何一個專案——邊界跟 README〈邊界與延伸閱讀〉同一句,改一邊要一起改。
+ - 此 repo 公開:推東西前確認**無公司識別資訊**(專案名/表名/業務規則);skills 與範本只用通用範例。
+diff --git a/README.en.md b/README.en.md
+index af6ba94..0196bc2 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -225,21 +225,21 @@ flowchart TB
+     class GATE gate
+     class OBS,AUTO,PROBE obs
+ ```
+ 
+ Lumos leans heavily on fail-open (proceed when the environment is incomplete, with CI as backstop): a broken governance tool never blocks the whole team, but the side effect is **you can't tell how many layers are actually guarding you right now**. `lumos enforcement` checks each layer above and prints a one-line "N of M active" — remote settings it can't probe locally (GitHub required checks) are honestly listed as unknown, not faked as present.
+ 
+ ---
+ 
+ ## 6. Inheriting an old project (Brownfield restoration)
+ 
+-You've inherited a project that's **already running but has an empty graph** (your own month of vibe coding, or the company's legacy system). Lumos's answer is *not* auto-generating docs for the whole repo (that's unchecked synthetic narrative — confidently wrong), but the **node-restoration SOP** — seven steps, any tech stack:
++You've inherited a project that's **already running but has an empty graph** (your own month of vibe coding, or the company's legacy system). Lumos's answer is *not* auto-generating docs for the whole repo (that's unchecked synthetic narrative — confidently wrong), but the **node-restoration SOP** — steps 0 through 6, seven in all, any tech stack. What follows are those seven condensed into five points (step-by-step pointers at the end of this section):
+ 
+ 1. **Lazy growth**: don't backfill everything at once. Query first — **if a note exists, use it; if it's ragged, patch it; only produce one if there's none**. The graph grows along whatever actually gets touched.
+ 2. **Understand before touching**: anchor from observable behavior (screen text / logs / error codes) back to code → trace the data flow to find "who else shares this" (that's your load-bearing wall) → recover the "why" from git history (when blame hits a squashed commit, go read the PR thread).
+ 3. **Every sentence carries provenance**: claims backed by code/git evidence get tagged with it; inferences are honestly tagged "speculation"; dead ends are tagged "lost" — with mechanical checks in place; no making up stories from the current state.
+ 4. **The exit runs a cross-examination**: two mutually-blind AIs — one reads only the notes and lists their verifiable claims, the other reads only the code and judges each claim true/false. Only then is restoration done.
+ 5. **Typical trigger = right before adding a feature**: restore the surrounding area first, then build the feature on top of the nodes — the shared-surface list and contract candidates become the new feature's guardrails, so you don't wreck the architecture or reinvent wheels.
+ 
+ Full procedure: `reference.md` in `skills/lumos-project-notes`, section "Node restoration (brownfield cold start)"; cheat sheet `commands/09-節點還原.md`; design history in `docs/lumos-toolchain-knowledge/Projects/節點還原SOP_計劃.md`.
+ 
+ ---
+diff --git a/README.md b/README.md
+index 27594ba..6502620 100644
+--- a/README.md
++++ b/README.md
+@@ -226,21 +226,21 @@ flowchart TB
+     class GATE gate
+     class OBS,AUTO,PROBE obs
+ ```
+ 
+ 這套大量用 fail-open(環境不全就先放行、CI 當後盾),好處是治理工具一壞不會全公司卡住;副作用是**你看不出現在到底有幾層真的在守**。`lumos enforcement` 把上面各層現況查一遍、印一行「幾層生效」——本機測不到的遠端設定(GitHub required check)誠實列 unknown,不假裝有。
+ 
+ ---
+ 
+ ## 6. 接手舊專案(Brownfield 還原)
+ 
+-接手一個**已經在跑、但圖譜是空的**專案(自己 vibe 一個月的、或公司的舊系統)怎麼辦?Lumos 的答案不是把整個 repo 攤平自動生文件(那種產出沒人查核過,錯得很自信),而是**節點還原 SOP**——七步、任何技術棧:
++接手一個**已經在跑、但圖譜是空的**專案(自己 vibe 一個月的、或公司的舊系統)怎麼辦?Lumos 的答案不是把整個 repo 攤平自動生文件(那種產出沒人查核過,錯得很自信),而是**節點還原 SOP**——步驟 0 到 6 共七步、任何技術棧。下面是這七步濃縮成的五個要點(逐步操作見本節末的指標):
+ 
+ 1. **惰性生長**:節點不一次補完。進場先查——**有就照著用;殘缺就補;沒有才產一篇**。圖譜沿著實際被動過的地方慢慢長。
+ 2. **先看懂再動手**:從看得到的行為(畫面文字/log/錯誤碼)反查到 code → 追資料流圈出「誰還共用它」(那就是承重牆)→ 從 git 歷史還原「為什麼」(blame 追到被壓平的 commit,就去讀 PR 討論串)。
+ 3. **每句話標出處**:有 code/git 證據的標證據;推論老實標「推測」;查不到標「佚失」——有機械檢查把關,嚴禁看著現狀編故事。
+ 4. **出口必過交叉查核**:兩個互不知情的 AI,一個只讀筆記列出裡面的可驗證主張、一個只讀 code 逐條判真假,對完才算還原完成。
+ 5. **典型用法=加新功能之前**:先還原會碰到的關聯面,新功能踩在節點上開發——共用面清單和合約候選直接變成新功能的護欄,不破壞架構、不重造輪子。
+ 
+ 操作全文:`skills/lumos-project-notes` 的 `reference.md`〈節點還原(brownfield 冷啟動)〉;快查表 `commands/09-節點還原.md`;設計脈絡與審計史 `docs/lumos-toolchain-knowledge/Projects/節點還原SOP_計劃.md`。
+ 
+ ---
+diff --git a/docs/.governance-log.jsonl b/docs/.governance-log.jsonl
+index a45a227..e96c9ec 100644
+--- a/docs/.governance-log.jsonl
++++ b/docs/.governance-log.jsonl
+@@ -25647,10 +25647,159 @@
+ {"ts": "2026-09-07T05:36:56+08:00", "commit": "fc18452", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+ {"ts": "2026-09-07T05:36:56+08:00", "commit": "fc18452", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
+ {"ts": "2026-09-07T05:36:56+08:00", "commit": "fc18452", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
+ {"ts": "2026-09-07T05:36:56+08:00", "commit": "fc18452", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
+ {"ts": "2026-09-07T05:36:56+08:00", "commit": "fc18452", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
+ {"ts": "2026-09-07T05:36:56+08:00", "commit": "fc18452", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=8"}
+ {"ts": "2026-09-07T05:52:10+08:00", "commit": "fc18452", "gate": "anchor-approve", "kind": "approved", "hard": false, "nodes": ["scripts/test_lumos.py"], "note": "全repo審視#9 CLI 入口面:頂層說明去手寫清單、打錯指令給近名、找不到節點給候選、無圖譜訊息統一;新增 4 支守衛測試"}
+ {"ts": "2026-09-07T05:52:48+08:00", "commit": "fc18452", "gate": "delguard", "kind": "ok", "hard": false, "nodes": ["Issues/E2時區跨日誤報.md", "Issues/linter-gap實務隱患.md", "Issues/lint不守驗證紀錄空回頭條件.md", "Issues/probe輪三參數只在散文.md", "MOC/index.md", "Projects/CI回流閉環_計劃.md", "Projects/CLAUDE注入re-sync與版本標籤_實作計畫.md", "Projects/CLAUDE注入re-sync與版本標籤_計劃.md", "Projects/Codex外審吸收_計劃.md", "Projects/Codex行為精修_計劃.md"], "note": "tokens=8 hits=295 secs=4.7"}
+ {"ts": "2026-09-07T05:53:14+08:00", "commit": "5aac4da", "gate": "design-loop", "kind": "converged", "hard": false, "nodes": ["code-audit-batch9"], "note": "disposal gate PASS"}
+ {"ts": "2026-09-07T05:52:43+08:00", "commit": "5aac4da", "gate": "code-loop", "kind": "passed", "hard": false, "nodes": [], "detail": "全repo審視#9 CLI入口面:三席代碼審 r1,去重7條全折0放行;卷證 code-audit-batch9", "branch": "main", "head_sha": "5aac4da92b0d801ff43888ef0bb426be0aabd1e9"}
++{"ts": "2026-09-07T05:53:21+08:00", "commit": "5aac4da", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-07-16_replay校準baseline_v0"], "note": "due=1 bad=0"}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-07T05:53:25+08:00", "commit": "0dc48b6", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=8"}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-07-16_replay校準baseline_v0"], "note": "due=1 bad=0"}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-07T05:54:08+08:00", "commit": "0dc48b6", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=8"}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-07-16_replay校準baseline_v0"], "note": "due=1 bad=0"}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-07T06:13:35+08:00", "commit": "0dc48b6", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=2 gates=5 soft=8"}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-07-16_replay校準baseline_v0"], "note": "due=1 bad=0"}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-07T06:13:38+08:00", "commit": "0dc48b6", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=2 gates=5 soft=8"}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-07-16_replay校準baseline_v0"], "note": "due=1 bad=0"}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-07T06:13:44+08:00", "commit": "0dc48b6", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=2 gates=5 soft=8"}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-07-16_replay校準baseline_v0"], "note": "due=1 bad=0"}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-07T06:14:07+08:00", "commit": "0dc48b6", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=6"}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=1 broken=0"}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-revisit", "kind": "warned", "hard": false, "nodes": ["2026-07-16_replay校準baseline_v0"], "note": "due=1 bad=0"}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
++{"ts": "2026-09-07T06:20:02+08:00", "commit": "0dc48b6", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=6"}
++{"ts": "2026-09-07T06:20:22+08:00", "commit": "0dc48b6", "gate": "anchor-approve", "kind": "approved", "hard": false, "nodes": ["scripts/test_lumos.py"], "note": "全repo審視#10 活文件對齊:新增兩條文件守衛(文件教的指令旗標要存在、速查表欄數要對齊)"}
+diff --git "a/docs/lumos-toolchain-knowledge/Issues/git-hooks\350\267\257\345\276\221\346\214\207\345\220\221\346\250\271\345\205\247_checkout\345\215\263\345\237\267\350\241\214\345\210\206\346\224\257\347\242\274.md" "b/docs/lumos-toolchain-knowledge/Issues/git-hooks\350\267\257\345\276\221\346\214\207\345\220\221\346\250\271\345\205\247_checkout\345\215\263\345\237\267\350\241\214\345\210\206\346\224\257\347\242\274.md"
+index 1f96a99..d116cfb 100644
+--- "a/docs/lumos-toolchain-knowledge/Issues/git-hooks\350\267\257\345\276\221\346\214\207\345\220\221\346\250\271\345\205\247_checkout\345\215\263\345\237\267\350\241\214\345\210\206\346\224\257\347\242\274.md"
++++ "b/docs/lumos-toolchain-knowledge/Issues/git-hooks\350\267\257\345\276\221\346\214\207\345\220\221\346\250\271\345\205\247_checkout\345\215\263\345\237\267\350\241\214\345\210\206\346\224\257\347\242\274.md"
+@@ -11,29 +11,29 @@ tags:
+ summary: |-
+   FLAG:
+   DECISION:
+   KEY:
+ related:
+   - "[[Projects/派工鏡頭注入_計劃]]"
+   - "[[Systems/anchor-integrity]]"
+ ---
+ # git-hooks路徑指向樹內_checkout即執行分支碼
+ 
+-> 白話:本 repo 把 git hooks 裝在版本控制的樹裡(`core.hooksPath=scripts/hooks`),好處是 pre-commit/pre-push 跟著 repo 走、每台機器一致;壞處是★checkout 任何分支,就會執行那條分支裡的 hook 檔★。送審的分支若加一支 `scripts/hooks/post-checkout`(或改既有三支),審查者一 checkout 就跑攻擊者的碼——改本地 ref、改 `~/.claude`、什麼都能做。
++> 白話:本 repo 把 git hooks 裝在版本控制的樹裡(`core.hooksPath=scripts/hooks`),好處是 pre-commit/pre-push 跟著 repo 走、每台機器一致;壞處是★checkout 任何分支,就會執行那條分支裡的 hook 檔★。送審的分支若在 hook 目錄裡加一支 checkout 時會觸發的 hook(git 支援 post-checkout 這個時點,本 repo 目前沒有這支),或改既有三支,審查者一 checkout 就跑攻擊者的碼——改本地 ref、改 `~/.claude`、什麼都能做。
+ 
+ ## 怎麼發現的
+ 
+ 2026-09-03 [[Projects/派工鏡頭注入_計劃]] r3 載荷安全席在暫存 repo 實測 `git checkout` 觸發樹內 hook 任意執行;編排者先寫「本 repo 未指向樹內」,查 `git config core.hooksPath` 才發現就是 `scripts/hooks`。
+ 
+ ## 為什麼現有防線擋不住
+ 
+-- 錨點([[Systems/anchor-integrity]])只擋「改了錨點檔還想 push」,不擋「checkout 別人已經 push 上來的分支」;而且只錨三支既有 hook,新增一支 `post-checkout` 不在清單。
++- 錨點([[Systems/anchor-integrity]])只擋「改了錨點檔還想 push」,不擋「checkout 別人已經 push 上來的分支」;而且只錨既有那幾支,分支上新增的 checkout 時點 hook 不在清單。
+ - CI 跑的是分支內容,同樣會執行。
+ 
+ ## 影響範圍
+ 
+ 任何會 checkout 他人分支的流程:本機代碼審、`lumos-code-loop` 的 worktree 驗證席、CI。信任模型實際上是「能 push 分支的人=能在審查者機器上執行碼的人」——這在單人 repo 是可接受的現況,多人協作前必須處理。
+ 
+ ## 候選處置(未裁)
+ 
+ 1. hooksPath 改指向樹外(`~/.lumos/hooks/`),由 install.sh 複製並由錨點比對來源;代價=每台機器多一步、hook 更新要重跑安裝。
+ 2. 保留樹內,但 code-loop 驗證席與 CI 在 checkout 前先 `git config core.hooksPath /dev/null`;代價=只保護自動流程,不保護人手 checkout。
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/graph-engineering\346\216\203\346\217\2172026-08-19_\350\252\277\347\240\224.md" "b/docs/lumos-toolchain-knowledge/Projects/graph-engineering\346\216\203\346\217\2172026-08-19_\350\252\277\347\240\224.md"
+index d31e964..7fac5f2 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/graph-engineering\346\216\203\346\217\2172026-08-19_\350\252\277\347\240\224.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/graph-engineering\346\216\203\346\217\2172026-08-19_\350\252\277\347\240\224.md"
+@@ -92,21 +92,21 @@ decisions:
+ | 讀側顯示標「無型」、排在具名欄位後 | 沒有需求方。原本的痛點(「被誰打死的」混在 related 裡)其實由 `lumos decisions` 解掉了——canary-audit 的死亡在決策鏈第五條寫得清清楚楚,讀者不靠邊;且單跳鄰居查詢的抬頭已經在講「弱恆不展」 |
+ 
+ **消融實驗也不跑。** 補鏈建議與 via 枚舉是「廣撒候選、人裁」的建議型功能,沒有 oracle,delta 定義不出來;硬定一個就是為量而量。
+ 
+ ### 觀察(不是待辦):related 裡混了七種語意
+ 
+ 抽層讀了六十幾條,`related` 底下實際混著:驗證了 / 事故揭露缺陷 / 規則的教訓來源 / 計劃要動這個系統 / 同案的實作篇與設計篇 / 這批接前一批 / 被推翻導致停用。**記下來當觀察,不轉待辦**——上面四個方案已逐條駁回。
+ 
+ ### 數字怎麼算(★兩份腳本量同一件事差了 35 條★)
+ 
+-帶 `related` 欄位的節點數 <!--lumos:count=206 re=(?m)^related:$ in=docs/lumos-toolchain-knowledge/**/*.md--> ——這個數字讓 doctor 自己重算。★寫完當天就漂過一次★:本篇的驗證節點一建,177 立刻變 178,Check N 當場喊出來。**這正是可重算標記存在的意義,不是缺陷。**邊數「四百多條」是單次腳本量測,**寫不成可重算標記就不寫精確數**。
++帶 `related` 欄位的節點數 <!--lumos:count=209 re=(?m)^related:$ in=docs/lumos-toolchain-knowledge/**/*.md--> ——這個數字讓 doctor 自己重算。★寫完當天就漂過一次★:本篇的驗證節點一建,177 立刻變 178,Check N 當場喊出來。**這正是可重算標記存在的意義,不是缺陷。**邊數「四百多條」是單次腳本量測,**寫不成可重算標記就不寫精確數**。
+ 
+ 兩個 session 各自寫腳本量「驗證篇出發的 related」,一邊 56 一邊 59,互相不可複現。差的 3 條 diff 出來,是 56 那邊的規則漏,真因值得下一個寫掃描腳本的人看:
+ 
+ > ★切 frontmatter 用 `find('\n---')` 當結尾時,最後一個欄位後面沒有換行,任何要求行尾 `\n` 的正則會整塊漏掉;先 `+'\n'` 再比。★
+ 
+ 具體症狀:`related:` 剛好是 frontmatter 最後一欄時,那個節點的 related **一條都不算**,而且靜默,不會報錯。漏了 14 個節點、35 條邊,連帶讓所有衍生比例偏低。這與「手寫整檔 frontmatter 忘記結尾 `---`」是同一家族(邊界 off-by-one),差別是那條炸得很明顯,這條無聲。
+ 
+ ### 兩個進場失誤,一個有守衛一個沒有
+ 
+ ① **0 筆沒換同義詞就跳去 web search**:查「圖譜 工程 標準」0 筆逐詞回退,沒換成原文詞就轉去外面搜,重付了一次已經付過的搜尋成本。今天注入的「查得到才算先行」三條擋得住這個——但範本原話是「不要轉頭去 grep」,**這次是「不要轉頭去 web search」的變體**,同一條規則要讀得出兩種。
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
+index 3ad4a5a..73eea1b 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
+@@ -850,10 +850,64 @@ git 的 `safe.directory`(CVE-2022-24765)、VS Code 的 Workspace Trust,結論都
+ - 拿一支**根本不吃節點名**的指令去測「打錯節點名」,等於沒驗。
+ - 自訂錯誤處理裡用了不存在的名字,當場炸。
+ - 子命令那層指到頂層說明。
+ 
+ 另外兩支既有測試翻紅也不是功能壞:一支的判準**只認函式定義、不認類別定義**;兩支拿英文字串當代理,而代理過期了(守的行為都還在)。
+ 
+ ### #23 ★這次明文不做★
+ 
+ 合成席自己寫了前提:必須排在另一件既有事項(回頭日期 09-12)之後。**現在做只會把一則已知噪音推上每週通知,正是那件事點名的「提醒麻痺」。** 順序反了會讓事情變糟,所以留待 09-12 那批一起做。
+ 
++
++---
++
++## 第九批:主題 #10 活文件對齊現況(2026-09-07)
++
++**一句話**:文件教的東西要跟工具現在的樣子對得上,而且**以後對不上要自己叫**。
++先修文、再補守衛——這個 repo 一貫的順序(先讓現況乾淨,守衛才守得住)。
++
++### 修文(先一條條查證,不照材料照抄)
++
++清單是 09-06 全 repo 審視時寫的,到今天已經有幾條被前面幾批順手修掉了。**每一條先看現況再動手**:
++
++- **上手指南的前置需求表**:原本寫「Claude Max 訂閱 —— 提交後派 AI 自動複查那層才划算」。
++  那一層 2026-08-21 就撤了,現在裝的五支 Claude hook 沒有任何一支在做這件事(查過註冊表與 hook 目錄)。
++  改成兩列真的存在的:一列 Codex CLI(要外家席用另一家模型審才需要,沒有就把收斂結論降級成「單家族視角下未發現」),
++  一列「吃得起配額的訂閱方案」(設計審/代碼審一輪同時派三到四個子代理讀全份材料)。
++  同一份文件底下那句「裝三樣」也把同一個已撤的層當現役在講,一併改成現在真的會跑的四個時點。
++- **邊界句自相矛盾**:上手指南寫「專案技術棧 skill 不放進這個 repo」,但 repo 裡就住著 kotlin / vue / csharp 三支。
++  README 中英兩版 09-06 已經改對了,只剩上手指南沒跟上,現在三處講同一句話。
++- **README 說「七步」下面列五點**:不是漏了兩點,是七步濃縮成五個要點。把這句話寫明,中英兩版一起。
++- **架構圖的 skills 盒子**只列五支方法論 skill,少了三支技術棧慣例 skill。改成以 `ls skills/` 為準並標「共 8 支」。
++- **注入到每個消費端的紀律範本**寫著某客戶專案名當量測出處,還指向「文末〈架構參考 Skills〉」——本 repo 沒有那一節。
++  ★改的是 `scripts/templates/graph-discipline.md` 這份範本,不是被注入的那兩個檔★:直接改那兩個檔會被健檢判成漂移、
++  下次刷新又被蓋回去。改完跑 `lumos update` 讓兩個檔跟上。
++- **方法論三份文件**:入口連結 09-06 已補。這次補的是「這份現在算什麼」的狀態列(三份都有),
++  以及主檔那一節〈給未來看到這份文件的人〉——它抄了一份完整的安裝與更新步驟,六月之後裝法換過三輪,
++  照著走會裝出一個只有兩層防護的舊環境。**同一件事不留第二份步驟**,改成指路上手指南,
++  只留下「為什麼每個 clone 都要裝一次」那個真正屬於「為什麼」的坑。順手把指向一篇本 repo 沒有的節點的連結拆掉。
++- **健檢的兩個提醒也一起清掉**:一篇事故筆記把「假想中的攻擊 hook」寫成看起來像存在的檔案路徑;
++  一篇筆記的重現步驟裡寫了一個假資料夾路徑;還有一個可重算的數字漂了(206→209,那個標記存在的意義就是會叫)。
++
++### 守衛兩條(先確認能翻紅才算數)
++
++- **文件教的指令和旗標要真的存在**:真值來源直接攔 argparse 的 parser 物件走一遍整棵樹
++  (66 個頂層 + 二層共 103 個節點,0.04 秒),**不剖 `--help` 的排版、也不用正則掃原始碼**——
++  舊教訓是「守衛的尺自己在漂」;而既有那支同型測試用 96 次子行程剖字串,要 18 秒。
++  首跑抓到一筆真的:速查表教 `lumos decision-supersede <節點> --match "…"`,但那個片段是位置參數、沒有 --match。
++  ★沙盤第一次沒翻紅★:切窗字元裡有 `>`,而文件裡的佔位符長得像 `<詞>`,窗在佔位符就被切斷,
++  後面的旗標永遠掃不到。**守衛沒壞,是現場走不到**(這是第三次踩同一條,先查現場再怪守衛)。
++  修法是先把 `<…>` 換成一個普通詞再切窗。改完兩種沙盤(假旗標、假指令)都會紅,還原就綠。
++- **速查表的欄數要跟表頭一樣**:等價於 markdownlint 的 MD056,自己寫二十行。
++  第一版掃出八筆全是假的——行內碼裡的「A 或 B」是跳脫過的豎線,不先換掉就會被當成分欄符。
++  換掉之後掃出兩筆真的:一列的 `tier: high|standard`、一列的 shell 管線豎線都沒跳脫,渲染出來整排錯位。
++
++**這兩條守衛的天花板要講清楚**:它們只驗「名字存不存在、格數對不對」,**驗不出語意漂移**——
++指令還在、但做的事跟文件寫的不一樣,照樣是綠的。它們擋的是以後的漂移,不是現在的缺陷。
++還有一個已知的洞:同一行寫著「已退場 / 已撤除 / 不存在」的整行會跳過(不然講歷史的句子會被誤判),
++所以把這幾個字寫進一行教學,那行就檢查不到。
++
++### 材料裡有一條查證後不成立
++
++材料說「速查表有九列格數對不上表頭,02 那張已經真的錯位」。**現在沒有**——
++第一批 quick win(57ab1b1)與後來那次代碼審(1bdb905)已經修掉了。
++寫材料時的計數器跟我第一版犯了同一個錯:沒扣掉跳脫過的豎線。
+diff --git "a/docs/lumos-toolchain-knowledge/Systems/hook\344\277\241\344\273\273\351\202\212\347\225\214.md" "b/docs/lumos-toolchain-knowledge/Systems/hook\344\277\241\344\273\273\351\202\212\347\225\214.md"
+index 970b75d..495cb1a 100644
+--- "a/docs/lumos-toolchain-knowledge/Systems/hook\344\277\241\344\273\273\351\202\212\347\225\214.md"
++++ "b/docs/lumos-toolchain-knowledge/Systems/hook\344\277\241\344\273\273\351\202\212\347\225\214.md"
+@@ -21,21 +21,21 @@ plan_refs:
+ # hook信任邊界
+ 
+ > 白話:hook 是「你一打開資料夾它就自己跑」的東西。所以它去執行什麼碼,決定了「打開一個陌生專案」有多危險。
+ 
+ ## 發生什麼(2026-09-06 實地重現)
+ 
+ 進場 hook 為了查「這個專案的防護有沒有生效」,會去跑一支 lumos。它原本跑的是**被打開那個資料夾自己的** `scripts/lumos`,而唯一的判準是「那個資料夾裡有 docs/*-knowledge」。
+ 
+ **所以:clone 一個陌生 repo、開一下 Claude,對方寫在那個路徑的 python 就在你機器上跑了。**
+ 
+-重現方式(自己搭一個假的陌生 repo,不必真的去 clone 誰的東西):建一個資料夾、`git init`、放一個 `docs/x-knowledge/`、在 `scripts/lumos` 放一支會留下記號檔的 python,然後把那個資料夾的路徑餵給進場 hook。記號檔出現了。
++重現方式(自己搭一個假的陌生 repo,不必真的去 clone 誰的東西):建一個資料夾、`git init`、在 docs 底下放一個名字長得像圖譜庫的空資料夾(尾巴是 -knowledge)、在 `scripts/lumos` 放一支會留下記號檔的 python,然後把那個資料夾的路徑餵給進場 hook。記號檔出現了。
+ 
+ ★而且那個檔連執行權限都不需要★——因為是拿 python 去執行它,不是直接執行它。權限位在這裡不是防線。
+ 
+ ## 現在的做法
+ 
+ 三支會用到 lumos 的 hook 共用同一條解析順序:
+ 
+ 1. 系統裡裝好的(`which lumos`)
+ 2. `$LUMOS_HOME` 指的那份
+ 3. 預設來源位置
+diff --git "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204-\345\205\250\346\231\257\345\234\226.md" "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204-\345\205\250\346\231\257\345\234\226.md"
+index ee96083..61aba87 100644
+--- "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204-\345\205\250\346\231\257\345\234\226.md"
++++ "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204-\345\205\250\346\231\257\345\234\226.md"
+@@ -1,13 +1,14 @@
+ # lumos 全景圖(白話總覽)
+ 
+ > 面向第一次聽到 lumos 的人。技術細節見 [圖譜即合約.md](圖譜即合約.md);設計脈絡見 [圖譜即合約-對外論述.md](圖譜即合約-對外論述.md)。
++> **這份文件現在算什麼**(2026-09-07 全 repo 審視 #10 補):現行機制的白話總覽,跟著機制改;圖上的道數與名稱以 [README](../../README.md) 與 `lumos --help` 為準,對不上時以那兩處為真、回來修這張圖。
+ 
+ **先講兩個詞**:**節點**=一篇筆記,記一件事「為什麼這樣設計、邊界在哪、哪些不能改、驗過沒」;**圖譜**=所有節點連起來的那張網。圖譜是這套工具的中心,程式碼只告訴你現在長怎樣,為什麼會這樣只有圖譜記得。
+ 
+ **lumos 是什麼(一句話)**:一套幫你「跟 AI 一起開發時,不會亂來、規則有據可查、出錯能及早發現」的工具。
+ 
+ 下面這張圖,是它怎麼幫你把關——從**平時改一段 code**,到**進實作前審一份新設計**,到**每天沒人盯著也能自己跑**。
+ 
+ > 2026-09-05 更新:③ 那條線改成現行做法——不再偷塞假錯、不再數「連兩輪」;改成機器把相關鐵則附給審查員、機器收貨驗引句、每個發現都要有去向、判定凍結每週回放。② 的檢查數更新為 22 道。⓪ 補上 Codex CLI 也接得上;收工檢查兩家一致(改了 code 沒動節點就擋一次)。④ 標明自主迴圈 2026-09-05 起暫停派工。舊版怎麼講、為什麼改,見 [圖譜即合約.md](圖譜即合約.md) 的沿革表。
+ 
+ ```mermaid
+diff --git "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204-\345\260\215\345\244\226\350\253\226\350\277\260.md" "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204-\345\260\215\345\244\226\350\253\226\350\277\260.md"
+index b56fc7a..0e669d7 100644
+--- "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204-\345\260\215\345\244\226\350\253\226\350\277\260.md"
++++ "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204-\345\260\215\345\244\226\350\253\226\350\277\260.md"
+@@ -1,15 +1,15 @@
+ ---
+ type: project
+ status: published
+ created: 2026-05-26
+-updated: 2026-06-15
++updated: 2026-09-07
+ tags:
+   - type/project
+   - status/published
+   - area/methodology
+   - area/external-essay
+ summary: |-
+   FLAG: 對外論述 (external essay) — graph as contract 機制寫給外部讀者看的白話版
+   KEY: 標題 = AI 時代的開發,拼的不是心流,是注意力能不能自由轉移
+   KEY: 副標 = Graph as Contract: 用自動把關,把「為什麼這樣做」綁進每一次程式碼提交
+   KEY: 核心命題 = AI 開發範式從「心流」轉到「注意力的轉移」,graph as contract 讓脈絡留在原地、注意力可以自由轉移
+@@ -20,30 +20,32 @@ summary: |-
+   KEY: (2026-06-12) SDD 段落修訂 — 撤回「瀑布式」批評(OpenSpec delta+archive 本就增量);改打「覆蓋範圍(只追蹤走流程的變更)+ 腐壞偵測(寫入後無持續驗證)」
+   KEY: (2026-06-12) 進場段說準 — 兩邊進場實質等價(OpenSpec 也是對話式 grill-me);真差異在保存「之後」:OpenSpec 歸檔=終點,這套沉澱=起點;Verification 實證紀錄=SDD 無對應物種
+   KEY: (2026-06-13) SDD 對照收尾 — 兩套=同一問題空間互相逼近的兩個解;判詞=SDD 信動工前的結構管「說清楚」,這套信動工後的強制力管「不腐爛」,軟體越長壽第二件事越值錢
+   KEY: (2026-06-13) ★核心主張★ 互動式規格驅動 — 全 AI 開發下「進場品質隨操作者浮動」是主張本身;解法=繞不過的對話強制理解;逼出的「懂」=人類在全AI時代唯一不可外包的工作=後半段驗證AI的能力
+   KEY: (2026-06-15) 合約即測試段新增 — ★INVARIANT★→[test:] 綁定 + doctor Check T 強制 + CI 真機驗、紅燈擋部署;把「是否為真」從「圖譜新鮮」推進到「載重鐵則綁可執行證據」;同段劃 verification≠validation 邊界(只蓋金流/認證載重子集、禁靜默 skip、證不了規則本身對不對)
+   KEY: (2026-06-15) CLI 演進段新增 + 修矛盾 — 撤回「不另造工具」;誠實敘事=Obsidian-native 起步→長出 lumos 零依賴 CLI;obsidian-cli 做不到=Check T 可執行綁定 / 跨 repo 指針 / 寫後自驗 / 合約登記簿;lumos 是合約即測試這層嚴謹的使能者。詳 [[lumos_計劃]]
+   KEY: (2026-06-15) 通篇白話化 — 全文重寫為一般讀者可讀(術語翻成人話、短句、具體例子、第一人稱「我」一致、SDD 對照壓縮加白話);目標=流暢、始末完整、動機自洽;保留所有論點與誠實邊界
+   KEY: (2026-06-15) Lumos tagline 開場 epigraph — 「揭開全 AI 開發的黑箱,照亮通往正確需求的路」;一照程式碼(脈絡/合約)一照需求(互動式規格驅動);誠實版=不替你把需求變對,只照亮路讓你自己走對(對齊 verification≠validation 邊界)
+ related:
+   - "[[圖譜即合約]]"
+-  - "[[LandmarkMember]]"
+ ---
+ 
+ # AI 時代的開發,拼的不是心流,是注意力能不能自由轉移
+ 
+ **(Graph as Contract:用自動把關,把「為什麼這樣做」綁進每一次程式碼提交)**
+ 
+ > **Lumos —— 揭開全 AI 開發的黑箱,照亮通往正確需求的路。**
+ > 一邊照「程式碼」:把藏起來的為什麼、決策、硬合約照出來;一邊照「需求」:用繞不過的對話逼出理解。它不替你把需求變對,而是把路照亮、讓你自己走對。
+ 
++> **這份文件現在算什麼**(2026-09-07 全 repo 審視 #10 補):寫給沒有脈絡的外部讀者的版本,還在跟著機制改。
++> 想看機制現況去 [README](../../README.md);想看完整論證去 [圖譜即合約](圖譜即合約.md);想看一張圖看完所有閘去 [全景圖](圖譜即合約-全景圖.md)。
++
+ ---
+ 
+ 從傳統軟體開發走到 AI 開發,我覺得最大的轉變,是「注意力」的用法不一樣了。
+ 
+ 傳統開發講「心流」——你要把全部精神集中在一個方案、一個架構上,沉浸進去、一氣呵成。AI 開發講的是「**注意力的轉移**」:你只要把需求和邊界用白話講清楚,就能快速設計、隨時切換,甚至同時開好幾個對話一起推進不同的工作。
+ 
+ 但「同時多開」要真的跑得起來,有個前提:**AI 必須真的搞懂你這個專案的來龍去脈**。它不能只看到「程式現在長這樣」,還要知道「當初為什麼這樣設計」「哪些地方動了會牽連到別處」,才能在改東西、搬東西的時候做出對的判斷。
+ 
+ 所以我做了這套機制,叫 **graph as contract(圖譜即合約)**——把「來龍去脈」變成一份跟著程式碼一起留存、不會散掉也不會過期的東西。
+ 
+diff --git "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md" "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md"
+index 9087955..c9c5372 100644
+--- "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md"
++++ "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md"
+@@ -1,42 +1,45 @@
+ ---
+ type: project
+ status: doing
+ created: 2026-05-25
+-updated: 2026-06-12
++updated: 2026-09-07
+ tags:
+   - type/project
+   - status/doing
+   - area/methodology
+ summary: |-
+   FLAG:Methodology / paradigm 文件 — 描述本專案的「圖譜 + Hook 配套」整套設計的範式
+   KEY:核心命題=把工程知識當 code 版控、用 hook 機械式強制同步、用 LLM 偵測語意漂移,取代「人類自律」的軟限制
+   KEY:四道強制力=L1 Stop hook 軟提醒(turn 結束;★2026-09-05 起兩家都在改了碼沒寫回時擋一次續做——Claude 舊的 stderr 提醒,官方文件明講模型看不到★) | L2 git 原生 pre-commit 硬擋(2026-05-25 從 PreToolUse 翻盤,bypass=--no-verify) | L3 PostToolUse LLM 偵測(commit 後) | 自足性審計(2026-06-10,圖譜實質更新後派乾淨 Sonnet agent 還原測試)
+   KEY:hooks 驗「同步性/有效性」(有沒有寫),自足性審計驗「自足性」(寫的夠不夠接手)——首輪即抓出 6 個 hooks 抓不到的記載模糊/內部矛盾
+   KEY:(2026-06-10)Part2 核心圖譜 v1 試點啟動 — 獨立 repo ~/backend/citrus-core-knowledge(分域 Business/{member,dining,common}),首條核心=CustTransfer語意表(lab2 DB實證),facet=projects/LandmarkMember;本專案 settings.json requires_core 旗標+L1 hook 掛載警告+CORE_KNOWLEDGE_ROOT env;指針紀律=升格不是遷徙,專案筆記留 core_refs/CORE:行,不留快照(雙寫必drift);兩週後 decision gates 檢視
+   KEY:(2026-06-10)L2 觀測面 bypass 留痕 — post-commit hook 偵測「有 code 無圖譜」commit(--no-verify 跳不過 post-commit)append .bypass-log.jsonl,digest 印 bypass 率;只記錄不阻擋,量測「不更新圖譜比更新圖譜更難」宣稱;治理調研 gap 落地
+   KEY:(2026-06-12)協作場景澄清 — 實際是團隊多人各自 Claude Code、push 同一專案 repo 共維護(非單人);feature 節點天然分片,但專案層共通節點(跨 feature,如點數系統/POS-API/MOC)會共編 → 重啟 L4 否決案前提(§11,單人估的 ROI 已變,待重評,收斂方向=graph-doctor 上 CI 非完整 L4)。兩層勿混:共通節點(跨 feature、單專案)≠ 核心知識(跨專案、≥2 專案才升格)
+   KEY:(2026-06-12)計劃意圖鏈機械化 — Verification.plan_refs 單向指針反指計劃 + graph-doctor Check 4(結案計劃漏接迭代驗證/斷鏈);初版 plan 物種四件套經 Sonnet 對抗審計砍半(否決 fulfilled_by 雙寫、四態生命週期、模板化盤問——enforcement 管鏈不管思考品質);E2E 豁免計劃 3 斷鏈補鏈歸零
+   KEY:(2026-06-12)合約性標記 — KEY 行 ★INVARIANT★/★DEBT★ 前綴(合約 vs 偶然,未標=未聲明,不確定不標);「需求與邊界」H2 段經第二輪審計否決(第四軌必漂移+偶然合約化鎖死重構);Plan 觸發判準=跨 session 預設寫/跨人共識/跨多節點,其餘 decisions[] 一條=微型計劃;常態工作流不變(對話敲定→依脈絡開發→事後沉澱)
+   KEY:(2026-06-13)L2 Gate 1 污染指紋 — 審計揭露 docs-only commit 對 L2/L3 全隱形(污染可靜默入庫數週);補強=pre-commit Gate 1(日期加引號指紋,置 Gate 2 前)+ CLAUDE.md repo 層 notesmd-cli 禁令(skill 單機覆蓋缺口);詳 [[2026-06-13_T2污染防線_Gate1]]
+   KEY:6 設計原則=Knowledge as code / Mechanical not motivational / Three-layer defense / Honest decay / AI as auditor not author / Composition over invention
+   KEY:跟業界主流(semantic RAG + chat)的差異=結構嚴謹 + commit-time enforcement;社群少見組合(同時做 CI gate + 三層 hook + LLM audit + 滾動歸檔)
+-  DEP:[[LandmarkMember]] (專案主文件)
+-related:
+-  - "[[LandmarkMember]]"
++  DEP:正本是 lumos-toolchain repo 本身;README / ARCHITECTURE / skills 是同一套機制的現況面
+ ---
+ 
+ # 圖譜即合約 (Graph as Contract)
+ 
+ > **One-liner**: 把工程知識當 code 版控、用 hook 機械式強制同步、用 LLM 偵測語意漂移 —— 取代「人類自律」的軟限制。
+ 
+-本文件描述 LandmarkMember 專案的圖譜與 hook 配套的整體架構與方法論。給新進 team 成員 / 未來的 Claude session 看一篇就懂整套設計。
++> **這份文件現在算什麼**(2026-09-07 全 repo 審視 #10 補):
++> 它是**方法論的來源稿**——「為什麼要這樣設計」的完整論證寫在這裡,而且到現在還在跟著機制改。
++> 出身是一個客戶專案的內部文件,現在正本是 lumos-toolchain 這個 repo,讀的時候把「本專案」理解成這套工具組。
++> **哪裡以誰為準**:機制現在長什麼樣以 [README](../../README.md) 與 [ARCHITECTURE](../../ARCHITECTURE.md) 為準;
++> 怎麼操作以 `skills/lumos-*` 為準;這份講的是為什麼。三者衝突時先信 README/skills,再回來修這份。
++> 文中標「已撤除」的層,是真的撤了、留著是為了讓人看得懂當初為什麼那樣分層。
+ 
+ ---
+ 
+ ## 一、Why — 解決什麼問題
+ 
+ 傳統工程知識管理會遇到的痛點:
+ 
+ 1. **文件 vs code 漂移**:code 改了,文件沒人跟新
+ 2. **驗證紀錄堆積成廢紙**:跑過的測試紀錄沒人 review、不確定還有效嗎
+ 3. **AI session 缺乏上下文**:每次 AI 重來都要重新解釋「為什麼這樣設計」
+@@ -510,73 +513,35 @@ vault 跟 codebase 同 repo 版控,圖譜變更跟 commit 綁定。Team 拉同
+ | arxiv 2512.19883 *CARL-CCI* | 證明 explicit diff structure > 大模型,影響 prompt 設計 |
+ | arxiv 2601.21116 *Epistemic Status* | 評估過 F-G-R 信心模型,**故意不採用**(scale 不符,留筆記) |
+ | Microsoft GraphRAG | 評估過 community summary 自動分群,**deferred**(量未到) |
+ | Andy Matuschak Evergreen notes | Systems/Verification/Issues 分層的概念來源 |
+ | MADR 4.0 | ADR `decisions[]` 四欄位 frontmatter 的格式參考 |
+ 
+ ---
+ 
+ ## 十、給未來看到這份文件的人
+ 
+-如果你是:
+-
+-- **新進開發者(本專案 team)** →
+-  ```bash
+-  git clone <this repo> && cd LandmarkMember
+-  scripts/install-hooks.sh                                  # ★必做: 激活 pre-commit/post-commit/pre-push + L1/L3
+-  python3 scripts/lumos doctor                           # 綠基線 / 環境自檢(零依賴,不需 Obsidian)
+-  python3 scripts/lumos context LandmarkMember --brief   # 進場地圖
+-  # 重啟 Claude Code session(L1/L3 session start 才載入)
+-  ```
+-  > **為什麼 install-hooks 非做不可**:`core.hooksPath` 是**本機 git config,不隨 clone**。
+-  > clone 只給 hook **檔案**(`scripts/hooks/`),git 不會用它們直到 install-hooks 設定 hooksPath。
+-  > **不跑這步,pre-commit/post-commit/pre-push 全部不 fire**——唯一硬陷阱。
+-
+-  **選做(看需求,不做也能跑)**:
+-  - `python3 scripts/lumos install` — 全域 `lumos` 指令(否則一律 `python3 scripts/lumos`)
+-  - `scripts/fetch-notesmd.sh` — 只在要 rename/移檔時(抓 9MB binary,不隨 clone)
+-  - clone `citrus-core-knowledge` 為 sibling / 設 `CORE_KNOWLEDGE_ROOT` — 只為讓 Check C 跨 repo 指針真驗,否則優雅跳過
+-  - 裝 Obsidian app + 註冊 vault — 只為人類視覺編輯 / 權威 lint;讀圖譜一律 lumos,不需要
+-
+-  skill 規範書(lumos-project-notes / lumos-core-knowledge / lumos-design-loop)**為 user-scope**
+-  (唯一源在 lumos-toolchain repo 的 `skills/`,symlink 進 `~/.claude/skills/`,所有專案共用;
+-  2026-06-13 起;早期曾隨 repo `.claude/skills/`,後升格 user-scope)。然後讀 [[LandmarkMember]] 了解專案。
+-  寫第一個 commit 時,L2 會提醒;push 前 pre-push 跑完整 doctor;commit 後 L3 會審。聽 stderr 的話即可。
+-  **Degrade**:沒有 Claude 訂閱 → L3 不 fire(L1/L2/pre-push 照常,digest + 他人 L3 兜底);
+-  無 Obsidian → 讀走 lumos,只少視覺圖譜 / 權威 lint。
+-
+-  **裝完之後怎麼保持最新(更新傳播)**:
+-
+-  | 元件 | `git pull` 夠嗎 | 說明 |
+-  |------|:---:|------|
+-  | lumos(`scripts/lumos` / 全域 `lumos`) | ✅ | 全域版是 symlink→repo source,pull 即新,**不用重跑 install** |
+-  | git hooks(pre-commit/post-commit/pre-push) | ✅ | `core.hooksPath` 是活指標指向 `scripts/hooks/`,非 copy |
+-  | CLAUDE.md / skills / workflow | ✅ | 純檔案 |
+-  | **L1/L3 Claude hooks**(`~/.claude/hooks/*.py`) | ❌ | install-hooks 預設 **copy** 到 ~/.claude;這兩 .py 更新時**重跑 `install-hooks.sh`**(或當初用 `--symlink` 裝則 pull 即新,但硬綁 repo 路徑) |
+-  | settings.json hook 註冊 | ❌ | 在 ~/.claude;註冊結構變動時重跑 install-hooks(罕見) |
+-  | notesmd binary | ❌ | `fetch-notesmd.sh` pin 版本;PINNED_VER 升版時重跑 fetch |
+-
+-  **實務習慣**:pull 後若 commit log 動到 `scripts/hooks/claude/*.py` 或 `merge-claude-settings.py`,重跑一次 `install-hooks.sh`;其餘 pull 全自動。**信號缺口**:沒東西主動提醒「該重跑」——同「clone 後要記得 install-hooks」一類靠紀律的洞,團隊化後再評估機械化。
+-
+-- **下次的 Claude session** → 動 code 前先讀本文件 + skill。commit 前確認有對應 Verification。三層 hook 會自動引導你,聽 stderr 的話。
+-
+-- **想複用這套範式到別的專案** → 兩條路:
+-  - **快路徑**: 把 `scripts/hooks/` + `scripts/install-hooks.sh` + `scripts/merge-claude-settings.py` 整套 copy 到新 repo,改 vault 名跟需要的 frontmatter 規範即可
+-  - **手裝最小可用**:
+-    1. 建 `docs/{slug}-knowledge/` vault + 學 Obsidian 寫 frontmatter
+-    2. copy `scripts/hooks/pre-commit` (Layer 2 硬擋) + 跑 `git config core.hooksPath scripts/hooks`
+-    3. copy `scripts/lumos`(健檢:`python3 scripts/lumos doctor`,零依賴)
+-    Layer 1 + 3 可後續加上,不是 day-1 必須。
+-
+-- **想質疑這套範式是否值得** → 看 §7 限制與選擇權衡。最大成本是「frontmatter 規範卡死靈活度」,最大收益是「半年後 onboard 新人時不用解釋設計理由,圖譜自帶完整脈絡」。
+-
+-
++★2026-09-07 全 repo 審視 #10 改★:這一節原本抄了一份「怎麼裝、怎麼更新」的完整步驟,
++六月之後裝法換過三輪(bootstrap 一鍵、get.sh 冷啟動、hook 從兩支變五支),抄的那份沒跟上,
++於是新人照這裡走會裝出一個舊的、只有兩層防護的環境。**同一件事不留第二份步驟**,改成指路:
++
++- **要裝、要更新** → [ONBOARDING](../../ONBOARDING.md)(裝什麼、驗收怎麼看)與 [README §9 更新方式](../../README.md)。
++  這份文件不再重複步驟,因為步驟會改而這裡不會有人記得回來改。
++- **下次的 Claude session** → 動 code 前先 `lumos search` / `lumos context`,再讀這份的〈二、四道強制力〉知道自己被什麼擋著。
++- **想把這套用到別的專案** → `python3 scripts/lumos bootstrap`(repo 裡已有 lumos)或 `get.sh` 冷啟動;
++  手動分層的作法見 ONBOARDING〈bootstrap 底下做了哪三件事〉。
++- **想質疑這套值不值得** → 看本文 §7〈限制與選擇權衡〉。最大成本是開頭欄位規範卡住靈活度,
++  最大收益是半年後接手的人不用有人解釋設計理由。
++
++**唯一還留在這裡的那個坑**(因為它是「為什麼」不是「怎麼做」):
++`core.hooksPath` 是本機 git 設定、**不隨 clone 走**。clone 只給你 hook 的檔案,
++git 不會去用它們,直到有人跑過安裝。所以「每個 clone 都要裝一次」不是麻煩,是 git 的規定。
+ 
+ ---
+ 
+ ## 十一、已否決的擴充提案
+ 
+ §7「故意不做的事」的詳版,記錄評估過但拒絕的擴充提案連同論證脈絡。
+ 未來若再有人提類似想法,先讀這裡再決定要不要重新討論。
+ 
+ ### Proposal: L4 cross-branch rot-check (2026-05-26 已否決)
+ 
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 9be19ef..5590d28 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,17 +1,17 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "c60e3c00e7d45556a5ff45126edb3d3aaf3caf1d6f4570c774ea31ad9a992483",
++    "scripts/test_lumos.py": "5a6943fe7301a9df70978c014b41c8c394a3d4b8cc584369478c6acd2017c820",
+     "scripts/test_autonomous_loop.py": "8a51c5837475c27f8f97994c232c342d0027206f0206f133da5ad0368ee1b3e8",
+     "scripts/hooks/pre-commit": "944b21c8fe7e2d82145a7761935bb1d38acc00b445f3a99e98575957531ba9c5",
+     "scripts/hooks/pre-push": "cd2f430382fba7dc443d95f5c5236fb21234b66b7517b4747b540df527736408",
+     "scripts/hooks/post-commit": "b9bc3073dad22a8cde82466bdba77faed2bfe82bdd88927a2f44ccbbeb408f36",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "e695c02abe3ac8acd1ecac2b9a0c6c87685e8b20755ef7eb701bc143458a85c4",
+     "scripts/hooks/claude/lumos-entry-hook.py": "7502776acef5e53c4e716384e10aee06db70a4868f2d54c67309e866f7348387",
+     "scripts/hooks/claude/impact-hook.py": "fedf49ff3ecf549e9fe45db7067a6e408d1ed636b4f7011a92e159449e61788c",
+     "scripts/hooks/claude/check-graph-sync.py": "7b990db020af2dbe7b18801a33e52fac1561e459a2b98541ca91da4926fd42c5",
+     "scripts/hooks/claude/ci-status-hook.py": "db549645cd858037d287d39dfbdbaaf70785f674a9e0046e6cf45bcf6e455370"
+   },
+-  "approved_at": "2026-09-07T05:52:10+08:00",
+-  "note": "全repo審視#9 CLI 入口面:頂層說明去手寫清單、打錯指令給近名、找不到節點給候選、無圖譜訊息統一;新增 4 支守衛測試"
++  "approved_at": "2026-09-07T06:20:22+08:00",
++  "note": "全repo審視#10 活文件對齊:新增兩條文件守衛(文件教的指令旗標要存在、速查表欄數要對齊)"
+ }
+diff --git a/scripts/templates/graph-discipline.md b/scripts/templates/graph-discipline.md
+index 548cea3..32481cd 100644
+--- a/scripts/templates/graph-discipline.md
++++ b/scripts/templates/graph-discipline.md
+@@ -1,31 +1,31 @@
+ ## 知識圖譜先行（必讀，優先級最高）
+ 
+ **`{{KG}}` 是本專案「為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒」的唯一來源；程式碼只告訴你現在長怎樣。** 它主要的讀者是下一個 session 的 AI（偶爾是人），所以寫的時候以「沒有脈絡的人讀得懂」為準。 行為事實（測試、實際執行、生產觀測）和圖譜衝突時，不自動判圖譜對——查清哪邊錯，立一篇事故筆記。
+ 
+ ### 第一個工具呼叫是 `lumos`，不是 grep / Read / Explore / 查 DB
+ 
+ | 你心裡想的是… | 先敲這個 |
+ |---|---|
+ | 「這個模組 / 欄位 / 流程為什麼這樣？」 | `lumos search <詞>` → `lumos context <節點>` |
+-| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（Landmark 實測 8 句 3 句 0 筆） |
++| **中文查詢：概念之間加空白** | `lumos search "作廢 收回 點數"`，不是 `作廢訂單點數怎麼收回`——整串當片語比對，黏成一串幾乎必定 0 筆（某導入專案實測 8 句有 3 句 0 筆） |
+ | 「動這段之前有什麼不能碰的？」 | `lumos contracts <節點>` |
+ | 「我要改 X，會波及什麼？」 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 「哪些是金流 / 未收案 / 連到某節點的？」 | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+ | 「我刪掉 / 改名了一個東西，筆記還在講它嗎？」 | `lumos search <舊名> --code` |
+ | 「當初為什麼這樣決定？翻案了嗎？」 | `lumos decisions <節點> [--superseded]` |
+ | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+ | 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
+ | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+ | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
+ 
+-查得到才算先行（Landmark 2026-08-11 實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
++查得到才算先行（2026-08-11 在一個導入專案上實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
+ 
+ ★第四條（2026-08-22 Enzo 裁，成本理由：判斷錯本來就要重查一次，這兩分鐘是提前付）★：**要說「沒有／缺／不存在／沒人做過」之前，如果那句話會決定要不要動手做東西——先派一個乾淨 agent 用「原始問題」去對一次，不要把你的結論丟給它**（丟結論它會順著你講，就失去意義）。同日實測：一天內六次判斷失準，**全部是「只信一個來源、沒去對第二個」**——搜錯詞、自己腳本有 bug、讀錯欄位名、用錯工具、看了張過期的表；其中四次是另一個 session 拿它自己的數字打臉才發現。**只有這個場合要派，其他查詢照常**（實測「帶否定斷言」的回覆一天 31 次太多，加上「會決定動不動手」這一刀才降到個位數）。
+ 
+ 兩個最常見的破口：① 把任務歸成「只是查個資料」就跳過；② 使用者說「直接改、不用解釋」就跳過。**不解釋可以，不查不行**——進場那一下是一行指令、幾秒鐘。
+ 
+ Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆記」給你——但它只推你碰到的檔，看到它不等於查過圖譜，合約邊界仍要自己 `lumos contracts` / `context`。
+ 
+ **接手圖譜還是空的專案 → 先走節點還原 SOP**（`lumos-project-notes` 的 `commands/09-節點還原.md`：七步把脈絡還原成節點；需要才產、有就照慣例用）。
+ **不確定該敲哪個指令 → 讀索引**：`lumos-project-notes` skill 的 `commands/INDEX.md`（4k，按你正在做的事分九類，只開需要的子檔）。
+ 
+@@ -41,11 +41,11 @@ Edit / Write 之前 hook 會自動塞一份「必看合約 / 事故 + 相關筆
+ 
+ ### 遇到這些情境就調用對應 skill
+ 
+ | 你正在做的事 | 調用 |
+ |---|---|
+ | 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
+ | 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
+ | 設計 spec 寫完、要進實作前的審查迴圈 | **`lumos-design-loop`** |
+ | 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
+ 
+-> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案技術棧 skill 見文末〈架構參考 Skills〉。
++> lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。這個專案如果有自己的技術棧 skill，慣例是在本檔末尾開一節〈架構參考 Skills〉列出來；沒有那一節就是還沒有。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 56b242a..825db4f 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -5150,20 +5150,205 @@ def t_command_index_complete():
+             if f"{parent} {sc}" not in corpus and f"`{sc}`" not in corpus:
+                 missing2.append(f"{parent} {sc}")
+     check("★二層子指令也都有歸位★", not missing2, f"缺: {missing2}")
+     idx = (cmd_dir / "INDEX.md").read_text(encoding="utf-8")
+     check("總目錄控制在 4.5k 字元內(分塊的意義)", len(idx) <= 4500, str(len(idx)))
+     for p in sorted(cmd_dir.glob("0*.md")):
+         check(f"子檔 {p.name} 在總目錄被指到", p.name in idx, p.name)
+     print("  ✓ t_command_index_complete")
+ 
+ 
++def _lumos_parser_tree():
++    """把 lumos 的整棵 argparse 樹撈出來:{(指令,子指令): 這一層認得的旗標集合}。
++
++    為什麼不用「跑 lumos <指令> --help 再剖字串」:那是 66+30 次子行程、約 18 秒,
++    而且剖的是給人看的排版,排版一改守衛就跟著壞。這裡直接攔 parse_args 拿到
++    parser 物件本身走一遍,0.04 秒、拿到的是真結構。**真值來源是 argparse 自己,
++    不是原始碼正則**——舊教訓是「守衛的尺自己在漂」(2026-09-06 #10 主題材料)。
++    """
++    import argparse as _ap
++    import importlib.machinery as _mach
++    import importlib.util as _iu
++    _loader = _mach.SourceFileLoader("_lumos_for_tree", GRAPHCTL)
++    _spec = _iu.spec_from_loader("_lumos_for_tree", _loader)
++    _mod = _iu.module_from_spec(_spec)
++    _loader.exec_module(_mod)
++
++    class _Grab(Exception):
++        def __init__(self, parser):
++            self.parser = parser
++
++    _orig = _ap.ArgumentParser.parse_args
++
++    def _fake(self, *a, **k):
++        raise _Grab(self)
++
++    _ap.ArgumentParser.parse_args = _fake
++    top = None
++    try:
++        _mod.main()
++    except _Grab as g:
++        top = g.parser
++    finally:
++        _ap.ArgumentParser.parse_args = _orig
++    if top is None:
++        raise AssertionError("攔不到 lumos 的 parser——main() 的結構改了?")
++
++    def _walk(parser, prefix=()):
++        flags = set()
++        for act in parser._actions:
++            for opt in act.option_strings:
++                flags.add(opt)
++            if isinstance(act, _ap._SubParsersAction):
++                for name, sub in act.choices.items():
++                    for item in _walk(sub, prefix + (name,)):
++                        yield item
++        yield prefix, flags
++
++    return dict(_walk(top))
++
++
++# 這幾個名字出現在指令後面時,代表「lumos 那一段已經講完、換別的程式了」。
++# 不切的話,`lumos impact --diff $(git merge-base --fork-point …)` 會把 --fork-point
++# 當成 lumos 的旗標誤報。切窗是為了不製造假紅(#10 材料明寫的踩點)。
++_NOT_LUMOS_PROGRAMS = {
++    "git", "gh", "codex", "claude", "python3", "python", "bash", "sh", "sed", "grep",
++    "awk", "curl", "sha256sum", "shasum", "wc", "cat", "ls", "cd", "xargs", "jq",
++    "echo", "npm", "node", "pytest", "open", "mkdir", "cp", "mv", "rm", "tee",
++}
++# 這幾個字出現在同一行,代表那一行是在講「這東西已經沒了」,不是在教人用。
++_RETIRED_WORDS = ("已退場", "退場", "已撤除", "撤除", "已移除", "不存在", "已拆")
++
++
++def t_skill_mentions_resolve():
++    """★文件教的指令和旗標,真的要存在★(2026-09-07 全 repo 審視 #10)。
++
++    出身:守衛一直只有單向——`t_command_index_complete` 驗「argparse 有的指令,
++    索引裡有沒有寫」。反過來沒人驗:**文件寫了一個早就拆掉的旗標,照著打會被靜默
++    吞掉或直接報錯**,而讀文件的多半是新人和 AI,他們沒有別的參照。實際踩過:
++    上手指南教 `./install.sh --copy`,那個旗標 2026-06-26 就拆了,教了兩個多月。
++
++    首跑抓到一筆真的:速查表教 `lumos decision-supersede <節點> --match "…"`,
++    但要比對的片段是位置參數、根本沒有 --match,照著打會直接報錯。
++
++    誠實講這條守衛的天花板:它只驗「名字存不存在」,**驗不出語意漂移**——
++    一支指令還在、但做的事跟文件寫的不一樣,它照樣是綠的。
++    另一個已知的洞:同一行寫著「已退場 / 已撤除 / 不存在」時整行跳過(不然講歷史
++    的句子會被誤判),所以有人把這幾個字寫進一行教學,那行就檢查不到。
++    """
++    import re as _re
++    _need_src("skills/lumos-project-notes/commands", "README.md")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    tree = _lumos_parser_tree()
++    check("argparse 樹撈得到,而且頂層指令 ≥60 個", len([k for k in tree if len(k) == 1]) >= 60,
++          str(len([k for k in tree if len(k) == 1])))
++    # ★先把 <佔位符> 換掉再切窗★:文件裡的 `lumos search <詞> --code` 帶著角括號,
++    # 而切窗字元原本含 `>`(想擋 shell 導向),於是窗在 `<詞>` 就被切斷、後面的旗標
++    # 永遠掃不到——第一版沙盤故意寫一個不存在的旗標進去,守衛照樣綠。
++    # 這正是「沙盤沒翻紅先查現場走不走得到」那條:守衛沒壞,是現場根本沒走到。
++    placeholder = _re.compile(r"<[^<>]*>")
++    stop = _re.compile(r"[|;&()`]| > |>>|\$\(")
++    bad = []
++
++    def code_lines(text):
++        """只看程式碼(反引號行內碼與圍欄區塊)——散文裡的「lumos 在 scripts/lumos」不是指令。"""
++        for fence in _re.findall(r"```[a-z]*\n(.*?)```", text, _re.S):
++            for line in fence.split("\n"):
++                yield line, line
++        for line in text.split("\n"):
++            for code in _re.findall(r"`([^`\n]+)`", line):
++                yield code, line
++
++    for path in sorted(root.glob("skills/**/*.md")) + [
++            root / "README.md", root / "README.en.md", root / "ONBOARDING.md",
++            root / "ARCHITECTURE.md", root / "CLAUDE.md", root / "AGENTS.md"]:
++        if not path.exists():
++            continue
++        where = str(path.relative_to(root))
++        for code, line in code_lines(path.read_text(encoding="utf-8")):
++            if any(w in line for w in _RETIRED_WORDS):
++                continue
++            for hit in _re.finditer(r"(?<![\w/-])lumos\s+", code):
++                rest = placeholder.sub("ARG", code[hit.end():])
++                cut = stop.search(rest)
++                if cut:
++                    rest = rest[:cut.start()]
++                toks = []
++                for tok in rest.split():
++                    if tok in _NOT_LUMOS_PROGRAMS:
++                        break
++                    toks.append(tok)
++                if not toks:
++                    continue
++                cmd = toks[0]
++                if not _re.fullmatch(r"[a-z][a-z0-9-]*", cmd):
++                    continue
++                if (cmd,) not in tree:
++                    bad.append("%s: 沒有 `lumos %s` 這個指令" % (where, cmd))
++                    continue
++                node, i = (cmd,), 1
++                if i < len(toks) and (cmd, toks[i]) in tree:
++                    node, i = (cmd, toks[i]), i + 1
++                allowed = set(tree[node]) | set(tree[()])
++                if len(node) == 2:
++                    allowed |= set(tree[(node[0],)])
++                for tok in toks[i:]:
++                    if not tok.startswith("--") or tok == "--":
++                        continue
++                    flag = tok.split("=")[0]
++                    if not _re.fullmatch(r"--[a-z0-9][a-z0-9-]*", flag):
++                        continue
++                    if flag not in allowed:
++                        bad.append("%s: `lumos %s` 沒有 %s 這個旗標" % (where, " ".join(node), flag))
++    uniq = sorted(set(bad))
++    check("★文件裡教的每個 lumos 指令與旗標都真的存在★", not uniq,
++          "共 %d 筆:%s" % (len(uniq), uniq[:8]))
++    print("  ✓ t_skill_mentions_resolve")
++
++
++def t_commands_table_shape():
++    """★速查表的欄數要跟表頭對齊★(2026-09-07 全 repo 審視 #10)。
++
++    出身:三張速查表曾經有整列少一格,markdown 渲染出來會把後面的欄位整排錯位,
++    讀的人看到的是「指令欄放著結果說明」。這種錯人眼很難看出來(原始碼裡看起來
++    只是少一根豎線),但對照 markdownlint 的 MD056 是標準檢查項,自己寫二十行就有。
++
++    比對時要先把跳脫過的 `\|`(行內碼裡的「A 或 B」)換掉——不換的話會把它當成
++    分欄符,製造整批假紅。第一版就是這樣,掃出八筆全是假的。
++    """
++    import re as _re
++    _need_src("skills/lumos-project-notes/commands")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    bad = []
++    files = sorted(root.glob("skills/**/*.md")) + sorted(root.glob("slim/skills/**/*.md"))
++    check("速查表檔案掃得到", len(files) >= 10, str(len(files)))
++    for path in files:
++        where = str(path.relative_to(root))
++        header = None
++        for lineno, raw in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
++            line = raw.strip().replace("\\|", "\x00")
++            if not line.startswith("|"):
++                header = None
++                continue
++            if _re.fullmatch(r"\|[\s:|-]+\|", line):
++                continue
++            n = line.count("|")
++            if header is None:
++                header = (n, lineno)
++                continue
++            if n != header[0]:
++                bad.append("%s:%d 這列 %d 格,表頭(第 %d 行)%d 格"
++                           % (where, lineno, n - 1, header[1], header[0] - 1))
++    check("★表格每一列的格數都跟表頭一樣★", not bad, "共 %d 筆:%s" % (len(bad), bad[:6]))
++    print("  ✓ t_commands_table_shape")
++
++
+ def t_every_subcommand_has_when():
+     """工具鏈補強十件 #3:每個子指令(含二層)的 `--help` 第一段要有「什麼時候用:」——
+     Claude 在情境測試裡常敲 `lumos X --help` 確認,空的 help 等於逼它猜。"""
+     import re as _re
+     import subprocess as _sp
+     root = Path(__file__).resolve().parent.parent
+     lumos_real = str(root / "scripts" / "lumos")
+     def helptext(*prefix):
+         r = _sp.run([sys.executable, lumos_real, *prefix, "--help"], capture_output=True, text=True)
+         return r.stdout + r.stderr
+diff --git "a/skills/lumos-project-notes/commands/03-\345\257\253\345\233\236\345\234\226\350\255\234.md" "b/skills/lumos-project-notes/commands/03-\345\257\253\345\233\236\345\234\226\350\255\234.md"
+index 47b2848..d57b2bd 100644
+--- "a/skills/lumos-project-notes/commands/03-\345\257\253\345\233\236\345\234\226\350\255\234.md"
++++ "b/skills/lumos-project-notes/commands/03-\345\257\253\345\233\236\345\234\226\350\255\234.md"
+@@ -2,21 +2,21 @@
+ 
+ 鐵則:frontmatter(開頭欄位)一律用指令改,別手改;正文段落用 Edit。多個連結必須一行一項。
+ 
+ | 情境 | 指令 | 結果怎麼讀 | 不用它會怎樣 |
+ |---|---|---|---|
+ | 「要新開一篇筆記」 | `lumos new <system\|issue\|verification\|project\|moc> <名稱>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 | 骨架建好,印出該填什麼;接著填摘要 | 手建檔漏 type/aliases,lint 擋 |
+ | 「改狀態/日期/類型這種單一值」 | `lumos set <節點> <欄位> <值>` | 印改成什麼;改 status 會連帶同步標籤 | 手改漏同步標籤,doctor 報漂移 |
+ | 「加一條驗證紀錄/關聯/標籤到清單欄位」 | `lumos append <節點> <欄位> "[[x]]"` | 自動去重 | 單字串塞多連結變 ghost 節點 |
+ | 「把清單裡一項拿掉(死背書、降格的指針)」 | `lumos remove <節點> <欄位> <值>` | 找不到會拒絕,不會亂刪 | — |
+ | 「記一條決策」 | `lumos decision-add <節點> "<內容>" --decided <日期>` | 回編號 dN | 手寫 decisions 格式壞,整條消失 |
+-| 「推翻一條舊決策」 | `lumos decision-supersede <節點> --match "<片段或 #dN>" --by "<新決策>"` | 舊的標 valid:false 並指向新的;會開一本連鎖帳 | 建在被推翻決策上的筆記沒人提醒 |
++| 「推翻一條舊決策」 | `lumos decision-supersede <節點> "<片段或 #dN>" --by "<新決策>"`(要比對的片段是位置參數,沒有 --match) | 舊的標 valid:false 並指向新的;會開一本連鎖帳 | 建在被推翻決策上的筆記沒人提醒 |
+ | 「舊筆記的決策沒編號」 | `lumos decision-reindex <節點>` 或 `--all` | 補 dN | 無法被引用 |
+ | 「翻案後,鄰居筆記要不要跟著改?」 | `lumos rel-cascade list`;逐篇 `confirm`/`prune` `<鄰居> --cascade-id <id> --from <節點>#dN`;中斷後 `lumos rel-cascade resume <id>` | 帳本記你判過哪些 | doctor 的 E2 會一直提醒 |
+ | 「做完了,要留驗證紀錄並掛回功能」 | `lumos new verification <名> --plan … --systems …`;漏掛的事後 `lumos sync-verified-by --apply` | doctor 1/4~4/4 不再報孤兒 | 驗證沒人找得到 |
+ | 「某篇功能筆記內容我重新確認過還站得住」 | `lumos self-audit <節點> [--date …]` | 寫 self_audit 戳記 | doctor [S] 一直提醒 |
+ | 「業務方點頭了,要留痕」 | `lumos signoff <節點> --note "<確認了什麼>"` | 寫簽核帳 | — |
+ | 「計劃條款誰認領了」 | `lumos spec-trace <計劃節點>` | 未認領的條款 rc1 | 計劃結案但沒驗證 |
+ | 「老驗證紀錄太多,要歸檔」 | `lumos archive [--days N] [--apply]` | 先 dry-run 再 --apply | — |
+ | 「改名/搬檔」 | `scripts/graph-rename.sh <舊> <新>` | 連結一起改寫 | 手搬斷連結 |
+ 
+ 寫完任何節點 → `lumos lint <節點>`(見 04)。
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index c4f7858..f29d135 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -69,25 +69,25 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合
+ | 最近 N 天修改 | `python3 scripts/lumos recent --days 7` |
+ | **條款級追溯（計劃 [SN] 條款誰認領了）** | `python3 scripts/lumos spec-trace <計劃節點> [--json]` — 計劃 body 標 `[S1]`/`[S2]`…,回指(plan_refs)的 Verification 提及即認領;未認領 rc1。opt-in,無標記=不追溯 |
+ | **業務簽核留痕（validation 那半:人點頭）** | `python3 scripts/lumos signoff <節點> --note "確認了什麼" [--by 人]` — append docs/.signoff-log.jsonl + frontmatter `signed_off`;gov 撈得到。工具只記留痕不證明確認真的發生 |
+ | 資料夾統計 | `python3 scripts/lumos stats` |
+ | 反查連入/連出 | `python3 scripts/lumos backlinks <筆記名>`／`links` |
+ | 進場掃脈絡（節點 + 鄰居 closet 索引；頭部突顯 ⚠ 合約） | `python3 scripts/lumos context <筆記名> [--brief]` |
+ | **合約登記簿（動模組前查硬合約）** | `python3 scripts/lumos contracts [筆記名]` — 列 ★INVARIANT★(改=breaking)/★DEBT★(可改);只認 KEY 行前綴標準格式 |
+ | **條件篩選(標籤欄位 WHERE)** | `python3 scripts/lumos query --tag 家族/值 [--tag …=AND] [--no-tag …] [--active] [--contract] [--linked <節點>] [--json]` — 「金流且未收案」「連到 X 且 open」一發拿清單;--active=排收案態、--contract=帶硬合約、--linked=1-hop 鄰域;bare 無條件 rc2。找「講到詞」用 search,篩「欄位條件」用 query |
+ | **全文搜尋** | `python3 scripts/lumos search <詞> [--path Systems] [--regex] [--files-only] [--top N] [--json]` — frontmatter+body,大小寫不敏感 substring;**預設 BM25F 相關性排序**(2026-07-11 轉正,goldset 評測修正尺 nDCG@5 +58.1%;只重排既有候選不擴召回,預設全量+逐檔命中明細,--top N 才截);`--legacy` 走舊字母序全量,`--regex` 自動走舊路;**A1 型別先驗:MOC 索引頁 ×0.4 降權**(仍在結果內只是後移;要找索引頁用 `--path MOC` 直達) |
+ | **spec 指涉宣稱機械核對(vault-free)** | `lumos refcheck <md檔> [--repo <root>] [--json]` — 抽 inline-code 檔路徑/行號、核對存在性/行號範圍、輸出證據 manifest(含行內容摘錄);design-loop 審計前先跑,存在性查證不靠 LLM。rc:全 ok=0/有 missing 或超界=1/參數錯=2 |
+-| **實務隱患掃描(vault-free，三模式)** | `lumos pitfalls <md>` — 輸出提問清單(spec 潛在隱患);`lumos pitfalls <md> --check` — 缺「## 實務隱患」節 rc 1(逼補節);`lumos pitfalls --diff <merge-base>..HEAD` — 代碼變更風險 manifest + 尾行 `tier: high|standard`(`tier: high` → 調用 `lumos-code-loop` 做對抗代碼審)。**專案配 `.lumos/lint.json`(一棧一組指令、各輸出 SARIF)則 `--diff` 自動吃社群 linter**:偵測 diff 涉及棧→跑 lint→解析合併 SARIF→過濾到 diff 觸及行→併進 manifest(claim 帶 `source:"lint:<driver>"`);無宣告則 regex-only 分毫不變。lumos 只解 SARIF、不內建棧規則。`--no-lint`:`--diff` 只跑快的 regex 層(不跑專案 lint 指令)。**pre-push hook 單點把關(blocking)**(2026-07-06 ADR:撤除每回合 Stop nag——太擾民,push 才是把關時點):push 前跑 `--diff --no-lint`,tier=high 且無有效 pass/skip 留痕 → rc1 **硬擋 push**;提示三路(跑 lumos-code-loop / `lumos code-loop skip --note` / `git push --no-verify`);tier≠high 不誤傷 |
++| **實務隱患掃描(vault-free，三模式)** | `lumos pitfalls <md>` — 輸出提問清單(spec 潛在隱患);`lumos pitfalls <md> --check` — 缺「## 實務隱患」節 rc 1(逼補節);`lumos pitfalls --diff <merge-base>..HEAD` — 代碼變更風險 manifest + 尾行 `tier: high\|standard`(`tier: high` → 調用 `lumos-code-loop` 做對抗代碼審)。**專案配 `.lumos/lint.json`(一棧一組指令、各輸出 SARIF)則 `--diff` 自動吃社群 linter**:偵測 diff 涉及棧→跑 lint→解析合併 SARIF→過濾到 diff 觸及行→併進 manifest(claim 帶 `source:"lint:<driver>"`);無宣告則 regex-only 分毫不變。lumos 只解 SARIF、不內建棧規則。`--no-lint`:`--diff` 只跑快的 regex 層(不跑專案 lint 指令)。**pre-push hook 單點把關(blocking)**(2026-07-06 ADR:撤除每回合 Stop nag——太擾民,push 才是把關時點):push 前跑 `--diff --no-lint`,tier=high 且無有效 pass/skip 留痕 → rc1 **硬擋 push**;提示三路(跑 lumos-code-loop / `lumos code-loop skip --note` / `git push --no-verify`);tier≠high 不誤傷 |
+ | **code-loop 收斂留痕(vault-free;留痕=逐筆 append 的持久紀錄檔,pre-push 讀它判放行)** | `lumos code-loop pass --note "<收斂理由>"` — 寫 `governance/code-loop/<branch>.json`({head_sha,status:"passed",note,ts}),綁當前 HEAD sha;`lumos code-loop skip --note "<理由>"` — 同,status="skipped"(假陽性逃生閥,繞行也留痕);`lumos code-loop check [--json] [--repo <root>]` — 判定 tier=high∧無有效 pass/skip(HEAD sha 相符)→ blocked(rc1),否則 rc0;`--json` 輸出結構化 verdict。**tier=high 分支 loop status 收斂後必須執行 `lumos code-loop pass` 再 push,否則 pre-push 硬擋** |
+ | **錨點完整性(vault-free)** | `lumos anchor verify [--repo] [--json]`/`lumos anchor approve --note "<理由>"` — 測試 runner+把關 hooks 的 sha256 baseline(`governance/anchor-baseline.json`);verify 不符 rc=1(pre-push/自主 loop 入口擋)、approve=改錨點合法路徑(治理帳留痕)。改測試 runner/hooks 後記得 approve |
+ | **派工鏡頭(vault-free)** | `lumos dispatch-lens <base>..<head> [--json]` — 代碼審派工詞的固定席(Claude 側 hook 看 `LUMOS-IMPACT:` 自動叫;派工前先手敲一次暖 20 分快取,大範圍 45 秒會超時、超時會附一行說明);`lumos dispatch-lens --spec <計劃.md>` — 設計審用,從計劃提到的程式檔與直接連結節點算(hook 看 `LUMOS-SPEC:`;2026-09-05);`--arm/--claim/--disarm/--status` Codex 編排用 |
+-| **linter→SARIF 橋接(vault-free)** | `lumos sqlfluff-sarif`(T-SQL,吃 `sqlfluff … --format json`)/ `lumos stylelint-sarif`(CSS/SCSS/.vue,吃 `stylelint … --formatter json`)—— 這兩款無原生 SARIF,轉 SARIF v2.1 進 lint-adapter(專案 `.lumos/lint.json` 對應棧 pipe;`... | python3 scripts/lumos <bridge> --out {LINT_SARIF_OUT}`)。**原生吐 SARIF 的不用橋接**:detekt/Roslyn(dotnet ErrorLog)/**ESLint(`@microsoft/eslint-formatter-sarif`)** 直接接。Landmark 真機:sqlfluff 65 .sql、ESLint 148 .vue 都驗過。盲區:Dapper 寫在 C# 字串的 SQL 非 .sql 檔 |
++| **linter→SARIF 橋接(vault-free)** | `lumos sqlfluff-sarif`(T-SQL,吃 `sqlfluff … --format json`)/ `lumos stylelint-sarif`(CSS/SCSS/.vue,吃 `stylelint … --formatter json`)—— 這兩款無原生 SARIF,轉 SARIF v2.1 進 lint-adapter(專案 `.lumos/lint.json` 對應棧 pipe;`... \| python3 scripts/lumos <bridge> --out {LINT_SARIF_OUT}`)。**原生吐 SARIF 的不用橋接**:detekt/Roslyn(dotnet ErrorLog)/**ESLint(`@microsoft/eslint-formatter-sarif`)** 直接接。Landmark 真機:sqlfluff 65 .sql、ESLint 148 .vue 都驗過。盲區:Dapper 寫在 C# 字串的 SQL 非 .sql 檔 |
+ | **linter 版本偵測(vault-free)** | `lumos lint-watch [--repo <root>] [--json]` — 讀專案 `.lumos/lint-watch.json`(`[{name,registry,current}]`,registry=`pypi:`/`npm:`/`maven:g:a`/`google-maven:g:a`(Android/AGP/AndroidX,dl.google.com)/`nuget:PackageId`(C#/.NET)/`github:o/r`),機械查各 registry 最新**穩定**版 vs 鎖定版 → 落後產候選 manifest(`{candidates,checked,failed}`)。純數字 tuple 比較 + 等段數守衛、prerelease 一律排除、fail-open(網路失敗不升 rc)。rc:成功=0(含缺/空清單)/清單格式壞=2。治理排程 `governance/lint-watch-check.sh`(掛 daily wrapper 第3步)吃它 → seen-ledger 去重 → 新候選暫存 `governance/lint-upgrades/` + LINE 通知 → 人放行(bump `current`) |
+ | **Compose 重組效能(vault-free)** | `lumos compose-metrics [--repo <root>] [--json] [--update-baseline] [--audit]` — 讀專案 `.lumos/compose-metrics.json`(宣告 metrics/reports 目錄)+ `.lumos/compose-baseline.json`,比對 Compose Compiler Metrics(專案 build 產出)現況 vs baseline → 退步 manifest(新增 non-skippable composable + skippable 比率退步/unstable 上升)。`--update-baseline`=放行(只寫成功解析模組)。**`--audit`=盤點模式:無視 baseline、列出當下全部 non-skippable composable(+unstable 原因)——初次採用/看既有問題點全景(補 delta-only 看不到既有債的洞)**。baseline+delta(metrics 整模組快照無 file:line)。rc:成功=0/宣告壞=2。**⚠ metrics 要用完整 build(非 incremental——incremental 只出部分檔)**;需專案 build 時給 Compose 編譯器 `metricsDestination`/`reportsDestination` 旗標(lumos 只讀不 build) |
+ | **影響幅度偵測(關聯節點自動修復地基,vault-free)** | `lumos impact --file <code路徑> [--repo <root>] [--json] [--depth N]` — 算「改這支 code 波及哪些圖譜節點」:①直接(body inline-code 反查,不掃 core_refs)②間接(多源 BFS hop 1..depth,related/verified_by/plan_refs/body-wikilink 雙向,cycle guard)③相關事故(節點 `pitfall_when` glob/content-regex 命中被碰檔;去重:既結構又 trigger 命中只列 incidents)。標 direction/contract/combo。**已掛 PreToolUse hook(v1.1 降噪版,2026-07-11 goldset §6 全過轉正)**:Claude Edit/Write/MultiEdit code 時動手前自動注入「必看(合約/事故固定席)+相關 top-8(帶分數,改動內容當查詢詞)」——從全量 40+ 行縮到數行;TTL 20min 冷卻窗內走 `--incidents-only` 快速路(事故安全面每次看)。據此判受影響節點需不需同步。rc:0/3(vault 缺)。**`lumos impact --diff <base>..HEAD [--json]`(2026-07-11 橋接)**:聚合整段 diff 各改動檔的 ranked impact(query=該檔 hunk)成受影響功能面 manifest(固定席全保+非固定 top-8+來源檔標注)——code-loop 派 reviewer 前跑,**固定席逐條貼進每席派工詞**(2026-08-29 起每席都附;★不是給 manifest 路徑——那條經兩輪設計審否決,見 [[Projects/impact鏡頭機械化_計劃]]★);advisory 人判;--diff 聚合版不接 hook——單檔版已轉正接 hook,見 impact 行)。**`--sync-check`(落成核對)**:同 range 的預期受影響節點 vs 實際動過節點 → 未同步清單(code-loop 收斂後、pass 留痕前跑) |
+ | **共改漏改守衛(知識同步散落的機械守衛,vault-free)** | `lumos cochange rules [--all] [--repo] [--json]` / `lumos cochange check [--staged\|--diff <A..B>] [--repo] [--json]` — git 歷史挖「改 A 歷史 X% 同改 B」規則(ROSE 非對稱 confidence,conf≥0.8/support≥3/排>20檔 commit/預設排除治理帳與生成檔),check 對變更集列漏改警告。**pre-commit Gate CC 已接線(advisory 恆不擋)**:改了機制文件漏掉歷史上總同改的列舉表會在 commit 時提醒。rc:正常 0(含空/zero-commit)/git 失敗 2。設計見 `Projects/cochange守衛_計劃` |
+ | **折入漂移守衛(design-loop 折入後查一致性)** | `lumos fold-check <spec路徑> [--json]` — 列鏡像段(summary/json fence/審計紀錄/天花板)逼逐段複查 + value-drift(全文域同識別詞不同值,如 `2..depth` vs `1..depth`)+ reverse-omission(高訊號 token `--flag`/★MARKER★/檔名 某段缺)。**design-loop skill step7 折入後強制跑**;排除審計紀錄段/placeholder/FENCE。rc:有 flag=1(訊號非 abort)/無=0 |
+ | 鄰域樹狀展開／畫圖 | `map <筆記名> --depth 2`／`export --folders Systems Projects` |
+ 
+ **寫入**：
+ 
+ | 操作 | 指令 | 說明 |
