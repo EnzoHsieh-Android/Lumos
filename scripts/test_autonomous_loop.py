@@ -871,6 +871,11 @@ class TestLoopShellTrap(unittest.TestCase):
         import subprocess, os
         env = dict(os.environ, HOME=str(home), PATH="%s:%s" % (bindir, os.environ["PATH"]))
         env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        # ★明示關掉暫停★(2026-09-06):這一整組測試驗的就是派工段的行為(選 gap、放回、
+        # 熔斷、留痕),而 2026-09-06 起 LUMOS_AUTOLOOP_OFF 預設為 1、派工段預設不跑。
+        # 不明示的話這些測試會在「派工根本沒執行」的狀態下比對輸出,全部紅——而且是紅在
+        # 環境預設而不是被測行為,是最難查的那種。
+        env["LUMOS_AUTOLOOP_OFF"] = "0"
         return subprocess.run(["bash", str(root / "governance" / "autonomous-loop.sh"), "--dry-run", "1"],
                               capture_output=True, text=True, env=env, timeout=120)
 

@@ -204,7 +204,8 @@ run_probe(){
   # 唯一真的燒模型配額的東西。以前它被「暫停派工」順帶關掉,現在 wrapper 無條件呼叫,沒有任何
   # 歷史的機器裝好當天就會立刻抽 8 題——那不是使用者要的。第一次遇到就先蓋本週印記、下週才開抽。
   if [ ! -s "$hist" ]; then
-    printf '{"seed": "%s", "note": "首次執行:先不抽,下週開始"}\n' "$week" >> "$hist"
+    mkdir -p "$(dirname "$hist")" 2>/dev/null || true   # 全新機器連 scenarios/ 夾都還沒有
+    printf '{"seed": "%s", "note": "首次執行:先不抽,下週開始"}\n' "$week" >> "$hist" 2>/dev/null || true
     log "情境探針:這台機器沒有任何歷史(第一次跑)——先不抽,免得裝好當天就燒配額;下週開始"
     return 0
   fi

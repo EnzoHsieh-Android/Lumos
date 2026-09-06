@@ -26314,5 +26314,21 @@ def t_update_unions_bookkeeping_instead_of_blocking():
           led2.count('{"ts":"DUP"}') == 3, f"實際 {led2.count('{\"ts\":\"DUP\"}')} 份;rc={r2.returncode}")
 
 
+def t_prepush_runs_both_test_files():
+    """推送前的閘必須把兩支測試檔都跑過(2026-09-06 全 repo 審視;CI 因此紅過一次)。
+
+    出身:我把派工段的暫停開關改成預設開啟,跑了關鍵字子集就推,結果 CI 紅在
+    scripts/test_autonomous_loop.py(那 132 支整組驗派工行為,被暫停擋掉)。推送前的閘
+    一直以來只跑 test_lumos.py,另一支只有 CI 跑——★紅在別支檔而不是你改的那支,是最難
+    查的那種★。那支只要 12 秒,沒有不跑的理由。"""
+    hook = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+    for f in ("scripts/test_lumos.py", "scripts/test_autonomous_loop.py"):
+        name = f.split("/")[-1]
+        runs = [l for l in hook.splitlines()
+                if name in l and "$PY" in l and not l.lstrip().startswith("#")]
+        check(f"pre-push: 有真的執行 {name}", bool(runs), name)
+    check("pre-push: 兩支都紅了就擋(各自有 exit 1)", hook.count("exit 1") >= 2, str(hook.count("exit 1")))
+
+
 if __name__ == "__main__":
     sys.exit(main())
