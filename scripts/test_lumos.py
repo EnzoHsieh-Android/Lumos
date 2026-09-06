@@ -303,7 +303,7 @@ def t_scaffold_project():
 
 def t_install_skills_unix():
     if sys.platform == "win32":
-        check("skills: Windows 分支留 Task 7 手動驗", True); return
+        raise _SrcOnly("Windows 分支留 Task 7 手動驗(這台不是 Windows,沒驗到)")
     import subprocess
     r = subprocess.run([sys.executable, GRAPHCTL, "install", "--force"], capture_output=True, text=True)
     dst = Path.home() / ".claude" / "skills" / "lumos-project-notes"
@@ -312,7 +312,7 @@ def t_install_skills_unix():
 
 def t_install_includes_skills():
     if sys.platform == "win32":
-        check("install+skills: Windows 留 Task 7 手動驗", True); return
+        raise _SrcOnly("Windows 分支留 Task 7 手動驗(這台不是 Windows,沒驗到)")
     import subprocess
     subprocess.run([sys.executable, GRAPHCTL, "install", "--force"], capture_output=True, text=True)
     g = Path.home() / ".local" / "bin" / "lumos"
@@ -1095,7 +1095,7 @@ def t_per_test_timeout():
         check("超時 helper: 卡住的要拋 TestTimeout", False, "沒拋,等於沒有超時保護")
     except TestTimeout:
         dt = time.time() - t0
-        check("超時 helper: 卡住的要拋 TestTimeout", True)
+        pass   # 這條分支在這台跑不到;不印綠(印綠等於宣稱驗過)
         check("超時 helper: 真的在時限附近打斷(不是等它跑完)", dt < 5, f"實際等了 {dt:.1f}s")
     check("超時 helper: seconds<=0 = 不設限(平台退路)", run_with_timeout(lambda: 7, 0) == 7)
 
@@ -2264,7 +2264,7 @@ def t_set_bad_date_rejected():
 # ── export 逸出節點名中的 " (R3 latent bug) ──
 def t_export_quote_escape():
     if sys.platform == "win32":
-        check("export quote: NTFS 禁 \" 字元,Windows skip", True)
+        pass   # NTFS 禁這個字元,這台不是 Windows;不印綠
         return
     v = mkvault()
     write(v, 'Systems/A"B.md', "type: system\nstatus: done")
@@ -4320,7 +4320,7 @@ def t_marker_doc_sync():
     skill = repo / "skills" / "lumos-project-notes" / "SKILL.md"
     disc = repo / "scripts" / "templates" / "graph-discipline.md"
     if not skill.exists() or not disc.exists():
-        check("drift: skills/template 不在(vendored)→ 跳過", True)
+        pass   # 消費端沒有這個範本;不印綠
         return
     st, dt = skill.read_text(encoding="utf-8"), disc.read_text(encoding="utf-8")
     for m in ("★CHECKPOINT★", "★IRREVERSIBLE★", "[rollback:", "[guard:", "[kill:",
@@ -12105,7 +12105,7 @@ def t_init_existing_resyncs():
         # 建舊 block CLAUDE.md
         tpl_path = lumos_src / "scripts" / "templates" / "graph-discipline.md"
         if not tpl_path.exists():
-            check("init_existing_resyncs: 跳過(lumos 源無範本)", True)
+            pass   # 來源沒有範本;不印綠
             return
 
         # 故意寫舊 block(body 不同於現版範本)
@@ -22605,10 +22605,10 @@ def t_enforcement_vendored_uptodate_active():
     src = Path(os.environ.get("LUMOS_HOME") or (Path.home() / "harness" / "lumos-toolchain"))
     srclumos = src / "scripts" / "lumos"
     if not srclumos.exists():
-        check("enforcement: 來源不可達,跳過 uptodate 測(非失敗)", True); return
+        raise _SrcOnly("來源不可達,uptodate 這段沒驗到")
     mm = _re.search(r'^LUMOS_VERSION\s*=\s*"(v\d+\.\d+)"', srclumos.read_text(encoding="utf-8", errors="replace"), _re.M)
     if not mm:
-        check("enforcement: 來源無版本常數,跳過(非失敗)", True); return
+        raise _SrcOnly("來源沒有版本常數,uptodate 這段沒驗到")
     ver = mm.group(1)
     root = Path(tempfile.mkdtemp(prefix="gctl-enf-vut-"))
     home = Path(tempfile.mkdtemp(prefix="gctl-enf-vut-home-"))
@@ -22723,11 +22723,19 @@ def main():
             # 判定仍是狀態驅動:`slim/` 真的在(來源 repo)就照跑,零行為改變。
             if t.__name__.startswith("t_slim_"):
                 _need_src("slim")
-            _fail_before = FAIL
+            _fail_before, _pass_before = FAIL, PASS
             _t_start = _time_slow.time()
             run_with_timeout(t, TIMEOUT_OVERRIDE.get(t.__name__, TEST_TIMEOUT_SEC))
             SLOWEST.append((_time_slow.time() - _t_start, t.__name__))
-            if FAIL > _fail_before:
+            # ★跑完卻一條斷言都沒有=沒驗過,判紅★(2026-09-06 全 repo 審視 #13)
+            # 跟「-k 選中 0 支判紅」同一個理由:綠燈必須代表「驗過而且過了」,不能代表
+            # 「什麼都沒發生」。原本有十處寫成 check(…, True) 當跳過用,那是把「沒驗」
+            # 記成 PASS;已全部改走 _SrcOnly 跳過通道,這條是防它再長回來的機械守衛。
+            if FAIL == _fail_before and PASS == _pass_before:
+                FAIL += 1
+                print(f"  ✗ {t.__name__}: 跑完了但一條斷言都沒有(沒驗過≠通過;"
+                      f"真的不該在這台跑就 raise _SrcOnly 走跳過通道)")
+            elif FAIL > _fail_before:
                 # 殺傷力驗證歸因用(2026-08-22 首跑判「弱證據」):失敗要跟測試名同一行,
                 # lumos guard kill 的 _kill_attribute 才能把紅燈歸到綁定測試頭上。
                 print(f"  ✗ FAILED {t.__name__}({FAIL - _fail_before} 條斷言)")
@@ -24644,7 +24652,7 @@ def t_anchor_files_match_baseline():
     m = _load_lumos_inproc()
     bp = Path(__file__).resolve().parent.parent / "governance" / "anchor-baseline.json"
     if not bp.is_file():
-        check("anchor: baseline 不存在(非來源 repo)——略", True); return
+        raise _SrcOnly("沒有 anchor baseline(非來源 repo),這段沒驗到")
     keys = set(_json.loads(bp.read_text(encoding="utf-8")).get("anchors", {}))
     check("anchor: ANCHOR_FILES == baseline 鍵集合", keys == set(m.ANCHOR_FILES), f"baseline={sorted(keys)} code={sorted(m.ANCHOR_FILES)}")
 
@@ -25000,7 +25008,7 @@ def t_codex_skills_shared_dir():
     """_install_skills 多裝 ~/.agents/skills(開放共用目錄):既有非我方真目錄跳過+warn 不刪;帶 .lumos-managed 標記的複製物重建;
     cmd_uninstall 只清 symlink/帶標記目錄、留外方目錄。"""
     if sys.platform == "win32":
-        check("codex-skills: Windows 留手動驗", True); return
+        raise _SrcOnly("Windows 分支留手動驗(這台不是 Windows,沒驗到)")
     home = Path(tempfile.mkdtemp(prefix="gctl-cdx-sk-"))
     foreign = home / ".agents" / "skills" / "lumos-project-notes"; foreign.mkdir(parents=True)
     (foreign / "SKILL.md").write_text("---\nname: someone-else\n---\n", encoding="utf-8")
@@ -26359,6 +26367,78 @@ def t_no_adhoc_normalizer_in_review_reports():
           "templates.md" in sk and "卷證規則" in sk, "")
     check("code-loop skill 明寫引句內不要再包同型括號(巢狀會被收貨截斷)",
           "巢狀" in sk, "")
+
+
+def t_skill_single_source_not_duplicated():
+    """宣稱「單源見某某」的頁面,不得又把那段內容自己抄一份(2026-09-06 全 repo 審視 #15)。
+
+    出身:兩份 SKILL.md 都寫著 Codex 對照單源=templates.md,卻又各抄一整段同樣的版本事實
+    (哪個版本選得中自訂席、哪個忽略、別信設定檔的沙盒欄)——說是單源,實際三份,提交記錄
+    裡就有一次「三處統一」的同步。★Codex 版本行為一變就要改三處★,正是散文載規則會漂的老問題。
+
+    守衛用「版本號」當代理指標:那幾段的識別特徵就是帶具體版本號。有單源指標的頁面出現
+    版本號,幾乎必然是又把單源的內容抄回來了。"""
+    import re as _re
+    root = Path(GRAPHCTL).resolve().parent.parent
+    ver = _re.compile(r"\b0\.1\d{2}\.\d+\b")           # codex CLI 版本形狀
+    src_note = ("單源見", "單源=", "不在此複述", "唯一來源")
+    offenders = []
+    for f in sorted((root / "skills").rglob("SKILL.md")):
+        txt = f.read_text(encoding="utf-8")
+        if any(k in txt for k in src_note) and ver.search(txt):
+            offenders.append(f"{f.relative_to(root)}: {ver.search(txt).group(0)}")
+    check("單源紀律: 宣稱單源的頭版不得再抄一份版本事實", not offenders, str(offenders))
+    # 反面:單源本身當然可以有版本號(它就是那一份)
+    tpl = root / "skills" / "lumos-design-loop" / "templates.md"
+    check("單源紀律/反面: 單源檔本身留著版本事實(不是把它也刪了)",
+          tpl.is_file() and bool(ver.search(tpl.read_text(encoding="utf-8"))), str(tpl))
+
+
+def t_lint_warns_unknown_frontmatter_key():
+    """開頭欄位鍵打錯要出聲(2026-09-06 全 repo 審視 #16)。
+
+    出身:打成 valid_unde / verifed_by,lint 一句話都不說、doctor 也看不到,那個欄位等於沒寫
+    ——而它可能是承載回頭條件或驗證關聯的欄位。★只給軟提醒不升 error★:工具對未知欄位的
+    立場是前向相容,升 error 會讓別人的 vault 每次 lint 都被嘮叨;清單可用 .lumos/config.json
+    的 extra_frontmatter_keys 擴充。
+
+    ★量錯兩次才對的教訓★:我先用「同行為空」數出 78 篇缺回頭條件,實際那是 YAML 清單寫法、
+    值在下一行;正確數字是 0 篇空值、7 篇連鍵都沒有。合成席原本說的 12 篇也不對。
+    數 frontmatter 一定要把區塊式寫法算進去。"""
+    import json, subprocess as _sp
+    from pathlib import Path as _P
+    base = _P(tempfile.mkdtemp(prefix="gctl-fmkey-"))
+    kg = base / "docs" / "fm-knowledge" / "Systems"
+    kg.mkdir(parents=True)
+    (kg / "a.md").write_text(
+        "---\ntype: system\nstatus: done\ncreated: 2026-09-06\nupdated: 2026-09-06\n"
+        "aliases: []\nvalid_unde: 打錯一個字\nverifed_by: 也打錯\n"
+        "tags:\n  - type/system\n  - status/done\nsummary: |-\n  KEY:測試用\n---\n# a\n",
+        encoding="utf-8")
+    def run():
+        return _sp.run([sys.executable, GRAPHCTL, "--vault", str(base / "docs" / "fm-knowledge"),
+                        "lint", "Systems/a"], capture_output=True, text=True, cwd=str(base)).stdout
+    out = run()
+    check("未知鍵: 打錯的鍵會被唸出來", "valid_unde" in out and "verifed_by" in out, out[-200:])
+    check("未知鍵: 有近名提示(不是只說不認得)", "valid_under" in out and "verified_by" in out, out[-200:])
+    check("未知鍵: ★只算 warning 不算 error★(前向相容立場)",
+          "2 warning" in out or "warning" in out, out[-120:])
+    # 可擴充:設定檔列進去就不再唸
+    (base / ".lumos").mkdir(exist_ok=True)
+    (base / ".lumos" / "config.json").write_text(
+        json.dumps({"extra_frontmatter_keys": ["valid_unde", "verifed_by"]}), encoding="utf-8")
+    out2 = run()
+    check("未知鍵: ★設定檔可擴充★(別的 vault 有自己的欄位,不該被嘮叨)",
+          "valid_unde" not in out2, out2[-200:])
+    # 反面:正常節點不得被誤唸
+    (kg / "b.md").write_text(
+        "---\ntype: system\nstatus: done\ncreated: 2026-09-06\nupdated: 2026-09-06\n"
+        "aliases: []\nvalid_under: x\nrevalidate_when: y\n"
+        "tags:\n  - type/system\n  - status/done\nsummary: |-\n  KEY:測試用\n---\n# b\n",
+        encoding="utf-8")
+    out3 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(base / "docs" / "fm-knowledge"),
+                    "lint", "Systems/b"], capture_output=True, text=True, cwd=str(base)).stdout
+    check("未知鍵/反面: 正常欄位不被誤唸", "沒見過的鍵" not in out3, out3[-160:])
 
 
 if __name__ == "__main__":
