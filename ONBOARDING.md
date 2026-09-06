@@ -20,7 +20,7 @@ python3 scripts/lumos bootstrap
 
 > **專案還沒導入過 Lumos**(repo 裡沒有 `scripts/lumos`)?改走:
 > ```bash
-> cd <你的專案> && curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
+> cd <你的專案> && curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
 > # 會先問一句「要把 <路徑> 建成 lumos 專案嗎?」按 y 才建;細節與 Windows 作法見 README §3
 > ```
 

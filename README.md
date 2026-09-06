@@ -71,7 +71,7 @@ lumos enforcement
 
 ```bash
 cd <你的專案>
-curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
+curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
 # 它會問「要把 <路徑> 建成 lumos 專案嗎? [y/N]」→ 按 y;然後重啟 Claude Code session
 ```
 
@@ -85,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh
 前置:Git for Windows、python 在 PATH、Claude Code。
 
 ```powershell
-irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex
+irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.ps1 | iex
 # 重啟 Claude Code session;若找不到 lumos,把 %USERPROFILE%\.local\bin 加進 PATH
 cd <你的專案>; lumos init
 ```
@@ -104,7 +104,9 @@ cd <你的專案>; lumos init
 只建專案層:`lumos init`(圖譜資料夾名稱預設取專案名,`--name` 自訂;既有圖譜**絕不覆寫**;`--no-hooks` 只建圖譜不裝檢查)。只裝機器層:`lumos install`。手動離線:
 
 ```bash
-git clone https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
+git clone --branch release https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
+#   release 是對外線(只有維護者快轉過去);要跟開發線就把 --branch release 拿掉。
+#   分支還沒開的話這行會失敗,拿掉旗標再跑一次即可。
 cd ~/harness/lumos-toolchain && ./install.sh
 python3 scripts/lumos install
 scripts/install-graph-toolchain.sh --target <專案路徑> --slug <名稱>

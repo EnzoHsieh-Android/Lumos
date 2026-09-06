@@ -66,6 +66,64 @@ _IS_WIN = os.name == "nt"
 
 # ── Task 5: 版本標籤(人可讀;advisory nudge 用;非正確性 oracle) ───────────────
 LUMOS_VERSION = "v1.0"  # release 手動 bump;允許粗——它是標籤,不是內容指紋
+# ★發布通道的分支名★(2026-09-07 #7 落地;設計出處 [[Projects/版本發布流程_計劃]] S5):
+# main=開發線(可壞),release=對外線(只有 owner 快轉過去)。三個 clone 站一律先試這條,
+# 分支還不存在時退回預設分支並印一行說明——冷啟動不能因此炸掉。
+LUMOS_RELEASE_BRANCH = "release"
+
+
+def _version_text():
+    """`lumos --version` 印的東西。
+
+    ★它回答的是「你手上這支 lumos 是哪一版」,不是「這台機器整體是哪一版」★
+    ——同一台機器可能同時有三個答案:全域指令(捷徑指向來源 clone)、
+    各專案自己複製的一份、以及全域的 AI hooks(來源是最後一個跑安裝的專案)。
+    這條只答第一個,所以訊息裡明講它在哪。
+
+    版本號是**人可讀的標籤,不是內容指紋**(既有決策:嚴禁拿它當「該不該更新」的判準),
+    所以後面補一個真的指紋:來源 clone 的 commit 短碼與有沒有未提交的改動。
+    複製到專案裡的那份沒有 git 脈絡,就照實說沒有,不要編一個出來。
+    """
+    import subprocess as _sp
+    here = Path(__file__).resolve().parent.parent
+    # 這一支是「工具鏈來源」還是「被複製進某個專案的那一份」?判準用檔案系統實況:
+    # 來源 repo 才有 skills/ 那批方法論手冊。分清楚很重要——複製進專案的那一份,
+    # 底下的 git 指紋是**那個專案的** commit,不是工具鏈的版本。
+    is_source = (here / "skills" / "lumos-project-notes").is_dir()
+    lines = ["lumos %s" % LUMOS_VERSION, "  這支的位置: %s" % (Path(__file__).resolve(),)]
+    lines.append("  這一支是: %s" % ("工具鏈來源本身" if is_source
+                                     else "被複製進某個專案的那一份(指紋是那個專案的,不是工具鏈的)"))
+    try:
+        sha = _sp.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"],
+                      capture_output=True, text=True, timeout=5)
+        if sha.returncode == 0 and sha.stdout.strip():
+            dirty = _sp.run(["git", "-C", str(here), "status", "--porcelain"],
+                            capture_output=True, text=True, timeout=5)
+            mark = "(有未提交的改動)" if dirty.stdout.strip() else ""
+            branch = _sp.run(["git", "-C", str(here), "rev-parse", "--abbrev-ref", "HEAD"],
+                             capture_output=True, text=True, timeout=5)
+            bname = branch.stdout.strip() or "?"
+            lines.append("  這一份的內容指紋: %s 在分支 %s %s" % (sha.stdout.strip(), bname, mark))
+        else:
+            lines.append("  這一份沒有 git 脈絡(多半是被複製進專案的那一份),只有版本標籤可講")
+    except Exception:
+        lines.append("  這一份的內容指紋: 查不到(git 不在或這裡不是 git 倉庫)")
+    lines.append("  同一台機器可能有三份不同版本的 lumos(全域指令 / 各專案複製的一份 / 全域 AI hooks),")
+    lines.append("  這裡只回答你現在跑的這一支。")
+    return "\n".join(lines)
+
+
+class _VersionAction(argparse.Action):
+    """--version:印版本再結束。用自訂 action 是因為指紋要當場算,
+    不能在建 parser 的時候就跑 git(那會讓每一次呼叫都多花一個子行程)。"""
+
+    def __init__(self, option_strings, dest, **kw):
+        kw["nargs"] = 0
+        super().__init__(option_strings, dest, **kw)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(_version_text())
+        parser.exit(0)
 
 # ── CLAUDE.md sentinel 常數(Task 1: reinject)────────────────────────────────
 # START 行後面可能帶版本戳與說明(e.g. " v1.2 — 勿手改 -->"),故用前綴 find。
@@ -10533,8 +10591,17 @@ def cmd_install(force=False):
     bindir.mkdir(parents=True, exist_ok=True)
     if _IS_WIN:
         shim = bindir / "lumos.cmd"
-        shim.write_text(f'@echo off\r\npython "{src}" %*\r\n', encoding="utf-8")
-        print(f"✓ 安裝: {shim} → python {src}")
+        # ★直譯器名稱在安裝當下偵測,不寫死 python★(2026-09-07 #7;借精簡版已審過的
+        # slim/install.py:_pick_windows_interpreter 的判斷,不另造第二套):
+        # 只有 python3.exe、沒有 python.exe 的 Windows 機器(某些官方安裝器 / 商店版)
+        # 上,安裝會用 python3 跑完並印「裝好了」,但 shim 寫死呼叫 python,
+        # 之後每次打 lumos 都是「'python' 不是可執行的命令」——裝完即壞,而且要等
+        # 使用者真的去用才發現。寫命令名稱不寫絕對路徑的理由見那支的說明
+        # (版本管理工具換 exe 是常態,絕對路徑撐不過升級)。
+        import shutil as _shutil
+        py_cmd = next((c for c in ("python3", "python") if _shutil.which(c)), "python")
+        shim.write_text(f'@echo off\r\n{py_cmd} "{src}" %*\r\n', encoding="utf-8")
+        print(f"✓ 安裝: {shim} → {py_cmd} {src}")
     else:
         dst = bindir / "lumos"
         if dst.is_symlink() and dst.resolve() == src:
@@ -11899,11 +11966,21 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
         else:
             print(f"[1/3] Lumos 來源已在: {home}（--pull 可拉最新 skills）")
     else:
-        print(f"[1/3] clone Lumos → {home} …")
+        branch = os.environ.get("LUMOS_BRANCH", LUMOS_RELEASE_BRANCH)
+        print(f"[1/3] clone Lumos({branch} 對外線)→ {home} …")
         home.parent.mkdir(parents=True, exist_ok=True)
-        if subprocess.run(["git", "clone", url, str(home)]).returncode != 0:
-            print(f"擋下:自動下載失敗。手動跑這行再重試:\n    git clone {url} {home}", file=sys.stderr)
-            return 2
+        # 先抓對外線;抓不到就退回預設分支並講清楚(release 分支可能還沒開,
+        # 冷啟動不該因此炸掉)。用分支不用 tag——tag 會進 detached HEAD,
+        # 之後 git pull / lumos update 全部靜默停在裝機那版(2026-07-30 裁定)。
+        ok = subprocess.run(["git", "clone", "--branch", branch, url, str(home)],
+                            capture_output=True, text=True).returncode == 0
+        if not ok:
+            print(f"  提醒:抓不到 {branch} 這條對外線(分支還沒開、或名字改了),改用預設分支。",
+                  file=sys.stderr)
+            print("  這代表你拿到的是開發線的內容,可能還沒發布過。", file=sys.stderr)
+            if subprocess.run(["git", "clone", url, str(home)]).returncode != 0:
+                print(f"擋下:自動下載失敗。手動跑這行再重試:\n    git clone {url} {home}", file=sys.stderr)
+                return 2
     # 2) 全域 lumos → 指向 Lumos 來源(非 vendored copy);install --force 已連帶裝 user-scope skills
     print("[2/3] 裝全域 lumos(+ user-scope skills)…")
     failures = []
@@ -19083,6 +19160,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--vault", type=Path, default=None,
                     help="vault 路徑 (預設自動找 docs/*-knowledge)")
+    ap.add_argument("--version", action=_VersionAction,
+                    help="印這支 lumos 的版本與內容指紋(不代表整台機器都是這一版)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("doctor", help="圖譜健康巡檢")

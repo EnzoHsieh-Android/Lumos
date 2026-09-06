@@ -5276,6 +5276,143 @@ _NOT_LUMOS_PROGRAMS = {
 _RETIRED_WORDS = ("已退場", "退場", "已撤除", "撤除", "已移除", "不存在", "已拆")
 
 
+def t_version_single_source():
+    """★版本號只有一個來源,CHANGELOG 要跟它一致★(2026-09-07 #7 對外發布線)。
+
+    出身:`LUMOS_VERSION` 從誕生就是 v1.0,沒有 CHANGELOG、沒有 tag、沒有對外分支,
+    所以「你在跑哪一版」這個問題結構上答不出來,而版本落後提醒也永遠不會響。
+    這條守衛只保證一件小事但保證得死:**版本常數與變更紀錄的第一筆一致**。
+
+    ★兩邊任一邊解析不到就算紅,不准跳過★(設計計劃 S1 明寫:守衛的尺自己也會漂)。
+    格式刻意釘死,也刻意不留常駐的「未發布」區塊——那種區塊會永遠是最新一筆,
+    害這條守衛每次日常推送都紅。
+    """
+    import re as _re
+    _need_src("CHANGELOG.md", "RELEASING.md")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    m = _re.search(r'^LUMOS_VERSION = "(v\d+\.\d+)"', src, _re.M)
+    check("版本常數解析得到(單一定義點)", bool(m), "找不到 LUMOS_VERSION 那一行")
+    log = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    m2 = _re.search(r"^## (v\d+\.\d+) — (\d{4}-\d{2}-\d{2})$", log, _re.M)
+    check("變更紀錄的標題格式解析得到", bool(m2), log[:200])
+    if m and m2:
+        check("★版本常數與變更紀錄第一筆一致★", m.group(1) == m2.group(1),
+              "常數 %s vs 變更紀錄 %s" % (m.group(1), m2.group(1)))
+    check("發版 checklist 存在(只驗存在,不假裝驗內容)", (root / "RELEASING.md").exists(), "RELEASING.md")
+    print("  ✓ t_version_single_source")
+
+
+def t_release_channel_is_wired_everywhere():
+    """★三個 clone 站與對外安裝網址,一律走對外線★(2026-09-07 #7)。
+
+    出身:2026-07-30 使用者裁定「main 開發線 / release 對外線」,五週零落地——
+    三個 clone 站與兩份 README 共七行安裝指令全指著 main 的當下 HEAD,
+    等於陌生人 curl|bash 抓到的永遠是最新的半成品。
+
+    這條守衛驗的是**接線接上了沒**,不是「發布流程對不對」:
+    ① 三個 clone 站都要先試對外線 ② 而且都要有退回預設分支的備援
+    (release 分支還沒開的時候,冷啟動不能因此炸掉) ③ 對外安裝網址不得再指 main。
+    """
+    _need_src("get.sh", "get.ps1", "README.md")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    sh = (root / "get.sh").read_text(encoding="utf-8")
+    ps = (root / "get.ps1").read_text(encoding="utf-8")
+    py = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    check("三個 clone 站都先試對外分支",
+          "--branch" in sh and "--branch" in ps and '"--branch"' in py,
+          "sh=%s ps=%s py=%s" % ("--branch" in sh, "--branch" in ps, '"--branch"' in py))
+    # 備援=抓不到對外線時仍然 clone 得下來(不是靜默失敗)
+    check("get.sh 有退回預設分支的備援", sh.count("git clone") >= 2, sh.count("git clone"))
+    check("get.ps1 有退回預設分支的備援", ps.count("git clone") >= 2, ps.count("git clone"))
+    check("bootstrap 內建 clone 有退回預設分支的備援", py.count('["git", "clone"') >= 1
+          and py.count('"git", "clone", "--branch"') >= 1, "看 cmd_bootstrap")
+    stale = []
+    for name in ("README.md", "README.en.md", "ONBOARDING.md"):
+        txt = (root / name).read_text(encoding="utf-8")
+        if "/Lumos/main/get." in txt:
+            stale.append(name)
+    check("★對外安裝網址不得再指開發線★", not stale, "還指著 main 的: %s" % stale)
+    # get.ps1 要跟 get.sh 做同一件事:委派 bootstrap,不是只裝機器層
+    check("get.ps1 也委派 bootstrap(兩支行為一致)", "bootstrap" in ps, ps[:200])
+    print("  ✓ t_release_channel_is_wired_everywhere")
+
+
+def t_get_sh_survives_truncated_stream():
+    """★get.sh 被 curl 串流到一半斷線時,不可以執行「已收到的那半段」★(2026-09-07 #7)。
+
+    這支是拿 `curl … | bash` 跑的。bash 邊收邊執行,網路中途斷掉的話,
+    它會把收到的那半段照樣跑完——裝到一半、沒有任何錯誤訊息。
+    防法是把整段包進函式、最後一行才呼叫:檔案沒收完,那一行就不存在,什麼都不會跑。
+
+    ★驗法是真的把檔案截斷再跑,不是讀原始碼找 main()★——
+    第一版沙盤(把包裝拆掉)是靠「找不到 main() 字串」翻紅的,那等於根本沒驗到行為。
+    現在改成:截一段前半,餵一個不認得的旗標,**沒包裝的話那段會印提醒、包了就一個字都沒有**。
+    另外先斷言「那段提醒的程式碼確實落在截斷範圍內」,否則這條會空跑成假綠
+    (連續第三次踩「沙盤沒翻紅是因為現場走不到」)。
+    """
+    import os as _os
+    import subprocess as _sp
+    import tempfile as _tf
+    _need_src("get.sh")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    sh = (root / "get.sh").read_text(encoding="utf-8")
+    lines = sh.split("\n")
+    half = "\n".join(lines[:int(len(lines) * 0.7)])
+    # ★先確認現場走得到★:被截下來的前半段裡,必須真的含有「會印東西」的那段碼,
+    # 否則不管有沒有包裝都不會有輸出,這條測試就變成永遠綠的擺設。
+    check("截斷的前半段確實含有會產生輸出的程式碼", "不認得" in half, half[-200:])
+    with _tf.TemporaryDirectory() as td:
+        f = Path(td) / "half.sh"
+        f.write_text(half, encoding="utf-8")
+        env = dict(_os.environ, HOME=td, LUMOS_HOME=str(Path(td) / "nope"))
+        r = _sp.run(["bash", str(f), "--zzz-unknown"], capture_output=True, text=True, env=env)
+        out = r.stdout + r.stderr
+        # bash 對截斷的檔案會抱怨語法錯誤(收到一半的 if 沒有收尾)——那是它拒絕執行,
+        # 不算「做了事」。真正要驗的是:get.sh 自己的任何一句話都不准被跑出來。
+        did = [w for w in ("不認得", "[clone]", "✓ 完成") if w in out]
+        check("★截斷的半份不執行 get.sh 自己的任何一步★", not did,
+              "半份居然跑到了:%s|%s" % (did, out[:200]))
+    print("  ✓ t_get_sh_survives_truncated_stream")
+
+
+def t_windows_shim_does_not_hardcode_python():
+    """★Windows 的 lumos.cmd 不得寫死 python★(2026-09-07 #7,借精簡版已審過的判斷)。
+
+    出身:只有 python3.exe、沒有 python.exe 的 Windows 機器(某些官方安裝器 /
+    商店版)上,安裝會用 python3 跑完並印「裝好了」,但 shim 裡寫死呼叫 python,
+    之後每次打 lumos 都是「'python' 不是可執行的命令」——**裝完即壞**,
+    而且要等使用者真的去用才發現。精簡版 2026-08 就修過同一個洞,主線一直沒跟上。
+
+    這台不是 Windows,所以驗的是**程式邏輯**(偵測到什麼就寫什麼),
+    不是 Windows 真機下 cmd.exe 對 .cmd 的解析行為。
+    """
+    import re as _re
+    root = Path(GRAPHCTL).resolve().parent.parent
+    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    i = src.index('shim = bindir / "lumos.cmd"')
+    seg = src[i:i + 900]
+    check("shim 的直譯器是安裝當下偵測來的,不是字面 python",
+          "which" in seg and "python3" in seg, seg[:300])
+    check("寫進 shim 的是偵測結果那個變數", _re.search(r"\{py_cmd\}", seg) is not None, seg[:300])
+    print("  ✓ t_windows_shim_does_not_hardcode_python")
+
+
+def t_version_flag_answers_which_copy():
+    """★lumos --version 印得出來,而且說清楚它只回答哪一支★(2026-09-07 #7)。
+
+    以前 `lumos --version` 直接吐 argparse 的英文錯誤,所以「你在跑哪一版」
+    這個問題連個入口都沒有。這條驗三件:印得出版本、有內容指紋、
+    而且明講「同一台機器可能有三份不同版本」——因為它真的只能回答一支。
+    """
+    import subprocess as _sp
+    out = _sp.run([sys.executable, GRAPHCTL, "--version"], capture_output=True, text=True)
+    check("--version 回傳 0", out.returncode == 0, out.stdout + out.stderr)
+    check("印得出版本標籤", "lumos v" in out.stdout, out.stdout[:200])
+    check("★講清楚只回答現在跑的這一支★", "只回答你現在跑的這一支" in out.stdout, out.stdout[:400])
+    print("  ✓ t_version_flag_answers_which_copy")
+
+
 def t_skill_mentions_resolve():
     """★文件教的指令和旗標,真的要存在★(2026-09-07 全 repo 審視 #10)。
 
@@ -11664,11 +11801,13 @@ def t_lens_timeout_keeps_warming_cache():
         r = _sp.run(["git", "-C", str(repo), "rev-parse", ref], capture_output=True, text=True)
         return r.stdout.strip()
 
-    # 挑一個「算得夠久」的範圍;算不出來就跳過(不是失敗)
-    # ★範圍別挑太大★:第一版挑 HEAD~40,整支跑 90 秒、超時上限只剩 2 倍餘裕
-    #   ——那種測試遲早會在慢一點的機器上假紅,然後被人關掉。
-    #   挑剛好算不完 1.5 秒的最小範圍就夠證明機制。
-    base = sha("HEAD~12") or sha("HEAD~5")
+    # ★怎麼讓它一定超時,又不必挑一個「算很久」的範圍★(2026-09-07 CI 紅了一次之後改)
+    # 舊寫法是「挑 HEAD~12 這種算不完 1.5 秒的範圍」。問題是**那個範圍的成本會隨著
+    # repo 長大而變**:寫的當天本機 90 秒上限還很寬,兩天後同一個範圍本機就要 55 秒,
+    # CI 上超過等它的 60 秒,於是 CI 紅——而紅的原因不是機制壞,是我拿「算多久」當開關。
+    # 現在改成:範圍挑最小的(算一兩秒),**開關改用期限本身**(0.05 秒,光是把子行程
+    # 生出來就不只這個數)。這樣「一定會超時」跟 repo 多大完全無關。
+    base = sha("HEAD~1") or sha("HEAD~2")
     head = sha("HEAD")
     if not base or not head:
         raise _SrcOnly("這個 repo 的歷史不夠長,測不到超時那條路")
@@ -11684,23 +11823,29 @@ def t_lens_timeout_keeps_warming_cache():
     rng = f"{base}..{head}"
     t0 = _t.monotonic()
     r = _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", rng, "--repo", str(repo),
-                 "--json", "--deadline", "1.5"], capture_output=True, text=True, timeout=90)
+                 "--json", "--deadline", "0.05"], capture_output=True, text=True, timeout=90)
     took = _t.monotonic() - t0
-    if r.returncode == 0:
-        # 這台算得比 1.5 秒還快 → 測不到超時那條路,誠實跳過而不是假裝驗過
-        raise _SrcOnly(f"這台算這個範圍只要 {took:.1f} 秒,測不到超時那條路")
     check("★逾時★: 期限內回來,而且回的是「還在算」不是失敗",
           r.returncode == 5 and took < 10, f"rc={r.returncode} 耗時 {took:.1f}s")
     check("逾時: 輸出講明還在暖快取", '"still_warming": true' in r.stdout, r.stdout[:200])
-    check("★逾時★: 同範圍只讓一個在算(有鎖)", lock.exists(), str(lock))
+    # ★「有人在算」的證據是鎖,不是行程還在★:鎖檔裡記的是**搶到鎖的那支**的行程編號
+    # (也就是剛剛回 rc5 就結束的那支),不是背景在算的那支——拿它去問「還活著嗎」
+    # 一定得到「死了」。試過一次,當場假紅。真正證明「沒被殺掉」的是下面那條:
+    # 快取最後有沒有出現。
+    check("★逾時★: 同範圍只讓一個在算(有鎖),或者它已經算完了",
+          lock.exists() or cpath.exists(), f"lock={lock.exists()} cache={cpath.exists()}")
 
     # 背景那支要活著把快取寫完
     for _ in range(60):
         if cpath.exists():
             break
         _t.sleep(1)
-    check("★逾時★: 背景那支沒被殺掉,自己把快取寫完了(下一席就直接命中)",
+    check("★逾時★: 背景那支自己把快取寫完了(下一席就直接命中)",
           cpath.exists(), f"快取沒出現={cpath}")
+    for _ in range(10):
+        if not lock.exists():
+            break
+        _t.sleep(1)
     check("逾時: 算完鎖自己清掉(不然下一次會以為還有人在算)", not lock.exists(), str(lock))
 
     # 邏輯必須住在 lumos,不住 hook

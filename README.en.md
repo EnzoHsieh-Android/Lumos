@@ -71,7 +71,7 @@ Run inside your project directory:
 
 ```bash
 cd <your-project>
-curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
+curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
 # It asks "make <path> a lumos project? [y/N]" → press y; then restart your Claude Code session
 ```
 
@@ -84,7 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh
 Prereqs: Git for Windows, python on PATH, Claude Code.
 
 ```powershell
-irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex
+irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.ps1 | iex
 # Restart the Claude Code session; if lumos isn't found, add %USERPROFILE%\.local\bin to PATH
 cd <your-project>; lumos init
 ```
@@ -103,7 +103,10 @@ cd <your-project>; lumos init
 Project layer only: `lumos init` (graph folder name defaults to the project name, `--name` to customize; an existing graph is **never overwritten**; `--no-hooks` builds the graph without installing checks). Machine layer only: `lumos install`. Manual offline:
 
 ```bash
-git clone https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
+git clone --branch release https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
+#   release is the public channel (only the maintainer fast-forwards it);
+#   drop --branch release to follow the development line. If the branch does not
+#   exist yet the command fails — rerun without the flag.
 cd ~/harness/lumos-toolchain && ./install.sh
 python3 scripts/lumos install
 scripts/install-graph-toolchain.sh --target <project-path> --slug <name>
