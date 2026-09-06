@@ -26315,6 +26315,60 @@ def t_update_unions_bookkeeping_instead_of_blocking():
           led2.count('{"ts":"DUP"}') == 3, f"實際 {led2.count('{\"ts\":\"DUP\"}')} 份;rc={r2.returncode}")
 
 
+
+def t_prepush_blocks_uncommitted_anchor_baseline():
+    """簽名檔改過沒提交就推 → 推送前的閘要擋(2026-09-06,CI 真的因此紅過一次)。
+
+    出身:折完代碼審要推,推送前的閘擋我「把關檔改過沒簽名」,我簽了名、把改動 commit 了
+    ——但只 `git add docs/`,而簽名檔在 `governance/` 底下,沒進去。
+    ★推送前的閘拿「工作目錄現在的樣子」驗,所以綠;CI 拿「已經推上去的內容」驗,所以紅。★
+    更糟的是 CI 的錯誤訊息叫你「再簽一次名」,再簽也沒用,因為問題是沒提交。
+
+    這支是行為測試不是字串比對:真的搭一個 repo、真的把簽名檔弄髒、真的跑那支 hook。"""
+    import subprocess, os, shutil
+    if not hasattr(os, "setsid"):
+        raise _SrcOnly("非 POSIX(要 os.setsid 跑 hook),這段沒驗到")
+    src = Path(GRAPHCTL).resolve()
+    hook_src = src.parent / "hooks" / "pre-push"
+    if not hook_src.is_file():
+        raise _SrcOnly("消費端沒有 pre-push(非來源 repo),這段沒驗到")
+
+    root = Path(tempfile.mkdtemp(prefix="gctl-ppbase-"))
+    (root / "scripts").mkdir()
+    (root / "governance").mkdir()
+    shutil.copy2(src, root / "scripts" / "lumos")
+    shutil.copy2(hook_src, root / "pre-push")
+    subprocess.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "t@t"], capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
+    # 產一份對得上的簽名檔並提交(讓第一道 anchor verify 過得去)
+    subprocess.run([sys.executable, str(root / "scripts" / "lumos"), "anchor", "approve",
+                    "--note", "fixture"], cwd=str(root), capture_output=True)
+    base = root / "governance" / "anchor-baseline.json"
+    check("prepush-baseline: fixture 真的產出簽名檔了(沒產出的話下面兩段等於沒驗)",
+          base.is_file(), str(base))
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "init"], capture_output=True)
+
+    def run_hook():
+        return subprocess.run(["bash", str(root / "pre-push")], cwd=str(root),
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+    # ① 乾淨狀態:不該因為「簽名檔沒提交」被擋
+    clean = run_hook()
+    check("prepush-baseline/反面: 簽名檔已提交時不報這個錯",
+          "簽名檔改過了但沒提交" not in clean.stderr, clean.stderr[-200:])
+
+    # ② 把簽名檔弄成「改過沒提交」(加個尾空白,JSON 照樣讀得動 → 第一道 anchor verify 仍會過)
+    base.write_text(base.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    dirty = run_hook()
+    check("prepush-baseline: 簽名檔改過沒提交 → 擋下(rc≠0)", dirty.returncode != 0,
+          f"rc={dirty.returncode} {dirty.stderr[-200:]}")
+    check("prepush-baseline: 訊息講清楚是「沒提交」而不是叫人再簽一次名",
+          "簽名檔改過了但沒提交" in dirty.stderr and "git add" in dirty.stderr,
+          dirty.stderr[-300:])
+
+
 def t_prepush_runs_both_test_files():
     """推送前的閘必須把兩支測試檔都跑過(2026-09-06 全 repo 審視;CI 因此紅過一次)。
 
