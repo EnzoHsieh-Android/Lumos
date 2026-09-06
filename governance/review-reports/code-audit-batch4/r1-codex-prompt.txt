@@ -1,0 +1,18 @@
+你是外部審查員,看一份「外部投稿的 diff」,找出作者沒看到的 bug。只做 finder。
+輸出:第一行 severity: <clean|minor|major|blocker>;每條:
+- [<severity>] <一句話>
+  引句:「<patch 裡逐字一行,≥10 字,★引句內不要再包同型括號★>」
+  位置:`<路徑>:<行號>`
+  why: <為什麼是 bug、什麼情況會出錯>
+被審材料:governance/review-reports/code-audit-batch4/r1-snapshot.patch。repo 在 /Users/enzo/harness/lumos-toolchain,可讀原檔佐證,只讀不改。不要跑 python3 scripts/test_lumos.py 不帶 -k(8 分鐘)。
+這批三件:
+① 十處「條件不成立就 check(訊息, True); return」改成 raise _SrcOnly 走既有跳過通道;另四處「印一條綠然後繼續」改成 pass 加註解。runner 加一條:跑完卻 PASS 與 FAIL 都沒增加就判紅。
+② 兩份 SKILL.md 各抄的 Codex 版本事實整段刪掉,只留「單源見 templates.md §3 ④」指標;加測試 t_skill_single_source_not_duplicated(宣稱單源的頭版不得再出現版本號正則)。
+③ lint 加「開頭欄位未知鍵」軟提醒(附近名候選),清單 _KNOWN_FRONTMATTER_KEYS 來自對本 vault 428 篇的機械盤點,可用 .lumos/config.json 的 extra_frontmatter_keys 擴充;加測試。
+重點鏡頭(逐條必答):
+1. ★零斷言判紅會不會誤傷★:有沒有哪種合法情況是「跑完就是不該有斷言」?例如整支被 _need_src 擋掉之前就 return、或某些 helper 型測試。去掃全部 t_ 函式找可能命中的。實際跑一次全套會太久,改用靜態掃描+抽樣實跑。
+2. ★raise _SrcOnly 換掉 return 的語意變化★:原本那些是 return(整支結束、後面不跑),現在是拋例外。有沒有哪一處後面還有必須執行的清理(finally / 暫存目錄刪除)因此被跳過?逐處看。
+3. ★單源守衛的正則★:0\.1\d{2}\.\d+ 這個形狀,會不會誤中別的東西(日期、版本號以外的數字串)?會不會漏掉別種寫法的版本引用?
+4. ★未知鍵清單的來源★:_KNOWN_FRONTMATTER_KEYS 是對本 vault 盤點出來的。有沒有漏掉「本 vault 現在沒有但工具其實會讀」的鍵?去 grep scripts/lumos 裡所有 fields.get( 的鍵名,跟清單對照,列出差集。
+5. ★近名判斷★:_levenshtein_le1 只判編輯距離 ≤1。有沒有明顯的邊界問題(空字串、單字元、大小寫)?
+6. lint 新增的迴圈對「欄位很多的節點」會不會變慢或吵?

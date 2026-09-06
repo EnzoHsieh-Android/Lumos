@@ -2264,8 +2264,7 @@ def t_set_bad_date_rejected():
 # ── export 逸出節點名中的 " (R3 latent bug) ──
 def t_export_quote_escape():
     if sys.platform == "win32":
-        pass   # NTFS 禁這個字元,這台不是 Windows;不印綠
-        return
+        raise _SrcOnly("這台不是 Windows(NTFS 才禁這個字元),這段沒驗到")
     v = mkvault()
     write(v, 'Systems/A"B.md', "type: system\nstatus: done")
     rm = run(v, "export", "--format", "mermaid", "--folders", "Systems", expect_rc=0)
@@ -2446,8 +2445,7 @@ def t_precommit_vendored_exempt():
     """vendored 工具檔(_VENDORED_TOOLKIT+兩夾)豁免圖譜閘;使用者自有 code 仍照擋。"""
     import subprocess
     if not hasattr(__import__("os"), "setsid"):
-        print("  - skip(非 POSIX)")
-        return
+        raise _SrcOnly("非 POSIX(要 os.setsid 起 pre-commit),這段沒驗到")
     # ① 只 stage vendored .py → 放行(rc0;lumos update 例行更新情境)
     r1 = Path(tempfile.mkdtemp(prefix="gctl-pcv1-"))
     res1 = _precommit_run(r1, ["scripts/test_lumos.py", "scripts/merge-claude-settings.py",
@@ -4320,8 +4318,7 @@ def t_marker_doc_sync():
     skill = repo / "skills" / "lumos-project-notes" / "SKILL.md"
     disc = repo / "scripts" / "templates" / "graph-discipline.md"
     if not skill.exists() or not disc.exists():
-        pass   # 消費端沒有這個範本;不印綠
-        return
+        raise _SrcOnly("消費端沒有 SKILL.md/graph-discipline.md 範本(非來源 repo),這段沒驗到")
     st, dt = skill.read_text(encoding="utf-8"), disc.read_text(encoding="utf-8")
     for m in ("★CHECKPOINT★", "★IRREVERSIBLE★", "[rollback:", "[guard:", "[kill:",
               "spec-trace", "signoff"):
@@ -5570,7 +5567,7 @@ def t_precommit_shebang_script_counts_as_code():
     沒副檔名的純文字檔(NOTES)不算程式碼 → 放行。實證前:五月起 26 個只改 scripts/lumos 的 commit 全部放行。"""
     import subprocess, os, tempfile as _tf
     if not hasattr(os, "setsid"):
-        print("  - skip(非 POSIX)"); return
+        raise _SrcOnly("非 POSIX(要 os.setsid 起 pre-commit),這段沒驗到")
     hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-commit"
     def run(files):
         root = Path(_tf.mkdtemp(prefix="gctl-pcsb-"))
@@ -6057,8 +6054,7 @@ def t_confirm_tty_unit():
     """bootstrap一鍵對稱:_confirm_tty 三階單元測(全程不真開終端機;POSIX pty)。"""
     import os, builtins
     if not hasattr(os, "openpty"):
-        print("  - skip(非 POSIX)")
-        return
+        raise _SrcOnly("非 POSIX(要 os.openpty 模擬終端機),這段沒驗到")
     m = _load_lumos()
 
     class _FakeTTYStdin:
@@ -6124,8 +6120,7 @@ def t_bootstrap_autoinit():
     """bootstrap一鍵對稱:四分流整合測(--init 建/非互動跳過/既有專案接hooks/中間態提示/冪等)。"""
     import subprocess, os
     if not hasattr(os, "setsid"):
-        print("  - skip(非 POSIX)")
-        return
+        raise _SrcOnly("非 POSIX(要 os.setsid 跑 bootstrap),這段沒驗到")
     # ① 無 vault + --init → 建 vault + hooks + CLAUDE 注入
     r1root = Path(tempfile.mkdtemp(prefix="gctl-bs1-"))
     subprocess.run(["git", "-C", str(r1root), "init"], capture_output=True)
@@ -6168,8 +6163,7 @@ def t_bootstrap_pull_failure_aborts():
     """
     import os, subprocess
     if not hasattr(os, "setsid"):
-        print("  - skip(非 POSIX)")
-        return
+        raise _SrcOnly("非 POSIX(要 os.setsid 跑 bootstrap),這段沒驗到")
     fake_home = Path(tempfile.mkdtemp(prefix="gctl-bsfail-home-"))
     src = Path(tempfile.mkdtemp(prefix="gctl-bsfail-src-"))
     (src / "scripts").mkdir(parents=True)
@@ -12105,8 +12099,7 @@ def t_init_existing_resyncs():
         # 建舊 block CLAUDE.md
         tpl_path = lumos_src / "scripts" / "templates" / "graph-discipline.md"
         if not tpl_path.exists():
-            pass   # 來源沒有範本;不印綠
-            return
+            raise _SrcOnly("來源沒有 graph-discipline.md 範本(非來源 repo),這段沒驗到")
 
         # 故意寫舊 block(body 不同於現版範本)
         START_PREFIX = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
@@ -26380,18 +26373,105 @@ def t_skill_single_source_not_duplicated():
     版本號,幾乎必然是又把單源的內容抄回來了。"""
     import re as _re
     root = Path(GRAPHCTL).resolve().parent.parent
-    ver = _re.compile(r"\b0\.1\d{2}\.\d+\b")           # codex CLI 版本形狀
-    src_note = ("單源見", "單源=", "不在此複述", "唯一來源")
+    # ★r1 訂正★:初版寫死 `0\.1\d{2}\.\d+`,只認 Codex 現在的 0.1XX.Y——版本一過 0.199 這條守衛
+    # 就靜默失效,而要求單源檔必須命中的反面斷言會同時假紅。放寬成任意 x.y.z 又會誤中別的數字,
+    # 所以改成鎖「同一行既有版本號、又在講 Codex」:被抄的那段內容本來就長這樣,不靠版本形狀猜。
+    ver = _re.compile(r"\b\d+\.\d+\.\d+\b")
+    def _codex_version_lines(txt):
+        return [ln.strip()[:80] for ln in txt.splitlines()
+                if ver.search(ln) and ("codex" in ln.lower() or "Codex" in ln)]
+    src_note = ("單源見", "單源=", "不在此複述", "唯一來源", "單一來源")
+    # ★r1 折入(兩家適配)★:原本只掃 skills/**/SKILL.md。skills 兩家共用(裝進
+    # ~/.claude/skills 與 ~/.agents/skills 的同一份來源,見 t_codex_skills_shared_dir),
+    # 所以那部分兩家都吃得到;但 **Codex 另外讀 repo 根的 AGENTS.md**(有 AGENTS.override.md
+    # 就只讀它),Claude 讀 CLAUDE.md——版本事實抄進這兩個入口檔,一樣會漂,而守衛看不到。
+    targets = sorted((root / "skills").rglob("SKILL.md"))
+    targets += [root / n for n in ("AGENTS.md", "AGENTS.override.md", "CLAUDE.md")]
     offenders = []
-    for f in sorted((root / "skills").rglob("SKILL.md")):
+    for f in targets:
+        if not f.is_file():
+            continue
         txt = f.read_text(encoding="utf-8")
-        if any(k in txt for k in src_note) and ver.search(txt):
-            offenders.append(f"{f.relative_to(root)}: {ver.search(txt).group(0)}")
-    check("單源紀律: 宣稱單源的頭版不得再抄一份版本事實", not offenders, str(offenders))
-    # 反面:單源本身當然可以有版本號(它就是那一份)
+        if any(k in txt for k in src_note):
+            for ln in _codex_version_lines(txt):
+                offenders.append(f"{f.relative_to(root)}: {ln}")
+    check("單源紀律: 宣稱單源的頭版不得再抄一份 Codex 版本事實", not offenders, str(offenders))
+    # 反面:單源本身當然要留著那段(它就是那一份)
     tpl = root / "skills" / "lumos-design-loop" / "templates.md"
-    check("單源紀律/反面: 單源檔本身留著版本事實(不是把它也刪了)",
-          tpl.is_file() and bool(ver.search(tpl.read_text(encoding="utf-8"))), str(tpl))
+    check("單源紀律/反面: 單源檔本身留著 Codex 版本事實(不是把它也刪了)",
+          tpl.is_file() and bool(_codex_version_lines(tpl.read_text(encoding="utf-8"))), str(tpl))
+    # 反面②:兩家入口檔要真的在掃描範圍內(不是因為檔名寫錯、掃了個不存在的檔而假綠)
+    scanned = [f for f in targets if f.is_file()]
+    for _entry in ("AGENTS.md", "CLAUDE.md"):
+        check(f"單源紀律/反面: {_entry}(Codex/Claude 的入口檔)有被掃到",
+              (root / _entry) in scanned, f"{_entry} 不在掃描清單")
+    # 反面③:把一行 Codex 版本事實塞進入口檔的副本,掃描器要抓得到
+    _fake = "# X\n本檔只指路、單一來源在別處\ncodex-cli 0.153.2 選得中自訂席\n"
+    check("單源紀律/反面: 版本事實抄進入口檔會被抓到",
+          bool(_codex_version_lines(_fake)) and any(k in _fake for k in src_note), _fake)
+
+
+
+def t_no_zero_assertion_return_paths():
+    """測試不准有「一條斷言都沒跑就 return」的分支(2026-09-06 代碼審 r1)。
+
+    出身:同批才加了「跑完零斷言=判紅」的 runner 規則,我當時用人工盤點宣稱「全套零命中,
+    既有測試沒有這型」——錯的。那次是在 POSIX 機器上跑,五處 `print("- skip(非 POSIX)"); return`
+    根本走不到,於是掃不出來;三席代碼審獨立指出同一件事。真在 Windows 上跑,那五支會被自己
+    新加的守衛判紅,而它們本來就是合法跳過。
+
+    ★所以盤點改成機械做★:靜態掃每支 t_ 函式,任何 return 之前一個 check() 都沒有的,一律要求
+    改走 raise _SrcOnly(跳過通道會被 runner 記成 skip,零斷言判紅只咬真的忘了斷言的)。"""
+    import ast as _ast
+    src = Path(__file__).resolve().read_text(encoding="utf-8")
+
+    def _calls_check(node):
+        return any(isinstance(x, _ast.Call) and isinstance(x.func, _ast.Name) and x.func.id == "check"
+                   for x in _ast.walk(node))
+
+    bad = []
+    for fn in _ast.parse(src).body:
+        if not (isinstance(fn, _ast.FunctionDef) and fn.name.startswith("t_")):
+            continue
+        seen = {"v": False}
+
+        def walk(body):
+            for st in body:
+                if isinstance(st, _ast.Return):
+                    if not seen["v"]:
+                        bad.append(f"{fn.name}:{st.lineno}")
+                    continue
+                if isinstance(st, _ast.Raise):
+                    continue
+                if isinstance(st, (_ast.If, _ast.For, _ast.While, _ast.With, _ast.Try)):
+                    for fld in ("test", "iter"):
+                        v = getattr(st, fld, None)
+                        if v is not None and _calls_check(v):
+                            seen["v"] = True
+                    for nm in ("body", "orelse", "finalbody"):
+                        walk(getattr(st, nm, []) or [])
+                    for h in getattr(st, "handlers", []) or []:
+                        walk(h.body)
+                    continue
+                if _calls_check(st):
+                    seen["v"] = True
+
+        walk(fn.body)
+
+    check("零斷言分支: 沒有測試會在一條斷言都沒跑的情況下 return(該跳過的請 raise _SrcOnly)",
+          not bad, f"{len(bad)} 處:{bad[:8]}")
+
+    # 反面:掃描器本身要抓得到——手搭一支零斷言 return 的假測試,必須被列出來
+    fake = "def t_fake_zero():\n    if 1:\n        return\n    check('x', True)\n"
+    fake_bad = []
+    for fn in _ast.parse(fake).body:
+        seen2 = {"v": False}
+        for st in fn.body:
+            if isinstance(st, _ast.If):
+                for sub in st.body:
+                    if isinstance(sub, _ast.Return) and not seen2["v"]:
+                        fake_bad.append(fn.name)
+    check("零斷言分支/反面: 掃描器抓得到刻意搭的零斷言 return", fake_bad == ["t_fake_zero"], str(fake_bad))
 
 
 def t_lint_warns_unknown_frontmatter_key():
@@ -26439,6 +26519,37 @@ def t_lint_warns_unknown_frontmatter_key():
     out3 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(base / "docs" / "fm-knowledge"),
                     "lint", "Systems/b"], capture_output=True, text=True, cwd=str(base)).stdout
     check("未知鍵/反面: 正常欄位不被誤唸", "沒見過的鍵" not in out3, out3[-160:])
+
+    # ★r1 代碼審折入①★:清單初版是「掃本 vault 出現過的鍵」建的,漏了工具真的會讀、
+    # 但本 vault 剛好沒節點寫的兩個(core_refs 跨專案升格參照、regen 重建溯源)。
+    # 被誤報的話,提示文字「它不會被任何檢查讀到」本身就是假話。
+    (kg / "c.md").write_text(
+        "---\ntype: system\nstatus: done\ncreated: 2026-09-06\nupdated: 2026-09-06\n"
+        "aliases: []\ncore_refs:\n  - core/x\nregen: scripts/foo.py\n"
+        "tags:\n  - type/system\n  - status/done\nsummary: |-\n  KEY:測試用\n---\n# c\n",
+        encoding="utf-8")
+    out4 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(base / "docs" / "fm-knowledge"),
+                    "lint", "Systems/c"], capture_output=True, text=True, cwd=str(base)).stdout
+    check("未知鍵/反面: 工具自己會讀的欄位(core_refs/regen)不得被誤報成不認得",
+          "core_refs" not in out4 and "regen" not in out4, out4[-200:])
+
+    # ★r1 代碼審折入②★:設定檔路徑原本寫死「vault 往上兩層」,vault 巢得更深(monorepo:
+    # repo/subdir/docs/x-knowledge)時算到 repo/subdir/.lumos,擴充口悄悄失效且不報錯。
+    deep = _P(tempfile.mkdtemp(prefix="gctl-fmdeep-"))
+    dkg = deep / "subdir" / "docs" / "d-knowledge" / "Systems"
+    dkg.mkdir(parents=True)
+    (dkg / "a.md").write_text(
+        "---\ntype: system\nstatus: done\ncreated: 2026-09-06\nupdated: 2026-09-06\n"
+        "aliases: []\nmy_own_field: x\n"
+        "tags:\n  - type/system\n  - status/done\nsummary: |-\n  KEY:測試用\n---\n# a\n",
+        encoding="utf-8")
+    (deep / ".lumos").mkdir()
+    (deep / ".lumos" / "config.json").write_text(
+        json.dumps({"extra_frontmatter_keys": ["my_own_field"]}), encoding="utf-8")
+    out5 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(deep / "subdir" / "docs" / "d-knowledge"),
+                    "lint", "Systems/a"], capture_output=True, text=True, cwd=str(deep)).stdout
+    check("未知鍵: 擴充口在巢得更深的 vault 也要生效(不是寫死往上兩層)",
+          "my_own_field" not in out5, out5[-200:])
 
 
 if __name__ == "__main__":

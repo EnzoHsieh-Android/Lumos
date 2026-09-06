@@ -3252,9 +3252,13 @@ _KNOWN_FRONTMATTER_KEYS = (
     "valid_under", "revalidate_when", "plan_refs", "date", "decisions", "verified_by",
     "about_code", "about_code_stamp", "self_audit", "feature", "commit",
     "decision_refs", "decision_refs_ai", "pitfall_when", "pitfall_ask", "pitfall_source",
-    "signed_off", "kill_recipes",
+    "signed_off", "kill_recipes", "core_refs", "regen",
 )
-# ↑ 2026-09-06 全 repo 審視 #16:清單來源=對本 vault 428 篇實際出現的鍵做機械盤點(不是憑印象列)。
+# ↑ 2026-09-06 全 repo 審視 #16。★代碼審 r1 訂正★:初版清單來源是「掃本 vault 428 篇出現過的鍵」,
+#   結果漏掉 core_refs(跨專案升格參照,doctor Check C 與 impact 跨 repo 展開都在讀)與 regen(重建溯源在讀)
+#   ——這兩個欄位工具確實會讀,只是本 vault 目前沒節點寫,於是掃不到、被誤報成「不認得」。
+#   正解是問工具認得哪些,不是問這個 vault 長怎樣:下面 cmd_lint 另在執行期併入 LIST_KEYS/LINK_KEYS,
+#   那兩份常數再新增欄位時這裡不必跟著改。
 #   ★這是軟提醒不是白名單硬擋★——別的 vault 有自己的欄位(consumer 專案、core-knowledge 的
 #   project/implements/domain 等),所以留 .lumos/config.json 的 extra_frontmatter_keys 可擴充。
 
@@ -3263,8 +3267,20 @@ def _extra_fm_keys(env):
     """讀 .lumos/config.json 的 extra_frontmatter_keys(消費專案自己的合法欄位)。讀不到就空。"""
     import json
     try:
-        cfg = Path(env.vault).parent.parent / ".lumos" / "config.json"
-        if cfg.is_file():
+        # ★r1 代碼審折入★:原本寫死「vault 往上兩層」,vault 巢得更深(monorepo 的
+        # repo/subdir/docs/x-knowledge)就算到 repo/subdir/.lumos,擴充口悄悄失效且不報錯。
+        # 改成從 vault 往上找設定檔本身;走到版控根就停(找不到 .git 時最多五層),
+        # 免得爬到家目錄撿到別的專案的設定。
+        base = Path(env.vault).resolve()
+        cfg = None
+        for hop, cand in enumerate((base, *base.parents)):
+            probe = cand / ".lumos" / "config.json"
+            if probe.is_file():
+                cfg = probe
+                break
+            if (cand / ".git").exists() or hop >= 5:
+                break
+        if cfg is not None:
             v = json.loads(cfg.read_text(encoding="utf-8")).get("extra_frontmatter_keys")
             return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
     except Exception:
@@ -3308,10 +3324,10 @@ def cmd_lint(env, node):
     # ★只給軟提醒不升 error★:工具對未知欄位的立場是「前向相容、容忍」(消費專案與
     # core-knowledge 各有自己的欄位),升成 error 會讓別人的 vault 每次 lint 都被嘮叨。
     # 清單可用 .lumos/config.json 的 extra_frontmatter_keys 擴充。
-    _known = set(_KNOWN_FRONTMATTER_KEYS) | set(_extra_fm_keys(env))
+    _known = set(_KNOWN_FRONTMATTER_KEYS) | set(LIST_KEYS) | set(LINK_KEYS) | set(_extra_fm_keys(env))
     _unknown = [k for k in n.fields.keys() if k not in _known]
     for _k in _unknown:
-        _near = [c for c in _known if _levenshtein_le1(_k, c)]
+        _near = sorted(c for c in _known if _levenshtein_le1(_k, c))   # r1:_known 是 set,不排序的話多個等距候選每次給的建議會漂
         _hint = f"——是不是想寫 {_near[0]}?" if _near else "——工具不認得這個欄位,它不會被任何檢查讀到"
         warns.append(f"開頭欄位有個沒見過的鍵『{_k}』{_hint}(真的要用就加進 .lumos/config.json 的 extra_frontmatter_keys)")
 
