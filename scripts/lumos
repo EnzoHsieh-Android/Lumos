@@ -17986,7 +17986,79 @@ def _lens_render_listed(lines, listed, read_body, cap, max_lines, bidx):
             break
 
 
-def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400):
+
+_LENS_WARM_ENV = "LUMOS_LENS_WARMING"
+
+
+def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
+    """派一個脫離的行程去算鏡頭,這邊最多等 deadline 秒;到時間就印說明、讓那支自己算完。
+
+    ★為什麼輸出要丟掉不是接管道★(2026-09-07 代碼審 r1 通才席實測):
+    接管道而沒人讀的話,輸出一多就卡在「寫不出去」,那支永遠算不完——
+    「它會自己把快取寫好」這個宣稱直接失效。實測輸出 300KB 時三秒後仍沒做完。
+    丟到 devnull 就沒有這個問題,而且我們本來就不需要它的輸出(要的是快取)。
+
+    ★為什麼開獨立行程組★:不然 hook 那一組被收掉時會把它一起帶走,等於還是白算。
+
+    ★同範圍只讓一個在算★:用一個帶行程編號的鎖檔,已經有人在算就不再派第二個
+    (並行派工時 N 席同時進來,不加這道會派出 N 個算同一件事的行程)。
+    """
+    import subprocess as _sp, time as _t, json as _j2
+
+    # 鎖檔名要跟快取同基底再加後綴——用 with_suffix 會把 .json 換掉,變成另一個名字
+    # (第一版就是這樣,結果第一次留下的鎖對不到第二次要找的快取)。
+    lock = cpath.with_name(cpath.name + ".warming")
+    already = False
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+    except FileExistsError:
+        # 已經有人在算:看它是不是還活著(鎖檔太舊就當它死了,自己接手)
+        try:
+            already = (_t.time() - lock.stat().st_mtime) < 300
+        except OSError:
+            already = False
+    except OSError:
+        already = False
+
+    if not already:
+        argv = [sys.executable, os.path.abspath(__file__), "dispatch-lens", diff_range,
+                "--json"] + (["--repo", str(repo)] if repo else [])
+        kw = {"stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL, "stdin": _sp.DEVNULL}
+        if hasattr(os, "setsid"):
+            kw["start_new_session"] = True          # 自己一組,不跟著呼叫者被收掉
+        env = dict(os.environ); env[_LENS_WARM_ENV] = "1"
+        try:
+            _sp.Popen(argv, env=env, **kw)
+        except OSError:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+
+    # 等快取出現(不是等行程結束——那支可能比 deadline 久很多)。
+    # 用小步輪詢:要等的是「檔案出現」不是「行程結束」,標準庫沒有現成的等法。
+    end = _t.monotonic() + float(deadline)
+    while _t.monotonic() < end:
+        got = _lens_cache_read(cpath)
+        if got is not None:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+            got["cache_hit"] = True
+            print(_j2.dumps(got, ensure_ascii=False) if as_json else got.get("text", ""))
+            return 0
+        _t.sleep(0.1)
+    # 到時間了:那支還在背景算。印一行機器讀得懂的說明,讓 hook 照它自己的格式轉述。
+    print(_j2.dumps({"timed_out": True, "still_warming": True, "range": diff_range},
+                    ensure_ascii=False) if as_json else "", end="" if as_json else "\n")
+    return 5
+
+
+def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None):
     import json as _json
     import io, contextlib, time as _time
     _t0 = _time.monotonic()   # v1.2:hook 內層 45 秒是總帳,備援段預算=45−已耗−保留
@@ -18025,6 +18097,34 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
         else:
             print(cached.get("text", ""))
         return 0
+
+    # ★超時之後讓它自己算完,邏輯住在這裡不住 hook★(2026-09-07 代碼審 r1 架構席)
+    #
+    # 出身:hook 原本超時就把子行程砍掉,算到一半全丟,同範圍下一席再燒一次
+    # (實際:一天 39 次派工 21 次放空)。第一版我把「放手不殺」寫進 hook——
+    # ★而這個專案的裁定是「hook 只做三件事,其餘全部住 lumos 子命令」,
+    #   我自己在計劃筆記裡寫了兩次要遵守,然後違反它。★
+    #
+    # 第一版還有一個實測出來的病:子行程的輸出接在管道上而沒人讀,
+    # 輸出一多就卡在寫不出去,永遠算不完——「它會自己算完」這個宣稱直接失效。
+    # 實測:輸出 300KB 時三秒後仍沒做完;真實輸出目前 0.5–10KB,是活的隱患不是理論
+    # (超時的情境正好就是範圍大、輸出大的情境)。
+    #
+    # 現在的做法:帶 --deadline 時,自己派一個**完全脫離**的行程去算(輸出丟掉,
+    # 所以永遠不會卡在管道),這邊只等快取出現;到時間就印一行說明結束,那支繼續算完。
+    # ★算得快就不要繞路★(2026-09-07 測試抓到):第一版無條件「派一個行程去算、這邊等」,
+    # 於是小專案(本來一瞬間就算完)也被逼走超時那條路——多一次行程啟動,而且 deadline
+    # 短的時候每次都回「超時」,明明它 0.2 秒就能算完。
+    # 現在的順序:①派背景那支去算(它會寫快取)②這邊在窗口內等快取出現
+    #   ——算得快的話一兩百毫秒就等到,跟直接算幾乎沒差;算不完才回「還在算」。
+    # ★為什麼不是「自己算、算不完再交給背景」★:那需要中途放棄一個算到一半的工作,
+    #   Python 沒有安全的中斷點;派出去等結果是這裡唯一乾淨的做法。
+    # ★關掉快取時不能走這條路★(2026-09-07 測試抓到):這條路整個靠快取把結果從背景那支
+    #   傳回來——快取關掉就永遠等不到,每次都回「超時」。關快取的情境(測試、除錯、
+    #   刻意要看即時結果)本來就該直接算。
+    if deadline and deadline > 0 and not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
+        return _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline)
+
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         rc = cmd_impact_diff(diff_range, repo=str(root), as_json=True)
@@ -18101,6 +18201,11 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
            "base": base_sha, "head": head_sha, "cache_hit": False}
     if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
         _lens_cache_write(cpath, out)
+        # 算完把「有人在算」的鎖清掉(是背景那支就一定要清,不然下一次會以為還有人在算)
+        try:
+            (cpath.with_name(cpath.name + ".warming")).unlink()
+        except OSError:
+            pass
     if as_json:
         print(_json.dumps(out, ensure_ascii=False))
     else:
@@ -19217,6 +19322,8 @@ def main():
     p.add_argument("--repo", dest="lens_repo", help="repo 內任一路徑(會自己找 repo 根)")
     p.add_argument("--json", dest="lens_json", action="store_true", help="JSON 輸出 {text,pinned,listed,omitted_nodes,omitted_files,mainline,cache_hit}")
     p.add_argument("--no-cache", dest="lens_nocache", action="store_true", help="不讀不寫 20 分鐘快取")
+    p.add_argument("--deadline", dest="lens_deadline", type=float, default=None, metavar="秒",
+                   help="最多等幾秒:快取沒有就派一個脫離的行程去算,這邊等到時間就回 rc5 並讓那支算完(下一次同範圍直接命中)。hook 用")
     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
     p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
     p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
@@ -19426,7 +19533,10 @@ def main():
             return 2
         if args.lens_arm:
             return cmd_dispatch_lens_arm(args.lens_range, repo=args.lens_repo, seats=args.lens_seats, no_cache=args.lens_nocache)
-        return cmd_dispatch_lens(args.lens_range, repo=args.lens_repo, as_json=args.lens_json, no_cache=args.lens_nocache)
+        # ★背景那支自己不准再派人★:它帶著 LUMOS_LENS_WARMING 進來,直接算、算完寫快取。
+        _dl = None if os.environ.get(_LENS_WARM_ENV) else args.lens_deadline
+        return cmd_dispatch_lens(args.lens_range, repo=args.lens_repo, as_json=args.lens_json,
+                                 no_cache=args.lens_nocache, deadline=_dl)
     if args.cmd == "impact":
         if sum(1 for x in (args.impact_file, args.impact_diff, args.impact_node) if x) > 1:
             print("擋下:--file、--diff、--node 只能選一個用", file=sys.stderr)

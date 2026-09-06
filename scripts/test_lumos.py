@@ -11288,6 +11288,25 @@ def t_hook_inner_timeout_always_below_outer():
         check(f"★逾時預算★: {name} 算出的內層 {inner:.1f}s 明顯小於外層 {outer}s",
               inner <= float(outer) * 0.75, f"內 {inner} / 外 {outer}")
 
+        # ★真正要守的是「連打幾次都不會累加超標」★(2026-09-07 代碼審 r1 通才席抓到):
+        # 第一版只驗單次呼叫的比例,而 hook 的 main() 常常依序打兩次——
+        # 實測進場提醒那支 7+7=14 秒 vs 外層 10、CI 狀態那支 10.5+10.5=21 秒 vs 外層 15,
+        # 結構性超標,而那條單次斷言全綠。
+        # ★判準要對★:回傳的是「還剩多少」不是「每段配額」,所以不能把兩次相加來判——
+        # 要驗的是「真的用掉時間之後,下一次拿到的會變少,而且已耗+下次上限 ≤ 天花板」。
+        import time as _tw
+        _sys.argv = [str(f), "--budget", str(outer)]
+        try:
+            _spent = 0.35
+            _tw.sleep(_spent)
+            _again = mod._inner_budget(default=float(outer))
+        finally:
+            _sys.argv = old_argv
+        check(f"★逾時預算★: {name} 用掉時間之後,下一次拿到的會變少(不是每次都給滿)",
+              _again < inner, f"第一次 {inner:.2f} → 用掉 {_spent}s 後 {_again:.2f}")
+        check(f"★逾時預算★: {name} 已耗 + 下次上限仍不超過天花板(連打幾次都不會累加超標)",
+              _spent + _again <= float(outer), f"{_spent}+{_again:.2f} vs {outer}")
+
     # ④ 反面:拿不到 --budget 時要用保守預設,不是算出 0 或負數
     f = hooks_dir / "impact-hook.py"
     sp = _iu.spec_from_file_location("hb_nb", str(f), loader=_SFL("hb_nb", str(f)))
@@ -11304,63 +11323,77 @@ def t_hook_inner_timeout_always_below_outer():
 
 
 def t_lens_timeout_keeps_warming_cache():
-    """★鏡頭超時不殺子行程,讓它跑完把快取寫好★(2026-09-07 全 repo 審視 #14)。
+    """★鏡頭超時不殺子行程,讓它跑完把快取寫好——而且這段邏輯住在 lumos 不住 hook★
+    (2026-09-07 全 repo 審視 #14;代碼審 r1 架構席把它從 hook 搬進 lumos)。
 
-    出身:原本用一般的「跑到超時就砍掉」——算到一半的東西全丟,同範圍的下一席再燒同樣
-    時間、再放空一次。實際發生過:一天 39 次派工 21 次放空。唯一的緩解是「編排者先手動
-    跑一次暖快取」,**全靠人記得**。
+    出身:原本超時就砍掉子行程——算到一半全丟,同範圍下一席再燒同樣時間再放空
+    (實際:一天 39 次派工 21 次放空)。唯一緩解是「編排者先手動暖快取」,全靠人記得。
 
-    改法:自己開子行程,到時間就放手不管(不砍),它會繼續算完並把結果寫進 20 分鐘快取,
-    下一席同範圍直接命中。★用獨立行程組★,不然 hook 的行程組被收掉時會把它一起帶走。
+    ★兩件事被審查席打回來過,都記在這裡免得再犯★:
+    ① 第一版寫在 hook 裡——而專案裁定是「hook 只做三件事,其餘住 lumos 子命令」,
+       我自己在計劃筆記寫了兩次要遵守,然後違反它。
+    ② 第一版把子行程的輸出接在管道上而沒人讀:**輸出一多就卡在寫不出去,永遠算不完**,
+       「它會自己把快取寫好」這個宣稱直接失效(實測 300KB 輸出三秒後仍沒做完)。
+       搬進 lumos 之後輸出直接丟掉,這個問題自然消失。
 
-    這支驗行為不是驗寫法:真的起一支慢工,設一個會超時的預算,看
-    ①hook 有沒有準時放手 ②那支有沒有活著把事情做完。"""
-    import importlib.util as _iu, time as _t, os as _os
-    from importlib.machinery import SourceFileLoader as _SFL
-    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "dispatch-lens-hook.py"
-    if not hook.is_file():
-        raise _SrcOnly("消費端沒有 hook 原始碼(非來源 repo),這段沒驗到")
-    _sp2 = _iu.spec_from_file_location("h_warm", str(hook), loader=_SFL("h_warm", str(hook)))
-    h = _iu.module_from_spec(_sp2); _sp2.loader.exec_module(h)
+    這支驗的是行為:真的用 lumos 跑一個算不完的範圍,看
+    ①有沒有在期限內回「還在算」②背景那支有沒有活著把快取寫完 ③鎖有沒有自己清掉。"""
+    import subprocess as _sp, time as _t, json as _j, os as _os
+    m = _load_lumos()
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    if not (repo / ".git").exists():
+        raise _SrcOnly("不在 git 專案裡(非來源 repo),這段沒驗到")
 
-    d = Path(tempfile.mkdtemp(prefix="gctl-warm-"))
-    marker = d / "算完了"
-    script = d / "slow.py"
-    script.write_text(f"import time,pathlib\ntime.sleep(1.2)\n"
-                      f"pathlib.Path({str(marker)!r}).write_text('done')\n", encoding="utf-8")
+    def sha(ref):
+        r = _sp.run(["git", "-C", str(repo), "rev-parse", ref], capture_output=True, text=True)
+        return r.stdout.strip()
 
+    # 挑一個「算得夠久」的範圍;算不出來就跳過(不是失敗)
+    # ★範圍別挑太大★:第一版挑 HEAD~40,整支跑 90 秒、超時上限只剩 2 倍餘裕
+    #   ——那種測試遲早會在慢一點的機器上假紅,然後被人關掉。
+    #   挑剛好算不完 1.5 秒的最小範圍就夠證明機制。
+    base = sha("HEAD~12") or sha("HEAD~5")
+    head = sha("HEAD")
+    if not base or not head:
+        raise _SrcOnly("這個 repo 的歷史不夠長,測不到超時那條路")
+    cpath = m._lens_cache_path(repo, base, head)
+    lock = cpath.with_name(cpath.name + ".warming")
+    for f in (cpath, lock):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    check("★前置★ 現場成立: 快取是空的(不然根本走不到超時那條路)", not cpath.exists(), str(cpath))
+
+    rng = f"{base}..{head}"
     t0 = _t.monotonic()
-    r, timed = h._run_lens_keep_warming([sys.executable, str(script)], 0.3)
+    r = _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", rng, "--repo", str(repo),
+                 "--json", "--deadline", "1.5"], capture_output=True, text=True, timeout=90)
     took = _t.monotonic() - t0
-    check("★逾時★: hook 準時放手,不等它跑完", timed and took < 1.0, f"timed={timed} 耗時 {took:.2f}s")
-    check("★前置★ 現場成立: 放手當下那支還沒做完(不然下面那條沒有鑑別力)",
-          not marker.exists(), "")
-    for _ in range(40):
-        if marker.exists():
+    if r.returncode == 0:
+        # 這台算得比 1.5 秒還快 → 測不到超時那條路,誠實跳過而不是假裝驗過
+        raise _SrcOnly(f"這台算這個範圍只要 {took:.1f} 秒,測不到超時那條路")
+    check("★逾時★: 期限內回來,而且回的是「還在算」不是失敗",
+          r.returncode == 5 and took < 10, f"rc={r.returncode} 耗時 {took:.1f}s")
+    check("逾時: 輸出講明還在暖快取", '"still_warming": true' in r.stdout, r.stdout[:200])
+    check("★逾時★: 同範圍只讓一個在算(有鎖)", lock.exists(), str(lock))
+
+    # 背景那支要活著把快取寫完
+    for _ in range(60):
+        if cpath.exists():
             break
-        _t.sleep(0.1)
-    check("★逾時★: 子行程沒被殺掉,自己把事情做完了(下一席就有快取)",
-          marker.exists(), "記號檔沒出現=它被殺掉了,快取還是空的")
+        _t.sleep(1)
+    check("★逾時★: 背景那支沒被殺掉,自己把快取寫完了(下一席就直接命中)",
+          cpath.exists(), f"快取沒出現={cpath}")
+    check("逾時: 算完鎖自己清掉(不然下一次會以為還有人在算)", not lock.exists(), str(lock))
 
-    # 反面:沒超時時要正常拿到結果
-    fast = d / "fast.py"
-    fast.write_text("print('ok')\n", encoding="utf-8")
-    r2, timed2 = h._run_lens_keep_warming([sys.executable, str(fast)], 10)
-    check("逾時/反面: 沒超時時照常拿到結果",
-          (not timed2) and r2 is not None and r2.returncode == 0 and "ok" in r2.stdout,
-          f"timed={timed2} r={r2}")
-
-    # 起不來時要回「起不來」而不是「超時」
-    r3, timed3 = h._run_lens_keep_warming([str(d / "不存在的東西")], 5)
-    check("逾時: 子行程起不來時回的是「起不來」不是「超時」",
-          r3 is None and not timed3, f"r={r3} timed={timed3}")
-
-    # 用獨立行程組(不然 hook 被收掉會把它一起帶走)
-    src = hook.read_text(encoding="utf-8")
-    check("★逾時★: 子行程開在獨立行程組(不然會跟著 hook 一起被收掉)",
-          "start_new_session" in src, "")
-    check("★逾時★: 超時那條路上沒有 kill / terminate(有的話等於還是白算)",
-          "proc.kill()" not in src and "proc.terminate()" not in src, "")
+    # 邏輯必須住在 lumos,不住 hook
+    hook_src = (Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "dispatch-lens-hook.py").read_text(encoding="utf-8")
+    check("★薄殼★: hook 裡不准再有子行程監督(Popen/行程組管理)",
+          "Popen" not in hook_src and "start_new_session" not in hook_src, "hook 又長回邏輯了")
+    lumos_src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
+    check("★薄殼★: 那段住在 lumos,而且輸出丟掉不接管道(接管道會卡死)",
+          "_lens_wait_or_warm" in lumos_src and "DEVNULL" in lumos_src, "")
 
 
 def t_hook_copy_list_completeness():
@@ -27242,9 +27275,13 @@ def t_dispatch_lens_hook_timeout_notice_and_spec_marker():
     # ★2026-09-07 改:hook 不再用 subprocess.run,改成自己開子行程、超時就放手不砍★
     #   (全 repo 審視 #14:原本超時會殺掉子行程,算到一半的東西全丟,下一席再燒一次)。
     #   所以這裡假裝的對象從 subprocess.run 換成 _run_lens_keep_warming。
-    def boom(*a, **k): return None, True          # (沒結果, 超時了)
+    # ★2026-09-07 再改一次:超時處理整段搬進 lumos 了(代碼審 r1 架構席:hook 維持薄殼)★
+    #   hook 現在只認 lumos 的回傳碼 5 =「這次沒算完,背景還在算」。
+    class _R5:
+        returncode = 5; stdout = ""; stderr = ""
+    def boom(*a, **k): return _R5()
     out = _io.StringIO()
-    with patch.object(m, "_run_lens_keep_warming", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
+    with patch.object(m.subprocess, "run", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
         rc = m.main()
     o = out.getvalue()
     check("lens-hook 超時: rc0 且派工詞尾端附了固定超時說明(含範圍與可跑的指令)", rc == 0 and "鏡頭超時" in o and "lumos dispatch-lens main..HEAD" in o and "updatedInput" in o, o[:200])
@@ -27254,13 +27291,13 @@ def t_dispatch_lens_hook_timeout_notice_and_spec_marker():
     def fake_run(argv, timeout=None, **k):
         seen["argv"] = argv
         class R: returncode = 0; stdout = _j.dumps({"text": "lumos 自動附加(設計審):x\n- docs/k/Systems/a.md", "pinned": 1, "shown": 1, "mode": "spec"}); stderr = ""
-        return R(), False                          # (結果, 沒超時)
+        return R()
     payload["tool_input"]["prompt"] = "你是審稿人。\nLUMOS-SPEC: docs/lumos-toolchain-knowledge/Projects/X_計劃.md\n"
     out = _io.StringIO()
-    with patch.object(m, "_run_lens_keep_warming", fake_run), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
+    with patch.object(m.subprocess, "run", fake_run), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out):
         rc = m.main()
     out2 = _io.StringIO()
-    with patch.object(m, "_run_lens_keep_warming", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out2):
+    with patch.object(m.subprocess, "run", boom), patch.object(m.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(m.sys, "stdout", out2):
         m.main()
     check("lens-hook spec 超時: 超時句給的是 --spec 指令而不是把路徑當範圍(通才 r1 #1)", "lumos dispatch-lens --spec docs/lumos-toolchain-knowledge/Projects/X_計劃.md" in out2.getvalue(), out2.getvalue()[:200])
     check("lens-hook spec 標記: 叫的是 dispatch-lens --spec <計劃> 並把回傳附進派工詞", rc == 0 and "--spec" in seen.get("argv", []) and "docs/lumos-toolchain-knowledge/Projects/X_計劃.md" in seen.get("argv", []) and "lumos 自動附加(設計審)" in out.getvalue(), str(seen.get("argv"))[:200])

@@ -115,30 +115,58 @@ def _plain_label(raw, cap=120):
 # 留 30% 給 hook 自己的啟動、收尾與寫輸出。拿不到 --budget(舊註冊還沒更新)就用保守預設。
 _BUDGET_RATIO = 0.7
 _BUDGET_FLOOR = 1.0          # 再怎麼扣也留 1 秒,不要算出 0 或負數
+_BUDGET_START = None         # 這支 hook 開始跑的時刻(第一次用到時記)
 
 
 def _outer_budget(default=10.0):
-    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。"""
+    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。
+    ★上限夾住★:異常大的值會讓內層跟著失控放大,等於整個 fail-open 形同虛設。"""
     import sys as _s
     argv = _s.argv
+    got = None
     for i, a in enumerate(argv):
         if a == "--budget" and i + 1 < len(argv):
             try:
-                return float(argv[i + 1])
+                got = float(argv[i + 1])
             except ValueError:
-                return default
+                got = None
+            break
         if a.startswith("--budget="):
             try:
-                return float(a.split("=", 1)[1])
+                got = float(a.split("=", 1)[1])
             except ValueError:
-                return default
-    return default
+                got = None
+            break
+    if got is None or got <= 0:
+        got = default
+    return min(float(got), 600.0)
 
 
-def _inner_budget(elapsed=0.0, default=10.0):
-    """內層某一段能用幾秒:天花板 × 0.7 − 已耗,下限 1 秒。
-    ★永遠小於外層★,所以逾時走的是自己的 fail-open 分支,不是被外面砍掉。"""
-    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - float(elapsed))
+def _inner_budget(elapsed=None, default=10.0):
+    """內層某一段還能用幾秒:天花板 × 0.7 − 這支 hook 到目前為止已經花掉的時間,下限 1 秒。
+
+    ★已耗時間自己算,不靠呼叫端記得傳★(2026-09-07 代碼審 r1 通才席抓到):
+    第一版的 elapsed 預設 0,而六個呼叫點裡只有一個真的傳了值——於是同一支 hook
+    只要依序呼叫兩次,理論上限就是 2 × 0.7 × 外層 = 1.4 倍外層,**結構性地超過天花板**。
+    實測:進場提醒那支 7+7=14 秒 vs 外層 10;CI 狀態那支 10.5+10.5=21 秒 vs 外層 15。
+    ★這正是這批改動宣稱要修掉的問題,只是換個地方重新發生。★
+
+    ★★這是「還剩多少」不是「每段配額」★★——很容易誤解,所以講清楚:
+    回傳的是「從現在到預算用完還有幾秒」。所以連續呼叫兩次拿到的兩個數字**不該相加**:
+    第一次拿到 7 秒、真的用掉 5 秒之後,第二次會拿到 2 秒。
+    只有在「第一段其實沒用多久」時第二次才會拿到接近 7 秒——那也是對的,因為時間真的還在。
+    ★守衛要驗的是「真的用掉時間之後,下一次拿到的會變少,而且總和不超過天花板」★,
+    不是「兩次的數字相加小於天花板」(那個判準本身就錯,會逼出錯誤的修法)。
+
+    ★誠實邊界★:天花板小於約 1.43 秒時,下限 1 秒會反過來大於外層。目前註冊表最小值是 10,
+    離這個門檻很遠;真要調到那麼小的話這個假設就不成立了。
+    """
+    import time as _tm
+    global _BUDGET_START
+    if _BUDGET_START is None:
+        _BUDGET_START = _tm.monotonic()
+    used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
+    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
 # ── ★逾時預算結束★ ──────────────────────────────────────────────────
 
 def _enforcement_alert(rows):

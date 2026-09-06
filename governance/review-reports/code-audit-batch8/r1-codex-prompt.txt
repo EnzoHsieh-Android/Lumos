@@ -1,0 +1,23 @@
+你是外部第三方審查員(外家否決席),審一份投稿的 diff,找出作者沒看到的 bug。唯讀:不要改檔、不要推送。
+
+工作目錄:/Users/enzo/harness/lumos-toolchain
+被審材料(凍結快照):governance/review-reports/code-audit-batch8/r1-snapshot.patch
+
+作者自述(不要照單全收):
+① hook 逾時天花板收成 merge-claude-settings.py 的 HOOK_BUDGET 單一來源,用 --budget 傳給 hook;各 hook 有逐字相同的 _outer_budget/_inner_budget,內層取「天花板×0.7 − 已耗」,下限 1 秒。
+② dispatch-lens-hook 超時改成不殺子行程:自己 Popen、到時間放手(不 kill),讓它跑完寫 20 分鐘快取,下一席命中。用 start_new_session 開獨立行程組。
+③ 翻掉 impact-hook「單檔固定 30 秒」的舊裁定(它等於外層天花板,讓 fail-open 分支不可達)。
+
+請特別查:
+1. **放手不殺的資源代價**:Popen 沒被 wait 會不會留殭屍?stdout/stderr 用 PIPE 但沒人讀,子行程寫滿 pipe buffer 會不會卡死——那會讓「它自己算完寫快取」這個宣稱直接失效。請估算鏡頭輸出量 vs pipe buffer(64KB)並實測。
+2. **start_new_session 真的擋得住嗎**:hook 被整組收掉時,新 session 的子行程活得下來嗎?實測。macOS 與 Linux 有沒有差?
+3. 忙等迴圈 `poll() + sleep(0.05)` 的代價與精度;有沒有更好的既有做法。
+4. `_inner_budget` 的算式與五支 hook 的每個呼叫點對一次:有沒有傳錯 elapsed、default 跟註冊表對不上、`min(2.0, _inner_budget(...))` 這種寫法對不對。
+5. `--budget` 解析:沒帶、後面沒值、負數/0/超大值會怎樣?內層會不會變成 0 或負數?
+6. check-graph-sync 外層從 10 提到 30:它掛在 Stop 事件,把使用者等待拉長有沒有副作用?這支平常實際跑多久?
+7. 新增兩支測試有沒有「現場走不到被測分支」的問題?把修法還原回去,它們真的會翻紅嗎?請自己推演至少一種還原方式並實際試。
+
+輸出格式(嚴格遵守):
+- 開頭一行獨立寫 severity: <clean|minor|major|blocker>
+- 每條發現:`- [major] <結論>`;下一行縮排 `引句:「<逐字取自凍結快照,至少 10 個字>」`;下一行 位置:`檔案:行號`;下一行 `blocking:是|否`;下一行 `why:` 查證過程(輸入/預期/實際)。
+- 引句必須逐字出自那份 patch。沒問題的面向寫 `- [clean] ...` 說明查了什麼。
