@@ -31,23 +31,20 @@
 #
 # 這份條款只管工具鏈自己的檔案。工具寫進你專案的東西——CLAUDE.md / AGENTS.md 裡的紀律
 # 區塊、你寫的圖譜筆記——都是你的,Lumos 不主張任何權利。
-"""Lumos — 知識圖譜的控制台(graph-as-contract control plane)
+"""Lumos — 幫你把「為什麼這樣做」記成一張查得到的圖,並在動手前推到你眼前。
 
-每一次全 AI 迭代是一條線,Lumos 把它織進「已理解的布」:巡檢 / 寫入 / 強制 / 視覺化。
-self-contained,無 Obsidian app / obsidian CLI 依賴,CI 可跑。
-設計與驗收標準: docs/<project>-knowledge/Projects/lumos_計劃.md
+程式碼只告訴你現在長什麼樣;這張圖記的是為什麼這樣設計、邊界在哪、哪些不能改、驗證過沒。
+不需要裝 Obsidian,CI 上也跑得動。
 
-子命令:
-  doctor      圖譜健康巡檢(四檢查 + 同名守衛 + frontmatter lint)
-  links       某筆記連出去的節點
-  backlinks   連到某筆記的節點
-  map         鄰域樹狀展開(--depth)
-  context     節點 + 鄰居 summary 壓縮索引(MemPalace closet 具象化)
-  decisions   讀取 ADR 決策(單篇,或 --superseded 全 vault 掃被推翻決策)
-  stale       status=stale 的驗證;--match 掃 valid_under/revalidate_when 命中條件
-  recent      最近 N 天修改的筆記
-  stats       資料夾統計
-  export      輸出 mermaid / dot 圖
+第一次用,照這三步走:
+  lumos search <關鍵字>     先找有沒有人寫過(中文查詢:概念之間加空白)
+  lumos context <節點>      看那一篇在講什麼、跟誰有關
+  lumos contracts <節點>    動它之前有什麼不能碰的
+
+★底下 argparse 會把每個子命令列出來,各附一句「什麼時候用」。★
+這段刻意不再手抄一份清單:2026-09-07 全 repo 審視 #9 量到,手抄那份停在 10 個、
+實際有 66 個,而且同一批指令被印兩遍。清單的單一來源是 HELP_WHEN,由 argparse 自己印。
+(這裡也刻意不寫「共幾個」——寫了就是另一個會過期的數字。)
 
 解析範圍(對齊 Obsidian 行為與 skill 鐵則):
   - body 的 [[wikilink]],排除 fenced code block 與 inline code(Obsidian 不索引)
@@ -6208,6 +6205,36 @@ def _el_near_name(a, b):
     return _el_near_ratio(a, b) >= _EL_NEAR_THRESHOLD
 
 
+
+def _node_not_found(env, name, *, write_side=False):
+    """印「找不到這篇筆記」並給近名候選。★讀取指令與寫入指令用不同的後半句★。
+
+    出身(2026-09-07 全 repo 審視 #9):四支**讀取**指令(健康巡檢、看合約、看漂移史、
+    決策重編)打錯節點名時,印的都是「決策沒地方掛」——那是**寫入側專用**的話,
+    白話化那批複製貼上時漏改。讀的人拿到一句對不上自己在做什麼的訊息,而且不給近名候選,
+    只能自己回去猜名字。
+
+    近名用既有的 _el_near_name(不另外引一支;那支剝日期前綴後用 difflib 比,repo 沒有
+    第二種近名判準)。
+    """
+    print(f"擋下:圖譜裡找不到叫「{name}」的筆記。", file=sys.stderr)
+    try:
+        cands = [rel for rel in env.notes if _el_near_name(name, Path(rel).stem)][:5]
+    except Exception:                      # noqa: BLE001 — 找不到就找不到,不能因為找近名而炸
+        cands = []
+    if cands:
+        print("  是不是想找這幾篇之一:", file=sys.stderr)
+        for c in cands:
+            print(f"      {c}", file=sys.stderr)
+    else:
+        print("  沒有名字接近的。用關鍵字找找看(中文查詢:概念之間加空白):", file=sys.stderr)
+        print(f"      lumos search {name}", file=sys.stderr)
+    if write_side:
+        print("  確定要新建的話:", file=sys.stderr)
+        print("      lumos new <類型> <名稱>", file=sys.stderr)
+    return 2
+
+
 def _el_node_meta(env, rel):
     """(status, 決策數)——status 取 frontmatter 欄位;決策數 len(parse_decisions)(機械數)。"""
     n = env.notes.get(rel)
@@ -10121,8 +10148,14 @@ def cmd_impact_node(node_arg, repo=None, as_json=False):
     start = Path(repo).resolve() if repo else Path.cwd()
     vault = find_vault(start)
     if vault is None:
-        print("擋下:目前目錄底下找不到知識圖譜(docs/*-knowledge)", file=sys.stderr)
-        return 2
+        # ★三條路同一套說法、同一個退出碼★(2026-09-07 全 repo 審視 #9)
+        print("擋下:這個專案底下找不到知識圖譜(docs/*-knowledge),所以沒有東西可以查。", file=sys.stderr)
+        print("  為什麼在意:這跟「查過了、沒有相關筆記」是兩件事——"
+              "前者是還沒建圖譜,後者才是真的沒關聯。", file=sys.stderr)
+        print("  這個專案要用圖譜的話:", file=sys.stderr)
+        print("      lumos init", file=sys.stderr)
+        print("  只是想指到別的地方的圖譜:加 --repo <含圖譜的目錄>", file=sys.stderr)
+        return 3
     env = Env(vault)
     rel = env.find(node_arg)
     if rel is None:
@@ -11351,8 +11384,14 @@ def cmd_update(source=None, no_pull=False, allow_stale=False):
     src = _lumos_src(source)
     vault = find_vault(Path.cwd())
     if vault is None:
-        print("擋下:目前目錄底下找不到知識圖譜(docs/*-knowledge)", file=sys.stderr)
-        return 2
+        # ★三條路同一套說法、同一個退出碼★(2026-09-07 全 repo 審視 #9)
+        print("擋下:這個專案底下找不到知識圖譜(docs/*-knowledge),所以沒有東西可以查。", file=sys.stderr)
+        print("  為什麼在意:這跟「查過了、沒有相關筆記」是兩件事——"
+              "前者是還沒建圖譜,後者才是真的沒關聯。", file=sys.stderr)
+        print("  這個專案要用圖譜的話:", file=sys.stderr)
+        print("      lumos init", file=sys.stderr)
+        print("  只是想指到別的地方的圖譜:加 --repo <含圖譜的目錄>", file=sys.stderr)
+        return 3
     root = vault.parent.parent  # docs/<slug>-knowledge → docs → 專案 root
     slug = vault.name[:-len("-knowledge")] if vault.name.endswith("-knowledge") else vault.name
     if root.resolve() == src.resolve():
@@ -16794,7 +16833,14 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
     else:
         vault = find_vault(Path.cwd())
     if vault is None:
-        print("IMPACT-DEBUG: vault 找不到(rc3)——非圖譜專案或 --repo 未指向含 vault 的目錄", file=sys.stderr)
+        # ★三條路同一套說法★(2026-09-07 全 repo 審視 #9):同一件事(找不到圖譜)
+        # 原本三種問法給三種答案——這條印一句除錯訊息、--node 印白話擋下、--diff 回成功印 0 篇。
+        print("擋下:這個專案底下找不到知識圖譜(docs/*-knowledge),所以沒有東西可以查。", file=sys.stderr)
+        print("  為什麼在意:這跟「查過了、沒有相關筆記」是兩件事——"
+              "前者是還沒建圖譜,後者才是真的沒關聯。", file=sys.stderr)
+        print("  這個專案要用圖譜的話:", file=sys.stderr)
+        print("      lumos init", file=sys.stderr)
+        print("  只是想指到別的地方的圖譜:加 --repo <含圖譜的目錄>", file=sys.stderr)
         return 3
 
     # 3. 解析 depth:CLI(顯式 --depth) > .lumos/impact.json config > 預設 2
@@ -17208,7 +17254,23 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
     per_file_meta = []
     import io, contextlib
     _vault = _vault_in(repo_root)
-    _env_shared = Env(_vault) if _vault is not None else None   # 建一次,逐檔復用(r1 N+1)
+    # ★沒有圖譜就直接說,不要印「0 篇」裝作查過了★(2026-09-07 全 repo 審視 #9)
+    #
+    # 出身:這條路原本只在**逐檔迴圈裡**才發現沒圖譜——而「這個範圍 0 個檔」時迴圈根本不跑,
+    # 於是一路走到最後印出「固定席 0 + top 0」並回成功。
+    # ★對新手最危險的就是這個★:同一件事(找不到圖譜),另外兩種問法一個回 rc3、一個回 rc2
+    # 並印白話擋下,只有這條印「0 篇」**看起來像查過了**——而它根本沒有圖譜可查。
+    # 文件本來就寫著這條路會回「圖譜缺」,只是零檔時走不到。
+    if _vault is None:
+        print("擋下:這個專案底下找不到知識圖譜(docs/*-knowledge),所以沒有東西可以查。",
+              file=sys.stderr)
+        print("  為什麼在意:這跟「查過了、沒有相關筆記」是兩件事——"
+              "前者是還沒建圖譜,後者才是真的沒關聯。", file=sys.stderr)
+        print("  這個專案要用圖譜的話:", file=sys.stderr)
+        print("      lumos init", file=sys.stderr)
+        print("  只是想指到別的地方的圖譜:加 --repo <含圖譜的目錄>", file=sys.stderr)
+        return 3
+    _env_shared = Env(_vault)   # 建一次,逐檔復用(r1 N+1)
     for f in files:
         d = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
                      "diff", diff_range, "--", f], capture_output=True, text=True)
@@ -18932,7 +18994,53 @@ def _fill_help_when(parser, parent=""):
                 _fill_help_when(sp, name)
 
 def main():
-    ap = argparse.ArgumentParser(prog="lumos", description=__doc__,
+    class _LumosParser(argparse.ArgumentParser):
+        """打錯指令時給人話 + 近名候選,不要吐一長串英文。
+
+        出身(2026-09-07 全 repo 審視 #9):打錯一個字母(例如 doctorr),argparse 預設會印
+        usage 那行(把 66 個指令名擠成一串)再加一句英文 invalid choice,後面又把 66 個名字
+        用引號逐個列一遍——**畫面上出現三次同一份清單,而使用者要的只是「你是不是想打 doctor」**。
+        """
+
+        def error(self, message):
+            import difflib as _dl
+            m = re.search(r"invalid choice: '([^']+)'", message or "")
+            bad = m.group(1) if m else None
+            names = []
+            for _a in self._actions:
+                if getattr(_a, "choices", None):
+                    names = [str(c) for c in _a.choices]
+                    break
+            if bad:
+                print(f"擋下:沒有「{bad}」這個指令。", file=sys.stderr)
+            elif "required: cmd" in (message or ""):
+                # ★裸打是最常見的第一次接觸★:不要丟一句英文的「缺少必填參數」給人。
+                print("擋下:要給一個指令才知道你想做什麼。", file=sys.stderr)
+                print("  第一次用的話,照這三步走:", file=sys.stderr)
+                print("      lumos search <關鍵字>     先找有沒有人寫過", file=sys.stderr)
+                print("      lumos context <節點>      看那一篇在講什麼", file=sys.stderr)
+                print("      lumos contracts <節點>    動它之前有什麼不能碰的", file=sys.stderr)
+            else:
+                # 其他參數錯(值不合法、缺子命令自己的必填…):argparse 的原句通常已經
+                # 指出是哪個參數,原樣轉述比我重寫一遍準確。
+                print(f"擋下:{message}", file=sys.stderr)
+            if bad and names:
+                near = _dl.get_close_matches(bad, names, n=3, cutoff=0.6)
+                if near:
+                    print("  是不是想打這個:", file=sys.stderr)
+                    for n2 in near:
+                        print(f"      lumos {n2}", file=sys.stderr)
+                else:
+                    print("  沒有名字接近的。看有哪些指令、各自什麼時候用:", file=sys.stderr)
+                    # ★指到自己這一層的說明★:子命令的子命令(例如 loop 底下那些)
+                    #   出錯時,該看的是 `lumos loop --help` 而不是頂層那份。
+                    print(f"      {self.prog} --help", file=sys.stderr)
+            else:
+                print("  看用法:", file=sys.stderr)
+                print(f"      {self.prog} --help", file=sys.stderr)
+            self.exit(2)
+
+    ap = _LumosParser(prog="lumos", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--vault", type=Path, default=None,
                     help="vault 路徑 (預設自動找 docs/*-knowledge)")
@@ -19663,8 +19771,7 @@ def main():
        (args.cmd == "decisions" and not args.superseded):
         rel = env.find(getattr(args, "note", None) or "")
         if rel is None:
-            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
-            return 2
+            return _node_not_found(env, args.note)
         if args.cmd == "links":
             return cmd_links(env, rel)
         if args.cmd == "backlinks":
@@ -19704,7 +19811,7 @@ def main():
         if args.note:
             rel = env.find(args.note)
             if rel is None:
-                print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
+                return _node_not_found(env, args.note)
                 return 2
         return cmd_contracts(env, rel)
 
@@ -19836,8 +19943,7 @@ def main():
     if args.cmd in ("set", "append", "remove"):
         rel = env.find(args.note)
         if rel is None:
-            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
-            return 2
+            return _node_not_found(env, args.note)
         try:
             if args.cmd == "set":
                 return cmd_set(env, rel, args.key, args.value)
@@ -19912,8 +20018,7 @@ def main():
             return 2
         rel = env.find(args.note)
         if rel is None:
-            print(f"擋下:圖譜裡找不到叫 {args.note} 的筆記,決策沒地方掛——先確認名稱或路徑", file=sys.stderr)
-            return 2
+            return _node_not_found(env, args.note)
         try:
             # [M1/P2] 兩函式回 (rc, 全域決策id);dispatcher 解包,CLI 對外仍只回整數 rc
             #   (M4 [S1] 觸發端將在此用 decision_id 呼 cascade_surface——屆時包獨立 try/except)

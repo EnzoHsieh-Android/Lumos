@@ -11413,6 +11413,191 @@ def t_lens_timeout_keeps_warming_cache():
           "_lens_wait_or_warm" in lumos_src and "DEVNULL" in lumos_src, "")
 
 
+
+def t_no_vault_same_answer_everywhere():
+    """★找不到圖譜這件事,每條路要給同一個答案,而且不准回成功★(2026-09-07 全 repo 審視 #9)。
+
+    出身:同一件事(這個專案沒有圖譜),三種問法給三種答案——
+      --file  → rc3 + 一句除錯口吻的訊息
+      --node  → rc2 + 白話擋下
+      --diff  → ★rc0 + 印出「0 檔、固定席 0」★
+    最後那條是計劃裡點名「對新手最危險」的:**看起來像查過了、結論是沒有相關筆記**,
+    而實際上它根本沒有圖譜可查。兩件事差很多——一個是還沒建,一個是真的沒關聯。
+
+    ★為什麼零檔時才會漏★:那條路原本只在逐檔迴圈裡才發現沒圖譜,而「這個範圍 0 個檔」
+    時迴圈根本不跑,於是一路走到最後印「0 篇」並回成功。文件本來就寫著它會回「圖譜缺」,
+    只是走不到。"""
+    import subprocess as _sp
+    d = Path(tempfile.mkdtemp(prefix="gctl-novault-"))
+    _sp.run(["git", "init", "-q", str(d)], capture_output=True)
+    (d / "a.py").write_text("x\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-qm", "i"], capture_output=True)
+    check("★前置★ 現場成立: 這個假專案真的沒有圖譜",
+          not list((d / "docs").glob("*-knowledge")) if (d / "docs").exists() else True, str(d))
+
+    seen = {}
+    for label, args in (("--file", ["--file", "a.py"]),
+                        ("--node", ["--node", "x"]),
+                        ("--diff", ["--diff", "HEAD~0..HEAD"])):
+        r = _sp.run([sys.executable, GRAPHCTL, "impact", *args], cwd=str(d),
+                    capture_output=True, text=True, timeout=60)
+        seen[label] = (r.returncode, (r.stderr or r.stdout))
+
+    for label, (rc, out) in seen.items():
+        check(f"★沒圖譜★: impact {label} 不准回成功(回成功=看起來像查過了)",
+              rc != 0, f"rc={rc} out={out[:120]}")
+        check(f"沒圖譜: impact {label} 講清楚是「沒有圖譜」不是「查過沒有」",
+              "找不到知識圖譜" in out and "查過了" in out, out[:200])
+        check(f"沒圖譜: impact {label} 給得出下一步指令",
+              "lumos init" in out, out[:200])
+    check("★沒圖譜★: 三條路的退出碼一致(同一件事不該有三種碼)",
+          len({rc for rc, _ in seen.values()}) == 1, str({k: v[0] for k, v in seen.items()}))
+
+    # 反面:真的有圖譜時,--diff 要照常查得出來(不然這道檢查等於把功能關掉)
+    kg = d / "docs" / "t-knowledge" / "Systems"
+    kg.mkdir(parents=True)
+    (kg / "a.md").write_text("---\ntype: system\nstatus: done\naliases: []\n"
+                             "tags:\n  - type/system\nsummary: |-\n  KEY:測試用\n---\n# a\n",
+                             encoding="utf-8")
+    _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-qm", "kg"], capture_output=True)
+    r = _sp.run([sys.executable, GRAPHCTL, "impact", "--diff", "HEAD~1..HEAD"], cwd=str(d),
+                capture_output=True, text=True, timeout=60)
+    check("★沒圖譜/反面★: 真的有圖譜時照常查得出來(這道檢查不能把功能關掉)",
+          r.returncode == 0, f"rc={r.returncode} {(r.stderr or r.stdout)[:150]}")
+
+
+
+def t_toplevel_help_has_no_handwritten_command_list():
+    """★頂層說明段不准再手抄一份子命令清單★(2026-09-07 全 repo 審視 #9)。
+
+    出身:那段是初始版本之後就沒改過的說明——**手抄的清單停在 10 個,實際有 66 個**,
+    而且 argparse 自己還會再列一次,所以同一批指令被印兩遍。指向的檔案路徑也不存在,
+    還夾著外人看不懂的內部詞。
+
+    改法不是「把清單補齊」——補齊的下一天又會過期。**清單的單一來源是 HELP_WHEN,
+    由 argparse 自己印**;說明段只留定位與入口三步。
+
+    這支釘的就是「不准長回來」:說明段裡不得再出現「兩個以上子命令名各自成行」的形狀。"""
+    import subprocess as _sp, re as _re
+    m = _load_lumos()
+    doc = (m.__doc__ or "")
+    check("★前置★ 現場成立: 讀得到頂層說明段", len(doc) > 50, doc[:80])
+
+    names = set(getattr(m, "HELP_WHEN", {}).keys())
+    check("★前置★ 現場成立: HELP_WHEN 真的是那份單一來源", len(names) > 30, str(len(names)))
+
+    # 說明段裡「以子命令名開頭、後面接說明」的行 = 手抄清單的形狀
+    handwritten = []
+    for line in doc.splitlines():
+        mm = _re.match(r"^\s{2,}([a-z][a-z-]{2,})\s{2,}\S", line)
+        if mm and mm.group(1) in names:
+            handwritten.append(line.strip()[:50])
+    check("★不准手抄★: 說明段裡沒有「子命令名 + 說明」的清單行(會過期,而且 argparse 已經印一次)",
+          len(handwritten) < 2, f"{len(handwritten)} 行:{handwritten[:5]}")
+
+    # 入口三步要在(那是新手唯一需要的東西)
+    for step in ("lumos search", "lumos context", "lumos contracts"):
+        check(f"說明段: 留著入口三步的「{step}」", step in doc, doc[:200])
+
+    # 反面:argparse 自己那份要真的有,而且每個都附一句話
+    h = _sp.run([sys.executable, GRAPHCTL, "--help"], capture_output=True, text=True).stdout
+    # ★真相來源是 argparse 自己列的那串,不是 HELP_WHEN 的鍵★:
+    #   HELP_WHEN 除了頂層指令,還收了「loop next」這種帶空格的、以及「bind」「approve」
+    #   這種次級指令的裸名——它們本來就不會出現在頂層。
+    #   第一版拿 HELP_WHEN 全部去比,算出 66/100、66/94 兩次假紅;判準錯不是功能壞。
+    _um = _re.search(r"\{([a-z0-9,\-]+)\}", h)
+    actual = set(_um.group(1).split(",")) if _um else set()
+    check("★前置★ 現場成立: 抓得到 argparse 列的頂層清單", len(actual) > 30, str(len(actual)))
+    _with_when = [n for n in actual if n in names]
+    check("說明段/反面: 頂層每個子命令都有一句「什麼時候用」(清單沒被弄不見)",
+          len(_with_when) >= len(actual) * 0.9, f"有說明的 {len(_with_when)}/{len(actual)}")
+
+
+
+def t_node_not_found_gives_candidates_not_write_side_message():
+    """★打錯節點名要給近名候選,而且讀取指令不准講寫入側的話★(2026-09-07 全 repo 審視 #9)。
+
+    出身:四支**讀取**指令(健康巡檢、看合約、看漂移史、決策重編)打錯名字時,
+    印的都是「決策沒地方掛」——那是**寫入側專用**的話,白話化那批複製貼上時漏改。
+    讀的人拿到一句對不上自己在做什麼的訊息,而且不給近名候選,只能自己回去猜名字。"""
+    import subprocess as _sp
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    vault = repo / "docs" / "lumos-toolchain-knowledge"
+    if not vault.is_dir():
+        raise _SrcOnly("消費端沒有本 repo 的圖譜(非來源 repo),這段沒驗到")
+
+    # 挑一篇真的存在的節點,故意打錯一個字
+    real = None
+    for f in sorted((vault / "Systems").glob("*.md")):
+        if len(f.stem) >= 6:
+            real = f.stem
+            break
+    check("★前置★ 現場成立: 找得到一篇可以拿來打錯的節點", bool(real), str(real))
+    typo = real[:-1] + "介" if real else "x"
+
+    # ★挑真的會吃節點名的指令★:drift-history 不收節點參數(它沿 git 歷史重放整份圖譜),
+    #   拿它來測只會撞到 argparse 的用法錯誤,那條斷言等於沒驗到。
+    for cmd in ("contracts", "decisions"):
+        r = _sp.run([sys.executable, GRAPHCTL, cmd, typo], cwd=str(repo),
+                    capture_output=True, text=True, timeout=90)
+        out = r.stderr or r.stdout
+        check(f"★近名★: {cmd} 打錯字時給得出候選", "是不是想找" in out, out[:200])
+        check(f"★用詞★: {cmd} 不准再講寫入側的「決策沒地方掛」",
+              "決策沒地方掛" not in out, out[:200])
+
+    # 完全不像的名字:要給搜尋指令當退路,而不是只說找不到
+    r = _sp.run([sys.executable, GRAPHCTL, "contracts", "zzz完全不存在zzz"], cwd=str(repo),
+                capture_output=True, text=True, timeout=90)
+    out = r.stderr or r.stdout
+    check("近名/反面: 完全不像時給搜尋指令當退路", "lumos search" in out, out[:200])
+    check("近名: 退出碼不是 0(找不到不能算成功)", r.returncode != 0, str(r.returncode))
+
+    # 原始碼層:那句寫入側的話不准再出現在讀取指令的分支
+    src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
+    check("★用詞★: 全檔不再有「找不到筆記 + 決策沒地方掛」這種混用",
+          "的筆記,決策沒地方掛" not in src, "")
+
+
+
+def t_bad_command_gives_near_name_not_wall_of_text():
+    """★打錯指令要給近名,不要吐一長串英文★(2026-09-07 全 repo 審視 #9)。
+
+    出身:打錯一個字母(例如 doctorr),預設會印 usage 那行(把 66 個指令名擠成一串)、
+    再一句英文 invalid choice、後面又把 66 個名字用引號逐個列一遍——
+    **同一份清單在畫面上出現三次,而使用者要的只是「你是不是想打 doctor」**。"""
+    import subprocess as _sp
+
+    def run(*args):
+        return _sp.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True, timeout=60)
+
+    r = run("doctorr")
+    out = r.stderr or r.stdout
+    check("★近名★: 打錯一個字母時直接指出正確的那個", "lumos doctor" in out, out[:200])
+    check("近名: 訊息是白話,不是英文的 invalid choice",
+          "invalid choice" not in out and "沒有「doctorr」這個指令" in out, out[:200])
+    check("★不要牆★: 不再把整份指令清單倒出來",
+          out.count("backlinks") <= 1 and len(out) < 600, f"{len(out)} 字元")
+    check("近名: 退出碼不是 0", r.returncode != 0, str(r.returncode))
+
+    r2 = run("zzzqqq")
+    out2 = r2.stderr or r2.stdout
+    check("近名/反面: 完全不像時給 --help 當退路", "--help" in out2, out2[:200])
+
+    # 子命令那層要指到自己那層的說明
+    r3 = run("loop", "zzz")
+    out3 = r3.stderr or r3.stdout
+    check("★指對層★: 子命令打錯時指的是那一層的說明(不是頂層那份)",
+          "lumos loop --help" in out3, out3[:200])
+
+    # 反面:正常指令不受影響
+    r4 = run("stats")
+    check("近名/反面: 正常指令照跑(不能為了改訊息把功能弄壞)", r4.returncode == 0, r4.stdout[:100])
+
+
 def t_hook_copy_list_completeness():
     """通則防復發:HOOK_ENTRIES 裡每個已註冊的 hook 腳本,都必須在 _install_hooks_py 複製清單內。
 
@@ -19580,7 +19765,11 @@ rel-cascade search set show stale stats sync-verified-by""".split())
     # dangling handler = 0:產物內被呼叫但未定義的 cmd_*/run_* 名稱
     import ast as _ast
     tree = _ast.parse(out.read_text(encoding="utf-8"))
-    defined = {n.name for n in _ast.walk(tree) if isinstance(n, _ast.FunctionDef)}
+    # ★類別也算「定義過」★(2026-09-07 全 repo 審視 #9):這條原本只認 FunctionDef,
+    # 於是新加的 _LumosParser(自訂錯誤訊息用的 ArgumentParser 子類)被誤判成懸空——
+    # 它其實好好地在產物裡。判準漏了一種定義形式,不是產物有問題。
+    defined = {n.name for n in _ast.walk(tree)
+               if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef))}
     called = {c.func.id for c in _ast.walk(tree)
               if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)}
     dangling = {n for n in (called - defined) if n.startswith(("cmd_", "run_", "_"))}
@@ -24990,14 +25179,20 @@ def t_slim_update_behavior():
           and "不吃任何參數" in r7.stderr and "FAKE-INSTALL" not in r7.stdout,
           f"rc={r7.returncode} {r7.stderr[:200]}")
     r7b = _sp.run([sys.executable, str(out)], capture_output=True, text=True, env=env)
-    check("behavior⑦: 裸打→usage+rc2 無 traceback",
-          r7b.returncode == 2 and "Traceback" not in r7b.stderr and "usage" in r7b.stderr,
+    # ★2026-09-07 起參數錯誤訊息改成白話(全 repo 審視 #9)★:這兩條守的是
+    # 「不吐 traceback、回 rc2、而且看得出下一步」——那三件事都還在,
+    # 只是原本拿英文字串「usage」「invalid choice」當代理,那個代理過期了。
+    check("behavior⑦: 裸打→擋下+rc2 無 traceback,而且看得出怎麼查用法",
+          r7b.returncode == 2 and "Traceback" not in r7b.stderr
+          and ("擋下" in r7b.stderr or "usage" in r7b.stderr)
+          and "--help" in r7b.stderr,
           f"rc={r7b.returncode} {r7b.stderr[:200]}")
     # ⑨ 全域旗標前置→argparse invalid choice,fail loud 非 crash
     r9 = _sp.run([sys.executable, str(out), "--vault", str(fake_home), "update"],
                  capture_output=True, text=True, env=env)
-    check("behavior⑨: --vault 前置→invalid choice rc2 無 traceback",
-          r9.returncode == 2 and "invalid choice" in r9.stderr and "Traceback" not in r9.stderr,
+    check("behavior⑨: --vault 前置→擋下(沒這個指令)rc2 無 traceback",
+          r9.returncode == 2 and "Traceback" not in r9.stderr
+          and ("這個指令" in r9.stderr or "invalid choice" in r9.stderr),
           f"rc={r9.returncode} {r9.stderr[:200]}")
     # Path.home 拋例外→rc2 不拋(模組級)
     m = None
