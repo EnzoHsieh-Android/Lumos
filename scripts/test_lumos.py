@@ -33,7 +33,7 @@ PASS, FAIL, SKIP = 0, 0, 0
 # 「本來跑得到、現在跑不到」會完全無聲——2026-09-06 就這樣漏過一次(見 main() 尾段)。
 # 目前值 0:這台是 POSIX 又是來源 repo,所有跳過通道的條件都不成立。
 # 在別的環境(Windows、消費端)跳過本來就會多,那時照訊息說的調整並寫理由。
-_EXPECTED_SKIP_MAX = 0
+EXPECTED_SKIP_MAX = int(__import__("os").environ.get("LUMOSEXPECTED_SKIP_MAX", "0"))
 
 
 class _SrcOnly(Exception):
@@ -365,6 +365,67 @@ def t_runner_isolates_real_home_and_tmp():
     # CODEX_HOME 若沒清掉,會繞過假家目錄直接打到真的 ~/.codex
     check("隔離: CODEX_HOME 已清掉(它會繞過假家目錄)",
           "CODEX_HOME" not in os.environ, str(os.environ.get("CODEX_HOME")))
+
+
+
+def t_runner_isolation_r1_fixes():
+    """代碼審 r1 折入的三條(2026-09-06,code-audit-batch5)。
+
+    ①★消費端假綠★:隔離時我把「lumos 來源 repo 在哪」這個環境變數無條件指向「這個 repo」。
+      但這支測試檔會被複製進消費專案——在那邊 repo 根就是消費專案自己,於是「vendored 的
+      工具是不是最新版」那條檢查會**拿自己跟自己比,永遠判最新**,過期的工具會被說成沒問題。
+      正解:只有確認自己就是來源 repo 才指向自己;不是的話讓它保持找不到,那條路本來就
+      該走跳過通道——**誠實的「沒驗到」勝過假的「驗過了」**。
+
+    ②★只印提醒等於沒有這道閘★:跳過支數超過基準線原本只印一行,退出碼照樣是 0,
+      所以 CI 與推送閘收到的還是「成功」。改成在基準線有意義的環境(來源 repo 且非 Windows)
+      判紅。
+
+    ③★收尾要用 finally★:原本寫在 return 之前,所以 `-k` 打錯字的早退、Ctrl-C、
+      以及測試迴圈外的例外通通會繞過它,把整個現場留在系統暫存目錄裡。"""
+    import subprocess, os, re
+    src = Path(__file__).resolve().read_text(encoding="utf-8")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+
+    # ① 條件式設定:來源 repo 才指自己
+    check("r1-①: 來源 repo 的判斷用 skills 目錄存在與否(不是無條件指自己)",
+          'if (repo_root / "skills" / "lumos-project-notes").is_dir():' in src, "")
+    check("r1-①: 不是來源 repo 就把那個變數清掉(讓該跳過的真的跳過)",
+          'os.environ.pop("LUMOS_HOME", None)' in src, "")
+    # 這台是來源 repo,所以應該有設而且指向這個 repo
+    check("★前置★ 現場成立:這台是來源 repo", (repo / "skills" / "lumos-project-notes").is_dir(), str(repo))
+    check("r1-①: 這台(來源 repo)有設,而且指向這個 repo",
+          os.environ.get("LUMOS_HOME") == str(repo), str(os.environ.get("LUMOS_HOME")))
+
+    # ② 超過基準線要進 FAIL,不是只印字
+    m = re.search(r"if not _args\.keyword and SKIP > EXPECTED_SKIP_MAX:(.{0,900})", src, re.S)
+    check("★前置★ 現場成立:找得到基準線那段", bool(m), "")
+    seg = m.group(1) if m else ""
+    check("r1-②: 超過基準線會加進 FAIL(不是只 print)", "FAIL += 1" in seg, seg[:200])
+    check("r1-②: 只在基準線有意義的環境判紅(來源 repo 且非 Windows)",
+          "_baseline_applies" in seg and "win32" in seg, seg[:200])
+    check("r1-②: 留了環境變數可以暫時放行", "LUMOSEXPECTED_SKIP_MAX" in src, "")
+
+    # ③ 早退也要收尾:真的跑一次打錯字的 -k,看有沒有留下現場
+    import tempfile as _tf
+    real_tmp = Path(_tf.gettempdir())
+    # 這一輪自己的根在假家目錄底下,所以要看「真正的系統暫存目錄」
+    sys_tmp = Path(os.environ.get("TMPDIR", "/tmp")).parent if "gctl-run-" in os.environ.get("TMPDIR", "") else real_tmp
+    def count_roots():
+        try:
+            return sum(1 for e in os.scandir(sys_tmp) if e.name.startswith("gctl-run-"))
+        except OSError:
+            return -1
+    before = count_roots()
+    check("★前置★ 現場成立:數得到系統暫存目錄底下的根", before >= 0, str(sys_tmp))
+    r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "-k", "no-such-test-zzz"],
+                       capture_output=True, text=True,
+                       env=dict(os.environ, TMPDIR=str(sys_tmp)))
+    after = count_roots()
+    check("r1-③: -k 打錯字早退時,rc 仍是失敗(選中 0 支=沒驗過)", r.returncode != 0, f"rc={r.returncode}")
+    check("r1-③: 早退沒有留下現場(收尾在 finally 裡)", after <= before, f"before={before} after={after}")
+    check("r1-③: 原始碼裡收尾確實在 finally 區塊",
+          "    finally:" in src and "這一輪的暫存現場留著沒刪" in src, "")
 
 
 def t_install_skills_unix():
@@ -22603,6 +22664,7 @@ TEST_TIMEOUT_SEC = int(_os_timeout.environ.get("LUMOS_TEST_TIMEOUT", "180"))
 # 上限要對「現在最慢那支」有足夠餘裕,否則慢一點的機器(CI)會假紅,
 # 然後下一步就是有人把 LUMOS_TEST_TIMEOUT 設 0 繞過——閘變裝飾。
 SLOWEST = []
+SKIPPED_NAMES = []   # r1 代碼審折入:跳過只記總數的話,「換掉哪一支」看不出來;把名字也留著
 # 天生就慢的測試(輪詢 CI 這種)給自己的上限。
 # ★不要為了遷就最慢那支把全域上限拉高★——那會讓真的卡死也要等到那個上限才被打斷,
 # 等於把偵測能力送掉。實測(2026-08-22 本機):t_ci_wait 132.3s、次慢 25.8s,
@@ -22813,9 +22875,20 @@ def _isolate_environment():
     另一半是暫存殘骸:系統暫存目錄底下累積了 34 萬個 gctl-* 測試殘骸,連 `ls` 都會卡住。
     測試自己用的是 `tempfile.mkdtemp(prefix="gctl-...")`,沒有人收尾。
 
-    ★為什麼修在唯一進入點★:跟上面清 git 環境變數同一個理由——替代方案是「每支會碰
+    ★為什麼修在唯一進入點★:跟 main() 裡清 git 環境變數同一個理由——替代方案是「每支會碰
     家目錄的測試各自隔離」,那是幾十個呼叫點的分支簿記,天生會漏(這個專案已經漏過兩次)。
     關在進入點,對現有與未來新增的測試都自動成立。
+
+    ★為什麼這次抽成函式,而前兩個同型前例是就地展開的★(r1 架構席問的,答案寫在這裡免得
+    以後有人以為是隨手寫的):清 git 環境變數那段是 7 行的 pop 迴圈、檔頭那個版本釘是 3 行,
+    就地展開讀起來就是一段敘事。這一段要建目錄、寫一份 git 身分設定、還要掃系統暫存目錄
+    做修剪,量體差一個數量級,塞進 main() 會把「這輪要跑哪些測試」的主線淹掉;而且它有
+    回傳值(這一輪的根,收尾要用),就地展開會多一個裸露的區域變數。**論證形狀一樣
+    (唯一進入點),只是實作成函式**——不是另立一套隔離手法。
+
+    既有的 per-call 假家目錄 helper(_teardown_run / _codex_run 那種)不受影響也沒變多餘:
+    它們要的是「內容由那支測試自己控制、可以拿來斷言」的假家目錄,跟這裡的全域兜底互補。
+    兩者疊起來時,呼叫端自己帶的 env 覆寫一律贏。
 
     回傳這一輪的根目錄(收尾要用)。
     """
@@ -22839,10 +22912,18 @@ def _isolate_environment():
     # CODEX_HOME 若在開發機上設過,會繞過假家目錄直接打到真的 ~/.codex
     os.environ.pop("CODEX_HOME", None)
     # ★LUMOS_HOME 不是使用者家目錄,是「lumos 來源 repo 在哪」★——一開始我把它也設成假家目錄,
-    #   結果 t_enforcement_vendored_uptodate_active 找不到來源就跳過了(跑得到變跑不到=覆蓋
-    #   悄悄少掉,全套的 skip 數從 0 變 1 才發現)。它的預設值是 ~/harness/lumos-toolchain,
-    #   而家目錄一換成假的那條路就斷了,所以這裡明寫成本 repo 的位置(從執行中的檔案算,不寫死)。
-    os.environ["LUMOS_HOME"] = str(Path(GRAPHCTL).resolve().parent.parent)
+    #   結果有支測試找不到來源就跳過了(跑得到變跑不到=覆蓋悄悄少掉,是比 skip 數字才發現)。
+    #   它的預設值是 ~/harness/lumos-toolchain,家目錄一換成假的那條路就斷了。
+    # ★但不能無條件指向「這個 repo」★(r1 外家席抓到):這支測試檔會被複製進消費專案,
+    #   在那邊 repo 根就是消費專案自己,於是「vendored 的工具是不是最新版」這條檢查會
+    #   **拿自己跟自己比,永遠判最新**——過期的工具在消費端會被說成沒問題,是假綠。
+    #   所以只有確認自己就是來源 repo 時才指向自己;不是的話讓它保持找不到,
+    #   那條路本來就該走跳過通道(誠實的「沒驗到」勝過假的「驗過了」)。
+    repo_root = Path(GRAPHCTL).resolve().parent.parent
+    if (repo_root / "skills" / "lumos-project-notes").is_dir():
+        os.environ["LUMOS_HOME"] = str(repo_root)
+    else:
+        os.environ.pop("LUMOS_HOME", None)
 
     # ③ 修剪舊殘骸:只碰「已標記結束」或「超過一天沒動」的本輪型根目錄。
     #    ★不按數量硬刪★——hook 會平行起 runner,刪掉別人正在用的根就是製造假紅。
@@ -22902,83 +22983,103 @@ def main():
                     help="跑完不要刪這一輪的暫存根目錄(要進去翻現場時用)")
     _args, _ = _p.parse_known_args()
     _run_root = _isolate_environment()
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
-    if _args.keyword:
-        tests = [t for t in tests if _args.keyword in t.__name__]
-        if not tests:
-            # 假綠洞修補:-k 選中 0 案例 ≠ 全綠——「跑了個寂寞」必須紅,
-            # 否則消費 rc 的一方(hook/CI 等機制)會把「沒驗」當「驗過」。
-            print(f"✗ -k '{_args.keyword}' 選中 0 個測試(t_ 名單無此子字串)——視為失敗", file=sys.stderr)
-            return 1
-    print(f"lumos 測試({len(tests)} 案例)")
-    global FAIL, SKIP
-    for t in tests:
-        try:
-            # ★單一處的自動規則,不往每支測試塞一行★:`t_slim_*` 整族驗的是「交付包」
-            # (slim/ 底下的產物 + slim-gen/slim-scan),那是來源 repo 專用。用前綴在
-            # 這裡一次涵蓋,★新增的 t_slim_* 自動繼承★——往 40 個函式各插一行才是
-            # 會漏的分支簿記(本專案 2026-08-01 剛因同型簿記漏一條被代碼審抓到)。
-            # 判定仍是狀態驅動:`slim/` 真的在(來源 repo)就照跑,零行為改變。
-            if t.__name__.startswith("t_slim_"):
-                _need_src("slim")
-            _fail_before, _pass_before = FAIL, PASS
-            _t_start = _time_slow.time()
-            run_with_timeout(t, TIMEOUT_OVERRIDE.get(t.__name__, TEST_TIMEOUT_SEC))
-            SLOWEST.append((_time_slow.time() - _t_start, t.__name__))
-            # ★跑完卻一條斷言都沒有=沒驗過,判紅★(2026-09-06 全 repo 審視 #13)
-            # 跟「-k 選中 0 支判紅」同一個理由:綠燈必須代表「驗過而且過了」,不能代表
-            # 「什麼都沒發生」。原本有十處寫成 check(…, True) 當跳過用,那是把「沒驗」
-            # 記成 PASS;已全部改走 _SrcOnly 跳過通道,這條是防它再長回來的機械守衛。
-            if FAIL == _fail_before and PASS == _pass_before:
+    try:
+        tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
+        if _args.keyword:
+            tests = [t for t in tests if _args.keyword in t.__name__]
+            if not tests:
+                # 假綠洞修補:-k 選中 0 案例 ≠ 全綠——「跑了個寂寞」必須紅,
+                # 否則消費 rc 的一方(hook/CI 等機制)會把「沒驗」當「驗過」。
+                print(f"✗ -k '{_args.keyword}' 選中 0 個測試(t_ 名單無此子字串)——視為失敗", file=sys.stderr)
+                return 1
+        print(f"lumos 測試({len(tests)} 案例)")
+        global FAIL, SKIP
+        for t in tests:
+            try:
+                # ★單一處的自動規則,不往每支測試塞一行★:`t_slim_*` 整族驗的是「交付包」
+                # (slim/ 底下的產物 + slim-gen/slim-scan),那是來源 repo 專用。用前綴在
+                # 這裡一次涵蓋,★新增的 t_slim_* 自動繼承★——往 40 個函式各插一行才是
+                # 會漏的分支簿記(本專案 2026-08-01 剛因同型簿記漏一條被代碼審抓到)。
+                # 判定仍是狀態驅動:`slim/` 真的在(來源 repo)就照跑,零行為改變。
+                if t.__name__.startswith("t_slim_"):
+                    _need_src("slim")
+                _fail_before, _pass_before = FAIL, PASS
+                _t_start = _time_slow.time()
+                run_with_timeout(t, TIMEOUT_OVERRIDE.get(t.__name__, TEST_TIMEOUT_SEC))
+                SLOWEST.append((_time_slow.time() - _t_start, t.__name__))
+                # ★跑完卻一條斷言都沒有=沒驗過,判紅★(2026-09-06 全 repo 審視 #13)
+                # 跟「-k 選中 0 支判紅」同一個理由:綠燈必須代表「驗過而且過了」,不能代表
+                # 「什麼都沒發生」。原本有十處寫成 check(…, True) 當跳過用,那是把「沒驗」
+                # 記成 PASS;已全部改走 _SrcOnly 跳過通道,這條是防它再長回來的機械守衛。
+                if FAIL == _fail_before and PASS == _pass_before:
+                    FAIL += 1
+                    print(f"  ✗ {t.__name__}: 跑完了但一條斷言都沒有(沒驗過≠通過;"
+                          f"真的不該在這台跑就 raise _SrcOnly 走跳過通道)")
+                elif FAIL > _fail_before:
+                    # 殺傷力驗證歸因用(2026-08-22 首跑判「弱證據」):失敗要跟測試名同一行,
+                    # lumos guard kill 的 _kill_attribute 才能把紅燈歸到綁定測試頭上。
+                    print(f"  ✗ FAILED {t.__name__}({FAIL - _fail_before} 條斷言)")
+            except _SrcOnly as e:
+                SKIP += 1
+                SKIPPED_NAMES.append(t.__name__)   # r1:只記總數的話,「換了一支跳過」量不到
+                print(f"  - skip {t.__name__}: {e}")
+            except TestTimeout as e:
+                # ★判紅不判 skip★:沒跑完 = 沒驗過。名字印出來,才知道要去修哪一支。
                 FAIL += 1
-                print(f"  ✗ {t.__name__}: 跑完了但一條斷言都沒有(沒驗過≠通過;"
-                      f"真的不該在這台跑就 raise _SrcOnly 走跳過通道)")
-            elif FAIL > _fail_before:
-                # 殺傷力驗證歸因用(2026-08-22 首跑判「弱證據」):失敗要跟測試名同一行,
-                # lumos guard kill 的 _kill_attribute 才能把紅燈歸到綁定測試頭上。
-                print(f"  ✗ FAILED {t.__name__}({FAIL - _fail_before} 條斷言)")
-        except _SrcOnly as e:
-            SKIP += 1
-            print(f"  - skip {t.__name__}: {e}")
-        except TestTimeout as e:
-            # ★判紅不判 skip★:沒跑完 = 沒驗過。名字印出來,才知道要去修哪一支。
-            FAIL += 1
-            print(f"  ✗ TIMEOUT {t.__name__}: {e}"
-                  f"(調整:LUMOS_TEST_TIMEOUT=<秒>,0=不設限)")
-        except Exception as e:
-            FAIL += 1
-            print(f"  ✗ {t.__name__} EXCEPTION: {e}")
-    if SLOWEST:
-        top = sorted(SLOWEST, reverse=True)[:5]
-        print(f"\n最慢 5 支(超時上限 {TEST_TIMEOUT_SEC}s;餘裕 = 上限 / 最慢):")
-        for sec, name in top:
-            lim = TIMEOUT_OVERRIDE.get(name, TEST_TIMEOUT_SEC)
-            ratio = (lim / sec) if sec > 0 else float("inf")
-            flag = "  ⚠ 餘裕不足 3 倍" if ratio < 3 else ""
-            lim_note = f"/上限 {lim}s" if name in TIMEOUT_OVERRIDE else ""
-            print(f"  {sec:6.1f}s  {name}{lim_note}  (餘裕 {ratio:.0f}x){flag}")
-    tail = f", {SKIP} skipped(來源 repo 專用)" if SKIP else ""
-    print(f"\n{'─'*40}\n{PASS} passed, {FAIL} failed{tail}")
-    # ★跳過的支數要有基準線★(2026-09-06 全 repo 審視 #11 現場學到的):
-    # 我把一個環境變數設錯,害一支測試找不到來源就靜默跳過——全套照樣「零紅」,
-    # 是我自己去比 skip 從 0 變 1 才發現。**跑得到變跑不到=覆蓋悄悄少掉,而它不會紅。**
-    # 所以在這裡對基準線比一次:超過就出聲(只在跑全套時比,-k 子集本來就會跳很多)。
-    if not _args.keyword and SKIP > _EXPECTED_SKIP_MAX:
-        print(f"  ⚠ 這次跳過 {SKIP} 支,比預期上限 {_EXPECTED_SKIP_MAX} 支多。"
-              f"跳過不會紅,但它代表那些測試這輪沒驗到——先確認是環境本來就跑不到(例如非 Windows),"
-              f"還是有人不小心把現場弄壞了。")
-        print(f"  確認過而且合理,就把 _EXPECTED_SKIP_MAX 調成 {SKIP} 並在旁邊寫一句為什麼。")
-    # 收尾:全綠而且沒說要留,就把這一輪的暫存根整個丟掉;有紅或 --keep-tmp 就留著給人翻現場。
-    import shutil as _sh, os as _os2
-    if FAIL or _args.keep_tmp:
-        print(f"  這一輪的暫存現場留著沒刪(有紅或 --keep-tmp):{_run_root}")
-    else:
-        try:
-            (_run_root / ".finished").write_text("", encoding="utf-8")
-            _sh.rmtree(_run_root, ignore_errors=True)
-        except OSError:
-            pass
-    return 1 if FAIL else 0
+                print(f"  ✗ TIMEOUT {t.__name__}: {e}"
+                      f"(調整:LUMOS_TEST_TIMEOUT=<秒>,0=不設限)")
+            except Exception as e:
+                FAIL += 1
+                print(f"  ✗ {t.__name__} EXCEPTION: {e}")
+        if SLOWEST:
+            top = sorted(SLOWEST, reverse=True)[:5]
+            print(f"\n最慢 5 支(超時上限 {TEST_TIMEOUT_SEC}s;餘裕 = 上限 / 最慢):")
+            for sec, name in top:
+                lim = TIMEOUT_OVERRIDE.get(name, TEST_TIMEOUT_SEC)
+                ratio = (lim / sec) if sec > 0 else float("inf")
+                flag = "  ⚠ 餘裕不足 3 倍" if ratio < 3 else ""
+                lim_note = f"/上限 {lim}s" if name in TIMEOUT_OVERRIDE else ""
+                print(f"  {sec:6.1f}s  {name}{lim_note}  (餘裕 {ratio:.0f}x){flag}")
+        tail = f", {SKIP} skipped(來源 repo 專用)" if SKIP else ""
+        print(f"\n{'─'*40}\n{PASS} passed, {FAIL} failed{tail}")
+        # ★跳過的支數要有基準線★(2026-09-06 全 repo 審視 #11 現場學到的):
+        # 我把一個環境變數設錯,害一支測試找不到來源就靜默跳過——全套照樣「零紅」,
+        # 是我自己去比 skip 從 0 變 1 才發現。**跑得到變跑不到=覆蓋悄悄少掉,而它不會紅。**
+        # 所以在這裡對基準線比一次:超過就出聲(只在跑全套時比,-k 子集本來就會跳很多)。
+        # ★超過基準線要判紅,不是印個提醒就算★(r1 外家席抓到):只印不紅的話,
+        # 覆蓋退化照樣以成功狀態碼離開,CI 與推送閘收到的還是 rc0——那就等於沒有這道基準線。
+        # 只在「基準線有意義」的環境判:來源 repo(消費端本來就會跳過一批來源專用的)
+        # 且非 Windows(Windows 分支的跳過是合法的)。其餘環境只印一行觀測,不判紅。
+        if not _args.keyword and SKIP > EXPECTED_SKIP_MAX:
+            _baseline_applies = (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes").is_dir() \
+                and sys.platform != "win32"
+            print(f"  這次跳過 {SKIP} 支,比預期上限 {EXPECTED_SKIP_MAX} 支多。"
+                  f"跳過不會出現在紅字裡,但它代表那些測試這輪沒驗到。")
+            # r1 折入:只印總數的話,「本來跳 A、現在改跳 B」這種換人的漂移量不到
+            # ——兩邊相減淨額一樣。所以把名字列出來,人一眼看得出換的是誰。
+            print(f"  跳過的是:{', '.join(SKIPPED_NAMES)}")
+            if _baseline_applies:
+                FAIL += 1
+                print(f"  ✗ 判紅:這台是來源 repo 又不是 Windows,所有跳過通道的條件本來都不成立"
+                      f"——多出來的跳過幾乎一定是現場被弄壞了(例如某個環境變數設錯,害測試找不到它要的東西)。")
+                print(f"  確認過而且合理的話,把 EXPECTED_SKIP_MAX 調成 {SKIP} 並在旁邊寫一句為什麼,"
+                      f"或設 LUMOSEXPECTED_SKIP_MAX=<數字> 暫時放行。")
+            else:
+                print(f"  (這台不是來源 repo 或是 Windows,跳過本來就會多,所以只記不判紅)")
+        return 1 if FAIL else 0
+    finally:
+        # ★收尾一定要跑到★(r1 外家席抓到):原本寫在 return 之前,所以 `-k` 打錯字的早退、
+        # Ctrl-C、以及測試迴圈外的例外通通會繞過它,把整個現場留在系統暫存目錄裡等一天後
+        # 才被下一輪修剪掉。改成 finally:不管從哪條路離開都收尾。
+        import shutil as _sh
+        if FAIL or _args.keep_tmp:
+            print(f"  這一輪的暫存現場留著沒刪(有紅或 --keep-tmp):{_run_root}")
+        else:
+            try:
+                (_run_root / ".finished").write_text("", encoding="utf-8")
+                _sh.rmtree(_run_root, ignore_errors=True)
+            except OSError:
+                pass
 
 
 
