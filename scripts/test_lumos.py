@@ -26137,6 +26137,56 @@ def t_autoloop_pause_only_stops_dispatch():
     check("暫停開關: ★wrapper 不得再包一層判斷★(那正是 09-05 的錯法)", not wrap_gate, str(wrap_gate)[:120])
     check("暫停開關: wrapper 無條件呼叫 autonomous-loop.sh",
           any('"$DIR/autonomous-loop.sh"' in l and not l.lstrip().startswith("#") for l in wrap.splitlines()), "")
+    # ★只釘位置會假綠★(r1 外家席):在第一個觀測之前插一行 exit 0,或把 gate 改成永遠不成立,
+    # 位置斷言照樣過。這裡再加兩條:①開關之前不得有任何無條件的 exit;②gate 用的是真的環境
+    # 變數判斷而不是寫死的常數。
+    before = lines[:gate] if gate > 0 else []
+    stray_exit = [(i + 1, l) for i, l in enumerate(before)
+                  if l.strip() in ("exit 0", "exit") and not l.lstrip().startswith("#")]
+    check("暫停開關: 開關之前沒有無條件的 exit(否則觀測根本走不到)", not stray_exit, str(stray_exit[:3]))
+    gate_line = lines[gate] if gate > 0 else ""
+    check("暫停開關: 判斷讀的是環境變數 LUMOS_AUTOLOOP_OFF(不是寫死的值)",
+          "${LUMOS_AUTOLOOP_OFF" in gate_line, gate_line.strip()[:100])
+    # ③ 首次執行不得立刻燒配額抽探針(r1 外家席:wrapper 改無條件之後,沒有歷史的機器會當天就抽 8 題)
+    check("暫停開關: 探針對「沒有任何歷史」的機器先不抽(免得裝好當天燒配額)",
+          "首次執行" in loop and "-s \"$hist\"" in loop, "")
+    # ★④ gate 的身體裡必須真的離開★(r1 通才席實測:把 exit 0 拿掉、只留 if 和 log,
+    #   暫停就變成什麼都不做、派工每天照跑,而上面所有位置斷言仍然全綠)
+    if gate > 0:
+        end = next((k for k in range(gate + 1, len(lines)) if lines[k].strip() == "fi"), -1)
+        body = lines[gate + 1:end] if end > gate else []
+        check("暫停開關: ★gate 的身體裡真的有離開動作★(不然暫停等於沒暫停)",
+              any(l.strip() in ("exit 0", "exit", "return 0") for l in body), str([l.strip()[:40] for l in body]))
+    # ★⑤ 行為面:真的跑一次,派工不得啟動★——用假的 gap 選擇器當金絲雀:只要派工段有跑到,
+    #   它就會被呼叫並留下痕跡。避免真跑 claude(改 PATH 讓 claude 不可見,探針自然跳過)。
+    import os as _os, subprocess as _sp, shutil as _sh, tempfile as _tf
+    sand = Path(_tf.mkdtemp(prefix="gctl-autoloop-"))
+    _sh.copytree(root / "governance", sand / "governance", dirs_exist_ok=True,
+                 ignore=_sh.ignore_patterns("__pycache__", "logs", "review-reports", "replay", "eval", "reports"))
+    (sand / "governance" / "logs").mkdir(parents=True, exist_ok=True)
+    # 沒有日報的話腳本會在到達 gate 之前就結束,金絲雀會「因為根本沒跑到」而假過——
+    # 補一份最小日報,讓它真的走到派工那一步(r1 通才席指出的同一種假綠,自查時撞到)
+    (sand / "governance" / "reports").mkdir(parents=True, exist_ok=True)
+    (sand / "governance" / "reports" / "governance-2026-01-01.json").write_text(
+        '{"items": []}', encoding="utf-8")
+    canary = sand / "governance" / ".dispatch-canary"
+    sh = sand / "governance" / "autonomous-loop.sh"
+    txt = sh.read_text(encoding="utf-8").replace(
+        "SKIP_CAP=3; skip_n=0", f'touch "{canary}"\nSKIP_CAP=3; skip_n=0', 1)
+    sh.write_text(txt, encoding="utf-8")
+    env = dict(_os.environ, HOME=str(sand), PATH="/usr/bin:/bin", LUMOS_AUTOLOOP_OFF="1")
+    r = _sp.run(["bash", str(sh), "--dry-run", "6"], cwd=str(root), env=env,
+                capture_output=True, text=True, timeout=300)
+    out = r.stdout + r.stderr
+    # ★先確認它真的走到那一步★(不然金絲雀是「因為根本沒跑到」而過的,零鑑別力)
+    check("暫停開關/行為: 腳本真的走到暫停判斷(不是提早結束)", "暫停中" in out, out[-260:])
+    check("暫停開關/行為: ★OFF=1 真跑一次,派工段沒有被執行到★", not canary.exists(), out[-200:])
+    # 反面:OFF=0 時派工段必須跑得到(證明金絲雀本身有鑑別力)
+    env0 = dict(env, LUMOS_AUTOLOOP_OFF="0")
+    _sp.run(["bash", str(sh), "--dry-run", "6"], cwd=str(root), env=env0,
+            capture_output=True, text=True, timeout=300)
+    check("暫停開關/行為: ★OFF=0 時派工段跑得到★(金絲雀有鑑別力,不是恆不存在)",
+          canary.exists(), "canary 未出現=這條斷言本身沒有鑑別力")
 
 
 def t_update_syncs_global_from_fresh_not_stale():
@@ -26149,7 +26199,12 @@ def t_update_syncs_global_from_fresh_not_stale():
     原位)與 _sync_global_from_project(搬到自癒之後)。
 
     這裡用反事實夾具驗:專案的 vendored hook 是舊的、來源是新的,update 完之後全域那份必須
-    等於★來源★。"""
+    等於★來源★。
+
+    ★為什麼開子行程,不用同檔既有的 in-process 路線★(r1 架構對齊席問的):這條要驗的是
+    「全域同步發生在自癒之後」,而全域同步會寫 ~/.claude —— 必須靠 env 假造 HOME 隔離,
+    in-process 直呼改不了子行程看到的 HOME。既有的 _mk_vendor_src/_run_vendor 是為
+    「_vendor_toolchain 自己的行為」寫的,不涵蓋全域那一半。"""
     import os, subprocess as _sp, shutil
     from pathlib import Path as _P
     repo = _P(GRAPHCTL).resolve().parent.parent
@@ -26189,7 +26244,11 @@ def t_update_unions_bookkeeping_instead_of_blocking():
 
     ★第一版用 stash/pop,實測會在帳本裡留下 <<<<<<< 衝突標記——比原本擋住更糟★。
     改成聯集合併:本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
-    這裡驗三件:pull 有成功、兩邊的行都在、檔案裡沒有衝突標記。"""
+    這裡驗三件:pull 有成功、兩邊的行都在、檔案裡沒有衝突標記。
+
+    ★為什麼開子行程★:要真的有 origin/clone/第三方推送三個 repo 才造得出「來源落後且本機
+    髒」這個情境,既有的 _mk_vendor_src 撐不到(它造的是無 remote 的假來源);而且這條路會
+    寫 ~/.claude,同樣要靠 env 假造 HOME 隔離。"""
     import os, subprocess as _sp, shutil
     from pathlib import Path as _P
     repo = _P(GRAPHCTL).resolve().parent.parent
@@ -26224,11 +26283,26 @@ def t_update_unions_bookkeeping_instead_of_blocking():
     r = _sp.run([sys.executable, "scripts/lumos", "update", "--source", str(src)],
                 cwd=str(proj), env=env, capture_output=True, text=True)
     led = (src / "docs" / ".usage-log.jsonl").read_text(encoding="utf-8")
-    check("update/來源髒帳: 沒有被擋下(rc 不是中止)", "擋下:工具鏈來源拉不到最新版" not in r.stderr, r.stderr[-200:])
+    check("update/來源髒帳: 整條 update 成功收尾(看真的 rc,不是只比字串)",
+          r.returncode == 0 and "擋下:工具鏈來源拉不到最新版" not in r.stderr,
+          f"rc={r.returncode} {r.stderr[-200:]}")
     check("update/來源髒帳: 本機那行沒丟", '{"ts":"LOCAL"}' in led, led[:200])
     check("update/來源髒帳: 遠端那行也拉進來了", '{"ts":"2"}' in led, led[:200])
     check("update/來源髒帳: ★帳本裡沒有衝突標記★(stash/pop 版會留)", "<<<<<<<" not in led and ">>>>>>>" not in led, led[:200])
     check("update/來源髒帳: 來源的 hook 拿到新版", "v2" in (src / hook_rel).read_text(encoding="utf-8"), "")
+    check("update/來源髒帳: 全域 hook 也同步到新版(不是只有專案端)",
+          "v2" in (home / ".claude" / "hooks" / "check-graph-sync.py").read_text(encoding="utf-8")
+          if (home / ".claude" / "hooks" / "check-graph-sync.py").exists() else False, "")
+    # ★重複行不得被吃掉★(r1 外家席):JSONL 是事件序列不是集合。再跑一次,這次本機加兩筆
+    # 內容跟遠端已有的完全相同的行——正確行為是補回 2 份(遠端 1 + 本機 2 = 3 份)。
+    with open(other / "docs" / ".usage-log.jsonl", "a", encoding="utf-8") as fh: fh.write('{"ts":"DUP"}\n')
+    _sp.run(["git"] + ident + ["commit", "-qam", "dup"], cwd=str(other)); _sp.run(["git", "push", "-q"], cwd=str(other))
+    with open(src / "docs" / ".usage-log.jsonl", "a", encoding="utf-8") as fh: fh.write('{"ts":"DUP"}\n{"ts":"DUP"}\n')
+    r2 = _sp.run([sys.executable, "scripts/lumos", "update", "--source", str(src)],
+                 cwd=str(proj), env=env, capture_output=True, text=True)
+    led2 = (src / "docs" / ".usage-log.jsonl").read_text(encoding="utf-8")
+    check("update/來源髒帳: ★合法的重複帳列沒被去重吃掉★(遠端 1 + 本機 2 = 3 份)",
+          led2.count('{"ts":"DUP"}') == 3, f"實際 {led2.count('{\"ts\":\"DUP\"}')} 份;rc={r2.returncode}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,17 @@
+你是外部審查員,看一份「外部投稿的 diff」,找出作者沒看到的 bug。只做 finder。
+輸出:第一行 severity: <clean|minor|major|blocker>;每條:
+- [<severity>] <一句話>
+  file: <路徑>:<行>
+  quote: <patch 裡逐字的一行>
+  why: <為什麼是 bug、什麼情況會出錯>
+被審材料:governance/review-reports/code-audit-batch3/r1-snapshot.patch。repo 在 /Users/enzo/harness/lumos-toolchain,可讀原檔佐證,只讀不改。不要跑 python3 scripts/test_lumos.py 不帶 -k(8 分鐘)。
+這批兩件:
+① 暫停自主派工的開關從 daily-governance.sh 搬進 governance/autonomous-loop.sh,放在選 gap 的迴圈之前(exit 0);wrapper 改成無條件呼叫。加測試 t_autoloop_pause_only_stops_dispatch(釘相對位置)。
+② lumos update 兩修:(a) _install_hooks_py 拆成 _set_hooks_path 與 _sync_global_from_project,後者從自癒迴圈之前搬到之後;(b) _pull_source_or_abort 在「來源只髒了 append-only 簿記 JSONL」時改用聯集合併(讀進記憶體→git checkout→pull→補回本機獨有的行)而不是擋下;_BOOKKEEPING_FILES 補 kill-log 與 signoff-log。加兩支反事實測試。
+重點鏡頭(逐條必答):
+1. ★autonomous-loop.sh 的 exit 0★:那支腳本開頭有 LOCKDIR 鎖與 trap EXIT finalize。從新位置 exit 0,鎖會不會被釋放?finalize 會不會誤判成「跑過但沒處置 gap」而寫錯帳或發通知?去讀 finalize 全文確認。
+2. ★wrapper 無條件呼叫的後果★:以前暫停時完全不執行,現在每天都會跑那支腳本。它會不會做出昂貴或有副作用的事(發 LINE、跑 claude -p 探針、寫遠端)?那些段各自的頻率閘是什麼?第一次跑的機器(沒有 stamp 檔)會發生什麼?
+3. ★聯集合併的正確性★:git status --porcelain 的解析用 ln[3:] 取路徑——重新命名(R 狀態,格式是 "old -> new")、未追蹤(??)、有空白或引號的檔名,會被怎麼處理?會不會把不該併的檔判成可併?
+4. ★聯集合併的資料安全★:checkout 之後 pull 失敗會怎樣(本機那幾行還救得回來嗎)?寫回時用 "\n".join(now + extra) + "\n",原檔沒有結尾換行或是空檔時會怎樣?重複行(合法的重複帳列)會不會被 set 去重而丟掉?
+5. ★全域同步搬位置★:_sync_global_from_project 現在在 _reinject_all 之後。cmd_init 的另一條路(第 11671 行附近)還在呼叫舊的 _install_hooks_py——那條路的順序對嗎?兩條路現在行為一致嗎?
+6. 新增的兩支測試自己會不會假綠?各構造一個「破壞了但測試仍綠」的情境試試看。

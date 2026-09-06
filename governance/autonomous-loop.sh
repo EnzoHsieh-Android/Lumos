@@ -200,6 +200,14 @@ run_probe(){
     log "情境探針:本週($week)已抽過,跳過"; return 0
   fi
   command -v claude >/dev/null 2>&1 || { log "情境探針:沒有 claude CLI,跳過"; return 0; }
+  # ★全新機器第一天不抽★(2026-09-06 代碼審 r1 外家席):這支會跑 8 題 `claude -p`,是整支腳本
+  # 唯一真的燒模型配額的東西。以前它被「暫停派工」順帶關掉,現在 wrapper 無條件呼叫,沒有任何
+  # 歷史的機器裝好當天就會立刻抽 8 題——那不是使用者要的。第一次遇到就先蓋本週印記、下週才開抽。
+  if [ ! -s "$hist" ]; then
+    printf '{"seed": "%s", "note": "首次執行:先不抽,下週開始"}\n' "$week" >> "$hist"
+    log "情境探針:這台機器沒有任何歷史(第一次跑)——先不抽,免得裝好當天就燒配額;下週開始"
+    return 0
+  fi
   log "情境探針:本週($week)抽 8 題開跑"
   (cd "$REPO" && python3 scripts/scenario_probe.py \
       --scenarios governance/scenarios/commands.jsonl,governance/scenarios/paraphrase.jsonl,governance/scenarios/discipline.jsonl,governance/scenarios/absence.jsonl \

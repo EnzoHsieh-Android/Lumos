@@ -1,0 +1,13 @@
+severity: minor
+
+- [minor] 簿記白名單補兩本,沒有照既有慣例補一行帶日期的理由註解。
+  位置:`scripts/lumos:13056`
+  引句：「docs/.kill-log.jsonl", "docs/.signoff-log.jsonl",」
+  why: 對照同一常數正下方那段「canary-log/bypass-log 2026-08-27 補(連去哪篇筆記)」——上次補兩本帳時,慣例是緊接著留「日期+理由+連結」的註解。這次同樣補兩本卻沒跟,以後有人要查「這兩本什麼時候、為什麼被排除」查不到。內容本身沒錯,kill-log 與 signoff-log 確實都是工具自己寫的 append-only 帳。
+
+- [minor] 兩支新測試改用「整支 CLI 開子行程」驗 cmd_update,同一函式家族的既有測試全部是 in-process 載模組直呼,這次是家族裡第一次換做法,且沒寫明為什麼。
+  位置:`scripts/test_lumos.py:26171`
+  引句：「r = _sp.run([sys.executable, "scripts/lumos", "update", "--source", str(src), "--no-pull"],」
+  why: 對照既有的 t_update_resyncs_claude 與 _run_vendor/_mk_vendor_src helper,那條路徑原本只有一種驗法。功能上這兩支測試是對的、也真的抓到兩個 bug,只是做法分岔沒留說明,下一個要在這個家族加測試的人不知道該學哪一支。
+
+其餘 clean:①新 exit 0 的早退寫法跟既有早退點一致(log 後 exit 0,trap 照樣清鎖)。②開關的預設極性沿用前一批的裁定,只是位置搬了,訊息印法跟該檔既有 log 慣例一致。③函式拆分的命名與 docstring 風格跟該檔既有私有 helper 一致,三個呼叫點都接對、沒有殘留舊名呼叫。⑤聯集合併沒有繞過既有的共用工具——repo 對重複帳列的唯一既有慣例是 gov 讀取時去重,解的是顯示問題不是這個情境;也沒有 .gitattributes 的 union 合併驅動可沿用;用 set 成員判斷是該檔用過幾十次的既有寫法,不算第二種風格。

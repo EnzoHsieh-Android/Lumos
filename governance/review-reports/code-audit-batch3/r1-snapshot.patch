@@ -1,0 +1,466 @@
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
+index 9637486..c1ff57e 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
+@@ -504,8 +504,30 @@ Enzo 確認著作權人是本人,選 **MIT**。查證、五個候選各派反方
+   - **根因不是粗心,是我沒問「這兩份清單是不是同一件事」**。它們語意根本不同:一份是「哪裡不算活著的程式」,一份是「哪些檔改了不必配圖譜」。既有的漂移守衛把它們綁在一起,反而誘導我照抄。
+   - **修法**:拆成兩個常數,散文那份明令不得複製到硬閘,並在測試裡釘死「硬閘那一行不得含 governance」。
+ - **散文清單只認 repo 根**(外家席):原本任何深度同名目錄都排,消費專案的 `src/docs/parser.py`、`packages/governance/rules.py` 很可能是真程式。六種路徑逐一驗過。
+ - **兩支新測試都被打臉**:①只比對常數不驗行為——審查席把真正的排除判斷寫死成關閉,測試照樣全綠;改成餵真 diff 給解析器。②把所有警告行都當軟提醒——repo 一有普通壞連結就會在產品沒壞的情況下翻紅;改成不重複計硬問題,並實際造一個硬問題驗過。
+ - **測試污染來源 repo**(外家席):新測試會對來源 repo 跑帶記帳的健康檢查,每跑一次就在工作樹留一筆、帳本持續膨脹。改成原始碼層確認欄位有接上,並**誠實標明這條的證據層級**——值的正確性由畫面斷言涵蓋。
+ - **收尾行排版分岔**(架構席):用了全檔沒出現過的符號,又把指令接在句尾。改回既有慣例:提醒行用既有符號、指令獨立一行。
+ - **順手補上一個一直沒人守的洞**(架構席):那條漂移守衛只比對三份同源清單裡的兩份,第三份漏同步不會有任何測試翻紅——而那支檔自己的檔頭就寫著「兩邊不一致會產生幽靈 bypass」。現在三份都比。
+ 
++## 第三批:#4 暫停誤傷、#5 更新通道兩個真 bug(2026-09-06)
++
++### #4 暫停派工把五段週期觀測一起關掉了
++
++- 開關寫在外層 wrapper、包住整支迴圈腳本,而那支腳本前半有五段便宜的週期觀測(檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、backlog 每日衰減)。三處筆記寫著「便宜的日常段照跑」,落地當下那句就是假的。
++- **監看的東西和被監看的東西同命**——回訪到期的升級鏈因此沒有出口,那正是同一次審視裡「五件逾期沒人管」的上游原因。
++- **裁定 (b) 不是 (a)**:合成席給了兩個選項,一是抽出獨立腳本、二是把開關搬進迴圈腳本。我選後者:不用搬函式(風險低),而且開關剛好只包住真正要停的那一段,符合世界解「toggle 只包最小單元」。
++- 實跑驗證:六段觀測全部跑到、backlog 今天實際衰減了一天、派工段照樣停。守衛測試釘的是**相對位置**(所有觀測必須排在開關之前、wrapper 不得再包一層)——用位置而不是真跑,因為真跑會發通知、抽探針、燒配額。
++
++### #5 更新會把全域 hook 換成舊版
++
++- 全域同步跟「設定 hook 路徑」綁在同一支函式,而它排在檔案自癒迴圈**之前**——所以更新會拿更新前的舊副本去覆蓋整台機器的 hook。實測舊版是六月的,而且舊版的設定合併器還會把已撤除的 hook 註冊加回去。
++- 修法:拆成兩支,設路徑留在原位、全域同步搬到自癒之後。反事實夾具實測:專案的是舊的、來源是新的,更新後全域那份等於來源。
++
++### #5 來源被自己弄髒導致更新全被擋
++
++- 唯讀的查詢指令就會附加一行到版控中的用量帳。**只要有人在來源目錄查過一次圖譜,這台機器所有專案的更新都被擋住**,而逃生門寫在錯誤訊息最後一行。
++- **裁定不採用「把帳本移出版控」**——那些帳本本來就該進版控,是治理紀錄,`lumos gov` 讀歷史、回放凍結都引用它們。
++- **第一版用暫存還原,實測會在帳本裡留下衝突標記**——兩邊都往同一個檔尾附加,還原必衝突,而帳本一有標記之後每次讀都炸。**那比原本擋住更糟。**
++- **定案:聯集合併**。這幾本是 append-only 的 JSONL,正確解是把兩邊的行取聯集:本機那份讀進記憶體 → 還原到已提交版 → 拉 → 把本機獨有的行補回去。非 JSONL 的簿記檔(設定基準線是一份 JSON 物件)不能這樣併,照原路擋下並說明。
++- **順帶抓到兩件**:①簿記白名單漏了兩本工具自己寫的帳(kill/signoff),補上;②暫存會建 commit 物件所以需要 git 身分,機器沒設全域身分時會靜默失敗——這條在改成聯集合併後不再相關,但當時是真的踩到。
++
+diff --git a/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md b/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md
+index 1a6a1f0..4c37a70 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/autonomous-iteration-loop.md
+@@ -27,16 +27,17 @@ summary: |-
+   KEY:dry-run≠模擬——orchestrator 必須真執行所有工具(canary record/cross_audit),收尾前自查 scratch spec+canary-log 必須存在,否則本輪無效重做(06-23 真機抓到「全程腦內模擬」幻覺後硬化)
+   KEY:claude -p 走 $0 OAuth token(CLAUDE_CODE_OAUTH_TOKEN,非 API key);避開 OAuth 被禁 model
+   KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross_verdict=endorsed 後,wrapper(autonomous-loop.sh L130-190)仍①驗 spec_path 存在②用自算 difficulty.assess_spec() 的 tier 重跑 loop status --disposal 機械重驗(★2026-08-27 遷,原 --gate★)③tier=high 要求 cross_verdict 必須乾淨 endorsed——任一不過→requeue 不放行+LINE;機制本體見 [[Systems/risk-tiered-review]]
+   KEY:週期任務第四支 run_replay(2026-08-26 改制回測 S4):每週補漏凍結+新凍必跑+存量輪替抽 5(游標檔)+預算 300s+便宜(單包×存量≤60s,首測 0.24s/包)自動升全跑;紅(邏輯漂移/帳被動/凍結檔被動)與 golden 過期分開喊,build_message('regime-replay') 帶重查指令(★訊息在 python 端組單行——與 run_exam 家族 bash 組裝不同,刻意新慣例:通知文字進得了單元測試網;後續新週期任務照此;cb3 arch-f1★);模組炸掉不蓋週戳(明日重試);fail-open
+   KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.00269,2026-07-24 裁定:語意合約唯一真獨立寫入閘=真跑測試或人,LLM judge=換皮提案者)②PoE 型防竄改帳+逐筆授權+可重播(arXiv 2607.05397,2026-07-25 裁定:價值不靠敵人成立——無人 loop 自己的遙測可不可信;現成便宜前例 2.7ms;07-26 再添 PROJECTMEM arXiv 2606.12329:本機零依賴 append-only 指紋鏈+寫入前驗內容實證可行,「要裝東西太重」藉口拿掉)③日報吸收管線升格為不可信輸入面(調研員每天真讀外部網頁,今天靠人眼把關,無人化後=夾帶指令/假結論的真通道)。框架修正(使用者 2026-07-25):「內部系統無敵意下毒」對——敵意攻擊框架(IssueTrojanBench 66.5%)不適用單人私有 repo;但無人化後「幻覺 agent 寫錯圖譜+改自己成績單」效果同下毒,主角不需是敵人。同日拒:審計加對抗步(design-loop d4 前置加重一律拒,可審≠審得出=07-23 已記天花板換新引用)/spec 夾帶掃描(spec 作者=自己人,威脅不成立)
+   KEY:紀律抗壓縮(Governance Decay arXiv 2606.22528,2026-07-26 對帳)=長跑對話的摘要壓縮會悄悄刪安全規矩(違規率 0→65-95%)——lumos 架構已結構性counter:規矩不住對話記憶(CLAUDE.md 每輪重注入/圖譜在硬碟/impact hook 每次動手前重推合約/orchestrator 每日 fresh spawn),「每輪從硬碟重讀紀律」該篇藥方=本設計既有形狀。殘餘面(誠實):對話中途的口頭約定(未落圖譜者)確實隨壓縮衰減——正是「退場必寫」存在的理由,重要裁定必須離開對話住進硬碟
+   KEY:★2026-09-05 週邊接線★([[Projects/第二輪審視六修_計劃]] d4/d5):回放週跑日誌原本被 cut -c1-160 切掉 red/stale 欄位(翻案看不見),改印「跑了/翻案/過期/錯誤」獨立一行+紅燈行+原始全文;daily-governance 加 testmap 每日重建(之前落後 614 個 commit)
+   KEY:★2026-09-05 wrapper 慣例★:daily-governance.sh 是 repo 唯一「活著等三小時」的外層腳本,主體包 `main()`、結尾同一行 `main "$@"; exit`——bash 邊讀邊跑,跑到一半改檔會從舊 byte 位置續讀(當天實發生 syntax error 後段全沒跑;沒 exit 更會整支重跑一遍)。守衛 [test:t_daily_governance_wrapper_is_function_wrapped](前奏白名單/五步名冊/結尾 exit/bash -n);之後再有長跑 wrapper 沿用這個寫法,不要各自發明(代碼審 r1 架構對齊席)。實驗 [[Verification/2026-09-05_wrapper邊跑邊改實驗]]
++  KEY:★2026-09-06 訂正暫停開關的位置★:09-05 那版把 LUMOS_AUTOLOOP_OFF 寫在 daily-governance.sh 裡包住整支 autonomous-loop.sh,結果檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、backlog 每日衰減這五段一起停了——而三處筆記寫著「便宜的日常段照跑」,落地當下那句就是假的。★監看的東西和被監看的東西同命★,回訪到期的升級鏈因此沒有出口,那正是同期「五件逾期沒人管」的上游原因。修法照 feature toggle 只包最小單元:開關搬進 autonomous-loop.sh、放在選 gap 之前,wrapper 無條件呼叫 [test:t_autoloop_pause_only_stops_dispatch]
+   DEP:governance/daily-governance.sh(真入口:launchd com.enzo.lumos.daily-governance 09:30 單次喚醒,腳本內串接呼叫——原「兩支獨立 cron 09:30/10:10」因 Mac 閉蓋睡眠中途醒不來已棄,見該檔頭註)｜governance/autonomous-loop.sh(被 daily-governance.sh:26 以 --dry-run 6 呼叫)｜autonomous_loop/{gap_select,backlog,cross_audit,confidence_report,line_notify,orchestrator_result,run_ledger}.py + orchestrator-prompt.md｜scripts/lumos canary record / loop status｜gh CLI｜LINE curl broadcast
+   TEST:scripts/test_autonomous_loop.py 全綠(2026-08-30 機械數=106;08-21 時為 53;★原記 27(2026-08-21 程式碼實證)★);dry-run 端到端真機跑通 06-20→06-26(入口現=daily-governance 09:30;測試數 2026-08-30 為 106 條)
+   VERIFY:[[Verification/2026-06-20_autonomous-iteration-loop]]
+ decisions:
+   - content: 定調為「自動備料 + 自審 + 停在放行閘等人」,而非「無人迭代」;放行(merge PR)永遠人手動,自動只到「備好待放行 spec」,絕不自動實作 / 自動 merge
+     id: d1
+     context: user 願景是「永遠在迭代的 lumos」;但全自動判收斂仍是沒閉合的迴歸(judge/cross-family 也是 AI、也會錯),且自動 brainstorm 沒人回澄清、AI 自選 gap 有自我強化偏誤
+     why_chosen: 放大放行帶寬不等於消滅放行;末端人 review PR 是全鏈唯一外部錨點、最後真兜底,對齊「AI 全工人只驗證撐不起、人只在最高槓桿放行點」
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 30e7fea..834fa1e 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,13 +1,13 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "dc3fb65da08fd6dfae183eedc81b1c6b791e6663a737a84b0d788df29180fce8",
++    "scripts/test_lumos.py": "c2dfe115198b18ed8482017b91cfb76c6b696ffd1eac783e8e53ad01720a74db",
+     "scripts/test_autonomous_loop.py": "0de0b7461115dec466cb79a90e88efde173e258b7405f2e9eb5e31bae4da2e2c",
+     "scripts/hooks/pre-commit": "944b21c8fe7e2d82145a7761935bb1d38acc00b445f3a99e98575957531ba9c5",
+     "scripts/hooks/pre-push": "8342e3d938e93f7c17626ca6445ea6e87864afcd313a0952e3d0294fa1a756e2",
+     "scripts/hooks/post-commit": "b9bc3073dad22a8cde82466bdba77faed2bfe82bdd88927a2f44ccbbeb408f36",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "74f01942756b84809f738c44bab963137938963f764b701123f7181ca9d26a99"
+   },
+-  "approved_at": "2026-09-06T12:58:17+08:00",
+-  "note": "batch2 r1 折入:清單拆分、測試改驗行為"
++  "approved_at": "2026-09-06T13:39:16+08:00",
++  "note": "第三批 #4#5:暫停開關搬位、更新通道兩修"
+ }
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index 962d2a7..858f5a0 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -278,16 +278,29 @@ run_replay
+ DECAY_OUT="$(cd "$REPO" && python3 -c "
+ import sys, json; sys.path.insert(0,'governance')
+ from autonomous_loop import backlog
+ r=backlog.daily_decay('$SCRIPT_DIR/backlog.jsonl','$SCRIPT_DIR/backlog-archive.jsonl',
+                       '$SCRIPT_DIR/autonomous_loop/decay-state.json','$TODAY')
+ print(json.dumps(r))" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '{\"status\":\"error\"}')"
+ log "backlog 衰減:$DECAY_OUT(ok=衰減完成/noop=今天已衰過/archive-fail=歸檔失敗 live 未動明天重試)"
+ 
++# ★派工段的暫停開關放在這裡,不在 wrapper★(2026-09-06 全 repo 審視 #4)
++# 為什麼:2026-09-05 決定「暫停派工」時,開關寫在 daily-governance.sh 裡包住整支腳本,結果
++# 上面那五段便宜的週期觀測(檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、backlog
++# 每日衰減)一起停了——而三處筆記白紙黑字寫著「便宜的日常段照跑」,落地當下那句就是假的。
++# ★監看的東西和被監看的東西同命★:回訪到期的升級鏈因此沒有出口,那正是同一次審視裡「五件
++# 逾期沒人管」的上游原因。世界解是 feature toggle 只包真正要停的最小單元(Fowler),所以
++# 開關搬到這裡——上面照跑,只停下面真正燒錢的派工。
++if [ "${LUMOS_AUTOLOOP_OFF:-1}" = "1" ]; then
++  log "派工段暫停中(LUMOS_AUTOLOOP_OFF=1,2026-09-05 起預設暫停;上面的週期觀測照跑)"
++  log "要臨時開回:LUMOS_AUTOLOOP_OFF=0 governance/autonomous-loop.sh --dry-run 6"
++  exit 0
++fi
++
+ SKIP_CAP=3; skip_n=0
+ while : ; do
+ GAP_JSON="$(cd "$REPO" && python3 -c "
+ import sys, json; sys.path.insert(0,'governance')
+ from autonomous_loop import gap_select
+ mode='pr' if '$MODE'=='--pr' else 'dryrun'
+ g=gap_select.select('$REPORT','$SCRIPT_DIR/backlog.jsonl','$PENDING',mode,'$TODAY','$SCRIPT_DIR/covered.jsonl')
+ print(json.dumps(g, ensure_ascii=False) if g else '')
+diff --git a/governance/daily-governance.sh b/governance/daily-governance.sh
+index 1828a38..55c5300 100755
+--- a/governance/daily-governance.sh
++++ b/governance/daily-governance.sh
+@@ -24,26 +24,23 @@ mkdir -p "$DIR/logs"
+ # 續讀,檔案長度變了就讀到垃圾、甚至把整支再跑一遍(scratch 實驗實證:step1/step2 印了兩次)。守衛測試釘這三件。
+ main() {
+   echo "[$(ts)] daily-governance wrapper 開始"
+ 
+   # 1) 治理日報(自設 PATH/token;log → governance.log)
+   "$DIR/ai-governance-research.sh" >> "$DIR/logs/governance.log" 2>&1
+   echo "[$(ts)] 治理日報 段結束 rc=$?"
+ 
+-  # 2) 自主迭代 loop(dry-run;log → autonomous.log)
+-  #    2026-09-05 暫停派工(README 審視 d3,見圖譜 Projects/README審視五修_計劃):七週週報收斂 0、待放行 0、每週 210–330 美元;
+-  #    dry-run 永遠走不到開 PR。開關沿用 repo 的 *_OFF 慣例,但預設 1(=暫停);要臨時開回:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
+-  if [ "${LUMOS_AUTOLOOP_OFF:-1}" != "1" ]; then
+-    "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
+-    echo "[$(ts)] 自主 loop 段結束 rc=$?"
+-  else
+-    echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3;LUMOS_AUTOLOOP_OFF=0 可開回)" >> "$DIR/logs/autonomous.log" 2>&1
+-    echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3)"
+-  fi
++  # 2) 週期觀測 + 自主迭代 loop(log → autonomous.log)
++  #    ★無條件呼叫★:暫停開關住在 autonomous-loop.sh 裡、只包住真正燒錢的派工段(2026-09-06
++  #    全 repo 審視 #4 訂正)。前半的檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、
++  #    backlog 每日衰減照跑——2026-09-05 那版把開關寫在這裡,等於連監看一起關掉。
++  #    要臨時開回派工:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
++  "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
++  echo "[$(ts)] 週期觀測+自主 loop 段結束 rc=$?"
+ 
+   # 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)
+   "$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc=$?
+   echo "[$(ts)] lint-watch 段結束 rc=$rc"
+ 
+   # 4) doctor 每日跑(fail-open;log → doctor-daily.log)
+   # intake守衛 T4 排程線(2026-08-30 d1,外家 r3 唯一補件):T4 的滾動窗計數器住在 doctor 的
+   # [I] 段;此前 doctor 只在 push/CI 跑——「doctor 每天跑」曾是未查證的假宣稱,這行讓它成真。
+diff --git a/scripts/lumos b/scripts/lumos
+index 0629609..a41a68c 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -11092,16 +11092,61 @@ def _pull_source_or_abort(src, allow_stale=False):
+     has_remote = subprocess.run(["git", "-C", str(src), "remote"],
+                                 capture_output=True, text=True).stdout.strip()
+     if not has_remote:
+         print("  (來源無 remote:離線 clone,跳過 pull)")
+         return 0
+     print("  git pull 來源(取最新工具組)…")
+     if subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode == 0:
+         return 0
++    # ★來源「只髒了工具自己寫的帳」不該擋人★(2026-09-06 全 repo 審視 #5)
++    # 症狀:唯讀的 `lumos show`/`context` 就會 append docs/.usage-log.jsonl,而那本帳是版控的。
++    # 只要有人在來源 clone 裡查過一次圖譜,之後這台機器所有專案的 update / bootstrap --pull
++    # 全部被 fail-closed 擋住;逃生門寫在錯誤訊息最後一行,沒人會讀到那裡。
++    #
++    # ★做法是「聯集合併」,不是 stash/pop★:這幾本是 append-only 的 JSONL,兩邊各自加了行,
++    # stash pop 會判成衝突並★在帳本裡留下衝突標記★——那比原本擋住更糟,帳本直接壞掉、
++    # 之後每次讀都炸(第一版真的踩到,實測留下 <<<<<<< 標記)。正確解是把兩邊的行取聯集:
++    # 先把本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
++    # 非 JSONL 的簿記檔(anchor-baseline.json 是一份 JSON 物件)不能這樣併,照原路擋下。
++    dirty = subprocess.run(["git", "-C", str(src), "status", "--porcelain"],
++                           capture_output=True, text=True).stdout.splitlines()
++    paths = [ln[3:].strip().strip('"') for ln in dirty if ln.strip()]
++    mergeable = paths and all(p in _BOOKKEEPING_FILES and p.endswith(".jsonl") for p in paths)
++    if paths and not mergeable and all(p in _BOOKKEEPING_FILES for p in paths):
++        print("  (來源只髒了簿記檔,但其中有不是 append-only JSONL 的,不能自動併——照原路擋下)",
++              file=sys.stderr)
++    if mergeable:
++        print(f"  來源只髒了工具自己寫的帳({len(paths)} 本 append-only)——取聯集後續拉,不丟任何一行")
++        saved = {}
++        for rel in paths:
++            f = src / rel
++            try:
++                saved[rel] = f.read_text(encoding="utf-8").splitlines()
++            except OSError:
++                saved = None
++                break
++        if saved is not None:
++            subprocess.run(["git", "-C", str(src), "checkout", "--"] + paths,
++                           capture_output=True, text=True)
++            rc2 = subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode
++            for rel, old_lines in saved.items():
++                f = src / rel
++                try:
++                    now = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
++                    have = set(now)
++                    extra = [l for l in old_lines if l not in have]
++                    if extra:
++                        f.write_text("\n".join(now + extra) + "\n", encoding="utf-8")
++                        print(f"    {rel}:本機獨有的 {len(extra)} 行已補回")
++                except OSError as e:
++                    print(f"  ⚠ {rel} 併回失敗(那幾行還在 git 的物件庫裡,`git checkout HEAD@{{1}} -- {rel}` 可救):{e}",
++                          file=sys.stderr)
++            if rc2 == 0:
++                return 0
+     if allow_stale:
+         print("  ⚠ --allow-stale:pull 失敗,明示沿用現有來源繼續", file=sys.stderr)
+         return 0
+     print(f"擋下:工具鏈來源拉不到最新版(可能是網路不通、有本地改動擋住、或歷史分岔),先停。\n"
+           f"  不會拿可能過期的來源蓋掉你的專案——默默裝到舊版這個坑踩過兩次。\n"
+           f"  先去來源那邊處理:\n    cd {src} && git status && git pull --ff-only\n"
+           f"  確定就要用現在這份來源:重跑並加 --allow-stale", file=sys.stderr)
+     return None
+@@ -11119,17 +11164,17 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
+               file=sys.stderr)
+         return None
+     if not no_pull:
+         rc_p = _pull_source_or_abort(src, allow_stale)
+         if rc_p is None:
+             return None                      # fail-closed:一個檔都還沒動就退場
+     # 安裝邏輯收進 python 單一源(scaffold + hooks);bash 安裝器僅留薄殼。
+     _scaffold_project(root, slug)
+-    _install_hooks_py(root)
++    _set_hooks_path(root)          # 全域同步★不在這裡★——要等下面的 copy2 自癒把 vendored 檔換新
+     rc = 0
+     # 結尾 diff 自癒:python 端逐檔比對 src↔target,差異即補(可安全覆寫)。
+     toolkit = list(_VENDORED_TOOLKIT)
+     for sub in ("scripts/hooks", "scripts/templates"):
+         base = src / sub
+         if base.is_dir():
+             toolkit += [str(p.relative_to(src)) for p in base.rglob("*") if p.is_file()]
+     healed = []
+@@ -11144,16 +11189,19 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
+                 t.chmod(t.stat().st_mode | 0o111)
+             healed.append(rel)
+     if healed:
+         print(f"  結尾自癒:補齊 installer 漏的 {len(healed)} 檔 → {', '.join(healed)}")
+     else:
+         print("  ✓ 結尾自癒檢查:工具組完全對齊(無漏)")
+     # 範本已是最新(copy2 迴圈完成) → reinject 紀律區塊(CLAUDE.md + Codex 指示檔,d1)
+     _reinject_all(root, slug)
++    # ★全域同步放在這裡★(2026-09-06 全 repo 審視 #5):要等上面的 copy2 自癒把 vendored hook
++    # 換成來源的新版之後才同步出去,否則 `lumos update` 會拿更新前的舊副本覆蓋全域 hooks。
++    _sync_global_from_project(root)
+     return rc
+ 
+ 
+ def cmd_update(source=None, no_pull=False, allow_stale=False):
+     """從 Lumos 唯一源 repo 更新「本專案」vendored 的工具組。
+     = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
+     圖譜資料受 install-graph-toolchain 的 scaffold-skip 保護,不會被動。"""
+     if _refuse_if_probe("update"):
+@@ -11527,26 +11575,43 @@ def _teardown_global_hooks(src_repo: Path, harness: str):
+         except OSError:
+             pass
+     name = "Claude" if harness == "claude" else "Codex"
+     print(f"  ✓ 全域 {name} hook 清理:移除 {len(removed)} 檔 + 剪懸空我方註冊" if removed
+           else f"  ✓ 全域 {name} hook:無我方殘留")
+     return True
+ 
+ 
+-def _install_hooks_py(root: Path):
++def _set_hooks_path(root: Path):
++    """① git config core.hooksPath(專案本地)。★跟全域同步拆開★——見 _sync_global_from_project。"""
+     import subprocess
+-    # ① git config core.hooksPath(專案本地)
+     subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"])
+-    # ②③ 全域 hooks/settings 同步(委派共用函式,消雙寫;來源=專案 vendored copy)
+     print("  ✓ hooks:core.hooksPath 已設")
++
++
++def _sync_global_from_project(root: Path):
++    """②③ 全域 hooks/settings 同步,來源=專案 vendored copy。
++
++    ★呼叫時機很要緊:必須在 vendored 檔案已經被更新之後★(2026-09-06 全 repo 審視 #5)。
++    原本這兩件跟 core.hooksPath 綁在同一支 _install_hooks_py,而它在 _vendor_toolchain 裡
++    排在 filecmp 自癒迴圈★之前★——於是 `lumos update` 會拿「更新前」的舊副本去覆蓋全域
++    ~/.claude/hooks,把整台機器最核心的收工 hook 靜默換成六月版(實測 30912B → 15303B),
++    訊息還印綠燈;舊版的 settings merger 甚至會把已撤除的 hook 註冊加回去。
++    """
+     for _h in ("claude", "codex"):
+         print(_sync_msg(_h, _sync_global_hooks(root, _h)))
+ 
+ 
++def _install_hooks_py(root: Path):
++    """相容外殼:兩件一起做。★新程式碼請分開呼叫★,尤其是「先更新 vendored 再同步全域」
++    那條路(_vendor_toolchain);這支留給「來源就是最新」的呼叫點(cmd_init 的新建路徑)。"""
++    _set_hooks_path(root)
++    _sync_global_from_project(root)
++
++
+ def _confirm_tty(prompt):
+     """三階互動確認(curl|bash 安全;設計:Projects/bootstrap一鍵對稱_計劃 std F1/F2/F3):
+     回 True(答 y/yes)/False(其他答案=拒絕)/None(非互動或無人回答→呼叫端跳過)。
+     ①stdin.isatty→input();EOFError 落入②非當 False(isatty 撒謊時別誤判拒絕)
+     ②os.open(tty,O_RDWR) 低階 fd(★r+ 開法對 tty 會炸 not seekable★)+os.write prompt
+       +select timeout(有控制終端≠有人回答,防 readline 永久掛)+os.read
+     ③皆不可→None。嚴禁在非 isatty 時讀 sys.stdin(curl|bash 下那是腳本殘文管線)。
+     測試接縫:LUMOS_TTY(預設 /dev/tty;單元測指 pty slave)/LUMOS_TTY_TIMEOUT(預設 30s)。"""
+@@ -12983,16 +13048,17 @@ def _strip_string_literals(code):
+ 
+ # 簿記檔白名單(單一源,兩個消費者:pitfalls --diff 掃描排除 + code-loop 留痕失效豁免)。
+ # 兩處分開寫過會漂移;pitfalls 這端 2026-08-11 才補上——治理帳裡記的 skip 理由本身在
+ # 描述「命中 open(...)」,被當代碼掃就再次命中 → 再 skip → 再寫一行理由……自我餵食,
+ # 實測誤觸發 9 次。這些檔是紀錄不是要合入的碼。
+ _BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
+                       "docs/.ci-log.jsonl", "docs/.canary-log.jsonl",
+                       "docs/.bypass-log.jsonl", "docs/.escape-log.jsonl",
++                      "docs/.kill-log.jsonl", "docs/.signoff-log.jsonl",
+                       "governance/anchor-baseline.json")
+ # ↑ canary-log/bypass-log 2026-08-27 補（[[Issues/簿記白名單漏canary與bypass帳]] 死結根治）:
+ # 審計記帳(canary record)在 loop 中發生,pass 後提交它們原本會讓留痕失效→擋推。
+ # ★真效果只在 code-loop 留痕豁免這第二消費者★:pitfalls 那端 canary-log 早被
+ # _PITFALL_DIFF_SKIP_EXT(.json/.jsonl,2026-08-22)按副檔名擋掉、輪不到白名單這關(s1-f1)。
+ _BOOKKEEPING_DIR = "governance/code-loop/"
+ _PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
+ LINT_CMD_TIMEOUT = 180
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a39bcb9..11b7bed 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -26095,10 +26095,141 @@ def t_doctor_summary_admits_soft_reminders():
+     # 受版控的 docs/.governance-log.jsonl,每跑一次測試就在工作樹留一筆、帳本持續膨脹)。隔離
+     # vault 也寫不出帳(寫者取不到可解析的 git HEAD 就靜默跳過)。所以退一步、★誠實標明證據層級★:
+     # 這條只驗「欄位有接上」是原始碼事實,不驗執行期的值——值的正確性由上面那幾條斷言涵蓋,
+     # 它們比對的是真的跑出來的畫面。
+     main_src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+     note_line = [l for l in main_src.splitlines() if "issues={issues}" in l]
+     check("doctor: doctor-run 事件的 note 有接上 soft= 欄位(原始碼層;值的正確性由上面的畫面斷言涵蓋)",
+           bool(note_line) and any("soft=" in l for l in note_line), str(note_line)[:160])
++def t_autoloop_pause_only_stops_dispatch():
++    """暫停派工不得把週期觀測一起關掉(2026-09-06 全 repo 審視 #4)。
++
++    出身:2026-09-05 決定暫停派工時,開關寫在 daily-governance.sh 裡包住整支 autonomous-loop.sh,
++    結果檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、backlog 每日衰減這五段一起停了
++    ——而三處筆記白紙黑字寫著「便宜的日常段照跑」。★監看的東西和被監看的東西同命★:回訪到期
++    的升級鏈因此沒有出口,那正是同一次審視裡「五件逾期沒人管」的上游原因。
++
++    修法照世界解(feature toggle 只包真正要停的最小單元):開關搬進 autonomous-loop.sh、放在
++    選 gap 之前;wrapper 無條件呼叫。這裡釘死那個相對位置——用位置而不是「跑一次看看」,是因為
++    真跑會發 LINE、抽探針、燒配額,不適合放進單元測試。"""
++    root = Path(GRAPHCTL).resolve().parent.parent
++    loop = (root / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
++    wrap = (root / "governance" / "daily-governance.sh").read_text(encoding="utf-8")
++    lines = loop.splitlines()
++    def line_of(pat, start=0):
++        return next((k for k, l in enumerate(lines) if k >= start and pat in l and not l.lstrip().startswith("#")), -1)
++    # 五段週期觀測的「呼叫點」(不是函式定義):都在檔案後段、彼此相鄰
++    calls = {}
++    for name in ("run_exam", "run_probe", "run_nags", "run_replay"):
++        k = next((i for i, l in enumerate(lines)
++                  if l.strip().startswith(name + " ") or l.strip() == name
++                  or (name in l and l.strip().startswith("[ -d"))), -1)
++        calls[name] = k
++        check(f"暫停開關: 找得到 {name} 的呼叫點", k > 0, str(k))
++    decay = line_of("backlog 衰減")
++    check("暫停開關: 找得到 backlog 每日衰減", decay > 0, str(decay))
++    gate = next((i for i, l in enumerate(lines) if "LUMOS_AUTOLOOP_OFF" in l and l.strip().startswith("if ")), -1)
++    check("暫停開關: autonomous-loop.sh 自己帶 LUMOS_AUTOLOOP_OFF 判斷", gate > 0, str(gate))
++    if gate > 0:
++        after = {k: v for k, v in list(calls.items()) + [("backlog衰減", decay)] if v > gate}
++        check("暫停開關: ★所有週期觀測都排在開關之前(關掉派工不會連它們一起關)★", not after, str(after))
++    # wrapper 那側不得再自己判一次(否則等於又把整支包起來)
++    wrap_gate = [l for l in wrap.splitlines() if "LUMOS_AUTOLOOP_OFF" in l and l.strip().startswith("if ")]
++    check("暫停開關: ★wrapper 不得再包一層判斷★(那正是 09-05 的錯法)", not wrap_gate, str(wrap_gate)[:120])
++    check("暫停開關: wrapper 無條件呼叫 autonomous-loop.sh",
++          any('"$DIR/autonomous-loop.sh"' in l and not l.lstrip().startswith("#") for l in wrap.splitlines()), "")
++
++
++def t_update_syncs_global_from_fresh_not_stale():
++    """`lumos update` 同步全域 hooks 時,來源必須是★更新後★的檔(2026-09-06 全 repo 審視 #5)。
++
++    出身:_vendor_toolchain 裡 _install_hooks_py(它同時做 core.hooksPath 與全域同步)排在
++    filecmp 自癒迴圈★之前★,於是 update 會拿「更新前」的 vendored 舊副本去覆蓋整台機器的
++    ~/.claude/hooks——實測把收工 hook 從 30912B 換成六月版的 15303B,訊息還印綠燈;舊版的
++    settings merger 甚至會把已撤除的 hook 註冊加回去。修法:把那支拆成 _set_hooks_path(留在
++    原位)與 _sync_global_from_project(搬到自癒之後)。
++
++    這裡用反事實夾具驗:專案的 vendored hook 是舊的、來源是新的,update 完之後全域那份必須
++    等於★來源★。"""
++    import os, subprocess as _sp, shutil
++    from pathlib import Path as _P
++    repo = _P(GRAPHCTL).resolve().parent.parent
++    base = _P(tempfile.mkdtemp(prefix="gctl-upd-fresh-"))
++    src, proj, home = base / "src", base / "proj", base / "home"
++    for d in (src / "scripts" / "hooks" / "claude", src / "docs", proj / "scripts" / "hooks" / "claude",
++              proj / "docs" / "p-knowledge" / "Systems", home):
++        d.mkdir(parents=True, exist_ok=True)
++    for f in ("lumos", "install-graph-toolchain.sh"):
++        shutil.copy2(repo / "scripts" / f, src / "scripts" / f)
++    hook_rel = "scripts/hooks/claude/check-graph-sync.py"
++    shutil.copy2(repo / hook_rel, src / hook_rel)
++    _sp.run(["git", "init", "-q", "."], cwd=str(src))
++    (proj / hook_rel).write_text("OLD-STALE-COPY\n", encoding="utf-8")
++    shutil.copy2(repo / "scripts" / "lumos", proj / "scripts" / "lumos")
++    _sp.run(["git", "init", "-q", "."], cwd=str(proj))
++    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
++    env.pop("CODEX_HOME", None)
++    r = _sp.run([sys.executable, "scripts/lumos", "update", "--source", str(src), "--no-pull"],
++                cwd=str(proj), env=env, capture_output=True, text=True)
++    glob_hook = home / ".claude" / "hooks" / "check-graph-sync.py"
++    check("update: 全域 hook 有被同步出來", glob_hook.is_file(), r.stdout[-200:] + r.stderr[-200:])
++    if glob_hook.is_file():
++        got, want, stale = glob_hook.read_bytes(), (src / hook_rel).read_bytes(), b"OLD-STALE-COPY\n"
++        check("update: ★全域 hook == 來源的新版★(不是更新前的舊副本)", got == want, f"len={len(got)} want={len(want)}")
++        check("update: 全域 hook 不是那份舊副本", got != stale, "")
++    check("update: 專案 vendored hook 也被自癒成新版",
++          (proj / hook_rel).read_bytes() == (src / hook_rel).read_bytes(), "")
++
++
++def t_update_unions_bookkeeping_instead_of_blocking():
++    """來源 clone 只髒了工具自己寫的 append-only 帳時,update 不該被擋,也不該弄壞帳本。
++
++    出身(2026-09-06 全 repo 審視 #5):唯讀的 `lumos show`/`context` 就會 append
++    docs/.usage-log.jsonl,而那本帳是版控的。只要有人在來源 clone 裡查過一次圖譜,之後這台
++    機器所有專案的 update 都被 fail-closed 擋住,逃生門寫在錯誤訊息最後一行沒人讀得到。
++
++    ★第一版用 stash/pop,實測會在帳本裡留下 <<<<<<< 衝突標記——比原本擋住更糟★。
++    改成聯集合併:本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
++    這裡驗三件:pull 有成功、兩邊的行都在、檔案裡沒有衝突標記。"""
++    import os, subprocess as _sp, shutil
++    from pathlib import Path as _P
++    repo = _P(GRAPHCTL).resolve().parent.parent
++    base = _P(tempfile.mkdtemp(prefix="gctl-upd-union-"))
++    origin, seed, home = base / "origin", base / "seed", base / "home"
++    ident = ["-c", "user.name=t", "-c", "user.email=t@t"]
++    origin.mkdir(parents=True); _sp.run(["git", "init", "-q", "--bare", "."], cwd=str(origin))
++    (seed / "scripts" / "hooks" / "claude").mkdir(parents=True); (seed / "docs").mkdir(parents=True)
++    for f in ("lumos", "install-graph-toolchain.sh"):
++        shutil.copy2(repo / "scripts" / f, seed / "scripts" / f)
++    hook_rel = "scripts/hooks/claude/check-graph-sync.py"
++    shutil.copy2(repo / hook_rel, seed / hook_rel)
++    (seed / "docs" / ".usage-log.jsonl").write_text('{"ts":"1"}\n', encoding="utf-8")
++    _sp.run(["git", "init", "-q", "-b", "main", "."], cwd=str(seed))
++    _sp.run(["git", "add", "-A"], cwd=str(seed))
++    _sp.run(["git"] + ident + ["commit", "-qm", "init"], cwd=str(seed))
++    _sp.run(["git", "remote", "add", "origin", str(origin)], cwd=str(seed))
++    _sp.run(["git", "push", "-q", "-u", "origin", "main"], cwd=str(seed))
++    other = base / "other"; _sp.run(["git", "clone", "-q", str(origin), str(other)])
++    with open(other / hook_rel, "a", encoding="utf-8") as fh: fh.write("v2\n")
++    with open(other / "docs" / ".usage-log.jsonl", "a", encoding="utf-8") as fh: fh.write('{"ts":"2"}\n')
++    _sp.run(["git"] + ident + ["commit", "-qam", "v2"], cwd=str(other))
++    _sp.run(["git", "push", "-q"], cwd=str(other))
++    src = base / "src"; _sp.run(["git", "clone", "-q", str(origin), str(src)])
++    with open(src / "docs" / ".usage-log.jsonl", "a", encoding="utf-8") as fh: fh.write('{"ts":"LOCAL"}\n')
++    proj = base / "proj"; (proj / "scripts").mkdir(parents=True)
++    (proj / "docs" / "p-knowledge" / "Systems").mkdir(parents=True)
++    shutil.copy2(repo / "scripts" / "lumos", proj / "scripts" / "lumos")
++    _sp.run(["git", "init", "-q", "."], cwd=str(proj))
++    home.mkdir(parents=True, exist_ok=True)
++    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home)); env.pop("CODEX_HOME", None)
++    r = _sp.run([sys.executable, "scripts/lumos", "update", "--source", str(src)],
++                cwd=str(proj), env=env, capture_output=True, text=True)
++    led = (src / "docs" / ".usage-log.jsonl").read_text(encoding="utf-8")
++    check("update/來源髒帳: 沒有被擋下(rc 不是中止)", "擋下:工具鏈來源拉不到最新版" not in r.stderr, r.stderr[-200:])
++    check("update/來源髒帳: 本機那行沒丟", '{"ts":"LOCAL"}' in led, led[:200])
++    check("update/來源髒帳: 遠端那行也拉進來了", '{"ts":"2"}' in led, led[:200])
++    check("update/來源髒帳: ★帳本裡沒有衝突標記★(stash/pop 版會留)", "<<<<<<<" not in led and ">>>>>>>" not in led, led[:200])
++    check("update/來源髒帳: 來源的 hook 拿到新版", "v2" in (src / hook_rel).read_text(encoding="utf-8"), "")
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

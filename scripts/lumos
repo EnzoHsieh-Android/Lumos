@@ -11107,41 +11107,91 @@ def _pull_source_or_abort(src, allow_stale=False):
     # 之後每次讀都炸(第一版真的踩到,實測留下 <<<<<<< 標記)。正確解是把兩邊的行取聯集:
     # 先把本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
     # 非 JSONL 的簿記檔(anchor-baseline.json 是一份 JSON 物件)不能這樣併,照原路擋下。
-    dirty = subprocess.run(["git", "-C", str(src), "status", "--porcelain"],
-                           capture_output=True, text=True).stdout.splitlines()
-    paths = [ln[3:].strip().strip('"') for ln in dirty if ln.strip()]
-    mergeable = paths and all(p in _BOOKKEEPING_FILES and p.endswith(".jsonl") for p in paths)
+    dirty = subprocess.run(["git", "-C", str(src), "status", "--porcelain=v1", "-z"],
+                           capture_output=True, text=True).stdout
+    # ★用 -z 逐筆解析,不要對人看的格式做字串切片★(2026-09-06 代碼審 r1 外家席):
+    # porcelain 的 rename 是 `R  old\0new`、含特殊字元的路徑在非 -z 模式會被 C-style 跳脫並加引號,
+    # 光 strip('"') 解不開。-z 模式路徑原樣不跳脫;rename/copy 會多吃一個 NUL 欄位,我們直接
+    # ★保守拒絕★(狀態碼含 R/C 就不自動併),寧可照原路擋下也不要判錯。
+    paths, bad_shape = [], False
+    if dirty:
+        parts = dirty.split("\0")
+        i = 0
+        while i < len(parts):
+            ent = parts[i]
+            if not ent:
+                i += 1
+                continue
+            xy, path = ent[:2], ent[3:]
+            if "R" in xy or "C" in xy:      # rename/copy:後面還跟一個來源路徑,保守不併
+                bad_shape = True
+                i += 2
+                continue
+            paths.append(path)
+            i += 1
+    mergeable = (not bad_shape) and paths and all(
+        p in _BOOKKEEPING_FILES and p.endswith(".jsonl") for p in paths)
     if paths and not mergeable and all(p in _BOOKKEEPING_FILES for p in paths):
-        print("  (來源只髒了簿記檔,但其中有不是 append-only JSONL 的,不能自動併——照原路擋下)",
+        print("  (來源只髒了簿記檔,但其中有不是 append-only JSONL 的、或有改名——不自動併,照原路擋下)",
               file=sys.stderr)
     if mergeable:
         print(f"  來源只髒了工具自己寫的帳({len(paths)} 本 append-only)——取聯集後續拉,不丟任何一行")
+        # ★先把本機那份存到磁碟再動 git★(2026-09-06 代碼審 r1 外家席):原本只存在記憶體,
+        # checkout 之後若被 SIGKILL / 斷電 / 寫回失敗,那些★從未進過 git 物件庫★的行就永久消失
+        # ——而且第一版的錯誤訊息還叫人用 `git checkout HEAD@{1}` 救,那是假的。
+        import tempfile as _tf, shutil as _sh
+        bak = Path(_tf.mkdtemp(prefix="lumos-bookkeeping-backup-"))
         saved = {}
-        for rel in paths:
-            f = src / rel
-            try:
-                saved[rel] = f.read_text(encoding="utf-8").splitlines()
-            except OSError:
-                saved = None
-                break
+        try:
+            for rel in paths:
+                f = src / rel
+                saved[rel] = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+                _sh.copy2(f, bak / rel.replace("/", "__")) if f.exists() else None
+        except OSError as e:
+            print(f"  ⚠ 備份簿記帳失敗,照原路擋下(沒有動任何檔):{e}", file=sys.stderr)
+            saved = None
         if saved is not None:
+            print(f"    (動手前已備份到 {bak};全部併回成功才會刪)")
             subprocess.run(["git", "-C", str(src), "checkout", "--"] + paths,
                            capture_output=True, text=True)
+            # ★比較對象是「拉之前的已提交版」,不是拉下來的內容★(2026-09-06 代碼審 r1 折入後
+            # 自己的測試抓到):checkout 完檔案就等於 base。要補回的是「本機在 base 之上加了什麼」
+            # ——拿拉下來的內容比,會在遠端剛好也加了同一行時把本機那筆當成重複吃掉。
+            base = {}
+            for rel in paths:
+                f = src / rel
+                base[rel] = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
             rc2 = subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode
+            all_ok = True
             for rel, old_lines in saved.items():
                 f = src / rel
                 try:
                     now = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
-                    have = set(now)
-                    extra = [l for l in old_lines if l not in have]
+                    # ★用計數不用集合★(外家席):JSONL 是事件序列不是集合,同一行內容合法地出現
+                    # 兩次是常態(同秒同節點的兩筆);set 判「有沒有」會把本機新增的那筆吃掉。
+                    # 算的是「本機在 base 之上加了幾份」,加幾份就補幾份到拉下來的版本後面。
+                    from collections import Counter as _C
+                    need = _C(old_lines) - _C(base.get(rel, []))
+                    extra = []
+                    for l in old_lines:
+                        if need[l] > 0:
+                            extra.append(l)
+                            need[l] -= 1
                     if extra:
-                        f.write_text("\n".join(now + extra) + "\n", encoding="utf-8")
+                        raw = f.read_text(encoding="utf-8") if f.exists() else ""
+                        sep = "" if (raw == "" or raw.endswith("\n")) else "\n"
+                        with open(f, "a", encoding="utf-8") as fh:
+                            fh.write(sep + "\n".join(extra) + "\n")
                         print(f"    {rel}:本機獨有的 {len(extra)} 行已補回")
                 except OSError as e:
-                    print(f"  ⚠ {rel} 併回失敗(那幾行還在 git 的物件庫裡,`git checkout HEAD@{{1}} -- {rel}` 可救):{e}",
-                          file=sys.stderr)
+                    all_ok = False
+                    print(f"  ⚠ {rel} 併回失敗——★那幾行還在備份裡★:{bak}/{rel.replace('/', '__')}\n"
+                          f"    ({e})", file=sys.stderr)
+            if all_ok:
+                _sh.rmtree(bak, ignore_errors=True)
             if rc2 == 0:
                 return 0
+            print(f"  (pull 仍失敗;本機的帳已經併回,備份留在 {bak})", file=sys.stderr)
     if allow_stale:
         print("  ⚠ --allow-stale:pull 失敗,明示沿用現有來源繼續", file=sys.stderr)
         return 0
@@ -11733,7 +11783,10 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
         if vault is not None and vendored:        # ① 已是專案 → 接 hooks(git config 每機器要重接)
             print(f"[3/3] 裝 repo hooks（{root}）…")
             try:
-                _install_hooks_py(root)
+                # ★只設路徑,不從這裡同步全域★(2026-09-06 代碼審 r1 外家席):步驟 2 才剛用
+                # 最新的來源裝好全域 hooks,這裡若再從「可能很舊」的消費專案同步一次,會把它倒退。
+                # 專案自己的 vendored 檔要更新是 `lumos update` 的事,那條路已改成自癒後才同步。
+                _set_hooks_path(root)
             except Exception as e:
                 print(f"  ⚠ hooks 安裝失敗:{e}", file=sys.stderr)
                 failures.append("hooks")
@@ -13059,6 +13112,10 @@ _BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
 # 審計記帳(canary record)在 loop 中發生,pass 後提交它們原本會讓留痕失效→擋推。
 # ★真效果只在 code-loop 留痕豁免這第二消費者★:pitfalls 那端 canary-log 早被
 # _PITFALL_DIFF_SKIP_EXT(.json/.jsonl,2026-08-22)按副檔名擋掉、輪不到白名單這關(s1-f1)。
+# ↑ kill-log/signoff-log 2026-09-06 補([[Projects/全repo審視_計劃]] #5):兩本同樣是工具自己
+# 寫的 append-only 帳(kill-log 由 guard kill 寫、signoff-log 由 signoff 寫),而這次替
+# _pull_source_or_abort 加「來源只髒簿記帳就聯集合併不擋人」時,漏了它們就等於那條路對這兩本
+# 失效——有人在來源 clone 跑過 guard kill 或 signoff,更新照樣被擋。
 _BOOKKEEPING_DIR = "governance/code-loop/"
 _PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
 LINT_CMD_TIMEOUT = 180
