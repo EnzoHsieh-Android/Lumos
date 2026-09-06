@@ -93,6 +93,27 @@ def mkvault():
     return d
 
 
+def _ledger_patch_last(ledger, loop, **fields):
+    """把帳本裡某個迴圈的最後一筆改掉(測試專用)。
+
+    ★為什麼需要這支★:2026-09-06 起,「載體席的引句必須全錨」在記帳當下就擋(不再只有閘擋)。
+    所以「載體引句錨不到的帳」透過現行 CLI 已經產不出來——它只可能來自舊版本、手改、或竄改。
+    而閘讀側那道檢查防的正是這種帳,所以測試改成直接把帳寫成壞的,比繞過寫側更貼近真實威脅。
+
+    給 report/snapshot 路徑時會順便把對應的 sha256 一起更新(讀側會驗 sha)。
+    """
+    import json as _j, hashlib
+    lines = ledger.read_text(encoding="utf-8").splitlines()
+    idx = max(i for i, l in enumerate(lines) if l.strip() and _j.loads(l).get("loop") == loop)
+    rec = _j.loads(lines[idx])
+    for k, v in fields.items():
+        rec[k] = str(v)
+        if k in ("report_path", "snapshot_path"):
+            rec[k.replace("_path", "_sha256")] = hashlib.sha256(Path(v).read_bytes()).hexdigest()
+    lines[idx] = _j.dumps(rec, ensure_ascii=False)
+    ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _sevrep(dirp, sev="clean"):
     """[嚴重度綁定機械掃 S1] 寫側強制(2026-08-26)後,審查席 CLI 記帳必附含宣告行的報告——
     測試共用最小報告。clean=值序最低,任何帳面等級都不構成低報(高報僅 stderr 提醒不擋)。"""
@@ -5202,8 +5223,8 @@ def t_finding_kind_ledger_and_stats():
     全集要對得上;gov --stats 算 process 佔比。"""
     import json as _j, subprocess as _sp
     v = mkvault(); spec = v / "Projects" / "fk.md"; spec.write_text("s\n", encoding="utf-8"); h = _sha256_of(spec)
-    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「s」\nseverity: clean\n", encoding="utf-8")
-    snap = v.parent / "r1-snapshot.md"; snap.write_text("s\n", encoding="utf-8")
+    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    snap = v.parent / "r1-snapshot.md"; snap.write_text("這是一段足夠長的快照內容 後面還有\n", encoding="utf-8")
     base = ["canary", "record", "none", "--loop", "fk-loop", "--round", "r1", "--auditor", "a", "--severity", "minor",
             "--findings", "3", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f2", "--accepted-set", "f3",
             "--accept-reason", "f3=文件精度", "--report", str(rep), "--snapshot", str(snap),
@@ -5320,8 +5341,8 @@ def t_refute_verdict_ledger_and_stats():
     「辯方三分類先不做」裁定自己點名的缺口(帳無逐席對錯 → 永遠偵測不到重啟條件)。"""
     import json as _j
     v = mkvault(); spec = v / "Projects" / "rv.md"; spec.write_text("s\n", encoding="utf-8"); h = _sha256_of(spec)
-    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「s」\nseverity: major\n", encoding="utf-8")
-    snap = v.parent / "r1-snapshot.md"; snap.write_text("s\n", encoding="utf-8")
+    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「這是一段足夠長的快照內容」\nseverity: major\n", encoding="utf-8")
+    snap = v.parent / "r1-snapshot.md"; snap.write_text("這是一段足夠長的快照內容 後面還有\n", encoding="utf-8")
     base = ["canary", "record", "none", "--loop", "rv-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
             "--findings", "2", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f3", "--accepted-set", "f2",
             "--accept-reason", "f2=辯方反證:a.py:10", "--report", str(rep), "--snapshot", str(snap),
@@ -16239,10 +16260,10 @@ def t_loop_next_disposal_cmd_actually_runs():
     import json as _j
     v = mkvault()
     spec = v / "Projects" / "t5spec.md"
-    spec.write_text("t5 spec\n規則甲。\n", encoding="utf-8")
+    spec.write_text("t5 spec\n規則甲:這是一段足夠長的內容當引句。\n", encoding="utf-8")
     h = _sha256_of(spec)
     rpt = v / "Projects" / "t5rpt.md"
-    rpt.write_text("引句：「規則甲。」\nseverity: minor\n", encoding="utf-8")
+    rpt.write_text("引句：「規則甲:這是一段足夠長的內容當引句。」\nseverity: minor\n", encoding="utf-8")
     lid = f"t5-{_M1U}"
     d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json").stdout)
     check("★前置★ 現場成立:panel tier 吐 disposal_cmd+disposal_gate",
@@ -16283,8 +16304,8 @@ def t_disposal_loop_requires_provenance():
     翻紅釘:把強制檢查還原掉 → 「定錨後缺 report 必 rc2」翻紅。"""
     v = mkvault()
     d = v / "Projects"
-    rpt = d / "t6r.md"; rpt.write_text("引句：「x」\nseverity: clean\n", encoding="utf-8")
-    snap = d / "t6s.md"; snap.write_text("x\n", encoding="utf-8")
+    rpt = d / "t6r.md"; rpt.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    snap = d / "t6s.md"; snap.write_text("這是一段足夠長的快照內容 後面還有\n", encoding="utf-8")
     lid = f"t6-{_M1U}"
     # 首筆帶 findings_set+留痕 → 定錨
     run(v, "canary", "record", "caught", "--round", "r1", "--loop", lid, "--auditor", "s1", "--severity", "minor",
@@ -16367,8 +16388,10 @@ def t_loop_status_disposal_gate():
     lid2 = f"t4b-{_M1U}"
     run(v, "canary", "record", "caught", "--loop", lid2, "--round", "r1", "--auditor", "s1",
         "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
-        "--report", str(rpt), "--snapshot", str(snap2),
+        "--report", str(rpt), "--snapshot", str(snap),
         "--spec", str(spec), "--reviewed", h, expect_rc=0)
+    # 記完再把帳裡的快照換成沒有該句的版本(寫側 2026-09-06 起會擋這種載體,見 _ledger_patch_last)
+    _ledger_patch_last(v.parent / ".canary-log.jsonl", lid2, snapshot_path=snap2)
     r3 = run(v, "loop", "status", lid2, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
     check("★quote-check 讀側:引句錨不到快照必 FAIL rc1★", r3.returncode == 1, f"rc={r3.returncode}\n{r3.stdout[:300]}")
 
@@ -16479,11 +16502,14 @@ def t_disposal_gate_r1_panel_hardening():
     lid2 = f"h8b-{_M1U}"
     rptBad = d / "h8bad.md"
     rptBad.write_text("引句：「這句話快照裡根本沒有喔喔喔」\nseverity: clean\n", encoding="utf-8")
-    for rid, rp in (("r1", rptA), ("r2", rptA), ("r1", rptBad)):
+    for rid in ("r1", "r2", "r1"):
         run(v, "canary", "record", "caught", "--loop", lid2, "--round", rid, "--auditor", "sx",
             "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
-            "--report", str(rp), "--snapshot", str(snap),
+            "--report", str(rptA), "--snapshot", str(snap),
             "--spec", str(spec), "--reviewed", h, expect_rc=0)
+    # 遲到那筆要「引句錨不到」。2026-09-06 起寫側會擋錨不到的載體,所以這種帳只可能來自
+    # 舊版本或手改——直接把帳改成指向壞報告,比繞過寫側更貼近讀側真正要防的東西。
+    _ledger_patch_last(ledger, lid2, report_path=rptBad)
     raw = [_j.loads(l) for l in ledger.read_text(encoding="utf-8").splitlines()
            if l.strip() and _j.loads(l).get("loop") == lid2]
     check("★前置★ 現場成立:帳面時序 r1,r2,r1(遲到筆引句錨不到)", [x.get("round") for x in raw] == ["r1", "r2", "r1"], str(raw)[:200])
@@ -16805,6 +16831,56 @@ def t_disposal_snapshot_provenance():
           last.get("snapshot_sha256") == _sha256_of(snap), str(last)[:200])
 
 
+
+def t_canary_record_carrier_must_be_fully_anchored():
+    """帶處置清單的那一席(全輪帳本載體)引句必須全錨,記帳當下就擋(2026-09-06,第三次踩)。
+
+    出身:規矩早就寫著「記帳前先跑引句檢查,挑每句都錨得到的那一席當載體」。這次我三席都
+    跑了檢查,**卻還是把有兩句錨不回快照的那席當載體**——跑了檢查但沒拿檢查結果去做決定。
+    處置閘照樣抓到了,但那時帳已經寫進只進不出的帳本,撤不掉,只能換迴圈編號把整輪重記一次。
+
+    ★這支把同一道檢查往前挪到寫帳之前★:代價從「整輪重記」降成「換一席再敲一次」。
+    只驗載體席;其餘席的引句本來就允許錨不到(不採信而已,不擋)。
+
+    錨不到不等於編造:今天那兩句引的是既有程式碼(說明「專案本來就有這個做法」),
+    不在只含改動的快照裡。所以訊息要講清楚是「這席不適合當載體」,不是「這席在造假」。"""
+    import json as _j
+    v = mkvault()
+    lid = f"carrier-{_M1U}"
+    snap = v / "Projects" / "snap.md"
+    snap.write_text("這是凍結快照 的內容 只有改動在裡面\n", encoding="utf-8")
+    good = v / "Projects" / "good.md"
+    good.write_text("severity: major\n- [major] x\n  引句:「這是凍結快照 的內容」\n", encoding="utf-8")
+    bad = v / "Projects" / "bad.md"
+    bad.write_text("severity: major\n- [major] x\n  引句:「這是凍結快照 的內容」\n"
+                   "- [major] y\n  引句:「這行在既有程式碼裡 不在改動裡」\n", encoding="utf-8")
+
+    # ① 非載體席(不帶處置清單):錨不到照樣可以記,不擋
+    run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s1",
+        "--severity", "major", "--findings", "2", "--report", str(bad), "--snapshot", str(snap),
+        expect_rc=0)
+    check("載體全錨: 非載體席引句錨不到不擋(本來就只是不採信)", True, "")
+
+    # ② 拿它當載體(帶處置清單)→ 擋下
+    r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s2",
+            "--severity", "major", "--findings", "2", "--report", str(bad), "--snapshot", str(snap),
+            "--findings-set", "a,b", "--folded-set", "a,b", "--accepted-set", "",
+            expect_rc=2)
+    check("載體全錨: 引句錨不到的席當載體 → 記帳當下擋下(rc2)", True, "")
+    check("載體全錨: 訊息講「換一席全錨的來帶」而不是指控造假",
+          "換一席全錨的來帶處置清單" in r.stderr and "不算編造" in r.stderr, r.stderr[-400:])
+    check("載體全錨: 訊息說清楚寫進去會被閘擋、只能換編號重記整輪",
+          "換迴圈編號" in r.stderr and "整輪重記" in r.stderr, r.stderr[-400:])
+
+    # ③ 換全錨席當載體 → 過
+    run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s3",
+        "--severity", "major", "--findings", "2", "--report", str(good), "--snapshot", str(snap),
+        "--findings-set", "a,b", "--folded-set", "a,b", "--accepted-set", "",
+        expect_rc=0)
+    last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+    check("載體全錨/反面: 全錨席當載體照樣記得進去", last.get("findings_set") == ["a", "b"], str(last)[:200])
+
+
 def t_canary_record_disposal_fields_optional():
     """[T1 相容雙讀](spec:Projects/design-loop重設計 六;plan:同名_實作計畫 T1)
 
@@ -16822,9 +16898,11 @@ def t_canary_record_disposal_fields_optional():
     v = mkvault()
     lid = f"dsp-{_M1U}"
     rpt = v / "Projects" / "rpt.md"
-    rpt.write_text("[major] x\n引句：「abc」\nseverity: minor\n", encoding="utf-8")
+    # 引句要夠長才過得了引句下限(短引句在閘那邊本來就算錨不到;2026-09-06 載體全錨檢查
+    # 往前挪到記帳端之後,這份假資料的三字元引句會被擋,改成像樣的長度)
+    rpt.write_text("[major] x\n引句：「這是被審文件裡的一整句話 拿來當錨點」\nseverity: minor\n", encoding="utf-8")
     snap = v / "Projects" / "snap.md"
-    snap.write_text("spec snapshot abc\n", encoding="utf-8")
+    snap.write_text("凍結快照 這是被審文件裡的一整句話 拿來當錨點 後面還有別的\n", encoding="utf-8")
 
     # ★相容鐵則★:零新參的舊呼叫 rc0,且記錄裡無任何新鍵
     r0 = run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", lid, "--severity", "minor",
