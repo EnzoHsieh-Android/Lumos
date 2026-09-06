@@ -11097,6 +11097,51 @@ def _pull_source_or_abort(src, allow_stale=False):
     print("  git pull 來源(取最新工具組)…")
     if subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode == 0:
         return 0
+    # ★來源「只髒了工具自己寫的帳」不該擋人★(2026-09-06 全 repo 審視 #5)
+    # 症狀:唯讀的 `lumos show`/`context` 就會 append docs/.usage-log.jsonl,而那本帳是版控的。
+    # 只要有人在來源 clone 裡查過一次圖譜,之後這台機器所有專案的 update / bootstrap --pull
+    # 全部被 fail-closed 擋住;逃生門寫在錯誤訊息最後一行,沒人會讀到那裡。
+    #
+    # ★做法是「聯集合併」,不是 stash/pop★:這幾本是 append-only 的 JSONL,兩邊各自加了行,
+    # stash pop 會判成衝突並★在帳本裡留下衝突標記★——那比原本擋住更糟,帳本直接壞掉、
+    # 之後每次讀都炸(第一版真的踩到,實測留下 <<<<<<< 標記)。正確解是把兩邊的行取聯集:
+    # 先把本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
+    # 非 JSONL 的簿記檔(anchor-baseline.json 是一份 JSON 物件)不能這樣併,照原路擋下。
+    dirty = subprocess.run(["git", "-C", str(src), "status", "--porcelain"],
+                           capture_output=True, text=True).stdout.splitlines()
+    paths = [ln[3:].strip().strip('"') for ln in dirty if ln.strip()]
+    mergeable = paths and all(p in _BOOKKEEPING_FILES and p.endswith(".jsonl") for p in paths)
+    if paths and not mergeable and all(p in _BOOKKEEPING_FILES for p in paths):
+        print("  (來源只髒了簿記檔,但其中有不是 append-only JSONL 的,不能自動併——照原路擋下)",
+              file=sys.stderr)
+    if mergeable:
+        print(f"  來源只髒了工具自己寫的帳({len(paths)} 本 append-only)——取聯集後續拉,不丟任何一行")
+        saved = {}
+        for rel in paths:
+            f = src / rel
+            try:
+                saved[rel] = f.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                saved = None
+                break
+        if saved is not None:
+            subprocess.run(["git", "-C", str(src), "checkout", "--"] + paths,
+                           capture_output=True, text=True)
+            rc2 = subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode
+            for rel, old_lines in saved.items():
+                f = src / rel
+                try:
+                    now = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+                    have = set(now)
+                    extra = [l for l in old_lines if l not in have]
+                    if extra:
+                        f.write_text("\n".join(now + extra) + "\n", encoding="utf-8")
+                        print(f"    {rel}:本機獨有的 {len(extra)} 行已補回")
+                except OSError as e:
+                    print(f"  ⚠ {rel} 併回失敗(那幾行還在 git 的物件庫裡,`git checkout HEAD@{{1}} -- {rel}` 可救):{e}",
+                          file=sys.stderr)
+            if rc2 == 0:
+                return 0
     if allow_stale:
         print("  ⚠ --allow-stale:pull 失敗,明示沿用現有來源繼續", file=sys.stderr)
         return 0
@@ -11124,7 +11169,7 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
             return None                      # fail-closed:一個檔都還沒動就退場
     # 安裝邏輯收進 python 單一源(scaffold + hooks);bash 安裝器僅留薄殼。
     _scaffold_project(root, slug)
-    _install_hooks_py(root)
+    _set_hooks_path(root)          # 全域同步★不在這裡★——要等下面的 copy2 自癒把 vendored 檔換新
     rc = 0
     # 結尾 diff 自癒:python 端逐檔比對 src↔target,差異即補(可安全覆寫)。
     toolkit = list(_VENDORED_TOOLKIT)
@@ -11149,6 +11194,9 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
         print("  ✓ 結尾自癒檢查:工具組完全對齊(無漏)")
     # 範本已是最新(copy2 迴圈完成) → reinject 紀律區塊(CLAUDE.md + Codex 指示檔,d1)
     _reinject_all(root, slug)
+    # ★全域同步放在這裡★(2026-09-06 全 repo 審視 #5):要等上面的 copy2 自癒把 vendored hook
+    # 換成來源的新版之後才同步出去,否則 `lumos update` 會拿更新前的舊副本覆蓋全域 hooks。
+    _sync_global_from_project(root)
     return rc
 
 
@@ -11532,14 +11580,31 @@ def _teardown_global_hooks(src_repo: Path, harness: str):
     return True
 
 
-def _install_hooks_py(root: Path):
+def _set_hooks_path(root: Path):
+    """① git config core.hooksPath(專案本地)。★跟全域同步拆開★——見 _sync_global_from_project。"""
     import subprocess
-    # ① git config core.hooksPath(專案本地)
     subprocess.run(["git", "-C", str(root), "config", "core.hooksPath", "scripts/hooks"])
-    # ②③ 全域 hooks/settings 同步(委派共用函式,消雙寫;來源=專案 vendored copy)
     print("  ✓ hooks:core.hooksPath 已設")
+
+
+def _sync_global_from_project(root: Path):
+    """②③ 全域 hooks/settings 同步,來源=專案 vendored copy。
+
+    ★呼叫時機很要緊:必須在 vendored 檔案已經被更新之後★(2026-09-06 全 repo 審視 #5)。
+    原本這兩件跟 core.hooksPath 綁在同一支 _install_hooks_py,而它在 _vendor_toolchain 裡
+    排在 filecmp 自癒迴圈★之前★——於是 `lumos update` 會拿「更新前」的舊副本去覆蓋全域
+    ~/.claude/hooks,把整台機器最核心的收工 hook 靜默換成六月版(實測 30912B → 15303B),
+    訊息還印綠燈;舊版的 settings merger 甚至會把已撤除的 hook 註冊加回去。
+    """
     for _h in ("claude", "codex"):
         print(_sync_msg(_h, _sync_global_hooks(root, _h)))
+
+
+def _install_hooks_py(root: Path):
+    """相容外殼:兩件一起做。★新程式碼請分開呼叫★,尤其是「先更新 vendored 再同步全域」
+    那條路(_vendor_toolchain);這支留給「來源就是最新」的呼叫點(cmd_init 的新建路徑)。"""
+    _set_hooks_path(root)
+    _sync_global_from_project(root)
 
 
 def _confirm_tty(prompt):
@@ -12988,6 +13053,7 @@ def _strip_string_literals(code):
 _BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
                       "docs/.ci-log.jsonl", "docs/.canary-log.jsonl",
                       "docs/.bypass-log.jsonl", "docs/.escape-log.jsonl",
+                      "docs/.kill-log.jsonl", "docs/.signoff-log.jsonl",
                       "governance/anchor-baseline.json")
 # ↑ canary-log/bypass-log 2026-08-27 補（[[Issues/簿記白名單漏canary與bypass帳]] 死結根治）:
 # 審計記帳(canary record)在 loop 中發生,pass 後提交它們原本會讓留痕失效→擋推。

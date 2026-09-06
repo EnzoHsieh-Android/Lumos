@@ -26100,5 +26100,136 @@ def t_doctor_summary_admits_soft_reminders():
     note_line = [l for l in main_src.splitlines() if "issues={issues}" in l]
     check("doctor: doctor-run 事件的 note 有接上 soft= 欄位(原始碼層;值的正確性由上面的畫面斷言涵蓋)",
           bool(note_line) and any("soft=" in l for l in note_line), str(note_line)[:160])
+def t_autoloop_pause_only_stops_dispatch():
+    """暫停派工不得把週期觀測一起關掉(2026-09-06 全 repo 審視 #4)。
+
+    出身:2026-09-05 決定暫停派工時,開關寫在 daily-governance.sh 裡包住整支 autonomous-loop.sh,
+    結果檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、backlog 每日衰減這五段一起停了
+    ——而三處筆記白紙黑字寫著「便宜的日常段照跑」。★監看的東西和被監看的東西同命★:回訪到期
+    的升級鏈因此沒有出口,那正是同一次審視裡「五件逾期沒人管」的上游原因。
+
+    修法照世界解(feature toggle 只包真正要停的最小單元):開關搬進 autonomous-loop.sh、放在
+    選 gap 之前;wrapper 無條件呼叫。這裡釘死那個相對位置——用位置而不是「跑一次看看」,是因為
+    真跑會發 LINE、抽探針、燒配額,不適合放進單元測試。"""
+    root = Path(GRAPHCTL).resolve().parent.parent
+    loop = (root / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
+    wrap = (root / "governance" / "daily-governance.sh").read_text(encoding="utf-8")
+    lines = loop.splitlines()
+    def line_of(pat, start=0):
+        return next((k for k, l in enumerate(lines) if k >= start and pat in l and not l.lstrip().startswith("#")), -1)
+    # 五段週期觀測的「呼叫點」(不是函式定義):都在檔案後段、彼此相鄰
+    calls = {}
+    for name in ("run_exam", "run_probe", "run_nags", "run_replay"):
+        k = next((i for i, l in enumerate(lines)
+                  if l.strip().startswith(name + " ") or l.strip() == name
+                  or (name in l and l.strip().startswith("[ -d"))), -1)
+        calls[name] = k
+        check(f"暫停開關: 找得到 {name} 的呼叫點", k > 0, str(k))
+    decay = line_of("backlog 衰減")
+    check("暫停開關: 找得到 backlog 每日衰減", decay > 0, str(decay))
+    gate = next((i for i, l in enumerate(lines) if "LUMOS_AUTOLOOP_OFF" in l and l.strip().startswith("if ")), -1)
+    check("暫停開關: autonomous-loop.sh 自己帶 LUMOS_AUTOLOOP_OFF 判斷", gate > 0, str(gate))
+    if gate > 0:
+        after = {k: v for k, v in list(calls.items()) + [("backlog衰減", decay)] if v > gate}
+        check("暫停開關: ★所有週期觀測都排在開關之前(關掉派工不會連它們一起關)★", not after, str(after))
+    # wrapper 那側不得再自己判一次(否則等於又把整支包起來)
+    wrap_gate = [l for l in wrap.splitlines() if "LUMOS_AUTOLOOP_OFF" in l and l.strip().startswith("if ")]
+    check("暫停開關: ★wrapper 不得再包一層判斷★(那正是 09-05 的錯法)", not wrap_gate, str(wrap_gate)[:120])
+    check("暫停開關: wrapper 無條件呼叫 autonomous-loop.sh",
+          any('"$DIR/autonomous-loop.sh"' in l and not l.lstrip().startswith("#") for l in wrap.splitlines()), "")
+
+
+def t_update_syncs_global_from_fresh_not_stale():
+    """`lumos update` 同步全域 hooks 時,來源必須是★更新後★的檔(2026-09-06 全 repo 審視 #5)。
+
+    出身:_vendor_toolchain 裡 _install_hooks_py(它同時做 core.hooksPath 與全域同步)排在
+    filecmp 自癒迴圈★之前★,於是 update 會拿「更新前」的 vendored 舊副本去覆蓋整台機器的
+    ~/.claude/hooks——實測把收工 hook 從 30912B 換成六月版的 15303B,訊息還印綠燈;舊版的
+    settings merger 甚至會把已撤除的 hook 註冊加回去。修法:把那支拆成 _set_hooks_path(留在
+    原位)與 _sync_global_from_project(搬到自癒之後)。
+
+    這裡用反事實夾具驗:專案的 vendored hook 是舊的、來源是新的,update 完之後全域那份必須
+    等於★來源★。"""
+    import os, subprocess as _sp, shutil
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).resolve().parent.parent
+    base = _P(tempfile.mkdtemp(prefix="gctl-upd-fresh-"))
+    src, proj, home = base / "src", base / "proj", base / "home"
+    for d in (src / "scripts" / "hooks" / "claude", src / "docs", proj / "scripts" / "hooks" / "claude",
+              proj / "docs" / "p-knowledge" / "Systems", home):
+        d.mkdir(parents=True, exist_ok=True)
+    for f in ("lumos", "install-graph-toolchain.sh"):
+        shutil.copy2(repo / "scripts" / f, src / "scripts" / f)
+    hook_rel = "scripts/hooks/claude/check-graph-sync.py"
+    shutil.copy2(repo / hook_rel, src / hook_rel)
+    _sp.run(["git", "init", "-q", "."], cwd=str(src))
+    (proj / hook_rel).write_text("OLD-STALE-COPY\n", encoding="utf-8")
+    shutil.copy2(repo / "scripts" / "lumos", proj / "scripts" / "lumos")
+    _sp.run(["git", "init", "-q", "."], cwd=str(proj))
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+    env.pop("CODEX_HOME", None)
+    r = _sp.run([sys.executable, "scripts/lumos", "update", "--source", str(src), "--no-pull"],
+                cwd=str(proj), env=env, capture_output=True, text=True)
+    glob_hook = home / ".claude" / "hooks" / "check-graph-sync.py"
+    check("update: 全域 hook 有被同步出來", glob_hook.is_file(), r.stdout[-200:] + r.stderr[-200:])
+    if glob_hook.is_file():
+        got, want, stale = glob_hook.read_bytes(), (src / hook_rel).read_bytes(), b"OLD-STALE-COPY\n"
+        check("update: ★全域 hook == 來源的新版★(不是更新前的舊副本)", got == want, f"len={len(got)} want={len(want)}")
+        check("update: 全域 hook 不是那份舊副本", got != stale, "")
+    check("update: 專案 vendored hook 也被自癒成新版",
+          (proj / hook_rel).read_bytes() == (src / hook_rel).read_bytes(), "")
+
+
+def t_update_unions_bookkeeping_instead_of_blocking():
+    """來源 clone 只髒了工具自己寫的 append-only 帳時,update 不該被擋,也不該弄壞帳本。
+
+    出身(2026-09-06 全 repo 審視 #5):唯讀的 `lumos show`/`context` 就會 append
+    docs/.usage-log.jsonl,而那本帳是版控的。只要有人在來源 clone 裡查過一次圖譜,之後這台
+    機器所有專案的 update 都被 fail-closed 擋住,逃生門寫在錯誤訊息最後一行沒人讀得到。
+
+    ★第一版用 stash/pop,實測會在帳本裡留下 <<<<<<< 衝突標記——比原本擋住更糟★。
+    改成聯集合併:本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
+    這裡驗三件:pull 有成功、兩邊的行都在、檔案裡沒有衝突標記。"""
+    import os, subprocess as _sp, shutil
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).resolve().parent.parent
+    base = _P(tempfile.mkdtemp(prefix="gctl-upd-union-"))
+    origin, seed, home = base / "origin", base / "seed", base / "home"
+    ident = ["-c", "user.name=t", "-c", "user.email=t@t"]
+    origin.mkdir(parents=True); _sp.run(["git", "init", "-q", "--bare", "."], cwd=str(origin))
+    (seed / "scripts" / "hooks" / "claude").mkdir(parents=True); (seed / "docs").mkdir(parents=True)
+    for f in ("lumos", "install-graph-toolchain.sh"):
+        shutil.copy2(repo / "scripts" / f, seed / "scripts" / f)
+    hook_rel = "scripts/hooks/claude/check-graph-sync.py"
+    shutil.copy2(repo / hook_rel, seed / hook_rel)
+    (seed / "docs" / ".usage-log.jsonl").write_text('{"ts":"1"}\n', encoding="utf-8")
+    _sp.run(["git", "init", "-q", "-b", "main", "."], cwd=str(seed))
+    _sp.run(["git", "add", "-A"], cwd=str(seed))
+    _sp.run(["git"] + ident + ["commit", "-qm", "init"], cwd=str(seed))
+    _sp.run(["git", "remote", "add", "origin", str(origin)], cwd=str(seed))
+    _sp.run(["git", "push", "-q", "-u", "origin", "main"], cwd=str(seed))
+    other = base / "other"; _sp.run(["git", "clone", "-q", str(origin), str(other)])
+    with open(other / hook_rel, "a", encoding="utf-8") as fh: fh.write("v2\n")
+    with open(other / "docs" / ".usage-log.jsonl", "a", encoding="utf-8") as fh: fh.write('{"ts":"2"}\n')
+    _sp.run(["git"] + ident + ["commit", "-qam", "v2"], cwd=str(other))
+    _sp.run(["git", "push", "-q"], cwd=str(other))
+    src = base / "src"; _sp.run(["git", "clone", "-q", str(origin), str(src)])
+    with open(src / "docs" / ".usage-log.jsonl", "a", encoding="utf-8") as fh: fh.write('{"ts":"LOCAL"}\n')
+    proj = base / "proj"; (proj / "scripts").mkdir(parents=True)
+    (proj / "docs" / "p-knowledge" / "Systems").mkdir(parents=True)
+    shutil.copy2(repo / "scripts" / "lumos", proj / "scripts" / "lumos")
+    _sp.run(["git", "init", "-q", "."], cwd=str(proj))
+    home.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home)); env.pop("CODEX_HOME", None)
+    r = _sp.run([sys.executable, "scripts/lumos", "update", "--source", str(src)],
+                cwd=str(proj), env=env, capture_output=True, text=True)
+    led = (src / "docs" / ".usage-log.jsonl").read_text(encoding="utf-8")
+    check("update/來源髒帳: 沒有被擋下(rc 不是中止)", "擋下:工具鏈來源拉不到最新版" not in r.stderr, r.stderr[-200:])
+    check("update/來源髒帳: 本機那行沒丟", '{"ts":"LOCAL"}' in led, led[:200])
+    check("update/來源髒帳: 遠端那行也拉進來了", '{"ts":"2"}' in led, led[:200])
+    check("update/來源髒帳: ★帳本裡沒有衝突標記★(stash/pop 版會留)", "<<<<<<<" not in led and ">>>>>>>" not in led, led[:200])
+    check("update/來源髒帳: 來源的 hook 拿到新版", "v2" in (src / hook_rel).read_text(encoding="utf-8"), "")
+
+
 if __name__ == "__main__":
     sys.exit(main())

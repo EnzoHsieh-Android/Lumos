@@ -283,6 +283,19 @@ r=backlog.daily_decay('$SCRIPT_DIR/backlog.jsonl','$SCRIPT_DIR/backlog-archive.j
 print(json.dumps(r))" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '{\"status\":\"error\"}')"
 log "backlog 衰減:$DECAY_OUT(ok=衰減完成/noop=今天已衰過/archive-fail=歸檔失敗 live 未動明天重試)"
 
+# ★派工段的暫停開關放在這裡,不在 wrapper★(2026-09-06 全 repo 審視 #4)
+# 為什麼:2026-09-05 決定「暫停派工」時,開關寫在 daily-governance.sh 裡包住整支腳本,結果
+# 上面那五段便宜的週期觀測(檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、backlog
+# 每日衰減)一起停了——而三處筆記白紙黑字寫著「便宜的日常段照跑」,落地當下那句就是假的。
+# ★監看的東西和被監看的東西同命★:回訪到期的升級鏈因此沒有出口,那正是同一次審視裡「五件
+# 逾期沒人管」的上游原因。世界解是 feature toggle 只包真正要停的最小單元(Fowler),所以
+# 開關搬到這裡——上面照跑,只停下面真正燒錢的派工。
+if [ "${LUMOS_AUTOLOOP_OFF:-1}" = "1" ]; then
+  log "派工段暫停中(LUMOS_AUTOLOOP_OFF=1,2026-09-05 起預設暫停;上面的週期觀測照跑)"
+  log "要臨時開回:LUMOS_AUTOLOOP_OFF=0 governance/autonomous-loop.sh --dry-run 6"
+  exit 0
+fi
+
 SKIP_CAP=3; skip_n=0
 while : ; do
 GAP_JSON="$(cd "$REPO" && python3 -c "

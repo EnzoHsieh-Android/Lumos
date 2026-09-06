@@ -29,16 +29,13 @@ main() {
   "$DIR/ai-governance-research.sh" >> "$DIR/logs/governance.log" 2>&1
   echo "[$(ts)] 治理日報 段結束 rc=$?"
 
-  # 2) 自主迭代 loop(dry-run;log → autonomous.log)
-  #    2026-09-05 暫停派工(README 審視 d3,見圖譜 Projects/README審視五修_計劃):七週週報收斂 0、待放行 0、每週 210–330 美元;
-  #    dry-run 永遠走不到開 PR。開關沿用 repo 的 *_OFF 慣例,但預設 1(=暫停);要臨時開回:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
-  if [ "${LUMOS_AUTOLOOP_OFF:-1}" != "1" ]; then
-    "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
-    echo "[$(ts)] 自主 loop 段結束 rc=$?"
-  else
-    echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3;LUMOS_AUTOLOOP_OFF=0 可開回)" >> "$DIR/logs/autonomous.log" 2>&1
-    echo "[$(ts)] 自主 loop 段暫停中(2026-09-05 d3)"
-  fi
+  # 2) 週期觀測 + 自主迭代 loop(log → autonomous.log)
+  #    ★無條件呼叫★:暫停開關住在 autonomous-loop.sh 裡、只包住真正燒錢的派工段(2026-09-06
+  #    全 repo 審視 #4 訂正)。前半的檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、
+  #    backlog 每日衰減照跑——2026-09-05 那版把開關寫在這裡,等於連監看一起關掉。
+  #    要臨時開回派工:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
+  "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
+  echo "[$(ts)] 週期觀測+自主 loop 段結束 rc=$?"
 
   # 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)
   "$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc=$?
