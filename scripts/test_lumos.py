@@ -21775,8 +21775,15 @@ def t_slim_ps1_ascii_only_no_bom():
     (不需要再模擬 DBCS 規則、也不需要判斷哪些字元危險)。"""
     from pathlib import Path as _P
     repo = _P(GRAPHCTL).parent.parent
-    for name in ("get.ps1", "install.ps1", "uninstall.ps1"):
-        raw = (repo / "slim" / name).read_bytes()
+    # ★2026-09-07 #7 起把 repo 根的 get.ps1 也納入★:它一直帶著中文,只是沒被這條蓋到。
+    # 理由跟精簡版那三支一字不差(磁碟執行用系統 ANSI codepage 解碼、CJK 前導位元組吃掉
+    # 下一個位元組),而「沒人回報」不等於沒問題——這個節點自己就寫過「沒人用過的路徑
+    # 不會有人回報」。中文說明搬到圖譜節點,不進 .ps1。
+    targets = [repo / "slim" / n for n in ("get.ps1", "install.ps1", "uninstall.ps1")]
+    targets.append(repo / "get.ps1")
+    for path in targets:
+        name = ("slim/" if path.parent.name == "slim" else "") + path.name
+        raw = path.read_bytes()
         check(f"★{name} 不得有 BOM(有 BOM 會讓 `irm | iex` 在第 1 行就炸)★",
               raw[:3] != b"\xef\xbb\xbf", repr(raw[:8]))
         bad = [(i, b) for i, b in enumerate(raw) if b > 127]
