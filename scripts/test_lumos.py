@@ -25900,29 +25900,91 @@ def t_daily_governance_wrapper_is_function_wrapped():
 def t_license_headers_travel_with_vendored_files():
     """授權標示必須跟著「會被複製進別人專案」的檔案走(2026-09-06 定 MIT)。
 
-    為什麼要機械守:根目錄的 LICENSE ★刻意不在 _VENDORED_TOOLKIT 白名單裡★——加進去的話
-    `lumos deinit` 會對白名單每一項無條件 unlink,等於刪掉使用者專案自己的 LICENSE。所以
-    合規完全靠檔頭:主程式帶 MIT 全文(它會單獨飄進別人的 repo),其餘被複製的檔帶 SPDX 兩行。
-    檔頭是靠人手維持的東西,重構或 slim-gen 改寫時最容易被靜默弄丟,所以釘一條。"""
+    為什麼要機械守:根目錄的 LICENSE ★刻意不在 _VENDORED_TOOLKIT 白名單裡★——deinit 會對白名單
+    每一項刪檔,加進去等於在消費專案刪掉使用者自己的 LICENSE。所以合規完全靠檔頭,而檔頭是靠人手
+    維持的東西,重構或 slim-gen 改寫時最容易被靜默弄丟。
+
+    ★這支測試被打臉四次才長成現在這樣,每一次的壞例子都留在下面的斷言裡★:
+      r1 外家席:白名單裡塞「含右括號的註解」→ 掃原始碼字串的版本假綠;
+      r1 通才席:白名單改成「兩個 tuple 相加」→ 換成語法樹解析還是假綠;
+      r1 架構對齊席:同檔 t_precommit_whitelist_drift_guard 早有更好寫法——載入模組讀執行期真值;
+      合約獨立審計:①在 scripts/hooks/ 頂層(不是 claude/ 底下)新增一支沒標示的檔,會被真的複製
+      出去,而手寫的清單掃不到 → 改成跟 _vendor_toolchain 同一套邏輯算;②MIT「全文」原本只比對兩
+      句片語,把中段整個換掉照樣綠 → 改成跟根目錄 LICENSE 的 MIT 正文逐行比對。
+    (合約 1 的「deinit 不得刪掉使用者的 LICENSE」另有端到端測試 t_deinit_never_deletes_user_license,
+     因為只驗白名單內容是必要非充分——繞過白名單直接刪檔這支測試看不到,審計實測過。)"""
     import re as _re
+    _spdx = _re.compile(r"^#\s*SPDX-License-Identifier:\s*MIT\s*$", _re.M)
+    _who = _re.compile(r"^#\s*SPDX-FileCopyrightText:", _re.M)
     root = Path(GRAPHCTL).resolve().parent.parent
     main = (root / "scripts" / "lumos").read_text(encoding="utf-8")
-    head = "\n".join(main.splitlines()[:45])
-    check("授權: 主程式檔頭有 SPDX 標示", "SPDX-License-Identifier: MIT" in head and "SPDX-FileCopyrightText" in head, head[:80])
-    check("授權: 主程式檔頭帶 MIT 全文(單獨飄出去也說得清)",
-          "Permission is hereby granted, free of charge" in main[:4000] and "WITHOUT WARRANTY OF ANY KIND" in main[:4000], "")
-    lic = root / "LICENSE"
-    check("授權: 根目錄有 LICENSE 且是 MIT", lic.is_file() and "MIT License" in lic.read_text(encoding="utf-8"), str(lic))
-    # 白名單四支 + hooks 整夾(它們都會被複製到消費專案)
-    targets = ["scripts/test_lumos.py", "scripts/merge-claude-settings.py", "scripts/graph-rename.sh",
-               "scripts/fetch-notesmd.sh", "scripts/hooks/pre-commit", "scripts/hooks/post-commit", "scripts/hooks/pre-push"]
-    targets += sorted(str(p.relative_to(root)) for p in (root / "scripts" / "hooks" / "claude").glob("*.py"))
-    missing = [f for f in targets if "SPDX-License-Identifier: MIT" not in "\n".join((root / f).read_text(encoding="utf-8").splitlines()[:45])]
-    check("授權: 每支會被複製進消費專案的檔都帶 SPDX 標示", not missing, str(missing))
-    src = main
-    m = _re.search(r"_VENDORED_TOOLKIT = \((.*?)\)", src, _re.S)
-    check("授權: ★LICENSE 不得進 _VENDORED_TOOLKIT★(deinit 會無條件刪白名單項,會刪掉使用者自己的 LICENSE)",
-          bool(m) and "LICENSE" not in m.group(1), (m.group(1)[:120] if m else "找不到白名單"))
+    head = lambda text, n=45: "\n".join(text.splitlines()[:n])
+    m = _load_lumos()
+
+    # [KEY 2 之一] 主程式檔頭:SPDX 註解行 + MIT 正文逐行比對(不是片語比對)
+    check("授權/KEY2: 主程式檔頭有 SPDX 標示(必須是註解行)",
+          bool(_spdx.search(head(main))) and bool(_who.search(head(main))), head(main, 6))
+    lic_path = root / "LICENSE"
+    check("授權: 根目錄有 LICENSE 且是 MIT", lic_path.is_file() and "MIT License" in lic_path.read_text(encoding="utf-8"), str(lic_path))
+    lic = lic_path.read_text(encoding="utf-8") if lic_path.is_file() else ""
+    body = [ln.strip() for ln in lic.split("Permission is hereby granted", 1)[-1].split("---")[0].splitlines() if ln.strip()]
+    hdr_txt = "\n".join(ln.lstrip("#").strip() for ln in main.splitlines()[:60])
+    missing_lines = [ln for ln in body if ln not in hdr_txt]
+    check("授權/KEY2: 主程式檔頭的 MIT 正文與根目錄 LICENSE 逐行相符(不是只比兩句片語)",
+          bool(body) and not missing_lines, f"缺 {len(missing_lines)} 行: {missing_lines[:2]}")
+
+    # [KEY 2 之二] 會被複製出去的檔案集合★跟生產邏輯同一套算法★,不是手寫清單
+    targets = list(getattr(m, "_VENDORED_TOOLKIT", []))
+    for d in ("scripts/hooks", "scripts/templates"):
+        base = root / d
+        if base.is_dir():
+            targets += [str(q.relative_to(root)) for q in base.rglob("*")
+                        if q.is_file() and "__pycache__" not in q.parts]
+    # 紀律模板刻意不加標頭:它會被合併進消費端自己的 CLAUDE.md/AGENTS.md,標頭會落進使用者的檔案
+    exempt = {"scripts/templates/graph-discipline.md"}
+    targets = sorted(set(targets) - exempt)
+    check("授權/KEY2: 會被複製出去的檔案集合算得出來且非空", len(targets) >= 12, f"{len(targets)} 支")
+    missing = [f for f in targets if (root / f).is_file() and not _spdx.search(head((root / f).read_text(encoding="utf-8", errors="replace")))]
+    check("授權/KEY2: 每支會被複製進消費專案的檔都帶 SPDX 標示", not missing, str(missing))
+
+    # [KEY 1] 授權檔不得進白名單(讀執行期真值,不掃原始碼字串)
+    wl = list(getattr(m, "_VENDORED_TOOLKIT", []))
+    check("授權/KEY1: _VENDORED_TOOLKIT 讀得到且非空", bool(wl) and all(isinstance(x, str) for x in wl), str(wl)[:160])
+    bad = [x for x in wl if Path(x).name in ("LICENSE", "COPYING", "NOTICE")]
+    check("授權/KEY1: ★授權檔不得進 _VENDORED_TOOLKIT★(白名單內容面)", not bad, str(bad) or str(wl)[:120])
+
+
+def t_deinit_never_deletes_user_license():
+    """★端到端★:在消費專案跑 deinit,使用者自己的 LICENSE / COPYING / NOTICE 必須原封不動。
+
+    出身(2026-09-06 合約獨立審計):只驗「白名單裡沒有 LICENSE」是必要非充分——審計員完全不碰
+    白名單,直接在 _deinit_remove_vendored 開頭加一行刪 LICENSE,原本那支測試 6/6 全綠、什麼都
+    沒發現。所以這裡不看白名單長怎樣,直接跑真的移除流程,再確認檔案還在。"""
+    from pathlib import Path as _P
+    m = _load_lumos()
+    src = _mk_f9_src("gctl-lic-src-")
+    root = _P(tempfile.mkdtemp(prefix="gctl-lic-deinit-"))
+    sc = root / "scripts"
+    (sc / "hooks" / "claude").mkdir(parents=True)
+    (sc / "templates").mkdir(parents=True)
+    (sc / "hooks" / "pre-commit").write_text("#!/bin/sh\n")
+    (sc / "hooks" / "claude" / "impact-hook.py").write_text("#x\n")
+    (sc / "templates" / "graph-discipline.md").write_text("tpl\n")
+    for rel in m._VENDORED_TOOLKIT:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x\n")
+    user_files = {"LICENSE": "MIT License\n\nCopyright (c) 2026 消費專案自己的人\n",
+                  "COPYING": "GPL-3.0\n", "NOTICE": "our notice\n"}
+    for name, txt in user_files.items():
+        (root / name).write_text(txt, encoding="utf-8")
+
+    m._deinit_remove_vendored(root, src)
+
+    for name, txt in user_files.items():
+        p = root / name
+        check(f"deinit: 使用者自己的 {name} 必須留著且內容未變", p.is_file() and p.read_text(encoding="utf-8") == txt,
+              f"exists={p.exists()}")
+    check("deinit: 確實有在做事(vendored 主程式已移除),不是空跑", not (sc / "lumos").exists(), "")
 
 
 if __name__ == "__main__":
