@@ -26330,5 +26330,57 @@ def t_prepush_runs_both_test_files():
     check("pre-push: 兩支都紅了就擋(各自有 exit 1)", hook.count("exit 1") >= 2, str(hook.count("exit 1")))
 
 
+def t_no_adhoc_normalizer_in_review_reports():
+    """審查卷證目錄裡不得再出現臨場正規化腳本(2026-09-06 收貨線指令化案停案後的根因修法)。
+
+    出身:那支腳本(governance/review-reports/code-daily-wrapper-main/normalize.py)有一個
+    ★讀不到任何嚴重度宣告就默默補成 clean★ 的分支——而記帳寫入端 rc2 擋的正是這件事,
+    留著它等於留一把繞過閘的鑰匙;它還會把引句裡的「」換成『』,讓合法引句錨不回快照。
+
+    ★根因不是缺工具,是派工詞自創格式★:查證指出席位吐錯格式不是模型天生行為,是派工詞
+    要求的,而正確格式早就寫在 lumos-design-loop 的 templates.md 卷證規則裡。派工詞照範本
+    寫,收貨正規化這件事就不存在——所以這裡直接禁止那個模式,而不是把它收成指令
+    (收成指令的設計走過完整設計審,五席一輪打穿,已停案)。"""
+    import subprocess as _sp
+    root = Path(GRAPHCTL).resolve().parent.parent
+    r = _sp.run(["git", "-C", str(root), "ls-files", "governance/review-reports"],
+                capture_output=True, text=True)
+    bad = [f for f in r.stdout.splitlines()
+           if f.endswith(".py") and any(k in Path(f).name.lower() for k in ("normalize", "normalise", "fixup", "reformat"))]
+    check("卷證目錄不得有臨場正規化腳本(派工詞照範本寫就不需要它)", not bad, str(bad))
+    # 同時釘住:code-loop skill 必須指向格式的單一來源,不要自己再寫一份
+    sk = (root / "skills" / "lumos-code-loop" / "SKILL.md").read_text(encoding="utf-8")
+    check("code-loop skill 指向席報告格式的單一來源(templates.md 卷證規則)",
+          "templates.md" in sk and "卷證規則" in sk, "")
+    check("code-loop skill 明寫引句內不要再包同型括號(巢狀會被收貨截斷)",
+          "巢狀" in sk, "")
+
+
+def t_quote_check_rejects_nested_same_quotes():
+    """引句裡有沒配對的同型引號必須擋下,不得靜默截斷(2026-09-06 實測補洞)。
+
+    出身:抽取正則止於第一個同型閉引號,所以「甲「乙」丙」只抽到 甲「乙,而那個前綴照樣錨得到、
+    判 ok——★丙 從沒被驗過★,席位可以在後半編造內容。同一支函式的註解記載 r1 s1 席修過另一種
+    組合(外「」內『』),這一種漏了;範本雖然教席位避免巢狀,但那是自律,這裡補上機械的那一半。
+
+    ★發現過程本身值得記★:我原本以為的病因是「抽取器把散文裡任何一對括號都當引句」,
+    實測推翻——抽取要求前面有 引句 標籤,散文括號不受影響。真因是巢狀截斷。差一點就照著
+    沒驗證的判斷去改工具(那正是同一天設計審抓到我的同型錯誤)。"""
+    m = _load_lumos()
+    spec = "文件內容:這句裡面又包了「另一句」在中間,完整存在於審材裡。"
+    rows = m._quote_rows('  引句:「這句裡面又包了「另一句」在中間」\n', spec)
+    check("巢狀引句: 抽得到一列", isinstance(rows, list) and len(rows) == 1, str(rows))
+    if rows:
+        check("巢狀引句: ★判不採信(不是靜默截斷後判過)★", rows[0].get("ok") is False, str(rows[0])[:160])
+        check("巢狀引句: 標成格式問題,理由講得出來", rows[0].get("malformed") is True, str(rows[0])[:160])
+    # 反面:正常引句照樣過(不是把全部都擋掉)
+    ok_rows = m._quote_rows('  引句:「這句裡面又包了另一句在中間」\n',
+                            "文件內容:這句裡面又包了另一句在中間,完整存在於審材裡。")
+    check("巢狀引句/反面: 沒有巢狀的引句照樣錨得到", ok_rows and ok_rows[0].get("ok") is True, str(ok_rows)[:160])
+    # 另一種組合(外「」內『』)是既有已修的,不得回歸
+    mix = m._quote_rows('  引句:「規則『甲』乙丙丁戊己庚辛」\n', "文件:規則『甲』乙丙丁戊己庚辛,在審材裡。")
+    check("巢狀引句: 外「」內『』(既有已修)照樣過,沒被新守衛誤擋", mix and mix[0].get("ok") is True, str(mix)[:160])
+
+
 if __name__ == "__main__":
     sys.exit(main())
