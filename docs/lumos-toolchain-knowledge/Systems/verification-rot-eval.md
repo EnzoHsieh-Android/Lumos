@@ -1,12 +1,12 @@
 ---
 type: system
-status: planned
+status: superseded
 created: 2026-06-26
 updated: 2026-06-26
 self_audit: sonnet/2026-06-26
 tags:
   - type/system
-  - status/planned
+  - status/superseded
 summary: |-
   FLOW:vault git 史 ─A.mine→ candidates.jsonl ─B.label(人)→ fixtures.jsonl(進git黃金集) ─C.run(複製L3 pre-LLM 成本閘→importlib 載 hook→build_prompt+call_claude_sonnet→正規化None/缺鍵)→ report(recall/precision/門檻敏感性表)
   KEY:量化 L3 腐化偵測(verification-rot-check.py)的真實 recall/precision，把 CONFIDENCE_THRESHOLD=0.7 從拍腦袋變成從門檻敏感性表挑——是一把尺、不是新閘(不改 hook、不接 CI 擋線、不改 doctor)
@@ -74,3 +74,12 @@ decisions:
 ## 相關
 - 設計稿:`docs/design/2026-06-19-rot-eval.md`(CONVERGED,canary-護審計 loop 5 輪、K=2;審計修正紀錄見尾段 R1-R4)。
 - 被量對象:`scripts/hooks/claude/verification-rot-check.py`(L3 腐化偵測 hook,不改)。
+
+## 結案(2026-09-06)
+
+**這篇從 2026-06 立案到現在是 design-only,從沒實作過**(自陳「scripts/rot-eval/ 與 lumos 子命令都還沒有」)。它要評估的那支 hook(`verification-rot-check.py`)已於 2026-08-22 撤除、2026-09-06 相容期滿真刪,所以評估對象本身不存在了。
+
+★不是「做完了」,是「要評估的東西沒了,案子跟著結」★。當初的問題(圖譜內容會不會腐爛、怎麼機械偵測)仍然沒有答案——全 repo 審視的完整性批評席把它列為「這輪 16 個鏡頭沒覆蓋到」的第二條:doctor 驗的全是機械面(雙向連結、路徑存在、欄位列舉),內容層腐爛今天沒有任何機制在管。要重啟就重新立案,不要復活這篇的舊 spec。
+
+單源:[[Projects/全repo審視_計劃]]。
+

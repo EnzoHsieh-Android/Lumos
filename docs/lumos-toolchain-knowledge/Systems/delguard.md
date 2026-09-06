@@ -24,6 +24,7 @@ summary: |-
   KEY:天花板=只抓「符號消失」型;死碼盲區(符號在、機制停用=存在性比對放行)/行為反轉/純語意矛盾不響——見 [[code側刪除傳播守衛_計劃]] 天花板節能力邊界表;v2 候選=呼叫點判定
   KEY:排除域與 pre-commit should_exclude 對齊(7 目錄+lock 三檔名),漂移由 t_precommit_whitelist_drift_guard 釘第三份清單;S3 問句同步在 lumos-project-notes skill 退場段(無 delguard 的 repo 靠自律)
   KEY:★2026-09-05 成功也記帳★([[Projects/第二輪審視六修_計劃]] d3):之前只記 degraded,治理帳 63/63 全是超時,外部稽核誤判成「從沒守到」;實測一般 commit 0.4 秒跑完、近 30 天 646 commit 只 63 次超時;現在跑完記 kind=ok(tokens/hits/secs)
+  KEY:[2026-09-06]★逾時降級的真因是命中行數,不是 token 數★——帳上 30% 執行是逾時降級(守衛在半盲狀態下擋人)。原以為跟 token 數有關,量出來是:6 token/835 命中=9.7 秒、10 token/1615 命中=14 秒(預算 15 秒)、6 token/0 命中=0.3 秒。真因是 git grep 掃進了審查卷證與治理帳:四個常用詞(doctor/lumos/check/node)全 repo 命中 75587 行、7.17 秒,排除 governance/ 與 docs/ 後 7336 行、0.47 秒(15 倍)。修法=兩夾進 _DELGUARD_EXCLUDE_DIRS 並同步 pre-commit 的 should_exclude(既有漂移守衛會逐項比對)。★語意也更準★:那兩夾是「講程式的文字」不是程式本身,符號被審查報告提到不代表它還活著 [test:t_delguard_excludes_prose_dirs]。★用罕見詞量不會重現★——第一次我用 cmd_doctor 之類量到 0.75 秒就差點判「已經不慢了」
   DEP:[[Systems/cochange-guard]](同型 advisory 前例,Gate CC 鄰位)｜scripts/hooks/pre-commit Gate DG｜find_vault/_cochange_repo_root 共用 helper
   TEST:t_delguard(scripts/test_lumos.py,85 條:S1 抽取/信心/掃描/S2/S3/fail-open/deadline/邊界輸入/鑑別力翻紅驗證)+t_precommit_whitelist_drift_guard 擴充;全量 2515/0@95c4224
 verified_by:

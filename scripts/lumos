@@ -792,6 +792,11 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
 
     def warn(lines, head, advice=None):
         nonlocal issues
+        # ★空清單也是一段提醒★:Check F 這種「沒有逐條、只有一句」的走 warn([]),issues 加 0,
+        # 只數 warn_soft 會漏掉它(2026-09-06 全 repo 審視:收尾行說 0 issues 蓋掉七段警告)
+        if not lines:
+            _soft["segs"] += 1
+            _soft["heads"].append(head)
         print(f"  {C['Y']}⚠{C['X']} {head}")
         for l in lines:
             print(f"      • {l}")
@@ -801,8 +806,13 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
 
     _verbose = verbose or ci   # --ci 視同 verbose:CI 日誌要完整;互動預設收斂(體檢 #10)
     _SOFT_CAP = 3
+    # 收尾行要講「還有幾段提醒」——不改 rc、不改軟硬分級,只是別讓結論行比正文樂觀
+    _soft = {"segs": 0, "lines": 0, "heads": []}
 
     def warn_soft(lines, head, advice=None):
+        _soft["segs"] += 1
+        _soft["lines"] += len(lines)
+        _soft["heads"].append(head)
         # 軟提醒:印出但不動 issues → 不影響 rc(R3-MAJOR-3)
         # ★預設每段最多 3 條★(2026-08-21 體檢 #10):軟段([P]19 行/[Y]6 行…)多為歷史/自指噪音,
         # 每次跑幾十行把硬提醒淹掉、Claude 一整天沒讀過一條;其餘收成一行,--verbose 全列。
@@ -1919,14 +1929,25 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         # nodes 恆空、不進 issues、不改 rc;gov 預設畫面隱藏(見 cmd_gov),--full/--stats 照列。
         _gates_hit = len({e.get("gate") for e in gov_events if str(e.get("gate", "")).startswith("check-")})
         gov_events.append({"gate": "doctor-run", "kind": "ran", "hard": False, "nodes": [],
-                           "note": f"issues={issues} gates={_gates_hit}"})
+                           "note": f"issues={issues} gates={_gates_hit} soft={_soft['segs']}"})
         _append_governance_log(env.vault, gov_events)
+
+    # 「還有幾段提醒」——子句從各段自己的標題取,不手寫第二份文字(會漂)
+    def _soft_tail():
+        # ★不要把各段標題截斷拼成一句★:那些標題是完整句子,截到十幾個字會變成讀不懂的碎片
+        # (2026-09-06 試過兩版都難讀)。這裡只給數字——結論行的任務是「別比正文樂觀」,
+        # 細節上面每一段都印過了,要全文一個指令就有。
+        if not _soft["segs"]:
+            return ""
+        cnt = f"{_soft['segs']} 段" + (f"、共 {_soft['lines']} 條" if _soft["lines"] else "")
+        return (f"\n  {C['Y']}·{C['X']} 另有 {cnt}提醒沒算進 issues——它們不影響這行的判定,"
+                f"但上面每一段都印了;{C['B']}lumos doctor --verbose{C['X']} 看全部")
 
     print(f"{C['B']}─────────────────────────────────{C['X']}")
     if issues == 0:
-        print(f"{C['G']}{C['B']}✓ 圖譜健康{C['X']} — 0 issues ({len(notes)} 篇)")
+        print(f"{C['G']}{C['B']}✓ 圖譜健康{C['X']} — 0 issues ({len(notes)} 篇){_soft_tail()}")
         return 0
-    print(f"{C['Y']}{C['B']}⚠ 發現 {issues} 個 issue{C['X']} ({len(notes)} 篇)")
+    print(f"{C['Y']}{C['B']}⚠ 發現 {issues} 個 issue{C['X']} ({len(notes)} 篇){_soft_tail()}")
     return 1 if strict else 0
 
 
@@ -11294,8 +11315,14 @@ _HARNESS_HOME = {"claude": (".claude", "settings.json"), "codex": (".codex", "ho
 # code-loop-guard.py:2026-07-06 ADR 撤除 Stop nag(見 Projects/code-loop必用守衛_計劃)——早過相容期,直接刪。
 # verification-rot-check.py:2026-08-21 體檢 #8 撤除(核心從未觸發、每次 Bash 付啟動成本;
 #   見 Verification/2026-08-21_工具鏈體檢修復批)——相容期中,留空殼。
-_RETIRED_STUB_CLAUDE_HOOKS = ("verification-rot-check.py",)
-_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py",)
+# 相容期空殼:剛撤的 hook 先換成 exit 0 的空殼,不刪檔——正在跑的 session 讀進的 settings
+# 快照可能還註冊著它,真檔一刪那些 session 每次觸發都報錯(2026-08-22 實際發生過)。
+# 下一版把名字從這裡移到 _RETIRED_CLAUDE_HOOKS 就是真刪。
+_RETIRED_STUB_CLAUDE_HOOKS = ()
+# 真刪:相容期已過。verification-rot-check.py 2026-08-22 撤除、2026-09-06 真刪(相容期兩週,
+# 遠超「舊 session 還活著」的實際窗口;它的取代品 Systems/verification-rot-eval 是 design-only
+# 從未實作,同日結案)。
+_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py", "verification-rot-check.py")
 
 _RETIRED_HOOK_STUB_BODY = (
     "#!/usr/bin/env python3\n"
@@ -14053,7 +14080,13 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
 
 
 _DELGUARD_STOP = frozenset("if else for while return import class def val var fun void public private static final new this true false null let const function".split())
-_DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/")
+# ★2026-09-06 加 governance/ 與 docs/★:這兩夾是「講程式的文字」不是程式本身——審查卷證、治理帳、
+# 方法論散文。符號還被它們提到,不代表那個符號還活著,所以掃它們既不準也很貴。實測四個常用詞
+# (doctor/lumos/check/node)全 repo 掃 7.17 秒、排除後 0.47 秒(15 倍);治理帳上的逾時降級也不是
+# 跟 token 數成正比,是跟「命中行數」——1615 命中要 14 秒,而 15 秒就是預算上限。
+# ★注意★:docs/ 底下的圖譜本體另有 :(exclude){graph_root} 專門排,這裡多排的是帳本與散文。
+_DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/",
+                          "governance/", "docs/")
 # 與 pre-commit should_exclude 的 lock 排除規則對齊(`*package-lock.json|*yarn.lock|*pnpm-lock.yaml`)
 _DELGUARD_EXCLUDE_LOCKFILES = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
 DELGUARD_TOKEN_CAP = 40  # staged diff 抽出 token 數上限,超額截斷(dropped 計入輸出提示)

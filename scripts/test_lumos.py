@@ -361,14 +361,19 @@ def t_install_global_hook_sync():
     import os, json as _j, subprocess as _sp
     repo = Path(GRAPHCTL).resolve().parent.parent
 
-    def run_sync(home):
+    def run_sync(home, stub_names=None):
+        # stub_names:把「相容期空殼」清單換成合成名字再跑。★這樣測的是機制不是某一支檔★
+        # (2026-09-06:verification-rot-check.py 相容期滿真刪後,那份清單變空;原本寫死該檔名
+        #  的第 5、6 段會因為「現在剛好沒有任何 hook 在相容期」而測不到東西=靜默失去覆蓋。)
+        patch = ("m._RETIRED_STUB_CLAUDE_HOOKS = tuple(sys.argv[3].split(','));" if stub_names else "")
         code = ("import sys;from pathlib import Path;"
                 "import importlib.util;from importlib.machinery import SourceFileLoader;"
                 "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
                 "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+                + patch +
                 "m._sync_global_claude(Path(sys.argv[2]))")
-        return _sp.run([sys.executable, "-c", code, GRAPHCTL, str(repo)],
-                       env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)),
+        argv = [sys.executable, "-c", code, GRAPHCTL, str(repo)] + ([",".join(stub_names)] if stub_names else [])
+        return _sp.run(argv, env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)),
                        capture_output=True, text=True)
 
     # 1. 乾淨假 HOME → copy 三 hook + settings 註冊我方 hook
@@ -418,10 +423,10 @@ def t_install_global_hook_sync():
     #    讀進的 settings 快照還註冊著它,一刀刪檔會讓那些 session 每次觸發都報錯。
     fake5 = Path(tempfile.mkdtemp(prefix="gctl-gsync5-"))
     h5 = fake5 / ".claude" / "hooks"; h5.mkdir(parents=True)
-    (h5 / "verification-rot-check.py").write_text("# 舊的真實作,會做事\nraise SystemExit(2)\n",
+    (h5 / "retired-example-hook.py").write_text("# 舊的真實作,會做事\nraise SystemExit(2)\n",
                                                   encoding="utf-8")
-    run_sync(fake5)
-    stub = h5 / "verification-rot-check.py"
+    run_sync(fake5, stub_names=["retired-example-hook.py"])
+    stub = h5 / "retired-example-hook.py"
     check("撤除兩階段: 相容期 hook 檔案還在(沒被一刀刪)", stub.exists())
     if stub.exists():
         body = stub.read_text(encoding="utf-8")
@@ -430,22 +435,27 @@ def t_install_global_hook_sync():
                      input='{"hook_event_name":"PostToolUse"}')
         check("撤除兩階段: 空殼跑起來 exit 0(舊 session 觸發不報錯)", rc.returncode == 0,
               f"rc={rc.returncode} err={rc.stderr[-160:]}")
-    # 過了相容期的(code-loop-guard)仍是真刪 —— 已由第 2 段覆蓋
+    # 過了相容期的(code-loop-guard、verification-rot-check)仍是真刪 —— 已由第 2 段覆蓋
+    check("撤除兩階段: 真刪清單含已過相容期的兩支",
+          set(_load_lumos()._RETIRED_CLAUDE_HOOKS) >= {"code-loop-guard.py", "verification-rot-check.py"},
+          str(_load_lumos()._RETIRED_CLAUDE_HOOKS))
     # 6. teardown 要連空殼一起清掉(相容期檔案不能留在拆機後的機器上)
     fake6 = Path(tempfile.mkdtemp(prefix="gctl-gsync6-"))
     h6 = fake6 / ".claude" / "hooks"; h6.mkdir(parents=True)
-    (h6 / "verification-rot-check.py").write_text("# stub\n", encoding="utf-8")
+    (h6 / "retired-example-hook.py").write_text("# stub\n", encoding="utf-8")   # 合成的相容期空殼
     (fake6 / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
     code6 = ("import sys;from pathlib import Path;"
              "import importlib.util;from importlib.machinery import SourceFileLoader;"
              "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
              "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+             # 同上:注入合成的相容期名字,測的是「teardown 會不會清空殼」這個機制
+             "m._RETIRED_STUB_CLAUDE_HOOKS = ('retired-example-hook.py',);"
              "m._teardown_global_claude(Path(sys.argv[2]))")
     _sp.run([sys.executable, "-c", code6, GRAPHCTL, str(repo)],
             env=dict(os.environ, HOME=str(fake6), USERPROFILE=str(fake6)),
             capture_output=True, text=True)
     check("撤除兩階段: teardown 連相容期空殼一起清掉",
-          not (h6 / "verification-rot-check.py").exists())
+          not (h6 / "retired-example-hook.py").exists())
 
 
 def t_probe_sandbox_cannot_push():
@@ -5587,13 +5597,13 @@ def t_merge_dedupes_preexisting_duplicates():
     fake_home = Path(tempfile.mkdtemp(prefix="gctl-dedupe-"))
     (fake_home / ".claude" / "hooks").mkdir(parents=True)
     (fake_home / ".claude" / "hooks" / "check-graph-sync.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-    (fake_home / ".claude" / "hooks" / "verification-rot-check.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    (fake_home / ".claude" / "hooks" / "retired-example-hook.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     settings = fake_home / ".claude" / "settings.json"
     dup = lambda name, matcher=None: dict(({"matcher": matcher} if matcher else {}),
                                           hooks=[{"type": "command", "command": f"python3 \"{fake_home}/.claude/hooks/{name}\"", "timeout": 10}])
     settings.write_text(json.dumps({"hooks": {
         "Stop": [dup("check-graph-sync.py"), dup("check-graph-sync.py")],
-        "PostToolUse": [dup("verification-rot-check.py", "Bash"), dup("verification-rot-check.py", "Bash")],
+        "PostToolUse": [dup("retired-example-hook.py", "Bash"), dup("retired-example-hook.py", "Bash")],
     }}), encoding="utf-8")
     env = dict(os.environ, HOME=str(fake_home), USERPROFILE=str(fake_home))
     merge = str(Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py")
@@ -25985,6 +25995,62 @@ def t_deinit_never_deletes_user_license():
         check(f"deinit: 使用者自己的 {name} 必須留著且內容未變", p.is_file() and p.read_text(encoding="utf-8") == txt,
               f"exists={p.exists()}")
     check("deinit: 確實有在做事(vendored 主程式已移除),不是空跑", not (sc / "lumos").exists(), "")
+
+
+def t_delguard_excludes_prose_dirs():
+    """delguard 不掃 governance/ 與 docs/(2026-09-06 全 repo 審視第二批)。
+
+    出身:治理帳上 30% 的 delguard 執行是「逾時降級」——守衛在半盲狀態下擋人。原本以為跟 token
+    數有關,實際量出來是跟★命中行數★成正比(帳上 1615 命中要 14 秒,而預算就是 15 秒)。真因是
+    git grep 掃進了審查卷證與治理帳:四個常用詞(doctor/lumos/check/node)全 repo 命中 75587 行、
+    7.17 秒,排除這兩夾後 7336 行、0.47 秒。
+
+    語意面也更準,不只是快:那兩夾是「講程式的文字」不是程式本身,符號被審查報告提到不代表它還
+    活著。排掉之後判「已消失」會更貼近事實(方向是更容易示警,不是更容易放過)。
+    ★docs/ 底下的圖譜本體另有專門的排除,這裡多排的是帳本與散文。★"""
+    m = _load_lumos()
+    ex = list(getattr(m, "_DELGUARD_EXCLUDE_DIRS", []))
+    for d in ("governance/", "docs/"):
+        check(f"delguard: 排除域含 {d}", d in ex, str(ex))
+    # 跟 pre-commit 的同源清單對齊(既有漂移守衛逐項比對,這裡只確認新加的兩項真的在那一行)
+    hooks_dir = Path(GRAPHCTL).resolve().parent / "hooks"
+    case_line = [l for l in (hooks_dir / "pre-commit").read_text(encoding="utf-8").splitlines()
+                 if "node_modules" in l and "case" not in l][0]
+    for d in ("governance", "docs"):
+        check(f"delguard: pre-commit 的 should_exclude 也排 {d}", d in case_line, case_line[:120])
+
+
+def t_doctor_summary_admits_soft_reminders():
+    """doctor 收尾行不得比正文樂觀(2026-09-06 全 repo 審視第二批;五個鏡頭各自撞到同一件事)。
+
+    出身:實跑當天上面列了 5 件回訪逾期、5 份驗證引用被翻案的決策、1 張零判定的連鎖單、1 條失效
+    路徑、沒接 linter,尾行仍印「✓ 圖譜健康 — 0 issues」,人和 AI 都會停在那一行。而且 9/1 起
+    129 次 doctor 全部 issues=0,那幾件一件都沒被清掉。
+
+    ★軟提醒不進 rc 是既有裁定,這裡不動它★——只要求結論行把「還有幾段沒算進來」講出來。
+    計數放在 warn 與 warn_soft 的共用層:Check F 那種「沒有逐條、只有一句」的走 warn([]),
+    issues 加 0,只數 warn_soft 會漏掉它。"""
+    import subprocess as _sp
+    root = Path(GRAPHCTL).resolve().parent.parent
+    r = _sp.run([sys.executable, GRAPHCTL, "doctor"], capture_output=True, text=True, cwd=str(root))
+    out = r.stdout
+    check("doctor: 既有結論行 token 沒被動到(四處測試錨著)", "圖譜健康" in out or "個 issue" in out, out[-160:])
+    check("doctor: 結論行帶「篇)」", "篇)" in out, out[-160:])
+    soft_printed = out.count("  ⚠ ")
+    tail_has = "提醒沒算進 issues" in out
+    check("doctor: 有軟提醒時,收尾行必須講還有幾段沒算進來",
+          (soft_printed == 0) or tail_has, f"印了 {soft_printed} 段 ⚠,收尾行有交代={tail_has}")
+    if tail_has:
+        import re as _re
+        m = _re.search(r"另有 (\d+) 段", out)
+        check("doctor: 收尾行講的段數 = 實際印出的 ⚠ 段數(不是手寫數字)",
+              bool(m) and int(m.group(1)) == soft_printed, f"收尾說 {m.group(1) if m else '?'} / 實印 {soft_printed}")
+    # 治理帳也要記得下這個數字(可重算)。★只有 --ci 會寫帳★,所以這裡自己跑一次 --ci 再看,
+    # 不要去讀「剛好最近有沒有人跑過」的帳尾——那會變成看別人臉色的測試
+    _sp.run([sys.executable, GRAPHCTL, "doctor", "--ci"], capture_output=True, text=True, cwd=str(root))
+    last = (root / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").rstrip().splitlines()[-1]
+    check("doctor: --ci 寫的 doctor-run 事件帶 soft= 欄位(數字可重算)",
+          '"gate": "doctor-run"' in last and "soft=" in last, last[:160])
 
 
 if __name__ == "__main__":
