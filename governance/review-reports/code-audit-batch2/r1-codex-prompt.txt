@@ -1,0 +1,18 @@
+你是外部審查員,看一份「外部投稿的 diff」,找出作者沒看到的 bug。只做 finder。
+輸出:第一行 severity: <clean|minor|major|blocker>;每條:
+- [<severity>] <一句話>
+  file: <路徑>:<行>
+  quote: <patch 裡逐字的一行>
+  why: <為什麼是 bug、什麼情況會出錯>
+被審材料:governance/review-reports/code-audit-batch2/r1-snapshot.patch。repo 在 /Users/enzo/harness/lumos-toolchain,可讀原檔佐證,只讀不改。不要跑 python3 scripts/test_lumos.py 不帶 -k(8 分鐘)。
+這批三件:
+① delguard(刪除守衛)的 _DELGUARD_EXCLUDE_DIRS 加入 "governance/" 與 "docs/",pre-commit 的 should_exclude case 行同步加 governance/*;加測試 t_delguard_excludes_prose_dirs。
+② doctor 收尾行加一句「另有 N 段、共 M 條提醒沒算進 issues」;計數放在 warn(空清單時)與 warn_soft 的共用層;doctor-run 治理事件加 soft= 欄位;加測試 t_doctor_summary_admits_soft_reminders。
+③ 刪掉 scripts/hooks/claude/verification-rot-check.py(427 行),把它從 _RETIRED_STUB_CLAUDE_HOOKS 移到 _RETIRED_CLAUDE_HOOKS;_RETIRED_STUB_CLAUDE_HOOKS 變成空 tuple;測試裡寫死該檔名的 7 處改成合成名字 retired-example-hook.py,並在子行程裡注入 m._RETIRED_STUB_CLAUDE_HOOKS 才測得到「相容期空殼」機制;圖譜節點結案、方法論文件標成歷史。
+重點鏡頭(逐條必答):
+1. ★排除 docs/ 會不會誤傷★:_DELGUARD_EXCLUDE_DIRS 有兩個使用點——(a) 判斷 diff 裡哪些「+ 行」要收 token,(b) git grep 的 :(exclude) 路徑。加了 docs/ 之後,原本靠 graph_root 排除的邏輯有沒有重複或衝突?消費專案的圖譜根不叫 docs/ 時會怎樣(例如 vault 在別的路徑)?比對規則是 `c.startswith(seg) or ("/"+seg) in c`——"docs/" 這個 seg 會不會誤配到 `xdocs/` 或 `a/mydocs/b`?
+2. ★語意方向★:排除更多目錄之後,delguard 是變得更容易示警還是更容易放過?去讀 _delguard_confidence 怎麼用 alive 集合算 high/low,確認方向。作者宣稱「方向是更容易示警」,對不對?
+3. ★doctor 計數★:warn(空清單) 也算一段——會不會有某個 warn 呼叫帶空清單但其實不是提醒?去把所有 warn( 呼叫點看過。soft["lines"] 只在 warn_soft 累加、warn 空清單不加,收尾行印「N 段、共 M 條」時 M 會不會少算而誤導?
+4. ★_RETIRED_STUB_CLAUDE_HOOKS 變空 tuple★:所有迭代它的地方對空 tuple 行為正確嗎?有沒有哪裡假設它非空?_teardown_global_claude 與 _sync_global_claude 都要看。
+5. ★測試注入★:run_sync 用 sys.argv[3] 傳 stub 名字,但只有 stub_names 為真時才 append 那個 argv——其他呼叫點 argv 只有 3 個,patch 字串不會被加入,對嗎?有沒有 argv 索引越界的可能?
+6. 刪檔之後有沒有殘留引用會炸(grep verification-rot-check 全 repo,排除 docs/design 與審查卷證那種歷史文件)?

@@ -1,0 +1,15 @@
+severity: major
+- [major] delguard 把任何深度名為 `docs`／`governance` 的目錄都當散文排除，會漏掉消費專案的真程式碼
+  file: scripts/lumos:14088
+  quote: `_DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/",`
+  why: `_delguard_parse_diff` 使用 `c.startswith(seg) or ("/"+seg) in c`，所以雖不會誤配 `xdocs/` 或 `a/mydocs/b`，卻會排除 `src/docs/parser.py`、`packages/governance/rules.py`。這些名稱在消費專案不保證是散文目錄；刪除其中符號時不會收 token，守衛直接漏報。它也與 pre-commit 只排根目錄 `docs/*|governance/*` 的規則不一致。圖譜根若在其他路徑仍由 `graph_root` 正確排除，但這個新增規則會額外誤傷上述程式目錄。排除 alive 命中確實會讓剩餘 token 更容易成為 high、作者宣稱的方向本身正確。
+
+- [major] 新 doctor 測試會在真 repo 追加受版控的治理帳，讓測試本身污染工作樹
+  file: scripts/test_lumos.py:26050
+  quote: `_sp.run([sys.executable, GRAPHCTL, "doctor", "--ci"], capture_output=True, text=True, cwd=str(root))`
+  why: `root` 是來源 repo；`doctor --ci` 會呼叫 `_append_governance_log`，追加 `docs/.governance-log.jsonl`。該帳在本 repo 受 git 追蹤，因此每次跑測試都會留下變更並持續膨脹，也可能影響後續依賴治理帳內容的測試。應在隔離 fixture repo/vault 驗證，不能對來源 repo 寫帳。
+
+- [minor] doctor 的「共 M 條提醒」沒有計入 `warn([])` 那段唯一的 head 提醒
+  file: scripts/lumos:814
+  quote: `_soft["lines"] += len(lines)`
+  why: Check F 以 `warn([], head)` 顯示一條只有標題的提醒；patch 只增加 `segs`，沒有增加 `lines`。若同時有其他 soft 段，收尾會印例如「2 段、共 5 條」，實際畫面卻有那 5 個逐條項目再加 Check F 的 head-only 提醒，數字少一。若只有 Check F，程式甚至省略「共 0 條」，也不符合投稿宣稱固定顯示「另有 N 段、共 M 條」。其餘 `warn` 呼叫都以非空 finding 清單代表 hard issue，只有 Check F 使用空清單；空 tuple 在 `_sync_global_claude`、`_teardown_global_claude` 均可安全迭代，測試的 `sys.argv[3]` 也只在同步追加參數時才注入，不會越界。

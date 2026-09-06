@@ -1,0 +1,925 @@
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
+index edace02..465af6e 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
+@@ -465,8 +465,34 @@ Enzo 確認著作權人是本人,選 **MIT**。查證、五個候選各派反方
+ 
+ - **三席各自用不同的壞例子讓同一支守衛假綠**:外家 Codex 用「白名單裡有含右括號的註解」、通才席用「兩個 tuple 相加」;我換成語法樹解析後擋得住前者、擋不住後者。**架構對齊席直接指出 repo 裡早就有更好的既有寫法**——載入模組讀執行期真值,同檔另一支測試早就這樣做。改用那條之後兩種都翻紅。
+ - **合約獨立審計判 fail,再抓三條**(它被要求「實際構造破壞而不是推論」):①繞過白名單直接在移除函式裡刪 LICENSE,守衛全綠;②在 hooks 頂層新增沒標示的檔會被真的複製出去,而手寫清單掃不到;③「MIT 全文」只比兩句片語,中段掏空照樣綠。→ 加端到端測試、清單改用生產邏輯算、全文改逐行比對。
+ - **四種假綠管道現在全部翻紅,原檔全綠**,都有實測記錄。
+ - **我自己漏的兩件**:節點寫了正文卻沒填摘要(等於對搜尋與簡要模式隱形),`about_code` 留空(改主程式的人不會被提醒看這篇)。都是自家鐵則,架構席抓到。
+ - **第三方版本標示對不上**:授權檔與產出 HTML 宣稱 1.80.0,但預設模式的網址沒鎖版。已鎖版。
+ - **教訓寫進節點**:「只驗白名單內容」是必要非充分,繞過白名單直接刪檔看不到——所以合約要配端到端測試,不能只驗一個常數的內容。
+ 
++## 第二批動手:三件(2026-09-06)
++
++### #2 刪除守衛半盲跑:逾時的真因不是我以為的那個
++
++- **帳上 30% 的執行是「掃到逾時就降級放行」**——守衛在半盲狀態下擋人。
++- **我第一次量錯方向**:用 `cmd_doctor` 這類罕見詞量,得到 0.75 秒,差點判「早先把逐字稿移出版控之後已經不慢了」。但帳上明明寫著「8 個 token 也逾時」,對不上。
++- **回頭把帳讀完才看到真相**:成本跟★命中行數★成正比,不是 token 數。6 個 token 命中 835 行要 9.7 秒;10 個 token 命中 1615 行要 14 秒,而預算就是 15 秒;6 個 token 命中 0 行只要 0.3 秒。
++- **換常用詞重測就重現了**:四個常用詞全 repo 命中 75587 行、7.17 秒;排除治理與文件兩夾後 7336 行、0.47 秒,**15 倍**。修完實測 8 個常用詞 1.09 秒。
++- **語意面也更準,不只是快**:那兩夾是「講程式的文字」不是程式本身,符號被審查報告提到不代表它還活著。排掉之後判「已消失」更貼近事實,方向是更容易示警而不是更容易放過。
++- 同步改了提交前守衛的排除清單(既有漂移守衛會逐項比對兩份清單),加一條測試釘住。
++
++### #3 健康檢查收尾行不再比正文樂觀
++
++- 實跑當天上面列了 5 件回訪逾期、5 份驗證引用被翻案的決策、1 張零判定的連鎖單、1 條失效路徑、沒接 linter,尾行仍印「✓ 圖譜健康 — 0 issues」。**五個鏡頭各自獨立撞到這件事。**
++- **軟提醒不進判定是既有裁定,沒有動它**——只要求結論行把「還有幾段沒算進來」講出來。
++- 計數放在兩個提醒函式的共用層:有一種檢查走「沒有逐條、只有一句」的路徑,只數其中一個會漏掉它。
++- **試了兩版把各段標題截斷拼成一句,都很難讀**(「功能筆記從來沒被不知道背景的人重、筆記的 about_code 標」)。最後改成只給數字,細節上面每段都印過了。這一版寫進註解,免得以後有人再試一次。
++- 治理帳的事件也帶上這個數字,可重算。測試釘住「收尾行講的段數必須等於實際印出的段數」,不是手寫。
++
++### #8 死碼房務
++
++- **刪掉已撤 hook 的 427 行殘骸**。它 2026-08-22 撤除時換成空殼保留(舊 session 的設定快照還註冊著它,一刀刪會讓那些 session 報錯),相容期兩週早就過了。
++- **測試裡寫死該檔名的七處改成合成名字**——測的是「兩階段撤除」這個機制,不是那支檔。★而且相容期清單清空之後,原本的測試會因為「現在剛好沒有任何 hook 在相容期」而測不到東西=靜默失去覆蓋★,所以改成注入合成名字。
++- **結案那個 design-only 的取代品節點**(從 2026-06 立案到現在從沒實作,而它要評估的對象已經不存在了)。明寫「不是做完了,是要評估的東西沒了」,而且★當初的問題仍然沒有答案★:圖譜內容會不會腐爛,今天沒有任何機制在管——完整性批評席也把這條列為這輪沒覆蓋到的第二項。
++- **方法論文件裡那一整層標成歷史**,它原本還在把已撤的 hook 當現役在教。
++
+diff --git a/docs/lumos-toolchain-knowledge/Systems/delguard.md b/docs/lumos-toolchain-knowledge/Systems/delguard.md
+index 04b6f65..c4f6f14 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/delguard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/delguard.md
+@@ -19,16 +19,17 @@ summary: |-
+   FLOW:pre-commit Gate DG(Gate CC 旁)→`lumos delguard --staged`→S1 staged diff `-` 行抽被刪識別字(per-file 回收表/stopword/排除域路徑段+lockfile/.md 不抽)→單次 git grep --cached 判兩檔信心(全域消失=high/呼叫點殘存=low)→三件套 regex 掃 vault 指名「還在講它」的節點+原句(型別只排序不壓低,Systems 排前)→S2 純連結編輯(LINK_KEYS 子集)∧S1 命中=假同步嫌疑→S3 退場三問(stdout)
+   KEY:[2026-08-21 體檢 #9]降級(超時/內部錯誤)一律寫治理帳 gate=delguard kind=degraded(note 標 reason)——原本只印一行放行、無處可數;TimeoutExpired 歸類超時不再印「內部錯誤」;預算 2.0→5.0→★15.0s(2026-08-27:5.0 在本 vault 377 篇+大 diff 仍常超,一 session 降級多次;Enzo 指示優化)★
+   KEY:advisory 恆 rc0——crash(`|| true`+except Exception)/timeout(python 內建 deadline,env LUMOS_DELGUARD_DEADLINE,預設 ★15.0s★)/git diff rc≠0 皆降級放行,降級訊息走 stdout;--json 含 tokens/hits/fake_sync/degraded
+   KEY:快照契約=staged index(git grep --cached;diff 帶 -M 與 -c core.quotePath=off -c diff.noprefix=false -c diff.mnemonicPrefix=false);vault-only repo(graph_root=".")靜默 return 0
+   KEY:先驗值 cap=40(DELGUARD_TOKEN_CAP)/top-10(DELGUARD_TOP_N),超 cap 保留高信心逐條+統計行不清零;replay 校準後以數據取代
+   KEY:天花板=只抓「符號消失」型;死碼盲區(符號在、機制停用=存在性比對放行)/行為反轉/純語意矛盾不響——見 [[code側刪除傳播守衛_計劃]] 天花板節能力邊界表;v2 候選=呼叫點判定
+   KEY:排除域與 pre-commit should_exclude 對齊(7 目錄+lock 三檔名),漂移由 t_precommit_whitelist_drift_guard 釘第三份清單;S3 問句同步在 lumos-project-notes skill 退場段(無 delguard 的 repo 靠自律)
+   KEY:★2026-09-05 成功也記帳★([[Projects/第二輪審視六修_計劃]] d3):之前只記 degraded,治理帳 63/63 全是超時,外部稽核誤判成「從沒守到」;實測一般 commit 0.4 秒跑完、近 30 天 646 commit 只 63 次超時;現在跑完記 kind=ok(tokens/hits/secs)
++  KEY:[2026-09-06]★逾時降級的真因是命中行數,不是 token 數★——帳上 30% 執行是逾時降級(守衛在半盲狀態下擋人)。原以為跟 token 數有關,量出來是:6 token/835 命中=9.7 秒、10 token/1615 命中=14 秒(預算 15 秒)、6 token/0 命中=0.3 秒。真因是 git grep 掃進了審查卷證與治理帳:四個常用詞(doctor/lumos/check/node)全 repo 命中 75587 行、7.17 秒,排除 governance/ 與 docs/ 後 7336 行、0.47 秒(15 倍)。修法=兩夾進 _DELGUARD_EXCLUDE_DIRS 並同步 pre-commit 的 should_exclude(既有漂移守衛會逐項比對)。★語意也更準★:那兩夾是「講程式的文字」不是程式本身,符號被審查報告提到不代表它還活著 [test:t_delguard_excludes_prose_dirs]。★用罕見詞量不會重現★——第一次我用 cmd_doctor 之類量到 0.75 秒就差點判「已經不慢了」
+   DEP:[[Systems/cochange-guard]](同型 advisory 前例,Gate CC 鄰位)｜scripts/hooks/pre-commit Gate DG｜find_vault/_cochange_repo_root 共用 helper
+   TEST:t_delguard(scripts/test_lumos.py,85 條:S1 抽取/信心/掃描/S2/S3/fail-open/deadline/邊界輸入/鑑別力翻紅驗證)+t_precommit_whitelist_drift_guard 擴充;全量 2515/0@95c4224
+ verified_by:
+   - "[[Verification/2026-08-11_delguard落地]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-08-21_工具鏈體檢修復批]]"
+ about_code:
+   - scripts/hooks/pre-commit
+diff --git a/docs/lumos-toolchain-knowledge/Systems/verification-rot-eval.md b/docs/lumos-toolchain-knowledge/Systems/verification-rot-eval.md
+index a5b8184..61d5cab 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/verification-rot-eval.md
++++ b/docs/lumos-toolchain-knowledge/Systems/verification-rot-eval.md
+@@ -1,17 +1,17 @@
+ ---
+ type: system
+-status: planned
++status: superseded
+ created: 2026-06-26
+ updated: 2026-06-26
+ self_audit: sonnet/2026-06-26
+ tags:
+   - type/system
+-  - status/planned
++  - status/superseded
+ summary: |-
+   FLOW:vault git 史 ─A.mine→ candidates.jsonl ─B.label(人)→ fixtures.jsonl(進git黃金集) ─C.run(複製L3 pre-LLM 成本閘→importlib 載 hook→build_prompt+call_claude_sonnet→正規化None/缺鍵)→ report(recall/precision/門檻敏感性表)
+   KEY:量化 L3 腐化偵測(verification-rot-check.py)的真實 recall/precision，把 CONFIDENCE_THRESHOLD=0.7 從拍腦袋變成從門檻敏感性表挑——是一把尺、不是新閘(不改 hook、不接 CI 擋線、不改 doctor)
+   KEY:零重寫保真——unit C 用 importlib.util.spec_from_file_location 載 hook(檔名帶連字號不能 import)，跑線上同一把 build_prompt+call_claude_sonnet 判斷；monkeypatch 打 hook_module.call_claude_sonnet 模組屬性
+   KEY:報告數字是「LLM 判斷層 recall」非「整條 pipeline recall」——eval 直接把對的 Verification 餵進去、繞過 find_candidate_verifications 搜尋層；真實 pipeline 還要再乘搜尋層命中率、只會更低
+   KEY:倖存者偏差——git 史只有「被發現並修掉」的失效，量出的 recall 是上限、真值更糟；當方向儀不當精密尺(N~15-30 吵雜)
+   KEY:狀態=design-only prototype 規範(CONVERGED 5輪)，尚未實作；scripts/rot-eval/ 與 lumos 子命令皆未落地
+   DEP:scripts/hooks/claude/verification-rot-check.py(L3,被量的對象,不改)｜build_prompt/call_claude_sonnet/MIN_DIFF_LINES/MAX_DIFF_LINES/CONFIDENCE_THRESHOLD
+@@ -69,8 +69,17 @@ decisions:
+ 
+ ## 已知限制
+ - **執行環境(spec §7)**:unit C 真跑 LLM 靠 `claude -p --model sonnet`(Max 訂閱 CLI、無 API key)→ **只能本機跑、不上 CI**;CI 只跑 monkeypatch 模式驗算分邏輯。升格接週彙整觸發時這條限制要正面寫明。
+ - **第四類訊號留升格**:每個 Verification 的 `revalidate_when`(非 git、結構化)可配 code diff 比對,prototype 不做;不宣稱「竭盡」。
+ 
+ ## 相關
+ - 設計稿:`docs/design/2026-06-19-rot-eval.md`(CONVERGED,canary-護審計 loop 5 輪、K=2;審計修正紀錄見尾段 R1-R4)。
+ - 被量對象:`scripts/hooks/claude/verification-rot-check.py`(L3 腐化偵測 hook,不改)。
++
++## 結案(2026-09-06)
++
++**這篇從 2026-06 立案到現在是 design-only,從沒實作過**(自陳「scripts/rot-eval/ 與 lumos 子命令都還沒有」)。它要評估的那支 hook(`verification-rot-check.py`)已於 2026-08-22 撤除、2026-09-06 相容期滿真刪,所以評估對象本身不存在了。
++
++★不是「做完了」,是「要評估的東西沒了,案子跟著結」★。當初的問題(圖譜內容會不會腐爛、怎麼機械偵測)仍然沒有答案——全 repo 審視的完整性批評席把它列為「這輪 16 個鏡頭沒覆蓋到」的第二條:doctor 驗的全是機械面(雙向連結、路徑存在、欄位列舉),內容層腐爛今天沒有任何機制在管。要重啟就重新立案,不要復活這篇的舊 spec。
++
++單源:[[Projects/全repo審視_計劃]]。
++
+diff --git "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md" "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md"
+index 4dbfb0e..9087955 100644
+--- "a/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md"
++++ "b/docs/methodology/\345\234\226\350\255\234\345\215\263\345\220\210\347\264\204.md"
+@@ -252,17 +252,19 @@ vault 跟 codebase 同 repo 版控,圖譜變更跟 commit 綁定。Team 拉同
+ | Verification | [[2026-06-10_L2-bypass留痕post-commit]] |
+ 
+ 已知侷限與刻意取捨(2026-06-10 自足性審計收束):
+ - **兩 hook 判定對齊無機械保障**——靠 Verification 的 revalidate_when 紀律(改 pre-commit 規則=必須同步改 post-commit 並重驗),不另寫對齊檢查腳本;真漂移時症狀明顯(幽靈 bypass/漏記),修法單純
+ - **bypass 率行動門檻刻意未定**——先累積數週基線再定;暫行判讀:「連續數週走高」=合約從側門腐爛訊號,單週突波先逐筆看 digest
+ - **bypass log 本機限定**——「審計軌跡」目前=單人本機工作流的軌跡;團隊化/CI 後本機 post-commit 必然漏記,屆時改 CI 端掃描(已列 revalidate_when)
+ - **bypass log 不接 L1 提醒是刻意的**——bypass 率是慢性指標,review 路徑是 weekly digest;接 L1 變成即時嘮叨,違反「只記錄不阻擋」的設計
+ 
+-### Layer 3: PostToolUse hook (LLM rot 偵測)
++### Layer 3: PostToolUse hook (LLM rot 偵測)——★已撤除,2026-08-22 停用、2026-09-06 真刪★
++
++> 下表是歷史記載,不是現況。這一層已經不存在:hook 檔已刪、註冊已清,`docs/.rot-queue.jsonl` 沒有任何寫入者。它要解的問題(圖譜內容會不會腐爛)★今天沒有任何機制在管★——doctor 驗的全是機械面(雙向連結、路徑存在、欄位列舉)。取代品 [[Systems/verification-rot-eval]] 是 design-only、從未實作,同日結案。要重啟就重新立案。
+ 
+ | 屬性 | 值 |
+ |------|-----|
+ | 檔 | `~/.claude/hooks/verification-rot-check.py` |
+ | 註冊於 | `~/.claude/settings.json` 的 `hooks.PostToolUse`(matcher=Bash, timeout=60s) |
+ | Trigger | commit 完成後 |
+ | 動作 | `claude -p --model sonnet` 平行判斷 max 5 候選 → stderr + append `docs/.rot-queue.jsonl` |
+ | 設計依據 | arxiv 2603.00489 README rot detection paper (ICSE 2026; Spec 99% / Recall 52%) |
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 7a873ba..09cf81e 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,13 +1,13 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "d2e78e9832b574dad621116b4d6122eebc5e10234687894e7c4e6294db082694",
++    "scripts/test_lumos.py": "133f0c07e4d2f716dbc088e3a8352b715e9ebb5425a8a05bab82041993ae4145",
+     "scripts/test_autonomous_loop.py": "0de0b7461115dec466cb79a90e88efde173e258b7405f2e9eb5e31bae4da2e2c",
+-    "scripts/hooks/pre-commit": "944b21c8fe7e2d82145a7761935bb1d38acc00b445f3a99e98575957531ba9c5",
++    "scripts/hooks/pre-commit": "54f11730676a35b67977fa4046205793767491c880d79b0a3c91573b7e22c8eb",
+     "scripts/hooks/pre-push": "8342e3d938e93f7c17626ca6445ea6e87864afcd313a0952e3d0294fa1a756e2",
+     "scripts/hooks/post-commit": "b9bc3073dad22a8cde82466bdba77faed2bfe82bdd88927a2f44ccbbeb408f36",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "74f01942756b84809f738c44bab963137938963f764b701123f7181ca9d26a99"
+   },
+-  "approved_at": "2026-09-06T12:03:28+08:00",
+-  "note": "MIT 授權 r1 折入:守衛改讀執行期真值+端到端 deinit 測試"
++  "approved_at": "2026-09-06T12:39:40+08:00",
++  "note": "第二批:delguard 排除域、doctor 收尾行、死碼房務"
+ }
+diff --git a/scripts/hooks/claude/verification-rot-check.py b/scripts/hooks/claude/verification-rot-check.py
+deleted file mode 100755
+index cf81d75..0000000
+--- a/scripts/hooks/claude/verification-rot-check.py
++++ /dev/null
+@@ -1,427 +0,0 @@
+-#!/usr/bin/env python3
+-# SPDX-FileCopyrightText: 2026 Enzo Hsieh
+-# SPDX-License-Identifier: MIT
+-# MIT licensed. Full text: scripts/lumos header, or LICENSE at
+-# https://github.com/EnzoHsieh-Android/Lumos
+-"""PostToolUse hook: 偵測 git commit 是否使既有 Verification 結論失效。
+-
+-Triggered by: PostToolUse on Bash matching `git commit` (any variant).
+-Strategy:
+-  1. After commit ran, read last commit (HEAD~1..HEAD) diff
+-  2. Find candidate Verifications via obsidian search (stem of changed code files)
+-  3. For each candidate (max 5), ask Sonnet via `claude -p` to judge if diff
+-     invalidates the verification's conclusion
+-  4. If invalidates with confidence >= 0.7:
+-       (a) print stderr warning surface to Claude
+-       (b) append to docs/.rot-queue.jsonl for weekly digest review
+-
+-Design choices:
+-  - Sonnet via Max subscription (no API key), see `claude -p --model sonnet`
+-  - Never blocks commit (exit 0 always)
+-  - Graceful degrade: obsidian unavailable / claude unavailable → silent
+-  - Cost guard: skip if diff < 10 lines, > 2000 lines, no code files, etc.
+-
+-Reference: arxiv 2603.00489 (README rot detection, ICSE 2026)
+-  Best 30B model: Specificity 99%, Recall 52%, MRR 0.64 → use as high-precision
+-  signal (rare alarms, always taken seriously), not the only safety net.
+-"""
+-from __future__ import annotations
+-import hashlib
+-import json
+-import os
+-import re
+-import subprocess
+-import sys
+-from concurrent.futures import ThreadPoolExecutor, as_completed
+-from datetime import datetime
+-from pathlib import Path
+-
+-# Reuse PreToolUse hook's git commit regex
+-GIT_COMMIT_RE = re.compile(r'(^|;|&&|\|\|)\s*git(\s+-C\s+\S+)?\s+commit\b')
+-
+-CODE_EXTS = {
+-    ".cs", ".vue", ".js", ".ts", ".tsx", ".jsx", ".mjs",
+-    ".sql", ".py", ".kt", ".kts", ".java", ".swift", ".go", ".rs",
+-    ".c", ".cc", ".cpp", ".h", ".hpp",
+-}
+-
+-# Tunable thresholds
+-MAX_CANDIDATES = 5
+-MIN_DIFF_LINES = 10           # 太小 (typo) 不檢查
+-MAX_DIFF_LINES = 2000         # 太大 (rename/move 全檔) 不檢查
+-MAX_DIFF_CHARS_PROMPT = 4000
+-MAX_VERIFICATION_CHARS_PROMPT = 1500
+-CLAUDE_TIMEOUT = 25           # 每次 claude -p 上限
+-CONFIDENCE_THRESHOLD = 0.7    # 低於此忽略 (對應 paper Spec 99% 設計)
+-
+-# C (2026-05-25): cache LLM 判斷結果避免同 (commit, verification, 內容版本) 重算
+-# 不降 candidates / 不退 Haiku,純加 cache,保住 paper recall 52% 不再降
+-CACHE_FILENAME = ".rot-check-cache.json"   # 在 docs/ 下,gitignored
+-CACHE_MAX_ENTRIES = 500                     # rolling LRU
+-
+-
+-def find_graph_root(project_root: Path) -> Path | None:
+-    docs = project_root / "docs"
+-    if not docs.is_dir():
+-        return None
+-    for child in docs.iterdir():
+-        if child.is_dir() and child.name.endswith("-knowledge"):
+-            return child
+-    legacy = docs / "knowledge"
+-    return legacy if legacy.is_dir() else None
+-
+-
+-def get_changed_code_files(project_root: Path) -> tuple[list[str], int]:
+-    """Return (changed code files, total diff lines insert+delete)."""
+-    try:
+-        names_result = subprocess.run(
+-            ["git", "diff", "HEAD~1", "HEAD", "--name-only"],
+-            cwd=str(project_root),
+-            capture_output=True, text=True, timeout=5,
+-        )
+-        if names_result.returncode != 0:
+-            return [], 0
+-        all_files = [l.strip() for l in names_result.stdout.splitlines() if l.strip()]
+-        code_files = [f for f in all_files if Path(f).suffix.lower() in CODE_EXTS]
+-
+-        stat_result = subprocess.run(
+-            ["git", "diff", "HEAD~1", "HEAD", "--shortstat"],
+-            cwd=str(project_root),
+-            capture_output=True, text=True, timeout=5,
+-        )
+-        diff_lines = 0
+-        if stat_result.returncode == 0:
+-            m = re.search(r'(\d+) insertions?\(\+\)', stat_result.stdout)
+-            if m: diff_lines += int(m.group(1))
+-            m = re.search(r'(\d+) deletions?\(\-\)', stat_result.stdout)
+-            if m: diff_lines += int(m.group(1))
+-        return code_files, diff_lines
+-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+-        return [], 0
+-
+-
+-def get_diff_text(project_root: Path) -> str:
+-    try:
+-        result = subprocess.run(
+-            ["git", "diff", "HEAD~1", "HEAD"],
+-            cwd=str(project_root),
+-            capture_output=True, text=True, timeout=5,
+-        )
+-        return result.stdout if result.returncode == 0 else ""
+-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+-        return ""
+-
+-
+-def get_commit_sha(project_root: Path) -> str:
+-    try:
+-        result = subprocess.run(
+-            ["git", "rev-parse", "HEAD"],
+-            cwd=str(project_root),
+-            capture_output=True, text=True, timeout=3,
+-        )
+-        return result.stdout.strip()[:12] if result.returncode == 0 else ""
+-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+-        return ""
+-
+-
+-def find_candidate_verifications(code_files: list[str], graph_root: Path) -> list[Path]:
+-    """For each changed code file's basename stem, search Verification/ via
+-    obsidian CLI. Returns absolute Path list."""
+-    vault_name = graph_root.name
+-    candidates: list[Path] = []
+-    seen_paths: set[str] = set()
+-
+-    stems: list[str] = []
+-    seen_stems: set[str] = set()
+-    for f in code_files:
+-        stem = Path(f).stem
+-        if not stem or len(stem) <= 2 or stem in seen_stems:
+-            continue
+-        seen_stems.add(stem)
+-        stems.append(stem)
+-    stems = stems[:5]
+-
+-    for stem in stems:
+-        try:
+-            result = subprocess.run(
+-                ["obsidian", f"vault={vault_name}", "search",
+-                 f"query={stem}", "limit=5"],
+-                capture_output=True, text=True, timeout=3,
+-            )
+-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+-            return []  # obsidian 不可用,完全放棄 (graceful degrade)
+-        if result.returncode != 0:
+-            continue
+-        for line in result.stdout.splitlines():
+-            line = line.strip()
+-            if not line.endswith(".md"):
+-                continue
+-            # 只看活躍 Verification (排除 Archive)
+-            if not line.startswith("Verification/") or line.startswith("Verification/Archive/"):
+-                continue
+-            if line in seen_paths:
+-                continue
+-            seen_paths.add(line)
+-            candidates.append(graph_root / line)
+-            if len(candidates) >= MAX_CANDIDATES:
+-                return candidates
+-    return candidates
+-
+-
+-def call_claude_sonnet(prompt: str) -> dict | None:
+-    """Call `claude -p --model sonnet --output-format json`.
+-    Return parsed inner JSON dict, or None on any failure."""
+-    try:
+-        result = subprocess.run(
+-            ["claude", "-p", "--model", "sonnet", "--output-format", "json"],
+-            input=prompt,
+-            capture_output=True, text=True, timeout=CLAUDE_TIMEOUT,
+-        )
+-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+-        return None
+-    if result.returncode != 0 or not result.stdout:
+-        return None
+-    try:
+-        wrapper = json.loads(result.stdout)
+-    except json.JSONDecodeError:
+-        return None
+-    if wrapper.get("is_error") or wrapper.get("subtype") != "success":
+-        return None
+-    inner_text = (wrapper.get("result") or "").strip()
+-    if not inner_text:
+-        return None
+-    # Strip possible markdown fence
+-    if inner_text.startswith("```"):
+-        lines = inner_text.split("\n")
+-        if lines and lines[0].startswith("```"):
+-            lines = lines[1:]
+-        if lines and lines[-1].startswith("```"):
+-            lines = lines[:-1]
+-        inner_text = "\n".join(lines).strip()
+-    try:
+-        return json.loads(inner_text)
+-    except json.JSONDecodeError:
+-        return None
+-
+-
+-def _cache_key(commit_sha: str, verification_path: str, verification_text: str, diff_text: str) -> str:
+-    """C: cache key = (commit, verification_path, verification_content_hash, diff_content_hash)。
+-    內容 hash 確保 Verification 更新或同 commit 不同 diff 都會 cache miss。"""
+-    v_hash = hashlib.sha1(verification_text.encode("utf-8", errors="ignore")).hexdigest()[:12]
+-    d_hash = hashlib.sha1(diff_text.encode("utf-8", errors="ignore")).hexdigest()[:12]
+-    return f"{commit_sha[:12]}:{verification_path}:{v_hash}:{d_hash}"
+-
+-
+-def _read_cache(cache_path: Path) -> dict:
+-    if not cache_path.is_file():
+-        return {}
+-    try:
+-        return json.loads(cache_path.read_text(encoding="utf-8"))
+-    except (OSError, json.JSONDecodeError):
+-        return {}
+-
+-
+-def _write_cache(cache_path: Path, cache: dict) -> None:
+-    # Rolling LRU: 超過 CACHE_MAX_ENTRIES 刪最舊 (依插入順序;Python 3.7+ dict 有序)
+-    if len(cache) > CACHE_MAX_ENTRIES:
+-        # 砍最舊的 1/4
+-        excess = len(cache) - int(CACHE_MAX_ENTRIES * 0.75)
+-        for k in list(cache.keys())[:excess]:
+-            cache.pop(k, None)
+-    try:
+-        cache_path.parent.mkdir(parents=True, exist_ok=True)
+-        cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+-    except OSError:
+-        pass
+-
+-
+-def build_prompt(verification_path: Path, verification_text: str, diff_text: str) -> str:
+-    diff_excerpt = diff_text[:MAX_DIFF_CHARS_PROMPT]
+-    if len(diff_text) > MAX_DIFF_CHARS_PROMPT:
+-        diff_excerpt += f"\n[... diff truncated, total {len(diff_text)} chars ...]"
+-    verification_excerpt = verification_text[:MAX_VERIFICATION_CHARS_PROMPT]
+-    if len(verification_text) > MAX_VERIFICATION_CHARS_PROMPT:
+-        verification_excerpt += f"\n[... verification truncated ...]"
+-    return f"""你的任務:判斷 git diff 是否使指定的 Verification 結論失效。
+-
+-定義「失效」(invalidates=true):
+-  diff 修改了 Verification 中「被驗證的符號 / SQL / 邏輯路徑 / API 契約」的實際行為。
+-不算失效 (invalidates=false):
+-  rename、純格式、註解、log 文字、import 重排、空白、JSDoc 補充。
+-
+-[VERIFICATION] path={verification_path.name}
+-{verification_excerpt}
+-
+-[DIFF]
+-{diff_excerpt}
+-
+-只輸出 JSON,不要 markdown fence,schema:
+-{{
+-  "invalidates": true|false,
+-  "confidence": 0.0,
+-  "reason": "<= 80 字一句話說明",
+-  "affected_symbols": ["string"],
+-  "suggested_action": "mark_stale" | "rerun_test" | "no_action"
+-}}"""
+-
+-
+-def main() -> int:
+-    try:
+-        payload = json.loads(sys.stdin.read())
+-    except json.JSONDecodeError:
+-        return 0
+-
+-    if payload.get("tool_name") != "Bash":
+-        return 0
+-
+-    cmd = (payload.get("tool_input") or {}).get("command", "")
+-    if not cmd or not GIT_COMMIT_RE.search(cmd):
+-        return 0
+-
+-    project_root_str = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd")
+-    if not project_root_str:
+-        return 0
+-    project_root = Path(project_root_str)
+-
+-    graph_root = find_graph_root(project_root)
+-    if graph_root is None:
+-        return 0
+-
+-    code_files, diff_lines = get_changed_code_files(project_root)
+-    if not code_files:
+-        return 0
+-    if diff_lines < MIN_DIFF_LINES:
+-        return 0
+-    if diff_lines > MAX_DIFF_LINES:
+-        print(
+-            f"[rot-check] diff 太大 ({diff_lines} 行),跳過自動檢查;"
+-            "請手動審視相關 Verifications",
+-            file=sys.stderr,
+-        )
+-        return 0
+-
+-    candidates = find_candidate_verifications(code_files, graph_root)
+-    if not candidates:
+-        return 0
+-
+-    diff_text = get_diff_text(project_root)
+-    if not diff_text:
+-        return 0
+-
+-    # C: cache 提早讀 (commit_sha + verification_path + 內容 hash 為 key)
+-    commit_sha = get_commit_sha(project_root)
+-    cache_path = graph_root.parent / CACHE_FILENAME
+-    cache = _read_cache(cache_path)
+-    cache_dirty = False
+-
+-    # 平行跑 claude -p (Sonnet 單次 ~15-20s,5 候選 sequential 會超過 hook timeout)
+-    def check_one(cand: Path) -> dict | None:
+-        nonlocal cache_dirty
+-        try:
+-            verification_text = cand.read_text(encoding="utf-8", errors="ignore")
+-        except OSError:
+-            return None
+-        try:
+-            rel_path = str(cand.relative_to(project_root))
+-        except ValueError:
+-            rel_path = str(cand)
+-
+-        # C: cache lookup
+-        cache_key = _cache_key(commit_sha, rel_path, verification_text, diff_text)
+-        cached = cache.get(cache_key)
+-        if cached is not None:
+-            # cache hit — 不重跑 LLM
+-            if not cached.get("invalidates") or float(cached.get("confidence") or 0) < CONFIDENCE_THRESHOLD:
+-                return None
+-            return {
+-                "verification": rel_path,
+-                "confidence": float(cached["confidence"]),
+-                "reason": str(cached.get("reason", ""))[:200],
+-                "affected_symbols": list(cached.get("affected_symbols") or [])[:5],
+-                "suggested_action": str(cached.get("suggested_action", "no_action")),
+-                "_cache_hit": True,
+-            }
+-
+-        # cache miss — 真跑 LLM
+-        prompt = build_prompt(cand, verification_text, diff_text)
+-        parsed = call_claude_sonnet(prompt)
+-        if not parsed:
+-            return None
+-        try:
+-            invalidates = bool(parsed.get("invalidates"))
+-            confidence = float(parsed.get("confidence") or 0)
+-        except (TypeError, ValueError):
+-            return None
+-
+-        # 寫 cache (即使 invalidates=false 也寫,下次同 key 命中省 LLM)
+-        cache[cache_key] = {
+-            "invalidates": invalidates,
+-            "confidence": confidence,
+-            "reason": parsed.get("reason", ""),
+-            "affected_symbols": parsed.get("affected_symbols") or [],
+-            "suggested_action": parsed.get("suggested_action", "no_action"),
+-            "ts": datetime.now().isoformat(timespec="seconds"),
+-        }
+-        cache_dirty = True
+-
+-        if not invalidates or confidence < CONFIDENCE_THRESHOLD:
+-            return None
+-        return {
+-            "verification": rel_path,
+-            "confidence": confidence,
+-            "reason": str(parsed.get("reason", ""))[:200],
+-            "affected_symbols": list(parsed.get("affected_symbols") or [])[:5],
+-            "suggested_action": str(parsed.get("suggested_action", "no_action")),
+-        }
+-
+-    findings = []
+-    with ThreadPoolExecutor(max_workers=min(len(candidates), MAX_CANDIDATES)) as ex:
+-        futures = [ex.submit(check_one, cand) for cand in candidates]
+-        for fut in as_completed(futures):
+-            result = fut.result()
+-            if result is not None:
+-                findings.append(result)
+-
+-    # C: flush cache (有跑 LLM 才寫)
+-    if cache_dirty:
+-        _write_cache(cache_path, cache)
+-
+-    if not findings:
+-        return 0
+-
+-    # === stderr 警告 ===
+-    msg = [
+-        "⚠️  Verification rot check (Sonnet): 本次 commit 可能使以下驗證紀錄失效",
+-        "",
+-    ]
+-    for f in findings:
+-        msg.append(f"   • {f['verification']}  (confidence={f['confidence']:.2f})")
+-        msg.append(f"     原因: {f['reason']}")
+-        msg.append(f"     建議: {f['suggested_action']}")
+-        if f["affected_symbols"]:
+-            msg.append(f"     symbols: {', '.join(f['affected_symbols'])}")
+-        msg.append("")
+-    msg.append(f"已寫入 docs/.rot-queue.jsonl (commit {commit_sha}),"
+-               "之後跑 `scripts/rot-queue-digest.sh` 看總覽。")
+-    print("\n".join(msg), file=sys.stderr)
+-
+-    # === 寫 .rot-queue.jsonl ===
+-    queue_path = graph_root.parent / ".rot-queue.jsonl"
+-    timestamp = datetime.now().isoformat(timespec="seconds")
+-    try:
+-        with queue_path.open("a", encoding="utf-8") as fh:
+-            for finding in findings:
+-                entry = {
+-                    "ts": timestamp,
+-                    "commit": commit_sha,
+-                    **finding,
+-                }
+-                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+-    except OSError:
+-        pass
+-
+-    return 0
+-
+-
+-if __name__ == "__main__":
+-    sys.exit(main())
+diff --git a/scripts/hooks/pre-commit b/scripts/hooks/pre-commit
+index 2db5bc8..392584a 100755
+--- a/scripts/hooks/pre-commit
++++ b/scripts/hooks/pre-commit
+@@ -132,17 +132,17 @@ is_shebang_code() {   # 沒副檔名的檔:看 staged 內容首行是不是 #!(2
+   fi
+   base="${path##*/}"; base="${base#"${base%%[!.]*}"}"; [[ "$base" == *.* ]] && return 1   # 去掉所有開頭的點再看有沒有副檔名(.pythonrc、..foo 也要看 shebang)
+   local first; first="$(git show ":$path" 2>/dev/null | head -c 200 | head -n 1)" || return 1
+   [[ "$first" == "#!"* ]]   # 任何 shebang 都算(不列直譯器清單:r1 外家 #!/bin/dash 漏判;四處同一條規則,由 t_code_exts_four_lists_agree 釘)
+ }
+ should_exclude() {
+   local path="$1"
+   case "$path" in
+-    docs/*|*/node_modules/*|*/bin/*|*/obj/*|*/.git/*|*/dist/*|*/build/*|*/__pycache__/*) return 0;;
++    docs/*|governance/*|*/node_modules/*|*/bin/*|*/obj/*|*/.git/*|*/dist/*|*/build/*|*/__pycache__/*) return 0;;
+     *package-lock.json|*yarn.lock|*pnpm-lock.yaml) return 0;;
+     # vendored 工具白名單(lumos 自有物,例行 lumos update 不該撞圖譜閘;2026-07-25)。
+     # ★精確白名單,非 scripts/* 整夾★——專案自有 scripts/foo.py 仍照擋。
+     # ★源 repo 守門★:在 Lumos 來源 repo 本身(有 skills/lumos-project-notes),這些檔=產品碼,
+     # 豁免不適用(否則源 repo 自家改 scripts/lumos 不帶圖譜會靜默放行=弄弱自家閘)。
+     # 與 scripts/lumos 的 _VENDORED_TOOLKIT 常數同源;漂移守衛 t_precommit_whitelist_drift_guard。
+     scripts/lumos|scripts/test_lumos.py|scripts/merge-claude-settings.py|scripts/graph-rename.sh|scripts/fetch-notesmd.sh|scripts/hooks/*|scripts/templates/*)
+       [[ -d "skills/lumos-project-notes" ]] && return 1   # 源 repo:不豁免
+diff --git a/scripts/lumos b/scripts/lumos
+index a7bf310..de82280 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -787,27 +787,37 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+     def section(idx, title):
+         print(f"{C['B']}[{idx}]{C['X']} {title}")
+ 
+     def ok(msg):
+         print(f"  {C['G']}✓{C['X']} {msg}")
+ 
+     def warn(lines, head, advice=None):
+         nonlocal issues
++        # ★空清單也是一段提醒★:Check F 這種「沒有逐條、只有一句」的走 warn([]),issues 加 0,
++        # 只數 warn_soft 會漏掉它(2026-09-06 全 repo 審視:收尾行說 0 issues 蓋掉七段警告)
++        if not lines:
++            _soft["segs"] += 1
++            _soft["heads"].append(head)
+         print(f"  {C['Y']}⚠{C['X']} {head}")
+         for l in lines:
+             print(f"      • {l}")
+         if advice:
+             print(f"  {C['B']}建議動作{C['X']}: {advice}")
+         issues += len(lines)
+ 
+     _verbose = verbose or ci   # --ci 視同 verbose:CI 日誌要完整;互動預設收斂(體檢 #10)
+     _SOFT_CAP = 3
++    # 收尾行要講「還有幾段提醒」——不改 rc、不改軟硬分級,只是別讓結論行比正文樂觀
++    _soft = {"segs": 0, "lines": 0, "heads": []}
+ 
+     def warn_soft(lines, head, advice=None):
++        _soft["segs"] += 1
++        _soft["lines"] += len(lines)
++        _soft["heads"].append(head)
+         # 軟提醒:印出但不動 issues → 不影響 rc(R3-MAJOR-3)
+         # ★預設每段最多 3 條★(2026-08-21 體檢 #10):軟段([P]19 行/[Y]6 行…)多為歷史/自指噪音,
+         # 每次跑幾十行把硬提醒淹掉、Claude 一整天沒讀過一條;其餘收成一行,--verbose 全列。
+         print(f"  {C['Y']}⚠{C['X']} {head}")
+         shown = list(lines) if _verbose else list(lines)[:_SOFT_CAP]
+         for l in shown:
+             print(f"      • {l}")
+         if len(lines) > len(shown):
+@@ -1914,24 +1924,35 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+         print()
+ 
+     if ci:
+         # ★run 標記(2026-08-21,doctor-run事件_計劃)★:乾淨 run 也要留痕——帳本只記警告時,
+         # 分不出「修好了」與「還在」(「已清」=該 run 有標記但無該節點的 check-* 事件)。
+         # nodes 恆空、不進 issues、不改 rc;gov 預設畫面隱藏(見 cmd_gov),--full/--stats 照列。
+         _gates_hit = len({e.get("gate") for e in gov_events if str(e.get("gate", "")).startswith("check-")})
+         gov_events.append({"gate": "doctor-run", "kind": "ran", "hard": False, "nodes": [],
+-                           "note": f"issues={issues} gates={_gates_hit}"})
++                           "note": f"issues={issues} gates={_gates_hit} soft={_soft['segs']}"})
+         _append_governance_log(env.vault, gov_events)
+ 
++    # 「還有幾段提醒」——子句從各段自己的標題取,不手寫第二份文字(會漂)
++    def _soft_tail():
++        # ★不要把各段標題截斷拼成一句★:那些標題是完整句子,截到十幾個字會變成讀不懂的碎片
++        # (2026-09-06 試過兩版都難讀)。這裡只給數字——結論行的任務是「別比正文樂觀」,
++        # 細節上面每一段都印過了,要全文一個指令就有。
++        if not _soft["segs"]:
++            return ""
++        cnt = f"{_soft['segs']} 段" + (f"、共 {_soft['lines']} 條" if _soft["lines"] else "")
++        return (f"\n  {C['Y']}·{C['X']} 另有 {cnt}提醒沒算進 issues——它們不影響這行的判定,"
++                f"但上面每一段都印了;{C['B']}lumos doctor --verbose{C['X']} 看全部")
++
+     print(f"{C['B']}─────────────────────────────────{C['X']}")
+     if issues == 0:
+-        print(f"{C['G']}{C['B']}✓ 圖譜健康{C['X']} — 0 issues ({len(notes)} 篇)")
++        print(f"{C['G']}{C['B']}✓ 圖譜健康{C['X']} — 0 issues ({len(notes)} 篇){_soft_tail()}")
+         return 0
+-    print(f"{C['Y']}{C['B']}⚠ 發現 {issues} 個 issue{C['X']} ({len(notes)} 篇)")
++    print(f"{C['Y']}{C['B']}⚠ 發現 {issues} 個 issue{C['X']} ({len(notes)} 篇){_soft_tail()}")
+     return 1 if strict else 0
+ 
+ 
+ # ═══════════════════════ 階段二: 讀側 ═══════════════════════
+ 
+ SYMBOL_RE = re.compile(r"^(KEY|FLOW|DEP|TEST|AUTH|FLAG|DECISION|VERIFY|CORE):")
+ FM_KEY_RE = re.compile(r"^\s*([A-Za-z_][\w-]*):")
+ 
+@@ -11289,18 +11310,24 @@ _HARNESS_HOME = {"claude": (".claude", "settings.json"), "codex": (".codex", "ho
+ #   階段一 STUB   —— 這一版換成 exit 0 空殼。舊 session 照樣觸發、什麼都不做、不報錯;
+ #                     新 session 讀到的 settings 已剪乾淨,根本不會叫它。
+ #   階段二 DELETE —— 確認沒有 session 還帶著舊註冊(隔一版/隔一天)才真刪檔。
+ # 撤新的 hook:先加進 STUB;下一版把它從 STUB 移到 DELETE。
+ #
+ # code-loop-guard.py:2026-07-06 ADR 撤除 Stop nag(見 Projects/code-loop必用守衛_計劃)——早過相容期,直接刪。
+ # verification-rot-check.py:2026-08-21 體檢 #8 撤除(核心從未觸發、每次 Bash 付啟動成本;
+ #   見 Verification/2026-08-21_工具鏈體檢修復批)——相容期中,留空殼。
+-_RETIRED_STUB_CLAUDE_HOOKS = ("verification-rot-check.py",)
+-_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py",)
++# 相容期空殼:剛撤的 hook 先換成 exit 0 的空殼,不刪檔——正在跑的 session 讀進的 settings
++# 快照可能還註冊著它,真檔一刪那些 session 每次觸發都報錯(2026-08-22 實際發生過)。
++# 下一版把名字從這裡移到 _RETIRED_CLAUDE_HOOKS 就是真刪。
++_RETIRED_STUB_CLAUDE_HOOKS = ()
++# 真刪:相容期已過。verification-rot-check.py 2026-08-22 撤除、2026-09-06 真刪(相容期兩週,
++# 遠超「舊 session 還活著」的實際窗口;它的取代品 Systems/verification-rot-eval 是 design-only
++# 從未實作,同日結案)。
++_RETIRED_CLAUDE_HOOKS = ("code-loop-guard.py", "verification-rot-check.py")
+ 
+ _RETIRED_HOOK_STUB_BODY = (
+     "#!/usr/bin/env python3\n"
+     '"""已撤除 hook 的相容期空殼——什麼都不做,直接放行。\n'
+     "\n"
+     "存在的唯一理由:正在跑的 session 在啟動當下讀進的 settings 快照可能還註冊著這支。\n"
+     "真檔一旦刪掉,那些 session 每次觸發都會報錯(2026-08-22 實際發生過)。新開的\n"
+     "session 讀到的 settings 已經剪乾淨,不會叫到這裡。\n"
+@@ -14048,17 +14075,23 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
+     else:
+         for w in warnings:
+             print(f"提醒:改了 {w['changed']} 但沒動 {w['missing']}——這兩個檔過去 {w['confidence']:.0%} 的時候是一起改的"
+                   f"(共 {w['support']} 次)。確認一下是不是漏改了。")
+     return 0
+ 
+ 
+ _DELGUARD_STOP = frozenset("if else for while return import class def val var fun void public private static final new this true false null let const function".split())
+-_DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/")
++# ★2026-09-06 加 governance/ 與 docs/★:這兩夾是「講程式的文字」不是程式本身——審查卷證、治理帳、
++# 方法論散文。符號還被它們提到,不代表那個符號還活著,所以掃它們既不準也很貴。實測四個常用詞
++# (doctor/lumos/check/node)全 repo 掃 7.17 秒、排除後 0.47 秒(15 倍);治理帳上的逾時降級也不是
++# 跟 token 數成正比,是跟「命中行數」——1615 命中要 14 秒,而 15 秒就是預算上限。
++# ★注意★:docs/ 底下的圖譜本體另有 :(exclude){graph_root} 專門排,這裡多排的是帳本與散文。
++_DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/",
++                          "governance/", "docs/")
+ # 與 pre-commit should_exclude 的 lock 排除規則對齊(`*package-lock.json|*yarn.lock|*pnpm-lock.yaml`)
+ _DELGUARD_EXCLUDE_LOCKFILES = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
+ DELGUARD_TOKEN_CAP = 40  # staged diff 抽出 token 數上限,超額截斷(dropped 計入輸出提示)
+ DELGUARD_TOP_N = 10  # CLI 文字輸出逐條列出上限,其餘併入「另有 K 處命中」統計行
+ 
+ 
+ def _delguard_is_diff_header(ln):
+     """True=這行是 unified diff 的檔頭行(--- a/… / +++ b/… / …/dev/null),不是內容行。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a556b68..5580e38 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -356,24 +356,29 @@ def _load_lumos_module():
+ 
+ def t_install_global_hook_sync():
+     """install全域hook同步_計劃:cmd_install 尾端同步全域 hooks/settings(全域機器自癒)。
+     在假 HOME 直呼 _sync_global_claude(repo):copy 三 hook + 撤除舊 code-loop-guard + prune 懸空註冊。
+     嚴禁碰真 ~/.claude(用 HOME=tmp 隔離)。"""
+     import os, json as _j, subprocess as _sp
+     repo = Path(GRAPHCTL).resolve().parent.parent
+ 
+-    def run_sync(home):
++    def run_sync(home, stub_names=None):
++        # stub_names:把「相容期空殼」清單換成合成名字再跑。★這樣測的是機制不是某一支檔★
++        # (2026-09-06:verification-rot-check.py 相容期滿真刪後,那份清單變空;原本寫死該檔名
++        #  的第 5、6 段會因為「現在剛好沒有任何 hook 在相容期」而測不到東西=靜默失去覆蓋。)
++        patch = ("m._RETIRED_STUB_CLAUDE_HOOKS = tuple(sys.argv[3].split(','));" if stub_names else "")
+         code = ("import sys;from pathlib import Path;"
+                 "import importlib.util;from importlib.machinery import SourceFileLoader;"
+                 "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
+                 "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
++                + patch +
+                 "m._sync_global_claude(Path(sys.argv[2]))")
+-        return _sp.run([sys.executable, "-c", code, GRAPHCTL, str(repo)],
+-                       env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)),
++        argv = [sys.executable, "-c", code, GRAPHCTL, str(repo)] + ([",".join(stub_names)] if stub_names else [])
++        return _sp.run(argv, env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)),
+                        capture_output=True, text=True)
+ 
+     # 1. 乾淨假 HOME → copy 三 hook + settings 註冊我方 hook
+     fake = Path(tempfile.mkdtemp(prefix="gctl-gsync-"))
+     r = run_sync(fake)
+     hooks = fake / ".claude" / "hooks"
+     for h in ("check-graph-sync.py", "impact-hook.py"):   # rot-check 2026-08-21 撤除
+         check(f"global sync: {h} copied", (hooks / h).exists(), f"stderr={r.stderr[-200:]}")
+@@ -413,44 +418,49 @@ def t_install_global_hook_sync():
+     run_sync(fake4)
+     s2 = (fake4 / ".claude" / "settings.json").read_text(encoding="utf-8")
+     check("global sync: 冪等(跑兩次 settings 一致)", s1 == s2)
+ 
+     # 5. ★撤除兩階段★:剛撤的 hook 換 exit 0 空殼(不是刪檔)——正在跑的 session 啟動時
+     #    讀進的 settings 快照還註冊著它,一刀刪檔會讓那些 session 每次觸發都報錯。
+     fake5 = Path(tempfile.mkdtemp(prefix="gctl-gsync5-"))
+     h5 = fake5 / ".claude" / "hooks"; h5.mkdir(parents=True)
+-    (h5 / "verification-rot-check.py").write_text("# 舊的真實作,會做事\nraise SystemExit(2)\n",
++    (h5 / "retired-example-hook.py").write_text("# 舊的真實作,會做事\nraise SystemExit(2)\n",
+                                                   encoding="utf-8")
+-    run_sync(fake5)
+-    stub = h5 / "verification-rot-check.py"
++    run_sync(fake5, stub_names=["retired-example-hook.py"])
++    stub = h5 / "retired-example-hook.py"
+     check("撤除兩階段: 相容期 hook 檔案還在(沒被一刀刪)", stub.exists())
+     if stub.exists():
+         body = stub.read_text(encoding="utf-8")
+         check("撤除兩階段: 內容已換成空殼(舊實作不再跑)", "raise SystemExit(2)" not in body, body[:80])
+         rc = _sp.run([sys.executable, str(stub)], capture_output=True, text=True,
+                      input='{"hook_event_name":"PostToolUse"}')
+         check("撤除兩階段: 空殼跑起來 exit 0(舊 session 觸發不報錯)", rc.returncode == 0,
+               f"rc={rc.returncode} err={rc.stderr[-160:]}")
+-    # 過了相容期的(code-loop-guard)仍是真刪 —— 已由第 2 段覆蓋
++    # 過了相容期的(code-loop-guard、verification-rot-check)仍是真刪 —— 已由第 2 段覆蓋
++    check("撤除兩階段: 真刪清單含已過相容期的兩支",
++          set(_load_lumos()._RETIRED_CLAUDE_HOOKS) >= {"code-loop-guard.py", "verification-rot-check.py"},
++          str(_load_lumos()._RETIRED_CLAUDE_HOOKS))
+     # 6. teardown 要連空殼一起清掉(相容期檔案不能留在拆機後的機器上)
+     fake6 = Path(tempfile.mkdtemp(prefix="gctl-gsync6-"))
+     h6 = fake6 / ".claude" / "hooks"; h6.mkdir(parents=True)
+-    (h6 / "verification-rot-check.py").write_text("# stub\n", encoding="utf-8")
++    (h6 / "retired-example-hook.py").write_text("# stub\n", encoding="utf-8")   # 合成的相容期空殼
+     (fake6 / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+     code6 = ("import sys;from pathlib import Path;"
+              "import importlib.util;from importlib.machinery import SourceFileLoader;"
+              "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
+              "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
++             # 同上:注入合成的相容期名字,測的是「teardown 會不會清空殼」這個機制
++             "m._RETIRED_STUB_CLAUDE_HOOKS = ('retired-example-hook.py',);"
+              "m._teardown_global_claude(Path(sys.argv[2]))")
+     _sp.run([sys.executable, "-c", code6, GRAPHCTL, str(repo)],
+             env=dict(os.environ, HOME=str(fake6), USERPROFILE=str(fake6)),
+             capture_output=True, text=True)
+     check("撤除兩階段: teardown 連相容期空殼一起清掉",
+-          not (h6 / "verification-rot-check.py").exists())
++          not (h6 / "retired-example-hook.py").exists())
+ 
+ 
+ def t_probe_sandbox_cannot_push():
+     """★探針沙盒推不出去★:被測 AI 在副本裡做什麼都行,但 push 必須被擋。
+ 
+     2026-08-23 事故:守衛題的情境是「沒有我就開工做」,被測 AI 真的改檔並 push,
+     副本 rsync 來的 .git/config 帶著 remote,一筆 author=probe@local 的假快照上了主幹。
+     三道:拔 remote / pre-push 硬擋 / 假身分。本測試★真的試 push★,不只看設定。
+@@ -5582,23 +5592,23 @@ def t_precommit_shebang_script_counts_as_code():
+ 
+ def t_merge_dedupes_preexisting_duplicates():
+     """體檢 #1(2026-08-21):舊版安裝器留下同一 hook 兩份註冊(真機 settings.json 實證:
+     verification-rot-check/check-graph-sync 各兩份,每次事件跑兩遍)。merger 每次執行都要自癒去重。"""
+     import json, os, subprocess, sys
+     fake_home = Path(tempfile.mkdtemp(prefix="gctl-dedupe-"))
+     (fake_home / ".claude" / "hooks").mkdir(parents=True)
+     (fake_home / ".claude" / "hooks" / "check-graph-sync.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+-    (fake_home / ".claude" / "hooks" / "verification-rot-check.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
++    (fake_home / ".claude" / "hooks" / "retired-example-hook.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+     settings = fake_home / ".claude" / "settings.json"
+     dup = lambda name, matcher=None: dict(({"matcher": matcher} if matcher else {}),
+                                           hooks=[{"type": "command", "command": f"python3 \"{fake_home}/.claude/hooks/{name}\"", "timeout": 10}])
+     settings.write_text(json.dumps({"hooks": {
+         "Stop": [dup("check-graph-sync.py"), dup("check-graph-sync.py")],
+-        "PostToolUse": [dup("verification-rot-check.py", "Bash"), dup("verification-rot-check.py", "Bash")],
++        "PostToolUse": [dup("retired-example-hook.py", "Bash"), dup("retired-example-hook.py", "Bash")],
+     }}), encoding="utf-8")
+     env = dict(os.environ, HOME=str(fake_home), USERPROFILE=str(fake_home))
+     merge = str(Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py")
+     r = subprocess.run([sys.executable, merge, "--prune-only"], env=env, capture_output=True, text=True)
+     data = json.loads(settings.read_text(encoding="utf-8"))
+     check("merge dedupe: Stop 兩份→一份", len(data["hooks"]["Stop"]) == 1, str(data["hooks"]["Stop"]))
+     check("merge dedupe: PostToolUse 兩份→一份", len(data["hooks"]["PostToolUse"]) == 1, str(data["hooks"]["PostToolUse"]))
+     check("merge dedupe: 輸出有 [dedupe] 留痕", "[dedupe]" in r.stdout, r.stdout)
+@@ -25982,10 +25992,66 @@ def t_deinit_never_deletes_user_license():
+ 
+     for name, txt in user_files.items():
+         p = root / name
+         check(f"deinit: 使用者自己的 {name} 必須留著且內容未變", p.is_file() and p.read_text(encoding="utf-8") == txt,
+               f"exists={p.exists()}")
+     check("deinit: 確實有在做事(vendored 主程式已移除),不是空跑", not (sc / "lumos").exists(), "")
+ 
+ 
++def t_delguard_excludes_prose_dirs():
++    """delguard 不掃 governance/ 與 docs/(2026-09-06 全 repo 審視第二批)。
++
++    出身:治理帳上 30% 的 delguard 執行是「逾時降級」——守衛在半盲狀態下擋人。原本以為跟 token
++    數有關,實際量出來是跟★命中行數★成正比(帳上 1615 命中要 14 秒,而預算就是 15 秒)。真因是
++    git grep 掃進了審查卷證與治理帳:四個常用詞(doctor/lumos/check/node)全 repo 命中 75587 行、
++    7.17 秒,排除這兩夾後 7336 行、0.47 秒。
++
++    語意面也更準,不只是快:那兩夾是「講程式的文字」不是程式本身,符號被審查報告提到不代表它還
++    活著。排掉之後判「已消失」會更貼近事實(方向是更容易示警,不是更容易放過)。
++    ★docs/ 底下的圖譜本體另有專門的排除,這裡多排的是帳本與散文。★"""
++    m = _load_lumos()
++    ex = list(getattr(m, "_DELGUARD_EXCLUDE_DIRS", []))
++    for d in ("governance/", "docs/"):
++        check(f"delguard: 排除域含 {d}", d in ex, str(ex))
++    # 跟 pre-commit 的同源清單對齊(既有漂移守衛逐項比對,這裡只確認新加的兩項真的在那一行)
++    hooks_dir = Path(GRAPHCTL).resolve().parent / "hooks"
++    case_line = [l for l in (hooks_dir / "pre-commit").read_text(encoding="utf-8").splitlines()
++                 if "node_modules" in l and "case" not in l][0]
++    for d in ("governance", "docs"):
++        check(f"delguard: pre-commit 的 should_exclude 也排 {d}", d in case_line, case_line[:120])
++
++
++def t_doctor_summary_admits_soft_reminders():
++    """doctor 收尾行不得比正文樂觀(2026-09-06 全 repo 審視第二批;五個鏡頭各自撞到同一件事)。
++
++    出身:實跑當天上面列了 5 件回訪逾期、5 份驗證引用被翻案的決策、1 張零判定的連鎖單、1 條失效
++    路徑、沒接 linter,尾行仍印「✓ 圖譜健康 — 0 issues」,人和 AI 都會停在那一行。而且 9/1 起
++    129 次 doctor 全部 issues=0,那幾件一件都沒被清掉。
++
++    ★軟提醒不進 rc 是既有裁定,這裡不動它★——只要求結論行把「還有幾段沒算進來」講出來。
++    計數放在 warn 與 warn_soft 的共用層:Check F 那種「沒有逐條、只有一句」的走 warn([]),
++    issues 加 0,只數 warn_soft 會漏掉它。"""
++    import subprocess as _sp
++    root = Path(GRAPHCTL).resolve().parent.parent
++    r = _sp.run([sys.executable, GRAPHCTL, "doctor"], capture_output=True, text=True, cwd=str(root))
++    out = r.stdout
++    check("doctor: 既有結論行 token 沒被動到(四處測試錨著)", "圖譜健康" in out or "個 issue" in out, out[-160:])
++    check("doctor: 結論行帶「篇)」", "篇)" in out, out[-160:])
++    soft_printed = out.count("  ⚠ ")
++    tail_has = "提醒沒算進 issues" in out
++    check("doctor: 有軟提醒時,收尾行必須講還有幾段沒算進來",
++          (soft_printed == 0) or tail_has, f"印了 {soft_printed} 段 ⚠,收尾行有交代={tail_has}")
++    if tail_has:
++        import re as _re
++        m = _re.search(r"另有 (\d+) 段", out)
++        check("doctor: 收尾行講的段數 = 實際印出的 ⚠ 段數(不是手寫數字)",
++              bool(m) and int(m.group(1)) == soft_printed, f"收尾說 {m.group(1) if m else '?'} / 實印 {soft_printed}")
++    # 治理帳也要記得下這個數字(可重算)。★只有 --ci 會寫帳★,所以這裡自己跑一次 --ci 再看,
++    # 不要去讀「剛好最近有沒有人跑過」的帳尾——那會變成看別人臉色的測試
++    _sp.run([sys.executable, GRAPHCTL, "doctor", "--ci"], capture_output=True, text=True, cwd=str(root))
++    last = (root / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").rstrip().splitlines()[-1]
++    check("doctor: --ci 寫的 doctor-run 事件帶 soft= 欄位(數字可重算)",
++          '"gate": "doctor-run"' in last and "soft=" in last, last[:160])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

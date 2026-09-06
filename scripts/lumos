@@ -795,7 +795,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         # ★空清單也是一段提醒★:Check F 這種「沒有逐條、只有一句」的走 warn([]),issues 加 0,
         # 只數 warn_soft 會漏掉它(2026-09-06 全 repo 審視:收尾行說 0 issues 蓋掉七段警告)
         if not lines:
+            # 只有標題、沒有逐條的那種提醒(例如「這個 repo 沒接 linter」):它本身就是一條,
+            # 不然收尾行會出現「1 段、共 0 條」這種讀不通的話(r1 外家席)
             _soft["segs"] += 1
+            _soft["lines"] += 1
             _soft["heads"].append(head)
         print(f"  {C['Y']}⚠{C['X']} {head}")
         for l in lines:
@@ -1939,9 +1942,12 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         # 細節上面每一段都印過了,要全文一個指令就有。
         if not _soft["segs"]:
             return ""
-        cnt = f"{_soft['segs']} 段" + (f"、共 {_soft['lines']} 條" if _soft["lines"] else "")
-        return (f"\n  {C['Y']}·{C['X']} 另有 {cnt}提醒沒算進 issues——它們不影響這行的判定,"
-                f"但上面每一段都印了;{C['B']}lumos doctor --verbose{C['X']} 看全部")
+        # 排版照該檔既有慣例:提醒行用 ⚠、指令獨立一行(跟 warn/warn_soft 的 advice 同款)
+        # ——r1 架構對齊席:原本用了全檔沒出現過的 · 符號、又把指令接在句尾同一行,
+        # 跟長期標準「發生什麼→為何在意→指令獨立一行」分岔
+        cnt = f"{_soft['segs']} 段、共 {_soft['lines']} 條"
+        return (f"\n  {C['Y']}⚠{C['X']} 另有 {cnt}提醒沒算進上面那個數字——它們不影響判定,"
+                f"但每一段剛才都印了\n  {C['B']}看全部{C['X']}: lumos doctor --verbose")
 
     print(f"{C['B']}─────────────────────────────────{C['X']}")
     if issues == 0:
@@ -14080,13 +14086,20 @@ def cmd_cochange_check(repo=None, staged=False, diff_range=None, as_json=False):
 
 
 _DELGUARD_STOP = frozenset("if else for while return import class def val var fun void public private static final new this true false null let const function".split())
-# ★2026-09-06 加 governance/ 與 docs/★:這兩夾是「講程式的文字」不是程式本身——審查卷證、治理帳、
-# 方法論散文。符號還被它們提到,不代表那個符號還活著,所以掃它們既不準也很貴。實測四個常用詞
-# (doctor/lumos/check/node)全 repo 掃 7.17 秒、排除後 0.47 秒(15 倍);治理帳上的逾時降級也不是
-# 跟 token 數成正比,是跟「命中行數」——1615 命中要 14 秒,而 15 秒就是預算上限。
-# ★注意★:docs/ 底下的圖譜本體另有 :(exclude){graph_root} 專門排,這裡多排的是帳本與散文。
-_DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/",
-                          "governance/", "docs/")
+# ①建置產物:這份★必須與 pre-commit 的 should_exclude 逐項對齊★(既有漂移守衛在比),
+# 因為兩邊講的是同一件事——那些目錄裡沒有人寫的原始碼。
+_DELGUARD_EXCLUDE_DIRS = ("node_modules/", "bin/", "obj/", "dist/", "build/", "__pycache__/", ".git/")
+# ②散文與帳本:★只有 delguard 排,絕對不要複製到 pre-commit 的 should_exclude★
+# (2026-09-06 代碼審 r1 通才席判 blocker、實測重現:我為了滿足漂移守衛就把 governance/ 一起
+#  抄進 pre-commit,結果 governance/ 底下 28 支真程式全部從「改 code 沒動圖譜就擋」的硬閘裡
+#  掉出去——兩份清單語意根本不同:delguard 那份是「哪裡不算活著的程式」,pre-commit 那份是
+#  「哪些檔改了不必配圖譜」。)
+# 為什麼 delguard 要排:符號被審查卷證或治理帳提到,不代表它還活著,掃它們既不準也很貴。
+# 實測四個常用詞(doctor/lumos/check/node)全 repo 命中 75587 行、7.17 秒,排除後 7336 行、
+# 0.47 秒(15 倍);逾時降級的成本是跟命中行數成正比,不是 token 數。
+# ★docs/ 底下的圖譜本體另有 :(exclude){graph_root} 專門排,這裡多排的是帳本與散文。★
+_DELGUARD_PROSE_DIRS = ("governance/", "docs/")
+_DELGUARD_ALL_EXCLUDE_DIRS = _DELGUARD_EXCLUDE_DIRS + _DELGUARD_PROSE_DIRS
 # 與 pre-commit should_exclude 的 lock 排除規則對齊(`*package-lock.json|*yarn.lock|*pnpm-lock.yaml`)
 _DELGUARD_EXCLUDE_LOCKFILES = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
 DELGUARD_TOKEN_CAP = 40  # staged diff 抽出 token 數上限,超額截斷(dropped 計入輸出提示)
@@ -14123,8 +14136,14 @@ def _delguard_parse_diff(diff_text, graph_root):
         # docs/kg-legacy/notes.md(字首相同、不同目錄)——必須是同一路徑或其子路徑
         # (r2 code-loop 折入:r1 兩席點名、上一修波漏掉)
         vault = bool(c) and (c == graph_root or c.startswith(graph_root + "/")) and c.endswith(".md")
+        # 建置產物:任何深度都排(src/robin/ 不撞 bin/ 靠前面那個 "/" )
+        # ★散文與帳本:只認 repo 根★(2026-09-06 代碼審 r1 外家席)——消費專案的
+        # src/docs/parser.py、packages/governance/rules.py 很可能是真程式,不是散文;
+        # 而且 git grep 那側的 :(exclude)docs 本來就只排根目錄、pre-commit 寫的也是
+        # docs/*,三處要同一個語意才不會各自漂。
         excl = bool(c) and (any(c.startswith(seg) or ("/" + seg) in c
                                 for seg in _DELGUARD_EXCLUDE_DIRS)
+                            or any(c.startswith(seg) for seg in _DELGUARD_PROSE_DIRS)
                             or c.endswith(_DELGUARD_EXCLUDE_LOCKFILES))
         return c, vault, excl
 
@@ -14189,7 +14208,7 @@ def _delguard_confidence(tokens, repo_root, graph_root, timeout=None):
     for t in tokens:
         cmd += ["-e", t]
     cmd += ["--", ".", f":(exclude){graph_root}"]
-    for d in _DELGUARD_EXCLUDE_DIRS:
+    for d in _DELGUARD_ALL_EXCLUDE_DIRS:
         cmd += [f":(exclude){d.rstrip('/')}"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root, timeout=timeout)
     if r.returncode > 1:

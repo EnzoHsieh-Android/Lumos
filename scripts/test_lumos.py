@@ -365,15 +365,16 @@ def t_install_global_hook_sync():
         # stub_names:把「相容期空殼」清單換成合成名字再跑。★這樣測的是機制不是某一支檔★
         # (2026-09-06:verification-rot-check.py 相容期滿真刪後,那份清單變空;原本寫死該檔名
         #  的第 5、6 段會因為「現在剛好沒有任何 hook 在相容期」而測不到東西=靜默失去覆蓋。)
-        patch = ("m._RETIRED_STUB_CLAUDE_HOOKS = tuple(sys.argv[3].split(','));" if stub_names else "")
+        # 直接嵌字面量,不用 argv 傳逗號串(r1 架構對齊席:假設檔名不含逗號、比嵌字面量更脆)
+        patch = (f"m._RETIRED_STUB_CLAUDE_HOOKS = {tuple(stub_names)!r};" if stub_names else "")
         code = ("import sys;from pathlib import Path;"
                 "import importlib.util;from importlib.machinery import SourceFileLoader;"
                 "spec=importlib.util.spec_from_file_location('m',sys.argv[1],loader=SourceFileLoader('m',sys.argv[1]));"
                 "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
                 + patch +
                 "m._sync_global_claude(Path(sys.argv[2]))")
-        argv = [sys.executable, "-c", code, GRAPHCTL, str(repo)] + ([",".join(stub_names)] if stub_names else [])
-        return _sp.run(argv, env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)),
+        return _sp.run([sys.executable, "-c", code, GRAPHCTL, str(repo)],
+                       env=dict(os.environ, HOME=str(home), USERPROFILE=str(home)),
                        capture_output=True, text=True)
 
     # 1. 乾淨假 HOME → copy 三 hook + settings 註冊我方 hook
@@ -2497,6 +2498,14 @@ def t_precommit_whitelist_drift_guard():
     # ★跨檔斷言★:三個 lockfile 名都要出現在 pre-commit 的**那一行** lock 排除規則裡。
     # (code-loop r1 L:原本還有一條「lf 出現在 scripts/lumos 源碼」——lf 本來就是從
     #  scripts/lumos 讀出來的常數值,恆真、零鑑別力,已刪。)
+    # ★同源第三份:post-commit★(2026-09-06 r1 架構對齊席)——post-commit 自己的檔頭明寫
+    # 「判定邏輯與 pre-commit 完全對齊,兩邊不一致會產生幽靈 bypass 或漏記」,但這支漂移守衛
+    # 一直只比對 pre-commit,post-commit 漏同步不會有任何測試翻紅。這次補上。
+    postcommit_txt = (hooks_dir / "post-commit").read_text(encoding="utf-8")
+    pre_case = [l for l in precommit_txt.splitlines() if "node_modules" in l and "case" not in l][0]
+    post_case = [l for l in postcommit_txt.splitlines() if "node_modules" in l and "case" not in l][0]
+    check("漂移守衛: post-commit 的 should_exclude 與 pre-commit 逐字相同(不一致=幽靈 bypass)",
+          pre_case.strip() == post_case.strip(), f"pre={pre_case.strip()[:70]} / post={post_case.strip()[:70]}")
     lock_line = [l for l in precommit_txt.splitlines() if "package-lock.json" in l][0]
     for lf in m._DELGUARD_EXCLUDE_LOCKFILES:
         check(f"delguard 漂移守衛: lockfile {lf} 見於 pre-commit lock 排除行",
@@ -25998,27 +26007,53 @@ def t_deinit_never_deletes_user_license():
 
 
 def t_delguard_excludes_prose_dirs():
-    """delguard 不掃 governance/ 與 docs/(2026-09-06 全 repo 審視第二批)。
+    """delguard 不掃 governance/ 與 docs/,★但那兩夾絕對不能進 pre-commit 的硬閘豁免★
+    (2026-09-06 全 repo 審視第二批;代碼審 r1 通才席判 blocker 後重寫)。
 
-    出身:治理帳上 30% 的 delguard 執行是「逾時降級」——守衛在半盲狀態下擋人。原本以為跟 token
-    數有關,實際量出來是跟★命中行數★成正比(帳上 1615 命中要 14 秒,而預算就是 15 秒)。真因是
-    git grep 掃進了審查卷證與治理帳:四個常用詞(doctor/lumos/check/node)全 repo 命中 75587 行、
-    7.17 秒,排除這兩夾後 7336 行、0.47 秒。
+    出身:治理帳上 30% 的 delguard 執行是「逾時降級」——守衛在半盲狀態下擋人。原以為跟 token
+    數有關,量出來是跟★命中行數★成正比(6 詞/835 命中=9.7 秒、10 詞/1615 命中=14 秒,而預算
+    就是 15 秒)。真因是掃進了審查卷證與治理帳:四個常用詞全 repo 命中 75587 行、7.17 秒,
+    排除後 7336 行、0.47 秒。
 
-    語意面也更準,不只是快:那兩夾是「講程式的文字」不是程式本身,符號被審查報告提到不代表它還
-    活著。排掉之後判「已消失」會更貼近事實(方向是更容易示警,不是更容易放過)。
-    ★docs/ 底下的圖譜本體另有專門的排除,這裡多排的是帳本與散文。★"""
+    ★blocker 的教訓:兩份清單語意不同,不可以互抄★——delguard 那份是「哪裡不算活著的程式」,
+    pre-commit 的 should_exclude 是「哪些檔改了不必配圖譜」。第一版為了滿足既有的漂移守衛,
+    把 governance/ 一起抄進 pre-commit,結果 governance/ 底下 28 支真程式全部從「改 code 沒動
+    圖譜就擋」的硬閘掉出去(審查席在乾淨 clone 實測重現)。所以拆成兩個常數,並在這裡釘死
+    「散文清單不得出現在硬閘那一行」。
+
+    這支測試★驗行為不只驗常數★:餵一份假 diff 給真正的解析函式,確認治理目錄的改動不會被
+    收成 token(r1 通才席實測:只比對常數的版本,把 excl 寫死成 False 也照樣全綠)。"""
     m = _load_lumos()
     ex = list(getattr(m, "_DELGUARD_EXCLUDE_DIRS", []))
+    prose = list(getattr(m, "_DELGUARD_PROSE_DIRS", []))
+    allx = list(getattr(m, "_DELGUARD_ALL_EXCLUDE_DIRS", []))
     for d in ("governance/", "docs/"):
-        check(f"delguard: 排除域含 {d}", d in ex, str(ex))
-    # 跟 pre-commit 的同源清單對齊(既有漂移守衛逐項比對,這裡只確認新加的兩項真的在那一行)
+        check(f"delguard: 散文清單含 {d}", d in prose, str(prose))
+    check("delguard: 合併清單 = 建置產物 + 散文", set(allx) == set(ex) | set(prose), str(allx))
+    # ★硬閘那一行不得含 governance★(docs/* 是它本來就有的,不是這次加的)
     hooks_dir = Path(GRAPHCTL).resolve().parent / "hooks"
     case_line = [l for l in (hooks_dir / "pre-commit").read_text(encoding="utf-8").splitlines()
                  if "node_modules" in l and "case" not in l][0]
-    for d in ("governance", "docs"):
-        check(f"delguard: pre-commit 的 should_exclude 也排 {d}", d in case_line, case_line[:120])
-
+    check("delguard: ★pre-commit 的硬閘豁免不得含 governance★(那底下有真程式,豁免=改 code 不配圖譜也放行)",
+          "governance" not in case_line, case_line[:140])
+    # 行為面:餵真的 diff 文字給解析器,治理目錄的加號行不得被收成 token
+    # delguard 抽的是被★刪掉★的識別字(減號行)。餵一份兩個檔各刪一個符號的假 diff:
+    # 治理目錄那個不該被抽出來,一般程式那個要照抽——這樣才驗得到排除真的在起作用。
+    diff = ("diff --git a/governance/autonomous_loop/gap_select.py b/governance/autonomous_loop/gap_select.py\n"
+            "--- a/governance/autonomous_loop/gap_select.py\n"
+            "+++ b/governance/autonomous_loop/gap_select.py\n"
+            "@@ -1,3 +1,2 @@\n"
+            "-def zzzGovernanceOnlySymbol():\n"
+            "diff --git a/scripts/thing.py b/scripts/thing.py\n"
+            "--- a/scripts/thing.py\n"
+            "+++ b/scripts/thing.py\n"
+            "@@ -1,3 +1,2 @@\n"
+            "-def zzzRealCodeSymbol():\n")
+    toks = m._delguard_parse_diff(diff, "docs/lumos-toolchain-knowledge")["tokens"]
+    check("delguard/行為: 治理目錄刪掉的符號沒被抽成 token(排除真的在起作用)",
+          "zzzGovernanceOnlySymbol" not in toks, str(toks)[:200])
+    check("delguard/行為: 一般程式刪掉的符號照樣抽(不是整個關掉)",
+          "zzzRealCodeSymbol" in toks, str(toks)[:200])
 
 def t_doctor_summary_admits_soft_reminders():
     """doctor 收尾行不得比正文樂觀(2026-09-06 全 repo 審視第二批;五個鏡頭各自撞到同一件事)。
@@ -26036,22 +26071,34 @@ def t_doctor_summary_admits_soft_reminders():
     out = r.stdout
     check("doctor: 既有結論行 token 沒被動到(四處測試錨著)", "圖譜健康" in out or "個 issue" in out, out[-160:])
     check("doctor: 結論行帶「篇)」", "篇)" in out, out[-160:])
-    soft_printed = out.count("  ⚠ ")
-    tail_has = "提醒沒算進 issues" in out
+    import re as _re
+    # ★只數分隔線之前的★:收尾那句自己也用 ⚠(跟該檔既有慣例一致),整份數會多算一
+    body_out = out.split("─────")[0] if "─────" in out else out
+    warn_printed = body_out.count("  ⚠ ")     # 硬問題與軟提醒印的是同一種行
+    hard = _re.search(r"發現 (\d+) 個 issue", out)
+    n_hard = int(hard.group(1)) if hard else 0
+    tail_has = "提醒沒算進上面那個數字" in out
     check("doctor: 有軟提醒時,收尾行必須講還有幾段沒算進來",
-          (soft_printed == 0) or tail_has, f"印了 {soft_printed} 段 ⚠,收尾行有交代={tail_has}")
+          (warn_printed == 0) or tail_has, f"印了 {warn_printed} 段 ⚠,收尾行有交代={tail_has}")
     if tail_has:
-        import re as _re
         m = _re.search(r"另有 (\d+) 段", out)
-        check("doctor: 收尾行講的段數 = 實際印出的 ⚠ 段數(不是手寫數字)",
-              bool(m) and int(m.group(1)) == soft_printed, f"收尾說 {m.group(1) if m else '?'} / 實印 {soft_printed}")
-    # 治理帳也要記得下這個數字(可重算)。★只有 --ci 會寫帳★,所以這裡自己跑一次 --ci 再看,
-    # 不要去讀「剛好最近有沒有人跑過」的帳尾——那會變成看別人臉色的測試
-    _sp.run([sys.executable, GRAPHCTL, "doctor", "--ci"], capture_output=True, text=True, cwd=str(root))
-    last = (root / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").rstrip().splitlines()[-1]
-    check("doctor: --ci 寫的 doctor-run 事件帶 soft= 欄位(數字可重算)",
-          '"gate": "doctor-run"' in last and "soft=" in last, last[:160])
-
-
+        n_soft = int(m.group(1)) if m else -1
+        # ★不能拿「所有 ⚠ 行」當軟提醒數★(代碼審 r1 通才席實測:repo 一有普通壞連結就會多一段
+        # 硬 ⚠,測試會在產品沒壞的情況下翻紅)。硬問題已經算進「N 個 issue」,不該重複計。
+        # 這裡只斷言關係:軟段數必須介於 0 與總 ⚠ 段數之間,且「軟 + 硬段」不超過總 ⚠ 段數。
+        check("doctor: 收尾行的軟段數落在合理範圍(不重複計硬問題)",
+              0 <= n_soft <= warn_printed, f"軟 {n_soft} / 總 ⚠ {warn_printed} / 硬 issue {n_hard}")
+        if n_hard == 0:
+            check("doctor: 沒有硬問題時,軟段數 = 印出的 ⚠ 段數(數字是算的不是手寫)",
+                  n_soft == warn_printed, f"收尾說 {n_soft} / 實印 {warn_printed}")
+    # 治理帳也要記得下這個數字。★不能對來源 repo 跑 doctor --ci 來驗★(r1 外家席:那會 append
+    # 受版控的 docs/.governance-log.jsonl,每跑一次測試就在工作樹留一筆、帳本持續膨脹)。隔離
+    # vault 也寫不出帳(寫者取不到可解析的 git HEAD 就靜默跳過)。所以退一步、★誠實標明證據層級★:
+    # 這條只驗「欄位有接上」是原始碼事實,不驗執行期的值——值的正確性由上面那幾條斷言涵蓋,
+    # 它們比對的是真的跑出來的畫面。
+    main_src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    note_line = [l for l in main_src.splitlines() if "issues={issues}" in l]
+    check("doctor: doctor-run 事件的 note 有接上 soft= 欄位(原始碼層;值的正確性由上面的畫面斷言涵蓋)",
+          bool(note_line) and any("soft=" in l for l in note_line), str(note_line)[:160])
 if __name__ == "__main__":
     sys.exit(main())
