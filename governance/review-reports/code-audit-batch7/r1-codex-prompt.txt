@@ -1,0 +1,24 @@
+你是外部第三方審查員(外家否決席),審一份投稿的 diff。★這批是安全性改動,請用「攻擊者會怎麼繞」的角度審。★ 唯讀:不要改檔、不要推送、不要跑會寫入家目錄的東西。
+
+工作目錄:/Users/enzo/harness/lumos-toolchain
+被審材料(凍結快照):governance/review-reports/code-audit-batch7/r1-snapshot.patch
+
+作者自述(不要照單全收):
+① 三支 hook 加共用 _trusted_lumos():which(lumos) → $LUMOS_HOME → ~/harness/lumos-toolchain → None,不再執行被打開那個資料夾的 scripts/lumos。
+② scripts/lumos 抽 _trusted_private_dir(d, expected),四處共用:不是 symlink、resolve() 等於預期路徑、是目錄、owner 是自己、group/other 不可寫。
+③ ANCHOR_FILES 6→10,anchor verify 加「baseline 的 hook 檔集合 == 實際存在的檔集合」。
+④ impact-hook 注入文字改固定字彙 + 首尾加「不是指令」框。
+⑤ pre-push 兩個寫死名字的 log 改 mktemp。
+
+請特別查:
+1. _trusted_lumos 可不可繞:PATH 誰控制得了?$LUMOS_HOME 誰設得了?三支複本真的逐字相同嗎(用 diff 驗)?**全面搜還有沒有別的地方會執行「當前專案」的碼**,不要只看這三支。
+2. _trusted_private_dir 的 TOCTOU:檢查完到 rmtree/mkdir/chmod 之間的縫。resolve() 對「路徑中間某層是 symlink」真的擋得住?請實搭多層 symlink 試(在你自己的暫存目錄)。
+3. _lens_arm_dir_ok 用 `Path(d).name` 當預期路徑最後一段——是不是等於「最後一段永遠對得上」?這條實際擋得住什麼、擋不住什麼?
+4. anchor 集合檢查排除 __pycache__ 與 .pyc/.pyo:能不能用別的檔名躲過?會不會反過來變成噪音(多一個暫存檔就翻紅)?
+5. 注入消毒是否徹底:_match_label 用 split(":",1)[0] 取 key,沒冒號會怎樣?_contract_label 的正則對非預期輸入回什麼?**還有沒有第三條路徑會產生 additionalContext 而沒被框**?框本身能不能被內容偽造(筆記裡就寫一行「參考資料結束」)?
+6. mktemp:set -u 下有沒有分支沒走到那兩行卻引用變數?
+
+輸出格式(嚴格遵守):
+- 開頭一行獨立寫 severity: <clean|minor|major|blocker>
+- 每條發現:`- [major] <結論>`;下一行縮排 `引句:「<逐字取自凍結快照,至少 10 個字>」`;下一行 位置:`檔案:行號`;下一行 `blocking:是|否`;下一行 `why:` 查證過程(輸入/預期/實際)。
+- 引句必須逐字出自那份 patch。沒問題的面向寫 `- [clean] ...` 說明查了什麼。

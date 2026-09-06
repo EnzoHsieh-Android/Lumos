@@ -54,13 +54,69 @@ def _emit_updated(tool_input: dict, prompt: str, text: str) -> None:
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": new_input}}, ensure_ascii=False))
 
 
+# ── ★只執行「可信來源」的 lumos,絕不執行被打開那個資料夾裡的碼★ ──────────────
+# 單源說明在 Systems/hook信任邊界;這段在幾支 hook 裡是逐字相同的複本,
+# 有守衛測試盯著不准漂(hook 是獨立檔、複製到 ~/.claude/hooks 後彼此 import 不到,
+# 所以用「複製 + 守衛」而不是抽共用模組)。
+#
+# 出身(2026-09-06 實地重現):這支 hook 原本執行的是 `<被打開的資料夾>/scripts/lumos`,
+# 唯一判準是那個資料夾有 docs/*-knowledge。**clone 一個陌生 repo、開一下 Claude,
+# 對方的 python 就在你機器上跑了**——而且因為是拿 python 去執行它,
+# 那個檔連執行權限都不需要。
+#
+# 解析順序:系統裝好的 → $LUMOS_HOME 指的 → 預設來源位置 → 都沒有就回 None。
+# 回 None 時呼叫端要靜默跳過那段功能(這套本來就是 fail-open:寧可少一層提醒,
+# 不可執行不該信任的碼)。
+#
+# ★2026-09-07 外家審查席補的一刀★:光是「從 PATH 或 $LUMOS_HOME 找到」不算可信——
+# 那兩個都是繼承來的環境值,workspace-local 的 bin(direnv / node_modules/.bin 之類)
+# 一進專案就可能改掉 PATH。所以找到之後還要驗那個檔本身:不是 symlink 指到別處、
+# 是自己的、group/other 不可寫。
+# ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+# 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+def _trusted_lumos():
+    import shutil as _sh, os as _os, stat as _st
+    from pathlib import Path as _P
+
+    def _ok(cand):
+        try:
+            p = _P(cand)
+            if not p.is_file():
+                return None
+            st = p.stat()
+            if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                return None          # 不是自己的檔
+            if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                return None          # 別人可寫 = 別人可換內容
+            par = p.parent.stat()
+            if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                return None          # 放在別人的目錄裡
+            if par.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                return None          # 目錄別人可寫 = 可被換掉
+            return str(p)
+        except OSError:
+            return None
+
+    found = _sh.which("lumos")
+    if found:
+        good = _ok(found)
+        if good:
+            return good
+    for base in (_os.environ.get("LUMOS_HOME"), str(_P.home() / "harness" / "lumos-toolchain")):
+        if not base:
+            continue
+        good = _ok(_P(base) / "scripts" / "lumos")
+        if good:
+            return good
+    return None
+# ── ★可信來源解析結束★ ────────────────────────────────────────────────
+
 def _find_lumos_script() -> str | None:
-    import shutil
-    w = shutil.which("lumos")
-    if w:
-        return w
-    cand = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "lumos"
-    return str(cand) if cand.is_file() else None
+    """★2026-09-07 外家審查席抓到:這支是第四支,前一批漏了★
+    原本 which 找不到就退回「這支 hook 檔往上四層」的 scripts/lumos——這支 hook 會被複製進
+    消費專案,那時往上四層正好是**消費專案自己的根**,等於又回到「執行手邊資料夾的碼」。
+    前一批只改了三支、測試也只掃那三支,所以沒抓到。現在改用共用的可信來源解析。"""
+    return _trusted_lumos()
 
 
 def _claim_codex_seat(payload: dict) -> int:
@@ -80,7 +136,7 @@ def _claim_codex_seat(payload: dict) -> int:
                            capture_output=True, text=True, timeout=INNER_TIMEOUT)
     except subprocess.TimeoutExpired:
         # 架構 r1 C:與 Claude 分支同語意——超時不再靜默,經 additionalContext 給一行固定說明
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": TIMEOUT_NOTE.format(what="(Codex 席:--claim)", cmd="--arm <base>..<head> --seats N 重新武裝(--status 只看剩幾席、不重算)", n=10)}}, ensure_ascii=False))
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": _frame_injected(TIMEOUT_NOTE.format(what="(Codex 席:--claim)", cmd="--arm <base>..<head> --seats N 重新武裝(--status 只看剩幾席、不重算)", n=10))}}, ensure_ascii=False))
         _debug("lumos dispatch-lens --claim 超時,已附超時說明")
         return 0
     except OSError as e:
@@ -98,7 +154,10 @@ def _claim_codex_seat(payload: dict) -> int:
     if not text:
         _debug(f"Codex 沒領到席({data.get('reason') if isinstance(data, dict) else '?'})")
         return 0
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}},
+    # 這段 text 是 lumos dispatch-lens 產的,框已經加在那邊(單源:框跟內容同一個地方組)。
+    # 這裡不重複框——重複會變成框中框,反而讓邊界更難讀。
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart",
+                                             "additionalContext": text}},   # framed-upstream
                      ensure_ascii=False))
     return 0
 

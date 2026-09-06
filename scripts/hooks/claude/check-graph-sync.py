@@ -469,18 +469,47 @@ def emit_queue_patrol(project_root: Path) -> None:
 # 解析順序:系統裝好的 → $LUMOS_HOME 指的 → 預設來源位置 → 都沒有就回 None。
 # 回 None 時呼叫端要靜默跳過那段功能(這套本來就是 fail-open:寧可少一層提醒,
 # 不可執行不該信任的碼)。
+#
+# ★2026-09-07 外家審查席補的一刀★:光是「從 PATH 或 $LUMOS_HOME 找到」不算可信——
+# 那兩個都是繼承來的環境值,workspace-local 的 bin(direnv / node_modules/.bin 之類)
+# 一進專案就可能改掉 PATH。所以找到之後還要驗那個檔本身:不是 symlink 指到別處、
+# 是自己的、group/other 不可寫。
+# ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+# 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
 def _trusted_lumos():
-    import shutil as _sh, os as _os
+    import shutil as _sh, os as _os, stat as _st
     from pathlib import Path as _P
+
+    def _ok(cand):
+        try:
+            p = _P(cand)
+            if not p.is_file():
+                return None
+            st = p.stat()
+            if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                return None          # 不是自己的檔
+            if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                return None          # 別人可寫 = 別人可換內容
+            par = p.parent.stat()
+            if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                return None          # 放在別人的目錄裡
+            if par.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                return None          # 目錄別人可寫 = 可被換掉
+            return str(p)
+        except OSError:
+            return None
+
     found = _sh.which("lumos")
     if found:
-        return found
+        good = _ok(found)
+        if good:
+            return good
     for base in (_os.environ.get("LUMOS_HOME"), str(_P.home() / "harness" / "lumos-toolchain")):
         if not base:
             continue
-        cand = _P(base) / "scripts" / "lumos"
-        if cand.is_file():
-            return str(cand)
+        good = _ok(_P(base) / "scripts" / "lumos")
+        if good:
+            return good
     return None
 # ── ★可信來源解析結束★ ────────────────────────────────────────────────
 

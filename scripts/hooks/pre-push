@@ -192,8 +192,23 @@ done
 # (看到的是別人那次的輸出)。加上現在分片會同時起好幾個行程,更該各用各的。
 # ★XXXXXX 必須在結尾★:macOS 的 mktemp 不吃「樣板中間有 XXXXXX」,會直接報
 # 「File exists」——第一版寫成 -XXXXXX.log,四支 pre-push 測試當場翻紅。
-_AUTOLOOP_LOG="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-autoloop-XXXXXX")"
-_TESTS_LOG="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-tests-XXXXXX")"
+_AUTOLOOP_LOG="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-autoloop-XXXXXX" 2>/dev/null || true)"
+_TESTS_LOG="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-tests-XXXXXX" 2>/dev/null || true)"
+# ★mktemp 失敗要講實話★(2026-09-07 通才審查席):這支沒有 set -e,mktemp 失敗時變數會是
+# 空字串,後面的重導向自己先失敗,於是被判成「測試有紅」——**訊息會叫人去查測試,
+# 而測試根本沒被跑過**。擋下 push 沒錯(保守方向),但理由說謊就會讓人查錯方向。
+if [[ -z "$_AUTOLOOP_LOG" || -z "$_TESTS_LOG" ]]; then
+  {
+    echo ""
+    echo "擋下:建不出暫存檔,所以這次的測試沒辦法跑。"
+    echo "★不是測試紅了,是暫存目錄有問題★——多半是空間滿了或沒有寫入權限。"
+    echo ""
+    echo "先看一眼暫存目錄:"
+    echo "      df -h \"${TMPDIR:-/tmp}\" && ls -ld \"${TMPDIR:-/tmp}\""
+    echo ""
+  } >&2
+  exit 1
+fi
 
 if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_autonomous_loop.py" ]]; then
   if ! "$PY" "$REPO_ROOT/scripts/test_autonomous_loop.py" >"$_AUTOLOOP_LOG" 2>&1; then
