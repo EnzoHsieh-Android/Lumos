@@ -1,0 +1,19 @@
+severity: blocker
+- [blocker] 守衛仍可用首個閉引號後追加內容繞過
+    引句:「rows.append({"quote": q, "ok": False, "malformed": True,」
+     位置:`scripts/lumos:12002`
+     why: 抽取器仍止於第一個閉引號，守衛只檢查已抽出的前綴；實測:把一行引句寫成「真前綴」之後直接再接編造內容與一個收尾符號,仍回 ok: true。因此不必使用巢狀開引號，攻擊者把編造文字放在首個閉引號後即可維持原逃逸口。換行、全形空白及 Markdown 正規化案例則都正常通過。
+
+- [major] 新判定會讓大量既有已通過卷證在回放時突然失敗
+    引句:「if q.count("「") != q.count("」") or q.count("『") != q.count("』"):」
+位置:`scripts/lumos:12001`
+ why: 全量重放帳本中 639 組 report/snapshot，實測有 109 組由原本全數錨定變成失敗；例如既有合法原文含內層術語引號、程式字串引號的報告，都被截成不平衡前綴後判 malformed。disposal 把它加入 `fails["quote"]`，所以歷史迴圈回放會轉 FAIL；severity-check 不讀 malformed，仍只檢查 severity 宣告，因此兩條下游語意不一致。另有原文本身合法包含孤立開引號的案例也會誤擋。
+
+- [major] 所謂禁止臨場正規化只禁止四種檔名，模式本身可任意繞過
+     引句:「if f.endswith(".py") and any(k in Path(f).name.lower() for k in ("normalize", "normalise", "fixup", "reformat"))]」
+位置:`scripts/test_lumos.py:26349`
+ why:只要把同一腳本命名為 `clean.py`、`convert.py`、`prepare.py`，或改成 shell/JavaScript，就完全不會被檢出；反之合法的 `normalize_measurements.py` 也會被誤傷。測試沒有搜尋危險的 `severity: clean` 代填行為，因此沒有真正釘住所稱的事故模式。
+
+- [major] SKILL 一面宣稱正規化不存在，一面仍明令收貨時先正規化
+ 引句:「派工詞照範本寫,收貨正規化這件事就不存在。」
+
