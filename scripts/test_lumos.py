@@ -28924,6 +28924,56 @@ def t_lint_warns_unknown_frontmatter_key():
           "my_own_field" not in out5, out5[-200:])
 
 
+def t_doctor_advisory_sections_do_not_block():
+    """★標題寫「提醒,不擋」的段落,不准用會擋的那支★(2026-09-07 當場撞到才補)。
+
+    健檢有兩支報訊息的函式:一支會讓 issue 計數增加(進而在嚴格模式回非零、擋住推送與 CI),
+    一支完全不動計數。**[I] 段的標題寫著「提醒,不擋」,兩個分支卻都用了會擋的那支**,
+    而其中一支的訊息自己寫著「未達裁決門檻」——說門檻沒到卻把人擋下來。
+    當天它真的擋住了一次正常的推送,而且因為標題和意圖都是對的,查了五段才查到是它。
+
+    ★這條驗的是「標題與行為一致」這個結構性質,不是某一段的內容★:
+    掃所有標題含「不擋」的段落,底下不准出現會擋的那支。
+    **例外要明寫**:[I] 段刻意保留一支會擋的——那是「轉硬擋條件已達」的升級路徑,
+    是這個機制設計上就要擋的地方,不是誤用。
+    """
+    import re as _re
+    root = Path(GRAPHCTL).resolve().parent.parent
+    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    # ★先把註解剝掉再數★:第一版直接掃原始碼,結果把下一段前言註解裡的
+    # 「errs→warn(hard)計 issues」當成真的呼叫,對 [N] 段誤報一次。
+    # 註解在講「哪一支會擋」是這個檔案的常態,不剝就一定假紅。
+    src = "\n".join(_re.sub(r"#.*$", "", ln) for ln in src.split("\n"))
+    secs = [(m.group(1), m.group(2), m.start()) for m in
+            _re.finditer(r'section\("([^"]+)",\s*"([^"]*)"', src)]
+    check("健檢的段落抓得到(≥15 段)", len(secs) >= 15, str(len(secs)))
+    # 這一段刻意保留一支會擋的:缺席迴圈出過 blocker 時的升級路徑
+    allowed_hard = {"I": "轉硬擋條件已達"}
+    bad = []
+    for i, (sid, title, pos) in enumerate(secs):
+        if "不擋" not in title:
+            continue
+        end = secs[i + 1][2] if i + 1 < len(secs) else pos + 6000
+        seg = src[pos:end]
+        hard = len(_re.findall(r"(?<![_\w])warn\(", seg))
+        if not hard:
+            continue
+        marker = allowed_hard.get(sid)
+        if marker and marker in seg and hard == 1:
+            continue          # 例外:只准一支,而且要帶那句明示升級的字樣
+        bad.append("%s(%s):會擋的那支出現 %d 次" % (sid, title[:24], hard))
+    check("★標題寫「不擋」的段落沒有在偷偷擋人★", not bad,
+          "；".join(bad) + "  —— 用不擋的那支,或把標題改成誠實的")
+    # 反面:例外那一支要真的還在(不能修過頭把該擋的也拿掉)
+    i = src.find('section("I"')
+    seg = src[i:i + 4600]   # 已剝註解
+    j = seg.find('section("', 10)
+    seg = seg[:j] if j > 0 else seg
+    check("★[I] 段「轉硬擋條件已達」那支仍然會擋★",
+          "轉硬擋條件已達" in seg and len(_re.findall(r"(?<![_\w])warn\(", seg)) == 1, seg[-400:])
+    print("  ✓ t_doctor_advisory_sections_do_not_block")
+
+
 def t_loop_close_kinds_classified():
     """★新增一種收工事件卻忘了歸類,這裡要翻紅★(2026-09-07 代碼審 r1,兩席獨立指出)。
 
