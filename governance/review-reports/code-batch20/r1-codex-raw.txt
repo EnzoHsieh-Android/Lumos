@@ -1,0 +1,2200 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.2
+--------
+[1mworkdir:[0m /Users/enzo/harness/lumos-toolchain
+[1mmodel:[0m gpt-5.6-sol
+[1mprovider:[0m openai
+[1mapproval:[0m never
+[1msandbox:[0m read-only
+[1mreasoning effort:[0m low
+[1mreasoning summaries:[0m none
+[1msession id:[0m 01a07ce5-f03a-70c1-b767-029d9d080d76
+--------
+[36muser[0m
+你是外部第三方投稿的審查員,擔任「否決席」。作者不在,不用客氣。
+
+工作目錄:/Users/enzo/harness/lumos-toolchain
+被審材料:governance/review-reports/code-batch20/r1-snapshot.patch
+可直接開檔:governance/wrapper-watchdog.sh、governance/install-watchdog.sh、
+governance/daily-governance.sh、scripts/test_lumos.py
+
+★被審的是一支監看器★:每小時被 launchd 叫一次,判斷「每日治理 wrapper」有沒有正常跑完,
+有事就發桌面通知並寫自己的紀錄檔。它的存在理由就是「死了要有人知道」——
+所以「該喊沒喊」比「多喊一次」嚴重得多。
+
+這批在修一個真實發生過的假警報:健康狀態檔不存在時,它每天喊一次
+「這台機器上的 wrapper 從來沒跑完過」,而 wrapper 自己的紀錄檔裡前一天和當天
+都寫著「完成」。成因是「跑完寫健康檔」是上一批才加進 wrapper 的,排程當時跑的還是舊版。
+
+修法:健康檔不在時去讀 wrapper 自己的紀錄檔(governance/logs/daily-wrapper.log)
+找最後一次「wrapper 完成」,36 小時內就改講「有在跑但沒留下健康狀態檔」,
+找不到或超過門檻才說「從來沒跑完過」,紀錄檔本身不在就退回原本判斷。
+另外把通知 app 的 bundle 識別碼從 .v2 改成 .v3。
+
+請特別看:
+1. ★新的第二個來源會怎麼壞,而且壞的方向是不是「不喊」★。紀錄檔可能很大、可能正在被寫入、
+   可能被輪替、可能有非 UTF-8 位元組、可能被人塞假行。逐一想。
+2. 時間比較:紀錄檔是本地時間字串、健康檔是 UTC ISO,兩條路用不同時間源。
+   日光節約 / 時鐘被調過 / 未來時間戳(負秒數)各會怎樣?
+3. 那個抓「wrapper 完成」的正則會不會誤中或漏抓;wrapper 未來改措辭會不會靜默退化。
+4. 每一個 `|| echo ''` 與 `2>/dev/null`:有沒有哪一條把「問不出來」變成「沒事」?
+5. 新測試 t_wrapper_watchdog_no_health_but_wrapper_ran 的五條斷言有沒有哪一條
+   就算實作什麼都不做也會綠?
+6. 「每次重建都要換 bundle 識別碼」這句話目前只寫在註解裡,沒有機械保證——這算不算問題?
+
+規矩:每條 finding 必附 file:line 與逐字引句,引句寫成獨立一行「引句:「…」」(≥10 字、原文可查);
+每條標 severity(blocker/major/minor)與 blocking(是/否);報告第一行寫一行
+「severity: <本輪最高>」。跑不了實驗的條目明白標「讀碼推論,未實跑」。
+[35m[3mcodex[0m[0m
+我會先依本 repo 規矩用 `lumos` 進場，再讀否決席相關 skill；全程唯讀，finding 會逐條核對 patch 與可直接開的實體檔。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc 'python3 scripts/lumos search "wrapper watchdog 假警報 健康狀態"'[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 382ms:[0m
+(多詞回退:你查的整串詞在未作廢的節點的可見文字裡找不到完全一致的,改成每個詞分開查、有出現就算;逐詞覆蓋 wrapper:24  ★watchdog:0★  假警報:3  健康狀態:1)
+  提醒:標 ★ 的那個詞在未作廢的節點的可見文字裡 0 命中——多半是你用的詞跟圖譜裡的說法不一樣,不代表圖譜沒記這件事;先換個說法再查一次
+提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。下結論前先讀全文:lumos show <節點>
+ 25.221  Projects/每日治理wrapper活著沒_計劃.md  [警報,健康,康狀,狀態,wrapper]
+    14 [KEY]: KEY:S1 健康狀態寫成原子寫入的機器局部 JSON(各步結果都要記,不能只記「跑完了」,否則「五步都跑其中一步失敗」會被標成存活);★檔案不存在=從來沒跑完過,訊息要跟「死掉了…
+    20 [body]: # 每日治理wrapper活著沒_計劃
+    29 [body]: [[Verification/2026-09-05_wrapper邊跑邊改實驗]](9/5 那次事故本身)。
+    57 [body]: ### [S1] 健康狀態寫成一份機器局部的 JSON,不是一個「跑完了」的戳記
+    137 [body]: 我們的腳本名字」,**那一版被實跑打穿**:持鎖者換個名字啟動(符號連結、包一層 wrapper)
+    208 [body]: - **健康狀態檔**(原子寫入、暫存檔同一層、自驗讀得回來才換上):記開始/結束時間、執行編號、
+    386 [body]: **它每天喊一次「這台機器上的 wrapper 從來沒跑完過」,而 wrapper 自己的紀錄檔裡,
+    389 [body]: 成因:「跑完要寫一份健康狀態檔」是這一批才加進 wrapper 的,而排程每天 09:30 叫的
+    … 還有 4 處
+ 11.439  Projects/派工編制資料化_計劃.md  [假警,警報,狀態]
+    74 [body]: - **unknown 降級措辭**(r1 兩席獨立抓到假警報矛盾):unknown 桶非空時,前述 shortfall/missing 全部降為「可能缺(另有 N 席家族無法辨識…
+    115 [body]: - **r1(2026-08-18,panel:3 sonnet(通才/機械判準/整合)+Gemini Flash 外家席(單發 REST,無 repo 存取);收貨三道全過,外家…
+ 10.289  Issues/引句錨定只驗前綴_後半可編造.md  [假警,警報]
+    58 [body]: **一、改判準必須同時推進回放引擎版本。** 回放的黃金抽查靠比對 `_REPLAY_ENGINE_REV` 決定要不要用現在的程式碼對凍結閉包重算:版本沒變就重算,版本變了才視為…
+    60 [body]: **二、判法不能把兩件事混在同一條判準裡。** 我用的是「抽出的內容裡同型開閉括號數是否相等」,通才席指出這其實混了兩件事:①內容裡出現過同型開括號 → 確實等於被截斷,結構上不會…
+  7.639  Issues/lint-watch空轉假綠.md  [健康,wrapper]
+    14 [KEY]: KEY:遮蔽鏈=fail-open 設計(網路失敗永不升 rc)+log 恆 0 bytes+wrapper 只記 rc——三層都「正常」,無一層能暴露「網破了」;同族先例=tes…
+    23 [body]: - 2026-07-05 部署 lint-watch-check.sh 進 daily-governance wrapper(launchd 09:30)。
+    24 [body]: - 2026-07-05〜07-17:每日 wrapper log 記「lint-watch 段結束 rc=0」;lint-watch.log 恆 0 bytes;`governa…
+    32 [body]: fail-open(網路失敗永不升 rc,設計正確)→ rc 恆 0;輸出恆空 → log 恆 0 bytes;wrapper 只記 rc → 每天「成功」。**三層各自正常,疊起…
+  7.596  Projects/全repo審視_計劃.md  [健康,狀態,wrapper]
+    47 [body]: | 11 | 每日 wrapper 沒有死人開關也沒有整跑鎖 | F43、F46 | high | S/low |
+    122 [body]: | F43 | governance-automation | 每日 wrapper 沒有死人開關:死了整天沒人知道,退出碼永遠 0 | S/low |
+    170 [body]: | 18 | 每日治理 wrapper:死了要有人知道、不要兩份同跑、帳本要有門檻 | F43、F46、F47 | M | ★要 |
+    277 [body]: - **做什麼**:二選一:抽 governance/weekly-jobs.sh 由 wrapper 無條件呼叫(函式原碼搬過去不改),或把 LUMOS_AUTOLOOP_OFF…
+    371 [body]: ### #18 每日治理 wrapper:死了要有人知道、不要兩份同跑、帳本要有門檻  ★需設計審★
+    374 [body]: - **為什麼**:9/5 那次 wrapper 在第二步跑完回來時,因為自己被改動的檔而 syntax error 死掉,第 3-5 步全沒跑——而它永遠 exit 0、沒有任何…
+    375 [body]: - **做什麼**:①wrapper 收尾寫 governance/logs/.last-complete(日期+各步 rc),各步 rc 做 OR 當退出碼,讓 launchd …
+    376 [body]: - **PRIOR-ART**:最小解在 wrapper 收尾一行戳記 + doctor 一條軟檢查;世界解=healthchecks.io/Cronitor 的 heartbea…
+    … 還有 2 處
+  5.073  Projects/pitfalls-lint-integration_計劃.md  [狀態,wrapper]
+    50 [body]: > **狀態(2026-07-04)**:spec `docs/design/2026-07-04-lint-version-watch.md`。design-loop 6 輪 c…
+  3.994  Systems/nested-agent-permission-scope.md  [狀態,wrapper]
+    40 [fm:why_chosen]: why_chosen: scope 由單一可查點 --allowedTools 在 harness 層管理即夠;獨立驗證需 wrapper 讀 log 比對工具清單,本 spec …
+    75 [body]: - **delegation-log 無法自證**:記「orchestrator 宣稱做了什麼」,可被寫假;獨立驗證(wrapper 讀 log 比對)明確不做(YAGNI)。
+  3.908  Projects/改制回測_計劃.md  [狀態,wrapper]
+    37 [body]: replay 對今日任一已收斂 loop=判定與當日 gate 輸出一致且治理帳行數不變;--freeze 產檔含完整閉包(帳列逐行 sha+spec sha+engine_rev…
+  3.744  Systems/autonomous-iteration-loop.md  [狀態,wrapper]
+    18 [fm]: - "[[Verification/2026-09-05_wrapper邊跑邊改實驗]]"
+    29 [KEY]: KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross…
+    34 [KEY]: KEY:★2026-09-05 wrapper 慣例★:daily-governance.sh 是 repo 唯一「活著等三小時」的外層腳本,主體包 `main()`、結尾同一行 …
+    35 [KEY]: KEY:★2026-09-06 訂正暫停開關的位置★:09-05 那版把 LUMOS_AUTOLOOP_OFF 寫在 daily-governance.sh 裡包住整支 auton…
+    221 [body]: | **★用「指令列長得像不像我們」認持鎖者是錯的★**(通才席 blocker) | 持鎖者只要換個名字啟動(符號連結、包一層 wrapper),`ps` 的指令列裡就沒有腳本名…
+  3.742  Projects/bootstrap一鍵對稱_計劃.md  [狀態,wrapper]
+    16 [KEY]: KEY:★樞紐坑:curl|bash 下 stdin=管線★——input() 綁死讀 sys.stdin,光 open('/dev/tty') 再 input() 是裝反(r1F…
+    64 [body]: - 原生 Windows：無 /dev/tty，第 1 階涵蓋正常互動；console wrapper 令 isatty=false 時會被當非互動（用 `--init` 逃生），…
+  3.707  Systems/cross-family-audit.md  [狀態,wrapper]
+    40 [fm:context]: context: design-loop R5 F2：disputed 不伴 converged:false 就走不進 wrapper 未收斂分支(L80-85)；硬編碼「撞 ca…
+    57 [body]: - **插在 orchestrator 內部**(orchestrator-prompt §2.5),不在 wrapper 層:autonomous-loop.sh 收到結果時 d…
+  3.662  Systems/測試假綠形態.md  [狀態,wrapper]
+    23 [KEY]: KEY:[2026-09-05]第 ★17★ 次,又是新測試自己中第④型:daily-governance 包 main() 的守衛首版只比「有 main() {」「最後一行 ma…
+    32 [fm]: - "[[Verification/2026-09-05_wrapper邊跑邊改實驗]]"
+    353 [body]: **現場**:每日治理 wrapper 有一條測試叫「另一份正在跑(pid 活著)→ 讓行不搶」,長這樣:
+  3.533  Projects/自足性審計閉環_計劃.md  [狀態,wrapper]
+    208 [body]: **B 唯讀工具面自相矛盾**(Codex f1 寫不了報告+s2f7 砍掉實測手段)→ 報告由 wrapper 落盤;審計/複審進探針式沙盒,Bash 解禁而主樹零風險;
+  2.837  Projects/標註刷新_計劃.md  [狀態,wrapper]
+    75 [body]: - 週閘 wrapper=`governance/autonomous-loop.sh` 週期考卷段(現呼叫 `retrieval_eval.py --goldset … --sp…
+    103 [body]: - **pre-flight(2026-08-17,機械排乾,不算 loop findings)**:①S2「兩席一致直接併 final」與刻意不做「人閘不可拆」自違→消歧為批次級…
+  2.542  Projects/關係層主網_實作計畫.md  [狀態]
+    112 [body]: - **並行（🟠，D10 折入：降宣稱+釘實作形）**：append-only 免 in-place lost-update；寫入走**專用 helper——O_APPEND fd…
+  2.434  Verification/2026-09-05_wrapper邊跑邊改實驗.md  [wrapper]
+    6 [fm:revalidate_when]: revalidate_when: daily-governance.sh 結尾或前奏改動、或再出現「wrapper 中途 syntax error」事故
+    13 [body]: # 2026-09-05_wrapper邊跑邊改實驗
+    18 [body]: 2026-09-05 09:30 的每日治理 wrapper(daily-governance.sh)死在自主迴圈那段回來之後:我在它跑的三小時內改了這支腳本,bash 回來讀到半…
+    32 [body]: 把真測試 `t_daily_governance_wrapper_is_function_wrapped` 複製到乾淨目錄,餵四種改壞的 wrapper:
+    46 [body]: - 沒測 zsh / dash;wrapper 明寫 `#!/bin/bash`。
+  2.345  Systems/risk-tiered-review.md  [wrapper]
+    15 [FLOW]: FLOW:選 gap→difficulty.assess(weakness+suggestion)→注入 __NEED__/__TIER__/MAXR_EFF(high=max(M…
+    17 [KEY]: KEY:機械脊椎=收檔不信 orchestrator 自報 converged——wrapper 自算 tier 重驗 gate,謊報低 tier 拉不低門檻;SPEC 空/不存在…
+    39 [fm:context]: context: __MAXR__ 由 wrapper 起點一次性 sed 注入,loop 中途無重注入管道(spec r4-F4 誠實收窄)
+  2.191  Projects/第二輪審視六修_計劃.md  [wrapper]
+    57 [body]: - **稽核員對、我上一輪判錯的兩件**:①今天 09:30 的 wrapper 真的死了——不是暫停沒兌現,是我在自主迴圈那段還在跑(09:37–12:42)時改了 daily-…
+    59 [body]: - **收斂判定(Claude 裁)**:四輪下來,第三、四輪各只剩一件真 bug(gov 折疊條件、wrapper 邊跑邊改)加文字同步,其餘都是已寫進 README「成本與界線…
+    61 [body]: ## 第四輪修法的代碼審(code-daily-wrapper-main r1,2026-09-05)折入
+    70 [body]: - A1(minor,架構對齊):包 main() 是 repo 首例,理由成立 → 記成慣例進 [[Systems/autonomous-iteration-loop]] KEY…
+  2.048  Verification/2026-09-04_Codex完全支援S1hook適配驗收.md  [wrapper]
+    22 [body]: - `HOME=s1accept/home lumos install --force` 後把隔離 hooks.json 的五條命令包一層落 stdout/stderr 檔(驗收 …
+    28 [body]: 3. **Stop → check-graph-sync 讀 Codex 逐字稿**:第一次真跑 Stop fire 但 stderr 空——查出兩件事:(a)那次 Codex 把…
+  1.751  Systems/compose-metrics-adapter.md  [wrapper]
+    41 [body]: - 只報「退步了」不報「怎麼修」(unstable→stable 是人的事:`@Immutable`/`@Stable`/wrapper)。
+  1.728  Issues/收工閘漏掉純Bash改碼.md  [wrapper]
+    35 [body]: 順帶記一個對造外家席報的 bash 陷阱(與本案無關但同日同源):函式被寫在 `||` 左手邊時,**bash 會把整個函式體的 `set -e` 關掉**,「寫 pid 失敗會自…
+  1.718  Verification/2026-09-04_Codex完全支援S0安裝層驗收.md  [wrapper]
+    29 [body]: 3. **真 Codex 冒煙**:五條註冊在隔離 hooks.json 裡包一層 `sh -c 'echo <事件>:<檔名> >> fired.log; …'`(驗收用 wra…
+  1.678  Verification/2026-07-04_lint-version-watch.md  [wrapper]
+    36 [body]: - design-loop 未 GATE PASS(核心收斂、shell wrapper 散文 churn 達 cap);shell 以真 shell smoke 定稿而非設計散文…
+  1.644  Systems/lint-version-watch.md  [wrapper]
+    53 [body]: 6 輪 canary 6/6 全 caught,抓修真缺陷(Maven `%22`+字串 max 病灶、PEP440 prerelease、三態、等段數守衛、fixture sea…
+  1.581  Projects/世界repo掃描2026-09-02_調研.md  [wrapper]
+    71 [body]: - **B2 單跑預算上限**。出處:SWE-agent(20.2k★)`per_instance_cost_limit` 預設 $3.0、觸頂 `handle_error_wit…
+    90 [body]: - **不收斂就跳過**:bmad-loop plateau-defer「story skipped, spec stashed, run continues」+ 人決策存 dec…
+  0.000  Projects/cochange守衛_計劃.md  []
+    22 [fm:context]: context: 小 repo(478 commits)警告型場景;假警報成本=信任崩壞;硬砍時間窗會餓死訊號
+  0.000  Verification/2026-07-04_risk-tiered-review.md  []
+    11 [fm:valid_under]: valid_under: difficulty.py RISK_CLASSES 四類詞表+params(high=3/8,standard=2/6)+assess_spec 黑名單…
+
+(共 27 篇候選,照相關性排序;想照檔名排加 --legacy)
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "sed -n '1,240p' /Users/enzo/.agents/skills/lumos-project-notes/SKILL.md"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+---
+name: lumos-project-notes
+description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫——任何任務開始要搞懂「這個模組/欄位/流程為什麼這樣、邊界在哪、哪些不能改、會波及什麼」時先用 lumos 查,不要直接 grep/Read;改完 code 要寫回決策/驗證/合約;收工體檢。觸發:正要 grep 或讀 code 去理解既有系統、排查、對外支援、查 DB、改名/刪除東西、開工掌握現況、收工寫回、問「圖譜有沒有記」。指令全集按情境分類在 commands/INDEX.md。
+---
+# lumos 專案知識圖譜——一頁手冊
+
+圖譜記「為什麼、邊界、不能改的、驗過沒」;code 只記「現在長怎樣」。圖譜跟行為事實(測試、實際執行、生產觀測)對不上時,不自動信圖譜——查清哪邊錯,立一篇事故筆記。主工具 `lumos`(python3 零依賴,自動找 `docs/*-knowledge/`)。**別用 Grep/Read/Edit/Write 直接碰圖譜的 .md 開頭欄位**——會繞過自驗和防護;正文段落用 Edit 可以。
+
+**指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一。下面只列每個階段最常用的。
+
+## 1. 進場(每個子任務都重來,不是 session 開頭一次)
+
+| 你在想… | 敲 |
+|---|---|
+| 這件事為什麼這樣 / 圖譜記了嗎 | `lumos search <詞>` → `lumos context <節點>`;0 命中先換同義詞;**中文概念之間加空白**(`作廢 收回 點數`,別黏成一句) |
+| 動這段有什麼不能碰 | `lumos contracts <節點>` |
+| 要讀全文再下結論 | `lumos show <節點>`(search 只給索引行;拿摘要判「沒記」以前真的錯過——值在筆記第 64 行,靠摘要判成沒有) |
+| 篩條件(金流 / 未收案 / 連到 X) | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+| 開工掌握現況 | `lumos query --tag status/doing`;`lumos recent --days 7` |
+| 圖譜空或稀疏(接手 brownfield) | 走節點還原 SOP:`commands/09-節點還原.md`(七步;需要才產節點、有就照慣例用) |
+
+看到筆記有 `core_refs:` 或 `CORE:` → 權威在跨專案核心圖譜,改那邊(`lumos-core-knowledge` skill)。
+**查得到才算先行**(Landmark 實測):0 筆看「逐詞覆蓋」標 ★ 的詞換同義詞,換三次再問人,別轉 grep;大節點先 `--brief`;單篇內部新舊打架時摘要有日期的 KEY 行 > 正文,衝突影響決策去 code 裁再回頭修。
+**分清你在哪種 session**:本機 Claude Code(含手機/網頁遙控本機)有本機 git 憑證、能 push;網頁版 claude.ai/code 是雲端沙盒,對主分支沒 push 權、只能推 feature branch——「遙控」不等於「遠端版」,曾騙到 AI 一次。
+被催「直接改、不用解釋」也一樣:不解釋可以,不查不行——改 code 前至少 `lumos impact --file <檔>` 一行。
+
+## 2. 動手前
+
+- `lumos impact --file <檔>` / `--diff <範圍>`:哪些筆記、驗證、決策會受影響(Edit 前 hook 也會塞一份,但只推你碰到的檔)。
+- `lumos pitfalls --diff <範圍>`:風險分級;`tier: high` 要過代碼審(`lumos-code-loop`)。
+- 要刪 / 改名東西:`lumos search <舊名> --code` 逐句判哪些筆記還在講它。
+- 改了環境 / 流程 / 設定(版本、金鑰、hook、排程):`lumos stale --candidate --match <關鍵字>` 列出寫了「改到這個就該重驗」的驗證紀錄。
+- 設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記(`type: project`),不寫到別的路徑;動筆前一行 `PRIOR-ART:`(最小解在哪層 / 世界解過沒 / 借用‧自建‧採用)。
+
+## 3. 寫回(同一次工作內;pre-commit 擋「改 code 沒動圖譜」)
+
+| 要做 | 敲 |
+|---|---|
+| 新筆記 | `lumos new <system\|issue\|verification\|project> <名>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 |
+| 改狀態 / 日期 | `lumos set <節點> <欄位> <值>`(日期不加引號) |
+| 加 / 刪清單項 | `lumos append <節點> <欄位> "[[x]]"` / `lumos remove …` |
+| 記決策 / 翻案 | `lumos decision-add <節點> "<內容>" --decided <日期>` / `lumos decision-supersede` |
+| 正文段落 | Edit;寫完 `lumos lint <節點>` |
+
+**四條血換的開頭欄位鐵則**:① 多個連結一行一項,擠成一串會長假筆記 ② `summary: |` 區塊裡的 `[[連結]]` 不算連結,要關聯另放 list 欄位 ③ 值含「冒號+空格」要引號或區塊 ④ 同層不能重複鍵。用指令寫天生避開;手改才會踩。
+
+**合約標記(動筆前掃一眼;不確定就不標,嚴禁看 code 反推)**:
+```
+KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes]
+KEY:★DEBT★ <偶然行為,可改>
+KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPOINT★ <改了難救>(建議補 [rollback:])
+```
+- 綁測試 / 留審計走指令:`lumos guard bind <節點> "<KEY 片段>" <測試名>`、`lumos guard audit …`;裸合約 doctor 擋,未審計 pre-push 擋。綁之前對照 [[Systems/測試假綠形態]](最隱蔽的一型:現場根本走不到被測分支;修 bug 的翻紅測試要配一條「現場成立」的前置斷言)。
+- 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
+- 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
+
+**摘要區塊**(Systems/Issues 必有):`FLOW:`流程 `KEY:`關鍵概念 `DEP:`依賴 `TEST:`測試;Issues 用 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN) `DECISION:` `KEY:`。已結案的 Issue 正文第一段要有結案橫幅(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
+**標籤**:`type/` `status/`(值域 lint 硬擋)、`priority/` P0–P3、`scope/`(feature/ area/ 已停用)、`risk/` 金流‧對外送出‧不可逆‧守衛面、`flag/`。
+
+**決策與驗證**:重大決策填四欄(context / alternatives≥2 / why_chosen / trade_offs),缺資訊問人不編。驗證紀錄填 `valid_under`(前提)與 `revalidate_when`(何時重驗),用 `plan_refs` 指回計劃;漏掛 `lumos sync-verified-by --apply`。計劃結案前 `lumos spec-trace <計劃>` 看哪些條款沒人認領。
+
+**承認風險的鐵則**(Enzo 2026-08-22 裁):筆記或訊息裡寫「沒機械守衛 / 只提醒不擋 / 單次量測 / 這數字是拍的」這類承認句,**旁邊必須有「什麼時候回頭看」**(週報、重驗條件、revalidate_when、到期日);寫不出重驗條件的,就是該處理不該承認。**回頭條件要接電**(2026-08-31 回訪案):帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`(緊鄰原句,doctor 到期會唸、逾 14 天沒人動升級週報);綁事件的明寫事件入口——純散文=52 件盤點實證的死文。
+
+## 4. 收工
+
+1. `lumos lint <每篇動過的>` → `lumos doctor`(紅的段先修;`--verbose` 看全部提醒)。
+2. code 有「拿掉 / 反轉」的改動:把那些名字逐個 `lumos search <名> --code`,逐句判筆記還成不成立,不成立當場改或標作廢。動到畫面 → 補可重放的 UI flow 並 `[test:<平台>:<flow>]` 綁回(沒裝置要明寫「未驗+原因」)。
+3. 圖譜實質更新後:派乾淨 agent 只讀圖譜還原脈絡,對不上就補到一致,留痕 `lumos self-audit <節點>`。
+4. push 後(專案有宣告 ci 區塊才有):`lumos ci-wait`,紅就當輪修,修不完要在收尾明講。
+5. 跨 session 傳訊只傳「指標+觸發」(我動了哪篇、你去讀哪篇),不傳內容本身;規則權威在圖譜不在誰的記憶。
+
+## 再深一層(按需開,別一次全讀)
+
+| 要做 | 開 |
+|---|---|
+| 某個指令的旗標與用法 | `commands/0N-*.md`(INDEX 指到)或 `lumos <cmd> --help` |
+| 合約鏈深規、[audit:] 五問、guard 工作流、防帶風向 | `reference.md`〈★INVARIANT★ → `[audit:]` 獨立合法性審計〉〈★INVARIANT★ → `[test:]` 綁定〉〈`lumos guard`〉 |
+| 決策四欄完整版、驗證紀錄完整規格、同步規則 | `reference.md`〈Properties〉〈同步規則〉 |
+| 開頭欄位鐵則、標籤家族、摘要區塊、結案橫幅、退場自問、跨 session 傳訊、CI 細則全文 | `reference.md`〈寫入規範與紀律全文〉 |
+| 自足性審計 prompt、交叉審計變體 | `reference.md`〈圖譜更新後：Sonnet agent 自足性審計〉〈變體 B：圖譜×程式碼交叉審計〉 |
+| maestro UI flow 派工要求 | `reference.md`〈產 maestro UI flow 的派工要求〉 |
+| 資料夾位置 | `docs/{slug}-knowledge/{Projects,Systems,Issues,Verification,MOC}`;某主題 >5 篇建 MOC |
+
+[35m[3mcodex[0m[0m
+`lumos-project-notes` 要求搜尋命中後必須讀完整節點、再查合約；我現在照這個順序確認監看器的既定邊界，之後才進 patch。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "python3 scripts/lumos context 'Projects/每日治理wrapper活著沒_計劃' --brief && python3 scripts/lumos contracts 'Projects/每日治理wrapper活著沒_計劃' && python3 scripts/lumos show 'Projects/每日治理wrapper活著沒_計劃'"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 774ms:[0m
+# Projects/每日治理wrapper活著沒_計劃.md
+type:project | status:doing | created:2026-09-07 | updated:2026-09-07
+summary:
+  FLAG:DECISION
+  KEY:問題=每天 09:30 那支跑五件事的腳本,9/5 跑到第二步就死、後三步全沒跑、整天沒人發現;它不管發生什麼都回 0,而且沒有任何東西在讀它印的東西
+→ 連出 (5):
+  • Issues/把自己的推論寫成repo明文寫過.md [open]
+  • Issues/自足性審計提醒空轉四十六天.md [resolved]
+  • Systems/autonomous-iteration-loop.md [done]
+  • Systems/reversibility-governance-ledger.md [done]
+  • Verification/2026-09-05_wrapper邊跑邊改實驗.md [pass]
+← 連入 (0):
+(這篇沒有登記任何「動了會壞」的合約)
+---
+type: project
+status: doing
+created: 2026-09-07
+updated: 2026-09-07
+tags:
+  - type/project
+  - status/doing
+summary: |-
+  FLAG:DECISION
+  KEY:問題=每天 09:30 那支跑五件事的腳本,9/5 跑到第二步就死、後三步全沒跑、整天沒人發現;它不管發生什麼都回 0,而且沒有任何東西在讀它印的東西
+  KEY:★r1 打掉兩個前提★ ①「推播那條腿斷了」是錯的——它在暫停開關之前就跑而且真的會推,真正的問題是要連喊 14 天才通知、對「36 小時前死掉」來不及 ②把死人開關押在健檢輸出正是前科事故失敗過的同一招(一條軟提醒響了 46 天、18,283 次沒人發現)
+  KEY:★r1 抓到三處我把機制看走眼★ 鎖的主要接管判準是「持鎖行程還活著嗎」不是鎖齡 60 分鐘|鎖的清除靠 trap EXIT 不是寫在函式結尾|五步加總照現有寫法會失效(那種 rc=$? 抓到的是指令替換自己的結束碼),而且函式現在恆回 0
+  KEY:S1 健康狀態寫成原子寫入的機器局部 JSON(各步結果都要記,不能只記「跑完了」,否則「五步都跑其中一步失敗」會被標成存活);★檔案不存在=從來沒跑完過,訊息要跟「死掉了」分開講,而且不算逾期★
+  KEY:S2 ★主通道改成一支獨立的排程看門狗★(每小時讀健康檔;跟被監看的那支是兩個失敗域),健檢軟提醒只當第二通道且★必須接不會讓 issue 計數增加的那一支★(同程式裡已有一段標題寫「不擋」實際會擋的前例);推播當第三層並明文接受 14 天延遲
+  KEY:S3 抄鎖要寫下五個非顯而易見的細節,並★兩者都做★:同源回指註解 + 一條比對兩份關鍵行為的測試(repo 既有立場是二選一,本案兩個都做)
+  KEY:S4 帳本門檻:N 填 5 MB(現在 3.97);★「每日 500 筆」對不上真實曲線★(近三天已破 500 且逐日翻倍),改成看「近 7 日均值比前 7 日成長超過一倍」;「先不分檔」的理由訂正——雜湊閉包讀的是另一本帳,四個整檔讀者這半才是真的
+  DEP:governance/daily-governance.sh|governance/autonomous-loop.sh 的取鎖段|scripts/lumos 的 doctor 分段|~/Library/LaunchAgents
+---
+# 每日治理wrapper活著沒_計劃
+
+> 白話:每天早上 9:30 有一支腳本自動跑五件事。**9/5 那次它跑到第二步就死了,第 3 到 5 步全沒跑,
+> 而且整天沒人發現。** 原因不是它沒印錯誤——是**沒有任何東西在讀它印的東西**,而且它不管發生什麼都回 0。
+
+診斷的可數事實在下面〈現況查證〉。相關的既有節點:
+[[Systems/autonomous-iteration-loop]](同一支腳本、同一週的「監看者與被監看者同命」教訓)、
+[[Issues/自足性審計提醒空轉四十六天]](「軟提醒沒人看」的前科)、
+[[Systems/reversibility-governance-ledger]](這本帳的既有裁定)、
+[[Verification/2026-09-05_wrapper邊跑邊改實驗]](9/5 那次事故本身)。
+
+## ★第一輪打掉了兩個前提,先誠實記★
+
+- **★「通知那條腿是斷的」是錯的★**:那支週報在暫停開關**之前**就執行,而且真的會推播。
+  真正的問題不是斷了,是**太慢**——它要同一道閘對同一篇連喊 **14 天**才通知,
+  拿來偵測「36 小時前死掉」根本來不及。第一版說「斷了」等於用錯的理由選了錯的接法。
+- **★把死人開關押在健檢輸出,正是前科事故失敗過的同一招★**:那則事故的節點寫著
+  「算得出觸發帳,但『誰會去看』仍無路徑;造了尺,沒造回看的觸發點,病灶未解」,
+  一條軟提醒響了 46 天、18,283 次沒人發現。而且那道閘至今仍在天天觸發,不是舊病灶。
+
+還有三條是我把機制看走眼:
+- **鎖的主要接管判準是「持鎖行程還活著嗎」**,不是我寫的「鎖齡 60 分鐘」;
+  60 分鐘只用在「pid 是空的」那個更窄的競態。
+- **鎖的清除是靠 `trap ... EXIT`**,不是寫在函式結尾。我只寫了目標沒寫機制。
+- **五步加總照現有寫法會失效**:那種 `echo "[$(ts)] rc=$?"` 裡的 `$?` 抓到的是指令替換自己的
+  結束碼。而且函式現在**恆回 0**(最後一條是無條件的收尾 echo),不是我寫的「回最後一步的結果」。
+
+## 現況查證(自己開檔看的)
+
+- 那支腳本主體包在函式裡、結尾同一行接 `exit`(9/5 事故之後補的,防邊跑邊改)。
+- **沒有整跑鎖**。**沒有完成戳記**。**沒有任何程式在讀它的紀錄檔**(全 repo 搜零命中)。
+- **治理帳 30 天長了 94%**:2026-08-08 是 2,047,015 位元組,今天是 3,966,503。
+- 排程設定只有日曆觸發,**沒有任何依賴退出碼的鍵**——非零不會停止排程也不會狂重試,
+  但同樣不會通知任何人。(第一版寫「要查」,現在查完了,這條銷案。)
+
+## 設計
+
+### [S1] 健康狀態寫成一份機器局部的 JSON,不是一個「跑完了」的戳記
+
+★第一版的戳記只記「我跑完了」,於是「五步都跑、其中一步失敗」會被標成存活★(外家席指出)。
+改成一份原子寫入(先寫暫存檔再改名)的 JSON,內容:
+開始時間、結束時間、**各步的結果**、加總結果、這次的執行編號。
+
+**五個結果要存進五個獨立變數**,而且一定用「指令與賦值同一行、中間不插別的指令替換」的寫法
+——現在第 1、2 段那種寫法抓到的不是前一支腳本的結果。函式最後一行換成真正的加總值,
+不能再讓收尾 echo 當隱式回傳。
+
+★「加總」是指「任一非零就非零」的邏輯聚合,不是算術相加★(r2 通才席實測):
+退出碼只能吃 0 到 255。兩步各回 128(那是「被訊號中止」的慣例編碼)算術相加是 256,
+取模之後**變成 0**——兩個真實失敗會被壓成「全部成功」,跟現在「恆回 0」是同一種靜默失敗,
+只是從必然變成特定數值下才發生。
+
+檔案放在版控外,位置與命名比照既有那批「每台機器各自的執行期狀態」
+(扁平放在同一層、附一句為什麼不能進版控的理由),不另開新目錄。
+★暫存檔要跟目的檔放同一層★(r2 指出,而且這是這個 repo 的既有寫法:
+既有的原子寫入把暫存檔命名成「目的檔名 + 一個固定後綴」,刻意同目錄,就是為了避開跨檔案系統改名失敗)。
+不要用系統暫存目錄再搬過來——那在這台機器上目前剛好同一顆磁碟不會炸,換一台就不一定。
+
+**★檔案不存在的語意要定死★**(外家席指出,第一版完全沒定義):
+- 不存在 = **從來沒跑完過**,訊息要跟「死掉了」分開講(新機、重新 clone、清過紀錄都會這樣)。
+- 不存在**不算逾期**,但要印一句「這台機器上那支從來沒跑完過」。
+
+### [S2] 死人開關:一支獨立的看門狗,健檢只當第二通道
+
+★主通道不能是健檢輸出★(第一輪 blocker):那正是前科事故失敗過的做法。
+
+**主通道 = 一支獨立的、極短的排程看門狗**:每小時跑一次,只做三件事——
+讀那份健康 JSON、判斷逾期或加總結果非零、有事就寫一筆治理帳並印出來。
+★它跟被監看的那支是兩個不同的失敗域★——這正是「監看者與被監看者同命」那條教訓要的。
+
+★用哪一種排程、以及它到底叫不叫得醒機器,這台機器上有兩個互相矛盾的證據★(r2 通才席判 blocking):
+- 被監看的那支自己的檔頭寫著「閉蓋的 Mac 幾乎一直在睡,日曆排程不會把機器叫醒」,
+  所以它才另外設了一個每天 09:28 的強制喚醒。查證屬實:這台機器只設了那一個喚醒。
+- **但這台機器上另一支每小時的排程,過去 7 天 168 個小時零缺口全部準時跑。**
+  原因是睡眠目前被幾支常駐程式掐住(通話服務、藍牙、caffeinate),機器實際上幾乎沒真的睡著。
+
+**裁定**:看門狗照那支已經證明可行的每小時排程做(同一種機制、同一個時點慣例)。
+★但要誠實記:它現在跑得準,靠的是「睡眠剛好被別的程式掐住」這個跟本案無關的巧合★——
+那幾支程式關掉,看門狗就會跟著開始漏跑。
+REVISIT:2026-10-07 查看門狗的紀錄有沒有缺小時;有缺就代表要另外掛強制喚醒,或改設計。
+
+★寫帳要邊緣觸發,不要每小時寫一筆★(外家席):照字面實作的話,故障持續期間每天會寫 24 筆同樣的東西,
+而**這份計劃自己正在處理帳本膨脹**。改成:第一次發現寫一筆、狀態改變寫一筆、之後每天仍故障寫一筆、
+恢復時再寫一筆。
+
+**第二通道 = 健檢的軟提醒**:同一個判斷,但只在有人跑健檢時出現。
+★必須接不會讓 issue 計數增加的那一支函式★——同一支程式裡已經有一段標題寫著「提醒,不擋」、
+實際卻用了會擋的那支,依慣例就近仿寫會在腳本死掉的當下連帶擋住全 repo 的推送。
+新段落要有自己的段落編號與閘名稱,才數得出來、也才進得了 14 天升級鏈。
+
+**推播那條**:既有的週報路徑可以用,但它要連喊 14 天才通知。
+★本案明文接受這個延遲當作第三層兜底,不假裝它是即時通道★;即時性靠看門狗那條。
+
+**★36 小時門檻要能分辨「機器沒開機」★**(第一輪指出):真實紀錄裡有過一次 **129 小時**
+的合法空窗(長假)。看門狗的判斷加一個條件:**這台機器從睡眠醒來超過兩小時**才算數。
+
+★量法要寫死,不然這條防護會變成裝飾品★(r2 通才席判 blocking,我自己實測驗過):
+最直覺的做法是問「開機多久」,**但那是錯的量**——這台是閉蓋的 Mac,幾乎一直在睡但從不關機,
+實測開機時間是 59 天前(7/10),所以「開機超過兩小時」永遠成立,等於這個條件從第一天就是空的,
+而且**不會有任何錯誤訊息**——正是本案在防的那種靜默失效。
+**正確的原語是問「上次真正從睡眠醒來是什麼時候」**(`sysctl kern.waketime`,單一系統呼叫)。
+我實測:開機時間 7/10、上次醒來 9/5 19:50——兩個差 57 天,證明它們量的不是同一件事。
+
+### [S3] 抄鎖:把非顯而易見的細節寫下來,並加防漂移
+
+抄的是那把「建目錄當原子鎖」的實作。★這五個細節第一版漏了或寫錯,現在寫清楚★:
+1. 建目錄是唯一的原子取鎖點。
+2. **主要接管判準是「持鎖行程還活著嗎」**——死了就立刻接管,跟鎖存在多久無關。
+3. 60 分鐘只用在「pid 是空的」那個競態(對方剛建好目錄還沒寫 pid);量不出鎖齡時也要讓行。
+4. 接管是「刪掉再建」,兩個接管者之間仍有競態。**來源腳本有 `set -e` 兜著,這支沒有**
+   ——原樣抄過去,第二個接管者建目錄失敗後會繼續跑。**重新取鎖必須顯式檢查成功**。
+5. **清除靠 `trap ... EXIT`,不是寫在函式結尾**;而且 trap 要在取到鎖之後**立刻**安裝
+   (來源是初始化一大段之後才裝,那段窗口也可能殘鎖,不要照搬)。
+
+★2026-09-07 code-batch19 之後,上面第 2 與第 4 條要接著讀這三句(碼已經改了,這裡不改就會說反話)★:
+
+- **第 2 條的「持鎖行程還活著嗎」怎麼判,換過機制。** 中間一版是「問 `ps` 的指令列裡有沒有
+  我們的腳本名字」,**那一版被實跑打穿**:持鎖者換個名字啟動(符號連結、包一層 wrapper)
+  就認不出來,鎖被搶走、兩個行程同時跑。現在是 pid 加上「那個行程的啟動時刻」,名字不參與。
+- **第 4 條講的「`set -e` 兜著」對來源那支也不成立。** 取鎖函式被寫成 `take_lock || {…}` 的
+  左手邊時,bash 會把整個函式體的 errexit 關掉。所以兩支都一樣:**要顯式檢查,不能靠 `set -e`**。
+- **第 5 條的「立刻安裝」在來源那支收斂成更乾淨的形式**:收尾器定義整段搬到取鎖之前,
+  全檔只留一個 `trap`,跟這支一致(中間一版用旗標,被架構對齊席擋下)。
+
+**★防漂移★**(架構席指出):這個 repo 對複製同一段邏輯的既有立場是二選一——
+機械守衛比對,或至少留同源回指註解。本案採**兩者都做**:
+抄過去的那段開頭附一句「同源:自主迴圈那支的取鎖段」,並加一條測試比對兩份的關鍵行為
+(取鎖方式、接管判準、清除機制)一致,不一致就翻紅。
+
+### [S4] 帳本門檻:數字要填,而且要對得上真實曲線
+
+★第一版的「N MB」那個 N 我根本沒填★。現在填:**5 MB**(現在 3.97 MB,依近期曲線約兩到三週會到)。
+
+★「近 7 日平均每日 500 筆」對不上實際曲線★:近 8 天是 62 / 61 / 91 / 159 / 391 / 669 / 931 /
+1155(最後一天只到上午),7 日均值 337.7 還沒過,但**連續三天單日已破 500 且逐日翻倍**——
+這條門檻上線沒幾天就會天天叫,變成第三種「叫了但沒人在意」的訊號。
+**改成看成長率**:近 7 日均值**比前 7 日均值成長超過一倍**才出聲。這樣抓的是「異常加速」,
+不是「量大」。順手記下來:目前成長主要來自兩道閘(近四天從 188/38 漲到 486/260),
+真正該處理的可能是那兩道閘在重複寫同一批未修的提醒,那是另一案。
+
+★「先不分檔」的理由要訂正★:第一版寫「四個整檔讀者 + 判定回放要逐行算雜湊閉包」。
+**雜湊閉包讀的是另一本帳,不是這一本**;四個整檔讀者這半查證為真,單獨就足以撐住結論。
+錯的那半刪掉。
+
+## 非目標
+
+- 不改既有的排程設定內容(只新增看門狗那一支)。
+- 不做帳本分檔(見 [S4])。
+- 不重新設計推播通道(它沒斷,只是慢;本案明文接受它當第三層)。
+
+## 實務隱患
+
+- **看門狗本身也會死**:它是獨立的排程項目,但排程器整個掛掉就兩支都不會跑。
+  ★這一層本機沒有解★——要解得靠機器外的東西。
+  **正式的替代方案(外家席提,列成可翻案的選項而不只是參考)**:
+  跑完之後向一個機器外的心跳服務報到,由那個服務在寬限期過後通知。
+  它同時涵蓋「排程器整個失效」與「機器長期離線」——**這是本機兩支排程都覆蓋不到的失敗域**。
+  代價:網路依賴、外部服務、通知設定、可能要管憑證。
+  REVISIT:2026-11-07 若出現「兩支都沒跑但沒人發現」的實例,就翻到這條。
+- **看門狗的誤報**:開機後兩小時內跨過門檻仍會誤報一次。
+  REVISIT:2026-10-07 查看門狗寫的那個閘:若誤報(當時腳本其實是好的)超過真報,門檻要調。
+- **軟提醒被接成硬擋**:見 [S2],計劃已明講要接哪一支。
+  落地時加一條測試:餵一個逾期的健康檔進去,斷言健檢的 issue 計數**不變**。
+- **鎖會不會把人鎖在外面**:60 分鐘接管那條是抄來的既有做法。本案的鎖目錄要真的進忽略清單。
+  ★訂正一條我自己寫錯的診斷★:第一版我寫「來源那支的鎖目錄沒有被現有忽略清單涵蓋」——
+  **那是錯的**。實測建立那個目錄再查,它命中忽略清單第 15 行的規則;而且追 git 歷史,
+  那條規則跟鎖機制是**同一次進 repo** 的,從頭就有涵蓋,不是「平常不落地才沒炸」的僥倖。
+  ★這句話的來源是第一輪某席報告的一句附帶提醒,我沒查證就抄進計劃★——
+  同型再犯,已記進 [[Issues/把自己的推論寫成repo明文寫過]]。
+- **這支腳本是本 repo 專用的**:安裝器的清單裡沒有它,不隨工具鏈分發。
+  本案的所有東西都只服務本 repo,不要寫成好像消費端也會拿到。
+
+PRIOR-ART: 最小解在收尾一份健康 JSON 加一支獨立看門狗;
+世界解=healthchecks.io / Cronitor 的心跳加寬限期、systemd 的 OnFailure、
+SRE 的「對缺席告警」、建目錄當原子鎖(macOS 沒有 flock)、logrotate 的大小條件;
+裁定=borrow-design,而且其中兩件(原子鎖、對缺席告警)這個 repo 自己已經有審過的實作可以抄。
+★關鍵的借用是「告警器必須跟被監看的行程分屬不同失敗域」——這正是第一版沒做到的那件事。★
+
+---
+
+## 實作紀錄(2026-09-07)
+
+六件都做完了,而且**實作途中被三個不同的東西擋下來,每一次擋得都對**。
+
+### 做了什麼
+
+- **五步各自留住結果**,指令與賦值同一行;收尾做**邏輯聚合**(任一非零就非零)。
+  實測驗過:第二步故意回 7 → 整支回 1、健康檔記得住是 `autonomous` 那一步、其餘四步各自留 0。
+- **健康狀態檔**(原子寫入、暫存檔同一層、自驗讀得回來才換上):記開始/結束時間、執行編號、
+  **各步結果**、加總。★不是只記「跑完了」★——那樣「五步都跑、其中一步失敗」會被標成存活。
+- **獨立看門狗** `governance/wrapper-watchdog.sh`:每小時跑、讀健康檔、邊緣觸發
+  (第一次發現 / 狀態改變 / 換日 / 恢復才記,不是每小時寫一筆)。
+  排程設定檔一併放在 `governance/`,**給人裝,不自動裝**。
+- **健檢第二通道**(新的 W2 段):同一份健康檔,三種情境都驗過,而且**用不擋的那支**。
+- **鎖**:抄過來 + 同源回指註解 + 一條比對兩份關鍵行為的守衛。
+- **帳本門檻**(新的 W3 段):5 MB,加「近 7 日均值 > 前 7 日兩倍」的成長率。
+  現況實測 3.9 MB、338 筆 vs 235 筆(1.4 倍),不喊——**數字對得上實際,不是拍的**。
+
+### ★被擋下來三次,三次都是對的★
+
+1. **既有守衛擋住我**:我把鎖、健康檔那幾支函式放在 `main()` **外面**,
+   而既有守衛要求「`main()` 之外只准前奏」。我第一反應是「函式定義又不會執行,應該可以」——
+   **但守衛是對的**:bash 邊讀邊執行,`main()` 外面的每一行(包含變數指派與函式定義)
+   在檔案被截斷時都會先跑。全部搬進 `main()` 之後,截斷探針證明半份跑起來
+   **什麼都不印、不建鎖也不建健康檔**。★守衛比我的直覺嚴,而它是對的。★
+2. **我寫了一個不存在的指令**:`lumos gov-event`。查了才發現沒這支,而且新開子命令要付
+   五份文件同步的代價。**設計裡「看門狗寫一筆治理帳」那句落不了地**——
+   工具沒有給外部腳本寫治理帳的入口。改成兩條通道:看門狗自己留紀錄(即時)、
+   健檢的軟提醒落治理帳(入帳、接得上 14 天升級鏈),兩條讀同一份健康檔。
+   ★這是設計與實作的落差,不是實作偷懶,寫在這裡免得下一個人以為漏做。★
+3. **我的 `sed` 剖錯了**:`.*sec = \([0-9]*\)` 的貪婪比對抓到的是 `usec` 不是 `sec`
+   ——真的用下去會拿微秒當秒數,那條「機器剛醒來就別喊」的防護**永遠不喊而且不報錯**。
+   改用明確抓第一個 `sec = `。★這條如果沒當場驗,就是一個永遠不會發作的假防護。★
+
+## 代碼審 r1(2026-09-07,5 席):21 條全折,沒有一條附理由放行
+
+編號 `code-batch13`,分級 standard 但實際派了 5 席(通才 / 併發與資源 / 邊界與輸入 /
+外家 finder / 外家否決)+ 架構對齊席。★三席各自「真的跑實驗」,不是讀碼推論★,
+所以這一輪的結論可信度跟前面幾輪不同級。任一席出 blocker → 這輪 accepted 必空。
+
+- r1(2026-09-07,5 席):21 條 / blocking 8 / **鎖的正確性整段重寫,看門狗的告警通道整段換掉**。
+  席報告在 `governance/review-reports/code-batch13/`。
+
+### ★三條打到設計本身,不只是實作 bug★
+
+1. **看門狗只寫一個沒人看的紀錄檔**(外家否決席判 blocker)。它完整重現了它想防的那件事:
+   「沒有任何東西在讀它印的東西」。**現在改成桌面通知為主**(狀態一變就跳出來,不靠人記得開檔案),
+   紀錄檔留著當時間序,健檢的 `[A1]` 段當入帳通道。
+2. **排程根本沒裝**(外家否決席判 blocker,實機查證屬實)。第一版只把設定檔加進 repo 就當交付,
+   但 `launchctl` 找不到那個服務——合進去之後看門狗一次都不會跑。
+   補了 `governance/install-watchdog.sh`(裝 / `--status` / `--uninstall`),**而且真的裝了**。
+3. **「再開一支排程就是獨立失敗域」這句話是錯的**(我自己寫的)。兩支排程共用同一個 launchd、
+   同一個使用者 session、同一顆磁碟。★真正的獨立失敗域是健檢的 `[A1]` 段★——它跑在
+   Claude Code 的收工流程裡,不在 launchd 底下。所以又補了一段「誰看看門狗」:
+   有治理腳本、但看門狗的狀態檔不見或超過 36 小時沒更新,健檢就喊。
+
+### ★我又寫了一句沒查證的絕對話,當場被打臉★
+
+碼裡我寫「兩條讀同一份健康檔,**所以不會各說各話**」。邊界席餵一份「五步全 0、只有 total 壞掉」
+的檔,兩邊當場講出相反結論——**讀同一份檔不代表看同一個欄位**(健檢讀 `steps`、看門狗讀 `total`)。
+現在兩邊都以 `steps` 為準,`total` 只當交叉檢查,對不上就單獨喊一種狀態。
+這是同一天內第七次同型(見 [[Issues/把自己的推論寫成repo明文寫過]])。
+
+### 鎖:改了兩輪才對
+
+第一版接管是「rm 掉舊鎖再 mkdir」。併發席實測:八個行程搶同一把殘鎖,30 輪有 19 輪多人同時拿到鎖,
+拿真腳本跑 15 輪有 2 輪整支被跑了兩遍。改用 `mv` 原子搬走之後**我自己再量,12 輪還有 1 輪雙開**
+——因為「判定它死了」跟「動手搬」中間隔了一段:A 接管完把鎖重建起來,早就決定要接管的 D
+會把 A 那把全新的鎖也搬走。最後的做法是接管整段走一把「接管權」小鎖,進去後再確認一次
+殘鎖還是原來那一把(pid 對不對得上)。**40 輪 × 8 個行程:0 雙開、0 空轉。**
+
+★教訓:第一次修完就量一次,不要因為改動看起來對就收手。★
+
+### 來源那支的同型洞(2026-09-07 當天補做,Enzo 指示)
+
+`governance/autonomous-loop.sh` 的取鎖段(這支就是抄它的)有同樣三個問題。
+原本排 9/14,Enzo 當天就指示先修掉。**三個洞都實測重現過,不是靠「同型」推論**:
+
+| 洞 | 舊行為實測 |
+|---|---|
+| 接管競態 → 雙開 | 30 輪 × 8 行程,**1 輪多人同時拿到鎖** |
+| pid 被無關的活行程重用 | 10 天前的殘鎖 + 一個活著的無關行程 → 印「另一份正在跑」直接退出,**自主迴圈永久停擺而且沒有訊息** |
+| pid 檔內容不是數字 | pid 寫 garbage、鎖 0 秒齡 → **當場接管** |
+
+★`set -e` 幫不上忙★:#18 那批的註解寫「來源腳本有 set -e 兜著」——那句話**只對了一半**。
+它攔掉「輸的那個 mkdir 失敗」那半(所以雙開率 1/30 比這支的 19/30 低),
+但**攔不掉關鍵那條**:兩個接管者的 mkdir 都成功時,沒有非零可攔。
+
+順手多修兩個這支獨有的:
+- **取鎖與收尾之間有裸奔窗口**:鎖在第 37 行拿到、trap 在第 190 行才裝,而這支有 `set -e`
+  ——中間任何一個指令失敗都會直接死掉,鎖留 60 分鐘。改成先裝一個只清鎖的 trap。
+- **收尾無條件刪鎖**:如果這支跑到一半被別人**合法接管**走了(殘鎖判定成立時真的會發生),
+  那一下刪的是別人正在用的鎖。改成只清「鎖裡 pid 是自己」的那一把。
+
+### 通知的圖示(2026-09-07 追加,Enzo 要的)
+
+`osascript ... display notification` **沒有辦法在指令裡指定圖片**——它顯示的是呼叫它那支程式的
+圖示,從 launchd 跑就是 Script Editor 那個。要換成 Lumos 自己的四角星只有兩條路:
+
+- 裝 `terminal-notifier`(可以 `-appIcon`)→ **新增一個外部依賴,零依賴家規下不選**。
+- 自己包一個最小的 `.app` → 只用 macOS 內建的 `osacompile` / `sips` / `iconutil` / `plutil`,不加依賴。
+
+走後者。那個 app 是**建出來的東西不是原始碼**,所以不進版控,`install-watchdog.sh` 裝的時候現建,
+放在 `~/Library/Application Support/Lumos/LumosWatchdog.app`。已實測圖示有換到。
+
+### 這一段又跑了一輪代碼審(code-batch14,3 席 10 條全折)
+
+第一版寫完就交,審查席打回來四件事,其中**兩件是我完全沒想到的**:
+
+**① `osacompile` 簽的章,被我後面那兩行 `plutil` 弄壞了**(通才席,這輪最深的一條)。
+簽章的雜湊**包含 Info.plist 的內容**,所以「簽完之後才改 bundle id」等於簽完名才改合約,
+章當場作廢。實測:剛編完是 valid,跑完 plutil 變成「invalid Info.plist」。
+後果不是難看——**章壞掉時 applet 裡的 `do shell script` 會被系統靜默擋掉**。
+這正好解釋了我折入過程中撞到的怪現象:我本來想讓 applet 摸一個檔案回報「我真的跑到了」,
+那個機制一直失敗,我當時以為是路徑或隱藏目錄的問題,其實是章壞了。
+`codesign -f -s -` 重簽之後,兩件事同時好了。
+
+**② 產生物不該放家目錄**(架構對齊席)。我一開始覺得 `~/Library/Application Support/` 是
+macOS 的正統位置。查證後它是對的:這個 repo 的慣例是**放 repo 樹內、用 `.gitignore` 蓋掉**
+——`scripts/fetch-notesmd.sh` 把下載的二進位放 `scripts/bin/`,`dist/` 同款;
+會碰家目錄的只有 OS 逼你放那裡的 plist,和安裝器做 symlink / 改設定檔。
+已搬到 `governance/.notifier/`。
+
+另外兩件:建 app 要在暫存區組好、驗過(含驗簽章)再原子換上,不能原地刪了重建;
+安裝失敗不准還印「裝好了」。
+
+### 折入過程自己量出來的兩條(沒有席位報)
+
+- **`open -a APP --args "訊息"` 的參數不會進到 applet**。而且 handler 寫成 `on run argv` 時
+  applet **整支不執行**(連第一行都沒跑到),`open` 照樣回 0。所以要寫 `on run`、訊息從檔案讀。
+- **applet 一定要寫 `quit`**。不寫會留在 GUI 事件迴圈裡不結束——每小時一則就是每小時一個殭屍行程。
+
+### ★換圖示要三件事一起做,而我一開始只做了一件★
+
+交付之後使用者實際看通知,回報「圖示沒變,是 AppleScript 的卷軸」——**而我在那之前已經
+跟他說「圖示換好了」**。那句話是錯的:我只驗到 icns 檔內容對、簽章有效,
+**我看不到通知本身**,卻用「檔案對了」推論成「顯示對了」。
+
+一步一步試出來,少一件都還是卷軸:
+
+1. **刪掉 `osacompile` 附的 `Assets.car`**。那是一份編譯過的圖示目錄,裡面裝著預設的
+   applet 圖示,**macOS 優先用它、不看我們放的 icns**。只放 icns 完全沒有用。
+2. **重簽**(上面那條)。
+3. **換一個 bundle 識別碼並重新註冊**。**通知中心會記住某個識別碼第一次註冊時的圖示**;
+   前兩件做對了但沿用舊識別碼,還是給你看快取的舊圖。做完①②仍是卷軸,
+   識別碼加 `.v2` + `lsregister -f` 之後當場變四角星。
+
+代價:換識別碼等於一個新 app,**通知權限要重新給**。中間有一次通知整個沒出來,
+就是這個造成的,不是 bug。所以安裝腳本裝完一定要當場發一則請人確認。
+識別碼的版本尾巴是刻意的——圖示邏輯以後再動,那個號要往上加一號。
+
+### ★訂正我在這篇裡寫過的一句★
+
+第一版這裡寫「安裝時就要發一則,不然第一次真的出事那天通知會被靜默丟掉」,語氣像是**問題解決了**。
+實際上**沒有**:安裝時發一則只是讓權限問題**在安裝當下被人看到**,它不會讓機器有能力偵測
+「我喊了但沒人看到」。實測三條路都不行:
+
+- `open` 的回傳碼 → 只反映有沒有啟動(故意 error 的 applet 實測 rc=0)
+- 讓 applet 自己回報 → 只證明它跑到了,不證明使用者看得到(`display notification` 被權限擋時不報錯)
+- 查通知權限 → 沒有官方 CLI;去翻 NotificationCenter 的 sqlite 是 SIP 保護、格式沒保證,
+  為了一個提醒功能賭未公開內部格式不划算,不做
+
+**所以「權限被關掉 = 靜默不喊」這個洞,這一層補不起來。** 它靠的是:安裝時人確認一次,
+加上兩條不受通知權限影響的通道——這支自己的紀錄檔、健檢的 `[A1]` 段。
+外家席說「這只是把沒人聽得到從一個樓層搬到另一個樓層」,那句話在「只靠通知」的前提下是對的,
+但前提不成立:通知從來不是唯一通道,是三條裡最不可靠、也最不需要人主動查的那一條。
+
+**留了退路**:app 不在、執行檔被砍、或 applet 沒跑到就退回 `osascript` 直接發。
+圖示會是系統預設的,但話還是講得出去。★寧可醜也要發得出去★——價值在有人看得到,不在好看。
+
+### 誠實邊界
+
+- **排程現在會自動裝,但要人跑一次那支安裝腳本**:`bash governance/install-watchdog.sh`。
+  工具鏈的安裝器不分發這支(清單裡沒有),換一台機器要重跑。
+- **看門狗本身也會死**:排程器整個掛掉就兩支都不跑。健檢的 `[A1]` 段現在會抓到這件事
+  (它不在 launchd 底下),但那要有人跑健檢。完全無人看顧的解只有機器外的心跳,
+  已列在計劃裡並掛回頭條件。
+- **「機器剛醒來」只擋得掉最大宗的誤報**:開機後兩小時內剛好跨過門檻仍會誤報一次。
+
+## 交付之後真人回報的兩件事(2026-09-08)
+
+使用者的原話是「為什麼看門狗老是出現這些不明所以的提示?而且 icon 圖也不見了」。
+兩件都是真的,而且第一件比「吵」嚴重——**它講的是假話**。
+
+### 一、看門狗只有一個來源,而那個來源的沉默被它當成了「沒發生過」
+
+**它每天喊一次「這台機器上的 wrapper 從來沒跑完過」,而 wrapper 自己的紀錄檔裡,
+前一天和當天都白紙黑字寫著「完成」(五步全 rc=0)。**
+
+成因:「跑完要寫一份健康狀態檔」是這一批才加進 wrapper 的,而排程每天 09:30 叫的
+還是舊版本(改動當天稍晚才落地)。舊版不寫那個檔 → 檔不存在 → 看門狗照字面判「從來沒跑完過」。
+機械證據:wrapper 的紀錄檔裡「開始(run …)」與「五步 rc=…」這兩行**新版才有**的字,
+出現次數都是 0。
+
+★這正是本 repo 那條「只信一個來源、沒去對第二個」的老坑,而且犯在一支
+「專門用來告訴人真相」的元件上。★ 它手邊就有第二個來源(wrapper 自己的紀錄檔),沒去看。
+
+**修法**:健康檔不在時,先讀 wrapper 的紀錄檔找最後一次「完成」。
+- 在門檻(36 小時)內 → 換句話講:「wrapper 有在跑(最後一次 …),但沒有留下健康狀態檔
+  ——這支看門狗因此看不到它的結果。」★仍然要喊★:那個狀態代表看門狗是瞎的,值得知道一次。
+- 找不到、或已經超過門檻 → 才說「從來沒跑完過」。
+- **紀錄檔本身不在 → 退回原本的判斷**(fail-safe:第二個來源缺席不能讓警報消失)。
+
+守衛:`t_wrapper_watchdog_no_health_but_wrapper_ran`,五條斷言。翻紅釘三個全紅
+(拿掉第二個來源 / 不管那次多久以前一律當成跑過 / 把「開始」也當成「完成」)。
+
+**這批提示會自己停**:下一次 09:30 跑的是新版,健康檔一寫出來就進正常判斷。
+
+### 二、通知圖示在重建一次之後不見了——是快取,不是檔案
+
+排除法走完:app 裡的圖示檔渲染出來**就是那顆四角星**(標準尺寸全在),簽章有效,
+會蓋掉自訂圖示的 `Assets.car` 也確實沒回來。所以檔案沒問題。
+
+可疑點是 app 在 2026-09-07 16:06 被整個重建過一次(圖示檔的時間戳就是那時),
+而使用者確認「圖示對了」是在那之前。
+
+**這件事補進交付時那條三步規律**:換圖示要「刪 Assets.car + 重簽 + 換識別碼並重新註冊」
+三件一起做——★而且「重建一次」本身就足以讓通知中心把圖示掉回沒有,
+即使三件事在建的時候順序都是對的。★ 也就是說**每次重建都要換號**,不只是改圖示邏輯時才換。
+2026-09-08 從 `.v2` 進到 `.v3`,重建後真人確認:四角星回來了。
+
+代價照舊:換識別碼等於一個新 app,**通知權限要重新給一次**。
+
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "nl -ba governance/review-reports/code-batch20/r1-snapshot.patch | sed -n '1,260p'; nl -ba governance/wrapper-watchdog.sh | sed -n '1,280p'; nl -ba governance/install-watchdog.sh | sed -n '1,280p'; rg -n -C 12 't_wrapper_watchdog_no_health_but_wrapper_ran|wrapper-watchdog|bundle identifier|\\.v[23]|wrapper 完成' scripts/test_lumos.py governance/daily-governance.sh"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+     1	diff --git a/governance/install-watchdog.sh b/governance/install-watchdog.sh
+     2	index d4d769b..4c17863 100755
+     3	--- a/governance/install-watchdog.sh
+     4	+++ b/governance/install-watchdog.sh
+     5	@@ -40,23 +40,25 @@ status() {
+     6	 #   ①裝 terminal-notifier —— 新增一個外部依賴,這個 repo 的家規是零依賴,不走。
+     7	 #   ②自己包一個最小的 .app —— 只用 macOS 內建的 osacompile / sips / iconutil / plutil,不加依賴。
+     8	 # 走②。app 是「建出來的東西」不是原始碼,所以不進版控,裝的時候現建。
+     9	 # ★放 repo 樹內、用 .gitignore 蓋掉,不放家目錄★(代碼審 r1 架構對齊席判 major,查證屬實):
+    10	 # 這個 repo 既有的「安裝時產生東西」慣例是放 repo 樹內的忽略路徑——
+    11	 # scripts/fetch-notesmd.sh 把下載的二進位放 scripts/bin/(.gitignore 第 3 行蓋住),
+    12	 # dist/、.lumos/test-cache*.json 同款。這個 repo 會碰家目錄的只有兩種:
+    13	 # OS 逼你放那裡的(LaunchAgents 的 plist),以及安裝器做 symlink / 改設定檔——
+    14	 # 從來沒有在家目錄底下自建二進位或 bundle。第一版放 ~/Library/Application Support/,
+    15	 # 是在版控管不到、也不是 OS 強制的地方開了第二種存放法。
+    16	-# 尾巴的 .v2 是刻意的:見下面 build_notifier 的第③點(通知中心會快取圖示,
+    17	+# 尾巴的版本號是刻意的:見下面 build_notifier 的第③點(通知中心會快取圖示,
+    18	+# 2026-09-08 從 .v2 進到 .v3:重建過一次之後圖示在通知上不見了,而 app 裡的 icns
+    19	+# 檔渲染出來是對的、簽章也有效——所以是快取,不是檔案。換號是唯一逼它重讀的辦法。
+    20	 # 換識別碼是唯一逼它重讀的辦法)。圖示邏輯以後再動,這個號要往上加。
+    21	-NOTIFIER_ID="com.enzo.lumos.watchdog-notifier.v2"
+    22	+NOTIFIER_ID="com.enzo.lumos.watchdog-notifier.v3"
+    23	 NOTIFIER_DIR="$DIR/.notifier"
+    24	 NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
+    25	 ICON_SRC="$(cd "$DIR/.." && pwd)/assets/lumos-icon.png"
+    26	 
+    27	 # 建好之後要能證明它是完整的,不能只看目錄在不在。
+    28	 verify_notifier() {   # $1 = bundle 路徑
+    29	   [ -x "$1/Contents/MacOS/applet" ] || return 1
+    30	   [ -f "$1/Contents/Resources/applet.icns" ] || return 1
+    31	   [ "$(plutil -extract CFBundleIdentifier raw "$1/Contents/Info.plist" 2>/dev/null || echo '')" \
+    32	     = "$NOTIFIER_ID" ] || return 1
+    33	diff --git a/governance/wrapper-watchdog.sh b/governance/wrapper-watchdog.sh
+    34	index 535850a..e47647a 100755
+    35	--- a/governance/wrapper-watchdog.sh
+    36	+++ b/governance/wrapper-watchdog.sh
+    37	@@ -127,20 +127,55 @@ wrapper_running() {
+    38	   local p; p="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+    39	   case "$p" in ''|*[!0-9]*) return 1 ;; esac
+    40	   kill -0 "$p" 2>/dev/null || return 1
+    41	   local cmd; cmd="$(ps -p "$p" -o command= 2>/dev/null || echo '')"
+    42	   case "$cmd" in *daily-governance*) return 0 ;; *) return 1 ;; esac
+    43	 }
+    44	 lock_age() {
+    45	   python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo ''
+    46	 }
+    47	 
+    48	+# ★健康檔不在時,要去問第二個來源再開口★(2026-09-08 真的講錯話之後補的)。
+    49	+# 出過的事:健康檔不存在,這支就每天喊一次「這台機器上的 wrapper 從來沒跑完過」
+    50	+# ——而 wrapper 自己的紀錄檔裡,前一天和當天都白紙黑字寫著「完成」。
+    51	+# 原因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
+    52	+# ★這支只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
+    53	+# 現在的規矩:健康檔不在 → 去看 wrapper 自己的紀錄檔;它最近有跑完的話,
+    54	+# 講的話要換成「有在跑但沒留下健康檔」,而不是「從來沒跑完過」。
+    55	+# ★仍然要喊★:那個狀態代表這支看門狗是瞎的,值得知道一次;只是不能講假話。
+    56	+# 紀錄檔的路徑跟 launchd 那份 plist 的 StandardOutPath 對齊;檔不在就當問不出來,
+    57	+# 退回原本的判斷(fail-safe:第二個來源缺席不會讓警報消失)。
+    58	+WRAPPER_LOG="$DIR/logs/daily-wrapper.log"
+    59	+wrapper_log_last_finish() {   # 印出最後一次「完成」的時間(本地時間字串);問不出來印空字串
+    60	+  [ -f "$WRAPPER_LOG" ] || { echo ''; return 0; }
+    61	+  python3 - "$WRAPPER_LOG" <<'PY' 2>/dev/null || echo ''
+    62	+import re, sys
+    63	+last = ""
+    64	+try:
+    65	+    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+    66	+        for ln in fh:
+    67	+            m = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*wrapper 完成", ln)
+    68	+            if m:
+    69	+                last = m.group(1)
+    70	+except OSError:
+    71	+    pass
+    72	+print(last)
+    73	+PY
+    74	+}
+    75	+secs_since_local() {   # $1="YYYY-MM-DD HH:MM:SS"(本地);印出距今幾秒,算不出來印空字串
+    76	+  [ -n "$1" ] || { echo ''; return 0; }
+    77	+  python3 -c "
+    78	+import datetime,sys
+    79	+d=datetime.datetime.strptime(sys.argv[1], '%Y-%m-%d %H:%M:%S')
+    80	+print(int((datetime.datetime.now()-d).total_seconds()))" "$1" 2>/dev/null || echo ''
+    81	+}
+    82	+
+    83	 # 健康檔一次讀出四件事,四行:finished_at / 哪些步驟非零 / total 跟 steps 對不對得上 / steps 讀不讀得到。
+    84	 # ★不能只讀 total★(代碼審 r1 邊界席):健檢的 [A1] 段讀的是 steps,這支第一版讀 total,
+    85	 # 餵一份「五步全 0、只有 total 壞掉」的檔,兩邊會講出完全相反的結論——而我在健檢那段
+    86	 # 的註解裡還寫了「兩條讀同一份健康檔,所以不會各說各話」,那句話當場被打臉。
+    87	 # 現在兩邊都以 steps 為準,total 只當交叉檢查:對不上就是這份檔壞了,單獨喊一種狀態。
+    88	 read_health() {
+    89	   python3 - "$HEALTH" <<'PY' 2>/dev/null || return 1
+    90	 import json, sys
+    91	 d = json.load(open(sys.argv[1]))
+    92	 fin = d.get("finished_at")
+    93	@@ -171,22 +206,30 @@ main() {
+    94	     local la; la="$(lock_age)"
+    95	     if [ -n "$la" ] && [ "$la" -gt "$STALE_SEC" ]; then
+    96	       now_state="hung|$today"
+    97	       msg="每日治理 wrapper 從 $(( la / 3600 )) 小時前就一直在跑、沒有結束——多半是卡住了。鎖在 $LOCKDIR。"
+    98	     else
+    99	       now_state="running|$today"   # 正在跑,沒事,不喊
+   100	     fi
+   101	   elif [ ! -f "$HEALTH" ]; then
+   102	     # ★檔案不存在 ≠ 死掉★(設計審 r1 外家席:第一版完全沒定義這個語意)。
+   103	     # 新機、重新 clone、清過紀錄都會這樣,訊息要跟「死掉了」分開講,而且不算逾期。
+   104	-    now_state="never|$today"
+   105	-    msg="這台機器上的每日治理 wrapper 從來沒跑完過(還沒有健康狀態檔)。第一次跑過就會有。"
+   106	+    # ★而且不存在也 ≠ 沒跑過★(2026-09-08):先問 wrapper 自己的紀錄檔。
+   107	+    local lf ls_
+   108	+    lf="$(wrapper_log_last_finish)"; ls_="$(secs_since_local "$lf")"
+   109	+    if [ -n "$ls_" ] && [ "$ls_" -le "$STALE_SEC" ]; then
+   110	+      now_state="nohealth|$today"
+   111	+      msg="每日治理 wrapper 有在跑(它自己的紀錄檔:最後一次完成 $lf),但沒有留下健康狀態檔——這支看門狗因此看不到它的結果。多半是排程跑的還是舊版本,或者那個檔被清掉了。"
+   112	+    else
+   113	+      now_state="never|$today"
+   114	+      msg="這台機器上的每日治理 wrapper 從來沒跑完過(沒有健康狀態檔,它自己的紀錄檔裡也找不到最近跑完的紀錄)。第一次跑過就會有。"
+   115	+    fi
+   116	   else
+   117	     local hr fin bad mismatch readable age
+   118	     if ! hr="$(read_health)"; then
+   119	       now_state="unreadable|$today"
+   120	       msg="每日治理 wrapper 的健康狀態檔讀不動($HEALTH)——看不出它跑了沒。"
+   121	     else
+   122	       fin="$(printf '%s\n' "$hr" | sed -n 1p)"
+   123	       bad="$(printf '%s\n' "$hr" | sed -n 2p)"
+   124	       mismatch="$(printf '%s\n' "$hr" | sed -n 3p)"
+   125	       readable="$(printf '%s\n' "$hr" | sed -n 4p)"
+   126	diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+   127	index 2dbb7d0..e5e3332 100644
+   128	--- a/scripts/test_lumos.py
+   129	+++ b/scripts/test_lumos.py
+   130	@@ -29944,20 +29944,88 @@ def t_daily_wrapper_health_write_failure_is_a_failure():
+   131	               r.returncode != 0, "rc=%d\n%s" % (r.returncode, r.stderr[-300:]))
+   132	         check("★而且要講出「不是普通檔案」這件事★,不能只說寫不進去",
+   133	               "不是一個普通檔案" in r.stderr, r.stderr[-300:])
+   134	         leftovers = list((g / ".daily-governance-health.json").iterdir())
+   135	         check("★失敗時不准留垃圾暫存檔★", not leftovers, [p.name for p in leftovers])
+   136	     finally:
+   137	         _sh.rmtree(root, ignore_errors=True)
+   138	     print("  ✓ t_daily_wrapper_health_write_failure_is_a_failure")
+   139	 
+   140	 
+   141	+def t_wrapper_watchdog_no_health_but_wrapper_ran():
+   142	+    """★健康檔不在時,不准直接斷言「從來沒跑完過」——先問 wrapper 自己的紀錄檔★(2026-09-08)。
+   143	+
+   144	+    真的講錯過:健康檔不存在,看門狗每天喊一次「這台機器上的 wrapper 從來沒跑完過」,
+   145	+    而 wrapper 自己的紀錄檔裡前一天和當天都白紙黑字寫著「完成」。
+   146	+    成因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
+   147	+    ★這支看門狗只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
+   148	+
+   149	+    現在:健康檔不在 → 去讀 wrapper 的紀錄檔。最近有跑完就換句話講(仍然要喊,
+   150	+    因為那代表看門狗是瞎的),完全找不到才說「從來沒跑完過」。
+   151	+    紀錄檔也不在的話退回原本判斷——第二個來源缺席不能讓警報消失。
+   152	+    """
+   153	+    import shutil as _sh, subprocess as _sp, tempfile as _tf, datetime as _dt
+   154	+    _need_src("governance/wrapper-watchdog.sh")
+   155	+    repo = Path(GRAPHCTL).resolve().parent.parent
+   156	+    root = Path(_tf.mkdtemp(prefix="gctl-wdlog-"))
+   157	+    try:
+   158	+        g = root / "governance"; (g / "logs").mkdir(parents=True)
+   159	+        wd = g / "wrapper-watchdog.sh"
+   160	+        wd.write_text((repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8"),
+   161	+                      encoding="utf-8")
+   162	+        wlog = g / "logs" / "daily-wrapper.log"
+   163	+        st = g / ".wrapper-watchdog-state"
+   164	+
+   165	+        def _run():
+   166	+            st.unlink(missing_ok=True)
+   167	+            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+   168	+
+   169	+        def _stamp(h):
+   170	+            return (_dt.datetime.now() - _dt.timedelta(hours=h)).strftime("%Y-%m-%d %H:%M:%S")
+   171	+
+   172	+        # ① 沒有健康檔、也沒有紀錄檔 → 維持原本那句(第二個來源缺席不改變結論)
+   173	+        r = _run()
+   174	+        check("★沒有健康檔又沒有紀錄檔 → 還是要說「從來沒跑完過」★",
+   175	+              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+   176	+
+   177	+        # ② 沒有健康檔,但紀錄檔說兩小時前才跑完 → 不准說「從來沒跑完過」
+   178	+        # ★時間戳只算一次★:算兩次的話跨秒就對不上,那是測試自己的時序 bug(踩過)
+   179	+        fin2 = _stamp(2)
+   180	+        wlog.write_text("[%s] daily-governance wrapper 開始\n"
+   181	+                        "[%s] daily-governance wrapper 完成\n" % (_stamp(2.2), fin2),
+   182	+                        encoding="utf-8")
+   183	+        r = _run()
+   184	+        check("★紀錄檔說最近才跑完 → 不准講「從來沒跑完過」★",
+   185	+              "從來沒跑完過" not in r.stdout, r.stdout + r.stderr)
+   186	+        check("★要改講「有在跑,但沒留下健康狀態檔」★",
+   187	+              "有在跑" in r.stdout and "健康狀態檔" in r.stdout, r.stdout + r.stderr)
+   188	+        check("★而且要把紀錄檔上那個時間講出來(人才查得下去)★",
+   189	+              fin2 in r.stdout, r.stdout)
+   190	+        check("★這個狀態仍然要喊★(看門狗瞎了值得知道一次,只是不能講假話)",
+   191	+              r.stdout.strip() != "", "什麼都沒印=這個狀態被靜默吞掉了")
+   192	+
+   193	+        # ③ 紀錄檔上最後一次跑完已經很久 → 回到「從來沒跑完過」
+   194	+        wlog.write_text("[%s] daily-governance wrapper 完成\n" % _stamp(80), encoding="utf-8")
+   195	+        r = _run()
+   196	+        check("★紀錄檔上最後一次已經超過門檻 → 照樣說「從來沒跑完過」★",
+   197	+              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+   198	+
+   199	+        # ④ 紀錄檔有內容但沒有任何「完成」→ 不能被誤讀成跑完過
+   200	+        wlog.write_text("[%s] daily-governance wrapper 開始\n"
+   201	+                        "[%s] 治理日報 段結束 rc=0\n" % (_stamp(1), _stamp(0.9)), encoding="utf-8")
+   202	+        r = _run()
+   203	+        check("★只有「開始」沒有「完成」→ 不算跑完★",
+   204	+              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+   205	+    finally:
+   206	+        _sh.rmtree(root, ignore_errors=True)
+   207	+
+   208	+
+   209	 def t_wrapper_watchdog_states():
+   210	     """★看門狗四種輸入各自要講對話★(2026-09-07 代碼審 r1 四席各自實測)。
+   211	 
+   212	     ① wrapper 正在跑(自主迴圈那段可跑三小時)→ 不准喊「超過 36 小時沒跑完」。
+   213	        第一版只看 finished_at 的年齡、完全不看鎖,會在它正常執行時發假警報,
+   214	        而那句話還會誘使人去 kill 一個其實正常的行程。
+   215	     ② finished_at 讀不動 + total=0 → 不准靜默判成正常。第一版時間解析失敗只讓
+   216	        age 變空字串,控制流直接掉到「比 total」,剛好是 0 就給綠燈。
+   217	     ③ 五步全 0、只有 total 壞掉 → 要說「這份檔自相矛盾」。第一版讀 total、健檢讀 steps,
+   218	        同一份檔兩邊講出相反結論(而碼裡還寫著「不會各說各話」)。
+     1	#!/bin/bash
+     2	# 每日治理 wrapper 的看門狗:讀它的健康狀態檔,逾期或有步驟失敗就出聲。
+     3	#
+     4	# ★為什麼要獨立一支★(2026-09-07 全 repo 審視 #18,設計審 r1 兩席判 blocker):
+     5	# 9/5 那次 wrapper 跑到第二步就死了、後三步全沒跑、整天沒人發現——因為
+     6	# ①它不管發生什麼都回 0 ②沒有任何東西在讀它印的東西。
+     7	# 而圖譜裡同一週剛好記過一條教訓:「監看的東西和被監看的東西同命」。
+     8	# 所以告警器不能住在 wrapper 裡,也不能只靠「有人跑健檢時順便看到」
+     9	# ——那正是這個 repo 前科事故失敗過的做法(一條軟提醒響了 46 天、18,283 次沒人發現)。
+    10	#
+    11	# 這支只做三件事:讀健康檔 → 判斷 → 有事說出去。不改任何東西。
+    12	set -uo pipefail
+    13	
+    14	DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    15	HEALTH="$DIR/.daily-governance-health.json"
+    16	LOCKDIR="$DIR/.daily-governance.lock"     # 被監看那支的鎖(拿來分辨「正在跑」和「死了」)
+    17	STATE="$DIR/.wrapper-watchdog-state"      # 上次喊過什麼(邊緣觸發用;不進版控)
+    18	WLOCK="$DIR/.wrapper-watchdog.lock"       # 這支自己的鎖
+    19	LOG="$DIR/logs/wrapper-watchdog.log"
+    20	ts() { date '+%Y-%m-%d %H:%M:%S'; }
+    21	
+    22	# 逾期門檻:排程是每天一次,給到 36 小時(睡過一天還有機會補)。
+    23	STALE_SEC=$(( 36 * 3600 ))
+    24	# ★「機器醒著多久」要問「上次從睡眠醒來」,不是「開機多久」★
+    25	# (設計審 r2 通才席判 blocker,實測:這台閉蓋 Mac 開機 59 天沒重開過,
+    26	#  「開機超過兩小時」永遠成立,那個條件從第一天就是空的、而且不會有任何錯誤訊息)。
+    27	# 真實紀錄裡有過一次 129 小時的合法空窗(長假),這條就是為了不在那種時候誤報。
+    28	AWAKE_MIN_SEC=$(( 2 * 3600 ))
+    29	
+    30	awake_sec() {
+    31	  # macOS:kern.waketime 給「上次真正從睡眠醒來」的時間。拿不到就失敗,呼叫端當「不確定」處理。
+    32	  # ★第一版用 sed 's/.*sec = \([0-9]*\).*/\1/' 剖,抓到的是 usec 不是 sec★
+    33	  #   ——`.*` 貪婪會吃到最後一個「sec = 」,而輸出長這樣:
+    34	  #     { sec = 1788609050, usec = 942190 } Sat Sep  5 19:50:50 2026
+    35	  #   真的用下去就是拿微秒當秒數,結果永遠判成「剛醒來」→ 這條防護永遠不喊,而且不會報錯。
+    36	  #   改用 python 明確抓第一個 `sec = `,不靠貪婪比對。
+    37	  local wt
+    38	  wt="$(python3 -c "
+    39	import subprocess,re,sys
+    40	o=subprocess.run(['sysctl','-n','kern.waketime'],capture_output=True,text=True).stdout
+    41	m=re.search(r'\bsec = (\d+)',o)
+    42	sys.stdout.write(m.group(1) if m else '')" 2>/dev/null || echo '')"
+    43	  [ -z "$wt" ] && return 1
+    44	  echo $(( $(date +%s) - wt ))
+    45	}
+    46	
+    47	# ★話要講到有人聽得到的地方★(2026-09-07 代碼審 r1 外家否決席判 blocker,說得對):
+    48	# 第一版只 echo 一行 + 追加一個本機紀錄檔,而 launchd 又把 stdout 導進另一個檔案
+    49	# ——完整重現了它想防的那件事:「沒有任何東西在讀它印的東西」。
+    50	# 所以現在走三條:
+    51	#   ①桌面通知:不需要任何人記得去開檔案,狀態一變就跳出來。
+    52	#     是這三條裡唯一「不靠人主動查」的,也是這支存在的理由。
+    53	#   ②這支自己的紀錄檔:留時間序,事後要回頭查哪天開始壞的靠它。
+    54	#   ③健檢的 [A1] 段:那段直接讀同一份健康檔,`lumos doctor` 一跑就看得到,並且接得上治理帳。
+    55	# ★三條裡①②住在 launchd,③住在 Claude Code 的收工健檢——後者才是真正的獨立失敗域★
+    56	#   (第一版計劃寫「再開一支 launchd job 就是獨立失敗域」,那句話是錯的:
+    57	#    兩支 launchd job 共用同一個 launchd、同一個使用者 session、同一顆磁碟)。
+    58	# 通知走兩條,前面那條有就用前面那條:
+    59	#   ①`~/Library/Application Support/Lumos/LumosWatchdog.app`——安裝腳本建的最小 app,
+    60	#     有 Lumos 自己的圖示。★osascript 直接發的通知沒辦法指定圖片★,它顯示的是呼叫者
+    61	#     (從 launchd 跑就是 Script Editor 的圖示),要換圖只能包成 app。
+    62	#   ②沒建成 app 就退回 osascript 直接發:圖示是系統預設的,但話還是講得出去。
+    63	#     ★寧可醜也要發得出去★——這支的價值在「有人看得到」,不在好看。
+    64	# ★路徑從 $DIR 算,不寫死家目錄★(代碼審 r1 架構對齊席):產生物放 repo 樹內、
+    65	# .gitignore 蓋掉,跟 scripts/bin/ 那支下載二進位的做法同款。install-watchdog.sh 建它。
+    66	NOTIFIER_DIR="$DIR/.notifier"
+    67	NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
+    68	notify() {
+    69	  # 訊息走檔案不走參數:applet 的 handler 寫成 `on run argv` 時,用 open --args 啟動會
+    70	  # ★整個不執行★而 open 照樣回 0(實測)。所以寫成 `on run`,訊息從檔案讀。
+    71	  #
+    72	  # ★退路要靠 applet 自己留的印子,不能只看 open 的回傳碼★
+    73	  # (代碼審 r1 外家否決席判 blocker,查證後修正它的推論):
+    74	  #   它說「open 回 0 不代表通知送出去,所以退路是死碼」——前半對(故意 error 的 applet 實測 rc=0)。
+    75	  #   現在改成 applet 跑完自己摸一個印子,等不到就走 osascript 退路,退路真的走得到了。
+    76	  # ★但「跑到了」不等於「使用者看得到」★:通知權限被關掉時 display notification 不報錯,
+    77	  #   shell 這一層沒有辦法分辨。那個洞交給另外兩條不受通知權限影響的通道:
+    78	  #   這支自己的紀錄檔、健檢的 [A1] 段。
+    79	  if [ -x "$NOTIFIER/Contents/MacOS/applet" ] && command -v open >/dev/null 2>&1; then
+    80	    if printf '%s' "$1" > "$NOTIFIER_DIR/message.txt" 2>/dev/null; then
+    81	      rm -f "$NOTIFIER_DIR/.ran" 2>/dev/null || true
+    82	      if open -a "$NOTIFIER" >/dev/null 2>&1; then
+    83	        local i
+    84	        for i in 1 2 3 4 5 6 7 8 9 10; do
+    85	          [ -f "$NOTIFIER_DIR/.ran" ] && return 0
+    86	          python3 -c "import time;time.sleep(0.5)" 2>/dev/null || sleep 1
+    87	        done
+    88	      fi
+    89	    fi
+    90	  fi
+    91	  command -v osascript >/dev/null 2>&1 || return 0
+    92	  osascript -e 'on run argv
+    93	    display notification (item 1 of argv) with title "Lumos 治理看門狗"
+    94	  end run' "$1" >/dev/null 2>&1 || true
+    95	}
+    96	emit() {   # $1=kind  $2=一句話
+    97	  local kind="$1" msg="$2"
+    98	  echo "[$(ts)] $msg"
+    99	  notify "$msg"
+   100	  mkdir -p "$DIR/logs" 2>/dev/null || true
+   101	  printf '{"ts":"%s","kind":"%s","note":"%s"}\n' \
+   102	    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$kind" "$msg" >> "$LOG" 2>/dev/null || true
+   103	}
+   104	
+   105	# ★這支自己也要一把鎖★(代碼審 r1 併發席:被監看的有鎖、監看的自己沒有,是不對稱的疏漏。
+   106	# 手動測試撞上排程那一次,兩份會各自判成「狀態改變」、重複寫帳)。
+   107	# ★但故意不學 wrapper 那套 pid 身分驗證★:監看器被一把殘鎖永久關掉,比偶爾兩份同時跑嚴重
+   108	# 得多,所以這裡一律用時間兜底、寧可搶——這支跑幾秒就結束,鎖超過 10 分鐘一定是殘的。
+   109	wlock_release() { rm -rf "$WLOCK" 2>/dev/null || true; }
+   110	take_wlock() {
+   111	  mkdir "$WLOCK" 2>/dev/null && return 0
+   112	  local age
+   113	  age="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$WLOCK')))" 2>/dev/null || echo 99999)"
+   114	  [ "$age" -lt 600 ] && return 1
+   115	  mv "$WLOCK" "$WLOCK.dead.$$" 2>/dev/null || return 1
+   116	  rm -rf "$WLOCK.dead.$$" 2>/dev/null || true
+   117	  mkdir "$WLOCK" 2>/dev/null || return 1
+   118	  return 0
+   119	}
+   120	
+   121	# 被監看那支現在是不是真的在跑(看它的鎖)。回傳 0=在跑,1=沒在跑。
+   122	# ★不看鎖就會誤報★(代碼審 r1 併發席實測):自主迴圈那段可以跑三小時,只看
+   123	# finished_at 的年齡,會在它正在跑的時候喊「超過 36 小時沒跑完、它不會自己喊」
+   124	# ——而那句話還會誘使人去 kill 一個其實正常的行程,一 kill 就掉進殘鎖接管那條路。
+   125	wrapper_running() {
+   126	  [ -d "$LOCKDIR" ] || return 1
+   127	  local p; p="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+   128	  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+   129	  kill -0 "$p" 2>/dev/null || return 1
+   130	  local cmd; cmd="$(ps -p "$p" -o command= 2>/dev/null || echo '')"
+   131	  case "$cmd" in *daily-governance*) return 0 ;; *) return 1 ;; esac
+   132	}
+   133	lock_age() {
+   134	  python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo ''
+   135	}
+   136	
+   137	# ★健康檔不在時,要去問第二個來源再開口★(2026-09-08 真的講錯話之後補的)。
+   138	# 出過的事:健康檔不存在,這支就每天喊一次「這台機器上的 wrapper 從來沒跑完過」
+   139	# ——而 wrapper 自己的紀錄檔裡,前一天和當天都白紙黑字寫著「完成」。
+   140	# 原因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
+   141	# ★這支只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
+   142	# 現在的規矩:健康檔不在 → 去看 wrapper 自己的紀錄檔;它最近有跑完的話,
+   143	# 講的話要換成「有在跑但沒留下健康檔」,而不是「從來沒跑完過」。
+   144	# ★仍然要喊★:那個狀態代表這支看門狗是瞎的,值得知道一次;只是不能講假話。
+   145	# 紀錄檔的路徑跟 launchd 那份 plist 的 StandardOutPath 對齊;檔不在就當問不出來,
+   146	# 退回原本的判斷(fail-safe:第二個來源缺席不會讓警報消失)。
+   147	WRAPPER_LOG="$DIR/logs/daily-wrapper.log"
+   148	wrapper_log_last_finish() {   # 印出最後一次「完成」的時間(本地時間字串);問不出來印空字串
+   149	  [ -f "$WRAPPER_LOG" ] || { echo ''; return 0; }
+   150	  python3 - "$WRAPPER_LOG" <<'PY' 2>/dev/null || echo ''
+   151	import re, sys
+   152	last = ""
+   153	try:
+   154	    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+   155	        for ln in fh:
+   156	            m = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*wrapper 完成", ln)
+   157	            if m:
+   158	                last = m.group(1)
+   159	except OSError:
+   160	    pass
+   161	print(last)
+   162	PY
+   163	}
+   164	secs_since_local() {   # $1="YYYY-MM-DD HH:MM:SS"(本地);印出距今幾秒,算不出來印空字串
+   165	  [ -n "$1" ] || { echo ''; return 0; }
+   166	  python3 -c "
+   167	import datetime,sys
+   168	d=datetime.datetime.strptime(sys.argv[1], '%Y-%m-%d %H:%M:%S')
+   169	print(int((datetime.datetime.now()-d).total_seconds()))" "$1" 2>/dev/null || echo ''
+   170	}
+   171	
+   172	# 健康檔一次讀出四件事,四行:finished_at / 哪些步驟非零 / total 跟 steps 對不對得上 / steps 讀不讀得到。
+   173	# ★不能只讀 total★(代碼審 r1 邊界席):健檢的 [A1] 段讀的是 steps,這支第一版讀 total,
+   174	# 餵一份「五步全 0、只有 total 壞掉」的檔,兩邊會講出完全相反的結論——而我在健檢那段
+   175	# 的註解裡還寫了「兩條讀同一份健康檔,所以不會各說各話」,那句話當場被打臉。
+   176	# 現在兩邊都以 steps 為準,total 只當交叉檢查:對不上就是這份檔壞了,單獨喊一種狀態。
+   177	read_health() {
+   178	  python3 - "$HEALTH" <<'PY' 2>/dev/null || return 1
+   179	import json, sys
+   180	d = json.load(open(sys.argv[1]))
+   181	fin = d.get("finished_at")
+   182	fin = fin if isinstance(fin, str) else ""
+   183	steps = d.get("steps")
+   184	if isinstance(steps, dict):
+   185	    bad = ",".join(str(k) for k, v in steps.items() if v != 0)
+   186	    agg = 1 if bad else 0
+   187	    mismatch = "1" if d.get("total") != agg else "0"
+   188	    readable = "1"
+   189	else:
+   190	    bad, mismatch, readable = "", "0", "0"
+   191	print(fin); print(bad); print(mismatch); print(readable)
+   192	PY
+   193	}
+   194	
+   195	main() {
+   196	  take_wlock || { echo "[$(ts)] 另一份看門狗正在跑,這次跳過"; return 0; }
+   197	  trap wlock_release EXIT
+   198	
+   199	  # ★邊緣觸發★(設計審 r2 外家席):照字面每小時寫一筆,故障持續期間一天寫 24 筆同樣的東西
+   200	  # ——而這一案自己正在處理帳本膨脹。只在「第一次發現 / 狀態改變 / 換日 / 恢復」時寫。
+   201	  local prev=""; [ -f "$STATE" ] && prev="$(cat "$STATE" 2>/dev/null || echo '')"
+   202	  local today; today="$(date +%F)"
+   203	  local now_state="" msg=""
+   204	
+   205	  if wrapper_running; then
+   206	    local la; la="$(lock_age)"
+   207	    if [ -n "$la" ] && [ "$la" -gt "$STALE_SEC" ]; then
+   208	      now_state="hung|$today"
+   209	      msg="每日治理 wrapper 從 $(( la / 3600 )) 小時前就一直在跑、沒有結束——多半是卡住了。鎖在 $LOCKDIR。"
+   210	    else
+   211	      now_state="running|$today"   # 正在跑,沒事,不喊
+   212	    fi
+   213	  elif [ ! -f "$HEALTH" ]; then
+   214	    # ★檔案不存在 ≠ 死掉★(設計審 r1 外家席:第一版完全沒定義這個語意)。
+   215	    # 新機、重新 clone、清過紀錄都會這樣,訊息要跟「死掉了」分開講,而且不算逾期。
+   216	    # ★而且不存在也 ≠ 沒跑過★(2026-09-08):先問 wrapper 自己的紀錄檔。
+   217	    local lf ls_
+   218	    lf="$(wrapper_log_last_finish)"; ls_="$(secs_since_local "$lf")"
+   219	    if [ -n "$ls_" ] && [ "$ls_" -le "$STALE_SEC" ]; then
+   220	      now_state="nohealth|$today"
+   221	      msg="每日治理 wrapper 有在跑(它自己的紀錄檔:最後一次完成 $lf),但沒有留下健康狀態檔——這支看門狗因此看不到它的結果。多半是排程跑的還是舊版本,或者那個檔被清掉了。"
+   222	    else
+   223	      now_state="never|$today"
+   224	      msg="這台機器上的每日治理 wrapper 從來沒跑完過(沒有健康狀態檔,它自己的紀錄檔裡也找不到最近跑完的紀錄)。第一次跑過就會有。"
+   225	    fi
+   226	  else
+   227	    local hr fin bad mismatch readable age
+   228	    if ! hr="$(read_health)"; then
+   229	      now_state="unreadable|$today"
+   230	      msg="每日治理 wrapper 的健康狀態檔讀不動($HEALTH)——看不出它跑了沒。"
+   231	    else
+   232	      fin="$(printf '%s\n' "$hr" | sed -n 1p)"
+   233	      bad="$(printf '%s\n' "$hr" | sed -n 2p)"
+   234	      mismatch="$(printf '%s\n' "$hr" | sed -n 3p)"
+   235	      readable="$(printf '%s\n' "$hr" | sed -n 4p)"
+   236	      age=""
+   237	      [ -n "$fin" ] && age="$(python3 -c "
+   238	import datetime,sys
+   239	d=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
+   240	print(int((datetime.datetime.now(datetime.timezone.utc)-d).total_seconds()))" "$fin" 2>/dev/null || echo '')"
+   241	      if [ -z "$age" ] || [ "$readable" != "1" ]; then
+   242	        # ★時間讀不動就是讀不動,不能往下掉進「沒事」★(代碼審 r1 外家 finder 實測:
+   243	        # 第一版時間解析失敗只讓 age 變空字串,控制流直接落到下面比 total,total 剛好是 0
+   244	        # 就靜默判成正常——一份完全讀不懂的健康檔換來一個綠燈)。
+   245	        now_state="unreadable|$today"
+   246	        msg="每日治理 wrapper 的健康狀態檔內容不對($HEALTH:時間或 steps 欄讀不動)——看不出它跑了沒。"
+   247	      elif [ "$age" -gt "$STALE_SEC" ]; then
+   248	        local aw; aw="$(awake_sec || echo '')"
+   249	        if [ -n "$aw" ] && [ "$aw" -lt "$AWAKE_MIN_SEC" ]; then
+   250	          now_state="justwoke|$today"   # 剛醒來,排程還沒輪到——不喊(那 129 小時空窗的形態)
+   251	        else
+   252	          now_state="stale|$today"
+   253	          msg="每日治理 wrapper 超過 36 小時沒跑完(最後一次 $fin)——第 3-5 步可能整批沒跑,而它不會自己喊。"
+   254	        fi
+   255	      elif [ "$mismatch" = "1" ]; then
+   256	        now_state="inconsistent|$today"
+   257	        msg="每日治理 wrapper 的健康狀態檔自相矛盾($HEALTH 的 total 跟 steps 對不上)——這份檔不能拿來判斷。"
+   258	      elif [ -n "$bad" ]; then
+   259	        now_state="failed|$today"
+   260	        msg="每日治理 wrapper 最後一次跑完但這些步驟失敗:$bad(見 $HEALTH 的 steps 欄)。"
+   261	      else
+   262	        now_state="ok|$today"
+   263	      fi
+   264	    fi
+   265	  fi
+   266	
+   267	  # 恢復也記一筆(不然帳上只看得到壞掉、看不到修好)
+   268	  case "${prev%%|*}" in
+   269	    ""|ok|running) ;;
+   270	    *) case "${now_state%%|*}" in
+   271	         ok|running) emit "recovered" "每日治理 wrapper 恢復正常(前一個狀態:${prev%%|*})。" ;;
+   272	       esac ;;
+   273	  esac
+   274	  if [ -n "$msg" ] && [ "$now_state" != "$prev" ]; then
+   275	    emit "${now_state%%|*}" "$msg"
+   276	  fi
+   277	
+   278	  # ★狀態檔寫不進去要喊,不能默默吞掉★(代碼審 r1 邊界席實測:第一版寫
+   279	  # `> "$STATE" 2>/dev/null || true`,狀態檔變成目錄或唯讀時 ①bash 會在套用 2>/dev/null
+   280	  # 之前就把錯誤印到真的 stderr,吞不掉 ②邊緣觸發整個失效,故障期間每小時重複喊一次
+     1	#!/bin/bash
+     2	# 把看門狗那支排程真的裝到這台機器上(macOS launchd),或用 --status 看它裝了沒。
+     3	#
+     4	# ★為什麼需要這支★(2026-09-07 代碼審 r1 外家否決席判 blocker,查證屬實):
+     5	# 第一版只把 plist 加進 repo 就當交付了,但 repo 裡的 plist 不會自己變成一個排程
+     6	# ——實機 `launchctl print gui/501/com.enzo.lumos.wrapper-watchdog` 回「找不到」。
+     7	# 也就是說那批合進去之後,號稱的看門狗一次都不會跑。
+     8	# (對照組:每日治理那支的 plist 根本不在 repo 裡,只躺在系統目錄,誰裝的沒有紀錄
+     9	#  ——所以這裡沒有既有慣例可以照抄,是新開的。)
+    10	set -uo pipefail
+    11	
+    12	DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    13	LABEL="com.enzo.lumos.wrapper-watchdog"
+    14	SRC="$DIR/$LABEL.plist"
+    15	DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
+    16	DOMAIN="gui/$(id -u)"
+    17	
+    18	status() {
+    19	  echo "plist 來源     : $SRC"
+    20	  echo "裝到哪         : $DEST"
+    21	  if [ -f "$DEST" ]; then
+    22	    if diff -q "$SRC" "$DEST" >/dev/null 2>&1; then
+    23	      echo "裝好的那份     : 跟 repo 一致"
+    24	    else
+    25	      echo "裝好的那份     : ★跟 repo 不一樣★——重跑這支會用 repo 的蓋過去"
+    26	    fi
+    27	  else
+    28	    echo "裝好的那份     : 沒有"
+    29	  fi
+    30	  if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    31	    echo "launchd 認得它 : 是"
+    32	  else
+    33	    echo "launchd 認得它 : ★否——它一次都不會跑★"
+    34	  fi
+    35	}
+    36	
+    37	# ★桌面通知的圖示要換成 Lumos 的四角星,得包一個 app★
+    38	# 事實先講清楚:`osascript ... display notification` 顯示的是**呼叫它那支程式**的圖示
+    39	# (從 launchd 跑就是 Script Editor 那個),沒有辦法在指令裡指定圖片。要自訂圖示只有兩條路:
+    40	#   ①裝 terminal-notifier —— 新增一個外部依賴,這個 repo 的家規是零依賴,不走。
+    41	#   ②自己包一個最小的 .app —— 只用 macOS 內建的 osacompile / sips / iconutil / plutil,不加依賴。
+    42	# 走②。app 是「建出來的東西」不是原始碼,所以不進版控,裝的時候現建。
+    43	# ★放 repo 樹內、用 .gitignore 蓋掉,不放家目錄★(代碼審 r1 架構對齊席判 major,查證屬實):
+    44	# 這個 repo 既有的「安裝時產生東西」慣例是放 repo 樹內的忽略路徑——
+    45	# scripts/fetch-notesmd.sh 把下載的二進位放 scripts/bin/(.gitignore 第 3 行蓋住),
+    46	# dist/、.lumos/test-cache*.json 同款。這個 repo 會碰家目錄的只有兩種:
+    47	# OS 逼你放那裡的(LaunchAgents 的 plist),以及安裝器做 symlink / 改設定檔——
+    48	# 從來沒有在家目錄底下自建二進位或 bundle。第一版放 ~/Library/Application Support/,
+    49	# 是在版控管不到、也不是 OS 強制的地方開了第二種存放法。
+    50	# 尾巴的版本號是刻意的:見下面 build_notifier 的第③點(通知中心會快取圖示,
+    51	# 2026-09-08 從 .v2 進到 .v3:重建過一次之後圖示在通知上不見了,而 app 裡的 icns
+    52	# 檔渲染出來是對的、簽章也有效——所以是快取,不是檔案。換號是唯一逼它重讀的辦法。
+    53	# 換識別碼是唯一逼它重讀的辦法)。圖示邏輯以後再動,這個號要往上加。
+    54	NOTIFIER_ID="com.enzo.lumos.watchdog-notifier.v3"
+    55	NOTIFIER_DIR="$DIR/.notifier"
+    56	NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
+    57	ICON_SRC="$(cd "$DIR/.." && pwd)/assets/lumos-icon.png"
+    58	
+    59	# 建好之後要能證明它是完整的,不能只看目錄在不在。
+    60	verify_notifier() {   # $1 = bundle 路徑
+    61	  [ -x "$1/Contents/MacOS/applet" ] || return 1
+    62	  [ -f "$1/Contents/Resources/applet.icns" ] || return 1
+    63	  [ "$(plutil -extract CFBundleIdentifier raw "$1/Contents/Info.plist" 2>/dev/null || echo '')" \
+    64	    = "$NOTIFIER_ID" ] || return 1
+    65	  # ★簽章也要驗★(代碼審 r1 通才席實測抓到,而且是這批最深的一條):
+    66	  # osacompile 會幫 app 簽章,而簽章的雜湊★包含 Info.plist 的內容★——所以「簽完之後才用
+    67	  # plutil 改 Info.plist」等於簽完名才改合約,章當場作廢。實測:剛編完 codesign 是 valid,
+    68	  # 跑完兩行 plutil 之後變成「invalid Info.plist (plist or signature have been modified)」,
+    69	  # 而且系統的權限守門(tccd)會在 log 裡說「認不出這支 app 的身分」。
+    70	  # 後果不只是難看:章壞掉時 applet 裡的 do shell script 會被★靜默擋掉★
+    71	  # ——我原本用它來回報「我真的跑到了」,結果那條回報永遠不會發生。重簽之後兩件事都好了。
+    72	  codesign --verify --deep --strict "$1" >/dev/null 2>&1 || return 1
+    73	  return 0
+    74	}
+    75	
+    76	build_notifier() {
+    77	  for c in osacompile sips iconutil plutil; do
+    78	    command -v "$c" >/dev/null 2>&1 || { echo "缺 $c,跳過通知圖示這一步(通知照發,只是用系統預設圖示)"; return 1; }
+    79	  done
+    80	  [ -f "$ICON_SRC" ] || { echo "找不到圖檔 $ICON_SRC,跳過通知圖示這一步"; return 1; }
+    81	  local tmp; tmp="$(mktemp -d)" || return 1
+    82	  # ★中途被砍也要清掉暫存★(代碼審 r1 外家席):沒有 trap 的話 signal 中止會留下整個目錄。
+    83	  trap 'rm -rf "$tmp" 2>/dev/null || true' RETURN
+    84	  local iset="$tmp/lumos.iconset"; mkdir -p "$iset" || return 1
+    85	  local s
+    86	  for s in 16 32 128 256 512; do
+    87	    sips -z "$s" "$s" "$ICON_SRC" --out "$iset/icon_${s}x${s}.png" >/dev/null 2>&1 || return 1
+    88	    sips -z $((s*2)) $((s*2)) "$ICON_SRC" --out "$iset/icon_${s}x${s}@2x.png" >/dev/null 2>&1 || return 1
+    89	  done
+    90	  iconutil -c icns "$iset" -o "$tmp/lumos.icns" >/dev/null 2>&1 || return 1
+    91	
+    92	  # ★applet 一定要 quit★:不加的話它會留在事件迴圈裡不結束,每小時一則就是每小時一個殭屍行程。
+    93	  # ★訊息用檔案傳,不用 open --args★(2026-09-07 實測):`open -a APP --args …` 傳的參數
+    94	  #   **不會**進到 applet 的 `on run argv`——探針證明 applet 有被啟動、但 argv 是空的。
+    95	  # ★放棄「留印子回報有沒有送出」那條★:本來想讓 applet 用 do shell script 摸一個檔案回報,
+    96	  #   實測未簽名 app 的 do shell script 會被系統**靜默擋掉**(不報錯、什麼都不做),
+    97	  #   寫了也是死碼。誠實的結論寫在 notify() 那邊。
+    98	  # ★handler 一定要寫成 `on run`,不能寫 `on run argv`★(實測):有 argv 的版本用
+    99	  #   `open -a APP --args …` 啟動時,applet ★整個不會執行★(連第一行都沒跑到),
+   100	  #   而 open 照樣回 0。所以訊息用檔案傳。
+   101	  cat > "$tmp/notify.applescript" <<APPLESCRIPT
+   102	on run
+   103		set msgFile to "$NOTIFIER_DIR/message.txt"
+   104		set markFile to "$NOTIFIER_DIR/.ran"
+   105		set theMsg to "(讀不到訊息)"
+   106		try
+   107			set theMsg to (read POSIX file msgFile as «class utf8»)
+   108		end try
+   109		display notification theMsg with title "Lumos 治理看門狗"
+   110		try
+   111			do shell script "/usr/bin/touch " & quoted form of markFile
+   112		end try
+   113	end run
+   114	APPLESCRIPT
+   115	
+   116	  # ★在暫存區建完、驗過,才換上去★(代碼審 r1 外家席判 major):
+   117	  # 第一版是「先 rm 掉正式的那份,再直接在正式路徑編譯」——編譯失敗就留下半成品,
+   118	  # 而 notify() 只用 `[ -d ]` 判斷,會把半成品當成可用,靜默走進一條發不出通知的路。
+   119	  local staged="$tmp/LumosWatchdog.app"
+   120	  osacompile -o "$staged" "$tmp/notify.applescript" >/dev/null 2>&1 || return 1
+   121	  cp "$tmp/lumos.icns" "$staged/Contents/Resources/applet.icns" || return 1
+   122	  plutil -replace CFBundleIdentifier -string "$NOTIFIER_ID" "$staged/Contents/Info.plist" >/dev/null || return 1
+   123	  plutil -replace CFBundleName -string "Lumos 治理看門狗" "$staged/Contents/Info.plist" >/dev/null || return 1
+   124	  # ★換圖示要三件事一起做,少一件都還是預設的卷軸★(2026-09-07 一步一步試出來的):
+   125	  #  ① 把 osacompile 附的 Assets.car 刪掉。那是一份「編譯過的圖示目錄」,裡面裝著預設的
+   126	  #     applet 圖示,而 macOS ★優先用它★,不看我們放的那個 .icns。只放 icns 沒有用。
+   127	  #  ② 重簽(下面那行)。簽章的雜湊包含 Info.plist,改完不重簽章就作廢。
+   128	  #  ③ 換一個 bundle 識別碼並重新註冊。★通知中心會記住某個識別碼第一次註冊時的圖示★
+   129	  #     ——前兩件做對了但沿用舊識別碼,它還是給你看快取住的舊圖示。
+   130	  #     所以識別碼帶一個版本尾巴;圖示邏輯以後再改,把尾巴往上加一號。
+   131	  #     代價:換識別碼等於一個新 app,通知權限要重新給——所以裝完一定要當場發一則請人確認。
+   132	  rm -f "$staged/Contents/Resources/Assets.car"
+   133	  plutil -remove CFBundleIconName "$staged/Contents/Info.plist" >/dev/null 2>&1 || true
+   134	  plutil -replace CFBundleIconFile -string "applet" "$staged/Contents/Info.plist" >/dev/null || return 1
+   135	  codesign -f -s - "$staged" >/dev/null 2>&1 || { echo "重簽失敗" >&2; return 1; }
+   136	  verify_notifier "$staged" || { echo "建出來的 app 不完整或簽章不對,不換上去(舊的那份原封不動)" >&2; return 1; }
+   137	
+   138	  mkdir -p "$NOTIFIER_DIR" || return 1
+   139	  local old="$NOTIFIER.old.$$"
+   140	  if [ -d "$NOTIFIER" ]; then mv "$NOTIFIER" "$old" 2>/dev/null || return 1; fi
+   141	  if ! mv "$staged" "$NOTIFIER" 2>/dev/null; then
+   142	    [ -d "$old" ] && mv "$old" "$NOTIFIER" 2>/dev/null || true   # 換不上去就把舊的放回來
+   143	    return 1
+   144	  fi
+   145	  rm -rf "$old" 2>/dev/null || true
+   146	  # 明確叫 LaunchServices 重讀這支(只 touch 不夠可靠)
+   147	  local lsr="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+   148	  [ -x "$lsr" ] && "$lsr" -f "$NOTIFIER" >/dev/null 2>&1
+   149	  touch "$NOTIFIER"
+   150	  return 0
+   151	}
+   152	
+   153	# 發一則通知。回 0 = ★applet 真的跑到了★(它自己摸了一個印子),
+   154	# 回 1 = 沒跑到(bundle 壞了、啟動失敗、或簽章壞到 do shell script 被擋)。
+   155	# ★但「跑到了」≠「使用者看得到」★:通知權限被關掉時 display notification 不報錯,
+   156	# shell 這一層分辨不出來。實測過三條路,沒有一條能確認「真的顯示了」:
+   157	#   ①open 的回傳碼——app 一跑就失敗它照樣回 0(故意 error 的 applet 實測 rc=0);
+   158	#   ②applet 自己回報——就是現在這條,它證明「跑到了」但不證明「看得到」;
+   159	#   ③查通知權限——沒有官方 CLI,去翻 NotificationCenter 的 sqlite 是 SIP 保護、格式沒保證,
+   160	#     為了一個提醒功能賭未公開內部格式不划算,不做。
+   161	# 所以「權限被關掉 = 靜默不喊」這個洞★這一層補不起來★,只能靠安裝時請人確認一次,
+   162	# 加上另外兩條不受通知權限影響的通道(這支的紀錄檔、健檢的 [A1] 段)。
+   163	try_notify() {   # $1 = 訊息
+   164	  mkdir -p "$NOTIFIER_DIR" 2>/dev/null || return 1
+   165	  printf '%s' "$1" > "$NOTIFIER_DIR/message.txt" 2>/dev/null || return 1
+   166	  rm -f "$NOTIFIER_DIR/.ran" 2>/dev/null || true
+   167	  open -a "$NOTIFIER" >/dev/null 2>&1 || return 1
+   168	  local i
+   169	  for i in 1 2 3 4 5 6 7 8 9 10; do
+   170	    [ -f "$NOTIFIER_DIR/.ran" ] && return 0
+   171	    python3 -c "import time;time.sleep(0.5)" 2>/dev/null || sleep 1
+   172	  done
+   173	  return 1
+   174	}
+   175	
+   176	case "${1:-install}" in
+   177	  --status|status) status; exit 0 ;;
+   178	  --rebuild-notifier)
+   179	    build_notifier || { echo "通知 app 建不起來——看門狗會退回系統預設圖示的通知" >&2; exit 1; }
+   180	    echo "通知 app 重建好了:$NOTIFIER"
+   181	    try_notify "重建完成——這則通知左邊應該是 Lumos 的四角星。" \
+   182	      || { echo "★通知送不出去★:app 建好了但沒跑到,先查 $NOTIFIER" >&2; exit 1; }
+   183	    exit 0 ;;
+   184	  --uninstall)
+   185	    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+   186	    rm -f "$DEST"
+   187	    rm -rf "$NOTIFIER"    # 建出來的通知 app 也一起清(代碼審 r1 外家席:第一版留著不刪)
+   188	    echo "已移除(含通知 app;系統設定裡那筆通知權限要自己清)。"; status; exit 0 ;;
+   189	esac
+   190	
+   191	[ -f "$SRC" ] || { echo "找不到 plist:$SRC" >&2; exit 1; }
+   192	# plist 裡寫死了腳本的絕對路徑,先確認那個路徑跟這份 repo 對得上,不然裝了也是跑空氣。
+   193	want="$DIR/wrapper-watchdog.sh"
+   194	grep -q -- "$want" "$SRC" || {
+   195	  echo "★plist 裡的腳本路徑跟這份 repo 對不上★" >&2
+   196	  echo "  這份 repo 的腳本在:$want" >&2
+   197	  echo "  plist 裡寫的是    :$(grep -A1 'ProgramArguments' -A3 "$SRC" | grep string | tail -1)" >&2
+   198	  exit 1
+   199	}
+   200	plutil -lint "$SRC" >/dev/null || { echo "plist 格式不合法:$SRC" >&2; exit 1; }
+   201	
+   202	mkdir -p "$(dirname "$DEST")"
+   203	cp "$SRC" "$DEST"
+   204	launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true    # 先卸再裝,才吃得到改過的內容
+   205	launchctl bootstrap "$DOMAIN" "$DEST" || { echo "launchctl bootstrap 失敗" >&2; exit 1; }
+   206	
+   207	# 通知 app 一併建起來,並且★當場發一則★——不是為了好看,是為了讓 macOS 現在就問你
+   208	# 「要不要允許這個 app 發通知」。不在安裝時問,第一次真的出事那天通知會被靜默丟掉,
+   209	# 而那正是這支看門狗存在的理由。
+   210	NOTIFY_OK=unknown
+   211	if build_notifier; then
+   212	  if try_notify "看門狗裝好了。之後它有話要說,就會長這樣。"; then
+   213	    NOTIFY_OK=sent
+   214	  else
+   215	    NOTIFY_OK=failed
+   216	  fi
+   217	else
+   218	  NOTIFY_OK=nobundle
+   219	fi
+   220	
+   221	echo ""
+   222	case "$NOTIFY_OK" in
+   223	  sent)
+   224	    echo "★剛才發了一則測試通知,請確認兩件事★"
+   225	    echo "  1. 右上角有沒有真的跳出來?★沒跳出來就是通知權限沒開★——"
+   226	    echo "     到「系統設定 → 通知」把「Lumos 治理看門狗」打開。"
+   227	    echo "     ★這一步只有你能確認★:通知被權限擋掉時,系統不會給腳本任何錯誤,"
+   228	    echo "     所以它永遠沒辦法自己發現「我喊了但沒人看到」。"
+   229	    echo "  2. 圖示是不是 Lumos 的四角星?不是的話重建一次:"
+   230	    echo "       bash governance/install-watchdog.sh --rebuild-notifier" ;;
+   231	  failed)
+   232	    echo "⚠ 通知 app 建好了,但測試通知沒送出去(applet 沒跑到)。"
+   233	    echo "  看門狗仍然會用系統預設圖示的方式發通知,話講得出去,只是圖示不是自己的。"
+   234	    echo "  想查:bash governance/install-watchdog.sh --rebuild-notifier" ;;
+   235	  nobundle)
+   236	    echo "⚠ 沒有建成自訂圖示的通知 app(缺工具或缺圖檔)。"
+   237	    echo "  不影響告警:看門狗會退回系統預設圖示的通知。" ;;
+   238	esac
+   239	echo ""
+   240	echo "★不管哪一種,桌面通知都只是三條通道裡的一條★——另外兩條是"
+   241	echo "  governance/logs/wrapper-watchdog.log 和 lumos doctor 的 [A1] 段,"
+   242	echo "  那兩條不受通知權限影響。"
+   243	
+   244	echo ""
+   245	echo "裝好了。"
+   246	status
+governance/daily-governance.sh-266-  done
+governance/daily-governance.sh-267-
+governance/daily-governance.sh-268-  # ★寫不進健康檔 = 這一次算失敗★(代碼審 r1 外家 finder 實測:第一版只印一句提醒、
+governance/daily-governance.sh-269-  # total 不動,五步全成功時整支照樣回 0——排程端看到「成功」,而看門狗那邊要等 36 小時
+governance/daily-governance.sh-270-  # 才會從舊時間戳發現不對。既然這一批的核心賣點就是「死了要有人知道」,不能在自己的
+governance/daily-governance.sh-271-  # 收尾這一步製造一個「回 0 但其實沒留下任何紀錄」的洞)。
+governance/daily-governance.sh-272-  if ! write_health "$rc1" "$rc2" "$rc3" "$rc4" "$rc5" "$total"; then
+governance/daily-governance.sh-273-    echo "[$(ts)] ★健康狀態檔寫不進去($HEALTH)★——看門狗會把這次當成沒跑完,所以這一次整支算失敗" >&2
+governance/daily-governance.sh-274-    total=1
+governance/daily-governance.sh-275-  fi
+governance/daily-governance.sh-276-
+governance/daily-governance.sh-277-  echo "[$(ts)] 五步 rc=$rc1/$rc2/$rc3/$rc4/$rc5,加總 $total"
+governance/daily-governance.sh:278:  echo "[$(ts)] daily-governance wrapper 完成"
+governance/daily-governance.sh-279-  # ★函式最後一行要是真正的加總★:原本最後一條是無條件的收尾 echo,
+governance/daily-governance.sh-280-  # 所以這支不管發生什麼都回 0(不是我原本以為的「回最後一步的結果」)。
+governance/daily-governance.sh-281-  return "$total"
+governance/daily-governance.sh-282-}
+governance/daily-governance.sh-283-
+governance/daily-governance.sh-284-main "$@"; exit
+--
+scripts/test_lumos.py-29056-    prelude_ok = _re.compile(r'^(#.*|\s*|set .*|DIR=.*|ts\(\) \{.*\}|mkdir -p "\$DIR/logs")$')
+scripts/test_lumos.py-29057-    bad_pre = [(i + 1, l) for i, l in enumerate(lines[:ms]) if not prelude_ok.match(l)]
+scripts/test_lumos.py-29058-    check("daily-governance: main() 之前只有前奏(shebang/註解/set/DIR/ts/mkdir),沒有可執行主體", not bad_pre, str(bad_pre[:3]))
+scripts/test_lumos.py-29059-    after = [(i + 1, l) for i, l in enumerate(lines[me + 1:], me + 1) if l.strip() and not l.lstrip().startswith("#") and l.strip() != 'main "$@"; exit']
+scripts/test_lumos.py-29060-    check("daily-governance: } 之後除註解只剩 main \"$@\"; exit 這一行", not after, str(after[:3]))
+scripts/test_lumos.py-29061-    check("daily-governance: 最後一行是 main \"$@\"; exit(exit 同一行,防回頭讀檔)", lines[-1].strip() == 'main "$@"; exit', lines[-1])
+scripts/test_lumos.py-29062-    calls = [l for l in lines if _re.search(r'"\$DIR/[a-z-]+\.sh"|python3 scripts/lumos', l) and not l.lstrip().startswith("#")]
+scripts/test_lumos.py-29063-    check("daily-governance: 所有子腳本/lumos 呼叫都在 main() 體內", calls and all(l in body for l in calls), f"{len(calls)} 個呼叫")
+scripts/test_lumos.py-29064-    # 通才席 r1 第二條:整步被刪也曾假綠。五步名冊釘死——要拿掉一步就得連這裡一起改(守衛的意思就是不能默默掉)。
+scripts/test_lumos.py-29065-    roster = ['"$DIR/ai-governance-research.sh"', '"$DIR/autonomous-loop.sh" --dry-run', '"$DIR/lint-watch-check.sh"', "python3 scripts/lumos doctor --ci", "python3 scripts/lumos testmap build"]
+scripts/test_lumos.py-29066-    missing = [r for r in roster if r not in body]
+scripts/test_lumos.py-29067-    check("daily-governance: 五步名冊(日報/自主迴圈/lint-watch/doctor --ci/testmap build)都在 main() 體內", not missing, str(missing))
+scripts/test_lumos.py:29068:    check("daily-governance: 收尾 echo 在體內", 'echo "[$(ts)] daily-governance wrapper 完成"' in body, "")
+scripts/test_lumos.py-29069-    r = _sp.run(["bash", "-n", str(p)], capture_output=True, text=True)
+scripts/test_lumos.py-29070-    check("daily-governance: bash -n 語法過", r.returncode == 0, r.stderr[:160])
+scripts/test_lumos.py-29071-
+scripts/test_lumos.py-29072-
+scripts/test_lumos.py-29073-def t_license_headers_travel_with_vendored_files():
+scripts/test_lumos.py-29074-    """授權標示必須跟著「會被複製進別人專案」的檔案走(2026-09-06 定 MIT)。
+scripts/test_lumos.py-29075-
+scripts/test_lumos.py-29076-    為什麼要機械守:根目錄的 LICENSE ★刻意不在 _VENDORED_TOOLKIT 白名單裡★——deinit 會對白名單
+scripts/test_lumos.py-29077-    每一項刪檔,加進去等於在消費專案刪掉使用者自己的 LICENSE。所以合規完全靠檔頭,而檔頭是靠人手
+scripts/test_lumos.py-29078-    維持的東西,重構或 slim-gen 改寫時最容易被靜默弄丟。
+scripts/test_lumos.py-29079-
+scripts/test_lumos.py-29080-    ★這支測試被打臉四次才長成現在這樣,每一次的壞例子都留在下面的斷言裡★:
+--
+scripts/test_lumos.py-29942-                    capture_output=True, text=True, timeout=120)
+scripts/test_lumos.py-29943-        check("★健康檔寫不進去 → 整支要回非零★(第一版回 0,偽裝成功)",
+scripts/test_lumos.py-29944-              r.returncode != 0, "rc=%d\n%s" % (r.returncode, r.stderr[-300:]))
+scripts/test_lumos.py-29945-        check("★而且要講出「不是普通檔案」這件事★,不能只說寫不進去",
+scripts/test_lumos.py-29946-              "不是一個普通檔案" in r.stderr, r.stderr[-300:])
+scripts/test_lumos.py-29947-        leftovers = list((g / ".daily-governance-health.json").iterdir())
+scripts/test_lumos.py-29948-        check("★失敗時不准留垃圾暫存檔★", not leftovers, [p.name for p in leftovers])
+scripts/test_lumos.py-29949-    finally:
+scripts/test_lumos.py-29950-        _sh.rmtree(root, ignore_errors=True)
+scripts/test_lumos.py-29951-    print("  ✓ t_daily_wrapper_health_write_failure_is_a_failure")
+scripts/test_lumos.py-29952-
+scripts/test_lumos.py-29953-
+scripts/test_lumos.py:29954:def t_wrapper_watchdog_no_health_but_wrapper_ran():
+scripts/test_lumos.py-29955-    """★健康檔不在時,不准直接斷言「從來沒跑完過」——先問 wrapper 自己的紀錄檔★(2026-09-08)。
+scripts/test_lumos.py-29956-
+scripts/test_lumos.py-29957-    真的講錯過:健康檔不存在,看門狗每天喊一次「這台機器上的 wrapper 從來沒跑完過」,
+scripts/test_lumos.py-29958-    而 wrapper 自己的紀錄檔裡前一天和當天都白紙黑字寫著「完成」。
+scripts/test_lumos.py-29959-    成因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
+scripts/test_lumos.py-29960-    ★這支看門狗只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
+scripts/test_lumos.py-29961-
+scripts/test_lumos.py-29962-    現在:健康檔不在 → 去讀 wrapper 的紀錄檔。最近有跑完就換句話講(仍然要喊,
+scripts/test_lumos.py-29963-    因為那代表看門狗是瞎的),完全找不到才說「從來沒跑完過」。
+scripts/test_lumos.py-29964-    紀錄檔也不在的話退回原本判斷——第二個來源缺席不能讓警報消失。
+scripts/test_lumos.py-29965-    """
+scripts/test_lumos.py-29966-    import shutil as _sh, subprocess as _sp, tempfile as _tf, datetime as _dt
+scripts/test_lumos.py:29967:    _need_src("governance/wrapper-watchdog.sh")
+scripts/test_lumos.py-29968-    repo = Path(GRAPHCTL).resolve().parent.parent
+scripts/test_lumos.py-29969-    root = Path(_tf.mkdtemp(prefix="gctl-wdlog-"))
+scripts/test_lumos.py-29970-    try:
+scripts/test_lumos.py-29971-        g = root / "governance"; (g / "logs").mkdir(parents=True)
+scripts/test_lumos.py:29972:        wd = g / "wrapper-watchdog.sh"
+scripts/test_lumos.py:29973:        wd.write_text((repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8"),
+scripts/test_lumos.py-29974-                      encoding="utf-8")
+scripts/test_lumos.py-29975-        wlog = g / "logs" / "daily-wrapper.log"
+scripts/test_lumos.py:29976:        st = g / ".wrapper-watchdog-state"
+scripts/test_lumos.py-29977-
+scripts/test_lumos.py-29978-        def _run():
+scripts/test_lumos.py-29979-            st.unlink(missing_ok=True)
+scripts/test_lumos.py-29980-            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+scripts/test_lumos.py-29981-
+scripts/test_lumos.py-29982-        def _stamp(h):
+scripts/test_lumos.py-29983-            return (_dt.datetime.now() - _dt.timedelta(hours=h)).strftime("%Y-%m-%d %H:%M:%S")
+scripts/test_lumos.py-29984-
+scripts/test_lumos.py-29985-        # ① 沒有健康檔、也沒有紀錄檔 → 維持原本那句(第二個來源缺席不改變結論)
+scripts/test_lumos.py-29986-        r = _run()
+scripts/test_lumos.py-29987-        check("★沒有健康檔又沒有紀錄檔 → 還是要說「從來沒跑完過」★",
+scripts/test_lumos.py-29988-              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+scripts/test_lumos.py-29989-
+scripts/test_lumos.py-29990-        # ② 沒有健康檔,但紀錄檔說兩小時前才跑完 → 不准說「從來沒跑完過」
+scripts/test_lumos.py-29991-        # ★時間戳只算一次★:算兩次的話跨秒就對不上,那是測試自己的時序 bug(踩過)
+scripts/test_lumos.py-29992-        fin2 = _stamp(2)
+scripts/test_lumos.py-29993-        wlog.write_text("[%s] daily-governance wrapper 開始\n"
+scripts/test_lumos.py:29994:                        "[%s] daily-governance wrapper 完成\n" % (_stamp(2.2), fin2),
+scripts/test_lumos.py-29995-                        encoding="utf-8")
+scripts/test_lumos.py-29996-        r = _run()
+scripts/test_lumos.py-29997-        check("★紀錄檔說最近才跑完 → 不准講「從來沒跑完過」★",
+scripts/test_lumos.py-29998-              "從來沒跑完過" not in r.stdout, r.stdout + r.stderr)
+scripts/test_lumos.py-29999-        check("★要改講「有在跑,但沒留下健康狀態檔」★",
+scripts/test_lumos.py-30000-              "有在跑" in r.stdout and "健康狀態檔" in r.stdout, r.stdout + r.stderr)
+scripts/test_lumos.py-30001-        check("★而且要把紀錄檔上那個時間講出來(人才查得下去)★",
+scripts/test_lumos.py-30002-              fin2 in r.stdout, r.stdout)
+scripts/test_lumos.py-30003-        check("★這個狀態仍然要喊★(看門狗瞎了值得知道一次,只是不能講假話)",
+scripts/test_lumos.py-30004-              r.stdout.strip() != "", "什麼都沒印=這個狀態被靜默吞掉了")
+scripts/test_lumos.py-30005-
+scripts/test_lumos.py-30006-        # ③ 紀錄檔上最後一次跑完已經很久 → 回到「從來沒跑完過」
+scripts/test_lumos.py:30007:        wlog.write_text("[%s] daily-governance wrapper 完成\n" % _stamp(80), encoding="utf-8")
+scripts/test_lumos.py-30008-        r = _run()
+scripts/test_lumos.py-30009-        check("★紀錄檔上最後一次已經超過門檻 → 照樣說「從來沒跑完過」★",
+scripts/test_lumos.py-30010-              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+scripts/test_lumos.py-30011-
+scripts/test_lumos.py-30012-        # ④ 紀錄檔有內容但沒有任何「完成」→ 不能被誤讀成跑完過
+scripts/test_lumos.py-30013-        wlog.write_text("[%s] daily-governance wrapper 開始\n"
+scripts/test_lumos.py-30014-                        "[%s] 治理日報 段結束 rc=0\n" % (_stamp(1), _stamp(0.9)), encoding="utf-8")
+scripts/test_lumos.py-30015-        r = _run()
+scripts/test_lumos.py-30016-        check("★只有「開始」沒有「完成」→ 不算跑完★",
+scripts/test_lumos.py-30017-              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+scripts/test_lumos.py-30018-    finally:
+scripts/test_lumos.py-30019-        _sh.rmtree(root, ignore_errors=True)
+--
+scripts/test_lumos.py-30027-       而那句話還會誘使人去 kill 一個其實正常的行程。
+scripts/test_lumos.py-30028-    ② finished_at 讀不動 + total=0 → 不准靜默判成正常。第一版時間解析失敗只讓
+scripts/test_lumos.py-30029-       age 變空字串,控制流直接掉到「比 total」,剛好是 0 就給綠燈。
+scripts/test_lumos.py-30030-    ③ 五步全 0、只有 total 壞掉 → 要說「這份檔自相矛盾」。第一版讀 total、健檢讀 steps,
+scripts/test_lumos.py-30031-       同一份檔兩邊講出相反結論(而碼裡還寫著「不會各說各話」)。
+scripts/test_lumos.py-30032-    ④ 它自己的狀態檔壞掉 → 要喊出來。第一版靜默吞掉,邊緣觸發失效、每小時重複喊同一件事。
+scripts/test_lumos.py-30033-    """
+scripts/test_lumos.py-30034-    import datetime as _dt
+scripts/test_lumos.py-30035-    import os as _os
+scripts/test_lumos.py-30036-    import shutil as _sh
+scripts/test_lumos.py-30037-    import subprocess as _sp
+scripts/test_lumos.py-30038-    import tempfile as _tf
+scripts/test_lumos.py:30039:    _need_src("governance/wrapper-watchdog.sh")
+scripts/test_lumos.py-30040-    repo = Path(GRAPHCTL).resolve().parent.parent
+scripts/test_lumos.py-30041-    root = Path(_tf.mkdtemp(prefix="gctl-wd-"))
+scripts/test_lumos.py-30042-    try:
+scripts/test_lumos.py-30043-        g = root / "governance"
+scripts/test_lumos.py-30044-        g.mkdir()
+scripts/test_lumos.py:30045:        wd = g / "wrapper-watchdog.sh"
+scripts/test_lumos.py:30046:        wd.write_text((repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8"),
+scripts/test_lumos.py-30047-                      encoding="utf-8")
+scripts/test_lumos.py-30048-        hp = g / ".daily-governance-health.json"
+scripts/test_lumos.py:30049:        st = g / ".wrapper-watchdog-state"
+scripts/test_lumos.py-30050-
+scripts/test_lumos.py-30051-        def _ago(h):
+scripts/test_lumos.py-30052-            return (_dt.datetime.now(_dt.timezone.utc)
+scripts/test_lumos.py-30053-                    - _dt.timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+scripts/test_lumos.py-30054-
+scripts/test_lumos.py-30055-        def _run():
+scripts/test_lumos.py-30056-            st.unlink(missing_ok=True)
+scripts/test_lumos.py-30057-            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+scripts/test_lumos.py-30058-
+scripts/test_lumos.py-30059-        # ① 逾期的健康檔 + 一支真的在跑的持鎖行程 → 不喊
+scripts/test_lumos.py-30060-        hp.write_text('{"finished_at":"%s","steps":{"governance":0},"total":0}' % _ago(37),
+scripts/test_lumos.py-30061-                      encoding="utf-8")
+--
+scripts/test_lumos.py-30169-        check("★時間欄位型別不對也要走黃色警告★(第一版拋 AttributeError 被外層吃成綠勾)",
+scripts/test_lumos.py-30170-              "健康紀錄的時間讀不動" in out, out[-600:])
+scripts/test_lumos.py-30171-        check("不准退化成 fail-open 的那句「跳過」",
+scripts/test_lumos.py-30172-              "治理腳本健康觀測跳過" not in out, out[-600:])
+scripts/test_lumos.py-30173-
+scripts/test_lumos.py-30174-        # A1:看門狗沒在跑 → 要喊
+scripts/test_lumos.py-30175-        (gov / ".daily-governance-health.json").write_text(
+scripts/test_lumos.py-30176-            _j.dumps({"finished_at": _ago(2), "steps": {"governance": 0}, "total": 0}),
+scripts/test_lumos.py-30177-            encoding="utf-8")
+scripts/test_lumos.py-30178-        out = _doctor()
+scripts/test_lumos.py-30179-        check("★有治理腳本但看門狗沒在跑,要喊★(不然看門狗自己死掉也沒人知道)",
+scripts/test_lumos.py-30180-              "看門狗沒在跑" in out, out[-600:])
+scripts/test_lumos.py:30181:        (gov / ".wrapper-watchdog-state").write_text("ok|x", encoding="utf-8")
+scripts/test_lumos.py-30182-        out = _doctor()
+scripts/test_lumos.py-30183-        check("看門狗剛跑過就不喊", "看門狗沒在跑" not in out, out[-600:])
+scripts/test_lumos.py-30184-
+scripts/test_lumos.py-30185-        # A2:治理帳裡有壞行 → 只跳那一行,統計照算
+scripts/test_lumos.py-30186-        def _line(day, i):
+scripts/test_lumos.py-30187-            return _j.dumps({"ts": "%sT10:00:%02d+08:00" % (day, i % 60), "gate": "x"},
+scripts/test_lumos.py-30188-                            ensure_ascii=False)
+scripts/test_lumos.py-30189-        today = _dt.date.today()
+scripts/test_lumos.py-30190-        rows = []
+scripts/test_lumos.py-30191-        for k in range(1, 8):
+scripts/test_lumos.py-30192-            rows += [_line((today - _dt.timedelta(days=k)).isoformat(), i) for i in range(40)]
+scripts/test_lumos.py-30193-        for k in range(8, 16):
+--
+scripts/test_lumos.py-30241-    check("★驗收也要驗簽章★(只查檔案在不在,驗不出章壞掉)",
+scripts/test_lumos.py-30242-          "codesign --verify" in src, "verify_notifier 沒有驗簽章")
+scripts/test_lumos.py-30243-
+scripts/test_lumos.py-30244-    # ── 結構:applet 的 handler 不准吃 argv ──
+scripts/test_lumos.py-30245-    m = _re.search(r"^on run(?P<rest>.*)$", src, _re.M)
+scripts/test_lumos.py-30246-    check("★applet 的 handler 要寫 `on run`,不能吃 argv★(吃 argv 就整支不執行,而 open 照樣回 0)",
+scripts/test_lumos.py-30247-          m is not None and m.group("rest").strip() == "", m.group(0) if m else "找不到 on run")
+scripts/test_lumos.py-30248-    check("訊息要從檔案讀(因為參數傳不進去)", "message.txt" in src, "沒有用檔案傳訊息")
+scripts/test_lumos.py-30249-    check("applet 要留「我跑到了」的印子,退路才有辦法觸發", '"$NOTIFIER_DIR/.ran"' in src or "markFile" in src,
+scripts/test_lumos.py-30250-          "沒有印子機制")
+scripts/test_lumos.py-30251-
+scripts/test_lumos.py-30252-    # ── 結構:兩支腳本對同一個 bundle 的判斷要一致 ──
+scripts/test_lumos.py:30253:    wd = (repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8")
+scripts/test_lumos.py-30254-    check("★看門狗判斷 app 可不可用要看執行檔,不是只看目錄在不在★"
+scripts/test_lumos.py-30255-          "(半成品 bundle 的目錄也存在,會被當成可用)",
+scripts/test_lumos.py-30256-          "Contents/MacOS/applet" in wd, "還在用 [ -d ] 判斷")
+scripts/test_lumos.py-30257-    check("移除時要把建出來的 app 一起清掉", 'rm -rf "$NOTIFIER"' in src, "--uninstall 沒清 app")
+scripts/test_lumos.py-30258-
+scripts/test_lumos.py-30259-    # ── 結構:換圖示的三件事缺一不可 ──
+scripts/test_lumos.py-30260-    # 2026-09-07 一步一步試出來的:只放 icns 沒有用;三件事漏任何一件,通知上還是預設的卷軸。
+scripts/test_lumos.py-30261-    check("★①要刪掉 osacompile 附的 Assets.car★"
+scripts/test_lumos.py-30262-          "(那份編譯過的圖示目錄裝著預設 applet 圖示,macOS 優先用它、不看我們放的 icns)",
+scripts/test_lumos.py-30263-          "Assets.car" in src, "沒刪 Assets.car,圖示會是預設的卷軸")
+scripts/test_lumos.py-30264-    i_car = src.find("rm -f \"$staged/Contents/Resources/Assets.car\"")
+scripts/test_lumos.py-30265-    check("★②重簽要排在刪 Assets.car 與改 Info.plist 之後★",
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "nl -ba governance/wrapper-watchdog.sh | sed -n '115,270p'; nl -ba scripts/test_lumos.py | sed -n '29950,30030p'; nl -ba scripts/test_lumos.py | sed -n '30220,30290p'; rg -n 't_wrapper_watchdog_no_health_but_wrapper_ran|t_watchdog_notifier|NOTIFIER_ID|CFBundleIdentifier' scripts/test_lumos.py governance/install-watchdog.sh"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+   115	  mv "$WLOCK" "$WLOCK.dead.$$" 2>/dev/null || return 1
+   116	  rm -rf "$WLOCK.dead.$$" 2>/dev/null || true
+   117	  mkdir "$WLOCK" 2>/dev/null || return 1
+   118	  return 0
+   119	}
+   120	
+   121	# 被監看那支現在是不是真的在跑(看它的鎖)。回傳 0=在跑,1=沒在跑。
+   122	# ★不看鎖就會誤報★(代碼審 r1 併發席實測):自主迴圈那段可以跑三小時,只看
+   123	# finished_at 的年齡,會在它正在跑的時候喊「超過 36 小時沒跑完、它不會自己喊」
+   124	# ——而那句話還會誘使人去 kill 一個其實正常的行程,一 kill 就掉進殘鎖接管那條路。
+   125	wrapper_running() {
+   126	  [ -d "$LOCKDIR" ] || return 1
+   127	  local p; p="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+   128	  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+   129	  kill -0 "$p" 2>/dev/null || return 1
+   130	  local cmd; cmd="$(ps -p "$p" -o command= 2>/dev/null || echo '')"
+   131	  case "$cmd" in *daily-governance*) return 0 ;; *) return 1 ;; esac
+   132	}
+   133	lock_age() {
+   134	  python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo ''
+   135	}
+   136	
+   137	# ★健康檔不在時,要去問第二個來源再開口★(2026-09-08 真的講錯話之後補的)。
+   138	# 出過的事:健康檔不存在,這支就每天喊一次「這台機器上的 wrapper 從來沒跑完過」
+   139	# ——而 wrapper 自己的紀錄檔裡,前一天和當天都白紙黑字寫著「完成」。
+   140	# 原因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
+   141	# ★這支只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
+   142	# 現在的規矩:健康檔不在 → 去看 wrapper 自己的紀錄檔;它最近有跑完的話,
+   143	# 講的話要換成「有在跑但沒留下健康檔」,而不是「從來沒跑完過」。
+   144	# ★仍然要喊★:那個狀態代表這支看門狗是瞎的,值得知道一次;只是不能講假話。
+   145	# 紀錄檔的路徑跟 launchd 那份 plist 的 StandardOutPath 對齊;檔不在就當問不出來,
+   146	# 退回原本的判斷(fail-safe:第二個來源缺席不會讓警報消失)。
+   147	WRAPPER_LOG="$DIR/logs/daily-wrapper.log"
+   148	wrapper_log_last_finish() {   # 印出最後一次「完成」的時間(本地時間字串);問不出來印空字串
+   149	  [ -f "$WRAPPER_LOG" ] || { echo ''; return 0; }
+   150	  python3 - "$WRAPPER_LOG" <<'PY' 2>/dev/null || echo ''
+   151	import re, sys
+   152	last = ""
+   153	try:
+   154	    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+   155	        for ln in fh:
+   156	            m = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*wrapper 完成", ln)
+   157	            if m:
+   158	                last = m.group(1)
+   159	except OSError:
+   160	    pass
+   161	print(last)
+   162	PY
+   163	}
+   164	secs_since_local() {   # $1="YYYY-MM-DD HH:MM:SS"(本地);印出距今幾秒,算不出來印空字串
+   165	  [ -n "$1" ] || { echo ''; return 0; }
+   166	  python3 -c "
+   167	import datetime,sys
+   168	d=datetime.datetime.strptime(sys.argv[1], '%Y-%m-%d %H:%M:%S')
+   169	print(int((datetime.datetime.now()-d).total_seconds()))" "$1" 2>/dev/null || echo ''
+   170	}
+   171	
+   172	# 健康檔一次讀出四件事,四行:finished_at / 哪些步驟非零 / total 跟 steps 對不對得上 / steps 讀不讀得到。
+   173	# ★不能只讀 total★(代碼審 r1 邊界席):健檢的 [A1] 段讀的是 steps,這支第一版讀 total,
+   174	# 餵一份「五步全 0、只有 total 壞掉」的檔,兩邊會講出完全相反的結論——而我在健檢那段
+   175	# 的註解裡還寫了「兩條讀同一份健康檔,所以不會各說各話」,那句話當場被打臉。
+   176	# 現在兩邊都以 steps 為準,total 只當交叉檢查:對不上就是這份檔壞了,單獨喊一種狀態。
+   177	read_health() {
+   178	  python3 - "$HEALTH" <<'PY' 2>/dev/null || return 1
+   179	import json, sys
+   180	d = json.load(open(sys.argv[1]))
+   181	fin = d.get("finished_at")
+   182	fin = fin if isinstance(fin, str) else ""
+   183	steps = d.get("steps")
+   184	if isinstance(steps, dict):
+   185	    bad = ",".join(str(k) for k, v in steps.items() if v != 0)
+   186	    agg = 1 if bad else 0
+   187	    mismatch = "1" if d.get("total") != agg else "0"
+   188	    readable = "1"
+   189	else:
+   190	    bad, mismatch, readable = "", "0", "0"
+   191	print(fin); print(bad); print(mismatch); print(readable)
+   192	PY
+   193	}
+   194	
+   195	main() {
+   196	  take_wlock || { echo "[$(ts)] 另一份看門狗正在跑,這次跳過"; return 0; }
+   197	  trap wlock_release EXIT
+   198	
+   199	  # ★邊緣觸發★(設計審 r2 外家席):照字面每小時寫一筆,故障持續期間一天寫 24 筆同樣的東西
+   200	  # ——而這一案自己正在處理帳本膨脹。只在「第一次發現 / 狀態改變 / 換日 / 恢復」時寫。
+   201	  local prev=""; [ -f "$STATE" ] && prev="$(cat "$STATE" 2>/dev/null || echo '')"
+   202	  local today; today="$(date +%F)"
+   203	  local now_state="" msg=""
+   204	
+   205	  if wrapper_running; then
+   206	    local la; la="$(lock_age)"
+   207	    if [ -n "$la" ] && [ "$la" -gt "$STALE_SEC" ]; then
+   208	      now_state="hung|$today"
+   209	      msg="每日治理 wrapper 從 $(( la / 3600 )) 小時前就一直在跑、沒有結束——多半是卡住了。鎖在 $LOCKDIR。"
+   210	    else
+   211	      now_state="running|$today"   # 正在跑,沒事,不喊
+   212	    fi
+   213	  elif [ ! -f "$HEALTH" ]; then
+   214	    # ★檔案不存在 ≠ 死掉★(設計審 r1 外家席:第一版完全沒定義這個語意)。
+   215	    # 新機、重新 clone、清過紀錄都會這樣,訊息要跟「死掉了」分開講,而且不算逾期。
+   216	    # ★而且不存在也 ≠ 沒跑過★(2026-09-08):先問 wrapper 自己的紀錄檔。
+   217	    local lf ls_
+   218	    lf="$(wrapper_log_last_finish)"; ls_="$(secs_since_local "$lf")"
+   219	    if [ -n "$ls_" ] && [ "$ls_" -le "$STALE_SEC" ]; then
+   220	      now_state="nohealth|$today"
+   221	      msg="每日治理 wrapper 有在跑(它自己的紀錄檔:最後一次完成 $lf),但沒有留下健康狀態檔——這支看門狗因此看不到它的結果。多半是排程跑的還是舊版本,或者那個檔被清掉了。"
+   222	    else
+   223	      now_state="never|$today"
+   224	      msg="這台機器上的每日治理 wrapper 從來沒跑完過(沒有健康狀態檔,它自己的紀錄檔裡也找不到最近跑完的紀錄)。第一次跑過就會有。"
+   225	    fi
+   226	  else
+   227	    local hr fin bad mismatch readable age
+   228	    if ! hr="$(read_health)"; then
+   229	      now_state="unreadable|$today"
+   230	      msg="每日治理 wrapper 的健康狀態檔讀不動($HEALTH)——看不出它跑了沒。"
+   231	    else
+   232	      fin="$(printf '%s\n' "$hr" | sed -n 1p)"
+   233	      bad="$(printf '%s\n' "$hr" | sed -n 2p)"
+   234	      mismatch="$(printf '%s\n' "$hr" | sed -n 3p)"
+   235	      readable="$(printf '%s\n' "$hr" | sed -n 4p)"
+   236	      age=""
+   237	      [ -n "$fin" ] && age="$(python3 -c "
+   238	import datetime,sys
+   239	d=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
+   240	print(int((datetime.datetime.now(datetime.timezone.utc)-d).total_seconds()))" "$fin" 2>/dev/null || echo '')"
+   241	      if [ -z "$age" ] || [ "$readable" != "1" ]; then
+   242	        # ★時間讀不動就是讀不動,不能往下掉進「沒事」★(代碼審 r1 外家 finder 實測:
+   243	        # 第一版時間解析失敗只讓 age 變空字串,控制流直接落到下面比 total,total 剛好是 0
+   244	        # 就靜默判成正常——一份完全讀不懂的健康檔換來一個綠燈)。
+   245	        now_state="unreadable|$today"
+   246	        msg="每日治理 wrapper 的健康狀態檔內容不對($HEALTH:時間或 steps 欄讀不動)——看不出它跑了沒。"
+   247	      elif [ "$age" -gt "$STALE_SEC" ]; then
+   248	        local aw; aw="$(awake_sec || echo '')"
+   249	        if [ -n "$aw" ] && [ "$aw" -lt "$AWAKE_MIN_SEC" ]; then
+   250	          now_state="justwoke|$today"   # 剛醒來,排程還沒輪到——不喊(那 129 小時空窗的形態)
+   251	        else
+   252	          now_state="stale|$today"
+   253	          msg="每日治理 wrapper 超過 36 小時沒跑完(最後一次 $fin)——第 3-5 步可能整批沒跑,而它不會自己喊。"
+   254	        fi
+   255	      elif [ "$mismatch" = "1" ]; then
+   256	        now_state="inconsistent|$today"
+   257	        msg="每日治理 wrapper 的健康狀態檔自相矛盾($HEALTH 的 total 跟 steps 對不上)——這份檔不能拿來判斷。"
+   258	      elif [ -n "$bad" ]; then
+   259	        now_state="failed|$today"
+   260	        msg="每日治理 wrapper 最後一次跑完但這些步驟失敗:$bad(見 $HEALTH 的 steps 欄)。"
+   261	      else
+   262	        now_state="ok|$today"
+   263	      fi
+   264	    fi
+   265	  fi
+   266	
+   267	  # 恢復也記一筆(不然帳上只看得到壞掉、看不到修好)
+   268	  case "${prev%%|*}" in
+   269	    ""|ok|running) ;;
+   270	    *) case "${now_state%%|*}" in
+ 29950	        _sh.rmtree(root, ignore_errors=True)
+ 29951	    print("  ✓ t_daily_wrapper_health_write_failure_is_a_failure")
+ 29952	
+ 29953	
+ 29954	def t_wrapper_watchdog_no_health_but_wrapper_ran():
+ 29955	    """★健康檔不在時,不准直接斷言「從來沒跑完過」——先問 wrapper 自己的紀錄檔★(2026-09-08)。
+ 29956	
+ 29957	    真的講錯過:健康檔不存在,看門狗每天喊一次「這台機器上的 wrapper 從來沒跑完過」,
+ 29958	    而 wrapper 自己的紀錄檔裡前一天和當天都白紙黑字寫著「完成」。
+ 29959	    成因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
+ 29960	    ★這支看門狗只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
+ 29961	
+ 29962	    現在:健康檔不在 → 去讀 wrapper 的紀錄檔。最近有跑完就換句話講(仍然要喊,
+ 29963	    因為那代表看門狗是瞎的),完全找不到才說「從來沒跑完過」。
+ 29964	    紀錄檔也不在的話退回原本判斷——第二個來源缺席不能讓警報消失。
+ 29965	    """
+ 29966	    import shutil as _sh, subprocess as _sp, tempfile as _tf, datetime as _dt
+ 29967	    _need_src("governance/wrapper-watchdog.sh")
+ 29968	    repo = Path(GRAPHCTL).resolve().parent.parent
+ 29969	    root = Path(_tf.mkdtemp(prefix="gctl-wdlog-"))
+ 29970	    try:
+ 29971	        g = root / "governance"; (g / "logs").mkdir(parents=True)
+ 29972	        wd = g / "wrapper-watchdog.sh"
+ 29973	        wd.write_text((repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8"),
+ 29974	                      encoding="utf-8")
+ 29975	        wlog = g / "logs" / "daily-wrapper.log"
+ 29976	        st = g / ".wrapper-watchdog-state"
+ 29977	
+ 29978	        def _run():
+ 29979	            st.unlink(missing_ok=True)
+ 29980	            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+ 29981	
+ 29982	        def _stamp(h):
+ 29983	            return (_dt.datetime.now() - _dt.timedelta(hours=h)).strftime("%Y-%m-%d %H:%M:%S")
+ 29984	
+ 29985	        # ① 沒有健康檔、也沒有紀錄檔 → 維持原本那句(第二個來源缺席不改變結論)
+ 29986	        r = _run()
+ 29987	        check("★沒有健康檔又沒有紀錄檔 → 還是要說「從來沒跑完過」★",
+ 29988	              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+ 29989	
+ 29990	        # ② 沒有健康檔,但紀錄檔說兩小時前才跑完 → 不准說「從來沒跑完過」
+ 29991	        # ★時間戳只算一次★:算兩次的話跨秒就對不上,那是測試自己的時序 bug(踩過)
+ 29992	        fin2 = _stamp(2)
+ 29993	        wlog.write_text("[%s] daily-governance wrapper 開始\n"
+ 29994	                        "[%s] daily-governance wrapper 完成\n" % (_stamp(2.2), fin2),
+ 29995	                        encoding="utf-8")
+ 29996	        r = _run()
+ 29997	        check("★紀錄檔說最近才跑完 → 不准講「從來沒跑完過」★",
+ 29998	              "從來沒跑完過" not in r.stdout, r.stdout + r.stderr)
+ 29999	        check("★要改講「有在跑,但沒留下健康狀態檔」★",
+ 30000	              "有在跑" in r.stdout and "健康狀態檔" in r.stdout, r.stdout + r.stderr)
+ 30001	        check("★而且要把紀錄檔上那個時間講出來(人才查得下去)★",
+ 30002	              fin2 in r.stdout, r.stdout)
+ 30003	        check("★這個狀態仍然要喊★(看門狗瞎了值得知道一次,只是不能講假話)",
+ 30004	              r.stdout.strip() != "", "什麼都沒印=這個狀態被靜默吞掉了")
+ 30005	
+ 30006	        # ③ 紀錄檔上最後一次跑完已經很久 → 回到「從來沒跑完過」
+ 30007	        wlog.write_text("[%s] daily-governance wrapper 完成\n" % _stamp(80), encoding="utf-8")
+ 30008	        r = _run()
+ 30009	        check("★紀錄檔上最後一次已經超過門檻 → 照樣說「從來沒跑完過」★",
+ 30010	              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+ 30011	
+ 30012	        # ④ 紀錄檔有內容但沒有任何「完成」→ 不能被誤讀成跑完過
+ 30013	        wlog.write_text("[%s] daily-governance wrapper 開始\n"
+ 30014	                        "[%s] 治理日報 段結束 rc=0\n" % (_stamp(1), _stamp(0.9)), encoding="utf-8")
+ 30015	        r = _run()
+ 30016	        check("★只有「開始」沒有「完成」→ 不算跑完★",
+ 30017	              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+ 30018	    finally:
+ 30019	        _sh.rmtree(root, ignore_errors=True)
+ 30020	
+ 30021	
+ 30022	def t_wrapper_watchdog_states():
+ 30023	    """★看門狗四種輸入各自要講對話★(2026-09-07 代碼審 r1 四席各自實測)。
+ 30024	
+ 30025	    ① wrapper 正在跑(自主迴圈那段可跑三小時)→ 不准喊「超過 36 小時沒跑完」。
+ 30026	       第一版只看 finished_at 的年齡、完全不看鎖,會在它正常執行時發假警報,
+ 30027	       而那句話還會誘使人去 kill 一個其實正常的行程。
+ 30028	    ② finished_at 讀不動 + total=0 → 不准靜默判成正常。第一版時間解析失敗只讓
+ 30029	       age 變空字串,控制流直接掉到「比 total」,剛好是 0 就給綠燈。
+ 30030	    ③ 五步全 0、只有 total 壞掉 → 要說「這份檔自相矛盾」。第一版讀 total、健檢讀 steps,
+ 30220	       那個回報永遠不會發生,退路邏輯就變成永遠不會觸發的死碼。
+ 30221	    ② applet 的 handler 寫成 `on run argv` 時,用 `open -a APP --args …` 啟動會讓它
+ 30222	       ★整個不執行★(連第一行都沒跑到),而 `open` 照樣回 0。所以只能寫 `on run`、
+ 30223	       訊息從檔案讀。
+ 30224	
+ 30225	    結構這一半到哪都跑得動;行為那一半只有在有那幾支 macOS 工具的機器上才跑。
+ 30226	    """
+ 30227	    import re as _re
+ 30228	    import shutil as _sh
+ 30229	    import subprocess as _sp
+ 30230	    _need_src("governance/install-watchdog.sh")
+ 30231	    repo = Path(GRAPHCTL).resolve().parent.parent
+ 30232	    src = (repo / "governance" / "install-watchdog.sh").read_text(encoding="utf-8")
+ 30233	
+ 30234	    # ── 結構:重簽必須排在兩行 plutil 之後 ──
+ 30235	    i_plutil = max(src.find("plutil -replace CFBundleIdentifier"),
+ 30236	                   src.find("plutil -replace CFBundleName"))
+ 30237	    i_sign = src.find("codesign -f -s -")
+ 30238	    check("★建 app 的流程要有重簽這一步★", i_sign > 0, "找不到 codesign -f -s -")
+ 30239	    check("★重簽要排在改 Info.plist 之後★(先簽後改 = 章作廢,而且是靜默的)",
+ 30240	          i_plutil > 0 and i_sign > i_plutil, "plutil 在 %d,codesign 在 %d" % (i_plutil, i_sign))
+ 30241	    check("★驗收也要驗簽章★(只查檔案在不在,驗不出章壞掉)",
+ 30242	          "codesign --verify" in src, "verify_notifier 沒有驗簽章")
+ 30243	
+ 30244	    # ── 結構:applet 的 handler 不准吃 argv ──
+ 30245	    m = _re.search(r"^on run(?P<rest>.*)$", src, _re.M)
+ 30246	    check("★applet 的 handler 要寫 `on run`,不能吃 argv★(吃 argv 就整支不執行,而 open 照樣回 0)",
+ 30247	          m is not None and m.group("rest").strip() == "", m.group(0) if m else "找不到 on run")
+ 30248	    check("訊息要從檔案讀(因為參數傳不進去)", "message.txt" in src, "沒有用檔案傳訊息")
+ 30249	    check("applet 要留「我跑到了」的印子,退路才有辦法觸發", '"$NOTIFIER_DIR/.ran"' in src or "markFile" in src,
+ 30250	          "沒有印子機制")
+ 30251	
+ 30252	    # ── 結構:兩支腳本對同一個 bundle 的判斷要一致 ──
+ 30253	    wd = (repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8")
+ 30254	    check("★看門狗判斷 app 可不可用要看執行檔,不是只看目錄在不在★"
+ 30255	          "(半成品 bundle 的目錄也存在,會被當成可用)",
+ 30256	          "Contents/MacOS/applet" in wd, "還在用 [ -d ] 判斷")
+ 30257	    check("移除時要把建出來的 app 一起清掉", 'rm -rf "$NOTIFIER"' in src, "--uninstall 沒清 app")
+ 30258	
+ 30259	    # ── 結構:換圖示的三件事缺一不可 ──
+ 30260	    # 2026-09-07 一步一步試出來的:只放 icns 沒有用;三件事漏任何一件,通知上還是預設的卷軸。
+ 30261	    check("★①要刪掉 osacompile 附的 Assets.car★"
+ 30262	          "(那份編譯過的圖示目錄裝著預設 applet 圖示,macOS 優先用它、不看我們放的 icns)",
+ 30263	          "Assets.car" in src, "沒刪 Assets.car,圖示會是預設的卷軸")
+ 30264	    i_car = src.find("rm -f \"$staged/Contents/Resources/Assets.car\"")
+ 30265	    check("★②重簽要排在刪 Assets.car 與改 Info.plist 之後★",
+ 30266	          i_car > 0 and i_sign > i_car, "Assets.car 在 %d,codesign 在 %d" % (i_car, i_sign))
+ 30267	    check("★③bundle 識別碼要帶版本尾巴★"
+ 30268	          "(通知中心會快取某個識別碼第一次註冊時的圖示,換識別碼是唯一逼它重讀的辦法)",
+ 30269	          _re.search(r'NOTIFIER_ID="[^"]*\.v\d+"', src) is not None,
+ 30270	          "識別碼沒有版本尾巴,改了圖示也吃不到")
+ 30271	    check("要明確叫 LaunchServices 重讀(只 touch 不夠可靠)", "lsregister" in src, "沒有 lsregister")
+ 30272	
+ 30273	    # ── 行為:工具齊全才跑(CI 上多半沒有) ──
+ 30274	    if not all(_sh.which(c) for c in ("osacompile", "sips", "iconutil", "plutil", "codesign")):
+ 30275	        print("  ✓ t_watchdog_notifier_bundle(結構部分;這台機器沒有 macOS 那幾支工具,行為部分略過)")
+ 30276	        return
+ 30277	    root = Path(tempfile.mkdtemp(prefix="gctl-notif-"))
+ 30278	    try:
+ 30279	        app = root / "T.app"
+ 30280	        scpt = root / "s.applescript"
+ 30281	        scpt.write_text("on run\n\tdisplay notification \"x\" with title \"y\"\nend run\n", encoding="utf-8")
+ 30282	        _sp.run(["osacompile", "-o", str(app), str(scpt)], capture_output=True, timeout=60)
+ 30283	        r0 = _sp.run(["codesign", "--verify", "--deep", "--strict", str(app)],
+ 30284	                     capture_output=True, text=True, timeout=60)
+ 30285	        check("剛編出來的 app,章是好的(這是對照組)", r0.returncode == 0, r0.stderr[-200:])
+ 30286	        _sp.run(["plutil", "-replace", "CFBundleIdentifier", "-string", "com.example.probe",
+ 30287	                 str(app / "Contents" / "Info.plist")], capture_output=True, timeout=60)
+ 30288	        r1 = _sp.run(["codesign", "--verify", "--deep", "--strict", str(app)],
+ 30289	                     capture_output=True, text=True, timeout=60)
+ 30290	        check("★改完 Info.plist,章真的會壞★(這條就是本 finding 的現場成立前置)",
+governance/install-watchdog.sh:54:NOTIFIER_ID="com.enzo.lumos.watchdog-notifier.v3"
+governance/install-watchdog.sh:63:  [ "$(plutil -extract CFBundleIdentifier raw "$1/Contents/Info.plist" 2>/dev/null || echo '')" \
+governance/install-watchdog.sh:64:    = "$NOTIFIER_ID" ] || return 1
+governance/install-watchdog.sh:122:  plutil -replace CFBundleIdentifier -string "$NOTIFIER_ID" "$staged/Contents/Info.plist" >/dev/null || return 1
+scripts/test_lumos.py:29954:def t_wrapper_watchdog_no_health_but_wrapper_ran():
+scripts/test_lumos.py:30211:def t_watchdog_notifier_bundle():
+scripts/test_lumos.py:30235:    i_plutil = max(src.find("plutil -replace CFBundleIdentifier"),
+scripts/test_lumos.py:30269:          _re.search(r'NOTIFIER_ID="[^"]*\.v\d+"', src) is not None,
+scripts/test_lumos.py:30275:        print("  ✓ t_watchdog_notifier_bundle(結構部分;這台機器沒有 macOS 那幾支工具,行為部分略過)")
+scripts/test_lumos.py:30286:        _sp.run(["plutil", "-replace", "CFBundleIdentifier", "-string", "com.example.probe",
+scripts/test_lumos.py:30298:    print("  ✓ t_watchdog_notifier_bundle")
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "nl -ba governance/wrapper-watchdog.sh | sed -n '265,330p'; rg -n 't_wrapper_watchdog_no_health_but_wrapper_ran\\(' scripts/test_lumos.py; rg -n '"'^def run|globals'"\\(\\)|t_wrapper_watchdog_states\\(' scripts/test_lumos.py | tail -30; nl -ba governance/install-watchdog.sh | sed -n '42,135p'"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+   265	  fi
+   266	
+   267	  # 恢復也記一筆(不然帳上只看得到壞掉、看不到修好)
+   268	  case "${prev%%|*}" in
+   269	    ""|ok|running) ;;
+   270	    *) case "${now_state%%|*}" in
+   271	         ok|running) emit "recovered" "每日治理 wrapper 恢復正常(前一個狀態:${prev%%|*})。" ;;
+   272	       esac ;;
+   273	  esac
+   274	  if [ -n "$msg" ] && [ "$now_state" != "$prev" ]; then
+   275	    emit "${now_state%%|*}" "$msg"
+   276	  fi
+   277	
+   278	  # ★狀態檔寫不進去要喊,不能默默吞掉★(代碼審 r1 邊界席實測:第一版寫
+   279	  # `> "$STATE" 2>/dev/null || true`,狀態檔變成目錄或唯讀時 ①bash 會在套用 2>/dev/null
+   280	  # 之前就把錯誤印到真的 stderr,吞不掉 ②邊緣觸發整個失效,故障期間每小時重複喊一次
+   281	  # ——正好是這支自己設計要避免的那件事)。
+   282	  local stmp="$STATE.tmp.$$"
+   283	  if ! { printf '%s' "$now_state" > "$stmp"; } 2>/dev/null \
+   284	     || ! mv -f "$stmp" "$STATE" 2>/dev/null \
+   285	     || [ "$(cat "$STATE" 2>/dev/null || echo '')" != "$now_state" ]; then
+   286	    rm -f "$stmp" 2>/dev/null || true
+   287	    emit "state-unwritable" "看門狗自己的狀態檔寫不進去($STATE)——它會開始每小時重複喊同一件事,先把那個路徑清掉。"
+   288	  fi
+   289	  return 0
+   290	}
+   291	
+   292	main "$@"; exit
+29954:def t_wrapper_watchdog_no_health_but_wrapper_ran():
+71:def run(vault, *args, expect_rc=None):
+1244:    names = {k for k in globals() if k.startswith("t_")}
+7657:def run_lumos(args):
+7663:def run_lumos_capture(args):
+13257:            tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
+13326:    total = len([k for k in globals() if k.startswith("t_")])
+13374:    all_names = sorted(k for k in globals() if k.startswith("t_"))
+25321:def run_with_timeout(fn, seconds):
+25654:        tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
+30022:def t_wrapper_watchdog_states():
+    42	# 走②。app 是「建出來的東西」不是原始碼,所以不進版控,裝的時候現建。
+    43	# ★放 repo 樹內、用 .gitignore 蓋掉,不放家目錄★(代碼審 r1 架構對齊席判 major,查證屬實):
+    44	# 這個 repo 既有的「安裝時產生東西」慣例是放 repo 樹內的忽略路徑——
+    45	# scripts/fetch-notesmd.sh 把下載的二進位放 scripts/bin/(.gitignore 第 3 行蓋住),
+    46	# dist/、.lumos/test-cache*.json 同款。這個 repo 會碰家目錄的只有兩種:
+    47	# OS 逼你放那裡的(LaunchAgents 的 plist),以及安裝器做 symlink / 改設定檔——
+    48	# 從來沒有在家目錄底下自建二進位或 bundle。第一版放 ~/Library/Application Support/,
+    49	# 是在版控管不到、也不是 OS 強制的地方開了第二種存放法。
+    50	# 尾巴的版本號是刻意的:見下面 build_notifier 的第③點(通知中心會快取圖示,
+    51	# 2026-09-08 從 .v2 進到 .v3:重建過一次之後圖示在通知上不見了,而 app 裡的 icns
+    52	# 檔渲染出來是對的、簽章也有效——所以是快取,不是檔案。換號是唯一逼它重讀的辦法。
+    53	# 換識別碼是唯一逼它重讀的辦法)。圖示邏輯以後再動,這個號要往上加。
+    54	NOTIFIER_ID="com.enzo.lumos.watchdog-notifier.v3"
+    55	NOTIFIER_DIR="$DIR/.notifier"
+    56	NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
+    57	ICON_SRC="$(cd "$DIR/.." && pwd)/assets/lumos-icon.png"
+    58	
+    59	# 建好之後要能證明它是完整的,不能只看目錄在不在。
+    60	verify_notifier() {   # $1 = bundle 路徑
+    61	  [ -x "$1/Contents/MacOS/applet" ] || return 1
+    62	  [ -f "$1/Contents/Resources/applet.icns" ] || return 1
+    63	  [ "$(plutil -extract CFBundleIdentifier raw "$1/Contents/Info.plist" 2>/dev/null || echo '')" \
+    64	    = "$NOTIFIER_ID" ] || return 1
+    65	  # ★簽章也要驗★(代碼審 r1 通才席實測抓到,而且是這批最深的一條):
+    66	  # osacompile 會幫 app 簽章,而簽章的雜湊★包含 Info.plist 的內容★——所以「簽完之後才用
+    67	  # plutil 改 Info.plist」等於簽完名才改合約,章當場作廢。實測:剛編完 codesign 是 valid,
+    68	  # 跑完兩行 plutil 之後變成「invalid Info.plist (plist or signature have been modified)」,
+    69	  # 而且系統的權限守門(tccd)會在 log 裡說「認不出這支 app 的身分」。
+    70	  # 後果不只是難看:章壞掉時 applet 裡的 do shell script 會被★靜默擋掉★
+    71	  # ——我原本用它來回報「我真的跑到了」,結果那條回報永遠不會發生。重簽之後兩件事都好了。
+    72	  codesign --verify --deep --strict "$1" >/dev/null 2>&1 || return 1
+    73	  return 0
+    74	}
+    75	
+    76	build_notifier() {
+    77	  for c in osacompile sips iconutil plutil; do
+    78	    command -v "$c" >/dev/null 2>&1 || { echo "缺 $c,跳過通知圖示這一步(通知照發,只是用系統預設圖示)"; return 1; }
+    79	  done
+    80	  [ -f "$ICON_SRC" ] || { echo "找不到圖檔 $ICON_SRC,跳過通知圖示這一步"; return 1; }
+    81	  local tmp; tmp="$(mktemp -d)" || return 1
+    82	  # ★中途被砍也要清掉暫存★(代碼審 r1 外家席):沒有 trap 的話 signal 中止會留下整個目錄。
+    83	  trap 'rm -rf "$tmp" 2>/dev/null || true' RETURN
+    84	  local iset="$tmp/lumos.iconset"; mkdir -p "$iset" || return 1
+    85	  local s
+    86	  for s in 16 32 128 256 512; do
+    87	    sips -z "$s" "$s" "$ICON_SRC" --out "$iset/icon_${s}x${s}.png" >/dev/null 2>&1 || return 1
+    88	    sips -z $((s*2)) $((s*2)) "$ICON_SRC" --out "$iset/icon_${s}x${s}@2x.png" >/dev/null 2>&1 || return 1
+    89	  done
+    90	  iconutil -c icns "$iset" -o "$tmp/lumos.icns" >/dev/null 2>&1 || return 1
+    91	
+    92	  # ★applet 一定要 quit★:不加的話它會留在事件迴圈裡不結束,每小時一則就是每小時一個殭屍行程。
+    93	  # ★訊息用檔案傳,不用 open --args★(2026-09-07 實測):`open -a APP --args …` 傳的參數
+    94	  #   **不會**進到 applet 的 `on run argv`——探針證明 applet 有被啟動、但 argv 是空的。
+    95	  # ★放棄「留印子回報有沒有送出」那條★:本來想讓 applet 用 do shell script 摸一個檔案回報,
+    96	  #   實測未簽名 app 的 do shell script 會被系統**靜默擋掉**(不報錯、什麼都不做),
+    97	  #   寫了也是死碼。誠實的結論寫在 notify() 那邊。
+    98	  # ★handler 一定要寫成 `on run`,不能寫 `on run argv`★(實測):有 argv 的版本用
+    99	  #   `open -a APP --args …` 啟動時,applet ★整個不會執行★(連第一行都沒跑到),
+   100	  #   而 open 照樣回 0。所以訊息用檔案傳。
+   101	  cat > "$tmp/notify.applescript" <<APPLESCRIPT
+   102	on run
+   103		set msgFile to "$NOTIFIER_DIR/message.txt"
+   104		set markFile to "$NOTIFIER_DIR/.ran"
+   105		set theMsg to "(讀不到訊息)"
+   106		try
+   107			set theMsg to (read POSIX file msgFile as «class utf8»)
+   108		end try
+   109		display notification theMsg with title "Lumos 治理看門狗"
+   110		try
+   111			do shell script "/usr/bin/touch " & quoted form of markFile
+   112		end try
+   113	end run
+   114	APPLESCRIPT
+   115	
+   116	  # ★在暫存區建完、驗過,才換上去★(代碼審 r1 外家席判 major):
+   117	  # 第一版是「先 rm 掉正式的那份,再直接在正式路徑編譯」——編譯失敗就留下半成品,
+   118	  # 而 notify() 只用 `[ -d ]` 判斷,會把半成品當成可用,靜默走進一條發不出通知的路。
+   119	  local staged="$tmp/LumosWatchdog.app"
+   120	  osacompile -o "$staged" "$tmp/notify.applescript" >/dev/null 2>&1 || return 1
+   121	  cp "$tmp/lumos.icns" "$staged/Contents/Resources/applet.icns" || return 1
+   122	  plutil -replace CFBundleIdentifier -string "$NOTIFIER_ID" "$staged/Contents/Info.plist" >/dev/null || return 1
+   123	  plutil -replace CFBundleName -string "Lumos 治理看門狗" "$staged/Contents/Info.plist" >/dev/null || return 1
+   124	  # ★換圖示要三件事一起做,少一件都還是預設的卷軸★(2026-09-07 一步一步試出來的):
+   125	  #  ① 把 osacompile 附的 Assets.car 刪掉。那是一份「編譯過的圖示目錄」,裡面裝著預設的
+   126	  #     applet 圖示,而 macOS ★優先用它★,不看我們放的那個 .icns。只放 icns 沒有用。
+   127	  #  ② 重簽(下面那行)。簽章的雜湊包含 Info.plist,改完不重簽章就作廢。
+   128	  #  ③ 換一個 bundle 識別碼並重新註冊。★通知中心會記住某個識別碼第一次註冊時的圖示★
+   129	  #     ——前兩件做對了但沿用舊識別碼,它還是給你看快取住的舊圖示。
+   130	  #     所以識別碼帶一個版本尾巴;圖示邏輯以後再改,把尾巴往上加一號。
+   131	  #     代價:換識別碼等於一個新 app,通知權限要重新給——所以裝完一定要當場發一則請人確認。
+   132	  rm -f "$staged/Contents/Resources/Assets.car"
+   133	  plutil -remove CFBundleIconName "$staged/Contents/Info.plist" >/dev/null 2>&1 || true
+   134	  plutil -replace CFBundleIconFile -string "applet" "$staged/Contents/Info.plist" >/dev/null || return 1
+   135	  codesign -f -s - "$staged" >/dev/null 2>&1 || { echo "重簽失敗" >&2; return 1; }
+
+[35m[3mcodex[0m[0m
+目前已抓到一條直接違反監看器使命的 fail-open：鎖齡查詢失敗會被空字串吞掉，接著把狀態當成「正在跑、沒事」。我也會用小型隔離探針驗證未來時間戳與大檔/輪替等路徑；若沙盒不准建立暫存檔，會按規矩標讀碼推論。
+[35m[3mcodex[0m[0m
+severity: blocker
+
+1. severity: blocker；blocking: 是  
+`governance/wrapper-watchdog.sh:237-263`：健康檔若帶未來的 `finished_at`，`age` 會是負數；它既不算逾期、也不算不可讀，五步為零時直接落入 `ok`，完全不通知。手動調時、錯誤時鐘或被竄改的健康檔都能讓監看器長期失明。這正是最不能接受的「該喊沒喊」。
+
+引句:「print(int((datetime.datetime.now(datetime.timezone.utc)-d).total_seconds()))」
+
+應拒絕負年齡，至少判成 `unreadable/inconsistent` 並告警；本地 log 的 `secs_since_local` 也應同規。讀碼推論，未實跑（唯讀沙盒禁止建立 here-document 暫存檔）。
+
+2. severity: blocker；blocking: 是  
+`governance/wrapper-watchdog.sh:133-135,205-212`：`lock_age` 的任何錯誤都被 `2>/dev/null || echo ''` 變成空值；呼叫端把空值當成「正在跑、沒事，不喊」。只要能讀 pid、`kill`/`ps` 成功，但鎖目錄的時間查不到，卡死的 wrapper 就會被永久判健康。
+
+引句:「python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo ''」
+
+這是題目指定要找的「問不出來 → 沒事」。應把鎖齡 unknown 判成可見的未知狀態，而不是 `running`。讀碼推論，未實跑。
+
+3. severity: major；blocking: 是  
+`governance/wrapper-watchdog.sh:148-161`：新增來源每小時從頭到尾掃完整紀錄檔，沒有大小上限、尾讀策略或執行時間上限。檔案很大或持續高速追加時，單次監看可能長時間不結束並一直持有看門狗鎖；後續每小時執行只會跳過。監看器本身因被監看 log 耗死，是直接的漏報路徑。
+
+引句:「with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:」
+
+一般並行 append、輪替、非 UTF-8 本身偏 fail-safe：半行通常不匹配、輪替後開檔失敗會回空而告警、非法位元組會被替換。但無界完整掃描沒有 fail-safe。應限制讀取尾端位元組數並限制處理時間；截到半行時丟掉第一個殘行。讀碼推論，未實跑。
+
+4. severity: major；blocking: 是  
+`governance/wrapper-watchdog.sh:156-158`：完成標記沒有綁定整行，只要求時間戳後任意位置出現 `wrapper 完成`。任何共用 stdout 的子程式、錯誤訊息或人為塞入的假行都能偽造最近完成；未來只要 wrapper 改措辭，這條又會靜默退回 `never`，沒有任何契約測試釘住 producer 與 parser。
+
+引句:「m = re.match(r"^\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})\\].*wrapper 完成", ln)」
+
+目前偽造不會完全消音，仍會發 `nohealth` 通知；但會把真實的「從未完成」降級成「有在跑」，證據完整性不足。應精確匹配 `daily-governance wrapper 完成` 整行，並加 producer/parser 同步測試。讀碼推論，未實跑。
+
+5. severity: minor；blocking: 否  
+`scripts/test_lumos.py:29997-30004`：第五條「仍然要喊」斷言是空的。前一條已要求 stdout 同時含「有在跑」及「健康狀態檔」，自然保證 stdout 非空；更重要的是，所有五條都只驗 stdout，完全沒驗 `emit` 是否真的走到桌面通知與 watchdog log。實作只要 `echo` 正確文案、通知什麼都不做，五條仍可綠。
+
+引句:「r.stdout.strip() != "", "什麼都沒印=這個狀態被靜默吞掉了"」
+
+應提供假的 notifier／隔離 log，斷言通知入口被呼叫且 watchdog log 有事件。讀碼推論，未實跑。
+
+6. severity: minor；blocking: 否  
+`governance/install-watchdog.sh:50-54`、`scripts/test_lumos.py:30267-30270`：規則說每次重建都要換識別碼，但實作固定為 `.v3`，測試只驗「尾巴長得像版本號」。同一版再次執行 `--rebuild-notifier` 不會換號，因此真實發生過的快取問題可再次出現而測試全綠。
+
+引句:「所以識別碼帶一個版本尾巴;圖示邏輯以後再改,把尾巴往上加一號。」
+
+引句:「_re.search(r'NOTIFIER_ID="[^"]*\\.v\\d+"', src) is not None」
+
+這算問題：註解不是守衛，現有測試也沒有守住所宣稱的不變量。不過它主要影響圖示而非告警文字是否送出，因此不單獨列為 blocking。
+
+補充時間判斷：本地 naive datetime 在 DST 回撥重複時段無法辨別 fold，春季跳時與人工調鐘也會造成約一小時偏差；在缺健康檔路徑目前仍會發 `nohealth`，所以通常是措辭錯而非消音。真正會靜默消音的是第 1 條健康檔未來 UTC 時戳。
+[2mtokens used[0m
+64,992
+severity: blocker
+
+1. severity: blocker；blocking: 是  
+`governance/wrapper-watchdog.sh:237-263`：健康檔若帶未來的 `finished_at`，`age` 會是負數；它既不算逾期、也不算不可讀，五步為零時直接落入 `ok`，完全不通知。手動調時、錯誤時鐘或被竄改的健康檔都能讓監看器長期失明。這正是最不能接受的「該喊沒喊」。
+
+引句:「print(int((datetime.datetime.now(datetime.timezone.utc)-d).total_seconds()))」
+
+應拒絕負年齡，至少判成 `unreadable/inconsistent` 並告警；本地 log 的 `secs_since_local` 也應同規。讀碼推論，未實跑（唯讀沙盒禁止建立 here-document 暫存檔）。
+
+2. severity: blocker；blocking: 是  
+`governance/wrapper-watchdog.sh:133-135,205-212`：`lock_age` 的任何錯誤都被 `2>/dev/null || echo ''` 變成空值；呼叫端把空值當成「正在跑、沒事，不喊」。只要能讀 pid、`kill`/`ps` 成功，但鎖目錄的時間查不到，卡死的 wrapper 就會被永久判健康。
+
+引句:「python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo ''」
+
+這是題目指定要找的「問不出來 → 沒事」。應把鎖齡 unknown 判成可見的未知狀態，而不是 `running`。讀碼推論，未實跑。
+
+3. severity: major；blocking: 是  
+`governance/wrapper-watchdog.sh:148-161`：新增來源每小時從頭到尾掃完整紀錄檔，沒有大小上限、尾讀策略或執行時間上限。檔案很大或持續高速追加時，單次監看可能長時間不結束並一直持有看門狗鎖；後續每小時執行只會跳過。監看器本身因被監看 log 耗死，是直接的漏報路徑。
+
+引句:「with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:」
+
+一般並行 append、輪替、非 UTF-8 本身偏 fail-safe：半行通常不匹配、輪替後開檔失敗會回空而告警、非法位元組會被替換。但無界完整掃描沒有 fail-safe。應限制讀取尾端位元組數並限制處理時間；截到半行時丟掉第一個殘行。讀碼推論，未實跑。
+
+4. severity: major；blocking: 是  
+`governance/wrapper-watchdog.sh:156-158`：完成標記沒有綁定整行，只要求時間戳後任意位置出現 `wrapper 完成`。任何共用 stdout 的子程式、錯誤訊息或人為塞入的假行都能偽造最近完成；未來只要 wrapper 改措辭，這條又會靜默退回 `never`，沒有任何契約測試釘住 producer 與 parser。
+
+引句:「m = re.match(r"^\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})\\].*wrapper 完成", ln)」
+
+目前偽造不會完全消音，仍會發 `nohealth` 通知；但會把真實的「從未完成」降級成「有在跑」，證據完整性不足。應精確匹配 `daily-governance wrapper 完成` 整行，並加 producer/parser 同步測試。讀碼推論，未實跑。
+
+5. severity: minor；blocking: 否  
+`scripts/test_lumos.py:29997-30004`：第五條「仍然要喊」斷言是空的。前一條已要求 stdout 同時含「有在跑」及「健康狀態檔」，自然保證 stdout 非空；更重要的是，所有五條都只驗 stdout，完全沒驗 `emit` 是否真的走到桌面通知與 watchdog log。實作只要 `echo` 正確文案、通知什麼都不做，五條仍可綠。
+
+引句:「r.stdout.strip() != "", "什麼都沒印=這個狀態被靜默吞掉了"」
+
+應提供假的 notifier／隔離 log，斷言通知入口被呼叫且 watchdog log 有事件。讀碼推論，未實跑。
+
+6. severity: minor；blocking: 否  
+`governance/install-watchdog.sh:50-54`、`scripts/test_lumos.py:30267-30270`：規則說每次重建都要換識別碼，但實作固定為 `.v3`，測試只驗「尾巴長得像版本號」。同一版再次執行 `--rebuild-notifier` 不會換號，因此真實發生過的快取問題可再次出現而測試全綠。
+
+引句:「所以識別碼帶一個版本尾巴;圖示邏輯以後再改,把尾巴往上加一號。」
+
+引句:「_re.search(r'NOTIFIER_ID="[^"]*\\.v\\d+"', src) is not None」
+
+這算問題：註解不是守衛，現有測試也沒有守住所宣稱的不變量。不過它主要影響圖示而非告警文字是否送出，因此不單獨列為 blocking。
+
+補充時間判斷：本地 naive datetime 在 DST 回撥重複時段無法辨別 fold，春季跳時與人工調鐘也會造成約一小時偏差；在缺健康檔路徑目前仍會發 `nohealth`，所以通常是措辭錯而非消音。真正會靜默消音的是第 1 條健康檔未來 UTC 時戳。

@@ -142,18 +142,41 @@ lock_age() {
 # 現在的規矩:健康檔不在 → 去看 wrapper 自己的紀錄檔;它最近有跑完的話,
 # 講的話要換成「有在跑但沒留下健康檔」,而不是「從來沒跑完過」。
 # ★仍然要喊★:那個狀態代表這支看門狗是瞎的,值得知道一次;只是不能講假話。
-# 紀錄檔的路徑跟 launchd 那份 plist 的 StandardOutPath 對齊;檔不在就當問不出來,
-# 退回原本的判斷(fail-safe:第二個來源缺席不會讓警報消失)。
+# ★這個路徑是兩邊共同宣告的約定,不是這一側自己猜的★(架構對齊席 A1):
+# 原本只有這個消費端寫死一條路徑,而真正的權威是 launchd 那份 plist 的 StandardOutPath
+# ——那份 plist 住在家目錄、不進版控,兩邊各自漂移不會有人知道。
+# 現在 daily-governance.sh 也宣告同一條路徑(守衛 t_wrapper_log_path_agrees 比對兩份)。
+# ★誠實記:這只把「單邊猜測」變成「雙邊約定」,擋不住有人去改 plist★
+# ——那份檔不在版控裡,這個 repo 沒有辦法看到它。真的被改掉時,
+# 這裡會靜靜地退回原本的判斷(fail-safe:第二來源缺席不會讓警報消失,只是少一層交叉檢查)。
+# REVISIT:2026-12-08 若 daily-governance 的排程改由安裝腳本產生,把 plist 一起納管,
+# 那時這條路徑就能有單一來源。
+# 檔不在就當問不出來,退回原本的判斷。
 WRAPPER_LOG="$DIR/logs/daily-wrapper.log"
 wrapper_log_last_finish() {   # 印出最後一次「完成」的時間(本地時間字串);問不出來印空字串
   [ -f "$WRAPPER_LOG" ] || { echo ''; return 0; }
   python3 - "$WRAPPER_LOG" <<'PY' 2>/dev/null || echo ''
-import re, sys
+import os, re, sys
+# ★整行綁定,不是「這一行裡有出現那四個字」★(code-batch20 外家席 f4,我實跑重現)：
+# 舊寫法用 `.*wrapper 完成`,我餵一行「⚠ …daily-governance wrapper 完成不了,要人來看」
+# ——它判成「跑完了」。★方向是把真警報降級成沒事★,正是這支不能有的方向。
+# 現在要求整行就是「[時間] daily-governance wrapper 完成」,尾巴不准有別的字。
+PAT = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] daily-governance wrapper 完成\s*$")
+# ★只讀尾端★(同席 f3)。它擔心的是「無上限掃描會把看門狗自己耗死」——
+# 我量過:把紀錄檔養到 68 MB,整支只跑 0.9 秒,而這個檔每天大約長 1 KB,
+# 也就是要一百多年才會到那個大小。★所以「會卡死」這句話目前量不出來★,
+# 但「沒有上限」本身是真的,而加上限只要兩行,就加。
+# 截到半行時把第一行丟掉(那一行必定不完整,留著只會是雜訊)。
+TAIL = 1 << 20
 last = ""
 try:
-    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
-        for ln in fh:
-            m = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*wrapper 完成", ln)
+    with open(sys.argv[1], "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        if size > TAIL:
+            fh.seek(size - TAIL)
+            fh.readline()
+        for raw in fh:
+            m = PAT.match(raw.decode("utf-8", "replace"))
             if m:
                 last = m.group(1)
 except OSError:
@@ -162,11 +185,18 @@ print(last)
 PY
 }
 secs_since_local() {   # $1="YYYY-MM-DD HH:MM:SS"(本地);印出距今幾秒,算不出來印空字串
+  # ★負數(時間戳在未來)一律當成算不出來★(外家席 f1 同規):時鐘被調過、
+  # 檔被竄改、或有人手貼一行未來時間,都不該讓監看器把它當成「剛剛才跑完」。
   [ -n "$1" ] || { echo ''; return 0; }
+  # ★時間一律換成帶時區的再比★(架構對齊席 A2,機械查證:全 repo 只有這一處用過
+  # naive 的 strptime + datetime.now(),其他一路都是 fromisoformat + now(timezone.utc))。
+  # 紀錄檔上的時間戳確實是本地字串,但 astimezone() 就能接回既有那一套,
+  # 不需要在同一個檔案裡養第二種時間比較法。
   python3 -c "
 import datetime,sys
-d=datetime.datetime.strptime(sys.argv[1], '%Y-%m-%d %H:%M:%S')
-print(int((datetime.datetime.now()-d).total_seconds()))" "$1" 2>/dev/null || echo ''
+d=datetime.datetime.strptime(sys.argv[1], '%Y-%m-%d %H:%M:%S').astimezone()
+n=int((datetime.datetime.now(datetime.timezone.utc)-d).total_seconds())
+print(n if n >= 0 else '')" "$1" 2>/dev/null || echo ''
 }
 
 # 健康檔一次讀出四件事,四行:finished_at / 哪些步驟非零 / total 跟 steps 對不對得上 / steps 讀不讀得到。
@@ -204,7 +234,14 @@ main() {
 
   if wrapper_running; then
     local la; la="$(lock_age)"
-    if [ -n "$la" ] && [ "$la" -gt "$STALE_SEC" ]; then
+    if [ -z "$la" ]; then
+      # ★量不出鎖齡 ≠ 沒事★(外家席 f2,我實跑重現):舊寫法把空值一路帶到 else,
+      # 判成「正在跑,不喊」。造個現場:鎖在、pid 活著、指令名對得上、鎖齡 72 小時,
+      # 但 python3 壞掉(launchd 那種精簡環境真的會遇到)→ ★整支一聲不吭★。
+      # 「問不出來」要當成看得見的未知狀態,不能靜靜地當成健康。
+      now_state="lockage-unknown|$today"
+      msg="每日治理 wrapper 看起來正在跑,但這支算不出它跑多久了(鎖 $LOCKDIR 的時間讀不到,多半是 python3 出問題)——所以「卡住了沒」現在判不出來。"
+    elif [ "$la" -gt "$STALE_SEC" ]; then
       now_state="hung|$today"
       msg="每日治理 wrapper 從 $(( la / 3600 )) 小時前就一直在跑、沒有結束——多半是卡住了。鎖在 $LOCKDIR。"
     else
@@ -238,6 +275,10 @@ main() {
 import datetime,sys
 d=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
 print(int((datetime.datetime.now(datetime.timezone.utc)-d).total_seconds()))" "$fin" 2>/dev/null || echo '')"
+      # ★未來的完成時間要當成「這份檔不能用」★(外家席 f1,我實跑重現:
+      # 餵一份 finished_at 在五小時後的健康檔、五步全 0 → 監看器★完全沒有輸出★。
+      # 手動調時、時鐘錯、檔被竄改都會走到這裡,而它是「該喊沒喊」那個方向)。
+      [ -n "$age" ] && [ "$age" -lt 0 ] && age=""
       if [ -z "$age" ] || [ "$readable" != "1" ]; then
         # ★時間讀不動就是讀不動,不能往下掉進「沒事」★(代碼審 r1 外家 finder 實測:
         # 第一版時間解析失敗只讓 age 變空字串,控制流直接落到下面比 total,total 剛好是 0

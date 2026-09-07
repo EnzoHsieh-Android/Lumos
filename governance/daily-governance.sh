@@ -28,6 +28,11 @@ main() {
   # 邊跑邊改時都會先被執行。函式體要找到配對的 } 才算讀完,所以整包放進來才是真的安全。
   # 第一版把鎖與健康檔那幾支放在 main() 外面,守衛當場擋下,而它是對的。
   HEALTH="$DIR/.daily-governance-health.json"   # 不進版控:每台機器各自的事實
+  # ★這支的 stdout 由 launchd 導到這裡★(那份 plist 的 StandardOutPath)。
+  # wrapper-watchdog.sh 在健康檔不在時會讀它當第二個來源,所以這是兩邊共用的約定:
+  # 改一邊要改另一邊,守衛 t_wrapper_log_path_agrees 會比對。
+  # 這一側自己不寫它(是 launchd 寫的),宣告在這裡是為了讓約定看得見、grep 得到。
+  WRAPPER_LOG="$DIR/logs/daily-wrapper.log"
   LOCKDIR="$DIR/.daily-governance.lock"
   # ── 整跑鎖 ──────────────────────────────────────────────────────────────────
   # ★同源:autonomous-loop.sh 的取鎖段★(2026-09-07 全 repo 審視 #18 抄過來)。

@@ -1,0 +1,218 @@
+diff --git a/governance/install-watchdog.sh b/governance/install-watchdog.sh
+index d4d769b..4c17863 100755
+--- a/governance/install-watchdog.sh
++++ b/governance/install-watchdog.sh
+@@ -40,23 +40,25 @@ status() {
+ #   ①裝 terminal-notifier —— 新增一個外部依賴,這個 repo 的家規是零依賴,不走。
+ #   ②自己包一個最小的 .app —— 只用 macOS 內建的 osacompile / sips / iconutil / plutil,不加依賴。
+ # 走②。app 是「建出來的東西」不是原始碼,所以不進版控,裝的時候現建。
+ # ★放 repo 樹內、用 .gitignore 蓋掉,不放家目錄★(代碼審 r1 架構對齊席判 major,查證屬實):
+ # 這個 repo 既有的「安裝時產生東西」慣例是放 repo 樹內的忽略路徑——
+ # scripts/fetch-notesmd.sh 把下載的二進位放 scripts/bin/(.gitignore 第 3 行蓋住),
+ # dist/、.lumos/test-cache*.json 同款。這個 repo 會碰家目錄的只有兩種:
+ # OS 逼你放那裡的(LaunchAgents 的 plist),以及安裝器做 symlink / 改設定檔——
+ # 從來沒有在家目錄底下自建二進位或 bundle。第一版放 ~/Library/Application Support/,
+ # 是在版控管不到、也不是 OS 強制的地方開了第二種存放法。
+-# 尾巴的 .v2 是刻意的:見下面 build_notifier 的第③點(通知中心會快取圖示,
++# 尾巴的版本號是刻意的:見下面 build_notifier 的第③點(通知中心會快取圖示,
++# 2026-09-08 從 .v2 進到 .v3:重建過一次之後圖示在通知上不見了,而 app 裡的 icns
++# 檔渲染出來是對的、簽章也有效——所以是快取,不是檔案。換號是唯一逼它重讀的辦法。
+ # 換識別碼是唯一逼它重讀的辦法)。圖示邏輯以後再動,這個號要往上加。
+-NOTIFIER_ID="com.enzo.lumos.watchdog-notifier.v2"
++NOTIFIER_ID="com.enzo.lumos.watchdog-notifier.v3"
+ NOTIFIER_DIR="$DIR/.notifier"
+ NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
+ ICON_SRC="$(cd "$DIR/.." && pwd)/assets/lumos-icon.png"
+ 
+ # 建好之後要能證明它是完整的,不能只看目錄在不在。
+ verify_notifier() {   # $1 = bundle 路徑
+   [ -x "$1/Contents/MacOS/applet" ] || return 1
+   [ -f "$1/Contents/Resources/applet.icns" ] || return 1
+   [ "$(plutil -extract CFBundleIdentifier raw "$1/Contents/Info.plist" 2>/dev/null || echo '')" \
+     = "$NOTIFIER_ID" ] || return 1
+diff --git a/governance/wrapper-watchdog.sh b/governance/wrapper-watchdog.sh
+index 535850a..e47647a 100755
+--- a/governance/wrapper-watchdog.sh
++++ b/governance/wrapper-watchdog.sh
+@@ -127,20 +127,55 @@ wrapper_running() {
+   local p; p="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+   case "$p" in ''|*[!0-9]*) return 1 ;; esac
+   kill -0 "$p" 2>/dev/null || return 1
+   local cmd; cmd="$(ps -p "$p" -o command= 2>/dev/null || echo '')"
+   case "$cmd" in *daily-governance*) return 0 ;; *) return 1 ;; esac
+ }
+ lock_age() {
+   python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo ''
+ }
+ 
++# ★健康檔不在時,要去問第二個來源再開口★(2026-09-08 真的講錯話之後補的)。
++# 出過的事:健康檔不存在,這支就每天喊一次「這台機器上的 wrapper 從來沒跑完過」
++# ——而 wrapper 自己的紀錄檔裡,前一天和當天都白紙黑字寫著「完成」。
++# 原因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
++# ★這支只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
++# 現在的規矩:健康檔不在 → 去看 wrapper 自己的紀錄檔;它最近有跑完的話,
++# 講的話要換成「有在跑但沒留下健康檔」,而不是「從來沒跑完過」。
++# ★仍然要喊★:那個狀態代表這支看門狗是瞎的,值得知道一次;只是不能講假話。
++# 紀錄檔的路徑跟 launchd 那份 plist 的 StandardOutPath 對齊;檔不在就當問不出來,
++# 退回原本的判斷(fail-safe:第二個來源缺席不會讓警報消失)。
++WRAPPER_LOG="$DIR/logs/daily-wrapper.log"
++wrapper_log_last_finish() {   # 印出最後一次「完成」的時間(本地時間字串);問不出來印空字串
++  [ -f "$WRAPPER_LOG" ] || { echo ''; return 0; }
++  python3 - "$WRAPPER_LOG" <<'PY' 2>/dev/null || echo ''
++import re, sys
++last = ""
++try:
++    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
++        for ln in fh:
++            m = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*wrapper 完成", ln)
++            if m:
++                last = m.group(1)
++except OSError:
++    pass
++print(last)
++PY
++}
++secs_since_local() {   # $1="YYYY-MM-DD HH:MM:SS"(本地);印出距今幾秒,算不出來印空字串
++  [ -n "$1" ] || { echo ''; return 0; }
++  python3 -c "
++import datetime,sys
++d=datetime.datetime.strptime(sys.argv[1], '%Y-%m-%d %H:%M:%S')
++print(int((datetime.datetime.now()-d).total_seconds()))" "$1" 2>/dev/null || echo ''
++}
++
+ # 健康檔一次讀出四件事,四行:finished_at / 哪些步驟非零 / total 跟 steps 對不對得上 / steps 讀不讀得到。
+ # ★不能只讀 total★(代碼審 r1 邊界席):健檢的 [A1] 段讀的是 steps,這支第一版讀 total,
+ # 餵一份「五步全 0、只有 total 壞掉」的檔,兩邊會講出完全相反的結論——而我在健檢那段
+ # 的註解裡還寫了「兩條讀同一份健康檔,所以不會各說各話」,那句話當場被打臉。
+ # 現在兩邊都以 steps 為準,total 只當交叉檢查:對不上就是這份檔壞了,單獨喊一種狀態。
+ read_health() {
+   python3 - "$HEALTH" <<'PY' 2>/dev/null || return 1
+ import json, sys
+ d = json.load(open(sys.argv[1]))
+ fin = d.get("finished_at")
+@@ -171,22 +206,30 @@ main() {
+     local la; la="$(lock_age)"
+     if [ -n "$la" ] && [ "$la" -gt "$STALE_SEC" ]; then
+       now_state="hung|$today"
+       msg="每日治理 wrapper 從 $(( la / 3600 )) 小時前就一直在跑、沒有結束——多半是卡住了。鎖在 $LOCKDIR。"
+     else
+       now_state="running|$today"   # 正在跑,沒事,不喊
+     fi
+   elif [ ! -f "$HEALTH" ]; then
+     # ★檔案不存在 ≠ 死掉★(設計審 r1 外家席:第一版完全沒定義這個語意)。
+     # 新機、重新 clone、清過紀錄都會這樣,訊息要跟「死掉了」分開講,而且不算逾期。
+-    now_state="never|$today"
+-    msg="這台機器上的每日治理 wrapper 從來沒跑完過(還沒有健康狀態檔)。第一次跑過就會有。"
++    # ★而且不存在也 ≠ 沒跑過★(2026-09-08):先問 wrapper 自己的紀錄檔。
++    local lf ls_
++    lf="$(wrapper_log_last_finish)"; ls_="$(secs_since_local "$lf")"
++    if [ -n "$ls_" ] && [ "$ls_" -le "$STALE_SEC" ]; then
++      now_state="nohealth|$today"
++      msg="每日治理 wrapper 有在跑(它自己的紀錄檔:最後一次完成 $lf),但沒有留下健康狀態檔——這支看門狗因此看不到它的結果。多半是排程跑的還是舊版本,或者那個檔被清掉了。"
++    else
++      now_state="never|$today"
++      msg="這台機器上的每日治理 wrapper 從來沒跑完過(沒有健康狀態檔,它自己的紀錄檔裡也找不到最近跑完的紀錄)。第一次跑過就會有。"
++    fi
+   else
+     local hr fin bad mismatch readable age
+     if ! hr="$(read_health)"; then
+       now_state="unreadable|$today"
+       msg="每日治理 wrapper 的健康狀態檔讀不動($HEALTH)——看不出它跑了沒。"
+     else
+       fin="$(printf '%s\n' "$hr" | sed -n 1p)"
+       bad="$(printf '%s\n' "$hr" | sed -n 2p)"
+       mismatch="$(printf '%s\n' "$hr" | sed -n 3p)"
+       readable="$(printf '%s\n' "$hr" | sed -n 4p)"
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 2dbb7d0..e5e3332 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -29944,20 +29944,88 @@ def t_daily_wrapper_health_write_failure_is_a_failure():
+               r.returncode != 0, "rc=%d\n%s" % (r.returncode, r.stderr[-300:]))
+         check("★而且要講出「不是普通檔案」這件事★,不能只說寫不進去",
+               "不是一個普通檔案" in r.stderr, r.stderr[-300:])
+         leftovers = list((g / ".daily-governance-health.json").iterdir())
+         check("★失敗時不准留垃圾暫存檔★", not leftovers, [p.name for p in leftovers])
+     finally:
+         _sh.rmtree(root, ignore_errors=True)
+     print("  ✓ t_daily_wrapper_health_write_failure_is_a_failure")
+ 
+ 
++def t_wrapper_watchdog_no_health_but_wrapper_ran():
++    """★健康檔不在時,不准直接斷言「從來沒跑完過」——先問 wrapper 自己的紀錄檔★(2026-09-08)。
++
++    真的講錯過:健康檔不存在,看門狗每天喊一次「這台機器上的 wrapper 從來沒跑完過」,
++    而 wrapper 自己的紀錄檔裡前一天和當天都白紙黑字寫著「完成」。
++    成因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
++    ★這支看門狗只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
++
++    現在:健康檔不在 → 去讀 wrapper 的紀錄檔。最近有跑完就換句話講(仍然要喊,
++    因為那代表看門狗是瞎的),完全找不到才說「從來沒跑完過」。
++    紀錄檔也不在的話退回原本判斷——第二個來源缺席不能讓警報消失。
++    """
++    import shutil as _sh, subprocess as _sp, tempfile as _tf, datetime as _dt
++    _need_src("governance/wrapper-watchdog.sh")
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    root = Path(_tf.mkdtemp(prefix="gctl-wdlog-"))
++    try:
++        g = root / "governance"; (g / "logs").mkdir(parents=True)
++        wd = g / "wrapper-watchdog.sh"
++        wd.write_text((repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8"),
++                      encoding="utf-8")
++        wlog = g / "logs" / "daily-wrapper.log"
++        st = g / ".wrapper-watchdog-state"
++
++        def _run():
++            st.unlink(missing_ok=True)
++            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
++
++        def _stamp(h):
++            return (_dt.datetime.now() - _dt.timedelta(hours=h)).strftime("%Y-%m-%d %H:%M:%S")
++
++        # ① 沒有健康檔、也沒有紀錄檔 → 維持原本那句(第二個來源缺席不改變結論)
++        r = _run()
++        check("★沒有健康檔又沒有紀錄檔 → 還是要說「從來沒跑完過」★",
++              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
++
++        # ② 沒有健康檔,但紀錄檔說兩小時前才跑完 → 不准說「從來沒跑完過」
++        # ★時間戳只算一次★:算兩次的話跨秒就對不上,那是測試自己的時序 bug(踩過)
++        fin2 = _stamp(2)
++        wlog.write_text("[%s] daily-governance wrapper 開始\n"
++                        "[%s] daily-governance wrapper 完成\n" % (_stamp(2.2), fin2),
++                        encoding="utf-8")
++        r = _run()
++        check("★紀錄檔說最近才跑完 → 不准講「從來沒跑完過」★",
++              "從來沒跑完過" not in r.stdout, r.stdout + r.stderr)
++        check("★要改講「有在跑,但沒留下健康狀態檔」★",
++              "有在跑" in r.stdout and "健康狀態檔" in r.stdout, r.stdout + r.stderr)
++        check("★而且要把紀錄檔上那個時間講出來(人才查得下去)★",
++              fin2 in r.stdout, r.stdout)
++        check("★這個狀態仍然要喊★(看門狗瞎了值得知道一次,只是不能講假話)",
++              r.stdout.strip() != "", "什麼都沒印=這個狀態被靜默吞掉了")
++
++        # ③ 紀錄檔上最後一次跑完已經很久 → 回到「從來沒跑完過」
++        wlog.write_text("[%s] daily-governance wrapper 完成\n" % _stamp(80), encoding="utf-8")
++        r = _run()
++        check("★紀錄檔上最後一次已經超過門檻 → 照樣說「從來沒跑完過」★",
++              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
++
++        # ④ 紀錄檔有內容但沒有任何「完成」→ 不能被誤讀成跑完過
++        wlog.write_text("[%s] daily-governance wrapper 開始\n"
++                        "[%s] 治理日報 段結束 rc=0\n" % (_stamp(1), _stamp(0.9)), encoding="utf-8")
++        r = _run()
++        check("★只有「開始」沒有「完成」→ 不算跑完★",
++              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++
++
+ def t_wrapper_watchdog_states():
+     """★看門狗四種輸入各自要講對話★(2026-09-07 代碼審 r1 四席各自實測)。
+ 
+     ① wrapper 正在跑(自主迴圈那段可跑三小時)→ 不准喊「超過 36 小時沒跑完」。
+        第一版只看 finished_at 的年齡、完全不看鎖,會在它正常執行時發假警報,
+        而那句話還會誘使人去 kill 一個其實正常的行程。
+     ② finished_at 讀不動 + total=0 → 不准靜默判成正常。第一版時間解析失敗只讓
+        age 變空字串,控制流直接掉到「比 total」,剛好是 0 就給綠燈。
+     ③ 五步全 0、只有 total 壞掉 → 要說「這份檔自相矛盾」。第一版讀 total、健檢讀 steps,
+        同一份檔兩邊講出相反結論(而碼裡還寫著「不會各說各話」)。
