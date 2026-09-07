@@ -7274,6 +7274,43 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 out["related_nodes"] = _rn0
             except Exception:
                 pass
+        # ★把「這個迴圈在審哪份東西」印出來★(2026-09-07,另一個 session 提的缺口:
+        # 一個只拿到編號的新 session,loop next 給的東西已經夠它直接派工——現在狀態、
+        # 分級、第幾輪、幾個人、五個席位各自的家族,全都有。★唯一斷掉的一步是「在審什麼」★,
+        # 而那個資訊其實就在帳上,只是沒印出來,接手的人得自己去 tail 帳本。)
+        #
+        # ★取「最後一筆有值的」,不是「最後一筆」★:spec_path 是選配欄位,如果 r1 有記、
+        # r2 沒記,取最後一筆會印「沒記」——而接手的人會誤解成「這個迴圈從來沒記過在審什麼」。
+        # 兩種語意不能共用同一句話。(實測本庫 209 個迴圈:0 個落在這個差異上,
+        # 兩種取法今天結果完全一致——但欄位是選配的,一致是現況不是保證,所以照安全的取。)
+        #
+        # ★措辭要帶輪次★:這裡說「接下來第 N 輪」,而帳上最後那筆是第 N-1 輪的材料。
+        # 講成「這個迴圈在審 X」會讓人以為那就是下一輪要審的東西,而下一輪要自己凍一份新的。
+        _sp_degraded = None
+        try:
+            _sp_rec = next((r for r in reversed(rounds)
+                            if isinstance(r.get("spec_path"), str) and r["spec_path"].strip()), None)
+            if _sp_rec:
+                _sp = _sp_rec["spec_path"]
+                # ★路徑要以「vault 所屬的 repo 根」為錨,不是 cwd★
+                # (2026-09-07 代碼審 r1 外家否決席判 major,實測屬實:從 governance/ 底下
+                #  不帶 --repo 呼叫,會對一個★確實存在★的檔案印「這個檔案現在不在了」
+                #  ——正好是我想避免的「遞一條死路給人」的反面)。
+                # _vault_repo_root 是這個 repo 既有的那支(從 vault 往上找 .git),
+                # 判定閘的卷證解析用的也是它,不另寫一份。
+                # ★連 .resolve() 都要跟既有那支一致★(代碼審 r1 架構對齊席:
+                # 判定閘的解析根寫的是 `Path(repo).resolve() if repo else _vault_repo_root(env)`,
+                # 而 _vault_repo_root 自己也是回 resolve 過的。少一個 resolve 就是第二套規則。)
+                _root = Path(repo).resolve() if repo else _vault_repo_root(env)
+                _sp_abs = Path(_sp) if Path(_sp).is_absolute() else (_root / _sp)
+                out["reviewed_spec"] = {"path": _sp, "round": _sp_rec.get("round"),
+                                        "exists": _sp_abs.exists(),
+                                        "is_latest_round": _sp_rec is rounds[-1]}
+        except Exception as _e:
+            # ★不要謊稱「沒記」★(代碼審 r1 外家否決席 minor):壞掉的帳(spec_path 是 list/dict)
+            # 會走到這裡,而文字模式接著會印「帳上沒記這個迴圈在審什麼」——那是假話,
+            # 使用者分不出「真的沒記」和「記了但工具讀不動」。rc 不變,但要出聲。
+            _sp_degraded = str(_e)
         if extra:
             out.update(extra)
         if as_json:
@@ -7289,6 +7326,29 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                           + (f" 備註:{s['note']}" if s.get("note") else ""))
             elif out.get("roster_note"):
                 print(f"  應派: 目前算不出該派誰——{out['roster_note']}")
+            # ★在審什麼★:排在席位之後、其他雜項之前——接手的人下一步就是去讀那份材料。
+            if "reviewed_spec" in out:
+                _rs = out["reviewed_spec"]
+                _rd = f"第 {_rs['round']} 輪" if _rs.get("round") else "上一次"
+                print(f"  帳上最後記到的審查材料({_rd}):{_rs['path']}"
+                      + ("" if _rs["exists"] else "  ★這個檔案現在不在了★"))
+                if not _rs.get("is_latest_round", True):
+                    # ★不能說「用它判上一輪」★(代碼審 r1 外家否決席判 major):
+                    # 最後一輪自己沒記材料時,這一筆是更早的輪次,拿它去判最後一輪是錯的輸入。
+                    print(f"      ★但最後一輪自己沒記材料★——這一份是{_rd}的,不是最後一輪審的東西,"
+                          "別拿它去判最後一輪")
+                elif phase in ("plant-canary", "gate-pending"):
+                    # ★只有「還會有下一輪」的狀態才講這句★(同席 major,實測:escalate 狀態下
+                    # 會同時印「停掉這個編號」和「下一輪要自己凍一份新的」,兩句直接打架)。
+                    print("      要判上一輪過不過關就用它;★下一輪要自己凍一份新的★,不是沿用這一份")
+                else:
+                    print("      這個編號沒有下一輪了(看下面的狀態說明),這一份留著當卷證")
+            elif _sp_degraded:
+                print(f"  帳上記了審查材料但讀不動({_sp_degraded})——不是「沒記」,是這本帳的那個欄位壞了")
+            elif rounds:
+                # ★沒有就明講,不要靜默省略★:省略的話接手的人分不出是「帳上沒記」
+                # 還是「工具沒印」。spec_path 是後來才加的欄位,舊帳本來就沒有。
+                print("  帳上沒記這個迴圈在審什麼(spec_path 是後來才加的欄位,舊帳沒有)")
             for k in ("canary_type", "record_cmd", "scope_cap", "cluster_hint", "note"):
                 if k in out:
                     print(f"  {k}: {out[k]}")
@@ -7324,7 +7384,34 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         return emit("plant-canary")
     # ① gate-pending:判 converged 需 gate 結果,資訊不足絕不背書(先於 cap)
     if spec is None:
-        return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關——用 lumos loop status <編號> --gate 帶完整參數自己判"})
+        # ★帳上有路徑就把指令補完★:接手的人最常卡在這一步——它說「少了 --spec」,
+        # 但沒告訴你 spec 在哪。那個資訊就在帳上。
+        # ★只有「最後一輪自己記了材料」才敢把指令補完★(代碼審 r1 外家否決席判 major):
+        # 拿更早輪次的材料去判最後一輪是明確錯誤的輸入,不是保守退化。
+        # ★型別要驗★(代碼審 r1 通才席附註:畸形帳(spec_path 是 list)會被直接塞進 f-string,
+        # 印出 `--spec [1, 2, 3]` 這種不能執行的指令——不會炸,但「幫你補完指令」的承諾是空話)。
+        _hint = rounds[-1].get("spec_path") if rounds else None
+        if not isinstance(_hint, str) or not _hint.strip():
+            _hint = None
+        if _hint:
+            # ★閘的模式與 repo 根都不准猜死★(同席 major):light 帳要 --light,
+            # repo 根用 vault 往上找 .git 那支既有的,不是寫死 `.`(從子目錄呼叫就錯)。
+            _mode = "--light" if light else "--disposal"
+            try:
+                _rr = str(Path(repo).resolve() if repo else _vault_repo_root(env))
+            except Exception:
+                _rr = "."
+            return emit("gate-pending", {"note": f"少了 --spec,沒辦法判斷過不過關。帳上記的材料是 {_hint},"
+                                                 f"直接用:lumos loop status {loop_id} {_mode} --spec {_hint} --repo {_rr}"
+                                                 f"(2026-08-25 以前定錨的舊 panel 帳要改用 --gate --panel)"})
+        _older = next((r["spec_path"] for r in reversed(rounds)
+                       if isinstance(r.get("spec_path"), str) and r["spec_path"].strip()), None)
+        if _older:
+            return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關。"
+                                                 f"★最後一輪沒記材料★(更早的輪次記過 {_older},但那不是這一輪審的東西),"
+                                                 "所以指令補不完——要自己找出這一輪的材料再帶 --spec"})
+        return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關——用 lumos loop status <編號> --gate 帶完整參數自己判"
+                                             "(帳上也沒記這個迴圈在審什麼,要自己找)"})
     # ② full-basis gate 委派(靜默跑既有謂詞,零新判定邏輯)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):

@@ -16260,6 +16260,163 @@ def t_search_multiword_fallback_reports_per_term_coverage():
           "逐詞覆蓋" not in r2.stderr and "多詞回退" not in r2.stderr, r2.stderr)
 
 
+def t_loop_next_shows_reviewed_spec():
+    """★loop next 要告訴接手的人「這個迴圈在審哪份東西」★(2026-09-07)。
+
+    缺口:一個只拿到編號的新 session,`loop next` 給的東西已經夠它直接派工——
+    現在狀態、分級、第幾輪、幾個人、席位各自的家族全都有。★唯一斷掉的一步是「在審什麼」★,
+    而那個資訊本來就在帳上,只是沒印出來,接手的人得自己去 tail 帳本。
+
+    ★這條守四件事★:
+    ① 有記就印,而且要帶輪次(說「接下來第 N 輪」的同時,帳上那筆是第 N-1 輪的材料,
+       不帶輪次會讓人以為那就是下一輪要審的東西)
+    ② ★取「最後一筆有值的」,不是「最後一筆」★——spec_path 是選配欄位,r1 記了 r2 沒記時,
+       取最後一筆會印「沒記」,而接手的人會誤解成「這個迴圈從來沒記過」。兩種語意不能共用一句話。
+    ③ 完全沒記就★明講★,不要靜默省略(省略的話分不出是「帳上沒記」還是「工具沒印」)
+    ④ 帳上有記但檔案已經不在,要講出來(不要遞一條死路給人)
+
+    ★帳本用真的指令產生,不手刻★:這本帳有多個寫入端、欄位語意不同,
+    手刻的 fixture 驗的是「我以為的形狀」不是真的形狀——同檔既有測試也是這樣寫的。
+    """
+    import json as _j
+    import subprocess as sp
+    import tempfile as _tf
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-loopspec-"))
+    v = root / "docs" / "demo-knowledge"
+    (v / "Systems").mkdir(parents=True)
+    (v / "Systems" / "x.md").write_text("---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n內容\n",
+                                        encoding="utf-8")
+    rep = root / "r1-通才.md"
+    rep.write_text("severity: minor\n\n- [minor] 一條\n  引句:「這是一句夠長的逐字引句拿來當錨」\n  blocking:否\n",
+                   encoding="utf-8")
+    snap = root / "r1-snapshot.patch"
+    snap.write_text("這是一句夠長的逐字引句拿來當錨\n", encoding="utf-8")
+    snap2 = root / "r1-esc.patch"
+    snap2.write_text("這是一句夠長的逐字引句拿來當錨\n", encoding="utf-8")
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+    def rec(loop, rnd, with_spec):
+        args = ["canary", "record", "none", "--loop", loop, "--round", rnd,
+                "--auditor", "通才", "--severity", "minor", "--findings", "1",
+                "--report", str(rep), "--tier", "standard", "--orchestrator", "claude"]
+        if with_spec:
+            # ★--spec 必須配 --reviewed★:記帳指令自己會擋(手刻 fixture 不會有這道檢查,
+            # 這就是「帳本要用真指令產生」的價值)
+            import hashlib as _h
+            args += ["--spec", str(snap), "--snapshot", str(snap),
+                     "--reviewed", _h.sha256(snap.read_bytes()).hexdigest()]
+        return lum(*args)
+
+    # ① 有記就印,帶輪次
+    r = rec("t-spec-a", "r1", True)
+    check("★前置★ 現場成立:記帳真的成功了(不是在測一本空帳)", r.returncode == 0, r.stdout + r.stderr)
+    o = lum("loop", "next", "t-spec-a")
+    check("★有記就要印出在審哪份東西★", "審查材料" in o.stdout, o.stdout)
+    check("★而且要帶輪次★(不帶的話會被當成下一輪要審的東西)",
+          "r1" in o.stdout.split("審查材料")[1][:40], o.stdout)
+    check("要提醒下一輪得自己凍一份新的", "自己凍一份新的" in o.stdout, o.stdout)
+
+    # ② 最後一筆沒記、前面有記 → 仍要印前面那筆(這是本條最重要的鑑別力)
+    r2 = rec("t-spec-a", "r2", False)
+    check("★前置★ 現場成立:第二筆真的沒帶 spec", r2.returncode == 0, r2.stdout + r2.stderr)
+    o2 = lum("loop", "next", "t-spec-a")
+    check("★r1 有記、r2 沒記 → 仍要印 r1 那筆★(取最後一筆會變成「沒記」,語意完全不同)",
+          "審查材料" in o2.stdout and "沒記這個迴圈在審什麼" not in o2.stdout, o2.stdout)
+    # ★但要講清楚那不是最後一輪的東西★(代碼審 r1 外家否決席判 major:
+    # 第一版照樣說「要判上一輪過不過關就用它」,而拿 r1 的材料去判 r2 是明確錯誤的輸入。
+    # 我原本的斷言只驗「有印出來」,沒驗「有沒有講對」——席位這一點說對了。)
+    check("★最後一輪自己沒記時,要講明這一份不是它審的東西★",
+          "不是最後一輪審的東西" in o2.stdout, o2.stdout)
+    check("★而且不准把判閘指令補完★(拿更早輪次的材料去判最後一輪是錯的輸入,不是保守退化)",
+          "指令補不完" in o2.stdout and "直接用:lumos loop status" not in o2.stdout, o2.stdout)
+
+    # ③ 完全沒記 → 明講
+    rec("t-spec-b", "r1", False)
+    o3 = lum("loop", "next", "t-spec-b")
+    # ★斷言要咬到「那一段」,不是咬到任何含這句話的地方★:同一句也出現在「少了 --spec」
+    # 的提示裡,只用子字串比對會被那一句滿足——翻紅釘實測:把整段拿掉,測試照樣全綠。
+    # 今天第四次同型(前三次在別批),所以這裡比對的是★行首那一段★。
+    check("★完全沒記要明講,不准靜默省略★(省略的話分不出是帳上沒記還是工具沒印)",
+          any(l.startswith("  帳上沒記這個迴圈在審什麼") for l in o3.stdout.splitlines()),
+          o3.stdout)
+
+    # ④ 檔案不在了 → 要講出來
+    snap.unlink()
+    o4 = lum("loop", "next", "t-spec-a")
+    check("★帳上有記但檔案不在了,要講出來★(不要遞一條死路給人)",
+          "不在了" in o4.stdout, o4.stdout)
+
+    # ★終止狀態不准說「下一輪要自己凍一份新的」★(同席 major,實測 escalate 狀態下
+    # 會同時印「停掉這個編號」和「下一輪要自己凍」,兩句直接打架)。
+    # light 帳抓到 major 就永久進 escalate,拿來當現場。
+    rep_major = root / "r1-major.md"
+    rep_major.write_text("severity: major\n\n- [major] 一條\n  引句:「這是一句夠長的逐字引句拿來當錨」\n  blocking:是\n",
+                         encoding="utf-8")
+    import hashlib as _h
+    lum("canary", "record", "none", "--loop", "t-spec-esc", "--auditor", "通才",
+        "--severity", "major", "--findings", "1", "--report", str(rep_major),
+        "--tier", "light", "--orchestrator", "claude",
+        "--spec", str(snap2), "--snapshot", str(snap2),
+        "--reviewed", _h.sha256(snap2.read_bytes()).hexdigest())
+    oe = lum("loop", "next", "t-spec-esc")
+    check("★前置★ 現場成立:真的進了 escalate", "escalate" in oe.stdout, oe.stdout[:300])
+    check("★終止狀態不准說「下一輪要自己凍一份新的」★(會跟「停掉這個編號」打架)",
+          "自己凍一份新的" not in oe.stdout, oe.stdout)
+    check("要改說沒有下一輪", "沒有下一輪" in oe.stdout, oe.stdout)
+
+    # ★相對路徑要以 vault 所屬的 repo 根為錨,不是 cwd★(同席 major,實測:
+    # 從 governance/ 底下不帶 --repo 呼叫,對一個確實存在的檔案印「這個檔案現在不在了」。
+    # ★我原本的測試只用絕對暫存路徑,正好避開這個現場——席位說那是假綠覆蓋,對的。★)
+    (root / ".git").mkdir(exist_ok=True)
+    (root / "sub").mkdir(exist_ok=True)
+    relsnap = root / "materials"
+    relsnap.mkdir(exist_ok=True)
+    (relsnap / "r1.patch").write_text("這是一句夠長的逐字引句拿來當錨\n", encoding="utf-8")
+    # ★記帳要在 root 底下跑★:--spec 是相對路徑,記帳指令會去讀它算指紋,
+    # 在別的 cwd 跑會讀不到而整筆失敗(現場搭不起來,測試就變成在測空氣)。
+    rrel = sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "canary", "record", "none",
+                   "--loop", "t-spec-rel", "--round", "r1", "--auditor", "通才",
+                   "--severity", "minor", "--findings", "1", "--report", str(rep),
+                   "--tier", "standard", "--orchestrator", "claude",
+                   "--spec", "materials/r1.patch", "--snapshot", "materials/r1.patch",
+                   "--reviewed", _h.sha256((relsnap / "r1.patch").read_bytes()).hexdigest()],
+                  capture_output=True, text=True, cwd=str(root))
+    check("★前置★ 現場成立:相對路徑那筆真的記進去了", rrel.returncode == 0,
+          rrel.stdout + rrel.stderr)
+    orel = sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "next", "t-spec-rel"],
+                  capture_output=True, text=True, cwd=str(root / "sub"))
+    check("★從子目錄、不帶 --repo,相對路徑不准誤報「檔案不見了」★",
+          "審查材料" in orel.stdout and "不在了" not in orel.stdout, orel.stdout)
+
+    # ★畸形的 spec_path 不准變成不能執行的指令★(代碼審 r1 通才席附註實測:
+    # 帳裡那個欄位若是 list,會被直接塞進 f-string,印出 `--spec [1, 2, 3]`
+    # ——不會炸,但「幫你補完指令」的承諾是空話。)
+    led = v.parent / ".canary-log.jsonl"
+    _lines = led.read_text(encoding="utf-8").splitlines()
+    _lines.append(_j.dumps({"loop": "t-spec-bad", "round": "r1", "kind": "none",
+                            "severity": "minor", "findings": 1, "tier": "standard",
+                            "orchestrator": "claude", "spec_path": [1, 2, 3]},
+                           ensure_ascii=False))
+    led.write_text("\n".join(_lines) + "\n", encoding="utf-8")
+    obad = lum("loop", "next", "t-spec-bad")
+    check("★畸形的材料欄位不准被當成路徑印出去★",
+          "[1, 2, 3]" not in obad.stdout, obad.stdout[:400])
+    check("★而且要講「讀不動」不是「沒記」★(那兩件事使用者要分得出來)",
+          "讀不動" in obad.stdout or "沒記這個迴圈在審什麼" in obad.stdout, obad.stdout[:400])
+
+    # 機讀輸出也要有
+    o5 = lum("loop", "next", "t-spec-a", "--json")
+    d = _j.loads(o5.stdout)
+    check("機讀輸出要有 reviewed_spec 三個欄位",
+          set(("path", "round", "exists")) <= set(d.get("reviewed_spec", {})), o5.stdout[:300])
+    check("檔案不在時 exists 要是 False", d["reviewed_spec"]["exists"] is False, o5.stdout[:300])
+    import shutil as _sh
+    _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_loop_next_shows_reviewed_spec")
+
+
 def t_search_cjk_loose_fallback():
     """★2026-09-07:沒有空白的中文查詢,退成相鄰兩字一組★(Projects/中文無空白查詢回退_計劃)。
 

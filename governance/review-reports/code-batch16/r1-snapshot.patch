@@ -1,0 +1,248 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md b/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
+index 3a5c295..a486ab4 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
++++ b/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
+@@ -51,20 +51,26 @@ decisions:
+     context: r1 深層 blocker(R1-BLOCKER-2):原宣稱「機械自我終止」過度;severity 自報、想早收工的編排者可記假 clean——這跟 canary「植入者忠實判定」是同一個沒閉合的迴歸
+     why_chosen: 對「無人看顧的自動 loop」夠用(終止從不可查的人判→可查的條件);對「刻意作弊」本就不設防、不該假裝防竄改;誠實標清天花板免下游過度信任
+     decided: 2026-06-19
+     valid: true
+   - content: missed 輪靠 tail-K 機制自然重置乾淨連續數(missed 必 kind!=caught 故落窗內即擋收斂),無需特例
+     id: d3
+     context: 第六輪 dogfood 實況逼出(R6):一次漏抓 canary 該讓乾淨連續數歸零,否則放水輪被忽略
+     why_chosen: tail-K 已天然涵蓋——missed 在窗內就不收斂、隨新輪滑出才放行;加特例反增複雜度
+     decided: 2026-06-19
+     valid: true
++  - content: loop next 要印「帳上最後記到的審查材料(第 rN 輪):<路徑>」,取★最後一筆有 spec_path 的★而不是最後一筆(那個欄位是選配,r1 記了 r2 沒記時取最後一筆會印成「沒記」,語意完全不同);完全沒記要明講不准靜默省略(不然接手的人分不出是帳上沒記還是工具沒印);檔案已不存在要標出來;「少了 --spec」那句提示直接把可貼上的完整指令補完。措辭必須帶輪次——loop next 說「接下來第 N 輪」而帳上那筆是第 N-1 輪的材料,不帶輪次會被誤讀成下一輪要審的東西。
++    id: d4
++    context: 一個只拿到編號的新 session 跑 loop next,拿到的東西已經夠它直接派工(狀態/分級/第幾輪/幾個人/席位家族全有),唯一斷掉的一步是「在審什麼」——而那個資訊本來就在帳上,只是沒印,接手的人要自己去 tail 帳本。另一個 session 做「新 session 只拿編號能不能接手」的實測時發現的。
++    why_chosen: 取最後一筆有值的:實測本庫 209 個迴圈有 0 個落在兩種取法的差異上,所以今天結果一致——但欄位是選配的,一致是現況不是保證,安全取法不花錢。跨輪換過路徑的 10 個迴圈全是每輪各自的快照,取最後一筆是對的(舊輪的路徑對下一輪是過期資訊)。
++    decided: 2026-09-07
++    valid: true
+ related:
+   - "[[Issues/loop-next吐不可宣告的tier]]"
+ about_code:
+   - scripts/lumos
+ ---
+ # loop-convergence-recording
+ 
+ 收斂留痕(Convergence Recording)—— lumos 治理朝 **loop engineering** 方向的 **Component A**(機械層):把對抗審計 loop 的終止判準從「人在判」變成「lumos 從紀錄機械算出、可查詢」。
+ 
+ 源起:lumos 治理大方向 memory `lumos-governance-direction-loop-engineering`(朝自主/無人看顧的自我檢查 loop)。非由單日日報 gap 直接觸發——2026-06-19 日報的 gaps/loop_lens 聚焦記憶完整性(STALE/記憶污染/HEARTBEAT),與本功能相鄰但不同路;本設計稿明載其角色來自 loop-engineering 方向。reportProvenance 見回報。
+diff --git a/scripts/lumos b/scripts/lumos
+index 680f761..5c6951a 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7267,35 +7267,67 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+                 # ★fail-open 鐵則:本 try 內禁止 sys.exit/SystemExit(except Exception 攔不到)★
+                 _rn0 = _el_related_nodes(env, Path(spec).stem) if spec else None
+                 if _rn0 is None or not _rn0["queried"]:
+                     # r1 合約席 G-1+r2 delta D2-2:code loop 的 --spec 慣用值=凍結 patch(stem 如
+                     # r1-snapshot→無訊號);spec 版查無訊號就一律改用編號版——spec 檔名是工具慣例名
+                     # 非主題,其殘渣(snapshot)不得流進「要查自己跑」建議行
+                     _rn0 = _el_related_nodes(env, loop_id)
+                 out["related_nodes"] = _rn0
+             except Exception:
+                 pass
++        # ★把「這個迴圈在審哪份東西」印出來★(2026-09-07,另一個 session 提的缺口:
++        # 一個只拿到編號的新 session,loop next 給的東西已經夠它直接派工——現在狀態、
++        # 分級、第幾輪、幾個人、五個席位各自的家族,全都有。★唯一斷掉的一步是「在審什麼」★,
++        # 而那個資訊其實就在帳上,只是沒印出來,接手的人得自己去 tail 帳本。)
++        #
++        # ★取「最後一筆有值的」,不是「最後一筆」★:spec_path 是選配欄位,如果 r1 有記、
++        # r2 沒記,取最後一筆會印「沒記」——而接手的人會誤解成「這個迴圈從來沒記過在審什麼」。
++        # 兩種語意不能共用同一句話。(實測本庫 209 個迴圈:0 個落在這個差異上,
++        # 兩種取法今天結果完全一致——但欄位是選配的,一致是現況不是保證,所以照安全的取。)
++        #
++        # ★措辭要帶輪次★:這裡說「接下來第 N 輪」,而帳上最後那筆是第 N-1 輪的材料。
++        # 講成「這個迴圈在審 X」會讓人以為那就是下一輪要審的東西,而下一輪要自己凍一份新的。
++        try:
++            _sp_rec = next((r for r in reversed(rounds) if r.get("spec_path")), None)
++            if _sp_rec:
++                _sp = _sp_rec["spec_path"]
++                _sp_abs = (Path(repo) / _sp) if repo else Path(_sp)
++                out["reviewed_spec"] = {"path": _sp, "round": _sp_rec.get("round"),
++                                        "exists": _sp_abs.exists()}
++        except Exception:
++            pass
+         if extra:
+             out.update(extra)
+         if as_json:
+             print(_json.dumps(out, ensure_ascii=False))
+         else:
+             print(f"[next] {loop_id}:現在狀態 {phase},分級 {eff_tier},接下來第 {n_next} 輪,"
+                   f"這輪要 {width} 人審,最多跑 {cap} 輪")
+             if out.get("roster"):
+                 for s in out["roster"]["seats"]:
+                     _fam = ("同門[" + out.get("orchestrator", "claude") + "]") if s['family'] == "claude" else ("外家(不是 " + out.get("orchestrator", "claude") + " 那一家)" if s['family'] == "external" else s['family'])
+                     print(f"  應派: {s['slot']}(家族 {_fam},"
+                           f"{'算' if s['occupies_w'] else '不算'}進人數,派工要求:{s['requirement']})"
+                           + (f" 備註:{s['note']}" if s.get("note") else ""))
+             elif out.get("roster_note"):
+                 print(f"  應派: 目前算不出該派誰——{out['roster_note']}")
++            # ★在審什麼★:排在席位之後、其他雜項之前——接手的人下一步就是去讀那份材料。
++            if "reviewed_spec" in out:
++                _rs = out["reviewed_spec"]
++                _rd = f"第 {_rs['round']} 輪" if _rs.get("round") else "上一次"
++                print(f"  帳上最後記到的審查材料({_rd}):{_rs['path']}"
++                      + ("" if _rs["exists"] else "  ★這個檔案現在不在了★"))
++                print("      要判上一輪過不過關就用它;★下一輪要自己凍一份新的★,不是沿用這一份")
++            elif rounds:
++                # ★沒有就明講,不要靜默省略★:省略的話接手的人分不出是「帳上沒記」
++                # 還是「工具沒印」。spec_path 是後來才加的欄位,舊帳本來就沒有。
++                print("  帳上沒記這個迴圈在審什麼(spec_path 是後來才加的欄位,舊帳沒有)")
+             for k in ("canary_type", "record_cmd", "scope_cap", "cluster_hint", "note"):
+                 if k in out:
+                     print(f"  {k}: {out[k]}")
+             # 圖譜入口栓 A 文字段(spec EL-1/EL-16:專屬多行段,不塞五鍵白名單;三分支唯一化)
+             try:
+                 if "related_nodes" in out:
+                     _rn = out["related_nodes"]
+                     if not _rn["queried"]:
+                         _lt, _ = _el_query_tokens(_rn["query"])
+                         if _lt:   # r1 正確性席 C-1:dref-v4 型「單字+版號」可查卻被閘掉——給出手動查詢的一行,不靜默丟失
+@@ -7317,21 +7349,28 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+         return 0 if phase == "converged" else 1
+ 
+     # ⓪ escalate:light ratchet 永久態最先短路
+     if light and any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker")
+                      for r in rounds):
+         return emit("escalate", {"note": "這個編號曾抓到 major 以上的問題,light 最寬鬆的規則從此失效——停掉這個編號,開新的(原編號加 -std)換嚴格規則接著審"})
+     if not rounds:
+         return emit("plant-canary")
+     # ① gate-pending:判 converged 需 gate 結果,資訊不足絕不背書(先於 cap)
+     if spec is None:
+-        return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關——用 lumos loop status <編號> --gate 帶完整參數自己判"})
++        # ★帳上有路徑就把指令補完★:接手的人最常卡在這一步——它說「少了 --spec」,
++        # 但沒告訴你 spec 在哪。那個資訊就在帳上。
++        _hint = next((r.get("spec_path") for r in reversed(rounds) if r.get("spec_path")), None)
++        if _hint:
++            return emit("gate-pending", {"note": f"少了 --spec,沒辦法判斷過不過關。帳上記的材料是 {_hint},"
++                                                 f"直接用:lumos loop status {loop_id} --disposal --spec {_hint} --repo ."})
++        return emit("gate-pending", {"note": "少了 --spec,沒辦法判斷過不過關——用 lumos loop status <編號> --gate 帶完整參數自己判"
++                                             "(帳上也沒記這個迴圈在審什麼,要自己找)"})
+     # ② full-basis gate 委派(靜默跑既有謂詞,零新判定邏輯)
+     buf = io.StringIO()
+     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+         rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
+                              spec=spec, repo=repo, panel=(panel_fmt and not light),
+                              light=light, min_seats=width)   # 恆傳(light/legacy=1;code-loop r1 折入)
+     if rc == 2:
+         sys.stderr.write(buf.getvalue())
+         return 2
+     if rc == 0:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f1cc0f6..610d8a1 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -16253,20 +16253,110 @@ def t_search_multiword_fallback_reports_per_term_coverage():
+ 
+     # ⑤ 回退沒觸發時不得印(片語存在)
+     note("Systems/n5.md", "# n5\n這裡有連續的 辛 壬 片語。\n")
+     r2 = lum("search", "辛 壬", "--any", "--files-only")
+     check("★前置★ 現場成立:片語「辛 壬」真的找得到(回退不該觸發)",
+           "n5.md" in r2.stdout, r2.stdout)
+     check("★⑤ 回退沒觸發時,一個字都不該印★",
+           "逐詞覆蓋" not in r2.stderr and "多詞回退" not in r2.stderr, r2.stderr)
+ 
+ 
++def t_loop_next_shows_reviewed_spec():
++    """★loop next 要告訴接手的人「這個迴圈在審哪份東西」★(2026-09-07)。
++
++    缺口:一個只拿到編號的新 session,`loop next` 給的東西已經夠它直接派工——
++    現在狀態、分級、第幾輪、幾個人、席位各自的家族全都有。★唯一斷掉的一步是「在審什麼」★,
++    而那個資訊本來就在帳上,只是沒印出來,接手的人得自己去 tail 帳本。
++
++    ★這條守四件事★:
++    ① 有記就印,而且要帶輪次(說「接下來第 N 輪」的同時,帳上那筆是第 N-1 輪的材料,
++       不帶輪次會讓人以為那就是下一輪要審的東西)
++    ② ★取「最後一筆有值的」,不是「最後一筆」★——spec_path 是選配欄位,r1 記了 r2 沒記時,
++       取最後一筆會印「沒記」,而接手的人會誤解成「這個迴圈從來沒記過」。兩種語意不能共用一句話。
++    ③ 完全沒記就★明講★,不要靜默省略(省略的話分不出是「帳上沒記」還是「工具沒印」)
++    ④ 帳上有記但檔案已經不在,要講出來(不要遞一條死路給人)
++
++    ★帳本用真的指令產生,不手刻★:這本帳有多個寫入端、欄位語意不同,
++    手刻的 fixture 驗的是「我以為的形狀」不是真的形狀——同檔既有測試也是這樣寫的。
++    """
++    import json as _j
++    import subprocess as sp
++    import tempfile as _tf
++    from pathlib import Path as _P
++    root = _P(_tf.mkdtemp(prefix="gctl-loopspec-"))
++    v = root / "docs" / "demo-knowledge"
++    (v / "Systems").mkdir(parents=True)
++    (v / "Systems" / "x.md").write_text("---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n內容\n",
++                                        encoding="utf-8")
++    rep = root / "r1-通才.md"
++    rep.write_text("severity: minor\n\n- [minor] 一條\n  引句:「這是一句夠長的逐字引句拿來當錨」\n  blocking:否\n",
++                   encoding="utf-8")
++    snap = root / "r1-snapshot.patch"
++    snap.write_text("這是一句夠長的逐字引句拿來當錨\n", encoding="utf-8")
++    def lum(*a):
++        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
++                      capture_output=True, text=True)
++    def rec(loop, rnd, with_spec):
++        args = ["canary", "record", "none", "--loop", loop, "--round", rnd,
++                "--auditor", "通才", "--severity", "minor", "--findings", "1",
++                "--report", str(rep), "--tier", "standard", "--orchestrator", "claude"]
++        if with_spec:
++            # ★--spec 必須配 --reviewed★:記帳指令自己會擋(手刻 fixture 不會有這道檢查,
++            # 這就是「帳本要用真指令產生」的價值)
++            import hashlib as _h
++            args += ["--spec", str(snap), "--snapshot", str(snap),
++                     "--reviewed", _h.sha256(snap.read_bytes()).hexdigest()]
++        return lum(*args)
++
++    # ① 有記就印,帶輪次
++    r = rec("t-spec-a", "r1", True)
++    check("★前置★ 現場成立:記帳真的成功了(不是在測一本空帳)", r.returncode == 0, r.stdout + r.stderr)
++    o = lum("loop", "next", "t-spec-a")
++    check("★有記就要印出在審哪份東西★", "審查材料" in o.stdout, o.stdout)
++    check("★而且要帶輪次★(不帶的話會被當成下一輪要審的東西)",
++          "r1" in o.stdout.split("審查材料")[1][:40], o.stdout)
++    check("要提醒下一輪得自己凍一份新的", "自己凍一份新的" in o.stdout, o.stdout)
++
++    # ② 最後一筆沒記、前面有記 → 仍要印前面那筆(這是本條最重要的鑑別力)
++    r2 = rec("t-spec-a", "r2", False)
++    check("★前置★ 現場成立:第二筆真的沒帶 spec", r2.returncode == 0, r2.stdout + r2.stderr)
++    o2 = lum("loop", "next", "t-spec-a")
++    check("★r1 有記、r2 沒記 → 仍要印 r1 那筆★(取最後一筆會變成「沒記」,語意完全不同)",
++          "審查材料" in o2.stdout and "沒記這個迴圈在審什麼" not in o2.stdout, o2.stdout)
++
++    # ③ 完全沒記 → 明講
++    rec("t-spec-b", "r1", False)
++    o3 = lum("loop", "next", "t-spec-b")
++    # ★斷言要咬到「那一段」,不是咬到任何含這句話的地方★:同一句也出現在「少了 --spec」
++    # 的提示裡,只用子字串比對會被那一句滿足——翻紅釘實測:把整段拿掉,測試照樣全綠。
++    # 今天第四次同型(前三次在別批),所以這裡比對的是★行首那一段★。
++    check("★完全沒記要明講,不准靜默省略★(省略的話分不出是帳上沒記還是工具沒印)",
++          any(l.startswith("  帳上沒記這個迴圈在審什麼") for l in o3.stdout.splitlines()),
++          o3.stdout)
++
++    # ④ 檔案不在了 → 要講出來
++    snap.unlink()
++    o4 = lum("loop", "next", "t-spec-a")
++    check("★帳上有記但檔案不在了,要講出來★(不要遞一條死路給人)",
++          "不在了" in o4.stdout, o4.stdout)
++
++    # 機讀輸出也要有
++    o5 = lum("loop", "next", "t-spec-a", "--json")
++    d = _j.loads(o5.stdout)
++    check("機讀輸出要有 reviewed_spec 三個欄位",
++          set(("path", "round", "exists")) <= set(d.get("reviewed_spec", {})), o5.stdout[:300])
++    check("檔案不在時 exists 要是 False", d["reviewed_spec"]["exists"] is False, o5.stdout[:300])
++    import shutil as _sh
++    _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_loop_next_shows_reviewed_spec")
++
++
+ def t_search_cjk_loose_fallback():
+     """★2026-09-07:沒有空白的中文查詢,退成相鄰兩字一組★(Projects/中文無空白查詢回退_計劃)。
+ 
+     背景:一串沒有空白的中文★結構上永遠查不到★——多詞回退要求「超過一個詞」,
+     而沒有空白就是一個詞。CLAUDE.md 第一條紀律就是在教這件事,而一條紀律存在,
+     就代表這個坑一直有人踩,踩的人是每個新 session 的 AI。
+ 
+     ★這條守的是六件事★:
+     ① 現場成立:沒有空白的中文查詢預設真的回 0(否則下面在測一個不存在的問題)
+     ② ★預設關★——不帶旗標時行為必須一行不變。這是整個設計的安全前提:
