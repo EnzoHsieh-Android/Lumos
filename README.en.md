@@ -15,6 +15,10 @@
   <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="900">
 </p>
 
+**Understand it** &nbsp;[What this is](#what-this-is) · [What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper)<br>
+**Use it** &nbsp;[Who this is for](#who-this-is-for) · [Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
+**Beyond that** &nbsp;[Why this exists](#why-this-exists) · [Going deeper](#going-deeper) · [Scope](#scope) · [Licence](#licence)
+
 ---
 
 ## What this is
@@ -70,7 +74,7 @@ That last line matters more than it looks. **Spelling out which things are rules
 
 ---
 
-## Isn't this just Obsidian?
+## How this differs from Obsidian
 
 **The note format is Obsidian-compatible — open it in Obsidian if you like**, and you don't need to install any notes app for Lumos to work. We're not trying to replace it.
 
@@ -117,7 +121,7 @@ The primary reader of these notes isn't a human — it's **the next session's AI
 
 ---
 
-## The loop: it gets sharper each round
+## The loop that gets sharper
 
 This is where Lumos parts ways with "a really well-written document". Documents go stale. This gets a little sharper every time it runs.
 
@@ -136,7 +140,7 @@ The four stages run in order. **The point is the last one: what gets accounted f
 
 ---
 
-## Who this is for — and who it isn't
+## Who this is for
 
 **A fit if:**
 
