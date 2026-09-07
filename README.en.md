@@ -12,9 +12,7 @@
 > **Lumos gives a project a second set of notes for everything the code can't say, then uses checks to make sure they actually get written.**
 
 <p align="center">
-  <img src="assets/graph-growth.gif" alt="A knowledge graph growing from a handful of notes to several hundred" width="820">
-  <br>
-  <sub>Lumos's own notes, over three months. One dot = one note; lines = notes that reference each other.</sub>
+  <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="900">
 </p>
 
 ---
@@ -33,11 +31,10 @@ That knowledge used to live in a senior engineer's head, and left when they did.
 
 Lumos writes those five things into a set of interlinked Markdown notes, then uses git checks (small programs that run when you commit or push) to close off the "changed the code, didn't touch the notes" path. **Not writing has to be more annoying than writing — otherwise nobody writes.**
 
-<p align="center">
-  <img src="assets/graph-demo-overview.jpg" alt="The knowledge graph of an online store project" width="860">
-  <br>
-  <sub>A demo graph: a fictional online store. Blue = modules, green = verification records, orange = incidents, purple = plans.</sub>
-</p>
+Two things in that diagram are worth pausing on:
+
+- **The gold ring isn't there from the start.** The blue module appears plain; the ring and star only grow once a green verification record is linked to it — because that's the rule: **claiming "this must not change" doesn't count until real evidence is bound to it.**
+- **The orange line goes backwards.** An incident doesn't sit in a corner gathering dust; it gets wired into the next plan as required reading before anyone starts.
 
 ---
 
@@ -90,15 +87,68 @@ That last line matters more than it looks. **Spelling out which things are rules
 
 **The note format is Obsidian-compatible — open it in Obsidian if you like**, and you don't need to install any notes app for Lumos to work. We're not trying to replace it.
 
-The difference: **an ordinary notes app never stops you.** It lets you write, but doesn't care whether you wrote anything, or whether what you wrote is true. Lumos adds three things that do stop you:
+The difference in one line: **Obsidian is for people to browse. Lumos is for an AI to query.**
+
+An ordinary notes app won't stop you, and won't find things for you either. Lumos adds this:
 
 | | Ordinary notes app | Lumos |
 |---|---|---|
+| **An AI using it** | Dump files into context and go fishing | **One command back: ranked, filtered, compressed** |
+| **Looking up from source code** | No such concept | **Give it a source file, get the notes it affects and which of them carry contracts** |
 | You write "this rule must not change" | Saved. Fine. | Name the test that guards it. Can't? Health check goes red. |
 | You changed code and touched no notes | Nobody notices | `git commit` stops you — fix it, or say in one line why it isn't needed |
-| Who reads it | People, browsing | **An AI, in one command, in seconds.** Before touching anything it asks where the boundaries are |
+| **Why it was decided that way** | Buried in prose; go read | **Decisions are their own field: id, date, reasoning, whether it was later overturned** |
+| **A note has gone stale** | Nobody knows; people keep trusting it | **Verification records must state what would invalidate them, and get nagged when due** |
 
-The third one is the most underrated. The primary reader of these notes isn't a human — it's **the next session's AI**. Which is why they're written so a stranger can follow them, not as shorthand for yourself.
+### The one that matters most: query it, don't pour it in
+
+An AI handed an Obsidian vault can only read files into context. **This repo's notes come to 2.61 million characters** — they don't fit; and even if they did, the important parts would be diluted into noise.
+
+Here's what 2.61 million characters looks like:
+
+<p align="center">
+  <img src="assets/graph-growth.gif" alt="Lumos's own knowledge graph growing to 440 notes over three months" width="820">
+  <br>
+  <sub>Lumos's own notes over three months: 440 of them, 1,572 links. Recorded from the actual tool, not drawn.</sub>
+</p>
+
+So Lumos lets it **issue a query** instead. Ask where a module's boundaries are, and this comes back:
+
+```console
+$ lumos context Systems/payment-integration --brief   # 783 chars back; the full note is 1,812
+Heads up — this note carries a contract. Read it before you touch anything:
+  ★INVARIANT★ one order must never be charged twice [test:test_no_double_charge_on_retry]
+```
+
+**Contracts are pinned to the top**, because that's the part you can least afford to miss. The difference isn't "faster" — it's **fits vs. doesn't fit**.
+
+Two more lookups Obsidian can't give you:
+
+```console
+$ lumos impact --file payment/gateway.py    # I'm about to change this. What does it touch?
+
+── direct (2) ──
+  ⚠contract Systems/payment-integration.md ★IRREVERSIBLE★  (body-inline-code)
+  ⚠contract Systems/checkout-flow.md ★INVARIANT★  (body-inline-code)
+── indirect (12) ──
+  hop1  Verification/2026-04-15_duplicate-charge-load-test.md  backlink ← via related ← payment-integration
+  hop1  Issues/2026-05-06_points-not-refunded-on-cancel.md  backlink ← via related ← checkout-flow
+```
+
+```console
+$ lumos query --tag status/doing            # What's still unfinished?
+
+Projects/subscriptions_plan.md [doing]
+Systems/push-notifications.md [doing]
+
+2 nodes matched
+```
+
+The first is a **reverse lookup from source code** — hand it a filename, get back which notes are affected, which of those carry contracts you must not break, and for the indirect ones, which note they came through.
+
+The second is a **structured query over tags**, not a full-text search. Tags come in families (`type/`, `status/`, and any you add such as `priority/` or `scope/`), and you can stack filters like "only what's still open" or "only what links to this note" — sliced by whatever taxonomy you chose.
+
+The primary reader of these notes isn't a human — it's **the next session's AI**. So they're written so a stranger can follow them, and **designed to be queried rather than read**.
 
 ---
 
