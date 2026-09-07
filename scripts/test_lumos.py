@@ -6167,6 +6167,322 @@ def _mk_bound_tests_repo(d, run_cmd='python3 tests/run.py {method}', contract_te
     return d
 
 
+def t_bound_tests_shared_impact_payload():
+    """★兩個消費者吃的必須是同一份波及結果★(2026-09-07 全 repo 審視 #17,設計 [S1] 第 3 步)。
+
+    推送關卡對每個 ref 算一次波及,同步點名與合約測試閘各讀一次。以前兩邊各自呼叫,
+    等於一次推送算兩次——而「不要算兩次」正是這一案 r1 拿來否決原設計的那個成本。
+
+    ★為什麼是機械守衛不是回頭條件★(r3 兩席都判 blocking):
+    同步點名★從不寫治理帳★,所以「它印了東西但那道閘說沒有」這件事,帳上根本查不到
+    ——原本寫的那條回頭條件看起來能查、其實不能。改成每次推送前就驗。
+
+    做法:餵一份**合成的**結果檔進去,兩邊算出來的節點集合必須一樣。
+    把其中一邊改成自己重算(不吃那份檔)就會翻紅。
+    """
+    import json as _j
+    import subprocess as _sp
+    import shutil as _sh
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btshare-"))
+    lumos_real = str(Path(GRAPHCTL).resolve())
+    try:
+        # 合成一份「只點名 Systems/Pay」的波及結果——這是現場的重點:
+        # 如果哪一邊偷偷自己重算,它算出來的東西不會剛好只有這一篇。
+        payload = {"range": "SYNTHETIC..RANGE",
+                   "files": ["app/pay.py"],
+                   "results": [{"node": "Systems/Pay.md", "pinned": True, "contract": "INVARIANT",
+                                "score": 9.99, "kind": "direct", "files": ["app/pay.py"]}],
+                   "sync": {"touched_nodes": [],
+                            "missing": [{"node": "Systems/Pay.md", "pinned": True,
+                                         "score": 9.99, "files": ["app/pay.py"]}]},
+                   "meta": {"files": 1, "pinned": 1, "free_kept": 0, "free_total": 0, "per_file": []}}
+        pj = Path(d) / "impact.json"
+        pj.write_text(_j.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+        # 消費者①:同步點名
+        r1 = _sp.run([sys.executable, lumos_real, "impact", "--sync-only",
+                      "--from-json", str(pj), "--repo", str(d)],
+                     capture_output=True, text=True)
+        check("★消費者①(同步點名)要吃那份檔,而且點名的就是檔裡那一篇★",
+              "Systems/Pay" in r1.stdout, r1.stdout + r1.stderr[-200:])
+        check("★而且不准去碰那個假造的範圍★(碰了代表它自己又算了一次)",
+              "SYNTHETIC..RANGE" not in r1.stderr, r1.stderr[-300:])
+
+        # 消費者②:合約測試閘
+        r2 = _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(pj),
+                      "--repo", str(d), "--advisory", "--json"],
+                     capture_output=True, text=True)
+        v = _j.loads(r2.stdout)
+        check("★消費者②(合約測試閘)吃同一份,而且真的跑到那篇綁的測試★",
+              v["status"] == "green" and v["ran"] == 1, r2.stdout + r2.stderr[-300:])
+
+        # ★現場成立★:那個假造的範圍本身是算不出東西的——所以上面兩條只可能來自那份檔
+        r3 = _sp.run([sys.executable, lumos_real, "bound-tests", "--diff", "SYNTHETIC..RANGE",
+                      "--repo", str(d), "--advisory", "--json"],
+                     capture_output=True, text=True)
+        v3 = _j.loads(r3.stdout)
+        check("★前置★ 現場成立:同一個範圍自己重算是算不出東西的",
+              v3["status"] != "green", r3.stdout)
+
+        # 讀不到那份檔:兩邊各自降級,一個失敗不准拖垮另一個
+        r4 = _sp.run([sys.executable, lumos_real, "impact", "--sync-only",
+                      "--from-json", str(Path(d) / "nope.json"), "--repo", str(d)],
+                     capture_output=True, text=True)
+        check("★讀不到 → 同步點名維持靜默、rc 不變★",
+              r4.returncode == 0 and "Systems/Pay" not in r4.stdout, r4.stdout + r4.stderr[-200:])
+        r5 = _sp.run([sys.executable, lumos_real, "bound-tests",
+                      "--from-json", str(Path(d) / "nope.json"), "--repo", str(d), "--advisory"],
+                     capture_output=True, text=True)
+        check("★讀不到 → 合約測試閘記帳放行,而且講得出是這一步壞了★",
+              r5.returncode == 0 and "讀不到" in r5.stderr, r5.stderr[-300:])
+        check("而且帳上要記成 range-unavailable,不要混進「真的沒東西可跑」",
+              "range-unavailable" in _bound_gov_kinds(d), str(_bound_gov_kinds(d)))
+
+        # ★人裁的核心:低風險不擋,高風險擋★(2026-09-07 Enzo)
+        # 不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 --no-verify
+        # ——而推送關卡自己在別的地方就把那條當第三選項在教,那條零留痕。
+        (Path(d) / "tests" / "RED").write_text("", encoding="utf-8")
+        ra = _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(pj),
+                      "--repo", str(d), "--advisory"], capture_output=True, text=True)
+        check("★前置★ 現場成立:那支測試真的紅了", "沒過" in ra.stderr, ra.stderr[-300:])
+        check("★低風險(--advisory):紅了照樣印,但★不擋★(rc=0)",
+              ra.returncode == 0, f"rc={ra.returncode}\n{ra.stderr[-300:]}")
+        check("★而且要講「這是測試紅了,不是還沒審查」★"
+              "(補一筆代碼審留痕修不好一支紅掉的測試,而舊路徑的訊息正是叫人去補留痕)",
+              "不是「還沒審查」" in ra.stderr, ra.stderr[-400:])
+        check("低風險的紅要記成 red-advisory", "red-advisory" in _bound_gov_kinds(d),
+              str(_bound_gov_kinds(d)))
+        rb = _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(pj),
+                      "--repo", str(d)], capture_output=True, text=True)
+        check("★不帶 --advisory(高風險那條路):紅了要擋(rc=1)★",
+              rb.returncode == 1, f"rc={rb.returncode}\n{rb.stderr[-300:]}")
+        check("高風險的紅要記成 red-blocked(兩者後果不同,不能混帳)",
+              "red-blocked" in _bound_gov_kinds(d), str(_bound_gov_kinds(d)))
+        # ★hard 欄位要跟著 kind 改名一起改★(代碼審 r1 外家否決席判 major):
+        # 舊碼比對的是舊的 "red",改名後高風險真的擋下去的那筆會被記成 hard:false,
+        # 而舊的呈現端依 hard 分「硬擋/軟」,會把真硬擋報成軟事件。
+        _hard = _bound_gov_hard(d)
+        check("★真的擋下去的那筆,hard 要是 true★", _hard.get("red-blocked") is True, str(_hard))
+        check("★只提醒的那筆,hard 要是 false★", _hard.get("red-advisory") is False, str(_hard))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+    # ★不可過濾的測試指令 + 低風險 → 不跑,誠實記★(設計 [S4])
+    # 沒有 {method} 佔位符就只能整套跑,逾時上限 600 秒。低風險推送不值得付這個。
+    # ★不要假裝這種情況也守住了★——所以記一個自己的類別,不混進 green。
+    d2 = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btwhole-"),
+                              run_cmd="python3 tests/run.py")   # 沒有 {method}
+    try:
+        pj2 = Path(d2) / "impact.json"
+        pj2.write_text(_j.dumps({"range": "SYNTHETIC..RANGE", "files": ["app/pay.py"],
+                                 "results": [{"node": "Systems/Pay.md", "pinned": True,
+                                              "contract": "INVARIANT", "score": 9.99,
+                                              "kind": "direct", "files": ["app/pay.py"]}],
+                                 "sync": {"touched_nodes": [], "missing": []},
+                                 "meta": {}}, ensure_ascii=False), encoding="utf-8")
+        rw = _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(pj2),
+                      "--repo", str(d2), "--advisory", "--json"], capture_output=True, text=True)
+        vw = _j.loads(rw.stdout)
+        check("★測試指令不可過濾 + 低風險 → 不跑,記 whole-suite-deferred★",
+              vw["status"] == "whole-suite-deferred", rw.stdout + rw.stderr[-200:])
+        check("★而且不准混進 green★(混了就是假裝這種情況也守住了)",
+              vw["status"] != "green", rw.stdout)
+        check("訊息要講怎麼修好它(把指令改成可過濾的)",
+              "{method}" in vw["reason"], vw["reason"])
+        check("帳上要記得到那個類別", "whole-suite-deferred" in _bound_gov_kinds(d2),
+              str(_bound_gov_kinds(d2)))
+        # 高風險照舊跑整套
+        rwh = _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(pj2),
+                       "--repo", str(d2), "--json"], capture_output=True, text=True)
+        vwh = _j.loads(rwh.stdout)
+        check("★高風險照舊跑整套★(不可過濾不是不跑的理由,只是低風險不值得付)",
+              vwh["status"] == "green" and vwh["ran"] >= 1, rwh.stdout + rwh.stderr[-200:])
+    finally:
+        _sh.rmtree(d2, ignore_errors=True)
+    # ★首推的起點要用 merge-base,不是主線 tip 本身★(代碼審 r1 外家否決席判 blocker)
+    # `主線..HEAD` 是端點比對——主線獨有的改動會被★反向★算進這次推送。
+    # 誤點到的合約如果有紅測試,高風險那條路會擋掉一次本來該過的推送。
+    d3 = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btmb-"))
+    try:
+        def g(*a):
+            return _sp.run(["git", "-C", str(d3), *a], capture_output=True, text=True)
+        base = g("rev-parse", "HEAD").stdout.strip()
+        g("checkout", "-q", "-b", "feature")
+        (Path(d3) / "app" / "onlyfeature.py").write_text("x = 1\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "feature only")
+        feat = g("rev-parse", "HEAD").stdout.strip()
+        main_branch = "main" if g("rev-parse", "--verify", "-q", "main").returncode == 0 else "master"
+        g("checkout", "-q", main_branch)
+        # ★主線獨有的改動要碰到「綁了合約的那個檔」★,否則兩種算法都不會紅、這條測不到東西
+        # (第一版就是這樣:主線只改一個沒綁合約的檔,翻紅釘照樣全綠——今天第七次同型)。
+        (Path(d3) / "app" / "pay.py").write_text("def charge(x):\n    return x + 0\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "main touches contract file")
+        g("checkout", "-q", "feature")
+        # ★RED 標記要在切回 feature 之後才建,而且不 commit★:
+        # 第一版在主線那個 commit 裡建,切回 feature 就不在工作目錄了,測試根本不會紅
+        # ——對照組因此是綠的,整條測不到東西(今天第八次「現場沒搭起來」)。
+        (Path(d3) / "tests" / "RED").write_text("", encoding="utf-8")
+        check("★前置★ 現場成立:主線比 feature 多一個 commit,而且那個 commit 碰到綁合約的檔",
+              g("rev-parse", main_branch).stdout.strip() != base, "現場沒搭起來,下面測不到")
+        rmb = _sp.run([sys.executable, lumos_real, "bound-tests", "--diff",
+                       f"4b825dc642cb6eb9a060e54bf8d69288fbee4904..{feat}",
+                       "--repo", str(d3), "--advisory", "--json"], capture_output=True, text=True)
+        vmb = _j.loads(rmb.stdout)
+        # 主線獨有的檔不該出現在這次推送的範圍裡。用 impact 直接看範圍算出哪些檔最直接。
+        rng_probe = _sp.run([sys.executable, lumos_real, "impact", "--diff",
+                             f"{g('rev-parse', main_branch).stdout.strip()}..{feat}",
+                             "--json", "--repo", str(d3)], capture_output=True, text=True)
+        endpoint_files = _j.loads(rng_probe.stdout).get("files", []) if rng_probe.stdout.strip() else []
+        check("★前置★ 現場成立:端點比對真的會把主線獨有的改動算進來(這就是那個 bug)",
+              any("pay.py" in f for f in endpoint_files), str(endpoint_files))
+        # 對照組:端點比對真的會紅(把主線獨有的改動算進來,誤點到那條合約)
+        rend = _sp.run([sys.executable, lumos_real, "bound-tests", "--diff",
+                        f"{g('rev-parse', main_branch).stdout.strip()}..{feat}",
+                        "--repo", str(d3), "--advisory", "--json"], capture_output=True, text=True)
+        check("★前置★ 現場成立:端點比對真的會誤判成紅(這就是那個 bug 的後果)",
+              _j.loads(rend.stdout)["status"] == "red", rend.stdout)
+        check("★首推的範圍不准把主線獨有的改動算進來★(要用 merge-base,不是主線 tip;"
+              "誤點到的合約若有紅測試,高風險那條路會擋掉一次本來該過的推送)",
+              vmb["status"] != "red", rmb.stdout + rmb.stderr[-300:])
+    finally:
+        _sh.rmtree(d3, ignore_errors=True)
+
+    # ★範圍換過了就不能再吃那份算好的結果★(同席 major)
+    # pre-push 給的 payload 是拿「空樹..HEAD」算的(整個 repo 都是 diff),
+    # 而範圍已經換成「跟主線的共同祖先..HEAD」。照樣吃那份 = 首推跑滿全部,
+    # 正是設計明令要避免的那條稅。
+    d4 = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btstale-"))
+    try:
+        headx = _sp.run(["git", "-C", str(d4), "rev-parse", "HEAD"],
+                        capture_output=True, text=True).stdout.strip()
+        (Path(d4) / "tests" / "RED").write_text("", encoding="utf-8")   # 真跑一定紅
+        pj4 = Path(d4) / "impact.json"
+        pj4.write_text(_j.dumps({"range": "WHOLE..REPO", "files": ["app/pay.py"],
+                                 "results": [{"node": "Systems/Pay.md", "pinned": True,
+                                              "contract": "INVARIANT", "score": 9.9,
+                                              "kind": "direct", "files": ["app/pay.py"]}],
+                                 "sync": {"touched_nodes": [], "missing": []},
+                                 "meta": {}}, ensure_ascii=False), encoding="utf-8")
+        rs = _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(pj4),
+                      "--diff", f"4b825dc642cb6eb9a060e54bf8d69288fbee4904..{headx}",
+                      "--repo", str(d4), "--advisory", "--json"], capture_output=True, text=True)
+        vs = _j.loads(rs.stdout)
+        check("★範圍被換過時,不准再吃那份用舊範圍算出來的結果★"
+              "(吃了就是首推跑滿全部——設計明令要避免的那條稅)",
+              vs["status"] != "red", rs.stdout + rs.stderr[-300:])
+    finally:
+        _sh.rmtree(d4, ignore_errors=True)
+
+    # ★多平台混合:可過濾的照跑,不可過濾的個別 deferred★(同席 major)
+    # 舊寫法是整批判——只要有一個平台可過濾就整批照跑,於是不可過濾的那幾個平台
+    # 照樣被跑整套(單套逾時 600 秒),低風險推送當場卡住。
+    # ★壞掉的 payload 也要擋在門口★(同席 major):合法 JSON 但形狀不對,
+    # 以前會通過驗證然後在下游拋例外、被 || true 吞掉,不是按設計記 range-unavailable。
+    d5 = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btbad-"))
+    try:
+        for bad in ('{"results":[1],"sync":[]}', '{"results":"x"}', '{"sync":{}}', 'not json'):
+            bj = Path(d5) / "bad.json"
+            bj.write_text(bad, encoding="utf-8")
+            rb2 = _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(bj),
+                           "--repo", str(d5), "--advisory", "--json"], capture_output=True, text=True)
+            check(f"★形狀不對的結果檔要擋在門口,記 range-unavailable★({bad[:22]})",
+                  rb2.returncode == 0 and '"range-unavailable"' in rb2.stdout,
+                  rb2.stdout[:200] + rb2.stderr[-200:])
+    finally:
+        _sh.rmtree(d5, ignore_errors=True)
+
+    # ★別人可寫的結果檔不准信★(代碼審 r1 架構對齊席:這個 repo 已經有一套硬化過的
+    # 「算一次、之後讀」——dispatch-lens 的快取會先驗 st_uid 與 group/other 可不可寫,
+    # 註解明寫「$TMPDIR 路徑可預測可偽造」。而這裡收的正是命令列傳進來的 $TMPDIR 路徑。)
+    d6 = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btperm-"))
+    try:
+        pj6 = Path(d6) / "impact.json"
+        pj6.write_text(_j.dumps({"range": "X..Y", "files": ["app/pay.py"],
+                                 "results": [{"node": "Systems/Pay.md", "pinned": True,
+                                              "contract": "INVARIANT", "score": 9.9,
+                                              "kind": "direct", "files": ["app/pay.py"]}],
+                                 "sync": {"touched_nodes": [], "missing": []},
+                                 "meta": {}}, ensure_ascii=False), encoding="utf-8")
+        rok = _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(pj6),
+                       "--repo", str(d6), "--advisory", "--json"], capture_output=True, text=True)
+        check("★前置★ 現場成立:權限正常時這份檔是信得過的",
+              _j.loads(rok.stdout)["status"] == "green", rok.stdout)
+        import os as _os6
+        _os6.chmod(pj6, 0o666)   # group/other 可寫
+        rbad = _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(pj6),
+                        "--repo", str(d6), "--advisory", "--json"], capture_output=True, text=True)
+        check("★別人也能寫的結果檔要當成讀不到,記 range-unavailable★",
+              '"range-unavailable"' in rbad.stdout, rbad.stdout[:250])
+    finally:
+        _sh.rmtree(d6, ignore_errors=True)
+
+    # ★耗時要真的落在帳上的獨立欄位★(設計 [S6];放進回傳的 dict 不算,
+    # 因為回傳值不落盤,而回頭條件看的是帳)
+    d7 = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-btsecs-"))
+    try:
+        pj7 = Path(d7) / "impact.json"
+        pj7.write_text(_j.dumps({"range": "X..Y", "files": ["app/pay.py"],
+                                 "results": [{"node": "Systems/Pay.md", "pinned": True,
+                                              "contract": "INVARIANT", "score": 9.9,
+                                              "kind": "direct", "files": ["app/pay.py"]}],
+                                 "sync": {"touched_nodes": [], "missing": []},
+                                 "meta": {}}, ensure_ascii=False), encoding="utf-8")
+        _sp.run([sys.executable, lumos_real, "bound-tests", "--from-json", str(pj7),
+                 "--repo", str(d7), "--advisory"], capture_output=True, text=True)
+        rows = []
+        gp = Path(d7) / "docs" / ".governance-log.jsonl"
+        for line in (gp.read_text(encoding="utf-8").splitlines() if gp.exists() else []):
+            try:
+                rr = _j.loads(line)
+            except Exception:
+                continue
+            if rr.get("gate") == "bound-tests" and rr.get("kind") == "green":
+                rows.append(rr)
+        check("★前置★ 現場成立:帳上真的有一筆 green", bool(rows), "沒有 green 那筆,下面測不到")
+        if rows:
+            check("★跑測試的耗時要是帳上的獨立欄位★(塞在自由文字裡回頭條件量不到)",
+                  "secs" in rows[-1], str(rows[-1]))
+            check("★算波及的耗時要另外一個欄位★(兩段成本成因不同,不能加在一起)",
+                  "calc_secs" in rows[-1], str(rows[-1]))
+    finally:
+        _sh.rmtree(d7, ignore_errors=True)
+
+    print("  ✓ t_bound_tests_shared_impact_payload")
+
+
+def _bound_gov_hard(d):
+    """治理帳裡 gate=bound-tests 每個 kind 對應的 hard 值(最後一筆為準)。"""
+    import json as _j
+    p = Path(d) / "docs" / ".governance-log.jsonl"
+    out = {}
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8").splitlines():
+        try:
+            r = _j.loads(line)
+        except Exception:
+            continue
+        if r.get("gate") == "bound-tests":
+            out[r.get("kind")] = r.get("hard")
+    return out
+
+
+def _bound_gov_kinds(d):
+    """治理帳裡 gate=bound-tests 的 kind 清單(給合約測試閘那幾支測試共用)。"""
+    import json as _j
+    p = Path(d) / "docs" / ".governance-log.jsonl"
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        try:
+            r = _j.loads(line)
+        except Exception:
+            continue
+        if r.get("gate") == "bound-tests":
+            out.append(r.get("kind"))
+    return out
+
+
 def t_bound_tests_gate():
     """受波及合約測試真跑閘(Projects/受波及合約測試真跑閘_計劃,design-loop bound-tests-gate-c r1 PASS):
     code-loop check 在判 tier 前,把 impact 固定席上合約綁的 [test:] 真跑;紅/懸空/方法名不合法 → BLOCKED;
@@ -6189,10 +6505,16 @@ def t_bound_tests_gate():
     (Path(d) / "tests" / "RED").write_text("", encoding="utf-8")
     r = check_cmd(d); v = _j.loads(r.stdout)
     check("★紅:BLOCKED rc1,點名 Pay 與 t_pay_ok★", r.returncode == 1 and v["blocked"] and "Pay" in v["reason"] and "t_pay_ok" in v["reason"], r.stdout)
-    check("紅寫治理帳 kind=red", "red" in gov_kinds(d), str(gov_kinds(d)))
+    # ★2026-09-07 起 red 拆成 red-advisory / red-blocked★(全 repo 審視 #17 設計 [S6]):
+    # 低風險推送從此也跑這些測試,但只提醒不擋。兩者後果完全不同,混成同一個 kind
+    # 就回答不了人裁時掛的那條回頭條件(「只提醒到底夠不夠」)。
+    check("紅寫治理帳 kind=red-blocked(擋的那條路)", "red-blocked" in gov_kinds(d), str(gov_kinds(d)))
     # ③ 逃生門:--skip-bound-tests --note → 不擋,kind=skipped
     r = check_cmd(d, "--skip-bound-tests", "--note", "外部 DB 不在"); v = _j.loads(r.stdout)
-    check("逃生門:不擋且留痕 skipped", r.returncode == 0 and "skipped" in gov_kinds(d), r.stdout + r.stderr[-200:])
+    # ★skipped 也拆成 flag / env★(同上):旗標是人當下決定並留了理由,
+    # 環境變數多半是 CI 常態設定,混在一起分不出哪一種在發生。
+    check("逃生門:不擋且留痕 skipped-flag", r.returncode == 0 and "skipped-flag" in gov_kinds(d),
+          r.stdout + r.stderr[-200:] + str(gov_kinds(d)))
     r = check_cmd(d, "--skip-bound-tests")
     check("逃生門沒 --note → 拒絕(rc2)", r.returncode == 2, r.stderr[-200:])
     # ④ CI 環境變數跳過
@@ -6224,7 +6546,33 @@ def t_bound_tests_gate():
     head = _sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     r = _sp.run([sys.executable, lumos_real, "code-loop", "check", "--diff", f"4b825dc642cb6eb9a060e54bf8d69288fbee4904..{head}", "--json", "--repo", str(d)], capture_output=True, text=True)
     v = _j.loads(r.stdout)
-    check("★新分支首推 → 不跑合約測試、不擋★", not v["blocked"] and v.get("bound_tests", {}).get("status") == "diff-unavailable", r.stdout)
+    # ★2026-09-07 起首推改用主線 tip 當起點★(設計 [S3]):
+    # 舊行為是直接記 diff-unavailable 放行,所以「每次推送都跑」在首推時是假的;
+    # 但也不能拿掉特例讓它跑滿全部——那等於每個新分支的第一次推送都要跑滿全部合約測試。
+    # 新行為:起點換成主線 tip。這個 fixture 的主線就是 HEAD,所以算出來是空 diff、
+    # 不會跑到那支會紅的測試(tests/RED 在,真跑一定紅)。
+    check("★新分支首推:不跑滿全部、不擋★",
+          not v["blocked"] and v.get("bound_tests", {}).get("status") != "red", r.stdout)
+    check("★而且不再是舊的 diff-unavailable★(那條代表「放棄計算」,現在是真的換了起點)",
+          v.get("bound_tests", {}).get("status") != "diff-unavailable", r.stdout)
+    _sh.rmtree(d, ignore_errors=True)
+
+    # ⑨ 首推 + 連主線都問不到(全新的 repo,沒有 main/master)→ range-unavailable
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-bt6-"))
+    _sp.run(["git", "-C", str(d), "checkout", "-q", "-b", "feature-only"], capture_output=True)
+    _sp.run(["git", "-C", str(d), "branch", "-q", "-D", "main"], capture_output=True)
+    _sp.run(["git", "-C", str(d), "branch", "-q", "-D", "master"], capture_output=True)
+    head = _sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    r = _sp.run([sys.executable, lumos_real, "code-loop", "check", "--diff",
+                 f"4b825dc642cb6eb9a060e54bf8d69288fbee4904..{head}", "--json", "--repo", str(d)],
+                capture_output=True, text=True)
+    v = _j.loads(r.stdout)
+    check("★前置★ 現場成立:真的沒有 main/master 了",
+          _sp.run(["git", "-C", str(d), "rev-parse", "--verify", "-q", "main"],
+                  capture_output=True).returncode != 0, "main 還在,這條測不到目標")
+    check("★連主線都問不到 → range-unavailable、不擋★(誠實記,不假裝守住了)",
+          not v["blocked"] and v.get("bound_tests", {}).get("status") == "range-unavailable", r.stdout)
+    check("而且帳上要記得到那個類別", "range-unavailable" in gov_kinds(d), str(gov_kinds(d)))
     _sh.rmtree(d, ignore_errors=True)
     print("  ✓ t_bound_tests_gate")
 
@@ -12391,6 +12739,71 @@ def t_codeloop_guard_prepush():
         check("codeloop_guard_prepush: lumos code-loop check rc=2(異常) → fail-open rc0",
               r.returncode == 0,
               f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}")
+
+
+def t_prepush_computes_impact_once():
+    """★真的跑 pre-push,釘住「一次推送只算一次波及」★
+    (2026-09-07 全 repo 審視 #17,代碼審 r1 通才席判 major)。
+
+    ★為什麼非要在這一層測不可★:我原本那條測試的名字與說明都寫著在驗推送關卡的
+    「算一次、兩個消費者各讀一次」,但★每一條斷言都是直接呼叫 CLI★,從頭到尾沒跑過
+    scripts/hooks/pre-push。審查席做了個 mutant,把 hook 裡的 bound_tests_advisory
+    改成永遠 `--diff`(完全忽略那份算好的檔,退回「每次重算」),
+    **34/34 全過、沒有任何一條翻紅**——這批存在的理由就是那個成本,而它沒有守衛。
+
+    做法:用一個會把自己的 argv 逐行記下來的假 lumos 頂替真的,跑一次 pre-push,
+    然後數:①`impact --diff … --sync-check --json` 只准出現一次
+    ②同步點名與合約測試閘都要帶 `--from-json`。
+    """
+    import subprocess as _sp
+    import os as _os
+    pre_push_path = str(Path(__file__).resolve().parent / "hooks" / "pre-push")
+    with tempfile.TemporaryDirectory() as d:
+        d = str(d)
+        _sp.run(["git", "init", "-q", d])
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            _sp.run(["git", "-C", d, "config", k, v])
+        (Path(d) / "app").mkdir()
+        (Path(d) / "app" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        # 假 lumos:記 argv,然後對每個子指令回一個「不擋」的最小答案
+        sd = Path(d) / "scripts"; sd.mkdir()
+        log = Path(d) / "argv.log"
+        (sd / "lumos").write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys, json, pathlib\n"
+            f"pathlib.Path({str(log)!r}).open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+            "c = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+            "if c == 'impact' and '--json' in sys.argv:\n"
+            "    print(json.dumps({'range': 'x', 'files': [], 'results': [],\n"
+            "                      'sync': {'touched_nodes': [], 'missing': []}, 'meta': {}}))\n"
+            "elif c == 'pitfalls' and '--json' in sys.argv:\n"
+            "    print(json.dumps({'tier': 'standard'}))\n"
+            "sys.exit(0)\n", encoding="utf-8")
+        _os.chmod(sd / "lumos", 0o755)
+        _sp.run(["git", "-C", d, "add", "-A"])
+        _sp.run(["git", "-C", d, "commit", "-qm", "init"])
+        head = _sp.run(["git", "-C", d, "rev-parse", "HEAD"],
+                       capture_output=True, text=True).stdout.strip()
+        env = dict(_os.environ); env["GIT_DIR"] = str(Path(d) / ".git")
+        zero = "0" * 40
+        _sp.run(["bash", pre_push_path], cwd=d,
+                input=f"refs/heads/main {head} refs/heads/main {zero}\n",
+                capture_output=True, text=True, env=env, timeout=180)
+        lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        check("★前置★ 現場成立:假 lumos 真的被 hook 呼叫到了", bool(lines), "一行都沒有")
+        n_calc = sum(1 for l in lines if l.startswith("impact --diff") and "--sync-check" in l)
+        check("★算波及只准算一次★(這批存在的理由就是這個成本)",
+              n_calc == 1, f"算了 {n_calc} 次:\n" + "\n".join(lines))
+        check("★同步點名要吃那份算好的,不准自己再算★",
+              any(l.startswith("impact --sync-only") and "--from-json" in l for l in lines),
+              "\n".join(lines))
+        check("★合約測試閘也要吃那份★(低風險這條路)",
+              any(l.startswith("bound-tests") and "--from-json" in l for l in lines),
+              "\n".join(lines))
+        check("★而且低風險那條要帶 --advisory★(人裁:只提醒不擋)",
+              any(l.startswith("bound-tests") and "--advisory" in l for l in lines),
+              "\n".join(lines))
+    print("  ✓ t_prepush_computes_impact_once")
 
 
 def t_prepush_range_scan():

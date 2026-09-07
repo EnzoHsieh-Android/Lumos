@@ -36,10 +36,48 @@ PY="$(command -v python3 || command -v python || true)"
 
 # ── 圖譜同步覆蓋點名(2026-08-22,提醒不擋):動過圖譜不等於動對篇。呈現在 lumos 內(impact --sync-only),
 # 這裡跟 cochange / delguard 一樣只呼叫、不碰內容。
-sync_nudge() {   # $1=diff range(或 staged)
-  local _py; _py="$(command -v python3 || command -v python || true)"
-  [ -n "$_py" ] && [ -f "$REPO_ROOT/scripts/lumos" ] || return 0
-  "$_py" "$REPO_ROOT/scripts/lumos" impact --diff "$1" --sync-only --repo "$REPO_ROOT" 1>&2 2>/dev/null || true
+# ★一次推送只算一次波及★(2026-09-07 全 repo 審視 #17,設計 [S1] 第 3 步):
+# 同步點名與合約測試閘要的是同一份東西。以前各自呼叫,等於一次推送算兩次
+# ——而「不要算兩次」正是這一案 r1 拿來否決原設計的那個成本
+# (那條裁定後來被查出已作廢,但成本本身是真的:這不是便宜的計算)。
+# 現在:算一次寫進暫存檔,兩個消費者各讀一次。
+# ★失敗隔離★:算不出來 → 暫存檔不存在或是空的 → 同步點名維持靜默、
+# 合約測試閘記一筆帳放行。一個失敗不准拖垮另一個。
+_IMPACT_JSON=""
+impact_once() {   # $1=diff range;算一次,結果放進 $_IMPACT_JSON
+  _IMPACT_JSON=""
+  [ -n "$PY" ] && [ -f "$GRAPHCTL" ] || return 0
+  # ★用同檔既有的樣板寫法與命名家族★(代碼審 r1 架構對齊席):
+  # 同一支腳本下面幾行就有 lumos-prepush-autoloop-XXXXXX / lumos-prepush-tests-XXXXXX,
+  # 而且旁邊的註解特別說明過「★XXXXXX 必須在結尾★」是踩過才定下來的。
+  local _f; _f="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-impact-XXXXXX" 2>/dev/null || true)"
+  [ -n "$_f" ] || return 0
+  if "$PY" "$GRAPHCTL" impact --diff "$1" --sync-check --json --repo "$REPO_ROOT" > "$_f" 2>/dev/null \
+     && [ -s "$_f" ]; then
+    _IMPACT_JSON="$_f"
+  else
+    rm -f "$_f"
+  fi
+}
+impact_done() { [ -n "$_IMPACT_JSON" ] && rm -f "$_IMPACT_JSON"; _IMPACT_JSON=""; }
+# ★硬擋或收到訊號時也要清★(代碼審 r1 外家否決席判 minor,屬實):
+# 上面那支只在 ref 迴圈正常跑到尾端時執行。高風險那條路 rc1 會直接 exit 1,
+# 收到訊號也一樣——每被硬擋一次就留一個暫存檔在 $TMPDIR 裡慢慢累積。
+trap 'impact_done' EXIT INT TERM
+sync_nudge() {   # 讀 impact_once 算好的那份
+  [ -n "$PY" ] && [ -f "$GRAPHCTL" ] && [ -n "$_IMPACT_JSON" ] || return 0
+  "$PY" "$GRAPHCTL" impact --sync-only --from-json "$_IMPACT_JSON" --repo "$REPO_ROOT" 1>&2 2>/dev/null || true
+}
+# ★合約測試閘:低風險也跑,紅了印出來記帳但不擋;高風險照舊擋★(人裁 2026-09-07)
+# 不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 --no-verify
+# ——而這支腳本自己在別的地方就把那條當第三選項在教,那條零留痕。
+bound_tests_advisory() {   # $1=diff range(暫存檔沒算出來時退回自己算)
+  [ -n "$PY" ] && [ -f "$GRAPHCTL" ] || return 0
+  if [ -n "$_IMPACT_JSON" ]; then
+    "$PY" "$GRAPHCTL" bound-tests --from-json "$_IMPACT_JSON" --advisory --repo "$REPO_ROOT" || true
+  else
+    "$PY" "$GRAPHCTL" bound-tests --diff "$1" --advisory --repo "$REPO_ROOT" || true
+  fi
 }
 if [[ -z "$PY" || ! -f "$GRAPHCTL" ]]; then
   echo "提醒:這台機器找不到 python3 或 lumos,推送前的知識庫檢查這次沒跑;推上去之後 CI 會再跑一遍兜底。" >&2
@@ -137,7 +175,8 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   [[ -z "$_EMPTY_TREE" ]] && continue   # 連空樹都算不出=git 環境壞,advisory 放行
 
   # 圖譜同步覆蓋點名(2026-08-22,提醒不擋):分開幾個 commit 各自過關、整批卻漏掉的篇在這裡浮出
-  sync_nudge "$_range"
+  impact_once "$_range"
+  sync_nudge
   pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
   if printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
     {
@@ -151,8 +190,11 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
     if [[ "$_rref" == refs/heads/* ]]; then
       _rbranch="${_rref#refs/heads/}"
       cl_rc=0
+      # ★高風險這條路也把算好的那份傳進去★:不傳的話它會自己再算一次,
+      # 而上面的註解寫的是「一次推送只算一次波及」——那句話就只在低風險成立。
+      _fj=(); [ -n "$_IMPACT_JSON" ] && _fj=(--from-json "$_IMPACT_JSON")
       "$PY" "$GRAPHCTL" code-loop check --diff "$_range" --at-sha "$_lsha" --branch "$_rbranch" \
-        --repo "$REPO_ROOT" >/dev/null 2>&1 || cl_rc=$?
+        --repo "$REPO_ROOT" ${_fj+"${_fj[@]}"} >/dev/null 2>&1 || cl_rc=$?
       if [[ "$cl_rc" -eq 1 ]]; then
         {
           echo "擋下:高風險的程式碼改動還沒經過對抗審查,或審查留痕已經失效。"
@@ -180,8 +222,17 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       echo ""
     } >&2 || true
   fi
+  # ★合約測試閘:低風險這一路也要跑★(2026-09-07 全 repo 審視 #17,人裁)
+  # 舊行為:這件事藏在 code-loop check 裡,而那支只在 tier=high 且推的是分支時才跑
+  # ——所以「改到硬合約就跑那些合約綁的測試」這句話,在低風險推送上是假的,
+  # 而改一行低風險的碼一樣可以打破合約。
+  # 高風險那條路已經在上面的 code-loop check 裡跑過(它會擋),這裡只補低風險那半。
+  if ! printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
+    bound_tests_advisory "$_range"
+  fi
   # test-layers 軟提醒(advisory,恆不影響 rc;無 .lumos/test-layers.json 靜默)
   "$PY" "$GRAPHCTL" test-layers --diff "$_range" --repo "$REPO_ROOT" 2>/dev/null || true
+  impact_done
 done
 
 # ★第二支測試檔也要跑★(2026-09-06 全 repo 審視:CI 因此紅過一次)

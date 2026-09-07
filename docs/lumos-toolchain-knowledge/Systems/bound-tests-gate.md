@@ -34,13 +34,39 @@ about_code:
 > 白話:改到相依功能,以前工具只會「點名」那些功能綁的測試,跑不跑靠自律。現在 pre-push 每次呼叫的 `code-loop check` 會把被點名的測試當場跑完:紅的、綁了不存在測試的、名字不合法的,一律擋推送。
 
 ## 怎麼跑
+
+★2026-09-07 起有兩條路★([[Projects/合約測試閘什麼時候跑_計劃]],人裁):
+- **高風險推送**:照舊藏在 `code-loop check` 裡,紅了**擋**。
+- **低風險推送**:pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了**印出來、記帳,但不擋**。
+  不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 `--no-verify`
+  ——而 pre-push 自己在別的地方就把那條當第三選項在教,那條零留痕。
+
+★而且波及計算一次推送只算一次★:pre-push 算一份寫進暫存檔,
+同步點名(`impact --sync-only --from-json`)與這道閘(`bound-tests --from-json`)各讀一次。
+以前兩邊各自呼叫等於算兩次,而那不是便宜的計算。
+一邊失敗不拖垮另一邊:同步點名維持靜默,這道閘記 `range-unavailable` 放行。
+
 1. `impact --diff <range>` 取固定席(合約/事故/直接相依)裡帶合約的節點。
+   ★新分支首推★:起點是空樹時改用主線 tip(`_mainline_ref`),不是放棄計算、也不是跑滿全部;
+   連主線都問不到才記 `range-unavailable`。
 2. 每個節點的 ★INVARIANT★ 行 `[test:…]` 用 `resolve_test_refs` 解平台前綴,再用 Check T 同一套平台真測試索引判存在(real/dangling/fake)。
 3. real 的逐支用 `.lumos/config.json` 的 run_cmd 真跑(`_kill_run`,同 kill);去重鍵=完整指令。超時:單支 `LUMOS_TEST_TIMEOUT`(預設 180s,同測試 runner),整套(run_cmd 無 {method})600s。
 4. 任一紅 → check 回 BLOCKED(rc1),訊息列合約、測試、尾段輸出,並給 `--skip-bound-tests --note` 範本。
 
-## fail-open 四情境(不擋,但都寫帳讓零觸發看得見)
-沒 run_cmd(kind=no-config)/ diff 算不出(diff-unavailable)/ 沒固定席(no-pins)/ 固定席沒綁測試(no-bound)。`gov --stats` 看 bound-tests 那列就知道這道閘在這個專案有沒有真的開。
+## 帳的類別(2026-09-07 拆細,不擋的都寫帳讓零觸發看得見)
+
+`green` / `red-advisory`(低風險,只提醒) / `red-blocked`(高風險,擋) /
+`skipped-flag`(人給了理由) / `skipped-env`(CI 環境變數) /
+`no-config`(沒 run_cmd) / `no-pins`(沒固定席) / `no-bound`(固定席沒綁測試) /
+`range-unavailable`(範圍算不出,含首推連主線都問不到) /
+`whole-suite-deferred`(測試指令不可過濾、而且這次是低風險 → 不跑)。
+
+★為什麼要拆這麼細★:紅了擋跟紅了只提醒,後果完全不同;人給理由跳過跟 CI 常態跳過,
+意義也完全不同。混成同一個 kind 就回答不了人裁時掛的那條回頭條件(「只提醒到底夠不夠」)。
+★耗時也拆成兩個獨立欄位★(`secs` 跑測試、`calc_secs` 算波及):
+以前塞在自由文字的備註裡,回頭條件量不到。
+
+`gov --stats` 看 bound-tests 那列就知道這道閘在這個專案有沒有真的開。
 
 ## 設計迴圈紀錄
 `bound-tests-gate-c` r1 四席(通才/正確性邊界/可執行性成本/架構對齊)20 條:19 折 1 放行(hermetic:run_cmd 是專案自宣告指令,與 CI 同信任邊界)。我自己記帳走歪兩次(處置帳一輪只能一筆;每席都要留痕)才過閘,編號 -b/-c 是這樣來的。

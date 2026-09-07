@@ -18038,12 +18038,66 @@ def _impact_diff_seed_ok(f):
     return True
 
 
+def _impact_payload_read(path):
+    """讀一份已經算好的波及結果(pre-push 每次推送只算一次,兩個消費者共用同一份)。
+
+    ★為什麼要有這支★(2026-09-07 全 repo 審視 #17,設計 [S1] 第 3 步):
+    推送關卡本來就對每個 ref 跑一次完整的波及計算(同步點名用)。合約測試閘要的是
+    同一份東西裡「帶合約而且綁了測試」的那幾篇——★再算一次就是把一次推送算兩次★,
+    而那正是這一案 r1 拿來否決原設計的那個成本(那條裁定後來被查出已作廢,
+    但「不要算兩次」本身仍然是對的)。
+
+    ★失敗要隔離★:讀不到就回 None,呼叫端各自決定怎麼降級——
+    同步點名維持靜默,合約測試閘記一筆帳放行。一個失敗不准拖垮另一個。
+    """
+    import json as _json, stat as _stat
+    # ★擁有權要驗,理由跟 dispatch-lens 那支快取一模一樣★
+    # (2026-09-07 代碼審 r1 架構對齊席判 blocking,說得對):
+    # 這個 repo 已經有一套硬化過的「算一次、之後讀」——_lens_cache_read,
+    # 它會先驗 st_uid 與 group/other 可不可寫,註解明寫「$TMPDIR 路徑可預測可偽造」。
+    # 而這裡收的正是一個從命令列傳進來的 $TMPDIR 路徑,同一種曝險。
+    # ★但沒有照抄整套★,理由是生命週期不同,而這一點原本沒寫下來所以席位抓到了:
+    #   dispatch-lens 那支是「跨呼叫、可被別人發現、要 TTL、要 key 去對」的快取;
+    #   這裡是「同一次 hook 執行內、由呼叫端明確指定路徑、用完就刪」的交接。
+    #   要 TTL 與 key 是多餘的,要擁有權驗證則是必要的——所以只借那一半。
+    try:
+        st = Path(path).stat()
+        if st.st_uid != os.getuid() or (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH)):
+            return None
+        data = _json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    # ★形狀要驗到位★(代碼審 r1 外家否決席判 major):只驗「是 dict 而且有 results」不夠——
+    # `{"results":[1],"sync":[]}` 這種合法 JSON 會通過,然後在下游 r.get(...) 當場拋例外,
+    # 而那個例外會被 pre-push 的 || true 吞掉:★不是按設計記 range-unavailable,是靜默失效★。
+    if not isinstance(data, dict):
+        return None
+    res = data.get("results")
+    if not isinstance(res, list) or any(not isinstance(r, dict) for r in res):
+        return None
+    sync = data.get("sync")
+    if sync is not None and not (isinstance(sync, dict)
+                                 and isinstance(sync.get("missing"), list)
+                                 and isinstance(sync.get("touched_nodes"), list)):
+        return None
+    return data
+
+
 def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as_json=False,
-                    sync_check=False, sync_only=False):
+                    sync_check=False, sync_only=False, from_json=None):
     """code-loop 橋接:對整段 diff 的每支改動 code 檔跑 ranked impact(query=該檔 hunk 文字),
     聚合成「受影響功能面」manifest——固定席(合約/事故)全保、非固定取跨檔最高分 top-N。
     定位=審計員鏡頭(advisory,人判),非自動推播(hook 面 goldset 評測未過線,故不接 hook)。
-    rc: 0=成功 / 2=git 失敗 / 3=vault 缺。"""
+    rc: 0=成功 / 2=git 失敗 / 3=vault 缺。
+
+    from_json:吃一份已經算好的結果,不自己算(見 _impact_payload_read)。目前只支援
+    搭 --sync-only 用——推送關卡算一次、同步點名與合約測試閘各讀一次。"""
+    if from_json is not None:
+        _pl = _impact_payload_read(from_json)
+        if _pl is None or _pl.get("sync") is None:
+            return 0          # 失敗隔離:維持同步點名現在的行為(靜默)
+        _print_sync_nudge(_pl["sync"], _pl.get("range") or diff_range)
+        return 0
     import json as _json
     import subprocess as _sp
     if diff_range == "staged":
@@ -19379,35 +19433,59 @@ def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts):
 _BOUND_TESTS_WHOLE_SUITE_TIMEOUT = 600.0   # 同 kill baseline 的下限
 
 
-def _bound_tests_log(repo_root, kind, nodes, note):
-    """治理帳 gate=bound-tests(獨立 gate,kind 裸結果詞;fail-open,寫不進不影響判定)。"""
+def _bound_tests_log(repo_root, kind, nodes, note, secs=None, calc_secs=None):
+    """治理帳 gate=bound-tests(獨立 gate,kind 裸結果詞;fail-open,寫不進不影響判定)。
+
+    ★secs / calc_secs 要當獨立欄位寫進帳★(2026-09-07 設計 [S6]):
+    以前只塞在自由文字的 note 裡(「46 綠 41.8s」),回頭條件量不到——
+    而這一案掛的兩條回頭條件都要問「近 30 天最大耗時多少」。
+    ★第一版我只把它們放進回傳的 dict,帳上還是自由文字★——那等於沒做,
+    因為回傳值不落盤,週跑回頭看的是帳。
+    secs=跑測試那段;calc_secs=算波及那段。兩段成本的成因不同,不能加在一起。
+    """
     try:
         vault = _vault_in(repo_root)
         if vault is not None:
-            _append_governance_log(vault, [{"gate": "bound-tests", "kind": kind, "hard": kind == "red",
-                                            "nodes": list(nodes), "note": note}])
+            # ★hard 要跟著 kind 改名一起改★(代碼審 r1 外家否決席判 major,查證屬實):
+            # kind 從 red 拆成 red-advisory / red-blocked 之後,這裡還在比對舊的 "red"
+            # ——於是★高風險真的擋下去的那一筆會被記成 hard:false★,
+            # 舊的呈現端依 hard 分「硬擋/軟」,會把真硬擋報成軟事件。
+            _rec = {"gate": "bound-tests", "kind": kind,
+                    "hard": kind == "red-blocked",
+                    "nodes": list(nodes), "note": note}
+            if secs is not None:
+                _rec["secs"] = secs
+            if calc_secs is not None:
+                _rec["calc_secs"] = calc_secs
+            _append_governance_log(vault, [_rec])
     except Exception:
         pass
 
 
-def _bound_tests_for_diff(repo_root, diff_range):
+def _bound_tests_for_diff(repo_root, diff_range, payload=None):
     """impact 固定席 → 各節點 ★INVARIANT★ 的 [test:] → (node, platform, method, status)。
-    status ∈ real / dangling / fake / bad-name。回 (items, reason_if_none)。"""
+    status ∈ real / dangling / fake / bad-name。回 (items, reason_if_none)。
+
+    payload 給了就直接用那份已經算好的結果(推送關卡一次推送只算一次,見 _impact_payload_read)。
+    """
     import io as _io, contextlib as _ctx, json as _json
-    buf = _io.StringIO()
-    try:
-        with _ctx.redirect_stdout(buf), _ctx.redirect_stderr(_io.StringIO()):
-            rc = cmd_impact_diff(diff_range, repo=str(repo_root), as_json=True)
-    except SystemExit:
-        rc = 2
-    except Exception:
-        rc = 2
-    if rc != 0:
-        return [], "diff-unavailable"
-    try:
-        data = _json.loads(buf.getvalue().strip().splitlines()[-1])
-    except Exception:
-        return [], "diff-unavailable"
+    if payload is not None:
+        data = payload
+    else:
+        buf = _io.StringIO()
+        try:
+            with _ctx.redirect_stdout(buf), _ctx.redirect_stderr(_io.StringIO()):
+                rc = cmd_impact_diff(diff_range, repo=str(repo_root), as_json=True)
+        except SystemExit:
+            rc = 2
+        except Exception:
+            rc = 2
+        if rc != 0:
+            return [], "diff-unavailable"
+        try:
+            data = _json.loads(buf.getvalue().strip().splitlines()[-1])
+        except Exception:
+            return [], "diff-unavailable"
     pins = [r["node"] for r in data.get("results", []) if r.get("pinned") and r.get("contract")]
     if not pins:
         return [], "no-pins"
@@ -19484,37 +19562,214 @@ def _run_bound_tests(repo_root, items):
     return results, None
 
 
-def _bound_tests_check(repo_root, diff_range, skip=False, skip_note=""):
-    """回 dict{status, ran, red:[…], secs, reason}。status ∈ green/red/skipped/no-config/no-pins/no-bound/diff-unavailable。"""
-    import os as _os
+_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _bound_tests_range(repo_root, diff_range):
+    """新分支首推時把「空樹起點」換成主線 tip。回 (可用的範圍, 說明) 或 (None, 為什麼算不出)。
+
+    ★為什麼不是拿掉特例、讓它跑滿全部★(2026-09-07 設計 [S3],r2 圖譜席算過):
+    首推時空樹當起點等於整個 repo 都是 diff,固定席近乎全中——每個新分支的第一次推送
+    都會跑滿全部合約測試。那不是「更嚴」,是把這道閘變成每次開分支都要等的稅。
+    ★也不是維持原狀★:原本這種情況直接記帳放行,所以「每次推送都跑」在首推時是假的。
+
+    ★改在 Python 這一側,不動推送關卡的 bash★(設計 [S3] 明寫,r3 通才席判 blocking:
+    上一版兩種讀法都通)。主線判準沿用既有的 _mainline_ref(已推上去的 main/master 優先,
+    再退本地),那支是純函式、沒有副作用,直接共用即可。
+    """
+    r = str(diff_range or "")
+    if not r.startswith(_EMPTY_TREE_SHA):
+        return r, None
+    head = r.split("..", 1)[1] if ".." in r else ""
+    ml = _mainline_ref(repo_root)
+    if not ml or not head:
+        return None, "新分支首推,而且問不到主線 tip(全新的 repo?)——受波及範圍算不出來"
+    # ★要用 merge-base,不是主線 tip 本身★(2026-09-07 代碼審 r1 外家否決席判 blocker,實測屬實):
+    # `主線..HEAD` 是兩棵樹的端點比對——★主線獨有的改動會被反向算進這次推送★。
+    # 實測:主線有 m.txt、feature 有 f.txt,`主線..feature` 動到 f.txt 與 m.txt 兩個;
+    # `merge-base..feature` 只動到 f.txt。誤點到的那些合約如果有紅的測試,
+    # 高風險那條路會擋掉一次本來該過的推送——★方向錯得最難看的那種★。
+    import subprocess as _sp
+    mb = _sp.run(["git", "merge-base", ml[1], head], capture_output=True, text=True,
+                 cwd=str(repo_root))
+    if mb.returncode != 0 or not mb.stdout.strip():
+        # 沒有共同祖先(孤兒分支 / 剛 init 的 repo)→ 誠實說算不出來,不要拿一個錯的範圍硬算
+        return None, f"新分支首推,而且跟主線 {ml[0]} 沒有共同祖先——受波及範圍算不出來"
+    return f"{mb.stdout.strip()}..{head}", f"新分支首推:起點改用跟主線 {ml[0]} 的共同祖先"
+
+
+def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=None, advisory=False):
+    """回 dict{status, ran, red:[…], secs, calc_secs, reason, advisory}。
+
+    status ∈ green / red / skipped / no-config / no-pins / no-bound /
+             range-unavailable / whole-suite-deferred。
+
+    advisory=True(低風險推送):紅了照樣印、照樣記帳,但呼叫端不擋(人裁 2026-09-07)。
+      不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 --no-verify
+      ——而推送關卡自己在別的地方就把那條當第三選項在教,那條零留痕。
+    payload:已經算好的波及結果(推送關卡一次推送只算一次)。
+    """
+    import os as _os, time as _time
     if skip or _os.environ.get("LUMOS_SKIP_BOUND_TESTS") == "1":
         note = skip_note or ("env LUMOS_SKIP_BOUND_TESTS=1" if not skip else "")
-        _bound_tests_log(repo_root, "skipped", [], note)
-        return {"status": "skipped", "ran": 0, "red": [], "secs": 0.0, "reason": note}
-    if str(diff_range or "").startswith("4b825dc642cb6eb9a060e54bf8d69288fbee4904"):
-        # 新分支首推:pre-push 給的是 EMPTY_TREE..sha(整個 repo 當 diff),固定席=全庫合約,跟這次改動無關 → fail-open
-        _bound_tests_log(repo_root, "diff-unavailable", [], "新分支首推無 merge-base,受波及範圍不可算")
-        return {"status": "diff-unavailable", "ran": 0, "red": [], "secs": 0.0, "reason": "新分支首推,受波及範圍不可算(整個 repo 當 diff 沒意義);下次推送就會算"}
-    items, why = _bound_tests_for_diff(repo_root, diff_range)
+        # ★旗標跳過與環境變數跳過要分開記★(設計 [S6]):前者是人當下決定並留了理由,
+        # 後者多半是 CI 常態設定——混在同一個類別裡,回頭條件分不出哪一種在發生。
+        kind = "skipped-env" if (not skip and _os.environ.get("LUMOS_SKIP_BOUND_TESTS") == "1") else "skipped-flag"
+        _bound_tests_log(repo_root, kind, [], note)
+        return {"status": "skipped", "ran": 0, "red": [], "secs": 0.0, "calc_secs": 0.0,
+                "reason": note, "advisory": advisory}
+    _t0 = _time.time()
+    _rng, _rng_note = _bound_tests_range(repo_root, diff_range)
+    if _rng is None:
+        _bound_tests_log(repo_root, "range-unavailable", [], _rng_note)
+        return {"status": "range-unavailable", "ran": 0, "red": [], "secs": 0.0,
+                "calc_secs": round(_time.time() - _t0, 2), "reason": _rng_note, "advisory": advisory}
+    # ★範圍換過了,那份算好的結果就不能用★(代碼審 r1 外家否決席判 major,查證屬實):
+    # pre-push 給的 payload 是拿「空樹..HEAD」算的(整個 repo 都是 diff),
+    # 而上面剛把範圍換成「跟主線的共同祖先..HEAD」。這時候若照樣吃那份 payload,
+    # 固定席會是全庫合約——★正是設計明令要避免的「首推跑滿全部」那條稅★,
+    # 而且範圍字串跟實際用的資料對不上,帳上會說謊。
+    if payload is not None and _rng != str(diff_range or ""):
+        payload = None
+    items, why = _bound_tests_for_diff(repo_root, _rng, payload=payload)
+    _calc = round(_time.time() - _t0, 2)
     if why:
         kind = why.split(":", 1)[0]
-        _bound_tests_log(repo_root, kind, [], why if ":" in why else diff_range)
-        return {"status": kind, "ran": 0, "red": [], "secs": 0.0, "reason": why}
+        # ★diff-unavailable 這個類別已經沒有來源了★:唯一會走到它的是空樹起點,
+        # 而那條現在改成先換主線 tip、換不到才記 range-unavailable(設計 [S3])。
+        # 留著對照組不動,免得舊帳的類別名突然消失。
+        _bound_tests_log(repo_root, kind, [], why if ":" in why else _rng)
+        return {"status": kind, "ran": 0, "red": [], "secs": 0.0, "calc_secs": _calc,
+                "reason": why, "advisory": advisory}
+    # ★不可過濾的測試指令 + 低風險 → 不跑,誠實記★(設計 [S4])。
+    # 沒有 {method} 佔位符就只能整套跑,逾時上限 600 秒。低風險推送不值得付這個。
+    # ★不要假裝這種情況也守住了★——所以記一個自己的類別,不混進 green。
+    # ★逐平台判,不是整批判★(代碼審 r1 外家否決席判 major,查證屬實):
+    # 舊寫法是「只要有一個平台可以過濾,就整批照跑」——結果那些★不可過濾★的平台
+    # 照樣被 _run_bound_tests 跑整套(單套逾時 600 秒),低風險推送當場卡住。
+    # 正確的隔離是:可過濾的照跑,不可過濾的那幾支個別 deferred。
+    if advisory:
+        _keep, _defer = _bound_tests_split_by_filterable(repo_root, items)
+        if _defer:
+            _bound_tests_log(repo_root, "whole-suite-deferred", sorted({i[0] for i in _defer}),
+                             "測試指令不可過濾(沒有 {method}),低風險這次不跑這幾支")
+        if not _keep:
+            return {"status": "whole-suite-deferred", "ran": 0, "red": [], "secs": 0.0,
+                    "calc_secs": _calc, "advisory": advisory,
+                    "reason": "你的測試指令不能只跑一支,所以這次跳過;把指令改成可過濾的(帶 {method}),這道閘才會每次推送都保護你"}
+        items = _keep
     results, err = _run_bound_tests(repo_root, items)
     if results is None:
         _bound_tests_log(repo_root, "no-config", sorted({i[0] for i in items}), err)
-        return {"status": "no-config", "ran": 0, "red": [], "secs": 0.0, "reason": err}
+        return {"status": "no-config", "ran": 0, "red": [], "secs": 0.0, "calc_secs": _calc,
+                "reason": err, "advisory": advisory}
     red = [(n, p, m, d) for n, p, m, v, d, _ in results if v == "red"]
     secs = round(sum(r[5] for r in results), 1)
     ran = sum(1 for r in results if r[3] == "green")
     if red:
-        _bound_tests_log(repo_root, "red", sorted({r[0] for r in red}), f"{len(red)} 紅/{len(results)}")
-        return {"status": "red", "ran": ran, "red": red, "secs": secs,
+        # ★advisory 與擋要分帳★(設計 [S6]):兩者的後果完全不同,混成一個 kind
+        # 就回答不了「只提醒到底夠不夠」——而那正是人裁時掛的回頭條件要問的事。
+        kind = "red-advisory" if advisory else "red-blocked"
+        _bound_tests_log(repo_root, kind, sorted({r[0] for r in red}),
+                         f"{len(red)} 紅/{len(results)}", secs=secs, calc_secs=_calc)
+        return {"status": "red", "ran": ran, "red": red, "secs": secs, "calc_secs": _calc,
+                "advisory": advisory,
                 "reason": "受波及合約的測試沒過:" + ";".join(f"{n} [{m}] {d}" for n, p, m, d in red[:6])}
-    _bound_tests_log(repo_root, "green", sorted({r[0] for r in results}), f"{ran} 綠 {secs}s")
-    return {"status": "green", "ran": ran, "red": [], "secs": secs, "reason": f"受波及合約測試 {ran} 支全綠({secs}s)"}
+    # ★耗時存成獨立欄位★(設計 [S6]):以前塞在自由文字的備註裡(「46 綠 41.8s」),
+    # 回頭條件量不到;而且那個秒數只算跑測試那段,不含前面算波及的時間。分開存。
+    _bound_tests_log(repo_root, "green", sorted({r[0] for r in results}),
+                     f"{ran} 綠", secs=secs, calc_secs=_calc)
+    return {"status": "green", "ran": ran, "red": [], "secs": secs, "calc_secs": _calc,
+            "advisory": advisory, "reason": f"受波及合約測試 {ran} 支全綠(跑 {secs}s、算 {_calc}s)"}
 
-def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note=""):
+
+def _bound_tests_split_by_filterable(repo_root, items):
+    """把這批要跑的測試按「那個平台的指令能不能只跑一支」拆成兩堆:(照跑的, 這次不跑的)。
+
+    ★逐平台判★(2026-09-07 代碼審 r1 外家否決席):第一版是整批判——只要有一個平台
+    可以過濾就整批照跑,於是不可過濾的那幾個平台照樣被跑整套(單套逾時 600 秒)。
+    低風險推送不值得付那個,但也不該因為某個平台不可過濾就把可以跑的那幾支一起放掉。
+
+    ★回不出設定就當「可過濾」★(保守:寧可跑,不要假裝守住了)——
+    真的跑不動時 _run_bound_tests 自己會記 no-config。
+    非 real 的項目(懸空 / 偽證據 / 名字不合法)一律留著:它們不用真跑就能判紅,
+    而那正是這道閘最該講出來的東西。
+    """
+    try:
+        plats = load_platforms(repo_root)["platforms"]
+    except Exception:
+        return list(items), []
+    keep, defer = [], []
+    for it in items:
+        _n, plat, _m, st = it
+        if st != "real":
+            keep.append(it)
+            continue
+        cmd = (plats.get(plat) or {}).get("run_cmd") or ""
+        (keep if ("{method}" in cmd or not cmd) else defer).append(it)
+    return keep, defer
+
+def cmd_bound_tests(diff_range, repo=None, as_json=False, advisory=False, from_json=None,
+                    skip=False, skip_note=""):
+    """跑「這次改動波及到的硬合約」綁的那些測試。
+
+    ★為什麼要獨立一支指令★(2026-09-07 全 repo 審視 #17,設計 [S2],r1 外家席判 blocking):
+    這件事本來藏在 code-loop check 裡,而合約測試紅了會讓那支回 rc1;推送關卡把所有 rc1
+    一律解讀成「高風險改動還沒審查」,叫人去跑 code-loop pass。
+    ★留下審查紀錄修不好一支紅掉的測試,下次照樣被擋。★ 訊息與處置必須分流。
+
+    ★扁平頂層指令,不包子動詞★:這個 repo 對單一動詞的工具一律扁平,
+    群組式(loop / canary / guard 那種)是留給天生有兩個以上動詞的。
+
+    rc:0=green 或沒東西可跑 / 1=red 且不是 advisory / 2=參數或環境問題。
+    --advisory:紅了照樣印、照樣記帳,但回 0(低風險推送用;人裁 2026-09-07)。
+    """
+    import json as _json
+    root = Path(repo or ".").resolve()
+    payload = _impact_payload_read(from_json) if from_json else None
+    if from_json and payload is None:
+        # ★失敗隔離★:讀不到那份算好的結果,不是「沒事」也不是「炸掉」——記帳放行,
+        # 並且讓人看得出是這一步壞了,不要跟「真的沒東西可跑」混在一起。
+        _bound_tests_log(root, "range-unavailable", [], f"讀不到已算好的波及結果:{from_json}")
+        if as_json:
+            print(_json.dumps({"status": "range-unavailable", "advisory": advisory,
+                               "reason": f"讀不到已算好的波及結果({from_json})"}, ensure_ascii=False))
+        else:
+            print(f"提醒:讀不到已經算好的波及結果({from_json}),這次沒跑合約測試。", file=sys.stderr)
+        return 0
+    v = _bound_tests_check(root, diff_range, skip=skip, skip_note=skip_note,
+                           payload=payload, advisory=advisory)
+    if as_json:
+        print(_json.dumps(v, ensure_ascii=False))
+        return 0 if (v["status"] != "red" or advisory) else 1
+    st = v["status"]
+    if st == "red":
+        # ★訊息要講「這要修測試,不是補審查留痕」★(設計 [S2] 的整個理由)
+        print("", file=sys.stderr)
+        head = "提醒(不擋)" if advisory else "擋下"
+        print(f"{head}:這次改動碰到的硬合約,它們綁的測試沒過。", file=sys.stderr)
+        for n, plat, m, d in v["red"][:6]:
+            print(f"    {n}  [{m}]  {d}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("  ★這是測試紅了,不是「還沒審查」★——補一筆代碼審留痕修不好它。", file=sys.stderr)
+        print("  要嘛把測試修綠,要嘛那條合約已經不成立了、去改合約:", file=sys.stderr)
+        print(f"      lumos contracts <節點>", file=sys.stderr)
+        if advisory:
+            print("  這次是低風險推送,只提醒不擋——但帳上記著,而且高風險推送會擋。", file=sys.stderr)
+        print("", file=sys.stderr)
+        return 0 if advisory else 1
+    # ★綠走 stdout、紅走 stderr,比照兄弟函式★(代碼審 r1 架構對齊席):
+    # code-loop check 對同一份 bound-tests 狀態的分法就是
+    # `file=sys.stderr if _st == "red" else sys.stdout`。第一版全部塞 stderr,
+    # 在終端機上看起來一樣,但那是一條說不出理由的偏離。
+    if st in ("green",):
+        print(f"合約測試 {v['ran']} 支全綠(跑 {v['secs']}s、算 {v.get('calc_secs', 0)}s)")
+    elif st == "whole-suite-deferred":
+        print(f"提醒:{v['reason']}")
+    return 0
+
+
+def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None):
     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
     AND 無有效 pass/skip 留痕 → blocked=True。
     留痕座標(prepush範圍修法 #2):at_sha/branch 給了則綁該座標(hook 傳被推送 ref 的
@@ -19550,7 +19805,12 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         diff_range = f"{mb}..HEAD"
 
     # 2.5 受波及合約測試真跑(不分 tier;紅就擋)
-    bt = _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note)
+    # ★高風險這條路也要吃那份算好的★(2026-09-07 代碼審 r1 通才席的附註,查證屬實):
+    # 第一版只接了低風險那條,於是高風險推送仍然算兩次(一次給同步點名、一次在這裡)
+    # ——而我在 pre-push 的註解裡寫的是「★一次推送只算一次波及★」。
+    # ★那句話當時只在低風險成立,是我自己寫太大的宣稱。★ 接上之後才是真的。
+    bt = _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note,
+                            payload=payload)
     _codeloop_guard_verdict.last_bound = bt
     if bt["status"] == "red":
         return {"blocked": True, "reason": bt["reason"], "tier": "unknown", "bound_tests": bt}
@@ -19615,7 +19875,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     return {"blocked": True, "reason": "tier=high 且無留痕(尚未跑 code-loop pass/skip)", "tier": tier}
 
 
-def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False):
+def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False, from_json=None):
     """code-loop 留痕讀寫。
     pass  → status=passed(綁 HEAD sha);
     skip  → status=skipped(綁 HEAD sha,留逃生痕);
@@ -19663,7 +19923,8 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
             return 2
         verdict = _codeloop_guard_verdict(repo_root, diff_range=diff_range,
                                           at_sha=at_sha, branch=marker_branch,
-                                          skip_bound=skip_bound, skip_note=note or "")
+                                          skip_bound=skip_bound, skip_note=note or "",
+                                          payload=_impact_payload_read(from_json) if from_json else None)
         bt = getattr(_codeloop_guard_verdict, "last_bound", None)
         if bt is not None and "bound_tests" not in verdict:
             verdict["bound_tests"] = bt
@@ -19706,6 +19967,7 @@ HELP_WHEN = {
     "contracts": "動某模組前看有什麼不能碰:列出標成 ★INVARIANT★ / ★DEBT★ 的規則與綁的測試。",
     "lint": "剛寫完一篇,確認沒寫壞(欄位、標籤、合約標記)。比 doctor 快,只看這篇。",
     "gov": "這篇或這段時間被哪幾道閘攔過。--stats 給純數字表。",
+    "bound-tests": "這次改動碰到的硬合約,它們綁的測試跑一次。紅了是要修測試,不是補審查留痕;低風險推送用 --advisory 只提醒不擋。",
     "canary": "審查迴圈的記帳:record 記一輪結果,second 找人覆核某一筆。",
     "second": "覆核某一筆審查判定,必須換不同的人。",
     "record": "記一輪審查結果:誰審的、嚴重度、幾條發現、各自怎麼處置、審的是哪份文件(指紋)。",
@@ -20354,6 +20616,8 @@ def main():
     p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
     p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
     p.add_argument("--diff", dest="impact_diff", help="diff range(如 main..HEAD):聚合各改動檔的 ranked impact 成受影響功能面 manifest(code-loop 審計鏡頭)")
+    p.add_argument("--from-json", dest="impact_from_json", default=None,
+                   help="吃一份已經算好的結果(搭 --sync-only;推送關卡一次推送只算一次)")
     p.add_argument("--sync-only", action="store_true", dest="impact_sync_only",
                    help="配 --sync-check:只印「該動卻沒動」的點名(hooks 用),不印受影響功能面")
     p.add_argument("--sync-check", action="store_true", dest="impact_sync",
@@ -20497,8 +20761,24 @@ def main():
             _clp.add_argument("--skip-bound-tests", dest="cl_skip_bound", action="store_true",
                               help="不真跑受波及合約的測試(要配 --note 理由;進治理帳被統計;CI 用環境變數 LUMOS_SKIP_BOUND_TESTS=1)")
             _clp.add_argument("--note", default="", help="--skip-bound-tests 的理由")
+            _clp.add_argument("--from-json", dest="cl_from_json", default=None,
+                              help="吃一份已經算好的波及結果(推送關卡一次推送只算一次)")
         _clp.add_argument("--repo", dest="cl_repo", default=None,
                           help="repo root(預設 cwd 逐層向上找 .git)")
+
+    # ★扁平頂層指令★(單一動詞的工具一律扁平;群組式留給天生有兩個以上動詞的)
+    bt = sub.add_parser("bound-tests",
+                        help="跑這次改動波及到的硬合約所綁的測試(紅了是要修測試,不是補審查留痕)")
+    bt.add_argument("--diff", dest="bt_diff", default=None, help="diff 範圍 <A..B>")
+    bt.add_argument("--repo", dest="bt_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+    bt.add_argument("--json", dest="bt_json", action="store_true", help="以 JSON 輸出判定 dict")
+    bt.add_argument("--advisory", dest="bt_advisory", action="store_true",
+                    help="紅了照樣印、照樣記帳,但不擋(低風險推送用)")
+    bt.add_argument("--from-json", dest="bt_from_json", default=None,
+                    help="吃一份已經算好的波及結果,不自己再算一次(推送關卡一次推送只算一次)")
+    bt.add_argument("--skip", dest="bt_skip", action="store_true",
+                    help="這次不跑(要配 --note 理由;進治理帳被統計)")
+    bt.add_argument("--note", dest="bt_note", default="", help="--skip 的理由")
 
     _fill_help_when(ap)
     args = ap.parse_args()
@@ -20572,12 +20852,17 @@ def main():
                 print("擋下:--node 只列直接相連的一層,沒有「深度」可言,不能搭 --depth", file=sys.stderr)
                 return 2
             return cmd_impact_node(args.impact_node, repo=args.impact_repo, as_json=args.impact_json)
-        if args.impact_diff:
+        if args.impact_from_json and not args.impact_sync_only:
+            print("擋下:--from-json 目前只支援搭 --sync-only 用(那是推送關卡「算一次、兩邊各讀一次」的用法)",
+                  file=sys.stderr)
+            return 2
+        if args.impact_diff or args.impact_from_json:
             return cmd_impact_diff(args.impact_diff, repo=args.impact_repo,
                                    depth=args.impact_depth, top=args.impact_top,
                                    min_score=args.impact_min, as_json=args.impact_json,
                                    sync_check=args.impact_sync or args.impact_sync_only,
-                                   sync_only=args.impact_sync_only)
+                                   sync_only=args.impact_sync_only,
+                                   from_json=args.impact_from_json)
         if not args.impact_file:
             print("擋下:impact 要給 --file <檔案> 或 --diff <起點..終點>", file=sys.stderr)
             return 2
@@ -20617,6 +20902,16 @@ def main():
                                   diff_range=args.coch_diff, as_json=args.coch_json)
     if args.cmd == "delguard":
         return cmd_delguard_check(repo=args.repo, as_json=args.json)
+    if args.cmd == "bound-tests":
+        if args.bt_skip and not (args.bt_note or "").strip():
+            print("擋下:--skip 要附一句理由(--note),不然帳上看不出為什麼跳過", file=sys.stderr)
+            return 2
+        if not args.bt_diff and not args.bt_from_json:
+            print("擋下:要嘛給 --diff <範圍>,要嘛給 --from-json <已算好的結果>", file=sys.stderr)
+            return 2
+        return cmd_bound_tests(args.bt_diff, repo=args.bt_repo, as_json=args.bt_json,
+                               advisory=args.bt_advisory, from_json=args.bt_from_json,
+                               skip=args.bt_skip, skip_note=args.bt_note)
     if args.cmd == "code-loop":
         note = getattr(args, "note", None) or ""
         cl_json = getattr(args, "cl_json", False)
@@ -20624,7 +20919,8 @@ def main():
                              diff_range=getattr(args, "cl_diff", None),
                              at_sha=getattr(args, "cl_at_sha", None),
                              skip_bound=getattr(args, "cl_skip_bound", False),
-                             marker_branch=getattr(args, "cl_branch", None))
+                             marker_branch=getattr(args, "cl_branch", None),
+                             from_json=getattr(args, "cl_from_json", None))
     if args.cmd == "loop" and args.lcmd == "capture-counts":
         # 純機械原語(不碰圖譜):跨異質 finder 算 capture-recapture 重疊,vault-free
         return cmd_loop_capture_counts(None, args.finders,
