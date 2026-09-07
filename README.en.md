@@ -91,8 +91,6 @@ That last line matters more than it looks. **Spelling out which things are rules
 
 The difference in one line: **Obsidian is for people to browse. Lumos is for an AI to query.**
 
-An ordinary notes app won't stop you, and won't find things for you either. Lumos adds this:
-
 | | Ordinary notes app | Lumos |
 |---|---|---|
 | **An AI using it** | Dump files into context and go fishing | **One command back: ranked, filtered, compressed** |
@@ -104,9 +102,7 @@ An ordinary notes app won't stop you, and won't find things for you either. Lumo
 
 ### The one that matters most: query it, don't pour it in
 
-An AI handed an Obsidian vault can only read files into context. **This repo's notes come to 2.61 million characters** — they don't fit; and even if they did, the important parts would be diluted into noise.
-
-Here's what 2.61 million characters looks like:
+An AI handed an Obsidian vault can only read files into context. **This repo's notes come to 2.61 million characters** — they don't fit; and if they did, the important parts would be diluted into noise.
 
 <p align="center">
   <img src="assets/graph-growth.gif" alt="Lumos's own knowledge graph growing to 440 notes over three months" width="820">
@@ -114,7 +110,7 @@ Here's what 2.61 million characters looks like:
   <sub>Lumos's own notes over three months: 440 of them, 1,572 links. Recorded from the actual tool, not drawn.</sub>
 </p>
 
-So Lumos lets it **issue a query** instead. Ask where a module's boundaries are, and this comes back:
+Lumos lets it **issue a query** instead:
 
 ```console
 $ lumos context Systems/payment-integration --brief   # 783 chars back; the full note is 1,812
@@ -122,35 +118,17 @@ Heads up — this note carries a contract. Read it before you touch anything:
   ★INVARIANT★ one order must never be charged twice [test:test_no_double_charge_on_retry]
 ```
 
-**Contracts are pinned to the top**, because that's the part you can least afford to miss. The difference isn't "faster" — it's **fits vs. doesn't fit**.
+**Contracts are pinned to the top.** The difference isn't "faster" — it's **fits vs. doesn't fit**.
 
-Two more lookups Obsidian can't give you:
+One more lookup Obsidian can't give you — a **reverse lookup from source code**:
 
-```console
-$ lumos impact --file payment/gateway.py    # I'm about to change this. What does it touch?
+<p align="center">
+  <img src="assets/impact-en.svg" alt="Give it a source file and the graph works out which notes are affected and which carry contracts" width="900">
+</p>
 
-── direct (2) ──
-  ⚠contract Systems/payment-integration.md ★IRREVERSIBLE★  (body-inline-code)
-  ⚠contract Systems/checkout-flow.md ★INVARIANT★  (body-inline-code)
-── indirect (12) ──
-  hop1  Verification/2026-04-15_duplicate-charge-load-test.md  backlink ← via related ← payment-integration
-  hop1  Issues/2026-05-06_points-not-refunded-on-cancel.md  backlink ← via related ← checkout-flow
-```
+Tags are also a **structured query**, not full-text search (`lumos query --tag status/doing`). They come in families, and filters stack: "only what's still open", "only what links to this note".
 
-```console
-$ lumos query --tag status/doing            # What's still unfinished?
-
-Projects/subscriptions_plan.md [doing]
-Systems/push-notifications.md [doing]
-
-2 nodes matched
-```
-
-The first is a **reverse lookup from source code** — hand it a filename, get back which notes are affected, which of those carry contracts you must not break, and for the indirect ones, which note they came through.
-
-The second is a **structured query over tags**, not a full-text search. Tags come in families (`type/`, `status/`, and any you add such as `priority/` or `scope/`), and you can stack filters like "only what's still open" or "only what links to this note" — sliced by whatever taxonomy you chose.
-
-The primary reader of these notes isn't a human — it's **the next session's AI**. So they're written so a stranger can follow them, and **designed to be queried rather than read**.
+The primary reader of these notes isn't a human — it's **the next session's AI**. So they're **designed to be queried rather than read**.
 
 ---
 
@@ -162,17 +140,11 @@ This is where Lumos parts ways with "a really well-written document". Documents 
   <img src="assets/loop-en.svg" alt="The graph feeds each review; each review writes back into the graph" width="900">
 </p>
 
-**One round goes like this:**
+The four stages run in order. **The point is the last one: what gets accounted for is written back into the graph, and becomes the next round's material.**
 
-1. **Something arrives for review** — a design doc, or a batch of code about to be pushed.
-2. **The machine works out which notes bear on this change and attaches them to the brief.** Reviewers don't go hunting, and they don't miss the lesson from an incident three months ago.
-3. **A few AI reviewers, none told the backstory, each look for their own kind of hole.** The author doesn't get to judge their own work — that's a hard rule of the design.
-4. **Every finding must be accounted for**: adopted ones change the draft, rejected ones need a written reason. Nothing ships until all of them are accounted for.
-5. **The accounting is written back into the graph**, and becomes material for the next round.
+**Notes aren't the final output; they're the next round's input.** Round one might hand a reviewer three notes; round five hands them eight — and all eight already earned their place. Nobody dropped them in from memory.
 
-Step five is the point. **Notes aren't the final output; they're the next round's input.** So round one might hand a reviewer three notes, and round five hands them eight — and all eight already earned their place in earlier rounds. Nobody dropped them in from memory.
-
-In one line: **same reviewers, same time budget — only the material got sharper.**
+**Same reviewers, same time budget — only the material got sharper.**
 
 > **The honest limit:** what a machine can prove is *form* — that a test exists, that a rollback is written, that someone independent reviewed it, that every finding was accounted for.
 > Whether a rule still matches the business, or whether that rollback would actually run — **only a person can answer that.** Don't read "has evidence attached" as "safe".
@@ -265,42 +237,15 @@ scripts/install-graph-toolchain.sh --target <project-path> --slug <name>
 
 ## Your first time through
 
-**You don't have to memorise a single command.** Open a Claude Code or Codex conversation and talk the way you normally would — the three things below happen on their own.
+**You won't have to memorise a single command.** Open a Claude Code or Codex conversation and talk the way you normally would:
 
-**1. Ask it a "why"**
+<p align="center">
+  <img src="assets/usage-en.svg" alt="Left: three things you say in plain language. Right: what it runs on its own." width="900">
+</p>
 
-> You: why does checkout reserve stock before it calls the payment gateway?
+Those three lines on the left are your whole job. The commands on the right **you never touch and never memorise** — installing writes "what to look up, and when" into Claude Code's `CLAUDE.md` and Codex's `AGENTS.md`, and wires up five checks that fire on their own (session-start reminder, pushing affected notes before an edit, attaching relevant notes when reviewers are dispatched, the wrap-up check, CI status).
 
-It won't go straight to the code. The discipline written into your rules file at install time makes it **read the notes first** — pulling out the boundaries and the contracts, then using the code to confirm the details. You'll see its answer carry things like "this one is a contract, and here's the test guarding it" — read from the notes, not guessed.
-
-Here's what it sees behind the scenes:
-
-```console
-# Systems/payment-integration.md
-type:system | status:done | created:2026-03-25 | updated:2026-06-10
-Heads up — this note carries a contract. Read it before you touch anything:
-  ★INVARIANT★ one order must never be charged twice [test:test_no_double_charge_on_retry]
-summary:
-  FLOW: checkout submitted → call the gateway with order_id → sync result → confirmation → both must agree
-verified_by: [[Verification/2026-04-15_duplicate-charge-load-test]], [[Verification/2026-06-10_refund-drill]]
-→ links out (3):
-  • Systems/checkout-flow.md [done]
-  • Verification/2026-04-15_duplicate-charge-load-test.md [done]
-← links in (4):
-  • Projects/subscriptions_plan.md [doing]
-```
-
-**Contracts go at the top, because that's the part you can least afford to skim past.**
-
-**2. Tell it to record something**
-
-> You: one order must never be charged twice — write that down; the test guarding it is `test_no_double_charge_on_retry`
-
-It creates the note, writes the summary lines, binds the test and verifies its own write. You never have to know which fields to fill, what the markers look like, or which folder the file belongs in.
-
-**3. Change some code, then wrap up**
-
-If you changed code and touched no notes, **you get stopped once as you finish** — either update a note, or say in one line why it isn't needed. And when you go to commit, it stops you again:
+When you go to commit with the notes untouched, this is what you get:
 
 ```console
 $ git commit -m "adjust checkout logic"
@@ -318,11 +263,7 @@ Pick one:
 
 **That block is the whole product.** Everything else exists to make it not annoying.
 
-> **So what are all those `lumos <command>` lines in this README?**
->
-> They're what the AI runs behind the scenes — not something for you to memorise. Installing writes "what to look up, and when" into Claude Code's `CLAUDE.md` and Codex's `AGENTS.md`, and wires up five checks that fire on their own: a session-start reminder, pushing the affected notes in front of it before it edits a file, attaching the relevant notes when reviewers are dispatched, the wrap-up check, and CI status.
->
-> **You can absolutely run them yourself** ([command reference](docs/指令參考.md)) — you just won't need to day to day. This README shows the output so you can see what it actually read and what actually got stopped: **governance you can't see is governance that isn't there.**
+> You can run the commands yourself — see the [command reference](docs/指令參考.md). This README shows their output so you can see what got read and what got stopped: **governance you can't see is governance that isn't there.**
 
 ---
 
@@ -342,9 +283,9 @@ Lumos is my answer to that.
 
 ## Going deeper
 
-- **[The mental model and the machinery](docs/心智模型.md)** — the kinds of notes, how the three "attach your evidence" chains work, what each check blocks, and what this thing can't do.
-- **[Command reference](docs/指令參考.md)** — the commands you'll actually use day to day. `lumos --help` is authoritative.
-- **[Taking over a project with no notes](docs/接手舊專案.md)** — an old company system, or something you vibe-coded for a month: how to reconstruct the context into notes.
+- **[The mental model and the machinery](docs/心智模型.md)** — how the three evidence chains work, what each check blocks, and what this can't do.
+- **[Command reference](docs/指令參考.md)** — you won't need these day to day, but they're here.
+- **[Taking over a project with no notes](docs/接手舊專案.md)** — reconstructing an old system's context into notes.
 - [Onboarding detail](ONBOARDING.md) · [Architecture](ARCHITECTURE.md) · [How this differs from spec-driven development](SDD-vs-Lumos.md)
 - Long-form methodology (Chinese): [The graph is the contract](docs/methodology/圖譜即合約.md) · [The whole picture](docs/methodology/圖譜即合約-全景圖.md) · [Written for outside readers](docs/methodology/圖譜即合約-對外論述.md)
 
