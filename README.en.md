@@ -36,6 +36,8 @@ Two things in that diagram are worth pausing on:
 - **The gold ring isn't there from the start.** The blue module appears plain; the ring and star only grow once a green verification record is linked to it — because that's the rule: **claiming "this must not change" doesn't count until real evidence is bound to it.**
 - **The orange line goes backwards.** An incident doesn't sit in a corner gathering dust; it gets wired into the next plan as required reading before anyone starts.
 
+**You don't hand-write these notes, and you don't memorise commands.** You develop the way you already do — talking to an AI as you look things up, change things, decide things. Installing injects "when to look something up, when to write it back" into Claude Code's and Codex's rule files, so **the context that settles out of those conversations gets kept, because the rules make it get kept.**
+
 ---
 
 ## What's in a note
@@ -61,7 +63,7 @@ Those two starred markers are the heart of the whole thing:
 - **★IRREVERSIBLE★ = once done, you can't take it back.**
   Marking it obliges you to write down real rollback steps — actual commands, an actual compensating flow. "Be careful" doesn't count.
 
-So "what rules can't be touched in this project" isn't a question you ask a person. It's one command:
+So "what rules can't be touched in this project" isn't a question you ask a person. It's one command — usually one the AI runs for you:
 
 ```console
 $ lumos contracts
@@ -263,21 +265,17 @@ scripts/install-graph-toolchain.sh --target <project-path> --slug <name>
 
 ## Your first time through
 
-Installed. Do these four things and you've been round the whole loop.
+**You don't have to memorise a single command.** Open a Claude Code or Codex conversation and talk the way you normally would — the three things below happen on their own.
 
-**1. Create your first note**
+**1. Ask it a "why"**
 
-```bash
-lumos new system checkout-flow
-```
+> You: why does checkout reserve stock before it calls the payment gateway?
 
-**2. Open it and write down what this part does and where it must not be touched.** Letting an AI write it is fine — the rules push it toward something a human can read.
+It won't go straight to the code. The discipline written into your rules file at install time makes it **read the notes first** — pulling out the boundaries and the contracts, then using the code to confirm the details. You'll see its answer carry things like "this one is a contract, and here's the test guarding it" — read from the notes, not guessed.
 
-**3. Ask what it recorded**
+Here's what it sees behind the scenes:
 
 ```console
-$ lumos context Systems/checkout-flow --brief
-
 # Systems/payment-integration.md
 type:system | status:done | created:2026-03-25 | updated:2026-06-10
 Heads up — this note carries a contract. Read it before you touch anything:
@@ -292,9 +290,17 @@ verified_by: [[Verification/2026-04-15_duplicate-charge-load-test]], [[Verificat
   • Projects/subscriptions_plan.md [doing]
 ```
 
-This is what an AI reads before it touches your code. **Contracts go at the top, because that's the part you can least afford to skim past.**
+**Contracts go at the top, because that's the part you can least afford to skim past.**
 
-**4. Change a line of code, touch no notes, and try to commit**
+**2. Tell it to record something**
+
+> You: one order must never be charged twice — write that down; the test guarding it is `test_no_double_charge_on_retry`
+
+It creates the note, writes the summary lines, binds the test and verifies its own write. You never have to know which fields to fill, what the markers look like, or which folder the file belongs in.
+
+**3. Change some code, then wrap up**
+
+If you changed code and touched no notes, **you get stopped once as you finish** — either update a note, or say in one line why it isn't needed. And when you go to commit, it stops you again:
 
 ```console
 $ git commit -m "adjust checkout logic"
@@ -311,6 +317,12 @@ Pick one:
 ```
 
 **That block is the whole product.** Everything else exists to make it not annoying.
+
+> **So what are all those `lumos <command>` lines in this README?**
+>
+> They're what the AI runs behind the scenes — not something for you to memorise. Installing writes "what to look up, and when" into Claude Code's `CLAUDE.md` and Codex's `AGENTS.md`, and wires up five checks that fire on their own: a session-start reminder, pushing the affected notes in front of it before it edits a file, attaching the relevant notes when reviewers are dispatched, the wrap-up check, and CI status.
+>
+> **You can absolutely run them yourself** ([command reference](docs/指令參考.md)) — you just won't need to day to day. This README shows the output so you can see what it actually read and what actually got stopped: **governance you can't see is governance that isn't there.**
 
 ---
 
