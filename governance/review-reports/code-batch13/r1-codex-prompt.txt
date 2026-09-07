@@ -1,0 +1,28 @@
+你是外家否決席。這是一份外部第三方投稿的 diff,找出作者沒看到的問題。唯讀,不要改檔。
+
+工作目錄 /Users/enzo/harness/lumos-toolchain
+材料:governance/review-reports/code-batch13/r1-snapshot.patch(510 行)
+
+背景:每天 09:30 有一支 shell 腳本跑五件事。9/5 那次它跑到第二步就死了、後三步全沒跑、
+整天沒人發現——因為①它不管發生什麼都回 0 ②沒有任何東西在讀它印的東西。
+這批做六件:五步各自留結果並邏輯聚合、健康狀態檔(原子寫入)、一支獨立的看門狗、
+健檢加兩段軟提醒(W2 健康、W3 帳本成長)、抄一把整跑鎖、帳本門檻。
+
+**重點看這些(作者自己覺得最脆的)**:
+1. **鎖**:抄自 governance/autonomous-loop.sh。★來源有 set -e、這支只有 set -uo pipefail★
+   ——接管競態、殘鎖、pid 空、trap 安裝時機,有沒有哪個細節在這個差異下會出事?
+   請實際構造情境跑(兩個同時跑、殺掉持鎖行程、pid 檔空、鎖目錄唯讀…)。
+2. **健康檔的原子寫入**:`printf > tmp` → python 驗 JSON → `mv -f`。
+   有沒有辦法讓它留下半寫的檔、或讓 tmp 殘留?磁碟滿、權限、同時兩份在寫?
+3. **邏輯聚合**:`for _r in ...; do [ "$_r" -ne 0 ] && total=1; done` ——
+   ★注意 `set -uo pipefail` 沒有 -e,但這一行是複合命令的最後一句★,
+   當所有 rc 都是 0 時這個迴圈的結束碼是什麼?會不會影響 `return "$total"`?請實跑。
+4. **看門狗**:`awake_sec` 用 python 剖 `sysctl -n kern.waketime`。
+   非 macOS、sysctl 不存在、python3 不存在時會怎樣?邊緣觸發的狀態檔壞掉會怎樣?
+5. **健檢新增的 W2/W3 兩段**:能不能讓它們擋人(它們宣稱不擋)?
+   W3 的日期切窗算法在跨月、缺日、時區不同時對不對?請實測。
+6. **五步各自留結果**:有沒有哪一步的 rc 其實還是抓不到?請逐步驗。
+
+規則:每條 finding 必附「引句:「<逐字 ≥10 字>」」與 file:line、severity、blocking:是/否。
+報告第一行寫一行獨立的 `severity: <本輪最高>`;乾淨也要寫 `severity: clean`。
+沒實際查證過的猜測不要寫成 finding。

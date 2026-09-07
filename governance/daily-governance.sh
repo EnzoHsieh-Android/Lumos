@@ -23,35 +23,200 @@ mkdir -p "$DIR/logs"
 # 約 36 毫秒,窗口存在但不是三小時那種)。結尾同一行接 exit 是必要的:沒有它,main 跑完 bash 會回頭從舊 byte 位置
 # 續讀,檔案長度變了就讀到垃圾、甚至把整支再跑一遍(scratch 實驗實證:step1/step2 印了兩次)。守衛測試釘這三件。
 main() {
-  echo "[$(ts)] daily-governance wrapper 開始"
+  # ★所有東西都在 main() 體內★(守衛 t_daily_governance_wrapper_is_function_wrapped 釘死):
+  # bash 是邊讀邊執行,main() 外面的任何一行——包含變數指派與函式定義——在檔案被截斷或
+  # 邊跑邊改時都會先被執行。函式體要找到配對的 } 才算讀完,所以整包放進來才是真的安全。
+  # 第一版把鎖與健康檔那幾支放在 main() 外面,守衛當場擋下,而它是對的。
+  HEALTH="$DIR/.daily-governance-health.json"   # 不進版控:每台機器各自的事實
+  LOCKDIR="$DIR/.daily-governance.lock"
+  # ── 整跑鎖 ──────────────────────────────────────────────────────────────────
+  # ★同源:autonomous-loop.sh 的取鎖段★(2026-09-07 全 repo 審視 #18 抄過來)。
+  # 那邊改了這裡要跟著改;守衛 t_daily_wrapper_lock_matches_source 會比對兩份的關鍵行為。
+  #
+  # 抄的時候要知道這幾件事(第一版的計劃寫錯或漏了其中三件,設計審 r1 三席抓出來;
+  # 另外五件是代碼審 r1 五席各自「真的跑實驗」跑出來的,不是讀碼推論):
+  #  ① 建目錄是唯一的原子取鎖點。
+  #  ② ★判「持鎖的還活著嗎」不能只用 kill -0★——作業系統會把 pid 回收給完全無關的行程,
+  #     那時 kill -0 說「活著」,這支就永遠讓行、五步永遠不跑,而且完全沒有訊息。
+  #     所以要再問一次「那個 pid 的指令長得像不像我們這支」。問不出來就保守當成活著:
+  #     誤判成死掉會雙開,比多讓一次行嚴重得多。
+  #  ③ 60 分鐘只用在「pid 讀不到」那個競態(對方剛建好目錄還沒寫 pid)。
+  #     ★「讀不到」包含「內容不是數字」★:pid 檔被寫壞(寫到一半被砍)時,第一版兩個分支
+  #     都不成立,直接掉到「接管」,連 0 秒齡的新鎖都搶。
+  #  ④ ★接管要用 mv 把舊鎖原子搬走,不是「rm 掉再 mkdir」★。rm+mkdir 擋不住這個排列:
+  #     A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功),兩邊都以為自己拿到鎖。
+  #     實測:八個行程搶同一把殘鎖,30 輪有 19 輪出現多人同時拿到;拿真腳本跑,15 輪有 2 輪雙開。
+  #     改用 mv 之後,兩個接管者只有一個的 rename 會成功,另一個的來源已經不在。
+  #     附帶好處:mv 要的是外層目錄的寫權限,所以鎖目錄自己變唯讀時也不會卡死。
+  #  ⑤ ★清除靠 trap EXIT,而且 trap 要裝在取鎖之前★:這支用 set -u,踩到未設變數會立刻中止,
+  #     手寫在結尾的清除根本不會執行。裝在取鎖之後則留下一個「拿到鎖但還沒裝 trap」的窗口。
+  #     裝在前面之所以安全,是因為 finalize 會先確認鎖裡的 pid 就是自己才動手。
+  finalize() {
+    [ "$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')" = "$$" ] || return 0
+    rm -rf "$LOCKDIR" 2>/dev/null || true
+  }
+  write_pid() {   # 也走暫存→改名:這個 repo 的教訓是共用檔一律原子寫入
+    local t="$LOCKDIR/pid.tmp"
+    echo $$ > "$t" 2>/dev/null && mv -f "$t" "$LOCKDIR/pid" 2>/dev/null
+  }
+  holder_alive() {   # $1=pid;0=是我們這支 1=不是 2=問不出來(呼叫端當成活著)
+    kill -0 "$1" 2>/dev/null || return 1
+    local cmd; cmd="$(ps -p "$1" -o command= 2>/dev/null || echo '')"
+    [ -z "$cmd" ] && return 2
+    case "$cmd" in *daily-governance*) return 0 ;; *) return 1 ;; esac
+  }
+  take_lock() {   # 0=拿到  1=別人在跑,正常讓行  2=鎖壞了,不正常
+    if mkdir "$LOCKDIR" 2>/dev/null; then
+      write_pid; return 0
+    fi
+    local oldpid; oldpid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+    case "$oldpid" in ''|*[!0-9]*) oldpid="" ;; esac   # 見③:壞內容等同讀不到
+    if [ -n "$oldpid" ]; then
+      holder_alive "$oldpid"; local hv=$?
+      if [ "$hv" -ne 1 ]; then
+        echo "[$(ts)] 另一份 daily-governance 正在跑(pid $oldpid),本次退出——不搶寫紀錄"
+        return 1
+      fi
+    else
+      local age
+      age="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo '')"
+      if [ -z "$age" ] || [ "$age" -lt 3600 ]; then
+        echo "[$(ts)] 另一份疑似剛起步(鎖存在 ${age:-量不出}s、pid 讀不到),本次退出讓行"
+        return 1
+      fi
+    fi
+    echo "[$(ts)] 發現殘鎖(pid ${oldpid:-讀不到} 不是這支、或鎖齡過老),接管"
+    # ★接管要整段互斥,不是只有搬走那一下原子★(2026-09-07 代碼審 r1 之後自己再量出來的:
+    # 第一版改用 mv 之後,八個行程搶同一把殘鎖 12 輪還有 1 輪雙開)。原因是
+    # 「判定它死了」跟「動手搬」中間隔了一段:
+    #   A 搬走殘鎖 → A 重建鎖 → A 開始跑 → D(老早就判定要接管)把 A 那把全新的鎖也搬走 → D 也開始跑。
+    # mv 本身確實原子,但 D 搬的已經是另一把鎖了。所以接管整段要走一把「接管權」小鎖,
+    # 進去之後★再確認一次殘鎖還是我看到的那一把★(pid 對不對得上)。
+    # 這把小鎖自己也可能殘留(接管中途被砍),用時間兜底:接管只花毫秒,超過 60 秒一定是殘的。
+    local steal="$LOCKDIR.steal"
+    if ! mkdir "$steal" 2>/dev/null; then
+      local sage
+      sage="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$steal')))" 2>/dev/null || echo 0)"
+      if [ "$sage" -lt 60 ]; then
+        echo "[$(ts)] 另一個接管者正在處理,本次退出"
+        return 1
+      fi
+      rm -rf "$steal" 2>/dev/null || true
+      mkdir "$steal" 2>/dev/null || { echo "[$(ts)] 接管失敗(接管權搶不到),本次退出"; return 1; }
+    fi
+    local rc=1
+    local nowpid; nowpid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+    case "$nowpid" in ''|*[!0-9]*) nowpid="" ;; esac
+    if [ "$nowpid" != "$oldpid" ]; then
+      echo "[$(ts)] 進來後發現鎖已經換人(pid ${nowpid:-讀不到}),不接管,本次退出"
+    else
+      local dead="$LOCKDIR.dead.$$"
+      if ! mv "$LOCKDIR" "$dead" 2>/dev/null; then
+        if [ ! -w "$DIR" ]; then
+          echo "[$(ts)] ★鎖搬不走而且 $DIR 寫不進去★——這次五步都沒跑,要人來看" >&2
+          rc=2
+        else
+          echo "[$(ts)] 接管失敗(鎖剛被釋放),本次退出"
+        fi
+      else
+        rm -rf "$dead" 2>/dev/null || true
+        rm -rf "$LOCKDIR".dead.* 2>/dev/null || true   # 前幾次刪不掉的殘留(例如目錄被改成唯讀)
+        if ! mkdir "$LOCKDIR" 2>/dev/null; then
+          echo "[$(ts)] ★接管後鎖建不起來($LOCKDIR)★——這次五步都沒跑,要人來看" >&2
+          rc=2
+        else
+          write_pid; rc=0
+        fi
+      fi
+    fi
+    rm -rf "$steal" 2>/dev/null || true
+    return "$rc"
+  }
+
+  # ★原子寫入健康檔★:寫暫存 → 自驗讀得回來 → 換上 → ★再回頭確認真的落在那個路徑★。
+  # 暫存檔跟目的檔★同一層★(跨檔案系統改名會失敗;這也是 scripts/lumos 既有寫檔的做法)。
+  # 最後那一次回讀是代碼審 r1 邊界席逼出來的:$HEALTH 這個路徑如果意外變成一個「目錄」
+  # (中斷殘留、備份工具建了同名資料夾),mv 會把暫存檔**搬進那個目錄**而不是回報失敗
+  # ——於是 wrapper 天天印成功、健檢說「沒事」、看門狗說「從沒跑過」,三層同時失明且零訊號。
+  write_health() {   # $1..$5 = 五步的 rc;$6 = 加總
+    if [ -e "$HEALTH" ] && [ ! -f "$HEALTH" ]; then
+      echo "[$(ts)] ★健康檔的位置不是一個普通檔案($HEALTH)★——先把它清掉才寫得進去" >&2
+      return 1
+    fi
+    local tmp="$HEALTH.tmp.$$"
+    printf '{"started_at":"%s","finished_at":"%s","run_id":"%s","steps":{"governance":%s,"autonomous":%s,"lint_watch":%s,"doctor":%s,"testmap":%s},"total":%s}\n' \
+      "$STARTED_AT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$RUN_ID" "$1" "$2" "$3" "$4" "$5" "$6" \
+      > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$HEALTH" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    python3 -c "import json,sys;sys.exit(0 if json.load(open(sys.argv[1])).get('run_id')==sys.argv[2] else 1)" \
+      "$HEALTH" "$RUN_ID" 2>/dev/null || return 1
+    return 0
+  }
+
+  trap finalize EXIT                     # ⑤ 裝在取鎖之前;finalize 自己會確認鎖是不是我的
+  local _lk; take_lock; _lk=$?
+  [ "$_lk" -eq 1 ] && return 0           # 正常讓行
+  [ "$_lk" -ne 0 ] && return 3           # 鎖壞了:回非零,不要偽裝成成功
+  STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  RUN_ID="$(date '+%Y%m%d-%H%M%S')-$$"
+  echo "[$(ts)] daily-governance wrapper 開始(run $RUN_ID)"
+
+  # ★每一步的結果要存進「自己的」變數,而且指令與賦值同一行★
+  # (2026-09-07 全 repo 審視 #18,設計審 r1 通才席實測):
+  # 原本第 1、2 步寫成 `cmd` 然後 `echo "... rc=$?"`——那個 $? 抓到的是 echo 裡
+  # $(ts) 這個指令替換自己的結束碼(幾乎恆為 0),不是前面那支腳本的。
+  # 實測:`bash -c 'false; echo "[$(date +%s)] rc=$?"'` 印出 rc=0。
+  # 而且原本第 3-5 步共用同一個變數名 rc,互相覆蓋,只有最後一步留得下來。
 
   # 1) 治理日報(自設 PATH/token;log → governance.log)
-  "$DIR/ai-governance-research.sh" >> "$DIR/logs/governance.log" 2>&1
-  echo "[$(ts)] 治理日報 段結束 rc=$?"
+  "$DIR/ai-governance-research.sh" >> "$DIR/logs/governance.log" 2>&1; rc1=$?
+  echo "[$(ts)] 治理日報 段結束 rc=$rc1"
 
   # 2) 週期觀測 + 自主迭代 loop(log → autonomous.log)
   #    ★無條件呼叫★:暫停開關住在 autonomous-loop.sh 裡、只包住真正燒錢的派工段(2026-09-06
   #    全 repo 審視 #4 訂正)。前半的檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、
   #    backlog 每日衰減照跑——2026-09-05 那版把開關寫在這裡,等於連監看一起關掉。
   #    要臨時開回派工:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
-  "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
-  echo "[$(ts)] 週期觀測+自主 loop 段結束 rc=$?"
+  "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1; rc2=$?
+  echo "[$(ts)] 週期觀測+自主 loop 段結束 rc=$rc2"
 
   # 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)
-  "$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc=$?
-  echo "[$(ts)] lint-watch 段結束 rc=$rc"
+  "$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc3=$?
+  echo "[$(ts)] lint-watch 段結束 rc=$rc3"
 
   # 4) doctor 每日跑(fail-open;log → doctor-daily.log)
   # intake守衛 T4 排程線(2026-08-30 d1,外家 r3 唯一補件):T4 的滾動窗計數器住在 doctor 的
   # [I] 段;此前 doctor 只在 push/CI 跑——「doctor 每天跑」曾是未查證的假宣稱,這行讓它成真。
-  ( cd "$DIR/.." && python3 scripts/lumos doctor --ci ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc=$?  # --ci=治理事件入帳(回訪掃描 v3 接電條款:無此則 nags 14 天升級鏈斷路)
-  echo "[$(ts)] doctor 段結束 rc=$rc"
+  ( cd "$DIR/.." && python3 scripts/lumos doctor --ci ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc4=$?  # --ci=治理事件入帳(回訪掃描 v3 接電條款:無此則 nags 14 天升級鏈斷路)
+  echo "[$(ts)] doctor 段結束 rc=$rc4"
 
   # 5) testmap 每日重建(2026-09-05 第二輪審視 d5:建過一次後落後 614 個 commit 沒人重建;0.6 秒)
-  ( cd "$DIR/.." && python3 scripts/lumos testmap build ) >> "$DIR/logs/testmap.log" 2>&1; rc=$?
-  echo "[$(ts)] testmap 重建 rc=$rc"
+  ( cd "$DIR/.." && python3 scripts/lumos testmap build ) >> "$DIR/logs/testmap.log" 2>&1; rc5=$?
+  echo "[$(ts)] testmap 重建 rc=$rc5"
 
+  # ★「加總」是邏輯聚合,不是算術相加★(設計審 r2 通才席實測):
+  # 退出碼只吃 0-255。兩步各回 128(被訊號中止的慣例編碼)算術相加是 256,取模變 0
+  # ——兩個真實失敗會被壓成「全部成功」,跟原本「恆回 0」是同一種靜默失敗。
+  local total=0
+  for _r in "$rc1" "$rc2" "$rc3" "$rc4" "$rc5"; do
+    [ "$_r" -ne 0 ] && total=1
+  done
+
+  # ★寫不進健康檔 = 這一次算失敗★(代碼審 r1 外家 finder 實測:第一版只印一句提醒、
+  # total 不動,五步全成功時整支照樣回 0——排程端看到「成功」,而看門狗那邊要等 36 小時
+  # 才會從舊時間戳發現不對。既然這一批的核心賣點就是「死了要有人知道」,不能在自己的
+  # 收尾這一步製造一個「回 0 但其實沒留下任何紀錄」的洞)。
+  if ! write_health "$rc1" "$rc2" "$rc3" "$rc4" "$rc5" "$total"; then
+    echo "[$(ts)] ★健康狀態檔寫不進去($HEALTH)★——看門狗會把這次當成沒跑完,所以這一次整支算失敗" >&2
+    total=1
+  fi
+
+  echo "[$(ts)] 五步 rc=$rc1/$rc2/$rc3/$rc4/$rc5,加總 $total"
   echo "[$(ts)] daily-governance wrapper 完成"
+  # ★函式最後一行要是真正的加總★:原本最後一條是無條件的收尾 echo,
+  # 所以這支不管發生什麼都回 0(不是我原本以為的「回最後一步的結果」)。
+  return "$total"
 }
 
 main "$@"; exit

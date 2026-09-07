@@ -1,0 +1,510 @@
+diff --git a/governance/.gitignore b/governance/.gitignore
+index 01a4f14..3ad861d 100644
+--- a/governance/.gitignore
++++ b/governance/.gitignore
+@@ -16,3 +16,9 @@ autonomous_loop/decay-state.json
+ .inflight-gap.json
+ # 壞行側檔(本機回收用,不是總帳)
+ *.jsonl.bad
++# 每日治理 wrapper 的執行期狀態(2026-09-07 全 repo 審視 #18)——每台機器各自的事實,
++# 提交出去等於帶著別人的日期散播(同上面那批的理由)。
++.daily-governance.lock/
++.daily-governance-health.json
++.wrapper-watchdog-state
++logs/wrapper-watchdog.log
+diff --git a/governance/com.enzo.lumos.wrapper-watchdog.plist b/governance/com.enzo.lumos.wrapper-watchdog.plist
+new file mode 100644
+index 0000000..67d364d
+--- /dev/null
++++ b/governance/com.enzo.lumos.wrapper-watchdog.plist
+@@ -0,0 +1,27 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++    <key>Label</key>
++    <string>com.enzo.lumos.wrapper-watchdog</string>
++
++    <key>ProgramArguments</key>
++    <array>
++        <string>/bin/bash</string>
++        <string>/Users/enzo/harness/lumos-toolchain/governance/wrapper-watchdog.sh</string>
++    </array>
++
++    <!-- 每小時一次。★它跟被監看的那支是兩個不同的失敗域★——被監看的那支死了、
++         或它自己的排程被停掉,另一邊都還在。這是本案的核心,不是效能考量。 -->
++    <key>StartInterval</key>
++    <integer>3600</integer>
++
++    <key>WorkingDirectory</key>
++    <string>/Users/enzo/harness/lumos-toolchain/governance</string>
++
++    <key>StandardOutPath</key>
++    <string>/Users/enzo/harness/lumos-toolchain/governance/logs/wrapper-watchdog.out</string>
++    <key>StandardErrorPath</key>
++    <string>/Users/enzo/harness/lumos-toolchain/governance/logs/wrapper-watchdog.err</string>
++</dict>
++</plist>
+diff --git a/governance/daily-governance.sh b/governance/daily-governance.sh
+index 55c5300..f1a53b0 100755
+--- a/governance/daily-governance.sh
++++ b/governance/daily-governance.sh
+@@ -23,35 +23,121 @@ mkdir -p "$DIR/logs"
+ # 約 36 毫秒,窗口存在但不是三小時那種)。結尾同一行接 exit 是必要的:沒有它,main 跑完 bash 會回頭從舊 byte 位置
+ # 續讀,檔案長度變了就讀到垃圾、甚至把整支再跑一遍(scratch 實驗實證:step1/step2 印了兩次)。守衛測試釘這三件。
+ main() {
+-  echo "[$(ts)] daily-governance wrapper 開始"
++  # ★所有東西都在 main() 體內★(守衛 t_daily_governance_wrapper_is_function_wrapped 釘死):
++  # bash 是邊讀邊執行,main() 外面的任何一行——包含變數指派與函式定義——在檔案被截斷或
++  # 邊跑邊改時都會先被執行。函式體要找到配對的 } 才算讀完,所以整包放進來才是真的安全。
++  # 第一版把鎖與健康檔那幾支放在 main() 外面,守衛當場擋下,而它是對的。
++  HEALTH="$DIR/.daily-governance-health.json"   # 不進版控:每台機器各自的事實
++  # ── 整跑鎖 ──────────────────────────────────────────────────────────────────
++  # ★同源:autonomous-loop.sh 的取鎖段★(2026-09-07 全 repo 審視 #18 抄過來)。
++  # 那邊改了這裡要跟著改;守衛 t_daily_wrapper_lock_matches_source 會比對兩份的關鍵行為。
++  #
++  # 抄的時候要知道這五件事(第一版的計劃寫錯或漏了其中三件,設計審 r1 三席抓出來):
++  #  ① 建目錄是唯一的原子取鎖點。
++  #  ② ★主要接管判準是「持鎖行程還活著嗎」★——死了就立刻接管,跟鎖存在多久無關。
++  #  ③ 60 分鐘只用在「pid 是空的」那個競態(對方剛建好目錄還沒寫 pid);量不出鎖齡也要讓行。
++  #  ④ 接管是「刪掉再建」,兩個接管者之間仍有競態。★來源腳本有 set -e 兜著,這支沒有★
++  #     ——所以重新取鎖必須顯式檢查成功,不能像來源那樣裸寫。
++  #  ⑤ ★清除靠 trap EXIT,不是寫在函式結尾★:這支用 set -u,踩到未設變數會立刻中止,
++  #     手寫在結尾的清除根本不會執行,鎖就卡到 60 分鐘後才自癒。
++  #     而且 trap 要在取到鎖之後**立刻**裝(來源是初始化一大段之後才裝,那段窗口也可能殘鎖)。
++  LOCKDIR="$DIR/.daily-governance.lock"
++  take_lock() {
++    if ! mkdir "$LOCKDIR" 2>/dev/null; then
++      local oldpid; oldpid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
++      if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
++        echo "[$(ts)] 另一份 daily-governance 正在跑(pid $oldpid),本次退出——不搶寫紀錄"
++        return 1
++      fi
++      if [ -z "$oldpid" ]; then
++        local age
++        age="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo '')"
++        if [ -z "$age" ] || [ "$age" -lt 3600 ]; then
++          echo "[$(ts)] 另一份疑似剛起步(鎖存在 ${age:-量不出}s、pid 未寫),本次退出讓行"
++          return 1
++        fi
++      fi
++      echo "[$(ts)] 發現殘鎖(pid ${oldpid:-?} 已不在或鎖齡過老),接管"
++      rm -rf "$LOCKDIR"
++      if ! mkdir "$LOCKDIR" 2>/dev/null; then   # ④ 這支沒有 set -e,接管失敗必須自己接住
++        echo "[$(ts)] 接管失敗(另一個接管者搶先),本次退出"
++        return 1
++      fi
++    fi
++    echo $$ > "$LOCKDIR/pid"
++    return 0
++  }
++
++  # ★原子寫入健康檔★:寫暫存 → 自驗讀得回來 → 換上。暫存檔跟目的檔★同一層★
++  # (跨檔案系統改名會失敗;這也是 scripts/lumos 既有寫檔的做法)。
++  write_health() {   # $1..$5 = 五步的 rc;$6 = 加總
++    local tmp="$HEALTH.tmp.$$"
++    printf '{"started_at":"%s","finished_at":"%s","run_id":"%s","steps":{"governance":%s,"autonomous":%s,"lint_watch":%s,"doctor":%s,"testmap":%s},"total":%s}\n' \
++      "$STARTED_AT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$RUN_ID" "$1" "$2" "$3" "$4" "$5" "$6" > "$tmp" 2>/dev/null || return 1
++    python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
++    mv -f "$tmp" "$HEALTH" 2>/dev/null || { rm -f "$tmp"; return 1; }
++    return 0
++  }
++
++  finalize() {
++    rm -rf "$LOCKDIR" 2>/dev/null || true
++  }
++
++  take_lock || return 0
++  trap finalize EXIT                     # ⑤ 取到鎖之後立刻裝,不留窗口
++  STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
++  RUN_ID="$(date '+%Y%m%d-%H%M%S')-$$"
++  echo "[$(ts)] daily-governance wrapper 開始(run $RUN_ID)"
++
++  # ★每一步的結果要存進「自己的」變數,而且指令與賦值同一行★
++  # (2026-09-07 全 repo 審視 #18,設計審 r1 通才席實測):
++  # 原本第 1、2 步寫成 `cmd` 然後 `echo "... rc=$?"`——那個 $? 抓到的是 echo 裡
++  # $(ts) 這個指令替換自己的結束碼(幾乎恆為 0),不是前面那支腳本的。
++  # 實測:`bash -c 'false; echo "[$(date +%s)] rc=$?"'` 印出 rc=0。
++  # 而且原本第 3-5 步共用同一個變數名 rc,互相覆蓋,只有最後一步留得下來。
+ 
+   # 1) 治理日報(自設 PATH/token;log → governance.log)
+-  "$DIR/ai-governance-research.sh" >> "$DIR/logs/governance.log" 2>&1
+-  echo "[$(ts)] 治理日報 段結束 rc=$?"
++  "$DIR/ai-governance-research.sh" >> "$DIR/logs/governance.log" 2>&1; rc1=$?
++  echo "[$(ts)] 治理日報 段結束 rc=$rc1"
+ 
+   # 2) 週期觀測 + 自主迭代 loop(log → autonomous.log)
+   #    ★無條件呼叫★:暫停開關住在 autonomous-loop.sh 裡、只包住真正燒錢的派工段(2026-09-06
+   #    全 repo 審視 #4 訂正)。前半的檢索考卷、情境探針、空轉提醒與 14 天升級鏈、回放週跑、
+   #    backlog 每日衰減照跑——2026-09-05 那版把開關寫在這裡,等於連監看一起關掉。
+   #    要臨時開回派工:LUMOS_AUTOLOOP_OFF=0。REVISIT 2026-10-05 決定給它真產出路徑或正式退場。
+-  "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1
+-  echo "[$(ts)] 週期觀測+自主 loop 段結束 rc=$?"
++  "$DIR/autonomous-loop.sh" --dry-run 6 >> "$DIR/logs/autonomous.log" 2>&1; rc2=$?
++  echo "[$(ts)] 週期觀測+自主 loop 段結束 rc=$rc2"
+ 
+   # 3) lint-watch 版本掃描(fail-open;log → lint-watch.log)
+-  "$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc=$?
+-  echo "[$(ts)] lint-watch 段結束 rc=$rc"
++  "$DIR/lint-watch-check.sh" >> "$DIR/logs/lint-watch.log" 2>&1; rc3=$?
++  echo "[$(ts)] lint-watch 段結束 rc=$rc3"
+ 
+   # 4) doctor 每日跑(fail-open;log → doctor-daily.log)
+   # intake守衛 T4 排程線(2026-08-30 d1,外家 r3 唯一補件):T4 的滾動窗計數器住在 doctor 的
+   # [I] 段;此前 doctor 只在 push/CI 跑——「doctor 每天跑」曾是未查證的假宣稱,這行讓它成真。
+-  ( cd "$DIR/.." && python3 scripts/lumos doctor --ci ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc=$?  # --ci=治理事件入帳(回訪掃描 v3 接電條款:無此則 nags 14 天升級鏈斷路)
+-  echo "[$(ts)] doctor 段結束 rc=$rc"
++  ( cd "$DIR/.." && python3 scripts/lumos doctor --ci ) >> "$DIR/logs/doctor-daily.log" 2>&1; rc4=$?  # --ci=治理事件入帳(回訪掃描 v3 接電條款:無此則 nags 14 天升級鏈斷路)
++  echo "[$(ts)] doctor 段結束 rc=$rc4"
+ 
+   # 5) testmap 每日重建(2026-09-05 第二輪審視 d5:建過一次後落後 614 個 commit 沒人重建;0.6 秒)
+-  ( cd "$DIR/.." && python3 scripts/lumos testmap build ) >> "$DIR/logs/testmap.log" 2>&1; rc=$?
+-  echo "[$(ts)] testmap 重建 rc=$rc"
++  ( cd "$DIR/.." && python3 scripts/lumos testmap build ) >> "$DIR/logs/testmap.log" 2>&1; rc5=$?
++  echo "[$(ts)] testmap 重建 rc=$rc5"
++
++  # ★「加總」是邏輯聚合,不是算術相加★(設計審 r2 通才席實測):
++  # 退出碼只吃 0-255。兩步各回 128(被訊號中止的慣例編碼)算術相加是 256,取模變 0
++  # ——兩個真實失敗會被壓成「全部成功」,跟原本「恆回 0」是同一種靜默失敗。
++  local total=0
++  for _r in "$rc1" "$rc2" "$rc3" "$rc4" "$rc5"; do
++    [ "$_r" -ne 0 ] && total=1
++  done
++
++  write_health "$rc1" "$rc2" "$rc3" "$rc4" "$rc5" "$total" \
++    || echo "[$(ts)] 提醒:健康狀態檔寫不進去($HEALTH)——看門狗會把這次當成沒跑完" >&2
+ 
++  echo "[$(ts)] 五步 rc=$rc1/$rc2/$rc3/$rc4/$rc5,加總 $total"
+   echo "[$(ts)] daily-governance wrapper 完成"
++  # ★函式最後一行要是真正的加總★:原本最後一條是無條件的收尾 echo,
++  # 所以這支不管發生什麼都回 0(不是我原本以為的「回最後一步的結果」)。
++  return "$total"
+ }
+ 
+ main "$@"; exit
+diff --git a/governance/wrapper-watchdog.sh b/governance/wrapper-watchdog.sh
+new file mode 100755
+index 0000000..2e22cc4
+--- /dev/null
++++ b/governance/wrapper-watchdog.sh
+@@ -0,0 +1,115 @@
++#!/bin/bash
++# 每日治理 wrapper 的看門狗:讀它的健康狀態檔,逾期或有步驟失敗就出聲。
++#
++# ★為什麼要獨立一支★(2026-09-07 全 repo 審視 #18,設計審 r1 兩席判 blocker):
++# 9/5 那次 wrapper 跑到第二步就死了、後三步全沒跑、整天沒人發現——因為
++# ①它不管發生什麼都回 0 ②沒有任何東西在讀它印的東西。
++# 而圖譜裡同一週剛好記過一條教訓:「監看的東西和被監看的東西同命」。
++# 所以告警器不能住在 wrapper 裡,也不能只靠「有人跑健檢時順便看到」
++# ——那正是這個 repo 前科事故失敗過的做法(一條軟提醒響了 46 天、18,283 次沒人發現)。
++#
++# 這支只做三件事:讀健康檔 → 判斷 → 有事寫一筆治理帳並印出來。不改任何東西。
++set -uo pipefail
++
++DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++REPO="$(cd "$DIR/.." && pwd)"
++HEALTH="$DIR/.daily-governance-health.json"
++STATE="$DIR/.wrapper-watchdog-state"      # 上次喊過什麼(邊緣觸發用;不進版控)
++ts() { date '+%Y-%m-%d %H:%M:%S'; }
++
++# 逾期門檻:排程是每天一次,給到 36 小時(睡過一天還有機會補)。
++STALE_SEC=$(( 36 * 3600 ))
++# ★「機器醒著多久」要問「上次從睡眠醒來」,不是「開機多久」★
++# (設計審 r2 通才席判 blocker,實測:這台閉蓋 Mac 開機 59 天沒重開過,
++#  「開機超過兩小時」永遠成立,那個條件從第一天就是空的、而且不會有任何錯誤訊息)。
++# 真實紀錄裡有過一次 129 小時的合法空窗(長假),這條就是為了不在那種時候誤報。
++AWAKE_MIN_SEC=$(( 2 * 3600 ))
++
++awake_sec() {
++  # macOS:kern.waketime 給「上次真正從睡眠醒來」的時間。拿不到就失敗,呼叫端當「不確定」處理。
++  # ★第一版用 sed 's/.*sec = \([0-9]*\).*/\1/' 剖,抓到的是 usec 不是 sec★
++  #   ——`.*` 貪婪會吃到最後一個「sec = 」,而輸出長這樣:
++  #     { sec = 1788609050, usec = 942190 } Sat Sep  5 19:50:50 2026
++  #   真的用下去就是拿微秒當秒數,結果永遠判成「剛醒來」→ 這條防護永遠不喊,而且不會報錯。
++  #   改用 python 明確抓第一個 `sec = `,不靠貪婪比對。
++  local wt
++  wt="$(python3 -c "
++import subprocess,re,sys
++o=subprocess.run(['sysctl','-n','kern.waketime'],capture_output=True,text=True).stdout
++m=re.search(r'\bsec = (\d+)',o)
++sys.stdout.write(m.group(1) if m else '')" 2>/dev/null || echo '')"
++  [ -z "$wt" ] && return 1
++  echo $(( $(date +%s) - wt ))
++}
++
++# ★治理帳走哪條路,誠實記★(2026-09-07 實作時發現設計的那句話落不了地):
++# 設計寫「有事就寫一筆治理帳」,但**工具沒有給外部腳本寫治理帳的入口**
++# ——既有的寫入者全是 lumos 內部的(健檢 --ci、錨點核可、迴圈記帳),
++# 而新開一支子命令的代價是五份文件同步,不值得為這件事付。
++# 所以分兩條通道:
++#   ①即時通道=這支自己的紀錄檔(每小時看得到,不進版控)
++#   ②入帳通道=健檢的軟提醒(它本來就會落治理帳,也接得上 14 天升級鏈)
++# 兩條的判斷讀同一份健康檔,所以不會各說各話。
++LOG="$DIR/logs/wrapper-watchdog.log"
++emit() {   # $1=kind  $2=一句話
++  local kind="$1" msg="$2"
++  echo "[$(ts)] $msg"
++  mkdir -p "$DIR/logs" 2>/dev/null || true
++  printf '{"ts":"%s","kind":"%s","note":"%s"}\n' \
++    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$kind" "$msg" >> "$LOG" 2>/dev/null || true
++}
++
++main() {
++  # ★邊緣觸發★(設計審 r2 外家席):照字面每小時寫一筆,故障持續期間一天寫 24 筆同樣的東西
++  # ——而這一案自己正在處理帳本膨脹。只在「第一次發現 / 狀態改變 / 換日 / 恢復」時寫。
++  local prev=""; [ -f "$STATE" ] && prev="$(cat "$STATE" 2>/dev/null || echo '')"
++  local today; today="$(date +%F)"
++  local now_state="" msg=""
++
++  if [ ! -f "$HEALTH" ]; then
++    # ★檔案不存在 ≠ 死掉★(設計審 r1 外家席:第一版完全沒定義這個語意)。
++    # 新機、重新 clone、清過紀錄都會這樣,訊息要跟「死掉了」分開講,而且不算逾期。
++    now_state="never|$today"
++    msg="這台機器上的每日治理 wrapper 從來沒跑完過(還沒有健康狀態檔)。第一次跑過就會有。"
++  else
++    local fin total age
++    fin="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('finished_at',''))" "$HEALTH" 2>/dev/null || echo '')"
++    total="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('total',1))" "$HEALTH" 2>/dev/null || echo 1)"
++    if [ -z "$fin" ]; then
++      now_state="unreadable|$today"
++      msg="每日治理 wrapper 的健康狀態檔讀不動($HEALTH)——看不出它跑了沒。"
++    else
++      age="$(python3 -c "
++import datetime,sys
++d=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
++print(int((datetime.datetime.now(datetime.timezone.utc)-d).total_seconds()))" "$fin" 2>/dev/null || echo '')"
++      if [ -n "$age" ] && [ "$age" -gt "$STALE_SEC" ]; then
++        local aw; aw="$(awake_sec || echo '')"
++        if [ -n "$aw" ] && [ "$aw" -lt "$AWAKE_MIN_SEC" ]; then
++          # 剛醒來,排程還沒輪到——不喊(這是那 129 小時空窗的形態)
++          now_state="justwoke|$today"
++        else
++          now_state="stale|$today"
++          msg="每日治理 wrapper 超過 36 小時沒跑完(最後一次 $fin)——第 3-5 步可能整批沒跑,而它不會自己喊。"
++        fi
++      elif [ "$total" != "0" ]; then
++        now_state="failed|$today"
++        msg="每日治理 wrapper 最後一次跑完但有步驟失敗(見 $HEALTH 的 steps 欄)。"
++      else
++        now_state="ok|$today"
++      fi
++    fi
++  fi
++
++  # 恢復也記一筆(不然帳上只看得到壞掉、看不到修好)
++  if [ "${prev%%|*}" != "ok" ] && [ "${now_state%%|*}" = "ok" ] && [ -n "$prev" ]; then
++    emit "recovered" "每日治理 wrapper 恢復正常(前一個狀態:${prev%%|*})。"
++  fi
++  if [ -n "$msg" ] && [ "$now_state" != "$prev" ]; then
++    emit "${now_state%%|*}" "$msg"
++  fi
++  printf '%s' "$now_state" > "$STATE" 2>/dev/null || true
++  return 0
++}
++
++main "$@"; exit
+diff --git a/scripts/lumos b/scripts/lumos
+index a7ba0aa..1ec447e 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1303,6 +1303,99 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+     #   邊還對不對):某節點 verified_by 指向的 Verification 已 stale/fail = 死背書(掛著給人假安心感、
+     #   驗證其實已失效)。ghost 目標交既有 ghost 檢查,這裡跳過(不重疊職責)。
+     #   設計見 Projects/關係層傳播守衛_計劃 [S6](phase-1 MVP,免前置、純 frontmatter)。
++    section("W2", "每天自動跑的那支治理腳本,最近有沒有跑完(提醒,不擋)")
++    # ★第二通道★(2026-09-07 全 repo 審視 #18):即時通道是 governance/wrapper-watchdog.sh
++    # (獨立排程、跟被監看的那支不同失敗域)。這一段是入帳通道——健檢本來就會把
++    # gate findings 落治理帳,也接得上 14 天升級鏈,而看門狗是外部 shell、沒有寫治理帳的入口。
++    # ★兩條讀同一份健康檔★,所以不會各說各話。
++    # ★一定要用 warn_soft★:同一天才因為「標題寫不擋、實際用了會擋的那支」擋掉一次正常推送
++    #(見 [[Systems/測試假綠形態]]);這支腳本沒跑不該擋住任何人推程式碼。
++    try:
++        import datetime as _dt
++        import json as _wj
++        _hp = _vault_repo_root(env) / "governance" / ".daily-governance-health.json"
++        if not _hp.exists():
++            ok("這台機器上沒有那支腳本的健康紀錄(沒裝排程、或還沒跑過第一次)——不判")
++        else:
++            _hd = _wj.loads(_hp.read_text(encoding="utf-8"))
++            _fin = _hd.get("finished_at") or ""
++            _age = None
++            try:
++                _d0 = _dt.datetime.fromisoformat(_fin.replace("Z", "+00:00"))
++                _age = (_dt.datetime.now(_dt.timezone.utc) - _d0).total_seconds()
++            except ValueError:
++                pass
++            _bad_steps = [k for k, v in (_hd.get("steps") or {}).items() if v not in (0, "0")]
++            if _age is None:
++                warn_soft([f"健康紀錄的時間讀不動:{_fin!r}"],
++                          "那支每天跑的治理腳本,健康紀錄格式不對:",
++                          "看 governance/.daily-governance-health.json")
++            elif _age > 36 * 3600:
++                warn_soft([f"最後一次跑完 {_fin}(約 {int(_age/3600)} 小時前)"],
++                          "★那支每天跑的治理腳本超過 36 小時沒跑完★——它不會自己喊:",
++                          "看 governance/logs/daily-wrapper.log;排程是 launchd com.enzo.lumos.daily-governance")
++            elif _bad_steps:
++                warn_soft([f"失敗的步驟:{', '.join(sorted(_bad_steps))}"],
++                          "那支每天跑的治理腳本最後一次跑完,但有步驟失敗:",
++                          "看 governance/logs/ 底下對應那一步的 log")
++            else:
++                ok(f"那支每天跑的治理腳本 {int((_age or 0)/3600)} 小時前跑完,五步都是 0")
++    except Exception as _e:
++        ok(f"治理腳本健康觀測跳過(fail-open:{_e})")
++    print()
++
++    section("W3", "治理帳長太快了沒(提醒,不擋)")
++    # ★只裝門檻觸發器,先不分檔★(2026-09-07 全 repo 審視 #18):
++    # 這本帳有四個整檔讀者(rewrite 血緣查詢、gov 彙整、code-loop 的 CI fallback、週回放),
++    # 分檔要一起動那四個,現在 4MB 還不值得。分檔的做法到門檻再談。
++    # ★訂正一條寫錯的理由★:第一版寫「加上判定回放要逐行算雜湊閉包」——
++    # 那個閉包讀的是**另一本帳**(.canary-log.jsonl),不是這一本。四個整檔讀者這半才是真的。
++    #
++    # ★門檻用「成長率」不是「絕對量」★(設計審 r1 邊界席實測):
++    # 原本寫「近 7 日平均每日超過 500 筆」,而實測近 8 天是 62/61/91/159/391/669/931/1155
++    # ——7 日均值 337 還沒過,但連三天單日已破 500 且逐日翻倍,那條門檻上線幾天就會天天叫,
++    # 變成第三種「叫了但沒人在意」的訊號。改成抓「異常加速」:近 7 日均值 > 前 7 日均值的兩倍。
++    _LEDGER_MB_CAP = 5
++    try:
++        import datetime as _gd
++        _gp = env.vault.parent / ".governance-log.jsonl"
++        if not _gp.exists():
++            ok("這個專案還沒有治理帳,不判")
++        else:
++            _mb = _gp.stat().st_size / 1048576.0
++            _by_day = {}
++            for _l in _gp.read_text(encoding="utf-8", errors="replace").splitlines():
++                _l = _l.strip()
++                if not _l or not _l.startswith("{"):
++                    continue
++                _i = _l.find('"ts"')
++                if _i < 0:
++                    continue
++                _day = _l[_i:_i + 40].split('"')[3][:10] if _l.count('"', _i) >= 4 else ""
++                if len(_day) == 10:
++                    _by_day[_day] = _by_day.get(_day, 0) + 1
++            _today = _gd.date.today()
++            def _win(a, b):   # 第 a..b 天前(含),缺日算 0
++                return [_by_day.get((_today - _gd.timedelta(days=_k)).isoformat(), 0)
++                        for _k in range(a, b)]
++            _recent = _win(1, 8)     # 昨天往前 7 天(不含今天:今天還沒過完)
++            _prev = _win(8, 15)
++            _ra = sum(_recent) / 7.0
++            _pa = sum(_prev) / 7.0
++            _msgs = []
++            if _mb > _LEDGER_MB_CAP:
++                _msgs.append(f"檔案 {_mb:.1f} MB,超過 {_LEDGER_MB_CAP} MB")
++            if _pa >= 1 and _ra > _pa * 2:
++                _msgs.append(f"近 7 日平均每天 {_ra:.0f} 筆,是前 7 日({_pa:.0f} 筆)的 {_ra/_pa:.1f} 倍")
++            if _msgs:
++                warn_soft(_msgs, "治理帳長得比平常快,或已經偏大:",
++                          "先看是哪一道閘在重複寫:lumos gov --stats")
++            else:
++                ok(f"治理帳 {_mb:.1f} MB;近 7 日每天 {_ra:.0f} 筆(前 7 日 {_pa:.0f} 筆),沒有異常加速")
++    except Exception as _e:
++        ok(f"治理帳成長觀測跳過(fail-open:{_e})")
++    print()
++
+     section("I", "審查迴圈的首輪前掃有沒有留痕(滾動窗觀測;提醒,不擋)")
+     # intake守衛 T4(2026-08-30 d1):升級迴路的機械閉環——外家 r2 裁「計數靠散文=到第六案
+     # 也不會發生」(repo 有提醒被無視 546 次的帳)。數數和喊人的是機器,決定升不升的是人。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 7f2879f..a6923b2 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -28924,6 +28924,96 @@ def t_lint_warns_unknown_frontmatter_key():
+           "my_own_field" not in out5, out5[-200:])
+ 
+ 
++def t_daily_wrapper_health_and_lock():
++    """★每日治理 wrapper:五步各自的結果留得住、鎖會清、健康檔寫得出來★
++    (2026-09-07 全 repo 審視 #18)。
++
++    出身:9/5 那次它跑到第二步就死了、後三步全沒跑、整天沒人發現——因為
++    ①每一步的結果沒被抓到(那種 `echo "[$(ts)] rc=$?"` 抓到的是指令替換自己的結束碼)
++    ②三步共用同一個變數名互相覆蓋 ③函式最後一條是無條件的收尾 echo,所以恆回 0。
++
++    這條用假的子腳本跑真的骨架:第二步故意失敗,驗
++    ①整支回非零 ②健康檔記得住是「哪一步」失敗 ③鎖收尾清掉了。
++    """
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    import subprocess as _sp
++    _need_src("governance/daily-governance.sh")
++    src = (Path(GRAPHCTL).resolve().parent.parent / "governance" / "daily-governance.sh").read_text(encoding="utf-8")
++    root = Path(tempfile.mkdtemp(prefix="gctl-wrapper-"))
++    try:
++        g = root / "governance"
++        g.mkdir()
++        (root / "scripts").mkdir()
++        (g / "daily-governance.sh").write_text(src, encoding="utf-8")
++        for name, rc in (("ai-governance-research.sh", 0), ("autonomous-loop.sh", 7),
++                         ("lint-watch-check.sh", 0)):
++            f = g / name
++            f.write_text("#!/bin/bash\nexit %d\n" % rc, encoding="utf-8")
++            _os.chmod(f, 0o755)
++        lum = root / "scripts" / "lumos"
++        lum.write_text("#!/usr/bin/env python3\nimport sys;sys.exit(0)\n", encoding="utf-8")
++        _os.chmod(lum, 0o755)
++        r = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
++        check("★中間某一步失敗,整支要回非零★(原本恆回 0)", r.returncode != 0,
++              "rc=%d\n%s" % (r.returncode, r.stdout[-400:]))
++        hp = g / ".daily-governance-health.json"
++        check("健康狀態檔寫得出來", hp.exists(), str(hp))
++        if hp.exists():
++            hd = _j.loads(hp.read_text(encoding="utf-8"))
++            check("★健康檔記得住是哪一步失敗★(不能只記「跑完了」)",
++                  hd.get("steps", {}).get("autonomous") == 7, hd)
++            check("★沒失敗的步驟要各自留 0,不能互相覆蓋★",
++                  [hd["steps"][k] for k in ("governance", "lint_watch", "doctor", "testmap")] == [0, 0, 0, 0], hd)
++            check("加總是邏輯聚合(非零)", hd.get("total") == 1, hd)
++        check("★收尾把鎖清掉了★(靠 trap,不是寫在函式結尾)",
++              not (g / ".daily-governance.lock").exists(), "鎖殘留")
++        # 第二次跑:上一次的鎖已清,應該照常跑得起來
++        r2 = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
++        check("鎖清乾淨之後下一次照常跑", "wrapper 開始" in r2.stdout, r2.stdout[-300:])
++        # 有人持鎖(pid 是活的)→ 要讓行,不能搶
++        lock = g / ".daily-governance.lock"
++        lock.mkdir()
++        (lock / "pid").write_text(str(_os.getpid()), encoding="utf-8")
++        r3 = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
++        check("★另一份正在跑(pid 活著)→ 讓行不搶★",
++              "正在跑" in r3.stdout and "wrapper 開始" not in r3.stdout, r3.stdout[-300:])
++        check("讓行時不刪別人的鎖", lock.exists(), "把別人的鎖刪了")
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_daily_wrapper_health_and_lock")
++
++
++def t_daily_wrapper_lock_matches_source():
++    """★抄過來的鎖要跟來源保持一致★(2026-09-07 全 repo 審視 #18,設計審 r1 架構席)。
++
++    這個 repo 對「複製同一段邏輯」的既有立場是二選一:機械守衛防漂移,或至少留同源回指註解。
++    本案兩個都做——這條是機械那半。
++
++    盯的是這把鎖真正會改的四件事:建目錄取鎖、以「持鎖行程還活著嗎」為主要接管判準、
++    pid 空時用鎖齡兜底、量不出鎖齡要讓行。
++    ★不比對逐字★(兩支的變數名與訊息本來就不同),比對的是這四個行為都還在。
++    """
++    _need_src("governance/daily-governance.sh", "governance/autonomous-loop.sh")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    dst = (root / "governance" / "daily-governance.sh").read_text(encoding="utf-8")
++    srcf = (root / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
++    traits = {
++        "建目錄取鎖": "mkdir \"$LOCKDIR\"",
++        "看持鎖行程活著沒": "kill -0",
++        "pid 空時用鎖齡兜底": "getmtime",
++        "量不出鎖齡要讓行": "3600",
++    }
++    for name, needle in traits.items():
++        check("來源那把鎖有「%s」" % name, needle in srcf, needle)
++        check("★抄過來的也有「%s」★" % name, needle in dst, needle)
++    check("★抄的那段要留同源回指註解★(這個 repo 的既有做法之一)",
++          "autonomous-loop.sh" in dst and "同源" in dst,
++          "找不到指回來源的註解——下一個人改了來源不會知道這裡也要改")
++    print("  ✓ t_daily_wrapper_lock_matches_source")
++
++
+ def t_doctor_advisory_sections_do_not_block():
+     """★標題寫「提醒,不擋」的段落,不准用會擋的那支★(2026-09-07 當場撞到才補)。
+ 

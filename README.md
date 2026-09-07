@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/lumos-logo.png" alt="Lumos" width="420">
+</p>
+
 # Lumos
 
 **繁體中文** · [English](README.en.md)

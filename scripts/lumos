@@ -1299,10 +1299,6 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                        "批次預標的跑一次 `lumos about-code migrate-stamp --at <標註當時 commit>`;單篇核過就 `lumos about-code restamp <節點>`")
     print()
 
-    # Check E1: 失效背書(軟,不擋,不計 issues)——關係層語意檢查(補 Check 3 只查邊存不存在、不查
-    #   邊還對不對):某節點 verified_by 指向的 Verification 已 stale/fail = 死背書(掛著給人假安心感、
-    #   驗證其實已失效)。ghost 目標交既有 ghost 檢查,這裡跳過(不重疊職責)。
-    #   設計見 Projects/關係層傳播守衛_計劃 [S6](phase-1 MVP,免前置、純 frontmatter)。
     section("I", "審查迴圈的首輪前掃有沒有留痕(滾動窗觀測;提醒,不擋)")
     # intake守衛 T4(2026-08-30 d1):升級迴路的機械閉環——外家 r2 裁「計數靠散文=到第六案
     # 也不會發生」(repo 有提醒被無視 546 次的帳)。數數和喊人的是機器,決定升不升的是人。
@@ -1372,6 +1368,191 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         ok(f"前掃留痕觀測跳過(fail-open:{_e})")
     print()
 
+    section("A1", "每天自動跑的那支治理腳本,最近有沒有跑完(提醒,不擋)")
+    # ★第二通道★(2026-09-07 全 repo 審視 #18):即時通道是 governance/wrapper-watchdog.sh
+    # (獨立排程、跟被監看的那支不同失敗域)。這一段是入帳通道,看門狗是外部 shell、沒有寫治理帳的入口。
+    # ★訂正第二句我自己寫錯的註解★(2026-09-07 代碼審 r1 邊界席實測打臉):
+    # 第一版這裡寫「兩條讀同一份健康檔,所以不會各說各話」——讀同一份檔案不代表看同一個欄位。
+    # 這一段讀 steps、看門狗第一版讀 total,餵一份「五步全 0、只有 total 壞掉」的檔,
+    # 兩邊當場講出完全相反的結論。現在兩邊都以 steps 為準,total 只當交叉檢查。
+    #
+    # ★訂正一句我自己寫錯的註解★(2026-09-07 代碼審 r1 架構席判 blocking):
+    # 第一版寫「健檢本來就會把 gate findings 落治理帳」——**那不是自動的**。
+    # 要那一段自己呼叫 gov_events.append 才會落帳;不掛就永遠進不了 14 天升級鏈,
+    # 而「入帳通道」正是這一段存在的唯一理由。
+    # (順帶記個實測:14 段軟提醒裡 6 段有掛、8 段沒掛——所以那不是「無一例外的鐵律」,
+    #  但我這一段的設計明白依賴落帳,所以非掛不可。)
+    # ★一定要用 warn_soft★:同一天才因為「標題寫不擋、實際用了會擋的那支」擋掉一次正常推送
+    #(見 [[Systems/測試假綠形態]]);這支腳本沒跑不該擋住任何人推程式碼。
+    try:
+        import datetime as _dt
+        import json as _wj
+        _hp = _vault_repo_root(env) / "governance" / ".daily-governance-health.json"
+        if not _hp.exists():
+            ok("這台機器上沒有那支腳本的健康紀錄(沒裝排程、或還沒跑過第一次)——不判")
+        else:
+            _hd = _wj.loads(_hp.read_text(encoding="utf-8"))
+            # ★型別不對也是「格式不對」,不能讓它掉到最外層的 broad except★
+            # (2026-09-07 代碼審 r1 邊界席實測:值是壞字串會印具體的黃色警告,值是 JSON 數字
+            #  則拋 AttributeError、被外層吃掉退化成一句綠色「跳過」——同一類壞資料兩種待遇)。
+            _fin = _hd.get("finished_at")
+            _fin = _fin if isinstance(_fin, str) else ("" if _fin is None else repr(_fin))
+            _age = None
+            try:
+                _d0 = _dt.datetime.fromisoformat(_fin.replace("Z", "+00:00"))
+                _age = (_dt.datetime.now(_dt.timezone.utc) - _d0).total_seconds()
+            except (ValueError, TypeError, AttributeError):
+                pass
+            _bad_steps = [k for k, v in (_hd.get("steps") or {}).items() if v not in (0, "0")]
+            if _age is None:
+                warn_soft([f"健康紀錄的時間讀不動:{_fin!r}"],
+                          "那支每天跑的治理腳本,健康紀錄格式不對:",
+                          "看 governance/.daily-governance-health.json")
+                gov_events.append({"gate": "daily-wrapper", "kind": "unreadable", "hard": False,
+                                   "nodes": [], "detail": f"finished_at 讀不動:{_fin!r}"})
+            elif _age > 36 * 3600:
+                warn_soft([f"最後一次跑完 {_fin}(約 {int(_age/3600)} 小時前)"],
+                          "★那支每天跑的治理腳本超過 36 小時沒跑完★——它不會自己喊:",
+                          "看 governance/logs/daily-wrapper.log;排程是 launchd com.enzo.lumos.daily-governance")
+                gov_events.append({"gate": "daily-wrapper", "kind": "stale", "hard": False,
+                                   "nodes": [], "detail": f"最後一次跑完 {_fin}"})
+            elif _bad_steps:
+                warn_soft([f"失敗的步驟:{', '.join(sorted(_bad_steps))}"],
+                          "那支每天跑的治理腳本最後一次跑完,但有步驟失敗:",
+                          "看 governance/logs/ 底下對應那一步的 log")
+                gov_events.append({"gate": "daily-wrapper", "kind": "step-failed", "hard": False,
+                                   "nodes": [], "detail": "失敗的步驟:" + ", ".join(sorted(_bad_steps))})
+            else:
+                ok(f"那支每天跑的治理腳本 {int((_age or 0)/3600)} 小時前跑完,五步都是 0")
+
+            # ★誰看看門狗★(2026-09-07 代碼審 r1 外家否決席判 blocker 的根):
+            # 看門狗自己也是一支排程,它沒被裝、被停掉、或每次一起跑就掛,一樣沒有人會知道。
+            # 它每跑一次都會覆寫自己的狀態檔(不管有沒有事),所以那個檔的時間 = 它上次跑的時間。
+            _ws = _hp.parent / ".wrapper-watchdog-state"
+            _wage = None
+            if _ws.exists():
+                _wage = _dt.datetime.now().timestamp() - _ws.stat().st_mtime
+            # ★剛從睡眠醒來不算逾期★:閉蓋的 Mac 幾乎一直在睡,launchd 的每小時工作
+            # 睡著時不會跑;不擋這一下就會在每次長假之後誤報一輪。
+            _awake = None
+            try:
+                import re as _wre
+                import subprocess as _wsp
+                _wo = _wsp.run(["sysctl", "-n", "kern.waketime"], capture_output=True,
+                               text=True, timeout=5).stdout
+                _wm = _wre.search(r"\bsec = (\d+)", _wo)
+                if _wm:
+                    _awake = _dt.datetime.now().timestamp() - int(_wm.group(1))
+            except Exception:
+                pass
+            if _awake is not None and _awake < 2 * 3600:
+                pass   # 剛醒來,排程還沒輪到
+            elif _wage is None:
+                warn_soft(["找不到 governance/.wrapper-watchdog-state"],
+                          "★這台機器有治理腳本,但看門狗沒在跑★——腳本死了不會有人知道:",
+                          "裝它:bash governance/install-watchdog.sh")
+                gov_events.append({"gate": "daily-wrapper", "kind": "watchdog-absent", "hard": False,
+                                   "nodes": [], "detail": "看門狗沒有狀態檔,推定沒裝或沒跑"})
+            elif _wage > 36 * 3600:
+                warn_soft([f"看門狗上次跑是 {int(_wage/3600)} 小時前(排程是每小時一次)"],
+                          "★看門狗自己停掉了★——腳本死了不會有人知道:",
+                          "查它:bash governance/install-watchdog.sh --status")
+                gov_events.append({"gate": "daily-wrapper", "kind": "watchdog-stale", "hard": False,
+                                   "nodes": [], "detail": f"看門狗上次跑是 {int(_wage/3600)} 小時前"})
+    except Exception as _e:
+        ok(f"治理腳本健康觀測跳過(fail-open:{_e})")
+    print()
+
+    section("A2", "治理帳長太快了沒(提醒,不擋)")
+    # ★只裝門檻觸發器,先不分檔★(2026-09-07 全 repo 審視 #18):
+    # 這本帳有四個整檔讀者(rewrite 血緣查詢、gov 彙整、code-loop 的 CI fallback、週回放),
+    # 分檔要一起動那四個,現在 4MB 還不值得。分檔的做法到門檻再談。
+    # ★訂正一條寫錯的理由★:第一版寫「加上判定回放要逐行算雜湊閉包」——
+    # 那個閉包讀的是**另一本帳**(.canary-log.jsonl),不是這一本。四個整檔讀者這半才是真的。
+    #
+    # ★門檻用「成長率」不是「絕對量」★(設計審 r1 邊界席實測):
+    # 原本寫「近 7 日平均每日超過 500 筆」,而實測近 8 天是 62/61/91/159/391/669/931/1155
+    # ——7 日均值 337 還沒過,但連三天單日已破 500 且逐日翻倍,那條門檻上線幾天就會天天叫,
+    # 變成第三種「叫了但沒人在意」的訊號。改成抓「異常加速」:近 7 日均值 > 前 7 日均值的兩倍。
+    _LEDGER_MB_CAP = 5
+    try:
+        import datetime as _gd
+        import json as _wj
+        _gp = env.vault.parent / ".governance-log.jsonl"
+        if not _gp.exists():
+            ok("這個專案還沒有治理帳,不判")
+        else:
+            _mb = _gp.stat().st_size / 1048576.0
+            # ★只讀檔尾,不整份讀★(代碼審 r1 併發席):問題只問「最近 14 天」,
+            # 卻用 O(全部歷史) 的讀法回答,而這本帳自己正在加速膨脹——偵測膨脹的機制
+            # 自己的成本跟著它想偵測的現象一起長,現在 4MB/34ms 沒事,但沒有封頂。
+            _CAP = 24 * 1048576
+            _sz = _gp.stat().st_size
+            _from = max(0, _sz - _CAP)
+            with open(_gp, "rb") as _fh:
+                _fh.seek(_from)
+                _raw = _fh.read()
+            if _from:
+                _raw = _raw.split(b"\n", 1)[1] if b"\n" in _raw else b""   # 丟掉切一半的頭一行
+            _by_day = {}
+            _oldest = None
+            for _l in _raw.decode("utf-8", "replace").splitlines():
+                _l = _l.strip()
+                if not _l or not _l.startswith("{"):
+                    continue
+                # ★一行壞掉只跳那一行★(代碼審 r1 邊界席實測):第一版用「從 "ts" 起算 40 個字元
+                # 再切引號」取日期,而防呆數的引號是「到行尾」、真正切的只有那 40 個字元,兩邊範圍
+                # 不一致——ts 的值沒加引號時就 IndexError,被最外層 broad except 接住印成綠色「跳過」,
+                # 不是跳過那一行,是整本兩萬多行的統計一起作廢。這本帳沒有寫入時的格式驗證,壞行可達。
+                # ★順便對時區★:兩個寫入者一個用本機時區、一個用 commit 作者時區,只截字串前 10 碼
+                # 會把午夜前後的同一時刻分進不同天(邊界席與外家否決席各自指出)。
+                try:
+                    _tv = _wj.loads(_l).get("ts")
+                    if not isinstance(_tv, str):
+                        continue
+                    _td = _gd.datetime.fromisoformat(_tv)
+                except Exception:
+                    continue
+                _day = _td.astimezone().date().isoformat()
+                if _oldest is None or _day < _oldest:
+                    _oldest = _day
+                _by_day[_day] = _by_day.get(_day, 0) + 1
+            _today = _gd.date.today()
+            # 讀檔尾讀不到 15 天前 → 前 7 日那半是殘的,比出來的倍數會偏高,不比。
+            _window_ok = (_from == 0) or (_oldest is not None
+                                          and _oldest <= (_today - _gd.timedelta(days=15)).isoformat())
+            def _win(a, b):   # 第 a..b 天前(含),缺日算 0
+                return [_by_day.get((_today - _gd.timedelta(days=_k)).isoformat(), 0)
+                        for _k in range(a, b)]
+            _recent = _win(1, 8)     # 昨天往前 7 天(不含今天:今天還沒過完)
+            _prev = _win(8, 15)
+            _ra = sum(_recent) / 7.0
+            _pa = sum(_prev) / 7.0
+            _msgs = []
+            if _mb > _LEDGER_MB_CAP:
+                _msgs.append(f"檔案 {_mb:.1f} MB,超過 {_LEDGER_MB_CAP} MB")
+            if not _window_ok:
+                pass   # 視窗殘缺,不比成長率(檔案大小那條照判)
+            elif _pa >= 1 and _ra > _pa * 2:
+                _msgs.append(f"近 7 日平均每天 {_ra:.0f} 筆,是前 7 日({_pa:.0f} 筆)的 {_ra/_pa:.1f} 倍")
+            if _msgs:
+                warn_soft(_msgs, "治理帳長得比平常快,或已經偏大:",
+                          "先看是哪一道閘在重複寫:lumos gov --stats")
+                gov_events.append({"gate": "ledger-growth", "kind": "fast", "hard": False,
+                                   "nodes": [], "detail": "；".join(_msgs)})
+            else:
+                ok(f"治理帳 {_mb:.1f} MB;近 7 日每天 {_ra:.0f} 筆(前 7 日 {_pa:.0f} 筆),沒有異常加速"
+                   if _window_ok else f"治理帳 {_mb:.1f} MB;只讀得到最近一段,成長率這次不比")
+    except Exception as _e:
+        ok(f"治理帳成長觀測跳過(fail-open:{_e})")
+    print()
+
+    # Check E1: 失效背書(軟,不擋,不計 issues)——關係層語意檢查(補 Check 3 只查邊存不存在、不查
+    #   邊還對不對):某節點 verified_by 指向的 Verification 已 stale/fail = 死背書(掛著給人假安心感、
+    #   驗證其實已失效)。ghost 目標交既有 ghost 檢查,這裡跳過(不重疊職責)。
+    #   設計見 Projects/關係層傳播守衛_計劃 [S6](phase-1 MVP,免前置、純 frontmatter)。
+    #   ★這段註解原本孤零零卡在別的段落前面★(2026-09-07 代碼審 r1 架構席指出,查證後
+    #   確認★不是本批造成的、之前就分家了★),順手搬回它自己的段落頭上。
     section("E1", "筆記引用的驗證紀錄,是不是已經失效或被推翻了(拿失效的驗證當依據)")
     dead_endorse = []
     for rel, n in sorted(notes.items()):
@@ -3678,7 +3859,8 @@ def cmd_signoff(env, node, note, by=None):
 # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
 # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
 _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisit", "check-e1", "delguard", "check-e2", "check-e3", "check-lint-decl", "doctor-run",
-                "check-j", "check-k", "check-r", "check-s", "check-s2", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests")
+                "check-j", "check-k", "check-r", "check-s", "check-s2", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests",
+                "daily-wrapper", "ledger-growth")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
 # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。

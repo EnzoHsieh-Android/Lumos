@@ -28924,6 +28924,409 @@ def t_lint_warns_unknown_frontmatter_key():
           "my_own_field" not in out5, out5[-200:])
 
 
+def t_daily_wrapper_health_and_lock():
+    """★每日治理 wrapper:五步各自的結果留得住、鎖會清、健康檔寫得出來★
+    (2026-09-07 全 repo 審視 #18)。
+
+    出身:9/5 那次它跑到第二步就死了、後三步全沒跑、整天沒人發現——因為
+    ①每一步的結果沒被抓到(那種 `echo "[$(ts)] rc=$?"` 抓到的是指令替換自己的結束碼)
+    ②三步共用同一個變數名互相覆蓋 ③函式最後一條是無條件的收尾 echo,所以恆回 0。
+
+    這條用假的子腳本跑真的骨架:第二步故意失敗,驗
+    ①整支回非零 ②健康檔記得住是「哪一步」失敗 ③鎖收尾清掉了。
+    """
+    import json as _j
+    import os as _os
+    import shutil as _sh
+    import subprocess as _sp
+    _need_src("governance/daily-governance.sh")
+    src = (Path(GRAPHCTL).resolve().parent.parent / "governance" / "daily-governance.sh").read_text(encoding="utf-8")
+    root = Path(tempfile.mkdtemp(prefix="gctl-wrapper-"))
+    try:
+        g = root / "governance"
+        g.mkdir()
+        (root / "scripts").mkdir()
+        (g / "daily-governance.sh").write_text(src, encoding="utf-8")
+        for name, rc in (("ai-governance-research.sh", 0), ("autonomous-loop.sh", 7),
+                         ("lint-watch-check.sh", 0)):
+            f = g / name
+            f.write_text("#!/bin/bash\nexit %d\n" % rc, encoding="utf-8")
+            _os.chmod(f, 0o755)
+        lum = root / "scripts" / "lumos"
+        lum.write_text("#!/usr/bin/env python3\nimport sys;sys.exit(0)\n", encoding="utf-8")
+        _os.chmod(lum, 0o755)
+        r = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
+        check("★中間某一步失敗,整支要回非零★(原本恆回 0)", r.returncode != 0,
+              "rc=%d\n%s" % (r.returncode, r.stdout[-400:]))
+        hp = g / ".daily-governance-health.json"
+        check("健康狀態檔寫得出來", hp.exists(), str(hp))
+        if hp.exists():
+            hd = _j.loads(hp.read_text(encoding="utf-8"))
+            check("★健康檔記得住是哪一步失敗★(不能只記「跑完了」)",
+                  hd.get("steps", {}).get("autonomous") == 7, hd)
+            check("★沒失敗的步驟要各自留 0,不能互相覆蓋★",
+                  [hd["steps"][k] for k in ("governance", "lint_watch", "doctor", "testmap")] == [0, 0, 0, 0], hd)
+            check("加總是邏輯聚合(非零)", hd.get("total") == 1, hd)
+        check("★收尾把鎖清掉了★(靠 trap,不是寫在函式結尾)",
+              not (g / ".daily-governance.lock").exists(), "鎖殘留")
+        # 第二次跑:上一次的鎖已清,應該照常跑得起來
+        r2 = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
+        check("鎖清乾淨之後下一次照常跑", "wrapper 開始" in r2.stdout, r2.stdout[-300:])
+        # 有人持鎖 → 要讓行,不能搶。
+        # ★持鎖者必須是「真的一支 daily-governance」★:這條原本拿測試行程自己的 pid 當持鎖者,
+        # 而那是一支 python——2026-09-07 代碼審 r1 三席各自實測「pid 會被作業系統回收給無關的
+        # 行程,那時 kill -0 說活著,wrapper 就永遠讓行」之後,取鎖多了一道身分驗證,
+        # 這條測試當場翻紅。它翻得對:舊寫法把那個 bug 當成正確行為釘住了。
+        lock = g / ".daily-governance.lock"
+        holder = g / "fake-daily-governance.sh"
+        holder.write_text("#!/bin/bash\nsleep 60\n", encoding="utf-8")
+        _os.chmod(holder, 0o755)
+        hp_proc = _sp.Popen(["bash", str(holder)], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        try:
+            lock.mkdir()
+            (lock / "pid").write_text(str(hp_proc.pid), encoding="utf-8")
+            r3 = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
+            check("★另一份正在跑(pid 活著、而且真的是這支)→ 讓行不搶★",
+                  "正在跑" in r3.stdout and "wrapper 開始" not in r3.stdout, r3.stdout[-300:])
+            check("讓行時不刪別人的鎖", lock.exists(), "把別人的鎖刪了")
+        finally:
+            hp_proc.kill()
+            hp_proc.wait(timeout=10)
+        # ★pid 活著但不是這支(作業系統回收 pid)→ 要接管,不能永遠讓行★
+        _sh.rmtree(lock, ignore_errors=True)
+        unrel = _sp.Popen([sys.executable, "-c", "import time;time.sleep(60)"],
+                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        try:
+            lock.mkdir()
+            (lock / "pid").write_text(str(unrel.pid), encoding="utf-8")
+            _os.utime(lock, (0, __import__("time").time() - 7200))
+            r4 = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
+            check("★pid 被無關的活行程佔用 → 要接管,不能永遠讓行★",
+                  "wrapper 開始" in r4.stdout, r4.stdout[-300:])
+        finally:
+            unrel.kill()
+            unrel.wait(timeout=10)
+        # ★pid 檔內容壞掉(非數字)等同「還沒寫 pid」→ 年輕鎖要讓行,不能搶★
+        _sh.rmtree(lock, ignore_errors=True)
+        lock.mkdir()
+        (lock / "pid").write_text("garbage-not-a-pid", encoding="utf-8")
+        r5 = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
+        check("★pid 檔寫壞 + 鎖很年輕 → 讓行★(第一版兩個分支都不成立,直接搶 0 秒齡的鎖)",
+              "讓行" in r5.stdout and "wrapper 開始" not in r5.stdout, r5.stdout[-300:])
+        _sh.rmtree(lock, ignore_errors=True)
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_daily_wrapper_health_and_lock")
+
+
+def _wrapper_sandbox():
+    """搭一個能真的跑 daily-governance.sh 的假現場(五支子腳本都是 exit 0)。回 (root, governance 目錄)。"""
+    import os as _os
+    import tempfile as _tf
+    _need_src("governance/daily-governance.sh")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    root = Path(_tf.mkdtemp(prefix="gctl-wrap2-"))
+    g = root / "governance"
+    g.mkdir()
+    (root / "scripts").mkdir()
+    (g / "daily-governance.sh").write_text(
+        (repo / "governance" / "daily-governance.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    for name in ("ai-governance-research.sh", "autonomous-loop.sh", "lint-watch-check.sh"):
+        f = g / name
+        f.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        _os.chmod(f, 0o755)
+    lum = root / "scripts" / "lumos"
+    lum.write_text("#!/usr/bin/env python3\nimport sys;sys.exit(0)\n", encoding="utf-8")
+    _os.chmod(lum, 0o755)
+    return root, g
+
+
+def t_daily_wrapper_takeover_is_atomic():
+    """★接管殘鎖不准讓兩份同時跑起來★(2026-09-07 代碼審 r1 併發與資源席,實測重現)。
+
+    第一版接管是「rm 掉舊鎖再 mkdir」,擋不住這個排列:
+      A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功)
+    兩邊的 mkdir 都回 0,兩邊都以為自己拿到鎖。實測八個行程搶同一把殘鎖,
+    30 輪有 19 輪出現多人同時拿到;拿真腳本跑,15 輪有 2 輪整支被跑了兩遍
+    ——兩份會同時寫同一批 log、各自寫健康檔互相蓋掉。
+
+    改成用 mv 把舊鎖原子搬走:兩個接管者只有一個的 rename 會成功。
+    """
+    import os as _os
+    import shutil as _sh
+    import subprocess as _sp
+    import time as _tm
+    root, g = _wrapper_sandbox()
+    try:
+        lock = g / ".daily-governance.lock"
+        doubled = 0
+        # ★輪數要夠★:修完第一版(改用 mv 搬走)之後量到的殘餘漏網率約 1/12,
+        # 8 輪只有一半機率抓得到。20 輪約 5 秒,還在超時上限的三十分之一內。
+        rounds = 20
+        for _ in range(rounds):
+            _sh.rmtree(lock, ignore_errors=True)
+            lock.mkdir()
+            (lock / "pid").write_text("999999", encoding="utf-8")   # 確定死透
+            _os.utime(lock, (0, _tm.time() - 7200))                 # 鎖齡 2 小時
+            procs = [_sp.Popen(["bash", str(g / "daily-governance.sh")],
+                               stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True) for _ in range(8)]
+            outs = [p.communicate(timeout=120)[0] for p in procs]
+            if sum(1 for o in outs if "wrapper 開始" in o) > 1:
+                doubled += 1
+        check("★八個行程搶同一把殘鎖,不准有任何一輪雙開★",
+              doubled == 0, "%d/%d 輪雙開" % (doubled, rounds))
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_daily_wrapper_takeover_is_atomic")
+
+
+def t_daily_wrapper_health_write_failure_is_a_failure():
+    """★健康檔寫不進去 = 這一次算失敗,而且不准留垃圾暫存檔★
+    (2026-09-07 代碼審 r1 邊界席 + 外家 finder,兩席各自實測)。
+
+    兩個洞疊在一起:
+    ① $HEALTH 這個路徑如果變成一個「目錄」(中斷殘留、備份工具建了同名資料夾),
+       `mv` 會把暫存檔**搬進那個目錄**而不是回報失敗——於是 wrapper 天天印成功、
+       健檢說「沒事」、看門狗說「從沒跑過」,三層防線同時失明且零訊號。
+    ② 就算 write_health 回了非零,第一版也只印一句提醒、不動 total,
+       五步全成功時整支照樣回 0——排程端看到的是「成功」。
+    """
+    import shutil as _sh
+    import subprocess as _sp
+    root, g = _wrapper_sandbox()
+    try:
+        (g / ".daily-governance-health.json").mkdir()      # ① 路徑變目錄
+        r = _sp.run(["bash", str(g / "daily-governance.sh")],
+                    capture_output=True, text=True, timeout=120)
+        check("★健康檔寫不進去 → 整支要回非零★(第一版回 0,偽裝成功)",
+              r.returncode != 0, "rc=%d\n%s" % (r.returncode, r.stderr[-300:]))
+        check("★而且要講出「不是普通檔案」這件事★,不能只說寫不進去",
+              "不是一個普通檔案" in r.stderr, r.stderr[-300:])
+        leftovers = list((g / ".daily-governance-health.json").iterdir())
+        check("★失敗時不准留垃圾暫存檔★", not leftovers, [p.name for p in leftovers])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_daily_wrapper_health_write_failure_is_a_failure")
+
+
+def t_wrapper_watchdog_states():
+    """★看門狗四種輸入各自要講對話★(2026-09-07 代碼審 r1 四席各自實測)。
+
+    ① wrapper 正在跑(自主迴圈那段可跑三小時)→ 不准喊「超過 36 小時沒跑完」。
+       第一版只看 finished_at 的年齡、完全不看鎖,會在它正常執行時發假警報,
+       而那句話還會誘使人去 kill 一個其實正常的行程。
+    ② finished_at 讀不動 + total=0 → 不准靜默判成正常。第一版時間解析失敗只讓
+       age 變空字串,控制流直接掉到「比 total」,剛好是 0 就給綠燈。
+    ③ 五步全 0、只有 total 壞掉 → 要說「這份檔自相矛盾」。第一版讀 total、健檢讀 steps,
+       同一份檔兩邊講出相反結論(而碼裡還寫著「不會各說各話」)。
+    ④ 它自己的狀態檔壞掉 → 要喊出來。第一版靜默吞掉,邊緣觸發失效、每小時重複喊同一件事。
+    """
+    import datetime as _dt
+    import os as _os
+    import shutil as _sh
+    import subprocess as _sp
+    import tempfile as _tf
+    _need_src("governance/wrapper-watchdog.sh")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    root = Path(_tf.mkdtemp(prefix="gctl-wd-"))
+    try:
+        g = root / "governance"
+        g.mkdir()
+        wd = g / "wrapper-watchdog.sh"
+        wd.write_text((repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8"),
+                      encoding="utf-8")
+        hp = g / ".daily-governance-health.json"
+        st = g / ".wrapper-watchdog-state"
+
+        def _ago(h):
+            return (_dt.datetime.now(_dt.timezone.utc)
+                    - _dt.timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        def _run():
+            st.unlink(missing_ok=True)
+            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+
+        # ① 逾期的健康檔 + 一支真的在跑的持鎖行程 → 不喊
+        hp.write_text('{"finished_at":"%s","steps":{"governance":0},"total":0}' % _ago(37),
+                      encoding="utf-8")
+        holder = g / "fake-daily-governance.sh"
+        holder.write_text("#!/bin/bash\nsleep 60\n", encoding="utf-8")
+        _os.chmod(holder, 0o755)
+        proc = _sp.Popen(["bash", str(holder)], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        lock = g / ".daily-governance.lock"
+        try:
+            lock.mkdir()
+            (lock / "pid").write_text(str(proc.pid), encoding="utf-8")
+            r = _run()
+            check("★它正在跑的時候不准喊「超過 36 小時沒跑完」★",
+                  "36 小時" not in r.stdout, r.stdout[-300:])
+            check("正在跑要記成 running", st.read_text(encoding="utf-8").startswith("running|"),
+                  st.read_text(encoding="utf-8"))
+        finally:
+            proc.kill()
+            proc.wait(timeout=10)
+            _sh.rmtree(lock, ignore_errors=True)
+
+        # ② 時間讀不動 + total=0 → 不准判成正常
+        hp.write_text('{"finished_at":"not-a-time","steps":{"governance":0},"total":0}',
+                      encoding="utf-8")
+        r = _run()
+        check("★時間讀不動就是讀不動,不准掉進「沒事」★",
+              st.read_text(encoding="utf-8").startswith("unreadable|"),
+              st.read_text(encoding="utf-8") + r.stdout[-200:])
+
+        # ③ 五步全 0、只有 total 壞掉 → 自相矛盾
+        hp.write_text('{"finished_at":"%s","steps":{"governance":0,"doctor":0},"total":"oops"}'
+                      % _ago(5), encoding="utf-8")
+        r = _run()
+        check("★total 跟 steps 對不上要單獨喊,不能跟健檢各說各話★",
+              st.read_text(encoding="utf-8").startswith("inconsistent|"),
+              st.read_text(encoding="utf-8") + r.stdout[-200:])
+
+        # ④ 狀態檔壞掉(是個目錄)→ 要喊,而且錯誤不准漏到 stderr
+        hp.write_text('{"finished_at":"%s","steps":{"doctor":9},"total":1}' % _ago(5),
+                      encoding="utf-8")
+        st.unlink(missing_ok=True)
+        st.mkdir()
+        r = _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+        check("★自己的狀態檔寫不進去要喊出來★(第一版靜默吞掉,邊緣觸發整個失效)",
+              "狀態檔寫不進去" in r.stdout, r.stdout[-300:])
+        check("★而且 bash 的重導向錯誤不准漏到 stderr★(2>/dev/null 對這種錯誤是無效的)",
+              r.stderr.strip() == "", r.stderr[-300:])
+        _sh.rmtree(st, ignore_errors=True)
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_wrapper_watchdog_states")
+
+
+def t_doctor_wrapper_sections_behave():
+    """★健檢那兩段軟提醒的行為本身要有測試★(2026-09-07 代碼審 r1 通才席指出:
+    在這之前唯一覆蓋它們的是「不擋人」那道結構守衛,不是行為正確性——門檻、
+    失敗步驟偵測、成長率公式全都沒有一條會在被改壞時翻紅)。
+
+    順便釘住兩條實測抓到的行為:
+    ① 治理帳裡有壞行,只能跳過那一行,不准整份統計作廢
+       (第一版取日期的防呆數的是「到行尾」的引號、真正切的只有 40 個字元,
+        兩邊範圍不一致 → IndexError → 被最外層 broad except 吃掉印成綠色「跳過」)。
+    ② finished_at 型別不對(JSON 數字)要跟壞字串一樣走黃色警告,
+       不准因為拋的是 AttributeError 就掉到綠色「跳過」。
+    """
+    import datetime as _dt
+    import json as _j
+    import shutil as _sh
+    import subprocess as _sp
+    import tempfile as _tf
+    _need_src("governance/daily-governance.sh")
+    root = Path(_tf.mkdtemp(prefix="gctl-dsec-"))
+    try:
+        # 圖譜目錄名要合規(docs/*-knowledge),且要有 .git——健檢找健康檔是從 vault 往上
+        # 找 .git 當根,沒有 .git 會退到 docs/ 那一層、就找不到 governance/。
+        (root / ".git").mkdir()
+        vault = root / "docs" / "test-knowledge"
+        vault.mkdir(parents=True)
+        (vault / "README.md").write_text("---\nstatus: active\n---\n\n內容\n", encoding="utf-8")
+        gov = root / "governance"
+        gov.mkdir()
+        led = root / "docs" / ".governance-log.jsonl"
+
+        def _doctor():
+            return _sp.run([sys.executable, GRAPHCTL, "doctor", "--ci"], cwd=str(root),
+                           capture_output=True, text=True, timeout=180).stdout
+
+        def _ago(h):
+            return (_dt.datetime.now(_dt.timezone.utc)
+                    - _dt.timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # A1:超過 36 小時沒跑完 → 要喊
+        (gov / ".daily-governance-health.json").write_text(
+            _j.dumps({"finished_at": _ago(40), "steps": {"governance": 0}, "total": 0}),
+            encoding="utf-8")
+        out = _doctor()
+        check("★超過 36 小時沒跑完要喊★", "36 小時沒跑完" in out, out[-600:])
+
+        # A1:有步驟失敗 → 要喊,而且要點名是哪一步
+        (gov / ".daily-governance-health.json").write_text(
+            _j.dumps({"finished_at": _ago(2), "steps": {"governance": 0, "testmap": 9}, "total": 1}),
+            encoding="utf-8")
+        out = _doctor()
+        check("★有步驟失敗要點名是哪一步★", "testmap" in out and "有步驟失敗" in out, out[-600:])
+
+        # A1:finished_at 型別不對 → 黃色警告,不准退化成綠色「跳過」
+        (gov / ".daily-governance-health.json").write_text(
+            _j.dumps({"finished_at": 1234567, "steps": {"governance": 0}, "total": 0}),
+            encoding="utf-8")
+        out = _doctor()
+        check("★時間欄位型別不對也要走黃色警告★(第一版拋 AttributeError 被外層吃成綠勾)",
+              "健康紀錄的時間讀不動" in out, out[-600:])
+        check("不准退化成 fail-open 的那句「跳過」",
+              "治理腳本健康觀測跳過" not in out, out[-600:])
+
+        # A1:看門狗沒在跑 → 要喊
+        (gov / ".daily-governance-health.json").write_text(
+            _j.dumps({"finished_at": _ago(2), "steps": {"governance": 0}, "total": 0}),
+            encoding="utf-8")
+        out = _doctor()
+        check("★有治理腳本但看門狗沒在跑,要喊★(不然看門狗自己死掉也沒人知道)",
+              "看門狗沒在跑" in out, out[-600:])
+        (gov / ".wrapper-watchdog-state").write_text("ok|x", encoding="utf-8")
+        out = _doctor()
+        check("看門狗剛跑過就不喊", "看門狗沒在跑" not in out, out[-600:])
+
+        # A2:治理帳裡有壞行 → 只跳那一行,統計照算
+        def _line(day, i):
+            return _j.dumps({"ts": "%sT10:00:%02d+08:00" % (day, i % 60), "gate": "x"},
+                            ensure_ascii=False)
+        today = _dt.date.today()
+        rows = []
+        for k in range(1, 8):
+            rows += [_line((today - _dt.timedelta(days=k)).isoformat(), i) for i in range(40)]
+        for k in range(8, 16):
+            rows += [_line((today - _dt.timedelta(days=k)).isoformat(), i) for i in range(2)]
+        led.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        out = _doctor()
+        check("★近 7 日均值超過前 7 日兩倍要喊★", "長得比平常快" in out, out[-600:])
+        led.write_text("\n".join(rows)
+                       + '\n{"ts": 123456789012345678901234567890, "g": "x"}\n'
+                       + "not json at all\n"
+                       + '\n{"ts": "壞掉的時間", "g": "x"}\n', encoding="utf-8")
+        out2 = _doctor()
+        check("★帳裡有壞行,只跳那一行,不准整份統計作廢★"
+              "(第一版取日期的防呆範圍跟切片範圍不一致 → 整份被 broad except 吃掉)",
+              "長得比平常快" in out2 and "治理帳成長觀測跳過" not in out2, out2[-600:])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_doctor_wrapper_sections_behave")
+
+
+def t_daily_wrapper_lock_matches_source():
+    """★抄過來的鎖要跟來源保持一致★(2026-09-07 全 repo 審視 #18,設計審 r1 架構席)。
+
+    這個 repo 對「複製同一段邏輯」的既有立場是二選一:機械守衛防漂移,或至少留同源回指註解。
+    本案兩個都做——這條是機械那半。
+
+    盯的是這把鎖真正會改的四件事:建目錄取鎖、以「持鎖行程還活著嗎」為主要接管判準、
+    pid 空時用鎖齡兜底、量不出鎖齡要讓行。
+    ★不比對逐字★(兩支的變數名與訊息本來就不同),比對的是這四個行為都還在。
+    """
+    _need_src("governance/daily-governance.sh", "governance/autonomous-loop.sh")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    dst = (root / "governance" / "daily-governance.sh").read_text(encoding="utf-8")
+    srcf = (root / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
+    traits = {
+        "建目錄取鎖": "mkdir \"$LOCKDIR\"",
+        "看持鎖行程活著沒": "kill -0",
+        "pid 空時用鎖齡兜底": "getmtime",
+        "量不出鎖齡要讓行": "3600",
+    }
+    for name, needle in traits.items():
+        check("來源那把鎖有「%s」" % name, needle in srcf, needle)
+        check("★抄過來的也有「%s」★" % name, needle in dst, needle)
+    check("★抄的那段要留同源回指註解★(這個 repo 的既有做法之一)",
+          "autonomous-loop.sh" in dst and "同源" in dst,
+          "找不到指回來源的註解——下一個人改了來源不會知道這裡也要改")
+    print("  ✓ t_daily_wrapper_lock_matches_source")
+
+
 def t_doctor_advisory_sections_do_not_block():
     """★標題寫「提醒,不擋」的段落,不准用會擋的那支★(2026-09-07 當場撞到才補)。
 
