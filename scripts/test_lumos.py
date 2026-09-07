@@ -28924,5 +28924,173 @@ def t_lint_warns_unknown_frontmatter_key():
           "my_own_field" not in out5, out5[-200:])
 
 
+def t_loop_close_kinds_classified():
+    """★新增一種收工事件卻忘了歸類,這裡要翻紅★(2026-09-07 代碼審 r1,兩席獨立指出)。
+
+    `loop list` 靠一張人工維護的「哪些事件算關門」表。原本沒有任何守衛:
+    以後有人加一種新的收斂事件,那支只會**安靜地**繼續把它判成「沒關門」,
+    清單長期有雜訊,最後被當成「這工具不準」而被忽略。
+
+    同型前例就在隔壁:治理帳的閘名有一張 `_KNOWN_GATES` 表,而它**有**專門的漂移守衛。
+    這條補上同一道:治理帳裡出現過的每一組 (閘, 種類),只要屬於審查迴圈那兩個閘,
+    就必須在「算關門」或「明確不算關門」兩張表裡的其中一張。
+
+    ★判準取自真實帳,不是寫死清單★——所以新增一種 kind、帳上一出現,這條就會紅。
+    """
+    import json as _j
+    _need_src("docs/lumos-toolchain-knowledge")
+    m = _load_lumos()
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    path = repo / "docs" / ".governance-log.jsonl"
+    if not path.exists():
+        raise _SrcOnly("這個 repo 沒有治理帳,這段沒驗到")
+    seen = set()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = _j.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(d, dict):
+            continue
+        if d.get("gate") in ("design-loop", "code-loop"):
+            seen.add((d.get("gate"), d.get("kind")))
+    check("治理帳裡撈得到審查迴圈的事件種類", len(seen) >= 4, str(sorted(seen)))
+    classified = (set(m.LOOP_CLOSE_EVENTS) | set(m.LOOP_CLOSE_EVENTS_BY_DETAIL)
+                  | set(m.LOOP_NOT_CLOSE_EVENTS))
+    unclassified = sorted(seen - classified)
+    check("★每一種審查迴圈事件都被歸類過(算關門 / 明確不算)★", not unclassified,
+          "沒歸類的: %s —— 新增了一種收工事件就要決定它算不算關門,"
+          "放著不管的話 loop list 會安靜地把它當成沒關門" % unclassified)
+    # 反面:表裡列的種類也不該是憑空想像的(全部都要在真實帳上出現過)
+    listed = set(m.LOOP_CLOSE_EVENTS) | set(m.LOOP_CLOSE_EVENTS_BY_DETAIL)
+    ghost = sorted(k for k in listed if k not in seen)
+    check("表裡列的關門種類都真的在帳上出現過(不是憑空想的)", not ghost,
+          "帳上從沒出現過: %s" % ghost)
+    print("  ✓ t_loop_close_kinds_classified")
+
+
+def t_loop_list_open_loops():
+    """`lumos loop list`:列出帳面上還沒關門的審查迴圈(執行DAG_調研 排第一順位的缺口——
+    loop next/status/verify-progress 全都強制要 loop_id,而沒有任何入口能先知道有哪些編號在飛,
+    實務上只能 tail .canary-log.jsonl 或看 git 未追蹤檔)。
+
+    關門訊號=治理帳 .governance-log.jsonl 的放行事件(design-loop converged/cap-reached/rewrite、
+    code-loop passed/skipped),nodes 帶迴圈編號;開著=沒有關門事件、或關門後又記了新的審查輪次。
+    ★誠實界線★:關門事件的慣例 2026-08-22 才開始,更早的迴圈天生沒有這筆——所以「沒關門」
+    只等於「帳面沒看到關門事件」,不等於「沒做完」,輸出必須自己講明。唯讀恆 rc0(比照 canary-stats)。"""
+    import json as _j
+    import shutil
+    root = Path(tempfile.mkdtemp(prefix="gctl-looplist-"))
+    vault = root / "docs" / "kg"
+    (vault / "MOC").mkdir(parents=True)
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
+    can = root / "docs" / ".canary-log.jsonl"
+    gov = root / "docs" / ".governance-log.jsonl"
+
+    def rec(loop, ts, rnd="r1", sev="minor"):
+        with open(can, "a", encoding="utf-8") as f:
+            f.write(_j.dumps({"ts": ts, "kind": "caught", "token": "x", "loop": loop,
+                              "round": rnd, "severity": sev, "auditor": "s1"}) + "\n")
+
+    def close(loop, ts, gate="design-loop", kind="converged"):
+        """設計審那組的關門事件:編號寫在 nodes 欄(跟真寫入端 _loop_gov_mark 同形)。"""
+        with open(gov, "a", encoding="utf-8") as f:
+            f.write(_j.dumps({"ts": ts, "commit": "abc", "gate": gate, "kind": kind,
+                              "hard": False, "nodes": [loop], "note": "t"}) + "\n")
+
+    def close_codeloop(loop, ts, kind="passed"):
+        """★code-loop 那組:nodes 永遠是空的,編號只在自由文字 detail 裡★
+        (2026-09-07 代碼審 r1,三席獨立抓到)。
+
+        第一版的 fixture 對 code-loop 也塞 `nodes: [loop]`——**那個形狀現實中不存在**,
+        真寫入端 `_codeloop_gov_log` 把 nodes 寫死成 []。於是測試綠、功能死:
+        實測 23 個早就過閘的 code 迴圈被報成「空轉候選」。
+        這裡照真寫入端的形狀寫,才驗得到那條路。"""
+        with open(gov, "a", encoding="utf-8") as f:
+            f.write(_j.dumps({"ts": ts, "commit": "abc", "gate": "code-loop", "kind": kind,
+                              "hard": False, "nodes": [], "note": "",
+                              "detail": "%s r1 收斂:5 findings 全折" % loop,
+                              "branch": "main", "head_sha": "deadbeef"}) + "\n")
+
+    try:
+        # 空帳也要 rc0,不能因為沒東西就報錯
+        r = run(vault, "loop", "list")
+        check("空帳 rc0", r.returncode == 0, r.stderr)
+
+        rec("still-open", "2026-09-06T10:00:00+08:00")
+        rec("already-closed", "2026-09-05T10:00:00+08:00")
+        close("already-closed", "2026-09-05T11:00:00+08:00")
+        rec("reopened", "2026-09-04T10:00:00+08:00")
+        close("reopened", "2026-09-04T11:00:00+08:00")
+        rec("reopened", "2026-09-06T12:00:00+08:00", rnd="r2")      # 關門後又開新輪
+        rec("long-idle", "2026-07-01T10:00:00+08:00")               # 沒關門但很久沒動
+        close_codeloop("code-closed", "2026-09-05T11:00:00+08:00")
+        rec("code-closed", "2026-09-05T10:00:00+08:00")
+        # ★過閘之後才補記帳是常態,不算重開★(2026-09-07 代碼審 r1 折入時實測發現):
+        # code-234 唯一那筆審查記錄比過閘晚 8 分鐘、code-kill 晚 14 分鐘,兩個都是同一次工作的
+        # 收尾簿記,第一版卻判成「又開新輪」而永遠列在空轉候選裡。
+        close_codeloop("code-late-bookkeeping", "2026-09-05T11:00:00+08:00")
+        rec("code-late-bookkeeping", "2026-09-05T11:08:00+08:00")
+
+        r = run(vault, "loop", "list", "--json", "--now", "2026-09-07")
+        check("loop list rc0", r.returncode == 0, r.stderr)
+        d = _j.loads(r.stdout)
+        ids = [x["loop"] for x in d["open"]]
+        check("列出還沒關門的", "still-open" in ids, r.stdout)
+        check("已關門的不列", "already-closed" not in ids, r.stdout)
+        check("★code-loop 的放行事件同樣算關門★", "code-closed" not in ids, r.stdout)
+        check("★關門後隔天以上又記帳=重新算開著★", "reopened" in ids, r.stdout)
+        check("★過閘後幾分鐘內的收尾簿記不算重開★", "code-late-bookkeeping" not in ids, r.stdout)
+        check("久沒動的不進預設清單(進 stale)", "long-idle" not in ids
+              and "long-idle" in [x["loop"] for x in d["stale"]], r.stdout)
+
+        one = next(x for x in d["open"] if x["loop"] == "still-open")
+        check("每筆帶最後活動日與距今天數", one["last_ts"][:10] == "2026-09-06" and one["idle_days"] == 1, r.stdout)
+        check("每筆帶輪數", next(x for x in d["open"] if x["loop"] == "reopened")["rounds"] == 2, r.stdout)
+
+        # --days 調門檻:放寬到 999 天,久沒動的要回到 open
+        r = run(vault, "loop", "list", "--json", "--days", "999", "--now", "2026-09-07")
+        check("--days 放寬後久沒動的回到 open",
+              "long-idle" in [x["loop"] for x in _j.loads(r.stdout)["open"]], r.stdout)
+
+        # 人讀輸出:必須自己講明「沒關門 ≠ 沒做完」,並給下一步指令
+        r = run(vault, "loop", "list", "--now", "2026-09-07")
+        check("★人讀輸出要講明誠實界線★", "不等於" in r.stdout and "2026-08-22" in r.stdout, r.stdout)
+        check("下一步指令要印出來", "loop next" in r.stdout, r.stdout)
+
+        # --exclude:通用前綴排除(自主迴圈每日場次天生不關門、一天長一個,會淹掉清單)
+        rec("auto-2026-09-06", "2026-09-06T09:00:00+08:00")
+        r = run(vault, "loop", "list", "--json", "--exclude", "auto-", "--now", "2026-09-07")
+        d = _j.loads(r.stdout)
+        check("--exclude 排掉指定前綴", "auto-2026-09-06" not in [x["loop"] for x in d["open"]]
+              and "still-open" in [x["loop"] for x in d["open"]], r.stdout)
+
+        # ★時區安全★:兩本帳今天都寫 +08:00,字串比對剛好會對;換一台機器寫 UTC 就會靜默判錯。
+        # 這組把它釘死:關門事件是 03:00Z(=11:00+08:00,真實時間晚於審查那筆 10:00+08:00),
+        # 但字串上 "…T03" < "…T10" —— 只比字串會誤判成「還開著」。
+        rec("tz-mixed", "2026-09-06T10:00:00+08:00")
+        close("tz-mixed", "2026-09-06T03:00:00+00:00")
+        r = run(vault, "loop", "list", "--json", "--now", "2026-09-07")
+        check("★跨時區的關門事件要判得出來(不能只比字串)★",
+              "tz-mixed" not in [x["loop"] for x in _j.loads(r.stdout)["open"]], r.stdout)
+
+        # --now 壞輸入:給人話,不要吐堆疊
+        r = run(vault, "loop", "list", "--now", "上禮拜")
+        check("--now 壞輸入 rc2", r.returncode == 2, str(r.returncode) + r.stderr)
+        check("--now 壞輸入給人話不吐堆疊",
+              "擋下" in r.stderr and "Traceback" not in r.stderr, r.stderr)
+
+        # 壞行:跳過但要出聲,仍 rc0(唯讀查詢不 fail-closed,但不准靜默)
+        with open(can, "a", encoding="utf-8") as f:
+            f.write("{壞掉的行\n")
+        r = run(vault, "loop", "list", "--now", "2026-09-07")
+        check("壞行仍 rc0", r.returncode == 0, r.stderr)
+        check("★壞行不得靜默★", "讀不動" in r.stderr or "跳過" in r.stderr, r.stderr)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -1,0 +1,335 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 2afedb3..24eada7 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -5224,6 +5224,181 @@ def cmd_loop_compress(file, as_json=False):
+     return 0
+ 
+ 
++# ── loop list:哪些審查迴圈還開著(執行DAG_調研 排第一順位的缺口) ──
++# next/status/verify-progress 全都強制要 loop_id,卻沒有任何入口能先知道有哪些編號在飛,
++# 實務上只能 tail .canary-log.jsonl 或看 git 未追蹤檔。關門訊號取治理帳的放行事件——
++# 那是既有的、寫入當下就落的、可重算的東西,不新增任何要人維護的狀態。
++LOOP_CLOSE_EVENTS = {("design-loop", "converged"), ("design-loop", "cap-reached"),
++                     ("design-loop", "rewrite"), ("code-loop", "passed"), ("code-loop", "skipped")}
++LOOP_CLOSE_SINCE = "2026-08-22"   # 治理帳出現第一筆 design-loop converged 的日子
++
++
++def _loop_ts_key(ts):
++    """ISO 時間字串 → 可比較的 UTC 秒數;解析不動或沒帶時區就回 None(呼叫端退回字串比對)。
++
++    ★為什麼需要這一層★:審查帳與治理帳今天全部寫 +08:00(當場數過:1101 / 26443 筆都是),
++    所以直接拿字串比大小剛好會對。但那是巧合不是保證——只要有一筆從別的時區(或 UTC)
++    寫進來,字串比對就會**靜默**把開著判成關了、或反過來。這層把那個假設消掉,成本幾行。
++    沒帶時區的一律不猜(回 None):猜錯比退回字串比對更糟。"""
++    import datetime
++    if not ts:
++        return None
++    try:
++        d = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
++    except ValueError:
++        return None
++    if d.tzinfo is None:
++        return None
++    return d.timestamp()
++
++
++def _loop_ts_newer(a, b):
++    """a 是不是比 b 晚。兩邊都解得動就比 UTC 秒數,否則退回字串比對(舊帳相容)。"""
++    ka, kb = _loop_ts_key(a), _loop_ts_key(b)
++    if ka is not None and kb is not None:
++        return ka > kb
++    return (a or "") > (b or "")
++
++
++def _loop_close_stamps(env):
++    """治理帳 → {loop_id: 最後一次關門事件的 ts}。壞行跳過(回傳跳過行數)。"""
++    import json
++    path = env.vault.parent / ".governance-log.jsonl"
++    stamps, bad = {}, 0
++    if not path.exists():
++        return stamps, bad
++    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
++        line = line.strip()
++        if not line:
++            continue
++        try:
++            d = json.loads(line)
++        except ValueError:
++            bad += 1
++            continue
++        if (d.get("gate"), d.get("kind")) not in LOOP_CLOSE_EVENTS:
++            continue
++        ts = d.get("ts") or ""
++        for n in (d.get("nodes") or []):
++            if isinstance(n, str) and _loop_ts_newer(ts, stamps.get(n, "")):
++                stamps[n] = ts
++    return stamps, bad
++
++
++def cmd_loop_list(env, days=14, show_all=False, stale_only=False, as_json=False, now=None,
++                  exclude=None):
++    """帳面上還開著的審查迴圈。開著=沒有關門事件,或關門後又記了新的審查輪次。
++
++    ★誠實界線★:關門事件的慣例 %s 才開始,更早的迴圈天生沒有這筆——所以「沒關門」
++    只等於「帳面沒看到關門事件」,不等於「沒做完」。唯讀恆 rc0(比照 canary-stats);
++    壞行跳過但出聲(不靜默,也不 fail-closed——這是查詢不是閘)。""" % LOOP_CLOSE_SINCE
++    import json, datetime
++    path = env.vault.parent / ".canary-log.jsonl"
++    per = {}
++    bad = 0
++    if path.exists():
++        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
++            line = line.strip()
++            if not line:
++                continue
++            try:
++                d = json.loads(line)
++            except ValueError:
++                bad += 1
++                continue
++            lid = d.get("loop")
++            if not isinstance(lid, str) or not lid:
++                continue
++            e = per.setdefault(lid, {"loop": lid, "last_ts": "", "rounds": set(), "records": 0,
++                                     "last_severity": None, "tier": None, "orchestrator": None})
++            e["records"] += 1
++            ts = d.get("ts") or ""
++            if not _loop_ts_newer(e["last_ts"], ts):   # ts >= last_ts(時區安全)
++                e["last_ts"] = ts
++                e["last_severity"] = d.get("severity")
++            if d.get("round"):
++                e["rounds"].add(d["round"])
++            e["tier"] = e["tier"] or d.get("tier")
++            e["orchestrator"] = e["orchestrator"] or d.get("orchestrator")
++    closed, gbad = _loop_close_stamps(env)
++    bad += gbad
++    if now:
++        try:
++            today = datetime.date.fromisoformat(now)
++        except ValueError:
++            print("擋下:--now 要給 YYYY-MM-DD 這種格式的日期,你給的是 %r" % now, file=sys.stderr)
++            return 2
++    else:
++        today = datetime.date.today()
++
++    def _idle(ts):
++        try:
++            return (today - datetime.date.fromisoformat(ts[:10])).days
++        except ValueError:
++            return None
++
++    rows = []
++    for e in per.values():
++        cts = closed.get(e["loop"], "")
++        rows.append({"loop": e["loop"], "last_ts": e["last_ts"], "idle_days": _idle(e["last_ts"]),
++                     "rounds": len(e["rounds"]) or e["records"], "last_severity": e["last_severity"],
++                     "tier": e["tier"], "orchestrator": e["orchestrator"],
++                     "closed_ts": cts or None,
++                     "open": _loop_ts_newer(e["last_ts"], cts)})
++    # 排除前綴:自主迴圈的每日場次(auto-YYYY-MM-DD)天生不會有關門事件、一天長一個,
++    # 不排掉的話這份清單遲早被它們淹掉。★不寫死任何前綴★——要排什麼由呼叫端說。
++    n_excluded = 0
++    if exclude:
++        keep = [r for r in rows if not any(r["loop"].startswith(x) for x in exclude)]
++        n_excluded = len(rows) - len(keep)
++        rows = keep
++    rows.sort(key=lambda r: (_loop_ts_key(r["last_ts"]) or float("-inf"), r["last_ts"]), reverse=True)
++    fresh = [r for r in rows if r["open"] and (r["idle_days"] is None or r["idle_days"] <= days)]
++    stale = [r for r in rows if r["open"] and r["idle_days"] is not None and r["idle_days"] > days]
++    done = [r for r in rows if not r["open"]]
++    if bad:
++        print("提醒:審查帳/治理帳有 %d 行讀不動,已跳過(這份清單可能因此少列迴圈)" % bad, file=sys.stderr)
++    if as_json:
++        print(json.dumps({"now": today.isoformat(), "days": days, "open": fresh,
++                          "stale": stale, "closed": done}, ensure_ascii=False, indent=2))
++        return 0
++    if not rows:
++        print("審查帳裡還沒有任何迴圈。開第一輪:")
++        print("    lumos loop next <編號> --tier standard --orchestrator claude --spec <計劃.md>")
++        return 0
++
++    def _line(r):
++        idle = "?" if r["idle_days"] is None else "%d 天前" % r["idle_days"]
++        sev = r["last_severity"] or "—"
++        return "  %-8s %2d 輪  最後一筆 %-7s  %s" % (idle, r["rounds"], sev, r["loop"])
++
++    if stale_only:
++        print("審查迴圈:超過 %d 天沒動、帳面又沒關門的有 %d 個(空轉候選)" % (days, len(stale)))
++        for r in stale:
++            print(_line(r))
++    else:
++        print("審查迴圈:帳面上還沒關門的有 %d 個(最近 %d 天有動)" % (len(fresh), days))
++        for r in fresh:
++            print(_line(r))
++        if show_all:
++            print()
++            print("已關門的 %d 個:" % len(done))
++            for r in done:
++                print("  %s  關於 %s" % (r["loop"], (r["closed_ts"] or "")[:10]))
++    print()
++    print("沒關門「不等於」沒做完——關門事件(治理帳裡的放行紀錄)這個慣例 %s 才開始," % LOOP_CLOSE_SINCE)
++    print("更早的迴圈天生沒有這一筆;這裡只說「帳面沒看到關門事件」。")
++    if not stale_only and stale:
++        print("另有 %d 個超過 %d 天沒動也沒關門(空轉候選),看它們:" % (len(stale), days))
++        print("    lumos loop list --stale")
++    if n_excluded:
++        print("(依 --exclude 略過 %d 個編號)" % n_excluded)
++    print()
++    print("要接哪一個,先問它下一步:")
++    print("    lumos loop next <編號> --spec <計劃.md>")
++    return 0
++
++
+ def cmd_loop_canary_stats(env, loop_id=None):
+     """[d4 承諾的讀取面,2026-08-05] 跨輪 canary 累積帳彙總——寫入面(record note/caught/missed)
+     T1-T7 落地後一直只能人翻 JSONL,正是「機制蓋好在等一個記得用它的人」病(全流程體檢命名)。
+@@ -18987,11 +19162,12 @@ HELP_WHEN = {
+     "candidates": "列某節點的候選決策(它 typed 邊指到的節點的決策),Claude 讀內容判實作哪條。",
+     "add-ai": "把 Claude 判定的 decision_ref 寫進 decision_refs_ai(標 by:ai;E3 生效、抑制不了 E2)。",
+     "promote": "人抽查後把 AI 填的 ref 蓋章升進正欄(升級成可抑制 E2);dangling 拒、印覆蓋提醒。",
+-    "loop": "審查迴圈的查詢:next 問下一步、status 問過不過、verify-progress 只讀帳本、canary-stats 看歷史抓漏率。",
++    "loop": "審查迴圈的查詢:list 先看有哪些編號開著、next 問下一步、status 問過不過、verify-progress 只讀帳本、canary-stats 看歷史抓漏率。",
+     "status": "這個審查編號過關了沒。多人審加 --panel,嚴格處置閘加 --disposal,單人 --light,結清模式 --settle。",
+     "compress": "長跑的審查上下文太長,規則式壓成三欄。",
+     "verify-progress": "不看散文,只從帳本結構欄位看審到哪了(防被報告措辭帶風向)。",
+     "next": "每輪開頭問:第幾輪、要幾人、派誰、怎麼記帳。第一次一定帶 --tier。",
++    "list": "先看有哪些審查編號還開著——next/status/verify-progress 都要編號,這支給你編號。",
+     "canary-stats": "各審查員歷史抓到/漏掉比率。觀測用,不影響過不過。",
+     "replay": "收斂後把判定凍成標準答案(--freeze),或懷疑判定邏輯/帳被動過時對閉包重算比對(--golden)。週跑自動抽查也走它。",
+     "capture-counts": "多個找錯工具的結果合併估漏網,吐給 record --capture-counts。",
+@@ -19343,6 +19519,14 @@ def main():
+     le.add_argument("--desc", dest="esc_desc", help="一句描述:什麼缺陷、為何可歸因到該迴圈")
+     le.add_argument("--defect-ref", dest="esc_ref", help="佐證指標(commit/Issue/報告路徑,選配)")
+     le.add_argument("--list", dest="esc_list", action="store_true", help="列全帳(按迴圈分組)")
++    ll = lsub.add_parser("list", help="哪些審查迴圈還開著(帳面沒關門的);next/status 都要 loop_id,這支先給你編號")
++    ll.add_argument("--days", dest="ll_days", type=int, default=14, help="幾天內有動才算「在飛」(預設 14)")
++    ll.add_argument("--stale", dest="ll_stale", action="store_true", help="只看超過門檻沒動又沒關門的(空轉候選)")
++    ll.add_argument("--all", dest="ll_all", action="store_true", help="連已關門的也列")
++    ll.add_argument("--exclude", dest="ll_exclude", action="append", default=[], metavar="前綴",
++                    help="略過編號以此開頭的迴圈(可重複;例:--exclude auto- 排掉自主迴圈的每日場次)")
++    ll.add_argument("--json", dest="ll_json", action="store_true")
++    ll.add_argument("--now", dest="ll_now", metavar="YYYY-MM-DD", help="指定「今天」是哪一天(重算/測試用;預設系統日期)")
+     lcs = lsub.add_parser("canary-stats",
+                           help="[d4 讀取面] 跨輪 canary 累積帳:席位×caught/missed×尾端連續 missed;唯讀恆 rc0")
+     lcs.add_argument("loop_id", nargs="?", default=None, help="省略=全 loop 摘要")
+@@ -19987,6 +20171,10 @@ def main():
+                           refute_verdicts=getattr(args, 'refute_verdicts', None))
+ 
+     if args.cmd == "loop":
++        if args.lcmd == "list":
++            return cmd_loop_list(env, days=args.ll_days, show_all=args.ll_all,
++                                 stale_only=args.ll_stale, as_json=args.ll_json, now=args.ll_now,
++                                 exclude=args.ll_exclude)
+         if args.lcmd == "canary-stats":
+             return cmd_loop_canary_stats(env, args.loop_id)
+         if args.lcmd == "status":
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 9b6f82d..80ab197 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -28924,5 +28924,104 @@ def t_lint_warns_unknown_frontmatter_key():
+           "my_own_field" not in out5, out5[-200:])
+ 
+ 
++def t_loop_list_open_loops():
++    """`lumos loop list`:列出帳面上還沒關門的審查迴圈(執行DAG_調研 排第一順位的缺口——
++    loop next/status/verify-progress 全都強制要 loop_id,而沒有任何入口能先知道有哪些編號在飛,
++    實務上只能 tail .canary-log.jsonl 或看 git 未追蹤檔)。
++
++    關門訊號=治理帳 .governance-log.jsonl 的放行事件(design-loop converged/cap-reached/rewrite、
++    code-loop passed/skipped),nodes 帶迴圈編號;開著=沒有關門事件、或關門後又記了新的審查輪次。
++    ★誠實界線★:關門事件的慣例 2026-08-22 才開始,更早的迴圈天生沒有這筆——所以「沒關門」
++    只等於「帳面沒看到關門事件」,不等於「沒做完」,輸出必須自己講明。唯讀恆 rc0(比照 canary-stats)。"""
++    import json as _j
++    import shutil
++    root = Path(tempfile.mkdtemp(prefix="gctl-looplist-"))
++    vault = root / "docs" / "kg"
++    (vault / "MOC").mkdir(parents=True)
++    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
++    can = root / "docs" / ".canary-log.jsonl"
++    gov = root / "docs" / ".governance-log.jsonl"
++
++    def rec(loop, ts, rnd="r1", sev="minor"):
++        with open(can, "a", encoding="utf-8") as f:
++            f.write(_j.dumps({"ts": ts, "kind": "caught", "token": "x", "loop": loop,
++                              "round": rnd, "severity": sev, "auditor": "s1"}) + "\n")
++
++    def close(loop, ts, gate="design-loop", kind="converged"):
++        with open(gov, "a", encoding="utf-8") as f:
++            f.write(_j.dumps({"ts": ts, "commit": "abc", "gate": gate, "kind": kind,
++                              "hard": False, "nodes": [loop], "note": "t"}) + "\n")
++
++    try:
++        # 空帳也要 rc0,不能因為沒東西就報錯
++        r = run(vault, "loop", "list")
++        check("空帳 rc0", r.returncode == 0, r.stderr)
++
++        rec("still-open", "2026-09-06T10:00:00+08:00")
++        rec("already-closed", "2026-09-05T10:00:00+08:00")
++        close("already-closed", "2026-09-05T11:00:00+08:00")
++        rec("reopened", "2026-09-04T10:00:00+08:00")
++        close("reopened", "2026-09-04T11:00:00+08:00")
++        rec("reopened", "2026-09-06T12:00:00+08:00", rnd="r2")      # 關門後又開新輪
++        rec("long-idle", "2026-07-01T10:00:00+08:00")               # 沒關門但很久沒動
++        close("code-closed", "2026-09-05T11:00:00+08:00", gate="code-loop", kind="passed")
++        rec("code-closed", "2026-09-05T10:00:00+08:00")
++
++        r = run(vault, "loop", "list", "--json", "--now", "2026-09-07")
++        check("loop list rc0", r.returncode == 0, r.stderr)
++        d = _j.loads(r.stdout)
++        ids = [x["loop"] for x in d["open"]]
++        check("列出還沒關門的", "still-open" in ids, r.stdout)
++        check("已關門的不列", "already-closed" not in ids, r.stdout)
++        check("★code-loop 的放行事件同樣算關門★", "code-closed" not in ids, r.stdout)
++        check("★關門後又記新輪次=重新算開著★", "reopened" in ids, r.stdout)
++        check("久沒動的不進預設清單(進 stale)", "long-idle" not in ids
++              and "long-idle" in [x["loop"] for x in d["stale"]], r.stdout)
++
++        one = next(x for x in d["open"] if x["loop"] == "still-open")
++        check("每筆帶最後活動日與距今天數", one["last_ts"][:10] == "2026-09-06" and one["idle_days"] == 1, r.stdout)
++        check("每筆帶輪數", next(x for x in d["open"] if x["loop"] == "reopened")["rounds"] == 2, r.stdout)
++
++        # --days 調門檻:放寬到 999 天,久沒動的要回到 open
++        r = run(vault, "loop", "list", "--json", "--days", "999", "--now", "2026-09-07")
++        check("--days 放寬後久沒動的回到 open",
++              "long-idle" in [x["loop"] for x in _j.loads(r.stdout)["open"]], r.stdout)
++
++        # 人讀輸出:必須自己講明「沒關門 ≠ 沒做完」,並給下一步指令
++        r = run(vault, "loop", "list", "--now", "2026-09-07")
++        check("★人讀輸出要講明誠實界線★", "不等於" in r.stdout and "2026-08-22" in r.stdout, r.stdout)
++        check("下一步指令要印出來", "loop next" in r.stdout, r.stdout)
++
++        # --exclude:通用前綴排除(自主迴圈每日場次天生不關門、一天長一個,會淹掉清單)
++        rec("auto-2026-09-06", "2026-09-06T09:00:00+08:00")
++        r = run(vault, "loop", "list", "--json", "--exclude", "auto-", "--now", "2026-09-07")
++        d = _j.loads(r.stdout)
++        check("--exclude 排掉指定前綴", "auto-2026-09-06" not in [x["loop"] for x in d["open"]]
++              and "still-open" in [x["loop"] for x in d["open"]], r.stdout)
++
++        # ★時區安全★:兩本帳今天都寫 +08:00,字串比對剛好會對;換一台機器寫 UTC 就會靜默判錯。
++        # 這組把它釘死:關門事件是 03:00Z(=11:00+08:00,真實時間晚於審查那筆 10:00+08:00),
++        # 但字串上 "…T03" < "…T10" —— 只比字串會誤判成「還開著」。
++        rec("tz-mixed", "2026-09-06T10:00:00+08:00")
++        close("tz-mixed", "2026-09-06T03:00:00+00:00")
++        r = run(vault, "loop", "list", "--json", "--now", "2026-09-07")
++        check("★跨時區的關門事件要判得出來(不能只比字串)★",
++              "tz-mixed" not in [x["loop"] for x in _j.loads(r.stdout)["open"]], r.stdout)
++
++        # --now 壞輸入:給人話,不要吐堆疊
++        r = run(vault, "loop", "list", "--now", "上禮拜")
++        check("--now 壞輸入 rc2", r.returncode == 2, str(r.returncode) + r.stderr)
++        check("--now 壞輸入給人話不吐堆疊",
++              "擋下" in r.stderr and "Traceback" not in r.stderr, r.stderr)
++
++        # 壞行:跳過但要出聲,仍 rc0(唯讀查詢不 fail-closed,但不准靜默)
++        with open(can, "a", encoding="utf-8") as f:
++            f.write("{壞掉的行\n")
++        r = run(vault, "loop", "list", "--now", "2026-09-07")
++        check("壞行仍 rc0", r.returncode == 0, r.stderr)
++        check("★壞行不得靜默★", "讀不動" in r.stderr or "跳過" in r.stderr, r.stderr)
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
+ if __name__ == "__main__":
+     sys.exit(main())

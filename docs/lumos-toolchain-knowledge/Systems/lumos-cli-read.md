@@ -16,6 +16,7 @@ summary: |-
   KEY:[2026-08-05]search 排序加 aliases 欄(權重 3.5,略低於標題 4.0)——frontmatter aliases list 進 BM25F;同義詞落空(搜「作廢」圖譜寫「沖銷」)的最便宜解,寫入者留同義詞一次、檢索受益永久 [test:t_search_aliases_field]
   KEY:[2026-08-04]+quote-check(vault-free 讀命令):報告引句逐條對回凍結快照(_quote_norm 正規化;rc0 全 ok/rc1 miss/rc2 IO或零引句)——disposal 閘的④號合取同源消費 [test:t_quote_check_normalization_and_verdict]
   FLOW:任一讀指令 → find_vault(從 cwd 往上找 docs/*-knowledge 或 standalone vault root) → load_vault(掃全 .md、解 frontmatter+wikilink) → Env(notes/by_stem/edges) → 各 cmd_* 純讀印出(context/show 另寫 usage-log 事件帳;doctor --ci 寫 governance-log) → return 0(查無/正則錯=非0)
+  KEY:[2026-09-07 loop list]新讀原語 `lumos loop list`——先看有哪些審查編號還開著(next/status/verify-progress 全都強制要 loop_id,卻沒有入口能先拿到編號;缺口出自 [[Projects/執行DAG_調研]])。★關門訊號取治理帳本來就會落的放行事件★(design-loop converged/cap-reached/rewrite + code-loop passed/skipped,nodes 帶編號),不新增任何要人維護的狀態;開著=沒關門事件或關門後又記新輪次。★誠實界線印在輸出裡★:關門事件慣例 2026-08-22 才開始,更早的迴圈天生沒這筆,工具只說「帳面沒看到關門事件」不說「沒做完」。唯讀恆 rc0;`--stale` 看空轉候選、`--exclude <前綴>` 排掉自主迴圈每日場次(不寫死前綴)、`--now YYYY-MM-DD` 指定今天(重算/測試用,壞值擋下 rc2)。★時間一律走 UTC 正規化再比(`_loop_ts_key`/`_loop_ts_newer`)★——兩本帳今天全寫 +08:00(數過 1101/26443 筆),直接比字串剛好會對但那是巧合;換一台機器寫 UTC 就會**靜默**把開著判成關了。解不動或沒帶時區才退回字串比對(舊帳相容),★沒帶時區一律不猜★。驗證見 [[Verification/2026-09-07_loop-list開著的迴圈]]
   KEY:[2026-08-16 query 結構化查詢]新讀原語 `query`——WHERE over 標籤家族(--tag 可重複=AND/--no-tag/--active 排收案態/--contract 沿 extract_contracts/--linked 1-hop 鄰域/--json);旗標 AND 疊加不發明查詢語言(borrow zk list);預設排除 superseded 對齊 search 真遺忘+--include-superseded 逃生;bare 無條件 rc2(對齊 stale --candidate);緣起=標籤收編後「欄位只有顯示沒有篩選」,Landmark 三情境實測見 [[Projects/圖譜結構化查詢_計劃]] [test:t_query_tag_and,t_query_no_tag_and_active,t_query_contract_uses_real_parser,t_query_linked_scope,t_query_forget_superseded,t_query_bare_rc2,t_query_json]
   KEY:read/traverse 14 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——context 與 show 寫 best-effort usage-log 事件帳(A2,2026-07-11 起)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀([[Projects/lumos-show讀取入口_計劃]] r4 收斂措辭,修 A2 起「零副作用」宣稱漂移);與 7 個寫入原語(set/append/new/decision-* …)互斥
   KEY:進場三步入口固定 search(定位節點) → context(掃脈絡,頭部突顯 ⚠ 合約) → contracts(查硬合約 invariant 改=breaking),CLAUDE.md 規定動既有系統第一個工具呼叫必須是 lumos 而非 grep/Read/DB
@@ -78,6 +79,7 @@ verified_by:
   - "[[Verification/2026-08-22_狀態表過期偵測]]"
   - "[[Verification/2026-08-25_連鎖佇列軟提醒落地]]"
   - "[[Verification/2026-08-27_關係語意腐爛守衛_G1解鎖即活]]"
+  - "[[Verification/2026-09-07_loop-list開著的迴圈]]"
 about_code:
   - scripts/lumos
 ---
