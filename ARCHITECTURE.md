@@ -1,10 +1,11 @@
 # Lumos 架構圖
 
-> 「圖譜即合約」工具組的**唯一源 → 分發 → 消費端**模型:所有東西只在一個 repo 維護(唯一源),裝到兩種地方生效——整台機器共用的(給 AI 的操作手冊),和複製進每個專案的(指令與檢查程式)。一張圖看懂什麼住哪、用哪個指令裝、為什麼非這樣分不可。
+> **東西只在一個地方維護,裝到兩種地方生效。**
+> 一種是整台機器共用一份的(給 AI 看的操作手冊);另一種是複製進每個專案的(指令與檢查程式)。這份文件講什麼住哪、用哪個指令裝、以及為什麼非得這樣分。
 
-> 想先讀「為什麼這樣設計」而不是「長什麼樣」:[圖譜即合約](docs/methodology/圖譜即合約.md)(核心主張)、[全景圖](docs/methodology/圖譜即合約-全景圖.md)(一張圖看完 22 道檢查)、[對外論述](docs/methodology/圖譜即合約-對外論述.md)(講給外部讀者的版本)。
+> 想先讀「為什麼這樣設計」而不是「長什麼樣」:[全景圖](docs/methodology/圖譜即合約-全景圖.md)最白話(一張圖看完 22 道檢查);[圖譜即合約](docs/methodology/圖譜即合約.md)是完整主張;[對外論述](docs/methodology/圖譜即合約-對外論述.md)是講給外部讀者的版本。
 
-## 1. 全景:唯一源 → 兩種 scope → 消費端
+## 1. 全景:一個來源,兩種安裝位置
 
 ```mermaid
 flowchart TB
@@ -22,7 +23,7 @@ flowchart TB
         PROBE["scripts/scenario_probe.py<br/>(情境探針:給 AI 出題,量它會不會自己先查圖譜;Claude / Codex 都能測)"]
     end
 
-    subgraph USER["① user-scope (每台機器一份)"]
+    subgraph USER["① 整台機器一份"]
         direction TB
         USKILL["~/.claude/skills/* 與 ~/.agents/skills/*<br/>(symlink → Lumos repo;後者給 Codex 讀)"]
         UCHOOK["~/.claude/hooks/ + settings.json<br/>~/.codex/hooks/ + hooks.json<br/>(同一批 hook 腳本,兩家各一份註冊)"]
@@ -30,7 +31,7 @@ flowchart TB
         UAGENT["$CODEX_HOME/agents/lumos_reviewer.toml<br/>(給 Codex 用的「審查員」身分設定)"]
     end
 
-    subgraph PROJ["② project-scope (每個專案 vendor 一份)"]
+    subgraph PROJ["② 每個專案各一份"]
         direction TB
         PCLI["scripts/lumos (vendored copy)"]
         PHOOK["scripts/hooks/ + core.hooksPath"]
@@ -65,7 +66,9 @@ flowchart TB
     class PROJ,PCLI,PHOOK,PCLAUDE,PCFG,PGRAPH,CONSUMER proj
 ```
 
-**為什麼分兩種 scope(生效範圍)**:CI 只會抓你的專案 repo、git hook 也是一個 repo 一份——所以指令和檢查程式**必須複製進每個專案**(術語叫 vendor)。skills 是純方法論文件,整台機器用捷徑(symlink)共用一份就好,不複製——複製了反而各專案的副本會各自過期。
+**為什麼一定要分兩種**:雲端測試只看得到你的專案資料夾,git 的檢查也是一個專案一份——所以**指令和檢查程式非複製進每個專案不可**。
+
+給 AI 看的手冊剛好相反:它是純文字方法論,整台機器用捷徑共用一份就好。**複製反而是壞事**——各專案的副本會各自停在不同的舊版本。
 
 ## 2. 安裝 / 生命週期指令做了什麼
 
@@ -123,7 +126,7 @@ flowchart TB
     CI --> C["ci-wait · ci-status<br/>(觀測非強制:擋不了 push/merge)"]
     WRITE --> W["set · append · remove · new · archive<br/>decision-add · decision-supersede · decision-reindex"]
     GUARD --> G["guard {list · scaffold · bind · audit · trace}<br/>(★INVARIANT★→[test:]→[audit:] 綁定鏈)"]
-    LOOP --> LP["pitfalls (--diff tier) · code-loop {pass/skip/check} · bound-tests (--advisory)<br/>canary {record · second} · loop {status·next·replay·verify-progress·…}<br/>dispatch-lens {<base>..<head> · --spec <計劃.md> · --arm·--claim·--disarm·--status}(派工鏡頭:diff 與設計審兩模式)<br/>收貨:fold-check · refcheck · quote-check · seat-check · severity-check"]
+    LOOP --> LP["pitfalls (--diff tier) · code-loop {pass/skip/check} · bound-tests (--advisory)<br/>canary {record · second} · loop {status·next·replay·verify-progress·…}<br/>dispatch-lens {<base>..<head> · --spec <計劃.md> · --arm·--claim·--disarm·--status}(派工鏡頭:diff 與設計審兩模式)<br/>交回來的驗收:fold-check · refcheck · quote-check · seat-check · severity-check"]
     INTEG --> I["anchor {verify · approve}<br/>impact (影響半徑 + 事故觸發 + --sync-check)<br/>cochange · delguard · testmap {build · affected}"]
     SARIF --> ST["sqlfluff-sarif · stylelint-sarif<br/>compose-metrics · lint-check"]
     LIFE --> L["install · uninstall · update<br/>bootstrap · init · deinit · teardown"]
@@ -138,11 +141,21 @@ flowchart TB
 
 > `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 67 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
 
-## 4. 強制力管線 (圖譜不腐爛的機制)
+## 4. 筆記不腐爛,靠的是五段接力
 
-五段接力:「回合內推播 → 提交把關 → 推送硬閘 → CI → 結果拉回當輪修」。回合內,系統在四個時點主動推:進場提醒先查圖譜、改檔前把「你要改的檔會波及哪些筆記」推到眼前、派審查員前把牽連的合約/事故附進派工詞、收工時點名改了 code 沒動的節點(兩家都擋一次,要補或說明);硬的關卡擋在提交與推送兩個點;推上去之後 `lumos ci-wait` 把雲端測試結論拉回同一輪工作裡修(這段要專案在 `.lumos/config.json` 宣告 `ci` 區塊才啟用)。
+**工作進行中,系統在四個時點主動把東西推到你眼前**(這些只提醒,不擋):
 
-> ⚠ **第五段是觀測不是強制**:`ci-wait` 只負責把雲端結論拉回來讓你當輪修,**擋不了 push 也擋不了 merge**;查不到結果時一律放行不誤擋。要做到「紅燈進不了主幹」,得在 GitHub 開分支保護(required check)——那是平台設定,本工具不碰。前四段才是硬閘。
+- 一進場:提醒先查筆記
+- 改檔之前:「你要改的這個檔會波及哪幾篇」
+- 派審查員之前:把牽連到的規則和事故自動附上去
+- 收工時:改了程式卻沒動筆記,擋一次要你補或說明
+
+**真正硬擋的關卡有兩個**:提交時、推送時。
+
+**推上去之後**,`lumos ci-wait` 把雲端測試的結論拉回同一輪工作裡修(要專案在 `.lumos/config.json` 宣告 `ci` 區塊才啟用)。
+
+> ⚠ **最後那段是「看得到」,不是「擋得住」**:`ci-wait` 只把雲端結論拉回來讓你當輪修,**它擋不了推送、也擋不了合併**;查不到結果時一律放行,不誤擋。
+> 要做到「紅燈進不了主幹」,得去 GitHub 開分支保護——那是平台設定,這個工具不碰。
 
 ```mermaid
 flowchart TB
@@ -154,13 +167,13 @@ flowchart TB
     end
 
     EDIT["改 code + 圖譜"] --> PC{"pre-commit (git)"}
-    PC -->|"改 code 沒帶圖譜更新"| BLOCK["⛔ 擋下 (可 --no-verify · post-commit 留痕)"]
+    PC -->|"改 code 沒帶圖譜更新"| BLOCK["⛔ 擋下 (可 --no-verify 繞過,但會留下紀錄)"]
     PC -->|通過| COMMIT["commit"]
 
     COMMIT --> PUSH{"pre-push (git)"}
     PUSH -->|"① lumos doctor --ci"| PB1["⛔ 圖譜不健康(斷連結、孤兒、規則沒綁測試…)"]
     PUSH -->|"② anchor verify"| PB2["⛔ 測試程式或把關腳本被改了,沒人簽名"]
-    PUSH -->|"③ code-loop check (tier=high)"| PB3["⛔ 高風險改動沒審過<br/>(審過留憑證 pass / 說明理由跳過 skip / 硬繞 --no-verify 會留痕;<br/>憑證綁版本,之後再改程式就失效,只改帳本檔不算)"]
+    PUSH -->|"③ code-loop check (tier=high)"| PB3["⛔ 高風險改動沒審過<br/>(審過留憑證 pass / 說明理由跳過 skip / 硬繞 --no-verify 會留下紀錄;<br/>憑證綁版本,之後再改程式就失效,只改帳本檔不算)"]
     PUSH -->|全過| PASS["push"]
     PASS --> CI["CI (GitHub Actions): 全套測試<br/>+ doctor --ci + anchor verify"]
     CI --> WAIT{"lumos ci-wait<br/>(push 後同輪等結論)"}
@@ -177,16 +190,17 @@ flowchart TB
     class BEFORE,ENTRY,PRE,LENS,STOPH push
 ```
 
-> **地板不是萬能裁判**:動手前的推播可以被無視、git 關卡可以用 `--no-verify` 繞過(後果自負、會留痕)。這套機制守得住「忘了/隨手漏」,守不住「刻意繞+不誠實」——那一層永遠留給人。
+> **這是地板,不是裁判**:動手前的提醒可以被無視,git 那兩道關卡可以用 `--no-verify` 繞過(後果自負,而且會留下紀錄)。
+> 它守得住「忘了」和「隨手漏」,守不住「刻意繞」——那一層永遠留給人。
 
-## 5. 審查怎麼越審越準:圖譜 ⇄ 審查的良性循環
+## 5. 審查為什麼會越審越準
 
 白話:前四節講「怎麼裝、有哪些指令、哪裡會擋」,這一節講**為什麼審查會越審越準**。圖譜裡的每篇節點(不能破壞的規則、出過的事故、做過的決定、驗過的結果)是每一輪審查的籌碼:派審查員的那一刻,機器把跟這次改動有關的節點附進派工單,審查員不用自己翻、也翻不漏;審完採納進設計的東西再寫回節點,變成下一輪的籌碼。**節點是下一輪的輸入,不是最後的產出物**(Enzo 2026-08-25 裁定;單源 `docs/lumos-toolchain-knowledge/Systems/開發工作流總覽.md`)。
 
 2026-08-26 到 09-05 落地的三塊東西,把這句話從口號變成真的有東西在跑:
 
-- **派工時自動附節點**(機制名 dispatch-lens):把跟這次改動直接相關、帶規則或出過事故的節點,連同「這條規則綁的測試現在還在不在」,一起附進每個審查員的派工單。Claude Code 是在派人那一刻改派工單;Codex CLI 讀不到派工單,改成審查員一開場自己領一份。
-- **收貨要驗、每條意見要有去向、判定要凍結**:審查員交回來的每條意見,先機器驗三件事——引的句子對得回原文嗎、講的行號存在嗎、該看的材料看了嗎——錨不到的不採信。每條意見要嘛採納、回頭改設計稿,要嘛寫下理由不採納;一輪裡每條都有交代才算過關。過關的判定凍結成標準答案,每週機器回放,規則改了看舊案會不會翻。
+- **派人審之前,機器先把該讀的塞給他**:跟這次改動有關、而且帶規則或出過事故的節點,連同「這條規則綁的測試現在還在不在」,一起附進交給審查員的那份說明(下面簡稱派工單)。Claude Code 是在派人那一刻改派工單;Codex 讀不到派工單,改成審查員一開場自己去領一份。
+- **交回來的意見要先驗,每條都要有下落,結論要凍結**:審查員交回來的每條意見,機器先驗三件事——**引的句子在原文裡找得到嗎、講的行號真的存在嗎、該讀的材料讀了嗎**。對不回原文的一律不採信(通常代表那句是編的)。每條意見要嘛採納、回頭改設計稿,要嘛寫下理由不採納;一輪裡每條都有交代才算過關。過關的判定凍結成標準答案,每週機器回放,規則改了看舊案會不會翻。
 - **量得到**:附上去的節點有沒有真的被審查員用到(利用率重算)、迴圈中被舊決定擋下幾次(逃逸帳)、每支迴圈燒多少(skill-doctor 成本基線)、AI 會不會自己先查圖譜(情境探針)。
 
 Claude Code 與 Codex CLI 走同一條路(細節與平台限制:`docs/lumos-toolchain-knowledge/Systems/codex-harness.md`)。
@@ -195,14 +209,14 @@ Claude Code 與 Codex CLI 走同一條路(細節與平台限制:`docs/lumos-tool
 flowchart TB
     NODES[("📚 圖譜:一篇篇節點<br/>不能破壞的規則 · 出過的事故 · 做過的決定 · 驗過的結果<br/>審查的籌碼,也是審查的產出")]
 
-    subgraph R1["① 開一輪 → 派工 → 審 → 收貨"]
+    subgraph R1["① 開一輪 → 派人 → 審 → 交回來驗"]
         direction LR
-        NEXT["開一輪審查<br/>算風險分級、第幾輪、派幾席<br/>先列出主題已有的節點"] --> LENS["派工時自動附節點<br/>代碼審從 diff 算 · 設計審從計劃筆記算<br/>超時會留一行說明,不再靜默"] --> SEATS["審查席<br/>幾個不同角度的同門 AI<br/>+ 架構一致席 + 換一家的 AI"] --> INTAKE["收貨先機器驗<br/>引句對得回?行號在?材料看了?<br/>錨不到的不採信"]
+        NEXT["開一輪審查<br/>算風險分級、第幾輪、派幾席<br/>先列出主題已有的節點"] --> LENS["派工時自動附節點<br/>代碼審從 diff 算 · 設計審從計劃筆記算<br/>超時會留一行說明,不再靜默"] --> SEATS["審查席<br/>幾個不同角度的同門 AI<br/>+ 架構一致席 + 換一家的 AI"] --> INTAKE["交回來先機器驗<br/>引的句子找得到?行號存在?材料讀了?<br/>對不回原文的不採信"]
     end
 
     subgraph R2["② 每條意見有交代 → 記帳 → 過不過 → 留憑證"]
         direction LR
-        FOLD["回頭改設計稿<br/>採納的改進稿子,不採納的寫理由<br/>拿不準的先派外家反駁"] --> LEDGER["記帳<br/>每席一筆 + 一筆彙總<br/>發現了什麼、改了哪些、哪些不採納"] --> GATE{"過不過?<br/>每條都有交代 ∧ 留痕能重算 ∧ 引句全對得回<br/>程式碼審:嚴重的一律要改"} -->|過| FREEZE["凍結判定<br/>存成標準答案<br/>每週機器回放"] --> PASS["「審過了」憑證<br/>綁在這個版本上<br/>推送與 CI 都認它"]
+        FOLD["回頭改設計稿<br/>採納的改進稿子,不採納的寫理由<br/>拿不準的先派外家反駁"] --> LEDGER["記帳<br/>每席一筆 + 一筆彙總<br/>發現了什麼、改了哪些、哪些不採納"] --> GATE{"過不過?<br/>每條都有交代 ∧ 紀錄能重算 ∧ 引的句子全找得到<br/>程式碼審:嚴重的一律要改"} -->|過| FREEZE["凍結判定<br/>存成標準答案<br/>每週機器回放"] --> PASS["「審過了」憑證<br/>綁在這個版本上<br/>推送與 CI 都認它"]
     end
 
     subgraph R3["③ 外圍:量它、跑它"]
@@ -232,4 +246,4 @@ flowchart TB
 
 ---
 
-> **接手圖譜是空的舊專案?** 工具組附「節點還原」七步 SOP(從 code 和 git 把脈絡還原成節點,惰性生長不攤平)——白話版見 [README §6](README.md),操作全文在 `skills/lumos-project-notes` 的 reference。
+> **接手一篇筆記都沒有的舊專案?** 工具組附一套七步的還原流程(從程式碼和 git 歷史撈回來龍去脈,用到哪補到哪、不整個攤平)——白話版見[接手一個沒有筆記的舊專案](docs/接手舊專案.md),操作全文在 `skills/lumos-project-notes` 的 reference。

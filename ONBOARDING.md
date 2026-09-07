@@ -21,7 +21,7 @@ python3 scripts/lumos bootstrap
 > **專案還沒導入過 Lumos**(repo 裡沒有 `scripts/lumos`)?改走:
 > ```bash
 > cd <你的專案> && curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
-> # 會先問一句「要把 <路徑> 建成 lumos 專案嗎?」按 y 才建;細節與 Windows 作法見 README §3
+> # 會先問一句「要把 <路徑> 建成 lumos 專案嗎?」按 y 才建;細節與 Windows 作法見 README 的〈裝起來〉
 > ```
 
 ---
@@ -37,8 +37,8 @@ python3 scripts/lumos bootstrap
 | `git` | 全部 | 無法運作 |
 | `python3` | lumos 指令與 hooks(純標準庫,不裝任何套件) | 無法運作 |
 | Claude Code | AI 才會自動載入方法論與提示 | 工具能跑,但 AI 不會自動照規矩走 |
-| Codex CLI(選用) | 想讓「外家席」用另一家模型審(design-loop / code-loop 的否決席) | 那席換成同一家模型,收斂結論要降級成「單家族視角下未發現」 |
-| 吃得起配額的訂閱方案(選用) | 審查迴圈一輪要派好幾個子代理各讀一次全份材料:設計審 standard 3 席、high 5 席,代碼審 standard 1 席,再加一席不計人數的「架構對齊」與(有的話)一席外家 | 手動一輪一輪跑仍可用,只是慢;其餘功能不受影響 |
+| Codex CLI(選用) | 讓審查裡有一個「換一家公司的 AI」——它專門唱反調 | 那一席換成同一家模型,結論要降級成「只從一家的角度看,沒發現問題」 |
+| 用量夠的訂閱方案(選用) | 審查一輪要派好幾個 AI,每個都把整份材料讀一次(一般 3 個、高風險 5 個,另外加一個看架構、一個換別家的) | 改成手動一輪一輪跑仍然可用,只是慢;其他功能不受影響 |
 | notesmd-cli(選用) | 只有改筆記檔名/搬檔時用(`graph-rename.sh`) | 平常用不到;需要時 `fetch-notesmd.sh` 可抓 |
 
 ---
@@ -78,21 +78,21 @@ python3 scripts/lumos install     # 之後任何目錄直接打 lumos,不用 pyt
 
 **三句核心紀律**(也注入在每個專案的 CLAUDE.md 裡):
 
-1. 圖譜(`docs/<專案>-knowledge/`)記「為什麼+邊界+驗過沒」;code 只是「現在長這樣」。要懂系統,先查圖譜。
-2. 影響行為/決策的改動,**同一次工作內**把脈絡寫回圖譜(提交關卡會擋沒寫的)。
-3. 動圖譜的結構化欄位走 `lumos` 指令,別直接改 `.md` 開頭(正文段落可以直接編輯)。
+1. 筆記(放在 `docs/<專案>-knowledge/`)記的是「為什麼、邊界在哪、驗過沒」;程式碼只是「現在長這樣」。要懂系統,先查筆記。
+2. 會影響行為或決策的改動,**同一次工作內**就把來龍去脈寫回筆記——提交時會擋沒寫的。
+3. 筆記開頭那幾行欄位用 `lumos` 指令改,別直接編輯(下面的正文段落可以直接改)。
 
 **常用指令:**
 ```bash
-lumos search <詞>             # 查圖譜(中文概念之間加空白)
-lumos context <節點>          # 進場掃脈絡:節點+鄰居,合約突顯在最上面
-lumos contracts [節點]        # 動模組前查硬合約
-lumos doctor                  # 全圖健檢
+lumos search <詞>             # 搜尋筆記(中文概念之間加空白)
+lumos context <筆記>          # 這篇加上鄰居的壓縮視圖,不能改的規則放最上面
+lumos contracts [筆記]        # 動一個模組之前,先看它有哪些不能改的規則
+lumos doctor                  # 整疊筆記健檢
 lumos new <型別> <名稱>       # 建新筆記(system/verification/issue/project)
-lumos set / append / decision-add   # 改欄位、加連結、記決策(都寫完自驗)
+lumos set / append / decision-add   # 改欄位、加連結、記決策(每支寫完都會自己檢查)
 ```
 
-**接手的專案圖譜是空的?** 走「節點還原」七步——從 code 和 git 把脈絡撈回來落成節點:白話版見 [README §6](README.md),快查表在 skills 的 `commands/09-節點還原.md`。
+**接手的專案一篇筆記都沒有?** 走「還原」七步,從程式碼和 git 歷史把來龍去脈撈回來:白話版見[接手一個沒有筆記的舊專案](docs/接手舊專案.md),快查表在 skills 的 `commands/09-節點還原.md`。
 
 ---
 
@@ -107,7 +107,7 @@ lumos set / append / decision-add   # 改欄位、加連結、記決策(都寫�
 
 ## 卸載
 
-裝與卸對稱,記這句:**整台機器一次拆=`lumos teardown`;只拆這個 repo=`lumos deinit`;只移全域指令=`lumos uninstall`**。teardown 永遠保留圖譜文件;細節見 README §7 結尾。
+裝與卸對稱,記這句:**整台機器一次拆=`lumos teardown`;只拆這個 repo=`lumos deinit`;只移全域指令=`lumos uninstall`**。teardown 永遠保留筆記檔案;細節見[指令參考](docs/指令參考.md)的〈裝與卸〉。
 
 ---
 

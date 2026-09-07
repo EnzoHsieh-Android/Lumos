@@ -299,7 +299,7 @@ Lumos is my answer to that.
 - **[Command reference](docs/command-reference.md)** — you won't need these day to day, but they're here.
 - **[Taking over a project with no notes](docs/taking-over.md)** — reconstructing an old system's context into notes.
 - [Onboarding detail](ONBOARDING.md) · [Architecture](ARCHITECTURE.md) · [Coming from SDD](SDD-vs-Lumos.en.md)
-- Long-form methodology (Chinese): [The graph is the contract](docs/methodology/圖譜即合約.md) · [The whole picture](docs/methodology/圖譜即合約-全景圖.md) · [Written for outside readers](docs/methodology/圖譜即合約-對外論述.md)
+- Long-form methodology (Chinese, shortest first): [The whole picture](docs/methodology/圖譜即合約-全景圖.md) (every check on one page) · [Written for outside readers](docs/methodology/圖譜即合約-對外論述.md) (the plain-language full version) · [The graph is the contract](docs/methodology/圖譜即合約.md) (the internal design record, with its history — longest)
 
 ---
 

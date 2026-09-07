@@ -297,7 +297,7 @@ Lumos 是我對這件事的答案。
 - **[指令參考](docs/指令參考.md)** — 日常你不用敲，但想查得到。
 - **[接手一個沒有筆記的舊專案](docs/接手舊專案.md)** — 怎麼把舊系統的脈絡還原成筆記。
 - [上手細節](ONBOARDING.md) · [架構全景](ARCHITECTURE.md) · [從 SDD 過來的話](SDD-vs-Lumos.md)
-- 方法論長文：[圖譜即合約](docs/methodology/圖譜即合約.md) · [全景圖](docs/methodology/圖譜即合約-全景圖.md) · [講給外部讀者的版本](docs/methodology/圖譜即合約-對外論述.md)
+- 方法論長文（依由淺到深）：[全景圖](docs/methodology/圖譜即合約-全景圖.md)（一張圖看完所有檢查）· [對外論述](docs/methodology/圖譜即合約-對外論述.md)（白話完整版）· [圖譜即合約](docs/methodology/圖譜即合約.md)（內部設計檔案，含演進史，最長）
 
 ---
 
