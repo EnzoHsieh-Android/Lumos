@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/lumos-logo.png" alt="Lumos" width="420">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/lumos-logo-dark.png">
+    <img src="assets/lumos-logo.png" alt="Lumos" width="320">
+  </picture>
 </p>
 
 # Lumos
@@ -12,7 +15,7 @@
 > **Lumos gives a project a second set of notes for everything the code can't say, then uses checks to make sure they actually get written.**
 
 <p align="center">
-  <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="900">
+  <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="760">
 </p>
 
 **Understand it** &nbsp;[What this is](#what-this-is) · [What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper)<br>
@@ -58,14 +61,15 @@ So "what rules can't be touched in this project" isn't a question you ask a pers
 $ lumos contracts
 
 # Systems/payment-integration.md
-  ★INVARIANT★ one order must never be charged twice — resends, retries, duplicate webhooks all count
+  ★INVARIANT★ one order must never be charged twice
+              — resends, retries, duplicate webhooks all count
       ↳ bound test: test_no_double_charge_on_retry
 # Systems/stock-deduction.md
   ★INVARIANT★ stock must never go negative — not by a single unit
       ↳ bound test: test_stock_never_goes_negative
 # Systems/cart.md
-  ★DEBT★ the cart lives in Redis with no database behind it; a Redis restart empties it.
-          Known, currently acceptable, changeable any time.
+  ★DEBT★ the cart lives in Redis with nothing behind it; a restart empties it
+          Known, acceptable for now, changeable any time
 
 4 contracts (changing one is a breaking change) | 2 debts (safe to change)
 ```
@@ -80,14 +84,14 @@ That last line matters more than it looks. **Spelling out which things are rules
 
 The difference in one line: **Obsidian is for people to browse. Lumos is for an AI to query.**
 
-| | Ordinary notes app | Lumos |
+| | Notes app | Lumos |
 |---|---|---|
-| **An AI using it** | Dump files into context and go fishing | **One command back: ranked, filtered, compressed** |
-| **Looking up from source code** | No such concept | **Give it a source file, get the notes it affects and which of them carry contracts** |
-| You write "this rule must not change" | Saved. Fine. | Name the test that guards it. Can't? Health check goes red. |
-| You changed code and touched no notes | Nobody notices | `git commit` stops you — fix it, or say in one line why it isn't needed |
-| **Why it was decided that way** | Buried in prose; go read | **Decisions are their own field: id, date, reasoning, whether it was later overturned** |
-| **A note has gone stale** | Nobody knows; people keep trusting it | **Verification records must state what would invalidate them, and get nagged when due** |
+| **An AI using it** | Pour files into context | **One command: ranked and compressed** |
+| **Lookup from source code** | No such concept | **Which notes it affects, which carry contracts** |
+| "This rule must not change" | Saved. Fine. | **Name the test guarding it, or go red** |
+| Code changed, notes untouched | Nobody notices | **`git commit` stops you** |
+| **Why it was decided** | Buried in prose | **Its own field: id, date, reasoning, overturned?** |
+| **A note gone stale** | Nobody knows | **Must say what invalidates it; nagged when due** |
 
 ### The one that matters most: query it, don't pour it in
 
@@ -129,11 +133,9 @@ This is where Lumos parts ways with "a really well-written document". Documents 
   <img src="assets/loop-en.svg" alt="The graph feeds each review; each review writes back into the graph" width="900">
 </p>
 
-The four stages run in order. **The point is the last one: what gets accounted for is written back into the graph, and becomes the next round's material.**
+The four stages run in order, and the last one is the point: what gets accounted for is written back into the graph, and becomes the next round's material.
 
-**Notes aren't the final output; they're the next round's input.** Round one might hand a reviewer three notes; round five hands them eight — and all eight already earned their place. Nobody dropped them in from memory.
-
-**Same reviewers, same time budget — only the material got sharper.**
+**Notes aren't the final output; they're the next round's input.** Round one might hand a reviewer three notes; round five hands them eight — and all eight already earned their place. Same reviewers, same time budget; only the material got sharper.
 
 > **The honest limit:** what a machine can prove is *form* — that a test exists, that a rollback is written, that someone independent reviewed it, that every finding was accounted for.
 > Whether a rule still matches the business, or whether that rollback would actually run — **only a person can answer that.** Don't read "has evidence attached" as "safe".
