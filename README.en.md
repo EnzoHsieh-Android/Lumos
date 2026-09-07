@@ -314,6 +314,20 @@ Pick one:
 
 ---
 
+## Why this exists
+
+I believe fully autonomous development is coming.
+
+But **an AI will never know a project's business experience on its own, and it won't know how the judgement calls were made.** Why the faster-looking approach was rejected. Which incident bought the rule that's in place now. Which number a person decided rather than calculated. None of that is in the code. It has always lived in people's heads — and when they leave, it goes with them. An AI has it worse: it arrives a stranger in every conversation.
+
+Models will keep getting stronger. But a stronger model facing a project with no context is still a stranger.
+
+So I'm convinced of this: **the foundation of the next generation of software development won't just be models that write better code — it will be the engineering discipline that keeps the context.**
+
+Lumos is my answer to that.
+
+---
+
 ## Going deeper
 
 - **[The mental model and the machinery](docs/心智模型.md)** — the kinds of notes, how the three "attach your evidence" chains work, what each check blocks, and what this thing can't do.
