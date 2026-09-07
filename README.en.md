@@ -170,6 +170,7 @@ Develop in plain language and all three invert: you handle the decisions, the re
 
 **Not a fit if:**
 
+- **You still write most of the code by hand, or your token budget is tight.** The whole premise is that context settles out of conversations with an AI — talk to no one, and there's nothing to keep. The review loops burn tokens of their own, too.
 - You'll finish it in two weeks and throw it away.
 - It's a small solo tool you read every day and hold entirely in your head.
 - You just want a nice notes app — Obsidian is genuinely enough for that.
