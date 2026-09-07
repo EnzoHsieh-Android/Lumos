@@ -1,0 +1,196 @@
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
+index 99ace21..1efefe9 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
+@@ -260,18 +260,40 @@ SRE 的「對缺席告警」、建目錄當原子鎖(macOS 沒有 flock)、logro
+ 
+ ★教訓:第一次修完就量一次,不要因為改動看起來對就收手。★
+ 
+ ### 還沒修的:來源那支有一模一樣的洞
+ 
+ `governance/autonomous-loop.sh` 的取鎖段(這支就是抄它的)有同樣三個問題,而且**更糟**
+ ——它的接管是裸的 `rm -rf; mkdir`,連成不成功都不檢查。**這批沒有動它**,因為那不在這次
+ 凍結的審查範圍裡,現在順手改等於把沒審過的碼混進推送。
+ REVISIT:2026-09-14 把 autonomous-loop.sh 的取鎖段換成這支現在的做法,走一次 code loop。
+ 
++### 通知的圖示(2026-09-07 追加,Enzo 要的)
++
++`osascript ... display notification` **沒有辦法在指令裡指定圖片**——它顯示的是呼叫它那支程式的
++圖示,從 launchd 跑就是 Script Editor 那個。要換成 Lumos 自己的四角星只有兩條路:
++
++- 裝 `terminal-notifier`(可以 `-appIcon`)→ **新增一個外部依賴,零依賴家規下不選**。
++- 自己包一個最小的 `.app` → 只用 macOS 內建的 `osacompile` / `sips` / `iconutil` / `plutil`,不加依賴。
++
++走後者。那個 app 是**建出來的東西不是原始碼**,所以不進版控,`install-watchdog.sh` 裝的時候現建,
++放在 `~/Library/Application Support/Lumos/LumosWatchdog.app`。已實測圖示有換到。
++
++兩件實作上會踩的:
++
++- **applet 一定要寫 `quit`**。不寫的話它會留在 GUI 事件迴圈裡不結束——每小時一則通知
++  就是每小時一個殭屍行程。(第一版直接跑 `Contents/MacOS/applet` 當場卡住,才發現。)
++- **安裝時就要發一則**。macOS 的通知權限是**逐 app** 問的;不在安裝當下讓它跳出來問,
++  第一次真的出事那天通知會被靜默丟掉——而那正是這支存在的理由。所以安裝腳本裝完會
++  立刻發一則並印一段「請確認你有看到」的字。
++
++**留了退路**:app 不在或 `open` 失敗就退回原本的 `osascript` 直接發。圖示會是系統預設的,
++但話還是講得出去。★寧可醜也要發得出去★——這支的價值在有人看得到,不在好看。
++
+ ### 誠實邊界
+ 
+ - **排程現在會自動裝,但要人跑一次那支安裝腳本**:`bash governance/install-watchdog.sh`。
+   工具鏈的安裝器不分發這支(清單裡沒有),換一台機器要重跑。
+ - **看門狗本身也會死**:排程器整個掛掉就兩支都不跑。健檢的 `[A1]` 段現在會抓到這件事
+   (它不在 launchd 底下),但那要有人跑健檢。完全無人看顧的解只有機器外的心跳,
+   已列在計劃裡並掛回頭條件。
+ - **「機器剛醒來」只擋得掉最大宗的誤報**:開機後兩小時內剛好跨過門檻仍會誤報一次。
+diff --git a/governance/install-watchdog.sh b/governance/install-watchdog.sh
+index 51b54e2..82bc9e9 100755
+--- a/governance/install-watchdog.sh
++++ b/governance/install-watchdog.sh
+@@ -27,22 +27,74 @@ status() {
+   else
+     echo "裝好的那份     : 沒有"
+   fi
+   if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+     echo "launchd 認得它 : 是"
+   else
+     echo "launchd 認得它 : ★否——它一次都不會跑★"
+   fi
+ }
+ 
++# ★桌面通知的圖示要換成 Lumos 的四角星,得包一個 app★
++# 事實先講清楚:`osascript ... display notification` 顯示的是**呼叫它那支程式**的圖示
++# (從 launchd 跑就是 Script Editor 那個),沒有辦法在指令裡指定圖片。要自訂圖示只有兩條路:
++#   ①裝 terminal-notifier —— 新增一個外部依賴,這個 repo 的家規是零依賴,不走。
++#   ②自己包一個最小的 .app —— 只用 macOS 內建的 osacompile / sips / iconutil / plutil,不加依賴。
++# 走②。app 是「建出來的東西」不是原始碼,所以不進版控,裝的時候現建。
++NOTIFIER_DIR="$HOME/Library/Application Support/Lumos"
++NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
++ICON_SRC="$(cd "$DIR/.." && pwd)/assets/lumos-icon.png"
++
++build_notifier() {
++  for c in osacompile sips iconutil plutil; do
++    command -v "$c" >/dev/null 2>&1 || { echo "缺 $c,跳過通知圖示這一步(通知照發,只是用系統預設圖示)"; return 1; }
++  done
++  [ -f "$ICON_SRC" ] || { echo "找不到圖檔 $ICON_SRC,跳過通知圖示這一步"; return 1; }
++  local tmp; tmp="$(mktemp -d)" || return 1
++  local iset="$tmp/lumos.iconset"; mkdir -p "$iset"
++  local s
++  for s in 16 32 128 256 512; do
++    sips -z "$s" "$s" "$ICON_SRC" --out "$iset/icon_${s}x${s}.png" >/dev/null 2>&1
++    sips -z $((s*2)) $((s*2)) "$ICON_SRC" --out "$iset/icon_${s}x${s}@2x.png" >/dev/null 2>&1
++  done
++  iconutil -c icns "$iset" -o "$tmp/lumos.icns" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
++  # ★applet 一定要 quit★:不加的話它會留在事件迴圈裡不結束,每小時一則就是每小時一個殭屍行程。
++  cat > "$tmp/notify.applescript" <<'APPLESCRIPT'
++on run argv
++	set theMsg to "(沒有內容)"
++	if (count of argv) > 0 then set theMsg to item 1 of argv
++	set theTitle to "Lumos 治理看門狗"
++	if (count of argv) > 1 then set theTitle to item 2 of argv
++	display notification theMsg with title theTitle
++	quit
++end run
++on quit
++	continue quit
++end quit
++APPLESCRIPT
++  rm -rf "$NOTIFIER"
++  mkdir -p "$NOTIFIER_DIR"
++  osacompile -o "$NOTIFIER" "$tmp/notify.applescript" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
++  cp "$tmp/lumos.icns" "$NOTIFIER/Contents/Resources/applet.icns"
++  plutil -replace CFBundleIdentifier -string "com.enzo.lumos.watchdog-notifier" "$NOTIFIER/Contents/Info.plist" >/dev/null
++  plutil -replace CFBundleName -string "Lumos 治理看門狗" "$NOTIFIER/Contents/Info.plist" >/dev/null
++  touch "$NOTIFIER"           # 逼 LaunchServices 重讀圖示
++  rm -rf "$tmp"
++  return 0
++}
++
+ case "${1:-install}" in
+   --status|status) status; exit 0 ;;
++  --rebuild-notifier)
++    build_notifier && echo "通知 app 重建好了:$NOTIFIER"
++    open -a "$NOTIFIER" --args "重建完成——這則通知左邊應該是 Lumos 的四角星。" 2>/dev/null || true
++    exit 0 ;;
+   --uninstall)
+     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+     rm -f "$DEST"
+     echo "已移除。"; status; exit 0 ;;
+ esac
+ 
+ [ -f "$SRC" ] || { echo "找不到 plist:$SRC" >&2; exit 1; }
+ # plist 裡寫死了腳本的絕對路徑,先確認那個路徑跟這份 repo 對得上,不然裝了也是跑空氣。
+ want="$DIR/wrapper-watchdog.sh"
+ grep -q -- "$want" "$SRC" || {
+@@ -50,12 +102,27 @@ grep -q -- "$want" "$SRC" || {
+   echo "  這份 repo 的腳本在:$want" >&2
+   echo "  plist 裡寫的是    :$(grep -A1 'ProgramArguments' -A3 "$SRC" | grep string | tail -1)" >&2
+   exit 1
+ }
+ plutil -lint "$SRC" >/dev/null || { echo "plist 格式不合法:$SRC" >&2; exit 1; }
+ 
+ mkdir -p "$(dirname "$DEST")"
+ cp "$SRC" "$DEST"
+ launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true    # 先卸再裝,才吃得到改過的內容
+ launchctl bootstrap "$DOMAIN" "$DEST" || { echo "launchctl bootstrap 失敗" >&2; exit 1; }
++
++# 通知 app 一併建起來,並且★當場發一則★——不是為了好看,是為了讓 macOS 現在就問你
++# 「要不要允許這個 app 發通知」。不在安裝時問,第一次真的出事那天通知會被靜默丟掉,
++# 而那正是這支看門狗存在的理由。
++if build_notifier; then
++  open -a "$NOTIFIER" --args "看門狗裝好了。之後它有話要說,就會長這樣。" 2>/dev/null || true
++  echo ""
++  echo "★請確認兩件事★"
++  echo "  1. 剛才右上角有沒有跳出一則通知?沒有的話到「系統設定 → 通知」把"
++  echo "     「Lumos 治理看門狗」打開——沒開的話它以後喊了你也看不到。"
++  echo "  2. 那則通知左邊的圖示是不是 Lumos 的四角星?"
++  echo "  圖示沒換到 → 重建一次:bash governance/install-watchdog.sh --rebuild-notifier"
++fi
++
++echo ""
+ echo "裝好了。"
+ status
+diff --git a/governance/wrapper-watchdog.sh b/governance/wrapper-watchdog.sh
+index c3d1e40..518b2d4 100755
+--- a/governance/wrapper-watchdog.sh
++++ b/governance/wrapper-watchdog.sh
+@@ -41,28 +41,38 @@ o=subprocess.run(['sysctl','-n','kern.waketime'],capture_output=True,text=True).
+ m=re.search(r'\bsec = (\d+)',o)
+ sys.stdout.write(m.group(1) if m else '')" 2>/dev/null || echo '')"
+   [ -z "$wt" ] && return 1
+   echo $(( $(date +%s) - wt ))
+ }
+ 
+ # ★話要講到有人聽得到的地方★(2026-09-07 代碼審 r1 外家否決席判 blocker,說得對):
+ # 第一版只 echo 一行 + 追加一個本機紀錄檔,而 launchd 又把 stdout 導進另一個檔案
+ # ——完整重現了它想防的那件事:「沒有任何東西在讀它印的東西」。
+ # 所以現在走三條:
+-#   ①桌面通知(macOS osascript):不需要任何人記得去開檔案,狀態一變就跳出來。
++#   ①桌面通知:不需要任何人記得去開檔案,狀態一變就跳出來。
+ #     是這三條裡唯一「不靠人主動查」的,也是這支存在的理由。
+ #   ②這支自己的紀錄檔:留時間序,事後要回頭查哪天開始壞的靠它。
+ #   ③健檢的 [A1] 段:那段直接讀同一份健康檔,`lumos doctor` 一跑就看得到,並且接得上治理帳。
+ # ★三條裡①②住在 launchd,③住在 Claude Code 的收工健檢——後者才是真正的獨立失敗域★
+ #   (第一版計劃寫「再開一支 launchd job 就是獨立失敗域」,那句話是錯的:
+ #    兩支 launchd job 共用同一個 launchd、同一個使用者 session、同一顆磁碟)。
++# 通知走兩條,前面那條有就用前面那條:
++#   ①`~/Library/Application Support/Lumos/LumosWatchdog.app`——安裝腳本建的最小 app,
++#     有 Lumos 自己的圖示。★osascript 直接發的通知沒辦法指定圖片★,它顯示的是呼叫者
++#     (從 launchd 跑就是 Script Editor 的圖示),要換圖只能包成 app。
++#   ②沒建成 app 就退回 osascript 直接發:圖示是系統預設的,但話還是講得出去。
++#     ★寧可醜也要發得出去★——這支的價值在「有人看得到」,不在好看。
++NOTIFIER="$HOME/Library/Application Support/Lumos/LumosWatchdog.app"
+ notify() {
++  if [ -d "$NOTIFIER" ] && command -v open >/dev/null 2>&1; then
++    open -a "$NOTIFIER" --args "$1" >/dev/null 2>&1 && return 0
++  fi
+   command -v osascript >/dev/null 2>&1 || return 0
+   osascript -e 'on run argv
+     display notification (item 1 of argv) with title "Lumos 治理看門狗"
+   end run' "$1" >/dev/null 2>&1 || true
+ }
+ emit() {   # $1=kind  $2=一句話
+   local kind="$1" msg="$2"
+   echo "[$(ts)] $msg"
+   notify "$msg"
+   mkdir -p "$DIR/logs" 2>/dev/null || true

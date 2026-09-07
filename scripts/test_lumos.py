@@ -29298,6 +29298,96 @@ def t_doctor_wrapper_sections_behave():
     print("  ✓ t_doctor_wrapper_sections_behave")
 
 
+def t_watchdog_notifier_bundle():
+    """★通知用的那支 app:改完 Info.plist 一定要重簽,而且 handler 不能吃 argv★
+    (2026-09-07 代碼審 code-batch14 r1,通才席與實測)。
+
+    兩個都是「壞掉時完全不出聲」的形態,所以非釘不可:
+
+    ① `osacompile` 會幫 app 簽章,而★簽章的雜湊包含 Info.plist 的內容★。腳本簽完之後才用
+       `plutil -replace` 改 bundle id,等於簽完名才改合約——章當場作廢。後果不是難看:
+       章壞掉時 applet 裡的 `do shell script` 會被系統**靜默擋掉**,於是「我真的跑到了」
+       那個回報永遠不會發生,退路邏輯就變成永遠不會觸發的死碼。
+    ② applet 的 handler 寫成 `on run argv` 時,用 `open -a APP --args …` 啟動會讓它
+       ★整個不執行★(連第一行都沒跑到),而 `open` 照樣回 0。所以只能寫 `on run`、
+       訊息從檔案讀。
+
+    結構這一半到哪都跑得動;行為那一半只有在有那幾支 macOS 工具的機器上才跑。
+    """
+    import re as _re
+    import shutil as _sh
+    import subprocess as _sp
+    _need_src("governance/install-watchdog.sh")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    src = (repo / "governance" / "install-watchdog.sh").read_text(encoding="utf-8")
+
+    # ── 結構:重簽必須排在兩行 plutil 之後 ──
+    i_plutil = max(src.find("plutil -replace CFBundleIdentifier"),
+                   src.find("plutil -replace CFBundleName"))
+    i_sign = src.find("codesign -f -s -")
+    check("★建 app 的流程要有重簽這一步★", i_sign > 0, "找不到 codesign -f -s -")
+    check("★重簽要排在改 Info.plist 之後★(先簽後改 = 章作廢,而且是靜默的)",
+          i_plutil > 0 and i_sign > i_plutil, "plutil 在 %d,codesign 在 %d" % (i_plutil, i_sign))
+    check("★驗收也要驗簽章★(只查檔案在不在,驗不出章壞掉)",
+          "codesign --verify" in src, "verify_notifier 沒有驗簽章")
+
+    # ── 結構:applet 的 handler 不准吃 argv ──
+    m = _re.search(r"^on run(?P<rest>.*)$", src, _re.M)
+    check("★applet 的 handler 要寫 `on run`,不能吃 argv★(吃 argv 就整支不執行,而 open 照樣回 0)",
+          m is not None and m.group("rest").strip() == "", m.group(0) if m else "找不到 on run")
+    check("訊息要從檔案讀(因為參數傳不進去)", "message.txt" in src, "沒有用檔案傳訊息")
+    check("applet 要留「我跑到了」的印子,退路才有辦法觸發", '"$NOTIFIER_DIR/.ran"' in src or "markFile" in src,
+          "沒有印子機制")
+
+    # ── 結構:兩支腳本對同一個 bundle 的判斷要一致 ──
+    wd = (repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8")
+    check("★看門狗判斷 app 可不可用要看執行檔,不是只看目錄在不在★"
+          "(半成品 bundle 的目錄也存在,會被當成可用)",
+          "Contents/MacOS/applet" in wd, "還在用 [ -d ] 判斷")
+    check("移除時要把建出來的 app 一起清掉", 'rm -rf "$NOTIFIER"' in src, "--uninstall 沒清 app")
+
+    # ── 結構:換圖示的三件事缺一不可 ──
+    # 2026-09-07 一步一步試出來的:只放 icns 沒有用;三件事漏任何一件,通知上還是預設的卷軸。
+    check("★①要刪掉 osacompile 附的 Assets.car★"
+          "(那份編譯過的圖示目錄裝著預設 applet 圖示,macOS 優先用它、不看我們放的 icns)",
+          "Assets.car" in src, "沒刪 Assets.car,圖示會是預設的卷軸")
+    i_car = src.find("rm -f \"$staged/Contents/Resources/Assets.car\"")
+    check("★②重簽要排在刪 Assets.car 與改 Info.plist 之後★",
+          i_car > 0 and i_sign > i_car, "Assets.car 在 %d,codesign 在 %d" % (i_car, i_sign))
+    check("★③bundle 識別碼要帶版本尾巴★"
+          "(通知中心會快取某個識別碼第一次註冊時的圖示,換識別碼是唯一逼它重讀的辦法)",
+          _re.search(r'NOTIFIER_ID="[^"]*\.v\d+"', src) is not None,
+          "識別碼沒有版本尾巴,改了圖示也吃不到")
+    check("要明確叫 LaunchServices 重讀(只 touch 不夠可靠)", "lsregister" in src, "沒有 lsregister")
+
+    # ── 行為:工具齊全才跑(CI 上多半沒有) ──
+    if not all(_sh.which(c) for c in ("osacompile", "sips", "iconutil", "plutil", "codesign")):
+        print("  ✓ t_watchdog_notifier_bundle(結構部分;這台機器沒有 macOS 那幾支工具,行為部分略過)")
+        return
+    root = Path(tempfile.mkdtemp(prefix="gctl-notif-"))
+    try:
+        app = root / "T.app"
+        scpt = root / "s.applescript"
+        scpt.write_text("on run\n\tdisplay notification \"x\" with title \"y\"\nend run\n", encoding="utf-8")
+        _sp.run(["osacompile", "-o", str(app), str(scpt)], capture_output=True, timeout=60)
+        r0 = _sp.run(["codesign", "--verify", "--deep", "--strict", str(app)],
+                     capture_output=True, text=True, timeout=60)
+        check("剛編出來的 app,章是好的(這是對照組)", r0.returncode == 0, r0.stderr[-200:])
+        _sp.run(["plutil", "-replace", "CFBundleIdentifier", "-string", "com.example.probe",
+                 str(app / "Contents" / "Info.plist")], capture_output=True, timeout=60)
+        r1 = _sp.run(["codesign", "--verify", "--deep", "--strict", str(app)],
+                     capture_output=True, text=True, timeout=60)
+        check("★改完 Info.plist,章真的會壞★(這條就是本 finding 的現場成立前置)",
+              r1.returncode != 0, "改完還是 valid,那前提不成立了:%s" % r1.stderr[-200:])
+        _sp.run(["codesign", "-f", "-s", "-", str(app)], capture_output=True, timeout=60)
+        r2 = _sp.run(["codesign", "--verify", "--deep", "--strict", str(app)],
+                     capture_output=True, text=True, timeout=60)
+        check("★重簽之後章又好了★", r2.returncode == 0, r2.stderr[-200:])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_watchdog_notifier_bundle")
+
+
 def t_daily_wrapper_lock_matches_source():
     """★抄過來的鎖要跟來源保持一致★(2026-09-07 全 repo 審視 #18,設計審 r1 架構席)。
 

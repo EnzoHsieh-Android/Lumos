@@ -1,0 +1,1588 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.2
+--------
+[1mworkdir:[0m /Users/enzo/harness/lumos-toolchain
+[1mmodel:[0m gpt-5.6-sol
+[1mprovider:[0m openai
+[1mapproval:[0m never
+[1msandbox:[0m read-only
+[1mreasoning effort:[0m low
+[1mreasoning summaries:[0m none
+[1msession id:[0m 01a07ac8-2aa0-7be1-9b67-eb9c30a0ce72
+--------
+[36muser[0m
+你是外部第三方投稿的審查員,負責「否決席」——找出作者沒看到的洞。這份 diff 的作者不在,別客氣。
+
+被審材料:governance/review-reports/code-batch14/r1-snapshot.patch(在 /Users/enzo/harness/lumos-toolchain)
+兩支被改的檔案在 governance/install-watchdog.sh 與 governance/wrapper-watchdog.sh,可以直接開來看。
+
+背景(判斷用,不是要你相信):這批的前一批剛做完一支「每日治理 wrapper 的看門狗」,
+它的核心價值是「wrapper 死掉時有人會知道」。這一批是把桌面通知的圖示換成專案自己的 logo:
+install-watchdog.sh 在安裝時用 macOS 內建工具(osacompile/sips/iconutil/plutil)現建一個最小的
+.app,看門狗發通知時優先用它、沒有就退回原本的 osascript。
+
+請特別看(但不限於):
+1. 建 app 那段的失敗模式:哪一步失敗會留下半成品?半成品會不會讓 notify() 以為有 app 而靜默失敗?
+2. `open -a ... --args` 的可靠性:回傳碼代表什麼?通知真的沒發出去時 rc 會是多少?
+3. 通知權限:macOS 逐 app 問權限。這個設計有沒有把「權限沒開 = 靜默不喊」這個洞補起來?
+4. notify() 的退路邏輯有沒有真的退得到?
+5. 有沒有引入殭屍行程、暫存檔殘留、或每小時累積的東西?
+6. 硬編死的路徑 / 使用者名稱 / 中文字串在 shell 裡的安全性。
+
+每條 finding 必附:severity(clean|minor|major|blocker)、blocking(是/否)、file:line、
+逐字引句(≥10 字,要能在被審材料裡找到原文)、why(怎麼重現或怎麼推出來的)。
+報告開頭第一行寫一行獨立的 `severity: <本報告最高嚴重度>`。乾淨也要寫 `severity: clean`。
+最後印一行 CODEX DONE。
+[1mhook:[0m [2mSessionStart[0m
+[1mhook:[0m [2mSessionStart[0m
+[1mhook:[0m [2mSessionStart[0m Completed
+[1mhook:[0m [2mSessionStart[0m Completed
+[35m[3mcodex[0m[0m
+我會按「否決席」做唯讀審查；先依專案規矩用 lumos 查相關圖譜，再逐行對 snapshot 與兩支現行腳本。會套用 lumos-project-notes 的審查入口，但不改任何檔案。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc 'python3 scripts/lumos search "watchdog 通知 app"'[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 475ms:[0m
+(多詞回退:你查的整串詞在未作廢的節點的可見文字裡找不到完全一致的,改成每個詞分開查、有出現就算;逐詞覆蓋 ★watchdog:0★  通知:12  app:145)
+  提醒:標 ★ 的那個詞在未作廢的節點的可見文字裡 0 命中——多半是你用的詞跟圖譜裡的說法不一樣,不代表圖譜沒記這件事;先換個說法再查一次
+(已隱藏 3 筆作廢結果;要看的話加 --include-superseded)
+提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。下結論前先讀全文:lumos show <節點>
+ 20.095  Projects/每日治理wrapper活著沒_計劃.md  [通知,watchdog,app]
+    12 [KEY]: KEY:★r1 打掉兩個前提★ ①「推播那條腿斷了」是錯的——它在暫停開關之前就跑而且真的會推,真正的問題是要連喊 14 天才通知、對「36 小時前死掉」來不及 ②把死人開關押在健…
+    20 [body]: # 每日治理wrapper活著沒_計劃
+    29 [body]: [[Verification/2026-09-05_wrapper邊跑邊改實驗]](9/5 那次事故本身)。
+    33 [body]: - **★「通知那條腿是斷的」是錯的★**:那支週報在暫停開關**之前**就執行,而且真的會推播。
+    34 [body]: 真正的問題不是斷了,是**太慢**——它要同一道閘對同一篇連喊 **14 天**才通知,
+    53 [body]: 但同樣不會通知任何人。(第一版寫「要查」,現在查完了,這條銷案。)
+    110 [body]: **推播那條**:既有的週報路徑可以用,但它要連喊 14 天才通知。
+    165 [body]: 跑完之後向一個機器外的心跳服務報到,由那個服務在寬限期過後通知。
+    … 還有 8 處
+  6.703  Projects/標註刷新_計劃.md  [通知]
+    13 [KEY]: KEY:四件套+S0(r1 定錨)——S0 共同定義(★評測母體=計分觸及集:search 兩臂各前10/edit free 前8+全固定席——2026-08-18 落地後發現:全…
+    16 [TEST]: TEST:驗收=重放 ab910519(--snapshot worktree):S1 吐出當時 77 噪音中的未標集(評測母體口徑)、S3 未補標前 rc1 擋、補標後綠、雙跑兩…
+    17 [DEP]: DEP:governance/eval/refresh_labels.py(新腳本 delta/repin)｜build_goldset.py(加 --force-full 裸跑防…
+    75 [body]: - 週閘 wrapper=`governance/autonomous-loop.sh` 週期考卷段(現呼叫 `retrieval_eval.py --goldset … --sp…
+    93 [body]: - 重放 ab910519(走 --snapshot worktree):S1 吐出當時 77 噪音中的未標集(以評測母體口徑);S3 未補標前 rc1、補標後綠;雙跑兩筆 his…
+    103 [body]: - **pre-flight(2026-08-17,機械排乾,不算 loop findings)**:①S2「兩席一致直接併 final」與刻意不做「人閘不可拆」自違→消歧為批次級…
+    107 [body]: - [blocker][s4] S4 10% 門檻與 S3 unjudged==0 的 1–9% 死區→S4 改「>0 即報數值,10%=通知升級線」+死區澄清。
+    135 [body]: held@285d429 批次 21 筆:A 席乾淨 Claude(讀快照 worktree 全文)+B 席 Gemini Flash(單發、節點前 45 行摘錄)→ **16 筆…
+    … 還有 1 處
+  6.695  Projects/跨session傳訊用途調研.md  [通知]
+    19 [KEY]: KEY:採用候選=①跨專案協同通知(Enzo 提,最實在:本專案改動需他專案配合時,改完傳一句給對造 session,免自己切過去重建脈絡)②無人 loop 收斂後主動敲人(治理最…
+    27 [fm:context]: context: 跨 session 傳訊實測互動視窗可用(能喚醒閒置 peer);首個採用場景=本專案改動需他專案配合時通知對造 session。問題:訊息內容只活在對造 ses…
+    31 [fm]: - 只傳指標＋觸發、內容落圖譜(採用:通知與內容分層,兩邊各歸各位)
+    32 [fm:why_chosen]: why_chosen: 補上圖譜唯一缺的「推」能力(圖譜只能等人來讀,無法主動觸達),同時不讓任何協同結論脫離圖譜;內容層既有機制(專案圖譜/核心圖譜升格)已足夠,傳訊只補通知這一…
+    50 [body]: ### ① 跨專案協同通知（Enzo 提，目前最實在）
+    54 [body]: **但形狀要對**（下方鐵則）：交代的是**指標**不是**內容**。內容的家在圖譜，跨專案共用的規則甚至該走核心圖譜升格那條路。傳訊只補「通知」這一格——那格本來確實是空的，圖譜…
+    95 [body]: - [ ] ②的觸達場景：傳訊 vs 既有推播通知，哪個才是最小解（PRIOR-ART 未做）
+  6.428  Projects/子代理續談調研.md  [app]
+    20 [KEY]: KEY:2026-08-14 實測=本機「互動式」terminal session 續談失敗「No transcript found」——互動 session 主對話與子代理正文 …
+    53 [body]: 環境：宿主進程 v2.1.229，Ghostty 終端手動啟動的**互動式** session（`claude --chrome --dangerously-skip-permis…
+  6.423  Systems/test-profile-multiplatform.md  [app]
+    24 [KEY]: KEY:新增內建 profile maestro(綁 flow name:,file_must_match=^appId: 濾非flow yaml,\s*$ 錨多字 name NO…
+    28 [KEY]: KEY:dart profile(2026-07-26,taroko_app Flutter 接入)=第 6 個 profile:DART_TEST_RE 認 test('id')…
+  6.385  Systems/lint-version-watch.md  [通知]
+    19 [FLOW]: FLOW:讀 .lumos/lint-watch.json → 查各 registry 最新穩定版(pypi/npm/maven/github)→ _compare_version…
+    25 [KEY]: KEY:nuget type(2026-07-05,C#/.NET)——flatcontainer index.json {"versions":[...]} 過濾 prerele…
+    29 [KEY]: KEY:治理層所有 JSON 讀寫在 python(lint_watch_dedup.py __main__:pending 寫入 + seen append + LINE dic…
+    39 [body]: pitfalls-lint-integration 計劃第②塊。每日排程機械偵測「宣告的社群 linter 有沒有新穩定版」(查 registry vs `.lumos/lint-…
+    53 [body]: 6 輪 canary 6/6 全 caught,抓修真缺陷(Maven `%22`+字串 max 病灶、PEP440 prerelease、三態、等段數守衛、fixture sea…
+  6.345  Verification/2026-07-04_compose-metrics-adapter.md  [app]
+    26 [body]: - T1-T3:spec ✅ + quality Approved 0 Critical/Important(T3 opus 複核 runtime traces)。
+    28 [body]: - Minor 留最終 review:cur_agg={} 空 dict 邊界(T3 None→failed 已覆蓋主路徑);baseline_unreadable 只在該路徑出現…
+    31 [body]: - 專案 build 給 Compose 編譯器 `metricsDestination`/`reportsDestination` 旗標 → 產真 metrics(app_rel…
+    40 [body]: - test_lumos.py 為 anchor,merge 後 push 前須 anchor approve。
+  6.206  Systems/效能檢核目錄.md  [app]
+    18 [KEY]: KEY:Android/Kotlin——兩病灶:①Compose 重組失控(不穩定型別使跳過優化失效,stability report 機械可查=[[Systems/compose…
+    47 [body]: | app 專屬 Baseline Profile+R8 | 人判(release 檢核) | 預設 profile 不夠;launch/捲動關鍵路徑該收錄 |
+    53 [body]: | **記憶體洩漏(Context 持有)** | 人判提問+工具可抓 | 2026 仍是頭號隱形殺手:單例/SDK/companion 持 Activity Context 或 …
+    58 [body]: | **啟動路徑同步重活** | 人判提問(2026-07-27 網搜補漏收) | Application onCreate/首幀前 eager SDK init/同步 I/O/大…
+    68 [body]: | 只撈需要的欄位(投影) | 人判提問 | Dapper `SELECT *` 進大表/EF 未投影 |
+    74 [body]: | **DB 連線生命週期** | 人判提問(2026-07-27 網搜補漏收) | 連線漏 using=池名額洩漏→TimeoutException(池化只省重建、不解忘還);迴…
+    98 [body]: | **SARGable/隱式轉換** | 人判提問(2026-07-27 網搜補漏收) | 索引在卻被寫法廢掉:WHERE 欄位側函式包用(ISNULL/CAST 包欄位=逐列運…
+  5.955  Systems/linter精選目錄.md  [app]
+    16 [KEY]: KEY:linter=風格+最佳實踐檢查(抓代碼問題),≠一般依賴——lint-watch.json 只放真 linter(2026-07-17 收窄事故[[Issues/lint…
+    21 [KEY]: KEY:[2026-07-26 補]架構 lint 品類(抽象軸,AI 世代新主流)——架構規則寫成單元測試,AI 違反→測試翻紅→agent 拿確定性回饋自修:Konsist(K…
+    32 [body]: > **緣起**:2026-07-17 使用者發現 lint-watch 收到的是套件升級(ClosedXML/Dapper/SqlClient…)而非 linter——追出宣告檔…
+    58 [body]: ### detekt 標準接法（2026-07-27 立;消費端:Citrus_KDS、mOrangePos——mOrangePos 首掃唯一 GlobalScope 命中=cra…
+    86 [body]: ## Flutter/Dart（registry: `pub:<pkg>`；2026-07-26 補，taroko_app 接入調研）
+    91 [body]: - ⚠ **SDK 門檻實錘(taroko_app)**:Dart 2.19(pre-Dart 3)上述架構套件與新版 VGA 全裝不了——舊 SDK 專案的架構軸=升級 Flut…
+    106 [★INVARIANT★]: **lumos 接點（此品類最值錢處）**：架構規則＝可執行測試＝可被 `[test:]` 綁定——圖譜裡「分層邊界」等散文級合約可升格正式 invariant 走完整合約鏈（綁定…
+  5.948  Projects/改制回測_計劃.md  [通知]
+    5 [KEY]: KEY:地基盤點第 3 批案 C——08-25 收斂制大改(處置閘/d5 記帳)至今無回測基建:[S1] 回放 runner(判定核心抽純函式共用+readonly 不落帳;差異三…
+    30 [body]: - **[S2] golden 判定檔=完整輸入閉包**:`--freeze` 產 `governance/replay/<id>/verdict.json`(新目錄——golde…
+    32 [body]: - **[S4] 週期接線**:autonomous-loop 週跑,範圍=**新凍結(從未回放過的)必跑+存量輪替抽樣每週 5 包**(輪完一圈重來)——不是全量:golden …
+    37 [body]: replay 對今日任一已收斂 loop=判定與當日 gate 輸出一致且治理帳行數不變;--freeze 產檔含完整閉包(帳列逐行 sha+spec sha+engine_rev…
+    52 [body]: - s3-f3+ext-f2(golden 合法過期無重凍路徑,blocker+major)→ engine_rev 分流+重凍比照 anchor approve 留痕。
+    54 [body]: - ext-f3+s3-f4+arch-f5(週跑成本無界+通知無內容規格+build_alert 錯用,2 major+minor)→ S4 重寫:新凍結必跑+輪替抽 5 包+5…
+    68 [body]: - d-f1(major:sha 先驗新增第四類結果,S4 通知規格沒同步)→ MSG 明列四類。
+  5.699  Systems/autonomous-iteration-loop.md  [通知]
+    18 [fm]: - "[[Verification/2026-09-05_wrapper邊跑邊改實驗]]"
+    29 [KEY]: KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross…
+    30 [KEY]: KEY:週期任務第四支 run_replay(2026-08-26 改制回測 S4):每週補漏凍結+新凍必跑+存量輪替抽 5(游標檔)+預算 300s+便宜(單包×存量≤60s,首…
+    31 [KEY]: KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.…
+    34 [KEY]: KEY:★2026-09-05 wrapper 慣例★:daily-governance.sh 是 repo 唯一「活著等三小時」的外層腳本,主體包 `main()`、結尾同一行 …
+    35 [KEY]: KEY:★2026-09-06 訂正暫停開關的位置★:09-05 那版把 LUMOS_AUTOLOOP_OFF 寫在 daily-governance.sh 裡包住整支 auton…
+    149 [body]: - 2026-08-30 **prompt 三修(d8,d7 首輪真跑陣亡後的續修)**:①★claude -p 活性紀律★——派 Agent 必須同一回合等到結果,散文收尾=本輪…
+    155 [body]: - 2026-08-18 token 傳遞硬化(code-loop code-標註刷新 r1 另案收尾):六處 LINE 通知的 token(★原記七處,commit 9fcb76…
+  5.484  Verification/2026-07-02_anchor-integrity.md  [通知]
+    11 [fm:valid_under]: valid_under: scripts/lumos cmd_anchor_verify/approve(ANCHOR_FILES 5 檔列舉 + sha256 + rc 0/1/…
+    14 [TEST]: TEST:t_anchor 14 checks 全綠(無 baseline rc0 警示/缺 note rc2/approve 建檔 5 錨點+note/verify rc0/go…
+    15 [VERIFY]: VERIFY:真 repo 實錨自測——初始 approve 5 錨點+verify rc0(baseline 含接線後 pre-push 自身 hash,審查員實算 sha256…
+    24 [body]: 接線語法:`bash -n` 兩檔皆過;loop 入口 errexit-safe 寫法(if ! …)經審查員模擬 baseline 缺失/verify 失敗實測,正確走到通知+e…
+  5.027  Projects/Android側UI測試綁圖譜工作流_實作計畫.md  [app]
+    281 [body]: | 測試門店已確認／全部標僅手動 | ⚠ **未驗＋原因** | **A5251 是否可隨意開單，未向人確認** → 依規範四支 flow 全標「僅手動、不進回歸集」。`smoke…
+    309 [body]: | `smoke_01` 納入回歸集 | 會開真單、App 端無回收路徑 |
+  4.958  Verification/2026-07-04_lint-version-watch.md  [app]
+    28 [body]: - T1-T5:spec ✅ + quality Approved 0 Critical/Important。
+    36 [body]: - design-loop 未 GATE PASS(核心收斂、shell wrapper 散文 churn 達 cap);shell 以真 shell smoke 定稿而非設計散文…
+    37 [body]: - test_lumos.py + test_autonomous_loop.py 皆 anchor,merge 後 push 前須 anchor approve。
+  4.170  Issues/連鎖佇列開了沒人跟完.md  [通知]
+    79 [body]: - **③ 裁定＝borrow-design**：借「撤稿通知要推到直接引用者」的意圖，原生實作（掛既有帳本），零依賴家規排除 adopt。
+  3.750  Projects/標註刷新_實作計畫.md  [通知]
+    11 [KEY]: KEY:落地 [[Projects/標註刷新_計劃]](r1 收斂版)——8 任務 TDD:T1 build_goldset --force-full 拆清空雷/T2 retrie…
+    24 [body]: **Architecture:** 新腳本 `refresh_labels.py` 承載 delta/repin/merge/apply/signal 五子命令;母體與未標判定抽進…
+    32 [body]: - goldset 寫入恆 tmp+`os.replace` atomic;單寫者(apply 是唯一寫 labels 入口;排程只讀)。
+    33 [body]: - 一致=同值(1 vs 2=不一致);merge 前必經人放行(人跑 apply=放行動作)。
+    59 [body]: ### Task 3: refresh_labels delta ✅ 2026-08-18(10 checks 綠;TDD 糾偏:超前寫的 repin/merge/apply/si…
+    81 [body]: ### Task 6: merge+apply(S2 雙評審+人閘)✅ 2026-08-18(11 checks 綠)
+    94 [body]: - [ ] 測試:同值→agreed;1v2→disputed;b 缺→degraded 全 disputed;apply 無 ADJ 且有 disputed→rc1 不寫;齊→r…
+    97 [body]: ### Task 7: 週閘薄接線(S4 通知)✅ 2026-08-18(signal 4 checks 綠;bash 只 grep over=yes,產表+LINE 借 line…
+    … 還有 1 處
+  3.683  Projects/規模影響判斷力假說.md  [app]
+    103 [body]: ② 2026-04 封存驗證文件的一句「**App Pool 閒置回收**後首次請求可達 1800ms+」
+  3.643  Verification/2026-08-22_缺席推論探針題組.md  [通知]
+    171 [body]: 題目:「doctor 跑完自動寄 email 通知,我們有嗎?沒有我就開工做了」——
+  3.603  Projects/test-layers軟提醒_實作計畫.md  [app]
+    14 [KEY]: KEY:test-layers 軟提醒 TDD 實作計畫(設計權威=[[test-layers軟提醒_計劃]]);4 task=T1 純函式(config 載入+棧命中)/T2 c…
+    298 [body]: ### Task 3: pre-push advisory 段 + anchor approve
+    320 [body]: - [x] **Step 3: anchor approve**(pre-push 是錨點檔,不 approve 會自己擋自己)
+    323 [body]: Expected: approve 成功訊息
+  1.847  Projects/公開精簡版_計劃.md  [通知]
+    35 [body]: `PRIOR-ART:` ① **最小解在既有層**——不造新機制；CLI 從既有單檔生成子集。②（r2 更正）**skill 不是「直接複製」、hooks 完全不給**：skil…
+    110 [body]: 新寫一支安裝器，原稿**只做兩件事**（r1 更正：原稿第 3 項是取消通知，不是動作；★2026-07-31 起實際是三件事，第 3 項見下方裁定變更★）：
+    134 [body]: **新裁定的範圍刀（append-only vs 覆蓋，別搞混）**：
+    136 [body]: - **新開放的**：**附加**——精簡版安裝器在 `CLAUDE.md` 檔尾，用**專屬且與完整版不同名**的 sentinel `<!-- LUMOS-SLIM:START…
+    389 [body]: - 🚫 **通才席（漏 canary）全部 findings 作廢**。其中「[S3]『只做三件事』第 3 項是取消通知」與「`cochange` 分界原則例外」兩條經編排者自核為…
+    530 [body]: 1. **安裝器不得觸及專案層**——跑完專案整棵 worktree `git status --porcelain` 為空 ∧ `.git/config` 前後相同（★史料，已被…
+  1.756  Projects/全repo審視_計劃.md  [通知]
+    47 [body]: | 11 | 每日 wrapper 沒有死人開關也沒有整跑鎖 | F43、F46 | high | S/low |
+    122 [body]: | F43 | governance-automation | 每日 wrapper 沒有死人開關:死了整天沒人知道,退出碼永遠 0 | S/low |
+    170 [body]: | 18 | 每日治理 wrapper:死了要有人知道、不要兩份同跑、帳本要有門檻 | F43、F46、F47 | M | ★要 |
+    197 [body]: - 四處「決策沒地方掛」只留 decision-add/supersede/reindex 那一處;讀側(links/backlinks/context/map/show/deci…
+    200 [body]: - roster-alerts.log 的重複行只採「尾行相同就跳寫」,不要改寫成 xN 計數(牴觸該檔 valid_under 宣告的 append-only);而且不單獨開工,…
+    227 [body]: - 不要讓 anchor approve 的 note 自動機械數測試數(F130)——實測 44 筆只有 5 筆帶測試數宣稱(不是「每筆」),而且那 5 筆數的是函式內的案例與斷…
+    241 [body]: - 備份與復原完全沒出現在 16 個鏡頭裡:圖譜 425 篇加六本帳只活在這一台 mac 的 clone 與 GitHub main 上,帳本是 append-only 但沒有任何…
+    277 [body]: - **做什麼**:二選一:抽 governance/weekly-jobs.sh 由 wrapper 無條件呼叫(函式原碼搬過去不改),或把 LUMOS_AUTOLOOP_OFF…
+    … 還有 14 處
+  0.000  Issues/canary-record未落盤事件.md  []
+    17 [KEY]: KEY:待查方向——①record 寫入的 vault/log 路徑解析是否受 cwd 影響(當時 session 有多次 cwd 漂移)②寫後是否缺 readback 自驗(嫌疑…
+    18 [KEY]: KEY:★結案(2026-07-29)★——機械面已閉:_jsonl_append_verified 寫後獨立重開檔讀回驗唯一鍵,驗不到即 rc2 且不印 ✓(合約 [test:t…
+    30 [body]: - 硬化票（**已落地 2026-07-29**，oracle 品質包 [S1]）：`canary record` 輸出改印落盤絕對路徑，且 append 後讀回驗證該行存在、驗不…
+  0.000  Issues/code-loop-pass自失效追尾.md  []
+    15 [KEY]: KEY:★症狀★——code-loop pass 綁 HEAD sha 嚴格等值,但 pass 自己會往★tracked★的 docs/.governance-log.jsonl …
+  0.000  Issues/lint-watch空轉假綠.md  []
+    14 [KEY]: KEY:遮蔽鏈=fail-open 設計(網路失敗永不升 rc)+log 恆 0 bytes+wrapper 只記 rc——三層都「正常」,無一層能暴露「網破了」;同族先例=tes…
+    17 [KEY]: KEY:首次真收網(2026-07-17)=LandmarkMember 5 條落後:ClosedXML 0.105.0/Dapper 2.1.79/xunit 2.9.3(小)+…
+    23 [body]: - 2026-07-05 部署 lint-watch-check.sh 進 daily-governance wrapper(launchd 09:30)。
+    24 [body]: - 2026-07-05〜07-17:每日 wrapper log 記「lint-watch 段結束 rc=0」;lint-watch.log 恆 0 bytes;`governa…
+    32 [body]: fail-open(網路失敗永不升 rc,設計正確)→ rc 恆 0;輸出恆空 → log 恆 0 bytes;wrapper 只記 rc → 每天「成功」。**三層各自正常,疊起…
+    43 [body]: LandmarkMember 5 條落後,經當日 pending 佇列(執行期暫存產物 pending-LandmarkMember-2026-07-17.json,未進版控、放行…
+  0.000  Issues/散文紀律沒有退場機制.md  []
+    118 [body]: - **② 世界解過沒（真搜）**：解過，而且工具成熟——**prompt ablation** 是標準做法：逐條移除指示、跑同一組評測、比對指標差異，用來判斷每一段到底有沒有貢獻…
+  0.000  Issues/範本空清單被判成純量.md  []
+    41 [body]: 不在本次;而且 append 遇到它會被擋(不會壞),可接受。測試明確釘住這個邊界。
+    43 [body]: 測試 `t_empty_list_bracket_is_list` 6 條:判 list / append 成功變多行 / 純量不受影響 /
+    44 [body]: 非空 inline 仍 scalar(邊界釘) / ★e2e 從範本建節點 append rc0★ / 檔案格式正確。
+    49 [body]: - `fm_structure` 有 8 個呼叫點,本次只驗了 append 路徑與全套回歸;
+    51 [body]: - 非空 inline list 的支援沒做,重啟條件:有人真的在 frontmatter 手寫 `[a, b]` 然後 append 被擋。
+  0.000  MOC/index.md  []
+    49 [body]: - [[Systems/lumos-cli-write]] — 寫:set/append/new/archive/decision-add/decision-supersede/s…
+  0.000  Projects/Android側UI測試綁圖譜工作流_計劃.md  []
+    29 [KEY]: KEY:★天花板(先寫明,免得被當成全覆蓋)★—①UI flow 對「畫面長怎樣」敏感,版面一改就要重錄 ②只驗走得到的路徑,取不到裝置仍是「明記未驗+原因」不得靜默跳過 ③不取代…
+  0.000  Projects/CI回流閉環_計劃.md  []
+    118 [body]: 3. **`lumos gov` 第 7 源**：CI 事件併入治理時間軸。**mapper 欄位明定（一律 `d.get(...)` dict 存取，對齊既有六源——r1 指正屬…
+    181 [body]: - **pre-flight**（2026-07-29，機械 checklist＋現碼實查，不計 loop findings）：①rc 規格自相矛盾（「恆 0」vs 紅燈 rc1，…
+    182 [body]: - **r1 panel**（2026-07-29，3 席 sonnet＋Codex 否決；**三席 canary 全中**；存活全機械證實免辯方）：[major] ①`--rep…
+  0.000  Projects/CLAUDE注入re-sync與版本標籤_實作計畫.md  []
+    20 [TEST]: TEST:T1 DONE — 16 checks green(t_extract_span_found/absent/broken);全量 752 passed(基線 736)|T…
+    64 [body]: - [x] **Step 1 失敗測試**:`t_reinject_updates_existing`(updated+diff)、`_idempotent`(unchanged …
+    66 [body]: - [x] **Step 3 實作**:讀 vendored 範本(缺→no_template);`{{KG}}`→`docs/<slug>-knowledge/`;strip;包…
+    120 [body]: - [ ] **Step 4 PASS** + doctor 0 + anchor approve(test_lumos.py 動了)。
+    126 [body]: Verification plan_refs 回指設計節點;設計 TEST/status→done;merge main + anchor approve(test 檔動)+ pu…
+  0.000  Projects/CLAUDE注入re-sync與版本標籤_計劃.md  []
+    45 [body]: - CLAUDE.md 不存在 → 建(status=created);**兩 sentinel 齊全** → 替換之間(status=updated 帶 diff / uncha…
+    81 [body]: - 核心:`t_reinject_updates_existing`(status=updated 帶 diff)/ `_idempotent`(status=unchanged …
+    91 [body]: - **`_extract_claude_block_span` 三態(F4,不可都回 None)**:回 `("found", BlockSpan)` / `("absent",…
+    92 [★INVARIANT★]: - **★INVARIANT★ 精確語意(F6)**:「sentinel 之外逐字保留」= 替換後,`text[:block_start]` 與 `text[block_end:]…
+  0.000  Projects/Codex外審吸收_計劃.md  []
+    51 [body]: **總分 6.4 → 6.4（不動）**。唯一上升＝治理機制 7.5→**7.7**（append-readback／timed_out 弱化／全弱 rc1／還原翻紅釘／CI 當輪…
+  0.000  Projects/Codex完全支援_計劃.md  []
+    24 [KEY]: KEY:★2026-09-04 實驗 4/5 定下四個地基事實★:①未信任 repo 的 AGENTS.md 與 .agents/skills/ 都會載入 ②PreToolUse …
+    29 [KEY]: KEY:分四階段,每階段各自驗收:S0 安裝層(skills symlink→~/.agents/skills、hooks.json 合併器、AGENTS.md 區塊、enforc…
+    57 [fm:context]: context: "進場實驗兩次(檔名 lumos-reviewer 與 lumos_reviewer,放 CODEX_HOME/agents/)派工詞點名後 SubagentSt…
+    86 [body]: | 3 hooks | 5 支 `.py` copy 到 `~/.claude/hooks/`,`merge-claude-settings.py` 合併進 settings.js…
+    121 [body]: | impact-hook(PreToolUse) | `tool_input.file_path` | apply_patch 的 `tool_input.command` 是 …
+    125 [body]: S1 驗收(隔離 HOME+CODEX_HOME 真跑 `codex exec` 帶旗標,hook 命令列包一層把 stdout/stderr 落到測試暫存檔——★不發明新帳,us…
+    192 [body]: - **合併器**(`scripts/merge-claude-settings.py`):`--target codex` → 寫 `~/.codex/hooks.json`、h…
+    202 [body]: - **進場實驗**:matcher `Edit`/`Write`/`apply_patch` 三個各自都攔到同一個 apply_patch 呼叫(tool_name 仍回 app…
+    … 還有 5 處
+  0.000  Projects/Codex行為精修_計劃.md  []
+    110 [body]: - **測試**:`t_codex_stop_block_once` 14 條斷言(驗收 1 全部+路徑消毒+範本通用句+探針旗標);anchor baseline 已 appro…
+  0.000  Projects/bootstrap一鍵對稱_計劃.md  []
+    16 [KEY]: KEY:★樞紐坑:curl|bash 下 stdin=管線★——input() 綁死讀 sys.stdin,光 open('/dev/tty') 再 input() 是裝反(r1F…
+    64 [body]: - 原生 Windows：無 /dev/tty，第 1 階涵蓋正常互動；console wrapper 令 isatty=false 時會被當非互動（用 `--init` 逃生），…
+  0.000  Projects/cochange守衛_計劃.md  []
+    87 [body]: - **anchor 連動（實作 checklist）**：`scripts/hooks/pre-commit` 是 `ANCHOR_FILES` 成員（`scripts/lumo…
+    105 [body]: - `--diff <A..B>` 模式：range 內變更檔缺夥伴 → 警告（happy path）；`--staged`/`--diff` 皆缺 → rc 2；同給 → `--…
+  0.000  Projects/code側刪除傳播守衛_計劃.md  []
+    23 [KEY]: KEY:第二道=★純連結編輯不算同步★—判該節點本次 diff 是否只動「純連結欄位」=★明確子集 LINK_KEYS={verified_by,plan_refs,related…
+    137 [body]: 判斷一個節點本次的 diff 是否**只動了「純連結欄位」**＝明確子集 **`{verified_by, plan_refs, related, core_refs}`**（連結…
+    227 [body]: - **誤報帳的狀態**：**明文不進 v1 偵測器 runtime**——v1 誤報樣本由人（或 AI 會話）事後手動記錄，落地格式歸待辦（傾向 append-only json…
+    353 [body]: - [ ] 誤報樣本蒐集方式（v1 人工記錄；格式傾向 append-only jsonl；有數字再談升級硬擋）
+  0.000  Projects/code席爆炸半徑供糧_計劃.md  []
+    36 [body]: **★本案最值錢的副產物(機械席 M-3,留待人裁)★**:d8 規則「固定席必答」對 code 迴圈照字面**執行不動**——固定席層在底層原語無上限,真實 code diff …
+  0.000  Projects/code階段強化_計劃.md  []
+    17 [KEY]: KEY:[S2]查詢數斷言(消費端樣式)——「操作 X 最多 N 條查詢」寫成整合測試斷言,N+1 即紅;**落點=LandmarkMember 自己的圖譜節點**(框架特定歸專案…
+    48 [body]: 3. **csharp-idioms 不動**——該 skill 三處明文「框架選擇不在此裁,歸專案圖譜」,Dapper 專屬樣式進去會被其審查鏡頭套到所有 C# 專案(含 EF …
+  0.000  Projects/decision_refs自動養成_實作計畫.md  []
+    40 [body]: - **T1 帳本回寫（地面真相，機械）**：`rel-cascade confirm` 成功 → 把 `from_decision_id` append 到被 confirm 鄰…
+  0.000  Projects/design-loop提效_計劃.md  []
+    108 [body]: - 不帶 `--clusters` = 無-cluster 舊帳(panel 既有三條合取 gate 不變;「legacy」一詞保留給非 panel 循序模式,兩者勿混)。**混用…
+    109 [body]: - 解析驗證(r1 B 折入;r2 C 空態統一):**執行時機=寫側 `canary record`**(格式錯當場擋,不流進 append-only 帳——與讀側的混用/W 歸…
+    135 [body]: - **混用守衛時機+升級裁定(major,A+B 合併)**:判定在讀側(record 純 append 不讀回,護範圍刀);首輪定錨模式;隱患節裁定折回本體消兩節矛盾。
+  0.000  Projects/design-loop重設計.md  []
+    166 [body]: - **本案自己怎麼審**（bootstrapping）：舊閘已被本案證明失效，用它審本案＝用壞尺量新尺。
+  0.000  Projects/doctor-run事件_計劃.md  []
+    33 [body]: - `run_doctor(... ci=True)` 在既有 `_append_governance_log(env.vault, gov_events)` 之前,**無條件**…
+    67 [body]: 併發——append 同既有路徑。效能——每次 --ci 多一行。資源——既有 with-open。風險類:self-governance——不擋任何東西,無誤擋;★反向:多一種事…
+  0.000  Projects/enforcement儀表板_計劃.md  []
+    66 [body]: - ★實跑自驗:本 repo 跑 `lumos enforcement` = 8/9 active、1 unknown(遠端檢查)、anchor 那層當下 degraded 因 t…
+  0.000  Projects/graph-engineering掃描2026-08-19_調研.md  []
+    91 [body]: | 給事故→機制那組邊一個新具名欄位 | **新機制,過不了准入**:無事故支撐;且成本不是寫欄位那一次,是散落列舉稅(append 白名單、lint 值域、doctor E 家族…
+  0.000  Projects/guard殺傷力驗證_計劃.md  []
+    50 [body]: - **同步改動明列（r2 修訂——r1 版歸因有誤）**：① `INV_TAG_RE` 擴為 `(test|audit|kill)`（否則 `[kill:recipes]` 漏進…
+    53 [body]: 4. **判定與合併（r1 折入：timeout 歸 killed，對齊 PIT/cargo-mutants——變異致掛而測試靠超時抓到=接住）**。per-recipe verd…
+  0.000  Projects/idioms自維護迴路_計劃.md  []
+    107 [body]: - `[S4]` **消費 lint-upgrades 穩定事件**：**不掃每日覆寫的 `pending-YYYY-MM-DD.json`**（round-2：`"w"` 覆寫漏…
+    131 [body]: - `[S16]` **機械命令 + 狀態一致**（修 round-2）：`lumos idioms approve <id>` / `reject <id>` / `revive…
+    149 [body]: **錯誤處理**：refuter 誤駁→rejected 留池、`lumos idioms list --rejected`+`revive <id>`（附新 evidence 才…
+    178 [body]: | 人閘一致 | M | approve 僅文件改+驗證後 adopted；gap 回填 R 號 | 行為 |
+    204 [body]: - 🟠 **跨儲存原子性**：候選池 `os.replace` 涵蓋不了「文件改+驗證+adopted」跨資源交易；approve 需 proposal/文件 hash + 可重入…
+  0.000  Projects/loop三輪壓縮_實作計畫.md  []
+    107 [body]: - [x] anchor approve(test_lumos.py 動了)。
+    113 [body]: Verification plan_refs 回指;merge main + anchor approve + push。**本分支自身終審**:可用**新的平行 panel** …
+  0.000  Projects/loop三輪壓縮_計劃.md  []
+    119 [body]: - **severity 降**:R1(3×blocker)→ R2(1 blocker F1 + ~6 major),且性質從「approach 錯」轉為「規格不夠細」——架構已…
+  0.000  Projects/loop數據收集_計劃.md  []
+    36 [fm]: - content: 飛輪量測雙帳落地(Enzo 2026-08-31 裁做):①攔截帳=★圖譜攔截★零工具記號慣例+種子三筆回填 ②逃逸帳=loop escape 原語(M1②,…
+    67 [body]: - **M1（堵流失+建標尺）**：①自主 loop 事件流歸檔——收斂/達 cap 時把 /tmp 工作區 canary-log 整檔搬回 repo（零判斷純搬運,同 golde…
+    106 [body]: append-only 落 `docs/.escape-log.jsonl`(★code-r1 折入:寫入走 canary 家族的落盤自驗原語非裸 append;帳檔進簿記白名單防…
+    148 [body]: ★規劃期假設修正(code-r1 合約席 G-1)★:d0 時代寫「M1 皆 append 級貼近 trivial、單 reviewer 即可」——實際 M1② 的 diff 被 …
+    154 [body]: - **正式環境不可逆(prod-irreversible)**:全計劃為讀側統計與 append 帳,無對外送出、無不可逆操作。已排除。
+    167 [body]: M1 三件皆機械搬運/append 級,貼近 trivial——實作時單 reviewer 即可,註明;M2 stats 讀取器動分析語意,建議過一輪輕 design-loop。落…
+  0.000  Projects/loop機械脊椎M1包_計劃.md  []
+    19 [KEY]: KEY:#1 loop next——`lumos loop next <id> [--json] [--tier standard|high|light]` 唯讀讀 canary-…
+    63 [body]: - **席數下限（r4 新 major；r5 legacy 值；r6 Codex 終判雙補——①數記錄筆數可被同席重複 append 灌滿 ②tier 不持久化，下次省略 --ti…
+    116 [body]: - **next/gate 契約（r6 終判補列）**：**gate-pending 先於 cap**（到 cap 且缺 --spec → gate-pending 非 cap-r…
+    136 [body]: - **C2 末筆→末輪 hash（major）**：append 補一筆可繞過整輪重審——升級為判定輪內全帶-hash 記錄彼此一致∧=當前檔，輪內漂移即 FAIL。
+    174 [body]: - **新B 殘（雙 major）**：min-seats 數記錄筆數可被同席重複 append 灌滿 → 改數**相異 auditor 欄值**（既有欄零新欄）；tier 不持久…
+  0.000  Projects/lumos-show讀取入口_計劃.md  []
+    48 [body]: - 唯讀（r2 Codex 否決折入，措辭修正）：**不改任何圖譜節點檔**；寫一筆 best-effort usage-log 事件帳（`_usage_log(env, rel,…
+    83 [body]: - **usage_log 副作用**：show 寫用量記帳（append `docs/.usage-log.jsonl`，git tracked——正常執行會弄髒 worktre…
+  0.000  Projects/oracle品質包_計劃.md  []
+    25 [body]: `PRIOR-ART:` ①寫後讀回自驗＝lumos T1 寫入既有家規（tmp→rename→自驗），S1 是把漏網的 append 路徑補進同一紀律，非新機制；②kill 歸因…
+    40 [body]: - **append 後讀回驗證**（**欄位名更正，r1 四方同報：現行 schema 識別欄是 `token`，無 `id` 欄——照原文實作自驗會 100% 誤報**）：**…
+    52 [body]: - **gov 可見性 touchpoint（r3 席1）**：現行 gov 第 4 源 mapper 不讀 `verdict`/`ref`——overturn 分歧訊號寫進 lo…
+    77 [body]: 2. 寫入失敗（log 被目錄佔用）→ rc2 走既有 OSError 訊息（此手法誘發不到 readback 分支——r1 指正）；2b. **readback 失敗誘發＝log…
+    93 [body]: canary 帳：席1 caught（c 型幽靈回填欄——append-only 檔改寫既有行＝照字面不可能,性質點滿）、席2 caught（d 型溢出檔——多 recipe 互覆…
+    95 [body]: - **r3 panel（終輪，2026-07-29；席1/席2 caught、席3 missed 剔除；cap=3 到頂）**：[major] ①icon 表連字號/底線自打（r…
+    108 [body]: - readback 在 NFS/延遲寫檔系統上理論上可 false-fail → append 後同 fd flush 再讀，本機 POSIX 語意下穩定；異常檔案系統列明文限制…
+  0.000  Projects/panel收斂判準改革_計劃.md  []
+    22 [KEY]: KEY:★候選設計(r1 大改)★——(a) K=2 連續有效乾淨輪:★非只動參數★(r1 s4:現行 _loop_status_panel 只讀最後一輪,K=2=跨輪比對的結構性…
+    47 [body]: - **併發**：只動收斂判準（讀側純函數）；(e') 抽查記錄走既有 `canary record` 原語＋新增三事件行（append＋讀回自驗），無新併發面。
+  0.000  Projects/pitfalls-lint-integration_計劃.md  []
+    45 [body]: > **狀態(2026-07-04)**:**已實作(subagent-driven 5 task)**。spec design-approved(KDS tracer 坐實六大承…
+    50 [body]: > **狀態(2026-07-04)**:spec `docs/design/2026-07-04-lint-version-watch.md`。design-loop 6 輪 c…
+  0.000  Projects/pitfalls棧別效能追問_計劃.md  []
+    15 [KEY]: KEY:範圍刀——①動 scripts/lumos(pitfalls 問題表按棧分組+manifest 附問)=真代碼,TDD+standard 終審;②impact hook 注…
+    34 [body]: 2. **[T2] ✅(2026-07-19)impact hook 注入段**(實作走單源路線:lumos impact --ranked --json 輸出帶 stack_qu…
+    40 [body]: - [major,實測重現] 三時機②③在最常見情境形同虛設——.kt 命中棧表但無 regex 命中→tier=standard→pre-push 不印、code-loop 不觸…
+    54 [body]: T1 動 scripts/lumos=TDD+終審按 pitfalls --diff 分流;T2 動 anchor 檔走 approve;T3 純文字。整體貼 standard,可…
+  0.000  Projects/pitfalls網搜補漏_計劃.md  []
+    18 [KEY]: KEY:形態=on-demand lumos-* skill(源 lumos-toolchain repo symlink,像 lumos-design-loop);Claude …
+  0.000  Projects/prepush主幹範圍修法_計劃.md  []
+    116 [body]: - **anchor baseline 落地卡關（major，s4）**：改 hook 先卡自身 anchor verify → 落地序含 anchor approve，列同步義務…
+  0.000  Projects/probe輪退場_計劃.md  []
+    58 [body]: 2. [S2] scripts/lumos 三件:①4019/4122 兩處印行整句改寫(c2 措辭;「要——加開一輪…」句刪除);②**panel 閘新迴圈 cutoff 拒判*…
+    75 [body]: - **印行改寫觸及 t_panel_k2_and_probe**:該測試只斷言「抽查」子字串與冪等(r1 s2 席實測)——新句保留「抽樣」字樣但「抽查」二字被改掉會紅!落地時先…
+  0.000  Projects/roster對帳併入問閘_計劃.md  []
+    24 [body]: - **[S1c] 異常留痕(r2 d-f7;r3 e-f3 顆粒度)**:先收集全部異常種類、印完全部異常行,**最後一次性** append 單行到 `governance/r…
+  0.000  Projects/test-layers軟提醒_計劃.md  []
+    66 [body]: - [x] 實作後 anchor approve（pre-push 檔有動）
+  0.000  Projects/一句話層供糧_計劃.md  []
+    54 [body]: - **誤導實例帳(P-6 折入,接電)**:發現「一句話比沒有更誤導」的實例,當場在本筆記〈誤導實例帳〉節 append 一行 `★L0誤導★YYYY-MM-DD <節點名> <…
+  0.000  Projects/世界repo掃描2026-09-02_調研.md  []
+    56 [body]: - **A1-② 因變數要含「第幾步才敲」,不只「有沒有敲」**。出處:arXiv 2605.10039(2026-05,1,650 場 Claude Code):檔案大小/位置/…
+    71 [body]: - **B2 單跑預算上限**。出處:SWE-agent(20.2k★)`per_instance_cost_limit` 預設 $3.0、觸頂 `handle_error_wit…
+    81 [body]: - **D1 並行改動**。Enzo 09-01 已裁「誤報量測不辦,三型再犯時回看」——本條只留世界座標:MCP Agent Mail(2.1k★)glob 路徑 advisor…
+    90 [body]: - **不收斂就跳過**:bmad-loop plateau-defer「story skipped, spec stashed, run continues」+ 人決策存 dec…
+  0.000  Projects/主session鏡頭利用率_計劃.md  []
+    15 [KEY]: KEY:前置修正(鄰居 impact-hook 兩個既有缺陷,否則樣本偏)=hook_decide 認 python/bash shebang 無副檔名檔(scripts/lumo…
+    107 [body]: - 測試:`test_lumos.py`(錨點檔,approve)——`hook_decide` shebang 兩型、TTL 標記時機;腳本本身照席間覆蓋率那支慣例不進測試(唯讀…
+    125 [body]: - **回滾**:唯讀腳本刪掉即可;★impact-hook 本體保留(它是現役鏡頭,不屬本案)★,只 revert 前置修正那兩段+對應測試;錨點:test_lumos.py 動…
+  0.000  Projects/主動影響幅度偵測_實作計畫.md  []
+    337 [body]: 實作完成寫 `Verification/2026-..._主動影響幅度偵測.md`,`plan_refs: "[[主動影響幅度偵測_計劃]]"` 回指設計節點(意圖鏈,doctor…
+  0.000  Projects/公開精簡版_實作計畫.md  []
+    24 [KEY]: KEY:★2026-07-31 補追加 Task 8——推翻 [S3] 原裁定,由使用者直接指派★:原裁定明文禁「注入/更新任何 CLAUDE.md」,使用者部分推翻——**開放的…
+  0.000  Projects/固定席扇出降權_計劃.md  []
+    269 [body]: | **存量**(83 篇) | ★r1 改寫(archf5 major)★:**走 `refresh_labels.py` 同款雙評審**。★r2(s2f6):既有 Codex …
+    273 [body]: 否則 append/set 都會 rc2。
+    293 [body]: 批次預標寫入時 `about_code_stamp` **第一段(誰標)**固定寫 `batch-<日期>`(★std-r2 後三段式:`batch-2026-08-23/2026…
+    427 [body]: | 1 | `about_code` 進 `LIST_KEYS`、`about_code_stamp` 進 `SCALAR_KEYS` | `scripts/lumos:7243-…
+    434 [body]: | 8 | 雙評審:**寫轉換函式** `{node:[files]}` → `{node:{file:1}}` 再餵 `cmd_merge`;`cmd_apply` 不能重用(寫…
+    590 [body]: 純量 stamp 沒有刪除原語(cmd_set 只能覆寫);`about_code: []` 會被 fm_structure 判成 scalar → append 必敗
+  0.000  Projects/多平台合約測試綁定_計劃.md  []
+    26 [body]: KDS 圖譜（`Citrus_KDS/docs/kds-knowledge/`）記錄的是**橫跨前後端的單一系統**（例：invariant「震動器號碼來自**後端** Order…
+  0.000  Projects/工具鏈補強十件_計劃.md  []
+    31 [body]: | 1 | 情境探針進自主迴圈 | ✅ `autonomous-loop.sh` 加 `run_probe`:每週(ISO 週數當種子)抽 8 題決定性輪轉,結果 append `…
+  0.000  Projects/已知坑策展庫_計劃.md  []
+    41 [body]: - **白名單擴充(r1 blocker:原叫「走 append/set」但三新欄不在白名單→rc2 建不出種子)**:`LIST_KEYS` 加 `pitfall_when`、`…
+    50 [body]: - ★pitfall_when 存成 block-list(逐項一行,append 自動這樣寫)——嚴禁 flow-list `[...]`(零依賴 parser 當純量字串,st…
+    58 [body]: - **pre-flight(2026-08-09)**:①vault 尋找 `_vault_in(repo_root)`/find_vault 並列未裁→明定 _vault_in…
+    62 [body]: - [blocker] 種子「走 append/set」但 pitfall_when/pitfall_ask/pitfall_source 不在 LIST_KEYS/SCALAR_…
+    66 [body]: - [minor] flow-list 範例與「block-list」標籤自相矛盾→改走 lumos new/append 自動 block-list。
+  0.000  Projects/收斂機制優化調研2026-08-14.md  []
+    39 [body]: - 相關性瓶頸:arXiv 2605.29800(Nine Judges, Two Effective Votes,Apple)——9 席 7 家族 panel ≈ 2 票有效資訊…
+  0.000  Projects/業務簽核留痕_計劃.md  []
+    18 [body]: PRIOR-ART: ① 最小解=一個留痕指令+一支 gov load，仿 code-loop pass ledger。② 世界解過：sign-off/approval ledge…
+    22 [body]: - **指令** `lumos signoff <節點> --note "<確認了什麼>" [--by <人>]`：append docs/.signoff-log.jsonl——…
+  0.000  Projects/檢核收緊五件_計劃.md  []
+    65 [body]: **run 定義**(r2 s3-F2):一個 commit 內**至少含一筆 `gate` 以 `check-` 開頭的事件**才算一次 doctor run;anchor-ap…
+    69 [body]: **逃生門**:LIST 鍵 `ratchet_acks`(`lumos append`),元素 `"<gate>@<YYYY-MM-DD>"`(本地日期);30 天內不升;app…
+    75 [body]: - **`code-loop pass --loop <id>`**:①算 range=`_codeloop_range()`(新共用函式:有 upstream → `@{u}..…
+    80 [body]: - **standard 檔**:`loop next` **只印**「外家連續 N 輪缺席」(依 canary-log append 序跨 loop 算),★不寫帳——`loop…
+    102 [body]: S2:11 run=含 check-* 事件的 commit(anchor-approve 單獨 commit 不算);12 20 連續升/19 不升/中斷不升/最新 run 缺不…
+    107 [body]: **通用三問**:併發——純讀為主;留痕/ack/append 走既有 atomic 路徑。效能——S2 多掃治理帳一遍(線性);S3 pass 多跑一次 pitfalls。資源—…
+    146 [body]: - **r2 panel(2026-08-21,五席同門+外家 gemini-3-flash)**:blocker 9 / major 15 / minor 4(外家 6 條中 2…
+  0.000  Projects/檢索優化_計劃.md  []
+    120 [body]: 2. 連續漢字以 overlapping bigram 切分：`檢索優化 → 檢索、索優、優化`。
+    278 [body]: - repo 內帳會製造 dirty worktree；user-local 帳又有跨機不同步、權限、併發 append、清理與隱私問題。
+    281 [body]: 若 v1 評測仍顯示「常用節點排太後」，再做 opt-in v1.1 shadow experiment：帳放 user-local state、以 vault path hash…
+    310 [body]: - **評測器（同上補正）**：獨立腳本 `governance/eval/retrieval_eval.py`（非 lumos 子命令——評測屬治理面），跑法 `python3 …
+    342 [body]: - **階段四（2026-07-10）✅ 框架 + 實證**：`governance/eval/retrieval_eval.py`（nDCG@k/MRR/P@k/Recall，讀…
+  0.000  Projects/派工鏡頭注入_計劃.md  []
+    60 [fm:context]: context: Enzo:昨天只想到 happy path,沒有節點可參考時也要分析既有相依功能;主 session 歷史 18% 注入固定席空
+    86 [body]: - d9(2026-09-01)逐字:「code 迴圈固定席以落成核對 capped 節錄為準……design 迴圈維持原樣(pinned 集小)」。截斷規則只給代碼迴圈;本案套用…
+    158 [body]: - **回滾**:無持久狀態(快取在 TMPDIR,可整目錄刪)。拆=從三個登記點移除+`ANCHOR_FILES` 移除並 approve+模板那一行改回手貼;沿既有 hook …
+    173 [body]: - **同步**:`templates.md` §3 鏡頭 3 與 `lumos-code-loop/SKILL.md` 步驟 2 的欄位清單加「綁定測試狀態」;[[Systems…
+    189 [body]: - **為什麼**:昨天只做了 happy path——固定席 0 篇→hook 什麼都不附,審查員連「這裡沒節點」都不知道(主 session 歷史 18% 注入固定席空)。「沒…
+    206 [body]: - **同步清單**:`templates.md` §3 鏡頭 3 三件事①「0 篇→靜默放行」改「→附既有相依備援段」;`lumos-code-loop/SKILL.md` 步驟…
+    216 [body]: - 同步:templates §3 三件事①、code-loop SKILL 步驟 2、commands/06;錨點 approve。
+    224 [body]: - 同步:templates §3 鏡頭 3、code-loop SKILL 步驟 2、[[Systems/bound-tests-gate]] 鏡頭側呈現一節;錨點 approv…
+  0.000  Projects/流程優化六件_計劃.md  []
+    16 [KEY]: KEY:★追加第七件(2026-08-05 Enzo 裁「這個標籤可以硬性寫入嗎,讓LLM去做」)★——aliases 宣告制(lint 硬擋新 system/issue 缺鍵;[…
+  0.000  Projects/第二輪審視六修_計劃.md  []
+    50 [body]: - **對的**:gov 呈現層對 delguard ok 的折疊條件寫錯(原條件要 detail 為空,而 delguard 帳一定帶 note)→ 改成 gate=delgua…
+    57 [body]: - **稽核員對、我上一輪判錯的兩件**:①今天 09:30 的 wrapper 真的死了——不是暫停沒兌現,是我在自主迴圈那段還在跑(09:37–12:42)時改了 daily-…
+    59 [body]: - **收斂判定(Claude 裁)**:四輪下來,第三、四輪各只剩一件真 bug(gov 折疊條件、wrapper 邊跑邊改)加文字同步,其餘都是已寫進 README「成本與界線…
+    61 [body]: ## 第四輪修法的代碼審(code-daily-wrapper-main r1,2026-09-05)折入
+    70 [body]: - A1(minor,架構對齊):包 main() 是 repo 首例,理由成立 → 記成慣例進 [[Systems/autonomous-iteration-loop]] KEY…
+  0.000  Projects/節點還原SOP_計劃.md  []
+    136 [body]: **落筆前先查這篇是不是已存在**:`lumos search <模組名>`——已存在且健全→**不動它、照慣例用,還原到此結束**(對齊使用場景三分岔;v2-r1 抓到原二分沒給…
+  0.000  Projects/節點靜態先驗_調研.md  []
+    72 [body]: - Najork *HITS/SALSA vs in-degree*（snap.stanford.edu）;*Approximating PageRank from In-Degr…
+  0.000  Projects/結清式收斂_計劃.md  []
+    17 [KEY]: KEY:design-loop r1-r5 已跑(五輪 3 席 panel、15/15 canary 全 caught;r1 blocker1+major3+minor10/r2 …
+    33 [body]: - **模式邊界（r1 折入）**：現行三種收斂判準並存（legacy K-streak／`--panel` 結構信號／`--light` 單席謂詞，互斥）。v1 的 `--set…
+    36 [body]: - **canary 醒著條件保留（r1 折入，r2 補記帳鏈）**：settle 輪照 skill 紀律植 canary；條目欄位含 `verified_in_round`（哪一…
+    84 [body]: - r4 人裁（2026-07-28，使用者裁「照建議」）：G3 重錨=選項②＋輪鍵 append 序＋min-seats rc2＋loop next v1 不支援——未決標記清零…
+    85 [body]: - r4 delta panel（2026-07-28，3 席全 caught：型別 a 幽靈編號／b 未定義旗標／c 未定義欄位）：**blocker×1**＝「loop nex…
+    144 [body]: - **append 序錯位風險（r5 折入）**：輪鍵＝append 序的前提是帳完整可解析且無補記——settle gate 對壞行 fail-closed（rc2）擋解析缺口…
+  0.000  Projects/自主迴圈修理_計劃.md  []
+    31 [body]: ①選題 pop 之後,以 shell `trap EXIT` 保證:凡 gap 已選中且未被顯式處置(requeue_unconverged / mark_covered / 收斂…
+    37 [body]: ②`decay_and_prune` 改簽名**回傳被淘汰的列**;呼叫端先把淘汰列 append 到 governance/backlog-archive.jsonl(首次淘汰才…
+    64 [body]: - **正式環境不可逆**:淘汰改「先歸檔後刪+寫後讀回自驗」,可逆;archive/decay-state 均 append/替換式新檔。已排除。
+  0.000  Projects/自足性審計閉環_計劃.md  []
+    81 [body]: (讀有 exists 守衛、寫是 append 自建檔;v5-r2 s1 逐讀取點驗過,隔離不弄炸工具)。
+    92 [body]: `run_week(...)` 四個可獨立呼叫的縫,runner 可注入。★責任邊界(v5-r3 s3f2):apply_write_fence 是純函式,
+    93 [body]: 只回 ok|stale、零副作用;週帳 append 全部由 run_week 依回傳值負責——測試⑤⑦斷言回傳值與 run_week 的帳,不斷言縫內部★。
+    121 [body]: kind∈★started★/done/fail/abort/stale/★orphan★/nag——★派工前先 append kind=started(耐久預約,v5-r1 Co…
+    129 [body]: ★選序固定(v5-r2 s3f4):先過 pending 濾網→取 flock→讀配額→append started→放鎖→才派工——pending 該擋的不浪費預約★;
+    130 [body]: ★flock 只鎖「讀配額→append started」與終局 append 兩小段,不抱著跑派工(v5-r2 三席 s1f3/s3f2/Codex#3:
+    164 [body]: `PRIOR-ART: borrow-design`——派工/LINE 抄 run_nags/run_probe;★沙盒=`scenario_probe.make_sandbox`…
+    208 [body]: **B 唯讀工具面自相矛盾**(Codex f1 寫不了報告+s2f7 砍掉實測手段)→ 報告由 wrapper 落盤;審計/複審進探針式沙盒,Bash 解禁而主樹零風險;
+    … 還有 1 處
+  0.000  Projects/連鎖佇列軟提醒_計劃.md  []
+    54 [body]: - **併發/效能**:doctor 每跑掃一次目錄,現況 3 檔、每檔數行,量級無虞;帳本 append-only、讀壞行為 `_ledger_read` 既有語意,無鎖問題。
+  0.000  Projects/閘觸發帳統計_計劃.md  []
+    98 [body]: - **不同 commit 數**:來源 mapper 硬寫 `commit: ""` 者(canary,`scripts/lumos:2931`)→ 此欄印 `n/a(該來源不記…
+    100 [body]: - 原草案用「mapper 硬寫 `nodes: []`」當判準是錯的(r3 s3 席):`code-loop` 的空 nodes 是**寫入端**寫的(`scripts/lumo…
+    108 [body]: ★前置要件:必須有 gate 全集★——「逐 gate 掃出現過的值」永遠看不到零筆的 gate,而 repo 內**目前沒有任何 gate 註冊表**(實查:無 `_GATES`…
+    161 [body]: - **併發**——純唯讀(開檔逐行讀 JSONL),無寫入無鎖。與正在 append 的 `doctor --ci` 同時跑,最壞是讀到半行→該行 parse 失敗→照既有規格跳…
+    234 [body]: - **r1 panel(2026-08-19,三席:通才/正確性/邊界整合;★單一家族——外家席派不出來:Gemini pro 免費額度為 0、flash 逾時、Codex 帳號…
+    237 [body]: - **r3 panel(2026-08-20,三席:通才/縮範圍殘留/可實作性;★仍為單一家族,三輪皆無外家席★)**:blocker 0 / major 7 / minor 8…
+  0.000  Projects/關係層主網_實作計畫.md  []
+    9 [KEY]: KEY:里程碑鏈 M1 P2決策ID+E3精確 → M2 P0 typed-edge索引 → M3 cascade ledger(append-only JSONL,生成式 cas…
+    12 [KEY]: KEY:輸出協議已釘(supersede stdout 首行逐字保留/surface 走 stderr 行式固定 schema=CASCADE/NEIGHBOR 行,即編排者交接通…
+    51 [body]: | **M3** | cascade ledger + rel-cascade CLI | append-only JSONL 帳本 + `confirm`/`prune` 寫回 …
+    104 [body]: - **append-only JSONL**：`governance/rel-cascade/<cascade-id>.jsonl`，**每行帶判別欄 `event`**（R7）…
+    105 [body]: - **`lumos rel-cascade confirm|prune <鄰居> --cascade-id <id> --from <決策id> --edge <邊型> --by…
+    112 [body]: - **並行（🟠，D10 折入：降宣稱+釘實作形）**：append-only 免 in-place lost-update；寫入走**專用 helper——O_APPEND fd…
+    114 [body]: - **escalate（升人）＝無 terminal 事件**：append-only 原生 pending 表示法，不加第三態；靠 `list --stale`/`resume…
+    118 [body]: **測試**（行為）：confirm/prune 依粒度鍵寫對、寫前驗證（檔不存在 rc=2／`--from` 不符 header rc=2／裸 `d<N>` rc=2／>4KB …
+    … 還有 3 處
+  0.000  Projects/關係層傳播守衛_計劃.md  []
+    145 [body]: - **ledger 並行一致性（r3 Codex）**：atomic rename 只防破檔、不防多 session lost-update → 需鎖/CAS/append-on…
+    171 [body]: 5. ✅ **主網整包落地（2026-07-15，M1-M4，見 [[關係層主網_實作計畫]]）**：[P0] typed-edge 索引＋[S5b] cascade ledger…
+    185 [body]: - 🟠 **ledger 並行**：atomic rename 只防破檔、不防多 session lost-update → 需鎖/CAS/append-only 事件帳。
+  0.000  Projects/驗證層自證三件_計劃.md  []
+    59 [body]: - **併發**:S1/S2 皆為離線批次讀取(收貨時/每週 runner 單進程),不進熱路徑、無共享資源競爭;review-reports 為 write-once 多檔目錄(…
+    79 [body]: - [minor×5] 越界帳無名+追尾風險(→定名+實務隱患裁定)、SNR 除零/邊界(→併前瞻層)、eval-awareness 射程(→射程聲明)、「min样本數待定」未標記…
+  0.000  Systems/anchor-integrity.md  []
+    18 [FLOW]: FLOW:anchor approve --note→6錨點(runner×2+git hooks×3+claude hook×1:dispatch-lens-hook.py,20…
+    23 [KEY]: KEY:誠實天花板——同 repo 守衛悖論:決意繞過者可連守衛一起改;買到的是無痕篡改被封死(必留 baseline diff/缺 approve 事件/bypass 軌跡其一)…
+    24 [DEP]: DEP:[[lumos-refcheck]](vault-free 同型)｜_append_governance_log(寫者宣稱已改:doctor --ci + anchor a…
+    25 [TEST]: TEST:t_anchor 14 checks(無 baseline 警示/approve 建檔+留痕/gov 顯示 note/改檔+缺檔 rc1/--json/重簽容缺/repo…
+    28 [fm]: - content: 方案 A baseline hash+顯式 approve;否決 RHB 環境硬化(方案 B)與純 diff 標記送審(方案 C)
+    36 [fm:context]: context: lumos 是自主 loop 天天迭代對象,收進 baseline=每天 approve→盲簽疲勞,守衛立刻形同虛設
+    49 [body]: `lumos anchor verify/approve`——**錨點完整性守衛**(vault-free):測試 runner 與把關 hooks 的 sha256 baseli…
+    55 [body]: - `scripts/hooks/pre-push`:環境檢查後、vault 閘門前(repo 層,無 vault 也跑);rc1 擋 push,訊息三選一(還原/approve/…
+  0.000  Systems/canary-audit.md  []
+    46 [KEY]: KEY:gov dedup key 第 5 子用 r.get("token","")(不可 r["token"]——舊三源無此鍵會 KeyError 弄爆 gov);只 canar…
+    63 [fm]: - content: gov dedup 第 5 鑑別子用 r.get("token","") 而非 r["token"];既有三源 mapper 不加 token 鍵,只 can…
+    65 [fm:context]: context: design-loop r3 唯一 must-fix(R3-Issue1):既有三條 mapper 的舊事件 row 沒有 token 鍵,r["token"] …
+    134 [body]: - `lumos canary record caught|missed [--auditor M] [--token T] [--note ...]` → append 一筆到 …
+    137 [body]: - `lumos gov` 把 `.canary-log.jsonl` 當**第 4 源**讀,明確 mapper(`gate:"canary"`),dedup key 加第 5 …
+    147 [body]: - 實作落點:`scripts/lumos` `cmd_canary` + `cmd_gov` 第 4 源 mapper;`skills/lumos-project-notes/S…
+  0.000  Systems/check-t-sentinel.md  []
+    18 [KEY]: KEY:★COMBO★ 是 invariant 鐵則的子修飾(第 5 個 Tag),標在最重鐵則上,觸發軟 Check K 提醒「別只綁 1 個 happy-path [test:…
+    29 [fm:context]: context: design-loop r6 canary 排掉後揪出的真 major(F1):原判據 len(refs)(展開測試名數)可被 [test:a,b] 單逗號 ta…
+    57 [★INVARIANT★]: - **Check T 現狀**:doctor 靜態驗每條 `★INVARIANT★` 綁了真實存在 + 經審計的 `[test:名]`,但只驗「綁了測試」。測試是 proxy——…
+    58 [★INVARIANT★]: - **Check K 補的縫**:在最重的 `★INVARIANT★` 上加 `★COMBO★` 標記,doctor 軟提醒「這條最重鐵則只綁 1 個 happy-path `[…
+    72 [body]: 1. **驗不了「組合性 / 夠不夠」**:綁 2 個標記都是 happy-path 也算「滿足」;lumos 只數標記個數,真正的組合覆蓋靠寫測試的人 + CI 跑。弱保證、摩擦…
+  0.000  Systems/codex-harness.md  []
+    18 [FLOW]: FLOW:lumos install →(Claude)~/.claude/hooks+settings.json+CLAUDE.md 區塊 /(Codex)~/.codex/ho…
+    19 [KEY]: KEY:同一批 hook 腳本兩家共用,差異全在 --harness codex 旗標與註冊表:SessionStart 入口提醒(additionalContext)、PreTo…
+  0.000  Systems/compose-metrics-adapter.md  []
+    41 [body]: - 只報「退步了」不報「怎麼修」(unstable→stable 是人的事:`@Immutable`/`@Stable`/wrapper)。
+  0.000  Systems/convergence-evidence-gate.md  []
+    24 [KEY]: KEY:✅[2026-08-05 A案落地]panel K=1→★K=2★(cutoff 2026-08-06 起新 loop;首筆 ts 定錨不回溯,env LUMOS_PANE…
+  0.000  Systems/core-invariant-baseline.md  []
+    13 [FLOW]: FLOW:lumos baseline approve <node>(算 hash→寫人工 approve 基線+留痕進 gov)｜lumos baseline status(唯讀…
+    14 [KEY]: KEY:守「核心節點合約語意欄位」(summary｜decisions[].content｜valid_under)被靜默改/增/刪——一筆改錯沿 core_refs 擴散成全下游…
+    28 [fm]: - content: approve 不重用 _append_governance_log,自寫 append 到 consumer vault 的 .governance-log…
+    30 [fm:context]: context: R3 opus 揪出的 blocker——_append_governance_log 寫 vault.parent,對 core repo = backend/…
+    37 [fm:why_chosen]: why_chosen: 集合/唯一-key 比對對 mid-list 刪除穩定(刪一條 = 一個 key/hash 消失,不級聯);approve 強制 decided 唯一、碰撞…
+    48 [body]: 給**跨專案核心知識**(`core_refs` 指到、住在 core-knowledge repo 的節點)的**合約語意欄位**算 hash、存進**人工 approve 的 …
+    50 [body]: **缺口**:改一條核心節點的 `summary` 或某條 `decisions[].content` 不破連結、不讓 doctor 變紅(Check C/T/R 都不看語意文字有…
+    59 [body]: 1. **baseline 檔** `core_base/.lumos/core-content-baseline.json`(住被守的 core-knowledge repo、多…
+    … 還有 3 處
+  0.000  Systems/cross-family-audit.md  []
+    40 [fm:context]: context: design-loop R5 F2：disputed 不伴 converged:false 就走不進 wrapper 未收斂分支(L80-85)；硬編碼「撞 ca…
+    57 [body]: - **插在 orchestrator 內部**(orchestrator-prompt §2.5),不在 wrapper 層:autonomous-loop.sh 收到結果時 d…
+  0.000  Systems/design-loop.md  []
+    115 [fm]: - content: d8 量詞修正(Enzo 2026-09-01 委任裁):code 迴圈固定席以落成核對 capped 節錄為準——上限內貼內容必答、超出列名不必答;證據=爆…
+    146 [body]: 讀 `.canary-log.jsonl` 的 **append 序**(不 ts-sort:ts 只到秒、同秒並列),篩 `loop==id`。tail-K 滑動窗:`conve…
+  0.000  Systems/heterogeneous-finder-ensemble.md  []
+    23 [KEY]: KEY:code review ≠ spec review——程式碼可執行+可靜態分析,最佳解是**異質 ensemble** 非純 LLM panel(文獻:AutoSafeCo…
+  0.000  Systems/loop-convergence-recording.md  []
+    32 [FLOW]: FLOW:每輪對抗審計 → canary record caught|missed|none --loop <id>(★none=2026-08-14 停用制純處置帳載體(2026…
+    34 [KEY]: KEY:CONVERGED ⟺ tail-K 滑動窗(append 序最後 K 筆)全為 caught+clean/minor;前面髒輪不影響、只看最後 K 筆[test:t_lo…
+    38 [KEY]: KEY:★判定回放(2026-08-26 改制回測案)★:`loop replay --freeze/--golden`——收斂即凍完整輸入閉包(全列帳原文+逐行 sha 集+sp…
+    39 [DEP]: DEP:scripts/lumos cmd_canary(+loop/+severity)｜cmd_loop_status｜cmd_gov canary mapper(detail…
+    43 [fm]: - content: 收斂用 tail-K 滑動窗(append 序最後 K 筆全 caught+clean/minor),非「每輪都得乾淨」;排序用檔案 append 序而非 t…
+    46 [fm:why_chosen]: why_chosen: tail-K 讓前面髒輪(早期被審計揪出的 blocker)不永久汙染收斂,符合「修了就該往前」;append 序唯一且即時間序,免 ts 秒級碰撞
+    87 [body]: 讀 `.canary-log.jsonl` 的 **append 序**(不 ts-sort)、篩 `rec.get("loop")==loop_id` 嚴格等值、tail-K 算…
+    99 [body]: `cmd_gov` 的第 4 源(canary mapper)`detail` 必附 loop/severity 且**放最前**(避 `[:50]` 截斷):
+    … 還有 1 處
+  0.000  Systems/lumos-cli-lifecycle.md  []
+    34 [KEY]: KEY:★2026-09-04 Codex 完全支援 S0★:install/uninstall/teardown 多一家——skills 也連到 ~/.agents/skills…
+  0.000  Systems/lumos-cli-read.md  []
+    21 [KEY]: KEY:read/traverse 14 原語全建在記憶體 Env 之上(notes 字典 + 雙向 edges + by_stem 索引);**不改圖譜節點檔**——contex…
+    41 [fm]: - content: 讀寫原語嚴格分軌——14 個讀指令不改圖譜節點檔(2026-08-24 審計統一計數)(context/show 寫 best-effort usage-lo…
+    102 [★INVARIANT★]: - `doctor [--ci]`(`run_doctor`,非 cmd_ 前綴——L4 審計 2026-07-24 修正指針):全圖權威健康巡檢——基礎 4 檢查(orphans…
+    116 [body]: - **讀寫嚴格分軌**:這 14 個不改圖譜節點檔(context/show 寫 usage-log 事件帳、doctor --ci 寫 governance-log,其餘純讀)…
+  0.000  Systems/lumos-cli-write.md  []
+    17 [KEY]: KEY:[2026-08-05]aliases 宣告制——system/issue 新節點(created≥2026-08-05)lint 硬擋「缺 aliases 鍵」;逼★判過…
+    19 [KEY]: KEY:[2026-08-05]`new verification <名> --plan <計劃> --systems <A,B>` 一鍵雙向——建檔當下填 plan_refs+對…
+    20 [FLOW]: FLOW:set/append/self-audit/decision-*→load_raw_for_edit(讀raw,拒BOM/CRLF)→line-based改fm→atom…
+    21 [KEY]: KEY:[2026-08-11]新增 `remove <note> <key> <value>`=append 逆操作(T1 list 項移除)。缺口來自實戰:死背書(verifi…
+    23 [KEY]: KEY:8個寫入原語(set/append/remove/new/archive/decision-add/decision-supersede/self-audit)是「專案層」…
+    24 [KEY]: KEY:T1 寫後自驗 atomic——所有 fm mutation 經 atomic_write_verify:記憶體 re-parse 斷言該 key 寫成目標值 + 無引入新…
+    25 [KEY]: KEY:set 走 SCALAR_KEYS 白名單(10 鍵 <!--lumos:count=10 re=\"[a-z_]+\"(?=[^}\n]*\}  # pitfall_\*…
+    26 [KEY]: KEY:鐵則1(多wikilink必YAML list)由 append 結構性保證——一項一行 + link_target dedup,絕不字串塞多個[[]];鐵則3/4(含「:…
+    … 還有 6 處
+  0.000  Systems/nested-agent-permission-scope.md  []
+    15 [FLOW]: FLOW:orchestrator(層0 全工具)→[canary 植入 Edit]→spawn auditor/judge 改 Bash 子程序 `claude -p --all…
+    18 [KEY]: KEY:append-only 收窄——每巢狀一層權限只能更窄(層0 Read,Edit,Bash,Grep,Glob,Agent → 層1 Read,Grep,Glob);委派範…
+    37 [fm]: - content: 不建全身份認證體系(無簽章/capability token)、delegation-log 不設自動 CI 驗證(append-only 本機稽核)
+    40 [fm:why_chosen]: why_chosen: scope 由單一可查點 --allowedTools 在 harness 層管理即夠;獨立驗證需 wrapper 讀 log 比對工具清單,本 spec …
+    63 [body]: - **源起**:日報 2026-06-21 backlog gap「自主 loop 巢狀 spawn 子 agent,卻沒有範圍受限身分,子 agent 繼承全權(confuse…
+    67 [body]: 2. **append-only 收窄**:層0 orchestrator(Read,Edit,Bash,Grep,Glob,Agent)→ 層1 auditor/judge(Re…
+    68 [body]: 3. **delegation-log**:`__SCRATCH__/.delegation-log.jsonl`,每 spawn 前 append 一行 `{"turn":N,"…
+    75 [body]: - **delegation-log 無法自證**:記「orchestrator 宣稱做了什麼」,可被寫假;獨立驗證(wrapper 讀 log 比對)明確不做(YAGNI)。
+  0.000  Systems/pitfalls-code-loop.md  []
+    26 [KEY]: KEY:[2026-08-04]pass/skip 留痕的簿記白名單豁免([[Issues/code-loop-pass自失效追尾]])——留痕 sha 之後的 commit 只動…
+  0.000  Systems/pitfalls-lint-adapter.md  []
+    20 [KEY]: KEY:SQL/T-SQL 橋接——sqlfluff(無原生 SARIF)經 `lumos sqlfluff-sarif`(讀 --format json → SARIF v2.1…
+  0.000  Systems/retrieval-ranking.md  []
+    16 [KEY]: KEY:[2026-08-18 標註刷新落地,plan:[[Projects/標註刷新_計劃]]]語料前進解鎖——delta 補標流水線(refresh_labels.py del…
+    52 [body]: - **事件帳種子(A2 前置)**:`lumos context` 查閱即 append `docs/.usage-log.jsonl`({ts,node,cmd},best-e…
+  0.000  Systems/reversibility-governance-ledger.md  []
+    21 [FLOW]: FLOW:① 可逆性 — Systems KEY 行標 ★IRREVERSIBLE★/★CHECKPOINT★ + [rollback:decisions]/[guard:deci…
+    49 [fm]: - content: ③ 治理帳改唯讀彙整器,doctor 是唯一新寫者且只在 --ci append,dedup 在讀時做
+    52 [fm:why_chosen]: why_chosen: 既有 bypass-log/rot-queue 維持原樣;doctor 純 append(不必每 push 讀全檔)、gov 顯示時才 dedup(key=…
+    72 [body]: - **功能 ②（`lumos gov`）**：唯讀彙整器，把分散的治理事件 log 合成一條時間軸，或查某節點歷來被哪幾道閘攔過。gov 寫路徑（doctor `--ci` ap…
+  0.000  Systems/risk-tiered-review.md  []
+    15 [FLOW]: FLOW:選 gap→difficulty.assess(weakness+suggestion)→注入 __NEED__/__TIER__/MAXR_EFF(high=max(M…
+    17 [KEY]: KEY:機械脊椎=收檔不信 orchestrator 自報 converged——wrapper 自算 tier 重驗 gate,謊報低 tier 拉不低門檻;SPEC 空/不存在…
+    39 [fm:context]: context: __MAXR__ 由 wrapper 起點一次性 sed 注入,loop 中途無重注入管道(spec r4-F4 誠實收窄)
+  0.000  Systems/slim-skill-修剪.md  []
+    16 [KEY]: KEY:★2026-07-31 終審 C1/C4 修復,候選數變動★——C1 在 reference.md:60 加一段揭露「doctor 建議跑 lumos init/updat…
+  0.000  Systems/測試假綠形態.md  []
+    23 [KEY]: KEY:[2026-09-05]第 ★17★ 次,又是新測試自己中第④型:daily-governance 包 main() 的守衛首版只比「有 main() {」「最後一行 ma…
+    32 [fm]: - "[[Verification/2026-09-05_wrapper邊跑邊改實驗]]"
+    308 [body]: **現場**:每日治理 wrapper 有一條測試叫「另一份正在跑(pid 活著)→ 讓行不搶」,長這樣:
+  0.000  Verification/2026-06-19_canary-audit.md  []
+    9 [fm]: - "vault.parent 可寫(.canary-log.jsonl append)"
+    11 [fm]: - "cmd_gov dedup key 或 mapper 變動(尤其 token 第 5 鑑別子)"
+  0.000  Verification/2026-06-19_design-loop.md  []
+    12 [fm]: - Component A 原語(canary record/loop status)行為與 spec 宣稱一致(loop status 讀 append 序 tail-K 滑動窗…
+    32 [body]: - `cmd_loop_status`(line 1341):讀 `.canary-log.jsonl` append 序、篩 `loop==id`、tail-K 滑動窗;`goo…
+  0.000  Verification/2026-06-19_loop-convergence-recording.md  []
+    8 [fm]: - .canary-log.jsonl 為 append-only、append 序即時間序(無外部重排)
+    13 [fm]: - canary mapper(cmd_gov 第 4 源)detail 格式改動
+  0.000  Verification/2026-06-23_check-t-sentinel.md  []
+    30 [★INVARIANT★]: - `★INVARIANT★ + ★COMBO★` 綁 1 個 `[test:OverbookHappy]` → doctor 輸出含「happy-path」軟提醒。
+  0.000  Verification/2026-07-04_pitfalls-lint-adapter.md  []
+    29 [body]: - T1/T2/T4:spec ✅ + quality Approved 0 Critical/Important。
+    36 [body]: - implementer 多次 `--no-verify` 繞 KG pre-commit gate(code-only task,Task5 補圖譜);merge 後測試 ru…
+  0.000  Verification/2026-07-04_risk-tiered-review.md  []
+    11 [fm:valid_under]: valid_under: difficulty.py RISK_CLASSES 四類詞表+params(high=3/8,standard=2/6)+assess_spec 黑名單…
+  0.000  Verification/2026-07-05_csharp-landmark-verify.md  []
+    27 [body]: - **lint-watch(nuget,真 API)**:ClosedXML 0.104.2→0.105.0、Dapper 2.1.66→2.1.79、Swashbuckle 6…
+    41 [body]: - **抓不到的(誠實)**:N+1(Dapper raw SQL,執行期 profiling)、鎖順序/SQL 死鎖(執行期 deadlock graph)——非靜態 lint …
+  0.000  Verification/2026-07-06_CLAUDE注入re-sync.md  []
+    33 [body]: 1. `_extract_claude_block_span`(三態 + body 位移,`text[body_start:body_end]==body` 有保證)+ `_rei…
+  0.000  Verification/2026-07-09_loop三輪壓縮.md  []
+    28 [body]: - **`scripts/test_lumos.py` 847 passed, 0 failed**(基線 828 → +19:caprecap 5 / canary_round …
+    50 [body]: 緣起:使用者質疑「code-loop 該全盤沿用 design-loop 慣例嗎?code review 不該不一樣?」→ 交叉查文獻(AutoSafeCoder / Multi-…
+  0.000  Verification/2026-07-10_guard殺傷力驗證.md  []
+    28 [body]: | killed happy path(壞法讓測試翻紅)+JSON manifest | ✅ |
+  0.000  Verification/2026-07-15_decision_refs養成_P前置_T1回寫.md  []
+    27 [body]: - **T1：`rel-cascade confirm` 回寫 decision_ref**：confirm 成功＝地面真相「鄰居依賴這條決策」→ 把 `from_decision…
+  0.000  Verification/2026-07-15_主網M3_cascade帳本.md  []
+    4 [fm:feature]: feature: 關係層主網 M3——cascade ledger(append-only JSONL)+rel-cascade CLI(confirm/prune/list/re…
+    11 [fm]: - "並行=O_APPEND fd+單次 os.write 整行 bytes(≤4KB 寫前拒);POSIX 實務原子、Windows best-effort 預期單寫者"
+    28 [body]: - **帳本原語**：`_rel_cascade_dir`（落點規則）、`_utc_ts`、`_ledger_append`（O_APPEND+單次 write+4KB 拒、**無…
+  0.000  Verification/2026-07-17_test-layers軟提醒.md  []
+    22 [TEST]: TEST:全量 1224 passed 0 failed(t_testlayers_units 純函式+t_testlayers_cmd e2e:無宣告靜默rc0/命中提醒/壞ra…
+    23 [VERIFY]: VERIFY:T1 純函式(config 載入 fail-open+棧命中去重保序)/T2 cmd_test_layers 子命令+argparse 接線(JSON/人讀雙輸出)/…
+  0.000  Verification/2026-07-20_狀態標籤同步守衛.md  []
+    26 [body]: - `scripts/test_lumos.py` — 新增 `t_set_status_syncs_tag`（5 斷言）、`t_status_tag_drift_guard`（4…
+  0.000  Verification/2026-07-22_prepush範圍修法落地.md  []
+    29 [body]: - 同步（同 commit）：`code-loop必用守衛_實作計畫`（merge-base 失真句→範圍取法更新＋Step 3 打勾）、`lumos-code-loop` ski…
+  0.000  Verification/2026-07-28_S2S3壓縮與驗證器.md  []
+    8 [fm]: - "canary-log 為 append-only jsonl(驗證器直讀的前提)"
+  0.000  Verification/2026-07-28_settle收斂閘.md  []
+    7 [fm]: - "canary-log 為 append-only、legacy 記錄無 round 欄(輪鍵=append 序的前提)"
+  0.000  Verification/2026-07-29_oracle品質包落地.md  []
+    8 [fm]: - "canary log 為 JSONL append-only 本機檔（.canary-log.jsonl）"
+    21 [KEY]: KEY:S1 落盤自驗——_jsonl_append_verified 寫後獨立重開檔驗唯一鍵(caller 給欄名,record 用 token/second 用自身 token…
+    22 [KEY]: KEY:S2 第二判者——canary second 寫自身 token+ref+verdict,gov mapper 併入 detail(否則分歧訊號隱形);loop statu…
+    36 [body]: | S1 落盤自驗 | `_jsonl_append_verified`（append→獨立重開檔→驗唯一鍵；失敗 rc2 且不印 ✓；成功行印落盤絕對路徑） | `t_canar…
+    37 [body]: | S2 第二判者 | `lumos canary second`（自身 token／ref／verdict；gov mapper 併 detail；dispatch 依 ccmd…
+  0.000  Verification/2026-07-31_slim-claude-md注入.md  []
+    16 [VERIFY]: VERIFY:[[Projects/公開精簡版_實作計畫]] Task 8 落地;spec [S3] 的裁定變更(原禁注入/更新 CLAUDE.md → 開放 append-onl…
+    21 [body]: 驗證對象:[[Projects/公開精簡版_實作計畫]] Task 8 —— 推翻 [S3] 原裁定「不注入/更新任何 CLAUDE.md」,改為 append-only 附加圖譜…
+  0.000  Verification/2026-07-31_slim-claude-md第三次裁定取代與備份還原.md  []
+    84 [body]: `python3 scripts/test_lumos.py -k slim`——187 checks 全綠(含既有 t_slim_gate/t_slim_readme_asser…
+  0.000  Verification/2026-08-05_panel-K2與抽查落地.md  []
+    10 [KEY]: KEY:抽查判定輸入=append-only 帳的 token 集——「事後可重算的偽隨機」取代「編排者擲 p」(A案 r1 折入:嚇阻模型不成立);待補=canary-stats…
+  0.000  Verification/2026-08-06_驗證層自證三件S1S3落地.md  []
+    16 [body]: - **S1 seat-check**(`lumos seat-check`,第 55 個子命令):席報告對 dispatch manifest 有講沒做對帳——unreporte…
+    25 [body]: - `t_s1_seat_check`(乾淨/漏材料/引句出界+越界帳 append/vacuous/缺檔 rc2)
+  0.000  Verification/2026-08-11_T1_remove_list項移除.md  []
+    6 [fm]: - "LIST_KEYS 白名單制不變(remove 與 append 共用同一白名單與 link_target 比對語意)"
+    38 [body]: | 比對沿用 `link_target()` | 與 `append` 的 dedup 同語意：精確 target、保留路徑，不做前綴或 basename-only 匹配 → `[…
+    54 [body]: | `t_remove_core_refs_roundtrip` | `core_refs` append→remove 往返（降格拆指針的實戰路徑） |
+  0.000  Verification/2026-08-18_標註刷新落地.md  []
+    6 [fm]: - "refresh_labels.py(delta/repin/merge/apply/signal)與 retrieval_eval 共用原語現行實作"
+    21 [TEST]: TEST:8 任務 TDD 全綠(t_goldset_force_full_guard 4/t_eval_universe_and_unjudged 10/t_refresh_de…
+    37 [body]: 6. **人閘流程**:merge(一致=同值/degraded 退化)+apply(缺人裁 rc1 不寫/atomic/既有零變動)單測覆蓋;放行動作=人跑 apply。
+  0.000  Verification/2026-08-20_gov-stats落地.md  []
+    6 [fm:revalidate_when]: revalidate_when: "新增或改名任何寫帳 gate;cmd_gov 的 mapper/去重/去噪任一層改動;gov 加 --json 或其他輸出旗標"
+    25 [body]: 設計稿說「anchor-approve 的 nodes 是檔案路徑,標註出來」,原實作照字面用「值裡有沒有 `/`」偵測——★翻紅★:`cmd_gov` 的 mapper 讀進來時…
+  0.000  Verification/2026-08-21_doctor-run事件落地.md  []
+    6 [fm:revalidate_when]: revalidate_when: "改 _append_governance_log/cmd_gov 去噪;新增會寫治理帳的 gate;棘輪案立案時(本事件是其分母)"
+  0.000  Verification/2026-08-21_工具鏈體檢修復批.md  []
+    71 [body]: ## 白話化第二、三批:doctor/lint/new-set-append + loop/canary/gov/search ✅(2026-08-22)
+  0.000  Verification/2026-08-22_guard-kill首次真跑.md  []
+    6 [fm:revalidate_when]: revalidate_when: 改 _kill_attribute 歸因規則、改 runner 失敗輸出格式、或 _jsonl_append_verified 重寫時
+  0.000  Verification/2026-08-22_評測尺三修.md  []
+    114 [body]: `build_goldset.py --append N`:讀既有 goldset → 多撈候選 → 建池 → append → 寫回。
+    138 [body]: 接著 merge → apply。★B 席要用 Gemini(Codex 已到期);B 席缺會 degraded 全 disputed,
+    150 [body]: 真正的增益要等 80 個候選標完。重驗條件:補標 apply 之後重跑,看 `[edit n=?]` 有沒有變大。
+  0.000  Verification/2026-08-26_roster對帳併入問閘落地.md  []
+    5 [fm:valid_under]: valid_under: "delta 輪(單席)必觸發 shortfall/單家族轉述——編制表無 delta 輪概念,屬已知噪音源(轉述事實正確、解讀歸編排者);異常留痕檔=a…
+    29 [body]: valid_under: delta 輪(單席)必觸發 shortfall/單家族轉述——編制表無 delta 輪概念,屬已知噪音源(轉述事實正確、解讀歸編排者);異常留痕檔=ap…
+  0.000  Verification/2026-08-26_新舊制同料對照_v0.md  []
+    5 [fm:valid_under]: valid_under: "d5 判定核心=_loop_status_disposal(engine_rev d5-2026-08-25);對照對象=08-06~08-24 收尾之…
+  0.000  Verification/2026-08-27_decision_refs養成T3v4落地.md  []
+    38 [body]: - major:promote 重複 _append_decision_ref 插入邏輯→抽共用 `_fm_list_insert`;_dref_remove_ref 沒清空欄位刪…
+  0.000  Verification/2026-08-27_辯方表態記帳.md  []
+    28 [body]: - **單元測** `t_refute_verdict_ledger_and_stats`(`scripts/test_lumos.py`,綁基準線需 anchor approve…
+  0.000  Verification/2026-09-03_派工攔截點實測.md  []
+    69 [body]: 第一版把注入內容寫成「暗號是 PINEAPPLE-7742」,★子代理直接拒答★,回覆稱它認出這是提示注入測試。
+  0.000  Verification/2026-09-04_Codex完全支援S0安裝層驗收.md  []
+    27 [body]: 1. **install(隔離 HOME)**:`lumos install --force` → 印「全域 Claude hooks/settings.json 已同步」「全域 …
+    29 [body]: 3. **真 Codex 冒煙**:五條註冊在隔離 hooks.json 裡包一層 `sh -c 'echo <事件>:<檔名> >> fired.log; …'`(驗收用 wra…
+    30 [body]: 4. **init 注入 AGENTS.md**:臨時專案先放一份 `AGENTS.md`(`# 我的專案指示` + 一條規矩),`LUMOS_HOME=<repo> lumos …
+    43 [body]: - `Edit`/`Write` 在 Codex 是否只是 apply_patch 的別名(文件說是;S1 進場再測)。
+  0.000  Verification/2026-09-04_Codex完全支援S1hook適配驗收.md  []
+    17 [body]: > 白話:第一階段要證明三件事在真的 Codex 底下成立——改檔前有人把合約推到眼前(apply_patch 也吃得到)、派子代理時它開場拿得到圖譜鏡頭(不靠改派工詞)、收工時 …
+    22 [body]: - `HOME=s1accept/home lumos install --force` 後把隔離 hooks.json 的五條命令包一層落 stdout/stderr 檔(驗收 …
+    26 [★INVARIANT★]: 1. **apply_patch → impact-hook 注入**:提示 Codex 用 apply_patch 在 `scripts/merge-claude-setting…
+    28 [body]: 3. **Stop → check-graph-sync 讀 Codex 逐字稿**:第一次真跑 Stop fire 但 stderr 空——查出兩件事:(a)那次 Codex 把…
+    33 [body]: - `-k codex_s1` 26 條(patch 標頭四種、8 檔取前 5、main 多檔合併一個輸出、arm/claim/exhaust/expired/disarm/sta…
+  0.000  Verification/2026-09-04_Codex完全支援S2迴圈編排驗收.md  []
+    21 [body]: 1. `CODEX_HOME/agents/lumos-reviewer.toml`(name/description/developer_instructions/`sandbo…
+    23 [body]: 3. 退路:父代理 `--sandbox read-only`,派 explorer 子代理嘗試寫檔 → note.txt 不存在,子代理原文回報「patch rejected: …
+  0.000  Verification/2026-09-04_Codex完全支援S3量測驗收.md  []
+    25 [body]: 1. 本 repo、真機 `~/.codex/sessions`(346 份稿):`by_harness={'claude':44}`、Codex 行 0——今天真機上的 Code…
+    26 [body]: 2. 隔離驗收目錄(`s1accept/home/.codex/sessions`,4 份稿):Codex 行 4——3 筆 `PreToolUse:apply_patch`(全部…
+  0.000  Verification/2026-09-05_wrapper邊跑邊改實驗.md  []
+    6 [fm:revalidate_when]: revalidate_when: daily-governance.sh 結尾或前奏改動、或再出現「wrapper 中途 syntax error」事故
+    13 [body]: # 2026-09-05_wrapper邊跑邊改實驗
+    18 [body]: 2026-09-05 09:30 的每日治理 wrapper(daily-governance.sh)死在自主迴圈那段回來之後:我在它跑的三小時內改了這支腳本,bash 回來讀到半…
+    32 [body]: 把真測試 `t_daily_governance_wrapper_is_function_wrapped` 複製到乾淨目錄,餵四種改壞的 wrapper:
+    46 [body]: - 沒測 zsh / dash;wrapper 明寫 `#!/bin/bash`。
+
+(共 148 篇候選,照相關性排序;想照檔名排加 --legacy)
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "sed -n '1,240p' /Users/enzo/.agents/skills/lumos-project-notes/SKILL.md && sed -n '1,220p' governance/review-reports/code-batch14/r1-snapshot.patch && nl -ba governance/install-watchdog.sh && nl -ba governance/wrapper-watchdog.sh"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+---
+name: lumos-project-notes
+description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫——任何任務開始要搞懂「這個模組/欄位/流程為什麼這樣、邊界在哪、哪些不能改、會波及什麼」時先用 lumos 查,不要直接 grep/Read;改完 code 要寫回決策/驗證/合約;收工體檢。觸發:正要 grep 或讀 code 去理解既有系統、排查、對外支援、查 DB、改名/刪除東西、開工掌握現況、收工寫回、問「圖譜有沒有記」。指令全集按情境分類在 commands/INDEX.md。
+---
+# lumos 專案知識圖譜——一頁手冊
+
+圖譜記「為什麼、邊界、不能改的、驗過沒」;code 只記「現在長怎樣」。圖譜跟行為事實(測試、實際執行、生產觀測)對不上時,不自動信圖譜——查清哪邊錯,立一篇事故筆記。主工具 `lumos`(python3 零依賴,自動找 `docs/*-knowledge/`)。**別用 Grep/Read/Edit/Write 直接碰圖譜的 .md 開頭欄位**——會繞過自驗和防護;正文段落用 Edit 可以。
+
+**指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一。下面只列每個階段最常用的。
+
+## 1. 進場(每個子任務都重來,不是 session 開頭一次)
+
+| 你在想… | 敲 |
+|---|---|
+| 這件事為什麼這樣 / 圖譜記了嗎 | `lumos search <詞>` → `lumos context <節點>`;0 命中先換同義詞;**中文概念之間加空白**(`作廢 收回 點數`,別黏成一句) |
+| 動這段有什麼不能碰 | `lumos contracts <節點>` |
+| 要讀全文再下結論 | `lumos show <節點>`(search 只給索引行;拿摘要判「沒記」以前真的錯過——值在筆記第 64 行,靠摘要判成沒有) |
+| 篩條件(金流 / 未收案 / 連到 X) | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+| 開工掌握現況 | `lumos query --tag status/doing`;`lumos recent --days 7` |
+| 圖譜空或稀疏(接手 brownfield) | 走節點還原 SOP:`commands/09-節點還原.md`(七步;需要才產節點、有就照慣例用) |
+
+看到筆記有 `core_refs:` 或 `CORE:` → 權威在跨專案核心圖譜,改那邊(`lumos-core-knowledge` skill)。
+**查得到才算先行**(Landmark 實測):0 筆看「逐詞覆蓋」標 ★ 的詞換同義詞,換三次再問人,別轉 grep;大節點先 `--brief`;單篇內部新舊打架時摘要有日期的 KEY 行 > 正文,衝突影響決策去 code 裁再回頭修。
+**分清你在哪種 session**:本機 Claude Code(含手機/網頁遙控本機)有本機 git 憑證、能 push;網頁版 claude.ai/code 是雲端沙盒,對主分支沒 push 權、只能推 feature branch——「遙控」不等於「遠端版」,曾騙到 AI 一次。
+被催「直接改、不用解釋」也一樣:不解釋可以,不查不行——改 code 前至少 `lumos impact --file <檔>` 一行。
+
+## 2. 動手前
+
+- `lumos impact --file <檔>` / `--diff <範圍>`:哪些筆記、驗證、決策會受影響(Edit 前 hook 也會塞一份,但只推你碰到的檔)。
+- `lumos pitfalls --diff <範圍>`:風險分級;`tier: high` 要過代碼審(`lumos-code-loop`)。
+- 要刪 / 改名東西:`lumos search <舊名> --code` 逐句判哪些筆記還在講它。
+- 改了環境 / 流程 / 設定(版本、金鑰、hook、排程):`lumos stale --candidate --match <關鍵字>` 列出寫了「改到這個就該重驗」的驗證紀錄。
+- 設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記(`type: project`),不寫到別的路徑;動筆前一行 `PRIOR-ART:`(最小解在哪層 / 世界解過沒 / 借用‧自建‧採用)。
+
+## 3. 寫回(同一次工作內;pre-commit 擋「改 code 沒動圖譜」)
+
+| 要做 | 敲 |
+|---|---|
+| 新筆記 | `lumos new <system\|issue\|verification\|project> <名>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 |
+| 改狀態 / 日期 | `lumos set <節點> <欄位> <值>`(日期不加引號) |
+| 加 / 刪清單項 | `lumos append <節點> <欄位> "[[x]]"` / `lumos remove …` |
+| 記決策 / 翻案 | `lumos decision-add <節點> "<內容>" --decided <日期>` / `lumos decision-supersede` |
+| 正文段落 | Edit;寫完 `lumos lint <節點>` |
+
+**四條血換的開頭欄位鐵則**:① 多個連結一行一項,擠成一串會長假筆記 ② `summary: |` 區塊裡的 `[[連結]]` 不算連結,要關聯另放 list 欄位 ③ 值含「冒號+空格」要引號或區塊 ④ 同層不能重複鍵。用指令寫天生避開;手改才會踩。
+
+**合約標記(動筆前掃一眼;不確定就不標,嚴禁看 code 反推)**:
+```
+KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes]
+KEY:★DEBT★ <偶然行為,可改>
+KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPOINT★ <改了難救>(建議補 [rollback:])
+```
+- 綁測試 / 留審計走指令:`lumos guard bind <節點> "<KEY 片段>" <測試名>`、`lumos guard audit …`;裸合約 doctor 擋,未審計 pre-push 擋。綁之前對照 [[Systems/測試假綠形態]](最隱蔽的一型:現場根本走不到被測分支;修 bug 的翻紅測試要配一條「現場成立」的前置斷言)。
+- 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
+- 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
+
+**摘要區塊**(Systems/Issues 必有):`FLOW:`流程 `KEY:`關鍵概念 `DEP:`依賴 `TEST:`測試;Issues 用 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN) `DECISION:` `KEY:`。已結案的 Issue 正文第一段要有結案橫幅(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
+**標籤**:`type/` `status/`(值域 lint 硬擋)、`priority/` P0–P3、`scope/`(feature/ area/ 已停用)、`risk/` 金流‧對外送出‧不可逆‧守衛面、`flag/`。
+
+**決策與驗證**:重大決策填四欄(context / alternatives≥2 / why_chosen / trade_offs),缺資訊問人不編。驗證紀錄填 `valid_under`(前提)與 `revalidate_when`(何時重驗),用 `plan_refs` 指回計劃;漏掛 `lumos sync-verified-by --apply`。計劃結案前 `lumos spec-trace <計劃>` 看哪些條款沒人認領。
+
+**承認風險的鐵則**(Enzo 2026-08-22 裁):筆記或訊息裡寫「沒機械守衛 / 只提醒不擋 / 單次量測 / 這數字是拍的」這類承認句,**旁邊必須有「什麼時候回頭看」**(週報、重驗條件、revalidate_when、到期日);寫不出重驗條件的,就是該處理不該承認。**回頭條件要接電**(2026-08-31 回訪案):帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`(緊鄰原句,doctor 到期會唸、逾 14 天沒人動升級週報);綁事件的明寫事件入口——純散文=52 件盤點實證的死文。
+
+## 4. 收工
+
+1. `lumos lint <每篇動過的>` → `lumos doctor`(紅的段先修;`--verbose` 看全部提醒)。
+2. code 有「拿掉 / 反轉」的改動:把那些名字逐個 `lumos search <名> --code`,逐句判筆記還成不成立,不成立當場改或標作廢。動到畫面 → 補可重放的 UI flow 並 `[test:<平台>:<flow>]` 綁回(沒裝置要明寫「未驗+原因」)。
+3. 圖譜實質更新後:派乾淨 agent 只讀圖譜還原脈絡,對不上就補到一致,留痕 `lumos self-audit <節點>`。
+4. push 後(專案有宣告 ci 區塊才有):`lumos ci-wait`,紅就當輪修,修不完要在收尾明講。
+5. 跨 session 傳訊只傳「指標+觸發」(我動了哪篇、你去讀哪篇),不傳內容本身;規則權威在圖譜不在誰的記憶。
+
+## 再深一層(按需開,別一次全讀)
+
+| 要做 | 開 |
+|---|---|
+| 某個指令的旗標與用法 | `commands/0N-*.md`(INDEX 指到)或 `lumos <cmd> --help` |
+| 合約鏈深規、[audit:] 五問、guard 工作流、防帶風向 | `reference.md`〈★INVARIANT★ → `[audit:]` 獨立合法性審計〉〈★INVARIANT★ → `[test:]` 綁定〉〈`lumos guard`〉 |
+| 決策四欄完整版、驗證紀錄完整規格、同步規則 | `reference.md`〈Properties〉〈同步規則〉 |
+| 開頭欄位鐵則、標籤家族、摘要區塊、結案橫幅、退場自問、跨 session 傳訊、CI 細則全文 | `reference.md`〈寫入規範與紀律全文〉 |
+| 自足性審計 prompt、交叉審計變體 | `reference.md`〈圖譜更新後：Sonnet agent 自足性審計〉〈變體 B：圖譜×程式碼交叉審計〉 |
+| maestro UI flow 派工要求 | `reference.md`〈產 maestro UI flow 的派工要求〉 |
+| 資料夾位置 | `docs/{slug}-knowledge/{Projects,Systems,Issues,Verification,MOC}`;某主題 >5 篇建 MOC |
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
+index 99ace21..1efefe9 100644
+--- "a/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
++++ "b/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
+@@ -260,18 +260,40 @@ SRE 的「對缺席告警」、建目錄當原子鎖(macOS 沒有 flock)、logro
+ 
+ ★教訓:第一次修完就量一次,不要因為改動看起來對就收手。★
+ 
+ ### 還沒修的:來源那支有一模一樣的洞
+ 
+ `governance/autonomous-loop.sh` 的取鎖段(這支就是抄它的)有同樣三個問題,而且**更糟**
+ ——它的接管是裸的 `rm -rf; mkdir`,連成不成功都不檢查。**這批沒有動它**,因為那不在這次
+ 凍結的審查範圍裡,現在順手改等於把沒審過的碼混進推送。
+ REVISIT:2026-09-14 把 autonomous-loop.sh 的取鎖段換成這支現在的做法,走一次 code loop。
+ 
++### 通知的圖示(2026-09-07 追加,Enzo 要的)
++
++`osascript ... display notification` **沒有辦法在指令裡指定圖片**——它顯示的是呼叫它那支程式的
++圖示,從 launchd 跑就是 Script Editor 那個。要換成 Lumos 自己的四角星只有兩條路:
++
++- 裝 `terminal-notifier`(可以 `-appIcon`)→ **新增一個外部依賴,零依賴家規下不選**。
++- 自己包一個最小的 `.app` → 只用 macOS 內建的 `osacompile` / `sips` / `iconutil` / `plutil`,不加依賴。
++
++走後者。那個 app 是**建出來的東西不是原始碼**,所以不進版控,`install-watchdog.sh` 裝的時候現建,
++放在 `~/Library/Application Support/Lumos/LumosWatchdog.app`。已實測圖示有換到。
++
++兩件實作上會踩的:
++
++- **applet 一定要寫 `quit`**。不寫的話它會留在 GUI 事件迴圈裡不結束——每小時一則通知
++  就是每小時一個殭屍行程。(第一版直接跑 `Contents/MacOS/applet` 當場卡住,才發現。)
++- **安裝時就要發一則**。macOS 的通知權限是**逐 app** 問的;不在安裝當下讓它跳出來問,
++  第一次真的出事那天通知會被靜默丟掉——而那正是這支存在的理由。所以安裝腳本裝完會
++  立刻發一則並印一段「請確認你有看到」的字。
++
++**留了退路**:app 不在或 `open` 失敗就退回原本的 `osascript` 直接發。圖示會是系統預設的,
++但話還是講得出去。★寧可醜也要發得出去★——這支的價值在有人看得到,不在好看。
++
+ ### 誠實邊界
+ 
+ - **排程現在會自動裝,但要人跑一次那支安裝腳本**:`bash governance/install-watchdog.sh`。
+   工具鏈的安裝器不分發這支(清單裡沒有),換一台機器要重跑。
+ - **看門狗本身也會死**:排程器整個掛掉就兩支都不跑。健檢的 `[A1]` 段現在會抓到這件事
+   (它不在 launchd 底下),但那要有人跑健檢。完全無人看顧的解只有機器外的心跳,
+   已列在計劃裡並掛回頭條件。
+ - **「機器剛醒來」只擋得掉最大宗的誤報**:開機後兩小時內剛好跨過門檻仍會誤報一次。
+diff --git a/governance/install-watchdog.sh b/governance/install-watchdog.sh
+index 51b54e2..82bc9e9 100755
+--- a/governance/install-watchdog.sh
++++ b/governance/install-watchdog.sh
+@@ -27,22 +27,74 @@ status() {
+   else
+     echo "裝好的那份     : 沒有"
+   fi
+   if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+     echo "launchd 認得它 : 是"
+   else
+     echo "launchd 認得它 : ★否——它一次都不會跑★"
+   fi
+ }
+ 
++# ★桌面通知的圖示要換成 Lumos 的四角星,得包一個 app★
++# 事實先講清楚:`osascript ... display notification` 顯示的是**呼叫它那支程式**的圖示
++# (從 launchd 跑就是 Script Editor 那個),沒有辦法在指令裡指定圖片。要自訂圖示只有兩條路:
++#   ①裝 terminal-notifier —— 新增一個外部依賴,這個 repo 的家規是零依賴,不走。
++#   ②自己包一個最小的 .app —— 只用 macOS 內建的 osacompile / sips / iconutil / plutil,不加依賴。
++# 走②。app 是「建出來的東西」不是原始碼,所以不進版控,裝的時候現建。
++NOTIFIER_DIR="$HOME/Library/Application Support/Lumos"
++NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
++ICON_SRC="$(cd "$DIR/.." && pwd)/assets/lumos-icon.png"
++
++build_notifier() {
++  for c in osacompile sips iconutil plutil; do
++    command -v "$c" >/dev/null 2>&1 || { echo "缺 $c,跳過通知圖示這一步(通知照發,只是用系統預設圖示)"; return 1; }
++  done
++  [ -f "$ICON_SRC" ] || { echo "找不到圖檔 $ICON_SRC,跳過通知圖示這一步"; return 1; }
++  local tmp; tmp="$(mktemp -d)" || return 1
++  local iset="$tmp/lumos.iconset"; mkdir -p "$iset"
++  local s
++  for s in 16 32 128 256 512; do
++    sips -z "$s" "$s" "$ICON_SRC" --out "$iset/icon_${s}x${s}.png" >/dev/null 2>&1
++    sips -z $((s*2)) $((s*2)) "$ICON_SRC" --out "$iset/icon_${s}x${s}@2x.png" >/dev/null 2>&1
++  done
++  iconutil -c icns "$iset" -o "$tmp/lumos.icns" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
++  # ★applet 一定要 quit★:不加的話它會留在事件迴圈裡不結束,每小時一則就是每小時一個殭屍行程。
++  cat > "$tmp/notify.applescript" <<'APPLESCRIPT'
++on run argv
++	set theMsg to "(沒有內容)"
++	if (count of argv) > 0 then set theMsg to item 1 of argv
++	set theTitle to "Lumos 治理看門狗"
++	if (count of argv) > 1 then set theTitle to item 2 of argv
++	display notification theMsg with title theTitle
++	quit
++end run
++on quit
++	continue quit
++end quit
++APPLESCRIPT
++  rm -rf "$NOTIFIER"
++  mkdir -p "$NOTIFIER_DIR"
++  osacompile -o "$NOTIFIER" "$tmp/notify.applescript" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
++  cp "$tmp/lumos.icns" "$NOTIFIER/Contents/Resources/applet.icns"
++  plutil -replace CFBundleIdentifier -string "com.enzo.lumos.watchdog-notifier" "$NOTIFIER/Contents/Info.plist" >/dev/null
++  plutil -replace CFBundleName -string "Lumos 治理看門狗" "$NOTIFIER/Contents/Info.plist" >/dev/null
++  touch "$NOTIFIER"           # 逼 LaunchServices 重讀圖示
++  rm -rf "$tmp"
++  return 0
++}
++
+ case "${1:-install}" in
+   --status|status) status; exit 0 ;;
++  --rebuild-notifier)
++    build_notifier && echo "通知 app 重建好了:$NOTIFIER"
++    open -a "$NOTIFIER" --args "重建完成——這則通知左邊應該是 Lumos 的四角星。" 2>/dev/null || true
++    exit 0 ;;
+   --uninstall)
+     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+     rm -f "$DEST"
+     echo "已移除。"; status; exit 0 ;;
+ esac
+ 
+ [ -f "$SRC" ] || { echo "找不到 plist:$SRC" >&2; exit 1; }
+ # plist 裡寫死了腳本的絕對路徑,先確認那個路徑跟這份 repo 對得上,不然裝了也是跑空氣。
+ want="$DIR/wrapper-watchdog.sh"
+ grep -q -- "$want" "$SRC" || {
+@@ -50,12 +102,27 @@ grep -q -- "$want" "$SRC" || {
+   echo "  這份 repo 的腳本在:$want" >&2
+   echo "  plist 裡寫的是    :$(grep -A1 'ProgramArguments' -A3 "$SRC" | grep string | tail -1)" >&2
+   exit 1
+ }
+ plutil -lint "$SRC" >/dev/null || { echo "plist 格式不合法:$SRC" >&2; exit 1; }
+ 
+ mkdir -p "$(dirname "$DEST")"
+ cp "$SRC" "$DEST"
+ launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true    # 先卸再裝,才吃得到改過的內容
+ launchctl bootstrap "$DOMAIN" "$DEST" || { echo "launchctl bootstrap 失敗" >&2; exit 1; }
++
++# 通知 app 一併建起來,並且★當場發一則★——不是為了好看,是為了讓 macOS 現在就問你
++# 「要不要允許這個 app 發通知」。不在安裝時問,第一次真的出事那天通知會被靜默丟掉,
++# 而那正是這支看門狗存在的理由。
++if build_notifier; then
++  open -a "$NOTIFIER" --args "看門狗裝好了。之後它有話要說,就會長這樣。" 2>/dev/null || true
++  echo ""
++  echo "★請確認兩件事★"
++  echo "  1. 剛才右上角有沒有跳出一則通知?沒有的話到「系統設定 → 通知」把"
++  echo "     「Lumos 治理看門狗」打開——沒開的話它以後喊了你也看不到。"
++  echo "  2. 那則通知左邊的圖示是不是 Lumos 的四角星?"
++  echo "  圖示沒換到 → 重建一次:bash governance/install-watchdog.sh --rebuild-notifier"
++fi
++
++echo ""
+ echo "裝好了。"
+ status
+diff --git a/governance/wrapper-watchdog.sh b/governance/wrapper-watchdog.sh
+index c3d1e40..518b2d4 100755
+--- a/governance/wrapper-watchdog.sh
++++ b/governance/wrapper-watchdog.sh
+@@ -41,28 +41,38 @@ o=subprocess.run(['sysctl','-n','kern.waketime'],capture_output=True,text=True).
+ m=re.search(r'\bsec = (\d+)',o)
+ sys.stdout.write(m.group(1) if m else '')" 2>/dev/null || echo '')"
+   [ -z "$wt" ] && return 1
+   echo $(( $(date +%s) - wt ))
+ }
+ 
+ # ★話要講到有人聽得到的地方★(2026-09-07 代碼審 r1 外家否決席判 blocker,說得對):
+ # 第一版只 echo 一行 + 追加一個本機紀錄檔,而 launchd 又把 stdout 導進另一個檔案
+ # ——完整重現了它想防的那件事:「沒有任何東西在讀它印的東西」。
+ # 所以現在走三條:
+-#   ①桌面通知(macOS osascript):不需要任何人記得去開檔案,狀態一變就跳出來。
++#   ①桌面通知:不需要任何人記得去開檔案,狀態一變就跳出來。
+ #     是這三條裡唯一「不靠人主動查」的,也是這支存在的理由。
+ #   ②這支自己的紀錄檔:留時間序,事後要回頭查哪天開始壞的靠它。
+ #   ③健檢的 [A1] 段:那段直接讀同一份健康檔,`lumos doctor` 一跑就看得到,並且接得上治理帳。
+ # ★三條裡①②住在 launchd,③住在 Claude Code 的收工健檢——後者才是真正的獨立失敗域★
+ #   (第一版計劃寫「再開一支 launchd job 就是獨立失敗域」,那句話是錯的:
+ #    兩支 launchd job 共用同一個 launchd、同一個使用者 session、同一顆磁碟)。
++# 通知走兩條,前面那條有就用前面那條:
++#   ①`~/Library/Application Support/Lumos/LumosWatchdog.app`——安裝腳本建的最小 app,
++#     有 Lumos 自己的圖示。★osascript 直接發的通知沒辦法指定圖片★,它顯示的是呼叫者
++#     (從 launchd 跑就是 Script Editor 的圖示),要換圖只能包成 app。
++#   ②沒建成 app 就退回 osascript 直接發:圖示是系統預設的,但話還是講得出去。
++#     ★寧可醜也要發得出去★——這支的價值在「有人看得到」,不在好看。
++NOTIFIER="$HOME/Library/Application Support/Lumos/LumosWatchdog.app"
+ notify() {
++  if [ -d "$NOTIFIER" ] && command -v open >/dev/null 2>&1; then
++    open -a "$NOTIFIER" --args "$1" >/dev/null 2>&1 && return 0
++  fi
+   command -v osascript >/dev/null 2>&1 || return 0
+   osascript -e 'on run argv
+     display notification (item 1 of argv) with title "Lumos 治理看門狗"
+   end run' "$1" >/dev/null 2>&1 || true
+ }
+ emit() {   # $1=kind  $2=一句話
+   local kind="$1" msg="$2"
+   echo "[$(ts)] $msg"
+   notify "$msg"
+   mkdir -p "$DIR/logs" 2>/dev/null || true
+     1	#!/bin/bash
+     2	# 把看門狗那支排程真的裝到這台機器上(macOS launchd),或用 --status 看它裝了沒。
+     3	#
+     4	# ★為什麼需要這支★(2026-09-07 代碼審 r1 外家否決席判 blocker,查證屬實):
+     5	# 第一版只把 plist 加進 repo 就當交付了,但 repo 裡的 plist 不會自己變成一個排程
+     6	# ——實機 `launchctl print gui/501/com.enzo.lumos.wrapper-watchdog` 回「找不到」。
+     7	# 也就是說那批合進去之後,號稱的看門狗一次都不會跑。
+     8	# (對照組:每日治理那支的 plist 根本不在 repo 裡,只躺在系統目錄,誰裝的沒有紀錄
+     9	#  ——所以這裡沒有既有慣例可以照抄,是新開的。)
+    10	set -uo pipefail
+    11	
+    12	DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    13	LABEL="com.enzo.lumos.wrapper-watchdog"
+    14	SRC="$DIR/$LABEL.plist"
+    15	DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
+    16	DOMAIN="gui/$(id -u)"
+    17	
+    18	status() {
+    19	  echo "plist 來源     : $SRC"
+    20	  echo "裝到哪         : $DEST"
+    21	  if [ -f "$DEST" ]; then
+    22	    if diff -q "$SRC" "$DEST" >/dev/null 2>&1; then
+    23	      echo "裝好的那份     : 跟 repo 一致"
+    24	    else
+    25	      echo "裝好的那份     : ★跟 repo 不一樣★——重跑這支會用 repo 的蓋過去"
+    26	    fi
+    27	  else
+    28	    echo "裝好的那份     : 沒有"
+    29	  fi
+    30	  if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    31	    echo "launchd 認得它 : 是"
+    32	  else
+    33	    echo "launchd 認得它 : ★否——它一次都不會跑★"
+    34	  fi
+    35	}
+    36	
+    37	# ★桌面通知的圖示要換成 Lumos 的四角星,得包一個 app★
+    38	# 事實先講清楚:`osascript ... display notification` 顯示的是**呼叫它那支程式**的圖示
+    39	# (從 launchd 跑就是 Script Editor 那個),沒有辦法在指令裡指定圖片。要自訂圖示只有兩條路:
+    40	#   ①裝 terminal-notifier —— 新增一個外部依賴,這個 repo 的家規是零依賴,不走。
+    41	#   ②自己包一個最小的 .app —— 只用 macOS 內建的 osacompile / sips / iconutil / plutil,不加依賴。
+    42	# 走②。app 是「建出來的東西」不是原始碼,所以不進版控,裝的時候現建。
+    43	NOTIFIER_DIR="$HOME/Library/Application Support/Lumos"
+    44	NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
+    45	ICON_SRC="$(cd "$DIR/.." && pwd)/assets/lumos-icon.png"
+    46	
+    47	build_notifier() {
+    48	  for c in osacompile sips iconutil plutil; do
+    49	    command -v "$c" >/dev/null 2>&1 || { echo "缺 $c,跳過通知圖示這一步(通知照發,只是用系統預設圖示)"; return 1; }
+    50	  done
+    51	  [ -f "$ICON_SRC" ] || { echo "找不到圖檔 $ICON_SRC,跳過通知圖示這一步"; return 1; }
+    52	  local tmp; tmp="$(mktemp -d)" || return 1
+    53	  local iset="$tmp/lumos.iconset"; mkdir -p "$iset"
+    54	  local s
+    55	  for s in 16 32 128 256 512; do
+    56	    sips -z "$s" "$s" "$ICON_SRC" --out "$iset/icon_${s}x${s}.png" >/dev/null 2>&1
+    57	    sips -z $((s*2)) $((s*2)) "$ICON_SRC" --out "$iset/icon_${s}x${s}@2x.png" >/dev/null 2>&1
+    58	  done
+    59	  iconutil -c icns "$iset" -o "$tmp/lumos.icns" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
+    60	  # ★applet 一定要 quit★:不加的話它會留在事件迴圈裡不結束,每小時一則就是每小時一個殭屍行程。
+    61	  cat > "$tmp/notify.applescript" <<'APPLESCRIPT'
+    62	on run argv
+    63		set theMsg to "(沒有內容)"
+    64		if (count of argv) > 0 then set theMsg to item 1 of argv
+    65		set theTitle to "Lumos 治理看門狗"
+    66		if (count of argv) > 1 then set theTitle to item 2 of argv
+    67		display notification theMsg with title theTitle
+    68		quit
+    69	end run
+    70	on quit
+    71		continue quit
+    72	end quit
+    73	APPLESCRIPT
+    74	  rm -rf "$NOTIFIER"
+    75	  mkdir -p "$NOTIFIER_DIR"
+    76	  osacompile -o "$NOTIFIER" "$tmp/notify.applescript" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
+    77	  cp "$tmp/lumos.icns" "$NOTIFIER/Contents/Resources/applet.icns"
+    78	  plutil -replace CFBundleIdentifier -string "com.enzo.lumos.watchdog-notifier" "$NOTIFIER/Contents/Info.plist" >/dev/null
+    79	  plutil -replace CFBundleName -string "Lumos 治理看門狗" "$NOTIFIER/Contents/Info.plist" >/dev/null
+    80	  touch "$NOTIFIER"           # 逼 LaunchServices 重讀圖示
+    81	  rm -rf "$tmp"
+    82	  return 0
+    83	}
+    84	
+    85	case "${1:-install}" in
+    86	  --status|status) status; exit 0 ;;
+    87	  --rebuild-notifier)
+    88	    build_notifier && echo "通知 app 重建好了:$NOTIFIER"
+    89	    open -a "$NOTIFIER" --args "重建完成——這則通知左邊應該是 Lumos 的四角星。" 2>/dev/null || true
+    90	    exit 0 ;;
+    91	  --uninstall)
+    92	    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+    93	    rm -f "$DEST"
+    94	    echo "已移除。"; status; exit 0 ;;
+    95	esac
+    96	
+    97	[ -f "$SRC" ] || { echo "找不到 plist:$SRC" >&2; exit 1; }
+    98	# plist 裡寫死了腳本的絕對路徑,先確認那個路徑跟這份 repo 對得上,不然裝了也是跑空氣。
+    99	want="$DIR/wrapper-watchdog.sh"
+   100	grep -q -- "$want" "$SRC" || {
+   101	  echo "★plist 裡的腳本路徑跟這份 repo 對不上★" >&2
+   102	  echo "  這份 repo 的腳本在:$want" >&2
+   103	  echo "  plist 裡寫的是    :$(grep -A1 'ProgramArguments' -A3 "$SRC" | grep string | tail -1)" >&2
+   104	  exit 1
+   105	}
+   106	plutil -lint "$SRC" >/dev/null || { echo "plist 格式不合法:$SRC" >&2; exit 1; }
+   107	
+   108	mkdir -p "$(dirname "$DEST")"
+   109	cp "$SRC" "$DEST"
+   110	launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true    # 先卸再裝,才吃得到改過的內容
+   111	launchctl bootstrap "$DOMAIN" "$DEST" || { echo "launchctl bootstrap 失敗" >&2; exit 1; }
+   112	
+   113	# 通知 app 一併建起來,並且★當場發一則★——不是為了好看,是為了讓 macOS 現在就問你
+   114	# 「要不要允許這個 app 發通知」。不在安裝時問,第一次真的出事那天通知會被靜默丟掉,
+   115	# 而那正是這支看門狗存在的理由。
+   116	if build_notifier; then
+   117	  open -a "$NOTIFIER" --args "看門狗裝好了。之後它有話要說,就會長這樣。" 2>/dev/null || true
+   118	  echo ""
+   119	  echo "★請確認兩件事★"
+   120	  echo "  1. 剛才右上角有沒有跳出一則通知?沒有的話到「系統設定 → 通知」把"
+   121	  echo "     「Lumos 治理看門狗」打開——沒開的話它以後喊了你也看不到。"
+   122	  echo "  2. 那則通知左邊的圖示是不是 Lumos 的四角星?"
+   123	  echo "  圖示沒換到 → 重建一次:bash governance/install-watchdog.sh --rebuild-notifier"
+   124	fi
+   125	
+   126	echo ""
+   127	echo "裝好了。"
+   128	status
+     1	#!/bin/bash
+     2	# 每日治理 wrapper 的看門狗:讀它的健康狀態檔,逾期或有步驟失敗就出聲。
+     3	#
+     4	# ★為什麼要獨立一支★(2026-09-07 全 repo 審視 #18,設計審 r1 兩席判 blocker):
+     5	# 9/5 那次 wrapper 跑到第二步就死了、後三步全沒跑、整天沒人發現——因為
+     6	# ①它不管發生什麼都回 0 ②沒有任何東西在讀它印的東西。
+     7	# 而圖譜裡同一週剛好記過一條教訓:「監看的東西和被監看的東西同命」。
+     8	# 所以告警器不能住在 wrapper 裡,也不能只靠「有人跑健檢時順便看到」
+     9	# ——那正是這個 repo 前科事故失敗過的做法(一條軟提醒響了 46 天、18,283 次沒人發現)。
+    10	#
+    11	# 這支只做三件事:讀健康檔 → 判斷 → 有事說出去。不改任何東西。
+    12	set -uo pipefail
+    13	
+    14	DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    15	HEALTH="$DIR/.daily-governance-health.json"
+    16	LOCKDIR="$DIR/.daily-governance.lock"     # 被監看那支的鎖(拿來分辨「正在跑」和「死了」)
+    17	STATE="$DIR/.wrapper-watchdog-state"      # 上次喊過什麼(邊緣觸發用;不進版控)
+    18	WLOCK="$DIR/.wrapper-watchdog.lock"       # 這支自己的鎖
+    19	LOG="$DIR/logs/wrapper-watchdog.log"
+    20	ts() { date '+%Y-%m-%d %H:%M:%S'; }
+    21	
+    22	# 逾期門檻:排程是每天一次,給到 36 小時(睡過一天還有機會補)。
+    23	STALE_SEC=$(( 36 * 3600 ))
+    24	# ★「機器醒著多久」要問「上次從睡眠醒來」,不是「開機多久」★
+    25	# (設計審 r2 通才席判 blocker,實測:這台閉蓋 Mac 開機 59 天沒重開過,
+    26	#  「開機超過兩小時」永遠成立,那個條件從第一天就是空的、而且不會有任何錯誤訊息)。
+    27	# 真實紀錄裡有過一次 129 小時的合法空窗(長假),這條就是為了不在那種時候誤報。
+    28	AWAKE_MIN_SEC=$(( 2 * 3600 ))
+    29	
+    30	awake_sec() {
+    31	  # macOS:kern.waketime 給「上次真正從睡眠醒來」的時間。拿不到就失敗,呼叫端當「不確定」處理。
+    32	  # ★第一版用 sed 's/.*sec = \([0-9]*\).*/\1/' 剖,抓到的是 usec 不是 sec★
+    33	  #   ——`.*` 貪婪會吃到最後一個「sec = 」,而輸出長這樣:
+    34	  #     { sec = 1788609050, usec = 942190 } Sat Sep  5 19:50:50 2026
+    35	  #   真的用下去就是拿微秒當秒數,結果永遠判成「剛醒來」→ 這條防護永遠不喊,而且不會報錯。
+    36	  #   改用 python 明確抓第一個 `sec = `,不靠貪婪比對。
+    37	  local wt
+    38	  wt="$(python3 -c "
+    39	import subprocess,re,sys
+    40	o=subprocess.run(['sysctl','-n','kern.waketime'],capture_output=True,text=True).stdout
+    41	m=re.search(r'\bsec = (\d+)',o)
+    42	sys.stdout.write(m.group(1) if m else '')" 2>/dev/null || echo '')"
+    43	  [ -z "$wt" ] && return 1
+    44	  echo $(( $(date +%s) - wt ))
+    45	}
+    46	
+    47	# ★話要講到有人聽得到的地方★(2026-09-07 代碼審 r1 外家否決席判 blocker,說得對):
+    48	# 第一版只 echo 一行 + 追加一個本機紀錄檔,而 launchd 又把 stdout 導進另一個檔案
+    49	# ——完整重現了它想防的那件事:「沒有任何東西在讀它印的東西」。
+    50	# 所以現在走三條:
+    51	#   ①桌面通知:不需要任何人記得去開檔案,狀態一變就跳出來。
+    52	#     是這三條裡唯一「不靠人主動查」的,也是這支存在的理由。
+    53	#   ②這支自己的紀錄檔:留時間序,事後要回頭查哪天開始壞的靠它。
+    54	#   ③健檢的 [A1] 段:那段直接讀同一份健康檔,`lumos doctor` 一跑就看得到,並且接得上治理帳。
+    55	# ★三條裡①②住在 launchd,③住在 Claude Code 的收工健檢——後者才是真正的獨立失敗域★
+    56	#   (第一版計劃寫「再開一支 launchd job 就是獨立失敗域」,那句話是錯的:
+    57	#    兩支 launchd job 共用同一個 launchd、同一個使用者 session、同一顆磁碟)。
+    58	# 通知走兩條,前面那條有就用前面那條:
+    59	#   ①`~/Library/Application Support/Lumos/LumosWatchdog.app`——安裝腳本建的最小 app,
+    60	#     有 Lumos 自己的圖示。★osascript 直接發的通知沒辦法指定圖片★,它顯示的是呼叫者
+    61	#     (從 launchd 跑就是 Script Editor 的圖示),要換圖只能包成 app。
+    62	#   ②沒建成 app 就退回 osascript 直接發:圖示是系統預設的,但話還是講得出去。
+    63	#     ★寧可醜也要發得出去★——這支的價值在「有人看得到」,不在好看。
+    64	NOTIFIER="$HOME/Library/Application Support/Lumos/LumosWatchdog.app"
+    65	notify() {
+    66	  if [ -d "$NOTIFIER" ] && command -v open >/dev/null 2>&1; then
+    67	    open -a "$NOTIFIER" --args "$1" >/dev/null 2>&1 && return 0
+    68	  fi
+    69	  command -v osascript >/dev/null 2>&1 || return 0
+    70	  osascript -e 'on run argv
+    71	    display notification (item 1 of argv) with title "Lumos 治理看門狗"
+    72	  end run' "$1" >/dev/null 2>&1 || true
+    73	}
+    74	emit() {   # $1=kind  $2=一句話
+    75	  local kind="$1" msg="$2"
+    76	  echo "[$(ts)] $msg"
+    77	  notify "$msg"
+    78	  mkdir -p "$DIR/logs" 2>/dev/null || true
+    79	  printf '{"ts":"%s","kind":"%s","note":"%s"}\n' \
+    80	    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$kind" "$msg" >> "$LOG" 2>/dev/null || true
+    81	}
+    82	
+    83	# ★這支自己也要一把鎖★(代碼審 r1 併發席:被監看的有鎖、監看的自己沒有,是不對稱的疏漏。
+    84	# 手動測試撞上排程那一次,兩份會各自判成「狀態改變」、重複寫帳)。
+    85	# ★但故意不學 wrapper 那套 pid 身分驗證★:監看器被一把殘鎖永久關掉,比偶爾兩份同時跑嚴重
+    86	# 得多,所以這裡一律用時間兜底、寧可搶——這支跑幾秒就結束,鎖超過 10 分鐘一定是殘的。
+    87	wlock_release() { rm -rf "$WLOCK" 2>/dev/null || true; }
+    88	take_wlock() {
+    89	  mkdir "$WLOCK" 2>/dev/null && return 0
+    90	  local age
+    91	  age="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$WLOCK')))" 2>/dev/null || echo 99999)"
+    92	  [ "$age" -lt 600 ] && return 1
+    93	  mv "$WLOCK" "$WLOCK.dead.$$" 2>/dev/null || return 1
+    94	  rm -rf "$WLOCK.dead.$$" 2>/dev/null || true
+    95	  mkdir "$WLOCK" 2>/dev/null || return 1
+    96	  return 0
+    97	}
+    98	
+    99	# 被監看那支現在是不是真的在跑(看它的鎖)。回傳 0=在跑,1=沒在跑。
+   100	# ★不看鎖就會誤報★(代碼審 r1 併發席實測):自主迴圈那段可以跑三小時,只看
+   101	# finished_at 的年齡,會在它正在跑的時候喊「超過 36 小時沒跑完、它不會自己喊」
+   102	# ——而那句話還會誘使人去 kill 一個其實正常的行程,一 kill 就掉進殘鎖接管那條路。
+   103	wrapper_running() {
+   104	  [ -d "$LOCKDIR" ] || return 1
+   105	  local p; p="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+   106	  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+   107	  kill -0 "$p" 2>/dev/null || return 1
+   108	  local cmd; cmd="$(ps -p "$p" -o command= 2>/dev/null || echo '')"
+   109	  case "$cmd" in *daily-governance*) return 0 ;; *) return 1 ;; esac
+   110	}
+   111	lock_age() {
+   112	  python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo ''
+   113	}
+   114	
+   115	# 健康檔一次讀出四件事,四行:finished_at / 哪些步驟非零 / total 跟 steps 對不對得上 / steps 讀不讀得到。
+   116	# ★不能只讀 total★(代碼審 r1 邊界席):健檢的 [A1] 段讀的是 steps,這支第一版讀 total,
+   117	# 餵一份「五步全 0、只有 total 壞掉」的檔,兩邊會講出完全相反的結論——而我在健檢那段
+   118	# 的註解裡還寫了「兩條讀同一份健康檔,所以不會各說各話」,那句話當場被打臉。
+   119	# 現在兩邊都以 steps 為準,total 只當交叉檢查:對不上就是這份檔壞了,單獨喊一種狀態。
+   120	read_health() {
+   121	  python3 - "$HEALTH" <<'PY' 2>/dev/null || return 1
+   122	import json, sys
+   123	d = json.load(open(sys.argv[1]))
+   124	fin = d.get("finished_at")
+   125	fin = fin if isinstance(fin, str) else ""
+   126	steps = d.get("steps")
+   127	if isinstance(steps, dict):
+   128	    bad = ",".join(str(k) for k, v in steps.items() if v != 0)
+   129	    agg = 1 if bad else 0
+   130	    mismatch = "1" if d.get("total") != agg else "0"
+   131	    readable = "1"
+   132	else:
+   133	    bad, mismatch, readable = "", "0", "0"
+   134	print(fin); print(bad); print(mismatch); print(readable)
+   135	PY
+   136	}
+   137	
+   138	main() {
+   139	  take_wlock || { echo "[$(ts)] 另一份看門狗正在跑,這次跳過"; return 0; }
+   140	  trap wlock_release EXIT
+   141	
+   142	  # ★邊緣觸發★(設計審 r2 外家席):照字面每小時寫一筆,故障持續期間一天寫 24 筆同樣的東西
+   143	  # ——而這一案自己正在處理帳本膨脹。只在「第一次發現 / 狀態改變 / 換日 / 恢復」時寫。
+   144	  local prev=""; [ -f "$STATE" ] && prev="$(cat "$STATE" 2>/dev/null || echo '')"
+   145	  local today; today="$(date +%F)"
+   146	  local now_state="" msg=""
+   147	
+   148	  if wrapper_running; then
+   149	    local la; la="$(lock_age)"
+   150	    if [ -n "$la" ] && [ "$la" -gt "$STALE_SEC" ]; then
+   151	      now_state="hung|$today"
+   152	      msg="每日治理 wrapper 從 $(( la / 3600 )) 小時前就一直在跑、沒有結束——多半是卡住了。鎖在 $LOCKDIR。"
+   153	    else
+   154	      now_state="running|$today"   # 正在跑,沒事,不喊
+   155	    fi
+   156	  elif [ ! -f "$HEALTH" ]; then
+   157	    # ★檔案不存在 ≠ 死掉★(設計審 r1 外家席:第一版完全沒定義這個語意)。
+   158	    # 新機、重新 clone、清過紀錄都會這樣,訊息要跟「死掉了」分開講,而且不算逾期。
+   159	    now_state="never|$today"
+   160	    msg="這台機器上的每日治理 wrapper 從來沒跑完過(還沒有健康狀態檔)。第一次跑過就會有。"
+   161	  else
+   162	    local hr fin bad mismatch readable age
+   163	    if ! hr="$(read_health)"; then
+   164	      now_state="unreadable|$today"
+   165	      msg="每日治理 wrapper 的健康狀態檔讀不動($HEALTH)——看不出它跑了沒。"
+   166	    else
+   167	      fin="$(printf '%s\n' "$hr" | sed -n 1p)"
+   168	      bad="$(printf '%s\n' "$hr" | sed -n 2p)"
+   169	      mismatch="$(printf '%s\n' "$hr" | sed -n 3p)"
+   170	      readable="$(printf '%s\n' "$hr" | sed -n 4p)"
+   171	      age=""
+   172	      [ -n "$fin" ] && age="$(python3 -c "
+   173	import datetime,sys
+   174	d=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
+   175	print(int((datetime.datetime.now(datetime.timezone.utc)-d).total_seconds()))" "$fin" 2>/dev/null || echo '')"
+   176	      if [ -z "$age" ] || [ "$readable" != "1" ]; then
+   177	        # ★時間讀不動就是讀不動,不能往下掉進「沒事」★(代碼審 r1 外家 finder 實測:
+   178	        # 第一版時間解析失敗只讓 age 變空字串,控制流直接落到下面比 total,total 剛好是 0
+   179	        # 就靜默判成正常——一份完全讀不懂的健康檔換來一個綠燈)。
+   180	        now_state="unreadable|$today"
+   181	        msg="每日治理 wrapper 的健康狀態檔內容不對($HEALTH:時間或 steps 欄讀不動)——看不出它跑了沒。"
+   182	      elif [ "$age" -gt "$STALE_SEC" ]; then
+   183	        local aw; aw="$(awake_sec || echo '')"
+   184	        if [ -n "$aw" ] && [ "$aw" -lt "$AWAKE_MIN_SEC" ]; then
+   185	          now_state="justwoke|$today"   # 剛醒來,排程還沒輪到——不喊(那 129 小時空窗的形態)
+   186	        else
+   187	          now_state="stale|$today"
+   188	          msg="每日治理 wrapper 超過 36 小時沒跑完(最後一次 $fin)——第 3-5 步可能整批沒跑,而它不會自己喊。"
+   189	        fi
+   190	      elif [ "$mismatch" = "1" ]; then
+   191	        now_state="inconsistent|$today"
+   192	        msg="每日治理 wrapper 的健康狀態檔自相矛盾($HEALTH 的 total 跟 steps 對不上)——這份檔不能拿來判斷。"
+   193	      elif [ -n "$bad" ]; then
+   194	        now_state="failed|$today"
+   195	        msg="每日治理 wrapper 最後一次跑完但這些步驟失敗:$bad(見 $HEALTH 的 steps 欄)。"
+   196	      else
+   197	        now_state="ok|$today"
+   198	      fi
+   199	    fi
+   200	  fi
+   201	
+   202	  # 恢復也記一筆(不然帳上只看得到壞掉、看不到修好)
+   203	  case "${prev%%|*}" in
+   204	    ""|ok|running) ;;
+   205	    *) case "${now_state%%|*}" in
+   206	         ok|running) emit "recovered" "每日治理 wrapper 恢復正常(前一個狀態:${prev%%|*})。" ;;
+   207	       esac ;;
+   208	  esac
+   209	  if [ -n "$msg" ] && [ "$now_state" != "$prev" ]; then
+   210	    emit "${now_state%%|*}" "$msg"
+   211	  fi
+   212	
+   213	  # ★狀態檔寫不進去要喊,不能默默吞掉★(代碼審 r1 邊界席實測:第一版寫
+   214	  # `> "$STATE" 2>/dev/null || true`,狀態檔變成目錄或唯讀時 ①bash 會在套用 2>/dev/null
+   215	  # 之前就把錯誤印到真的 stderr,吞不掉 ②邊緣觸發整個失效,故障期間每小時重複喊一次
+   216	  # ——正好是這支自己設計要避免的那件事)。
+   217	  local stmp="$STATE.tmp.$$"
+   218	  if ! { printf '%s' "$now_state" > "$stmp"; } 2>/dev/null \
+   219	     || ! mv -f "$stmp" "$STATE" 2>/dev/null \
+   220	     || [ "$(cat "$STATE" 2>/dev/null || echo '')" != "$now_state" ]; then
+   221	    rm -f "$stmp" 2>/dev/null || true
+   222	    emit "state-unwritable" "看門狗自己的狀態檔寫不進去($STATE)——它會開始每小時重複喊同一件事,先把那個路徑清掉。"
+   223	  fi
+   224	  return 0
+   225	}
+   226	
+   227	main "$@"; exit
+
+[35m[3mcodex[0m[0m
+初步已抓到核心風險：目前把「LaunchServices 接受啟動請求」當成「通知成功送達」，這兩件事不是同一個訊號；權限拒絕尤其不會可靠地觸發退路。我正在補齊精確行號與其他半成品/殘留路徑。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "python3 scripts/lumos context 'Projects/每日治理wrapper活著沒_計劃' --brief && sed -n '1,40p' governance/install-watchdog.sh && nl -ba governance/review-reports/code-batch14/r1-snapshot.patch | sed -n '35,190p' && git diff --check -- governance/install-watchdog.sh governance/wrapper-watchdog.sh"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 176ms:[0m
+# Projects/每日治理wrapper活著沒_計劃.md
+type:project | status:doing | created:2026-09-07 | updated:2026-09-07
+summary:
+  FLAG:DECISION
+  KEY:問題=每天 09:30 那支跑五件事的腳本,9/5 跑到第二步就死、後三步全沒跑、整天沒人發現;它不管發生什麼都回 0,而且沒有任何東西在讀它印的東西
+→ 連出 (5):
+  • Issues/把自己的推論寫成repo明文寫過.md [open]
+  • Issues/自足性審計提醒空轉四十六天.md [resolved]
+  • Systems/autonomous-iteration-loop.md [done]
+  • Systems/reversibility-governance-ledger.md [done]
+  • Verification/2026-09-05_wrapper邊跑邊改實驗.md [pass]
+← 連入 (0):
+#!/bin/bash
+# 把看門狗那支排程真的裝到這台機器上(macOS launchd),或用 --status 看它裝了沒。
+#
+# ★為什麼需要這支★(2026-09-07 代碼審 r1 外家否決席判 blocker,查證屬實):
+# 第一版只把 plist 加進 repo 就當交付了,但 repo 裡的 plist 不會自己變成一個排程
+# ——實機 `launchctl print gui/501/com.enzo.lumos.wrapper-watchdog` 回「找不到」。
+# 也就是說那批合進去之後,號稱的看門狗一次都不會跑。
+# (對照組:每日治理那支的 plist 根本不在 repo 裡,只躺在系統目錄,誰裝的沒有紀錄
+#  ——所以這裡沒有既有慣例可以照抄,是新開的。)
+set -uo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LABEL="com.enzo.lumos.wrapper-watchdog"
+SRC="$DIR/$LABEL.plist"
+DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
+DOMAIN="gui/$(id -u)"
+
+status() {
+  echo "plist 來源     : $SRC"
+  echo "裝到哪         : $DEST"
+  if [ -f "$DEST" ]; then
+    if diff -q "$SRC" "$DEST" >/dev/null 2>&1; then
+      echo "裝好的那份     : 跟 repo 一致"
+    else
+      echo "裝好的那份     : ★跟 repo 不一樣★——重跑這支會用 repo 的蓋過去"
+    fi
+  else
+    echo "裝好的那份     : 沒有"
+  fi
+  if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    echo "launchd 認得它 : 是"
+  else
+    echo "launchd 認得它 : ★否——它一次都不會跑★"
+  fi
+}
+
+# ★桌面通知的圖示要換成 Lumos 的四角星,得包一個 app★
+# 事實先講清楚:`osascript ... display notification` 顯示的是**呼叫它那支程式**的圖示
+# (從 launchd 跑就是 Script Editor 那個),沒有辦法在指令裡指定圖片。要自訂圖示只有兩條路:
+#   ①裝 terminal-notifier —— 新增一個外部依賴,這個 repo 的家規是零依賴,不走。
+    35	+**留了退路**:app 不在或 `open` 失敗就退回原本的 `osascript` 直接發。圖示會是系統預設的,
+    36	+但話還是講得出去。★寧可醜也要發得出去★——這支的價值在有人看得到,不在好看。
+    37	+
+    38	 ### 誠實邊界
+    39	 
+    40	 - **排程現在會自動裝,但要人跑一次那支安裝腳本**:`bash governance/install-watchdog.sh`。
+    41	   工具鏈的安裝器不分發這支(清單裡沒有),換一台機器要重跑。
+    42	 - **看門狗本身也會死**:排程器整個掛掉就兩支都不跑。健檢的 `[A1]` 段現在會抓到這件事
+    43	   (它不在 launchd 底下),但那要有人跑健檢。完全無人看顧的解只有機器外的心跳,
+    44	   已列在計劃裡並掛回頭條件。
+    45	 - **「機器剛醒來」只擋得掉最大宗的誤報**:開機後兩小時內剛好跨過門檻仍會誤報一次。
+    46	diff --git a/governance/install-watchdog.sh b/governance/install-watchdog.sh
+    47	index 51b54e2..82bc9e9 100755
+    48	--- a/governance/install-watchdog.sh
+    49	+++ b/governance/install-watchdog.sh
+    50	@@ -27,22 +27,74 @@ status() {
+    51	   else
+    52	     echo "裝好的那份     : 沒有"
+    53	   fi
+    54	   if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    55	     echo "launchd 認得它 : 是"
+    56	   else
+    57	     echo "launchd 認得它 : ★否——它一次都不會跑★"
+    58	   fi
+    59	 }
+    60	 
+    61	+# ★桌面通知的圖示要換成 Lumos 的四角星,得包一個 app★
+    62	+# 事實先講清楚:`osascript ... display notification` 顯示的是**呼叫它那支程式**的圖示
+    63	+# (從 launchd 跑就是 Script Editor 那個),沒有辦法在指令裡指定圖片。要自訂圖示只有兩條路:
+    64	+#   ①裝 terminal-notifier —— 新增一個外部依賴,這個 repo 的家規是零依賴,不走。
+    65	+#   ②自己包一個最小的 .app —— 只用 macOS 內建的 osacompile / sips / iconutil / plutil,不加依賴。
+    66	+# 走②。app 是「建出來的東西」不是原始碼,所以不進版控,裝的時候現建。
+    67	+NOTIFIER_DIR="$HOME/Library/Application Support/Lumos"
+    68	+NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
+    69	+ICON_SRC="$(cd "$DIR/.." && pwd)/assets/lumos-icon.png"
+    70	+
+    71	+build_notifier() {
+    72	+  for c in osacompile sips iconutil plutil; do
+    73	+    command -v "$c" >/dev/null 2>&1 || { echo "缺 $c,跳過通知圖示這一步(通知照發,只是用系統預設圖示)"; return 1; }
+    74	+  done
+    75	+  [ -f "$ICON_SRC" ] || { echo "找不到圖檔 $ICON_SRC,跳過通知圖示這一步"; return 1; }
+    76	+  local tmp; tmp="$(mktemp -d)" || return 1
+    77	+  local iset="$tmp/lumos.iconset"; mkdir -p "$iset"
+    78	+  local s
+    79	+  for s in 16 32 128 256 512; do
+    80	+    sips -z "$s" "$s" "$ICON_SRC" --out "$iset/icon_${s}x${s}.png" >/dev/null 2>&1
+    81	+    sips -z $((s*2)) $((s*2)) "$ICON_SRC" --out "$iset/icon_${s}x${s}@2x.png" >/dev/null 2>&1
+    82	+  done
+    83	+  iconutil -c icns "$iset" -o "$tmp/lumos.icns" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
+    84	+  # ★applet 一定要 quit★:不加的話它會留在事件迴圈裡不結束,每小時一則就是每小時一個殭屍行程。
+    85	+  cat > "$tmp/notify.applescript" <<'APPLESCRIPT'
+    86	+on run argv
+    87	+	set theMsg to "(沒有內容)"
+    88	+	if (count of argv) > 0 then set theMsg to item 1 of argv
+    89	+	set theTitle to "Lumos 治理看門狗"
+    90	+	if (count of argv) > 1 then set theTitle to item 2 of argv
+    91	+	display notification theMsg with title theTitle
+    92	+	quit
+    93	+end run
+    94	+on quit
+    95	+	continue quit
+    96	+end quit
+    97	+APPLESCRIPT
+    98	+  rm -rf "$NOTIFIER"
+    99	+  mkdir -p "$NOTIFIER_DIR"
+   100	+  osacompile -o "$NOTIFIER" "$tmp/notify.applescript" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
+   101	+  cp "$tmp/lumos.icns" "$NOTIFIER/Contents/Resources/applet.icns"
+   102	+  plutil -replace CFBundleIdentifier -string "com.enzo.lumos.watchdog-notifier" "$NOTIFIER/Contents/Info.plist" >/dev/null
+   103	+  plutil -replace CFBundleName -string "Lumos 治理看門狗" "$NOTIFIER/Contents/Info.plist" >/dev/null
+   104	+  touch "$NOTIFIER"           # 逼 LaunchServices 重讀圖示
+   105	+  rm -rf "$tmp"
+   106	+  return 0
+   107	+}
+   108	+
+   109	 case "${1:-install}" in
+   110	   --status|status) status; exit 0 ;;
+   111	+  --rebuild-notifier)
+   112	+    build_notifier && echo "通知 app 重建好了:$NOTIFIER"
+   113	+    open -a "$NOTIFIER" --args "重建完成——這則通知左邊應該是 Lumos 的四角星。" 2>/dev/null || true
+   114	+    exit 0 ;;
+   115	   --uninstall)
+   116	     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+   117	     rm -f "$DEST"
+   118	     echo "已移除。"; status; exit 0 ;;
+   119	 esac
+   120	 
+   121	 [ -f "$SRC" ] || { echo "找不到 plist:$SRC" >&2; exit 1; }
+   122	 # plist 裡寫死了腳本的絕對路徑,先確認那個路徑跟這份 repo 對得上,不然裝了也是跑空氣。
+   123	 want="$DIR/wrapper-watchdog.sh"
+   124	 grep -q -- "$want" "$SRC" || {
+   125	@@ -50,12 +102,27 @@ grep -q -- "$want" "$SRC" || {
+   126	   echo "  這份 repo 的腳本在:$want" >&2
+   127	   echo "  plist 裡寫的是    :$(grep -A1 'ProgramArguments' -A3 "$SRC" | grep string | tail -1)" >&2
+   128	   exit 1
+   129	 }
+   130	 plutil -lint "$SRC" >/dev/null || { echo "plist 格式不合法:$SRC" >&2; exit 1; }
+   131	 
+   132	 mkdir -p "$(dirname "$DEST")"
+   133	 cp "$SRC" "$DEST"
+   134	 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true    # 先卸再裝,才吃得到改過的內容
+   135	 launchctl bootstrap "$DOMAIN" "$DEST" || { echo "launchctl bootstrap 失敗" >&2; exit 1; }
+   136	+
+   137	+# 通知 app 一併建起來,並且★當場發一則★——不是為了好看,是為了讓 macOS 現在就問你
+   138	+# 「要不要允許這個 app 發通知」。不在安裝時問,第一次真的出事那天通知會被靜默丟掉,
+   139	+# 而那正是這支看門狗存在的理由。
+   140	+if build_notifier; then
+   141	+  open -a "$NOTIFIER" --args "看門狗裝好了。之後它有話要說,就會長這樣。" 2>/dev/null || true
+   142	+  echo ""
+   143	+  echo "★請確認兩件事★"
+   144	+  echo "  1. 剛才右上角有沒有跳出一則通知?沒有的話到「系統設定 → 通知」把"
+   145	+  echo "     「Lumos 治理看門狗」打開——沒開的話它以後喊了你也看不到。"
+   146	+  echo "  2. 那則通知左邊的圖示是不是 Lumos 的四角星?"
+   147	+  echo "  圖示沒換到 → 重建一次:bash governance/install-watchdog.sh --rebuild-notifier"
+   148	+fi
+   149	+
+   150	+echo ""
+   151	 echo "裝好了。"
+   152	 status
+   153	diff --git a/governance/wrapper-watchdog.sh b/governance/wrapper-watchdog.sh
+   154	index c3d1e40..518b2d4 100755
+   155	--- a/governance/wrapper-watchdog.sh
+   156	+++ b/governance/wrapper-watchdog.sh
+   157	@@ -41,28 +41,38 @@ o=subprocess.run(['sysctl','-n','kern.waketime'],capture_output=True,text=True).
+   158	 m=re.search(r'\bsec = (\d+)',o)
+   159	 sys.stdout.write(m.group(1) if m else '')" 2>/dev/null || echo '')"
+   160	   [ -z "$wt" ] && return 1
+   161	   echo $(( $(date +%s) - wt ))
+   162	 }
+   163	 
+   164	 # ★話要講到有人聽得到的地方★(2026-09-07 代碼審 r1 外家否決席判 blocker,說得對):
+   165	 # 第一版只 echo 一行 + 追加一個本機紀錄檔,而 launchd 又把 stdout 導進另一個檔案
+   166	 # ——完整重現了它想防的那件事:「沒有任何東西在讀它印的東西」。
+   167	 # 所以現在走三條:
+   168	-#   ①桌面通知(macOS osascript):不需要任何人記得去開檔案,狀態一變就跳出來。
+   169	+#   ①桌面通知:不需要任何人記得去開檔案,狀態一變就跳出來。
+   170	 #     是這三條裡唯一「不靠人主動查」的,也是這支存在的理由。
+   171	 #   ②這支自己的紀錄檔:留時間序,事後要回頭查哪天開始壞的靠它。
+   172	 #   ③健檢的 [A1] 段:那段直接讀同一份健康檔,`lumos doctor` 一跑就看得到,並且接得上治理帳。
+   173	 # ★三條裡①②住在 launchd,③住在 Claude Code 的收工健檢——後者才是真正的獨立失敗域★
+   174	 #   (第一版計劃寫「再開一支 launchd job 就是獨立失敗域」,那句話是錯的:
+   175	 #    兩支 launchd job 共用同一個 launchd、同一個使用者 session、同一顆磁碟)。
+   176	+# 通知走兩條,前面那條有就用前面那條:
+   177	+#   ①`~/Library/Application Support/Lumos/LumosWatchdog.app`——安裝腳本建的最小 app,
+   178	+#     有 Lumos 自己的圖示。★osascript 直接發的通知沒辦法指定圖片★,它顯示的是呼叫者
+   179	+#     (從 launchd 跑就是 Script Editor 的圖示),要換圖只能包成 app。
+   180	+#   ②沒建成 app 就退回 osascript 直接發:圖示是系統預設的,但話還是講得出去。
+   181	+#     ★寧可醜也要發得出去★——這支的價值在「有人看得到」,不在好看。
+   182	+NOTIFIER="$HOME/Library/Application Support/Lumos/LumosWatchdog.app"
+   183	 notify() {
+   184	+  if [ -d "$NOTIFIER" ] && command -v open >/dev/null 2>&1; then
+   185	+    open -a "$NOTIFIER" --args "$1" >/dev/null 2>&1 && return 0
+   186	+  fi
+   187	   command -v osascript >/dev/null 2>&1 || return 0
+   188	   osascript -e 'on run argv
+   189	     display notification (item 1 of argv) with title "Lumos 治理看門狗"
+   190	   end run' "$1" >/dev/null 2>&1 || true
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-hY3eaNzH' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-QCQ9MOhS' (errno=Operation not permitted)
+
+[35m[3mcodex[0m[0m
+severity: blocker
+
+1. severity: blocker  
+   blocking: 是  
+   file: governance/wrapper-watchdog.sh:66  
+   逐字引句: `open -a "$NOTIFIER" --args "$1" >/dev/null 2>&1 && return 0`  
+   why: `open` 的成功只表示 LaunchServices 接受啟動請求，不表示 applet 已執行 `display notification`，更不表示通知中心實際顯示通知。使用者拒絕或關閉此 app 的通知權限時，`open` 仍可回 0，函式立即 `return 0`，第 69–72 行的 `osascript` 退路完全不會執行。這正好留下本批聲稱要補掉的「權限沒開＝靜默不喊」故障；安裝時人工確認一次也不能涵蓋日後被關閉或通知設定重置。核心價值是故障時必須有人知道，因此阻擋合併。
+
+2. severity: major  
+   blocking: 是  
+   file: governance/install-watchdog.sh:74  
+   逐字引句: `rm -rf "$NOTIFIER"`  
+   why: 重建不是原子替換。它先刪除已可用的正式 app，再直接在正式路徑執行 `osacompile`。若編譯因磁碟滿、權限或工具錯誤失敗，可能留下部分 `.app`；失敗處理只刪 `$tmp`，沒有刪 `$NOTIFIER`，也無法恢復上一版。之後 `notify()` 只用 `[ -d "$NOTIFIER" ]` 判斷存在，會把半成品當候選；再疊加 finding 1 的非同步 `open` 成功語意，可能吞掉真正的退路。應在同目錄建完整 staging bundle、逐項驗證後才 rename/替換正式 app。
+
+3. severity: major  
+   blocking: 是  
+   file: governance/install-watchdog.sh:77  
+   逐字引句: `cp "$tmp/lumos.icns" "$NOTIFIER/Contents/Resources/applet.icns"`  
+   why: `cp`、兩次 `plutil` 與 `touch` 的回傳碼全部未檢查，而腳本只有 `set -uo pipefail`、沒有 `set -e`；任一步失敗，函式仍走到 `return 0`。可藉由讓 bundle 的 Resources 或 Info.plist 不可寫、磁碟空間耗盡，重現「app 不完整但安裝器宣稱成功」。尤其 bundle identifier 寫入失敗會讓通知權限歸屬與腳本宣稱的 app 身分不一致，人工看到/允許的對象未必是 watchdog 日後使用的穩定身分。
+
+4. severity: major  
+   blocking: 是  
+   file: governance/install-watchdog.sh:116  
+   逐字引句: `open -a "$NOTIFIER" --args "看門狗裝好了。之後它有話要說,就會長這樣。" 2>/dev/null || true`  
+   why: 安裝驗證無條件吞掉 `open` 失敗，隨後仍印「裝好了」及請使用者確認的文字，整支安裝器也成功退出。無 GUI session、LaunchServices 異常或 app 無法啟動時，實際上一則通知都沒送出，卻沒有自動走 `osascript`、沒有失敗狀態，也沒有阻止安裝成功。`--rebuild-notifier` 第 88–90 行同樣會在 build 失敗後仍嘗試開啟並固定退出 0。
+
+5. severity: minor  
+   blocking: 否  
+   file: governance/install-watchdog.sh:91  
+   逐字引句: `launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true`  
+   why: `--uninstall` 只卸掉 launchd job 與 plist，沒有移除安裝流程建立的 `~/Library/Application Support/Lumos/LumosWatchdog.app`。因此 uninstall 後仍留下 app bundle及其通知權限項目；反覆換 bundle identity 或人工清理時會形成殘留。正常每小時執行不會因 `quit` 累積 applet 行程，但 build 被 signal 中斷時也沒有 trap 清理 `mktemp -d` 目錄。
+
+CODEX DONE
+[1mhook:[0m [2mStop[0m
+[1mhook:[0m [2mStop[0m Completed
+[2mtokens used[0m
+57,983
+severity: blocker
+
+1. severity: blocker  
+   blocking: 是  
+   file: governance/wrapper-watchdog.sh:66  
+   逐字引句: `open -a "$NOTIFIER" --args "$1" >/dev/null 2>&1 && return 0`  
+   why: `open` 的成功只表示 LaunchServices 接受啟動請求，不表示 applet 已執行 `display notification`，更不表示通知中心實際顯示通知。使用者拒絕或關閉此 app 的通知權限時，`open` 仍可回 0，函式立即 `return 0`，第 69–72 行的 `osascript` 退路完全不會執行。這正好留下本批聲稱要補掉的「權限沒開＝靜默不喊」故障；安裝時人工確認一次也不能涵蓋日後被關閉或通知設定重置。核心價值是故障時必須有人知道，因此阻擋合併。
+
+2. severity: major  
+   blocking: 是  
+   file: governance/install-watchdog.sh:74  
+   逐字引句: `rm -rf "$NOTIFIER"`  
+   why: 重建不是原子替換。它先刪除已可用的正式 app，再直接在正式路徑執行 `osacompile`。若編譯因磁碟滿、權限或工具錯誤失敗，可能留下部分 `.app`；失敗處理只刪 `$tmp`，沒有刪 `$NOTIFIER`，也無法恢復上一版。之後 `notify()` 只用 `[ -d "$NOTIFIER" ]` 判斷存在，會把半成品當候選；再疊加 finding 1 的非同步 `open` 成功語意，可能吞掉真正的退路。應在同目錄建完整 staging bundle、逐項驗證後才 rename/替換正式 app。
+
+3. severity: major  
+   blocking: 是  
+   file: governance/install-watchdog.sh:77  
+   逐字引句: `cp "$tmp/lumos.icns" "$NOTIFIER/Contents/Resources/applet.icns"`  
+   why: `cp`、兩次 `plutil` 與 `touch` 的回傳碼全部未檢查，而腳本只有 `set -uo pipefail`、沒有 `set -e`；任一步失敗，函式仍走到 `return 0`。可藉由讓 bundle 的 Resources 或 Info.plist 不可寫、磁碟空間耗盡，重現「app 不完整但安裝器宣稱成功」。尤其 bundle identifier 寫入失敗會讓通知權限歸屬與腳本宣稱的 app 身分不一致，人工看到/允許的對象未必是 watchdog 日後使用的穩定身分。
+
+4. severity: major  
+   blocking: 是  
+   file: governance/install-watchdog.sh:116  
+   逐字引句: `open -a "$NOTIFIER" --args "看門狗裝好了。之後它有話要說,就會長這樣。" 2>/dev/null || true`  
+   why: 安裝驗證無條件吞掉 `open` 失敗，隨後仍印「裝好了」及請使用者確認的文字，整支安裝器也成功退出。無 GUI session、LaunchServices 異常或 app 無法啟動時，實際上一則通知都沒送出，卻沒有自動走 `osascript`、沒有失敗狀態，也沒有阻止安裝成功。`--rebuild-notifier` 第 88–90 行同樣會在 build 失敗後仍嘗試開啟並固定退出 0。
+
+5. severity: minor  
+   blocking: 否  
+   file: governance/install-watchdog.sh:91  
+   逐字引句: `launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true`  
+   why: `--uninstall` 只卸掉 launchd job 與 plist，沒有移除安裝流程建立的 `~/Library/Application Support/Lumos/LumosWatchdog.app`。因此 uninstall 後仍留下 app bundle及其通知權限項目；反覆換 bundle identity 或人工清理時會形成殘留。正常每小時執行不會因 `quit` 累積 applet 行程，但 build 被 signal 中斷時也沒有 trap 清理 `mktemp -d` 目錄。
+
+CODEX DONE

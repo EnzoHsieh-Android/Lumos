@@ -48,14 +48,46 @@ sys.stdout.write(m.group(1) if m else '')" 2>/dev/null || echo '')"
 # 第一版只 echo 一行 + 追加一個本機紀錄檔,而 launchd 又把 stdout 導進另一個檔案
 # ——完整重現了它想防的那件事:「沒有任何東西在讀它印的東西」。
 # 所以現在走三條:
-#   ①桌面通知(macOS osascript):不需要任何人記得去開檔案,狀態一變就跳出來。
+#   ①桌面通知:不需要任何人記得去開檔案,狀態一變就跳出來。
 #     是這三條裡唯一「不靠人主動查」的,也是這支存在的理由。
 #   ②這支自己的紀錄檔:留時間序,事後要回頭查哪天開始壞的靠它。
 #   ③健檢的 [A1] 段:那段直接讀同一份健康檔,`lumos doctor` 一跑就看得到,並且接得上治理帳。
 # ★三條裡①②住在 launchd,③住在 Claude Code 的收工健檢——後者才是真正的獨立失敗域★
 #   (第一版計劃寫「再開一支 launchd job 就是獨立失敗域」,那句話是錯的:
 #    兩支 launchd job 共用同一個 launchd、同一個使用者 session、同一顆磁碟)。
+# 通知走兩條,前面那條有就用前面那條:
+#   ①`~/Library/Application Support/Lumos/LumosWatchdog.app`——安裝腳本建的最小 app,
+#     有 Lumos 自己的圖示。★osascript 直接發的通知沒辦法指定圖片★,它顯示的是呼叫者
+#     (從 launchd 跑就是 Script Editor 的圖示),要換圖只能包成 app。
+#   ②沒建成 app 就退回 osascript 直接發:圖示是系統預設的,但話還是講得出去。
+#     ★寧可醜也要發得出去★——這支的價值在「有人看得到」,不在好看。
+# ★路徑從 $DIR 算,不寫死家目錄★(代碼審 r1 架構對齊席):產生物放 repo 樹內、
+# .gitignore 蓋掉,跟 scripts/bin/ 那支下載二進位的做法同款。install-watchdog.sh 建它。
+NOTIFIER_DIR="$DIR/.notifier"
+NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
 notify() {
+  # 訊息走檔案不走參數:applet 的 handler 寫成 `on run argv` 時,用 open --args 啟動會
+  # ★整個不執行★而 open 照樣回 0(實測)。所以寫成 `on run`,訊息從檔案讀。
+  #
+  # ★退路要靠 applet 自己留的印子,不能只看 open 的回傳碼★
+  # (代碼審 r1 外家否決席判 blocker,查證後修正它的推論):
+  #   它說「open 回 0 不代表通知送出去,所以退路是死碼」——前半對(故意 error 的 applet 實測 rc=0)。
+  #   現在改成 applet 跑完自己摸一個印子,等不到就走 osascript 退路,退路真的走得到了。
+  # ★但「跑到了」不等於「使用者看得到」★:通知權限被關掉時 display notification 不報錯,
+  #   shell 這一層沒有辦法分辨。那個洞交給另外兩條不受通知權限影響的通道:
+  #   這支自己的紀錄檔、健檢的 [A1] 段。
+  if [ -x "$NOTIFIER/Contents/MacOS/applet" ] && command -v open >/dev/null 2>&1; then
+    if printf '%s' "$1" > "$NOTIFIER_DIR/message.txt" 2>/dev/null; then
+      rm -f "$NOTIFIER_DIR/.ran" 2>/dev/null || true
+      if open -a "$NOTIFIER" >/dev/null 2>&1; then
+        local i
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          [ -f "$NOTIFIER_DIR/.ran" ] && return 0
+          python3 -c "import time;time.sleep(0.5)" 2>/dev/null || sleep 1
+        done
+      fi
+    fi
+  fi
   command -v osascript >/dev/null 2>&1 || return 0
   osascript -e 'on run argv
     display notification (item 1 of argv) with title "Lumos 治理看門狗"
