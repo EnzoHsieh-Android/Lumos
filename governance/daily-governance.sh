@@ -38,8 +38,12 @@ main() {
   #  ① 建目錄是唯一的原子取鎖點。
   #  ② ★判「持鎖的還活著嗎」不能只用 kill -0★——作業系統會把 pid 回收給完全無關的行程,
   #     那時 kill -0 說「活著」,這支就永遠讓行、五步永遠不跑,而且完全沒有訊息。
-  #     所以要再問一次「那個 pid 的指令長得像不像我們這支」。問不出來就保守當成活著:
-  #     誤判成死掉會雙開,比多讓一次行嚴重得多。
+  #     ★第一版是再問「那個 pid 的指令長得像不像我們這支」,那個做法錯了★
+  #     (2026-09-07 code-batch19 通才席實跑打穿:持鎖者換個名字啟動就認不出來,
+  #     鎖被搶走、兩個行程同時跑)。現在改成硬身分——取鎖時把自己的啟動時刻寫進鎖裡,
+  #     之後拿 pid 去問系統要同一個值來比。細節在下面 holder_alive 的註解。
+  #     問不出來不是無條件讓行,是掉到③的鎖齡兜底:無條件讓行那條路上沒有兜底,
+  #     一旦誤判就回到「永久停擺而且完全沒有訊息」。
   #  ③ 60 分鐘只用在「pid 讀不到」那個競態(對方剛建好目錄還沒寫 pid)。
   #     ★「讀不到」包含「內容不是數字」★:pid 檔被寫壞(寫到一半被砍)時,第一版兩個分支
   #     都不成立,直接掉到「接管」,連 0 秒齡的新鎖都搶。
@@ -53,35 +57,83 @@ main() {
   #     裝在前面之所以安全,是因為 finalize 會先確認鎖裡的 pid 就是自己才動手。
   finalize() {
     [ "$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')" = "$$" ] || return 0
-    rm -rf "$LOCKDIR" 2>/dev/null || true
+    # ★先搬走再確認★(2026-09-07 code-batch19 外家席 f5):讀 pid 跟刪目錄中間還有一段,
+    # 那段時間裡鎖可能已經合法換人,無條件 rm 刪掉的是新持有者正在用的鎖。
+    # mv 是原子的:搬得走才輪到我處置,搬完再看一次裡面的 pid 是不是自己。
+    local held="$LOCKDIR.rel.$$"
+    mv "$LOCKDIR" "$held" 2>/dev/null || return 0
+    if [ "$(cat "$held/pid" 2>/dev/null || echo '')" = "$$" ]; then
+      rm -rf "$held" 2>/dev/null || true
+    else
+      # 搬到的是別人的:原樣還回去。還不回去(對方已經另建一把)就留著不刪
+      # ——留一坨看得見的證據,比默默刪掉別人的鎖好。
+      mv "$held" "$LOCKDIR" 2>/dev/null || \
+        echo "[$(ts)] ★收尾搬到的不是自己的鎖、又還不回去★:留在 $held,要人來看" >&2
+    fi
   }
-  write_pid() {   # 也走暫存→改名:這個 repo 的教訓是共用檔一律原子寫入
-    local t="$LOCKDIR/pid.tmp"
+  lock_secs_since() {   # $1=路徑;印出它幾秒前被動過;問不出來印空字串
+    python3 -c 'import os,sys,time;print(int(time.time()-os.path.getmtime(sys.argv[1])))' "$1" 2>/dev/null || echo ''
+  }
+  lock_proc_start() {   # $1=pid;印出那個行程的啟動時刻;pid 不存在或問不出來印空字串
+    ps -p "$1" -o lstart= 2>/dev/null | sed 's/^ *//;s/ *$//' || echo ''
+  }
+  holder_alive() {   # $1=pid;0=就是當初建這把鎖的那個行程 1=確定不是 2=問不出來
+    # ★不再用「指令列長得像不像我們」認人★(2026-09-07 code-batch19 通才席 blocker)。
+    # 那個做法它實跑打穿了:持鎖者只要換個名字啟動(符號連結、包一層 wrapper、
+    # 未來重構成 bin/run-with-lock.sh …),ps 的指令列裡就沒有我們的名字,
+    # 活著的持鎖者會被判成死的,鎖當場被搶走——★它量到兩個行程同時跑起來★,
+    # 而那正是這把鎖存在的唯一理由。改名字錨也只是把洞縮小,沒有關掉。
+    #
+    # 改用硬身分:pid 加上「那個行程的啟動時刻」。取鎖時把啟動時刻一起寫進鎖裡,
+    # 之後拿 pid 去問系統要同一個值來比。pid 會被回收、名字會變,
+    # 但「同一個 pid 而且啟動時刻一模一樣」只可能是同一個行程。
+    # 舊格式的鎖(只有 pid 沒有啟動時刻)問不出來 → 回 2 → 呼叫端走鎖齡兜底。
+    kill -0 "$1" 2>/dev/null || return 1
+    local want got
+    want="$(cat "$LOCKDIR/start" 2>/dev/null || echo '')"
+    [ -z "$want" ] && return 2
+    got="$(lock_proc_start "$1")"
+    [ -z "$got" ] && return 2
+    [ "$want" = "$got" ] && return 0
+    return 1
+  }
+  write_pid() {   # 兩個檔都走暫存→改名:這個 repo 的教訓是共用檔一律原子寫入
+    # ★啟動時刻要先寫★:這樣「pid 檔存在」就保證「啟動時刻也在」,
+    # 讀的人不會拿到只有一半的身分。
+    local st; st="$(lock_proc_start $$)"
+    [ -z "$st" ] && return 1
+    local t="$LOCKDIR/start.tmp"
+    echo "$st" > "$t" 2>/dev/null && mv -f "$t" "$LOCKDIR/start" 2>/dev/null || return 1
+    t="$LOCKDIR/pid.tmp"
     echo $$ > "$t" 2>/dev/null && mv -f "$t" "$LOCKDIR/pid" 2>/dev/null
   }
-  holder_alive() {   # $1=pid;0=是我們這支 1=不是 2=問不出來(呼叫端當成活著)
-    kill -0 "$1" 2>/dev/null || return 1
-    local cmd; cmd="$(ps -p "$1" -o command= 2>/dev/null || echo '')"
-    [ -z "$cmd" ] && return 2
-    case "$cmd" in *daily-governance*) return 0 ;; *) return 1 ;; esac
-  }
   take_lock() {   # 0=拿到  1=別人在跑,正常讓行  2=鎖壞了,不正常
+    # ★寫 pid 失敗要當成沒拿到★(外家席 f1):這支沒開 set -e(檔頭第 12 行寫了理由),
+    # 所以 write_pid 失敗會被整個吞掉,然後照樣回報「拿到了」。
+    # 後果是我們在寫紀錄,鎖裡卻沒有 pid;60 分鐘後別人用鎖齡兜底接管 → 雙開。
     if mkdir "$LOCKDIR" 2>/dev/null; then
-      write_pid; return 0
+      write_pid && return 0
+      rmdir "$LOCKDIR" 2>/dev/null || true
+      echo "[$(ts)] ★鎖建起來了但 pid 寫不進去($LOCKDIR)★——這次五步都沒跑,要人來看" >&2
+      return 2
     fi
     local oldpid; oldpid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
     case "$oldpid" in ''|*[!0-9]*) oldpid="" ;; esac   # 見③:壞內容等同讀不到
     if [ -n "$oldpid" ]; then
-      holder_alive "$oldpid"; local hv=$?
-      if [ "$hv" -ne 1 ]; then
+      # ★不要寫成「呼叫;讀 $?」★:這支沒開 set -e 所以現在沒事,但那個寫法一旦被
+      # 抄到有開 errexit 的地方,「持鎖者已死」這條完全正常的路會整支中止。
+      local hv=0; holder_alive "$oldpid" || hv=$?
+      if [ "$hv" -eq 0 ]; then
         echo "[$(ts)] 另一份 daily-governance 正在跑(pid $oldpid),本次退出——不搶寫紀錄"
         return 1
       fi
-    else
-      local age
-      age="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo '')"
+    fi
+    if [ "$oldpid" = "" ] || [ "${hv:-2}" -eq 2 ]; then
+      # 身分問不出來(舊格式的鎖、ps 讀不到)也走這條,不是無條件讓行——
+      # 無條件讓行那條路上沒有兜底,一旦誤判就是永久停擺而且完全沒有訊息。
+      local age; age="$(lock_secs_since "$LOCKDIR")"
       if [ -z "$age" ] || [ "$age" -lt 3600 ]; then
-        echo "[$(ts)] 另一份疑似剛起步(鎖存在 ${age:-量不出}s、pid 讀不到),本次退出讓行"
+        echo "[$(ts)] 另一份疑似剛起步(鎖存在 ${age:-量不出}s、身分驗不出),本次退出讓行"
         return 1
       fi
     fi
@@ -95,13 +147,19 @@ main() {
     # 這把小鎖自己也可能殘留(接管中途被砍),用時間兜底:接管只花毫秒,超過 60 秒一定是殘的。
     local steal="$LOCKDIR.steal"
     if ! mkdir "$steal" 2>/dev/null; then
-      local sage
-      sage="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$steal')))" 2>/dev/null || echo 0)"
-      if [ "$sage" -lt 60 ]; then
+      local sage; sage="$(lock_secs_since "$steal")"
+      if [ -z "$sage" ] || [ "$sage" -lt 60 ]; then
         echo "[$(ts)] 另一個接管者正在處理,本次退出"
         return 1
       fi
-      rm -rf "$steal" 2>/dev/null || true
+      # ★破接管權也要原子★(外家席 f2):原本寫成「rm 掉再 mkdir」,
+      # 那正是這把鎖在修的同一個形態——兩個人可以各刪一次各建一次,雙雙進到下面那段,
+      # 然後各自在結尾無條件刪掉接管權,把還在裡面的第三個人曝出去。
+      # 改用 mv:同一個目錄只有一個人搬得走,搬不走的就是輸的那個,直接讓行。
+      local sdead="$steal.dead.$$"
+      mv "$steal" "$sdead" 2>/dev/null || { echo "[$(ts)] 接管權剛被別人處理掉,本次退出"; return 1; }
+      rm -rf "$sdead" 2>/dev/null || true
+      rm -rf "$steal".dead.* 2>/dev/null || true
       mkdir "$steal" 2>/dev/null || { echo "[$(ts)] 接管失敗(接管權搶不到),本次退出"; return 1; }
     fi
     local rc=1
@@ -124,8 +182,12 @@ main() {
         if ! mkdir "$LOCKDIR" 2>/dev/null; then
           echo "[$(ts)] ★接管後鎖建不起來($LOCKDIR)★——這次五步都沒跑,要人來看" >&2
           rc=2
+        elif ! write_pid; then
+          rmdir "$LOCKDIR" 2>/dev/null || true
+          echo "[$(ts)] ★接管後 pid 寫不進去($LOCKDIR)★——這次五步都沒跑,要人來看" >&2
+          rc=2
         else
-          write_pid; rc=0
+          rc=0
         fi
       fi
     fi

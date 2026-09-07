@@ -29788,10 +29788,14 @@ def t_daily_wrapper_health_and_lock():
         r2 = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
         check("鎖清乾淨之後下一次照常跑", "wrapper 開始" in r2.stdout, r2.stdout[-300:])
         # 有人持鎖 → 要讓行,不能搶。
-        # ★持鎖者必須是「真的一支 daily-governance」★:這條原本拿測試行程自己的 pid 當持鎖者,
+        # ★持鎖者的身分必須真的對得上★:這條原本拿測試行程自己的 pid 當持鎖者,
         # 而那是一支 python——2026-09-07 代碼審 r1 三席各自實測「pid 會被作業系統回收給無關的
         # 行程,那時 kill -0 說活著,wrapper 就永遠讓行」之後,取鎖多了一道身分驗證,
         # 這條測試當場翻紅。它翻得對:舊寫法把那個 bug 當成正確行為釘住了。
+        # ★身分驗證後來又換過一次★(code-batch19 通才席 blocker:比對指令列名字被實跑打穿,
+        # 持鎖者換個名字啟動就會被搶鎖)。現在鎖裡除了 pid 還要有「持鎖者的啟動時刻」——
+        # 不寫那個檔的話,這條會走「驗不出→鎖齡兜底」一樣讓行、一樣綠,
+        # ★但驗到的就不是「認得出活著的持鎖者」這件事了★,那是假綠。
         lock = g / ".daily-governance.lock"
         holder = g / "fake-daily-governance.sh"
         holder.write_text("#!/bin/bash\nsleep 60\n", encoding="utf-8")
@@ -29800,6 +29804,9 @@ def t_daily_wrapper_health_and_lock():
         try:
             lock.mkdir()
             (lock / "pid").write_text(str(hp_proc.pid), encoding="utf-8")
+            (lock / "start").write_text(
+                _sp.run(["ps", "-p", str(hp_proc.pid), "-o", "lstart="],
+                        capture_output=True, text=True).stdout.strip(), encoding="utf-8")
             r3 = _sp.run(["bash", str(g / "daily-governance.sh")], capture_output=True, text=True, timeout=120)
             check("★另一份正在跑(pid 活著、而且真的是這支)→ 讓行不搶★",
                   "正在跑" in r3.stdout and "wrapper 開始" not in r3.stdout, r3.stdout[-300:])
@@ -30222,13 +30229,24 @@ def t_daily_wrapper_lock_matches_source():
         "看持鎖行程活著沒": "kill -0",
         "pid 空時用鎖齡兜底": "getmtime",
         "量不出鎖齡要讓行": "3600",
+        # ★以下五項是 2026-09-07 code-batch19 補的★(架構對齊席 F3:
+        # 原本四項只蓋到最基本的,而兩邊真正共用、最容易寫錯的是接管那一段)。
+        "身分用啟動時刻不用名字": "lstart",
+        "接管走接管權小鎖": ".steal",
+        "破接管權也用 mv 不用 rm": "$steal.dead.",
+        "接管把舊鎖原子搬走": "$LOCKDIR.dead.",
+        "收尾先搬走再確認是不是自己的": "$LOCKDIR.rel.",
     }
     for name, needle in traits.items():
         check("來源那把鎖有「%s」" % name, needle in srcf, needle)
         check("★抄過來的也有「%s」★" % name, needle in dst, needle)
-    check("★抄的那段要留同源回指註解★(這個 repo 的既有做法之一)",
-          "autonomous-loop.sh" in dst and "同源" in dst,
-          "找不到指回來源的註解——下一個人改了來源不會知道這裡也要改")
+    # ★回指要雙向★(架構對齊席 F2):血緣是雙向的——#18 先在 daily 上修好,
+    # code-batch19 再搬回 autonomous-loop.sh,而 batch19 的三席同時修了兩邊。
+    # 只有一邊留註解的話,從另一邊進來的人不會知道要一起改。
+    for label, text in (("抄過去那份", dst), ("來源那份", srcf)):
+        check("★%s要留同源回指註解★" % label,
+              ("autonomous-loop.sh" in text or "daily-governance.sh" in text) and "同源" in text,
+              "找不到指向另一邊的註解——改了一邊的人不會知道另一邊也要改")
     print("  ✓ t_daily_wrapper_lock_matches_source")
 
 

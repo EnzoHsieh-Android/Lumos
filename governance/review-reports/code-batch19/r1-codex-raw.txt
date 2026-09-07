@@ -1,0 +1,2216 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.2
+--------
+[1mworkdir:[0m /Users/enzo/harness/lumos-toolchain
+[1mmodel:[0m gpt-5.6-sol
+[1mprovider:[0m openai
+[1mapproval:[0m never
+[1msandbox:[0m read-only
+[1mreasoning effort:[0m low
+[1mreasoning summaries:[0m none
+[1msession id:[0m 01a07c37-6d77-7390-9f96-07d3fac3e760
+--------
+[36muser[0m
+你是外部第三方投稿的審查員,擔任「否決席」。作者不在,不用客氣。
+
+工作目錄:/Users/enzo/harness/lumos-toolchain
+被審材料:governance/review-reports/code-batch19/r1-snapshot.patch
+可直接開檔:governance/autonomous-loop.sh(取鎖段 take_lock / lock_holder_alive /
+lock_write_pid / release_lock)、scripts/test_autonomous_loop.py
+
+★這支是自主迴圈的整跑鎖★——它保護的是 backlog / archive 不被兩份同時寫壞。
+弄鬆了會資料互蓋,弄緊了會讓自主迴圈永久停擺(而且沒有訊息)。
+
+這批修三個實測重現過的洞:①接管用「rm 掉再 mkdir」會雙開(30 輪 × 8 行程 1 輪)
+②pid 被作業系統回收給無關的活行程 → kill -0 說活著 → 永遠讓行 ③pid 檔內容不是數字
+→ 兩個分支都跳過 → 直接接管 0 秒齡的新鎖。另修兩個這支獨有的:取鎖到裝 trap 之間
+有裸奔窗口(這支有 set -e)、收尾無條件刪鎖(可能刪掉別人合法接管走的那把)。
+
+請特別看:
+1. ★新的 take_lock 有沒有留下別的競態★。特別是:接管權小鎖(.steal)自己殘留怎麼辦、
+   mv 與 mkdir 之間的窗口、多個接管者的排列、以及「先裝只清鎖的 trap、後面換成 finalize」
+   這個兩段式 trap 有沒有漏接的路徑。
+2. ★set -e 的交互★:這支有 set -euo pipefail。新加的函式裡哪些指令失敗會讓整支直接死掉?
+   `local x; x="$(...)"` 這種寫法在 set -e 下的行為對嗎?`lock_holder_alive` 用 $? 取回傳值
+   的寫法在 set -e 下安全嗎?
+3. ★release_lock 的判準★:它用「鎖裡的 pid 是不是自己」。什麼情況下會判錯?
+   pid 檔剛好在那一刻被別人覆寫、或 pid 檔不存在,各會怎樣?
+4. ★身分驗證★:`ps -p <pid> -o command=` 找 *autonomous-loop*。
+   什麼情況下會誤判?(檔名被改、從別的路徑呼叫、ps 輸出被截斷、pid 是自己的子行程)
+   「問不出來就當成活著」這個保守方向對不對?
+5. ★測試有沒有假綠★:作者自己記錄了兩次現場沒搭起來(探針拿到鎖就結束、
+   收尾 trap 把鎖放掉,導致「後來者合法拿到」被誤判成雙開)。現在的探針對不對?
+   自己造 mutant 驗,不要照抄作者的翻紅釘。
+6. 作者誠實記了一處「防禦深度、沒有守衛」(接管權區裡的再確認)。那個判斷對嗎?
+   真的沒辦法從外部構造那個現場嗎?
+
+每條 finding 必附:severity(clean|minor|major|blocker)、blocking(是/否)、file:line、
+逐字引句(≥10 字,能在被審材料找到原文)、why(怎麼重現、實際輸出)。
+報告第一行寫獨立的 `severity: <最高嚴重度>`。乾淨也要寫 severity: clean。
+沒真的驗過的寫成備註並註明「讀碼推論,未實跑」。最後印一行 CODEX DONE。
+[1mhook:[0m [2mSessionStart[0m
+[1mhook:[0m [2mSessionStart[0m
+[1mhook:[0m [2mSessionStart[0m Completed
+[1mhook:[0m [2mSessionStart[0m Completed
+[35m[3mcodex[0m[0m
+我會依 `lumos-project-notes` 進場，先查這把整跑鎖的合約與既有事故，再對快照逐行審；全程唯讀，並自行做獨立 mutant／競態實驗。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc 'python3 scripts/lumos search "自主 迴圈 整跑 鎖"'[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 622ms:[0m
+(多詞回退:你查的整串詞在未作廢的節點的可見文字裡找不到完全一致的,改成每個詞分開查、有出現就算;逐詞覆蓋 自主:65  迴圈:133  整跑:5  鎖:97)
+(已隱藏 6 筆作廢結果;要看的話加 --include-superseded)
+提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。下結論前先讀全文:lumos show <節點>
+ 18.995  Verification/2026-08-26_自主迴圈三症修理落地.md  [自主,迴圈,整跑,鎖]
+    11 [fm]: - "[[Projects/自主迴圈修理_計劃]]"
+    14 [body]: # 2026-08-26 自主迴圈三症修理落地
+    16 [body]: > 白話:自主迴圈「丟件、選題退化、燒錢無帳」三個洞的修理,實作完成、測試全綠。對應 [[Projects/自主迴圈修理_計劃]] 的 [S1]-[S4],設計審 auto-loo…
+    28 [body]: 七席(4 claude 鏡頭+外家 finder+架構對齊+spec 落地核對)共 24 條全折零放行,其中 2 blocker(skip 後 backlog 見底整輪不落帳、歸檔…
+    32 [body]: r2 delta 席 4 條 major 全折(skip covered 失敗被 continue 蓋變數=安全網假象,席位實跑重現 gap+$42 三檔皆無;鎖 TOCTOU 空…
+ 12.059  Projects/每日治理wrapper活著沒_計劃.md  [自主,迴圈,整跑,鎖]
+    13 [KEY]: KEY:★r1 抓到三處我把機制看走眼★ 鎖的主要接管判準是「持鎖行程還活著嗎」不是鎖齡 60 分鐘|鎖的清除靠 trap EXIT 不是寫在函式結尾|五步加總照現有寫法會失效(那…
+    16 [KEY]: KEY:S3 抄鎖要寫下五個非顯而易見的細節,並★兩者都做★:同源回指註解 + 一條比對兩份關鍵行為的測試(repo 既有立場是二選一,本案兩個都做)
+    18 [DEP]: DEP:governance/daily-governance.sh|governance/autonomous-loop.sh 的取鎖段|scripts/lumos 的 doct…
+    41 [body]: - **鎖的主要接管判準是「持鎖行程還活著嗎」**,不是我寫的「鎖齡 60 分鐘」;
+    43 [body]: - **鎖的清除是靠 `trap ... EXIT`**,不是寫在函式結尾。我只寫了目標沒寫機制。
+    50 [body]: - **沒有整跑鎖**。**沒有完成戳記**。**沒有任何程式在讀它的紀錄檔**(全 repo 搜零命中)。
+    123 [body]: ### [S3] 抄鎖:把非顯而易見的細節寫下來,並加防漂移
+    125 [body]: 抄的是那把「建目錄當原子鎖」的實作。★這五個細節第一版漏了或寫錯,現在寫清楚★:
+    … 還有 31 處
+ 10.061  Projects/idioms自維護迴路_計劃.md  [自主,鎖]
+    14 [KEY]: KEY:候選池=idioms-candidates.json(6態:pending/screened/rejected/deferred/staged/adopted;os.rep…
+    16 [KEY]: KEY:誠實代價=A層需Claude在場(自主loop tick或skill),非真7×24無人;「自動」限M層偵測+staging
+    17 [DEP]: DEP:[[pitfalls網搜補漏_計劃]][[lint-version-watch]][[自主loop加法偏食]][[linter-gap實務隱患]]
+    19 [DECISION]: DECISION:[2026-07-12]C3結構化附出不動verdict(valid)｜refuter/drain屬A層Claude編排不硬造model-runner(valid…
+    23 [fm]: - "[[Issues/自主loop加法偏食]]"
+    26 [fm]: - content: 走方案C：薄 collector + 共用候選池為新造，refuter 借 gapfill、drain 借自主 loop、落點仿 linter-gap
+    31 [fm]: - "A 全新 lumos idioms-watch 子系統：概念最乾淨、邊界清楚，但重造 gapfill refuter/自主 loop drain/linter-gap 落點—…
+    37 [fm]: - content: round-1 修正:方案C→C'——borrow-design(gapfill反證哲學+lint-watch的staging形態)但refuter留痕/dr…
+    … 還有 12 處
+  9.041  Projects/圖譜進迴圈入口栓_計劃.md  [自主,迴圈,鎖]
+    15 [body]: # 圖譜進迴圈入口栓_計劃
+    21 [body]: **這條線=「節點搜尋得到 → 迴圈真的用上」。檢索本身健康**(見 PRIOR-ART 考卷數字),漏在兩個入口:
+    23 [body]: - **開迴圈不看圖譜**:`loop next` 給輪次/席位/記帳模板,不給「這主題圖譜已有什麼」。★事故:impact 鏡頭案(2026-08-29)開案時 `送審前impa…
+    37 [body]: - 輸出合約(文字模式,專屬多行段比照 roster 迴圈 scripts/lumos:5905,不塞五鍵白名單 scripts/lumos:5911),三分支唯一化:
+    57 [body]: - **併發/資源/鎖**:純讀索引,檢索無任何寫入(usage-log 僅 show/context 記,r2 席驗證)。已排除。
+    64 [body]: - **已知邊界(code-r1 全 minor 折入)**:①候選檔 21% 被讀兩次(OR 掃描+_rank_fields),ms 級接受(R-2)②無鎖無快取,並發呼叫各自重…
+    70 [body]: - **自主迴圈消費的坑(r1 邊界席)**:現行 orchestrator-prompt **不跑 `loop next`**,且其 lumos 呼叫全走 `--vault __…
+    84 [body]: - EL-9(邊 F5):「未來自主迴圈消費」宣稱撤下,改記 vault 錨定坑。
+    … 還有 2 處
+  7.104  Projects/地基盤點2026-08-26_調研.md  [自主,迴圈]
+    6 [KEY]: KEY:重點缺口:①關係層只查斷鏈不查「還對不對」(自認頭號腐爛無常態守衛)②新收斂制無新舊對照回測(n=1~11,golden 未建 bundle)③自主迴圈 backlog 退…
+    15 [fm]: - content: Enzo 裁(2026-08-26):五批補強照建議序全部排隊執行(1 自主迴圈修理+goldset 修尺→2 八員批次裁定→3 改制回測+綁定機械掃→4 關…
+    35 [body]: - **G1 decision_refs 雞生蛋死鎖**——機制全在、0 筆;E3/主網睡著;T3(AI suggest)2026-07-15 凍結待「v4 簡化」。〔判定:該立案…
+    47 [body]: - **L2 08-14 痛點 Issue 四點未隨大改重核**——留痕座標三方不一致仍在;「折入即修懲罰」可能換殼存活(08-25 後 9 個 d5 迴圈 5 個靠第二輪);sc…
+    53 [body]: 現況:真正常態運作的只有兩支——檢索考卷(每 7 天,8 gate)與情境探針(每週 8 題);gov 日報 gaps 餵自主迴圈;G3 雜湊鏈保收斂窗內部一致。
+    57 [body]: - **E3 自主迴圈失能三症**——backlog 160 筆卡 0.5 分退化成 FIFO(挑兩個月前舊題)、三次派工兩次 NO_JSON 失敗單次燒 $30-70、「花費 v…
+    70 [body]: - 第 1 批 ✅(2026-08-26 當日完成,CI 綠):自主迴圈修理([[Projects/自主迴圈修理_計劃]],[[Verification/2026-08-26_自主…
+    73 [body]: - 第 4 批 ✅(2026-08-27):G1 decision_refs 解鎖(CI 綠 4a9df6a)+G2 關係語意腐爛守衛=★被 G1 解鎖即活★(機制 M1-M4+C…
+    … 還有 2 處
+  7.024  Projects/intake守衛_計劃.md  [自主,迴圈]
+    10 [fm]: - content: Enzo 2026-08-30 裁:三輪達上限攤牌後人裁放行進實作,前提=折入 r3 四件——①T4 接 daily-governance.sh(外家:補這線…
+    22 [body]: ★引用訂正(r2 正確性 F1)★:v2 曾引嚴重度綁定案當「先 advisory 後硬擋」前例——**引反了**,該案實為外家否決 advisory 優先、反轉首日硬擋。v3 誠…
+    26 [body]: **數法**(可重跑;CJK 目錄名須經 `core.quotepath=false` + python 切段,shell for 迴圈會炸):
+    43 [body]: - **intake 綁迴圈不綁輪**(r2 b-F4/c-F5:實帳 11 份有 10 份在 r1、判定輪幾乎都是 r2+,綁輪必長噪):前掃是首輪一次,r2+ **不需**再產…
+    44 [body]: - 落點:`skills/lumos-design-loop/templates.md` intake 慣例正本 + SKILL.md 步驟 2。**範圍=非 code 迴圈**(…
+    49 [body]: - 迴圈目錄含合法宣告行 → `[disposal] intake: ✓`
+    51 [body]: - **迴圈目錄不存在 → 跳過不印**(scratch 迴圈如自主迴圈的 /tmp 工作區;r2 b-F1:不跳會每天印進沒人讀的 log)。
+    53 [body]: - 誠實承認覆蓋邊界:panel/light/settle/legacy 不走 --disposal,T2 蓋不到(r2 b-F2)——它們是舊帳路徑,新迴圈一律處置閘,缺口隨舊帳…
+    … 還有 6 處
+  7.007  Verification/2026-09-07_loop-list開著的迴圈.md  [自主,迴圈]
+    11 [fm:revalidate_when]: revalidate_when: 治理帳放行事件改欄位或改 gate/kind 值域、canary 帳 loop/round 欄改名、或自主迴圈開始為每日場次寫關門事件
+    15 [KEY]: KEY:★關門訊號不新增任何要人維護的狀態★——取治理帳 `.governance-log.jsonl` 本來就會落的放行事件(design-loop converged/cap-…
+    16 [KEY]: KEY:★誠實界線寫進輸出本身★——關門事件慣例 2026-08-22 才開始(治理帳第一筆 design-loop converged),更早的迴圈天生沒這筆;工具只說「帳面沒看…
+    17 [KEY]: KEY:實跑 2026-09-07:審查帳 199 個迴圈,有關門事件 77 個,沒關門且 14 天內有動 35 個(「在飛」),沒關門且超過 14 天沒動 88 個(「空轉候選」…
+    18 [KEY]: KEY:★設計上的發現★在飛那 35 個裡 12 個是自主迴圈每日場次(`auto-*`)——天生不會關門且一天長一個,不處理遲早淹掉清單;修法=通用 `--exclude <前綴…
+    22 [body]: # 2026-09-07_loop-list開著的迴圈
+    24 [body]: > 白話:以前要知道「現在有哪些審查迴圈開著」,只能去 tail 一個日誌檔的最後一行,
+    36 [body]: - **關門事件**=治理帳 `.governance-log.jsonl` 裡這五種:`design-loop` 的 converged / cap-reached / rewr…
+    … 還有 9 處
+  6.990  Projects/流程優化六件_計劃.md  [自主,迴圈]
+    15 [KEY]: KEY:2026-08-05 Enzo 裁「都做」的六件流程優化,全數同日落地——每件掛在 2026-08-04 實戰痛點上:①散落漂移機械掃進 design-loop skill…
+    18 [fm:PRIOR-ART]: PRIOR-ART:①全數=既有機制小修/加讀取面,無新輪子 ②aliases=Obsidian 慣例借用;考卷排程=既有 runner 掛既有迴圈 ③裁定=borrow-desi…
+  6.954  Projects/自主迴圈修理_計劃.md  [自主,迴圈]
+    5 [KEY]: KEY:地基盤點第 1 批案 A——自主迴圈三症修理:①NO_JSON 中止真的丟 gap(log 說「自然重抽」是假話,08-24/25 兩筆實丟)②選題退化 FIFO(deca…
+    16 [body]: # 自主迴圈修理_計劃
+    18 [body]: > 白話:每天早上自動選一個治理缺口、寫成 spec、自審到收斂、停在放行閘等人的那條迴圈,最近三天燒了 156 美金、一件都沒落地。查下來是三個具體的洞。本 spec 經 r1 …
+    40 [body]: ⑤壞行容錯+原子寫:`load_backlog`/`load_covered` 逐行 try/except,壞行跳過並 log 計數(不讓一行壞資料把整條迴圈打趴——set -eu…
+    45 [body]: ③outcome 兩層分類(主類:細類):`converged`、`unconverged:cap|disputed|degraded-high`、`tier-blocked:sp…
+  6.914  Projects/全repo審視_計劃.md  [自主,迴圈,整跑]
+    16 [body]: - **16 個鏡頭**:CLI 結構、圖譜資料模型與檢索、git 端強制力、AI 助理的 hooks、審查迴圈操作成本、排程自動化可靠性、測試套件、安裝發佈、文件與上手、skil…
+    47 [body]: | 11 | 每日 wrapper 沒有死人開關也沒有整跑鎖 | F43、F46 | high | S/low |
+    48 [body]: | 12 | 暫停自主迴圈連帶把週期觀測任務全關掉 | F44、F91 | high | S/low |
+    59 [body]: | 23 | Check E4 連鎖提醒 nodes=[] 進不了空轉偵測與升級鏈 | F118 | med | S/low |
+    109 [body]: | F68 | docs-onboarding | 快速上手在「重啟 session」就結束:沒有「怎麼確認裝好了」,也沒有一條 30 分鐘走完核心迴圈的教學 | M/low |
+    111 [body]: | F38 | review-loops | 收貨正規化(quote:→引句:「」、file:→反引號、補 severity 行)仍是「每個迴圈臨場寫一支腳本」的 SOP,不是 l…
+    117 [body]: | F91 | cost-observability | 暫停自主迴圈的同時,把週報、空轉提醒(nags)、REVISIT 14 天升級鏈、連敗 LINE 告警全部一起關掉了——監…
+    123 [body]: | F44 | governance-automation | 暫停自主迴圈的開關順手把五支週期任務全關了,圖譜卻寫「便宜段照跑」 | S/low |
+    … 還有 31 處
+  6.863  Verification/2026-08-05_流程優化六件落地.md  [自主,迴圈]
+    10 [VERIFY]: VERIFY:①散落漂移機械掃入 skill 折入段(紀律層,Landmark r2 實錄為證)②canary-stats 讀取面+RSNO r3 首筆正式校準(機械寬判 3/5 …
+  6.794  Projects/世界repo掃描2026-09-02_調研.md  [自主,迴圈]
+    14 [fm]: - "[[Issues/自主loop加法偏食]]"
+    23 [KEY]: KEY:第五次世界掃描(2026-09-02,Enzo 指派「搜各大 repo 找借鏡突破口」)——選角度的方法=圖譜零筆 ∧ 對得上開著的 P2 痛點,四路乾淨 agent 各掃…
+    26 [KEY]: KEY:自主迴圈三候選——B1 輪內重播偵測(OpenHands stuck_detector 規則式精確相等非相似度;我們 08-27 起每輪已記 findings-set/fo…
+    45 [body]: | B 無人看顧的自主迴圈 harness | [[Issues/自主loop加法偏食]]、[[Systems/autonomous-iteration-loop]] 卡死與成本 …
+    68 [body]: ### B 組:自主迴圈
+    72 [body]: - **B3 席位成本欄填充率**。★當場數帳(2026-09-02,`docs/.canary-log.jsonl` 自 08-22 起)★:374 筆,`tokens` 有值 …
+    81 [body]: - **D1 並行改動**。Enzo 09-01 已裁「誤報量測不辦,三型再犯時回看」——本條只留世界座標:MCP Agent Mail(2.1k★)glob 路徑 advisor…
+  6.765  Projects/loop數據收集_計劃.md  [自主,迴圈]
+    16 [KEY]: KEY:問題=loop 真實跑一次產生的資訊(輪數曲線/canary 型別命中/席位 missed 軸/辯方開庭/逃逸)散落且部分蒸發——判「最佳收斂方式」需要這本帳。實測盤點(2…
+    22 [KEY]: KEY:[2026-07-26 同篇再吸收]arXiv 2605.25665 於 07-26 日報再現(標題換說法,日報 dedup 按標題沒擋同 id——**根因已挖到底並修 2…
+    23 [DECISION]: DECISION:v1 不做統計模型/dashboard/自動調參(代內 n 不足,先累後校準順序不可倒);只做「訊號機械化+歸因」四件:自主 loop 歸檔/逃逸帳/epoch …
+    53 [body]: | lumos-toolchain | 24 | 11 | 手動線全留存;**自主日報 loop 在 /tmp 工作區,事件流蒸發**（corrosion-gauge 7 輪 K=…
+    67 [body]: - **M1（堵流失+建標尺）**：①自主 loop 事件流歸檔——收斂/達 cap 時把 /tmp 工作區 canary-log 整檔搬回 repo（零判斷純搬運,同 golde…
+    104 [body]: **② 逃逸帳(漏網面,M1② 原語,✅ 2026-08-31 落地)**:迴圈收斂放行後、下游抓到可歸因缺陷→
+    105 [body]: lumos loop escape <迴圈編號> --stage <發現階段> --severity <minor|major|blocker> --desc <描述>
+    106 [body]: append-only 落 `docs/.escape-log.jsonl`(★code-r1 折入:寫入走 canary 家族的落盤自驗原語非裸 append;帳檔進簿記白名單防…
+    … 還有 3 處
+  6.735  Systems/slim-get-一行安裝.md  [整跑]
+    27 [TEST]: TEST:t_slim_get_idempotent 7 checks 全綠——首次執行 rc0(git clone 到位)、第二次執行不出現 clone 式爆炸訊息且 stder…
+  6.528  Projects/README審視五修_計劃.md  [自主,迴圈]
+    14 [body]: KEY:稽核來源=`governance/review-reports/readme-audit-2026-09-05.md`(乾淨稽核員)+本 session 實測(pre-co…
+    17 [body]: KEY:d3 自主迴圈暫停派工——daily-governance 不再每天派 orchestrator(帳上近兩週(8/23–9/5)滾動週報收斂 0/待放行 0、每週 210–…
+    18 [body]: KEY:d4 README 補「成本與界線」一節(中英)——代碼審 7 天 930 萬 token、自主迴圈成本與零產出、pre-commit 任一篇即過、憑證自發只擋忘記不擋敷衍…
+  6.366  Projects/第二輪審視六修_計劃.md  [自主,迴圈]
+    46 [body]: - **文件同步(第三輪自查)**:hook 檔頭「任何失敗都靜默」改成「超時不再靜默、其他失敗仍靜默」;skill 範本同句;三張良性循環圖與全景圖 ④ 標明自主迴圈已暫停派工、…
+    57 [body]: - **稽核員對、我上一輪判錯的兩件**:①今天 09:30 的 wrapper 真的死了——不是暫停沒兌現,是我在自主迴圈那段還在跑(09:37–12:42)時改了 daily-…
+    58 [body]: - **文字矛盾 7 處**:code-loop SKILL、commands/06 的「超時放空/靜默放行」舊句、ARCHITECTURE §4 「Codex 側會擋一次」、圖譜…
+    59 [body]: - **收斂判定(Claude 裁)**:四輪下來,第三、四輪各只剩一件真 bug(gov 折疊條件、wrapper 邊跑邊改)加文字同步,其餘都是已寫進 README「成本與界線…
+  6.240  Systems/design-loop.md  [自主,迴圈]
+    26 [fm]: - "[[Verification/2026-08-25_迴圈摩擦兩修落地]]"
+    31 [fm]: - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
+    33 [KEY]: KEY:[2026-08-26]世界對照(governance/review-reports/world-benchmark-2026-08-26.md)——最終形態核心判準與業界…
+    34 [KEY]: KEY:★[2026-08-25 甲裁落地]多席 code-loop 統一處置閘([[Projects/probe輪退場_計劃]])★——panel 閘新迴圈 cutoff 拒判(…
+    35 [KEY]: KEY:★迴圈摩擦兩修落地(2026-08-25,[[Projects/迴圈摩擦三修_計劃]] v2 單輪過處置閘;d3 重寫訊號改形撤回見該案 decisions)★——①卷證規…
+    36 [KEY]: KEY:★d5 落地(2026-08-25,[[Projects/設計審收斂重定義_計劃]] 處置閘單輪 PASS)★——散文設計審回歸處置閘為正閘:新迴圈一律 --disposa…
+    39 [KEY]: KEY:★問閘雙軌(2026-08-24,[[Issues/設計迴圈問閘指令與panel記帳互斥]] d1 落地)★——記帳型態決定閘:單席循序一輪一筆處置帳→--disposal…
+    52 [KEY]: KEY:[2026-08-30]loop next 首輪印「主題既有節點」advisory(圖譜入口栓 A:近名/superseded 上榜先讀再開;--json 加 relate…
+    … 還有 11 處
+  5.823  Projects/工具鏈補強十件_計劃.md  [自主,迴圈]
+    10 [fm]: - content: ④ 不改閘:實查 git 追蹤狀態,治理帳/審查記錄/繞過帳/簽核帳/usage/review-reports 皆 tracked,只有 code-loop …
+    14 [fm]: - content: ⑤ 不開設計迴圈:實查 scripts/lumos,panel 自 2026-08-06(A案 cutoff)起新迴圈為 K=2;處置閘「一輪全清即過」是 2…
+    31 [body]: | 1 | 情境探針進自主迴圈 | ✅ `autonomous-loop.sh` 加 `run_probe`:每週(ISO 週數當種子)抽 8 題決定性輪轉,結果 append `…
+    34 [body]: | 6 | 人裁放行率 | ✅ `loop next` 判 cap-reached / 各閘 PASS(gate/panel/cluster/settle/light/dispos…
+    36 [body]: | 4 | 閘留痕 CI 可見性 | ✅ 查證後不改閘(見 d1):治理帳/審查記錄/繞過帳/簽核帳/usage/review-reports 皆 tracked;只有 code-…
+    37 [body]: | 5 | panel 收斂判準 | ✅ 查證後前提不成立(見 d2):2026-08-06 起新迴圈 panel 已是 K=2;2026-08-08 起走的處置閘「一輪全清即過」…
+  5.789  Projects/執行DAG_調研.md  [自主,迴圈]
+    12 [KEY]: KEY:★「缺執行記憶」是事實錯誤★——現有三套:實作計畫的 T1..Tn 任務拆解(含「包①→②→③嚴格順序」)、status 欄+`query --active`、自主迴圈 `…
+    20 [KEY]: KEY:方案 A 實得比直覺少——`spec-trace` 在本 repo 實測幾乎沒餵資料(6/6、8/8 無人認領、1 篇「opt-in 未啟用」),那是「沒人填格式」不是「沒…
+    28 [fm]: - "[[Issues/連鎖佇列開了沒人跟完]]"
+    50 [body]: PRIOR-ART:①最小解在既有機制層——「唯一下一動作」的神諭已經有了(`lumos loop next`,只讀帳本結構不讀散文),只差一個「列出現在開著的迴圈」的入口;結構化…
+    70 [body]: 3. **自主迴圈的待辦帳**(`governance/backlog.jsonl`,185 筆)——有價值分、每日衰減、已涵蓋永久排除、熔斷、「同時只准一件在飛」。
+    92 [body]: - 有結構化的「觸發」但語意都不是任務排序:`valid_under`/`revalidate_when`(環境變了要重驗)、`REVISIT:`(時間到期)、`rel-casca…
+    103 [body]: 同型前科另見 [[Issues/連鎖佇列開了沒人跟完]](歷來 8 張連鎖單,前兩張零判定空轉,現有 1 張開 9 天零判定)。
+    127 [body]: | 學術:動態任務圖 | DynTaskMAS;企業級 Plan-Execute-Replan | 規劃者產圖 → 執行者派工 → 出事重新規劃 | ★最誠實的一篇是反例★:專門論…
+    … 還有 2 處
+  5.732  Systems/lumos-cli-read.md  [自主,迴圈]
+    12 [KEY]: KEY:[2026-08-25]doctor E4 連鎖待辦軟提醒([[Projects/連鎖佇列軟提醒_計劃]])——統計併 E2 帳本掃描迴圈順手收集;零判定帳本數+最老天數+…
+    19 [KEY]: KEY:[2026-09-07 loop list]新讀原語 `lumos loop list`——先看有哪些審查編號還開著(next/status/verify-progress…
+    26 [KEY]: KEY:★預檢迴圈與主迴圈共用 `_search_visible_lines` 單一實作★(2026-08-03 code-loop r2)——原本預檢自己一份「整段 regex …
+    30 [KEY]: KEY:讀指令屬「專案層」——以 cwd find_vault 鎖定本專案 vault(不受同名 vault 影響);對比 install/bootstrap 的「機器層」(全域 …
+    53 [fm]: - content: 讀指令以 cwd find_vault 鎖定「專案層」vault(往上找 docs/*-knowledge 或 standalone vault root),…
+    56 [fm:why_chosen]: why_chosen: cwd-based 定位讓任何專案子目錄直接 lumos <cmd> 都鎖到正確 vault,機器層工具(全域 lumos/skills)則一次裝好共用
+    79 [fm]: - "[[Verification/2026-07-15_主網M4_觸發與連鎖]]"
+    86 [fm]: - "[[Verification/2026-08-25_連鎖佇列軟提醒落地]]"
+    … 還有 5 處
+  5.697  Systems/judge-perturbation-stability.md  [自主,迴圈]
+    11 [FLOW]: FLOW:gap(單一 judge 不可靠)→設計擾動穩定度測試(關鍵輪換序審兩次、翻盤即不採信)→design-loop r1 折機械 reorder→r2 揭機制堵不住自證(只…
+    19 [fm]: - content: 放棄擾動穩定度測試方案,改用輕方案——可信度報告硬列「這個迴圈沒檢查到的維度(judge 單一不可靠列首)」,把破口誠實標給最後兜底的人,不建 reorder…
+    49 [body]: 改用日報 inspirations 的更輕路線:`confidence_report.py` 的可信度報告把「殘留風險」升級成 **「⚠ 這個迴圈沒檢查到的維度(品質最可能爛在這、…
+    59 [body]: - 姊妹設計:`docs/design/2026-06-20-judge-severity-gate.md`(把 severity 交給 judge,催生本案要補的弱環)、`doc…
+  5.624  Systems/loop-convergence-recording.md  [自主,迴圈]
+    26 [fm]: - "[[Verification/2026-09-07_loop-list開著的迴圈]]"
+    64 [fm:why_chosen]: why_chosen: 取最後一筆有值的:實測本庫 209 個迴圈有 0 個落在兩種取法的差異上,所以今天結果一致——但欄位是選配的,一致是現況不是保證,安全取法不花錢。跨輪換過路…
+    76 [body]: 源起:lumos 治理大方向 memory `lumos-governance-direction-loop-engineering`(朝自主/無人看顧的自我檢查 loop)。非由…
+    84 [body]: 複用既有 `.canary-log.jsonl`。`lumos canary record` 的選用鍵（2026-07-21 M1包 起共七類：`loop`/`severity`/…
+    125 [body]: **為什麼這個錯特別貴**:帳本是只進不出的。閘在讀側照樣會抓到,但那時帳已經寫進去,撤不掉,**只能換迴圈編號把整輪所有席重記一次**。
+  5.472  Systems/autonomous-iteration-loop.md  [自主,迴圈]
+    16 [fm]: - "[[Verification/2026-08-26_自主迴圈三症修理落地]]"
+    17 [fm]: - "[[Verification/2026-08-27_自主loop遷處置閘]]"
+    31 [KEY]: KEY:★抽掉人之前必辦清單(觸發條件=迴圈能不經人放行寫圖譜/開 PR 那天,今天人在放行點故全部不建)★——①提案者≠寫入者結構分離(Mnemosyne arXiv 2607.…
+    64 [fm]: - content: 暫停每日自主 loop(launchctl disable com.enzo.lumos.daily-governance;plist 保留)
+    72 [fm]: - content: 重啟每日自主 loop(dry-run 模式維持:收斂備 pending 等人放行,絕不自動 merge)
+    78 [fm]: - content: 自主 loop 記帳+收斂閘遷處置閘、對齊手動 loop(Enzo 2026-08-27 裁):step-6 canary caught/missed → r…
+    87 [fm:why_chosen]: why_chosen: 三個死因全出自迴圈自己的遺言與頂層紀錄(非猜測):活性=死因實錄逐欄可查;引句=r6 notes 逐字點名;日報=r5 自己發現的。修法全在 prompt …
+    109 [body]: > **源起:日報 2026-06-18 gap**——「整套把關預設『每次 commit 都有人在旁邊看 stderr』,但無人看顧的自主迴圈已成主流,這個前提正在崩。」對齊治理…
+    … 還有 1 處
+  5.439  Projects/連結缺失補全_計劃.md  [迴圈,鎖]
+    22 [body]: PRIOR-ART: ① 最小解層級——新增**唯讀候選生成子命令**(觀測,不動任何排序/閘),補的連結=正常圖譜編輯(引用寫進節點 body,反查自然吃到,零新消費端);姿勢 …
+    92 [body]: - **資源**:純檔案讀+stdout;無連線/鎖。
+  5.350  Verification/2026-09-05_README審視量測.md  [自主,迴圈]
+    23 [body]: KEY:自主迴圈成本:`grep "過去 7 天" governance/logs/autonomous.log` 8/30–9/5 每日滾動週報皆「跑 8 次、收斂 0、備好待放…
+  5.350  Verification/2026-09-05_wrapper邊跑邊改實驗.md  [自主,迴圈]
+    18 [body]: 2026-09-05 09:30 的每日治理 wrapper(daily-governance.sh)死在自主迴圈那段回來之後:我在它跑的三小時內改了這支腳本,bash 回來讀到半…
+  5.198  Verification/2026-08-22_成本欄接上與撤除兩階段.md  [自主,迴圈]
+    48 [body]: **消費者只有一個(寫不出消費者就是裝飾)**:Enzo 在週報看「本週自主 loop + 派席共花 $X、Y 小時」,
+    133 [body]: - **成本欄現在還是空的**。管線接好了,第一筆真數據要等下一輪自主迴圈跑完。在那之前它與
+  5.154  Issues/自足性審計提醒空轉四十六天.md  [自主,迴圈]
+    18 [fm]: - content: 出口落地:lumos gov --nags <天> 列「同一軟閘對同一篇連喊 ≥N 天、最近一次體檢還在喊」的清單(rc1);自主迴圈每週跑一次、有就 LIN…
+    27 [body]: > `lumos gov --nags <天>` 列出「同一道軟閘對同一篇連喊 ≥N 天、最近一次體檢還在喊」的清單;自主迴圈每週跑一次,有就 LINE。**實證**:首跑抓到 5…
+    50 [body]: - [[Issues/連鎖佇列開了沒人跟完]] — supersede 開的待辦單兩張都是空的;★同樣是「要主動跑才看得到,doctor 不報、pre-push 不提」★。
+  5.014  Projects/graph-engineering掃描2026-08-19_調研.md  [自主,迴圈]
+    16 [fm:why_chosen]: why_chosen: 前提不成立:code 三處明文把 related 當弱邊排除在多跳外(關係層時序判定/連鎖帳展開/單跳鄰居),只在補鏈與 via 廣撒候選處參與。四個方案逐…
+    43 [body]: ★2026-08-22 精化(原記漏了半件,害下一個人從 code 挖了一整輪)★:**`related` 是刻意設計的「弱邊」,不入多跳。** code 三處明文——doctor…
+    80 [body]: 只是**零筆填過**。2026-08-22 已把管線接上(自主迴圈解析 `claude -p` 本來就吐的成本 + 派席
+    125 [body]: - **檢索品質回歸**——自主迴圈的 `run_exam` 每 ≥7 天跑 goldset held split。查
+  4.834  Projects/席位人格化_計劃.md  [鎖]
+    53 [body]: - **併發／效能／資源**:已排除——本案只改派工措辭與模型選擇,不碰任何執行路徑、鎖、連線。
+  4.815  Projects/驗證層自證三件_計劃.md  [迴圈,鎖]
+    51 [body]: - ClawBench 動力系統診斷(特徵向量/參與比/本徵值/regime 分類)——對單人治理迴圈過重,散文空轉風險;日報實證 design-loop 對 shell/glue…
+    62 [body]: - **資源**:純檔案讀取+stdout 報表,無連線/鎖。
+  4.769  Projects/design-loop輕量檔_計劃.md  [整跑]
+    106 [body]: - **light 首戰全程收束（2026-07-21，loop 完整跑到落地）**：ratchet 後 std panel 3 輪（有效/無效/有效）＋Codex 否決席 3 次…
+  4.492  Issues/自主loop加法偏食.md  [自主]
+    14 [KEY]: KEY:結構性偏誤——自主 loop 的任務是「從 gap 產 spec」,所以它永遠提「加一個機制」,從不提「這題該在別層用更便宜的既有手段解」或「該刪什麼」。治理面只有生長壓力…
+    23 [body]: # 自主 loop 加法偏食(結構性偏誤)
+    26 [body]: 自主迭代 loop 的產出永遠是「新增一個機制」——它的任務定義(gap → spec → design-loop)天生不會產出「這題該用既有層的便宜解」或「該刪掉什麼」。**治理…
+  4.448  Verification/2026-08-27_自主loop遷處置閘.md  [自主]
+    6 [fm:revalidate_when]: revalidate_when: "下次自主 loop 真跑一輪後,核對它有沒有照新協議記成處置帳、且處置閘真 PASS(本次只驗人手模擬單輪 record+gate,未驗 loo…
+    13 [body]: # 2026-08-27_自主loop遷處置閘
+    15 [body]: 驗證 [[Systems/autonomous-iteration-loop]] d7:自主 loop 的記帳+收斂閘遷處置閘、對齊手動 loop。
+    17 [body]: PRIOR-ART: 最小解=借手動 code-loop 現成的處置帳協議(record none + 處置帳 + --disposal,2026-08-04/08-25 已設計已…
+  4.317  Systems/canary-audit.md  [自主,迴圈]
+    24 [fm]: - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
+    106 [body]: 源起:日報 2026-06-18 Gap 1「內迴圈派 Sonnet 當審計員,卻從沒檢查它這一輪到底有沒有在認真抓」+ Codex `/goal` 共識「你判斷『做完沒』的那套檢…
+    109 [body]: 這套方法論把判斷外包給乾淨審計員(spec/設計的對抗審計 loop)。一個放水審計員回報的「沒問題/看起來不錯」是最危險的假乾淨——自主迴圈只會更快更自信地犯錯。canary 把…
+  4.224  Projects/Codex外審吸收_計劃.md  [鎖]
+    72 [body]: **6.4 上限理由收窄（非撤銷）**：舊理由「完全缺乏寫後驗證」已修正；新理由＝「寫後可見性已補，但證據帳的**持久性／唯一性／身份／並發／不可竄改**仍未成立」（無 fsync…
+  4.197  Verification/2026-07-09_loop三輪壓縮.md  [自主]
+    21 [KEY]: KEY:誠實天花板=文獻是 benchmark 準確度非 canary/辯方構件;capture-recapture 小樣本出極端值當一個信號非 oracle;orchestrat…
+    46 [body]: - **orchestrator panel 化延後**:自主 loop 暫停中(2026-07-07),panel 化其 orchestrator-prompt 低優先。**co…
+    57 [body]: 緣起:使用者追問「linter 命中→餵進去仍手動串」那句何意 → 釐清「便利原語(現在能做)vs 端到端無人跑(卡自主 loop 暫停)」兩者被我混淆,便利原語其實不卡。遂補:
+    58 [body]: - `loop capture-counts --from-pitfalls <range> [--repo]`:自動跑 `pitfalls --diff`、按 `source` …
+  4.153  Systems/finding-refute.md  [自主,迴圈]
+    20 [KEY]: KEY:辯方降級也須拿反證 file:line,拿不出則維持;對齊 judge「無查證行鎖 major」底線,空口『沒問題』不算
+    51 [fm:context]: context: 自主迴圈 2026-08-29 那輪四次撞上,只能把辯方判決留空、反證寫進 note,結構帳因此少了四輪的辯方資料(它自己的 notes 點名這條)。追查發現死結…
+    70 [body]: - **無查證行底線**:若 finding 真的無任何查證行(judge 因此鎖 major),辯方也得拿反證 file:line 才能降,拿不出則維持。
+    94 [body]: ★blocker 輪讓步(2026-08-29,d5)★:同輪 severity=blocker 時,舊規則強制放行清單必須是空的,而反證推翻的發現照規矩「不折入」——兩條一夾使 …
+  4.086  Projects/結清式收斂_計劃.md  [自主,迴圈]
+    33 [body]: - **模式邊界（r1 折入）**：現行三種收斂判準並存（legacy K-streak／`--panel` 結構信號／`--light` 單席謂詞，互斥）。v1 的 `--set…
+    39 [body]: - [S2] **結構化壓縮（治長跑 governance decay 殘餘面）**：自跑迴圈長上下文不交通用摘要，壓成「已驗證證據＋未結約束」兩欄結構化狀態；硬合約、「停在放行點…
+    41 [body]: - **掛載面（r1 折入）**：自主 loop 的編排入口與 scratch 狀態（`governance/autonomous_loop/orchestrator-prompt…
+    83 [body]: - r3 delta panel（2026-07-27，3 席全 caught：型別 d 未定義產物／a 幽靈引用／b 未定義旗標；s1 重植1次、s2 重植2次頂格）：**blo…
+    85 [body]: - r4 delta panel（2026-07-28，3 席全 caught：型別 a 幽靈編號／b 未定義旗標／c 未定義欄位）：**blocker×1**＝「loop nex…
+    142 [body]: - **G3 選項②的代價（r4 折入）**：settle 下不再驗輪間鏈續性——「中途某輪審的是被篡改副本」這類序列證據不被機械驗，防線收斂為「終態全對齊現檔」＋條目級 sha；…
+    143 [body]: - **loop next 盲區（r5 折入，v1 已知限制）**：`loop next` 機械上認不得 settle loop，誤用會照完整 legacy gate 判：常見向=…
+  4.080  Projects/嚴重度綁定機械掃_計劃.md  [自主,迴圈]
+    28 [body]: - **[S1] record 寫側強制(第一層,硬擋)**:`canary record` 凡帶 --loop+--auditor 的★審查席帳列★(結局帳 --outcome …
+  3.956  Systems/anchor-integrity.md  [自主]
+    18 [FLOW]: FLOW:anchor approve --note→6錨點(runner×2+git hooks×3+claude hook×1:dispatch-lens-hook.py,20…
+    36 [fm:context]: context: lumos 是自主 loop 天天迭代對象,收進 baseline=每天 approve→盲簽疲勞,守衛立刻形同虛設
+    52 [body]: 方法論最底層退路「CI 跑真測試、綠才算數」把測試結果當不可造假真值,但 runner/評分器本身可被悄悄改寫(外部實證:八大權威評測被 conftest 鉤子全破)。lumos …
+  3.860  Verification/2026-08-22_缺席推論探針題組.md  [自主,迴圈]
+    194 [body]: 該專案沒有自主迴圈。★目前是手動跑:需要帶 `--repo` 指向該專案,且腳本要用工具鏈這邊的。★
+  3.860  Verification/2026-08-14_子代理續談headless實測.md  [自主]
+    14 [TEST]: TEST:成功判準=追問到前輪具體內容且確認記憶還在——達成;[[Projects/子代理續談調研]] DECISION 的重啟條件同日解鎖
+    30 [body]: - 三個應用場景（追問取代重派／攻防加一回合／原審查員驗修）在 headless 自主 loop（governance 排程、自主迭代）技術上已可行；寫入 design-loop …
+  3.839  Projects/先問世界_存量掃描裁定.md  [自主]
+    7 [fm]: - "[[自主loop加法偏食]]"
+    22 [DEP]: DEP:[[自主loop加法偏食]]
+    27 [body]: 三路平行深度研究(WebSearch/WebFetch 真讀官方 docs、GitHub 原始碼、Swimm patent US11132193B1、學術文獻 Offutt 199…
+  3.820  Projects/Codex行為精修_計劃.md  [自主,迴圈]
+    28 [body]: PRIOR-ART: ① 最小解層級——Stop hook 的 `decision:block` 是 Codex 官方通道(文件:「tells Codex to continue …
+    58 [body]: - F2 多一輪的計時風險(codex exec 沒有 --max-turns):①設計審的外家席跑 `--sandbox read-only`,改不了碼→閘門 2 就退出、永遠不…
+    67 [body]: - 為什麼不做「擋到寫回為止」:文件沒記載迴圈上限、0.153.2 原始碼檢視也未見固定次數(外家席 r1;不把「沒寫」當官方契約),只有 `stop_hook_active` 可…
+  3.799  Projects/自足性審計閉環_計劃.md  [自主,鎖]
+    11 [KEY]: KEY:★審查狀態(2026-08-24)★:selfaudit-loop-v5 三輪跑滿=standard 上限,未收斂(r3 仍 2 blocker,已全折入 v8:終局鎖阻塞…
+    114 [body]: →落 pending+不再自動重試;★柵欄擋下(stale)=時序巧合非失敗→不落 pending、不鎖,記週帳後重新排隊
+    129 [body]: ★選序固定(v5-r2 s3f4):先過 pending 濾網→取 flock→讀配額→append started→放鎖→才派工——pending 該擋的不浪費預約★;
+    130 [body]: ★flock 只鎖「讀配額→append started」與終局 append 兩小段,不抱著跑派工(v5-r2 三席 s1f3/s3f2/Codex#3:
+    131 [body]: 原寫法整段持鎖最壞約 90 分鐘,第二個進場的 loop 會掛死);鎖檔=governance/selfaudit-week.jsonl.lock(已退場) sidecar
+    133 [body]: ★兩段鎖模式不同(v5-r3 s1f1/Codex#1:NB 丟終局=已完成的結果無聲蒸發,stale 丟了還連鎖誤判孤兒)★:
+    135 [body]: 終局段=阻塞 LOCK_EX(工作已完成必須耐久;所有持鎖者都只持毫秒級,等待有界)★;
+    136 [body]: 耐久預約已提供跨程序「已佔用」信號,窄鎖不開回雙派工的洞★;
+    … 還有 8 處
+  3.797  Issues/只退場不痛的機制.md  [自主]
+    55 [body]: - [[Issues/自主loop加法偏食]] — 講的是**自主 loop** 結構上只會加不會減;本單講的是**人**的退場行為也只發生在零成本時。兩者互為佐證:生長壓力來自機…
+  3.620  Projects/標註刷新_計劃.md  [自主,迴圈]
+    11 [KEY]: KEY:立案動機(2026-08-17)——治全系統唯一紅燈的實證阻塞:2026-08-08 補鏈後依協定重釘快照 ab910519,P@8 0.713→0.447/固定席噪音 7…
+    15 [KEY]: KEY:刻意不做——★「指標語意不改」2026-08-26 已被翻(condensed 上路,詳 [[Projects/評測尺翻案_計劃]];本篇 decisions d1 已標 …
+    42 [body]: 2026-08-08 補鏈四筆後依 r1 協定重釘快照至 ab910519:P@8 0.713→0.447、hook 固定席噪音 77 條——新快照拉進 7/20 後全部未標節點,…
+    62 [body]: - A 席=乾淨 Claude agent、B 席=Gemini(`gemini -m <flash 現行版> -p`,headless;★刻意不鎖版跟隨現行 flash——rat…
+    83 [body]: - LLM 在計分迴圈:評審只產標註,計分恆決定論可重算——LLM 永不出現在分數計算路徑上。
+    139 [body]: 443 筆全量批(語料前進批):5 平行 Claude 席+5 發 Gemini 塊呼叫 → 一致 245(55%,較試車批 76% 低=大批含大量邊緣候選)→ 198 筆仲裁席 …
+  3.558  Projects/社群演算法補強_調研.md  [自主]
+    13 [fm]: - "[[Issues/自主loop加法偏食]]"
+    17 [body]: 2026-07-10 deep-research 調研：對圖譜已知四缺口（a. canary 對技術密集 spec 易漏、b. 自主 loop 只長不剪、c. 知識同步散落、d. …
+    75 [body]: - [[Issues/自主loop加法偏食]]
+  3.289  Projects/版本發布流程_計劃.md  [自主,迴圈]
+    94 [body]: - **旗標解析要改架構**（r1 補）：現行迴圈是純布林 token 比對（`case "$a" in --pull|--init)`），`--ref v1.2` 兩個 toke…
+    121 [body]: - **checksum 的信任根是 TOFU**：若首次下載時上游已被替換，指紋會把錯的東西鎖成「正確」。
+    224 [body]: REVISIT:2026-10-05 這三條跟自主迴圈去留同一天複審;屆時若對外線已經有人在用,S4 優先。
+  3.272  Projects/design-loop重設計.md  [自主]
+    20 [KEY]: KEY:★定位(使用者確認;r1 折入修正:閘便宜,審不淺)★——「初篩網」指★放行門檻★(不要求窮盡,一輪處置全清即走),★不是審查深度★:前提層錯誤(需求誤解/架構誤判/跨系統…
+    31 [fm:context]: context: 全流程體檢發現 gate 從未放行(1/38)、每次靠人裁繞過;追問後使用者確認 d4 定位並補述:下游有 TDD 落地與 E2E 檢驗功能性,且治理大方向是無人…
+    71 [body]: - **終極要能無人自跑**（loop engineering 大方向）：一道從不亮綠燈的閘，在有人時靠人工繞過；放進自主 loop 就是全部卡死等人——★自動化是假的★。
+  3.209  Verification/2026-06-20_autonomous-iteration-loop.md  [自主]
+    24 [body]: - **流水線端到端跑通**:日報 →(fallback)gap_select 自主選 gap → orchestrator 真 brainstorm 出 spec + 巢狀 sp…
+  3.195  Systems/risk-tiered-review.md  [自主]
+    53 [body]: RHB 實測:題目越難、老實解法越不可行,連低作弊率的好模型也開始抄捷徑——自主 loop 碰難 gap 時恰是審計最易失靈時。現制一視同仁=在最容易出事的場合給最少的盯。
+  3.175  Projects/檔案測試依賴地圖_計劃.md  [自主,迴圈]
+    24 [body]: TDD／code-loop 迴圈裡「改了 X，該跑哪些測試」目前靠人腦或全跑。`test-layers` 只到**棧層**粒度（碰 .cs → 跑 C# 層）；本案補**檔案**粒…
+    165 [body]: - [編排者自主修正，不計收斂帳]（落選席觀察，逐條機械查證屬實後採納）：build 失敗 rc1→**rc2** 對齊家族慣例（席1/席3 同報）；`.lumos/` mkdir…
+    169 [body]: - [編排者自主修正，不計收斂帳]（落選席同報、逐條機械證實）：stem 剝綴詞「最長優先」與列表順序矛盾（`_tests`(6) 排第 4）→ 長度降序表＋大小寫不敏感明定＋[S…
+  3.164  Projects/固定席降噪A層_計劃.md  [自主,迴圈]
+    9 [KEY]: KEY:★v2(r1 五席打掉 v1 後改)★主案=間接保送只認 INVARIANT/IRREVERSIBLE;被降的 RISK 類 indirect 進**獨立參考道**(不佔固…
+    71 [body]: E08 `design-loop`(管自主迴圈測試,about 沒標 test_autonomous_loop)——★全是 about 漏標受害者★。
+    112 [body]: ★為什麼不是 about 豁免★:翻前案已鎖決策+兩條測試機械擋+巨檔門檻讓豁免在震央必死——r1 三票否決,v1 作廢。
+    192 [body]: **A about 豁免**=翻前案已鎖乙選項+`about 不是第四條入口` docstring 與兩條測試機械擋(s2f5/s3f1/s3f2/arch)+巨檔門檻讓豁免在震央…
+    197 [body]: ★教訓:v1 用一小時寫的主案,三個承重點全是「沒對前案已鎖的決策與機械測試」——立案時 `lumos decisions <前案> `+grep 測試,比反事實跑得快更重要。★
+    241 [body]: ★收斂:本輪存活 0,設計出迴圈,進實作。★
+  3.161  Projects/固定席扇出降權_計劃.md  [自主,迴圈]
+    23 [fm:why_chosen]: why_chosen: 三選一:甲收窄/乙恢復降級加豁免(要重設計豁免再審)/丙擱置。甲最誠實:離線驗證(訊號成立)是硬的、排序價值是真的、欄位是未來語意查詢的基礎;硬撐降噪會再走…
+    43 [KEY]: KEY:★r1 六洞全折★——「與考卷必看同一把尺」宣稱作廢(「關於」比「必看」嚴,是精確度子集非等價物);讀側打錯靶(固定席三軸:direct/indirect/incident…
+    306 [body]: **不另立機制,併入 Check S**(★此句已被 r3 s3f11 翻案:Check S 只掃 system,事故類驗不到→另開迴圈同輸出格式;見工具清單 #6。std-r1 …
+    363 [body]: - `LUMOS_IMPACT_ABOUT=0` ★也關 doctor #6 的迴圈★(s1f6:總開關只關一半等於沒關)。
+    432 [body]: | 6 | 過期檢查:**不併入 Check S**(它只掃 type:system,事故類驗不到,s3f11)→ 另開迴圈但同輸出格式;★std-r2:比正文雜湊,不需 git/…
+    441 [body]: 實作是兩個迴圈。這是取捨不是解法。
+    477 [body]: ### #6 過期檢查:另開迴圈,輸出對齊 Check S(★std-r2 折入後版★)
+    494 [body]: - `scripts/hooks/claude/impact-hook.py:344-348` pins 顯示迴圈加:`x.get("about_hit")` → 行首標 `★關於…
+    … 還有 2 處
+  3.128  Systems/slim-gen-生成器.md  [迴圈]
+    11 [FLOW]: FLOW:讀 `scripts/lumos` 原始碼 → AST parse → 算 root 集合(保留指令 dispatch 分支呼叫的函式 + module-level 語句…
+    12 [KEY]: KEY:★正解是行級手術,不是 ast.unparse★——語法樹無註解,`ast.unparse` 實測把 686 行事故脈絡註解全剝光、格式全重排,直接違背〈公開精簡版計劃〉「…
+    14 [KEY]: KEY:removed_cmds 真值來源=掃全部 subparser 註冊(Assign/Expr/迴圈三種形態)得到的指令全集減 DEFAULT_KEEP(26 支 <!--l…
+    16 [KEY]: KEY:★迴圈註冊刪除須 top_var receiver 限定★(2026-07-31 審查揪出、已修復,不是「超出範圍」)——`_is_registration_loop` 原…
+    20 [TEST]: TEST:25 checks 全綠(`python3 scripts/test_lumos.py -k slim_gen`)——真檔生成(--help==保留24支/py_comp…
+    21 [KEY]: KEY:★2026-08-01 補追加 Task 13——組包清單再擴充,與 [[Systems/slim-install-安裝器]]/[[Systems/slim-uninsta…
+    31 [fm:context]: context: 任意保留率門檻無意義(砍多砍少都會動它),真正該鎖的是密度沒有下降——那才是行級手術相對 ast.unparse 的實質保證
+    35 [fm]: - content: 迴圈註冊刪除加 top_var receiver 限定:2026-07-31 審查(Task 5 複審)以合成 fixture 實地示範重現「保留指令巢狀自建…
+    … 還有 2 處
+  3.064  Issues/設計迴圈問閘指令與panel記帳互斥.md  [迴圈]
+    13 [KEY]: KEY:design-loop SKILL 步驟 8 寫問閘用 `lumos loop status --disposal`,但 scripts/lumos:4527-4534 明…
+    20 [fm:why_chosen]: why_chosen: 訊息層修=零判準風險;測試釘住訊息錨字串防迴歸;自主迴圈讀得懂指路即可續跑
+    24 [body]: # 設計迴圈問閘指令與panel記帳互斥
+    26 [body]: > 白話:設計審查的操作手冊叫你用 A 指令問「審完了沒」,但只要這個迴圈是多人同審的型態,A 指令會直接把你擋下來,你得自己發現要改用 B 指令——而 A 和 B 判「過關」的標…
+    33 [body]: →「擋下:第 r1 輪有 5 筆記錄都帶了處置結果,一輪只能有一筆」(多席 panel 記帳型態)。改問 `--gate --panel --min-seats 3` 才通,且該閘…
+    41 [body]: ✅ d1 落地:CLI 指路+兩 SKILL 分岔+05/06 鏡像+測試(code-gate-routing 迴圈單席+架構席審過,最嚴重 minor 全折)。
+    44 [body]: 本 Issue 的修復走 code-gate-routing 迴圈收斂時,處置閘的 quote 關卡再曝一個同族假設縫:發現若屬「diff 之外的鏡像檔沒跟上」型(本輪 7 條裡 …
+  3.052  Systems/診斷迴圈先行.md  [迴圈]
+    15 [FLOW]: FLOW:遇到壞掉的東西 → ★先建一道會對「這個症狀」翻紅的緊迴圈★(完成判準見下) → 才准列假說(3-5 條、排序、每條可證偽) → 逐條測、一次只動一個變數 → 修 + 回…
+    16 [KEY]: KEY:★核心規則(紀律層,刻意不標成硬合約——它管的是動手之前的行為,沒有可綁的 [test:];依本專案「不確定是不是合約就不標」鐵則,確定不是合約就更不該標)★ 在「一道你已…
+    20 [KEY]: KEY:找不到正確的測試接縫時,★那件事本身就是 finding★——是架構在阻止這個 bug 被鎖住,要記下來;不是退而求其次寫一條驗不到真實呼叫現場的弱測試(那會直接掉進 [[…
+    21 [DEP]: DEP:CLAUDE.md「已知行為測試先行、未知行為實驗先行」那條(本節點是它缺的完成判準)｜scripts/templates/graph-discipline.md 同一行(…
+    26 [body]: # 診斷迴圈先行
+    57 [body]: 5. **差異迴圈** — 同一份輸入跑「舊版 vs 新版」或「兩種設定」，diff 輸出。
+    59 [body]: 7. **屬性／模糊迴圈** — 「有時候答案是錯的」這種，跑 1000 組隨機輸入找失效模式。
+    61 [body]: ### 把迴圈當產品來磨
+    … 還有 5 處
+  3.042  Verification/2026-08-25_probe輪退場與多席路由統一落地.md  [迴圈]
+    6 [fm:revalidate_when]: revalidate_when: "下次改動 panel 抽查印行時,t_panel_probe_retired 的舊義務句斷言改為正向鎖新句字面(sha 硬幣紅證限制的回頭條件,…
+    9 [KEY]: KEY:[S2] 三件落地——panel 閘新迴圈 cutoff 拒判(首筆 ts≥2026-08-26,env 覆寫;拒判白話指路 --disposal)/兩處抽查印行降觀測(保…
+    12 [KEY]: KEY:誠實帳:r1 記帳兩失誤自首(intake 斷言未跑檢查被閘抓包/四席報告漏落檔)——收貨慣例無機械守衛首個反面教材,回寫迴圈摩擦案 [S4]
+    25 [body]: - REVISIT:2026-10-06 5 席以上的真實迴圈跑到時,驗載體彙總在那個規模下還操不操作得動
+    27 [body]: > 白話:審查系統「說一套走一套」的最後一塊補完——多席代碼審從此跟其他審查一樣走處置閘(而且 major 一律要修不能談),舊的 panel 閘只留給歷史帳回放,新迴圈想走會被機…
+    33 [body]: - 世界對照補記(2026-08-26,governance/review-reports/world-benchmark-2026-08-26.md):受監管實務保留「事後隨機抽…
+    48 [body]: 這輪是 3 席的中等分級,不是 4–5 席的高分級。**載體彙總在 5 席規模下操不操作得動,到今天仍然沒有真實案例。**不拿 3 席的順利去推論 5 席也順利——席數變多時要對帳…
+    52 [body]: 這輪我把「有兩句引句錨不回快照」的席選成載體,處置閘抓到、但帳已寫進去只能換編號重記整輪。現在 `canary record` 在寫帳之前就會擋。細節記在迴圈摩擦那篇的 [S4] …
+  3.033  Projects/probe輪退場_計劃.md  [迴圈]
+    6 [KEY]: KEY:★d2(Enzo 第二裁)★:code-* 迴圈處置閘輪級加嚴——輪內任一席 severity ≥ major 則 accepted 必空(major 一律折),與 pan…
+    24 [fm]: - content: Enzo 裁(2026-08-25,第二問):code-* 迴圈的處置閘輪級規則加嚴——輪內任一席 severity ≥ major 則 accepted 必…
+    26 [fm:context]: context: 外家 v2 否決席指出 panel 要求 max≤minor 而處置閘允許 major 附理由放行,路由統一未處理此差=實質放寬;攤牌後 Enzo 裁「code …
+    46 [body]: ①教義互斥:[[Projects/panel收斂判準改革_計劃]] 被翻紀錄(2026-08-08,Enzo 具名)寫「code-loop 收斂改走 --disposal」;但 c…
+    53 [body]: - **c4 防線不降級(v3,以 decisions d2 為地基)**:嚴重度門檻——處置閘原制允許 major 附理由放行(panel 要求存活 max≤minor),路由統…
+    57 [body]: 1. [S1] code-loop SKILL.md:步驟 2「只在 high 的 panel」改「只在 high 的多席編制(記帳與問閘見步驟 6-7)」——消歧義(三席同抓:p…
+    58 [body]: 2. [S2] scripts/lumos 三件:①4019/4122 兩處印行整句改寫(c2 措辭;「要——加開一輪…」句刪除);②**panel 閘新迴圈 cutoff 拒判*…
+    59 [body]: 3. [S3] **skills/lumos-code-loop/reference.md 全面同步(v2 最大漏列,三席+外家同抓)**:§4(307-402:328 問收斂指令…
+    … 還有 5 處
+  2.989  Verification/2026-08-30_intake守衛T1-T4落地.md  [迴圈]
+    5 [fm:valid_under]: valid_under: "T1 宣告行=剝圍欄後行首 fullmatch preflight-4: ran(值域單值、多行視同無);T2 處置閘 advisory 不進合取、co…
+    6 [fm:revalidate_when]: revalidate_when: "T4 滾動窗滿 6 個迴圈時看首次判定(出現率 ≥5/6 → advisory 已夠;<5/6 且缺席者有 blocker 輪 → doctor…
+    19 [body]: - **T1** 宣告行慣例:`_intake_declared`(剝 fenced 圍欄→行首 fullmatch `preflight-4: ran`;多行=格式壞視同無)+ …
+    20 [body]: - **T2** 處置閘 advisory 一行(觀測不進合取不改 rc):非 code 迴圈才看;✓/⚠/跳過三態。
+    22 [body]: - **T4** doctor [I] 段:滾動窗(最近 6 個非 code 迴圈,cutoff=宣告行誕生日 2026-08-30)計宣告行出現率;<5/6 且缺席迴圈帳面有 b…
+    27 [body]: - 冒煙即 dogfood:T2 第一個點名的就是本案自己的迴圈(r1-intake 當時無宣告行 → ⚠;補行後 → ✓)。
+    28 [body]: - ★落地時撞到並修掉兩個實作級陷阱★:①git 裸日期 `--since=2026-08-30` 把時刻預設成**當下**不是午夜——當天恆空;必帶 T00:00:00(spec…
+    33 [body]: - T2/T4 蓋不到 panel/light/settle/legacy 舊帳路徑;新迴圈一律處置閘,缺口隨舊帳退場收斂。
+  2.974  Systems/heterogeneous-finder-ensemble.md  [自主]
+    42 [fm:trade_offs]: trade_offs: 需編排者把各 finder 命中收齊(--from-pitfalls 已把 linter 那半自動化);端到端無人跑仍待自主 orchestrator(暫停…
+    47 [fm]: 便利原語(--from-pitfalls 自動收割 linter 命中)與端到端無人跑是兩件事;前者不卡自主 loop 暫停,現在就做。
+    49 [fm:why_chosen]: why_chosen: 手動路徑最煩的一步(手貼 linter file:line)純 lumos 機械可消,與自主 orchestrator 無關
+    79 [body]: - 端到端無人跑(自動派 reviewer + linter + 判收斂)屬自主 orchestrator,暫停中(2026-07-07);目前是**手動路徑一鍵化**。
+  2.971  Projects/收斂閘漏項敏感度v2_計劃.md  [迴圈]
+    29 [KEY]: KEY:材料機械數過——帳 868 筆、80 迴圈跑過處置閘(代碼審 27/設計審 53),★設計審中兩輪以上 25 個、單輪 28 個★;去重規則=r(N-1) snapshot…
+    33 [KEY]: KEY:★隔離三件預註冊★——①執行環境照 scenario_probe 沙盒(拔 remote/pre-push 寫死 exit 1/假身分),不用 worktree,因 202…
+    35 [KEY]: KEY:成本先跑 4 迴圈 x 2 組 x 3 席 = 24 場量單價(探針實測每 5 小時窗口約 50-55 場,多席審查貴多少未量);重試哲學對齊鄰居=逐場算缺可無限補到齊(v…
+    42 [fm:why_chosen]: why_chosen: r(N-1) 是真實存在過、且確實缺那一條的版本(當時席位真的抓到並要求補),所以①不需要製造缺陷②不需要 id 對文字的映射③不需要切 hunk、不會弄壞…
+    48 [body]: > 白話:我們的審查迴圈判「可以收工了」的條件是——這一輪提出來的每個問題都處理完了。它從來沒問過另一半:**該提出來的有沒有被提出來**。外部這個月有兩篇不同領域的論文各自量到同…
+    63 [body]: | 設計審、末輪 findings≥3、字典序前 8 | 前 8 個有 6 個只有 r1(無前輪可比);另有 3 個共用同一份快照(sha 逐字元相同) | 母體=**跑過兩輪以上…
+    65 [body]: | 「隔離副本」四個字帶過 | 本專案 2026-08-23 出過探針副本推上真遠端的事故;且重跑沿用原迴圈名會被四個讀取端當同一迴圈延續、卷證目錄同名可能覆寫原始快照 | 隔離三…
+    99 [body]: `cmd_loop_replay`(`scripts/lumos:451`)是既有的「重跑歷史迴圈」原語,但它重算的是**判定引擎**:對凍結的輸入閉包(全列原文+逐行 sha+s…
+    … 還有 8 處
+  2.945  Projects/設計審收斂重定義_計劃.md  [迴圈]
+    23 [fm:context]: context: v2 曾把 A 軌寫成「不動閘、盼 K=2 兩乾淨輪」——Enzo 指出自相矛盾:本案方向之一就是 K=2 不適用散文,在此奢求 K=2 沒意義。處置閘 2026…
+    29 [fm]: - content: d5 訂正版(Enzo 2026-08-25 裁,行文同日訂正):K=2 不適用散文審計收斂——散文設計審回歸處置閘為正閘(單輪、每發現折或附理由接受;同輪有…
+    50 [body]: 節點還原案兩迴圈 6 輪 153 條全折未機械收斂(帳:canary-log 30 筆,severity 分布 blocker 16/major 12/minor 1/clean …
+    58 [body]: - **d1 病根與軌道**:雙因(閘零容忍語意×折返注入)。A 軌先行(便宜、不動判定邏輯;第一件=散文審回歸處置閘,見 d2);B 軌=閘改 blocking/密度語意(歸檔首…
+    59 [body]: - **d2 散文審回歸處置閘+末輪驗收紀律(d5 重寫;原「r3=K=2 第二乾淨輪」表述作廢——K=2 不適用散文審;panel/K=2=舊制帳,僅已定錨 panel 記帳的舊…
+    60 [body]: - **d3 重寫出口(人裁選項,非自動)**:單輪 blocking 密度極高(暫用門檻:>1 條 blocking/300 字——**本案自定 heuristic,非 Gilb…
+    66 [body]: 2. [S2] design-loop SKILL+reference:**分閘**判詞(panel/disposal 各自語意)、blocking↔severity 綁定句、d2…
+    70 [body]: 6. [S6] 實測驗收:下一個真實設計迴圈按新制跑;prose-lint 詞表寬鬆度與 d3 門檻在該迴圈校準;結果 Verification 認領並判 d1 升級條件;隨附:d…
+    … 還有 8 處
+  2.943  Projects/code席爆炸半徑供糧_計劃.md  [迴圈]
+    10 [fm]: - content: r1 五席+外家全票縮案:B(loop next 爆炸半徑 advisory)廢=停案 d2 明文否決選項本人+截斷判死設計+必經論自反證;C 廢=繞母案重開…
+    17 [body]: PRIOR-ART: **借用既有計算與掛點,不建新指令**——爆炸半徑的計算已存在(`impact --diff` 波及清單、`pitfalls --diff` 的必看節點);席…
+    19 [body]: > 迴圈編號=`爆炸半徑供糧`(慣例應為檔名去尾,但「code」開頭會被 kind 偵測誤判成 code-loop 帳——實測 roster 判不出;去前綴取尾段,此行即映射紀錄)…
+    23 [body]: - **審查席判不了爆炸半徑**:code 席只拿 patch+原始碼;圖譜記的「這段碼綁哪條合約、出過什麼事故、連到哪些功能」沒進派工詞。內容級盤點([[Verification…
+    25 [body]: - **★關鍵時間線(前掃修正後的誠實版)★**:「每席都附圖譜鏡頭、貼內容不給路徑、固定席必答」這條規則 **2026-08-29(d8)才進 code-loop skill**…
+    36 [body]: **★本案最值錢的副產物(機械席 M-3,留待人裁)★**:d8 規則「固定席必答」對 code 迴圈照字面**執行不動**——固定席層在底層原語無上限,真實 code diff …
+    47 [body]: - **自指**:本案材料(本計劃)將出現在自己 code 迴圈的爆炸半徑裡——自審節點慣例已有(盤點口徑排除),不另處理。
+    53 [body]: - **重驗**:C(5 個 code 迴圈後);B 上線後若 top N 常年空(diff 都不碰帶 tag 節點)→ N 與來源重議。
+  2.924  Verification/2026-08-25_迴圈摩擦兩修落地.md  [迴圈]
+    6 [fm:revalidate_when]: revalidate_when: "[S4] 下一個真實設計迴圈(驗:carrier 首選全錨且零因引句加開 delta 輪/前掃語意類首個有命中案/rN-intake 被寫且 H…
+    11 [KEY]: KEY:[S3] 寫回四處——設計審收斂重定義 decisions 加「雙訊號已試並撤回」條(d3,查詢通道可查)/落地驗證 KEY 補撤回+血緣演練✅/連鎖佇列 plan 句補指…
+    19 [fm]: - "[[Projects/迴圈摩擦三修_計劃]]"
+    21 [body]: # 2026-08-25_迴圈摩擦兩修落地
+    34 [body]: **要驗的是**:「先跑引句檢查、再挑全錨那席當載體」這個做法,在下一個真實迴圈裡是不是首選就選對。
+    40 [body]: - 處置閘照樣抓到了。但那時帳已經寫進只進不出的帳本——撤不掉,只能換迴圈編號把整輪三席重記一次。
+  2.917  Systems/nested-agent-permission-scope.md  [自主]
+    63 [body]: - **源起**:日報 2026-06-21 backlog gap「自主 loop 巢狀 spawn 子 agent,卻沒有範圍受限身分,子 agent 繼承全權(confuse…
+  2.911  Systems/convergence-evidence-gate.md  [迴圈]
+    22 [KEY]: KEY:★[2026-08-25 甲裁]panel 閘退役(僅舊迴圈回放)+probe 抽查義務退場+「20 筆抽查帳」通道作廢(Enzo 具名);code 迴圈處置閘加嚴(maj…
+    23 [KEY]: KEY:★兩套閘並存的路由(2026-08-24 補接線)★——本節點管 panel 閘 K 語意;另一套 --disposal(單席處置合取)與 panel 互斥,記帳型態決定問…
+    68 [body]: > **落地實證**:新迴圈(首筆 ts ≥ 2026-08-26)問 `--gate --panel` 一律拒判並指路 `--disposal`(cutoff 機制,t_pane…
+    69 [body]: > **回放條件**:2026-08-25 前定錨 panel 帳的舊迴圈照常可判(判定碼、K=2、兩條合取原樣);「判準凍結」句仍有效(語意=回放判準不漂);「攢 20 筆抽查帳…
+  2.907  Projects/pitfalls-lint-integration_計劃.md  [自主]
+    49 [body]: 排程(吃治理日報骨架)盯已採用的 linter 套件有沒有新版/新規則(查 registry 最新版 vs 專案鎖定版)→ 產「該升級 X」候選 → 候選→放行紀律。
+    50 [body]: > **狀態(2026-07-04)**:spec `docs/design/2026-07-04-lint-version-watch.md`。design-loop 6 輪 c…
+    53 [body]: Compose 重組效能(SARIF linter 蓋不到的偏科坑)——吃 Compose Compiler Metrics(baseline+delta,同 lint-watch…
+  2.883  Verification/2026-09-04_Codex完全支援S2迴圈編排驗收.md  [迴圈]
+    15 [body]: # 2026-09-04_Codex完全支援S2迴圈編排驗收
+  2.866  Systems/開發工作流總覽.md  [迴圈]
+    16 [KEY]: KEY:★迴圈目的(Enzo 2026-08-25 裁定陳述)★——進場雙入口:新專案走既有流程寫節點/維護面用還原 SOP 反推節點;兩路產物同構(帶證據的節點)=loop 階段…
+    21 [KEY]: KEY:★2026-09-05 良性循環怎麼轉★(把 08-25「節點是下一輪的輸入」變成真的在跑的路):節點→派工時自動附相關節點給每個審查員(機制名 dispatch-lens…
+  2.844  Projects/派工鏡頭注入_計劃.md  [迴圈]
+    22 [KEY]: KEY:★鏡頭不是閘★——★只限代碼迴圈★:派工詞含 `LUMOS-IMPACT: <base>..HEAD` 時,PreToolUse(matcher Agent)hook 把 …
+    67 [body]: > 白話:代碼審派審查員的時候,規矩要求把「這批改動碰到哪些帶合約或出過事故的筆記」貼進派工詞——實帳沒人做到。本案在派子代理那一刻,由 hook 把機器算好的那份清單**附**進…
+    80 [body]: - ★沒人貼★:規則 2026-08-29 上線後唯一一個迴圈、編排者=規則作者本人、次日,零執行([[Projects/code席爆炸半徑供糧_計劃]])。
+    84 [body]: ## 範圍:只有代碼迴圈(r1 折入)
+    86 [body]: - d9(2026-09-01)逐字:「code 迴圈固定席以落成核對 capped 節錄為準……design 迴圈維持原樣(pinned 集小)」。截斷規則只給代碼迴圈;本案套用…
+    87 [body]: - 設計迴圈審的是計劃筆記工作副本,沒有既定 git diff 範圍;r1 兩席實跑 `HEAD..HEAD` 回空。硬塞標記=標記在、鏡頭永遠不注入。
+    88 [body]: - 所以:標記只進代碼審模板(§3);設計審模板(§1)★不動★。§7.6 架構對齊席是兩種迴圈★共用一格★(r2 三席抓到「代碼改標記、設計不動」照字面做不到)→那格改成兩支明寫…
+    93 [body]: 2. **[[Systems/design-loop]] d9**(2026-09-01):「上限內貼內容必答、超出列名不必答」;d9 只訂「截錄」,上限值 8 是 `_print…
+    … 還有 8 處
+  2.841  Systems/測試假綠形態.md  [自主,迴圈]
+    72 [body]: **散文檔**寫「必須包含某句」「不准包含舊寫法」的斷言。本 session 遷自主迴圈收斂閘時，
+    91 [body]: - ★同日第二例，而且是**這個節點自己的綁定測試**★（2026-08-01 代碼審 r1 抓到）：`t_deinit_vendored_unlink_failure_does_…
+    254 [body]: **順手踩到的第二個坑**:我想加一條「持鎖的那支行程還活著嗎」來證明沒被殺,
+    255 [body]: 但鎖檔裡記的是**搶到鎖那一支**的行程編號(也就是回完「還在算」就結束的那支),
+    313 [body]: 代碼審抓到「只用 kill -0 判持鎖行程,pid 被作業系統回收給無關行程就會永遠讓行」,
+    315 [body]: ——因為它塞進去的持鎖者是 python,身分驗證正確地判定「那不是 daily-governance」。
+    318 [body]: 正確的假資料是:真的起一支檔名含 `daily-governance` 的行程當持鎖者。
+    375 [body]: 我量到「209 個迴圈裡 0 個落在那個差異上」之後,照樣把守衛裝上。理由是:
+  2.835  Verification/2026-08-25_設計審收斂重定義落地.md  [迴圈]
+    6 [fm:revalidate_when]: revalidate_when: "[S6] 下一個真實設計迴圈按新制跑完(校準 prose-lint 詞表與 d3 門檻、抽驗 blocking 綁定矛盾率、判 d1 升級條件)…
+    12 [KEY]: KEY:★[S6] 實測已跑(2026-08-25,同日):cascade-reminder(P1 Issue 真案,非自指)standard 五席 18 審項/blocking …
+    26 [body]: > 白話:設計審對散文收斂不了的病,解法全部落地——散文審回歸「每個發現折掉或附理由接受就過」的處置閘,K=2 連續乾淨只剩已定錨 panel 帳的舊迴圈在用(代碼審現制也走處置閘…
+    29 [body]: - [S6] 實測=1 個案例(cascade-reminder,standard 五席):單輪收斂成立,但樣本數 1,校準值(詞表不動、門檻建議 2 條/300 字)是單案觀察非…
+  2.831  Projects/迴圈摩擦三修_計劃.md  [迴圈]
+    7 [DEP]: DEP:[[Projects/設計審收斂重定義_計劃]]｜[[Projects/連鎖佇列軟提醒_計劃]]
+    16 [body]: # 迴圈摩擦三修_計劃
+    24 [body]: ①a **審材外引用**:code-cascade-reminder r1 carrier 兩句引句錨在 patch 外現碼→disposal 閘 quote 關 FAIL(帳:該…
+    37 [body]: 3. [S3] 圖譜寫回(r1 s1 席訂正目標位置):[[Verification/2026-08-25_設計審收斂重定義落地]] 的校準 KEY 補「雙訊號嘗試已撤回(loop…
+    38 [body]: 4. [S4] 實測掛鉤(下一個真實設計迴圈):carrier 首選席即全錨、加開 delta 輪數=0→d1 收斂;前掃語意類抓漏 ≥1→d2 生效——**判定只在「首個真有語意…
+    66 [body]: ✅ 全數完成:v2 單輪過閘→[S1]-[S3] 落地→[S4] 已以 probe-retire 兩版三輪實測(判定與反面教材見 [[Verification/2026-08-25…
+  2.809  Verification/2026-07-31_slim-install安裝器落地.md  [迴圈]
+    7 [fm]: - "呼叫方式含直接執行/路徑含空白/symlink 呼叫(含相對路徑多層鏈)三種,由 slim/install.sh 開頭的手捲 symlink 解析迴圈涵蓋"
+    17 [KEY]: KEY:symlink 呼叫邊界原生寫法會壞,已改用手捲 symlink 解析迴圈修正(選項(a)),細節見 [[Systems/slim-install-安裝器]]
+    43 [body]: `$(dirname "$0")` 原生寫法在「透過 symlink 呼叫」下會解析到 symlink 所在目錄而非真實包目錄,實測必壞(`ERROR: 找不到 .../scrip…
+  2.807  Projects/跨session傳訊用途調研.md  [自主]
+    58 [body]: 每天早上的自主迭代線跑完會停在「收斂了、等人放行」。現在得靠人想起來去看。讓它敲一下當下開著的視窗，省掉「等人想起來」這段。治理長期缺的是**觸達人**，不是算力。
+  2.800  Projects/連鎖佇列軟提醒_計劃.md  [迴圈]
+    5 [KEY]: KEY:立案(2026-08-25,自 [[Issues/連鎖佇列開了沒人跟完]] P1)——decision-supersede 自動開的連鎖待辦單沒人跟(3 張裡 2 張零判定…
+    15 [body]: # 連鎖佇列軟提醒_計劃
+    19 [body]: PRIOR-ART:最小解在 doctor 既有 soft-check 層(`warn_soft`,scripts/lumos:486,不擋、只提醒);世界解=撤稿研究:無提醒時撤…
+    23 [body]: `governance/rel-cascade/` 歷來 3 張帳本:前兩張(2026-08-04/2026-08-11)建立後**零筆 confirm/prune**,分別空轉 …
+    29 [body]: - **d3 訊息照工具輸出三段式**:發生什麼(N 張連鎖待辦單自建立後零筆判定,最老 X 天)→為何在意(被翻案決策的引用筆記沒人回頭判,世界對照=94.6% 的撤稿引用不承認…
+    32 [body]: - **d5 來源 Issue 修法四選項逐一裁**(r1 折入:v1 只做 B 沒議 A/C/D 就要結案=靜默放棄):**A 採納**(supersede 成功訊息尾加一行「已…
+    36 [body]: 1. [T1] doctor 軟提醒:統計**在 Check E2 既有掃描迴圈內順手收集**(scripts/lumos:950-956,不開第二條 glob 迴圈),輸出段緊接…
+    37 [body]: 2. [T1b] `decision-supersede` 成功訊息尾加一行「已開連鎖待辦單 <cid>,下一步: lumos rel-cascade list」(d5 採納 A;…
+    … 還有 6 處
+  2.759  Projects/工具鏈全環節體檢_調研.md  [自主]
+    38 [body]: 2. **自主 loop 連續 38 天空轉**:launchd 每天 09:30 準時跑、rc=0,實際被 `governance/pending/` 兩個 2026-07-14…
+  2.741  Verification/2026-08-30_圖譜入口栓落地.md  [迴圈]
+    11 [fm]: - "[[Projects/圖譜進迴圈入口栓_計劃]]"
+    15 [body]: 兩個 advisory 入口栓(A=`loop next` 首輪印主題既有節點;B=`lumos new` 近名建檔後即告)照 [[Projects/圖譜進迴圈入口栓_計劃]] v…
+    27 [body]: - **事故本尊重放(真 vault)**:`loop next impact-鏡頭機械化re --tier standard` → 被片語搜尋藏掉的 `impact鏡頭機械化_計…
+    32 [body]: spec v3 寫 OR 候選收集「抽成共用 helper,兩處(advisory 與 cmd_search)共用」。實作沒有重構 `cmd_search` 主迴圈——它綁著多詞回…
+  2.717  Verification/2026-08-25_連鎖佇列軟提醒落地.md  [迴圈]
+    5 [fm:valid_under]: valid_under: "doctor E4 掛在 Check E2 掃描迴圈內;_ledger_read 回傳形狀(header|None,transitions);warn_…
+    9 [KEY]: KEY:[T1] doctor E4 落地——統計併 Check E2 既有帳本掃描迴圈收集(不開第二條 glob),零判定帳本數+最老天數(UTC-aware .days,缺 t…
+    10 [KEY]: KEY:[T1b] supersede 開單當下 stderr 白話指路兩行(「已開連鎖待辦單…confirm/prune;下一步:」+指令獨立行)——照既有輸出協議(stdout…
+    18 [fm]: - "[[Projects/連鎖佇列軟提醒_計劃]]"
+    20 [body]: # 2026-08-25_連鎖佇列軟提醒落地
+  2.704  Issues/引句錨定只驗前綴_後半可編造.md  [迴圈]
+    46 [body]: 2. **打壞既有卷證**——對帳本裡可讀的 613 組報告與快照重放,**148 組(24%)** 會從「全數錨定」變成判錯;而處置閘會把它算進失敗,歷史迴圈回放會轉紅。
+    53 [body]: - **回溯性**:新判準對既有卷證要不要生效?24% 會轉紅,而那些迴圈當時是照當時的規矩過的。★需要一個「向前生效、不追溯」的設計★,而回放凍結閉包裡的舊判定該怎麼處理要一起想…
+    58 [body]: **一、改判準必須同時推進回放引擎版本。** 回放的黃金抽查靠比對 `_REPLAY_ENGINE_REV` 決定要不要用現在的程式碼對凍結閉包重算:版本沒變就重算,版本變了才視為…
+  2.704  Projects/Android側UI測試綁圖譜工作流_計劃.md  [自主]
+    24 [KEY]: KEY:★實戰要求三:裝置前置是這條路線的真實成本,沒文件化第二次就沒人跑得起來★—mOrangePos 實測撞到四關:①首次使用授權閘(要算挑戰碼)②複製設定★務必改裝置名★(否…
+    26 [KEY]: KEY:★實務隱患(r1 三席一致補;pitfalls --check 機械零命中≠不需要)★—★金流/prod 不可逆最重★:flow 跑真裝置真後端,參考實作檔頭記著「驗過…單…
+    32 [DECISION]: DECISION:[2026-08-11 r2]★不改任何 skill★—綁定照常綁星標合約;有裝置真跑記 pass --note,沒裝置走既有 code-loop skip --…
+    64 [fm:context]: context: r2 opus 席(F6)實查推翻 d2 的前提:S1 條文自身標明「紀律層規則非機械閘」(skills/lumos-code-loop/SKILL.md:227…
+    180 [body]: > ★r2 訂正（F6，opus 席實查）：上面這個「撞裁定」的擔憂**前提是錯的**★——S1 條文自己標明「**紀律層規則非機械閘**」（`skills/lumos-code-…
+    182 [★INVARIANT★]: > **本輪裁定（decisions d3，翻盤 d2）**：**什麼都不用改**——綁定照常綁 ★INVARIANT★；有裝置就真跑並記 `pass --note`，沒裝置走既有…
+    250 [body]: - **併發（裝置是獨佔資源）**：①同一台裝置被兩個 flow／或人與 agent 同時操作 → maestro 每個 `tapOn` 都會點到「某個東西」所以不報錯，flow …
+    252 [body]: - **認證**：首次授權閘「要算挑戰碼」是**人工步驟**，與「無人看顧 loop」方向牴觸——v1 明文：**這條路線 v1 不進自主 loop**，只在有人的工作階段跑。
+    … 還有 1 處
+  2.701  Issues/2026-08-03_剝除與邊界解析的既有缺陷群.md  [迴圈]
+    20 [DEP]: DEP:scripts/lumos(_refcheck_scan/doctor Check P/cmd_archive/spec-trace/split_frontmatter/c…
+    95 [body]: - **JSONL 讀迴圈四份以上**只 catch `ValueError`，一行合法但非物件的 JSON → `gov`／`loop status` 拋 `AttributeE…
+    153 [body]: | ⑦ | JSONL 非物件行 → AttributeError | 四份以上同構迴圈，該一起收編 |
+  2.677  Projects/改制回測_計劃.md  [迴圈]
+    17 [body]: > 白話:昨天把收斂判準整組換掉(處置閘),證據只有「上線當天十個迴圈跑得過」。這案把「重算一遍還是同樣判定嗎」變成可以每週自動問的問題:帳、報告、spec 的雜湊全部凍進判定檔(…
+    23 [body]: - 處置閘判定=純讀側(canary 帳列+報告檔 sha+快照),`loop status --disposal` 決定論可重算;今日已收斂迴圈 10+ 個,素材齊(govern…
+    25 [body]: - 舊制 panel 迴圈的帳仍在(replay-only 通道活著),但從未被拿來與新制同料對照。
+    29 [body]: - **[S1] 回放 runner**:`lumos loop replay <id> --golden <檔>`(回放模式,不需 --spec——spec sha 用閉包裡凍結…
+    30 [body]: - **[S2] golden 判定檔=完整輸入閉包**:`--freeze` 產 `governance/replay/<id>/verdict.json`(新目錄——golde…
+    31 [body]: - **[S3] 新舊制同料對照(一次性分析)**:取 2026-08-06~08-25 間 panel 定錨迴圈,先按帳形狀分類——(a) 單席帶處置集合=d5 可比,跑四合取記…
+    78 [body]: - code-batch3(代碼審 r1,2026-08-26)折回 spec(實作層七修,條款語意不變):①回放先驗 golden 本體 vs HEAD blob(拿 golde…
+  2.658  Issues/lint-watch空轉假綠.md  [迴圈]
+    15 [KEY]: KEY:修法(2026-07-17 收網三修,governance/lint-watch-check.sh):①SSL_CERT_FILE 指 macOS 內建 /etc/ssl/…
+    35 [body]: ① `SSL_CERT_FILE=/etc/ssl/cert.pem`(macOS 內建,未設定才 export)② 多 repo 撒網迴圈(宣告檔存在才掃;seen/pendin…
+  2.658  Projects/loop三輪壓縮_計劃.md  [自主]
+    82 [body]: - **自主 loop 無人攤牌**:panel 一輪不收斂 → unconverged requeue(既有);tier=high 仍走硬證據閘(G1 + agreement 記…
+    94 [body]: - **F4 W<2 caught(輪無效)後續**:輪無效 → 不算收斂、**算耗 1 輪 cap**、下一輪全新 W-panel 重跑(不補單槽——補單槽破壞平行獨立性)。ca…
+  2.652  Issues/loop機制痛點_Landmark_code-crossclaim實跑回饋.md  [迴圈]
+    44 [body]: - **① K=2 vs 折入即修 → 已解(d5 處置閘)**:2026-08-25 收斂制改成處置閘(一輪每個發現折掉或附理由放行即過),沒有 K=2 的「連兩輪乾淨」要求——…
+  2.642  Projects/子代理續談調研.md  [自主]
+    73 [body]: - 現況結論：**headless 環境（governance 排程、自主迭代 loop）技術上可用；互動式 session 仍不可用**（transcript 不落地）。
+  2.622  Verification/2026-08-26_新舊制同料對照_v0.md  [迴圈]
+    5 [fm:valid_under]: valid_under: "d5 判定核心=_loop_status_disposal(engine_rev d5-2026-08-25);對照對象=08-06~08-24 收尾之…
+    16 [body]: 改制回測 [S3]:對 2026-08-06~08-24 收尾的全部 45 個舊制(panel 世代)迴圈,用 d5 處置語意唯讀重算(spec_sha 用各 loop 窗末指紋,…
+    28 [body]: - 一個歷史「已收斂」的代碼迴圈,d5 重算在處置集合這關擋下——★舊制放行過、新制會擋的實證★:08-25 改制缺的遲到對照證據,就是這一筆。
+  2.612  Issues/主程式讀取路徑漏接UnicodeDecodeError.md  [迴圈]
+    9 [fm]: - "[[Systems/診斷迴圈先行]]"
+    17 [KEY]: KEY:★已跑過會翻紅的指令(依 [[Systems/診斷迴圈先行]] 完成判準,不是讀 code 推理出來的)★:`printf` 造一個含 `\xff\xfe` 的 .md →…
+  2.600  Projects/prepush主幹範圍修法_計劃.md  [迴圈]
+    21 [TEST]: TEST:見 body 測試策略——--diff CLI 格數/新舊相容/留痕座標(綁 remote_ref 目的地非 local_ref)/hook 假 stdin 模擬(mai…
+    47 [body]: - **聚合**：對每個有效範圍跑 `pitfalls --diff <range> --no-lint --json`；**逐 ref 獨立判——某 ref 判 high 即對「…
+    85 [body]: 2. hook 模擬（臨時 git repo＋假 stdin，沿 `t_codeloop_guard_prepush` subprocess＋input 模式）：main-dire…
+    117 [body]: - **聚合成本/多 ref 迴圈無測試（s3）**：短路＋逐 ref 迴圈重置＋多 ref 混合測試格。
+  2.574  Verification/2026-09-03_席間覆蓋率離線量測.md  [迴圈]
+    23 [KEY]: KEY:★教訓:兩個獨立來源一致可以兩個都錯——如果共用同一個錯誤前提★。v2 母體我算 53/25、外家 Codex 獨立重算也 53/25,正確是 52/24;_roster_…
+    30 [body]: > 白話:我們的審查迴圈每輪派好幾個 AI 席位挑毛病,判「收工」的條件是「這一輪提出來的每個問題都處理完了」。它從來沒問過另一半——**該提的有沒有被提**。這篇拿帳上已經躺著的…
+    129 [body]: v2 的母體數字我算成「設計審 53 個、多輪 25 個」,外家席(Codex)獨立重算**也得到 53/25**,兩邊一致。但正確是 **52/24**:`_roster_kin…
+  2.563  Issues/probe輪三參數只在散文.md  [迴圈]
+    23 [body]: > ✅ **已結案(2026-08-25,[[Projects/probe輪退場_計劃]] 落地;Enzo 甲裁)**:待裁兩選項取**退場**——且範圍升級:多席 code-lo…
+  2.560  Issues/deinit整夾刪使用者檔.md  [迴圈]
+    20 [KEY]: KEY:★2026-08-02 同一支函式的後續補強(code-teardown-windows loop)★——頂層白名單迴圈的裸 `p.unlink()` 包成 `try/ex…
+  2.541  Systems/lint-version-watch.md  [迴圈]
+    20 [KEY]: KEY:[2026-07-17]收網三修(事故見[[Issues/lint-watch空轉假綠]]——部署後空轉12天):runner ①SSL_CERT_FILE=/etc/ss…
+    39 [body]: pitfalls-lint-integration 計劃第②塊。每日排程機械偵測「宣告的社群 linter 有沒有新穩定版」(查 registry vs `.lumos/lint-…
+  2.503  Verification/2026-07-31_slim-gen生成器落地.md  [迴圈]
+    7 [fm]: - "精簡版保留指令清單固定為現行 24 支(DEFAULT_KEEP);root 集合演算法覆蓋 dispatch if 分支 + module-level 語句/class b…
+    13 [fm]: - "scripts/lumos 的 subparser 註冊改用第四種形態(非 Assign/Expr/迴圈)→ collect_edits 需補對應 visit,否則移除清單漏…
+    70 [body]: 2. **百分比門檻無意義**:任意保留率門檻(60%/50%)砍多砍少都會動它,不是行級手術這個設計本身要鎖的性質。改鎖「產物註解密度不得低於原檔的 90%」——這才是行級手術(…
+  2.499  Projects/roster對帳併入問閘_計劃.md  [迴圈]
+    6 [KEY]: KEY:★light 誤判實錘★:r1 單席冒 5 條 major,依鐵則升級 roster-merge-std 完整迴圈,乾淨輪不洗回
+    36 [body]: - 守衛面:動輸出不動判定;try/except+打樁斷言鎖 rc。已排除:金流/對外/不可逆。
+  2.490  Systems/linter精選目錄.md  [迴圈]
+    17 [KEY]: KEY:C#(nuget)——StyleCop.Analyzers(風格/命名/排版)｜Roslynator.Analyzers(500+品質簡化)｜SonarAnalyzer.C…
+    22 [KEY]: KEY:[2026-07-26 補]ast-grep(跨語言 AST 結構比對引擎,github:ast-grep/ast-grep)——「事故→固化機械規則」的升級引擎:pitf…
+    44 [body]: | **Microsoft.VisualStudio.Threading.Analyzers** | async/併發死鎖 | async 後端(如 LandmarkMember)…
+    91 [body]: - ⚠ **SDK 門檻實錘(taroko_app)**:Dart 2.19(pre-Dart 3)上述架構套件與新版 VGA 全裝不了——舊 SDK 專案的架構軸=升級 Flut…
+    110 [body]: AST 級結構比對（比 regex 誤報少、表達力強），多語言單一引擎；CodeRabbit 以它為底層、官方供 `llms.txt` 讓 LLM 寫規則。**用途定位**：pit…
+  2.479  Projects/code階段強化_計劃.md  [自主]
+    35 [body]: **改動**(兩份 skill 文字;**紀律層規則,非機械閘**——同「硬閘是紀律非技術鎖」家規,誠實聲明):
+    69 [body]: 拒收理由立足工程成本:需穩定硬體環境壓噪音(change-point 偵測才有意義),重;lumos 自身是 CLI 無熱路徑。**誠實缺口(r1 折入,不得誇大覆蓋)**:S2 …
+    82 [body]: 5. **真加軸=第三家族**:以**實際驗證可用者為限**——qwen 有自主 loop 既有整合(cross_audit);gemini 於本 repo 無任何整合紀錄,列候選…
+  2.475  Projects/中文無空白查詢回退_計劃.md  [迴圈]
+    71 [body]: - **(乙,採用) 只在搜尋函式現有的預檢與主迴圈裡擴充那份詞清單。**
+    72 [body]: 現有主迴圈已經把路徑篩選、可見文字判定、命中行標記、排除已作廢節點、隱藏筆數、
+    76 [body]: (預檢自己剝一份而跟主迴圈分岔,造成幽靈連結邊、以及逐詞覆蓋虛報非零)。
+    83 [body]: ★而且「產生字對」這件事要抽成一支小的純函式★,給預檢、主迴圈、提示、測試共用——
+    170 [body]: 既有預檢與主迴圈的路徑篩選、可見文字判定、命中行標記、排除作廢節點、隱藏筆數、
+    172 [body]: - **切字對抽成一支純函式**(`_cjk_bigrams`),預檢、主迴圈、提示、測試共用。
+    207 [body]: 而我寫 `_cjk_bigrams` 時**只借了那條字元域的規則,切的迴圈自己重寫了一遍**。
+  2.473  Verification/2026-08-26_改制回測落地.md  [迴圈]
+    27 [body]: - 首批真凍 17 包(08-25 起全部收斂 d5 迴圈:9 設計+7 代碼+severity-scan),全量回放 17/17 綠,總耗時 4.1s、單包 0.24s——★升級…
+    51 [body]: **一個一直沒解決的殘留**:有 7 個舊迴圈的帳裡沒有記被審文件的路徑,所以凍不起來。模組的處理是**列名單但不猜**,從 08-27 到今天名單一模一樣。這是刻意的(猜錯比不凍…
+  2.462  Projects/公開精簡版_實作計畫.md  [迴圈]
+    20 [KEY]: KEY:★首批必接的三條裸項★(spec 放行時未結清):①S6-3 子模式判準三來源(Task 5 實測 export/search 分類)②掃描器第五種形態=裸中文散文型 to…
+    23 [KEY]: KEY:2026-07-31 補追加 Task 7(第二輪分支終審代碼審抓到的兩條殘留 minor,無獨立 SDD brief,由使用者直接指派)——minor-1:Task 6 …
+    312 [body]: - [ ] **Step 1: 寫失敗測試（合成 fixture 驗迴圈註冊）**
+    314 [body]: 這條是 spec 放行時的裸項③：現行白名單下**沒有真實的「該砍的迴圈註冊指令」**（唯一迴圈註冊的 `links`/`backlinks` 都在保留清單），所以必須造合成 fi…
+    401 [body]: > ★**正解＝用 AST 只拿「要刪的行號範圍」，然後刪那些行；保留的部分一個字元都不動。**★ 唯一例外是「混合保留／移除的迴圈註冊」，該小塊（2–3 行）允許重排。
+    639 [body]: Expected: PASS。**若 `產物 --help == 保留 24 支` 紅，讀 diff 找出哪支沒被砍乾淨——多半是註冊形式（`Expr` vs `Assign` v…
+    897 [body]: Create `slim/README.md`，必須包含（每項都被上面的斷言鎖住）：
+  2.462  Projects/Codex完全支援_計劃.md  [迴圈]
+    23 [KEY]: KEY:目標=在 Codex CLI 下開一個 lumos 專案,得到跟 Claude Code 下★同一套★六層防護:指示(AGENTS.md)/skills/hooks(進場、…
+    29 [KEY]: KEY:分四階段,每階段各自驗收:S0 安裝層(skills symlink→~/.agents/skills、hooks.json 合併器、AGENTS.md 區塊、enforc…
+    78 [body]: lumos 的六層防護(指示 / skills / hooks / 迴圈編排 / 量測 / 安裝拆機)在 Codex CLI 下逐層接上,驗收標準是「乾淨機器、隔離 HOME 與 …
+    87 [body]: | 4 迴圈編排 | design-loop / code-loop skill 叫主對話「派 Agent、model sonnet」;外家席=Codex;★家族判定是靜態關鍵字表…
+    127 [body]: ### S2 迴圈從 Codex 編排
+    131 [body]: - **外家席相對化(整合 F3/通才 F3 blocker)**:`loop next` 首輪必帶 `--orchestrator claude|codex`(比照 `--tie…
+    203 [body]: - **impact-hook**:`EDIT_TOOLS` 加 apply_patch;`extract_patch_paths`(Add/Update/Delete/Move …
+    220 [body]: - **驗收**:[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]。
+  2.423  Verification/2026-08-21_工具鏈體檢修復批.md  [自主]
+    22 [body]: ## #2 自主 loop 38 天空轉 ✅(部分)
+  2.418  Projects/節點還原SOP_計劃.md  [迴圈]
+    13 [KEY]: KEY:★審查狀態(2026-08-24)★:standard 三輪跑滿達上限未收斂(r1=39/r2=25/r3=25 條,全折零放行;r3 仍 3 blocker 已折入);E…
+    16 [KEY]: KEY:★v2-r3 審計(2026-08-24,5 席,v2 上限輪)★:收尾判準去模型化(兩套閘語意不裁正統、立 Issue 待裁、上限到=攤人)/三層切斷改標本案自定+收貨假…
+    61 [fm:context]: context: Enzo 於 r3 進行中連發三則指示(原話:「依照這個SOP還原基於codebase能還原的事實,讓新功能基於這個事實,延續既有的開發框架和元件」「需要但沒有的…
+    65 [fm]: - content: d7(Enzo 裁甲,2026-08-24):開新編號 node-restore-sop-v2 審一輪 v4 delta——範圍=r3 折入面(self-au…
+    68 [fm:why_chosen]: why_chosen: 與 selfaudit-loop-v5 同款先例:上限後未審的結構內容開新編號補審,乾淨輪不洗回原迴圈;成本約一輪五席
+    73 [fm:context]: context: 兩迴圈六輪 30 席 153 條全折零放行後攤人;甲=第三迴圈(被 Enzo 否):後三輪發現集中於迴圈自身簿記語言且每折新生一兩處同類,邊際遞減;機械閘 K=2…
+    105 [body]: - **問世界第二輪(2026-08-24 Enzo 指示網搜;★原迴圈 r3 後折入,後經 v2 delta 三輪補審並折入修正——v2-r3 抓到舊標記「未經審查」已過期★)*…
+    108 [body]: ## 使用場景(Enzo 指定,2026-08-24;d6。★原迴圈 r3 快照凍結後折入,後經 v2 delta 三輪補審並折入修正★)
+    … 還有 5 處
+  2.413  Issues/vendored測試套件在消費端假紅.md  [迴圈]
+    9 [fm]: - "[[Systems/診斷迴圈先行]]"
+    30 [body]: ★我原本要說「那是既有現象」——跑了差異迴圈才發現是錯的★：
+    37 [body]: （[[Systems/診斷迴圈先行]] 那條「不准在拿到訊號前建立理論」，第一個擋下的是我自己。）
+  2.386  Systems/pitfalls-code-loop.md  [迴圈]
+    23 [KEY]: KEY:[2026-08-11]同型第二例——簿記帳也排除(_BOOKKEEPING_FILES/_DIR:治理帳/usage-log/ci-log/anchor-baseline…
+    40 [fm]: - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;cod…
+    52 [fm]: - content: code-loop check 在 marker 檔不在時退讀 tracked 的治理帳(docs/.governance-log.jsonl 最後一筆該分支…
+  2.378  Projects/中心性重驗排程_計劃.md  [迴圈]
+    16 [KEY]: KEY:advisory 純顯示排序——不新增輪詢、不改 Check S 判定語意、gov_events 寫入順序不動(只重排顯示清單,掃描迴圈不動);Check S 前 8 筆截…
+    34 [body]: - [S3] **顯示整合**：`lumos stale` **僅 bare 模式**預設融合排序＋分位欄（＝[S2] 三段 band 標籤，同物同名）（`--match`/`--…
+  2.378  Systems/codex-harness.md  [迴圈]
+    48 [body]: - 落地四階段 S0–S3 與裁定 d1–d6:[[Projects/Codex完全支援_計劃]];驗證 [[Verification/2026-09-04_Codex完全支援S0…
+    50 [body]: - 收工檢查本體:[[Systems/graph-sync-coverage]];安裝生命週期:[[Systems/lumos-cli-lifecycle]];設計/代碼迴圈的 C…
+  2.373  Projects/一句話層供糧_計劃.md  [迴圈]
+    22 [body]: - **開迴圈的相關節點清單**(入口栓 A=`loop next` 首輪印「主題既有節點」的 advisory,[[Projects/圖譜進迴圈入口栓_計劃]]):印「名+sta…
+    36 [body]: - 入口栓 A 清單:每行「名 [status] 決策 N 條[ ★近名]」**最末**加「 — <L0>」(A-1 釘序:gist 恆最後;空則整段不加);--json 的 `r…
+  2.328  Projects/bootstrap一鍵對稱_計劃.md  [迴圈]
+    21 [KEY]: KEY:範圍刀=不動 cmd_init 本體(slug/scaffold/注入邏輯全復用);不加 bootstrap --name(要自訂 slug 的用戶自己跑 init --n…
+    54 [body]: clone 完成後整段交給 `bootstrap`（消掉 get.sh 自己跑 `install --force` 的雙寫）。**旗標解析改迴圈**（現碼 `get.sh:9` 只…
+  2.288  Projects/panel收斂判準改革_計劃.md  [迴圈]
+    39 [body]: 上段(08-08)翻的是**閘切換**(canary 可信度前提動搖→code-loop 收斂改走 --disposal,當時實作只落到單席)。本段翻的是**多席路由+抽查機制**…
+    54 [body]: 1. `_loop_status_panel` 結構改動：現只讀最後一輪（`next(reversed(groups))`），K=2 需跨輪比對——動的是判定迴圈不是參數（s4-F…
+  2.284  Projects/驗形式與驗內容_調研.md  [迴圈]
+    22 [KEY]: KEY:★世界數字③機械強制 vs 散文治理(arXiv 2605.14744,2400 案/8 條件/每格 N=300)★——純文字治理 ★27.3% 的延後決定是「化妝式合規」…
+    32 [fm]: - content: 解法方向不改:硬約束優於加權排序、機械原語跑在 LLM 解釋迴圈之外——這兩條世界都量過,本 repo 兩條都已經在做
+    34 [fm:context]: context: 記憶下毒論文量到 provenance 當加權排序等於不設防(p=0.80);機械強制論文的設計是所有原語跑在 LLM 解釋迴圈外、約 32.7% 案子由機械直接…
+    122 [body]: - 核心理論:**「當同一個模型既解釋政策又滿足政策時,那條政策就只是建議而不是約束」**(regressional Goodhart)。機械原語一律**跑在 LLM 的解釋迴圈之…
+    133 [body]: 2. **★解法形狀被驗證了兩條★**:硬約束優於加權排序(記憶下毒論文的失敗案例);機械原語要跑在 LLM 解釋迴圈之外(機械強制論文的設計)。**本 repo 兩條都已經在做,…
+  2.276  Systems/slim-scan-掃描器.md  [迴圈]
+    11 [FLOW]: FLOW:先取 `lumos --help` 解析出的指令全集減 KEEP 白名單得 removed 集合 → 再讀交付檔(README/SKILL.md/reference.md…
+  2.268  Projects/impact鏡頭機械化_計劃.md  [迴圈]
+    79 [body]: 2. **數字錯兩次。** 立案寫「74 份只有 8 份」——分母混了 design 與 code 兩種迴圈;v2 訂正時又寫「code 迴圈 2/25」,而同篇上一段自己算出的是…
+  2.262  Systems/效能檢核目錄.md  [迴圈]
+    51 [body]: | 結構化並發與取消傳播 | 人判提問+lint 可查部分 | async 沒 await 吞例外/withContext 内 catch CancellationExceptio…
+    73 [body]: | **LINQ 重複枚舉/中間集合** | 人判提問+analyzer 可查部分 | IEnumerable 被多次 foreach=查詢重跑(該 ToList 一次);長鏈每步…
+    74 [body]: | **DB 連線生命週期** | 人判提問(2026-07-27 網搜補漏收) | 連線漏 using=池名額洩漏→TimeoutException(池化只省重建、不解忘還);迴…
+  2.256  Projects/code側刪除傳播守衛_計劃.md  [鎖]
+    226 [body]: - **資源**：無——純檔案讀取，無連線／鎖／長駐進程。
+  2.228  Projects/回訪掃描_計劃.md  [迴圈]
+    17 [★INVARIANT★]: PRIOR-ART: **借用既有形態,一個掃描器治 52 件**——doctor 軟提醒段(E4 連鎖票同形:全靜默設計/warn_soft cap3/gov event/adv…
+    23 [body]: 2. **「下一個真實迴圈驗收」家族是最大宗隱形壞帳**:事件天天發生、承諾從不被喚起;至少三件條件已成立未執行(其一計劃已標 done 而 S6 查無驗證回寫)。
+    54 [body]: - **效能**:doctor 已全檔掃描多輪,REVISIT 掃描併既有迴圈或 rglob 一次,量級同 E 系;>0.5s 增量再議。
+  2.224  Systems/slim-install-安裝器.md  [迴圈]
+    26 [KEY]: KEY:★symlink 呼叫邊界(2026-07-31 實測,spec [S4-c] 明列未經審計必須實測)★——`$(dirname "$0")` 素樸寫法解析到 symlin…
+    30 [KEY]: KEY:★2026-08-01 補追加 Task 13——bash 全部搬成 Python(stdlib only),由使用者直接指派★:`slim/install.sh` 原本承…
+  2.201  Projects/Codex工作流整合_調研.md  [迴圈]
+    20 [KEY]: KEY:候選(未裁):①--output-schema 鎖外家席報告格式(今天收貨正規化踩三次) ②codex review 當第二種外家形態(輸出未測) ③Codex 側 dis…
+    28 [body]: - **設計審迴圈**:每輪一席「外家否決」(`lumos-design-loop/SKILL.md` 步驗 5、`templates.md` 辯方段;`codex exec --…
+    29 [body]: - **代碼審迴圈**:低共識 ≥major 條目派 Codex 辯方(`lumos-code-loop/SKILL.md` 步驟 4、`reference.md:141/152`…
+    50 [body]: 1. **席報告格式**:外家席報告的 severity/blocking 同行、引句改述,今天光是收貨正規化就踩了三次——`codex exec --output-schema`…
+  2.184  Verification/2026-09-05_skill-doctor成本基線.md  [迴圈]
+    19 [body]: KEY:★真正的成本在迴圈★——7 天:lumos-code-loop 930 萬 token / 49 次(平均約 19 萬一次)、lumos-design-loop 300 萬…
+  2.171  Projects/收斂閘殘餘估計降級_計劃.md  [迴圈]
+    57 [body]: - **資料涵蓋**：讀取全部 kind（caught/missed/**none**）記錄的 `capture_counts`——現行掃描迴圈對 kind=none 是 `con…
+  2.154  Projects/真遺忘召回過濾_計劃.md  [迴圈]
+    48 [body]: `cmd_search` 有**三條輸出路徑**：預設 `ranked`／`--legacy`（字母序）／`--regex`（dispatch 層強制關 ranked）。濾網**必…
+    50 [body]: - 插在命中確認**之前**（迴圈頂）→ 隱藏數會變成「全庫 superseded 總數」而非「本次查到、被藏的筆數」（測試 6 擋不住此錯算）。
+    110 [body]: - **F2**（濾網插點未定，三路分裂）→ A方案加「濾網插在三路分岔前的共用迴圈」小節＋測試案例 7。
+  2.149  Systems/lumos-cli-lifecycle.md  [迴圈]
+    16 [KEY]: KEY:bootstrap 一鍵對稱(2026-07-25)=step3 升級專案層四分流:有vault+vendored→接hooks｜中間態(有vault無vendored,_…
+  2.144  Verification/2026-07-15_主網實驗場_LandmarkMember.md  [迴圈]
+    42 [body]: 按 E1 建議拔除 5 條死背書後，Check 3 反咬 4 條「verified_by 漏寫」——stale 驗證內文仍連模組，雙向義務與 E1 打架（拔了報漏寫、掛回報死背書，…
+  2.142  Verification/2026-07-25_bootstrap一鍵對稱.md  [迴圈]
+    8 [fm]: - "get.sh 迴圈解析 --pull/--init 後整段委派 bootstrap(set -e 保錯誤傳播)"
+    31 [body]: - `get.sh`：迴圈解析旗標（修掉只看 `$1` 的無聲吞旗標）→ clone 後整段委派 bootstrap（`set -e` 保錯誤傳播）。
+  2.130  Verification/2026-08-08_驗證層去模型化落地.md  [迴圈]
+    27 [body]: - 對本 repo 大檔(scripts/lumos)實跑**逾時**:病根=本 repo 測試拓撲(主檔測試邊=整套 2400 案),每變異跑一次=spec 自警的「乘法爆炸」。…
+  2.114  Systems/外部對照-code衍生wiki.md  [迴圈]
+    68 [body]: 1. **零紀律零維護**（最深一條）：lumos 全部價值押在人的紀律（退場必寫/圖譜先行/實時更新）+ 機械閘逼；頭號失效＝人懶得寫回。openwiki **結構上把人移出維護…
+    89 [body]: - lumos＝在開發迴圈內、**決策當下**記（作者當時握有真脈絡/決策/被否方案）＝**第一手目擊證詞**非事後遺跡重建。primary source vs reconstru…
+  2.036  Projects/CI回流閉環_計劃.md  [迴圈]
+    14 [KEY]: KEY:問題——CI(GitHub Actions)紅了只存在 GitHub 網頁,本機 lumos/圖譜/治理帳全不知情;下個 session 開場也讀不到 → 自動開發迴圈在「…
+    99 [body]: ### [S2] 修復重試迴圈（skill 紀律，機械原語由 [S1] 出）
+    101 [body]: `lumos-project-notes` skill 的收尾段與 code-loop 收斂後段各加一條——**僅當專案 `.lumos/config.json` 宣告 `ci` …
+  2.030  Projects/收斂機制優化調研2026-08-14.md  [迴圈]
+    40 [body]: - 停損寫法:多判準停損(穩定窗 w=2+信心門檻+實質/表面語意區分,三取二)、業界慣例「綠燈或邊際遞減(nitpick-only 即停)、cap 2-3 防無限迴圈」。
+    103 [body]: arXiv 2608.18167「Adversarial Review」——三 agent(主/審查員/批評者)、雙層迴圈、
+  2.023  Projects/from-scratch重生守衛_計劃.md  [迴圈]
+    64 [body]: 1. **縮面積——對舊節點 diff 重生、不整篇換**。stale 也是拿舊節點當底料、只重寫被證據推翻的部分、輸出 diff 給人審。保住殘存目擊內容，把 synthesis…
+    96 [★INVARIANT★]: - **不對稱信任接線**：`推測:` 行**不得**承載 ★INVARIANT★/★IRREVERSIBLE★（合約不能建在推測上）;推測升級唯一路徑＝補 [src:]/[git…
+    158 [body]: - **raw 行偵測四組合測試補全(major,B#2)**+**實測發現 1836-1840 迴圈不含 ★IRREVERSIBLE★**→分支不對稱明記(消歧只需 INVARI…
+  2.015  Systems/check-r-guard.md  [迴圈]
+    38 [fm:context]: context: design-loop r1 F-DRIFT(major):原宣稱「才能通過既有漂移測試」不成立——t_marker_doc_sync 迴圈原不含 [guard:…
+    73 [body]: `extract_reversibility` 迴圈寫死兩種 regex,marker 值集合封閉(只 `★CHECKPOINT★`/`★IRREVERSIBLE★`),不存在 f…
+  2.000  Projects/oracle品質包_計劃.md  [自主]
+    66 [body]: | `killed_unattributed` | rc≠0 但綁定測試名未命中上述判準 | 弱證據：可能只是 compile error/環境 crash——印警告「建議 rec…
+    95 [body]: - **r3 panel（終輪，2026-07-29；席1/席2 caught、席3 missed 剔除；cap=3 到頂）**：[major] ①icon 表連字號/底線自打（r…
+  1.996  Projects/skill寫法學借鑒與design-loop剪枝.md  [迴圈]
+    98 [body]: ## 第二輪(2026-08-02):診斷迴圈先行
+    110 [body]: **落地**：立 [[Systems/診斷迴圈先行]]；CLAUDE.md 與 `scripts/templates/graph-discipline.md` 的「實驗先行」那條*…
+  1.958  Verification/2026-08-23_關於欄位離線預標驗證.md  [迴圈]
+    51 [body]: ②`autonomous-iteration-loop` 對 orchestrator_result.py——模型列了迴圈主腳本與另兩支模組,
+  1.942  Projects/合約測試閘什麼時候跑_計劃.md  [迴圈]
+    89 [body]: - 暫存檔在 ref 迴圈結束時刪掉,不進版控。
+    150 [body]: | [S1] 兩個消費者接起來 | pre-push 算一次寫暫存檔 → `impact --sync-only --from-json` 與 `bound-tests --fro…
+    202 [body]: | 6 | **暫存檔在硬擋或訊號時洩漏**(minor) | 清理只在 ref 迴圈正常尾端跑,而高風險 rc1 會直接 exit。加了 `trap ... EXIT INT T…
+  1.939  Projects/進度從提交推導_計劃.md  [迴圈]
+    85 [fm:context]: context: v1(提交+CI)死於載體靜默丟資料;v2(跑測試)死於載體不是為此設計。兩者共同根=借一個為別的目的存在的東西承載進度,縫從語意落差長出來。審查迴圈之所以會動(…
+    136 [body]: **消費者**:①接手的 session(現在只能讀散文猜)②Enzo 本人(問「做到哪」要人回答)③無人自跑的迴圈(未來)。
+    140 [body]: - **審查迴圈為什麼準**:★「完成一輪」和「記下一輪」是**同一個動作**★——那筆帳本身就是工作成果。不可能做了沒記,也不可能記了沒做。
+    230 [body]: **資源**:無長連線、無鎖;寫入照 `_ledger_append` 開 fd 即寫即關。git diff 子行程有既有 timeout 慣例可抄(`_lens_git`)。
+    263 [body]: **三版共同教訓(這才是這個案子的產出)**:三種載體(提交/測試/hook 事件)各自被量出在本 repo 丟掉大部分訊號;★任務粒度的「做到哪」在這裡沒有誠實的機器來源★——意…
+  1.937  Systems/bound-tests-gate.md  [迴圈]
+    71 [body]: ## 設計迴圈紀錄
+  1.909  Verification/2026-08-21_L4交叉審計30節點清帳.md  [迴圈]
+    49 [body]: | 診斷迴圈先行 | 4 | 0 | 5 | 5 |
+  1.891  Projects/doctor-run事件_計劃.md  [迴圈]
+    36 [body]: - `gov` 時間軸(非 `--full`)**明確過濾** `gate == "doctor-run"` 的列——★過濾只作用在**顯示迴圈的印出動作**(摺疊與逐行印兩處各自…
+  1.875  Verification/2026-08-01_slim-python移植.md  [迴圈]
+    29 [body]: - `slim/install.sh`、`slim/uninstall.sh`、`slim/install.ps1`、`slim/uninstall.ps1` 都只做兩件事:①定位…
+    54 [body]: - `scripts/slim-gen.py` 組包清單機械鎖(`t_slim_gen_dist_ships_entrypoints`)含全部新檔(`install.py`/`un…
+  1.826  Projects/多平台合約測試綁定_計劃.md  [迴圈]
+    77 [body]: Maestro 測試單位 = YAML flow 檔；天然身份是**檔名**，`method_re` 從不看檔名 → 錯配。**採「綁 `name:` 欄位」路線**（沿用現有 c…
+    98 [body]: - **新增 discover knob `file_must_match`（選填，`re.Pattern` 或 None）**：只認內容**行首**含 marker 的檔（Mae…
+  1.811  Projects/公開精簡版_計劃.md  [迴圈]
+    69 [body]: - `rel-cascade` **保留的理由（r2 兩度更正，取最精確版）**：白名單內的 `decision-supersede` 在**決策節點已有 id（走過 `decis…
+    93 [body]: - 用 python 內建 `ast` 移除白名單外的**指令實作函式**、其 subparser 註冊（**含迴圈註冊形式**——`links`/`backlinks` 正是迴圈…
+    101 [body]: - **為何用 ast 不用 regex**：2026-07-30 實證 regex 剖 Python 兩次出錯（漏抓迴圈註冊指令→53 誤算 51；漏抓三元式賦值→verdict…
+    217 [body]: **★2026-07-31 Task 3 實測結論★**：路徑含空白直接執行過（`cd "$(dirname "$0")" && pwd` 本就處理引號，未改動）。**symlin…
+    325 [body]: | [S2] | 生成後 `compileall` 通過＋SyntaxWarning 零；**迴圈註冊的指令在該砍時真的被砍掉**；**非 `cmd_` 前綴的移除指令實作（`_l…
+    447 [body]: **不採信（兩席漏餌，findings 一律作廢，列入下一輪爭議清單）**：V1 的 12 條「成立」裁決全部無效；V3 的 12 條裁決與 8 條額外發現全部無效——其中經編排者…
+    518 [body]: | 3 | **前輪孤兒發現未複驗** | V3 的 `T-5`「現行白名單下沒有真實的『該砍的迴圈註冊指令』（唯一迴圈註冊的 `links`/`backlinks` 都在保留清單…
+  1.797  Verification/2026-08-01_slim-ps1早期分支exit修復.md  [迴圈]
+    41 [body]: - **驗不到**:PowerShell 真實執行語意——這個 `return` 實際執行時是否真的結束整個函式(而非某個巢狀 scriptblock/迴圈——本次改法的函式本身沒…
+  1.792  Verification/2026-07-29_CI回流閉環v1落地.md  [迴圈]
+    79 [body]: - 命令數真值改由 `lumos --help` 的 choices 取得，**不再對原始碼做 regex 近似**——舊 regex 漏掉迴圈註冊的
+  1.786  Verification/2026-08-24_about_code讀側四項落地.md  [迴圈]
+    65 [body]: ★history 的 key 一個字沒動★(帳本連續);自動迴圈 grep 的「gate 總判定」與測試釘的「unjudged(held 評測母體)」兩個錨字串保留在句內。
+  1.747  Projects/CLAUDE注入re-sync與版本標籤_實作計畫.md  [迴圈]
+    78 [body]: - [x] **Step 3 實作**:`_scaffold_project` 移除注入段;`_vendor_toolchain` 在 copy2 迴圈**後**呼叫 `_rein…
+  1.524  Projects/評測尺翻案_計劃.md  [迴圈]
+    58 [body]: - 評審/人閘不動;LLM 不進計分迴圈(計分恆決定論可重算)維持。
+  1.519  Projects/循序codeloop-tier錨定_計劃.md  [迴圈]
+    75 [body]: 4. `t_tier_roster_table` 更新(pre-flight 指名兩條必紅斷言):①keys 精確集合相等斷言擴為五組合 ②「無 code/standard(v1 …
+  1.500  Projects/CLAUDE注入re-sync與版本標籤_計劃.md  [迴圈]
+    54 [body]: - `_vendor_toolchain`:注入改到 **copy2 vendor 迴圈之後**呼叫(讀新範本 + 修 :3557 先於 :3567-3576 的順序錯)。
+  1.492  MOC/index.md  [自主]
+    29 [body]: ## 自主治理 / loop engineering
+    30 [body]: - [[Systems/autonomous-iteration-loop]] — 日報 gap→brainstorm→design-loop→收斂備 pending 的無人看顧自…
+  1.407  Projects/檢索多詞回退_計劃.md  [迴圈]
+    161 [body]: 預檢與主迴圈是**兩份實作**，第一版預檢**沒套用「隱藏作廢節點」的過濾** → 覆蓋數比實際搜得到的多
+  1.386  Issues/同工作區多session並行改動.md  [迴圈]
+    104 [body]: 同一棵工作樹,一邊在跑設計審迴圈、一邊在做執行 DAG 調研並實作一支新子命令。
+  1.221  Issues/散文紀律沒有退場機制.md  [迴圈]
+    23 [KEY]: KEY:★誠實界線★—自家★沒有★任何一次量測顯示我們的散文紀律造成傷害,外部數字不等於自家數字。本 Issue 主張「補上量尺與出口」,★不是主張「散文紀律有害」★;優先級因此壓…
+    124 [body]: - ⚠ **但「證據缺席」在這題上不是中性的**（二輪審計指出）：自家零實測，★部分正是因為沒有人做過 ablation、也沒有制度要求做★。用「沒證據」當作「不重要」的理由會形成…
+    153 [body]: - **不涵蓋圖譜節點數**。那題由 [[Issues/連鎖佇列開了沒人跟完]] 處理，且該 Issue 已量過並判定「該收的不是節點數，是衍生污染」。載體不同：圖譜是 ranke…
+  0.997  Projects/關係層主網_實作計畫.md  [迴圈]
+    8 [KEY]: KEY:關係層守衛「主網(proactive 連鎖確認)」的 TDD 實作計畫;設計/架構收斂見 [[關係層傳播守衛_計劃]] §八待釘合約,本節點把 🔴🟠 合約逐條釘死 + 切 …
+    9 [KEY]: KEY:里程碑鏈 M1 P2決策ID+E3精確 → M2 P0 typed-edge索引 → M3 cascade ledger(append-only JSONL,生成式 cas…
+    52 [body]: | **M4** | 觸發 + typed hop-1 + 判斷閘連鎖 | supersede 觸發 → typed hop-1 列鄰居 → AI 判斷閘 → 確認才前進的工作清單…
+    54 [body]: **進度：M1✅ M2✅ M3✅ M4✅——整包完工（2026-07-15，全套 1103 tests 綠）**：[[Verification/2026-07-15_主網M1_決策…
+    73 [body]: - ID 穩定性：一旦指派，即使決策被 supersede 也**保留原 id**（翻案是加 `valid:false`、不刪不換號）；reindex 只補缺、不重排既有。**唯一…
+    101 [body]: **目標**：連鎖判定的持久化帳本（可中斷/續/稽核）+ 寫回指令。
+    110 [body]: - **定址（🔴，D5 折入：消解淨化而非定義淨化；R2 辯方修正措辭）**：cascade-id = `c-<YYYYMMDDHHMMSS>-<sha1(root全域決策id)[…
+    122 [body]: ## M4 · 觸發 + typed hop-1 + 判斷閘連鎖（orchestration，最大最軟）
+    … 還有 4 處
+  0.968  Projects/design-loop判準重定位.md  [迴圈]
+    250 [body]: 已經吃過虧的「多份實作立刻漂移」（2026-08-02 教訓，見 [[Projects/檢索多詞回退_計劃]]：預檢與主迴圈兩份實作當場就漂）。
+  0.923  Projects/閘觸發帳統計_計劃.md  [迴圈]
+    81 [body]: **零觸發有三種,本統計分不出來**:①跑了沒事 ②接了帳但從沒被觸發 ③**守的功能從來沒被用過**。`check-j` 屬第三種——其整段邏輯掛在 `if _regen_rel…
+    161 [body]: - **併發**——純唯讀(開檔逐行讀 JSONL),無寫入無鎖。與正在 append 的 `doctor --ci` 同時跑,最壞是讀到半行→該行 parse 失敗→照既有規格跳…
+    163 [body]: - **資源**——全走 with-open 即開即關,無連線無鎖持有。
+  0.867  Projects/對外說明親和化改寫.md  [迴圈]
+    291 [body]: 而審查迴圈本身也要燒 token。」
+  0.000  Issues/E4confirm餵翻案根造成E3.md  []
+    21 [body]: 房務清帳時對兩張連鎖待辦單跑 `rel-cascade confirm`(判「引用篇仍成立」),confirm 的**養成順手邏輯**自動把 cascade 的根決策餵進該篇的 `…
+  0.000  Issues/vendored自測3紅_來源repo專用測試漏標skip.md  []
+    24 [body]: > ⚠ 三紅實為兩支測試(②③是同一支的連鎖:check 翻紅後 json 解析再炸)。同類前案見 [[Issues/vendored測試套件在消費端假紅]](2026-08-02…
+  0.000  Issues/把自己的推論寫成repo明文寫過.md  []
+    24 [KEY]: KEY:★第六次:借來的權威★——第一輪某席在報告最後附帶提「那把鎖的鎖目錄沒被忽略清單涵蓋」,我沒查證就抄進計劃還加了教訓評語;第二輪另一席查證那是錯的(實測命中規則,而且規則跟…
+    142 [body]: 第一輪某一席在報告最後附帶提了一句「被抄的那把鎖的鎖目錄其實沒有被忽略清單涵蓋,
+    147 [body]: 而且追 git 歷史,那條規則跟鎖機制是**同一次進 repo** 的——從頭就有涵蓋。
+  0.000  Issues/空連鎖單巡過無法銷帳.md  []
+    16 [body]: # 空連鎖單巡過無法銷帳
+    26 [body]: - 前案 [[Projects/連鎖佇列軟提醒_計劃]] d2 明文裁「零筆=沒看過」語意且**不記分母**——當時樣本都有候選,空票型沒進視野。
+  0.000  Issues/連鎖佇列開了沒人跟完.md  []
+    8 [fm]: - 連鎖帳本空轉
+    19 [fm]: - "[[Projects/連鎖佇列軟提醒_計劃]]"
+    21 [FLOW]: FLOW:decision-supersede→自動開 cascade 帳本(governance/rel-cascade/<cid>.jsonl)→★然後就沒有然後了★——沒有任…
+    23 [KEY]: KEY:★實測(2026-08-13)★—歷來只開過 2 條連鎖,**2/2 都是 confirmed=0 pruned=0**:①`c-20260804063546` root=…
+    26 [KEY]: KEY:★這條的價值在「便宜」不在「新」★—不新增機制:帳本、CLI、backlinks 全都現成,缺的只是一個「有未完成連鎖」的軟提醒(doctor 一條 soft check,…
+    29 [body]: # 連鎖佇列開了沒人跟完
+    31 [body]: > ✅ **已結案(2026-08-25,[[Projects/連鎖佇列軟提醒_計劃]] 落地)**:修法 A 採納(supersede 當下 stderr 白話指路一行)、B 採…
+    77 [body]: - **① 最小解在哪一層**：`rel-cascade` 帳本／CLI／`backlinks`／`doctor` 的 soft check 機制**全部現成**——缺的只是「有未…
+    … 還有 4 處
+  0.000  Projects/Agentflow吸收_調研.md  []
+    81 [body]: | ④Incident→Rule Lineage | **料齊了、沒有單一入口**:typed edges(Issue→Project→System)+ `gov <節點>`(這篇…
+  0.000  Projects/Android側UI測試綁圖譜工作流_實作計畫.md  []
+    256 [body]: - **裝置 ready 的可檢查前置**（實測撞過的四關，寫成逐條可勾）：①首次使用授權閘（要算挑戰碼）②複製設定★務必改裝置名★（否則兩台產生重複單號，踩既有事故）③一人登入開…
+  0.000  Projects/cochange守衛_計劃.md  []
+    112 [body]: - 本 repo 跑 `cochange rules`：應含高於門檻的已知真耦合對——README.en.md⇒README.md（conf 1.0）、`scripts/test_…
+  0.000  Projects/decision_refs自動養成_實作計畫.md  []
+    31 [body]: 主網（[[關係層主網_實作計畫]]）實測揭露：它的真實牙口卡在 `decision_refs` 採用，而**工作流裡沒有任何環節產生 decision_refs**——雞生蛋死鎖。…
+    73 [body]: 1. `decision-refs backlog [--json]`：列「該跑 suggest 流程的節點」＝有三具名邊指向「**帶≥1 有 id 決策的節點**」、且 `dec…
+    103 [body]: - **promote dangling rc=2 拒非 warn**（A#1，canary a 同向——真 spec 本就 rc=2，v2 已對；v3 再強調）、**backlo…
+    116 [body]: T3 回填=**批次分兩相**,★誠實標:單次單趟沒有機械擋,純靠 Claude 編排協議紀律不重查(r2 d-f1)——backlog 是無狀態查詢、無批次 id/快照鎖★。25…
+  0.000  Projects/design-loop提效_計劃.md  []
+    108 [body]: - 不帶 `--clusters` = 無-cluster 舊帳(panel 既有三條合取 gate 不變;「legacy」一詞保留給非 panel 循序模式,兩者勿混)。**混用…
+    126 [body]: record 解析(寫側):三態白名單過/壞狀態 rc2/名含非法字元 rc2/同輪重名 rc2/尾逗號空段靜默過濾/**帶旗標過濾後空列表(空字串/全逗號)rc2**/段缺 = …
+    143 [body]: - **定錨改「第一個有效輪」+rc2 訊息分因(major,B-F1 自核)**:首輪全 missed 的新 loop 不得鎖死 legacy;訊息不得誤稱 M2 前舊帳。
+  0.000  Projects/edit面查詢品質閘_計劃.md  []
+    88 [body]: - [major][通才] stderr 註記被「人讀輸出」措辭鎖死於 as_json=False 而 --diff 恆 json→改「觸發恆印」。
+  0.000  Projects/guard殺傷力驗證_計劃.md  []
+    28 [fm:why_chosen]: why_chosen: PIT 把 TIMED_OUT 記 killed(變異致掛=被接住);hydration 為邊緣便利換一片 binary/untracked 新風險面;lo…
+    52 [body]: 3. **原始碼層隔離 + baseline 前置（r1 折入：正名——worktree 只隔離檔案，不隔離 DB/埠/外部狀態）**：對**配方 platform 的 repo …
+    97 [body]: - **r2（2026-07-10，panel W=5；canary s2 caught（attempt_seq/verdict_policy 幽靈機制+與 v1 不重跑矛盾，性質…
+  0.000  Projects/loop機械脊椎M1包_計劃.md  []
+    159 [body]: - **新 A**：測試策略行仍鎖舊語意（light advisory 不擋/驗末筆）→ 全單同步 v5 語意。
+  0.000  Projects/審查規模對照實驗二_Landmark真缺陷.md  []
+    53 [body]: **N2 命中** ＝ 報告指出「**先查後做之間不是原子的，併發下兩筆可同時通過檢查 → 重複退款／重複 CustTransfer**」（TOCTOU／race／缺鎖或交易隔離）…
+    81 [body]: | N2 | S | HIT | 「先查後動，中間沒有鎖」＋ ReadCommitted ＋兩邊都讀到 false ＋重複寫 CustTransfer |
+  0.000  Projects/建了沒人跑批次裁定_計劃.md  []
+    30 [body]: | ① decision_refs | 欄位 0 筆、code 16 處在 | 保留,掛回第 4 批(關係層解鎖正主) |
+  0.000  Projects/標籤結構收編_計劃.md  []
+    27 [body]: > 白話：Enzo 在圖譜裡自發長出的分類標籤（priority／scope／flag…）是寫給 AI 看的備忘——但 AI 進場的主讀路徑根本不顯示它們。本案把野生家族收編成正式…
+  0.000  Projects/標註刷新_實作計畫.md  []
+    121 [body]: - 併發寫 goldset 丟資料 blocker——flock 寫入鎖(apply 全程;repin 鎖內重讀)+pid tmp;鎖占用 rc1 快速失敗。
+  0.000  Projects/檢索優化_計劃.md  []
+    288 [body]: - 手算 BM25F fixture，鎖定「field weight 在飽和前」及 IDF 永不為負。
+  0.000  Projects/派工編制資料化_計劃.md  []
+    99 [body]: - **通用三問**:併發——純唯讀(glob+讀 JSON),無寫入無鎖,兩請求同時跑各印各的,無共享狀態。效能——每輪 dispatch 檔個位數、loop 帳千行級,冷路徑(…
+  0.000  Projects/精簡版update指令_計劃.md  []
+    74 [body]: - **通用三問**:併發——update 非併發場景,git 自身鎖保護;效能——冷路徑;資源——subprocess 皆 run() 同步回收。
+  0.000  Projects/關係層傳播守衛_計劃.md  []
+    16 [KEY]: KEY:兩張網——主網(proactive改節點觸發連鎖確認,趁脈絡最全當場處理)+補網(reactive doctor Check E週期掃,接住主網漏的/之後才連上的)
+    17 [KEY]: KEY:連鎖防爆炸鐵則=非「自動展N層」是「確認才前進的工作清單」;只有判定真傳播的節點才長下一跳,follow真依賴脊椎、死支斷掉——否則2-3跳點名半張圖=麻痺
+    20 [DECISION]: DECISION:[2026-07-14]兩張網(主=改節點觸發連鎖/補=doctor Check E)(valid)
+    21 [DECISION]: DECISION:[2026-07-14]連鎖=判斷閘工作清單非盲BFS(valid)｜擴impact現有引擎不重造(valid)｜advisory不硬擋(valid)
+    26 [fm]: - "[[Issues/連鎖佇列開了沒人跟完]]"
+    28 [fm]: - content: 兩張網補關係層語意驗證:主網=改節點觸發的判斷閘連鎖確認(擴impact --node+hook)、補網=doctor Check E週期掃frontmatt…
+    31 [fm:why_chosen]: why_chosen: "proactive主網趁脈絡最全當場處理最準最便宜、reactive Check E當補網;連鎖必判斷閘防2-3跳點名半張圖;只掃frontmatter可…
+    36 [fm:context]: context: round-1 panel跨家族Codex以scripts/lumos行號釘出PRIOR-ART事實錯誤:_reco_scores是推薦排序器非傳播引擎、deci…
+    … 還有 10 處
+  0.000  Systems/compose-metrics-adapter.md  []
+    19 [KEY]: KEY:baseline+delta——metrics 是整模組快照、無 file:line、無 severity(KDS 現況 21 non-skippable,直接報每次洗版)…
+  0.000  Systems/doctor-irreversible-hint.md  []
+    28 [fm:why_chosen]: why_chosen: soft reminder 價值在「觸發思考」不在「精確鎖定節點」;B 因大量 Systems 無 [test:] link 會靜默漏提;C 的 LLM 判…
+  0.000  Systems/hook逾時預算.md  []
+    14 [KEY]: KEY:★內≥外代表那條 fail-open 分支結構上永遠跑不到★——外面先 SIGKILL 整支 hook、繞過 try/except;影響鏡頭那條分支裡有「清掉冷卻窗記號」,…
+    24 [fm:context]: context: 舊值 30 等於外層天花板。內層一到,外面會先把整支 hook 砍掉(SIGKILL、繞過 try/except),於是內層那條「逾時就 fail-open」的分…
+    37 [body]: 這不是理論問題。影響鏡頭那支的 fail-open 分支裡有一件實事:**把冷卻窗的記號清掉**。跑不到就表示——超時之後那個檔會被冷卻窗鎖住 20 分鐘完全不注入,而且沒有任何人…
+    83 [body]: 用 120 個 commit 的範圍(算完要 137 秒):設 1 秒 deadline → 1.2 秒回來、回傳碼是「超時但還在算」、背景確實有行程、鎖也在;等它算完 → **快…
+    85 [body]: ★測的過程我連續四次沒測到,原因每次不同★:背景那支比 deadline 還快、鎖檔名算錯、算完沒清鎖、我自己前面的量測把快取寫進去了。**四次都是「現場沒成立」不是機制壞掉。**…
+  0.000  Systems/judge-severity-gate.md  []
+    75 [body]: - C4 同步點:`docs/design/2026-06-20-autonomous-iteration-loop.md` §3(severity 改由 judge 回報;pro…
+  0.000  Systems/lumos-cli-write.md  []
+    56 [fm]: - "[[Verification/2026-07-15_主網M4_觸發與連鎖]]"
+  0.000  Systems/lumos-refcheck.md  []
+    27 [fm:why_chosen]: why_chosen: 兩者粒度不同,硬共用要帶 mode 參數反而耦合;複製段小(~30 行)且各自有測試鎖行為
+  0.000  Systems/retrieval-ranking.md  []
+    16 [KEY]: KEY:[2026-08-18 標註刷新落地,plan:[[Projects/標註刷新_計劃]]]語料前進解鎖——delta 補標流水線(refresh_labels.py del…
+  0.000  Systems/slim-readme.md  []
+    57 [body]: 公開精簡版交付內容之一:`slim/README.md`,新人 clone 到精簡版後唯一的自足說明文件(★不假設讀過完整版任何文件★)。涵蓋安裝、進場三步、frontmatter…
+  0.000  Systems/slim-uninstall-一行卸載.md  []
+    17 [★INVARIANT★]: KEY:★INVARIANT★(★2026-07-31 Task 10 新增,本次修的核心★)四個清理步驟(bin／skill 目錄／`~/.lumos-slim`／CLAUDE.…
+    27 [KEY]: KEY:★2026-07-31 代碼審第二輪 minor-2 調查★——「連續跑兩次 uninstall.sh」原本沒有回歸測試覆蓋。讀腳本+手動在暫存目錄實測兩次後判定**腳本本…
+  0.000  Verification/2026-07-05_csharp-landmark-verify.md  []
+    38 [body]: ## 併發/死鎖 + T-SQL 真機驗(2026-07-05 追加)
+    39 [body]: - **VSTHRD(C# async 死鎖/併發,Roslyn analyzer)**:Landmark Server build → 144 finding,含 **35× V…
+    41 [body]: - **抓不到的(誠實)**:N+1(Dapper raw SQL,執行期 profiling)、鎖順序/SQL 死鎖(執行期 deadlock graph)——非靜態 lint …
+  0.000  Verification/2026-07-14_relguard_E2建在被推翻決策上.md  []
+    27 [body]: - `scripts/lumos` cmd_doctor：新增 `Check E2`（放 Check E1 之後、Check H 之前）。**內聯 typed 反查**（掃全圖節點…
+  0.000  Verification/2026-07-15_decision_refs養成_codeloop硬化.md  []
+    33 [body]: - **CX1 併發 lost-update（Codex, 降級）**：`_append_decision_ref` read-modify-replace 無鎖＝**全 CLI …
+  0.000  Verification/2026-07-15_主網M1_決策穩定ID.md  []
+    51 [body]: - 併發同節點 add 仍是全 CLI 既有 last-writer-wins（輸家整筆被蓋非撞號），M1 不加鎖（design-loop r2 辯方裁定）。
+  0.000  Verification/2026-07-15_主網M3_cascade帳本.md  []
+    25 [body]: 主網第三座（[[關係層主網_實作計畫]] M3/[S5b][S3寫回]）——連鎖判定的持久化帳本，design-loop 三輪錘最兇的一段全部落地。
+    55 [body]: - [[關係層主網_實作計畫]]（M1✅M2✅M3✅ → 終站 M4 觸發+判斷閘連鎖；完工後 **LandmarkMember 當實驗場**）
+  0.000  Verification/2026-07-15_主網M4_觸發與連鎖.md  []
+    24 [body]: # 驗證：關係層主網 M4——觸發與連鎖（整包收官）
+  0.000  Verification/2026-07-22_prepush範圍修法落地.md  []
+    9 [fm]: - "動 scripts/hooks/pre-push 的 stdin/範圍推導/逐 ref 迴圈"
+  0.000  Verification/2026-07-24_真遺忘search排除superseded.md  []
+    9 [fm]: - "動 cmd_search 候選迴圈/三路輸出/_is_forgotten,或改 status 語意(superseded/stale)"
+  0.000  Verification/2026-07-31_公開精簡版交付.md  []
+    170 [body]: - `slim-gen.py --emit-manifest` 印出的 `removed_cmds` 有 32 支,比 spec 記的「移除 29 支」多 3 支(`pass`/`…
+  0.000  Verification/2026-07-31_公開精簡版代碼審第二輪minor修復.md  []
+    47 [body]: **調查結果**:讀腳本(`slim/uninstall.sh`)+ 手動在暫存目錄跑兩次確認——**腳本本身不需要改**。BIN/SKILL/PKG 三步判斷式第二次跑時全部落入…
+    68 [body]: 此測試修正前(尚未寫入前)不存在,無「紅」可言;新增後首次執行即綠,因為驗證的是既有腳本的既有正確行為(調查未發現需要修的 bug),不是修 bug 後的回歸鎖定。
+  0.000  Verification/2026-08-02_slim三缺陷修復_實驗產出.md  []
+    43 [body]: CLAUDE.md 唯讀、磁碟滿、或 Windows 上檔案被別的程式鎖住時 → `PermissionError` **直接炸穿 `main()`**，排在後面的步驟⑤（清 ma…
+  0.000  Verification/2026-08-18_派工編制資料化落地.md  []
+    6 [fm:revalidate_when]: revalidate_when: tier↔格式守衛改動(code/standard 解鎖時 roster 補列)、dispatch 檔名慣例變更、skill 席次編制改動(先改 …
+  0.000  Verification/2026-08-24_固定席降噪A層落地.md  []
+    52 [body]: 六輪 21 席零放行;三個要害各輪打掉:about 豁免(翻已鎖決策)、降自由席(門檻砍出輸出)、安置模糊(diff 聚合漏網)。
+  0.000  Verification/2026-08-27_關係語意腐爛守衛_G1解鎖即活.md  []
+    5 [fm:valid_under]: valid_under: "補網 Check E1(失效背書)/E2(建在被推翻決策上)/E3(意圖鏈斷義)/E4(翻案連鎖跟進)+主網 cascade(supersede→typ…
+    13 [body]: # 2026-08-27_關係語意腐爛守衛_G1解鎖即活
+    14 [body]: ## 做了什麼(G2=被 G1 解鎖即活,非新建)
+    18 [body]: - 補網(routine,doctor 每次跑):Check E1 失效背書 / E2 建在被推翻決策上(節點級時序 proxy+decision_refs 精化)/ E3 意圖鏈…
+    22 [body]: - 主網 cascade 觸發(開連鎖待辦單 c-...);
+  0.000  Verification/2026-08-30_席報告圖譜使用一次性盤點.md  []
+    6 [fm:revalidate_when]: revalidate_when: "①d8 後席列 n≥50 時重跑一次對照(重開常設指標的條件之一,見計劃 d2)②code 迴圈圖譜鏡頭若改版(現況:code 10 份嚴格 0…
+
+(共 205 篇候選,照相關性排序;想照檔名排加 --legacy)
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "sed -n '1,240p' /Users/enzo/.agents/skills/lumos-project-notes/SKILL.md"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+---
+name: lumos-project-notes
+description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫——任何任務開始要搞懂「這個模組/欄位/流程為什麼這樣、邊界在哪、哪些不能改、會波及什麼」時先用 lumos 查,不要直接 grep/Read;改完 code 要寫回決策/驗證/合約;收工體檢。觸發:正要 grep 或讀 code 去理解既有系統、排查、對外支援、查 DB、改名/刪除東西、開工掌握現況、收工寫回、問「圖譜有沒有記」。指令全集按情境分類在 commands/INDEX.md。
+---
+# lumos 專案知識圖譜——一頁手冊
+
+圖譜記「為什麼、邊界、不能改的、驗過沒」;code 只記「現在長怎樣」。圖譜跟行為事實(測試、實際執行、生產觀測)對不上時,不自動信圖譜——查清哪邊錯,立一篇事故筆記。主工具 `lumos`(python3 零依賴,自動找 `docs/*-knowledge/`)。**別用 Grep/Read/Edit/Write 直接碰圖譜的 .md 開頭欄位**——會繞過自驗和防護;正文段落用 Edit 可以。
+
+**指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一。下面只列每個階段最常用的。
+
+## 1. 進場(每個子任務都重來,不是 session 開頭一次)
+
+| 你在想… | 敲 |
+|---|---|
+| 這件事為什麼這樣 / 圖譜記了嗎 | `lumos search <詞>` → `lumos context <節點>`;0 命中先換同義詞;**中文概念之間加空白**(`作廢 收回 點數`,別黏成一句) |
+| 動這段有什麼不能碰 | `lumos contracts <節點>` |
+| 要讀全文再下結論 | `lumos show <節點>`(search 只給索引行;拿摘要判「沒記」以前真的錯過——值在筆記第 64 行,靠摘要判成沒有) |
+| 篩條件(金流 / 未收案 / 連到 X) | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+| 開工掌握現況 | `lumos query --tag status/doing`;`lumos recent --days 7` |
+| 圖譜空或稀疏(接手 brownfield) | 走節點還原 SOP:`commands/09-節點還原.md`(七步;需要才產節點、有就照慣例用) |
+
+看到筆記有 `core_refs:` 或 `CORE:` → 權威在跨專案核心圖譜,改那邊(`lumos-core-knowledge` skill)。
+**查得到才算先行**(Landmark 實測):0 筆看「逐詞覆蓋」標 ★ 的詞換同義詞,換三次再問人,別轉 grep;大節點先 `--brief`;單篇內部新舊打架時摘要有日期的 KEY 行 > 正文,衝突影響決策去 code 裁再回頭修。
+**分清你在哪種 session**:本機 Claude Code(含手機/網頁遙控本機)有本機 git 憑證、能 push;網頁版 claude.ai/code 是雲端沙盒,對主分支沒 push 權、只能推 feature branch——「遙控」不等於「遠端版」,曾騙到 AI 一次。
+被催「直接改、不用解釋」也一樣:不解釋可以,不查不行——改 code 前至少 `lumos impact --file <檔>` 一行。
+
+## 2. 動手前
+
+- `lumos impact --file <檔>` / `--diff <範圍>`:哪些筆記、驗證、決策會受影響(Edit 前 hook 也會塞一份,但只推你碰到的檔)。
+- `lumos pitfalls --diff <範圍>`:風險分級;`tier: high` 要過代碼審(`lumos-code-loop`)。
+- 要刪 / 改名東西:`lumos search <舊名> --code` 逐句判哪些筆記還在講它。
+- 改了環境 / 流程 / 設定(版本、金鑰、hook、排程):`lumos stale --candidate --match <關鍵字>` 列出寫了「改到這個就該重驗」的驗證紀錄。
+- 設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記(`type: project`),不寫到別的路徑;動筆前一行 `PRIOR-ART:`(最小解在哪層 / 世界解過沒 / 借用‧自建‧採用)。
+
+## 3. 寫回(同一次工作內;pre-commit 擋「改 code 沒動圖譜」)
+
+| 要做 | 敲 |
+|---|---|
+| 新筆記 | `lumos new <system\|issue\|verification\|project> <名>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 |
+| 改狀態 / 日期 | `lumos set <節點> <欄位> <值>`(日期不加引號) |
+| 加 / 刪清單項 | `lumos append <節點> <欄位> "[[x]]"` / `lumos remove …` |
+| 記決策 / 翻案 | `lumos decision-add <節點> "<內容>" --decided <日期>` / `lumos decision-supersede` |
+| 正文段落 | Edit;寫完 `lumos lint <節點>` |
+
+**四條血換的開頭欄位鐵則**:① 多個連結一行一項,擠成一串會長假筆記 ② `summary: |` 區塊裡的 `[[連結]]` 不算連結,要關聯另放 list 欄位 ③ 值含「冒號+空格」要引號或區塊 ④ 同層不能重複鍵。用指令寫天生避開;手改才會踩。
+
+**合約標記(動筆前掃一眼;不確定就不標,嚴禁看 code 反推)**:
+```
+KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes]
+KEY:★DEBT★ <偶然行為,可改>
+KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPOINT★ <改了難救>(建議補 [rollback:])
+```
+- 綁測試 / 留審計走指令:`lumos guard bind <節點> "<KEY 片段>" <測試名>`、`lumos guard audit …`;裸合約 doctor 擋,未審計 pre-push 擋。綁之前對照 [[Systems/測試假綠形態]](最隱蔽的一型:現場根本走不到被測分支;修 bug 的翻紅測試要配一條「現場成立」的前置斷言)。
+- 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
+- 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
+
+**摘要區塊**(Systems/Issues 必有):`FLOW:`流程 `KEY:`關鍵概念 `DEP:`依賴 `TEST:`測試;Issues 用 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN) `DECISION:` `KEY:`。已結案的 Issue 正文第一段要有結案橫幅(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
+**標籤**:`type/` `status/`(值域 lint 硬擋)、`priority/` P0–P3、`scope/`(feature/ area/ 已停用)、`risk/` 金流‧對外送出‧不可逆‧守衛面、`flag/`。
+
+**決策與驗證**:重大決策填四欄(context / alternatives≥2 / why_chosen / trade_offs),缺資訊問人不編。驗證紀錄填 `valid_under`(前提)與 `revalidate_when`(何時重驗),用 `plan_refs` 指回計劃;漏掛 `lumos sync-verified-by --apply`。計劃結案前 `lumos spec-trace <計劃>` 看哪些條款沒人認領。
+
+**承認風險的鐵則**(Enzo 2026-08-22 裁):筆記或訊息裡寫「沒機械守衛 / 只提醒不擋 / 單次量測 / 這數字是拍的」這類承認句,**旁邊必須有「什麼時候回頭看」**(週報、重驗條件、revalidate_when、到期日);寫不出重驗條件的,就是該處理不該承認。**回頭條件要接電**(2026-08-31 回訪案):帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`(緊鄰原句,doctor 到期會唸、逾 14 天沒人動升級週報);綁事件的明寫事件入口——純散文=52 件盤點實證的死文。
+
+## 4. 收工
+
+1. `lumos lint <每篇動過的>` → `lumos doctor`(紅的段先修;`--verbose` 看全部提醒)。
+2. code 有「拿掉 / 反轉」的改動:把那些名字逐個 `lumos search <名> --code`,逐句判筆記還成不成立,不成立當場改或標作廢。動到畫面 → 補可重放的 UI flow 並 `[test:<平台>:<flow>]` 綁回(沒裝置要明寫「未驗+原因」)。
+3. 圖譜實質更新後:派乾淨 agent 只讀圖譜還原脈絡,對不上就補到一致,留痕 `lumos self-audit <節點>`。
+4. push 後(專案有宣告 ci 區塊才有):`lumos ci-wait`,紅就當輪修,修不完要在收尾明講。
+5. 跨 session 傳訊只傳「指標+觸發」(我動了哪篇、你去讀哪篇),不傳內容本身;規則權威在圖譜不在誰的記憶。
+
+## 再深一層(按需開,別一次全讀)
+
+| 要做 | 開 |
+|---|---|
+| 某個指令的旗標與用法 | `commands/0N-*.md`(INDEX 指到)或 `lumos <cmd> --help` |
+| 合約鏈深規、[audit:] 五問、guard 工作流、防帶風向 | `reference.md`〈★INVARIANT★ → `[audit:]` 獨立合法性審計〉〈★INVARIANT★ → `[test:]` 綁定〉〈`lumos guard`〉 |
+| 決策四欄完整版、驗證紀錄完整規格、同步規則 | `reference.md`〈Properties〉〈同步規則〉 |
+| 開頭欄位鐵則、標籤家族、摘要區塊、結案橫幅、退場自問、跨 session 傳訊、CI 細則全文 | `reference.md`〈寫入規範與紀律全文〉 |
+| 自足性審計 prompt、交叉審計變體 | `reference.md`〈圖譜更新後：Sonnet agent 自足性審計〉〈變體 B：圖譜×程式碼交叉審計〉 |
+| maestro UI flow 派工要求 | `reference.md`〈產 maestro UI flow 的派工要求〉 |
+| 資料夾位置 | `docs/{slug}-knowledge/{Projects,Systems,Issues,Verification,MOC}`;某主題 >5 篇建 MOC |
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc 'python3 scripts/lumos context Projects/每日治理wrapper活著沒_計劃 --brief && python3 scripts/lumos contracts Projects/每日治理wrapper活著沒_計劃'[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 462ms:[0m
+# Projects/每日治理wrapper活著沒_計劃.md
+type:project | status:doing | created:2026-09-07 | updated:2026-09-07
+summary:
+  FLAG:DECISION
+  KEY:問題=每天 09:30 那支跑五件事的腳本,9/5 跑到第二步就死、後三步全沒跑、整天沒人發現;它不管發生什麼都回 0,而且沒有任何東西在讀它印的東西
+→ 連出 (5):
+  • Issues/把自己的推論寫成repo明文寫過.md [open]
+  • Issues/自足性審計提醒空轉四十六天.md [resolved]
+  • Systems/autonomous-iteration-loop.md [done]
+  • Systems/reversibility-governance-ledger.md [done]
+  • Verification/2026-09-05_wrapper邊跑邊改實驗.md [pass]
+← 連入 (0):
+(這篇沒有登記任何「動了會壞」的合約)
+
+[35m[3mcodex[0m[0m
+圖譜顯示這批仍在進行中的 wrapper 修理計劃，且未登記額外合約；我現在以「整跑鎖不可雙開、也不可靜默永停」作審查準繩，開始對快照和現行檔做行號對照。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "nl -ba governance/review-reports/code-batch19/r1-snapshot.patch | sed -n '1,280p'
+nl -ba governance/autonomous-loop.sh | sed -n '1,190p'
+rg -n \"take_lock|lock_holder_alive|lock_write_pid|release_lock|steal|probe|mutant|lock\" scripts/test_autonomous_loop.py"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+     1	diff --git a/docs/.canary-log.jsonl b/docs/.canary-log.jsonl
+     2	index 52ef1fe..c63b25f 100644
+     3	--- a/docs/.canary-log.jsonl
+     4	+++ b/docs/.canary-log.jsonl
+     5	@@ -1144,10 +1144,20 @@
+     6	 {"ts": "2026-09-07T18:03:52+08:00", "kind": "none", "auditor": "tester", "token": "CANARY-4039fd54", "note": "", "loop": "repro-pathbug", "round": "r1", "severity": "minor", "findings": 0, "result_sha256": "bdd48532d403f769bd0228397edcdc5364900da649dc8feb1f501a0b82afaae5", "reviewed_sha256": "bdd48532d403f769bd0228397edcdc5364900da649dc8feb1f501a0b82afaae5", "spec_path": "scripts/lumos", "tier": "standard", "orchestrator": "claude", "report_path": "/private/var/folders/tc/xmllmxtn4q5704lsy80wc1kw0000gn/T/tmp.ysSAizWTkh/report.md", "report_sha256": "483144b651597f81c969cc1e4f366602363d71f966f6d56a4f18349a970f36ee", "snapshot_path": "scripts/lumos", "snapshot_sha256": "bdd48532d403f769bd0228397edcdc5364900da649dc8feb1f501a0b82afaae5"}
+     7	 {"ts": "2026-09-07T18:24:25+08:00", "kind": "none", "auditor": "架構對齊", "token": "CANARY-39247ce6", "note": "", "loop": "code-batch16", "round": "r1", "severity": "major", "findings": 6, "result_sha256": "05c4872b5b7f5c587c5250e6cc030b0b79c5dfd426a8d463252fe135c96867a6", "reviewed_sha256": "05c4872b5b7f5c587c5250e6cc030b0b79c5dfd426a8d463252fe135c96867a6", "spec_path": "governance/review-reports/code-batch16/r1-snapshot.patch", "scope_lines": 248, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/code-batch16/r1-架構對齊.md", "report_sha256": "0d293da38a72c435456dfb2d3c6cbb490784bc0f932eaf79c83295dd5ca2c835", "snapshot_path": "governance/review-reports/code-batch16/r1-snapshot.patch", "snapshot_sha256": "05c4872b5b7f5c587c5250e6cc030b0b79c5dfd426a8d463252fe135c96867a6"}
+     8	 {"ts": "2026-09-07T18:24:25+08:00", "kind": "none", "auditor": "外家否決", "token": "CANARY-1ba4632b", "note": "", "loop": "code-batch16", "round": "r1", "severity": "major", "findings": 5, "result_sha256": "05c4872b5b7f5c587c5250e6cc030b0b79c5dfd426a8d463252fe135c96867a6", "reviewed_sha256": "05c4872b5b7f5c587c5250e6cc030b0b79c5dfd426a8d463252fe135c96867a6", "spec_path": "governance/review-reports/code-batch16/r1-snapshot.patch", "scope_lines": 248, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/code-batch16/r1-外家否決.md", "report_sha256": "86d5b3276d6f5158e76dfb33b91516927d51b7e6787c418eecb4e6db35cdeca6", "snapshot_path": "governance/review-reports/code-batch16/r1-snapshot.patch", "snapshot_sha256": "05c4872b5b7f5c587c5250e6cc030b0b79c5dfd426a8d463252fe135c96867a6"}
+     9	 {"ts": "2026-09-07T18:24:26+08:00", "kind": "none", "auditor": "通才", "token": "CANARY-1f3a8066", "note": "", "loop": "code-batch16", "round": "r1", "severity": "blocker", "findings": 6, "result_sha256": "05c4872b5b7f5c587c5250e6cc030b0b79c5dfd426a8d463252fe135c96867a6", "reviewed_sha256": "05c4872b5b7f5c587c5250e6cc030b0b79c5dfd426a8d463252fe135c96867a6", "spec_path": "governance/review-reports/code-batch16/r1-snapshot.patch", "scope_lines": 248, "tier": "standard", "orchestrator": "claude", "findings_set": ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9"], "folded_set": ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9"], "accepted_set": [], "finding_kinds": {"f1": "code", "f2": "code", "f3": "code", "f4": "code", "f5": "code", "f6": "code", "f7": "code", "f8": "code", "f9": "code"}, "report_path": "governance/review-reports/code-batch16/r1-通才.md", "report_sha256": "04a39d7a59c8e724725299afcfbebce267ff12ac3106bfd372695088e3cbe783", "snapshot_path": "governance/review-reports/code-batch16/r1-snapshot.patch", "snapshot_sha256": "05c4872b5b7f5c587c5250e6cc030b0b79c5dfd426a8d463252fe135c96867a6", "intake_path": "governance/review-reports/code-batch16/r1-intake.md", "intake_sha256": "a6f86f65bec5eac13fad399481cc81b81b28dbe098abdbd0a294be8a178cebde"}
+    10	 {"ts": "2026-09-07T19:05:49+08:00", "kind": "none", "auditor": "架構對齊", "token": "CANARY-97c4cce8", "note": "", "loop": "code-batch17", "round": "r1", "severity": "minor", "findings": 6, "result_sha256": "8c517a506b96a9dfdae52f3777a527c988bd57d1a74fe0b24b959e3f4d25d430", "reviewed_sha256": "8c517a506b96a9dfdae52f3777a527c988bd57d1a74fe0b24b959e3f4d25d430", "spec_path": "governance/review-reports/code-batch17/r1-snapshot.patch", "scope_lines": 125, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/code-batch17/r1-架構對齊.md", "report_sha256": "f9d4a1b3dbe2080fe33b1ea3c315584b64c497529622f1849c370706a1c6ac5d", "snapshot_path": "governance/review-reports/code-batch17/r1-snapshot.patch", "snapshot_sha256": "8c517a506b96a9dfdae52f3777a527c988bd57d1a74fe0b24b959e3f4d25d430"}
+    11	 {"ts": "2026-09-07T19:05:50+08:00", "kind": "none", "auditor": "通才", "token": "CANARY-ce08f1aa", "note": "", "loop": "code-batch17", "round": "r1", "severity": "major", "findings": 4, "result_sha256": "8c517a506b96a9dfdae52f3777a527c988bd57d1a74fe0b24b959e3f4d25d430", "reviewed_sha256": "8c517a506b96a9dfdae52f3777a527c988bd57d1a74fe0b24b959e3f4d25d430", "spec_path": "governance/review-reports/code-batch17/r1-snapshot.patch", "scope_lines": 125, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/code-batch17/r1-通才.md", "report_sha256": "aab1b9f6314e2ddc0984478473ce594d40d00f22d687c7a5647f70c23be4d184", "snapshot_path": "governance/review-reports/code-batch17/r1-snapshot.patch", "snapshot_sha256": "8c517a506b96a9dfdae52f3777a527c988bd57d1a74fe0b24b959e3f4d25d430"}
+    12	 {"ts": "2026-09-07T19:05:50+08:00", "kind": "none", "auditor": "外家否決", "token": "CANARY-84772f72", "note": "", "loop": "code-batch17", "round": "r1", "severity": "major", "findings": 2, "result_sha256": "8c517a506b96a9dfdae52f3777a527c988bd57d1a74fe0b24b959e3f4d25d430", "reviewed_sha256": "8c517a506b96a9dfdae52f3777a527c988bd57d1a74fe0b24b959e3f4d25d430", "spec_path": "governance/review-reports/code-batch17/r1-snapshot.patch", "scope_lines": 125, "tier": "standard", "orchestrator": "claude", "findings_set": ["f1", "f2", "f3", "f4"], "folded_set": ["f1", "f2", "f3", "f4"], "accepted_set": [], "finding_kinds": {"f1": "code", "f2": "code", "f3": "code", "f4": "code"}, "report_path": "governance/review-reports/code-batch17/r1-外家否決.md", "report_sha256": "b521fa144a7c2a2d35dcf160b0eec4e61816f2463fd438c5f8d46a12f00e5e25", "snapshot_path": "governance/review-reports/code-batch17/r1-snapshot.patch", "snapshot_sha256": "8c517a506b96a9dfdae52f3777a527c988bd57d1a74fe0b24b959e3f4d25d430", "intake_path": "governance/review-reports/code-batch17/r1-intake.md", "intake_sha256": "2d670ae7926e4427aa3487e22ba5ce4ad0139e4e30fd213f723da05e62897f66"}
+    13	 {"ts": "2026-09-07T21:11:33+08:00", "kind": "none", "auditor": "架構對齊", "token": "CANARY-2fe6d015", "note": "", "loop": "code-batch18", "round": "r1", "severity": "major", "findings": 7, "result_sha256": "fdf913a4340223f1ab5508f5d2163df371f24ac58d6cd74c240e7820e75f90d8", "reviewed_sha256": "fdf913a4340223f1ab5508f5d2163df371f24ac58d6cd74c240e7820e75f90d8", "spec_path": "governance/review-reports/code-batch18/r1-snapshot.patch", "scope_lines": 1160, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/code-batch18/r1-架構對齊.md", "report_sha256": "18e228ea3cbf9c88c1f96579360620cbc566d75a608f2f94e02420b49781a551", "snapshot_path": "governance/review-reports/code-batch18/r1-snapshot.patch", "snapshot_sha256": "fdf913a4340223f1ab5508f5d2163df371f24ac58d6cd74c240e7820e75f90d8"}
+    14	 {"ts": "2026-09-07T21:11:33+08:00", "kind": "none", "auditor": "通才", "token": "CANARY-a46de7fb", "note": "", "loop": "code-batch18", "round": "r1", "severity": "major", "findings": 7, "result_sha256": "fdf913a4340223f1ab5508f5d2163df371f24ac58d6cd74c240e7820e75f90d8", "reviewed_sha256": "fdf913a4340223f1ab5508f5d2163df371f24ac58d6cd74c240e7820e75f90d8", "spec_path": "governance/review-reports/code-batch18/r1-snapshot.patch", "scope_lines": 1160, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/code-batch18/r1-通才.md", "report_sha256": "b7b0575371947ea4bd62ca53be79618e583aac96bdf45a1cc65a206f78c664f1", "snapshot_path": "governance/review-reports/code-batch18/r1-snapshot.patch", "snapshot_sha256": "fdf913a4340223f1ab5508f5d2163df371f24ac58d6cd74c240e7820e75f90d8"}
+    15	 {"ts": "2026-09-07T21:11:33+08:00", "kind": "none", "auditor": "外家否決", "token": "CANARY-cd8cd749", "note": "", "loop": "code-batch18", "round": "r1", "severity": "blocker", "findings": 6, "result_sha256": "fdf913a4340223f1ab5508f5d2163df371f24ac58d6cd74c240e7820e75f90d8", "reviewed_sha256": "fdf913a4340223f1ab5508f5d2163df371f24ac58d6cd74c240e7820e75f90d8", "spec_path": "governance/review-reports/code-batch18/r1-snapshot.patch", "scope_lines": 1160, "tier": "standard", "orchestrator": "claude", "findings_set": ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11"], "folded_set": ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11"], "accepted_set": [], "finding_kinds": {"f1": "code", "f2": "code", "f3": "code", "f4": "code", "f5": "code", "f6": "code", "f7": "code", "f8": "code", "f9": "code", "f10": "code", "f11": "code"}, "report_path": "governance/review-reports/code-batch18/r1-外家否決.md", "report_sha256": "c15dd6a65080f330dc9e6297532d1a153b24bcf29426f36105dbff5d350e4e7c", "snapshot_path": "governance/review-reports/code-batch18/r1-snapshot.patch", "snapshot_sha256": "fdf913a4340223f1ab5508f5d2163df371f24ac58d6cd74c240e7820e75f90d8", "intake_path": "governance/review-reports/code-batch18/r1-intake.md", "intake_sha256": "b55df838ac44d39bf2b832b8c3f3cea07d8df78c8c70a3991913a0f77a6c23d4"}
+    16	+{"ts": "2026-09-07T21:20:58+08:00", "kind": "none", "auditor": "正確性-sonnet", "token": "CANARY-dfee06cb", "note": "", "loop": "進度從提交推導-v2", "round": "r1", "severity": "blocker", "findings": 8, "result_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "reviewed_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 192, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v2/r1-正確性.md", "report_sha256": "450a743d7c961529ffbabae2bf13f6eaa59f7a67b3ac8f45676bfcb2a080af53", "snapshot_path": "governance/review-reports/進度從提交推導-v2/r1-snapshot.md", "snapshot_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "intake_path": "governance/review-reports/進度從提交推導-v2/r1-intake.md", "intake_sha256": "d5093ca3c986b1d1d46edb3b4599956893428192f810e2a59f2a59b0a5d2a24a"}
+    17	+{"ts": "2026-09-07T21:20:58+08:00", "kind": "none", "auditor": "邊界-sonnet", "token": "CANARY-03b42962", "note": "", "loop": "進度從提交推導-v2", "round": "r1", "severity": "blocker", "findings": 7, "result_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "reviewed_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 192, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v2/r1-邊界.md", "report_sha256": "80b1bbe48885a221a93fd54bc02349e008a152974b65a766ec0bde0c50ffde43", "snapshot_path": "governance/review-reports/進度從提交推導-v2/r1-snapshot.md", "snapshot_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "intake_path": "governance/review-reports/進度從提交推導-v2/r1-intake.md", "intake_sha256": "d5093ca3c986b1d1d46edb3b4599956893428192f810e2a59f2a59b0a5d2a24a"}
+    18	+{"ts": "2026-09-07T21:20:59+08:00", "kind": "none", "auditor": "接手-sonnet", "token": "CANARY-0d1657ec", "note": "", "loop": "進度從提交推導-v2", "round": "r1", "severity": "blocker", "findings": 5, "result_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "reviewed_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 192, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v2/r1-接手.md", "report_sha256": "b00023ad5dde7e76b8641bdb4947306082c4335189316f7ba0f5738ecce11e82", "snapshot_path": "governance/review-reports/進度從提交推導-v2/r1-snapshot.md", "snapshot_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "intake_path": "governance/review-reports/進度從提交推導-v2/r1-intake.md", "intake_sha256": "d5093ca3c986b1d1d46edb3b4599956893428192f810e2a59f2a59b0a5d2a24a"}
+    19	+{"ts": "2026-09-07T21:20:59+08:00", "kind": "none", "auditor": "外家-codex", "token": "CANARY-823c631c", "note": "", "loop": "進度從提交推導-v2", "round": "r1", "severity": "blocker", "findings": 8, "result_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "reviewed_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 192, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v2/r1-外家codex.md", "report_sha256": "484da315de835a4fa520c1e23cd33c8f8dac3a8c4eef39e2f7e62781d31c7bb1", "snapshot_path": "governance/review-reports/進度從提交推導-v2/r1-snapshot.md", "snapshot_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "intake_path": "governance/review-reports/進度從提交推導-v2/r1-intake.md", "intake_sha256": "d5093ca3c986b1d1d46edb3b4599956893428192f810e2a59f2a59b0a5d2a24a"}
+    20	+{"ts": "2026-09-07T21:23:59+08:00", "kind": "none", "auditor": "正確性-sonnet", "token": "CANARY-db0cd200", "note": "", "loop": "進度從提交推導-v3", "round": "r1", "severity": "blocker", "findings": 9, "result_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "reviewed_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 227, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v3/r1-正確性.md", "report_sha256": "9f4392485aa54747b22824b4d34d0d566b1f76e1c5879d639779c6f17e06ada3", "snapshot_path": "governance/review-reports/進度從提交推導-v3/r1-snapshot.md", "snapshot_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "intake_path": "governance/review-reports/進度從提交推導-v3/r1-intake.md", "intake_sha256": "f454f785dc3c3295853e6ea0320045148def10b742943dbdf9735ffb15ef2457"}
+    21	+{"ts": "2026-09-07T21:23:59+08:00", "kind": "none", "auditor": "邊界-sonnet", "token": "CANARY-cf13a855", "note": "", "loop": "進度從提交推導-v3", "round": "r1", "severity": "blocker", "findings": 7, "result_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "reviewed_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 227, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v3/r1-邊界.md", "report_sha256": "23bddd0c6f5190d12cb431e5a373da70dc52c101de9336367632deca76630678", "snapshot_path": "governance/review-reports/進度從提交推導-v3/r1-snapshot.md", "snapshot_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "intake_path": "governance/review-reports/進度從提交推導-v3/r1-intake.md", "intake_sha256": "f454f785dc3c3295853e6ea0320045148def10b742943dbdf9735ffb15ef2457"}
+    22	+{"ts": "2026-09-07T21:24:00+08:00", "kind": "none", "auditor": "接手-sonnet", "token": "CANARY-554c0857", "note": "", "loop": "進度從提交推導-v3", "round": "r1", "severity": "blocker", "findings": 7, "result_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "reviewed_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 227, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v3/r1-接手.md", "report_sha256": "9e701d1046f65830af0a0d05512f24aa31bb03887474f838ff895b5cd3115a68", "snapshot_path": "governance/review-reports/進度從提交推導-v3/r1-snapshot.md", "snapshot_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "intake_path": "governance/review-reports/進度從提交推導-v3/r1-intake.md", "intake_sha256": "f454f785dc3c3295853e6ea0320045148def10b742943dbdf9735ffb15ef2457"}
+    23	+{"ts": "2026-09-07T21:24:00+08:00", "kind": "none", "auditor": "架構對齊-sonnet", "token": "CANARY-5526244f", "note": "", "loop": "進度從提交推導-v3", "round": "r1", "severity": "blocker", "findings": 7, "result_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "reviewed_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 227, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v3/r1-架構對齊.md", "report_sha256": "ec332d226f2b0d58e3e5b0ffb775f0c0c8abaaed7438863d89168eb6dfeced66", "snapshot_path": "governance/review-reports/進度從提交推導-v3/r1-snapshot.md", "snapshot_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "intake_path": "governance/review-reports/進度從提交推導-v3/r1-intake.md", "intake_sha256": "f454f785dc3c3295853e6ea0320045148def10b742943dbdf9735ffb15ef2457"}
+    24	+{"ts": "2026-09-07T21:24:00+08:00", "kind": "none", "auditor": "外家-codex", "token": "CANARY-8ac3d848", "note": "", "loop": "進度從提交推導-v3", "round": "r1", "severity": "blocker", "findings": 6, "result_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "reviewed_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 227, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v3/r1-外家codex.md", "report_sha256": "155917ce740105abe2a0979ec68b92347145c63cfd0300c6745e918bb1c4feb1", "snapshot_path": "governance/review-reports/進度從提交推導-v3/r1-snapshot.md", "snapshot_sha256": "92621f8fd5aba60582fc25bdd966d8d9c2df881db5523f810d89a64c70dc67f6", "intake_path": "governance/review-reports/進度從提交推導-v3/r1-intake.md", "intake_sha256": "f454f785dc3c3295853e6ea0320045148def10b742943dbdf9735ffb15ef2457"}
+    25	+{"ts": "2026-09-07T21:25:01+08:00", "kind": "none", "auditor": "架構對齊-sonnet", "token": "CANARY-75cf34ef", "note": "", "loop": "進度從提交推導-v2", "round": "r1", "severity": "major", "findings": 6, "result_sha256": "a0a166c21e348f28868e764c22115ddb8c46a2b7e128d2152562f2f0cb9d5262", "reviewed_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "spec_path": "docs/lumos-toolchain-knowledge/Projects/進度從提交推導_計劃.md", "scope_lines": 192, "tier": "standard", "orchestrator": "claude", "report_path": "governance/review-reports/進度從提交推導-v2/r1-架構對齊.md", "report_sha256": "a7fbb2535bce4956c6d09ededdf40d74af059fe39eba5dc5ef4738ef3b977a3a", "snapshot_path": "governance/review-reports/進度從提交推導-v2/r1-snapshot.md", "snapshot_sha256": "bf99fe9e074f21c8f204a647f2d5c9fc99632f09399daac809cb48dc39833aa9", "intake_path": "governance/review-reports/進度從提交推導-v2/r1-intake.md", "intake_sha256": "d5093ca3c986b1d1d46edb3b4599956893428192f810e2a59f2a59b0a5d2a24a"}
+    26	diff --git a/docs/.governance-log.jsonl b/docs/.governance-log.jsonl
+    27	index 793c319..fcbe209 100644
+    28	--- a/docs/.governance-log.jsonl
+    29	+++ b/docs/.governance-log.jsonl
+    30	@@ -28499,10 +28499,112 @@
+    31	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+    32	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+    33	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=5 broken=0"}
+    34	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+    35	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+    36	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
+    37	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
+    38	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
+    39	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
+    40	 {"ts": "2026-09-07T21:14:27+08:00", "commit": "ce4e099", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=9"}
+    41	+{"ts": "2026-09-07T21:38:28+08:00", "commit": "ce4e099", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+    42	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+    43	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+    44	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
+    45	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+    46	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
+    47	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
+    48	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["受波及合約測試真跑閘_計劃"]}
+    49	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
+    50	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+    51	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+    52	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
+    53	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+    54	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
+    55	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+    56	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+    57	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+    58	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=6 broken=0"}
+    59	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+    60	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+    61	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
+    62	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
+    63	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
+    64	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
+    65	+{"ts": "2026-09-07T21:38:31+08:00", "commit": "def4416", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=9"}
+    66	+{"ts": "2026-09-07T21:38:32+08:00", "commit": "def4416", "gate": "bound-tests", "kind": "no-pins", "hard": false, "nodes": [], "note": ""}
+    67	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+    68	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+    69	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
+    70	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+    71	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
+    72	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
+    73	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["受波及合約測試真跑閘_計劃"]}
+    74	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
+    75	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+    76	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+    77	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
+    78	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+    79	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
+    80	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+    81	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+    82	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+    83	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=6 broken=0"}
+    84	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+    85	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+    86	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
+    87	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
+    88	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
+    89	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
+    90	+{"ts": "2026-09-07T21:39:07+08:00", "commit": "def4416", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=9"}
+    91	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+    92	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+    93	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
+    94	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+    95	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
+    96	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
+    97	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["受波及合約測試真跑閘_計劃"]}
+    98	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
+    99	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+   100	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+   101	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
+   102	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+   103	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
+   104	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+   105	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+   106	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+   107	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=6 broken=0"}
+   108	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+   109	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+   110	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
+   111	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
+   112	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
+   113	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
+   114	+{"ts": "2026-09-07T21:45:32+08:00", "commit": "def4416", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=9"}
+   115	+{"ts": "2026-09-07T21:47:40+08:00", "commit": "def4416", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+   116	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["codex-harness"]}
+   117	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook信任邊界"]}
+   118	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["hook逾時預算"]}
+   119	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s", "kind": "warned", "hard": false, "nodes": ["授權與歸屬"]}
+   120	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["嚴謹度分配偏向機械層"]}
+   121	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["主動影響幅度偵測_計劃"]}
+   122	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["受波及合約測試真跑閘_計劃"]}
+   123	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["閘觸發帳統計_計劃"]}
+   124	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["anchor-integrity"]}
+   125	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+   126	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["design-loop"]}
+   127	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["linter精選目錄"]}
+   128	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["loop-convergence-recording"]}
+   129	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["lumos-cli-read"]}
+   130	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-s2", "kind": "warned", "hard": false, "nodes": ["slim-get-一行安裝"]}
+   131	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-e1", "kind": "warned", "hard": false, "nodes": ["bound-tests-gate"]}
+   132	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-cascade", "kind": "warned", "hard": false, "nodes": [], "note": "unseen=6 broken=0"}
+   133	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+   134	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-03_派工攔截點實測"]}
+   135	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S0安裝層驗收"]}
+   136	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S1hook適配驗收"]}
+   137	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S2迴圈編排驗收"]}
+   138	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "check-e3", "kind": "warned", "hard": false, "nodes": ["2026-09-04_Codex完全支援S3量測驗收"]}
+   139	+{"ts": "2026-09-07T21:47:49+08:00", "commit": "13759ce", "gate": "doctor-run", "kind": "ran", "hard": false, "nodes": [], "note": "issues=0 gates=5 soft=9"}
+   140	+{"ts": "2026-09-07T21:47:52+08:00", "commit": "13759ce", "gate": "bound-tests", "kind": "no-pins", "hard": false, "nodes": [], "note": ""}
+   141	+{"ts": "2026-09-07T21:49:02+08:00", "commit": "13759ce", "gate": "design-loop", "kind": "rewrite", "hard": false, "nodes": ["進度從提交推導-v3"], "note": "prev=進度從提交推導-v3;successor=進度從提交推導-v4;Enzo 裁(2026-09-07 第三次重寫,已攤人;Enzo 原話「我要解這個問題,你的目標就是這個」)。v3 五席全 blocker,論點層級三處:Edit/Write 只佔本 repo 改檔呼叫個位數%(邊界席實測逐字稿 886 vs 43481)、檔案路徑鍵對 scripts/lumos 不分辨(126 篇)、活動不攜帶意圖。v4 換軸:不再從副產品推導,改「agent 明確記意圖+工具量事實+收工 hook 當入口」"}
+   142	+{"ts": "2026-09-07T22:05:08+08:00", "commit": "13759ce", "gate": "delguard", "kind": "ok", "hard": false, "nodes": [], "note": "tokens=0 hits=0 secs=0.0"}
+   143	diff --git "a/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
+   144	index fd9ff27..acb3168 100644
+   145	--- "a/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
+   146	+++ "b/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
+   147	@@ -253,26 +253,40 @@ SRE 的「對缺席告警」、建目錄當原子鎖(macOS 沒有 flock)、logro
+   148	 ### 鎖:改了兩輪才對
+   149	 
+   150	 第一版接管是「rm 掉舊鎖再 mkdir」。併發席實測:八個行程搶同一把殘鎖,30 輪有 19 輪多人同時拿到鎖,
+   151	 拿真腳本跑 15 輪有 2 輪整支被跑了兩遍。改用 `mv` 原子搬走之後**我自己再量,12 輪還有 1 輪雙開**
+   152	 ——因為「判定它死了」跟「動手搬」中間隔了一段:A 接管完把鎖重建起來,早就決定要接管的 D
+   153	 會把 A 那把全新的鎖也搬走。最後的做法是接管整段走一把「接管權」小鎖,進去後再確認一次
+   154	 殘鎖還是原來那一把(pid 對不對得上)。**40 輪 × 8 個行程:0 雙開、0 空轉。**
+   155	 
+   156	 ★教訓:第一次修完就量一次,不要因為改動看起來對就收手。★
+   157	 
+   158	-### 還沒修的:來源那支有一模一樣的洞
+   159	-
+   160	-`governance/autonomous-loop.sh` 的取鎖段(這支就是抄它的)有同樣三個問題,而且**更糟**
+   161	-——它的接管是裸的 `rm -rf; mkdir`,連成不成功都不檢查。**這批沒有動它**,因為那不在這次
+   162	-凍結的審查範圍裡,現在順手改等於把沒審過的碼混進推送。
+   163	-REVISIT:2026-09-14 把 autonomous-loop.sh 的取鎖段換成這支現在的做法,走一次 code loop。
+   164	+### 來源那支的同型洞(2026-09-07 當天補做,Enzo 指示)
+   165	+
+   166	+`governance/autonomous-loop.sh` 的取鎖段(這支就是抄它的)有同樣三個問題。
+   167	+原本排 9/14,Enzo 當天就指示先修掉。**三個洞都實測重現過,不是靠「同型」推論**:
+   168	+
+   169	+| 洞 | 舊行為實測 |
+   170	+|---|---|
+   171	+| 接管競態 → 雙開 | 30 輪 × 8 行程,**1 輪多人同時拿到鎖** |
+   172	+| pid 被無關的活行程重用 | 10 天前的殘鎖 + 一個活著的無關行程 → 印「另一份正在跑」直接退出,**自主迴圈永久停擺而且沒有訊息** |
+   173	+| pid 檔內容不是數字 | pid 寫 garbage、鎖 0 秒齡 → **當場接管** |
+   174	+
+   175	+★`set -e` 幫不上忙★:#18 那批的註解寫「來源腳本有 set -e 兜著」——那句話**只對了一半**。
+   176	+它攔掉「輸的那個 mkdir 失敗」那半(所以雙開率 1/30 比這支的 19/30 低),
+   177	+但**攔不掉關鍵那條**:兩個接管者的 mkdir 都成功時,沒有非零可攔。
+   178	+
+   179	+順手多修兩個這支獨有的:
+   180	+- **取鎖與收尾之間有裸奔窗口**:鎖在第 37 行拿到、trap 在第 190 行才裝,而這支有 `set -e`
+   181	+  ——中間任何一個指令失敗都會直接死掉,鎖留 60 分鐘。改成先裝一個只清鎖的 trap。
+   182	+- **收尾無條件刪鎖**:如果這支跑到一半被別人**合法接管**走了(殘鎖判定成立時真的會發生),
+   183	+  那一下刪的是別人正在用的鎖。改成只清「鎖裡 pid 是自己」的那一把。
+   184	 
+   185	 ### 通知的圖示(2026-09-07 追加,Enzo 要的)
+   186	 
+   187	 `osascript ... display notification` **沒有辦法在指令裡指定圖片**——它顯示的是呼叫它那支程式的
+   188	 圖示,從 launchd 跑就是 Script Editor 那個。要換成 Lumos 自己的四角星只有兩條路:
+   189	 
+   190	 - 裝 `terminal-notifier`(可以 `-appIcon`)→ **新增一個外部依賴,零依賴家規下不選**。
+   191	 - 自己包一個最小的 `.app` → 只用 macOS 內建的 `osacompile` / `sips` / `iconutil` / `plutil`,不加依賴。
+   192	 
+   193	 走後者。那個 app 是**建出來的東西不是原始碼**,所以不進版控,`install-watchdog.sh` 裝的時候現建,
+   194	diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+   195	index ca63f89..75c9efa 100755
+   196	--- a/governance/autonomous-loop.sh
+   197	+++ b/governance/autonomous-loop.sh
+   198	@@ -6,42 +6,133 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+   199	 MODE="${1:---dry-run}"
+   200	 MAXR="${2:-6}"
+   201	 # 非 dry-run 停用(2026-07-29 使用者裁定,Codex 外審採納):子 agent 權限隔離
+   202	 # (Systems/nested-agent-permission-scope,planned)落地前,confused-deputy 已知漏洞
+   203	 # 不留可執行入口——--pr 直接拒跑。解禁條件:read-only child isolation 落地+過 code-loop。
+   204	 if [ "$MODE" != "--dry-run" ]; then
+   205	   echo "autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常" >&2
+   206	   exit 2
+   207	 fi
+   208	 # ── 整跑鎖(code-r1 s2-f1/f2):launchd+人工同時跑會互蓋 backlog/archive——mkdir 原子搶鎖,
+   209	-# 鎖裡放 PID;持鎖行程已死(kill -0 不到)視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。
+   210	+# 鎖裡放 PID;持鎖行程已死視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。
+   211	+#
+   212	+# ★2026-09-07 補三個洞,三個都實測過★(全 repo 審視 #18 在抄這段時被五席挖出來,
+   213	+#  當時只修了抄過去那一份,這裡是回頭把來源也修掉;守衛 t_daily_wrapper_lock_matches_source
+   214	+#  比的是四個行為還在不在、不比逐字,所以兩邊寫法不必一樣):
+   215	+#
+   216	+#  ①★雙開★:「rm 掉舊鎖再 mkdir」擋不住這個排列——
+   217	+#    A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功),兩邊都以為自己拿到鎖。
+   218	+#    ★set -e 幫不上忙★:兩個 mkdir 都成功,沒有非零可攔。實測這一段的舊邏輯
+   219	+#    30 輪 × 8 行程有 1 輪多人同時拿到(比 daily-governance 的 19/30 低,是因為
+   220	+#    set -e 攔掉了「輸的那個 mkdir 失敗」那半,但沒攔掉這條)。
+   221	+#    改法:接管整段走一把「接管權」小鎖,進去後再確認殘鎖還是原來那一把。
+   222	+#
+   223	+#  ②★pid 被作業系統回收給無關的活行程★ → kill -0 說「活著」→ 這支永遠讓行、
+   224	+#    自主迴圈永久停擺而且完全沒有訊息。實測:10 天前的殘鎖 + 一個活著的無關行程,
+   225	+#    舊邏輯印「另一份正在跑」直接退出。改法:再問一次「那個 pid 的指令像不像我們這支」。
+   226	+#    ★問不出來就保守當成活著★:誤判成死掉會雙開,比多讓一次行嚴重得多。
+   227	+#
+   228	+#  ③★pid 檔內容不是數字★(寫到一半被砍)→ 兩個分支都不成立 → 直接掉到「接管」,
+   229	+#    連 0 秒齡的新鎖都搶。實測:pid 寫 garbage、鎖 0 秒齡,舊邏輯當場接管。
+   230	+#    改法:非數字一律當成「pid 讀不到」,走鎖齡兜底那條。
+   231	 LOCKDIR="$SCRIPT_DIR/.autonomous-loop.lock"
+   232	-if ! mkdir "$LOCKDIR" 2>/dev/null; then
+   233	-  OLDPID="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+   234	-  if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+   235	-    echo "[$(date '+%F %T')] 另一份 autonomous-loop 正在跑(pid $OLDPID),本次退出——不搶寫 backlog"; exit 0
+   236	-  fi
+   237	-  # ★空 pid ≠ 殘鎖★(r2 d-f2 TOCTOU):對方可能剛 mkdir 成功、還沒來得及寫 pid——
+   238	-  # 「pid 沒寫」與「pid 寫過但行程死了」不能走同一條接管路。只有鎖齡超過 60 分鐘
+   239	-  # (真跑最長也早該寫完 pid)才視為殘鎖;年輕的空 pid 鎖一律讓行。
+   240	-  if [ -z "$OLDPID" ]; then
+   241	+
+   242	+lock_holder_alive() {   # $1=pid;0=是我們這支 1=不是 2=問不出來(呼叫端當成活著)
+   243	+  kill -0 "$1" 2>/dev/null || return 1
+   244	+  local cmd; cmd="$(ps -p "$1" -o command= 2>/dev/null || echo '')"
+   245	+  [ -z "$cmd" ] && return 2
+   246	+  case "$cmd" in *autonomous-loop*) return 0 ;; *) return 1 ;; esac
+   247	+}
+   248	+lock_write_pid() {   # 也走暫存→改名:這個 repo 的教訓是共用檔一律原子寫入
+   249	+  local t="$LOCKDIR/pid.tmp"
+   250	+  echo $$ > "$t" 2>/dev/null && mv -f "$t" "$LOCKDIR/pid" 2>/dev/null
+   251	+}
+   252	+take_lock() {   # 0=拿到  1=別人在跑,正常讓行  2=鎖壞了,不正常
+   253	+  if mkdir "$LOCKDIR" 2>/dev/null; then lock_write_pid; return 0; fi
+   254	+  local oldpid; oldpid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+   255	+  case "$oldpid" in ''|*[!0-9]*) oldpid="" ;; esac   # 見③:壞內容等同讀不到
+   256	+  if [ -n "$oldpid" ]; then
+   257	+    lock_holder_alive "$oldpid"; local hv=$?
+   258	+    if [ "$hv" -ne 1 ]; then
+   259	+      echo "[$(date '+%F %T')] 另一份 autonomous-loop 正在跑(pid $oldpid),本次退出——不搶寫 backlog"
+   260	+      return 1
+   261	+    fi
+   262	+  else
+   263	+    # ★空 pid ≠ 殘鎖★(r2 d-f2 TOCTOU):對方可能剛 mkdir 成功、還沒來得及寫 pid。
+   264	     # 鎖齡用 python 算(stat -f 是 BSD 專屬,Linux 上整句壞掉;r3 e-f1)。
+   265	-    # ★量不出=讓行★:兜底方向必須保守——量不出鎖齡時寧可少跑一天,不搶對方剛拿到的鎖。
+   266	-    LOCK_AGE="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo '')"
+   267	-    if [ -z "$LOCK_AGE" ] || [ "$LOCK_AGE" -lt 3600 ]; then
+   268	-      echo "[$(date '+%F %T')] 另一份 autonomous-loop 疑似剛起步(鎖存在 ${LOCK_AGE:-量不出}s、pid 未寫),本次退出讓行"; exit 0
+   269	+    # ★量不出=讓行★:寧可少跑一天,不搶對方剛拿到的鎖。
+   270	+    local age
+   271	+    age="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo '')"
+   272	+    if [ -z "$age" ] || [ "$age" -lt 3600 ]; then
+   273	+      echo "[$(date '+%F %T')] 另一份 autonomous-loop 疑似剛起步(鎖存在 ${age:-量不出}s、pid 讀不到),本次退出讓行"
+   274	+      return 1
+   275	     fi
+   276	   fi
+   277	-  echo "[$(date '+%F %T')] 發現殘鎖(pid ${OLDPID:-?} 已不在或鎖齡過老),接管"
+   278	-  rm -rf "$LOCKDIR"; mkdir "$LOCKDIR"
+   279	-fi
+   280	-echo $$ > "$LOCKDIR/pid"
+     1	#!/usr/bin/env bash
+     2	set -euo pipefail
+     3	export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+     4	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+     5	REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+     6	MODE="${1:---dry-run}"
+     7	MAXR="${2:-6}"
+     8	# 非 dry-run 停用(2026-07-29 使用者裁定,Codex 外審採納):子 agent 權限隔離
+     9	# (Systems/nested-agent-permission-scope,planned)落地前,confused-deputy 已知漏洞
+    10	# 不留可執行入口——--pr 直接拒跑。解禁條件:read-only child isolation 落地+過 code-loop。
+    11	if [ "$MODE" != "--dry-run" ]; then
+    12	  echo "autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常" >&2
+    13	  exit 2
+    14	fi
+    15	# ── 整跑鎖(code-r1 s2-f1/f2):launchd+人工同時跑會互蓋 backlog/archive——mkdir 原子搶鎖,
+    16	# 鎖裡放 PID;持鎖行程已死視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。
+    17	#
+    18	# ★2026-09-07 補三個洞,三個都實測過★(全 repo 審視 #18 在抄這段時被五席挖出來,
+    19	#  當時只修了抄過去那一份,這裡是回頭把來源也修掉;守衛 t_daily_wrapper_lock_matches_source
+    20	#  比的是四個行為還在不在、不比逐字,所以兩邊寫法不必一樣):
+    21	#
+    22	#  ①★雙開★:「rm 掉舊鎖再 mkdir」擋不住這個排列——
+    23	#    A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功),兩邊都以為自己拿到鎖。
+    24	#    ★set -e 幫不上忙★:兩個 mkdir 都成功,沒有非零可攔。實測這一段的舊邏輯
+    25	#    30 輪 × 8 行程有 1 輪多人同時拿到(比 daily-governance 的 19/30 低,是因為
+    26	#    set -e 攔掉了「輸的那個 mkdir 失敗」那半,但沒攔掉這條)。
+    27	#    改法:接管整段走一把「接管權」小鎖,進去後再確認殘鎖還是原來那一把。
+    28	#
+    29	#  ②★pid 被作業系統回收給無關的活行程★ → kill -0 說「活著」→ 這支永遠讓行、
+    30	#    自主迴圈永久停擺而且完全沒有訊息。實測:10 天前的殘鎖 + 一個活著的無關行程,
+    31	#    舊邏輯印「另一份正在跑」直接退出。改法:再問一次「那個 pid 的指令像不像我們這支」。
+    32	#    ★問不出來就保守當成活著★:誤判成死掉會雙開,比多讓一次行嚴重得多。
+    33	#
+    34	#  ③★pid 檔內容不是數字★(寫到一半被砍)→ 兩個分支都不成立 → 直接掉到「接管」,
+    35	#    連 0 秒齡的新鎖都搶。實測:pid 寫 garbage、鎖 0 秒齡,舊邏輯當場接管。
+    36	#    改法:非數字一律當成「pid 讀不到」,走鎖齡兜底那條。
+    37	LOCKDIR="$SCRIPT_DIR/.autonomous-loop.lock"
+    38	
+    39	lock_holder_alive() {   # $1=pid;0=是我們這支 1=不是 2=問不出來(呼叫端當成活著)
+    40	  kill -0 "$1" 2>/dev/null || return 1
+    41	  local cmd; cmd="$(ps -p "$1" -o command= 2>/dev/null || echo '')"
+    42	  [ -z "$cmd" ] && return 2
+    43	  case "$cmd" in *autonomous-loop*) return 0 ;; *) return 1 ;; esac
+    44	}
+    45	lock_write_pid() {   # 也走暫存→改名:這個 repo 的教訓是共用檔一律原子寫入
+    46	  local t="$LOCKDIR/pid.tmp"
+    47	  echo $$ > "$t" 2>/dev/null && mv -f "$t" "$LOCKDIR/pid" 2>/dev/null
+    48	}
+    49	take_lock() {   # 0=拿到  1=別人在跑,正常讓行  2=鎖壞了,不正常
+    50	  if mkdir "$LOCKDIR" 2>/dev/null; then lock_write_pid; return 0; fi
+    51	  local oldpid; oldpid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+    52	  case "$oldpid" in ''|*[!0-9]*) oldpid="" ;; esac   # 見③:壞內容等同讀不到
+    53	  if [ -n "$oldpid" ]; then
+    54	    lock_holder_alive "$oldpid"; local hv=$?
+    55	    if [ "$hv" -ne 1 ]; then
+    56	      echo "[$(date '+%F %T')] 另一份 autonomous-loop 正在跑(pid $oldpid),本次退出——不搶寫 backlog"
+    57	      return 1
+    58	    fi
+    59	  else
+    60	    # ★空 pid ≠ 殘鎖★(r2 d-f2 TOCTOU):對方可能剛 mkdir 成功、還沒來得及寫 pid。
+    61	    # 鎖齡用 python 算(stat -f 是 BSD 專屬,Linux 上整句壞掉;r3 e-f1)。
+    62	    # ★量不出=讓行★:寧可少跑一天,不搶對方剛拿到的鎖。
+    63	    local age
+    64	    age="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo '')"
+    65	    if [ -z "$age" ] || [ "$age" -lt 3600 ]; then
+    66	      echo "[$(date '+%F %T')] 另一份 autonomous-loop 疑似剛起步(鎖存在 ${age:-量不出}s、pid 讀不到),本次退出讓行"
+    67	      return 1
+    68	    fi
+    69	  fi
+    70	  echo "[$(date '+%F %T')] 發現殘鎖(pid ${oldpid:-讀不到} 不是這支、或鎖齡過老),接管"
+    71	  # 見①:接管整段要互斥,而且進去之後要再確認一次
+    72	  local steal="$LOCKDIR.steal"
+    73	  if ! mkdir "$steal" 2>/dev/null; then
+    74	    local sage
+    75	    sage="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$steal')))" 2>/dev/null || echo 0)"
+    76	    if [ "$sage" -lt 60 ]; then
+    77	      echo "[$(date '+%F %T')] 另一個接管者正在處理,本次退出"; return 1
+    78	    fi
+    79	    rm -rf "$steal" 2>/dev/null || true
+    80	    mkdir "$steal" 2>/dev/null || { echo "[$(date '+%F %T')] 接管失敗(接管權搶不到),本次退出"; return 1; }
+    81	  fi
+    82	  local rc=1
+    83	  # ★這一步是防禦深度,沒有守衛★(2026-09-07 誠實記):它守的窗口是「B 讀到舊 pid 決定接管、
+    84	  # 卡在接管權外面,A 在這期間完成接管並釋放接管權,B 才進去」。要從外部穩定構造這個順序
+    85	  # 得在腳本裡插測試鉤子,現在沒有——拿掉它重跑整套測試是 0 條紅,這句話是量出來的。
+    86	  # 留著的理由:它便宜,而且沒有它時那個窗口會讓 B 把 A 那把全新的鎖搬走。
+    87	  local nowpid; nowpid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+    88	  case "$nowpid" in ''|*[!0-9]*) nowpid="" ;; esac
+    89	  if [ "$nowpid" != "$oldpid" ]; then
+    90	    echo "[$(date '+%F %T')] 進來後發現鎖已經換人(pid ${nowpid:-讀不到}),不接管,本次退出"
+    91	  else
+    92	    local dead="$LOCKDIR.dead.$$"
+    93	    if ! mv "$LOCKDIR" "$dead" 2>/dev/null; then
+    94	      if [ ! -w "$SCRIPT_DIR" ]; then
+    95	        echo "[$(date '+%F %T')] ★鎖搬不走而且 $SCRIPT_DIR 寫不進去★——這次沒跑,要人來看" >&2
+    96	        rc=2
+    97	      else
+    98	        echo "[$(date '+%F %T')] 接管失敗(鎖剛被釋放),本次退出"
+    99	      fi
+   100	    else
+   101	      rm -rf "$dead" 2>/dev/null || true
+   102	      rm -rf "$LOCKDIR".dead.* 2>/dev/null || true
+   103	      if ! mkdir "$LOCKDIR" 2>/dev/null; then
+   104	        echo "[$(date '+%F %T')] ★接管後鎖建不起來($LOCKDIR)★——這次沒跑,要人來看" >&2
+   105	        rc=2
+   106	      else
+   107	        lock_write_pid; rc=0
+   108	      fi
+   109	    fi
+   110	  fi
+   111	  rm -rf "$steal" 2>/dev/null || true
+   112	  return "$rc"
+   113	}
+   114	
+   115	# ★取鎖與收尾之間不能有裸奔的窗口★:這支有 set -e,從這裡到下面 trap finalize EXIT
+   116	# 之間任何一個指令失敗都會直接中止,鎖就卡到 60 分鐘後才自癒。
+   117	# 所以先裝一個只清鎖的 trap,等 finalize 定義好再換成它(finalize 自己也會清鎖)。
+   118	LOCK_HELD=0
+   119	release_lock() {
+   120	  # ★只清自己的那把★:收尾原本是無條件 rm——如果這支跑到一半被別人★合法接管★走了
+   121	  # (殘鎖判定成立時真的會發生),那一下刪的是別人正在用的鎖。
+   122	  # 判準用鎖裡的 pid 是不是自己,不用 LOCK_HELD:那個旗標只知道「我曾經拿到過」。
+   123	  [ "$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')" = "$$" ] || return 0
+   124	  rm -rf "$LOCKDIR" 2>/dev/null || true
+   125	}
+   126	trap 'if [ "$LOCK_HELD" = 1 ]; then release_lock; fi' EXIT
+   127	take_lock || { _lk=$?; [ "$_lk" -eq 2 ] && exit 3; exit 0; }
+   128	LOCK_HELD=1
+   129	
+   130	TODAY="$(date +%F)"
+   131	REPORT="$SCRIPT_DIR/reports/governance-$TODAY.json"
+   132	PENDING="$SCRIPT_DIR/pending";  mkdir -p "$PENDING"
+   133	LOGDIR="$SCRIPT_DIR/logs";      mkdir -p "$LOGDIR"
+   134	SCRATCH="$(mktemp -d "/tmp/auto-loop-$TODAY.XXXXXX")"; mkdir -p "$SCRATCH/kg" "$SCRATCH/spec"   # mktemp:防可預測路徑搶佔(外審 minor)
+   135	log(){ echo "[$(date '+%F %T')] $*"; }
+   136	
+   137	# ── 收尾器(auto-loop-repair-v2 [S1]+[S3]+[S4]):trap EXIT 統一做四件事——
+   138	# ①未處置 gap 原分放回(失敗不丟件,涵蓋全部早退點;滿 3 次熔斷 covered+喊人)
+   139	# ②結局落帳(結構化欄 --outcome/--usd;與成本抽取解耦,PARSE_FAIL 也有帳)
+   140	# ③連兩個有跑日全失敗 → LINE 喊人(素訊息,不套「備好待放行」模板)
+   141	# ④七天產出一行(失敗日也印——放 trap 就是為了這個)
+   142	# 內部所有指令都要 fail-open(|| true / if 判),trap 裡一個炸掉會吞掉後面全部。
+   143	# ★誠實邊界(code-r1 s2-f3)★:trap EXIT 接得住 bash 攔得到的退出,接不住 SIGKILL/斷電;
+   144	# 那個窗口由 in-flight 標記檔補——選中 gap 先落標記,下次開場發現殘留標記就放回。
+   145	GAP_JSON=""; GAP_DISPOSED=""; OUTCOME=""; COST_ARGS=""; FINAL_DONE=""; ROUND_RECORDED=""
+   146	INFLIGHT="$SCRIPT_DIR/.inflight-gap.json"
+   147	finalize(){
+   148	  [ -n "$FINAL_DONE" ] && return 0; FINAL_DONE=1
+   149	  rm -f "${PROMPT_FILE:-}" 2>/dev/null || true
+   150	  [ -n "${SCRATCH:-}" ] && rm -rf "$SCRATCH" 2>/dev/null || true   # code-r1 s2-f5:暫存不累積
+   151	  if [ -z "$GAP_JSON" ]; then release_lock; return 0; fi   # 還沒選中 gap 的早退(無日報/無 gap):無輪無帳
+   152	  if [ -z "$GAP_DISPOSED" ]; then
+   153	    RQ="$(echo "$GAP_JSON" | python3 -c "
+   154	import sys, json; sys.path.insert(0,'$REPO/governance')
+   155	from autonomous_loop import gap_select
+   156	g=json.load(sys.stdin)
+   157	print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+   158	" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
+   159	    log "失敗不丟件:gap 已放回 backlog($RQ;分數不動,pipeline_failures 累計,滿 3 次轉 covered 留人)"
+   160	    if [ "$RQ" = "covered" ]; then
+   161	      MSG="⚠ 自主迴圈:某 gap 連 3 次管線失敗,已轉 covered 留人手動(weakness 見 governance/covered.jsonl 末行)"       LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+   162	import sys, os; sys.path.insert(0,'$REPO/governance')
+   163	from autonomous_loop import line_notify
+   164	t=os.environ.get('LINE_TOKEN','')
+   165	print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
+   166	    fi
+   167	  fi
+   168	  if [ -z "$ROUND_RECORDED" ]; then   # skip 迭代已當場落帳的輪不重複記(code-r1 s1-f1/s3-f1)
+   169	    # shellcheck disable=SC2086  # COST_ARGS 故意不引號:要拆成多參數
+   170	    if ! (cd "$REPO" && python3 scripts/lumos canary record none --loop "auto-$TODAY"           --auditor orchestrator --outcome "${OUTCOME:-pipeline_fail:parse_fail}" $COST_ARGS           --note "自主迴圈結局帳(trap 收尾統一落;成本欄=claude -p 實際回傳,非估算)")           >>"$LOGDIR/cost-$TODAY.log" 2>&1; then
+   171	      log "結局帳:record 失敗——帳上沒有這輪(詳情 $LOGDIR/cost-$TODAY.log)"
+   172	    fi
+   173	  fi
+   174	  if [ -n "$GAP_DISPOSED" ] || [ "${RQ:-}" = "requeued" ] || [ "${RQ:-}" = "covered" ]; then
+   175	    rm -f "$INFLIGHT" 2>/dev/null || true   # gap 真有去向才解除斷電保險(r2 d-f3)
+   176	  else
+   177	    log "⚠ gap 放回未確認(${RQ:-無}),in-flight 標記保留給下次開場回收"
+   178	  fi
+   179	  LEDGER_OUT="$(cd "$REPO" && python3 -c "
+   180	import sys; sys.path.insert(0,'governance')
+   181	from autonomous_loop import run_ledger
+   182	lg='docs/.canary-log.jsonl'
+   183	print(run_ledger.format_week_line(run_ledger.summarize_week(lg,'$TODAY')))
+   184	print('CONSEC_FAIL' if run_ledger.consecutive_fail_days(lg,'$TODAY') else 'OK')
+   185	" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '')"
+   186	  if [ -n "$LEDGER_OUT" ]; then
+   187	    log "$(echo "$LEDGER_OUT" | head -1)"
+   188	    if echo "$LEDGER_OUT" | grep -q CONSEC_FAIL; then
+   189	      log "⚠ 連兩個有跑日全是管線失敗——不是天氣,喊人"
+   190	      MSG="⚠ 自主迴圈連兩個有跑日管線全失敗($(echo "$LEDGER_OUT" | head -1));死因分類看 canary 帳 outcome 欄,log $LOGDIR/"       LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+60:    def test_gate_blocks_when_pending(self):
+88:            json.dumps({"loop": "foo", "kind": "caught", "severity": "blocker", "auditor": "opus", "note": "r1", "token": "t1"}),
+93:        self.assertIn("blocker", md)
+161:        self.assertEqual(c["wallclock_min"], 2)          # 99920ms → 1.665 分 → round=2
+170:        self.assertEqual(c["wallclock_min"], 0)          # 20 秒 → 0 分,不四捨五入成 1(不假造)
+191:            orchestrator_result.cost_cli_args({"usd": 1.0, "wallclock_min": 3,
+193:            ["--tokens", "500", "--wallclock-min", "3", "--usd", "1.0"])
+196:            orchestrator_result.cost_cli_args({"usd": None, "wallclock_min": None,
+228:    def test_ok_blocker(self):
+229:        body = json.dumps({"choices": [{"message": {"content": "最嚴重 severity = blocker"}}], "usage": {}}).encode()
+231:        self.assertEqual(r["worst_severity"], "blocker")
+260:        body = json.dumps({"choices": [{"message": {"content": "內文提到一個 blocker 是植入的\n最嚴重 severity = **major**"}}], "usage": {}}).encode()
+266:        sev, fb = self.ca._parse_worst("正文提到 blocker 一詞\n最嚴重 severity = minor")
+270:        sev, fb = self.ca._parse_worst("引述:「最嚴重 severity = blocker」不在末行\n然後結束")
+271:        self.assertEqual((sev, fb), ("blocker", True))
+705:            {"ts": "2026-08-26T10:00:00+08:00", "loop": "probe-x", "outcome": "converged"},           # 非 auto-*
+992:        # s3-f1(blocker):skip 一次→backlog 見底→exit,skip 那筆要有自己的帳(含成本)
+1046:    def test_lock_blocks_concurrent_run(self):
+1062:            lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+1063:            (lock / "pid").write_text(str(proc.pid))
+1071:    def test_lock_not_yielded_to_recycled_pid(self):
+1083:            lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+1084:            (lock / "pid").write_text(str(unrel.pid))
+1090:    def test_lock_broken_pid_file_is_not_a_takeover_ticket(self):
+1098:        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+1099:        (lock / "pid").write_text("garbage-not-a-pid")
+1106:    def test_lock_takeover_is_atomic(self):
+1120:        i = src.index('LOCKDIR="$SCRIPT_DIR/.autonomous-loop.lock"')
+1130:            probe = d / "autonomous-loop-probe.sh"
+1131:            probe.write_text('#!/usr/bin/env bash\nset -euo pipefail\nSCRIPT_DIR="$1"\n'
+1133:            os.chmod(probe, 0o755)
+1134:            lock = d / ".autonomous-loop.lock"
+1139:                if lock.exists():
+1141:                    _sh.rmtree(lock, ignore_errors=True)
+1142:                lock.mkdir()
+1143:                (lock / "pid").write_text("999999")              # 確定死透
+1144:                os.utime(lock, (0, time.time() - 7200))          # 鎖齡 2 小時
+1145:                procs = [_sp.Popen(["bash", str(probe), str(d)],
+1157:            shutil_.rmtree(lock, ignore_errors=True)
+1158:            lock.mkdir()
+1159:            (lock / "pid").write_text("999999")
+1160:            os.utime(lock, (0, time.time() - 7200))
+1161:            holder = _sp.Popen(["bash", str(probe), str(d)],
+1164:            held_pid = (lock / "pid").read_text().strip()
+1166:            late = _sp.run(["bash", str(probe), str(d)], capture_output=True, text=True, timeout=120)
+1169:            self.assertEqual((lock / "pid").read_text().strip(), held_pid,
+1172:            # ★誠實記一個沒有守衛的地方★:take_lock 進到接管權區之後還會「再確認一次
+1181:    def test_stale_lock_taken_over(self):
+1184:        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+1185:        (lock / "pid").write_text("99999999")
+1229:    def test_young_lock_without_pid_yields(self):
+1232:        (gov / ".autonomous-loop.lock").mkdir()  # 剛建立、沒 pid
+1238:    def test_old_lock_without_pid_taken_over(self):
+1242:        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+1244:        os.utime(lock, (old, old))
+1293:    def _slow_clock(self, per_call=20.0):
+1305:             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+1313:             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+1318:             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(10.0)):
+1386:             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.01)):
+1390:             mock.patch.object(self.m.time, "time", side_effect=self._slow_clock(0.01)):
+1400:        def clock():
+1405:             mock.patch.object(self.m.time, "time", side_effect=clock):
+1445:        spec = importlib.util.spec_from_file_location("scenario_probe", root / "scripts" / "scenario_probe.py")
+1566:        # r1 code-ablation-probe:引號內/echo 出來的規則文字不算敲 lumos;真呼叫算
+1646:        (d / "with-q-a-1.json").write_text(json.dumps({"arm": "with", "results": [], "skills_health_bad": [["x", "/tmp/lumos-probe-z/skills/x"]]}), encoding="utf-8")
+1675:        spec = importlib.util.spec_from_file_location("scenario_probe", root / "scripts" / "scenario_probe.py")
+1685:        probe = home / "T" / "lumos-probe-abc" / "repo" / "skills" / "s"; probe.mkdir(parents=True)
+1686:        (skills / "in-sandbox").symlink_to(probe)                           # 指進沙盒(即使暫時存在也算壞)
+1693:    def test_refuse_if_probe(self):
+
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "rg -n '"'^diff --git|''^@@|''^'"\\+.*(lock_holder_alive|lock_write_pid|take_lock|release_lock|steal|trap|test_lock)' governance/review-reports/code-batch19/r1-snapshot.patch
+nl -ba scripts/test_autonomous_loop.py | sed -n '1020,1260p'
+nl -ba governance/autonomous-loop.sh | sed -n '190,245p'"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+1:diff --git a/docs/.canary-log.jsonl b/docs/.canary-log.jsonl
+5:@@ -1144,10 +1144,20 @@
+26:diff --git a/docs/.governance-log.jsonl b/docs/.governance-log.jsonl
+30:@@ -28499,10 +28499,112 @@
+143:diff --git "a/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\346\257\217\346\227\245\346\262\273\347\220\206wrapper\346\264\273\350\221\227\346\262\222_\350\250\210\345\212\203.md"
+147:@@ -253,26 +253,40 @@ SRE 的「對缺席告警」、建目錄當原子鎖(macOS 沒有 flock)、logro
+180:+- **取鎖與收尾之間有裸奔窗口**:鎖在第 37 行拿到、trap 在第 190 行才裝,而這支有 `set -e`
+181:+  ——中間任何一個指令失敗都會直接死掉,鎖留 60 分鐘。改成先裝一個只清鎖的 trap。
+194:diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+198:@@ -6,42 +6,133 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+242:+lock_holder_alive() {   # $1=pid;0=是我們這支 1=不是 2=問不出來(呼叫端當成活著)
+248:+lock_write_pid() {   # 也走暫存→改名:這個 repo 的教訓是共用檔一律原子寫入
+252:+take_lock() {   # 0=拿到  1=別人在跑,正常讓行  2=鎖壞了,不正常
+253:+  if mkdir "$LOCKDIR" 2>/dev/null; then lock_write_pid; return 0; fi
+257:+    lock_holder_alive "$oldpid"; local hv=$?
+283:+  local steal="$LOCKDIR.steal"
+284:+  if ! mkdir "$steal" 2>/dev/null; then
+286:+    sage="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$steal')))" 2>/dev/null || echo 0)"
+290:+    rm -rf "$steal" 2>/dev/null || true
+291:+    mkdir "$steal" 2>/dev/null || { echo "[$(date '+%F %T')] 接管失敗(接管權搶不到),本次退出"; return 1; }
+318:+        lock_write_pid; rc=0
+322:+  rm -rf "$steal" 2>/dev/null || true
+326:+# ★取鎖與收尾之間不能有裸奔的窗口★:這支有 set -e,從這裡到下面 trap finalize EXIT
+328:+# 所以先裝一個只清鎖的 trap,等 finalize 定義好再換成它(finalize 自己也會清鎖)。
+330:+release_lock() {
+337:+trap 'if [ "$LOCK_HELD" = 1 ]; then release_lock; fi' EXIT
+338:+take_lock || { _lk=$?; [ "$_lk" -eq 2 ] && exit 3; exit 0; }
+350:@@ -50,21 +141,21 @@ log(){ echo "[$(date '+%F %T')] $*"; }
+362:+  if [ -z "$GAP_JSON" ]; then release_lock; return 0; fi   # 還沒選中 gap 的早退(無日報/無 gap):無輪無帳
+373:@@ -98,21 +189,21 @@ print('CONSEC_FAIL' if run_ledger.consecutive_fail_days(lg,'$TODAY') else 'OK')
+385:+  release_lock
+396:diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+400:@@ -1,11 +1,11 @@
+413:@@ -1037,29 +1037,153 @@ class TestLoopShellTrapR1Folds(unittest.TestCase):
+450:+    def test_lock_not_yielded_to_recycled_pid(self):
+469:+    def test_lock_broken_pid_file_is_not_a_takeover_ticket(self):
+488:+    def test_lock_takeover_is_atomic(self):
+507:+            # 第一版拿到鎖就馬上結束,而收尾 trap 會把鎖放掉——後來的行程再拿到那把鎖
+554:+            # ★誠實記一個沒有守衛的地方★:take_lock 進到接管權區之後還會「再確認一次
+  1020	    def test_three_strikes_covered_and_alert_path(self):
+  1021	        # conf-f3:滿 3 次熔斷→covered+喊人線路真的走到(無 token → no-token)
+  1022	        root, gov, scripts, home, bindir = self._sandbox(
+  1023	            anchor_ok=False,
+  1024	            backlog_rows=[{"weakness": "頑固gap", "suggestion": "x", "value_score": 0.5,
+  1025	                           "last_seen": "2099-01-01", "source_date": "2099-01-01",
+  1026	                           "pipeline_failures": 2}],
+  1027	            report_gaps=[])
+  1028	        r = self._run(root, home, bindir)
+  1029	        self.assertIn("轉 covered 留人", r.stdout)
+  1030	        self.assertIn("no-token", r.stdout)                      # LINE 線路走到了(打樁無 token)
+  1031	        self.assertIn("頑固gap", gap_select.load_covered(gov / "covered.jsonl"))
+  1032	
+  1033	    def test_consecutive_fail_days_alert_fires(self):
+  1034	        # conf-f6:預埋兩個失敗有跑日→收尾判 CONSEC_FAIL→喊人線路走到
+  1035	        import datetime
+  1036	        d1 = (datetime.date.today() - datetime.timedelta(days=2)).isoformat()
+  1037	        d2 = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+  1038	        root, gov, scripts, home, bindir = self._sandbox(
+  1039	            anchor_ok=False,
+  1040	            preseed_ledger=[
+  1041	                {"ts": d1 + "T10:00:00+08:00", "loop": "auto-" + d1, "outcome": "pipeline_fail:api_error"},
+  1042	                {"ts": d2 + "T10:00:00+08:00", "loop": "auto-" + d2, "outcome": "pipeline_fail:truncated"}])
+  1043	        r = self._run(root, home, bindir)
+  1044	        self.assertIn("連兩個有跑日", r.stdout)
+  1045	
+  1046	    def test_lock_blocks_concurrent_run(self):
+  1047	        """s2-f1:鎖被★真的另一份 autonomous-loop★持有 → 本次直接退出不搶寫。
+  1048	
+  1049	        ★2026-09-07 改過這條的現場★:原本拿「本測試行程自己的 pid」當持鎖者,
+  1050	        而那是一支 python。取鎖多了一道身分驗證(pid 會被作業系統回收給無關的行程,
+  1051	        那時 kill -0 說「活著」,這支就永遠讓行、自主迴圈永久停擺而且沒有訊息)之後,
+  1052	        這條當場翻紅——★它翻得對★:舊寫法把那個 bug 當成正確行為釘住了。
+  1053	        ★同一個錯的替身在 daily-governance 那批也出現過一次,兩邊都用 python 冒充 shell 腳本。★
+  1054	        """
+  1055	        import subprocess as _sp
+  1056	        root, gov, scripts, home, bindir = self._sandbox()
+  1057	        holder = gov / "fake-autonomous-loop.sh"
+  1058	        holder.write_text("#!/bin/bash\nsleep 60\n", encoding="utf-8")
+  1059	        os.chmod(holder, 0o755)
+  1060	        proc = _sp.Popen(["bash", str(holder)], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+  1061	        try:
+  1062	            lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+  1063	            (lock / "pid").write_text(str(proc.pid))
+  1064	            r = self._run(root, home, bindir)
+  1065	            self.assertEqual(r.returncode, 0)
+  1066	            self.assertIn("另一份", r.stdout)
+  1067	            self.assertEqual(self._calls(scripts), [])           # 什麼都沒做
+  1068	        finally:
+  1069	            proc.kill(); proc.wait(timeout=10)
+  1070	
+  1071	    def test_lock_not_yielded_to_recycled_pid(self):
+  1072	        """★pid 被作業系統回收給無關的活行程 → 要接管,不能永遠讓行★(2026-09-07)。
+  1073	
+  1074	        只用 kill -0 判不出來:它只回答「這個 pid 現在有沒有行程」,不回答「是不是原本那支」。
+  1075	        這台機器開機 59 天沒重開過,pid 空間有限,長時間 churn 下重用是實際會發生的事。
+  1076	        一旦踩到,自主迴圈會永久停擺——★而且完全沒有訊息★。
+  1077	        """
+  1078	        import subprocess as _sp
+  1079	        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
+  1080	        unrel = _sp.Popen([sys.executable, "-c", "import time;time.sleep(60)"],
+  1081	                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+  1082	        try:
+  1083	            lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+  1084	            (lock / "pid").write_text(str(unrel.pid))
+  1085	            r = self._run(root, home, bindir)
+  1086	            self.assertIn("接管", r.stdout)
+  1087	        finally:
+  1088	            unrel.kill(); unrel.wait(timeout=10)
+  1089	
+  1090	    def test_lock_broken_pid_file_is_not_a_takeover_ticket(self):
+  1091	        """★pid 檔內容不是數字(寫到一半被砍)→ 年輕的鎖要讓行,不能搶★(2026-09-07)。
+  1092	
+  1093	        舊邏輯:`[ -n "$OLDPID" ] && kill -0` 對垃圾字串必然為假,`[ -z "$OLDPID" ]` 也為假
+  1094	        ——★兩個分支都跳過,直接掉到「接管」★,連 0 秒齡的新鎖都搶。
+  1095	        空字串 pid 反而有 60 分鐘保護,內容壞掉的 pid 卻完全沒有。
+  1096	        """
+  1097	        root, gov, scripts, home, bindir = self._sandbox()
+  1098	        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+  1099	        (lock / "pid").write_text("garbage-not-a-pid")
+  1100	        r = self._run(root, home, bindir)
+  1101	        self.assertEqual(r.returncode, 0)
+  1102	        self.assertIn("讓行", r.stdout)
+  1103	        self.assertNotIn("接管", r.stdout)
+  1104	        self.assertEqual(self._calls(scripts), [])
+  1105	
+  1106	    def test_lock_takeover_is_atomic(self):
+  1107	        """★接管殘鎖不准讓兩份同時跑起來★(2026-09-07 實測重現)。
+  1108	
+  1109	        舊做法是「rm 掉舊鎖再 mkdir」,擋不住這個排列:
+  1110	          A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功)
+  1111	        兩邊的 mkdir 都回 0,兩邊都以為自己拿到鎖,於是同時寫 backlog/archive——
+  1112	        而那正是這把鎖存在的理由。
+  1113	        ★set -e 幫不上忙★:兩個 mkdir 都成功,沒有非零可攔;實測舊邏輯
+  1114	        30 輪 × 8 行程有 1 輪多人同時拿到。
+  1115	
+  1116	        這裡只測取鎖那一段(整支跑八份太慢):把它抽出來當獨立腳本,對同一把殘鎖並行搶。
+  1117	        """
+  1118	        import subprocess as _sp
+  1119	        src = (Path(__file__).resolve().parent.parent / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
+  1120	        i = src.index('LOCKDIR="$SCRIPT_DIR/.autonomous-loop.lock"')
+  1121	        j = src.index("LOCK_HELD=1") + len("LOCK_HELD=1")
+  1122	        d = Path(tempfile.mkdtemp())
+  1123	        try:
+  1124	            # ★探針必須「持鎖一段時間」才量得到雙開★(2026-09-07 踩到:
+  1125	            # 第一版拿到鎖就馬上結束,而收尾 trap 會把鎖放掉——後來的行程再拿到那把鎖
+  1126	            # 是★合法的接續★不是雙開。診斷輸出裡那支「沒有接管那行、直接 GOT」的
+  1127	            # 就是這樣來的。真腳本持鎖好幾分鐘,所以現場要模擬那個。
+  1128	            # ★這是同一天第十次「現場沒搭起來」★,而且差一點讓我去修一個不存在的 bug。
+  1129	            # 名字也要含 autonomous-loop:身分驗證找的就是這個字。
+  1130	            probe = d / "autonomous-loop-probe.sh"
+  1131	            probe.write_text('#!/usr/bin/env bash\nset -euo pipefail\nSCRIPT_DIR="$1"\n'
+  1132	                             + src[i:j] + '\necho "GOT $$"\nsleep 2\n', encoding="utf-8")
+  1133	            os.chmod(probe, 0o755)
+  1134	            lock = d / ".autonomous-loop.lock"
+  1135	            doubled = 0
+  1136	            _diag = []
+  1137	            rounds = 20
+  1138	            for _ in range(rounds):
+  1139	                if lock.exists():
+  1140	                    import shutil as _sh
+  1141	                    _sh.rmtree(lock, ignore_errors=True)
+  1142	                lock.mkdir()
+  1143	                (lock / "pid").write_text("999999")              # 確定死透
+  1144	                os.utime(lock, (0, time.time() - 7200))          # 鎖齡 2 小時
+  1145	                procs = [_sp.Popen(["bash", str(probe), str(d)],
+  1146	                                   stdout=_sp.PIPE, stderr=_sp.PIPE, text=True) for _ in range(8)]
+  1147	                outs = [pr.communicate(timeout=120) for pr in procs]
+  1148	                if sum(1 for o, _e in outs if "GOT" in o) > 1:
+  1149	                    doubled += 1
+  1150	                    _diag.append([(o.strip(), e.strip()[-200:]) for o, e in outs if o.strip() or e.strip()])
+  1151	            self.assertEqual(doubled, 0,
+  1152	                             f"★八個行程搶同一把殘鎖,{doubled}/{rounds} 輪雙開★\n"
+  1153	                             + "\n".join(str(x) for x in _diag[:2]))
+  1154	
+  1155	            # ★後來者不准搶走已經有人正常持著的鎖★
+  1156	            shutil_ = __import__("shutil")
+  1157	            shutil_.rmtree(lock, ignore_errors=True)
+  1158	            lock.mkdir()
+  1159	            (lock / "pid").write_text("999999")
+  1160	            os.utime(lock, (0, time.time() - 7200))
+  1161	            holder = _sp.Popen(["bash", str(probe), str(d)],
+  1162	                               stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+  1163	            time.sleep(0.8)
+  1164	            held_pid = (lock / "pid").read_text().strip()
+  1165	            self.assertNotEqual(held_pid, "999999", "★前置★ 現場成立:接管真的發生了、pid 換人了")
+  1166	            late = _sp.run(["bash", str(probe), str(d)], capture_output=True, text=True, timeout=120)
+  1167	            self.assertNotIn("GOT", late.stdout,
+  1168	                             f"★鎖已經有人正常持著,後來者不准拿到★\n{late.stdout}\n{late.stderr}")
+  1169	            self.assertEqual((lock / "pid").read_text().strip(), held_pid,
+  1170	                             "★而且不准把別人的 pid 蓋掉★")
+  1171	            holder.kill(); holder.wait(timeout=10)
+  1172	            # ★誠實記一個沒有守衛的地方★:take_lock 進到接管權區之後還會「再確認一次
+  1173	            # 鎖是不是原來那一把」。那一步守的窗口是——B 讀到舊 pid 決定接管、卡在接管權外面,
+  1174	            # A 在這期間完成接管並釋放接管權,B 才進去。要從外部穩定構造這個順序,
+  1175	            # 得在腳本裡插測試鉤子;現在沒有。★所以那一步是防禦深度,不是有守衛的行為。★
+  1176	            # (拿掉它重跑整套:0 條紅——這句話是量出來的,不是推測。)
+  1177	        finally:
+  1178	            import shutil as _sh
+  1179	            _sh.rmtree(d, ignore_errors=True)
+  1180	
+  1181	    def test_stale_lock_taken_over(self):
+  1182	        # s2-f1:持鎖行程已死→接管照跑
+  1183	        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
+  1184	        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+  1185	        (lock / "pid").write_text("99999999")
+  1186	        r = self._run(root, home, bindir)
+  1187	        self.assertIn("接管", r.stdout)
+  1188	        self.assertEqual(r.returncode, 1)                        # 照常跑到 anchor 失敗
+  1189	
+  1190	    def test_inflight_marker_recovered_on_next_run(self):
+  1191	        # s2-f3:上次被 SIGKILL 砍在半路的 gap,下次開場放回
+  1192	        root, gov, scripts, home, bindir = self._sandbox(
+  1193	            anchor_ok=False, report_gaps=[],
+  1194	            inflight={"weakness": "被硬砍的gap", "suggestion": "x", "value_score": 0.42,
+  1195	                      "last_seen": "2026-08-20", "source_date": "2026-08-20"})
+  1196	        r = self._run(root, home, bindir)
+  1197	        self.assertIn("被硬砍", r.stdout)
+  1198	        rows = backlog.load_backlog(gov / "backlog.jsonl")
+  1199	        mine = [x for x in rows if x["weakness"] == "被硬砍的gap"]
+  1200	        self.assertEqual(len(mine), 1, rows)
+  1201	        self.assertAlmostEqual(mine[0]["value_score"], 0.42 * 0.95, places=4)  # 原分放回,再吃當天正常衰減一次
+  1202	        self.assertFalse((gov / ".inflight-gap.json").exists())  # 標記消化掉
+  1203	
+  1204	
+  1205	class TestLoopShellTrapR2Folds(unittest.TestCase):
+  1206	    """r2 delta 折修釘(d-f1/d-f2/d-f3;紅證=delta 席實跑重現)。"""
+  1207	    _sandbox = TestLoopShellTrapR1Folds._sandbox
+  1208	    _run = TestLoopShellTrap._run
+  1209	    _calls = TestLoopShellTrap._calls
+  1210	    _env = TestLoopShellTrapR1Folds._env
+  1211	
+  1212	    @unittest.skipIf(__import__("os").geteuid() == 0, "root 繞過權限位,chmod 444 重現法不成立(r3 觀察)")
+  1213	    def test_covered_write_fail_gap_requeued_not_lost(self):
+  1214	        # d-f1:covered 寫失敗→gap 當場放回,不因 continue 蒸發
+  1215	        import os, stat
+  1216	        root, gov, scripts, home, bindir = self._sandbox(
+  1217	            envelopes=[self._env({"skipped": True, "reason": "r", "converged": False,
+  1218	                                  "topic": "t", "spec_path": ""})])
+  1219	        (gov / "covered.jsonl").write_text("")
+  1220	        (gov / "covered.jsonl").chmod(0o444)     # 讀得到、append 必炸(delta 席同款重現法)
+  1221	        r = self._run(root, home, bindir)
+  1222	        rows = backlog.load_backlog(gov / "backlog.jsonl")
+  1223	        mine = [x for x in rows if x["weakness"] == "沙箱測試gap"]
+  1224	        self.assertEqual(len(mine), 1, r.stdout + r.stderr)      # 放回了,沒蒸發
+  1225	        self.assertGreaterEqual(mine[0]["pipeline_failures"], 1)  # 同輪可能反覆 skip 疊計數
+  1226	        self.assertEqual(mine[0]["value_score"], 0.5)             # 分數不動
+  1227	        self.assertIn("當場放回", r.stdout)
+  1228	
+  1229	    def test_young_lock_without_pid_yields(self):
+  1230	        # d-f2:空 pid+年輕鎖=對方剛起步,讓行不接管
+  1231	        root, gov, scripts, home, bindir = self._sandbox()
+  1232	        (gov / ".autonomous-loop.lock").mkdir()  # 剛建立、沒 pid
+  1233	        r = self._run(root, home, bindir)
+  1234	        self.assertEqual(r.returncode, 0)
+  1235	        self.assertIn("讓行", r.stdout)
+  1236	        self.assertEqual(self._calls(scripts), [])
+  1237	
+  1238	    def test_old_lock_without_pid_taken_over(self):
+  1239	        # d-f2:空 pid 但鎖齡過老→接管
+  1240	        import os, time
+  1241	        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
+  1242	        lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+  1243	        old = time.time() - 7200
+  1244	        os.utime(lock, (old, old))
+  1245	        r = self._run(root, home, bindir)
+  1246	        self.assertIn("接管", r.stdout)
+  1247	
+  1248	    def test_inflight_recovery_failure_keeps_marker(self):
+  1249	        # d-f3:放回失敗→標記保留,不自我銷毀
+  1250	        root, gov, scripts, home, bindir = self._sandbox(
+  1251	            anchor_ok=False, report_gaps=[],
+  1252	            inflight={"weakness": "救不回的gap", "suggestion": "x", "value_score": 0.4,
+  1253	                      "last_seen": "2026-08-20", "source_date": "2026-08-20"})
+  1254	        (gov / "backlog.jsonl").mkdir()          # requeue 寫 backlog 必炸
+  1255	        r = self._run(root, home, bindir)
+  1256	        self.assertIn("放回失敗", r.stdout)
+  1257	        self.assertTrue((gov / ".inflight-gap.json").exists(), "標記=唯一證據,失敗不准刪")
+  1258	
+  1259	
+  1260	
+   190	      MSG="⚠ 自主迴圈連兩個有跑日管線全失敗($(echo "$LEDGER_OUT" | head -1));死因分類看 canary 帳 outcome 欄,log $LOGDIR/"       LINE_TOKEN="$(cat "$HOME/.config/ai-daily/line_token" 2>/dev/null)" python3 -c "
+   191	import sys, os; sys.path.insert(0,'$REPO/governance')
+   192	from autonomous_loop import line_notify
+   193	t=os.environ.get('LINE_TOKEN','')
+   194	print('LINE', line_notify.send(line_notify.build_alert(os.environ['MSG']), t) if t else 'no-token')" || true
+   195	    fi
+   196	  else
+   197	    log "七天彙總:算不出來(詳 $LOGDIR/finalize-$TODAY.err)——不擋收尾,但這行沒了要查"
+   198	  fi
+   199	  release_lock
+   200	}
+   201	trap finalize EXIT
+   202	
+   203	# ── in-flight 殘留回收(code-r1 s2-f3):上次被 SIGKILL/斷電砍在半路的 gap 放回 ──
+   204	if [ -f "$INFLIGHT" ]; then
+   205	  RQ0="$(python3 -c "
+   206	import sys, json; sys.path.insert(0,'$REPO/governance')
+   207	from autonomous_loop import gap_select
+   208	g=json.load(open('$INFLIGHT'))
+   209	print(gap_select.requeue_pipeline_fail('$SCRIPT_DIR/backlog.jsonl', g, '$SCRIPT_DIR/covered.jsonl'))
+   210	" 2>>"$LOGDIR/finalize-$TODAY.err" || echo '?')"
+   211	  case "$RQ0" in
+   212	    requeued|covered)
+   213	      log "上次執行被硬砍(SIGKILL/斷電),殘留的選中 gap 已放回($RQ0)"; rm -f "$INFLIGHT";;
+   214	    *)
+   215	      log "⚠ 上次被硬砍的 gap 放回失敗($RQ0)——標記保留,下次開場再試;唯一證據不自我銷毀(詳 $LOGDIR/finalize-$TODAY.err)";;
+   216	  esac
+   217	fi
+   218	
+   219	if [ ! -f "$REPORT" ]; then
+   220	  if [ "$MODE" = "--dry-run" ]; then
+   221	    REPORT="$(ls -t "$SCRIPT_DIR/reports/"governance-2*.json 2>/dev/null | head -1 || true)"
+   222	    [ -n "$REPORT" ] && log "今日無日報,dry-run fallback:$REPORT" || { log "無任何日報,結束"; exit 0; }
+   223	  else log "今日無日報($TODAY),跳過"; exit 0; fi
+   224	fi
+   225	
+   226	# ── 週期考卷(2026-08-05 掛載):雙庫檢索考卷 ≥7 天未跑就補跑——把「hook 調參靠記得」
+   227	# 變「定期發生」;fail-open,考卷失敗只記 log 不阻斷 gap 流程。判定/漂移細節在
+   228	# retrieval_eval.py 自己的 gate 輸出與 history jsonl,此處只管排程。
+   229	run_exam(){ local repo="$1" tag="$2"
+   230	  local hist="$repo/governance/eval/retrieval-eval-history.jsonl"
+   231	  local gold="$repo/governance/eval/retrieval-goldset.json"
+   232	  [ -f "$gold" ] || { log "考卷($tag):無 goldset,跳過"; return 0; }
+   233	  # 取「最後一筆帶 ts 的 goldset 列」(單席快審 F3:末行可能是無 ts 的 auto-cochange 列→誤判 1970 天天重考)
+   234	  local last; last="$(python3 -c '
+   235	import json,sys
+   236	last="1970-01-01"
+   237	try:
+   238	    for l in open(sys.argv[1],encoding="utf-8"):
+   239	        try: d=json.loads(l)
+   240	        except ValueError: continue
+   241	        if d.get("ts") and d.get("mode","goldset")=="goldset": last=d["ts"]
+   242	except OSError: pass
+   243	print(last)' "$hist" 2>/dev/null || echo 1970-01-01)"
+   244	  local last_s; last_s="$(date -j -f %F "$last" +%s 2>/dev/null || echo 0)"
+   245	  local age=$(( ( $(date +%s) - last_s ) / 86400 ))
+
+[35m[3mcodex[0m[0m
+讀碼已抓到一個高風險交互：`take_lock` 被放在 `||` 左側，Bash 會抑制函式體內的 `errexit`；因此不能把 `set -e` 當成 `lock_write_pid` 失敗的保險。我會用獨立 mutant 確認它是否會「沒寫 pid 卻回報拿鎖成功」，並壓測殘留 `.steal` 的接管者競態。
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc 'python3 -m unittest scripts.test_autonomous_loop.TestLoopShellTrapR1Folds.test_lock_takeover_is_atomic scripts.test_autonomous_loop.TestLoopShellTrapR1Folds.test_lock_not_yielded_to_recycled_pid scripts.test_autonomous_loop.TestLoopShellTrapR1Folds.test_lock_broken_pid_file_is_not_a_takeover_ticket scripts.test_autonomous_loop.TestLoopShellTrapR2Folds.test_young_lock_without_pid_yields scripts.test_autonomous_loop.TestLoopShellTrapR2Folds.test_old_lock_without_pid_taken_over'[0m in /Users/enzo/harness/lumos-toolchain
+[31m exited 1 in 4ms:[0m
+[35m[3mexec[0m[0m
+[1m/bin/zsh -lc "bash -c 'set -e; lock_write_pid(){ false; }; take_lock(){ lock_write_pid; return 0; }; take_lock || { rc="'$?; echo fallback:$rc; }; echo TAKE_RC:$? SURVIVED'"'
+bash -c 'set -e; lock_holder_alive(){ return 1; }; take_lock(){ lock_holder_alive 1; local hv="'$?; echo HV:$hv; return 0; }; take_lock || echo fallback; echo SURVIVED'"'
+sed -n '194,345p' governance/review-reports/code-batch19/r1-snapshot.patch"[0m in /Users/enzo/harness/lumos-toolchain
+[32m succeeded in 0ms:[0m
+TAKE_RC:0 SURVIVED
+HV:1
+SURVIVED
+diff --git a/governance/autonomous-loop.sh b/governance/autonomous-loop.sh
+index ca63f89..75c9efa 100755
+--- a/governance/autonomous-loop.sh
++++ b/governance/autonomous-loop.sh
+@@ -6,42 +6,133 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+ MODE="${1:---dry-run}"
+ MAXR="${2:-6}"
+ # 非 dry-run 停用(2026-07-29 使用者裁定,Codex 外審採納):子 agent 權限隔離
+ # (Systems/nested-agent-permission-scope,planned)落地前,confused-deputy 已知漏洞
+ # 不留可執行入口——--pr 直接拒跑。解禁條件:read-only child isolation 落地+過 code-loop。
+ if [ "$MODE" != "--dry-run" ]; then
+   echo "autonomous-loop: 非 dry-run 已停用(2026-07-29 裁定,詳見圖譜 nested-agent-permission-scope);dry-run 照常" >&2
+   exit 2
+ fi
+ # ── 整跑鎖(code-r1 s2-f1/f2):launchd+人工同時跑會互蓋 backlog/archive——mkdir 原子搶鎖,
+-# 鎖裡放 PID;持鎖行程已死(kill -0 不到)視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。
++# 鎖裡放 PID;持鎖行程已死視為殘鎖接管。SIGKILL 殘鎖靠這條自癒。
++#
++# ★2026-09-07 補三個洞,三個都實測過★(全 repo 審視 #18 在抄這段時被五席挖出來,
++#  當時只修了抄過去那一份,這裡是回頭把來源也修掉;守衛 t_daily_wrapper_lock_matches_source
++#  比的是四個行為還在不在、不比逐字,所以兩邊寫法不必一樣):
++#
++#  ①★雙開★:「rm 掉舊鎖再 mkdir」擋不住這個排列——
++#    A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功),兩邊都以為自己拿到鎖。
++#    ★set -e 幫不上忙★:兩個 mkdir 都成功,沒有非零可攔。實測這一段的舊邏輯
++#    30 輪 × 8 行程有 1 輪多人同時拿到(比 daily-governance 的 19/30 低,是因為
++#    set -e 攔掉了「輸的那個 mkdir 失敗」那半,但沒攔掉這條)。
++#    改法:接管整段走一把「接管權」小鎖,進去後再確認殘鎖還是原來那一把。
++#
++#  ②★pid 被作業系統回收給無關的活行程★ → kill -0 說「活著」→ 這支永遠讓行、
++#    自主迴圈永久停擺而且完全沒有訊息。實測:10 天前的殘鎖 + 一個活著的無關行程,
++#    舊邏輯印「另一份正在跑」直接退出。改法:再問一次「那個 pid 的指令像不像我們這支」。
++#    ★問不出來就保守當成活著★:誤判成死掉會雙開,比多讓一次行嚴重得多。
++#
++#  ③★pid 檔內容不是數字★(寫到一半被砍)→ 兩個分支都不成立 → 直接掉到「接管」,
++#    連 0 秒齡的新鎖都搶。實測:pid 寫 garbage、鎖 0 秒齡,舊邏輯當場接管。
++#    改法:非數字一律當成「pid 讀不到」,走鎖齡兜底那條。
+ LOCKDIR="$SCRIPT_DIR/.autonomous-loop.lock"
+-if ! mkdir "$LOCKDIR" 2>/dev/null; then
+-  OLDPID="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
+-  if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+-    echo "[$(date '+%F %T')] 另一份 autonomous-loop 正在跑(pid $OLDPID),本次退出——不搶寫 backlog"; exit 0
+-  fi
+-  # ★空 pid ≠ 殘鎖★(r2 d-f2 TOCTOU):對方可能剛 mkdir 成功、還沒來得及寫 pid——
+-  # 「pid 沒寫」與「pid 寫過但行程死了」不能走同一條接管路。只有鎖齡超過 60 分鐘
+-  # (真跑最長也早該寫完 pid)才視為殘鎖;年輕的空 pid 鎖一律讓行。
+-  if [ -z "$OLDPID" ]; then
++
++lock_holder_alive() {   # $1=pid;0=是我們這支 1=不是 2=問不出來(呼叫端當成活著)
++  kill -0 "$1" 2>/dev/null || return 1
++  local cmd; cmd="$(ps -p "$1" -o command= 2>/dev/null || echo '')"
++  [ -z "$cmd" ] && return 2
++  case "$cmd" in *autonomous-loop*) return 0 ;; *) return 1 ;; esac
++}
++lock_write_pid() {   # 也走暫存→改名:這個 repo 的教訓是共用檔一律原子寫入
++  local t="$LOCKDIR/pid.tmp"
++  echo $$ > "$t" 2>/dev/null && mv -f "$t" "$LOCKDIR/pid" 2>/dev/null
++}
++take_lock() {   # 0=拿到  1=別人在跑,正常讓行  2=鎖壞了,不正常
++  if mkdir "$LOCKDIR" 2>/dev/null; then lock_write_pid; return 0; fi
++  local oldpid; oldpid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
++  case "$oldpid" in ''|*[!0-9]*) oldpid="" ;; esac   # 見③:壞內容等同讀不到
++  if [ -n "$oldpid" ]; then
++    lock_holder_alive "$oldpid"; local hv=$?
++    if [ "$hv" -ne 1 ]; then
++      echo "[$(date '+%F %T')] 另一份 autonomous-loop 正在跑(pid $oldpid),本次退出——不搶寫 backlog"
++      return 1
++    fi
++  else
++    # ★空 pid ≠ 殘鎖★(r2 d-f2 TOCTOU):對方可能剛 mkdir 成功、還沒來得及寫 pid。
+     # 鎖齡用 python 算(stat -f 是 BSD 專屬,Linux 上整句壞掉;r3 e-f1)。
+-    # ★量不出=讓行★:兜底方向必須保守——量不出鎖齡時寧可少跑一天,不搶對方剛拿到的鎖。
+-    LOCK_AGE="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo '')"
+-    if [ -z "$LOCK_AGE" ] || [ "$LOCK_AGE" -lt 3600 ]; then
+-      echo "[$(date '+%F %T')] 另一份 autonomous-loop 疑似剛起步(鎖存在 ${LOCK_AGE:-量不出}s、pid 未寫),本次退出讓行"; exit 0
++    # ★量不出=讓行★:寧可少跑一天,不搶對方剛拿到的鎖。
++    local age
++    age="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo '')"
++    if [ -z "$age" ] || [ "$age" -lt 3600 ]; then
++      echo "[$(date '+%F %T')] 另一份 autonomous-loop 疑似剛起步(鎖存在 ${age:-量不出}s、pid 讀不到),本次退出讓行"
++      return 1
+     fi
+   fi
+-  echo "[$(date '+%F %T')] 發現殘鎖(pid ${OLDPID:-?} 已不在或鎖齡過老),接管"
+-  rm -rf "$LOCKDIR"; mkdir "$LOCKDIR"
+-fi
+-echo $$ > "$LOCKDIR/pid"
++  echo "[$(date '+%F %T')] 發現殘鎖(pid ${oldpid:-讀不到} 不是這支、或鎖齡過老),接管"
++  # 見①:接管整段要互斥,而且進去之後要再確認一次
++  local steal="$LOCKDIR.steal"
++  if ! mkdir "$steal" 2>/dev/null; then
++    local sage
++    sage="$(python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$steal')))" 2>/dev/null || echo 0)"
++    if [ "$sage" -lt 60 ]; then
++      echo "[$(date '+%F %T')] 另一個接管者正在處理,本次退出"; return 1
++    fi
++    rm -rf "$steal" 2>/dev/null || true
++    mkdir "$steal" 2>/dev/null || { echo "[$(date '+%F %T')] 接管失敗(接管權搶不到),本次退出"; return 1; }
++  fi
++  local rc=1
++  # ★這一步是防禦深度,沒有守衛★(2026-09-07 誠實記):它守的窗口是「B 讀到舊 pid 決定接管、
++  # 卡在接管權外面,A 在這期間完成接管並釋放接管權,B 才進去」。要從外部穩定構造這個順序
++  # 得在腳本裡插測試鉤子,現在沒有——拿掉它重跑整套測試是 0 條紅,這句話是量出來的。
++  # 留著的理由:它便宜,而且沒有它時那個窗口會讓 B 把 A 那把全新的鎖搬走。
++  local nowpid; nowpid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')"
++  case "$nowpid" in ''|*[!0-9]*) nowpid="" ;; esac
++  if [ "$nowpid" != "$oldpid" ]; then
++    echo "[$(date '+%F %T')] 進來後發現鎖已經換人(pid ${nowpid:-讀不到}),不接管,本次退出"
++  else
++    local dead="$LOCKDIR.dead.$$"
++    if ! mv "$LOCKDIR" "$dead" 2>/dev/null; then
++      if [ ! -w "$SCRIPT_DIR" ]; then
++        echo "[$(date '+%F %T')] ★鎖搬不走而且 $SCRIPT_DIR 寫不進去★——這次沒跑,要人來看" >&2
++        rc=2
++      else
++        echo "[$(date '+%F %T')] 接管失敗(鎖剛被釋放),本次退出"
++      fi
++    else
++      rm -rf "$dead" 2>/dev/null || true
++      rm -rf "$LOCKDIR".dead.* 2>/dev/null || true
++      if ! mkdir "$LOCKDIR" 2>/dev/null; then
++        echo "[$(date '+%F %T')] ★接管後鎖建不起來($LOCKDIR)★——這次沒跑,要人來看" >&2
++        rc=2
++      else
++        lock_write_pid; rc=0
++      fi
++    fi
++  fi
++  rm -rf "$steal" 2>/dev/null || true
++  return "$rc"
++}
++
++# ★取鎖與收尾之間不能有裸奔的窗口★:這支有 set -e,從這裡到下面 trap finalize EXIT
++# 之間任何一個指令失敗都會直接中止,鎖就卡到 60 分鐘後才自癒。
++# 所以先裝一個只清鎖的 trap,等 finalize 定義好再換成它(finalize 自己也會清鎖)。
++LOCK_HELD=0
++release_lock() {
++  # ★只清自己的那把★:收尾原本是無條件 rm——如果這支跑到一半被別人★合法接管★走了
++  # (殘鎖判定成立時真的會發生),那一下刪的是別人正在用的鎖。
++  # 判準用鎖裡的 pid 是不是自己,不用 LOCK_HELD:那個旗標只知道「我曾經拿到過」。
++  [ "$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')" = "$$" ] || return 0
++  rm -rf "$LOCKDIR" 2>/dev/null || true
++}
++trap 'if [ "$LOCK_HELD" = 1 ]; then release_lock; fi' EXIT
++take_lock || { _lk=$?; [ "$_lk" -eq 2 ] && exit 3; exit 0; }
++LOCK_HELD=1
+ 
+ TODAY="$(date +%F)"
+ REPORT="$SCRIPT_DIR/reports/governance-$TODAY.json"
+ PENDING="$SCRIPT_DIR/pending";  mkdir -p "$PENDING"
+ LOGDIR="$SCRIPT_DIR/logs";      mkdir -p "$LOGDIR"
+ SCRATCH="$(mktemp -d "/tmp/auto-loop-$TODAY.XXXXXX")"; mkdir -p "$SCRATCH/kg" "$SCRATCH/spec"   # mktemp:防可預測路徑搶佔(外審 minor)
+
+[35m[3mcodex[0m[0m
+severity: blocker
+
+1. severity: blocker  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:253  
+逐字引句: `if mkdir "$LOCKDIR" 2>/dev/null; then lock_write_pid; return 0; fi`  
+why: `take_lock` 是 `take_lock || {...}` 的左操作數；Bash 會在這個呼叫脈絡中關閉整個函式體的 `errexit`。因此 `lock_write_pid` 失敗不會終止腳本，緊接的 `return 0` 仍宣告成功。接管分支同樣在 `lock_write_pid; rc=0` 無條件把失敗改寫成成功。結果是行程開始修改 backlog/archive，但鎖沒有有效 pid；60 分鐘後另一行程可把仍在執行的它當殘鎖接管，造成雙開。獨立 mutant 實跑：
+
+```text
+TAKE_RC:0 SURVIVED
+```
+
+mutant 中 `lock_write_pid(){ false; }`，仍得到成功。這也證明作者對 `set -e` 的依賴不成立。`local x; x="$(...)"` 分開寫本身可取狀態，但在這個被 `||` 抑制 errexit 的函式裡，不會提供預期的自動退出。
+
+2. severity: blocker  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:283  
+逐字引句: `if ! mkdir "$steal" 2>/dev/null; then`  
+why: 殘留 `.steal` 的自癒重新用了本批正在修掉的非原子模式：多個接管者都判定 `.steal` 超過 60 秒後，各自執行 `rm -rf "$steal"` 再 `mkdir "$steal"`。可排列成 A 刪、A 建、B 刪掉 A 的新 `.steal`、B 建；兩者都進入接管權區。之後兩者還會無條件刪 `.steal`，因此其中一方亦可刪掉另一方正在持有的接管權。這使「接管權小鎖」在最需要自癒的情境重新失去互斥性。讀碼推論，未實跑；目前唯讀沙箱無可用暫存目錄，測試實際輸出為 `FileNotFoundError: No usable temporary directory found`。
+
+3. severity: major  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:337  
+逐字引句: `trap 'if [ "$LOCK_HELD" = 1 ]; then release_lock; fi' EXIT`  
+why: trap 雖先安裝，卻要到 `take_lock` 返回後才把 `LOCK_HELD=1`。若行程在成功建立鎖／寫 pid 後、執行賦值前收到 TERM/HUP，EXIT trap 會看到 0 而拒絕清鎖。這正是聲稱已消除的「取鎖到 trap 生效」窗口，只是縮成一條指令間的非同步窗口；之後要等殘鎖機制處理。讀碼推論，未實跑。修法應讓「成功取得鎖」與 ownership flag 的建立位於同一成功路徑，trap 判準也不應在此刻仍依賴尚未更新的 flag。
+
+4. severity: major  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:245  
+逐字引句: `case "$cmd" in *autonomous-loop*) return 0 ;; *) return 1 ;; esac`  
+why: 身分驗證只做未定錨的文字包含判斷，既有假陰性也有假陽性。腳本改名後，即使是真持鎖者也回 1，後來者會搬走活鎖並雙開；反之，任何無關行程只要參數、工作名稱或路徑含 `autonomous-loop` 就被當成真持鎖者，PID 回收問題仍可讓迴圈永久讓行。從不同路徑呼叫只要 basename 尚含該字通常可過；`ps` 空輸出走 2、保守讓行是正確方向，但非空且被截斷為不含關鍵字會危險地判死。pid 若是子行程也會依命令文字碰運氣，沒有父子或啟動身分證據。讀碼推論，未實跑。
+
+5. severity: major  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:331  
+逐字引句: `[ "$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')" = "$$" ] || return 0`  
+why: `release_lock` 的「讀 pid → rm 鎖目錄」不是原子操作。它若先讀到自己的 pid，另一接管者隨後把舊目錄搬走並建立新鎖，原行程接著會 `rm -rf "$LOCKDIR"`，刪掉新持鎖者的合法鎖。這在身分驗證假陰性造成活行程可被接管時可實際串起。pid 恰在比較前被覆成別人的 pid時會安全地不刪；pid 不存在也會不刪，但留下無 pid 鎖並造成最長 60 分鐘停擺。若覆寫發生在比較後，判準無法保護。讀碼推論，未實跑。
+
+6. severity: major  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:294  
+逐字引句: `★這一步是防禦深度,沒有守衛★`  
+why: 「無法從外部穩定構造、必須插測試鉤子」的判斷不成立。腳本在搶 `.steal` 前先輸出「發現殘鎖」；外部測試可讀到該行後立即 SIGSTOP B，讓 A 完成接管並釋放 `.steal`，再 SIGCONT B。刪掉 `nowpid != oldpid` 的 mutant 後，B 會搬走 A 的新鎖；保留時則應輸出「鎖已經換人」並退出。現有探針只同時啟動八份，沒有控制這個時序，所以拿掉再確認仍全綠是假綠，不是該行不可測。讀碼推論，未實跑。
+
+備註：目前的「持鎖 sleep 2 秒」探針已修正作者前兩次把合法接續誤判成雙開的問題；它確實加入「接管已發生、pid 已換人」的前置斷言。不過它沒有預埋過期 `.steal`、沒有 mutation `lock_write_pid` 失敗，也沒有外部 SIGSTOP/SIGCONT 排程，因此上述關鍵分支仍未被守住。指定的五條測試在本審查沙箱皆因沒有可寫暫存目錄而 ERROR，不能把本次結果算綠。
+
+CODEX DONE
+[1mhook:[0m [2mStop[0m
+[1mhook:[0m [2mStop[0m Completed
+[2mtokens used[0m
+70,941
+severity: blocker
+
+1. severity: blocker  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:253  
+逐字引句: `if mkdir "$LOCKDIR" 2>/dev/null; then lock_write_pid; return 0; fi`  
+why: `take_lock` 是 `take_lock || {...}` 的左操作數；Bash 會在這個呼叫脈絡中關閉整個函式體的 `errexit`。因此 `lock_write_pid` 失敗不會終止腳本，緊接的 `return 0` 仍宣告成功。接管分支同樣在 `lock_write_pid; rc=0` 無條件把失敗改寫成成功。結果是行程開始修改 backlog/archive，但鎖沒有有效 pid；60 分鐘後另一行程可把仍在執行的它當殘鎖接管，造成雙開。獨立 mutant 實跑：
+
+```text
+TAKE_RC:0 SURVIVED
+```
+
+mutant 中 `lock_write_pid(){ false; }`，仍得到成功。這也證明作者對 `set -e` 的依賴不成立。`local x; x="$(...)"` 分開寫本身可取狀態，但在這個被 `||` 抑制 errexit 的函式裡，不會提供預期的自動退出。
+
+2. severity: blocker  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:283  
+逐字引句: `if ! mkdir "$steal" 2>/dev/null; then`  
+why: 殘留 `.steal` 的自癒重新用了本批正在修掉的非原子模式：多個接管者都判定 `.steal` 超過 60 秒後，各自執行 `rm -rf "$steal"` 再 `mkdir "$steal"`。可排列成 A 刪、A 建、B 刪掉 A 的新 `.steal`、B 建；兩者都進入接管權區。之後兩者還會無條件刪 `.steal`，因此其中一方亦可刪掉另一方正在持有的接管權。這使「接管權小鎖」在最需要自癒的情境重新失去互斥性。讀碼推論，未實跑；目前唯讀沙箱無可用暫存目錄，測試實際輸出為 `FileNotFoundError: No usable temporary directory found`。
+
+3. severity: major  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:337  
+逐字引句: `trap 'if [ "$LOCK_HELD" = 1 ]; then release_lock; fi' EXIT`  
+why: trap 雖先安裝，卻要到 `take_lock` 返回後才把 `LOCK_HELD=1`。若行程在成功建立鎖／寫 pid 後、執行賦值前收到 TERM/HUP，EXIT trap 會看到 0 而拒絕清鎖。這正是聲稱已消除的「取鎖到 trap 生效」窗口，只是縮成一條指令間的非同步窗口；之後要等殘鎖機制處理。讀碼推論，未實跑。修法應讓「成功取得鎖」與 ownership flag 的建立位於同一成功路徑，trap 判準也不應在此刻仍依賴尚未更新的 flag。
+
+4. severity: major  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:245  
+逐字引句: `case "$cmd" in *autonomous-loop*) return 0 ;; *) return 1 ;; esac`  
+why: 身分驗證只做未定錨的文字包含判斷，既有假陰性也有假陽性。腳本改名後，即使是真持鎖者也回 1，後來者會搬走活鎖並雙開；反之，任何無關行程只要參數、工作名稱或路徑含 `autonomous-loop` 就被當成真持鎖者，PID 回收問題仍可讓迴圈永久讓行。從不同路徑呼叫只要 basename 尚含該字通常可過；`ps` 空輸出走 2、保守讓行是正確方向，但非空且被截斷為不含關鍵字會危險地判死。pid 若是子行程也會依命令文字碰運氣，沒有父子或啟動身分證據。讀碼推論，未實跑。
+
+5. severity: major  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:331  
+逐字引句: `[ "$(cat "$LOCKDIR/pid" 2>/dev/null || echo '')" = "$$" ] || return 0`  
+why: `release_lock` 的「讀 pid → rm 鎖目錄」不是原子操作。它若先讀到自己的 pid，另一接管者隨後把舊目錄搬走並建立新鎖，原行程接著會 `rm -rf "$LOCKDIR"`，刪掉新持鎖者的合法鎖。這在身分驗證假陰性造成活行程可被接管時可實際串起。pid 恰在比較前被覆成別人的 pid時會安全地不刪；pid 不存在也會不刪，但留下無 pid 鎖並造成最長 60 分鐘停擺。若覆寫發生在比較後，判準無法保護。讀碼推論，未實跑。
+
+6. severity: major  
+blocking: 是  
+file:line: governance/review-reports/code-batch19/r1-snapshot.patch:294  
+逐字引句: `★這一步是防禦深度,沒有守衛★`  
+why: 「無法從外部穩定構造、必須插測試鉤子」的判斷不成立。腳本在搶 `.steal` 前先輸出「發現殘鎖」；外部測試可讀到該行後立即 SIGSTOP B，讓 A 完成接管並釋放 `.steal`，再 SIGCONT B。刪掉 `nowpid != oldpid` 的 mutant 後，B 會搬走 A 的新鎖；保留時則應輸出「鎖已經換人」並退出。現有探針只同時啟動八份，沒有控制這個時序，所以拿掉再確認仍全綠是假綠，不是該行不可測。讀碼推論，未實跑。
+
+備註：目前的「持鎖 sleep 2 秒」探針已修正作者前兩次把合法接續誤判成雙開的問題；它確實加入「接管已發生、pid 已換人」的前置斷言。不過它沒有預埋過期 `.steal`、沒有 mutation `lock_write_pid` 失敗，也沒有外部 SIGSTOP/SIGCONT 排程，因此上述關鍵分支仍未被守住。指定的五條測試在本審查沙箱皆因沒有可寫暫存目錄而 ERROR，不能把本次結果算綠。
+
+CODEX DONE

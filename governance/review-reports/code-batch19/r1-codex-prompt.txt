@@ -1,0 +1,37 @@
+你是外部第三方投稿的審查員,擔任「否決席」。作者不在,不用客氣。
+
+工作目錄:/Users/enzo/harness/lumos-toolchain
+被審材料:governance/review-reports/code-batch19/r1-snapshot.patch
+可直接開檔:governance/autonomous-loop.sh(取鎖段 take_lock / lock_holder_alive /
+lock_write_pid / release_lock)、scripts/test_autonomous_loop.py
+
+★這支是自主迴圈的整跑鎖★——它保護的是 backlog / archive 不被兩份同時寫壞。
+弄鬆了會資料互蓋,弄緊了會讓自主迴圈永久停擺(而且沒有訊息)。
+
+這批修三個實測重現過的洞:①接管用「rm 掉再 mkdir」會雙開(30 輪 × 8 行程 1 輪)
+②pid 被作業系統回收給無關的活行程 → kill -0 說活著 → 永遠讓行 ③pid 檔內容不是數字
+→ 兩個分支都跳過 → 直接接管 0 秒齡的新鎖。另修兩個這支獨有的:取鎖到裝 trap 之間
+有裸奔窗口(這支有 set -e)、收尾無條件刪鎖(可能刪掉別人合法接管走的那把)。
+
+請特別看:
+1. ★新的 take_lock 有沒有留下別的競態★。特別是:接管權小鎖(.steal)自己殘留怎麼辦、
+   mv 與 mkdir 之間的窗口、多個接管者的排列、以及「先裝只清鎖的 trap、後面換成 finalize」
+   這個兩段式 trap 有沒有漏接的路徑。
+2. ★set -e 的交互★:這支有 set -euo pipefail。新加的函式裡哪些指令失敗會讓整支直接死掉?
+   `local x; x="$(...)"` 這種寫法在 set -e 下的行為對嗎?`lock_holder_alive` 用 $? 取回傳值
+   的寫法在 set -e 下安全嗎?
+3. ★release_lock 的判準★:它用「鎖裡的 pid 是不是自己」。什麼情況下會判錯?
+   pid 檔剛好在那一刻被別人覆寫、或 pid 檔不存在,各會怎樣?
+4. ★身分驗證★:`ps -p <pid> -o command=` 找 *autonomous-loop*。
+   什麼情況下會誤判?(檔名被改、從別的路徑呼叫、ps 輸出被截斷、pid 是自己的子行程)
+   「問不出來就當成活著」這個保守方向對不對?
+5. ★測試有沒有假綠★:作者自己記錄了兩次現場沒搭起來(探針拿到鎖就結束、
+   收尾 trap 把鎖放掉,導致「後來者合法拿到」被誤判成雙開)。現在的探針對不對?
+   自己造 mutant 驗,不要照抄作者的翻紅釘。
+6. 作者誠實記了一處「防禦深度、沒有守衛」(接管權區裡的再確認)。那個判斷對嗎?
+   真的沒辦法從外部構造那個現場嗎?
+
+每條 finding 必附:severity(clean|minor|major|blocker)、blocking(是/否)、file:line、
+逐字引句(≥10 字,能在被審材料找到原文)、why(怎麼重現、實際輸出)。
+報告第一行寫獨立的 `severity: <最高嚴重度>`。乾淨也要寫 severity: clean。
+沒真的驗過的寫成備註並註明「讀碼推論,未實跑」。最後印一行 CODEX DONE。

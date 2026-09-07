@@ -1,4 +1,4 @@
-import json, tempfile, unittest, sys, io, urllib.error
+import json, os, tempfile, time, unittest, sys, io, urllib.error
 from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "governance"))
@@ -908,6 +908,46 @@ class TestLoopShellTrap(unittest.TestCase):
         self.assertIn("12.5", " ".join(hit[0]))
 
 
+def _auto_lock_probe(hold="2", extra=""):
+    """把真腳本的取鎖段抽出來當獨立探針(整支跑八份太慢)。
+
+    ★抽的是真碼,不是照著重寫一份★:三個錨點任何一個對不上就當場炸掉,
+    免得有人重構之後這幾支測試變成在測一段已經不存在的邏輯——那是假綠的一種。
+    收尾器在真腳本裡有六十行、依賴的變數要跑到後面才有值;但它開頭就用
+    「還沒選中題目」早退成「只清鎖然後回去」,探針照那條真實路徑立樁。
+    """
+    src = (Path(__file__).resolve().parent.parent / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
+    a0 = 'LOCKDIR="$SCRIPT_DIR/.autonomous-loop.lock"'
+    a1 = "\u2605\u6574\u652f\u53ea\u6709\u9019\u4e00\u500b trap"   # \u2605\u6574\u652f\u53ea\u6709\u9019\u4e00\u500b trap
+    a2 = 'take_lock || { _lk=$?; [ "$_lk" -eq 2 ] && exit 3; exit 0; }'
+    for a in (a0, a1, a2):
+        if src.count(a) != 1:
+            raise AssertionError(
+                "★取鎖段的錨點對不到(出現 %d 次)★:%s\n"
+                "探針抽不到真碼,這幾支鎖測試會變成假綠——改了取鎖段就要一起改這裡。" % (src.count(a), a[:46]))
+    # ★切在整行的開頭★:a1 落在一行註解的中間,直接切會留下半截 "# ...",
+    # 後面接上去的樁全被那個註解吃掉(踩過一次:收尾器整個沒定義)。
+    cut = src.rindex("\n", 0, src.index(a1)) + 1
+    body = src[src.index(a0):cut]
+    return ('#!/usr/bin/env bash\nset -euo pipefail\nSCRIPT_DIR="$1"\n' + body
+            + "finalize(){ release_lock; }   # 真腳本沒選中題目時走的就是這條:只清鎖\n"
+            + extra + "trap finalize EXIT\n" + a2 + '\necho "GOT $$"\nsleep ' + hold + "\n")
+
+
+def _write_probe(d, hold="2", extra=""):
+    # ★檔名要含 autonomous-loop★:身分驗證比對的就是腳本自己的檔名
+    pr = Path(d) / "autonomous-loop-probe.sh"
+    pr.write_text(_auto_lock_probe(hold, extra), encoding="utf-8")
+    os.chmod(pr, 0o755)
+    return pr
+
+
+# 這幾句只要出現,就代表那個行程已經走進「接管區」(拿到接管權、開始動殘鎖)
+_ENTERED = ("GOT", "接管失敗(鎖剛被釋放)", "進來後發現鎖已經換人", "接管後 pid 寫不進去", "鎖搬不走")
+# 這幾句代表它在接管區外面就被擋下來了
+_BLOCKED_OUTSIDE = ("另一個接管者正在處理", "接管權剛被別人處理掉")
+
+
 class TestLoopShellTrapR1Folds(unittest.TestCase):
     """code-r1 折修的 shell 端到端釘(沙箱同 TestLoopShellTrap;紅證=s1 席自建重現+修前無覆蓋)。"""
 
@@ -1044,15 +1084,481 @@ class TestLoopShellTrapR1Folds(unittest.TestCase):
         self.assertIn("連兩個有跑日", r.stdout)
 
     def test_lock_blocks_concurrent_run(self):
-        # s2-f1:鎖被活行程持有→本次直接退出不搶寫
-        import os
+        """s2-f1:鎖被★真的另一份 autonomous-loop★持有 → 本次直接退出不搶寫。
+
+        ★2026-09-07 改過這條的現場★:原本拿「本測試行程自己的 pid」當持鎖者,
+        而那是一支 python。取鎖多了一道身分驗證(pid 會被作業系統回收給無關的行程,
+        那時 kill -0 說「活著」,這支就永遠讓行、自主迴圈永久停擺而且沒有訊息)之後,
+        這條當場翻紅——★它翻得對★:舊寫法把那個 bug 當成正確行為釘住了。
+        ★同一個錯的替身在 daily-governance 那批也出現過一次,兩邊都用 python 冒充 shell 腳本。★
+        """
+        import subprocess as _sp
+        root, gov, scripts, home, bindir = self._sandbox()
+        holder = gov / "fake-autonomous-loop.sh"
+        holder.write_text("#!/bin/bash\nsleep 60\n", encoding="utf-8")
+        os.chmod(holder, 0o755)
+        proc = _sp.Popen(["bash", str(holder)], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        try:
+            lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+            (lock / "pid").write_text(str(proc.pid))
+            # ★身分要真的對得上★:不寫 start 的話它會走「驗不出→鎖齡兜底」那條,
+            # 一樣讓行、一樣綠,但驗到的就不是「認得出活著的持鎖者」這件事了(假綠)。
+            import subprocess as _s2
+            (lock / "start").write_text(
+                _s2.run(["ps", "-p", str(proc.pid), "-o", "lstart="],
+                        capture_output=True, text=True).stdout.strip())
+            r = self._run(root, home, bindir)
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("正在跑", r.stdout)
+            self.assertEqual(self._calls(scripts), [])           # 什麼都沒做
+        finally:
+            proc.kill(); proc.wait(timeout=10)
+
+    def test_lock_not_yielded_to_recycled_pid(self):
+        """★pid 被作業系統回收給無關的活行程 → 要接管,不能永遠讓行★(2026-09-07)。
+
+        只用 kill -0 判不出來:它只回答「這個 pid 現在有沒有行程」,不回答「是不是原本那支」。
+        這台機器開機 59 天沒重開過,pid 空間有限,長時間 churn 下重用是實際會發生的事。
+        一旦踩到,自主迴圈會永久停擺——★而且完全沒有訊息★。
+        """
+        import subprocess as _sp
+        root, gov, scripts, home, bindir = self._sandbox(anchor_ok=False)
+        unrel = _sp.Popen([sys.executable, "-c", "import time;time.sleep(60)"],
+                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        try:
+            lock = gov / ".autonomous-loop.lock"; lock.mkdir()
+            (lock / "pid").write_text(str(unrel.pid))
+            (lock / "start").write_text("Mon Jan  1 00:00:00 2001")   # 鎖記的不是這個行程
+            os.utime(lock, (0, time.time() - 30))                     # 鎖很年輕:兜底救不了,只能靠身分
+            r = self._run(root, home, bindir)
+            self.assertIn("接管", r.stdout)
+        finally:
+            unrel.kill(); unrel.wait(timeout=10)
+
+    def test_lock_broken_pid_file_is_not_a_takeover_ticket(self):
+        """★pid 檔內容不是數字(寫到一半被砍)→ 年輕的鎖要讓行,不能搶★(2026-09-07)。
+
+        舊邏輯:`[ -n "$OLDPID" ] && kill -0` 對垃圾字串必然為假,`[ -z "$OLDPID" ]` 也為假
+        ——★兩個分支都跳過,直接掉到「接管」★,連 0 秒齡的新鎖都搶。
+        空字串 pid 反而有 60 分鐘保護,內容壞掉的 pid 卻完全沒有。
+        """
         root, gov, scripts, home, bindir = self._sandbox()
         lock = gov / ".autonomous-loop.lock"; lock.mkdir()
-        (lock / "pid").write_text(str(os.getpid()))              # 本測試行程=活的
+        (lock / "pid").write_text("garbage-not-a-pid")
         r = self._run(root, home, bindir)
         self.assertEqual(r.returncode, 0)
-        self.assertIn("另一份", r.stdout)
-        self.assertEqual(self._calls(scripts), [])               # 什麼都沒做
+        self.assertIn("讓行", r.stdout)
+        self.assertNotIn("接管", r.stdout)
+        self.assertEqual(self._calls(scripts), [])
+
+    def test_lock_takeover_is_atomic(self):
+        """★接管殘鎖不准讓兩份同時跑起來★(2026-09-07 實測重現)。
+
+        舊做法是「rm 掉舊鎖再 mkdir」,擋不住這個排列:
+          A 刪 → A 建(成功)→ B 刪(把 A 剛建好的砍掉)→ B 建(成功)
+        兩邊的 mkdir 都回 0,兩邊都以為自己拿到鎖,於是同時寫 backlog/archive——
+        而那正是這把鎖存在的理由。
+        ★set -e 幫不上忙★:兩個 mkdir 都成功,沒有非零可攔;實測舊邏輯
+        30 輪 × 8 行程有 1 輪多人同時拿到。
+
+        這裡只測取鎖那一段(整支跑八份太慢):把它抽出來當獨立腳本,對同一把殘鎖並行搶。
+        """
+        import subprocess as _sp
+        d = Path(tempfile.mkdtemp())
+        try:
+            # ★探針必須「持鎖一段時間」才量得到雙開★(2026-09-07 踩到:
+            # 第一版拿到鎖就馬上結束,而收尾 trap 會把鎖放掉——後來的行程再拿到那把鎖
+            # 是★合法的接續★不是雙開。診斷輸出裡那支「沒有接管那行、直接 GOT」的
+            # 就是這樣來的。真腳本持鎖好幾分鐘,所以現場要模擬那個。
+            # ★這是同一天第十次「現場沒搭起來」★,而且差一點讓我去修一個不存在的 bug。
+            # 名字也要含 autonomous-loop:身分驗證找的就是這個字。
+            probe = _write_probe(d)
+            lock = d / ".autonomous-loop.lock"
+            doubled = 0
+            _diag = []
+            rounds = 20
+            for _ in range(rounds):
+                if lock.exists():
+                    import shutil as _sh
+                    _sh.rmtree(lock, ignore_errors=True)
+                lock.mkdir()
+                (lock / "pid").write_text("999999")              # 確定死透
+                os.utime(lock, (0, time.time() - 7200))          # 鎖齡 2 小時
+                procs = [_sp.Popen(["bash", str(probe), str(d)],
+                                   stdout=_sp.PIPE, stderr=_sp.PIPE, text=True) for _ in range(8)]
+                outs = [pr.communicate(timeout=120) for pr in procs]
+                if sum(1 for o, _e in outs if "GOT" in o) > 1:
+                    doubled += 1
+                    _diag.append([(o.strip(), e.strip()[-200:]) for o, e in outs if o.strip() or e.strip()])
+            self.assertEqual(doubled, 0,
+                             f"★八個行程搶同一把殘鎖,{doubled}/{rounds} 輪雙開★\n"
+                             + "\n".join(str(x) for x in _diag[:2]))
+
+            # ★後來者不准搶走已經有人正常持著的鎖★
+            shutil_ = __import__("shutil")
+            shutil_.rmtree(lock, ignore_errors=True)
+            lock.mkdir()
+            (lock / "pid").write_text("999999")
+            os.utime(lock, (0, time.time() - 7200))
+            holder = _sp.Popen(["bash", str(probe), str(d)],
+                               stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+            time.sleep(0.8)
+            held_pid = (lock / "pid").read_text().strip()
+            self.assertNotEqual(held_pid, "999999", "★前置★ 現場成立:接管真的發生了、pid 換人了")
+            late = _sp.run(["bash", str(probe), str(d)], capture_output=True, text=True, timeout=120)
+            self.assertNotIn("GOT", late.stdout,
+                             f"★鎖已經有人正常持著,後來者不准拿到★\n{late.stdout}\n{late.stderr}")
+            self.assertEqual((lock / "pid").read_text().strip(), held_pid,
+                             "★而且不准把別人的 pid 蓋掉★")
+            holder.kill(); holder.wait(timeout=10)
+            # ★上面那句「這一步沒有守衛」我寫錯了★(2026-09-07 code-batch19 外家席 f6 指出)。
+            # 進接管區之後「再確認一次鎖是不是原來那一把」是可以從外部穩定構造的:
+            # 在它印出「發現殘鎖」之後把它 SIGSTOP、替它把鎖換成別人的新鎖、再放行就行。
+            # 守衛在 test_takeover_rechecks_pid_before_stealing。
+        finally:
+            import shutil as _sh
+            _sh.rmtree(d, ignore_errors=True)
+
+    def test_write_pid_failure_is_not_a_lock(self):
+        """★寫 pid 失敗不准回報「拿到鎖了」★(2026-09-07 code-batch19 外家席 f1,它自己跑過 mutant)。
+
+        原本兩處都寫成「建目錄成功 → 寫 pid → return 0」,寫 pid 的結果沒人看。
+        我當時以為 `set -e` 會接住,★那是錯的★:這支函式被寫成 `take_lock || {...}` 的
+        左手邊,而 bash 在那個位置會把整個函式體的 errexit 關掉。實跑驗過:
+        把寫 pid 換成必定失敗,函式照樣回 0、腳本照樣活著往下跑。
+        (孿生的 daily-governance.sh 更直接——它檔頭第 12 行明寫「不用 -e」。)
+
+        後果不是少跑一次,是雙開:我們在動 backlog,鎖裡卻沒有 pid;
+        別人讀不到 pid 就走「鎖齡兜底」,60 分鐘後把這把沒 pid 的鎖接管走。
+
+        ★這支把外家席那個 mutant 變成常設守衛★:覆寫寫 pid 讓它必定失敗,
+        驗兩個現場都不准回報成功,而且不准留下一把沒有 pid 的鎖在地上。
+        """
+        import subprocess as _sp, shutil as _sh
+        d = Path(tempfile.mkdtemp())
+        try:
+            probe = _write_probe(d, extra="lock_write_pid(){ false; }\n")
+            lock = d / ".autonomous-loop.lock"
+
+            for name, prep, want in (
+                ("全新取鎖", lambda: None, "鎖建起來了但 pid 寫不進去"),
+                ("接管殘鎖", lambda: (lock.mkdir(), (lock / "pid").write_text("999999"),
+                                     os.utime(lock, (0, time.time() - 7200))), "接管後 pid 寫不進去"),
+            ):
+                _sh.rmtree(lock, ignore_errors=True)
+                prep()
+                r = _sp.run(["bash", str(probe), str(d)], capture_output=True, text=True, timeout=60)
+                self.assertNotIn("GOT", r.stdout, f"★{name}:寫 pid 失敗卻回報拿到鎖★\n{r.stdout}\n{r.stderr}")
+                self.assertEqual(r.returncode, 3, f"★{name}:要回非零,不能偽裝成正常讓行★\n{r.stderr}")
+                self.assertIn(want, r.stderr, f"★{name}:要講清楚是哪一步壞了★\n{r.stderr}")
+                self.assertFalse(lock.exists(),
+                                 f"★{name}:不准留下沒有 pid 的鎖★——那正是 60 分鐘後被別人接管走的東西")
+        finally:
+            _sh.rmtree(d, ignore_errors=True)
+
+    def test_takeover_rechecks_pid_before_stealing(self):
+        """★接管者進門後要再確認一次殘鎖還是它看到的那一把★(外家席 f6)。
+
+        守的窗口:B 讀到舊 pid、判定該接管,卡在接管權外面;A 在這期間完成接管、
+        建好自己的新鎖、放掉接管權;B 這才進去。沒有這一句,B 會把 A 那把★全新的、
+        正在用的★鎖搬走,兩邊同時跑。
+
+        ★我原本寫「這個順序沒辦法從外部穩定構造,所以它只是防禦深度」——那句話是錯的。★
+        作法是外家席給的:在 B 印出「發現殘鎖」之後把 B 停住(SIGSTOP),
+        替它把鎖換成 A 的新鎖,再放行。停住的位置有把握,是因為現場預埋了一把
+        「超過 60 秒的殘留接管權」,B 得先跑一次 python 算它的年齡——那幾十毫秒就是窗口。
+
+        ★怎麼確定是我搶進去了、不是它自己跑過頭★:接管權目錄的 inode。
+        B 破接管權的方式是「搬走再建一個新的」,inode 會變;停住的當下 inode 還是原來那顆,
+        就證明它還沒走到重讀 pid 那一步。沒搶到就重來,八次都沒搶到就讓這支測試紅——
+        ★不准靜默當成通過★。
+        """
+        import subprocess as _sp, shutil as _sh, signal
+        d = Path(tempfile.mkdtemp())
+        holder = None
+        try:
+            probe = _write_probe(d, hold="8")
+            lock = d / ".autonomous-loop.lock"
+            steal = d / ".autonomous-loop.lock.steal"
+            won = False
+            for _attempt in range(8):
+                _sh.rmtree(lock, ignore_errors=True); _sh.rmtree(steal, ignore_errors=True)
+                for junk in d.glob(".autonomous-loop.lock.*"):
+                    _sh.rmtree(junk, ignore_errors=True)
+                lock.mkdir(); (lock / "pid").write_text("999999")      # 死透的殘鎖
+                os.utime(lock, (0, time.time() - 7200))
+                steal.mkdir(); os.utime(steal, (0, time.time() - 120))  # 殘留的接管權(>60s)
+                ino0 = os.stat(steal).st_ino
+
+                out = d / "b.out"
+                with open(out, "w") as fh:
+                    b = _sp.Popen(["bash", str(probe), str(d)], stdout=fh, stderr=_sp.STDOUT, text=True)
+                stopped = False
+                for _ in range(4000):
+                    if "發現殘鎖" in out.read_text(encoding="utf-8", errors="replace"):
+                        os.kill(b.pid, signal.SIGSTOP); stopped = True; break
+                    if b.poll() is not None:
+                        break
+                    time.sleep(0.0005)
+                if not stopped:
+                    b.kill(); b.wait(timeout=10); continue
+                # 它還沒破接管權 → 還沒走到重讀 pid 那一步 → 這一輪我搶進去了
+                still = steal.exists() and os.stat(steal).st_ino == ino0
+                if not still:
+                    os.kill(b.pid, signal.SIGCONT); b.kill(); b.wait(timeout=10); continue
+
+                # A 完成接管:把殘鎖換成 A 自己那把活的
+                holder = _sp.Popen([sys.executable, "-c", "import time;time.sleep(30)"],
+                                   stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                _sh.rmtree(lock, ignore_errors=True)
+                lock.mkdir(); (lock / "pid").write_text(str(holder.pid))
+                os.kill(b.pid, signal.SIGCONT)
+                b.wait(timeout=60)
+                text = out.read_text(encoding="utf-8", errors="replace")
+
+                self.assertIn("進來後發現鎖已經換人", text,
+                              "★鎖在它進門前換人了,它必須放棄接管★\n" + text)
+                self.assertNotIn("GOT", text, "★它把別人正在用的新鎖搶走了★\n" + text)
+                self.assertEqual((lock / "pid").read_text().strip(), str(holder.pid),
+                                 "★A 那把鎖要原封不動★")
+                won = True
+                break
+            self.assertTrue(won, "★八次都沒能在正確的位置把它停住★——現場沒搭起來,"
+                                 "這支測試什麼都沒驗到,不准當成通過")
+        finally:
+            if holder is not None:
+                holder.kill(); holder.wait(timeout=10)
+            _sh.rmtree(d, ignore_errors=True)
+
+    def test_steal_break_is_atomic(self):
+        """★破「殘留的接管權」也要原子,不能 rm 掉再重建★(外家席 f2)。
+
+        接管權小鎖自己也會殘留(接管中途被砍),所以超過 60 秒就允許破掉重來。
+        原本那段寫成「rm 掉再 mkdir」——★那正是這一整批在修的同一個形態★:
+        A 刪 → A 建 → B 刪(把 A 剛建的砍掉)→ B 建,兩個人都以為自己拿到接管權,
+        然後各自在結尾無條件刪掉它,把還在裡面的第三個人曝出去。
+
+        量的是「同一輪裡有幾個行程真的走進接管區」。改用 mv 之後只有一個人搬得走,
+        其餘的會在門外被擋下來。
+        """
+        import subprocess as _sp, shutil as _sh
+        d = Path(tempfile.mkdtemp())
+        try:
+            probe = _write_probe(d, hold="1")
+            lock = d / ".autonomous-loop.lock"
+            steal = d / ".autonomous-loop.lock.steal"
+            worst, diag = 0, []
+            rounds = 12
+            for _ in range(rounds):
+                for junk in list(d.glob(".autonomous-loop.lock*")):
+                    _sh.rmtree(junk, ignore_errors=True)
+                lock.mkdir(); (lock / "pid").write_text("999999")
+                os.utime(lock, (0, time.time() - 7200))
+                steal.mkdir(); os.utime(steal, (0, time.time() - 120))
+                procs = [_sp.Popen(["bash", str(probe), str(d)],
+                                   stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True) for _ in range(6)]
+                outs = [pr.communicate(timeout=120)[0] for pr in procs]
+                entered = [o for o in outs if any(m in o for m in _ENTERED)]
+                if len(entered) > worst:
+                    worst, diag = len(entered), [o.strip()[-160:] for o in outs if o.strip()]
+                # 現場要真的成立:被擋在門外的人得留下痕跡,不然這一輪根本沒起衝突
+                self.assertTrue(any(any(m in o for m in _BLOCKED_OUTSIDE) for o in outs)
+                                or len(entered) >= 1,
+                                "★前置★ 六個行程搶同一把殘留接管權,總得有人講話\n" + str(outs))
+            self.assertLessEqual(worst, 1,
+                                 f"★同一輪有 {worst} 個行程同時走進接管區★(接管權沒互斥住)\n"
+                                 + "\n".join(diag))
+        finally:
+            _sh.rmtree(d, ignore_errors=True)
+
+    def test_lock_released_when_killed_by_signal(self):
+        """★被 TERM 砍掉時鎖要清掉,不能等 60 分鐘自癒★(外家席 f3 + 架構對齊席 F1)。
+
+        原本的寫法是「先裝一個看旗標的臨時 trap,拿到鎖之後才把旗標扳成 1」。
+        取鎖成功到扳旗標之間如果收到訊號,旗標還是 0,收尾就什麼都不做。
+        ★bash 收到 SIGTERM 會不會跑 EXIT trap,我實測過:會。★ 所以那個窗口是真的漏。
+        現在改成跟 daily-governance.sh 一樣:單一 trap 無條件裝在取鎖之前,
+        由收尾器自己驗鎖裡的 pid 是不是自己(沒拿到鎖時呼叫它是空操作)。
+        """
+        import subprocess as _sp, shutil as _sh, signal
+        d = Path(tempfile.mkdtemp())
+        try:
+            probe = _write_probe(d, hold="30")
+            lock = d / ".autonomous-loop.lock"
+            b = _sp.Popen(["bash", str(probe), str(d)], stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True)
+            got = False
+            for _ in range(200):
+                if lock.exists() and (lock / "pid").exists():
+                    got = True; break
+                time.sleep(0.02)
+            self.assertTrue(got, "★前置★ 它得先真的拿到鎖")
+            b.send_signal(signal.SIGTERM)
+            b.wait(timeout=30)
+            self.assertFalse(lock.exists(), "★被訊號砍掉之後鎖還在★——下一次要卡到 60 分鐘後才跑得動")
+        finally:
+            _sh.rmtree(d, ignore_errors=True)
+
+    def test_release_leaves_someone_elses_lock_alone(self):
+        """★收尾只清自己那把鎖★(外家席 f5 的行為半)。
+
+        這支跑到一半可能被別人★合法接管★走(殘鎖判定成立時真的會發生),
+        那時候鎖裡的 pid 已經是別人的,收尾若無條件 rm,刪的是別人正在用的鎖。
+
+        ★誠實記一個沒有守衛的地方★:折入的另外半條是「先把鎖搬到旁邊、
+        再看一次裡面的 pid 是不是自己」,它守的是「讀完 pid 到刪掉目錄之間鎖換人」
+        那個更窄的窗口。那個窗口我★沒查出★可以從外部構造的方法——收尾器在讀 pid 到
+        搬走之間沒有任何可以停住它的位置(上面 f6 那支能停,是因為中間隔了一次 python 呼叫)。
+        所以那半是防禦深度,這支只釘得住 pid 比對這一半。
+        REVISIT:2026-12-07 若收尾器中途多出任何一次外部呼叫,回來把那半也釘上。
+        """
+        import subprocess as _sp, shutil as _sh
+        d = Path(tempfile.mkdtemp())
+        try:
+            probe = _write_probe(d, hold="3")
+            lock = d / ".autonomous-loop.lock"
+            b = _sp.Popen(["bash", str(probe), str(d)], stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True)
+            for _ in range(200):
+                if lock.exists() and (lock / "pid").exists():
+                    break
+                time.sleep(0.02)
+            self.assertTrue((lock / "pid").read_text().strip().isdigit(),
+                            "★前置★ 它得先真的拿到鎖、pid 寫進去了")
+            (lock / "pid").write_text("424242")                        # 模擬「被別人合法接管走了」
+            b.wait(timeout=60)
+            self.assertTrue(lock.exists(), "★鎖裡的 pid 不是自己,收尾不准動它★")
+            self.assertEqual((lock / "pid").read_text().strip(), "424242", "★也不准把內容改掉★")
+        finally:
+            _sh.rmtree(d, ignore_errors=True)
+
+    def test_single_trap_installed_before_take_lock(self):
+        """★整支只准有一個 EXIT trap,而且要無條件裝在取鎖之前★(架構對齊席 F1)。
+
+        daily-governance.sh 對同一個問題的既有做法就是這樣(它註解⑤寫明)。
+        這批原本引入了第二種做法——臨時 trap + 全域旗標 + 中途換 trap——
+        那是這個 repo 原本沒有的機制,而且旗標本身還多開了一個收不到訊號的窗口。
+        行為那半由 test_lock_released_when_killed_by_signal 守;這支守結構,
+        免得下一個人又把旗標加回來(旗標加回來時行為測試不一定會紅,窗口太窄)。
+        """
+        src = (Path(__file__).resolve().parent.parent / "governance" / "autonomous-loop.sh").read_text(encoding="utf-8")
+        traps = [ln for ln in src.splitlines() if ln.strip().startswith("trap ")]
+        self.assertEqual(len(traps), 1, "★只准一個 trap★:" + str(traps))
+        self.assertEqual(traps[0].strip(), "trap finalize EXIT",
+                         "★trap 要無條件裝,不准掛條件或旗標★:" + traps[0])
+        call = 'take_lock || { _lk=$?; [ "$_lk" -eq 2 ] && exit 3; exit 0; }'
+        self.assertEqual(src.count(call), 1, "★取鎖只准呼叫一次★")
+        self.assertLess(src.index("trap finalize EXIT"), src.index(call),
+                        "★trap 要裝在取鎖之前★:中間任何一步失敗,鎖都會留到 60 分鐘後才自癒")
+        self.assertLess(src.index("finalize(){"), src.index("trap finalize EXIT"),
+                        "★收尾器要先定義好★")
+        self.assertNotIn("LOCK_HELD", src, "★不准再用旗標擋收尾★——那個旗標有個收不到訊號的窗口")
+
+    def _named_sleeper(self, d, name, secs=60):
+        """開一個「指令列裡帶指定檔名」的活行程,用來冒充持鎖者。"""
+        import subprocess as _sp
+        sub = Path(d) / "holder"; sub.mkdir(exist_ok=True)
+        f = sub / name
+        f.write_text("#!/usr/bin/env bash\nsleep %d\n" % secs, encoding="utf-8")
+        os.chmod(f, 0o755)
+        return _sp.Popen(["bash", str(f)], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+
+    def test_recycled_pid_is_detected_by_start_time(self):
+        """★pid 被回收給別人時,用「啟動時刻對不上」認出來★(2026-09-07 code-batch19)。
+
+        只用 kill -0 判不出來:它只回答「這個 pid 現在有沒有行程」,不回答「是不是原本那個」。
+        這台機器開機快兩個月沒重開,pid 空間有限,長時間 churn 下重用是實際會發生的事。
+        一旦踩到,自主迴圈會永久停擺——★而且完全沒有訊息★。
+
+        ★也不能改用「指令列長得像不像我們」認★:那個做法被 r1 通才席實跑打穿了
+        (見 test_live_holder_started_under_another_name_is_not_robbed)。
+        現在用的是硬身分——取鎖時把自己的啟動時刻寫進鎖裡,之後拿 pid 去問系統要同一個值。
+        這裡的現場就是「pid 還活著,但鎖裡記的啟動時刻是別人的」。
+        """
+        import subprocess as _sp, shutil as _sh
+        d = Path(tempfile.mkdtemp()); imp = None
+        try:
+            probe = _write_probe(d, hold="1")
+            imp = self._named_sleeper(d, probe.name)
+            lock = d / ".autonomous-loop.lock"; lock.mkdir()
+            (lock / "pid").write_text(str(imp.pid))
+            (lock / "start").write_text("Mon Jan  1 00:00:00 2001")   # 記的不是這個行程
+            os.utime(lock, (0, time.time() - 30))                     # 鎖很年輕,兜底救不了它
+            r = _sp.run(["bash", str(probe), str(d)], capture_output=True, text=True, timeout=60)
+            self.assertIn("接管", r.stdout,
+                          "★pid 還在但啟動時刻對不上 = pid 被回收了,要接管不能讓行★\n"
+                          + r.stdout + r.stderr)
+            self.assertIn("GOT", r.stdout, "★接管完要真的跑起來★")
+        finally:
+            if imp is not None:
+                imp.kill(); imp.wait(timeout=10)
+            _sh.rmtree(d, ignore_errors=True)
+
+    def test_live_holder_started_under_another_name_is_not_robbed(self):
+        """★持鎖者換個名字啟動,仍然不准被搶鎖★(2026-09-07 code-batch19 通才席 blocker)。
+
+        原本的身分驗證是拿 `ps` 的指令列比對腳本名字。通才席實跑打穿了它:
+        持鎖者只要透過符號連結(或包一層 wrapper、未來重構成 bin/run-with-lock.sh)啟動,
+        指令列裡就沒有那個名字 → 活著的持鎖者被判成死的 → 鎖當場被搬走。
+        ★它量到兩個行程同時印出「我拿到鎖了」並且同時還活著★,
+        而「不准兩份同時動 backlog」正是這把鎖唯一的存在理由。
+
+        改成硬身分(pid + 記在鎖裡的啟動時刻)之後,名字完全不參與判斷。
+        這支就照它的重現方式做:持鎖者走符號連結啟動,後來者走真名。
+        """
+        import subprocess as _sp, shutil as _sh
+        d = Path(tempfile.mkdtemp())
+        holder = None
+        try:
+            probe = _write_probe(d, hold="6")
+            link = d / "renamed-run.sh"
+            os.symlink(probe, link)
+            lock = d / ".autonomous-loop.lock"
+            holder = _sp.Popen(["bash", str(link), str(d)], stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True)
+            got = False
+            for _ in range(300):
+                if (lock / "pid").exists():
+                    got = True; break
+                time.sleep(0.02)
+            self.assertTrue(got, "★前置★ 走符號連結的那個要先真的拿到鎖")
+            held = (lock / "pid").read_text().strip()
+            cmdline = _sp.run(["ps", "-p", held, "-o", "command="],
+                              capture_output=True, text=True).stdout
+            self.assertNotIn("autonomous-loop", cmdline,
+                             "★前置★ 現場要成立:持鎖者的指令列裡不能有腳本名字\n" + cmdline)
+            late = _sp.run(["bash", str(probe), str(d)], capture_output=True, text=True, timeout=60)
+            self.assertNotIn("GOT", late.stdout,
+                             "★活著的持鎖者被搶了鎖★——兩份會同時動 backlog\n"
+                             + late.stdout + late.stderr)
+            self.assertIn("正在跑", late.stdout, late.stdout + late.stderr)
+            self.assertEqual((lock / "pid").read_text().strip(), held, "★也不准把別人的 pid 蓋掉★")
+        finally:
+            if holder is not None:
+                holder.kill(); holder.wait(timeout=10)
+            _sh.rmtree(d, ignore_errors=True)
+
+    def test_old_format_lock_without_start_falls_back_to_lock_age(self):
+        """★身分驗不出來時走鎖齡兜底,不是無條件讓行★(2026-09-07 code-batch19)。
+
+        現場是升級當下真的會發生的:舊版本留下的鎖只有 pid、沒有啟動時刻。
+        舊寫法碰到「問不出來」是直接讓行,而讓行那條路上★沒有任何兜底★——
+        那就回到註解②講的永久停擺。現在改成掉進鎖齡那條:年輕的讓行、過老的接管。
+        """
+        import subprocess as _sp, shutil as _sh
+        d = Path(tempfile.mkdtemp()); alive = None
+        try:
+            probe = _write_probe(d, hold="1")
+            alive = self._named_sleeper(d, probe.name)
+            lock = d / ".autonomous-loop.lock"
+            for age, want_in, want_out in ((30, "讓行", "接管"), (7200, "接管", "讓行")):
+                _sh.rmtree(lock, ignore_errors=True)
+                lock.mkdir(); (lock / "pid").write_text(str(alive.pid))   # 舊格式:沒有 start
+                os.utime(lock, (0, time.time() - age))
+                r = _sp.run(["bash", str(probe), str(d)], capture_output=True, text=True, timeout=60)
+                self.assertIn(want_in, r.stdout, f"★鎖齡 {age}s 應該{want_in}★\n{r.stdout}{r.stderr}")
+                self.assertNotIn(want_out, r.stdout, f"★鎖齡 {age}s 不該{want_out}★\n{r.stdout}")
+        finally:
+            if alive is not None:
+                alive.kill(); alive.wait(timeout=10)
+            _sh.rmtree(d, ignore_errors=True)
 
     def test_stale_lock_taken_over(self):
         # s2-f1:持鎖行程已死→接管照跑
