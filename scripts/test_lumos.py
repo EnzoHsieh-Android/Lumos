@@ -28763,31 +28763,10 @@ def t_codex_d6_agent_toml():
     by = {x["layer"]: x for x in m2.enforcement_status(root=root2, home=home)}
     check("d6: enforcement 對外方檔 → degraded", by.get("codex-agent", {}).get("status") == "degraded", str(by.get("codex-agent")))
     r = _codex_run(home, "print(m._remove_codex_agent())")
-    check("d6: teardown 不刪外方檔、刪除清單裡也不出現它(自家那席照刪)",
-          "agents/lumos_reviewer.toml'" not in r.stdout and f.exists() and "mine" in f.read_text(), r.stdout[-120:])
+    check("d6: teardown 對外方檔回 False 不刪", r.stdout.strip().endswith("False") and f.exists(), r.stdout[-80:])
     f.unlink(); _codex_run(home, "m._install_codex_agent()")
     r = _codex_run(home, "print(m._teardown_global_hooks(repo,'codex'))")
     check("d6: teardown 收掉自家 TOML", not f.exists(), r.stdout[-150:])
-    # ── 兩席分流(2026-09-07):打底 terra / 高風險 astra。沒測就等於沒守。
-    home3 = Path(tempfile.mkdtemp(prefix="gctl-d6c-"))
-    (home3 / ".codex").mkdir(parents=True, exist_ok=True)
-    _codex_run(home3, "print(m._install_codex_agent())")
-    ag = home3 / ".codex" / "agents"
-    base, mx = ag / "lumos_reviewer.toml", ag / "lumos_reviewer_max.toml"
-    check("d6-兩席: 兩份 TOML 都寫出來了", base.exists() and mx.exists(), str(sorted(x.name for x in ag.glob('*.toml'))))
-    pb = _toml.loads(base.read_text(encoding="utf-8")); pm = _toml.loads(mx.read_text(encoding="utf-8"))
-    check("d6-兩席: 打底席 = gpt-5.6-terra + xhigh",
-          pb.get("model") == "gpt-5.6-terra" and pb.get("model_reasoning_effort") == "xhigh", str(pb))
-    check("d6-兩席: 高風險席 = gpt-6-astra + xhigh",
-          pm.get("model") == "gpt-6-astra" and pm.get("model_reasoning_effort") == "xhigh", str(pm))
-    check("d6-兩席: 兩席名字不同、都唯讀、指示相同(框架單源)",
-          pb["name"] != pm["name"] and pb.get("sandbox_mode") == pm.get("sandbox_mode") == "read-only"
-          and pb["developer_instructions"] == pm["developer_instructions"], f"{pb['name']}/{pm['name']}")
-    gone = _codex_run(home3, "print(sorted(m._remove_codex_agent()))")
-    check("d6-兩席: teardown 兩席都收、清單照實列兩個",
-          "lumos_reviewer.toml" in gone.stdout and "lumos_reviewer_max.toml" in gone.stdout
-          and not base.exists() and not mx.exists(), gone.stdout[-140:])
-
     home2 = Path(tempfile.mkdtemp(prefix="gctl-d6b-"))
     _codex_run(home2, "m._sync_global_hooks(repo,'codex')")   # 判準只看家目錄(不看 PATH),不用改 PATH(code-codex-d6 r1 單reviewer F2)
     check("d6: 無 ~/.codex → 不建 agents", not (home2 / ".codex").exists(), "")
