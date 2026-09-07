@@ -242,7 +242,7 @@ scripts/install-graph-toolchain.sh --target <project-path> --slug <name>
 
 `release` is the public line; only the maintainer moves it forward. Drop `--branch release` to follow the development line instead.
 
-**Both Claude Code and Codex CLI are supported** — one install wires up both, with matching behaviour. Details in [the mental model](docs/心智模型.md).
+**Both Claude Code and Codex CLI are supported** — one install wires up both, with matching behaviour. Details in [the mental model](docs/mental-model.md).
 </details>
 
 ---
@@ -275,7 +275,7 @@ Pick one:
 
 **That block is the whole product.** Everything else exists to make it not annoying.
 
-> You can run the commands yourself — see the [command reference](docs/指令參考.md). This README shows their output so you can see what got read and what got stopped: **governance you can't see is governance that isn't there.**
+> You can run the commands yourself — see the [command reference](docs/command-reference.md). This README shows their output so you can see what got read and what got stopped: **governance you can't see is governance that isn't there.**
 
 ---
 
@@ -295,9 +295,9 @@ Lumos is my answer to that.
 
 ## Going deeper
 
-- **[The mental model and the machinery](docs/心智模型.md)** — how the three evidence chains work, what each check blocks, and the half a tool can't prove.
-- **[Command reference](docs/指令參考.md)** — you won't need these day to day, but they're here.
-- **[Taking over a project with no notes](docs/接手舊專案.md)** — reconstructing an old system's context into notes.
+- **[The mental model and the machinery](docs/mental-model.md)** — how the three evidence chains work, what each check blocks, and the half a tool can't prove.
+- **[Command reference](docs/command-reference.md)** — you won't need these day to day, but they're here.
+- **[Taking over a project with no notes](docs/taking-over.md)** — reconstructing an old system's context into notes.
 - [Onboarding detail](ONBOARDING.md) · [Architecture](ARCHITECTURE.md) · [How this differs from spec-driven development](SDD-vs-Lumos.md)
 - Long-form methodology (Chinese): [The graph is the contract](docs/methodology/圖譜即合約.md) · [The whole picture](docs/methodology/圖譜即合約-全景圖.md) · [Written for outside readers](docs/methodology/圖譜即合約-對外論述.md)
 
