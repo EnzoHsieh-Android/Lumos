@@ -28763,10 +28763,31 @@ def t_codex_d6_agent_toml():
     by = {x["layer"]: x for x in m2.enforcement_status(root=root2, home=home)}
     check("d6: enforcement 對外方檔 → degraded", by.get("codex-agent", {}).get("status") == "degraded", str(by.get("codex-agent")))
     r = _codex_run(home, "print(m._remove_codex_agent())")
-    check("d6: teardown 對外方檔回 False 不刪", r.stdout.strip().endswith("False") and f.exists(), r.stdout[-80:])
+    check("d6: teardown 不刪外方檔、刪除清單裡也不出現它(自家那席照刪)",
+          "agents/lumos_reviewer.toml'" not in r.stdout and f.exists() and "mine" in f.read_text(), r.stdout[-120:])
     f.unlink(); _codex_run(home, "m._install_codex_agent()")
     r = _codex_run(home, "print(m._teardown_global_hooks(repo,'codex'))")
     check("d6: teardown 收掉自家 TOML", not f.exists(), r.stdout[-150:])
+    # ── 兩席分流(2026-09-07):打底 terra / 高風險 astra。沒測就等於沒守。
+    home3 = Path(tempfile.mkdtemp(prefix="gctl-d6c-"))
+    (home3 / ".codex").mkdir(parents=True, exist_ok=True)
+    _codex_run(home3, "print(m._install_codex_agent())")
+    ag = home3 / ".codex" / "agents"
+    base, mx = ag / "lumos_reviewer.toml", ag / "lumos_reviewer_max.toml"
+    check("d6-兩席: 兩份 TOML 都寫出來了", base.exists() and mx.exists(), str(sorted(x.name for x in ag.glob('*.toml'))))
+    pb = _toml.loads(base.read_text(encoding="utf-8")); pm = _toml.loads(mx.read_text(encoding="utf-8"))
+    check("d6-兩席: 打底席 = gpt-5.6-terra + xhigh",
+          pb.get("model") == "gpt-5.6-terra" and pb.get("model_reasoning_effort") == "xhigh", str(pb))
+    check("d6-兩席: 高風險席 = gpt-6-astra + xhigh",
+          pm.get("model") == "gpt-6-astra" and pm.get("model_reasoning_effort") == "xhigh", str(pm))
+    check("d6-兩席: 兩席名字不同、都唯讀、指示相同(框架單源)",
+          pb["name"] != pm["name"] and pb.get("sandbox_mode") == pm.get("sandbox_mode") == "read-only"
+          and pb["developer_instructions"] == pm["developer_instructions"], f"{pb['name']}/{pm['name']}")
+    gone = _codex_run(home3, "print(sorted(m._remove_codex_agent()))")
+    check("d6-兩席: teardown 兩席都收、清單照實列兩個",
+          "lumos_reviewer.toml" in gone.stdout and "lumos_reviewer_max.toml" in gone.stdout
+          and not base.exists() and not mx.exists(), gone.stdout[-140:])
+
     home2 = Path(tempfile.mkdtemp(prefix="gctl-d6b-"))
     _codex_run(home2, "m._sync_global_hooks(repo,'codex')")   # 判準只看家目錄(不看 PATH),不用改 PATH(code-codex-d6 r1 單reviewer F2)
     check("d6: 無 ~/.codex → 不建 agents", not (home2 / ".codex").exists(), "")
@@ -30208,6 +30229,30 @@ def t_watchdog_notifier_bundle():
     finally:
         _sh.rmtree(root, ignore_errors=True)
     print("  ✓ t_watchdog_notifier_bundle")
+
+
+def t_prepush_autoloop_count_is_not_hardcoded():
+    """★推送閘印的支數要從實際輸出讀,不准寫死★(2026-09-08)。
+
+    寫死的數字會靜靜地漂:那行訊息印著「自主迴圈那 132 支也綠」,
+    而那個檔當時實際有 144 支——閘其實跑整支、沒有少跑,但它報出來的數字錯了。
+    這個 repo 對「宣稱 vs 實測」的既有立場是別讓數字靜靜地漂(doctor 的 [E] 段就在做這件事),
+    訊息裡的數字同一個道理。
+
+    這條驗兩件:①那段不含寫死的支數 ②真的有一支從輸出取數的函式。
+    """
+    _need_src("scripts/hooks/pre-push")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    src = (root / "scripts" / "hooks" / "pre-push").read_text(encoding="utf-8")
+    i = src.index("test_autonomous_loop.py")
+    seg = src[max(0, i - 400): i + 1400]
+    import re as _re
+    hard = _re.findall(r"自主迴圈那\s*\d+\s*支", seg)
+    check("★推送閘的訊息不准寫死自主迴圈的支數★", not hard,
+          "找到寫死的支數 %s——測試檔增減時這個數字不會跟著動" % hard)
+    check("★要有一支從實際輸出取支數的函式★", "_autoloop_count" in seg,
+          "找不到 _autoloop_count:數字沒有來源就只能是寫死的")
+    print("  ✓ t_prepush_autoloop_count_is_not_hardcoded")
 
 
 def t_daily_wrapper_lock_matches_source():
