@@ -407,23 +407,22 @@ def t_runner_isolation_r1_fixes():
     check("r1-②: 留了環境變數可以暫時放行", "LUMOSEXPECTED_SKIP_MAX" in src, "")
 
     # ③ 早退也要收尾:真的跑一次打錯字的 -k,看有沒有留下現場
-    import tempfile as _tf
-    real_tmp = Path(_tf.gettempdir())
-    # 這一輪自己的根在假家目錄底下,所以要看「真正的系統暫存目錄」
-    sys_tmp = Path(os.environ.get("TMPDIR", "/tmp")).parent if "gctl-run-" in os.environ.get("TMPDIR", "") else real_tmp
-    def count_roots():
-        try:
-            return sum(1 for e in os.scandir(sys_tmp) if e.name.startswith("gctl-run-"))
-        except OSError:
-            return -1
-    before = count_roots()
-    check("★前置★ 現場成立:數得到系統暫存目錄底下的根", before >= 0, str(sys_tmp))
-    r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "-k", "no-such-test-zzz"],
-                       capture_output=True, text=True,
-                       env=dict(os.environ, TMPDIR=str(sys_tmp)))
-    after = count_roots()
-    check("r1-③: -k 打錯字早退時,rc 仍是失敗(選中 0 支=沒驗過)", r.returncode != 0, f"rc={r.returncode}")
-    check("r1-③: 早退沒有留下現場(收尾在 finally 裡)", after <= before, f"before={before} after={after}")
+    # ★給它一個自己的空暫存目錄★(2026-09-08 修):原本是數「整個系統暫存目錄底下有幾個
+    # gctl-run-」,前後各數一次。但推送前的閘會切成四片同時跑,每片各建一個 gctl-run- 根——
+    # 別片在這中間起來或留下殘骸,這條就誤判。實測:單獨跑綠、全套平行跑紅(before=239
+    # after=240)。改成讓子進程用一個空的專屬目錄,跑完那個目錄應該是空的,
+    # 跟別片完全無關。這樣也測得比原本準:原本只驗「沒有變多」,現在驗「一個都沒留」。
+    import tempfile as _tf, shutil as _sh
+    iso_tmp = Path(_tf.mkdtemp(prefix="gctl-isolation-probe-"))
+    try:
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "-k", "no-such-test-zzz"],
+                           capture_output=True, text=True,
+                           env=dict(os.environ, TMPDIR=str(iso_tmp)))
+        left = sorted(e.name for e in os.scandir(iso_tmp) if e.name.startswith("gctl-run-"))
+        check("r1-③: -k 打錯字早退時,rc 仍是失敗(選中 0 支=沒驗過)", r.returncode != 0, f"rc={r.returncode}")
+        check("r1-③: 早退沒有留下現場(收尾在 finally 裡)", left == [], f"留下 {left}")
+    finally:
+        _sh.rmtree(iso_tmp, ignore_errors=True)
     check("r1-③: 原始碼裡收尾確實在 finally 區塊",
           "    finally:" in src and "這一輪的暫存現場留著沒刪" in src, "")
 
