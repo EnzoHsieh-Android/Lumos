@@ -11,12 +11,14 @@
 
 > That module you had an AI write three months ago? You need to change it today.
 > You don't remember why it was built that way. Neither does the AI — every session, it starts as a stranger.
->
-> **Lumos gives a project a second set of notes for everything the code can't say, then uses checks to make sure they actually get written.**
 
-That isn't a memory problem. **Code, as a medium, simply can't hold those things.**
+<p align="center">
+  <img src="assets/hook-en.svg" alt="Left: three months ago the conversation compared three approaches, rejected two with reasons, agreed one unbreakable rule, and ran the tests. Right: three months later only the code remains and the trade-offs have evaporated" width="900">
+</p>
 
-Open a file and it tells you exactly one thing: what it looks like right now. On these five, it has nothing to say:
+In that conversation, everything was there: the approaches you compared, why you rejected the others, the one rule you agreed must never break. **When it shipped, only the code survived.**
+
+That isn't anyone's memory failing. **Code, as a medium, simply cannot hold those things.** Open a file and it tells you exactly one thing — what it looks like right now. On these five, it has nothing to say:
 
 - **Why** this approach — what was compared, what was rejected.
 - **Where this part ends**, and who gets hit if you change it.
@@ -24,9 +26,9 @@ Open a file and it tells you exactly one thing: what it looks like right now. On
 - Whether this was **ever verified**, and under what assumptions.
 - Whether you can **take it back** if you get it wrong.
 
-Those five used to live in a senior engineer's head. While they were around you could just ask; when they left, it left with them. **The AI era is worse** — an AI arrives as a new hire in every single conversation, and what you told it last time doesn't count this time.
+Those five used to live in a senior engineer's head. While they were around you could just ask; when they left, it left with them.
 
-**Lumos writes those five things down, and makes you write them.** They become a set of interlinked Markdown notes living in the same project as the code; then git checks (small programs that run when you commit or push) close off the "changed the code, didn't touch the notes" path. **Not writing has to be more annoying than writing — otherwise nobody writes.**
+**What Lumos does is simple: it writes those five things into a set of interlinked Markdown notes that live in the same project as the code, then uses git checks — small programs that run when you commit or push — to close off the "changed the code, didn't touch the notes" path.** Not writing has to be more annoying than writing; otherwise nobody writes.
 
 Here's roughly what that grows into — an online store, where a plan comes first, then the module, then a record of what was done:
 
