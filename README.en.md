@@ -295,7 +295,7 @@ Lumos is my answer to that.
 
 ## Going deeper
 
-- **[The mental model and the machinery](docs/心智模型.md)** — how the three evidence chains work, what each check blocks, and what this can't do.
+- **[The mental model and the machinery](docs/心智模型.md)** — how the three evidence chains work, what each check blocks, and the half a tool can't prove.
 - **[Command reference](docs/指令參考.md)** — you won't need these day to day, but they're here.
 - **[Taking over a project with no notes](docs/接手舊專案.md)** — reconstructing an old system's context into notes.
 - [Onboarding detail](ONBOARDING.md) · [Architecture](ARCHITECTURE.md) · [How this differs from spec-driven development](SDD-vs-Lumos.md)
