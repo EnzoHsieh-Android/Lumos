@@ -19957,6 +19957,411 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
 # ── 每個子指令「這是幹嘛 / 什麼時候用」(Projects/工具鏈補強十件_計劃 #3)──────────
 # 來源=skills/lumos-project-notes/commands/ 索引子檔的情境欄;建完 parser 由 _fill_help_when 灌進
 # 每個子指令的 description,讓 `lumos X --help` 第一行就講人話。t_every_subcommand_has_when 釘非空。
+# ── 接手視圖(Projects/接手視圖_計劃,2026-09-07)──────────────────────────────────────────
+# 白話:四版「幫 agent 造一本進度帳」都被實測打穿(進度從提交推導_計劃 v1–v4)。這支不造帳,只把三個一直都在、
+# 能可靠讀的來源讀成一張接手用的表——計劃點名的檔現在什麼 git 狀態、最後一輪在動什麼、使用者最後說了什麼。
+# 讀不到就說讀不到(fail-open、恆 rc0:這是查詢不是閘)。★不印進度、不判做到哪、不猜★:線索不是狀態。
+_HANDOFF_USER_MAX = 200   # 使用者最後一句只印前 200 字
+# r1 外家 #4:派工鏡頭的正則只吃 ASCII 無空白;筆記慣例把路徑包在反引號裡,反引號內的路徑不限字元(空白、中文都收)。
+# 前綴表要跟 _LENS_SPEC_CODE_RE 同一份(t_handoff_view 有漂移守衛:這裡每個前綴 lens 正則都得認得)
+_HANDOFF_TICK_PREFIXES = ("scripts", "governance", "skills", "src", "app", "lib")
+_HANDOFF_TICK_RE = re.compile(r"`((?:%s)/[^`\n]+)`" % "|".join(_HANDOFF_TICK_PREFIXES))
+_HANDOFF_HOOK_REL = "hooks/claude/check-graph-sync.py"   # 相對 scripts/(lumos 所在目錄);重用它的逐字稿解析器,不重寫
+
+
+def _handoff_slug(path):
+    """Claude Code 逐字稿目錄名:cwd 每個非英數字元換成 '-'。2026-09-07 拿兩條真路徑對過
+    (主樹 /Users/enzo/harness/lumos-toolchain → -Users-enzo-harness-lumos-toolchain;
+    工作樹 …/.claude/worktrees/handoff-view → …--claude-worktrees-handoff-view)。★規則是推的,不是官方文件★——
+    對不上就走「找不到目錄」那條路,而且把試過的路徑印出來,不會猜錯還裝沒事。"""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+
+_HANDOFF_MAX_CANDIDATES = 10   # 多候選時只看最新這麼多份(每份要讀全文找計劃名,真逐字稿 5MB 一份)
+
+
+def _handoff_find_transcript(root, plan_stem=""):
+    """自動挑逐字稿:~/.claude/projects/<slug>/ 下的 .jsonl,★排掉接手者自己這個 session★
+    (CLAUDE_CODE_SESSION_ID;接手的當下「最新的一份」永遠是自己,不排就永遠讀到自己的尾巴)。
+    ★多份候選時(同 checkout 多開是常態;r1 外家 #2)不盲拿最新★:最新 N 份裡「提到這份計劃名」的最新一份優先,
+    都沒提到才拿最新;候選清單一併回傳,輸出印給接手者自己判、要指定就 --transcript。
+    回 (path|None, reason|None, candidates|None);candidates={"picked_by": 說明, "list": [{path,title,mtime,mentions_plan}]}。"""
+    import json as _json, datetime as _dt
+    me = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    dirs, tried = [], []
+    for base in (Path.cwd(), Path.cwd().resolve(), Path(root), Path(root).resolve()):
+        d = Path.home() / ".claude" / "projects" / _handoff_slug(base)
+        if d not in dirs:
+            dirs.append(d)
+    for d in dirs:
+        if not d.is_dir():
+            tried.append(str(d))
+            continue
+        files = [p for p in d.glob("*.jsonl") if p.is_file()]
+        if not files:
+            tried.append(f"{d}(目錄在但沒有 .jsonl)")
+            continue
+        others = [p for p in files if not (me and p.stem == me)]
+        if not others:
+            return None, (f"{d} 只有接手者自己這個 session 的逐字稿({me}.jsonl),沒有別人的可讀;"
+                          "要看特定一份用 --transcript <路徑>"), None
+        others.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        cands = []
+        for p in others[:_HANDOFF_MAX_CANDIDATES]:
+            title, mentions = None, False
+            try:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+                head = text.split("\n", 1)[0]
+                try:
+                    o = _json.loads(head)
+                    if isinstance(o, dict) and o.get("type") == "custom-title" and isinstance(o.get("customTitle"), str):
+                        title = o["customTitle"]
+                except ValueError:
+                    pass
+                mentions = bool(plan_stem) and plan_stem in text
+                mtime = _dt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            except OSError:
+                mtime = "?"
+            cands.append({"path": str(p), "title": title, "mtime": mtime, "mentions_plan": mentions})
+        pick = next((c for c in cands if c["mentions_plan"]), None)
+        picked_by = "提到計劃的最新一份" if pick else "最新一份"
+        pick = pick or cands[0]
+        return Path(pick["path"]), None, {"picked_by": picked_by, "list": cands}
+    return None, ("找不到逐字稿目錄(試過:%s);從 Claude 裡開出來的終端機不寫逐字稿,那種 session 只剩 git 那半"
+                  % "、".join(tried)), None
+
+
+def _handoff_load_hook():
+    """importlib 匯入收工 hook 的逐字稿解析器(它有 __main__ 守衛,匯入不會執行)。回 (module|None, reason|None)。"""
+    import importlib.util as _ilu
+    p = Path(__file__).resolve().parent / _HANDOFF_HOOK_REL
+    if not p.is_file():
+        return None, f"找不到收工 hook 的解析器({p})"
+    prev = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True   # 唯讀指令不該在 repo 裡留 __pycache__(r2 折入時稽核鉤子抓到的是自己先前留的 .pyc)
+    try:
+        spec = _ilu.spec_from_file_location("lumos_handoff_hook", str(p))
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as e:   # 匯入是別人的檔,什麼都可能炸;這裡是查詢,炸了要變成一句原因不是 traceback
+        return None, f"收工 hook 的解析器匯入失敗({p}:{e.__class__.__name__}:{e})"
+    finally:
+        sys.dont_write_bytecode = prev
+    for fn in ("collect_turn_actions", "_is_real_user_input"):
+        if not callable(getattr(mod, fn, None)):
+            return None, f"收工 hook 的解析器版本不認得(缺 {fn}:{p})"
+    return mod, None
+
+
+def _handoff_rel(fp, root):
+    try:
+        return str(Path(fp).resolve().relative_to(Path(root).resolve()))
+    except (ValueError, OSError):
+        return str(fp)
+
+
+def _handoff_is_human(o, mod):
+    """人打的字:hook 的「真實 user 輸入」再濾掉三種系統行(2026-09-07 真逐字稿看到的):
+    任務通知 promptSource=system、壓縮摘要 isCompactSummary、系統提醒 isMeta。"""
+    if not mod._is_real_user_input(o):
+        return False
+    return not (o.get("isMeta") or o.get("isCompactSummary") or o.get("promptSource") == "system")
+
+
+def _handoff_claude_turn(objs, mod):
+    """Claude 逐字稿的最後一輪:★邊界是最後一句人話★,不是 hook 用的「最後一個 type=user 的行」——
+    系統會在一輪中間塞任務通知/提醒(也是 type=user),hook 的邊界會在那裡截斷、把人話之後的改檔全漏掉
+    (r1 外家 #1 抓到;hook 自己是否也該改是另案,這裡不動 hook)。只借 hook 的人話判定與工具名單,邊界自己算;
+    Codex 逐字稿仍走 hook。回 (files, cmds, last_user, last_ts)。"""
+    turn, last_user, last_ts = [], None, None
+    for o in reversed(objs):
+        if _handoff_is_human(o, mod):
+            c = (o.get("message") or {}).get("content")
+            if isinstance(c, str):
+                text = c
+            elif isinstance(c, list):
+                text = " ".join(str(b.get("text", "")) for b in c if isinstance(b, dict) and b.get("type") == "text")
+            else:
+                text = ""
+            text = text.strip()
+            if text:
+                last_user, last_ts = text[:_HANDOFF_USER_MAX], o.get("timestamp")
+            break
+        turn.append(o)
+    turn.reverse()
+    edit_tools = getattr(mod, "EDIT_TOOLS", None) or {"Edit", "Write", "MultiEdit"}
+    files, cmds = [], []
+    for o in turn:
+        if o.get("type") != "assistant":
+            continue
+        msg = o.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "tool_use":
+                continue
+            inp = item.get("input")
+            if not isinstance(inp, dict):
+                continue
+            name = item.get("name", "")
+            if name in edit_tools:
+                fp = inp.get("file_path", "")
+                if fp and fp not in files:
+                    files.append(fp)
+            elif name == "Bash":
+                cmd = inp.get("command", "")
+                if cmd:
+                    cmds.append(cmd)
+    return files, cmds, last_user, last_ts
+
+
+def _handoff_intent(transcript, root):
+    """逐字稿尾端當「意圖線索」。外層兜底:解析過程任何例外→「意圖不可得(原因)」,不 traceback
+    (r1 外家 #3 實測:合法 JSON 但 session_meta.payload 是 list,原本在 .get 炸掉)。"""
+    try:
+        return _handoff_intent_inner(transcript, root)
+    except Exception as e:
+        return None, f"逐字稿解析炸了({e.__class__.__name__}:{e}),不猜"
+
+
+def _handoff_intent_inner(transcript, root):
+    """最後一輪動過的檔與指令 + 使用者最後一句★人話★。回 (intent|None, reason|None)。"""
+    import json as _json
+    tp = Path(transcript)
+    if not tp.is_file():
+        return None, f"找不到逐字稿 {tp}"
+    try:
+        raw = tp.read_text(encoding="utf-8", errors="ignore")
+    except OSError as e:
+        return None, f"逐字稿讀不到({e.__class__.__name__}:{tp})"
+    lines = [l for l in raw.splitlines() if l.strip()]
+    if not lines:
+        return None, f"逐字稿是空的 {tp}"
+    objs, bad = [], 0
+    for l in lines:
+        try:
+            o = _json.loads(l)
+        except ValueError:
+            bad += 1
+            continue
+        if isinstance(o, dict):
+            objs.append(o)
+        else:
+            bad += 1
+    if not objs:
+        return None, f"逐字稿 {bad} 行全讀不動(不是一行一則 JSON 物件){tp}"
+    mod, why = _handoff_load_hook()
+    if mod is None:
+        return None, why
+    title = next((o.get("customTitle") for o in objs
+                  if o.get("type") == "custom-title" and isinstance(o.get("customTitle"), str)), None)
+    if objs[0].get("type") == "session_meta":   # Codex rollout:版本先自己對,hook 對認不得的版本只印一行就回空,分不出「沒動作」
+        ver = str(((objs[0].get("payload") or {}).get("cli_version")) or "")
+        known = getattr(mod, "CODEX_TRANSCRIPT_VERSIONS", set()) or set()
+        if ver not in known:
+            return None, (f"Codex 逐字稿版本認不得(cli_version={ver or '?'};解析器認得的:{','.join(sorted(known)) or '無'}),"
+                          "不猜格式")
+        kind = "codex"
+    else:
+        kind = "claude"
+    if kind == "codex":
+        try:
+            files, cmds = mod.collect_turn_actions(tp)
+        except Exception as e:
+            return None, f"解析器對這份逐字稿炸了({e.__class__.__name__}:{e})"
+        last_user, last_ts = None, None
+    else:
+        files, cmds, last_user, last_ts = _handoff_claude_turn(objs, mod)
+    return {"transcript": str(tp), "title": title, "kind": kind,
+            "turn_files": [_handoff_rel(f, root) for f in files], "turn_bash": list(cmds),
+            "last_user": last_user, "last_user_ts": last_ts, "bad_lines": bad}, None
+
+
+def _handoff_files(text, root, toplevel):
+    """計劃點名的程式檔:重用派工鏡頭的路徑正則與過濾(去重、.md 不算、穿越不收),★不抄它的 5 檔上限★
+    (那是派工預算,不是接手的預算——第 6 個檔以後也是計劃的一部分)。
+    留的條件:repo 內存在、或 git 認得(已刪的檔樹上沒了但 status 會報 D)。
+    ★用 git status --porcelain 不用 diff HEAD★:後者看不到 untracked(進度從提交推導 v4 的死因之一)。"""
+    cands, seen = [], set()
+    raw = [m.rstrip(".,;:)」』】、") for m in _LENS_SPEC_CODE_RE.findall(text)]
+    raw += [m.strip() for m in _HANDOFF_TICK_RE.findall(text)]   # 反引號內的路徑:空白、非 ASCII 都收(r1 外家 #4)
+    for cand in raw:
+        if not cand or cand in seen or cand.endswith(".md"):
+            continue
+        seen.add(cand)
+        try:   # scripts/../../x 這種穿越不收(派工鏡頭外家 r1 M3 同款)
+            (root / cand).resolve().relative_to(root.resolve())
+        except (ValueError, OSError):
+            continue
+        cands.append(cand)
+    if not cands:
+        return []
+
+    def _git_key(cand):   # porcelain 的路徑永遠相對 repo 根;root 若是子目錄要對齊
+        try:
+            return str((root / cand).resolve().relative_to(toplevel.resolve()))
+        except (ValueError, OSError):
+            return cand
+
+    st, renamed = {}, {}
+    # 整個 repo 問一次、不帶 pathspec:rename 的舊路徑才會跟新路徑一起出現(r1 外家順帶抓到沒測 rename);
+    # -z 路徑不轉義;★-uall 這回是必要的★:不帶 pathspec 時未追蹤目錄會折成一條 `?? dir/`,裡面的檔就對不上
+    r = _lens_git(root, "status", "--porcelain", "-z", "-uall")
+    if r is not None and r.returncode == 0:
+        toks = r.stdout.split("\0")
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if len(t) >= 4:
+                xy, new = t[:2], t[3:]
+                st[new] = xy
+                if xy[0] in "RC" and i + 1 < len(toks):   # rename/copy:下一個 token 是舊路徑
+                    old = toks[i + 1]
+                    st[old] = "R>"
+                    renamed[old] = new
+                    i += 1
+            i += 1
+    out = []
+    for cand in cands:
+        key = _git_key(cand)
+        xy = st.get(key)
+        exists = (root / cand).is_file()
+        if xy is None and not exists:
+            continue   # 不存在也不被 git 認得=計劃寫錯或早就沒了,不列
+        renamed_to = None
+        if xy is None:
+            state = "乾淨"
+        elif xy == "??":
+            state = "未追蹤"
+        elif xy == "R>":
+            state = "已改名"
+            renamed_to = renamed.get(key)
+        elif "D" in xy:
+            state = "已刪"
+        else:
+            state = "已改"
+        last = None
+        if state != "未追蹤":
+            lr = _lens_git(root, "log", "-1", "--date=short", "--format=%ad %s", "--", cand)
+            if lr is not None and lr.returncode == 0 and lr.stdout.strip():
+                last = lr.stdout.strip()
+        out.append({"path": cand, "state": state, "last_commit": last, "renamed_to": renamed_to})
+    return out
+
+
+def _handoff_cmd_brief(cmd, width=80):
+    """指令摘要給人看:去掉開頭的 cd <路徑>(2026-09-07 真逐字稿實看:一輪五條指令全以 cd repo 開頭,只印第一行就是五個 cd),
+    取第一行非空的、截 width 字。JSON 輸出不經這裡,原文保留。"""
+    lines = [l.strip() for l in cmd.splitlines() if l.strip()]
+    # 整行只是 cd 或 echo 橫幅(echo "=== ④ … ===")的先跳過;同一行開頭的 cd X && / echo "…"; 也剝掉
+    _noise_line = r"^(cd\s+\S+|echo\s+(\"[^\"]*\"|'[^']*'|\S+))\s*(&&|;)?$"
+    _noise_head = r"^(cd\s+\S+|echo\s+(\"[^\"]*\"|'[^']*'|\S+))\s*(&&|;)\s*"
+    while lines and re.match(_noise_line, lines[0]):
+        lines.pop(0)
+    if lines:
+        for _ in range(3):
+            lines[0] = re.sub(_noise_head, "", lines[0])
+    first = lines[0] if lines and lines[0] else cmd.strip()
+    return first[:width] + ("…" if len(first) > width else "")
+
+
+def cmd_handoff(env, node, as_json=False, transcript=None, turns=1):
+    """`lumos handoff <計劃節點>`:唯讀接手視圖。用法錯誤(節點不存在、不在 git 裡)才 rc2,其餘恆 rc0。"""
+    import json as _json
+    rel = env.find(node)
+    if not rel:
+        print(f"擋下:找不到節點「{node}」", file=sys.stderr)
+        print("  為什麼在意:接手視圖是照計劃筆記點名的檔去問 git,沒有計劃就沒有清單。", file=sys.stderr)
+        print("  先找節點:", file=sys.stderr)
+        print(f"      lumos search {node}", file=sys.stderr)
+        return 2
+    root = _repo_root_from_env(env)
+    r = _lens_git(root, "rev-parse", "--show-toplevel")
+    if r is None or r.returncode != 0 or not r.stdout.strip():
+        print(f"擋下:{root} 不在 git 專案裡,接手視圖的檔案狀態全靠 git", file=sys.stderr)
+        return 2
+    toplevel = Path(r.stdout.strip())
+    if turns != 1:
+        print("提醒:--turns 目前只讀最後一輪(v1 範圍刀),給了別的值也照最後一輪算。", file=sys.stderr)
+    try:
+        text = (env.vault / rel).read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        print(f"擋下:計劃筆記讀不到({e.__class__.__name__}:{rel})", file=sys.stderr)
+        return 2
+    files = _handoff_files(text, root, toplevel)
+    cand_info = None
+    if transcript:
+        intent, why = _handoff_intent(transcript, root)
+    else:
+        tp, why, cand_info = _handoff_find_transcript(root, plan_stem=Path(rel).stem)
+        intent, why = _handoff_intent(tp, root) if tp else (None, why)
+    if intent is not None and cand_info:
+        intent["candidates"] = cand_info
+    plan_name = rel[:-3] if rel.endswith(".md") else rel
+    if as_json:
+        print(_json.dumps({"plan": plan_name, "repo": str(root), "files": files,
+                           "intent": intent, "intent_unavailable_reason": why}, ensure_ascii=False, indent=2))
+        return 0
+
+    # 人讀三段式:發生什麼 → 為何在意 → 下一步指令獨立一行
+    print(f"接手視圖:{plan_name}(從 git 工作樹與逐字稿讀出來的,不是任何一本帳;只列狀態,不判做到哪)")
+    order = {"已改": 0, "已改名": 1, "已刪": 2, "未追蹤": 3, "乾淨": 4}
+    if not files:
+        print("計劃沒點名找得到的程式檔(scripts/ governance/ src/ … 這幾種路徑一個都沒有,或點名的都不存在)。")
+    else:
+        cnt = {}
+        for f in files:
+            cnt[f["state"]] = cnt.get(f["state"], 0) + 1
+        print(f"計劃點名的程式檔 {len(files)} 個:" + "、".join(f"{k} {cnt[k]}" for k in order if k in cnt))
+        for f in sorted(files, key=lambda x: (order.get(x["state"], 9), x["path"])):
+            tail = f"最後提交 {f['last_commit']}" if f["last_commit"] else "(沒進過 git)"
+            if f.get("renamed_to"):
+                tail = f"→ {f['renamed_to']};" + tail
+            print(f"  {f['state']:<4} {f['path']:<44} {tail}")
+    if intent is None:
+        print(f"意圖不可得({why}):只剩 git 那半——上一輪在動什麼、使用者最後說了什麼,這裡看不到。")
+    else:
+        src = f"逐字稿「{intent['title']}」" if intent.get("title") else "逐字稿"
+        print(f"最後一輪在動什麼({src},{intent['transcript']}):")
+        if intent["turn_files"]:
+            print("  改過的檔:" + "、".join(intent["turn_files"]))
+        elif intent["turn_bash"]:
+            print("  改過的檔:(最後一輪沒有 Edit/Write 類呼叫;★純 Bash 改檔這裡看不到★,同 Issues/收工閘漏掉純Bash改碼 的盲點)")
+        else:
+            print("  改過的檔:(最後一輪沒有工具呼叫)")
+        cmds = intent["turn_bash"]
+        shown = "  |  ".join(_handoff_cmd_brief(c) for c in cmds[:8]) + (f"(…共 {len(cmds)} 條)" if len(cmds) > 8 else "")
+        print("  跑過的指令:" + (shown if cmds else "(沒有)"))
+        if intent["last_user"]:
+            when = f"({intent['last_user_ts'][:16].replace('T', ' ')})" if intent.get("last_user_ts") else ""
+            print(f"  使用者最後說{when}:「{intent['last_user']}」")
+        elif intent["kind"] == "codex":
+            print("  使用者最後說:(Codex 逐字稿 v1 不抽人話,只抽動作)")
+        else:
+            print("  使用者最後說:(逐字稿裡沒有人打的字——只有系統通知/提醒/壓縮摘要)")
+        ci = intent.get("candidates")
+        if ci and len(ci.get("list") or []) > 1:
+            others = [c for c in ci["list"] if c["path"] != intent["transcript"]]
+            print(f"  另有 {len(others)} 份候選逐字稿(這裡挑的是{ci['picked_by']};同一個 checkout 多開時可能挑錯人,自己看一眼):")
+            for c in others[:5]:
+                print(f"    {c['mtime']}  {c['title'] or '(無標題)'}{'(有提到這份計劃)' if c['mentions_plan'] else ''}  {c['path']}")
+            print("  要指定哪一份:")
+            print(f"      lumos handoff {plan_name.split('/')[-1]} --transcript <路徑>")
+        if intent.get("bad_lines"):
+            print(f"  提醒:逐字稿有 {intent['bad_lines']} 行讀不動,已跳過(官方明說格式不穩)。")
+    print("為什麼在意:已改/已刪/未追蹤是上一個 session 做到一半留下的;這裡只列狀態,不猜做到第幾步、不判做到底了沒——線索不是狀態。")
+    print("下一步:")
+    changed = [f["path"] for f in files if f["state"] in ("已改", "已刪")]
+    fresh = [f["path"] for f in files if f["state"] == "未追蹤"]
+    if changed:
+        print("      git diff HEAD -- " + " ".join(changed))
+    if fresh:
+        print("      git status --short -- " + " ".join(fresh))
+    print(f"      lumos context {plan_name.split('/')[-1]} --brief")
+    return 0
+
+
 HELP_WHEN = {
     "doctor": "整個圖譜健不健康。收工前跑;紅的段先修,--verbose 看全部提醒,--ci 給 pre-push 和 CI 用。",
     "links": "這篇筆記連出去哪些筆記。改上游前看下游用。",
@@ -19977,6 +20382,7 @@ HELP_WHEN = {
     "candidates": "列某節點的候選決策(它 typed 邊指到的節點的決策),Claude 讀內容判實作哪條。",
     "add-ai": "把 Claude 判定的 decision_ref 寫進 decision_refs_ai(標 by:ai;E3 生效、抑制不了 E2)。",
     "promote": "人抽查後把 AI 填的 ref 蓋章升進正欄(升級成可抑制 E2);dangling 拒、印覆蓋提醒。",
+    "handoff": "接手別人做到一半的計劃:計劃點名的檔各是什麼 git 狀態、上一輪在動什麼、使用者最後說了什麼——從工作樹與逐字稿讀,不造帳、不判做到哪。",
     "loop": "審查迴圈的查詢:list 先看有哪些編號開著、next 問下一步、status 問過不過、verify-progress 只讀帳本、canary-stats 看歷史抓漏率。",
     "status": "這個審查編號過關了沒。多人審加 --panel,嚴格處置閘加 --disposal,單人 --light,結清模式 --settle。",
     "compress": "長跑的審查上下文太長,規則式壓成三欄。",
@@ -20599,6 +21005,13 @@ def main():
     p.add_argument("--repo", dest="refcheck_repo", help="repo root(預設 cwd 逐層向上找 .git)")
     p.add_argument("--json", dest="as_json", action="store_true", help="輸出 JSON manifest")
 
+    p = sub.add_parser("handoff", help="接手視圖:計劃點名的檔各是什麼 git 狀態 + 逐字稿尾端的意圖線索(唯讀、不造帳、只有用法錯才非 0)")
+    p.add_argument("handoff_node", help="計劃節點(Projects/<主題>_計劃 或它的 stem)")
+    p.add_argument("--transcript", dest="handoff_transcript", metavar="PATH",
+                   help="指定逐字稿 .jsonl(預設:~/.claude/projects/<cwd slug>/ 最新一份、排掉自己這個 session)")
+    p.add_argument("--turns", dest="handoff_turns", type=int, default=1, help="讀最後幾輪(v1 只做 1;給別的值會提醒並照 1 算)")
+    p.add_argument("--json", dest="handoff_json", action="store_true",
+                   help="JSON:{plan, repo, files:[{path,state,last_commit}], intent|null, intent_unavailable_reason}")
     p = sub.add_parser("dispatch-lens", help="代碼審派工詞的固定席鏡頭:把 <base>..<head> 碰到的合約/事故節點整理成可附進派工詞的純文字(hook 用;內容從 base 讀,零自由文字)")
     p.add_argument("lens_range", nargs="?", help="diff 範圍,恰好 <base>..<head>;base 必須在主線歷史上(--claim/--disarm/--status 不用給)")
     p.add_argument("--arm", dest="lens_arm", action="store_true", help="Codex 編排用:派工前一刻算好鏡頭、武裝 --seats 席(10 分內子代理開場各領一席)")
@@ -21024,6 +21437,9 @@ def main():
                           finding_kinds=getattr(args, 'finding_kinds', None),
                           refute_verdicts=getattr(args, 'refute_verdicts', None))
 
+    if args.cmd == "handoff":
+        return cmd_handoff(env, args.handoff_node, as_json=args.handoff_json,
+                           transcript=args.handoff_transcript, turns=args.handoff_turns)
     if args.cmd == "loop":
         if args.lcmd == "list":
             return cmd_loop_list(env, days=args.ll_days, show_all=args.ll_all,

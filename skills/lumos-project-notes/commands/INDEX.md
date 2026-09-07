@@ -17,6 +17,7 @@
 | 「我刪掉/改名了一個函式,筆記會不會還在講它?」 | `lumos search <舊名> --code` 逐句判 | delguard 只在 commit 時提醒,而且逾時會放行 |
 | 「當初為什麼做這個決定?後來翻案了嗎?」 | `lumos decisions <節點> [--superseded]` | 決策是結構化欄位,grep 散文抓不全 |
 | 「這個計劃做到哪了、哪些條款沒人認領?」 | `lumos spec-trace <計劃節點>` | 條款認領靠回指連結,不是文字比對 |
+| 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>` | git status 看得到檔、看不到上一輪在動什麼與人最後說了什麼;逐字稿在本機,指令自己找(排掉自己這個 session)、缺就印「意圖不可得」 |
 | 「我 push 了,CI 跑得怎樣?」 | `lumos ci-wait`(等結果)/ `lumos ci-status`(看上次) | 結果會進治理帳,`gh run list` 不會 |
 | 「做完了,要留驗證紀錄 / 改狀態 / 記決策」 | `lumos new verification <名> --plan <計劃> --systems <節點>` / `lumos set` / `lumos decision-add` | 手改開頭欄位會漏同步、長假筆記,lint 擋 |
 | 「這批改動要不要過審才能推?」 | `lumos pitfalls --diff <merge-base>..HEAD` 看 `tier:` | pre-push 會算同一件事,high 沒留痕就擋 |
@@ -26,7 +27,7 @@
 
 | 你正在… | 開這個子檔 | 裡面有 |
 |---|---|---|
-| 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export |
+| 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff |
 | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
 | 改完東西,要寫回圖譜 | `commands/03-寫回圖譜.md` | new / set / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh |
 | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / doctor / stale / gov / drift-history / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |

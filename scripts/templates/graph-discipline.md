@@ -16,6 +16,7 @@
 | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
 | 「我改了某個流程 / 環境，哪些驗證該重驗？」 | `lumos stale --candidate --match <關鍵字>` |
 | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
+| 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>`（唯讀：點名檔各自的 git 狀態＋逐字稿尾端「上一輪在動什麼、人最後說了什麼」；不判進度、逐字稿缺就明說） |
 | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
 
 查得到才算先行（2026-08-11 在一個導入專案上實測出來的三條）：① 0 筆不是沒記——看「逐詞覆蓋」裡標 ★ 的那個詞是 0，換同義詞再查，換三次還不到再問人，**不要轉頭去 grep**；② 大節點先 `lumos context <節點> --brief`（合約行照樣在頭部），要全文再 `lumos show`；③ 單篇筆記內部可能新舊打架，doctor 驗不出——摘要裡有日期的 KEY 行比正文段落新，衝突又影響決策就去 code 裁，再回頭修圖譜。
