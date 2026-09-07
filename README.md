@@ -296,7 +296,7 @@ Lumos 是我對這件事的答案。
 - **[心智模型與機制](docs/心智模型.md)** — 三條鏈怎麼運作、哪道檢查擋什麼，以及工具證不了的那一半。
 - **[指令參考](docs/指令參考.md)** — 日常你不用敲，但想查得到。
 - **[接手一個沒有筆記的舊專案](docs/接手舊專案.md)** — 怎麼把舊系統的脈絡還原成筆記。
-- [上手細節](ONBOARDING.md) · [架構全景](ARCHITECTURE.md) · [跟規格驅動開發（SDD）差在哪](SDD-vs-Lumos.md)
+- [上手細節](ONBOARDING.md) · [架構全景](ARCHITECTURE.md) · [從 SDD 過來的話](SDD-vs-Lumos.md)
 - 方法論長文：[圖譜即合約](docs/methodology/圖譜即合約.md) · [全景圖](docs/methodology/圖譜即合約-全景圖.md) · [講給外部讀者的版本](docs/methodology/圖譜即合約-對外論述.md)
 
 ---
