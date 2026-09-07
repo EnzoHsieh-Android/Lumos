@@ -12465,7 +12465,10 @@ def _sync_global_hooks(src_repo: Path, harness: str) -> str:
                                            #    TOML 不寫、下次 install --force 再補;hook 檔 copy 在前面已做(自癒無害)(code-codex-d6 r1 單reviewer F3)
         st = _install_codex_agent()
         if st == "created":
-            print(f"  ✓ Codex 自訂審查席已寫兩份:{_CODEX_AGENT_NAME}(gpt-5.6-terra 打底)與 {_CODEX_AGENT_MAX_NAME}(gpt-6-astra,高風險改動才派——Plus 額度緊,別當預設)")
+            print(f"  ✓ Codex 自訂審查席已寫三份:")
+            print(f"      {_CODEX_AGENT_NAME:<22} 散文審(設計審),terra + medium —— 也是預設")
+            print(f"      {_CODEX_AGENT_CODE_NAME:<22} 程式碼審(一般風險),terra + xhigh")
+            print(f"      {_CODEX_AGENT_MAX_NAME:<22} 程式碼審(高風險),astra + xhigh —— Plus 額度緊,別當預設")
             print(f"    派工詞點名哪一個就用哪一個;0.153.2 實測選得中、0.144.1 忽略;唯讀仍靠父代理 --sandbox read-only")
     return "ok"
 
@@ -12473,14 +12476,25 @@ def _sync_global_hooks(src_repo: Path, harness: str) -> str:
 _CODEX_AGENT_NAME = "lumos_reviewer"   # 底線:模型 spawn 時會把連字號正規化成底線(2026-09-04 實看)
 # 第三種「我方」標記(sentinel HTML 註解給 markdown、.lumos-managed 檔給目錄):TOML 檔只能用行註解當標記,不是另立做法
 _CODEX_AGENT_MARK = "# lumos-managed: 由 lumos install 寫入,teardown 收走;改範本請改 scripts/lumos"
-_CODEX_AGENT_MAX_NAME = "lumos_reviewer_max"   # 高風險改動才派的席(額度貴,見下方註解)
+_CODEX_AGENT_CODE_NAME = "lumos_reviewer_code"  # 程式碼審(一般風險)
+_CODEX_AGENT_MAX_NAME = "lumos_reviewer_max"   # 程式碼審(高風險);額度貴,見下方註解
 _CODEX_AGENT_INSTRUCTIONS = """你是 lumos 的外部審查席(乾淨脈絡,不帶編排者的結論)。只讀不寫、不改任何檔。
 每條 finding 一行獨立 severity: clean|minor|major|blocker、一行 blocking: 是|否、一行 引句:「逐字出自審材」、引程式碼寫 file: `路徑:行號`。
 blocker/major 要附能翻紅的最小重現,附不出標「未能重現」。沒問題的節寫「已讀,無 finding」。最後一行總結最嚴重 severity 與 blocking 條數。"""
 
-# ★兩席分流(2026-09-07 Enzo 裁)★:打底用 gpt-5.6-terra、高風險改動才派 gpt-6-astra。
-# 理由=Astra 在 Plus 方案的額度很緊(查到每 5 小時 5–45 則,未實測),全用它會一輪吃光、
-# 之後退回「沒有外家席」——[[Issues/外家席長期缺席仍照跑loop]] 記過這個前科。額度花在刀口上。
+# ★三席分流(2026-09-07 立兩席,09-08 Enzo 再裁拆成三席)★
+#
+#   散文審(設計審)  lumos_reviewer       terra + medium   ← 也是預設
+#   程式碼審(一般)  lumos_reviewer_code  terra + xhigh
+#   程式碼審(高風險) lumos_reviewer_max   astra + xhigh
+#
+# ★為什麼散文審只給 medium★:2026-09-08 實測,拿 xhigh 去審一份 8k 字元的 README 語感,
+#   慢到使用者當場喊停。挑中文語感這種題目不需要深推理;xhigh 該留給「爆炸半徑判不出來」
+#   那種要真的想很久的題目。**推理強度要配題目,不是越高越好——它的成本是牆鐘時間,
+#   而審查慢到讓人不想派,就等於沒有這道防線。**
+# ★為什麼高風險才用 astra★:Astra 在 Plus 方案的額度很緊(查到每 5 小時 5–45 則,未實測),
+#   全用它會一輪吃光、之後退回「沒有外家席」——[[Issues/外家席長期缺席仍照跑loop]]
+#   記過這個前科(九個審查席全同一家族)。額度花在刀口上。
 # ★model / model_reasoning_effort 兩個欄位都是實測有效的★(2026-09-07,codex-cli 0.153.2):
 #   給用不了的模型 → 席位啟動失敗噴 400;給亂填的強度 → 明確報錯並列出支援值。
 #   ⚠ 別用「叫席位自報模型代號」來驗——實測它會答錯(TOML 指定 5.4-mini,它自報 GPT-6)。
@@ -12495,9 +12509,12 @@ sandbox_mode = "read-only"
 '''
 
 
-_CODEX_AGENT_TOML = _codex_agent_toml(_CODEX_AGENT_NAME, "gpt-5.6-terra", "xhigh", "打底")
-_CODEX_AGENT_MAX_TOML = _codex_agent_toml(_CODEX_AGENT_MAX_NAME, "gpt-6-astra", "xhigh", "高風險改動")
-_CODEX_SEATS = ((_CODEX_AGENT_NAME, _CODEX_AGENT_TOML), (_CODEX_AGENT_MAX_NAME, _CODEX_AGENT_MAX_TOML))
+_CODEX_AGENT_TOML = _codex_agent_toml(_CODEX_AGENT_NAME, "gpt-5.6-terra", "medium", "散文審,也是預設")
+_CODEX_AGENT_CODE_TOML = _codex_agent_toml(_CODEX_AGENT_CODE_NAME, "gpt-5.6-terra", "xhigh", "程式碼審")
+_CODEX_AGENT_MAX_TOML = _codex_agent_toml(_CODEX_AGENT_MAX_NAME, "gpt-6-astra", "xhigh", "程式碼審,高風險")
+_CODEX_SEATS = ((_CODEX_AGENT_NAME, _CODEX_AGENT_TOML),
+                (_CODEX_AGENT_CODE_NAME, _CODEX_AGENT_CODE_TOML),
+                (_CODEX_AGENT_MAX_NAME, _CODEX_AGENT_MAX_TOML))
 
 
 def _install_codex_agent(home=None) -> str:
@@ -12531,9 +12548,9 @@ def _install_codex_agent(home=None) -> str:
 
 
 def _remove_codex_agent(home=None) -> list:
-    """teardown 對稱:兩席都收,只刪帶標記的那份;★回真正刪掉的檔名清單★(空清單=什麼都沒刪,falsy)。
-    回清單不回 bool 的理由:兩席之後「刪了幾個」跟「刪了哪些」不一樣,teardown 的移除清單要照實列,
-    不能因為函式回 True 就把兩席都當成刪過(那會report 一個沒發生的動作)。"""
+    """teardown 對稱:每一席都收,只刪帶標記的那份;★回真正刪掉的檔名清單★(空清單=什麼都沒刪,falsy)。
+    回清單不回 bool 的理由:多席之後「刪了幾個」跟「刪了哪些」不一樣,teardown 的移除清單要照實列,
+    不能因為函式回 True 就把每一席都當成刪過(那會 report 一個沒發生的動作)。"""
     d = _codex_home(home) / "agents"
     gone = []
     for nm, _ in _CODEX_SEATS:
@@ -12598,7 +12615,7 @@ def _teardown_global_hooks(src_repo: Path, harness: str):
     merge = src_repo / "scripts" / "merge-claude-settings.py"   # ③ prune-only 剪懸空我方註冊
     if merge.exists() and settings.exists():
         subprocess.run([sys.executable, str(merge), "--prune-only"] + (["--target", "codex"] if harness == "codex" else []))
-    if harness == "codex":                            # ④ 自家自訂審查席 TOML(d6;兩席,照實列刪掉的那些)
+    if harness == "codex":                            # ④ 自家自訂審查席 TOML(d6;三席,照實列刪掉的那些)
         removed.extend(_remove_codex_agent())
     bak = settings.with_suffix(".json.bak")   # ⑤ 合併器每次改檔留的備份也收掉(r1 單reviewer F7:拆機要對稱)
     if bak.exists():
@@ -13721,7 +13738,7 @@ def enforcement_status(root=None, home=None):
             elif miss:
                 add("codex-agent", "inactive", f"少了審查席 {'、'.join(miss)}(lumos install --force 會寫)")
             else:
-                add("codex-agent", "active", f"兩席都在:{_CODEX_AGENT_NAME}(terra 打底)、{_CODEX_AGENT_MAX_NAME}(astra 高風險);0.153.2 實測選得中、0.144.1 忽略;唯讀仍靠父代理沙盒")
+                add("codex-agent", "active", f"三席都在:{_CODEX_AGENT_NAME}(散文審 terra+medium)、{_CODEX_AGENT_CODE_NAME}(程式碼審 terra+xhigh)、{_CODEX_AGENT_MAX_NAME}(高風險 astra+xhigh);0.153.2 實測選得中、0.144.1 忽略;唯讀仍靠父代理沙盒")
     except Exception as e:
         add("codex-agent", "unknown", str(e))
 

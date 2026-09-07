@@ -28772,20 +28772,28 @@ def t_codex_d6_agent_toml():
     (home3 / ".codex").mkdir(parents=True, exist_ok=True)
     _codex_run(home3, "print(m._install_codex_agent())")
     ag = home3 / ".codex" / "agents"
-    base, mx = ag / "lumos_reviewer.toml", ag / "lumos_reviewer_max.toml"
-    check("d6-兩席: 兩份 TOML 都寫出來了", base.exists() and mx.exists(), str(sorted(x.name for x in ag.glob('*.toml'))))
-    pb = _toml.loads(base.read_text(encoding="utf-8")); pm = _toml.loads(mx.read_text(encoding="utf-8"))
-    check("d6-兩席: 打底席 = gpt-5.6-terra + xhigh",
-          pb.get("model") == "gpt-5.6-terra" and pb.get("model_reasoning_effort") == "xhigh", str(pb))
-    check("d6-兩席: 高風險席 = gpt-6-astra + xhigh",
+    base = ag / "lumos_reviewer.toml"; code = ag / "lumos_reviewer_code.toml"; mx = ag / "lumos_reviewer_max.toml"
+    check("d6-三席: 三份 TOML 都寫出來了", base.exists() and code.exists() and mx.exists(),
+          str(sorted(x.name for x in ag.glob('*.toml'))))
+    pb = _toml.loads(base.read_text(encoding="utf-8"))
+    pc = _toml.loads(code.read_text(encoding="utf-8"))
+    pm = _toml.loads(mx.read_text(encoding="utf-8"))
+    # ★推理強度要配題目★:散文審給 medium(xhigh 慢到不想派=等於沒這道防線),程式碼審才給 xhigh
+    check("d6-三席: 散文審席 = gpt-5.6-terra + medium",
+          pb.get("model") == "gpt-5.6-terra" and pb.get("model_reasoning_effort") == "medium", str(pb))
+    check("d6-三席: 程式碼審席 = gpt-5.6-terra + xhigh",
+          pc.get("model") == "gpt-5.6-terra" and pc.get("model_reasoning_effort") == "xhigh", str(pc))
+    check("d6-三席: 高風險席 = gpt-6-astra + xhigh",
           pm.get("model") == "gpt-6-astra" and pm.get("model_reasoning_effort") == "xhigh", str(pm))
-    check("d6-兩席: 兩席名字不同、都唯讀、指示相同(框架單源)",
-          pb["name"] != pm["name"] and pb.get("sandbox_mode") == pm.get("sandbox_mode") == "read-only"
-          and pb["developer_instructions"] == pm["developer_instructions"], f"{pb['name']}/{pm['name']}")
+    check("d6-三席: 三席名字互不相同、都唯讀、指示完全相同(框架單源)",
+          len({pb["name"], pc["name"], pm["name"]}) == 3
+          and pb.get("sandbox_mode") == pc.get("sandbox_mode") == pm.get("sandbox_mode") == "read-only"
+          and pb["developer_instructions"] == pc["developer_instructions"] == pm["developer_instructions"],
+          f"{pb['name']}/{pc['name']}/{pm['name']}")
     gone = _codex_run(home3, "print(sorted(m._remove_codex_agent()))")
-    check("d6-兩席: teardown 兩席都收、清單照實列兩個",
-          "lumos_reviewer.toml" in gone.stdout and "lumos_reviewer_max.toml" in gone.stdout
-          and not base.exists() and not mx.exists(), gone.stdout[-140:])
+    check("d6-三席: teardown 三席都收、清單照實列三個",
+          all(n in gone.stdout for n in ("lumos_reviewer.toml", "lumos_reviewer_code.toml", "lumos_reviewer_max.toml"))
+          and not base.exists() and not code.exists() and not mx.exists(), gone.stdout[-160:])
 
     home2 = Path(tempfile.mkdtemp(prefix="gctl-d6b-"))
     _codex_run(home2, "m._sync_global_hooks(repo,'codex')")   # 判準只看家目錄(不看 PATH),不用改 PATH(code-codex-d6 r1 單reviewer F2)
@@ -30000,16 +30008,35 @@ def t_wrapper_watchdog_no_health_but_wrapper_ran():
               "有在跑" in r.stdout and "健康狀態檔" in r.stdout, r.stdout + r.stderr)
         check("★而且要把紀錄檔上那個時間講出來(人才查得下去)★",
               fin2 in r.stdout, r.stdout)
-        check("★這個狀態仍然要喊★(看門狗瞎了值得知道一次,只是不能講假話)",
-              r.stdout.strip() != "", "什麼都沒印=這個狀態被靜默吞掉了")
+        # ★不能只驗 stdout★(code-batch20 外家席 f5):前一條已經要求 stdout 同時含
+        # 「有在跑」與「健康狀態檔」,所以「stdout 非空」那條是空的;而且五條全部只看
+        # stdout,實作只要 echo 對文案、帳不寫、通知不發,照樣全綠。
+        # 改成驗第二條通道:它自己的紀錄檔(那也是健檢 [A1] 段真正在讀的東西)。
+        wlogf = g / "logs" / "wrapper-watchdog.log"
+        check("★這個狀態要落進它自己的紀錄檔★(桌面通知會被權限擋掉,帳不會)",
+              wlogf.exists() and '"kind":"nohealth"' in wlogf.read_text(encoding="utf-8"),
+              wlogf.read_text(encoding="utf-8") if wlogf.exists() else "紀錄檔根本沒建")
 
-        # ③ 紀錄檔上最後一次跑完已經很久 → 回到「從來沒跑完過」
+        # ③ ★兩筆以上時要取最後一筆★(code-batch20 通才席 F3 用 mutant 抓到的覆蓋洞:
+        #    它把找到就 break 改成「取第一筆」,我原本的五個場景全綠——因為每個場景
+        #    都只放一筆完成紀錄。碼本身是對的(不 break 就是後面覆蓋前面),
+        #    但沒有任何斷言在守那個語意,誰改成取第一筆都不會有人發現。)
+        old_fin, new_fin = _stamp(80), _stamp(2)
+        wlog.write_text("[%s] daily-governance wrapper 完成\n"
+                        "[%s] daily-governance wrapper 完成\n" % (old_fin, new_fin), encoding="utf-8")
+        r = _run()
+        check("★紀錄檔有兩筆完成 → 要取最後那筆,不是第一筆★",
+              new_fin in r.stdout and old_fin not in r.stdout, r.stdout + r.stderr)
+        check("★而且結論要是「有在跑」★(取到第一筆的話會超過門檻、變成從來沒跑完過)",
+              "從來沒跑完過" not in r.stdout, r.stdout)
+
+        # ④ 紀錄檔上最後一次跑完已經很久 → 回到「從來沒跑完過」
         wlog.write_text("[%s] daily-governance wrapper 完成\n" % _stamp(80), encoding="utf-8")
         r = _run()
         check("★紀錄檔上最後一次已經超過門檻 → 照樣說「從來沒跑完過」★",
               "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
 
-        # ④ 紀錄檔有內容但沒有任何「完成」→ 不能被誤讀成跑完過
+        # ⑤ 紀錄檔有內容但沒有任何「完成」→ 不能被誤讀成跑完過
         wlog.write_text("[%s] daily-governance wrapper 開始\n"
                         "[%s] 治理日報 段結束 rc=0\n" % (_stamp(1), _stamp(0.9)), encoding="utf-8")
         r = _run()
@@ -30017,6 +30044,149 @@ def t_wrapper_watchdog_no_health_but_wrapper_ran():
               "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
     finally:
         _sh.rmtree(root, ignore_errors=True)
+
+
+def t_wrapper_log_path_agrees():
+    """★第二個來源的路徑要兩邊都宣告,不能只有讀的那一側自己猜★(2026-09-08 架構對齊席 A1)。
+
+    看門狗在健康檔不在時會去讀 wrapper 的 stdout 紀錄檔當第二個來源。
+    原本只有看門狗這一側寫死一條路徑,而真正的權威是 launchd 那份 plist 的 StandardOutPath
+    ——那份檔住在家目錄、不進版控。兩邊各自漂移不會有人知道,而漂移的後果是
+    ★第二個來源靜靜地消失★,看門狗又退回只有一個來源的狀態。
+
+    這條把它變成雙邊約定並機械比對。★誠實記:這擋不住有人去改 plist★——
+    那份檔不在版控裡,這個 repo 看不到它;真的被改掉時看門狗會 fail-safe 退回舊判斷。
+    """
+    _need_src("governance/daily-governance.sh", "governance/wrapper-watchdog.sh")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    import re as _re
+    paths = {}
+    for f in ("daily-governance.sh", "wrapper-watchdog.sh"):
+        src = (root / "governance" / f).read_text(encoding="utf-8")
+        m = _re.search(r'^\s*WRAPPER_LOG="([^"]+)"', src, _re.M)
+        paths[f] = m.group(1) if m else None
+        check("★%s 要宣告 stdout 紀錄檔的路徑★" % f, paths[f] is not None,
+              "找不到 WRAPPER_LOG=,約定就只剩一邊知道")
+    check("★兩邊宣告的路徑要一模一樣★",
+          paths["daily-governance.sh"] == paths["wrapper-watchdog.sh"],
+          "產出側 %r vs 讀取側 %r" % (paths["daily-governance.sh"], paths["wrapper-watchdog.sh"]))
+    print("  ✓ t_wrapper_log_path_agrees")
+
+
+def t_watchdog_time_math_is_one_scheme():
+    """★同一個檔裡不要養兩套時間比較法★(2026-09-08 架構對齊席 A2,它的查證我複驗過)。
+
+    這個工具鏈一路以來只用一種:`fromisoformat` 解析、拿 `datetime.now(timezone.utc)` 相減。
+    我加第二個來源時用了 naive 的 `strptime` + 沒有時區的 `datetime.now()`
+    ——**全 repo 唯一一處**。紀錄檔上的時間戳確實是本地字串,但 `astimezone()`
+    就能接回既有那一套,不需要另開一條路。
+
+    兩套並存的實際後果不只是難讀:naive 的比較在日光節約回撥的重複時段分不出來,
+    人工調鐘也會差一小時,而這支的判斷門檻是以小時計的。
+    """
+    _need_src("governance/wrapper-watchdog.sh")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    raw = (root / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8")
+    # ★只看碼,不看註解★:第一版忘了剝註解,結果咬到「這裡曾經用過 datetime.now()」
+    # 那句說明文字,報了一個假的紅。這是「斷言沒咬到目標」的反面,同一族。
+    src = "\n".join(ln for ln in raw.splitlines() if not ln.lstrip().startswith("#"))
+    check("★前置★ 現場成立:剝完註解還看得到那段時間運算",
+          "total_seconds()" in src, "剝過頭了,連碼都沒了")
+    check("★不准出現沒有時區的 datetime.now()★",
+          "datetime.now()" not in src.replace("datetime.now(datetime.timezone.utc)", ""),
+          "有 naive 的 now(),那是第二套時間比較法")
+    check("★strptime 解析完要接上 astimezone()★",
+          ("strptime" not in src) or ("astimezone()" in src),
+          "用了 strptime 卻沒轉成帶時區的,兩套時間法並存")
+    print("  ✓ t_watchdog_time_math_is_one_scheme")
+
+
+def t_wrapper_watchdog_unknown_is_not_healthy():
+    """★「問不出來」不准靜靜地變成「沒事」★(2026-09-08 code-batch20,三個現場都實跑重現過)。
+
+    這支的存在理由是「死了要有人知道」,所以★該喊沒喊★比多喊一次嚴重得多。
+    外家否決席挑出三個會讓它一聲不吭的洞,每一個我都自己造現場跑過:
+
+    ① **健康檔的完成時間在未來**(手動調時、時鐘錯、檔被竄改):算出來的年齡是負數,
+       既不算逾期也不算讀不動,五步全 0 就直接落進「沒事」——★整支完全沒有輸出★。
+    ② **鎖齡量不出來**:鎖在、pid 活著、指令名對得上,但 python3 壞掉(launchd 那種
+       精簡環境真的會遇到)。舊寫法把空值帶到 else 判「正在跑,不喊」——
+       ★卡了 72 小時一聲不吭★。
+    ③ **紀錄檔上的完成時間在未來**:不該被當成「剛剛才跑完」。
+    """
+    import shutil as _sh, subprocess as _sp, tempfile as _tf, datetime as _dt, os as _os, time as _time
+    _need_src("governance/wrapper-watchdog.sh")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    src = (repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8")
+
+    def _mk():
+        root = Path(_tf.mkdtemp(prefix="gctl-wdunk-"))
+        g = root / "governance"; (g / "logs").mkdir(parents=True)
+        (g / "wrapper-watchdog.sh").write_text(src, encoding="utf-8")
+        return root, g
+
+    def _run(g, env=None):
+        (g / ".wrapper-watchdog-state").unlink(missing_ok=True)
+        r = _sp.run(["bash", str(g / "wrapper-watchdog.sh")], capture_output=True, timeout=300, env=env)
+        return r.stdout.decode("utf-8", "replace").strip()
+
+    # ① 健康檔的完成時間在未來
+    root, g = _mk()
+    try:
+        fut = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (g / ".daily-governance-health.json").write_text(
+            '{"finished_at":"%s","steps":{"governance":0},"total":0}' % fut, encoding="utf-8")
+        out = _run(g)
+        check("★健康檔的完成時間在未來 → 不准一聲不吭★", out != "", "整支沒有任何輸出")
+        check("★而且要講成「這份檔不能用」,不是「沒事」★",
+              ("不對" in out or "讀不動" in out or "矛盾" in out), out)
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+
+    # ② 鎖齡量不出來(python3 壞掉),而 wrapper 其實卡了 72 小時
+    root, g = _mk()
+    proc = None
+    try:
+        b = root / "bin"; b.mkdir()
+        (b / "python3").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8"); _os.chmod(b / "python3", 0o755)
+        h = g / "fake-daily-governance.sh"
+        h.write_text("#!/bin/bash\nsleep 40\n", encoding="utf-8"); _os.chmod(h, 0o755)
+        proc = _sp.Popen(["bash", str(h)], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        lk = g / ".daily-governance.lock"; lk.mkdir()
+        (lk / "pid").write_text(str(proc.pid), encoding="utf-8")
+        _os.utime(lk, (0, _time.time() - 72 * 3600))
+        env = dict(_os.environ); env["PATH"] = str(b) + ":" + env["PATH"]
+        out = _run(g, env)
+        check("★算不出鎖齡 → 不准當成「正在跑、沒事」★", out != "", "整支沒有任何輸出")
+        check("★要講明是「判不出來」不是「沒事」★", "判不出來" in out or "讀不到" in out, out)
+    finally:
+        if proc is not None:
+            proc.kill(); proc.wait(timeout=10)
+        _sh.rmtree(root, ignore_errors=True)
+
+    # ③ 紀錄檔的完成時間在未來 + 「完成不了」不准被當成完成
+    root, g = _mk()
+    try:
+        wlog = g / "logs" / "daily-wrapper.log"
+        now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fut2 = (_dt.datetime.now() + _dt.timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+        wlog.write_text("[%s] daily-governance wrapper 完成\n" % fut2, encoding="utf-8")
+        check("★紀錄檔上未來的完成時間 → 不算「剛跑完」★",
+              "從來沒跑完過" in _run(g), "被當成剛跑完了")
+        wlog.write_text("[%s] ⚠ daily-governance wrapper 完成不了,要人來看\n" % now, encoding="utf-8")
+        check("★「wrapper 完成不了」是錯誤訊息,不是完成事件★"
+              "(舊寫法只找「這一行裡有沒有那四個字」,把真警報降級成沒事)",
+              "從來沒跑完過" in _run(g), "被誤判成跑完了")
+        wlog.write_text("[%s] daily-governance wrapper 完成\n" % now, encoding="utf-8")
+        check("★反向對照:真正的完成行仍然要認得出來★(證明上面不是靠改過頭換來的)",
+              "有在跑" in _run(g), "改過頭了,真的完成也認不出來")
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+
+    # 結構:只讀尾端(無上限掃描沒有 fail-safe;實測 68MB 跑 0.9 秒,所以是防患不是救火)
+    check("★讀紀錄檔要有上限,不能整份掃★",
+          "TAIL" in src and "seek(size - TAIL)" in src,
+          "找不到尾端讀取:檔案養大之後這支會跟著變慢,而且沒有任何上限")
 
 
 def t_wrapper_watchdog_states():
