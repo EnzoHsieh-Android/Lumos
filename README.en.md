@@ -18,8 +18,9 @@
   <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="760">
 </p>
 
-**Understand it** &nbsp;[What this is](#what-this-is) · [What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper) · [Why plain language](#why-plain-language)<br>
-**Use it** &nbsp;[Who this is for](#who-this-is-for) · [Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
+**Understand it** &nbsp;[What this is](#what-this-is) · [What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper)<br>
+**Is it for you** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
+**Use it** &nbsp;[Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
 **Beyond that** &nbsp;[Why this exists](#why-this-exists) · [Going deeper](#going-deeper) · [Scope](#scope) · [Licence](#licence)
 
 ---
@@ -142,24 +143,6 @@ The four stages run in order, and the last one is the point: what gets accounted
 
 ---
 
-## Why plain language
-
-<p align="center">
-  <img src="assets/shift-en.svg" alt="By hand: one track, trade-offs stay in your head. Plain language: several tracks, trade-offs land as notes" width="900">
-</p>
-
-Writing it yourself means three things happen at once:
-
-- **One track at a time.** That isn't a question of how efficient you are — it's what serial attention means. Hands on the keys, you can't push three things forward at once.
-- **A later AI can only work backwards from the code.** And the code never contained the *why*; it only ever shows the *what*.
-- **The most valuable part never existed anywhere.** Which options you compared, why you rejected one, what you were assuming at the time — none of it left your head, because you never said it to anyone.
-
-Develop in plain language and all three invert: you handle the decisions, the requirements and the trade-offs, while implementation runs on several tracks at once — and **the trade-offs already happen in the conversation**. No separate documentation pass; the rules make them land as notes.
-
-**And the gap only widens.** The stronger models get, the worse the return on doing it by hand — but no matter how strong they get, a model facing a project with no context is still a stranger. **The skill you're practising depreciates; the context you leave behind doesn't.**
-
----
-
 ## Who this is for
 
 **A fit if:**
@@ -176,6 +159,26 @@ Develop in plain language and all three invert: you handle the decisions, the re
 - You just want a nice notes app — Obsidian is genuinely enough for that.
 
 **The cost, stated upfront:** this makes every commit take longer. What you buy is not having to do archaeology three months later. **If the project won't live three months, it doesn't pay for itself.**
+
+---
+
+## Why plain language
+
+That first "not a fit" — still writing most of the code by hand — comes down to this.
+
+<p align="center">
+  <img src="assets/shift-en.svg" alt="By hand: one track, trade-offs stay in your head. Plain language: several tracks, trade-offs land as notes" width="900">
+</p>
+
+Writing it yourself means three things happen at once:
+
+- **One track at a time.** That isn't a question of how efficient you are — it's what serial attention means. Hands on the keys, you can't push three things forward at once.
+- **A later AI can only work backwards from the code.** And the code never contained the *why*; it only ever shows the *what*.
+- **The most valuable part never existed anywhere.** Which options you compared, why you rejected one, what you were assuming at the time — none of it left your head, because you never said it to anyone.
+
+Develop in plain language and all three invert: you handle the decisions, the requirements and the trade-offs, while implementation runs on several tracks at once — and **the trade-offs already happen in the conversation**. No separate documentation pass; the rules make them land as notes.
+
+**And the gap only widens.** The stronger models get, the worse the return on doing it by hand — but no matter how strong they get, a model facing a project with no context is still a stranger. **The skill you're practising depreciates; the context you leave behind doesn't.**
 
 ---
 
