@@ -942,12 +942,6 @@ def _write_probe(d, hold="2", extra=""):
     return pr
 
 
-# 這幾句只要出現,就代表那個行程已經走進「接管區」(拿到接管權、開始動殘鎖)
-_ENTERED = ("GOT", "接管失敗(鎖剛被釋放)", "進來後發現鎖已經換人", "接管後 pid 寫不進去", "鎖搬不走")
-# 這幾句代表它在接管區外面就被擋下來了
-_BLOCKED_OUTSIDE = ("另一個接管者正在處理", "接管權剛被別人處理掉")
-
-
 class TestLoopShellTrapR1Folds(unittest.TestCase):
     """code-r1 折修的 shell 端到端釘(沙箱同 TestLoopShellTrap;紅證=s1 席自建重現+修前無覆蓋)。"""
 
@@ -1330,16 +1324,24 @@ class TestLoopShellTrapR1Folds(unittest.TestCase):
                 holder.kill(); holder.wait(timeout=10)
             _sh.rmtree(d, ignore_errors=True)
 
-    def test_steal_break_is_atomic(self):
-        """★破「殘留的接管權」也要原子,不能 rm 掉再重建★(外家席 f2)。
+    def test_stale_steal_does_not_block_and_only_one_takes_over(self):
+        """★殘留的「接管權」不准把接管永遠卡死,而且解開之後只准一個人接管成功★。
 
         接管權小鎖自己也會殘留(接管中途被砍),所以超過 60 秒就允許破掉重來。
-        原本那段寫成「rm 掉再 mkdir」——★那正是這一整批在修的同一個形態★:
-        A 刪 → A 建 → B 刪(把 A 剛建的砍掉)→ B 建,兩個人都以為自己拿到接管權,
-        然後各自在結尾無條件刪掉它,把還在裡面的第三個人曝出去。
+        兩件事各自要成立:破得掉(不然自主迴圈永遠跑不起來),破掉之後仍然只有一個人拿到鎖。
 
-        量的是「同一輪裡有幾個行程真的走進接管區」。改用 mv 之後只有一個人搬得走,
-        其餘的會在門外被擋下來。
+        ★這支原本寫成「數同一輪有幾個行程走進接管區」,那是錯的,CI 上翻紅才發現★
+        (2026-09-07,本機碰巧綠、Linux 紅):
+        「進來後發現鎖已經換人」代表它是在**別人做完之後**才進去的——那是合法的接續,不是同時。
+        用那幾句話當「同時進去」的證據,量到的是時序巧合不是互斥性。
+        ★這是同一批裡第 20 次「測試存在但沒在驗它宣稱要驗的」。★
+
+        **誠實記**:破接管權那一下改用 mv(原本是 rm 掉再 mkdir)**沒有行為層的守衛**。
+        通才席跑 15 輪 × 8 行程量到 0/15,並且講出原因:真正的互斥在下一層——
+        `mv "$LOCKDIR"` 同一個來源只有一個人搬得走,所以就算兩個人都以為自己拿到接管權,
+        也只有一個接管得成。★我當時讀到那段、還是寫了一支「量得到」的測試,而它量錯了。★
+        那一改留著的理由是「同一個形態不要留第二份」,守衛是結構層的:
+        `t_daily_wrapper_lock_matches_source` 釘住兩支腳本都必須用 mv 破接管權,改回去會翻紅。
         """
         import subprocess as _sp, shutil as _sh
         d = Path(tempfile.mkdtemp())
@@ -1347,27 +1349,19 @@ class TestLoopShellTrapR1Folds(unittest.TestCase):
             probe = _write_probe(d, hold="1")
             lock = d / ".autonomous-loop.lock"
             steal = d / ".autonomous-loop.lock.steal"
-            worst, diag = 0, []
-            rounds = 12
-            for _ in range(rounds):
+            for _ in range(6):
                 for junk in list(d.glob(".autonomous-loop.lock*")):
                     _sh.rmtree(junk, ignore_errors=True)
                 lock.mkdir(); (lock / "pid").write_text("999999")
                 os.utime(lock, (0, time.time() - 7200))
-                steal.mkdir(); os.utime(steal, (0, time.time() - 120))
+                steal.mkdir(); os.utime(steal, (0, time.time() - 120))   # 殘留的接管權(>60s)
                 procs = [_sp.Popen(["bash", str(probe), str(d)],
                                    stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True) for _ in range(6)]
                 outs = [pr.communicate(timeout=120)[0] for pr in procs]
-                entered = [o for o in outs if any(m in o for m in _ENTERED)]
-                if len(entered) > worst:
-                    worst, diag = len(entered), [o.strip()[-160:] for o in outs if o.strip()]
-                # 現場要真的成立:被擋在門外的人得留下痕跡,不然這一輪根本沒起衝突
-                self.assertTrue(any(any(m in o for m in _BLOCKED_OUTSIDE) for o in outs)
-                                or len(entered) >= 1,
-                                "★前置★ 六個行程搶同一把殘留接管權,總得有人講話\n" + str(outs))
-            self.assertLessEqual(worst, 1,
-                                 f"★同一輪有 {worst} 個行程同時走進接管區★(接管權沒互斥住)\n"
-                                 + "\n".join(diag))
+                got = [o for o in outs if "GOT" in o]
+                self.assertEqual(len(got), 1,
+                                 "★殘留的接管權要破得掉、而且只准一個人接管成功★"
+                                 f"(這一輪 {len(got)} 個)\n" + "\n".join(o.strip()[-160:] for o in outs))
         finally:
             _sh.rmtree(d, ignore_errors=True)
 
