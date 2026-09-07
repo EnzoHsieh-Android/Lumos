@@ -10,7 +10,7 @@
 [繁體中文](README.md) · **English**
 
 > That module you had an AI write three months ago? You need to change it today.
-> You don't remember why it was built that way. Neither does the AI — every session, it starts as a stranger.
+> You don't remember why it was built that way. The AI can't reach it either — open a new session and everything you said last time is gone.
 
 <p align="center">
   <img src="assets/hook-en.svg" alt="Left: three months ago the conversation compared three approaches, rejected two with reasons, agreed one unbreakable rule, and ran the tests. Right: three months later only the code remains and the trade-offs have evaporated" width="900">
@@ -185,7 +185,7 @@ Writing it yourself means three things happen at once:
 
 Develop in plain language and all three invert: you handle the decisions, the requirements and the trade-offs, while implementation runs on several tracks at once — and **the trade-offs already happen in the conversation**. No separate documentation pass; the rules make them land as notes.
 
-**And the gap only widens.** The stronger models get, the worse the return on doing it by hand — but no matter how strong they get, a model facing a project with no context is still a stranger. **The skill you're practising depreciates; the context you leave behind doesn't.**
+**And the gap only widens.** The stronger models get, the worse the return on doing it by hand — but no matter how strong they get, what a model can't reach it can't reach. **The skill you're practising depreciates; the context you leave behind doesn't.**
 
 ---
 
@@ -291,11 +291,24 @@ Pick one:
 
 I believe fully autonomous development is coming.
 
-But **an AI will never know a project's business experience on its own, and it won't know how the judgement calls were made.** Why the faster-looking approach was rejected. Which incident bought the rule that's in place now. Which number a person decided rather than calculated. None of that is in the code. It has always lived in people's heads — and when they leave, it goes with them. An AI has it worse: it arrives a stranger in every conversation.
+But **an AI will never know a project's business experience on its own, and it won't know how the judgement calls were made.** Why the faster-looking approach was rejected. Which incident bought the rule that's in place now. Which number a person decided rather than calculated. None of that is in the code. It has always lived in people's heads — and when they leave, it goes with them.
 
-Models will keep getting stronger. But a stronger model facing a project with no context is still a stranger.
+**An AI can't reach it either, for two reasons. The second one gets talked about less:**
 
-So I'm convinced of this: **the foundation of the next generation of software development won't just be models that write better code — it will be the engineering discipline that keeps the context.**
+- **Open a new session and it can't see what was said in the last one.** The trade-off you spent half an hour settling with it yesterday? It has no idea.
+- **Stay in one session long enough and the early part gets pushed out.** The context window has a ceiling; past a certain length the oldest material is dropped — **you think it still remembers, and it doesn't.**
+
+Models will keep getting stronger. But neither of those goes away with a stronger model — **they are questions of what it can reach, not how clever it is.**
+
+**So the context has to live outside the model. But writing it down isn't enough.**
+
+If what you wrote doesn't move with the code, then three months later it describes a three-month-old world — **which is worse than having nothing, because the next person will believe it.** This is where every "let's document things properly" initiative actually dies: not that nobody wrote anything, but that nothing forced it to keep up.
+
+So the thing to guarantee isn't "was it written" — it's **"does it change when the code changes"**. Discipline can't deliver that. Only a machine can: **change the code without touching the notes, and the commit doesn't go through.**
+
+So I'm convinced of this: **the foundation of the next generation of software development won't just be models that write better code — it will be the engineering discipline that keeps the context, and won't let it rot.**
+
+What you want is something that **grows with the work** — **not a system that gets written once and starts rotting from that day on.**
 
 Lumos is my answer to that.
 
