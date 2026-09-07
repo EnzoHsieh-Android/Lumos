@@ -9,7 +9,7 @@
 
 ## 0. 前置
 
-- `gh auth status` 確認登入(第 3、5 步要用)。
+- `gh auth status` 確認登入(**第 2 步等 CI** 與 **第 5 步開 Release** 要用;第 3 步是純 git,不需要)。
 - 工作樹乾淨、人在 `main`、跟遠端同步。
 
 ## 1. 寫版本與變更紀錄
@@ -47,7 +47,10 @@ git push Lumos vX.Y
 ```
 
 - 安裝通道是**分支**不是 tag:`git clone --branch <tag>` 會進 detached HEAD,
-  之後 `git pull` 與 `lumos update` 會靜默停在裝機那一版(2026-07-30 裁定)。
+  之後 `git pull --ff-only` 必定失敗,`lumos update` 也就更新不了(2026-07-30 裁定)。
+  ★2026-09-07 訂正★:當初的理由寫的是「**靜默**停在裝機那一版」,那半句現在不成立——
+  2026-09-06 起拉不到來源會直接中止並講明原因(fail-closed),不再只印一行警告就繼續。
+  所以結論一樣(釘 tag 就收不到更新),但**現在你會被告知**,不是無聲無息。
 - 上次 tag 建了但推失敗要重跑:先 `git tag -d vX.Y`。
 
 ## 5. 開 GitHub Release

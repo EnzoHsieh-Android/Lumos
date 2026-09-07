@@ -1,0 +1,2894 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.2
+--------
+workdir: /Users/enzo/harness/lumos-toolchain
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 01a0790d-68c3-7c31-b084-c27be9cfc210
+--------
+user
+你是外家否決席。這是一份外部第三方投稿的 diff,任務是找出作者沒看到的問題。
+
+工作目錄 /Users/enzo/harness/lumos-toolchain
+材料:governance/review-reports/code-audit-batch11/r1-snapshot.patch
+你可以直接開檔、跑指令、跑測試查證(唯讀,不要改檔;要試就複製到暫存目錄再改)。
+
+這批在做「對外發布線」的最小切片:
+- 三個 clone 站(get.sh / get.ps1 / scripts/lumos 的 cmd_bootstrap)改成先試 release 分支、
+  抓不到退回預設分支。
+- 兩份 README 與 ONBOARDING 的安裝網址改指 release。
+- 新增 CHANGELOG.md、RELEASING.md;新增 lumos --version。
+- get.sh 整段包進 main()(防 curl 串流中斷時執行半段);get.ps1 改成委派 bootstrap 且改成 ASCII-only。
+- Windows 的 lumos.cmd shim 不再寫死 python。
+- 順修一條在 CI 紅過的測試(t_lens_timeout_keeps_warming_cache)。
+
+重點看:
+1. 三個 clone 站的「退回預設分支」備援,行為真的一致嗎?有沒有哪一支在失敗時會留下半個目錄、
+   或把錯誤吞掉?請實際構造「分支不存在」的情境跑跑看(可以用本機 file:// 的假 repo)。
+2. get.sh 的 main() 包裝有沒有漏(例如某段仍在函式外、或 set -euo 的行為被改變)。
+3. 新增的五條守衛,能不能構造「真的錯但守衛照樣綠」的例子?請實跑。
+4. lumos --version 在各種環境下會不會炸(不是 git repo、git 不存在、被複製進別的專案)。
+5. RELEASING.md / CHANGELOG.md 裡的敘述,有沒有跟程式實際行為不符的?請開檔或跑指令查證。
+6. t_lens_timeout_keeps_warming_cache 改完之後,還抓不抓得到「逾時就砍子行程」這個回歸?
+
+規則:
+- 每條 finding 必附「引句:「<逐字 ≥10 字>」」與 file:line,以及 severity 與 blocking:是/否。
+- 報告第一行寫 `severity: <本輪最高>`;乾淨也要寫 `severity: clean`。
+- 沒查證過的猜測不要寫成 finding。
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Completed
+hook: SessionStart Completed
+codex
+我會把 patch 套到暫存副本，逐項做可重現的失敗實驗；原工作目錄只讀。先從圖譜找「發布／bootstrap／守衛」的既有合約，再核對 diff 與測試。
+exec
+/bin/zsh -lc 'python3 scripts/lumos search "發布 bootstrap 守衛"' in /Users/enzo/harness/lumos-toolchain
+ succeeded in 521ms:
+(多詞回退:你查的整串詞在未作廢的節點的可見文字裡找不到完全一致的,改成每個詞分開查、有出現就算;逐詞覆蓋 發布:17  bootstrap:22  守衛:254)
+(已隱藏 7 筆作廢結果;要看的話加 --include-superseded)
+ 14.418  Projects/版本發布流程_計劃.md  [發布,守衛,bootstrap]
+    17 [KEY]: KEY:★核心機制(2026-07-30 使用者裁定,取代 r1 的 tag 通道版)★——**開發線與對外線分兩條分支**:main=開發線(可壞)、release=對外線(只有…
+    23 [KEY]: KEY:可逆性=發布動作實務上收不回(有人裝了);但 ★tag 可刪可 force-move 是事實★——「只前滾不改寫」是**政策不是性質**,無機械強制(Codex 指出,誠實…
+    25 [body]: # 版本發布流程（計劃）
+    28 [body]: `PRIOR-ART:` ① **最小解在既有層**——`LUMOS_VERSION` 常數與 `_version_nudge()` 版本 nudge 已存在（`scripts/l…
+    47 [body]: 2. **發布溝通**：tag＋Release＋CHANGELOG 給出可指認、可回溯的版本身分。
+    54 [body]: ### [S1] 版本單一源與一致性守衛
+    57 [body]: - **真值取得方式釘死**（r1：守衛的尺自己也會漂）：版本取 `^LUMOS_VERSION = "(v\d+\.\d+)"$` 單一定義點；CHANGELOG 取**第一個*…
+    80 [body]: - **不重抄步驟**（r1 折入，本 repo 有清單漂移前科）：把 `ci.yml` 的驗證步驟抽成 **reusable workflow**（`workflow_call`…
+    … 還有 11 處
+ 11.563  Systems/slim-skill-修剪.md  [發布,守衛,bootstrap]
+    13 [KEY]: KEY:reference.md「子命令全覽」行(原列 53 支)整行改寫成只列 24 支保留指令,分四類(讀取/導航 12＋巡檢/治理 4＋寫入 7＋合約守衛 1=24)
+    32 [body]: > **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+ 11.307  Systems/slim-get-一行安裝.md  [發布,守衛,bootstrap]
+    20 [KEY]: KEY:與本 repo 根目錄既有的 `get.sh`/`get.ps1`(完整版 Lumos 遠端一鍵裝,clone `EnzoHsieh-Android/Lumos` 後委派 …
+    50 [body]: > **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+    76 [body]: 守衛範圍已擴大:同一條測試現在掃四支(精簡版三支 + repo 根那支)。
+ 10.884  Projects/公開精簡版_計劃.md  [發布,守衛,bootstrap]
+    18 [KEY]: KEY:★一次性凍結,不是發布通道★——交出去後不再更新,故**不需要**單一源持續同步/白名單漂移守衛/等價驗證當長期合約/併入發版流程(原稿一半篇幅在解這些,已刪)。代價轉向:…
+    20 [KEY]: KEY:★安裝器只做機器層,絕不碰專案層★——專案層的 init/update 會**重新注入 CLAUDE.md 紀律區塊**(用精簡範本),會覆蓋掉既有專案含 design-l…
+    22 [KEY]: KEY:★r1 發現(已折入;①②=blocker,③④=major,分級以〈審計修正紀錄〉正表為準)★——①[S1] 正面表列留下「沉默地帶」,而 [S2] 規則是「白名單**外…
+    23 [KEY]: KEY:★r2 blocker(已折入)★——**r1 的 blocker② 在「聲稱已修好它」的那一節原地復發**:上一版在 [S4-a] 列了一份精確到行號、看起來窮盡的懸空引…
+    25 [KEY]: KEY:★放行裁定=**未收斂,人裁放行**(2026-07-31)★——settle gate rc1(清單 25/35 結清,10 條未結清:S1-2~S1-7/S2-1~S2…
+    26 [KEY]: KEY:★交付載體(使用者裁定 2026-07-31,**放行後補洞、未經審計**)★=**開一個新 repo,交付當下打 tag/設 archived 凍結**(非 zip、非塞…
+    27 [KEY]: KEY:**不可逆面**——交接出去收不回;且交出後無人維護,故交付前**四道**機械驗證是硬前提(原稿標題誤寫「三道」卻列四項)。★settle-r2 更正(兩席獨立命中)★:原…
+    41 [body]: 不是發布一個產品，是**交接一份可讀的資產**。
+    … 還有 28 處
+  9.889  Verification/2026-07-31_slim-skill與readme落地.md  [發布,守衛,bootstrap]
+    20 [KEY]: KEY:reference.md:85「子命令全覽」行已改寫成只列 24 支保留指令(讀取/導航12+巡檢/治理4+寫入7+合約守衛1);SKILL.md:14「紅燈不過夜」已拆出…
+    57 [body]: > **子命令全覽（53 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `li…
+    60 [body]: > **子命令全覽（本精簡版 24 支頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search…
+  9.257  Systems/lumos-cli-lifecycle.md  [守衛,bootstrap]
+    14 [FLOW]: FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install…
+    15 [KEY]: KEY:兩層分工——機器層(install/uninstall)只動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Clau…
+    16 [KEY]: KEY:bootstrap 一鍵對稱(2026-07-25)=step3 升級專案層四分流:有vault+vendored→接hooks｜中間態(有vault無vendored,_…
+    19 [KEY]: KEY:★2026-08-01 teardown 的 Windows 兩處補洞★——①確認提示的 `input()` 是裸的,而 `cmd_deinit`(6766)與 `_con…
+    20 [KEY]: KEY:安全守衛(2026-07-24,改共用函式故 deinit/uninstall 直呼也受惠)——_deinit_unbar_gate 只在 core.hooksPath 指…
+    23 [★DEBT★]: KEY:★DEBT★ CLAUDE.md START sentinel 的版本戳(LUMOS_VERSION)=人可讀標籤/advisory nudge,非正確性守衛(內容比對 d…
+    27 [KEY]: KEY:★2026-08-11 來源 pull 改 fail-closed★——有 remote 卻拉不到最新即中止,★中止點在寫任何檔之前(不留半套)★;政策收進 _pull_s…
+    32 [DEP]: DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit/c…
+    … 還有 11 處
+  8.934  Projects/bootstrap一鍵對稱_計劃.md  [守衛,bootstrap]
+    14 [KEY]: KEY:問題=拆側已有一鍵 teardown,裝側 bootstrap 卻不對稱——它只「接上已是 lumos 的專案」(step3 找不到 vendored 工具就跳過),不會把…
+    15 [KEY]: KEY:方案=bootstrap step3 升級成「專案層自動接線」四分流:①有 vault+有 vendored(已是專案)→照舊 _install_hooks_py(hook…
+    17 [KEY]: KEY:誤建守衛=auto-init 絕不默默做——站在 dotfiles 等個人 repo 跑安裝不能被偷偷變成 lumos 專案:確認 y 才建(prompt 印完整 repo…
+    21 [KEY]: KEY:範圍刀=不動 cmd_init 本體(slug/scaffold/注入邏輯全復用);不加 bootstrap --name(要自訂 slug 的用戶自己跑 init --n…
+    22 [DECISION]: DECISION:裝側對稱=bootstrap 升級為真一鍵(機器層+專案層 auto-init 含確認),get.sh 委派 bootstrap;顆粒指令(install/ini…
+    23 [DEP]: DEP:scripts/lumos cmd_bootstrap/cmd_init/_install_hooks_py/_vault_in｜get.sh
+    24 [fm:PRIOR-ART]: PRIOR-ART:①最小解=組合既有 cmd_init,bootstrap 只加分流+確認,get.sh 改委派消雙寫 ②世界解=curl|bash 裝置器問確認走 /dev/t…
+    26 [fm]: - "[[Verification/2026-07-25_bootstrap一鍵對稱]]"
+    … 還有 15 處
+  8.623  Projects/teardown一鍵拆機_計劃.md  [守衛,bootstrap]
+    17 [KEY]: KEY:範圍(std Codex F11 校準)=teardown 拆「當前 repo 的專案層 + 機器全域(CLI/skills/hooks)」,非整台機器所有 repo(de…
+    20 [KEY]: KEY:便宜守衛(std,走 B 方案 b)=①core.hooksPath 只在它指向本 repo 的 scripts/hooks 時才 unset(std F8:否則誤殺使用者…
+    22 [KEY]: KEY:確認/冪等=單次確認(destructive-but-recoverable:bootstrap/install 復原);--yes 略過、非互動無 --yes 拒絕且拒絕…
+    24 [DECISION]: DECISION:teardown=全域hook清理→deinit(keep_graph)→uninstall;範圍=當前 repo+機器全域(非全機所有 repo,std F11…
+    26 [fm:PRIOR-ART]: PRIOR-ART:①最小解=組合既有 cmd_deinit+cmd_uninstall,新增 _teardown_global_claude(_sync_global_claud…
+    40 [body]: teardown 拆的是「**當前 repo 的專案層 ＋ 機器全域（CLI/skills/hooks）**」——**不是**整台機器所有 repo（`deinit` 只吃當前 g…
+    50 [body]: ## 便宜守衛（走 B 方案 (b)，改在共用函式 → deinit/uninstall 直接呼叫也變安全）
+    85 [body]: - **F8/F10**（core.hooksPath 無條件 unset／uninstall 刪一般檔）→ 加兩便宜守衛（改共用函式）。
+  7.920  Systems/lumos-refcheck.md  [守衛,bootstrap]
+    11 [fm]: - risk/守衛面
+    16 [KEY]: KEY:vault-free(pre-Env 分流,同 install/bootstrap);--repo 省略時 cwd 逐層向上找 .git,無則 rc2
+  7.915  Verification/2026-08-19_精簡版update指令落地.md  [守衛,bootstrap]
+    9 [KEY]: KEY:凍結聲明退役;--tool-only 隔離專案層注入;argv 前置攔截含長度守衛;拼接先於 ast.parse 自檢;合成 fixture 走 --no-update-i…
+    31 [body]: - `slim/install.py`:`--tool-only`(跳過注入守衛與 CLAUDE.md 合併;穩定介面註解)+凍結訊息改 update 指路。
+    37 [body]: 14 條 10 折 4 駁(carrier=governance/review-reports/code-精簡版update指令/r1-orchestrator.md)。要點:①`…
+    49 [body]: ★2026-08-20 起本句降為歷史快照——鏡像已與本工具鏈分家(見 [[Systems/lumos-cli-lifecycle]] d5),本 repo 不再同步它,「已同步至…
+  7.777  Projects/全repo審視_計劃.md  [發布,守衛,bootstrap]
+    39 [body]: | 3 | 版本發布線(release 分支/tag/CHANGELOG)裁定後零落地 | F58、F72、F86、F99 | high | S/low |
+    55 [body]: | 19 | lumos update / bootstrap 把全域 hook 倒退、帳檔擋更新 | F59、F61 | high | S/med |
+    65 [body]: | 29 | frontmatter 欄位 schema 沒有機械守衛(打錯鍵、必填空欄) | F13、F14 | med | S/low |
+    72 [body]: | 36 | 治理資料體積無守衛:Codex stderr 卷證與 jsonl 帳本 | F39、F47 | med | S/low |
+    74 [body]: | 38 | 文件裡的指令與旗標沒有存在性守衛(只驗命令總數) | F84、F105 | med | S/low |
+    110 [body]: | F58 | install-distribution | 版本發布流程計劃審完 38 天零執行,也沒有回頭條件——對外通道仍是 main 開發線 | M/low |
+    126 [body]: | F59 | install-distribution | `lumos update` 把全域 ~/.claude/hooks 同步成「更新前」的 vendored 版;boo…
+    154 [body]: | 2 | pre-commit 刪除守衛半盲跑:15 秒逾時是自己造成的 | F18 | S | 否 |
+    … 還有 72 處
+  7.625  Verification/2026-08-22_成本欄接上與撤除兩階段.md  [發布,守衛]
+    54 [body]: ## 二、★撤除 hook 改兩階段★(發布相容期)
+    60 [body]: **根因**:撤除是一刀切,沒有相容期。**這是「工具鏈自己沒有發布流程」的具體代價**——
+    104 [body]: 配一條守衛測試:**覆寫表的名字必須真的存在於 `t_` 名單**。改名後覆寫會靜默失效,那支
+    136 [body]: - **兩階段撤除沒有機械守衛逼人用**。下次撤 hook 的人可能直接加進 DELETE 組。
+    138 [body]: - 版本號仍寫死 v1.0、消費端仍無法釘版/回滾——**這次只解了症狀(相容期),沒解根因(沒有發布流程)**。
+  7.266  Systems/slim-gen-生成器.md  [發布,守衛]
+    20 [TEST]: TEST:25 checks 全綠(`python3 scripts/test_lumos.py -k slim_gen`)——真檔生成(--help==保留24支/py_comp…
+    32 [fm:why_chosen]: why_chosen: 密度守衛照樣抓得住 ast.unparse 迴歸(密度歸零);實測(2026-07-31 當時)原檔 11999行/686行註解=5.7%,產物 6203行…
+    47 [body]: > **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+  7.191  Verification/2026-07-25_bootstrap一鍵對稱.md  [bootstrap]
+    6 [fm]: - "bootstrap step3 四分流(有vault+vendored→hooks/中間態→提示/無vault→確認後init/非git→跳過);cmd_init 一律 fo…
+    8 [fm]: - "get.sh 迴圈解析 --pull/--init 後整段委派 bootstrap(set -e 保錯誤傳播)"
+    10 [fm]: - "動 cmd_bootstrap/_confirm_tty/get.sh 或 cmd_init 的輕重路徑分流"
+    12 [fm]: - "[[Projects/bootstrap一鍵對稱_計劃]]"
+    17 [TEST]: TEST:t_confirm_tty_unit 6(三階全蓋含★第2階 pty 成功路徑★+stdin 全程未被讀斷言+timeout→None)/t_bootstrap_auto…
+    18 [KEY]: KEY:裝側一鍵對稱落地——bootstrap 專案層四分流(無 vault 經 _confirm_tty 確認才 auto-init,--init 免確認;中間態不自動動),ge…
+    24 [body]: # 2026-07-25_bootstrap一鍵對稱
+    26 [body]: 裝側一鍵對稱落地。spec：[[Projects/bootstrap一鍵對稱_計劃]]。緣起：拆側有一鍵 `teardown`，裝側要「curl → cd → init」三步；使用…
+    … 還有 2 處
+  7.050  Projects/精簡版update指令_計劃.md  [發布,守衛]
+    26 [body]: - 使用者問「精簡版跑 lumos update 會拉到哪版」→ 查證:精簡版根本無此指令(25 支白名單外),README 凍結聲明明文「不是發布通道」。使用者裁示:做上去,語意…
+    37 [body]: - 模板內容(stdlib only):`_slim_update()` 函式——①定位固定落點 `Path.home()/".lumos-slim"`(兩平台同,與 get.sh…
+    38 [body]: - slim-gen 拼接兩處:①產物 `def main():` 行後插入 argv 前置攔截(**`len(sys.argv) > 1 and sys.argv[1] == "…
+    50 [body]: - 散落掃關鍵詞(★std-r1 擴後全貌,與測試 4 文字釘一字對齊,r1 迷你核對補★):「不會有更新」「凍結快照」「不是發布通道」「不會有真正的新版本可拉」「〈凍結聲明〉」(…
+    63 [body]: 2. `t_slim_update_behavior`:產物以假 HOME 執行——①無 `~/.lumos-slim`→rc2+指路訊息;②fixture 造本地 git 源+c…
+    65 [body]: 4. **文字釘**(pre-flight 補+r1+std-r1 兩席擴):斷言 `slim/README.md` 含「lumos update」與〈更新方式〉;README 與…
+    66 [body]: 5. **S4 發行同步驗收=人工步驟,無 CI 著落(誠實明記)**:發行 repo 非本 repo 管轄,驗收指令 `diff -r dist/ <Citrus_Lumos c…
+    67 [body]: 6. **slim-scan 豁免修真**(std-r1 整合席):update 落地後從「已移除指令」變「存在指令」——`slim-scan` 白名單 += update、**刪…
+    … 還有 2 處
+  6.920  Systems/slim-readme.md  [發布,守衛]
+    15 [KEY]: KEY:★2026-07-31 終審 C1 修復★——README 新增一段揭露「`doctor` 有些檢查會建議跑 `lumos init`/`lumos update`/`lu…
+    20 [KEY]: KEY:★2026-08-01 Task 11——新增第 8 節,注入目標守衛★:新增〈注入目標守衛(裝到哪裡才安全)〉,插在〈會不會動我專案的 CLAUDE.md〉之後——逐條說…
+    50 [body]: > **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+  6.888  Issues/探針沙盒改動真全域機器狀態.md  [bootstrap]
+    21 [KEY]: KEY:機制=情境探針把 repo 複製到臨時沙盒、在裡面跑 claude -p,但那個 session 的 HOME 是真的 ~/;只要它(或子程序)跑 lumos instal…
+    22 [KEY]: KEY:★確切觸發哪個動作沒查出來★——41 場的工具呼叫記錄裡沒有任何 install/update/bootstrap 執行;run1 只存前 12 個呼叫(可能截斷掉),沙盒…
+    23 [KEY]: KEY:防線兩道(2026-09-02 已交付,見 [[Verification/2026-09-02_探針沙盒全域防護]])——①探針對 claude -p 設 LUMOS_PR…
+  6.671  Systems/授權與歸屬.md  [守衛,bootstrap]
+    14 [FLOW]: FLOW:改任何一支「會被 lumos init/update/bootstrap 複製進消費專案」的檔 → 檔頭必須帶 SPDX 標示(主程式另帶 MIT 全文)→ 動 _VEN…
+    96 [body]: **四種假綠管道現在全部翻紅,原檔全綠**——含三席代碼審各自構造的那三種。這支測試前後被打臉四次才長成現在的樣子,每一次的壞例子都寫進 docstring,免得以後有人「簡化」它…
+  6.621  Systems/canary-audit.md  [發布,守衛]
+    11 [fm]: - risk/守衛面
+    40 [KEY]: KEY:[2026-08-14 prior-art 掃描]同題 repo LoopX(huangruiteng/loopx,4.7k星,loop-engineering 狀態核心)…
+    169 [body]: （見 [[Projects/版本發布流程_計劃]] r1），但帳上沒有任何機械證據證明它醒著。
+  6.518  Systems/slim-scan-掃描器.md  [發布,守衛]
+    15 [★DEBT★]: KEY:★DEBT★(2026-08-01 代碼審 r6 方法論收穫)★掃描器只認「指令名」,認不得「路徑」★——`Projects/xxx_計劃`、`governance/gol…
+    40 [body]: > **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+  6.513  Systems/lumos-cli-read.md  [守衛,bootstrap]
+    22 [KEY]: KEY:doctor 是全圖權威巡檢(4 檢查 orphans/unresolved/verified_by 雙向(stale/fail 驗證豁免——E1 拔死背書後不反咬漏寫)/…
+    29 [KEY]: KEY:讀指令屬「專案層」——以 cwd find_vault 鎖定本專案 vault(不受同名 vault 影響);對比 install/bootstrap 的「機器層」(全域 …
+    52 [fm]: - content: 讀指令以 cwd find_vault 鎖定「專案層」vault(往上找 docs/*-knowledge 或 standalone vault root),…
+    73 [fm]: - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
+    80 [fm]: - "[[Verification/2026-08-27_關係語意腐爛守衛_G1解鎖即活]]"
+    95 [★INVARIANT★]: - `search <詞> [--path Systems] [--regex] [--files-only] [--code] [--include-superseded]`(`…
+    100 [★INVARIANT★]: - `doctor [--ci]`(`run_doctor`,非 cmd_ 前綴——L4 審計 2026-07-24 修正指針):全圖權威健康巡檢——基礎 4 檢查(orphans…
+    120 [body]: - **專案層 vs 機器層**:讀指令以 cwd `find_vault` 鎖本專案 vault(不受同名影響);install / bootstrap 是機器層(全域 `lum…
+    … 還有 1 處
+  6.207  Projects/graph-engineering掃描2026-08-19_調研.md  [發布,守衛]
+    110 [body]: ### 兩個進場失誤,一個有守衛一個沒有
+    114 [body]: ② **重推一個 code 早就否決的優化**:related 不入多跳寫在 code 註解裡,圖譜一篇都沒講,所以整輪走完才發現前提不存在。★**這條沒有機械守衛**★——重驗條…
+    121 [body]: **有守衛、盤錯的**:
+    136 [body]: - **發布沒有相容期**——版本號寫死 v1.0 從沒 bump,消費端無法釘版/回滾。症狀:install 一刀
+    138 [body]: ★根因(沒有發布流程)沒解★。
+  6.035  Projects/公開精簡版_實作計畫.md  [發布,守衛,bootstrap]
+    27 [KEY]: KEY:★2026-08-01 補追加 Task 11——注入目標守衛,真實事故驅動(咬過兩次,由使用者直接指派)★:兩位不同的子代理驗證時忘記先 `cd` 進交付包 clone,…
+    28 [KEY]: KEY:★2026-08-01 補追加 Task 12——分支終審第四輪代碼審兩條殘留 finding,由使用者直接指派★:①MAJOR:Task 11 新增的 `t_slim_i…
+    29 [KEY]: KEY:★★交付端反向漂移——來源端不知道交付端做了什麼(2026-08-12 推 delguard 時碰巧比對才發現,無任何機械守衛)★★—`Citrus_Lumos` 已經★往…
+    30 [KEY]: KEY:★2026-08-01 補追加 Task 13——bash 全部搬成 Python(Windows 真的能用了),由使用者直接指派★:`slim/install.sh`(2…
+    31 [KEY]: KEY:★2026-08-01 補追加 Task 14——修兩條 Windows 專屬缺陷,由使用者直接指派★:①`.cmd` shim 寫死呼叫字面 `python`,與 `in…
+    32 [KEY]: KEY:★2026-08-01 補追加 Task 15——補 Task 14 明講的殘留缺陷,由使用者直接指派★:Task 14 只修了三支 `.ps1` **結尾**的裸 `ex…
+    62 [body]: - **入列實錄（2026-08-11）**：keep 清單實有**四面鏡子**（slim-gen `DEFAULT_KEEP`／t_slim_gen／t_slim_gate／sl…
+    63 [body]: - **delguard 入列理由（2026-08-11）**：消費端 pre-commit 已帶 Gate DG，slim 缺此命令＝靜默死門（stderr 被吞＋`|| tru…
+    … 還有 4 處
+  5.986  Verification/2026-07-31_接手者演練複審修復.md  [bootstrap]
+    23 [KEY]: KEY:④ Landmark 演練逐項證實揭露段屬實——(1) 正常路徑:`lumos search/context/contracts/doctor` 對 `docs/landm…
+  5.725  Projects/enforcement儀表板_計劃.md  [守衛,bootstrap]
+    16 [KEY]: KEY:為什麼採這條(六條 GPT 建議對完決策帳後)——①真新(圖譜零筆、指令不存在)②低成本(純唯讀匯總,偵測邏輯多半現成:_version_nudge/cmd_anchor_…
+    25 [fm:why_chosen]: why_chosen: enforcement 真新+低成本+對症(fail-open 盲區);拆檔維持緩辦(單人期);manifest 併拆檔風險;relevance 既有守衛在…
+    76 [body]: - ★上線後一致性守衛(2026-09-02)★:新指令觸發 8 條同步守衛翻紅——指令索引(commands/04)補 enforcement 行、五份文件命令數 64→65、s…
+    83 [body]: ★繞不過的極限(誠實)★:若連 SessionStart hook 自己都沒裝,這條自動線也不會觸發——抓不到「自己完全不存在」(雞生蛋)。能抓的是**部分漂移**(hook 裝了…
+  5.614  Verification/2026-07-31_公開精簡版交付.md  [發布,守衛]
+    21 [VERIFY]: VERIFY:[[Projects/公開精簡版_實作計畫]] Task 5 落地——四道機械驗證(負向/正向/等價/真機預演)全過、交付包 dist/ 組裝完成、slim-scan…
+    27 [body]: 驗證對象:[[Projects/公開精簡版_實作計畫]] Task 5(最後一個 Task)—— 四道機械驗證 + 交付包組裝,以及動手前額外修正的 `slim-scan.py` …
+  5.496  Projects/install全域hook同步_計劃.md  [發布,守衛]
+    10 [fm]: - "[[Projects/code-loop必用守衛_計劃]]"
+    29 [fm:why_chosen]: why_chosen: 根因是工具鏈沒有發布流程(版本號寫死 v1.0、消費端無法釘版回滾),連最基本的相容期都表達不出來。兩階段是最小解:零新指令、零新機制,只把既有常數拆成 S…
+    86 [body]: ★這只解了症狀★——根因是工具鏈自己沒有發布流程(版本號寫死 v1.0 從沒 bump、消費端無法
+    88 [body]: **沒有機械守衛逼下一個人先進 STUB;重驗條件=下次有人撤 hook 時看他有沒有照做。**
+  5.454  Systems/lumos-cli-write.md  [守衛,bootstrap]
+    18 [KEY]: KEY:[2026-08-05]decisions 結構守衛修假陽性——原始條數只認 entry 縮排層(恰 2 空格),alternatives_considered 巢狀清單不…
+    22 [KEY]: KEY:[2026-08-23]`remove <note> <key>`★不帶 value=把純量欄位整個拿掉★(design-loop about-code-field r3 …
+    31 [KEY]: KEY:[2026-07-20]set status 反正規化同步——status 存兩處(欄位+tags 的 status/* 標籤,模板生),set status 同一次原子寫…
+    60 [fm]: - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
+    61 [fm]: - "[[2026-07-20_狀態標籤同步守衛]]"
+    83 [body]: | `archive [--days N] [--apply]` | 移檔 | 滾動歸檔老 Verification(days 是選填旗標預設 180,非位置參數;另見 `cmd_…
+  5.446  Systems/slim-install-安裝器.md  [發布,守衛]
+    15 [FLOW]: FLOW:`slim/install.sh` 用 `$(cd "$(dirname "$0")" && pwd)`(先解 symlink 鏈)定位交付包 → 檢查 `scripts…
+    22 [★INVARIANT★]: KEY:★INVARIANT★(2026-08-01 Task 11 新增)CLAUDE.md 注入動手前必須先過三層目標守衛,拒絕時 rc=2 且 CLAUDE.md 不得被動—…
+    23 [KEY]: KEY:★2026-08-01 分支終審第四輪代碼審,兩條殘留 finding★——①MAJOR:`t_slim_install_guard_here_bypasses` 舊 fi…
+    29 [TEST]: TEST:`python3 scripts/test_lumos.py -k slim` 全綠(截至 2026-08-21 為 474 checks;★原記 225(2026-08…
+    30 [KEY]: KEY:★2026-08-01 補追加 Task 13——bash 全部搬成 Python(stdlib only),由使用者直接指派★:`slim/install.sh` 原本承…
+    33 [KEY]: KEY:(★2026-08-01 Task 14 修復③,保險性修法,★這段語意本身未在真機驗證★)`install.ps1` 收尾原本是裸的 `exit $LASTEXITCOD…
+    43 [fm]: - "[[Verification/2026-08-01_slim-install注入目標守衛]]"
+    67 [body]: > **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+    … 還有 1 處
+  5.445  Projects/lint接線收口_計劃.md  [守衛,bootstrap]
+    21 [body]: - **[S1] doctor 加 [F] 檢(複用不重寫;r2 兩折)**:①路徑解析明定=用 run_doctor 既有 `_repo_root_from_env` 慣例(va…
+    32 [body]: - 守衛面:[L2] 紅=CI 擋,但判準=既有 _lintcheck_validate 逐字複用(KDS 真宣告驗過不誤紅、{} 合法)——零新判準=零新誤紅面;本 repo 無…
+  5.160  Projects/loop數據收集_計劃.md  [守衛,bootstrap]
+    36 [fm]: - content: 飛輪量測雙帳落地(Enzo 2026-08-31 裁做):①攔截帳=★圖譜攔截★零工具記號慣例+種子三筆回填 ②逃逸帳=loop escape 原語(M1②,…
+    40 [fm]: - content: 換尺可比切片 r1 五席全票縮案+r2 收斂落地(原名三數字防刷,K-1 正名):B(使用率 held 池)死=判死指標換裝復活繞 d2 重開閘(★圖譜攔截★…
+    106 [body]: append-only 落 `docs/.escape-log.jsonl`(★code-r1 折入:寫入走 canary 家族的落盤自驗原語非裸 append;帳檔進簿記白名單防…
+    123 [body]: 逃逸記帳判準 v1:lumos loop escape 記入,歸因守衛只防編號打錯(NFC 實存性),不驗收斂狀態;stage/severity/desc 必填;帳=docs/.e…
+    126 [body]: - **rev=標記間原文 NFC 後 sha256 前 8 碼,機械算不靠人記**(★r1 三席同抓:散文宣告版本=可比性形同虛設;考卷 rev 是內容自動算的;r2 D2-5 …
+    130 [body]: **C(存活,升級成測試)**:「數字值不進閘」從人工 grep 慣例升級為**漂移守衛測試**(同形家規 t_precommit_whitelist_drift_guard;架構…
+    145 [body]: | 2026-08-31 | 4020fe48 | v1 初凍(bootstrap:首驗紅印值、人工謄入本列、重跑轉綠) |
+  3.638  Systems/slim-uninstall-一行卸載.md  [發布]
+    61 [body]: > **仍在 repo 裡、測試仍在跑**，但★不再發布★——沒有自動發布路徑，人工推送也已停。
+  2.675  Projects/CI回流閉環_計劃.md  [守衛,bootstrap]
+    113 [body]: - **落地三處必改（r1 實查，缺一即靜默失效）**：① 新 hook 檔進 `scripts/hooks/claude/`；② 登記進 `merge-claude-settin…
+    114 [body]: - **生命週期對稱（impact hook 推播命中 [[Issues/hook卸載殘留註冊]]，其通則正中本案）**：該事故通則＝「凡 A 端刪除／B 端引用的成對資源，守衛要…
+  2.521  MOC/index.md  [守衛,bootstrap]
+    40 [body]: ## 完整性 / 影響 / 漂移守衛
+    42 [body]: - [[Systems/cochange-guard]] — co-change 漏改守衛:git 歷史挖共改規則(ROSE 非對稱 confidence),pre-commit …
+    50 [body]: - [[Systems/lumos-cli-lifecycle]] — install/uninstall/update/bootstrap/init/deinit;機器層 vs …
+  2.191  Issues/code-loop守衛main-direct盲區.md  [守衛]
+    18 [KEY]: KEY:pre-push 的 tier=high→code-loop 硬擋守衛以 merge-base..HEAD 算 diff——**直接 commit 在 main 上時 me…
+    19 [KEY]: KEY:影響面=凡 main-direct 的 gate/守衛類 code 變更都不會被 code-loop 硬擋——把關точка失效,只剩散文紀律(編排者自覺調用 lumos-…
+    20 [KEY]: KEY:候選修法(未裁)——①pre-push 對 main-direct push 改用「本次 push 的 range(remote..HEAD)」算 tier ②家規化:ga…
+    27 [body]: # code-loop守衛main-direct盲區
+    29 [body]: pre-push 守衛（scripts/hooks/pre-push:64-88）：`pitfalls --diff` 判 tier=high 時跑 `lumos code-loo…
+    33 [body]: 修法候選見 summary；動 hook 屬改守衛，須過 design-loop。
+  2.167  Issues/design-loop折入漂移_機械守衛.md  [守衛]
+    12 [fm]: - "[[design-loop折入守衛_計劃]]"
+    13 [fm]: - "[[design-loop折入守衛_實作計畫]]"
+    18 [KEY]: KEY:修法定案(見 [[design-loop折入守衛_計劃]]+[[design-loop折入守衛_實作計畫]]):**初版 lint ①§-ref+②summary→body…
+    19 [DECISION]: DECISION:先記為 lumos 工具鏈改進 Issue(非某 spec 問題);真要做需自己走 brainstorm→design-loop(注意別遞歸)。與知識同步散落漂移…
+    21 [KEY]: KEY:[2026-07-17]同病新案例=圖譜節點自身也漂——[[design-loop]] M1 落地只在 summary 頂加 KEY 增量行,FLOW 主幹+辯方 KEY …
+    25 [body]: # design-loop 折入漂移 → 需機械守衛
+    43 [body]: 即使中途做了兩次「整體固化 pass」手動補漂移,下輪仍冒新漂移——**手動同步壓不住,需機械守衛**。
+    45 [body]: ## 修法方向(機械守衛,非靠紀律記得)
+    … 還有 2 處
+  2.164  Systems/cochange-guard.md  [守衛]
+    11 [fm]: - risk/守衛面
+    18 [TEST]: TEST:30/30通過(2026-07-10,t_cochange,含 mutation M3 邊界殺手測試)+全套895綠+code-loop panel r1 收斂(3/3 …
+    20 [fm]: - "[[Projects/cochange守衛_計劃]]"
+    24 [fm]: - "[[Verification/2026-07-10_cochange守衛]]"
+    26 [fm]: - 共改漏改守衛
+    31 [body]: # cochange-guard（共改漏改守衛）
+    35 [body]: 解「知識同步散落」缺口的機械守衛：從 git 歷史挖「改 A 歷史上 X% 同改 B」的關聯規則，commit 時警告漏改的夥伴檔。警告型、不擋人。設計全程見 [[Projects…
+    51 [body]: - [[Projects/cochange守衛_計劃]]
+  2.163  Systems/check-r-guard.md  [守衛]
+    11 [fm]: - risk/守衛面
+    19 [KEY]: KEY:誠實天花板=證明「decisions 記錄了前置守衛」,不證明「守衛在 code 運行時生效」(code 層靠 [test:]);與 [rollback:] 上界相同
+    21 [TEST]: TEST:t_reversibility_guard_doctor｜t_reversibility_lint([guard:] 案例)｜t_marker_doc_sync([gua…
+    33 [fm:why_chosen]: why_chosen: CHECKPOINT 是「改了難救」非「不可逆」,語義上不該被事前守衛免除軟提醒;分開 IRREVERSIBLE/CHECKPOINT 兩分支讓行為精確且 …
+    39 [fm:why_chosen]: why_chosen: 漂移守衛測試斷言 [guard: 須同時出現在模板與 skill,tuple 擴充與兩檔同步必須原子化否則測試紅燈
+    49 [body]: 源起:日報 2026-06-22 gap——Check R 驗「事後回退有沒有寫」,但外部不可逆動作(寄出的信、下游已消費的 prod 遷移)根本沒有逆操作,「把回退寫下來」≠「跑…
+    76 [body]: - **可逆性軸**:`[guard:]` 是 KEY 行 regex namespace 的 pointer,標「事前守衛機制有沒有記在 decisions」。
+    77 [body]: - **合約軸**:`lumos guard bind/scaffold/audit` 是 argparse CLI 指令,綁 `[test:]` 守衛測試。
+    … 還有 2 處
+  2.162  Issues/vendored測試套件在消費端假紅.md  [守衛]
+    18 [KEY]: KEY:★實測數字(Landmark clone)★:`lumos update` 前 8 紅 → 更新後 ★91 紅★(本次精簡版工作讓它變 10 倍);修法後 ★0 紅 / 6…
+    21 [KEY]: KEY:★元守衛(這才是重點)★=`t_need_src_guards_cannot_silently_disable_coverage`:守衛的失敗模式是「放行」,所以它自己壞掉…
+    22 [DEP]: DEP:scripts/test_lumos.py(`_SrcOnly`/`_need_src`/runner 前綴規則/元守衛)｜scripts/lumos `_VENDORED…
+    59 [body]: ## ★元守衛（這才是重點）★
+    63 [body]: `t_need_src_guards_cannot_silently_disable_coverage`：掃本檔所有**獨立成行**的 `_need_src("...")` 實際參…
+    65 [body]: 翻紅釘：`mv slim /tmp/slim-hidden` → 元守衛翻紅並印出 `缺: ['slim']`；還原後轉綠。
+    76 [body]: 來源端 skip = 0 是關鍵：**守衛在來源端完全不生效，沒有遮掉任何一行覆蓋**。
+    81 [body]: - `t_slim_*` 前綴規則是**約定**：如果有人寫了一支測交付包卻不叫 `t_slim_*`，它在消費端仍會假紅。元守衛抓不到這種（它只驗「被守門的產物存在」，不驗「該守…
+  2.160  Verification/2026-08-01_slim-install注入目標守衛.md  [守衛]
+    5 [fm:valid_under]: valid_under: "分支 feat/public-slim-handoff,slim/install.sh 現行版本(⓪ 注入目標守衛三層設計、--here 逃生閥);Py…
+    13 [TEST]: TEST:`python3 scripts/test_lumos.py -k slim` 217 checks 全綠。六支新測試 `t_slim_install_guard_*` …
+    14 [VERIFY]: VERIFY:[[Systems/slim-install-安裝器]] 新增的合約性 KEY 行(⓪ 注入目標守衛三層)。收尾在本 repo 根目錄實跑重新生成的 `dist/in…
+    16 [body]: # 2026-08-01_slim-install注入目標守衛
+    24 [body]: ## 修法:三層守衛,各擋不同的東西
+    34 [body]: 新增六支 `t_slim_install_guard_*`(見 [[Systems/slim-install-安裝器]] summary DEP/TEST 行)。既有 `t_sli…
+    41 [body]: - `t_slim_install_guard_repro_real_incident`(原版)**是稻草人**:原版直接對 `slim/install.sh` 原始檔以 repo…
+  2.155  Projects/狀態標籤同步守衛_計劃.md  [守衛]
+    19 [TEST]: TEST:已落地(2026-07-20)——①t_set_status_syncs_tag ②t_status_tag_drift_guard(lint rc1+doctor Ch…
+    21 [body]: # 狀態標籤同步守衛_計劃
+    27 [body]: PRIOR-ART: 最小解在既有機制層（`cmd_set` 單函式小修＋lint 加一條 check，無新機制）；世界解過——Obsidian 社群共識是 tag/propert…
+    32 [body]: - **[S2] 漂移守衛**：`lumos lint`（doctor 併掃）新增檢查——`status` 欄位與 tags 內 `status/*` 標籤不一致即報錯（硬擋，同鐵…
+    38 [body]: 2. **只加守衛不加同步**：lint 報錯後叫人手修。否決：工具自己寫入造成的漂移叫人擦屁股，違反「機械守衛」哲學。
+    44 [body]: 3. 全 vault 掃描 0 漂移（現況已清零，守衛上線後維持）。
+  2.151  Projects/循序codeloop-tier錨定_計劃.md  [守衛]
+    13 [FLOW]: FLOW:守衛 kind-aware 放寬一格(code∧standard∧無 --round 循序=設計行為)→loop next seq 樣式(width=1/cap 沿 3/…
+    14 [KEY]: KEY:零收緊——code+standard 帶 --round(panel)照舊合法,反向守衛經 r1 三席一致撤除;indeterminate/design/high/ligh…
+    21 [body]: > 白話:單 reviewer 循序跑的 code loop,照規矩本來就該標 standard 檔位,但現在的「檔位↔記帳格式一致性守衛」不分 loop 種類,一標 standa…
+    29 [body]: PRIOR-ART: ① 最小解層級——非新機制,是既有守衛(cmd_loop_next tier↔格式一致性,code-loop r1 折入)的判斷式加 kind 維度;kind…
+    33 [body]: ### S1 守衛判斷式 kind-aware(cmd_loop_next tier↔格式一致性段)
+    40 [body]: | standard | **循序 legacy 格式=設計行為,放行**;panel 格式**照舊合法**(今日 kind-blind 守衛本就允許 standard∧panel…
+    41 [body]: | light | **既有** light↔panel 格式守衛不變(帶 round 即擋;★此為既有守衛,與本案已撤除的那條候選守衛同名不同物,勿混——r1 迷你核對辨義★) …
+    44 [body]: - 守衛放寬僅此一象限(code∧standard∧無round);其餘象限回歸測試逐格釘住。**本案對任何象限零收緊**(r1 折入後成立——放寬一格、不動其餘、不加新擋)。
+    … 還有 8 處
+  2.146  Verification/2026-08-27_關係語意腐爛守衛_G1解鎖即活.md  [守衛]
+    11 [fm]: - "[[Projects/關係層傳播守衛_計劃]]"
+    13 [body]: # 2026-08-27_關係語意腐爛守衛_G1解鎖即活
+    16 [body]: 地基第 4 批 G2=關係語意腐爛守衛(調研頭號腐爛:別篇決策推翻本篇前提)。調研判「卡點=G1」。查證:守衛整套機制早已建好——
+    21 [body]: **G1(本批已交付,回填 8 條 decision_refs)一到位,守衛就有牙。** 實測驗證(scratch 拷貝,不動真圖):翻案 `Systems/lumos-refch…
+    29 [body]: - 守衛只覆蓋**有結構邊/有 decision_refs** 的語意腐爛(E2 靠 typed 邊、E3 靠 decision_refs)。★無結構邊的純語意矛盾(A 的前提被 …
+    30 [body]: - 主網/補網機制本身在 LandmarkMember 真實 vault 規模的實測仍留 doing(計劃註明),本節點只證「在 lumos-toolchain vault 上、回…
+  2.137  Verification/2026-07-05_code-loop必用守衛.md  [守衛]
+    7 [fm]: - "[[code-loop必用守衛_計劃]]"
+    9 [fm]: - "[[code-loop必用守衛_計劃]]"
+    10 [fm]: - "[[code-loop必用守衛_實作計畫]]"
+    16 [TEST]: TEST:code-loop 必用守衛實作完成,736 passed 0 failed(branch feat/codeloop-guard,TDD 5 task + opus w…
+    17 [VERIFY]: VERIFY:三守衛共用判定式 tier=high(pitfalls --diff)∧無有效pass∧無有效skip → blocked;lumos code-loop {pass…
+    21 [body]: # 2026-07-05 code-loop 必用守衛驗證
+    23 [body]: 收「`pitfalls --diff` tier=high 目前只 pre-push advisory 提醒、真跑 `lumos-code-loop` 靠 Claude 記得調用」…
+    39 [body]: - **hook 閉環**:`t_hook_copy_list_completeness`(註冊⊆複製 set-diff)於 e9e61ae 前會紅、後綠——真通則守衛防「註冊了沒…
+  2.136  Issues/linter-gap實務隱患.md  [守衛]
+    15 [DECISION]: DECISION:isinstance(True,int) bool 穿 int 守衛=真通則隱患但 lumos 已全修(唯二 config int 守衛皆加 not isinst…
+    30 [body]: - **`isinstance(x, int)` 誤收 bool**(python `bool` 是 `int` 子類,`isinstance(True,int)==True`;c…
+  2.136  Projects/code-loop必用守衛_實作計畫.md  [守衛]
+    10 [fm]: - "[[code-loop必用守衛_計劃]]"
+    12 [fm]: - "[[code-loop必用守衛_計劃]]"
+    15 [KEY]: KEY:「code-loop 必用守衛」TDD 實作計畫(設計見 [[code-loop必用守衛_計劃]]);5 task=T1 code-loop 留痕(pass/skip/ch…
+    18 [DEP]: DEP:[[code-loop必用守衛_計劃]]
+    21 [body]: # code-loop 必用守衛 Implementation Plan
+    23 [body]: > **REQUIRED SUB-SKILL:** superpowers:subagent-driven-development。**設計權威**:[[code-loop必用守衛…
+    38 [body]: - 非 oracle:守衛關「忘了/隨手漏」,關不掉「刻意繞」。
+  2.135  Projects/design-loop折入守衛_實作計畫.md  [守衛]
+    10 [fm]: - "[[design-loop折入守衛_計劃]]"
+    12 [fm]: - "[[design-loop折入守衛_計劃]]"
+    15 [KEY]: KEY:「design-loop 折入守衛」TDD 實作計畫(設計見 [[design-loop折入守衛_計劃]]);兩交付=lumos fold-check <path> 指令(…
+    19 [DEP]: DEP:[[design-loop折入守衛_計劃]]
+    23 [body]: # design-loop 折入守衛 Implementation Plan
+    26 [body]: > **設計權威**:[[design-loop折入守衛_計劃]](§2 fold-check 演算法 / §3 skill step7 / §4 天花板 / §5 測試)。本計畫…
+    158 [body]: 實作完成寫 `Verification/2026-..._design-loop折入守衛.md`,`plan_refs: "[[design-loop折入守衛_計劃]]"` 回指;…
+  2.135  Verification/2026-07-06_CLAUDE注入re-sync.md  [守衛]
+    18 [VERIFY]: VERIFY:_extract_claude_block_span 三態(found/absent/broken,text[start:end]==body 不變量)+ _rein…
+    19 [KEY]: KEY:版本=標籤/advisory 非正確性守衛,內容比對(Check D)才是守衛——code 落實無偷用版本當 oracle(終審實證);design-loop 3 輪(架構…
+    29 [★INVARIANT★]: - **`scripts/test_lumos.py` 826 passed, 0 failed**(基線 736 → +90:extract_span 三態/reinject 6…
+    34 [body]: 2. 解耦注入 from `_scaffold_project`(其 skip-if-exists 只保護圖譜資料);接 `_vendor_toolchain`(copy2 ven…
+    48 [body]: - **版本 ≠ 守衛**:版本號只驅動 advisory nudge,正確性靠 Check D 內容比對(同「有寫下 undo ≠ 驗過能跑」)。
+  2.133  Verification/2026-07-20_狀態標籤同步守衛.md  [守衛]
+    16 [VERIFY]: VERIFY:[[Projects/狀態標籤同步守衛_計劃]] S1+S2 落地
+    18 [fm]: - "[[狀態標籤同步守衛_計劃]]"
+    20 [body]: # 2026-07-20_狀態標籤同步守衛
+  2.132  Verification/2026-07-05_design-loop折入守衛.md  [守衛]
+    7 [fm]: - "[[design-loop折入守衛_計劃]]"
+    9 [fm]: - "[[design-loop折入守衛_計劃]]"
+    10 [fm]: - "[[design-loop折入漂移_機械守衛]]"
+    16 [VERIFY]: VERIFY:folded-drift 機械守衛落地——鏡像段列舉+value-drift(全文域同識別詞不同值)+reverse-omission(高訊號 token 降噪 23…
+    19 [fm]: - "Projects/design-loop折入守衛_計劃.md#d1"
+    21 [body]: # 2026-07-05 design-loop 折入守衛 驗證
+    23 [body]: `lumos fold-check` + `lumos-design-loop` SKILL.md step7 實作完成並通過 opus 終審。落地 [[design-loop折入…
+  2.128  Systems/delguard.md  [守衛]
+    13 [fm]: - risk/守衛面
+    15 [fm]: - "[[code側刪除傳播守衛_計劃]]"
+    16 [fm]: - "[[code側刪除傳播守衛_實作計畫]]"
+    24 [KEY]: KEY:天花板=只抓「符號消失」型;死碼盲區(符號在、機制停用=存在性比對放行)/行為反轉/純語意矛盾不響——見 [[code側刪除傳播守衛_計劃]] 天花板節能力邊界表;v2 候…
+    27 [KEY]: KEY:[2026-09-06]★逾時降級的真因是命中行數,不是 token 數★——帳上 30% 執行是逾時降級(守衛在半盲狀態下擋人)。原以為跟 token 數有關,量出來是:…
+    38 [body]: # delguard — code 側刪除傳播守衛（S1+S2+S3）
+    42 [body]: 設計脈絡、失守實錄（mOrangePos aff2329）、誤報處置、能力邊界表全在 [[code側刪除傳播守衛_計劃]]（design-loop r1/r2 收斂，golden …
+  2.128  Projects/CLAUDE注入re-sync與版本標籤_計劃.md  [守衛]
+    17 [DECISION]: DECISION:含機械漂移守衛(test + doctor Check):本 repo CLAUDE.md 區塊 == resolved template,逐字比對(內容比對 >…
+    18 [DECISION]: DECISION:交付物 3 版本號=「人可讀標籤 + 粗 nudge」,嚴禁當 staleness oracle;單一源 LUMOS_VERSION → 機械蓋進 START s…
+    19 [KEY]: KEY:誠實天花板=版本號不證內容對(bump 可漏),真守衛是內容比對;--no-verify 繞得過 doctor;非 oracle
+    21 [TEST]: TEST:design-loop 3 輪(全 caught,見 canary-log claude-reinject)——架構折穩(解耦/ReInjectResult三態/Bloc…
+    57 [body]: ## 交付物 2:漂移守衛(內容比對,真守衛)
+    60 [body]: - 比對區 = 兩 sentinel「之間」,**不含 sentinel 行本身**(版本戳在 START sentinel 行,落在比對區外,故版本差不觸發內容守衛——標籤與守衛…
+    61 [body]: - **比對 slice 單一源 + 位移(F-05 + F2)**:單一函數 `_extract_claude_block_span(text) -> BlockSpan|Non…
+    66 [body]: ## 交付物 3:版本標籤 + 粗 nudge(嚴禁當守衛)
+    … 還有 4 處
+  2.126  Issues/寫下風險當成處理風險.md  [守衛]
+    14 [KEY]: KEY:文件裡「這條沒機械守衛/這數字是拍的/本工具擋不了」密度極高,已成慣用句式;承認正在替代處理
+    15 [KEY]: KEY:2026-08-20 當日就新增至少三處:鏡像分家無守衛、slim 凍結無守衛、gov --stats 的限制聲明
+    27 [body]: > 立成 CLAUDE.md 第 4 條鐵則:寫「沒守衛/只提醒/單次量測」旁邊要有什麼時候回頭看。**實證**:本輪三處承認句都對到了週抽/空轉週報/留痕。
+    40 [body]: - 「無機械守衛,靠自律」「純靠 honor-system」
+    46 [body]: 1. 鏡像分家:「移除 remote 只擋誤推,不擋有人手動加回來再推——無機械守衛,靠本決策留痕」
+    68 [body]: | **C 已接受型** | 評估過、決定不做 | 一句理由 + 一個回看觸發條件 | 只寫「無守衛」不寫為什麼可以 |
+    79 [body]: | slim/ 凍結無機械守衛 | C | 理由=測試仍跑、改了不會壞只會白做;回看=slim/ 被改且交付庫未同步時。FROZEN.md 已載,不動 |
+  2.121  Systems/測試假綠形態.md  [守衛]
+    20 [KEY]: KEY:★2026-08-26 code-batch3 實例(s3 席一次抓四條,都靠「拔守衛後仍全綠」證實)★——④型(現場走不到被測分支):斷言「__seqN 尾巴沉默」實際被…
+    23 [KEY]: KEY:[2026-09-05]第 ★17★ 次,又是新測試自己中第④型:daily-governance 包 main() 的守衛首版只比「有 main() {」「最後一行 ma…
+    24 [KEY]: KEY:[2026-09-06]★新型:不是假綠是「假紅」,但同源——測試沒在驗它宣稱要驗的東西★。t_codex_s1_lens_arm_claim 驗的是席次 token 原子…
+    93 [body]: - ★第 12 次（2026-08-02，檢索多詞回退 M1）——又是這一型，而且又是**新測試自己犯的**★：`t_search_multiword_fallback_is_op…
+    94 [body]: - ★這次新學到的通則★：**要驗「某條件成立時不得走某分支」，先確認現場真的滿足那條分支的全部前置條件。** 擋住你的往往不是你在測的那個守衛，而是**被測邏輯自己更前面的守衛*…
+    95 [body]: - ★第 13 次（2026-08-03，未閉合圍欄守衛）——**第④型的新面貌：現場不成立的原因是「指令用法就錯了」**★：要驗「`guard trace` 不得把未閉合圍欄裡的…
+    97 [body]: - ★方法上的收穫（值得變成習慣）★：**先跑突變版確認它真的會誤報，再寫斷言。** 本例是先看到突變版印出 `→ 2026-08-03_demo`（誤報佐證）、還原版印出「無 V…
+    122 [body]: ### ⑦ 守衛的白名單過寬
+    … 還有 18 處
+  2.119  Projects/標籤結構收編_計劃.md  [守衛]
+    19 [KEY]: KEY:★四件落地★——①context 頭部攤出 type/status 以外全部 tag 家族(實測 gap:標了 priority/P1 進場讀不到) ②值域 lint(cu…
+    20 [KEY]: KEY:risk 回填(agent 保守判,寧缺勿濫):toolchain 28 節點(守衛面 23/不可逆 5;金流/對外零命中符合預期)、Landmark 15 節點(金流 9…
+  2.118  Verification/2026-07-10_cochange守衛.md  [守衛]
+    4 [fm:feature]: feature: cochange 共改漏改守衛(rules/check CLI + pre-commit Gate CC)
+    18 [fm]: - "[[Projects/cochange守衛_計劃]]"
+    20 [fm]: - "Projects/cochange守衛_計劃.md#d1"
+    21 [fm]: - "Projects/cochange守衛_計劃.md#d2"
+    23 [body]: # 驗證：cochange 共改漏改守衛
+    48 [body]: - 本 repo：`rules` 含 README.en.md⇒README.md(1.0)、test_lumos⇒lumos(0.82)、**ARCHITECTURE.md⇒RE…
+    53 [body]: `python3 scripts/test_lumos.py -k cochange`；真機驗收指令見 [[Projects/cochange守衛_計劃]] 驗收節。
+  2.115  Issues/推新分支時風險分級拿空樹當起點.md  [守衛]
+    13 [DECISION]: DECISION:未裁——修法三方向已列,傾向 2(只改訊息)或 3(不做),不傾向 1(改範圍),理由:解析預設分支失敗會讓守衛變鬆,拿可能的假陰性換假陽性不划算。這是判斷不是裁…
+    16 [KEY]: KEY:★為什麼值得記★——擋下訊息給的三條出路裡兩條是繞過(code-loop skip / --no-verify),而唯一不繞過的那條成本是「跑一輪多席代碼審」。常態誤擋的閘…
+    20 [KEY]: KEY:同源問題——與 [[Verification/2026-09-03_席間覆蓋率離線量測]] 是同一類:守衛的「叫」與「不叫」一旦跟真實風險脫鉤,就從證據退化成儀式
+    27 [body]: > 白話:推送前的守衛會先算「這批改動有多高風險」,高風險就擋下來要求先跑代碼審。但**推一個遠端還沒有的分支時,它沒有東西可以比對,就退回拿「空樹」當起點**——等於把整個 re…
+    48 [body]: **三條出路裡有兩條是繞過守衛**:①跑一輪代碼審 ②留一句理由跳過(`code-loop skip`)③強制推(`--no-verify`)。
+    50 [body]: ★一個常態誤擋的閘,會訓練人習慣性繞過它——那比閘不存在更糟,因為帳面上看起來還有守衛。★
+    52 [body]: 這與 [[Verification/2026-09-03_席間覆蓋率離線量測]] 量到的是同一類問題:**守衛的「叫」與「不叫」一旦跟真實風險脫鉤,它就從證據退化成儀式。**
+    62 [body]: 1. **新 ref 時退回跟預設分支比,而不是空樹**:`_range="$(git merge-base Lumos/main $_lsha)..$_lsha"`,取不到 me…
+    … 還有 1 處
+  2.113  Systems/anchor-integrity.md  [守衛]
+    11 [fm]: - risk/守衛面
+    23 [KEY]: KEY:誠實天花板——同 repo 守衛悖論:決意繞過者可連守衛一起改;買到的是無痕篡改被封死(必留 baseline diff/缺 approve 事件/bypass 軌跡其一)…
+    31 [fm:why_chosen]: why_chosen: 機械、確定性、零依賴;無痕篡改被封死到只剩「連守衛一起改」,人 review 有明確紅旗;B 留 future 真 CI(baseline 屆時直接複用)
+    36 [fm:context]: context: lumos 是自主 loop 天天迭代對象,收進 baseline=每天 approve→盲簽疲勞,守衛立刻形同虛設
+    49 [body]: `lumos anchor verify/approve`——**錨點完整性守衛**(vault-free):測試 runner 與把關 hooks 的 sha256 baseli…
+    67 [body]: ## ★簽名檔本身沒提交,是這道守衛的天生破口(2026-09-06 實際被 CI 咬到)★
+    76 [body]: **最坑的地方**:CI 的錯誤訊息會叫你「重新核可並留理由」——照做也沒用,因為問題根本不是沒簽名,是簽了沒提交。訊息把人指向錯的方向,而這種紅燈又特別像「守衛壞了」。
+    78 [body]: **怎麼修的**:推送前的閘多一道——簽名檔如果處在「改過但沒提交」的狀態就擋下,訊息直接講「沒提交」並給提交指令,不叫人再簽一次。守衛配的是**行為測試不是字串比對**:真的搭一…
+    … 還有 1 處
+  2.113  Verification/2026-07-16_fromscratch守衛M1_CheckJ.md  [守衛]
+    7 [fm]: - "[[Projects/from-scratch重生守衛_計劃]]"
+    15 [VERIFY]: VERIFY:M1 Check J(regen 重生來源守衛)落地——J-a 拒發明合約(regen 節點的 INVARIANT 標記行需 [src:]/[git:] 意圖證據,與…
+    20 [body]: # 2026-07-16 fromscratch守衛 M1 Check J 落地驗證
+    22 [body]: [[Projects/from-scratch重生守衛_計劃]] M1 的實作驗證。design-loop 3 輪 panel 人裁實質收斂（golden: `governance…
+  2.109  Projects/code-loop必用守衛_計劃.md  [守衛]
+    15 [KEY]: KEY:⚠現行(2026-07-06 ADR,見 decisions):Stop nag 已撤除(每回合刷屏太擾民)——守衛=pre-push 單點 blocking;hook 檔…
+    26 [fm]: - "[[Verification/2026-07-05_code-loop必用守衛]]"
+    35 [body]: # code-loop 必用守衛_計劃
+    37 [body]: > 收「看到訊號還要記得調用 code-loop」的破口(使用者點出)。借鏡 [[主動影響幅度偵測_計劃]] 的 push 注入。**不是新 review 機制,是給既有 code…
+    42 [body]: ## §1 架構(三守衛點,共用判定式)
+  2.105  Verification/2026-07-29_CI回流閉環v1落地.md  [守衛]
+    39 [body]: ## 過程中被機械守衛咬住兩次（正面案例）
+    41 [body]: 1. **命令數漂移守衛**：新增兩個頂層命令後，`t_docs_command_count` 立刻在三份文件上翻紅——這正是它昨天被加進來的目的，且 spec [S5] 已預先寫…
+    48 [body]: ## 文件同步與新守衛（2026-07-29，使用者指出「為什麼這些都還要我講」）
+    50 [body]: 當天有守衛的（指令數）一改就被咬住並當場修好；沒守衛的三處全漏、由使用者提醒才補：
+    53 [body]: **根因不是疏忽是結構**：同一事實散在多處、只有一處有機械守衛；文件越長漂移面越大（呼應 [[Projects/上下文瘦身_計劃]]）。
+    54 [body]: **修法＝把守衛面推廣**：新增 `t_docs_enumeration_drift`，把「禁止手寫數字／列舉」從指令數擴到三類機械可推導事實——
+    57 [body]: 守衛已做 mutation 驗證（拿掉一個 verdict → 翻紅；還原 → 綠），非稻草人。
+    78 [body]: **守衛面同時擴大**（`t_docs_command_count` / `t_docs_enumeration_drift`）：
+    … 還有 4 處
+  2.103  Projects/prepush主幹範圍修法_計劃.md  [守衛]
+    10 [fm]: - "[[Issues/code-loop守衛main-direct盲區]]"
+    15 [KEY]: KEY:問題=pre-push 的 tier/code-loop 守衛以 merge-base(HEAD,main) 算 diff——main-direct 時 mb==HEAD,…
+    17 [KEY]: KEY:hook 改動——**stdin 必須最先讀**(讀進陣列再跑測試段,防後續指令吃掉);逐推送 ref 檢:刪除 ref(local_sha 全零)跳過;**無基準(新 r…
+    19 [KEY]: KEY:落地同步義務(r1 折入)——①anchor:scripts/hooks/pre-push 是錨點檔,改後落地 push 先卡自身 anchor verify→序含 `lu…
+    20 [KEY]: KEY:★風險面★self-governance=high(動 pre-push 守衛本身)——spec 過 design-loop 非 light([[Issues/code-l…
+    29 [body]: > **狀態**：**實質收斂人裁放行（2026-07-21，使用者）**——cap 3 輪滿＋r3 首個輪有效（opus 2/2）＋設計本體 Codex 確認解除＋殘留全文件歷史…
+    42 [body]: - **★無基準＝保守掃全部，不 fail-open（r2 Codex 三席否決折入——樞紐反轉）★**：對守衛而言「算不出基準→跳過」是把盲區改成正式繞法（首推 main／`ma…
+    65 [body]: `lumos-code-loop` SKILL `## 一眼看懂` 的「**何時**:」條末補一句（r1 s4-F5 折入落點精確化）：「gate/守衛類 code **建議** …
+    … 還有 3 處
+  2.100  Systems/check-j-regen-guard.md  [守衛]
+    11 [fm]: - risk/守衛面
+    17 [fm]: - "[[Projects/from-scratch重生守衛_計劃]]"
+    19 [fm]: - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
+    29 [VERIFY]: VERIFY:[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]
+    35 [body]: Check J：from-scratch 重建節點的 provenance 分級守衛。設計三輪對抗審與收斂史見 [[Projects/from-scratch重生守衛_計劃]] 與…
+  2.098  Verification/2026-07-22_install全域hook同步.md  [守衛]
+    16 [TEST]: TEST:t_install_global_hook_sync 9 checks(copy 三 hook/settings 註冊/撤除 code-loop-guard 真檔刪+註冊…
+    28 [body]: - 同步：`Issues/hook卸載殘留註冊` 補殘尾 KEY、漂移守衛 `t_hook_copy_list_completeness` 改指 `_GLOBAL_CLAUDE_H…
+  2.093  Systems/hook信任邊界.md  [守衛]
+    14 [KEY]: KEY:三支 hook(進場 / 圖譜同步 / 影響鏡頭)的解析函式是逐字相同的複本——hook 是獨立檔、複製到 ~/.claude/hooks 後彼此 import 不到,所以…
+    44 [body]: ## 為什麼是「複製 + 守衛」而不是抽共用模組
+    46 [body]: hook 是獨立檔,安裝時會被複製到 `~/.claude/hooks/`,**複製過去之後彼此 import 不到**。所以那段解析函式在三支檔裡是逐字相同的複本,由守衛測試盯著…
+    51 [body]: - **沒買到**:如果你自己把一個陌生 repo 裝成 lumos 專案(跑 install),那是你主動信任它,這條防不到;還有 hook 檔本身如果被換掉,是另一道守衛(錨點…
+    70 [body]: 版控裡有 8 個 hook 檔,錨點清單只列 4 個——**另外四支被改了、或偷偷多一支,守衛一句話都不說**。四支補進清單,並加一條「清單 vs 實際檔案的集合要相等」。
+    82 [body]: **有兩條既有斷言原本在要求「把原文印出來」**——那兩條斷言本身就是在守著破口,已翻成守衛。
+    106 [body]: ### 二、寫死清單的守衛,守不到清單外的東西
+    108 [body]: 我改了三支 hook,守衛也寫死掃那三支。**第四支(派工鏡頭那支)的備援是「往上四層」,複製進消費專案之後正好是專案根**——跟我自己在別支檔案的註解裡描述成「破口」的寫法一模一…
+    … 還有 2 處
+  2.087  Verification/2026-07-04_lint-version-watch.md  [守衛]
+    14 [VERIFY]: VERIFY:subagent-driven 6 task、每 task 乾淨 reviewer 雙判;3 task 有 fix 派修複審(T1 設計defect/T3 覆蓋補/T…
+    21 [body]: - `t_lint_watch_semver`(T1)——`_semver_parse`/`_is_prerelease` 正負例(cobra→False)/`_compare_v…
+    29 [body]: - **T1 設計 defect(6 輪 design-loop 漏網,誠實記錄完整性天花板)**:§測試1 自相矛盾跨段數見證(3.9/3.20.0 behind vs 等段數守…
+    30 [body]: - fix 派修:T3(--json dest 一致化 + malformed-entry rc2 覆蓋)、T4(argv 守衛 + malformed-seen 測試)、T5(d…
+    45 [body]: - ⚠️ **compound/非標準版**:hilt `2.49`(2段)vs latest 3段 → `segment-count-mismatch` skip(等段數守衛依設…
+  2.086  Verification/2026-07-24_teardown一鍵拆機.md  [守衛]
+    21 [KEY]: KEY:兩便宜守衛改共用函式(deinit/uninstall 直呼也變安全)=core.hooksPath 只在指向本 repo scripts/hooks 才 unset(st…
+    22 [VERIFY]: VERIFY:設計 std 單席 Codex 跨家族審(blocker+多 major:順序F5/失敗F6/守衛F8F10/範圍F11/繼承殘留F4F9F12)+使用者「照建議」裁…
+    36 [body]: - **兩守衛（std F8/F10，改共用函式）**：`core.hooksPath` 只在指向本 repo `scripts/hooks` 時 unset（不誤殺使用者 git…
+    43 [body]: 5 個測試函式 10 檢查（全域清理/prune-only/兩守衛/拒絕零 mutation）＋全套 1365 綠。假 HOME 隔離，嚴禁碰真 `~/.claude`。
+  2.085  Verification/2026-06-24_check-r-guard.md  [守衛]
+    16 [fm]: Check R [guard:decisions] 事前預防路徑驗證:design-loop 3 輪收斂(canary 3/3 全中、跨家族複核 2 輪 endorsed)+ Py…
+    25 [body]: - r2/r3 折入 minor(型別守衛 inner-delta 釐清、組件同 commit、命名正交辯方反證、測試斷言補強)。
+    31 [body]: - `t_marker_doc_sync`(`:1195`):tuple 含 `"[guard:"`,斷言其同時出現在 `graph-discipline.md` 與 `SKILL…
+    34 [body]: PASS——機制按分支真值表行為,事前/事後兩軌與 CHECKPOINT 隔離均有測試覆蓋,知識同步有漂移守衛。
+  2.085  Verification/2026-08-18_循序tier錨定落地.md  [守衛]
+    5 [fm:valid_under]: valid_under: cmd_loop_next 現行守衛結構、_roster_kind 三值判、_TIER_PARAMS standard=(3,3)
+    6 [fm:revalidate_when]: revalidate_when: tier↔格式守衛再改動、_TIER_PARAMS 值變更、skill 循序 cap 政策改動
+    9 [KEY]: KEY:守衛放寬僅 code∧standard∧無round 一格(seq 布林含 not panel_fmt);零收緊(panel 照舊合法);cap 6→3=第 3 輪攤人;t…
+    19 [body]: > 白話:循序單 reviewer 的 code loop 終於能標 standard 檔位——守衛認得 loop 種類後只放行這一格,其餘象限回歸測試逐格釘住零收緊;cap 從被…
+    23 [body]: - TDD 六組測試先紅後綠(紅=守衛 rc2/表無列/警告缺):`t_seq_code_std_anchor`(含前置斷言 design 象限仍擋)/`t_seq_code_st…
+    28 [body]: - `scripts/lumos`:守衛加 `not seq` 豁免(seq=`code ∧ standard ∧ not panel_fmt`);width 覆寫 1(cap 沿…
+  2.083  Verification/2026-08-12_CheckU_過度概化守衛.md  [守衛]
+    22 [body]: # 驗證：Check U（過度概化守衛）
+    44 [body]: 2. **`CustTransfer`「折疊守衛（通則）」**——自稱通則、「凡…都必須」、**零 `[test:]`**，
+    46 [body]: 3. **`滿額贈`** 同一條折疊守衛（同型宣稱、同樣沒綁）。
+  2.082  Systems/lumos-deinit.md  [守衛]
+    15 [FLOW]: FLOW:pre-flight守衛(非git→rc2｜root==_lumos_src→rc2｜vault==root→強制keep-graph)→[--dry-run僅印即返]→…
+    18 [KEY]: KEY:vault==root 鐵閘獨立於 root==_lumos_src 守衛——保護任何 standalone-vault repo(非只 Lumos 源)免被 rmtree…
+    25 [fm]: - content: vault==root 鐵閘:偵測到 vault.resolve()==root.resolve() 時強制 keep-graph、絕不 rmtree,獨立於…
+    27 [fm:context]: context: design-loop r3 canary 審計揪出的真 blocker:_vault_in 對 standalone vault(根目錄 MOC/+System…
+    28 [fm:why_chosen]: why_chosen: 對主打防誤刪的指令,刪掉整個 repo 是不可逆災難;鐵閘獨立於來源守衛才能涵蓋任何 standalone-vault repo
+    66 [body]: 3. `vault==root` 鐵閘 → 強制 `keep_graph=True`(standalone vault:圖譜=repo 根,刪了=刪整個 repo)。**獨立於**…
+    71 [body]: > `root==_lumos_src()` 守衛:對齊 `cmd_update` 的 root==src 模式,印 stderr 並 `return 2`(拒絕整個 deinit…
+    74 [body]: ## 固定執行順序(pre-flight 守衛全在第一個 mutation 之前)
+  2.078  Verification/2026-08-30_intake守衛T1-T4落地.md  [守衛]
+    6 [fm:revalidate_when]: revalidate_when: "T4 滾動窗滿 6 個迴圈時看首次判定(出現率 ≥5/6 → advisory 已夠;<5/6 且缺席者有 blocker 輪 → doctor…
+    11 [fm]: - "[[Projects/intake守衛_計劃]]"
+    13 [body]: # 2026-08-30_intake守衛T1-T4落地
+    15 [body]: 驗證 [[Projects/intake守衛_計劃]] d1(三輪達上限攤牌後人裁放行)的 T1-T4 落地。
+  2.074  Verification/2026-07-04_risk-tiered-review.md  [守衛]
+    11 [fm:valid_under]: valid_under: difficulty.py RISK_CLASSES 四類詞表+params(high=3/8,standard=2/6)+assess_spec 黑名單…
+    12 [fm:revalidate_when]: revalidate_when: 改 RISK_CLASSES 詞表或黑名單;改 params 對映;改收檔守衛接線;改 §2.5c high 條文;RISK_CLASSES re…
+    15 [VERIFY]: VERIFY:bash -n 過;review 三輪(Task1 防呆雙條件被削經 controller 攔下還原、Task2 SPEC 前置守衛 Important 修、Task…
+    21 [body]: `bash -n governance/autonomous-loop.sh`:語法過;收檔守衛三分支(SPEC 無效/gate 重驗不過/high 級 cross 非 endor…
+    22 [body]: 審查過程攔下三個真缺陷:implementer 擅削 spec 防呆字元條件(還原+fixture 加長)、TIER_FINAL 計算缺 SPEC 前置守衛(補)、測試 class…
+  2.072  Systems/check-y-symbol-existence.md  [守衛]
+    11 [fm]: - risk/守衛面
+    16 [fm]: - 幽靈符號守衛
+    23 [KEY]: KEY:★守的是成因 D「寫的時候就錯」★——code 從沒變過也會發生,故 ★diff-based 守衛(delguard)結構上抓不到★。與 delguard 分工:delgu…
+    37 [body]: # Check Y — 被提及符號存在性（幽靈符號守衛）
+  2.067  Issues/code-loop-pass自失效追尾.md  [守衛]
+    8 [fm]: - "[[Issues/code-loop守衛main-direct盲區]]"
+    9 [fm]: - "[[Projects/code-loop必用守衛_實作計畫]]"
+    17 [KEY]: KEY:配套——pass/skip 成功訊息加一行順序提示(其後只准簿記檔 commit);與 [[Issues/code-loop守衛main-direct盲區]] 同屬「守衛機…
+  2.066  Systems/節點還原.md  [守衛]
+    15 [KEY]: KEY:與重生守衛(Check J)的分工——守衛管「重建不准瞎編」(輸出端),本 SOP 管「產出」(建哪些/從哪開始/多深算夠);機械把關真實範圍=只掃 summary、J-a…
+    27 [body]: [[Systems/外部對照-code衍生wiki]] 早就承認:冷啟動整個陌生 repo 是 lumos 的弱項(對手 openwiki 的強項)。但 openwiki 式的全倉…
+  2.065  Systems/check-u-overgeneralization.md  [守衛]
+    11 [fm]: - risk/守衛面
+    15 [fm]: - 過度概化守衛
+    30 [fm]: - "[[Verification/2026-08-12_CheckU_過度概化守衛]]"
+    37 [body]: # Check U — 全稱宣稱未綁測試（過度概化守衛）
+    49 [body]: 另一個真陽性：`CustTransfer` / `滿額贈` 的「**折疊守衛（通則）**」——自稱通則、寫著「凡顯示/計數該表的查詢**都必須**折疊」、**零 `[test:]`…
+    100 [body]: > 保留 U 是因為它在本專案確實抓到真東西（折疊守衛通則），但**不應被當成可移植的機制**。
+  2.061  Verification/2026-08-01_公開精簡版代碼審第四輪修復.md  [守衛]
+    14 [VERIFY]: VERIFY:[[Systems/slim-install-安裝器]] 分支終審第四輪代碼審兩條 finding 修復——①MAJOR:`t_slim_install_guard_…
+    20 [body]: [[Verification/2026-08-01_slim-install注入目標守衛]](Task 11)交付後,分支終審第四輪代碼審對三層守衛實作又抓到兩條殘留 findin…
+    22 [body]: - **① MAJOR**:`t_slim_install_guard_here_bypasses` docstring 宣稱驗「`--here` 繞過第二層」,但 fixture…
+    23 [body]: - **② MINOR**:`slim/install.sh:76` 的守衛判斷與印目標邏輯用 `$(pwd -P)`(解 symlink),但(改前)`:207` 算 CLAUD…
+    33 [body]: **額外檢查其他守衛測試**(逐一過六支 `t_slim_install_guard_*` + `t_slim_uninstall_refuses_foreign_bin`):只有…
+  2.058  Issues/自主loop加法偏食.md  [守衛]
+    18 [KEY]: KEY:守衛模型原則(使用者提出):守衛該長在「事件源」上——每種漂移向量在發生那刻被對應的閘接住;對已有事件閘的東西做收斂期輪詢=overcheck。唯一合法的重驗=無事件可掛的…
+    35 [body]: 人的修剪動作:2026-07-06 撤除 Stop nag(ADR 在 [[code-loop必用守衛_計劃]])——「太擾民,pre-push 單點就夠」。loop 永遠不會自發…
+  2.042  Systems/doctor-irreversible-hint.md  [守衛]
+    13 [fm]: - risk/守衛面
+    16 [KEY]: KEY:warn_soft 軟提示——不計 issues、不影響 rc;Check H 是「摩擦地板」提醒,不是合規守衛(NOPE hard block)
+    55 [body]: - **互補 Check R 而非取代**:Check R(`scripts/lumos:619-642`)只驗「有沒有標 ★IRREVERSIBLE★、標了回退/守衛是否合規」;…
+    56 [body]: - **摩擦地板,非合約守衛**:`warn_soft` 印出但不動 `issues`、不影響 rc。絕不 hard block(刻意設計:syntactic pattern 必有…
+  2.041  Projects/Codex外審吸收_計劃.md  [守衛]
+    16 [KEY]: KEY:★P0 已落地★——①GitHub Actions CI 信任根(.github/workflows/ci.yml:compileall+SyntaxWarning 閘+全…
+    33 [body]: | 壞 YAML 逃過 doctor（d1 吞進 content） | **採，已修＋守衛** | 實錘；lint 新守衛用正牌 parser 驗空 content/條數 |
+    34 [body]: | 文件漂移（44 指令/兩步安裝/Obsidian 宣稱） | **採，已修＋機械守衛** | t_docs_command_count 首跑抓到 README.en 漏網＝守衛…
+    61 [body]: | 「hook 三方 ⟺ 已守衛」 | 斷言實為**單向** `registered ⊆ copied`；「複製了沒註冊」的幽靈 hook 照樣過 | `t_docs_enumer…
+    65 [body]: 2. **指令數三版本並存**——`AGENTS.md` 44／`reference.md` 49／實際 51；`t_docs_command_count` 只掃 README/R…
+    66 [body]: 3. **圖譜自己是舊的**——`Systems/guard-kill.md` 仍寫「六態／timed_out 歸 killed／全 killed 含 timed_out=rc0」…
+  2.034  Issues/vendored自測3紅_來源repo專用測試漏標skip.md  [守衛]
+    12 [KEY]: KEY:2026-08-17 Landmark 跑 lumos update 後自測 2139綠/76skip/★3紅★,三紅全是引用來源 repo 資產的測試漏掛「來源 repo…
+    20 [body]: > ## ✅ 已結案(2026-08-17)— 兩處 skip 守衛補齊/修細,消費端模擬實證轉 skip
+    22 [body]: > ①`t_precommit_whitelist_drift_guard` 頂部補 `_need_src("docs/lumos-toolchain-knowledge/Syst…
+  2.032  Systems/risk-tiered-review.md  [守衛]
+    11 [fm]: - risk/守衛面
+    17 [KEY]: KEY:機械脊椎=收檔不信 orchestrator 自報 converged——wrapper 自算 tier 重驗 gate,謊報低 tier 拉不低門檻;SPEC 空/不存在…
+    40 [fm:why_chosen]: why_chosen: 寫做得到的;損失=escalate 輪少 2 輪預算,fail-closed 方向不受影響(收檔守衛以自算 tier 重驗)
+    57 [body]: - `governance/autonomous-loop.sh`:選 gap 後分級注入;收檔守衛(SPEC 前置驗證→自算 tier 重驗 gate→high 級 cross_…
+  2.023  Projects/CLAUDE注入re-sync與版本標籤_實作計畫.md  [守衛]
+    17 [KEY]: KEY:T1 marker常數+_extract_claude_block_span 三態→ T2 _reinject_claude_block(5-status+diff+半壞+…
+    28 [body]: **Goal:** 讓 `lumos update`/`init` 真正刷新既有專案 CLAUDE.md 紀律區塊(覆蓋 sentinel 之間 + diff)+ 內容比對漂移守衛…
+    37 [body]: - 版本=標籤(advisory nudge)**非正確性守衛**;內容比對(Check D)才是守衛。
+    85 [body]: ### Task 4: doctor Check D(內容比對漂移守衛)
+  2.017  Projects/code側刪除傳播守衛_實作計畫.md  [守衛]
+    11 [fm]: - "[[code側刪除傳播守衛_計劃]]"
+    14 [KEY]: KEY:spec 單源=[[code側刪除傳播守衛_計劃]](design-loop 已收斂,golden@governance/golden/code側刪除傳播守衛/);本節點只…
+    22 [body]: # code側刪除傳播守衛_實作計畫
+    26 [body]: **Goal:** 把已收斂的 [[code側刪除傳播守衛_計劃]] v1（S1 被刪符號偵測＋S2 純連結判定＋S3 問句）落成 `lumos delguard` 子命令＋pre…
+    55 [body]: ### Task 1：LINK_KEYS 常數＋子集守衛斷言
+    540 [body]: 全部 task 完成後：`lumos pitfalls --diff <merge-base>..HEAD`——**動了守衛面，大概率 tier: high** → 依家規走 `l…
+  2.017  Projects/code側刪除傳播守衛_計劃.md  [守衛]
+    8 [fm]: - "[[關係層傳播守衛_計劃]]"
+    9 [fm]: - "[[cochange守衛_計劃]]"
+    19 [KEY]: KEY:★這是兩個既有守衛之間的接縫,不是新問題面★—[[關係層傳播守衛_計劃]] 自己寫明「pre-commit 只保證 code↔圖譜同次有動(檔案級存在性),保證不了決策翻案…
+    23 [KEY]: KEY:第二道=★純連結編輯不算同步★—判該節點本次 diff 是否只動「純連結欄位」=★明確子集 LINK_KEYS={verified_by,plan_refs,related…
+    24 [KEY]: KEY:★天花板(誠實講)★—只抓「符號消失」這一型。行為反轉但名字沒少(例:`isStock = if(isSend=="Y") prefs.isStock else false…
+    53 [fm:why_chosen]: why_chosen: S1 的輸入契約=staged snapshot,只有 pre-commit 天然持有;快照一致性是本守衛正確性的前提,不是實作偏好
+    55 [fm]: impact hook 在編輯當下的即時推播不帶本守衛訊號;接受——刪除在編輯當下未必成形,commit 時點才是刪除的定案點。
+    62 [body]: # code 側刪除傳播守衛_計劃
+    … 還有 12 處
+  2.015  Issues/2026-08-03_剝除與邊界解析的既有缺陷群.md  [守衛]
+    61 [body]: ### ② `cmd_archive:6713` 活守衛護欄用 raw 全文
+    63 [body]: 同一個語意（「這篇 Verification 有沒有提到這個守衛測試」），`guard trace` 剝 code、`archive` 不剝
+    65 [body]: 會被 archive **永久**排除在歸檔外，並對外宣稱它「背書存活守衛」。
+    84 [body]: ### ⑤ BOM 讓 `lint` 的 decisions 守衛靜默關掉
+    87 [body]: BOM 檔 → `startswith("---")` 為 False → 整個 decisions 結構守衛跳過。
+    89 [body]: > 那個守衛的存在理由正是 2026-07-29 外審的「**綠燈 ≠ schema 有效**」——結果它自己被一個 BOM 關掉。
+    149 [body]: | ② | `archive` 活守衛護欄用 raw 掃 | 修法明確（改用 `_strip_code_text`），但**我沒自驗過重現**，且會改變歸檔行為，值得單獨一輪 |
+    151 [body]: | ⑤ | BOM 關掉 lint 的 decisions 守衛 | 一行 `utf-8` → `utf-8-sig` 看似 trivial，但要確認沒有別處依賴「BOM 檔被當無…
+  2.013  Projects/design-loop折入守衛_計劃.md  [守衛]
+    10 [fm]: - "[[design-loop折入漂移_機械守衛]]"
+    22 [TEST]: TEST:已實作(branch feat/fold-check,528 passed;2 design-loop 輪+TDD 5 task+opus 終審);VERIFY:[[20…
+    31 [fm]: - "[[2026-07-05_design-loop折入守衛]]"
+    33 [body]: # design-loop 折入守衛_計劃
+    35 [body]: > **狀態**:設計定稿(2026-07-05 brainstorming)。解 [[design-loop折入漂移_機械守衛]] Issue。待 design-loop → w…
+    115 [body]: 實作完成 Verification 用 `plan_refs: "[[design-loop折入守衛_計劃]]"` 回指;更新本節點 `TEST:` + `verified_by`…
+  2.006  Verification/2026-07-09_loop三輪壓縮.md  [守衛]
+    18 [VERIFY]: VERIFY:T1 capture-recapture 殘餘估計(Chao1 偏差修正純函式)/ T2 canary record --round 留痕欄 / T3 loop st…
+    20 [KEY]: KEY:opus 機械核心終審抓 2 blocker 已修——C1 無 capture_counts 改 fail-closed(不繞過殘餘)、I1 混用守衛改全帶 round 比…
+    34 [body]: 3. **T3 `loop status --panel`**:按 round-id 分組判最新輪四條合取(輪有效≥2caught ∧ 存活 max≤minor[只算 caught…
+    40 [body]: - **I1 混用守衛不全**:`any(round)` 讓 partial-mix log 過關、round-less 記錄形成 None phantom 組可偽過 → 改「全帶…
+  1.991  Systems/lint-version-watch.md  [守衛]
+    22 [KEY]: KEY:機械核心在 scripts/lumos `lint-watch` 子命令(vault-free、dispatch 置於 find_vault 前);純數字 tuple 比較…
+    47 [body]: - 版本比較純數字 tuple + 等段數守衛:current 須與 registry 同版本方案、同精度宣告(靠人維護,清單漂移會漏報)。
+    50 [body]: - **複合/非標準版**(KSP `1.9.0-1.0.13` 含 `-` 被判 prerelease、hilt `2.49` 2 段與 3 段 latest 段數不符)→ 守衛…
+    53 [body]: 6 輪 canary 6/6 全 caught,抓修真缺陷(Maven `%22`+字串 max 病灶、PEP440 prerelease、三態、等段數守衛、fixture sea…
+  1.990  Projects/地基盤點2026-08-26_調研.md  [守衛]
+    6 [KEY]: KEY:重點缺口:①關係層只查斷鏈不查「還對不對」(自認頭號腐爛無常態守衛)②新收斂制無新舊對照回測(n=1~11,golden 未建 bundle)③自主迴圈 backlog 退…
+    36 [body]: - **G2 關係層只查存在不查語意**——[[Projects/關係層傳播守衛_計劃]] 自認「頭號腐爛(別篇決策推翻本篇前提)hooks 抓不到,只 $30 AI 交叉審掃得出…
+    38 [body]: - **G4 孤兒守衛只盯 Verification**——Issues/Projects/Systems 零入邊無機械檢查(粗估 13 篇)。〔判定:light 小案〕
+    73 [body]: - 第 4 批 ✅(2026-08-27):G1 decision_refs 解鎖(CI 綠 4a9df6a)+G2 關係語意腐爛守衛=★被 G1 解鎖即活★(機制 M1-M4+C…
+    74 [body]: - 第 5 批 🔄(2026-08-27,D2✅ L2✅ G6 部分):D2 安全鏡頭=Enzo 裁「明文宣告排除+邊界」([[Systems/pitfalls-code-loop…
+  1.989  Verification/2026-08-16_圖譜結構化查詢query落地.md  [守衛]
+    21 [TEST]: TEST:t_query_* 7 案 32 斷言全綠(標籤 AND/no-tag/active/contract 真解析器/linked 鄰域/superseded 排除+逃生/b…
+    37 [body]: 3. **交付面同步**(漂移守衛逼出,非自發記得):AGENTS/ARCHITECTURE/README/README.en/skill reference 指令數 60→61;…
+  1.984  Projects/關係層傳播守衛_計劃.md  [守衛]
+    18 [KEY]: KEY:天花板=只掃frontmatter可判;純語意矛盾(兩篇內容打架)仍留AI交叉審,本守衛不取代、是機械前濾網讓AI那關變便宜。哲學=機械強制列鄰居(擴覆蓋)+人判傳播(守語…
+    19 [DEP]: DEP:[[pitfalls事故觸發_計劃]][[cochange守衛_計劃]]
+    24 [fm]: - "[[cochange守衛_計劃]]"
+    25 [fm]: - "[[code側刪除傳播守衛_計劃]]"
+    31 [fm:why_chosen]: why_chosen: "proactive主網趁脈絡最全當場處理最準最便宜、reactive Check E當補網;連鎖必判斷閘防2-3跳點名半張圖;只掃frontmatter可…
+    52 [fm]: - content: "[S3]判斷閘改AI先判分級,非每鄰居都要人點:明顯牽連AI自動confirm(放寬)、明顯無關AI自動prune但只在有把握時(不對稱—誤prune=靜默…
+    60 [fm:context]: context: "[S6]是關係層守衛裡免前置、純frontmatter、風險最低的一條→先落地把頭號腐爛的一塊變免費週期檢查;主網與E2-E4需P0 typed-edge in…
+    73 [body]: # 關係層傳播守衛_計劃
+    … 還有 3 處
+  1.980  Verification/2026-07-05_pitfalls網搜補漏.md  [守衛]
+    17 [KEY]: KEY:dogfood 唯一候選(isinstance bool 穿 int)被反證預篩駁倒——反證者 grep 證 lumos 唯二 config int 守衛皆已加 not i…
+    30 [body]: 3. **反證預篩**:派乾淨 refuter(default-refute+要 file:line)→ **駁倒**:grep 證 lumos 唯二 config int 守衛(…
+  1.979  Verification/2026-08-18_派工編制資料化落地.md  [守衛]
+    6 [fm:revalidate_when]: revalidate_when: tier↔格式守衛改動(code/standard 解鎖時 roster 補列)、dispatch 檔名慣例變更、skill 席次編制改動(先改 …
+    10 [KEY]: KEY:編制單源=_TIER_ROSTER;--roster advisory 恆不影響 rc;code/standard 循序 v1 不涵蓋(上游守衛缺陷另案)
+    31 [body]: - `scripts/lumos`:`_TIER_ROSTER`(design/light·standard·high+code/high;code/standard 循序 v1 …
+  1.972  Verification/2026-07-14_relguard_E1失效背書.md  [守衛]
+    4 [fm:feature]: feature: doctor Check E1 失效背書(關係層傳播守衛 phase-1 MVP,[S6])
+    17 [fm]: - "[[關係層傳播守衛_計劃]]"
+    26 [body]: 關係層傳播守衛 phase-1 MVP（計劃 [S6]）落地：doctor 新增一道**關係層語意檢查**，補「Check 3 只查邊存不存在、不查邊還對不對」的洞。
+    44 [body]: 只查 frontmatter 可判的失效背書（status=stale/fail）；純語意矛盾仍留 AI 交叉審。E1 是關係層守衛四檢（E1-E4）最先、免前置的一條；E2（建在…
+    47 [body]: - [[關係層傳播守衛_計劃]]
+  1.972  Issues/loop-next吐不可宣告的tier.md  [守衛]
+    19 [DECISION]: DECISION:[2026-08-04]修 record_cmd 不吐不可宣告值(`eff_tier in LOOP_TIERS` 才帶 --tier),並補 `tier_hin…
+    27 [body]: > ## ✅ 病根已修（2026-08-18）— 守衛 kind-aware,循序 code loop 可錨定 standard
+    30 [body]: > [[Projects/循序codeloop-tier錨定_計劃]] 把 tier↔格式守衛改為認 loop 種類:**code∧standard∧無 round
+    113 [body]: - **`legacy` cap 6 要不要收緊**：這動到收斂判準＝守衛面，依 `lumos-design-loop` 進場硬否決，
+  1.965  Verification/2026-08-12_CheckY_符號存在性.md  [守衛]
+    18 [KEY]: KEY:成因 D 是 diff-based 守衛結構上抓不到的那一類——本檢查是第一道對它有效的機械防線
+    73 [body]: - [[Verification/2026-08-12_CheckU_過度概化守衛]]
+  1.964  Projects/test-layers軟提醒_計劃.md  [守衛]
+    17 [KEY]: KEY:軟閘定位=關「忘了」不關「刻意不跑」——E2E 慢+flaky,本機硬擋逼出 --no-verify 文化反噬其他硬閘;真硬閘留 CI 合併點;同 code-loop 必用…
+    57 [body]: - 關「忘了跑」，關不掉「刻意不跑＋不誠實」——同守衛譜系，靠留痕事後可查。
+    62 [body]: 宣告檔＋列印＋prompt 併入，無深演算法——貼 standard：走 writing-plans＋TDD（宣告解析/棧命中/rc 恆 0 三組測試），可跳 design-loo…
+  1.954  Issues/probe輪三參數只在散文.md  [守衛]
+    15 [KEY]: KEY:standard cap=3 下 probe 吃掉 1/3 額度,是實質行為差異非措辭;「限 1 次」無守衛則可重開 probe 洗輪
+    36 [body]: standard 檔 cap=3。照程式碼,probe 佔掉一輪 → 實際只剩兩輪可用於真審計;skill 卻告訴編排者「不計 cap」。**編排者照 skill 排程,會在第三輪…
+  1.954  Systems/drift-history.md  [守衛]
+    11 [fm]: - risk/守衛面
+    21 [KEY]: KEY:★存在理由=讓每份圖譜自己量規律,而不是相信別人在別份圖譜上的結論★(Enzo 2026-08-12 質疑:「你只對這份圖譜適用嗎?」)。U/Y 兩道守衛靠形狀與詞表啟發式…
+  1.953  Issues/lint不守驗證紀錄空回頭條件.md  [守衛]
+    13 [KEY]: KEY:守衛缺口(code-batch2 conf-f1 順帶抓到):lumos lint 對 Verification 的 valid_under/revalidate_when…
+  1.944  Verification/2026-08-25_迴圈摩擦兩修落地.md  [守衛]
+    13 [KEY]: KEY:★[S4] 實測已跑(probe-retire 兩版三輪為載體)★——①卷證規則:五席×三輪多數全錨,錨不到者皆巢狀截斷/格式類,機械重現全中;carrier 選席 SOP…
+    28 [body]: - [S4] 已跑(見 KEY):「首選 carrier 即全錨」在 probe-retire-v2 r1 未達成(誤選 s2 且 intake 造假被抓)、r2 修正後達成——結…
+    48 [body]: - 守衛配行為測試,含反面(全錨席照樣記得進去)。反向驗過:把這道擋拿掉,測試翻紅。
+  1.944  Systems/lint-declaration-health.md  [守衛]
+    11 [fm]: - risk/守衛面
+    23 [KEY]: KEY:誠實天花板——靜態層驗格式不驗命令跑不跑得動;smoke真跑=慢(每linter一次完整run)、且對「輸出SARIF到stdout而非佔位符檔」的宣告會報錯(那也是宣告錯…
+    57 [body]: 兩層必要性的鐵證:靜態抓不到(宣告本身沒錯)、smoke 抓得到(現實跑不動)。教訓:**外部工具放 `/tmp` 這類易失位置=脆弱宣告**,靜態校驗無能為力,smoke 是唯一…
+  1.942  Verification/2026-07-24_真遺忘search排除superseded.md  [守衛]
+    19 [KEY]: KEY:行為合約——回歸守衛 t_search_forget_superseded+獨立審計 sonnet/2026-07-24(含 mutation 實測:把 stale 也濾/…
+    37 [body]: - 行為合約：回歸守衛 `t_search_forget_superseded` ＋ 獨立審計 `sonnet/2026-07-24`（mutation 實測守得住）；因 doct…
+  1.935  Projects/先問世界_存量掃描裁定.md  [守衛]
+    19 [KEY]: KEY:誠實反向發現=lumos 在「決策時效性」(valid_under/revalidate_when/ADR 四欄位)領先全部研究對象;Check T 認真方法強於 Stri…
+    21 [DECISION]: DECISION:[2026-07-07] 家規定案=borrow-design(預設,借精神原生實作)/build(真沒輪子)/adopt(例外須理由,零依賴下幾乎恆排除);sk…
+    63 [body]: 需求層級樹、traceability matrix 視圖、查詢語言、ROLE 標籤、環偵測、Proposed/Rejected 狀態(計劃節點+alternatives_consi…
+  1.921  Verification/2026-08-11_delguard落地.md  [守衛]
+    19 [fm]: - "[[Projects/code側刪除傳播守衛_計劃]]"
+    20 [fm]: - "[[Projects/code側刪除傳播守衛_實作計畫]]"
+    30 [body]: - `t_delguard`（`scripts/test_lumos.py`）**全數綠**，涵蓋面：LINK_KEYS 常數與子集守衛、diff 解析（token 抽取/stop…
+    39 [body]: - [[Projects/code側刪除傳播守衛_計劃]]（spec，design-loop 已收斂）
+    40 [body]: - [[Projects/code側刪除傳播守衛_實作計畫]]（Task 1–8 全部完成）
+  1.916  Issues/hook卸載殘留註冊.md  [守衛]
+    9 [fm]: - "[[code-loop必用守衛_計劃]]"
+    22 [KEY]: KEY:通則=凡「A 端刪除、B 端引用」的成對資源(腳本↔註冊/檔案↔複製清單),守衛要嘛做成對稱操作、要嘛在 B 端做懸空自癒;同型前例=C1/T12(註冊了沒複製)的鏡像(複…
+    42 [body]: 凡「A 端刪除、B 端引用」的成對資源——腳本↔settings 註冊、hook 檔↔複製清單——守衛要嘛做**對稱操作**(刪必解註冊),要嘛在 B 端做**懸空自癒**(引用失…
+  1.914  Verification/2026-07-14_relguard_E2建在被推翻決策上.md  [守衛]
+    4 [fm:feature]: feature: doctor Check E2 建在被推翻決策上 + P1 supersede 自動補 ended/bump updated(關係層守衛 phase-2,[S7]…
+    20 [fm]: - "[[關係層傳播守衛_計劃]]"
+    24 [body]: 關係層傳播守衛 phase-2（計劃 [S7] + 前置 [P1]）落地：補網再添一道**時序關係檢查**，把 Check 4 的「結案後有較新驗證」時序 proxy 推進到「**…
+    47 [body]: - E2 是關係層守衛四檢的第二條；**E4（V.date < node.updated）實測 51 條背書噴 14 條（27%）良性落後 → 判定噪音產生器，不照原 spec 出…
+    50 [body]: - [[關係層傳播守衛_計劃]]
+  1.910  Projects/派工編制資料化_計劃.md  [守衛]
+    16 [KEY]: KEY:code/standard 循序 v1 不涵蓋(既有 --tier standard↔格式守衛缺陷另案);kind 前綴三值判(code-/indeterminate/de…
+    55 [body]: ★**code/standard(循序單 reviewer)v1 不入表、編制對帳不涵蓋**(r1 整合席 blocker,CLI 實測重現):既有 `cmd_loop_next`…
+    84 [body]: - ★supersede(2026-08-18 同日):此條與下述 code/standard 排除已由 [[Projects/循序codeloop-tier錨定_計劃]] 承接修…
+    85 [body]: - **不修 tier↔格式守衛的循序 code loop 缺陷**(r1 整合席實證的既有 bug:循序 code loop 記 `--tier standard` 後 `loo…
+    100 [body]: - **風險類自答**:本案碰**守衛面**(審查機制周邊)——但 v1 純觀測、不動任何 gate 判定式,爆炸半徑=多印幾行字;誤報最壞後果=編排者多看一眼。已排除:金流(無)…
+    115 [body]: - **r1(2026-08-18,panel:3 sonnet(通才/機械判準/整合)+Gemini Flash 外家席(單發 REST,無 repo 存取);收貨三道全過,外家…
+  1.908  Systems/convergence-evidence-gate.md  [守衛]
+    11 [fm]: - risk/守衛面
+    26 [KEY]: KEY:~~panel 判準最鬆(K=1)未經檢驗~~——✅2026-08-05 A案已解(上行);歷史脈絡保留:外部案例研究 arXiv 2605.12280 §3.5 明確建議…
+    33 [KEY]: KEY:誠實天花板——findings 數源頭仍是 LLM 裁決(gate 機械化算術非數字正確性);枯竭≠挖乾(同門盲點趨同);sentinel 擋混淆不擋對抗注入;§2.5c …
+  1.906  Issues/簿記白名單漏canary與bypass帳.md  [守衛]
+    13 [KEY]: KEY:死結型缺口(batch2 CI 紅實錘):_BOOKKEEPING_FILES 白名單漏 docs/.canary-log.jsonl 與 .bypass-log.json…
+  1.897  Projects/流程優化六件_計劃.md  [守衛]
+    16 [KEY]: KEY:★追加第七件(2026-08-05 Enzo 裁「這個標籤可以硬性寫入嗎,讓LLM去做」)★——aliases 宣告制(lint 硬擋新 system/issue 缺鍵;[…
+  1.890  Verification/2026-08-21_L4交叉審計30節點清帳.md  [守衛]
+    72 [body]: ## 附帶:證據目錄豁免命令數守衛(2026-08-21 push 時抓到)
+    74 [body]: `t_` 命令數守衛掃全 repo `*.md` 比對「N 個頂層命令」與 argparse,掃到 `governance/l4-audit/` 的 verify 檔(引用歷史快照…
+  1.884  Projects/intake守衛_計劃.md  [守衛]
+    17 [body]: # intake守衛_計劃
+    61 [body]: doctor 新增一段 advisory(提醒不擋,照 [S]/[S2] 的形態):數「★最近 6 個非 code 迴圈目錄★(cutoff=宣告行誕生日 2026-08-30 非…
+  1.880  Projects/design-loop提效_計劃.md  [守衛]
+    20 [DECISION]: DECISION:②動 loop status gate 語意=改守衛的守衛,高風險面——本計劃進實作前必過 design-loop(用舊 loop 審新 loop);①③④⑤純 …
+    65 [body]: - **M2（動 gate code,必過 design-loop）**：② risk-cluster 帳——`canary record` 加 cluster 欄位、`loop …
+    107 [body]: - **★統一單位裁定(r2 折入,一刀收四洞:Codex 謂詞/A caught-輪三讀法/B 首輪 missed 定錨+中段卡死/C ledger 蒸發)**:cluster …
+    108 [body]: - 不帶 `--clusters` = 無-cluster 舊帳(panel 既有三條合取 gate 不變;「legacy」一詞保留給非 panel 循序模式,兩者勿混)。**混用…
+    135 [body]: - **混用守衛時機+升級裁定(major,A+B 合併)**:判定在讀側(record 純 append 不讀回,護範圍刀);首輪定錨模式;隱患節裁定折回本體消兩節矛盾。
+    164 [body]: - **混用守衛的邊界**：升級裁定已折回規格本體(第一個**有效輪**定錨,r2 精化——首輪全 missed 不定錨)——此處僅留提醒:讀側 rc2 的錯誤訊息必須分因指路「開…
+  1.877  Verification/2026-08-01_slim-ps1早期分支exit修復.md  [守衛]
+    13 [TEST]: TEST:擴充 `t_slim_ps1_scripts_avoid_session_killing_trailing_exit`(斷言範圍從只看結尾 `exit $LASTEXIT…
+    39 [body]: 2. 新增反向斷言 `t_slim_ps1_error_branches_still_halt_via_return`——驗的是「拔掉 exit 之後,守衛有沒有被順手拆成不擋」:…
+    43 [body]: 4. 反向斷言的殺傷力驗證(mutant,未進 commit):在 `install.ps1` 把找不到 python 那個分支的 `return 2` 拿掉(讓 `Write-E…
+  1.875  Projects/cochange守衛_計劃.md  [守衛]
+    12 [fm:context]: context: 漏改守衛本質有方向:改A該提醒B,與改B該提醒A是兩條獨立規則;README.en.md 每次都跟著 README.md 改(6/6)、反向不成立(6/16)
+    34 [body]: # cochange守衛_計劃
+    38 [body]: 解 [[Projects/社群演算法補強_調研]] 缺口 c（知識同步散落）：機制同步只改最相關段、漏散落的列舉表/清單，人手動也漏。做一個 **co-change mining …
+    45 [body]: - **`core.quotePath=off` 必帶**（挖掘與 staged 讀取皆同）：git 預設對中文/non-ASCII 路徑輸出 octal 逃逸帶引號字串，而本守衛…
+    91 [body]: ## 交付同步清單（散落列舉表——本守衛的立意，自己不能漏）
+  1.867  Projects/固定席降噪A層_計劃.md  [守衛]
+    9 [KEY]: KEY:★v2(r1 五席打掉 v1 後改)★主案=間接保送只認 INVARIANT/IRREVERSIBLE;被降的 RISK 類 indirect 進**獨立參考道**(不佔固…
+    11 [KEY]: KEY:尺=固定席噪音數(主目標;★不押絕對值,以 knob=1 臂考卷實測為準★)+ P@8 逐 byte 不變(結構保證)+ must_in_out cap 內不退(結構保證;…
+    29 [fm:context]: context: v4 兩輪五席審過:沒學過 lane 的讀者(diff 聚合/hook free 桶/守衛)結構性不受影響,rescued 模式則要每個讀者都學會過濾;頂層鍵有 …
+    39 [body]: > 掛著「守衛面」這種**軟**標記、又跟每支檔都只隔一跳,每一題都被無條件保送進固定席。
+    55 [body]: | 按合約 | **RISK·守衛面 56** / INVARIANT 22 / 無(事故)15 / RISK·不可逆 3 |
+    58 [body]: **根因**:間接保送條件=「有合約且 hop≤1」——★任何類的合約都算★。「RISK·守衛面」是提醒級的軟標記
+    92 [body]: (★命名沿既有 `meta.truncated` 慣例,arch r3★;hook 顯示「另有 N 條守衛面參考未列出」)。
+    124 [body]: 5. **goldset 標籤本案凍結**(Codex f4):不補標、不改答案——改了 rev 就換、棘輪重立基線,守衛蒸發。
+    … 還有 2 處
+  1.865  Verification/2026-08-24_固定席降噪A層落地.md  [守衛]
+    24 [body]: > 白話:改程式時 hook 推的「必看」清單,一半以上是掛著「守衛面」軟標記、跟誰都隔一跳的樞紐筆記。
+    25 [body]: > 現在保送只認「改了就壞」的硬合約;軟標記的降到輸出尾端一個標明「守衛面參考」的小節(最多 3 條)。
+    43 [body]: JSON ★獨立頂層鍵 `lane`★(決策 d2:沒學過的讀者結構性安全——diff 聚合/hook free 桶/守衛零改動),條件鍵兩態。
+  1.863  Projects/設計審收斂重定義_計劃.md  [守衛]
+    58 [body]: - **d1 病根與軌道**:雙因(閘零容忍語意×折返注入)。A 軌先行(便宜、不動判定邏輯;第一件=散文審回歸處置閘,見 d2);B 軌=閘改 blocking/密度語意(歸檔首…
+    65 [body]: 1. [S1] `lumos prose-lint <檔>` **子命令**(r1 架構席:排乾必跑檢查慣例=子命令;頂層命令 62→63,命令數守衛連動的活文件全數同步列入交付)…
+    85 [body]: - 實作補正(2026-08-25,過閘後落地時):s2F7「兩份舊報告必須同步」證偽——`node-restore-sop/r1-ext.md` 與 `prose-converg…
+    112 [body]: **那 1 個沒過的是哪個、為什麼**(不含糊帶過):是收貨留痕守衛那個案子。我拿閘問了現況,卡在兩關——① 帳記完之後被審的計劃筆記又被改過,所以判定輪的指紋對不上;② 那輪的席…
+    114 [body]: - **不是設計沒收斂,是帳沒收尾**:那個守衛本身早就落地在跑(閘自己那行「迴圈目錄有帶前掃留痕」就是它做的)。
+  1.860  Systems/hook逾時預算.md  [守衛]
+    17 [DEP]: DEP:scripts/merge-claude-settings.py(HOOK_BUDGET 單一來源)|scripts/hooks/claude/*.py(_inner_bu…
+    47 [body]: 守衛實際去跑每支 hook 的算式,確認算出來的內層 ≤ 外層 × 0.75。
+    55 [body]: ★必須用獨立行程組★:不然 hook 這個行程組被收掉時會把它一起帶走,等於還是白算。守衛有釘這一條,還有「超時那條路上不准出現砍掉的動作」。
+  1.855  Projects/結清式收斂_計劃.md  [守衛]
+    18 [KEY]: KEY:★首個真實 loop dogfood(2026-07-31,對象=[[Projects/公開精簡版_計劃]];該 spec 兩輪 panel 未收斂、capture-rec…
+    36 [body]: - **canary 醒著條件保留（r1 折入，r2 補記帳鏈）**：settle 輪照 skill 紀律植 canary；條目欄位含 `verified_in_round`（哪一…
+    38 [body]: - 收斂＝清單全結清 ∧ G1 ∧ G3（G2 advisory 印出不進合取，r2 已裁）。高風險 spec（金流／對外寄送／prod 不可逆／守衛面，對齊 skill 四類）建…
+    56 [body]: - [x] design-loop 出場（2026-07-28 實質收斂人裁，signoff 留痕；非機械 rc0——裁量出場，golden 已凍）；tier 註記：spec 命中…
+    68 [body]: - **self-governance（真命中）**：本 spec 改的是「守自己的閘」——結清模式若設計錯，收斂閘形同虛設且不易察覺（壞掉的守衛比沒有守衛更危險）。防範：① op…
+    83 [body]: - r3 delta panel（2026-07-27，3 席全 caught：型別 d 未定義產物／a 幽靈引用／b 未定義旗標；s1 重植1次、s2 重植2次頂格）：**blo…
+    113 [body]: `--settle` 對已有 panel 記錄（帶 `round` 欄）的 loop **在 settle 邏輯之前就 rc2**——混用守衛先擋（「canary-log 含 ro…
+    140 [body]: - 結清＝「列出來的都驗了」，**清單本身漏列的照樣漏**（清單完整性是新的單點）；v1 靠人拆＝人的注意力上限，**編排者（LLM）代拆時清單完整性直接回到 maker bias…
+    … 還有 2 處
+  1.853  Verification/2026-08-04_design-loop重設計落地T1-T7.md  [守衛]
+    17 [KEY]: KEY:T2 附帶觸發漂移守衛(六份文件「53 個頂層命令」→54);中途 Xcode license 失效使 git 全掛(124 假紅),恢復後全綠——★環境紅與代碼紅的區分靠…
+  1.849  Verification/2026-08-27_辯方表態記帳.md  [守衛]
+    21 [body]: - **記帳指令**(`scripts/lumos`,六處):`canary record --refute-verdict <id>=agree|evidence|concern…
+    34 [body]: - **[架構 major]** `--refute-verdict` 進了「缺 findings-set 就 rc2」守衛、樣板 `--finding-kind` 沒進 → 兩姊…
+  1.847  Issues/設計迴圈問閘指令與panel記帳互斥.md  [守衛]
+    15 [DECISION]: DECISION:已裁並落地(d1,2026-08-24):①+②-lite——擋下訊息指路(指令獨立成行)+兩份 SKILL 問閘分岔+05/06 子檔鏡像同步+漂移守衛測試 t…
+    17 [fm]: - content: 裁①+②-lite(Enzo 2026-08-24「接著解」):--disposal 撞多席記帳的擋下訊息加路由指引(指路不代選,判準語意零變動);desig…
+  1.844  Verification/2026-08-26_建了沒人跑退場批落地.md  [守衛]
+    22 [body]: - **拆除完整性**:`lumos mutate` → rc2(argparse 已無此指令);canary_calibration.py/canary_snr.py/canar…
+    23 [body]: - **殺傷面清理**:退測試段時吃掉三個共用 fixture(_hk_fixture/_hk_impact/_mk_roster_fixture)——被 11 紅抓包,從 git…
+  1.843  Verification/2026-09-03_派工攔截點實測.md  [守衛]
+    20 [KEY]: KEY:★只證明做得到,沒證明該做★——該停案另有 2026-08-02 的獨立裁定(擋 high 抓不到 standard、擋 standard 逼人繞過)未被本篇推翻,重開後仍…
+    63 [★INVARIANT★]: `Systems/測試假綠形態` ★INVARIANT★、`Systems/reversibility-governance-ledger` ★RISK·守衛面★)。
+    102 [body]: - **今天另有一筆同型教訓**:同一天實測到守衛誤擋會訓練人繞過(見 [[Issues/推新分支時風險分級拿空樹當起點]])。派工閘若做,誤擋率是首要設計約束。
+  1.836  Verification/2026-07-22_prepush範圍修法落地.md  [守衛]
+    25 [body]: 盲區修法 hook code 落地。spec：[[Projects/prepush主幹範圍修法_計劃]]（過 design-loop 收斂）。緣起 [[Issues/code-lo…
+  1.832  Projects/跨session傳訊用途調研.md  [守衛]
+    20 [DECISION]: DECISION:[2026-08-14]形狀鐵則已拍板(Enzo)並寫入 `lumos-project-notes` skill〈跨 session 傳訊的形狀〉節作單源(含三步…
+    35 [fm]: ★最痛的一條★:對造有沒有照做(把跟進結果寫回自己圖譜)目前無法機械偵測——本規則純自律、零守衛,漏了不會有任何工具吐警告。
+    91 [body]: - [ ] 這條規則目前**零機械守衛**——要不要做一道檢查（例如：本 session 送出過協同訊息 → 收工時提醒「對造回報寫回圖譜了沒」），還是就接受純自律
+  1.825  Verification/2026-07-02_multiplatform-test-binding.md  [守衛]
+    45 [body]: | t_archive_live_guard_multiplatform | 活守衛護欄跨 repo（後端 C# 守衛存活 → Verification 保留） | ✅ |
+  1.824  Projects/關係層主網_實作計畫.md  [守衛]
+    8 [KEY]: KEY:關係層守衛「主網(proactive 連鎖確認)」的 TDD 實作計畫;設計/架構收斂見 [[關係層傳播守衛_計劃]] §八待釘合約,本節點把 🔴🟠 合約逐條釘死 + 切 …
+    14 [DEP]: DEP:[[關係層傳播守衛_計劃]]｜[[主動影響幅度偵測_計劃]]｜[[Systems/lumos-cli-read]]｜[[Systems/lumos-cli-write]]
+    20 [fm]: - "[[關係層傳播守衛_計劃]]"
+    39 [body]: 主網＝**改節點的當下就當場點出受波及的鄰居**（proactive，趁脈絡最全、最便宜時處理），對照補網（E1/E2 已上、doctor 事後週期掃）。架構經 3 輪 Codex…
+    68 [body]: 4. **E3 精確版**：Verification `decision_refs: ["<節點rel>#d<N>"]` → 檢查該被指的決策是否 `valid:false` → …
+    129 [body]: - **[S3] 判斷閘（AI 先判分級）**：AI 讀鄰居內容 + 翻的決策，判「真牽連嗎」。**不對稱防漏**：明顯牽連 → 自動 confirm（放寬）；明顯無關 → 自動 …
+    157 [body]: - **AI 判斷閘 GIGO（M4）**：auto-prune 判錯＝靜默漏傳播＝本守衛要防的頭號腐爛。緩解＝不對稱分級（prune 只在有把握時）+ 留痕 `--by ai` …
+  1.819  Verification/2026-08-23_關於欄位離線預標驗證.md  [守衛]
+    70 [body]: 3 個漏掉的必看:兩個是 `anchor-integrity`(守衛檔簽名機制)對 pre-commit / impact-hook——
+    93 [body]: - **過期率未測**:83 篇預標都是 2026-08-23 的快照,沒有 stamp、沒有守衛。
+  1.811  Systems/reversibility-governance-ledger.md  [守衛]
+    11 [fm]: - risk/守衛面
+    33 [DEP]: DEP:文件四面同步 — graph-discipline.md 速查｜lumos-project-notes SKILL.md｜NEW_HINT[system]｜lint;漂移測…
+  1.809  Systems/pitfalls-code-loop.md  [守衛]
+    11 [fm]: - risk/守衛面
+    14 [fm]: - "[[Verification/2026-07-05_code-loop必用守衛]]"
+    32 [KEY]: KEY:PITFALL_CLASSES 四類名 ≡ difficulty.RISK_CLASSES、_PITFALL_BLACKLIST ≡ difficulty._BLACKLI…
+  1.804  Projects/README審視五修_計劃.md  [守衛]
+    15 [body]: KEY:d1 pre-commit/post-commit 補 shebang 判定——沒副檔名但首行是 `#!` 的 staged 檔算程式碼(讀 staged blob 不讀工…
+    20 [body]: KEY:設計審跳過:d1 是 bug 修+既有守衛延伸;d2 是把已審過三輪的 Codex 機制套到 Claude(邏輯同一份碼);d3 是關開關;d4/d5 是文件。代碼審依 p…
+    37 [body]: - **sonnet delta 席**(快照已落後,結論與外家同題):另一條 minor——單一個引號的假輸入在 `set -u` 下子字串會吐錯(真 git 輸出到不了),加長…
+  1.802  Verification/2026-08-25_設計審收斂重定義落地.md  [守衛]
+    9 [KEY]: KEY:[S1] `lumos prose-lint` 子命令落地(62→63)——中文模糊措辭掃描 19 詞保守版,恆 rc0 advisory,排除 code fence/引句…
+  1.793  Issues/測試未隔離HOME刪掉真機Claude-hooks.md  [守衛]
+    35 [body]: 於是 `teardown -y` 不是「被守衛擋下」，而是**真的執行了**，打在我自己的機器上：
+    64 [body]: - **真的把接縫加進 CLI**：`_selfdelete_risk()` 讀 `LUMOS_SIMULATE_WINDOWS`——只有這道守衛用它，不動全域 `_IS_WIN`…
+    73 [body]: **同一句教訓寫在筆記裡三次,還是照樣發生第三次。** 這就是「承認風險而沒有機械守衛」的實際代價。
+  1.789  Projects/社群演算法補強_調研.md  [守衛]
+    52 [body]: ### 6. 知識同步散落守衛：co-change mining（高信度，3-0；直答缺口 c）
+    55 [body]: - 借法：stdlib 解析 git log → 挖「A 改 ⇒ B 歷史 X% 同改」規則 → pre-commit/doctor check：改了機制文件沒碰歷史上總同改的列舉…
+    62 [body]: 1. co-change mining 守衛（高信度 + 直答已知痛點 + stdlib 可行性明確）
+  1.786  Projects/檢索edit面真紅_計劃.md  [守衛]
+    13 [KEY]: KEY:假說(可證偽,H1-H4)——H1 垃圾查詢毒化文字臂:E05/E14 的 delta 文本是 shebang/檔頭,L=1.0 給到 native-windows-sup…
+    43 [body]: 固定席另軌:pin_noise E02=33/34、E03=24/25;must_pinned 全 held 僅 5/35——RISK/INVARIANT 連坐在守衛面節點大增後爆…
+  1.779  Verification/2026-08-25_probe輪退場與多席路由統一落地.md  [守衛]
+    12 [KEY]: KEY:誠實帳:r1 記帳兩失誤自首(intake 斷言未跑檢查被閘抓包/四席報告漏落檔)——收貨慣例無機械守衛首個反面教材,回寫迴圈摩擦案 [S4]
+  1.777  Issues/連鎖佇列開了沒人跟完.md  [守衛]
+    16 [fm]: - "[[關係層傳播守衛_計劃]]"
+    72 [body]: 2. delguard 歸因錯被寫進審計修正紀錄，成為「這型失守已有守衛」的依據 → 三席一致抓回
+  1.776  Verification/2026-08-30_圖譜入口栓落地.md  [守衛]
+    20 [body]: - **紅釘五支,突變驗證過才算數**(★code-r1 合約席 G-4 打臉後全部機械重量;本節首版的 3/4/2 三個數字全錯(實為 2/3/0),第三支尤其嚴重——原測試沒構…
+    23 [body]: 3. 拔首輪守衛(只留 plant-canary 條件)→ 1 條紅(強化前 0);
+  1.776  Systems/autonomous-iteration-loop.md  [守衛]
+    11 [fm]: - risk/守衛面
+    29 [KEY]: KEY:tier 收檔守衛(2026-07-24 L4 審計補漏——本節點原漏這道會否決自報收斂的機械閘):orchestrator 自報 converged=True+cross…
+    34 [KEY]: KEY:★2026-09-05 wrapper 慣例★:daily-governance.sh 是 repo 唯一「活著等三小時」的外層腳本,主體包 `main()`、結尾同一行 …
+    67 [fm:why_chosen]: why_chosen: 恢復指令:launchctl enable gui/$UID/com.enzo.lumos.daily-governance && launchctl bo…
+    70 [fm:superseded_by]: superseded_by: 2026-07-11 使用者裁示重啟(launchctl enable+bootstrap 已執行,每日 09:30);重啟時點的安全網比暫停時厚:p…
+  1.775  Projects/迴圈摩擦三修_計劃.md  [守衛]
+    31 [body]: - **d4 落點**:v2 交付=純 skill 文件(templates.md/SKILL.md)+圖譜寫回;rewrite 收尾寫入端(`lumos loop rewrite…
+    50 [body]: - **rN-intake.md 是新留痕慣例,無機械擋**——沒人寫它不會有閘紅。回頭條件:[S4] 下案跑完檢查該檔存在性(例5);連兩案缺席→升級為 record 的必帶欄位…
+    61 [body]: - r1@v2(2026-08-25,5 席:s1 通才/s2 機械/s3 折入/arch/ext=Codex):13 審項/blocking 6(s1 4/2+s2 1/0+s3…
+  1.774  Verification/2026-07-31_公開精簡版終審修復.md  [守衛]
+    5 [fm:feature]: feature: 全分支終審(對抗代碼審)提出 4 條 finding 的修復——C1 交付 CLI 自己叫人跑不存在指令/C2 等價驗證假守衛/C3 doctor 實跑收假紅/C…
+    8 [fm]: - "C2 的等價驗證改跑在 docs/lumos-toolchain-knowledge(本 repo 自身 vault)的當下內容上,非固定快照——vault 內容變動不影響「…
+    23 [KEY]: KEY:C2(等價驗證假守衛)——原本跑在 mkvault() 的空 vault 上,兩邊 search 都回空字串,比 `'' == ''`;改跑在本 repo 自己的 docs…
+  1.770  Projects/收斂機制優化調研2026-08-14.md  [守衛]
+    19 [KEY]: KEY:候選②(守衛面,須過 design-loop)★K 計數區分「實質輪 vs 修復驗訖輪」★——解 Landmark 痛點「折入即修被記髒輪,修得越勤收斂越慢」;外部同向:業…
+    20 [KEY]: KEY:候選③(守衛面,須過 design-loop)★capture-recapture 全面降 advisory★——軟體審查文獻 30 年結論:前提(席獨立+等捕獲率)被違反…
+  1.770  Projects/嚴重度綁定機械掃_計劃.md  [守衛]
+    5 [KEY]: KEY:地基盤點第 3 批案 D——新收斂制地基假設「席報告的 severity 標籤↔帳面 --severity 忠實轉錄」至今零機械守衛(僅人工核過 0/18);★r1 外家否…
+    23 [body]: - 帳列有 severity(寫側白名單擋值域)、report{path,sha256}。席報告格式★不★一致:2026-08-26 普查 59 份,41 份用「severity:…
+    40 [body]: - 守衛面:第一層(寫側)天生是硬擋(拒帳 rc2),不存在「等掃描器抓到才升級」的循環空窗(r1 外家 ext-f4 指的循環盲點因此不成立於新案);第二層 advisory 恆…
+    52 [body]: - ext-f4(major:升級條件循環盲點)→ 寫側即硬擋,循環空窗不存在(明文記於守衛面)。
+  1.748  Verification/2026-08-23_about_code存量雙評審落地.md  [守衛]
+    42 [body]: 它們是給人或 AI 讀的文字,改它們有注入一致性守衛。全是 Codex 列、Opus 不列。
+    65 [body]: - **#4 沒接,這批資料目前零消費者**——寫進去了但沒人讀。過期守衛(#6)也沒接。
+  1.740  Systems/效能檢核目錄.md  [守衛]
+    23 [KEY]: KEY:[2026-07-19]三時機已落地(見[[Projects/pitfalls棧別效能追問_計劃]])——①pitfalls --diff 命中棧附檢核問(manifest…
+  1.738  Verification/2026-08-04_design-loop處置閘終審硬化.md  [守衛]
+    30 [body]: | r1 | caught 3／missed 2（s2 席探針 recraft×2-fail＝弱證據；部分 caught 靠 hunk 行數頭破綻＝植入手藝瑕疵） | 壞行 fai…
+    36 [body]: - **終審未收斂**：cap=3 到頂，三輪每輪都還在出 major——發現未枯竭，capture-recapture 殘餘同判。放行歸人裁（明示豁免留痕或加開 r4）；殘留風險…
+  1.734  Projects/Android側UI測試綁圖譜工作流_計劃.md  [守衛]
+    26 [KEY]: KEY:★實務隱患(r1 三席一致補;pitfalls --check 機械零命中≠不需要)★—★金流/prod 不可逆最重★:flow 跑真裝置真後端,參考實作檔頭記著「驗過…單…
+    29 [KEY]: KEY:★天花板(先寫明,免得被當成全覆蓋)★—①UI flow 對「畫面長怎樣」敏感,版面一改就要重錄 ②只驗走得到的路徑,取不到裝置仍是「明記未驗+原因」不得靜默跳過 ③不取代…
+    43 [fm]: 綁 name: 而非路徑,代價=flow 檔改名/搬家時 name 與檔名可能不一致(靠命名慣例自律,無機械守衛);
+    229 [body]: | **name → 檔案路徑查得到** | 由 `[test:maestro:X]` 反推要跑哪個檔 | ⚠ **目前無路徑**（r1-F4）：maestro 只吃檔案路徑，`d…
+    253 [body]: - **PII／證據外流**：maestro 每次執行留影片／log，終審證據若照慣例存進 `governance/review-reports/<loop-id>/ui-evid…
+    262 [body]: - **`name:` 唯一性與 name↔檔名一致性都沒有守衛**（r1-F13／F4）：`discover_test_methods` 回的是不記路徑的扁平集合，兩支 flow…
+    283 [body]: - **本節點自身即案例**：PRIOR-ART ① 答對方向（不造新機制）卻沒查到該機制**已完成到什麼程度**，把「已交付」寫成「待接上」。教訓：PRIOR-ART ① 除了問…
+    298 [★INVARIANT★]: ★這五條目前都沒有機械守衛★（`[kill:]` 在 UI 層走不通、命名慣例無 linter），提名的意思是「日後若要蓋 ★INVARIANT★，先從這裡挑」，不是現在就標。
+  1.732  Projects/from-scratch重生守衛_計劃.md  [守衛]
+    34 [fm]: - "[[Verification/2026-07-16_fromscratch守衛M1_CheckJ]]"
+    38 [body]: # from-scratch重生守衛_計劃
+    73 [body]: - **M1（MVP,最硬核）**：`provenance 分級隔離` + `拒絕發明無證據合約`。＝解法 2 + 5。純機械 + 紀律,複用既有雙欄信任,無新派工。**這兩條不做…
+    98 [body]: ### lint Check J（只對 `regen:` 節點生效;**r1 改名:doctor `[G]` 已被同名 basename 守衛佔用** scripts/lumos:…
+  1.727  Verification/2026-08-11_T1_remove_list項移除.md  [守衛]
+    58 [body]: > 過程中「文件命令數 vs argparse」守衛翻紅 5 條（文件寫 58、實際 59），改完 4 份 README/AGENTS/ARCHITECTURE + skill r…
+  1.727  Verification/2026-08-24_about_code讀側四項落地.md  [守衛]
+    39 [body]: 登記守衛:`check-s2` 進 `_KNOWN_GATES`(漂移守衛抓到才補——機制在工作);HELP_WHEN 三條;索引 02 檔四行。
+    85 [body]: ★教訓:改守衛的「放行條件」時,第一個要問的是「這條新路上,原本必經的檢查還在不在」——閘的橫幅字面必須等於實際做過的檢查。★
+  1.725  Projects/固定席扇出降權_計劃.md  [守衛]
+    43 [KEY]: KEY:★r1 六洞全折★——「與考卷必看同一把尺」宣稱作廢(「關於」比「必看」嚴,是精確度子集非等價物);讀側打錯靶(固定席三軸:direct/indirect/incident…
+    220 [body]: r2 曾統一成兩段「記日期不記雜湊」——std-r2 證明日期表達不了順序,★繞回 r1「欄位設計」節原本含雜湊的三段格式★(r1 原文 `<sha256 前 12 碼>/<誰標>…
+    299 [body]: ### ★過期守衛(沒有這個就別做)★
+    327 [body]: 兩種都是「偽陰性」,正是這道守衛要防的方向。**處置(不加子行程數)**:
+    339 [body]: **根本問法錯了**:守衛要答的是「標記時看的正文,跟現在一樣嗎」,那就**直接記正文雜湊**,不要拿日期或 commit 去推:
+    384 [body]: must-see 棘輪仍跑,當回歸守衛(確認收窄後真的零退化)。
+    386 [body]: ([[Issues/散文紀律沒有退場機制]])。★必須配機械守衛★:帶合約的節點沒填 `about_code`
+    429 [body]: | 3 | 純量欄位刪除原語 | ✅ 2026-08-23 done:`remove <節點> <key>` 不帶 value=整欄拿掉 | 不加新子命令(一個指令學一次);守衛:…
+    … 還有 6 處
+  1.718  Verification/2026-09-04_Codex完全支援S1hook適配驗收.md  [守衛]
+    28 [body]: 3. **Stop → check-graph-sync 讀 Codex 逐字稿**:第一次真跑 Stop fire 但 stderr 空——查出兩件事:(a)那次 Codex 把…
+    42 [body]: - Codex 改版後逐字稿型別(守衛=版本不在 fixture 就略過並印一行,不猜);同版本內其他沒見過的 JS 寫法(目前 fixture 涵蓋:有/無引號 cmd、換行縮排…
+  1.714  Systems/design-loop.md  [守衛]
+    11 [fm]: - risk/守衛面
+    28 [fm]: - "[[Verification/2026-08-30_intake守衛T1-T4落地]]"
+    39 [KEY]: KEY:★問閘雙軌(2026-08-24,[[Issues/設計迴圈問閘指令與panel記帳互斥]] d1 落地)★——記帳型態決定閘:單席循序一輪一筆處置帳→--disposal…
+    62 [KEY]: KEY:平行 panel 模式(2026-07-09,≤3輪壓縮,見 [[loop三輪壓縮_計劃]])——買獨立廣度非相關深度:一輪平行 W 個多樣審計員(tier→panel_w…
+    81 [fm:context]: context: finding-refute 後續 spec(3 輪自動收斂):原 step4「編排者自剝審計員誤判」是沒閉合的迴歸、會放水;canary 防假陰性,但假陽性(審…
+  1.712  Projects/檔案測試依賴地圖_計劃.md  [守衛]
+    86 [body]: **map 有效性（三級守衛）**：
+    100 [body]: **rc 合約**：恆 rc0；唯一 rc2＝缺 `--diff`（argparse 格式錯（`--diff -abc`）被 argparse 擋＝rc2 豁免於本合約；[S3] …
+    118 [body]: 11. map 守衛：edge 缺欄跳邊；edge 非 dict 跳邊；`sources` 缺→`[]` 不 crash；`edges` 非 list 整檔失效；`built_at…
+    124 [body]: 17. map 守衛補：`version`≠1 整檔失效；`built_at` 缺整檔失效；conf=999 越界跳邊；
+    172 [body]: - [major 折入] ① `_cochange_mine` 四元組＋rules 值為 (conf,support) 二元組未解包（r2 只補了 load_config 的姊妹坑…
+    177 [body]: - [major 折入] ① 測試檔判定句「完整檔名 vs stem」自相矛盾 → 拆三子句各自明定比對域（席1+席2）；② `foo_spec` 示例與綴詞表矛盾（會種回 r3 …
+    181 [body]: [major] ①駝峰邊界殺自家旗艦例（`.` 前字元）→ 邊界改「前字元非大寫」＋縮寫類取捨記帳（席2+席3）；②剝離規則未複述判定兩套規則＋`ABTest`/`Foo_TEST…
+  1.700  Verification/2026-08-11_AndroidUI工作流A段落地.md  [守衛]
+    55 [body]: - spec 天花板列的東西一條都沒解決：`name:` 唯一性無守衛、`[kill:]` 在 UI 層走不通、版面一改要重錄、時機那格只做到「有人問」。
+    59 [body]: 3. **路徑同源守衛的強度已於終審後補強**：原寫法對整檔驗、正面被另一條無關 KEY 行滿足、負面只認逐字舊寫法（刪整行或換措辭都不會紅，近乎恆真）。改成**先切出「UI 層驗…
+  1.691  Issues/同工作區多session並行改動.md  [守衛]
+    66 [body]: - **(a) 零機制,純紀律**:多開之前先講好誰動哪些檔。★問題:紀律沒有機械守衛,
+    75 [body]: **我的傾向是 (b)**,理由:(a) 沒守衛、(c) 代價大且會擋掉今天證明有用的互相補位。
+  1.683  Projects/節點還原SOP_計劃.md  [守衛]
+    8 [KEY]: KEY:立案(2026-08-24 Enzo 開新任務)——「接手既有專案,把功能脈絡還原成圖譜節點」的 SOP。盤點確認缺口結構性:守衛半邊有(Check J/regen 章),…
+    19 [DEP]: DEP:[[Systems/check-j-regen-guard]]｜[[Systems/外部對照-code衍生wiki]]｜[[Projects/from-scratch重生守…
+    24 [fm]: - "[[Projects/from-scratch重生守衛_計劃]]"
+    47 [fm]: - content: 放置層:SOP 七步全文進 skill 的 reference.md(與既有重生守衛段相鄰),commands/09-節點還原.md 只留薄查表(何時敲哪個指…
+    50 [fm:why_chosen]: why_chosen: 同層鄰居一致性——下一個要放長方法論的人不用在兩種先例間猜;reference.md 本來就是敘事型深規的家(重生守衛、自足性審計都住那)。代價:讀者多一跳…
+    80 [body]: > 白話:接手一個已經在跑、但圖譜是空的(或很稀疏的)專案時,現在的工具鏈只管「重建筆記不准瞎編」(守衛),
+    92 [body]: 2026-08-24 實測輸出 0:八個指令子檔沒有任何一個提到重建/還原,照 INDEX.md 的情境分類走不到重生守衛(唯一指路的是注入範本裡一句「寫法在 skill」)。
+    102 [body]: - **openwiki**([[Systems/外部對照-code衍生wiki]])——全倉自動攤平的世界解。本 SOP 反著用:不學它攤平(無 oracle——沒有獨立查核者判…
+    … 還有 4 處
+  1.656  Verification/2026-08-02_slim三缺陷修復_實驗產出.md  [守衛]
+    28 [KEY]: KEY:合約條文漏了一種失效形態也算漏——原「互不阻擋」只寫了「安全考量跳過」,沒寫「拋未捕捉例外」,而 code 裡活著的正是後者。★條文枚舉不完整,守衛就有洞★
+    47 [body]: > **合約條文自己也有洞**：原條文只寫「任一步驟基於**安全考量跳過**絕不能連帶阻止其餘步驟」——只枚舉了「主動跳過」，沒枚舉「拋例外」。而 code 裡活著的正是沒被枚舉的…
+  1.623  Verification/2026-07-10_合約鏈補強234.md  [守衛]
+    33 [body]: 指令語法有表但「時機」沒嵌——補：合約鏈速查接第三級 `[kill:]`（且把 kill 說明從可逆性段搬回合約軸）、spec-trace/signoff 進 CLAUDE 注入區…
+  1.621  Projects/自足性審計閉環_計劃.md  [守衛]
+    70 [body]: ★接線三刀(v5-r1 arch f3/s2f7/s3f2/Codex 提示)★:①「至少一個篩選條件」守衛的判準要把新旗標算進去
+    71 [body]: ②與守衛判準的既有五旗標(--tag/--no-tag/--active/--contract/--linked——照 cmd_query 現行 guard 逐字;v5-r2 s1…
+    81 [body]: (讀有 exists 守衛、寫是 append 自建檔;v5-r2 s1 逐讀取點驗過,隔離不弄炸工具)。
+    170 [body]: ①`_self_audit_lists` 同集+doctor --ci 落帳回歸 ②`query --self-audit-due --json`:投影超集(node/status…
+    179 [body]: - **守衛面**:自動蓋章會不會洗掉真問題?→ PASS 才蓋,prompt 是「找站不住」框架(2/2 抓到證明有牙);auto- 前綴留追溯。
+    240 [body]: **H「重驗條件由本案兌現」撤回**(arch f6/s2f4/s3f4:迴避≠驗證);**I query 三刀**(arch f3/s2f7/s3f2:守衛判準/旗標互斥/投影超…
+    243 [body]: ★本輪正面訊號:回寫柵欄被架構席驗出與 about_code 雜湊守衛同構、r3 帳五席條數首次全對——四犯後的規矩生效。★
+    253 [body]: **E 旗標清單抄錯**(s1f4):守衛五旗標漏 --no-tag 誤列 --include-superseded,照 cmd_query 逐字修+兩旗標各自 rc2;
+  1.617  Projects/loop三輪壓縮_實作計畫.md  [守衛]
+    69 [body]: **Interfaces:** `loop status <id> --gate --panel [--repo]`——按 round-id 分組;每組判四條合取。混用守衛:`--…
+    73 [body]: - [x] **Step 3 實作** 分組 + 四條合取 + 混用守衛;legacy 路徑完全不動(新分支包在 `if panel:`)。
+  1.605  Verification/2026-07-10_審計loop研究硬化.md  [守衛]
+    25 [body]: - `skills/lumos-code-loop/SKILL.md`：單源引用行（不雙寫防散落漂移——cochange 守衛日後可驗這對耦合）。
+  1.602  Projects/guard殺傷力驗證_計劃.md  [守衛]
+    50 [body]: - **同步改動明列（r2 修訂——r1 版歸因有誤）**：① `INV_TAG_RE` 擴為 `(test|audit|kill)`（否則 `[kill:recipes]` 漏進…
+    67 [body]: - 裁定 1 改動明列 ⑥⑦ 的三處硬編同步（cmd_gov/scaffold gitignore/cochange 排除）與 graph-discipline 欄位速查+t_ma…
+    92 [★INVARIANT★]: - **Landmark（C# xunit，跨 repo platform root）**：挑一條已綁 `[test:]` 且測試 hermetic（lab2 finally 全刪…
+    97 [body]: - **r2（2026-07-10，panel W=5；canary s2 caught（attempt_seq/verdict_policy 幽靈機制+與 v1 不重跑矛盾，性質…
+  1.597  Verification/2026-06-23_check-t-sentinel.md  [守衛]
+    33 [body]: - **F1 逗號繞過守衛**:`[test:HappyA,HappyB]`(單標記多名)算 1 個標記 → **仍提醒**,坐實判據用標記個數而非展開名數。
+  1.596  Systems/guard-kill.md  [守衛]
+    11 [fm]: - risk/守衛面
+  1.586  Systems/check-n-recomputable.md  [守衛]
+    11 [fm]: - risk/守衛面
+  1.585  Verification/2026-06-26_lumos-deinit_跨平台.md  [守衛]
+    35 [body]: `shutil.rmtree(vault)` 被四重閘擋(任一即不刪):`--dry-run` 提早 return、`--keep-graph`、`vault==root` 鐵閘強…
+  1.576  Verification/2026-06-19_reversibility-governance-ledger.md  [守衛]
+    29 [body]: - `t_reversibility_guard_doctor`：`[guard:decisions]` 有非空 guard → 放行;無守衛 → 擋。
+  1.574  Systems/finding-refute.md  [守衛]
+    10 [fm]: - risk/守衛面
+    94 [body]: ★blocker 輪讓步(2026-08-29,d5)★:同輪 severity=blocker 時,舊規則強制放行清單必須是空的,而反證推翻的發現照規矩「不折入」——兩條一夾使 …
+  1.566  Verification/2026-08-01_slim-manifest殘留與代碼審六輪.md  [守衛]
+    55 [body]: **③ 每個「我枚舉了 N 種形態」的守衛都要假設有第 N+1 種。** `slim-scan.py` 掃五種指令名形態,但**掃不到路徑型懸空引用**（圖譜節點路徑、`gover…
+    67 [body]: 1. **Windows 無真機驗證**。`LUMOS_SLIM_SIMULATE_WINDOWS` 只切 `IS_WIN` 這個旗標,模擬不了 `os.linesep` 等作業系…
+  1.552  Projects/多平台合約測試綁定_計劃.md  [守衛]
+    108 [body]: - **⚠ title 自由文字 vs `IDENT_RE` 的結構性死結，及其乾淨解（審計 r1 提出、r2 追問矛盾）**：Playwright/Maestro 識別子天生可含…
+    136 [body]: - `cmd_archive`（`scripts/lumos:2934`，活守衛護欄）——**兩位審計員都漏、自驗補上的第三處**；不改則多平台下 archive 用單 profi…
+  1.549  Systems/heterogeneous-finder-ensemble.md  [守衛]
+    20 [fm]: - risk/守衛面
+  1.548  Projects/檢索PPR邊權_計劃.md  [守衛]
+    32 [body]: - [S3] **融合與消融（edit 面）**：hook/impact 推薦排序新增 P 分量——種子=**該檔 reverse-lookup 的 direct 節點集**（r2…
+    55 [body]: - r3-std panel（2026-07-28,cap=3 終輪,canary=`goldset run-id` 假對帳鍵／ghosts 政策假援引／`--pin-remote…
+  1.536  Verification/2026-09-02_探針沙盒全域防護.md  [守衛]
+    5 [fm:valid_under]: valid_under: 防線靠環境變數 LUMOS_PROBE=1 傳到 claude -p;cmd_install/uninstall/update/bootstrap 開頭呼…
+    19 [body]: - `bash install.sh` → exit 2(薄殼 exec 到 cmd_install,守衛照樣生效)
+  1.535  Projects/自主迴圈修理_計劃.md  [守衛]
+    55 [body]: - 不動放行閘、N=1 閘、tier 收檔守衛、dry-run 紀律等既有裁定。
+    65 [body]: - **守衛面**:本案改守衛面,走完整設計審(standard),不走 light。
+  1.535  Systems/check-t-sentinel.md  [守衛]
+    11 [fm]: - risk/守衛面
+    15 [fm]: - "[[Verification/2026-08-12_CheckU_過度概化守衛]]"
+  1.532  Projects/design-loop判準重定位.md  [守衛]
+    53 [body]: > **狀態**：2026-08-04 立案，**尚未進實作**。守衛面改動，依 `lumos-design-loop` 進場硬否決 → 必須跑完整 panel loop 才能實作…
+    252 [body]: ### 隨之而來的兩個守衛義務（設計時要一併解，不得漏）
+    256 [body]: 2. ★**code-loop 不得繞進來**★：光靠「code-loop skill 不寫這個旗標」是紀律不是守衛。
+    298 [body]: - **進場資格**：命中硬否決（**守衛面**）→ **不給 light，必須完整 panel**。
+    310 [body]: ★**不得以「先實作、之後補審」繞過**★：守衛面改動的進場硬否決就是為了擋這個。
+    462 [body]: → 候選守衛：派工後檢查輸出檔非空且含結束標記，否則視為未派成。
+  1.528  Issues/探針沙盒能推到真遠端.md  [守衛]
+    22 [body]: 2026-08-23 09:37 跑守衛題 a05(情境:「想加功能,沒有我就開工做」)。被測 AI 真的改了
+  1.522  Verification/2026-08-12_CheckN_可重算數字宣稱.md  [守衛]
+    62 [body]: - [[Verification/2026-08-12_CheckU_過度概化守衛]] — 同批的 Check U（守成因 G）
+  1.522  Systems/nested-agent-permission-scope.md  [守衛]
+    11 [fm]: - risk/守衛面
+  1.513  Issues/散文紀律沒有退場機制.md  [守衛]
+    134 [body]: - [ ] **D（另議）· 往機械化搬**：TDAD 的 1.82% 來自機械算好的清單，不是散文。凡是能算出來塞到眼前的（既有的動手前影響提示、共改守衛、測試對照表都屬此類），…
+    144 [body]: 3. **誠實記無守衛**:其中一個失誤(重推一個 code 早就否決的優化)沒有任何機械守衛接得住,就明寫「無守衛,重驗條件=下次有人再提就看這篇有沒有接住他」。
+  1.512  Verification/2026-08-06_驗證層自證三件S1S3落地.md  [守衛]
+    27 [body]: - 全套 2374 passed 0 failed;54→55 命令數散落守衛翻紅 6 檔全數同步。
+  1.503  Projects/reviewer結構明文化_計劃.md  [守衛]
+    17 [body]: 把 [[Projects/社群演算法補強_調研]] §4/§5 的 LLM-judge 可靠度實證寫進 lumos-design-loop / lumos-code-loop sk…
+  1.502  Projects/建了沒人跑批次裁定_計劃.md  [守衛]
+    43 [body]: - ★消費端假紅回歸釘的樣本置換★:t_vendored_consumer_srconly_skip_regression 原拿 canary_snr.py 當「目錄在、檔不在」陷…
+  1.496  Projects/送審前impact鏡頭機械化_計劃.md  [守衛]
+    96 [body]: - **流程**：★這是守衛面，依 `lumos-design-loop` 進場硬否決，**不給 light、必須跑完整 panel loop 才能實作**★
+    128 [body]: ★這是「加了守衛，但守在錯的門」★。加閘之前得先答出「怎麼在不擋住最常見路徑的前提下擋到它」，
+  1.494  Systems/judge-severity-gate.md  [守衛]
+    11 [fm]: - risk/守衛面
+  1.494  Verification/2026-08-07_連結缺失補全落地.md  [守衛]
+    29 [body]: `t_s2_waterline_rescue`(4 案:need 公式/向下相容/pinned 不計/補盡即止;夾具兩度修錯如實記——「無特徵詞」誤命中、pinned 抽走閾值支撐…
+  1.488  Verification/2026-08-01_slim-windows兩缺陷修復.md  [守衛]
+    62 [body]: **範圍刻意收窄**:三支 `.ps1` 內仍有幾處**早期分支**的 `exit 2`(如「找不到 python3/python」「找不到 git」等錯誤守衛)未動——這些理論上…
+    77 [body]: - 三支 `.ps1` 內**早期分支**的 `exit 2`(python/git 找不到等錯誤守衛)理論上有同款 session 終止風險,本次未觸碰,留作已知殘留風險。
+  1.486  Verification/2026-07-05_pitfalls事故觸發.md  [守衛]
+    31 [body]: 4. **impact hook 注入 incidents**:三段(direct/indirect/incidents),空守衛三皆空才不注入。
+  1.476  Verification/2026-07-16_dloop提效M2_cluster帳.md  [守衛]
+    26 [body]: - **Codex 否決席 3 真洞**（4 canary 席對真 diff 各鏡頭判 clean,真 findings 全出跨家族席）:①[blocker] `resolved:…
+  1.468  Systems/core-invariant-baseline.md  [守衛]
+    11 [fm]: - risk/守衛面
+  1.468  Verification/2026-09-05_wrapper邊跑邊改實驗.md  [守衛]
+    31 [body]: ## 實驗三:守衛測試對四種壞檔會不會翻紅(先紅後綠)
+  1.467  Verification/2026-07-15_主網實驗場_LandmarkMember.md  [守衛]
+    4 [fm:feature]: feature: 關係層守衛實驗場——LandmarkMember 真實 vault(256 節點)實測:補網唯讀+主網全鏈沙盒實彈
+    19 [body]: # 驗證：關係層守衛實驗場——LandmarkMember（真實 256 節點 vault）
+  1.460  Verification/2026-08-27_自主loop遷處置閘.md  [守衛]
+    29 [body]: - `governance/autonomous-loop.sh`:runner 的 tier 守衛重驗 `--need --gate` → `--disposal`,清掉死的 N…
+  1.455  Verification/2026-08-08_驗證層去模型化落地.md  [守衛]
+    23 [body]: `t_mutate_diff`(9 斷言:算子生成/殺活判定/決定性兩跑一致/baseline 紅 rc2/no-test-selected 桶/互斥 rc);全套 2409 pa…
+  1.438  Projects/test-layers軟提醒_實作計畫.md  [守衛]
+    18 [DECISION]: DECISION:[2026-07-17]跳 design-loop 並註明:宣告檔解析+列印+prompt 併入純 glue 層,無深演算法——實作真測 > 設計散文(同 cod…
+  1.419  Projects/loop機械脊椎M1包_計劃.md  [守衛]
+    19 [KEY]: KEY:#1 loop next——`lumos loop next <id> [--json] [--tier standard|high|light]` 唯讀讀 canary-…提醒:命中≠查完——搜尋只告訴你「哪裡可能有」,不是完整內容;光看摘要就判「圖譜沒記」以前真的出過錯。下結論前先讀全文:lumos show <節點>
+
+    48 [body]: - **唯讀**：讀該 loop 的 canary-log（同 `loop status` 的讀側守衛：round 混用/損壞 clusters/非連續 round-id → 同款…
+    118 [body]: - **迴歸**：既有 legacy gate（K-streak∧G1∧G2）、panel 三條合取、cluster 帳、混用守衛——全部現行測試不紅（不動語意）。
+    179 [body]: - **r2（織入式 canary＋事後補審 framing「patch 為受審物本體，repo 逐字差異不構成 finding」）**：**sonnet canary 4/4 全…
+  1.418  Projects/第二輪審視六修_計劃.md  [守衛]
+    65 [body]: - R1/X1(major,通才與 Codex 各自抓到):守衛測試只比三個字串,主體搬回頂層或函式外多一行仍綠 → 改成前奏白名單(main 前只准 set/DIR/ts/mkd…
+    69 [body]: - R3(minor,通才):code-loop SKILL 同一段落後半句仍寫「超時→靜默放行」,我上一段還宣稱已修 → 改掉;這是「宣稱修了但掃漏」的實例,跟 [[Issues…
+  1.417  Verification/2026-07-16_replay校準baseline_v0.md  [守衛]
+    33 [body]: | sonnet 釘住 | 3 | 3 | +1(lint 不掃 repo 契約)/+3(summary 互斥/混用粒度/升級撞守衛——含預言 M2 自審場景) |
+  1.402  Issues/自足性審計提醒空轉四十六天.md  [守衛]
+    29 [body]: > ⚠ 只偵測「還在喊」;提醒被降級成不提醒的那種「承認無效」沒有機械守衛。
+  1.399  Verification/2026-07-31_slim-gen生成器落地.md  [守衛]
+    74 [body]: - 前一位實作者中途已經對 brief 原稿的斷言做過一次校正(改到 ≥50% + `O_NOFOLLOW` 哨兵,見 git 未 commit 的工作副本),但未留紀錄說明理由。…
+  1.397  Projects/連鎖佇列軟提醒_計劃.md  [守衛]
+    39 [body]: 4. [T3] Issue [[Issues/連鎖佇列開了沒人跟完]] 結案橫幅(修法 A/B/C 已裁採納、D 另議留言)+本計劃雙向連;Systems 側 KEY 寫回(關係層…
+    56 [body]: - **守衛面**:加的是不動 rc 的軟行,整段可 revert;不碰金流/對外/不可逆。
+  1.395  Systems/cross-family-audit.md  [守衛]
+    11 [fm]: - risk/守衛面
+  1.392  Projects/世界repo掃描2026-09-02_調研.md  [守衛]
+    70 [body]: - **B1 輪內重播偵測**。出處:OpenHands(85.9k★)agent-sdk `stuck_detector.py`,規則式:同 action→同 observati…
+    90 [body]: - **不收斂就跳過**:bmad-loop plateau-defer「story skipped, spec stashed, run continues」+ 人決策存 dec…
+    91 [body]: - **Ralph loop**(anthropics/claude-code 官方 plugin):唯一守衛是 `--max-iterations`,README 自承「Alwa…
+  1.390  Verification/2026-07-28_testmap落地與Landmark轉正.md  [守衛]
+    31 [body]: - 覆蓋 [S3] 全 25 項：naming 各型（含點分 basename 去尾點、`_spec` 直剝、`Foo_TESTS` 底線不敏感、同名唯一 `__tests__/B…
+  1.389  Projects/impact-diff橋接_計劃.md  [守衛]
+    33 [body]: - t_impact_diff 14 斷言：rc/manifest 結構/seed 過濾（code 檔進、圖譜節點與 governance 資料檔不進、**已刪檔保留**、CJK …
+  1.382  Verification/2026-08-22_缺席推論探針題組.md  [守衛]
+    152 [body]: ## ★第四條紀律 + a05 守衛題(Enzo 授權後補,同日)★
+    166 [body]: ### 守衛題 a05 與★翻紅釘實測★
+  1.368  Projects/design-loop重設計_實作計畫.md  [守衛]
+    134 [body]: 附帶：新命令觸發漂移守衛（六份文件「53 個頂層命令」→54 同步）——列舉宣稱靠守衛不靠記憶的再一次實證。
+  1.354  Verification/2026-08-27_decision_refs養成T3v4落地.md  [守衛]
+    5 [fm:valid_under]: valid_under: "六原語(backlog/candidates/add-ai/list/prune/promote)+雙欄不對稱信任(E2 只讀 decision_ref…
+    20 [body]: - **真回填一批**:8 條 decision_refs across 5 個驗證節點(design-loop折入守衛→#d1、cochange→#d1/d2、refcheck→…
+  1.343  Projects/pitfalls棧別效能追問_計劃.md  [守衛]
+    37 [body]: 4. **同步義務**:效能檢核目錄節點改 → `_STACK_PERF_QUESTIONS` 同步(反向亦然);漂移守衛=測試斷言表中每棧問題數與目錄「人判提問」欄一致性(輕量:…
+  1.338  Issues/loop機制痛點_Landmark_code-crossclaim實跑回饋.md  [守衛]
+    34 [body]: 1. **K=2 懲罰即時修復**(上面 KEY①)——**懸置待裁**。動收斂判準屬守衛面,要走 design-loop,不可順手改。
+  1.333  Projects/圖譜結構化查詢_計劃.md  [守衛]
+    65 [body]: - [x] cmd_query 實作(全量 2636 passed 0 failed;含漂移守衛逼出的 5 檔指令數 60→61 與 slim KEEP 收編 25→26 支)
+  1.332  Projects/Android側UI測試綁圖譜工作流_實作計畫.md  [守衛]
+    72 [body]: 3. *既有機制小修蓋得住嗎*：蓋得住——`t_precommit_whitelist_drift_guard` 已經是「跨檔同源清單」守衛，加一條斷言即可，**不新造 detec…
+    316 [body]: - 本計畫**只接線、不造機制**——所以 spec 天花板列的東西一條都沒被解決：`name:` 唯一性無守衛、`[kill:]` 在 UI 層走不通、版面一改要重錄。
+  1.325  Verification/2026-07-31_slim-claude-md第三次裁定取代與備份還原.md  [守衛]
+    84 [body]: `python3 scripts/test_lumos.py -k slim`——187 checks 全綠(含既有 t_slim_gate/t_slim_readme_asser…
+  1.304  Projects/pitfalls-lint-integration_計劃.md  [守衛]
+    50 [body]: > **狀態(2026-07-04)**:spec `docs/design/2026-07-04-lint-version-watch.md`。design-loop 6 輪 c…
+  1.303  Projects/工具鏈補強十件_計劃.md  [守衛]
+    32 [body]: | 9 | 頭版指標漂移守衛 | ✅ `t_skill_reference_pointers_resolve`:五份 SKILL.md 的「`reference.md`/`temp…
+  1.290  Projects/GPT外部評審吸收_計劃.md  [守衛]
+    37 [body]: | 知識有效期限/相關碼變了重驗 | valid_under+revalidate_when+`lumos stale`+cochange 守衛 |
+  1.280  Projects/檢索多詞回退_計劃.md  [守衛]
+    138 [body]: 這道閘直接判假，**OR 路徑一次都沒被執行**。把 fallback-only 守衛拿掉（改成永遠 OR）的
+    235 [body]: | M06 圖譜 同步 閘 | 0.311 | ★裁決者標為「查詢歧義」★——可指 pre-commit 強迫碰圖譜的閘，也可指節點間同步漂移的守衛 |
+  1.261  Projects/doctor-run事件_計劃.md  [守衛]
+    56 [★INVARIANT★]: 不碰金流/對外送/不可逆/守衛面判定(只加一筆帳,不改任何閘的裁決);不動 ★INVARIANT★;預估 <20 行含測試;非演算法密集 → 走 light。
+  1.259  Projects/roster對帳併入問閘_計劃.md  [守衛]
+    36 [body]: - 守衛面:動輸出不動判定;try/except+打樁斷言鎖 rc。已排除:金流/對外/不可逆。
+  1.248  Verification/2026-08-01_slim-python移植.md  [守衛]
+    33 [body]: 1. 原 bash 版本 `install.sh:207` 曾因為算 CLAUDE.md 寫入路徑用素樸 `$(pwd)`、守衛用 `$(pwd -P)`(見 Task 12 修復…
+  1.237  Issues/引句錨定只驗前綴_後半可編造.md  [守衛]
+    62 [body]: **三、還有一種更容易無意寫出來的觸發方式。** 引句裡只要有一個「落單、沒有配對開括號」的同型收尾符號,抽取一樣在那裡截斷,而抽到的前綴裡開閉數是 0 比 0(平衡),我的守衛完…
+  1.212  Projects/code席爆炸半徑供糧_計劃.md  [守衛]
+    30 [body]: **B 廢**(blocker×多席):①停案判決 d2 **明文列舉並否決過**「pitfalls→loop next 改工具落點」——B 就是那個選項本人,無新論證(P-1);…
+  1.211  Projects/decision_refs自動養成_實作計畫.md  [守衛]
+    46 [body]: - **不對稱信任（核心安全）**：AI 誤指決策（V 實作 d3、AI 填 d2）的緩解——`by:ai` 的 ref **對 E3 firing 生效**（加法、advisor…
+    138 [body]: - ★所有原語的 ref-對-ref 比對(backlog 集合差/candidates 去重/add-ai 冪等/prune 定位/promote locate·remove·d…
+    153 [body]: - _dref_same 空-did 守衛(did 任一空即不相等)——破了=無 id 決策誤併漏警,候選。
+  1.194  Verification/2026-08-23_影響欄位離線驗證.md  [守衛]
+    28 [body]: r1 那個案例把「關於」與「影響」的差別講透:`anchor-integrity`(守衛檔要簽名)——
+  1.193  Systems/loop-convergence-recording.md  [守衛]
+    11 [fm]: - risk/守衛面
+  1.185  Verification/2026-08-22_評測尺三修.md  [守衛]
+    97 [body]: 出卷器 9 條(含★守衛:裸跑防護不准被拿掉★)。
+  1.182  Projects/圖譜進迴圈入口栓_計劃.md  [守衛]
+    117 [body]: - CEL-10(合G-1~G-6):--spec fallback 鏈;JSON query 合約收斂;B 多筆合約收斂;★突變數字全部重量:M1 拔母token濾=6 紅、M2…
+  1.167  Projects/主session鏡頭利用率_計劃.md  [守衛]
+    83 [body]: 2. **推送事件**:定義見上(hookName 篩、雙標頭、list content);★去重鍵=toolUseID★;pinned 為空(只有自由席或守衛面參考)→★不進分母…
+    127 [body]: - ★沒有機械守衛的部分★:推送發生率若本來就低,兩週後只會得到「樣本不存在」——這本身就是答案,REVISIT 那條會改題。
+  1.163  Projects/檢核收緊五件_計劃.md  [守衛]
+    31 [body]: | S1 承認句檢核 | 2026-08-21 L4 清帳抓到「pass --note 須含效能答案」「probe 三參數」兩處 skill 寫「須」而 code 零檢查,編排者照…
+  1.159  Projects/impact鏡頭機械化_計劃.md  [守衛]
+    24 [fm:superseded_by]: superseded_by: ★2026-09-03 實測推翻死因,重開條件已滿足(見 [[Verification/2026-09-03_派工攔截點實測]])★:d2 的核心死因…
+    39 [body]: > ② 同日另一筆實測顯示,守衛常態誤擋會訓練人習慣性繞過(見 [[Issues/推新分支時風險分級拿空樹當起點]]),
+  1.145  Projects/design-loop重設計.md  [守衛]
+    94 [body]: | 9 折入＋fold-check | 鏡像段機械查 | 守衛真；但折入本身在生產下一輪缺陷（歷史第三輪常見的「補丁沒同步」型 findings 即此） |
+    109 [body]: | **閘**（過不了就不放行） | G3 hash 鏈；**處置帳集合核對**（逐條 finding 帶穩定 ID，folded／accepted 兩集合**互斥且聯集＝find…
+    166 [body]: - **本案自己怎麼審**（bootstrapping）：舊閘已被本案證明失效，用它審本案＝用壞尺量新尺。
+  1.123  Projects/閘觸發帳統計_計劃.md  [守衛]
+    48 [body]: 2. **風格偏好?** 否。「宣稱有守衛、實際從沒響過」是正確性問題,不是美感。(★注意:砍成純數字後本案只陳述「沒出現」,不主張「沒作用」——後者要人另外查證★)
+    79 [body]: - 只有走上述 15 個 gate 名之一的事件會被看到;不記帳的守衛(不論多重要)在本統計中不存在。
+    236 [body]: - **r-post 外家否決席(2026-08-20,gemini-3-flash-preview 付費層,★外家管道恢復後首跑;loop 已閉,屬事後補審★)**:5 條。**…
+  1.114  Projects/Codex行為精修_計劃.md  [守衛]
+    15 [fm]: - "[[Projects/code-loop必用守衛_計劃]]"
+    44 [body]: ## 改動 (A):Codex 收工擋停一次(守衛面,d1 擬)
+    52 [body]: - **對 2026-07-06 裁定「Stop hook 只注入不擋」的正面回應**([[Projects/code-loop必用守衛_計劃]] d1;架構席 r1 major)…
+  1.101  Verification/2026-07-11_hook面v1.1轉正.md  [守衛]
+    76 [body]: **歸類**:典型「逐輪折入漂移」——同 [[Issues/design-loop折入漂移_機械守衛]] 的 finding class(增量改寫時舊數字被沿用進新結論)。v1.2…
+  1.044  Systems/linter精選目錄.md  [守衛]
+    67 [body]: - 接完跑 `lumos lint-check --smoke` 驗宣告真跑得動(這正是抓到 /tmp jar 蒸發的守衛)。
+  1.014  Projects/一句話層供糧_計劃.md  [守衛]
+    43 [body]: - **★真隱患:L0 品質不齊★**:白話行是自發慣例、無格式守衛。r1 機械數:51/84 條 >80 要截、硬截僅 3 條落句尾;抽樣 6 條截斷中 3-4 條把結論切在斷點…
+  0.979  Projects/評測尺翻案_計劃.md  [守衛]
+    99 [body]: - **守衛面**:評測 gate 是排序調參守門,改尺=改守門標準——完整設計審+代碼審;雙報期 gate 恆以舊尺判,新尺只預覽,失真可零成本棄置(不切換即回退)。
+  0.964  Projects/Codex完全支援_計劃.md  [守衛]
+    112 [body]: 4. **enforcement 層**:每支 Codex hook 一列(與 Claude 側 `session-entry-hook` 等同粒度,架構 #3):`codex-<…
+    136 [body]: - recount 多一個 Codex reader(路徑 `~/.codex/sessions/**`,以 `cwd` 過濾 repo,fixture 版本守衛同 S1);pro…
+    226 [body]: - **recount.py**:`scan_codex_file`——`session_meta.cwd` 篩 repo、`cli_version` fixture 守衛、dev…
+  0.940  Projects/收斂閘漏項敏感度v2_計劃.md  [守衛]
+    50 [body]: PRIOR-ART: ① 最小解層級——不新增閘、不改判準、不製造材料;只是把既有的「隔離環境裡跑一份已知有缺陷的材料、看守衛會不會叫」(`guard kill`)那一招,指向審查…
+    222 [body]: - **★沒有機械守衛★**:上面五條全是紀律,沒有任何程式擋得住作者回頭改讀法。回頭條件=第一批結果落地時,由寫 Verification 的人比對本篇讀法段的 git 歷史有沒…
+  0.933  Projects/probe輪退場_計劃.md  [守衛]
+    84 [body]: - 詳帳:`governance/review-reports/probe-retire-v2/r1-*.md`+r1-intake.md。★r1 記帳自首:編排者曾在未跑 quo…
+  0.929  Projects/中心性重驗排程_計劃.md  [守衛]
+    44 [body]: - **self-governance（r1 升格為真命中）**：Check S 只露前 8 筆——排序偏置會**系統性決定誰永遠不被看見**（r1 F10：樞紐霸榜＋截斷疊加）。…
+  0.928  Projects/skill寫法學借鑒與design-loop剪枝.md  [守衛]
+    142 [body]: ★對齊 design-loop 的 d4 裁定「前置加重一律拒」★：新守衛要有證據才加，不是有道理就加。
+  0.870  Projects/驗證層去模型化_計劃.md  [守衛]
+    95 [body]: - **[self-governance]**:S2 動的是守衛面規矩書——golden 語料在(本週三 loop),舊帳不回溯+新制已在 design-loop 實戰;S4 恆 …
+  0.866  Projects/改制回測_計劃.md  [守衛]
+    41 [body]: - 守衛面:runner 唯讀不進閘(advisory);週跑漂移=喊人不擋。對外送出:僅 LINE 喊人,走 build_message('regime-replay') 模板(…
+  0.822  Projects/主動影響幅度偵測_計劃.md  [守衛]
+    83 [body]: → 它是 **pull(你去查)**,不是 **push(它來提醒)**。與記憶 `knowledge-sync-scatter-needs-mechanical-guard`(非…
+    308 [body]: **收尾決定(使用者選 TDD 路,2026-07-05)**:9 輪後判斷——設計層高價值 finding 已榨出(2 真 bug 修掉),findings 不枯竭主因是 (i)…
+  0.779  Projects/lumos-show讀取入口_計劃.md  [守衛]
+    89 [body]: - **F2 派發組無條件 fallback（major，機械證實免辯方）**：:9670 `return cmd_decisions` 無守衛——必須插 if 分支，否則 sho…
+  0.778  Projects/派工鏡頭注入_計劃.md  [守衛]
+    160 [body]: - ★沒有機械守衛的部分★:編排者自己寫派工詞不照模板,標記就不在——鏡頭的本性,回頭條件見 REVISIT。
+    193 [body]: - 新 helper `_json_at_ref(repo_root, ref, rel_path)`:`git show <ref>:<path>` 解 JSON,沒有/壞→No…
+  0.654  Projects/標註刷新_計劃.md  [守衛]
+    175 [body]: 「多撈一倍、建池後空的丟棄並補位」。測試 9 條(含 ★裸跑防護不准被拿掉★ 的守衛)。
+  0.630  Projects/檢索優化_計劃.md  [守衛]
+    74 [body]: | 合約/事故 | 安全固定席不參與排序，超額標 safety overflow（Codex 案）| 守衛資訊不因 top-k 靜默消失 |
+  0.000  Systems/外部對照-code衍生wiki.md  []
+    15 [fm]: - "[[Projects/from-scratch重生守衛_計劃]]"
+  0.000  Verification/2026-07-04_pitfalls-code-loop.md  []
+    12 [fm:revalidate_when]: revalidate_when: 改 PITFALL_CLASSES 詞表或黑名單(漂移守衛擋);改 _PITFALL_DIFF_PATTERNS;改 cmd_loop_statu…
+  0.000  Verification/2026-07-28_settle收斂閘.md  []
+    10 [fm]: - "cmd_loop_status 三模式(legacy/panel/light)謂詞或混用守衛改動"
+
+(共 258 篇候選,照相關性排序;想照檔名排加 --legacy)
+
+exec
+/bin/zsh -lc "sed -n '1,240p' /Users/enzo/.agents/skills/lumos-project-notes/SKILL.md" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+---
+name: lumos-project-notes
+description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫——任何任務開始要搞懂「這個模組/欄位/流程為什麼這樣、邊界在哪、哪些不能改、會波及什麼」時先用 lumos 查,不要直接 grep/Read;改完 code 要寫回決策/驗證/合約;收工體檢。觸發:正要 grep 或讀 code 去理解既有系統、排查、對外支援、查 DB、改名/刪除東西、開工掌握現況、收工寫回、問「圖譜有沒有記」。指令全集按情境分類在 commands/INDEX.md。
+---
+# lumos 專案知識圖譜——一頁手冊
+
+圖譜記「為什麼、邊界、不能改的、驗過沒」;code 只記「現在長怎樣」。圖譜跟行為事實(測試、實際執行、生產觀測)對不上時,不自動信圖譜——查清哪邊錯,立一篇事故筆記。主工具 `lumos`(python3 零依賴,自動找 `docs/*-knowledge/`)。**別用 Grep/Read/Edit/Write 直接碰圖譜的 .md 開頭欄位**——會繞過自驗和防護;正文段落用 Edit 可以。
+
+**指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一。下面只列每個階段最常用的。
+
+## 1. 進場(每個子任務都重來,不是 session 開頭一次)
+
+| 你在想… | 敲 |
+|---|---|
+| 這件事為什麼這樣 / 圖譜記了嗎 | `lumos search <詞>` → `lumos context <節點>`;0 命中先換同義詞;**中文概念之間加空白**(`作廢 收回 點數`,別黏成一句) |
+| 動這段有什麼不能碰 | `lumos contracts <節點>` |
+| 要讀全文再下結論 | `lumos show <節點>`(search 只給索引行;拿摘要判「沒記」以前真的錯過——值在筆記第 64 行,靠摘要判成沒有) |
+| 篩條件(金流 / 未收案 / 連到 X) | `lumos query --tag 家族/值 [--active] [--linked <節點>]` |
+| 開工掌握現況 | `lumos query --tag status/doing`;`lumos recent --days 7` |
+| 圖譜空或稀疏(接手 brownfield) | 走節點還原 SOP:`commands/09-節點還原.md`(七步;需要才產節點、有就照慣例用) |
+
+看到筆記有 `core_refs:` 或 `CORE:` → 權威在跨專案核心圖譜,改那邊(`lumos-core-knowledge` skill)。
+**查得到才算先行**(Landmark 實測):0 筆看「逐詞覆蓋」標 ★ 的詞換同義詞,換三次再問人,別轉 grep;大節點先 `--brief`;單篇內部新舊打架時摘要有日期的 KEY 行 > 正文,衝突影響決策去 code 裁再回頭修。
+**分清你在哪種 session**:本機 Claude Code(含手機/網頁遙控本機)有本機 git 憑證、能 push;網頁版 claude.ai/code 是雲端沙盒,對主分支沒 push 權、只能推 feature branch——「遙控」不等於「遠端版」,曾騙到 AI 一次。
+被催「直接改、不用解釋」也一樣:不解釋可以,不查不行——改 code 前至少 `lumos impact --file <檔>` 一行。
+
+## 2. 動手前
+
+- `lumos impact --file <檔>` / `--diff <範圍>`:哪些筆記、驗證、決策會受影響(Edit 前 hook 也會塞一份,但只推你碰到的檔)。
+- `lumos pitfalls --diff <範圍>`:風險分級;`tier: high` 要過代碼審(`lumos-code-loop`)。
+- 要刪 / 改名東西:`lumos search <舊名> --code` 逐句判哪些筆記還在講它。
+- 改了環境 / 流程 / 設定(版本、金鑰、hook、排程):`lumos stale --candidate --match <關鍵字>` 列出寫了「改到這個就該重驗」的驗證紀錄。
+- 設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記(`type: project`),不寫到別的路徑;動筆前一行 `PRIOR-ART:`(最小解在哪層 / 世界解過沒 / 借用‧自建‧採用)。
+
+## 3. 寫回(同一次工作內;pre-commit 擋「改 code 沒動圖譜」)
+
+| 要做 | 敲 |
+|---|---|
+| 新筆記 | `lumos new <system\|issue\|verification\|project> <名>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 |
+| 改狀態 / 日期 | `lumos set <節點> <欄位> <值>`(日期不加引號) |
+| 加 / 刪清單項 | `lumos append <節點> <欄位> "[[x]]"` / `lumos remove …` |
+| 記決策 / 翻案 | `lumos decision-add <節點> "<內容>" --decided <日期>` / `lumos decision-supersede` |
+| 正文段落 | Edit;寫完 `lumos lint <節點>` |
+
+**四條血換的開頭欄位鐵則**:① 多個連結一行一項,擠成一串會長假筆記 ② `summary: |` 區塊裡的 `[[連結]]` 不算連結,要關聯另放 list 欄位 ③ 值含「冒號+空格」要引號或區塊 ④ 同層不能重複鍵。用指令寫天生避開;手改才會踩。
+
+**合約標記(動筆前掃一眼;不確定就不標,嚴禁看 code 反推)**:
+```
+KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes]
+KEY:★DEBT★ <偶然行為,可改>
+KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPOINT★ <改了難救>(建議補 [rollback:])
+```
+- 綁測試 / 留審計走指令:`lumos guard bind <節點> "<KEY 片段>" <測試名>`、`lumos guard audit …`;裸合約 doctor 擋,未審計 pre-push 擋。綁之前對照 [[Systems/測試假綠形態]](最隱蔽的一型:現場根本走不到被測分支;修 bug 的翻紅測試要配一條「現場成立」的前置斷言)。
+- 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
+- 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
+
+**摘要區塊**(Systems/Issues 必有):`FLOW:`流程 `KEY:`關鍵概念 `DEP:`依賴 `TEST:`測試;Issues 用 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN) `DECISION:` `KEY:`。已結案的 Issue 正文第一段要有結案橫幅(status 在開頭欄位,`show --body-only` 看不到,讀者會把修好的當現況)。
+**標籤**:`type/` `status/`(值域 lint 硬擋)、`priority/` P0–P3、`scope/`(feature/ area/ 已停用)、`risk/` 金流‧對外送出‧不可逆‧守衛面、`flag/`。
+
+**決策與驗證**:重大決策填四欄(context / alternatives≥2 / why_chosen / trade_offs),缺資訊問人不編。驗證紀錄填 `valid_under`(前提)與 `revalidate_when`(何時重驗),用 `plan_refs` 指回計劃;漏掛 `lumos sync-verified-by --apply`。計劃結案前 `lumos spec-trace <計劃>` 看哪些條款沒人認領。
+
+**承認風險的鐵則**(Enzo 2026-08-22 裁):筆記或訊息裡寫「沒機械守衛 / 只提醒不擋 / 單次量測 / 這數字是拍的」這類承認句,**旁邊必須有「什麼時候回頭看」**(週報、重驗條件、revalidate_when、到期日);寫不出重驗條件的,就是該處理不該承認。**回頭條件要接電**(2026-08-31 回訪案):帶日期的寫成獨立一行 `REVISIT:YYYY-MM-DD 一句要做什麼`(緊鄰原句,doctor 到期會唸、逾 14 天沒人動升級週報);綁事件的明寫事件入口——純散文=52 件盤點實證的死文。
+
+## 4. 收工
+
+1. `lumos lint <每篇動過的>` → `lumos doctor`(紅的段先修;`--verbose` 看全部提醒)。
+2. code 有「拿掉 / 反轉」的改動:把那些名字逐個 `lumos search <名> --code`,逐句判筆記還成不成立,不成立當場改或標作廢。動到畫面 → 補可重放的 UI flow 並 `[test:<平台>:<flow>]` 綁回(沒裝置要明寫「未驗+原因」)。
+3. 圖譜實質更新後:派乾淨 agent 只讀圖譜還原脈絡,對不上就補到一致,留痕 `lumos self-audit <節點>`。
+4. push 後(專案有宣告 ci 區塊才有):`lumos ci-wait`,紅就當輪修,修不完要在收尾明講。
+5. 跨 session 傳訊只傳「指標+觸發」(我動了哪篇、你去讀哪篇),不傳內容本身;規則權威在圖譜不在誰的記憶。
+
+## 再深一層(按需開,別一次全讀)
+
+| 要做 | 開 |
+|---|---|
+| 某個指令的旗標與用法 | `commands/0N-*.md`(INDEX 指到)或 `lumos <cmd> --help` |
+| 合約鏈深規、[audit:] 五問、guard 工作流、防帶風向 | `reference.md`〈★INVARIANT★ → `[audit:]` 獨立合法性審計〉〈★INVARIANT★ → `[test:]` 綁定〉〈`lumos guard`〉 |
+| 決策四欄完整版、驗證紀錄完整規格、同步規則 | `reference.md`〈Properties〉〈同步規則〉 |
+| 開頭欄位鐵則、標籤家族、摘要區塊、結案橫幅、退場自問、跨 session 傳訊、CI 細則全文 | `reference.md`〈寫入規範與紀律全文〉 |
+| 自足性審計 prompt、交叉審計變體 | `reference.md`〈圖譜更新後：Sonnet agent 自足性審計〉〈變體 B：圖譜×程式碼交叉審計〉 |
+| maestro UI flow 派工要求 | `reference.md`〈產 maestro UI flow 的派工要求〉 |
+| 資料夾位置 | `docs/{slug}-knowledge/{Projects,Systems,Issues,Verification,MOC}`;某主題 >5 篇建 MOC |
+
+exec
+/bin/zsh -lc 'python3 scripts/lumos show Projects/版本發布流程_計劃.md' in /Users/enzo/harness/lumos-toolchain
+ succeeded in 142ms:
+---
+type: project
+status: doing
+created: 2026-07-29
+updated: 2026-07-29
+tags:
+  - type/project
+  - status/doing
+related:
+  - "[[Systems/lumos-cli-lifecycle]]"
+  - "[[Projects/CLAUDE注入re-sync與版本標籤_計劃]]"
+  - "[[Projects/Codex外審吸收_計劃]]"
+summary: |-
+  FLAG:DECISION
+  KEY:目的(2026-07-30 使用者定錨)=「對外能更新／釋出哪一版我說了算／只有我能寫」;★宣稱邊界★——release 是**刻意會移動的通道**不是 pin(要 pin 走 opt-in --ref);branch protection 由「正解」降為「可選縱深」(壞 main 已傳不出去,因為沒人跟 main)
+  KEY:核心約束=本專案分發模型是 symlink 到活 clone(git pull 即更新);故解法必須**保住 git pull 語意**——release 分支保住了、tag 通道會毀掉它(見下兩條)
+  KEY:★核心機制(2026-07-30 使用者裁定,取代 r1 的 tag 通道版)★——**開發線與對外線分兩條分支**:main=開發線(可壞)、release=對外線(只有 owner fast-forward 過去)。發版動作=`git push origin main:release`。消費端 clone 的是 release **分支**,故 git pull / lumos update / bootstrap --pull **全部原封不動照常運作**——這是相對 tag 方案的決定性優勢
+  KEY:★為什麼不是 tag 當通道★(r1 blocker)——`git clone --branch <tag>` 得 detached HEAD,而既有兩處 `git pull --ff-only` 失敗只印 WARN 不改 rc(scripts/lumos:7416/7159),且 ~/.local/bin/lumos 是 symlink 指向該 clone → 整台機器所有專案的 lumos update 會**靜默永久停在裝機那版**(三席獨立指出+編排者自核屬實)。改用分支即整類消失;真要釘死仍可 --ref opt-in
+  KEY:權限模型天然成立——public repo 預設即「全世界唯讀、只有 owner 能寫」,正是需求本身;無須任何 GitHub 設定。★個人帳號 repo 的 collaborator 一律是 write、無唯讀選項★(官方明載,要細分權限只能轉 organization)——故「private+collaborator」路線與「只有我能寫」直接衝突,已排除
+  KEY:四條消費路徑(r1 補第四條)——①維護者活 clone ②陌生人首裝 ③vendored 副本 ④**全域 Claude hooks**(_install_hooks_py→_sync_global_claude 由「最後一個跑安裝的專案」的 vendored 副本覆蓋,scripts/lumos:7353);故「機器上跑哪一版」本來就可能是三個不同答案
+  KEY:單一源=scripts/lumos 的 LUMOS_VERSION;tag/CHANGELOG 與它一致由測試機械驗,且 CHANGELOG 標題格式**釘死**不借 Keep a Changelog 的 Unreleased 慣例(否則常駐 Unreleased 會撞「解析失敗即紅」)
+  KEY:★邊界(不推翻既有決策)★——[[Projects/CLAUDE注入re-sync與版本標籤_計劃]] 已裁「版本號=人可讀標籤、嚴禁當 staleness oracle」,本計劃不改那條;只新增一個獨立角色:release 識別碼
+  KEY:可逆性=發布動作實務上收不回(有人裝了);但 ★tag 可刪可 force-move 是事實★——「只前滾不改寫」是**政策不是性質**,無機械強制(Codex 指出,誠實記)
+---
+# 版本發布流程（計劃）
+
+
+`PRIOR-ART:` ① **最小解在既有層**——`LUMOS_VERSION` 常數與 `_version_nudge()` 版本 nudge 已存在（`scripts/lumos:7080`，doctor Check N 呼叫），本案是「給它接上 git tag 與 CHANGELOG」，不是造新機制。② **世界解過**（真搜非印象，2026-07-29）：curl|bash 的釘版本／checksum 是熟坑，主流解法為「安裝腳本支援指定版本、預設抓 GitHub Release、附 checksum」（Sigstore「A Safer curl|bash」、Kusari「Pinning Dependencies」）；發版流程標準形態＝tag → CI 驗 → `gh release create` → CHANGELOG（GitHub Docs「Managing releases」、`gh release create`）。③ **裁定＝borrow-design**：照抄「tag＋Release＋CHANGELOG」形態，**不採**外部工具（release-it／goreleaser／semantic-release——零依賴家規，且它們解的是多語言打包發布，本專案沒有 build artifact）。自建部分只有膠水。
+
+## 動機（r1 折入後的誠實版）
+
+**使用者的真實需求（2026-07-30 澄清，此為本案定錨）**：「能夠對外版本更新、釋出我想釋出的版本、但只有我可以寫入。」
+
+拆開就是三件事：對外能更新／放哪一版我說了算／只有我能寫。第三件在 public 個人 repo 上**天然成立**（預設即全世界唯讀、只有 owner 能寫），不需要任何設定。所以真正要解的是前兩件，而它們的本質是——**開發線與對外線要分開**。
+
+`release` 分支正是這個分離：main 隨便推，release 只有你把它快轉過去。**壞掉的 main 傳不到任何人**，因為沒有人跟 main。
+
+**r1 跨家族否決席的批評，這一版解掉了兩條、保留一條**：
+- ✅ 「`get.sh` 腳本本身從 main 抓，壞 main 可讓它無視版本」→ **解掉**：README 的一鍵指令改指 `raw.githubusercontent.com/.../release/get.sh`。raw 可服務任意 ref，改一個字連第一段腳本都走對外線（tag 做不到這件事而不必每版改 README 網址）。
+- ✅ 「釘 tag 破壞既有更新路徑」→ **解掉**：分支不是 detached HEAD。
+- ⚠️ 「`latest` 是會移動的通道、不是可重現的 pin」→ **維持成立，且這是刻意的**。使用者要的就是通道（「釋出我想釋出的版本」＝我移動指標）。真正的 pin 是 opt-in `--ref <tag|sha>`。
+
+**branch protection 的定位隨之改變**：從「本案的正解」降為「可選的縱深」——壞 main 已經傳不出去，required check 只再多保護 main 自身的整潔。仍留在 [[Projects/Codex外審吸收_計劃]] backlog ⑥。
+
+**本案買到的**：
+1. **釋出控制**：對外拿到什麼，由你移動 `release` 決定。
+2. **發布溝通**：tag＋Release＋CHANGELOG 給出可指認、可回溯的版本身分。
+3. **可回答「你在跑哪一版」**（[S8]）。
+
+**明確不做**：semver 相容性承諾／多版本並存／降級支援／簽章與 SLSA provenance／自動 changelog 生成／**改變預設安裝行為**。
+
+## 條款
+
+### [S1] 版本單一源與一致性守衛
+- 單一源＝`scripts/lumos` 的 `LUMOS_VERSION`（現值 `v1.0`），格式 `vMAJOR.MINOR`，不引入 patch 段與 semver 語意承諾。
+- 新增 `t_version_single_source`：`LUMOS_VERSION` 必須與 `CHANGELOG.md` 最新一筆版本一致。
+- **真值取得方式釘死**（r1：守衛的尺自己也會漂）：版本取 `^LUMOS_VERSION = "(v\d+\.\d+)"$` 單一定義點；CHANGELOG 取**第一個**符合 `[S2]` 釘死格式的標題。**兩邊任一解析不到＝紅燈，不得跳過。**
+
+### [S2] CHANGELOG（格式釘死，不留猜測空間）
+- 新增 `CHANGELOG.md`。標題格式**恰為** `## vMAJOR.MINOR — YYYY-MM-DD`（全形破折號，與 `LUMOS_VERSION` 同帶 `v` 前綴）。
+- **不採 Keep a Changelog 的 `## [Unreleased]` 常駐區塊**（r1 折入）：常駐 Unreleased 會成為「最新一筆」，讓 `[S1]` 的解析在**每一次日常 push** 都撞「解析失敗即紅」。未發版的變更寫在 commit message 與圖譜，不進 CHANGELOG。
+- 首筆＝`v1.0`，內容為「首次正式標記；此前為未標記的持續開發」，不回溯編造歷史。
+
+### [S3] 發版動作（人執行，checklist）
+0. **前置檢查**：`gh auth status` 已登入（r1 補：[S3] 第 3、5 步都依賴 `gh`，隱藏依賴要寫成步驟）。工作樹乾淨、在 `main`、與 remote 同步。
+1. bump `LUMOS_VERSION` ＋ 寫 `CHANGELOG.md` 該筆 → commit → push。
+   - **首次發版特例**（r1 補）：`LUMOS_VERSION` 已是 `v1.0`，此步只寫 CHANGELOG，無值可 bump。
+2. **等 CI**：跑 `lumos ci-wait --json`，**必須確認 `verdict == "green"`**。
+   - ★**不得只看 rc**★（r1 blocker 折入，兩席獨立指出）：`ci-wait` 的 rc0 涵蓋 `green`／`undetermined`／`timeout`／`no-run`／`unavailable`／`disabled` 六種判定中的五種——`gh` 未裝／未登入／網路斷會 fail-open 回 rc0（`scripts/lumos` 該路徑註解自書「fail-open,不擋任何流程」）。寫成 `lumos ci-wait && git tag ...` 這種最自然的寫法**會在 CI 根本沒被查到時放行發版**，而發版不可逆。
+   - 非 `green` 一律停止，人工判斷後重來。
+3. **移動對外線**：`git push origin main:release`（fast-forward；**不得 force**）。這一步才是「放出去」，後面兩步是留紀錄。
+4. `git tag -a vX.Y -m "..."` → `git push origin vX.Y`。
+   - **重跑清理**（r1 補）：若上次 tag 已建但 push 失敗，重跑前需 `git tag -d vX.Y`；若 release 已存在需先 `gh release delete`。
+   - **既有 pre-push 行為預告**：對 tag ref，pre-push 會印 `非分支 ref、tier=high——advisory 放行(tag 內容 gate 另訂策略)`。**本計劃即為該 TODO 的定案處**：tag 內容 gate ＝ [S4] 的事後 workflow，pre-push 維持 advisory 不改（tag 指向的 commit 早已在 main 過完整閘）。
+5. `gh release create vX.Y`，notes 取自該筆 CHANGELOG。
+- 寫成 `RELEASING.md`（人看的 checklist），**不寫成腳本**——低頻、不可逆、需要人在場判斷。
+
+### [S4] tag 閘（CI，事後檢查）
+- **獨立 workflow 檔**（r1 定案）：不塞進 `ci.yml`。GitHub Actions 的 `on:` 是 workflow 層級，把 `tags:` 加進 `ci.yml` 會讓既有 job 在每次 tag push 重跑，且版本斷言 job 在一般 push 時無 tag 可比。
+- **不重抄步驟**（r1 折入，本 repo 有清單漂移前科）：把 `ci.yml` 的驗證步驟抽成 **reusable workflow**（`workflow_call`），push 版與 tag 版都 `uses:` 它；tag 版額外加一步斷言 `LUMOS_VERSION == 該 tag 名`。若 reusable workflow 在實作時證實不可行，退路是加一條守衛測試比對兩份 YAML 的步驟清單——**不得靠人工同步兩份**。
+- **限制誠實記**：事後檢查（tag 已存在才跑），讓錯誤可見，不能阻止 tag 被推出去。
+
+### [S5] 對外通道＝`release` 分支（2026-07-30 設計轉向）
+- **兩條線**：`main`＝開發線（可壞、CI 紅也無妨）；`release`＝對外線，**只有 owner 用 fast-forward 移動**。
+- **發版動作**（併入 [S3]）：`git push origin main:release`。非 fast-forward 必須失敗而非 force（政策：只前滾）。
+- **三個 clone 站一律預設 `release`**：`get.sh`、`cmd_bootstrap` 內建 clone（`scripts/lumos:7423`）、`get.ps1`。
+  - **冷啟動 fallback**：`release` 分支尚不存在時 → 退回預設分支並印一行說明，不得炸掉。
+  - 實作用 `git clone --branch release`（分支不是 tag，**不會進 detached HEAD**）。
+- **README 一鍵指令改指對外線**：`raw.githubusercontent.com/<owner>/Lumos/release/get.sh`。這關掉 r1 否決席指出的「第一段腳本仍來自 main」缺口。
+  - **限制**：GitHub raw 有 CDN 快取（數分鐘級），移動 `release` 後不是瞬間生效；發版後短時間內仍可能取到舊腳本。這是**延遲不是錯誤**，明記。
+- **既有更新機制零改動**：消費端在**分支**上，`git pull` / `bootstrap --pull` / `lumos update` 全部照常，只是只會拉到 owner 批准過的內容。
+- **維護者本機刻意留在 `main`**（吃前緣）；`git log release..main` 即「有哪些還沒放出去」。
+- **真釘死＝opt-in**：`get.sh --ref <tag|branch|sha>`。
+  - **旗標解析要改架構**（r1 補）：現行迴圈是純布林 token 比對（`case "$a" in --pull|--init)`），`--ref v1.2` 兩個 token 會雙雙落進 `*)` 被警告忽略。必須改成能消耗下一個 token。
+  - **釘在 tag/sha ＝ detached HEAD，必須當場告知**：印明確警告「此安裝已釘在 `<ref>`，`git pull` 與 `lumos update` 不會拉到新版；要回到對外線請 `git -C <home> checkout release && git pull`」。
+- **`--pull` 語意定案**：只對「在分支上」的 clone 有意義；偵測到 detached HEAD 時**印明確訊息並回非零**，不再靜默 WARN 後假裝成功（此為既有靜默失敗的修正，屬本案範圍）。
+
+### [S6] notesmd 二進位 checksum
+- `fetch-notesmd.sh` 已釘版本 `v0.3.6`，但無內容驗證（tag／release asset 上游可重傳）。
+- **管線要拆**（r1 補）：現行是 `curl -fsSL "$URL" | tar xz -C "$TMP"` 直接串流，沒有落地檔可算指紋。必須改成「先存檔 → 驗 SHA256 → 再解壓」。
+- **trap 要條件化**（r1 blocker 級細節，兩席指出＋自核）：現有 `trap 'rm -rf "$TMP"' EXIT`（`scripts/fetch-notesmd.sh:35`）無條件清除。若只加 `exit 1`，承諾的「保留暫存檔供人查」**不會發生且靜默不發生**。必須改為驗證失敗時清除 trap 或改用不受 trap 影響的保留路徑。
+- **VER 被覆寫時的行為定案**（r1 補）：腳本支援 `fetch-notesmd.sh <版本>` 覆寫（既有升版測試流程）。指紋表**只涵蓋已釘版本**；覆寫成表外版本時 → **印明確警告「此版本無指紋、未驗證」並要求 `--allow-unverified` 才繼續**，否則中止。不靜默放行。
+- 指紋來源＝當下實際下載到的檔案；**明記這是 TOFU（首次使用即信任），不是上游官方公布值**。
+- 平台涵蓋 darwin_all / linux_amd64 / linux_arm64。
+
+### [S7] Actions 釘 SHA
+- `actions/checkout@v4` / `actions/setup-python@v5` 改完整 commit SHA ＋ 尾註原 tag。
+- 代價：上游修補不會自動吃到，需人工升——列入 `RELEASING.md` 定期檢查項。
+
+### [S8] `lumos --version`（r1 新增，補回動機二）
+- 動機明列「可回答你在跑哪一版」，r0 卻只在隱患段寫「待審」，等於動機沒被實現。
+- 新增 `lumos --version`：印 `LUMOS_VERSION` ＋ **來源 clone 的 commit sha 與 dirty 狀態**（vendored 副本沒有 git 脈絡時印 `(vendored, 無 git 脈絡)`）。
+- **誠實**：這回答的是「這支 lumos 是哪一版」，不是「這台機器整體是哪一版」——見下方天花板。
+
+## 實務隱患
+
+- **一台機器可能同時有三個版本**（r1 補，Codex 指出＋自核）：全域 CLI（symlink→活 clone）、各專案 vendored 副本、**全域 Claude hooks**（`_install_hooks_py` → `_sync_global_claude(root)`，來源是「最後一個跑安裝的專案」的 vendored 副本，`scripts/lumos:7353`）。`[S8]` 的 `--version` 只能回答第一個。
+- **`get.sh` 自身未釘**：釘的是它 clone 的內容，不是它自己。要連腳本都釘，使用者得改用釘版本的 raw URL——只能建議、不能強制。
+- **tag 可變是事實**：`git tag` 可刪除、可 force-move，GitHub Release 可編輯。「只前滾不改寫」是**政策不是性質**，無機械強制。
+- **`[S4]` 是事後閘**：錯的 tag 推出去後才紅，此時已可能有人裝到。
+- **checksum 的信任根是 TOFU**：若首次下載時上游已被替換，指紋會把錯的東西鎖成「正確」。
+- **`[S3]` 的存在性守衛本身會漂**（r1 承認）：要機械判定 `RELEASING.md`「列出全部步驟」，勢必硬編步驟關鍵字，checklist 改了守衛不會跟著改。**故降級為「檔案存在」即可，不假裝驗內容**——與其做一個會漂的假守衛，不如誠實只驗存在性。
+
+## 測試策略
+
+| 條款 | 測試 | 型態 |
+|---|---|---|
+| [S1][S2] | `t_version_single_source`：LUMOS_VERSION ↔ CHANGELOG 最新筆一致；**任一邊解析不到即紅**（反事實：改壞格式必翻紅） | 機械守衛＋反事實 |
+| [S3] | 無自動測試（人工 checklist，設計如此）；唯一機械面＝`RELEASING.md` **存在**（不驗內容，理由見隱患） | 存在性守衛 |
+| [S4] | tag workflow 的版本斷言邏輯（fixture 驗，不真推 tag）＋ 兩份 workflow 不得各自維護步驟清單 | 單元＋機械守衛 |
+| [S5] | ①三個 clone 站預設 `release`（含 release 不存在時的冷啟動 fallback）②`--ref` 解析（含「值被當未知旗標吃掉」的回歸）③detached HEAD 下 `--pull` **必須回非零**（反事實：目前會靜默 rc0） | 單元＋反事實 |
+| [S6] | checksum 不符必須中止（餵內容被改過的假 tar）；**斷言暫存檔仍在**（r1 補：原測試沒驗這條承諾）；表外版本未帶 `--allow-unverified` 必須中止 | 反事實 |
+| [S7] | workflow 檔內不得出現可移動 tag 形式 | 機械守衛 |
+| [S8] | `lumos --version` 有輸出且含版本字串；vendored（無 .git）情境不炸 | 單元 |
+
+**反事實優先**：凡宣稱「壞掉時會擋」的條款（[S1][S5][S6]），都必須有「弄壞→必翻紅」的測試，而非只驗正常路徑。
+
+## 審計修正紀錄
+
+**r1（2026-07-29，panel W=5＋跨家族否決席；4 caught／1 missed → 該輪無效輪，missed 席 findings 依紀律不計入帳，惟其中經編排者機械自核屬實者仍折入並標註）**
+
+| # | 來源 | severity | 折入 |
+|---|---|---|---|
+| 1 | slot4／slot5 獨立 | **blocker** | [S3] 改為必須驗 `verdict == "green"`，明列 rc0 的五種非綠狀態 |
+| 2 | slot4／Codex 否決席／slot3（自核屬實） | **blocker** | [S5] 翻轉預設：不釘為預設，釘版本改 opt-in；並修 `--pull` 在 detached HEAD 的靜默假成功 |
+| 3 | Codex 否決席 | major | 動機段降低宣稱：不再自稱 supply-chain pin；明指 branch protection 才是正解 |
+| 4 | Codex 否決席 | major | 補第四條消費路徑（全域 Claude hooks），並修正「三條路徑」的摘要 |
+| 5 | Codex 否決席 | major | 誠實天花板補「tag 可變是政策非性質」 |
+| 6 | slot2（`cmd_bootstrap` 自帶 clone）／Codex（`get.ps1`） | major | [S5] 涵蓋全部三個 clone 站，不只 `get.sh` |
+| 7 | slot2／slot3（自核屬實） | major | [S6] trap 條件化；管線拆成「先落地再驗」 |
+| 8 | slot2／slot5 | major | [S2] 標題格式釘死、明確不採 Unreleased 常駐區塊 |
+| 9 | slot5 | major | [S6] VER 覆寫成表外版本的行為定案（`--allow-unverified`） |
+| 10 | slot5 | major | 新增 [S8] `lumos --version`（動機二原本沒被任何條款實現） |
+| 11 | slot5 | major | [S5] 明列 `get.sh` 旗標解析架構要改（現行吃不了帶值旗標） |
+| 12 | slot1 | minor | `_ver_check` → `_version_nudge`（真名，`scripts/lumos:7080`） |
+| 13 | slot1 | minor | [S3] 首次發版無值可 bump 的特例 |
+| 14 | slot1 | minor | [S3] 存在性守衛降級為只驗存在（不做會漂的假守衛） |
+| 15 | slot4／slot5 | minor | [S4] 定案獨立 workflow ＋ reusable workflow 避免步驟重抄 |
+| 16 | slot5 | minor | [S3] 補步驟 0（`gh auth status`）與 pre-push tag advisory 的定案 |
+| 17 | slot3（missed 席，自核屬實） | minor | [S3] 重跑清理步驟（tag／release 已存在） |
+| 18 | slot2 | minor | [S6] `curl \| tar` 串流沒有落地檔可算指紋 |
+
+**canary 判定**：slot1(型 b)／slot2(型 c)／slot4(型 a)／slot5(型 b) 皆 caught 且性質判定正確；slot3(型 d) **missed**。
+（**刻意不記 canary 字面內容**——本節點會被下一輪審計員讀到，寫出 token 等於教會他們認餌；型別代碼與 canary-log 已足夠追溯。）
+其中一席的 canary finding 附帶「只前滾不改寫 vs 回滾條款矛盾」屬溯源影子，依紀律不折；惟「tag 打在對的 commit 但內容有問題怎麼辦」的答案已由政策本身給出＝**發下一版，不改寫舊版**，於本次一併寫明。
+
+## 進度(2026-09-06 全 repo 審視補記)
+
+2026-07-30 裁定的這條發布線(release 分支 / tag / CHANGELOG / `--version`)至今零落地,五週沒動,而 README 與安裝指南仍教陌生人從 main 分支 curl 安裝。
+
+REVISIT:2026-10-05 裁「做最小切片」還是「明文不做並把 status 改成 todo」——★不要改成 deferred,project 型的合法值沒有它,寫下去會變成 lumos query 篩不到的狀態★。
+
+
+---
+
+## 落地紀錄:最小切片(2026-09-07,全 repo 審視 #7)
+
+七月三十號裁定之後五週零落地,今天把**最小切片**做完。做了 [S2]、[S5]、[S8]
+與三個順手的硬化;沒做 [S4] tag 閘、[S6] 二進位指紋、[S7] Actions 釘 SHA。
+
+### 做了什麼
+
+- **[S2] 變更紀錄**:`CHANGELOG.md` 首筆 v1.0,標題格式釘死成
+  `## vMAJOR.MINOR — YYYY-MM-DD`。刻意沒有常駐的「未發布」區塊——那種區塊會永遠是
+  最新一筆,害守衛每次日常推送都紅。
+- **[S5] 對外通道**:三個 clone 站(`get.sh`、`get.ps1`、`lumos bootstrap` 內建那支)
+  一律先試 `release` 分支,**抓不到就退回預設分支並印一行說明**——分支還沒開的時候,
+  冷啟動不能因此炸掉。兩份 README 與上手指南共五行安裝網址改指 `release`;
+  手動離線那兩行 clone 加 `--branch release` 並註明拿掉旗標就是跟開發線。
+- **[S8] `lumos --version`**:印版本標籤 + 內容指紋(短碼、分支、有沒有未提交的改動),
+  而且**明說這一支是來源本身還是被複製進專案的那一份**——後者的 git 指紋是那個專案的,
+  不是工具鏈的版本,不講清楚會誤導。訊息尾端明講「同一台機器可能有三份」。
+- **`get.sh` 整段包進函式**:它是 curl 串流進 bash 跑的,網路中途斷掉時 bash 會把
+  收到的半段照樣跑完,裝到一半而且沒有錯誤訊息。包成函式、最後一行才呼叫,
+  檔案沒收完那一行就不存在。尾巴的 `; exit` 是第二道。
+- **`get.ps1` 改成跟 `get.sh` 做同一件事**:之前它只跑 `install --force`,少了專案層接線,
+  於是 Windows 使用者裝完只有機器層、專案裡什麼都沒有,而文件寫的是「一次到位」。
+  **兩邊行為不一致比少功能更糟。** 順手補旗標透傳與同一套「只認 --pull/--init」。
+- **Windows 的 `lumos.cmd` 不再寫死 `python`**:借精簡版 2026-08 已審過的判斷
+  (安裝當下試 `python3`/`python`,寫命令名不寫絕對路徑)。只有 `python3.exe` 的機器上,
+  舊寫法會裝完就壞,而且要等使用者真的打 `lumos` 才發現。
+- **`RELEASING.md`**:人執行的 checklist。刻意不寫成腳本——低頻、不可逆、每步都要人看一眼。
+  裡面把「`ci-wait` 只看回傳碼會出事」寫成粗體(rc0 涵蓋六種判定裡的五種)。
+
+### 守衛五條(每條都驗過翻紅再還原)
+
+- 版本常數與變更紀錄第一筆一致,**任一邊解析不到就算紅**。
+- 三個 clone 站都先試對外線、都有退回備援;對外安裝網址不得再指開發線;
+  `get.ps1` 必須也委派 bootstrap。
+- **`get.sh` 截斷之後不准執行自己的任何一步**:真的把檔案截到七成、餵一個不認得的旗標,
+  看它會不會印出提醒。★第一版這條是假的★——它靠「原始碼裡找不到 `main()`」翻紅,
+  等於根本沒驗行為;而且沒包裝的截斷檔會讓 bash 抱怨語法錯誤,那是拒絕執行不是做事,
+  判準要改成「get.sh 自己的任何一句話都不准被印出來」。另外先斷言「會印東西的那段碼
+  確實落在截斷範圍內」,否則整條會空跑成永遠綠的擺設。
+- Windows shim 的直譯器是安裝當下偵測來的,不是字面 `python`。
+- `--version` 印得出版本、有指紋、而且明講只回答現在跑的這一支。
+
+### 還沒做、為什麼
+
+- **[S4] tag 閘**:事後檢查,價值低於前面幾條;要拆 reusable workflow 才不會兩份步驟各自漂移。
+- **[S6] 二進位指紋**:`fetch-notesmd.sh` 平常用不到(只有改筆記檔名時才抓)。
+- **[S7] Actions 釘 SHA**:要配一套定期升版檢查,不然只是把風險換成過期。
+
+REVISIT:2026-10-05 這三條跟自主迴圈去留同一天複審;屆時若對外線已經有人在用,S4 優先。
+
+### 誠實記
+
+- **release 分支這一刻還沒開**:程式與文件都接好了、備援也驗過(抓不到就退回預設分支),
+  但真正的第一次 `git push Lumos main:release` 要等這批的 CI 綠了才做,
+  照 `RELEASING.md` 第二步的規矩:看判定不是看回傳碼。
+- **raw 有 CDN 快取**(數分鐘級),移動 release 之後短時間內仍可能取到舊腳本。這是延遲不是錯誤。
+- **「只前滾不改寫」是政策不是性質**:分支照樣可以被 force,沒有機械強制。
+
+exec
+/bin/zsh -lc "sed -n '1,260p' governance/review-reports/code-audit-batch11/r1-snapshot.patch" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index 0000000..890811d
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,17 @@
++# CHANGELOG
++
++這份只記「對外放出去的版本」。標題格式固定為 `## vMAJOR.MINOR — YYYY-MM-DD`,
++版本號的單一來源是 `scripts/lumos` 裡的 `LUMOS_VERSION`,有守衛盯著兩邊一致。
++
++還沒發版的變更寫在 commit 訊息與知識圖譜裡,**不進這份**——
++刻意不留常駐的「未發布」區塊,否則它會永遠是「最新一筆」,讓守衛每次推送都紅。
++
++## v1.0 — 2026-09-07
++
++首次正式標記對外線。在此之前是未標記的持續開發,不回頭編造歷史。
++
++這一版對外提供:
++- 圖譜 CLI(`lumos`,python3 零依賴,66 個頂層指令)
++- 提交/推送關卡(git hooks)與給 AI 的四個時點提示(Claude / Codex 兩家共用同一批腳本)
++- 設計審與代碼審兩套審查迴圈,連同記帳、處置閘與判定凍結
++- 一鍵安裝(`get.sh` / `get.ps1` / `lumos bootstrap`)
+diff --git a/ONBOARDING.md b/ONBOARDING.md
+index f559e6e..8089a16 100644
+--- a/ONBOARDING.md
++++ b/ONBOARDING.md
+@@ -13,21 +13,21 @@ clone 專案後,在專案裡跑一個指令——**連 Lumos 本體都會自動
+ ```bash
+ git clone <你的專案> && cd <你的專案>
+ python3 scripts/lumos bootstrap
+ # 然後重啟 Claude Code session(給 AI 的提示要在 session 開頭載入)
+ ```
+ 
+ 之後每 clone 一個新專案,同樣跑一次 `python3 scripts/lumos bootstrap` 即可(機器已設定好的部分會自動跳過)。
+ 
+ > **專案還沒導入過 Lumos**(repo 裡沒有 `scripts/lumos`)?改走:
+ > ```bash
+-> cd <你的專案> && curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
++> cd <你的專案> && curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
+ > # 會先問一句「要把 <路徑> 建成 lumos 專案嗎?」按 y 才建;細節與 Windows 作法見 README §3
+ > ```
+ 
+ ---
+ 
+ 驗收:重啟 session 後跑一次 `lumos enforcement`,它列每一層防護有沒有接上(Codex 那幾行會停在「本機讀不到信任狀態」,那是天生測不到)。
+ 
+ 授權:[MIT](LICENSE)。工具鏈自己的檔案適用;工具寫進你專案的東西(設定檔裡的紀律區塊、你寫的圖譜筆記)是你的。
+ 
+ ## 前置需求
+diff --git a/README.en.md b/README.en.md
+index 0196bc2..16e8478 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -64,53 +64,56 @@ lumos enforcement
+ ```
+ 
+ It lists whether each layer is wired up — registered, file present, version current — not whether it judges correctly. Codex rows stop at "registered, can't read trust state locally"; that one is unknowable from here, not broken.
+ 
+ ### 3b. Introducing Lumos to a new project (one command)
+ 
+ Run inside your project directory:
+ 
+ ```bash
+ cd <your-project>
+-curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
++curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
+ # It asks "make <path> a lumos project? [y/N]" → press y; then restart your Claude Code session
+ ```
+ 
+ - The prompt **defaults to N**: standing in a directory you don't want instrumented (e.g. dotfiles), just press Enter and nothing happens.
+ - Don't like piping remote scripts? `curl -fsSL <url> -o get.sh`, review, then run.
+ - Non-interactive/CI: append `-s -- --init` to skip the confirmation.
+ 
+ <details><summary>Windows (native PowerShell)</summary>
+ 
+ Prereqs: Git for Windows, python on PATH, Claude Code.
+ 
+ ```powershell
+-irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex
++irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.ps1 | iex
+ # Restart the Claude Code session; if lumos isn't found, add %USERPROFILE%\.local\bin to PATH
+ cd <your-project>; lumos init
+ ```
+ </details>
+ 
+ <details><summary>Granular install / offline (advanced)</summary>
+ 
+ **Works with both Claude Code and Codex CLI** (since 2026-09; details and known limits in the graph node `Systems/codex-harness`):
+ 
+ - **One install, both harnesses**: a single `lumos install` wires skills, hook registrations and the discipline block into both (Claude: `~/.claude` + `CLAUDE.md`; Codex: `~/.codex/hooks.json`, `~/.agents/skills`, `AGENTS.md`, custom reviewer seat `lumos_reviewer`). Codex hooks only run after you open an interactive `codex` once and pick "Trust all" (trust binds to the command line, so later hook updates from lumos need no re-approval); `lumos enforcement` shows every layer's state.
+ - **Same hooks, same end-of-turn behaviour**: when code changed but no node did, the turn is blocked once and the model is asked to write the node or say in one line why not — once per session, on both harnesses (before 2026-09-05 the Claude side only wrote to a debug log nobody saw). Switch off with `LUMOS_STOP_BLOCK_OFF=1`.
+ - **Codex as loop orchestrator**: first round `lumos loop next <id> --orchestrator codex`; right before dispatching reviewers run `lumos dispatch-lens --arm <base>..HEAD --seats N` (Codex hooks cannot read the dispatch message, so each subagent claims a seat on start), then `--disarm`; name the reviewer seat `lumos_reviewer` (selectable from Codex 0.153.2).
+ - **Measurable**: the scenario probe `scripts/scenario_probe.py --runner codex` runs the same question set against Codex; `--stop-block off` is the control arm for the end-of-turn block.
+ - **An old gap fixed on the way**: the end-of-turn check used to recognise code only by file extension, so extension-less entry points like this repo's `scripts/lumos` were never flagged; files whose first line is a shebang now count as code, on both harnesses.
+ 
+ Project layer only: `lumos init` (graph folder name defaults to the project name, `--name` to customize; an existing graph is **never overwritten**; `--no-hooks` builds the graph without installing checks). Machine layer only: `lumos install`. Manual offline:
+ 
+ ```bash
+-git clone https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
++git clone --branch release https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
++#   release is the public channel (only the maintainer fast-forwards it);
++#   drop --branch release to follow the development line. If the branch does not
++#   exist yet the command fails — rerun without the flag.
+ cd ~/harness/lumos-toolchain && ./install.sh
+ python3 scripts/lumos install
+ scripts/install-graph-toolchain.sh --target <project-path> --slug <name>
+ ```
+ </details>
+ 
+ ### Why two layers, "machine" and "project"?
+ 
+ - **Project layer**: CI only checks out your project repo, and git hooks are per-repo — so the check tools must be **copied into every project** (a.k.a. vendored). Refresh with `lumos update`.
+ - **Machine layer**: the operating manuals for the AI (skills) are **shared machine-wide**, linked (symlinked) into Claude Code's directory — one `git pull` on the Lumos clone updates them for every project at once.
+diff --git a/README.md b/README.md
+index 6502620..f2a2cab 100644
+--- a/README.md
++++ b/README.md
+@@ -64,54 +64,56 @@ lumos enforcement
+ ```
+ 
+ 它列每一層防護是「有沒有裝上、接上」——不是判得對不對。全綠代表 hook 註冊了、檔案在、版本對;Codex 那幾行會停在「已註冊、要不要跑本機讀不到」,那是天生測不到,不是壞了。
+ 
+ ### 3b. 全新專案要導入(一條指令)
+ 
+ 站在你的專案目錄裡跑:
+ 
+ ```bash
+ cd <你的專案>
+-curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
++curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
+ # 它會問「要把 <路徑> 建成 lumos 專案嗎? [y/N]」→ 按 y;然後重啟 Claude Code session
+ ```
+ 
+ - 問句**預設是 N**:站在不想導入的目錄(例如 dotfiles)按 Enter 就跳過,不會誤裝。
+ - 不想盲跑遠端腳本?先 `curl -fsSL <網址> -o get.sh` 下載審閱再執行。
+ - CI 等非互動環境:結尾加 `-s -- --init` 免確認直接建。
+ - 裝完重啟 session,然後跑一次 `lumos enforcement` 確認每層防護都接上了(說明見 3a)。
+ 
+ <details><summary>Windows(原生 PowerShell)</summary>
+ 
+ 前置:Git for Windows、python 在 PATH、Claude Code。
+ 
+ ```powershell
+-irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.ps1 | iex
++irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.ps1 | iex
+ # 重啟 Claude Code session;若找不到 lumos,把 %USERPROFILE%\.local\bin 加進 PATH
+ cd <你的專案>; lumos init
+ ```
+ </details>
+ 
+ <details><summary>顆粒安裝/離線(進階)</summary>
+ 
+ **Claude Code 與 Codex CLI 都支援**(2026-09 起;細節與界線見圖譜 `Systems/codex-harness`):
+ 
+ - **裝一次接兩家**:同一次 `lumos install` 把 skills、hook 註冊、紀律區塊接到兩家(Claude:`~/.claude`+`CLAUDE.md`;Codex:`~/.codex/hooks.json`、`~/.agents/skills`、`AGENTS.md`、自訂審查席 `lumos_reviewer`)。Codex 的 hook 要你開一次互動 `codex` 按「Trust all」才會跑(信任綁的是命令列,之後 lumos 更新 hook 內容不用重按);`lumos enforcement` 看得到各層狀態。
+ - **同一批 hook、同一種收工行為**:改了程式碼卻沒動節點時,收工會被擋一次、要它補節點或說一句為什麼不用,同一個 session 只擋一次,兩家一樣(Claude 側原本只印到沒人看得到的除錯日誌,2026-09-05 起改成一樣擋)。要關:環境變數 `LUMOS_STOP_BLOCK_OFF=1`。
+ - **用 Codex 當編排者跑迴圈**:首輪 `lumos loop next <編號> --orchestrator codex`;派審查員前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`(Codex 的派工訊息 hook 讀不到,改由子代理開場自己領一席),派完 `--disarm`;審查席點名 `lumos_reviewer`(Codex 0.153.2 起選得中)。
+ - **量得到**:情境探針 `scripts/scenario_probe.py --runner codex` 對 Codex 跑同一批題;`--stop-block off` 是收工擋停的對照組。
+ - **順帶修的一個老洞**:收工檢查以前只認副檔名,像本 repo 的 `scripts/lumos` 這種沒副檔名的主程式從來沒被提醒過;現在首行是 shebang 的檔也算程式碼,兩家都受惠。
+ 
+ 只建專案層:`lumos init`(圖譜資料夾名稱預設取專案名,`--name` 自訂;既有圖譜**絕不覆寫**;`--no-hooks` 只建圖譜不裝檢查)。只裝機器層:`lumos install`。手動離線:
+ 
+ ```bash
+-git clone https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
++git clone --branch release https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
++#   release 是對外線(只有維護者快轉過去);要跟開發線就把 --branch release 拿掉。
++#   分支還沒開的話這行會失敗,拿掉旗標再跑一次即可。
+ cd ~/harness/lumos-toolchain && ./install.sh
+ python3 scripts/lumos install
+ scripts/install-graph-toolchain.sh --target <專案路徑> --slug <名稱>
+ ```
+ </details>
+ 
+ ### 為什麼分「機器層」和「專案層」兩層?
+ 
+ - **專案層**:CI 只會抓你的專案 repo、git hooks 也是一個 repo 一份——所以檢查工具必須**複製一份進每個專案**(term: vendor)。更新用 `lumos update`。
+ - **機器層**:給 AI 看的操作手冊(skills)是**整台機器共用一份**,用捷徑(symlink)連到 Claude Code 的目錄——對 Lumos 目錄 `git pull` 一次,所有專案同時吃到新版。
+diff --git a/RELEASING.md b/RELEASING.md
+new file mode 100644
+index 0000000..94c23c4
+--- /dev/null
++++ b/RELEASING.md
+@@ -0,0 +1,73 @@
++# 怎麼發一版出去(給維護者的 checklist)
++
++白話:`main` 是開發線,推壞了沒關係,因為**沒有人跟著 main**。
++`release` 是對外線,只有你把它快轉過去,別人才拿得到。
++發版就是「把 release 快轉到你認可的那個 commit」,其餘都是留紀錄。
++
++**這份刻意不寫成腳本**:發版低頻、不可逆(有人已經裝了就收不回),
++而且每一步都需要人在場看一眼再決定。寫成腳本只會讓人閉著眼睛按 Enter。
++
++## 0. 前置
++
++- `gh auth status` 確認登入(第 3、5 步要用)。
++- 工作樹乾淨、人在 `main`、跟遠端同步。
++
++## 1. 寫版本與變更紀錄
++
++- `scripts/lumos` 的 `LUMOS_VERSION` 就是版本的唯一來源;`CHANGELOG.md` 第一筆要跟它一致
++  (有守衛盯著,兩邊任一邊解析不到就紅)。
++- 標題格式**恰好**是 `## vMAJOR.MINOR — YYYY-MM-DD`(全形破折號,版本帶 v)。
++- commit、push。
++
++## 2. 等 CI,而且要看判定不是看回傳碼
++
++```
++lumos ci-wait --json
++```
++
++★**只看回傳碼會出事**★:`ci-wait` 回傳 0 涵蓋六種判定裡的五種——
++沒裝 `gh`、沒登入、網路斷都會「放行」(它刻意設計成不擋流程)。
++所以要看 `verdict` 欄位**等於 `green`** 才往下走。不是 green 就停下來查清楚。
++
++## 3. 把對外線快轉過去(這一步才是「放出去」)
++
++```
++git push Lumos main:release
++```
++
++- **不是 fast-forward 就讓它失敗,不要 force**。政策是只前滾、不改寫。
++- 遠端在你的 clone 裡叫什麼名字自己確認(`git remote -v`);
++  本 repo 的維護者機器上叫 `Lumos`,不是預設的 `origin`。
++
++## 4. 打 tag(留紀錄用,不是安裝通道)
++
++```
++git tag -a vX.Y -m "<一句話>"
++git push Lumos vX.Y
++```
++
++- 安裝通道是**分支**不是 tag:`git clone --branch <tag>` 會進 detached HEAD,
++  之後 `git pull` 與 `lumos update` 會靜默停在裝機那一版(2026-07-30 裁定)。
++- 上次 tag 建了但推失敗要重跑:先 `git tag -d vX.Y`。
++
++## 5. 開 GitHub Release
++
++```
++gh release create vX.Y
++```
++
++notes 直接抄該筆 CHANGELOG。
++
++## 發完之後要知道的兩件事
++
++- **raw 有 CDN 快取**(數分鐘級)。移動 release 之後,
++  `curl … /release/get.sh` 短時間內仍可能拿到舊的那份。**這是延遲不是錯誤。**
++- **一台機器可能同時跑三個版本**:全域指令(捷徑指向來源 clone)、
++  各專案自己複製的一份、全域 AI hooks(來源是最後一個跑安裝的專案)。
++  `lumos --version` 只回答你現在打的那一支。
++
++## 還沒放出去的有哪些
++
++```
++git log release..main --oneline
++```
+diff --git a/docs/.governance-log.jsonl b/docs/.governance-log.jsonl
+index 156eb9a..2fb23a2 100644
+--- a/docs/.governance-log.jsonl
+
+exec
+/bin/zsh -lc "rg '"'^diff --git|''^@@'"' governance/review-reports/code-audit-batch11/r1-snapshot.patch" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+@@ -0,0 +1,17 @@
+diff --git a/ONBOARDING.md b/ONBOARDING.md
+@@ -13,21 +13,21 @@ clone 專案後,在專案裡跑一個指令——**連 Lumos 本體都會自動
+diff --git a/README.en.md b/README.en.md
+@@ -64,53 +64,56 @@ lumos enforcement
+diff --git a/README.md b/README.md
+@@ -64,54 +64,56 @@ lumos enforcement
+diff --git a/RELEASING.md b/RELEASING.md
+@@ -0,0 +1,73 @@
+diff --git a/docs/.governance-log.jsonl b/docs/.governance-log.jsonl
+@@ -25822,10 +25822,120 @@
+diff --git a/docs/.usage-log.jsonl b/docs/.usage-log.jsonl
+@@ -597,10 +597,14 @@
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\345\205\250repo\345\257\251\350\246\226_\350\250\210\345\212\203.md"
+@@ -930,10 +930,40 @@ git 的 `safe.directory`(CVE-2022-24765)、VS Code 的 Workspace Trust,結論都
+diff --git "a/docs/lumos-toolchain-knowledge/Projects/\347\211\210\346\234\254\347\231\274\345\270\203\346\265\201\347\250\213_\350\250\210\345\212\203.md" "b/docs/lumos-toolchain-knowledge/Projects/\347\211\210\346\234\254\347\231\274\345\270\203\346\265\201\347\250\213_\350\250\210\345\212\203.md"
+@@ -163,10 +163,70 @@ summary: |-
+diff --git "a/docs/lumos-toolchain-knowledge/Systems/slim-get-\344\270\200\350\241\214\345\256\211\350\243\235.md" "b/docs/lumos-toolchain-knowledge/Systems/slim-get-\344\270\200\350\241\214\345\256\211\350\243\235.md"
+@@ -50,10 +50,28 @@ about_code:
+diff --git "a/docs/lumos-toolchain-knowledge/Systems/\346\270\254\350\251\246\345\201\207\347\266\240\345\275\242\346\205\213.md" "b/docs/lumos-toolchain-knowledge/Systems/\346\270\254\350\251\246\345\201\207\347\266\240\345\275\242\346\205\213.md"
+@@ -231,10 +231,30 @@ check("★前置★ 現場成立:rmdir 這一步真的拋了例外(輸出有順
+diff --git a/get.ps1 b/get.ps1
+@@ -1,12 +1,57 @@
+diff --git a/get.sh b/get.sh
+@@ -1,33 +1,51 @@
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+@@ -1,17 +1,17 @@
+diff --git a/scripts/lumos b/scripts/lumos
+@@ -59,20 +59,78 @@ import re
+@@ -10526,22 +10584,31 @@ def _refuse_if_probe(action):
+@@ -11892,25 +11959,35 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
+@@ -19076,20 +19153,22 @@ def main():
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+@@ -5269,20 +5269,157 @@ def _doc_files_for_guards(root):
+@@ -11657,57 +11794,65 @@ def t_lens_timeout_keeps_warming_cache():
+@@ -21623,22 +21768,29 @@ def t_slim_ps1_ascii_only_no_bom():
+
+codex
+圖譜把關鍵合約寫得很清楚：三個 clone 站都必須「release 失敗後退回預設分支且不能假成功」，而 `--version` 在 vendored 情境不能拿宿主專案的 Git 資訊冒充工具版本。接下來我會直接用假 repo 與突變版守衛驗證這兩件事。
+exec
+/bin/zsh -lc 'git status --short && git diff -- get.sh get.ps1 scripts/lumos scripts/test_lumos.py CHANGELOG.md RELEASING.md README.md README.en.md ONBOARDING.md' in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-4ED4F6TO' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-jveL6mBm' (errno=Operation not permitted)
+ M docs/.governance-log.jsonl
+?? governance/review-reports/code-audit-batch11/
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-YpakX1P2' (errno=Operation not permitted)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-S4u2Ykts' (errno=Operation not permitted)
+
+exec
+/bin/zsh -lc "sed -n '680,1150p' governance/review-reports/code-audit-batch11/r1-snapshot.patch" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
++# 包成函式再在最後一行呼叫,就要等整份收完才會開始跑;檔案沒收完,呼叫那一行根本不存在。
++# 最後一行的 `; exit` 是同一個理由的第二道:確保 bash 不會再往下讀到殘留的位元組。
+ set -euo pipefail
+-LUMOS_HOME="${LUMOS_HOME:-$HOME/harness/lumos-toolchain}"
+-LUMOS_URL="${LUMOS_URL:-https://github.com/EnzoHsieh-Android/Lumos}"
+ 
+-# 迴圈解析(舊碼單點比對 $1,並帶兩旗標會無聲吃掉第二個);未知旗標 warn 忽略
+-ARGS=()
+-for a in "$@"; do
+-  case "$a" in
+-    --pull|--init) ARGS+=("$a") ;;
+-    *) echo "提醒:不認得 $a 這個選項,略過(只認 --pull 和 --init)" >&2 ;;
+-  esac
+-done
++main() {
++  LUMOS_HOME="${LUMOS_HOME:-$HOME/harness/lumos-toolchain}"
++  LUMOS_URL="${LUMOS_URL:-https://github.com/EnzoHsieh-Android/Lumos}"
++  LUMOS_BRANCH="${LUMOS_BRANCH:-release}"
+ 
+-if [[ -f "$LUMOS_HOME/scripts/lumos" ]]; then
+-  echo "[clone] Lumos 源已在: $LUMOS_HOME"
+-else
+-  echo "[clone] clone Lumos → $LUMOS_HOME …"
+-  mkdir -p "$(dirname "$LUMOS_HOME")"
+-  git clone "$LUMOS_URL" "$LUMOS_HOME"
+-fi
++  # 迴圈解析(舊碼單點比對 $1,並帶兩旗標會無聲吃掉第二個);未知旗標 warn 忽略
++  ARGS=()
++  for a in "$@"; do
++    case "$a" in
++      --pull|--init) ARGS+=("$a") ;;
++      *) echo "提醒:不認得 $a 這個選項,略過(只認 --pull 和 --init)" >&2 ;;
++    esac
++  done
+ 
+-# 其餘全交 bootstrap(機器層 install+skills、專案層四分流;set -e 保錯誤傳播)
+-LUMOS_HOME="$LUMOS_HOME" python3 "$LUMOS_HOME/scripts/lumos" bootstrap ${ARGS[@]+"${ARGS[@]}"}
++  if [[ -f "$LUMOS_HOME/scripts/lumos" ]]; then
++    echo "[clone] Lumos 源已在: $LUMOS_HOME"
++  else
++    echo "[clone] clone Lumos($LUMOS_BRANCH 對外線)→ $LUMOS_HOME …"
++    mkdir -p "$(dirname "$LUMOS_HOME")"
++    # 對外線抓不到就退回預設分支:release 分支可能還沒開,冷啟動不該因此炸掉。
++    # 用分支不用 tag,是因為 tag 會進 detached HEAD,之後 git pull / lumos update 全部靜默停住。
++    if ! git clone --branch "$LUMOS_BRANCH" "$LUMOS_URL" "$LUMOS_HOME" 2>/dev/null; then
++      echo "  提醒:抓不到 $LUMOS_BRANCH 這條對外線(分支還沒開、或名字改了),改用預設分支。" >&2
++      echo "  這代表你拿到的是開發線的內容,可能還沒發布過。" >&2
++      git clone "$LUMOS_URL" "$LUMOS_HOME"
++    fi
++  fi
+ 
+-echo
+-echo "✓ 完成。最後一步:**重啟 Claude Code session**(hooks 在 session start 載入)"
++  # 其餘全交 bootstrap(機器層 install+skills、專案層四分流;set -e 保錯誤傳播)
++  LUMOS_HOME="$LUMOS_HOME" python3 "$LUMOS_HOME/scripts/lumos" bootstrap ${ARGS[@]+"${ARGS[@]}"}
++
++  echo
++  echo "✓ 完成。最後一步:**重啟 Claude Code session**(hooks 在 session start 載入)"
++}
++
++main "$@"; exit
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 945023b..e12b2b0 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,17 +1,17 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "1127cdefa87cfc90dcf78da22cb1cd465f5e45ab2d136d4f1029f45d0183c55a",
++    "scripts/test_lumos.py": "1e061491b41967e4ba0e94e19b1a85bf3348a2adb35c81ba6de4820ed7eb60f7",
+     "scripts/test_autonomous_loop.py": "8a51c5837475c27f8f97994c232c342d0027206f0206f133da5ad0368ee1b3e8",
+     "scripts/hooks/pre-commit": "944b21c8fe7e2d82145a7761935bb1d38acc00b445f3a99e98575957531ba9c5",
+     "scripts/hooks/pre-push": "cd2f430382fba7dc443d95f5c5236fb21234b66b7517b4747b540df527736408",
+     "scripts/hooks/post-commit": "b9bc3073dad22a8cde82466bdba77faed2bfe82bdd88927a2f44ccbbeb408f36",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "e695c02abe3ac8acd1ecac2b9a0c6c87685e8b20755ef7eb701bc143458a85c4",
+     "scripts/hooks/claude/lumos-entry-hook.py": "7502776acef5e53c4e716384e10aee06db70a4868f2d54c67309e866f7348387",
+     "scripts/hooks/claude/impact-hook.py": "fedf49ff3ecf549e9fe45db7067a6e408d1ed636b4f7011a92e159449e61788c",
+     "scripts/hooks/claude/check-graph-sync.py": "7b990db020af2dbe7b18801a33e52fac1561e459a2b98541ca91da4926fd42c5",
+     "scripts/hooks/claude/ci-status-hook.py": "db549645cd858037d287d39dfbdbaaf70785f674a9e0046e6cf45bcf6e455370"
+   },
+-  "approved_at": "2026-09-07T06:47:06+08:00",
+-  "note": "batch10 r1 折入:守衛真值單一來源(舊兩支測試改走同一份 parser 樹)、掃描清單合一、二層子指令與表格認法修正"
++  "approved_at": "2026-09-07T07:27:57+08:00",
++  "note": "#7 續:根 get.ps1 納入 ASCII-only 合約守衛範圍"
+ }
+diff --git a/scripts/lumos b/scripts/lumos
+index 64e836f..4a673fe 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -59,20 +59,78 @@ import re
+ import sys
+ import time
+ import unicodedata
+ from collections import defaultdict, deque, namedtuple
+ from pathlib import Path
+ 
+ _IS_WIN = os.name == "nt"
+ 
+ # ── Task 5: 版本標籤(人可讀;advisory nudge 用;非正確性 oracle) ───────────────
+ LUMOS_VERSION = "v1.0"  # release 手動 bump;允許粗——它是標籤,不是內容指紋
++# ★發布通道的分支名★(2026-09-07 #7 落地;設計出處 [[Projects/版本發布流程_計劃]] S5):
++# main=開發線(可壞),release=對外線(只有 owner 快轉過去)。三個 clone 站一律先試這條,
++# 分支還不存在時退回預設分支並印一行說明——冷啟動不能因此炸掉。
++LUMOS_RELEASE_BRANCH = "release"
++
++
++def _version_text():
++    """`lumos --version` 印的東西。
++
++    ★它回答的是「你手上這支 lumos 是哪一版」,不是「這台機器整體是哪一版」★
++    ——同一台機器可能同時有三個答案:全域指令(捷徑指向來源 clone)、
++    各專案自己複製的一份、以及全域的 AI hooks(來源是最後一個跑安裝的專案)。
++    這條只答第一個,所以訊息裡明講它在哪。
++
++    版本號是**人可讀的標籤,不是內容指紋**(既有決策:嚴禁拿它當「該不該更新」的判準),
++    所以後面補一個真的指紋:來源 clone 的 commit 短碼與有沒有未提交的改動。
++    複製到專案裡的那份沒有 git 脈絡,就照實說沒有,不要編一個出來。
++    """
++    import subprocess as _sp
++    here = Path(__file__).resolve().parent.parent
++    # 這一支是「工具鏈來源」還是「被複製進某個專案的那一份」?判準用檔案系統實況:
++    # 來源 repo 才有 skills/ 那批方法論手冊。分清楚很重要——複製進專案的那一份,
++    # 底下的 git 指紋是**那個專案的** commit,不是工具鏈的版本。
++    is_source = (here / "skills" / "lumos-project-notes").is_dir()
++    lines = ["lumos %s" % LUMOS_VERSION, "  這支的位置: %s" % (Path(__file__).resolve(),)]
++    lines.append("  這一支是: %s" % ("工具鏈來源本身" if is_source
++                                     else "被複製進某個專案的那一份(指紋是那個專案的,不是工具鏈的)"))
++    try:
++        sha = _sp.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"],
++                      capture_output=True, text=True, timeout=5)
++        if sha.returncode == 0 and sha.stdout.strip():
++            dirty = _sp.run(["git", "-C", str(here), "status", "--porcelain"],
++                            capture_output=True, text=True, timeout=5)
++            mark = "(有未提交的改動)" if dirty.stdout.strip() else ""
++            branch = _sp.run(["git", "-C", str(here), "rev-parse", "--abbrev-ref", "HEAD"],
++                             capture_output=True, text=True, timeout=5)
++            bname = branch.stdout.strip() or "?"
++            lines.append("  這一份的內容指紋: %s 在分支 %s %s" % (sha.stdout.strip(), bname, mark))
++        else:
++            lines.append("  這一份沒有 git 脈絡(多半是被複製進專案的那一份),只有版本標籤可講")
++    except Exception:
++        lines.append("  這一份的內容指紋: 查不到(git 不在或這裡不是 git 倉庫)")
++    lines.append("  同一台機器可能有三份不同版本的 lumos(全域指令 / 各專案複製的一份 / 全域 AI hooks),")
++    lines.append("  這裡只回答你現在跑的這一支。")
++    return "\n".join(lines)
++
++
++class _VersionAction(argparse.Action):
++    """--version:印版本再結束。用自訂 action 是因為指紋要當場算,
++    不能在建 parser 的時候就跑 git(那會讓每一次呼叫都多花一個子行程)。"""
++
++    def __init__(self, option_strings, dest, **kw):
++        kw["nargs"] = 0
++        super().__init__(option_strings, dest, **kw)
++
++    def __call__(self, parser, namespace, values, option_string=None):
++        print(_version_text())
++        parser.exit(0)
+ 
+ # ── CLAUDE.md sentinel 常數(Task 1: reinject)────────────────────────────────
+ # START 行後面可能帶版本戳與說明(e.g. " v1.2 — 勿手改 -->"),故用前綴 find。
+ _CLAUDE_START_PREFIX = "<!-- LUMOS:GRAPH-DISCIPLINE:START"
+ _CLAUDE_END = "<!-- LUMOS:GRAPH-DISCIPLINE:END -->"
+ # Task 5: START 行模板(含版本佔位符);reinject 時 .format(version=LUMOS_VERSION)。
+ # 範本 graph-discipline.md 保持無版本戳(canonical prefix 形式);
+ # 版本由 reinject 當下插值——單一源 = LUMOS_VERSION 常數,無「改範本忘 bump」風險。
+ _START_TEMPLATE = (
+     "<!-- LUMOS:GRAPH-DISCIPLINE:START {version}"
+@@ -10526,22 +10584,31 @@ def _refuse_if_probe(action):
+ def cmd_install(force=False):
+     """全域 lumos + user-scope skills(機器層一鍵)。Unix=symlink、Win=.cmd shim。"""
+     import os
+     if _refuse_if_probe("install"):
+         return 2
+     src = Path(__file__).resolve()
+     bindir = Path.home() / ".local" / "bin"
+     bindir.mkdir(parents=True, exist_ok=True)
+     if _IS_WIN:
+         shim = bindir / "lumos.cmd"
+-        shim.write_text(f'@echo off\r\npython "{src}" %*\r\n', encoding="utf-8")
+-        print(f"✓ 安裝: {shim} → python {src}")
++        # ★直譯器名稱在安裝當下偵測,不寫死 python★(2026-09-07 #7;借精簡版已審過的
++        # slim/install.py:_pick_windows_interpreter 的判斷,不另造第二套):
++        # 只有 python3.exe、沒有 python.exe 的 Windows 機器(某些官方安裝器 / 商店版)
++        # 上,安裝會用 python3 跑完並印「裝好了」,但 shim 寫死呼叫 python,
++        # 之後每次打 lumos 都是「'python' 不是可執行的命令」——裝完即壞,而且要等
++        # 使用者真的去用才發現。寫命令名稱不寫絕對路徑的理由見那支的說明
++        # (版本管理工具換 exe 是常態,絕對路徑撐不過升級)。
++        import shutil as _shutil
++        py_cmd = next((c for c in ("python3", "python") if _shutil.which(c)), "python")
++        shim.write_text(f'@echo off\r\n{py_cmd} "{src}" %*\r\n', encoding="utf-8")
++        print(f"✓ 安裝: {shim} → {py_cmd} {src}")
+     else:
+         dst = bindir / "lumos"
+         if dst.is_symlink() and dst.resolve() == src:
+             print(f"✓ 已安裝(symlink 正確): {dst} → {src}")
+         elif dst.exists() or dst.is_symlink():
+             if not force:
+                 cur = str(dst.resolve()) if dst.is_symlink() else "(一般檔案)"
+                 print(f"⚠ {dst} 已存在(→ {cur}),加 --force 覆寫", file=sys.stderr)
+                 return 2
+             dst.unlink(); dst.symlink_to(src); print(f"✓ 覆寫安裝: {dst} → {src}")
+@@ -11892,25 +11959,35 @@ def cmd_bootstrap(lumos_url=None, lumos_home=None, pull=False, init=False, allow
+     if (home / "scripts" / "lumos").exists():
+         if pull:
+             print(f"[1/3] Lumos 來源已在,git pull 更新: {home}")
+             # 與 _vendor_toolchain 共用政策:有 remote 卻拉不到就中止,不拿可能過期的
+             # 來源往下走(step3 的 auto-init 會把它 vendor 進專案 → 同一個降版坑)。
+             if _pull_source_or_abort(home, allow_stale) is None:
+                 return 2
+         else:
+             print(f"[1/3] Lumos 來源已在: {home}（--pull 可拉最新 skills）")
+     else:
+-        print(f"[1/3] clone Lumos → {home} …")
++        branch = os.environ.get("LUMOS_BRANCH", LUMOS_RELEASE_BRANCH)
++        print(f"[1/3] clone Lumos({branch} 對外線)→ {home} …")
+         home.parent.mkdir(parents=True, exist_ok=True)
+-        if subprocess.run(["git", "clone", url, str(home)]).returncode != 0:
+-            print(f"擋下:自動下載失敗。手動跑這行再重試:\n    git clone {url} {home}", file=sys.stderr)
+-            return 2
++        # 先抓對外線;抓不到就退回預設分支並講清楚(release 分支可能還沒開,
++        # 冷啟動不該因此炸掉)。用分支不用 tag——tag 會進 detached HEAD,
++        # 之後 git pull / lumos update 全部靜默停在裝機那版(2026-07-30 裁定)。
++        ok = subprocess.run(["git", "clone", "--branch", branch, url, str(home)],
++                            capture_output=True, text=True).returncode == 0
++        if not ok:
++            print(f"  提醒:抓不到 {branch} 這條對外線(分支還沒開、或名字改了),改用預設分支。",
++                  file=sys.stderr)
++            print("  這代表你拿到的是開發線的內容,可能還沒發布過。", file=sys.stderr)
++            if subprocess.run(["git", "clone", url, str(home)]).returncode != 0:
++                print(f"擋下:自動下載失敗。手動跑這行再重試:\n    git clone {url} {home}", file=sys.stderr)
++                return 2
+     # 2) 全域 lumos → 指向 Lumos 來源(非 vendored copy);install --force 已連帶裝 user-scope skills
+     print("[2/3] 裝全域 lumos(+ user-scope skills)…")
+     failures = []
+     rc2 = subprocess.run([sys.executable, str(home / "scripts" / "lumos"),
+                           "install", "--force"]).returncode
+     if rc2 != 0:                                  # std F8:不吞錯
+         print(f"  提醒:重新安裝(install --force)失敗,回傳碼 {rc2}", file=sys.stderr)
+         failures.append("install")
+     # 3) 專案層自動接線(四分流;git toplevel 才算專案)
+     try:
+@@ -19076,20 +19153,22 @@ def main():
+                     print(f"      {self.prog} --help", file=sys.stderr)
+             else:
+                 print("  看用法:", file=sys.stderr)
+                 print(f"      {self.prog} --help", file=sys.stderr)
+             self.exit(2)
+ 
+     ap = _LumosParser(prog="lumos", description=__doc__,
+                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+     ap.add_argument("--vault", type=Path, default=None,
+                     help="vault 路徑 (預設自動找 docs/*-knowledge)")
++    ap.add_argument("--version", action=_VersionAction,
++                    help="印這支 lumos 的版本與內容指紋(不代表整台機器都是這一版)")
+     sub = ap.add_subparsers(dest="cmd", required=True)
+ 
+     d = sub.add_parser("doctor", help="圖譜健康巡檢")
+     d.add_argument("--strict", action="store_true", help="有 finding 即 exit 1 (CI 用)")
+     d.add_argument("--ci", action="store_true", help="CI 模式 = --strict + 無色彩(+軟提醒全列)")
+     d.add_argument("--verbose", action="store_true", help="軟提醒全列(預設每段最多 3 條,硬檢查不受影響)")
+     d.add_argument("--suggest", action="store_true",
+                    help="orphan Verification 附推薦掛載 Systems(從正文連結/plan_refs/feature 推斷,供人確認)")
+ 
+     for name, hlp in (("links", "連出的節點"), ("backlinks", "連入的節點")):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 924cd25..e848a86 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -5269,20 +5269,157 @@ def _doc_files_for_guards(root):
+ # 當成 lumos 的旗標誤報。切窗是為了不製造假紅(#10 材料明寫的踩點)。
+ _NOT_LUMOS_PROGRAMS = {
+     "git", "gh", "codex", "claude", "python3", "python", "bash", "sh", "sed", "grep",
+     "awk", "curl", "sha256sum", "shasum", "wc", "cat", "ls", "cd", "xargs", "jq",
+     "echo", "npm", "node", "pytest", "open", "mkdir", "cp", "mv", "rm", "tee",
+ }
+ # 這幾個字出現在同一行,代表那一行是在講「這東西已經沒了」,不是在教人用。
+ _RETIRED_WORDS = ("已退場", "退場", "已撤除", "撤除", "已移除", "不存在", "已拆")
+ 
+ 
++def t_version_single_source():
++    """★版本號只有一個來源,CHANGELOG 要跟它一致★(2026-09-07 #7 對外發布線)。
++
++    出身:`LUMOS_VERSION` 從誕生就是 v1.0,沒有 CHANGELOG、沒有 tag、沒有對外分支,
++    所以「你在跑哪一版」這個問題結構上答不出來,而版本落後提醒也永遠不會響。
++    這條守衛只保證一件小事但保證得死:**版本常數與變更紀錄的第一筆一致**。
++
++    ★兩邊任一邊解析不到就算紅,不准跳過★(設計計劃 S1 明寫:守衛的尺自己也會漂)。
++    格式刻意釘死,也刻意不留常駐的「未發布」區塊——那種區塊會永遠是最新一筆,
++    害這條守衛每次日常推送都紅。
++    """
++    import re as _re
++    _need_src("CHANGELOG.md", "RELEASING.md")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
++    m = _re.search(r'^LUMOS_VERSION = "(v\d+\.\d+)"', src, _re.M)
++    check("版本常數解析得到(單一定義點)", bool(m), "找不到 LUMOS_VERSION 那一行")
++    log = (root / "CHANGELOG.md").read_text(encoding="utf-8")
++    m2 = _re.search(r"^## (v\d+\.\d+) — (\d{4}-\d{2}-\d{2})$", log, _re.M)
++    check("變更紀錄的標題格式解析得到", bool(m2), log[:200])
++    if m and m2:
++        check("★版本常數與變更紀錄第一筆一致★", m.group(1) == m2.group(1),
++              "常數 %s vs 變更紀錄 %s" % (m.group(1), m2.group(1)))
++    check("發版 checklist 存在(只驗存在,不假裝驗內容)", (root / "RELEASING.md").exists(), "RELEASING.md")
++    print("  ✓ t_version_single_source")
++
++
++def t_release_channel_is_wired_everywhere():
++    """★三個 clone 站與對外安裝網址,一律走對外線★(2026-09-07 #7)。
++
++    出身:2026-07-30 使用者裁定「main 開發線 / release 對外線」,五週零落地——
++    三個 clone 站與兩份 README 共七行安裝指令全指著 main 的當下 HEAD,
++    等於陌生人 curl|bash 抓到的永遠是最新的半成品。
++
++    這條守衛驗的是**接線接上了沒**,不是「發布流程對不對」:
++    ① 三個 clone 站都要先試對外線 ② 而且都要有退回預設分支的備援
++    (release 分支還沒開的時候,冷啟動不能因此炸掉) ③ 對外安裝網址不得再指 main。
++    """
++    _need_src("get.sh", "get.ps1", "README.md")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    sh = (root / "get.sh").read_text(encoding="utf-8")
++    ps = (root / "get.ps1").read_text(encoding="utf-8")
++    py = (root / "scripts" / "lumos").read_text(encoding="utf-8")
++    check("三個 clone 站都先試對外分支",
++          "--branch" in sh and "--branch" in ps and '"--branch"' in py,
++          "sh=%s ps=%s py=%s" % ("--branch" in sh, "--branch" in ps, '"--branch"' in py))
++    # 備援=抓不到對外線時仍然 clone 得下來(不是靜默失敗)
++    check("get.sh 有退回預設分支的備援", sh.count("git clone") >= 2, sh.count("git clone"))
++    check("get.ps1 有退回預設分支的備援", ps.count("git clone") >= 2, ps.count("git clone"))
++    check("bootstrap 內建 clone 有退回預設分支的備援", py.count('["git", "clone"') >= 1
++          and py.count('"git", "clone", "--branch"') >= 1, "看 cmd_bootstrap")
++    stale = []
++    for name in ("README.md", "README.en.md", "ONBOARDING.md"):
++        txt = (root / name).read_text(encoding="utf-8")
++        if "/Lumos/main/get." in txt:
++            stale.append(name)
++    check("★對外安裝網址不得再指開發線★", not stale, "還指著 main 的: %s" % stale)
++    # get.ps1 要跟 get.sh 做同一件事:委派 bootstrap,不是只裝機器層
++    check("get.ps1 也委派 bootstrap(兩支行為一致)", "bootstrap" in ps, ps[:200])
++    print("  ✓ t_release_channel_is_wired_everywhere")
++
++
++def t_get_sh_survives_truncated_stream():
++    """★get.sh 被 curl 串流到一半斷線時,不可以執行「已收到的那半段」★(2026-09-07 #7)。
++
++    這支是拿 `curl … | bash` 跑的。bash 邊收邊執行,網路中途斷掉的話,
++    它會把收到的那半段照樣跑完——裝到一半、沒有任何錯誤訊息。
++    防法是把整段包進函式、最後一行才呼叫:檔案沒收完,那一行就不存在,什麼都不會跑。
++
++    ★驗法是真的把檔案截斷再跑,不是讀原始碼找 main()★——
++    第一版沙盤(把包裝拆掉)是靠「找不到 main() 字串」翻紅的,那等於根本沒驗到行為。
++    現在改成:截一段前半,餵一個不認得的旗標,**沒包裝的話那段會印提醒、包了就一個字都沒有**。
++    另外先斷言「那段提醒的程式碼確實落在截斷範圍內」,否則這條會空跑成假綠
++    (連續第三次踩「沙盤沒翻紅是因為現場走不到」)。
++    """
++    import os as _os
++    import subprocess as _sp
++    import tempfile as _tf
++    _need_src("get.sh")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    sh = (root / "get.sh").read_text(encoding="utf-8")
++    lines = sh.split("\n")
++    half = "\n".join(lines[:int(len(lines) * 0.7)])
++    # ★先確認現場走得到★:被截下來的前半段裡,必須真的含有「會印東西」的那段碼,
++    # 否則不管有沒有包裝都不會有輸出,這條測試就變成永遠綠的擺設。
++    check("截斷的前半段確實含有會產生輸出的程式碼", "不認得" in half, half[-200:])
++    with _tf.TemporaryDirectory() as td:
++        f = Path(td) / "half.sh"
++        f.write_text(half, encoding="utf-8")
++        env = dict(_os.environ, HOME=td, LUMOS_HOME=str(Path(td) / "nope"))
++        r = _sp.run(["bash", str(f), "--zzz-unknown"], capture_output=True, text=True, env=env)
++        out = r.stdout + r.stderr
++        # bash 對截斷的檔案會抱怨語法錯誤(收到一半的 if 沒有收尾)——那是它拒絕執行,
++        # 不算「做了事」。真正要驗的是:get.sh 自己的任何一句話都不准被跑出來。
++        did = [w for w in ("不認得", "[clone]", "✓ 完成") if w in out]
++        check("★截斷的半份不執行 get.sh 自己的任何一步★", not did,
++              "半份居然跑到了:%s|%s" % (did, out[:200]))
++    print("  ✓ t_get_sh_survives_truncated_stream")
++
++
++def t_windows_shim_does_not_hardcode_python():
++    """★Windows 的 lumos.cmd 不得寫死 python★(2026-09-07 #7,借精簡版已審過的判斷)。
++
++    出身:只有 python3.exe、沒有 python.exe 的 Windows 機器(某些官方安裝器 /
++    商店版)上,安裝會用 python3 跑完並印「裝好了」,但 shim 裡寫死呼叫 python,
++    之後每次打 lumos 都是「'python' 不是可執行的命令」——**裝完即壞**,
++    而且要等使用者真的去用才發現。精簡版 2026-08 就修過同一個洞,主線一直沒跟上。
++
++    這台不是 Windows,所以驗的是**程式邏輯**(偵測到什麼就寫什麼),
++    不是 Windows 真機下 cmd.exe 對 .cmd 的解析行為。
++    """
++    import re as _re
++    root = Path(GRAPHCTL).resolve().parent.parent
++    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
++    i = src.index('shim = bindir / "lumos.cmd"')
++    seg = src[i:i + 900]
++    check("shim 的直譯器是安裝當下偵測來的,不是字面 python",
++          "which" in seg and "python3" in seg, seg[:300])
++    check("寫進 shim 的是偵測結果那個變數", _re.search(r"\{py_cmd\}", seg) is not None, seg[:300])
++    print("  ✓ t_windows_shim_does_not_hardcode_python")
++
++
++def t_version_flag_answers_which_copy():
++    """★lumos --version 印得出來,而且說清楚它只回答哪一支★(2026-09-07 #7)。
++
++    以前 `lumos --version` 直接吐 argparse 的英文錯誤,所以「你在跑哪一版」
++    這個問題連個入口都沒有。這條驗三件:印得出版本、有內容指紋、
++    而且明講「同一台機器可能有三份不同版本」——因為它真的只能回答一支。
++    """
++    import subprocess as _sp
++    out = _sp.run([sys.executable, GRAPHCTL, "--version"], capture_output=True, text=True)
++    check("--version 回傳 0", out.returncode == 0, out.stdout + out.stderr)
++    check("印得出版本標籤", "lumos v" in out.stdout, out.stdout[:200])
++    check("★講清楚只回答現在跑的這一支★", "只回答你現在跑的這一支" in out.stdout, out.stdout[:400])
++    print("  ✓ t_version_flag_answers_which_copy")
++
++
+ def t_skill_mentions_resolve():
+     """★文件教的指令和旗標,真的要存在★(2026-09-07 全 repo 審視 #10)。
+ 
+     出身:守衛一直只有單向——`t_command_index_complete` 驗「argparse 有的指令,
+     索引裡有沒有寫」。反過來沒人驗:**文件寫了一個早就拆掉的旗標,照著打會被靜默
+     吞掉或直接報錯**,而讀文件的多半是新人和 AI,他們沒有別的參照。實際踩過:
+     上手指南教 `./install.sh --copy`,那個旗標 2026-06-26 就拆了,教了兩個多月。
+ 
+     首跑抓到一筆真的:速查表教 `lumos decision-supersede <節點> --match "…"`,
+     但要比對的片段是位置參數、根本沒有 --match,照著打會直接報錯。
+@@ -11657,57 +11794,65 @@ def t_lens_timeout_keeps_warming_cache():
+     import subprocess as _sp, time as _t, json as _j, os as _os
+     m = _load_lumos()
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     if not (repo / ".git").exists():
+         raise _SrcOnly("不在 git 專案裡(非來源 repo),這段沒驗到")
+ 
+     def sha(ref):
+         r = _sp.run(["git", "-C", str(repo), "rev-parse", ref], capture_output=True, text=True)
+         return r.stdout.strip()
+ 
+-    # 挑一個「算得夠久」的範圍;算不出來就跳過(不是失敗)
+-    # ★範圍別挑太大★:第一版挑 HEAD~40,整支跑 90 秒、超時上限只剩 2 倍餘裕
+-    #   ——那種測試遲早會在慢一點的機器上假紅,然後被人關掉。
+-    #   挑剛好算不完 1.5 秒的最小範圍就夠證明機制。
+-    base = sha("HEAD~12") or sha("HEAD~5")
++    # ★怎麼讓它一定超時,又不必挑一個「算很久」的範圍★(2026-09-07 CI 紅了一次之後改)
++    # 舊寫法是「挑 HEAD~12 這種算不完 1.5 秒的範圍」。問題是**那個範圍的成本會隨著
++    # repo 長大而變**:寫的當天本機 90 秒上限還很寬,兩天後同一個範圍本機就要 55 秒,
++    # CI 上超過等它的 60 秒,於是 CI 紅——而紅的原因不是機制壞,是我拿「算多久」當開關。
++    # 現在改成:範圍挑最小的(算一兩秒),**開關改用期限本身**(0.05 秒,光是把子行程
++    # 生出來就不只這個數)。這樣「一定會超時」跟 repo 多大完全無關。
++    base = sha("HEAD~1") or sha("HEAD~2")
+     head = sha("HEAD")
+     if not base or not head:
+         raise _SrcOnly("這個 repo 的歷史不夠長,測不到超時那條路")
+     cpath = m._lens_cache_path(repo, base, head)
+     lock = cpath.with_name(cpath.name + ".warming")
+     for f in (cpath, lock):
+         try:
+             f.unlink()
+         except OSError:
+             pass
+     check("★前置★ 現場成立: 快取是空的(不然根本走不到超時那條路)", not cpath.exists(), str(cpath))
+ 
+     rng = f"{base}..{head}"
+     t0 = _t.monotonic()
+     r = _sp.run([sys.executable, GRAPHCTL, "dispatch-lens", rng, "--repo", str(repo),
+-                 "--json", "--deadline", "1.5"], capture_output=True, text=True, timeout=90)
++                 "--json", "--deadline", "0.05"], capture_output=True, text=True, timeout=90)
+     took = _t.monotonic() - t0
+-    if r.returncode == 0:
+-        # 這台算得比 1.5 秒還快 → 測不到超時那條路,誠實跳過而不是假裝驗過
+
+exec
+/bin/zsh -lc "sed -n '1150,1400p' governance/review-reports/code-audit-batch11/r1-snapshot.patch && sed -n '600,720p' governance/review-reports/code-audit-batch11/r1-snapshot.patch" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+-        # 這台算得比 1.5 秒還快 → 測不到超時那條路,誠實跳過而不是假裝驗過
+-        raise _SrcOnly(f"這台算這個範圍只要 {took:.1f} 秒,測不到超時那條路")
+     check("★逾時★: 期限內回來,而且回的是「還在算」不是失敗",
+           r.returncode == 5 and took < 10, f"rc={r.returncode} 耗時 {took:.1f}s")
+     check("逾時: 輸出講明還在暖快取", '"still_warming": true' in r.stdout, r.stdout[:200])
+-    check("★逾時★: 同範圍只讓一個在算(有鎖)", lock.exists(), str(lock))
++    # ★「有人在算」的證據是鎖,不是行程還在★:鎖檔裡記的是**搶到鎖的那支**的行程編號
++    # (也就是剛剛回 rc5 就結束的那支),不是背景在算的那支——拿它去問「還活著嗎」
++    # 一定得到「死了」。試過一次,當場假紅。真正證明「沒被殺掉」的是下面那條:
++    # 快取最後有沒有出現。
++    check("★逾時★: 同範圍只讓一個在算(有鎖),或者它已經算完了",
++          lock.exists() or cpath.exists(), f"lock={lock.exists()} cache={cpath.exists()}")
+ 
+     # 背景那支要活著把快取寫完
+     for _ in range(60):
+         if cpath.exists():
+             break
+         _t.sleep(1)
+-    check("★逾時★: 背景那支沒被殺掉,自己把快取寫完了(下一席就直接命中)",
++    check("★逾時★: 背景那支自己把快取寫完了(下一席就直接命中)",
+           cpath.exists(), f"快取沒出現={cpath}")
++    for _ in range(10):
++        if not lock.exists():
++            break
++        _t.sleep(1)
+     check("逾時: 算完鎖自己清掉(不然下一次會以為還有人在算)", not lock.exists(), str(lock))
+ 
+     # 邏輯必須住在 lumos,不住 hook
+     hook_src = (Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "dispatch-lens-hook.py").read_text(encoding="utf-8")
+     check("★薄殼★: hook 裡不准再有子行程監督(Popen/行程組管理)",
+           "Popen" not in hook_src and "start_new_session" not in hook_src, "hook 又長回邏輯了")
+     lumos_src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
+     check("★薄殼★: 那段住在 lumos,而且輸出丟掉不接管道(接管道會卡死)",
+           "_lens_wait_or_warm" in lumos_src and "DEVNULL" in lumos_src, "")
+ 
+@@ -21623,22 +21768,29 @@ def t_slim_ps1_ascii_only_no_bom():
+     中文說明搬到 `slim/WINDOWS-NOTES.md`(知識不丟,但不進 .ps1)。
+ 
+     ★這條紀律組織內部早就有★:LandmarkMember 的 CLAUDE.md〈Deploy 腳本踩雷規則〉
+     第 1 條「ASCII-only 規則」,理由一字不差,而且是踩了三輪 prod deploy 失敗才立的。
+     ★我設計這幾支檔案時沒有去查過——那正是 CLAUDE.md 第一條「圖譜先行」要防的。★
+ 
+     ★本測試是機械完備的★:斷言「零個非 ASCII 位元組」直接消滅整個問題類別
+     (不需要再模擬 DBCS 規則、也不需要判斷哪些字元危險)。"""
+     from pathlib import Path as _P
+     repo = _P(GRAPHCTL).parent.parent
+-    for name in ("get.ps1", "install.ps1", "uninstall.ps1"):
+-        raw = (repo / "slim" / name).read_bytes()
++    # ★2026-09-07 #7 起把 repo 根的 get.ps1 也納入★:它一直帶著中文,只是沒被這條蓋到。
++    # 理由跟精簡版那三支一字不差(磁碟執行用系統 ANSI codepage 解碼、CJK 前導位元組吃掉
++    # 下一個位元組),而「沒人回報」不等於沒問題——這個節點自己就寫過「沒人用過的路徑
++    # 不會有人回報」。中文說明搬到圖譜節點,不進 .ps1。
++    targets = [repo / "slim" / n for n in ("get.ps1", "install.ps1", "uninstall.ps1")]
++    targets.append(repo / "get.ps1")
++    for path in targets:
++        name = ("slim/" if path.parent.name == "slim" else "") + path.name
++        raw = path.read_bytes()
+         check(f"★{name} 不得有 BOM(有 BOM 會讓 `irm | iex` 在第 1 行就炸)★",
+               raw[:3] != b"\xef\xbb\xbf", repr(raw[:8]))
+         bad = [(i, b) for i, b in enumerate(raw) if b > 127]
+         check(f"★{name} 必須是 ASCII-only(非 ASCII 位元組會在 cp950 下撞壞引號配對)★",
+               not bad,
+               f"發現 {len(bad)} 個非 ASCII 位元組,前幾個位移: {[i for i, _ in bad[:8]]}\n"
+               + (raw.decode("utf-8", "replace")[max(0, bad[0][0] - 60):bad[0][0] + 60] if bad else ""))
+ 
+     notes = repo / "slim" / "WINDOWS-NOTES.md"
+     check("★中文設計說明必須有落點(不是刪掉,是搬家)★",
++#
++# ASCII-ONLY, NO BOM. This is not a style preference:
++#   - No BOM + non-ASCII: when the file is run from disk, PowerShell 5.1 decodes it with the
++#     system ANSI codepage. On CJK systems a DBCS lead byte eats the next byte and breaks
++#     quote pairing -> parse error, nothing gets installed.
++#   - BOM: `irm | iex` receives a plain string and PowerShell does NOT strip the BOM, so
++#     U+FEFF becomes line 1 content and that comment line is executed as a command.
++#   Both were hit on a real Windows machine (2026-08-03). ASCII-only removes the whole class.
++#   Same rule as slim/*.ps1; see the graph note Systems/slim-get (one-line install) for the full story.
++#   Chinese wording for this script lives in that note, not in this file.
++#
++# This delegates to `lumos bootstrap`, same as get.sh. It used to run `install --force` only,
++# which set up the machine layer but not the project layer - so Windows users finished the
++# documented "one command does it all" with nothing wired inside their project.
+ $ErrorActionPreference = "Stop"
+-$homeDir = if ($env:LUMOS_HOME) { $env:LUMOS_HOME } else { "$HOME\harness\lumos-toolchain" }
+-$url = if ($env:LUMOS_URL) { $env:LUMOS_URL } else { "https://github.com/EnzoHsieh-Android/Lumos" }
+-if (-not (Test-Path "$homeDir\scripts\lumos")) {
+-  New-Item -ItemType Directory -Force -Path (Split-Path $homeDir) | Out-Null
+-  git clone $url $homeDir
++
++function Invoke-LumosGet {
++  param([string[]]$ScriptArgs)   # NOT $Args: that is an automatic variable and would be shadowed
++  $homeDir = if ($env:LUMOS_HOME) { $env:LUMOS_HOME } else { "$HOME\harness\lumos-toolchain" }
++  $url = if ($env:LUMOS_URL) { $env:LUMOS_URL } else { "https://github.com/EnzoHsieh-Android/Lumos" }
++  $branch = if ($env:LUMOS_BRANCH) { $env:LUMOS_BRANCH } else { "release" }
++
++  $pass = @()
++  foreach ($f in $ScriptArgs) {
++    if ($f -eq '--pull' -or $f -eq '--init') { $pass += $f }
++    else { Write-Warning "unknown option $f - ignored (only --pull and --init are accepted)" }
++  }
++
++  if (-not (Test-Path "$homeDir\scripts\lumos")) {
++    New-Item -ItemType Directory -Force -Path (Split-Path $homeDir) | Out-Null
++    Write-Host "[clone] cloning Lumos ($branch, the public channel) -> $homeDir ..."
++    # Fall back to the default branch: the release branch may not exist yet and a cold
++    # start must not die because of that. Branch, not tag: a tag gives a detached HEAD and
++    # every later `git pull` / `lumos update` would silently stay on the install-time version.
++    git clone --branch $branch $url $homeDir 2>$null
++    if ($LASTEXITCODE -ne 0) {
++      Write-Warning "cannot reach the '$branch' channel (branch missing or renamed); using the default branch - you are getting the development line."
++      git clone $url $homeDir
++      if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
++    }
++  } else {
++    Write-Host "[clone] Lumos source already at: $homeDir"
++  }
++
++  $env:LUMOS_HOME = $homeDir
++  python "$homeDir\scripts\lumos" bootstrap @pass
++  if ($LASTEXITCODE -ne 0) { throw "bootstrap failed with exit code $LASTEXITCODE" }
++
++  Write-Host ""
++  Write-Host "Done. Last step: restart your Claude Code session (hooks load at session start)."
+ }
+-python "$homeDir\scripts\lumos" install --force    # = 全域 lumos.cmd + skills
+-Write-Host "`n✓ 機器層裝好。下一步:"
+-Write-Host "  1. 重啟 Claude Code session(L1/L3 hooks 在 session start 載入)"
+-Write-Host "  2. 進你的專案:cd <專案>; lumos init"
++
++Invoke-LumosGet -ScriptArgs $args
+diff --git a/get.sh b/get.sh
+index 1b7094c..edec5c0 100755
+--- a/get.sh
++++ b/get.sh
+@@ -1,33 +1,51 @@
+ #!/usr/bin/env bash
+ # get.sh — 遠端一鍵裝:clone Lumos 後整段委派 bootstrap(機器層+專案層自動接線)。
+-# 用法:  curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/main/get.sh | bash
++# 用法:  curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
+ #   旗標: --pull(既有 clone 也拉最新)/--init(無 vault 的 repo 免確認建圖譜)
+ #         curl -fsSL <url> | bash -s -- --pull --init
+-#   環境變數:LUMOS_HOME(預設 ~/harness/lumos-toolchain)、LUMOS_URL(預設 GitHub)
++#   環境變數:LUMOS_HOME(預設 ~/harness/lumos-toolchain)、LUMOS_URL(預設 GitHub)、
++#            LUMOS_BRANCH(預設 release;開發線是 main)
+ # 站在專案 repo 內跑 → bootstrap 會問「要建成 lumos 專案嗎?」(y 才建;非互動跳過)。
++#
++# ★為什麼整段包在 main() 裡★(2026-09-07 #7):這支是拿 curl 串流進 bash 執行的。
++# 網路在中途斷掉時,bash 會把「已經收到的那半段」照樣跑完——裝到一半、沒有任何錯誤訊息。
++# 包成函式再在最後一行呼叫,就要等整份收完才會開始跑;檔案沒收完,呼叫那一行根本不存在。
++# 最後一行的 `; exit` 是同一個理由的第二道:確保 bash 不會再往下讀到殘留的位元組。
+ set -euo pipefail
+-LUMOS_HOME="${LUMOS_HOME:-$HOME/harness/lumos-toolchain}"
+-LUMOS_URL="${LUMOS_URL:-https://github.com/EnzoHsieh-Android/Lumos}"
+ 
+-# 迴圈解析(舊碼單點比對 $1,並帶兩旗標會無聲吃掉第二個);未知旗標 warn 忽略
+-ARGS=()
+-for a in "$@"; do
+-  case "$a" in
+-    --pull|--init) ARGS+=("$a") ;;
+-    *) echo "提醒:不認得 $a 這個選項,略過(只認 --pull 和 --init)" >&2 ;;
+-  esac
+-done
++main() {
++  LUMOS_HOME="${LUMOS_HOME:-$HOME/harness/lumos-toolchain}"
++  LUMOS_URL="${LUMOS_URL:-https://github.com/EnzoHsieh-Android/Lumos}"
++  LUMOS_BRANCH="${LUMOS_BRANCH:-release}"
+ 
+-if [[ -f "$LUMOS_HOME/scripts/lumos" ]]; then
+-  echo "[clone] Lumos 源已在: $LUMOS_HOME"
+-else
+-  echo "[clone] clone Lumos → $LUMOS_HOME …"
+-  mkdir -p "$(dirname "$LUMOS_HOME")"
+-  git clone "$LUMOS_URL" "$LUMOS_HOME"
+-fi
++  # 迴圈解析(舊碼單點比對 $1,並帶兩旗標會無聲吃掉第二個);未知旗標 warn 忽略
++  ARGS=()
++  for a in "$@"; do
++    case "$a" in
++      --pull|--init) ARGS+=("$a") ;;
++      *) echo "提醒:不認得 $a 這個選項,略過(只認 --pull 和 --init)" >&2 ;;
++    esac
++  done
+ 
+-# 其餘全交 bootstrap(機器層 install+skills、專案層四分流;set -e 保錯誤傳播)
+-LUMOS_HOME="$LUMOS_HOME" python3 "$LUMOS_HOME/scripts/lumos" bootstrap ${ARGS[@]+"${ARGS[@]}"}
++  if [[ -f "$LUMOS_HOME/scripts/lumos" ]]; then
++    echo "[clone] Lumos 源已在: $LUMOS_HOME"
++  else
++    echo "[clone] clone Lumos($LUMOS_BRANCH 對外線)→ $LUMOS_HOME …"
+
+exec
+/bin/zsh -lc "ls skills/lumos-project-notes >/dev/null 2>&1; printf 'source-marker=%s\\n' \""'$?"; rg -n "def _lens_wait_or_warm|start_new_session|Popen|deadline" scripts/lumos | head -40; rg -n "t_release_channel_is_wired_everywhere|t_version_flag_answers_which_copy|t_get_sh_survives_truncated_stream|t_windows_shim" governance/review-reports/code-audit-batch11/r1-snapshot.patch' in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+source-marker=0
+7147:        proc = subprocess.Popen(cmd, shell=True, cwd=str(cwd), start_new_session=True,
+13632:        # 執行指令:使用 Popen 以便 TimeoutExpired 時能 killpg。
+13635:        proc = subprocess.Popen(
+13639:            start_new_session=True,
+14635:def _delguard_vault_scan(tokens, conf, graph_root_abs, deadline_check=None):
+14639:       deadline_check: 選用 callable(),os.walk 外層迴圈每檔呼叫一次;回 True 立即
+14649:            if deadline_check is not None and deadline_check():
+14663:                # 才輪到下一次檢查,deadline 直接超支(2026-08-11 code-loop r1 H)
+14664:                if deadline_check is not None and i % 2000 == 0 and deadline_check():
+14730:        deadline = float(os.environ.get("LUMOS_DELGUARD_DEADLINE", "15.0"))  # 5.0 在本 repo(377 篇+大 diff)仍常超,2026-08-27 一 session 降級多次→15;advisory fail-open,pre-commit 多等幾秒換掃完整
+14732:        deadline = 15.0   # s1-f2:兜底跟預設一致(原 2.0,主值調 15 後落差 7.5 倍→非數值 env 悄悄退化只給 2 秒)
+14734:        return time.monotonic() - t0 > deadline
+14757:                           timeout=max(0.1, deadline - (time.monotonic() - t0)))
+14772:                print(f"提醒:「刪掉的東西筆記還在不在講」這項檢查超時降級({deadline}s 內沒掃完),先放行;這次結果不完整,已記一筆在治理帳。")
+14774:        rem = max(0.1, deadline - (time.monotonic() - t0))
+14781:                print(f"delguard: 超時降級({deadline}s),放行;本輪掃描不完整(已記治理帳 delguard/degraded)")
+14784:        def _deadline_check():
+14785:            if time.monotonic() - t0 > deadline:
+14789:        hits = _delguard_vault_scan(tokens, conf, gr, deadline_check=_deadline_check)
+14790:        _partial = _trunc["hit"]   # 外家 r1 M2:掃描被 deadline 截斷回部分結果,不能算 ok
+14791:        _slow = (not _partial) and (time.monotonic() - t0 > deadline)   # delta r3:單一大檔掃完才發現超時=結果完整但慢,記 ok 帶 reason=slow 讓帳看得到
+15897:    deadline = time.time() + float(timeout)
+15920:                time.sleep(min(float(grace), max(0.0, deadline - time.time())))
+15947:                time.sleep(min(float(grace), max(0.0, deadline - time.time())))
+15957:        if time.time() >= deadline:
+15963:        time.sleep(min(15.0, max(1.0, deadline - time.time())))
+17647:def _lens_fallback(root, base_sha, head_sha, changed_files, base_tree, base_modes, deadline, cache_note=""):
+17652:        return deadline - _time.monotonic()
+18137:def _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline):
+18138:    """派一個脫離的行程去算鏡頭,這邊最多等 deadline 秒;到時間就印說明、讓那支自己算完。
+18200:            kw["start_new_session"] = True          # 自己一組,不跟著呼叫者被收掉
+18205:            _sp.Popen(argv, env=env, **kw)
+18212:    # 等快取出現(不是等行程結束——那支可能比 deadline 久很多)。
+18214:    end = _t.monotonic() + float(deadline)
+18240:def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=8, max_lines=400, deadline=None):
+18292:    # 現在的做法:帶 --deadline 時,自己派一個**完全脫離**的行程去算(輸出丟掉,
+18295:    # 於是小專案(本來一瞬間就算完)也被逼走超時那條路——多一次行程啟動,而且 deadline
+18304:    if deadline and deadline > 0 and not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
+18305:        return _lens_wait_or_warm(root, cpath, diff_range, repo, as_json, deadline)
+18361:        deadline = _t0 + _LENS_INNER_BUDGET - _LENS_FALLBACK_RESERVE
+988:+def t_release_channel_is_wired_everywhere():
+1020:+    print("  ✓ t_release_channel_is_wired_everywhere")
+1023:+def t_get_sh_survives_truncated_stream():
+1058:+    print("  ✓ t_get_sh_survives_truncated_stream")
+1061:+def t_windows_shim_does_not_hardcode_python():
+1080:+    print("  ✓ t_windows_shim_does_not_hardcode_python")
+1083:+def t_version_flag_answers_which_copy():
+1095:+    print("  ✓ t_version_flag_answers_which_copy")
+
+exec
+/bin/zsh -lc "python3 -c \"\\nfrom pathlib import Path\\nimport re\\np=Path(\\\"governance/review-reports/code-audit-batch11/r1-snapshot.patch\\\").read_text()\\nfiles={}\\nfor block in re.split(r\\\"(?="'^diff --git )'"\\\",p,flags=re.M):\\n m=re.match(r\\\"diff --git .* b/(\\\\\\\\S+)\\\",block)\\n if not m: continue\\n name=m.group(1).strip(chr(34))\\n if name not in {\\\"get.sh\\\",\\\"get.ps1\\\",\\\"scripts/lumos\\\",\\\"scripts/test_lumos.py\\\"}: continue\\n old=Path(name).read_text().splitlines(); out=[]; pos=0\\n matches=list(re.finditer(r\\\""'^@@ -('"\\\\\\\\d+)(?:,(\\\\\\\\d+))? \\\\\\\\+(\\\\\\\\d+)(?:,(\\\\\\\\d+))? @@["'^'"\\\\\\\\n]*\\\\\\\\n\\\",block,re.M))\\n for j,hm in enumerate(matches):\\n  start=int(hm.group(1))-1; out.extend(old[pos:start]); pos=start\\n  hend=matches[j+1].start() if j+1<len(matches) else len(block)\\n  for line in block[hm.end():hend].splitlines():\\n   if line.startswith(\\\" \\\"): out.append(line[1:]); pos+=1\\n   elif line.startswith(\\\"-\\\"): pos+=1\\n   elif line.startswith(\\\"+\\\"): out.append(line[1:])\\n out.extend(old[pos:]); files[name]=\\\"\\\\\\\\n\\\".join(out)+\\\"\\\\\\\\n\\\"\\nsh,ps,py=files[\\\"get.sh\\\"],files[\\\"get.ps1\\\"],files[\\\"scripts/lumos\\\"]\\ndef pred(sh,ps,py):\\n return [\\\"--branch\\\" in sh and \\\"--branch\\\" in ps and chr(34)+\\\"--branch\\\"+chr(34) in py,sh.count(\\\"git clone\\\")>=2,ps.count(\\\"git clone\\\")>=2,py.count(\\\"[\\\\\\\\\\\\\\\"git\\\\\\\\\\\\\\\", \\\\\\\\\\\\\\\"clone\\\\\\\\\\\\\\\"\\\")>=1 and py.count(\\\"\\\\\\\\\\\\\\\"git\\\\\\\\\\\\\\\", \\\\\\\\\\\\\\\"clone\\\\\\\\\\\\\\\", \\\\\\\\\\\\\\\"--branch\\\\\\\\\\\\\\\"\\\")>=1,\\\"bootstrap\\\" in ps]\\nbadsh=sh.replace(\\\"if "'! git clone --branch '"\\\\\\\\\\\""'$LUMOS_BRANCH'"\\\\\\\\\\\" \\\\\\\\\\\""'$LUMOS_URL'"\\\\\\\\\\\" \\\\\\\\\\\""'$LUMOS_HOME'"\\\\\\\\\\\" 2>/dev/null; then\\\",\\\"if false; then # git clone --branch \\\\\\\\\\\""'$LUMOS_BRANCH'"\\\\\\\\\\\" \\\\\\\\\\\""'$LUMOS_URL'"\\\\\\\\\\\" \\\\\\\\\\\""'$LUMOS_HOME'"\\\\\\\\\\\"\\\")\\nbadps=ps.replace(\\\"python \\\\\\\\\\\""'$homeDir'"\\\\\\\\\\\\\\\\scripts\\\\\\\\\\\\\\\\lumos\\\\\\\\\\\" bootstrap @pass\\\",\\\"python \\\\\\\\\\\""'$homeDir'"\\\\\\\\\\\\\\\\scripts\\\\\\\\\\\\\\\\lumos\\\\\\\\\\\" install --force # bootstrap\\\")\\nprint(\\\"baseline\\\",pred(sh,ps,py)); print(\\\"broken-sh\\\",pred(badsh,ps,py)); print(\\\"broken-ps\\\",pred(sh,badps,py))\\nfor name, needles in {\\\"scripts/lumos\\\":[\\\"def _version_text():\\\",\\\"這一份的內容指紋: %s 在分支\\\"],\\\"get.ps1\\\":[\\\"python \\\\\\\\\\\""'$homeDir'"\\\\\\\\\\\\\\\\scripts\\\\\\\\\\\\\\\\lumos\\\\\\\\\\\" bootstrap @pass\\\"],\\\"scripts/test_lumos.py\\\":[\\\"三個 clone 站都先試對外分支\\\",\\\"get.sh 有退回預設分支的備援\\\",\\\"get.ps1 也委派 bootstrap\\\"]}.items():\\n lines=files[name].splitlines()\\n for needle in needles: print(name,next((i for i,x in enumerate(lines,1) if needle in x),None),needle)\\n\"" in /Users/enzo/harness/lumos-toolchain
+ exited 1 in 0ms:
+  File "<string>", line 1
+    \nfrom pathlib import Path\nimport re\np=Path("governance/review-reports/code-audit-batch11/r1-snapshot.patch").read_text()\nfiles={}\nfor block in re.split(r"(?=^diff --git )",p,flags=re.M):\n m=re.match(r"diff --git .* b/(\\S+)",block)\n if not m: continue\n name=m.group(1).strip(chr(34))\n if name not in {"get.sh","get.ps1","scripts/lumos","scripts/test_lumos.py"}: continue\n old=Path(name).read_text().splitlines(); out=[]; pos=0\n matches=list(re.finditer(r"^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@[^\\n]*\\n",block,re.M))\n for j,hm in enumerate(matches):\n  start=int(hm.group(1))-1; out.extend(old[pos:start]); pos=start\n  hend=matches[j+1].start() if j+1<len(matches) else len(block)\n  for line in block[hm.end():hend].splitlines():\n   if line.startswith(" "): out.append(line[1:]); pos+=1\n   elif line.startswith("-"): pos+=1\n   elif line.startswith("+"): out.append(line[1:])\n out.extend(old[pos:]); files[name]="\\n".join(out)+"\\n"\nsh,ps,py=files["get.sh"],files["get.ps1"],files["scripts/lumos"]\ndef pred(sh,ps,py):\n return ["--branch" in sh and "--branch" in ps and chr(34)+"--branch"+chr(34) in py,sh.count("git clone")>=2,ps.count("git clone")>=2,py.count("[\\\"git\\\", \\\"clone\\\"")>=1 and py.count("\\\"git\\\", \\\"clone\\\", \\\"--branch\\\"")>=1,"bootstrap" in ps]\nbadsh=sh.replace("if ! git clone --branch \\"\\" \\"\\" \\"\\" 2>/dev/null; then","if false; then # git clone --branch \\"\\" \\"\\" \\"\\"")\nbadps=ps.replace("python \\"\\\\scripts\\\\lumos\\" bootstrap @pass","python \\"\\\\scripts\\\\lumos\\" install --force # bootstrap")\nprint("baseline",pred(sh,ps,py)); print("broken-sh",pred(badsh,ps,py)); print("broken-ps",pred(sh,badps,py))\nfor name, needles in {"scripts/lumos":["def _version_text():","這一份的內容指紋: %s 在分支"],"get.ps1":["python \\"\\\\scripts\\\\lumos\\" bootstrap @pass"],"scripts/test_lumos.py":["三個 clone 站都先試對外分支","get.sh 有退回預設分支的備援","get.ps1 也委派 bootstrap"]}.items():\n lines=files[name].splitlines()\n for needle in needles: print(name,next((i for i,x in enumerate(lines,1) if needle in x),None),needle)\n
+     ^
+SyntaxError: unexpected character after line continuation character
+
+exec
+/bin/zsh -lc "python3 -c 'from pathlib import Path
+import re
+p=Path(\"governance/review-reports/code-audit-batch11/r1-snapshot.patch\").read_text()
+def added(name):
+ b=next(x for x in re.split(r\"(?="'^diff --git )",p,flags=re.M) if (" b/"+name+"'"\\n\") in x)
+ return \"\\n\".join(x[1:] for x in b.splitlines() if x.startswith(\"+\") and not x.startswith(\"+++\"))
+sh=added(\"get.sh\"); ps=added(\"get.ps1\"); py=added(\"scripts/lumos\")
+def pred(sh,ps,py):
+ return [\"--branch\" in sh and \"--branch\" in ps and \"\\\"--branch\\\"\" in py,sh.count(\"git clone\")>=2,ps.count(\"git clone\")>=2,py.count(\"[\\\"git\\\", \\\"clone\\\"\")>=1 and py.count(\"\\\"git\\\", \\\"clone\\\", \\\"--branch\\\"\")>=1,\"bootstrap\" in ps]
+badsh=sh.replace(\"if "'! git clone --branch","if false; then # git clone --branch")
+badps=ps.replace(" bootstrap @pass"," install --force # bootstrap")
+print("baseline",pred(sh,ps,py));print("broken-sh",pred(badsh,ps,py));print("broken-ps",pred(sh,badps,py))'"'" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+baseline [True, True, True, True, True]
+broken-sh [True, True, True, True, True]
+broken-ps [True, True, True, True, True]
+
+exec
+/bin/zsh -lc "python3 -c 'from pathlib import Path
+import re
+p=Path(\"governance/review-reports/code-audit-batch11/r1-snapshot.patch\").read_text()
+def added(name):
+ b=next(x for x in re.split(r\"(?="'^diff --git )",p,flags=re.M) if (" b/"+name+"'"\\n\") in x)
+ return \"\\n\".join(x[1:] for x in b.splitlines() if x.startswith(\"+\") and not x.startswith(\"+++\"))
+py=added(\"scripts/lumos\"); log=added(\"CHANGELOG.md\")
+bad=py.replace('\"'\"'LUMOS_VERSION = \"v1.0\"'\"'\"', '\"'\"'LUMOS_VERSION = \"v1.0\"\\nLUMOS_VERSION = \"v9.9\"'\"'\"',1)
+m=re.search(r'\"'\"'"'^LUMOS_VERSION = "(v'"\\d+\\.\\d+)\"'\"'\"',bad,re.M); m2=re.search(r\""'^## (v'"\\d+\\.\\d+) — (\\d{4}-\\d{2}-\\d{2})"'$",log,re.M)
+print("duplicate-version guard result",bool(m),bool(m2),m.group(1)==m2.group(1),"runtime-last-value=v9.9")
+i=bad.index('"'\"'\"'shim = bindir / \"lumos.cmd\"'\"'\"'); seg=bad[i:i+900]
+mut=seg.replace(\"shim.write_text(f'\"'\"'@echo off\\\\r\\\\n{py_cmd}\", \"shim.write_text(f'\"'\"'@echo off\\\\r\\\\npython\")
+print(\"hardcoded-shim guard result\",(\"which\" in mut and \"python3\" in mut), re.search(r\"\\{py_cmd\\}\",mut) is not None, \"actual-command-hardcoded-python\" in \"\")'" in /Users/enzo/harness/lumos-toolchain
+ exited 1 in 0ms:
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+    print("duplicate-version guard result",bool(m),bool(m2),m.group(1)==m2.group(1),"runtime-last-value=v9.9")
+                                                            ^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'group'
+
+exec
+/bin/zsh -lc "python3 -c 'from pathlib import Path
+import re
+p=Path(\"governance/review-reports/code-audit-batch11/r1-snapshot.patch\").read_text()
+b=next(x for x in re.split(r\"(?="'^diff --git )",p,flags=re.M) if " b/scripts/lumos'"\\n\" in x)
+py=\"\\n\".join(x[1:] for x in b.splitlines() if x.startswith(\"+\") and not x.startswith(\"+++\"))
+bad=py.replace('\"'\"'LUMOS_VERSION = \"v1.0\"'\"'\"', '\"'\"'LUMOS_VERSION = \"v1.0\"\\nLUMOS_VERSION = \"v9.9\"'\"'\"',1)
+m=re.search(r'\"'\"'"'^LUMOS_VERSION = "(v'"\\d+\\.\\d+)\"'\"'\"',bad,re.M)
+print(\"duplicate-version exact guard predicate:\",bool(m),m.group(1)==\"v1.0\",\"but Python final binding is v9.9\")
+i=bad.index('\"'\"'shim = bindir / \"lumos.cmd\"'\"'\"'); seg=bad[i:i+900]
+mut=seg.replace(\"{py_cmd} \\\"{src}\\\" %*\", \"python \\\"{src}\\\" %*\")
+print(\"hardcoded-shim exact predicates:\",(\"which\" in mut and \"python3\" in mut),re.search(r\"\\{py_cmd\\}\",mut) is not None)
+print(\"actual shim command contains hardcoded:\", \"python \\\"{src}\\\" %*\" in mut)'" in /Users/enzo/harness/lumos-toolchain
+ exited 1 in 0ms:
+Traceback (most recent call last):
+  File "<string>", line 8, in <module>
+    print("duplicate-version exact guard predicate:",bool(m),m.group(1)=="v1.0","but Python final binding is v9.9")
+                                                             ^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'group'
+
+exec
+/bin/zsh -lc "awk '
+/"'^diff --git /{f=$4; sub("b/","",f)}
+/''^@@ /{split($3,a,"[, +]"); n=a[2]; in_h=1; next}
+in_h && /''^'"\\+\\+\\+/{next}
+in_h && /"'^'"\\+/{line=substr("'$0,2); if (line ~ /三個 clone 站都先試對外分支|get.sh 有退回預設分支的備援|get.ps1 也委派 bootstrap|這一份的內容指紋: %s 在分支|python '"\\\"\\"'$homeDir'"\\\\scripts\\\\lumos\\\" bootstrap|整段包在 main|截斷的半份不執行|get_windows|shim 的直譯器/) print f \":\" n \":\" line; n++; next}
+in_h && /"'^ /{n++; next}
+in_h && /''^-/{next}
+in_h && !/''^[ +'"\\-\\\\]/{in_h=0}
+' governance/review-reports/code-audit-batch11/r1-snapshot.patch" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+"docs/lumos-toolchain-knowledge/Projects/\347\211\210\346\234\254\347\231\274\345\270\203\346\265\201\347\250\213_\350\250\210\345\212\203.md":215:- Windows shim 的直譯器是安裝當下偵測來的,不是字面 `python`。
+get.ps1:50:  python "$homeDir\scripts\lumos" bootstrap @pass
+get.sh:10:# ★為什麼整段包在 main() 裡★(2026-09-07 #7):這支是拿 curl 串流進 bash 執行的。
+scripts/lumos:106:            lines.append("  這一份的內容指紋: %s 在分支 %s %s" % (sha.stdout.strip(), bname, mark))
+scripts/test_lumos.py:5322:    check("三個 clone 站都先試對外分支",
+scripts/test_lumos.py:5326:    check("get.sh 有退回預設分支的備援", sh.count("git clone") >= 2, sh.count("git clone"))
+scripts/test_lumos.py:5337:    check("get.ps1 也委派 bootstrap(兩支行為一致)", "bootstrap" in ps, ps[:200])
+scripts/test_lumos.py:5374:        check("★截斷的半份不執行 get.sh 自己的任何一步★", not did,
+scripts/test_lumos.py:5395:    check("shim 的直譯器是安裝當下偵測來的,不是字面 python",
+
+exec
+/bin/zsh -lc "python3 scripts/lumos context Systems/lumos-cli-lifecycle --brief && sed -n '7120,7185p' scripts/lumos && awk '/"'^diff --git a'"\\/RELEASING.md/{f=1} f&&/"'^'"\\+/{n++; if("'$0~/(detached HEAD|gh auth status)/) print n ":" substr($0,2)} /''^diff --git /&&f&&$0!~/RELEASING.md/{exit}'"' governance/review-reports/code-audit-batch11/r1-snapshot.patch" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 149ms:
+# Systems/lumos-cli-lifecycle.md
+type:system | status:done | created:2026-06-26 | updated:2026-08-20 | risk:不可逆
+提醒:這篇有「動了會壞」的合約,動手前一定要看:
+  ★INVARIANT★ re-inject 只覆蓋 sentinel 之間 body、sentinel 之外 CLAUDE.md 內容 byte-equal 保留(改=毀使用者手寫內容=breaking) [test:t_reinject_preserves_outside] [audit:sonnet/2026-07-06]
+  ★DEBT★ CLAUDE.md START sentinel 的版本戳(LUMOS_VERSION)=人可讀標籤/advisory nudge,非正確性守衛(內容比對 doctor Check D 才是;版本在 body 外、bump 不觸發守衛)
+  ★DEBT★ pull 成功但來源工作區髒(未提交改動)仍會被 vendor 出去——本輪未擋,因來源 repo 的 docs/.governance-log.jsonl 等簿記檔恆髒,一律擋會天天卡住;要做需先分「簿記檔 vs 實質檔」白名單
+summary:
+  KEY:[2026-08-05]來源 repo 自身的 reinject 路徑補齊——update 在來源 repo 改走 reinject-only(原:ERROR 拒跑);init 既有 vaul…
+  FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install/uninstall…
+verified_by: [[Verification/2026-07-06_CLAUDE注入re-sync]], [[Verification/2026-07-25_bootstrap一鍵對稱]], [[Verification/2026-08-05_流程優化六件落地]], [[Verification/2026-08-19_精簡版update指令落地]], [[Verification/2026-08-20_gov-stats落地]], [[Verification/2026-08-21_L4交叉審計30節點清帳]], [[Verification/2026-08-21_doctor-run事件落地]], [[Verification/2026-08-21_工具鏈體檢修復批]], [[Verification/2026-08-22_指令索引與情境探針]], [[Verification/2026-09-04_Codex完全支援S0安裝層驗收]], [[Verification/2026-09-04_Codex完全支援S1hook適配驗收]], [[Verification/2026-09-04_Codex完全支援S3量測驗收]]
+→ 連出 (19):
+  • Projects/CLAUDE注入re-sync與版本標籤_計劃.md [done]
+  • Systems/lumos-cli-read.md [done]
+  • Systems/lumos-cli-write.md [done]
+  • Systems/lumos-deinit.md [done]
+  • Systems/native-windows-support.md [done]
+  • Systems/slim-install-安裝器.md [done]
+  • Systems/slim-uninstall-一行卸載.md [done]
+  • Verification/2026-07-06_CLAUDE注入re-sync.md [pass]
+  • Verification/2026-07-25_bootstrap一鍵對稱.md [pass]
+  • Verification/2026-08-05_流程優化六件落地.md [pass]
+  • Verification/2026-08-19_精簡版update指令落地.md [pass]
+  • Verification/2026-08-20_gov-stats落地.md [pass]
+  • Verification/2026-08-21_L4交叉審計30節點清帳.md [pass]
+  • Verification/2026-08-21_doctor-run事件落地.md [pass]
+  • Verification/2026-08-21_工具鏈體檢修復批.md [pass]
+  • Verification/2026-08-22_指令索引與情境探針.md [pass]
+  • Verification/2026-09-04_Codex完全支援S0安裝層驗收.md [pass]
+  • Verification/2026-09-04_Codex完全支援S1hook適配驗收.md [pass]
+  • Verification/2026-09-04_Codex完全支援S3量測驗收.md [pass]
+← 連入 (34):
+  • Issues/deinit整夾刪使用者檔.md [done]
+  • Issues/hook卸載殘留註冊.md [done]
+  • Issues/init-force-slug誤用basename.md [done]
+  • Issues/vendored測試套件在消費端假紅.md [resolved]
+  • Issues/探針沙盒改動真全域機器狀態.md [doing]
+  • Issues/測試未隔離HOME刪掉真機Claude-hooks.md [resolved]
+  • MOC/index.md [doing]
+  • Projects/CLAUDE注入re-sync與版本標籤_計劃.md [done]
+  • Projects/Codex完全支援_計劃.md [done]
+  • Projects/Codex行為精修_計劃.md [doing]
+  • Projects/bootstrap一鍵對稱_計劃.md [done]
+  • Projects/cochange守衛_計劃.md [done]
+  • Projects/enforcement儀表板_計劃.md [done]
+  • Projects/install全域hook同步_計劃.md [done]
+  • Projects/kotlin慣例skill_計劃.md [done]
+  • Projects/teardown一鍵拆機_計劃.md [doing]
+  • Projects/上下文瘦身_計劃.md [done]
+  • Projects/先問世界_存量掃描裁定.md [done]
+  • Projects/公開精簡版_實作計畫.md [done]
+  • Projects/公開精簡版_計劃.md [doing]
+  • Projects/版本發布流程_計劃.md [doing]
+  • Systems/cochange-guard.md [done]
+  • Systems/codex-harness.md [done]
+  • Systems/lumos-cli-read.md [done]
+  • Systems/lumos-cli-write.md [done]
+  • Systems/slim-gen-生成器.md [done]
+  • Systems/slim-get-一行安裝.md [done]
+  • Systems/slim-install-安裝器.md [done]
+  • Systems/slim-readme.md [done]
+  • Systems/slim-scan-掃描器.md [done]
+  • Systems/slim-skill-修剪.md [done]
+  • Systems/slim-uninstall-一行卸載.md [done]
+  • Verification/2026-07-06_CLAUDE注入re-sync.md [pass]
+  • Verification/2026-08-19_精簡版update指令落地.md [pass]
+        summ = fields.get("summary")
+        if isinstance(summ, str):
+            for sl in summ.split("\n"):
+                mi = INVARIANT_RE.match(sl.strip())
+                if mi and invariant_substr in INV_TAG_RE.sub("", sl):
+                    return bool(KILL_REF_RE.search(sl))
+        return False
+
+    try:
+        atomic_write_verify(path, new_lines, "[kill:recipes]", check)
+    except (ValueError, RuntimeError) as ex:
+        print(f"擋下:{ex}", file=sys.stderr)
+        return 2
+    print(f"✓ kill 配方寫入 {rel}(invariant『{invariant_substr[:24]}…』, test={test})")
+    print("  下一步: lumos guard kill 跑殺傷力驗證(worktree 隔離,弄壞→測試必須翻紅)")
+    return 0
+
+
+def _kill_run(cmd, cwd, timeout):
+    """跑 run_cmd(shell,killpg 沿 lint 先例)。回 (rc, tail200, elapsed, timed_out)。"""
+    import os
+    import signal
+    import subprocess
+    import tempfile
+    import time
+    t0 = time.time()
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as buf:
+        proc = subprocess.Popen(cmd, shell=True, cwd=str(cwd), start_new_session=True,
+                                stdout=buf, stderr=subprocess.STDOUT)
+        try:
+            proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError, AttributeError):
+                # AttributeError=Windows 無 killpg/SIGKILL → 退回殺直接子程序
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            proc.wait()
+            buf.seek(0)
+            txt = buf.read()
+            return (None, _kill_cap(txt), time.time() - t0, True)
+        buf.seek(0)
+        txt = buf.read()
+    return (proc.returncode, _kill_cap(txt), time.time() - t0, False)
+
+
+_KILL_OUT_CAP = 256 * 1024
+
+
+def _kill_cap(txt):
+    """[S3 oracle品質包] 保留完整輸出供歸因(上限 256KB;超限取頭尾各半、對齊換行邊界
+    並插 marker——裸位元組砍半會把兩條真實行拼成假行汙染行窗掃描)。"""
+    if len(txt) <= _KILL_OUT_CAP:
+        return txt
+    half = _KILL_OUT_CAP // 2
+    head, tail = txt[:half], txt[-half:]
+    head = head[:head.rfind("\n") + 1] if "\n" in head else head
+    tail = tail[tail.find("\n") + 1:] if "\n" in tail else tail
+    dropped = len(txt) - len(head) - len(tail)
+    return head + f"...[truncated {dropped} bytes]...\n" + tail
+
+
+_KILL_FAIL_MARKS = ("FAIL", "FAILED", "✗", "AssertionError")
+13:- `gh auth status` 確認登入(第 3、5 步要用)。
+50:- 安裝通道是**分支**不是 tag:`git clone --branch <tag>` 會進 detached HEAD,
+
+exec
+/bin/zsh -lc 'rg -n "def _pull_source_or_abort|git pull --ff-only|git pull" scripts/lumos | head -20' in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+11288:def _pull_source_or_abort(src, allow_stale=False):
+11308:    print("  git pull 來源(取最新工具組)…")
+11411:          f"  先去來源那邊處理:\n    cd {src} && git status && git pull --ff-only\n"
+11466:    = (git pull Lumos) + install-graph-toolchain --target <本專案> --slug <自動偵測>。
+11534:        print(f"  ⚠ 連結失敗,改複製(失去 git pull 即更新): {dst}")
+11948:    非 git→跳過只做機器層。--pull:既有 Lumos clone 也 git pull 拉最新。
+11961:            print(f"[1/3] Lumos 來源已在,git pull 更新: {home}")
+11974:        # 之後 git pull / lumos update 全部靜默停在裝機那版(2026-07-30 裁定)。
+19545:    p.add_argument("--no-pull", action="store_true", help="不 git pull 來源,用現有")
+19553:    p.add_argument("--pull", action="store_true", help="既有 Lumos clone 也 git pull 拉最新(預設沿用)")
+19560:    p.add_argument("--no-pull", action="store_true", help="vendor 工具時不 git pull 來源")
+
+exec
+/bin/zsh -lc "sed -n '11288,11325p' scripts/lumos" in /Users/enzo/harness/lumos-toolchain
+ succeeded in 0ms:
+def _pull_source_or_abort(src, allow_stale=False):
+    """更新來源 clone;拉不到就中止。回傳 0=可繼續、None=中止(呼叫端不得再寫任何檔)。
+
+    ★為什麼 fail-closed★:原本 pull 失敗只印一行警告就繼續 vendor,來源落後或有本機
+    分歧時會靜默拿舊版蓋掉專案裡較新的檔——消費端實戰咬過兩次,那行警告混在一堆輸出裡
+    根本看不到。「拿不到最新」與「確定這是最新」是兩種狀態,不該用同一條路走完。
+
+    ★但無 remote 不算失敗★:手動複製 / slim 安裝出來的來源本就沒有 remote,那是合法的
+    離線情境,擋它等於把離線使用者鎖在門外。只有「有 remote 卻拉不到」才中止。
+    _vendor_toolchain(專案層) 與 cmd_bootstrap(機器層) 共用本函式,避免兩處政策漂移。
+    """
+    import subprocess
+    if not (src / ".git").is_dir():
+        print("  (來源非 git repo,跳過 pull)")
+        return 0
+    has_remote = subprocess.run(["git", "-C", str(src), "remote"],
+                                capture_output=True, text=True).stdout.strip()
+    if not has_remote:
+        print("  (來源無 remote:離線 clone,跳過 pull)")
+        return 0
+    print("  git pull 來源(取最新工具組)…")
+    if subprocess.run(["git", "-C", str(src), "pull", "--ff-only"]).returncode == 0:
+        return 0
+    # ★來源「只髒了工具自己寫的帳」不該擋人★(2026-09-06 全 repo 審視 #5)
+    # 症狀:唯讀的 `lumos show`/`context` 就會 append docs/.usage-log.jsonl,而那本帳是版控的。
+    # 只要有人在來源 clone 裡查過一次圖譜,之後這台機器所有專案的 update / bootstrap --pull
+    # 全部被 fail-closed 擋住;逃生門寫在錯誤訊息最後一行,沒人會讀到那裡。
+    #
+    # ★做法是「聯集合併」,不是 stash/pop★:這幾本是 append-only 的 JSONL,兩邊各自加了行,
+    # stash pop 會判成衝突並★在帳本裡留下衝突標記★——那比原本擋住更糟,帳本直接壞掉、
+    # 之後每次讀都炸(第一版真的踩到,實測留下 <<<<<<< 標記)。正確解是把兩邊的行取聯集:
+    # 先把本機那份讀進記憶體 → checkout 回 HEAD → pull → 把本機獨有的行補回去。
+    # 非 JSONL 的簿記檔(anchor-baseline.json 是一份 JSON 物件)不能這樣併,照原路擋下。
+    dirty = subprocess.run(["git", "-C", str(src), "status", "--porcelain=v1", "-z"],
+                           capture_output=True, text=True).stdout
+    # ★用 -z 逐筆解析,不要對人看的格式做字串切片★(2026-09-06 代碼審 r1 外家席):
+    # porcelain 的 rename 是 `R  old\0new`、含特殊字元的路徑在非 -z 模式會被 C-style 跳脫並加引號,
+    # 光 strip('"') 解不開。-z 模式路徑原樣不跳脫;rename/copy 會多吃一個 NUL 欄位,我們直接
+
+codex
+severity: major
+
+1. severity: major；blocking:是 — Windows 一鍵安裝仍寫死 `python`。`lumos.cmd` 雖改成偵測 `python3`／`python`，但 `get.ps1` 隨後直接呼叫 `python`；只有 `python3.exe` 的環境會在 bootstrap 前失敗，正是 shim 修改聲稱要支援的環境。引句:「`python "$homeDir\scripts\lumos" bootstrap @pass`」 get.ps1:50
+
+2. severity: major；blocking:是 — 發布通道守衛只數字串，無法驗證 clone 或委派行為。我實際以兩個錯誤版本重跑其精確判準：
+
+   - 把 get.sh 的 release clone 改成永遠不執行，但把 `git clone --branch` 留在註解。
+   - 把 get.ps1 改回 `install --force`，僅在註解保留 `bootstrap`。
+
+   兩個錯誤版本的五項 predicate 仍全部為 `True`。因此它抓不到錯誤分支、死碼、註解或實際委派退化。引句:「`check("三個 clone 站都先試對外分支",`」 scripts/test_lumos.py:5322；引句:「`check("get.sh 有退回預設分支的備援", sh.count("git clone") >= 2`」 scripts/test_lumos.py:5326；引句:「`check("get.ps1 也委派 bootstrap(兩支行為一致)", "bootstrap" in ps`」 scripts/test_lumos.py:5337
+
+3. severity: major；blocking:是 — `--version` 對 vendored 副本仍把宿主專案的 Git SHA 稱為「這一份的內容指紋」。程式以 `git -C <宿主專案>` 查 SHA；複製到別的 Git 專案後得到的是該專案 commit，不是 lumos 內容。雖上一行附有警告，這個 SHA 仍不能識別目前執行的 lumos，與 CHANGELOG／RELEASING 宣稱的內容指紋用途不符。現有測試只找「只回答現在跑的這一支」文字，沒有驗證指紋來源。引句:「`這一份的內容指紋: %s 在分支 %s %s`」 scripts/lumos:106
+
+4. severity: minor；blocking:否 — RELEASING 對 detached HEAD 的現行行為描述已過期。現在 `_pull_source_or_abort` 對有 remote 且 `git pull --ff-only` 失敗會 fail-closed，`lumos update` 不會「靜默停住」，而會中止。這會讓維護者依錯誤故障模型判斷 tag 安裝。引句:「`之後 git pull 與 lumos update 會靜默停在裝機那一版`」 RELEASING.md:51
+
+補充查證：
+
+- `t_lens_timeout_keeps_warming_cache` 仍能抓到「逾時後砍背景行程」：背景行程若被殺，60 秒內不會產生 cache，測試會紅；刪掉斷言文字中的「沒被殺掉」沒有削弱 oracle。
+- get.sh 除 `set -euo pipefail` 外，具副作用的主體都在 `main()`；沒有確認到包裝遺漏。
+- 執行環境禁止建立任何暫存檔／目錄，`mktemp` 直接回 `Operation not permitted`，因此無法實跑 file:// 假 repo 的 clone；未把這部分的靜態疑點列為 finding。
+hook: Stop
+hook: Stop Completed
+tokens used
+79,337
+severity: major
+
+1. severity: major；blocking:是 — Windows 一鍵安裝仍寫死 `python`。`lumos.cmd` 雖改成偵測 `python3`／`python`，但 `get.ps1` 隨後直接呼叫 `python`；只有 `python3.exe` 的環境會在 bootstrap 前失敗，正是 shim 修改聲稱要支援的環境。引句:「`python "$homeDir\scripts\lumos" bootstrap @pass`」 get.ps1:50
+
+2. severity: major；blocking:是 — 發布通道守衛只數字串，無法驗證 clone 或委派行為。我實際以兩個錯誤版本重跑其精確判準：
+
+   - 把 get.sh 的 release clone 改成永遠不執行，但把 `git clone --branch` 留在註解。
+   - 把 get.ps1 改回 `install --force`，僅在註解保留 `bootstrap`。
+
+   兩個錯誤版本的五項 predicate 仍全部為 `True`。因此它抓不到錯誤分支、死碼、註解或實際委派退化。引句:「`check("三個 clone 站都先試對外分支",`」 scripts/test_lumos.py:5322；引句:「`check("get.sh 有退回預設分支的備援", sh.count("git clone") >= 2`」 scripts/test_lumos.py:5326；引句:「`check("get.ps1 也委派 bootstrap(兩支行為一致)", "bootstrap" in ps`」 scripts/test_lumos.py:5337
+
+3. severity: major；blocking:是 — `--version` 對 vendored 副本仍把宿主專案的 Git SHA 稱為「這一份的內容指紋」。程式以 `git -C <宿主專案>` 查 SHA；複製到別的 Git 專案後得到的是該專案 commit，不是 lumos 內容。雖上一行附有警告，這個 SHA 仍不能識別目前執行的 lumos，與 CHANGELOG／RELEASING 宣稱的內容指紋用途不符。現有測試只找「只回答現在跑的這一支」文字，沒有驗證指紋來源。引句:「`這一份的內容指紋: %s 在分支 %s %s`」 scripts/lumos:106
+
+4. severity: minor；blocking:否 — RELEASING 對 detached HEAD 的現行行為描述已過期。現在 `_pull_source_or_abort` 對有 remote 且 `git pull --ff-only` 失敗會 fail-closed，`lumos update` 不會「靜默停住」，而會中止。這會讓維護者依錯誤故障模型判斷 tag 安裝。引句:「`之後 git pull 與 lumos update 會靜默停在裝機那一版`」 RELEASING.md:51
+
+補充查證：
+
+- `t_lens_timeout_keeps_warming_cache` 仍能抓到「逾時後砍背景行程」：背景行程若被殺，60 秒內不會產生 cache，測試會紅；刪掉斷言文字中的「沒被殺掉」沒有削弱 oracle。
+- get.sh 除 `set -euo pipefail` 外，具副作用的主體都在 `main()`；沒有確認到包裝遺漏。
+- 執行環境禁止建立任何暫存檔／目錄，`mktemp` 直接回 `Operation not permitted`，因此無法實跑 file:// 假 repo 的 clone；未把這部分的靜態疑點列為 finding。
+CODEX DONE

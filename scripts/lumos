@@ -103,9 +103,17 @@ def _version_text():
             branch = _sp.run(["git", "-C", str(here), "rev-parse", "--abbrev-ref", "HEAD"],
                              capture_output=True, text=True, timeout=5)
             bname = branch.stdout.strip() or "?"
-            lines.append("  這一份的內容指紋: %s 在分支 %s %s" % (sha.stdout.strip(), bname, mark))
+            # ★複製進別的專案時,這個編號是「那個專案的」,不是工具鏈的★
+            # (2026-09-07 代碼審 r1 外家席:不講清楚的話,讀的人會拿它當工具鏈版本用)
+            if is_source:
+                lines.append("  這一份的內容指紋: %s 在分支 %s %s" % (sha.stdout.strip(), bname, mark))
+            else:
+                lines.append("  所在專案的 commit: %s 在分支 %s %s" % (sha.stdout.strip(), bname, mark))
+                lines.append("  (這是**那個專案的**編號,不是工具鏈的版本;工具鏈版本只有上面那個標籤)")
+        elif is_source:
+            lines.append("  這一份沒有 git 脈絡(來源目錄不是 git 倉庫,例如從壓縮檔解出來的),只有版本標籤可講")
         else:
-            lines.append("  這一份沒有 git 脈絡(多半是被複製進專案的那一份),只有版本標籤可講")
+            lines.append("  這一份沒有 git 脈絡(被複製進來的那一份,而且所在目錄不是 git 倉庫),只有版本標籤可講")
     except Exception:
         lines.append("  這一份的內容指紋: 查不到(git 不在或這裡不是 git 倉庫)")
     lines.append("  同一台機器可能有三份不同版本的 lumos(全域指令 / 各專案複製的一份 / 全域 AI hooks),")
@@ -10591,8 +10599,14 @@ def cmd_install(force=False):
     bindir.mkdir(parents=True, exist_ok=True)
     if _IS_WIN:
         shim = bindir / "lumos.cmd"
-        # ★直譯器名稱在安裝當下偵測,不寫死 python★(2026-09-07 #7;借精簡版已審過的
-        # slim/install.py:_pick_windows_interpreter 的判斷,不另造第二套):
+        # ★直譯器名稱在安裝當下偵測,不寫死 python★(2026-09-07 #7)。
+        # ★這是「刻意複製一份 + 守衛盯著兩邊一致」,不是「呼叫既有那支」★
+        # (2026-09-07 代碼審 r1 架構席:我原本的註解寫「不另造第二套」,但程式碼其實
+        #  就是另打了一份——宣稱與事實不符)。真的不能呼叫:精簡版是獨立交付包,
+        # 這支被 vendor 進消費端專案時 slim/ 根本不在,import 必炸。所以照這個 repo
+        # 對 hook 那批的既有做法:複製一份、加一條測試盯住兩邊的候選順序與退回值一致
+        # (t_windows_interpreter_pick_matches_slim)。判斷本身借的是
+        # slim/install.py:_pick_windows_interpreter,那支的完整理由寫在它的說明裡:
         # 只有 python3.exe、沒有 python.exe 的 Windows 機器(某些官方安裝器 / 商店版)
         # 上,安裝會用 python3 跑完並印「裝好了」,但 shim 寫死呼叫 python,
         # 之後每次打 lumos 都是「'python' 不是可執行的命令」——裝完即壞,而且要等

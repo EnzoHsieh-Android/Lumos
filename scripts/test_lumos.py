@@ -5276,6 +5276,51 @@ _NOT_LUMOS_PROGRAMS = {
 _RETIRED_WORDS = ("已退場", "退場", "已撤除", "撤除", "已移除", "不存在", "已拆")
 
 
+def t_windows_interpreter_pick_matches_slim():
+    """★主線與精簡版挑 Windows 直譯器的判斷必須一致★(2026-09-07 代碼審 r1 架構席)。
+
+    為什麼是兩份而不是一份:精簡版是獨立交付包,主線的 `scripts/lumos` 會被複製進
+    消費端專案,那時 `slim/` 根本不在——import 必炸。所以照這個 repo 對 hook 那批的
+    既有做法:**複製一份,再加一條測試盯著兩邊不准漂**。
+
+    盯的是這支判斷真正會改的兩件事:候選的順序,還有兩個都找不到時退回什麼。
+    """
+    import re as _re
+    _need_src("slim/install.py")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    slim_all = (root / "slim" / "install.py").read_text(encoding="utf-8")
+    # ★要從「函式定義」那裡切,不是從第一次出現函式名的地方★:第一次出現是別的
+    # 說明段裡的引用,從那裡切出來的窗根本沒蓋到函式本體(第一版就這樣,退回值解析不到)。
+    _i = slim_all.index("def _pick_windows_interpreter")
+    slim = slim_all[_i:_i + 3000]
+    main = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    m1 = _re.search(r'for cand in \(([^)]*)\):\s*\n\s*if shutil\.which\(cand\):', slim)
+    check("精簡版那支的候選順序解析得到", bool(m1), slim[:400])
+    m2 = _re.search(r'py_cmd = next\(\(c for c in \(([^)]*)\) if _shutil\.which\(c\)\), "(\w+)"\)', main)
+    check("主線那段的候選順序解析得到", bool(m2), main[main.find('lumos.cmd'):][:400])
+    if m1 and m2:
+        check("★兩邊候選順序一樣★", m1.group(1) == m2.group(1),
+              "slim=%s main=%s" % (m1.group(1), m2.group(1)))
+        tail = _re.search(r'return "(\w+)"', slim)
+        check("精簡版的退回值解析得到", bool(tail), "找不到 return 退回值")
+        if tail:
+            check("★兩邊「都找不到時退回什麼」一樣★", tail.group(1) == m2.group(2),
+                  "slim=%s main=%s" % (tail.group(1), m2.group(2)))
+    # ★get.ps1 也算第三份★(2026-09-07 代碼審 r1 通才席+外家席都判 blocking):
+    # 它是 Windows 使用者的第一個入口,而它呼叫 lumos 那一行原本寫死 `python`——
+    # 只有 python3.exe 的機器連 bootstrap 都進不去,而那正是同一批改動宣稱要救的機器。
+    ps = _strip_comments((root / "get.ps1").read_text(encoding="utf-8"))
+    m3 = _re.search(r"foreach \(\$cand in @\(([^)]*)\)\)", ps)
+    check("get.ps1 有偵測直譯器的迴圈", bool(m3), ps[:300])
+    if m3 and m2:
+        got = tuple(x.strip().strip("'\"") for x in m3.group(1).split(","))
+        want = tuple(x.strip().strip("'\"") for x in m2.group(1).split(","))
+        check("★get.ps1 的候選順序也一樣★", got == want, "ps=%s main=%s" % (got, want))
+    bare = [ln for ln in ps.split("\n") if _re.search(r"(^|[^$\w])python\s+[\"$]", ln)]
+    check("★get.ps1 不准直接叫 python(要用偵測到的那個)★", not bare, "還在寫死: %s" % bare[:3])
+    print("  ✓ t_windows_interpreter_pick_matches_slim")
+
+
 def t_version_single_source():
     """★版本號只有一個來源,CHANGELOG 要跟它一致★(2026-09-07 #7 對外發布線)。
 
@@ -5303,6 +5348,21 @@ def t_version_single_source():
     print("  ✓ t_version_single_source")
 
 
+def _strip_comments(text, marker="#"):
+    """把整行註解拿掉——守衛要看的是「程式碼真的這樣做」,不是「註解裡提過這個字」。
+
+    (2026-09-07 代碼審 r1 外家席:第一版只數字串出現次數,於是把真正的備援邏輯整段
+    刪掉、只在註解裡留兩次 `git clone` 字樣,守衛照樣綠。)
+    """
+    out = []
+    for line in text.split("\n"):
+        st = line.strip()
+        if st.startswith(marker):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def t_release_channel_is_wired_everywhere():
     """★三個 clone 站與對外安裝網址,一律走對外線★(2026-09-07 #7)。
 
@@ -5310,31 +5370,67 @@ def t_release_channel_is_wired_everywhere():
     三個 clone 站與兩份 README 共七行安裝指令全指著 main 的當下 HEAD,
     等於陌生人 curl|bash 抓到的永遠是最新的半成品。
 
-    這條守衛驗的是**接線接上了沒**,不是「發布流程對不對」:
-    ① 三個 clone 站都要先試對外線 ② 而且都要有退回預設分支的備援
-    (release 分支還沒開的時候,冷啟動不能因此炸掉) ③ 對外安裝網址不得再指 main。
+    ★`get.sh` 那一段是真的跑起來驗的★(代碼審 r1 外家席把「只數字串」判成 major):
+    起一個只有預設分支、沒有 release 分支的本機假 repo,真的讓 get.sh 去 clone,
+    看它①有沒有印出「退回預設分支」的提醒 ②有沒有真的把東西 clone 下來
+    ③有沒有接著把工作交給 bootstrap。**這三件事一起成立才叫備援有接上。**
+
+    誠實講剩下的限制:`get.ps1` 要有 PowerShell 才跑得起來,CI 上沒有,
+    所以那一支仍是看程式碼形狀——但**先把整行註解拿掉再看**,
+    堵掉「只在註解裡留字樣」那個繞法。`cmd_bootstrap` 同理(真跑它會動到機器層)。
     """
+    import os as _os
+    import subprocess as _sp
+    import tempfile as _tf
     _need_src("get.sh", "get.ps1", "README.md")
     root = Path(GRAPHCTL).resolve().parent.parent
     sh = (root / "get.sh").read_text(encoding="utf-8")
-    ps = (root / "get.ps1").read_text(encoding="utf-8")
-    py = (root / "scripts" / "lumos").read_text(encoding="utf-8")
-    check("三個 clone 站都先試對外分支",
-          "--branch" in sh and "--branch" in ps and '"--branch"' in py,
-          "sh=%s ps=%s py=%s" % ("--branch" in sh, "--branch" in ps, '"--branch"' in py))
-    # 備援=抓不到對外線時仍然 clone 得下來(不是靜默失敗)
-    check("get.sh 有退回預設分支的備援", sh.count("git clone") >= 2, sh.count("git clone"))
-    check("get.ps1 有退回預設分支的備援", ps.count("git clone") >= 2, ps.count("git clone"))
-    check("bootstrap 內建 clone 有退回預設分支的備援", py.count('["git", "clone"') >= 1
-          and py.count('"git", "clone", "--branch"') >= 1, "看 cmd_bootstrap")
+    ps = _strip_comments((root / "get.ps1").read_text(encoding="utf-8"))
+    py = _strip_comments((root / "scripts" / "lumos").read_text(encoding="utf-8"))
+    check("另外兩個 clone 站(去掉註解之後)確實先試對外分支",
+          "--branch" in ps and '"--branch"' in py, "ps=%s py=%s" % ("--branch" in ps, '"--branch"' in py))
+    check("get.ps1(去掉註解之後)真的委派 bootstrap,不是只裝機器層",
+          "bootstrap" in ps and "install --force" not in ps, ps[:200])
+    # ★失敗要讓外層真的拿到非 0★(2026-09-07 代碼審 r1 架構席):精簡版那三支
+    # 已經審過三輪的做法是「函式 return rc、頂層設 $global:LASTEXITCODE」,
+    # 不是 throw——`irm | iex` 之下 throw 的退出碼沒被明確控制。這支要照同一套。
+    check("★get.ps1 照精簡版那套回傳退出碼(不是 throw)★",
+          "$global:LASTEXITCODE" in ps and "throw" not in ps,
+          "global=%s throw=%s" % ("$global:LASTEXITCODE" in ps, "throw" in ps))
+    check("bootstrap 內建 clone(去掉註解之後)有退回預設分支那條路",
+          py.count('"git", "clone"') >= 1 and py.count('"git", "clone", "--branch"') >= 1, "看 cmd_bootstrap")
     stale = []
     for name in ("README.md", "README.en.md", "ONBOARDING.md"):
         txt = (root / name).read_text(encoding="utf-8")
         if "/Lumos/main/get." in txt:
             stale.append(name)
     check("★對外安裝網址不得再指開發線★", not stale, "還指著 main 的: %s" % stale)
-    # get.ps1 要跟 get.sh 做同一件事:委派 bootstrap,不是只裝機器層
-    check("get.ps1 也委派 bootstrap(兩支行為一致)", "bootstrap" in ps, ps[:200])
+
+    # ── get.sh:真的跑一次(來源是本機假 repo,沒有 release 分支)──────────────
+    with _tf.TemporaryDirectory() as td:
+        tdp = Path(td)
+        src = tdp / "fake-lumos"
+        (src / "scripts").mkdir(parents=True)
+        # 假的 lumos:只把「我被叫到了」寫進檔案,不做任何真事
+        (src / "scripts" / "lumos").write_text(
+            "import sys, pathlib\n"
+            "pathlib.Path(sys.argv[0]).parent.parent.joinpath('CALLED').write_text(' '.join(sys.argv[1:]))\n",
+            encoding="utf-8")
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+            _sp.run(cmd, cwd=str(src), capture_output=True)
+        br = _sp.run(["git", "-C", str(src), "branch", "--list", "release"],
+                     capture_output=True, text=True).stdout.strip()
+        check("★前置★ 假來源真的沒有 release 分支(不然這段等於沒驗)", br == "", br)
+        dest = tdp / "home" / "lumos"
+        r = _sp.run(["bash", str(root / "get.sh")], capture_output=True, text=True,
+                    env=dict(_os.environ, LUMOS_HOME=str(dest), LUMOS_URL=str(src),
+                             HOME=str(tdp / "home")), timeout=120)
+        out = r.stdout + r.stderr
+        check("★備援★ 抓不到對外線時有講出來,不是靜默", "預設分支" in out, out[-400:])
+        check("★備援★ 還是真的把東西 clone 下來了", (dest / "scripts" / "lumos").exists(), out[-400:])
+        check("★備援★ 而且接著把工作交給 bootstrap", (dest / "CALLED").exists()
+              and "bootstrap" in (dest / "CALLED").read_text(encoding="utf-8"), out[-400:])
     print("  ✓ t_release_channel_is_wired_everywhere")
 
 
@@ -5367,12 +5463,15 @@ def t_get_sh_survives_truncated_stream():
         f.write_text(half, encoding="utf-8")
         env = dict(_os.environ, HOME=td, LUMOS_HOME=str(Path(td) / "nope"))
         r = _sp.run(["bash", str(f), "--zzz-unknown"], capture_output=True, text=True, env=env)
-        out = r.stdout + r.stderr
         # bash 對截斷的檔案會抱怨語法錯誤(收到一半的 if 沒有收尾)——那是它拒絕執行,
-        # 不算「做了事」。真正要驗的是:get.sh 自己的任何一句話都不准被跑出來。
-        did = [w for w in ("不認得", "[clone]", "✓ 完成") if w in out]
-        check("★截斷的半份不執行 get.sh 自己的任何一步★", not did,
-              "半份居然跑到了:%s|%s" % (did, out[:200]))
+        # 不算「做了事」,所以只濾掉「bash 自己講的話」(開頭是那個暫存檔路徑的行),
+        # ★其餘任何一個字都算它做了事★。
+        # (2026-09-07 代碼審 r1 通才席判 major:第一版只認三個寫死的字串,
+        #  於是往函式外插一行別的 echo,截斷後真的印出來了,守衛照樣綠。)
+        leaked = [ln for ln in (r.stdout + r.stderr).split("\n")
+                  if ln.strip() and not ln.startswith(str(f)) and "bash" not in ln.split(":")[0]]
+        check("★截斷的半份一個字都不准印(印了就代表它做了事)★", not leaked,
+              "半份居然跑到了:%s" % leaked[:5])
     print("  ✓ t_get_sh_survives_truncated_stream")
 
 
@@ -5405,11 +5504,32 @@ def t_version_flag_answers_which_copy():
     這個問題連個入口都沒有。這條驗三件:印得出版本、有內容指紋、
     而且明講「同一台機器可能有三份不同版本」——因為它真的只能回答一支。
     """
+    import os as _os
+    import shutil as _sh
     import subprocess as _sp
+    import tempfile as _tf
     out = _sp.run([sys.executable, GRAPHCTL, "--version"], capture_output=True, text=True)
     check("--version 回傳 0", out.returncode == 0, out.stdout + out.stderr)
     check("印得出版本標籤", "lumos v" in out.stdout, out.stdout[:200])
     check("★講清楚只回答現在跑的這一支★", "只回答你現在跑的這一支" in out.stdout, out.stdout[:400])
+
+    # ★被複製進別的 git 專案時,那個 commit 編號不准被講成「工具鏈的版本」★
+    # (2026-09-07 代碼審 r1 外家席:原本一律印「這一份的內容指紋」,而複製進去之後
+    #  那其實是宿主專案的編號。原本也沒有任何測試驗這件事。)
+    with _tf.TemporaryDirectory() as td:
+        vend = Path(td) / "someproject"
+        (vend / "scripts").mkdir(parents=True)
+        _sh.copy2(GRAPHCTL, vend / "scripts" / "lumos")
+        env = dict(_os.environ, HOME=td)
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+            _sp.run(cmd, cwd=str(vend), capture_output=True, env=env)
+        r2 = _sp.run([sys.executable, str(vend / "scripts" / "lumos"), "--version"],
+                     capture_output=True, text=True, cwd=str(vend), env=env)
+        check("複製進專案的那一份:也印得出來、不會炸", r2.returncode == 0, r2.stdout + r2.stderr)
+        check("★複製進專案的那一份:編號要標成「所在專案的」★",
+              "所在專案的 commit" in r2.stdout and "這一份的內容指紋" not in r2.stdout,
+              r2.stdout[:400])
     print("  ✓ t_version_flag_answers_which_copy")
 
 
@@ -11807,8 +11927,22 @@ def t_lens_timeout_keeps_warming_cache():
     # CI 上超過等它的 60 秒,於是 CI 紅——而紅的原因不是機制壞,是我拿「算多久」當開關。
     # 現在改成:範圍挑最小的(算一兩秒),**開關改用期限本身**(0.05 秒,光是把子行程
     # 生出來就不只這個數)。這樣「一定會超時」跟 repo 多大完全無關。
-    base = sha("HEAD~1") or sha("HEAD~2")
-    head = sha("HEAD")
+    #
+    # ★但範圍的兩端必須都在「主線」上★(2026-09-07 代碼審 r1 通才席判 blocker):
+    # 鏡頭只信主線可達的起點,而它認的主線是**已經推上去的**那條(main@{upstream}),
+    # 不是本地的 main。第一版拿 HEAD~1 當起點,只要本地有兩個以上還沒推的提交
+    # ——正是送審當下的狀態——起點就不在主線上,鏡頭回的是「起點不在主線」而不是逾時,
+    # 整條測試真紅,而且會被推送閘擋下,原因跟它要驗的東西毫無關係。
+    # 所以起點與終點都取主線 tip 與它的前一個:兩端一定都在主線上,範圍又一定很小。
+    ml = None
+    for cand in ("main@{upstream}", "master@{upstream}", "main", "master"):
+        if sha(cand):
+            ml = cand
+            break
+    if ml is None:
+        raise _SrcOnly("這個 clone 找不到主線分支(main/master),測不到這條路")
+    base = sha(ml + "~1")
+    head = sha(ml)
     if not base or not head:
         raise _SrcOnly("這個 repo 的歷史不夠長,測不到超時那條路")
     cpath = m._lens_cache_path(repo, base, head)
