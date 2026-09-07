@@ -14,20 +14,9 @@
 >
 > **Lumos gives a project a second set of notes for everything the code can't say, then uses checks to make sure they actually get written.**
 
-<p align="center">
-  <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="760">
-</p>
+That isn't a memory problem. **Code, as a medium, simply can't hold those things.**
 
-**Understand it** &nbsp;[What this is](#what-this-is) · [What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper)<br>
-**Is it for you** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
-**Use it** &nbsp;[Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
-**Beyond that** &nbsp;[Why this exists](#why-this-exists) · [Going deeper](#going-deeper) · [Scope](#scope) · [Licence](#licence)
-
----
-
-## What this is
-
-Code only tells you what things look like right now. Five things it can't tell you:
+Open a file and it tells you exactly one thing: what it looks like right now. On these five, it has nothing to say:
 
 - **Why** this approach — what was compared, what was rejected.
 - **Where this part ends**, and who gets hit if you change it.
@@ -35,16 +24,29 @@ Code only tells you what things look like right now. Five things it can't tell y
 - Whether this was **ever verified**, and under what assumptions.
 - Whether you can **take it back** if you get it wrong.
 
-That knowledge used to live in a senior engineer's head, and left when they did. The AI era is worse: an AI is a stranger in every conversation. What you told it last time doesn't count this time.
+Those five used to live in a senior engineer's head. While they were around you could just ask; when they left, it left with them. **The AI era is worse** — an AI arrives as a new hire in every single conversation, and what you told it last time doesn't count this time.
 
-Lumos writes those five things into a set of interlinked Markdown notes, then uses git checks (small programs that run when you commit or push) to close off the "changed the code, didn't touch the notes" path. **Not writing has to be more annoying than writing — otherwise nobody writes.**
+**Lumos writes those five things down, and makes you write them.** They become a set of interlinked Markdown notes living in the same project as the code; then git checks (small programs that run when you commit or push) close off the "changed the code, didn't touch the notes" path. **Not writing has to be more annoying than writing — otherwise nobody writes.**
 
-Two things in that diagram are worth pausing on:
+Here's roughly what that grows into — an online store, where a plan comes first, then the module, then a record of what was done:
+
+<p align="center">
+  <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="760">
+</p>
+
+Two things in this diagram are worth pausing on:
 
 - **The gold ring isn't there from the start.** The blue module appears plain; the ring and star only grow once a green verification record is linked to it — because that's the rule: **claiming "this must not change" doesn't count until real evidence is bound to it.**
 - **The orange line goes backwards.** An incident doesn't sit in a corner gathering dust; it gets wired into the next plan as required reading before anyone starts.
 
 **You don't hand-write these notes, and you don't memorise commands.** You develop the way you already do — talking to an AI as you look things up, change things, decide things. Installing injects "when to look something up, when to write it back" into Claude Code's and Codex's rule files, so **the context that settles out of those conversations gets kept, because the rules make it get kept.**
+
+---
+
+**Understand it** &nbsp;[What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper)<br>
+**Is it for you** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
+**Use it** &nbsp;[Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
+**Beyond that** &nbsp;[Why this exists](#why-this-exists) · [Going deeper](#going-deeper) · [Scope](#scope) · [Licence](#licence)
 
 ---
 
