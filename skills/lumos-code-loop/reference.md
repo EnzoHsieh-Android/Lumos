@@ -79,7 +79,7 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch
 ### 步驟 3 — 派乾淨 reviewer
 
 
-Agent tool、`model: sonnet`(連 2 次 missed 後升 opus;Codex:spawn_agent,★不能逐席指定模型★——模型由 codex 設定 `agents.default_subagent_model` 決定,升 opus 那條只在 Claude 適用)、**不告知有 canary**、指向工作副本 `/tmp/code-<topic>-rN.patch`。
+Agent tool、`model: sonnet`(連 2 次 missed 後升 opus;★Codex 可以逐席指定模型——2026-09-07 實測推翻舊說法★:席位 TOML 的 `model` / `model_reasoning_effort` 兩個欄位都有效(給用不了的模型 → 席位啟動失敗噴 400;給亂填的強度 → 明確報錯並列出支援值)。lumos 已寫兩席:`lumos_reviewer`=gpt-5.6-terra+xhigh 打底、`lumos_reviewer_max`=gpt-6-astra+xhigh 只給 tier=high。⚠ 別用「叫席位自報模型代號」驗——實測它會答錯)、**不告知有 canary**、指向工作副本 `/tmp/code-<topic>-rN.patch`。
 > ⛔ 「連 2 次 missed」升級觸發已隨 canary 停用作廢;現行觸發=引句大面積錨不到或泛泛而談,見搬入版護欄
 
 **framing(refute framing)**:
@@ -101,7 +101,7 @@ Agent tool、`model: sonnet`(連 2 次 missed 後升 opus;Codex:spawn_agent,★�
 
 
 ### 3 · 派乾淨 reviewer
-Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus;Codex:spawn_agent 不能逐席指定模型,升級靠改 `agents.default_subagent_model`)、指向工作副本。
+Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus;★Codex 側改成點名另一席★:打底 `lumos_reviewer`(terra),tier=high 點 `lumos_reviewer_max`(astra)——2026-09-07 實測席位 TOML 的 model 欄位有效,舊的「不能逐席指定模型」已作廢)、指向工作副本。
 
 **refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來會壞嗎;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席。」
 
