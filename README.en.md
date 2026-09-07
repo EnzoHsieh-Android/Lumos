@@ -83,30 +83,21 @@ That last line matters more than it looks. **Spelling out which things are rules
 
 ## How this differs from Obsidian
 
-**The note format is Obsidian-compatible — open it in Obsidian if you like**, and you don't need to install any notes app for Lumos to work. We're not trying to replace it.
+**Nothing here conflicts with Obsidian.** These are ordinary Markdown files — open and edit them in Obsidian if you like; equally, install no notes app at all and everything still works.
 
-The difference in one line: **Obsidian is for people to browse. Lumos is for an AI to query.**
+The difference is one line: **Obsidian is for people to browse. Lumos is for an AI to query.** Every difference below grows out of that one sentence.
 
-| | Notes app | Lumos |
-|---|---|---|
-| **An AI using it** | Pour files into context | **One command: ranked and compressed** |
-| **Lookup from source code** | No such concept | **Which notes it affects, which carry contracts** |
-| "This rule must not change" | Saved. Fine. | **Name the test guarding it, or go red** |
-| Code changed, notes untouched | Nobody notices | **`git commit` stops you** |
-| **Why it was decided** | Buried in prose | **Its own field: id, date, reasoning, overturned?** |
-| **A note gone stale** | Nobody knows | **Must say what invalidates it; nagged when due** |
+### An AI can't read it all, so it has to query
 
-### The one that matters most: query it, don't pour it in
-
-An AI handed an Obsidian vault can only read files into context. **This repo's notes come to 2.61 million characters** — they don't fit; and if they did, the important parts would be diluted into noise.
+An AI handed an ordinary vault can do exactly one thing: read files in. **This project's notes come to 2.67 million characters** — they don't fit, and if they did, the important parts would be diluted into noise.
 
 <p align="center">
-  <img src="assets/graph-growth.gif" alt="Lumos's own knowledge graph growing to 440 notes over three months" width="820">
+  <img src="assets/graph-growth.gif" alt="Lumos's own notes growing from a handful to four hundred over three months" width="820">
   <br>
-  <sub>Lumos's own notes over three months: 440 of them, 1,572 links. Recorded from the actual tool, not drawn.</sub>
+  <sub>Lumos's own notes over three months (440 notes and 1,572 links when this was recorded; 444 today). Recorded from the actual tool, not drawn.</sub>
 </p>
 
-Lumos lets it **issue a query** instead:
+So it works the other way round: **it issues a query and gets back a ranked, compressed answer.**
 
 ```console
 $ lumos context Systems/payment-integration --brief   # 783 chars back; the full note is 1,812
@@ -116,29 +107,42 @@ Heads up — this note carries a contract. Read it before you touch anything:
 
 **Contracts are pinned to the top.** The difference isn't "faster" — it's **fits vs. doesn't fit**.
 
-One more lookup Obsidian can't give you — a **reverse lookup from source code**:
+### It also has to work backwards
+
+You're holding a source file and you want to know which notes changing it will touch, and which of those carry rules that must not break. **That direction doesn't exist in a notes app.**
 
 <p align="center">
   <img src="assets/impact-en.svg" alt="Give it a source file and the graph works out which notes are affected and which carry contracts" width="900">
 </p>
 
-Tags are also a **structured query**, not full-text search (`lumos query --tag status/doing`). They come in families, and filters stack: "only what's still open", "only what links to this note".
+Tags follow the same logic: they're a **structured query**, not full-text search (`lumos query --tag status/doing`). They come in families, and filters stack — "only what's still open", "only what links to this note".
 
-The primary reader of these notes isn't a human — it's **the next session's AI**. So they're **designed to be queried rather than read**.
+### And four things a notes app won't keep track of for you
+
+| What you did | Notes app | Lumos |
+|---|---|---|
+| Wrote "this rule must not change" | Saved. Fine. | **Name the test guarding it** — can't, and the health check goes red |
+| Changed code, didn't touch the notes | Nobody notices | **`git commit` stops you** — write it up, or say why it isn't needed |
+| Recorded why something was decided | Buried in prose | **Its own field**: id, date, reasoning, whether it was later overturned |
+| Left a verification sitting for months | Nobody knows it went stale | You must **say up front what would invalidate it**; the health check nags when it's due |
+
+To close it in one line: **the primary reader of these notes isn't a human — it's the next session's AI.** They're built to be queried, not read.
 
 ---
 
 ## The loop that gets sharper
 
-This is where Lumos parts ways with "a really well-written document". Documents go stale. This gets a little sharper every time it runs.
+**This is where Lumos parts ways with "a really well-written document".** A document is at its most accurate the day it is finished, and only decays from there. This runs the other way: every round, the material gets a little sharper.
 
 <p align="center">
   <img src="assets/loop-en.svg" alt="The graph feeds each review; each review writes back into the graph" width="900">
 </p>
 
-The four stages run in order, and the last one is the point: what gets accounted for is written back into the graph, and becomes the next round's material.
+The four stages run in order, and the last one is the point: **what gets accounted for is written back into the graph, and becomes the next round's material.**
 
-**Notes aren't the final output; they're the next round's input.** Round one might hand a reviewer three notes; round five hands them eight — and all eight already earned their place. Same reviewers, same time budget; only the material got sharper.
+**Notes aren't the final output; they're the next round's input.** Round one might hand a reviewer three notes; round five hands them eight — and all eight earned their place in earlier rounds; nobody threw them in from memory.
+
+Same reviewers, same time budget. **The only thing that changed is the quality of what they were handed.**
 
 > **The honest limit:** what a machine can prove is *form* — that a test exists, that a rollback is written, that someone independent reviewed it, that every finding was accounted for.
 > Whether a rule still matches the business, or whether that rollback would actually run — **only a person can answer that.** Don't read "has evidence attached" as "safe".
