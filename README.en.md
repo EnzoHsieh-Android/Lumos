@@ -43,25 +43,10 @@ Two things in that diagram are worth pausing on:
 ## What's in a note
 
 <p align="center">
-  <img src="assets/graph-node-detail.jpg" alt="One note opened, showing its contract and a plain-language explanation" width="860">
-  <br>
-  <sub>The payment-integration note, opened. Lit up on the left: the notes connected to it.</sub>
+  <img src="assets/note-anatomy-en.svg" alt="The anatomy of a note: machine-read fields, summary lines, contracts with their evidence, and below the divider the part for people" width="900">
 </p>
 
-Every note opens with a few summary lines you can take in at a glance. The real thing looks like this:
-
-```
-FLOW: checkout submitted → call the gateway with order_id → sync result → async confirmation → both must agree
-KEY:★INVARIANT★ one order must never be charged twice [test:test_no_double_charge_on_retry]
-KEY:★IRREVERSIBLE★ a charge that reached the gateway can't be pulled back, only refunded [rollback:decisions]
-```
-
-Those two starred markers are the heart of the whole thing:
-
-- **★INVARIANT★ = this must not change; changing it breaks something else.**
-  A claim that heavy can't just be asserted. That `[test:...]` has to name a test that **really exists and really runs** — if it doesn't resolve, the health check goes red.
-- **★IRREVERSIBLE★ = once done, you can't take it back.**
-  Marking it obliges you to write down real rollback steps — actual commands, an actual compensating flow. "Be careful" doesn't count.
+Those two starred markers are the heart of the whole thing — **a heavy claim can't just be asserted; evidence has to hang off it**, and if it doesn't resolve, the health check goes red.
 
 So "what rules can't be touched in this project" isn't a question you ask a person. It's one command — usually one the AI runs for you:
 
@@ -301,8 +286,6 @@ What doesn't come in: your business notes, release scripts, framework choices th
 
 ## Licence
 
-[MIT](LICENSE).
+[MIT](LICENSE), covering the toolchain's own files, including the ones copied into your project.
 
-**The toolchain's own files are covered by it**, including the ones copied into your project (the main program and hooks — each carries a licence header, the main program carries the full text).
-
-**What the tool writes into your project is yours** — the discipline block in your config, the notes you write. Lumos claims no rights over them. Third-party components are listed at the end of LICENSE.
+**The notes you write are yours.** Lumos claims no rights over them.
