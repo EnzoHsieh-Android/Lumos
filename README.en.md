@@ -156,7 +156,6 @@ The four stages run in order, and the last one is the point: what gets accounted
 - **You still write most of the code by hand, or your token budget is tight.** The whole premise is that context settles out of conversations with an AI — talk to no one, and there's nothing to keep. The review loops burn tokens of their own, too.
 - You'll finish it in two weeks and throw it away.
 - It's a small solo tool you read every day and hold entirely in your head.
-- You just want a nice notes app — Obsidian is genuinely enough for that.
 
 **The cost, stated upfront:** this makes every commit take longer. What you buy is not having to do archaeology three months later. **If the project won't live three months, it doesn't pay for itself.**
 
