@@ -12739,6 +12739,57 @@ def t_runner_parses_args_strictly():
     check("參數: --list 沒有跑任何測試(輸出裡不該有結果行)",
           "passed," not in r.stdout, r.stdout[-200:])
 
+    # ★--list 要吃掉「每一道」篩選,不是只吃當時踩到的那一道★
+    # (2026-09-07,另一個 session 實測回報:`--list -k 任何字串` 都回全部,
+    #  連一個完全不存在的關鍵字也回 666 支——介面看起來支援篩選、實際不篩,
+    #  拿它去判「某支測試存不存在」會永遠得到「存在」。)
+    # ★這個 bug 修過一次卻只修了一半★:上一輪把 --list 移到「分片」後面,
+    #  關鍵字那道漏了。所以這條守衛釘的是★所有篩選的聯合效果★,不是單看關鍵字那一道
+    #  ——再加第三道篩選時,漏接一樣會翻紅。
+    _all = len(names)
+    r_k = run("--list", "-k", "t_guard_kill")
+    _nk = [l for l in r_k.stdout.splitlines() if l.startswith("t_")]
+    # ★「現場成立」與「結果正確」要拆成兩條★(代碼審 r1 架構對齊席指出,對的:
+    # Systems/測試假綠形態 有一條硬規則說這兩者要能分開失敗、分優先級——
+    # 合成一個 and 的話,翻紅時看不出是「篩選沒生效」還是「篩選篩錯」。
+    # 同一支測試函式 30 行後的既有寫法就是拆兩條的。)
+    check("★前置★ --list 真的有吃 -k(有篩掉東西)", 0 < len(_nk) < _all,
+          f"{len(_nk)}/{_all} 支")
+    check("★而且篩出來的每一支都要含那個關鍵字★",
+          all("t_guard_kill" in n for n in _nk), _nk[:5])
+    r_none = run("--list", "-k", "zzz_no_such_test_name_at_all")
+    _nn = [l for l in r_none.stdout.splitlines() if l.startswith("t_")]
+    check("★關鍵字對不到任何測試時要列 0 支★(這是「存不存在」查詢的正確答案)",
+          len(_nn) == 0, f"{len(_nn)} 支")
+    # ★rc 與訊息都要釘住★(代碼審 r1 外家否決席:不釘的話兩種語意都會綠,
+    # 將來有人把它改成 rc=1 也不會有人發現)。
+    # ★rc=0 是刻意的,而且符合這個 repo 的慣例★(架構對齊席用三個既有案例證明:
+    # search 0 筆、contracts 沒合約、loop list 空帳,三者都 return 0——
+    # loop list 的說明原文就是「唯讀恆 rc0…這是查詢不是閘」)。
+    # 會被 hook/CI 消費當「有沒有驗過」的是「真的跑」那條路,那條才回 rc=1。
+    check("★查不到不算失敗:rc 要是 0★(查詢恆 rc0 是這個 repo 的慣例,閘才非零)",
+          r_none.returncode == 0, f"rc={r_none.returncode}")
+    check("★但不准靜默:stderr 要說「沒有對到」★(查的人要分得出「沒有」和「工具沒印」)",
+          "沒有對到任何測試" in r_none.stderr, r_none.stderr[:200])
+    r_sh = run("--shard", "2/4", "--list")
+    _ns = [l for l in r_sh.stdout.splitlines() if l.startswith("t_")]
+    check("--list 要吃 --shard(上一輪修好的,不能又弄壞)",
+          0 < len(_ns) < _all, f"{len(_ns)}/{_all} 支")
+    r_both = run("--shard", "2/4", "--list", "-k", "loop")
+    _nb = [l for l in r_both.stdout.splitlines() if l.startswith("t_")]
+    # ★要比對「集合完全相等」,不是「數量比較小而且都含關鍵字」★
+    # (2026-09-07 代碼審 r1 外家否決席判 blocking,說得對):舊寫法是
+    # `len(_nb) <= len(_ns) and all("loop" in n)`——如果實作在同時帶兩個旗標時
+    # ★完全忽略分片★、只對全部 666 支篩 loop,只要含 loop 的總數不超過該片的支數,
+    # 那條斷言照樣綠。★這是裁判自證的假綠通道。★
+    # 正確的靶:從「這一片的名單」再篩 loop,兩邊必須一模一樣。
+    _expect = sorted(n for n in _ns if "loop" in n)
+    check("★兩道篩選要疊:結果必須等於「這一片的名單再篩關鍵字」★",
+          sorted(_nb) == _expect, f"實際 {len(_nb)} 支 {sorted(_nb)[:3]} / 應是 {len(_expect)} 支 {_expect[:3]}")
+    check("★而且要真的比全套篩出來的少★(否則等於沒分片,上面那條就沒有現場)",
+          len(_expect) < len([n for n in names if "loop" in n]),
+          f"這一片 {len(_expect)} 支 vs 全套 {len([n for n in names if 'loop' in n])} 支")
+
     # 直接打測試名 = -k 同義(情境錄音就是這樣敲的)。
     # ★靶要挑「不會再開子進程」的那種★:第一版我拿這支自己當靶,結果它生出自己、
     # 自己再生出自己,無限遞迴直到超時——是超時把它判紅才發現(這也順帶證明超時那道有用)。
@@ -12847,12 +12898,13 @@ def t_runner_shard_partitions_completely():
     import subprocess as _sp, os as _os, re as _re
     runner = str(Path(__file__).resolve())
 
-    def shard_names(i, n):
-        r = _sp.run([sys.executable, runner, "--shard", f"{i}/{n}", "--list"],
-                    capture_output=True, text=True, timeout=60)
-        # --list 走的是分片之前的路徑,所以改用「跑一個選不中的關鍵字」拿分到幾支
-        return r
-
+    # ★這裡原本有一支叫 shard_names 的死碼★(2026-09-07 代碼審 r1 通才席掃到,查證屬實:
+    # 從未被呼叫,實際在用的是下面的 shard_count)。刪掉它的理由不只是「沒人用」——
+    # ★它的註解寫著「--list 走的是分片之前的路徑」,而那句話現在正好是反的★:
+    # --list 早就移到分片之後,這一批又把它移到關鍵字之後。留著一句說反的話比留死碼糟。
+    # (順帶:下面 shard_count 仍用「跑一個選不中的關鍵字」讀那行「分到 N 支」,
+    #  現在 `--shard i/n --list` 也拿得到同樣的數字了,但換掉會改變這道守衛量的東西,
+    #  不在這一批的範圍內。)
     def shard_count(i, n):
         r = _sp.run([sys.executable, runner, "--shard", f"{i}/{n}", "-k", "zzz_絕不存在的名字"],
                     capture_output=True, text=True, timeout=120)
@@ -25207,12 +25259,6 @@ def main():
                 print(f"擋下:第 {_i} 片一支測試都沒分到——片數比測試數還多,或切法寫錯了;"
                       f"跑了個寂寞不算通過", file=sys.stderr)
                 return 1
-        if _args.list:
-            # ★r1 折入★:原本 --list 排在關鍵字與分片之前,所以 `--shard 2/4 --list` 會列出全部
-            # ——正好是「想確認某一片分到哪些」時最需要的資訊,卻給了錯的答案。移到篩選之後。
-            for _t in tests:
-                print(_t.__name__)
-            return 0
 
         # ★上次紅過的先跑★:配 -x 用,修完重跑幾秒就知道好了沒,不用等八分鐘。
         # ★r1 折入:排序必須在分片之後★——原本先重排再分片,而各片是獨立行程、
@@ -25248,11 +25294,27 @@ def main():
             print(f"這輪用種子 {_args.seed} 打亂了順序(要重現同一種順序就帶同一個種子)")
         if _args.keyword:
             tests = [t for t in tests if _args.keyword in t.__name__]
-            if not tests:
-                # 假綠洞修補:-k 選中 0 案例 ≠ 全綠——「跑了個寂寞」必須紅,
-                # 否則消費 rc 的一方(hook/CI 等機制)會把「沒驗」當「驗過」。
-                print(f"✗ -k '{_args.keyword}' 選中 0 個測試(t_ 名單無此子字串)——視為失敗", file=sys.stderr)
-                return 1
+        if _args.list:
+            # ★--list 要排在★所有★篩選之後★(2026-09-07,另一個 session 實測回報)。
+            # 上一次(r1)只把它移到「分片」後面,關鍵字那道漏了——於是 `--list -k 任何字串`
+            # 都回全部,連一個完全不存在的關鍵字也回 666 支。
+            # 後果不是「多印幾行」:介面看起來支援篩選、實際不篩,拿它去判「某支測試存不存在」
+            # 會永遠得到「存在」。★同一個 bug 修過一次卻只修了一半,是這一型的典型★——
+            # 修的時候要問「這道閘前面還有幾道篩選」,不是只看當時踩到的那一道。
+            for _t in tests:
+                print(_t.__name__)
+            if _args.keyword and not tests:
+                # ★列不到不等於失敗★:這是查詢不是執行,「沒有這支測試」本來就是一個
+                # 合法答案,所以 rc 維持 0(跟下面「跑了個寂寞要紅」是不同的事)。
+                # 但不能靜默——查的人要分得出「沒有」和「工具沒印」。
+                print(f"(-k '{_args.keyword}' 沒有對到任何測試)", file=sys.stderr)
+            return 0
+        if _args.keyword and not tests:
+            # 假綠洞修補:-k 選中 0 案例 ≠ 全綠——「跑了個寂寞」必須紅,
+            # 否則消費 rc 的一方(hook/CI 等機制)會把「沒驗」當「驗過」。
+            # ★這條只管「要真的跑」的路★:上面 --list 是查詢,不適用。
+            print(f"✗ -k '{_args.keyword}' 選中 0 個測試(t_ 名單無此子字串)——視為失敗", file=sys.stderr)
+            return 1
         print(f"lumos 測試({len(tests)} 案例)")
         global FAIL, SKIP
         _failed_names = []
