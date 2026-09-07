@@ -1,4 +1,6 @@
-preflight-4: ran(r1 已跑,r2 沿用;r2 材料是 r1 折入後的重寫版)
+preflight-4: ran
+
+(前掃範圍:r1 已跑,r2 沿用;r2 材料是 r1 折入後的重寫版)
 
 # design-contract-gate-timing r2 收貨留痕
 

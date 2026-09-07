@@ -1,4 +1,6 @@
-preflight-4: ran(r1 已跑;r2 材料是折入後的同一篇)
+preflight-4: ran
+
+(前掃範圍:r1 已跑;r2 材料是折入後的同一篇)
 
 # design-daily-wrapper-liveness r2 收貨留痕
 
