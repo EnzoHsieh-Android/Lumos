@@ -16260,6 +16260,189 @@ def t_search_multiword_fallback_reports_per_term_coverage():
           "逐詞覆蓋" not in r2.stderr and "多詞回退" not in r2.stderr, r2.stderr)
 
 
+def t_search_cjk_loose_fallback():
+    """★2026-09-07:沒有空白的中文查詢,退成相鄰兩字一組★(Projects/中文無空白查詢回退_計劃)。
+
+    背景:一串沒有空白的中文★結構上永遠查不到★——多詞回退要求「超過一個詞」,
+    而沒有空白就是一個詞。CLAUDE.md 第一條紀律就是在教這件事,而一條紀律存在,
+    就代表這個坑一直有人踩,踩的人是每個新 session 的 AI。
+
+    ★這條守的是六件事★:
+    ① 現場成立:沒有空白的中文查詢預設真的回 0(否則下面在測一個不存在的問題)
+    ② ★預設關★——不帶旗標時行為必須一行不變。這是整個設計的安全前提:
+       預設關的時候沒有任何呼叫端的行為改變,這點要機械可證,不是用嘴保證的。
+    ③ 帶 --cjk-loose 才救得回來
+    ④ ★不共用 --no-any★:那支旗標的語意有硬合約釘住只管多詞查詢。
+       `--no-any --cjk-loose` 一起下,字對回退仍然要動。
+    ⑤ ★fallback-only★:整串真的找得到時絕不回退(理由同多詞那條——
+       打分以候選集為語料,擴召回會擾動所有既有查詢的排序)
+    ⑥ ★字元域分兩件裁★:跑不跑回退只認漢字(假名/諺文在切詞器裡產不出字對);
+       印不印「加空白」建議照舊涵蓋日韓——統一成漢字判定會靜默拿掉日韓查詢
+       今天就有的那句提示,那是行為退步。
+
+    ★翻紅釘★:把 `_fb_kind = "chars"` 那段拿掉 → ③ 翻紅;把預設值改成開 → ② 翻紅;
+    把觸發條件改成 `any_terms and ...` → ④ 翻紅;把長度下限拿掉 → ⑥ 的短段那條翻紅;
+    把字元域放寬到假名 → ⑥ 的純假名那條翻紅。
+    """
+    import subprocess as sp, tempfile as _tf
+    import json as _j
+    from pathlib import Path as _P
+    root = _P(_tf.mkdtemp(prefix="gctl-cjkloose-"))
+    v = root / "docs" / "demo-knowledge"
+    for sub in ("Systems", "Projects"):
+        (v / sub).mkdir(parents=True, exist_ok=True)
+    def note(rel, body):
+        (v / rel).write_text("---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n" + body,
+                             encoding="utf-8")
+    # 現場:查「訂單作廢點數」——整串不存在,但「訂單」「作廢」「點數」各自散在不同篇。
+    # 這正是設計要處理的形態:概念都在圖譜裡,只是使用者黏成一串。
+    note("Systems/alpha.md", "# alpha\n這篇講訂單怎麼建立。\n")
+    note("Systems/beta.md", "# beta\n這篇講作廢的流程。\n")
+    note("Systems/gamma.md", "# gamma\n這篇講點數怎麼算。\n")
+    # 整串真的存在的一篇(⑤ 的現場)
+    note("Systems/whole.md", "# whole\n這裡有一整串發票補登流程說明。\n")
+    def lum(*a):
+        return sp.run([sys.executable, GRAPHCTL, "--vault", str(v), *a],
+                      capture_output=True, text=True)
+
+    # ① 現場成立
+    r0 = lum("search", "訂單作廢點數", "--files-only")
+    check("★前置★ 現場成立:沒有空白的中文查詢預設真的回 0",
+          ".md" not in r0.stdout, r0.stdout)
+    check("★前置★ 現場成立:那幾個概念各自查得到(不是圖譜真的沒有)",
+          all(".md" in lum("search", w, "--files-only").stdout for w in ("訂單", "作廢", "點數")),
+          "有詞單獨查也是 0,那這題測不出東西")
+
+    # ② 預設關:行為一行不變
+    # ★這裡守的是「候選集與結果不變」,不是「行為一行不變」★
+    # (代碼審 r1 外家否決席判 major,查證屬實:同一批還改了那句提示的措辭、
+    #  以及全形空白分詞時不再印它——那兩個都在預設路徑上。舊寫法把宣稱寫得
+    #  涵蓋不了自己的改動,而測試只檢查「加空白」還在,對那個宣稱沒有鑑別力。)
+    check("★預設關:候選集與結果不變(一筆都不該回)★",
+          ".md" not in r0.stdout and "放寬條件" not in r0.stderr, r0.stdout + r0.stderr)
+    r0h = lum("search", "訂單作廢點數")   # 不帶 --files-only:機器消費端本來就不印提示
+    check("預設關時,原本那句「加空白」的建議照舊要印", "加空白" in r0h.stderr, r0h.stderr[-300:])
+
+    # ③ 帶旗標才動
+    r1 = lum("search", "訂單作廢點數", "--cjk-loose", "--files-only")
+    check("★帶 --cjk-loose 才救得回來★", ".md" in r1.stdout, r1.stdout + r1.stderr[-300:])
+    check("★要明示整串一筆都沒有★(不講清楚就等於把「圖譜沒這東西」這個訊號吃掉)",
+          "一筆都沒有" in r1.stderr, r1.stderr[-400:])
+
+    # ④ 不共用 --no-any
+    r2 = lum("search", "訂單作廢點數", "--cjk-loose", "--no-any", "--files-only")
+    check("★--no-any 不准把字對回退一起關掉★(那支旗標的合約只管多詞查詢)",
+          r2.stdout == r1.stdout, f"帶 --no-any:\n{r2.stdout}\n不帶:\n{r1.stdout}")
+
+    # ⑤ fallback-only
+    r3 = lum("search", "發票補登流程", "--cjk-loose", "--files-only")
+    check("★前置★ 現場成立:整串「發票補登流程」本來就找得到",
+          "whole.md" in r3.stdout, r3.stdout)
+    check("★整串找得到就不准回退★(回退會擾動所有既有查詢的排序)",
+          "放寬條件" not in r3.stderr, r3.stderr[-300:])
+
+    # ⑥ 字元域:兩件事分開裁
+    # ★不帶 --files-only★:那是機器消費端,提示本來就不印(既有慣例)
+    rk = lum("search", "ひらがなだけのてすと", "--cjk-loose")
+    check("★純假名不跑字對回退★(切詞器根本產不出字對,跑了只生永遠 0 命中的雜訊)",
+          "放寬條件" not in rk.stderr, rk.stderr[-300:])
+    check("★但純假名照舊要拿到「加空白」的建議★"
+          "(那是跟文字系統無關的操作建議,拿掉是行為退步)",
+          "加空白" in rk.stderr, rk.stderr[-300:])
+    rh = lum("search", "한국어테스트입니다", "--cjk-loose")
+    check("純諺文同上:不回退", "放寬條件" not in rh.stderr, rh.stderr[-300:])
+    check("純諺文同上:建議照印", "加空白" in rh.stderr, rh.stderr[-300:])
+    rs = lum("search", "訂單點", "--cjk-loose", "--files-only")
+    check("★太短的漢字段不觸發★(兩三個字只切得出一兩組,一命中就爆量——"
+          "跟「單字全庫召回」是同一種病)",
+          "放寬條件" not in rs.stderr, rs.stderr[-300:])
+    rm = lum("search", "日本語のテスト訂單作廢點數", "--cjk-loose", "--files-only")
+    check("日文漢字假名混寫:只要有夠長的漢字段就回退,假名那幾段忽略",
+          "放寬條件" in rm.stderr, rm.stderr[-300:])
+
+    # 機讀三欄 + 比率
+    rj = lum("search", "訂單作廢點數", "--cjk-loose", "--json")
+    d = _j.loads(rj.stdout)
+    check("★機讀輸出要直接給整串命中數★(機器端不必去解析提示文字)",
+          d.get("phrase_hits") == 0, rj.stdout[:300])
+    check("機讀輸出要說有沒有用到回退", d.get("loose_cjk_fallback") is True, rj.stdout[:300])
+    check("機讀輸出要給每一組的覆蓋數",
+          isinstance(d.get("char_pair_coverage"), dict) and d["char_pair_coverage"], rj.stdout[:300])
+    check("★每筆結果要有「幾組裡命中幾組」★(查詢內可比;分數是以候選集為語料算的,不可跨查詢比)",
+          all("char_pairs_hit" in r and "char_pairs_total" in r for r in d["results"]),
+          rj.stdout[:300])
+    rp = lum("search", "訂單作廢點數", "--cjk-loose")
+    check("給人看的輸出也要有那個比率", "組裡命中" in rp.stdout, rp.stdout[:400])
+
+    # ★切詞只准有一份實作★(代碼審 r1 架構對齊席判 blocking;規矩寫在 _el_query_tokens
+    # 的說明裡:「重用 _rank_tokenize(禁第二份切詞實作)」)。這條用結構掃,不靠人自律。
+    _src = (_P(GRAPHCTL).resolve().parent.parent / "scripts" / "lumos").read_text(encoding="utf-8")
+    _i = _src.index("def _cjk_bigrams(")
+    _body = _src[_i:_src.index("\n\n\n", _i)]
+    check("★切字對要呼叫既有的切詞器,不准自己再切一份★",
+          "_rank_tokenize(" in _body, _body[-400:])
+    check("★而且不准留下手工滑窗的痕跡★(seg[i:i+2] 這種)",
+          "[i:i + 2]" not in _body and "[i:i+2]" not in _body, _body[-400:])
+
+    # ★--files-only 的格式不准被塞東西★(代碼審 r1 外家否決席:設計寫「每筆結果顯示比率」,
+    # 而這條路沒有——它是機器消費端,有呼叫端在解析 `節點 (數字)`。宣稱因此縮窄成
+    # 「給人看的兩種輸出有比率」,這條測試把「不准塞」釘住。)
+    rf = lum("search", "訂單作廢點數", "--cjk-loose", "--files-only")
+    check("★--files-only 是機器消費端,不准把比率塞進去★",
+          "組裡命中" not in rf.stdout, rf.stdout[:300])
+    for _ln in [x for x in rf.stdout.splitlines() if x.strip()]:
+        check("--files-only 每行仍是「節點 (數字)」的老格式",
+              _ln.rstrip().endswith(")") and ".md (" in _ln, _ln)
+        break
+
+    # ★擴充 B 以上不涵蓋,而說明文字要說到做到★(同席 minor)
+    rext = lum("search", "𠀀𠀁𠀂𠀃", "--cjk-loose")
+    check("★擴充 B 的漢字不進回退(跟排序切詞器共用同一條字元域規則,擴了會動到排序)★",
+          "放寬條件" not in rext.stderr, rext.stderr[-300:])
+    rhelp = lum("search", "--help")
+    check("★旗標說明不准說「中文」★(宣稱的範圍不得大於實際做到的;擴充 B 沒涵蓋)",
+          "漢字" in rhelp.stdout and "沒有空白的中文查不到" not in rhelp.stdout,
+          [l for l in rhelp.stdout.splitlines() if "cjk-loose" in l])
+
+    # ★長查詢要擋下來,而且要說為什麼★(代碼審 r1 通才席判 major,兩邊各自量過:
+    # 成本是 O(字對數 × 篇數 × 篇幅),本庫 441 篇實測 300 字要 5 秒、3000 字要 48 秒,
+    # 而這支旗標是給短問句用的。不做無聲截斷——那會讓人以為查完了。)
+    _long = "".join(chr(0x4e00 + i) for i in range(200))
+    rlong = lum("search", _long, "--cjk-loose")
+    check("★太長的查詢不跑放寬比對★(成本隨字對數線性長,貼一整段會像掛住)",
+          "放寬條件" not in rlong.stderr, rlong.stderr[-300:])
+    check("★而且要講清楚是「太長」不是「查不到」★(無聲截斷會讓人以為查完了)",
+          "太長" in rlong.stderr, rlong.stderr[-300:])
+
+    # ★零寬字元不准讓兩條路同時無聲失效★(同席 minor,實測:夾一個 U+200B,
+    # split() 不當它是空白(多詞回退不退),而「有沒有空白」若把它算成空白,
+    # 字對回退的閘也被擋掉——使用者拿到沉默的 0 筆,連提示都沒有。)
+    rz = lum("search", "訂單\u200b作廢點數", "--cjk-loose")
+    check("★夾了看不見的零寬字元,仍要走得到放寬比對★(不然是沉默的 0 筆)",
+          "放寬條件" in rz.stderr, rz.stderr[-300:])
+    # ★這一條咬的是另一層★:零寬字元夾在中間會把連續漢字段★切斷★,兩半都不到長度下限
+    # 就切不出任何一組。上面那條只驗得到「閘沒被擋掉」——實測拆掉切字對那一層它照樣綠,
+    # 所以要一個「兩半都太短」的現場才有鑑別力(這是本批第三次發現斷言沒咬到目標層)。
+    rz2 = lum("search", "訂單作\u200b廢點數", "--cjk-loose")
+    check("★零寬字元把漢字段切成兩個太短的半段時,也要能切出組★",
+          "放寬條件" in rz2.stderr, rz2.stderr[-300:])
+
+    # ★同一個建議不准印兩次★(同席 minor:字對回退觸發但每組覆蓋都 0 時,
+    # 結果是 0 筆,於是「加空白」那句又被印一次,連指令範例都一模一樣。)
+    rdup = lum("search", "龘靐齉爩鬱麤", "--cjk-loose")
+    check("★「加空白」的建議最多印一次★", rdup.stderr.count("加空白") <= 1,
+          f"印了 {rdup.stderr.count('加空白')} 次\n{rdup.stderr[-400:]}")
+
+    # 順手修的既有洞:全形空白
+    rw = lum("search", "訂單　作廢　點數")
+    check("★全形空白分詞的查詢,不准同時說「已經分詞查過」又說「你沒有空白」★"
+          "(這兩行互相矛盾;不是本案造成的,但既然動同一個判準就順手修)",
+          not ("多詞回退" in rw.stderr and "沒有空白" in rw.stderr), rw.stderr[-400:])
+    import shutil as _sh
+    _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_search_cjk_loose_fallback")
+
+
 def t_search_multiword_fallback_is_default_and_only_on_zero():
     """★2026-08-02:多詞查詢回退(Projects/檢索多詞回退_計劃 M1)★。
 

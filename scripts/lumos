@@ -2455,25 +2455,122 @@ def _search_visible_lines(lines, include_code):
         yield _no, ln, (ln if include_code else INLINE_CODE_RE.sub("", ln))
 
 
-def _cjk_nospace_hint(term, hits, regex=False):
-    """中文黏成一串沒斷詞就幾乎必定 0 筆(Landmark 2026-08-11 實測 8 句 3 句 0 筆):整串當片語比對,
-    整串找不到才退成各詞分開找,而一串中文沒有「各詞」可退。0 命中且查詢含 ≥4 個中日韓字、沒有空白 → 提示。"""
-    if hits or regex:
+# ★字對回退的觸發下限(暫用值,還沒校準)★:只有「連續漢字段長度 ≥ 這個數」才拿它切字對。
+# 4 個字 = 3 個字對,跟既有那句提示的觸發條件同一個數,不是另外拍的。
+# ★這個數還沒有實測依據★——計劃 [S2] 明寫門檻要在對照組裡定,而對照組要等這支能跑才組得出
+# 候選池(這就是為什麼實作排在量測前面)。目前預設關,所以拍錯也不影響任何人。
+# REVISIT:2026-10-14 用 [S2] 那套獨立評測校準這個數,連同查詢長度一起看(短查詢與長問句
+# 的風險不同,實測四個漢字三題有兩題仍正確回 0,真正的風險在長問句)。
+_CJK_LOOSE_MIN_RUN = 4
+# ★字對數上限★(2026-09-07 代碼審 r1 通才席判 major,兩邊各自量過):
+# 這條回退的成本是 O(字對數 × 篇數 × 篇幅)——預檢對每個字對、每篇筆記做一次子字串比對,
+# 主迴圈再對每一行比一次。本庫 441 篇實測(我自己量的,通才席另外量到同一個量級):
+#   10 字 0.55s / 30 字 0.87s / 50 字 1.18s / 100 字 1.94s / 300 字 5.13s(通才席量到 3000 字 47.9s)
+# 這支旗標是給「自然問句」用的,而貼一整段文字進來看起來就是掛住了。
+# ★不做無聲截斷★(那會讓人以為查完了):超過上限就不跑回退,並且講清楚為什麼。
+# 50 這個數是照上面那條曲線挑的——約 1.2 秒,還在「等一下」而不是「卡住了」的區間。
+_CJK_LOOSE_MAX_PAIRS = 50
+
+
+def _strip_zero_width(s):
+    """拿掉肉眼看不見的零寬字元(常見於手機輸入法與網頁複製貼上)。
+
+    ★為什麼需要★(2026-09-07 代碼審 r1 通才席實測):一串中文裡夾一個 U+200B 時,
+    Python 的 split() 不把它當空白(所以多詞回退不會退),而「有沒有空白」的判斷
+    如果把它算成空白,字對回退的閘又會被擋掉——★兩條路同時失效,而且完全沒有訊息★,
+    使用者拿到的是沉默的 0 筆。它也會把連續漢字段切斷,讓字對切不出來。
+    """
+    return re.sub(r"[\u200b-\u200f\ufeff]", "", s or "")
+
+
+def _cjk_bigrams(term):
+    """把查詢裡的★連續漢字段★切成相鄰兩字一組:「檢索優化」→ 檢索 / 索優 / 優化。去重保序。
+
+    ★這支是單一真相★:預檢、主迴圈、提示、測試都用它,不要各自再切一份。
+    這個檔案裡記著兩次真事故,都是「同一個問題長出第二份獨立實作」造成的——
+    預檢自己剝一份程式碼圍欄而跟主迴圈分岔,結果是幽靈連結邊、以及逐詞覆蓋虛報非零。
+
+    ★字元域只認漢字(基本區 + 擴充 A),跟排序切詞器同源★:假名與諺文在那支切詞器裡
+    根本產不出字對,放進來只會生出永遠 0 命中的雜訊。日文漢字假名混寫只取漢字那幾段。
+    ★擴充 B 以上不涵蓋★(2026-09-07 代碼審 r1 外家否決席指出,實測屬實:「𠀀𠀁𠀂𠀃」
+    不進回退)。不擴的理由:這支跟排序切詞器共用同一條字元域規則,擴了會一起改動排序的
+    切詞行為,那是另一件事、要另外量。★所以旗標的說明文字改成「漢字(基本區與擴充 A)」,
+    不要說「中文」——宣稱的範圍不得大於實際做到的範圍,這條在這支檔案裡被抓到過三次。★
+    REVISIT:2026-11-14 跟「要不要翻預設」一起看要不要擴字元域(人名、古籍、異體字會用到)。
+
+    ★為什麼要有長度下限★:比照鄰居那三道濾網(丟純數字、丟單字、丟可拆分的複合詞)——
+    那三道是實測逼出來的,不是防禦性寫法(「2026」命中 381/385 等於全庫召回,
+    單一常見漢字同病)。字對天生長度 2、非 ASCII、不含連字號,所以純數字與可拆分那兩道
+    對它是空的;真正會咬到的是★短漢字段★,而它就是「單字全庫召回」的同一種病:
+    兩個字的段只切得出一個字對,那個字對很可能是個常見詞,一命中就爆量。
+    所以只有長度 ≥ _CJK_LOOSE_MIN_RUN 的段才拿來切——這一條同時當觸發門檻用,
+    不另立第二個判準(兩個判準各寫一份,就是上面那兩次事故的形狀)。
+    """
+    out, seen = [], set()
+    for m in _RANK_CJK_RE.finditer(_strip_zero_width(nfc(term or "").lower())):
+        seg = m.group(0)
+        if len(seg) < _CJK_LOOSE_MIN_RUN:
+            continue
+        # ★切詞交給 _rank_tokenize,不自己再切一份★
+        # (2026-09-07 代碼審 r1 架構對齊席判 blocking,查證屬實:這個 repo 有明文規矩,
+        #  寫在 _el_query_tokens 的說明裡——「重用 _rank_tokenize(禁第二份切詞實作)」。
+        #  第一版我只借了那條字元域的規則,切的迴圈自己重寫一遍,等於違反同一條家規,
+        #  而我在這支函式的說明裡才剛寫完「同一個問題長出第二份實作付過兩次學費」。
+        #  ★那個警告我只用來提醒未來的呼叫端,沒有拿來檢查自己這一步。★
+        #  實測十題(含日文混寫、ASCII 夾雜、空字串、重複字)兩種寫法輸出完全一致。)
+        # 這裡傳進去的一定是「單一連續漢字段」,所以它只會吐這一段的字對。
+        for bg in _rank_tokenize(seg):
+            if bg not in seen:
+                seen.add(bg)
+                out.append(bg)
+    return out
+
+
+# ★「有沒有空白」要認全形★(2026-09-07 全 repo 審視 #22 順手修的既有洞)。
+# 修之前:用全形空白分詞的查詢會同時收到兩行互相矛盾的訊息——多詞回退說「已經照規矩
+# 分詞查過」,下一行的提示又說「你查的是一串沒有空白的中文,請加空白」。
+# 這個洞不是本案造成的,但既然要動同一個判準,順手修掉。
+# ★零寬字元不算空白★:它不是分詞意圖,而且 Python 的 split() 也不把它當空白——
+# 算進來會讓多詞回退與字對回退同時失效且無聲(見 _strip_zero_width)。
+# ★誠實記一句★:呼叫端都會先跑 _strip_zero_width,所以這一改目前★量不到行為差別★
+# (翻紅釘實測:只拆這一改,測試照樣全綠)。留著是因為這條規則本身就該是對的
+# ——「零寬字元是空白」在任何讀者眼裡都是錯的判斷,而且哪天有人拿掉前面那道剝除,
+# 這裡是最後一道。不是死碼,是語意正確且目前被前一道遮住。
+_ANY_SPACE_RE = re.compile(r"\s|[\u3000\u00a0\u2000-\u200a]")
+
+
+def _cjk_nospace_hint(term, hits, regex=False, already_advised=False):
+    """黏成一串沒斷開就幾乎必定 0 筆(Landmark 2026-08-11 實測 8 句 3 句 0 筆):整串當片語比對,
+    整串找不到才退成各詞分開找,而黏成一串沒有「各詞」可退。0 命中且查詢含 ≥4 個中日韓字、沒有空白 → 提示。
+
+    ★字元域刻意比字對回退寬★(2026-09-07 全 repo 審視 #22,[S6] 兩件事分開裁):
+    「要不要跑字對回退」只認漢字(假名與諺文在切詞器裡根本產不出字對);
+    但「要不要建議加空白」對日韓查詢一樣有用——那是跟文字系統無關的操作建議,
+    統一成漢字判定會靜默拿掉日韓查詢今天就有的這句提示,那是行為退步。
+    所以這裡照舊認中日韓,★只是訊息不再說「中文」★(說了對日韓查詢就是錯的)。
+    """
+    # ★同一個建議不准印兩次★(2026-09-07 代碼審 r1 通才席實測):字對回退觸發、
+    # 而每一組覆蓋都是 0 時,結果會是 0 筆——於是這一句又被呼叫一次,印出跟前面
+    # 一模一樣的「加空白」建議與一模一樣的指令範例。不是矛盾,是囉唆,而這一批
+    # 本來就在收斂訊息品質。呼叫端已經講過就不再講。
+    if hits or regex or already_advised:
         return None
-    t = (term or "").strip()
-    if " " in t or len(t) < 4:
+    t = _strip_zero_width(term or "").strip()
+    # ★空白要認全形★:修之前,用全形空白分詞的查詢會同時收到兩行互相矛盾的訊息——
+    # 多詞回退說「已經照規矩分詞查過」,這一句又說「你查的是一串沒有空白的中文,請加空白」。
+    if _ANY_SPACE_RE.search(t) or len(t) < 4:
         return None
     cjk = sum(1 for ch in t if "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff" or "\uac00" <= ch <= "\ud7af")
     if cjk < 4:
         return None
-    return ("提醒:0 筆,而且你查的是一串沒有空白的中文。搜尋會先把整串當片語比對,整串找不到才退成各詞分開找——"
-            "一串中文沒有「各詞」可退,所以自然問句幾乎必定 0 筆。把概念之間加空白再查一次,例如「作廢訂單點數怎麼收回」改成:\n"
+    return ("提醒:0 筆,而且你查的是黏成一串、中間沒有空白的字。搜尋會先把整串當片語比對,整串找不到才退成各詞分開找——"
+            "黏成一串就沒有「各詞」可退,所以自然問句幾乎必定 0 筆。把概念之間加空白再查一次,例如「作廢訂單點數怎麼收回」改成:\n"
             "    lumos search \"作廢 收回 點數\"")
 
 
 def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, include_code=False,
                ranked=False, top=20, as_json=False, include_superseded=False,
-               any_terms=True):
+               any_terms=True, cjk_loose=False):
     """全文搜尋(frontmatter + body)。預設大小寫不敏感 substring;--regex 用正則。
     預設**排除 fenced code 區塊 + inline code**(對齊 doctor 連結抽取的慣例,--code 才含);
     context 標記命中區域(★INVARIANT★/KEY/fm:欄位/body)。職責=自由文字;結構化查詢走
@@ -2507,6 +2604,38 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     #   預檢誤判成「找得到」時只是不回退(維持現況),不會造成錯誤召回。
     _fb_terms = [t for t in nfc(term).lower().split() if t] if not regex else []
     _fb_used = False
+    # ★沒有空白的中文:把回退用的那組詞換成相鄰兩字一組★(2026-09-07 全 repo 審視 #22)
+    # 問題:一串沒有空白的中文★結構上永遠查不到★——下面那道回退要求「超過一個詞」,
+    # 而沒有空白就是一個詞。CLAUDE.md 第一條紀律就是在教這件事,而一條紀律存在,
+    # 就代表這個坑一直有人踩,踩的人是每個新 session 的 AI。
+    # ★做法是「換掉回退時用哪一組詞」,不是新開一支候選收集器★(設計 [S3],r2 兩席都建議):
+    #   下面那個預檢與主迴圈已經把路徑篩選、可見文字判定、命中行標記、排除作廢節點、
+    #   隱藏筆數、三種輸出次序全部綁在一起。抽第二份出來 = 這支檔案已經付過兩次學費的
+    #   那個形狀(同一個問題長出第二份獨立實作 → 幽靈連結邊 + 逐詞覆蓋虛報非零)。
+    # ★預設關★(設計 [S5]):量測完才裁預設,而量測要等這支能跑才組得出候選池。
+    # ★訂正一句我自己寫太大的宣稱★(2026-09-07 代碼審 r1 外家否決席判 major,查證屬實):
+    #   第一版寫「預設關的時候沒有任何呼叫端的行為改變」——**那句話是假的**。
+    #   同一批還改了下面那句「加空白」提示,而它在預設路徑上:
+    #     ①措辭改了(不再說「中文」,因為對日韓查詢是錯的)
+    #     ②全形空白分詞且 0 命中時★不再印★(那是刻意修掉的矛盾訊息)
+    #   精確版本是:★候選集與結果不變,變的只有那句提示★。
+    #   用固定語料實測過(三篇假筆記、五種查詢):輸出唯一的差異就是提示措辭那兩行,
+    #   結果行一字不差。★不要用「行為一行不變」這種涵蓋不了自己改動的說法。★
+    # ★不共用 --no-any★:那支旗標的語意有硬合約釘住只管「多詞查詢」,共用等於在沒走
+    #   合約更新流程的情況下改寫合約範圍;而且使用者可能想單獨關這一支、保留多詞回退。
+    _fb_kind = "words"
+    if cjk_loose and (not regex) and len(_fb_terms) == 1 \
+            and not _ANY_SPACE_RE.search(_strip_zero_width(term or "")):
+        _bg = _cjk_bigrams(term)
+        if len(_bg) > _CJK_LOOSE_MAX_PAIRS:
+            print(f"(這串太長了:切出 {len(_bg)} 組相鄰兩字,超過 {_CJK_LOOSE_MAX_PAIRS} 組就不跑放寬比對——"
+                  f"組數乘上筆記數,會慢到像掛住。放寬比對是給短問句用的。\n"
+                  "  改成幾個關鍵詞加空白會又快又準,例如:\n"
+                  '    lumos search "作廢 收回 點數"', file=sys.stderr)
+        elif _bg:
+            _fb_terms = _bg
+            _fb_kind = "chars"
+    _bg_note_cov = {}   # 字對回退時:節點 → 這篇命中了哪幾組(算「幾組裡命中幾組」用)
     # ★2026-08-03 起為預設(人裁)★——`--no-any` 逃生。翻預設的證據
     # (Projects/檢索多詞回退_計劃 M4):
     #   ①現況是「每個現實多詞查詢都回 0」(Landmark 284 篇 10/10、本庫快照 10/10)
@@ -2516,7 +2645,7 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     #   ④M1.5 逐詞覆蓋已把「查無」訊號還回來 ⑤查無任何機器消費端依賴「回 0」語意
     # ★誠實邊界★:pooling bias(候選池半數來自回退自己的 top-10)、n=10、單一快照。
     _fb_cov = {}        # M1.5:逐詞覆蓋(term -> 命中篇數);只在回退真的觸發時才印
-    if any_terms and (not regex) and len(_fb_terms) > 1:
+    if (any_terms or _fb_kind == "chars") and (not regex) and len(_fb_terms) > 1:
         _fb_seen = False
         for _r in sorted(env.notes):
             if path_prefix and not _r.startswith(path_prefix):
@@ -2580,11 +2709,45 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             _sc.append("未作廢的節點" if not include_superseded else "全部節點")
             _sc.append("(含程式碼區塊)" if include_code else "的可見文字")
             _scope_txt = "".join(_sc)
-            print(f"(多詞回退:你查的整串詞在{_scope_txt}裡找不到完全一致的,改成每個詞分開查、有出現就算;"
-                  f"逐詞覆蓋 {_cov_txt})", file=sys.stderr)
-            if any(_fb_cov.get(t, 0) == 0 for t in _fb_terms):
-                print(f"  提醒:標 ★ 的那個詞在{_scope_txt}裡 0 命中——多半是你用的詞跟圖譜裡的說法不一樣,"
-                      "不代表圖譜沒記這件事;先換個說法再查一次", file=sys.stderr)
+            if _fb_kind == "chars":
+                # ★三段式,而且不准用行話★(設計 [S7];「字對召回」對使用者是沒解釋過的詞):
+                # 發生什麼 → 為什麼該在意 → 指令獨立一行。
+                # ★第一層訊號:永遠明示整串是 0★(設計 [S4])。回退之後結果不會是 0,
+                # 使用者永遠拿得到看起來合理的東西——不講清楚整串其實一筆都沒有,
+                # 就等於把「這個概念圖譜裡沒有」這個訊號吃掉了。
+                print(f"(整串「{term}」在{_scope_txt}裡一筆都沒有。以下是放寬條件找到的:"
+                      f"把它切成相鄰兩字一組去比對,所以命中可能只是字面重疊、跟你要找的事情無關。\n"
+                      f"  每一組各自命中幾篇:{_cov_txt})", file=sys.stderr)
+                print("  查得更準的做法是概念之間加空白,例如:\n"
+                      '    lumos search "作廢 收回 點數"', file=sys.stderr)
+                if any(_fb_cov.get(t, 0) == 0 for t in _fb_terms):
+                    # ★誠實記一個彆扭★(設計 [S4]):零命中標記會落在切割產生的無意義組合上
+                    # (「銀行貸款利率」切出來的「行貸」「款利」本來就不該有命中),
+                    # 所以那些星號看起來像「這個概念圖譜沒有」,其實只是切割的雜訊。
+                    print("  標 ★ 的那幾組 0 命中——但切出來的組合本來就有一半不是真的詞"
+                          "(「銀行貸款」會切出「行貸」),所以這裡的 0 不代表圖譜沒記",
+                          file=sys.stderr)
+            else:
+                print(f"(多詞回退:你查的整串詞在{_scope_txt}裡找不到完全一致的,改成每個詞分開查、有出現就算;"
+                      f"逐詞覆蓋 {_cov_txt})", file=sys.stderr)
+                if any(_fb_cov.get(t, 0) == 0 for t in _fb_terms):
+                    print(f"  提醒:標 ★ 的那個詞在{_scope_txt}裡 0 命中——多半是你用的詞跟圖譜裡的說法不一樣,"
+                          "不代表圖譜沒記這件事;先換個說法再查一次", file=sys.stderr)
+    def _bg_ratio(rel):
+        """字對回退時,這一筆「幾組裡命中幾組」。沒走字對回退就回空字串。
+        ★不用行話★(設計 [S7]):對使用者講「組」,不講「字對」「bigram」。
+
+        ★涵蓋範圍要講清楚★(2026-09-07 代碼審 r1 外家否決席判 minor,屬實):
+        設計寫「每筆結果顯示比率」,而 `--files-only` 那條路★沒有★——它是機器消費端,
+        輸出格式是 `節點 (命中行數)`,有呼叫端在解析,塞一段中文進去會打壞它們。
+        所以精確版本是:**給人看的兩種輸出(排序後、字母序)有比率;`--files-only`
+        格式不動,比率改走 `--json` 的 char_pairs_hit / char_pairs_total 兩個欄位**。
+        這跟這支檔案既有的慣例一致(提示一律走 stderr,不污染 stdout)。"""
+        if not (_fb_used and _fb_kind == "chars"):
+            return ""
+        _n = len(_bg_note_cov.get(rel, ()))
+        return f"  ({len(_fb_terms)} 組裡命中 {_n} 組)"
+
     if ranked and regex:
         print("(--regex 模式不做相關性排序,照舊順序輸出)", file=sys.stderr)
         ranked = False
@@ -2607,9 +2770,19 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
                     fm_end = i + 1
                     break
         hits = []
+        _seen_bg = set()
         for _no, ln, probe in _search_visible_lines(lines, include_code):
             if matches(probe):
                 hits.append((_no, ln))
+                if _fb_used and _fb_kind == "chars":
+                    # ★第三層訊號:每筆結果「幾組裡命中幾組」★(設計 [S4])。
+                    # 為什麼用比率不用分數:分數是以★每次的候選集★當語料算出來的,
+                    # 絕對值不能跨查詢比(21 個候選的 2.02 跟 1 個候選的 0.31 不同語料);
+                    # 鄰居那案已經因為同一個理由刪掉過分數門檻。比率是★查詢內可比★的。
+                    _lp = nfc(probe).lower()
+                    for _b in _fb_terms:
+                        if _b in _lp:
+                            _seen_bg.add(_b)
         if not hits:
             continue
         # 真遺忘濾網(★插點=命中確認後、三路分岔前):預設藏 superseded,--include-superseded 逃生。
@@ -2619,6 +2792,8 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
             continue
         total_files += 1
         total_hits += len(hits)
+        if _fb_used and _fb_kind == "chars":
+            _bg_note_cov[rel] = _seen_bg
         if ranked:
             _cand_hits[rel] = len(hits)
             _cand_detail[rel] = (hits, fm_end)
@@ -2626,7 +2801,7 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
         if files_only:
             print(f"{rel} ({len(hits)})")
             continue
-        print(f"{rel}")
+        print(f"{rel}{_bg_ratio(rel)}")
         for lineno, ln in hits[:8]:
             s = ln.strip()
             tag = _search_region(lineno, ln, fm_end)
@@ -2646,15 +2821,24 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
         if as_json:
             results = [{"node": rel, "score": score, "hits": hits, "match_lines": _cand_hits[rel]}
                        for rel, score, hits in scored]
-            print(_json.dumps({"results": results, "candidates": len(_cand_hits),
-                               "hidden_superseded": hidden_superseded},
-                              ensure_ascii=False))
+            # ★機器端不必去解析提示文字★(設計 [S4] 第 4 點):三個欄位直接給。
+            # phrase_hits 恆為 0 是重點——它就是「整串一筆都沒有」那個被回退吃掉的訊號。
+            _payload = {"results": results, "candidates": len(_cand_hits),
+                        "hidden_superseded": hidden_superseded}
+            if _fb_used and _fb_kind == "chars":
+                _payload["phrase_hits"] = 0
+                _payload["loose_cjk_fallback"] = True
+                _payload["char_pair_coverage"] = {t: _fb_cov.get(t, 0) for t in _fb_terms}
+                for _r in _payload["results"]:
+                    _r["char_pairs_hit"] = len(_bg_note_cov.get(_r["node"], ()))
+                    _r["char_pairs_total"] = len(_fb_terms)
+            print(_json.dumps(_payload, ensure_ascii=False))
         elif files_only:
             for rel, score, _h in scored:
                 print(f"{rel} ({_cand_hits[rel]})")
         else:
             for rel, score, toks in scored:
-                print(f"{score:7.3f}  {rel}  [{','.join(toks[:5])}]")
+                print(f"{score:7.3f}  {rel}  [{','.join(toks[:5])}]{_bg_ratio(rel)}")
                 d_hits, d_fm = _cand_detail.get(rel, ([], 0))
                 for lineno, ln in d_hits[:8]:
                     s = ln.strip()
@@ -2669,7 +2853,8 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
         # 是實證過的失效模式(金鑰明明在節點第 64 行,靠摘要判成「沒有」)。有命中就提醒一句,
         # 走 stderr 與逐詞覆蓋同慣例;--json/--files-only 不印(機器消費端)。
         if not scored and not as_json and not files_only:
-            _h = _cjk_nospace_hint(term, 0, regex)
+            _h = _cjk_nospace_hint(term, 0, regex,
+                                   already_advised=(_fb_used and _fb_kind == "chars"))
             if _h:
                 print(_h, file=sys.stderr)
         if scored and not as_json and not files_only:
@@ -2680,7 +2865,8 @@ def cmd_search(env, term, path_prefix=None, regex=False, files_only=False, inclu
     if not include_code:
         suffix += " [已排除 code block,--code 可含]"
     print(f"\n{total_hits} 處 / {total_files} 篇{suffix}")
-    _h = _cjk_nospace_hint(term, total_files, regex)
+    _h = _cjk_nospace_hint(term, total_files, regex,
+                           already_advised=(_fb_used and _fb_kind == "chars"))
     if _h and not files_only:
         print(_h, file=sys.stderr)
     if total_files and not files_only:
@@ -19892,6 +20078,10 @@ def main():
                    help="多詞回退(2026-08-03 起已是預設,旗標保留相容)")
     p.add_argument("--no-any", action="store_true", dest="search_no_any",
                    help="關閉多詞回退:整串片語找不到就回 0,不退成各詞 OR 召回")
+    # ★獨立旗標,不共用 --no-any★(設計 [S5]):那支的語意有硬合約釘住只管多詞查詢。
+    # 預設關——量測完才裁預設,而量測要等這支能跑才組得出候選池([S1] 的順序)。
+    p.add_argument("--cjk-loose", action="store_true", dest="search_cjk_loose",
+                   help="一串沒有空白的漢字查不到時,退成相鄰兩字一組去找(只認基本區與擴充 A;結果會比較雜;預設關)")
     p.add_argument("--legacy", action="store_true", dest="search_legacy",
                    help="舊行為:字母序+全量輸出(轉正前預設;--regex 自動走此路)")
     p.add_argument("--top", type=int, default=0, help="相關性排序輸出上限(0=全量,預設;圖譜先行不靜默截斷)")
@@ -20400,7 +20590,8 @@ def main():
                           regex=args.regex, files_only=args.files_only,
                           include_code=args.code, ranked=_use_ranked, top=args.top,
                           as_json=args.search_json, include_superseded=args.include_superseded,
-                          any_terms=not args.search_no_any)
+                          any_terms=not args.search_no_any,
+                          cjk_loose=args.search_cjk_loose)
 
     if args.cmd == "contracts":
         rel = None
