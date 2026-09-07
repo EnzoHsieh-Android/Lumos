@@ -29951,6 +29951,74 @@ def t_daily_wrapper_health_write_failure_is_a_failure():
     print("  ✓ t_daily_wrapper_health_write_failure_is_a_failure")
 
 
+def t_wrapper_watchdog_no_health_but_wrapper_ran():
+    """★健康檔不在時,不准直接斷言「從來沒跑完過」——先問 wrapper 自己的紀錄檔★(2026-09-08)。
+
+    真的講錯過:健康檔不存在,看門狗每天喊一次「這台機器上的 wrapper 從來沒跑完過」,
+    而 wrapper 自己的紀錄檔裡前一天和當天都白紙黑字寫著「完成」。
+    成因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
+    ★這支看門狗只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
+
+    現在:健康檔不在 → 去讀 wrapper 的紀錄檔。最近有跑完就換句話講(仍然要喊,
+    因為那代表看門狗是瞎的),完全找不到才說「從來沒跑完過」。
+    紀錄檔也不在的話退回原本判斷——第二個來源缺席不能讓警報消失。
+    """
+    import shutil as _sh, subprocess as _sp, tempfile as _tf, datetime as _dt
+    _need_src("governance/wrapper-watchdog.sh")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    root = Path(_tf.mkdtemp(prefix="gctl-wdlog-"))
+    try:
+        g = root / "governance"; (g / "logs").mkdir(parents=True)
+        wd = g / "wrapper-watchdog.sh"
+        wd.write_text((repo / "governance" / "wrapper-watchdog.sh").read_text(encoding="utf-8"),
+                      encoding="utf-8")
+        wlog = g / "logs" / "daily-wrapper.log"
+        st = g / ".wrapper-watchdog-state"
+
+        def _run():
+            st.unlink(missing_ok=True)
+            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+
+        def _stamp(h):
+            return (_dt.datetime.now() - _dt.timedelta(hours=h)).strftime("%Y-%m-%d %H:%M:%S")
+
+        # ① 沒有健康檔、也沒有紀錄檔 → 維持原本那句(第二個來源缺席不改變結論)
+        r = _run()
+        check("★沒有健康檔又沒有紀錄檔 → 還是要說「從來沒跑完過」★",
+              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+
+        # ② 沒有健康檔,但紀錄檔說兩小時前才跑完 → 不准說「從來沒跑完過」
+        # ★時間戳只算一次★:算兩次的話跨秒就對不上,那是測試自己的時序 bug(踩過)
+        fin2 = _stamp(2)
+        wlog.write_text("[%s] daily-governance wrapper 開始\n"
+                        "[%s] daily-governance wrapper 完成\n" % (_stamp(2.2), fin2),
+                        encoding="utf-8")
+        r = _run()
+        check("★紀錄檔說最近才跑完 → 不准講「從來沒跑完過」★",
+              "從來沒跑完過" not in r.stdout, r.stdout + r.stderr)
+        check("★要改講「有在跑,但沒留下健康狀態檔」★",
+              "有在跑" in r.stdout and "健康狀態檔" in r.stdout, r.stdout + r.stderr)
+        check("★而且要把紀錄檔上那個時間講出來(人才查得下去)★",
+              fin2 in r.stdout, r.stdout)
+        check("★這個狀態仍然要喊★(看門狗瞎了值得知道一次,只是不能講假話)",
+              r.stdout.strip() != "", "什麼都沒印=這個狀態被靜默吞掉了")
+
+        # ③ 紀錄檔上最後一次跑完已經很久 → 回到「從來沒跑完過」
+        wlog.write_text("[%s] daily-governance wrapper 完成\n" % _stamp(80), encoding="utf-8")
+        r = _run()
+        check("★紀錄檔上最後一次已經超過門檻 → 照樣說「從來沒跑完過」★",
+              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+
+        # ④ 紀錄檔有內容但沒有任何「完成」→ 不能被誤讀成跑完過
+        wlog.write_text("[%s] daily-governance wrapper 開始\n"
+                        "[%s] 治理日報 段結束 rc=0\n" % (_stamp(1), _stamp(0.9)), encoding="utf-8")
+        r = _run()
+        check("★只有「開始」沒有「完成」→ 不算跑完★",
+              "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+
+
 def t_wrapper_watchdog_states():
     """★看門狗四種輸入各自要講對話★(2026-09-07 代碼審 r1 四席各自實測)。
 

@@ -47,9 +47,11 @@ status() {
 # OS 逼你放那裡的(LaunchAgents 的 plist),以及安裝器做 symlink / 改設定檔——
 # 從來沒有在家目錄底下自建二進位或 bundle。第一版放 ~/Library/Application Support/,
 # 是在版控管不到、也不是 OS 強制的地方開了第二種存放法。
-# 尾巴的 .v2 是刻意的:見下面 build_notifier 的第③點(通知中心會快取圖示,
+# 尾巴的版本號是刻意的:見下面 build_notifier 的第③點(通知中心會快取圖示,
+# 2026-09-08 從 .v2 進到 .v3:重建過一次之後圖示在通知上不見了,而 app 裡的 icns
+# 檔渲染出來是對的、簽章也有效——所以是快取,不是檔案。換號是唯一逼它重讀的辦法。
 # 換識別碼是唯一逼它重讀的辦法)。圖示邏輯以後再動,這個號要往上加。
-NOTIFIER_ID="com.enzo.lumos.watchdog-notifier.v2"
+NOTIFIER_ID="com.enzo.lumos.watchdog-notifier.v3"
 NOTIFIER_DIR="$DIR/.notifier"
 NOTIFIER="$NOTIFIER_DIR/LumosWatchdog.app"
 ICON_SRC="$(cd "$DIR/.." && pwd)/assets/lumos-icon.png"

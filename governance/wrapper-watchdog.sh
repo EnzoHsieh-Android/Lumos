@@ -134,6 +134,41 @@ lock_age() {
   python3 -c "import os,time;print(int(time.time()-os.path.getmtime('$LOCKDIR')))" 2>/dev/null || echo ''
 }
 
+# ★健康檔不在時,要去問第二個來源再開口★(2026-09-08 真的講錯話之後補的)。
+# 出過的事:健康檔不存在,這支就每天喊一次「這台機器上的 wrapper 從來沒跑完過」
+# ——而 wrapper 自己的紀錄檔裡,前一天和當天都白紙黑字寫著「完成」。
+# 原因是「寫健康檔」是後來才加進 wrapper 的,排程當時跑的還是舊版,舊版不寫那個檔。
+# ★這支只有一個來源,而那個來源的沉默被它當成了「沒發生過」。★
+# 現在的規矩:健康檔不在 → 去看 wrapper 自己的紀錄檔;它最近有跑完的話,
+# 講的話要換成「有在跑但沒留下健康檔」,而不是「從來沒跑完過」。
+# ★仍然要喊★:那個狀態代表這支看門狗是瞎的,值得知道一次;只是不能講假話。
+# 紀錄檔的路徑跟 launchd 那份 plist 的 StandardOutPath 對齊;檔不在就當問不出來,
+# 退回原本的判斷(fail-safe:第二個來源缺席不會讓警報消失)。
+WRAPPER_LOG="$DIR/logs/daily-wrapper.log"
+wrapper_log_last_finish() {   # 印出最後一次「完成」的時間(本地時間字串);問不出來印空字串
+  [ -f "$WRAPPER_LOG" ] || { echo ''; return 0; }
+  python3 - "$WRAPPER_LOG" <<'PY' 2>/dev/null || echo ''
+import re, sys
+last = ""
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+        for ln in fh:
+            m = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*wrapper 完成", ln)
+            if m:
+                last = m.group(1)
+except OSError:
+    pass
+print(last)
+PY
+}
+secs_since_local() {   # $1="YYYY-MM-DD HH:MM:SS"(本地);印出距今幾秒,算不出來印空字串
+  [ -n "$1" ] || { echo ''; return 0; }
+  python3 -c "
+import datetime,sys
+d=datetime.datetime.strptime(sys.argv[1], '%Y-%m-%d %H:%M:%S')
+print(int((datetime.datetime.now()-d).total_seconds()))" "$1" 2>/dev/null || echo ''
+}
+
 # 健康檔一次讀出四件事,四行:finished_at / 哪些步驟非零 / total 跟 steps 對不對得上 / steps 讀不讀得到。
 # ★不能只讀 total★(代碼審 r1 邊界席):健檢的 [A1] 段讀的是 steps,這支第一版讀 total,
 # 餵一份「五步全 0、只有 total 壞掉」的檔,兩邊會講出完全相反的結論——而我在健檢那段
@@ -178,8 +213,16 @@ main() {
   elif [ ! -f "$HEALTH" ]; then
     # ★檔案不存在 ≠ 死掉★(設計審 r1 外家席:第一版完全沒定義這個語意)。
     # 新機、重新 clone、清過紀錄都會這樣,訊息要跟「死掉了」分開講,而且不算逾期。
-    now_state="never|$today"
-    msg="這台機器上的每日治理 wrapper 從來沒跑完過(還沒有健康狀態檔)。第一次跑過就會有。"
+    # ★而且不存在也 ≠ 沒跑過★(2026-09-08):先問 wrapper 自己的紀錄檔。
+    local lf ls_
+    lf="$(wrapper_log_last_finish)"; ls_="$(secs_since_local "$lf")"
+    if [ -n "$ls_" ] && [ "$ls_" -le "$STALE_SEC" ]; then
+      now_state="nohealth|$today"
+      msg="每日治理 wrapper 有在跑(它自己的紀錄檔:最後一次完成 $lf),但沒有留下健康狀態檔——這支看門狗因此看不到它的結果。多半是排程跑的還是舊版本,或者那個檔被清掉了。"
+    else
+      now_state="never|$today"
+      msg="這台機器上的每日治理 wrapper 從來沒跑完過(沒有健康狀態檔,它自己的紀錄檔裡也找不到最近跑完的紀錄)。第一次跑過就會有。"
+    fi
   else
     local hr fin bad mismatch readable age
     if ! hr="$(read_health)"; then
