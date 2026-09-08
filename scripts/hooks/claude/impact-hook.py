@@ -841,4 +841,12 @@ def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, 
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # #19 S4:把「我跑完了」記成一筆事件,讓 lumos enforcement 答得出
+    # 「它最近有沒有真的跑過」,而不是只答「有沒有註冊」。共用寫入器在 _hookevent.py。
+    import sys as _s, pathlib as _p
+    _s.path.insert(0, str(_p.Path(__file__).resolve().parent))
+    try:
+        from _hookevent import guard as _guard
+    except Exception:
+        _guard = None
+    sys.exit(_guard("pretooluse-impact-hook", __file__, main) if _guard else main())

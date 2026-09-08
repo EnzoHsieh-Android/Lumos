@@ -813,6 +813,85 @@ def cmd_loop_rewrite(env, loop_id, successor, note):
     return 0
 
 
+def _gate_event(repo_root, gate, kind, note, *, hard=False, head_sha=None,
+                ref=None, nodes=None, extra=None):
+    """擋人(或放行/被跳過)的那一刻,由★做判定的那一方★落一筆治理帳(#19 S1)。
+
+    ★為什麼不是 hook 來記★:這個 repo 既有的寫入模式是「做事的那支子命令,
+    順便把自己的判定落帳」(_append_governance_log 的寫者是 doctor --ci 與 anchor approve;
+    _codeloop_gov_log 的寫者是 code-loop 自己)。沒有任何先例是「hook 呼叫一個
+    專門用來記帳的端點」——而且 2026-09-07 真的有人寫過一個不存在的 `lumos gov-event`,
+    當時的結論就是「工具沒有給外部腳本寫治理帳的入口」。r1 架構對齊席把這條翻出來。
+
+    ★attempt_id 是拿來把同一次推送的事件串起來的★(#19 S6):pre-push 是逐 ref 迴圈,
+    而錨點與健檢跑在迴圈外面——「當下的 commit」對整支層級的閘沒有唯一答案。
+    整支層級的事件用 attempt_id(由 hook 產生、經環境變數傳進來),
+    逐 ref 的事件另外帶那一行真正的 sha。
+
+    ★回傳值要被看★(#19 S7):True=寫進去了,False=沒寫進去。
+    既有的寫入器是 `except OSError: pass`,錯誤靜靜吞掉——如果新的照抄,
+    「擋人時一定有帳」這個承諾在磁碟滿/權限錯/帳檔壞掉時就是空的。
+    ★但是:寫不進去不得改寫閘的判定★——該擋還是擋(反過來要求「寫成功才擋」
+    會讓觀測系統故障變成放行,那正是這批要修的病的鏡像)。呼叫端負責在 stderr 講一句。
+    """
+    import json as _json
+    import datetime as _dt
+    root = Path(repo_root)
+    docs = root / "docs"
+    if not docs.is_dir():
+        return False
+    if not head_sha:
+        try:
+            head_sha = _sp_run_text(["git", "-C", str(root), "rev-parse", "HEAD"])
+        except Exception:
+            head_sha = ""
+    # ★動態閘名要自己對名單★(既有漂移釘 t_gov_stats_gate_drift 抓到的):
+    # 那條釘子掃全檔「"gate": 後面不是字串字面值」的位置,防的是
+    # 「用變數當閘名 → 逃過字面值掃描 → gov 的名單漏掉它」。這支是通用寫入器,
+    # 閘名本來就是參數,所以改成★在這裡對名單★——不在名單上就不寫,並且喊出來。
+    # 這樣既保住那條釘子的用意,又不必為了通過它把通用寫入器拆成六份。
+    if gate not in _KNOWN_GATES:
+        print(f"  ⚠ 想記一筆 gate={gate},但它不在 _KNOWN_GATES 名單上——"
+              f"沒有寫(否則 gov 的統計會漏掉它)。要新增閘名請同時更新 _KNOWN_GATES。",
+              file=sys.stderr)
+        return False
+    ev = {
+        "ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "commit": (head_sha or "")[:7],
+        "gate": gate, "kind": kind, "hard": bool(hard),
+        "nodes": list(nodes or []), "note": note,
+    }
+    att = os.environ.get("LUMOS_PUSH_ATTEMPT", "").strip()
+    if att:
+        ev["attempt_id"] = att[:64]
+    if ref:
+        ev["ref"] = ref
+    if head_sha:
+        ev["head_sha"] = head_sha
+    if extra:
+        ev.update(extra)
+    try:
+        with open(docs / ".governance-log.jsonl", "a", encoding="utf-8") as f:
+            f.write(_json.dumps(ev, ensure_ascii=False) + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def _gate_event_or_warn(repo_root, gate, kind, note, **kw):
+    """落帳,寫不進去就在 stderr 講一句。★永遠不改變呼叫端的判定★(#19 S7)。"""
+    ok = _gate_event(repo_root, gate, kind, note, **kw)
+    if not ok:
+        print(f"  ⚠ telemetry-write-failed:{gate} 這一筆帳寫不進去(判定不受影響,照原樣執行)",
+              file=sys.stderr)
+    return ok
+
+
+def _sp_run_text(cmd):
+    import subprocess as _sp
+    return _sp.run(cmd, capture_output=True, text=True).stdout.strip()
+
+
 def _append_governance_log(vault, events):
     """寫者=doctor --ci + anchor approve:把 gate findings append 到 docs/.governance-log.jsonl。
     非 git / 取不到 HEAD → 跳過(不報錯)。dedup 留給讀時(lumos gov)。"""
@@ -4046,7 +4125,9 @@ def cmd_signoff(env, node, note, by=None):
 # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
 _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisit", "check-e1", "delguard", "check-e2", "check-e3", "check-lint-decl", "doctor-run",
                 "check-j", "check-k", "check-r", "check-s", "check-s2", "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests",
-                "daily-wrapper", "ledger-growth")
+                "daily-wrapper", "ledger-growth",
+                # #19 S1:擋人/放行/被跳過的事件會用到這兩個閘名(code-loop 已在上面)
+                "anchor", "pitfalls")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
 # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
@@ -4062,6 +4143,13 @@ _STATS_ABSENT_DISCLAIMER = (
 # 節點名不同質,同欄並列會被誤讀成可互相比較。★不能用「值裡有沒有 /」偵測★——cmd_gov 的
 # mapper 讀進來時已把路徑 stem 成 pre-push,偵測不到(2026-08-20 實作時測試翻紅抓到)。
 _STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑", "design-loop": "此來源記的是審查編號", "bound-tests": "no-config/no-pins 也記一筆,採用率看得見"}
+
+
+def _gov_repo_root_for_hooks():
+    """gov --stats 讀 hook 事件檔時用的 repo 根(唯讀,找不到就讓呼叫端跳過那一段)。"""
+    import subprocess as _s
+    return _s.run(["git", "rev-parse", "--show-toplevel"],
+                  capture_output=True, text=True).stdout.strip() or "."
 
 
 def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
@@ -4150,6 +4238,66 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node):
               + (f"——人裁放行率 {capped / len(by):.0%}" if by else ""))
         print("  (2026-08-22 起 loop next / loop status 才會記這個帳;更早的迴圈沒資料,不在分母)")
         print()
+    # ── 閘的硬擋 / 放行 / 被跳過(#19 S1-S3)────────────────────────────────
+    # ★每一種新事件都要指名一個讀它的地方★——這裡就是那個地方。
+    # 沒有消費者的帳只是更大的垃圾場;而這批新增的三種事件的消費者就是這一段。
+    hard = [r for r in ded if r.get("kind") == "blocked"]
+    skipped = [r for r in ded if str(r.get("kind", "")).startswith("skipped")]
+    fo = [r for r in ded if r.get("kind") == "fail-open"]
+    if hard or skipped or fo:
+        print("  閘的動作(#19 起才有帳;更早的擋下與放行沒有紀錄,不在分母):")
+        if hard:
+            _by = {}
+            for r in hard:
+                _by[r.get("gate", "?")] = _by.get(r.get("gate", "?"), 0) + 1
+            print("    硬擋 %d 次:%s" % (len(hard), "、".join(f"{k} {v}" for k, v in sorted(_by.items()))))
+        if skipped:
+            _by = {}
+            for r in skipped:
+                _by[r.get("gate", "?")] = _by.get(r.get("gate", "?"), 0) + 1
+            print("    被跳過 %d 次:%s" % (len(skipped), "、".join(f"{k} {v}" for k, v in sorted(_by.items())))
+                  + "  ← ★這一行是「哪一道最常被跳」的答案★")
+        if fo:
+            _by = {}
+            for r in fo:
+                _by[r.get("gate", "?")] = _by.get(r.get("gate", "?"), 0) + 1
+            print("    檢查自己壞掉而放行(fail-open)%d 次:%s" % (len(fo), "、".join(f"{k} {v}" for k, v in sorted(_by.items()))))
+            print("    (fail-open 是刻意設計——不為缺環境擋死推送;但每一次放行都要看得見,不然分不出哪一層沒生效)")
+        print()
+
+    # ── hook 最近有沒有真的跑過(#19 S4)────────────────────────────────────
+    # ★次數放這裡,不放 enforcement 那張表★(r1 架構對齊席):那張是「當下狀態」,
+    # 次數與時間序列是另一種性質的資料,這個 repo 已經有這一段在做聚合。
+    # ★不印「注入 N 次」★——那是成效,派工鏡頭 d1 明令不量;這裡只講「活著沒」。
+    try:
+        _hp = Path(_gov_repo_root_for_hooks()) / "governance" / "runtime" / "hook-events.jsonl"
+    except Exception:
+        _hp = None
+    if _hp is not None and _hp.exists():
+        import json as _hj
+        import datetime as _hd
+        _cut = _hd.datetime.now().astimezone() - _hd.timedelta(days=since_days)
+        _agg = {}
+        for _ln in _hp.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not _ln.strip():
+                continue
+            try:
+                _e = _hj.loads(_ln)
+                _t = _hd.datetime.fromisoformat(str(_e.get("ts", "")))
+            except ValueError:
+                continue
+            if _t.tzinfo is None or _t < _cut:
+                continue
+            _a = _agg.setdefault(_e.get("hook", "?"), {"ok": 0, "timeout": 0, "error": 0})
+            if _e.get("kind") in _a:
+                _a[_e["kind"]] += 1
+        if _agg:
+            print(f"  hook 近 {since_days} 天真的跑過幾次(成功 / 逾時 / 失敗):")
+            for _k in sorted(_agg):
+                _v = _agg[_k]
+                print(f"    {_k}: 成功 {_v['ok']} / 逾時 {_v['timeout']} / 失敗 {_v['error']}")
+            print("    (只有『成功跑完』算跑過;逾時與失敗分開列——在進入點記帳的做法會把它們算成生效)")
+            print()
     print("  註:這張表是「去重後」的筆數,跟不加 --stats 的畫面行數不是同一套算法——預設畫面還會再折疊一次。")
 
 
@@ -11603,6 +11751,94 @@ def cmd_deinit(keep_graph=False, dry_run=False, yes=False, source=None):
     return 0
 
 
+_HOOK_LIVENESS_WINDOW_DAYS = 7
+
+
+def _hook_recent_ok(repo_root, hook_name, hook_path):
+    """這支 hook 最近有沒有「成功跑完」過(#19 S4)。
+
+    回 (verdict, note):verdict ∈ {"ok", "stale", "unknown"}。
+
+    ★三個條件同時成立才算 ok★(r1 外家否決席 blocker):
+    只用「近 7 天跑過」判不出「現在」有沒有效——hook 今天上午跑過、下午被移除,
+    接下來七天照樣顯示有效,那正是「以為防護還在、其實已經沒了」。
+    所以除了②有近期成功事件之外,還要①現在有註冊(呼叫端已經判過)
+    ③**現在的檔案指紋跟那筆事件記的一樣**(換版本要看得出來)。
+
+    ★沒有近期成功不等於失效★:可能只是七天內沒有自然觸發(例如那支 hook
+    要開子代理才會跑)。所以回 `stale/unknown`,★不回 inactive★。
+
+    ★逾時與失敗不算「跑過」★:事件的 kind 分成 ok/timeout/error,這裡只認 ok。
+    """
+    import json as _j
+    import datetime as _dt
+    import hashlib as _h
+    f = Path(repo_root) / "governance" / "runtime" / "hook-events.jsonl"
+    if not f.exists():
+        return "unknown", "還沒有任何 hook 事件檔(這台機器還沒跑過,或剛 clone)"
+    try:
+        cur_fp = _h.sha256(Path(hook_path).read_bytes()).hexdigest()[:16] if hook_path else ""
+    except OSError:
+        cur_fp = ""
+    cutoff = _dt.datetime.now().astimezone() - _dt.timedelta(days=_HOOK_LIVENESS_WINDOW_DAYS)
+    root_s = str(Path(repo_root).resolve())
+    latest = None
+    try:
+        for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not ln.strip():
+                continue
+            try:
+                e = _j.loads(ln)
+            except ValueError:
+                continue
+            if e.get("hook") != hook_name or e.get("kind") != "ok":
+                continue
+            if e.get("repo") and e.get("repo") != root_s:
+                continue          # ★別的 repo 的事件不算數★(跨 repo 假綠)
+            try:
+                ts = _dt.datetime.fromisoformat(str(e.get("ts", "")))
+            except ValueError:
+                continue
+            if ts.tzinfo is None:
+                continue
+            if ts > _dt.datetime.now().astimezone():
+                continue          # 未來時間戳不採信(時鐘被調過)
+            if ts < cutoff:
+                continue
+            if latest is None or ts > latest[0]:
+                latest = (ts, e)
+    except OSError:
+        return "unknown", "hook 事件檔讀不動"
+    if latest is None:
+        return "stale", f"近 {_HOOK_LIVENESS_WINDOW_DAYS} 天沒有成功跑完的紀錄(可能只是沒被觸發)"
+    if cur_fp and latest[1].get("fp") and latest[1].get("fp") != cur_fp:
+        return "stale", "最近那次成功跑的是別的版本(檔案指紋對不上,換版之後還沒跑過)"
+    return "ok", f"最近一次成功 {latest[0].strftime('%Y-%m-%d %H:%M')}"
+
+
+def _hooks_path_is_ours(root: Path, val: str) -> bool:
+    """core.hooksPath 的值指的是不是本 repo 的 scripts/hooks。
+
+    ★不能拿字串直接比★(#19 S5):`git config core.hooksPath` 存的可能是相對路徑、
+    絕對路徑、或以 `~` 開頭——三種寫法指的是同一個地方。
+    2026-09-08 實測:本機存的是絕對路徑,而 enforcement 拿它跟字面的 "scripts/hooks" 比,
+    於是把兩道每次推送都在跑的 git 閘印成 inactive。
+    ★方向是「該說有卻說沒有」★:表面安全,實際後果是那兩列長期紅、真的掉了也沒有訊號價值。
+
+    這支是從 _deinit_unbar_gate 抽出來的既有做法(架構對齊席:不要寫第二份),
+    只多補一件它沒處理的:`~` 展開。
+    """
+    if not val:
+        return False
+    v = os.path.expanduser(val)
+    vp = Path(v) if Path(v).is_absolute() else (root / v)
+    ours = root / "scripts" / "hooks"
+    try:
+        return vp.resolve() == ours.resolve()
+    except Exception:
+        return str(vp) == str(ours)
+
+
 def _deinit_unbar_gate(root: Path) -> int:
     """拆 pre-commit 閘:git -C root config --unset core.hooksPath。
     rc 0(已 unset)/ rc 5(key 本不存在)皆成功;其他 rc 印 warning 但不中止
@@ -11614,13 +11850,7 @@ def _deinit_unbar_gate(root: Path) -> int:
                          capture_output=True, text=True)
     val = cur.stdout.strip()
     if val:
-        vp = Path(val) if Path(val).is_absolute() else (root / val)
-        ours = (root / "scripts" / "hooks")
-        try:
-            same = vp.resolve() == ours.resolve()
-        except Exception:
-            same = str(vp) == str(ours)
-        if not same:
+        if not _hooks_path_is_ours(root, val):   # #19 S5:抽成共用,別留第二份實作
             print(f"  ⚠ core.hooksPath={val} 非指向 lumos(scripts/hooks),保留不動(可能是你自設的)",
                   file=sys.stderr)
             return 0
@@ -13665,7 +13895,13 @@ def enforcement_status(root=None, home=None):
         registered = any(needle in cmd for cmd in reg)
         file_ok = (hookdir / needle).exists()
         if registered and file_ok:
-            add(layer, "active", needle)
+            # ★生效 ≠ 有註冊★(#19 S4):還要「現在的這個版本最近真的成功跑完過」。
+            # 沒有近期成功不標 inactive——那可能只是七天內沒被觸發。
+            _lv, _why = _hook_recent_ok(root, layer, hookdir / needle)
+            if _lv == "ok":
+                add(layer, "active", f"{needle};{_why}")
+            else:
+                add(layer, "stale" if _lv == "stale" else "unknown", f"{needle};{_why}")
         elif registered and not file_ok:
             add(layer, "degraded", f"{needle} 已註冊但檔案不在 ~/.claude/hooks/(懸空)")
         else:
@@ -13786,7 +14022,7 @@ def enforcement_status(root=None, home=None):
     for layer, fn in (("git-pre-commit", "pre-commit"), ("git-pre-push", "pre-push")):
         try:
             f = root / "scripts" / "hooks" / fn
-            ok = hp == "scripts/hooks" and f.is_file() and os.access(str(f), os.X_OK)
+            ok = _hooks_path_is_ours(root, hp) and f.is_file() and os.access(str(f), os.X_OK)
             add(layer, "active" if ok else "inactive",
                 f"core.hooksPath={hp or '(未設)'};{fn} {'在' if f.is_file() else '缺'}")
         except Exception as e:
@@ -13889,6 +14125,20 @@ def cmd_enforcement(repo=None, as_json=False):
     return 0
 
 
+def _anchor_blocked(repo_root, mismatches, extra_msgs):
+    """錨點擋下人的那一刻落一筆 hard 帳(#19 S1)。★這道永遠不可跳★——
+    它是「裁判有沒有被換掉」那一層,跳掉它之後所有「測試綠」的結論都不可信。"""
+    bits = []
+    if mismatches:
+        bits.append("%d 個驗證器檔跟基準線不一樣:%s" % (len(mismatches), ", ".join(
+            (m if isinstance(m, str)
+             else str(m.get("file") or m.get("path") or m))[:60] for m in mismatches[:4])))
+    if extra_msgs:
+        bits.append(";".join(str(x)[:80] for x in extra_msgs[:3]))
+    _gate_event_or_warn(repo_root, "anchor", "blocked", "|".join(bits) or "anchor verify 失敗",
+                        hard=True)
+
+
 def cmd_anchor_verify(repo=None, as_json=False):
     """錨點完整性核對:baseline 內每個錨點檔算 sha256 比對。
     全符 rc=0;mismatch/缺檔 rc=1;baseline 不存在 rc=0+警示(漸進採用);參數錯 rc=2。
@@ -13960,7 +14210,10 @@ def cmd_anchor_verify(repo=None, as_json=False):
     if as_json:
         print(json.dumps({"ok": not mismatches and not _extra_msgs, "mismatches": mismatches,
                           "roster": _extra_msgs}, ensure_ascii=False))
-        return 1 if (mismatches or _extra_msgs) else 0
+        if mismatches or _extra_msgs:
+            _anchor_blocked(repo_root, mismatches, _extra_msgs)
+            return 1
+        return 0
     if _extra_msgs:
         print("✗ anchor verify 失敗——會自動執行的 hook 檔,登記的名單跟實際檔案對不上:")
         for _msg in _extra_msgs:
@@ -13969,6 +14222,7 @@ def cmd_anchor_verify(repo=None, as_json=False):
         print("  確定是你自己加/刪的 → 把它加進 ANCHOR_FILES(scripts/lumos)再重新核可:")
         print("      lumos anchor approve --note \"為什麼多/少了這支 hook\"")
         if not mismatches:
+            _anchor_blocked(repo_root, mismatches, _extra_msgs)
             return 1
     if mismatches:
         print("✗ anchor verify 失敗——驗證器(測試/檢查腳本)的內容跟上次核可的基準線不一樣:")
@@ -13978,7 +14232,10 @@ def cmd_anchor_verify(repo=None, as_json=False):
         print("不是故意改的 → 用 git checkout 還原;是刻意改的 → 重新核可並留理由:\n    lumos anchor approve --note \"理由\"")
     else:
         print(f"✓ anchor verify — {len(data.get('anchors', {}))} 個驗證器檔案都跟基準線一致,沒被動過")
-    return 1 if mismatches else 0
+    if mismatches:
+        _anchor_blocked(repo_root, mismatches, _extra_msgs)
+        return 1
+    return 0
 
 
 def cmd_anchor_approve(repo=None, note=None, vault=None):
@@ -19823,6 +20080,19 @@ def cmd_bound_tests(diff_range, repo=None, as_json=False, advisory=False, from_j
     return 0
 
 
+def _gate_failopen(repo_root, gate, why):
+    """fail-open 放行了——把「放行的事實與原因」落一筆帳(#19 S2)。
+
+    ★世界解就是這樣要求的★:K8s 的准入檢查允許「檢查掛掉就放行」,
+    但那個放行一定會進稽核日誌;OPA 的 decision logs 也是「判斷本身就是要被記錄的事件」。
+    這個 repo 的 fail-open 是刻意設計(不為缺環境 brick 掉推送),
+    ★但代價正是「看不出哪一層沒生效」★——那正是這一批要修的病。
+
+    hard=False:這是放行不是硬擋,但它必須看得見。
+    """
+    _gate_event_or_warn(repo_root, gate, "fail-open", why, hard=False)
+
+
 def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None):
     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
     AND 無有效 pass/skip 留痕 → blocked=True。
@@ -19840,6 +20110,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     marker_sha = at_sha or _codeloop_git_head(repo_root)
     marker_branch = branch or _codeloop_git_branch(repo_root)
     if not marker_sha:
+        _gate_failopen(repo_root, "code-loop", "無法取得 HEAD sha")
         return {"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"}
 
     if diff_range is None:
@@ -19855,6 +20126,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
                     return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
                 break
         if not mb:
+            _gate_failopen(repo_root, "code-loop", "算不出 merge-base")
             return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
         diff_range = f"{mb}..HEAD"
 
@@ -19878,13 +20150,16 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
                      "--repo", str(repo_root)],
                     capture_output=True, text=True, cwd=str(repo_root))
         if r.returncode != 0:
+            _gate_failopen(repo_root, "pitfalls", f"pitfalls 回非零:{r.stderr.strip()[:120]}")
             return {"blocked": False, "reason": f"pitfalls 失敗(fail-open): {r.stderr.strip()[:120]}", "tier": "unknown"}
         lines = [l for l in r.stdout.splitlines() if l.strip().startswith("{")]
         if not lines:
+            _gate_failopen(repo_root, "pitfalls", "pitfalls 沒有 JSON 輸出")
             return {"blocked": False, "reason": "pitfalls 無 JSON 輸出(fail-open)", "tier": "unknown"}
         data = _json.loads(lines[0])
         tier = data.get("tier", "standard")
     except Exception as e:
+        _gate_failopen(repo_root, "pitfalls", f"pitfalls 例外:{str(e)[:120]}")
         return {"blocked": False, "reason": f"pitfalls 例外(fail-open): {e}", "tier": "unknown"}
 
     if tier != "high":
@@ -19923,10 +20198,50 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
             reason = f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]};非純簿記增量)"
         else:
             reason = f"tier=high 且留痕狀態無效({rec_status!r})"
+        if _codeloop_marker_skipped(repo_root, reason, marker_sha):
+            return {"blocked": False, "reason": "留痕要求被 env 跳過(合約測試閘照跑)", "tier": tier}
         return {"blocked": True, "reason": reason, "tier": tier}
 
     # 5. 無留痕
-    return {"blocked": True, "reason": "tier=high 且無留痕(尚未跑 code-loop pass/skip)", "tier": tier}
+    _r5 = "tier=high 且無留痕(尚未跑 code-loop pass/skip)"
+    if _codeloop_marker_skipped(repo_root, _r5, marker_sha):
+        return {"blocked": False, "reason": "留痕要求被 env 跳過(合約測試閘照跑)", "tier": tier}
+    return {"blocked": True, "reason": _r5, "tier": tier}
+
+
+def _codeloop_marker_skipped(repo_root, reason, head_sha):
+    """`LUMOS_SKIP_CODE_LOOP=1` 只跳「代碼審留痕要求」這一步(#19 S3)。
+
+    ★形狀照既有的★(r1 架構對齊席):這個 repo 已經有「每道閘一個布林環境變數」的跳閘機制
+    (`LUMOS_SKIP_BOUND_TESTS`、`LUMOS_STOP_BLOCK_OFF`、`LUMOS_ENTRY_HOOK_OFF`),
+    而且既有那支已經在記 `skipped-env`。原本提的是一個新的通用 `LUMOS_SKIP=<gate-id>`
+    ——那是新形狀,而且沒承認既有的存在。
+
+    ★這一支放的位置是刻意的,而且是 r1 的 blocker 本體★(通才席):
+    合約測試閘是這支判定式內部的**第 2.5 步**(不分 tier、紅就擋),
+    而 pre-push 自己那次獨立呼叫是 `--advisory` 加 `|| true`、**不擋**。
+    所以「不呼叫 code-loop check」＝連合約測試閘一起跳掉——
+    而那是計劃裡寫明「不可跳」的一道。CI 那邊又設 `LUMOS_SKIP_BOUND_TESTS=1`
+    (理由是全套測試當後盾),但全套測試驗的是「現有測試會過」,
+    **驗不出「這個合約根本沒綁測試」**。兩層疊起來,那個覆蓋率缺口本機和 CI 都沒人抓。
+
+    ★所以這個環境變數只能跳到這裡★:第 2.5 步已經跑完了,合約測試閘不受影響。
+
+    ★誠實邊界★:這一道的 CI 後盾只在「直推主線」這個前提下成立
+    ——CI 的 code-loop 那一步掛 `if: github.event_name == 'push'`,PR 不跑;
+    而 CI 又只在推主線與開 PR 時觸發,feature 分支推上去根本不跑。
+    2026-09-08 實查:本 repo 主線沒有分支保護、零 PR,所以現況安全。
+    REVISIT:2026-12-08 或這個 repo 開始用 PR / 加上分支保護時,重新判這一道能不能跳。
+    """
+    import os as _os
+    if _os.environ.get("LUMOS_SKIP_CODE_LOOP") != "1":
+        return False
+    _gate_event_or_warn(repo_root, "code-loop", "skipped-env",
+                        f"env LUMOS_SKIP_CODE_LOOP=1;原本會擋的理由:{reason}",
+                        hard=False, head_sha=head_sha)
+    print("  ⚠ 代碼審留痕要求被 LUMOS_SKIP_CODE_LOOP=1 跳過——★這一筆會留在治理帳上★"
+          "(合約測試閘不受影響,照跑)", file=sys.stderr)
+    return True
 
 
 def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False, from_json=None):
@@ -20001,6 +20316,14 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                         print("  真的跑不了(外部 DB 不在、環境缺)→ 留痕跳過:\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
                 elif _st == "no-config":
                     print("  提醒:這個專案沒設測試指令(.lumos/config.json 的 test.run_cmd),受波及合約的測試沒有跑——合約測試閘等於沒開。")
+        if blocked:
+            # #19 S1:擋人的那一刻落一筆 hard 帳,由做判定的這一方寫,不是 hook 寫。
+            # #19 S6:逐 ref 的事件要帶那一行真正的 sha(at_sha),不是盲取 HEAD
+            # ——pre-push 是逐 ref 迴圈,同次推多個 ref 時 HEAD 會歸錯。
+            _gate_event_or_warn(repo_root, "code-loop", "blocked",
+                                f"tier={tier}:{reason}", hard=True,
+                                head_sha=at_sha or head_sha, ref=marker_branch,
+                                extra={"tier": tier})
         return 1 if blocked else 0
 
     print(f"擋下:沒有 {subcmd!r} 這個子命令", file=sys.stderr)

@@ -4337,7 +4337,12 @@ def t_gov_stats_date_na():
 def t_gov_stats_gate_drift():
     """漂移釘:掃全檔 \"gate\": \"字面值\",全部必須在 _KNOWN_GATES 內。"""
     import re as _re
-    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    raw = Path(GRAPHCTL).read_text(encoding="utf-8")
+    # ★掃描前要剝掉註解★(2026-09-08 #19 踩到):這條釘子原本對全檔做字串比對,
+    # 於是一句「在講這條釘子在掃什麼」的註解本身就被算成一個動態寫入點。
+    # ★掃的是碼就只掃碼★——註解裡出現同樣的字串不該讓守衛翻紅(那是假紅,
+    # 而假紅跟假綠一樣會讓守衛失去信任)。
+    src = "\n".join(l for l in raw.splitlines() if not l.lstrip().startswith("#"))
     lits = set(_re.findall(r'"gate": "([a-zA-Z0-9_-]+)"', src))
     m = _stats_known_gates()
     check("stats: 原始碼 gate 字面值全在 _KNOWN_GATES", lits and lits <= set(m),
@@ -4346,8 +4351,16 @@ def t_gov_stats_gate_drift():
     # 測試綠燈但名單漏 gate。釘法:全檔「"gate": 後面不是字串字面值」的位置恰為 1 處
     # (scripts/lumos:2989 讀側 passthrough,合法)——新冒出第 2 處=有人用動態閘名,翻紅逼人審。
     dyn = _re.findall(r'"gate": [^"]', src)
-    check("stats: 動態 gate 寫點恰為 1 處(讀側 passthrough)", len(dyn) == 1,
+    # ★2026-09-08 #19 從 1 處變 2 處★:新增的通用落帳器 `_gate_event` 的閘名是參數,
+    # 本來就逃得過字面值掃描。★處置不是把釘子放寬,是讓那個寫入點自己去對名單★
+    # ——它在寫之前檢查 gate 在不在 _KNOWN_GATES,不在就不寫並且喊出來。
+    # 所以這條釘子改成:動態寫點最多 2 處,而且第 2 處必須自己驗過名單。
+    check("stats: 動態 gate 寫點不超過 2 處", len(dyn) <= 2,
           f"實際 {len(dyn)} 處——新增動態閘名會逃過漂移掃描,請改用字面值或更新 _KNOWN_GATES 與本釘")
+    check("★前置★ 剝完註解還掃得到碼裡的閘名", len(lits) >= 5, str(sorted(lits)))
+    check("★動態寫點必須自己對 _KNOWN_GATES★(不然那條掃描就形同虛設)",
+          "if gate not in _KNOWN_GATES:" in src,
+          "找不到動態寫入器的名單檢查——動態閘名會逃過漂移掃描")
     check("stats: _KNOWN_GATES 非空且含 check-s/canary", "check-s" in m and "canary" in m, str(m))
 
 
@@ -25336,8 +25349,14 @@ def run_with_timeout(fn, seconds):
         signal.signal(signal.SIGALRM, old)
 
 
-def _enforcement_fixture(all_active=True):
-    """建一個臨時 repo+home,可選全裝好或全缺,回 (root, home)。"""
+def _enforcement_fixture(all_active=True, with_hook_events=True):
+    """建一個臨時 repo+home,可選全裝好或全缺,回 (root, home)。
+
+    ★with_hook_events 是 2026-09-08 #19 S4 加的★:判準從「有註冊就算生效」
+    升格成「現在有註冊 ∧ 現在的檔案指紋對得上 ∧ 最近有一筆成功完成的事件」,
+    所以「全裝好」的現場必須連事件也造出來,否則五支 hook 會是 stale/unknown。
+    ★這個開關本身就是那條判準的反向對照★:關掉它,那五列必須從 active 掉下來。
+    """
     import json as _j
     root = Path(tempfile.mkdtemp(prefix="gctl-enf-repo-"))
     home = Path(tempfile.mkdtemp(prefix="gctl-enf-home-"))
@@ -25356,6 +25375,11 @@ def _enforcement_fixture(all_active=True):
         hooks = {"SessionStart": ["lumos-entry-hook.py", "ci-status-hook.py"],
                  "PreToolUse": ["impact-hook.py"], "Stop": ["check-graph-sync.py"]}
         cfg = {}
+        _hook_layer = {"lumos-entry-hook.py": "session-entry-hook",
+                       "ci-status-hook.py": "sessionstart-ci-status-hook",
+                       "impact-hook.py": "pretooluse-impact-hook",
+                       "check-graph-sync.py": "stop-graph-sync-hook",
+                       "dispatch-lens-hook.py": "pretooluse-dispatch-lens-hook"}
         for ev, files in hooks.items():
             grp = {"hooks": [{"command": "python3 " + str(chd / "hooks" / f)} for f in files]}
             if ev == "PreToolUse":
@@ -25364,6 +25388,23 @@ def _enforcement_fixture(all_active=True):
             for f in files:
                 (chd / "hooks" / f).write_text("# stub\n")   # 目標檔真的存在
         (chd / "settings.json").write_text(_j.dumps({"hooks": cfg}), encoding="utf-8")
+    if all_active and with_hook_events:
+        # ★三條件裡的第②③條★:同 repo、同版本、近期成功完成的事件。
+        # 指紋要對得上實際的 hook 檔——換版之後沒跑過就不該算生效。
+        import hashlib as _h, json as _hj, datetime as _hd
+        rt = root / "governance" / "runtime"; rt.mkdir(parents=True, exist_ok=True)
+        _now = _hd.datetime.now().astimezone().isoformat()
+        _lines = []
+        for _f, _layer in _hook_layer.items():
+            _fp_path = home / ".claude" / "hooks" / _f
+            if not _fp_path.exists():
+                continue
+            _fp = _h.sha256(_fp_path.read_bytes()).hexdigest()[:16]
+            _lines.append(_hj.dumps({"ts": _now, "hook": _layer, "kind": "ok",
+                                     "repo": str(root.resolve()), "fp": _fp},
+                                    ensure_ascii=False))
+        (rt / "hook-events.jsonl").write_text("\n".join(_lines) + ("\n" if _lines else ""),
+                                              encoding="utf-8")
     return root, home
 
 
@@ -25381,6 +25422,22 @@ def t_enforcement_all_active():
     check("enforcement: python active", by.get("python") == "active", str(by))
     check("enforcement: CI workflow active", by.get("ci-workflow") == "active", str(by))
     check("enforcement: 遠端檢查恆 unknown", by.get("required-status-check") == "unknown", str(by))
+
+    # ★反向對照:判準從「有註冊」升格成「最近真的跑過」★(2026-09-08 #19 S4)。
+    # r1 外家否決席判 blocker:只用「有註冊」判不出「現在」有沒有效——
+    # hook 今天上午跑過、下午被移除,舊判準照樣顯示 active。
+    # 這一段把「最近成功跑過」的證據拿掉,那五列必須從 active 掉下來;
+    # ★而且不准掉成 inactive★——那可能只是七天內沒被觸發,講成「沒裝」是另一種假訊號。
+    root2, home2 = _enforcement_fixture(all_active=True, with_hook_events=False)
+    by2 = {r["layer"]: r["status"] for r in m.enforcement_status(root=root2, home=home2)}
+    for _layer in ("session-entry-hook", "pretooluse-impact-hook",
+                   "stop-graph-sync-hook", "sessionstart-ci-status-hook"):
+        check("★沒有近期成功紀錄 → %s 不准是 active★" % _layer,
+              by2.get(_layer) != "active", str(by2))
+        check("★而且不准掉成 inactive(那是「沒裝」的意思)★",
+              by2.get(_layer) in ("stale", "unknown"), "%s=%s" % (_layer, by2.get(_layer)))
+    check("★同一份現場裡,git 那兩道不受 hook 事件影響★(免得改判準時誤傷別列)",
+          by2.get("git-pre-push") == "active" and by2.get("git-pre-commit") == "active", str(by2))
 
 
 def t_enforcement_dangling_hook_degraded():
@@ -30044,6 +30101,442 @@ def t_wrapper_watchdog_no_health_but_wrapper_ran():
               "從來沒跑完過" in r.stdout, r.stdout + r.stderr)
     finally:
         _sh.rmtree(root, ignore_errors=True)
+
+
+def _gate_ledger_sandbox():
+    """造一個最小 repo:有 git、有 docs/、有一份錨點基準線(故意跟實際檔案對不上)。"""
+    import subprocess as _sp, tempfile as _tf, json as _json, os as _os
+    root = Path(_tf.mkdtemp(prefix="gctl-gateev-"))
+    _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+    (root / "docs").mkdir()
+    (root / "docs" / ".governance-log.jsonl").write_text("", encoding="utf-8")
+    hooks = root / "scripts" / "hooks"; hooks.mkdir(parents=True)
+    victim = root / "scripts" / "runner.py"
+    victim.write_text("print('v1')\n", encoding="utf-8")
+    (root / "governance").mkdir(exist_ok=True)
+    (root / "governance" / "anchor-baseline.json").write_text(_json.dumps(
+        {"anchors": {"scripts/runner.py": "0" * 64}}, ensure_ascii=False), encoding="utf-8")
+    (root / "x.txt").write_text("x", encoding="utf-8")
+    _sp.run(["git", "-C", str(root), "add", "-A"], check=True, capture_output=True)
+    _sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-qm", "init"], check=True, capture_output=True)
+    return root
+
+
+def _gate_rows(root):
+    import json as _json
+    p = Path(root) / "docs" / ".governance-log.jsonl"
+    if not p.exists():
+        return []
+    return [_json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def t_hook_liveness_is_not_just_recently_ran():
+    """★「近 7 天跑過」本身就是假綠來源,判準要三個條件同時成立★(2026-09-08 #19 S4)。
+
+    r1 外家否決席判 blocker:hook 今天上午跑過、下午被移除,接下來七天照樣顯示有效
+    ——那正是「以為防護還在、其實已經沒了」,是這支儀表板最不能有的方向。
+
+    所以判準是:①現在有註冊 ②現在的檔案指紋對得上 ③最近有一筆**同 repo、同版本、
+    成功完成**的事件。沒有近期成功要標 stale/unknown,★不標 inactive★
+    ——那可能只是七天內沒被觸發。
+
+    這一支逐個餵會造成假綠的輸入:別的 repo 的事件、未來時間戳、逾時、失敗、換過版本。
+    """
+    import json as _j, datetime as _dt, hashlib as _h, shutil as _sh, tempfile as _tf
+    _need_src("scripts/lumos")
+    lm = _load_lumos()
+    root = Path(_tf.mkdtemp(prefix="gctl-hooklive-"))
+    try:
+        hookf = root / "h.py"; hookf.write_text("print(1)\n", encoding="utf-8")
+        fp = _h.sha256(hookf.read_bytes()).hexdigest()[:16]
+        d = root / "governance" / "runtime"; d.mkdir(parents=True)
+        log = d / "hook-events.jsonl"
+
+        def write(rows):
+            log.write_text("".join(_j.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                           encoding="utf-8")
+
+        def ts(days=0, hours=0):
+            return (_dt.datetime.now().astimezone()
+                    - _dt.timedelta(days=days, hours=hours)).isoformat()
+
+        base = {"hook": "H", "kind": "ok", "repo": str(root.resolve()), "fp": fp}
+
+        check("★沒有事件檔 → unknown,不是 inactive★",
+              lm._hook_recent_ok(root, "H", hookf)[0] == "unknown", "")
+
+        write([dict(base, ts=ts(hours=2))])
+        check("★兩小時前成功跑過 + 指紋對得上 → ok★",
+              lm._hook_recent_ok(root, "H", hookf)[0] == "ok", log.read_text())
+
+        write([dict(base, ts=ts(days=8))])
+        check("★八天前那筆超出窗口 → stale★",
+              lm._hook_recent_ok(root, "H", hookf)[0] == "stale", "")
+
+        write([dict(base, ts=ts(hours=1), kind="timeout"), dict(base, ts=ts(hours=1), kind="error")])
+        check("★逾時與失敗不算「跑過」★(在進入點記帳的實作會靠這種資料假綠)",
+              lm._hook_recent_ok(root, "H", hookf)[0] == "stale", log.read_text())
+
+        write([dict(base, ts=ts(hours=1), repo="/somewhere/else")])
+        check("★別的 repo 的事件不算數★(共用檔會讓 A 專案的執行幫 B 專案假綠)",
+              lm._hook_recent_ok(root, "H", hookf)[0] == "stale", log.read_text())
+
+        write([dict(base, ts=(_dt.datetime.now().astimezone() + _dt.timedelta(hours=5)).isoformat())])
+        check("★未來時間戳不採信★(時鐘被調過會長期假綠)",
+              lm._hook_recent_ok(root, "H", hookf)[0] == "stale", log.read_text())
+
+        write([dict(base, ts=ts(hours=1), fp="deadbeefdeadbeef")])
+        check("★換過版本 → stale★(新版還沒跑過,不能拿舊版跑過當有效)",
+              lm._hook_recent_ok(root, "H", hookf)[0] == "stale", log.read_text())
+
+        write([dict(base, ts=ts(hours=1)), dict(base, ts=ts(days=9))])
+        check("★新舊混在一起時看最新那筆★",
+              lm._hook_recent_ok(root, "H", hookf)[0] == "ok", log.read_text())
+
+        log.write_text("這不是 json\n" + _j.dumps(dict(base, ts=ts(hours=1))) + "\n", encoding="utf-8")
+        check("★夾雜壞行不能整支炸掉★(fail-open 但仍要讀得到好的那筆)",
+              lm._hook_recent_ok(root, "H", hookf)[0] == "ok", log.read_text())
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_hook_liveness_is_not_just_recently_ran")
+
+
+def t_hook_event_recorded_only_on_success():
+    """★「跑過」只記在成功完成點,不記在進入點★(2026-09-08 #19 S4,r1 通才席)。
+
+    如果實作圖省事把寫入放在 hook 進入點(常見寫法:先記一筆「開始」再做事),
+    就會出現一種新的假綠——hook 每次都在起手式就當機,儀表板卻穩定顯示「近期跑過 N 次」。
+
+    ★同型前例就在隔壁★:`Systems/hook逾時預算` 記的正是「寫在 except 分支裡的清理動作
+    結構上永遠跑不到,而且沒人發現」,時間是 2026-09-07——前一天。
+    """
+    import json as _j, shutil as _sh, tempfile as _tf, subprocess as _sp
+    _need_src("scripts/hooks/claude/_hookevent.py")
+    src = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "_hookevent.py"
+    root = Path(_tf.mkdtemp(prefix="gctl-hookev-"))
+    try:
+        _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+        probe = root / "probe.py"
+        probe.write_text(
+            "import sys, pathlib\n"
+            "sys.path.insert(0, %r)\n" % str(src.parent) +
+            "from _hookevent import guard\n"
+            "def main():\n"
+            "    if len(sys.argv) > 1 and sys.argv[1] == 'boom':\n"
+            "        raise RuntimeError('起手式就當機')\n"
+            "    return 0\n"
+            "sys.exit(guard('H', __file__, main, swallow=True))\n", encoding="utf-8")
+        log = root / "governance" / "runtime" / "hook-events.jsonl"
+
+        _sp.run([sys.executable, str(probe), "boom"], cwd=str(root), capture_output=True, timeout=60)
+        rows = [_j.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+        check("★炸掉的那次不准記成 ok★", all(r["kind"] != "ok" for r in rows), str(rows))
+        check("★但要記成 error(不是靜靜消失——那樣就看不出它一直在炸)★",
+              any(r["kind"] == "error" for r in rows), str(rows))
+
+        _sp.run([sys.executable, str(probe)], cwd=str(root), capture_output=True, timeout=60)
+        rows = [_j.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+        check("★正常跑完那次才記 ok★", any(r["kind"] == "ok" for r in rows), str(rows))
+        check("★事件要帶 repo 與指紋★(跨 repo 與換版都靠它們分辨)",
+              all(r.get("repo") and "fp" in r for r in rows), str(rows))
+
+        # 檔案位置:repo 樹內,不是家目錄(r1 三席都提,架構席判 blocker)
+        check("★事件檔要落在 repo 樹內★", log.exists(), str(log))
+        txt = src.read_text(encoding="utf-8")
+        # ★只看碼,不看說明文字★:第一版直接對全檔比對,結果咬到 docstring 裡
+        # 「原本寫 ~/.cache/lumos,為什麼搬走」那段說明,報了一個假的紅。
+        # ★這是同一天第四次「斷言咬到註解」★——收束:凡是「碼裡不准出現 X」這類斷言,
+        # 一律先把註解與 docstring 剝掉。
+        import ast as _ast
+        _tree = _ast.parse(txt)
+        for _n in _ast.walk(_tree):
+            if isinstance(_n, (_ast.Module, _ast.FunctionDef, _ast.ClassDef)):
+                _d = _ast.get_docstring(_n, clean=False)
+                if _d:
+                    txt = txt.replace(_d, "")
+        code = "\n".join(l for l in txt.splitlines() if not l.lstrip().startswith("#"))
+        check("★前置★ 剝完註解還看得到碼", "def record(" in code, code[:200])
+        check("★不准寫回家目錄★(這個 repo 的慣例是 repo 樹內 + gitignore)",
+              "~/.cache" not in code and "expanduser" not in code, "碼裡還有家目錄的路徑")
+        check("★要有容量上限★(append-only 的檔不能無限長)", "MAX_BYTES" in txt, "")
+        check("★不記「注入 N 次」★(那是成效,派工鏡頭 d1 明令不量)",
+              "inject" not in txt.lower(), "碼裡出現了 inject 相關欄位")
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_hook_event_recorded_only_on_success")
+
+
+def t_skip_code_loop_never_skips_bound_tests():
+    """★跳過「代碼審留痕」不得連帶跳掉合約測試閘★(2026-09-08 #19 S3;r1 通才席 blocker)。
+
+    這是 r1 最鋒利的一條。計劃裡我把「代碼審留痕」列進可跳、把「合約測試閘」列進不可跳,
+    ★而後者其實包在前者的同一次呼叫裡面★:合約測試閘是 `code-loop check` 內部的
+    第 2.5 步(不分 tier、紅就擋),而 pre-push 自己那次獨立呼叫是 `--advisory` 加 `|| true`、
+    **不擋**。所以照「hook 維持薄殼」最自然的實作(不呼叫那支),
+    會把我自己寫明不可跳的那道一起跳掉。
+
+    ★而 CI 那邊也關著它★:CI 設 `LUMOS_SKIP_BOUND_TESTS: "1"`,理由是「全套測試當後盾」
+    ——但全套測試驗的是「現有測試會過」,**驗不出「這個合約根本沒綁測試」**。
+    兩層疊起來,那個覆蓋率缺口在本機和 CI 都不會有人抓到。
+
+    所以這個環境變數只能跳到「留痕要求」那一步為止。
+    """
+    import subprocess as _sp, json as _j, os as _os, shutil as _sh
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+
+    def run(d, env=None):
+        e = dict(_os.environ); e.pop("LUMOS_SKIP_BOUND_TESTS", None); e.update(env or {})
+        return _sp.run([sys.executable, lumos_real, "code-loop", "check",
+                        "--diff", "HEAD~1..HEAD", "--json", "--repo", str(d)],
+                       capture_output=True, text=True, env=e)
+
+    def gov(d, gate):
+        pth = Path(d) / "docs" / ".governance-log.jsonl"
+        if not pth.exists():
+            return []
+        return [_j.loads(l) for l in pth.read_text(encoding="utf-8").splitlines()
+                if l.strip() and _j.loads(l).get("gate") == gate]
+
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-skipcl-"))
+    try:
+        (Path(d) / "tests" / "RED").write_text("", encoding="utf-8")   # 讓合約綁的測試翻紅
+        r = run(d)
+        v = _j.loads(r.stdout)
+        check("★前置★ 現場成立:合約測試紅的時候本來就會擋",
+              r.returncode == 1 and v["blocked"], r.stdout + r.stderr[-200:])
+
+        r = run(d, env={"LUMOS_SKIP_CODE_LOOP": "1"})
+        v = _j.loads(r.stdout)
+        check("★跳過留痕要求之後,合約測試閘照樣擋★(這是 r1 blocker 的本體)",
+              r.returncode == 1 and v["blocked"], r.stdout + r.stderr[-300:])
+        check("★而且擋的理由要還是合約測試,不是留痕★",
+              "t_pay_ok" in v.get("reason", "") or "Pay" in v.get("reason", ""), r.stdout)
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+    # 合約測試是綠的、但 tier=high 沒留痕 → 這時候才輪得到那個環境變數放行,而且要留帳
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-skipcl2-"))
+    try:
+        # ★現場要真的長成 tier=high★:第一版直接用 fixture 的現場,結果 tier=standard,
+        # 後半段整段被「前置不成立」跳過——★那等於這條路根本沒被測到★,
+        # 而「跳過留痕」正是這一支要驗的東西。
+        # 高風險的觸發條件實測出來是「新增的行裡有沒配 with 的 open(」,
+        # 而且要動到合約點名的那個檔,合約測試閘才會被牽連進來。
+        (Path(d) / "app" / "pay.py").write_text(
+            "def charge(x):\n    f = open('/dev/null')\n    return abs(x)\n", encoding="utf-8")
+        _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
+        _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-qm", "high", "--no-verify"], capture_output=True)
+        r = run(d)
+        base = _j.loads(r.stdout)
+        check("★前置★ 現場成立:這一筆真的被判成高風險而且被擋",
+              base.get("tier") == "high" and base["blocked"],
+              "tier=%s blocked=%s" % (base.get("tier"), base.get("blocked")))
+        if base.get("tier") == "high" and base["blocked"]:
+            r2 = run(d, env={"LUMOS_SKIP_CODE_LOOP": "1"})
+            v2 = _j.loads(r2.stdout)
+            check("★留痕要求可以被跳(合約測試綠的前提下)★",
+                  r2.returncode == 0 and not v2["blocked"], r2.stdout + r2.stderr[-200:])
+            rows = [x for x in gov(d, "code-loop") if x.get("kind") == "skipped-env"]
+            check("★被跳的閘一定要留一筆帳★(不然量不出哪一道最常被跳)",
+                  len(rows) >= 1, str(gov(d, "code-loop")))
+            if rows:
+                check("★帳上要看得出原本會擋的理由★",
+                      "留痕" in str(rows[-1].get("note", "")), str(rows[-1]))
+            check("★而且要在 stderr 明講會留帳★(沒有人看的留痕等於沒有留痕)",
+                  "留在治理帳" in r2.stderr, r2.stderr[-300:])
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_skip_code_loop_never_skips_bound_tests")
+
+
+def t_gate_blocked_writes_hard_ledger_row():
+    """★閘擋下人的那一刻要落一筆 hard 帳★(2026-09-08 #19 S1)。
+
+    修的病:治理帳 29,348 筆、`hard=true` **一筆都沒有**、`kind=blocked` 也是 0
+    ——不是沒人寫那個欄位,是會寫它的那幾處從沒觸發過;真正的缺口是 hook 層的
+    `exit 1`(pre-push 7 處、pre-commit 3 處)擋掉一次推送時,帳上完全看不出來。
+    而 README 對外宣稱「每道關卡攔了誰、硬擋還是提醒」都在帳上。
+
+    ★寫的人是「做判定的那一方」,不是 hook★(r1 架構對齊席):這個 repo 既有的模式
+    就是子命令順便落帳,沒有「hook 呼叫記帳端點」的先例——而且 2026-09-07 真的有人
+    寫過一個不存在的 `lumos gov-event`,當時的結論是「工具沒有給外部腳本寫治理帳的入口」。
+
+    ★同一次推送的事件要串得起來★(#19 S6):pre-push 是逐 ref 迴圈、而錨點跑在迴圈外,
+    所以整支層級的事件用 hook 產生的一次性識別碼,不是盲取 HEAD。
+    """
+    import subprocess as _sp, shutil as _sh, os as _os
+    _need_src("scripts/lumos")
+    lumos = Path(GRAPHCTL).resolve()
+    root = _gate_ledger_sandbox()
+    try:
+        env = dict(_os.environ); env["LUMOS_PUSH_ATTEMPT"] = "TESTATTEMPT-1"
+        r = _sp.run([sys.executable, str(lumos), "anchor", "verify", "--repo", str(root)],
+                    capture_output=True, text=True, cwd=str(root), timeout=180, env=env)
+        check("★前置★ 現場成立:錨點真的被擋了", r.returncode == 1, r.stdout + r.stderr)
+        rows = _gate_rows(root)
+        hard = [x for x in rows if x.get("hard") is True]
+        check("★擋下時要留一筆 hard=true 的帳★", len(hard) == 1, str(rows))
+        if hard:
+            check("★kind 要是 blocked★(既有 29,348 筆裡一筆都沒有)",
+                  hard[0].get("kind") == "blocked", str(hard[0]))
+            check("★要講得出是哪一道閘★", hard[0].get("gate") == "anchor", str(hard[0]))
+            check("★要講得出擋的是什麼★(不能只有一個空 note)",
+                  "runner.py" in str(hard[0].get("note", "")), str(hard[0]))
+            check("★同一次推送的識別碼要落進去★(整支層級的事件靠它串,不是靠 HEAD)",
+                  hard[0].get("attempt_id") == "TESTATTEMPT-1", str(hard[0]))
+
+        # 沒有那個環境變數時不准硬塞一個假的
+        (root / "docs" / ".governance-log.jsonl").write_text("", encoding="utf-8")
+        env2 = dict(_os.environ); env2.pop("LUMOS_PUSH_ATTEMPT", None)
+        _sp.run([sys.executable, str(lumos), "anchor", "verify", "--repo", str(root)],
+                capture_output=True, text=True, cwd=str(root), timeout=180, env=env2)
+        rows = _gate_rows(root)
+        check("★沒有識別碼時就不要那個欄位,不准編一個★",
+              rows and "attempt_id" not in rows[-1], str(rows[-1:]))
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_gate_blocked_writes_hard_ledger_row")
+
+
+def t_gate_ledger_write_failure_does_not_change_verdict():
+    """★記帳失敗不得改寫閘的判定★(2026-09-08 #19 S7,r1 外家否決席)。
+
+    既有的治理帳寫入器是 `except OSError: pass`——I/O 錯誤靜靜吞掉。
+    新的寫入如果照抄,「擋人時一定有帳」這個承諾在磁碟滿、權限錯、帳檔壞掉時就是空的。
+
+    但反過來要求「寫成功才擋」更糟:那會讓**觀測系統故障變成放行**
+    ——正是這一批要修的病的鏡像。所以規則是兩條:
+    ①該擋還是擋 ②寫不進去要在 stderr 明講 `telemetry-write-failed`,不能靜靜吞掉。
+    """
+    import subprocess as _sp, shutil as _sh, os as _os
+    _need_src("scripts/lumos")
+    lumos = Path(GRAPHCTL).resolve()
+    root = _gate_ledger_sandbox()
+    try:
+        log = root / "docs" / ".governance-log.jsonl"
+        _os.chmod(log, 0o444)          # 帳檔寫不進去
+        r = _sp.run([sys.executable, str(lumos), "anchor", "verify", "--repo", str(root)],
+                    capture_output=True, text=True, cwd=str(root), timeout=180)
+        check("★帳寫不進去,該擋的還是要擋★(不能因為觀測壞了就放行)",
+              r.returncode == 1, "rc=%s\n%s%s" % (r.returncode, r.stdout, r.stderr))
+        check("★而且要在 stderr 明講寫不進去★(靜靜吞掉的話,承諾在最需要時是空的)",
+              "telemetry-write-failed" in r.stderr, r.stderr[-400:])
+        check("★訊息要講明判定不受影響★(免得人以為被擋是記帳造成的)",
+              "判定不受影響" in r.stderr, r.stderr[-300:])
+        _os.chmod(log, 0o644)
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_gate_ledger_write_failure_does_not_change_verdict")
+
+
+def t_prepush_makes_one_attempt_id():
+    """★推送閘要產生一次性識別碼,而且要 export 出去★(2026-09-08 #19 S6)。
+
+    這支是逐 ref 迴圈,而錨點與健檢跑在迴圈**外面**——所以「當下的 commit」
+    對整支層級的閘沒有唯一答案。同次推多個 ref、推的不是目前 checkout 的 ref、
+    detached HEAD 或推 tag,盲取 HEAD 都會把事件歸到錯的 commit 上。
+    """
+    _need_src("scripts/hooks/pre-push", "scripts/lumos")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    src = (root / "scripts" / "hooks" / "pre-push").read_text(encoding="utf-8")
+    import re as _re
+    m = _re.search(r"(?m)^export LUMOS_PUSH_ATTEMPT=(.+)$", src)
+    check("★要 export(不 export 的話子行程讀不到)★", m is not None,
+          "找不到 export LUMOS_PUSH_ATTEMPT=")
+    if m:
+        check("★識別碼要每次不同★(寫死的話串不出「同一次」)",
+              ("$$" in m.group(1)) or ("RANDOM" in m.group(1)) or ("date" in m.group(1)),
+              m.group(1))
+        # ★比對真正的呼叫行,不是註解★:第一版用 `src.index("anchor verify")`,
+        # 咬到的是檔頭那段說明文字裡的同一串字,位置在最前面,判斷當場反過來。
+        # 這是同一天第三次「斷言咬到註解」。
+        i_exp = src.index("export LUMOS_PUSH_ATTEMPT=")
+        i_anchor = src.index('"$GRAPHCTL" anchor verify')
+        check("★要在第一道閘之前就產生好★(不然前面的閘串不進去)", i_exp < i_anchor,
+              "export 在 %d,第一道閘的呼叫在 %d" % (i_exp, i_anchor))
+    lsrc = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    check("★lumos 端要讀它★(只有 hook 產生、沒人讀,等於沒做)",
+          'LUMOS_PUSH_ATTEMPT' in lsrc, "lumos 沒讀那個環境變數")
+    print("  ✓ t_prepush_makes_one_attempt_id")
+
+
+def t_hooks_path_forms_all_recognized():
+    """★core.hooksPath 三種寫法都要判成同一件事,而且 hook 真的不在時要翻紅★(2026-09-08 #19 S5)。
+
+    修的是一個**現在就在講錯話**的東西:`lumos enforcement` 把 git-pre-commit 與
+    git-pre-push 都印成 inactive,而那兩道每次推送都在跑。根因是碼裡拿
+    `core.hooksPath` 的值跟字面字串 `"scripts/hooks"` 比,而本機存的是絕對路徑。
+
+    ★方向是「該說有卻說沒有」★——表面上是安全方向(不會假綠),實際後果更糟:
+    那兩列長期是紅的,所以真的哪天 hook 掉了,那個紅沒有任何訊號價值。儀表板自己在喊狼來了。
+
+    ★這支同時是反向對照★:只驗「三種寫法都說 active」會被一個「永遠回 True」的實作騙過去,
+    所以最後一段把 hook 檔真的移走,要求它翻成 inactive。
+    """
+    import subprocess as _sp, tempfile as _tf, shutil as _sh, os as _os
+    _need_src("scripts/lumos")
+    lumos = Path(GRAPHCTL).resolve()
+    root = Path(_tf.mkdtemp(prefix="gctl-hookspath-"))
+    try:
+        _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+        hooks = root / "scripts" / "hooks"; hooks.mkdir(parents=True)
+        for fn in ("pre-commit", "pre-push"):
+            f = hooks / fn; f.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8"); _os.chmod(f, 0o755)
+
+        def _rows():
+            r = _sp.run([sys.executable, str(lumos), "enforcement"],
+                        capture_output=True, text=True, cwd=str(root), timeout=180)
+            return r.stdout
+
+        def _set(v):
+            _sp.run(["git", "-C", str(root), "config", "core.hooksPath", v],
+                    check=True, capture_output=True)
+
+        # ① 相對 ② 絕對 ③ ~ 開頭(用 HOME 指到這個沙箱做出來)
+        forms = [("相對", "scripts/hooks"), ("絕對", str(hooks))]
+        home = root / "home"; home.mkdir()
+        link = home / "hk"
+        try:
+            _os.symlink(str(hooks), str(link)); forms.append(("~ 開頭", "~/hk"))
+        except OSError:
+            pass
+
+        env = dict(_os.environ); env["HOME"] = str(home)
+        for name, val in forms:
+            _set(val)
+            r = _sp.run([sys.executable, str(lumos), "enforcement"],
+                        capture_output=True, text=True, cwd=str(root), timeout=180, env=env)
+            for layer in ("git-pre-commit", "git-pre-push"):
+                line = [l for l in r.stdout.splitlines() if layer in l]
+                check("★%s 寫法要判成 active(%s)★" % (name, layer),
+                      bool(line) and "active" in line[0] and "inactive" not in line[0],
+                      (line[0] if line else "沒有這一列") + " | 值=" + val)
+
+        # ★反向對照★:設定還指著同一個地方,但 hook 檔不見了 → 必須翻紅
+        _set(str(hooks))
+        (hooks / "pre-push").unlink()
+        r = _sp.run([sys.executable, str(lumos), "enforcement"],
+                    capture_output=True, text=True, cwd=str(root), timeout=180)
+        line = [l for l in r.stdout.splitlines() if "git-pre-push" in l]
+        check("★hook 檔真的不在時要翻成 inactive★(只驗「它說 active」不算驗過)",
+              bool(line) and "inactive" in line[0], line[0] if line else "沒有這一列")
+        line = [l for l in r.stdout.splitlines() if "git-pre-commit" in l]
+        check("★而且不能一起誤殺:另一支還在就還是 active★",
+              bool(line) and "inactive" not in line[0], line[0] if line else "沒有這一列")
+
+        # 指到別人的目錄 → 不是我們的,要判 inactive(既有 teardown 守衛的同一條語意)
+        other = root / "githooks"; other.mkdir()
+        _set(str(other))
+        r = _sp.run([sys.executable, str(lumos), "enforcement"],
+                    capture_output=True, text=True, cwd=str(root), timeout=180)
+        line = [l for l in r.stdout.splitlines() if "git-pre-commit" in l]
+        check("★指到別人自設的目錄 → 不算我們生效★",
+              bool(line) and "inactive" in line[0], line[0] if line else "沒有這一列")
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_hooks_path_forms_all_recognized")
 
 
 def t_wrapper_log_path_agrees():

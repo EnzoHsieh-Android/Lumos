@@ -299,7 +299,15 @@ def main():
 
 
 if __name__ == "__main__":
+    # #19 S4:把「我跑完了」記成一筆事件,讓 lumos enforcement 答得出
+    # 「它最近有沒有真的跑過」,而不是只答「有沒有註冊」。共用寫入器在 _hookevent.py。
+    import sys as _s, pathlib as _p
+    _s.path.insert(0, str(_p.Path(__file__).resolve().parent))
     try:
-        sys.exit(main())
+        from _hookevent import guard as _guard
+    except Exception:
+        _guard = None
+    try:
+        sys.exit(_guard("session-entry-hook", __file__, main, swallow=True) if _guard else main())
     except Exception:
         sys.exit(0)
