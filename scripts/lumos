@@ -160,18 +160,16 @@ ReInjectResult = namedtuple("ReInjectResult", "status diff")
 #   要「剝圍欄 + 剝 inline code」→ `_strip_code_text`
 #   要「只剝圍欄、★保留 inline code★」→ `_strip_fences_text`(refcheck 家族要這個)
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
-_HTML_COMMENT_INLINE_RE = re.compile(r"<!--.*?-->")
 _DOUBLE_BACKTICK_RE = re.compile(r"``.+?``")
 
 
 def _strip_inline_markup(line):
     """行內層級的「哪些字看得見」——跟 `_visible_lines`(行層級)配成一對,★全檔唯一★,別在別處自寫第二份
     (條款綁定 -b r2 架構席:三條規則散在 clause_bindings 裡就是第二份)。
-    剝:單行 HTML 註解、雙反引號 span、單反引號 span(INLINE_CODE_RE);★未閉合的反引號之後一律不信★(程式碼範例裡的
-    [test:]/[manual:] 不能當證據,寧可少認)。回 (看得見的文字, 有沒有因未閉合反引號截掉東西)。
-    search 的 probe 刻意只用 INLINE_CODE_RE 不走這裡:搜尋寧可多看見,截掉=靜默看不見(2026-08-03 那個坑)。"""
-    s = _HTML_COMMENT_INLINE_RE.sub("", line)
-    s = INLINE_CODE_RE.sub("", _DOUBLE_BACKTICK_RE.sub("", s))
+    剝:雙反引號 span、單反引號 span(INLINE_CODE_RE);★未閉合的反引號之後一律不信★(程式碼範例裡的 [test:]/[manual:] 不能當證據,寧可少認)。
+    ★不碰 HTML 註解★:-b r3 兩席證明「偵測註解」本身就是洞(先關再開、註解正則不認反引號邊界),註解裡的 [SN] 一律走「認不得→擋」。
+    回 (看得見的文字, 有沒有因未閉合反引號截掉東西)。search 的 probe 刻意只用 INLINE_CODE_RE 不走這裡:搜尋寧可多看見,截掉=靜默看不見(2026-08-03 那個坑)。"""
+    s = INLINE_CODE_RE.sub("", _DOUBLE_BACKTICK_RE.sub("", line))
     if "`" in s:
         return s.split("`", 1)[0], True
     return s, False
@@ -2528,24 +2526,23 @@ def _visible_lines(lines, keep_fenced=False):
     自動注入必看合約的 impact hook)——★一個縮排的 ``` 就能把某節點的鐵則警告
     靜默關掉★。逐行 toggle 對兩個假設都免疫。
     """
-    fence = None          # 開著的圍欄是哪一種(``` 或 ~~~):只有同一種才能關(-b r2 外家席:兩種共用一個 toggle 會被交錯反轉可見性)
-    in_comment = False    # 跨行 HTML 註解 <!-- … -->:整段不算內容(單行的由 _strip_inline_markup 剝)
+    fence = None          # 開著的圍欄:(字元, 長度)。同字元且至少一樣長才能關(CommonMark;-b r2/r3 外家席:兩種共用 toggle 會交錯反轉、```` 被 ``` 提前關)
+    # ★不偵測 HTML 註解★(-b r3 單reviewer 兩條 blocker:`-->  <!--` 先關再開會把後面整份藏掉;曾短暫加過,同日拿掉)
     for i, ln in enumerate(lines):
-        s = ln.lstrip()
-        if fence is None and s.startswith(("```", "~~~")):       # fenced code 邊界(``` 與 ~~~ 都是 CommonMark 圍欄;2026-09-08 條款綁定 -b r1 外家席補 ~~~)
-            fence = s[:3]
-            continue
-        if fence is not None and s.startswith(fence):
-            fence = None
-            continue
+        indent = len(ln) - len(ln.lstrip(" "))
+        s = ln.lstrip(" ")
+        # 縮排 ≤3 格才是圍欄標記;4 格以上(或 tab)是縮排程式碼區塊的內容,不是邊界(-b r3 外家席:四空白的 ``` 曾吞掉後面真條款)
+        is_marker = indent <= 3 and not ln.startswith("\t") and s.startswith(("```", "~~~"))
+        if is_marker:
+            ch = s[0]
+            run = len(s) - len(s.lstrip(ch))
+            if fence is None:
+                fence = (ch, run)
+                continue
+            if ch == fence[0] and run >= fence[1]:
+                fence = None
+                continue
         if fence is not None and not keep_fenced:
-            continue
-        if in_comment:
-            if "-->" in ln:
-                in_comment = False
-            continue
-        if "<!--" in ln and "-->" not in ln.split("<!--", 1)[1]:
-            in_comment = True
             continue
         yield i + 1, ln
 
@@ -4075,12 +4072,13 @@ def cmd_lint(env, node):
 
 
 SPEC_CLAUSE_RE = re.compile(r"\[S(\d+)\]")
-_CLAUSE_ENUM = r"(?:(?:[A-Za-z]|[一二三四五六七八九十]{1,3}|[甲乙丙丁戊己])[.、)）]\s*|[①-⑳⑴-⒇]\s*)?"   # a. / 一、/ 十一、/ 甲) / ① 這種短編號也是清單;★單字母且必帶分隔符★(-b r2:cf./vs. 曾被當編號)
-_CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.|+•—·)]*" + _CLAUSE_ENUM + r"(?:\[[ xX]\]\s*)?(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表 - * + • — · 1. 1) a. 一、/標題 #/引用 >/粗體/表格 |/勾選框 [ ] 符號)就是 [SN];一行只認一條,後面的 [SN] 一律是引用
-_CLAUSE_LISTLIKE_RE = re.compile(r"^\s*(?:[^\w\s]+\s*|(?:\d{1,3}|[A-Za-z]|[一二三四五六七八九十]{1,3}|[甲乙丙丁戊己])[.、)）]\s*|[①-⑳⑴-⒇]\s*)*\[S(\d+)\]")   # 「像清單項卻認不得的前綴」:[SN] 前面只有符號或帶分隔符的短編號——用來判該擋還是當純引用;前面是詞或詞+冒號(規格 [S1]、注:[S1]、cf. [S1])才算散文(-b r2 兩席:冒號與任意短詞曾誤擋)
+_CLAUSE_ENUM = r"(?:(?:[A-Za-z]{1,2}|[一二三四五六七八九十]{1,3}|[甲乙丙丁戊己庚])[.、)）]\s*|[①-⑳⑴-⒇㈠-㈩ⅰ-ⅻⅠ-Ⅻ]\s*)?"   # a. / aa. / 一、/ 十一、/ 甲) / ① ㈠ ⅰ 這種短編號也是清單;★1–2 個字母/中文數字且必帶分隔符★——cf./vs. 也算編號(被當定義→沒標就擋,方向安全);三個字母以上才是詞
+_CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.、|+•—·)]*" + _CLAUSE_ENUM + r"(?:\[[ xX]\]\s*)?(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表 - * + • — · 1. 1) a. 一、/標題 #/引用 >/粗體/表格 |/勾選框 [ ] 符號)就是 [SN];一行只認一條,後面的 [SN] 一律是引用
+_CLAUSE_LISTLIKE_RE = re.compile(r"^\s*(?:[^\w\s]+\s*|(?:\d{1,3}|[A-Za-z]{1,2}|[一二三四五六七八九十]{1,3}|[甲乙丙丁戊己庚])[.、)）]\s*|[①-⑳⑴-⒇㈠-㈩ⅰ-ⅻⅠ-Ⅻ]\s*)*\[S(\d+)\]")   # 「像清單項卻認不得的前綴」:[SN] 前面只有符號或帶分隔符的短編號——用來判該擋還是當純引用;前面是詞或詞+冒號(規格 [S1]、注:[S1]、cf. [S1])才算散文(-b r2 兩席:冒號與任意短詞曾誤擋)
 _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了", "dangling": "懸空(寫錯)",
                     "unrecognized": "懸空(設定認不到)", "mentioned": "懸空(只被提到)", "bad-name": "壞名(平台前綴未定義)",
-                    "undefined": "非定義(只在範例/引用裡出現,不算條款)", "duplicate": "編號重複定義(兩行都寫 [SN])"}
+                    "undefined": "非定義(只在範例/引用裡出現,不算條款)", "duplicate": "編號重複定義(兩行都寫 [SN])",
+                    "shadowed": "定義過,又出現在認不得的清單行(第二次寫法看不懂)"}
 _CLAUSE_GATE_SINCE = "2026-09-09T00:00:00+08:00"   # 處置閘的條款綁定步只看首筆帳在這之後的迴圈——不回溯舊迴圈(週跑回放會重跑閘,回溯=舊判定全翻)。
 # 設隔日不設當日(同 _SEV_WRITESIDE_CUTOFF 的理由:合入當天白天用舊碼寫的帳,日粒度切不開先後);比對走 _loop_ts_key 換算 UTC(r1 單reviewer:字串比日期會依記帳機器時區判不同)。
 
@@ -4088,7 +4086,7 @@ _CLAUSE_GATE_SINCE = "2026-09-09T00:00:00+08:00"   # 處置閘的條款綁定步
 def clause_bindings(text, split, default, methods_for, hay_for):
     """計劃正文的 [SN] 條款 × 同一行的 [test:]/[manual:](條款綁測試算進度 [S1];唯讀、純函式)。
     定義行=該 id 第一次出現在行首的那一行(去 - * # > 數字. | 粗體符號),從沒在行首出現過的 id=非定義(undefined,不算條款)——
-    「見 [S2]」這種行內引用不算定義;★反引號/圍欄/HTML 註解裡的內容都不看,未閉合反引號之後不信★(r2 單reviewer blocker:同一行「真條款 + `[S9] 範例`」曾讓閘 FAIL)。
+    「見 [S2]」這種行內引用不算定義;★反引號/圍欄裡的內容不看,未閉合反引號之後不信;HTML 註解不特別處理(裡面的 [SN] 走認不得→擋)★(r2 單reviewer blocker:同一行「真條款 + `[S9] 範例`」曾讓閘 FAIL)。
     配對範圍=同一行、定義的 [SN] 之後到行尾(一行一條;後面再出現的 [SN] 是引用,不切段)
     (r1 通才席:SPEC_CLAUSE_RE/TEST_REF_RE 都是全文正則沒有行邊界,不同實作者會各自猜)。
     狀態七種(r1 接手席/通才席:四態不是三態、懸空要分「寫錯」與「設定認不到」,後者不進量測分母):
@@ -4102,11 +4100,13 @@ def clause_bindings(text, split, default, methods_for, hay_for):
     for no, raw in _visible_lines(text.split("\n"), keep_fenced=False):
         line, truncated = _strip_inline_markup(raw)
         ms = list(SPEC_CLAUSE_RE.finditer(line))
+        if truncated:
+            # 未閉合反引號截掉的那一段裡若有 [SN] → 認不得就擋,不放行(-b r2/r3 兩席三次:`[S1]、`x [S2]、- [S1] 甲 `x [S2] 都曾讓條款消失)
+            seen = {int(m.group(1)) for m in ms}
+            for m in SPEC_CLAUSE_RE.finditer(raw):
+                if int(m.group(1)) not in seen:
+                    listlike_extra.setdefault(int(m.group(1)), []).append(no)
         if not ms:
-            raw_lead = _CLAUSE_LEAD_RE.match(raw) or _CLAUSE_LISTLIKE_RE.match(raw)   # 反引號本身是符號,LISTLIKE 也認得到 `[S1]
-            if truncated and raw_lead is not None:
-                # 原始行看起來是條款定義、遮完反引號卻看不到 [SN](反引號在編號前面)→ 認不得就擋,不放行(-b r2 兩席:曾讓整條消失、閘印未啟用)
-                listlike_extra.setdefault(int(raw_lead.group(1)), []).append(no)
             continue
         lead = _CLAUSE_LEAD_RE.match(line)
         if lead is not None:
@@ -4133,8 +4133,8 @@ def clause_bindings(text, split, default, methods_for, hay_for):
             out.append({"id": f"S{cid}", "line": no, "refs": [], "manual": [], "defined": False, "state": "undefined",
                         "listlike": listlike or cid in listlike_extra, "listlike_lines": listlike_extra.get(cid, [])})
             continue
-        if cid in listlike_extra:   # 合法定義過,卻又出現在像清單的認不得的行(或反引號前綴的行)→ 當重複/認不得,擋
-            out.append({"id": f"S{cid}", "line": defined[cid][0], "refs": [], "manual": [], "defined": True, "state": "duplicate",
+        if cid in listlike_extra:   # 合法定義過,卻又出現在像清單的認不得的行(或反引號前綴的行)→ 自己的狀態,擋(-b r3 架構席:別跟真重複共用一個名)
+            out.append({"id": f"S{cid}", "line": defined[cid][0], "refs": [], "manual": [], "defined": True, "state": "shadowed",
                         "dup_lines": [defined[cid][0]] + listlike_extra[cid]})
             continue
         if cid in dup:
@@ -4241,7 +4241,7 @@ def cmd_spec_trace(env, node, as_json=False):
     # 條款綁測試算進度 [S3](2026-09-08):★單一裁決來源=條款行綁的測試★;舊制「驗證筆記回指」欄保留印出、只當對照。
     binds, berr = _clause_bindings_for(env, text)
     bmap = {b["id"]: b for b in binds}
-    untagged = [f"S{i}" for i in ids if bmap.get(f"S{i}", {}).get("state") in ("untagged", "duplicate")]
+    untagged = [f"S{i}" for i in ids if bmap.get(f"S{i}", {}).get("state") in ("untagged", "duplicate", "shadowed")]
     summ = _clause_summary([b for b in binds if b["state"] != "undefined"])
     # 非定義=從沒在行首定義的(行內引用),或只在反引號裡出現的(遮掉後根本掃不到、不在 binds 裡)
     summ["undefined"] = sum(1 for b in binds if b["state"] == "undefined") + sum(1 for i in ids if f"S{i}" not in bmap)
@@ -4262,7 +4262,7 @@ def cmd_spec_trace(env, node, as_json=False):
                 tail = " ← " + ", ".join(b["refs"])
             elif b and b["manual"]:
                 tail = " ← " + "; ".join(b["manual"])
-            mark = "✓" if (b and b["state"] in ("bound", "manual")) else ("✗" if (b and b["state"] in ("untagged", "duplicate")) else "⚠")
+            mark = "✓" if (b and b["state"] in ("bound", "manual")) else ("✗" if (b and b["state"] in ("untagged", "duplicate", "shadowed")) else "⚠")
             if (b and b["state"] == "undefined") or (not b and not berr):
                 mark = "·"
             who = ", ".join(Path(x).stem for x in claims[i]) or "無"
@@ -13507,6 +13507,10 @@ def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=N
     dups = [b for b in clauses if b["state"] == "duplicate"]
     if dups:
         print("[disposal] 條款綁定: ✗ — 條款編號重複定義:" + "、".join(f"{b['id']}(第 {'/'.join(map(str, b['dup_lines']))} 行)" for b in dups) + ";一個編號只能定義一次,不然第二筆沒標會漏過")
+        return "fail"
+    shad = [b for b in clauses if b["state"] == "shadowed"]
+    if shad:
+        print("[disposal] 條款綁定: ✗ — 條款定義過、又出現在這裡不認得的清單行:" + "、".join(f"{b['id']}(第 {'/'.join(map(str, b['dup_lines']))} 行)" for b in shad) + ";看不懂的寫法不放行")
         return "fail"
     unt = [b for b in clauses if b["state"] == "untagged"]
     summ = _clause_summary(clauses)
