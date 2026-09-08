@@ -342,3 +342,4 @@ hook 事件檔從家目錄搬回 repo 樹內且判準從「近 7 天跑過」改
   平行推送閘期間五支 hook 一直在追加,`t_gov_stats_rc_and_full` 兩次呼叫的統計段就不同 → 推送閘翻紅(單跑是綠的,典型的「隔離缺陷被當成不穩」)。
   改成從 vault 反推(`_vault_repo_root`),跟 disposal 留痕同一支;補 `t_gov_stats_hook_section_reads_vault_repo_not_cwd`(獨一無二的 hook 名證明讀的是假 vault 那份),突變退回 cwd 版翻紅。
   ★順帶承認:S4 那段 hook 統計上線時沒有直接測試,這次才補。★
+- 同日 code 迴圈 r1(三席乾淨)折入架構席 ⚠:`_render_gov_stats` 的 `repo_root` 改必填、漏傳直接炸——鄰居慣例不給預設,靜默少一段比炸更難察覺。
