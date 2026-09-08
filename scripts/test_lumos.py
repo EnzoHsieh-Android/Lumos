@@ -119,12 +119,13 @@ def _ledger_patch_last(ledger, loop, **fields):
     ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _sevrep(dirp, sev="clean"):
+def _sevrep(dirp, sev="clean", n=0):
     """[嚴重度綁定機械掃 S1] 寫側強制(2026-08-26)後,審查席 CLI 記帳必附含宣告行的報告——
-    測試共用最小報告。clean=值序最低,任何帳面等級都不構成低報(高報僅 stderr 提醒不擋)。"""
-    p = Path(dirp) / f"sev-ok-{sev}.md"
+    測試共用最小報告。clean=值序最低,任何帳面等級都不構成低報(高報僅 stderr 提醒不擋)。
+    n=報幾條(2026-09-09 審查有沒有用記帳 S1:--findings 不得多於報告裡的獨立宣告行數,所以帶 --findings ≥1 的記帳要 n≥findings)。"""
+    p = Path(dirp) / (f"sev-ok-{sev}.md" if not n else f"sev-ok-{sev}-{n}.md")
     if not p.exists():
-        p.write_text(f"severity: {sev}\n", encoding="utf-8")
+        p.write_text(f"severity: {sev}\n" + "".join(f"## f{i}\nseverity: {sev}\n" for i in range(1, n + 1)), encoding="utf-8")
     return str(p)
 
 
@@ -4298,14 +4299,15 @@ def t_panel_probe_retired():
     env2["LUMOS_PANEL_RETIRE_CUTOFF"] = "2000-01-01"   # 一切迴圈都算「新」→驗拒判
     # (a) 新迴圈問 panel 被拒
     run(v, "canary", "record", "none", "--loop", "pr-new", "--round", "r1", "--auditor", "a",
-        "--severity", "minor", "--findings", "1", "--report", _sevrep(v.parent), expect_rc=0)
+        "--severity", "minor", "--findings", "1", "--report", _sevrep(v.parent, "minor", 1), expect_rc=0)
     ra = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", "pr-new",
                   "--gate", "--panel"], capture_output=True, text=True, env=env2)
     check("retired: 新迴圈問 panel 拒判 rc2", ra.returncode == 2, f"{ra.returncode} {ra.stderr[-200:]}")
     check("retired: 拒判訊息指路 --disposal", "--disposal" in ra.stderr and "僅供舊迴圈回放" in ra.stderr, ra.stderr[-300:])
     # (b) code-* major+accepted → FAIL;散文同構 → PASS(用 --disposal,無 spec 綁定的最小帳)
     specf = v / "Systems" / "strict-spec.md"
-    specf.write_text("---\ntype: system\nstatus: done\n---\n# s\n引句素材行,長度超過十個字元。\nseverity: clean\n", encoding="utf-8")
+    specf.write_text("severity: major\n## f1\nseverity: major\n引句素材行,長度超過十個字元。\n", encoding="utf-8")   # 兼當席報告:檔首檔級行+一條宣告(2026-09-09 寫側拒收沒正規化的報告)
+    specm = v / "Systems" / "strict-spec-minor.md"; specm.write_text("severity: minor\n## f1\nseverity: minor\n引句素材行,長度超過十個字元。\n", encoding="utf-8")   # minor 記帳用的報告(帳面不得低於報告最高)
     import hashlib as _hl
     sha = _hl.sha256(specf.read_bytes()).hexdigest()
     for lp, sev in (("code-strict-t", "major"), ("prose-strict-t", "major")):
@@ -4339,7 +4341,7 @@ def t_panel_probe_retired():
     for seat in ("x1", "x2"):
         run(v, "canary", "record", "none", "--loop", "code-mc-t", "--round", "r1", "--auditor", seat,
             "--severity", "minor", "--findings", "1", "--findings-set", "f1", "--refuted-set", "none", "--folded-set", "f1",
-            "--report", str(specf), "--snapshot", str(specf), "--spec", str(specf), "--reviewed", sha,
+            "--report", str(specm), "--snapshot", str(specf), "--spec", str(specf), "--reviewed", sha,
             expect_rc=0)
     re2 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", "code-mc-t",
                    "--disposal", "--spec", str(specf)], capture_output=True, text=True, env=env2)
@@ -6292,7 +6294,7 @@ def t_finding_kind_ledger_and_stats():
     全集要對得上;gov --stats 算 process 佔比。"""
     import json as _j, subprocess as _sp
     v = mkvault(); spec = v / "Projects" / "fk.md"; spec.write_text("s\n", encoding="utf-8"); h = _sha256_of(spec)
-    rep = v.parent / "r1-s1.md"; rep.write_text("severity: clean\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
+    rep = v.parent / "r1-s1.md"; rep.write_text("severity: minor\n## f1\nseverity: minor\n## f2\nseverity: minor\n## f3\nseverity: minor\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     snap = v.parent / "r1-snapshot.md"; snap.write_text("這是一段足夠長的快照內容 後面還有\n", encoding="utf-8")
     base = ["canary", "record", "none", "--loop", "fk-loop", "--round", "r1", "--auditor", "a", "--severity", "minor",
             "--findings", "3", "--findings-set", "f1,f2,f3", "--refuted-set", "none", "--folded-set", "f1,f2", "--accepted-set", "f3",
@@ -6410,7 +6412,7 @@ def t_refute_verdict_ledger_and_stats():
     「辯方三分類先不做」裁定自己點名的缺口(帳無逐席對錯 → 永遠偵測不到重啟條件)。"""
     import json as _j
     v = mkvault(); spec = v / "Projects" / "rv.md"; spec.write_text("s\n", encoding="utf-8"); h = _sha256_of(spec)
-    rep = v.parent / "r1-s1.md"; rep.write_text("severity: major\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
+    rep = v.parent / "r1-s1.md"; rep.write_text("severity: major\n## f1\nseverity: major\n## f2\nseverity: major\n## f3\nseverity: minor\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     snap = v.parent / "r1-snapshot.md"; snap.write_text("這是一段足夠長的快照內容 後面還有\n", encoding="utf-8")
     base = ["canary", "record", "none", "--loop", "rv-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
             "--findings", "2", "--findings-set", "f1,f2,f3", "--refuted-set", "none", "--folded-set", "f1,f3", "--accepted-set", "f2",
@@ -6431,7 +6433,7 @@ def t_refute_verdict_ledger_and_stats():
     # 三態齊 + 統計用全新 vault,計數才乾淨(不被上面子集那筆疊加)
     v2 = mkvault(); spec2 = v2 / "Projects" / "rv2.md"; spec2.write_text("s\n", encoding="utf-8"); h2 = _sha256_of(spec2)
     # 快照放一段 ≥10 字的內容、報告引它,才過得了 disposal 的 quote-check(否則兩邊都因錨不到 FAIL,F3 會空過)
-    rep2 = v2.parent / "r1-s1.md"; rep2.write_text("severity: major\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
+    rep2 = v2.parent / "r1-s1.md"; rep2.write_text("severity: major\n## f1\nseverity: major\n## f2\nseverity: major\n## f3\nseverity: minor\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     snap2 = v2.parent / "r1-snapshot.md"; snap2.write_text("這是一段足夠長的快照內容用來讓引句錨定過\n", encoding="utf-8")
     base2 = ["canary", "record", "none", "--loop", "rv2-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
              "--findings", "2", "--findings-set", "f1,f2,f3", "--refuted-set", "none", "--folded-set", "f1,f3", "--accepted-set", "f2",
@@ -6450,7 +6452,7 @@ def t_refute_verdict_ledger_and_stats():
     check("agree 但該 id 沒折入 → rc2(帳對不上)", r.returncode == 2 and "折入清單" in r.stderr, r.stderr)
     # blocker 輪讓步(2026-08-29 修回歸):blocker 輪舊規則強制放行清單為空,而反證發現照規矩不折入
     # → 兩條一夾使記帳整筆被擋(自主迴圈當日四次撞上)。本欄讓步:blocker 輪允許 evidence 落折入。
-    repb = v.parent / "r1-blocker.md"; repb.write_text("severity: blocker\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
+    repb = v.parent / "r1-blocker.md"; repb.write_text("severity: blocker\n## b1\nseverity: blocker\n## b2\nseverity: major\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     baseb = ["canary", "record", "none", "--loop", "rv-blk", "--round", "r1", "--auditor", "a",
              "--severity", "blocker", "--findings", "2", "--findings-set", "b1,b2", "--refuted-set", "none",
              "--folded-set", "b1,b2", "--report", str(repb), "--snapshot", str(snap),
@@ -20518,7 +20520,7 @@ def t_m1_codeloop_r2_fixes():
             "--spec", str(spec), "--repo", str(v.parent))
     check("legacy gate min-seats 生效", r.returncode == 1 and "席" in r.stdout, r.stdout[-150:])
     # r3 折入:逐輪驗非空(一有一空不得以聯集過)
-    run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", f"lw-{_M1U}", "--severity", "minor", "--findings", "1",
+    run(v, "canary", "record", "caught", "--report", _sevrep(v.parent, "minor", 1), "--loop", f"lw-{_M1U}", "--severity", "minor", "--findings", "1",
         "--auditor", "solo", "--reviewed", h, "--spec", str(spec), expect_rc=0)
     run(v, "canary", "record", "caught", "--loop", f"lw-{_M1U}", "--severity", "clean", "--findings", "0",
         "--reviewed", h, "--spec", str(spec), expect_rc=0)   # 第二輪空席
@@ -27370,6 +27372,10 @@ def t_report_normalize_cmd():
         "中文嚴重度": "severity: major\n## F1\n嚴重度:major\n",
         "跨行黏合": "severity: major\nseverity:\nmajor\n",
         "行內帶尾巴": "severity: major\n## F1\nseverity: major / blocking: 是\n",
+        "清單項只有等級字": "severity: major\n## F1\n- MAJOR\n",
+        "清單項等級字接分隔符": "severity: major\n## F1\n- major / blocking: 是\n",
+        "總結句夾帶高於檔級的等級(codex f1)": "severity: clean\n總結: severity: blocker\n",
+        "總結句夾帶但檔級行缺": "## F1\n最嚴重 severity: minor\n",
     }
     for k, t in bad.items():
         check(f"normalize:殘留寫法「{k}」被拒", bool(iss(t)), t)
@@ -27381,6 +27387,10 @@ def t_report_normalize_cmd():
         "總結句": "severity: clean\n最嚴重 severity: clean,blocking 條數 0\n",
         "反引號講格式": "severity: clean\n規則:每條寫 `- severity: X`\n",
         "標題散文提到 major": "severity: clean\n## 這段講 major 這個字的用法\n",
+        "清單項散文用到 minor(r1 f1)": "severity: clean\n- minor 問題:文件裡有錯字,不影響邏輯\n",
+        "複合詞 non-major(r1 f1)": "severity: clean\n這是個 non-major 的調整\n",
+        "總結句等級不高於檔級": "severity: major\n## F1\nseverity: major\n最嚴重 severity: major,blocking 條數 1\n",
+        "帶 BOM 的正規化報告(codex f4)": "\ufeffseverity: clean\n",
     }
     for k, t in ok.items():
         check(f"normalize:「{k}」不算殘留", iss(t) == [], str(iss(t)))
@@ -27399,6 +27409,8 @@ def t_report_normalize_cmd():
     check("normalize:引句/圍欄/已正規化 → 0 處、逐字不動", ch2 == 0 and new2 == src2 and rest2 == [], f"{ch2} {rest2}")
     new3, ch3, rest3 = nz("## F1\nsev: major\n")
     check("normalize:認不得的拼法不轉、殘留清單留給人", ch3 == 0 and bool(rest3), f"{ch3} {rest3}")
+    newb, chb, issb = nz("\ufeffseverity: major\n## F1\nseverity: major\n")
+    check("normalize:BOM 剝掉算一處、剝完無殘留、輸出不帶 BOM(codex f4)", chb == 1 and issb == [] and not newb.startswith("\ufeff"), f"{chb} {issb}")
     new4, ch4, _ = nz("severity: minor\n## F1\n- severity: blocker\n")
     check("normalize:原本就有檔級行則不動它(值不改,低報留給寫側擋)", ch4 == 1 and new4.startswith("severity: minor\n"), new4)
     # ⑤ CLI
@@ -27416,10 +27428,18 @@ def t_report_normalize_cmd():
     check("report-normalize:轉不了 rc1 印行號要人改", r.returncode == 1 and "要人改" in r.stdout and "第 1 行" in r.stdout, f"rc={r.returncode} {r.stdout[:300]}")
     r = run(v, "report-normalize", str(d / "nope.md"))
     check("report-normalize:檔讀不到 rc2", r.returncode == 2, "")
+    # r1 架構席 a1:vault-free——沒有圖譜的目錄、不帶 --vault 也要能跑(跟 fold-check/prose-lint 同層)
+    import subprocess as _sp, tempfile as _tf
+    nov = Path(_tf.mkdtemp(prefix="gctl-novault-")); f2 = nov / "rep.md"; f2.write_text(src, encoding="utf-8")
+    r = _sp.run([sys.executable, GRAPHCTL, "report-normalize", str(f2)], capture_output=True, text=True, cwd=str(nov))
+    check("report-normalize:沒圖譜、不帶 --vault 也能跑(vault-free;r1 a1)", r.returncode == 0 and "會改 4 處" in r.stdout, f"rc={r.returncode} {r.stderr[:120]}")
+    # r1 架構席 a2:獨立宣告行的正則全檔只准出現一份
+    _src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    check("normalize:宣告行正則單源(全檔字面值只出現一次;r1 a2)", _src.count('severity:[ \\t]*(clean|minor|major|blocker)[ \\t]*') == 1, str(_src.count('severity:[ \\t]*(clean|minor|major|blocker)[ \\t]*')))
 
 
 def t_canary_reported_normalized():
-    """[審查有沒有用記帳 S1] 寫側:報告沒正規化 → rc2「還沒正規化」且治理帳留 rejected 事件(撞牆要看得見);
+    """[審查有沒有用記帳 S1] 寫側:報告沒正規化 → rc2「還沒正規化」且治理帳留 blocked 事件(撞牆要看得見);
     正規化過 → reported 由機器數落帳(不含檔級與 clean;引句/圍欄/總結句不算);--findings 多於 reported → rc2;
     「報了幾條」沒有旗標可填。"""
     import json as _j, shutil, subprocess as _sp
@@ -27436,8 +27456,10 @@ def t_canary_reported_normalized():
             r = run(v, *base, "--severity", "major", "--report", str(rep))
             check(f"reported:殘留「{name}」rc2 還沒正規化", r.returncode == 2 and "還沒正規化" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
         gov = (d / ".governance-log.jsonl").read_text(encoding="utf-8")
-        _rej = [l for l in gov.splitlines() if '"rejected"' in l and "report-not-normalized" in l]
-        check("reported:被擋三次都留 rejected 事件(report-not-normalized),三筆各自獨立", len(_rej) == 3, gov[-300:])
+        _rej = [l for l in gov.splitlines() if '"blocked"' in l and "report-not-normalized" in l]
+        check("reported:被擋三次都留 blocked 事件(report-not-normalized),三筆各自獨立", len(_rej) == 3, gov[-300:])
+        _st = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("reported:gov --stats 算到擋下 3 次(連撞多半在同一秒,靠事件隨機碼分開;r1 f5/codex f3)", "記帳被寫側擋下 3 次(報告沒正規化 3 / 缺 refuted-set 0 / findings 多於 reported 0)" in _st, _st[-600:])
         check("reported:被擋沒落 canary 帳", not (d / ".canary-log.jsonl").exists() or "rptn" not in (d / ".canary-log.jsonl").read_text(encoding="utf-8"), "")
         rep.write_text("severity: major\n<!-- 來源:席位 -->\n## F1\nseverity: major\n## F2\nseverity: minor\n## F3\nseverity: clean\n"
                        "引句:「severity: blocker 原文」\n> severity: blocker\n```\nseverity: blocker\n```\n最嚴重 severity: major\n", encoding="utf-8")
@@ -27447,6 +27469,8 @@ def t_canary_reported_normalized():
         check("reported:機器數落帳=2(不含檔級/clean/引句/圍欄/總結句)", last.get("reported") == 2, str(last.get("reported")))
         r = run(v, *base, "--severity", "major", "--findings", "3", "--report", str(rep))
         check("reported:--findings 3 > reported 2 → rc2", r.returncode == 2 and "不能多於報告裡報的條數" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+        _st2 = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("reported:findings 多於 reported 的撞牆也留 blocked 並在 gov --stats 分開數(codex f6)", "findings-over-reported" in (d / ".governance-log.jsonl").read_text(encoding="utf-8") and "findings 多於 reported 1" in _st2, _st2[-400:])
         r = run(v, *base, "--severity", "major", "--reported", "9", "--report", str(rep))
         check("reported:沒有 --reported 旗標(機器數,人填不了)", r.returncode == 2 and "--reported" in r.stderr, r.stderr[:200])
         rep.write_text("severity: clean\n", encoding="utf-8")
@@ -27458,7 +27482,7 @@ def t_canary_reported_normalized():
 
 
 def t_canary_refuted_set():
-    """[審查有沒有用記帳 S2] 載體席(帶 --findings-set)必帶 --refuted-set:缺 → rc2 且治理帳留 rejected;
+    """[審查有沒有用記帳 S2] 載體席(帶 --findings-set)必帶 --refuted-set:缺 → rc2 且治理帳留 blocked;
     none 過且落帳 [];id=理由(≥4 字含實字)/id 不得也在 findings-set/非 none 必帶 --intake 且 intake 要有
     「同一列含整字 id 與 HIT|MISS|重現|採信」(a1 對不到 a10、a1x);refuted_set+refuted_reasons 落帳;
     非載體席(不帶 --findings-set)不受影響。"""
@@ -27475,11 +27499,13 @@ def t_canary_refuted_set():
         r = run(v, *carrier)
         check("refuted:載體缺 --refuted-set rc2", r.returncode == 2 and "--refuted-set" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
         gov = (d / ".governance-log.jsonl").read_text(encoding="utf-8")
-        check("refuted:缺欄被擋留 rejected 事件", "refuted-set-missing" in gov, gov[-200:])
+        check("refuted:缺欄被擋留 blocked 事件", "refuted-set-missing" in gov, gov[-200:])
         r = run(v, *base)
         check("refuted:非載體席不帶 --refuted-set 照收 rc0", r.returncode == 0, r.stderr[:200])
         r = run(v, *carrier, "--refuted-set", "a1")
         check("refuted:沒有 = 的項 rc2", r.returncode == 2 and "id=理由" in r.stderr, r.stderr[:200])
+        r = run(v, *carrier, "--refuted-set", " ,")
+        check("refuted:空項 rc2(不准當 none 混過;codex f5)", r.returncode == 2 and "空項" in r.stderr, f"rc={r.returncode} {r.stderr[:120]}")
         r = run(v, *carrier, "--refuted-set", "a1=xx")
         check("refuted:理由太短 rc2", r.returncode == 2 and "≥" in r.stderr, r.stderr[:200])
         r = run(v, *carrier, "--refuted-set", "f1=跑三次都沒重現")
@@ -27490,6 +27516,14 @@ def t_canary_refuted_set():
         ik.write_text("preflight-4: ran\n| a10 | 跑三次 | MISS |\n| a1x 也不算 | MISS |\na1 這行沒有關鍵字\n", encoding="utf-8")
         r = run(v, *carrier, "--refuted-set", "a1=跑三次都沒重現", "--intake", str(ik))
         check("refuted:intake 只有 a10/a1x/無關鍵字行 → 整字對不到 rc2", r.returncode == 2 and "整字" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+        ik.write_text("preflight-4: ran\n格式範例:\n```\n| a1 | 範例 | MISS |\n```\n", encoding="utf-8")
+        r = run(v, *carrier, "--refuted-set", "a1=跑三次都沒重現", "--intake", str(ik))
+        check("refuted:intake 那列只在 ``` 圍欄裡(格式範例)→ 不算重現紀錄 rc2(r1 f3)", r.returncode == 2 and "整字" in r.stderr, f"rc={r.returncode}")
+        rep_cjk = d / "rep-cjk.md"; rep_cjk.write_text("severity: major\n## f1\nseverity: major\n## 甲\nseverity: minor\n", encoding="utf-8")
+        ik.write_text("preflight-4: ran\n| 甲乙 | 跑三次 | MISS |\n", encoding="utf-8")
+        r = run(v, "canary", "record", "none", "--loop", "rfs-cjk", "--round", "r1", "--auditor", "s1-sonnet", "--severity", "major", "--findings", "1", "--report", str(rep_cjk),
+                "--findings-set", "f1", "--folded-set", "f1", "--refuted-set", "甲=跑三次都沒重現", "--intake", str(ik))
+        check("refuted:CJK id 甲 不因 甲乙 命中 → rc2(r1 f4/codex f2)", r.returncode == 2 and "整字" in r.stderr, f"rc={r.returncode} {r.stderr[:120]}")
         ik.write_text("preflight-4: ran\n| a10 | 跑三次 | MISS |\n| a1 | 跑三次 | MISS |\n", encoding="utf-8")
         r = run(v, *carrier, "--refuted-set", "a1=跑三次都沒重現", "--intake", str(ik))
         check("refuted:intake 有整字 a1+MISS 列 → rc0", r.returncode == 0, r.stderr[:300])
@@ -27508,8 +27542,8 @@ def t_gov_stats_review_yield():
     S=max(0,M+R−N)、逃逸帳計數);gov --stats 新段(只算有 reported 的輪、Σ 五數、兩個回頭條件數、K<5 樣本太少、
     寫側擋下次數分兩類、逃逸帳);沒 reported 也沒逃逸 → 段落不印。"""
     import json as _j, hashlib as _h, shutil
-    gov = ['{"ts":"2026-09-09T09:00:00+08:00","commit":"","gate":"canary","kind":"rejected","hard":true,"nodes":[],"note":"report-not-normalized:2 loop=x auditor=y"}\n',
-           '{"ts":"2026-09-09T09:01:00+08:00","commit":"","gate":"canary","kind":"rejected","hard":true,"nodes":[],"note":"refuted-set-missing loop=x auditor=y"}\n']
+    gov = ['{"ts":"2026-09-09T09:00:00+08:00","commit":"","gate":"canary","kind":"blocked","hard":true,"nodes":[],"note":"report-not-normalized:2 loop=x auditor=y"}\n',
+           '{"ts":"2026-09-09T09:01:00+08:00","commit":"","gate":"canary","kind":"blocked","hard":true,"nodes":[],"note":"refuted-set-missing loop=x auditor=y"}\n']
     root, v = _stats_fixture("gctl-ryld-", gov)
     try:
         d = root / "docs"
@@ -27532,6 +27566,9 @@ def t_gov_stats_review_yield():
                  report_path=rp1, report_sha256=hr1),
             dict(common, ts="2026-09-09T10:01:00+08:00", loop="ry-new", round="r1", auditor="s1", token="N2", severity="major", findings=2, reported=1,
                  findings_set=["f1", "f2"], folded_set=["f1", "f2"], accepted_set=[], refuted_set=[], report_path=rp1, report_sha256=hr1),
+            # ry-r:R>0 的輪——N=2、M=2、R=1 → S=max(0,2+1−2)=1;釘「S 算式少了 R」這個突變(R=0 的輪分不出來)
+            dict(common, ts="2026-09-09T12:00:00+08:00", loop="ry-r", round="r1", auditor="s1", token="R1", severity="major", findings=2, reported=2,
+                 findings_set=["f1", "f2"], folded_set=["f1", "f2"], accepted_set=[], refuted_set=["a1"], refuted_reasons={"a1": "跑三次都沒重現"}, report_path=rp1, report_sha256=hr1),
         ]
         (d / ".canary-log.jsonl").write_text("\n".join(_j.dumps(x) for x in rows) + "\n", encoding="utf-8")
         (d / ".escape-log.jsonl").write_text(_j.dumps({"ts": "2026-09-09T11:00:00+08:00", "token": "ESC-1", "loop": "ry-new", "stage": "ci", "severity": "major", "desc": "x"}) + "\n", encoding="utf-8")
@@ -27545,19 +27582,26 @@ def t_gov_stats_review_yield():
         check("yield:S=max(0,M+R−N)=1 印「存活多於席位報的 1 條」", "存活多於席位報的 1 條" in line, line)
         check("yield:這條迴圈累計逃逸 1", "累計逃逸 1" in line, line)
         check("yield:問閘尾標「觀測,不進合取」且不印比率", "觀測,不進合取" in line and "%" not in line, line)
+        r = run(v, "loop", "status", "ry-r", "--disposal", "--spec", str(spec), "--repo", str(root))
+        line = next((l for l in r.stdout.splitlines() if "審查有沒有用" in l), "")
+        check("yield:R>0 的輪 S=max(0,M+R−N)=max(0,2+1−2)=1(少算 R 會變 0)", "席位報 2(機器數)→ 存活 2 / 編排者重現不到 1" in line and "存活多於席位報的 1 條" in line, line or r.stdout[-500:])
         out = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
-        check("stats-yield:只算有 reported 的 1 輪(舊帳不進)", "只算有 reported 欄的 1 輪" in out, out[-900:])
-        check("stats-yield:Σ 五數", "Σ席位報 1 → Σ存活 2 / Σ編排者重現不到 0 → Σ折 2 / Σ放行 0;存活多於席位報的輪 1(共 Σ1 條)" in out, out[-900:])
-        check("stats-yield:回頭條件兩個數(有載體 1 輪/記了 refuted-set 1 輪/非 0 的 0 輪;S>0 的輪 1)", "有載體的 1 輪裡記了 refuted-set 的 1 輪、其中非 0 的 0 輪;S>0 的輪 1" in out, out[-900:])
-        check("stats-yield:K<5 → 樣本太少", "樣本太少,別下結論(K=1" in out, out[-900:])
-        check("stats-yield:寫側擋下 2 次分兩類", "記帳被寫側擋下 2 次(報告沒正規化 1 / 缺 refuted-set 1)" in out, out[-900:])
+        check("stats-yield:只算有 reported 的 2 輪(舊帳不進)", "只算有 reported 欄的 2 輪" in out, out[-900:])
+        check("stats-yield:Σ 五數", "Σ席位報 3 → Σ存活 4 / Σ編排者重現不到 1 → Σ折 4 / Σ放行 0;存活多於席位報的輪 2(共 Σ2 條)" in out, out[-900:])
+        check("stats-yield:回頭條件兩個數(有載體 2 輪/記了 refuted-set 2 輪/非 0 的 1 輪;S>0 的輪 2)", "有載體的 2 輪裡記了 refuted-set 的 2 輪、其中非 0 的 1 輪;S>0 的輪 2" in out, out[-900:])
+        check("stats-yield:K<5 → 樣本太少", "樣本太少,別下結論(K=2" in out, out[-900:])
+        check("stats-yield:寫側擋下 2 次分三類", "記帳被寫側擋下 2 次(報告沒正規化 1 / 缺 refuted-set 1 / findings 多於 reported 0)" in out, out[-900:])
         check("stats-yield:逃逸帳 1 筆最重 major", "逃逸帳 1 筆" in out and "最重 major" in out, out[-900:])
         check("stats-yield:段內不印比率", "審查有用率" not in out.split("審查有沒有用", 1)[1].split("\n\n", 1)[0].replace("別自己算 Σ折/Σ報 當『審查有用率』", ""), "")
-        # 現場反證:沒 reported 也沒逃逸 → 段落不印
+        # r1 f2:只有「被擋」、一輪都沒記成、沒逃逸 → 段落照印(擋下次數正是要給人看的)
         (d / ".canary-log.jsonl").write_text(_j.dumps(rows[0]) + "\n", encoding="utf-8")
         (d / ".escape-log.jsonl").unlink()
         out0 = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
-        check("stats-yield:沒 reported 也沒逃逸 → 段落不印", "審查有沒有用(只算" not in out0, out0[-400:])
+        check("stats-yield:只有 blocked、沒 reported 也沒逃逸 → 段落照印且有擋下次數(r1 f2)", "只算有 reported 欄的 0 輪" in out0 and "記帳被寫側擋下 2 次" in out0, out0[-600:])
+        # 現場反證:連 blocked 都沒有 → 段落不印
+        (d / ".governance-log.jsonl").write_text("", encoding="utf-8")
+        out00 = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("stats-yield:沒 reported、沒逃逸、沒 blocked → 段落不印", "審查有沒有用(只算" not in out00, out00[-400:])
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -29292,7 +29336,7 @@ def t_codex_s2_orchestrator():
     check("s2-orch: 帶 codex → 回 orchestrator=codex 且 record_cmd 帶 --orchestrator codex", d.get("orchestrator") == "codex" and "--orchestrator codex" in d.get("record_cmd", ""), r.stdout[:300])
     r = run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "codex")
     check("s2-orch: 人讀輸出印「外家(不是 codex 那一家)」", "不是 codex 那一家" in r.stdout and "同門[codex]" in r.stdout, r.stdout[:400])
-    rep = v.parent / "r1-seat.md"; rep.write_text("# r\nseverity: clean\n", encoding="utf-8")
+    rep = v.parent / "r1-seat.md"; rep.write_text("severity: clean\n# r\n", encoding="utf-8")
     r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "外家否決-sonnet", "--severity", "clean", "--findings", "0", "--tier", "standard", "--orchestrator", "codex", "--report", str(rep))
     check("s2-orch: record --orchestrator codex 寫入", r.returncode == 0 and any(_j.loads(l).get("orchestrator") == "codex" for l in (v.parent / ".canary-log.jsonl").read_text().splitlines() if l.strip() and _j.loads(l).get("loop") == lid), r.stderr[-200:])
     r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r2", "--auditor", "x-sonnet", "--severity", "clean", "--findings", "0", "--orchestrator", "claude", "--report", str(rep))
