@@ -409,6 +409,31 @@ def _find_lumos_script() -> str | None:
     return _trusted_lumos()
 
 
+DELTA_TEXT_CAP = 2 * 1024 * 1024   # 表態閘 S3:原始編輯內容送給 lumos 算觸發式適用性的上限(2 MB;超過截前 2 MB 並註記)
+
+
+def extract_delta_text(payload: dict, cap_bytes: int = DELTA_TEXT_CAP):
+    """表態閘 S3(r3 外家 F10/正確性席 C2/接手席 H5):把「這次編輯的原始內容」保留換行送給 lumos 逐行比對 when。
+    query 那欄(extract_delta_query)是 8000 字/512 詞的截斷版、用空白重組會丟換行,只給詞彙融合用;拿它算觸發會把後段靜默漏掉。
+    回 (text, truncated)。"""
+    ti = payload.get("tool_input") or {}
+    tool = payload.get("tool_name", "")
+    parts: list[str] = []
+    if tool == "Edit":
+        parts = [str(ti.get("old_string") or ""), str(ti.get("new_string") or "")]
+    elif tool == "MultiEdit":
+        for e in (ti.get("edits") or []):
+            if isinstance(e, dict):
+                parts += [str(e.get("old_string") or ""), str(e.get("new_string") or "")]
+    elif tool == "Write":
+        parts = [str(ti.get("content") or "")]
+    text = "\n".join(p for p in parts if p)
+    b = text.encode("utf-8")
+    if len(b) > cap_bytes:
+        return b[:cap_bytes].decode("utf-8", errors="ignore"), True
+    return text, False
+
+
 def extract_delta_query(payload: dict, cap_tokens: int = 512, cap_chars: int = 8000) -> str:
     """v1.1:從 tool_input 抽「這次改動的內容」當查詢詞(spec §3)。
 
@@ -642,10 +667,14 @@ def build_ranked_context(data: dict) -> str:
             lines.append(f"  {x.get('score',0):.2f} hop{x.get('hop','?')} {x.get('node','?')}")
         if meta.get("lane_truncated"):
             lines.append(f"  (另有 {meta['lane_truncated']} 條守衛面參考未列出)")
-    for stk, qs in (data.get("stack_questions") or {}).items():
-        lines.append(f"[{stk} 效能檢核——動手時順答這幾個問題]")
+    # 表態閘 S3:lumos 有算適用性(有 stack_questions_applicable 鍵)就只印觸發到的題;沒算(legacy)才印全表
+    for stk, qs in _stack_section(data).items():
+        lines.append(f"[{stk} 效能檢核——動手時順答這幾個問題]" if "stack_questions_applicable" not in data
+                     else f"[{stk} 效能檢核——這次改動觸發了這幾題,動手時順答;推送前每題要表態(lumos code-loop dispositions)]")
         for q in qs:
             lines.append(f"  - {q}")
+    if data.get("delta_truncated"):
+        lines.append("  (這次編輯內容超過 2 MB,效能檢核只掃了前 2 MB)")
     lines.append("")
     # 收尾指令只在真的列了節點時附(單 reviewer 終審 minor:僅檢核問題時
     # 「判上列節點」答非所問,會弱化對提問的聚焦——檢核段標題已自帶指令)
@@ -656,9 +685,16 @@ def build_ranked_context(data: dict) -> str:
     return _frame_injected("\n".join(lines))
 
 
+def _stack_section(data: dict) -> dict:
+    """要印哪些棧題:有 stack_questions_applicable 鍵(lumos 算過觸發)就用它(可能是空 {}→不印);沒有才退回全表 stack_questions。"""
+    if "stack_questions_applicable" in data:
+        return data.get("stack_questions_applicable") or {}
+    return data.get("stack_questions") or {}
+
+
 def inject_ranked_context(data: dict) -> bool:
     """ranked 版注入:results/stack_questions/lane 皆空 → 不輸出(lane-only 的題也要注入,v4 Codex f2)。"""
-    if not data.get("results") and not data.get("stack_questions") and not data.get("lane"):
+    if not data.get("results") and not _stack_section(data) and not data.get("lane"):
         return False
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -787,7 +823,8 @@ def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, 
     # 窗外 → ranked 降噪版(固定席+top-8,delta 當查詢詞);
     # 窗內 → --incidents-only 快速路(只跑事故比對——安全面每次都看,重型 BFS 降頻)。
     delta_q = extract_delta_query(payload)
-    stdin_payload = json.dumps({"query": delta_q, "prospective": {}}, ensure_ascii=False)
+    delta_text, delta_trunc = extract_delta_text(payload)
+    stdin_payload = json.dumps({"query": delta_q, "prospective": {}, "delta_text": delta_text, "delta_truncated": delta_trunc}, ensure_ascii=False)
     cmd = [sys.executable, lumos, "impact", "--file", file_path_abs, "--repo", repo,
            "--ranked", "--stdin-payload", "--json"]
     if in_cooldown:
@@ -831,7 +868,7 @@ def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, 
             _ttl_unmark(session_id, file_path_abs, ttl_token)
         return None
     # 判空與 inject_ranked_context 同一條:results/stack_questions/lane 皆空 → 不注入(lane-only 也注入)
-    has = impact_data.get("results") or impact_data.get("stack_questions") or impact_data.get("lane")
+    has = impact_data.get("results") or _stack_section(impact_data) or impact_data.get("lane")
     ctx = build_ranked_context(impact_data) if has else ""
     if not ctx.strip():
         if session_id and not in_cooldown:

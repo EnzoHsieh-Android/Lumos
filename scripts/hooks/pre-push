@@ -184,7 +184,9 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   impact_once "$_range"
   sync_nudge
   pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
-  if printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
+  _tier_high=0
+  printf '%s' "$pf_json" | grep -q '"tier": *"high"' && _tier_high=1
+  if [[ "$_tier_high" -eq 1 ]]; then
     {
       echo ""
       echo "提醒:這次推送的程式碼裡有高風險寫法(像是沒包交易的寫入、沒關的檔案控制代碼、沒限流的外部呼叫),tier=high。"
@@ -192,50 +194,51 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
       echo ""
     } >&2
-    # 留痕座標綁 remote_ref 目的地:refs/heads/* → 分支硬擋+skip 逃生;非 heads → advisory
-    if [[ "$_rref" == refs/heads/* ]]; then
-      _rbranch="${_rref#refs/heads/}"
-      cl_rc=0
-      # ★高風險這條路也把算好的那份傳進去★:不傳的話它會自己再算一次,
-      # 而上面的註解寫的是「一次推送只算一次波及」——那句話就只在低風險成立。
-      _fj=(); [ -n "$_IMPACT_JSON" ] && _fj=(--from-json "$_IMPACT_JSON")
-      "$PY" "$GRAPHCTL" code-loop check --diff "$_range" --at-sha "$_lsha" --branch "$_rbranch" \
-        --repo "$REPO_ROOT" ${_fj+"${_fj[@]}"} >/dev/null 2>&1 || cl_rc=$?
-      if [[ "$cl_rc" -eq 1 ]]; then
-        {
-          echo "擋下:高風險的程式碼改動還沒經過對抗審查,或審查留痕已經失效。"
-          echo "高風險改動不能只靠寫的人自己看一遍——規則是先讓一批沒有脈絡的審查員找洞,留下紀錄,才能推。"
-          echo ""
-          echo "三條路選一條:"
-          echo "  1. 跑一輪代碼對抗審查(用 lumos-code-loop 這個 skill),通過後留痕再推。"
-          echo "  2. 確定是誤判或刻意不審 → 留一句理由跳過,再推:"
-          echo "       lumos code-loop skip --note \"為什麼跳過\""
-          echo "  3. 緊急 → git push --no-verify(本機不留痕,但 CI 會把這次推送標紅)"
-          echo ""
-        } >&2
-        exit 1
-      fi
-      # rc=0(已收斂/skip):放行;rc≠0/1(異常):fail-open 放行
-    else
-      # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,high 亦 advisory
-      echo "提醒:這次推的是 tag 不是分支,高風險檢查只提醒不擋(advisory)。" >&2
+  fi
+  # 留痕座標綁 remote_ref 目的地:refs/heads/* → 分支:★無條件★叫 check(表態閘 2026-09-09,Projects/棧別提問表態閘_計劃 S7):
+  # 合約測試紅 / 有適用題表態不完整 / tier=high 無留痕,三個獨立判定各自出各自的訊息、由 check 印
+  # ——這裡不再自己寫死「跑一輪代碼審」文案、也不再把它的輸出丟 /dev/null(r3 正確性席 C3)。非 heads → advisory。
+  if [[ "$_rref" == refs/heads/* ]]; then
+    _rbranch="${_rref#refs/heads/}"
+    cl_rc=0
+    # ★高風險這條路也把算好的那份傳進去★:不傳的話它會自己再算一次波及。
+    _fj=(); [ -n "$_IMPACT_JSON" ] && _fj=(--from-json "$_IMPACT_JSON")
+    # 低風險推送的受波及合約測試維持「只提醒不擋」(2026-09-07 全 repo 審視 #17 人裁);高風險不帶旗標,照擋
+    _ba=(); [[ "$_tier_high" -eq 0 ]] && _ba=(--bound-tests-advisory)
+    _cl_out="$("$PY" "$GRAPHCTL" code-loop check --diff "$_range" --at-sha "$_lsha" --branch "$_rbranch" \
+      --repo "$REPO_ROOT" ${_fj+"${_fj[@]}"} ${_ba+"${_ba[@]}"} 2>&1)" || cl_rc=$?
+    if [[ "$cl_rc" -eq 1 ]]; then
+      {
+        echo ""
+        printf '%s\n' "$_cl_out"
+        echo ""
+        echo "高風險缺審查留痕的逃生路:先表態(上面的 dispositions 指令),再 lumos code-loop skip --note \"為什麼跳過\";緊急硬推 git push --no-verify(本機不留痕,CI 會把這次推送標紅)"
+        echo ""
+      } >&2
+      exit 1
     fi
-  elif printf '%s' "$pf_json" | grep -q '"stack_questions": *{"'; then
-    {
-      echo ""
-      echo "提醒:這次改到的技術棧有幾個效能上該問自己的問題(不擋,advisory),列在下面;審查留痕裡建議帶一句答案。"
-      "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
-      echo ""
-    } >&2 || true
+    # rc=0(已收斂/已表態/skip):check 的提醒行(低風險合約測試紅、設定檔警告、表態閘小結)原樣給人看;rc≠0/1(異常):fail-open 放行
+    [ -n "$_cl_out" ] && { printf '%s\n' "$_cl_out" | grep -E '提醒|受波及合約測試|表態閘' >&2 || true; }
+  else
+    # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,一律 advisory(r2 外家 F7)
+    [[ "$_tier_high" -eq 1 ]] && echo "提醒:這次推的是 tag 不是分支,高風險檢查只提醒不擋(advisory)。" >&2
+    if printf '%s' "$pf_json" | grep -q '"stack_questions_applicable": *{"'; then
+      {
+        echo ""
+        echo "提醒:這次改到的技術棧有幾題效能檢核被觸發(推的是 tag,只提醒不擋),列在下面:"
+        "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+        echo ""
+      } >&2 || true
+    fi
+    bound_tests_advisory "$_range"
   fi
   # ★合約測試閘:低風險這一路也要跑★(2026-09-07 全 repo 審視 #17,人裁)
   # 舊行為:這件事藏在 code-loop check 裡,而那支只在 tier=high 且推的是分支時才跑
   # ——所以「改到硬合約就跑那些合約綁的測試」這句話,在低風險推送上是假的,
   # 而改一行低風險的碼一樣可以打破合約。
   # 高風險那條路已經在上面的 code-loop check 裡跑過(它會擋),這裡只補低風險那半。
-  if ! printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
-    bound_tests_advisory "$_range"
-  fi
+  # (表態閘 2026-09-09 起)分支 ref 的低風險推送:合約測試已在上面的 code-loop check 裡以 advisory 跑過一次,這裡不再跑第二次;
+  # tag 走上面 else 分支的 bound_tests_advisory。
   # test-layers 軟提醒(advisory,恆不影響 rc;無 .lumos/test-layers.json 靜默)
   "$PY" "$GRAPHCTL" test-layers --diff "$_range" --repo "$REPO_ROOT" 2>/dev/null || true
   impact_done

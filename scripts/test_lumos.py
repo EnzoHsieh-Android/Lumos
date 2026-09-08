@@ -13239,11 +13239,15 @@ def t_prepush_computes_impact_once():
         check("★同步點名要吃那份算好的,不准自己再算★",
               any(l.startswith("impact --sync-only") and "--from-json" in l for l in lines),
               "\n".join(lines))
-        check("★合約測試閘也要吃那份★(低風險這條路)",
-              any(l.startswith("bound-tests") and "--from-json" in l for l in lines),
+        # 表態閘(2026-09-09)起:分支 ref 一律叫 code-loop check(它內部跑受波及合約測試),低風險那條帶 --bound-tests-advisory
+        check("★合約測試閘也要吃那份★(低風險這條路:走 code-loop check --from-json)",
+              any(l.startswith("code-loop check") and "--from-json" in l for l in lines),
               "\n".join(lines))
-        check("★而且低風險那條要帶 --advisory★(人裁:只提醒不擋)",
-              any(l.startswith("bound-tests") and "--advisory" in l for l in lines),
+        check("★而且低風險那條要帶 --bound-tests-advisory★(人裁:只提醒不擋)",
+              any(l.startswith("code-loop check") and "--bound-tests-advisory" in l for l in lines),
+              "\n".join(lines))
+        check("★低風險不再另外跑 bound-tests(check 裡已跑一次)★",
+              not any(l.startswith("bound-tests") for l in lines),
               "\n".join(lines))
     print("  ✓ t_prepush_computes_impact_once")
 
@@ -32888,6 +32892,422 @@ def t_handoff_hook_import_is_pure():
         check("匯入 hook 不在 cwd / HOME 留任何檔", leftover == [], str(leftover))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 棧別提問表態閘(Projects/棧別提問表態閘_計劃,2026-09-09)────────────────────────────────
+def _disp_repo(d, kt_body=None, config=None, with_issue=True):
+    """建一個 main + feat 分支的 repo:feat 加一支 .kt(預設含 viewModelScope.launch → kt-coroutines 適用,
+    註解裡的 GlobalScope 不算),tier standard(沒有 python 形狀的 regex 命中)。config=None → python profile + tests/。"""
+    import json as _j, subprocess as _sp
+    g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+    g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+    P = Path(d)
+    (P / "README.md").write_text("init\n", encoding="utf-8")
+    (P / ".lumos").mkdir()
+    cfg = config if config is not None else {"test_profile": "python", "test": {"method_regex": "(?m)^def (test_[A-Za-z0-9_]+)\\s*\\(", "run_cmd": "true"}}
+    (P / ".lumos" / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
+    (P / "tests").mkdir()
+    (P / "tests" / "test_flow.py").write_text("def test_scope_cancel():\n    assert True\n", encoding="utf-8")
+    (P / "docs" / "x-knowledge" / "Issues").mkdir(parents=True)
+    if with_issue:
+        (P / "docs" / "x-knowledge" / "Issues" / "待補協程scope.md").write_text(
+            "---\ntype: issue\nstatus: open\ncreated: 2026-09-09\nsummary: |-\n  KEY:x\n---\n# 待補\n", encoding="utf-8")
+        (P / "docs" / "x-knowledge" / "Issues" / "已結案.md").write_text(
+            "---\ntype: issue\nstatus: resolved\ncreated: 2026-09-09\nsummary: |-\n  KEY:x\n---\n# 已結案\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "init")
+    g("checkout", "-q", "-b", "feat/disp")
+    (P / "app").mkdir()
+    body = kt_body if kt_body is not None else (
+        "class VM : ViewModel() {\n"
+        "    // TODO remove GlobalScope later\n"
+        "    fun load() { viewModelScope.launch { repo.fetch() } }\n"
+        "}\n")
+    (P / "app" / "Screen.kt").write_text(body, encoding="utf-8")
+    g("add", "-A"); g("commit", "-qm", "kt change")
+    return _sp.run(["git", "rev-parse", "HEAD"], cwd=d, capture_output=True, text=True).stdout.strip()
+
+
+def _disp_run(args, cwd=None):
+    import subprocess as _sp
+    return _sp.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True, cwd=cwd)
+
+
+def t_stack_question_triggers():
+    """[表態閘 S2]每題有唯一 id 與非空 when、id 集合釘住(改 id=刻意動作,r3 正確性席 C1);
+    比對對增行與刪行、剝字串、跳註解行;stack_questions 語意不變、另有 applicable/meta;前端 .ts 歸 vue。
+    翻紅釘:拔掉 _stack_norm_line 的註解跳過 → ③翻紅;把 changed_lines 只收 + 行 → ⑤翻紅。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    ids = [s["id"] for v in m._STACK_QUESTION_SPECS.values() for s in v]
+    check("①每題 id 唯一且 when 非空(regex 已在載入時編譯)", len(ids) == len(set(ids)) and all(s["when"] for v in m._STACK_QUESTION_SPECS.values() for s in v), str(ids))
+    check("①id 集合釘住(改 id 要來改這條測試——改語意才換 id 的紀律靠這裡逼)",
+          set(ids) == {"kt-compose", "kt-coroutines", "kt-dispatchers", "kt-flow", "kt-collections", "kt-leaks", "kt-startup",
+                       "cs-async", "cs-data", "cs-cache", "cs-linq", "cs-connection",
+                       "vue-parallel", "vue-lcp", "vue-bundle", "vue-watch", "vue-reactive",
+                       "sql-nplus1", "sql-index", "sql-transaction", "sql-sargable",
+                       "swift-main", "swift-swiftui", "swift-leaks", "swift-startup", "swift-concurrency", "swift-energy",
+                       "node-eventloop", "node-parallel", "node-data", "node-external", "node-memory"}, str(sorted(ids)))
+    import re as _re
+    check("①id 格式 ^[a-z]+-[a-z0-9]+$(r3 邊界席 B10)", all(_re.fullmatch(r"[a-z]+-[a-z0-9]+", i) for i in ids), str([i for i in ids if not _re.fullmatch(r"[a-z]+-[a-z0-9]+", i)]))
+    app, meta = m._stack_applicability({"kt": ["    fun load() { viewModelScope.launch { repo.fetch() } }"]}, 300)
+    got = {r["id"] for r in meta["kt"] if r["applicable"]}
+    check("②命中樣本:viewModelScope.launch → kt-coroutines 適用、kt-compose 不適用", "kt-coroutines" in got and "kt-compose" not in got, str(got))
+    app2, meta2 = m._stack_applicability({"kt": ["    // TODO remove GlobalScope later", "    val s = \"GlobalScope\""]}, 300)
+    check("③註解行與字串字面裡的觸發詞不算", not app2, str(app2))
+    app3, meta3 = m._stack_applicability({"kt": ["x"] * 301}, 300)
+    check("④超過門檻全表適用且 triggered_by 註明", len(app3["kt"]) == 7 and meta3["kt"][0]["triggered_by"] == ["行數>300"], str(meta3["kt"][0]))
+    with tempfile.TemporaryDirectory() as d:
+        _disp_repo(d)
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
+        data = _j.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
+        check("⑤stack_questions 語意不變(kt 整組 7 題)", len(data["stack_questions"]["kt"]) == 7, str(data.get("stack_questions")))
+        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 7, str(data.get("stack_questions_applicable")))
+        # 刪行也算:拿掉 viewModelScope 那行 → kt-coroutines 仍適用
+        P = Path(d); (P / "app" / "Screen.kt").write_text("class VM : ViewModel() {\n}\n", encoding="utf-8")
+        import subprocess as _sp
+        _sp.run(["git", "commit", "-qam", "remove launch"], cwd=d)
+        r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
+        data2 = _j.loads([l for l in r2.stdout.splitlines() if l.startswith("{")][0])
+        check("⑥純刪除 diff 也觸發(拿掉 viewModelScope.launch → kt-coroutines 適用)", "kt" in data2["stack_questions_applicable"], str(data2.get("stack_questions_applicable")))
+    with tempfile.TemporaryDirectory() as d:
+        import subprocess as _sp
+        g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+        (Path(d) / "package.json").write_text('{"dependencies": {"vue": "^3"}}', encoding="utf-8")
+        (Path(d) / "a.txt").write_text("x\n", encoding="utf-8"); g("add", "-A"); g("commit", "-qm", "init")
+        (Path(d) / "store.ts").write_text("export const s = ref({}); watch(s, () => {})\n", encoding="utf-8"); g("add", "-A"); g("commit", "-qm", "ts")
+        r3 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
+        data3 = _j.loads([l for l in r3.stdout.splitlines() if l.startswith("{")][0])
+        check("⑦前端 .ts 歸 vue 棧且 watch/ref 觸發", "vue" in data3["stack_questions_applicable"], str(data3.get("stack_questions_applicable")))
+
+
+def t_dispositions_template():
+    """[表態閘 S1]樣板:適用題留空、未觸發題自動 na(auto+觸發清單)、含 id 與原文;零命中與 gate=off 印 {};
+    --carry 帶舊答案;門檻不合法用預設並印一行。翻紅釘:拔掉 auto 欄 → ②翻紅。"""
+    import json as _j
+    with tempfile.TemporaryDirectory() as d:
+        _disp_repo(d)
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", d])
+        tpl = _j.loads(r.stdout)
+        check("①適用題 status 留空、帶原文", tpl["kt-coroutines"]["status"] == "" and tpl["kt-coroutines"]["question"], str(tpl.get("kt-coroutines")))
+        check("②未觸發題自動 na 且 auto:true、reason 帶觸發清單", tpl["kt-compose"]["status"] == "na" and tpl["kt-compose"]["auto"] is True and tpl["kt-compose"]["reason"].startswith("未觸發:"), str(tpl.get("kt-compose")))
+        check("③stderr 講要答幾題", "要答的題 1 題" in r.stderr, r.stderr[-200:])
+        # 寫一份表態,再 --carry
+        tpl["kt-coroutines"] = {"status": "na", "question": tpl["kt-coroutines"]["question"], "reason": "這段只是把既有呼叫搬進協程,沒有新的並行點"}
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps(tpl, ensure_ascii=False), encoding="utf-8")
+        w = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        check("④寫入 rc0", w.returncode == 0, w.stdout + w.stderr)
+        r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--carry", "--repo", d])
+        tpl2 = _j.loads(r2.stdout)
+        check("⑤--carry 帶回舊答案並標 carried", tpl2["kt-coroutines"]["status"] == "na" and tpl2["kt-coroutines"].get("carried") is True, str(tpl2.get("kt-coroutines")))
+    with tempfile.TemporaryDirectory() as d:
+        _disp_repo(d, kt_body="class VM : ViewModel() {\n}\n")   # 沒有觸發
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", d])
+        check("⑥零命中印 {} 並在 stderr 講一句", r.stdout.strip() == "{}" and "沒有要答" in r.stderr, r.stdout + r.stderr)
+    with tempfile.TemporaryDirectory() as d:
+        _disp_repo(d, config={"stack_questions": {"gate": "off"}})
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", d])
+        check("⑦gate=off 印 {}", r.stdout.strip() == "{}" and "off" in r.stderr, r.stdout + r.stderr)
+    with tempfile.TemporaryDirectory() as d:
+        _disp_repo(d, config={"stack_questions": {"ask_all_over_lines": "300", "gate": "sometimes"}})
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
+        check("⑧門檻/gate 值不合法 → 用預設並印一行", "ask_all_over_lines" in r.stderr and "gate" in r.stderr and r.returncode == 0, r.stderr[-300:])
+
+
+def t_codeloop_dispositions_write():
+    """[表態閘 S4]形狀壞 rc2 不寫並講原因;好 → 先治理帳(帶 branch/head_sha/commit/ts)再原子寫 marker;沒 docs/ 明講。
+    翻紅釘:把 _disp_validate 的 status 檢查拔掉 → ①翻紅。"""
+    import json as _j
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        P = Path(d); f = P / "disp.json"
+        q = "x"
+        bad_cases = [
+            ("status 大寫", {"kt-coroutines": {"status": "Satisfied", "question": q, "evidence": "app/Screen.kt:3"}}, "只認小寫"),
+            ("satisfied 缺 evidence", {"kt-coroutines": {"status": "satisfied", "question": q}}, "evidence"),
+            ("na 理由太短", {"kt-coroutines": {"status": "na", "question": q, "reason": "不需要。"}}, "太短"),
+            ("英文短理由加句號繞不過", {"kt-coroutines": {"status": "na", "question": q, "reason": "not needed here。"}}, "太短"),
+            ("todo 缺 issue", {"kt-coroutines": {"status": "todo", "question": q, "reason": "之後另開一題把 scope 生命週期補齊"}}, "issue"),
+            ("未知 id", {"kt-nope": {"status": "na", "question": q, "reason": "這段只是把既有呼叫搬進協程沒有新並行"}}, "不是題目表裡的 id"),
+            ("evidence 帶 ..", {"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "../x.kt:1"}}, "切不開"),
+            ("legacy 帶平台前綴", {"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "test:app:test_scope_cancel"}}, "沒開多平台"),
+        ]
+        for label, doc, expect in bad_cases:
+            f.write_text(_j.dumps(doc, ensure_ascii=False), encoding="utf-8")
+            r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+            check(f"①{label} → rc2 且講原因", r.returncode == 2 and expect in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
+        check("①壞形狀一個都沒寫 marker", not (P / "governance" / "code-loop").exists(), "")
+        good = {"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "test:test_scope_cancel"},
+                "kt-compose": {"status": "na", "question": q, "auto": True, "reason": "未觸發:x"}}
+        f.write_text(_j.dumps(good, ensure_ascii=False), encoding="utf-8")
+        r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        check("②合法 → rc0", r.returncode == 0, r.stdout + r.stderr)
+        mk = P / "governance" / "code-loop" / "feat__disp.dispositions.json"
+        rec = _j.loads(mk.read_text(encoding="utf-8"))
+        check("②marker 帶 head_sha/branch/ts", rec["head_sha"] == sha and rec["branch"] == "feat/disp" and rec["ts"], str(rec)[:200])
+        lines = [_j.loads(l) for l in (P / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+        ev = [e for e in lines if e.get("kind") == "dispositions"]
+        check("②治理帳事件帶 branch/head_sha/commit/dispositions", ev and ev[-1]["branch"] == "feat/disp" and ev[-1]["head_sha"] == sha and ev[-1]["commit"] == sha[:7] and "kt-coroutines" in ev[-1]["dispositions"], str(ev[-1:])[:300])
+    with tempfile.TemporaryDirectory() as d:
+        import shutil
+        _disp_repo(d); shutil.rmtree(Path(d) / "docs")
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "na", "question": "x", "reason": "這段只是把既有呼叫搬進協程沒有新並行"}}, ensure_ascii=False), encoding="utf-8")
+        r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        check("③沒有 docs/ → rc2 明講治理帳寫不進去", r.returncode == 2 and "docs/" in r.stderr, r.stderr[-200:])
+
+
+def t_codeloop_check_dispositions_gate():
+    """[表態閘 S5]有適用題(tier standard)不看 tier:缺表態/auto na/證據壞/todo 壞 → BLOCKED 列出;合法 → 放行;
+    gate=off 不擋、high-only 只在 high 擋;skip 留痕一樣要表態;工作樹有 WIP 不影響。翻紅釘:拔掉 3.5 步 → ①翻紅。"""
+    import json as _j
+    q = "x"
+    def write_disp(d, doc):
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps(doc, ensure_ascii=False), encoding="utf-8")
+        return _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("①tier standard 但有適用題且無表態 → BLOCKED(reason_kind=dispositions)", r.returncode == 1 and v.get("reason_kind") == "dispositions" and v["tier"] == "standard", r.stdout[-300:])
+        rh = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--repo", d])
+        check("①人讀訊息三段式含指令", "表態不完整" in rh.stderr and "--dispositions-template" in rh.stderr and "代碼審" not in rh.stderr, rh.stderr[-500:])
+        (Path(d) / "wip.txt").write_text("未提交的東西\n", encoding="utf-8")   # 工作樹髒
+        write_disp(d, {"kt-coroutines": {"status": "na", "question": q, "auto": True, "reason": "未觸發:x"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("②適用題卻 auto na → BLOCKED", r.returncode == 1 and "自動填" in _j.loads(r.stdout.strip().splitlines()[-1])["dispositions"]["problems"][0], r.stdout[-300:])
+        write_disp(d, {"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Nope.kt:1"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("③satisfied 引不存在的檔 → BLOCKED", r.returncode == 1 and "證據對不上" in r.stdout, r.stdout[-300:])
+        write_disp(d, {"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Screen.kt:99"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("③行號超出 → BLOCKED", r.returncode == 1 and "行號" in r.stdout, r.stdout[-300:])
+        write_disp(d, {"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Screen.kt:3"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("④合法 path:line → 放行(工作樹有 WIP 不影響)", r.returncode == 0, r.stdout[-300:] + r.stderr[-300:])
+        (Path(d) / "tests" / "test_new.py").write_text("def test_untracked():\n    pass\n", encoding="utf-8")   # 未追蹤測試
+        write_disp(d, {"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "test:test_untracked"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("⑤未追蹤的測試當證據 → BLOCKED(樹裡 grep 不到)", r.returncode == 1 and "grep 不到" in r.stdout, r.stdout[-300:])
+        write_disp(d, {"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "test:test_scope_cancel"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("⑤已提交的測試名 → 放行", r.returncode == 0, r.stdout[-300:])
+        write_disp(d, {"kt-coroutines": {"status": "todo", "question": q, "issue": "Issues/已結案", "reason": "之後另開一題把 scope 生命週期補齊"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("⑥todo 連到 resolved 的 Issue → BLOCKED", r.returncode == 1 and "open/doing" in r.stdout, r.stdout[-300:])
+        write_disp(d, {"kt-coroutines": {"status": "todo", "question": q, "issue": "Issues/待補協程scope", "reason": "之後另開一題把 scope 生命週期補齊"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("⑥todo 連到 open 的 Issue(樹裡 glob 解析 slug) → 放行", r.returncode == 0, r.stdout[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d, config={"stack_questions": {"gate": "off"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--repo", d])
+        check("⑦gate=off 不擋", r.returncode == 0, r.stderr[-200:])
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d, config={"stack_questions": {"gate": "high-only"}})
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--repo", d])
+        check("⑧high-only 在 standard 不擋", r.returncode == 0, r.stderr[-200:])
+    with tempfile.TemporaryDirectory() as d:
+        # tier high(python requests.post)+ kt 適用題:skip 留痕仍要表態
+        sha = _disp_repo(d)
+        import subprocess as _sp
+        (Path(d) / "app" / "svc.py").write_text("import requests\ndef f():\n    requests.post('http://x')\n", encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=d); _sp.run(["git", "commit", "-qm", "high"], cwd=d)
+        sha2 = _sp.run(["git", "rev-parse", "HEAD"], cwd=d, capture_output=True, text=True).stdout.strip()
+        _disp_run(["code-loop", "skip", "--note", "刻意不審", "--repo", d])
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~2..HEAD", "--at-sha", sha2, "--branch", "feat/disp", "--json", "--repo", d])
+        check("⑨tier high + skip 留痕但沒表態 → 仍 BLOCKED(reason_kind=dispositions)", r.returncode == 1 and _j.loads(r.stdout.strip().splitlines()[-1]).get("reason_kind") == "dispositions", r.stdout[-300:])
+
+
+def t_codeloop_dispositions_ledger_fallback():
+    """[表態閘 S6]marker 不在時從治理帳按 kind 重建(pass/skip 與 dispositions 互不擠掉);簿記豁免下仍認;改碼後過期 → 指向 --carry;
+    config 壞掉時 test: 證據 BLOCKED 說明設定檔。翻紅釘:_codeloop_read_dispositions 拿掉 ledger 分支 → ①翻紅。"""
+    import json as _j, shutil, subprocess as _sp
+    q = "x"
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Screen.kt:3"}}, ensure_ascii=False), encoding="utf-8")
+        _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        _disp_run(["code-loop", "pass", "--note", "審過", "--repo", d])   # 之後一筆 pass 事件,不得擠掉表態
+        shutil.rmtree(Path(d) / "governance" / "code-loop")   # 模擬 CI 乾淨 checkout
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("①marker 不在 → 從治理帳重建表態(pass 事件在後也不擠掉) → 放行", r.returncode == 0, r.stdout[-300:] + r.stderr[-200:])
+        # 簿記豁免:只提交治理帳
+        _sp.run(["git", "add", "docs/.governance-log.jsonl"], cwd=d); _sp.run(["git", "commit", "-qm", "gov"], cwd=d)
+        sha_b = _sp.run(["git", "rev-parse", "HEAD"], cwd=d, capture_output=True, text=True).stdout.strip()
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~2..HEAD", "--at-sha", sha_b, "--branch", "feat/disp", "--json", "--repo", d])
+        check("②祖先 sha 之後只動簿記 → 表態仍有效", r.returncode == 0, r.stdout[-300:])
+        # 改碼 → 過期
+        (Path(d) / "app" / "Screen.kt").write_text("class VM : ViewModel() {\n    fun load() { viewModelScope.launch { repo.fetch2() } }\n}\n", encoding="utf-8")
+        _sp.run(["git", "commit", "-qam", "code"], cwd=d)
+        sha_c = _sp.run(["git", "rev-parse", "HEAD"], cwd=d, capture_output=True, text=True).stdout.strip()
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~3..HEAD", "--at-sha", sha_c, "--branch", "feat/disp", "--json", "--repo", d])
+        check("③改碼後表態過期 → BLOCKED 且指向 --carry", r.returncode == 1 and "過期" in r.stdout and "carry" in r.stdout, r.stdout[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "test:test_scope_cancel"}}, ensure_ascii=False), encoding="utf-8")
+        _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        (Path(d) / ".lumos" / "config.json").write_text("{ not json", encoding="utf-8")
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("④config 壞掉時 test: 證據 BLOCKED 並說明是設定檔", r.returncode == 1 and "config.json" in r.stdout, r.stdout[-300:])
+
+
+def t_codeloop_dispositions_range_and_branch():
+    """[表態閘 S5/S4 r3 折入]①適用範圍=merge-base(主線,at_sha)..at_sha:把主線合進分支再推分支,主線帶進來的 kt 不算本次要表態(r3 邊界席 B1);
+    ②推主線本身用推送範圍(kt 改動照擋);③dispositions --branch 寫在別的名字下、check --branch 找得到(r3 外家 F11);
+    ④沒帶 --at-sha 用 HEAD 對樹驗(未提交的檔當證據 → BLOCKED;r3 邊界席 B5);⑤沒記錄的訊息提到 --branch。
+    翻紅釘:拔掉 guard verdict 裡的 merge-base 縮範圍 → ①翻紅。"""
+    import json as _j, subprocess as _sp
+    q = "x"
+    with tempfile.TemporaryDirectory() as d:
+        g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        _disp_repo(d, kt_body="class VM\n")          # feat/disp 上的 kt 不含觸發詞
+        base_feat = g("rev-parse", "HEAD").stdout.strip()
+        # 主線上進一筆有觸發詞的 kt,再合進分支
+        g("checkout", "-q", "main")
+        (Path(d) / "app").mkdir(exist_ok=True)
+        (Path(d) / "app" / "Main.kt").write_text("class M {\n    fun load() { viewModelScope.launch { repo.fetch() } }\n}\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "main kt")
+        g("checkout", "-q", "feat/disp"); g("merge", "-q", "--no-edit", "main")
+        (Path(d) / "app" / "util.py").write_text("x = 1\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "feat py")
+        head = g("rev-parse", "HEAD").stdout.strip()
+        # 推送範圍(遠端還在 base_feat)含主線那筆 kt;適用性該算在 main..HEAD(只有 py)
+        r = _disp_run(["code-loop", "check", "--diff", f"{base_feat}..{head}", "--at-sha", head, "--branch", "feat/disp", "--json", "--repo", d])
+        v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("①合主線後推分支:主線帶進來的 kt 不算本次要表態 → 放行(範圍縮到 merge-base)", r.returncode == 0 and (v.get("dispositions") or {}).get("applicable", -1) == 0, r.stdout[-400:])
+        # 推主線本身:推送範圍照用,kt 觸發 → 擋
+        g("checkout", "-q", "main")
+        mh = g("rev-parse", "HEAD").stdout.strip()
+        r = _disp_run(["code-loop", "check", "--diff", f"{mh}~1..{mh}", "--at-sha", mh, "--branch", "main", "--json", "--repo", d])
+        v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("②推主線本身:推送範圍照用 → 有適用題無表態 → BLOCKED", r.returncode == 1 and v.get("reason_kind") == "dispositions" and "--branch" in " ".join(v["dispositions"]["problems"]), r.stdout[-400:])
+        # ③ --branch:在 main checkout 下替 release 分支名表態,check --branch release 找得到
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Main.kt:2"}}, ensure_ascii=False), encoding="utf-8")
+        w = _disp_run(["code-loop", "dispositions", str(f), "--branch", "release", "--repo", d])
+        check("③dispositions --branch release 寫在該名字下", w.returncode == 0 and (Path(d) / "governance" / "code-loop" / "release.dispositions.json").exists(), w.stdout[-200:] + w.stderr[-200:])
+        r = _disp_run(["code-loop", "check", "--diff", f"{mh}~1..{mh}", "--at-sha", mh, "--branch", "release", "--json", "--repo", d])
+        check("③check --branch release 讀到那筆 → 放行", r.returncode == 0, r.stdout[-300:])
+        # ④ 沒帶 --at-sha:用 HEAD 對樹驗;未提交的檔當證據 → 擋
+        (Path(d) / "app" / "Wip.kt").write_text("class W\n", encoding="utf-8")
+        f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Wip.kt:1"}}, ensure_ascii=False), encoding="utf-8")
+        _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        r = _disp_run(["code-loop", "check", "--diff", f"{mh}~1..{mh}", "--json", "--repo", d])
+        v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("④沒帶 --at-sha 用 HEAD 對樹驗:未提交的檔不算證據 → BLOCKED", r.returncode == 1 and v.get("reason_kind") == "dispositions", r.stdout[-300:])
+        f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Main.kt:2"}}, ensure_ascii=False), encoding="utf-8")
+        _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        r = _disp_run(["code-loop", "check", "--diff", f"{mh}~1..{mh}", "--json", "--repo", d])
+        check("④同一組但證據在 HEAD 樹裡 → 放行", r.returncode == 0, r.stdout[-300:] + r.stderr[-200:])
+
+
+def t_impact_hook_stack_questions_filtered():
+    """[表態閘 S3]hook 另送原始 delta_text(保留換行、2 MB 截斷帶 delta_truncated);impact --file --json 據它算 applicable/meta;
+    hook 有 applicable 鍵就只印命中的題(空 → 不注入棧段);legacy 沒鍵退回全表;截斷時註記一句;query 欄語意不變。
+    翻紅釘:hook 不送 delta_text → ③翻紅;lumos 拿 query 而不是 delta_text 算 → ②翻紅(query 沒換行,逐行正規化會失效)。"""
+    import contextlib, io, json as _j, subprocess as _sp
+    m = _load_hook_mod("impact_hook_disp_mod", "impact-hook.py")
+    # ① delta_text 形狀
+    txt, tr = m.extract_delta_text({"tool_name": "Edit", "tool_input": {"old_string": "a\nb", "new_string": "c\nd"}})
+    check("①Edit 的 old+new 保留換行", txt == "a\nb\nc\nd" and tr is False, repr(txt))
+    big = "x" * (m.DELTA_TEXT_CAP + 10)
+    txt2, tr2 = m.extract_delta_text({"tool_name": "Write", "tool_input": {"content": big}})
+    check("①超過 2 MB 截前 2 MB 並標 truncated", tr2 is True and len(txt2.encode("utf-8")) == m.DELTA_TEXT_CAP, str(len(txt2)))
+    q = m.extract_delta_query({"tool_name": "Write", "tool_input": {"content": "// GlobalScope\nfun f() { viewModelScope.launch {} }\n"}})
+    check("①query 欄語意不變(照舊含詞串)", "viewModelScope.launch" in q and "GlobalScope" in q, q[:80])
+    # ② lumos 端 e2e:delta_text 命中 → applicable 只列 kt-coroutines;註解裡的 GlobalScope 不算
+    with tempfile.TemporaryDirectory() as d:
+        g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+        g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
+        P = Path(d)
+        (P / "docs" / "x-knowledge" / "MOC").mkdir(parents=True)
+        (P / "docs" / "x-knowledge" / "MOC" / "index.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+        (P / "app").mkdir(); (P / "app" / "Screen.kt").write_text("class VM\n", encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "init")
+        def _impact(payload):
+            r = _sp.run([sys.executable, GRAPHCTL, "impact", "--file", str(P / "app" / "Screen.kt"), "--repo", d, "--ranked", "--stdin-payload", "--json"],
+                        input=_j.dumps(payload, ensure_ascii=False), capture_output=True, text=True)
+            return _j.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+        out = _impact({"query": "GlobalScope viewModelScope launch", "prospective": {},
+                       "delta_text": "// TODO GlobalScope 之後拿掉\nfun load() { viewModelScope.launch { repo.fetch() } }\n", "delta_truncated": False})
+        app = out.get("stack_questions_applicable") or {}
+        ids = [r["id"] for r in (out.get("stack_questions_meta") or {}).get("kt", []) if r["applicable"]]
+        check("②impact 依 delta_text 算:只有 kt-coroutines 適用(註解裡的 GlobalScope 不算)、全表 stack_questions 照舊", ids == ["kt-coroutines"] and len(app.get("kt", [])) == 1 and len(out.get("stack_questions", {}).get("kt", [])) == 7, str(ids) + str(list(out)))
+        out2 = _impact({"query": "nothing", "prospective": {}, "delta_text": "val x = 1\n", "delta_truncated": True})
+        check("②零命中 → applicable 是 {} 且鍵存在;delta_truncated 透傳", out2.get("stack_questions_applicable") == {} and out2.get("delta_truncated") is True, str({k: out2.get(k) for k in ("stack_questions_applicable", "delta_truncated")}))
+        out3 = _impact({"query": "legacy", "prospective": {}})
+        check("②legacy 呼叫沒送 delta_text → 沒有 applicable 鍵", "stack_questions_applicable" not in out3 and "stack_questions" in out3, str(list(out3)))
+    # ③ hook 端只格式化
+    t1 = m.build_ranked_context({"results": [], "meta": {}, "stack_questions": {"kt": ["問一?", "問二?"]}, "stack_questions_applicable": {"kt": ["問二?"]}})
+    check("③有 applicable 鍵 → 只印命中的題", "問二?" in t1 and "問一?" not in t1 and "表態" in t1, t1)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        m.inject_ranked_context({"results": [], "meta": {}, "stack_questions": {"kt": ["問一?"]}, "stack_questions_applicable": {}})
+    check("③applicable 空 → 不注入棧段(雖然全表非空)", buf.getvalue() == "", buf.getvalue()[:80])
+    t2 = m.build_ranked_context({"results": [], "meta": {}, "stack_questions": {"kt": ["問一?"]}})
+    check("③legacy 沒鍵 → 退回全表", "問一?" in t2, t2)
+    t3 = m.build_ranked_context({"results": [], "meta": {}, "stack_questions": {"kt": ["問一?"]}, "stack_questions_applicable": {"kt": ["問一?"]}, "delta_truncated": True})
+    check("③截斷時註記一句", "只掃了前 2 MB" in t3, t3)
+    src = Path(m.__file__).read_text(encoding="utf-8")
+    check("③hook 送 delta_text 與 delta_truncated 給 lumos", '"delta_text": delta_text' in src and '"delta_truncated": delta_trunc' in src, "")
+
+
+def t_dispatch_lens_includes_dispositions():
+    """[表態閘 S8]派工鏡頭 diff 模式附表態記錄(有才附;只列人答的題,未觸發只給個數);快取 key 含表態記錄 sha256(重表態後舊快取 miss)。
+    翻紅釘:拔掉 _lens_dispositions_lines 呼叫 → ①翻紅。"""
+    import json as _j, subprocess as _sp, shutil
+    d, v = _mk_lens_bound_repo()
+    try:
+        r0 = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
+        d0 = _j.loads(r0.stdout.strip().splitlines()[-1]) if r0.stdout.strip() else {}
+        check("⓪沒表態記錄 → 不附、JSON dispositions=null", "表態記錄" not in d0.get("text", "") and d0.get("dispositions") is None, d0.get("text", "")[:300])
+        f = d / "disp.json"
+        f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": "q", "evidence": "src/alpha.py:1"},
+                               "kt-compose": {"status": "na", "question": "q", "auto": True, "reason": "未觸發:x"}}, ensure_ascii=False), encoding="utf-8")
+        w = _sp.run([sys.executable, GRAPHCTL, "code-loop", "dispositions", str(f), "--repo", str(d)], capture_output=True, text=True)
+        check("①表態寫入", w.returncode == 0, w.stderr[-300:])
+        r1 = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
+        d1 = _j.loads(r1.stdout.strip().splitlines()[-1]) if r1.stdout.strip() else {}
+        t = d1.get("text", "")
+        check("①鏡頭附表態記錄:人答的題列出、未觸發只給個數、JSON answered=1", "表態記錄" in t and "kt-coroutines satisfied" in t and "kt-compose" not in t and "另有 1 題未觸發" in t and (d1.get("dispositions") or {}).get("answered") == 1, t[:600])
+        m = _load_lumos_inproc()
+        p_a = m._lens_cache_path(d, "a" * 40, "b" * 40, extra="")
+        p_b = m._lens_cache_path(d, "a" * 40, "b" * 40, extra="deadbeef")
+        check("②快取 key 含表態記錄 sha:extra 不同 → 路徑不同", p_a != p_b, f"{p_a}\n{p_b}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def t_gov_stats_dispositions():
+    """[表態閘 S9]gov --stats 多一段按 id 彙總四值;同 sha 兩筆 dispositions 各算各的(去重鍵拿 ts 當鑑別子,r3 接手席 H1);
+    人答 ≥10 且全 na → 死題候選;recall-miss ≥3 → 觸發太窄候選;沒這兩種事件 → 段落不印。"""
+    import json as _j, shutil
+    def ev(ts, kind, **kw):
+        base = {"ts": ts, "commit": "abc1234", "gate": "code-loop", "kind": kind, "hard": False, "nodes": [], "note": ""}
+        base.update(kw); return _j.dumps(base, ensure_ascii=False) + "\n"
+    dead = {"cs-async": {"status": "na", "question": "q", "reason": "這條路徑沒有非同步呼叫,不適用本題"}}
+    gov = [ev("2026-09-09T10:00:00+08:00", "dispositions", branch="f", head_sha="abc1234" + "0" * 33,
+              dispositions={"kt-coroutines": {"status": "satisfied", "question": "q", "evidence": "a.kt:1"},
+                            "kt-compose": {"status": "na", "question": "q", "auto": True, "reason": "未觸發:x"}}),
+           ev("2026-09-09T10:05:00+08:00", "dispositions", branch="f", head_sha="abc1234" + "0" * 33,
+              dispositions={"kt-coroutines": {"status": "na", "question": "q", "reason": "這次只改字串資源沒碰協程"},
+                            "kt-compose": {"status": "todo", "question": "q", "issue": "Issues/x", "reason": "之後另開一題把重組範圍量出來"}})]
+    gov += [ev(f"2026-09-09T11:{i:02d}:00+08:00", "dispositions", branch="g", head_sha="abc1234" + "1" * 33, dispositions=dead) for i in range(10)]
+    gov += [ev(f"2026-09-09T12:{i:02d}:00+08:00", "recall-miss", recall_miss="kt-flow", note="kt-flow:席位抓到 flow 沒 distinctUntilChanged") for i in range(3)]
+    root, vault = _stats_fixture("gctl-disp-", gov)
+    try:
+        r = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0)
+        out = r.stdout
+        check("①按 id 彙總、同 sha 兩筆各算(kt-coroutines 做到了 1 不適用 1;kt-compose 待辦 1 未觸發自動 1)",
+              "kt-coroutines:做到了 1、不適用 1、待辦 0、未觸發自動 0" in out and "kt-compose:做到了 0、不適用 0、待辦 1、未觸發自動 1" in out, out[-1500:])
+        check("②人答 10 次全 na → 死題候選", "cs-async:做到了 0、不適用 10" in out and "死題候選" in out, out[-1500:])
+        check("③recall-miss 3 次 → 觸發太窄候選", "kt-flow:審查席抓到未觸發題的問題 3 次 ← 觸發太窄候選" in out, out[-1500:])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    root2, vault2 = _stats_fixture("gctl-disp0-", ['{"ts":"2026-09-09T09:00:00+08:00","commit":"a","gate":"check-s","kind":"warned","hard":false,"nodes":["N1"]}\n'])
+    try:
+        r = run(vault2, "gov", "--since", "9999", "--stats", expect_rc=0)
+        check("④沒表態事件 → 段落不印", "棧別提問表態" not in r.stdout, r.stdout[-400:])
+    finally:
+        shutil.rmtree(root2, ignore_errors=True)
 
 
 if __name__ == "__main__":
