@@ -336,3 +336,9 @@ hook 事件檔從家目錄搬回 repo 樹內且判準從「近 7 天跑過」改
   ★擋人不是關門★——已歸進「明確不算」那張表;`skipped-env` / `fail-open` 在真實帳上出現第一筆時
   守衛會再提醒,屆時同樣歸「不算」(表只列真的出現過的,是那支守衛的反向條件)。
 
+## 落地後修正(2026-09-08 下午)
+
+- **`gov --stats` 的 hook 段讀錯 repo**:原本用「cwd 的 git 根」找 `governance/runtime/hook-events.jsonl`,測試用假 vault 時讀到的是真 repo 的檔;
+  平行推送閘期間五支 hook 一直在追加,`t_gov_stats_rc_and_full` 兩次呼叫的統計段就不同 → 推送閘翻紅(單跑是綠的,典型的「隔離缺陷被當成不穩」)。
+  改成從 vault 反推(`_vault_repo_root`),跟 disposal 留痕同一支;補 `t_gov_stats_hook_section_reads_vault_repo_not_cwd`(獨一無二的 hook 名證明讀的是假 vault 那份),突變退回 cwd 版翻紅。
+  ★順帶承認:S4 那段 hook 統計上線時沒有直接測試,這次才補。★

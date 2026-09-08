@@ -4444,6 +4444,29 @@ def t_gov_stats_rc_and_full():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_gov_stats_hook_section_reads_vault_repo_not_cwd():
+    """gov --stats 的「hook 近 N 天跑過幾次」段要從 vault 反推的 repo 根讀 governance/runtime/hook-events.jsonl,
+    不是從 cwd 的 git 根(2026-09-08 實踩:假 vault 讀到真 repo 的事件檔,平行推送閘期間被追加 → 同測試兩次呼叫統計段不同 → 假紅)。
+    ①假 vault 沒有事件檔 → 不印那一段(即使 cwd 那個 repo 有)②假 vault 的 repo 根放一份、hook 名獨一無二 → 印的是它。"""
+    import shutil, subprocess as _sp
+    gov = ['{"ts":"2026-06-01T09:00:00","commit":"aaa","gate":"check-s","kind":"warned","hard":false,"nodes":["N1"]}\n']
+    root, vault = _stats_fixture("gctl-sthk-", gov)
+    try:
+        _sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)   # 讓 _vault_repo_root 走到 root
+        out0 = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("stats-hook: 假 vault 沒事件檔 → 不印 hook 段", "真的跑過幾次" not in out0, out0[-400:])
+        rt = root / "governance" / "runtime"; rt.mkdir(parents=True)
+        import datetime as _dt
+        now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        lines = [f'{{"ts": "{now}", "hook": "zz-fixture-only-hook", "kind": "{k}", "repo": "x", "fp": "0"}}' for k in ("ok", "ok", "timeout")]
+        (rt / "hook-events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out1 = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("stats-hook: 現場成立——假 vault 的事件檔放好後 hook 段出現", "真的跑過幾次" in out1, out1[-400:])
+        check("stats-hook: 印的是假 vault 那份(獨一無二的 hook 名,cwd 的真檔不可能有)", "zz-fixture-only-hook: 成功 2 / 逾時 1 / 失敗 0" in out1, out1[-400:])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def t_gov_stats_window_and_parse():
     import shutil
     gov = [
