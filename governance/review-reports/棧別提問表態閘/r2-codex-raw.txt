@@ -1,0 +1,199 @@
+## Finding 1：CI 無法用既有讀側同時重建兩種獨立留痕
+
+severity: blocker
+
+blocking: 是——若未定義 pass/skip 與 dispositions 兩條事件如何合併，乾淨 checkout 必然可能把已表態判成缺失。
+
+spec 段落：三、表態何時寫、閘放哪裡；[S6] CI 路徑。
+
+引句:「本機讀 marker、CI 從治理帳事件重建」
+
+問題：`dispositions` 與稍後寫入的 pass/skip 是不同事件；既有讀側只挑最後一筆 pass/skip，不能靠「加欄位」取得更早的 dispositions。spec 必須明定按 branch 分別選有效 pass/skip 與 dispositions，再各自以 head_sha／簿記祖先規則驗證後合併，或明定 pass/skip 寫事件時複製當前 dispositions。
+
+file: `scripts/lumos:20408` `_codeloop_read_from_ledger` 只回傳一個 marker 同形 dict。
+
+file: `scripts/lumos:20423` 讀側明確排除非 passed/skipped 事件；新 `kind=dispositions` 會被跳過。
+
+file: `scripts/lumos:21031` pass/skip 在 dispositions 之後另寫一筆事件，且 spec 明定它們不帶表態旗標。
+
+---
+
+## Finding 2：治理帳寫失敗仍會回報 dispositions 成功
+
+severity: blocker
+
+blocking: 是——CI 唯一權威事件可能沒有落盤，本機 marker 卻成功，導致本機放行、CI 假紅。
+
+spec 段落：三、表態何時寫、閘放哪裡；實務隱患／守衛面。
+
+引句:「形狀好原子寫 marker＋治理帳事件」
+
+問題：原子 marker 只解了半套；若沿用 `_codeloop_gov_log`，治理帳開啟或追加失敗會被吞掉，呼叫端無從知道事件缺失。新原語需把 ledger 寫入結果變成可檢查的回傳／例外，並明定 marker 與 ledger 的寫入順序及失敗補償。
+
+file: `scripts/lumos:20454` `_codeloop_gov_log` 沒有成功／失敗回傳契約。
+
+file: `scripts/lumos:20474` 治理帳以 append 寫入。
+
+file: `scripts/lumos:20476` `OSError` 被直接 `pass`，但 `cmd_code_loop` 仍照常印成功。
+
+---
+
+## Finding 3：`git diff --quiet` 不能證明測試索引來自 at_sha
+
+severity: blocker
+
+blocking: 是——未提交的測試可被當成被推送 commit 的有效證據。
+
+spec 段落：四、錨點怎麼驗；[S5]。
+
+引句:「要求該平台 root 在 `git diff --quiet <at_sha> -- <root>` 下乾淨」
+
+問題：CI 乾淨 checkout 時此檢查通常成立；本機髒工作樹時它能抓 tracked 的 staged/unstaged 差異，卻完全忽略 untracked 檔，而 `_platform_test_index` 直接掃工作樹。攻擊／誤用路徑是新增一個未追蹤測試方法、用它作 `test:` 證據，quiet 仍綠；應從 `at_sha` 暫存樹建立索引，或另以 `git ls-files --others --exclude-standard <root>` 封鎖未追蹤檔。
+
+file: `scripts/lumos:8162` `_platform_test_index` 建的是平台工作樹索引。
+
+file: `scripts/lumos:8178` `discover_test_methods` 直接掃平台 root。
+
+file: `scripts/test_lumos.py:9347` 現有測試已出現 untracked 檔情境，可沿用來補反例。
+
+---
+
+## Finding 4：改檔前與推送前使用不同適用性母體
+
+severity: blocker
+
+blocking: 是——同一改動可能在動手前被問、推送時卻自動 na，違反「同一組 when」的核心宣稱。
+
+spec 段落：一、哪些問要答；[S3]。
+
+引句:「對「目前檔案內容」跑同一組 `when`」
+
+問題：hook 對整份目前檔案匹配，pitfalls/check 卻只匹配 diff 的 added 行；既有舊行命中、此次只改相鄰行時，兩個時機會得到不同適用集合。應讓 hook 也取得 before/after diff，或明確承認兩種集合並禁止 hook 的結果被描述為與推送閘相同。
+
+file: `scripts/lumos:16685` `_pitfall_diff_collect` 以 `git diff -U3` 取資料。
+
+file: `scripts/lumos:16707` 刪除行直接跳過。
+
+file: `scripts/lumos:16711` 只有 `+` 行進入 added 集合。
+
+file: `scripts/hooks/claude/impact-hook.py:645` 現行 hook 只消費 lumos 已產出的 `stack_questions`，本身沒有單源問題表或 diff 座標。
+
+---
+
+## Finding 5：added-line regex 無法覆蓋「缺少／移除」型問題
+
+severity: blocker
+
+blocking: 是——大量題目問的是某保護是否缺席，僅看新增行無法可靠決定不適用，會讓硬閘自動放過真正風險。
+
+spec 段落：一、哪些問要答；刻意不做。
+
+引句:「每題都必須有觸發；寫不出觸發的題本身就是設計問題」
+
+問題：例如移除 cancellation、穩定 key、timeout、using 或資源清理可以是純刪除；另有「互不依賴」「生命週期是否匹配」「索引是否支撐」等跨行／跨檔關係，任何 added-line regex 都無法證明不適用。應將負向／關係型題改成較寬的檔案或語法構造觸發，並為 deletion-only、跨檔與缺席條件建立 recall corpus，否則 `auto:true` 是未查證的免答。
+
+file: `scripts/lumos:15038` Compose 題同時包含缺穩定 key、Effect key 是否正確等關係判斷。
+
+file: `scripts/lumos:15047` C# 題包含 CancellationToken 斷鏈與互不依賴等待。
+
+file: `scripts/lumos:15051` 資源題包含例外路徑能否收回連線。
+
+---
+
+## Finding 6：`stack_questions` 的「向後相容」只保住型別，沒有保住語意
+
+severity: major
+
+blocking: 否——可在實作前補齊 consumer contract 與回歸測試，不必推翻整體設計。
+
+spec 段落：一、哪些問要答；[S2]、[S3]。
+
+引句:「向後相容：仍是 list of str」
+
+問題：既有 consumer 把欄位理解成「命中棧就列完整題組」；改成只列適用題會改變 hook 顯示、測試數量守衛及任何依賴完整清單的外部 consumer，不能只以元素型別相同宣稱相容。應將完整表只放 meta、明定 `stack_questions` 語意版本，並保留舊 fixture 驗證「未適用題消失」是刻意的新行為。
+
+file: `scripts/lumos:16733` 現行語意是非測試檔命中棧即附該棧整組問題。
+
+file: `scripts/hooks/claude/impact-hook.py:645` hook 逐項原樣格式化此欄，題數改變會直接改使用者可見輸出。
+
+file: `scripts/test_lumos.py:19044` 既有 `t_pitfalls_stack_questions` 明載數量守衛。
+
+---
+
+## Finding 7：tag 推送仍留有不表態的出口
+
+severity: major
+
+blocking: 是——總則宣稱「缺一問就不准推」，但現有 pre-push 對非 branch ref 明確只提醒。
+
+spec 段落：三、表態何時寫、閘放哪裡；[S7]。
+
+引句:「閘條件：diff 有適用題就擋，不看 tier」
+
+問題：spec 只說把 standard advisory 改成同一道閘，沒有處置現有 `refs/heads/*` 之外一律 advisory 的分支；直接推 tag 仍能避開本機表態閘。若 tag 刻意不擋，需縮小總則並補 CI 後盾測試；若也要擋，需定義 tag 的留痕座標，不能冒充 branch。
+
+file: `scripts/hooks/pre-push:195` 硬擋限定目的 ref 為 `refs/heads/*`。
+
+file: `scripts/hooks/pre-push:219` 非分支 ref 走另一分支。
+
+file: `scripts/hooks/pre-push:221` tag 明確標為 advisory、不擋。
+
+---
+
+## Finding 8：併發段只處理 marker 覆寫，未處理 tracked ledger 的競爭與順序
+
+severity: major
+
+blocking: 否——單機常態可運作，但「最後一筆」必須先定義並補競爭測試。
+
+spec 段落：實務隱患／併發。
+
+引句:「check 取該 sha 最後一筆事件」
+
+問題：`os.replace` 只能保證 marker 不出現半檔，不能讓 marker 與 ledger 成為同一交易；兩個程序可能各自覆寫 marker、追加不同事件，而 CI 最後看到的順序又取決於提交／合併後的檔案順序。需明定 ledger 的最後一筆是檔案順序而非 `ts`、處理同 sha 重複事件及衝突合併，並測試兩程序交錯寫入。
+
+file: `scripts/lumos:20443` 現有 marker 與 ledger 是兩個獨立寫入函式。
+
+file: `scripts/lumos:20419` ledger 依檔案行序掃描，後行覆蓋前行。
+
+file: `scripts/lumos:20474` ledger append 沒有跨程序鎖或與 marker 共用交易。
+
+---
+
+## Finding 9：效能與資源預算尚未封口
+
+severity: major
+
+blocking: 否——可用上限、快取和測試把成本界線補實。
+
+spec 段落：實務隱患；驗收條款。
+
+引句:「適用性讓每次表態成本壓到幾行」
+
+問題：check 可能為多個 `test:` 證據建立多平台測試索引，hook 又要掃整檔 regex；spec 沒有檔案大小、regex 數量、平台數、索引耗時或超時預算，因此「成本壓到幾行」只描述 token，不代表執行成本。應加大型 diff／大檔／多平台 benchmark，以及 regex 編譯失敗與超時的明確 fail-open/blocked 歸屬。
+
+file: `scripts/lumos:8168` 測試方法索引雖為單次 CLI 內惰性快取，仍會按被引用平台掃 root。
+
+file: `scripts/lumos:8178` 每個平台首次引用會執行 `discover_test_methods`。
+
+file: `scripts/lumos:3358` 平台數與 root 由消費專案設定，沒有本案所述成本上限。
+
+---
+
+## 逐節讀畢紀錄
+
+- 現況查證：已讀，無額外 finding。
+- 設計／觸發式適用性：已讀，finding 4、5、6。
+- 設計／表態形狀：已讀，原文對照修復成立；無額外 finding。
+- 設計／表態時機與閘：已讀，skip 修復方向成立，但 finding 1、2、7 未封口。
+- 設計／錨點驗證：已讀，path:line 的 at_sha 修復成立；多平台選擇成立，但 test 索引版本性仍有 finding 3。
+- 設計／副產品：已讀，mapper 已列入 DEP 與 [S9]；無額外 finding。
+- 驗收條款：已讀，finding 1、3、4、6、7 缺少反例驗收。
+- 實務隱患／守衛面：已讀，finding 2、7。
+- 實務隱患／併發：已讀，finding 8。
+- 實務隱患／效能與資源：已讀，finding 9。
+- 實務隱患／不可逆與回滾：已讀；marker 可覆寫、tracked ledger 可由 git 回復，無 finding。
+- 刻意不做：已讀，finding 5 與「不用語意分類」的邊界衝突。
+- 審計修正紀錄：已讀；前輪六條中原文對照、path:line at_sha、原子 marker、多平台選擇已實質折入，skip 與 CI 重建仍留下上述新洞。
+
+總結：最嚴重 severity 為 blocker，blocking 共 6 條。
