@@ -45,4 +45,4 @@ preflight-4: ran(代碼審首輪;材料=r1-snapshot.patch 1644 行(U6,scripts/lu
 
 ## 處置(最終)
 - 五席 sonnet 25 條 + Gemini 2 條 + Codex finder 8 條 + 否決 4 條 = 39 條(去掉跨席重複後 ~31 個獨立問題),全折、accepted 空、refuted none。
-- 全套測試:折入後 4797 綠(sonnet 輪)、Codex 折入後 4804 綠(全套)。
+- 全套測試:折入後 4797 綠(sonnet 輪)、Codex 折入後見 fullsuite-branch3(記帳時補數字)。
