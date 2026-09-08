@@ -30042,7 +30042,8 @@ def t_wrapper_watchdog_no_health_but_wrapper_ran():
 
         def _run():
             st.unlink(missing_ok=True)
-            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120,
+                           env=_watchdog_quiet_env(root))   # ★別在使用者桌面彈真通知★
 
         def _stamp(h):
             return (_dt.datetime.now() - _dt.timedelta(hours=h)).strftime("%Y-%m-%d %H:%M:%S")
@@ -30957,6 +30958,70 @@ def t_watchdog_time_math_is_one_scheme():
     print("  ✓ t_watchdog_time_math_is_one_scheme")
 
 
+def t_watchdog_tests_never_notify_the_desktop():
+    """★測試跑真的看門狗時,不准在使用者桌面彈通知★(2026-09-08,使用者回報「叫不停」)。
+
+    真的發生了:三支看門狗測試會真的執行那支腳本,而沙箱裡沒有通知 app,
+    `notify()` 就落到系統的 `osascript` ——**每一次都是一則真通知**。
+    一輪全套約 20 則,而全套一天跑了好幾遍。★是我的測試在騷擾使用者,不是看門狗壞掉。★
+
+    ★修在測試側不在產品側★:不新增「不要通知」的開關(那種開關會被拿來關真的告警)。
+    這一支釘住:每一個「跑真看門狗」的呼叫點都必須帶 `_watchdog_quiet_env`。
+    下次再加一支測試忘了帶,這裡會紅。
+    """
+    import re as _re
+    src = Path(__file__).resolve().read_text(encoding="utf-8")
+    bad = []
+    for m in _re.finditer(r'_sp\.run\(\["bash", str\((wd|g / "wrapper-watchdog\.sh")\)\]', src):
+        # ★窗口要前後都看★:設定安靜環境的那一行可能寫在呼叫的前面(env=… 先算好),
+        # 第一版只往後看 400 字,漏掉那種寫法、報了一個假的紅。
+        seg = src[max(0, m.start() - 400):m.start() + 400]
+        if "_watchdog_quiet_env" not in seg:
+            ln = src[:m.start()].count("\n") + 1
+            bad.append("第 %d 行" % ln)
+    check("★每個跑真看門狗的呼叫點都要帶安靜環境★", not bad,
+          "沒帶的:" + "、".join(bad))
+    # 反向對照:那支 helper 真的擋得住嗎
+    import subprocess as _sp2, tempfile as _tf2, shutil as _sh2, os as _os2
+    root = Path(_tf2.mkdtemp(prefix="gctl-quiet-"))
+    try:
+        env = _watchdog_quiet_env(root)
+        hit = root / "hit"
+        probe = root / "p.sh"
+        probe.write_text('#!/bin/sh\nosascript -e x && echo ok\n', encoding="utf-8")
+        _os2.chmod(probe, 0o755)
+        r = _sp2.run(["bash", str(probe)], capture_output=True, text=True, env=env, timeout=60)
+        check("★替身要真的蓋掉系統那支★(不然這條守衛是空的)",
+              "ok" in r.stdout and not hit.exists(), r.stdout + r.stderr)
+    finally:
+        _sh2.rmtree(root, ignore_errors=True)
+    print("  ✓ t_watchdog_tests_never_notify_the_desktop")
+
+
+def _watchdog_quiet_env(root, base=None):
+    """跑真的看門狗時,★把桌面通知那條路擋掉★(2026-09-08,使用者回報「叫不停」)。
+
+    真的發生了:看門狗的測試會真的執行那支腳本,而沙箱裡沒有通知 app
+    → `notify()` 落到系統的 `osascript` → **每一次都在使用者桌面彈一則真通知**。
+    三支看門狗測試加起來一輪跑約 20 次,而全套一天跑了好幾遍。
+
+    ★修在測試側,不在產品側★:不新增「不要通知」的環境變數——那種開關會被拿來
+    關掉真的告警,而這支的存在理由就是「死了要有人知道」。
+    改成在測試的 PATH 前面塞兩支無害替身(`osascript` / `open`),
+    腳本照原樣跑、判斷照原樣走,只是話送不到桌面。
+    """
+    import os as _os
+    b = Path(root) / "_quiet_bin"
+    b.mkdir(exist_ok=True)
+    for name in ("osascript", "open"):
+        f = b / name
+        f.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        _os.chmod(f, 0o755)
+    env = dict(base or _os.environ)
+    env["PATH"] = str(b) + ":" + env.get("PATH", "")
+    return env
+
+
 def t_wrapper_watchdog_unknown_is_not_healthy():
     """★「問不出來」不准靜靜地變成「沒事」★(2026-09-08 code-batch20,三個現場都實跑重現過)。
 
@@ -30983,6 +31048,7 @@ def t_wrapper_watchdog_unknown_is_not_healthy():
 
     def _run(g, env=None):
         (g / ".wrapper-watchdog-state").unlink(missing_ok=True)
+        env = _watchdog_quiet_env(g.parent, env)          # ★別在使用者桌面彈真通知★
         r = _sp.run(["bash", str(g / "wrapper-watchdog.sh")], capture_output=True, timeout=300, env=env)
         return r.stdout.decode("utf-8", "replace").strip()
 
@@ -31080,7 +31146,8 @@ def t_wrapper_watchdog_states():
 
         def _run():
             st.unlink(missing_ok=True)
-            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+            return _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120,
+                           env=_watchdog_quiet_env(root))   # ★別在使用者桌面彈真通知★
 
         # ① 逾期的健康檔 + 一支真的在跑的持鎖行程 → 不喊
         hp.write_text('{"finished_at":"%s","steps":{"governance":0},"total":0}' % _ago(37),
@@ -31124,7 +31191,8 @@ def t_wrapper_watchdog_states():
                       encoding="utf-8")
         st.unlink(missing_ok=True)
         st.mkdir()
-        r = _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120)
+        r = _sp.run(["bash", str(wd)], capture_output=True, text=True, timeout=120,
+                    env=_watchdog_quiet_env(root))       # ★別在使用者桌面彈真通知★
         check("★自己的狀態檔寫不進去要喊出來★(第一版靜默吞掉,邊緣觸發整個失效)",
               "狀態檔寫不進去" in r.stdout, r.stdout[-300:])
         check("★而且 bash 的重導向錯誤不准漏到 stderr★(2>/dev/null 對這種錯誤是無效的)",
