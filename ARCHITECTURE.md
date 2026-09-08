@@ -173,7 +173,7 @@ flowchart TB
     COMMIT --> PUSH{"pre-push (git)"}
     PUSH -->|"① lumos doctor --ci"| PB1["⛔ 圖譜不健康(斷連結、孤兒、規則沒綁測試…)"]
     PUSH -->|"② anchor verify"| PB2["⛔ 測試程式或把關腳本被改了,沒人簽名"]
-    PUSH -->|"③ code-loop check (tier=high)"| PB3["⛔ 高風險改動沒審過<br/>(審過留憑證 pass / 說明理由跳過 skip / 硬繞 --no-verify 會留下紀錄;<br/>憑證綁版本,之後再改程式就失效,只改帳本檔不算)"]
+    PUSH -->|"③ code-loop check (留痕/表態)"| PB3["⛔ 高風險改動沒審過,或觸發到的效能檢核題沒表態<br/>(審過留憑證 pass / 說明理由跳過 skip / 每題表態 dispositions / 硬繞 --no-verify 會留下紀錄;<br/>憑證與表態都綁版本,之後再改程式就失效,只改帳本檔不算)"]
     PUSH -->|全過| PASS["push"]
     PASS --> CI["CI (GitHub Actions): 全套測試<br/>+ doctor --ci + anchor verify"]
     CI --> WAIT{"lumos ci-wait<br/>(push 後同輪等結論)"}

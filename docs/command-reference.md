@@ -92,7 +92,9 @@ It's for **visibility while you develop** — wherever it keeps going off is whe
 lumos pitfalls --diff <range>    # risk tier for this change (standard / high)
 lumos bound-tests --diff <range> # actually run the tests bound to the contracts you touched
                                  # red here means fix the test, not add a review record
-lumos code-loop check|pass|skip  # review record for high-risk changes (checked on push)
+lumos code-loop check|pass|skip  # review record for high-risk changes; check also runs the stack-question disposition gate (checked on push)
+lumos code-loop dispositions <file> [--branch <name>]  # answer the triggered stack performance questions before pushing (template: lumos pitfalls --diff <range> --dispositions-template --carry)
+lumos code-loop recall-miss <id> --note "..."  # a reviewer found an issue matching a question the triggers missed
 lumos loop status <id>           # convergence verdict for a design or code review loop
 lumos testmap affected --diff .. # suggests which tests to run for this change
 lumos anchor verify|approve      # tamper fingerprints for test and check files

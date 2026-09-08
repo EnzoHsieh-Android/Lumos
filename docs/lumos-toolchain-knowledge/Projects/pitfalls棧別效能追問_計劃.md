@@ -2,7 +2,7 @@
 type: project
 status: done
 created: 2026-07-19
-updated: 2026-07-20
+updated: 2026-09-09
 tags:
   - type/project
   - status/done
@@ -18,6 +18,15 @@ summary: |-
   DECISION:[2026-07-19]問題表自帶於 scripts/lumos(同 _PITFALL_QUESTIONS 慣例)而非宣告檔——檢核問題是方法論資產跨專案同一份,非專案配置;內容與效能檢核目錄節點同步義務記入(防雙寫漂移,散落漂移家規)(valid)
 verified_by:
   - "[[Verification/2026-07-20_棧別效能追問]]"
+decisions:
+  - content: standard 不擋:棧別檢核答案只落 pass --note 建議、工具不驗
+    id: d1
+    context: 三時機推到眼前;留痕建議含答案,人工紀律
+    why_chosen: 當時判 standard 改動不該被擋,答案留給紀律
+    decided: 2026-07-20
+    valid: false
+    superseded_by: "[[Projects/棧別提問表態閘_計劃]]"
+    ended: 2026-09-09
 ---
 # pitfalls棧別效能追問_計劃
 
