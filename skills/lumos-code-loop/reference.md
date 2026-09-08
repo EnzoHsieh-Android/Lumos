@@ -45,7 +45,7 @@ description: 分支終審前執行代碼對抗審計 loop——pitfalls --diff �
   3. ~~三道防污染自檢~~ ⛔ 隨植入停用(無植入即無污染面)
   4. 派乾淨 reviewer + 抑噪紀律 + impact 鏡頭
   5. 判讀:辯方殺假陽性 → 存活 max severity
-  6. 記錄 `canary record none`(disposal 版模板:carrier 帶 --findings-set/--folded-set/--accepted-set,
+  6. 記錄 `canary record none`(disposal 版模板:carrier 帶 --findings-set/--folded-set/--accepted-set/--refuted-set(2026-09-09 起必帶),
      `loop next` 已泛型吐 `disposal_cmd`——★只換閘不換記帳式,disposal 恆卡「無處置帳」★)
      → 問收斂 `loop status --disposal --spec <凍結 diff/patch> --repo <root>`(2026-08-08 起;舊帳沿舊閘)
   7.(可選)mutation 冒煙補機械錨
@@ -169,7 +169,7 @@ fix commit(含必要的新測試)。測試收口分兩級:
   - 業務合約級隱患 → 另寫圖譜 ★INVARIANT★ 綁 `[test:]`;非合約級測試進套件靠回歸守。
 
 ### 步驟 5 — 記錄
-> ⛔ `canary record caught|missed` 的 kind 隨植入協議 2026-08-14 停用;現行一律 `canary record none … --findings-set/--folded-set/--accepted-set --report --snapshot --scope-lines`,語法見下方「5 · 記錄」。
+> ⛔ `canary record caught|missed` 的 kind 隨植入協議 2026-08-14 停用;現行一律 `canary record none … --findings-set/--folded-set/--accepted-set --refuted-set --report --snapshot --scope-lines`,語法見下方「5 · 記錄」。
 
 ```bash
 lumos canary record caught|missed \

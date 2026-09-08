@@ -996,18 +996,19 @@ def t_loop_disposal_zero_findings():
     """★零發現的乾淨輪,處置閘要能過★(2026-08-24 code-out-top3 實踩:record 說「沒發現別帶處置選項」、
     disposal 閘又要求「無處置帳 ✗」——兩邊打架,乾淨輪永遠過不了。手冊語意=「每個發現都有去向即過」,
     零發現視同全處置(vacuous),這是閘漏了 findings=0 分支的 bug 不是語意變更。
-    翻紅釘:把空輪分支拿掉 → 第 2 條翻紅。"""
+    翻紅釘:把空輪分支拿掉 → 第 2 條翻紅。
+    編號帶 code- 前綴(2026-09-09):條款綁定閘當日生效後,設計審拿 .patch 當審材會被那一步擋(這裡審的是空輪語意不是條款),code 迴圈那一步跳過。"""
     import subprocess as sp, hashlib, tempfile
     v = mkvault()
     spec = Path(tempfile.mkdtemp(prefix="zf-")) / "spec.patch"
     spec.write_text("diff --git a/x b/x\n+clean\n", encoding="utf-8")
-    rpt = spec.parent / "r1-s1.md"; rpt.write_text("# clean\n已讀,無 finding\nseverity: clean\n", encoding="utf-8")
+    rpt = spec.parent / "r1-s1.md"; rpt.write_text("severity: clean\n# clean\n已讀,無 finding\n", encoding="utf-8")
     sha = hashlib.sha256(spec.read_bytes()).hexdigest()
-    r = run(v, "canary", "record", "none", "--loop", "zf-loop", "--round", "r1", "--auditor", "s1",
+    r = run(v, "canary", "record", "none", "--loop", "code-zf-loop", "--round", "r1", "--auditor", "s1",
             "--severity", "clean", "--findings", "0", "--report", str(rpt), "--snapshot", str(spec),
             "--spec", str(spec), "--reviewed", sha, "--scope-lines", "2", "--tier", "standard")
     check("clean 輪記帳 rc0", r.returncode == 0, r.stderr[-200:])
-    g = run(v, "loop", "status", "zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
+    g = run(v, "loop", "status", "code-zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
     check("★零發現輪處置閘 PASS(vacuous:沒有發現=每個發現都有去向)★", g.returncode == 0 and "PASS" in g.stdout, g.stdout[-300:] + g.stderr[-200:])
     check("訊息講明是零發現空輪", "0 條發現" in g.stdout or "零發現" in g.stdout or "無發現" in g.stdout, g.stdout[-300:])
     # r1 blocker 折入:空輪不准跳過留痕重驗;橫幅不准宣稱沒做的「引句全錨定」
@@ -1015,7 +1016,7 @@ def t_loop_disposal_zero_findings():
     check("★空輪橫幅不宣稱引句全錨定(沒驗的不寫)★", "引句全錨定" not in g.stdout and ("引句" in g.stdout), g.stdout[-300:])
     import shutil as _sh
     hid = spec.parent / "hidden"; _sh.move(str(rpt), str(hid))
-    g3 = run(v, "loop", "status", "zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
+    g3 = run(v, "loop", "status", "code-zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
     _sh.move(str(hid), str(rpt))
     check("★空輪留痕檔被刪 → FAIL(不是免驗通行證)★", g3.returncode != 0 and "留痕" in g3.stdout, g3.stdout[-300:])
     # r1 f2:帳上 findings 手改成壞值 → fail-closed rc2,不 traceback
@@ -1023,14 +1024,15 @@ def t_loop_disposal_zero_findings():
     check("前置:找得到帳本", lp.exists(), str(lp))
     orig = lp.read_text(encoding="utf-8")
     lp.write_text(orig.replace('"findings": 0', '"findings": "x"', 1), encoding="utf-8")
-    g4 = run(v, "loop", "status", "zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
+    g4 = run(v, "loop", "status", "code-zf-loop", "--disposal", "--spec", str(spec), "--repo", str(v))
     lp.write_text(orig, encoding="utf-8")
     check("★findings 壞值 → rc2 擋下、不 traceback★", g4.returncode == 2 and "Traceback" not in g4.stderr and ("壞" in g4.stderr or "手改" in g4.stderr or "格式" in g4.stderr), f"rc={g4.returncode} {g4.stderr[-250:]}")
     # 反向:有發現卻沒處置帳,仍要 FAIL(不能被空輪分支放水)
-    r2 = run(v, "canary", "record", "none", "--loop", "zf-loop2", "--round", "r1", "--auditor", "s1",
-             "--severity", "major", "--findings", "2", "--report", str(rpt), "--snapshot", str(spec),
+    rpt2 = spec.parent / "r1-s1b.md"; rpt2.write_text("severity: major\nseverity: major\n甲\nseverity: major\n乙\n", encoding="utf-8")
+    r2 = run(v, "canary", "record", "none", "--loop", "code-zf-loop2", "--round", "r1", "--auditor", "s1",
+             "--severity", "major", "--findings", "2", "--report", str(rpt2), "--snapshot", str(spec),
              "--spec", str(spec), "--reviewed", sha, "--scope-lines", "2", "--tier", "standard")
-    g2 = run(v, "loop", "status", "zf-loop2", "--disposal", "--spec", str(spec), "--repo", str(v))
+    g2 = run(v, "loop", "status", "code-zf-loop2", "--disposal", "--spec", str(spec), "--repo", str(v))
     check("★有發現沒處置帳 → 照樣 FAIL★", g2.returncode != 0 and "FAIL" in g2.stdout, g2.stdout[-200:])
 
 
@@ -4309,7 +4311,7 @@ def t_panel_probe_retired():
     for lp, sev in (("code-strict-t", "major"), ("prose-strict-t", "major")):
         run(v, "canary", "record", "none", "--loop", lp, "--round", "r1", "--auditor", "s1",
             "--severity", sev, "--findings", "1",
-            "--findings-set", "f1", "--accepted-set", "f1", "--accept-reason", "f1=測試放行",
+            "--findings-set", "f1", "--refuted-set", "none", "--accepted-set", "f1", "--accept-reason", "f1=測試放行",
             "--report", str(specf), "--snapshot", str(specf),
             "--spec", str(specf), "--reviewed", sha, expect_rc=0)
     rb = run(v, "loop", "status", "code-strict-t", "--disposal", "--spec", str(specf))
@@ -4336,7 +4338,7 @@ def t_panel_probe_retired():
     # 第四釘(cpr r1 主審 B):退役迴圈+多 carrier 的分流訊息
     for seat in ("x1", "x2"):
         run(v, "canary", "record", "none", "--loop", "code-mc-t", "--round", "r1", "--auditor", seat,
-            "--severity", "minor", "--findings", "1", "--findings-set", "f1", "--folded-set", "f1",
+            "--severity", "minor", "--findings", "1", "--findings-set", "f1", "--refuted-set", "none", "--folded-set", "f1",
             "--report", str(specf), "--snapshot", str(specf), "--spec", str(specf), "--reviewed", sha,
             expect_rc=0)
     re2 = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "status", "code-mc-t",
@@ -4705,9 +4707,9 @@ def t_disposal_clause_gate():
         spec = d / spec_name; spec.write_text(body, encoding="utf-8")
         h = _sha256_of(spec)
         snap = d / f"{lid}-snap.md"; snap.write_text(body, encoding="utf-8")
-        rpt = d / f"{lid}-rpt.md"; rpt.write_text("[minor] 甲\n引句：「規則甲：只在 0 命中時回退。」\nseverity: minor\n", encoding="utf-8")
+        rpt = d / f"{lid}-rpt.md"; rpt.write_text("severity: minor\n甲\n引句：「規則甲：只在 0 命中時回退。」\n", encoding="utf-8")
         run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s1-sonnet",
-            "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+            "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
             "--report", str(rpt), "--snapshot", str(snap), "--spec", str(spec), "--reviewed", h, expect_rc=0)
         if ts_override:
             _ledger_patch_last(v.parent / ".canary-log.jsonl", lid, ts=ts_override)
@@ -6290,10 +6292,10 @@ def t_finding_kind_ledger_and_stats():
     全集要對得上;gov --stats 算 process 佔比。"""
     import json as _j, subprocess as _sp
     v = mkvault(); spec = v / "Projects" / "fk.md"; spec.write_text("s\n", encoding="utf-8"); h = _sha256_of(spec)
-    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    rep = v.parent / "r1-s1.md"; rep.write_text("severity: clean\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     snap = v.parent / "r1-snapshot.md"; snap.write_text("這是一段足夠長的快照內容 後面還有\n", encoding="utf-8")
     base = ["canary", "record", "none", "--loop", "fk-loop", "--round", "r1", "--auditor", "a", "--severity", "minor",
-            "--findings", "3", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f2", "--accepted-set", "f3",
+            "--findings", "3", "--findings-set", "f1,f2,f3", "--refuted-set", "none", "--folded-set", "f1,f2", "--accepted-set", "f3",
             "--accept-reason", "f3=文件精度", "--report", str(rep), "--snapshot", str(snap),
             "--spec", str(spec), "--reviewed", h, "--tier", "standard"]
     r = run(v, *base, "--finding-kind", "f1=code", "--finding-kind", "f2=banana")
@@ -6322,7 +6324,7 @@ def t_intake_guard_t1_t3():
     import json as _j, hashlib as _h, tempfile as _tf
     v = mkvault(); spec = v / "Projects" / "ig.md"; spec.write_text("s\n", encoding="utf-8")
     sha = _h.sha256(spec.read_bytes()).hexdigest()
-    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    rep = v.parent / "r1-s1.md"; rep.write_text("severity: clean\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     snap = v.parent / "r1-snap.md"; snap.write_text("這是一段足夠長的快照內容用來讓引句錨定過\n", encoding="utf-8")
     ik = v.parent / "r1-intake.md"; ik.write_text("# intake\n\npreflight-4: ran\n內文\n", encoding="utf-8")
     base = ["canary", "record", "none", "--loop", "ig-loop", "--round", "r1", "--auditor", "a",
@@ -6352,7 +6354,7 @@ def t_intake_guard_gate_and_reverify():
     v = mkvault(); repo = v.parent
     spec = v / "Projects" / "ig2.md"; spec.write_text("s\n", encoding="utf-8")
     sha = _h.sha256(spec.read_bytes()).hexdigest()
-    rep = repo / "r-s1.md"; rep.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    rep = repo / "r-s1.md"; rep.write_text("severity: clean\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     snap = repo / "r-snap.md"; snap.write_text("這是一段足夠長的快照內容用來讓引句錨定過\n", encoding="utf-8")
     lp = repo / "governance" / "review-reports" / "gate-loop"; lp.mkdir(parents=True)
     ik = lp / "r1-intake.md"; ik.write_text("# intake\n\npreflight-4: ran\n", encoding="utf-8")
@@ -6382,7 +6384,7 @@ def t_intake_guard_gate_and_reverify():
     # 帳上 sha 對不上了→會 FAIL;此處只驗 advisory 分支,故用沒入帳的新 loop
     lp2 = repo / "governance" / "review-reports" / "gate-loop2"; lp2.mkdir(parents=True)
     (lp2 / "r1-intake.md").write_text("# 沒有宣告行\n", encoding="utf-8")
-    rep2 = repo / "r2-s1.md"; rep2.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    rep2 = repo / "r2-s1.md"; rep2.write_text("severity: clean\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     a2 = ["canary", "record", "none", "--loop", "gate-loop2", "--round", "r1", "--auditor", "a",
           "--severity", "clean", "--findings", "0", "--report", str(rep2), "--snapshot", str(snap),
           "--spec", str(spec), "--reviewed", sha, "--tier", "standard"]
@@ -6408,10 +6410,10 @@ def t_refute_verdict_ledger_and_stats():
     「辯方三分類先不做」裁定自己點名的缺口(帳無逐席對錯 → 永遠偵測不到重啟條件)。"""
     import json as _j
     v = mkvault(); spec = v / "Projects" / "rv.md"; spec.write_text("s\n", encoding="utf-8"); h = _sha256_of(spec)
-    rep = v.parent / "r1-s1.md"; rep.write_text("引句：「這是一段足夠長的快照內容」\nseverity: major\n", encoding="utf-8")
+    rep = v.parent / "r1-s1.md"; rep.write_text("severity: major\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     snap = v.parent / "r1-snapshot.md"; snap.write_text("這是一段足夠長的快照內容 後面還有\n", encoding="utf-8")
     base = ["canary", "record", "none", "--loop", "rv-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
-            "--findings", "2", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f3", "--accepted-set", "f2",
+            "--findings", "2", "--findings-set", "f1,f2,f3", "--refuted-set", "none", "--folded-set", "f1,f3", "--accepted-set", "f2",
             "--accept-reason", "f2=辯方反證:a.py:10", "--report", str(rep), "--snapshot", str(snap),
             "--spec", str(spec), "--reviewed", h, "--tier", "standard"]
     r = run(v, *base, "--refute-verdict", "f1=maybe")
@@ -6429,10 +6431,10 @@ def t_refute_verdict_ledger_and_stats():
     # 三態齊 + 統計用全新 vault,計數才乾淨(不被上面子集那筆疊加)
     v2 = mkvault(); spec2 = v2 / "Projects" / "rv2.md"; spec2.write_text("s\n", encoding="utf-8"); h2 = _sha256_of(spec2)
     # 快照放一段 ≥10 字的內容、報告引它,才過得了 disposal 的 quote-check(否則兩邊都因錨不到 FAIL,F3 會空過)
-    rep2 = v2.parent / "r1-s1.md"; rep2.write_text("引句：「這是一段足夠長的快照內容」\nseverity: major\n", encoding="utf-8")
+    rep2 = v2.parent / "r1-s1.md"; rep2.write_text("severity: major\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     snap2 = v2.parent / "r1-snapshot.md"; snap2.write_text("這是一段足夠長的快照內容用來讓引句錨定過\n", encoding="utf-8")
     base2 = ["canary", "record", "none", "--loop", "rv2-loop", "--round", "r1", "--auditor", "a", "--severity", "major",
-             "--findings", "2", "--findings-set", "f1,f2,f3", "--folded-set", "f1,f3", "--accepted-set", "f2",
+             "--findings", "2", "--findings-set", "f1,f2,f3", "--refuted-set", "none", "--folded-set", "f1,f3", "--accepted-set", "f2",
              "--accept-reason", "f2=辯方反證:a.py:10", "--report", str(rep2), "--snapshot", str(snap2),
              "--spec", str(spec2), "--reviewed", h2, "--tier", "standard"]
     r = run(v2, *base2, "--refute-verdict", "f1=agree", "--refute-verdict", "f2=evidence", "--refute-verdict", "f3=concern")
@@ -6448,9 +6450,9 @@ def t_refute_verdict_ledger_and_stats():
     check("agree 但該 id 沒折入 → rc2(帳對不上)", r.returncode == 2 and "折入清單" in r.stderr, r.stderr)
     # blocker 輪讓步(2026-08-29 修回歸):blocker 輪舊規則強制放行清單為空,而反證發現照規矩不折入
     # → 兩條一夾使記帳整筆被擋(自主迴圈當日四次撞上)。本欄讓步:blocker 輪允許 evidence 落折入。
-    repb = v.parent / "r1-blocker.md"; repb.write_text("引句：「這是一段足夠長的快照內容」\nseverity: blocker\n", encoding="utf-8")
+    repb = v.parent / "r1-blocker.md"; repb.write_text("severity: blocker\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     baseb = ["canary", "record", "none", "--loop", "rv-blk", "--round", "r1", "--auditor", "a",
-             "--severity", "blocker", "--findings", "2", "--findings-set", "b1,b2",
+             "--severity", "blocker", "--findings", "2", "--findings-set", "b1,b2", "--refuted-set", "none",
              "--folded-set", "b1,b2", "--report", str(repb), "--snapshot", str(snap),
              "--spec", str(spec), "--reviewed", h, "--tier", "standard"]
     r = run(v, *baseb, "--refute-verdict", "b2=evidence")
@@ -17198,7 +17200,7 @@ def t_loop_next_shows_reviewed_spec():
     (v / "Systems" / "x.md").write_text("---\ntype: system\nstatus: done\ntags:\n  - type/system\n---\n內容\n",
                                         encoding="utf-8")
     rep = root / "r1-通才.md"
-    rep.write_text("severity: minor\n\n- [minor] 一條\n  引句:「這是一句夠長的逐字引句拿來當錨」\n  blocking:否\n",
+    rep.write_text("severity: minor\n\nseverity: minor\n一條\n  引句:「這是一句夠長的逐字引句拿來當錨」\n  blocking:否\n",
                    encoding="utf-8")
     snap = root / "r1-snapshot.patch"
     snap.write_text("這是一句夠長的逐字引句拿來當錨\n", encoding="utf-8")
@@ -17262,7 +17264,7 @@ def t_loop_next_shows_reviewed_spec():
     # 會同時印「停掉這個編號」和「下一輪要自己凍」,兩句直接打架)。
     # light 帳抓到 major 就永久進 escalate,拿來當現場。
     rep_major = root / "r1-major.md"
-    rep_major.write_text("severity: major\n\n- [major] 一條\n  引句:「這是一句夠長的逐字引句拿來當錨」\n  blocking:是\n",
+    rep_major.write_text("severity: major\n\nseverity: major\n一條\n  引句:「這是一句夠長的逐字引句拿來當錨」\n  blocking:是\n",
                          encoding="utf-8")
     import hashlib as _h
     lum("canary", "record", "none", "--loop", "t-spec-esc", "--auditor", "通才",
@@ -19500,7 +19502,7 @@ def t_loop_next_disposal_cmd_actually_runs():
     spec.write_text("t5 spec\n規則甲:這是一段足夠長的內容當引句。\n", encoding="utf-8")
     h = _sha256_of(spec)
     rpt = v / "Projects" / "t5rpt.md"
-    rpt.write_text("引句：「規則甲:這是一段足夠長的內容當引句。」\nseverity: minor\n", encoding="utf-8")
+    rpt.write_text("severity: minor\nseverity: minor\n引句：「規則甲:這是一段足夠長的內容當引句。」\n", encoding="utf-8")
     lid = f"t5-{_M1U}"
     d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json").stdout)
     check("★前置★ 現場成立:panel tier 吐 disposal_cmd+disposal_gate",
@@ -19541,12 +19543,12 @@ def t_disposal_loop_requires_provenance():
     翻紅釘:把強制檢查還原掉 → 「定錨後缺 report 必 rc2」翻紅。"""
     v = mkvault()
     d = v / "Projects"
-    rpt = d / "t6r.md"; rpt.write_text("引句：「這是一段足夠長的快照內容」\nseverity: clean\n", encoding="utf-8")
+    rpt = d / "t6r.md"; rpt.write_text("severity: clean\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
     snap = d / "t6s.md"; snap.write_text("這是一段足夠長的快照內容 後面還有\n", encoding="utf-8")
     lid = f"t6-{_M1U}"
     # 首筆帶 findings_set+留痕 → 定錨
     run(v, "canary", "record", "caught", "--round", "r1", "--loop", lid, "--auditor", "s1", "--severity", "minor",
-        "--findings-set", "a", "--folded-set", "a", "--report", str(rpt), "--snapshot", str(snap),
+        "--findings-set", "a", "--refuted-set", "none", "--folded-set", "a", "--report", str(rpt), "--snapshot", str(snap),
         expect_rc=0)
     # 定錨後缺留痕 → rc2
     rr = run(v, "canary", "record", "caught", "--loop", lid, "--auditor", "s2", "--severity", "minor")
@@ -19582,12 +19584,12 @@ def t_loop_status_disposal_gate():
     snap = d / "t4snap.md"
     snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     rpt = d / "t4rpt.md"
-    rpt.write_text("[minor] 甲\n引句：「規則甲：只在 0 命中時回退。」\nseverity: clean\n", encoding="utf-8")
+    rpt.write_text("severity: clean\n甲\n引句：「規則甲：只在 0 命中時回退。」\n", encoding="utf-8")
     lid = f"t4-{_M1U}"
 
     # 判定輪 r1 兩席:席1 帶處置帳+留痕+雙 hash;席2=★missed★(d4:不得影響閘)
     run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--auditor", "s1",
-        "--severity", "minor", "--findings-set", "F1,F2", "--folded-set", "F1",
+        "--severity", "minor", "--findings-set", "F1,F2", "--refuted-set", "none", "--folded-set", "F1",
         "--accepted-set", "F2", "--accept-reason", "F2=精度級",
         "--report", str(rpt), "--snapshot", str(snap),
         "--spec", str(spec), "--reviewed", h, expect_rc=0)
@@ -19624,7 +19626,7 @@ def t_loop_status_disposal_gate():
     snap2.write_text("# 別的內容\n", encoding="utf-8")
     lid2 = f"t4b-{_M1U}"
     run(v, "canary", "record", "caught", "--loop", lid2, "--round", "r1", "--auditor", "s1",
-        "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+        "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
         "--report", str(rpt), "--snapshot", str(snap),
         "--spec", str(spec), "--reviewed", h, expect_rc=0)
     # 記完再把帳裡的快照換成沒有該句的版本(寫側 2026-09-06 起會擋這種載體,見 _ledger_patch_last)
@@ -19635,7 +19637,7 @@ def t_loop_status_disposal_gate():
     # ②處置集合讀側+blocker 線:blocker 席在場且有 accepted → FAIL(即使寫側當時個別合法)
     lid3 = f"t4c-{_M1U}"
     run(v, "canary", "record", "caught", "--loop", lid3, "--round", "r1", "--auditor", "s1",
-        "--severity", "minor", "--findings-set", "F1", "--folded-set", "",
+        "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "",
         "--accepted-set", "F1", "--accept-reason", "F1=可放",
         "--report", str(rpt), "--snapshot", str(snap),
         "--spec", str(spec), "--reviewed", h, expect_rc=0)
@@ -19662,11 +19664,11 @@ def t_loop_status_disposal_panel_routing():
     snap = d / "rt-snap.md"
     snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     rpt = d / "rt-rpt.md"
-    rpt.write_text("[minor] 甲\n引句：「路由規則甲確實存在於本份文件之中。」\nseverity: clean\n", encoding="utf-8")
+    rpt.write_text("severity: clean\n甲\n引句：「路由規則甲確實存在於本份文件之中。」\n", encoding="utf-8")
     lid = f"rt-route-{_M1U}"
     for seat in ("s1", "s2"):
         run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--auditor", seat,
-            "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+            "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
             "--report", str(rpt), "--snapshot", str(snap),
             "--spec", str(spec), "--reviewed", h, expect_rc=0)
     r = run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
@@ -19679,7 +19681,7 @@ def t_loop_status_disposal_panel_routing():
     # 單席一筆:不觸發多席擋,也不該印指路(訊息只在撞牆時出現)
     lid2 = f"rt-single-{_M1U}"
     run(v, "canary", "record", "caught", "--loop", lid2, "--round", "r1", "--auditor", "s1",
-        "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+        "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
         "--report", str(rpt), "--snapshot", str(snap),
         "--spec", str(spec), "--reviewed", h, expect_rc=0)
     r2 = run(v, "loop", "status", lid2, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
@@ -19710,15 +19712,15 @@ def t_disposal_gate_r1_panel_hardening():
     snap = d / "h8snap.md"
     snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     rptA = d / "h8a.md"
-    rptA.write_text("[minor] 甲\n引句：「規則『甲』其實存在,規則乙也在。」\nseverity: clean\n", encoding="utf-8")
+    rptA.write_text("severity: clean\n甲\n引句：「規則『甲』其實存在,規則乙也在。」\n", encoding="utf-8")
     rptB = d / "h8b.md"
-    rptB.write_text("[major] 乙\n引句：「規則『甲』其實存在,規則乙也在。」\nseverity: clean\n", encoding="utf-8")
+    rptB.write_text("severity: clean\n乙\n引句：「規則『甲』其實存在,規則乙也在。」\n", encoding="utf-8")
     ledger = v.parent / ".canary-log.jsonl"
 
     # ── ① 讀側:壞行 → disposal rc2 ──
     lid1 = f"h8a-{_M1U}"
     run(v, "canary", "record", "caught", "--loop", lid1, "--round", "r1", "--auditor", "s1",
-        "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+        "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
         "--report", str(rptA), "--snapshot", str(snap),
         "--spec", str(spec), "--reviewed", h, expect_rc=0)
     r0 = run(v, "loop", "status", lid1, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
@@ -19738,10 +19740,10 @@ def t_disposal_gate_r1_panel_hardening():
     # ── ② round-id 非連續重現 → rc2 ──
     lid2 = f"h8b-{_M1U}"
     rptBad = d / "h8bad.md"
-    rptBad.write_text("引句：「這句話快照裡根本沒有喔喔喔」\nseverity: clean\n", encoding="utf-8")
+    rptBad.write_text("severity: clean\n引句：「這句話快照裡根本沒有喔喔喔」\n", encoding="utf-8")
     for rid in ("r1", "r2", "r1"):
         run(v, "canary", "record", "caught", "--loop", lid2, "--round", rid, "--auditor", "sx",
-            "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+            "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
             "--report", str(rptA), "--snapshot", str(snap),
             "--spec", str(spec), "--reviewed", h, expect_rc=0)
     # 遲到那筆要「引句錨不到」。2026-09-06 起寫側會擋錨不到的載體,所以這種帳只可能來自
@@ -19757,7 +19759,7 @@ def t_disposal_gate_r1_panel_hardening():
     # ── ③ 竄改非 carrier 席(missed)的報告 → FAIL ──
     lid3 = f"h8c-{_M1U}"
     run(v, "canary", "record", "caught", "--loop", lid3, "--round", "r1", "--auditor", "s1",
-        "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+        "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
         "--report", str(rptA), "--snapshot", str(snap),
         "--spec", str(spec), "--reviewed", h, expect_rc=0)
     run(v, "canary", "record", "missed", "--loop", lid3, "--round", "r1", "--auditor", "s2",
@@ -19774,11 +19776,11 @@ def t_disposal_gate_r1_panel_hardening():
 
     # ── ④ 相對路徑:record 於 vault.parent 下用相對路徑,gate 從別的 cwd 跑照樣過 ──
     lid4 = f"h8d-{_M1U}"
-    (v.parent / "h8rel-r.md").write_text("引句：「規則『甲』其實存在,規則乙也在。」\nseverity: clean\n", encoding="utf-8")
+    (v.parent / "h8rel-r.md").write_text("severity: clean\n引句：「規則『甲』其實存在,規則乙也在。」\n", encoding="utf-8")
     (v.parent / "h8rel-s.md").write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     rr = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(v), "canary", "record", "caught",
                          "--loop", lid4, "--round", "r1", "--auditor", "s1", "--severity", "minor",
-                         "--findings-set", "F1", "--folded-set", "F1",
+                         "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
                          "--report", "h8rel-r.md", "--snapshot", "h8rel-s.md",
                          "--spec", str(spec), "--reviewed", h],
                         capture_output=True, text=True, cwd=str(v.parent))
@@ -19792,7 +19794,7 @@ def t_disposal_gate_r1_panel_hardening():
     rptBin = d / "h8bin.md"
     rptBin.write_bytes(b"severity: minor\n\xff\xfe\x00 binary junk \x80\x81")   # 首行合法宣告=過寫側;其餘 bytes 仍非 UTF-8,讀側行為不變
     run(v, "canary", "record", "caught", "--loop", lid5, "--round", "r1", "--auditor", "s1",
-        "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+        "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
         "--report", str(rptBin), "--snapshot", str(snap),
         "--spec", str(spec), "--reviewed", h, expect_rc=0)
     r7 = run(v, "loop", "status", lid5, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
@@ -19826,7 +19828,7 @@ def t_disposal_gate_r2_panel_hardening():
     snap = d / "r2snap.md"
     snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     rpt = d / "r2rpt.md"
-    rpt.write_text("引句：「規則丙:留痕全席重驗,一席都不能少。」\nseverity: clean\n", encoding="utf-8")
+    rpt.write_text("severity: clean\n引句：「規則丙:留痕全席重驗,一席都不能少。」\n", encoding="utf-8")
 
     # ── ① legacy(round-less):兩筆記錄各自成輪,判定輪=最後一筆 ──
     lid1 = f"r2a-{_M1U}"
@@ -19861,7 +19863,7 @@ def t_disposal_gate_r2_panel_hardening():
                               "token": f"CANARY-r2b{_M1U}", "result_sha256": h, "reviewed_sha256": h},
                              ensure_ascii=False) + "\n")
     run(v, "canary", "record", "caught", "--loop", lid2, "--round", "r1", "--auditor", "s1",
-        "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+        "--severity", "minor", "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
         "--report", str(rpt), "--snapshot", str(snap), "--spec", str(spec), "--reviewed", h, expect_rc=0)
     r2 = run(v, "loop", "status", lid2, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
     check("★前置★ 現場成立:判定輪含一席無留痕欄+一席 carrier", r2.returncode in (0, 1), f"rc={r2.returncode}")
@@ -19878,7 +19880,7 @@ def t_disposal_gate_r2_panel_hardening():
         (vv / sub).mkdir()
     gov = root / "governance"
     gov.mkdir()
-    (gov / "g-r.md").write_text("引句：「規則丙:留痕全席重驗,一席都不能少。」\nseverity: clean\n", encoding="utf-8")
+    (gov / "g-r.md").write_text("severity: clean\n引句：「規則丙:留痕全席重驗,一席都不能少。」\n", encoding="utf-8")
     spec2 = gov / "g-spec.md"
     spec2.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     (gov / "g-s.md").write_text(spec2.read_text(encoding="utf-8"), encoding="utf-8")
@@ -19886,7 +19888,7 @@ def t_disposal_gate_r2_panel_hardening():
     lid3 = f"r2c-{_M1U}"
     rr = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vv), "canary", "record", "caught",
                          "--loop", lid3, "--round", "r1", "--auditor", "s1", "--severity", "minor",
-                         "--findings-set", "F1", "--folded-set", "F1",
+                         "--findings-set", "F1", "--refuted-set", "none", "--folded-set", "F1",
                          "--report", "governance/g-r.md", "--snapshot", "governance/g-s.md",
                          "--spec", str(spec2), "--reviewed", h2],
                         capture_output=True, text=True, cwd=str(root))
@@ -19918,7 +19920,7 @@ def t_disposal_gate_r3_panel_hardening():
     snap = d / "r3snap.md"
     snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     rpt = d / "r3rpt.md"
-    rpt.write_text("引句：「規則丁:保留字首不得外用,引號要成對。」\nseverity: clean\n", encoding="utf-8")
+    rpt.write_text("severity: clean\n引句：「規則丁:保留字首不得外用,引號要成對。」\n", encoding="utf-8")
 
     # ── ① __ 保留字首寫側 rc2 ──
     lid1 = f"r3a-{_M1U}"
@@ -20047,7 +20049,7 @@ def t_disposal_snapshot_provenance():
     snap.write_text("# spec v1\n規則甲：只在 0 命中時回退。\n", encoding="utf-8")
     rpt = d / "t3rpt.md"
     # 審查員的 finding:引的是它「建議加入」的句子(快照裡沒有)
-    rpt.write_text("[major] 缺逃生口\n引句：「規則乙：加 --escape 逃生口。」\nseverity: minor\n", encoding="utf-8")
+    rpt.write_text("severity: minor\n缺逃生口\n引句：「規則乙：加 --escape 逃生口。」\n", encoding="utf-8")
     cur = d / "t3cur.md"         # 折入後的現檔:把 finding 建議的句子折進去了
     cur.write_text("# spec v2\n規則甲：只在 0 命中時回退。\n規則乙：加 --escape 逃生口。\n", encoding="utf-8")
 
@@ -20087,10 +20089,10 @@ def t_canary_record_carrier_must_be_fully_anchored():
     snap = v / "Projects" / "snap.md"
     snap.write_text("這是凍結快照 的內容 只有改動在裡面\n", encoding="utf-8")
     good = v / "Projects" / "good.md"
-    good.write_text("severity: major\n- [major] x\n  引句:「這是凍結快照 的內容」\n", encoding="utf-8")
+    good.write_text("severity: major\nseverity: major\nx\n  引句:「這是凍結快照 的內容」\nseverity: major\ny\n", encoding="utf-8")
     bad = v / "Projects" / "bad.md"
-    bad.write_text("severity: major\n- [major] x\n  引句:「這是凍結快照 的內容」\n"
-                   "- [major] y\n  引句:「這行在既有程式碼裡 不在改動裡」\n", encoding="utf-8")
+    bad.write_text("severity: major\nseverity: major\nx\n  引句:「這是凍結快照 的內容」\nseverity: major\n"
+                   "y\n  引句:「這行在既有程式碼裡 不在改動裡」\n", encoding="utf-8")
 
     # ① 非載體席(不帶處置清單):錨不到照樣可以記,不擋
     run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s1",
@@ -20101,7 +20103,7 @@ def t_canary_record_carrier_must_be_fully_anchored():
     # ② 拿它當載體(帶處置清單)→ 擋下
     r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s2",
             "--severity", "major", "--findings", "2", "--report", str(bad), "--snapshot", str(snap),
-            "--findings-set", "a,b", "--folded-set", "a,b", "--accepted-set", "",
+            "--findings-set", "a,b", "--refuted-set", "none", "--folded-set", "a,b", "--accepted-set", "",
             expect_rc=2)
     check("載體全錨: 引句錨不到的席當載體 → 記帳當下擋下(rc2)", True, "")
     check("載體全錨: 訊息講「換一席全錨的來帶」而不是指控造假",
@@ -20112,7 +20114,7 @@ def t_canary_record_carrier_must_be_fully_anchored():
     # ③ 換全錨席當載體 → 過
     run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s3",
         "--severity", "major", "--findings", "2", "--report", str(good), "--snapshot", str(snap),
-        "--findings-set", "a,b", "--folded-set", "a,b", "--accepted-set", "",
+        "--findings-set", "a,b", "--refuted-set", "none", "--folded-set", "a,b", "--accepted-set", "",
         expect_rc=0)
     last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
     check("載體全錨/反面: 全錨席當載體照樣記得進去", last.get("findings_set") == ["a", "b"], str(last)[:200])
@@ -20137,12 +20139,12 @@ def t_canary_record_disposal_fields_optional():
     rpt = v / "Projects" / "rpt.md"
     # 引句要夠長才過得了引句下限(短引句在閘那邊本來就算錨不到;2026-09-06 載體全錨檢查
     # 往前挪到記帳端之後,這份假資料的三字元引句會被擋,改成像樣的長度)
-    rpt.write_text("[major] x\n引句：「這是被審文件裡的一整句話 拿來當錨點」\nseverity: minor\n", encoding="utf-8")
+    rpt.write_text("severity: minor\nseverity: minor\nx\nseverity: minor\ny\n引句：「這是被審文件裡的一整句話 拿來當錨點」\n", encoding="utf-8")
     snap = v / "Projects" / "snap.md"
     snap.write_text("凍結快照 這是被審文件裡的一整句話 拿來當錨點 後面還有別的\n", encoding="utf-8")
 
     # ★相容鐵則★:零新參的舊呼叫 rc0,且記錄裡無任何新鍵
-    r0 = run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", lid, "--severity", "minor",
+    r0 = run(v, "canary", "record", "caught", "--report", str(rpt), "--loop", lid, "--severity", "minor",
              "--findings", "2", "--auditor", "s1", expect_rc=0)
     log = (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()
     last = _j.loads(log[-1])
@@ -20153,7 +20155,7 @@ def t_canary_record_disposal_fields_optional():
     # 完整合法寫入:全欄落帳且 sha256 可重算
     r1 = run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "major",
              "--auditor", "s1", "--report", str(rpt), "--snapshot", str(snap),
-             "--findings-set", "a,b,c", "--folded-set", "a,b", "--accepted-set", "c",
+             "--findings-set", "a,b,c", "--refuted-set", "none", "--folded-set", "a,b", "--accepted-set", "c",
              "--accept-reason", "c=文件精度級,成本不值", expect_rc=0)
     last = _j.loads((v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
     check("★前置★ 現場成立:六欄全落帳", last.get("findings_set") == ["a", "b", "c"]
@@ -20166,14 +20168,14 @@ def t_canary_record_disposal_fields_optional():
     bad = [
         # ★b 的理由給齊,讓「缺 b 未處置」成為唯一能 rc2 的路——否則聯集檢查被拔掉時
         # 理由檢查會代打,翻紅釘假紅(2026-08-04 第一版就中了這型:斷言測的不是它宣稱的那條)
-        (["--findings-set", "a,b,c", "--folded-set", "a", "--accepted-set", "c",
+        (["--findings-set", "a,b,c", "--refuted-set", "none", "--folded-set", "a", "--accepted-set", "c",
           "--accept-reason", "c=有理由"],
          "★缺 b 未處置(聯集≠全集)必 rc2★"),
-        (["--findings-set", "a,b", "--folded-set", "a,b", "--accepted-set", "b"],
+        (["--findings-set", "a,b", "--refuted-set", "none", "--folded-set", "a,b", "--accepted-set", "b"],
          "folded∩accepted 非空必 rc2"),
-        (["--findings-set", "a", "--folded-set", "a", "--accepted-set", "",
+        (["--findings-set", "a", "--refuted-set", "none", "--folded-set", "a", "--accepted-set", "",
           "--accept-reason", "x=y"], "理由鍵集合≠accepted_set 必 rc2"),
-        (["--findings-set", "a,a", "--folded-set", "a,a"], "findings_set 重複 id 必 rc2"),
+        (["--findings-set", "a,a", "--refuted-set", "none", "--folded-set", "a,a"], "findings_set 重複 id 必 rc2"),
     ]
     for extra, name in bad:
         rr = run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", lid, "--round", "r1", "--severity", "minor",
@@ -20181,11 +20183,11 @@ def t_canary_record_disposal_fields_optional():
         check(name, rr.returncode == 2, f"rc={rr.returncode} {rr.stderr[:120]}")
     # accepted 有 id 但沒給理由
     rr = run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", lid, "--round", "r1", "--severity", "minor",
-             "--auditor", "s1", "--findings-set", "a,b", "--folded-set", "a", "--accepted-set", "b")
+             "--auditor", "s1", "--findings-set", "a,b", "--refuted-set", "none", "--folded-set", "a", "--accepted-set", "b")
     check("accepted 無理由必 rc2(空殼放行擋在寫側)", rr.returncode == 2, rr.stderr[:120])
     # d1:blocker 不得 accepted
     rr = run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", lid, "--round", "r1", "--severity", "blocker",
-             "--auditor", "s1", "--findings-set", "a", "--folded-set", "", "--accepted-set", "a",
+             "--auditor", "s1", "--findings-set", "a", "--refuted-set", "none", "--folded-set", "", "--accepted-set", "a",
              "--accept-reason", "a=想放行")
     check("★d1:blocker 輪 accepted 非空必 rc2★", rr.returncode == 2, rr.stderr[:120])
     # 留痕檔不存在
@@ -20195,7 +20197,7 @@ def t_canary_record_disposal_fields_optional():
     # blocker+全折(accepted 空)合法——d1 只擋 accepted,不擋折
     # (T6 生效後:本 loop 已定錨,須帶留痕——正確行為,非誤傷)
     run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "blocker",
-        "--auditor", "s1", "--findings-set", "a", "--folded-set", "a",
+        "--auditor", "s1", "--findings-set", "a", "--refuted-set", "none", "--folded-set", "a",
         "--report", str(rpt), "--snapshot", str(snap), expect_rc=0)
 
 
@@ -27294,13 +27296,15 @@ def t_canary_severity_writeside():
             "--severity", "clean", "--report", str(rep))
     check("寫側:無獨立宣告行 rc2(散文夾註不觸發)", r.returncode == 2 and "宣告" in r.stderr, r.stderr[:200])
     # ④ 三型逃逸不計入:引句行尾/blockquote/跨行黏合——真宣告只有 clean,帳 clean 過=證明逃逸沒被讀進去
-    rep.write_text("引句:「規格原文寫 severity 應為」severity: blocker\n"
-                   "> severity: blocker\n"
-                   "severity:\nblocker\n"
-                   "severity: clean\n", encoding="utf-8")
+    rep.write_text("severity: clean\n引句:「規格原文寫 severity 應為」severity: blocker\n"
+                   "> severity: blocker\n", encoding="utf-8")
     r = run(v, "canary", "record", "none", "--loop", "svw", "--round", "r2", "--auditor", "s1",
             "--severity", "clean", "--report", str(rep))
-    check("寫側:引句尾/blockquote/跨行三型全不計入(帳 clean 過)", r.returncode == 0, r.stderr[:300])
+    check("寫側:引句尾/blockquote 兩型不計入(帳 clean 過)", r.returncode == 0, r.stderr[:300])
+    rep.write_text("severity: clean\nseverity:\nblocker\n", encoding="utf-8")
+    r = run(v, "canary", "record", "none", "--loop", "svw", "--round", "r2", "--auditor", "s1",
+            "--severity", "clean", "--report", str(rep))
+    check("寫側:跨行黏合的 severity 現在是殘留寫法 → 拒收 rc2(審查有沒有用記帳 S1:認不得就擋)", r.returncode == 2 and "還沒正規化" in r.stderr, r.stderr[:300])
     # ⑤ 變體不認:大寫/全形冒號/行首空白——沒有任何合法行=rc2
     rep.write_text("Severity: blocker\nseverity：blocker\n  severity: blocker\n", encoding="utf-8")
     r = run(v, "canary", "record", "none", "--loop", "svw", "--round", "r3", "--auditor", "s1",
@@ -27323,7 +27327,7 @@ def t_canary_severity_writeside():
     r = run(v, "canary", "record", "none", "--loop", "svw-rl", "--auditor", "s1", "--severity", "minor")
     check("寫側:有席無輪(round-less)照樣強制 rc2(繞道關死)", r.returncode == 2 and "--report" in r.stderr, r.stderr[:200])
     r = run(v, "canary", "record", "none", "--loop", "svw-rl", "--auditor", "s1", "--severity", "minor",
-            "--findings-set", "f1", "--folded-set", "f1")
+            "--findings-set", "f1", "--refuted-set", "none", "--folded-set", "f1")
     check("寫側:處置帳不綁輪次 rc2", r.returncode == 2 and "綁 --round" in r.stderr, r.stderr[:200])
     # cb3 r2 extv-f1:--outcome 掛在審查欄位上假冒豁免 → 互斥 rc2
     r = run(v, "canary", "record", "none", "--loop", "svw-fake", "--auditor", "s1", "--severity", "minor",
@@ -27341,6 +27345,221 @@ def t_canary_severity_writeside():
             "--severity", "clean", "--report", str(rep), "--spec", str(spec), "--reviewed", hsp, expect_rc=0)
     last = [_j.loads(l) for l in (d / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][-1]
     check("寫側:spec_path 落帳(改制回測 S2①)", str(spec.resolve()) == last.get("spec_path") or last.get("spec_path", "").endswith("svw-spec.md"), str(last.get("spec_path")))
+
+
+def t_report_normalize_cmd():
+    """[審查有沒有用記帳 S1/S4] 拒收偵測與正規化器:r1–r3 五席各一種的真實殘留寫法全被拒(認不得就擋,不列舉例外);
+    引句/blockquote/圍欄/總結句/反引號講格式/標題散文提到 major 不算殘留;HTML 註解不跳過;
+    正規化器只做三種純格式轉換+補檔級行(值=最高)、不動引句/圍欄/值、轉不了的留給人;
+    CLI:不帶 --write 只印不動檔、--write 寫回、已正規化 rc0、轉不了 rc1、讀不到 rc2。"""
+    m = _load_lumos_inproc()
+    iss = m._report_normalize_issues
+    # ① 檔首規則
+    check("normalize:檔首不是檔級行 → 拒", bool(iss("## F1\nseverity: major\n")), "")
+    check("normalize:HTML 註解不跳過(專案三處明令不偵測註解;來源註記放檔級行後面)", bool(iss("<!-- 來源 -->\nseverity: major\n")), "")
+    check("normalize:空行後的檔級行算檔首", iss("\n\nseverity: major\n<!-- 來源 -->\n## F1\nseverity: major\n說明\n") == [], "")
+    # ② 殘留寫法(r1 通才=列表項、r2 架構=粗體、r3 通才=標題嵌等級、r3 外家=行內、r3 簡化=大寫拼法)
+    bad = {
+        "列表項": "severity: major\n## F1\n- severity: major\n",
+        "粗體": "severity: major\n## F1\n**severity**: major\n",
+        "標題破折號嵌等級": "severity: major\n## F1 — MAJOR\n",
+        "標題冒號嵌等級": "severity: major\n## f1: major\n",
+        "方括號": "severity: major\n- [major] F1 說明\n",
+        "大寫拼法": "severity: major\n## F1\nSeverity: major\n",
+        "縮寫 sev": "severity: major\n## F1\nsev: major\n",
+        "中文嚴重度": "severity: major\n## F1\n嚴重度:major\n",
+        "跨行黏合": "severity: major\nseverity:\nmajor\n",
+        "行內帶尾巴": "severity: major\n## F1\nseverity: major / blocking: 是\n",
+    }
+    for k, t in bad.items():
+        check(f"normalize:殘留寫法「{k}」被拒", bool(iss(t)), t)
+    # ③ 不算殘留
+    ok = {
+        "引句行": "severity: clean\n引句:「severity: blocker 是規格原文」\n",
+        "blockquote": "severity: clean\n> severity: blocker\n",
+        "圍欄": "severity: clean\n```\n- severity: blocker\n```\n",
+        "總結句": "severity: clean\n最嚴重 severity: clean,blocking 條數 0\n",
+        "反引號講格式": "severity: clean\n規則:每條寫 `- severity: X`\n",
+        "標題散文提到 major": "severity: clean\n## 這段講 major 這個字的用法\n",
+    }
+    for k, t in ok.items():
+        check(f"normalize:「{k}」不算殘留", iss(t) == [], str(iss(t)))
+    # ④ 正規化器:三型全轉 + 補檔級行
+    nz = m.normalize_report_text
+    src = "## F1 —— severity: blocker,blocking: 是\n說明\n## F2\n- severity: minor / blocking: 否\n## F3\n**severity**: major\n"
+    new, changed, rest = nz(src)
+    check("normalize:三型全轉+補檔級行=4 處", changed == 4, f"{changed}\n{new}")
+    check("normalize:轉完無殘留", rest == [], str(rest))
+    check("normalize:檔級行=最高 blocker 且在檔首", new.startswith("severity: blocker\n"), new[:40])
+    check("normalize:標題保留、等級落下一行、尾巴另起一行", "## F1\nseverity: blocker\nblocking: 是\n" in new, new)
+    check("normalize:列表項尾巴另起一行(去掉 / 分隔)", "severity: minor\nblocking: 否\n" in new, new)
+    check("normalize:reported 機器數=3(不含檔級)", m._report_reported_count(new) == 3, str(m._report_reported_count(new)))
+    src2 = "severity: major\n引句:「- severity: blocker」\n```\n- severity: blocker\n```\n## F1\nseverity: major\n"
+    new2, ch2, rest2 = nz(src2)
+    check("normalize:引句/圍欄/已正規化 → 0 處、逐字不動", ch2 == 0 and new2 == src2 and rest2 == [], f"{ch2} {rest2}")
+    new3, ch3, rest3 = nz("## F1\nsev: major\n")
+    check("normalize:認不得的拼法不轉、殘留清單留給人", ch3 == 0 and bool(rest3), f"{ch3} {rest3}")
+    new4, ch4, _ = nz("severity: minor\n## F1\n- severity: blocker\n")
+    check("normalize:原本就有檔級行則不動它(值不改,低報留給寫側擋)", ch4 == 1 and new4.startswith("severity: minor\n"), new4)
+    # ⑤ CLI
+    v = mkvault(); d = v.parent
+    f = d / "rep.md"; f.write_text(src, encoding="utf-8")
+    r = run(v, "report-normalize", str(f))
+    check("report-normalize:不帶 --write 印會改幾處、不動檔 rc0",
+          r.returncode == 0 and f.read_text(encoding="utf-8") == src and "會改 4 處" in r.stdout, f"rc={r.returncode} {r.stdout[:200]}")
+    r = run(v, "report-normalize", str(f), "--write")
+    check("report-normalize:--write 寫回 rc0", r.returncode == 0 and f.read_text(encoding="utf-8") == new, r.stdout[:200])
+    r = run(v, "report-normalize", str(f))
+    check("report-normalize:已正規化 → 不用改 rc0", r.returncode == 0 and "不用改" in r.stdout, r.stdout[:200])
+    f.write_text("## F1\nsev: major\n", encoding="utf-8")
+    r = run(v, "report-normalize", str(f), "--write")
+    check("report-normalize:轉不了 rc1 印行號要人改", r.returncode == 1 and "要人改" in r.stdout and "第 1 行" in r.stdout, f"rc={r.returncode} {r.stdout[:300]}")
+    r = run(v, "report-normalize", str(d / "nope.md"))
+    check("report-normalize:檔讀不到 rc2", r.returncode == 2, "")
+
+
+def t_canary_reported_normalized():
+    """[審查有沒有用記帳 S1] 寫側:報告沒正規化 → rc2「還沒正規化」且治理帳留 rejected 事件(撞牆要看得見);
+    正規化過 → reported 由機器數落帳(不含檔級與 clean;引句/圍欄/總結句不算);--findings 多於 reported → rc2;
+    「報了幾條」沒有旗標可填。"""
+    import json as _j, shutil, subprocess as _sp
+    root, v = _stats_fixture("gctl-rptn-", [])
+    try:
+        _sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)   # _vault_repo_root → root,治理帳落 root/docs
+        d = root / "docs"
+        rep = d / "rep.md"
+        base = ["canary", "record", "none", "--loop", "rptn", "--round", "r1", "--auditor", "s1-sonnet"]
+        for name, body in (("列表項", "severity: major\n## F1\n- severity: major\n"),
+                           ("標題嵌等級", "severity: major\n## F1 — MAJOR\n說明\n"),
+                           ("檔首不是檔級行", "## F1\nseverity: major\n")):
+            rep.write_text(body, encoding="utf-8")
+            r = run(v, *base, "--severity", "major", "--report", str(rep))
+            check(f"reported:殘留「{name}」rc2 還沒正規化", r.returncode == 2 and "還沒正規化" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+        gov = (d / ".governance-log.jsonl").read_text(encoding="utf-8")
+        _rej = [l for l in gov.splitlines() if '"rejected"' in l and "report-not-normalized" in l]
+        check("reported:被擋三次都留 rejected 事件(report-not-normalized),三筆各自獨立", len(_rej) == 3, gov[-300:])
+        check("reported:被擋沒落 canary 帳", not (d / ".canary-log.jsonl").exists() or "rptn" not in (d / ".canary-log.jsonl").read_text(encoding="utf-8"), "")
+        rep.write_text("severity: major\n<!-- 來源:席位 -->\n## F1\nseverity: major\n## F2\nseverity: minor\n## F3\nseverity: clean\n"
+                       "引句:「severity: blocker 原文」\n> severity: blocker\n```\nseverity: blocker\n```\n最嚴重 severity: major\n", encoding="utf-8")
+        r = run(v, *base, "--severity", "major", "--findings", "2", "--report", str(rep))
+        check("reported:正規化過 rc0(引句/blockquote/圍欄/總結句/註解不算殘留)", r.returncode == 0, r.stderr[:300])
+        last = [_j.loads(l) for l in (d / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][-1]
+        check("reported:機器數落帳=2(不含檔級/clean/引句/圍欄/總結句)", last.get("reported") == 2, str(last.get("reported")))
+        r = run(v, *base, "--severity", "major", "--findings", "3", "--report", str(rep))
+        check("reported:--findings 3 > reported 2 → rc2", r.returncode == 2 and "不能多於報告裡報的條數" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+        r = run(v, *base, "--severity", "major", "--reported", "9", "--report", str(rep))
+        check("reported:沒有 --reported 旗標(機器數,人填不了)", r.returncode == 2 and "--reported" in r.stderr, r.stderr[:200])
+        rep.write_text("severity: clean\n", encoding="utf-8")
+        r = run(v, *base, "--severity", "clean", "--report", str(rep))
+        last = [_j.loads(l) for l in (d / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][-1]
+        check("reported:乾淨輪 reported=0", r.returncode == 0 and last.get("reported") == 0, f"rc={r.returncode} {last.get('reported')}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_canary_refuted_set():
+    """[審查有沒有用記帳 S2] 載體席(帶 --findings-set)必帶 --refuted-set:缺 → rc2 且治理帳留 rejected;
+    none 過且落帳 [];id=理由(≥4 字含實字)/id 不得也在 findings-set/非 none 必帶 --intake 且 intake 要有
+    「同一列含整字 id 與 HIT|MISS|重現|採信」(a1 對不到 a10、a1x);refuted_set+refuted_reasons 落帳;
+    非載體席(不帶 --findings-set)不受影響。"""
+    import json as _j, shutil, subprocess as _sp
+    root, v = _stats_fixture("gctl-rfs-", [])
+    try:
+        _sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+        d = root / "docs"
+        rep = d / "rep.md"
+        rep.write_text("severity: major\n## f1\nseverity: major\n## a1\nseverity: minor\n", encoding="utf-8")
+        base = ["canary", "record", "none", "--loop", "rfs", "--round", "r1", "--auditor", "s1-sonnet",
+                "--severity", "major", "--findings", "1", "--report", str(rep)]
+        carrier = base + ["--findings-set", "f1", "--folded-set", "f1"]
+        r = run(v, *carrier)
+        check("refuted:載體缺 --refuted-set rc2", r.returncode == 2 and "--refuted-set" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+        gov = (d / ".governance-log.jsonl").read_text(encoding="utf-8")
+        check("refuted:缺欄被擋留 rejected 事件", "refuted-set-missing" in gov, gov[-200:])
+        r = run(v, *base)
+        check("refuted:非載體席不帶 --refuted-set 照收 rc0", r.returncode == 0, r.stderr[:200])
+        r = run(v, *carrier, "--refuted-set", "a1")
+        check("refuted:沒有 = 的項 rc2", r.returncode == 2 and "id=理由" in r.stderr, r.stderr[:200])
+        r = run(v, *carrier, "--refuted-set", "a1=xx")
+        check("refuted:理由太短 rc2", r.returncode == 2 and "≥" in r.stderr, r.stderr[:200])
+        r = run(v, *carrier, "--refuted-set", "f1=跑三次都沒重現")
+        check("refuted:id 也在 findings-set → rc2 二選一", r.returncode == 2 and "二選一" in r.stderr, r.stderr[:200])
+        r = run(v, *carrier, "--refuted-set", "a1=跑三次都沒重現")
+        check("refuted:非 none 缺 --intake rc2", r.returncode == 2 and "--intake" in r.stderr, r.stderr[:200])
+        ik = d / "r1-intake.md"
+        ik.write_text("preflight-4: ran\n| a10 | 跑三次 | MISS |\n| a1x 也不算 | MISS |\na1 這行沒有關鍵字\n", encoding="utf-8")
+        r = run(v, *carrier, "--refuted-set", "a1=跑三次都沒重現", "--intake", str(ik))
+        check("refuted:intake 只有 a10/a1x/無關鍵字行 → 整字對不到 rc2", r.returncode == 2 and "整字" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+        ik.write_text("preflight-4: ran\n| a10 | 跑三次 | MISS |\n| a1 | 跑三次 | MISS |\n", encoding="utf-8")
+        r = run(v, *carrier, "--refuted-set", "a1=跑三次都沒重現", "--intake", str(ik))
+        check("refuted:intake 有整字 a1+MISS 列 → rc0", r.returncode == 0, r.stderr[:300])
+        last = [_j.loads(l) for l in (d / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][-1]
+        check("refuted:refuted_set 與 refuted_reasons 落帳", last.get("refuted_set") == ["a1"] and last.get("refuted_reasons", {}).get("a1") == "跑三次都沒重現", str(last)[:300])
+        carrier2 = [("rfs-none" if x == "rfs" else x) for x in carrier]   # 同輪第二筆載體、同編號進嚴格模式後缺 --snapshot 都會被既有守衛擋,換編號
+        r = run(v, *carrier2, "--refuted-set", "none")
+        last = [_j.loads(l) for l in (d / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][-1]
+        check("refuted:none → rc0 且落帳 [](不是缺鍵)", r.returncode == 0 and last.get("refuted_set") == [] and "refuted_reasons" not in last, f"rc={r.returncode} {r.stderr[:300]}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_gov_stats_review_yield():
+    """[審查有沒有用記帳 S3] 讀側:問閘尾一行漏斗(舊帳缺 reported → 印 ?、S 算不了;新帳同席兩筆同報告只算一次、
+    S=max(0,M+R−N)、逃逸帳計數);gov --stats 新段(只算有 reported 的輪、Σ 五數、兩個回頭條件數、K<5 樣本太少、
+    寫側擋下次數分兩類、逃逸帳);沒 reported 也沒逃逸 → 段落不印。"""
+    import json as _j, hashlib as _h, shutil
+    gov = ['{"ts":"2026-09-09T09:00:00+08:00","commit":"","gate":"canary","kind":"rejected","hard":true,"nodes":[],"note":"report-not-normalized:2 loop=x auditor=y"}\n',
+           '{"ts":"2026-09-09T09:01:00+08:00","commit":"","gate":"canary","kind":"rejected","hard":true,"nodes":[],"note":"refuted-set-missing loop=x auditor=y"}\n']
+    root, v = _stats_fixture("gctl-ryld-", gov)
+    try:
+        d = root / "docs"
+        spec = root / "spec.md"; spec.write_text("規則甲:嚴重度要忠實轉錄,十個字以上。\n", encoding="utf-8")
+        hsp = _h.sha256(spec.read_bytes()).hexdigest()
+        def _seat(loop, name, body):
+            p = root / "governance" / "review-reports" / loop / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+            return str(p.relative_to(root)), _h.sha256(p.read_bytes()).hexdigest()
+        rp1, hr1 = _seat("ry-new", "r1-s1.md", "severity: major\n## f1\nseverity: major\n引句:「嚴重度要忠實轉錄,十個字以上」\n")
+        sp1, hs1 = _seat("ry-new", "r1-snapshot.md", spec.read_text(encoding="utf-8"))
+        common = {"kind": "none", "result_sha256": hsp, "reviewed_sha256": hsp, "snapshot_path": sp1, "snapshot_sha256": hs1}
+        rows = [
+            # ry-old:2026-09-09 前的帳,沒 reported/refuted_set
+            dict(common, ts="2026-09-01T10:00:00+08:00", loop="ry-old", round="r1", auditor="s1", token="O1", severity="major", findings=1,
+                 findings_set=["f1"], folded_set=["f1"], accepted_set=[], report_path=rp1, report_sha256=hr1),
+            # ry-new:同席先留痕再當載體(同報告 sha)→ N 只算一次=1;M=2、R=0 → S=1
+            dict(common, ts="2026-09-09T10:00:00+08:00", loop="ry-new", round="r1", auditor="s1", token="N1", severity="major", findings=1, reported=1,
+                 report_path=rp1, report_sha256=hr1),
+            dict(common, ts="2026-09-09T10:01:00+08:00", loop="ry-new", round="r1", auditor="s1", token="N2", severity="major", findings=2, reported=1,
+                 findings_set=["f1", "f2"], folded_set=["f1", "f2"], accepted_set=[], refuted_set=[], report_path=rp1, report_sha256=hr1),
+        ]
+        (d / ".canary-log.jsonl").write_text("\n".join(_j.dumps(x) for x in rows) + "\n", encoding="utf-8")
+        (d / ".escape-log.jsonl").write_text(_j.dumps({"ts": "2026-09-09T11:00:00+08:00", "token": "ESC-1", "loop": "ry-new", "stage": "ci", "severity": "major", "desc": "x"}) + "\n", encoding="utf-8")
+        r = run(v, "loop", "status", "ry-old", "--disposal", "--spec", str(spec), "--repo", str(root))
+        line = next((l for l in r.stdout.splitlines() if "審查有沒有用" in l), "")
+        check("yield:舊帳缺 reported → 席位報 ? / 重現不到 ? / S 算不了", "席位報 ?(機器數)" in line and "重現不到 ?" in line and "算不了(缺欄位)" in line and "折 1 / 放行 0" in line, r.stdout[-500:])
+        check("yield:舊帳這條迴圈逃逸 0", "累計逃逸 0" in line, line)
+        r = run(v, "loop", "status", "ry-new", "--disposal", "--spec", str(spec), "--repo", str(root))
+        line = next((l for l in r.stdout.splitlines() if "審查有沒有用" in l), "")
+        check("yield:同席兩筆同報告只算一次 N=1、M=2、R=0、折 2", "席位報 1(機器數)→ 存活 2 / 編排者重現不到 0" in line and "折 2 / 放行 0" in line, line or r.stdout[-500:])
+        check("yield:S=max(0,M+R−N)=1 印「存活多於席位報的 1 條」", "存活多於席位報的 1 條" in line, line)
+        check("yield:這條迴圈累計逃逸 1", "累計逃逸 1" in line, line)
+        check("yield:問閘尾標「觀測,不進合取」且不印比率", "觀測,不進合取" in line and "%" not in line, line)
+        out = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("stats-yield:只算有 reported 的 1 輪(舊帳不進)", "只算有 reported 欄的 1 輪" in out, out[-900:])
+        check("stats-yield:Σ 五數", "Σ席位報 1 → Σ存活 2 / Σ編排者重現不到 0 → Σ折 2 / Σ放行 0;存活多於席位報的輪 1(共 Σ1 條)" in out, out[-900:])
+        check("stats-yield:回頭條件兩個數(有載體 1 輪/記了 refuted-set 1 輪/非 0 的 0 輪;S>0 的輪 1)", "有載體的 1 輪裡記了 refuted-set 的 1 輪、其中非 0 的 0 輪;S>0 的輪 1" in out, out[-900:])
+        check("stats-yield:K<5 → 樣本太少", "樣本太少,別下結論(K=1" in out, out[-900:])
+        check("stats-yield:寫側擋下 2 次分兩類", "記帳被寫側擋下 2 次(報告沒正規化 1 / 缺 refuted-set 1)" in out, out[-900:])
+        check("stats-yield:逃逸帳 1 筆最重 major", "逃逸帳 1 筆" in out and "最重 major" in out, out[-900:])
+        check("stats-yield:段內不印比率", "審查有用率" not in out.split("審查有沒有用", 1)[1].split("\n\n", 1)[0].replace("別自己算 Σ折/Σ報 當『審查有用率』", ""), "")
+        # 現場反證:沒 reported 也沒逃逸 → 段落不印
+        (d / ".canary-log.jsonl").write_text(_j.dumps(rows[0]) + "\n", encoding="utf-8")
+        (d / ".escape-log.jsonl").unlink()
+        out0 = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("stats-yield:沒 reported 也沒逃逸 → 段落不印", "審查有沒有用(只算" not in out0, out0[-400:])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def t_severity_check_cmd():
@@ -27388,7 +27607,7 @@ def t_disposal_severity_tail():
     spec.write_text("規則甲:嚴重度要忠實轉錄,十個字以上。\n", encoding="utf-8")
     hsp = _h.sha256(spec.read_bytes()).hexdigest()
     rpt = repo / "governance" / "review-reports" / "sevtail" / "r1-s1.md"
-    rpt.write_text("引句:「嚴重度要忠實轉錄,十個字以上」\nseverity: blocker\n", encoding="utf-8")
+    rpt.write_text("severity: blocker\n引句:「嚴重度要忠實轉錄,十個字以上」\n", encoding="utf-8")
     hr = _h.sha256(rpt.read_bytes()).hexdigest()
     snap = repo / "governance" / "review-reports" / "sevtail" / "r1-snapshot.md"
     snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
@@ -27401,7 +27620,7 @@ def t_disposal_severity_tail():
            "report_path": "governance/review-reports/sevtail/r1-s1.md", "report_sha256": hr,
            "snapshot_path": "governance/review-reports/sevtail/r1-snapshot.md", "snapshot_sha256": hs}
     rpt_old = repo / "governance" / "review-reports" / "sevtail" / "r1-s0.md"
-    rpt_old.write_text("引句:「嚴重度要忠實轉錄,十個字以上」\nseverity: blocker\n", encoding="utf-8")
+    rpt_old.write_text("severity: blocker\n引句:「嚴重度要忠實轉錄,十個字以上」\n", encoding="utf-8")
     hro = _h.sha256(rpt_old.read_bytes()).hexdigest()
     row_old = {"ts": "2026-08-20T10:00:00+08:00", "kind": "none", "loop": "sevtail", "round": "r1",
                "auditor": "s0", "token": "TT0", "severity": "minor",
@@ -27454,7 +27673,7 @@ def t_loop_replay_freeze_and_golden():
     rpt = d / "r1-s1.md"
     # cb3 s3-f4:刻意低報形(報告 blocker/帳 minor)——readonly 守衛若被拔,severity 尾巴會寫
     # roster-alerts.log,「不產檔」斷言才分得出「守衛擋住」與「本來就沒事」
-    rpt.write_text("引句:「回放要決定論,十個字以上」\nseverity: blocker\n", encoding="utf-8")
+    rpt.write_text("severity: blocker\n引句:「回放要決定論,十個字以上」\n", encoding="utf-8")
     snap = d / "r1-snapshot.md"
     snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     hr = _h.sha256(rpt.read_bytes()).hexdigest()
