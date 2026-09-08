@@ -1,0 +1,1666 @@
+你是外家否決席(非 Claude 家族),外部第三方 code reviewer,任務是否決:找出這份 diff 裡會讓它不該被合併的洞(守衛面改動:擋錯人、放錯人、留下壞狀態、繞過既有裁定)。這份 diff 是別人投稿的變更,不是你或本系統寫的。逐 hunk 讀完整份 diff、主動找洞。
+
+Diff 全文附在本訊息最後(你沒有檔案系統,不能 Read/Grep;只能就 diff 文字判斷,引句一律從 diff 逐字抄;圖譜鏡頭那一項略過並註明「無法查證」)。
+變更主題:lumos 治理工具的「棧別提問表態閘」——(1) 題表 _STACK_PERF_QUESTIONS 改成 _STACK_QUESTION_SPECS(每題 id/q/when regex,載入時編譯),_stack_applicability 對改動內容的增刪行(剝字串、跳註解)算哪些題適用;pitfalls --diff --json 新增 stack_questions_applicable/stack_questions_meta(舊 stack_questions 語意不變);(2) 新原語 lumos code-loop dispositions <檔> [--branch]:驗表態 JSON 形狀(satisfied 附 evidence path:line 或 test:名/na 附理由/todo 附 Issue)→先寫治理帳事件 kind=dispositions→原子寫 marker governance/code-loop/<branch>.dispositions.json;lumos code-loop recall-miss <id> --note;lumos pitfalls --diff --dispositions-template [--carry] [--branch] 印樣板;(3) code-loop check 加 3.5 步 _dispositions_verdict:適用範圍改算 merge-base(主線,at_sha)..at_sha(推主線本身用推送範圍)、對該分支最後一筆表態逐題核對(錨點對 at_sha 樹驗:git cat-file/行數、git grep -w -F、ls-tree 解 Issue slug)、20 秒預算半途超時保留已查出的、gate 設定 all/high-only/off 讀 .lumos/config.json、沒帶 --at-sha 用 HEAD;check 加 --bound-tests-advisory(低風險合約測試紅只提醒);(4) pre-push 對每個分支 ref 無條件叫 check、輸出不再丟 /dev/null、tag 走 advisory;ci.yml 錯誤訊息;(5) impact hook 另送原始 delta_text(≤2 MB)給 lumos,impact --file --json 據它算 applicable,hook 只印命中題;(6) dispatch-lens 附表態記錄、快取 key 含其 sha256;(7) gov mapper 放行 dispositions/recall_miss 欄、去重鍵對這兩種 kind 拿 ts 當鑑別子,gov --stats 新段(死題候選/觸發太窄候選);(8) 九支新測試、兩條既有釘子改寫(t_prepush_computes_impact_once/t_stack_question_triggers);skills/圖譜文件同步。
+repo 在 /Users/enzo/harness/lumos-toolchain(可 Read/Grep 真代碼查證 diff 上下文;主程式 scripts/lumos 單檔 python3 零依賴;測試 scripts/test_lumos.py,跑子集:python3 scripts/test_lumos.py -k <關鍵字>;★不要改任何檔★)。
+
+審查鏡頭:
+1. 正確性——逐 hunk,每個可疑處挑一個具體輸入、把執行路徑走一遍(別看變數名字用猜的):守衛判定(_codeloop_guard_verdict 3.5 步的範圍縮減與 at_sha=HEAD、_dispositions_verdict 四種 status 與超時、錨點對樹驗的 git 指令 rc 語意)、寫側順序(治理帳→marker)、讀側重建、樣板 --carry、hook delta_text 2 MB、pre-push bash 改寫(rc 取得、陣列展開、過濾)、gov 去重鍵改動對既有事件的影響、dispatch-lens 快取 key。每條 finding 講清「哪個輸入、走到哪一行」會出錯。
+2. pitfalls manifest:/Users/enzo/harness/lumos-toolchain/governance/review-reports/code-表態閘/r1-pitfalls.txt(1 條 claim,讀 question 欄判真隱患/誤報)。
+3. 圖譜鏡頭:自己跑 python3 scripts/lumos impact --diff 280b34a..HEAD --repo /Users/enzo/harness/lumos-toolchain 看牽連節點,逐條判這份 diff 會不會破壞該節點宣稱的行為或合約(判「不影響」也要寫一句為什麼)。
+4. 本案特定:這是推送閘(pre-push/CI 會擋人)。找出任何一條「合法推送被誤擋而且 spec 提供的指令解不開」的路,以及任何一條「該擋的推送被放行(fail-open 太寬、範圍縮減縮過頭、--branch 錯位、記錄過期判不到)」的路;另外找「編排者填個值就能繞過」的路(例:表態檔內容敷衍到什麼程度工具仍放行——這是已承認的天花板,只在超出 spec 承認範圍時報)。
+
+錨定紀律(硬性):每條 finding 必附一段從 diff 逐字複製的原文引句(≥10 字),寫成獨立一行「引句:「…」」,引句內不要再包「」——編不出引句的疑慮不要交(收貨端跑 lumos quote-check 逐條驗;錨不到=該條不採信)。審材外查證所得走佐證通道,格式 file: `路徑:行號`(反引號必加)。
+抑噪紀律:低嚴重度疑慮,給不出具體失敗場景就不要標;未定義的詞/壞引用/內部不一致例外一律要報。不能從 diff 指出具體受影響的 file:line,就不准臆測「可能會壞別處」。
+你指出的 blocker/major 必須附能當場翻紅的最小重現(測試或指令+輸出);附不出請如實標「未能重現」並降權。每條 finding 敘述 ≤3 句、不准「可能/或許/建議考慮」收尾,判不準標 ⚠ 交編排者。
+
+輸出格式(硬性,收貨端機器讀):
+- 第一行:severity: <整份最高:clean|minor|major|blocker>
+- 每條 finding:「### fN 標題」一行(標題不含嚴重度字樣),接著★獨立一行★「severity: <值>」、一行「blocking: 是|否」(blocking:否 ↔ minor,是 ↔ major/blocker)、一行「file: `路徑:行號`」、一行「引句:「…」」、然後 ≤3 句敘述(哪個輸入走到哪一行、怎麼重現)。嚴重度不要寫在標題、列表項或粗體裡,只准那一行。
+- 圖譜鏡頭逐條判定一段;最後一行「最嚴重 severity: X,blocking 條數 N」。
+
+===== DIFF(scripts/lumos、pre-push、impact-hook.py、ci.yml)=====
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 862bce7..d885295 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -29,13 +29,13 @@ jobs:
+       - name: 自主迴圈測試
+         run: python scripts/test_autonomous_loop.py
+       - name: Graph doctor (strict)
+         run: python scripts/lumos doctor --ci
+       - name: code-loop gate (push 後盾;體檢 #5)
+         # `git push --no-verify` 會整個跳過 pre-push——測試/doctor/anchor 這裡都已重跑,唯獨 tier=high
+-        # 的對抗審查閘沒人補查,繞過零留痕。本步在 push 事件重算 pitfalls tier 並比對留痕:
++        # 的對抗審查閘與表態閘(2026-09-09)沒人補查,繞過零留痕。本步在 push 事件重算 pitfalls tier/適用題並比對留痕:
+         # rc1=高風險 diff 無 pass/skip 留痕 → CI 紅(可見的痕跡;ci-wait/ci-log 會收到)。
+         if: github.event_name == 'push'
+         env:
+           LUMOS_SKIP_BOUND_TESTS: "1"   # 受波及合約測試在本機 pre-push 真跑;CI 已跑全套當後盾,不重跑
+           BEFORE: ${{ github.event.before }}
+           SHA: ${{ github.sha }}
+@@ -45,13 +45,13 @@ jobs:
+           case "$BEFORE" in 0000000000000000000000000000000000000000|"") BEFORE="$EMPTY";; esac
+           git cat-file -e "$BEFORE^{commit}" 2>/dev/null || BEFORE="$EMPTY"
+           echo "range: $BEFORE..$SHA branch=$BRANCH"
+           python scripts/lumos code-loop check --diff "$BEFORE..$SHA" --at-sha "$SHA" --branch "$BRANCH" --repo . || {
+             rc=$?
+             if [ "$rc" -eq 1 ]; then
+-              echo "::error::tier=high 代碼無 code-loop 留痕——本機 pre-push 被繞過(--no-verify)或留痕失效;補 lumos code-loop pass|skip --note 後重推"
++              echo "::error::code-loop check 擋下(原因在上面:合約測試紅 / 效能檢核題沒表態 / 高風險代碼無審查留痕)——本機 pre-push 被繞過(--no-verify)或留痕失效;照上面 check 印的指令補留痕(dispositions / pass|skip --note)後重推"
+               exit 1
+             fi
+             exit "$rc"
+           }
+       - name: Anchor verify (baseline 缺失必紅)
+         run: |
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index bd842e7..a9df8e8 100755
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -406,12 +406,37 @@ def _find_lumos_script() -> str | None:
+     # ★2026-09-06 改★:改用共用的可信來源解析(見 _trusted_lumos)。
+     # 原本的備援是「這支 hook 檔往上三層」——在來源 repo 裡沒問題,但這支 hook 會被
+     # 複製進消費專案,那時往上三層就是消費專案自己,等於又回到「執行手邊資料夾的碼」。
+     return _trusted_lumos()
+ 
+ 
++DELTA_TEXT_CAP = 2 * 1024 * 1024   # 表態閘 S3:原始編輯內容送給 lumos 算觸發式適用性的上限(2 MB;超過截前 2 MB 並註記)
++
++
++def extract_delta_text(payload: dict, cap_bytes: int = DELTA_TEXT_CAP):
++    """表態閘 S3(r3 外家 F10/正確性席 C2/接手席 H5):把「這次編輯的原始內容」保留換行送給 lumos 逐行比對 when。
++    query 那欄(extract_delta_query)是 8000 字/512 詞的截斷版、用空白重組會丟換行,只給詞彙融合用;拿它算觸發會把後段靜默漏掉。
++    回 (text, truncated)。"""
++    ti = payload.get("tool_input") or {}
++    tool = payload.get("tool_name", "")
++    parts: list[str] = []
++    if tool == "Edit":
++        parts = [str(ti.get("old_string") or ""), str(ti.get("new_string") or "")]
++    elif tool == "MultiEdit":
++        for e in (ti.get("edits") or []):
++            if isinstance(e, dict):
++                parts += [str(e.get("old_string") or ""), str(e.get("new_string") or "")]
++    elif tool == "Write":
++        parts = [str(ti.get("content") or "")]
++    text = "\n".join(p for p in parts if p)
++    b = text.encode("utf-8")
++    if len(b) > cap_bytes:
++        return b[:cap_bytes].decode("utf-8", errors="ignore"), True
++    return text, False
++
++
+ def extract_delta_query(payload: dict, cap_tokens: int = 512, cap_chars: int = 8000) -> str:
+     """v1.1:從 tool_input 抽「這次改動的內容」當查詢詞(spec §3)。
+ 
+     Edit = old_string+new_string(刪與增都算「碰到」);MultiEdit = 各 edit 串接;
+     Write = content 全文。cap:512 distinct 空白分詞(CJK 連串視為一詞,罕觸頂)+ 字元上限兜底。
+     prospective 整檔重建刻意省略:content trigger 已 delta-scoped(比對本查詢詞),
+@@ -639,29 +664,40 @@ def build_ranked_context(data: dict) -> str:
+     if lane:
+         lines.append(f"守衛面參考——這 {len(lane)} 篇是軟標記樞紐,跟每支檔都近,未被本次改動直接證實相關:")
+         for x in lane:
+             lines.append(f"  {x.get('score',0):.2f} hop{x.get('hop','?')} {x.get('node','?')}")
+         if meta.get("lane_truncated"):
+             lines.append(f"  (另有 {meta['lane_truncated']} 條守衛面參考未列出)")
+-    for stk, qs in (data.get("stack_questions") or {}).items():
+-        lines.append(f"[{stk} 效能檢核——動手時順答這幾個問題]")
++    # 表態閘 S3:lumos 有算適用性(有 stack_questions_applicable 鍵)就只印觸發到的題;沒算(legacy)才印全表
++    for stk, qs in _stack_section(data).items():
++        lines.append(f"[{stk} 效能檢核——動手時順答這幾個問題]" if "stack_questions_applicable" not in data
++                     else f"[{stk} 效能檢核——這次改動觸發了這幾題,動手時順答;推送前每題要表態(lumos code-loop dispositions)]")
+         for q in qs:
+             lines.append(f"  - {q}")
++    if data.get("delta_truncated"):
++        lines.append("  (這次編輯內容超過 2 MB,效能檢核只掃了前 2 MB)")
+     lines.append("")
+     # 收尾指令只在真的列了節點時附(單 reviewer 終審 minor:僅檢核問題時
+     # 「判上列節點」答非所問,會弱化對提問的聚焦——檢核段標題已自帶指令)
+     if res or lane:
+         lines.append(_INJECT_INSTRUCTION)
+     # ★這條渲染路徑也要框★:第一版我只框了另一條,結果同一支 hook 有一半的輸出沒框
+     # ——是全套測試翻紅才發現的(那條測試走的正是這一條路)。
+     return _frame_injected("\n".join(lines))
+ 
+ 
++def _stack_section(data: dict) -> dict:
++    """要印哪些棧題:有 stack_questions_applicable 鍵(lumos 算過觸發)就用它(可能是空 {}→不印);沒有才退回全表 stack_questions。"""
++    if "stack_questions_applicable" in data:
++        return data.get("stack_questions_applicable") or {}
++    return data.get("stack_questions") or {}
++
++
+ def inject_ranked_context(data: dict) -> bool:
+     """ranked 版注入:results/stack_questions/lane 皆空 → 不輸出(lane-only 的題也要注入,v4 Codex f2)。"""
+-    if not data.get("results") and not data.get("stack_questions") and not data.get("lane"):
++    if not data.get("results") and not _stack_section(data) and not data.get("lane"):
+         return False
+     print(json.dumps({"hookSpecificOutput": {
+         "hookEventName": "PreToolUse",
+         "additionalContext": build_ranked_context(data),
+     }}, ensure_ascii=False))
+     return True
+@@ -784,13 +820,14 @@ def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str,
+         ttl_token = None
+ 
+     # v1.1(2026-07-11,goldset §6 全過後轉正):
+     # 窗外 → ranked 降噪版(固定席+top-8,delta 當查詢詞);
+     # 窗內 → --incidents-only 快速路(只跑事故比對——安全面每次都看,重型 BFS 降頻)。
+     delta_q = extract_delta_query(payload)
+-    stdin_payload = json.dumps({"query": delta_q, "prospective": {}}, ensure_ascii=False)
++    delta_text, delta_trunc = extract_delta_text(payload)
++    stdin_payload = json.dumps({"query": delta_q, "prospective": {}, "delta_text": delta_text, "delta_truncated": delta_trunc}, ensure_ascii=False)
+     cmd = [sys.executable, lumos, "impact", "--file", file_path_abs, "--repo", repo,
+            "--ranked", "--stdin-payload", "--json"]
+     if in_cooldown:
+         cmd.append("--incidents-only")
+     try:
+         result = subprocess.run(
+@@ -828,13 +865,13 @@ def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str,
+         impact_data = None
+     if not impact_data:
+         if session_id and not in_cooldown:
+             _ttl_unmark(session_id, file_path_abs, ttl_token)
+         return None
+     # 判空與 inject_ranked_context 同一條:results/stack_questions/lane 皆空 → 不注入(lane-only 也注入)
+-    has = impact_data.get("results") or impact_data.get("stack_questions") or impact_data.get("lane")
++    has = impact_data.get("results") or _stack_section(impact_data) or impact_data.get("lane")
+     ctx = build_ranked_context(impact_data) if has else ""
+     if not ctx.strip():
+         if session_id and not in_cooldown:
+             _ttl_unmark(session_id, file_path_abs, ttl_token)   # 零注入不開冷卻窗(前置修正②);標記在判定當下已寫,這裡只撤
+         return None
+     return ctx
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 5644c3f..4ace6df 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -181,64 +181,67 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+   [[ -z "$_EMPTY_TREE" ]] && continue   # 連空樹都算不出=git 環境壞,advisory 放行
+ 
+   # 圖譜同步覆蓋點名(2026-08-22,提醒不擋):分開幾個 commit 各自過關、整批卻漏掉的篇在這裡浮出
+   impact_once "$_range"
+   sync_nudge
+   pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
+-  if printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
++  _tier_high=0
++  printf '%s' "$pf_json" | grep -q '"tier": *"high"' && _tier_high=1
++  if [[ "$_tier_high" -eq 1 ]]; then
+     {
+       echo ""
+       echo "提醒:這次推送的程式碼裡有高風險寫法(像是沒包交易的寫入、沒關的檔案控制代碼、沒限流的外部呼叫),tier=high。"
+       echo "命中的地方列在下面:"
+       "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+       echo ""
+     } >&2
+-    # 留痕座標綁 remote_ref 目的地:refs/heads/* → 分支硬擋+skip 逃生;非 heads → advisory
+-    if [[ "$_rref" == refs/heads/* ]]; then
+-      _rbranch="${_rref#refs/heads/}"
+-      cl_rc=0
+-      # ★高風險這條路也把算好的那份傳進去★:不傳的話它會自己再算一次,
+-      # 而上面的註解寫的是「一次推送只算一次波及」——那句話就只在低風險成立。
+-      _fj=(); [ -n "$_IMPACT_JSON" ] && _fj=(--from-json "$_IMPACT_JSON")
+-      "$PY" "$GRAPHCTL" code-loop check --diff "$_range" --at-sha "$_lsha" --branch "$_rbranch" \
+-        --repo "$REPO_ROOT" ${_fj+"${_fj[@]}"} >/dev/null 2>&1 || cl_rc=$?
+-      if [[ "$cl_rc" -eq 1 ]]; then
+-        {
+-          echo "擋下:高風險的程式碼改動還沒經過對抗審查,或審查留痕已經失效。"
+-          echo "高風險改動不能只靠寫的人自己看一遍——規則是先讓一批沒有脈絡的審查員找洞,留下紀錄,才能推。"
+-          echo ""
+-          echo "三條路選一條:"
+-          echo "  1. 跑一輪代碼對抗審查(用 lumos-code-loop 這個 skill),通過後留痕再推。"
+-          echo "  2. 確定是誤判或刻意不審 → 留一句理由跳過,再推:"
+-          echo "       lumos code-loop skip --note \"為什麼跳過\""
+-          echo "  3. 緊急 → git push --no-verify(本機不留痕,但 CI 會把這次推送標紅)"
+-          echo ""
+-        } >&2
+-        exit 1
+-      fi
+-      # rc=0(已收斂/skip):放行;rc≠0/1(異常):fail-open 放行
+-    else
+-      # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,high 亦 advisory
+-      echo "提醒:這次推的是 tag 不是分支,高風險檢查只提醒不擋(advisory)。" >&2
++  fi
++  # 留痕座標綁 remote_ref 目的地:refs/heads/* → 分支:★無條件★叫 check(表態閘 2026-09-09,Projects/棧別提問表態閘_計劃 S7):
++  # 合約測試紅 / 有適用題表態不完整 / tier=high 無留痕,三個獨立判定各自出各自的訊息、由 check 印
++  # ——這裡不再自己寫死「跑一輪代碼審」文案、也不再把它的輸出丟 /dev/null(r3 正確性席 C3)。非 heads → advisory。
++  if [[ "$_rref" == refs/heads/* ]]; then
++    _rbranch="${_rref#refs/heads/}"
++    cl_rc=0
++    # ★高風險這條路也把算好的那份傳進去★:不傳的話它會自己再算一次波及。
++    _fj=(); [ -n "$_IMPACT_JSON" ] && _fj=(--from-json "$_IMPACT_JSON")
++    # 低風險推送的受波及合約測試維持「只提醒不擋」(2026-09-07 全 repo 審視 #17 人裁);高風險不帶旗標,照擋
++    _ba=(); [[ "$_tier_high" -eq 0 ]] && _ba=(--bound-tests-advisory)
++    _cl_out="$("$PY" "$GRAPHCTL" code-loop check --diff "$_range" --at-sha "$_lsha" --branch "$_rbranch" \
++      --repo "$REPO_ROOT" ${_fj+"${_fj[@]}"} ${_ba+"${_ba[@]}"} 2>&1)" || cl_rc=$?
++    if [[ "$cl_rc" -eq 1 ]]; then
++      {
++        echo ""
++        printf '%s\n' "$_cl_out"
++        echo ""
++        echo "高風險缺審查留痕的逃生路:先表態(上面的 dispositions 指令),再 lumos code-loop skip --note \"為什麼跳過\";緊急硬推 git push --no-verify(本機不留痕,CI 會把這次推送標紅)"
++        echo ""
++      } >&2
++      exit 1
+     fi
+-  elif printf '%s' "$pf_json" | grep -q '"stack_questions": *{"'; then
+-    {
+-      echo ""
+-      echo "提醒:這次改到的技術棧有幾個效能上該問自己的問題(不擋,advisory),列在下面;審查留痕裡建議帶一句答案。"
+-      "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+-      echo ""
+-    } >&2 || true
++    # rc=0(已收斂/已表態/skip):check 的提醒行(低風險合約測試紅、設定檔警告、表態閘小結)原樣給人看;rc≠0/1(異常):fail-open 放行
++    [ -n "$_cl_out" ] && { printf '%s\n' "$_cl_out" | grep -E '提醒|受波及合約測試|表態閘' >&2 || true; }
++  else
++    # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,一律 advisory(r2 外家 F7)
++    [[ "$_tier_high" -eq 1 ]] && echo "提醒:這次推的是 tag 不是分支,高風險檢查只提醒不擋(advisory)。" >&2
++    if printf '%s' "$pf_json" | grep -q '"stack_questions_applicable": *{"'; then
++      {
++        echo ""
++        echo "提醒:這次改到的技術棧有幾題效能檢核被觸發(推的是 tag,只提醒不擋),列在下面:"
++        "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
++        echo ""
++      } >&2 || true
++    fi
++    bound_tests_advisory "$_range"
+   fi
+   # ★合約測試閘:低風險這一路也要跑★(2026-09-07 全 repo 審視 #17,人裁)
+   # 舊行為:這件事藏在 code-loop check 裡,而那支只在 tier=high 且推的是分支時才跑
+   # ——所以「改到硬合約就跑那些合約綁的測試」這句話,在低風險推送上是假的,
+   # 而改一行低風險的碼一樣可以打破合約。
+   # 高風險那條路已經在上面的 code-loop check 裡跑過(它會擋),這裡只補低風險那半。
+-  if ! printf '%s' "$pf_json" | grep -q '"tier": *"high"'; then
+-    bound_tests_advisory "$_range"
+-  fi
++  # (表態閘 2026-09-09 起)分支 ref 的低風險推送:合約測試已在上面的 code-loop check 裡以 advisory 跑過一次,這裡不再跑第二次;
++  # tag 走上面 else 分支的 bound_tests_advisory。
+   # test-layers 軟提醒(advisory,恆不影響 rc;無 .lumos/test-layers.json 靜默)
+   "$PY" "$GRAPHCTL" test-layers --diff "$_range" --repo "$REPO_ROOT" 2>/dev/null || true
+   impact_done
+ done
+ 
+ # ★第二支測試檔也要跑★(2026-09-06 全 repo 審視:CI 因此紅過一次)
+diff --git a/scripts/lumos b/scripts/lumos
+index 180cbfe..7324973 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4512,12 +4512,37 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, es
+                 if v in rv: rv[v] += 1
+     rvt = sum(rv.values())
+     if rvt:
+         print(f"  辯方怎麼表態(只算有標 --refute-verdict 的 {rv_rounds} 輪,共 {rvt} 條):同意是真的 {rv['agree']}、拿反證降級 {rv['evidence']}、只存疑無反證 {rv['concern']}")
+         print("  (降級那批 evidence 是重啟條件的候選:回頭抽驗有沒有『降錯、後來證明是真的』;2026-08-27 起才有標)")
+         print()
++    # ── 表態閘副產品(Projects/棧別提問表態閘_計劃 S9,2026-09-09):按題目 id 彙總歷來四值;死題候選/觸發太窄候選 ──
++    _dq, _rm = {}, {}
++    for r in rows:
++        if r.get("gate") != "code-loop":
++            continue
++        if r.get("kind") == "dispositions" and isinstance(r.get("dispositions"), dict):
++            for _qid, _ent in r["dispositions"].items():
++                if not isinstance(_ent, dict):
++                    continue
++                _b = _dq.setdefault(_qid, {"satisfied": 0, "na": 0, "todo": 0, "auto-na": 0})
++                if _ent.get("auto"):
++                    _b["auto-na"] += 1
++                elif _ent.get("status") in _b:
++                    _b[_ent["status"]] += 1
++        elif r.get("kind") == "recall-miss" and r.get("recall_miss"):
++            _rm[r["recall_miss"]] = _rm.get(r["recall_miss"], 0) + 1
++    if _dq or _rm:
++        print("  棧別提問表態(表態閘,2026-09-09 起;每筆表態事件每題算一次,同 sha 重表態各算各的):")
++        for _qid in sorted(_dq):
++            _b = _dq[_qid]; _human = _b["satisfied"] + _b["na"] + _b["todo"]
++            _tag = " ← 死題候選(人答 ≥10 次且全是不適用:題目不對或被敷衍,回頭裁刪題或加嚴)" if (_human >= 10 and _b["na"] == _human) else ""
++            print(f"    {_qid}:做到了 {_b['satisfied']}、不適用 {_b['na']}、待辦 {_b['todo']}、未觸發自動 {_b['auto-na']}{_tag}")
++        for _qid, _n in sorted(_rm.items()):
++            print(f"    {_qid}:審查席抓到未觸發題的問題 {_n} 次" + (" ← 觸發太窄候選(修它的 when)" if _n >= 3 else "(累積 3 次列候選)"))
++        print()
+     # ── 審查有沒有用(審查有沒有用記帳 S3,2026-09-08):只算有 reported 欄的輪(2026-09-09 起才有) ──
+     _by_round = {}
+     for r in rows:
+         if r.get("gate") == "canary" and r.get("loop") and r.get("round"):
+             _by_round.setdefault((r["loop"], r["round"]), []).append(r)
+     _ys = {k: _review_yield_round(v) for k, v in _by_round.items()}
+@@ -4701,13 +4726,17 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
+     # .rot-queue.jsonl(L3)2026-08-22 拆出:寫帳的 verification-rot-check 8/21 已撤,本機也沒有這個檔;留 loader 只是假名額。
+     load(".governance-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+          "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
+          "nodes": [stem(x) for x in d.get("nodes", [])], "detail": d.get("note", ""),
+          # 審查有沒有用記帳(2026-09-09):記帳被寫側擋下(canary/blocked)每次各算一筆——同一個 commit 連撞三次
+          # 本來會被 (commit,nodes,gate,kind) 折成一次,「擋下 N 次」就永遠是 1;拿 ts+note(note 含事件隨機碼)當第 5 鑑別子(同秒也分得開,r1 f5)
+-         "token": (d.get("ts", "") + d.get("note", "")) if (d.get("gate") == "canary" and d.get("kind") == "blocked") else ""})
++         # 表態閘(2026-09-09,r3 接手席 H1):同 sha 兩筆 dispositions / recall-miss 各算各的,拿 ts 當鑑別子
++         "token": ((d.get("ts", "") + d.get("note", "")) if (d.get("gate") == "canary" and d.get("kind") == "blocked")
++                   else d.get("ts", "") if (d.get("gate") == "code-loop" and d.get("kind") in ("dispositions", "recall-miss")) else ""),
++         "dispositions": d.get("dispositions") if d.get("kind") == "dispositions" else None,
++         "recall_miss": d.get("recall_miss") if d.get("kind") == "recall-miss" else None})
+     # 第 6 源:業務簽核留痕(validation:人對業務正確性點頭的日期/人/內容)。
+     load(".signoff-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
+          "gate": "signoff", "kind": "signed", "hard": False,
+          "token": d.get("ts", ""), "nodes": [stem(d.get("node", ""))],
+          "detail": (d.get("by", "") + " " + d.get("note", "")).strip()})
+     # 第 5 源:kill 殺傷力驗證留痕(guard kill 的 verdict 史)。
+@@ -6358,12 +6387,15 @@ LOOP_NOT_CLOSE_EVENTS = {
+                                           # 而且重凍在判定 FAIL 時也會發生,當成關門會製造新洞
+     # 2026-09-08 #19:閘擋人時由做判定的子命令自己落 kind=blocked 的 hard 帳。
+     # ★擋人不是關門★——那是一次推送被擋下,迴圈本身沒有任何狀態變化。
+     # 同族的 skipped-env / fail-open 在真實帳上出現第一筆時,守衛 t_loop_close_kinds_classified
+     # 會再提醒;那時同樣歸這裡(★不得歸「算關門」★)。表裡只列真的出現過的(守衛的反向條件)。
+     ("code-loop", "blocked"),
++    # 棧別提問表態閘(2026-09-09):表態記錄與 recall-miss 帳都是陳述,不是關門(r2 接手席 H1:忘了登記守衛翻紅)。
++    ("code-loop", "dispositions"),
++    ("code-loop", "recall-miss"),
+ }
+ LOOP_CLOSE_SINCE = "2026-08-22"   # 治理帳出現第一筆 design-loop converged 的日子
+ # ★誠實記★:code-loop 的放行事件早得多(最早 2026-07-05),比這個日期早六週。
+ # 上面那個日期只用在「設計審那組」的免責聲明,不涵蓋 code-loop 那組。
+ 
+ 
+@@ -14965,13 +14997,13 @@ def cmd_anchor_approve(repo=None, note=None, vault=None):
+         _append_governance_log(v, [{"gate": "anchor-approve", "kind": "approved",
+                                     "hard": False, "nodes": changed, "note": note}])
+     print(f"✓ anchor approve — {len(anchors)} 個錨點寫入 baseline({len(changed)} 個變更)")
+     return 0
+ 
+ 
+-def _validate_repo_ref(repo_root, token, line):
++def _validate_repo_ref(repo_root, token, line, at_sha=None):
+     """驗一條 repo 內檔案指涉:回 (status, excerpt)。status ∈ missing/line_out_of_range/ok。
+     _refcheck_scan 與 check_regen_provenance(Check J 的 [src:] 驗證)共用——
+     J-c 不得走 _refcheck_scan 抽取入口(inline-code 抽取 + top_dirs 靜默過濾會把假目錄放行,
+     正是 J-c 要擋的幻覺;此 helper 直收已解析 path/line,無靜默過濾)。
+     token 消毒(code-review blocker 修):空/絕對路徑/含 .. 一律 missing——top_dirs 過濾
+     被拆掉時它隱含的安全性(空值/絕對/traversal 天然進不了 top_dirs)必須在此顯式補回,
+@@ -14979,12 +15011,28 @@ def _validate_repo_ref(repo_root, token, line):
+     token = token.strip()
+     from pathlib import PurePosixPath, PureWindowsPath
+     if (not token
+             or PurePosixPath(token).is_absolute() or PureWindowsPath(token).is_absolute()
+             or ".." in PurePosixPath(token).parts):
+         return "missing", ""
++    # at_sha 給了就對那個 commit 的 git 樹驗,不看工作樹(表態閘 2026-09-09,r3 架構對齊席 A3:同一件事同一個入口,
++    # 別在 code-loop 那邊另造一套);三態語意(missing/line_out_of_range/ok)兩條路一致。
++    if at_sha:
++        if not _git_tree_has(repo_root, at_sha, token):
++            return "missing", ""
++        if not line:
++            return "ok", ""
++        txt = _git_tree_text(repo_root, at_sha, token)
++        file_lines = txt.splitlines() if txt is not None else None
++        if "-" in line:
++            lo, hi = (int(x) for x in line.split("-", 1))
++        else:
++            lo = hi = int(line)
++        if file_lines is None or lo < 1 or hi > len(file_lines):
++            return "line_out_of_range", ""
++        return "ok", (file_lines[lo - 1] if lo == hi else file_lines[lo - 1] + "\n…\n" + file_lines[hi - 1])
+     target = repo_root / token
+     if not target.exists():
+         return "missing", ""
+     if target.is_dir() or not line:
+         return "ok", ""
+     if "-" in line:
+@@ -15060,61 +15108,96 @@ _PITFALL_QUESTIONS = {
+     "self-governance": "誤擋的逃生口?繞過有沒有留痕?",
+ }
+ _PITFALL_BLACKLIST = ("方案評比", "canary 相容性", "誠實天花板", "審計修正紀錄")
+ # 棧別效能追問(pitfalls棧別效能追問_計劃 T1):diff 命中該棧檔案時附進 manifest。
+ # 內容源=圖譜 Systems/效能檢核目錄「人判提問」欄,每棧取最載重 3-5 問(kt=6 cs=4 vue=4 sql=3;idioms ⚠不可機檢條目優先入問+2026-07-20 洩漏/裝箱補(R1 並行/R3 競態等);2026-07-19 使用者補全)——
+ # 目錄改動須同步此表、反向亦然(散落漂移家規);提問式>陳述式(逼答哲學,Vercel 56% 跳過實證)。
+-_STACK_PERF_QUESTIONS = {
++# ★形狀(2026-09-09 棧別提問表態閘 S2)★:每題 {id, q, when}——id 穩定代號(改措辭不改 id、改語意才換 id;表態與統計都以 id 為鍵),
++# q 原文,when 觸發 regex 清單(對「改動內容的行」剝字串、跳註解後不分大小寫比對,任一命中=適用;空 when/壞 regex 由
++# t_stack_question_triggers 釘)。舊消費者要的 {棧: [原文…]} 由下方 _STACK_PERF_QUESTIONS 派生,語意不變。
++_STACK_QUESTION_SPECS = {
+     "kt": [
+-        "Compose:昂貴計算有沒有 remember?不穩定型別/缺穩定 key 會不會讓重組失控(stability report 可查)?副作用有沒有放在 LaunchedEffect/DisposableEffect 且 key 選對(讀了會變的輸入卻用 Unit 當 key=永不重跑;key 太寬=每次重組重跑;2026-09-08 補,KDS 18 處 LaunchedEffect 有 9 處 Unit key)?",
+-        "協程:互不依賴的等待有沒有並行(coroutineScope+async)?有沒有 GlobalScope 裸用/scope 沒跟生命週期(viewModelScope)?",
+-        "Dispatchers 選對了嗎(IO 密集≠Default)?suspend 函式 main-safe 嗎?async 吞例外/長運算 ensureActive?",
+-        "Flow/Channel 選型:狀態=StateFlow/事件=SharedFlow/單消費=Channel,選反漏事件或黏著重放;背壓 buffer/conflate?repeatOnLifecycle?shareIn 有沒有放函式回傳(每叫一次漏一條熱流,idioms R5)?",
+-        "大集合長鏈有沒有 asSequence(每步 map/filter 生中間 List)?熱路徑 value class 有沒有被泛型/可空觸發裝箱?",
+-        "洩漏:單例/SDK/companion 有沒有持 Activity Context 或 View(該給 applicationContext)?長活物件持 ViewModel/View 引用?",
+-        "啟動:Application onCreate/首幀前有沒有同步重活(eager SDK init/磁碟 IO/大 JSON 解析)?拖冷啟+ANR 面;刻意暖機=正當取捨但要寫明理由(延後 init 可能把延遲挪到首筆業務,更糟)?",
++        {"id": "kt-compose", "q": 'Compose:昂貴計算有沒有 remember?不穩定型別/缺穩定 key 會不會讓重組失控(stability report 可查)?副作用有沒有放在 LaunchedEffect/DisposableEffect 且 key 選對(讀了會變的輸入卻用 Unit 當 key=永不重跑;key 太寬=每次重組重跑;2026-09-08 補,KDS 18 處 LaunchedEffect 有 9 處 Unit key)?',
++         "when": ['@Composable', 'LaunchedEffect', 'DisposableEffect', '\\bremember\\b', 'derivedStateOf', 'Lazy(Column|Row|VerticalGrid)']},
++        {"id": "kt-coroutines", "q": '協程:互不依賴的等待有沒有並行(coroutineScope+async)?有沒有 GlobalScope 裸用/scope 沒跟生命週期(viewModelScope)?',
++         "when": ['\\blaunch\\b', '\\basync\\b', 'coroutineScope', 'supervisorScope', 'GlobalScope', 'viewModelScope', 'lifecycleScope', '\\.await\\(']},
++        {"id": "kt-dispatchers", "q": 'Dispatchers 選對了嗎(IO 密集≠Default)?suspend 函式 main-safe 嗎?async 吞例外/長運算 ensureActive?',
++         "when": ['Dispatchers\\.', 'withContext\\(', 'suspend fun', 'ensureActive', 'runBlocking']},
++        {"id": "kt-flow", "q": 'Flow/Channel 選型:狀態=StateFlow/事件=SharedFlow/單消費=Channel,選反漏事件或黏著重放;背壓 buffer/conflate?repeatOnLifecycle?shareIn 有沒有放函式回傳(每叫一次漏一條熱流,idioms R5)?',
++         "when": ['StateFlow', 'SharedFlow', '\\bChannel\\b', '\\bflow\\s*\\{', 'shareIn', 'stateIn', '\\.collect\\b', 'collectLatest', 'repeatOnLifecycle', 'conflate', '\\.buffer\\(']},
++        {"id": "kt-collections", "q": '大集合長鏈有沒有 asSequence(每步 map/filter 生中間 List)?熱路徑 value class 有沒有被泛型/可空觸發裝箱?',
++         "when": ['\\.(map|filter|flatMap|sortedBy|groupBy)\\s*\\{', 'asSequence', '@JvmInline', 'value class']},
++        {"id": "kt-leaks", "q": '洩漏:單例/SDK/companion 有沒有持 Activity Context 或 View(該給 applicationContext)?長活物件持 ViewModel/View 引用?',
++         "when": ['\\bContext\\b', 'companion object', 'WeakReference', '\\bActivity\\b', '\\bView\\b']},
++        {"id": "kt-startup", "q": '啟動:Application onCreate/首幀前有沒有同步重活(eager SDK init/磁碟 IO/大 JSON 解析)?拖冷啟+ANR 面;刻意暖機=正當取捨但要寫明理由(延後 init 可能把延遲挪到首筆業務,更糟)?',
++         "when": ['onCreate\\(', ': Application\\(\\)', 'SplashScreen', '\\binit\\s*\\{']},
+     ],
+     "cs": [
+-        "熱路徑有沒有阻塞異步(.Result/.Wait)?互不依賴的 await 有沒有 Task.WhenAll 並行?CancellationToken 斷鏈?",
+-        "查詢有沒有 N+1/SELECT * 進大表?大結果集有分頁、過濾聚合下推到資料層嗎?",
+-        "熱讀路徑該不該上快取?熱路徑有沒有短命大物件(該用 Span/ValueTask)?",
+-        "LINQ:IEnumerable 有沒有被多次枚舉(查詢重跑,該 ToList 一次)?長鏈中間集合要不要收斂?",
+-        "連線生命週期:SqlConnection 有沒有 using 包好(漏包=池名額洩漏→TimeoutException,CA2000 預設關、機器沒在抓)?迴圈內反覆開連線?交易入口 open 後、建交易前例外,連線收得回嗎?",
++        {"id": "cs-async", "q": '熱路徑有沒有阻塞異步(.Result/.Wait)?互不依賴的 await 有沒有 Task.WhenAll 並行?CancellationToken 斷鏈?',
++         "when": ['\\bawait\\b', '\\.Result\\b', '\\.Wait\\(', 'GetAwaiter\\(', 'Task\\.Run', 'CancellationToken']},
++        {"id": "cs-data", "q": '查詢有沒有 N+1/SELECT * 進大表?大結果集有分頁、過濾聚合下推到資料層嗎?',
++         "when": ['\\bSELECT\\b', 'FromSql', '\\.Query(Async)?<', '\\.Include\\(', '\\.Skip\\(', '\\.Take\\(', 'IQueryable', '\\.ToList']},
++        {"id": "cs-cache", "q": '熱讀路徑該不該上快取?熱路徑有沒有短命大物件(該用 Span/ValueTask)?',
++         "when": ['IMemoryCache', 'HybridCache', 'IDistributedCache', 'new byte\\[', 'MemoryStream', 'Span<', 'ValueTask']},
++        {"id": "cs-linq", "q": 'LINQ:IEnumerable 有沒有被多次枚舉(查詢重跑,該 ToList 一次)?長鏈中間集合要不要收斂?',
++         "when": ['IEnumerable<', '\\.Select\\(', '\\.Where\\(', 'foreach\\s*\\(']},
++        {"id": "cs-connection", "q": '連線生命週期:SqlConnection 有沒有 using 包好(漏包=池名額洩漏→TimeoutException,CA2000 預設關、機器沒在抓)?迴圈內反覆開連線?交易入口 open 後、建交易前例外,連線收得回嗎?',
++         "when": ['SqlConnection', 'DbConnection', 'IDbConnection', 'OpenAsync', 'BeginTransaction', 'using\\s*\\(']},
+     ],
+     "vue": [
+-        "互不依賴的 await 有沒有 Promise.all 並行?這個互動會不會卡主線程(INP>200ms)?",
+-        "LCP 元素有沒有被誤加 lazy loading?圖片有沒有寬高(防 CLS)?",
+-        "新依賴 bundle 多重?能不能動態載入?",
+-        "async watch 有沒有處理競態(舊回應蓋掉新資料)?深層 watch 成本有意識嗎?v-for 子項 prop 有沒有預算成 per-item 值?",
+-        "響應原語選型:大 API 回應/大列表有沒有整包 ref()/reactive()(深響應逐層 Proxy,大 JSON 可膨脹數倍記憶體)?不需深追蹤的大資料該 shallowRef/markRaw;ESLint 無規則可抓,量級自判?",
++        {"id": "vue-parallel", "q": '互不依賴的 await 有沒有 Promise.all 並行?這個互動會不會卡主線程(INP>200ms)?',
++         "when": ['\\bawait\\b', '@click', '@input', 'addEventListener', 'setTimeout']},
++        {"id": "vue-lcp", "q": 'LCP 元素有沒有被誤加 lazy loading?圖片有沒有寬高(防 CLS)?',
++         "when": ['loading=\\"lazy\\"', '<img', '<picture', 'IntersectionObserver']},
++        {"id": "vue-bundle", "q": '新依賴 bundle 多重?能不能動態載入?',
++         "when": ['import\\s.*from\\s+[\'\\"][^./]', 'defineAsyncComponent', 'import\\(']},
++        {"id": "vue-watch", "q": 'async watch 有沒有處理競態(舊回應蓋掉新資料)?深層 watch 成本有意識嗎?v-for 子項 prop 有沒有預算成 per-item 值?',
++         "when": ['\\bwatch\\(', 'watchEffect', 'v-for', 'deep:\\s*true', 'AbortController']},
++        {"id": "vue-reactive", "q": '響應原語選型:大 API 回應/大列表有沒有整包 ref()/reactive()(深響應逐層 Proxy,大 JSON 可膨脹數倍記憶體)?不需深追蹤的大資料該 shallowRef/markRaw;ESLint 無規則可抓,量級自判?',
++         "when": ['\\breactive\\(', '\\bref\\(', 'shallowRef', 'markRaw', 'toRaw', 'JSON\\.parse', 'fetch\\(', 'axios']},
+     ],
+     "sql": [
+-        "這條查詢會在迴圈裡被呼叫嗎(N+1)?",
+-        "有沒有索引支撐?會不會大表全掃?",
+-        "交易範圍會不會鎖太久?隔離等級是刻意選的還是吃預設(READ COMMITTED 與 SERIALIZABLE 差在哪要說得出)?多表更新的鎖順序全站一致嗎(不一致=死鎖,重試包裝只是止血)?同一查詢換參數會不會拿到爛計畫(parameter sniffing;SQL Server compat 150 沒有 PSP 優化)?",
+-        "SARGable:索引在卻被寫法廢掉——WHERE 欄位側有沒有函式包用(ISNULL/CAST 包欄位=逐列運算廢索引;CONVERT(date,欄) 是文件化特例可 seek)?參數型別對得上欄位嗎(C# string 預設 nvarchar 打 varchar 欄=隱式轉換整表掃)?",
++        {"id": "sql-nplus1", "q": '這條查詢會在迴圈裡被呼叫嗎(N+1)?',
++         "when": ['\\bSELECT\\b']},
++        {"id": "sql-index", "q": '有沒有索引支撐?會不會大表全掃?',
++         "when": ['\\bWHERE\\b', '\\bJOIN\\b', 'ORDER BY', '\\bLIKE\\b', '\\bIN\\s*\\(']},
++        {"id": "sql-transaction", "q": '交易範圍會不會鎖太久?隔離等級是刻意選的還是吃預設(READ COMMITTED 與 SERIALIZABLE 差在哪要說得出)?多表更新的鎖順序全站一致嗎(不一致=死鎖,重試包裝只是止血)?同一查詢換參數會不會拿到爛計畫(parameter sniffing;SQL Server compat 150 沒有 PSP 優化)?',
++         "when": ['BEGIN TRAN', '\\bCOMMIT\\b', '\\bROLLBACK\\b', 'ISOLATION LEVEL', '\\bUPDATE\\b', '\\bDELETE\\b', '\\bMERGE\\b', 'WITH\\s*\\((NOLOCK|UPDLOCK|HOLDLOCK)', '@\\w+']},
++        {"id": "sql-sargable", "q": 'SARGable:索引在卻被寫法廢掉——WHERE 欄位側有沒有函式包用(ISNULL/CAST 包欄位=逐列運算廢索引;CONVERT(date,欄) 是文件化特例可 seek)?參數型別對得上欄位嗎(C# string 預設 nvarchar 打 varchar 欄=隱式轉換整表掃)?',
++         "when": ['CONVERT\\(', 'CAST\\(', 'ISNULL\\(', 'COALESCE\\(', 'LOWER\\(', 'UPPER\\(', 'DATEADD\\(', "LIKE\\s*'%"]},
+     ],
+-    # iOS / Swift(2026-09-08 補棧,內容源=效能檢核目錄 iOS 段+swift-idioms ⚠不可機檢條目;★尚無真專案實跑★)
+     "swift": [
+-        "主執行緒:這段有沒有同步 IO/解碼/大 JSON/Core Data fetch 跑在 @MainActor 或 UI 回呼裡(Hangs instrument 會抓,但 review 先問)?互不依賴的 await 有沒有 async let 並行?",
+-        "SwiftUI:body 裡有沒有昂貴計算或每次重建的物件(該搬進 model/用 cached 值)?觀察範圍是不是太寬(整個大 store 當 @Observable 依賴,改一欄全樹重算)?List/ForEach 的 id 穩不穩?有沒有 AnyView/條件分支換型別讓 diff 失效、GeometryReader/深層堆疊/preference 鏈讓 layout 反覆、隱式動畫掛在大樹上?貴的子樹有沒有 equatable() 或值包裝擋重算?",
+-        "洩漏:closure/Task/Timer/NotificationCenter 有沒有 [weak self]?長活物件(單例/協調器)有沒有抓著 view controller 或 view model?Task 有沒有隨畫面取消(.task 修飾子 vs 手持 Task 不 cancel)?",
+-        "啟動與捲動:首幀前有沒有同步重活(SDK init/大 plist/圖片解碼)?捲動 cell 有沒有在主線程解圖/算 layout(該預先縮圖、非同步解碼)?",
+-        "併發正確性:actor 隔離有沒有被 nonisolated(unsafe)/@unchecked Sendable 繞掉?跨 actor 的重複 await 中間狀態會不會被別人改掉(actor reentrancy)?",
+-        "耗電與網路:有沒有背景持續定位/輪詢/計時器(該用系統背景任務、定位精度按需)?網路請求有沒有合併批次、快取、重用連線(能量大宗是無線電喚醒,零散小請求最貴)?",
++        {"id": "swift-main", "q": '主執行緒:這段有沒有同步 IO/解碼/大 JSON/Core Data fetch 跑在 @MainActor 或 UI 回呼裡(Hangs instrument 會抓,但 review 先問)?互不依賴的 await 有沒有 async let 並行?',
++         "when": ['@MainActor', 'DispatchQueue\\.main', 'MainActor\\.run', 'JSONDecoder', 'Data\\(contentsOf', 'NSFetchRequest', 'async let', '\\bawait\\b']},
++        {"id": "swift-swiftui", "q": 'SwiftUI:body 裡有沒有昂貴計算或每次重建的物件(該搬進 model/用 cached 值)?觀察範圍是不是太寬(整個大 store 當 @Observable 依賴,改一欄全樹重算)?List/ForEach 的 id 穩不穩?有沒有 AnyView/條件分支換型別讓 diff 失效、GeometryReader/深層堆疊/preference 鏈讓 layout 反覆、隱式動畫掛在大樹上?貴的子樹有沒有 equatable() 或值包裝擋重算?',
++         "when": ['var body', '@Observable', '@State\\b', '@StateObject', '@ObservedObject', 'ForEach', '\\bList\\s*[({]', 'AnyView', 'GeometryReader', '\\.animation\\(', 'withAnimation']},
++        {"id": "swift-leaks", "q": '洩漏:closure/Task/Timer/NotificationCenter 有沒有 [weak self]?長活物件(單例/協調器)有沒有抓著 view controller 或 view model?Task 有沒有隨畫面取消(.task 修飾子 vs 手持 Task 不 cancel)?',
++         "when": ['\\[weak self\\]', 'Timer\\.', 'NotificationCenter', '\\.sink\\s*\\{', 'Task\\s*\\{', 'Task\\.detached', 'deinit']},
++        {"id": "swift-startup", "q": '啟動與捲動:首幀前有沒有同步重活(SDK init/大 plist/圖片解碼)?捲動 cell 有沒有在主線程解圖/算 layout(該預先縮圖、非同步解碼)?',
++         "when": ['didFinishLaunching', 'UIImage\\(', 'CGImageSource', 'UICollectionView', 'UITableView', 'cellForRow', 'LazyVStack', 'prepareForReuse']},
++        {"id": "swift-concurrency", "q": '併發正確性:actor 隔離有沒有被 nonisolated(unsafe)/@unchecked Sendable 繞掉?跨 actor 的重複 await 中間狀態會不會被別人改掉(actor reentrancy)?',
++         "when": ['\\bactor\\b', 'nonisolated', '@unchecked Sendable', '\\bSendable\\b', 'isolated']},
++        {"id": "swift-energy", "q": '耗電與網路:有沒有背景持續定位/輪詢/計時器(該用系統背景任務、定位精度按需)?網路請求有沒有合併批次、快取、重用連線(能量大宗是無線電喚醒,零散小請求最貴)?',
++         "when": ['CLLocationManager', 'desiredAccuracy', 'startUpdatingLocation', 'BGTaskScheduler', 'Timer\\.scheduledTimer', 'URLSession', 'URLRequest', 'URLCache', 'beginBackgroundTask']},
+     ],
+-    # Node.js / TS 後端(2026-09-08 補棧,內容源=效能檢核目錄 Node 段+node-idioms ⚠不可機檢條目;★尚無真專案實跑★)
+-    # ★鍵是 "node" 不是副檔名★:.ts/.js 前端(Vue)也用,靠 _stack_key_for_file 讀 package.json 才分得出後端。
+     "node": [
+-        "事件迴圈:這段有沒有同步阻塞(fs.*Sync/JSON.parse 大 body/同步 crypto/大迴圈/正則回溯)跑在請求路徑上?CPU 重活該不該丟 worker thread?",
+-        "並行與上限:互不依賴的 await 有沒有 Promise.all 並行?Promise.all 的集合有沒有上限(無界 map(async) 打爆下游連線池/記憶體,該 p-limit 之類有界並行)?",
+-        "資料層:查詢有沒有在迴圈裡(N+1)?連線池大小有沒有依實例數算過(太大壓垮 DB、太小排隊)?大結果集有沒有 stream/分頁而不是整包 toArray?",
+-        "外呼與資源:每個 HTTP/DB 外呼有沒有 timeout 與 AbortSignal?長連線(keep-alive agent/DB client)有沒有重用而不是每請求新建?未處理的 rejection/error 事件會不會直接砸掉 process?",
+-        "記憶體與背壓:大檔/大回應有沒有走 stream(pipeline)而不是讀進記憶體?長活的 Map/陣列/事件監聽有沒有上限與清理(以請求為鍵的快取是常見洩漏)?",
++        {"id": "node-eventloop", "q": '事件迴圈:這段有沒有同步阻塞(fs.*Sync/JSON.parse 大 body/同步 crypto/大迴圈/正則回溯)跑在請求路徑上?CPU 重活該不該丟 worker thread?',
++         "when": ['Sync\\(', 'JSON\\.parse', 'crypto\\.\\w+Sync', 'new RegExp', 'worker_threads', '\\.exec\\(']},
++        {"id": "node-parallel", "q": '並行與上限:互不依賴的 await 有沒有 Promise.all 並行?Promise.all 的集合有沒有上限(無界 map(async) 打爆下游連線池/記憶體,該 p-limit 之類有界並行)?',
++         "when": ['Promise\\.all', 'Promise\\.allSettled', '\\.map\\(\\s*async', '\\bawait\\b']},
++        {"id": "node-data", "q": '資料層:查詢有沒有在迴圈裡(N+1)?連線池大小有沒有依實例數算過(太大壓垮 DB、太小排隊)?大結果集有沒有 stream/分頁而不是整包 toArray?',
++         "when": ['\\.query\\(', '\\.find\\(', 'findMany', '\\bSELECT\\b', 'Pool\\(', 'createPool', '\\.connect\\(', '\\.toArray\\(']},
++        {"id": "node-external", "q": '外呼與資源:每個 HTTP/DB 外呼有沒有 timeout 與 AbortSignal?長連線(keep-alive agent/DB client)有沒有重用而不是每請求新建?未處理的 rejection/error 事件會不會直接砸掉 process?',
++         "when": ['fetch\\(', 'axios', 'https?\\.request', 'got\\(', 'AbortSignal', 'AbortController', '\\.on\\([\'\\"]error', 'process\\.on\\(', 'unhandledRejection']},
++        {"id": "node-memory", "q": '記憶體與背壓:大檔/大回應有沒有走 stream(pipeline)而不是讀進記憶體?長活的 Map/陣列/事件監聽有沒有上限與清理(以請求為鍵的快取是常見洩漏)?',
++         "when": ['new Map\\(', 'new Set\\(', 'createReadStream', 'createWriteStream', 'pipeline\\(', '\\.pipe\\(', 'Buffer\\.', 'readFile\\(']},
+     ],
+ }
++_STACK_PERF_QUESTIONS = {_k: [_s["q"] for _s in _v] for _k, _v in _STACK_QUESTION_SPECS.items()}   # 派生:舊語意(命中棧整組原文)
++_STACK_TRIGGERS = {_k: [(_s["id"], tuple(re.compile(_p, re.I) for _p in _s["when"])) for _s in _v]
++                   for _k, _v in _STACK_QUESTION_SPECS.items()}   # 載入時編譯:壞 regex=啟動即錯
+ # 以 "node" 鍵而非副檔名為棧的原因:.ts/.js 在 Vue 前端與 Node 後端都出現,單看副檔名分不出來。
+ _NODE_FRONTEND_MARKERS = ("vue", "nuxt", "react", "next", "svelte", "@angular/core", "solid-js", "preact")
+ _NODE_FLAVOR_CACHE = {}
+ 
+ 
+ def _node_flavor(file_rel, repo_root):
+@@ -15160,14 +15243,97 @@ _NODE_EXTS = {"ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"}
+ def _stack_key_for_file(file_rel, repo_root):
+     """一支改動檔對到 _STACK_PERF_QUESTIONS 的鍵:一般=副檔名;.ts/.js 家族要看 package.json——
+     後端回 "node",前端回 "vue"(.vue 檔本來就命中 vue 鍵;純 .ts 前端檔目前無獨立題組,回 None)。
+     兩個消費者(pitfalls --diff / impact hook)都走這一支,別各自抄副檔名邏輯。"""
+     ext = Path(file_rel).suffix.lstrip(".").lower()
+     if ext in _NODE_EXTS:
+-        return "node" if _node_flavor(file_rel, repo_root) == "node" else None
++        # 2026-09-09(表態閘 r2 邊界席 B4):前端 .ts/.js 原本回 None=零覆蓋零稽核;改歸 vue 棧(watch/ref/await 那幾題有觸發)。
++        _fl = _node_flavor(file_rel, repo_root)
++        return "node" if _fl == "node" else ("vue" if _fl == "vue" else None)
+     return ext if ext in _STACK_PERF_QUESTIONS else None
++
++
++# ── 棧別提問表態閘(Projects/棧別提問表態閘_計劃,2026-09-09)——適用性 + 設定 ─────────────────
++_STACK_QUESTIONS_GATE_VALUES = ("all", "high-only", "off")
++_STACK_ASK_ALL_DEFAULT = 300
++
++
++def _stack_questions_config(repo_root):
++    """讀 .lumos/config.json 的 stack_questions 區塊(直讀 repo_root,同 _ci_config/load_test_profile 慣例,
++    ★不走載 vault 的 helper★——check 跑在 pre-push,自稱 vault-free;r2 架構對齊席 A4)。
++    回 {mode: all|high-only|off, ask_all_over_lines: int, warnings: [str]};值不合法一律用預設並留一句給呼叫端印。"""
++    import json
++    cfg = {"mode": "all", "ask_all_over_lines": _STACK_ASK_ALL_DEFAULT, "warnings": []}   # 鍵叫 mode 不叫 gate:治理閘名的漂移掃描會把 gate 鍵的字面值當閘名
++    p = Path(repo_root) / ".lumos" / "config.json"
++    if not p.is_file():
++        return cfg
++    try:
++        data = json.loads(p.read_text(encoding="utf-8"))
++    except Exception as e:
++        cfg["warnings"].append(f".lumos/config.json 讀不了({e.__class__.__name__}),stack_questions 用預設(gate=all、門檻 {_STACK_ASK_ALL_DEFAULT})")
++        return cfg
++    sq = data.get("stack_questions") if isinstance(data, dict) else None
++    if not isinstance(sq, dict):
++        return cfg
++    g = sq.get("gate", "all")
++    if g not in _STACK_QUESTIONS_GATE_VALUES:
++        cfg["warnings"].append(f"設定檔的 stack_questions.gate={g!r} 不合法(只認 {'/'.join(_STACK_QUESTIONS_GATE_VALUES)}),已用 all")
++    else:
++        cfg["mode"] = g
++    t = sq.get("ask_all_over_lines", _STACK_ASK_ALL_DEFAULT)
++    if isinstance(t, bool) or not isinstance(t, int) or t < 1:
++        cfg["warnings"].append(f"設定檔的 stack_questions.ask_all_over_lines={t!r} 不合法(要正整數),已用 {_STACK_ASK_ALL_DEFAULT}")
++    else:
++        cfg["ask_all_over_lines"] = t
++    return cfg
++
++
++def _stack_norm_line(code):
++    """觸發比對前的正規化(同 _PITFALL_DIFF_PATTERNS 那套,r2 架構對齊席 A5/邊界席 B15):
++    註解開頭的行整行不算(回 None);其餘剝掉字串字面再回。"""
++    s = code.strip()
++    if not s or s.startswith(("#", "//", "--", "/*", "*")):
++        return None
++    return _strip_string_literals(code)
++
++
++def _stack_applicability(lines_by_stack, threshold):
++    """lines_by_stack: {棧: [改動內容的行…]}(增行與刪行都算;呼叫端已排除測試檔與非代碼檔)。
++    回 (applicable, meta):applicable={棧: [題目原文…]}(只列適用);meta={棧: [{id, question, applicable, triggered_by}]}(全表)。
++    某棧行數 > threshold → 該棧全表適用(改得多=觸發漏得多,寧多問;triggered_by=["行數>門檻"])。"""
++    applicable, meta = {}, {}
++    for stk, raw_lines in lines_by_stack.items():
++        specs = _STACK_QUESTION_SPECS.get(stk)
++        if not specs:
++            continue
++        norm = [n for n in (_stack_norm_line(l) for l in raw_lines) if n is not None]
++        over = len(raw_lines) > threshold
++        rows, app = [], []
++        for spec, (qid, pats) in zip(specs, _STACK_TRIGGERS[stk]):
++            hits = []
++            if over:
++                hits = [f"行數>{threshold}"]
++            else:
++                for pat in pats:
++                    if any(pat.search(n) for n in norm):
++                        hits.append(pat.pattern)
++            rows.append({"id": qid, "question": spec["q"], "applicable": bool(hits), "triggered_by": hits})
++            if hits:
++                app.append(spec["q"])
++        meta[stk] = rows
++        if app:
++            applicable[stk] = app
++    return applicable, meta
++
++
++def _stack_spec_by_id(qid):
++    for stk, specs in _STACK_QUESTION_SPECS.items():
++        for s in specs:
++            if s["id"] == qid:
++                return stk, s
++    return None, None
+ # diff 模式:代碼形態 pattern:(regex, 形態類軸, 提問)——類軸限 併發/效能/資源(非四業務類)
+ # 第四欄 in_strings:SQL 本來就寫在字串裡,要看字串;其餘只看真代碼(字串字面先剝掉,#7)。
+ # SQL 三條收緊成真的 SQL 形狀——「UPDATE 失敗」這種訊息文字不算。
+ _PITFALL_DIFF_PATTERNS = [
+     (re.compile(r"requests\.\w+\(|httpx\.\w+\(", re.I), "資源", "HTTP 呼叫有沒有 timeout?", False),
+     (re.compile(r"\bopen\s*\(", re.I), "資源", "檔案 handle 有沒有 with/確定 close?", False),
+@@ -16701,12 +16867,22 @@ def _arch_alignment_hints(added, repo_root, per_file=3):
+         sibs.sort(key=lambda p: -difflib.SequenceMatcher(None, p.stem.lower(), pf.stem.lower()).ratio())
+         out_files[f] = [str(p.relative_to(repo_root)).replace(os.sep, "/") for p in sibs[:per_file]]
+     if not out_files:
+         return {}
+     return {"files": out_files, "idiom_skills": sorted(skills), "questions": list(_ARCH_QUESTIONS)}
+ 
++def _stack_changed_ok(cur_file):
++    """棧別觸發要不要看這支檔的改動行:非代碼副檔名、審計證物、簿記檔、測試檔一律不看(同 claims 的過濾)。"""
++    ext = Path(cur_file).suffix
++    return (ext not in _PITFALL_DIFF_SKIP_EXT
++            and not cur_file.startswith("governance/review-reports/")
++            and cur_file not in _BOOKKEEPING_FILES
++            and not cur_file.startswith(_BOOKKEEPING_DIR)
++            and not _PITFALL_DIFF_TEST_PAT.search(cur_file))
++
++
+ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+     """掃 git diff <range> 算代碼形態風險 claims(regex 層 + 選擇性 lint 層)——**純計算、不印**。
+     回 dict {"claims", "tier"[, "lint_ran", "lint_skipped", "filtered"]};git 錯回 None(呼叫端印錯)。
+     供 _pitfall_diff_mode(印)與 loop capture-counts(收割成異質 finder)共用同一計算。"""
+     import subprocess
+     try:
+@@ -16719,30 +16895,37 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+         return None
+     if r.returncode != 0:
+         print(f"擋下:git 算不出 {diff_range} 這段差異: {r.stderr.strip()}", file=sys.stderr)
+         return None
+     added = {}
+     claims = []
++    changed_lines = {}   # {檔: [增行與刪行的內容…]}——只給棧別觸發用(表態閘 S2)
+     cur_file, new_ln = "", 0
+     for line in r.stdout.splitlines():
+         if line.startswith("+++ b/"):
+             cur_file = line[6:]
+             continue
+         m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)", line)
+         if m:
+             new_ln = int(m.group(1))
+             continue
+         if line.startswith("+++") or line.startswith("---"):
+             continue
+         if line.startswith("-"):
+-            continue                          # 刪除行不推進新檔行號
++            # 刪除行不推進新檔行號;但它是「改動內容」——棧別觸發要看(拿掉 CancellationToken/timeout/key 也該問;
++            # 表態閘 r2 外家 F5/正確性 C9)。added 集合本身仍只收新增行(其他消費者語意不變)。
++            if cur_file and _stack_changed_ok(cur_file):
++                changed_lines.setdefault(cur_file, []).append(line[1:])
++            continue
+         if not line.startswith("+"):
+             new_ln += 1                       # context 行推進
+             continue
+         # 這是新增行(+ 開頭)
+         added.setdefault(cur_file, set()).add(new_ln)
++        if cur_file and _stack_changed_ok(cur_file):
++            changed_lines.setdefault(cur_file, []).append(line[1:])
+         ext = Path(cur_file).suffix if cur_file else ""
+         code = line[1:]
+         if (ext not in _PITFALL_DIFF_SKIP_EXT and cur_file
+                 and not cur_file.startswith("governance/review-reports/")
+                 # ↑ 審計證物排除(2026-08-05):歸檔的席報告/canary 快照 .patch 裡★故意★埋著
+                 #   資源/併發 bug——當成代碼掃會讓 push 被自己的留痕擋下(C 慣例首擋實錄)
+@@ -16765,24 +16948,38 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+     for f in added:
+         if _PITFALL_DIFF_TEST_PAT.search(f):
+             continue
+         sk = _stack_key_for_file(f, repo_root)   # .ts/.js 看 package.json 分前後端(2026-09-08)
+         if sk and sk not in stack_qs:
+             stack_qs[sk] = _STACK_PERF_QUESTIONS[sk]
++    # 觸發式適用性(表態閘 S2,2026-09-09):同一棧所有改動檔的增刪行合在一起比對;
++    # stack_questions 語意不變(命中棧整組),另給 stack_questions_applicable(只列適用)與 stack_questions_meta(全表)。
++    _sq_cfg = _stack_questions_config(repo_root)
++    _by_stack = {}
++    for f, lines_ in changed_lines.items():
++        if _PITFALL_DIFF_TEST_PAT.search(f):
++            continue
++        sk = _stack_key_for_file(f, repo_root)
++        if sk:
++            _by_stack.setdefault(sk, []).extend(lines_)
++    stack_app, stack_meta = _stack_applicability(_by_stack, _sq_cfg["ask_all_over_lines"])
++    for w in _sq_cfg["warnings"]:
++        print(f"提醒:{w}", file=sys.stderr)
+ 
+     # ── 架構對齊三問(2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法)──
+     # 對每支改動的 code 檔,列同資料夾、同副檔名、最相似檔名的 3 個既有檔當「對照組」;
+     # 審查員/編排者拿這三個檔去問「分層與依賴方向 / 命名與錯誤處理 / 有沒有引入第二種做法」。
+     arch = _arch_alignment_hints(added, repo_root)
+ 
+     # ── Task 4: lint 整合 ─────────────────────────────────────────────────
+     config = None if no_lint else _lint_load_config(repo_root)
+     if config is None:
+         # fallback: no_lint 或無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
+         return {"claims": claims, "tier": "high" if claims else "standard",
+-                "stack_questions": stack_qs, "arch_alignment": arch}
++                "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
++                "stack_questions_meta": stack_meta, "arch_alignment": arch}
+ 
+     # 有 config: 補 source 到 regex claims
+     for c in claims:
+         c["source"] = "pitfalls-builtin"
+ 
+     cmds = _lint_stacks_for_diff(added, config)
+@@ -16809,13 +17006,14 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+     else:
+         filtered_marker = False  # 未對齊 → 全收 + 標記
+ 
+     all_claims = lint_claims + claims
+     out = {"claims": all_claims, "tier": "high" if all_claims else "standard",
+            "lint_ran": lint_ran, "lint_skipped": lint_skipped,
+-           "stack_questions": stack_qs, "arch_alignment": arch}
++           "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
++           "stack_questions_meta": stack_meta, "arch_alignment": arch}
+     if filtered_marker is not None:
+         out["filtered"] = filtered_marker
+     return out
+ 
+ 
+ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
+@@ -16966,13 +17164,13 @@ def cmd_stylelint_sarif(out=None):
+             fh.write(text)
+     else:
+         print(text)
+     return 0
+ 
+ 
+-def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False):
++def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False, disp_tpl=False, carry=False, branch=None):
+     """實務隱患提問(vault-free):spec 模式逼答設計決策級隱患;--diff 模式攤代碼級風險位置(Task 2)。
+     spec 模式印通用 4 問(含風險類反問)+ 命中類追問;--check:命中類且無「## <section_title>」節 → rc 1(只驗節存在)。
+     --no-lint:--diff 只跑 regex 層(快,給 pre-push advisory)。"""
+     import json
+     repo_root = _anchor_repo_root(repo)
+     if repo_root is None:
+@@ -16980,12 +17178,29 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
+     if diff is not None:
+         if diff.startswith("-"):
+             # --diff 值直接進 git 當 positional;'-' 開頭會被 git 誤認成選項(可寫任意檔,
+             # 如 --output=<path>——r2 panel major 實測驗證)。查詢命令慣例=usage-error rc2。
+             print("擋下:--diff 的值不能用 - 開頭(會被當成選項)", file=sys.stderr)
+             return 2
++        if disp_tpl:
++            # 表態樣板(表態閘 S1):只跑 regex 層;零命中或 gate=off 印 {} 並在 stderr 講一句(r2 邊界席 B11/B7)
++            data = _pitfall_diff_collect(diff, repo_root, no_lint=True)
++            if data is None:
++                return 2
++            cfg = _stack_questions_config(repo_root)
++            if cfg["mode"] == "off" or not data.get("stack_questions_applicable"):
++                print("{}")
++                print("這次改動沒有要答的效能檢核題(沒命中任何觸發,或 stack_questions.gate=off)" if cfg["mode"] != "off"
++                      else "這個專案把 stack_questions.gate 設成 off,不要求表態", file=sys.stderr)
++                return 0
++            _cb = (branch or _codeloop_git_branch(repo_root)) if carry else None
++            tpl = _dispositions_template(data, repo_root, branch=_cb, carry=carry)
++            print(json.dumps(tpl, ensure_ascii=False, indent=2))
++            n_app = sum(len(v) for v in data["stack_questions_applicable"].values())
++            print(f"要答的題 {n_app} 題(status 留空的那些);其餘已自動記未觸發。填完:lumos code-loop dispositions <這個檔>", file=sys.stderr)
++            return 0
+         return _pitfall_diff_mode(diff, repo_root, as_json, no_lint)
+     if md is None:
+         print("擋下:pitfalls 要給一個 .md 檔,或用 --diff <起點..終點> 指定改動範圍", file=sys.stderr)
+         return 2
+     mp = Path(md)
+     if not mp.is_file():
+@@ -19046,12 +19261,22 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+             # 棧別效能追問(pitfalls棧別效能追問_計劃 T2):完整 ranked 模式(非 incidents-only
+             # 冷卻快速路)且目標檔命中問題表 → 附該棧檢核問(全表);單源=_STACK_PERF_QUESTIONS,hook 只格式化
+             if not incidents_only and not _PITFALL_DIFF_TEST_PAT.search(rel_file):
+                 _sk = _stack_key_for_file(rel_file, repo_root_for_lookup)   # .ts/.js 看 package.json 分前後端
+                 if _sk:
+                     out_obj["stack_questions"] = {_sk: _STACK_PERF_QUESTIONS[_sk]}
++                    # 觸發式適用性(表態閘 S3):hook 另送原始 delta_text(保留換行;query 那欄是 8000 字/512 詞截斷版,只給詞彙融合)
++                    # → 只列命中 when 的題;沒送(legacy 呼叫)就沒有 applicable 鍵,hook 退回印全表。
++                    _dt = _payload.get("delta_text") if stdin_payload else None
++                    if isinstance(_dt, str):
++                        _cfgq = _stack_questions_config(repo_root_for_lookup)
++                        _app, _meta = _stack_applicability({_sk: _dt.splitlines()}, _cfgq["ask_all_over_lines"])
++                        out_obj["stack_questions_applicable"] = _app
++                        out_obj["stack_questions_meta"] = _meta
++                        if _payload.get("delta_truncated"):
++                            out_obj["delta_truncated"] = True
+             print(json.dumps(out_obj, ensure_ascii=False))
+         else:
+             print(f"改動 {rel_file} — 相關 top(固定席 {len(pins)}):")
+             for r in final:
+                 mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{r.get('hop','?')}"}.get(r["kind"], "")
+                 ct = f" ★{r['contract']}★" if r.get("contract") else ""
+@@ -19383,16 +19608,32 @@ def _mainline_ref(repo_root):
+         sha = _lens_full_sha(repo_root, cand)
+         if sha:
+             return cand, sha
+     return None
+ 
+ 
+-def _lens_cache_path(repo_root, base_sha, head_sha):
++def _lens_dispositions_lines(lines, rec):
++    """派工鏡頭附表態記錄(表態閘 S8):只列人答的題(未觸發自動 na 只給個數);工具驗過錨點存在、沒驗答案對不對——審查席反駁的就是這些答案。回人答題數。"""
++    disp = rec.get("dispositions") or {}
++    human = [(q, e) for q, e in disp.items() if isinstance(e, dict) and not e.get("auto")]
++    n_auto = sum(1 for e in disp.values() if isinstance(e, dict) and e.get("auto"))
++    lines.append(f"[表態記錄(棧別效能檢核;分支 {rec.get('branch')},版本 {str(rec.get('head_sha') or '')[:8]})——工具只驗了證據存在,沒驗答案對不對;審查時把這些答案當可反駁的宣稱]")
++    for q, e in human:
++        st = e.get("status")
++        tail = e.get("evidence") if st == "satisfied" else (e.get("issue") + " " + str(e.get("reason") or "") if st == "todo" else str(e.get("reason") or ""))
++        lines.append(f"  {q} {st} — {str(tail)[:200]}")
++    if n_auto:
++        lines.append(f"  (另有 {n_auto} 題未觸發、工具自動記不適用)")
++    return len(human)
++
++
++def _lens_cache_path(repo_root, base_sha, head_sha, extra=""):
+     import hashlib
+     # repo 部分用 realpath(跟 armed 檔的 _lens_repo_key 同一種算法;code-codex-s1 r1 架構席:兩套 key 並存)
+-    key = hashlib.sha256(f"{os.path.realpath(str(repo_root))}|{base_sha}|{head_sha}|schema{_LENS_SCHEMA}".encode("utf-8")).hexdigest()   # 帶 schema 版本:v1.1 舊快取自然 miss(v1.2 r2 外家)
++    # extra=表態記錄的 sha256(表態閘 S8):重表態之後舊快取自然 miss
++    key = hashlib.sha256(f"{os.path.realpath(str(repo_root))}|{base_sha}|{head_sha}|schema{_LENS_SCHEMA}|{extra}".encode("utf-8")).hexdigest()   # 帶 schema 版本:v1.1 舊快取自然 miss(v1.2 r2 外家)
+     return Path.home() / ".cache" / "lumos" / "dispatch-lens" / f"{key}.json"
+ 
+ 
+ def _lens_cache_read(path, ttl_sec=1200):
+     """只信自己 uid 擁有、group/other 不可寫、TTL 內的檔(r3 載荷席:$TMPDIR 路徑可預測可偽造)。"""
+     import json as _json, stat as _stat, time as _time
+@@ -20137,13 +20378,19 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
+         print("擋下:找不到主線(main/master 都沒有)", file=sys.stderr)
+         return 4
+     anc = _lens_git(root, "merge-base", "--is-ancestor", base_sha, ml[1])
+     if anc is None or anc.returncode != 0:
+         print(f"擋下:base {base_ref} 不在主線 {ml[0]} 的歷史上——鏡頭只信主線可達的 base", file=sys.stderr)
+         return 4
+-    cpath = _lens_cache_path(root, base_sha, head_sha)
++    # 表態記錄(表態閘 S8):有才附;快取 key 含它的 sha256
++    _disp_rec = _codeloop_read_dispositions(root, _codeloop_git_branch(root))
++    _disp_key = ""
++    if _disp_rec:
++        import hashlib as _hl, json as _dj
++        _disp_key = _hl.sha256(_dj.dumps(_disp_rec, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
++    cpath = _lens_cache_path(root, base_sha, head_sha, extra=_disp_key)
+     cached = None if (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")) else _lens_cache_read(cpath)
+     if cached is not None:
+         cached["cache_hit"] = True
+         if as_json:
+             print(_json.dumps(cached, ensure_ascii=False))
+         else:
+@@ -20231,12 +20478,15 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
+     fallback_status = "none"
+     if not listed:
+         # v1.2:固定席 0 篇不再靜默——附 code 層既有相依備援段(全部只用 base 樹;預算扣 impact 已耗)
+         deadline = _t0 + _LENS_INNER_BUDGET - _LENS_FALLBACK_RESERVE
+         fb_lines, fallback_status, _fb_meta = _lens_fallback(root, base_sha, head_sha, list(data.get("files") or []), base_tree, base_modes, deadline)
+         lines.extend(fb_lines)
++    _disp_n = 0
++    if _disp_rec:
++        _disp_n = _lens_dispositions_lines(lines, _disp_rec)
+     if listed:
+         lines.append(_LENS_HEADER)
+         def _read_base(rel):
+             sh = _lens_git(root, "show", f"{base_sha}:{rel}", quote=True)
+             return sh.stdout if (sh is not None and sh.returncode == 0) else None
+         _lens_render_listed(lines, listed, _read_base, cap, max_lines, _bidx)
+@@ -20247,13 +20497,14 @@ def cmd_dispatch_lens(diff_range, repo=None, as_json=False, no_cache=False, cap=
+         # ★2026-09-07 架構審查席裁:同一個問題不准有兩套慣例★
+         # 影響鏡頭那邊加了框、這邊還是舊的「句尾一句話」,同一個 repo 就有兩套。
+         # 統一成「框 + 句尾話」——框多買到的是「不可信的區域從哪裡開始」。
+         lines[:] = [_frame_injected("\n".join(lines))]
+     out = {"text": "\n".join(lines), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status, "fallback_status": fallback_status,
+            "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
+-           "base": base_sha, "head": head_sha, "cache_hit": False}
++           "base": base_sha, "head": head_sha, "cache_hit": False,
++           "dispositions": ({"branch": _disp_rec.get("branch"), "head_sha": _disp_rec.get("head_sha"), "answered": _disp_n} if _disp_rec else None)}
+     if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
+         _lens_cache_write(cpath, out)
+         # 算完把「有人在算」的鎖清掉。★只刪自己那把★(2026-09-07 代碼審 r2 外家席):
+         # 無條件刪的話,鎖過期被別人接手之後,先算完的那支會刪掉**別人正在用的鎖**。
+         # 鎖裡寫的是派工者的行程編號;背景這支從環境變數拿得到,對得上才刪。
+         try:
+@@ -20457,12 +20708,16 @@ def _codeloop_read_from_ledger(repo_root, branch):
+             if ('"passed"' not in line) and ('"skipped"' not in line):
+                 continue
+             try:
+                 ev = json.loads(line)
+             except Exception:
+                 continue
++            # ★kind 也要對★(表態閘 2026-09-09):dispositions 事件的內容可能含 "passed" 字樣,子字串預篩擋不住;
++            # 兩種 kind 各自重建(_codeloop_read_dispositions 讀另一種),互不擠掉。
++            if ev.get("kind") not in ("passed", "skipped"):
++                continue
+             if ev.get("gate") == "code-loop" and ev.get("branch") == branch and ev.get("head_sha"):
+                 last = ev
+     except OSError:
+         return None
+     if last is None:
+         return None
+@@ -20862,13 +21117,358 @@ def _gate_failopen(repo_root, gate, why):
+ 
+     hard=False:這是放行不是硬擋,但它必須看得見。
+     """
+     _gate_event_or_warn(repo_root, gate, "fail-open", why, hard=False)
+ 
+ 
+-def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None):
++# ── 棧別提問表態閘:表態記錄的寫/讀/驗(Projects/棧別提問表態閘_計劃,2026-09-09)──────────────
++# 白話:diff 命中某棧的「適用題」,推送前每一題要有機器讀得懂的交代——satisfied(附證據)/na(理由)/todo(連 Issue+理由)。
++# 表態是獨立原語(派審查員之前就寫),跟 pass/skip 分開;check 用同一套留痕座標規則解析,錨點一律對被推送 commit 的 git 樹驗。
++_DISP_STATUSES = ("satisfied", "na", "todo")
++_DISP_STRIP_RE = re.compile(r"[\s\W_]")   # 空白+標點(Unicode \w 含 CJK 字,所以 CJK 會留下)
++# CJK 判定沿用檢索那套 _RANK_CJK_RE(單一真相;r3 架構對齊席 A4:檔案裡各寫各的 CJK range 是被抓過的錯)——
++# 只含漢字,假名/諺文走「總長 ≥25」那條。
++_DISP_BUDGET = 20.0   # 秒:表態核對的時間預算(同派工鏡頭 _LENS_SPEC_BUDGET 慣例),超過走 fail-open 進治理帳
++
++
++def _disp_reason_ok(text):
++    """理由門檻(r2 邊界席 B10):去掉空白與標點後,CJK 字元 ≥10 個,或總字元 ≥25 個;標點不算 CJK,加句號繞不過。"""
++    if not isinstance(text, str):
++        return False
++    core = _DISP_STRIP_RE.sub("", text)
++    return len("".join(_RANK_CJK_RE.findall(core))) >= 10 or len(core) >= 25
++
++
++def _disp_split_path_line(ev):
++    """'path:line' → (path, line) 或 (None, 原因)。最後一個冒號之後是行號(純數字或 a-b);反斜線先正規化;絕對路徑與 .. 拒收。"""
++    from pathlib import PurePosixPath
++    s = str(ev).strip().replace("\\", "/")
++    if ":" not in s:
++        return None, "缺行號(格式 path:line)"
++    path, line = s.rsplit(":", 1)
++    if not re.fullmatch(r"\d+(-\d+)?", line):
++        return None, f"行號 {line!r} 不是數字或 a-b"
++    if not path or path.startswith("/") or PurePosixPath(path).is_absolute() or ".." in PurePosixPath(path).parts:
++        return None, "路徑要是 repo 相對路徑(不收絕對路徑與 ..)"
++    return path, line
++
++
++def _disp_split_test(ev, platforms, default_platform):
++    """'test:<名>' / 'test:<平台>:<名>' → (平台, 名) 或 (None, 原因)。規則同 resolve_test_refs(含冒號=平台前綴、裸名歸 default);
++    legacy 單平台卻帶前綴 → 明講「沒開多平台」而不是「找不到」(r2 邊界席 B11)。"""
++    body = str(ev)[len("test:"):]
++    if ":" in body:
++        plat, name = body.split(":", 1)
++        if not platforms:
++            return None, f"這個專案沒開多平台(.lumos/config.json 沒有 platforms),不支援平台前綴 {plat!r}"
++        if plat not in platforms:
++            return None, f"平台 {plat!r} 不在 platforms 裡({', '.join(sorted(platforms))})"
++        return plat, name
++    if not body:
++        return None, "test: 後面要有測試名"
++    return default_platform, body
++
++
++def _disp_validate(d, platforms=None, default_platform=None):
++    """驗表態 JSON 形狀(S4)。回 [錯誤句…],空=合法。"""
++    errs = []
++    if not isinstance(d, dict):
++        return ["表態檔最外層要是物件 {題目id: {...}}"]
++    for qid, ent in d.items():
++        _stk, spec = _stack_spec_by_id(qid)
++        if spec is None:
++            errs.append(f"{qid}:不是題目表裡的 id"); continue
++        if not isinstance(ent, dict):
++            errs.append(f"{qid}:值要是物件"); continue
++        st = ent.get("status")
++        if st not in _DISP_STATUSES:
++            errs.append(f"{qid}:status={st!r} 不合法(只認小寫 satisfied/na/todo)"); continue
++        if not str(ent.get("question") or "").strip():
++            errs.append(f"{qid}:question 空(樣板會帶原文,別刪)")
++        if st == "satisfied":
++            ev = str(ent.get("evidence") or "")
++            if not ev:
++                errs.append(f"{qid}:satisfied 要附 evidence(path:line 或 test:<名>)")
++            elif ev.startswith("test:"):
++                ok, why = _disp_split_test(ev, platforms or {}, default_platform)
++                if ok is None:
++                    errs.append(f"{qid}:{why}")
++            else:
++                p, why = _disp_split_path_line(ev)
++                if p is None:
++                    errs.append(f"{qid}:evidence {ev!r} 切不開——{why}")
++        if st == "na" and not ent.get("auto") and not _disp_reason_ok(ent.get("reason")):
++            errs.append(f"{qid}:na 的 reason 太短(去空白標點後 CJK ≥10 字或總長 ≥25 字)")
++        if st == "todo":
++            if not str(ent.get("issue") or "").startswith("Issues/"):
++                errs.append(f"{qid}:todo 要附 issue(Issues/<名>)")
++            if not _disp_reason_ok(ent.get("reason")):
++                errs.append(f"{qid}:todo 的 reason 太短(同 na 門檻)")
++    return errs
++
++
++def _codeloop_dispositions_gov_log(repo_root, branch, head_sha, ts, dispositions):
++    """★先寫治理帳★(CI 唯一路徑;r2 外家 F2:寫不進去要讓呼叫端知道)。回 (ok, 原因)。"""
++    import json
++    docs = Path(repo_root) / "docs"
++    if not docs.is_dir():
++        return False, "這個專案沒有 docs/,表態進不了治理帳、CI 端讀不到(跟 pass 留痕同一個限制)"
++    ev = {"ts": ts, "commit": head_sha[:7], "gate": "code-loop", "kind": "dispositions", "hard": False, "nodes": [],
++          "detail": f"表態 {len(dispositions)} 題", "branch": branch, "head_sha": head_sha, "dispositions": dispositions}
++    try:
++        with open(docs / ".governance-log.jsonl", "a", encoding="utf-8") as f:
++            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
++    except OSError as e:
++        return False, f"治理帳寫不進去({e})"
++    return True, ""
++
++
++def _codeloop_write_dispositions(repo_root, branch, head_sha, ts, dispositions):
++    """再原子寫 marker governance/code-loop/<branch>.dispositions.json(暫存+os.replace,同 _write_lf 慣例;r1 外家 F6)。"""
++    import json
++    d = Path(repo_root) / "governance" / "code-loop"
++    d.mkdir(parents=True, exist_ok=True)
++    p = d / f"{_codeloop_branch_filename(branch)}.dispositions.json"
++    _write_lf(p, json.dumps({"head_sha": head_sha, "branch": branch, "ts": ts, "dispositions": dispositions},
++                            ensure_ascii=False, indent=2) + "\n")
++    return p
++
++
++def _codeloop_read_dispositions(repo_root, branch):
++    """本機 marker 優先;沒有就退治理帳「該分支最後一筆 kind=dispositions」(檔案行序的最後一筆,不是 ts;r2 外家 F8)。
++    ★跟 pass/skip 分開重建★(r2 外家 F1/邊界席 B9):兩種 kind 互不擠掉。"""
++    import json
++    p = Path(repo_root) / "governance" / "code-loop" / f"{_codeloop_branch_filename(branch)}.dispositions.json"
++    if p.exists():
++        try:
++            return json.loads(p.read_text(encoding="utf-8"))
++        except Exception:
++            return None
++    path = Path(repo_root) / "docs" / ".governance-log.jsonl"
++    if not path.exists():
++        return None
++    last = None
++    try:
++        for line in path.read_text(encoding="utf-8").splitlines():
++            if '"dispositions"' not in line:
++                continue
++            try:
++                ev = json.loads(line)
++            except Exception:
++                continue
++            if ev.get("gate") == "code-loop" and ev.get("kind") == "dispositions" and ev.get("branch") == branch and ev.get("head_sha"):
++                last = ev
++    except OSError:
++        return None
++    if last is None:
++        return None
++    return {"head_sha": last["head_sha"], "branch": branch, "ts": last.get("ts"),
++            "dispositions": last.get("dispositions") or {}, "_source": "ledger"}
++
++
++def _codeloop_record_valid(repo_root, rec_sha, marker_sha):
++    """留痕座標有效性(pass/skip 與表態共用同一套):同 sha;或 rec_sha 是 marker_sha 的祖先且中間只動簿記檔
++    ([[Issues/code-loop-pass自失效追尾]] 的豁免)。回 (ok, 一句為什麼)。"""
++    import subprocess as _sp
++    if not rec_sha:
++        return False, "記錄沒有 sha"
++    if rec_sha == marker_sha:
++        return True, f"同版本 {marker_sha[:8]}"
++    anc = _sp.run(["git", "merge-base", "--is-ancestor", rec_sha, marker_sha],
++                  capture_output=True, text=True, cwd=str(repo_root))
++    if anc.returncode != 0:
++        return False, f"記錄 sha {rec_sha[:8]} 不是目標 {marker_sha[:8]} 的祖先"
++    df = _sp.run(["git", "diff", "--name-only", rec_sha, marker_sha],
++                 capture_output=True, text=True, cwd=str(repo_root))
++    files = [f.strip() for f in df.stdout.splitlines() if f.strip()]
++    if df.returncode == 0 and all(f in _BOOKKEEPING_FILES or f.startswith(_BOOKKEEPING_DIR) for f in files):
++        return True, f"祖先 {rec_sha[:8]}+簿記豁免(其後 {len(files)} 檔皆簿記)"
++    return False, f"記錄 sha {rec_sha[:8]} 之後動了代碼(非純簿記增量)"
++
++
++def _git_tree_has(repo_root, at_sha, path):
++    import subprocess as _sp
++    r = _sp.run(["git", "cat-file", "-e", f"{at_sha}:{path}"], capture_output=True, text=True, cwd=str(repo_root))
++    return r.returncode == 0
++
++
++def _git_tree_text(repo_root, at_sha, path):
++    import subprocess as _sp
++    r = _sp.run(["git", "show", f"{at_sha}:{path}"], capture_output=True, text=True, cwd=str(repo_root), errors="ignore")
++    return r.stdout if r.returncode == 0 else None
++
++
++def _disp_check_path_line(repo_root, at_sha, ev):
++    """satisfied 的 path:line 錨點:走 refcheck 同一個入口 _validate_repo_ref(有 at_sha 對被推送的樹、沒有對工作樹;
++    三態 missing/line_out_of_range/ok 同義;r3 架構對齊席 A3)。只驗存在不驗內容。"""
++    p, line = _disp_split_path_line(ev)
++    if p is None:
++        return False, line
++    st, _ = _validate_repo_ref(Path(repo_root), p, line, at_sha=at_sha)
++    if st == "ok":
++        return True, ""
++    where = f"推送版本 {at_sha[:8]} 的樹" if at_sha else "工作樹"
++    why = "不存在(未追蹤/未提交?)" if st == "missing" else "行號超出檔案長度"
++    return False, f"{p}:{line} 在{where}{why}"
++
++
++def _disp_check_test(repo_root, at_sha, ev, pidx):
++    """satisfied 的 test: 錨點兩道都要過(r2 三席一致,不要求工作樹乾淨):①工作樹 discovery(profile 語意、多平台)名字在集合裡
++    ②有 at_sha 時 `git grep -F` 在被推送的樹的該平台 root 命中(未追蹤/未提交的測試自然不在樹)。root 在 repo 外(跨 repo)只做①。"""
++    import subprocess as _sp
++    pdata, split, default, methods_for, _hay = pidx
++    plat, name = _disp_split_test(ev, split, default)
++    if plat is None:
++        return False, name
++    if name not in methods_for(plat):
++        return False, f"測試 {name!r} 在平台 {plat!r} 的工作樹掃不到(profile 認不得,或名字打錯)"
++    if not at_sha:
++        return True, ""
++    root = Path(pdata["platforms"][plat]["root"]).resolve()
++    rr = Path(repo_root).resolve()
++    try:
++        rel = root.relative_to(rr)
++    except ValueError:
++        return True, ""   # 跨 repo 的平台 root:at_sha 不屬於那個 repo,只做工作樹那一道
++    # -w 整字比對(r3 邊界席 B2:-F 子字串會讓 testFoo 撞到 testFooBar);rc 128(pathspec 在 repo 外等)當「驗不了」明講
++    r = _sp.run(["git", "grep", "-w", "-F", "-q", "-e", name, at_sha, "--", str(rel) if str(rel) != "." else "."],
++                capture_output=True, text=True, cwd=str(repo_root))
++    if r.returncode == 1:
++        return False, f"測試 {name!r} 在推送版本 {at_sha[:8]} 的樹裡整字 grep 不到(未追蹤/未提交的測試不算證據)"
++    if r.returncode != 0:
++        return False, f"測試 {name!r} 無法對推送版本的樹驗證(git grep rc={r.returncode}:{r.stderr.strip()[:80]})"
++    return True, ""
++
++
++def _disp_check_issue(repo_root, at_sha, issue):
++    """todo 的 Issue:先解析 docs/*-knowledge 的實際 slug(git cat-file 不展開 glob,r2 正確性席 C4),再驗存在且 status open/doing。"""
++    import subprocess as _sp
++    name = str(issue)[len("Issues/"):]
++    if name.endswith(".md"):
++        name = name[:-3]
++    if at_sha:
++        ls = _sp.run(["git", "ls-tree", "--name-only", at_sha, "docs/"], capture_output=True, text=True, cwd=str(repo_root))
++        slugs = [x.strip() for x in ls.stdout.splitlines() if x.strip().endswith("-knowledge")]
++        for s in slugs:
++            p = f"{s}/Issues/{name}.md"
++            if _git_tree_has(repo_root, at_sha, p):
++                txt = _git_tree_text(repo_root, at_sha, p) or ""
++                m = re.search(r"(?m)^status:\s*(\S+)", txt)
++                st = m.group(1) if m else ""
++                return (st in ("open", "doing")), ("" if st in ("open", "doing") else f"{p} 的 status 是 {st or '空'},todo 只准連 open/doing")
++        return False, f"推送版本 {at_sha[:8]} 的樹裡找不到 docs/*-knowledge/Issues/{name}.md"
++    hits = list(Path(repo_root).glob(f"docs/*-knowledge/Issues/{name}.md"))
++    if not hits:
++        return False, f"工作樹找不到 docs/*-knowledge/Issues/{name}.md"
++    m = re.search(r"(?m)^status:\s*(\S+)", hits[0].read_text(encoding="utf-8", errors="ignore"))
++    st = m.group(1) if m else ""
++    return (st in ("open", "doing")), ("" if st in ("open", "doing") else f"{hits[0].name} 的 status 是 {st or '空'},todo 只准連 open/doing")
++
++
++def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha, tier, deadline=None):
++    """表態閘判定(S5):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。回 dict{blocked, gate, applicable, checked, problems[]}。
++    超過 deadline 時停下來、回 blocked=False 並標 over_budget(呼叫端走 fail-open 進治理帳)。"""
++    import time as _time
++    cfg = _stack_questions_config(repo_root)
++    app = pf_data.get("stack_questions_applicable") or {}
++    meta = pf_data.get("stack_questions_meta") or {}
++    out = {"blocked": False, "gate_mode": cfg["mode"], "applicable": sum(len(v) for v in app.values()),
++           "checked": 0, "problems": [], "warnings": list(cfg["warnings"])}
++    if not app or cfg["mode"] == "off" or (cfg["mode"] == "high-only" and tier != "high"):
++        return out
++    rec = _codeloop_read_dispositions(repo_root, marker_branch)
++    if rec is None:
++        out["problems"].append(f"分支 {marker_branch!r} 還沒有表態記錄(推 HEAD:別名 時表態要帶 --branch {marker_branch},查的是遠端目的分支)")
++        out["blocked"] = True
++        return out
++    ok, why = _codeloop_record_valid(repo_root, str(rec.get("head_sha") or ""), marker_sha)
++    if not ok:
++        out["problems"].append(f"表態記錄過期:{why}——改了碼要重表態(樣板加 --carry 帶舊答案)")
++        out["blocked"] = True
++        return out
++    disp = rec.get("dispositions") or {}
++    cfg_path = Path(repo_root) / ".lumos" / "config.json"
++    cfg_broken = False
++    if cfg_path.is_file():
++        try:
++            import json as _j
++            _j.loads(cfg_path.read_text(encoding="utf-8"))
++        except Exception:
++            cfg_broken = True
++    pidx = None
++    for _stk, rows in meta.items():
++        for row in rows:
++            if not row.get("applicable"):
++                continue
++            if deadline is not None and _time.monotonic() > deadline:
++                # 半途超時(r3 邊界席 B4):已經查出的違規不能丟——有問題就照擋、註明沒查完;一題都還沒查出問題才 fail-open
++                out["over_budget"] = True
++                if out["problems"]:
++                    out["problems"].append("(表態核對超過時間預算,後面的題沒查完;上面已查出的照擋)")
++                    out["blocked"] = True
++                else:
++                    out["blocked"] = False
++                return out
++            qid = row["id"]
++            ent = disp.get(qid)
++            if ent is None:
++                out["problems"].append(f"{qid} 缺表態"); continue
++            if ent.get("auto"):
++                out["problems"].append(f"{qid} 工具判它適用,但表態是自動填的 na——要人答"); continue
++            st = ent.get("status")
++            if st == "satisfied":
++                ev = str(ent.get("evidence") or "")
++                if ev.startswith("test:"):
++                    if cfg_broken:
++                        out["problems"].append(f"{qid} 無法驗證 test: 證據:.lumos/config.json 解析失敗(先修設定檔)"); continue
++                    if pidx is None:
++                        pidx = _platform_test_index(Path(repo_root))
++                    ok2, why2 = _disp_check_test(repo_root, at_sha, ev, pidx)
++                else:
++                    ok2, why2 = _disp_check_path_line(repo_root, at_sha, ev)
++                if not ok2:
++                    out["problems"].append(f"{qid} 證據對不上:{why2}"); continue
++            elif st == "todo":
++                ok2, why2 = _disp_check_issue(repo_root, at_sha, str(ent.get("issue") or ""))
++                if not ok2:
++                    out["problems"].append(f"{qid} 待辦對不上:{why2}"); continue
++            elif st == "na":
++                if not _disp_reason_ok(ent.get("reason")):
++                    out["problems"].append(f"{qid} na 的理由太短"); continue
++            else:
++                out["problems"].append(f"{qid} status {st!r} 不合法"); continue
++            out["checked"] += 1
++    out["blocked"] = bool(out["problems"])
++    return out
++
++
++def _dispositions_template(pf_data, repo_root, branch=None, carry=False):
++    """S1:適用題 status 留空、未觸發題自動 na(auto:true+觸發清單);--carry 從該分支最後一筆表態帶「id 相同且仍適用」的舊答案。"""
++    meta = pf_data.get("stack_questions_meta") or {}
++    tpl = {}
++    old = {}
++    if carry and branch:
++        rec = _codeloop_read_dispositions(repo_root, branch)
++        old = (rec or {}).get("dispositions") or {}
++    for _stk, rows in meta.items():
++        for row in rows:
++            qid = row["id"]
++            if row.get("applicable"):
++                prev = old.get(qid)
++                if carry and isinstance(prev, dict) and not prev.get("auto") and prev.get("status") in _DISP_STATUSES:
++                    ent = dict(prev); ent["question"] = row["question"]; ent["carried"] = True
++                else:
++                    ent = {"status": "", "question": row["question"], "evidence": "", "reason": "", "issue": ""}
++            else:
++                ent = {"status": "na", "question": row["question"], "auto": True,
++                       "reason": "未觸發:" + ", ".join(spec_w for spec_w in (s["when"] for s in _STACK_QUESTION_SPECS[_stk] if s["id"] == qid) for spec_w in spec_w)}
++            tpl[qid] = ent
++    return tpl
++
++
++def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None, bound_advisory=False):
+     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
+     AND 無有效 pass/skip 留痕 → blocked=True。
+     留痕座標(prepush範圍修法 #2):at_sha/branch 給了則綁該座標(hook 傳被推送 ref 的
+     local_sha 與 remote_ref 分支),否則讀當前 checkout HEAD/branch(向後相容)。
+     diff_range 給了則跳 merge-base 推導直接算 tier;否則沿 merge-base..HEAD 現行為。
+     fail-open:pitfalls 出錯 / 非 git / 無 merge-base → tier 視作非 high(不 blocked)。
+@@ -20876,12 +21476,13 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+     """
+     import json as _json
+     import subprocess as _sp
+ 
+     # 留痕比對座標:優先用傳入的(hook 綁被推送 ref),否則讀 checkout
+     _codeloop_guard_verdict.last_bound = None   # 每次呼叫先清,提早 fail-open 的分支不會拿到上一輪的殘留
++    _codeloop_guard_verdict.last_dispositions = None
+     marker_sha = at_sha or _codeloop_git_head(repo_root)
+     marker_branch = branch or _codeloop_git_branch(repo_root)
+     if not marker_sha:
+         _gate_failopen(repo_root, "code-loop", "無法取得 HEAD sha")
+         return {"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"}
+ 
+@@ -20907,14 +21508,16 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+     # 第一版只接了低風險那條,於是高風險推送仍然算兩次(一次給同步點名、一次在這裡)
+     # ——而我在 pre-push 的註解裡寫的是「★一次推送只算一次波及★」。
+     # ★那句話當時只在低風險成立,是我自己寫太大的宣稱。★ 接上之後才是真的。
+     bt = _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note,
+                             payload=payload)
+     _codeloop_guard_verdict.last_bound = bt
+-    if bt["status"] == "red":
++    if bt["status"] == "red" and not bound_advisory:
+         return {"blocked": True, "reason": bt["reason"], "tier": "unknown", "bound_tests": bt}
++    # bound_advisory(表態閘 S7 之後 pre-push 對每個分支 ref 都叫 check):低風險推送的合約測試維持 2026-09-07 人裁的
++    # 「只提醒不擋」——紅了照樣印(呼叫端讀 last_bound),但不在這裡擋;高風險那條 pre-push 不帶這旗標,照舊擋。
+ 
+     # 3. 跑 pitfalls --diff <range> --no-lint --json 取 tier
+     try:
+         import sys as _sys
+         graphctl = Path(__file__).resolve()
+         r = _sp.run([_sys.executable, str(graphctl), "pitfalls",
+@@ -20931,12 +21534,53 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+         data = _json.loads(lines[0])
+         tier = data.get("tier", "standard")
+     except Exception as e:
+         _gate_failopen(repo_root, "pitfalls", f"pitfalls 例外:{str(e)[:120]}")
+         return {"blocked": False, "reason": f"pitfalls 例外(fail-open): {e}", "tier": "unknown"}
+ 
++    # 3.5 表態閘(Projects/棧別提問表態閘_計劃,2026-09-09):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。
++    # 判定順序=合約測試(2.5)→表態(3.5)→審查留痕(4/5):序列早退,先中的先報、修完再跑(r3 架構對齊席 A1 要求講明)。
++    dv = {"blocked": False, "gate_mode": "?", "applicable": 0, "checked": 0, "problems": []}
++    # 適用範圍(r3 邊界席 B1):算「哪些題適用」用 merge-base(主線, at_sha)..at_sha——把主線合進分支再推分支,
++    # 推送範圍(remote..local)會把主線帶進來的碼算成本次要表態;推主線本身、或算不出主線/merge-base 才用推送範圍。tier 照舊用推送範圍。
++    disp_data, disp_range = data, diff_range
++    try:
++        _ml = _mainline_ref(repo_root)
++        _mlname = _ml[0].split("@")[0] if _ml else None
++        if _ml and marker_branch and marker_branch != _mlname:
++            _mbr = _sp.run(["git", "merge-base", _ml[1], marker_sha], capture_output=True, text=True, cwd=str(repo_root))
++            _mb = _mbr.stdout.strip() if _mbr.returncode == 0 else ""
++            if _mb and _mb == marker_sha:
++                # 分支 tip 已在主線上:沒有本分支自己的改動,沒有題要答
++                disp_data, disp_range = {"stack_questions_applicable": {}, "stack_questions_meta": {}}, None
++            elif _mb and f"{_mb}..{marker_sha}" != diff_range:
++                _nr = f"{_mb}..{marker_sha}"
++                _r2 = _sp.run([_sys.executable, str(graphctl), "pitfalls", "--diff", _nr, "--no-lint", "--json", "--repo", str(repo_root)],
++                              capture_output=True, text=True, cwd=str(repo_root))
++                _l2 = [l for l in _r2.stdout.splitlines() if l.strip().startswith("{")]
++                if _r2.returncode == 0 and _l2:
++                    disp_data, disp_range = _json.loads(_l2[0]), _nr
++    except Exception:
++        disp_data, disp_range = data, diff_range
++    try:
++        import time as _time
++        # at_sha 沒給(本機直接叫 check)→ 用 HEAD 當 at_sha,錨點一樣對樹驗(未提交的改動不算證據;r3 邊界席 B5)
++        dv = _dispositions_verdict(repo_root, disp_data, marker_sha, marker_branch, marker_sha, tier,
++                                   deadline=_time.monotonic() + _DISP_BUDGET)
++        dv["range"] = disp_range
++        if dv.get("over_budget") and not dv.get("blocked"):
++            _gate_failopen(repo_root, "code-loop", f"表態核對超過 {_DISP_BUDGET:.0f} 秒預算且尚未查出問題,這次放行")
++    except Exception as e:
++        _gate_failopen(repo_root, "code-loop", f"表態核對例外:{str(e)[:120]}")
++        dv = {"blocked": False, "gate_mode": "?", "applicable": 0, "checked": 0, "problems": [], "error": str(e)[:120]}
++    _codeloop_guard_verdict.last_dispositions = dv
++    if dv["blocked"]:
++        return {"blocked": True, "reason_kind": "dispositions",
++                "reason": f"有 {dv['applicable']} 題適用,表態不完整({len(dv['problems'])} 處)",
++                "tier": tier, "dispositions": dv}
++
+     if tier != "high":
+         return {"blocked": False, "reason": f"tier={tier}(非 high)", "tier": tier}
+ 
+     # 4. 讀留痕,pass/skip 且 sha == marker_sha → 有效(marker_sha/marker_branch 綁被推送 ref 或 checkout)
+     rec = _codeloop_read(repo_root, marker_branch)
+     if rec is not None:
+@@ -20969,19 +21613,19 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+         if rec_sha != marker_sha:
+             reason = f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]};非純簿記增量)"
+         else:
+             reason = f"tier=high 且留痕狀態無效({rec_status!r})"
+         if _codeloop_marker_skipped(repo_root, reason, marker_sha):
+             return {"blocked": False, "reason": "留痕要求被 env 跳過(合約測試閘照跑)", "tier": tier}
+-        return {"blocked": True, "reason": reason, "tier": tier}
++        return {"blocked": True, "reason": reason, "tier": tier, "reason_kind": "review"}
+ 
+     # 5. 無留痕
+     _r5 = "tier=high 且無留痕(尚未跑 code-loop pass/skip)"
+     if _codeloop_marker_skipped(repo_root, _r5, marker_sha):
+         return {"blocked": False, "reason": "留痕要求被 env 跳過(合約測試閘照跑)", "tier": tier}
+-    return {"blocked": True, "reason": _r5, "tier": tier}
++    return {"blocked": True, "reason": _r5, "tier": tier, "reason_kind": "review"}
+ 
+ 
+ def _codeloop_marker_skipped(repo_root, reason, head_sha):
+     """`LUMOS_SKIP_CODE_LOOP=1` 只跳「代碼審留痕要求」這一步(#19 S3)。
+ 
+     ★形狀照既有的★(r1 架構對齊席):這個 repo 已經有「每道閘一個布林環境變數」的跳閘機制
+@@ -21025,17 +21669,73 @@ def _codeloop_marker_skipped(repo_root, reason, head_sha):
+                         hard=False, head_sha=head_sha)
+     print("  ⚠ 代碼審留痕要求被 LUMOS_SKIP_CODE_LOOP=1 跳過——★這一筆會留在治理帳上★"
+           "(合約測試閘不受影響,照跑)", file=sys.stderr)
+     return True
+ 
+ 
+-def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False, from_json=None):
++def _cmd_codeloop_dispositions(repo_root, branch, head_sha, ts, disp_file):
++    """`code-loop dispositions <檔.json>`(表態閘 S4):驗形狀 → 先寫治理帳 → 再原子寫 marker。壞就 rc2 不寫並講原因。"""
++    import json
++    if not disp_file:
++        print("擋下:要給表態檔路徑——先 lumos pitfalls --diff <範圍> --dispositions-template > 檔,填完再帶進來", file=sys.stderr)
++        return 2
++    p = Path(disp_file)
++    if not p.is_file():
++        print(f"擋下:找不到表態檔 {disp_file}", file=sys.stderr)
++        return 2
++    try:
++        data = json.loads(p.read_text(encoding="utf-8-sig"))
++    except Exception as e:
++        print(f"擋下:表態檔不是合法 JSON({e})", file=sys.stderr)
++        return 2
++    pdata = load_platforms(repo_root)
++    errs = _disp_validate(data, pdata["platforms"] if pdata["multiplatform"] else {}, pdata["default_platform"])
++    if errs:
++        print(f"擋下:表態檔有 {len(errs)} 處形狀不對,一個都沒寫:", file=sys.stderr)
++        for e in errs[:10]:
++            print(f"  - {e}", file=sys.stderr)
++        if len(errs) > 10:
++            print(f"  …另有 {len(errs) - 10} 處", file=sys.stderr)
++        print("  規則:status 只認小寫 satisfied/na/todo;satisfied 附 evidence(path:line 或 test:<名>);na/todo 附理由(去空白標點後 CJK ≥10 字或總長 ≥25 字);todo 附 issue(Issues/<名>)", file=sys.stderr)
++        return 2
++    ok, why = _codeloop_dispositions_gov_log(repo_root, branch, head_sha, ts, data)
++    if not ok:
++        print(f"擋下:{why}——表態沒寫(治理帳是 CI 唯一讀得到的地方,寫不進去等於沒表態)", file=sys.stderr)
++        return 2
++    mp = _codeloop_write_dispositions(repo_root, branch, head_sha, ts, data)
++    n_auto = sum(1 for v in data.values() if isinstance(v, dict) and v.get("auto"))
++    print(f"✅ code-loop dispositions:{len(data)} 題表態記下來了(人答 {len(data) - n_auto}、未觸發自動 na {n_auto};分支 {branch},版本 {head_sha[:8]})")
++    print(f"  本機記錄 {mp.relative_to(Path(repo_root))};治理帳也追加了一筆(CI 讀那一筆)。之後改了程式碼要重表態:樣板加 --carry 會把還適用的舊答案帶過來。")
++    return 0
++
++
++def _cmd_codeloop_recall_miss(repo_root, branch, head_sha, ts, qid, note):
++    """`code-loop recall-miss <題目id> --note`(表態閘 S9):審查席抓到「對得上某未觸發題」的問題時登記一筆;同題累積 3 次 gov --stats 印「觸發太窄候選」。"""
++    if not qid:
++        print("擋下:要給題目 id(例:kt-coroutines;lumos pitfalls --diff <範圍> --json 的 stack_questions_meta 有全表)", file=sys.stderr)
++        return 2
++    stk, spec = _stack_spec_by_id(qid)
++    if spec is None:
++        print(f"擋下:{qid!r} 不是題目表裡的 id;全表看 lumos pitfalls --diff <範圍> --json 的 stack_questions_meta", file=sys.stderr)
++        return 2
++    if not (note or "").strip():
++        print("擋下:--note 寫一句審查席抓到了什麼(進治理帳,之後拿來修那題的觸發)", file=sys.stderr)
++        return 2
++    _gate_event_or_warn(repo_root, "code-loop", "recall-miss", f"{qid}:{note}", hard=False,
++                        head_sha=head_sha, ref=branch, extra={"recall_miss": qid})
++    print(f"✅ 記下 recall-miss:{qid}(棧 {stk})——同題累積 3 次,gov --stats 會列成「觸發太窄候選」,到時修它的 when。")
++    return 0
++
++
++def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False, from_json=None, disp_file=None, qid=None, bound_advisory=False):
+     """code-loop 留痕讀寫。
+     pass  → status=passed(綁 HEAD sha);
+     skip  → status=skipped(綁 HEAD sha,留逃生痕);
+-    check → 跑判定式回報 verdict(blocked=tier=high∧無有效留痕);--json 輸出 verdict dict。
++    dispositions <檔> → 棧別提問表態(表態閘 2026-09-09;派審查員之前寫,skip 也要先表態);
++    recall-miss <id> → 審查席抓到未觸發題的問題時登記一筆;
++    check → 跑判定式回報 verdict(blocked=合約測試紅 ∨ 有適用題表態不完整 ∨ tier=high∧無有效留痕);--json 輸出 verdict dict。
+     rc: 0=OK / 1=check:blocked / 2=參數錯。
+     """
+     # resolve repo root
+     if repo is not None:
+         repo_root = Path(repo)
+         if not repo_root.is_dir():
+@@ -21055,12 +21755,18 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None,
+     head_sha = _codeloop_git_head(repo_root)
+     if not head_sha:
+         print("擋下:問不到目前的 git 版本號(git 指令失敗?)", file=sys.stderr)
+         return 2
+     ts = _codeloop_git_ts(repo_root)
+ 
++    if subcmd == "dispositions":
++        # --branch(r3 外家 F11):推 HEAD:別名 時 pre-push 按遠端目的分支查記錄,表態要寫在那個名字下
++        return _cmd_codeloop_dispositions(repo_root, marker_branch or branch, head_sha, ts, disp_file)
++    if subcmd == "recall-miss":
++        return _cmd_codeloop_recall_miss(repo_root, branch, head_sha, ts, qid, note or "")
++
+     if subcmd in ("pass", "skip"):
+         status = "passed" if subcmd == "pass" else "skipped"
+         _codeloop_write(repo_root, branch, status, note or "", head_sha, ts)
+         _codeloop_gov_log(repo_root, branch, status, note or "", head_sha, ts)
+         label = "✅" if status == "passed" else "⏭"
+         what = "審查通過,已留痕" if status == "passed" else "刻意跳過審查,已留痕"
+@@ -21074,32 +21780,57 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None,
+         if skip_bound and not (note or "").strip():
+             print("擋下:--skip-bound-tests 要帶 --note 寫為什麼不跑受波及合約的測試(會進治理帳被統計)", file=sys.stderr)
+             return 2
+         verdict = _codeloop_guard_verdict(repo_root, diff_range=diff_range,
+                                           at_sha=at_sha, branch=marker_branch,
+                                           skip_bound=skip_bound, skip_note=note or "",
+-                                          payload=_impact_payload_read(from_json) if from_json else None)
++                                          payload=_impact_payload_read(from_json) if from_json else None,
++                                          bound_advisory=bound_advisory)
+         bt = getattr(_codeloop_guard_verdict, "last_bound", None)
+         if bt is not None and "bound_tests" not in verdict:
+             verdict["bound_tests"] = bt
++        dv = getattr(_codeloop_guard_verdict, "last_dispositions", None)
++        if dv is not None and "dispositions" not in verdict:
++            verdict["dispositions"] = dv
+         blocked = verdict["blocked"]
+         reason = verdict["reason"]
+         tier = verdict["tier"]
+         if as_json:
+             print(_cljson.dumps(verdict, ensure_ascii=False))
+         else:
+-            if blocked:
++            if blocked and verdict.get("reason_kind") == "dispositions":
++                # 三段式:發生什麼 → 為何在意 → 指令獨立一行;最多列 10 問,其餘一句(r2 邊界席 B12)
++                _pr = (dv or {}).get("problems") or []
++                print(f"擋下:這次改動有 {(dv or {}).get('applicable', 0)} 題效能檢核適用,但表態不完整({len(_pr)} 處)——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
++                for _x in _pr[:10]:
++                    print(f"  - {_x}", file=sys.stderr)
++                _rng = (dv or {}).get("range") or diff_range or "<範圍>"
++                if len(_pr) > 10:
++                    print(f"  …另有 {len(_pr) - 10} 問,全量看:", file=sys.stderr)
++                    print(f"    lumos code-loop check --diff {diff_range or '<範圍>'} --json", file=sys.stderr)
++                print("在意的原因:題目推到眼前不等於有人回答;推送前每一題要有機器讀得懂的交代(做到了附證據/不適用附理由/待辦連 Issue),這不是審查,跟 tier 無關。", file=sys.stderr)
++                print(f"接下來(適用題算在 {_rng},樣板用同一個範圍):", file=sys.stderr)
++                print(f"    lumos pitfalls --diff {_rng} --dispositions-template --carry > /tmp/disp.json   # 填完:", file=sys.stderr)
++                _bflag = f" --branch {marker_branch}" if marker_branch and marker_branch != branch else ""
++                print(f"    lumos code-loop dispositions /tmp/disp.json{_bflag}", file=sys.stderr)
++            elif blocked:
+                 print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
+                       file=sys.stderr)
+             else:
+                 print(f"✅ code-loop check: OK——可以推(分支 {branch},版本 {head_sha[:8]},tier={tier}):{reason}")
++                if dv and dv.get("applicable"):
++                    print(f"  表態閘:{dv['applicable']} 題適用、{dv.get('checked', 0)} 題表態核對過(gate={dv.get('gate_mode')})")
++            for _w in ((dv or {}).get("warnings") or []):
++                print(f"  提醒:{_w}")
+             if bt is not None:
+                 _st = bt.get("status")
+                 if _st in ("green", "red"):
+                     print(f"  受波及合約測試:{bt.get('reason')}", file=sys.stderr if _st == "red" else sys.stdout)
+-                    if _st == "red":
++                    if _st == "red" and not blocked:
++                        print("  (低風險推送的合約測試只提醒不擋——2026-09-07 人裁;紅的還是去修)", file=sys.stderr)
++                    elif _st == "red":
+                         print("  真的跑不了(外部 DB 不在、環境缺)→ 留痕跳過:\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
+                 elif _st == "no-config":
+                     print("  提醒:這個專案沒設測試指令(.lumos/config.json 的 test.run_cmd),受波及合約的測試沒有跑——合約測試閘等於沒開。")
+         if blocked:
+             # #19 S1:擋人的那一刻落一筆 hard 帳,由做判定的這一方寫,不是 hook 寫。
+             # #19 S6:逐 ref 的事件要帶那一行真正的 sha(at_sha),不是盲取 HEAD
+@@ -21641,15 +22372,17 @@ HELP_WHEN = {
+     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
+     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
+     "cochange": "改了 A 檔,歷史上常一起改的 B 檔要不要跟著改。rules 看規則,check 對變更集比對。",
+     "rules": "列出共改規則集。",
+     "cochange check": "對這次變更集比對規則,列出可能漏改的夥伴檔(提醒不擋)。",
+-    "code-loop check": "我現在推得上去嗎:tier=high 又沒有效留痕就 BLOCKED,並講原因。",
++    "code-loop check": "我現在推得上去嗎:合約測試紅、觸發到的效能檢核題沒表態、tier=high 又沒有效留痕,任一成立就 BLOCKED,並講原因。",
++    "code-loop dispositions": "推送前對這次改動觸發到的棧別效能檢核題逐題表態(做到了附證據/不適用附理由/待辦連 Issue);樣板從 pitfalls --diff --dispositions-template 來。",
++    "code-loop recall-miss": "審查席抓到「對得上某未觸發題」的問題時登記一筆;同題累積 3 次 gov --stats 列成觸發太窄候選。",
+     "delguard": "commit 時自動跑:刪掉 / 改名的符號,筆記還在不在講它。",
+-    "code-loop": "高風險改動推送前的留痕:pass 審過、skip 刻意不審、check 現在推得上去嗎。",
++    "code-loop": "推送前的留痕:pass 審過、skip 刻意不審、dispositions 對效能檢核題表態、check 現在推得上去嗎。",
+     "loop rewrite": "人裁判「整份重寫」後收尾:記 rewrite 事件+血緣(prev/successor)進治理帳;連續第二次判重寫會警告強制攤人。",
+     "pass": "代碼審過了,留痕綁當下版本;之後再改 code 就失效要重跑。",
+     "skip": "刻意不審,留痕寫理由(合法,但會被統計)。",
+ }
+ 
+ 
+@@ -22239,12 +22972,18 @@ def main():
+     p.add_argument("md", nargs="?", help="spec md 檔(spec 模式)")
+     p.add_argument("--diff", dest="pf_diff", help="diff range(如 main..HEAD;diff 模式)")
+     p.add_argument("--repo", dest="pf_repo", help="repo root(預設 cwd 向上找 .git)")
+     p.add_argument("--check", action="store_true", help="命中風險類且無「## 實務隱患」節 → rc 1")
+     p.add_argument("--json", dest="pf_json", action="store_true", help="JSON 輸出")
+     p.add_argument("--no-lint", dest="pf_no_lint", action="store_true", help="--diff 只跑 regex 層、不跑專案 lint 指令(快,給 pre-push advisory)")
++    p.add_argument("--dispositions-template", dest="pf_disp_tpl", action="store_true",
++                   help="--diff 模式:印這次改動的表態樣板 JSON(適用題留空、未觸發題自動 na);填完給 lumos code-loop dispositions <檔>")
++    p.add_argument("--carry", dest="pf_carry", action="store_true",
++                   help="配 --dispositions-template:把這個分支最後一筆表態裡 id 相同且仍適用的舊答案帶過來(改碼後只答新題)")
++    p.add_argument("--branch", dest="pf_branch", default=None,
++                   help="配 --carry:從哪個分支名下的表態記錄帶(預設 checkout 分支;合進主線後推主線可帶原分支名)")
+ 
+     cw = sub.add_parser("ci-wait", help="[CI回流閉環] push 後同輪等 GitHub Actions 結論(綠 rc0/紅 rc1;需 .lumos/config.json 宣告 ci 區塊才啟用)")
+     cw.add_argument("--timeout", dest="cw_timeout", type=float, default=1800.0)   # 600 撐不過 ~15min CI(2026-08-27),→1800 並順帶治 ci-status 過期(ci-wait 跑完才寫 ci-log)
+     cw.add_argument("--grace", dest="cw_grace", type=float, default=30.0, help="判綠/判無 run 前的重查窗(秒)")
+     cw.add_argument("--repo-dir", dest="cw_repo", default=None)
+     cw.add_argument("--sha", dest="cw_sha", default=None)
+@@ -22345,15 +23084,24 @@ def main():
+ 
+     cl = sub.add_parser("code-loop", help="code-loop 留痕(vault-free):pass/skip 收斂紀錄 + check 查詢")
+     clsub = cl.add_subparsers(dest="clcmd", required=True)
+     for _clname, _clhelp in (
+         ("pass", "記錄本分支 HEAD 已過 code-loop 收斂(status=passed)"),
+         ("skip", "顯式跳過 code-loop 並留痕(status=skipped;同 bypass 哲學)"),
+-        ("check", "跑判定式:tier=high∧無有效留痕→rc1 blocked;--json 輸出 verdict dict"),
++        ("dispositions", "棧別提問表態:把填好的表態 JSON 檔記進留痕與治理帳(派審查員之前做;skip 也要先表態)"),
++        ("recall-miss", "審查席抓到「對得上某未觸發題」的問題時登記一筆(同題累積 3 次 gov --stats 列觸發太窄候選)"),
++        ("check", "跑判定式:合約測試紅 ∨ 有適用題表態不完整 ∨ tier=high∧無有效留痕 → rc1 blocked;--json 輸出 verdict dict"),
+     ):
+         _clp = clsub.add_parser(_clname, help=_clhelp)
++        if _clname == "dispositions":
++            _clp.add_argument("cl_disp_file", metavar="file", help="表態 JSON 檔(lumos pitfalls --diff <範圍> --dispositions-template 印的樣板填完)")
++            _clp.add_argument("--branch", dest="cl_branch", default=None,
++                              help="表態寫在哪個分支名下(預設 checkout 分支;推 HEAD:別名 時帶遠端目的分支名,pre-push 按它查)")
++        if _clname == "recall-miss":
++            _clp.add_argument("cl_qid", metavar="qid", help="題目 id(例 kt-coroutines;全表看 pitfalls --diff --json 的 stack_questions_meta)")
++            _clp.add_argument("--note", default="", help="審查席抓到了什麼(一句;進治理帳)")
+         if _clname in ("pass", "skip"):
+             _clp.add_argument("--note", default="", help="理由(pass/skip 必填習慣;進治理帳)")
+         if _clname == "check":
+             _clp.add_argument("--json", dest="cl_json", action="store_true",
+                               help="以 JSON 輸出 verdict dict{blocked,reason,tier}")
+             _clp.add_argument("--diff", dest="cl_diff", default=None,
+@@ -22364,12 +23112,14 @@ def main():
+                               help="留痕比對綁此 branch(hook 傳 remote_ref 分支名;預設讀 checkout branch)")
+             _clp.add_argument("--skip-bound-tests", dest="cl_skip_bound", action="store_true",
+                               help="不真跑受波及合約的測試(要配 --note 理由;進治理帳被統計;CI 用環境變數 LUMOS_SKIP_BOUND_TESTS=1)")
+             _clp.add_argument("--note", default="", help="--skip-bound-tests 的理由")
+             _clp.add_argument("--from-json", dest="cl_from_json", default=None,
+                               help="吃一份已經算好的波及結果(推送關卡一次推送只算一次)")
++            _clp.add_argument("--bound-tests-advisory", dest="cl_bound_advisory", action="store_true",
++                              help="受波及合約測試紅了只提醒不擋(pre-push 對低風險推送用;高風險不帶,照擋)")
+         _clp.add_argument("--repo", dest="cl_repo", default=None,
+                           help="repo root(預設 cwd 逐層向上找 .git)")
+ 
+     # ★扁平頂層指令★(單一動詞的工具一律扁平;群組式留給天生有兩個以上動詞的)
+     bt = sub.add_parser("bound-tests",
+                         help="跑這次改動波及到的硬合約所綁的測試(紅了是要修測試,不是補審查留痕)")
+@@ -22414,13 +23164,15 @@ def main():
+     if args.cmd == "fold-check":
+         return cmd_fold_check(args.path, as_json=args.as_json)
+     if args.cmd == "refcheck":
+         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+     if args.cmd == "pitfalls":
+         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
+-                            check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint)
++                            check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint,
++                            disp_tpl=getattr(args, "pf_disp_tpl", False), carry=getattr(args, "pf_carry", False),
++                            branch=getattr(args, "pf_branch", None))
+     if args.cmd == "testmap":
+         if args.tmcmd == "build":
+             return cmd_testmap_build(repo=args.tm_repo, as_json=args.tm_json)
+         return cmd_testmap_affected(diff=args.tm_diff, repo=args.tm_repo,
+                                     as_json=args.tm_json)
+     if args.cmd == "test-layers":
+@@ -22523,13 +23275,16 @@ def main():
+         cl_json = getattr(args, "cl_json", False)
+         return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo, as_json=cl_json,
+                              diff_range=getattr(args, "cl_diff", None),
+                              at_sha=getattr(args, "cl_at_sha", None),
+                              skip_bound=getattr(args, "cl_skip_bound", False),
+                              marker_branch=getattr(args, "cl_branch", None),
+-                             from_json=getattr(args, "cl_from_json", None))
++                             disp_file=getattr(args, "cl_disp_file", None),
++                             qid=getattr(args, "cl_qid", None),
++                             from_json=getattr(args, "cl_from_json", None),
++                             bound_advisory=getattr(args, "cl_bound_advisory", False))
+     if args.cmd == "loop" and args.lcmd == "capture-counts":
+         # 純機械原語(不碰圖譜):跨異質 finder 算 capture-recapture 重疊,vault-free
+         return cmd_loop_capture_counts(None, args.finders,
+                                        from_pitfalls=args.cc_pitfalls, repo=args.cc_repo)
+ 
+     vault = args.vault or find_vault(Path.cwd())
