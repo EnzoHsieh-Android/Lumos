@@ -8,7 +8,9 @@ about_code_stamp: claude/2026-08-30/d8883b1b5f71
 tags:
   - type/system
   - status/done
+  - scope/retrieval
 summary: |-
+  KEY:[2026-09-08 handoff 條款行]計劃有 [SN] 時 `lumos handoff` 多印一行「驗收條款 N 條:綁了測試/靠人/未標/懸空 + 指路 lumos spec-trace」——只印文字計數不印每條的表,★不撤「不判完成、不印進度」的範圍刀★(條款綁測試算進度 r1 接手席 F-S3-1);--json 多 clauses 鍵 [test:t_handoff_clause_pointer_only]
   KEY:[2026-09-07 handoff]新讀原語 `lumos handoff <計劃節點>`——唯讀接手視圖:計劃點名的程式檔各是什麼 git 狀態(status --porcelain,含未追蹤/已刪;★不用 diff HEAD,它看不到未追蹤★)+最後提交、逐字稿尾端的意圖線索(importlib 借收工 hook 的人話判定與工具名單,★輪次邊界=最後一句人話★自算——hook 的邊界會被系統塞的任務通知截斷,r1 外家 #1;Codex 稿走 hook;自動挑 ~/.claude/projects/<slug>/ 的候選:排掉接手者自己 CLAUDE_CODE_SESSION_ID、提到這份計劃名者優先、候選列出)。★不造帳、不判做到哪、讀不到就印「意圖不可得(原因)」rc0★;只有用法錯(節點不存在/不在 git)才 rc2。來歷:進度從提交推導四版造帳全被打穿後的唯讀解,計劃 [[Projects/接手視圖_計劃]] [test:t_handoff_view]
   KEY:[2026-08-25]doctor E4 連鎖待辦軟提醒([[Projects/連鎖佇列軟提醒_計劃]])——統計併 E2 帳本掃描迴圈順手收集;零判定帳本數+最老天數+損毀另列;全判定整段靜默;gov check-cascade;supersede 開單當下 stderr 白話指路(修法 A;零鄰居分支不講「上面列的每個」);已知縫=CASCADE-EMPTY 帳本永久零判定 E4 長鳴,首次真實出現時裁;[test:t_doctor_cascade_reminder]
   KEY:[2026-08-23]`git_last_change_dates(repo_root, vault)`——一次 git log 拿 vault 每檔最後改動日期(行程內快取;git 缺席回 {} fail-open)。是 about_code 過期判準的材料(計劃 [[Projects/固定席扇出降權_計劃]] #5):逐篇 83 次 5.3s vs 批次 0.22s;★必帶 -c core.quotepath=false★,vault 路徑帶中文目錄名,沒旗標整條路徑被八進位跳脫、表是空的且不報錯(翻紅釘實證連英文檔都撈不到)。尚未接進 impact,只是原語

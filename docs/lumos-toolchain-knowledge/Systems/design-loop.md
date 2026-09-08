@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/loop-engineering
 verified_by:
   - "[[Verification/2026-06-19_design-loop]]"
   - "[[Verification/2026-07-09_loop三輪壓縮]]"
@@ -30,6 +31,8 @@ verified_by:
   - "[[Verification/2026-09-03_派工攔截點實測]]"
   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
 summary: |-
+  KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3):--spec 是 .md 計劃、有 [SN] 條款、迴圈首筆帳在 2026-09-08(含)之後 → 任一條款那一行沒有 [test:]/[manual:] 就不得 PASS(理由印「條款綁定」);.patch 審材、無 [SN]、舊迴圈、凍結/回放模式一律跳過不擋 [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]
+  KEY:[2026-09-08 條款綁定]為什麼加在閘不是 skill 散文:接手席/架構席/簡化席三席獨立查證「設計審出口寫一句流程規則」零約束,跟 spec-trace 33 篇 15 篇零認領同型;閘是設計審往下走的唯一入口(進度從提交推導 d9)。漏洞:整份不寫 [SN] 可繞過 → REVISIT:2026-11-08 那次連「過審計劃有 [SN] 的比例」一起量
   KEY:[2026-08-26]世界對照(governance/review-reports/world-benchmark-2026-08-26.md)——最終形態核心判準與業界主流合流:處置閘≈「all threads resolved 才准 merge」政策、blocking 宣告≈Conventional Comments 但進閘、code嚴/散文寬≈must-fix/nit 分層、K=2 退役=向世界收斂;領先半步=機械重驗審查誠實度(quote-check/留痕 sha/intake);唯一結構差=事後抽查層(世界受監管實務保留,我們由 L4+週巡檢代位,「抽已收斂迴圈冷復審」列觀察不立案
   KEY:★[2026-08-25 甲裁落地]多席 code-loop 統一處置閘([[Projects/probe輪退場_計劃]])★——panel 閘新迴圈 cutoff 拒判(僅舊帳回放)+probe 抽查義務退場(判定降觀測)+code 迴圈輪級加嚴(major 席→accepted 必空,d2;散文維持 d5 制);「20 筆抽查帳」翻案通道具名作廢;[test:t_panel_probe_retired] 三釘
   KEY:★迴圈摩擦兩修落地(2026-08-25,[[Projects/迴圈摩擦三修_計劃]] v2 單輪過處置閘;d3 重寫訊號改形撤回見該案 decisions)★——①卷證規則:引句限逐字出自凍結審材,審材外佐證走「file: 反引號路徑:行號」通道(refcheck 只抽反引號);編排者機械重現留痕 rN-intake.md(命令+輸出+HIT/MISS,MISS=佐證不採信退回該席);carrier 選全錨席=記帳載體非證據總集 ②首輪前掃加「機械宣稱驗語意」(分流:語意類修正含前後對照留痕,動核心裁定升正式 finding) ③rewrite 收尾寫入端 lumos loop rewrite 首用(血緣 prev/successor 入治理帳,連續第二次自動警告;★血緣查=邊界比對 successor=<id> 後必接分號或行尾——裸子字串會讓前綴編號互撞偽造警告,clf r1 主審 PoC 實錘後修,壞 JSON 行同輪加防護★)

@@ -4467,6 +4467,146 @@ def t_gov_stats_hook_section_reads_vault_repo_not_cwd():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_clause_bindings_states():
+    """條款綁測試算進度 [S1]:計劃正文 [SN] × 同一行 [test:]/[manual:] 的七態純函式(stub 索引,不碰檔案)。
+    釘:同一行才算配對、行內引用不算定義、懸空分寫錯/設定認不到/只被提到、平台前綴未定義=壞名。"""
+    m = _load_lumos_inproc()
+    text = "\n".join([
+        "### [S1] 綁對 [test:t_ok]",
+        "- [S2] 沒標",
+        "- [S3] 靠人 [manual:真機點一次]",
+        "- [S4] 寫錯 [test:t_nope]",
+        "- [S5] 設定認不到 [test:test_in_class]",
+        "- [S6] 只被提到 [test:t_mentioned_only]",
+        "[S7] 下一行才綁",
+        "[test:t_ok]",
+        "見 [S1] 與 [S2] 的說明 [test:t_ok]",       # 行內引用不算定義,它後面的 [test:] 不能算到 S2 頭上
+        "- [S8] 甲 [test:t_ok] [S9] 乙",              # 同一行兩條:S8 認到下一個 [SN] 之前,S9 沒有
+        "- `[S10] 反引號範例 [test:t_ok]`",           # 反引號裡=範例不是定義
+        "### [S10] 真定義沒標",
+        "- [S11] 兩種都寫以測試為準 [manual:人看] [test:t_ok]",
+    ])
+    methods = {"python": {"t_ok"}}
+    hay = {"python": "def t_ok():\n    pass\nclass T:\n    def test_in_class(self):\n        pass\n# t_mentioned_only 只在註解\n"}
+    rows = m.clause_bindings(text, {}, "python", lambda p: methods.get(p, set()), lambda p: hay.get(p, ""))
+    st = {r["id"]: r["state"] for r in rows}
+    exp = {"S1": "bound", "S2": "untagged", "S3": "manual", "S4": "dangling", "S5": "unrecognized", "S6": "mentioned",
+           "S7": "untagged", "S8": "bound", "S9": "untagged", "S10": "untagged", "S11": "bound"}
+    for k, v in exp.items():
+        check(f"clause: {k} → {v}", st.get(k) == v, f"{k}={st.get(k)} 全部={st}")
+    ln = {r["id"]: r["line"] for r in rows}
+    check("clause: S1 定義行是第 1 行不是「見 [S1]」那行", ln["S1"] == 1, str(ln))
+    check("clause: S10 定義行是 ### 那行(反引號範例不算)", ln["S10"] == 12, str(ln))
+    check("clause: S3 的 manual 文字有抓到", [r for r in rows if r["id"] == "S3"][0]["manual"] == ["真機點一次"], str(rows))
+    # 平台前綴未定義 → bad-name(不猜)
+    rows2 = m.clause_bindings("- [S1] 甲 [test:ios:t_x]", {"python": {}}, "python", lambda p: set(), lambda p: "")
+    check("clause: 未定義平台前綴 → bad-name", rows2[0]["state"] == "bad-name", str(rows2))
+    _src = "\n".join(l for l in Path(GRAPHCTL).read_text(encoding="utf-8").splitlines() if not l.lstrip().startswith("#"))
+    check("clause: 分類沿用 _classify_one(不開第二套引擎)——來源裡有呼叫(去註解行後比對)", "_classify_one(seg, split, default, methods_for, hay_for)" in _src, "")
+
+
+def _clause_repo(prefix):
+    """條款綁測試算進度 的整合 fixture:git repo 根 + .lumos 測試設定 + tests/t.py(t_ok)+ vault docs/x-knowledge。回 (root, vault)。"""
+    import json as _j, subprocess as _sp
+    d = Path(tempfile.mkdtemp(prefix=prefix))
+    _sp.run(["git", "-C", str(d), "init", "-q"], capture_output=True)
+    (d / "tests").mkdir(); (d / "tests" / "test_t.py").write_text("def t_ok():\n    assert True\n", encoding="utf-8")
+    (d / ".lumos").mkdir()
+    (d / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "python", "test": {"method_regex": "(?m)^def (t_[A-Za-z0-9_]+)\\s*\\("}}), encoding="utf-8")
+    v = d / "docs" / "x-knowledge"
+    for sub in ("Projects", "MOC"):
+        (v / sub).mkdir(parents=True)
+    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+    return d, v
+
+
+def t_spec_trace_clause_table():
+    """條款綁測試算進度 [S3]:spec-trace 印條款表、JSON 帶 bindings、裁決=綁定(rc 看未標),舊制回指欄照印當對照。"""
+    import json as _j, shutil
+    d, v = _clause_repo("gctl-clst-")
+    try:
+        (v / "Projects" / "P_計劃.md").write_text(
+            "---\ntype: project\nstatus: doing\n---\n# P\n- [S1] 甲 [test:t_ok]\n- [S2] 乙 [manual:人看]\n- [S3] 丙\n- [S4] 丁 [test:t_gone]\n", encoding="utf-8")
+        r = run(v, "spec-trace", "Projects/P_計劃", "--json", expect_rc=1)
+        dd = _j.loads(r.stdout.strip().splitlines()[-1])
+        b = dd["bindings"]
+        check("spec-trace: S1 綁了/S2 靠人/S3 未標/S4 寫錯", (b["S1"]["state"], b["S2"]["state"], b["S3"]["state"], b["S4"]["state"]) == ("bound", "manual", "untagged", "dangling"), str(b))
+        check("spec-trace: untagged 只有 S3、rc1", dd["untagged"] == ["S3"], str(dd))
+        check("spec-trace: 舊制欄仍在(四條都無回指)", dd["unclaimed"] == ["S1", "S2", "S3", "S4"], str(dd))
+        r2 = run(v, "spec-trace", "Projects/P_計劃", expect_rc=1)
+        check("spec-trace: 人讀版每條帶中文態與舊制回指", "[S1] 綁了 ← t_ok(舊制回指:無)" in r2.stdout and "[S4] 懸空(寫錯)" in r2.stdout, r2.stdout)
+        check("spec-trace: 未標時印怎麼補", "[manual:一句怎麼驗]" in r2.stdout, r2.stdout)
+        (v / "Projects" / "P_計劃.md").write_text(
+            "---\ntype: project\nstatus: doing\n---\n# P\n- [S1] 甲 [test:t_ok]\n- [S2] 乙 [manual:人看]\n- [S3] 丙 [manual:對帳]\n- [S4] 丁 [test:t_gone]\n", encoding="utf-8")
+        r3 = run(v, "spec-trace", "Projects/P_計劃", expect_rc=0)
+        check("spec-trace: 全標(含一條懸空)→ rc0,懸空只提醒", "懸空 1" in r3.stdout, r3.stdout)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def t_handoff_clause_pointer_only():
+    """條款綁測試算進度 [S3]:handoff 只印一行計數+指路,不印每條的表(接手視圖範圍刀「不判完成」不撤);沒 [SN] 的計劃不印那行。"""
+    import json as _j, shutil, subprocess as _sp
+    d, v = _clause_repo("gctl-hocl-")
+    try:
+        (v / "Projects" / "P_計劃.md").write_text(
+            "---\ntype: project\nstatus: doing\n---\n# P\n- [S1] 甲 [test:t_ok]\n- [S2] 乙\n點名 `tests/test_t.py`。\n", encoding="utf-8")
+        (v / "Projects" / "Q_計劃.md").write_text("---\ntype: project\nstatus: doing\n---\n# Q\n沒條款。\n", encoding="utf-8")
+        _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
+        _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--no-verify"], capture_output=True)
+        r = run(v, "handoff", "Projects/P_計劃", expect_rc=0)
+        line = [l for l in r.stdout.splitlines() if l.startswith("驗收條款")]
+        check("handoff: 恰一行條款計數", len(line) == 1 and "驗收條款 2 條:綁了測試 1、靠人 0、未標 1" in line[0], r.stdout)
+        check("handoff: 那行指路到 spec-trace", "lumos spec-trace P_計劃" in line[0], line)
+        check("handoff: 不印每條的表(範圍刀「不判完成」)", "[S1]" not in r.stdout and "[S2]" not in r.stdout, r.stdout)
+        rj = run(v, "handoff", "Projects/P_計劃", "--json", expect_rc=0)
+        dj = _j.loads(rj.stdout)
+        check("handoff: --json 帶 clauses 計數", dj["clauses"]["total"] == 2 and dj["clauses"]["bound"] == 1 and dj["clauses"]["untagged"] == 1, str(dj["clauses"]))
+        r2 = run(v, "handoff", "Projects/Q_計劃", expect_rc=0)
+        check("handoff: 沒 [SN] 的計劃不印那行", "驗收條款" not in r2.stdout, r2.stdout)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def t_disposal_clause_gate():
+    """條款綁測試算進度 [S3]:處置閘第五步——計劃有 [SN] 而某條沒 [test:]/[manual:] → FAIL(條款綁定);全標 → 過;
+    code 迴圈的 .patch 審材不看;首筆帳早於 _CLAUSE_GATE_SINCE 的舊迴圈不回溯。
+    翻紅釘:把那一步拿掉 → 「沒標必 FAIL」翻紅。"""
+    import shutil
+    v = mkvault()
+    d = v / "Projects"
+    def _loop(lid, spec_name, body, ts_override=None):
+        spec = d / spec_name; spec.write_text(body, encoding="utf-8")
+        h = _sha256_of(spec)
+        snap = d / f"{lid}-snap.md"; snap.write_text(body, encoding="utf-8")
+        rpt = d / f"{lid}-rpt.md"; rpt.write_text("[minor] 甲\n引句：「規則甲：只在 0 命中時回退。」\nseverity: minor\n", encoding="utf-8")
+        run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "s1-sonnet",
+            "--severity", "minor", "--findings-set", "F1", "--folded-set", "F1",
+            "--report", str(rpt), "--snapshot", str(snap), "--spec", str(spec), "--reviewed", h, expect_rc=0)
+        if ts_override:
+            _ledger_patch_last(v.parent / ".canary-log.jsonl", lid, ts=ts_override)
+        return run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+    base = "# spec\n規則甲：只在 0 命中時回退。\n"
+    r = _loop(f"cg-a-{_M1U}", "cga.md", base + "- [S1] 甲\n- [S2] 乙 [manual:人看]\n")
+    check("clause-gate: 有一條沒標 → FAIL 且理由含 條款綁定", r.returncode == 1 and "條款綁定: ✗" in r.stdout and "S1(第" in r.stdout and "條款綁定" in r.stdout.splitlines()[-1], r.stdout[-600:])
+    r = _loop(f"cg-b-{_M1U}", "cgb.md", base + "- [S1] 甲 [manual:人看]\n- [S2] 乙 [manual:對帳]\n")
+    check("clause-gate: 全標 → 那一步 ✓ 且整閘 PASS", r.returncode == 0 and "條款綁定: ✓" in r.stdout and "DISPOSAL GATE PASS" in r.stdout, r.stdout[-600:])
+    r = _loop(f"cg-c-{_M1U}", "cgc.md", base)
+    check("clause-gate: 計劃無 [SN] → 跳過不擋", r.returncode == 0 and "opt-in 未啟用" in r.stdout, r.stdout[-400:])
+    r = _loop(f"cg-d-{_M1U}", "cgd.patch", base + "- [S1] 甲\n")
+    check("clause-gate: 審材是 .patch(code 迴圈)→ 不看條款", r.returncode == 0 and "不是計劃筆記" in r.stdout, r.stdout[-400:])
+    r = _loop(f"cg-e-{_M1U}", "cge.md", base + "- [S1] 甲\n", ts_override="2026-09-01T00:00:00+08:00")
+    check("clause-gate: 首筆帳早於 2026-09-08 的舊迴圈不回溯", r.returncode == 0 and "不回溯" in r.stdout, r.stdout[-500:])
+    # 凍結/回放模式(帶 spec_sha_override)不重讀活檔——獨立審計挑出的缺口:既有呼叫端都同時傳 spec=None,拔掉這條分支只會退化成理由句錯
+    import io, contextlib
+    m = _load_lumos_inproc()
+    spec_md = d / "cgf.md"; spec_md.write_text(base + "- [S1] 甲\n", encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        st = m._disposal_clause_step([{"ts": "2026-09-08T12:00:00+08:00"}], str(spec_md), v.parent, None, spec_sha_override="deadbeef")
+    check("clause-gate: 凍結/回放模式帶 [SN] 沒標的活檔也跳過、理由句講明", st == "skip" and "凍結/回放" in buf.getvalue(), f"{st} {buf.getvalue()}")
+
+
 def t_gov_stats_window_and_parse():
     import shutil
     gov = [
@@ -16332,8 +16472,15 @@ def t_spec_trace_and_signoff():
         (v / "Verification" / "V3.md").write_text(
             "---\ntype: verification\nstatus: pass\nplan_refs:\n  - \"[[P_計劃]]\"\n---\n"
             "# V3\n[S3] 落地。\n", encoding="utf-8")
+        r = lum("spec-trace", "Projects/P_計劃", "--json")
+        dd = json.loads(r.stdout.strip().splitlines()[-1])
+        check("spec-trace 舊制欄:全認領後 unclaimed 空(欄照印,只當對照)", dd["unclaimed"] == [] and dd["ruling"] == "binding", str(dd))
+        check("spec-trace ★裁決改綁定★:舊制全認領但條款沒標仍 rc1", r.returncode == 1 and dd["untagged"] == ["S1", "S2", "S3"], f"rc={r.returncode} {dd}")
+        (v / "Projects" / "P_計劃.md").write_text(
+            "---\ntype: project\nstatus: doing\n---\n# P\n\n## 變更規格\n"
+            "- [S1] 做 A [manual:人跑一次]\n- [S2] 做 B [manual:看畫面]\n- [S3] 做 C [manual:對帳]\n", encoding="utf-8")
         r = lum("spec-trace", "Projects/P_計劃")
-        check("spec-trace 全認領 rc0", r.returncode == 0, r.stdout)
+        check("spec-trace 三條都標 [manual:] → rc0", r.returncode == 0 and "靠人 3" in r.stdout, r.stdout)
         # opt-in 未啟用
         (v / "Projects" / "Q_計劃.md").write_text(
             "---\ntype: project\nstatus: doing\n---\n# Q\n無標記。\n", encoding="utf-8")
