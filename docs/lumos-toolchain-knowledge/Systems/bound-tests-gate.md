@@ -16,6 +16,7 @@ tags:
 summary: |-
   FLOW:pre-push→code-loop check→impact --diff 固定席→合約行 [test:] 解平台→classify 存在性→逐支 _kill_run→紅/懸空/不合法=BLOCKED
   KEY:★INVARIANT★ code-loop check 對 impact 固定席上合約綁的測試逐支真跑,任一紅/懸空(dangling/fake)/方法名不合法 → blocked=True rc1;沒 run_cmd/diff 算不出/無固定席/沒綁 → 不擋但寫 gate=bound-tests 帳 [test:t_bound_tests_gate] [audit:sonnet/2026-08-22]
+  KEY:(2026-09-09 表態閘起)pre-push 對每個分支 ref 都叫 check,低風險那一路帶 `--bound-tests-advisory`:紅了只印、寫帳、不擋(2026-09-07 人裁「低風險只提醒」搬進 check 內部執行,不再另呼叫 bound-tests --advisory);高風險不帶旗標,上面那條合約照擋;tag 推送仍走獨立的 bound-tests --advisory [test:t_prepush_computes_impact_once]
   KEY:掛在 check(擋的路徑)不掛 pass——design-loop bound-tests-gate-c r1 架構席抓到的;去重鍵=解析後完整指令(同 kill);超時用 runner 同名 LUMOS_TEST_TIMEOUT,whole-suite 600s(同 kill)
   KEY:逃生門 --skip-bound-tests --note(留痕 kind=skipped);CI 設 LUMOS_SKIP_BOUND_TESTS=1(CI 已跑全套)
   DEP:[[Systems/pitfalls-code-loop]]
@@ -38,7 +39,7 @@ about_code:
 
 ★2026-09-07 起有兩條路★([[Projects/合約測試閘什麼時候跑_計劃]],人裁):
 - **高風險推送**:照舊藏在 `code-loop check` 裡,紅了**擋**。
-- **低風險推送**:pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了**印出來、記帳,但不擋**。
+- **低風險推送**:pre-push 同一次 `code-loop check` 帶 `--bound-tests-advisory`(2026-09-09 表態閘起;之前是另外呼叫 `lumos bound-tests --advisory`,現在只有 tag 推送還走那條),紅了**印出來、記帳,但不擋**。
   不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 `--no-verify`
   ——而 pre-push 自己在別的地方就把那條當第三選項在教,那條零留痕。
 

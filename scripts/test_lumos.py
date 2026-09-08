@@ -32935,7 +32935,7 @@ def _disp_run(args, cwd=None):
 def t_stack_question_triggers():
     """[表態閘 S2]每題有唯一 id 與非空 when、id 集合釘住(改 id=刻意動作,r3 正確性席 C1);
     比對對增行與刪行、剝字串、跳註解行;stack_questions 語意不變、另有 applicable/meta;前端 .ts 歸 vue。
-    翻紅釘:拔掉 _stack_norm_line 的註解跳過 → ③翻紅;把 changed_lines 只收 + 行 → ⑤翻紅。"""
+    翻紅釘:拔掉 _stack_norm_line 的註解跳過 → ③翻紅;把 changed_lines 只收 + 行 → ⑥「純刪除 diff 也觸發」翻紅(r1 合約測試席 f5 訂正編號)。"""
     import json as _j
     m = _load_lumos_inproc()
     ids = [s["id"] for v in m._STACK_QUESTION_SPECS.values() for s in v]
@@ -32954,6 +32954,20 @@ def t_stack_question_triggers():
     check("②命中樣本:viewModelScope.launch → kt-coroutines 適用、kt-compose 不適用", "kt-coroutines" in got and "kt-compose" not in got, str(got))
     app2, meta2 = m._stack_applicability({"kt": ["    // TODO remove GlobalScope later", "    val s = \"GlobalScope\""]}, 300)
     check("③註解行與字串字面裡的觸發詞不算", not app2, str(app2))
+    app_ic, _ = m._stack_applicability({"kt": ["val n = 1 // TODO GlobalScope 之後拿掉", "val s = 2 /* viewModelScope.launch */"]}, 300)
+    check("③行尾註解裡的觸發詞也不算(r1 外家備援席 f2)", not app_ic, str(app_ic))
+    # 五棧各一題命中/不命中(r1 合約測試席 f4:原本只有 kt 有直接樣本)
+    _samples = {"cs": ("cs-async", "var x = await svc.GetAsync(ct);", "var y = svc.Get();"),
+                "sql": ("sql-index", "SELECT id FROM t WHERE a = 1", "INSERT INTO t VALUES (1)"),
+                "swift": ("swift-swiftui", "struct V: View { var body: some View { Text(\"x\") } }", "let n = 3"),
+                "node": ("node-parallel", "const r = await Promise.all(items.map(fetchOne))", "const r = items.map(f)"),
+                "vue": ("vue-lcp", "<img src=\"a.png\" loading=\"lazy\">", "<div class=\"x\"></div>")}
+    for _stk, (_qid, _hit, _miss) in _samples.items():
+        _a1, _m1 = m._stack_applicability({_stk: [_hit]}, 300)
+        _a2, _m2 = m._stack_applicability({_stk: [_miss]}, 300)
+        _got1 = {r["id"] for r in _m1[_stk] if r["applicable"]}
+        _got2 = {r["id"] for r in _m2[_stk] if r["applicable"]}
+        check(f"③{_stk}:命中樣本觸發 {_qid}、不命中樣本零觸發", _qid in _got1 and not _got2, f"hit={_got1} miss={_got2}")
     app3, meta3 = m._stack_applicability({"kt": ["x"] * 301}, 300)
     check("④超過門檻全表適用且 triggered_by 註明", len(app3["kt"]) == 7 and meta3["kt"][0]["triggered_by"] == ["行數>300"], str(meta3["kt"][0]))
     with tempfile.TemporaryDirectory() as d:
@@ -33016,7 +33030,7 @@ def t_dispositions_template():
 
 def t_codeloop_dispositions_write():
     """[表態閘 S4]形狀壞 rc2 不寫並講原因;好 → 先治理帳(帶 branch/head_sha/commit/ts)再原子寫 marker;沒 docs/ 明講。
-    翻紅釘:把 _disp_validate 的 status 檢查拔掉 → ①翻紅。"""
+    翻紅釘:把 _dispositions_validate 的 status 檢查拔掉 → ①翻紅。"""
     import json as _j
     with tempfile.TemporaryDirectory() as d:
         sha = _disp_repo(d)
@@ -33054,6 +33068,81 @@ def t_codeloop_dispositions_write():
         f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "na", "question": "x", "reason": "這段只是把既有呼叫搬進協程沒有新並行"}}, ensure_ascii=False), encoding="utf-8")
         r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
         check("③沒有 docs/ → rc2 明講治理帳寫不進去", r.returncode == 2 and "docs/" in r.stderr, r.stderr[-200:])
+
+
+def t_codeloop_dispositions_r1_folds():
+    """[代碼審 code-表態閘 r1 折入]①evidence 行號 10-5 / 0 寫側 rc2(邊界席 f1);_validate_repo_ref 對 10-5、5-0 回 line_out_of_range 不炸;
+    ②合法 JSON 但 platforms 語意壞:dispositions rc2 講設定檔(正確性席 f2)、check 對 test: 證據 BLOCKED 不 fail-open(正確性席 f1);
+    ③單次 git 卡住超過 LUMOS_DISP_GIT_TIMEOUT → 該題「無法驗證」BLOCKED,不放行(併發席 f2);④marker JSON 壞掉退治理帳(併發席 f4);
+    ⑤gate=high-only 且 tier standard 樣板印 {}(正確性席 f6);⑥同一顆 sha 表態兩次 gov --stats 各算各的(併發席 f3/合約測試席 f1);
+    ⑦鏡頭遇到缺 issue 的 todo 不炸(正確性席 f3)。"""
+    import json as _j, os as _os, shutil, stat as _stat, subprocess as _sp
+    q = "x"
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        f = Path(d) / "disp.json"
+        for bad in ("app/Screen.kt:10-5", "app/Screen.kt:0"):
+            f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": bad}}), encoding="utf-8")
+            r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+            check(f"①{bad} 寫側 rc2", r.returncode == 2 and "行號" in r.stderr, r.stderr[-200:])
+        (Path(d) / "five.txt").write_text("1\n2\n3\n4\n5\n", encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=d); _sp.run(["git", "commit", "-qm", "five"], cwd=d)
+        h = _sp.run(["git", "rev-parse", "HEAD"], cwd=d, capture_output=True, text=True).stdout.strip()
+        check("①_validate_repo_ref 10-5 → line_out_of_range(不 IndexError)", m._validate_repo_ref(Path(d), "five.txt", "10-5", at_sha=h)[0] == "line_out_of_range", "")
+        check("①_validate_repo_ref 5-0 → line_out_of_range(不負索引繞回)", m._validate_repo_ref(Path(d), "five.txt", "5-0", at_sha=h)[0] == "line_out_of_range" and m._validate_repo_ref(Path(d), "five.txt", "5-0")[0] == "line_out_of_range", "")
+        check("①_validate_repo_ref 2-4 仍 ok", m._validate_repo_ref(Path(d), "five.txt", "2-4", at_sha=h)[0] == "ok", "")
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "test:test_scope_cancel"}}), encoding="utf-8")
+        w = _disp_run(["code-loop", "dispositions", str(f), "--repo", d]); check("②前置:合法設定下表態寫入", w.returncode == 0, w.stderr[-200:])
+        bad_cfg = {"platforms": {"a": {"profile": "python", "root": "."}, "b": {"profile": "python", "root": "."}}}   # 兩個平台沒 default_platform
+        (Path(d) / ".lumos" / "config.json").write_text(_j.dumps(bad_cfg), encoding="utf-8")
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("②platforms 語意壞 → check BLOCKED 講 platforms 不合法(不 fail-open)", r.returncode == 1 and v.get("reason_kind") == "dispositions" and "platforms" in " ".join(v["dispositions"]["problems"]), r.stdout[-400:])
+        w2 = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        check("②platforms 語意壞 → dispositions rc2 講設定檔(不 traceback)", w2.returncode == 2 and "platforms" in w2.stderr and "Traceback" not in w2.stderr, w2.stderr[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Screen.kt:3"}}), encoding="utf-8")
+        _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        bindir = Path(d) / "fakebin"; bindir.mkdir()
+        real_git = shutil.which("git")
+        (bindir / "git").write_text(f"#!/bin/sh\nif [ \"$1\" = show ]; then sleep 2; fi\nexec {real_git} \"$@\"\n", encoding="utf-8")
+        _os.chmod(bindir / "git", 0o755)
+        env = dict(_os.environ); env["PATH"] = str(bindir) + _os.pathsep + env["PATH"]; env["LUMOS_DISP_GIT_TIMEOUT"] = "0.3"
+        r = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d], capture_output=True, text=True, env=env)
+        v = _j.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+        check("③git show 卡住超過上限 → 該題無法驗證、BLOCKED 不放行", r.returncode == 1 and v.get("reason_kind") == "dispositions" and "無法驗證" in " ".join(v["dispositions"]["problems"]), r.stdout[-400:] + r.stderr[-200:])
+        # ④ marker 壞掉退治理帳
+        mp = Path(d) / "governance" / "code-loop" / "feat-disp.dispositions.json"
+        mp.write_text("{ broken", encoding="utf-8")
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--json", "--repo", d])
+        check("④marker JSON 壞掉 → 退治理帳讀到合法表態 → 放行", r.returncode == 0, r.stdout[-300:] + r.stderr[-200:])
+    with tempfile.TemporaryDirectory() as d:
+        _disp_repo(d, config={"stack_questions": {"gate": "high-only"}})
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", d])
+        check("⑤gate=high-only 且 tier standard → 樣板印 {} 並說明", r.stdout.strip() == "{}" and "high-only" in r.stderr, r.stdout + r.stderr[-200:])
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        (Path(d) / "docs" / "x-knowledge" / "MOC").mkdir(parents=True, exist_ok=True)
+        (Path(d) / "docs" / "x-knowledge" / "MOC" / "index.md").write_text("---\ntype: moc\n---\n# i\n", encoding="utf-8")
+        f = Path(d) / "disp.json"
+        f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Screen.kt:3"}}), encoding="utf-8")
+        _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        f.write_text(_j.dumps({"kt-coroutines": {"status": "na", "question": q, "reason": "這次只改字串資源沒碰協程呼叫"}}), encoding="utf-8")
+        _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        evs = [_j.loads(l) for l in (Path(d) / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if '"dispositions"' in l]
+        check("⑥同 sha 兩筆事件 ts 相同但 written_at 不同", len(evs) == 2 and evs[0]["ts"] == evs[1]["ts"] and evs[0]["written_at"] != evs[1]["written_at"], str([(e.get("ts"), e.get("written_at")) for e in evs]))
+        r = run(Path(d) / "docs" / "x-knowledge", "gov", "--since", "9999", "--stats", expect_rc=0)
+        check("⑥gov --stats 兩筆各算(做到了 1、不適用 1),不折成一筆", "kt-coroutines:做到了 1、不適用 1" in r.stdout, r.stdout[-800:])
+        # ⑦ 鏡頭:缺 issue 的 todo(治理帳重建來的不重驗形狀)不炸
+        mp = Path(d) / "governance" / "code-loop" / "feat-disp.dispositions.json"
+        mp.write_text(_j.dumps({"head_sha": sha, "branch": "feat/disp", "ts": "t", "dispositions": {"kt-coroutines": {"status": "todo", "question": q, "reason": "r"}}}), encoding="utf-8")
+        lines = []
+        n = m._lens_dispositions_lines(lines, _j.loads(mp.read_text(encoding="utf-8")))
+        check("⑦_lens_dispositions_lines 對缺 issue 的 todo 不炸", n == 1 and any("kt-coroutines todo" in l for l in lines), str(lines))
 
 
 def t_codeloop_check_dispositions_gate():
@@ -33180,12 +33269,7 @@ def t_codeloop_dispositions_range_and_branch():
         r = _disp_run(["code-loop", "check", "--diff", f"{mh}~1..{mh}", "--at-sha", mh, "--branch", "main", "--json", "--repo", d])
         v = _j.loads(r.stdout.strip().splitlines()[-1])
         check("②推主線本身:推送範圍照用 → 有適用題無表態 → BLOCKED", r.returncode == 1 and v.get("reason_kind") == "dispositions" and "--branch" in " ".join(v["dispositions"]["problems"]), r.stdout[-400:])
-        # ③ --branch:在 main checkout 下替 release 分支名表態,check --branch release 找得到
-        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Main.kt:2"}}, ensure_ascii=False), encoding="utf-8")
-        w = _disp_run(["code-loop", "dispositions", str(f), "--branch", "release", "--repo", d])
-        check("③dispositions --branch release 寫在該名字下", w.returncode == 0 and (Path(d) / "governance" / "code-loop" / "release.dispositions.json").exists(), w.stdout[-200:] + w.stderr[-200:])
-        r = _disp_run(["code-loop", "check", "--diff", f"{mh}~1..{mh}", "--at-sha", mh, "--branch", "release", "--json", "--repo", d])
-        check("③check --branch release 讀到那筆 → 放行", r.returncode == 0, r.stdout[-300:])
+        f = Path(d) / "disp.json"
         # ④ 沒帶 --at-sha:用 HEAD 對樹驗;未提交的檔當證據 → 擋
         (Path(d) / "app" / "Wip.kt").write_text("class W\n", encoding="utf-8")
         f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Wip.kt:1"}}, ensure_ascii=False), encoding="utf-8")
@@ -33197,6 +33281,21 @@ def t_codeloop_dispositions_range_and_branch():
         _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
         r = _disp_run(["code-loop", "check", "--diff", f"{mh}~1..{mh}", "--json", "--repo", d])
         check("④同一組但證據在 HEAD 樹裡 → 放行", r.returncode == 0, r.stdout[-300:] + r.stderr[-200:])
+    with tempfile.TemporaryDirectory() as d:
+        # ③ --branch 真的跨分支讀(r1 合約測試席 f2:舊寫法在 main checkout 下 merge-base 短路成零適用題,根本沒走到讀取):
+        # checkout feat/disp(kt 有觸發詞、領先 main),表態寫在 release 名下 → check --branch release 讀得到;--branch other 讀不到
+        sha = _disp_repo(d)
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Screen.kt:3"}}, ensure_ascii=False), encoding="utf-8")
+        w = _disp_run(["code-loop", "dispositions", str(f), "--branch", "release", "--repo", d])
+        check("③dispositions --branch release 寫在該名字下", w.returncode == 0 and (Path(d) / "governance" / "code-loop" / "release.dispositions.json").exists(), w.stdout[-200:] + w.stderr[-200:])
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "release", "--json", "--repo", d])
+        v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("③check --branch release 有適用題且讀到 release 那筆 → 放行", r.returncode == 0 and (v.get("dispositions") or {}).get("applicable") == 1 and (v.get("dispositions") or {}).get("checked") == 1, r.stdout[-400:])
+        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "other", "--json", "--repo", d])
+        v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("③check --branch other 讀不到 → BLOCKED 且訊息提 --branch", r.returncode == 1 and "'other'" in " ".join(v["dispositions"]["problems"]), r.stdout[-300:])
+        e = _disp_run(["code-loop", "dispositions", str(f), "--branch", "", "--repo", d])
+        check("③--branch 空字串 → rc2 不悄悄退回 checkout(r1 邊界席 f3)", e.returncode == 2 and "空字串" in e.stderr, e.stderr[-200:])
 
 
 def t_impact_hook_stack_questions_filtered():
