@@ -31463,6 +31463,38 @@ def t_prepush_autoloop_count_is_not_hardcoded():
     print("  ✓ t_prepush_autoloop_count_is_not_hardcoded")
 
 
+def t_directly_invoked_scripts_keep_exec_bit():
+    """★會被直接執行的腳本,在 git 索引裡必須帶執行位★(2026-09-08,看門狗真警報抓到的)。
+
+    真的發生了:我用「寫暫存檔再 os.replace 換名」原子改寫 autonomous-loop.sh,
+    ★換名會丟 +x★(記憶筆記 2026-09-07 就記過,今天又踩)。git 把 100644 記進索引,
+    隔天 09:30 排程的 wrapper 直接呼叫它 → Permission denied → rc=126 →
+    看門狗喊「autonomous 那步失敗」。測試沒抓到,因為測試都用 `bash <檔>` 跑、不需要 +x。
+
+    這一支盯的是「誰會被別的腳本或 launchd 直接呼叫」那幾支——判準取自它們真的被怎麼呼叫,
+    不是全 repo 所有 .sh 一律要 +x。
+    """
+    import subprocess as _sp
+    _need_src("governance/daily-governance.sh")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    # 被直接呼叫的:wrapper 本身(launchd 直呼)、它直呼的子腳本、看門狗(launchd 直呼)、安裝器
+    must = ["governance/daily-governance.sh", "governance/autonomous-loop.sh",
+            "governance/wrapper-watchdog.sh", "governance/install-watchdog.sh",
+            "governance/ai-governance-research.sh", "scripts/hooks/pre-push", "scripts/hooks/pre-commit"]
+    out = _sp.run(["git", "-C", str(root), "ls-files", "-s"] + must, capture_output=True, text=True).stdout
+    modes = {}
+    for ln in out.splitlines():
+        parts = ln.split()
+        if len(parts) >= 4:
+            modes[parts[3]] = parts[0]
+    for f in must:
+        if not (root / f).exists():
+            continue
+        check("★%s 在索引裡要是 100755★(丟了 +x,launchd/wrapper 直呼會 Permission denied)" % f,
+              modes.get(f) == "100755", "索引模式=%s" % modes.get(f))
+    print("  ✓ t_directly_invoked_scripts_keep_exec_bit")
+
+
 def t_daily_wrapper_lock_matches_source():
     """★抄過來的鎖要跟來源保持一致★(2026-09-07 全 repo 審視 #18,設計審 r1 架構席)。
 
