@@ -33143,6 +33143,61 @@ def t_codeloop_dispositions_r1_folds():
         lines = []
         n = m._lens_dispositions_lines(lines, _j.loads(mp.read_text(encoding="utf-8")))
         check("⑦_lens_dispositions_lines 對缺 issue 的 todo 不炸", n == 1 and any("kt-coroutines todo" in l for l in lines), str(lines))
+    with tempfile.TemporaryDirectory() as d:
+        # ⑧ 整檔刪除(+++ /dev/null)的刪行也要算(r1 外家 finder f2/否決 f1)
+        _disp_repo(d)
+        _sp.run(["git", "rm", "-q", "app/Screen.kt"], cwd=d); _sp.run(["git", "commit", "-qm", "delete"], cwd=d)
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--json", "--repo", d])
+        data = _j.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
+        check("⑧整檔刪掉含觸發詞的 kt → kt-coroutines 仍適用", "kt-coroutines" in {x["id"] for x in data["stack_questions_meta"].get("kt", []) if x["applicable"]}, str(data.get("stack_questions_applicable")))
+    with tempfile.TemporaryDirectory() as d:
+        # ⑨ 治理帳裡的 evidence 字串不能冒充已提交的測試(r1 外家 finder f3):未追蹤測試+表態後 commit 治理帳
+        sha0 = _disp_repo(d)
+        (Path(d) / "tests" / "test_new.py").write_text("def test_untracked():\n    pass\n", encoding="utf-8")
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "test:test_untracked"}}), encoding="utf-8")
+        _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        _sp.run(["git", "add", "docs/.governance-log.jsonl", "governance"], cwd=d); _sp.run(["git", "commit", "-qm", "gov"], cwd=d)
+        sha1 = _sp.run(["git", "rev-parse", "HEAD"], cwd=d, capture_output=True, text=True).stdout.strip()
+        r = _disp_run(["code-loop", "check", "--diff", f"{sha0}~1..{sha1}", "--at-sha", sha1, "--branch", "feat/disp", "--json", "--repo", d])
+        v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("⑨樹裡只有治理帳提到那個名字(測試檔未提交)→ 仍 BLOCKED", r.returncode == 1 and v.get("reason_kind") == "dispositions" and "grep 不到" in " ".join(v["dispositions"]["problems"]), r.stdout[-400:])
+    with tempfile.TemporaryDirectory() as d:
+        # ⑩ checkout 在 main、推的是 feat/disp:表態帶 --at-sha 綁被推的版本(r1 外家 finder f5/否決 f2)
+        feat = _disp_repo(d)
+        _sp.run(["git", "checkout", "-q", "main"], cwd=d)
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": q, "evidence": "app/Screen.kt:3"}}), encoding="utf-8")
+        w = _disp_run(["code-loop", "dispositions", str(f), "--branch", "feat/disp", "--at-sha", feat, "--repo", d])
+        mk = _j.loads((Path(d) / "governance" / "code-loop" / (m._codeloop_branch_filename("feat/disp") + ".dispositions.json")).read_text(encoding="utf-8"))
+        check("⑩--at-sha 讓 marker 綁被推的 sha 不是 checkout HEAD", w.returncode == 0 and mk["head_sha"] == feat, w.stderr[-200:] + str(mk.get("head_sha")))
+        r = _disp_run(["code-loop", "check", "--diff", f"main..{feat}", "--at-sha", feat, "--branch", "feat/disp", "--json", "--repo", d])
+        check("⑩check 在 main checkout 下按 feat 的 sha 讀到 → 放行", r.returncode == 0, r.stdout[-300:] + r.stderr[-200:])
+        e = _disp_run(["code-loop", "dispositions", str(f), "--at-sha", "deadbeef", "--repo", d])
+        check("⑩--at-sha 不存在 → rc2", e.returncode == 2, e.stderr[-200:])
+    # ⑪ advisory 旗標對算出 tier=high 的推送無效(r1 外家 finder f4/否決 f3):程序內替身
+    from unittest import mock as _mock
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        R = Path(d)
+        real_run = m.subprocess.run if hasattr(m, "subprocess") else __import__("subprocess").run
+        import subprocess as _sp2
+        def fake_run(argv, *a, **kw):
+            if len(argv) > 2 and argv[2] == "pitfalls":
+                return _sp2.CompletedProcess(argv, 0, _j.dumps({"tier": "high", "stack_questions_applicable": {}, "stack_questions_meta": {}}), "")
+            return _sp2.run(argv, *a, **kw)
+        calls = []
+        def fake_bt(*a, **kw):
+            calls.append(kw.get("advisory")); return {"status": "red", "reason": "模擬:合約測試紅了"}
+        g = m._codeloop_guard_verdict.__globals__
+        with _mock.patch.object(_sp2, "run", side_effect=fake_run), _mock.patch.dict(g, {"_bound_tests_check": fake_bt, "_codeloop_read": lambda *a: {"status": "passed", "head_sha": sha}, "_gate_failopen": lambda *a: None}):
+            v = m._codeloop_guard_verdict(R, diff_range="HEAD~1..HEAD", at_sha=sha, branch="feat/disp", bound_advisory=True)
+        check("⑪帶 advisory 但算出 high → 紅測試硬跑一次(advisory=False)並擋", v["blocked"] is True and calls == [True, False], f"blocked={v.get('blocked')} calls={calls} reason={v.get('reason')}")
+    # ⑫ 要看字串內容的三題(r1 外家 finder f7)
+    a1, m1 = m._stack_applicability({"node": ['socket.on("error", handleError)']}, 300)
+    a2, m2 = m._stack_applicability({"sql": ["SELECT 1 FROM t WHERE name LIKE '%foo'"]}, 300)
+    a3, m3 = m._stack_applicability({"vue": ['import x from "./local"']}, 300)
+    a4, m4 = m._stack_applicability({"vue": ['import x from "lodash"']}, 300)
+    ids = lambda mm, k: {r["id"] for r in mm[k] if r["applicable"]}
+    check("⑫.on(\"error\") → node-external;LIKE '% → sql-sargable;相對匯入不算 vue-bundle、外部匯入算", "node-external" in ids(m1, "node") and "sql-sargable" in ids(m2, "sql") and "vue-bundle" not in ids(m3, "vue") and "vue-bundle" in ids(m4, "vue"), f"{ids(m1,'node')} {ids(m2,'sql')} {ids(m3,'vue')} {ids(m4,'vue')}")
 
 
 def t_codeloop_check_dispositions_gate():
