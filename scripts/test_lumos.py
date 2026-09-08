@@ -4481,7 +4481,7 @@ def t_clause_bindings_states():
         "[S7] 下一行才綁",
         "[test:t_ok]",
         "見 [S1] 與 [S2] 的說明 [test:t_ok]",       # 行內引用不算定義,它後面的 [test:] 不能算到 S2 頭上
-        "- [S8] 甲 [test:t_ok] [S9] 乙",              # 同一行兩條:S8 認到下一個 [SN] 之前,S9 沒有
+        "- [S8] 甲 [test:t_ok],詳見 [S9] 那段",        # 一行一條:後面的 [S9] 是引用不是第二條(r3 外家席 #3)
         "- `[S10] 反引號範例 [test:t_ok]`",           # 反引號裡=範例不是定義
         "### [S10] 真定義沒標",
         "- [S11] 兩種都寫以測試為準 [manual:人看一次] [test:t_ok]",
@@ -4495,15 +4495,26 @@ def t_clause_bindings_states():
         "細節見 [S20] 那一段",                                                # 只有行內引用、從沒在行首定義 → undefined
         "- [ ] [S21] 勾選框寫法也是定義 [test:t_ok]",                         # r2 外家席:Markdown task-list
         "- [x] [S22] 勾過的也是 [manual:人看一次]",
+        "```",
+        "- [S23] 圍欄裡的範例 [test:t_ok]",                                   # r3:fence 內整段不看
+        "```",
+        "• [S24] 圓點清單 [manual:人看一次]",                                 # r3 外家席 #2:多認幾種清單符號
+        "1) [S25] 括號編號 [manual:人看一次]",
+        "- [S26] 未閉合反引號 `[S27] 範例 [test:t_ok]",                       # r3 單reviewer N1:剝不掉,但一行一條→S27 只是引用
+        "- [S28] 第一次定義 [manual:人看一次]",
+        "- [S28] 第二次定義沒標",                                              # r3 外家席 #4:重複定義 → duplicate
     ])
     methods = {"python": {"t_ok"}}
     hay = {"python": "def t_ok():\n    pass\nclass T:\n    def test_in_class(self):\n        pass\n# t_mentioned_only 只在註解\n"}
     rows = m.clause_bindings(text, {}, "python", lambda p: methods.get(p, set()), lambda p: hay.get(p, ""))
     st = {r["id"]: r["state"] for r in rows}
     exp = {"S1": "bound", "S2": "untagged", "S3": "manual", "S4": "dangling", "S5": "unrecognized", "S6": "mentioned",
-           "S7": "untagged", "S8": "bound", "S9": "untagged", "S10": "untagged", "S11": "bound",
+           "S7": "untagged", "S8": "bound", "S9": "undefined", "S10": "untagged", "S11": "bound",
            "S13": "bound", "S14": "untagged", "S15": "untagged", "S16": "manual",
-           "S17": "bound", "S19": "untagged", "S20": "undefined", "S21": "bound", "S22": "manual"}
+           "S17": "bound", "S19": "untagged", "S20": "undefined", "S21": "bound", "S22": "manual",
+           "S24": "manual", "S25": "manual", "S26": "bound", "S27": "undefined", "S28": "duplicate"}
+    check("clause: fence 裡的 S23 根本不進清單", "S23" not in st, str(st))
+    check("clause: S28 重複定義帶兩個行號", len([r for r in rows if r["id"] == "S28"][0]["dup_lines"]) == 2, str([r for r in rows if r["id"] == "S28"]))
     check("clause: 只在反引號裡出現的 S12/S18 根本不進清單(遮掉後掃不到)", "S12" not in st and "S18" not in st, str(st))
     for k, v in exp.items():
         check(f"clause: {k} → {v}", st.get(k) == v, f"{k}={st.get(k)} 全部={st}")
@@ -4582,6 +4593,8 @@ def t_handoff_clause_pointer_only():
         (d / ".lumos" / "config.json").write_text('{"platforms": {"a": {"profile": "python", "root": "."}, "b": {"profile": "python", "root": "."}}}', encoding="utf-8")
         r3 = run(v, "handoff", "Projects/P_計劃", expect_rc=0)
         check("handoff: 測試索引建不起來 → 那行講明原因,不印「0 條」(r2 外家席 minor)", "索引建不起來" in r3.stdout and "驗收條款 0 條" not in r3.stdout, r3.stdout)
+        rj3 = _j.loads(run(v, "handoff", "Projects/P_計劃", "--json", expect_rc=0).stdout)
+        check("handoff: --json 索引錯時 total 是 null 不是 0(r3 外家席 minor)", rj3["clauses"]["total"] is None and rj3["clauses"]["index_error"], str(rj3["clauses"]))
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -4630,8 +4643,14 @@ def t_disposal_clause_gate():
     check("clause-gate: 只在反引號出現的 [S9] 不算條款(r1 blocker),不會讓閘 FAIL", r.returncode == 0 and "S9" not in r.stdout.split("條款綁定")[-1].split("\n")[0] and "1 條全標" in r.stdout, r.stdout[-500:])
     r = _loop(v, f"cg-i2-{_M1U}", "cgi2.md", base + "### [S1] 真條款 [test:t_x],例如 `[S9] 範例格式`\n")
     check("clause-gate: 同一行「真條款 + 反引號範例」也不會讓閘 FAIL(r2 blocker)", r.returncode == 0 and "1 條全標" in r.stdout, r.stdout[-500:])
-    r = _loop(v, f"cg-m-{_M1U}", "cgm.md", base + "見 [S1] 的說明,[S2] 也一樣。\n")
-    check("clause-gate: 有 [SN] 字樣但沒有一條在行首定義 → 格式看不懂就擋(r2 外家席:零條款照過)", r.returncode == 1 and "沒有一條在行首定義" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-m-{_M1U}", "cgm.md", base + "見 [S1] 的說明,[S2] 也一樣。\n## 規格 [S3] 詳解\n")
+    check("clause-gate: 只在散文/標題裡提到 [SN] → 視同未啟用,不擋(r3 外家席 #2)", r.returncode == 0 and "沒有條款定義行" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-m2-{_M1U}", "cgm2.md", base + "→ [S1] 甲\n→ [S2] 乙\n")
+    check("clause-gate: 像清單項卻是不認得的前綴 → 擋(格式看不懂不放行)", r.returncode == 1 and "不認得的清單寫法" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-o-{_M1U}", "cgo.md", base + "- [S1] 甲 [manual:人看一次]\n- [S1] 乙沒標\n")
+    check("clause-gate: 同編號定義兩次 → 擋(r3 外家席 #4)", r.returncode == 1 and "編號重複定義" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-p-{_M1U}", "cgp.md", base + "- [S1] 甲 [manual:人看一次],詳見 [S2] 那段\n```\n- [S3] 圍欄範例\n```\n")
+    check("clause-gate: 同一行引用 + 圍欄範例都不算條款 → PASS(r3 三席)", r.returncode == 0 and "1 條全標" in r.stdout, r.stdout[-500:])
     r = _loop(v, f"cg-n-{_M1U}", "cgn.md", base + "- [ ] [S1] 甲 [manual:人看一次]\n- [x] [S2] 乙 [manual:對帳一次]\n")
     check("clause-gate: 勾選框寫法的條款算定義行,全標 → PASS", r.returncode == 0 and "2 條全標" in r.stdout, r.stdout[-500:])
     # 凍結/回放模式(帶 spec_sha_override)不重讀活檔
