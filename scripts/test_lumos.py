@@ -2694,7 +2694,6 @@ def t_dart_profile_discovery():
           any(_fn.fnmatch(fname, g) for g in prof["file_name_match"]), fname)
 
 
-# ── Check T python profile:comment_strip=none+行首錨+檔名錨(CheckT-Python-profile_計劃) ──
 # ── iOS/Node 補棧(2026-09-08,Projects/iOS與Node後端補棧_計劃;★尚無真專案,只有這裡的合成樣本★)──
 def t_swift_profile_discovery():
     """swift-xctest profile:XCTest 靠 test 前綴、Swift Testing 靠 @Test 巨集,兩代並收;
@@ -2768,6 +2767,7 @@ def t_node_jest_profile_discovery():
     check("node ⑦node-vitest 與 node-jest 同一份設定", m.TEST_PROFILES["node-vitest"] is m.TEST_PROFILES["node-jest"], "")
 
 
+# ── Check T python profile:comment_strip=none+行首錨+檔名錨(CheckT-Python-profile_計劃) ──
 def t_python_profile_discovery():
     m = _load_lumos()
     root = Path(tempfile.mkdtemp(prefix="gctl-pyprof-"))
@@ -8560,7 +8560,6 @@ def t_checky_profile_switches_language():
           "查無此符號" not in r.stdout, r.stdout)
 
 
-def t_checky_neg_extra_is_configurable():
 def t_checky_swift_and_typescript_profiles():
     """[iOS/Node 補棧 2026-09-08]symbol_profile=swift / typescript:PascalCase.method 形狀進候選、
     到對應副檔名的碼裡找;找不到才吵。翻紅釘:把兩個 profile 從 SYMBOL_PROFILES 拔掉 → 回 csharp 預設
@@ -8582,6 +8581,7 @@ def t_checky_swift_and_typescript_profiles():
               "\n".join(missing_lines)[:600] or r.stdout[:600])
 
 
+def t_checky_neg_extra_is_configurable():
     """★語系/用語相依的部分可由專案自行增補★(例:某專案說「已封存」而非「已移除」)。"""
     import json
     root, v = _y_repo("`GhostService.OldAsync` 已封存。", "public class X {}")
@@ -9035,7 +9035,6 @@ def t_pitfalls_diff_arch_alignment_hints():
     print("  ✓ t_pitfalls_diff_arch_alignment_hints")
 
 
-def t_pitfalls_diff_prints_impact_lens_hint_human_only():
 def t_pitfalls_diff_node_flavor_by_package_json():
     """[iOS/Node 補棧 2026-09-08]同樣是 .ts 檔,後端專案(package.json 沒前端框架)附 node 效能追問
     + node-idioms;前端專案(依賴有 vue)維持舊行為:不附 node 追問、慣例 skill 仍是 vue-idioms;
@@ -9077,6 +9076,7 @@ def t_pitfalls_diff_node_flavor_by_package_json():
     print("  ✓ t_pitfalls_diff_node_flavor_by_package_json")
 
 
+def t_pitfalls_diff_prints_impact_lens_hint_human_only():
     """★2026-08-02:code-loop 的「派 reviewer 前跑 impact --diff 附 manifest」原本
     純紀律層、沒有任何機械提醒——當天編排者自己就忘了跑,而事後補跑第一行就是後來
     被證實違反合約的那個節點。★本測試釘住那句提示存在,而且只存在於人可讀輸出。★
@@ -17693,7 +17693,6 @@ def t_lint_tag_value_enums():
     check("舊帳(cutoff 前)不回溯", run(v, "lint", "舊野值").returncode == 0, "")
 
 
-def t_canary_type_probe_fields():
 def t_lint_scope_policy():
     """[工具分類 2026-09-08]scope 家族值域宣告制——工具鏈自己按「研究方向」分九類,每篇節點掛一個
     scope/<類> 主標籤。守衛只在專案於 .lumos/config.json 宣告 scope 區塊時才唸(消費專案沒宣告=
@@ -17737,6 +17736,7 @@ def t_lint_scope_policy():
     check("required:false 仍唸野值", r8.returncode == 0 and "whatever" in r8.stdout, r8.stdout[:200])
 
 
+def t_canary_type_probe_fields():
     """[D 前置 2026-08-05,Enzo 裁]植入型別與探針結果結構化——原散文 note 不可重算,
     攢十輪也是考古材料。record 加 --canary-type/--probe 選配欄(T1 慣例:不給不寫鍵、
     行為不變);canary-stats 加型別×探針×caught 表。D 本體開工條件=帶型別記錄攢滿 15 筆

@@ -14790,7 +14790,78 @@ _STACK_PERF_QUESTIONS = {
         "交易範圍會不會鎖太久?隔離等級是刻意選的還是吃預設(READ COMMITTED 與 SERIALIZABLE 差在哪要說得出)?多表更新的鎖順序全站一致嗎(不一致=死鎖,重試包裝只是止血)?同一查詢換參數會不會拿到爛計畫(parameter sniffing;SQL Server compat 150 沒有 PSP 優化)?",
         "SARGable:索引在卻被寫法廢掉——WHERE 欄位側有沒有函式包用(ISNULL/CAST 包欄位=逐列運算廢索引;CONVERT(date,欄) 是文件化特例可 seek)?參數型別對得上欄位嗎(C# string 預設 nvarchar 打 varchar 欄=隱式轉換整表掃)?",
     ],
+    # iOS / Swift(2026-09-08 補棧,內容源=效能檢核目錄 iOS 段+swift-idioms ⚠不可機檢條目;★尚無真專案實跑★)
+    "swift": [
+        "主執行緒:這段有沒有同步 IO/解碼/大 JSON/Core Data fetch 跑在 @MainActor 或 UI 回呼裡(Hangs instrument 會抓,但 review 先問)?互不依賴的 await 有沒有 async let 並行?",
+        "SwiftUI:body 裡有沒有昂貴計算或每次重建的物件(該搬進 model/用 cached 值)?觀察範圍是不是太寬(整個大 store 當 @Observable 依賴,改一欄全樹重算)?List/ForEach 的 id 穩不穩?有沒有 AnyView/條件分支換型別讓 diff 失效、GeometryReader/深層堆疊/preference 鏈讓 layout 反覆、隱式動畫掛在大樹上?貴的子樹有沒有 equatable() 或值包裝擋重算?",
+        "洩漏:closure/Task/Timer/NotificationCenter 有沒有 [weak self]?長活物件(單例/協調器)有沒有抓著 view controller 或 view model?Task 有沒有隨畫面取消(.task 修飾子 vs 手持 Task 不 cancel)?",
+        "啟動與捲動:首幀前有沒有同步重活(SDK init/大 plist/圖片解碼)?捲動 cell 有沒有在主線程解圖/算 layout(該預先縮圖、非同步解碼)?",
+        "併發正確性:actor 隔離有沒有被 nonisolated(unsafe)/@unchecked Sendable 繞掉?跨 actor 的重複 await 中間狀態會不會被別人改掉(actor reentrancy)?",
+        "耗電與網路:有沒有背景持續定位/輪詢/計時器(該用系統背景任務、定位精度按需)?網路請求有沒有合併批次、快取、重用連線(能量大宗是無線電喚醒,零散小請求最貴)?",
+    ],
+    # Node.js / TS 後端(2026-09-08 補棧,內容源=效能檢核目錄 Node 段+node-idioms ⚠不可機檢條目;★尚無真專案實跑★)
+    # ★鍵是 "node" 不是副檔名★:.ts/.js 前端(Vue)也用,靠 _stack_key_for_file 讀 package.json 才分得出後端。
+    "node": [
+        "事件迴圈:這段有沒有同步阻塞(fs.*Sync/JSON.parse 大 body/同步 crypto/大迴圈/正則回溯)跑在請求路徑上?CPU 重活該不該丟 worker thread?",
+        "並行與上限:互不依賴的 await 有沒有 Promise.all 並行?Promise.all 的集合有沒有上限(無界 map(async) 打爆下游連線池/記憶體,該 p-limit 之類有界並行)?",
+        "資料層:查詢有沒有在迴圈裡(N+1)?連線池大小有沒有依實例數算過(太大壓垮 DB、太小排隊)?大結果集有沒有 stream/分頁而不是整包 toArray?",
+        "外呼與資源:每個 HTTP/DB 外呼有沒有 timeout 與 AbortSignal?長連線(keep-alive agent/DB client)有沒有重用而不是每請求新建?未處理的 rejection/error 事件會不會直接砸掉 process?",
+        "記憶體與背壓:大檔/大回應有沒有走 stream(pipeline)而不是讀進記憶體?長活的 Map/陣列/事件監聽有沒有上限與清理(以請求為鍵的快取是常見洩漏)?",
+    ],
 }
+# 以 "node" 鍵而非副檔名為棧的原因:.ts/.js 在 Vue 前端與 Node 後端都出現,單看副檔名分不出來。
+_NODE_FRONTEND_MARKERS = ("vue", "nuxt", "react", "next", "svelte", "@angular/core", "solid-js", "preact")
+_NODE_FLAVOR_CACHE = {}
+
+
+def _node_flavor(file_rel, repo_root):
+    """判一支 .ts/.js 檔是「前端(vue)」還是「Node 後端(node)」:從檔案所在目錄往上找最近的 package.json
+    (monorepo 各包各判),依賴裡有前端框架 → "vue"(只有 vue-idioms 這一份前端慣例,先都歸它);有 package.json
+    但沒前端框架 → "node";找不到 package.json → None(呼叫端沿用舊行為,不多附東西)。
+    ★只看 dependencies/devDependencies 的鍵,不猜檔案內容★——猜錯會把後端問題塞給前端檔。"""
+    import json
+    try:
+        base = (Path(repo_root) / file_rel).resolve().parent
+        stop = Path(repo_root).resolve()
+        for cand in (base, *base.parents):
+            key = str(cand)
+            if key in _NODE_FLAVOR_CACHE:
+                fl = _NODE_FLAVOR_CACHE[key]
+                if fl is not None:
+                    return fl
+            pj = cand / "package.json"
+            if pj.is_file():
+                try:
+                    data = json.loads(pj.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+                deps = set()
+                for k in ("dependencies", "devDependencies", "peerDependencies"):
+                    v = data.get(k) if isinstance(data, dict) else None
+                    if isinstance(v, dict):
+                        deps.update(v.keys())
+                fl = "vue" if any(m in deps for m in _NODE_FRONTEND_MARKERS) else "node"
+                _NODE_FLAVOR_CACHE[key] = fl
+                return fl
+            _NODE_FLAVOR_CACHE[key] = None
+            if cand == stop:
+                break
+    except Exception:
+        pass
+    return None
+
+
+_NODE_EXTS = {"ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"}
+
+
+def _stack_key_for_file(file_rel, repo_root):
+    """一支改動檔對到 _STACK_PERF_QUESTIONS 的鍵:一般=副檔名;.ts/.js 家族要看 package.json——
+    後端回 "node",前端回 "vue"(.vue 檔本來就命中 vue 鍵;純 .ts 前端檔目前無獨立題組,回 None)。
+    兩個消費者(pitfalls --diff / impact hook)都走這一支,別各自抄副檔名邏輯。"""
+    ext = Path(file_rel).suffix.lstrip(".").lower()
+    if ext in _NODE_EXTS:
+        return "node" if _node_flavor(file_rel, repo_root) == "node" else None
+    return ext if ext in _STACK_PERF_QUESTIONS else None
 # diff 模式:代碼形態 pattern:(regex, 形態類軸, 提問)——類軸限 併發/效能/資源(非四業務類)
 # 第四欄 in_strings:SQL 本來就寫在字串裡,要看字串;其餘只看真代碼(字串字面先剝掉,#7)。
 # SQL 三條收緊成真的 SQL 形狀——「UPDATE 失敗」這種訊息文字不算。
@@ -15063,78 +15134,7 @@ def _lint_run_and_parse(cmd, repo_root):
     fd, temp_path = tempfile.mkstemp(suffix=".sarif", prefix="lumos-lint-")
     os.close(fd)
     try:
-    # iOS / Swift(2026-09-08 補棧,內容源=效能檢核目錄 iOS 段+swift-idioms ⚠不可機檢條目;★尚無真專案實跑★)
-    "swift": [
-        "主執行緒:這段有沒有同步 IO/解碼/大 JSON/Core Data fetch 跑在 @MainActor 或 UI 回呼裡(Hangs instrument 會抓,但 review 先問)?互不依賴的 await 有沒有 async let 並行?",
-        "SwiftUI:body 裡有沒有昂貴計算或每次重建的物件(該搬進 model/用 cached 值)?觀察範圍是不是太寬(整個大 store 當 @Observable 依賴,改一欄全樹重算)?List/ForEach 的 id 穩不穩?有沒有 AnyView/條件分支換型別讓 diff 失效、GeometryReader/深層堆疊/preference 鏈讓 layout 反覆、隱式動畫掛在大樹上?貴的子樹有沒有 equatable() 或值包裝擋重算?",
-        "洩漏:closure/Task/Timer/NotificationCenter 有沒有 [weak self]?長活物件(單例/協調器)有沒有抓著 view controller 或 view model?Task 有沒有隨畫面取消(.task 修飾子 vs 手持 Task 不 cancel)?",
-        "啟動與捲動:首幀前有沒有同步重活(SDK init/大 plist/圖片解碼)?捲動 cell 有沒有在主線程解圖/算 layout(該預先縮圖、非同步解碼)?",
-        "併發正確性:actor 隔離有沒有被 nonisolated(unsafe)/@unchecked Sendable 繞掉?跨 actor 的重複 await 中間狀態會不會被別人改掉(actor reentrancy)?",
-        "耗電與網路:有沒有背景持續定位/輪詢/計時器(該用系統背景任務、定位精度按需)?網路請求有沒有合併批次、快取、重用連線(能量大宗是無線電喚醒,零散小請求最貴)?",
-    ],
-    # Node.js / TS 後端(2026-09-08 補棧,內容源=效能檢核目錄 Node 段+node-idioms ⚠不可機檢條目;★尚無真專案實跑★)
-    # ★鍵是 "node" 不是副檔名★:.ts/.js 前端(Vue)也用,靠 _stack_key_for_file 讀 package.json 才分得出後端。
-    "node": [
-        "事件迴圈:這段有沒有同步阻塞(fs.*Sync/JSON.parse 大 body/同步 crypto/大迴圈/正則回溯)跑在請求路徑上?CPU 重活該不該丟 worker thread?",
-        "並行與上限:互不依賴的 await 有沒有 Promise.all 並行?Promise.all 的集合有沒有上限(無界 map(async) 打爆下游連線池/記憶體,該 p-limit 之類有界並行)?",
-        "資料層:查詢有沒有在迴圈裡(N+1)?連線池大小有沒有依實例數算過(太大壓垮 DB、太小排隊)?大結果集有沒有 stream/分頁而不是整包 toArray?",
-        "外呼與資源:每個 HTTP/DB 外呼有沒有 timeout 與 AbortSignal?長連線(keep-alive agent/DB client)有沒有重用而不是每請求新建?未處理的 rejection/error 事件會不會直接砸掉 process?",
-        "記憶體與背壓:大檔/大回應有沒有走 stream(pipeline)而不是讀進記憶體?長活的 Map/陣列/事件監聽有沒有上限與清理(以請求為鍵的快取是常見洩漏)?",
-    ],
         # 注入臨時檔路徑到指令
-# 以 "node" 鍵而非副檔名為棧的原因:.ts/.js 在 Vue 前端與 Node 後端都出現,單看副檔名分不出來。
-_NODE_FRONTEND_MARKERS = ("vue", "nuxt", "react", "next", "svelte", "@angular/core", "solid-js", "preact")
-_NODE_FLAVOR_CACHE = {}
-
-
-def _node_flavor(file_rel, repo_root):
-    """判一支 .ts/.js 檔是「前端(vue)」還是「Node 後端(node)」:從檔案所在目錄往上找最近的 package.json
-    (monorepo 各包各判),依賴裡有前端框架 → "vue"(只有 vue-idioms 這一份前端慣例,先都歸它);有 package.json
-    但沒前端框架 → "node";找不到 package.json → None(呼叫端沿用舊行為,不多附東西)。
-    ★只看 dependencies/devDependencies 的鍵,不猜檔案內容★——猜錯會把後端問題塞給前端檔。"""
-    import json
-    try:
-        base = (Path(repo_root) / file_rel).resolve().parent
-        stop = Path(repo_root).resolve()
-        for cand in (base, *base.parents):
-            key = str(cand)
-            if key in _NODE_FLAVOR_CACHE:
-                fl = _NODE_FLAVOR_CACHE[key]
-                if fl is not None:
-                    return fl
-            pj = cand / "package.json"
-            if pj.is_file():
-                try:
-                    data = json.loads(pj.read_text(encoding="utf-8"))
-                except Exception:
-                    data = {}
-                deps = set()
-                for k in ("dependencies", "devDependencies", "peerDependencies"):
-                    v = data.get(k) if isinstance(data, dict) else None
-                    if isinstance(v, dict):
-                        deps.update(v.keys())
-                fl = "vue" if any(m in deps for m in _NODE_FRONTEND_MARKERS) else "node"
-                _NODE_FLAVOR_CACHE[key] = fl
-                return fl
-            _NODE_FLAVOR_CACHE[key] = None
-            if cand == stop:
-                break
-    except Exception:
-        pass
-    return None
-
-
-_NODE_EXTS = {"ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"}
-
-
-def _stack_key_for_file(file_rel, repo_root):
-    """一支改動檔對到 _STACK_PERF_QUESTIONS 的鍵:一般=副檔名;.ts/.js 家族要看 package.json——
-    後端回 "node",前端回 "vue"(.vue 檔本來就命中 vue 鍵;純 .ts 前端檔目前無獨立題組,回 None)。
-    兩個消費者(pitfalls --diff / impact hook)都走這一支,別各自抄副檔名邏輯。"""
-    ext = Path(file_rel).suffix.lstrip(".").lower()
-    if ext in _NODE_EXTS:
-        return "node" if _node_flavor(file_rel, repo_root) == "node" else None
-    return ext if ext in _STACK_PERF_QUESTIONS else None
         injected_cmd = cmd.replace("{LINT_SARIF_OUT}", shlex.quote(temp_path))
         # 執行指令:使用 Popen 以便 TimeoutExpired 時能 killpg。
         # stdout/stderr → DEVNULL:linter 的 console 輸出(dotnet 警告走 stdout、detekt 走 stderr)
