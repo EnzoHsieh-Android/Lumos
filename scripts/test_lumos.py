@@ -4500,9 +4500,18 @@ def t_clause_bindings_states():
         "```",
         "• [S24] 圓點清單 [manual:人看一次]",                                 # r3 外家席 #2:多認幾種清單符號
         "1) [S25] 括號編號 [manual:人看一次]",
-        "- [S26] 未閉合反引號 `[S27] 範例 [test:t_ok]",                       # r3 單reviewer N1:剝不掉,但一行一條→S27 只是引用
+        "- [S26] 未閉合反引號 `[S27] 範例 [test:t_ok]",                       # 未閉合反引號後面一律不信:S26 拿不到那個 [test:] → 未標;S27 不進清單
         "- [S28] 第一次定義 [manual:人看一次]",
         "- [S28] 第二次定義沒標",                                              # r3 外家席 #4:重複定義 → duplicate
+        "a. [S29] 字母編號 [manual:人看一次]",                                # -b r1 單reviewer:字母/中文編號也是清單
+        "一、[S30] 中文編號 [manual:對帳一次]",
+        "規格 [S31] 前面是詞=散文引用",                                        # 不是清單 → undefined、不像清單
+        "- [S32] 雙反引號藏標記 ``[manual:人看一次]``",                       # -b r1 外家 #1:剝掉 → 未標
+        "- [S33] 未閉合反引號後面不信 `x [manual:人看一次]",                   # 未閉合:後面不信 → 未標
+        "<!-- [S34] 只是 HTML 註解 -->",                                       # -b r1 外家 #4:不是內容
+        "~~~",
+        "- [S35] 波浪圍欄裡的範例",                                            # -b r1 外家 #2
+        "~~~",
     ])
     methods = {"python": {"t_ok"}}
     hay = {"python": "def t_ok():\n    pass\nclass T:\n    def test_in_class(self):\n        pass\n# t_mentioned_only 只在註解\n"}
@@ -4512,7 +4521,10 @@ def t_clause_bindings_states():
            "S7": "untagged", "S8": "bound", "S9": "undefined", "S10": "untagged", "S11": "bound",
            "S13": "bound", "S14": "untagged", "S15": "untagged", "S16": "manual",
            "S17": "bound", "S19": "untagged", "S20": "undefined", "S21": "bound", "S22": "manual",
-           "S24": "manual", "S25": "manual", "S26": "bound", "S27": "undefined", "S28": "duplicate"}
+           "S24": "manual", "S25": "manual", "S26": "untagged", "S28": "duplicate",
+           "S29": "manual", "S30": "manual", "S31": "undefined", "S32": "untagged", "S33": "untagged"}
+    check("clause: HTML 註解裡的 S34、~~~ 圍欄裡的 S35、未閉合反引號後的 S27 都不進清單", "S34" not in st and "S35" not in st and "S27" not in st, str(st))
+    check("clause: S31 前面是詞 → 不像清單(listlike False)", [r for r in rows if r["id"] == "S31"][0]["listlike"] is False, str(rows[-1]))
     check("clause: fence 裡的 S23 根本不進清單", "S23" not in st, str(st))
     check("clause: S28 重複定義帶兩個行號", len([r for r in rows if r["id"] == "S28"][0]["dup_lines"]) == 2, str([r for r in rows if r["id"] == "S28"]))
     check("clause: 只在反引號裡出現的 S12/S18 根本不進清單(遮掉後掃不到)", "S12" not in st and "S18" not in st, str(st))
@@ -4647,6 +4659,16 @@ def t_disposal_clause_gate():
     check("clause-gate: 只在散文/標題裡提到 [SN] → 視同未啟用,不擋(r3 外家席 #2)", r.returncode == 0 and "沒有條款定義行" in r.stdout, r.stdout[-500:])
     r = _loop(v, f"cg-m2-{_M1U}", "cgm2.md", base + "→ [S1] 甲\n→ [S2] 乙\n")
     check("clause-gate: 像清單項卻是不認得的前綴 → 擋(格式看不懂不放行)", r.returncode == 1 and "不認得的清單寫法" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-m6-{_M1U}", "cgm6.md", base + "- [S1] 已標 [manual:人看一次]\n→ [S2] 真條款沒標\n")
+    check("clause-gate: 已有合法條款時,像清單卻不認得的 [S2] 照擋(-b r1 外家 #3:加一條合法條款不能繞)", r.returncode == 1 and "不認得的清單寫法" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-m7-{_M1U}", "cgm7.md", base + "<!-- [S1] 只是註解 -->\n沒有條款。\n")
+    check("clause-gate: 純 HTML 註解裡的 [S1] 不算、不擋(-b r1 外家 #4)", r.returncode == 0 and "opt-in 未啟用" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-m3-{_M1U}", "cgm3.md", base + "a. [S1] 甲沒標\nb. [S2] 乙沒標\n")
+    check("clause-gate: 字母編號的條款沒標 → 擋(不是靜默跳過;-b r1 blocker)", r.returncode == 1 and "S1(第" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-m5-{_M1U}", "cgm5.md", base + "iii. [S1] 三個字母的編號沒標\n")
+    check("clause-gate: 白名單外的短編號(iii.)→ 像清單,擋而不是當散文跳過", r.returncode == 1 and "不認得的清單寫法" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-m4-{_M1U}", "cgm4.md", base + "Q. [S1] 這種怪編號\n")
+    check("clause-gate: 不在白名單但像短編號的前綴 → 當像清單擋,不放行", r.returncode == 1 and ("不認得的清單寫法" in r.stdout or "S1(第" in r.stdout), r.stdout[-500:])
     r = _loop(v, f"cg-o-{_M1U}", "cgo.md", base + "- [S1] 甲 [manual:人看一次]\n- [S1] 乙沒標\n")
     check("clause-gate: 同編號定義兩次 → 擋(r3 外家席 #4)", r.returncode == 1 and "編號重複定義" in r.stdout, r.stdout[-500:])
     r = _loop(v, f"cg-p-{_M1U}", "cgp.md", base + "- [S1] 甲 [manual:人看一次],詳見 [S2] 那段\n```\n- [S3] 圍欄範例\n```\n")

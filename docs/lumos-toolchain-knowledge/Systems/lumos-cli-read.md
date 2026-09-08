@@ -10,6 +10,7 @@ tags:
   - status/done
   - scope/retrieval
 summary: |-
+  KEY:[2026-09-08 ~~~ 圍欄]`_visible_lines`(search 與所有「哪些字看得見」的唯一實作)從此把 `~~~` 跟 ``` 一樣當 fenced code 邊界——條款綁定 -b r1 外家席抓到 CommonMark 另一種圍欄沒被遮;影響面=search/refcheck/條款解析對 ~~~ 內文字一律不看 [test:t_clause_bindings_states]
   KEY:[2026-09-08 handoff 條款行]計劃有 [SN] 時 `lumos handoff` 多印一行「驗收條款 N 條:綁了測試/靠人/未標/懸空 + 指路 lumos spec-trace」——只印文字計數不印每條的表,★不撤「不判完成、不印進度」的範圍刀★(條款綁測試算進度 r1 接手席 F-S3-1);--json 多 clauses 鍵 [test:t_handoff_clause_pointer_only]
   KEY:[2026-09-07 handoff]新讀原語 `lumos handoff <計劃節點>`——唯讀接手視圖:計劃點名的程式檔各是什麼 git 狀態(status --porcelain,含未追蹤/已刪;★不用 diff HEAD,它看不到未追蹤★)+最後提交、逐字稿尾端的意圖線索(importlib 借收工 hook 的人話判定與工具名單,★輪次邊界=最後一句人話★自算——hook 的邊界會被系統塞的任務通知截斷,r1 外家 #1;Codex 稿走 hook;自動挑 ~/.claude/projects/<slug>/ 的候選:排掉接手者自己 CLAUDE_CODE_SESSION_ID、提到這份計劃名者優先、候選列出)。★不造帳、不判做到哪、讀不到就印「意圖不可得(原因)」rc0★;只有用法錯(節點不存在/不在 git)才 rc2。來歷:進度從提交推導四版造帳全被打穿後的唯讀解,計劃 [[Projects/接手視圖_計劃]] [test:t_handoff_view]
   KEY:[2026-08-25]doctor E4 連鎖待辦軟提醒([[Projects/連鎖佇列軟提醒_計劃]])——統計併 E2 帳本掃描迴圈順手收集;零判定帳本數+最老天數+損毀另列;全判定整段靜默;gov check-cascade;supersede 開單當下 stderr 白話指路(修法 A;零鄰居分支不講「上面列的每個」);已知縫=CASCADE-EMPTY 帳本永久零判定 E4 長鳴,首次真實出現時裁;[test:t_doctor_cascade_reminder]

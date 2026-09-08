@@ -2515,7 +2515,7 @@ def _visible_lines(lines, keep_fenced=False):
     """
     in_fence = False
     for i, ln in enumerate(lines):
-        if ln.lstrip().startswith("```"):       # fenced code 邊界
+        if ln.lstrip().startswith(("```", "~~~")):       # fenced code 邊界(``` 與 ~~~ 都是 CommonMark 圍欄;2026-09-08 條款綁定 -b r1 外家席補 ~~~)
             in_fence = not in_fence
             continue
         if in_fence and not keep_fenced:
@@ -4048,8 +4048,9 @@ def cmd_lint(env, node):
 
 
 SPEC_CLAUSE_RE = re.compile(r"\[S(\d+)\]")
-_CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.|+•—·)]*(?:\[[ xX]\]\s*)?(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表 - * + • — · 1. 1)/標題 #/引用 >/粗體/表格 |/勾選框 [ ] 符號)就是 [SN];一行只認一條,後面的 [SN] 一律是引用
-_CLAUSE_LISTLIKE_RE = re.compile(r"^\W*\[S(\d+)\]")   # 「像清單項卻認不得的前綴」:[SN] 前面只有非文字符號——用來判「零條定義」該擋還是該當純引用
+_CLAUSE_ENUM = r"(?:[A-Za-z一二三四五六七八九十甲乙丙丁]{1,2}[.、)）]\s*)?"   # a. / 一、/ 甲) 這種短編號也是清單(-b r1 單reviewer:字母/中文編號曾被當散文靜默跳過)
+_CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.|+•—·)]*" + _CLAUSE_ENUM + r"(?:\[[ xX]\]\s*)?(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表 - * + • — · 1. 1) a. 一、/標題 #/引用 >/粗體/表格 |/勾選框 [ ] 符號)就是 [SN];一行只認一條,後面的 [SN] 一律是引用
+_CLAUSE_LISTLIKE_RE = re.compile(r"^\s*(?:[^\w\s]+\s*|\w{1,3}[.、)）:：]\s*)*\[S(\d+)\]")   # 「像清單項卻認不得的前綴」:[SN] 前面只有符號或短編號(x. / 一、/ 甲:)——用來判「零條定義」該擋還是該當純引用;前面是詞(規格 [S1])才算散文
 _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了", "dangling": "懸空(寫錯)",
                     "unrecognized": "懸空(設定認不到)", "mentioned": "懸空(只被提到)", "bad-name": "壞名(平台前綴未定義)",
                     "undefined": "非定義(只在範例/引用裡出現,不算條款)", "duplicate": "編號重複定義(兩行都寫 [SN])"}
@@ -4061,7 +4062,7 @@ def clause_bindings(text, split, default, methods_for, hay_for):
     """計劃正文的 [SN] 條款 × 同一行的 [test:]/[manual:](條款綁測試算進度 [S1];唯讀、純函式)。
     定義行=該 id 第一次出現在行首的那一行(去 - * # > 數字. | 粗體符號),從沒在行首出現過的 id=非定義(undefined,不算條款)——
     「見 [S2]」這種行內引用不算定義;★反引號裡的內容整段遮掉再掃★(r2 單reviewer blocker:同一行「真條款 + `[S9] 範例`」曾讓閘 FAIL)。
-    配對範圍=同一行、在它之後、下一個 [SN] 之前
+    配對範圍=同一行、定義的 [SN] 之後到行尾(一行一條;後面再出現的 [SN] 是引用,不切段)
     (r1 通才席:SPEC_CLAUSE_RE/TEST_REF_RE 都是全文正則沒有行邊界,不同實作者會各自猜)。
     狀態七種(r1 接手席/通才席:四態不是三態、懸空要分「寫錯」與「設定認不到」,後者不進量測分母):
       untagged 未標 / manual 靠人 / bound 綁了(全部 ref 都是真測試)/ dangling 寫錯(方法集合與檔案都沒有)/
@@ -4074,7 +4075,9 @@ def clause_bindings(text, split, default, methods_for, hay_for):
     # 正是 2026-08-03 兩份 fence 實作分岔那個坑)。fence 內整段不看;行內反引號的內容剝掉(範例);未閉合的反引號剝不掉,但一行只認一條所以
     # 它頂多讓真條款的 segment 多吃到範例文字(壞測試名→懸空只提醒),做不出第二條條款。
     for no, raw in _visible_lines(text.split("\n"), keep_fenced=False):
-        line = INLINE_CODE_RE.sub("", raw)
+        line = re.sub(r"<!--.*?-->", "", raw)                     # 單行 HTML 註解不是內容(-b r1 外家席:`<!-- [S1] -->` 曾被當未知清單擋)
+        line = INLINE_CODE_RE.sub("", re.sub(r"``.+?``", "", line))   # 雙反引號 span 先剝,再剝單反引號 span(沿用 INLINE_CODE_RE)
+        line = line.split("`", 1)[0]                              # 還剩下的反引號=未閉合:後面一律不信(程式碼範例裡的標記不能當證據;寧可少認也不放行)
         ms = list(SPEC_CLAUSE_RE.finditer(line))
         if not ms:
             continue
@@ -4087,16 +4090,16 @@ def clause_bindings(text, split, default, methods_for, hay_for):
             else:
                 defined[cid] = (no, seg)
             for m in ms[1:]:
-                fallback.setdefault(int(m.group(1)), (no, ""))
+                fallback.setdefault(int(m.group(1)), (no, "", False))          # 定義行後面的 [SN]=引用,絕不像清單
         else:
-            for m in ms:
-                fallback.setdefault(int(m.group(1)), (no, line[m.end():]))
+            for i, m in enumerate(ms):
+                # 「像清單項卻認不得的前綴」只看這一行★第一個★ [SN](後面的是引用);-b r1 自踩:曾拿整行去判,把「詳見 [S2]」判成像清單
+                fallback.setdefault(int(m.group(1)), (no, line[m.end():], i == 0 and bool(_CLAUSE_LISTLIKE_RE.match(line))))
     out = []
     for cid in sorted(set(defined) | set(fallback)):
         if cid not in defined:   # 只在範例/引用/行內出現過、從沒在行首定義 → 不是條款(r1 單reviewer blocker:純示範文字曾讓閘 FAIL)
-            no, seg = fallback[cid]
-            out.append({"id": f"S{cid}", "line": no, "refs": [], "manual": [], "defined": False, "state": "undefined",
-                        "listlike": bool(_CLAUSE_LISTLIKE_RE.match(text.split("\n")[no - 1]))})
+            no, seg, listlike = fallback[cid]
+            out.append({"id": f"S{cid}", "line": no, "refs": [], "manual": [], "defined": False, "state": "undefined", "listlike": listlike})
             continue
         if cid in dup:
             out.append({"id": f"S{cid}", "line": defined[cid][0], "refs": [], "manual": [], "defined": True, "state": "duplicate",
@@ -4223,7 +4226,7 @@ def cmd_spec_trace(env, node, as_json=False):
                 tail = " ← " + ", ".join(b["refs"])
             elif b and b["manual"]:
                 tail = " ← " + "; ".join(b["manual"])
-            mark = "✓" if (b and b["state"] in ("bound", "manual")) else ("✗" if (b and b["state"] == "untagged") else "⚠")
+            mark = "✓" if (b and b["state"] in ("bound", "manual")) else ("✗" if (b and b["state"] in ("untagged", "duplicate")) else "⚠")
             if (b and b["state"] == "undefined") or (not b and not berr):
                 mark = "·"
             who = ", ".join(Path(x).stem for x in claims[i]) or "無"
@@ -13457,12 +13460,12 @@ def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=N
         return "fail"
     clauses = [b for b in rows_b if b["state"] != "undefined"]
     undef = [b for b in rows_b if b["state"] == "undefined"]
+    listlike = [b for b in undef if b.get("listlike")]
+    if listlike:
+        # 有 [SN] 在行首附近、卻是這裡不認得的清單寫法(r2 外家席用 `- [ ] [S1]` 實跑出「零條款照過」;-b r1 外家席:只在零條款時查會被「加一條合法條款」繞過)——不管有沒有別的條款,格式看不懂就擋
+        print(f"[disposal] 條款綁定: ✗ — {len(listlike)} 個 [SN] 看起來是條款卻用了這裡不認得的清單寫法(第 " + "、".join(str(b["line"]) for b in listlike) + " 行);看不懂的寫法不放行——條款要寫成 `- [S1] …`/`### [S1] …`/`1. [S1] …`/表格列/`- [ ] [S1] …`")
+        return "fail"
     if not clauses:
-        listlike = [b for b in undef if b.get("listlike")]
-        if listlike:
-            # 有 [SN] 在行首附近、卻是這裡不認得的清單寫法(r2 外家席用 `- [ ] [S1]` 實跑出「零條款照過」)——格式看不懂就擋,不放行
-            print(f"[disposal] 條款綁定: ✗ — {len(listlike)} 個 [SN] 看起來是條款卻用了這裡不認得的清單寫法(第 " + "、".join(str(b["line"]) for b in listlike) + " 行);看不懂的寫法不放行——條款要寫成 `- [S1] …`/`### [S1] …`/`1. [S1] …`/表格列/`- [ ] [S1] …`")
-            return "fail"
         print(f"[disposal] 條款綁定: —(計劃只在散文/標題裡提到 [SN] {len(undef)} 次,沒有條款定義行,視同 opt-in 未啟用)")
         return "skip"
     dups = [b for b in clauses if b["state"] == "duplicate"]
@@ -21006,7 +21009,8 @@ def cmd_handoff(env, node, as_json=False, transcript=None, turns=1):
         else:
             hang = _cc["dangling"] + _cc["unrecognized"] + _cc["mentioned"] + _cc["bad-name"]
             print(f"驗收條款 {_cc['total']} 條:綁了測試 {_cc['bound']}、靠人 {_cc['manual']}、未標 {_cc['untagged']}、懸空 {hang}"
-                  f"(哪一條是哪一態、綁了什麼:lumos spec-trace {plan_name.split('/')[-1]})")
+                  + (f"、編號重複 {_cc['duplicate']}" if _cc.get("duplicate") else "")
+                  + f"(哪一條是哪一態、綁了什麼:lumos spec-trace {plan_name.split('/')[-1]})")
     print("為什麼在意:已改/已刪/未追蹤是上一個 session 做到一半留下的;這裡只列狀態,不猜做到第幾步、不判做到底了沒——線索不是狀態。")
     print("下一步:")
     changed = [f["path"] for f in files if f["state"] in ("已改", "已刪")]
