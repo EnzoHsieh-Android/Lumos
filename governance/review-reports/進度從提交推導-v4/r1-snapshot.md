@@ -1,0 +1,268 @@
+---
+type: project
+status: doing
+created: 2026-09-07
+updated: 2026-09-07
+tags:
+  - type/project
+  - status/doing
+related:
+  - "[[Projects/執行DAG_調研]]"
+  - "[[Projects/驗形式與驗內容_調研]]"
+  - "[[Systems/loop-convergence-recording]]"
+  - "[[Issues/同工作區多session並行改動]]"
+  - "[[Projects/全repo審視_計劃]]"
+  - "[[Issues/收工閘漏掉純Bash改碼]]"
+summary: |-
+  FLAG:TECHNICAL
+  KEY:立案(2026-09-07)——「這件事做到哪」是人手寫在筆記裡所以會漂(60 框 0 勾但事做完了、沒東西會發現)。★現為 v4(三次重寫;第二、三次 Enzo 攤人裁;v3 死後編排者建議停案,Enzo 裁「我要解這個問題」)★
+  KEY:★血緣★v1 提交 trailer+CI→載體靜默丟資料;v2 跑測試→載體不為此設計(撞名 95 對/skip 假綠/單測 132 秒/蓋推送閘快取);v3 PostToolUse 記事件→★Edit/Write 只佔本 repo 改檔呼叫個位數%(邊界席實測 886 vs 43,481)、檔案路徑對 scripts/lumos 不分辨(150 篇;原稿誤寫 126)、活動不攜帶意圖★。卷證各在 governance/review-reports/進度從提交推導{,-v2,-v3}/
+  KEY:★d9 轉向:分界線不是「誰在記」是「有沒有驗過的證據+有沒有人需要它才能前進」★——三版全在從副產品推導;唯一會動的審查帳其實也是 agent 自報,不爛是因為①寫入驗證(雜湊讀不回拒寫)②入口綁定(不記帳 loop next 不答)。勾選框兩者都無。★v3 押「換 runtime 記」是押錯軸;agent 自報恰能給 runtime 永遠給不了的意圖★
+  KEY:★d10 v4 核心★=入口是既有收工 hook(改了 code 就擋一次,當日擋過編排者);擋下時要求 `lumos task record <計劃> <任務>`——agent 只填意圖,工具自己填 session/ts/改動檔(git diff HEAD)/head_sha,並驗計劃存在、任務標記在節點文字裡找得到(Check J「拒絕發明」用在任務層)、改動檔非空;帳 docs/.task-log.jsonl(★本案新建,尚不存在★) 版控 append-only;`lumos task next <計劃>` 只讀帳+計劃列每任務最後誰動/何時/改了什麼、沒帳明說;★不判完成★(歸 d3 推送閘)
+  KEY:★這次先驗地基再寫(2026-09-07 實查 ~/.claude/hooks/check-graph-sync.py)★:Stop 擋一次(:9,:483,:553 _stop_mark)/偵測改動兩條腿=逐字稿(:196,Edit/Write/MultiEdit+rm/mv/cp/git rm/git mv :74)與 impact --diff HEAD(:468,git,看得到所有 Bash 內容改動)/逐字稿官方明說非穩定介面認不得即略過(:116)→關鍵判斷只靠 git 腿/payload 有 session_id(:679)/逃生句是 honor(:580)/CLI 寫入偵測只認 obsidian(:302 touched_graph_via_cli)→v4 在同函式加認 lumos task record 不另寫/Codex 側 Stop 已適配(比 v3 好,v3 的 PostToolUse Codex 無對應)/_ledger_append 無 O_CREAT、建檔照 rel_cascade_create(scripts/lumos:10414)
+  KEY:★v3 三死因一個不踩★:改動檔從 git diff 量(不管怎麼改的都看得到)/鍵是「計劃+任務」由 agent 說,檔案只是附帶事實/意圖就是 agent 填的欄位/帳走版控解 worktree 與跨機不共享
+  KEY:設計 [S1] task record 寫側(agent 給計劃+任務+可選 note;工具給 session/ts/files/head_sha;驗節點存在、標記存在否則 rc2 列出該節點有的標記、files 非空;首筆 O_CREAT|O_EXCL 建檔、之後 _ledger_append、readback 自驗)/[S2] 收工 hook 加第二條件「改 code 且沒 record→擋一次」三段式訊息、逃生句同既有 honor、fail-open 三態不改/[S3] task next 讀側唯讀 rc0 --json 壞行三段式(完整搬 loop list)、SessionStart 進場提示加「接手先敲 task next」/[S4] 帳進 _BOOKKEEPING_FILES 白名單免 code-loop pass 自失效
+  KEY:★誠實天花板★強制力只有入口(逃生句放行=既有 honor 層)→★成敗=上線後 N 輪裡多少輪走逃生句,要量★;任務標記格式不統一只驗「找得到」不統一;一輪多任務允許多筆但只要求≥1;files=git diff HEAD 快照,中途 commit 會漏已提交部分(★--since <上一筆 head_sha> 補,設計審請打★);「這輪」邊界靠逐字稿,認不得整輪略過
+  KEY:範圍刀=不判完成/不做依賴認領任務圖/不新增偵測機制/不強制(擋一次+逃生)/不記內容。待裁:標記找不到擋還是允許「未對應」(會不會變新逃生口)、兩個擋合併否、task next 要不要順帶 spec-trace
+  KEY:驗收=A 改三檔記一筆結束→B 只跑 task next 知 A 停在哪/入口真擋(不記擋一次含指令獨立行、記了放行、逃生放行、不二擋)/拒絕發明(不存在標記 rc2 列既有)/★sed -i 改檔不記照樣被擋(git 腿)★/首筆建檔 readback(釘 v3 O_CREAT 洞)/code-loop pass 不因記帳失效/fixture 用真 task record 產不手刻
+decisions:
+  - content: 用 git trailer 承載工作項識別碼,不自建格式、不建任務狀態檔
+    id: d1
+    context: 要讓「完成」自己留下紀錄,需要一個機器可讀的欄位把提交跟工作項綁起來。選項:自訂提交訊息格式再寫正則撈、開一份任務狀態檔、或用 git 原生 trailer
+    why_chosen: git trailer 是原生標準,`git log --format='%(trailers:key=X,valueonly=true)'` 一個旗標就查得出,不必自寫解析(自寫正則撈提交訊息=又一個「形式對、內容不一定對」的地方);而且本 repo 每筆提交已經在產 trailer(近 30 筆 100% 帶 Co-Authored-By/Claude-Session),是加一個鍵不是加一套機制。任務狀態檔已於 執行DAG_調研 裁掉:手維護的狀態正是本案要消滅的東西。代價:綁死 git(非 git 專案不適用);trailer 要靠寫提交的人記得加,沒有機械守衛前一樣會漏
+    decided: 2026-09-07
+    valid: false
+    superseded_by: d7
+    ended: 2026-09-07
+  - content: 本案明說只蓋四分之三:沒有程式碼可掛的工作(skill 散文/圖譜回填/真機驗收)不假裝算得出來
+    id: d2
+    context: 先前量到 74 個任務段裡 56 個(75%)抽得出對應測試名,剩 18 個天生沒有——那類沒有提交可掛,或掛了也證明不了什麼
+    why_chosen: 家規要求承認風險要附回頭條件、寫不出判準就明說靠人;而把算不出來的東西輸出成「未完成」或靜默略過,都會讓使用者以為算過了——那正是本 repo 反覆抓到的假綠形態。代價:這個工具永遠有一塊盲區,不能宣稱『進度全自動』
+    decided: 2026-09-07
+    valid: false
+    superseded_by: d8
+    ended: 2026-09-07
+  - content: 完成判準掛實作端、看測試:功能級測試套綠 + 相依功能無回歸;明確不做散文級判準
+    id: d3
+    context: Enzo 裁。原本待裁三選項:有提交掛過就算完成 / 加上綁的測試綠 / 散文級判斷。外家 f2 曾證明「測試綠≠任務完成」(多任務共用一個測試、有的只寫跑全套、既有測試開工前就綠)
+    why_chosen: ★f2 打的是任務級,Enzo 裁的是功能級,三條反對在功能級各自失效★:共用測試在功能級就是同一個功能的測試、既有測試已綠對新功能不成立、只寫跑全套在功能級正是「相依無回歸」那一半的定義。所以不是繞過外家,是換到 f2 打不到的粒度。代價:①功能級是二元的,答不出「做到第幾步」,接手需要的解析度要靠任務級測試名另外給(且不得用來宣告完成)②判準的品質等於測試的品質,弱測試=假綠,靠既有翻紅釘紀律頂著③沒有測試可掛的工作型別完全不在射程內
+    decided: 2026-09-07
+    valid: true
+  - content: 識別碼沿用既有 [SN] 條款標記,定址比照決策寫成 <計劃節點rel>#S1
+    id: d4
+    context: 三選項:沿用 50 群那套 #N(只存在於那一份清單)、每份計劃自己給 T1..Tn(跨計劃撞名)、計劃節點名+任務號
+    why_chosen: 不發明新方案:①[SN] 標記是既有慣例且已有消費者(spec-trace 用它看哪些條款沒被驗證認領)②定址形狀已有前例(決策是 <節點rel>#dN,程式裡有格式驗證與 dangling 偵測,可照抄)③識別碼從計劃節點自己長出來,不必維護第二份登記簿。代價:計劃節點改名會讓舊 trailer 指不到——但決策定址有同一個問題,不是本案新引入的風險
+    decided: 2026-09-07
+    valid: false
+    superseded_by: d7
+    ended: 2026-09-07
+  - content: trailer 鍵名用 Lumos-Task:
+    id: d5
+    context: "候選 Task: / Refs: / Lumos-Task:;本 repo 現有 trailer 是 Co-Authored-By 與 Claude-Session"
+    why_chosen: "比照既有的 Claude-Session: 命名空間形態;Refs:/Fixes:/Closes: 在 git 生態各有既定語意、借用製造歧義;Task: 太泛將來可能撞別的工具。代價:字長,但由提交模板產生、人不必自己打(Co-Authored-By 就是這樣運作)"
+    decided: 2026-09-07
+    valid: false
+    superseded_by: d7
+    ended: 2026-09-07
+  - content: 「綠」的來源用 CI 那筆,不用 code-loop pass
+    id: d6
+    context: 兩個候選都按版本記:governance/code-loop/main.json 的 {head_sha,status} 與 lumos ci-status 的 {sha,conclusion}
+    why_chosen: ★code-loop pass 記的是「審查過了」不是「測試綠了」,狀態值裡還有 skipped——拿它當測試結果就是借一個紀錄表達它沒有的意思,正是本 repo 今天抓了一整天的病★;CI 那筆語意就是對的(實查 JSON 帶 sha 與 conclusion,本地讀不打網路)。代價不小:CI 只在推送後跑,本機未推的工作查不到,所以必須把「還沒推=未知」與「未完成」分開輸出——混在一起就是新的假綠
+    decided: 2026-09-07
+    valid: false
+    superseded_by: d7
+    ended: 2026-09-07
+  - content: v2 核心:不推論「完成」,只報告「這個任務宣告的證據現在是什麼狀態」——對計劃宣告的測試名當場在工作樹上跑,回報「不存在/存在但紅/存在且綠」
+    id: d7
+    context: r1 五席四席判 blocker。六個 blocker 群的共同形狀:每一條都來自「拿一個代理物(trailer / CI 紀錄)去推論完成」,而每個代理物都有縫,每條縫都生出一個**假完成**——正是本案要消滅的病
+    why_chosen: ★不推論就沒有縫★:識別碼問題消失(任務的名字就是它宣告的測試名,那是程式碼裡真實存在的符號,天生唯一可定址,改名會被既有 doctor Check Y 抓到);trailer 四種靜默失敗全部消失(不用 trailer);CI 對應問題消失(當場跑,只跑宣告的那幾個不是全套);★未提交態解決——讀工作樹不讀提交歷史,session 做到一半還沒 commit 照樣看得見,而 r1 指出那正是最急迫最常見的一格★;提交夾帶不影響(不依賴提交歸屬);f2 的反對被正面處理不是躲開(不宣稱測試綠=完成,推論交給讀的人)。★與 trailer 的關鍵差別:trailer 寫錯的輸出跟沒寫一樣(靜默),測試名寫錯的輸出是「不存在」(看得見)★。代價:只覆蓋有宣告測試名的約 75%;跑測試要時間(只跑子集,要量);答不出「相依功能有沒有回歸」那一半
+    decided: 2026-09-07
+    valid: false
+    superseded_by: d8
+    ended: 2026-09-07
+  - content: v3 核心:由 runtime 記、不由 agent 宣稱、也不借別的東西的語意——改檔工具跑完由 PostToolUse hook 往只增不改的帳追加{session,時間,檔案};「做到哪」=對計劃點名的檔重播這本帳
+    id: d8
+    context: v1(提交+CI)死於載體靜默丟資料;v2(跑測試)死於載體不是為此設計。兩者共同根=借一個為別的目的存在的東西承載進度,縫從語意落差長出來。審查迴圈之所以會動(兩輪無人攻擊)=記錄的動作就是工作本身、且工具在記非人在宣稱。世界共識同形(事件溯源/持久執行:runtime 記每步,agent 不自報;arXiv 2605.21997「The Log is the Agent」);本地三事實:PostToolUse 槽現在是空的、hook 拿得到 session_id 與 tool_input、三本既有帳全無 session 維度
+    why_chosen: 與 v1/v2 的差別不是換載體是換記錄者:事件就是動作本身,沒有解釋層,所以沒有語意縫。躲過兩輪全部 blocker 不是繞過而是無關(不用提交→trailer 四種失敗與夾帶無關;不跑測試→壞檔窗口/撞名/skip/效能/蓋快取無關;鍵是檔案路徑→不需識別碼;編輯當下就記→未提交態是它最強的一格;每筆帶 session→互相通報變自動)。★它報的是活動不是完成★,完成留給 d3 的推送閘。代價:hook 看不到的改動(Bash sed/人手改/沒裝 hook 的機器)沒紀錄,「沒紀錄」≠「沒動」要分開輸出;Codex 對應事件未驗;量大要輪替且帳必 gitignore(usage-log 弄髒工作樹有前科);PostToolUse 槽拆過登記沒清有前科
+    decided: 2026-09-07
+    valid: false
+    superseded_by: d10
+    ended: 2026-09-07
+  - content: ★轉向:分界線不是「誰在記」,是「有沒有驗過的證據+有沒有人需要它才能前進」★——三版都在從副產品(提交/測試/hook 事件)推導任務狀態,全部被量出丟訊號;唯一會動的審查帳其實也是 agent 自報,不爛是因為寫入驗證+入口綁定
+    id: d9
+    context: v3 死後編排者建議停案,Enzo 反問「難道無法解決」並裁「我要解這個問題」。重看:勾選框(無證據/無消費者/不需要它就能前進)爛;canary record(雜湊驗證/loop next 讀它/不記就問不到下一輪)不爛——兩者都是 agent 自報
+    why_chosen: ★編排者承認 v3 押錯軸★:「換成 runtime 記」不是審查帳會動的原因。真正差別=寫入時驗證證據+是往下走的唯一入口。而且 agent 自報恰好能給 runtime 永遠給不了的那樣東西——意圖(v3 致命傷)。代價:回到「agent 要記得呼叫工具」,唯一強制力是入口綁定,設計審第一槍要打這裡
+    decided: 2026-09-07
+    valid: true
+  - content: v4 核心:入口=既有收工 hook(改了 code 就擋一次);擋下時要求 lumos task record <計劃> <任務>——agent 只填意圖,工具自己填 session/時間/改動檔(git diff HEAD)並驗計劃與任務標記存在;帳版控 append-only;lumos task next <計劃> 只讀帳+計劃列每個任務最後誰動/何時/沒帳的明說;不判完成
+    id: d10
+    context: 地基實查(2026-09-07):收工 hook 已存在且當日擋過編排者一次(改 code 沒動筆記);它偵測改動有兩條腿——逐字稿(Edit/Write/MultiEdit+rm/mv/cp/git rm/git mv)與 impact --diff HEAD(git,看得到所有 Bash 內容改動);擋一次後放行、有逃生句;payload 有 session_id;Codex 側 Stop hook 已適配;逐字稿格式官方明說非穩定介面、認不得即略過
+    why_chosen: v3 三個死因一個不踩:覆蓋率走 git diff 腿不靠工具事件;鍵是「計劃+任務」由 agent 說,不是檔案路徑;意圖由 agent 給。帳走版控(同 canary-log)解 v3 的 worktree/跨機不共享。★驗證形狀照 Check J「拒絕發明」:工具不判做完,只驗你指的計劃/任務真的存在、改動檔非空★。代價:每次記帳弄髒工作樹(canary-log 已如此);agent 要記得呼叫——強制力只有入口;逃生句是 honor(既有 graph-sync 也是)
+    decided: 2026-09-07
+    valid: true
+  - content: 偵測「這輪改了 code」改為 git 優先重佈線(git diff --name-only HEAD 過 is_code_file),不再「重用既有偵測原樣加條件」——既有收工閘對純 Bash 改碼本來就漏,這是修既有洞不是新機制
+    id: d11
+    context: v4 前掃(獨立重開 hook 程式碼)證實:git 腿只在「圖譜已被動過」分支被呼叫、用途是列缺筆記;閘門 1/2 只看逐字稿(Edit/Write/MultiEdit + rm/mv/cp/git rm/git mv),sed -i 這類在閘門 2 就 return 0,git diff 連跑都沒跑。d10 語境裡「兩條腿、不管怎麼改都看得到」是編排者誤讀佈線
+    why_chosen: 論點(入口/意圖/事實)未被打到,死的是機制宣稱;git diff 本身確實看得到所有內容改動,只是沒接對位置。重佈線的代價:①這支 hook 今天剛進 ANCHOR_FILES,改它必走 anchor approve 留痕②既有筆記閘的行為會跟著變(開始抓到 sed -i 的改碼)——這是修一個獨立的既有洞,立 Issue 另記,不算 v4 偷擴範圍③逐字稿腿保留為輔(哪些 Bash 是這輪的),git 腿為主
+    decided: 2026-09-07
+    valid: true
+---
+# 進度從提交推導_計劃
+
+> 白話:現在「這件事做到哪一步」是人手寫在筆記裡的,所以會漂——有一篇計劃狀態寫「做完了」,
+> 裡面 60 個勾選框一個都沒勾。本案要把它換成**算出來的**:每個工作項給一個名字,
+> 完成它的那個提交把名字掛上去,進度就從 git 算,沒有東西需要人維護。
+
+> **本篇用到的三個詞**:「外家」=不是編排者那一家的審查席(本 repo 慣例上是 Codex);「f2」=某輪外家報告的第 2 條發現(此處指 [[Projects/執行DAG_調研]] 那輪);「編排者」=負責派審查員、判讀報告、折入修正的那個角色(本案是主對話的 AI);「群」=[[Projects/全repo審視_計劃]] 把 130 條發現去重合併後、可獨立交付的分組。
+
+PRIOR-ART(★v2 重寫;原稿整段在替已死的 trailer 背書,前掃 ③ 抓到是重寫殘留★):①**最小解在既有機制層**——v2 不新增任何資料格式:任務的名字就是它**已經宣告在計劃裡的測試函式名**,跑法用既有的測試子集入口(`-k <關鍵字>`,前掃實跑驗過可用)。②本家可抄的樣板=`loop verify-progress` 的 help 逐字:「不看散文,只從帳本結構欄位看審到哪了(防被報告措辭帶風向)。」③世界解:GitHub `Closes #N` 綁 forge;beads / Task Master 已於 [[Projects/執行DAG_調研]] d1 裁「可借形狀、不借實作」。④不採用新依賴:只用 python3 stdlib 與既有測試入口。★⑤ v1 的 git trailer 路線已在 r1 被打死(四種靜默失敗),d1/d2/d5/d6 四條決策全部翻案;本節不再替它背書。★
+
+## 問題(有症狀、有數字、有消費者)
+
+**症狀**:任何一個 session 都答不出「這件實作做到哪一步了」。
+
+**當場量到的數字(2026-09-07)**:
+
+| 量到什麼 | 數字 |
+|---|---|
+| Projects 標「進行中」 vs 超過 30 天沒動 | **46 篇 / 其中 17 篇**(★快照 2026-09-07 傍晚;原稿寫 43 是當天稍早的量測,差的 3 篇是同日新增、含本篇自己★。「17 篇」前掃機械重算吻合) |
+| 一篇 `status: done` 的實作計畫,裡面的勾選框 | **60 個框,0 個打勾**(12 任務 × 5 步驟,全是實作步驟不是驗收清單) |
+| 另一篇實作計畫的勾選框 | **39 個框,全部打勾** |
+| [[Projects/全repo審視_計劃]] 的 50 群主清單 | **沒有「做完沒」這一欄**;進度靠翻提交訊息回推 |
+| 近 120 筆提交帶項目編號的 | **6 筆**(而且全部集中在那份有編號的主清單上) |
+
+★第二、三列並列才是重點★:同一個 repo、同一種格式,**有人維護有人不維護,而沒有任何東西會知道差別**。
+
+**消費者**:①接手的 session(現在只能讀散文猜)②Enzo 本人(問「做到哪」要人回答)③無人自跑的迴圈(未來)。
+
+## 根因:完成與記錄是兩件事
+
+- **審查迴圈為什麼準**:★「完成一輪」和「記下一輪」是**同一個動作**★——那筆帳本身就是工作成果。不可能做了沒記,也不可能記了沒做。
+- **實作為什麼歪**:工作成果是程式碼,記錄是另外去勾一個框。**兩件事分開就一定會漂**;那 60 個沒勾的框就是這樣來的。
+
+**所以本案不是「做一個進度追蹤器」,是「讓完成那個動作自己留下紀錄」。**
+
+## ★血緣:v1 → v2 → v3 → v4(三次重寫;第二、三次 Enzo 攤人裁;v3 死後編排者建議停案,Enzo 裁「我要解這個問題」)★
+
+| 版 | 做法 | 死因(一句,附卷證) |
+|---|---|---|
+| v1 | 提交掛 trailer + 讀 CI | 載體靜默丟資料(squash/revert/格式/夾帶;CI 綁 push 頂端)。`governance/review-reports/進度從提交推導/` |
+| v2 | 當場跑計劃宣告的測試 | 載體不為此設計(單檔寫到一半癱瘓/撞名 664 支裡 95 對/skip 靜默變綠/單測 132 秒/蓋推送閘 test-cache)。`…-v2/` |
+| v3 | PostToolUse hook 記改檔事件 | ★Edit/Write 只佔本 repo 改檔呼叫個位數%(邊界席實測 886 vs 43,481)/檔案路徑對 `scripts/lumos` 不分辨(★150 篇,v3 接手/正確性席各自實查;原稿誤寫 126——那是 spec-trace 未使用篇數,兩個數字混了★)/活動不攜帶意圖★。`…-v3/` |
+| **v4** | **agent 明確記意圖 + 工具量事實 + 收工 hook 當入口** | (待審) |
+
+★三版共同錯誤(d9)★:都在**從副產品推導**任務狀態。而唯一會動的審查帳**也是 agent 自報**——它不爛,不是因為誰在記,是因為①寫入時驗證證據(雜湊讀不回拒寫)②它是往下走的唯一入口(不記帳 `loop next` 不答)。**勾選框兩者都沒有。**
+
+## v4 核心:agent 給意圖,工具給事實,入口逼你記
+
+> **改了 code 的那一輪要結束時,既有的收工 hook 會擋一次(今天已擋過編排者)。v4 讓它多要一件事:這輪掛到哪個計劃的哪個任務——`lumos task record <計劃> <任務>`。agent 只填這兩個(意圖,runtime 永遠給不了的東西);工具自己填 session、時間、這輪改動的檔(從 git diff 量),並驗你指的計劃與任務真的存在。帳 append-only、版控。`lumos task next <計劃>` 只讀帳+計劃,列出每個任務最後誰動、何時、改了哪些檔;沒帳的明說沒帳;★不判完成★。**
+
+**為什麼 v3 的三個死因一個不踩**:
+| v3 死因 | v4 |
+|---|---|
+| Edit/Write 只佔改檔呼叫個位數% | 改動檔從 **git diff HEAD** 量——★前掃推翻原稿「既有第二條腿」:那條腿只在圖譜已動過的分支被呼叫、不參與改碼判斷★(見 d11 與 [[Issues/收工閘漏掉純Bash改碼]])。v4 要**重佈線成 git 優先**,才真的不管怎麼改都看得到 |
+| 檔案路徑對主程式不分辨 | 鍵是「計劃+任務」,**由 agent 說**;檔案只是附帶事實 |
+| 活動不攜帶意圖 | **意圖就是 agent 填的那兩個欄位** |
+| 帳 gitignore→worktree/跨機不共享 | 帳走版控(docs/.task-log.jsonl(★本案新建,尚不存在★),同 `.canary-log.jsonl`) |
+
+## 已驗過的地基(2026-09-07 實查;★這次先驗再寫★)
+
+- **入口存在且真的擋**:`check-graph-sync.py` 掛在 Stop,改了 code 沒動筆記→回 `decision:block`(`:9`,`:483`)。★擋一次=**每 session 一次**★(`:553` 標記檔 `~/.cache/lumos/stop-block/<session>`,O_CREAT|O_EXCL,7 天後才 lazy 清)——同 session 之後每輪違規**全靜默**(stderr 模型看不到)。★所以 v4 的「沒 task record→擋」**不能共用這顆標記**,要有自己的;每 session 一次還是每輪一次,待裁★。「編排者當日被擋過一次」★無可稽核留痕★——標記檔不進任何治理帳,只有自陳。
+- ~~偵測「改了 code」兩條腿~~ → ★**前掃推翻(地基級)**★:閘門 1/2 的 src_files **只**來自逐字稿(`:196` Edit/Write/MultiEdit + `:74-77` Bash 的 rm/mv/cp/git rm/git mv 五種);`impact --diff HEAD`(`:468`)**只在圖譜已被動過的分支**被呼叫、用途是列缺筆記,**從不參與「改了 code 沒」的判斷**;純 Bash 改碼在閘門 2 就 `return 0` 且不印任何東西;逐字稿認不得時(`:116`)是**整支略過**,不是退回 git。→ **既有閘本來就漏純 Bash 改碼**,立 [[Issues/收工閘漏掉純Bash改碼]]。★v4 的 [S2] 改為 git 優先重佈線(d11)★。
+- ★行號警告★:上列是安裝版(`~/.claude/hooks/`,703 行);repo 源檔 `scripts/hooks/claude/check-graph-sync.py`(835 行,錨點認證的那份)自 `:468` 起後移 132 行(多一段 `_trusted_lumos`,當日補、尚未 install)。**實作對源檔,行號重查。**
+- **payload 有 `session_id`**(`:679`)。
+- **逃生句是 honor**(`:580`「或一句話說明為什麼這次不用」)——既有契約,v4 不加嚴也不放寬。
+- **Codex 側 Stop hook 已適配**——★前掃精修:第三條驗的是**非阻擋的 stderr 提醒路徑**,且是離線重播真 payload、不是重跑 codex exec;`decision:block` 後 Codex 會不會續做**完全沒驗**★。→ v4 第一版**只承諾 Claude 側入口**;Codex block→續做列為前置驗,驗過才宣稱兩家。
+- **既有 CLI 寫入偵測只認 `obsidian`**(`:302`)。~~同函式加認 lumos task record~~ → ★前掃推翻★:它唯一的呼叫點 `:628` 是 `if graph_touched_via_edit or touched_graph_via_cli(...)`,語意固定=「圖譜動過就不印缺筆記提醒」;若讓 `task record` 也回 True,**既有的筆記提醒會被連帶吃掉**。→ v4 另寫 `recorded_task_via_cli()` 與獨立分支,不碰那個 OR。
+- **`_ledger_append` 無 O_CREAT**(v3 三席);`rel_cascade_create()` 用 `O_CREAT|O_EXCL` 建檔(`scripts/lumos:10414`)——v4 建檔照後者,追加照前者。★前掃補:`rel_cascade_create` 建檔會先寫一筆 `event:header`,canary-log 沒有 header★→ **v4 裁:不寫 header**(照 canary-log,每行都是真資料;首筆就是第一筆 task 記錄)。
+- **`_BOOKKEEPING_FILES`**(`scripts/lumos:14128`)常數名對,兩個消費者(pitfalls 排除 `:12086`、code-loop 豁免 `:15672`)直接引用,加一個字串即生效。
+- **`check-graph-sync.py` 在 `ANCHOR_FILES`**(`scripts/lumos:12897`,2026-09-07 anchor-approve 補進四支之一)→ ★v4 改它必走 `anchor approve`★。
+
+## 設計
+
+### [S1] `lumos task record <計劃節點> <任務標記> [--note 一句]`(寫側)
+- **agent 給**:計劃節點、任務標記(自由文字,但★必須在該節點正文裡找得到★——Check J「拒絕發明」用在任務層)、可選一句備註。
+- **工具給**:`session_id`(從環境/hook payload)、`ts`、`files`(`git diff --name-only HEAD` 當下結果)、`head_sha`。
+- **驗**:節點存在;任務標記在節點文字中存在(否則 rc2 擋下並列出該節點有哪些 `### Task`/`[SN]`/`T\d` 樣式的標記);`files` 非空(空=這輪沒改東西,拒記並說明)。
+- **寫**:docs/.task-log.jsonl(★本案新建,尚不存在★),首次 `O_CREAT|O_EXCL` 建檔(照 `rel_cascade_create`),之後 `_ledger_append`。★readback 自驗★(照 canary record 合約)。
+
+### [S2] 收工 hook 多要一件事(入口)
+- ★**先重佈線偵測(d11)**★:閘門 1/2 的 src_files 改由 `git diff --name-only HEAD` 過 `is_code_file` 取得;逐字稿腿保留為輔(判哪些 Bash 是這輪的)。**這一步同時修掉既有閘漏純 Bash 改碼的洞**([[Issues/收工閘漏掉純Bash改碼]]),是修既有洞不是擴範圍。
+- 再加第二個條件:**改了 code 且這輪沒有 `lumos task record`→擋**,訊息三段式:發生什麼(這輪改了 N 個檔沒掛任務)→為何在意(下一個接手的 session 會看不到)→指令獨立一行。
+- 偵測「有沒有 record」:**另寫** `recorded_task_via_cli(bash_commands)`,在 `main()` 開獨立分支,不碰 `:628` 那個 OR。
+- ★自己的擋一次標記★(不共用 `_stop_mark`);每 session 一次 vs 每輪一次待裁。
+- ★改這支 hook 走 `anchor approve`★。
+- 逃生:一句話「這輪不是任務工作」→放行(同既有 honor 契約)。**擋一次,不重複擋**(同 `_stop_mark`)。
+- ★fail-open 照既有三態★:逐字稿認不得→略過本 session(既有行為,不改)。
+
+### [S3] `lumos task next <計劃節點>`(讀側=入口的另一半)
+- 列該節點所有任務標記;每個:最後一筆帳的 session/ts/距今/files,或「**沒帳**」。
+- ★不判完成★、不排序、不猜下一個——「next」的意思是「接手的人看這張表自己選」。
+- 唯讀 rc 恆 0、`--json`、壞行走 stderr 三段式(完整搬 `loop list` 那套,不是只搬 rc0)。
+- **進場提示**:SessionStart hook 進場訊息加一行「接手先敲 `lumos task next <計劃>`」(照「第一刀是 lumos」那句的形狀)——這是讀側的消費入口,回應三輪「唯讀無人用」。
+
+### [S4] 帳本
+- docs/.task-log.jsonl(★本案新建,尚不存在★),**版控**(同 canary-log),append-only。
+- 一筆:`{ts, session_id, plan, task, files[], head_sha, note?}`。**不記 diff 內容**。
+- 加進 `_BOOKKEEPING_FILES` 白名單(code-loop pass 自失效豁免那份),否則每次記帳讓 pass 失效。
+
+## 範圍刀(明確不做)
+- **不判完成**——歸 d3 推送閘。
+- **不做依賴、不做認領租約、不建任務圖**。
+- **不新增偵測改動的機制**——只用收工 hook 既有兩條腿。
+- **不強制**——擋一次+逃生句,同既有契約。
+- **不記內容**。
+
+## ★誠實天花板★
+- **強制力只有入口**:agent 說「這輪不是任務工作」就放行,跟既有 graph-sync 同一個 honor 層。★所以 v4 的成敗=「不記就問不到下一步」有沒有真的讓人記——這要量:上線後 N 輪裡有多少輪走逃生句★。
+- **任務標記格式不統一**(74/83/73 三種切法都量過):[S1] 只驗「在節點文字裡找得到」,不統一格式;格式治理另案。
+- **一輪改多個任務**:一輪只記一筆會壓扁;允許同輪多筆,但 hook 只要求≥1 筆。
+- **files 是 git diff HEAD 的快照**:未 stage 也算;但若 agent 中途 commit 了,HEAD 已前進,files 會漏掉已提交的那部分——★要用 `--since <上一筆的 head_sha>` 補,設計審請打★。
+- **Bash 改檔看得到,但「這輪」的邊界靠逐字稿**(哪些 Bash 是這輪的):逐字稿認不得時整輪略過(既有行為)。
+
+## 實務隱患(pitfalls 反問逐類答;命中類 self-governance)
+
+**[self-governance] 誤擋的逃生口?** 一句話「這輪不是任務工作」→放行;同 session 只擋一次(`_stop_mark`)。**跟既有 graph-sync 閘完全同一個逃生口,不加嚴不放寬。**
+**[self-governance] 繞過有沒有留痕?** ★既有 graph-sync 的逃生是純 honor、**不留痕**★。v4 **多做一件事**:逃生句也往帳記一筆 `{session, ts, event:"skip", reason}`——不然「N 輪裡多少輪走逃生」(誠實天花板裡本案自己說要量的成敗指標)根本量不到。★留痕不改變它是 honor 的事實(可以說謊),只讓「說了幾次」可數;這也是對 v3 外家 F4「無消費入口」的回答:逃生率是可量的健康指標,doctor 可以喊★。
+
+**併發**:兩 session 同時 `task record`→各自一筆 append;POSIX 下 `O_APPEND`+單次 write(≤4KB)保證行不交錯。★v3 邊界席已指出 `_ledger_append` 合約明寫「預期單寫者、Windows best-effort」★——v4 直接承認:多 session 同寫在 POSIX 靠 O_APPEND 原子性,**Windows 為 best-effort**,不裝作解了。同一 session 同輪多筆:允許。
+**效能**:寫側一次 `git diff --name-only HEAD`(毫秒級);讀側 `task next` 讀整本帳。★量級遠小於 v3★:v3 是每次改檔一筆,v4 是每個「改了 code 的輪次」最多幾筆(治理帳 425 筆/天是所有閘事件,task-log 只會更少)。輪替先不做;REVISIT:帳超過 5 萬行時回頭做輪替(doctor 可數)。
+**資源**:無長連線、無鎖;寫入照 `_ledger_append` 開 fd 即寫即關。git diff 子行程有既有 timeout 慣例可抄(`_lens_git`)。
+**其他風險類逐答**:金流無/對外寄送無(帳只落本機檔)/不可逆★無★——append-only 且版控,誤記可 revert 或補一筆 `event:"void"`(不改舊行)/認證無/快取無/遷移無(新檔)/限流無/**PII**:記 session_id 與檔路徑,不含內容;session_id 可對回本機逐字稿,逐字稿本已在本機,不新增外洩面/★**狀態同步:有**★——帳版控後多機靠 git 同步,兩邊各 append 同檔的合併通常自動(canary-log 已是前例),衝突時人裁;/★**守衛面:有**★——本案改的是治理 hook 本身(`check-graph-sync.py`)。★前置驗:該 hook 是否在 `ANCHOR_FILES`;是則改它必走 `anchor approve` 留痕,不得繞★(v3 沒答這題)。
+
+## 待裁(留給設計審)
+- 任務標記找不到時,是擋(rc2)還是允許記「未對應任務」?後者會不會變成新的逃生口。
+- 同一輪既動 code 又動筆記但沒記任務——兩個擋合併成一次還是各擋一次。
+- `task next` 要不要順便印該計劃的 `spec-trace`(條款認領)——兩本帳一次看。
+
+## 驗收線
+- **session 中斷模擬**:A session 改三個檔、記一筆、結束;B session 只跑 `lumos task next` 就知道 A 停在哪個任務、動了哪些檔、多久前。
+- **入口真的擋**:改 code 不記→收工被擋一次,訊息含 `lumos task record` 獨立行;記了→放行;說逃生句→放行;同 session 不二擋。
+- **拒絕發明**:記一個節點裡不存在的任務標記→rc2 並列出該節點有的標記。
+- **★Bash 改檔算數(這條是 v4 的載重驗收)★**:用 `sed -i` 改檔的一輪,不記→照樣被擋——**現況做不到**(閘門 2 靜默放行),要靠 d11 重佈線後才成立;先寫翻紅測試證明現況漏、再重佈線翻綠。
+- **首筆建檔**:帳不存在時第一筆成功寫入且 readback 得到(釘 v3 的 O_CREAT 洞)。
+- **code-loop pass 不因記帳失效**(白名單釘)。
+- fixture ★用真的 `lumos task record` 產帳,不手刻★。
+
+## 審計修正紀錄
+
+- **v1 r1(2026-09-07,5 席)**:去重 9 群/blocking 6 群/★兩條地基裁決被打穿(識別碼粒度、判準論證)→ Enzo 裁整份重寫★。卷證 `governance/review-reports/進度從提交推導/`
+- **v2 r1(2026-09-07,5 席)**:blocking 5 席全 blocker/★共同根=拿 test_lumos.py 當即時查詢後端(壞檔窗口 3 席、撞名 95 對 3 席、skip 假綠 2 席、蓋推送閘快取本家實測)→ Enzo 攤人裁第二次重寫★。卷證 `…-v2/`(★三席報告與記帳為事後補,當輪漏做,v3 接手席 F-hnd-7 抓到★)
+- **v3 r1(2026-09-07,5 席)**:5 席全 blocker/去重 13 群/★論點層級被打穿三處,不是規格不全★。卷證 `…-v3/`
+
+### ★v3 r1 判決:不收斂,且不建議 v4——編排者建議停案,攤 Enzo★
+
+**規格不全類(可寫補)**:安裝線沒寫(架構)、CLI 位置第三次沒答(架構)、`_ledger_append` 無 O_CREAT 首筆拋錯被 fail-open 吞→帳永遠沒啟動(★3 席獨立,正確性現場複現★)、且其合約明寫「預期單寫者、Windows best-effort」與多 session 同寫矛盾(邊界)、輪替讀側競態與 1000 萬行重播 17 秒/5.4GB 無上限(2 席)、append 序 vs ts 未定(repo 已有定論未抄)、子代理共用 session_id 只多 agent_id 而 schema 沒收(邊界查官方文件)、repo 外路徑/symlink/rename/大小寫四類邊界未定、PostToolUse 失敗路徑未驗、d2 是 v2 殘留(2 席)。
+
+**★論點層級(寫補救不了)★**:
+1. **覆蓋率**:邊界席實測本 repo 1760 份 session 逐字稿——Edit/Write/MultiEdit 共 **886** 次,Bash **43,481** 次、其中保守抓 **≥13,712** 次疑似改檔。★[S1] 只掛前者=對本 repo 改檔類呼叫的個位數百分比★;而擴到 Bash 就得解析指令字串猜改了什麼=重新引入 v3 宣稱已消滅的解釋層。
+2. **鍵太粗**:檔案路徑對本 repo 最重要的那支檔不分辨——`scripts/lumos` 直接連 150 篇(v3 接手/正確性席各自實查;★原稿誤寫 126,那是 spec-trace 未使用篇數★),派工鏡頭的 40 篇門檻註解原話「單檔 CLI、總測試檔=太泛,整檔略過」;正確性席對本計劃實跑抽取★淨抽出零個 v3 現行設計的可用檔★(4 席獨立命中同區)。
+3. **輸出太淺 + 仍是代理物**:「最後誰動了哪個檔」不攜帶意圖與步驟深度——12 步停在第 7 步與停在第 1 步帳上同形(接手/外家獨立);「工具成功返回」≠「位元組改變」(Write 原樣寫回、Edit 替換等於原文都留「動過」)(外家);單 session 情境 `git diff` 已比帳本豐富(接手)。
+4. **無消費入口**:讀側仍待裁;前例 spec-trace 158 篇 126 篇從未使用(v2→v3 兩輪外家/接手獨立指出)。
+
+**三版共同教訓(這才是這個案子的產出)**:三種載體(提交/測試/hook 事件)各自被量出在本 repo 丟掉大部分訊號;★任務粒度的「做到哪」在這裡沒有誠實的機器來源★——意圖是唯一沒有任何 runtime 會記的東西。已經答得好的:審查迴圈(帳本)、功能級完成(推送閘)、「什麼變了」(git diff)。
+
+**外家提的第六條路(唯一留作候選,不開 v4)**:★無帳本的唯讀接手視圖★——重用 dispatch-lens 取計劃檔(要先修 5 檔上限與前綴 regex),直接顯示 `git status`、diff 摘要、相關提交;★輸出可驗證的「現在有哪些內容變了」,不宣稱 session、任務進度或完成★。它比 v3 小,而且不引入任何新狀態。要不要立為 Issue 或小案,Enzo 裁。
+
+★2026-09-07 Enzo 推翻停案建議(「難道無法解決?」「我要解這個問題,你的目標就是這個」)→ 編排者承認三版都在同一軸挖洞(從副產品推導),轉軸為「agent 明確記+工具驗+入口逼」= v4,見 d9/d10。上面那條回頭條件作廢:★
+~~REVISIT:2026-10-07 若一個月內再出現一次「session 中斷後接手撞牆」的實例(記進 [[Issues/同工作區多session並行改動]]),回頭看第六條路要不要做;沒有實例=本案停案成立。

@@ -20186,9 +20186,12 @@ def t_docs_command_count():
     # review-reports/ 是 loop 留痕(席報告/快照的 sha256 記在 canary 帳,disposal/panel 閘會重驗——
     # 回改=打斷留痕驗證,實錘:2026-08-25 62→63 時兩份舊席報告已被帳綁死);audits/ 是審計當下的證據快照。
     # 兩者與外審歸檔同性質:歷史不得回改,命令數過期屬正常。
+    # ★.claude/worktrees/ 要排掉★(2026-09-08):同工作區裡開的 git worktree 會在 repo 目錄底下
+    # 放一整份副本,rglob 掃到它就把「另一條分支的舊文件」當成本 repo 的文件來對帳,
+    # 合併當下這支必紅——而那不是漂移,是掃錯地方。
     skip = ("governance/external-reviews/", "governance/golden/", "governance/l4-audit/",
             "governance/review-reports/", "governance/audits/",
-            "-knowledge/", "/.git/", "node_modules/")
+            "-knowledge/", "/.git/", "node_modules/", ".claude/worktrees/")
     scanned = 0
     for p in sorted(root.rglob("*.md")):
         rel = p.relative_to(root).as_posix()
@@ -30301,6 +30304,50 @@ def t_gate_event_silent_when_repo_has_no_ledger():
     print("  ✓ t_gate_event_silent_when_repo_has_no_ledger")
 
 
+def t_installed_hook_copy_really_records_events():
+    """★用真的安裝流程裝進隔離家目錄,跑安裝副本,事件檔要長出來★(2026-09-08 r1 通才席)。
+
+    通才席的原話:來源樹的測試「從沒測過裝到 ~/.claude/hooks/ 之後 import 得不得到——
+    來源樹全綠,安裝副本全死,測試看不見這個落差」。我第一版的守衛只驗複製清單,
+    仍然是「看清單」不是「看安裝」。★這一支就是那個落差本身★:
+    HOME 指到暫存目錄 → 跑真的 `lumos install` → 跑安裝出來的那支 hook → 事件檔必須出現。
+
+    另外釘一件今天實測到的:在 Lumos 來源 repo 自己身上跑 `init --force` 會★刻意跳過 hook 安裝★
+    (它印「當前就是來源本身,跳過 vendor/hooks」)——所以部署 hook 的指令是 `lumos install`,
+    這一支走的就是它。
+    """
+    import shutil as _sh, tempfile as _tf, subprocess as _sp, os as _os, json as _j
+    _need_src("scripts/lumos", "scripts/hooks/claude/_hookevent.py")
+    lumos = Path(GRAPHCTL).resolve()
+    home = Path(_tf.mkdtemp(prefix="gctl-inst-home-"))
+    repo = Path(_tf.mkdtemp(prefix="gctl-inst-repo-"))
+    try:
+        env = dict(_os.environ); env["HOME"] = str(home); env.pop("LUMOS_PROBE", None)
+        r = _sp.run([sys.executable, str(lumos), "install"], capture_output=True, text=True,
+                    env=env, timeout=600, cwd=str(lumos.parent.parent))
+        hooks = home / ".claude" / "hooks"
+        check("★前置★ 真的裝進了隔離家目錄", (hooks / "lumos-entry-hook.py").exists(),
+              r.stdout[-400:] + r.stderr[-400:])
+        check("★共用模組要一起被裝過去★(來源樹綠、安裝副本死的那個洞)",
+              (hooks / "_hookevent.py").exists(), str(sorted(x.name for x in hooks.glob("*.py"))))
+        # 跑安裝出來的那支 hook(不是來源樹那支),在一個 git repo 裡
+        _sp.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+        r2 = _sp.run([sys.executable, str(hooks / "lumos-entry-hook.py"), "--budget", "10"],
+                     input=_j.dumps({"cwd": str(repo)}), capture_output=True, text=True,
+                     env=env, cwd=str(repo), timeout=120)
+        check("★安裝副本跑得動★", r2.returncode == 0, r2.stderr[-300:])
+        ev = repo / "governance" / "runtime" / "hook-events.jsonl"
+        check("★安裝副本跑完要留下事件★(沒留=import 失敗被靜靜吞掉)", ev.exists(),
+              "事件檔沒長出來;stderr=" + r2.stderr[-300:])
+        if ev.exists():
+            rows = [_j.loads(l) for l in ev.read_text(encoding="utf-8").splitlines() if l.strip()]
+            check("★事件是 ok,而且來自安裝副本的指紋★",
+                  rows and rows[-1]["kind"] == "ok" and rows[-1].get("fp"), str(rows[-1:]))
+    finally:
+        _sh.rmtree(home, ignore_errors=True); _sh.rmtree(repo, ignore_errors=True)
+    print("  ✓ t_installed_hook_copy_really_records_events")
+
+
 def t_installed_hooks_bring_their_local_imports():
     """★被複製的 hook 所 import 的本地模組,也必須在複製清單裡★(2026-09-08 r1 外家席 blocker)。
 
@@ -31673,6 +31720,404 @@ def t_loop_list_open_loops():
         check("★壞行不得靜默★", "讀不動" in r.stderr or "跳過" in r.stderr, r.stderr)
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+
+def t_handoff_view():
+    """`lumos handoff <計劃節點>`:唯讀接手視圖(Projects/接手視圖_計劃 的驗收線)。
+
+    不造任何新帳,只把三個既有可信來源讀成一張接手用的表:
+      ①計劃點名的程式檔(重用派工鏡頭的路徑正則,★無 5 檔上限★——第 6 個以後也要在);
+      ②每檔 git 狀態:乾淨/已改/未追蹤/已刪(★用 git status --porcelain,不用 diff HEAD——後者看不到
+        untracked,是 進度從提交推導 v4 的死因之一★)+ 最後一次提交;
+      ③逐字稿尾端當「意圖線索」:最後一輪動過的檔與跑過的指令(重用收工 hook 的解析器,不重寫)
+        + 使用者最後一句★人話★(系統塞的任務通知 / 壓縮摘要 / meta 提醒都不算人話)。
+    逐字稿缺/空/壞/版本認不得 → 「意圖不可得(原因)」且 rc 仍 0(fail-open:這是查詢不是閘)。
+    ★不印進度、不印完成、不猜做到第幾步★(誠實天花板:線索不是狀態)。"""
+    import json as _j
+    import os as _os
+    import re as _re
+    import shutil
+    import subprocess as _sp
+    import time as _time
+
+    # ★2026-09-07 從真逐字稿截下來的七種行(Claude Code 2.1.263 / 2.1.238;session 9d19b273… / e23fcdc0… / dd1cfb7c…),
+    # 結構原封不動、長字串截短——fixture 的形狀來自真檔,不手刻(同檔 t_loop_list_open_loops 的教訓:
+    # 手刻的形狀現實中不存在 → 測試綠、功能死)。要換版本先重截。★
+    _REAL = {
+        "title": '{"type": "custom-title", "customTitle": "Basic Optimization", "sessionId": "9d19b273-e844-45fc-a4df-6b46743d3415"}',
+        # 人打的:有 promptId、沒有 promptSource / isMeta / isCompactSummary
+        "human": '{"parentUuid": "b7a79337-5014-4203-a743-c3a19c803fdb", "isSidechain": false, "promptId": "69ed8a9e-2a45-4bb9-911a-ead00d5790c5", "type": "user", "message": {"role": "user", "content": "/compact"}, "uuid": "f57141da-b40c-46c8-9b28-de45b0e222e3", "timestamp": "2026-08-24T12:05:38.006Z", "userType": "external", "entrypoint": "cli", "cwd": "/Users/enzo/harness/lumos-toolchain", "sessionId": "dd1cfb7c-d0fe-47bf-bf9f-47bd0802cb5e", "version": "2.1.238", "gitBranch": "main", "slug": "cosmic-wobbling-sunrise"}',
+        # 系統塞的任務通知:promptSource=system(hook 把它當輪次邊界,但它不是人話)
+        "sys": '{"parentUuid": "187bfaae-f644-4638-995d-09dfcbb878f0", "isSidechain": false, "type": "user", "message": {"role": "user", "content": "<task-notification>\\n<task-id>a14e2b1541014caf6</…"}, "uuid": "98411f33-0215-4e99-b943-e65817717e8b", "timestamp": "2026-09-07T02:43:53.089Z", "permissionMode": "bypassPermissions", "origin": {"kind": "task-notification"}, "promptSource": "system", "queueSkipAttachments": true, "userType": "external", "entrypoint": "cli", "cwd": "/Users/enzo/harness/lumos-toolchain", "sessionId": "9d19b273-e844-45fc-a4df-6b46743d3415", "version": "2.1.263", "gitBranch": "main", "sessionKind": "bg"}',
+        # 系統提醒:isMeta=true
+        "meta": '{"parentUuid": "32ac71fa-0e5b-4def-b3b4-0e68b8e1a3fc", "isSidechain": false, "type": "user", "message": {"role": "user", "content": "<system-reminder>\\nThe user named this session \\"B…"}, "isMeta": true, "uuid": "b24eeef8-f908-4c65-9990-35d30f25934b", "timestamp": "2026-09-07T03:17:00.233Z", "userType": "external", "entrypoint": "cli", "cwd": "/Users/enzo/harness/lumos-toolchain", "sessionId": "9d19b273-e844-45fc-a4df-6b46743d3415", "version": "2.1.263", "gitBranch": "main", "sessionKind": "bg"}',
+        "bash": '{"parentUuid": "8b791aa0-9ce1-4903-8dac-65b7568377ee", "isSidechain": false, "message": {"model": "claude-opus-5", "id": "msg_011CenvMyQ6AhnSLesRzevZc", "type": "message", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01DrPGjHf2fMmjW3NQaB3m5M", "name": "Bash", "input": {"command": "cd /Users/enzo/harness/lumos-toolchain\\nD=governa…", "description": "Save seat reports and quote-check"}, "caller": {"type": "direct"}}], "stop_reason": "tool_use", "stop_sequence": null, "stop_details": null, "usage": {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0, "output_tokens_details": {"thinking_tokens": 0}, "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0}, "service_tier": "standard", "cache_creation": {"ephemeral_1h_input_tokens": 685, "ephemeral_5m_input_tokens": 0}, "inference_geo": "not_available", "iterations": [{"input_tokens": 2, "output_tokens": 2560, "cache_read_input_tokens": 965620, "cache_creation_input_tokens": 685, "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 685}, "type": "message"}], "speed": "standard"}, "diagnostics": null}, "apiBlockIndex": 1, "requestId": "req_011CenvMs7ZaWVj71p7VJLWC", "type": "assistant", "uuid": "86ed01d3-aeb9-4b53-be1c-b541818f9611", "timestamp": "2026-09-06T21:48:11.501Z", "effort": "high", "session_id": "1eeb5654-5918-4030-95d1-6723f6b0923f", "userType": "external", "entrypoint": "cli", "cwd": "/Users/enzo/harness/lumos-toolchain", "sessionId": "9d19b273-e844-45fc-a4df-6b46743d3415", "version": "2.1.263", "gitBranch": "main", "sessionKind": "bg"}',
+        "result": '{"parentUuid": "86ed01d3-aeb9-4b53-be1c-b541818f9611", "isSidechain": false, "type": "user", "message": {"role": "user", "content": [{"tool_use_id": "toolu_01DrPGjHf2fMmjW3NQaB3m5M", "type": "tool_result", "content": "r1-通才: ✅ 全數錨定:報告裡每句引言都能在凍結快照找到原文(比對時忽略粗體、反引號和空白差…", "is_error": false}]}, "uuid": "3da261d7-54e8-4a47-80d8-39015cb83e85", "timestamp": "2026-09-06T21:48:12.267Z", "toolUseResult": {"stdout": "r1-通才: ✅ 全數錨定:報告裡每句引言都能在凍結快照找到原文(比對時忽略粗體、反引號和空白差…", "stderr": "", "interrupted": false, "isImage": false, "noOutputExpected": false}, "sourceToolAssistantUUID": "86ed01d3-aeb9-4b53-be1c-b541818f9611", "session_id": "1eeb5654-5918-4030-95d1-6723f6b0923f", "userType": "external", "entrypoint": "cli", "cwd": "/Users/enzo/harness/lumos-toolchain", "sessionId": "9d19b273-e844-45fc-a4df-6b46743d3415", "version": "2.1.263", "gitBranch": "main", "sessionKind": "bg"}',
+        "edit": '{"parentUuid": "8bf9f620-5c5a-4f2b-b7b5-ae099e9289a5", "isSidechain": false, "message": {"model": "claude-opus-5", "id": "msg_011CeohLQa6c52VCQ5CdEJRr", "type": "message", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_014bGbAN3P4TgTSpoSiRYWev", "name": "Edit", "input": {"replace_all": false, "file_path": "/Users/enzo/harness/lumos-toolchain/assets/loop-…", "old_string": "             keyTimes=\\"0;0.29;0.5;0.41;0.45;0.78…", "new_string": "             keyTimes=\\"0;0.29;0.32;0.41;0.45;0.7…"}, "caller": {"type": "direct"}}], "stop_reason": "tool_use", "stop_sequence": null, "stop_details": null, "usage": {"input_tokens": 2, "cache_creation_input_tokens": 7017, "cache_read_input_tokens": 294763, "output_tokens": 530, "output_tokens_details": {"thinking_tokens": 267}, "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0}, "service_tier": "standard", "cache_creation": {"ephemeral_1h_input_tokens": 7017, "ephemeral_5m_input_tokens": 0}, "inference_geo": "not_available", "iterations": [{"input_tokens": 2, "output_tokens": 530, "cache_read_input_tokens": 294763, "cache_creation_input_tokens": 7017, "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 7017}, "type": "message"}], "speed": "standard"}, "diagnostics": null}, "apiBlockIndex": 2, "requestId": "req_011CeohLMFRLPqks1BUVdhWu", "type": "assistant", "uuid": "1a3ce1a3-68af-4069-a0fd-6396819f4d68", "timestamp": "2026-09-07T07:37:21.837Z", "effort": "xhigh", "session_id": "e23fcdc0-102b-40e0-ab76-5ea3c0bc1608", "userType": "external", "entrypoint": "cli", "cwd": "/Users/enzo/harness/lumos-toolchain", "sessionId": "e23fcdc0-102b-40e0-ab76-5ea3c0bc1608", "version": "2.1.263", "gitBranch": "main"}',
+    }
+
+    def L(kind, text=None, cmd=None, fp=None):
+        """拿真行改語意欄位(內容/指令/檔路徑),結構不動。"""
+        o = _j.loads(_REAL[kind])
+        if text is not None:
+            o["message"]["content"] = text
+        if cmd is not None:
+            o["message"]["content"][0]["input"]["command"] = cmd
+        if fp is not None:
+            o["message"]["content"][0]["input"]["file_path"] = fp
+        return _j.dumps(o, ensure_ascii=False)
+
+    root = Path(tempfile.mkdtemp(prefix="gctl-handoff-")).resolve()
+    vault = root / "docs" / "kg"
+    (vault / "Projects").mkdir(parents=True)
+    (vault / "MOC").mkdir()
+    (vault / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
+
+    def git(*a):
+        return _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                       cwd=str(root), capture_output=True, text=True)
+
+    git("init", "-q")
+    (root / "scripts").mkdir()
+    for i in range(1, 7):
+        (root / "scripts" / f"f{i}.py").write_text(f"# f{i}\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "init six files")
+    (root / "scripts" / "f2.py").write_text("# f2 changed\n", encoding="utf-8")           # 已改(沒 staged)
+    (root / "scripts" / "f3.py").write_text("# f3 staged\n", encoding="utf-8")            # 已改(staged)
+    git("add", "scripts/f3.py")
+    (root / "scripts" / "f5.py").unlink()                                                 # 已刪(還在 index)
+    (root / "scripts" / "f7.py").write_text("# brand new\n", encoding="utf-8")            # 未追蹤
+    (root / "scripts" / "newdir").mkdir()
+    (root / "scripts" / "newdir" / "n8.py").write_text("# nested new\n", encoding="utf-8")  # 未追蹤且在未追蹤目錄裡
+    git("mv", "scripts/f6.py", "scripts/f6b.py")                                            # 已改名(rename 在 index;r1 外家順帶抓到沒測)
+    (root / "scripts" / "資料 處理.py").write_text("# cjk + space\n", encoding="utf-8")       # 未追蹤;路徑有空白與中文(r1 外家 #4)
+
+    plan = vault / "Projects" / "p_計劃.md"
+    plan.write_text(
+        "---\ntype: project\nstatus: doing\n---\n# p_計劃\n\n"
+        "點名八個檔:scripts/f1.py、scripts/f2.py、scripts/f3.py、scripts/f4.py、scripts/f5.py、scripts/f6.py、"
+        "scripts/f7.py、scripts/newdir/n8.py。\n"
+        "不存在的:scripts/ghost.py。筆記不算:scripts/readme.md。穿越不收:scripts/../../etc/passwd。\n"
+        "反引號裡的路徑不限字元:`scripts/資料 處理.py`;反引號裡的筆記照樣不算:`scripts/x.md`。\n",
+        encoding="utf-8")
+
+    def transcript(lines):
+        p = root / f"t{_time.monotonic_ns()}.jsonl"
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return p
+
+    f1 = str(root / "scripts" / "f1.py")
+    f2 = str(root / "scripts" / "f2.py")
+    # 兩輪:第一輪動 f1;中間夾系統提醒與任務通知;最後一輪(人話「把 f2 的註解改掉」)動 f2
+    t_ok = transcript([
+        _REAL["title"],
+        L("human", text="先看 f1"),
+        L("bash", cmd="cat scripts/f1.py"), _REAL["result"],
+        L("edit", fp=f1), _REAL["result"],
+        _REAL["meta"], _REAL["sys"],
+        L("human", text="把 f2 的註解改掉,順手看一下 f3"),
+        L("bash", cmd="python3 -c 'print(1)'"), _REAL["result"],
+        L("bash", cmd="cd /somewhere/repo\necho \"=== 標題 ===\"; python3 scripts/x.py --flag"), _REAL["result"],   # 真逐字稿常見:先 cd、再 echo 橫幅
+        L("edit", fp=f2), _REAL["result"],
+    ])
+
+    try:
+        r = run(vault, "handoff", "p_計劃", "--json", "--transcript", str(t_ok))
+        check("handoff rc0", r.returncode == 0, r.stderr)
+        d = _j.loads(r.stdout)
+        by = {x["path"]: x for x in d["files"]}
+        check("點名的九個都在(不存在/筆記/穿越的不收)", sorted(by) == sorted([
+            "scripts/f1.py", "scripts/f2.py", "scripts/f3.py", "scripts/f4.py", "scripts/f5.py",
+            "scripts/f6.py", "scripts/f7.py", "scripts/newdir/n8.py", "scripts/資料 處理.py"]), r.stdout)
+        check("★反引號裡帶空白與中文的路徑也收、git 狀態對得上(r1 外家 #4)★", by["scripts/資料 處理.py"]["state"] == "未追蹤", r.stdout)
+        _lm = _load_lumos()
+        check("漂移守衛:反引號抽取的每個前綴,派工鏡頭正則都認得(兩份前綴表沒分岔)",
+              all(_lm._LENS_SPEC_CODE_RE.search(f" {p}/x.py") for p in _lm._HANDOFF_TICK_PREFIXES), str(_lm._HANDOFF_TICK_PREFIXES))
+        check("前提仍成立:派工鏡頭正則自己抓不到空白+中文的路徑(哪天抓得到了,反引號抽取就是多餘的)",
+              _lm._LENS_SPEC_CODE_RE.search("`scripts/資料 處理.py`") is None, "lens 正則現在抓得到了")
+        check("★第 6 個以後也在(釘掉派工鏡頭的 5 檔上限)★", "scripts/f6.py" in by and "scripts/f7.py" in by, r.stdout)
+        check("乾淨", by["scripts/f1.py"]["state"] == "乾淨", r.stdout)
+        check("已改(沒 staged)", by["scripts/f2.py"]["state"] == "已改", r.stdout)
+        check("已改(staged 也算已改)", by["scripts/f3.py"]["state"] == "已改", r.stdout)
+        check("已刪(index 還有、樹上沒了)", by["scripts/f5.py"]["state"] == "已刪", r.stdout)
+        check("已改名(git mv 後計劃點名的舊路徑仍列、指向新路徑)",
+              by["scripts/f6.py"]["state"] == "已改名" and by["scripts/f6.py"]["renamed_to"] == "scripts/f6b.py", r.stdout)
+        check("★未追蹤(diff HEAD 看不到的那種)★", by["scripts/f7.py"]["state"] == "未追蹤", r.stdout)
+        check("★未追蹤目錄裡的檔也逐檔列(status 改成整個 repo 問一次之後,-uall 變成必要;翻紅釘:拆掉→這條翻紅)★",
+              by["scripts/newdir/n8.py"]["state"] == "未追蹤", r.stdout)
+        check("有提交過的帶最後提交(日期+標題)", "init six files" in (by["scripts/f1.py"]["last_commit"] or "")
+              and _re.match(r"\d{4}-\d{2}-\d{2}", by["scripts/f1.py"]["last_commit"] or ""), r.stdout)
+        check("未追蹤的沒有最後提交", by["scripts/f7.py"]["last_commit"] is None, r.stdout)
+
+        it = d["intent"]
+        check("意圖線索有拿到", it is not None and d["intent_unavailable_reason"] is None, r.stdout)
+        check("★只給最後一輪的檔(前一輪的 f1 不在)★", it["turn_files"] == ["scripts/f2.py"], r.stdout)
+        check("最後一輪跑過的指令(JSON 保留原文,含開頭的 cd)",
+              it["turn_bash"] == ["python3 -c 'print(1)'", "cd /somewhere/repo\necho \"=== 標題 ===\"; python3 scripts/x.py --flag"], r.stdout)
+        check("★使用者最後一句人話(系統通知/提醒不算)★", it["last_user"] == "把 f2 的註解改掉,順手看一下 f3", r.stdout)
+        check("帶逐字稿的標題與路徑(接手者要知道讀的是哪一份)",
+              it["title"] == "Basic Optimization" and it["transcript"] == str(t_ok), r.stdout)
+
+        # 逐字稿尾端是系統提醒(人講完之後系統又塞了一行):hook 的輪次邊界在提醒那行→最後一輪沒動作,
+        # 但「使用者最後說」仍要是人話,不能變成 <system-reminder>
+        t_tail_meta = transcript([_REAL["title"], L("human", text="改 f2"), L("edit", fp=f2), _REAL["result"], _REAL["meta"]])
+        r = run(vault, "handoff", "p_計劃", "--json", "--transcript", str(t_tail_meta))
+        it = _j.loads(r.stdout)["intent"]
+        check("尾端是系統提醒:人話照抓、不抓提醒", it["last_user"] == "改 f2", r.stdout)
+        check("★尾端是系統提醒:人話之後的改檔照樣抽到(邊界是最後一句人話,不是最後一個 type=user 行;r1 外家 #1)★",
+              it["turn_files"] == ["scripts/f2.py"], r.stdout)
+        # 一輪中間被系統塞任務通知(真逐字稿常見):通知前後的動作都算這一輪
+        t_mid_sys = transcript([_REAL["title"], L("human", text="改 f2"), L("bash", cmd="python3 a.py"), _REAL["result"],
+                                _REAL["sys"], L("edit", fp=f2), _REAL["result"]])
+        r = run(vault, "handoff", "p_計劃", "--json", "--transcript", str(t_mid_sys))
+        it = _j.loads(r.stdout)["intent"]
+        check("★一輪中間夾任務通知:通知前的指令與通知後的改檔都算★",
+              it["turn_files"] == ["scripts/f2.py"] and it["turn_bash"] == ["python3 a.py"] and it["last_user"] == "改 f2", r.stdout)
+
+        # 最後一輪只有 Bash 沒有 Edit/Write:要講明「純 Bash 改檔看不到」(收工閘同一個盲點,另案),不能印成「沒改檔」
+        t_bash_only = transcript([_REAL["title"], L("human", text="用腳本改"), L("bash", cmd="python3 patch.py"), _REAL["result"]])
+        r = run(vault, "handoff", "p_計劃", "--transcript", str(t_bash_only))
+        check("人讀:最後一輪只有 Bash → 講明純 Bash 改檔看不到", "純 Bash" in r.stdout and "python3 patch.py" in r.stdout, r.stdout)
+
+        # 四種不可得都要 rc0、intent=null、reason 講清楚
+        r = run(vault, "handoff", "p_計劃", "--json", "--transcript", str(root / "nope.jsonl"))
+        d = _j.loads(r.stdout)
+        check("★逐字稿缺:rc0 且意圖不可得★", r.returncode == 0 and d["intent"] is None
+              and "找不到" in d["intent_unavailable_reason"], r.stdout + r.stderr)
+        check("逐字稿缺:git 那半照給", len(d["files"]) == 9, r.stdout)
+        t_empty = transcript([])
+        r = run(vault, "handoff", "p_計劃", "--json", "--transcript", str(t_empty))
+        d = _j.loads(r.stdout)
+        check("逐字稿空:rc0 且不可得", r.returncode == 0 and d["intent"] is None and "空" in d["intent_unavailable_reason"], r.stdout)
+        t_bad = transcript(["{not json", "garbage", "{\"type\": 3"])
+        r = run(vault, "handoff", "p_計劃", "--json", "--transcript", str(t_bad))
+        d = _j.loads(r.stdout)
+        check("逐字稿全壞行:rc0 且不可得", r.returncode == 0 and d["intent"] is None
+              and "讀不動" in d["intent_unavailable_reason"], r.stdout)
+        t_codex = transcript([_j.dumps({"type": "session_meta", "payload": {"cli_version": "9.9.9", "cwd": str(root)}})])
+        r = run(vault, "handoff", "p_計劃", "--json", "--transcript", str(t_codex))
+        d = _j.loads(r.stdout)
+        check("★Codex 逐字稿版本認不得:rc0 且不可得(不猜格式)★", r.returncode == 0 and d["intent"] is None
+              and "9.9.9" in d["intent_unavailable_reason"], r.stdout)
+        # 合法 JSON 但形狀怪(r1 外家 #3 實測會 traceback 的那型):整段兜底,rc0 不可得
+        t_shape = transcript([_j.dumps({"type": "session_meta", "payload": [1]})])
+        r = run(vault, "handoff", "p_計劃", "--json", "--transcript", str(t_shape))
+        check("★session_meta.payload 不是物件:rc0 不可得、不 traceback★", r.returncode == 0 and "Traceback" not in r.stderr
+              and _j.loads(r.stdout)["intent"] is None, r.stdout + r.stderr)
+        t_null = transcript([_REAL["title"], _j.dumps({"type": "user", "message": {"role": "user", "content": None}})])
+        r = run(vault, "handoff", "p_計劃", "--json", "--transcript", str(t_null))
+        check("user 行 content 為 null:rc0 不 traceback", r.returncode == 0 and "Traceback" not in r.stderr, r.stdout + r.stderr)
+
+        # 自動找逐字稿:~/.claude/projects/<cwd slug>/ 最新的一份,★但要排掉接手者自己這個 session★
+        # (接手時「最新」永遠是自己;不排掉就永遠讀到自己的尾巴)
+        home = root / "home"
+        slug = _re.sub(r"[^A-Za-z0-9]", "-", str(root))
+        pdir = home / ".claude" / "projects" / slug
+        pdir.mkdir(parents=True)
+        # 兩份別人的 + 一份自己的:同一個 checkout 多開是常態(r1 外家 #2),不能盲拿最新
+        mention = pdir / "mention-session.jsonl"   # 較舊,但提到這份計劃
+        mention.write_text("\n".join([_REAL["title"], L("human", text="先讀 p_計劃 再改 f2"), L("edit", fp=f2), _REAL["result"]]) + "\n", encoding="utf-8")
+        newest = pdir / "newest-session.jsonl"     # 最新,但在做別的事
+        newest.write_text("\n".join([_REAL["title"], L("human", text="別的事")]) + "\n", encoding="utf-8")
+        me = pdir / "me-session.jsonl"
+        me.write_text("\n".join([_REAL["title"], L("human", text="我是接手者")]) + "\n", encoding="utf-8")
+        _os.utime(mention, (_time.time() - 200, _time.time() - 200))
+        _os.utime(newest, (_time.time() - 100, _time.time() - 100))
+        env = dict(_os.environ, HOME=str(home), CLAUDE_CODE_SESSION_ID="me-session")
+
+        def auto(*extra):
+            r = _sp.run([sys.executable, GRAPHCTL, "--vault", str(vault), "handoff", "p_計劃", *extra],
+                        cwd=str(root), env=env, capture_output=True, text=True)
+            return r
+
+        r = auto("--json")
+        d = _j.loads(r.stdout)
+        check("★自動找逐字稿:排掉自己;多份候選時提到這份計劃的優先,不是盲拿最新★", d["intent"] is not None
+              and d["intent"]["transcript"] == str(mention) and d["intent"]["last_user"] == "先讀 p_計劃 再改 f2", r.stdout + r.stderr)
+        check("候選清單一併給(接手者自己判)", len(d["intent"]["candidates"]["list"]) == 2
+              and d["intent"]["candidates"]["picked_by"].startswith("提到計劃"), r.stdout)
+        r = auto()
+        check("人讀:多份候選要列出來並給指定的指令", "另有 1 份候選" in r.stdout and "--transcript" in r.stdout, r.stdout)
+        mention.unlink()
+        r = auto("--json")
+        d = _j.loads(r.stdout)
+        check("都沒提到計劃才拿最新的那份", d["intent"] is not None and d["intent"]["transcript"] == str(newest)
+              and d["intent"]["candidates"]["picked_by"] == "最新一份", r.stdout + r.stderr)
+        newest.unlink()
+        r = auto("--json")
+        d = _j.loads(r.stdout)
+        check("只剩自己那份:不可得且講明是自己", r.returncode == 0 and d["intent"] is None
+              and "自己" in d["intent_unavailable_reason"], r.stdout + r.stderr)
+
+        # 人讀輸出:三段式、四態字樣、不可得要講明;★不印進度/完成/百分比★
+        r = run(vault, "handoff", "p_計劃", "--transcript", str(t_ok))
+        out = r.stdout
+        check("人讀:五態都印", all(w in out for w in ("乾淨", "已改", "未追蹤", "已刪", "已改名")), out)
+        check("人讀:人話與最後一輪的檔", "把 f2 的註解改掉" in out and "scripts/f2.py" in out, out)
+        check("人讀:指令摘要去掉開頭的 cd 與 echo 橫幅(真逐字稿實看:一輪五條全是 cd 開頭、接著 echo \"=== ④ ===\")",
+              "python3 scripts/x.py --flag" in out and "cd /somewhere" not in out and "=== 標題 ===" not in out, out)
+        check("人讀:下一步指令獨立成行", "\n      git diff" in out and "lumos context" in out, out)
+        check("★人讀:不印進度、不印完成、不印百分比★", not any(w in out for w in ("進度", "完成", "%")), out)
+        r = run(vault, "handoff", "p_計劃", "--transcript", str(root / "nope.jsonl"))
+        check("人讀:不可得要講明只剩 git 那半", "意圖不可得" in r.stdout and "git" in r.stdout, r.stdout)
+
+        # root 不是 git toplevel(vault 在子目錄):porcelain 的路徑永遠相對 repo 根,要對得上(r1 外家順帶抓到沒測)
+        root2 = Path(tempfile.mkdtemp(prefix="gctl-handoff-sub-")).resolve()
+        _sp.run(["git", "init", "-q"], cwd=str(root2))
+        sub = root2 / "sub"
+        (sub / "docs" / "kg" / "Projects").mkdir(parents=True)
+        (sub / "docs" / "kg" / "MOC").mkdir()
+        (sub / "docs" / "kg" / "MOC" / "i.md").write_bytes("---\ntype: moc\n---\n# i\n".encode("utf-8"))
+        (sub / "scripts").mkdir()
+        (sub / "scripts" / "g1.py").write_text("# g1\n", encoding="utf-8")
+        _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], cwd=str(root2))
+        _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "sub init"], cwd=str(root2))
+        (sub / "scripts" / "g1.py").write_text("# g1 changed\n", encoding="utf-8")
+        (sub / "docs" / "kg" / "Projects" / "q_計劃.md").write_text(
+            "---\ntype: project\nstatus: doing\n---\n# q_計劃\n\n點名 scripts/g1.py\n", encoding="utf-8")
+        r = run(sub / "docs" / "kg", "handoff", "q_計劃", "--json", "--transcript", str(root / "nope.jsonl"))
+        d2 = _j.loads(r.stdout)
+        check("root 是子目錄時 git 狀態照樣對得上(porcelain 路徑相對 repo 根)",
+              [(x["path"], x["state"]) for x in d2["files"]] == [("scripts/g1.py", "已改")], r.stdout + r.stderr)
+        shutil.rmtree(root2, ignore_errors=True)
+
+        # 用法錯誤才非 0:節點不存在
+        r = run(vault, "handoff", "沒這個節點")
+        check("節點不存在 rc2 + 擋下", r.returncode == 2 and "擋下" in r.stderr, r.stderr)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+
+
+_HOOK_PURE_PROBE = r'''
+import importlib.util as u, sys, os, json, sysconfig
+hook = os.path.realpath(sys.argv[1])
+paths = sysconfig.get_paths()
+# r3 外家 #7:只准標準庫本體(stdlib / platstdlib),不准 site-packages、不准整個 Python 安裝目錄;
+# 路徑先 realpath 再用 commonpath 驗目錄邊界(startswith 會把 /lib/python3.14-foo 也放行)
+std = set()
+for s in (paths.get("stdlib"), paths.get("platstdlib")):
+    if s:
+        std.add(os.path.realpath(s))
+def under_std(p):
+    p = os.path.realpath(str(p))
+    for s in std:
+        try:
+            if os.path.commonpath([p, s]) == s:
+                return True
+        except ValueError:
+            pass
+    return False
+def is_write(mode, flags):
+    # r3 外家 #6:os.open 走的是 (path, None, flags),mode 為 None、寫入意圖在 flags 裡;io.open 的 mode 是字串
+    if mode is not None and any(c in str(mode) for c in "wax+"):
+        return True
+    try:
+        f = int(flags)
+    except (TypeError, ValueError):
+        return mode is None   # 兩邊都看不懂=看不出是不是寫,保守算違規
+    return (f & os.O_ACCMODE) != os.O_RDONLY or bool(f & (os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+DENY = ("subprocess.", "os.system", "os.exec", "os.spawn", "os.fork", "os.posix_spawn", "os.kill", "os.putenv", "os.unsetenv",
+        "os.chdir", "os.remove", "os.unlink", "os.rename", "os.mkdir", "os.rmdir", "os.chmod", "os.chown", "os.link", "os.symlink",
+        "os.truncate", "os.utime", "shutil.", "socket.", "http.", "urllib.", "ftplib.", "smtplib.", "poplib.", "imaplib.",
+        "webbrowser.", "ctypes.", "tempfile.", "pty.", "signal.", "sys.setprofile", "sys.settrace", "glob.", "mmap.", "sqlite3.")
+bad = []
+_depth = [0]   # 檢查深度:稽核鉤子與 stat 包裝在做路徑判定時自己也會 lstat/realpath,深度>0 的呼叫一律放行不記
+def audit(ev, args):
+    _depth[0] += 1
+    try:
+        _audit_inner(ev, args)
+    finally:
+        _depth[0] -= 1
+def _audit_inner(ev, args):
+    if ev == "open":
+        path = args[0] if len(args) > 0 else ""
+        mode = args[1] if len(args) > 1 else None
+        flags = args[2] if len(args) > 2 else 0
+        if not isinstance(path, (str, bytes, os.PathLike)):   # 用 fd 開的看不出目標,保守算違規
+            bad.append([ev, repr(path), repr(mode)]); return
+        p = os.path.realpath(os.fsdecode(path))
+        own_cache = os.path.join(os.path.dirname(hook), "__pycache__")   # Python 匯入系統讀 hook 自己的快取,不是 hook 的動作
+        in_own_cache = os.path.commonpath([p, own_cache]) == own_cache if p.startswith(os.path.dirname(hook)) else False
+        if is_write(mode, flags) or not (p == hook or in_own_cache or under_std(p)):
+            bad.append([ev, p, repr(mode), int(flags) if isinstance(flags, int) else repr(flags)])
+    elif ev in ("os.listdir", "os.scandir"):
+        p = str(args[0]) if args and args[0] is not None else "."
+        if not under_std(os.path.realpath(p)):
+            bad.append([ev, p])
+    elif ev.startswith(DENY):
+        bad.append([ev, str(args)[:120]])
+sys.addaudithook(audit)
+# r4 外家 #8:stat 家族在 CPython 沒有稽核事件(os.stat("/etc/passwd") 零事件),匯入期間把它們包起來套同一套路徑政策。
+# 只包 os 模組的名字:importlib 自己走 posix 模組的原函式,不受影響;hook 裡 os.stat / os.path.exists / pathlib 都會經過這裡。
+def _wrap_pathfn(name):
+    orig = getattr(os, name)
+    def wrapped(path, *a, **kw):
+        if _depth[0] == 0:   # 政策檢查裡的 realpath 自己會呼叫 os.lstat,深度>0 就放行,不然無限遞迴
+            _depth[0] += 1
+            try:
+                if isinstance(path, (str, bytes, os.PathLike)):
+                    p = os.path.realpath(os.fsdecode(path))
+                    if not (p == hook or under_std(p)):
+                        bad.append(["os." + name, p])
+                else:
+                    bad.append(["os." + name, repr(path)])
+            finally:
+                _depth[0] -= 1
+        return orig(path, *a, **kw)
+    setattr(os, name, wrapped)
+for _n in ("stat", "lstat", "access", "readlink", "statvfs"):
+    if hasattr(os, _n):
+        _wrap_pathfn(_n)
+s = u.spec_from_file_location("h", hook); m = u.module_from_spec(s); s.loader.exec_module(m)
+assert callable(m.collect_turn_actions) and callable(m._is_real_user_input)
+sys.stdout.write("AUDIT:" + json.dumps(bad, ensure_ascii=False))
+'''
+
+
+def t_handoff_hook_import_is_pure():
+    """r1 外家 #5:`lumos handoff` 用 importlib 匯入收工 hook 檔,等於執行它的頂層碼——唯讀查詢不該有副作用。
+    不搬 hook(範圍刀:不動 hook),改用這條鎖住「匯入不產生任何外部動作」。
+    ★r2 外家:只看印字與 tmp 留檔鎖不住開程序 / 連網 / 讀別的檔 / 寫 tmp 外的路徑★ → 改用 Python 稽核鉤子
+    (sys.addaudithook)全程監看匯入:open 只准讀 hook 自己的原始碼與標準庫本體(stdlib/platstdlib,realpath+commonpath 驗邊界;
+    site-packages 與 Python 安裝目錄其他部分都不算——r3 外家 #7);寫入意圖同時看 mode 字串與 os.open 的數字 flags(r3 外家 #6);
+    listdir/scandir 只准標準庫;stat/lstat/access/readlink/statvfs(沒有稽核事件,r4 外家 #8)在匯入期間包起來套同一套政策;
+    子程序、socket、http/urllib、shutil、os 的改檔系統呼叫、ctypes、tempfile、signal、glob… 一律違規。
+    另外 stdout/stderr 必須乾淨(hook 印字會污染 handoff 的 JSON 輸出)、tmp 不得留檔。
+    PYTHONDONTWRITEBYTECODE=1 是關掉 Python 自己寫 __pycache__,那不是 hook 的動作。
+    ★宣稱的精確範圍★:鎖的是「寫/建/刪/改權限任何檔、開子程序、開 socket、讀 hook 與標準庫以外的檔案內容 / 目錄清單 / 中繼資料」。
+    ★明寫的殘餘面(不在鎖內)★:讀程序自身狀態(os.getcwd / os.environ / os.getpid / time)、經 posix 模組直呼原函式
+    (posix.stat 不經 os 名字)、以及 CPython 其他沒有稽核事件又不經 os 模組名字的讀取原語。要縮這個面得改 hook 檔或
+    換成不執行 hook,兩者都在範圍刀外;殘餘面是否可接受歸人裁(2026-09-07 r4 後攤給 Enzo)。
+    翻紅釘:hook 頂層塞 print / subprocess.run / open 別的檔 / socket.socket / 寫檔 / listdir / os.open(O_WRONLY) 自己 /
+    讀 sys.executable 各一種,這條都要紅。"""
+    import json as _j
+    import os as _os
+    import shutil
+    import subprocess as _sp
+    tmp = Path(tempfile.mkdtemp(prefix="gctl-hookpure-"))
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "check-graph-sync.py"
+    try:
+        r = _sp.run([sys.executable, "-c", _HOOK_PURE_PROBE, str(hook)], cwd=str(tmp),
+                    env=dict(_os.environ, HOME=str(tmp), PYTHONDONTWRITEBYTECODE="1"),
+                    capture_output=True, text=True)
+        check("匯入 hook 不炸,且匯出接手視圖要用的兩個名字", r.returncode == 0, r.stderr[-400:])
+        check("★匯入 hook 不印任何東西(stdout 只有探針自己的稽核結果、stderr 空)★",
+              r.stdout.startswith("AUDIT:") and r.stderr == "", repr((r.stdout[:200], r.stderr[:200])))
+        try:
+            events = _j.loads(r.stdout[len("AUDIT:"):]) if r.stdout.startswith("AUDIT:") else ["(探針輸出被污染)"]
+        except ValueError:
+            events = ["(探針輸出不是 JSON)"]
+        check("★匯入 hook 沒有鎖內的外部動作:不開程序、不連網、不改檔系統、不讀 hook 與標準庫以外的檔案內容 / 目錄清單 / 中繼資料★",
+              events == [], str(events)[:400])
+        leftover = [str(p.relative_to(tmp)) for p in tmp.rglob("*")]
+        check("匯入 hook 不在 cwd / HOME 留任何檔", leftover == [], str(leftover))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == "__main__":
     sys.exit(main())
