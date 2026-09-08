@@ -4048,7 +4048,7 @@ def cmd_lint(env, node):
 
 
 SPEC_CLAUSE_RE = re.compile(r"\[S(\d+)\]")
-_CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.|]*(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表/標題/粗體/表格 | 符號)就是 [SN];反引號裡的 `[S3] …` 是範例、「見 [S2]」是引用,都不是定義
+_CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.|]*(?:\[[ xX]\]\s*)?(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表/標題/粗體/表格 |/勾選框 [ ] 符號)就是 [SN];反引號裡的 `[S3] …` 是範例、「見 [S2]」是引用,都不是定義
 _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了", "dangling": "懸空(寫錯)",
                     "unrecognized": "懸空(設定認不到)", "mentioned": "懸空(只被提到)", "bad-name": "壞名(平台前綴未定義)",
                     "undefined": "非定義(只在範例/引用裡出現,不算條款)"}
@@ -13442,6 +13442,10 @@ def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=N
         return "fail"
     clauses = [b for b in rows_b if b["state"] != "undefined"]
     undef = [b for b in rows_b if b["state"] == "undefined"]
+    if not clauses:
+        # 有 [SN] 卻沒有一條在行首定義:多半是這裡不認得的寫法(r2 外家席用 `- [ ] [S1]` 勾選框實跑出「零條款照過」)——格式看不懂就擋,不放行
+        print(f"[disposal] 條款綁定: ✗ — 計劃裡有 [SN] 字樣但沒有一條在行首定義({len(undef)} 個只在行內/範例出現);看不懂的寫法不放行——條款要寫成 `- [S1] …`/`### [S1] …`/表格列/`- [ ] [S1] …`")
+        return "fail"
     unt = [b for b in clauses if b["state"] == "untagged"]
     summ = _clause_summary(clauses)
     hang = summ["dangling"] + summ["unrecognized"] + summ["mentioned"] + summ["bad-name"]
@@ -20974,9 +20978,12 @@ def cmd_handoff(env, node, as_json=False, transcript=None, turns=1):
             print(f"  提醒:逐字稿有 {intent['bad_lines']} 行讀不動,已跳過(官方明說格式不穩)。")
     _cc = _handoff_clause_counts(env, text)
     if _cc is not None:   # 條款綁測試算進度 [S3]:只印計數與指路,表住 spec-trace——這裡的範圍刀是「不判完成」,計數是文字事實不是進度
-        hang = _cc["dangling"] + _cc["unrecognized"] + _cc["mentioned"] + _cc["bad-name"]
-        print(f"驗收條款 {_cc['total']} 條:綁了測試 {_cc['bound']}、靠人 {_cc['manual']}、未標 {_cc['untagged']}、懸空 {hang}"
-              f"(哪一條是哪一態、綁了什麼:lumos spec-trace {plan_name.split('/')[-1]})")
+        if _cc.get("index_error"):
+            print(f"驗收條款:測試索引建不起來({_cc['index_error']}),算不出各條狀態;先修 .lumos/config.json 的 test 設定,再 lumos spec-trace {plan_name.split('/')[-1]}")
+        else:
+            hang = _cc["dangling"] + _cc["unrecognized"] + _cc["mentioned"] + _cc["bad-name"]
+            print(f"驗收條款 {_cc['total']} 條:綁了測試 {_cc['bound']}、靠人 {_cc['manual']}、未標 {_cc['untagged']}、懸空 {hang}"
+                  f"(哪一條是哪一態、綁了什麼:lumos spec-trace {plan_name.split('/')[-1]})")
     print("為什麼在意:已改/已刪/未追蹤是上一個 session 做到一半留下的;這裡只列狀態,不猜做到第幾步、不判做到底了沒——線索不是狀態。")
     print("下一步:")
     changed = [f["path"] for f in files if f["state"] in ("已改", "已刪")]

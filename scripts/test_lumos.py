@@ -4493,6 +4493,8 @@ def t_clause_bindings_states():
         "### [S17] 真條款同一行帶範例 [test:t_ok],例如 `[S18] 範例格式`",   # r2 單reviewer blocker:反引號整段遮掉
         "- [S19] 四個標點不算講了怎麼驗 [manual:!!!!]",                      # r2 外家席實跑
         "細節見 [S20] 那一段",                                                # 只有行內引用、從沒在行首定義 → undefined
+        "- [ ] [S21] 勾選框寫法也是定義 [test:t_ok]",                         # r2 外家席:Markdown task-list
+        "- [x] [S22] 勾過的也是 [manual:人看一次]",
     ])
     methods = {"python": {"t_ok"}}
     hay = {"python": "def t_ok():\n    pass\nclass T:\n    def test_in_class(self):\n        pass\n# t_mentioned_only 只在註解\n"}
@@ -4501,7 +4503,7 @@ def t_clause_bindings_states():
     exp = {"S1": "bound", "S2": "untagged", "S3": "manual", "S4": "dangling", "S5": "unrecognized", "S6": "mentioned",
            "S7": "untagged", "S8": "bound", "S9": "untagged", "S10": "untagged", "S11": "bound",
            "S13": "bound", "S14": "untagged", "S15": "untagged", "S16": "manual",
-           "S17": "bound", "S19": "untagged", "S20": "undefined"}
+           "S17": "bound", "S19": "untagged", "S20": "undefined", "S21": "bound", "S22": "manual"}
     check("clause: 只在反引號裡出現的 S12/S18 根本不進清單(遮掉後掃不到)", "S12" not in st and "S18" not in st, str(st))
     for k, v in exp.items():
         check(f"clause: {k} → {v}", st.get(k) == v, f"{k}={st.get(k)} 全部={st}")
@@ -4577,6 +4579,9 @@ def t_handoff_clause_pointer_only():
         check("handoff: --json 帶 clauses 計數", dj["clauses"]["total"] == 2 and dj["clauses"]["bound"] == 1 and dj["clauses"]["untagged"] == 1, str(dj["clauses"]))
         r2 = run(v, "handoff", "Projects/Q_計劃", expect_rc=0)
         check("handoff: 沒 [SN] 的計劃不印那行", "驗收條款" not in r2.stdout, r2.stdout)
+        (d / ".lumos" / "config.json").write_text('{"platforms": {"a": {"profile": "python", "root": "."}, "b": {"profile": "python", "root": "."}}}', encoding="utf-8")
+        r3 = run(v, "handoff", "Projects/P_計劃", expect_rc=0)
+        check("handoff: 測試索引建不起來 → 那行講明原因,不印「0 條」(r2 外家席 minor)", "索引建不起來" in r3.stdout and "驗收條款 0 條" not in r3.stdout, r3.stdout)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -4625,6 +4630,10 @@ def t_disposal_clause_gate():
     check("clause-gate: 只在反引號出現的 [S9] 不算條款(r1 blocker),不會讓閘 FAIL", r.returncode == 0 and "S9" not in r.stdout.split("條款綁定")[-1].split("\n")[0] and "1 條全標" in r.stdout, r.stdout[-500:])
     r = _loop(v, f"cg-i2-{_M1U}", "cgi2.md", base + "### [S1] 真條款 [test:t_x],例如 `[S9] 範例格式`\n")
     check("clause-gate: 同一行「真條款 + 反引號範例」也不會讓閘 FAIL(r2 blocker)", r.returncode == 0 and "1 條全標" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-m-{_M1U}", "cgm.md", base + "見 [S1] 的說明,[S2] 也一樣。\n")
+    check("clause-gate: 有 [SN] 字樣但沒有一條在行首定義 → 格式看不懂就擋(r2 外家席:零條款照過)", r.returncode == 1 and "沒有一條在行首定義" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-n-{_M1U}", "cgn.md", base + "- [ ] [S1] 甲 [manual:人看一次]\n- [x] [S2] 乙 [manual:對帳一次]\n")
+    check("clause-gate: 勾選框寫法的條款算定義行,全標 → PASS", r.returncode == 0 and "2 條全標" in r.stdout, r.stdout[-500:])
     # 凍結/回放模式(帶 spec_sha_override)不重讀活檔
     m = _load_lumos_inproc()
     spec_md = v / "Projects" / "cgz.md"; spec_md.write_text(base + "- [S1] 甲\n", encoding="utf-8")
