@@ -1,3 +1,4 @@
+severity: blocker
 <!-- 外家否決席 r3(Codex, --sandbox read-only;原始逐字稿 r3-codex-raw.txt;正規化:去重複印出的第二份、去行尾雙空白) -->
 severity: blocker
 

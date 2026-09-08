@@ -49,19 +49,25 @@ severity: blocker
 
 用 WIP 的 `_SEV_RESIDUE_RE = re.compile(r"(?i)(?:\bsev(?:erity)?\s*[:：]|嚴重度\s*[:：]|\[(?:clean|minor|major|blocker)\])")` 與 `_report_normalize_issues` 實跑七份真實檔案(`code-batch20/r1-{通才,架構對齊,外家否決}.md`、`code-clause-bindings-b/r1-{架構對齊-sonnet,外家否決-codex,單reviewer-sonnet}.md`、`code-clause-bindings-b/r3-架構對齊-sonnet.md`):**七份全數會被拒收或悄悄算出 0**,無一份能直接照現有格式過關。
 
-### Finding A —— severity: blocker,blocking: 是
+### Finding A
+severity: blocker
+blocking: 是
 判準:spec 自己舉的殘留範例格式,在 WIP 實作裡完全沒被偵測到,悄悄算出 0——這正是三輪重寫要根治的原始症狀,重演在 r3 自己身上。
 `_SEV_RESIDUE_RE` 只認 `severity:`/`嚴重度:`/方括號等級三種字面,spec 第③條自己舉的「`## F1 — BLOCKER`」不含這三種字面中任何一種,實測 `_SEV_RESIDUE_RE.search("## F1 — BLOCKER")` 回 `None`。真實檔案 `code-batch20/r1-架構對齊.md`、`code-batch20/r1-通才.md`(兩份都有真實 major/blocker 發現)跑 `_report_normalize_issues` 皆回傳 0 個 issue(判定「已正規化」),但 `_report_reported_count` 算出 **0**——兩份有真內容的報告會被寫進帳「報了 0 條」,不是拒收、是靜默錯帳。
 file: `scripts/lumos:4958`(`_SEV_RESIDUE_RE` 定義,工作樹未提交)
 file: `governance/review-reports/code-batch20/r1-架構對齊.md`、`governance/review-reports/code-batch20/r1-通才.md`(兩份真實報告皆有具體 major 發現,WIP 實測 `reported=0`)
 
-### Finding B —— severity: blocker,blocking: 是
+### Finding B
+severity: blocker
+blocking: 是
 判準:一個現行活躍、本審查鏈自己五席之一的既有格式,被 spec 自己舉的例句字面命中並拒收,S4 沒有替這個席位的方法論規劃過渡。
 「架構對齊」席固定用「五題固定架構、每題聚合一個 `- severity: X`」的既有寫法(不是逐條 finding 各自獨立宣告),`- severity: clean`/`- severity: minor` 正是 spec 第③條列的第一個例子。WIP 實測 `code-clause-bindings-b/r1-架構對齊-sonnet.md`(3 處)與 `code-clause-bindings-b/r3-架構對齊-sonnet.md`(驗收輪,3 處)全被 `_report_normalize_issues` 判定要 rc2,`code-clause-bindings/r1-架構對齊-sonnet.md` 同款寫法在 r1/r2/r3 三輪一致重現。改法不只是拿掉 `- `——這席目前是「一題可能聚合多條 finding、只印一個聚合嚴重度」,要符合「每條 finding 恰一行獨立宣告」得整個重寫回報方法論,S4 沒提到這件事。
 引句:「行內 `severity:`(如 `- severity: minor`」
 file: `governance/review-reports/code-clause-bindings-b/r1-架構對齊-sonnet.md:27,48,76`、`governance/review-reports/code-clause-bindings-b/r3-架構對齊-sonnet.md:27,50,85`
 
-### Finding C —— severity: blocker,blocking: 是
+### Finding C
+severity: blocker
+blocking: 是
 判準:本審查鏈自己派工用的收尾慣例句式(本次任務指示本身也要求「最後一行總結最嚴重 severity 與 blocking 條數」)會被同一支拒收偵測擋下,不是罕見寫法而是全庫慣例。
 `governance/review-reports/` 底下有 330 個檔案含「(最嚴重|總結最嚴重|最高) severity」這種收尾句式。WIP 實測 `code-clause-bindings-b/r1-外家否決-codex.md`(「最嚴重 severity: major；blocking 4 條。」)與 `r1-單reviewer-sonnet.md`(「最嚴重 severity:blocker(Finding 1)。」)都被判定要 rc2——兩份報告本體的 finding 宣告格式完全合規,單純因為結尾總結句含 `severity:` 字樣就整份被擋。這條規則若照字面上線,今天所有仍在用這句收尾慣例的席位(含這次任務本身的派工指示)都需要先改掉收尾句才能記帳,S1/S4 都沒提到這個成本。
 引句:「報告有一行 `- severity: major` 殘留 → record rc2 並印行號」
@@ -69,7 +75,9 @@ file: `governance/review-reports/code-clause-bindings-b/r1-外家否決-codex.md
 
 ## 三、深挖 [S2] intake 重現表列格式
 
-### Finding D —— severity: major,blocking: 是
+### Finding D
+severity: major
+blocking: 是
 判準:S2 假設每份 intake 都用同一套「HIT/MISS」字面詞彙標重現結果,但真實 intake 文件的用詞是編排者自訂的,不是定死格式;WIP 的整字驗證是「同一行含整字 id 與字面 `HIT`/`MISS`」,對不用這兩個字的 intake 會誤擋合法駁回。
 grep 全庫 intake 檔:`code-clause-bindings*` 系列一致用「**HIT**」/「HIT」/「MISS」;但 `接手視圖/r1-intake.md` 用「— HIT,折」與「— 觀察對,判準不採(accepted)」並存(後者完全沒有 HIT/MISS 字樣)、`Codex完全支援/r1-intake.md` 用「→ MISS(不採信)」與「→ **部分 MISS**」、`probe-retire-v2/r1-intake.md` 用「2 MISS」比例句式——同一專案內至少四種措辭並存。若編排者沿用「accepted/不採信/判準不採」這類既有措辭記錄一筆重現不到,WIP 的 `("HIT" in ln or "MISS" in ln)` 檢查會找不到字面 HIT/MISS 而 rc2,即使那一列已經是編排者親自重現過、寫得很清楚的判決。
 引句:「機械重現表那一列」
@@ -77,7 +85,9 @@ file: `governance/review-reports/接手視圖/r1-intake.md:19`(「觀察對,判�
 
 ## 四、深挖 [S3] N 去重與 S 公式邊界
 
-### Finding E —— severity: major,blocking: 是
+### Finding E
+severity: major
+blocking: 是
 判準:「同席報告先留痕、後當載體會不會 N 重複計數」這個問題,WIP 程式碼已經用 `(auditor, report_sha256)` 去重防住,但 r3-snapshot.md 本文完全沒寫這條規則——照 spec 文字字面實作(只講「N=該輪席位列 reported 加總」)不會想到要去重,會在同席兩筆的情境下重複計 N。
 WIP `_review_yield_round` docstring 明寫「★同席同報告只算一次★(同一席會先留痕一筆、再當載體一筆;以 (auditor, report_sha256) 去重)」,但 spec 正文只有一句「N=該輪席位列 `reported` 加總」,沒提去重、也沒提這個去重鍵是 `report_sha256`(意味著兩筆記帳之間報告檔內容必須逐位元組相同,若中途改過一個字,sha 不同、去重會失效,一樣重複計)。查真實帳(`docs/.canary-log.jsonl` 1208–1216)目前每個 (loop,round,auditor) 只有一列,載體的 `findings_set` 跟自己的 `report_path`/`severity` 同列——今天的資料沒有踩到這個坑,但那是因為今天所有記帳都一次到位,不是 spec 規則保證的。
 引句:「多席同輪時 M/R 只來自唯一載體」
