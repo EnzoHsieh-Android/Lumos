@@ -4490,6 +4490,9 @@ def t_clause_bindings_states():
         "- [S14] 空的 manual [manual: ]",                   # 外家席 major 2:空=沒講怎麼驗=未標
         "- [S15] 太短的 manual [manual:x]",
         "- [S16] 夠長的 manual [manual:人看一次]",
+        "### [S17] 真條款同一行帶範例 [test:t_ok],例如 `[S18] 範例格式`",   # r2 單reviewer blocker:反引號整段遮掉
+        "- [S19] 四個標點不算講了怎麼驗 [manual:!!!!]",                      # r2 外家席實跑
+        "細節見 [S20] 那一段",                                                # 只有行內引用、從沒在行首定義 → undefined
     ])
     methods = {"python": {"t_ok"}}
     hay = {"python": "def t_ok():\n    pass\nclass T:\n    def test_in_class(self):\n        pass\n# t_mentioned_only 只在註解\n"}
@@ -4497,14 +4500,16 @@ def t_clause_bindings_states():
     st = {r["id"]: r["state"] for r in rows}
     exp = {"S1": "bound", "S2": "untagged", "S3": "manual", "S4": "dangling", "S5": "unrecognized", "S6": "mentioned",
            "S7": "untagged", "S8": "bound", "S9": "untagged", "S10": "untagged", "S11": "bound",
-           "S12": "undefined", "S13": "bound", "S14": "untagged", "S15": "untagged", "S16": "manual"}
+           "S13": "bound", "S14": "untagged", "S15": "untagged", "S16": "manual",
+           "S17": "bound", "S19": "untagged", "S20": "undefined"}
+    check("clause: 只在反引號裡出現的 S12/S18 根本不進清單(遮掉後掃不到)", "S12" not in st and "S18" not in st, str(st))
     for k, v in exp.items():
         check(f"clause: {k} → {v}", st.get(k) == v, f"{k}={st.get(k)} 全部={st}")
     ln = {r["id"]: r["line"] for r in rows}
     check("clause: S1 定義行是第 1 行不是「見 [S1]」那行", ln["S1"] == 1, str(ln))
     check("clause: S10 定義行是 ### 那行(反引號範例不算)", ln["S10"] == 12, str(ln))
     check("clause: S3 的 manual 文字有抓到", [r for r in rows if r["id"] == "S3"][0]["manual"] == ["真機點一次"], str(rows))
-    check("clause: S12 標 defined=False", [r for r in rows if r["id"] == "S12"][0]["defined"] is False, str(rows))
+    check("clause: S20 標 defined=False", [r for r in rows if r["id"] == "S20"][0]["defined"] is False, str(rows))
     # 平台前綴未定義 → bad-name(不猜)
     rows2 = m.clause_bindings("- [S1] 甲 [test:ios:t_x]", {"python": {}}, "python", lambda p: set(), lambda p: "")
     check("clause: 未定義平台前綴 → bad-name", rows2[0]["state"] == "bad-name", str(rows2))
@@ -4539,7 +4544,7 @@ def t_spec_trace_clause_table():
         dd = _j.loads(r.stdout.strip().splitlines()[-1])
         b = dd["bindings"]
         check("spec-trace: S1 綁了/S2 靠人/S3 未標/S4 寫錯/S5 只被提到(真索引)", (b["S1"]["state"], b["S2"]["state"], b["S3"]["state"], b["S4"]["state"], b["S5"]["state"]) == ("bound", "manual", "untagged", "dangling", "mentioned"), str(b))
-        check("spec-trace: 只在反引號出現的 S9 → 非定義,不進未標", b["S9"]["state"] == "undefined" and dd["untagged"] == ["S3"], str(dd))
+        check("spec-trace: 只在反引號出現的 S9 → 不在綁定表、不進未標、計進非定義", "S9" not in b and dd["untagged"] == ["S3"] and dd["binding_summary"]["undefined"] == 1, str(dd))
         check("spec-trace: 舊制欄仍在(五條都無回指;S9 也在舊制的 id 集合裡)", dd["unclaimed"] == ["S1", "S2", "S3", "S4", "S5", "S9"], str(dd))
         r2 = run(v, "spec-trace", "Projects/P_計劃", expect_rc=1)
         check("spec-trace: 人讀版每條帶中文態與舊制回指", "[S1] 綁了 ← t_ok(舊制回指:無)" in r2.stdout and "[S4] 懸空(寫錯)" in r2.stdout, r2.stdout)
@@ -4606,6 +4611,8 @@ def t_disposal_clause_gate():
     check("clause-gate: 設計審拿 .patch 當審材 → FAIL(外家席:副檔名跳過會被繞)", r.returncode == 1 and "必須是計劃筆記" in r.stdout, r.stdout[-500:])
     r = _loop(v, f"code-cg-{_M1U}", "cgcode.patch", base + "- [S1] 甲\n")
     check("clause-gate: code- 迴圈的 patch → 不看條款", r.returncode == 0 and "code 迴圈" in r.stdout, r.stdout[-400:])
+    r = _loop(v, f"codecg{_M1U}", "cgcode2.md", base + "- [S1] 甲\n")
+    check("clause-gate: code 開頭但不是 code- 的編號 → 當設計審照擋(取名繞不過)", r.returncode == 1 and "S1(第" in r.stdout, r.stdout[-400:])
     r = _loop(v, f"cg-e-{_M1U}", "cge.md", base + "- [S1] 甲\n", ts_override="2026-09-01T00:00:00+08:00")
     check("clause-gate: 首筆帳早於 cutoff 的舊迴圈不回溯", r.returncode == 0 and "不回溯" in r.stdout, r.stdout[-500:])
     r = _loop(v, f"cg-f-{_M1U}", "cgf.md", base + "- [S1] 甲\n", ts_override="2026-09-08T20:00:00-05:00")   # 真 UTC 09-09T01:00,晚於 cutoff(09-08T16:00Z)
@@ -4615,7 +4622,9 @@ def t_disposal_clause_gate():
     r = _loop(v, f"cg-h-{_M1U}", "cgh.md", base + "- [S1] 甲 [manual: ]\n")
     check("clause-gate: [manual: ] 空的 → 視同未標 FAIL", r.returncode == 1 and "S1(第" in r.stdout, r.stdout[-400:])
     r = _loop(v, f"cg-i-{_M1U}", "cgi.md", base + "### [S1] 真條款 [test:t_x]\n寫法例如 `[S9] 這是範例格式`,不是真的有第九條\n")
-    check("clause-gate: 只在反引號出現的 [S9] 不算條款(r1 blocker),不會讓閘 FAIL", "S9" not in r.stdout.split("條款綁定")[-1].split("\n")[0] and "不算條款" in r.stdout, r.stdout[-500:])
+    check("clause-gate: 只在反引號出現的 [S9] 不算條款(r1 blocker),不會讓閘 FAIL", r.returncode == 0 and "S9" not in r.stdout.split("條款綁定")[-1].split("\n")[0] and "1 條全標" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-i2-{_M1U}", "cgi2.md", base + "### [S1] 真條款 [test:t_x],例如 `[S9] 範例格式`\n")
+    check("clause-gate: 同一行「真條款 + 反引號範例」也不會讓閘 FAIL(r2 blocker)", r.returncode == 0 and "1 條全標" in r.stdout, r.stdout[-500:])
     # 凍結/回放模式(帶 spec_sha_override)不重讀活檔
     m = _load_lumos_inproc()
     spec_md = v / "Projects" / "cgz.md"; spec_md.write_text(base + "- [S1] 甲\n", encoding="utf-8")
@@ -4623,6 +4632,10 @@ def t_disposal_clause_gate():
     with contextlib.redirect_stdout(buf):
         st = m._disposal_clause_step([{"ts": NEW}], str(spec_md), v.parent, None, loop_id="cg-z", spec_sha_override="deadbeef")
     check("clause-gate: 凍結/回放模式帶 [SN] 沒標的活檔也跳過、理由句講明", st == "skip" and "凍結/回放" in buf.getvalue(), f"{st} {buf.getvalue()}")
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        st2 = m._disposal_clause_step([{"ts": NEW}], str(v / "Projects" / "nope.md"), v.parent, None, loop_id="cg-z")
+    check("clause-gate: 計劃讀不到 → abort(呼叫端同 G3 擋下 rc2),不是軟 FAIL", st2 == "abort" and "擋下" in err.getvalue(), f"{st2} {err.getvalue()}")
     # 真索引(git repo + .lumos 設定 + tests/t_ok):綁了 → 過;懸空 → 只提醒照過(r1 單reviewer F7)
     d2, v2 = _clause_repo("gctl-cgri-")
     try:
@@ -4630,6 +4643,10 @@ def t_disposal_clause_gate():
         check("clause-gate: 真索引綁了真測試 → PASS 且印 綁了 1", r.returncode == 0 and "綁了 1" in r.stdout, r.stdout[-500:])
         r = _loop(v2, f"cg-k-{_M1U}", "cgk.md", base + "- [S1] 甲 [test:t_gone]\n- [S2] 乙 [test:t_mentioned]\n", repo=d2)
         check("clause-gate: 真索引懸空(寫錯+只被提到)→ 只提醒照過", r.returncode == 0 and "懸空 2 只提醒不擋" in r.stdout, r.stdout[-500:])
+        # 測試索引建不起來(設定壞:platforms 缺 default)→ fail-closed(獨立審計挑出的無人看管半句)
+        (d2 / ".lumos" / "config.json").write_text('{"platforms": {"a": {"profile": "python", "root": "."}, "b": {"profile": "python", "root": "."}}}', encoding="utf-8")
+        r = _loop(v2, f"cg-l-{_M1U}", "cgl.md", base + "- [S1] 甲 [test:t_ok]\n", repo=d2)
+        check("clause-gate: 測試索引建不起來 → FAIL(驗不了≠通過)", r.returncode == 1 and "索引建不起來" in r.stdout, r.stdout[-500:])
     finally:
         shutil.rmtree(d2, ignore_errors=True)
 

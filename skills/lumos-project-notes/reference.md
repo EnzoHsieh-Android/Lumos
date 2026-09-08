@@ -370,7 +370,7 @@ find docs/{vault-name} -name '*\]\]*'
 |---|---|---|
 | `type/` `status/` | enum(status 依 type:system=doing/done/planned/deferred/rejected/superseded/stale;project=todo/doing/done/superseded;issue=open/doing/resolved/done/wontfix;verification=**pass**;moc=doing/done) | 生命週期;lint 硬擋野值 |
 | `priority/` | **P0-P3** | 處理優先級(P0 最急),主用 Issues |
-| `scope/` | kebab 值;**值域由專案自己宣告**在 `.lumos/config.json` 的 `scope` 區塊(`{"values":[…],"required":true}`)——宣告了 lint 才唸(沒掛/掛超過兩個/值不在表內都只 warning 不擋),沒宣告=自由值零噪音 | 消費專案=業務域切片(pointsmall/concurrency…);lumos 工具鏈自己=九個研究方向(node-content/retrieval/loop-engineering/agent-dag/evals/guards-gates/stack-knowledge/platform/ux-docs-hygiene,定義與邊界見該圖譜 `Projects/工具分類_計劃`)。★一篇一個主類,真橫跨才第二個★;★feature/ 與 area/ 已凍結,新寫入一律 scope/(讀側仍認舊帳)★ |
+| `scope/` | 自由 kebab 值(pointsmall/concurrency…) | 業務域切片;★feature/ 與 area/ 已凍結,新寫入一律 scope/(讀側仍認舊帳)★ |
 | `risk/` | **金流/對外送出/不可逆/守衛面** | Systems 專用;消費者=impact(★2026-08-24 起 RISK·值不再保送必看——降入「守衛面參考」lane 小節;固定席只認 INVARIANT/IRREVERSIBLE+事故★)+design-loop light 硬否決 |
 | `flag/` | 小寫語意標;已知有效:do-not-modify/security-relevant/depends-on-claude-code-internals/depends-on-obsidian-internals | 節點級警示,AI 讀 |
 

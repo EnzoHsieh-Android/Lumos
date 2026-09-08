@@ -3038,7 +3038,7 @@ _MANUAL_MIN_CHARS = 4
 # src|git 擴充(M1 Check J):影響 11 處行號/8 類呼叫點(Check T 乾淨宣稱/contracts/lint 訊息/
 # guard 分類·list·trace/scaffold/kill-add/audit)——行為後果:guard 定位對「正文相同只差指針」
 # 的合約改多重命中=要求更精確正文(指針非宣稱正文,符合語意非退化);[test:] 抽取不受影響。
-INV_TAG_RE = re.compile(r"\[(?:test|audit|kill|src|git|manual):\s*[^\]]*\]")
+INV_TAG_RE = re.compile(r"\[(?:(?:test|audit|kill|src|git):\s*[^\]]+|manual:\s*[^\]]*)\]")   # manual 允許空(要能剝掉 [manual: ]),其餘照舊至少一字
 KILL_REF_RE = re.compile(r"\[kill:\s*recipes\s*\]")
 # 真實可執行測試方法:xUnit 屬性([Fact]/[Theory]/[SkippableFact],含 (Skip=..) 變體)
 # + 可選後續屬性(InlineData/MemberData/Trait)→ 存取修飾 → 可選 async → 回傳型別 → 方法名。
@@ -4058,8 +4058,9 @@ _CLAUSE_GATE_SINCE = "2026-09-09T00:00:00+08:00"   # 處置閘的條款綁定步
 
 def clause_bindings(text, split, default, methods_for, hay_for):
     """計劃正文的 [SN] 條款 × 同一行的 [test:]/[manual:](條款綁測試算進度 [S1];唯讀、純函式)。
-    定義行=該 id 第一次出現在行首的那一行(去 - * # > 數字. 粗體/反引號符號),都不在行首就取第一次出現的行——
-    「見 [S2]」這種行內引用不算定義。配對範圍=同一行、在它之後、下一個 [SN] 之前
+    定義行=該 id 第一次出現在行首的那一行(去 - * # > 數字. | 粗體符號),從沒在行首出現過的 id=非定義(undefined,不算條款)——
+    「見 [S2]」這種行內引用不算定義;★反引號裡的內容整段遮掉再掃★(r2 單reviewer blocker:同一行「真條款 + `[S9] 範例`」曾讓閘 FAIL)。
+    配對範圍=同一行、在它之後、下一個 [SN] 之前
     (r1 通才席:SPEC_CLAUSE_RE/TEST_REF_RE 都是全文正則沒有行邊界,不同實作者會各自猜)。
     狀態七種(r1 接手席/通才席:四態不是三態、懸空要分「寫錯」與「設定認不到」,後者不進量測分母):
       untagged 未標 / manual 靠人 / bound 綁了(全部 ref 都是真測試)/ dangling 寫錯(方法集合與檔案都沒有)/
@@ -4068,7 +4069,8 @@ def clause_bindings(text, split, default, methods_for, hay_for):
     分類沿用 _classify_one(不開第二套引擎;r1 簡化席開碼確認),只在它答 fake/dangling 時多做一步分辨。
     同一行同時有 [test:] 與 [manual:] → 以 [test:] 為準(靠人只在沒測試時成立)。回 list[dict] 依 id 排序。"""
     defined, fallback = {}, {}
-    for no, line in enumerate(text.split("\n"), 1):
+    for no, raw in enumerate(text.split("\n"), 1):
+        line = re.sub(r"`[^`]*`", lambda m: " " * len(m.group(0)), raw)   # 反引號裡的一律是範例:整段遮掉(長度不變,行號/位置照舊)
         ms = list(SPEC_CLAUSE_RE.finditer(line))
         if not ms:
             continue
@@ -4088,7 +4090,8 @@ def clause_bindings(text, split, default, methods_for, hay_for):
             continue
         no, seg = defined[cid]
         refs = invariant_test_refs(seg)
-        manual = [x.strip() for x in MANUAL_REF_RE.findall(seg) if len(x.strip()) >= _MANUAL_MIN_CHARS]
+        manual = [x.strip() for x in MANUAL_REF_RE.findall(seg)
+                  if len(x.strip()) >= _MANUAL_MIN_CHARS and re.search(r"[^\W_]", x)]   # ≥4 字且至少一個實字(四個標點不算「講了怎麼驗」)
         row = {"id": f"S{cid}", "line": no, "refs": refs, "manual": manual, "defined": True}
         if not refs:
             row["state"] = "manual" if manual else "untagged"   # [manual: ] 空的或太短=沒講怎麼驗=未標(外家席 major 2)
@@ -4185,9 +4188,10 @@ def cmd_spec_trace(env, node, as_json=False):
     # 條款綁測試算進度 [S3](2026-09-08):★單一裁決來源=條款行綁的測試★;舊制「驗證筆記回指」欄保留印出、只當對照。
     binds, berr = _clause_bindings_for(env, text)
     bmap = {b["id"]: b for b in binds}
-    untagged = [f"S{i}" for i in ids if bmap.get(f"S{i}", {}).get("state", "untagged") == "untagged"]
+    untagged = [f"S{i}" for i in ids if bmap.get(f"S{i}", {}).get("state") == "untagged"]
     summ = _clause_summary([b for b in binds if b["state"] != "undefined"])
-    summ["undefined"] = sum(1 for b in binds if b["state"] == "undefined")
+    # 非定義=從沒在行首定義的(行內引用),或只在反引號裡出現的(遮掉後根本掃不到、不在 binds 裡)
+    summ["undefined"] = sum(1 for b in binds if b["state"] == "undefined") + sum(1 for i in ids if f"S{i}" not in bmap)
     if as_json:
         print(json.dumps({"plan": rel, "clauses": {f"S{i}": claims[i] for i in ids},
                           "unclaimed": [f"S{i}" for i in unclaimed],
@@ -4199,14 +4203,14 @@ def cmd_spec_trace(env, node, as_json=False):
             print(f"提醒:測試索引建不起來({berr}),綁定欄全印「索引不可得」;先修 .lumos/config.json 的 test 設定", file=sys.stderr)
         for i in ids:
             b = bmap.get(f"S{i}")
-            st = _CLAUSE_STATE_ZH[b["state"]] if b else ("索引不可得" if berr else "未標")
+            st = _CLAUSE_STATE_ZH[b["state"]] if b else ("索引不可得" if berr else "非定義(只在反引號裡出現,不算條款)")
             tail = ""
             if b and b["refs"]:
                 tail = " ← " + ", ".join(b["refs"])
             elif b and b["manual"]:
                 tail = " ← " + "; ".join(b["manual"])
-            mark = "✓" if (b and b["state"] in ("bound", "manual")) else ("✗" if (not b or b["state"] == "untagged") else "⚠")
-            if b and b["state"] == "undefined":
+            mark = "✓" if (b and b["state"] in ("bound", "manual")) else ("✗" if (b and b["state"] == "untagged") else "⚠")
+            if (b and b["state"] == "undefined") or (not b and not berr):
                 mark = "·"
             who = ", ".join(Path(x).stem for x in claims[i]) or "無"
             print(f"{mark} [S{i}] {st}{tail}(舊制回指:{who})")
@@ -13401,19 +13405,17 @@ def _quote_rows(rtext, stext):
 def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=None):
     """處置閘第五步(條款綁測試算進度 [S3]):回 "fail" / "ok" / "skip",自己印一行 [disposal] 條款綁定。
     skip 四種:①凍結/回放模式(spec_sha_override 有值,對凍結 sha 判、不重讀活檔)②迴圈類型是 code(loop id 前綴 code-,同 _roster_kind;
-    不看副檔名——外家席:.patch 跳過只看尾碼會被設計審拿 patch 當審材繞過)③迴圈首筆帳早於 _CLAUSE_GATE_SINCE(不回溯)④計劃無 [SN](opt-in 未啟用)。
-    設計審審材不是 .md、首筆帳 ts 讀不動、計劃讀不成文字、測試索引建不起來 → 一律 fail(驗不了≠通過)。
+    code 開頭但不是 code- 的一律當設計審,fail-closed;不看副檔名——外家席:.patch 跳過只看尾碼會被設計審拿 patch 當審材繞過)
+    ③迴圈首筆帳早於 _CLAUSE_GATE_SINCE(不回溯)④計劃無 [SN](opt-in 未啟用)。
+    設計審審材不是 .md、首筆帳 ts 讀不動、測試索引建不起來 → fail(驗不了≠通過);計劃讀不成文字 → "abort"(呼叫端同 G3 擋下 rc2,兩步同一種處置)。
     這是「設計審出口真的有東西逼」的那一半——沒有它,綁測試名跟 spec-trace 一樣沒人做(33 篇 15 篇零認領)。"""
     if spec_sha_override is not None:
         print("[disposal] 條款綁定: —(凍結/回放模式:不重讀活檔,以問閘當下的判定為準)")
         return "skip"
-    kind = _roster_kind(loop_id or "")
-    if kind == "code":
+    if _roster_kind(loop_id or "") == "code":
         print("[disposal] 條款綁定: —(code 迴圈,審材是 diff 不是計劃,不看條款)")
         return "skip"
-    if kind is None:
-        print(f"[disposal] 條款綁定: —(loop 編號 {loop_id!r} 看不出是設計審還是代碼審,不判;新迴圈請用 code-<主題> 或不帶 code 前綴)")
-        return "skip"
+    # _roster_kind 回 None(code 開頭但不是 code-)一律當設計審:fail-closed,免得取個 codeX 的編號就繞過(r2 外家席實跑抓到)
     tss = [str(r.get("ts", "")) for r in rows if r.get("ts")]
     keys = [(_loop_ts_key(x), x) for x in tss]
     if any(k is None for k, _ in keys):
@@ -13429,8 +13431,8 @@ def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=N
     try:
         text = Path(spec).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
-        print(f"[disposal] 條款綁定: ✗ — --spec 指的文件讀不成文字({e.__class__.__name__}),確認路徑對不對:\n    {spec}")
-        return "fail"
+        print(f"擋下:--spec 指的文件讀不成文字({e.__class__.__name__}),確認路徑對不對:\n    {spec}", file=sys.stderr)
+        return "abort"
     if not SPEC_CLAUSE_RE.search(text):
         print("[disposal] 條款綁定: —(計劃無 [SN] 條款,opt-in 未啟用)")
         return "skip"
@@ -13744,7 +13746,10 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         # no-dir(scratch 迴圈,如自主迴圈 /tmp 工作區)= 跳過不印
     # ── ⑤ 條款綁定(條款綁測試算進度 [S3],2026-09-08):計劃有 [SN] 的,每條要嘛 [test:] 要嘛 [manual:],否則不得 PASS。
     #    只看 .md 計劃、首筆帳在 _CLAUSE_GATE_SINCE 之後的迴圈(不回溯);懸空只印不擋(存在性歸 doctor/spec-trace 唸)。
-    if _disposal_clause_step(rounds, spec, root, env, loop_id=loop_id, spec_sha_override=spec_sha_override) == "fail":
+    _cl = _disposal_clause_step(rounds, spec, root, env, loop_id=loop_id, spec_sha_override=spec_sha_override)
+    if _cl == "abort":
+        return 2          # 同 G3:審材讀不到是用法錯誤,整支停,不是「這一項沒過」(r1/r2 架構席)
+    if _cl == "fail":
         fails.append("條款綁定")
     if result_out is not None:
         result_out["rid"] = rid
