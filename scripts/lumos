@@ -839,7 +839,12 @@ def _gate_event(repo_root, gate, kind, note, *, hard=False, head_sha=None,
     root = Path(repo_root)
     docs = root / "docs"
     if not docs.is_dir():
-        return False
+        # ★「這個 repo 根本沒有這本帳」不是「寫不進去」★(2026-09-08 r1 通才席 major):
+        # 沒跑過 lumos init 的 repo 本來就沒有 docs/,這是結構性、每次都會發生、
+        # 永遠不會自己好。用「寫不進去」那句話講它,會讓人以為工具壞了去瞎排查,
+        # 久了養成忽略這類警告的習慣——恰好抵銷這批想建立的信任。
+        # 既有的姐妹寫入器面對同一情境是靜靜略過,這裡對齊它:回 None 表示「不適用」。
+        return None
     if not head_sha:
         try:
             head_sha = _sp_run_text(["git", "-C", str(root), "rev-parse", "HEAD"])
@@ -860,11 +865,20 @@ def _gate_event(repo_root, gate, kind, note, *, hard=False, head_sha=None,
         "commit": (head_sha or "")[:7],
         "gate": gate, "kind": kind, "hard": bool(hard),
         "nodes": list(nodes or []), "note": note,
+        # ★同一個 gate 的欄位名要對得起來★(2026-09-08 r1 架構席 major):
+        # 既有的 _codeloop_gov_log 把備註寫成 detail、分支寫成 branch,而這支寫 note / ref
+        # ——同一個 gate="code-loop" 的歷史紀錄要認兩套欄名才查得全。兩邊都寫。
+        "detail": note,
     }
     att = os.environ.get("LUMOS_PUSH_ATTEMPT", "").strip()
     if att:
         ev["attempt_id"] = att[:64]
     if ref:
+        # ★這裡刻意不寫 branch★:架構對齊席指出「新事件讀不到」時說了一句
+        # 「目前不算功能性錯誤——新事件本來就不該被當成 marker」。
+        # ★那句話講的是一個保護,不是一個不一致★——我第一次折的時候把它當成欄名不一致、
+        # 順手加了 branch 別名,結果 blocked 事件當場被 _codeloop_read_from_ledger
+        # 當成留痕讀走,既有測試翻紅。欄名對齊只做 note/detail 那一半,分支識別不對齊。
         ev["ref"] = ref
     if head_sha:
         ev["head_sha"] = head_sha
@@ -881,6 +895,8 @@ def _gate_event(repo_root, gate, kind, note, *, hard=False, head_sha=None,
 def _gate_event_or_warn(repo_root, gate, kind, note, **kw):
     """落帳,寫不進去就在 stderr 講一句。★永遠不改變呼叫端的判定★(#19 S7)。"""
     ok = _gate_event(repo_root, gate, kind, note, **kw)
+    if ok is None:
+        return None          # 這個 repo 沒有治理帳(沒跑過 lumos init)——不適用,不是故障
     if not ok:
         print(f"  ⚠ telemetry-write-failed:{gate} 這一筆帳寫不進去(判定不受影響,照原樣執行)",
               file=sys.stderr)
@@ -12583,7 +12599,12 @@ def _scaffold_project(root: Path, slug: str):
     print(f"  ✓ scaffold {kg}(帳檔 .gitignore → {kg.parent / '.gitignore'})")
 
 
-_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py", "dispatch-lens-hook.py")
+_GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py", "dispatch-lens-hook.py",
+                        # ★共用模組也要複製★(2026-09-08 code-enforcement-obs r1 外家席 blocker):
+                        # 五支 hook 都 `from _hookevent import guard`。沒複製它 → 安裝副本 import 失敗
+                        # → 退回不記事件 → enforcement 對那五列永遠 unknown。★裝了等於沒裝★,
+                        # 而且來源樹的測試照樣全綠(測的是來源樹,不是安裝副本)。
+                        "_hookevent.py")
 _GLOBAL_HOOKS = _GLOBAL_CLAUDE_HOOKS   # 兩家共用同一批檔(Claude→~/.claude/hooks、Codex→~/.codex/hooks;Projects/Codex完全支援_計劃 d2);舊名留給既有呼叫/測試
 _SKILL_MARKER = ".lumos-managed"       # fallback 複製出的 skill 目錄帶此標記檔;開放共用目錄只重建帶標記的(r2 邊界 N1)
 _HARNESS_HOME = {"claude": (".claude", "settings.json"), "codex": (".codex", "hooks.json")}
@@ -13184,6 +13205,10 @@ ANCHOR_FILES = [
     "scripts/hooks/claude/impact-hook.py",          # 改檔前把牽連的合約推到眼前
     "scripts/hooks/claude/check-graph-sync.py",     # 收工檢查圖譜有沒有跟上
     "scripts/hooks/claude/ci-status-hook.py",       # 推送後回報 CI 狀態
+    # ★2026-09-08 #19 S4:五支 hook 共用的事件寫入器★——它被那五支 import、
+    # 而且會跟著複製到 ~/.claude/hooks/,所以它也是「一打開資料夾就自動跑」的程式的一部分。
+    # 漏登記的話 anchor verify 會直接擋推送(r1 架構對齊席當場重現),而那道★永遠不可跳★。
+    "scripts/hooks/claude/_hookevent.py",
 ]
 _ANCHOR_BASELINE_REL = "governance/anchor-baseline.json"
 
@@ -14095,7 +14120,10 @@ def enforcement_summary(rows):
     """回 (active 數, 非 unknown 總數, unknown 數)。分母排除 unknown;
     ★也排除 registered-trust-unknown★(Codex hook 已註冊但要人審過才跑、本機讀不到——既不算生效也不算壞,
     算進分母會讓摘要永遠紅;它在列表裡用 🔒 單獨可見)。"""
-    unknown = sum(1 for r in rows if r["status"] in ("unknown", "registered-trust-unknown"))
+    # ★stale 跟 unknown 同一族:不確定,別冤枉★(2026-09-08 r1 架構席 major)。
+    # 漏排它的話,「近期沒被觸發」會被算進分母當成沒生效,摘要永遠偏悲觀
+    # ——那正是這個排除清單當初為 registered-trust-unknown 設立的同一個道理。
+    unknown = sum(1 for r in rows if r["status"] in ("unknown", "registered-trust-unknown", "stale"))
     total = len(rows) - unknown
     active = sum(1 for r in rows if r["status"] == "active")
     return active, total, unknown
@@ -14112,7 +14140,8 @@ def cmd_enforcement(repo=None, as_json=False):
         active, total, unknown = enforcement_summary(rows)
         print(_json.dumps({"rows": rows, "active": active, "total": total, "unknown": unknown}, ensure_ascii=False))
         return 0
-    mark = {"active": "✅", "inactive": "❌", "degraded": "⚠️", "unknown": "❔", "registered-trust-unknown": "🔒"}
+    mark = {"active": "✅", "inactive": "❌", "degraded": "⚠️", "unknown": "❔",
+            "registered-trust-unknown": "🔒", "stale": "🕰"}   # 新增值域要同步加圖示,不然落到 '?'(r1 架構席)
     print("Lumos 防護生效狀態(這查的是「有沒有裝上/接上」,不是「判得對不對」)\n")
     for r in rows:
         print(f"  {mark.get(r['status'], '?')} {r['layer']:26s} {r['status']:24s} {r['detail']}")
@@ -19684,6 +19713,12 @@ def _codeloop_read_from_ledger(repo_root, branch):
             line = line.strip()
             if not line or '"code-loop"' not in line:
                 continue
+            # ★只有 pass/skip 才是留痕★(2026-09-08 #19 代碼審 r1 之後補的防禦):
+            # 同一個 gate 底下現在還有 blocked / skipped-env / fail-open 這些事件,
+            # 它們絕不能被當成「審過了」的憑證。上面撤掉 branch 別名已經擋住一次,
+            # 這裡是第二道——★別讓「哪些 kind 算留痕」這件事只靠欄位有沒有寫★。
+            if ('"passed"' not in line) and ('"skipped"' not in line):
+                continue
             try:
                 ev = json.loads(line)
             except Exception:
@@ -20235,6 +20270,18 @@ def _codeloop_marker_skipped(repo_root, reason, head_sha):
     """
     import os as _os
     if _os.environ.get("LUMOS_SKIP_CODE_LOOP") != "1":
+        return False
+    # ★兩個跳閘不准疊★(r1 外家否決席 major,我實測屬實):
+    # `--skip-bound-tests --note …` 讓合約測試閘回 skipped,再加這個環境變數跳掉留痕要求
+    # ——兩層疊起來就是完整放行,而那直接推翻「合約測試閘不可跳」這句話。
+    # 處置不是把話改小,是不准疊:合約測試閘已經被跳過時,這個環境變數失效。
+    _bt = getattr(_codeloop_guard_verdict, "last_bound", None)
+    if isinstance(_bt, dict) and str(_bt.get("status", "")).startswith("skipped"):
+        print("  ⚠ 合約測試閘這次已經被跳過了,所以 LUMOS_SKIP_CODE_LOOP 不生效"
+              "——★兩個跳閘疊起來等於完整放行★,那是這批明令不准的。", file=sys.stderr)
+        _gate_event_or_warn(repo_root, "code-loop", "skipped-env",
+                            "拒絕:合約測試閘已被跳過時不接受 LUMOS_SKIP_CODE_LOOP",
+                            hard=False, head_sha=head_sha)
         return False
     _gate_event_or_warn(repo_root, "code-loop", "skipped-env",
                         f"env LUMOS_SKIP_CODE_LOOP=1;原本會擋的理由:{reason}",

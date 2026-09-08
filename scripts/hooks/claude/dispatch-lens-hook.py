@@ -328,6 +328,17 @@ def main() -> int:
                  else SPEC_TIMEOUT_NOTE.format(what=what))
         _emit_updated(tool_input, prompt, _note)
         _debug("lumos dispatch-lens 超時,已附超時說明行(那支仍在背景把快取算完)")
+        # ★吞掉逾時的地方要自己講一聲★(#19 r1 外家否決席 blocker):
+        # 這一條是「捕捉逾時 → 附說明 → 正常 return 0」,而 guard() 只看得到有沒有丟例外,
+        # 所以不講的話這次會被記成「成功跑完」——一支每次都逾時的 hook 會穩定顯示
+        # 「近期跑過 N 次」,正是這一批要防的假綠。
+        try:
+            import sys as _s2, pathlib as _p2
+            _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
+            from _hookevent import mark as _mark
+            _mark("timeout", "lumos dispatch-lens 逾時,附了說明行")
+        except Exception:
+            pass
         return 0
 
     if r.returncode != 0:

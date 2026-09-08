@@ -26,6 +26,7 @@
 ★不記「注入 N 次」★:那是**成效**,而派工鏡頭那案的 d1 明令「不擋不驗不記不量」。
 本批只做「活著沒」(跑過 / 逾時 / 失敗),不做「有沒有用」。這條分界不要順手加回去。
 """
+import datetime
 import json
 import os
 import time
@@ -59,7 +60,13 @@ def record(repo_root, hook_name, kind, note="", hook_file=None):
         d.mkdir(parents=True, exist_ok=True)
         f = d / "hook-events.jsonl"
         ev = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            # ★不能用 time.strftime("%z")★(2026-09-08 r1 通才席 blocker,兩個版本實跑對照):
+            # 它吐的偏移量沒有冒號(+0800),而讀側用 datetime.fromisoformat——
+            # ★那在 Python 3.11 之前不吃無冒號格式★。實測 3.9 直接 ValueError,
+            # 而 3.9 是這個 repo 的下限、3.10 是 Ubuntu 22.04 內建版本,不是冷門情境。
+            # 後果是「兩秒前才成功記的一筆」被判成沒跑過 → 儀表板在那些機器上永久 stale,
+            # 正好打臉這批的核心賣點。用 datetime 自己的 isoformat,兩邊同一套。
+            "ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
             "hook": hook_name,
             "kind": kind,
             "repo": str(root.resolve()),
@@ -86,13 +93,35 @@ def record(repo_root, hook_name, kind, note="", hook_file=None):
 
 
 def _root_from_cwd():
+    """★逾時砍到 3 秒★(r1 外家席 major):這支跑在每支 hook 的本業之前,
+    正常態實測約 13 毫秒,但最壞態原本設 10 秒——跟 hook 的整體預算同量級,
+    git 卡住時會先把預算吃完,讓本業根本沒機會跑。觀測絕不能排擠本業。"""
     import subprocess
     try:
         r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, timeout=3)
         return r.stdout.strip() or None
     except Exception:
         return None
+
+
+_MARKED = {"kind": None, "note": ""}
+
+
+def mark(kind, note=""):
+    """hook 自己在「內部吞掉了逾時/失敗」的地方呼叫這一支(#19 r1 外家席 blocker)。
+
+    ★為什麼需要它★:`guard()` 只看得到 `main()` 有沒有丟例外。
+    而五支 hook 有好幾條「捕捉逾時 → 附一行說明 → 正常 return 0」的路徑
+    (dispatch-lens 的 `except subprocess.TimeoutExpired` 就是),
+    ★那種情況下 guard 會把它記成 ok——一支每次都逾時的 hook 會穩定顯示「跑過 N 次」★,
+    正是這一批自己點名要防的假綠。而 KINDS 裡宣告的 timeout 原本沒有任何接線寫得到。
+
+    所以吞掉的那一方要自己講一聲。沒講的才算 ok。
+    """
+    if kind in KINDS:
+        _MARKED["kind"] = kind
+        _MARKED["note"] = str(note)[:200]
 
 
 def guard(hook_name, hook_file, main, swallow=False):
@@ -111,11 +140,21 @@ def guard(hook_name, hook_file, main, swallow=False):
         rc = main()
     except Exception as e:
         if root:
-            record(root, hook_name, "error", note=type(e).__name__ + ":" + str(e)[:120],
-                   hook_file=hook_file)
+            if not record(root, hook_name, "error",
+                          note=type(e).__name__ + ":" + str(e)[:120], hook_file=hook_file):
+                print("  ⚠ telemetry-write-failed:hook 事件寫不進去",
+                      file=__import__("sys").stderr)
         if swallow:
             return 0
         raise
     if root:
-        record(root, hook_name, "ok", hook_file=hook_file)
+        # ★內部吞掉逾時/失敗時,記的是那個 kind,不是 ok★(見 mark 的說明)。
+        _k = _MARKED["kind"] or "ok"
+        ok = record(root, hook_name, _k, note=_MARKED["note"], hook_file=hook_file)
+        if not ok:
+            # ★S7 也要蓋到這本帳★(r1 外家席 major):原本 record 把寫入錯誤吞成 False
+            # 而 guard 完全不看回傳值,所以磁碟滿/權限錯時 stderr 一個字都沒有,
+            # 操作者只會看到 enforcement 慢慢變 stale,分不出是 hook 沒跑還是帳壞了。
+            print("  ⚠ telemetry-write-failed:hook 事件寫不進去(hook 自己的工作不受影響)",
+                  file=__import__("sys").stderr)
     return rc

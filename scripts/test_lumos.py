@@ -30131,6 +30131,369 @@ def _gate_rows(root):
     return [_json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
+def t_blocked_events_are_never_read_as_markers():
+    """★擋下/跳過/放行的事件,絕不能被當成「審過了」的憑證★(2026-09-08 代碼審 r1 之後補的)。
+
+    真的踩到了:我把新落帳器的欄名「對齊」既有那支時順手加了分支欄位,
+    結果 `blocked` 事件當場被留痕讀取器讀走——既有測試翻紅才發現。
+
+    ★架構對齊席原本那句話是在講一個保護,不是在講一個不一致★:
+    它說「新事件讀不到 marker 讀取器——目前不算功能性錯誤,新事件本來就不該被當成 marker」。
+    我把它當成欄名不一致去修,等於把保護拆掉。
+
+    現在兩道:①落帳時不寫分支識別欄 ②讀留痕時只認 passed/skipped 兩種 kind。
+    ★別讓「哪些 kind 算留痕」只靠欄位有沒有寫★。
+    """
+    import json as _j, shutil as _sh, tempfile as _tf, subprocess as _sp
+    m = _load_lumos_inproc()
+    root = Path(_tf.mkdtemp(prefix="gctl-marker-"))
+    try:
+        _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+        (root / "docs").mkdir()
+        log = root / "docs" / ".governance-log.jsonl"
+        rows = [
+            {"ts": "2026-09-08T10:00:00+08:00", "gate": "code-loop", "kind": "passed",
+             "branch": "main", "head_sha": "aaaa", "detail": "真的審過了"},
+            {"ts": "2026-09-08T11:00:00+08:00", "gate": "code-loop", "kind": "blocked",
+             "branch": "main", "head_sha": "bbbb", "note": "擋下"},
+            {"ts": "2026-09-08T12:00:00+08:00", "gate": "code-loop", "kind": "skipped-env",
+             "branch": "main", "head_sha": "cccc", "note": "被跳過"},
+            {"ts": "2026-09-08T13:00:00+08:00", "gate": "code-loop", "kind": "fail-open",
+             "branch": "main", "head_sha": "dddd", "note": "放行"},
+        ]
+        log.write_text("".join(_j.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        rec = m._codeloop_read_from_ledger(root, "main")
+        check("★前置★ 讀得到東西(不然下面的斷言是空的)", rec is not None, str(rec))
+        if rec:
+            check("★讀到的必須是那筆 passed,不是後面任何一種新事件★",
+                  rec.get("head_sha") == "aaaa" and rec.get("status") == "passed", str(rec))
+        # 反向對照:只有新事件、沒有 passed/skipped → 要回 None,不能硬湊一筆
+        log.write_text("".join(_j.dumps(r, ensure_ascii=False) + "\n" for r in rows[1:]),
+                       encoding="utf-8")
+        check("★只有擋下/跳過/放行時,要回「沒有留痕」★",
+              m._codeloop_read_from_ledger(root, "main") is None,
+              str(m._codeloop_read_from_ledger(root, "main")))
+        # 落帳器不准寫分支識別欄(第一道)
+        src = Path(GRAPHCTL).read_text(encoding="utf-8")
+        i = src.index("def _gate_event(")
+        seg = src[i:src.index("def _gate_event_or_warn", i)]
+        code = "\n".join(l for l in seg.splitlines() if not l.lstrip().startswith("#"))
+        check("★落帳器不准寫 branch 欄★(寫了就會被留痕讀取器撿走)",
+              'ev["branch"]' not in code, code)
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_blocked_events_are_never_read_as_markers")
+
+
+def t_hook_event_timestamp_roundtrips_on_old_python():
+    """★寫入端與讀取端的時間格式要在最舊的支援版本上兜得起來★(2026-09-08 r1 通才席 blocker)。
+
+    真的壞過:寫入用 `time.strftime("%Y-%m-%dT%H:%M:%S%z")`,吐出來的偏移量**沒有冒號**
+    (`+0800`);而讀取用 `datetime.fromisoformat`,★那在 Python 3.11 之前不吃無冒號格式★。
+    實測 3.9 直接 ValueError——而 3.9 是這個 repo 的下限、3.10 是 Ubuntu 22.04 內建版本。
+    後果是「兩秒前才成功記的一筆」被判成沒跑過,儀表板在那些機器上永久 stale,
+    ★正好打臉這批的核心賣點★。
+
+    ★而我的測試原本測不到它★:消費端測試自己造事件時用的是
+    `datetime.now().astimezone().isoformat()`(帶冒號),**從沒真的呼叫過寫入器**
+    ——消費端與生產端用了不同的資料產生方式,兩邊格式從沒被放在一起驗過。
+    這一支就是把它們接起來:用寫入器真的寫、用讀取端真的讀。
+    """
+    import shutil as _sh, tempfile as _tf, subprocess as _sp, os as _os
+    _need_src("scripts/hooks/claude/_hookevent.py")
+    hookdir = Path(GRAPHCTL).resolve().parent / "hooks" / "claude"
+    cands = [sys.executable]
+    for alt in ("/usr/bin/python3", "/usr/local/bin/python3"):
+        if _os.path.exists(alt) and alt not in cands:
+            cands.append(alt)
+    checked_old = False
+    for py in cands:
+        ver = _sp.run([py, "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
+                      capture_output=True, text=True).stdout.strip()
+        root = Path(_tf.mkdtemp(prefix="gctl-tsrt-"))
+        try:
+            _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+            probe = root / "p.py"
+            probe.write_text(
+                "import sys\n"
+                "sys.path.insert(0, %r)\n" % str(hookdir) +
+                "from _hookevent import record\n"
+                "print(record(%r, 'H', 'ok', hook_file=__file__))\n" % str(root),
+                encoding="utf-8")
+            w = _sp.run([py, str(probe)], cwd=str(root), capture_output=True, text=True, timeout=60)
+            check("★%s 寫得出事件★" % ver, "True" in w.stdout, w.stdout + w.stderr[-200:])
+            verdict = _sp.run(
+                [py, "-c",
+                 "import importlib.machinery as m, importlib.util as u, sys\n"
+                 "l = m.SourceFileLoader('lm', %r)\n" % str(Path(GRAPHCTL).resolve()) +
+                 "sp = u.spec_from_loader('lm', l); mod = u.module_from_spec(sp)\n"
+                 "sys.argv=['lumos']\n"
+                 "try:\n    l.exec_module(mod)\nexcept SystemExit:\n    pass\n"
+                 "print(mod._hook_recent_ok(%r, 'H', %r)[0])" % (str(root), str(probe))],
+                capture_output=True, text=True, timeout=120).stdout.strip()
+            check("★%s:剛寫的那筆要讀得回來(不能判成 stale)★" % ver,
+                  verdict == "ok", "verdict=%r" % verdict)
+            if ver and tuple(int(x) for x in ver.split(".")) < (3, 11):
+                checked_old = True
+        finally:
+            _sh.rmtree(root, ignore_errors=True)
+    check("★前置★ 這台機器上有沒有 3.11 以前的 python 可以驗(沒有就只驗到當前版本)",
+          True, "checked_old=%s" % checked_old)
+    src = (hookdir / "_hookevent.py").read_text(encoding="utf-8")
+    check("★不准用 time.strftime 的 %z 寫時間戳★(它吐無冒號偏移,3.11 前讀不動)",
+          '"%Y-%m-%dT%H:%M:%S%z"' not in src, "碼裡還有那個格式")
+    print("  ✓ t_hook_event_timestamp_roundtrips_on_old_python")
+
+
+def t_enforcement_stale_is_not_counted_as_down():
+    """★新增的 stale 狀態要一起排出分母、而且要有圖示★(2026-09-08 r1 架構席 major)。
+
+    `stale` 的設計意圖是「不確定,別冤枉」——可能只是七天內沒被觸發。
+    但摘要行的分母排除清單只寫了 unknown 與 registered-trust-unknown,
+    ★漏排它就等於把「沒被觸發」算成「沒生效」★,摘要永遠偏悲觀;
+    圖示字典也沒有這個鍵,會落到問號分支。
+    這正是「這批想解決假訊號,卻在另一個角落製造一個新的假訊號」。
+    """
+    m = _load_lumos_inproc()
+    rows = [{"layer": "a", "status": "active"}, {"layer": "b", "status": "stale"},
+            {"layer": "c", "status": "unknown"}, {"layer": "d", "status": "inactive"}]
+    # ★回的是 (active, 非 unknown 總數, unknown 數) 三元組,不是字串★
+    # (第一版拿字串比對,對著一個 tuple 找 "1/2",當然找不到——那是我的斷言型別看錯,
+    #  不是實作壞掉。同一天不只一次:斷言之前先確認被測的東西是什麼型別。)
+    act, total, unk = m.enforcement_summary(rows)
+    check("★stale 不准被算進分母★(4 列裡 stale+unknown 兩列要排掉,分母剩 2)",
+          (act, total, unk) == (1, 2, 2), str((act, total, unk)))
+    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+    # ★要咬的是「圖示字典裡有 stale」,不是「全檔任何地方出現 "stale":」★
+    # (第一版全檔比對,拿掉圖示之後別處還有同樣的字串,突變體沒翻紅——翻紅釘抓到的。)
+    i_mark = src.index('mark = {"active":')
+    mark_seg = src[i_mark:src.index("}", i_mark)]
+    check("★圖示字典要有 stale★(不然畫面印問號)", '"stale"' in mark_seg, mark_seg)
+    check("★分母排除清單要含 stale★",
+          '"registered-trust-unknown", "stale"' in src, "排除清單沒有 stale")
+    print("  ✓ t_enforcement_stale_is_not_counted_as_down")
+
+
+def t_gate_event_silent_when_repo_has_no_ledger():
+    """★「這個 repo 根本沒有這本帳」不是「寫不進去」★(2026-09-08 r1 通才席 major)。
+
+    沒跑過 `lumos init` 的 repo 本來就沒有 `docs/`。第一版把這個情境跟
+    「磁碟滿/權限錯」用同一句話講,而且是★結構性、每次都會發生、永遠不會自己好★
+    ——那種警告久了會被忽略,恰好抵銷這批想建立的信任。
+    既有的姐妹寫入器面對同一情境是靜靜略過,這裡對齊它。
+    """
+    import shutil as _sh, tempfile as _tf, subprocess as _sp
+    m = _load_lumos_inproc()
+    root = Path(_tf.mkdtemp(prefix="gctl-noledger-"))
+    try:
+        _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+        r = m._gate_event(root, "anchor", "blocked", "x", hard=True)
+        check("★沒有 docs/ 時回「不適用」,不是「失敗」★", r is None, repr(r))
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            m._gate_event_or_warn(root, "anchor", "blocked", "x", hard=True)
+        check("★而且不准噴 telemetry-write-failed★(那句話是留給真的故障的)",
+              "telemetry-write-failed" not in buf.getvalue(), buf.getvalue())
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_gate_event_silent_when_repo_has_no_ledger")
+
+
+def t_installed_hooks_bring_their_local_imports():
+    """★被複製的 hook 所 import 的本地模組,也必須在複製清單裡★(2026-09-08 r1 外家席 blocker)。
+
+    真的踩到了:五支 hook 都 `from _hookevent import guard`,但安裝清單只列那五支主檔。
+    安裝副本 import 一定失敗 → 走 try/except 退回不記事件 → `enforcement` 對那五列
+    永遠 unknown。★裝了等於沒裝★,而且來源樹的測試照樣全綠——**因為它們測的是來源樹,
+    不是安裝副本**。
+
+    ★這條寫成通則,不是只釘那一個檔名★:下次任何一支 hook 多 import 一個本地模組,
+    忘了加進清單一樣會翻紅。
+    """
+    import ast as _ast, re as _re
+    _need_src("scripts/lumos")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    src = (root / "scripts" / "lumos").read_text(encoding="utf-8")
+    # ★非貪婪括號會被註解裡的括號截斷★:清單裡有中文註解、註解裡有「(…)」,
+    # 第一版用 `\((.*?)\)` 只抓到第一個右括號為止,於是漏掉後面的項目、報了一個假的紅。
+    # 改成抓到「_GLOBAL_HOOKS =」那一行之前的整段。
+    i0 = src.index("_GLOBAL_CLAUDE_HOOKS = (")
+    i1 = src.index("_GLOBAL_HOOKS", i0)
+    m = _re.match(r"(?s).*", src[i0:i1])
+    check("★前置★ 找得到複製清單", m is not None, "找不到 _GLOBAL_CLAUDE_HOOKS")
+    if not m:
+        return
+    listed = set(_re.findall(r'"([^"]+\.py)"', src[i0:i1]))
+    check("★前置★ 清單非空", len(listed) >= 5, str(sorted(listed)))
+    hookdir = root / "scripts" / "hooks" / "claude"
+    missing = []
+    for fn in sorted(listed):
+        f = hookdir / fn
+        if not f.exists():
+            missing.append(f"{fn}(清單上有,檔案卻不在)")
+            continue
+        try:
+            tree = _ast.parse(f.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for n in _ast.walk(tree):
+            names = []
+            if isinstance(n, _ast.ImportFrom) and n.level == 0 and n.module:
+                names = [n.module]
+            elif isinstance(n, _ast.Import):
+                names = [a.name for a in n.names]
+            for nm in names:
+                top = nm.split(".")[0]
+                if (hookdir / (top + ".py")).exists() and (top + ".py") not in listed:
+                    missing.append(f"{fn} import 了 {top}.py,但它不在複製清單裡")
+    check("★每個被複製的 hook,它 import 的本地模組也要在清單裡★", not missing,
+          ";".join(sorted(set(missing))))
+    # ★複製清單之外,錨點名單也要收★:那支模組會跟著複製到 ~/.claude/hooks/,
+    # 一樣是「你一打開資料夾就自動跑」的程式的一部分。2026-09-08 漏這一條當場擋住推送,
+    # 而錨點那道★永遠不可跳★。(第一版只驗複製清單,拿掉錨點登記的突變體沒翻紅——翻紅釘抓到的。)
+    i_af = src.index("ANCHOR_FILES = [")
+    anchors = set(_re.findall(r'"([^"]+)"', src[i_af:src.index("]", i_af)]))
+    for fn in sorted(listed):
+        rel = "scripts/hooks/claude/" + fn
+        if (hookdir / fn).exists():
+            check("★%s 也要在錨點名單裡★" % fn, rel in anchors,
+                  "ANCHOR_FILES 沒有 %s" % rel)
+    print("  ✓ t_installed_hooks_bring_their_local_imports")
+
+
+def t_hook_swallowed_timeout_is_not_recorded_as_ok():
+    """★hook 內部吞掉的逾時,不准被記成「成功跑完」★(2026-09-08 r1 外家席 blocker)。
+
+    `guard()` 只看得到 `main()` 有沒有丟例外。而派工鏡頭那支有一條
+    「捕捉逾時 → 附一行說明 → 正常 return 0」的路徑——★那種情況下會被記成 ok★,
+    於是一支每次都逾時的 hook 會穩定顯示「近期跑過 N 次」。
+    而 `KINDS` 裡宣告的 `timeout` 原本沒有任何接線寫得到。
+
+    處置:吞掉的那一方自己呼叫 `mark("timeout")`,`guard()` 記那個 kind。
+    """
+    import json as _j, shutil as _sh, tempfile as _tf, subprocess as _sp
+    _need_src("scripts/hooks/claude/_hookevent.py", "scripts/hooks/claude/dispatch-lens-hook.py")
+    hookdir = Path(GRAPHCTL).resolve().parent / "hooks" / "claude"
+    root = Path(_tf.mkdtemp(prefix="gctl-swallow-"))
+    try:
+        _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+        probe = root / "p.py"
+        probe.write_text(
+            "import sys\n"
+            "sys.path.insert(0, %r)\n" % str(hookdir) +
+            "from _hookevent import guard, mark\n"
+            "def main():\n"
+            "    mark('timeout', '假裝內部逾時後正常回來')\n"
+            "    return 0\n"
+            "sys.exit(guard('H', __file__, main))\n", encoding="utf-8")
+        _sp.run([sys.executable, str(probe)], cwd=str(root), capture_output=True, timeout=60)
+        rows = [_j.loads(l) for l in
+                (root / "governance" / "runtime" / "hook-events.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+        check("★內部吞掉逾時 → 記 timeout,不記 ok★",
+              rows and rows[-1]["kind"] == "timeout", str(rows))
+        check("★而且那筆不能被 _hook_recent_ok 當成「跑過」★",
+              _load_lumos()._hook_recent_ok(root, "H", probe)[0] != "ok", str(rows))
+
+        # 真的那支 hook 有沒有在它吞逾時的地方講一聲
+        # ★搜尋窗要對準真的那一條吞逾時路徑★:第一版用第一個 `except (subprocess.TimeoutExpired`
+        # 當起點,而檔裡不只一處,窗口落在別的地方,報了一個假的紅。
+        # 改成:先確認那個 mark 呼叫存在,再確認它跟「附了超時說明行」那句在同一段。
+        dl = (hookdir / "dispatch-lens-hook.py").read_text(encoding="utf-8")
+        check("★派工鏡頭那支要有 mark(\"timeout\") 的呼叫★",
+              '_mark("timeout"' in dl, "找不到 mark 呼叫")
+        if '_mark("timeout"' in dl:
+            i_m = dl.index('_mark("timeout"')
+            check("★而且要落在「附了超時說明行」那一段裡★(不是隨便放一處)",
+                  "超時說明行" in dl[max(0, i_m - 900):i_m + 300], dl[max(0, i_m-400):i_m+200])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_hook_swallowed_timeout_is_not_recorded_as_ok")
+
+
+def t_hook_event_write_failure_is_announced():
+    """★hook 事件寫不進去也要喊 telemetry-write-failed★(2026-09-08 r1 外家席 major)。
+
+    S7 原本只蓋到治理帳那本。`record()` 把寫入錯誤吞成 False,而 `guard()` 完全不看回傳值
+    ——磁碟滿、權限錯時 stderr 一個字都沒有,操作者只會看到 enforcement 慢慢變 stale,
+    ★分不出是 hook 沒跑,還是帳壞了★。
+    """
+    import shutil as _sh, tempfile as _tf, subprocess as _sp, os as _os
+    _need_src("scripts/hooks/claude/_hookevent.py")
+    hookdir = Path(GRAPHCTL).resolve().parent / "hooks" / "claude"
+    root = Path(_tf.mkdtemp(prefix="gctl-hwfail-"))
+    try:
+        _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+        rt = root / "governance" / "runtime"; rt.mkdir(parents=True)
+        log = rt / "hook-events.jsonl"; log.write_text("", encoding="utf-8")
+        _os.chmod(log, 0o444)
+        probe = root / "p.py"
+        probe.write_text(
+            "import sys\n"
+            "sys.path.insert(0, %r)\n" % str(hookdir) +
+            "from _hookevent import guard\n"
+            "def main():\n    return 0\n"
+            "sys.exit(guard('H', __file__, main))\n", encoding="utf-8")
+        r = _sp.run([sys.executable, str(probe)], cwd=str(root), capture_output=True, text=True, timeout=60)
+        check("★寫不進去要在 stderr 明講★", "telemetry-write-failed" in r.stderr, r.stderr[-300:])
+        check("★但 hook 自己的工作不受影響(rc 照舊)★", r.returncode == 0, str(r.returncode))
+        check("★訊息要講明本業不受影響★", "不受影響" in r.stderr, r.stderr[-200:])
+        _os.chmod(log, 0o644)
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_hook_event_write_failure_is_announced")
+
+
+def t_double_skip_does_not_fully_open_the_gate():
+    """★兩個跳閘不准疊成完整放行★(2026-09-08 r1 外家席 major,我實測屬實)。
+
+    `--skip-bound-tests --note …` 讓合約測試閘回 skipped,再加 `LUMOS_SKIP_CODE_LOOP=1`
+    跳掉留痕要求——兩層疊起來就是完整放行,★直接推翻「合約測試閘不可跳」這句話★。
+
+    處置不是把話改小,是不准疊:合約測試閘已經被跳過時,那個環境變數失效。
+    """
+    import json as _j, os as _os, shutil as _sh, subprocess as _sp
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+    d = _mk_bound_tests_repo(tempfile.mkdtemp(prefix="gctl-dskip-"))
+    try:
+        (Path(d) / "app" / "pay.py").write_text(
+            "def charge(x):\n    f = open('/dev/null')\n    return abs(x)\n", encoding="utf-8")
+        _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
+        _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-qm", "high", "--no-verify"], capture_output=True)
+        e = dict(_os.environ); e.pop("LUMOS_SKIP_BOUND_TESTS", None)
+        e["LUMOS_SKIP_CODE_LOOP"] = "1"
+        r = _sp.run([sys.executable, lumos_real, "code-loop", "check", "--diff", "HEAD~1..HEAD",
+                     "--json", "--repo", str(d), "--skip-bound-tests", "--note", "外部 DB 不在"],
+                    capture_output=True, text=True, env=e, timeout=180)
+        v = _j.loads(r.stdout)
+        check("★兩個跳閘一起用時不准完整放行★",
+              r.returncode == 1 and v["blocked"], r.stdout + r.stderr[-400:])
+        check("★而且要講清楚為什麼不接受★", "兩個跳閘" in r.stderr or "已經被跳過" in r.stderr,
+              r.stderr[-300:])
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_double_skip_does_not_fully_open_the_gate")
+
+
+def t_hook_root_probe_timeout_is_small():
+    """★觀測用的探測不得跟 hook 的整體預算同量級★(2026-09-08 r1 外家席 major)。
+
+    `guard()` 在每支 hook 的本業之前多跑一次 git。正常態實測約 13 毫秒,
+    但逾時原本設 10 秒——跟 hook 的預算同量級,git 卡住時會先把預算吃完,
+    ★讓本業根本沒機會跑★。觀測絕不能排擠本業。
+    """
+    import re as _re
+    _need_src("scripts/hooks/claude/_hookevent.py")
+    src = (Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "_hookevent.py").read_text(encoding="utf-8")
+    m = _re.search(r"rev-parse.*?timeout=(\d+)", src, _re.S)
+    check("★前置★ 找得到那個探測的逾時設定", m is not None, "找不到")
+    if m:
+        check("★探測逾時要 ≤3 秒★(跟 hook 預算同量級的話會排擠本業)",
+              int(m.group(1)) <= 3, "現在是 %s 秒" % m.group(1))
+    print("  ✓ t_hook_root_probe_timeout_is_small")
+
+
 def t_hook_liveness_is_not_just_recently_ran():
     """★「近 7 天跑過」本身就是假綠來源,判準要三個條件同時成立★(2026-09-08 #19 S4)。
 
