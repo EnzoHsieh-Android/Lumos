@@ -3029,11 +3029,16 @@ TEST_REF_RE = re.compile(r"\[test:\s*([^\]]+)\]")
 # 與 [test:] 平行:test 證『有沒有照規則做』,audit 證『這規則該不該是鐵則 / 綁的測試夠不夠格』
 # (沒標準答案的判斷不得由提出者本人自評 — maker/checker)。doctor Check T 強制。
 AUDIT_REF_RE = re.compile(r"\[audit:\s*([^\]]+)\]")
+# [manual:一句怎麼驗] — 計劃 [SN] 條款行「沒有測試可掛、靠人驗」的標記(條款綁測試算進度 S1,2026-09-08)。
+# 同家族:跟 test/audit 一起被 INV_TAG_RE 剝掉(誤寫進 ★INVARIANT★ 行也不會污染乾淨宣稱文字);但★合約行不認它★——合約要測試不是人,
+# 它只被 clause_bindings 讀。內容太短(<4 字)不算「講了怎麼驗」,視同未標。
+MANUAL_REF_RE = re.compile(r"\[manual:\s*([^\]]*)\]")
+_MANUAL_MIN_CHARS = 4
 # 抽「乾淨宣稱文字」時 test/audit/kill 與 regen 證據指針(src/git)都要剝掉(否則漏進顯示/子字串比對)。
 # src|git 擴充(M1 Check J):影響 11 處行號/8 類呼叫點(Check T 乾淨宣稱/contracts/lint 訊息/
 # guard 分類·list·trace/scaffold/kill-add/audit)——行為後果:guard 定位對「正文相同只差指針」
 # 的合約改多重命中=要求更精確正文(指針非宣稱正文,符合語意非退化);[test:] 抽取不受影響。
-INV_TAG_RE = re.compile(r"\[(?:test|audit|kill|src|git):\s*[^\]]+\]")
+INV_TAG_RE = re.compile(r"\[(?:test|audit|kill|src|git|manual):\s*[^\]]*\]")
 KILL_REF_RE = re.compile(r"\[kill:\s*recipes\s*\]")
 # 真實可執行測試方法:xUnit 屬性([Fact]/[Theory]/[SkippableFact],含 (Skip=..) 變體)
 # + 可選後續屬性(InlineData/MemberData/Trait)→ 存取修飾 → 可選 async → 回傳型別 → 方法名。
@@ -4043,11 +4048,12 @@ def cmd_lint(env, node):
 
 
 SPEC_CLAUSE_RE = re.compile(r"\[S(\d+)\]")
-MANUAL_REF_RE = re.compile(r"\[manual:\s*([^\]]+)\]")   # 條款靠人驗、講怎麼驗;跟 [test:]/[audit:] 同一個標記家族(條款綁測試算進度 S1)
-_CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.]*(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表/標題/粗體符號)就是 [SN];反引號裡的 `[S3] …` 是範例不是定義
+_CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.|]*(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表/標題/粗體/表格 | 符號)就是 [SN];反引號裡的 `[S3] …` 是範例、「見 [S2]」是引用,都不是定義
 _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了", "dangling": "懸空(寫錯)",
-                    "unrecognized": "懸空(設定認不到)", "mentioned": "懸空(只被提到)", "bad-name": "壞名(平台前綴未定義)"}
-_CLAUSE_GATE_SINCE = "2026-09-08"   # 處置閘的條款綁定步只看首筆帳在這天(含)之後的迴圈——不回溯舊迴圈(週跑回放會重跑閘,回溯=舊判定全翻)
+                    "unrecognized": "懸空(設定認不到)", "mentioned": "懸空(只被提到)", "bad-name": "壞名(平台前綴未定義)",
+                    "undefined": "非定義(只在範例/引用裡出現,不算條款)"}
+_CLAUSE_GATE_SINCE = "2026-09-09T00:00:00+08:00"   # 處置閘的條款綁定步只看首筆帳在這之後的迴圈——不回溯舊迴圈(週跑回放會重跑閘,回溯=舊判定全翻)。
+# 設隔日不設當日(同 _SEV_WRITESIDE_CUTOFF 的理由:合入當天白天用舊碼寫的帳,日粒度切不開先後);比對走 _loop_ts_key 換算 UTC(r1 單reviewer:字串比日期會依記帳機器時區判不同)。
 
 
 def clause_bindings(text, split, default, methods_for, hay_for):
@@ -4070,18 +4076,22 @@ def clause_bindings(text, split, default, methods_for, hay_for):
         for i, m in enumerate(ms):
             cid = int(m.group(1))
             seg = line[m.end(): ms[i + 1].start() if i + 1 < len(ms) else len(line)]
-            if lead is not None and i == 0 and int(lead.group(1)) == cid:
+            if lead is not None:          # 定義行:這一行所有 [SN] 都算定義,各認到下一個 [SN] 之前
                 defined.setdefault(cid, (no, seg))
             else:
                 fallback.setdefault(cid, (no, seg))
     out = []
     for cid in sorted(set(defined) | set(fallback)):
-        no, seg = defined.get(cid) or fallback[cid]
+        if cid not in defined:   # 只在範例/引用/行內出現過、從沒在行首定義 → 不是條款(r1 單reviewer blocker:純示範文字曾讓閘 FAIL)
+            no, seg = fallback[cid]
+            out.append({"id": f"S{cid}", "line": no, "refs": [], "manual": [], "defined": False, "state": "undefined"})
+            continue
+        no, seg = defined[cid]
         refs = invariant_test_refs(seg)
-        manual = [x.strip() for x in MANUAL_REF_RE.findall(seg)]
-        row = {"id": f"S{cid}", "line": no, "refs": refs, "manual": manual, "defined": cid in defined}
+        manual = [x.strip() for x in MANUAL_REF_RE.findall(seg) if len(x.strip()) >= _MANUAL_MIN_CHARS]
+        row = {"id": f"S{cid}", "line": no, "refs": refs, "manual": manual, "defined": True}
         if not refs:
-            row["state"] = "manual" if manual else "untagged"
+            row["state"] = "manual" if manual else "untagged"   # [manual: ] 空的或太短=沒講怎麼驗=未標(外家席 major 2)
             out.append(row)
             continue
         if _classify_one(seg, split, default, methods_for, hay_for) == "real":
@@ -4115,7 +4125,9 @@ def _clause_bindings_for(env, text, root=None):
     """cmd_spec_trace / cmd_handoff / 處置閘共用:用 vault 反推的 repo 根建平台索引(★不用 cwd★,同 gov --stats 教訓),
     回 (rows, err)。索引建不起來(設定壞)回 ([], 一句原因),呼叫端印出來、不炸查詢。"""
     try:
-        rr = _vault_repo_root(env) if env is not None else Path(root or ".")
+        # 顯式 root(呼叫端已照 --repo 覆蓋規則算好)贏,env 反推只是預設——跟 _loop_status_disposal 其餘四步同一條優先序
+        # (r1 架構席/單reviewer 都抓到我寫反了:git-less 部署副本裡 .git 不在,反推會落錯根)
+        rr = Path(root) if root else _vault_repo_root(env)
         _, split, default, methods_for, hay_for = _platform_test_index(rr)
         return clause_bindings(text, split, default, methods_for, hay_for), None
     except (ValueError, OSError) as e:
@@ -4123,15 +4135,15 @@ def _clause_bindings_for(env, text, root=None):
 
 
 def _clause_summary(rows):
-    c = {k: 0 for k in _CLAUSE_STATE_ZH}
+    c = {k: 0 for k in _CLAUSE_STATE_ZH}   # 含 undefined 桶;呼叫端多半先濾掉再算
     for r in rows:
         c[r["state"]] += 1
     return c
 
 
 def cmd_spec_trace(env, node, as_json=False):
-    """條款級追溯(RTM 輕量版):計劃 body 的 [SN] 條款 × 回指 Verification 的認領。
-    rc:全認領=0;有未認領=1;計劃無 [SN] 標記=0(opt-in 未啟用)。唯讀。"""
+    """條款級追溯(RTM 輕量版):計劃 body 的 [SN] 條款 × 條款那一行綁的 [test:]/[manual:](裁決欄,2026-09-08 起)
+    × 回指 Verification 的認領(舊制對照欄)。rc:有未標條款=1;全標(綁了/靠人,懸空只提醒)=0;計劃無 [SN]=0(opt-in 未啟用)。唯讀。"""
     import json
     rel = env.find(node)
     if rel is None:
@@ -4174,7 +4186,8 @@ def cmd_spec_trace(env, node, as_json=False):
     binds, berr = _clause_bindings_for(env, text)
     bmap = {b["id"]: b for b in binds}
     untagged = [f"S{i}" for i in ids if bmap.get(f"S{i}", {}).get("state", "untagged") == "untagged"]
-    summ = _clause_summary(binds)
+    summ = _clause_summary([b for b in binds if b["state"] != "undefined"])
+    summ["undefined"] = sum(1 for b in binds if b["state"] == "undefined")
     if as_json:
         print(json.dumps({"plan": rel, "clauses": {f"S{i}": claims[i] for i in ids},
                           "unclaimed": [f"S{i}" for i in unclaimed],
@@ -4193,14 +4206,19 @@ def cmd_spec_trace(env, node, as_json=False):
             elif b and b["manual"]:
                 tail = " ← " + "; ".join(b["manual"])
             mark = "✓" if (b and b["state"] in ("bound", "manual")) else ("✗" if (not b or b["state"] == "untagged") else "⚠")
+            if b and b["state"] == "undefined":
+                mark = "·"
             who = ", ".join(Path(x).stem for x in claims[i]) or "無"
             print(f"{mark} [S{i}] {st}{tail}(舊制回指:{who})")
         hang = summ["dangling"] + summ["unrecognized"] + summ["mentioned"]
-        print(f"\n{len(ids)} 條款 / 未標 {len(untagged)} / 靠人 {summ['manual']} / 綁了 {summ['bound']} / 懸空 {hang}"
+        n_cl = len(ids) - summ["undefined"]
+        print(f"\n{n_cl} 條款 / 未標 {len(untagged)} / 靠人 {summ['manual']} / 綁了 {summ['bound']} / 懸空 {hang}"
               f"(寫錯 {summ['dangling']}·設定認不到 {summ['unrecognized']}·只被提到 {summ['mentioned']})/ 壞名 {summ['bad-name']}"
-              f";舊制(驗證筆記回指)未認領 {len(unclaimed)}")
+              + (f" / 非定義 {summ['undefined']}(只在範例/引用裡出現,不算條款)" if summ["undefined"] else "")
+              + f";舊制(驗證筆記回指)未認領 {len(unclaimed)}")
         if untagged:
-            print("為什麼在意:未標的條款沒人能機械判它做到沒——要嘛在那一行綁 [test:測試名],要嘛寫 [manual:一句怎麼驗];設計審處置閘會擋。")
+            print("為什麼在意:未標的條款沒人能機械判它做到沒,設計審處置閘會擋。")
+            print("    每條要嘛在那一行綁 [test:測試名],要嘛寫 [manual:一句怎麼驗];沒有測試可掛也得講清楚靠人怎麼驗")
     return 1 if untagged else 0
 
 
@@ -13380,25 +13398,38 @@ def _quote_rows(rtext, stext):
     return rows
 
 
-def _disposal_clause_step(rows, spec, root, env, spec_sha_override=None):
+def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=None):
     """處置閘第五步(條款綁測試算進度 [S3]):回 "fail" / "ok" / "skip",自己印一行 [disposal] 條款綁定。
-    skip 三種:審材不是 .md 計劃(code 迴圈的 patch)/ 迴圈首筆帳早於 _CLAUSE_GATE_SINCE(不回溯,週跑回放會重跑閘)/ 計劃無 [SN](opt-in 未啟用)。
+    skip 四種:①凍結/回放模式(spec_sha_override 有值,對凍結 sha 判、不重讀活檔)②迴圈類型是 code(loop id 前綴 code-,同 _roster_kind;
+    不看副檔名——外家席:.patch 跳過只看尾碼會被設計審拿 patch 當審材繞過)③迴圈首筆帳早於 _CLAUSE_GATE_SINCE(不回溯)④計劃無 [SN](opt-in 未啟用)。
+    設計審審材不是 .md、首筆帳 ts 讀不動、計劃讀不成文字、測試索引建不起來 → 一律 fail(驗不了≠通過)。
     這是「設計審出口真的有東西逼」的那一半——沒有它,綁測試名跟 spec-trace 一樣沒人做(33 篇 15 篇零認領)。"""
     if spec_sha_override is not None:
-        # 凍結/回放對「凍結 sha」判、不重讀活檔(凍結與回放兩側輸入必須同構,同 G3 的理由);這一步只在問閘當下對活檔判。
         print("[disposal] 條款綁定: —(凍結/回放模式:不重讀活檔,以問閘當下的判定為準)")
         return "skip"
-    first_ts = min((str(r.get("ts", "")) for r in rows if r.get("ts")), default="")
-    if first_ts and first_ts[:10] < _CLAUSE_GATE_SINCE:
-        print(f"[disposal] 條款綁定: —(迴圈首筆帳 {first_ts[:10]} 早於 {_CLAUSE_GATE_SINCE},不回溯)")
+    kind = _roster_kind(loop_id or "")
+    if kind == "code":
+        print("[disposal] 條款綁定: —(code 迴圈,審材是 diff 不是計劃,不看條款)")
+        return "skip"
+    if kind is None:
+        print(f"[disposal] 條款綁定: —(loop 編號 {loop_id!r} 看不出是設計審還是代碼審,不判;新迴圈請用 code-<主題> 或不帶 code 前綴)")
+        return "skip"
+    tss = [str(r.get("ts", "")) for r in rows if r.get("ts")]
+    keys = [(_loop_ts_key(x), x) for x in tss]
+    if any(k is None for k, _ in keys):
+        bad = next(x for k, x in keys if k is None)
+        print(f"[disposal] 條款綁定: ✗ — 帳上有一筆 ts 讀不動或沒帶時區({bad!r}),判不了新舊迴圈;壞資料不放行(同 findings 壞值的 fail-closed)")
+        return "fail"
+    if keys and min(k for k, _ in keys) < _loop_ts_key(_CLAUSE_GATE_SINCE):
+        print(f"[disposal] 條款綁定: —(迴圈首筆帳 {min(keys)[1][:19]} 早於 {_CLAUSE_GATE_SINCE[:10]},不回溯)")
         return "skip"
     if not str(spec).endswith(".md"):
-        print("[disposal] 條款綁定: —(審材不是計劃筆記,不看條款)")
-        return "skip"
+        print(f"[disposal] 條款綁定: ✗ — 設計審的審材必須是計劃筆記(.md),不是 {Path(str(spec)).name}(拿 patch 當審材繞不過這一步)")
+        return "fail"
     try:
         text = Path(spec).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
-        print(f"[disposal] 條款綁定: ✗ — 計劃讀不成文字({e.__class__.__name__})")
+        print(f"[disposal] 條款綁定: ✗ — --spec 指的文件讀不成文字({e.__class__.__name__}),確認路徑對不對:\n    {spec}")
         return "fail"
     if not SPEC_CLAUSE_RE.search(text):
         print("[disposal] 條款綁定: —(計劃無 [SN] 條款,opt-in 未啟用)")
@@ -13407,15 +13438,18 @@ def _disposal_clause_step(rows, spec, root, env, spec_sha_override=None):
     if err:
         print(f"[disposal] 條款綁定: ✗ — 測試索引建不起來({err}),驗不了≠通過")
         return "fail"
-    unt = [b for b in rows_b if b["state"] == "untagged"]
-    summ = _clause_summary(rows_b)
+    clauses = [b for b in rows_b if b["state"] != "undefined"]
+    undef = [b for b in rows_b if b["state"] == "undefined"]
+    unt = [b for b in clauses if b["state"] == "untagged"]
+    summ = _clause_summary(clauses)
     hang = summ["dangling"] + summ["unrecognized"] + summ["mentioned"] + summ["bad-name"]
+    tail_u = f";另有 {len(undef)} 個 id 只在範例/引用裡出現,不算條款" if undef else ""
     if unt:
-        print(f"[disposal] 條款綁定: ✗ — {len(unt)}/{len(rows_b)} 條驗收條款沒標:" + "、".join(f"{b['id']}(第 {b['line']} 行)" for b in unt))
+        print(f"[disposal] 條款綁定: ✗ — {len(unt)}/{len(clauses)} 條驗收條款沒標:" + "、".join(f"{b['id']}(第 {b['line']} 行)" for b in unt) + tail_u)
         print("    每條要嘛在那一行綁 [test:測試名],要嘛寫 [manual:一句怎麼驗];沒有測試可掛也得講清楚靠人怎麼驗")
         return "fail"
-    print(f"[disposal] 條款綁定: ✓ — {len(rows_b)} 條全標(綁了 {summ['bound']}/靠人 {summ['manual']}"
-          + (f";懸空 {hang} 只提醒不擋,spec-trace 會唸" if hang else "") + ")")
+    print(f"[disposal] 條款綁定: ✓ — {len(clauses)} 條全標(綁了 {summ['bound']}/靠人 {summ['manual']}"
+          + (f";懸空 {hang} 只提醒不擋,spec-trace 會唸" if hang else "") + tail_u + ")")
     return "ok"
 
 
@@ -13710,7 +13744,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         # no-dir(scratch 迴圈,如自主迴圈 /tmp 工作區)= 跳過不印
     # ── ⑤ 條款綁定(條款綁測試算進度 [S3],2026-09-08):計劃有 [SN] 的,每條要嘛 [test:] 要嘛 [manual:],否則不得 PASS。
     #    只看 .md 計劃、首筆帳在 _CLAUSE_GATE_SINCE 之後的迴圈(不回溯);懸空只印不擋(存在性歸 doctor/spec-trace 唸)。
-    if _disposal_clause_step(rounds, spec, root, env, spec_sha_override=spec_sha_override) == "fail":
+    if _disposal_clause_step(rounds, spec, root, env, loop_id=loop_id, spec_sha_override=spec_sha_override) == "fail":
         fails.append("條款綁定")
     if result_out is not None:
         result_out["rid"] = rid
@@ -20841,6 +20875,7 @@ def _handoff_clause_counts(env, text):
     if not SPEC_CLAUSE_RE.search(text):
         return None
     rows, err = _clause_bindings_for(env, text)
+    rows = [r for r in rows if r["state"] != "undefined"]
     c = _clause_summary(rows)
     c["total"] = len(rows)
     c["index_error"] = err
@@ -20988,7 +21023,7 @@ HELP_WHEN = {
     "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
     "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住。",
     "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。",
-    "spec-trace": "計劃結案前看哪些條款沒有驗證紀錄認領。",
+    "spec-trace": "計劃的驗收條款每條綁了測試沒(綁了/靠人/未標/懸空);舊制「驗證紀錄認領」欄照印當對照。",
     "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認)。",
     "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by。預設 dry-run,--apply 才寫。",
     "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
@@ -21397,7 +21432,7 @@ def main():
     gk.add_argument("--json", dest="gk_json", action="store_true", help="輸出 JSON manifest")
     gk.add_argument("--keep-worktree", action="store_true", help="保留沙盒現場(除錯)")
 
-    p = sub.add_parser("spec-trace", help="條款級追溯(RTM 輕量):計劃 [SN] 條款 × 回指 Verification 認領;未認領 rc1")
+    p = sub.add_parser("spec-trace", help="條款級追溯:計劃 [SN] 條款那一行綁的 [test:]/[manual:](裁決,有未標 rc1)× 回指 Verification 認領(舊制對照欄)")
     p.add_argument("node", help="計劃節點")
     p.add_argument("--json", dest="st_json", action="store_true")
 

@@ -16,7 +16,7 @@
 | 「最近誰改了什麼 / 現在在做什麼」 | `lumos recent --days 7`、`lumos query --tag status/doing` | git log 看不到圖譜層的進度 |
 | 「我刪掉/改名了一個函式,筆記會不會還在講它?」 | `lumos search <舊名> --code` 逐句判 | delguard 只在 commit 時提醒,而且逾時會放行 |
 | 「當初為什麼做這個決定?後來翻案了嗎?」 | `lumos decisions <節點> [--superseded]` | 決策是結構化欄位,grep 散文抓不全 |
-| 「這個計劃做到哪了、哪些條款沒人認領?」 | `lumos spec-trace <計劃節點>` | 條款認領靠回指連結,不是文字比對 |
+| 「這個計劃的條款每條綁了測試沒、哪條還沒標?」 | `lumos spec-trace <計劃節點>` | 裁決看條款那一行的 [test:]/[manual:];舊制「驗證筆記回指」欄只當對照 |
 | 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>` | git status 看得到檔、看不到上一輪在動什麼與人最後說了什麼;逐字稿在本機,指令自己找(排掉自己這個 session)、缺就印「意圖不可得」 |
 | 「我 push 了,CI 跑得怎樣?」 | `lumos ci-wait`(等結果)/ `lumos ci-status`(看上次) | 結果會進治理帳,`gh run list` 不會 |
 | 「做完了,要留驗證紀錄 / 改狀態 / 記決策」 | `lumos new verification <名> --plan <計劃> --systems <節點>` / `lumos set` / `lumos decision-add` | 手改開頭欄位會漏同步、長假筆記,lint 擋 |

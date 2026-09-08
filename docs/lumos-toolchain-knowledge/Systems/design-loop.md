@@ -31,7 +31,7 @@ verified_by:
   - "[[Verification/2026-09-03_派工攔截點實測]]"
   - "[[Verification/2026-09-04_Codex完全支援S2迴圈編排驗收]]"
 summary: |-
-  KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3):--spec 是 .md 計劃、有 [SN] 條款、迴圈首筆帳在 2026-09-08(含)之後 → 任一條款那一行沒有 [test:]/[manual:] 就不得 PASS(理由印「條款綁定」);.patch 審材、無 [SN]、舊迴圈、凍結/回放模式一律跳過不擋 [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]
+  KEY:★INVARIANT★ 處置閘第五步(2026-09-08,[[Projects/條款綁測試算進度_計劃]] d3/d4):設計審迴圈(loop id 不是 code- 開頭)、首筆帳在 2026-09-09T00:00+08:00 之後(換算 UTC 比)→ 審材必須是 .md 計劃(拿 .patch 就 FAIL);計劃有 [SN] 時任一條款定義行沒有 [test:]/[manual:≥4 字] 就不得 PASS(理由印「條款綁定」;只在範例/引用裡出現的 id 不算條款;懸空只提醒);code- 迴圈、無 [SN]、舊迴圈、凍結/回放模式跳過;壞 ts 與索引建不起來 fail-closed [test:t_disposal_clause_gate] [audit:sonnet/2026-09-08]
   KEY:[2026-09-08 條款綁定]為什麼加在閘不是 skill 散文:接手席/架構席/簡化席三席獨立查證「設計審出口寫一句流程規則」零約束,跟 spec-trace 33 篇 15 篇零認領同型;閘是設計審往下走的唯一入口(進度從提交推導 d9)。漏洞:整份不寫 [SN] 可繞過 → REVISIT:2026-11-08 那次連「過審計劃有 [SN] 的比例」一起量
   KEY:[2026-08-26]世界對照(governance/review-reports/world-benchmark-2026-08-26.md)——最終形態核心判準與業界主流合流:處置閘≈「all threads resolved 才准 merge」政策、blocking 宣告≈Conventional Comments 但進閘、code嚴/散文寬≈must-fix/nit 分層、K=2 退役=向世界收斂;領先半步=機械重驗審查誠實度(quote-check/留痕 sha/intake);唯一結構差=事後抽查層(世界受監管實務保留,我們由 L4+週巡檢代位,「抽已收斂迴圈冷復審」列觀察不立案
   KEY:★[2026-08-25 甲裁落地]多席 code-loop 統一處置閘([[Projects/probe輪退場_計劃]])★——panel 閘新迴圈 cutoff 拒判(僅舊帳回放)+probe 抽查義務退場(判定降觀測)+code 迴圈輪級加嚴(major 席→accepted 必空,d2;散文維持 d5 制);「20 筆抽查帳」翻案通道具名作廢;[test:t_panel_probe_retired] 三釘

@@ -4484,20 +4484,27 @@ def t_clause_bindings_states():
         "- [S8] 甲 [test:t_ok] [S9] 乙",              # 同一行兩條:S8 認到下一個 [SN] 之前,S9 沒有
         "- `[S10] 反引號範例 [test:t_ok]`",           # 反引號裡=範例不是定義
         "### [S10] 真定義沒標",
-        "- [S11] 兩種都寫以測試為準 [manual:人看] [test:t_ok]",
+        "- [S11] 兩種都寫以測試為準 [manual:人看一次] [test:t_ok]",
+        "只在這裡被提到的 `[S12] 範例` 不是條款",          # 從沒在行首定義 → undefined,不算條款、不進未標
+        "| [S13] | 表格列也是定義 [test:t_ok] |",          # 表格列(r1 單reviewer F2)
+        "- [S14] 空的 manual [manual: ]",                   # 外家席 major 2:空=沒講怎麼驗=未標
+        "- [S15] 太短的 manual [manual:x]",
+        "- [S16] 夠長的 manual [manual:人看一次]",
     ])
     methods = {"python": {"t_ok"}}
     hay = {"python": "def t_ok():\n    pass\nclass T:\n    def test_in_class(self):\n        pass\n# t_mentioned_only 只在註解\n"}
     rows = m.clause_bindings(text, {}, "python", lambda p: methods.get(p, set()), lambda p: hay.get(p, ""))
     st = {r["id"]: r["state"] for r in rows}
     exp = {"S1": "bound", "S2": "untagged", "S3": "manual", "S4": "dangling", "S5": "unrecognized", "S6": "mentioned",
-           "S7": "untagged", "S8": "bound", "S9": "untagged", "S10": "untagged", "S11": "bound"}
+           "S7": "untagged", "S8": "bound", "S9": "untagged", "S10": "untagged", "S11": "bound",
+           "S12": "undefined", "S13": "bound", "S14": "untagged", "S15": "untagged", "S16": "manual"}
     for k, v in exp.items():
         check(f"clause: {k} → {v}", st.get(k) == v, f"{k}={st.get(k)} 全部={st}")
     ln = {r["id"]: r["line"] for r in rows}
     check("clause: S1 定義行是第 1 行不是「見 [S1]」那行", ln["S1"] == 1, str(ln))
     check("clause: S10 定義行是 ### 那行(反引號範例不算)", ln["S10"] == 12, str(ln))
     check("clause: S3 的 manual 文字有抓到", [r for r in rows if r["id"] == "S3"][0]["manual"] == ["真機點一次"], str(rows))
+    check("clause: S12 標 defined=False", [r for r in rows if r["id"] == "S12"][0]["defined"] is False, str(rows))
     # 平台前綴未定義 → bad-name(不猜)
     rows2 = m.clause_bindings("- [S1] 甲 [test:ios:t_x]", {"python": {}}, "python", lambda p: set(), lambda p: "")
     check("clause: 未定義平台前綴 → bad-name", rows2[0]["state"] == "bad-name", str(rows2))
@@ -4510,7 +4517,7 @@ def _clause_repo(prefix):
     import json as _j, subprocess as _sp
     d = Path(tempfile.mkdtemp(prefix=prefix))
     _sp.run(["git", "-C", str(d), "init", "-q"], capture_output=True)
-    (d / "tests").mkdir(); (d / "tests" / "test_t.py").write_text("def t_ok():\n    assert True\n", encoding="utf-8")
+    (d / "tests").mkdir(); (d / "tests" / "test_t.py").write_text("def t_ok():\n    assert True\n# t_mentioned 只在這句註解出現,不是 def\n", encoding="utf-8")
     (d / ".lumos").mkdir()
     (d / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "python", "test": {"method_regex": "(?m)^def (t_[A-Za-z0-9_]+)\\s*\\("}}), encoding="utf-8")
     v = d / "docs" / "x-knowledge"
@@ -4526,20 +4533,21 @@ def t_spec_trace_clause_table():
     d, v = _clause_repo("gctl-clst-")
     try:
         (v / "Projects" / "P_計劃.md").write_text(
-            "---\ntype: project\nstatus: doing\n---\n# P\n- [S1] 甲 [test:t_ok]\n- [S2] 乙 [manual:人看]\n- [S3] 丙\n- [S4] 丁 [test:t_gone]\n", encoding="utf-8")
+            "---\ntype: project\nstatus: doing\n---\n# P\n- [S1] 甲 [test:t_ok]\n- [S2] 乙 [manual:人看一次]\n- [S3] 丙\n- [S4] 丁 [test:t_gone]\n"
+            "- [S5] 戊 [test:t_mentioned]\n寫法範例:`[S9] 這樣寫`\n", encoding="utf-8")
         r = run(v, "spec-trace", "Projects/P_計劃", "--json", expect_rc=1)
         dd = _j.loads(r.stdout.strip().splitlines()[-1])
         b = dd["bindings"]
-        check("spec-trace: S1 綁了/S2 靠人/S3 未標/S4 寫錯", (b["S1"]["state"], b["S2"]["state"], b["S3"]["state"], b["S4"]["state"]) == ("bound", "manual", "untagged", "dangling"), str(b))
-        check("spec-trace: untagged 只有 S3、rc1", dd["untagged"] == ["S3"], str(dd))
-        check("spec-trace: 舊制欄仍在(四條都無回指)", dd["unclaimed"] == ["S1", "S2", "S3", "S4"], str(dd))
+        check("spec-trace: S1 綁了/S2 靠人/S3 未標/S4 寫錯/S5 只被提到(真索引)", (b["S1"]["state"], b["S2"]["state"], b["S3"]["state"], b["S4"]["state"], b["S5"]["state"]) == ("bound", "manual", "untagged", "dangling", "mentioned"), str(b))
+        check("spec-trace: 只在反引號出現的 S9 → 非定義,不進未標", b["S9"]["state"] == "undefined" and dd["untagged"] == ["S3"], str(dd))
+        check("spec-trace: 舊制欄仍在(五條都無回指;S9 也在舊制的 id 集合裡)", dd["unclaimed"] == ["S1", "S2", "S3", "S4", "S5", "S9"], str(dd))
         r2 = run(v, "spec-trace", "Projects/P_計劃", expect_rc=1)
         check("spec-trace: 人讀版每條帶中文態與舊制回指", "[S1] 綁了 ← t_ok(舊制回指:無)" in r2.stdout and "[S4] 懸空(寫錯)" in r2.stdout, r2.stdout)
         check("spec-trace: 未標時印怎麼補", "[manual:一句怎麼驗]" in r2.stdout, r2.stdout)
         (v / "Projects" / "P_計劃.md").write_text(
-            "---\ntype: project\nstatus: doing\n---\n# P\n- [S1] 甲 [test:t_ok]\n- [S2] 乙 [manual:人看]\n- [S3] 丙 [manual:對帳]\n- [S4] 丁 [test:t_gone]\n", encoding="utf-8")
+            "---\ntype: project\nstatus: doing\n---\n# P\n- [S1] 甲 [test:t_ok]\n- [S2] 乙 [manual:人看一次]\n- [S3] 丙 [manual:對帳一次]\n- [S4] 丁 [test:t_gone]\n- [S5] 戊 [test:t_mentioned]\n", encoding="utf-8")
         r3 = run(v, "spec-trace", "Projects/P_計劃", expect_rc=0)
-        check("spec-trace: 全標(含一條懸空)→ rc0,懸空只提醒", "懸空 1" in r3.stdout, r3.stdout)
+        check("spec-trace: 全標(含兩條懸空)→ rc0,懸空只提醒", "懸空 2" in r3.stdout and "只被提到 1" in r3.stdout, r3.stdout)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -4569,13 +4577,13 @@ def t_handoff_clause_pointer_only():
 
 
 def t_disposal_clause_gate():
-    """條款綁測試算進度 [S3]:處置閘第五步——計劃有 [SN] 而某條沒 [test:]/[manual:] → FAIL(條款綁定);全標 → 過;
-    code 迴圈的 .patch 審材不看;首筆帳早於 _CLAUSE_GATE_SINCE 的舊迴圈不回溯。
-    翻紅釘:把那一步拿掉 → 「沒標必 FAIL」翻紅。"""
-    import shutil
-    v = mkvault()
-    d = v / "Projects"
-    def _loop(lid, spec_name, body, ts_override=None):
+    """條款綁測試算進度 [S3]:處置閘第五步——設計審計劃有 [SN] 而某條沒 [test:]/[manual:] → FAIL(條款綁定);全標 → 過;
+    code- 迴圈不看;設計審拿 .patch 當審材 → FAIL(不是跳過);首筆帳早於 cutoff 的舊迴圈不回溯;ts 換算 UTC 比、壞 ts fail-closed;
+    真索引下「綁了→過」「懸空→只提醒照過」。翻紅釘:把那一步拿掉 → 「沒標必 FAIL」翻紅。"""
+    import shutil, io, contextlib
+    NEW = "2026-09-10T10:00:00+08:00"    # cutoff 是 2026-09-09T00:00+08:00(隔日制),記錄當下的 ts 會早於它,要手動推到之後
+    def _loop(v, lid, spec_name, body, ts_override=NEW, repo=None):
+        d = v / "Projects"; d.mkdir(exist_ok=True)
         spec = d / spec_name; spec.write_text(body, encoding="utf-8")
         h = _sha256_of(spec)
         snap = d / f"{lid}-snap.md"; snap.write_text(body, encoding="utf-8")
@@ -4585,26 +4593,45 @@ def t_disposal_clause_gate():
             "--report", str(rpt), "--snapshot", str(snap), "--spec", str(spec), "--reviewed", h, expect_rc=0)
         if ts_override:
             _ledger_patch_last(v.parent / ".canary-log.jsonl", lid, ts=ts_override)
-        return run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+        return run(v, "loop", "status", lid, "--disposal", "--spec", str(spec), "--repo", str(repo or v.parent))
     base = "# spec\n規則甲：只在 0 命中時回退。\n"
-    r = _loop(f"cg-a-{_M1U}", "cga.md", base + "- [S1] 甲\n- [S2] 乙 [manual:人看]\n")
+    v = mkvault()
+    r = _loop(v, f"cg-a-{_M1U}", "cga.md", base + "- [S1] 甲\n- [S2] 乙 [manual:人看一次]\n")
     check("clause-gate: 有一條沒標 → FAIL 且理由含 條款綁定", r.returncode == 1 and "條款綁定: ✗" in r.stdout and "S1(第" in r.stdout and "條款綁定" in r.stdout.splitlines()[-1], r.stdout[-600:])
-    r = _loop(f"cg-b-{_M1U}", "cgb.md", base + "- [S1] 甲 [manual:人看]\n- [S2] 乙 [manual:對帳]\n")
+    r = _loop(v, f"cg-b-{_M1U}", "cgb.md", base + "- [S1] 甲 [manual:人看一次]\n- [S2] 乙 [manual:對帳一次]\n")
     check("clause-gate: 全標 → 那一步 ✓ 且整閘 PASS", r.returncode == 0 and "條款綁定: ✓" in r.stdout and "DISPOSAL GATE PASS" in r.stdout, r.stdout[-600:])
-    r = _loop(f"cg-c-{_M1U}", "cgc.md", base)
+    r = _loop(v, f"cg-c-{_M1U}", "cgc.md", base)
     check("clause-gate: 計劃無 [SN] → 跳過不擋", r.returncode == 0 and "opt-in 未啟用" in r.stdout, r.stdout[-400:])
-    r = _loop(f"cg-d-{_M1U}", "cgd.patch", base + "- [S1] 甲\n")
-    check("clause-gate: 審材是 .patch(code 迴圈)→ 不看條款", r.returncode == 0 and "不是計劃筆記" in r.stdout, r.stdout[-400:])
-    r = _loop(f"cg-e-{_M1U}", "cge.md", base + "- [S1] 甲\n", ts_override="2026-09-01T00:00:00+08:00")
-    check("clause-gate: 首筆帳早於 2026-09-08 的舊迴圈不回溯", r.returncode == 0 and "不回溯" in r.stdout, r.stdout[-500:])
-    # 凍結/回放模式(帶 spec_sha_override)不重讀活檔——獨立審計挑出的缺口:既有呼叫端都同時傳 spec=None,拔掉這條分支只會退化成理由句錯
-    import io, contextlib
+    r = _loop(v, f"cg-d-{_M1U}", "cgd.patch", base + "- [S1] 甲\n")
+    check("clause-gate: 設計審拿 .patch 當審材 → FAIL(外家席:副檔名跳過會被繞)", r.returncode == 1 and "必須是計劃筆記" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"code-cg-{_M1U}", "cgcode.patch", base + "- [S1] 甲\n")
+    check("clause-gate: code- 迴圈的 patch → 不看條款", r.returncode == 0 and "code 迴圈" in r.stdout, r.stdout[-400:])
+    r = _loop(v, f"cg-e-{_M1U}", "cge.md", base + "- [S1] 甲\n", ts_override="2026-09-01T00:00:00+08:00")
+    check("clause-gate: 首筆帳早於 cutoff 的舊迴圈不回溯", r.returncode == 0 and "不回溯" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-f-{_M1U}", "cgf.md", base + "- [S1] 甲\n", ts_override="2026-09-08T20:00:00-05:00")   # 真 UTC 09-09T01:00,晚於 cutoff(09-08T16:00Z)
+    check("clause-gate: ts 換算 UTC 比(字串比會誤判成舊迴圈)", r.returncode == 1 and "條款綁定: ✗" in r.stdout and "S1(第" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-g-{_M1U}", "cgg.md", base + "- [S1] 甲 [manual:人看一次]\n", ts_override="0000-00-00T00:00:00+08:00")
+    check("clause-gate: 壞 ts → fail-closed(不放行)", r.returncode == 1 and "讀不動" in r.stdout, r.stdout[-500:])
+    r = _loop(v, f"cg-h-{_M1U}", "cgh.md", base + "- [S1] 甲 [manual: ]\n")
+    check("clause-gate: [manual: ] 空的 → 視同未標 FAIL", r.returncode == 1 and "S1(第" in r.stdout, r.stdout[-400:])
+    r = _loop(v, f"cg-i-{_M1U}", "cgi.md", base + "### [S1] 真條款 [test:t_x]\n寫法例如 `[S9] 這是範例格式`,不是真的有第九條\n")
+    check("clause-gate: 只在反引號出現的 [S9] 不算條款(r1 blocker),不會讓閘 FAIL", "S9" not in r.stdout.split("條款綁定")[-1].split("\n")[0] and "不算條款" in r.stdout, r.stdout[-500:])
+    # 凍結/回放模式(帶 spec_sha_override)不重讀活檔
     m = _load_lumos_inproc()
-    spec_md = d / "cgf.md"; spec_md.write_text(base + "- [S1] 甲\n", encoding="utf-8")
+    spec_md = v / "Projects" / "cgz.md"; spec_md.write_text(base + "- [S1] 甲\n", encoding="utf-8")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        st = m._disposal_clause_step([{"ts": "2026-09-08T12:00:00+08:00"}], str(spec_md), v.parent, None, spec_sha_override="deadbeef")
+        st = m._disposal_clause_step([{"ts": NEW}], str(spec_md), v.parent, None, loop_id="cg-z", spec_sha_override="deadbeef")
     check("clause-gate: 凍結/回放模式帶 [SN] 沒標的活檔也跳過、理由句講明", st == "skip" and "凍結/回放" in buf.getvalue(), f"{st} {buf.getvalue()}")
+    # 真索引(git repo + .lumos 設定 + tests/t_ok):綁了 → 過;懸空 → 只提醒照過(r1 單reviewer F7)
+    d2, v2 = _clause_repo("gctl-cgri-")
+    try:
+        r = _loop(v2, f"cg-j-{_M1U}", "cgj.md", base + "- [S1] 甲 [test:t_ok]\n", repo=d2)
+        check("clause-gate: 真索引綁了真測試 → PASS 且印 綁了 1", r.returncode == 0 and "綁了 1" in r.stdout, r.stdout[-500:])
+        r = _loop(v2, f"cg-k-{_M1U}", "cgk.md", base + "- [S1] 甲 [test:t_gone]\n- [S2] 乙 [test:t_mentioned]\n", repo=d2)
+        check("clause-gate: 真索引懸空(寫錯+只被提到)→ 只提醒照過", r.returncode == 0 and "懸空 2 只提醒不擋" in r.stdout, r.stdout[-500:])
+    finally:
+        shutil.rmtree(d2, ignore_errors=True)
 
 
 def t_gov_stats_window_and_parse():
@@ -16478,7 +16505,7 @@ def t_spec_trace_and_signoff():
         check("spec-trace ★裁決改綁定★:舊制全認領但條款沒標仍 rc1", r.returncode == 1 and dd["untagged"] == ["S1", "S2", "S3"], f"rc={r.returncode} {dd}")
         (v / "Projects" / "P_計劃.md").write_text(
             "---\ntype: project\nstatus: doing\n---\n# P\n\n## 變更規格\n"
-            "- [S1] 做 A [manual:人跑一次]\n- [S2] 做 B [manual:看畫面]\n- [S3] 做 C [manual:對帳]\n", encoding="utf-8")
+            "- [S1] 做 A [manual:人跑一次]\n- [S2] 做 B [manual:看畫面對不對]\n- [S3] 做 C [manual:對帳一次]\n", encoding="utf-8")
         r = lum("spec-trace", "Projects/P_計劃")
         check("spec-trace 三條都標 [manual:] → rc0", r.returncode == 0 and "靠人 3" in r.stdout, r.stdout)
         # opt-in 未啟用

@@ -61,7 +61,7 @@ lumos guard list [--unbound]     # which contracts still have no test bound
 lumos guard scaffold / bind / audit    # scaffold a test → bind it → independent review
 lumos guard kill <node>          # break it for real in a sandbox and check the test goes red
 lumos signoff <node> --note ".." # a human sign-off, for the half a tool can't answer
-lumos spec-trace <plan node>     # which clauses in the plan no verification has claimed yet
+lumos spec-trace <plan node>     # per clause: bound to a test / manual / untagged / dangling (legacy claim column kept for reference)
 ```
 
 ---

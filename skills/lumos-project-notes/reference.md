@@ -67,7 +67,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | **改某流程前查「該重驗哪幾篇」** | `python3 scripts/lumos stale --candidate --match "<關鍵字>"` — 聚焦活躍 Verification 的 `revalidate_when`(未來重驗條件、排 Archive);比純 `--match` 窄(後者含 valid_under 快照 + Archive) |
 | status=stale 清單 | `python3 scripts/lumos stale` |
 | 最近 N 天修改 | `python3 scripts/lumos recent --days 7` |
-| **條款級追溯（計劃 [SN] 條款誰認領了）** | `python3 scripts/lumos spec-trace <計劃節點> [--json]` — 計劃 body 標 `[S1]`/`[S2]`…,回指(plan_refs)的 Verification 提及即認領;未認領 rc1。opt-in,無標記=不追溯 |
+| **條款級追溯（計劃 [SN] 條款誰認領了）** | `python3 scripts/lumos spec-trace <計劃節點> [--json]` — 計劃 body 標 `[S1]`/`[S2]`…,★2026-09-08 起裁決=條款那一行綁的 `[test:測試名]`/`[manual:怎麼驗]`(七態:綁了/靠人/未標/懸空×3/壞名),有未標 rc1★;舊制「回指(plan_refs)的 Verification 提及」欄照印只當對照。opt-in,無標記=不追溯 |
 | **業務簽核留痕（validation 那半:人點頭）** | `python3 scripts/lumos signoff <節點> --note "確認了什麼" [--by 人]` — append docs/.signoff-log.jsonl + frontmatter `signed_off`;gov 撈得到。工具只記留痕不證明確認真的發生 |
 | 資料夾統計 | `python3 scripts/lumos stats` |
 | 反查連入/連出 | `python3 scripts/lumos backlinks <筆記名>`／`links` |
@@ -370,7 +370,7 @@ find docs/{vault-name} -name '*\]\]*'
 |---|---|---|
 | `type/` `status/` | enum(status 依 type:system=doing/done/planned/deferred/rejected/superseded/stale;project=todo/doing/done/superseded;issue=open/doing/resolved/done/wontfix;verification=**pass**;moc=doing/done) | 生命週期;lint 硬擋野值 |
 | `priority/` | **P0-P3** | 處理優先級(P0 最急),主用 Issues |
-| `scope/` | 自由 kebab 值(pointsmall/concurrency…) | 業務域切片;★feature/ 與 area/ 已凍結,新寫入一律 scope/(讀側仍認舊帳)★ |
+| `scope/` | kebab 值;**值域由專案自己宣告**在 `.lumos/config.json` 的 `scope` 區塊(`{"values":[…],"required":true}`)——宣告了 lint 才唸(沒掛/掛超過兩個/值不在表內都只 warning 不擋),沒宣告=自由值零噪音 | 消費專案=業務域切片(pointsmall/concurrency…);lumos 工具鏈自己=九個研究方向(node-content/retrieval/loop-engineering/agent-dag/evals/guards-gates/stack-knowledge/platform/ux-docs-hygiene,定義與邊界見該圖譜 `Projects/工具分類_計劃`)。★一篇一個主類,真橫跨才第二個★;★feature/ 與 area/ 已凍結,新寫入一律 scope/(讀側仍認舊帳)★ |
 | `risk/` | **金流/對外送出/不可逆/守衛面** | Systems 專用;消費者=impact(★2026-08-24 起 RISK·值不再保送必看——降入「守衛面參考」lane 小節;固定席只認 INVARIANT/IRREVERSIBLE+事故★)+design-loop light 硬否決 |
 | `flag/` | 小寫語意標;已知有效:do-not-modify/security-relevant/depends-on-claude-code-internals/depends-on-obsidian-internals | 節點級警示,AI 讀 |
 
@@ -844,7 +844,7 @@ plan_refs:
 
 > **⚠ 橋接任何 spec/SDD 工具的預設輸出路徑（必讀）**：各家工具都有自己的 spec 落點——`superpowers:brainstorming` → `docs/superpowers/specs/YYYY-MM-DD-*.md`、`writing-plans` 有自己的落點、`OpenSpec` → `openspec/`、其他 SDD / spec-driven 框架亦各有目錄——**在本紀律下一律覆寫成 lumos 計劃節點**（`Projects/<主題>_計劃.md`，`type: project`），**不另存 `docs/superpowers/specs/`、`openspec/` 或任何 repo 路徑**。理由:「圖譜即唯一真相」涵蓋計劃/設計,不只 code;spec 散在 repo 檔 = 圖譜外的第二真相源,必 drift。多數此類工具也明示「user/專案偏好可覆寫預設 spec 路徑」,本紀律即該覆寫。落地的 Verification 用 `plan_refs` 回指該計劃節點。
 
-**條款級追溯（opt-in，2026-07-10）**：計劃的規格 bullet 可標 `[S1]`/`[S2]`…；落地的 Verification（有 plan_refs 回指）在 body 提及 `[SN]` 即認領；`lumos spec-trace <計劃節點>` 掃未認領（rc1）。大計劃建議標，小計劃不用。一篇 Verification 盡量只回指一個計劃（條款 ID 無計劃域，多計劃回指會交叉記帳）。
+**條款級追溯（opt-in，2026-07-10）**：計劃的規格 bullet 可標 `[S1]`/`[S2]`…；落地的 Verification（有 plan_refs 回指）在 body 提及 `[SN]` 即認領；`lumos spec-trace <計劃節點>` 每條印綁定態；★2026-09-08 起 rc 看「有沒有未標」（條款那一行要綁 `[test:]` 或 `[manual:]`；設計審處置閘第五步會擋沒標的），舊制回指欄只當對照★。大計劃建議標，小計劃不用。一篇 Verification 盡量只回指一個計劃（條款 ID 無計劃域，多計劃回指會交叉記帳）。
 
 **Claude 的維護義務**：
 
@@ -945,7 +945,7 @@ obsidian vault="{vault}" create path="Verification/{日期}_{功能名稱}" cont
 - 關聯模組（wikilink）
 
 **Claude 主動填寫義務**：
-- 對應計劃若有 `[SN]` 條款標記 → 本 Verification body 提及所認領的 `[SN]`（spec-trace 靠這個算帳）
+- 對應計劃若有 `[SN]` 條款標記 → 本 Verification body 提及所認領的 `[SN]`（spec-trace 的舊制對照欄靠這個；★裁決欄看條款行綁的 `[test:]`/`[manual:]`，2026-09-08 起★）
 - 重大業務規則（金流/對外合約）落地或翻盤後 → 提醒使用者跑 `lumos signoff <節點> --note "..."` 留 validation 簽核痕（技術驗證 ≠ 業務確認）
 - 寫 `valid_under` 不可只填「現在好用」這種廢話；要具體版本/規模/schema 數字
 - `revalidate_when` 從 `valid_under` 反推：每條 `valid_under` 對應一條「當條件 X 改變時」的 `revalidate_when`
@@ -1249,7 +1249,7 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
 | 收工 | `lumos doctor` |
 
 **被催「直接改、不用解釋」時**:不解釋可以,不查不行——改 code 前 `lumos impact --file <檔>` 一行(幾秒),沒它你改到合約都不知道。
-| 計劃結案前看哪些條款沒人認領 | `lumos spec-trace <計劃節點>` |
+| 計劃結案前看哪些條款沒綁測試/沒寫怎麼驗（舊制「誰認領」欄照印） | `lumos spec-trace <計劃節點>` |
 
 
 ---
