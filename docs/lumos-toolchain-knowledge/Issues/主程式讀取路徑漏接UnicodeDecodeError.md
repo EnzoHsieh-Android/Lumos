@@ -10,6 +10,7 @@ related:
 tags:
   - type/issue
   - status/open
+  - scope/ux-docs-hygiene
 summary: |-
   FLAG:TECHNICAL — 未修,刻意不在 slim 修復那一次順手擴大範圍;嚴重度自評 minor(開發者工具吐 traceback,非資料損毀),但★是剛在 slim 判定為缺陷的同一個類別★,不修就等於雙標
   KEY:`scripts/lumos` 有 ★20 處★ `read_text`/`read_bytes` 包在只接 `OSError` 的 try 裡——`UnicodeDecodeError` 繼承 `ValueError` 不是 `OSError` 子類,攔不到,直接 traceback 炸給使用者

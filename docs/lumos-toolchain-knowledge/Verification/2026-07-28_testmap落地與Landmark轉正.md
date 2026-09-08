@@ -14,6 +14,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/stack-knowledge
 summary: |-
   TEST:t_testmap_build/t_testmap_affected/t_testmap_rc 72 檢查全綠(code-loop r1 補 6 缺口);全套 1581 passed 0 failed;anchor 重批訖
   VERIFY:[[Projects/檔案測試依賴地圖_計劃]] 全案落地+[S4] Landmark 轉正閘 PASS

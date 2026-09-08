@@ -14,6 +14,7 @@ revalidate_when: |-
 tags:
   - type/verification
   - status/pass
+  - scope/stack-knowledge
 plan_refs:
   - "[[Android側UI測試綁圖譜工作流_計劃]]"
   - "[[Android側UI測試綁圖譜工作流_實作計畫]]"

@@ -13,6 +13,7 @@ tags:
   - type/issue
   - status/open
   - priority/P3
+  - scope/platform
 ---
 # ci-wait未推送sha誤導訊息
 

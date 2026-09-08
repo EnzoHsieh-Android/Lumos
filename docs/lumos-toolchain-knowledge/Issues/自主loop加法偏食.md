@@ -9,6 +9,7 @@ related:
 tags:
   - type/issue
   - status/open
+  - scope/loop-engineering
 summary: |-
   FLAG:DECISION
   KEY:結構性偏誤——自主 loop 的任務是「從 gap 產 spec」,所以它永遠提「加一個機制」,從不提「這題該在別層用更便宜的既有手段解」或「該刪什麼」。治理面只有生長壓力、沒有修剪壓力 → overcheck 的來源

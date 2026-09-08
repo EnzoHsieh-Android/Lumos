@@ -14,6 +14,7 @@ summary: |-
 tags:
   - type/project
   - status/doing
+  - scope/node-content
 plan_refs:
   - "[[關係層主網_實作計畫]]"
 decisions:

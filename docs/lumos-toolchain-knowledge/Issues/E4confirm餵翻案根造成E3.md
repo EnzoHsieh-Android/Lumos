@@ -8,6 +8,7 @@ about_code: []
 tags:
   - type/issue
   - status/done
+  - scope/guards-gates
 summary: |-
   FLAG:
   DECISION:

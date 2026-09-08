@@ -15,6 +15,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/guards-gates
 ---
 # 驗證：關係層守衛實驗場——LandmarkMember（真實 256 節點 vault）
 

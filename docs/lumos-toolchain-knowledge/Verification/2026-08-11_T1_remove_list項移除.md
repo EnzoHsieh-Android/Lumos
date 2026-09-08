@@ -13,7 +13,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
-  - scope/cli-write
+  - scope/node-content
 summary: |-
   TEST:7 條牙齒測試全綠;全套 2543 passed / 0 failed
   VERIFY:實戰驗收——LandmarkMember 清掉 14 條死背書(doctor E1 14→0)+ 拆 core_refs 指針(doctor C 轉「無指針」),兩者皆為本命令上線前無路可走的操作

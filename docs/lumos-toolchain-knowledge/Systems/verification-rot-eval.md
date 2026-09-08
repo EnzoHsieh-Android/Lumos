@@ -7,6 +7,7 @@ self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/superseded
+  - scope/evals
 summary: |-
   FLOW:vault git 史 ─A.mine→ candidates.jsonl ─B.label(人)→ fixtures.jsonl(進git黃金集) ─C.run(複製L3 pre-LLM 成本閘→importlib 載 hook→build_prompt+call_claude_sonnet→正規化None/缺鍵)→ report(recall/precision/門檻敏感性表)
   KEY:量化 L3 腐化偵測(verification-rot-check.py)的真實 recall/precision，把 CONFIDENCE_THRESHOLD=0.7 從拍腦袋變成從門檻敏感性表挑——是一把尺、不是新閘(不改 hook、不接 CI 擋線、不改 doctor)

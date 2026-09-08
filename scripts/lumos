@@ -3074,8 +3074,10 @@ TEST_METHOD_RE = re.compile(
     r"[\w.<>,\[\]\?]+\s+"
     r"([A-Za-z_]\w*)\s*\(",
     re.S)
-CODE_EXTS_T = {".cs", ".py", ".js", ".ts", ".tsx", ".jsx", ".vue",
-               ".sql", ".kt", ".java", ".go", ".rs"}
+# 2026-09-08 補 .swift/.dart 與 ESM/CJS 變體:Check Y 的碼庫掃描(build_code_haystack)走這張表,不走
+# SYMBOL_PROFILES 的 code_exts——少了 .swift 時 Swift 專案每個符號都被判「查無」(t_checky_swift_and_typescript_profiles 抓到)。
+CODE_EXTS_T = {".cs", ".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".vue",
+               ".sql", ".kt", ".java", ".go", ".rs", ".swift", ".dart"}
 CODE_SKIP_DIRS = {".git", "node_modules", "bin", "obj", "dist", "build",
                   "__pycache__", "publish", "vendor", ".vs", ".idea"}
 
@@ -3097,6 +3099,17 @@ PLAYWRIGHT_TEST_RE = re.compile(r"\btest(?:\.describe)?\(\s*[\"']([A-Za-z_]\w*)[
 # Dart/Flutter:test('id')/testWidgets('id') 字串名錨——識別字名才可綁(含空白 NO MATCH,
 # 設計上不可綁,同 playwright);Dart 有 // 與 /*..*/ 註解故 comment_strip 走 c-style。
 DART_TEST_RE = re.compile(r"\btest(?:Widgets)?\(\s*[\"']([A-Za-z_]\w*)[\"']")
+
+# Swift(2026-09-08,iOS 補棧):兩代框架並存——XCTest 靠命名慣例(方法名必須 test 開頭,runner 才收),
+# Swift Testing 靠 @Test 巨集(任何名字、任何位置;@Test("顯示名") 也算)。單一 capture group:
+# @Test 分支收任意識別字,裸 func 分支用 lookahead 限定 test 前綴。修飾詞(private/static/…)可夾在中間。
+SWIFT_TEST_RE = re.compile(
+    r"(?:@Test\b(?:\([^)]*\))?\s*(?:(?:public|private|internal|fileprivate|static|final|mutating|override|nonisolated)\s+)*func\s+"
+    r"|\bfunc\s+(?=test))([A-Za-z_]\w*)\s*\(")
+
+# Jest / Vitest(2026-09-08,Node 補棧):test('id')/it('id')/describe('id'),含 .only/.skip/.concurrent
+# 修飾;識別字名才可綁(含空白 NO MATCH,同 playwright/dart 設計)。.each 帶樣板字串不收。
+JEST_TEST_RE = re.compile(r"\b(?:test|it|describe)(?:\.(?:only|skip|concurrent))?\(\s*[\"']([A-Za-z_]\w*)[\"']")
 
 # Python:行首錨(欄位 0)——排除巢狀/類內/縮排 def 與被註解的 # def(對齊「module-global 才被
 # runner 收集」語意;無框架註冊標記可錨=誠實天花板,見 Projects/CheckT-Python-profile_計劃)。
@@ -3128,6 +3141,19 @@ SYMBOL_PROFILES = {
         "shape_re": r"^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*$",
         "suffixes": (), "dotted_ok": True,
         "code_exts": (".py",),
+    },
+    # Swift / TypeScript(2026-09-08,iOS 與 Node 補棧;★尚無真專案跑過★):型別 PascalCase、方法
+    # camelCase,跟 Kotlin 同形狀,所以借同一條 shape_re;裸 camelCase 自由函式(fetchUser)不進候選
+    # =刻意的保守天花板(進了會把散文裡的英文單字當符號,噪音比漏檢貴)。
+    "swift": {
+        "shape_re": r"^[A-Z][A-Za-z]*(?:\.[a-zA-Z][A-Za-z]*)*$",
+        "suffixes": (), "dotted_ok": True,
+        "code_exts": (".swift",),
+    },
+    "typescript": {
+        "shape_re": r"^[A-Z][A-Za-z]*(?:\.[a-zA-Z][A-Za-z]*)*$",
+        "suffixes": (), "dotted_ok": True,
+        "code_exts": (".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"),
     },
 }
 # 否定語境詞表:節點「正確地記錄某符號已不存在」時不該被報錯。
@@ -3246,7 +3272,41 @@ TEST_PROFILES = {
                  "behavioral": (["tests"], []),
                  "state": (["tests"], [])},
     },
+    # Swift / iOS(2026-09-08,plan:Projects/iOS與Node後端補棧_計劃;★尚無真專案跑過★):
+    # XCTest 方法名 test 開頭 + Swift Testing @Test 巨集兩代並收(SWIFT_TEST_RE);測試 target 慣例
+    # 是頂層 <App>Tests / <App>UITests 目錄 → suffix 模式(同 C#),pure 排除 UITests;SwiftPM 的
+    # Tests/ 也是 suffix "Tests" 命中。跑單支:xcodebuild -only-testing:Target/Class/method(XCTest)。
+    "swift-xctest": {
+        "exts": {".swift"}, "method_re": SWIFT_TEST_RE, "scaffold_ext": ".swift",
+        "comment_strip": "c-style",
+        "dir_mode": "suffix", "rglob_under": None,
+        "attr_hint": "XCTest: func test*() / Swift Testing: @Test func 任意名(兩代都認)",
+        "fail_hint": "XCTFail(哨兵) / Issue.record(哨兵)",
+        # suffix 模式取字母序第一個命中目錄,而 AppUITests 也以 Tests 結尾——所以 behavioral 只列 UITests
+        # (沒有 UI 測試 target 的專案 → None → scaffold 要 --out),state 跟 pure 一樣落單元 target。
+        "dirs": {"pure": (["Tests"], ["UITests"]),
+                 "behavioral": (["UITests"], []),
+                 "state": (["Tests"], ["UITests"])},
+    },
+    # Node.js / TypeScript 後端(2026-09-08,同上計劃;★尚無真專案跑過★):Jest 與 Vitest 同一套
+    # test/it/describe('id') 語法(JEST_TEST_RE),檔名錨走兩家共同預設 *.test.* / *.spec.*
+    # (__tests__/ 目錄下不帶後綴的檔不在錨內=誠實天花板,要用就 config.json 的 test.exts/method_regex
+    # 逃生口或改檔名);scaffold_name {m}.test + .ts → pay_guard.test.ts 自然命中檔名錨。
+    # 跑單支:jest -t <名> / vitest run -t <名>。"node-vitest" 是同一份設定的別名(下方指派)。
+    "node-jest": {
+        "exts": {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"},
+        "method_re": JEST_TEST_RE, "scaffold_ext": ".ts",
+        "scaffold_name": "{m}.test", "comment_strip": "c-style",
+        "file_name_match": ["*.test.*", "*.spec.*"],
+        "dir_mode": "rglob", "rglob_under": None,
+        "attr_hint": "test('id')/it('id')/describe('id')(識別字名才可綁,含空白 NO MATCH;Jest/Vitest 同語法)",
+        "fail_hint": "expect(哨兵).toBe(...)",
+        "dirs": {"pure": (["__tests__", "test", "tests"], []),
+                 "behavioral": (["test", "tests", "e2e"], []),
+                 "state": (["test", "tests", "e2e"], [])},
+    },
 }
+TEST_PROFILES["node-vitest"] = TEST_PROFILES["node-jest"]   # 同語法同檔名慣例,只差跑法;讓 config 寫哪個都認
 
 
 def load_test_profile(repo_root, cfg=None):
@@ -3823,8 +3883,9 @@ _KNOWN_FRONTMATTER_KEYS = (
 #   project/implements/domain 等),所以留 .lumos/config.json 的 extra_frontmatter_keys 可擴充。
 
 
-def _extra_fm_keys(env):
-    """讀 .lumos/config.json 的 extra_frontmatter_keys(消費專案自己的合法欄位)。讀不到就空。"""
+def _lumos_config_near_vault(env):
+    """從 vault 往上找 .lumos/config.json 讀成 dict;找不到、讀不了、不是物件都回 {}(lint 側的擴充口
+    一律 fail-open)。extra_frontmatter_keys 與 scope 值域兩個宣告共用這一支,免得兩套搜尋規則各漂各的。"""
     import json
     try:
         # ★r1 代碼審折入★:原本寫死「vault 往上兩層」,vault 巢得更深(monorepo 的
@@ -3841,11 +3902,32 @@ def _extra_fm_keys(env):
             if (cand / ".git").exists() or hop >= 5:
                 break
         if cfg is not None:
-            v = json.loads(cfg.read_text(encoding="utf-8")).get("extra_frontmatter_keys")
-            return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
     except Exception:
         pass
-    return []
+    return {}
+
+
+def _extra_fm_keys(env):
+    """讀 .lumos/config.json 的 extra_frontmatter_keys(消費專案自己的合法欄位)。讀不到就空。"""
+    v = _lumos_config_near_vault(env).get("extra_frontmatter_keys")
+    return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+
+
+def _scope_policy(env):
+    """讀 .lumos/config.json 的 scope 區塊 {"values": [...], "required": bool}。
+
+    [工具分類 2026-09-08,plan:Projects/工具分類_計劃] scope/ 標籤家族的值域由專案自己宣告——
+    工具鏈自己用九個研究方向值、消費專案用業務域切片,兩邊語意不同,所以不能在程式裡寫死一張表。
+    沒宣告(絕大多數消費專案)回 None,lint 對 scope 一個字都不說,行為與 2026-08-05 收編定版時相同。"""
+    sc = _lumos_config_near_vault(env).get("scope")
+    if not isinstance(sc, dict):
+        return None
+    vals = sc.get("values")
+    if not isinstance(vals, list):
+        return None
+    return {"values": {x for x in vals if isinstance(x, str)}, "required": bool(sc.get("required", True))}
 
 
 def _levenshtein_le1(a, b):
@@ -3945,6 +4027,23 @@ def cmd_lint(env, node):
         if _mflag and _mflag.group(1) not in _FLAG_ENUM:
             errs.append(f"FLAG:『{_mflag.group(1)}』不是允許的三種分類之一 {sorted(_FLAG_ENUM)}"
                         "(FLAG 是分類欄不是備註欄;想寫的說明移到 KEY: 那行)")
+
+    # scope 值域(2026-09-08 工具分類:一篇一個主類,真橫跨才第二個)——只在專案宣告了 scope 區塊時唸,
+    # 而且只 warning 不擋;★不走 created cutoff★:宣告的當下全圖已回填,之後新節點漏掛就該被唸。MOC 豁免。
+    _sp = _scope_policy(env) if t != "moc" else None
+    if _sp is not None:
+        _scope_tags = [tg for tg in (n.fields.get("tags") or []) if isinstance(tg, str) and tg.startswith("scope/")]
+        _menu = ", ".join(sorted(_sp["values"]))
+        if not _scope_tags and _sp["required"]:
+            warns.append("這篇沒掛 scope/ 標籤(這個專案在 .lumos/config.json 宣告了每篇要有一個主類):"
+                         f"挑一個掛上——{_menu};各類的定義用 lumos query --tag scope/<值> 看同類節點就懂")
+        elif len(_scope_tags) > 2:
+            warns.append(f"這篇掛了 {len(_scope_tags)} 個 scope/ 標籤,規矩是一篇一個主類、真橫跨兩類才准第二個:"
+                         "留下最能代表它的,其餘拿掉(lumos remove <節點> tags scope/<值>)")
+        for tg in _scope_tags:
+            if tg.split("/", 1)[1] not in _sp["values"]:
+                warns.append(f"scope 標籤 {tg!r} 不在這個專案宣告的值域裡({_menu}):"
+                             "打錯字就改成表內的值,真的要新類就先去 .lumos/config.json 的 scope.values 登記")
 
     # decisions 結構守衛(2026-07-29 外審實錘:id 縮排吞進 content block,parser 靜默降級、
     # doctor 全綠——「綠燈≠schema 有效」的活例。以正牌 parse_decisions 驗:
@@ -11831,7 +11930,7 @@ def cmd_teardown(yes=False, source=None):
         print("  +【機器全域】(~/.local/bin/lumos、user-scope skills、~/.claude 全域 hooks)。")
         print("  圖譜文件保留;scripts/hooks|templates 只刪 lumos 檔、你的自有檔保留(F9)。")
         print("  ⚠ 仍在的破壞性:剝 CLAUDE.md 注入會正規化 sentinel 外空白/換行;移除全部 lumos 家族")
-        print("     skills(含 csharp/kotlin/vue-idioms,你名字不同的 skill 不碰)。")
+        print("     skills(含各語言 *-idioms 慣例 skill,以 ls skills/ 為準;你名字不同的 skill 不碰)。")
         print("  (只拆當前 repo——別的 repo 與 bootstrap 來源 clone 不動。)")
         try:
             ans = input("確定? [y/N] ").strip().lower()
@@ -14663,7 +14762,7 @@ _PITFALL_BLACKLIST = ("方案評比", "canary 相容性", "誠實天花板", "�
 # 目錄改動須同步此表、反向亦然(散落漂移家規);提問式>陳述式(逼答哲學,Vercel 56% 跳過實證)。
 _STACK_PERF_QUESTIONS = {
     "kt": [
-        "Compose:昂貴計算有沒有 remember?不穩定型別/缺穩定 key 會不會讓重組失控(stability report 可查)?",
+        "Compose:昂貴計算有沒有 remember?不穩定型別/缺穩定 key 會不會讓重組失控(stability report 可查)?副作用有沒有放在 LaunchedEffect/DisposableEffect 且 key 選對(讀了會變的輸入卻用 Unit 當 key=永不重跑;key 太寬=每次重組重跑;2026-09-08 補,KDS 18 處 LaunchedEffect 有 9 處 Unit key)?",
         "協程:互不依賴的等待有沒有並行(coroutineScope+async)?有沒有 GlobalScope 裸用/scope 沒跟生命週期(viewModelScope)?",
         "Dispatchers 選對了嗎(IO 密集≠Default)?suspend 函式 main-safe 嗎?async 吞例外/長運算 ensureActive?",
         "Flow/Channel 選型:狀態=StateFlow/事件=SharedFlow/單消費=Channel,選反漏事件或黏著重放;背壓 buffer/conflate?repeatOnLifecycle?shareIn 有沒有放函式回傳(每叫一次漏一條熱流,idioms R5)?",
@@ -14688,7 +14787,7 @@ _STACK_PERF_QUESTIONS = {
     "sql": [
         "這條查詢會在迴圈裡被呼叫嗎(N+1)?",
         "有沒有索引支撐?會不會大表全掃?",
-        "交易範圍會不會鎖太久?",
+        "交易範圍會不會鎖太久?隔離等級是刻意選的還是吃預設(READ COMMITTED 與 SERIALIZABLE 差在哪要說得出)?多表更新的鎖順序全站一致嗎(不一致=死鎖,重試包裝只是止血)?同一查詢換參數會不會拿到爛計畫(parameter sniffing;SQL Server compat 150 沒有 PSP 優化)?",
         "SARGable:索引在卻被寫法廢掉——WHERE 欄位側有沒有函式包用(ISNULL/CAST 包欄位=逐列運算廢索引;CONVERT(date,欄) 是文件化特例可 seek)?參數型別對得上欄位嗎(C# string 預設 nvarchar 打 varchar 欄=隱式轉換整表掃)?",
     ],
 }
@@ -14964,7 +15063,78 @@ def _lint_run_and_parse(cmd, repo_root):
     fd, temp_path = tempfile.mkstemp(suffix=".sarif", prefix="lumos-lint-")
     os.close(fd)
     try:
+    # iOS / Swift(2026-09-08 補棧,內容源=效能檢核目錄 iOS 段+swift-idioms ⚠不可機檢條目;★尚無真專案實跑★)
+    "swift": [
+        "主執行緒:這段有沒有同步 IO/解碼/大 JSON/Core Data fetch 跑在 @MainActor 或 UI 回呼裡(Hangs instrument 會抓,但 review 先問)?互不依賴的 await 有沒有 async let 並行?",
+        "SwiftUI:body 裡有沒有昂貴計算或每次重建的物件(該搬進 model/用 cached 值)?觀察範圍是不是太寬(整個大 store 當 @Observable 依賴,改一欄全樹重算)?List/ForEach 的 id 穩不穩?有沒有 AnyView/條件分支換型別讓 diff 失效、GeometryReader/深層堆疊/preference 鏈讓 layout 反覆、隱式動畫掛在大樹上?貴的子樹有沒有 equatable() 或值包裝擋重算?",
+        "洩漏:closure/Task/Timer/NotificationCenter 有沒有 [weak self]?長活物件(單例/協調器)有沒有抓著 view controller 或 view model?Task 有沒有隨畫面取消(.task 修飾子 vs 手持 Task 不 cancel)?",
+        "啟動與捲動:首幀前有沒有同步重活(SDK init/大 plist/圖片解碼)?捲動 cell 有沒有在主線程解圖/算 layout(該預先縮圖、非同步解碼)?",
+        "併發正確性:actor 隔離有沒有被 nonisolated(unsafe)/@unchecked Sendable 繞掉?跨 actor 的重複 await 中間狀態會不會被別人改掉(actor reentrancy)?",
+        "耗電與網路:有沒有背景持續定位/輪詢/計時器(該用系統背景任務、定位精度按需)?網路請求有沒有合併批次、快取、重用連線(能量大宗是無線電喚醒,零散小請求最貴)?",
+    ],
+    # Node.js / TS 後端(2026-09-08 補棧,內容源=效能檢核目錄 Node 段+node-idioms ⚠不可機檢條目;★尚無真專案實跑★)
+    # ★鍵是 "node" 不是副檔名★:.ts/.js 前端(Vue)也用,靠 _stack_key_for_file 讀 package.json 才分得出後端。
+    "node": [
+        "事件迴圈:這段有沒有同步阻塞(fs.*Sync/JSON.parse 大 body/同步 crypto/大迴圈/正則回溯)跑在請求路徑上?CPU 重活該不該丟 worker thread?",
+        "並行與上限:互不依賴的 await 有沒有 Promise.all 並行?Promise.all 的集合有沒有上限(無界 map(async) 打爆下游連線池/記憶體,該 p-limit 之類有界並行)?",
+        "資料層:查詢有沒有在迴圈裡(N+1)?連線池大小有沒有依實例數算過(太大壓垮 DB、太小排隊)?大結果集有沒有 stream/分頁而不是整包 toArray?",
+        "外呼與資源:每個 HTTP/DB 外呼有沒有 timeout 與 AbortSignal?長連線(keep-alive agent/DB client)有沒有重用而不是每請求新建?未處理的 rejection/error 事件會不會直接砸掉 process?",
+        "記憶體與背壓:大檔/大回應有沒有走 stream(pipeline)而不是讀進記憶體?長活的 Map/陣列/事件監聽有沒有上限與清理(以請求為鍵的快取是常見洩漏)?",
+    ],
         # 注入臨時檔路徑到指令
+# 以 "node" 鍵而非副檔名為棧的原因:.ts/.js 在 Vue 前端與 Node 後端都出現,單看副檔名分不出來。
+_NODE_FRONTEND_MARKERS = ("vue", "nuxt", "react", "next", "svelte", "@angular/core", "solid-js", "preact")
+_NODE_FLAVOR_CACHE = {}
+
+
+def _node_flavor(file_rel, repo_root):
+    """判一支 .ts/.js 檔是「前端(vue)」還是「Node 後端(node)」:從檔案所在目錄往上找最近的 package.json
+    (monorepo 各包各判),依賴裡有前端框架 → "vue"(只有 vue-idioms 這一份前端慣例,先都歸它);有 package.json
+    但沒前端框架 → "node";找不到 package.json → None(呼叫端沿用舊行為,不多附東西)。
+    ★只看 dependencies/devDependencies 的鍵,不猜檔案內容★——猜錯會把後端問題塞給前端檔。"""
+    import json
+    try:
+        base = (Path(repo_root) / file_rel).resolve().parent
+        stop = Path(repo_root).resolve()
+        for cand in (base, *base.parents):
+            key = str(cand)
+            if key in _NODE_FLAVOR_CACHE:
+                fl = _NODE_FLAVOR_CACHE[key]
+                if fl is not None:
+                    return fl
+            pj = cand / "package.json"
+            if pj.is_file():
+                try:
+                    data = json.loads(pj.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+                deps = set()
+                for k in ("dependencies", "devDependencies", "peerDependencies"):
+                    v = data.get(k) if isinstance(data, dict) else None
+                    if isinstance(v, dict):
+                        deps.update(v.keys())
+                fl = "vue" if any(m in deps for m in _NODE_FRONTEND_MARKERS) else "node"
+                _NODE_FLAVOR_CACHE[key] = fl
+                return fl
+            _NODE_FLAVOR_CACHE[key] = None
+            if cand == stop:
+                break
+    except Exception:
+        pass
+    return None
+
+
+_NODE_EXTS = {"ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"}
+
+
+def _stack_key_for_file(file_rel, repo_root):
+    """一支改動檔對到 _STACK_PERF_QUESTIONS 的鍵:一般=副檔名;.ts/.js 家族要看 package.json——
+    後端回 "node",前端回 "vue"(.vue 檔本來就命中 vue 鍵;純 .ts 前端檔目前無獨立題組,回 None)。
+    兩個消費者(pitfalls --diff / impact hook)都走這一支,別各自抄副檔名邏輯。"""
+    ext = Path(file_rel).suffix.lstrip(".").lower()
+    if ext in _NODE_EXTS:
+        return "node" if _node_flavor(file_rel, repo_root) == "node" else None
+    return ext if ext in _STACK_PERF_QUESTIONS else None
         injected_cmd = cmd.replace("{LINT_SARIF_OUT}", shlex.quote(temp_path))
         # 執行指令:使用 Popen 以便 TimeoutExpired 時能 killpg。
         # stdout/stderr → DEVNULL:linter 的 console 輸出(dotnet 警告走 stdout、detekt 走 stderr)
@@ -16184,7 +16354,15 @@ def cmd_delguard_check(repo=None, as_json=False):
 
 
 _ARCH_IDIOM_SKILL = {"kt": "kotlin-idioms", "kts": "kotlin-idioms", "cs": "csharp-idioms", "vue": "vue-idioms",
-                     "ts": "vue-idioms", "js": "vue-idioms"}
+                     "ts": "vue-idioms", "js": "vue-idioms", "swift": "swift-idioms"}
+
+
+def _idiom_skill_for(ext, file_rel, repo_root):
+    """副檔名 → 慣例 skill 名(沒有就 None)。.ts/.js 家族要看 package.json:後端 → node-idioms、
+    前端或找不到 package.json → 沿用 vue-idioms(2026-09-08 前的行為)。"""
+    if ext in _NODE_EXTS:
+        return "node-idioms" if _node_flavor(file_rel, repo_root) == "node" else _ARCH_IDIOM_SKILL.get(ext, "vue-idioms")
+    return _ARCH_IDIOM_SKILL.get(ext)
 _ARCH_QUESTIONS = [
     "分層與依賴方向:新碼放的層、它呼叫誰、誰呼叫它,跟對照檔一樣嗎?有沒有跨層直呼?",
     "命名與錯誤處理:命名慣例、例外/錯誤回傳、日誌方式,跟對照檔一樣嗎?",
@@ -16205,8 +16383,9 @@ def _arch_alignment_hints(added, repo_root, per_file=3):
         ext = pf.suffix.lstrip(".").lower()
         if not ext or ext in {e.lstrip(".") for e in _PITFALL_DIFF_SKIP_EXT}:
             continue
-        if ext in _ARCH_IDIOM_SKILL:
-            skills.add(_ARCH_IDIOM_SKILL[ext])
+        _sk = _idiom_skill_for(ext, f, repo_root)
+        if _sk:
+            skills.add(_sk)
         d = Path(repo_root) / pf.parent
         try:
             sibs = [p for p in d.iterdir() if p.is_file() and p.suffix == pf.suffix and p.name != pf.name
@@ -16283,9 +16462,9 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     for f in added:
         if _PITFALL_DIFF_TEST_PAT.search(f):
             continue
-        ext = Path(f).suffix.lstrip(".").lower()
-        if ext in _STACK_PERF_QUESTIONS and ext not in stack_qs:
-            stack_qs[ext] = _STACK_PERF_QUESTIONS[ext]
+        sk = _stack_key_for_file(f, repo_root)   # .ts/.js 看 package.json 分前後端(2026-09-08)
+        if sk and sk not in stack_qs:
+            stack_qs[sk] = _STACK_PERF_QUESTIONS[sk]
 
     # ── 架構對齊三問(2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法)──
     # 對每支改動的 code 檔,列同資料夾、同副檔名、最相似檔名的 3 個既有檔當「對照組」;
@@ -18564,9 +18743,9 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
             # 棧別效能追問(pitfalls棧別效能追問_計劃 T2):完整 ranked 模式(非 incidents-only
             # 冷卻快速路)且目標檔命中問題表 → 附該棧檢核問(全表);單源=_STACK_PERF_QUESTIONS,hook 只格式化
             if not incidents_only and not _PITFALL_DIFF_TEST_PAT.search(rel_file):
-                _ext = Path(rel_file).suffix.lstrip(".").lower()
-                if _ext in _STACK_PERF_QUESTIONS:
-                    out_obj["stack_questions"] = {_ext: _STACK_PERF_QUESTIONS[_ext]}
+                _sk = _stack_key_for_file(rel_file, repo_root_for_lookup)   # .ts/.js 看 package.json 分前後端
+                if _sk:
+                    out_obj["stack_questions"] = {_sk: _STACK_PERF_QUESTIONS[_sk]}
             print(json.dumps(out_obj, ensure_ascii=False))
         else:
             print(f"改動 {rel_file} — 相關 top(固定席 {len(pins)}):")

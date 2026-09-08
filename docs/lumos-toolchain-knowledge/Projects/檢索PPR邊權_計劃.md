@@ -7,6 +7,7 @@ signed_off: 2026-07-28
 tags:
   - type/project
   - status/done
+  - scope/retrieval
 related:
   - "[[Projects/檢索優化_計劃]]"
   - "[[Projects/節點靜態先驗_調研]]"

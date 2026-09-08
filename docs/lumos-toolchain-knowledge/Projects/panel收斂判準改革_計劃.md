@@ -13,6 +13,7 @@ related:
 tags:
   - type/project
   - status/done
+  - scope/loop-engineering
 summary: |-
   FLAG:DECISION
   KEY:★立案動機(r1 措辭校正)★——panel 是風險最高路徑(tier=high 專用)卻配最鬆判準(一個乾淨輪即收斂 K=1);convergence-evidence-gate 自認「未經檢驗的取捨」。★範圍(r1 收窄)★:design-loop 已改走 disposal 閘(2026-08-04),本案標的=★code-loop panel★。動機屬假設性風險非既遂觀測(r1 Codex F9:T8/RSNO 未收斂是三條合取全體作用,不能推「碰巧乾淨就會放行」)——但假設性風險有內部既遂實例支撐(見證據二 relmainnet)

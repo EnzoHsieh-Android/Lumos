@@ -8,6 +8,7 @@ about_code: []
 tags:
   - type/system
   - status/doing
+  - scope/platform
 summary: |-
   FLOW:註冊表一處定天花板 → 指令列 --budget 傳給 hook → hook 內層一律取「天花板×0.7 減已耗、下限 1 秒」→ 逾時走自己的 fail-open,不是被外面砍掉
   KEY:★量出來的症狀(2026-09-07)★五支 hook 三支違反自家「外要明顯大於內」:進場提醒 10 vs 10、影響鏡頭 30 vs 30、收工檢查外 10 內 25(內是外的 2.5 倍)

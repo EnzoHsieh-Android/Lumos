@@ -6,6 +6,7 @@ updated: 2026-09-07
 tags:
   - type/project
   - status/doing
+  - scope/platform
 summary: |-
   FLAG:DECISION
   KEY:問題=每天 09:30 那支跑五件事的腳本,9/5 跑到第二步就死、後三步全沒跑、整天沒人發現;它不管發生什麼都回 0,而且沒有任何東西在讀它印的東西

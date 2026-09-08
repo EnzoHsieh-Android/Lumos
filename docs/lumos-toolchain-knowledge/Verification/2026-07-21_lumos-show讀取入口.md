@@ -13,6 +13,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/ux-docs-hygiene
 summary: |-
   TEST:t_show 11 checks 全綠(找到全文/找不到 stderr+rc2/--body-only 剝離/模糊名沿 env.find/唯讀節點檔不變/派發組迴歸/重開檔失敗 rc2 無 traceback[壞 symlink 模擬]/無 frontmatter 檔印整檔)+全套迴歸 1268 passed 0 failed
   KEY:TDD 紅→綠——先寫 t_show 跑紅(invalid choice)再實作;實作三件套=cmd_show(:3717 前)+argparse show parser(note 命名,陷阱②)+派發組 tuple 加 show+fallback 前 if 分支(陷阱①)+utf-8-sig 開檔(陷阱③)+重開檔 try/except rc2

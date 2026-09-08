@@ -11,6 +11,8 @@ revalidate_when:
   - "IRREVERSIBLE_HINT_PATTERNS 增刪 pattern"
   - "_scan_diff_for_irreversible_hints 的掃描範圍/過濾邏輯改動"
   - "run_doctor 的 ci 旗標分派或 section 插入點變動"
+tags:
+  - scope/guards-gates
 ---
 # Verification:doctor-irreversible-hint(Check H)
 

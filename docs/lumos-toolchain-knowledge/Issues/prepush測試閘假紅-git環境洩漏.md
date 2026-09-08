@@ -6,6 +6,7 @@ updated: 2026-08-01
 tags:
   - type/issue
   - status/resolved
+  - scope/guards-gates
 summary: |-
   FLAG:TECHNICAL
   DECISION:①薄殼(install.sh/uninstall.sh)改用純 bash 參數展開取目錄,不呼叫外部 `dirname`——這是交付給別人跑的工具,少一個外部依賴是實打實的可攜性,且把系統目錄加回測試 PATH 會破壞該測試「證明沒寫死 python」的前提 ②GIT_DIR 那條併案保留,清在 test_lumos.py 唯一進入點而非幾十個呼叫點各自清(分支簿記天生會漏)

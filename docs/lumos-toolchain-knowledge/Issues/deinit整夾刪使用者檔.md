@@ -11,6 +11,7 @@ pitfall_when:
 tags:
   - type/issue
   - status/done
+  - scope/platform
 summary: |-
   FLAG:ORIGIN
   KEY:bug=_deinit_remove_vendored(scripts/lumos:6293-6306)對 scripts/hooks、scripts/templates 兩夾整夾 shutil.rmtree(非逐檔白名單)——使用者若在這兩夾放自有檔(自己的 git hook / 範本),deinit/teardown 會一併永久刪除,reinstall 救不回(std Codex teardown審 F9,2026-07-24)

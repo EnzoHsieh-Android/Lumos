@@ -11,6 +11,8 @@ revalidate_when:
   - orchestrator-prompt.md 步驟 2 design-loop 的 sub-step 結構或 judge prompt 改動
   - good(r) 謂詞(scripts/lumos:1368)或 canary record --severity 介面(scripts/lumos:3006)變更
   - 二值保守規則(沒查證→至少 major)或辯方 refute(sub-step4.5)邏輯調整
+tags:
+  - scope/loop-engineering
 ---
 # Verification — judge-severity-gate(2026-06-20)
 

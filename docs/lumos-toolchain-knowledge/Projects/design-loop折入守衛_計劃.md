@@ -6,6 +6,7 @@ updated: 2026-07-05
 tags:
   - type/project
   - status/done
+  - scope/loop-engineering
 related:
   - "[[design-loop折入漂移_機械守衛]]"
   - "[[design-loop]]"

@@ -7,6 +7,7 @@ self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
+  - scope/platform
 summary: |-
   FLOW:`cp -R skills/lumos-project-notes slim/skills/` 建交付源目錄副本 → 跑 `slim-scan.py` 出 129 條候選 → 逐條人工裁(改寫句子/刪整段/判假陽性)→ 重跑掃描器剩 14 條、逐條可指出假陽性理由(全是「明講某指令未交付」的誠實揭露句,被裸 token/prefixed 形態誤判成教學) → SKILL.md 本身收斂到 0 候選
   KEY:修剪原則=只修懸空引用,紀律語氣照舊不動(spec 已裁定①)——語氣豁免保的是「話」不是「話所在的段落」,如 SKILL.md 原 ci-wait bullet 整段圍繞已砍指令展開,但「紅燈不過夜…不得靜默收工」這句的主詞是「CI 紅燈」不是工具,拆出來留、工具子句砍

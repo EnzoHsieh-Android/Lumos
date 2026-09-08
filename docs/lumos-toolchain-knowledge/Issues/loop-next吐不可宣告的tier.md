@@ -10,6 +10,7 @@ related:
 tags:
   - type/issue
   - status/done
+  - scope/loop-engineering
 summary: |-
   FLAG:TECHNICAL
   KEY:症狀=`loop next` 在無 tier 定錨的 legacy loop 上,吐出的 `record_cmd` 帶 `--tier legacy`,而 `--tier` 的 choices 只有 light/standard/high(LOOP_TIERS)——★複製貼上會被 argparse 當場 rc2★

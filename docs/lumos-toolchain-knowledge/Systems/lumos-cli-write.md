@@ -7,12 +7,15 @@ self_audit: claude-fable/2026-08-24
 tags:
   - type/system
   - status/done
+  - scope/node-content
 related:
   - "[[Systems/lumos-cli-read]]"
   - "[[Systems/lumos-cli-lifecycle]]"
   - "[[Verification/2026-08-11_T1_remove_list項移除]]"
   - "[[Systems/check-u-overgeneralization]]"
+  - "[[Projects/工具分類_計劃]]"
 summary: |-
+  KEY:[2026-09-08 scope 值域宣告制]lint 多一段 scope/ 檢查(plan:[[Projects/工具分類_計劃]]):只在 vault 往上找到的 .lumos/config.json 有 scope 區塊({values:[…],required:bool})時啟動,沒宣告=一個字不說;啟動後 非 MOC 節點 沒掛(required)/掛超過兩個/值不在表內 → ★只 warning 不擋★,不走 created cutoff。設定檔搜尋與 extra_frontmatter_keys 共用同一支 helper(_lumos_config_near_vault) [test:t_lint_scope_policy]
   KEY:[2026-08-05 標籤收編]值域 lint(cutoff 2026-08-06 新節點硬擋,舊帳不回溯)——status 依 type enum(verification 用 pass)/summary FLAG: 三值(敘述移 KEY 行)/priority P0-P3/risk 四值;feature/area 凍結 warning 勸轉 scope/。schema 表單源=lumos-project-notes SKILL〈標籤家族〉 [test:t_lint_tag_value_enums]
   KEY:[2026-08-05]aliases 宣告制——system/issue 新節點(created≥2026-08-05)lint 硬擋「缺 aliases 鍵」;逼★判過★不逼有值(aliases: []=明示無同義詞,合法;湊數別名吃 3.5 檢索權重=主動污染排序)。配套:模板自帶 aliases: []+NEW_HINT 教學(來源限真實出現過的說法)+append 白名單納 aliases;兩庫回填 2026-08-05(toolchain 22 節點 23 條/Landmark 71 節點 152 條,grounded 規則) [test:t_lint_aliases_declared]
   KEY:[2026-08-05]decisions 結構守衛修假陽性——原始條數只認 entry 縮排層(恰 2 空格),alternatives_considered 巢狀清單不計(Landmark 回填實戰:照 ADR 規範寫巢狀清單被誤報「壞損」;真壞型 sibling 吞沒照抓) [test:t_lint_decisions_nested_list_not_false_positive]

@@ -7,6 +7,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/cdc40f962cfd
 tags:
   - type/project
   - status/done
+  - scope/ux-docs-hygiene
 related:
   - "[[Projects/上下文瘦身_計劃]]"
   - "[[Projects/GPT外部評審吸收_計劃]]"

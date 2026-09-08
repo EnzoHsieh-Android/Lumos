@@ -19,6 +19,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 ---
 # 驗證:原生 Windows 支援
 

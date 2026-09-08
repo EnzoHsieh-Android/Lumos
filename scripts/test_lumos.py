@@ -2695,6 +2695,79 @@ def t_dart_profile_discovery():
 
 
 # ── Check T python profile:comment_strip=none+行首錨+檔名錨(CheckT-Python-profile_計劃) ──
+# ── iOS/Node 補棧(2026-09-08,Projects/iOS與Node後端補棧_計劃;★尚無真專案,只有這裡的合成樣本★)──
+def t_swift_profile_discovery():
+    """swift-xctest profile:XCTest 靠 test 前綴、Swift Testing 靠 @Test 巨集,兩代並收;
+    非 test 前綴的裸 func 不收;註解內剝掉;測試目錄=頂層 *Tests suffix、pure 排除 *UITests。
+    翻紅釘:把 SWIFT_TEST_RE 的 @Test 分支拔掉 → ②③翻紅;把 lookahead 拔掉 → ④翻紅。"""
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-swiftprof-"))
+    (root / "AppTests").mkdir()
+    (root / "AppUITests").mkdir()
+    (root / "AppTests" / "CheckoutTests.swift").write_text(
+        "import XCTest\n@testable import App\n"
+        "final class CheckoutTests: XCTestCase {\n"
+        "    func testTotalIncludesTax() { XCTAssertEqual(1, 1) }\n"
+        "    private func makeSut() -> Int { 0 }\n"
+        "    // func testCommentedOut() {}\n"
+        "    /* func testInBlockComment() {} */\n"
+        "}\n", encoding="utf-8")
+    (root / "AppTests" / "CartTests.swift").write_text(
+        "import Testing\n"
+        "@Suite struct CartTests {\n"
+        "    @Test func emptyCartHasZeroTotal() { #expect(true) }\n"
+        "    @Test(\"顯示名可以是中文\") func addingItemIncrementsCount() { #expect(true) }\n"
+        "    @Test\n    private static func nextLineAfterAttribute() { #expect(true) }\n"
+        "    func helperNotATest() {}\n"
+        "}\n", encoding="utf-8")
+    prof = dict(m.TEST_PROFILES["swift-xctest"])
+    got = m.discover_test_methods(root, prof)
+    check("swift ①XCTest func test* 認得", "testTotalIncludesTax" in got, f"{got}")
+    check("swift ②@Test func 任意名認得", "emptyCartHasZeroTotal" in got, f"{got}")
+    check("swift ③@Test(\"顯示名\") 與 @Test 換行+修飾詞都認得",
+          "addingItemIncrementsCount" in got and "nextLineAfterAttribute" in got, f"{got}")
+    check("swift ④非 test 前綴的裸 func 不收", "makeSut" not in got and "helperNotATest" not in got, f"{got}")
+    check("swift ⑤註解內的 test 被剝(c-style)", "testCommentedOut" not in got and "testInBlockComment" not in got, f"{got}")
+    pure = m._detect_test_dir(root, "pure", prof)
+    beh = m._detect_test_dir(root, "behavioral", prof)
+    check("swift ⑥pure 測試目錄=AppTests(排除 UITests)", pure is not None and pure.name == "AppTests", str(pure))
+    check("swift ⑦behavioral 先取 UITests", beh is not None and beh.name == "AppUITests", str(beh))
+
+
+def t_node_jest_profile_discovery():
+    """node-jest / node-vitest profile:test/it/describe('id') 含 .only/.skip;多字 title 不可綁;
+    檔名錨 *.test.* / *.spec.*(其他檔不掃);scaffold 產物命中檔名錨;node-vitest 是同一份設定。
+    翻紅釘:JEST_TEST_RE 拔掉 it|describe → ②翻紅;file_name_match 拔掉 → ⑤翻紅。"""
+    m = _load_lumos()
+    root = Path(tempfile.mkdtemp(prefix="gctl-jestprof-"))
+    (root / "src" / "orders").mkdir(parents=True)
+    (root / "src" / "orders" / "total.test.ts").write_text(
+        "import { describe, it, test, expect } from 'vitest';\n"
+        "describe('orderTotal', () => {\n"
+        "  it('includesTax', () => { expect(1).toBe(1); });\n"
+        "  test.only('roundsToCents', () => {});\n"
+        "  test.skip('skippedButStillDeclared', () => {});\n"
+        "  it('has spaces so not bindable', () => {});\n"
+        "  // it('lineCommented', () => {});\n"
+        "  /* test('blockCommented', () => {}); */\n"
+        "});\n", encoding="utf-8")
+    (root / "src" / "orders" / "total.ts").write_text(   # 非測試檔:裡面的 test( 不算
+        "export function total() { return 1; }\n// test('inSourceFile', () => {});\nconst x = test('notATestFile', 1);\n",
+        encoding="utf-8")
+    prof = dict(m.TEST_PROFILES["node-jest"])
+    got = m.discover_test_methods(root, prof)
+    check("node ①test('id') 含 .only/.skip 認得", {"roundsToCents", "skippedButStillDeclared"} <= got, f"{got}")
+    check("node ②it('id') / describe('id') 認得", {"includesTax", "orderTotal"} <= got, f"{got}")
+    check("node ③多字 title 不可綁", not any("spaces" in g for g in got), f"{got}")
+    check("node ④註解內剝掉", "lineCommented" not in got and "blockCommented" not in got, f"{got}")
+    check("node ⑤非 *.test.*/*.spec.* 檔不掃(檔名錨)", "notATestFile" not in got and "inSourceFile" not in got, f"{got}")
+    import fnmatch as _fn
+    fname = prof["scaffold_name"].format(m="pay_guard") + prof["scaffold_ext"]
+    check("node ⑥scaffold 產物 pay_guard.test.ts 命中檔名錨",
+          any(_fn.fnmatch(fname, g) for g in prof["file_name_match"]), fname)
+    check("node ⑦node-vitest 與 node-jest 同一份設定", m.TEST_PROFILES["node-vitest"] is m.TEST_PROFILES["node-jest"], "")
+
+
 def t_python_profile_discovery():
     m = _load_lumos()
     root = Path(tempfile.mkdtemp(prefix="gctl-pyprof-"))
@@ -8488,6 +8561,27 @@ def t_checky_profile_switches_language():
 
 
 def t_checky_neg_extra_is_configurable():
+def t_checky_swift_and_typescript_profiles():
+    """[iOS/Node 補棧 2026-09-08]symbol_profile=swift / typescript:PascalCase.method 形狀進候選、
+    到對應副檔名的碼裡找;找不到才吵。翻紅釘:把兩個 profile 從 SYMBOL_PROFILES 拔掉 → 回 csharp 預設
+    +「未知 profile」警告,①②翻紅。"""
+    import json
+    for prof, ext, code in (("swift", "swift", "final class PaymentFlow { func startCheckout() {} }\n"),
+                            ("typescript", "ts", "export class PaymentFlow { startCheckout() {} }\n")):
+        root, v = _y_repo("入口 `PaymentFlow.startCheckout`;舊的 `GhostCoordinator.vanish` 還被引用。", "")
+        (root / "src" / f"flow.{ext}").write_text(code, encoding="utf-8")
+        (root / ".lumos").mkdir(exist_ok=True)
+        (root / ".lumos" / "config.json").write_text(json.dumps({"symbol_profile": prof}), encoding="utf-8")
+        r = run(v, "doctor")
+        out = r.stdout + r.stderr
+        check(f"Check Y {prof}: 不吐「未知 profile」警告", "未知 symbol_profile" not in out, out[:300])
+        missing_lines = [l for l in r.stdout.splitlines() if "查無此符號" in l or "GhostCoordinator" in l or "PaymentFlow" in l]
+        check(f"Check Y {prof}: 幽靈符號被抓、存在的符號不吵",
+              "查無此符號" in r.stdout and any("GhostCoordinator" in l for l in missing_lines)
+              and not any("PaymentFlow" in l for l in missing_lines),
+              "\n".join(missing_lines)[:600] or r.stdout[:600])
+
+
     """★語系/用語相依的部分可由專案自行增補★(例:某專案說「已封存」而非「已移除」)。"""
     import json
     root, v = _y_repo("`GhostService.OldAsync` 已封存。", "public class X {}")
@@ -8942,6 +9036,47 @@ def t_pitfalls_diff_arch_alignment_hints():
 
 
 def t_pitfalls_diff_prints_impact_lens_hint_human_only():
+def t_pitfalls_diff_node_flavor_by_package_json():
+    """[iOS/Node 補棧 2026-09-08]同樣是 .ts 檔,後端專案(package.json 沒前端框架)附 node 效能追問
+    + node-idioms;前端專案(依賴有 vue)維持舊行為:不附 node 追問、慣例 skill 仍是 vue-idioms;
+    沒有 package.json 也維持舊行為。.swift 檔附 swift 追問 + swift-idioms。
+    翻紅釘:把 _stack_key_for_file 的 package.json 分流拔掉 → ①或②翻紅。"""
+    import json as _json, subprocess as sp
+
+    def mkrepo(pkg_deps, ext="ts"):
+        root = Path(tempfile.mkdtemp(prefix="gctl-nodeflv-"))
+        def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+        def commit(msg): git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", msg)
+        git("init")
+        if pkg_deps is not None:
+            (root / "package.json").write_text(_json.dumps({"name": "x", "dependencies": pkg_deps}), encoding="utf-8")
+        svc = root / "src" / "services"; svc.mkdir(parents=True)
+        (svc / f"OrderService.{ext}").write_text("export const a = 1;\n", encoding="utf-8")
+        commit("init")
+        (svc / f"RefundService.{ext}").write_text("export const b = 2;\n", encoding="utf-8")
+        commit("add")
+        r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+        return _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+
+    d_node = mkrepo({"fastify": "^5"})
+    check("①後端 .ts:附 node 效能追問 + node-idioms",
+          "node" in (d_node.get("stack_questions") or {}) and "node-idioms" in (d_node.get("arch_alignment") or {}).get("idiom_skills", []),
+          str(d_node.get("stack_questions", {}).keys()) + str(d_node.get("arch_alignment")))
+    d_vue = mkrepo({"vue": "^3"})
+    check("②前端 .ts(依賴有 vue):不附 node 追問、慣例仍 vue-idioms",
+          "node" not in (d_vue.get("stack_questions") or {}) and "vue-idioms" in (d_vue.get("arch_alignment") or {}).get("idiom_skills", []),
+          str(d_vue.get("stack_questions", {}).keys()) + str(d_vue.get("arch_alignment")))
+    d_none = mkrepo(None)
+    check("③沒 package.json:舊行為(不附 node 追問、vue-idioms)",
+          "node" not in (d_none.get("stack_questions") or {}) and "vue-idioms" in (d_none.get("arch_alignment") or {}).get("idiom_skills", []),
+          str(d_none.get("arch_alignment")))
+    d_swift = mkrepo(None, ext="swift")
+    check("④.swift:附 swift 效能追問 + swift-idioms",
+          "swift" in (d_swift.get("stack_questions") or {}) and "swift-idioms" in (d_swift.get("arch_alignment") or {}).get("idiom_skills", []),
+          str(d_swift.get("stack_questions", {}).keys()) + str(d_swift.get("arch_alignment")))
+    print("  ✓ t_pitfalls_diff_node_flavor_by_package_json")
+
+
     """★2026-08-02:code-loop 的「派 reviewer 前跑 impact --diff 附 manifest」原本
     純紀律層、沒有任何機械提醒——當天編排者自己就忘了跑,而事後補跑第一行就是後來
     被證實違反合約的那個節點。★本測試釘住那句提示存在,而且只存在於人可讀輸出。★
@@ -17559,6 +17694,49 @@ def t_lint_tag_value_enums():
 
 
 def t_canary_type_probe_fields():
+def t_lint_scope_policy():
+    """[工具分類 2026-09-08]scope 家族值域宣告制——工具鏈自己按「研究方向」分九類,每篇節點掛一個
+    scope/<類> 主標籤。守衛只在專案於 .lumos/config.json 宣告 scope 區塊時才唸(消費專案沒宣告=
+    零噪音,行為不變),而且只 warning 不擋:沒掛(required)/值不在表內/掛超過兩個;MOC 豁免;
+    不走 created cutoff(全圖已回填,新節點漏掛就該被唸)。翻紅釘:拔 _scope_policy 檢查 → ①③④翻紅。"""
+    import json as _j
+    v = mkvault()
+
+    def mk(name, tags=""):
+        (v / "Systems" / f"{name}.md").write_text(
+            f"---\ntype: system\nstatus: doing\ncreated: 2026-09-08\nupdated: 2026-09-08\n"
+            f"aliases: []\ntags:\n  - type/system\n{tags}summary: |-\n  KEY:x\n---\n# {name}\n",
+            encoding="utf-8")
+
+    mk("沒掛")
+    r0 = run(v, "lint", "沒掛")
+    check("沒宣告 scope 區塊=零噪音(消費專案行為不變)", r0.returncode == 0 and "scope/" not in r0.stdout, r0.stdout[:200])
+    (v.parent / ".lumos").mkdir(exist_ok=True)
+    cfg = v.parent / ".lumos" / "config.json"
+    cfg.write_text(_j.dumps({"scope": {"values": ["retrieval", "evals", "platform"], "required": True}}), encoding="utf-8")
+    r1 = run(v, "lint", "沒掛")
+    check("★宣告後沒掛 scope=warning、rc 仍 0★", r1.returncode == 0 and "沒掛 scope/" in r1.stdout, r1.stdout[:300])
+    mk("野值", "  - scope/whatever\n")
+    r2 = run(v, "lint", "野值")
+    check("★值不在宣告表=warning★", r2.returncode == 0 and "whatever" in r2.stdout and "宣告的值域" in r2.stdout, r2.stdout[:300])
+    mk("三個", "  - scope/retrieval\n  - scope/evals\n  - scope/platform\n")
+    r3 = run(v, "lint", "三個")
+    check("★掛超過兩個=warning(一篇一個主類)★", r3.returncode == 0 and "3 個 scope/" in r3.stdout, r3.stdout[:300])
+    mk("剛好", "  - scope/retrieval\n")
+    r4 = run(v, "lint", "剛好")
+    check("合法一個=零警告", r4.returncode == 0 and "scope/" not in r4.stdout, r4.stdout[:200])
+    mk("兩個橫跨", "  - scope/retrieval\n  - scope/evals\n")
+    r5 = run(v, "lint", "兩個橫跨")
+    check("兩個(真橫跨)放行不唸", r5.returncode == 0 and "scope/" not in r5.stdout, r5.stdout[:200])
+    r6 = run(v, "lint", "MOC/idx")
+    check("MOC 豁免", r6.returncode == 0 and "scope/" not in r6.stdout, r6.stdout[:200])
+    cfg.write_text(_j.dumps({"scope": {"values": ["retrieval"], "required": False}}), encoding="utf-8")
+    r7 = run(v, "lint", "沒掛")
+    check("required:false 時沒掛不唸", r7.returncode == 0 and "沒掛 scope/" not in r7.stdout, r7.stdout[:200])
+    r8 = run(v, "lint", "野值")
+    check("required:false 仍唸野值", r8.returncode == 0 and "whatever" in r8.stdout, r8.stdout[:200])
+
+
     """[D 前置 2026-08-05,Enzo 裁]植入型別與探針結果結構化——原散文 note 不可重算,
     攢十輪也是考古材料。record 加 --canary-type/--probe 選配欄(T1 慣例:不給不寫鍵、
     行為不變);canary-stats 加型別×探針×caught 表。D 本體開工條件=帶型別記錄攢滿 15 筆

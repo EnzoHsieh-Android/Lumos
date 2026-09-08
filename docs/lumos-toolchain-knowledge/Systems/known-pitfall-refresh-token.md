@@ -10,6 +10,7 @@ self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/doing
+  - scope/stack-knowledge
 summary: |-
   FLOW:
   KEY:

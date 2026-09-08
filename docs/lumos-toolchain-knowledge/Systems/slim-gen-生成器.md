@@ -7,6 +7,7 @@ self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
+  - scope/platform
 summary: |-
   FLOW:讀 `scripts/lumos` 原始碼 → AST parse → 算 root 集合(保留指令 dispatch 分支呼叫的函式 + module-level 語句/class body 呼叫的函式,★root 不可只算 dispatch,否則模組層賦值如 `_SKILLS = _skills_list()` 的 helper 會被誤砍★)→ 從 root 做可達性閉包(BFS)→ 補集=移除函式清單 → 收集刪除的行號範圍(整函式/dangling subparser 註冊/dispatch if 分支)+ 少量重排插入(混合保留移除的迴圈註冊,唯一允許重排的小塊)→ 對原始文字做行級刪除套用(不重建保留部分的任何字元)→ 自我 `ast.parse` 驗證產物語法完整
   KEY:★正解是行級手術,不是 ast.unparse★——語法樹無註解,`ast.unparse` 實測把 686 行事故脈絡註解全剝光、格式全重排,直接違背〈公開精簡版計劃〉「接手者改得動」的核心價值主張;唯一允許重排的例外是混合保留/移除的迴圈註冊小塊(2-3 行)

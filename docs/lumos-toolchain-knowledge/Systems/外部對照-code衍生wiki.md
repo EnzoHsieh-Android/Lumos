@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - prior-art
+  - scope/node-content
 related:
   - "[[Systems/canary-audit]]"
   - "[[Systems/verification-rot-eval]]"

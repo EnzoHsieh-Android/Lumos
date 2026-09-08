@@ -6,6 +6,7 @@ updated: 2026-07-17
 tags:
   - type/project
   - status/done
+  - scope/stack-knowledge
 related:
   - "[[Systems/pitfalls-lint-adapter]]"
   - "[[Systems/pitfalls-code-loop]]"

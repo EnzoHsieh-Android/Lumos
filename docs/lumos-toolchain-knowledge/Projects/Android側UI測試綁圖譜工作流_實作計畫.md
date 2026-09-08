@@ -6,7 +6,7 @@ updated: 2026-08-11
 tags:
   - type/project
   - status/doing
-  - scope/governance
+  - scope/stack-knowledge
 related:
   - "[[Android側UI測試綁圖譜工作流_計劃]]"
   - "[[Systems/pitfalls-code-loop]]"

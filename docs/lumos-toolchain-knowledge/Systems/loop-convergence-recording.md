@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/loop-engineering
 verified_by:
   - "[[Verification/2026-06-19_loop-convergence-recording]]"
   - "[[Verification/2026-07-16_dloop提效M2_cluster帳]]"

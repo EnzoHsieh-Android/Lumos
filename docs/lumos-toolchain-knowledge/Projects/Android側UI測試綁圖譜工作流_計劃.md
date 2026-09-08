@@ -14,7 +14,7 @@ related:
 tags:
   - type/project
   - status/todo
-  - scope/governance
+  - scope/stack-knowledge
 summary: |-
   FLOW:功能完成→除單元測試外,用 maestro 建該功能的 UI flow 檔→以檔案形式實跑通過→用 [test:] 綁回該功能的圖譜節點→之後重測/重驗直接跑檔
   KEY:★缺口是三重的,且都很精確(對照既有 [[Systems/pitfalls-code-loop]] 的「UI 層驗收慣例」2026-08-05)★—①**時機**:既有慣例掛在 code-loop 終審(審查時派 agent 去看一眼),使用者要的是**功能完成當下** ②**產物**:既有留截圖+console 存 governance/review-reports/<loop-id>/ui-evidence/,那是**一次性證據**;要的是 flow 檔=**可重放資產**。⚠既有慣例自己寫著「證據可重放非口頭」——★但截圖其實不可重放,flow 檔才是★ ③**棧(★分兩層,原稿把範圍講太大★)**:`[test:]`/Check T 機制層**Android 早有通道**(maestro profile,見下方 KEY);缺的只有**慣例散文層**——UI 層驗收慣例只點名 Playwright MCP / claude-in-chrome(逐字核對 Systems/pitfalls-code-loop:17),沒寫「agent 要開 Android 時走哪條路」

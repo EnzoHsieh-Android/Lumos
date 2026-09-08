@@ -15,6 +15,7 @@ related:
 tags:
   - type/project
   - status/doing
+  - scope/loop-engineering
 summary: |-
   FLAG:DECISION
   KEY:★問題(實測非假想)★——38 個 design loop 用真 gate 指令跑一遍,★過閘 1/38,panel 模式 0/23★——即★用現行判準重跑,37/38 過不了★(注意界線:帳本沒記出場方式,「當年是不是被閘放行的」查不到,不得寫成「機械帳從未背書過」)

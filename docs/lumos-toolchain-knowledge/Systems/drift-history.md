@@ -9,7 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
-  - scope/cli-read
+  - scope/evals
 aliases:
   - drift-history
   - 歷史重放

@@ -6,6 +6,7 @@ updated: 2026-08-30
 tags:
   - type/project
   - status/done
+  - scope/loop-engineering
 decisions:
   - content: Enzo 2026-08-30 裁:三輪達上限攤牌後人裁放行進實作,前提=折入 r3 四件——①T4 接 daily-governance.sh(外家:補這線 r2 否決理由即消失)②T2/T4 範圍恢復非 code 迴圈(code 的 intake 是撈回紀錄非前掃紀錄,兩種被 v3 誤當一種)③處置閘③對 intake 全輪掃(intake_path 掛 r1 帳列,只掃判定輪永遠碰不到)④T4 改滾動窗(最近 6 個非 code 迴圈,窗內達標自然靜默,防 546 形態恆真)。不開第四輪設計審(超上限邊際效益低,實作完有代碼審把關)
     id: d1

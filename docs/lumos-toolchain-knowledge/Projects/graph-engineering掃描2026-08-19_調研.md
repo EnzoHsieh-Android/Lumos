@@ -6,6 +6,7 @@ updated: 2026-08-19
 tags:
   - type/project
   - status/doing
+  - scope/node-content
 related:
   - "[[Issues/散文紀律沒有退場機制]]"
   - "[[Projects/閘觸發帳統計_計劃]]"

@@ -11,6 +11,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 summary: |-
   TEST:t_slim_install_no_project_touch 16 checks 全綠(換形狀後,含新增的 sentinel 外 byte-equal/porcelain 只含 CLAUDE.md 斷言)、t_slim_install_claude_md_idempotent 5 checks 全綠(新增)、t_slim_uninstall_removes_claude_md_block 8 checks 全綠(新增),`python3 scripts/test_lumos.py -k slim` 137 passed/0 failed
   VERIFY:[[Projects/公開精簡版_實作計畫]] Task 8 落地;spec [S3] 的裁定變更(原禁注入/更新 CLAUDE.md → 開放 append-only 附加,仍禁覆蓋)已寫回 [[Projects/公開精簡版_計劃]] [S3]

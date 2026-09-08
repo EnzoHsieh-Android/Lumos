@@ -7,6 +7,7 @@ revalidate_when: "改動 slim/install.sh 的第一/二層判定式、TARGET_DIR 
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 plan_refs:
   - "[[Projects/公開精簡版_計劃]]"
 summary: |-

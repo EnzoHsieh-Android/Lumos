@@ -11,6 +11,7 @@ aliases:
 tags:
   - type/system
   - status/doing
+  - scope/guards-gates
 summary: |-
   FLOW:改 code→(Stop hook 當輪點名)→git commit(pre-commit Gate 3 過關前點名)→git push(pre-push 整批點名)
   KEY:「動過圖譜」不等於「動對篇」——三個位置都用 lumos impact --sync-check 算「跟改到的 code 直接相關(固定席:合約/事故/直接相依)、這次卻沒動」的筆記,點名前 8 篇;★2026-09-05 起兩家都在改了碼沒寫回時回 block 一次讓模型續做補筆記(stop_hook_active+session 標記雙護欄;Codex 先做 [[Projects/Codex行為精修_計劃]],Claude 同日套用 [[Projects/README審視五修_計劃]] d2——舊 stderr 提醒官方文件明講模型看不到)★,逃生門仍是 --no-verify(有繞過帳)

@@ -6,6 +6,7 @@ updated: 2026-07-05
 tags:
   - type/project
   - status/done
+  - scope/guards-gates
 related:
   - "[[code-loop必用守衛_計劃]]"
 plan_refs:

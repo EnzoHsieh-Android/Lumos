@@ -16,6 +16,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/guards-gates
 ---
 # 驗證：關係層主網 M2——typed-edge 反向索引
 

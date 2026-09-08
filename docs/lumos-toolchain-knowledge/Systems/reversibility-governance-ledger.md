@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/guards-gates
 verified_by:
   - "[[Verification/2026-06-19_reversibility-governance-ledger]]"
   - "[[Verification/2026-07-10_審計loop研究硬化]]"

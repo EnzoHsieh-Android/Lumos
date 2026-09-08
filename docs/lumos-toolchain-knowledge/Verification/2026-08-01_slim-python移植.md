@@ -7,6 +7,7 @@ revalidate_when: "改動 install.py/uninstall.py 的 IS_WIN 分支(_install_cli 
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 plan_refs:
   - "[[Projects/公開精簡版_實作計畫]]"
 summary: |-

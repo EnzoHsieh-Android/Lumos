@@ -7,6 +7,7 @@ revalidate_when: 換模型或 Claude Code 大版;改探針判準(forbid_before �
 tags:
   - type/verification
   - status/pass
+  - scope/evals
 plan_refs:
   - "[[Projects/修法A_lumos先行ablation_計劃]]"
 ---

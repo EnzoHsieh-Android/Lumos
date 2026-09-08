@@ -7,6 +7,7 @@ self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
+  - scope/platform
 summary: |-
   FLOW:先取 `lumos --help` 解析出的指令全集減 KEEP 白名單得 removed 集合 → 再讀交付檔(README/SKILL.md/reference.md)逐行掃(★(2026-08-21 程式碼實證)順序:removed 在迴圈前算好,slim-scan.py:154→156★)→ 五種形態各自 regex 對照 → 命中彙整成候選清單(不改檔,只印) → rc 0/1/2
   KEY:★不是自動改寫器★——裸 token/散文型形態必有假陽性(export/set/show/loop/impact 等本身是常見英文詞),故只出候選交人逐條裁,絕不自動改寫交付檔

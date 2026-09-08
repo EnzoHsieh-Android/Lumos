@@ -11,6 +11,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 summary: |-
   TEST:t_slim_install_no_project_touch 8 checks 全綠(`python3 scripts/test_lumos.py -k slim_install`);全套回歸見報告
   VERIFY:[[Projects/公開精簡版_實作計畫]] Task 3 落地;spec [S4-c] 的 symlink 邊界(未經審計、必須實測)已實測,結論見 [[Projects/公開精簡版_計劃]] [S4-c]

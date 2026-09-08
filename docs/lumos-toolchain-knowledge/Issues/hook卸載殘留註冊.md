@@ -13,6 +13,7 @@ pitfall_when:
 tags:
   - type/issue
   - status/done
+  - scope/platform
 summary: |-
   FLAG:ORIGIN
   KEY:現場事故——code-loop-guard.py 被工具鏈更新刪除(落實 2026-07-06 ADR 撤 Stop nag),但 ~/.claude/settings.json 的 Stop 註冊沒清 → 每回合報「檔案不存在」(無害但吵);使用者手動擦屁股

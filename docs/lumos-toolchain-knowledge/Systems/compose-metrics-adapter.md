@@ -7,6 +7,7 @@ self_audit: sonnet/2026-07-24
 tags:
   - type/system
   - status/doing
+  - scope/stack-knowledge
 related:
   - "[[lint-version-watch]]"
   - "[[pitfalls-lint-adapter]]"

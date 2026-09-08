@@ -6,6 +6,7 @@ updated: 2026-07-02
 tags:
   - type/verification
   - status/pass
+  - scope/guards-gates
 related:
   - "[[Systems/anchor-integrity]]"
 valid_under: scripts/lumos cmd_anchor_verify/approve(ANCHOR_FILES 5 檔列舉 + sha256 + rc 0/1/2);接線=pre-push vault 閘門前 + autonomous-loop.sh 每輪派工前;governance-log 寫者=doctor --ci + anchor approve

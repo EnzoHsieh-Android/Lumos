@@ -12,6 +12,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/stack-knowledge
 plan_refs:
   - "[[test-layers軟提醒_計劃]]"
   - "[[test-layers軟提醒_實作計畫]]"

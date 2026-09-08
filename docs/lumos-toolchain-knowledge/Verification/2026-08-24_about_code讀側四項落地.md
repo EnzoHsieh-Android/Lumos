@@ -13,6 +13,7 @@ summary: |-
 tags:
   - type/verification
   - status/pass
+  - scope/retrieval
 plan_refs:
   - "[[Projects/固定席扇出降權_計劃]]"
 related:

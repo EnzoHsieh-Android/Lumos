@@ -14,6 +14,8 @@ revalidate_when:
   - 新增/改 ★IRREVERSIBLE★ / ★CHECKPOINT★ / [rollback:] / [guard:] marker 字串(需同步 graph-discipline + SKILL.md,漂移測試守)
 about_code:
   - scripts/lumos
+tags:
+  - scope/guards-gates
 ---
 # Verification: reversibility-governance-ledger
 

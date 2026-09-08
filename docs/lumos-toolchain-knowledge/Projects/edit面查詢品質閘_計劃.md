@@ -6,6 +6,7 @@ updated: 2026-08-18
 tags:
   - type/project
   - status/done
+  - scope/retrieval
 summary: |-
   KEY:落地 [[Projects/檢索edit面真紅_計劃]] EXP1(離線 held 0.6842→0.7092 零倒退)——impact ranked 的 query 品質閘:★低資訊判準(r1 改版)=剝 shebang 首行後壓縮空白殘餘 <20 字→視同空查詢(L 臂靜默)★,沿既有空查詢語意,不新增公式;觸發族=純 shebang(E05/E14)+短文(E01/E15,模擬零倒退);shebang+真內容不誤殺;事故探針刻意不受閘
   KEY:落點=scripts/lumos impact ranked 融合塊(`query = (_payload.get("query") or "")` 之後、lex 計算之前)加 `_impact_query_junk(query)` 判準;--diff 聚合路徑(query=hunk 文字)同一落點自然生效;JSON 輸出加 `query_gated: true` 觀測欄(僅觸發時)

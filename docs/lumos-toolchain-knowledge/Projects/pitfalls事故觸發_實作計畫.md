@@ -6,6 +6,7 @@ updated: 2026-07-07
 tags:
   - type/project
   - status/done
+  - scope/retrieval
 related:
   - "[[pitfalls事故觸發_計劃]]"
 plan_refs:

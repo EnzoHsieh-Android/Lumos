@@ -6,6 +6,7 @@ updated: 2026-09-08
 tags:
   - type/project
   - status/doing
+  - scope/guards-gates
 summary: |-
   KEY:立案(2026-09-08,全 repo 審視 #19)——把判準從「生效=有註冊」升格成「生效=最近真的跑過」,並讓「擋了誰、放行了誰、被跳了幾次」在帳上查得到。是 [[Projects/enforcement儀表板_計劃]] 的續案不是重開
   KEY:★這批的起點是儀表板自己在講錯話★——lumos enforcement 把 git-pre-commit/git-pre-push 都印成 inactive,而那兩道每次推送都在跑;根因是碼裡拿 core.hooksPath 跟字面字串 "scripts/hooks" 比,本機那個設定是絕對路徑。方向是「該說有卻說沒有」:表面安全,實際後果是那兩列長期紅、真的掉了也沒有訊號價值

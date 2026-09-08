@@ -14,6 +14,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 summary: |-
   TEST:t_slim_readme_assertions 9 checks 全綠(`python3 scripts/test_lumos.py -k slim_readme`);slim 相關全批 `-k slim` 37 checks 全綠
   VERIFY:[[Projects/公開精簡版_實作計畫]] Task 4 落地;裁決統計=改寫50/刪78/初裁假陽性1/重跑後剩餘候選14(逐條假陽性理由見下)

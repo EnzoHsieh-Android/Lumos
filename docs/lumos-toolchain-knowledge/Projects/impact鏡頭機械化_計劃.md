@@ -6,6 +6,7 @@ updated: 2026-09-03
 tags:
   - type/project
   - status/doing
+  - scope/agent-dag
 decisions:
   - content: Enzo 2026-08-29 裁:只做 S1(impact manifest 進派工必附材料,經 loop next 吐 impact_cmd + dispatch materials + seat-check 自動涵蓋),S2([Y] 符號檢查改標準庫 ast)另案追蹤不併入;S1 走完整設計審(非 light)
     id: d1

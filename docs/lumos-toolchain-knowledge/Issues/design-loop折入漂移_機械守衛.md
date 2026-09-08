@@ -7,6 +7,7 @@ tags:
   - type/issue
   - status/done
   - priority/P2
+  - scope/loop-engineering
 related:
   - "[[主動影響幅度偵測_計劃]]"
   - "[[design-loop折入守衛_計劃]]"

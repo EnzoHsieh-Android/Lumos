@@ -7,6 +7,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/63561a781dcc
 tags:
   - type/project
   - status/done
+  - scope/platform
 related:
   - "[[lumos-cli-lifecycle]]"
 summary: |-

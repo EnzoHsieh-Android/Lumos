@@ -11,6 +11,8 @@ revalidate_when:
   - "DashScope 國際 endpoint / qwen3-max API 契約變更(回文格式或 auth)"
   - "orchestrator-prompt §2.5 步驟或 §3 cross_* 欄位改動"
   - "cross_audit.run_cross_audit 簽名 / status 三態語意改動"
+tags:
+  - scope/agent-dag
 ---
 # Verification: cross-family-audit(2026-06-22)
 

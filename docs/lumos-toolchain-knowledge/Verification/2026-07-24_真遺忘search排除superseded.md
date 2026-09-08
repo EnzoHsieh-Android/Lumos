@@ -12,6 +12,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/retrieval
 summary: |-
   TEST:t_search_forget_superseded 19 checks(預設排除 superseded/stale 不被藏守門/活節點保留/valid:false 不誤傷/隱藏數走 stderr 精確=命中被藏筆數/--include-superseded 逃生/三路 ranked+legacy+regex 一致/--json hidden_superseded 欄位+合法 JSON/--files-only stdout 檔名+stderr 提示)+全套 1355 綠零迴歸
   KEY:真遺忘第一刀落地——search 預設藏 status=superseded(agent 進場翻筆記不再把已殺合約當活的讀),**不藏 stale**(重驗警訊);緣起 GateMem(arXiv 2606.18829)照出「標記≠遺忘」

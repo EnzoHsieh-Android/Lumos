@@ -12,6 +12,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 summary: |-
   TEST:t_install_global_hook_sync 9 checks(copy 三 hook/settings 註冊/撤除 code-loop-guard 真檔刪+註冊剪/使用者自訂 hook 不誤剪/冪等)+既有 t_install_hooks_py/t_merge_settings_*/t_hook_copy_list_completeness 迴歸全綠(漂移守衛改指 _GLOBAL_CLAUDE_HOOKS 常數);全套 1335 綠(1 fail 為漂移守衛真相源遷移,已修)
   KEY:全域機器自癒缺口補上——cmd_install 尾端加 _sync_global_claude(不需專案 vault),別台只全域裝 lumos 的機器 `./install.sh` 即清舊 Stop 註冊(code-loop-guard nag);_install_hooks_py ②③委派同函式消雙寫

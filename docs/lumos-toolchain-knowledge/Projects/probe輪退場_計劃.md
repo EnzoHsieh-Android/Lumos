@@ -12,6 +12,7 @@ updated: 2026-08-25
 tags:
   - type/project
   - status/done
+  - scope/loop-engineering
 decisions:
   - content: Enzo 裁甲(2026-08-25,r1 攤牌後):多席 code-loop(含 high)收斂閘統一走處置閘(d5 型記帳:各席留痕+一輪一筆彙總 carrier),panel 閘轉純歷史回放;probe 抽查輪隨宿主退場(義務拔除、判定碼保留降觀測)。此裁定同時具名處置防浮動條款:panel 判準凍結句保留(回放語意),「攢 20 筆抽查帳」翻案通道隨 panel 退役正式作廢——先例同 08-08 具名推翻與 canary 停用(皆業主先裁後動,本次亦然:r1 五席 19 審項/blocking 15 攤牌在前,實作在裁定之後)
     id: d1

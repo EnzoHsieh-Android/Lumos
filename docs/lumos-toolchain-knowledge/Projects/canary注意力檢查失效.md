@@ -14,6 +14,7 @@ related:
 tags:
   - type/project
   - status/done
+  - scope/evals
 summary: |-
   FLAG:TECHNICAL
   KEY:★問題:design-loop 的 canary 與它自己的派工模板互斥★——`templates.md:83` 官方抑噪紀律逐字寫「低嚴重度疑慮,給不出具體失敗場景就不要標」,而 design-loop 的四個 canary 型別(壞章節引用/未定義旗標/未定義欄位/未定義產物)★全部是低嚴重度、講不出失敗場景的文件級瑕疵★。審計員越聽話,越會漏抓

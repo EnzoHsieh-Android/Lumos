@@ -11,6 +11,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 summary: |-
   TEST:code-loop panel 終審(loop=code-dloop-redesign,tier=high,W=5+Codex 雙席+spec 席)三輪的 findings 修復驗證。新測試 4 支:t_disposal_gate_r1_panel_hardening(11 斷言)/t_disposal_gate_r2_panel_hardening(7)/t_disposal_gate_r3_panel_hardening(4)/t_calibration_readback_hardening(3)+quote-check 巢狀/下限 3 斷言;每支紅→綠+前置斷言;全套 2302 綠
   VERIFY:r1 修 7 major(壞行 fail-open 寫讀兩側/判定輪取錯/巢狀引句截斷/引句 10 字下限/只驗 carrier→全席/相對路徑落帳/UnicodeDecodeError);r2 修修復批自身回歸 3 條(__legacy 合組/全席缺欄跳過/vault.parent≠repo root→_vault_repo_root);r3 修 3 major(__ 保留字首撞鍵 3 席重疊/不成對引號格式 miss/--repo 顯式覆蓋)+校準帳 run_id 自驗與 --log 隔離。全部先機械 repro(可執行 falsification)才修

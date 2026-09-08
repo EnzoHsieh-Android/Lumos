@@ -16,6 +16,8 @@ summary: |-
   KEY:_round_valid_m2 統一單位謂詞(caught≥2∧missed=0∧kind 全白名單)——gate/fold/定錨/混用/W 歸屬五處共用;無效輪完全豁免+警告區列帳不蒸發;2caught+1missed 或 +1 未知 kind 的輪其 clusters 掛 caught 記錄上也不採(睡著席 resolved 不得清 disputed-major)
   KEY:讀側 rc2 類全數落地——round-id 非連續重現/有效輪 W 雙帶/有效輪級混用(訊息分因指路開新 loop id)/clusters 欄損壞型別;無-cluster 舊帳三條合取(含 capture-recapture fail-closed)迴歸不變
   KEY:design-loop 3 輪 22 條 findings 全折的 spec v4 逐格實作;人裁實質收斂條件=實作後必過 tier=high full code-loop(push 時執行)
+tags:
+  - scope/loop-engineering
 ---
 # 2026-07-16 design-loop 提效 M2:risk-cluster 三態帳落地驗證
 

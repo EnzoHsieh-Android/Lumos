@@ -326,7 +326,7 @@ Lumos is my answer to that.
 
 ## Scope
 
-Lumos ships **general-purpose tooling only**: the notes CLI, the checks and git hooks, and the cross-project convention manuals for particular tech stacks (kotlin / vue / csharp — they aren't tied to any one project, so they live here).
+Lumos ships **general-purpose tooling only**: the notes CLI, the checks and git hooks, and the cross-project convention manuals for particular tech stacks (kotlin / vue / csharp / swift / node — `ls skills/` is the source of truth; they aren't tied to any one project, so they live here).
 
 What doesn't come in: your business notes, release scripts, framework choices that only one project makes.
 

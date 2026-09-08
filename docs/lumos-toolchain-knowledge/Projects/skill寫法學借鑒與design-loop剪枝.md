@@ -7,6 +7,7 @@ self_audit: sonnet/2026-08-13
 tags:
   - type/project
   - status/done
+  - scope/ux-docs-hygiene
 summary: |-
   FLAG:DECISION
   DECISION:PRIOR-ART: ① 最小解在既有機制層(code-loop 已有的「精實 SKILL.md + reference.md + 撞到就 Read 表」結構,直接套到 design-loop,不造新機制) ② 世界解過:mattpocock/skills 的 `writing-great-skills` 是一支專講「怎麼寫 skill」的 meta-skill,給出資訊階梯三層、context/cognitive 兩種載荷、五個失效模式、no-op 測試 ③ 裁定=**borrow-design**——抄它的寫法學(診斷詞彙+剪枝判準),★不動 lumos 的驗證層★(它整套沒有 canary/收斂閘/合約綁測試,那是 lumos 的差異化)

@@ -12,6 +12,8 @@ revalidate_when:
   - 下一個真實 design-loop 出現 auditor 假陽性(首次能實測辯方當輪降級的場景)
 summary: |-
   finding-refute spec 自走 design-loop 3 輪於 2026-06-24 自動收斂(canary 3/3 全中、r2+r3 連 2 good、全程無假陽性);辯方階段本身因 spec 階段機制未上,由編排者手動當辯方,本輪無假陽性可駁。
+tags:
+  - scope/loop-engineering
 ---
 # 2026-06-24 finding-refute 驗證
 

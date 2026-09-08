@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/stack-knowledge
 related:
   - "[[Systems/pitfalls-lint-adapter]]"
   - "[[Systems/lint-version-watch]]"

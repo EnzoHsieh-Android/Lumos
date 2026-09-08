@@ -14,6 +14,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 ---
 # Verification: loop-convergence-recording(2026-06-19)
 

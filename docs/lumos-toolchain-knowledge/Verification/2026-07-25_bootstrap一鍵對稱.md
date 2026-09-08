@@ -13,6 +13,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 summary: |-
   TEST:t_confirm_tty_unit 6(三階全蓋含★第2階 pty 成功路徑★+stdin 全程未被讀斷言+timeout→None)/t_bootstrap_autoinit 9(--init 建vault+hooks+注入/冪等二跑走接hooks分支/非互動不建+提示/中間態提示不動)/t_getsh_forwards_args 5(真跑 bash:兩旗標轉發非只$1/未知旗標warn/委派無 install 雙寫/失敗傳播 exit 非零)+全套 1392 綠零迴歸
   KEY:裝側一鍵對稱落地——bootstrap 專案層四分流(無 vault 經 _confirm_tty 確認才 auto-init,--init 免確認;中間態不自動動),get.sh clone 後整段委派;與拆側 teardown 成鏡像(bootstrap 不刪 vault、teardown 不建 vault,圖譜兩邊都不碰)

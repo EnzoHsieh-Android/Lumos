@@ -14,6 +14,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/guards-gates
 summary: |-
   TEST:t_python_profile_discovery 9(炸點 fixture t_mid 不被吃/行首認 t_·test_/縮排類內不認/註解 def 不認/檔名錨 helper.py 不認/scaffold_ext+scaffold_name 命中檔名錨/csharp 對照組用 .cs fixture 剝離照舊)+t_python_profile_multiplatform 1(platforms 路徑欄位經 dict 直達)+端到端 doctor Check T「2 條合約 0 偽證據」+全套 1402 綠
   KEY:dogfooding 缺口補上——TEST_PROFILES 加 python(行首錨+檔名錨+comment_strip=none),lumos 自家 Python 合約可走 Check T 形式綁定;真遺忘合約(test+audit 2026-07-24 已備)隨之升回正式硬合約

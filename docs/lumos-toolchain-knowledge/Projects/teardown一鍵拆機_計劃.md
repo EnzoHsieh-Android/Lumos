@@ -6,6 +6,7 @@ updated: 2026-07-24
 tags:
   - type/project
   - status/doing
+  - scope/platform
 related:
   - "[[Systems/lumos-cli-lifecycle]]"
   - "[[Systems/lumos-deinit]]"

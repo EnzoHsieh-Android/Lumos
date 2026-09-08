@@ -7,6 +7,7 @@ date: 2026-06-19
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 valid_under:
   - design-loop skill 自身的 spec 經 canary-護對抗審計、用 K=2 判準達 CONVERGED(連 2 輪 caught 且無 blocker/major)
   - Component A 原語(canary record/loop status)行為與 spec 宣稱一致(loop status 讀 append 序 tail-K 滑動窗、good=caught∧severity∈{clean,minor})

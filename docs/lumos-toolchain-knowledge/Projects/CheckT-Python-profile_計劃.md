@@ -6,6 +6,7 @@ updated: 2026-07-25
 tags:
   - type/project
   - status/done
+  - scope/guards-gates
 related:
   - "[[Systems/test-profile-multiplatform]]"
   - "[[Systems/check-t-sentinel]]"

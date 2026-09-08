@@ -8,6 +8,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/e003e9b4061d
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 plan_refs:
   - "[[Projects/公開精簡版_實作計畫]]"
 summary: |-

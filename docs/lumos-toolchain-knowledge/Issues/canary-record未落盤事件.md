@@ -6,6 +6,7 @@ updated: 2026-07-29
 tags:
   - type/issue
   - status/done
+  - scope/loop-engineering
 related:
   - "[[Systems/canary-audit]]"
 pitfall_when:

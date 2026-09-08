@@ -12,6 +12,7 @@ pitfall_when:
 tags:
   - type/issue
   - status/resolved
+  - scope/platform
 summary: |-
   FLAG:TECHNICAL
   DECISION:不停止 vendoring 測試套件(消費端仍需要「更新後 CLI 有沒有壞」這個能力),改讓★來源 repo 專用★的測試在消費端乾淨 skip;判定★狀態驅動★(`_need_src()` 只看那個產物是不是真的不在),來源端零行為改變

@@ -7,6 +7,7 @@ aliases: []
 tags:
   - type/issue
   - status/done
+  - scope/platform
 summary: |-
   FLAG:TECHNICAL
   KEY:2026-08-17 Landmark 跑 lumos update 後自測 2139綠/76skip/★3紅★,三紅全是引用來源 repo 資產的測試漏掛「來源 repo 專用」skip 守衛

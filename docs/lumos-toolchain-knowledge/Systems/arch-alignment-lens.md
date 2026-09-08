@@ -11,6 +11,7 @@ aliases:
 tags:
   - type/system
   - status/doing
+  - scope/agent-dag
 summary: |-
   FLOW:pitfalls --diff 列對照檔→loop next 吐「架構對齊」席→派工用 templates §7.6 三問→finding 進處置閘
   KEY:只判「跟專案既有的一不一樣」,不評風格好壞;major 只給「引入第二種做法」或「跨層直呼」

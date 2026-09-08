@@ -7,6 +7,7 @@ revalidate_when: "registry 端點語意改 / .lumos/lint-watch.json schema 改 /
 tags:
   - type/verification
   - status/pass
+  - scope/stack-knowledge
 related:
   - "[[lint-version-watch]]"
 summary: |-

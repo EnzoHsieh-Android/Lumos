@@ -6,6 +6,7 @@ updated: 2026-07-05
 tags:
   - type/project
   - status/done
+  - scope/guards-gates
 related:
   - "[[pitfalls-code-loop]]"
   - "[[主動影響幅度偵測_計劃]]"

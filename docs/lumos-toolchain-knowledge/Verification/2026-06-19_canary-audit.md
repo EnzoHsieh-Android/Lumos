@@ -14,6 +14,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 summary: |-
   canary-audit 的 record helper + gov 第 4 源彙整,經 t_canary / t_canary_loop_fields 回歸(258 passed)+ 設計稿 4 輪 Sonnet 對抗審計收斂。
 ---

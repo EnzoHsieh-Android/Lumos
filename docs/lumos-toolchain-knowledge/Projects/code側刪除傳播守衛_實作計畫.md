@@ -6,7 +6,7 @@ updated: 2026-08-11
 tags:
   - type/project
   - status/done
-  - scope/governance
+  - scope/guards-gates
 related:
   - "[[code側刪除傳播守衛_計劃]]"
 summary: |-

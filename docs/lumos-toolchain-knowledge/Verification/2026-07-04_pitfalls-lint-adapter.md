@@ -7,6 +7,7 @@ revalidate_when: "SARIF schema 大改 / .lumos/lint.json 格式改 / _lint_run_a
 tags:
   - type/verification
   - status/pass
+  - scope/stack-knowledge
 related:
   - "[[pitfalls-lint-adapter]]"
 summary: |-

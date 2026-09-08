@@ -6,6 +6,7 @@ updated: 2026-09-05
 tags:
   - type/project
   - status/doing
+  - scope/ux-docs-hygiene
 ---
 # README審視五修_計劃
 

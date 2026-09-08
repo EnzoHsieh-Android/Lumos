@@ -6,6 +6,7 @@ updated: 2026-07-25
 tags:
   - type/project
   - status/done
+  - scope/platform
 related:
   - "[[Systems/lumos-cli-lifecycle]]"
   - "[[Projects/teardown一鍵拆機_計劃]]"

@@ -16,6 +16,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 about_code:
   - scripts/slim-gen.py
   - slim/install.sh

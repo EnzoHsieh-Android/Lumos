@@ -6,6 +6,7 @@ updated: 2026-07-05
 tags:
   - type/project
   - status/done
+  - scope/stack-knowledge
 related:
   - "[[pitfalls-lint-integration_計劃]]"
   - "[[finding-refute]]"

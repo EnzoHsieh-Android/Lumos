@@ -12,6 +12,7 @@ pitfall_when:
 tags:
   - type/issue
   - status/resolved
+  - scope/ux-docs-hygiene
 summary: |-
   FLAG:ORIGIN
   KEY:我寫測試驗「teardown 該擋下 Windows 自刪」,現場沒隔離 HOME、又用了自己編的 `LUMOS_SIMULATE_WINDOWS`(當時 CLI 根本沒這個接縫)——於是 `teardown -y` ★真的跑了★:刪光真機 `~/.claude/hooks/` 四支、移除全域 `~/.local/bin/lumos`,而 `settings.json` 註冊還留著指向已不存在的檔 → Claude Code 的 PostToolUse hook 每次都報錯

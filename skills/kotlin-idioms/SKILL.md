@@ -109,7 +109,7 @@ catch (e: IOException) { log(e) }
 - 機檢：`自訂`
 
 ### R15. 重組效能三件套 ⚠ 不可機檢
-昂貴計算包 `remember(keys) {}`；高頻 state 的派生判斷用 `derivedStateOf`（如 `firstVisibleItemIndex > 0`，否則每滾一像素重組一次）；動畫／捲動值延遲到 `Modifier.offset { }`／`drawBehind {}` 再讀。另禁 backwards write（composition 中讀完又寫同一 state → 無限重組）。
+昂貴計算包 `remember(keys) {}`；高頻 state 的派生判斷用 `derivedStateOf`（如 `firstVisibleItemIndex > 0`，否則每滾一像素重組一次）；動畫／捲動值延遲到 `Modifier.offset { }`／`drawBehind {}` 再讀。另禁 backwards write（composition 中讀完又寫同一 state → 無限重組）。副作用只放 `LaunchedEffect`／`DisposableEffect`，而且 key 要選對：讀了會變的輸入卻用 `Unit` 當 key＝永不重跑；key 太寬＝每次重組重跑（2026-09-08 世界對照補；某消費端 18 處 LaunchedEffect 有 9 處 Unit key）。
 - 依據：[Compose 官方效能指南](https://developer.android.com/develop/ui/compose/performance/bestpractices)
 
 ### R16. Composable 參數紀律（現成規則整組開）

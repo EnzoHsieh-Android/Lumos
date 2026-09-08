@@ -13,7 +13,7 @@ related:
 tags:
   - type/project
   - status/todo
-  - scope/governance
+  - scope/guards-gates
 summary: |-
   FLOW:code diff 的 `-` 行抽出被刪識別字→grep 圖譜內文→列出「還在講它」的節點與原句→逐句問「這句還成立嗎」→改掉或標作廢
   KEY:★這是兩個既有守衛之間的接縫,不是新問題面★—[[關係層傳播守衛_計劃]] 自己寫明「pre-commit 只保證 code↔圖譜同次有動(檔案級存在性),保證不了決策翻案→下游校正(跨節點語意傳播)——不同顆粒度、不重疊」,把 code↔節點 這個方向劃給 pre-commit;而 pre-commit Gate 3 實際只判「有沒有任何一個圖譜 .md 進 staged」。兩邊各自以為對方管了

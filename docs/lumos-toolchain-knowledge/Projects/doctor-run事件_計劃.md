@@ -7,6 +7,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/66f17c769d82
 tags:
   - type/project
   - status/done
+  - scope/evals
 related:
   - "[[Projects/檢核收緊五件_計劃]]"
 about_code:

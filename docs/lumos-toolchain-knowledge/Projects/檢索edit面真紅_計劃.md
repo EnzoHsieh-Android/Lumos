@@ -6,6 +6,7 @@ updated: 2026-08-18
 tags:
   - type/project
   - status/done
+  - scope/retrieval
 summary: |-
   KEY:立案動機(2026-08-18)——語料前進後的第一顆★真紅★:hook P@8 0.6842<0.70,held 未標 0(標註刷新兌現「量到品質非過期」後的真訊號)。症狀紅指令=`python3 governance/eval/retrieval_eval.py --goldset … --split held`(hook_p_gate False,已實跑翻紅)
   KEY:驗屍(逐案解剖,10 held edit 案)——拖分主力三案:E05 0.25(retrieval_eval.py)/E03 0.375(test_lumos.py)/E14 0.375(lint-watch-check.sh);固定席噪音爆炸另計(E02 34 pin 33 噪/E03 25 pin 24 噪;must 35 筆僅 5 筆被 pin 接住)

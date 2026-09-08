@@ -16,6 +16,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/guards-gates
 about_code:
   - scripts/lumos
 ---

@@ -6,6 +6,7 @@ updated: 2026-07-02
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 related:
   - "[[Systems/lumos-refcheck]]"
 valid_under: scripts/lumos cmd_refcheck(FENCE_RE/INLINE_CODE_RE 抽取 + (token,line) 去重 + rc 0/1/2);消費端=orchestrator-prompt §2.8/§2.5a + design-loop SKILL 步驟 2.5

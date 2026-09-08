@@ -7,6 +7,7 @@ signed_off: 2026-08-08
 tags:
   - type/project
   - status/superseded
+  - scope/guards-gates
 summary: |
   KEY:給 lumos mutate 一個自動消費者(現況零消費=蓋好沒人用病)——advisory 不進閘;核心張力=mutate 對大檔×全套測試爆炸、code-loop 收貨常含大檔,故消費者選型 A(code-loop 即時,踩爆炸)vs B(每日 autonomous-loop 過夜,無延遲無爆炸)傾向 B 先
   KEY:防爆三招=預算上限(sha256 抽樣)+跳過重測試檔(skipped:heavy-test)+總時限 partial;活口→mutation-survivors.jsonl→backlog gap 候選→人裁(不自動寫測試=maker bias 鐵則)

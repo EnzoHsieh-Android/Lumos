@@ -6,6 +6,7 @@ updated: 2026-07-21
 tags:
   - type/project
   - status/doing
+  - scope/guards-gates
 related:
   - "[[Issues/code-loop守衛main-direct盲區]]"
   - "[[Systems/pitfalls-code-loop]]"

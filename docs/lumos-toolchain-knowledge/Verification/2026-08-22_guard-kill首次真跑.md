@@ -7,6 +7,7 @@ revalidate_when: 改 _kill_attribute 歸因規則、改 runner 失敗輸出格�
 tags:
   - type/verification
   - status/pass
+  - scope/guards-gates
 ---
 # 2026-08-22_guard-kill首次真跑
 

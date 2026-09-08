@@ -12,6 +12,7 @@ related:
 tags:
   - type/project
   - status/done
+  - scope/loop-engineering
 summary: |-
   FLAG:TECHNICAL
   KEY:本檔=[[Projects/design-loop重設計]](r1 已收斂、人裁放行)的 TDD 實作計畫。六包嚴格順序:★①相容雙讀→②quote-check+凍結快照→③--disposal gate(獨立路徑)→④skill 重寫(與③同批交付)→⑤收緊(留痕轉強制)→⑥離線校準★——順序鐵則=schema/產生器/skill/gate 消費端不同步的中間版本,不得存在任何強制檢查(r1 Codex 折入)

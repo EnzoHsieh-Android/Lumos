@@ -6,6 +6,7 @@ updated: 2026-08-30
 tags:
   - type/project
   - status/done
+  - scope/agent-dag
 decisions:
   - content: r1 五席+外家全票縮案:B(loop next 爆炸半徑 advisory)廢=停案 d2 明文否決選項本人+截斷判死設計+必經論自反證;C 廢=繞母案重開閘;存活交付=pitfalls 提示句升級(接上「貼進派工詞」最後一里,行為釘已綁);副產物=d8「固定席必答」對 code 迴圈執行不動(固定席實測 31 篇無上限),要不要加量詞待人裁
     id: d1

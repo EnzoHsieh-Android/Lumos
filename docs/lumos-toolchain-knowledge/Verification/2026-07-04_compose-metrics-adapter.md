@@ -7,6 +7,7 @@ revalidate_when: "Compose 編譯器 metrics 格式改(欄名/檔名/strong-skipp
 tags:
   - type/verification
   - status/pass
+  - scope/stack-knowledge
 related:
   - "[[compose-metrics-adapter]]"
 summary: |-

@@ -6,7 +6,7 @@ updated: 2026-09-05
 tags:
   - type/project
   - status/done
-  - scope/governance
+  - scope/platform
 related:
   - "[[Projects/Codex工作流整合_調研]]"
   - "[[Projects/派工鏡頭注入_計劃]]"

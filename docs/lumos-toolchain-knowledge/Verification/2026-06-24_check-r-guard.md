@@ -16,6 +16,8 @@ summary: |-
   Check R [guard:decisions] 事前預防路徑驗證:design-loop 3 輪收斂(canary 3/3 全中、跨家族複核 2 輪 endorsed)+ Python 回歸測試(doctor/lint/漂移守衛)全綠。
 about_code:
   - scripts/lumos
+tags:
+  - scope/guards-gates
 ---
 # Verification: check-r-guard
 

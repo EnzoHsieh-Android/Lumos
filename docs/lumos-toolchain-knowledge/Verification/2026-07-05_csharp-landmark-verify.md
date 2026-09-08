@@ -7,6 +7,7 @@ revalidate_when: "dotnet SARIF 版本預設改 / NuGet API 形狀改 / _lint_run
 tags:
   - type/verification
   - status/pass
+  - scope/stack-knowledge
 related:
   - "[[pitfalls-lint-adapter]]"
   - "[[lint-version-watch]]"

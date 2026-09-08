@@ -16,6 +16,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/node-content
 ---
 
 # 驗證：decision_refs 自動養成 code-loop 硬化

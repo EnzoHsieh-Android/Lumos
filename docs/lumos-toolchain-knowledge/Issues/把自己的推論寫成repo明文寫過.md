@@ -7,6 +7,7 @@ aliases: []
 tags:
   - type/issue
   - status/open
+  - scope/node-content
 about_code:
   - docs/lumos-toolchain-knowledge/Projects/中文無空白查詢回退_計劃.md
 summary: |-

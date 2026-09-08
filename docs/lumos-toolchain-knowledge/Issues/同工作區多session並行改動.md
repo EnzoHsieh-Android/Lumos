@@ -7,6 +7,7 @@ aliases: []
 tags:
   - type/issue
   - status/open
+  - scope/agent-dag
 summary: |-
   FLAG:ORIGIN
   KEY:症狀=同一台機器同一個工作目錄開兩個對話一起做事,改動互相波及;git 不會攔,四層閘(git / pre-commit / pre-push / doctor / hook)沒有一層的輸入裡有「session」這個維度

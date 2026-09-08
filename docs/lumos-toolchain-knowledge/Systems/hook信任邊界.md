@@ -8,6 +8,7 @@ about_code: []
 tags:
   - type/system
   - status/doing
+  - scope/platform
 summary: |-
   FLOW:hook 要用 lumos 時 → _trusted_lumos()(系統裝的 → $LUMOS_HOME → 預設來源)→ 都找不到就跳過那段功能(fail-open),★絕不執行被打開那個資料夾裡的 scripts/lumos★
   KEY:★2026-09-06 實地重現★進場 hook 原本執行「被打開那個資料夾」自己的 scripts/lumos,唯一判準是它有 docs/*-knowledge——clone 陌生 repo、開一下 Claude,對方的 python 就跑了;而且是被 python 執行的,那個檔連執行權限都不需要(實測權限 -rw-r--r-- 照樣跑)

@@ -6,7 +6,7 @@ updated: 2026-09-03
 tags:
   - type/project
   - status/doing
-  - scope/governance
+  - scope/evals
 summary: |-
   FLAG:DECISION
   KEY:主 session 動手前被 impact-hook 推到眼前的固定席節點,★有沒有被碰★今天零數字。本案第一段★只量不加義務、不設門檻、零新元件★:一支唯讀腳本讀逐字稿,只出分佈+分層抽樣兩評判;歷史推送現在就能跑(本專案主 session 44 筆=16 舊標頭+28 新;子代理全機重數 0,r2 的 42/70 撤回)

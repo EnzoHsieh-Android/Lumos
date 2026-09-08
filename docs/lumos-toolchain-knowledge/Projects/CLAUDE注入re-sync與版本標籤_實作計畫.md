@@ -7,6 +7,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/6e5e7ced6c88
 tags:
   - type/project
   - status/done
+  - scope/platform
 related:
   - "[[CLAUDE注入re-sync與版本標籤_計劃]]"
 plan_refs:

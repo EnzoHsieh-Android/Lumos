@@ -6,6 +6,7 @@ updated: 2026-07-07
 tags:
   - type/project
   - status/done
+  - scope/loop-engineering
 related:
   - "[[design-loop折入守衛_計劃]]"
 plan_refs:

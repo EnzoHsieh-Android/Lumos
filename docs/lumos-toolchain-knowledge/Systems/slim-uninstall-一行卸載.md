@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/不可逆
+  - scope/platform
 plan_refs:
   - "[[Projects/公開精簡版_計劃]]"
 summary: |-

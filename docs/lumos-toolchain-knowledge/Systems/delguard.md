@@ -9,8 +9,8 @@ self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
-  - scope/governance
   - risk/守衛面
+  - scope/guards-gates
 related:
   - "[[code側刪除傳播守衛_計劃]]"
   - "[[code側刪除傳播守衛_實作計畫]]"

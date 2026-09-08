@@ -7,6 +7,7 @@ revalidate_when: "若日後決定週期性重跑 backlog(非本批一次性回�
 tags:
   - type/verification
   - status/pass
+  - scope/node-content
 plan_refs:
   - "[[Projects/decision_refs自動養成_實作計畫]]"
 ---

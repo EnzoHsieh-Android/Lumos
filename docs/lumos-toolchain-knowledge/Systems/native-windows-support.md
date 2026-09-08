@@ -8,6 +8,7 @@ tags:
   - type/system
   - area/onboarding
   - area/cross-platform
+  - scope/platform
 verified_by:
   - "[[Verification/2026-06-26_native-windows-support_真機]]"
 summary: |-

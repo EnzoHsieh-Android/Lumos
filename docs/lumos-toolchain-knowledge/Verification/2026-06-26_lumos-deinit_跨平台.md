@@ -17,6 +17,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 ---
 # 驗證:lumos deinit 跨平台
 

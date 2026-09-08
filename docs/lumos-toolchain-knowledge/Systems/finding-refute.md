@@ -8,6 +8,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/loop-engineering
 verified_by:
   - "[[Verification/2026-06-24_finding-refute]]"
   - "[[Verification/2026-08-27_辯方表態記帳]]"

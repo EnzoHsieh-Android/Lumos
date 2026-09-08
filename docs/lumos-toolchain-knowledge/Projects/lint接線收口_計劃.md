@@ -10,6 +10,7 @@ updated: 2026-08-26
 tags:
   - type/project
   - status/done
+  - scope/stack-knowledge
 ---
 
 # lint接線收口_計劃

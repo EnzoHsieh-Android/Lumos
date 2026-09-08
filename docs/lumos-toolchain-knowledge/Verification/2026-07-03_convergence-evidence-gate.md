@@ -6,6 +6,7 @@ updated: 2026-07-03
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 related:
   - "[[Systems/convergence-evidence-gate]]"
 valid_under: cmd_loop_status --gate(K-streak∧G1 _refcheck_scan∧G2 分段枯竭定義+互證+fail-closed;rc 0/1/2)+ canary record --findings(optional 鍵)+ cross_audit _parse_worst 末行優先回 (sev,parse_fallback)+_build_prompt sentinel;§2.5c 計票=存活才 +1/unanchored 不獨撐/parse_fallback 不計票

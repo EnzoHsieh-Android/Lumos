@@ -6,6 +6,7 @@ updated: 2026-07-16
 tags:
   - type/project
   - status/doing
+  - scope/loop-engineering
 related:
   - "[[Systems/design-loop]]"
   - "[[Systems/loop-convergence-recording]]"

@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/node-content
 related:
   - "[[Systems/check-t-sentinel]]"
   - "[[Systems/lumos-refcheck]]"

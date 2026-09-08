@@ -7,6 +7,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/a7f4b7c3b461
 tags:
   - type/project
   - status/doing
+  - scope/loop-engineering
 related:
   - "[[Systems/design-loop]]"
   - "[[Systems/pitfalls-code-loop]]"

@@ -6,6 +6,7 @@ updated: 2026-07-29
 tags:
   - type/project
   - status/done
+  - scope/evals
 related:
   - "[[Projects/Codex外審吸收_計劃]]"
   - "[[Issues/canary-record未落盤事件]]"

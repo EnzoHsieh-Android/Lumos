@@ -11,6 +11,7 @@ related:
 tags:
   - type/project
   - status/done
+  - scope/agent-dag
 summary: |-
   FLOW:★2026-08-02 人裁 A 案、已落地★(B/C 加閘案不做,理由見下)。問題=code-loop skill 白紙黑字要求「派 reviewer 前跑 `lumos impact --diff` 並附 manifest 當第二鏡頭」,但★純紀律層、無任何機械提醒★ → 2026-08-02 實測我自己就忘了 → 修法=A 免費提示(已落地)
   KEY:★這不是工具缺口,是執行落差★——`impact --diff` 本來就會逐檔用 hunk 文字當 query 跑 BM25F,固定席(帶硬合約標記的節點)不參與排序競爭故永不被擠掉,hop1 撈得到「改 A 壞 B」的 B。今天跑起來第一行就是後來被證實違反合約的那個節點

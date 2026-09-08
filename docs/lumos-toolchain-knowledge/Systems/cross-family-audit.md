@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/agent-dag
 verified_by:
   - "[[Verification/2026-06-22_cross-family-audit]]"
 summary: |-

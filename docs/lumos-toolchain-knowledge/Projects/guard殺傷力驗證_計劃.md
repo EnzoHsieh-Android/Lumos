@@ -7,6 +7,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/6016fbb925a9
 tags:
   - type/project
   - status/done
+  - scope/guards-gates
 decisions:
   - content: 壞法人宣告(kill 配方進 decisions)+config 宣告 run_cmd,不做自動變異生成
     id: d1

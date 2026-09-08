@@ -7,6 +7,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/2b9ec15c9e5a
 tags:
   - type/issue
   - status/done
+  - scope/guards-gates
 related:
   - "[[Systems/pitfalls-code-loop]]"
   - "[[Projects/loop機械脊椎M1包_計劃]]"

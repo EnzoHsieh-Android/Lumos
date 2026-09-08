@@ -6,6 +6,7 @@ updated: 2026-07-04
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 related:
   - "[[Systems/pitfalls-code-loop]]"
 valid_under: cmd_pitfalls 三模式(PITFALL_CLASSES 詞表+剝除對齊 assess_spec 含防呆+--check 節檢查+--diff pattern/@@ 行號推導/形態類軸/過濾繼承 Check H);cmd_loop_status --gate 的 --spec 可選(G1 skip);lumos-code-loop skill 對抗紀律;接線四檔

@@ -7,6 +7,7 @@ revalidate_when: "改動 slim/install.sh 的 manifest 寫入邏輯、slim/uninst
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 plan_refs:
   - "[[Projects/公開精簡版_計劃]]"
 summary: |-

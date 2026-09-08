@@ -13,6 +13,7 @@ tags:
   - type/issue
   - status/open
   - priority/P3
+  - scope/stack-knowledge
 ---
 
 # Landmark宣告lint時接smoke排程

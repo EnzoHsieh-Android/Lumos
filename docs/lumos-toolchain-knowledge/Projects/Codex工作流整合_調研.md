@@ -6,7 +6,7 @@ updated: 2026-09-04
 tags:
   - type/project
   - status/doing
-  - scope/governance
+  - scope/platform
 related:
   - "[[Projects/派工鏡頭注入_計劃]]"
   - "[[Projects/主session鏡頭利用率_計劃]]"

@@ -10,6 +10,7 @@ related:
 tags:
   - type/issue
   - status/resolved
+  - scope/guards-gates
 summary: |-
   FLAG:TECHNICAL
   KEY:★症狀★——code-loop pass 綁 HEAD sha 嚴格等值,但 pass 自己會往★tracked★的 docs/.governance-log.jsonl append 一行;照「先 commit 乾淨再 push」的普遍直覺把這行 commit 進去,HEAD 前進 → pass 立刻自失效 → 重記 pass 又產生新帳行 → 追尾循環,每圈重付全套 pre-push 閘(2026-08-04 design-loop 重設計終審放行實戰:追尾三圈才發現)。設計者預期順序「pass→先 push→後補 commit 帳」沒寫在任何地方

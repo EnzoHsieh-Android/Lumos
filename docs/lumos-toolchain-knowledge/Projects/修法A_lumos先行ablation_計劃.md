@@ -6,7 +6,7 @@ updated: 2026-09-02
 tags:
   - type/project
   - status/done
-  - scope/governance
+  - scope/evals
 related:
   - "[[Issues/散文紀律沒有退場機制]]"
   - "[[Issues/嚴謹度分配偏向機械層]]"

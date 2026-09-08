@@ -7,6 +7,7 @@ revalidate_when: codex 改版(enforcement codex-cli 列≠0.144.1)或逐字稿�
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 plan_refs:
   - "[[Projects/Codex完全支援_計劃]]"
 decision_refs_ai:

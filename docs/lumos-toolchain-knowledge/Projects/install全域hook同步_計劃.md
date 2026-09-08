@@ -6,6 +6,7 @@ updated: 2026-08-22
 tags:
   - type/project
   - status/done
+  - scope/platform
 related:
   - "[[Projects/code-loop必用守衛_計劃]]"
   - "[[Systems/lumos-cli-lifecycle]]"

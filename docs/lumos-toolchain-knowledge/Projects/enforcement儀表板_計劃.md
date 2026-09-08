@@ -5,7 +5,7 @@ created: 2026-09-02
 tags:
   - type/project
   - status/done
-  - scope/governance
+  - scope/guards-gates
 related:
   - "[[Projects/世界repo掃描2026-09-02_調研]]"
   - "[[Systems/lumos-cli-lifecycle]]"

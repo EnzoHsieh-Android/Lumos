@@ -6,6 +6,7 @@ updated: 2026-08-18
 tags:
   - type/project
   - status/done
+  - scope/retrieval
 summary: |
   KEY:★紅燈史(2026-08-18 兩段)★:①標註過期段結案——首批補標後舊語料 hook P@8 0.6944→0.7458 轉綠(假紅=標註債);②語料前進至 9fcb761 後新基線 0.6842=真紅→③query 品質閘落地(2026-08-18 同日)0.7467 轉綠且六閘全 PASS,見 [[Projects/edit面查詢品質閘_計劃]]——原:治全系統唯一紅燈(hook P@8 0.639/must recall 0.6)——2026-08-07 驗屍 11 筆必看 miss 歸因:①直連被動態閾砍 6 筆(direct 基底 0.30+L≈0<動態閾 0.65×max_free;v1.1/v1.2 買精度的明碼代價)②裸檔名 1 筆③連結缺失 4 筆(r1 勘誤 E20 改判)
   KEY:兩帖藥(r1 折入後)=R1 直連保底席(最終 free 集零 direct 觸發;準固定席外掛 pins+rescued+free,--top 例外明示;rescued 欄位穿透 ranked schema+hook 顯示跟進)+R2 裸檔名容錯(反查端自建抽取路不動共用 _refcheck_scan;git ls-files 母體唯一才比對;hit provenance 穿透);第三帖(Drift 符號錨/TLR 補連結)deferred 另立

@@ -11,6 +11,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 about_code:
   - slim/uninstall.py
 ---

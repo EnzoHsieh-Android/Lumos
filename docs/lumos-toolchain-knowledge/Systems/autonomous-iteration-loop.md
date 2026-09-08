@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/loop-engineering
 verified_by:
   - "[[Verification/2026-06-20_autonomous-iteration-loop]]"
   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"

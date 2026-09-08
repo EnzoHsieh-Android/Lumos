@@ -7,6 +7,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/d4bd9679b0b9
 tags:
   - type/project
   - status/doing
+  - scope/node-content
 related:
   - "[[Systems/外部對照-code衍生wiki]]"
   - "[[Systems/canary-audit]]"

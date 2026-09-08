@@ -8,6 +8,7 @@ tags:
   - status/doing
   - flag/security-relevant
   - flag/depends-on-claude-code-internals
+  - scope/agent-dag
 verified_by:
   - "[[Verification/2026-08-14_跨session傳訊互動視窗實測]]"
 related:

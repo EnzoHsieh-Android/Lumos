@@ -13,6 +13,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/agent-dag
 ---
 # Verification: nested-agent-permission-scope(design-loop 收斂)
 

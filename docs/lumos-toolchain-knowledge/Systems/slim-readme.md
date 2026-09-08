@@ -7,6 +7,7 @@ self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
+  - scope/platform
 summary: |-
   FLOW:先寫 `t_slim_readme_assertions`(紅)→ 寫 `slim/README.md` 滿足 7 項必要內容 → 跑測試轉綠 → 跑 `slim-scan.py` 掃 README 本身,調整措辭到 rc0(README 不像 skill 文件允許留假陽性候選,測試斷言死板要求 rc0)
   KEY:7 項必要內容=①怎麼裝(`install.sh`)+怎麼確認(`lumos --help`)②進場三步 search→context→contracts ③frontmatter 四鐵則(逐字轉錄自 reference.md)④合約鏈是什麼+doctor 為什麼擋+怎麼解 ⑤範圍聲明(功能子集,不含對抗審計;「移除的是入口不是全部程式碼」逐字句)⑥明講不要跑 install-hooks.sh、不要照 CLAUDE.md clone 完整版跑 install.sh,且誠實承認「本 README 壓不住專案自己的 CLAUDE.md」⑦~~凍結聲明~~ ★(2026-08-21 程式碼實證)已被 2026-08-19 移除,改為檢查「lumos update」/〈更新方式〉章;測試現查 8 個 key+1 懸空引用,①的 `install.sh`/`lumos --help` 不在 key 清單內★

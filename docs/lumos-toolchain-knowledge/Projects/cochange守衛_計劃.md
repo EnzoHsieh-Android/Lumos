@@ -6,6 +6,7 @@ updated: 2026-07-10
 tags:
   - type/project
   - status/done
+  - scope/guards-gates
 decisions:
   - content: 耦合度量採 ROSE 非對稱 confidence(shared/freq_A),不採 Code Maat 對稱平均
     id: d1

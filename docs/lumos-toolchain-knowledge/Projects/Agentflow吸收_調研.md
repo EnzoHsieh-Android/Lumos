@@ -6,6 +6,7 @@ updated: 2026-09-07
 tags:
   - type/project
   - status/doing
+  - scope/agent-dag
 related:
   - "[[Projects/執行DAG_調研]]"
   - "[[Systems/check-j-regen-guard]]"

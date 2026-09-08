@@ -6,6 +6,7 @@ updated: 2026-08-29
 tags:
   - type/issue
   - status/done
+  - scope/stack-knowledge
 related:
   - "[[Systems/lint-version-watch]]"
 summary: |-

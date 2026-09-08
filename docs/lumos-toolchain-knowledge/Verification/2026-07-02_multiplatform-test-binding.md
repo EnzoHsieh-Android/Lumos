@@ -18,6 +18,7 @@ revalidate_when:
 tags:
   - type/verification
   - status/pass
+  - scope/guards-gates
 decision_refs_ai:
   - "Projects/多平台合約測試綁定_計劃.md#d1"
 ---

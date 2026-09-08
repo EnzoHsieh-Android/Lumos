@@ -370,7 +370,7 @@ find docs/{vault-name} -name '*\]\]*'
 |---|---|---|
 | `type/` `status/` | enum(status 依 type:system=doing/done/planned/deferred/rejected/superseded/stale;project=todo/doing/done/superseded;issue=open/doing/resolved/done/wontfix;verification=**pass**;moc=doing/done) | 生命週期;lint 硬擋野值 |
 | `priority/` | **P0-P3** | 處理優先級(P0 最急),主用 Issues |
-| `scope/` | 自由 kebab 值(pointsmall/concurrency…) | 業務域切片;★feature/ 與 area/ 已凍結,新寫入一律 scope/(讀側仍認舊帳)★ |
+| `scope/` | kebab 值;**值域由專案自己宣告**在 `.lumos/config.json` 的 `scope` 區塊(`{"values":[…],"required":true}`)——宣告了 lint 才唸(沒掛/掛超過兩個/值不在表內都只 warning 不擋),沒宣告=自由值零噪音 | 消費專案=業務域切片(pointsmall/concurrency…);lumos 工具鏈自己=九個研究方向(node-content/retrieval/loop-engineering/agent-dag/evals/guards-gates/stack-knowledge/platform/ux-docs-hygiene,定義與邊界見該圖譜 `Projects/工具分類_計劃`)。★一篇一個主類,真橫跨才第二個★;★feature/ 與 area/ 已凍結,新寫入一律 scope/(讀側仍認舊帳)★ |
 | `risk/` | **金流/對外送出/不可逆/守衛面** | Systems 專用;消費者=impact(★2026-08-24 起 RISK·值不再保送必看——降入「守衛面參考」lane 小節;固定席只認 INVARIANT/IRREVERSIBLE+事故★)+design-loop light 硬否決 |
 | `flag/` | 小寫語意標;已知有效:do-not-modify/security-relevant/depends-on-claude-code-internals/depends-on-obsidian-internals | 節點級警示,AI 讀 |
 
@@ -602,7 +602,7 @@ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
 
 > scaffold/bind 只省「打字」,不省「確認」。doctor Check T + 誠實鐵則(上節)照舊兜底:stub 不填(留 Assert.Fail)= 紅;綁了不存在的方法 = 懸空被擋。
 >
-> **測試棧 profile(語言可插拔,P5)**:guard/Check T 的「認哪些測試方法」由 `.lumos/config.json` 決定。內建 4 個 profile:**`csharp-xunit`(預設)**、**`kotlin-junit`**(Android 單元)、**`maestro`**(Android E2E,綁 flow `name:` 欄位;`file_must_match=^appId:` 只認真 flow;多字 name NO MATCH)、**`playwright`**(web E2E,綁 `test('id')`/`test.describe('id')`;含空白 title 不可綁)。各 profile 定:掃哪些副檔名、方法 regex、scaffold 副檔名、測試目錄偵測。**無 config = csharp-xunit,完全向後相容**。逃生口:`config.json` 的 `test` 可欄位級覆蓋 `exts`/`scaffold_ext`/`method_regex`。範本仍技術棧專屬、放各專案 `.lumos/guard-templates/`。
+> **測試棧 profile(語言可插拔,P5)**:guard/Check T 的「認哪些測試方法」由 `.lumos/config.json` 決定。內建 profile(以 `TEST_PROFILES` 為準):**`csharp-xunit`(預設)**、**`kotlin-junit`**(Android 單元)、**`maestro`**(Android/iOS E2E,綁 flow `name:` 欄位;`file_must_match=^appId:` 只認真 flow;多字 name NO MATCH)、**`playwright`**(web E2E,綁 `test('id')`/`test.describe('id')`;含空白 title 不可綁)、**`dart`**(Flutter,檔名錨 `*_test.dart`)、**`python`**(行首 `def test_*`+檔名錨)、**`swift-xctest`**(iOS:XCTest `func test*` 與 Swift Testing `@Test func` 兩代並收;頂層 `*Tests` 目錄,pure 排除 `*UITests`;2026-09-08 補,★尚無真專案跑過★)、**`node-jest`** / **`node-vitest`**(Node 後端,同一份設定:`test/it/describe('id')` 含 `.only/.skip`;檔名錨 `*.test.*`/`*.spec.*`,`__tests__/` 下無後綴的檔不在錨內;2026-09-08 補,★尚無真專案跑過★)。各 profile 定:掃哪些副檔名、方法 regex、scaffold 副檔名、測試目錄偵測。**無 config = csharp-xunit,完全向後相容**。逃生口:`config.json` 的 `test` 可欄位級覆蓋 `exts`/`scaffold_ext`/`method_regex`。範本仍技術棧專屬、放各專案 `.lumos/guard-templates/`。
 > ```json
 > // 單平台:Android 專案 .lumos/config.json
 > { "test_profile": "kotlin-junit" }

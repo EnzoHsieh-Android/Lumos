@@ -16,6 +16,8 @@ summary: |-
   KEY:三結論——①haiku 剖面=grep 可得能抓(白名單/詞不存在),推理/交叉對照型全滅→pre-flight 的 haiku 只配機械清單,語意審最低配 sonnet ②單席 sonnet 一發命中 r1 標籤 6-8 成+數條當年 r2/r3 才浮出的洞→多輪的邊際價值主要在「折入後迴歸驗證」非「首輪廣度」,支持 delta-scoped 設計 ③sonnet 對洩漏免疫力強(先推導後驗算並自行揭露),haiku 直接抄答案
   KEY:★replay 方法論鐵則三條(v0 主產出)★——①golden 凍的是折入後 spec,replay 受試對象必須從 git 史撈前折 v1 ②repo 必須 worktree 釘在該 loop 開跑時的 commit(否則實作後 code=答案卡:haiku 抄答案/演化殘影被當缺陷) ③prompt 必須明示「spec 提案的新機制 code 尚未實作=正常」(否則弱模型刷範疇錯誤:把提案未實作當 blocker)
   KEY:誠實邊界——n=2 spec×2 模型,方向性結論非統計結論;標籤集由編排者事後建構(排除 v1 文本中不存在者),有裁判自由度;「超前命中」計分寬鬆面靠人判
+tags:
+  - scope/evals
 ---
 # 2026-07-16 replay 校準 baseline v0
 

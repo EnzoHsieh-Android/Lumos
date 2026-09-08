@@ -7,6 +7,7 @@ revalidate_when: "改動三支 .ps1 的函式結構/return 分支、或未來真
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 plan_refs:
   - "[[Projects/公開精簡版_實作計畫]]"
 summary: |-

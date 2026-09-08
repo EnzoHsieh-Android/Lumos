@@ -6,6 +6,7 @@ updated: 2026-07-05
 tags:
   - type/project
   - status/done
+  - scope/retrieval
 related:
   - "[[pitfalls-lint-integration_計劃]]"
   - "[[主動影響幅度偵測_計劃]]"

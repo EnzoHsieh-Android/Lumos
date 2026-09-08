@@ -11,6 +11,8 @@ revalidate_when:
   - "orchestrator-prompt 或 gap_select / cross_audit / backlog 邏輯改動"
   - "claude -p / gh / qwen API 介面或 OAuth 可用 model 變動"
   - "從 dry-run 切到真 PR 模式(--pr)時須重驗放行閘 branch+PR+LINE 路徑"
+tags:
+  - scope/loop-engineering
 ---
 # Verification — autonomous-iteration-loop
 

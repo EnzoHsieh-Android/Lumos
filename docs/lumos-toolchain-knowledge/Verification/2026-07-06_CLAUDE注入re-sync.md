@@ -13,6 +13,7 @@ related:
 tags:
   - type/verification
   - status/pass
+  - scope/platform
 summary: |-
   TEST:CLAUDE 注入 re-sync + 版本標籤實作完成,826 passed 0 failed(branch feat/claude-reinject,TDD 6 task + opus whole-branch 終審 Ready to merge 無 Critical/Important);修「lumos update/init 從不刷新既有專案 CLAUDE.md 紀律區塊」破口
   VERIFY:_extract_claude_block_span 三態(found/absent/broken,text[start:end]==body 不變量)+ _reinject_claude_block 6-status(覆蓋 sentinel 之間 body + diff,sentinel 外 byte-equal 合約)+ 解耦注入 from _scaffold_project + 接線 _vendor_toolchain(copy2 後,修順序)/cmd_init(既有 vault 只 re-inject 不 pull/重裝 hooks)+ doctor Check D 內容比對漂移守衛(_expected_claude_body 單一源)+ LUMOS_VERSION 版本戳(body 外→不觸發 Check D)+ Check N nudge(soft advisory,來源不可達靜默 skip)

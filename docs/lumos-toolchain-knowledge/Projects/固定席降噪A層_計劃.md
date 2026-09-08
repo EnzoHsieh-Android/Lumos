@@ -17,6 +17,7 @@ related:
 tags:
   - type/project
   - status/done
+  - scope/retrieval
 decisions:
   - content: 三輪達上限後裁甲:開新編號 pin-denoise-a-v4 再審一輪 delta(獨立 JSON 鍵安置模型+r3 折入)
     id: d1

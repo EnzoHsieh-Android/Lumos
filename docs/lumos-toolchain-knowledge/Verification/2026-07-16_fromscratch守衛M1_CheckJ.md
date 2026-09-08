@@ -16,6 +16,8 @@ summary: |-
   KEY:共用 check_regen_provenance(note,repo_root)->(errs,warns,gov_events)——lint 與 doctor 同函式防漂移;映射表:errs→lint rc1/doctor warn(hard),warns→lint 顯示不計 rc/doctor warn_soft,gov_events→僅 doctor --ci 落帳(lint 高頻不落帳)
   KEY:雙報消歧 predicate 落地——regen 節點「推測前綴+INVARIANT 標記」同行時恰一則 J 專屬訊息(generic 位置錯誤 continue 跳過);非 regen 節點 generic 兜底保留(該形態對 INVARIANT_RE 隱形的毒由兜底接)
   KEY:touchpoints——SCALAR_KEYS+regen/INV_TAG_RE 擴 src|git(11 處呼叫點,contracts 顯示驗乾淨)/_refcheck_scan 重構走共用 _validate_repo_ref(既有 refcheck 測試無迴歸)/SRC_REF_RE+GIT_REF_RE+REGEN_PREFIX_RE 新正則
+tags:
+  - scope/node-content
 ---
 # 2026-07-16 fromscratch守衛 M1 Check J 落地驗證
 

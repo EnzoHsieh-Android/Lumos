@@ -25,6 +25,7 @@ related:
 tags:
   - type/project
   - status/done
+  - scope/node-content
 decisions:
   - content: SOP 預設任務驅動:還原跟著「這次要動哪裡」走;第一天只建一篇最小骨架 MOC(純指針),不整倉攤平
     id: d1

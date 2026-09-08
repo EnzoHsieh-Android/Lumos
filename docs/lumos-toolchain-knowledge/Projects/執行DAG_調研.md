@@ -6,6 +6,7 @@ updated: 2026-09-07
 tags:
   - type/project
   - status/doing
+  - scope/agent-dag
 summary: |-
   FLAG:TECHNICAL
   KEY:調研對象=外部評論(GPT,2026-09-07 Enzo 帶進來,沒讀過 repo)主張 Lumos 缺 Execution Memory、該建第二張執行圖(task DAG)+八個 CLI 指令;本篇查證後裁「方向對、起點錯」

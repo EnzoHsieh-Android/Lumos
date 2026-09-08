@@ -6,6 +6,7 @@ updated: 2026-07-04
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 related:
   - "[[Systems/risk-tiered-review]]"
 valid_under: difficulty.py RISK_CLASSES 四類詞表+params(high=3/8,standard=2/6)+assess_spec 黑名單剝除與防呆雙條件(節數<2 或字元<200);wrapper 接線形(分級注入/SPEC 前置守衛/收檔 gate 重驗/high 級 cross_verdict 核對);orchestrator-prompt __NEED__/__TIER__ 佔位符與 ratchet/high 條文

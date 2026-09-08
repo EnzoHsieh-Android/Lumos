@@ -6,7 +6,7 @@ updated: 2026-08-18
 tags:
   - type/project
   - status/done
-  - scope/graph-governance
+  - scope/guards-gates
 aliases:
   - 循序 tier 錨定
 summary: |

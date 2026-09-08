@@ -7,6 +7,7 @@ revalidate_when: 動任何 loop status 收斂謂詞、動 canary record 欄位�
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 summary: |-
   VERIFY:canary 協議停用(Systems/canary-audit d5)的工具面落地驗訖——①record kind 加 none(無植入輪純處置帳載體)②五處閘謂詞納 none:panel 輪有效(none 制=記帳席≥2 且 0 missed)/_round_valid_m2(五consumer共用)/light(ratchet+末輪+K-streak good)/verify-progress(caught_ok)/settle(is_caught_round)③嚴重度合取讀 caught+none(原只讀 caught,none 輪會盲掉存活 findings 假 PASS)
   VERIFY:[終審後補]單 reviewer 終審(sonnet,錨定紀律)交 6 條全採信——同型漏掃 4 處補齊:canary-stats 停用制提示(原對 none loop 回「無記錄」誤讀成沒發生)/gov 對抗層折入帳計 none(原永凍 0)/disposal 觀測行印 none 數/cluster 條1 顯示與謂詞同步;測試②斷言太鬆補強(斷 stdout ✗ 行)且突變實驗證明必翻紅;templates.md 權威指令塊改 record none+植入句逐段標停

@@ -11,6 +11,7 @@ related:
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 summary: |-
   TEST:lumos fold-check <path> + design-loop SKILL.md step7 實作完成,528 passed 0 failed(branch feat/fold-check,TDD 5 task + opus 終審)
   VERIFY:folded-drift 機械守衛落地——鏡像段列舉+value-drift(全文域同識別詞不同值)+reverse-omission(高訊號 token 降噪 237→24);掃描域排除審計段/placeholder/FENCE;無 frontmatter 檔不 crash

@@ -8,6 +8,7 @@ about_code: []
 tags:
   - type/issue
   - status/resolved
+  - scope/loop-engineering
 summary: |-
   FLAG:TECHNICAL
   KEY:design-loop SKILL 步驟 8 寫問閘用 `lumos loop status --disposal`,但 scripts/lumos:4527-4534 明擋 --disposal 與 --panel/--min-seats 併用;多席 panel 型記帳(每席一筆 canary record 帶處置集合)丟給 --disposal 會被「一輪只能有一筆處置」擋下——實務上多席迴圈只能問 --gate --panel(K=2),skill 文字沒講這個分岔

@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/loop-engineering
 verified_by:
   - "[[Verification/2026-06-20_judge-severity-gate]]"
 summary: |-

@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/deferred
   - risk/守衛面
+  - scope/loop-engineering
 verified_by:
   - "[[Verification/2026-06-19_canary-audit]]"
   - "[[Verification/2026-07-10_審計loop研究硬化]]"

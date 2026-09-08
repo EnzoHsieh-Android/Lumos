@@ -6,6 +6,7 @@ updated: 2026-07-07
 tags:
   - type/project
   - status/done
+  - scope/stack-knowledge
 related:
   - "[[Systems/pitfalls-code-loop]]"
 summary: |-

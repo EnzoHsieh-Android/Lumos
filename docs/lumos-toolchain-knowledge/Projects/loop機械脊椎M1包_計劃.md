@@ -6,6 +6,7 @@ updated: 2026-07-21
 tags:
   - type/project
   - status/done
+  - scope/loop-engineering
 related:
   - "[[Projects/全盤外審2026-07_調研]]"
   - "[[Projects/design-loop輕量檔_計劃]]"

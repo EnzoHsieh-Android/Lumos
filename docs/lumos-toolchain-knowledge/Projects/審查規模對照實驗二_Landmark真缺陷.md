@@ -9,6 +9,7 @@ related:
 tags:
   - type/project
   - status/done
+  - scope/evals
 summary: |-
   FLAG:TECHNICAL
   DECISION:★預先登記(派工前寫死)★:主要指標=命中率(二元,判準見下),按 payload 大小分格,兩根針各 3 重複、每格 n=6。支持=命中率隨規模★單調下降★;打平或非單調=不支持。無論結果都寫回,不得只在支持時才記

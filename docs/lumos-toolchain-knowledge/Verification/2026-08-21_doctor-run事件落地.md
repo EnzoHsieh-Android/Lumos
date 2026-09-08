@@ -7,6 +7,7 @@ revalidate_when: "改 _append_governance_log/cmd_gov 去噪;新增會寫治理�
 tags:
   - type/verification
   - status/pass
+  - scope/evals
 plan_refs:
   - "[[Projects/doctor-run事件_計劃]]"
 ---

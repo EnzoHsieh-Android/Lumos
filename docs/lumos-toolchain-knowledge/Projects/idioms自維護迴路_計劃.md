@@ -6,6 +6,7 @@ updated: 2026-07-12
 tags:
   - type/project
   - status/doing
+  - scope/stack-knowledge
 summary: |-
   FLOW:M層(C1a-lint演進/C1b-框架版本 cron偵測)→pending候選→A層(refuter/drain草案/C3旁註/C2網搜,Claude在場跑)→screened→staged→人閘三力度→改idioms文件
   KEY:治病=idioms三份(kotlin/vue/csharp)會過時(版本變)或缺漏(新實踐沒收),既有「飛輪」靠人記得回填=實質不會發生;把「該回來複查」變機械觸發

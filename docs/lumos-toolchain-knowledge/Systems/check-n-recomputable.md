@@ -9,7 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
-  - scope/cli-read
+  - scope/node-content
 aliases:
   - Check N
   - 可重算數字宣稱

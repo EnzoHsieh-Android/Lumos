@@ -7,6 +7,7 @@ signed_off: 2026-07-21
 tags:
   - type/project
   - status/done
+  - scope/ux-docs-hygiene
 related:
   - "[[Projects/全盤外審2026-07_調研]]"
   - "[[Systems/lumos-cli-read]]"

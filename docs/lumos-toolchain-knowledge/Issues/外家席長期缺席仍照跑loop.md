@@ -8,7 +8,7 @@ tags:
   - type/issue
   - status/resolved
   - priority/P2
-  - scope/loop-engineering
+  - scope/agent-dag
 summary: |-
   FLAG:DECISION
   KEY:maker≠checker 是整套驗證的地基,而跨家族審查席已連續缺席數週:Codex 帳號不支援可用模型、Gemini pro 免費額度 limit=0、flash 逾時

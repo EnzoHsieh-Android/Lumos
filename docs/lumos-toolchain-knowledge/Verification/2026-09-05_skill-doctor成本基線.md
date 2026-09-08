@@ -7,6 +7,7 @@ revalidate_when: 代碼審/設計審席位編制改了、或 skill 說明文字�
 tags:
   - type/verification
   - status/pass
+  - scope/evals
 plan_refs:
   - "[[Projects/loop數據收集_計劃]]"
 ---

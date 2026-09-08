@@ -7,6 +7,7 @@ self_audit: sonnet/2026-08-21
 tags:
   - type/system
   - status/done
+  - scope/retrieval
 summary: |-
   KEY:★2026-08-26 評測尺翻案(condensed,plan:[[Projects/評測尺翻案_計劃]])★——「未標=0」翻案:全品質尺加 condensed 版(觸及集窗內已判子列表計分,MRR→MRR@10),題級門檻 ceil(k/2) 低覆蓋記 None 不進 macro、面別覆蓋率分算;雙報期 gate 恆以舊尺拍板、新尺走 history 巢狀欄 condensed_preview(一輪一筆不破);切換點=repin(母體未標=0 時兩尺恆等,恆等斷言過才切、棘輪基線跨 metric_rev 繼承僅限該輪);pin_noise 維持未標=噪音(顯式三態);消融 rc3 零容忍不動
   KEY:[2026-08-24 固定席降噪A層落地,plan:[[Projects/固定席降噪A層_計劃]]]硬合約保送——LUMOS_IMPACT_HARD_PIN=1 時 indirect hop≤1 保送只認 INVARIANT/IRREVERSIBLE;RISK·* 類降入★JSON 獨立頂層鍵 lane 參考道★(產生端 cap LUMOS_IMPACT_LANE_N=3、R 公式分數、不進 results/free/P@8、視同 pins 進未標檢查;沒學過 lane 的讀者結構性不受影響=決策 d2)。預設 0 待 train/held 網格轉正 [test:t_impact_hard_pin_lane]

@@ -6,6 +6,7 @@ updated: 2026-07-17
 tags:
   - type/project
   - status/done
+  - scope/stack-knowledge
 related:
   - "[[test-layers軟提醒_計劃]]"
 plan_refs:

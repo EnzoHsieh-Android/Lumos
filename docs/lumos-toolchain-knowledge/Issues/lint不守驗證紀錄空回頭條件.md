@@ -8,6 +8,7 @@ about_code: []
 tags:
   - type/issue
   - status/open
+  - scope/node-content
 summary: |-
   FLAG:TECHNICAL
   KEY:守衛缺口(code-batch2 conf-f1 順帶抓到):lumos lint 對 Verification 的 valid_under/revalidate_when 空欄不警——同一天五篇驗證全把回頭條件寫進正文、欄位空白,stale --match 全掃不到,lint 全綠放行;鐵則四被靜默架空而無機械提醒

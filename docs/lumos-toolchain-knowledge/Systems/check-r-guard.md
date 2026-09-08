@@ -9,6 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
+  - scope/guards-gates
 verified_by:
   - "[[Verification/2026-06-24_check-r-guard]]"
 summary: |-

@@ -6,6 +6,7 @@ updated: 2026-07-09
 tags:
   - type/project
   - status/done
+  - scope/loop-engineering
 related:
   - "[[loop三輪壓縮_計劃]]"
 plan_refs:

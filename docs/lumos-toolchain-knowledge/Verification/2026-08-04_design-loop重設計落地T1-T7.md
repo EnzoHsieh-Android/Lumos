@@ -10,6 +10,7 @@ plan_refs:
 tags:
   - type/verification
   - status/pass
+  - scope/loop-engineering
 summary: |-
   TEST:六包中 T1-T7 全數落地(T8 收尾=本節點+終審)。新測試 5 支:t_canary_record_disposal_fields_optional(10 斷言)/t_quote_check_normalization_and_verdict(6)/t_disposal_snapshot_provenance(3,反循環合約)/t_loop_status_disposal_gate(10)/t_disposal_loop_requires_provenance+t_loop_next_disposal_cmd_actually_runs+t_calibration_smoke。每支:紅→綠→還原翻紅釘實測+現場成立前置
   VERIFY:相容鐵則逐包驗訖——零新參舊呼叫 rc0 無新鍵、舊 panel 閘同帳輸出不變、未定錨 loop 不受收緊影響;d4 落地實證=missed 席在場 disposal 閘照樣 rc0;反循環實證=同一報告對現檔 rc0(假 ok)對凍結快照 rc1;讀側重驗實證=record 完竄改報告→FAIL

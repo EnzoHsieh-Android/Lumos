@@ -9,7 +9,7 @@ tags:
   - type/system
   - status/done
   - risk/守衛面
-  - scope/cli-lint
+  - scope/node-content
 aliases:
   - Check U
   - 過度概化守衛

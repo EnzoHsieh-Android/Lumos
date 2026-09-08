@@ -6,6 +6,7 @@ updated: 2026-07-10
 tags:
   - type/project
   - status/done
+  - scope/loop-engineering
 decisions:
   - content: 難度過濾用 haiku 弱模型探針(反向適配 FLAWS difficulty filter),上限重植 2 次
     id: d1

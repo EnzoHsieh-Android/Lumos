@@ -7,6 +7,7 @@ self_audit: sonnet/2026-06-26
 tags:
   - type/system
   - status/rejected
+  - scope/evals
 summary: |-
   FLOW:gap(單一 judge 不可靠)→設計擾動穩定度測試(關鍵輪換序審兩次、翻盤即不採信)→design-loop r1 折機械 reorder→r2 揭機制堵不住自證(只換藏身處)→人選放棄→改輕方案:可信度報告硬列「迴圈沒檢查到的維度」
   KEY:評估後放棄(2026-06-20)——非未完成,是 design-loop 揭示「用同一 judge 審它自己穩定性逃不出『誰控制擾動』的自證悖論」後的主動不做判斷

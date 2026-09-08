@@ -11,6 +11,7 @@ pitfall_when:
 tags:
   - type/issue
   - status/done
+  - scope/platform
 summary: |-
   FLAG:ORIGIN
   KEY:現場事故——`lumos init --force` 在既有 vault 上,slug 誤用 repo basename 而非既有 vault 的 slug。repo basename=landmarkmember、實際 vault=landmark-knowledge → --force 建了空的 docs/landmarkmember-knowledge/ scaffold + 把 CLAUDE.md {{KG}} 圖譜路徑寫錯成 landmarkmember-knowledge(drift)

@@ -8,6 +8,7 @@ about_code: []
 tags:
   - type/issue
   - status/open
+  - scope/guards-gates
 summary: |-
   FLAG:TECHNICAL
   KEY:症狀=收工 hook(check-graph-sync.py,Stop)的「改了 code 沒動筆記→擋一次」對**純 Bash 改碼**(sed -i / heredoc > / python 寫檔)完全看不到:閘門 1/2 只從逐字稿收 Edit/Write/MultiEdit 檔路徑與 Bash 的 rm/mv/cp/git rm/git mv 五種,src_files 空就 return 0——連 stderr 提醒都不印

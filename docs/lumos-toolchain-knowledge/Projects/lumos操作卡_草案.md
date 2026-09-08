@@ -7,6 +7,7 @@ about_code_stamp: batch-2026-08-23/2026-08-23/b8ad327339f2
 tags:
   - type/project
   - status/superseded
+  - scope/ux-docs-hygiene
 related:
   - "[[Projects/工具鏈全環節體檢_調研]]"
 ---
