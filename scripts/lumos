@@ -1355,6 +1355,8 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     sa_stale = [m for _rel, m in sa_stale]
 
     def _soft_list(items, head, advice):
+        # 同一個 idiom 另有一份在 _profile_stack_mismatch(它要「兩組各留額度並回傳 list」,
+        # 這支吃單一 list 又直接印,裝不下)——改文案或上限時兩邊一起看(r2 架構席 f3)。
         shown = items[:8]
         lines = list(shown)
         if len(items) > len(shown):
@@ -8701,8 +8703,11 @@ def cmd_guard_kill_add(env, node, invariant_substr, file, old, new, test=None,
     return 0
 
 
-def _kill_run(cmd, cwd, timeout):
-    """跑 run_cmd(shell,killpg 沿 lint 先例)。回 (rc, tail200, elapsed, timed_out)。"""
+def _kill_run(cmd, cwd, timeout, keep_re=None):
+    """跑 run_cmd(shell,killpg 沿 lint 先例)。回 (rc, tail200, elapsed, timed_out)。
+
+    keep_re 直接轉給 _kill_cap:輸出超過上限而要截斷時,符合這個樣式的行不得被砍掉
+    (合約測試閘拿它保住「執行了 N 支」那一行;見 _kill_cap)。回傳形狀不變。"""
     import os
     import signal
     import subprocess
@@ -8726,26 +8731,39 @@ def _kill_run(cmd, cwd, timeout):
             proc.wait()
             buf.seek(0)
             txt = buf.read()
-            return (None, _kill_cap(txt), time.time() - t0, True)
+            return (None, _kill_cap(txt, keep_re), time.time() - t0, True)
         buf.seek(0)
         txt = buf.read()
-    return (proc.returncode, _kill_cap(txt), time.time() - t0, False)
+    return (proc.returncode, _kill_cap(txt, keep_re), time.time() - t0, False)
 
 
 _KILL_OUT_CAP = 256 * 1024
 
 
-def _kill_cap(txt):
+def _kill_cap(txt, keep_re=None):
     """[S3 oracle品質包] 保留完整輸出供歸因(上限 256KB;超限取頭尾各半、對齊換行邊界
-    並插 marker——裸位元組砍半會把兩條真實行拼成假行汙染行窗掃描)。"""
+    並插 marker——裸位元組砍半會把兩條真實行拼成假行汙染行窗掃描)。
+
+    keep_re:★被砍掉的中段裡,符合這個樣式的行要留下來★(2026-09-09 代碼審 r2 f1)。
+    出身:合約測試閘現在靠「測試工具自己說執行了幾支」那一行當證據,而那一行如果落在
+    被砍掉的中段,一支真的跑過的測試會被誤判成「證不出跑過」而擋下推送。
+    ★審查席舉的 jest 例子實測不成立★(jest 29 把覆蓋率表印在摘要之前,摘要仍是最後一行),
+    所以這是防禦性修法而不是修一個已發生的 bug——但沒有它,這道閘等於押注
+    「所有測試工具都把摘要印在最後」,而那是沒人驗過的假設。最多留 20 行,免得反噬成新的爆量。"""
     if len(txt) <= _KILL_OUT_CAP:
         return txt
     half = _KILL_OUT_CAP // 2
     head, tail = txt[:half], txt[-half:]
     head = head[:head.rfind("\n") + 1] if "\n" in head else head
     tail = tail[tail.find("\n") + 1:] if "\n" in tail else tail
+    kept = ""
+    if keep_re is not None:
+        middle = txt[len(head):len(txt) - len(tail)]
+        hits = [l for l in middle.splitlines() if re.search(keep_re, l)][:20]
+        if hits:
+            kept = "...[kept from truncated middle]...\n" + "\n".join(hits) + "\n"
     dropped = len(txt) - len(head) - len(tail)
-    return head + f"...[truncated {dropped} bytes]...\n" + tail
+    return head + f"...[truncated {dropped} bytes]...\n" + kept + tail
 
 
 _KILL_FAIL_MARKS = ("FAIL", "FAILED", "✗", "AssertionError")
@@ -13321,16 +13339,19 @@ _STACK_PREFER_TEST = {"node-jest": 2, "playwright": 1}
 _STACK_GUESS_SKIP_EXTS = {".yaml", ".yml"}
 
 
+_STACK_GUESS_CACHE = None   # 整支 CLI 跑期算一次(模組級單例,同 _TESTMAP_DIR_RE 的既有寫法)
+
+
 def _stack_guess():
-    """副檔名 → (test_profile 或 "", symbol_profile 或 "", 人話)。反查自兩張正典表,結果 cache。
+    """副檔名 → {test, symbol, human, symbol_weak}。反查自兩張正典表,結果 cache。
 
     ★對不到就留空字串,不硬湊★:例如 `.dart` 沒有任何 symbol profile 認領、`.vue` 沒有任何
     test profile 認領。留空的後果是 init 產出的骨架該欄是空的,而健檢 S3 會唸「你的程式碼是
     這種副檔名、但設定認的是別的」——比硬填一個不存在的值好,因為那個值只會換來每次讀設定
     都印一行警告、而且永遠沒人知道為什麼。"""
-    cached = getattr(_stack_guess, "_cache", None)
-    if cached is not None:
-        return cached
+    global _STACK_GUESS_CACHE
+    if _STACK_GUESS_CACHE is not None:
+        return _STACK_GUESS_CACHE
     tp_by_ext, sp_by_ext = {}, {}
     for name, prof in TEST_PROFILES.items():
         for ext in (prof.get("exts") or ()):
@@ -13364,8 +13385,15 @@ def _stack_guess():
         owners = sp_by_ext.get(ext) or []
         pick = partner.get(tp_by_ext.get(ext, ""), "")
         sp = pick if pick in owners else (owners[0] if owners else "")
-        out[ext] = (tp_by_ext.get(ext, ""), sp, _STACK_HUMAN.get(ext, ext))
-    _stack_guess._cache = out
+        # ★猜得弱要講出來★(2026-09-09 代碼審 r2 f4):`.vue`/`.sql`/`.ps1` 只有 csharp 那份
+        # 副檔名清單收了它們(那是「C# 店裡也會有的檔」的意思,不是「這是 C# 專案」)。
+        # 反查因此會把一個以 Vue/SQL/PowerShell 為主的專案猜成 symbol_profile csharp——
+        # 值合法、所有檢查都不唸,等於把 r1 修掉的「猜錯沒人知道」換成更隱蔽的版本。
+        # weak=True 表示「這個 profile 不是為這個副檔名而生的,只是碰巧收了它」。
+        weak = bool(sp) and sp != pick
+        out[ext] = {"test": tp_by_ext.get(ext, ""), "symbol": sp,
+                    "human": _STACK_HUMAN.get(ext, ext), "symbol_weak": weak}
+    _STACK_GUESS_CACHE = out
     return out
 
 
@@ -13457,18 +13485,32 @@ def _profile_stack_mismatch(root):
         if n >= _floor and ext not in covered:
             test_msgs.append(f"專案裡有 {n} 個 {ext} 檔,但測試設定認的是 {sorted(covered) or '(預設 C#)'}——掃不到這些檔裡的測試")
     sym, _neg = load_symbol_profile(root)
-    sym_exts = set(sym.get("code_exts") or [])
+    sym_ordered = list(sym.get("code_exts") or [])
+    sym_exts = set(sym_ordered)
+    # ★主要副檔名一個都沒有=這個設定八成不是為這個 repo 挑的★(r2 f4):
+    # 每個符號 profile 的清單第一個副檔名是它的本命(csharp→.cs、swift→.swift…),
+    # 後面那些是「這種店裡也會有的檔」(csharp 收了 .vue/.sql/.ps1)。所以一個 Vue 專案
+    # 反查會得到 csharp——值合法、上面兩組都不唸,因為 .vue 確實在 csharp 清單裡。
+    # 這一條專門補那個洞:本命副檔名掛零就出聲。
+    if sym_ordered and counts.get(sym_ordered[0], 0) == 0:
+        sym_msgs.append(f"符號設定認的本命副檔名是 {sym_ordered[0]},但這個專案一個 {sym_ordered[0]} 檔都沒有"
+                        f"(它還認 {sorted(sym_exts - {sym_ordered[0]})},所以不會被上面那條唸到)"
+                        "——這個設定八成不是為這個專案挑的")
     for ext, n in sorted(counts.items(), key=lambda kv: -kv[1]):
         if n >= _floor and ext not in sym_exts:
             sym_msgs.append(f"專案裡有 {n} 個 {ext} 檔,但 symbol_profile 認的是 {sorted(sym_exts)}——筆記提到的符號在這些檔裡查不到也不會報")
     # ★兩組各自留額度,截斷要說實話★(r1 單reviewer f3,實測):
     # 舊寫法是兩組接成一串再 out[:8],而測試那組永遠排在前面——symbol_profile 那整類
     # 在副檔名一多的專案會被整批吃掉,而且標頭照印「有 8 項」,看不出還有沒講的。
+    # ★跟健檢的 _soft_list 是同一個 idiom,故意沒抽成共用函式★(r2 架構席 f3):
+    # 那支定義在 run_doctor 內部、吃單一 list、直接印出去回 None,裝不下「兩組各留額度、
+    # 回傳 list 給呼叫端」;為了這五行去改它會動到十個既有呼叫點。文案對齊成同一種說法
+    # (「… 還有 N 條」),以後改動任一邊請回頭看另一邊——scripts/lumos 的 _soft_list。
     cap, out = 4, []
     for group in (test_msgs, sym_msgs):
         out.extend(group[:cap])
         if len(group) > cap:
-            out.append(f"(同類還有 {len(group) - cap} 條沒列出來)")
+            out.append(f"… 還有 {len(group) - cap} 條(同一類)")
     return out
 
 
@@ -13523,7 +13565,8 @@ def _init_config_skeleton(root):
         body = blank
     elif len(ranked) == 1 or ranked[0][1] > sum(c for _, c in ranked[1:]) * 3:
         ext = ranked[0][0]
-        tp, sp, human = guess[ext]
+        g = guess[ext]
+        tp, sp, human = g["test"], g["symbol"], g["human"]
         body = {"_推測": f"看到 {counts[ext]} 個 {ext} 檔,猜這是 {human} 專案——不對就改",
                 "test_profile": tp, "symbol_profile": sp,
                 "test": {"run_cmd": _SKELETON_RUN_CMD.get(tp, "")}}
@@ -13531,10 +13574,16 @@ def _init_config_skeleton(root):
             body["_請自己填"] = ("這個副檔名在正典表裡只被其中一種 profile 認領,另一個留空給你填:"
                                 f"test_profile 可選 {'/'.join(sorted(TEST_PROFILES))};"
                                 f"symbol_profile 可選 {'/'.join(sorted(SYMBOL_PROFILES))}")
+        if g["symbol_weak"]:
+            body["_這個猜得很弱"] = (f"symbol_profile 猜成 {sp},只是因為 {sp} 的副檔名清單裡碰巧收了 {ext}"
+                                    f"——那不代表這是 {sp} 專案。符號檢查會用 {sp} 的清單去找筆記提到的符號,"
+                                    "對不上就整批查不到也不會報。請自己確認,可選:"
+                                    f"{'/'.join(sorted(SYMBOL_PROFILES))}")
     else:
         plats = {}
         for ext, n in ranked[:3]:
-            tp, sp, human = guess[ext]
+            g = guess[ext]
+            tp, sp, human = g["test"], g["symbol"], g["human"]
             if not tp:
                 continue
             plats.setdefault(tp.split("-")[0], {"profile": tp, "root": ".", "run_cmd": _SKELETON_RUN_CMD.get(tp, ""),
@@ -13544,7 +13593,7 @@ def _init_config_skeleton(root):
         else:
             body = {"_推測": "看到多種語言,用多平台格式(每個平台各自的 root/profile/run_cmd)——請確認並把 root 改成各平台真正的目錄",
                     "default_platform": next(iter(plats)), "platforms": plats,
-                    "symbol_profile": guess[ranked[0][0]][1]}
+                    "symbol_profile": guess[ranked[0][0]]["symbol"]}
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     body = {"_請先確認": note, **body}
     _write_lf(cfg_path, _j.dumps(body, ensure_ascii=False, indent=2) + "\n")
@@ -21334,32 +21383,52 @@ _FILTER_PROBE_TTL = 14 * 86400   # 快取保鮮期:測試工具升級、設定�
 # 這比冒煙測試強在★逐支判★:合約 [test:] 名字打錯一個字,只有那一支會被抓出來。
 # ★只填在這台機器上真的跑過、而且對照過「跑 1 支」與「跑 0 支」兩種輸出的 profile★;
 # 沒實測過的留空 → 退回冒煙測試那條舊路,不憑想像寫樣式。
+# ★具名欄位,不用位置元組★(2026-09-09 代碼審 r2 架構席 f1):本檔既有的「表裡帶說明、
+# 說明會在執行期被印給使用者」前例是 TEST_PROFILES 的 attr_hint / fail_hint,呼叫端用鍵取值。
 _RAN_EVIDENCE = {
-    "swift-xctest": (r"Executed\s+[1-9]\d*\s+tests?\b",
-                     "Xcode 26.6 實測:跑 1 支印「Executed 1 test, with 0 failures」,跑 0 支印「Executed 0 tests」",
-                     "xcodebuild 的 -quiet 會把那行藏起來——把 -quiet 拿掉(帶著 -quiet 時,跑 1 支跟跑 0 支的輸出一模一樣)"),
-    "csharp-xunit": (r"Passed:\s*[1-9]",
-                     "dotnet 9.0.117 實測:跑到測試印「Passed!  - Failed: 0, Passed: 1」,對不到只印「No test matches」",
-                     "在指令尾巴加 `-- RunConfiguration.TreatNoTestsAsError=true`,對不到測試就會直接回非零"),
-    "node-jest": (r"Tests:.*?[1-9]\d*\s+passed",
-                  "jest 29 實測:跑到印「Tests: 1 passed, 1 total」,-t 對不到印「Tests: 1 skipped, 1 total」",
-                  "如果你換了自訂 reporter,摘要行的字樣會變——把 reporter 換回預設,或改用會對不到就回非零的跑法"),
-    "python": (r"[1-9]\d*\s+passed",
-               "pytest 8 實測:跑到印「1 passed in 0.01s」;對不到本來就回 5(非零),這條只是雙保險",
-               "pytest 的 -q/-p no:terminal 會把摘要行拿掉——留著預設輸出"),
+    "swift-xctest": {
+        "re": r"Executed\s+[1-9]\d*\s+tests?\b",
+        "measured": "Xcode 26.6 實測:跑 1 支印「Executed 1 test, with 0 failures」,跑 0 支印「Executed 0 tests」",
+        "fix_hint": "xcodebuild 的 -quiet 會把那行藏起來——把 -quiet 拿掉(帶著 -quiet 時,跑 1 支跟跑 0 支的輸出一模一樣)",
+    },
+    "csharp-xunit": {
+        "re": r"Passed:\s*[1-9]",
+        "measured": "dotnet 9.0.117 實測:跑到測試印「Passed!  - Failed: 0, Passed: 1」,對不到只印「No test matches」",
+        "fix_hint": "在指令尾巴加 `-- RunConfiguration.TreatNoTestsAsError=true`,對不到測試就會直接回非零",
+    },
+    "node-jest": {
+        "re": r"Tests:.*?[1-9]\d*\s+passed",
+        "measured": "jest 29 實測:跑到印「Tests: 1 passed, 1 total」,-t 對不到印「Tests: 1 skipped, 1 total」",
+        "fix_hint": "如果你換了自訂 reporter,摘要行的字樣會變——把 reporter 換回預設,或改用會對不到就回非零的跑法",
+    },
+    "python": {
+        "re": r"[1-9]\d*\s+passed",
+        "measured": "pytest 8 實測:跑到印「1 passed in 0.01s」;對不到本來就回 5(非零),這條只是雙保險",
+        "fix_hint": "pytest 的 -q/-p no:terminal 會把摘要行拿掉——留著預設輸出",
+    },
 }
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def _ran_evidence_re(profile):
+    """這個測試 profile 的「跑過的證據」樣式;沒實測過回 None。"""
+    spec = _RAN_EVIDENCE.get(profile or "")
+    return spec["re"] if spec else None
+
+
 def _ran_evidence_check(profile, out):
-    """輸出裡有沒有「至少跑了一支」的證據。回 (有沒有, 沒有的話怎麼修) 或 (None, "") 表示這個 profile 沒實測過。"""
+    """輸出裡有沒有「至少跑了一支」的證據。回 (有沒有, 沒有的話怎麼修) 或 (None, "") 表示這個 profile 沒實測過。
+
+    ★它證的是「有東西跑過」,不是「跑的是你要的那一支」★(2026-09-09 代碼審 r2 f8 訂正):
+    這裡只數輸出裡有沒有出現「N passed」,不比對測試名。「合約綁的名字對到別支測試」
+    那種情況,擋下它的是更早、這次沒改的存在性靜態檢查(resolve_test_refs 判 real/dangling/fake),
+    不是這一支。別把既有防線的功勞算到這裡,不然以後有人會以為單靠它就夠。"""
     spec = _RAN_EVIDENCE.get(profile or "")
     if not spec:
         return None, ""
-    pat, _how, fix = spec
-    if re.search(pat, _ANSI_RE.sub("", out or "")):
+    if re.search(spec["re"], _ANSI_RE.sub("", out or "")):
         return True, ""
-    return False, fix
+    return False, spec["fix_hint"]
 
 
 def _bound_tests_filter_probe(root, run_cmd, timeout=600):
@@ -21389,8 +21458,12 @@ def _bound_tests_filter_probe(root, run_cmd, timeout=600):
     key = hashlib.sha256(f"{_os.path.realpath(str(root))}|{run_cmd}|schema{_FILTER_PROBE_SCHEMA}".encode("utf-8")).hexdigest()
     cache = Path.home() / ".cache" / "lumos" / "bound-filter" / f"{key}.json"
     try:
+        # ★讀寫兩端用同一套判準★(2026-09-09 代碼審 r2 f6):第一版只有寫入端走共用檢查,
+        # 讀取端裸查檔案自己的 uid/權限——父目錄被換成指向別處的 symlink 時讀得到別人的判定,
+        # 而這份判定直接決定合約測試閘報不報綠。那正是 r1 兩席都點名「別再各自漂」的同一種漂移。
         st = cache.stat()
-        if (st.st_uid == _os.getuid() and not (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH))
+        if (_trusted_private_dir(cache.parent, ".cache", "lumos", "bound-filter")
+                and st.st_uid == _os.getuid() and not (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH))
                 and _time.time() - st.st_mtime <= _FILTER_PROBE_TTL):
             d = _j.loads(cache.read_text(encoding="utf-8"))
             return bool(d["trustworthy"]), d.get("why", "")
@@ -21446,16 +21519,21 @@ def _run_bound_tests(repo_root, items):
             rc, tail, secs, to = seen[key]
         else:
             timeout = max(_BOUND_TESTS_WHOLE_SUITE_TIMEOUT, per_test or 0) if whole else per_test
-            rc, tail, secs, to = _kill_run(cmd, root, timeout if timeout else 10 ** 6)
+            rc, tail, secs, to = _kill_run(cmd, root, timeout if timeout else 10 ** 6,
+                                           keep_re=_ran_evidence_re(pentry.get("profile_name")))
             seen[key] = (rc, tail, secs, to)
         if to:
             results.append((node, plat, method, "red", f"超時(>{int(timeout)}s)", secs))
         elif rc != 0:
             results.append((node, plat, method, "red", f"rc={rc} {tail[-120:].strip()}", secs))
         else:
-            # ★回成功不等於跑過★(消費專案接入靜默失效 [F]/[S7],2026-09-09 r1 折入):
-            # 整套跑的情況不驗(沒有「只跑這一支」可言);有實測過輸出樣式的 profile 才驗。
-            ran, fix = (None, "") if whole else _ran_evidence_check(pentry.get("profile_name"), tail)
+            # ★回成功不等於跑過★(消費專案接入靜默失效 [F]/[S7],2026-09-09 r1 折入)。
+            # ★整套跑也要驗★(r2 f5):第一版跳過整套跑那條路,理由是「沒有『只跑這一支』可言」。
+            # 那個理由只擋得住「過濾條件對不到」這一種,擋不住「整套跑但一支都沒執行」
+            # ——審查席用一支「印 SKIPPED 然後 exit 0」的假執行器實測到現制照樣報綠。
+            # ★誠實邊界★:整套跑時這一層只證得出「有測試跑過」,證不出「你綁的那一支跑過」
+            # (輸出裡的 N 支可能全是別的測試)。那是整套跑這種形態自帶的天花板,不是這裡的實作缺陷。
+            ran, fix = _ran_evidence_check(pentry.get("profile_name"), tail)
             if ran is False:
                 results.append((node, plat, method, "unproven", fix, secs))
             else:
@@ -22641,7 +22719,19 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                 print("  在意的原因:兩邊都留下來才看得見矛盾;誰讓誰由人定,這裡不擋。", file=sys.stderr)
             if bt is not None:
                 _st = bt.get("status")
-                if _st in ("green", "red"):
+                if _st == "unfilterable":
+                    # ★這一段是 2026-09-09 代碼審 r2 的 blocker★:判定那邊已經把「證不出跑過」
+                    # 併進擋的條件,但真正把訊息印給人看的是這裡,而這裡只認 green/red
+                    # ——低風險推送因此在假綠上★一個字都不印★就放行,高風險擋下時也看不到逃生指令。
+                    # 決定擋不擋跟決定講什麼,是兩個地方;改了前者一定要回頭看後者。
+                    print(f"  受波及合約測試:{bt.get('reason')}", file=sys.stderr)
+                    if not blocked:
+                        print("  (低風險推送只提醒不擋——比照紅測試的 2026-09-07 人裁;證不出跑過的還是去修測試指令)", file=sys.stderr)
+                    else:
+                        print("  這代表閘會報「全綠」而其實一支都沒跑——你會以為合約被守著,其實沒有。", file=sys.stderr)
+                        print("  設定檔在 .lumos/config.json 的 test.run_cmd(多平台在 platforms.<平台>.run_cmd)。", file=sys.stderr)
+                        print("  真的修不動、這次要先過(會留痕):\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
+                elif _st in ("green", "red"):
                     print(f"  受波及合約測試:{bt.get('reason')}", file=sys.stderr if _st == "red" else sys.stdout)
                     if _st == "red" and not blocked:
                         print("  (低風險推送的合約測試只提醒不擋——2026-09-07 人裁;紅的還是去修)", file=sys.stderr)

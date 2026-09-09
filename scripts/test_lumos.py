@@ -34028,6 +34028,68 @@ def t_bound_tests_unproven_blocks_push():
         dd2 = _mk_bound_tests_repo(d2)   # 預設假執行器會印「1 passed in 0.01s」
         v2 = m._bound_tests_check(dd2, "HEAD~1..HEAD")
         check("④輸出裡說得出跑了幾支的,照樣報綠(不是一律擋)", v2["status"] == "green", str(v2)[:180])
+    # ★整套跑也要驗★(r2 f5):第一版跳過整套跑那條路,理由是「沒有只跑這一支可言」;
+    # 那擋不住「整套跑但那一支被 skip 掉、還是 exit 0」——審查席用假執行器實測到現制照樣報綠。
+    with tempfile.TemporaryDirectory() as d3:
+        dd3 = _mk_bound_tests_repo(d3, run_cmd="python3 tests/whole_skip.py")   # 無 {method}=整套跑
+        (dd3 / "tests" / "whole_skip.py").write_text(
+            "print('t_pay_ok: SKIPPED (flaky, disabled by team)')\n", encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=str(dd3))
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"], cwd=str(dd3))
+        v3 = m._bound_tests_check(dd3, "HEAD~1..HEAD")
+        check("⑤整套跑但一支都沒執行 → 也不准報綠", v3["status"] == "unfilterable", str(v3)[:200])
+    # ★截斷不得把證據砍掉★(r2 f1):輸出超過上限時 _kill_cap 砍中段,證據若落在中段就會
+    # 誤判成「證不出跑過」而擋下一支真的跑過的測試。
+    big = ("noise\n" * 40000) + "1 passed in 0.01s\n" + ("noise\n" * 40000)
+    capped = m._kill_cap(big, keep_re=m._RAN_EVIDENCE["python"]["re"])
+    check("⑥證據行落在被砍掉的中段時,截斷要把它留下來",
+          m._ran_evidence_check("python", capped)[0] is True, capped[:120] + " … " + capped[-120:])
+    check("⑥沒帶樣式時行為不變(截斷仍會砍掉中段)",
+          m._ran_evidence_check("python", m._kill_cap(big))[0] is False, "沒帶 keep_re 卻留住了")
+
+
+
+def t_code_loop_check_speaks_about_unproven():
+    """[消費專案接入靜默失效 S7 · 2026-09-09 r2 f2/f3,blocker]★決定擋不擋跟決定講什麼是兩個地方★。
+
+    出身:判定那支已經把「證不出跑過」併進擋的條件,但真正把訊息印給人看的 cmd_code_loop
+    只認 green/red——低風險推送因此在假綠上★一個字都不印★就放行,高風險擋下時也看不到
+    逃生指令。改了判定一定要回頭看列印分流。
+    翻紅釘:把列印分流的 unfilterable 那一支拿掉 → ①②都翻紅。"""
+    m = _load_lumos_inproc()
+    import subprocess as _sp, io as _io, contextlib as _ctx
+    with tempfile.TemporaryDirectory() as d:
+        dd = _mk_bound_tests_repo(d, run_cmd="python3 tests/silent_ok.py {method}")
+        (dd / "tests" / "silent_ok.py").write_text(
+            "import sys\n"
+            "m = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+            "if m and m != 't_pay_ok':\n"
+            "    sys.exit(2)\n"
+            "sys.exit(0)\n", encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=str(dd))
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"], cwd=str(dd))
+
+        def _run(advisory):
+            out, err = _io.StringIO(), _io.StringIO()
+            with _ctx.redirect_stdout(out), _ctx.redirect_stderr(err):
+                rc = m.cmd_code_loop("check", repo=str(dd), diff_range="HEAD~1..HEAD",
+                                     bound_advisory=advisory)
+            return rc, out.getvalue() + err.getvalue()
+
+        rc_a, txt_a = _run(True)
+        check("★前置★ 現場成立:這一筆真的是「證不出跑過」",
+              m._codeloop_guard_verdict.last_bound.get("status") == "unfilterable",
+              str(m._codeloop_guard_verdict.last_bound)[:160])
+        check("①低風險推送不擋,但★必須出聲★(不能一個字都不印就放行)",
+              rc_a == 0 and "無法確認測試真的跑過" in txt_a, f"rc={rc_a} 輸出={txt_a[:300]}")
+        check("①而且要講明「只提醒不擋」,免得人以為它守住了",
+              "只提醒不擋" in txt_a, txt_a[:300])
+
+        rc_b, txt_b = _run(False)
+        check("②擋下時要給得出逃生指令(紅測試有,這條原本沒有)",
+              "--skip-bound-tests" in txt_b and "--note" in txt_b, f"rc={rc_b} 輸出={txt_b[:400]}")
+        check("②而且要講清楚後果,不是只丟一句狀態名",
+              "一支都沒跑" in txt_b, txt_b[:400])
 
 
 def t_stack_guess_derived_from_canonical_tables():
@@ -34039,16 +34101,19 @@ def t_stack_guess_derived_from_canonical_tables():
     翻紅釘:在 _stack_guess() 的結果裡塞一個 SYMBOL_PROFILES 沒有的值 → ①翻紅。"""
     m = _load_lumos_inproc()
     g = m._stack_guess()
-    bad = [f"{e}:test={t}" for e, (t, s, h) in g.items() if t and t not in m.TEST_PROFILES]
-    bad += [f"{e}:symbol={s}" for e, (t, s, h) in g.items() if s and s not in m.SYMBOL_PROFILES]
+    bad = [f"{e}:test={v['test']}" for e, v in g.items() if v["test"] and v["test"] not in m.TEST_PROFILES]
+    bad += [f"{e}:symbol={v['symbol']}" for e, v in g.items() if v["symbol"] and v["symbol"] not in m.SYMBOL_PROFILES]
     check("①猜出來的每個值都是正典表裡真的有的 profile 名", not bad, "; ".join(bad))
     check("②正典沒認領就留空,不硬湊一個不存在的值",
-          g[".vue"][1] in m.SYMBOL_PROFILES and g[".dart"][1] == "", str((g[".vue"], g[".dart"])))
+          g[".vue"]["symbol"] in m.SYMBOL_PROFILES and g[".dart"]["symbol"] == "", str((g[".vue"], g[".dart"])))
     check("③`.js` 挑到跟它的測試 profile 同語言的那個符號 profile(不是清單裡碰巧排前面的)",
-          g[".js"] == ("node-jest", "typescript", g[".js"][2]), str(g[".js"]))
+          (g[".js"]["test"], g[".js"]["symbol"]) == ("node-jest", "typescript"), str(g[".js"]))
     for ext in (".swift", ".kt", ".cs", ".py"):
-        t, s, _h = g[ext]
-        check(f"④{ext} 兩個 profile 都猜得出來", bool(t) and bool(s), str((ext, t, s)))
+        check(f"④{ext} 兩個 profile 都猜得出來", bool(g[ext]["test"]) and bool(g[ext]["symbol"]), str((ext, g[ext])))
+    # ★猜得弱要自己招★(r2 f4):.vue/.sql/.ps1 只是碰巧被 csharp 的清單收了,不代表那是 C# 專案。
+    check("⑤只是被別人的清單碰巧收進去的,要標成弱猜",
+          g[".vue"]["symbol_weak"] and g[".sql"]["symbol_weak"] and not g[".cs"]["symbol_weak"],
+          str({e: g[e] for e in (".vue", ".sql", ".cs")}))
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         for i in range(6):
@@ -34090,6 +34155,37 @@ def t_bound_filter_cache_uses_trusted_dir():
                 check("②目錄不可信時不寫快取(不在別人動得了的目錄上留判定)",
                       not list(cache_dir.glob("*.json")), str(list(cache_dir.glob("*.json"))))
                 cache_dir.chmod(0o700)
+                # ★讀取端也要走同一支檢查★(r2 f6):第一版只有寫入端走共用檢查,
+                # 讀取端裸查檔案自己的 uid/權限——目錄被換掉時照樣讀得到別人塞的判定。
+                m._bound_tests_filter_probe(Path(work), "false {method}")   # 先種一筆「可信」進快取
+                seeded = list(cache_dir.glob("*.json"))
+                check("★前置★ 現場成立:快取裡真的有一筆讀得到的判定",
+                      len(seeded) == 1 and m._bound_tests_filter_probe(Path(work), "false {method}")[0] is True,
+                      str(seeded))
+                cache_dir.chmod(0o777)
+                import json as _js
+                _js.dump({"trustworthy": False, "why": "別人塞的"}, open(seeded[0], "w"))
+                ok3, _why3 = m._bound_tests_filter_probe(Path(work), "false {method}")
+                check("③目錄不可信時★不採信★快取裡的判定(重跑一次而不是照讀)",
+                      ok3 is True, f"讀到了別人塞的判定:{ok3} {_why3}")
+                cache_dir.chmod(0o700)
+                # ★保鮮期真的會過期★(r2 f7):原本只斷言常數是正整數,判斷條件被改壞不會翻紅。
+                for f in cache_dir.glob("*.json"):
+                    f.unlink()
+                m._bound_tests_filter_probe(Path(work), "true {method}")
+                stale = list(cache_dir.glob("*.json"))[0]
+                _js.dump({"trustworthy": False, "why": "舊判定"}, open(stale, "w"))
+                import os as _o2, time as _t2
+                fresh = _t2.time() - (m._FILTER_PROBE_TTL - 3600)      # 還在保鮮期內
+                _o2.utime(stale, (fresh, fresh))
+                check("④保鮮期內照讀快取(不然下面測不到差別)",
+                      m._bound_tests_filter_probe(Path(work), "true {method}")[1] == "舊判定",
+                      "保鮮期內卻沒讀快取")
+                expired = _t2.time() - (m._FILTER_PROBE_TTL + 3600)    # 過期
+                _o2.utime(stale, (expired, expired))
+                check("④過期就重探,不照讀舊判定(測試工具升級會讓判定翻面,而指令文字不變)",
+                      m._bound_tests_filter_probe(Path(work), "true {method}")[1] != "舊判定",
+                      "過期了還在讀舊判定")
         finally:
             if old_home is None:
                 _os.environ.pop("HOME", None)
@@ -34146,8 +34242,8 @@ def t_doctor_s3_keeps_symbol_profile_group():
         has_sym = [x for x in msgs if "symbol_profile 認的是" in x]
         check("①測試那組有出聲", has_test, str(msgs)[:200])
         check("②symbol_profile 那組沒有被整批吃掉", has_sym, str(msgs)[:300])
-        check("②截斷時會說還有幾條沒列",
-              any("沒列出來" in x for x in msgs) or (len(has_test) < 4 and len(has_sym) < 4),
+        check("②截斷時會說還有幾條沒列(文案跟健檢既有的截斷提示同一種說法)",
+              any("… 還有" in x for x in msgs) or (len(has_test) < 4 and len(has_sym) < 4),
               str(msgs)[:300])
     with tempfile.TemporaryDirectory() as d2:
         root2 = Path(d2)
@@ -34162,6 +34258,19 @@ def t_doctor_s3_keeps_symbol_profile_group():
               str(blank))
         check("③訊息講得出後果,不是只說「沒填」",
               all(("靜默" in x or "視而不見" in x or "綁不上" in x) for x in blank), str(blank))
+    # ★猜得弱的那一側★(r2 f4):`.vue` 只是碰巧被 csharp 的副檔名清單收了(那是「C# 店裡也會有
+    # 的檔」的意思),所以一個純 Vue 專案反查出來的 symbol_profile 是 csharp——值合法、
+    # load_symbol_profile 不警告、上面兩組也都不唸,等於把「猜錯沒人知道」換成更隱蔽的版本。
+    # 補這個洞的是「本命副檔名一個都沒有」這條。
+    with tempfile.TemporaryDirectory() as d3:
+        root3 = Path(d3)
+        for i in range(8):
+            (root3 / f"c{i}.vue").write_text("<template></template>\n", encoding="utf-8")
+        msgs3 = m._profile_stack_mismatch(root3)
+        check("④符號設定的本命副檔名一個都沒有 → 要出聲(值合法但八成不是為這個專案挑的)",
+              any("本命副檔名" in x for x in msgs3), str(msgs3)[:300])
+        check("④而且要講明為什麼上面那條唸不到它",
+              any("不會被上面那條唸到" in x for x in msgs3), str(msgs3)[:300])
 
 def t_doctor_about_code_not_linked():
     """[消費專案接入靜默失效 S3]標了 about_code 的★合約★節點,正文沒寫路徑就出聲(波及計算連不到);
