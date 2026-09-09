@@ -30,18 +30,19 @@ Those five used to live in a senior engineer's head. While they were around you 
 
 **What Lumos does is simple: it writes those five things into a set of interlinked Markdown notes that live in the same project as the code, then uses git checks — small programs that run when you commit or push — to close off the "changed the code, didn't touch the notes" path.** Not writing has to be more annoying than writing; otherwise nobody writes.
 
+> **The easiest thing to misread: the one being blocked isn't you — it's the AI.**
+> It writes the code and the notes. It hits this check when it commits, reads the message, goes back and writes the note, and commits again — **those messages are written for it to read.**
+> So "blocking" isn't friction; it's a **control signal**: **the rule is there for the AI to hit.** Hitting it makes it comply, with nobody in the loop. What you do is the requirements and the judgement calls.
+
 Here's roughly what that grows into — an online store, where a plan comes first, then the module, then a record of what was done:
 
 <p align="center">
   <img src="assets/graph-demo-en.svg" alt="A demo: an online store's notes — plan first, then the module, then a record" width="760">
 </p>
 
-Two things in this diagram are worth pausing on:
+Two details: **the gold ring (a rule that must not change) only grows once a verification record links to it** — claiming isn't enough; and **the orange line runs backwards** — an incident gets pulled into the next plan as required reading.
 
-- **The gold ring isn't there from the start.** The blue module appears plain; the ring and star only grow once a green verification record is linked to it — because that's the rule: **claiming "this must not change" doesn't count until real evidence is bound to it.**
-- **The orange line goes backwards.** An incident doesn't sit in a corner gathering dust; it gets wired into the next plan as required reading before anyone starts.
-
-**You don't hand-write these notes, and you don't memorise commands.** You develop the way you already do — talking to an AI as you look things up, change things, decide things. Installing injects "when to look something up, when to write it back" into Claude Code's and Codex's rule files, so **the context that settles out of those conversations gets kept, because the rules make it get kept.**
+**You don't hand-write these notes, and you don't memorise commands.** You develop the way you already do — installing injects "when to look something up, when to write it back" into Claude Code's and Codex's rule files.
 
 ---
 
@@ -60,75 +61,28 @@ Two things in this diagram are worth pausing on:
 
 Those two starred markers are the heart of the whole thing — **a heavy claim can't just be asserted; evidence has to hang off it**, and if it doesn't resolve, the health check goes red.
 
-So "what rules can't be touched in this project" isn't a question you ask a person. It's one command — usually one the AI runs for you:
-
-```console
-$ lumos contracts
-
-# Systems/payment-integration.md
-  ★INVARIANT★ one order must never be charged twice
-              — resends, retries, duplicate webhooks all count
-      ↳ bound test: test_no_double_charge_on_retry
-# Systems/stock-deduction.md
-  ★INVARIANT★ stock must never go negative — not by a single unit
-      ↳ bound test: test_stock_never_goes_negative
-# Systems/cart.md
-  ★DEBT★ the cart lives in Redis with nothing behind it; a restart empties it
-          Known, acceptable for now, changeable any time
-
-4 contracts (changing one is a breaking change) | 2 debts (safe to change)
-```
-
-That last line matters more than it looks. **Spelling out which things are rules and which merely happen to be true means the next person refactoring doesn't have to guess.**
+So "what rules can't be touched in this project" isn't a question you ask a person — **one command answers it**, usually one the AI runs (see the [command reference](docs/command-reference.md)).
 
 ---
 
 ## How this differs from Obsidian
 
-**Nothing here conflicts with Obsidian.** These are ordinary Markdown files — open and edit them in Obsidian if you like; equally, install no notes app at all and everything still works.
+**No conflict.** These are ordinary Markdown files — open them in Obsidian if you like; install no notes app at all and everything still works.
 
-The difference is one line: **Obsidian is for people to browse. Lumos is for an AI to query.** Every difference below grows out of that one sentence.
+The difference is one line: **Obsidian is for people to browse. Lumos is for an AI to query.**
 
-### An AI can't read it all, so it has to query
+| What you did | Notes app | Lumos |
+|---|---|---|
+| An AI wants a module's backstory | Pour the files in and let it dig | **One query back: ranked, compressed** (this project's notes run to 2.67M characters — they don't fit) |
+| You want to know who a file change hits | No such concept | **Reverse lookup from the code**, including which notes carry rules that must not break |
+| You write "this rule must not change" | Saved. Fine. | **Name the test guarding it**, or the health check goes red |
+| You changed code and didn't touch the notes | Nobody notices | **Stopped at commit** |
 
-An AI handed an ordinary vault can do exactly one thing: read files in. **This project's notes come to 2.67 million characters** — they don't fit, and if they did, the important parts would be diluted into noise.
-
-<p align="center">
-  <img src="assets/graph-growth.gif" alt="Lumos's own notes growing from a handful to four hundred over three months" width="820">
-  <br>
-  <sub>Lumos's own notes over three months (440 notes and 1,572 links when this was recorded; 444 today). Recorded from the actual tool, not drawn.</sub>
-</p>
-
-So it works the other way round: **it issues a query and gets back a ranked, compressed answer.**
-
-```console
-$ lumos context Systems/payment-integration --brief   # 783 chars back; the full note is 1,812
-Heads up — this note carries a contract. Read it before you touch anything:
-  ★INVARIANT★ one order must never be charged twice [test:test_no_double_charge_on_retry]
-```
-
-**Contracts are pinned to the top.** The difference isn't "faster" — it's **fits vs. doesn't fit**.
-
-### It also has to work backwards
-
-You're holding a source file and you want to know which notes changing it will touch, and which of those carry rules that must not break. **That direction doesn't exist in a notes app.**
+**The primary reader of these notes isn't a human — it's the next session's AI.** They're built to be queried, not read.
 
 <p align="center">
   <img src="assets/impact-en.svg" alt="Give it a source file and the graph works out which notes are affected and which carry contracts" width="900">
 </p>
-
-Tags follow the same logic: they're a **structured query**, not full-text search (`lumos query --tag status/doing`). They come in families, and filters stack — "only what's still open", "only what links to this note".
-
-### And four things a notes app won't keep track of for you
-
-| What you did | Notes app | Lumos |
-|---|---|---|
-| Wrote "this rule must not change" | Saved. Fine. | **Name the test guarding it** — can't, and the health check goes red |
-| Changed code, didn't touch the notes | Nobody notices | **`git commit` stops you** — write it up, or say why it isn't needed |
-| Recorded why something was decided | Buried in prose | **Its own field**: id, date, reasoning, whether it was later overturned |
-| Left a verification sitting for months | Nobody knows it went stale | You must **say up front what would invalidate it**; the health check nags when it's due |
-
-To close it in one line: **the primary reader of these notes isn't a human — it's the next session's AI.** They're built to be queried, not read.
 
 ---
 
@@ -158,15 +112,11 @@ That first "not a fit" — still writing most of the code by hand — comes down
   <img src="assets/shift-en.svg" alt="By hand: one track, trade-offs stay in your head. Plain language: several tracks, trade-offs land as notes" width="900">
 </p>
 
-Writing it yourself means three things happen at once:
+Writing it yourself means three things happen at once: **one track at a time**; **a later AI can only work backwards from the code** (where the *why* was never written); and **the most valuable part never existed anywhere** — what you compared and why you rejected it never left your head.
 
-- **One track at a time.** That isn't a question of how efficient you are — it's what serial attention means. Hands on the keys, you can't push three things forward at once.
-- **A later AI can only work backwards from the code.** And the code never contained the *why*; it only ever shows the *what*.
-- **The most valuable part never existed anywhere.** Which options you compared, why you rejected one, what you were assuming at the time — none of it left your head, because you never said it to anyone.
+Develop in plain language and all three invert: you handle decisions and trade-offs, implementation runs on several tracks, and **the trade-offs already happen in the conversation** — the rules make them settle into notes.
 
-Develop in plain language and all three invert: you handle the decisions, the requirements and the trade-offs, while implementation runs on several tracks at once — and **the trade-offs already happen in the conversation**. No separate documentation pass; the rules make them land as notes.
-
-**And the gap only widens.** The stronger models get, the worse the return on doing it by hand — but no matter how strong they get, what a model can't reach it can't reach. **The skill you're practising depreciates; the context you leave behind doesn't.**
+**And the gap only widens** — the stronger models get, the worse the return on doing it by hand. The full argument is in [the mental model](docs/mental-model.md).
 
 ---
 
@@ -186,15 +136,6 @@ It asks "turn this directory into a lumos project? [y/N]" — press `y`.
 - Don't want to pipe a remote script blind? `curl -fsSL <url> -o get.sh`, read it, then run it.
 - Non-interactive environments like CI: append `-s -- --init` to create it without asking.
 
-### The project already uses Lumos
-
-```bash
-git clone <your-project> && cd <your-project>
-python3 scripts/lumos bootstrap
-```
-
-One line: Lumos itself, the operating manual the AI reads, the global command, and the git checks. Then **restart your Claude Code or Codex conversation** — some of the prompting loads at session start.
-
 ### Did it install?
 
 ```bash
@@ -203,36 +144,7 @@ lumos enforcement
 
 It lists each layer of protection and whether it's **wired up** — note that it checks the wiring, not whether the judgement is right. All-green means the checks are registered, files are present, versions match. The Codex lines stop at "registered; can't tell locally whether it runs" — that's a platform limit, not a fault.
 
-<details><summary>Windows (native PowerShell)</summary>
-
-Prerequisites: Git for Windows, python on PATH, Claude Code.
-
-```powershell
-irm https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.ps1 | iex
-# Restart the session. If lumos isn't found, add %USERPROFILE%\.local\bin to PATH.
-cd <your-project>; lumos init
-```
-</details>
-
-<details><summary>Partial install / offline / why there are two layers</summary>
-
-**Why two layers:**
-- **Project layer** — CI only sees your project repo, and git hooks are per-repo, so the checking tool has to be **copied into every project**. Update with `lumos update`.
-- **Machine layer** — the operating manual the AI reads is **one copy per machine**, symlinked into the Claude Code / Codex directories. `git pull` the Lumos directory once and every project picks up the new version.
-
-Project layer only: `lumos init` (`--no-hooks` creates the notes folder without the checks; existing notes are **never overwritten**). Machine layer only: `lumos install`. Fully manual:
-
-```bash
-git clone --branch release https://github.com/EnzoHsieh-Android/Lumos ~/harness/lumos-toolchain
-cd ~/harness/lumos-toolchain && ./install.sh
-python3 scripts/lumos install
-scripts/install-graph-toolchain.sh --target <project-path> --slug <name>
-```
-
-`release` is the public line; only the maintainer moves it forward. Drop `--branch release` to follow the development line instead.
-
-**Both Claude Code and Codex CLI are supported** — one install wires up both, with matching behaviour. Details in [the mental model](docs/mental-model.md).
-</details>
+> Taking over a project that already uses Lumos, native PowerShell on Windows, offline installs, partial installs, and why there are two layers — all in [Onboarding detail](ONBOARDING.md).
 
 ---
 
@@ -264,7 +176,8 @@ Pick one:
 
 **That block is the whole product.** Everything else exists to make it not annoying.
 
-> You can run the commands yourself — see the [command reference](docs/command-reference.md). This README shows their output so you can see what got read and what got stopped: **governance you can't see is governance that isn't there.**
+**Two questions this always gets, in one line each:** (1) "So I write the code *and* the notes?" — **the AI writes both, and the AI is what gets blocked**; that message is printed for it. (2) "It blocks me for one button?" — the commit gate **always stops you once** (the AI decides: write the note, or add the flag, no justification), but **the pre-push code review is risk-tiered and a small change doesn't trigger it at all**.
+The detail, and the actual skip rate, are in [the mental model](docs/mental-model.md).
 
 ---
 
@@ -282,6 +195,12 @@ The four stages run in order, and the last one is the point: **what gets account
 
 Same reviewers, same time budget. **The only thing that changed is the quality of what they were handed.**
 
+<p align="center">
+  <img src="assets/graph-growth.gif" alt="Lumos's own notes growing from a handful to four hundred over three months" width="820">
+  <br>
+  <sub>Lumos's own notes over three months (440 notes and 1,572 links when recorded; 457 today). Recorded from the actual tool, not drawn.</sub>
+</p>
+
 ### The dispatch step is a DAG
 
 "Attach the relevant notes to the reviewers" sounds simple. What actually happens is **one brief fanning out to several seats, then converging back to a single verdict**.
@@ -290,15 +209,9 @@ Same reviewers, same time budget. **The only thing that changed is the quality o
   <img src="assets/dispatch-en.svg" alt="Dispatch is a DAG: the notes and the diff produce one brief, which fans out to several seats each looking from one angle, then converges through machine intake, a rebuttal seat and a disposal gate, and is written back into the notes" width="900">
 </p>
 
-Three things worth pointing at:
+The one worth reading: **the useful part of the brief isn't "which notes are relevant" — it's the state of the test bound to each rule.** The ones bound to nothing no gate covers; a person is all that reads them. Seats work independently because **"several seats agreed" only counts as evidence if they didn't copy each other.**
 
-- **The most useful thing in the brief is the state of the test bound to each rule** — guarded, pointing at nothing, fake evidence, or **not bound at all**. That last kind no gate covers, so **a person is the only thing reading it — read it first.**
-- **Seats work independently and never see each other's reports.** That isn't politeness — **"several seats said the same thing" only counts as evidence if they didn't copy each other.**
-- **Converging isn't voting.** Machine intake goes first (does the quote resolve, does the line exist), then a rebuttal seat argues each severe finding, and finally every finding must have an outcome — **adopted into the draft, or rejected with a written reason.**
-
-
-> **The honest limit:** what a machine can prove is *form* — that a test exists, that a rollback is written, that someone independent reviewed it, that every finding was accounted for.
-> Whether a rule still matches the business, or whether that rollback would actually run — **only a person can answer that.** Don't read "has evidence attached" as "safe".
+> **Honestly:** what a machine holds is *form*. Whether a rule still matches the business — only a person can answer that. Don't read "has evidence attached" as "safe".
 
 ---
 
@@ -310,82 +223,29 @@ Before code goes up, three different things look at it. **They catch three diffe
   <img src="assets/review-layers-en.svg" alt="Three layers of code review: linters, per-stack questions, and tests — each one states what it cannot catch" width="900">
 </p>
 
-### 1. The linter layer
+**1. The linter layer** — the project declares which linters to run; Lumos only reads their output, filters to the lines this change touched, and **folds it into the reviewer's brief**. It can't catch design-level problems: no rule expresses "this coroutine is on the wrong dispatcher".
 
-**The project declares which linters to run; Lumos only reads their output.** It ships no rules of its own for any language, and doesn't install or manage anything — **the rule library belongs to the community, and rebuilding one would be pointless.**
+**2. The questions layer** — each stack carries a list of performance questions it should ask itself (32 across six stacks), and **only the ones you actually touched surface**. Before the push each needs an answer: done (with evidence) / not applicable (with a reason) / not yet (linked issue). It can't judge whether an answer is right — **the tool checks the evidence exists; reviewers argue the rest.**
 
-What it does add is two things nobody else does:
-
-- **Filters down to the lines this change actually touched**, rather than handing over a full report.
-- **Folds the result into the reviewer's brief**, so a reviewer sees what the linter said from the first line, without running anything.
-
-**What it can't catch**: design-level problems. No linter rule expresses "this coroutine is on the wrong dispatcher".
-
-### 2. The questions layer
-
-This is the layer that fills that hole: **each stack carries a list of questions it should ask itself** — six stacks (Kotlin, C#, Vue, SQL, Swift, Node), 32 questions, each with its own trigger words.
-
-**It only asks what you actually touched.** The triggers are matched against the lines this change added or removed; the rest are logged as not-triggered — **handing over all 32 is the same as handing over none; people skim past it.**
+**3. The tests layer** — the affected contract tests actually run. **This is the backstop**: said right but built wrong is caught here and nowhere else. It can't catch anything no test guards.
 
 <p align="center">
   <img src="assets/stack-gate-en.svg" alt="The journey of one change: the extension identifies the stack, only triggered questions surface, three ways to answer, push and CI block on any missing one" width="900">
 </p>
 
-Before the push, every one needs an answer — one of three: **done** (with evidence: which file and line, or which test guards it), **not applicable** (with a reason), **not yet** (linked to an open issue). **One missing answer blocks the push, regardless of risk tier.**
+**A language that isn't on the list (Python itself isn't) doesn't trigger the second layer.** The full "what the tool checks and doesn't" table, and how each language plugs in, are in [the mental model](docs/mental-model.md).
 
-**The tool's limits have to be spelled out, or this reads as "the machine guarantees quality":**
-
-| You said | The tool checks | The tool **doesn't** check |
-|---|---|---|
-| Done, see this line | The file exists, the line is in range | **Whether that line actually solves it** |
-| Done, there's a test | The test is findable | **Whether that test has any teeth** |
-| Not applicable | A reason was written | **Whether the reason holds** |
-| Not yet | The issue exists and is open | **Whether it will ever get done** |
-
-**Whether an answer is right, the tool does not judge at all.** Those answers get attached to the reviewers' briefs — **what the review seats argue with is exactly these answers.**
-
-### 3. The tests layer
-
-**The affected contract tests actually run before the push.** Red is red — **another review record will not fix a failing test.**
-
-**This is the backstop**: said right but built wrong is caught here and nowhere else.
-
-**What it can't catch**: anything no test guards. There, you're back to the first two layers and your own judgement.
-
-### Switching language changes one box, not the path
-
-The whole path is shared. **The only per-language difference is the first box**: the extension identifies the stack, and that stack's questions come out. `.ts` and `.js` check the project config to tell frontend from backend.
-
-**A language that isn't on the list simply doesn't trigger the second layer** — Python itself isn't on it. There you're left with the linter layer and the tests. A project easing into this can also set that layer to high-risk-only, or turn it off.
-
-> **Honestly: the second layer stops "couldn't be bothered to answer". It does not stop "answered carelessly".**
-> Write "not applicable" with a bogus reason and the tool can't tell; cite a test that doesn't cover the point and it can't tell either.
-> **It catches the laziest kind of lie — the rest is on the review seats, and finally on the tests.**
+> **Honestly: the second layer stops "couldn't be bothered to answer". It does not stop "answered carelessly".** It catches the laziest kind of lie — the rest is on the review seats, and finally on the tests.
 
 ---
 
 ## Why this exists
 
-I believe fully autonomous development is coming.
+Fully autonomous development is coming. **But the context won't follow on its own** — why the faster-looking approach was rejected, which incident bought the rule that's in place now: an AI can't reach any of it. A new session can't see the last one; stay in one long enough and the earliest part gets pushed out of the window. **Those are questions of what it can reach, not how clever it is — a stronger model doesn't make them go away.**
 
-But **an AI will never know a project's business experience on its own, and it won't know how the judgement calls were made.** Why the faster-looking approach was rejected. Which incident bought the rule that's in place now. Which number a person decided rather than calculated. None of that is in the code. It has always lived in people's heads — and when they leave, it goes with them.
+**So the context has to live outside the model. But writing it down isn't enough** — if it doesn't move with the code, three months later it describes a three-month-old world, **which is worse than nothing, because the next person will believe it.** Every "let's document things properly" dies here: not that nobody wrote anything, **but that nothing forced it to keep up.**
 
-**An AI can't reach it either, for two reasons. The second one gets talked about less:**
-
-- **Open a new session and it can't see what was said in the last one.** The trade-off you spent half an hour settling with it yesterday? It has no idea.
-- **Stay in one session long enough and the early part gets pushed out.** The context window has a ceiling; past a certain length the oldest material is dropped — **you think it still remembers, and it doesn't.**
-
-Models will keep getting stronger. But neither of those goes away with a stronger model — **they are questions of what it can reach, not how clever it is.**
-
-**So the context has to live outside the model. But writing it down isn't enough.**
-
-If what you wrote doesn't move with the code, then three months later it describes a three-month-old world — **which is worse than having nothing, because the next person will believe it.** This is where every "let's document things properly" initiative actually dies: not that nobody wrote anything, but that nothing forced it to keep up.
-
-So the thing to guarantee isn't "was it written" — it's **"does it change when the code changes"**. Discipline can't deliver that. Only a machine can: **change the code without touching the notes, and the commit doesn't go through.**
-
-So I'm convinced of this: **the foundation of the next generation of software development won't just be models that write better code — it will be the engineering discipline that keeps the context, and won't let it rot.**
-
-What you want is something that **grows with the work** — **not a system that gets written once and starts rotting from that day on.**
+So I'm convinced of this: **the foundation of the next generation of software development won't just be models that write better code — it will be the engineering discipline that keeps the context and won't let it rot.** Something that **grows with the work**, not a system written once that starts rotting that day.
 
 Lumos is my answer to that.
 
