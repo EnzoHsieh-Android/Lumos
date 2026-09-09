@@ -6540,7 +6540,13 @@ def _mk_bound_tests_repo(d, run_cmd='python3 tests/run.py {method}', contract_te
         "known = ('t_pay_ok',)   # 這個假 repo 裡真的存在的測試名\n"
         "if m and m not in known:\n"
         "    print('no such test', m); sys.exit(2)\n"
+        "# ★輸出要說出「跑了幾支」★(消費專案接入靜默失效 [F],2026-09-09 r1 折入):\n"
+        "# 閘現在的主力證據是從測試工具自己的輸出裡看「執行了 N 支」——真的 pytest 印\n"
+        "# 「1 passed in 0.01s」,xcodebuild 印「Executed 1 test」。假執行器不印的話,\n"
+        "# 對閘來說跟「回成功但一支都沒跑」長得一模一樣,而那正是這道閘要抓的假綠。\n"
         "print('ran', m)\n"
+        "if not red:\n"
+        "    print('1 passed in 0.01s')\n"
         "sys.exit(1 if red else 0)\n", encoding="utf-8")
     (d / ".lumos").mkdir()
     cfg = {"test_profile": "python", "test": {"method_regex": "(?m)^def (t_[A-Za-z0-9_]+)\\s*\\("}}
@@ -33855,7 +33861,7 @@ def t_tension_doc_sync():
 def t_init_writes_config_skeleton():
     """[消費專案接入靜默失效 S1]init 產設定骨架:單語言依偵測、多語言走多平台格式、認不出寫說明;
     骨架標示「推測」;既有設定不覆寫;★產出的必須是合法 JSON★(寫成帶 // 註解的檔會讓整份設定解析失敗)。
-    翻紅釘:把 _STACK_GUESS 的 .swift 拿掉 → ①翻紅。"""
+    翻紅釘:把 SYMBOL_PROFILES 的 swift 條目拿掉(_stack_guess 反查自它)→ ①翻紅。"""
     import json as _j
     m = _load_lumos_inproc()
     with tempfile.TemporaryDirectory() as d:
@@ -33903,6 +33909,10 @@ def t_init_gitignore_matches_design():
         gov_ig = root / "governance" / ".gitignore"
         check("②本機留痕目錄要忽略(per-machine 狀態不版控)",
               gov_ig.exists() and "code-loop/" in gov_ig.read_text(encoding="utf-8"), str(gov_ig))
+        # ★hook 事件流水也是 per-machine★(2026-09-09 補):第一版漏了它,第一個接入的真專案
+        # 因此把 hook-events.jsonl 提交進版控——工具鏈自己的根目錄忽略清單一直都有這條。
+        check("②hook 事件流水也要忽略(同一類 per-machine 狀態)",
+              "runtime/" in gov_ig.read_text(encoding="utf-8"), gov_ig.read_text(encoding="utf-8"))
         gov_ig.write_text("# 我自己的\ncode-loop/\n", encoding="utf-8")
         _sp.run([sys.executable, GRAPHCTL, "init", "--name", "x", "--no-hooks"], cwd=str(root), capture_output=True, text=True)
         check("③既有忽略設定不覆寫", "我自己的" in gov_ig.read_text(encoding="utf-8"), gov_ig.read_text(encoding="utf-8"))
@@ -33977,6 +33987,181 @@ def t_doctor_profile_mismatch_hint():
         check("③設對了 → 不出聲", m._profile_stack_mismatch(root) == [], str(m._profile_stack_mismatch(root)))
     check("④沒有 repo(vault 不在 git 底下)→ 靜默不炸", m._profile_stack_mismatch(None) == [], "應該回空 list")
 
+
+
+def t_bound_tests_unproven_blocks_push():
+    """[消費專案接入靜默失效 S7 · 2026-09-09 r1 折入]★「指令回成功但證不出跑過」要跟紅一樣擋★。
+
+    為什麼要有這支:第一版只把狀態從 green 換成 unfilterable、印一行到 stderr,
+    而真正決定推送擋不擋的那支只認 red——所以「假綠改成擋」當時是假的,實際上只換了一行字。
+    這支同時釘住新的主力證據:不靠退出碼,改看測試工具自己的輸出有沒有說「執行了 N 支」。
+
+    現場:假執行器對不存在的測試名回非零(所以舊的冒煙測試會判它★可信★),
+    但成功時什麼摘要都不印——正是 xcodebuild -quiet 的形態(跑 1 支跟跑 0 支輸出一模一樣)。
+    翻紅釘:把擋的條件改回只認 red → ②翻紅;把 _RAN_EVIDENCE 的 python 那條拿掉 → ①翻紅。"""
+    m = _load_lumos_inproc()
+    import subprocess as _sp
+    with tempfile.TemporaryDirectory() as d:
+        dd = _mk_bound_tests_repo(d, run_cmd="python3 tests/silent_ok.py {method}")
+        (dd / "tests" / "silent_ok.py").write_text(
+            "import sys\n"
+            "m = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+            "if m and m != 't_pay_ok':\n"
+            "    sys.exit(2)\n"          # 分得出「找不到測試」→ 冒煙測試會判它可信
+            "sys.exit(0)\n",             # 但成功時一個字都不印 → 證不出真的跑過
+            encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=str(dd))
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"], cwd=str(dd))
+        ok, why = m._bound_tests_filter_probe(dd, "python3 tests/silent_ok.py {method}")
+        check("★前置★ 現場成立:舊的冒煙測試判這支指令是可信的(所以抓不到這種假綠)", ok is True, why)
+        v = m._bound_tests_check(dd, "HEAD~1..HEAD")
+        check("①回成功但輸出裡看不到跑過幾支 → 不是 green,是 unfilterable",
+              v["status"] == "unfilterable" and "看不到有跑過任何測試" in v["reason"], str(v)[:220])
+        verdict = m._codeloop_guard_verdict(dd, diff_range="HEAD~1..HEAD")
+        check("②推送真的被擋下來(不是只印一行提醒)",
+              verdict.get("blocked") is True and "無法確認測試真的跑過" in verdict.get("reason", ""),
+              str(verdict)[:220])
+        verdict_adv = m._codeloop_guard_verdict(dd, diff_range="HEAD~1..HEAD", bound_advisory=True)
+        check("③低風險那條照舊只提醒不擋(比照紅測試的 2026-09-07 人裁)",
+              verdict_adv.get("blocked") is not True, str(verdict_adv)[:180])
+    with tempfile.TemporaryDirectory() as d2:
+        dd2 = _mk_bound_tests_repo(d2)   # 預設假執行器會印「1 passed in 0.01s」
+        v2 = m._bound_tests_check(dd2, "HEAD~1..HEAD")
+        check("④輸出裡說得出跑了幾支的,照樣報綠(不是一律擋)", v2["status"] == "green", str(v2)[:180])
+
+
+def t_stack_guess_derived_from_canonical_tables():
+    """[消費專案接入靜默失效 S1 · 2026-09-09 r1 架構對齊席 f4]★猜技術棧的對照表必須反查自正典兩張表★。
+
+    出身:第一版手打了第三份「副檔名→profile」對照,結果 `.vue` 寫成 symbol_profile "vue"、
+    `.dart` 寫成 "dart",而正典的 SYMBOL_PROFILES 根本沒有這兩個鍵——init 猜中語言、
+    卻把設定寫壞,之後每次讀設定都印一行「未知 symbol_profile」再退回 C#,沒人知道為什麼。
+    翻紅釘:在 _stack_guess() 的結果裡塞一個 SYMBOL_PROFILES 沒有的值 → ①翻紅。"""
+    m = _load_lumos_inproc()
+    g = m._stack_guess()
+    bad = [f"{e}:test={t}" for e, (t, s, h) in g.items() if t and t not in m.TEST_PROFILES]
+    bad += [f"{e}:symbol={s}" for e, (t, s, h) in g.items() if s and s not in m.SYMBOL_PROFILES]
+    check("①猜出來的每個值都是正典表裡真的有的 profile 名", not bad, "; ".join(bad))
+    check("②正典沒認領就留空,不硬湊一個不存在的值",
+          g[".vue"][1] in m.SYMBOL_PROFILES and g[".dart"][1] == "", str((g[".vue"], g[".dart"])))
+    check("③`.js` 挑到跟它的測試 profile 同語言的那個符號 profile(不是清單裡碰巧排前面的)",
+          g[".js"] == ("node-jest", "typescript", g[".js"][2]), str(g[".js"]))
+    for ext in (".swift", ".kt", ".cs", ".py"):
+        t, s, _h = g[ext]
+        check(f"④{ext} 兩個 profile 都猜得出來", bool(t) and bool(s), str((ext, t, s)))
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        for i in range(6):
+            (root / f"c{i}.vue").write_text("<template></template>\n", encoding="utf-8")
+        m._init_config_skeleton(root)
+        import json as _j
+        cfg = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
+        sp = cfg.get("symbol_profile") or (cfg.get("platforms") and "")
+        check("⑤產出的骨架讀得回來、而且不會印「未知 symbol_profile」",
+              (not sp) or sp in m.SYMBOL_PROFILES, str(cfg)[:200])
+
+
+def t_bound_filter_cache_uses_trusted_dir():
+    """[2026-09-09 r1 兩席同判]過濾能力快取要走跟鄰居同一支私有目錄信任檢查,而且要會過期。
+
+    出身:同一個 ~/.cache/lumos/ 底下的鄰居快取寫入前都呼叫 _trusted_private_dir
+    (2026-09-06 全 repo 審視修過的漂移);新的 bound-filter 只裸 mkdir + 寫檔,
+    是同一種漂移第三次發生。快取內容直接決定合約測試閘報不報綠,不是裝飾性的。
+    翻紅釘:把 _bound_tests_filter_probe 裡的 _trusted_private_dir 判斷拿掉 → ②翻紅。"""
+    m = _load_lumos_inproc()
+    import os as _os
+    check("①快取 key 帶判定規則版本(規則改版舊快取自然 miss)", bool(m._FILTER_PROBE_SCHEMA), "沒有 schema 欄位")
+    check("①快取有保鮮期(測試工具升級會讓判定翻面,而指令文字不變)",
+          isinstance(m._FILTER_PROBE_TTL, int) and m._FILTER_PROBE_TTL > 0, str(getattr(m, "_FILTER_PROBE_TTL", None)))
+    old_home = _os.environ.get("HOME")
+    with tempfile.TemporaryDirectory() as home:
+        try:
+            _os.environ["HOME"] = home
+            cache_dir = Path(home) / ".cache" / "lumos" / "bound-filter"
+            cache_dir.mkdir(parents=True)
+            with tempfile.TemporaryDirectory() as work:
+                m._bound_tests_filter_probe(Path(work), "true {method}")
+                wrote_ok = list(cache_dir.glob("*.json"))
+                check("①正常權限下會寫快取(不然下面測不到差別)", len(wrote_ok) == 1, str(wrote_ok))
+                for f in wrote_ok:
+                    f.unlink()
+                cache_dir.chmod(0o777)          # group/other 可寫=不可信
+                m._bound_tests_filter_probe(Path(work), "true {method}")
+                check("②目錄不可信時不寫快取(不在別人動得了的目錄上留判定)",
+                      not list(cache_dir.glob("*.json")), str(list(cache_dir.glob("*.json"))))
+                cache_dir.chmod(0o700)
+        finally:
+            if old_home is None:
+                _os.environ.pop("HOME", None)
+            else:
+                _os.environ["HOME"] = old_home
+
+
+def t_init_additive_setup_reaches_existing_projects():
+    """[2026-09-09 r1 架構對齊席 f2]設定骨架與本機留痕的忽略設定,★既有專案也要拿得到★。
+
+    出身:這兩樣本來寫在 scaffold 裡,而 scaffold 開頭就是「vault 已存在 → return」,
+    外層 cmd_init 又對「已有 vault 且沒帶 --force」更早 return。兩層 guard 的用意都是
+    保護既有 vault 的內容不被覆寫,但新產出借用同一把鎖等於被連坐——
+    ★最需要這兩樣的既有消費專案,不論怎麼跑 init 都拿不到★。
+    翻紅釘:把 _init_additive_setup 搬回 _scaffold_project 裡 → ②翻紅。"""
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / "docs" / "x-knowledge" / "MOC").mkdir(parents=True)   # 假裝是既有專案
+        for i in range(5):
+            (root / f"F{i}.swift").write_text("import Foundation\n", encoding="utf-8")
+        m._scaffold_project(root, "x")
+        check("①既有 vault 照舊不被覆寫(保護資料的行為沒變)",
+              not (root / ".lumos" / "config.json").exists(), "scaffold 不該自己產設定")
+        m._init_additive_setup(root)
+        check("②既有專案拿得到設定骨架", (root / ".lumos" / "config.json").exists(), "沒有 config.json")
+        check("②既有專案拿得到本機留痕的忽略設定",
+              (root / "governance" / ".gitignore").exists(), "沒有 governance/.gitignore")
+        before = (root / ".lumos" / "config.json").read_text(encoding="utf-8")
+        m._init_additive_setup(root)
+        check("③再跑一次不覆寫已經有的東西",
+              (root / ".lumos" / "config.json").read_text(encoding="utf-8") == before, "被覆寫了")
+
+
+def t_doctor_s3_keeps_symbol_profile_group():
+    """[2026-09-09 r1 單reviewer f3/f9]健檢 S3 的兩組提醒各自留額度,截斷要說實話;骨架留空也要抓得到。
+
+    出身:舊寫法把兩組接成一串再截前 8 條,而測試那組永遠排在前面——
+    symbol_profile 那整類在副檔名一多的專案會被整批吃掉,標頭照印「有 8 項」,
+    看不出還有沒講的。另外「猜不到的語言」(Rust/Go…)骨架會留空字串,
+    而讀設定那支對空字串靜默退回 C# 預設,靠副檔名比對的 S3 也抓不到。
+    翻紅釘:改回「兩組接起來再 out[:8]」→ ②翻紅;拿掉 _config_left_blank → ③翻紅。"""
+    m = _load_lumos_inproc()
+    import json as _j
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / ".lumos").mkdir()
+        (root / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "python"}), encoding="utf-8")
+        for ext in (".swift", ".kt", ".cs", ".dart", ".ts", ".vue"):
+            for i in range(6):
+                (root / f"f{i}{ext}").write_text("x\n", encoding="utf-8")
+        msgs = m._profile_stack_mismatch(root)
+        has_test = [x for x in msgs if "測試設定認的是" in x]
+        has_sym = [x for x in msgs if "symbol_profile 認的是" in x]
+        check("①測試那組有出聲", has_test, str(msgs)[:200])
+        check("②symbol_profile 那組沒有被整批吃掉", has_sym, str(msgs)[:300])
+        check("②截斷時會說還有幾條沒列",
+              any("沒列出來" in x for x in msgs) or (len(has_test) < 4 and len(has_sym) < 4),
+              str(msgs)[:300])
+    with tempfile.TemporaryDirectory() as d2:
+        root2 = Path(d2)
+        (root2 / ".lumos").mkdir()
+        (root2 / ".lumos" / "config.json").write_text(
+            _j.dumps({"test_profile": "", "symbol_profile": "", "test": {"run_cmd": ""}}), encoding="utf-8")
+        for i in range(20):
+            (root2 / f"m{i}.rs").write_text("fn main() {}\n", encoding="utf-8")
+        blank = m._config_left_blank(root2)
+        check("③清單外的語言:骨架留空也要出聲(副檔名比對抓不到這種)",
+              len(blank) == 2 and any("test_profile" in x for x in blank) and any("symbol_profile" in x for x in blank),
+              str(blank))
+        check("③訊息講得出後果,不是只說「沒填」",
+              all(("靜默" in x or "視而不見" in x or "綁不上" in x) for x in blank), str(blank))
 
 def t_doctor_about_code_not_linked():
     """[消費專案接入靜默失效 S3]標了 about_code 的★合約★節點,正文沒寫路徑就出聲(波及計算連不到);

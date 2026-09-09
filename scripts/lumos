@@ -1412,7 +1412,10 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     # ★判準是「跟 repo 實際副檔名不符」,不是「還在吃預設值」★(消費專案接入靜默失效 [B]/S2;
     # r1 外家備援席 f2 指出:寫「跟預設不符」會被 init 產出的骨架抵銷——骨架一寫,值就不是預設了,
     # 猜錯也永遠不會出聲)。所以這裡只比實際副檔名,不管值從哪來。
-    _mismatch = _profile_stack_mismatch(repo_root)
+    # ★清單外的語言也要抓得到★(r1 單reviewer f9):副檔名比對只認得出正典表裡那幾種,
+    # Rust / Go 之類的專案骨架會留空字串,而讀設定那支對空字串一律靜默退回 C# 預設。
+    # 所以另外看一眼「骨架欄位是不是還空著」——那一條跟語言無關。
+    _mismatch = _config_left_blank(repo_root) + _profile_stack_mismatch(repo_root)
     if not _mismatch:
         ok("測試與符號的技術棧設定跟專案裡的程式碼對得上")
     else:
@@ -3427,6 +3430,10 @@ def load_platforms(repo_root, cfg=None):
         _tcfg = cfg.get("test") if isinstance(cfg.get("test"), dict) else {}
         return {"multiplatform": False, "default_platform": name,
                 "platforms": {name: {"profile": load_test_profile(repo_root, cfg=_given if isinstance(_given, dict) else None), "root": repo_root,
+                                     # ★profile 名要留著★(2026-09-09 [F] 折入):"profile" 存的是攤開的 profile dict,
+                                     # 「這個平台用的是哪一支測試工具」的名字原本在這裡被丟掉,而合約測試閘要拿它
+                                     # 去查該工具「跑過的證據」長什麼樣。多平台分支同樣補一份。
+                                     "profile_name": name,
                                      "run_cmd": _tcfg.get("run_cmd")}}}
     out = {}
     for plat, spec in plats.items():
@@ -3439,7 +3446,7 @@ def load_platforms(repo_root, cfg=None):
         root = (repo_root / root_str).resolve()   # 明寫基底 repo_root(非 cwd),見 D1
         if not root.exists():
             print(f"⚠ 平台 '{plat}' 的 root 不存在: {root}(該平台 discover 將掃不到測試)", file=sys.stderr)
-        out[plat] = {"profile": dict(TEST_PROFILES[pname]), "root": root,
+        out[plat] = {"profile": dict(TEST_PROFILES[pname]), "root": root, "profile_name": pname,
                      "run_cmd": spec.get("run_cmd")}   # guard kill 用;缺=None
     default = cfg.get("default_platform")
     if default is None:
@@ -13077,6 +13084,7 @@ def _vendor_toolchain(src, root, slug, no_pull=False, allow_stale=False):
             return None                      # fail-closed:一個檔都還沒動就退場
     # 安裝邏輯收進 python 單一源(scaffold + hooks);bash 安裝器僅留薄殼。
     _scaffold_project(root, slug)
+    _init_additive_setup(root)     # 只加不覆寫;掛在這裡讓 `lumos update` 也能把設定骨架補給既有專案
     _set_hooks_path(root)          # 全域同步★不在這裡★——要等下面的 copy2 自癒把 vendored 檔換新
     rc = 0
     # 結尾 diff 自癒:python 端逐檔比對 src↔target,差異即補(可安全覆寫)。
@@ -13261,44 +13269,159 @@ def _scaffold_project(root: Path, slug: str):
               "# CI 靠它讀代碼審留痕與棧別提問表態,忽略掉那條路就斷了。\n"
               ".bypass-log.jsonl\n.rot-queue.jsonl\n.canary-log.jsonl\n"
               ".kill-log.jsonl\n.signoff-log.jsonl\n.usage-log.jsonl\n.ci-log.jsonl\n")
-    # ★本機執行期狀態要忽略★(同上):留痕/表態的 marker 綁著當下的版本號,
+    print(f"  ✓ scaffold {kg}(帳檔 .gitignore → {kg.parent / '.gitignore'})")
+
+
+def _init_additive_setup(root: Path):
+    """init 每一條路都要跑的「只加不覆寫」設定(★既有專案也拿得到★)。
+
+    ★為什麼要從 scaffold 裡搬出來★(2026-09-09 r1 架構對齊席 f2):
+    這兩樣本來寫在 _scaffold_project 裡,而那支開頭就是「vault 已存在 → 直接 return」,
+    外面的 cmd_init 又對「已有 vault 且沒帶 --force」更早 return。兩層 guard 的用意都是
+    ★保護既有 vault 的內容不被覆寫★——但新的產出借用同一把鎖等於被連坐:
+    所有本來就有 vault 的既有消費專案(這批修的正是這種專案的接入靜默)不論怎麼跑 init
+    都拿不到設定骨架與本機留痕的忽略設定。
+    這兩件事本身都是「檔案不存在才寫」,不會覆寫任何東西,所以不需要那把鎖。"""
+    # ★本機執行期狀態要忽略★:留痕/表態的 marker 綁著當下的版本號,
     # 提交出去等於把「某台機器某個時刻的狀態」散播給所有人,而且一提交版本就移動、自己作廢。
-    gov_ignore = kg.parent.parent / "governance" / ".gitignore"
+    gov_ignore = root / "governance" / ".gitignore"
     if not gov_ignore.exists():
         gov_ignore.parent.mkdir(parents=True, exist_ok=True)
         _write_lf(gov_ignore,
-                  "# code-loop 留痕與表態的本機檔:綁 HEAD 版本號的 per-machine 執行期狀態,\n"
-                  "# 不版控、不跨機當權威(CI 讀的是 docs/.governance-log.jsonl)。\n"
-                  "code-loop/\n")
-    print(f"  ✓ scaffold {kg}(帳檔 .gitignore → {kg.parent / '.gitignore'};本機留痕 → {gov_ignore})")
-    _init_config_skeleton(kg.parent.parent)
+                  "# 這底下是 per-machine 的執行期狀態,不版控、不跨機當權威\n"
+                  "# (CI 讀的是 docs/.governance-log.jsonl,那份刻意沒被忽略)。\n"
+                  "# code-loop:代碼審留痕與棧別提問表態的本機標記,綁 HEAD 版本號——一提交版本就移動、自己作廢。\n"
+                  "# runtime:hook 事件流水,每台機器各自的事實。★2026-09-09 補★:第一版漏了它,\n"
+                  "# 而第一個接入的真專案(calc-ios)因此把 hook-events.jsonl 提交進版控。\n"
+                  "code-loop/\n"
+                  "runtime/\n")
+        print(f"  ✓ 本機留痕的忽略設定 {gov_ignore}")
+    _init_config_skeleton(root)
 
 
 # 副檔名 → (test_profile, symbol_profile, 一句人話)。給 init 猜這個 repo 是什麼棧用。
+# ★這張表是「反查」出來的,不是第三份副檔名清單★(r1 架構對齊席 f4,blocker):
+# 第一版手打了 ext→profile 的對照,結果 `.vue` 寫成 symbol_profile "vue"、`.dart` 寫成 "dart",
+# 而 SYMBOL_PROFILES 根本沒有這兩個鍵——init 猜中語言、卻把設定寫壞,之後每次讀設定都印
+# 「未知 symbol_profile」再退回 C#。正典只有兩張表(TEST_PROFILES 的 exts、SYMBOL_PROFILES
+# 的 code_exts),這裡一律從那兩張反查;手寫的只剩「人話標籤」與兩處歧義的取捨。
 # ★只用來產「請你確認」的骨架,不當斷言★(消費專案接入靜默失效 [A]/S1;r1 邊界席 f5 要求多語言走多平台格式)
-_STACK_GUESS = {
-    ".swift": ("swift-xctest", "swift", "iOS / Swift"),
-    ".kt": ("kotlin-junit", "kotlin", "Android / Kotlin"),
-    ".cs": ("csharp-xunit", "csharp", ".NET / C#"),
-    ".py": ("python", "python", "Python"),
-    ".dart": ("dart", "dart", "Flutter / Dart"),
-    ".ts": ("node-jest", "typescript", "TypeScript / Node"),
-    ".tsx": ("node-jest", "typescript", "TypeScript / React"),
-    ".js": ("node-jest", "typescript", "JavaScript / Node"),
-    ".vue": ("playwright", "vue", "Vue"),
+_STACK_HUMAN = {
+    ".swift": "iOS / Swift", ".kt": "Android / Kotlin", ".kts": "Android / Kotlin",
+    ".java": "Java", ".cs": ".NET / C#", ".py": "Python", ".dart": "Flutter / Dart",
+    ".ts": "TypeScript / Node", ".tsx": "TypeScript / React", ".mts": "TypeScript",
+    ".cts": "TypeScript", ".js": "JavaScript / Node", ".jsx": "JavaScript / React",
+    ".mjs": "JavaScript", ".cjs": "JavaScript", ".vue": "Vue", ".sql": "SQL", ".ps1": "PowerShell",
 }
+# 一個副檔名被多個 test profile 認領時挑誰(唯一的人工取捨,寫明理由):
+# .ts/.js 家族同時屬於 node-jest(單元測試)與 playwright(端對端)——骨架先給單元測試那條,
+# 端對端專案自己改。這是偏好不是事實,所以骨架照樣標「推測」。
+_STACK_PREFER_TEST = {"node-jest": 2, "playwright": 1}
+# 拿來猜棧會全錯的副檔名:yaml/yml 在幾乎每個 repo 都是 CI/設定檔,數量還常常最多。
+_STACK_GUESS_SKIP_EXTS = {".yaml", ".yml"}
+
+
+def _stack_guess():
+    """副檔名 → (test_profile 或 "", symbol_profile 或 "", 人話)。反查自兩張正典表,結果 cache。
+
+    ★對不到就留空字串,不硬湊★:例如 `.dart` 沒有任何 symbol profile 認領、`.vue` 沒有任何
+    test profile 認領。留空的後果是 init 產出的骨架該欄是空的,而健檢 S3 會唸「你的程式碼是
+    這種副檔名、但設定認的是別的」——比硬填一個不存在的值好,因為那個值只會換來每次讀設定
+    都印一行警告、而且永遠沒人知道為什麼。"""
+    cached = getattr(_stack_guess, "_cache", None)
+    if cached is not None:
+        return cached
+    tp_by_ext, sp_by_ext = {}, {}
+    for name, prof in TEST_PROFILES.items():
+        for ext in (prof.get("exts") or ()):
+            if ext in _STACK_GUESS_SKIP_EXTS:
+                continue
+            cur = tp_by_ext.get(ext)
+            if cur is None or _STACK_PREFER_TEST.get(name, 0) > _STACK_PREFER_TEST.get(cur, 0):
+                tp_by_ext[ext] = name
+    for name, prof in SYMBOL_PROFILES.items():
+        for ext in (prof.get("code_exts") or ()):
+            sp_by_ext.setdefault(ext, [])
+            sp_by_ext[ext].append(name)
+    # 一個副檔名被多個 symbol profile 認領時,★挑跟測試 profile 同一種語言的那個★——
+    # 判準也是反查出來的,不再多開一張表:哪個 symbol profile 的副檔名跟這支測試 profile
+    # 重疊最多,就當它們是同一種語言。實例:`.js` 同時被 csharp(它的清單裡混了 .vue/.js/.sql)
+    # 與 typescript 認領,而 .js 的測試 profile 是 node-jest,跟 typescript 重疊 6 個、
+    # 跟 csharp 只重疊 1 個 → 挑 typescript。沒挑到就退回「有認領的隨便一個」。
+    partner = {}
+    for tname, tprof in TEST_PROFILES.items():
+        texts = set(tprof.get("exts") or ())
+        best, best_n = "", 0
+        for sname, sprof in SYMBOL_PROFILES.items():
+            n = len(texts & set(sprof.get("code_exts") or ()))
+            if n > best_n:
+                best, best_n = sname, n
+        partner[tname] = best
+    out = {}
+    for ext in set(tp_by_ext) | set(sp_by_ext):
+        if ext in _STACK_GUESS_SKIP_EXTS:
+            continue
+        owners = sp_by_ext.get(ext) or []
+        pick = partner.get(tp_by_ext.get(ext, ""), "")
+        sp = pick if pick in owners else (owners[0] if owners else "")
+        out[ext] = (tp_by_ext.get(ext, ""), sp, _STACK_HUMAN.get(ext, ext))
+    _stack_guess._cache = out
+    return out
+
+
 _SKELETON_RUN_CMD = {
     # 骨架裡先給一個「形狀對」的指令當起點——★重點是形狀,不是它在你機器上跑得動★。
     # xcodebuild 那條刻意寫滿三段(target/類別/方法):少寫一段會讓過濾條件對不到任何測試,
     # 而那正是 2026-09-09 在第一個 iOS 專案上抓到的假綠來源。
+    # ★也刻意不帶 -quiet★(2026-09-09 r1 折入,實測):-quiet 會把「Executed N tests」那行藏起來,
+    # 而那行是這道閘唯一能證明「真的跑了東西」的證據——帶了 -quiet,跑 1 支跟跑 0 支的輸出一模一樣。
     "swift-xctest": "xcodebuild test -scheme <你的 scheme> -destination 'platform=iOS Simulator,name=<模擬器名>' -only-testing:<測試 target>/<測試類別>/{method}",
     "kotlin-junit": "./gradlew test --tests '*{method}'",
-    "csharp-xunit": "dotnet test --filter FullyQualifiedName~{method}",
+    # ★尾巴那段 runsettings 不能省★(2026-09-09 r1 折入,dotnet 9.0.117 實測):
+    # 沒有它,`dotnet test --filter` 對一個根本不存在的測試名照樣印「No test matches」然後回 0,
+    # 閘拿退出碼當「測試跑過」就是假綠;加上去之後同一條指令回 1,對到真測試時仍回 0。
+    "csharp-xunit": "dotnet test --filter FullyQualifiedName~{method} -- RunConfiguration.TreatNoTestsAsError=true",
     "python": "python3 -m pytest -k {method}",
+    # jest 沒有對應的旗標(29.x 實測:-t 對不到任何測試仍回 0,--passWithNoTests=false 也一樣)——
+    # 這條靠下面的「跑過的證據」比對摘要行,不靠退出碼。
     "node-jest": "npx jest -t {method}",
     "dart": "flutter test --plain-name {method}",
     "playwright": "npx playwright test -g {method}",
 }
+
+# 掃 repo 猜技術棧時一律略過的目錄(★兩支掃描共用同一份★——r1 單reviewer f4:
+# 兩邊各有一份且內容不同時,init 猜出來的骨架跟健檢驗的東西會對不上,
+# 「猜錯沒人知道」正好在自己身上重演一次)。
+# ★只放「不是人寫的原始碼」的目錄★:相依套件、建置產物、工具自己的目錄。
+# 合併時特意★把 scripts 從名單裡拿掉★:它原本只在健檢那份裡,而那是普通的原始碼目錄
+# ——照舊略過的話,本 repo 自己的 Python 全在 scripts/ 底下,健檢就再也抓不到
+# 「這個 repo 從沒設 symbol_profile、一直吃 C# 預設」那一條真的問題(實測會從 1 條變 0 條)。
+# vault 用「目錄名結尾 -knowledge」認,不整個 docs/ 略過(專案可能在 docs/ 放範例程式)。
+_STACK_SCAN_SKIP = {"node_modules", ".git", "build", "DerivedData", "dist", "vendor",
+                    "Pods", ".venv", "venv", ".gradle", ".build", "target",
+                    "governance", ".lumos"}
+
+
+def _stack_scan_skip(name):
+    return name in _STACK_SCAN_SKIP or name.endswith("-knowledge")
+
+
+def _stack_ext_counts(root):
+    """數 repo 裡各種程式碼副檔名各有幾個檔。回 {ext: n}。
+
+    ★用 os.walk 就地剪枝,不是 rglob 之後再過濾★(r1 單reviewer f5,實測):
+    rglob 會先把 node_modules 底下 2000 個檔全部走過一遍才被丟掉——略過名單對它想排除的
+    正是最大的那幾個目錄完全沒省到。健檢每次都跑這段,大型專案會隨依賴目錄大小線性變慢。"""
+    import os as _os
+    counts = {}
+    known = _stack_guess()
+    for dirpath, dirnames, filenames in _os.walk(str(root)):
+        dirnames[:] = [d for d in dirnames if not _stack_scan_skip(d)]
+        for fn in filenames:
+            ext = _os.path.splitext(fn)[1].lower()
+            if ext in known:
+                counts[ext] = counts.get(ext, 0) + 1
+    return counts
 
 
 def _profile_stack_mismatch(root):
@@ -13310,17 +13433,10 @@ def _profile_stack_mismatch(root):
     if not root:
         return []   # vault 不在 git repo 底下(測試 fixture、--vault 指到別處):沒有 repo 可比,靜默跳過
     root = Path(root)
-    counts = {}
-    skip = {"node_modules", ".git", "build", "DerivedData", "dist", "vendor", "Pods", ".venv", "docs", "governance", "scripts"}
-    for f in root.rglob("*"):
-        if not f.is_file() or any(part in skip for part in f.parts):
-            continue
-        ext = f.suffix.lower()
-        if ext in _STACK_GUESS:
-            counts[ext] = counts.get(ext, 0) + 1
+    counts = _stack_ext_counts(root)
     if not counts:
         return []
-    out = []
+    test_msgs, sym_msgs = [], []
     try:
         pdata = load_platforms(root)
     except Exception:
@@ -13331,16 +13447,56 @@ def _profile_stack_mismatch(root):
             covered |= set(TEST_PROFILES.get(pe.get("profile"), {}).get("exts") or [])
     else:
         covered = set(load_test_profile(root).get("exts") or [])
-    # 只唸「數量夠多、卻沒有任何平台的測試 profile 認得」的副檔名(散落一兩個檔不算)
+    # 只唸「數量夠多、卻沒有任何平台的測試 profile 認得」的副檔名(散落幾個檔不算)。
+    # ★門檻不只看絕對數量,也看它佔不佔份量★:本 repo 實測——它是 Python 專案,
+    # 但安裝腳本有 4 個 .ps1,只用「≥3 個」的話會唸一句「你的測試設定掃不到這些 .ps1」,
+    # 而那裡面根本沒有測試。改成「還要不少於最大宗的四分之一」就只剩真的那幾條。
+    _top = max(counts.values())
+    _floor = max(3, _top / 4)
     for ext, n in sorted(counts.items(), key=lambda kv: -kv[1]):
-        if n >= 3 and ext not in covered:
-            out.append(f"專案裡有 {n} 個 {ext} 檔,但測試設定認的是 {sorted(covered) or '(預設 C#)'}——掃不到這些檔裡的測試")
+        if n >= _floor and ext not in covered:
+            test_msgs.append(f"專案裡有 {n} 個 {ext} 檔,但測試設定認的是 {sorted(covered) or '(預設 C#)'}——掃不到這些檔裡的測試")
     sym, _neg = load_symbol_profile(root)
     sym_exts = set(sym.get("code_exts") or [])
     for ext, n in sorted(counts.items(), key=lambda kv: -kv[1]):
-        if n >= 3 and ext not in sym_exts:
-            out.append(f"專案裡有 {n} 個 {ext} 檔,但 symbol_profile 認的是 {sorted(sym_exts)}——筆記提到的符號在這些檔裡查不到也不會報")
-    return out[:8]
+        if n >= _floor and ext not in sym_exts:
+            sym_msgs.append(f"專案裡有 {n} 個 {ext} 檔,但 symbol_profile 認的是 {sorted(sym_exts)}——筆記提到的符號在這些檔裡查不到也不會報")
+    # ★兩組各自留額度,截斷要說實話★(r1 單reviewer f3,實測):
+    # 舊寫法是兩組接成一串再 out[:8],而測試那組永遠排在前面——symbol_profile 那整類
+    # 在副檔名一多的專案會被整批吃掉,而且標頭照印「有 8 項」,看不出還有沒講的。
+    cap, out = 4, []
+    for group in (test_msgs, sym_msgs):
+        out.extend(group[:cap])
+        if len(group) > cap:
+            out.append(f"(同類還有 {len(group) - cap} 條沒列出來)")
+    return out
+
+
+def _config_left_blank(root):
+    """設定骨架產了但沒填(消費專案接入靜默失效 [B];r1 單reviewer f9)。
+
+    為什麼要另外驗:猜不到技術棧時骨架會把 test_profile / symbol_profile 寫成空字串,
+    而讀設定那支對空字串一律靜默退回 csharp 預設——清單外的語言(Rust、Go…)因此
+    第一天起兩個關鍵設定都錯,而且 S3 靠副檔名比對也抓不到(它只認得出正典表裡的副檔名)。
+    這一條純粹看「骨架欄位還空著沒有」,跟語言無關。"""
+    import json as _json
+    if not root:
+        return []
+    cfg_path = Path(root) / ".lumos" / "config.json"
+    if not cfg_path.exists():
+        return []
+    try:
+        cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ["`.lumos/config.json` 解析失敗——整份設定會被當作不存在,測試 profile 與符號 profile 都退回 C# 預設"]
+    if not isinstance(cfg, dict):
+        return []
+    out = []
+    if not cfg.get("test_profile") and not cfg.get("platforms"):
+        out.append("`.lumos/config.json` 的 test_profile 還是空的——掃不到你的測試,合約綁不上任何東西(閘會靜默放行)")
+    if not cfg.get("symbol_profile"):
+        out.append("`.lumos/config.json` 的 symbol_profile 還是空的——符號檢查會用 C# 的副檔名清單,對你的程式碼視而不見")
+    return out
 
 
 def _init_config_skeleton(root):
@@ -13353,38 +13509,42 @@ def _init_config_skeleton(root):
     cfg_path = Path(root) / ".lumos" / "config.json"
     if cfg_path.exists():
         return   # 既有設定不碰
-    counts = {}
-    skip = {"node_modules", ".git", "build", "DerivedData", "dist", "vendor", "Pods", ".venv", "docs", "governance"}
-    for f in Path(root).rglob("*"):
-        if not f.is_file() or any(part in skip for part in f.parts):
-            continue
-        ext = f.suffix.lower()
-        if ext in _STACK_GUESS:
-            counts[ext] = counts.get(ext, 0) + 1
+    guess = _stack_guess()
+    counts = _stack_ext_counts(root)
     ranked = sorted(counts.items(), key=lambda kv: -kv[1])
     # ★不能寫 // 註解★:這是要被 json.loads 讀的檔,加註解會讓整份設定解析失敗、退回預設,
     # 反而製造出這批要解的那種靜默。說明一律走 JSON 欄位。
     note = ("這份是 lumos init 產出的骨架,裡面的技術棧是用副檔名推測的——請開檔確認。"
             "猜錯的話兩件事會靜默失效:掃不到你的測試(合約綁不上)、符號檢查對你的程式碼視而不見。"
             "確認完可以把這個 _請先確認 欄位刪掉。")
+    blank = {"_說明": "偵測不到已知的技術棧。填 test_profile(可選:%s)與 symbol_profile(可選:%s),並把 run_cmd 改成你專案跑單一測試的指令(必須帶 {method} 佔位符,而且對不存在的測試名要回非零或在輸出裡數得出跑了幾支)" % ("/".join(sorted(TEST_PROFILES)), "/".join(sorted(SYMBOL_PROFILES))),
+             "test_profile": "", "symbol_profile": "", "test": {"run_cmd": ""}}
     if not ranked:
-        body = {"_說明": "偵測不到已知的技術棧。填 test_profile(可選:%s)與 symbol_profile,並把 run_cmd 改成你專案跑單一測試的指令(必須帶 {method} 佔位符)" % "/".join(sorted(TEST_PROFILES)),
-                "test_profile": "", "symbol_profile": "", "test": {"run_cmd": ""}}
+        body = blank
     elif len(ranked) == 1 or ranked[0][1] > sum(c for _, c in ranked[1:]) * 3:
         ext = ranked[0][0]
-        tp, sp, human = _STACK_GUESS[ext]
+        tp, sp, human = guess[ext]
         body = {"_推測": f"看到 {counts[ext]} 個 {ext} 檔,猜這是 {human} 專案——不對就改",
                 "test_profile": tp, "symbol_profile": sp,
                 "test": {"run_cmd": _SKELETON_RUN_CMD.get(tp, "")}}
+        if not tp or not sp:
+            body["_請自己填"] = ("這個副檔名在正典表裡只被其中一種 profile 認領,另一個留空給你填:"
+                                f"test_profile 可選 {'/'.join(sorted(TEST_PROFILES))};"
+                                f"symbol_profile 可選 {'/'.join(sorted(SYMBOL_PROFILES))}")
     else:
         plats = {}
         for ext, n in ranked[:3]:
-            tp, sp, human = _STACK_GUESS[ext]
+            tp, sp, human = guess[ext]
+            if not tp:
+                continue
             plats.setdefault(tp.split("-")[0], {"profile": tp, "root": ".", "run_cmd": _SKELETON_RUN_CMD.get(tp, ""),
                                                 "_推測": f"看到 {n} 個 {ext} 檔({human})"})
-        body = {"_推測": "看到多種語言,用多平台格式(每個平台各自的 root/profile/run_cmd)——請確認並把 root 改成各平台真正的目錄",
-                "default_platform": next(iter(plats)), "platforms": plats,
-                "symbol_profile": _STACK_GUESS[ranked[0][0]][1]}
+        if not plats:
+            body = blank
+        else:
+            body = {"_推測": "看到多種語言,用多平台格式(每個平台各自的 root/profile/run_cmd)——請確認並把 root 改成各平台真正的目錄",
+                    "default_platform": next(iter(plats)), "platforms": plats,
+                    "symbol_profile": guess[ranked[0][0]][1]}
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     body = {"_請先確認": note, **body}
     _write_lf(cfg_path, _j.dumps(body, ensure_ascii=False, indent=2) + "\n")
@@ -13886,7 +14046,8 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False, allow_stale
     預設並 vendor 工具組 + 裝 pre-commit/pre-push 閘(--no-hooks 只建圖譜輕量版)。
     像 `openspec init`:一行開好就能 `lumos new`。
     分工:init = 專案層(圖譜 + 該 repo 的 hooks);bootstrap = 機器層(clone Lumos/skills/全域 lumos),一輩子一次。
-    序列(既有 vault 非 force):只 _reinject_claude_block(讀本機已 vendor 範本,不 pull、不重裝 hooks)→ early-return。
+    序列(既有 vault 非 force):_reinject_claude_block(讀本機已 vendor 範本,不 pull、不重裝 hooks)
+      → _init_additive_setup(只加不覆寫:設定骨架 + 本機留痕的忽略設定)→ early-return。
     序列(新 vault 或 --force):_vendor_toolchain(pull + copy2 + hooks + reinject) → scaffold → 完成。
     no_hooks 路徑(不分新/既有):只 _reinject_claude_block(讀本機已 vendor 範本,無則靜默)。"""
     import subprocess
@@ -13934,13 +14095,18 @@ def cmd_init(name=None, force=False, with_hooks=True, no_pull=False, allow_stale
         # no_hooks:讀本機 vendored 範本執行 reinject(無範本 → no_template → 靜默)
         _do_reinject()
 
-    # ── Step 2: existing/force 判定 ───────────────────────────────────
+    # ── Step 2: 只加不覆寫的設定(★新舊專案都要,不受下面的早退影響★)──────
+    # r1 架構對齊席 f2:這兩樣本來被關在「保護既有 vault」的兩層早退後面,
+    # 於是最需要它們的既有消費專案永遠拿不到。它們自己就是「檔案不存在才寫」。
+    _init_additive_setup(root)
+
+    # ── Step 3: existing/force 判定 ───────────────────────────────────
     if existing is not None and not force:
         print(f"✓ 此 repo 已有 vault: {existing.relative_to(root)}")
         print("  (要另建用 --name <slug>;要在既有 vault 上重裝/更新 hooks 與工具組用 --force,vault 內容不動)")
         return 0
 
-    # ── Step 3: scaffold 圖譜資料(新 vault;既有 vault 內部 kg.exists() guard 保護) ──
+    # ── Step 4: scaffold 圖譜資料(新 vault;既有 vault 內部 kg.exists() guard 保護) ──
     if not with_hooks:
         print(f"lumos init — 在 {root} 建圖譜 vault: docs/{slug}-knowledge/")
     _scaffold_project(root, slug)  # 6 夾 + .gitignore + MOC/index.md;既有 vault 自動 skip 保護資料
@@ -21152,31 +21318,84 @@ def _bound_tests_for_diff(repo_root, diff_range, payload=None):
 
 
 _FILTER_PROBE_NAME = "lumosProbeNoSuchTest9f3c"   # 故意不存在的測試名;冒煙測試用
+_FILTER_PROBE_SCHEMA = "v2"      # 判定規則改版就換這個字串,舊快取自然 miss(r1 單reviewer f8)
+_FILTER_PROBE_TTL = 14 * 86400   # 快取保鮮期:測試工具升級、設定檔加旗標都可能讓判定翻面(同上)
+
+# 測試 profile → (在輸出裡證明「至少真的跑了一支測試」的樣式, 這條是怎麼量出來的, 沒看到時怎麼修)。
+# ★這是這道閘的主力證據,冒煙測試退成備援★(2026-09-09 r1 折入)。
+# 為什麼要換:冒煙測試問的是「這個指令分不分得出測試不存在」,而實測下來★大多數測試工具都分不出來★——
+#   xcodebuild 給對三段 -only-testing 但方法名打錯 → 跑 0 支、回 0;
+#   dotnet test --filter 對不到 → 印 No test matches、回 0;
+#   jest -t 對不到 → 印 1 skipped、回 0;
+#   只有 pytest(回 5)與本 repo 自己的執行器(自己判 0 支=失敗)分得出來。
+# 也就是說,原本的做法會把最常見的幾種棧全部判成「不可信」——不是擋錯人就是等於沒擋。
+# ★改成看正面證據★:這一支跑完回 0 之後,再去它自己的輸出裡找「執行了 N 支(N≥1)」那行。
+#   有 → 這支真的跑過,綠算數;沒有 → 它回成功但什麼都沒跑,不能算綠。
+# 這比冒煙測試強在★逐支判★:合約 [test:] 名字打錯一個字,只有那一支會被抓出來。
+# ★只填在這台機器上真的跑過、而且對照過「跑 1 支」與「跑 0 支」兩種輸出的 profile★;
+# 沒實測過的留空 → 退回冒煙測試那條舊路,不憑想像寫樣式。
+_RAN_EVIDENCE = {
+    "swift-xctest": (r"Executed\s+[1-9]\d*\s+tests?\b",
+                     "Xcode 26.6 實測:跑 1 支印「Executed 1 test, with 0 failures」,跑 0 支印「Executed 0 tests」",
+                     "xcodebuild 的 -quiet 會把那行藏起來——把 -quiet 拿掉(帶著 -quiet 時,跑 1 支跟跑 0 支的輸出一模一樣)"),
+    "csharp-xunit": (r"Passed:\s*[1-9]",
+                     "dotnet 9.0.117 實測:跑到測試印「Passed!  - Failed: 0, Passed: 1」,對不到只印「No test matches」",
+                     "在指令尾巴加 `-- RunConfiguration.TreatNoTestsAsError=true`,對不到測試就會直接回非零"),
+    "node-jest": (r"Tests:.*?[1-9]\d*\s+passed",
+                  "jest 29 實測:跑到印「Tests: 1 passed, 1 total」,-t 對不到印「Tests: 1 skipped, 1 total」",
+                  "如果你換了自訂 reporter,摘要行的字樣會變——把 reporter 換回預設,或改用會對不到就回非零的跑法"),
+    "python": (r"[1-9]\d*\s+passed",
+               "pytest 8 實測:跑到印「1 passed in 0.01s」;對不到本來就回 5(非零),這條只是雙保險",
+               "pytest 的 -q/-p no:terminal 會把摘要行拿掉——留著預設輸出"),
+}
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _ran_evidence_check(profile, out):
+    """輸出裡有沒有「至少跑了一支」的證據。回 (有沒有, 沒有的話怎麼修) 或 (None, "") 表示這個 profile 沒實測過。"""
+    spec = _RAN_EVIDENCE.get(profile or "")
+    if not spec:
+        return None, ""
+    pat, _how, fix = spec
+    if re.search(pat, _ANSI_RE.sub("", out or "")):
+        return True, ""
+    return False, fix
 
 
 def _bound_tests_filter_probe(root, run_cmd, timeout=600):
-    """★測試指令有沒有過濾能力★(消費專案接入靜默失效 [F]/[S7])。
+    """★測試指令有沒有過濾能力★(消費專案接入靜默失效 [F]/[S7])——**備援用**。
 
-    為什麼要驗:閘只看退出碼,而「過濾條件對不到任何測試」在有些建置工具上是
-    ★跑 0 支、印成功、退出碼 0★——calc-ios 實測:-only-testing 少寫類別段時
+    主力是 _RAN_EVIDENCE(從輸出裡直接看「執行了幾支」)。這一支只在該 profile 沒有實測過的
+    輸出樣式時才跑,因為它問的是比較弱的問題:「這個指令分不分得出測試不存在」。
+
+    為什麼還留著:沒有輸出樣式可比對時,退出碼是唯一剩下的訊號,而「過濾條件對不到任何測試」
+    在有些建置工具上是★跑 0 支、印成功、退出碼 0★——calc-ios 實測:-only-testing 少寫類別段時
     xcodebuild 執行 0 支測試仍回 0,閘因此回報「4 支全綠」。那不是綠,是假綠。
 
     做法借既有 lint-check --smoke 的形狀:拿一個故意不存在的測試名跑一次。
     回不為 0 → 這指令分得出「找不到測試」,可信;回 0 → 它對任何名字都說成功,不可信。
 
-    結果按 (root, run_cmd) 快取在 ~/.cache/lumos/bound-filter/(指令一改 key 就變,不必 TTL)。
+    ★誠實邊界★(r1 單reviewer f7):它只證明「認得出完全不存在的名字」,證不了「精準只選中那一支」
+    ——pytest -k test_pay 會用子字串比對連 test_pay_extra 一起跑。逐支精準度靠 _RAN_EVIDENCE 那條路,
+    這條備援路上沒有解。
+
+    結果按 (root, run_cmd, 判定規則版本) 快取在 ~/.cache/lumos/bound-filter/,保鮮 14 天
+    (r1 單reviewer f8:測試工具升級或設定檔加旗標都會讓判定翻面,而 run_cmd 文字不變)。
+    快取目錄走跟鄰居同一支 _trusted_private_dir(r1 兩席同判:繞過去是同一種漂移第三次發生)。
     回 (可信 bool, 一句原因)。"""
-    import hashlib, json as _j, os as _os
+    import hashlib, json as _j, os as _os, stat as _stat, time as _time
     if "{method}" not in run_cmd:
         return True, "整套跑,不靠過濾"
-    key = hashlib.sha256(f"{_os.path.realpath(str(root))}|{run_cmd}".encode("utf-8")).hexdigest()
+    key = hashlib.sha256(f"{_os.path.realpath(str(root))}|{run_cmd}|schema{_FILTER_PROBE_SCHEMA}".encode("utf-8")).hexdigest()
     cache = Path.home() / ".cache" / "lumos" / "bound-filter" / f"{key}.json"
-    if cache.exists():
-        try:
+    try:
+        st = cache.stat()
+        if (st.st_uid == _os.getuid() and not (st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH))
+                and _time.time() - st.st_mtime <= _FILTER_PROBE_TTL):
             d = _j.loads(cache.read_text(encoding="utf-8"))
             return bool(d["trustworthy"]), d.get("why", "")
-        except Exception:
-            pass
+    except (OSError, ValueError, KeyError):
+        pass
     import shlex as _shlex
     probe_cmd = run_cmd.replace("{method}", _shlex.quote(_FILTER_PROBE_NAME))
     rc, tail, secs, to = _kill_run(probe_cmd, str(root), timeout)
@@ -21189,14 +21408,18 @@ def _bound_tests_filter_probe(root, run_cmd, timeout=600):
         ok, why = True, f"冒煙測試回 rc={rc},指令分得出找不到測試"
     try:
         cache.parent.mkdir(parents=True, exist_ok=True)
-        _write_lf(cache, _j.dumps({"trustworthy": ok, "why": why, "secs": secs}, ensure_ascii=False) + "\n")
+        if _trusted_private_dir(cache.parent, ".cache", "lumos", "bound-filter"):
+            _write_lf(cache, _j.dumps({"trustworthy": ok, "why": why, "secs": secs}, ensure_ascii=False) + "\n")
     except OSError:
         pass
     return ok, why
 
 
 def _run_bound_tests(repo_root, items):
-    """逐 (platform, method) 真跑;去重鍵=解析後完整指令。回 results[(node, plat, method, verdict, detail, secs)]。"""
+    """逐 (platform, method) 真跑;去重鍵=解析後完整指令。回 results[(node, plat, method, verdict, detail, secs)]。
+
+    verdict ∈ green / red / unproven。unproven=「指令回成功,但它自己的輸出裡看不到有跑過任何測試」
+    ——那不是紅(測試沒失敗),但也絕對不是綠。"""
     import shlex as _shlex, os as _os
     try:
         pdata = load_platforms(repo_root)
@@ -21230,7 +21453,13 @@ def _run_bound_tests(repo_root, items):
         elif rc != 0:
             results.append((node, plat, method, "red", f"rc={rc} {tail[-120:].strip()}", secs))
         else:
-            results.append((node, plat, method, "green", "whole-suite" if whole else "", secs))
+            # ★回成功不等於跑過★(消費專案接入靜默失效 [F]/[S7],2026-09-09 r1 折入):
+            # 整套跑的情況不驗(沒有「只跑這一支」可言);有實測過輸出樣式的 profile 才驗。
+            ran, fix = (None, "") if whole else _ran_evidence_check(pentry.get("profile_name"), tail)
+            if ran is False:
+                results.append((node, plat, method, "unproven", fix, secs))
+            else:
+                results.append((node, plat, method, "green", "whole-suite" if whole else "", secs))
     return results, None
 
 
@@ -21273,8 +21502,10 @@ def _bound_tests_range(repo_root, diff_range):
 def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=None, advisory=False):
     """回 dict{status, ran, red:[…], secs, calc_secs, reason, advisory}。
 
-    status ∈ green / red / skipped / no-config / no-pins / no-bound /
-             range-unavailable / whole-suite-deferred。
+    status ∈ green / red / unfilterable / skipped / no-config / no-vault / no-pins /
+             no-bound / diff-unavailable / range-unavailable / whole-suite-deferred。
+    unfilterable=「指令回成功,但證不出真的跑過測試」(消費專案接入靜默失效 [F]/[S7]);
+    不擋的路徑上它只印訊息,擋的路徑上它跟紅一樣擋。
 
     advisory=True(低風險推送):紅了照樣印、照樣記帳,但呼叫端不擋(人裁 2026-09-07)。
       不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 --no-verify
@@ -21336,6 +21567,7 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=
         return {"status": "no-config", "ran": 0, "red": [], "secs": 0.0, "calc_secs": _calc,
                 "reason": err, "advisory": advisory}
     red = [(n, p, m, d) for n, p, m, v, d, _ in results if v == "red"]
+    unproven = [(n, p, m, d) for n, p, m, v, d, _ in results if v == "unproven"]
     secs = round(sum(r[5] for r in results), 1)
     ran = sum(1 for r in results if r[3] == "green")
     if red:
@@ -21347,16 +21579,23 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=
         return {"status": "red", "ran": ran, "red": red, "secs": secs, "calc_secs": _calc,
                 "advisory": advisory,
                 "reason": "受波及合約的測試沒過:" + ";".join(f"{n} [{m}] {d}" for n, p, m, d in red[:6])}
-    # ★報綠之前先確認那個綠是真的★(消費專案接入靜默失效 [F]/[S7]):
-    # 閘只看退出碼,而「過濾條件對不到任何測試」在有些建置工具上是跑 0 支、印成功、回 0。
-    # 對這輪真的用到的每個 (root, run_cmd) 各做一次過濾能力冒煙測試(結果有快取,不是每次推送都跑)。
+    # ★報綠之前先確認那個綠是真的★(消費專案接入靜默失效 [F]/[S7])。
+    # 兩層證據,先強後弱:
+    #   ① 逐支看「跑過的證據」——_run_bound_tests 已經對有實測輸出樣式的 profile 驗過,
+    #      驗不過的那幾支在上面被標成 unproven。這一層抓得到「合約 [test:] 名字打錯一個字」。
+    #   ② 沒有輸出樣式可比對的 profile,退回過濾能力冒煙測試(拿不存在的測試名跑一次)。
+    #      這層只答得出「這個指令認不認得出完全不存在的名字」,精準度證不了。
+    _bad = ["這一支跑完回成功,但它自己的輸出裡看不到有跑過任何測試(%s [%s])。%s"
+            % (n, m, d or "") for n, p, m, d in unproven[:3]]
     try:
         _pd = load_platforms(repo_root)
-        _pairs, _bad = set(), []
+        _pairs = set()
         for _n, _plat, _m, _v, _d, _sc in results:
             if _v != "green":
                 continue
             _pe = (_pd["platforms"].get(_plat) or {})
+            if _RAN_EVIDENCE.get(_pe.get("profile_name") or ""):
+                continue   # 這個 profile 走上面那層,不必再付一次冒煙測試的時間
             _rc_cmd = _pe.get("run_cmd")
             if _rc_cmd:
                 _pairs.add((str(_pe.get("root") or repo_root), _rc_cmd))
@@ -21364,14 +21603,14 @@ def _bound_tests_check(repo_root, diff_range, skip=False, skip_note="", payload=
             _ok, _why = _bound_tests_filter_probe(_root, _cmd)
             if not _ok:
                 _bad.append(_why)
-        if _bad:
-            _bound_tests_log(repo_root, "unfilterable", sorted({r[0] for r in results}),
-                             "測試指令沒有過濾能力,綠不可信", secs=secs, calc_secs=_calc)
-            return {"status": "unfilterable", "ran": 0, "red": [], "secs": secs, "calc_secs": _calc,
-                    "advisory": advisory,
-                    "reason": "無法確認測試真的跑過:" + _bad[0] + "(把測試指令的過濾條件修對——例如 xcodebuild 的 -only-testing 要寫成 target/類別/方法三段——再跑一次)"}
     except Exception as _e:   # 冒煙測試自己壞掉不能反過來擋人:記帳、照原判定走
         _gate_failopen(repo_root, "bound-tests", f"過濾能力冒煙測試例外:{str(_e)[:100]}")
+    if _bad:
+        _bound_tests_log(repo_root, "unfilterable", sorted({r[0] for r in results}),
+                         "證不出測試真的跑過,綠不可信", secs=secs, calc_secs=_calc)
+        return {"status": "unfilterable", "ran": 0, "red": [], "secs": secs, "calc_secs": _calc,
+                "advisory": advisory,
+                "reason": "無法確認測試真的跑過:" + _bad[0]}
     # ★耗時存成獨立欄位★(設計 [S6]):以前塞在自由文字的備註裡(「46 綠 41.8s」),
     # 回頭條件量不到;而且那個秒數只算跑測試那段,不含前面算波及的時間。分開存。
     _bound_tests_log(repo_root, "green", sorted({r[0] for r in results}),
@@ -21428,8 +21667,9 @@ def cmd_bound_tests(diff_range, repo=None, as_json=False, advisory=False, from_j
     ★扁平頂層指令,不包子動詞★:這個 repo 對單一動詞的工具一律扁平,
     群組式(loop / canary / guard 那種)是留給天生有兩個以上動詞的。
 
-    rc:0=green 或沒東西可跑 / 1=red 且不是 advisory / 2=參數或環境問題。
+    rc:0=green 或沒東西可跑 / 1=red 或 unfilterable(且不是 advisory) / 2=參數或環境問題。
     --advisory:紅了照樣印、照樣記帳,但回 0(低風險推送用;人裁 2026-09-07)。
+    unfilterable(指令回成功但證不出跑過)比照紅辦理——假綠的殺傷力跟紅一樣。
     """
     import json as _json
     root = Path(repo or ".").resolve()
@@ -21448,7 +21688,7 @@ def cmd_bound_tests(diff_range, repo=None, as_json=False, advisory=False, from_j
                            payload=payload, advisory=advisory)
     if as_json:
         print(_json.dumps(v, ensure_ascii=False))
-        return 0 if (v["status"] != "red" or advisory) else 1
+        return 0 if (v["status"] not in ("red", "unfilterable") or advisory) else 1
     st = v["status"]
     if st == "red":
         # ★訊息要講「這要修測試,不是補審查留痕」★(設計 [S2] 的整個理由)
@@ -21479,7 +21719,19 @@ def cmd_bound_tests(diff_range, repo=None, as_json=False, advisory=False, from_j
         # 這個既有關鍵字——pre-push 對 code-loop check 的非阻擋輸出會先 grep 過濾一次(r1 邊界席 f2)。
         print(f"提醒:受波及合約測試這次沒有可跑的——{_BOUND_ZERO_REASONS[st]}")
     elif st == "unfilterable":
-        print(f"提醒:受波及合約測試沒跑——{v['reason']}", file=sys.stderr)
+        print("", file=sys.stderr)
+        head = "提醒(不擋)" if advisory else "擋下"
+        print(f"{head}:受波及合約的測試指令跑完回成功,但★證不出它真的跑過任何一支測試★。", file=sys.stderr)
+        print(f"    {v['reason']}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("  為什麼要擋:這種情況下閘會報「全綠」,而實際上一支都沒跑——", file=sys.stderr)
+        print("  你會以為合約被測試守著,其實沒有。那比測試紅掉更危險,因為它不出聲。", file=sys.stderr)
+        print("  設定檔在 .lumos/config.json 的 test.run_cmd(多平台在 platforms.<平台>.run_cmd)。", file=sys.stderr)
+        if not advisory:
+            print("  真的修不動、這次要先過:", file=sys.stderr)
+            print("      lumos bound-tests --diff <範圍> --skip --note \"<為什麼跳過>\"", file=sys.stderr)
+            print("      (推送關卡那條路用 lumos code-loop check --skip-bound-tests --note \"…\";兩條都會留痕)", file=sys.stderr)
+        return 0 if advisory else 1
     return 0
 
 
@@ -22030,7 +22282,13 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     bt = _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note,
                             payload=payload, advisory=bound_advisory)   # advisory 也要傳進去(r1 外家否決 f3:不傳會對低風險跑整套 600 秒)
     _codeloop_guard_verdict.last_bound = bt
-    if bt["status"] == "red" and not bound_advisory:
+    # ★「證不出跑過」跟紅一樣擋★(2026-09-09 r1 單reviewer f2,blocker):
+    # 第一版只把狀態從 green 換成 unfilterable、印一行到 stderr 就結束,決定擋不擋的這裡
+    # 只認 red——也就是說「假綠改成擋」這句話當時是假的,實際上只是換了一行字。
+    # 假綠的殺傷力跟紅一樣(你以為合約被測試守著,其實沒有),所以走同一條路:
+    # 高風險擋、低風險比照紅只提醒(那是 2026-09-07 的人裁,理由是擋下去人會改走 --no-verify)。
+    # 真的修不動的話逃生門跟紅共用:--skip-bound-tests --note "<理由>",會留痕。
+    if bt["status"] in ("red", "unfilterable") and not bound_advisory:
         return {"blocked": True, "reason": bt["reason"], "tier": "unknown", "bound_tests": bt}
     # bound_advisory(表態閘 S7 之後 pre-push 對每個分支 ref 都叫 check):低風險推送的合約測試維持 2026-09-07 人裁的
     # 「只提醒不擋」——紅了照樣印(呼叫端讀 last_bound),但不在這裡擋;高風險那條 pre-push 不帶這旗標,照舊擋。
@@ -22061,7 +22319,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     if bound_advisory and tier == "high":
         bt = _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note, payload=payload, advisory=False)
         _codeloop_guard_verdict.last_bound = bt
-        if bt["status"] == "red":
+        if bt["status"] in ("red", "unfilterable"):
             return {"blocked": True, "reason": bt["reason"] + "(tier=high,--bound-tests-advisory 不適用)", "tier": tier, "bound_tests": bt}
 
     # 3.5 表態閘(Projects/棧別提問表態閘_計劃,2026-09-09):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。
