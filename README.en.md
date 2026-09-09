@@ -46,7 +46,7 @@ Two details: **the gold ring (a rule that must not change) only grows once a ver
 
 ---
 
-**Understand it** &nbsp;[What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian)<br>
+**Understand it** &nbsp;[What's in a note](#whats-in-a-note)<br>
 **Is it for you** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
 **Use it** &nbsp;[Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
 **Beyond that** &nbsp;[The loop that gets sharper](#the-loop-that-gets-sharper) · [Code review has three layers](#code-review-here-has-three-layers) · [Why this exists](#why-this-exists) · [Scope](#scope) · [Going deeper](#going-deeper) · [Licence](#licence)
@@ -63,25 +63,10 @@ Those two starred markers are the heart of the whole thing — **a heavy claim c
 
 So "what rules can't be touched in this project" isn't a question you ask a person — **one command answers it**, usually one the AI runs (see the [command reference](docs/command-reference.md)).
 
----
-
-## How this differs from Obsidian
-
-**No conflict.** These are ordinary Markdown files — open them in Obsidian if you like; install no notes app at all and everything still works.
-
-The difference is one line: **Obsidian is for people to browse. Lumos is for an AI to query.**
-
-| What you did | Notes app | Lumos |
-|---|---|---|
-| An AI wants a module's backstory | Pour the files in and let it dig | **One query back: ranked, compressed** (this project's notes run to 2.67M characters — they don't fit) |
-| You want to know who a file change hits | No such concept | **Reverse lookup from the code**, including which notes carry rules that must not break |
-| You write "this rule must not change" | Saved. Fine. | **Name the test guarding it**, or the health check goes red |
-| You changed code and didn't touch the notes | Nobody notices | **Stopped at commit** |
-
-**The primary reader of these notes isn't a human — it's the next session's AI.** They're built to be queried, not read.
+**The primary reader of these notes isn't a human — it's the next session's AI — so they're built to be queried.** When an AI wants a module's backstory, one query returns a ranked, compressed answer; nothing gets poured in wholesale. It works the other way too: hand it a source file and it lists **which notes mention that file and which declare they cover it** — flagging the ones that carry rules that must not break.
 
 <p align="center">
-  <img src="assets/impact-en.svg" alt="Give it a source file and the graph works out which notes are affected and which carry contracts" width="900">
+  <img src="assets/impact-en.svg" alt="Give it a source file and it lists which notes mention or cover it, and which carry contracts" width="900">
 </p>
 
 ---
@@ -115,6 +100,8 @@ That first "not a fit" — still writing most of the code by hand — comes down
 Writing it yourself means three things happen at once: **one track at a time**; **a later AI can only work backwards from the code** (where the *why* was never written); and **the most valuable part never existed anywhere** — what you compared and why you rejected it never left your head.
 
 Develop in plain language and all three invert: you handle decisions and trade-offs, implementation runs on several tracks, and **the trade-offs already happen in the conversation** — the rules make them settle into notes.
+
+**One more thing changes with it: the language stops being the barrier.** Once you understand how a given stack is deployed, verified and tested, you can develop in any language by talking. Languages are like different implementations of the same interface — **you can swap the language, but every one of them has to inherit the same spec context**: why it was designed this way, where its edges are, what must not change, whether it was verified. **The context is where the investment goes; the language is just the interface.**
 
 **And the gap only widens** — the stronger models get, the worse the return on doing it by hand. The full argument is in [the mental model](docs/mental-model.md).
 
@@ -203,13 +190,16 @@ Same reviewers, same time budget. **The only thing that changed is the quality o
 
 ### The dispatch step is a DAG
 
-"Attach the relevant notes to the reviewers" sounds simple. What actually happens is **one brief fanning out to several seats, then converging back to a single verdict**.
+Dispatch means: **the same brief goes to several reviewers, each looking from one angle, and their findings get merged.**
 
 <p align="center">
   <img src="assets/dispatch-en.svg" alt="Dispatch is a DAG: the notes and the diff produce one brief, which fans out to several seats each looking from one angle, then converges through machine intake, a rebuttal seat and a disposal gate, and is written back into the notes" width="900">
 </p>
 
-The one worth reading: **the useful part of the brief isn't "which notes are relevant" — it's the state of the test bound to each rule.** The ones bound to nothing no gate covers; a person is all that reads them. Seats work independently because **"several seats agreed" only counts as evidence if they didn't copy each other.**
+Two things worth knowing:
+
+- **The most useful line in the brief** is "this rule — say, never charge twice — is the test guarding it still there?" The tool marks it outright: present, pointing at a test that no longer exists, or never bound at all. **The unbound kind, only a person is reading.**
+- **Several people looking separately and agreeing afterwards is evidence; agreeing after copying each other isn't.** That's why no seat sees another's report.
 
 > **Honestly:** what a machine holds is *form*. Whether a rule still matches the business — only a person can answer that. Don't read "has evidence attached" as "safe".
 
@@ -233,17 +223,17 @@ Before code goes up, three different things look at it. **They catch three diffe
   <img src="assets/review-layers-en.svg" alt="Three layers of code review: linters, per-stack questions, and tests — each one states what it cannot catch" width="900">
 </p>
 
-**1. The linter layer** — the project declares which linters to run; Lumos only reads their output, filters to the lines this change touched, and **folds it into the reviewer's brief**. It can't catch design-level problems: no rule expresses "this coroutine is on the wrong dispatcher".
+**1. The linter layer** — the project declares which linters to run; Lumos only reads their output, filters to the lines this change touched, and **folds it into the reviewer's brief**. It can't catch design-level problems: no rule expresses "this coroutine is on the wrong dispatcher" — **that's the next layer's job.**
 
-**2. The questions layer** — each stack carries a list of performance questions it should ask itself (32 across six stacks), and **only the ones you actually touched surface**. Before the push each needs an answer: done (with evidence) / not applicable (with a reason) / not yet (linked issue). It can't judge whether an answer is right — **the tool checks the evidence exists; reviewers argue the rest.**
+**2. The questions layer** — each stack carries a list of performance questions it should ask itself (32 across six stacks), and **only the ones you actually touched surface**. Before the push each needs an answer: done (with evidence) / not applicable (with a reason) / not yet (linked issue). It can't judge whether an answer is right — **the tool checks the evidence exists; the review seats from the previous section take over and argue it.**
 
-**3. The tests layer** — the affected contract tests actually run. **This is the backstop**: said right but built wrong is caught here and nowhere else. It can't catch anything no test guards.
+**3. The tests layer** — the affected contract tests actually run. **This is the backstop**: said right but built wrong is caught here and nowhere else. It can't catch anything no test guards — **there, only the review seats and you remain. That's the real ceiling.**
 
 <p align="center">
   <img src="assets/stack-gate-en.svg" alt="The journey of one change: the extension identifies the stack, only triggered questions surface, three ways to answer, push and CI block on any missing one" width="900">
 </p>
 
-**A language that isn't on the list (Python itself isn't) doesn't trigger the second layer.** The full "what the tool checks and doesn't" table, and how each language plugs in, are in [the mental model](docs/mental-model.md).
+**A language that isn't on the list doesn't trigger the second layer.** The full "what the tool checks and doesn't" table, and how each language plugs in, are in [the mental model](docs/mental-model.md).
 
 > **Honestly: the second layer stops "couldn't be bothered to answer". It does not stop "answered carelessly".** It catches the laziest kind of lie — the rest is on the review seats, and finally on the tests.
 
