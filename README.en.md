@@ -157,7 +157,9 @@ The review loop above is language-agnostic. But "is this Kotlin coroutine on the
 
 **The tool has been asking all along.** Before an edit and before a push, it surfaces "the performance questions this stack should ask itself".
 
-**But putting a question in front of someone isn't the same as getting it answered.** In practice the overwhelming majority of recorded reviews carry no response to those questions at all — **seen, then skipped past**. This section is about closing that second half.
+**But putting a question in front of someone isn't the same as getting it answered.** Going through the governance ledger: **of 178 recorded reviews, barely a dozen carry any response to those questions at all** — and **13 of those answered for Python, a language that isn't even on the list**.
+
+So: **seen, then skipped past** — and the few who did answer answered about the wrong thing. This section is about closing that second half.
 
 <p align="center">
   <img src="assets/stack-gate-en.svg" alt="The journey of one change: the extension identifies the stack and pulls its questions; before editing only the triggered ones surface; before pushing each needs an answer; push and CI block on any missing one; reviewers treat the answers as refutable claims" width="900">
