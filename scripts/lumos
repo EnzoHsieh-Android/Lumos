@@ -4524,19 +4524,25 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, es
             for _qid, _ent in r["dispositions"].items():
                 if not isinstance(_ent, dict):
                     continue
-                _b = _dq.setdefault(_qid, {"satisfied": 0, "na": 0, "todo": 0, "auto-na": 0})
+                _b = _dq.setdefault(_qid, {"satisfied": 0, "na": 0, "todo": 0, "tension": 0, "auto-na": 0, "cand": 0, "cand-tension": 0})
                 if _ent.get("auto"):
                     _b["auto-na"] += 1
-                elif _ent.get("status") in _b:
+                elif _ent.get("status") in ("satisfied", "na", "todo", "tension"):
                     _b[_ent["status"]] += 1
+                # 候選張力(2026-09-09 兩席相反時端出張力):樣板帶的 hint 隨表態存進帳,這裡就是 REVISIT 的分母
+                if _ent.get("hint") and not _ent.get("auto"):
+                    _b["cand"] += 1
+                    if _ent.get("status") == "tension":
+                        _b["cand-tension"] += 1
         elif r.get("kind") == "recall-miss" and r.get("recall_miss"):
             _rm[r["recall_miss"]] = _rm.get(r["recall_miss"], 0) + 1
     if _dq or _rm:
         print("  棧別提問表態(表態閘,2026-09-09 起;每筆表態事件每題算一次,同 sha 重表態各算各的):")
         for _qid in sorted(_dq):
-            _b = _dq[_qid]; _human = _b["satisfied"] + _b["na"] + _b["todo"]
+            _b = _dq[_qid]; _human = _b["satisfied"] + _b["na"] + _b["todo"] + _b["tension"]   # 分母含張力(r1 接手席 H4:8 na + 5 tension 不是死題)
             _tag = " ← 死題候選(人答 ≥10 次且全是不適用:題目不對或被敷衍,回頭裁刪題或加嚴)" if (_human >= 10 and _b["na"] == _human) else ""
-            print(f"    {_qid}:做到了 {_b['satisfied']}、不適用 {_b['na']}、待辦 {_b['todo']}、未觸發自動 {_b['auto-na']}{_tag}")
+            _cand = f"、候選題 {_b['cand']}(其中答 tension {_b['cand-tension']})" if _b["cand"] else ""
+            print(f"    {_qid}:做到了 {_b['satisfied']}、不適用 {_b['na']}、待辦 {_b['todo']}、未觸發自動 {_b['auto-na']}、張力 {_b['tension']}{_cand}{_tag}")
         for _qid, _n in sorted(_rm.items()):
             print(f"    {_qid}:審查席抓到未觸發題的問題 {_n} 次" + (" ← 觸發太窄候選(修它的 when)" if _n >= 3 else "(累積 3 次列候選)"))
         print()
@@ -4734,6 +4740,7 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
          "token": ((d.get("ts", "") + d.get("note", "")) if (d.get("gate") == "canary" and d.get("kind") == "blocked")
                    else (d.get("written_at") or d.get("ts", "")) if (d.get("gate") == "code-loop" and d.get("kind") in ("dispositions", "recall-miss")) else ""),
          "dispositions": d.get("dispositions") if d.get("kind") == "dispositions" else None,
+         "candidates": d.get("candidates") if d.get("kind") == "dispositions" else None,   # 候選張力題數(2026-09-09)
          "recall_miss": d.get("recall_miss") if d.get("kind") == "recall-miss" else None})
     # 第 6 源:業務簽核留痕(validation:人對業務正確性點頭的日期/人/內容)。
     load(".signoff-log.jsonl", lambda d: {"ts": d.get("ts", ""), "commit": d.get("commit", ""),
@@ -16882,6 +16889,71 @@ def _arch_alignment_hints(added, repo_root, per_file=3):
         return {}
     return {"files": out_files, "idiom_skills": sorted(skills), "questions": list(_ARCH_QUESTIONS)}
 
+
+# ── 可能撞(2026-09-09,Projects/兩席相反時端出張力_計劃 §二)──
+# 架構對齊席要「跟既有一樣」,棧別檢核題要「用比較好的做法」,兩者可能相反。這裡不裁誰對,只端候選:
+# 改動檔的增行命中某題的觸發字、而它的對照檔(同層最像的 3 個既有檔)一個都沒有那個字 → 「這個檔用了鄰居都沒用的做法」。
+_TENSION_MAX_FILES = 20              # 最多處理幾個改動檔(每檔 ≤3 對照檔=最多 60 次讀檔);以改動檔為單位,對照組整組讀完或整組不算(r1 邊界席 B8)
+_TENSION_MAX_BYTES = 2 * 1024 * 1024  # 單個對照檔上限,超過記 unreadable
+
+
+def _tension_read_norm(path):
+    """讀對照檔 → 正規化後的行(同 _stack_norm_line,兩邊對稱);讀不到/非 UTF-8/超過 2 MB → None(記 unreadable)。
+    ★刻意不用本檔慣用的 errors="replace"★(r1 邊界席 B6):候選要分得出「讀到了沒命中」跟「根本沒讀到」,
+    替換成亂碼再比對會把後者偽裝成前者。"""
+    try:
+        if path.stat().st_size > _TENSION_MAX_BYTES:
+            return None
+        raw = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return [n for n in (_stack_norm_line(l) for l in raw.splitlines()) if n is not None]
+
+
+def _tension_candidates_into(arch, added_lines, repo_root):
+    """把候選寫進 arch:arch["tension_candidates"]=[{file, question, patterns, siblings, unreadable}];超過檔數上限加 arch["candidates_truncated"]=True。
+    只看 when(不看 when_raw:鄰居的字串字面比對沒意義);正規化同 _stack_norm_line——區塊註解內不以 * 開頭的裸行會被當程式碼,
+    這是既有適用性判定同一條天花板,兩邊對稱、偏差方向是少一個候選(r1 外家 F1/通才 G4,承認不修)。
+    候選的題必在 stack_questions_applicable:added_lines 跟 changed_lines 過同一道 _stack_changed_ok,增行 ⊂ 增刪行。"""
+    out = []
+    n_files = 0
+    truncated = False
+    for f, sibs in (arch.get("files") or {}).items():
+        lines = added_lines.get(f)
+        if not lines:
+            continue
+        sk = _stack_key_for_file(f, repo_root)
+        if not sk or sk not in _STACK_TRIGGERS:
+            continue
+        norm = [n for n in (_stack_norm_line(l) for l in lines) if n is not None]
+        if not norm:
+            continue
+        if n_files >= _TENSION_MAX_FILES:
+            truncated = True
+            break
+        n_files += 1
+        sib_norm = {s: _tension_read_norm(Path(repo_root) / s) for s in sibs}
+        readable = [s for s in sibs if sib_norm[s] is not None]
+        unreadable = [s for s in sibs if sib_norm[s] is None]
+        if not readable:
+            continue   # 只剩不可讀的對照檔:沒有東西可比,不出候選
+        for qid, pats, _raw in _STACK_TRIGGERS[sk]:
+            novel = []
+            for pat in pats:
+                if not any(pat.search(n) for n in norm):
+                    continue
+                if any(pat.search(n) for s in readable for n in sib_norm[s]):
+                    continue
+                if pat.pattern not in novel:
+                    novel.append(pat.pattern)
+            if novel:
+                out.append({"file": f, "question": qid, "patterns": novel, "siblings": readable, "unreadable": unreadable})
+    if out:
+        arch["tension_candidates"] = out
+    if truncated:
+        arch["candidates_truncated"] = True
+
+
 def _stack_changed_ok(cur_file):
     """這支檔的改動行要不要掃(claims 的代碼形態 regex 與棧別觸發共用,r1 架構對齊席 f2):
     非代碼副檔名不看;審計證物 governance/review-reports/ 不看(2026-08-05:歸檔的席報告/canary 快照 .patch 裡★故意★埋著
@@ -16914,6 +16986,7 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     added = {}
     claims = []
     changed_lines = {}   # {檔: [增行與刪行的內容…]}——只給棧別觸發用(表態閘 S2)
+    added_lines = {}     # {檔: [增行內容…]}——只給「可能撞」候選用(2026-09-09 兩席相反時端出張力:候選看的是新引入,刪行不算)
     cur_file, new_ln, _old_file = "", 0, ""
     for line in r.stdout.splitlines():
         if line.startswith("--- a/"):
@@ -16945,6 +17018,7 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
         added.setdefault(cur_file, set()).add(new_ln)
         if cur_file and _stack_changed_ok(cur_file):
             changed_lines.setdefault(cur_file, []).append(line[1:])
+            added_lines.setdefault(cur_file, []).append(line[1:])   # 同一道 _stack_changed_ok 過濾:簿記檔/審計證物不產生候選(r1 通才 G5)
         code = line[1:]
         # 哪些檔要掃:跟棧別觸發同一支 _stack_changed_ok(r1 架構對齊席 f2:原本這裡內聯一份、那邊再抄一份)
         if (cur_file and _stack_changed_ok(cur_file)
@@ -16983,6 +17057,8 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     # 對每支改動的 code 檔,列同資料夾、同副檔名、最相似檔名的 3 個既有檔當「對照組」;
     # 審查員/編排者拿這三個檔去問「分層與依賴方向 / 命名與錯誤處理 / 有沒有引入第二種做法」。
     arch = _arch_alignment_hints(added, repo_root)
+    if arch:
+        _tension_candidates_into(arch, added_lines, repo_root)   # 可能撞:改動檔新增了對照檔都沒有的做法(只端候選,不判)
 
     # ── Task 4: lint 整合 ─────────────────────────────────────────────────
     config = None if no_lint else _lint_load_config(repo_root)
@@ -17060,6 +17136,14 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
                 print(f"    {f} ← 對照 {', '.join(sibs)}")
             if arch.get("idiom_skills"):
                 print(f"    慣例 skill:{', '.join(arch['idiom_skills'])}(審查員派工時一併附上)")
+            _cands = arch.get("tension_candidates") or []
+            for c in _cands[:6]:   # 比照上面對照檔清單的 [:6](r1 通才 G7)
+                print(f"    可能撞:{c['file']} 新增的 {'/'.join(c['patterns'])} 在對照的 {len(c['siblings'])} 個檔裡都沒出現(這是 {c['question']} 那題的做法)"
+                      "——沿用既有或改用新做法都用 tension 表態,審查席會查兩邊")
+            if len(_cands) > 6:
+                print(f"    …另有 {len(_cands) - 6} 條可能撞,--json 看全量(arch_alignment.tension_candidates)")
+            if arch.get("candidates_truncated"):
+                print(f"    改動檔太多,候選只算了前 {_TENSION_MAX_FILES} 個檔(--json 的 candidates_truncated)")
         print(f"tier: {data['tier']}")
         # ★送審前 impact 鏡頭提示(2026-08-02;Projects/送審前impact鏡頭機械化_計劃 A 案)★
         # 為什麼在這裡:code-loop skill 要求「派 reviewer 前跑 impact --diff 並附 manifest
@@ -19639,6 +19723,8 @@ def _lens_dispositions_lines(lines, rec):
         st = e.get("status")
         tail = (str(e.get("evidence") or "") if st == "satisfied"
                 else (str(e.get("issue") or "") + " " + str(e.get("reason") or "")) if st == "todo"
+                # tension 四欄都給審查席看——反駁的就是這四欄(2026-09-09 兩席相反時端出張力;「｜」分隔是編排者裁的,四欄需要分隔)
+                else (f"選 {e.get('chosen') or ''}｜既有 {', '.join(str(x) for x in (e.get('existing') or []))}｜隱患 {e.get('hazard') or ''}｜建議 {e.get('suggestion') or ''}") if st == "tension"
                 else str(e.get("reason") or ""))   # 全部 str(… or ""):治理帳重建來的紀錄不重驗形狀,缺欄不能炸(r1 正確性席 f3)
         lines.append(f"  {q} {st} — {str(tail)[:200]}")
     if n_auto:
@@ -21149,7 +21235,14 @@ def _gate_failopen(repo_root, gate, why):
 # ── 棧別提問表態閘:表態記錄的寫/讀/驗(Projects/棧別提問表態閘_計劃,2026-09-09)──────────────
 # 白話:diff 命中某棧的「適用題」,推送前每一題要有機器讀得懂的交代——satisfied(附證據)/na(理由)/todo(連 Issue+理由)。
 # 表態是獨立原語(派審查員之前就寫),跟 pass/skip 分開;check 用同一套留痕座標規則解析,錨點一律對被推送 commit 的 git 樹驗。
-_DISP_STATUSES = ("satisfied", "na", "todo")
+_DISP_STATUSES = ("satisfied", "na", "todo", "tension")
+# 第四種表態 tension(張力,2026-09-09 Projects/兩席相反時端出張力_計劃):架構對齊席與棧別檢核題立場相反時,
+# 不挑邊、把兩邊都端上來——既有寫法在哪(existing)、隱患(hazard)、建議(suggestion)、這次選了哪邊(chosen)。
+# 上限是 r1 三席一致抓到的:單題核對沒有中途檢查點,無上限的清單會拖垮推送前 20 秒預算。
+_DISP_CHOSEN = ("existing", "suggested")
+_DISP_EXISTING_MAX = 20     # existing 最多幾項(每項推送前要開 git 樹驗一次)
+_DISP_ITEM_MAX = 300        # existing 單項字數上限
+_DISP_TEXT_MAX = 2000       # hazard / suggestion 字數上限
 _DISP_STRIP_RE = re.compile(r"[\s\W_]")   # 空白+標點(Unicode \w 含 CJK 字,所以 CJK 會留下)
 # CJK 判定沿用檢索那套 _RANK_CJK_RE(單一真相;r3 架構對齊席 A4:檔案裡各寫各的 CJK range 是被抓過的錯)——
 # 只含漢字,假名/諺文走「總長 ≥25」那條。
@@ -21210,7 +21303,7 @@ def _dispositions_validate(d, platforms=None, default_platform=None):
             errs.append(f"{qid}:值要是物件"); continue
         st = ent.get("status")
         if st not in _DISP_STATUSES:
-            errs.append(f"{qid}:status={st!r} 不合法(只認小寫 satisfied/na/todo)"); continue
+            errs.append(f"{qid}:status={st!r} 不合法(只認小寫 satisfied/na/todo/tension)"); continue
         if not str(ent.get("question") or "").strip():
             errs.append(f"{qid}:question 空(樣板會帶原文,別刪)")
         if st == "satisfied":
@@ -21232,6 +21325,53 @@ def _dispositions_validate(d, platforms=None, default_platform=None):
                 errs.append(f"{qid}:todo 要附 issue(Issues/<名>)")
             if not _dispositions_reason_ok(ent.get("reason")):
                 errs.append(f"{qid}:todo 的 reason 太短(同 na 門檻)")
+        if st == "tension":
+            errs.extend(f"{qid}:{e}" for e in _dispositions_tension_shape(ent, platforms, default_platform))
+    return errs
+
+
+def _dispositions_tension_shape(ent, platforms=None, default_platform=None, check_evidence=True):
+    """tension 表態的形狀(寫側與讀側共用同一份規則;讀側對治理帳重建來的紀錄不信形狀,所以再驗一次):
+    chosen 小寫二值;existing 1–20 項 path:line、每項 ≤300 字;hazard/suggestion 過 na 門檻且 ≤2000 字;
+    chosen=suggested 要附 evidence(規則同 satisfied:path:line 或 test:)。回 [錯誤句…],空=合法;只驗形狀,存在性由讀側對 git 樹驗。"""
+    errs = []
+    ch = ent.get("chosen")
+    if ch not in _DISP_CHOSEN:
+        errs.append(f"tension 的 chosen={ch!r} 不合法(只認小寫 existing/suggested:這次改動沿用既有寫法還是改用建議)")
+    ex = ent.get("existing")
+    if not isinstance(ex, list) or not ex:
+        errs.append(f"tension 要附 existing(既有寫法的 path:line 清單,1–{_DISP_EXISTING_MAX} 項;空的等於沒指出既有寫法在哪)")
+    else:
+        if len(ex) > _DISP_EXISTING_MAX:
+            errs.append(f"existing 有 {len(ex)} 項,上限 {_DISP_EXISTING_MAX}(推送前每項都要開 git 樹驗)")
+        for i, item in enumerate(ex[:_DISP_EXISTING_MAX], 1):
+            s = str(item)
+            if len(s) > _DISP_ITEM_MAX:
+                errs.append(f"existing 第 {i} 項超過 {_DISP_ITEM_MAX} 字")
+                continue
+            p, why = _dispositions_split_path_line(s)
+            if p is None:
+                errs.append(f"existing 第 {i} 項 {s!r} 切不開——{why}")
+    for fld in ("hazard", "suggestion"):
+        txt = ent.get(fld)
+        if not _dispositions_reason_ok(txt):
+            errs.append(f"tension 的 {fld} 缺或太短(去空白標點後 CJK ≥10 字或總長 ≥25 字)")
+        elif len(str(txt)) > _DISP_TEXT_MAX:
+            errs.append(f"tension 的 {fld} 超過 {_DISP_TEXT_MAX} 字")
+    if ch == "suggested":
+        ev = str(ent.get("evidence") or "")
+        if not ev:
+            errs.append("chosen=suggested 要附 evidence(這次改動裡採新做法的那一行 path:line,或 test:<名>)")
+        elif not check_evidence:
+            pass   # 讀側:evidence 的切分與存在性交給跟 satisfied 同一條 _ev(有平台索引),這裡只驗有沒有附
+        elif ev.startswith("test:"):
+            ok, why = _dispositions_split_test(ev, platforms or {}, default_platform)
+            if ok is None:
+                errs.append(why)
+        else:
+            p, why = _dispositions_split_path_line(ev)
+            if p is None:
+                errs.append(f"evidence {ev!r} 切不開——{why}")
     return errs
 
 
@@ -21244,6 +21384,8 @@ def _codeloop_dispositions_gov_log(repo_root, branch, head_sha, ts, dispositions
     import datetime as _dt
     ev = {"ts": ts, "commit": head_sha[:7], "gate": "code-loop", "kind": "dispositions", "hard": False, "nodes": [],
           "detail": f"表態 {len(dispositions)} 題", "branch": branch, "head_sha": head_sha, "dispositions": dispositions,
+          # 候選張力的持久分母(2026-09-09 r1 接手席 H3):pitfalls 不留帳,樣板帶的 hint 隨表態存進來,這裡數一次帶 hint 的題
+          "candidates": sum(1 for v in dispositions.values() if isinstance(v, dict) and v.get("hint") and not v.get("auto")),
           # ts 是 HEAD 的 commit 時間(同 pass 留痕慣例),同一顆 sha 重表態兩筆 ts 一樣;written_at 才是事件時間,gov 去重拿它當鑑別子
           "written_at": _dt.datetime.now().astimezone().isoformat(timespec="microseconds")}
     try:
@@ -21437,7 +21579,7 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
     app = pf_data.get("stack_questions_applicable") or {}
     meta = pf_data.get("stack_questions_meta") or {}
     out = {"blocked": False, "gate_mode": cfg["mode"], "applicable": sum(len(v) for v in app.values()),
-           "checked": 0, "problems": [], "warnings": list(cfg["warnings"])}
+           "checked": 0, "problems": [], "warnings": list(cfg["warnings"]), "tensions": []}
     if not app or cfg["mode"] == "off" or (cfg["mode"] == "high-only" and tier != "high"):
         return out
     rec = _codeloop_read_dispositions(repo_root, marker_branch)
@@ -21470,20 +21612,43 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
         if ent.get("auto"):
             return f"{qid} 工具判它適用,但表態是自動填的 na——要人答"
         st = ent.get("status")
-        if st == "satisfied":
-            ev = str(ent.get("evidence") or "")
+
+        def _ev(ev):
+            """satisfied 與 tension(chosen=suggested)的 evidence 同一條驗法:test: 走測試索引+樹 grep,其餘 path:line 對樹驗存在。"""
+            nonlocal pidx
             if ev.startswith("test:"):
                 if cfg_broken:
-                    return f"{qid} 無法驗證 test: 證據:.lumos/config.json 解析失敗(先修設定檔)"
+                    return False, "無法驗證 test: 證據:.lumos/config.json 解析失敗(先修設定檔)"
                 if pidx is None:
                     try:
                         pidx = _platform_test_index(Path(repo_root))
                     except Exception as e:
-                        return f"{qid} 無法驗證 test: 證據:.lumos/config.json 的 platforms 不合法({str(e)[:80]})——先修設定檔"
-                ok2, why2 = _dispositions_check_test(repo_root, at_sha, ev, pidx)
-            else:
-                ok2, why2 = _dispositions_check_path_line(repo_root, at_sha, ev)
+                        return False, f"無法驗證 test: 證據:.lumos/config.json 的 platforms 不合法({str(e)[:80]})——先修設定檔"
+                return _dispositions_check_test(repo_root, at_sha, ev, pidx)
+            return _dispositions_check_path_line(repo_root, at_sha, ev)
+
+        if st == "satisfied":
+            ok2, why2 = _ev(str(ent.get("evidence") or ""))
             return None if ok2 else f"{qid} 證據對不上:{why2}"
+        if st == "tension":
+            # 形狀再驗一次(治理帳重建來的紀錄不信形狀;缺欄 → 該題無法驗證,不炸整份),再對樹驗每個 existing
+            shape = _dispositions_tension_shape(ent, check_evidence=False)
+            if shape:
+                return f"{qid} tension 形狀不對:{shape[0]}"
+            paths = []
+            for item in ent["existing"]:
+                s = str(item)
+                ok2, why2 = _dispositions_check_path_line(repo_root, at_sha, s)
+                if not ok2:
+                    return f"{qid} tension 的 existing 對不上:{why2}"
+                paths.append(s.replace("\\", "/").rsplit(":", 1)[0])
+            if ent.get("chosen") == "suggested":
+                ok2, why2 = _ev(str(ent.get("evidence") or ""))
+                if not ok2:
+                    return f"{qid} tension 的 evidence 對不上:{why2}"
+            out["tensions"].append({"id": qid, "chosen": ent.get("chosen"), "existing": [str(x) for x in ent["existing"]],
+                                    "files": len(set(paths)), "hazard": str(ent.get("hazard") or ""), "suggestion": str(ent.get("suggestion") or "")})
+            return None
         if st == "todo":
             ok2, why2 = _dispositions_check_issue(repo_root, at_sha, str(ent.get("issue") or ""))
             return None if ok2 else f"{qid} 待辦對不上:{why2}"
@@ -21525,6 +21690,10 @@ def _dispositions_template(pf_data, repo_root, branch=None, carry=False):
     if carry and branch:
         rec = _codeloop_read_dispositions(repo_root, branch)
         old = (rec or {}).get("dispositions") or {}
+    # 可能撞的候選(pitfalls 算的,按題目 id 收):有候選的適用題帶一句 hint,提醒人這題可以用 tension 表態
+    cands = {}
+    for c in ((pf_data.get("arch_alignment") or {}).get("tension_candidates") or []):
+        cands.setdefault(c.get("question"), []).append(c)
     for _stk, rows in meta.items():
         for row in rows:
             qid = row["id"]
@@ -21532,8 +21701,14 @@ def _dispositions_template(pf_data, repo_root, branch=None, carry=False):
                 prev = old.get(qid)
                 if carry and isinstance(prev, dict) and not prev.get("auto") and prev.get("status") in _DISP_STATUSES:
                     ent = dict(prev); ent["question"] = row["question"]; ent["carried"] = True
+                    ent.pop("hint", None)   # 舊 hint 是上一輪的候選,不跟著答案走(r1 通才 G6:dict(prev) 整包淺拷貝會帶過來)
                 else:
                     ent = {"status": "", "question": row["question"], "evidence": "", "reason": "", "issue": ""}
+                    if qid in cands:
+                        c = cands[qid][0]
+                        more = f"(另有 {len(cands[qid]) - 1} 個改動檔也命中這題)" if len(cands[qid]) > 1 else ""
+                        ent["hint"] = (f"候選張力:{c.get('file')} 新增 {'/'.join(c.get('patterns') or [])},對照檔 {', '.join(c.get('siblings') or [])} 都沒有"
+                                       f"——刻意沿用既有寫法或刻意改用新做法,status 填 tension{more}")
             else:
                 ent = {"status": "na", "question": row["question"], "auto": True,
                        "reason": "未觸發:" + ", ".join(spec_w for spec_w in (s["when"] for s in _STACK_QUESTION_SPECS[_stk] if s["id"] == qid) for spec_w in spec_w)}
@@ -21776,7 +21951,8 @@ def _cmd_codeloop_dispositions(repo_root, branch, head_sha, ts, disp_file):
             print(f"  - {e}", file=sys.stderr)
         if len(errs) > 10:
             print(f"  …另有 {len(errs) - 10} 處", file=sys.stderr)
-        print("  規則:status 只認小寫 satisfied/na/todo;satisfied 附 evidence(path:line 或 test:<名>);na/todo 附理由(去空白標點後 CJK ≥10 字或總長 ≥25 字);todo 附 issue(Issues/<名>)", file=sys.stderr)
+        print("  規則:status 只認小寫 satisfied/na/todo/tension;satisfied 附 evidence(path:line 或 test:<名>);na/todo 附理由(去空白標點後 CJK ≥10 字或總長 ≥25 字);todo 附 issue(Issues/<名>);"
+              f"tension 附 chosen(existing|suggested)、existing(既有寫法 path:line 清單,1–{_DISP_EXISTING_MAX} 項)、hazard、suggestion(同理由門檻,各 ≤{_DISP_TEXT_MAX} 字),選 suggested 再附 evidence", file=sys.stderr)
         return 2
     ok, why = _codeloop_dispositions_gov_log(repo_root, branch, head_sha, ts, data)
     if not ok:
@@ -21922,6 +22098,21 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                     print(f"  表態閘:{dv['applicable']} 題適用、{dv.get('checked', 0)} 題表態核對過(gate={dv.get('gate_mode')})")
             for _w in ((dv or {}).get("warnings") or []):
                 print(f"  提醒:{_w}")
+            # 張力(2026-09-09 Projects/兩席相反時端出張力_計劃):合法的 tension 不擋,但要讓人看見——OK 與 BLOCKED 都印,走 stderr(提醒慣例)
+            _tens = (dv or {}).get("tensions") or []
+            if _tens:
+                print(f"⚠ 張力 {len(_tens)} 則(兩個審查角度相反——沿用既有寫法還是改用建議做法——工具只端上來、不裁):", file=sys.stderr)
+                for _t in _tens:
+                    _seen, _first = set(), []
+                    for _x in _t.get("existing") or []:
+                        _p = str(_x).replace("\\", "/").rsplit(":", 1)[0]
+                        if _p not in _seen:
+                            _seen.add(_p); _first.append(str(_x))
+                    _side = "沿用既有" if _t.get("chosen") == "existing" else "改用建議"
+                    print(f"  {_t['id']} 選了{_side}:既有寫法在 {', '.join(_first[:3])}(共 {_t.get('files', 0)} 檔)", file=sys.stderr)
+                    print(f"    隱患:{_t.get('hazard', '')}", file=sys.stderr)
+                    print(f"    建議:{_t.get('suggestion', '')}", file=sys.stderr)
+                print("  在意的原因:兩邊都留下來才看得見矛盾;誰讓誰由人定,這裡不擋。", file=sys.stderr)
             if bt is not None:
                 _st = bt.get("status")
                 if _st in ("green", "red"):

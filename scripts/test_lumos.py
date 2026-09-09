@@ -33543,5 +33543,295 @@ def t_usage_scan_smoke():
         shutil.rmtree(root, ignore_errors=True)
 
 
+# ═══ 兩席相反時端出張力(2026-09-09,Projects/兩席相反時端出張力_計劃):第四種表態 tension + pitfalls 候選 + 文件守衛 ═══
+
+
+def _tension_good(q="x", chosen="existing", **over):
+    ent = {"status": "tension", "question": q, "chosen": chosen, "existing": ["app/Screen.kt:3"],
+           "hazard": "循序等待會把兩個互不依賴的網路請求串成兩倍延遲", "suggestion": "改用 coroutineScope 加 async 讓兩個請求並行"}
+    ent.update(over)
+    return {k: v for k, v in ent.items() if v is not None}
+
+
+def t_dispositions_tension_validate():
+    """[張力 S1]寫側:tension 缺欄/大小寫/上限/切不開 → rc2 講哪一欄;合法 → 事件與 marker 都寫、hint 原樣存、candidates 計數;
+    --carry 帶答案不帶 hint;suggested 的 evidence 同 satisfied 認 test:。翻紅釘:把 _dispositions_validate 的 tension 分支拔掉 → ①翻紅。"""
+    import json as _j
+    with tempfile.TemporaryDirectory() as d:
+        _disp_repo(d)
+        P = Path(d); f = P / "disp.json"
+        def w(doc):
+            f.write_text(_j.dumps(doc, ensure_ascii=False), encoding="utf-8")
+            return _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        bad = [
+            ("缺 chosen", _tension_good(chosen=None), "chosen"),
+            ("chosen 大寫", _tension_good(chosen="Existing"), "小寫"),
+            ("缺 existing", _tension_good(existing=None), "existing"),
+            ("existing 空", _tension_good(existing=[]), "existing"),
+            ("existing 不是清單", _tension_good(existing="app/Screen.kt:3"), "existing"),
+            ("existing 21 項", _tension_good(existing=[f"app/Screen.kt:{i + 1}" for i in range(21)]), "20"),
+            ("existing 單項超長", _tension_good(existing=["app/" + "x" * 300 + ".kt:1"]), "300"),
+            ("existing 帶 ..", _tension_good(existing=["../x.kt:1"]), "切不開"),
+            ("hazard 太短", _tension_good(hazard="會慢。"), "太短"),
+            ("suggestion 超長", _tension_good(suggestion="改" * 2001), "2000"),
+            ("suggested 缺 evidence", _tension_good(chosen="suggested"), "evidence"),
+            ("suggested 的 evidence 帶平台前綴(legacy)", _tension_good(chosen="suggested", evidence="test:app:test_scope_cancel"), "沒開多平台"),
+        ]
+        for label, ent, expect in bad:
+            r = w({"kt-coroutines": ent})
+            check(f"①{label} → rc2 且講哪一欄", r.returncode == 2 and expect in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
+        r = w({"kt-coroutines": {"status": "bogus", "question": "x"}})
+        check("①status 錯誤訊息列出四值", "satisfied/na/todo/tension" in r.stderr, r.stderr[-300:])
+        check("①整份形狀壞的規則提示行列 tension 必填欄", "chosen" in r.stderr and "hazard" in r.stderr, r.stderr[-400:])
+        check("①壞形狀一個都沒寫 marker", not (P / "governance" / "code-loop").exists(), "")
+        good = {"kt-coroutines": _tension_good(hint="候選張力:app/Screen.kt 新增 launch"),
+                "kt-compose": {"status": "na", "question": "x", "auto": True, "reason": "未觸發:x"}}
+        r = w(good)
+        check("②合法 tension → rc0", r.returncode == 0, r.stdout + r.stderr)
+        mk = _j.loads((P / "governance" / "code-loop" / "feat__disp.dispositions.json").read_text(encoding="utf-8"))
+        check("②marker 裡 status=tension", mk["dispositions"]["kt-coroutines"]["status"] == "tension", str(mk)[:200])
+        ev = [_j.loads(l) for l in (P / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if '"dispositions"' in l]
+        e = ev[-1]
+        check("②治理帳事件:hint 原樣存、candidates=1", e["dispositions"]["kt-coroutines"].get("hint", "").startswith("候選張力") and e.get("candidates") == 1, str(e)[:300])
+        r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--carry", "--repo", d])
+        tpl = _j.loads(r2.stdout)
+        check("③--carry 帶回 tension 答案、不帶舊 hint", tpl["kt-coroutines"]["status"] == "tension" and tpl["kt-coroutines"].get("carried") is True and "hint" not in tpl["kt-coroutines"], str(tpl.get("kt-coroutines"))[:300])
+        r = w({"kt-coroutines": _tension_good(chosen="suggested", evidence="test:test_scope_cancel")})
+        check("④chosen=suggested 附 test: 證據 → rc0(同 satisfied 規則)", r.returncode == 0, r.stderr[-300:])
+
+
+def t_codeloop_check_tension_warns():
+    """[張力 S2]讀側:existing 指不存在的檔/空清單/缺欄 → BLOCKED 帶 id 與欄名;合法 → 不擋、JSON tensions 帶 files=去重路徑數、
+    stderr 印 ⚠ 張力(OK 與因別題 BLOCKED 都印);suggested 的 evidence 走 satisfied 同分支。翻紅釘:拔掉 _one 的 tension 分支 → ③翻紅。"""
+    import json as _j
+    def w(d, doc):
+        f = Path(d) / "disp.json"; f.write_text(_j.dumps(doc, ensure_ascii=False), encoding="utf-8")
+        return _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+    def chk(d, sha, js=True):
+        a = ["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--repo", d]
+        return _disp_run(a + (["--json"] if js else []))
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        w(d, {"kt-coroutines": _tension_good(existing=["app/Nope.kt:1"])})
+        r = chk(d, sha); v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("①existing 指不存在的檔 → BLOCKED 帶 id 與欄名", r.returncode == 1 and any("kt-coroutines" in p and "existing" in p for p in v["dispositions"]["problems"]), r.stdout[-400:])
+        mk = Path(d) / "governance" / "code-loop" / "feat__disp.dispositions.json"
+        rec = _j.loads(mk.read_text(encoding="utf-8")); rec["dispositions"]["kt-coroutines"]["existing"] = []
+        mk.write_text(_j.dumps(rec, ensure_ascii=False), encoding="utf-8")
+        r = chk(d, sha); v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("②marker 被改成 existing 空清單 → 讀側重驗、BLOCKED", r.returncode == 1 and any("existing" in p for p in v["dispositions"]["problems"]), r.stdout[-400:])
+        rec["dispositions"]["kt-coroutines"] = {"status": "tension", "question": "x", "chosen": "existing", "existing": ["app/Screen.kt:3"]}
+        mk.write_text(_j.dumps(rec, ensure_ascii=False), encoding="utf-8")
+        r = chk(d, sha); v = _j.loads(r.stdout.strip().splitlines()[-1])
+        check("②缺 hazard/suggestion 的紀錄不炸、判無法驗證進 problems", r.returncode == 1 and any("hazard" in p or "suggestion" in p for p in v["dispositions"]["problems"]) and "Traceback" not in r.stderr, r.stdout[-400:] + r.stderr[-200:])
+        w(d, {"kt-coroutines": _tension_good(existing=["app/Screen.kt:3", "app/Screen.kt:1", "README.md:1"])})
+        r = chk(d, sha); v = _j.loads(r.stdout.strip().splitlines()[-1])
+        t = (v.get("dispositions") or {}).get("tensions") or []
+        check("③合法 tension → 不擋;JSON tensions 帶 files=2(去重路徑)、chosen、hazard、suggestion",
+              r.returncode == 0 and len(t) == 1 and t[0]["files"] == 2 and t[0]["chosen"] == "existing" and t[0]["id"] == "kt-coroutines" and t[0]["hazard"] and t[0]["suggestion"], r.stdout[-400:])
+        rh = chk(d, sha, js=False)
+        check("③人可讀:rc0、stderr 印 ⚠ 張力、兩個不同路徑、共 2 檔、隱患/建議/不擋",
+              rh.returncode == 0 and "張力" in rh.stderr and "app/Screen.kt" in rh.stderr and "README.md" in rh.stderr and "共 2 檔" in rh.stderr and "隱患" in rh.stderr and "建議" in rh.stderr and "不擋" in rh.stderr, rh.stderr[-600:])
+        w(d, {"kt-coroutines": _tension_good(chosen="suggested", evidence="test:test_scope_cancel")})
+        r = chk(d, sha)
+        check("④suggested + 樹裡找得到的測試名 → 放行", r.returncode == 0, r.stdout[-300:])
+        (Path(d) / "tests" / "test_new.py").write_text("def test_untracked():\n    pass\n", encoding="utf-8")
+        w(d, {"kt-coroutines": _tension_good(chosen="suggested", evidence="test:test_untracked")})
+        r = chk(d, sha)
+        check("④suggested + 未追蹤測試 → BLOCKED(同 satisfied 的驗法)", r.returncode == 1 and "grep 不到" in r.stdout, r.stdout[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d, kt_body="class VM : ViewModel() {\n    fun load() { viewModelScope.launch(Dispatchers.IO) { repo.fetch() } }\n}\n")
+        w(d, {"kt-coroutines": _tension_good()})   # kt-dispatchers 也適用但沒表態
+        rh = chk(d, sha, js=False)
+        check("⑤因別題 BLOCKED 時仍印 ⚠ 張力", rh.returncode == 1 and "表態不完整" in rh.stderr and "張力" in rh.stderr, rh.stderr[-600:])
+
+
+_TENS_SEQ = "class {n} {{\n    fun run() {{\n        scope.launch {{\n            val a = repo.fetch()\n            val b = repo.other()\n        }}\n    }}\n}}\n"
+_TENS_ASYNC = "class {n} {{\n    fun run() {{\n        scope.launch {{\n            val a = async {{ repo.fetch() }}\n        }}\n    }}\n}}\n"
+
+
+def _cand_repo(files_base, files_change):
+    """base commit 寫 files_base,再一個 commit 套 files_change(值 None=刪檔;bytes=原樣寫)。回 repo 根。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-tens-"))
+    g = lambda *a: sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a], cwd=root, capture_output=True)
+    g("init", "-q", "-b", "main")
+    (root / "README.md").write_text("x\n", encoding="utf-8")
+    for step in (files_base, files_change):
+        for rel, body in step.items():
+            p = root / rel; p.parent.mkdir(parents=True, exist_ok=True)
+            if body is None:
+                p.unlink()
+            elif isinstance(body, bytes):
+                p.write_bytes(body)
+            else:
+                p.write_text(body, encoding="utf-8")
+        g("add", "-A"); g("commit", "-qm", "step")
+    return root
+
+
+def _cand_json(root):
+    import json as _json
+    r = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--json")
+    return _json.loads([l for l in r.stdout.splitlines() if l.strip().startswith("{")][0])
+
+
+def t_pitfalls_tension_candidates():
+    """[張力 S3]候選:改動檔增行命中觸發字、對照檔全沒有 → tension_candidates;對照檔有 → 無;只刪行 → 無;行註解/字串不算、
+    區塊註解裸行算(既有正規化天花板,釘現況);非 UTF-8 對照檔記 unreadable、只剩不可讀不出候選;沒對照組無候選;
+    候選 qid 必適用、簿記路徑不產生候選;人可讀最多 6 行;第 21 個改動檔起不判、candidates_truncated。翻紅釘:拔掉候選計算 → ①翻紅。"""
+    import shutil
+    S = "app/services/"
+    base = {S + f"{n}.kt": _TENS_SEQ.format(n=n) for n in ("A", "B", "C")}
+    root = _cand_repo(base, {S + "D.kt": _TENS_ASYNC.format(n="D")})
+    try:
+        d = _cand_json(root); arch = d.get("arch_alignment") or {}
+        c = arch.get("tension_candidates") or []
+        check("①三個對照檔都沒 async、改動檔新增 async → 恰一條候選(檔/題/pattern/對照 3 檔)",
+              len(c) == 1 and c[0]["file"] == S + "D.kt" and c[0]["question"] == "kt-coroutines" and "\\basync\\b" in c[0]["patterns"] and len(c[0]["siblings"]) == 3 and not c[0].get("unreadable"), str(c)[:400])
+        meta = {row["id"]: row for row in (d.get("stack_questions_meta") or {}).get("kt", [])}
+        check("①候選的 qid 在適用題裡", meta.get("kt-coroutines", {}).get("applicable") is True, str(meta.get("kt-coroutines"))[:200])
+        rh = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root))
+        check("①人可讀印「可能撞」並指到 tension 表態", "可能撞" in rh.stdout and "tension" in rh.stdout and "D.kt" in rh.stdout, rh.stdout[-600:])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    root = _cand_repo({**base, S + "A.kt": _TENS_ASYNC.format(n="A")}, {S + "D.kt": _TENS_ASYNC.format(n="D")})
+    try:
+        arch = _cand_json(root).get("arch_alignment") or {}
+        check("②某個對照檔已經有 async → 沒有候選鍵", "tension_candidates" not in arch, str(arch)[:300])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    root = _cand_repo({**base, S + "D.kt": _TENS_ASYNC.format(n="D")}, {S + "D.kt": _TENS_SEQ.format(n="D")})
+    try:
+        arch = _cand_json(root).get("arch_alignment") or {}
+        check("③只有刪行含 async → 沒有候選", "tension_candidates" not in arch, str(arch)[:300])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    root = _cand_repo(base, {S + "D.kt": "class D {\n    // async { comment only\n    val s = \"async\"\n    fun run() { scope.launch { repo.fetch() } }\n}\n",
+                             S + "E.kt": "/* start of block\n   async { bare line inside block comment\n */\nclass E {\n    fun run() { scope.launch { repo.fetch() } }\n}\n"})
+    try:
+        c = (_cand_json(root).get("arch_alignment") or {}).get("tension_candidates") or []
+        files = sorted(x["file"] for x in c)
+        check("④行註解與字串裡的 async 不算命中(D 無候選);區塊註解內裸行算命中(E 有候選,釘既有天花板)", files == [S + "E.kt"], str(c)[:400])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    root = _cand_repo({S + "A.kt": _TENS_SEQ.format(n="A"), S + "B.kt": _TENS_SEQ.format(n="B"), S + "Z.kt": b"\xff\xfe\x00class Z { launch }\n"},
+                      {S + "D.kt": _TENS_ASYNC.format(n="D")})
+    try:
+        c = (_cand_json(root).get("arch_alignment") or {}).get("tension_candidates") or []
+        check("⑤非 UTF-8 對照檔記 unreadable、其餘可讀且沒 async → 仍是候選", len(c) == 1 and c[0]["unreadable"] == [S + "Z.kt"] and sorted(c[0]["siblings"]) == [S + "A.kt", S + "B.kt"], str(c)[:400])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    root = _cand_repo({S + "Z.kt": b"\xff\xfe\x00class Z { launch }\n"}, {S + "D.kt": _TENS_ASYNC.format(n="D")})
+    try:
+        arch = _cand_json(root).get("arch_alignment") or {}
+        check("⑤只剩不可讀的對照檔 → 不出候選", "tension_candidates" not in arch, str(arch)[:300])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    root = _cand_repo({}, {"lonely/D.kt": _TENS_ASYNC.format(n="D")})
+    try:
+        arch = _cand_json(root).get("arch_alignment") or {}
+        check("⑥沒有對照組的新檔 → 無候選也無 unreadable", "tension_candidates" not in arch and "lonely/D.kt" not in (arch.get("files") or {}), str(arch)[:300])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    G = "governance/review-reports/"
+    root = _cand_repo({G + "A.kt": _TENS_SEQ.format(n="A"), G + "B.kt": _TENS_SEQ.format(n="B")}, {G + "D.kt": _TENS_ASYNC.format(n="D")})
+    try:
+        d = _cand_json(root); arch = d.get("arch_alignment") or {}
+        kt_meta = {row["id"]: row for row in (d.get("stack_questions_meta") or {}).get("kt", [])}
+        check("⑦簿記路徑(審計證物目錄)裡的同樣增行 → 無候選、題也不適用(不變量:候選必適用)",
+              "tension_candidates" not in arch and not kt_meta.get("kt-coroutines", {}).get("applicable"), str(arch)[:200] + str(kt_meta.get("kt-coroutines"))[:200])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # 21 個目錄各自有三個循序對照檔(新檔放同一目錄會互為對照、彼此都有 async,測不到候選)
+    root = _cand_repo({f"app/s{i:02d}/{n}.kt": _TENS_SEQ.format(n=n) for i in range(21) for n in ("A", "B", "C")},
+                      {f"app/s{i:02d}/D.kt": _TENS_ASYNC.format(n="D") for i in range(21)})
+    try:
+        d = _cand_json(root); arch = d.get("arch_alignment") or {}
+        c = arch.get("tension_candidates") or []
+        check("⑧21 個改動檔 → 只判前 20 個(每個對照組整組讀完)、candidates_truncated=true", len(c) == 20 and arch.get("candidates_truncated") is True and all(len(x["siblings"]) == 3 for x in c), f"n={len(c)} trunc={arch.get('candidates_truncated')}")
+        rh = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root))
+        n_lines = sum(1 for l in rh.stdout.splitlines() if "可能撞" in l and "另有" not in l)
+        check("⑧人可讀最多印 6 行、其餘一句「另有 14 條」、截斷印一句", n_lines == 6 and "另有 14 條" in rh.stdout and "只算了前 20 個" in rh.stdout, rh.stdout[-800:])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_dispositions_template_tension_hint():
+    """[張力 S4]樣板:有候選的題帶 hint(改動檔/pattern/對照檔),沒候選的題沒有;帶 hint 的樣板寫入不被拒且進治理帳;--carry 不帶舊 hint。
+    翻紅釘:拔掉樣板的 hint 注入 → ①翻紅。"""
+    import json as _j, shutil
+    S = "app/services/"
+    root = _cand_repo({S + f"{n}.kt": _TENS_SEQ.format(n=n) for n in ("A", "B", "C")}, {S + "D.kt": _TENS_ASYNC.format(n="D")})
+    try:
+        (root / "docs").mkdir(); (root / ".lumos").mkdir()
+        (root / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "python"}), encoding="utf-8")
+        r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", str(root)])
+        tpl = _j.loads(r.stdout)
+        h = tpl["kt-coroutines"].get("hint", "")
+        check("①有候選的題帶 hint(改動檔、pattern、對照檔、指到 tension)", h.startswith("候選張力") and "D.kt" in h and "async" in h and "A.kt" in h and "tension" in h, str(tpl.get("kt-coroutines"))[:400])
+        check("①沒候選的題沒有 hint", "hint" not in tpl["kt-compose"], str(tpl.get("kt-compose"))[:200])
+        tpl["kt-coroutines"].update(_tension_good(existing=[S + "A.kt:4"], question=tpl["kt-coroutines"]["question"]))
+        f = root / "disp.json"; f.write_text(_j.dumps(tpl, ensure_ascii=False), encoding="utf-8")
+        w = _disp_run(["code-loop", "dispositions", str(f), "--repo", str(root)])
+        check("②帶 hint 的樣板原樣寫入 rc0", w.returncode == 0, w.stderr[-300:])
+        ev = [_j.loads(l) for l in (root / "docs" / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if '"dispositions"' in l][-1]
+        check("②hint 進治理帳、candidates=1", ev["dispositions"]["kt-coroutines"].get("hint", "").startswith("候選張力") and ev.get("candidates") == 1, str(ev)[:300])
+        r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--carry", "--repo", str(root)])
+        tpl2 = _j.loads(r2.stdout)
+        check("③--carry 帶答案、不帶舊 hint", tpl2["kt-coroutines"]["status"] == "tension" and "hint" not in tpl2["kt-coroutines"], str(tpl2.get("kt-coroutines"))[:300])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_tension_lens_and_gov():
+    """[張力 S5]派工鏡頭對 tension 印四欄;gov --stats 每題多印「張力 N」與候選數,死題分母含 tension。翻紅釘:拔掉 _lens_dispositions_lines 的 tension 尾巴 → ①翻紅。"""
+    import json as _j, subprocess as _sp, shutil
+    d, v = _mk_lens_bound_repo()
+    try:
+        f = d / "disp.json"
+        f.write_text(_j.dumps({"kt-coroutines": _tension_good(existing=["src/alpha.py:1"])}, ensure_ascii=False), encoding="utf-8")
+        w = _sp.run([sys.executable, GRAPHCTL, "code-loop", "dispositions", str(f), "--repo", str(d)], capture_output=True, text=True)
+        check("⓪tension 表態寫入", w.returncode == 0, w.stderr[-300:])
+        r1 = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
+        t = (_j.loads(r1.stdout.strip().splitlines()[-1]) if r1.stdout.strip() else {}).get("text", "")
+        check("①鏡頭表態段對 tension 印選/既有/隱患/建議四欄", "kt-coroutines tension" in t and "選 existing" in t and "既有 src/alpha.py:1" in t and "隱患" in t and "建議" in t, t[:800])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    def ev(ts, **kw):
+        base = {"ts": ts, "commit": "abc1234", "gate": "code-loop", "kind": "dispositions", "hard": False, "nodes": [], "note": "", "branch": "f", "head_sha": "abc1234" + "0" * 33, "written_at": ts}
+        base.update(kw); return _j.dumps(base, ensure_ascii=False) + "\n"
+    tens = _tension_good(hint="候選張力:x")
+    na = {"status": "na", "question": "q", "reason": "這次只改字串資源沒碰協程"}
+    gov = [ev("2026-09-09T10:00:00+08:00", candidates=1, dispositions={"kt-coroutines": tens})]
+    gov += [ev(f"2026-09-09T11:{i:02d}:00+08:00", candidates=0, dispositions={"cs-async": na}) for i in range(8)]
+    gov += [ev(f"2026-09-09T12:{i:02d}:00+08:00", candidates=0, dispositions={"cs-async": _tension_good(hint=None)}) for i in range(5)]
+    gov += [ev(f"2026-09-09T13:{i:02d}:00+08:00", candidates=0, dispositions={"cs-data": na}) for i in range(10)]
+    root, vault = _stats_fixture("gctl-tens-gov-", gov)
+    try:
+        out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+        check("②每題印張力數與候選數", "kt-coroutines:做到了 0、不適用 0、待辦 0、未觸發自動 0、張力 1、候選題 1(其中答 tension 1)" in out, out[-1500:])
+        cs = [l for l in out.splitlines() if l.strip().startswith("cs-async:")]
+        check("③8 na + 5 tension → 分母含 tension、不標死題", cs and "張力 5" in cs[0] and "死題候選" not in cs[0], str(cs))
+        cd = [l for l in out.splitlines() if l.strip().startswith("cs-data:")]
+        check("③10 na + 0 其他 → 仍標死題候選", cd and "死題候選" in cd[0], str(cd))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def t_tension_doc_sync():
+    """[張力 S6]口徑住在九處文字,漂移守衛釘九處都含「tension」(同 t_marker_doc_sync 形狀;消費端沒 skills/vault → _SrcOnly)。"""
+    repo = Path(__file__).resolve().parent.parent
+    kg = repo / "docs" / "lumos-toolchain-knowledge"
+    files = [repo / "skills" / "lumos-code-loop" / "SKILL.md", repo / "skills" / "lumos-code-loop" / "reference.md",
+             repo / "skills" / "lumos-design-loop" / "templates.md", repo / "skills" / "lumos-project-notes" / "commands" / "06-代碼審與推送.md",
+             kg / "Systems" / "棧別提問表態閘.md", kg / "Systems" / "效能檢核目錄.md", kg / "Systems" / "arch-alignment-lens.md",
+             kg / "Issues" / "架構對齊席與棧別檢核題可能相反.md", kg / "Projects" / "兩席相反時端出張力_計劃.md"]
+    if not all(p.exists() for p in files):
+        raise _SrcOnly("消費端沒有 skills/ 或來源圖譜(非來源 repo),這段沒驗到")
+    for p in files:
+        check(f"drift: tension 在 {p.name}", "tension" in p.read_text(encoding="utf-8"), f"{p} 沒提到 tension")
+
+
 if __name__ == "__main__":
     sys.exit(main())
