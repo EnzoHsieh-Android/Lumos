@@ -190,14 +190,12 @@ So "what rules can't be touched in this project" isn't a question you ask a pers
 
 **Station ② on the map.** Dispatch means: **the same brief goes to several reviewers, each looking from one angle, and their findings get merged.**
 
-<p align="center">
-  <img src="assets/dispatch-en.svg" alt="Dispatch is a DAG: the notes and the diff produce one brief, which fans out to several seats each looking from one angle, then converges through machine intake, a rebuttal seat and a disposal gate, and is written back into the notes" width="900">
-</p>
-
 Two things worth knowing:
 
 - **The most useful line in the brief** is "this rule — say, never charge twice — is the test guarding it still there?" The tool marks it outright: present, pointing at a test that no longer exists, or never bound at all. **The unbound kind, only a person is reading.**
 - **Several people looking separately and agreeing afterwards is evidence; agreeing after copying each other isn't.** That's why no seat sees another's report.
+
+The full dispatch, intake, and disposal-gate diagram is in [the detailed machinery guide](docs/mental-model.md#7-reading-the-detailed-diagrams).
 
 ---
 
@@ -215,23 +213,9 @@ Every review round carries one seat that looks at nothing else. **It doesn't hun
 
 The three layers below look at the code itself:
 
-Before code goes up, three different things look at it. **They catch three different classes of problem — drop one and nobody catches that class.**
+Before code goes up, three different things look at it: **linters** catch known rule violations, **questions** require an explicit position on performance and reliability, and **tests** verify the actual behaviour. Drop one and nobody catches that class.
 
-<p align="center">
-  <img src="assets/review-layers-en.svg" alt="Three layers of code review: linters, per-stack questions, and tests — each one states what it cannot catch" width="900">
-</p>
-
-**1. The linter layer** — the project declares which linters to run; Lumos only reads their output, filters to the lines this change touched, and **folds it into the reviewer's brief**. It can't catch design-level problems: no rule expresses "this coroutine is on the wrong dispatcher" — **that's the next layer's job.**
-
-**2. The questions layer** — each stack carries a list of performance questions it should ask itself (32 across six stacks), and **only the ones you actually touched surface**. Before the push each needs an answer: done (with evidence) / not applicable (with a reason) / not yet (linked issue). It can't judge whether an answer is right — **the tool checks the evidence exists; the review seats from the previous section take over and argue it.**
-
-**3. The tests layer** — the affected contract tests actually run. **This is the backstop**: said right but built wrong is caught here and nowhere else. It can't catch anything no test guards — **there, only the review seats and you remain. That's the real ceiling.**
-
-<p align="center">
-  <img src="assets/stack-gate-en.svg" alt="The journey of one change: the extension identifies the stack, only triggered questions surface, three ways to answer, push and CI block on any missing one" width="900">
-</p>
-
-**A language that isn't on the list doesn't trigger the second layer.** The full "what the tool checks and doesn't" table, and how each language plugs in, are in [the mental model](docs/mental-model.md).
+What each layer cannot catch, when stack questions trigger, and how push and CI connect are in [the detailed machinery guide](docs/mental-model.md#7-reading-the-detailed-diagrams).
 
 > **Honestly: the second layer stops "couldn't be bothered to answer". It does not stop "answered carelessly".** It catches the laziest kind of lie — the rest is on the review seats, and finally on the tests.
 

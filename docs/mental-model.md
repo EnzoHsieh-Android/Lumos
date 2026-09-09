@@ -138,7 +138,39 @@ Claude Code and Codex CLI follow the same path. One install wires up both, and t
 
 ---
 
-## 7. Four design principles
+## 7. Reading the detailed diagrams
+
+### Dispatch: the same material, separate angles
+
+<p align="center">
+  <img src="../assets/dispatch-en.svg" alt="Dispatch is a DAG: notes and the diff produce one brief, fan out to several independent seats, then converge through machine intake, rebuttal, and a disposal gate before being written back" width="900">
+</p>
+
+Dispatch is not copying one prompt to several reviewers. It packages the change, relevant notes, load-bearing rules, and linter results into the same brief, then gives each seat a separate angle. Seats cannot see one another's reports, so copying a conclusion cannot masquerade as agreement.
+
+At intake, the machinery checks that quotes, line numbers, and cited material resolve. Adopted, rejected, and unresolved findings must each have a destination. The next round therefore receives material that has been accounted for, rather than a pile of opinions with no conclusion.
+
+### Three review layers: each has a blind spot
+
+<p align="center">
+  <img src="../assets/review-layers-en.svg" alt="Three layers of code review: linters, per-stack questions, and tests; each states what it cannot catch" width="900">
+</p>
+
+**1. Linters** are declared by the project. Lumos reads their output, filters it to lines this change touched, and folds it into the reviewer brief. They cannot catch design-level mistakes — a coroutine on the wrong dispatcher, for example — so that question belongs to the next layer and the review seats.
+
+**2. Questions** surface only the performance and reliability prompts triggered by the stack you touched. Before push, each needs a position: done (with evidence), not applicable (with a reason), or not yet (with a linked issue). The tool can establish that an answer exists; review seats have to challenge whether it is right.
+
+**3. Tests** actually run the affected contract tests. If the first two layers said the right thing but the implementation is wrong, this is the backstop. Where no test guards a behaviour, only the review seats and human judgement remain.
+
+### The stack gate: ask only what this change triggered
+
+<p align="center">
+  <img src="../assets/stack-gate-en.svg" alt="One change: the extension identifies the stack, only triggered questions surface, answers have three forms, and push and CI block on a missing answer" width="900">
+</p>
+
+The file extension and project configuration determine which stack applies; only its triggered questions appear. A language outside the question table does not activate the second layer. This is not a quality guarantee: it stops "no answer," not "a careless answer" — the latter still needs review and tests.
+
+## 8. Four design principles
 
 - **Zero dependencies** — pure Python standard library. CI runs it directly; nothing to install.
 - **Don't over-govern** — only load-bearing claims get a chain. Soft reminders stay soft. No ceremony without matching value.
