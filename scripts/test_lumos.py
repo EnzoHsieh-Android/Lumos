@@ -318,14 +318,21 @@ def t_scaffold_project():
     dg = proj / "docs" / ".gitignore"
     check("scaffold: docs/.gitignore 與帳檔同層", dg.exists(), "")
     body = dg.read_text(encoding="utf-8") if dg.exists() else ""
-    for name in (".governance-log.jsonl", ".canary-log.jsonl", ".usage-log.jsonl"):
+    for name in (".canary-log.jsonl", ".usage-log.jsonl"):
         check(f"scaffold: docs/.gitignore 含 {name}", name in body, body)
+    # ★治理帳刻意不在忽略清單★(消費專案接入靜默失效 [D]/S6,2026-09-09):它是 CI 唯一讀得到
+    # 代碼審留痕與棧別提問表態的地方,忽略掉的話新專案接 CI 時那條路直接斷(第一個 iOS 專案實地踩到)。
+    check("scaffold: 治理帳不在忽略清單(CI 靠它讀留痕)",
+          all(l.strip() != ".governance-log.jsonl" for l in body.splitlines()), body)
     check("scaffold: vault 內不再放無效 .gitignore", not (kg / ".gitignore").exists(), "")
     import subprocess as _sp
     _sp.run(["git", "init", "-q"], cwd=str(proj))
+    (proj / "docs" / ".canary-log.jsonl").write_text("{}\n", encoding="utf-8")
+    ci = _sp.run(["git", "check-ignore", "-q", "docs/.canary-log.jsonl"], cwd=str(proj))
+    check("scaffold: 本機流水帳真的被 git 忽略", ci.returncode == 0, f"rc={ci.returncode}")
     (proj / "docs" / ".governance-log.jsonl").write_text("{}\n", encoding="utf-8")
-    ci = _sp.run(["git", "check-ignore", "-q", "docs/.governance-log.jsonl"], cwd=str(proj))
-    check("scaffold: 帳檔真的被 git 忽略", ci.returncode == 0, f"rc={ci.returncode}")
+    ci2 = _sp.run(["git", "check-ignore", "-q", "docs/.governance-log.jsonl"], cwd=str(proj))
+    check("scaffold: 治理帳沒有被忽略(進得了版控,CI 才讀得到)", ci2.returncode != 0, f"rc={ci2.returncode}")
 
 
 
@@ -6526,7 +6533,13 @@ def _mk_bound_tests_repo(d, run_cmd='python3 tests/run.py {method}', contract_te
     (d / "tests" / "run.py").write_text(
         "import sys, os\n"
         "m = sys.argv[1] if len(sys.argv) > 1 else ''\n"
-        "red = os.path.exists(os.path.join(os.path.dirname(__file__), 'RED'))\n"
+        "here = os.path.dirname(__file__)\n"
+        "red = os.path.exists(os.path.join(here, 'RED'))\n"
+        "# ★找不到指定的測試要回非零★(消費專案接入靜默失效 [F]):真的測試執行器都這樣,\n"
+        "# 假執行器原本不管傳什麼都回 0,那等於「沒有過濾能力」——閘的冒煙測試會判它不可信。\n"
+        "known = ('t_pay_ok',)   # 這個假 repo 裡真的存在的測試名\n"
+        "if m and m not in known:\n"
+        "    print('no such test', m); sys.exit(2)\n"
         "print('ran', m)\n"
         "sys.exit(1 if red else 0)\n", encoding="utf-8")
     (d / ".lumos").mkdir()
@@ -33837,6 +33850,154 @@ def t_tension_doc_sync():
         raise _SrcOnly("消費端沒有 skills/ 或來源圖譜(非來源 repo),這段沒驗到")
     for p in files:
         check(f"drift: tension 在 {p.name}", "tension" in p.read_text(encoding="utf-8"), f"{p} 沒提到 tension")
+
+
+def t_init_writes_config_skeleton():
+    """[消費專案接入靜默失效 S1]init 產設定骨架:單語言依偵測、多語言走多平台格式、認不出寫說明;
+    骨架標示「推測」;既有設定不覆寫;★產出的必須是合法 JSON★(寫成帶 // 註解的檔會讓整份設定解析失敗)。
+    翻紅釘:把 _STACK_GUESS 的 .swift 拿掉 → ①翻紅。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        for n in range(4):
+            (root / f"F{n}.swift").write_text("import Foundation\n", encoding="utf-8")
+        m._init_config_skeleton(root)
+        cfg = root / ".lumos" / "config.json"
+        data = _j.loads(cfg.read_text(encoding="utf-8"))   # 合法 JSON 才 parse 得動
+        check("①單語言:猜到 swift 的兩個 profile", data.get("test_profile") == "swift-xctest" and data.get("symbol_profile") == "swift", str(data))
+        check("①骨架標示是推測的、要人確認", "_請先確認" in data and "推測" in _j.dumps(data, ensure_ascii=False), str(list(data)))
+        check("①測試指令的形狀含三段式與 {method}", "{method}" in data["test"]["run_cmd"] and data["test"]["run_cmd"].count("/") >= 2, data["test"]["run_cmd"])
+        check("①load_test_profile 讀回來認得 .swift", ".swift" in m.load_test_profile(root).get("exts"), str(m.load_test_profile(root).get("exts")))
+        before = cfg.read_text(encoding="utf-8")
+        m._init_config_skeleton(root)
+        check("②既有設定不覆寫", cfg.read_text(encoding="utf-8") == before, "被覆寫了")
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        for n in range(4):
+            (root / f"A{n}.swift").write_text("x\n", encoding="utf-8")
+            (root / f"B{n}.ts").write_text("x\n", encoding="utf-8")
+        m._init_config_skeleton(root)
+        data = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
+        check("③多語言走多平台格式(不挑一個猜)", "platforms" in data and len(data["platforms"]) >= 2 and "default_platform" in data, str(list(data)))
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / "a.rs").write_text("x\n", encoding="utf-8")
+        m._init_config_skeleton(root)
+        data = _j.loads((root / ".lumos" / "config.json").read_text(encoding="utf-8"))
+        check("④認不出:留空並寫說明,不亂猜", data.get("test_profile") == "" and "_說明" in data, str(data))
+
+
+def t_init_gitignore_matches_design():
+    """[消費專案接入靜默失效 S6]init 的兩份忽略設定要跟設計一致:治理帳★不在★忽略清單(CI 唯一路徑)、
+    本機留痕目錄★要★忽略(per-machine 狀態);既有的不覆寫。翻紅釘:把 governance/.gitignore 那段拿掉 → ②翻紅。"""
+    import subprocess as _sp
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _sp.run(["git", "init", "-q", str(root)])
+        _sp.run([sys.executable, GRAPHCTL, "init", "--name", "x", "--no-hooks"], cwd=str(root), capture_output=True, text=True)
+        docs_ig = (root / "docs" / ".gitignore").read_text(encoding="utf-8")
+        check("①治理帳不在忽略清單(CI 靠它讀留痕與表態)",
+              all(l.strip() != ".governance-log.jsonl" for l in docs_ig.splitlines()), docs_ig)
+        check("①其餘本機流水帳照舊忽略", ".canary-log.jsonl" in docs_ig and ".usage-log.jsonl" in docs_ig, docs_ig)
+        gov_ig = root / "governance" / ".gitignore"
+        check("②本機留痕目錄要忽略(per-machine 狀態不版控)",
+              gov_ig.exists() and "code-loop/" in gov_ig.read_text(encoding="utf-8"), str(gov_ig))
+        gov_ig.write_text("# 我自己的\ncode-loop/\n", encoding="utf-8")
+        _sp.run([sys.executable, GRAPHCTL, "init", "--name", "x", "--no-hooks"], cwd=str(root), capture_output=True, text=True)
+        check("③既有忽略設定不覆寫", "我自己的" in gov_ig.read_text(encoding="utf-8"), gov_ig.read_text(encoding="utf-8"))
+
+
+def t_bound_tests_rejects_unfilterable_cmd():
+    """[消費專案接入靜默失效 S7]★閘不得把「指令回成功」當「測試跑過」★:測試指令對一個不存在的測試名
+    也回 0 → 判 unfilterable、不報綠。這是 2026-09-09 在真 iOS 專案上實測到的假綠(xcodebuild 跑 0 支仍回 0)。
+    翻紅釘:拔掉 _bound_tests_filter_probe 的呼叫 → ②翻紅。"""
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        ok, why = m._bound_tests_filter_probe(root, "true {method}")
+        check("①對不存在的測試名也回 0 → 判不可信", ok is False and "假綠" in why, f"{ok} {why}")
+        ok2, why2 = m._bound_tests_filter_probe(root, "false {method}")
+        check("①回非零 → 判可信(分得出找不到測試)", ok2 is True, f"{ok2} {why2}")
+        ok3, why3 = m._bound_tests_filter_probe(root, "true")
+        check("①沒有 {method} 佔位符 → 整套跑,不在這條判", ok3 is True and "整套" in why3, f"{ok3} {why3}")
+    with tempfile.TemporaryDirectory() as d:
+        dd = _mk_bound_tests_repo(d, run_cmd="python3 tests/always_ok.py {method}")
+        # 這支假執行器不管傳什麼都回 0——就是「沒有過濾能力」的樣子。
+        # ★先建檔再算範圍★:fixture 最後一筆 commit 才是動到 app/pay.py 的那筆,
+        # 新增檔案要塞進同一筆,否則 HEAD~1..HEAD 變成只有這個新檔、固定席落空。
+        (dd / "tests" / "always_ok.py").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+        import subprocess as _sp
+        _sp.run(["git", "add", "-A"], cwd=str(dd))
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"], cwd=str(dd))
+        v = m._bound_tests_check(dd, "HEAD~1..HEAD")
+        check("②端到端:沒有過濾能力的指令 → 不是 green 而是 unfilterable",
+              v["status"] == "unfilterable" and "無法確認測試真的跑過" in v["reason"], str(v)[:220])
+
+
+def t_bound_tests_explains_no_pins():
+    """[消費專案接入靜默失效 S4]零覆蓋不再靜默:三種來源(沒節點引用/沒綁測試/找不到知識庫)各自出聲,
+    而且訊息帶既有關鍵字(否則會被 pre-push 對 code-loop check 輸出的 grep 過濾器吞掉)。
+    翻紅釘:把 _BOUND_ZERO_REASONS 那段印出拿掉 → ②翻紅。"""
+    m = _load_lumos_inproc()
+    check("①四種零覆蓋來源各有一句人話", set(m._BOUND_ZERO_REASONS) == {"no-vault", "no-pins", "no-bound", "diff-unavailable"}, str(list(m._BOUND_ZERO_REASONS)))
+    for k, v in m._BOUND_ZERO_REASONS.items():
+        check(f"①{k} 的說明不是代號、講得出後果或下一步", len(v) > 15 and k not in v, v)
+    with tempfile.TemporaryDirectory() as d:
+        import subprocess as _sp
+        root = Path(d)
+        _sp.run(["git", "init", "-q", str(root)])
+        (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+        _sp.run(["git", "add", "-A"], cwd=str(root))
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"], cwd=str(root))
+        r = _sp.run([sys.executable, GRAPHCTL, "bound-tests", "--diff", "HEAD", "--repo", str(root), "--advisory"], capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        check("②沒有知識庫時真的印出來(不再回 0 不印字)",
+              "受波及合約測試" in out and "找不到知識庫" in out, (out[-200:] or "(空)"))
+        check("②訊息帶 pre-push 過濾器認得的關鍵字", "提醒" in out or "受波及合約測試" in out, (out[-160:] or "(空)"))
+
+
+def t_doctor_profile_mismatch_hint():
+    """[消費專案接入靜默失效 S2]設定的技術棧跟 repo 實際程式碼不符要出聲,★不論值來自預設或設定檔★
+    (寫成「跟預設不符」會被 init 產出的骨架抵銷);相符時不出聲;沒有 repo 時靜默不炸。
+    翻紅釘:把判準改回「只在沒有設定檔時檢查」 → ②翻紅。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        for n in range(4):
+            (root / f"F{n}.swift").write_text("x\n", encoding="utf-8")
+        check("①完全沒設定(吃 C# 預設)+ 一堆 swift → 出聲",
+              any(".swift" in x for x in m._profile_stack_mismatch(root)), str(m._profile_stack_mismatch(root)))
+        (root / ".lumos").mkdir()
+        (root / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "csharp-xunit", "symbol_profile": "csharp"}), encoding="utf-8")
+        check("②設定檔寫死錯的值也要出聲(不是只看預設)",
+              any(".swift" in x for x in m._profile_stack_mismatch(root)), str(m._profile_stack_mismatch(root)))
+        (root / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "swift-xctest", "symbol_profile": "swift"}), encoding="utf-8")
+        check("③設對了 → 不出聲", m._profile_stack_mismatch(root) == [], str(m._profile_stack_mismatch(root)))
+    check("④沒有 repo(vault 不在 git 底下)→ 靜默不炸", m._profile_stack_mismatch(None) == [], "應該回空 list")
+
+
+def t_doctor_about_code_not_linked():
+    """[消費專案接入靜默失效 S3]標了 about_code 的★合約★節點,正文沒寫路徑就出聲(波及計算連不到);
+    ★只唸有合約且綁測試的★(不縮小的話本 repo 會被唸 40 篇、是計劃自訂門檻的四倍);純文件節點不唸。"""
+    v = mkvault()
+    write(v, "Systems/有合約沒連上.md",
+          "type: system\nstatus: done\nabout_code:\n  - app/pay.py\nsummary: |-\n  FLOW:x\n  KEY:★INVARIANT★ 金額不得為負 [test:t_pay_ok] [audit:x/2026-08-22]",
+          body="# A\n這裡不提路徑。\n")
+    write(v, "Systems/有合約有連上.md",
+          "type: system\nstatus: done\nabout_code:\n  - app/ok.py\nsummary: |-\n  FLOW:x\n  KEY:★INVARIANT★ 另一條 [test:t_ok] [audit:x/2026-08-22]",
+          body="# B\n實作在 `app/ok.py`。\n")
+    write(v, "Systems/純文件沒合約.md", "type: system\nstatus: done\nabout_code:\n  - app/doc.py",
+          body="# C\n不提路徑,但也沒有合約。\n")
+    r = run(v, "doctor")
+    # ★只看 S4 那一段★:節點名在健檢別的段落(例如「沒被重新確認」)也會出現,
+    # 用整份 stdout 判「不唸」會被別段的列舉打臉。
+    _sec = r.stdout.split("[S4]", 1)[-1].split("\n[", 1)[0]
+    check("①有合約、正文沒路徑 → 唸它", "有合約沒連上" in _sec, _sec[:400])
+    check("②有合約、正文有路徑 → 不唸", "有合約有連上" not in _sec, _sec[:400])
+    check("③純文件節點 → 不唸(這是把噪音從 40 條壓到 2 條的那一刀)", "純文件沒合約" not in _sec, _sec[:400])
+    check("④建議行講得出後果與做法", "反引號" in _sec and "靜默跳過" in _sec, _sec[:400])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 # r1 intake — 消費專案接入靜默失效(2026-09-09;standard 三席+架構對齊+外家)
 
-preflight-4: ran(新案首輪;材料 r1-snapshot.md 81 行;lint/pitfalls --check/prose-lint/refcheck 皆過)
+preflight-4: ran
+
+(宣告行必須整行只有那幾個字才算數——刻意設計,防照抄模板偽造;說明另起一行)
+新案首輪;材料 r1-snapshot.md 81 行;lint / pitfalls --check / prose-lint / refcheck 四道機械掃描皆過。
 
 ## 席位編制與缺席留痕
 - 外家否決席(Codex gpt-5.6-terra xhigh)★撞 ChatGPT 用量上限,21:27 才重置★——本輪缺席,改派備援 Gemini(scripts/external-seat.sh)。依 2026-08-23 裁定,備援席的 ≥major 不算否決票,但發現本身照樣逐條判讀。

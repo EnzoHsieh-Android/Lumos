@@ -1,6 +1,6 @@
 ---
 type: system
-status: doing
+status: done
 created: 2026-08-22
 updated: 2026-08-22
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
@@ -11,11 +11,13 @@ aliases:
   - 合約測試閘
 tags:
   - type/system
-  - status/doing
+  - status/done
   - scope/guards-gates
 summary: |-
   FLOW:pre-push→code-loop check→impact --diff 固定席→合約行 [test:] 解平台→classify 存在性→逐支 _kill_run→紅/懸空/不合法=BLOCKED
   KEY:★INVARIANT★ code-loop check 對 impact 固定席上合約綁的測試逐支真跑,任一紅/懸空(dangling/fake)/方法名不合法 → blocked=True rc1;沒 run_cmd/diff 算不出/無固定席/沒綁 → 不擋但寫 gate=bound-tests 帳 [test:t_bound_tests_gate] [audit:sonnet/2026-08-22]
+  KEY:★閘不得把「指令回成功」當「測試跑過」★(2026-09-09 消費專案接入靜默失效 [F]):報綠之前先對每個真的用到的測試指令做一次過濾能力冒煙測試——拿故意不存在的測試名跑一次,若也回 0 代表過濾條件沒生效,狀態改 unfilterable 不報綠(結果按 root+指令快取在 ~/.cache/lumos/bound-filter/)。實錘:xcodebuild 的 -only-testing 少寫類別段時跑 0 支測試仍印 TEST SUCCEEDED、退出碼 0,閘因此回報「4 支全綠」 [test:t_bound_tests_rejects_unfilterable_cmd]
+  KEY:零覆蓋不再靜默(同上 [E]):四種來源各自出聲(找不到知識庫/沒節點引用/沒綁測試/算不出範圍),訊息帶「受波及合約測試」關鍵字以通過 pre-push 對 check 輸出的 grep 過濾 [test:t_bound_tests_explains_no_pins]
   KEY:(2026-09-09 表態閘起)pre-push 對每個分支 ref 都叫 check,低風險那一路帶 `--bound-tests-advisory`:紅了只印、寫帳、不擋(2026-09-07 人裁「低風險只提醒」搬進 check 內部執行,不再另呼叫 bound-tests --advisory);高風險不帶旗標,上面那條合約照擋;tag 推送仍走獨立的 bound-tests --advisory [test:t_prepush_computes_impact_once]
   KEY:掛在 check(擋的路徑)不掛 pass——design-loop bound-tests-gate-c r1 架構席抓到的;去重鍵=解析後完整指令(同 kill);超時用 runner 同名 LUMOS_TEST_TIMEOUT,whole-suite 600s(同 kill)
   KEY:逃生門 --skip-bound-tests --note(留痕 kind=skipped);CI 設 LUMOS_SKIP_BOUND_TESTS=1(CI 已跑全套)
@@ -23,7 +25,7 @@ summary: |-
   DEP:[[Systems/guard-kill]]
   TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config/壞設定檔/新分支首推 12 斷言(2026-08-30 機械重數訂正,原記十));本 repo 實跑 42 支 29s
 verified_by:
-  - "[[Verification/2026-08-22_受波及合約測試真跑閘落地]]"
+  - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
 about_code:
   - .github/workflows/ci.yml
   - scripts/hooks/pre-push
