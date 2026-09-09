@@ -177,6 +177,10 @@ More notes are not automatically better. Decisions can expire and tests have ass
 
 **The outer loop: evaluate the process itself, so changes can be compared.**
 
+<p align="center">
+  <img src="assets/evals-overview-en.svg" alt="Record each round, replay and compare results, then calibrate subsequent rounds" width="760">
+</p>
+
 Evals are evaluations. Lumos records review seats, findings, and dispositions, freezes accepted gate verdicts as replay references, and uses weekly replay to check whether rule changes alter earlier outcomes. Retrieval has a separate set of human-labelled questions for comparing algorithm changes.
 
 These records support calibration; they do not guarantee that review quality improves with every round. [Explore the machinery](docs/mental-model.md#6-what-the-review-loop-actually-runs)
