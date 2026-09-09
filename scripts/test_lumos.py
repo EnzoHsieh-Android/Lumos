@@ -33639,6 +33639,12 @@ def t_codeloop_check_tension_warns():
         w(d, {"kt-coroutines": _tension_good(chosen="suggested", evidence="test:test_untracked")})
         r = chk(d, sha)
         check("④suggested + 未追蹤測試 → BLOCKED(同 satisfied 的驗法)", r.returncode == 1 and "grep 不到" in r.stdout, r.stdout[-300:])
+        # code-loop r1 單reviewer R1:設定檔壞掉時「無法驗證…」不得再被外包成「對不上:無法驗證…」(satisfied 與 tension 同一條路)
+        cfgp = Path(d) / ".lumos" / "config.json"; cfg_bak = cfgp.read_text(encoding="utf-8")
+        cfgp.write_text("{broken", encoding="utf-8")
+        r = chk(d, sha); pr = _j.loads(r.stdout.strip().splitlines()[-1])["dispositions"]["problems"]
+        check("④設定檔壞掉 → 訊息以「無法驗證」開頭、不包「對不上:」", r.returncode == 1 and any(p.startswith("kt-coroutines 無法驗證") for p in pr) and not any("對不上:無法驗證" in p for p in pr), str(pr)[:300])
+        cfgp.write_text(cfg_bak, encoding="utf-8")
     with tempfile.TemporaryDirectory() as d:
         sha = _disp_repo(d, kt_body="class VM : ViewModel() {\n    fun load() { viewModelScope.launch(Dispatchers.IO) { repo.fetch() } }\n}\n")
         w(d, {"kt-coroutines": _tension_good()})   # kt-dispatchers 也適用但沒表態

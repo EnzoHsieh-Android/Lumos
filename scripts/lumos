@@ -21627,9 +21627,13 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
                 return _dispositions_check_test(repo_root, at_sha, ev, pidx)
             return _dispositions_check_path_line(repo_root, at_sha, ev)
 
+        def _ev_msg(prefix, why2):
+            """設定檔壞掉那幾條 why 本身就是「無法驗證…」,不再外包「對不上」(code-loop r1 單reviewer R1:包了會變雙重否定)。"""
+            return f"{qid} {why2}" if why2.startswith("無法驗證") else f"{qid} {prefix}:{why2}"
+
         if st == "satisfied":
             ok2, why2 = _ev(str(ent.get("evidence") or ""))
-            return None if ok2 else f"{qid} 證據對不上:{why2}"
+            return None if ok2 else _ev_msg("證據對不上", why2)
         if st == "tension":
             # 形狀再驗一次(治理帳重建來的紀錄不信形狀;缺欄 → 該題無法驗證,不炸整份),再對樹驗每個 existing
             shape = _dispositions_tension_shape(ent, check_evidence=False)
@@ -21641,11 +21645,11 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
                 ok2, why2 = _dispositions_check_path_line(repo_root, at_sha, s)
                 if not ok2:
                     return f"{qid} tension 的 existing 對不上:{why2}"
-                paths.append(s.replace("\\", "/").rsplit(":", 1)[0])
+                paths.append(_dispositions_split_path_line(s)[0])   # 路徑用既有切分函式拿,不手刻(code-loop r1 架構對齊席 A2)
             if ent.get("chosen") == "suggested":
                 ok2, why2 = _ev(str(ent.get("evidence") or ""))
                 if not ok2:
-                    return f"{qid} tension 的 evidence 對不上:{why2}"
+                    return _ev_msg("tension 的 evidence 對不上", why2)
             out["tensions"].append({"id": qid, "chosen": ent.get("chosen"), "existing": [str(x) for x in ent["existing"]],
                                     "files": len(set(paths)), "hazard": str(ent.get("hazard") or ""), "suggestion": str(ent.get("suggestion") or "")})
             return None
@@ -22105,7 +22109,7 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                 for _t in _tens:
                     _seen, _first = set(), []
                     for _x in _t.get("existing") or []:
-                        _p = str(_x).replace("\\", "/").rsplit(":", 1)[0]
+                        _p = _dispositions_split_path_line(str(_x))[0] or str(_x)   # 同一支切分函式(code-loop r1 架構對齊席 A2);切不開的整串當 key
                         if _p not in _seen:
                             _seen.add(_p); _first.append(str(_x))
                     _side = "沿用既有" if _t.get("chosen") == "existing" else "改用建議"
