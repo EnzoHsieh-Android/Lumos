@@ -88,7 +88,9 @@ def scan(project_dir: str, days: int, min_lines: int):
     for f in files:
         seen = set(); first = None; pending_compact = False
         events = []; meta = {}
-        for line in open(f, errors="replace"):
+        with open(f, errors="replace") as _fh:   # code-反面詞 r1 單席 f6:原本裸 open 靠 refcount 關檔
+            lines_ = list(_fh)
+        for line in lines_:
             try:
                 d = json.loads(line)
             except Exception:

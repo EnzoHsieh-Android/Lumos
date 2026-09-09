@@ -32977,6 +32977,16 @@ def t_stack_question_triggers():
         "swift": [("swift-main", "DispatchQueue.global().async { load() }"), ("swift-swiftui", "func tableView(_ t: UITableView, cellForRowAt i: IndexPath) -> UITableViewCell {"), (None, "let n = 3")],
         "node": [("node-eventloop", "const cp = require('child_process')"), ("node-data", 'db.query("SELECT * FROM t", cb)'), (None, "const r = items.map(f)")],
     }
+    # 看字串只限 when_raw 那幾條(code-反面詞 r1 單席 f1):log/錯誤訊息裡的關鍵字不能變假命中;SQL 字串要長得像 SQL
+    for _stk, _line, _bad in [("cs", 'logger.LogError("SELECT query failed, retrying");', "cs-data"),
+                              ("node", 'console.log("remember to call JSON.parse on the config")', "node-eventloop"),
+                              ("node", 'throw new Error("db.query failed, check createPool settings")', "node-data"),
+                              ("swift", "override func viewDidLoad() { super.viewDidLoad() }", "swift-swiftui"),
+                              ("cs", "response.Body.Open();", "cs-connection"),
+                              ("sql", "SELECT dbo.fn_TotalTrim(name) FROM Users", "sql-sargable")]:
+        _a, _m = m._stack_applicability({_stk: [_line]}, 300)
+        _got = {r["id"] for r in _m[_stk] if r["applicable"]}
+        check(f"③假命中不回來:{_line[:34]} 不亮 {_bad}", _bad not in _got, str(_got))
     for _stk, rows_ in _legacy.items():
         for _qid, _line in rows_:
             _a, _m = m._stack_applicability({_stk: [_line]}, 300)
