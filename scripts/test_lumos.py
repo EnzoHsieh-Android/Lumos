@@ -33464,5 +33464,57 @@ def t_gov_stats_dispositions():
         shutil.rmtree(root2, ignore_errors=True)
 
 
+def t_usage_scan_smoke():
+    """scripts/usage_scan.py(2026-09-09 Spotify shunt 調研的唯讀儀器)四個必須對的地方:
+    ①同一 message.id 分成多行(逐字稿一個 content block 一行)只算一次請求——不去重會把 context 帳多算一倍;
+    ②Read ≥門檻行數的檔算進「大檔讀取」、Bash cat 類算進 bash_read;
+    ③壓縮標記把駐留計數歸零;④逐字稿目錄不存在 rc2 而非 traceback。
+    翻紅釘:把 scan() 裡 `if mid in seen: continue` 拿掉 → ①翻紅。"""
+    import importlib.util, json as _j, subprocess as _sp, tempfile as _tf, shutil
+    from pathlib import Path as _P
+    repo = _P(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("usage_scan_fx", repo / "scripts" / "usage_scan.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    root = _P(_tf.mkdtemp(prefix="usage-scan-"))
+    try:
+        big = root / "big.py"; big.write_text("x = 1\n" * 400, encoding="utf-8")
+        small = root / "small.py"; small.write_text("y = 2\n" * 10, encoding="utf-8")
+        pd = root / "proj"; pd.mkdir()
+        def asst(mid, content, usage):
+            return {"type": "assistant", "message": {"id": mid, "content": content, "usage": usage}}
+        def res(tid, text):
+            return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": text}]}}
+        u1 = {"input_tokens": 10, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 5, "output_tokens": 3}
+        lines = [
+            asst("m1", [{"type": "text", "text": "hi"}], u1),
+            asst("m1", [{"type": "tool_use", "id": "tu1", "name": "Read", "input": {"file_path": str(big)}}], u1),  # 同 id 第二行
+            res("tu1", "A" * 2000),
+            asst("m2", [{"type": "tool_use", "id": "tu2", "name": "Bash", "input": {"command": f"cat {small}"}}],
+                 {"input_tokens": 1, "cache_read_input_tokens": 300, "cache_creation_input_tokens": 0, "output_tokens": 1}),
+            res("tu2", "B" * 1000),
+            {"type": "summary", "isCompactSummary": True},
+            asst("m3", [{"type": "text", "text": "after"}],
+                 {"input_tokens": 1, "cache_read_input_tokens": 50, "cache_creation_input_tokens": 0, "output_tokens": 1}),
+        ]
+        (pd / "s.jsonl").write_text("".join(_j.dumps(x, ensure_ascii=False) + "\n" for x in lines), encoding="utf-8")
+        r = m.scan(str(pd), 14, 350)
+        check("①同 message.id 多行只算一次請求(3 不是 4)", len(r["prompts"]) == 3, str(r["prompts"]))
+        check("①cache_read 總量不重複計(450)", r["tot"]["cache_read"] == 450, str(r["tot"]))
+        check("②Read 400 行檔算大檔:2000 字元/1 次", r["read_big"] == [2000, 1], str(r["read_big"]))
+        check("②Bash cat 算進 bash_read:1000 字元/1 次", r["bash_read"] == [1000, 1], str(r["bash_read"]))
+        check("③壓縮標記被數到", r["compact_markers"] == 1, str(r["compact_markers"]))
+        # 駐留:tu1 之後同段內只有 m2 一次請求(m3 在壓縮後)→ Read 駐留 = 2000×1;tu2 之後同段 0 次
+        check("③壓縮後駐留歸零(Read 駐留=2000,Bash 駐留=0)",
+              r["by_tool_res"]["Read"] == 2000 and r["by_tool_res"]["Bash"] == 0, str(dict(r["by_tool_res"])))
+        out = m.report(r, 14, 350, 5)
+        check("報告帶白話段標與門檻數字", "≥350 行大檔" in out and "2,000 字元 / 1 次" in out, out[-600:])
+        rc = _sp.run([sys.executable, str(repo / "scripts" / "usage_scan.py"), "--project-dir", str(root / "nope")],
+                     capture_output=True, text=True)
+        check("④目錄不存在 rc2、訊息給 --project-dir 指引、無 traceback",
+              rc.returncode == 2 and "--project-dir" in rc.stderr and "Traceback" not in rc.stderr, rc.stderr[-300:])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 if __name__ == "__main__":
     sys.exit(main())

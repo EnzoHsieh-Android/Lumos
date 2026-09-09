@@ -1,0 +1,68 @@
+逐字稿:21 個 session,14 天內有動;去重後請求 12,482 次;壓縮點 23 次
+
+A. context 大小(每次請求送進模型的 token;快取讀取也算,因為每輪都要再讀一次)
+   總量 input=254,239 cache_read=6,226,475,448 cache_create=74,834,584 output=15,644,901
+   每次請求 p50=486,176 p90=879,711 max=999,860 平均=504,852
+   session 第一次請求(=固定底盤:系統提示+CLAUDE.md+skill+記憶)p50=44,036 max=72,784
+   壓縮後第一次請求 p50=75,479 max=93,429(n=23)
+   token 量按 context 大小分桶:<100k 1%  100-200k 3%  200-400k 15%  >=400k 81%
+   → 桶越靠右佔比越高,代表成本主要來自「session 拉得很長、context 很大」,而不是單筆輸出很大。
+
+B. 工具輸出直接進 context 的字元(≈ token×4;這是 Spotify shunt 省的那種)
+   合計 11,228,580 字元(≈2,807,145 token);模型自己的輸出(文字+工具參數)=15,956,075 字元
+   Bash                     8,765,197 字元  78.1%  10,628 次  駐留佔比  85.9%
+   Agent                    1,642,329 字元  14.6%     865 次  駐留佔比   7.2%
+   WebSearch                  287,926 字元   2.6%      98 次  駐留佔比   2.6%
+   Read                       198,074 字元   1.8%      73 次  駐留佔比   0.7%
+   WebFetch                   121,819 字元   1.1%      68 次  駐留佔比   1.1%
+   Edit                        49,590 字元   0.4%     285 次  駐留佔比   0.5%
+   Write                       36,908 字元   0.3%     190 次  駐留佔比   0.3%
+   ListAgents                  34,808 字元   0.3%      19 次  駐留佔比   0.5%
+
+C. 駐留成本(字元 × 之後同一壓縮段內還有幾次請求)——誰真的貴
+   模型自身輸出 6,410,960,062  vs  全部工具輸出 4,863,762,227  → 比值 1.32
+   → 比值 >1 代表模型自己寫的東西(長腳本、長回覆)比工具吐回來的更佔 context。
+   Bash 指令家族(直接字元 / 次數 / 平均 / 駐留佔比):
+   cd                          3,873,123  5012 次 平均    772  駐留 45.9%
+   sed                         1,113,310   571 次 平均  1,949  駐留 13.6%
+   python3 script/-c             920,910  1554 次 平均    592  駐留  9.0%
+   grep                          538,767   627 次 平均    859  駐留  5.9%
+   echo                          411,233   334 次 平均  1,231  駐留  3.9%
+   cat                           307,185   391 次 平均    785  駐留  3.4%
+   for                           166,308   114 次 平均  1,458  駐留  1.7%
+   ls                            129,416   147 次 平均    880  駐留  1.3%
+   set                           119,030    97 次 平均  1,227  駐留  0.6%
+   tail                          111,661   205 次 平均    544  駐留  1.2%
+   -n                            101,781    63 次 平均  1,615  駐留  1.0%
+   wc                             68,481    41 次 平均  1,670  駐留  1.0%
+   lumos search                   61,871    27 次 平均  2,291  駐留  1.2%
+   lumos quote-check              60,746    44 次 平均  1,380  駐留  1.0%
+   test_lumos.py                  55,771   169 次 平均    330  駐留  0.7%
+   lumos show                     51,105    15 次 平均  3,407  駐留  1.0%
+   head                           47,400    36 次 平均  1,316  駐留  0.4%
+   git add                        46,507    94 次 平均    494  駐留  0.5%
+   awk                            39,616    25 次 平均  1,584  駐留  0.5%
+   mkdir                          28,290    52 次 平均    544  駐留  0.4%
+   單筆大小分布(看有沒有「一筆就很大」的輸出):
+   Bash         n= 10628 max= 16,925 p50=   371 p90= 2,120 p99= 6,596 >10k=29
+   Agent        n=   865 max= 19,315 p50= 1,068 p90= 2,975 p99=15,827 >10k=36
+   WebSearch    n=    98 max=  7,107 p50= 3,114 p90= 3,713 p99= 7,107 >10k=0
+   Read         n=    73 max= 37,103 p50=   217 p90= 6,805 p99=37,103 >10k=7
+   WebFetch     n=    68 max=  7,754 p50= 1,585 p90= 3,003 p99= 7,754 >10k=0
+   Edit         n=   285 max=    401 p50=   167 p90=   195 p99=   340 >10k=0
+
+D. 讀檔命中 ≥350 行大檔(Spotify 的擋檔門檻)
+   Read 工具:≥350 行 97,309 字元 / 50 次;<350 行 96,362 字元 / 19 次;檔已不在 4,403
+   Bash cat/sed -n/head/tail:803,520 字元 / 659 次(平均 1,219;小=已經是定點讀)
+   大檔讀取佔全部工具輸出:0.87%  ← 這個數字小,擋檔 hook 就沒得省
+   Read 最花的檔(字元 / 次數 / 行數):
+       88,340  19x 行數= 23708  ~/harness/lumos-toolchain/scripts/lumos
+       37,103   1x 行數=    57  /private/tmp/claude-501/-Users-enzo-harness-lumos-toolchain/dd1cfb7c-d0fe-47bf-bf9f-47bd0802cb5e/tasks/a0b45fb420a3a14cf.output
+       14,449   1x 行數=   118  ~/harness/lumos-toolchain/governance/reports/world-governance-scan-2026-09-02.md
+       12,359   1x 行數=   132  ~/harness/lumos-toolchain/docs/design/2026-07-02-anchor-integrity.md
+       11,067   1x 行數=    88  ~/harness/lumos-toolchain/governance/autonomous_loop/orchestrator-prompt.md
+        5,458   1x 行數= 33468  ~/harness/lumos-toolchain/scripts/test_lumos.py
+        5,408   3x 行數=   318  ~/harness/lumos-toolchain/skills/lumos-design-loop/templates.md
+        4,986   1x 行數=   112  ~/harness/lumos-toolchain/governance/autonomous_loop/cross_audit.py
+        4,587   1x 行數=    45  ~/.claude/projects/-Users-enzo-harness-lumos-toolchain/memory/MEMORY.md
+        3,824   1x 行數=    -1  ~/harness/lumos-toolchain/.claude/worktrees/handoff-view/docs/lumos-toolchain-knowledge/Projects/接手視圖_計劃.md
