@@ -156,7 +156,7 @@ At intake, the machinery checks that quotes, line numbers, and cited material re
   <img src="../assets/review-layers-en.svg" alt="Three layers of code review: linters, per-stack questions, and tests; each states what it cannot catch" width="900">
 </p>
 
-**1. Linters** are declared by the project. Lumos reads their output, filters it to lines this change touched, and folds it into the reviewer brief. They cannot catch design-level mistakes — a coroutine on the wrong dispatcher, for example — so that question belongs to the next layer and the review seats.
+**1. Linters** are declared by the project. Lumos reads their output, filters it to lines this change touched, and folds it into the reviewer brief. Their coverage depends on the configured rules; design and context-dependent mistakes also need questions and review seats.
 
 **2. Questions** surface only the performance and reliability prompts triggered by the stack you touched. Before push, each needs a position: done (with evidence), not applicable (with a reason), or not yet (with a linked issue). The tool can establish that an answer exists; review seats have to challenge whether it is right.
 
@@ -170,9 +170,39 @@ At intake, the machinery checks that quotes, line numbers, and cited material re
 
 The file extension and project configuration determine which stack applies; only its triggered questions appear. A language outside the question table does not activate the second layer. This is not a quality guarantee: it stops "no answer," not "a careless answer" — the latter still needs review and tests.
 
+<a id="7-four-design-principles"></a>
+
 ## 8. Four design principles
 
 - **Zero dependencies** — pure Python standard library. CI runs it directly; nothing to install.
 - **Don't over-govern** — only load-bearing claims get a chain. Soft reminders stay soft. No ceremony without matching value.
 - **An honest ceiling** — the tool proves form, not business correctness. What it can't say, it says it can't say.
 - **The author doesn't get to judge** — where there's no right answer, the call goes to an independent AI that wasn't told the backstory.
+
+## 9. Visual reference
+
+The README keeps the overview and first-use flow. These illustrations provide additional detail; conversations and outputs are explanatory examples, not results from this run.
+
+### From a request to tool operations
+
+Requests map to retrieval and write-back operations. You do not need to memorize the CLI first.
+
+<p align="center">
+  <img src="../assets/usage-en.svg" alt="From a request to tool operations" width="900">
+</p>
+
+### How a note carries rules and evidence
+
+Structured fields support retrieval; the body preserves reasoning and limits. A contract marker and a test link do not guarantee business correctness.
+
+<p align="center">
+  <img src="../assets/note-anatomy-en.svg" alt="How a note carries rules and evidence" width="900">
+</p>
+
+### From a file to related notes
+
+The query returns registered associations as a starting point for investigation. Dependencies absent from the results may still exist.
+
+<p align="center">
+  <img src="../assets/impact-en.svg" alt="From a file to related notes" width="900">
+</p>
