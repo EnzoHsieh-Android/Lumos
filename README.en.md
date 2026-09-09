@@ -45,10 +45,10 @@ Two things in this diagram are worth pausing on:
 
 ---
 
-**Understand it** &nbsp;[What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian) · [The loop that gets sharper](#the-loop-that-gets-sharper) · [Code review has three layers](#code-review-here-has-three-layers)<br>
+**Understand it** &nbsp;[What's in a note](#whats-in-a-note) · [How this differs from Obsidian](#how-this-differs-from-obsidian)<br>
 **Is it for you** &nbsp;[Who this is for](#who-this-is-for) · [Why plain language](#why-plain-language)<br>
 **Use it** &nbsp;[Getting it installed](#getting-it-installed) · [Your first time through](#your-first-time-through)<br>
-**Beyond that** &nbsp;[Why this exists](#why-this-exists) · [Going deeper](#going-deeper) · [Scope](#scope) · [Licence](#licence)
+**Beyond that** &nbsp;[The loop that gets sharper](#the-loop-that-gets-sharper) · [Code review has three layers](#code-review-here-has-three-layers) · [Why this exists](#why-this-exists) · [Scope](#scope) · [Going deeper](#going-deeper) · [Licence](#licence)
 
 ---
 
@@ -132,87 +132,6 @@ To close it in one line: **the primary reader of these notes isn't a human — i
 
 ---
 
-## The loop that gets sharper
-
-**This is where Lumos parts ways with "a really well-written document".** A document is at its most accurate the day it is finished, and only decays from there. This runs the other way: every round, the material gets a little sharper.
-
-<p align="center">
-  <img src="assets/loop-en.svg" alt="The graph feeds each review; each review writes back into the graph" width="900">
-</p>
-
-The four stages run in order, and the last one is the point: **what gets accounted for is written back into the graph, and becomes the next round's material.**
-
-**Notes aren't the final output; they're the next round's input.** Round one might hand a reviewer three notes; round five hands them eight — and all eight earned their place in earlier rounds; nobody threw them in from memory.
-
-Same reviewers, same time budget. **The only thing that changed is the quality of what they were handed.**
-
-> **The honest limit:** what a machine can prove is *form* — that a test exists, that a rollback is written, that someone independent reviewed it, that every finding was accounted for.
-> Whether a rule still matches the business, or whether that rollback would actually run — **only a person can answer that.** Don't read "has evidence attached" as "safe".
-
----
-
-## Code review here has three layers
-
-Before code goes up, three different things look at it. **They catch three different classes of problem — drop one and nobody catches that class.**
-
-<p align="center">
-  <img src="assets/review-layers-en.svg" alt="Three layers of code review: linters, per-stack questions, and tests — each one states what it cannot catch" width="900">
-</p>
-
-### 1. The linter layer
-
-**The project declares which linters to run; Lumos only reads their output.** It ships no rules of its own for any language, and doesn't install or manage anything — **the rule library belongs to the community, and rebuilding one would be pointless.**
-
-What it does add is two things nobody else does:
-
-- **Filters down to the lines this change actually touched**, rather than handing over a full report.
-- **Folds the result into the reviewer's brief**, so a reviewer sees what the linter said from the first line, without running anything.
-
-**What it can't catch**: design-level problems. No linter rule expresses "this coroutine is on the wrong dispatcher".
-
-### 2. The questions layer
-
-This is the layer that fills that hole: **each stack carries a list of questions it should ask itself** — six stacks (Kotlin, C#, Vue, SQL, Swift, Node), 32 questions, each with its own trigger words.
-
-**It only asks what you actually touched.** The triggers are matched against the lines this change added or removed; the rest are logged as not-triggered — **handing over all 32 is the same as handing over none; people skim past it.**
-
-<p align="center">
-  <img src="assets/stack-gate-en.svg" alt="The journey of one change: the extension identifies the stack, only triggered questions surface, three ways to answer, push and CI block on any missing one" width="900">
-</p>
-
-Before the push, every one needs an answer — one of three: **done** (with evidence: which file and line, or which test guards it), **not applicable** (with a reason), **not yet** (linked to an open issue). **One missing answer blocks the push, regardless of risk tier.**
-
-**The tool's limits have to be spelled out, or this reads as "the machine guarantees quality":**
-
-| You said | The tool checks | The tool **doesn't** check |
-|---|---|---|
-| Done, see this line | The file exists, the line is in range | **Whether that line actually solves it** |
-| Done, there's a test | The test is findable | **Whether that test has any teeth** |
-| Not applicable | A reason was written | **Whether the reason holds** |
-| Not yet | The issue exists and is open | **Whether it will ever get done** |
-
-**Whether an answer is right, the tool does not judge at all.** Those answers get attached to the reviewers' briefs — **what the review seats argue with is exactly these answers.**
-
-### 3. The tests layer
-
-**The affected contract tests actually run before the push.** Red is red — **another review record will not fix a failing test.**
-
-**This is the backstop**: said right but built wrong is caught here and nowhere else.
-
-**What it can't catch**: anything no test guards. There, you're back to the first two layers and your own judgement.
-
-### Switching language changes one box, not the path
-
-The whole path is shared. **The only per-language difference is the first box**: the extension identifies the stack, and that stack's questions come out. `.ts` and `.js` check the project config to tell frontend from backend.
-
-**A language that isn't on the list simply doesn't trigger the second layer** — Python itself isn't on it. There you're left with the linter layer and the tests. A project easing into this can also set that layer to high-risk-only, or turn it off.
-
-> **Honestly: the second layer stops "couldn't be bothered to answer". It does not stop "answered carelessly".**
-> Write "not applicable" with a bogus reason and the tool can't tell; cite a test that doesn't cover the point and it can't tell either.
-> **It catches the laziest kind of lie — the rest is on the review seats, and finally on the tests.**
-
----
-
 ## Who this is for
 
 **A fit if:**
@@ -253,15 +172,6 @@ Develop in plain language and all three invert: you handle the decisions, the re
 
 ## Getting it installed
 
-### The project already uses Lumos
-
-```bash
-git clone <your-project> && cd <your-project>
-python3 scripts/lumos bootstrap
-```
-
-One line: Lumos itself, the operating manual the AI reads, the global command, and the git checks. Then **restart your Claude Code or Codex conversation** — some of the prompting loads at session start.
-
 ### Adding it to a new project
 
 Run this from inside your project directory:
@@ -275,6 +185,15 @@ It asks "turn this directory into a lumos project? [y/N]" — press `y`.
 - **The default is N**, so if you're standing in the wrong directory (your dotfiles, say), Enter skips it. No accidental installs.
 - Don't want to pipe a remote script blind? `curl -fsSL <url> -o get.sh`, read it, then run it.
 - Non-interactive environments like CI: append `-s -- --init` to create it without asking.
+
+### The project already uses Lumos
+
+```bash
+git clone <your-project> && cd <your-project>
+python3 scripts/lumos bootstrap
+```
+
+One line: Lumos itself, the operating manual the AI reads, the global command, and the git checks. Then **restart your Claude Code or Codex conversation** — some of the prompting loads at session start.
 
 ### Did it install?
 
@@ -349,6 +268,102 @@ Pick one:
 
 ---
 
+## The loop that gets sharper
+
+**This is where Lumos parts ways with "a really well-written document".** A document is at its most accurate the day it is finished, and only decays from there. This runs the other way: every round, the material gets a little sharper.
+
+<p align="center">
+  <img src="assets/loop-en.svg" alt="The graph feeds each review; each review writes back into the graph" width="900">
+</p>
+
+The four stages run in order, and the last one is the point: **what gets accounted for is written back into the graph, and becomes the next round's material.**
+
+**Notes aren't the final output; they're the next round's input.** Round one might hand a reviewer three notes; round five hands them eight — and all eight earned their place in earlier rounds; nobody threw them in from memory.
+
+Same reviewers, same time budget. **The only thing that changed is the quality of what they were handed.**
+
+### The dispatch step is a DAG
+
+"Attach the relevant notes to the reviewers" sounds simple. What actually happens is **one brief fanning out to several seats, then converging back to a single verdict**.
+
+<p align="center">
+  <img src="assets/dispatch-en.svg" alt="Dispatch is a DAG: the notes and the diff produce one brief, which fans out to several seats each looking from one angle, then converges through machine intake, a rebuttal seat and a disposal gate, and is written back into the notes" width="900">
+</p>
+
+Three things worth pointing at:
+
+- **The most useful thing in the brief is the state of the test bound to each rule** — guarded, pointing at nothing, fake evidence, or **not bound at all**. That last kind no gate covers, so **a person is the only thing reading it — read it first.**
+- **Seats work independently and never see each other's reports.** That isn't politeness — **"several seats said the same thing" only counts as evidence if they didn't copy each other.**
+- **Converging isn't voting.** Machine intake goes first (does the quote resolve, does the line exist), then a rebuttal seat argues each severe finding, and finally every finding must have an outcome — **adopted into the draft, or rejected with a written reason.**
+
+
+> **The honest limit:** what a machine can prove is *form* — that a test exists, that a rollback is written, that someone independent reviewed it, that every finding was accounted for.
+> Whether a rule still matches the business, or whether that rollback would actually run — **only a person can answer that.** Don't read "has evidence attached" as "safe".
+
+---
+
+## Code review here has three layers
+
+Before code goes up, three different things look at it. **They catch three different classes of problem — drop one and nobody catches that class.**
+
+<p align="center">
+  <img src="assets/review-layers-en.svg" alt="Three layers of code review: linters, per-stack questions, and tests — each one states what it cannot catch" width="900">
+</p>
+
+### 1. The linter layer
+
+**The project declares which linters to run; Lumos only reads their output.** It ships no rules of its own for any language, and doesn't install or manage anything — **the rule library belongs to the community, and rebuilding one would be pointless.**
+
+What it does add is two things nobody else does:
+
+- **Filters down to the lines this change actually touched**, rather than handing over a full report.
+- **Folds the result into the reviewer's brief**, so a reviewer sees what the linter said from the first line, without running anything.
+
+**What it can't catch**: design-level problems. No linter rule expresses "this coroutine is on the wrong dispatcher".
+
+### 2. The questions layer
+
+This is the layer that fills that hole: **each stack carries a list of questions it should ask itself** — six stacks (Kotlin, C#, Vue, SQL, Swift, Node), 32 questions, each with its own trigger words.
+
+**It only asks what you actually touched.** The triggers are matched against the lines this change added or removed; the rest are logged as not-triggered — **handing over all 32 is the same as handing over none; people skim past it.**
+
+<p align="center">
+  <img src="assets/stack-gate-en.svg" alt="The journey of one change: the extension identifies the stack, only triggered questions surface, three ways to answer, push and CI block on any missing one" width="900">
+</p>
+
+Before the push, every one needs an answer — one of three: **done** (with evidence: which file and line, or which test guards it), **not applicable** (with a reason), **not yet** (linked to an open issue). **One missing answer blocks the push, regardless of risk tier.**
+
+**The tool's limits have to be spelled out, or this reads as "the machine guarantees quality":**
+
+| You said | The tool checks | The tool **doesn't** check |
+|---|---|---|
+| Done, see this line | The file exists, the line is in range | **Whether that line actually solves it** |
+| Done, there's a test | The test is findable | **Whether that test has any teeth** |
+| Not applicable | A reason was written | **Whether the reason holds** |
+| Not yet | The issue exists and is open | **Whether it will ever get done** |
+
+**Whether an answer is right, the tool does not judge at all.** Those answers get attached to the reviewers' briefs — **what the review seats argue with is exactly these answers.**
+
+### 3. The tests layer
+
+**The affected contract tests actually run before the push.** Red is red — **another review record will not fix a failing test.**
+
+**This is the backstop**: said right but built wrong is caught here and nowhere else.
+
+**What it can't catch**: anything no test guards. There, you're back to the first two layers and your own judgement.
+
+### Switching language changes one box, not the path
+
+The whole path is shared. **The only per-language difference is the first box**: the extension identifies the stack, and that stack's questions come out. `.ts` and `.js` check the project config to tell frontend from backend.
+
+**A language that isn't on the list simply doesn't trigger the second layer** — Python itself isn't on it. There you're left with the linter layer and the tests. A project easing into this can also set that layer to high-risk-only, or turn it off.
+
+> **Honestly: the second layer stops "couldn't be bothered to answer". It does not stop "answered carelessly".**
+> Write "not applicable" with a bogus reason and the tool can't tell; cite a test that doesn't cover the point and it can't tell either.
+> **It catches the laziest kind of lie — the rest is on the review seats, and finally on the tests.**
+
+---
+
 ## Why this exists
 
 I believe fully autonomous development is coming.
@@ -376,6 +391,14 @@ Lumos is my answer to that.
 
 ---
 
+## Scope
+
+Lumos ships **general-purpose tooling only**: the notes CLI, the checks and git hooks, and the cross-project convention manuals for particular tech stacks (kotlin / vue / csharp / swift / node — `ls skills/` is the source of truth; they aren't tied to any one project, so they live here).
+
+What doesn't come in: your business notes, release scripts, framework choices that only one project makes.
+
+---
+
 ## Going deeper
 
 - **[The mental model and the machinery](docs/mental-model.md)** — how the three evidence chains work, what each check blocks, and the half a tool can't prove.
@@ -383,14 +406,6 @@ Lumos is my answer to that.
 - **[Taking over a project with no notes](docs/taking-over.md)** — reconstructing an old system's context into notes.
 - [Onboarding detail](ONBOARDING.md) · [Architecture](ARCHITECTURE.md) · [Coming from SDD](SDD-vs-Lumos.en.md)
 - Long-form methodology (Chinese, shortest first): [The whole picture](docs/methodology/圖譜即合約-全景圖.md) (every check on one page) · [Written for outside readers](docs/methodology/圖譜即合約-對外論述.md) (the plain-language full version) · [The graph is the contract](docs/methodology/圖譜即合約.md) (the internal design record, with its history — longest)
-
----
-
-## Scope
-
-Lumos ships **general-purpose tooling only**: the notes CLI, the checks and git hooks, and the cross-project convention manuals for particular tech stacks (kotlin / vue / csharp / swift / node — `ls skills/` is the source of truth; they aren't tied to any one project, so they live here).
-
-What doesn't come in: your business notes, release scripts, framework choices that only one project makes.
 
 ---
 
