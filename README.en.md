@@ -136,6 +136,10 @@ Pre-push code review is risk-tiered; small changes do not all trigger the same r
 
 **Station ④: turn this change's results into the next change's input.**
 
+<p align="center">
+  <img src="assets/writeback-overview-en.svg" alt="Write decisions, review and verification results into related notes; retrieve them for the next change and write new results back" width="900">
+</p>
+
 After a change, the AI writes design trade-offs, review dispositions, verification results, and unresolved work into the relevant notes. The next session can retrieve the reasoning and constraints instead of reconstructing everything from code.
 
 More notes are not automatically better. Decisions can expire and tests have assumptions. Records need updating, re-verification, or stale markers as the system changes.
