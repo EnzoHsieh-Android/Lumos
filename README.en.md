@@ -9,19 +9,19 @@
 
 [繁體中文](README.md) · **English**
 
-**Lumos is an engineering governance toolkit for AI-assisted development.**
+**Lumos is an engineering governance toolkit for natural-language-driven development.**
 
-From understanding a request to implementation, review, verification, and handoff, Lumos connects project context, important rules, and development checks. A change leaves more than code: it also leaves the reasoning, its impact, and how it was checked.
+You describe goals, clarify constraints, and make trade-offs in conversation. Within the scope you authorize, the AI carries out the development workflow—from retrieving context and implementing changes to testing, committing, and pushing.
 
-The toolkit combines a Markdown knowledge graph, a CLI, AI working instructions, and enforcement checks for Claude Code or Codex. You describe the goal and make trade-offs; the AI follows the workflow to retrieve context, implement, and write back. Business decisions and risk acceptance remain human responsibilities.
+Lumos connects rules and checks to that workflow. When a requirement is unmet, the AI receives the reason for the block, addresses it or asks you to decide, and records decisions and verification results for future work. A change leaves more than code: it also leaves the reasoning, its impact, and how it was checked.
 
 Each change moves through four stations: **Notes → Dispatch → Review → Write-back**. Around that loop, evals use the accumulated records to check and calibrate the process.
+
+[Who it's for](#who-this-is-for) · [Install](#getting-it-installed) · [First use](#your-first-time-through) · [How it works](#how-it-works) · [Limits and scope](#scope) · [Documentation](#going-deeper)
 
 <p align="center">
   <img src="assets/map-en.svg" alt="The Lumos loop: retrieve context from notes, dispatch, review, and write back; evals use each round's records to calibrate the process" width="900">
 </p>
-
-[Who it's for](#who-this-is-for) · [Install](#getting-it-installed) · [First use](#your-first-time-through) · [The four stations](#notes) · [Limits and scope](#scope) · [Documentation](#going-deeper)
 
 ## Who this is for
 
@@ -40,7 +40,13 @@ It connects work that is otherwise easy to scatter across tools and conversation
 
 ## Getting it installed
 
+The toolkit combines a Markdown knowledge graph, a CLI, AI working instructions, and enforcement checks for Claude Code or Codex. You describe the goal and make trade-offs; the AI follows the workflow to retrieve context, implement, and write back. Business decisions and risk acceptance remain human responsibilities.
+
+### 1. Check your environment
+
 You need **Git, Python 3.9+**, and Claude Code or Codex. Installation adds more than a CLI: it installs shared tools and skills, and project initialization adds a knowledge graph, AI instructions, and hooks. See [onboarding](ONBOARDING.md) for the scope of those changes.
+
+### 2. Run the installer
 
 Run this from the project you want to onboard:
 
@@ -49,6 +55,8 @@ curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get
 ```
 
 When the script asks whether to initialize the current directory, check the directory before answering `y`. Pressing Enter skips initialization. You can also download and inspect the script before running it.
+
+### 3. Restart and check
 
 After installation, **start a new AI session**, then check the wiring:
 
@@ -69,28 +77,32 @@ Start with a small change that is easy to verify. For example, tell the AI:
 This illustrates the workflow; it is not a complete refund specification. If eligibility, amounts, or permissions are unclear, the AI should ask you.
 
 <p align="center">
-  <img src="assets/first-change-en.svg" alt="Illustrative workflow: request refunds; the AI reads payment rules, implements and tests; decisions and verification results remain available for future work" width="900">
+  <img src="assets/first-change-en.svg" alt="Illustrative workflow: request refunds; the AI reads payment rules, implements and tests; decisions and verification results remain available for future work" width="760">
   <br>
   <sub>Workflow illustration, not a recorded test result. Actual steps depend on project rules and change risk.</sub>
 </p>
 
-You do not need to memorize the CLI. Installed instructions tell the AI when to query and write back; hooks remind it or block incomplete work at the relevant stages.
+You do not need to memorize the CLI. Installed instructions tell the AI when to query and write back. Once you authorize a commit or push, the AI also executes the Git operation, while Lumos hooks and checks provide feedback at the relevant stages.
 
-For example, changing code without updating notes triggers the commit check. The AI needs to update the relevant context or handle a no-note-change exception according to project rules. This brings unfinished work back into the workflow; **it does not guarantee the AI can resolve every block on its own**. Trade-offs and risk decisions still need you.
+For example, if the AI attempts a commit after changing code without updating notes, the commit check blocks it and returns the reason. The AI should read that result, update the relevant context or handle a no-note-change exception according to project rules, then retry. The block becomes feedback within the workflow, not just a warning for a person to read. Trade-offs or risks it cannot resolve still come back to you.
 
 At the end, look for three things: **what changed, what was actually verified, and which decisions or limitations were recorded**. A test that was not run should not be reported as passing.
 
-## Notes
+## How it works
 
-**Station ①: retrieve the context the change needs.**
+<a id="notes"></a>
 
-The knowledge graph is a set of linked Markdown notes that can be versioned with the project. It records design reasoning, module boundaries, important rules, incident lessons, and the conditions under which something was verified.
+### ① Notes
 
-For example, a shop can connect a refund plan to the payment module, a rule against duplicate refunds, and the test that guards that rule:
+retrieve the context the change needs.
 
 <p align="center">
   <img src="assets/graph-demo-en.svg" alt="An illustrative shop knowledge graph: plans connect to features and verification records; incident lessons feed later plans" width="760">
 </p>
+
+The knowledge graph is a set of linked Markdown notes that can be versioned with the project. It records design reasoning, module boundaries, important rules, incident lessons, and the conditions under which something was verified.
+
+The shop example connects plans, modules, important rules, and their verification records.
 
 The AI can search by question or look up notes associated with a changed file, retrieving material relevant to the task. **Registered links are not a complete dependency analysis**: the graph provides leads that still need checking against code and actual behaviour.
 
@@ -98,12 +110,14 @@ Important rules can be marked as contracts and bound to tests. That makes a “m
 
 [See note structure and impact-query illustrations](docs/mental-model.md#9-visual-reference)
 
-## Dispatch
+<a id="dispatch"></a>
 
-**Station ②: equip reviewers without removing independent judgement.**
+### ② Dispatch
+
+equip reviewers without removing independent judgement.
 
 <p align="center">
-  <img src="assets/dispatch-overview-en.svg" alt="One brief branches into independent reviewers, whose findings are collected and addressed" width="900">
+  <img src="assets/dispatch-overview-en.svg" alt="One brief branches into independent reviewers, whose findings are collected and addressed" width="760">
 </p>
 
 Dispatch packages the change, related notes, and important rules for reviewers with different perspectives. Seats cannot see one another's reports, reducing the opportunity to copy conclusions. Agreement still does not guarantee correctness.
@@ -112,37 +126,39 @@ At intake, citations are checked and findings are recorded as adopted, rejected,
 
 [See the full dispatch, intake, and disposal-gate flow](docs/mental-model.md#7-reading-the-detailed-diagrams)
 
-## Review
+<a id="review"></a>
 
-**Station ③: check architecture, known problems, and actual behaviour separately.**
+### ③ Review
+
+check architecture, known problems, and actual behaviour separately.
 
 <p align="center">
-  <img src="assets/review-overview-en.svg" alt="Architecture review and three complementary checks: linters, questions and reviewers, and tests" width="900">
+  <img src="assets/review-overview-en.svg" alt="Architecture review and three complementary checks: linters, questions and reviewers, and tests" width="760">
 </p>
 
 Review covers more than bugs. An architecture seat compares the change with existing code at the same layer, looking for a second competing approach or calls that bypass established boundaries—not merely differences in personal style.
 
-Complementary checks cover the implementation:
-
-- **Linters** check encoded rules and common violations.
-- **Stack questions and review seats** require explanations for relevant performance and reliability concerns, then challenge their evidence.
-- **Tests** execute the bound tests for affected contracts and check actual behaviour.
+Linters cover encoded rules; stack questions and reviewers challenge context-dependent reasoning. Tests execute the affected contracts' bound tests. Together, they provide complementary evidence.
 
 Pre-push code review is risk-tiered; small changes do not all trigger the same review effort. Gates can require answers and evidence to exist, but format checks alone cannot establish that an answer is correct.
 
 [See the three layers, stack triggers, and push gates](docs/mental-model.md#7-reading-the-detailed-diagrams)
 
-## Write-back
+<a id="write-back"></a>
 
-**Station ④: turn this change's results into the next change's input.**
+### ④ Write-back
+
+turn this change's results into the next change's input.
 
 <p align="center">
-  <img src="assets/writeback-overview-en.svg" alt="Write decisions, review and verification results into related notes; retrieve them for the next change and write new results back" width="900">
+  <img src="assets/writeback-overview-en.svg" alt="Write decisions, review and verification results into related notes; retrieve them for the next change and write new results back" width="760">
 </p>
 
 After a change, the AI writes design trade-offs, review dispositions, verification results, and unresolved work into the relevant notes. The next session can retrieve the reasoning and constraints instead of reconstructing everything from code.
 
 More notes are not automatically better. Decisions can expire and tests have assumptions. Records need updating, re-verification, or stale markers as the system changes.
+
+[Explore write-back in the full loop](docs/mental-model.md#6-what-the-review-loop-actually-runs)
 
 <details>
 <summary>See the growth of Lumos's own knowledge graph</summary>
@@ -155,7 +171,9 @@ More notes are not automatically better. Decisions can expire and tests have ass
 
 </details>
 
-## evals
+<a id="evals"></a>
+
+### Outer loop: evals
 
 **The outer loop: evaluate the process itself, so changes can be compared.**
 
@@ -165,7 +183,9 @@ These records support calibration; they do not guarantee that review quality imp
 
 ## Why plain language
 
-The primary workflow is conversational: you describe the goal, state constraints, and compare approaches, then the AI executes. Those conversations already contain useful design context. Lumos brings it into a queryable, verifiable development workflow.
+Natural-language-driven development means more than asking AI to generate a piece of code: conversation drives the whole development workflow. It connects two parts of Lumos: **conversation captures reasoning; execution receives feedback.**
+
+Requirements, alternatives, and rejected approaches can become reusable context when they are expressed in conversation. Having the AI execute tool operations also lets it read check results and address incomplete work. If the AI receives only the finished code, Lumos cannot reconstruct trade-offs that were never expressed or recorded.
 
 This does not mean engineers no longer need to understand code, or that writing code by hand has no value. You still need to assess requirements, architecture, deployment, and verification. Lumos aims to reduce repeated context-setting and after-the-fact record keeping.
 
